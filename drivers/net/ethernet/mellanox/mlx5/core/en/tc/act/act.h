@@ -94,6 +94,7 @@ extern struct mlx5e_tc_act mlx5e_tc_act_sample;
 extern struct mlx5e_tc_act mlx5e_tc_act_ptype;
 extern struct mlx5e_tc_act mlx5e_tc_act_redirect_ingress;
 extern struct mlx5e_tc_act mlx5e_tc_act_police;
+extern struct mlx5e_tc_act mlx5e_tc_act_rx_queue;
 
 struct mlx5e_tc_act *
 mlx5e_tc_act_get(enum flow_action_id act_id,

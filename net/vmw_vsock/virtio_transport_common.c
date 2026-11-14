@@ -295,6 +295,9 @@ out:
  * since a socket assigned to a transport is required.
  *
  * Do not use on listener sockets!
+ *
+ * This checks that the socket can reach the g2h device, so device-only replies
+ * such as virtio_transport_reset_no_sock() must keep not using this path.
  */
 static int virtio_transport_send_pkt_info(struct vsock_sock *vsk,
 					  struct virtio_vsock_pkt_info *info)
@@ -316,6 +319,9 @@ static int virtio_transport_send_pkt_info(struct vsock_sock *vsk,
 	t_ops = virtio_transport_get_ops(vsk);
 	if (unlikely(!t_ops))
 		return -EFAULT;
+
+	if (!vsock_g2h_reachable_sk(vsk))
+		return -ENETUNREACH;
 
 	src_cid = t_ops->transport.get_local_cid();
 	src_port = vsk->local_addr.svm_port;
@@ -1468,8 +1474,8 @@ void virtio_transport_release(struct vsock_sock *vsk)
 EXPORT_SYMBOL_GPL(virtio_transport_release);
 
 static int
-virtio_transport_recv_connecting(struct sock *sk,
-				 struct sk_buff *skb)
+virtio_transport_recv_connecting(struct sock *sk, struct sk_buff *skb,
+				 struct virtio_transport *t)
 {
 	struct virtio_vsock_hdr *hdr = virtio_vsock_hdr(skb);
 	struct vsock_sock *vsk = vsock_sk(sk);
@@ -1478,9 +1484,18 @@ virtio_transport_recv_connecting(struct sock *sk,
 
 	switch (le16_to_cpu(hdr->op)) {
 	case VIRTIO_VSOCK_OP_RESPONSE:
-		sk->sk_state = TCP_ESTABLISHED;
+		if (!vsock_maybe_set_connected(vsk)) {
+			/* The net arg is required but unused: only g2h can fail
+			 * vsock_maybe_set_connected(), and g2h
+			 * virtio_transport_reset_no_sock() ignores the net arg.
+			 */
+			virtio_transport_reset_no_sock(t, skb, sock_net(sk));
+			skerr = ECONNRESET;
+			err = -ENETUNREACH;
+			goto close;
+		}
+
 		sk->sk_socket->state = SS_CONNECTED;
-		vsock_insert_connected(vsk);
 		sk->sk_state_change(sk);
 		break;
 	case VIRTIO_VSOCK_OP_INVALID:
@@ -1498,6 +1513,7 @@ virtio_transport_recv_connecting(struct sock *sk,
 
 destroy:
 	virtio_transport_reset(vsk, skb);
+close:
 	sk->sk_state = TCP_CLOSE;
 	sk->sk_err = skerr;
 	sk_error_report(sk);
@@ -1736,8 +1752,6 @@ virtio_transport_recv_listen(struct sock *sk, struct sk_buff *skb,
 
 	lock_sock_nested(child, SINGLE_DEPTH_NESTING);
 
-	child->sk_state = TCP_ESTABLISHED;
-
 	vchild = vsock_sk(child);
 	vsock_addr_init(&vchild->local_addr, le64_to_cpu(hdr->dst_cid),
 			le32_to_cpu(hdr->dst_port));
@@ -1758,7 +1772,14 @@ virtio_transport_recv_listen(struct sock *sk, struct sk_buff *skb,
 	if (virtio_transport_space_update(child, skb))
 		child->sk_write_space(child);
 
-	vsock_insert_connected(vchild);
+	if (!vsock_maybe_set_connected(vchild)) {
+		release_sock(child);
+		/* Only reached for g2h, whose send_pkt() ignores the netns. */
+		virtio_transport_reset_no_sock(t, skb, sock_net(sk));
+		sock_put(child);
+		return -ENETUNREACH;
+	}
+
 	vsock_enqueue_accept(sk, child);
 	virtio_transport_send_response(vchild, skb);
 
@@ -1859,7 +1880,7 @@ void virtio_transport_recv_pkt(struct virtio_transport *t,
 		kfree_skb(skb);
 		break;
 	case TCP_SYN_SENT:
-		virtio_transport_recv_connecting(sk, skb);
+		virtio_transport_recv_connecting(sk, skb, t);
 		kfree_skb(skb);
 		break;
 	case TCP_ESTABLISHED:

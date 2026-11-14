@@ -336,6 +336,9 @@ static void mana_per_port_queue_reset_work_handler(struct work_struct *work)
 	if (err)
 		netdev_err(ndev, "mana_attach failed: %d\n", err);
 
+	/* Let the next TX timeout try a CQE poll recovery first */
+	WRITE_ONCE(apc->last_tx_timeout, 0);
+
 dealloc_pre_rxbufs:
 	mana_pre_dealloc_rxbufs(apc);
 clear_flag:
@@ -964,6 +967,7 @@ static void mana_tx_timeout(struct net_device *netdev, unsigned int txqueue)
 	struct mana_port_context *apc = netdev_priv(netdev);
 	struct mana_context *ac = apc->ac;
 	struct gdma_context *gc = ac->gdma_dev->gdma_context;
+	unsigned long last = READ_ONCE(apc->last_tx_timeout);
 
 	/* Debug knob for bringup/qualification: when set, log the timeout and
 	 * skip the reset so the failing state is preserved for telemetry.
@@ -980,11 +984,30 @@ static void mana_tx_timeout(struct net_device *netdev, unsigned int txqueue)
 	if (test_bit(GC_IN_SERVICE, &gc->flags))
 		return;
 
-	/* Note: If there are pending queue reset work for this port(apc),
-	 * subsequent request queued up from here are ignored. This is because
-	 * we are using the same work instance per port(apc).
+	if (!apc->port_is_up)
+		return;
+
+	/* If the previous timeout fired less than
+	 * MANA_TX_TIMEOUT_RESET_THRESHOLD ago, the earlier CQE poll did not
+	 * help and queue stalled again	: escalate to a port reset.
+	 * Note: If there is pending queue reset work for this port (apc),
+	 * subsequent requests queued up from here are ignored, because the
+	 * same work instance is used per port (apc).
 	 */
-	queue_work(ac->per_port_queue_reset_wq, &apc->queue_reset_work);
+	if (last &&
+	    time_after(last, jiffies - MANA_TX_TIMEOUT_RESET_THRESHOLD)) {
+		queue_work(ac->per_port_queue_reset_wq, &apc->queue_reset_work);
+		return;
+	}
+
+	/* First timeout, or the previous one was long ago: try to recover by
+	 * polling the TX CQ for completions before escalating to a reset.
+	 */
+	if (txqueue < apc->num_queues && apc->tx_qp && apc->tx_qp[txqueue]) {
+		WRITE_ONCE(apc->last_tx_timeout, jiffies);
+		apc->eth_stats.tx_cqe_poll_recovery++;
+		napi_schedule(&apc->tx_qp[txqueue]->tx_cq.napi);
+	}
 }
 
 static int mana_shaper_set(struct net_shaper_binding *binding,
@@ -2515,9 +2538,6 @@ static void mana_rx_dim_work(struct work_struct *work)
 	cur_moder = net_dim_get_rx_moderation(dim->mode, dim->profile_ix);
 	cq = container_of(dim, struct mana_cq, dim);
 
-	cur_moder.usec = min_t(u16, cur_moder.usec, MANA_INTR_MODR_USEC_MAX);
-	cur_moder.pkts = min_t(u16, cur_moder.pkts, MANA_INTR_MODR_COMP_MAX);
-
 	mana_gd_ring_dim(cq->gdma_cq, cur_moder.usec, true,
 			 cur_moder.pkts, true);
 
@@ -2532,9 +2552,6 @@ static void mana_tx_dim_work(struct work_struct *work)
 
 	cur_moder = net_dim_get_tx_moderation(dim->mode, dim->profile_ix);
 	cq = container_of(dim, struct mana_cq, dim);
-
-	cur_moder.usec = min_t(u16, cur_moder.usec, MANA_INTR_MODR_USEC_MAX);
-	cur_moder.pkts = min_t(u16, cur_moder.pkts, MANA_INTR_MODR_COMP_MAX);
 
 	mana_gd_ring_dim(cq->gdma_cq, cur_moder.usec, true,
 			 cur_moder.pkts, true);
@@ -2871,10 +2888,15 @@ static int mana_create_txq(struct mana_port_context *apc,
 		cq_spec.modr_ctx_id = 0;
 		cq_spec.attached_eq = cq->gdma_cq->cq.parent->id;
 
-		/* DIM setting can be changed at runtime */
-		cq_spec.req_cq_moderation = true;
-		cq_spec.cq_moderation_usec = apc->intr_modr_tx_usec;
-		cq_spec.cq_moderation_comp = apc->intr_modr_tx_comp;
+		/* Request CQ moderation only if HW supports it.
+		 * DIM setting can be changed at runtime.
+		 */
+		if (gc->pf_cap_flags1 &
+		    GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION) {
+			cq_spec.req_cq_moderation = true;
+			cq_spec.cq_moderation_usec = apc->intr_modr_tx_usec;
+			cq_spec.cq_moderation_comp = apc->intr_modr_tx_comp;
+		}
 
 		err = mana_create_wq_obj(apc, apc->port_handle, GDMA_SQ,
 					 &wq_spec, &cq_spec,
@@ -3206,10 +3228,14 @@ static struct mana_rxq *mana_create_rxq(struct mana_port_context *apc,
 	cq_spec.modr_ctx_id = 0;
 	cq_spec.attached_eq = cq->gdma_cq->cq.parent->id;
 
-	/* DIM setting can be changed at runtime */
-	cq_spec.req_cq_moderation = true;
-	cq_spec.cq_moderation_usec = apc->intr_modr_rx_usec;
-	cq_spec.cq_moderation_comp = apc->intr_modr_rx_comp;
+	/* Request CQ moderation only if HW supports it.
+	 * DIM setting can be changed at runtime.
+	 */
+	if (gc->pf_cap_flags1 & GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION) {
+		cq_spec.req_cq_moderation = true;
+		cq_spec.cq_moderation_usec = apc->intr_modr_rx_usec;
+		cq_spec.cq_moderation_comp = apc->intr_modr_rx_comp;
+	}
 
 	err = mana_create_wq_obj(apc, apc->port_handle, GDMA_RQ,
 				 &wq_spec, &cq_spec, &rxq->rxobj);
@@ -3894,6 +3920,40 @@ int mana_detach(struct net_device *ndev, bool from_close)
 	return 0;
 }
 
+/* Match the interrupt moderation settings to the PF capability, which is
+ * queried again when the device resumes from a reset or suspend. Must be
+ * called before the queues are created.
+ */
+static void mana_init_intr_modr(struct mana_port_context *apc)
+{
+	struct gdma_context *gc = apc->ac->gdma_dev->gdma_context;
+
+	if (!(gc->pf_cap_flags1 &
+	      GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION)) {
+		apc->intr_modr_rx_usec = 0;
+		apc->intr_modr_rx_comp = 0;
+		apc->intr_modr_tx_usec = 0;
+		apc->intr_modr_tx_comp = 0;
+		apc->rx_dim_enabled = false;
+		apc->tx_dim_enabled = false;
+		return;
+	}
+
+	/* Keep the current settings, unless they were never initialized
+	 * because the port was probed without the capability.
+	 */
+	if (apc->intr_modr_rx_usec && apc->intr_modr_rx_comp &&
+	    apc->intr_modr_tx_usec && apc->intr_modr_tx_comp)
+		return;
+
+	apc->intr_modr_rx_usec = MANA_INTR_MODR_USEC_DEF;
+	apc->intr_modr_rx_comp = MANA_INTR_MODR_COMP_DEF;
+	apc->intr_modr_tx_usec = MANA_INTR_MODR_USEC_DEF;
+	apc->intr_modr_tx_comp = MANA_INTR_MODR_COMP_DEF;
+	apc->rx_dim_enabled = MANA_ADAPTIVE_RX_DEF;
+	apc->tx_dim_enabled = MANA_ADAPTIVE_TX_DEF;
+}
+
 static int mana_probe_port(struct mana_context *ac, int port_idx,
 			   struct net_device **ndev_storage)
 {
@@ -3924,15 +3984,7 @@ static int mana_probe_port(struct mana_context *ac, int port_idx,
 	apc->cqe_coalescing_enable = 0;
 	apc->cqe8_coalescing_enable = 0;
 
-	/* Initialize interrupt moderation settings if supported by HW */
-	if (gc->pf_cap_flags1 & GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION) {
-		apc->intr_modr_rx_usec = MANA_INTR_MODR_USEC_DEF;
-		apc->intr_modr_rx_comp = MANA_INTR_MODR_COMP_DEF;
-		apc->intr_modr_tx_usec = MANA_INTR_MODR_USEC_DEF;
-		apc->intr_modr_tx_comp = MANA_INTR_MODR_COMP_DEF;
-		apc->rx_dim_enabled = MANA_ADAPTIVE_RX_DEF;
-		apc->tx_dim_enabled = MANA_ADAPTIVE_TX_DEF;
-	}
+	mana_init_intr_modr(apc);
 
 	mutex_init(&apc->vport_mutex);
 	apc->vport_use_count = 0;
@@ -4256,6 +4308,7 @@ int mana_probe(struct gdma_dev *gd, bool resuming)
 			enable_work(&apc->queue_reset_work);
 			netdev_lock(ac->ports[i]);
 			apc->link_cfg_error = 1;
+			mana_init_intr_modr(apc);
 			netdev_unlock(ac->ports[i]);
 			err = mana_attach(ac->ports[i]);
 			rtnl_unlock();

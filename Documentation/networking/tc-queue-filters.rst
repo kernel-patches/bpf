@@ -35,3 +35,25 @@ queues and/or a single queue are supported as below:
    devices, TC filter directing traffic to a queue have higher
    priority over flow director filter assigning a queue. The hash
    filter has lowest priority.
+
+Tunnel key partitioning splits the key space of a tunnel into blocks. One
+filter with a mask on enc_key_id steers a block to its own queue. This
+helps with traffic that RSS cannot spread because its hashed fields barely
+vary, such as GTP-U tunnels between a few endpoints::
+
+  # GTP-U TEIDs whose two top bits are 01 go to queue 1
+  tc filter add dev eth0 ingress protocol ip flower skip_sw \
+      ip_proto udp dst_port 2152 enc_key_id 0x40000000/0xc0000000 \
+      action skbedit queue_mapping 1 skip_sw
+
+Not all drivers can program a partial mask.
+
+On mlx5 devices such a filter runs on a physical port where nothing
+decapsulates the packet. All the keys describe the packet on the wire.
+ip_proto and dst_port tell the hardware which tunnel header holds the key.
+The software datapath has no tunnel metadata on such a port. The filter
+therefore needs skip_sw. Without it the filter stays in software, where
+the port reads key zero.
+
+Reducing the number of channels below the queue of a filter drops the
+traffic of that filter on mlx5 devices until the channel returns.

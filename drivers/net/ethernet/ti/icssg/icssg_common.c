@@ -1426,10 +1426,13 @@ void prueth_cleanup_tx_ts(struct prueth_emac *emac)
 	int i;
 
 	for (i = 0; i < PRUETH_MAX_TX_TS_REQUESTS; i++) {
-		if (emac->tx_ts_skb[i]) {
+		/* Slot may hold ERR_PTR(-EBUSY) if the TX path reserved it
+		 * but has not yet stored the real skb pointer.  Skip the free
+		 * but still clear the slot so it can be reused.
+		 */
+		if (!IS_ERR_OR_NULL(emac->tx_ts_skb[i]))
 			dev_kfree_skb_any(emac->tx_ts_skb[i]);
-			emac->tx_ts_skb[i] = NULL;
-		}
+		emac->tx_ts_skb[i] = NULL;
 	}
 }
 EXPORT_SYMBOL_GPL(prueth_cleanup_tx_ts);

@@ -62,16 +62,22 @@ static int et1011c_read_status(struct phy_device *phydev)
 {
 	static int speed;
 	int ret;
-	u32 val;
+	int val;
 
 	ret = genphy_read_status(phydev);
 
 	if (speed != phydev->speed) {
 		speed = phydev->speed;
 		val = phy_read(phydev, ET1011C_STATUS_REG);
+		if (val < 0)
+			return val;
+
 		if ((val & ET1011C_SPEED_MASK) ==
 					ET1011C_GIGABIT_SPEED) {
 			val = phy_read(phydev, ET1011C_CONFIG_REG);
+			if (val < 0)
+				return val;
+
 			val &= ~ET1011C_TX_FIFO_MASK;
 			phy_write(phydev, ET1011C_CONFIG_REG, val |
 					  ET1011C_GMII_INTERFACE |

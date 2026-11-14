@@ -59,6 +59,7 @@ static_assert(sizeof(struct netmem_desc) <= offsetof(struct page, _refcount));
 /* net_iov */
 
 DECLARE_STATIC_KEY_FALSE(page_pool_mem_providers);
+DECLARE_STATIC_KEY_FALSE(page_pool_restricted);
 
 /*  We overload the LSB of the struct page pointer to indicate whether it's
  *  a page or net_iov.
@@ -68,12 +69,13 @@ DECLARE_STATIC_KEY_FALSE(page_pool_mem_providers);
 enum net_iov_type {
 	NET_IOV_DMABUF,
 	NET_IOV_IOURING,
+	NET_IOV_XSK,
 };
 
 /* A memory descriptor representing abstract networking I/O vectors.
  *
- * net_iovs are allocated and used by networking code, and the size of
- * the chunk is PAGE_SIZE.
+ * net_iovs are allocated and used by networking code. Their area sets the
+ * size of a chunk, see net_iov_area.niov_shift.
  *
  * Examples include imported dmabuf memory and imported io_uring memory. See
  * net_iov_type for all the supported types. While current net_iov types are
@@ -104,6 +106,12 @@ struct net_iov_area {
 	/* Array of net_iovs for this area. */
 	struct net_iov *niovs;
 	size_t num_niovs;
+	/* Each net_iov covers 1 << niov_shift bytes. */
+	unsigned int niov_shift;
+	/* CPU address of the first net_iov, or NULL if the CPU cannot read
+	 * the area.
+	 */
+	void *vaddr;
 };
 
 static inline struct net_iov_area *net_iov_owner(const struct net_iov *niov)
@@ -114,6 +122,18 @@ static inline struct net_iov_area *net_iov_owner(const struct net_iov *niov)
 static inline unsigned int net_iov_idx(const struct net_iov *niov)
 {
 	return niov - net_iov_owner(niov)->niovs;
+}
+
+static inline void *net_iov_address(const struct net_iov *niov)
+{
+	const struct net_iov_area *area = net_iov_owner(niov);
+	unsigned long off;
+
+	if (!area->vaddr)
+		return NULL;
+
+	off = (unsigned long)net_iov_idx(niov) << area->niov_shift;
+	return area->vaddr + off;
 }
 
 /* Initialize a niov: stamp the owning area, the memory provider type.
@@ -342,10 +362,16 @@ static inline void *__netmem_address(netmem_ref netmem)
 	return page_address(__netmem_to_page(netmem));
 }
 
+/**
+ * netmem_address - get the CPU address of the memory behind @netmem
+ * @netmem: netmem to get the address of
+ *
+ * Return: the address, or NULL if the CPU cannot read @netmem.
+ */
 static inline void *netmem_address(netmem_ref netmem)
 {
 	if (netmem_is_net_iov(netmem))
-		return NULL;
+		return net_iov_address(netmem_to_net_iov(netmem));
 
 	return __netmem_address(netmem);
 }
@@ -397,13 +423,37 @@ static inline unsigned long netmem_get_dma_addr(netmem_ref netmem)
 	return netmem_to_nmdesc(netmem)->dma_addr;
 }
 
+struct net_device;
+
 #if defined(CONFIG_NET_DEVMEM)
 static inline bool net_is_devmem_iov(const struct net_iov *niov)
 {
 	return niov->type == NET_IOV_DMABUF;
 }
+
+/**
+ * netdev_has_dmabuf_binding - is there a dmabuf binding for a
+ * given @dev and @dma_dev
+ *
+ * @dev: netdev to check bindings
+ * @dma_dev: dma device to check, when NULL it will not be checked
+ *
+ * A binding is reported for as long as it is mapped, which can be long
+ * after the user unbound it: net_iovs of a TX binding can still be queued
+ * in flight, with DMA mappings that are only valid for the device the dmabuf
+ * was attached to.
+ *
+ * Return: true if a binding is found under @dev and possibly @dma_dev
+ */
+bool netdev_has_dmabuf_binding(struct net_device *dev, struct device *dma_dev);
 #else
 static inline bool net_is_devmem_iov(const struct net_iov *niov)
+{
+	return false;
+}
+
+static inline bool netdev_has_dmabuf_binding(struct net_device *dev,
+					     struct device *dma_dev)
 {
 	return false;
 }
@@ -411,6 +461,15 @@ static inline bool net_is_devmem_iov(const struct net_iov *niov)
 
 void net_iov_inc_ref(struct net_iov *niov);
 void net_iov_dec_ref(struct net_iov *niov);
+
+#if IS_ENABLED(CONFIG_PAGE_POOL)
+bool netmem_can_retain(netmem_ref netmem);
+#else
+static inline bool netmem_can_retain(netmem_ref netmem)
+{
+	return true;
+}
+#endif
 
 /**
  * netmem_inc_ref - acquire a non-page_pool reference on a netmem

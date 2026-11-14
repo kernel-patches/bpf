@@ -88,6 +88,8 @@ static int __netdev_queue_config(struct net_device *dev, int rxq_idx,
 	mpp = &__netif_get_rx_queue(dev, rxq_idx)->mp_params;
 	if (mpp->rx_page_size)
 		qcfg->rx_page_size = mpp->rx_page_size;
+	if (mpp->rx_headroom)
+		qcfg->rx_headroom = mpp->rx_headroom;
 	err = validate_cb(dev, qcfg, extack);
 	if (err)
 		return err;

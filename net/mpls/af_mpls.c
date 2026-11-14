@@ -419,6 +419,9 @@ static int mpls_forward(struct sk_buff *skb, struct net_device *dev,
 	if (!nh)
 		goto err;
 
+	if (unlikely(skb_headroom(skb) > U16_MAX - sizeof(*hdr)))
+		goto err;
+
 	/* Pop the label */
 	skb_pull(skb, sizeof(*hdr));
 	skb_reset_network_header(skb);

@@ -13,6 +13,10 @@ struct netlink_ext_ack;
 struct netdev_queue_config;
 struct cpumask;
 struct pp_memory_provider_params;
+struct xdp_buff;
+struct xdp_frame;
+
+struct xdp_frame *xdp_copy_buff_to_frame(const struct xdp_buff *xdp);
 
 /* Random bits of netdevice that don't need to be exposed */
 #define FLOW_LIMIT_HISTORY	(1 << 7)  /* must be ^2 and !overflow buckets */
@@ -121,6 +125,10 @@ bool netif_is_queue_leasee(const struct net_device *dev);
 
 void __netif_mp_uninstall_rxq(struct netdev_rx_queue *rxq,
 			      const struct pp_memory_provider_params *p);
+void netif_mp_update_napi(struct netdev_rx_queue *rxq);
+void netif_mp_arm_dev(struct net_device *dev);
+void netif_mp_disarm_dev(struct net_device *dev);
+void netif_mp_napi_del(struct napi_struct *napi);
 
 void netif_rxq_cleanup_unlease(struct netdev_rx_queue *phys_rxq,
 			       struct netdev_rx_queue *virt_rxq);

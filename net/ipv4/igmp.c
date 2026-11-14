@@ -1517,6 +1517,12 @@ int inet_fill_ifmcaddr(struct sk_buff *skb, struct net_device *dev,
 	ifm->ifa_scope = RT_SCOPE_UNIVERSE;
 	ifm->ifa_index = dev->ifindex;
 
+	if (args->netnsid >= 0 &&
+	    nla_put_s32(skb, IFA_TARGET_NETNSID, args->netnsid)) {
+		nlmsg_cancel(skb, nlh);
+		return -EMSGSIZE;
+	}
+
 	ci.cstamp = (READ_ONCE(im->mca_cstamp) - INITIAL_JIFFIES) * 100UL / HZ;
 	ci.tstamp = ci.cstamp;
 	ci.ifa_prefered = INFINITY_LIFE_TIME;
@@ -1538,6 +1544,7 @@ static void inet_ifmcaddr_notify(struct net_device *dev,
 {
 	struct inet_fill_args fillargs = {
 		.event = event,
+		.netnsid = -1,
 	};
 	struct net *net = dev_net(dev);
 	struct sk_buff *skb;
@@ -2522,6 +2529,10 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		err = -EINVAL;
 		goto done;
 	}
+	psl = rtnl_dereference(pmc->sflist);
+	if (!add && !psl)
+		goto done;	/* err = -EADDRNOTAVAIL */
+
 	/* if a source filter was set, must be the same mode as before */
 	if (pmc->sflist) {
 		if (pmc->sfmode != omode) {
@@ -2536,10 +2547,7 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		pmc->sfmode = omode;
 	}
 
-	psl = rtnl_dereference(pmc->sflist);
 	if (!add) {
-		if (!psl)
-			goto done;	/* err = -EADDRNOTAVAIL */
 		rv = !0;
 		for (i = 0; i < psl->sl_count; i++) {
 			rv = memcmp(&psl->sl_addr[i], &mreqs->imr_sourceaddr,
@@ -2765,21 +2773,22 @@ int ip_mc_msfget(struct sock *sk, struct ip_msfilter *msf, sockopt_t *opt)
 	if (err)
 		return err;
 
-	opt->optlen = msf_size;
 	if (copy_to_iter(msf, IP_MSFILTER_SIZE(0), &opt->iter_out) !=
 	    IP_MSFILTER_SIZE(0))
 		return -EFAULT;
 	if (len && copy_to_iter(psl->sl_addr, len, &opt->iter_out) != len)
 		return -EFAULT;
+
+	opt->optlen = msf_size;
 	return 0;
 done:
 	return err;
 }
 
 int ip_mc_gsfget(struct sock *sk, struct group_filter *gsf,
-		 sockptr_t optval, size_t ss_offset)
+		 sockopt_t *opt, size_t ss_offset)
 {
-	int i, count, copycount;
+	int i, count, copycount, err;
 	struct sockaddr_in *psin;
 	__be32 addr;
 	struct ip_mc_socklist *pmc;
@@ -2807,6 +2816,18 @@ int ip_mc_gsfget(struct sock *sk, struct group_filter *gsf,
 	count = psl ? psl->sl_count : 0;
 	copycount = count < gsf->gf_numsrc ? count : gsf->gf_numsrc;
 	gsf->gf_numsrc = count;
+
+	/* The source list is sized by the gf_numsrc the caller left in optval,
+	 * not by optlen, which only has to cover the fixed part.
+	 */
+	err = sockopt_expand_out(opt, ss_offset +
+				 copycount * sizeof(struct sockaddr_storage));
+	if (err)
+		return err;
+
+	/* The caller fills the fixed part in once it knows gf_numsrc. */
+	iov_iter_advance(&opt->iter_out, ss_offset);
+
 	for (i = 0; i < copycount; i++) {
 		struct sockaddr_storage ss;
 
@@ -2814,10 +2835,8 @@ int ip_mc_gsfget(struct sock *sk, struct group_filter *gsf,
 		memset(&ss, 0, sizeof(ss));
 		psin->sin_family = AF_INET;
 		psin->sin_addr.s_addr = psl->sl_addr[i];
-		if (copy_to_sockptr_offset(optval, ss_offset,
-					   &ss, sizeof(ss)))
+		if (copy_to_iter(&ss, sizeof(ss), &opt->iter_out) != sizeof(ss))
 			return -EFAULT;
-		ss_offset += sizeof(ss);
 	}
 	return 0;
 }

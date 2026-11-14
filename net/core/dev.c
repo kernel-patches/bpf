@@ -163,6 +163,7 @@
 #include <net/page_pool/types.h>
 #include <net/page_pool/helpers.h>
 #include <net/page_pool/memory_provider.h>
+#include <net/xdp_sock_drv.h>
 #include <net/rps.h>
 #include <linux/phy_link_topology.h>
 
@@ -1770,6 +1771,7 @@ static int __dev_open(struct net_device *dev, struct netlink_ext_ack *extack)
 		dev_set_rx_mode(dev);
 		dev_activate(dev);
 		add_device_randomness(dev->dev_addr, dev->addr_len);
+		netif_mp_arm_dev(dev);
 	}
 
 	return ret;
@@ -1832,6 +1834,7 @@ static void __dev_close_many(struct list_head *head)
 
 		netdev_assert_locked_ops_compat(dev);
 
+		netif_mp_disarm_dev(dev);
 		if (ops->ndo_stop)
 			ops->ndo_stop(dev);
 
@@ -3665,7 +3668,7 @@ void skb_warn_bad_offload(const struct sk_buff *skb)
  */
 int skb_checksum_help(struct sk_buff *skb)
 {
-	__wsum csum;
+	__wsum csum = 0;
 	int ret = 0, offset;
 
 	if (skb->ip_summed == CHECKSUM_COMPLETE)
@@ -3697,13 +3700,16 @@ int skb_checksum_help(struct sk_buff *skb)
 			  offset, skb_headlen(skb));
 		goto out;
 	}
-	csum = skb_checksum(skb, offset, skb->len - offset, 0);
+	ret = skb_checksum_full(skb, offset, skb->len - offset, &csum);
+	if (ret)
+		goto out;
 
 	offset += skb->csum_offset;
 	if (unlikely(offset + sizeof(__sum16) > skb_headlen(skb))) {
 		DO_ONCE_LITE(skb_dump, KERN_ERR, skb, false);
 		WARN_ONCE(true, "offset+2 (%zu) > skb_headlen() (%u)\n",
 			  offset + sizeof(__sum16), skb_headlen(skb));
+		ret = -EINVAL;
 		goto out;
 	}
 	ret = skb_ensure_writable(skb, offset + sizeof(__sum16));
@@ -3749,8 +3755,11 @@ int skb_crc32c_csum_help(struct sk_buff *skb)
 	if (ret)
 		goto out;
 
-	crc = ~skb_crc32c(skb, start, skb->len - start, ~0);
-	*(__le32 *)(skb->data + offset) = cpu_to_le32(crc);
+	crc = ~0;
+	ret = skb_crc32c_full(skb, start, skb->len - start, &crc);
+	if (ret)
+		goto out;
+	*(__le32 *)(skb->data + offset) = cpu_to_le32(~crc);
 	skb_reset_csum_not_inet(skb);
 out:
 	return ret;
@@ -4181,10 +4190,12 @@ static struct sk_buff *validate_xmit_unreadable_skb(struct sk_buff *skb,
 
 	shinfo = skb_shinfo(skb);
 
+	/* All net_iovs in an unreadable skb share the same binding. */
 	if (shinfo->nr_frags > 0) {
 		niov = netmem_to_net_iov(skb_frag_netmem(&shinfo->frags[0]));
 		if (net_is_devmem_iov(niov) &&
-		    READ_ONCE(net_devmem_iov_binding(niov)->dev) != dev)
+		    (net_devmem_iov_binding(niov)->direction != DMA_TO_DEVICE ||
+		     READ_ONCE(net_devmem_iov_binding(niov)->dev) != dev))
 			goto out_free;
 	}
 
@@ -4206,6 +4217,15 @@ static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device 
 	skb = validate_xmit_unreadable_skb(skb, dev);
 	if (unlikely(!skb))
 		goto out_null;
+
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		if (skb->encapsulation)
+			skb_set_inner_transport_header(skb,
+						       skb_checksum_start_offset(skb));
+		else
+			skb_set_transport_header(skb,
+						 skb_checksum_start_offset(skb));
+	}
 
 	/* Only fraglist GSO, whose segments already carry valid checksums,
 	 * can be handed to a device as CHECKSUM_UNNECESSARY. Any other GSO
@@ -4251,16 +4271,9 @@ static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device 
 		 * support checksumming for this protocol, complete
 		 * checksumming here.
 		 */
-		if (skb->ip_summed == CHECKSUM_PARTIAL) {
-			if (skb->encapsulation)
-				skb_set_inner_transport_header(skb,
-							       skb_checksum_start_offset(skb));
-			else
-				skb_set_transport_header(skb,
-							 skb_checksum_start_offset(skb));
-			if (skb_csum_hwoffload_help(skb, features))
-				goto out_kfree_skb;
-		}
+		if (skb->ip_summed == CHECKSUM_PARTIAL &&
+		    skb_csum_hwoffload_help(skb, features))
+			goto out_kfree_skb;
 	}
 
 	skb = validate_xmit_xfrm(skb, features, again);
@@ -5227,6 +5240,10 @@ EXPORT_SYMBOL(rps_needed);
 struct static_key_false rfs_needed __read_mostly;
 EXPORT_SYMBOL(rfs_needed);
 
+#ifdef CONFIG_RFS_ACCEL
+struct static_key_false arfs_llc_affinity __read_mostly;
+#endif
+
 static u32 rfs_slot(u32 hash, rps_tag_ptr tag_ptr)
 {
 	return hash_32(hash, rps_tag_to_log(tag_ptr));
@@ -5264,7 +5281,7 @@ static bool rps_flow_is_active(struct rps_dev_flow *rflow,
 
 static struct rps_dev_flow *
 set_rps_cpu(struct net_device *dev, struct sk_buff *skb,
-	    struct rps_dev_flow *rflow, u16 next_cpu, u32 hash)
+	    struct rps_dev_flow *rflow, u16 old_cpu, u16 next_cpu, u32 hash)
 {
 	if (next_cpu < nr_cpu_ids) {
 		u32 head;
@@ -5283,6 +5300,13 @@ set_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		if (!skb_rx_queue_recorded(skb) || !dev->rx_cpu_rmap ||
 		    !(dev->features & NETIF_F_NTUPLE))
 			goto out;
+
+		if (static_branch_unlikely(&arfs_llc_affinity) &&
+		    old_cpu < nr_cpu_ids && cpu_online(old_cpu) &&
+		    cpus_share_cache(old_cpu, next_cpu) &&
+		    READ_ONCE(rflow->filter) != RPS_NO_FILTER)
+			goto out;
+
 		rxq_index = cpu_rmap_lookup_index(dev->rx_cpu_rmap, next_cpu);
 		if (rxq_index == skb_get_rx_queue(skb))
 			goto out;
@@ -5412,8 +5436,8 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		    (tcpu >= nr_cpu_ids || !cpu_online(tcpu) ||
 		     ((int)(READ_ONCE(per_cpu(softnet_data, tcpu).input_queue_head) -
 		      rflow->last_qtail)) >= 0)) {
+			rflow = set_rps_cpu(dev, skb, rflow, tcpu, next_cpu, hash);
 			tcpu = next_cpu;
-			rflow = set_rps_cpu(dev, skb, rflow, next_cpu, hash);
 		}
 
 		if (tcpu < nr_cpu_ids && cpu_online(tcpu)) {
@@ -5865,26 +5889,48 @@ static u32 netif_receive_generic_xdp(struct sk_buff **pskb,
  * and DDOS attacks will be more effective. In-driver-XDP use dedicated TX
  * queues, so they do not have this starvation issue.
  */
-void generic_xdp_tx(struct sk_buff *skb, const struct bpf_prog *xdp_prog)
+void generic_xdp_tx(struct sk_buff *skb, const struct bpf_prog *xdp_prog,
+		    u32 act)
 {
 	struct net_device *dev = skb->dev;
+	enum skb_drop_reason reason;
 	struct netdev_queue *txq;
-	bool free_skb = true;
+	bool again = false;
 	int cpu, rc;
 
+	reason = qdisc_pkt_len_segs_init(skb);
+	if (unlikely(reason)) {
+		trace_xdp_exception(dev, xdp_prog, act);
+		dev_core_stats_tx_dropped_inc(dev);
+		kfree_skb_reason(skb, reason);
+		return;
+	}
+
 	txq = netdev_core_pick_tx(dev, skb, NULL);
+	skb = validate_xmit_skb_list(skb, dev, &again);
+	if (!skb) {
+		trace_xdp_exception(dev, xdp_prog, act);
+		return;
+	}
+
 	cpu = smp_processor_id();
 	HARD_TX_LOCK(dev, txq, cpu);
-	if (!netif_xmit_frozen_or_drv_stopped(txq)) {
-		rc = netdev_start_xmit(skb, dev, txq, 0);
-		if (dev_xmit_complete(rc))
-			free_skb = false;
+	while (skb && !netif_xmit_frozen_or_drv_stopped(txq)) {
+		struct sk_buff *next = skb->next;
+
+		skb_mark_not_on_list(skb);
+		rc = netdev_start_xmit(skb, dev, txq, false);
+		if (!dev_xmit_complete(rc)) {
+			skb->next = next;
+			break;
+		}
+		skb = next;
 	}
 	HARD_TX_UNLOCK(dev, txq);
-	if (free_skb) {
-		trace_xdp_exception(dev, xdp_prog, XDP_TX);
+	if (skb) {
+		trace_xdp_exception(dev, xdp_prog, act);
 		dev_core_stats_tx_dropped_inc(dev);
-		kfree_skb(skb);
+		kfree_skb_list(skb);
 	}
 }
 
@@ -5910,7 +5956,7 @@ int do_xdp_generic(const struct bpf_prog *xdp_prog, struct sk_buff **pskb)
 					goto out_redir;
 				break;
 			case XDP_TX:
-				generic_xdp_tx(*pskb, xdp_prog);
+				generic_xdp_tx(*pskb, xdp_prog, XDP_TX);
 				break;
 			}
 			bpf_net_ctx_clear(bpf_net_ctx);
@@ -7568,6 +7614,7 @@ void netif_queue_set_napi(struct net_device *dev, unsigned int queue_index,
 	case NETDEV_QUEUE_TYPE_RX:
 		rxq = __netif_get_rx_queue(dev, queue_index);
 		rxq->napi = napi;
+		netif_mp_update_napi(rxq);
 		return;
 	case NETDEV_QUEUE_TYPE_TX:
 		txq = netdev_get_tx_queue(dev, queue_index);
@@ -7969,6 +8016,7 @@ void __netif_napi_del_locked(struct napi_struct *napi)
 	}
 
 	list_del_rcu(&napi->dev_list);
+	netif_mp_napi_del(napi);
 	napi_free_frags(napi);
 
 	gro_cleanup(&napi->gro);
@@ -10545,6 +10593,8 @@ u8 dev_xdp_sb_prog_count(struct net_device *dev)
 
 int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 {
+	int err;
+
 	if (!dev->netdev_ops->ndo_bpf)
 		return -EOPNOTSUPP;
 
@@ -10556,9 +10606,17 @@ int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 		return -EBUSY;
 	}
 
-	if (dev_get_min_mp_channel_count(dev)) {
-		NL_SET_ERR_MSG(bpf->extack, "unable to propagate XDP to device using memory provider");
+	if (!netif_all_mps_have_cap(dev, MP_CAP_READABLE)) {
+		NL_SET_ERR_MSG(bpf->extack,
+			       "unable to propagate XDP to device using unreadable memory provider");
 		return -EBUSY;
+	}
+
+	if (bpf->command == XDP_SETUP_PROG && bpf->prog) {
+		err = xsk_validate_dev(dev, dev->mtu, bpf->prog, XDP_MODE_DRV,
+				       bpf->extack);
+		if (err)
+			return err;
 	}
 
 	return dev->netdev_ops->ndo_bpf(dev, bpf);
@@ -10632,9 +10690,16 @@ static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
 		return -EBUSY;
 	}
 
-	if (dev_get_min_mp_channel_count(dev)) {
-		NL_SET_ERR_MSG(extack, "unable to install XDP to device using memory provider");
+	if (!netif_all_mps_have_cap(dev, MP_CAP_READABLE)) {
+		NL_SET_ERR_MSG(extack,
+			       "unable to install XDP to device using unreadable memory provider");
 		return -EBUSY;
+	}
+
+	if (mode != XDP_MODE_HW && prog) {
+		err = xsk_validate_dev(dev, dev->mtu, prog, mode, extack);
+		if (err)
+			return err;
 	}
 
 	memset(&xdp, 0, sizeof(xdp));
@@ -13068,7 +13133,6 @@ int __dev_change_net_namespace(struct net_device *dev, struct net *net,
 	 * the device is just moving and can keep their slaves up.
 	 */
 	call_netdevice_notifiers(NETDEV_UNREGISTER, dev);
-	rcu_barrier();
 
 	new_nsid = peernet2id_alloc(dev_net(dev), net, GFP_KERNEL);
 

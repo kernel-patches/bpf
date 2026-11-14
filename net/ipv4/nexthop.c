@@ -2109,6 +2109,9 @@ remove_nh_grp_entry(struct net *net, struct nh_grp_entry *nhge,
 	return false;
 }
 
+static void nh_rt_cache_flush(struct net *net, struct nexthop *nh,
+			      struct nexthop *replaced_nh);
+
 static bool __must_check
 remove_nexthop_from_groups(struct net *net, struct nexthop *nh,
 			   struct nl_info *nlinfo)
@@ -2129,6 +2132,13 @@ remove_nexthop_from_groups(struct net *net, struct nexthop *nh,
 
 	/* make sure all see the newly published array before releasing rtnl */
 	synchronize_net();
+
+	/* Routes through the groups can still hold dsts cached through @nh,
+	 * which are only released when @nh is freed. Invalidate them now that
+	 * no reader can pick @nh from the old groups any more.
+	 */
+	list_for_each_entry(nhge, &deferred_free, nh_list)
+		nh_rt_cache_flush(net, nhge->nh_parent, nh);
 
 	/* Now safe to free percpu stats — all RCU readers have finished */
 	list_for_each_entry_safe(nhge, tmp, &deferred_free, nh_list) {

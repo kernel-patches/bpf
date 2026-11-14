@@ -30,6 +30,8 @@
  * SOFTWARE.
  */
 
+#include <linux/mlx5/data_direct.h>
+
 #include "devlink.h"
 #include "en.h"
 #include "lib/crypto.h"
@@ -153,6 +155,30 @@ mlx5e_get_devlink_param_num_doorbells(struct mlx5_core_dev *dev)
 	return err ? MLX5_DEFAULT_NUM_DOORBELLS : val.vu32;
 }
 
+static int mlx5e_create_data_direct_crossing_mkey(struct mlx5_core_dev *mdev)
+{
+	struct mlx5e_hw_objs *res = &mdev->mlx5e_res.hw_objs;
+
+	if (!mdev->data_direct ||
+	    !MLX5_CAP_GEN(mdev, crossing_vhca_mkey))
+		return 0;
+
+	return mlx5e_create_crossing_vhca_mkey(mdev, mdev->data_direct->mkey,
+					       U64_MAX,
+					       &res->data_direct_crossing_mkey);
+}
+
+static void mlx5e_destroy_data_direct_crossing_mkey(struct mlx5_core_dev *mdev)
+{
+	struct mlx5e_hw_objs *res = &mdev->mlx5e_res.hw_objs;
+
+	if (!mdev->data_direct ||
+	    !MLX5_CAP_GEN(mdev, crossing_vhca_mkey))
+		return;
+
+	mlx5_core_destroy_mkey(mdev, res->data_direct_crossing_mkey);
+}
+
 int mlx5e_create_mdev_resources(struct mlx5_core_dev *mdev, bool create_tises)
 {
 	struct mlx5e_hw_objs *res = &mdev->mlx5e_res.hw_objs;
@@ -177,12 +203,19 @@ int mlx5e_create_mdev_resources(struct mlx5_core_dev *mdev, bool create_tises)
 		goto err_dealloc_transport_domain;
 	}
 
+	err = mlx5e_create_data_direct_crossing_mkey(mdev);
+	if (err) {
+		mlx5_core_err(mdev, "create data direct crossing mkey failed, %d\n",
+			      err);
+		goto err_destroy_mkey;
+	}
+
 	num_doorbells = min(mlx5e_get_devlink_param_num_doorbells(mdev),
 			    mlx5e_get_max_num_channels(mdev));
 	res->bfregs = kzalloc_objs(*res->bfregs, num_doorbells);
 	if (!res->bfregs) {
 		err = -ENOMEM;
-		goto err_destroy_mkey;
+		goto err_destroy_crossing_mkey;
 	}
 
 	for (i = 0; i < num_doorbells; i++) {
@@ -221,6 +254,8 @@ err_destroy_bfregs:
 	for (i = 0; i < res->num_bfregs; i++)
 		mlx5_free_bfreg(mdev, res->bfregs + i);
 	kfree(res->bfregs);
+err_destroy_crossing_mkey:
+	mlx5e_destroy_data_direct_crossing_mkey(mdev);
 err_destroy_mkey:
 	mlx5_core_destroy_mkey(mdev, res->mkey);
 err_dealloc_transport_domain:
@@ -241,6 +276,7 @@ void mlx5e_destroy_mdev_resources(struct mlx5_core_dev *mdev)
 	for (unsigned int i = 0; i < res->num_bfregs; i++)
 		mlx5_free_bfreg(mdev, res->bfregs + i);
 	kfree(res->bfregs);
+	mlx5e_destroy_data_direct_crossing_mkey(mdev);
 	mlx5_core_destroy_mkey(mdev, res->mkey);
 	mlx5_core_dealloc_transport_domain(mdev, res->td.tdn);
 	mlx5_core_dealloc_pd(mdev, res->pdn);

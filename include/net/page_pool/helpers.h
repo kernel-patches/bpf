@@ -62,6 +62,7 @@
 
 #include <linux/dma-mapping.h>
 
+#include <net/page_pool/memory_provider.h>
 #include <net/page_pool/types.h>
 #include <net/net_debug.h>
 #include <net/netmem.h>
@@ -519,7 +520,42 @@ static inline void page_pool_nid_changed(struct page_pool *pool, int new_nid)
  */
 static inline bool page_pool_is_unreadable(struct page_pool *pool)
 {
-	return !!pool->mp_ops;
+	return pool->mp_ops && !(pool->mp_ops->caps & MP_CAP_READABLE);
+}
+
+/**
+ * page_pool_refill_done() - report the end of an RX ring refill
+ * @pool: page pool of the rings
+ * @state: whether all rings that take buffers from @pool are full
+ *
+ * A memory provider with a fixed set of buffers must know when the rings
+ * are full, and when they wait for buffers. Call this once per page pool
+ * after each refill, also when the rings were full already.
+ *
+ * Context: the NAPI poll that allocates from @pool, or the driver while that
+ * NAPI is disabled, with IRQs enabled.
+ * Return: true if the refill is done, false if NAPI should retry it soon.
+ */
+static inline bool page_pool_refill_done(struct page_pool *pool,
+					 enum pp_refill state)
+{
+	const struct memory_provider_ops *ops = pool->mp_ops;
+
+	if (ops && ops->refill_done)
+		return ops->refill_done(pool, state);
+
+	return true;
+}
+
+/**
+ * page_pool_supports_frag() - may page pool buffers be split
+ * @pool: queried page pool
+ *
+ * Return: false if the memory provider of @pool hands out whole buffers only
+ */
+static inline bool page_pool_supports_frag(const struct page_pool *pool)
+{
+	return !pool->mp_ops || pool->mp_ops->caps & MP_CAP_FRAG;
 }
 
 #endif /* _NET_PAGE_POOL_HELPERS_H */

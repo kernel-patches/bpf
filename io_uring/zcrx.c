@@ -542,6 +542,7 @@ static int __zcrx_create_area(struct io_zcrx_ifq *ifq,
 	ifq->niov_shift = buf_size_shift;
 	nr_iovs = area->mem.size >> ifq->niov_shift;
 	area->nia.num_niovs = nr_iovs;
+	area->nia.niov_shift = buf_size_shift;
 
 	ret = -ENOMEM;
 	area->nia.niovs = kvmalloc_objs(area->nia.niovs[0], nr_iovs,
@@ -1477,6 +1478,7 @@ static const struct memory_provider_ops io_uring_pp_zc_ops = {
 	.destroy		= io_pp_zc_destroy,
 	.nl_fill		= io_pp_nl_fill,
 	.uninstall		= io_pp_uninstall,
+	.caps			= MP_CAP_FRAG | MP_CAP_RETAIN,
 };
 
 static unsigned zcrx_parse_rq(netmem_ref *netmem_array, unsigned nr,

@@ -321,8 +321,16 @@ allOf:
         - clocks
 
     else:
-      properties:
-        clocks: false
+      if:
+        not:
+          properties:
+            compatible:
+              contains:
+                const: rockchip,rk3588-php-grf
+
+      then:
+        properties:
+          clocks: false
 
 examples:
   - |

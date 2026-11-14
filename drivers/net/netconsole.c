@@ -49,6 +49,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/workqueue.h>
 #include <linux/delay.h>
+#include <linux/ratelimit.h>
 
 MODULE_AUTHOR("Matt Mackall <mpm@selenic.com>");
 MODULE_DESCRIPTION("Console driver for network interfaces");
@@ -83,7 +84,8 @@ MODULE_PARM_DESC(netconsole, " netconsole=[src-port]@[src-ip]/[dev],[tgt-port]@<
 
 static bool oops_only;
 module_param(oops_only, bool, 0600);
-MODULE_PARM_DESC(oops_only, "Only log oops messages");
+MODULE_PARM_DESC(oops_only,
+		 "Only log oops messages, everything once the kernel died");
 
 #define NETCONSOLE_PARAM_TARGET_PREFIX "cmdline"
 
@@ -95,6 +97,17 @@ static int __init option_setup(char *opt)
 }
 __setup("netconsole=", option_setup);
 #endif	/* MODULE */
+
+/* The kernel is dying, or has died.
+ *
+ * oops_in_progress only spans the printing of the crash. netconsole is
+ * CON_NBCON_ATOMIC_UNSAFE, so the records reach the target later, from the
+ * printer thread, with the flag already cleared. TAINT_DIE outlives it.
+ */
+static bool netconsole_kernel_dying(void)
+{
+	return oops_in_progress || test_taint(TAINT_DIE);
+}
 
 /* Linked list of all configured targets */
 static LIST_HEAD(target_list);
@@ -111,21 +124,10 @@ static DEFINE_MUTEX(target_cleanup_list_lock);
 
 static struct workqueue_struct *netconsole_wq;
 
-/*
- * Console driver for netconsoles.  Register only consoles that have
- * an associated target of the same type.
- */
-static struct console netconsole_ext, netconsole;
-
 struct netconsole_target_stats  {
 	u64_stats_t xmit_drop_count;
 	u64_stats_t enomem_count;
 	struct u64_stats_sync syncp;
-};
-
-enum console_type {
-	CONS_BASIC = BIT(0),
-	CONS_EXTENDED = BIT(1),
 };
 
 /* Features enabled in sysdata. Contrary to userdata, this data is populated by
@@ -184,6 +186,7 @@ struct netcons_userdata {
  * @sysdata:		Cached, formatted string of append
  * @sysdata_fields:	Sysdata features enabled.
  * @msgcounter:	Message sent counter.
+ * @ratelimit:	Token bucket used to rate limit messages
  * @stats:	Packet send stats for the target. Used for debugging.
  * @state:	State of the target.
  *		Visible from userspace (read-write).
@@ -214,6 +217,7 @@ struct netcons_userdata {
  *		successful netpoll_setup() / netpoll_cleanup() pair on @np.
  * @refill_wq:	Work item that asynchronously tops @skb_pool back up to
  *		MAX_SKBS after find_skb() drains an entry.
+ * @console:	Console printing to this target, registered once it is enabled.
  */
 struct netconsole_target {
 	struct list_head	list;
@@ -227,6 +231,8 @@ struct netconsole_target {
 	u32			sysdata_fields;
 	/* protected by target_list_lock */
 	u32			msgcounter;
+	/* carries its own lock, writers hold dynamic_netconsole_mutex */
+	struct ratelimit_state	ratelimit;
 #endif
 	struct netconsole_target_stats stats;
 	enum target_state	state;
@@ -243,7 +249,12 @@ struct netconsole_target {
 	struct work_struct	resume_wq;
 	struct sk_buff_head	skb_pool;
 	struct work_struct	refill_wq;
+	struct console		console;
 };
+
+static int netconsole_register_console(struct netconsole_target *nt,
+				       short flags);
+static void netconsole_unregister_console(struct netconsole_target *nt);
 
 #ifdef	CONFIG_NETCONSOLE_DYNAMIC
 
@@ -289,6 +300,26 @@ static void dynamic_netconsole_mutex_unlock(void)
 	mutex_unlock(&dynamic_netconsole_mutex);
 }
 
+static void netconsole_ratelimit_init(struct netconsole_target *nt)
+{
+	ratelimit_state_init(&nt->ratelimit, 0, DEFAULT_RATELIMIT_BURST);
+	/* The flag keeps ___ratelimit() from reporting the suppressed count
+	 * itself, which would printk() from inside the console being
+	 * serviced. Nothing calls ratelimit_state_exit(), so the count is
+	 * never reported on release either.
+	 */
+	ratelimit_set_flags(&nt->ratelimit, RATELIMIT_MSG_ON_RELEASE);
+}
+
+static bool netconsole_ratelimited(struct netconsole_target *nt)
+{
+	/* A limit meant for steady-state logging must not eat a crash dump. */
+	if (netconsole_kernel_dying())
+		return false;
+
+	return !__ratelimit(&nt->ratelimit);
+}
+
 #else	/* !CONFIG_NETCONSOLE_DYNAMIC */
 
 static int __init dynamic_netconsole_init(void)
@@ -323,6 +354,15 @@ static void dynamic_netconsole_mutex_lock(void)
 
 static void dynamic_netconsole_mutex_unlock(void)
 {
+}
+
+static void netconsole_ratelimit_init(struct netconsole_target *nt)
+{
+}
+
+static bool netconsole_ratelimited(struct netconsole_target *nt)
+{
+	return false;
 }
 
 #endif	/* CONFIG_NETCONSOLE_DYNAMIC */
@@ -383,6 +423,8 @@ static void netcons_wait_carrier(struct netpoll *np, struct net_device *ndev)
 
 	atmost = jiffies + netpoll_get_carrier_timeout() * HZ;
 	while (!netif_carrier_ok(ndev)) {
+		if (READ_ONCE(ndev->reg_state) != NETREG_REGISTERED)
+			break;
 		if (time_after(jiffies, atmost)) {
 			np_notice(np, "timeout waiting for carrier\n");
 			break;
@@ -537,6 +579,16 @@ static int netcons_netpoll_setup(struct netconsole_target *nt)
 		rtnl_unlock();
 		netcons_wait_carrier(np, ndev);
 		rtnl_lock();
+
+		/* Check that ndev hasn't been unregistered when we released
+		 * the RTNL above.
+		 */
+		if (ndev->reg_state != NETREG_REGISTERED) {
+			np_err(np, "%s was unregistered while waiting for carrier, aborting\n",
+			       netcons_egress_dev(np, buf, sizeof(buf)));
+			err = -ENODEV;
+			goto put;
+		}
 	}
 
 	if (nt->local_ip.family == AF_UNSPEC) {
@@ -552,13 +604,16 @@ static int netcons_netpoll_setup(struct netconsole_target *nt)
 	err = __netpoll_setup(np, ndev);
 	if (err)
 		goto put;
-	rtnl_unlock();
 
 	/* Make sure all NAPI polls which started before dev->npinfo
 	 * was visible have exited before we start calling NAPI poll.
 	 * NAPI skips locking if dev->npinfo is NULL.
+	 * Hold RTNL until enable is finished so we don't race with
+	 * netconsole_netdev_event()
 	 */
-	synchronize_rcu();
+	synchronize_net();
+	nt->state = STATE_ENABLED;
+	rtnl_unlock();
 
 	return 0;
 
@@ -589,7 +644,6 @@ static void resume_target(struct netconsole_target *nt)
 		return;
 	}
 
-	nt->state = STATE_ENABLED;
 	pr_info("network logging resumed on interface %s\n", nt->np.dev_name);
 }
 
@@ -630,6 +684,11 @@ static void process_resume_target(struct work_struct *work)
 	list_del_init(&nt->list);
 	spin_unlock_irqrestore(&target_list_lock, flags);
 
+	/* The console registered before the deactivation may still be around,
+	 * and extended may have changed since. Drop it here, a new one is
+	 * registered below once the target is enabled again.
+	 */
+	netconsole_unregister_console(nt);
 	resume_target(nt);
 
 	/* netpoll_setup() took a net_device reference and dropped the RTNL
@@ -660,6 +719,8 @@ static void process_resume_target(struct work_struct *work)
 	spin_unlock_irqrestore(&target_list_lock, flags);
 	rtnl_unlock();
 
+	netconsole_register_console(nt, 0);
+
 out_unlock:
 	dynamic_netconsole_mutex_unlock();
 }
@@ -686,6 +747,7 @@ static struct netconsole_target *alloc_and_init(void)
 	nt->remote_port = 6666;
 	eth_broadcast_addr(nt->remote_mac);
 	nt->state = STATE_DISABLED;
+	netconsole_ratelimit_init(nt);
 	INIT_WORK(&nt->resume_wq, process_resume_target);
 	/* Set up the skb pool primitives once; enabling only refills it. */
 	skb_queue_head_init(&nt->skb_pool);
@@ -898,10 +960,23 @@ static ssize_t remote_ip_show(struct config_item *item, char *buf)
 
 static ssize_t local_mac_show(struct config_item *item, char *buf)
 {
-	struct net_device *dev = to_target(item)->np.dev;
-	static const u8 bcast[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	struct netconsole_target *nt = to_target(item);
+	unsigned long flags;
+	u8 mac[ETH_ALEN];
 
-	return sysfs_emit(buf, "%pM\n", dev ? dev->dev_addr : bcast);
+	eth_broadcast_addr(mac);
+
+	dynamic_netconsole_mutex_lock();
+	/* Hold target_list_lock here so netconsole_netdev_event() doesn't tear
+	 * down np.dev from under us.
+	 */
+	spin_lock_irqsave(&target_list_lock, flags);
+	if (nt->state == STATE_ENABLED && nt->np.dev)
+		memcpy(mac, nt->np.dev->dev_addr, ETH_ALEN);
+	spin_unlock_irqrestore(&target_list_lock, flags);
+	dynamic_netconsole_mutex_unlock();
+
+	return sysfs_emit(buf, "%pM\n", mac);
 }
 
 static ssize_t remote_mac_show(struct config_item *item, char *buf)
@@ -922,6 +997,21 @@ static ssize_t transmit_errors_show(struct config_item *item, char *buf)
 	} while (u64_stats_fetch_retry(&nt->stats.syncp, start));
 
 	return sysfs_emit(buf, "%llu\n", xmit_drop_count + enomem_count);
+}
+
+static ssize_t ratelimit_interval_ms_show(struct config_item *item, char *buf)
+{
+	struct netconsole_target *nt = to_target(item);
+
+	return sysfs_emit(buf, "%u\n",
+			  jiffies_to_msecs(READ_ONCE(nt->ratelimit.interval)));
+}
+
+static ssize_t ratelimit_burst_show(struct config_item *item, char *buf)
+{
+	struct netconsole_target *nt = to_target(item);
+
+	return sysfs_emit(buf, "%d\n", READ_ONCE(nt->ratelimit.burst));
 }
 
 /* configfs helper to display if cpu_nr sysdata feature is enabled */
@@ -962,33 +1052,6 @@ static ssize_t sysdata_release_enabled_show(struct config_item *item,
 	dynamic_netconsole_mutex_unlock();
 
 	return sysfs_emit(buf, "%d\n", release_enabled);
-}
-
-/* Iterate in the list of target, and make sure we don't have any console
- * register without targets of the same type
- */
-static void unregister_netcons_consoles(void)
-{
-	struct netconsole_target *nt;
-	u32 console_type_needed = 0;
-	unsigned long flags;
-
-	spin_lock_irqsave(&target_list_lock, flags);
-	list_for_each_entry(nt, &target_list, list) {
-		if (nt->extended)
-			console_type_needed |= CONS_EXTENDED;
-		else
-			console_type_needed |= CONS_BASIC;
-	}
-	spin_unlock_irqrestore(&target_list_lock, flags);
-
-	if (!(console_type_needed & CONS_EXTENDED) &&
-	    console_is_registered(&netconsole_ext))
-		unregister_console(&netconsole_ext);
-
-	if (!(console_type_needed & CONS_BASIC) &&
-	    console_is_registered(&netconsole))
-		unregister_console(&netconsole);
 }
 
 static ssize_t sysdata_msgid_enabled_show(struct config_item *item,
@@ -1034,6 +1097,9 @@ static ssize_t enabled_store(struct config_item *item,
 
 	ret = -EINVAL;
 	current_enabled = nt->state == STATE_ENABLED;
+	/* Interface events stop a target but keep its console */
+	if (!current_enabled)
+		netconsole_unregister_console(nt);
 	if (enabled == current_enabled) {
 		pr_info("network logging has already %s\n",
 			current_enabled ? "started" : "stopped");
@@ -1044,19 +1110,6 @@ static ssize_t enabled_store(struct config_item *item,
 		if (nt->release && !nt->extended) {
 			pr_err("Not enabling netconsole. Release feature requires extended log message");
 			goto out_unlock;
-		}
-
-		if (nt->extended && !console_is_registered(&netconsole_ext)) {
-			netconsole_ext.flags |= CON_ENABLED;
-			register_console(&netconsole_ext);
-		}
-
-		/* User might be enabling the basic format target for the very
-		 * first time, make sure the console is registered.
-		 */
-		if (!nt->extended && !console_is_registered(&netconsole)) {
-			netconsole.flags |= CON_ENABLED;
-			register_console(&netconsole);
 		}
 
 		/*
@@ -1079,7 +1132,9 @@ static ssize_t enabled_store(struct config_item *item,
 			goto out_unlock;
 		}
 
-		nt->state = STATE_ENABLED;
+		ret = netconsole_register_console(nt, 0);
+		if (ret)
+			goto out_unlock;
 		pr_info("network logging started\n");
 	} else {	/* false */
 		/* We need to disable the netconsole before cleaning it up
@@ -1095,10 +1150,7 @@ static ssize_t enabled_store(struct config_item *item,
 		list_move(&nt->list, &target_cleanup_list);
 		spin_unlock_irqrestore(&target_list_lock, flags);
 		mutex_unlock(&target_cleanup_list_lock);
-		/* Unregister consoles, whose the last target of that type got
-		 * disabled.
-		 */
-		unregister_netcons_consoles();
+		netconsole_unregister_console(nt);
 	}
 
 	ret = count;
@@ -1311,6 +1363,60 @@ static ssize_t remote_mac_store(struct config_item *item, const char *buf,
 out_unlock:
 	dynamic_netconsole_mutex_unlock();
 	return ret;
+}
+
+static ssize_t ratelimit_interval_ms_store(struct config_item *item,
+					   const char *buf, size_t count)
+{
+	struct netconsole_target *nt = to_target(item);
+	unsigned int interval;
+	unsigned long jifs;
+	ssize_t ret;
+
+	ret = kstrtouint(buf, 10, &interval);
+	if (ret)
+		return ret;
+
+	/* msecs_to_jiffies() saturates below INT_MAX on 32-bit, so the
+	 * jiffies value alone does not bound what userspace wrote.
+	 */
+	jifs = msecs_to_jiffies(interval);
+	if (interval > INT_MAX || jifs > INT_MAX)
+		return -ERANGE;
+
+	/* Restart the interval, so a target that is already flooding picks
+	 * the new limit up now rather than at the next refill.
+	 */
+	dynamic_netconsole_mutex_lock();
+	ratelimit_state_reset_interval(&nt->ratelimit, jifs);
+	dynamic_netconsole_mutex_unlock();
+
+	return count;
+}
+
+static ssize_t ratelimit_burst_store(struct config_item *item, const char *buf,
+				     size_t count)
+{
+	struct netconsole_target *nt = to_target(item);
+	unsigned int burst;
+	ssize_t ret;
+
+	ret = kstrtouint(buf, 10, &burst);
+	if (ret)
+		return ret;
+
+	if (burst > INT_MAX)
+		return -ERANGE;
+
+	/* Restart the interval as ratelimit_interval_ms_store() does, so the
+	 * new burst is spendable right away.
+	 */
+	dynamic_netconsole_mutex_lock();
+	WRITE_ONCE(nt->ratelimit.burst, burst);
+	ratelimit_state_reset_interval(&nt->ratelimit, nt->ratelimit.interval);
+	dynamic_netconsole_mutex_unlock();
+
+	return count;
 }
 
 struct userdatum {
@@ -1677,6 +1783,8 @@ CONFIGFS_ATTR_RO(, local_mac);
 CONFIGFS_ATTR(, remote_mac);
 CONFIGFS_ATTR(, release);
 CONFIGFS_ATTR_RO(, transmit_errors);
+CONFIGFS_ATTR(, ratelimit_interval_ms);
+CONFIGFS_ATTR(, ratelimit_burst);
 
 static struct configfs_attribute *netconsole_target_attrs[] = {
 	&attr_enabled,
@@ -1690,6 +1798,8 @@ static struct configfs_attribute *netconsole_target_attrs[] = {
 	&attr_local_mac,
 	&attr_remote_mac,
 	&attr_transmit_errors,
+	&attr_ratelimit_interval_ms,
+	&attr_ratelimit_burst,
 	NULL,
 };
 
@@ -1770,6 +1880,9 @@ static struct config_group *make_netconsole_target(struct config_group *group,
 
 	/* Initialize the config_group member */
 	init_target_config_group(nt, name);
+	/* The index stays 0, printk shows the console as netcons_<name>0 */
+	snprintf(nt->console.name, sizeof(nt->console.name), "netcons_%s",
+		 name);
 
 	/* Adding, but it is disabled */
 	spin_lock_irqsave(&target_list_lock, flags);
@@ -1787,6 +1900,8 @@ static void drop_netconsole_target(struct config_group *group,
 	bool needs_cleanup;
 
 	dynamic_netconsole_mutex_lock();
+
+	netconsole_unregister_console(nt);
 
 	mutex_lock(&target_cleanup_list_lock);
 	spin_lock_irqsave(&target_list_lock, flags);
@@ -2470,50 +2585,40 @@ static void send_msg_udp(struct netconsole_target *nt, const char *msg,
 }
 
 /**
- * netconsole_write - Generic function to send a msg to all targets
+ * netconsole_write - Send a msg to the target of a console
+ * @con: console of the target
  * @wctxt: nbcon write context
- * @extended: "true" for extended console mode
  *
- * Given an nbcon write context, send the message to the netconsole targets
+ * Given an nbcon write context, send the message to the netconsole target
  */
-static void netconsole_write(struct nbcon_write_context *wctxt, bool extended)
+static void netconsole_write(struct console *con,
+			     struct nbcon_write_context *wctxt)
 {
 	struct netconsole_target *nt;
 
-	if (oops_only && !oops_in_progress)
+	nt = container_of(con, struct netconsole_target, console);
+
+	if (oops_only && !netconsole_kernel_dying())
 		return;
 
-	list_for_each_entry(nt, &target_list, list) {
-		if (nt->extended != extended || nt->state != STATE_ENABLED ||
-		    !netif_running(nt->np.dev))
-			continue;
+	if (nt->state != STATE_ENABLED || !netif_running(nt->np.dev))
+		return;
 
-		/* If nbcon_enter_unsafe() fails, just return given netconsole
-		 * lost the ownership, and iterating over the targets will not
-		 * be able to re-acquire.
-		 */
-		if (!nbcon_enter_unsafe(wctxt))
-			return;
+	if (netconsole_ratelimited(nt))
+		return;
 
-		if (extended)
-			send_ext_msg_udp(nt, wctxt);
-		else
-			send_msg_udp(nt, wctxt->outbuf, wctxt->len);
+	/* If nbcon_enter_unsafe() fails, just return given netconsole
+	 * lost the ownership.
+	 */
+	if (!nbcon_enter_unsafe(wctxt))
+		return;
 
-		nbcon_exit_unsafe(wctxt);
-	}
-}
+	if (nt->extended)
+		send_ext_msg_udp(nt, wctxt);
+	else
+		send_msg_udp(nt, wctxt->outbuf, wctxt->len);
 
-static void netconsole_write_ext(struct console *con __always_unused,
-				 struct nbcon_write_context *wctxt)
-{
-	netconsole_write(wctxt, true);
-}
-
-static void netconsole_write_basic(struct console *con __always_unused,
-				   struct nbcon_write_context *wctxt)
-{
-	netconsole_write(wctxt, false);
+	nbcon_exit_unsafe(wctxt);
 }
 
 static void netconsole_device_lock(struct console *con __always_unused,
@@ -2667,9 +2772,10 @@ static struct netconsole_target *alloc_param_target(char *target_config,
 			 * otherwise, keep the target in the list, but disabled.
 			 */
 			goto fail;
-	} else {
-		nt->state = STATE_ENABLED;
 	}
+	/* netcons_cmdline<N> does not fit, printk shows the index after it */
+	strscpy(nt->console.name, "netcons_" NETCONSOLE_PARAM_TARGET_PREFIX);
+	nt->console.index = cmdline_count;
 	populate_configfs_item(nt, cmdline_count);
 
 	return nt;
@@ -2682,6 +2788,7 @@ fail:
 /* Cleanup netpoll for given target (from boot/module param) and free it */
 static void free_param_target(struct netconsole_target *nt)
 {
+	netconsole_unregister_console(nt);
 	cancel_work_sync(&nt->resume_wq);
 	if (nt->state == STATE_ENABLED)
 		netconsole_skb_pool_flush(nt);
@@ -2692,29 +2799,58 @@ static void free_param_target(struct netconsole_target *nt)
 	kfree(nt);
 }
 
-static struct console netconsole_ext = {
-	.name = "netcon_ext",
-	.flags = CON_ENABLED | CON_EXTENDED | CON_NBCON | CON_NBCON_ATOMIC_UNSAFE,
-	.write_thread = netconsole_write_ext,
-	.write_atomic = netconsole_write_ext,
-	.device_lock = netconsole_device_lock,
-	.device_unlock = netconsole_device_unlock,
-};
+/* Register the console of an enabled @nt, @flags can request CON_PRINTBUFFER.
+ * If that fails, disable @nt, as it would not print anything.
+ */
+static int netconsole_register_console(struct netconsole_target *nt,
+				       short flags)
+{
+	struct console *con = &nt->console;
+	unsigned long irqflags;
 
-static struct console netconsole = {
-	.name = "netcon",
-	.flags = CON_ENABLED | CON_NBCON | CON_NBCON_ATOMIC_UNSAFE,
-	.write_thread = netconsole_write_basic,
-	.write_atomic = netconsole_write_basic,
-	.device_lock = netconsole_device_lock,
-	.device_unlock = netconsole_device_unlock,
-};
+	if (nt->state != STATE_ENABLED)
+		return 0;
+
+	con->flags = CON_ENABLED | CON_NBCON | CON_NBCON_ATOMIC_UNSAFE | flags;
+	if (nt->extended)
+		con->flags |= CON_EXTENDED;
+	con->write_thread = netconsole_write;
+	con->write_atomic = netconsole_write;
+	con->device_lock = netconsole_device_lock;
+	con->device_unlock = netconsole_device_unlock;
+
+	register_console(con);
+	if (console_is_registered(con))
+		return 0;
+
+	pr_err("failed to register console %s%d, disabling its target\n",
+	       con->name, con->index);
+	rtnl_lock();
+	spin_lock_irqsave(&target_list_lock, irqflags);
+	nt->state = STATE_DISABLED;
+	spin_unlock_irqrestore(&target_list_lock, irqflags);
+	/* An interface event may have released the device already */
+	if (nt->np.dev) {
+		netconsole_skb_pool_flush(nt);
+		netcons_release_dev(nt);
+	}
+	rtnl_unlock();
+
+	return -ENOMEM;
+}
+
+static void netconsole_unregister_console(struct netconsole_target *nt)
+{
+	if (!console_is_registered(&nt->console))
+		return;
+
+	unregister_console(&nt->console);
+}
 
 static int __init init_netconsole(void)
 {
 	int err;
 	struct netconsole_target *nt, *tmp;
-	u32 console_type_needed = 0;
 	unsigned int count = 0;
 	unsigned long flags;
 	char *target_config;
@@ -2730,13 +2866,7 @@ static int __init init_netconsole(void)
 				goto fail;
 			}
 			/* Dump existing printks when we register */
-			if (nt->extended) {
-				console_type_needed |= CONS_EXTENDED;
-				netconsole_ext.flags |= CON_PRINTBUFFER;
-			} else {
-				console_type_needed |= CONS_BASIC;
-				netconsole.flags |= CON_PRINTBUFFER;
-			}
+			netconsole_register_console(nt, CON_PRINTBUFFER);
 
 			spin_lock_irqsave(&target_list_lock, flags);
 			list_add(&nt->list, &target_list);
@@ -2759,10 +2889,6 @@ static int __init init_netconsole(void)
 	if (err)
 		goto undonotifier;
 
-	if (console_type_needed & CONS_EXTENDED)
-		register_console(&netconsole_ext);
-	if (console_type_needed & CONS_BASIC)
-		register_console(&netconsole);
 	pr_info("network logging started\n");
 
 	return err;
@@ -2795,10 +2921,6 @@ static void __exit cleanup_netconsole(void)
 {
 	struct netconsole_target *nt, *tmp;
 
-	if (console_is_registered(&netconsole_ext))
-		unregister_console(&netconsole_ext);
-	if (console_is_registered(&netconsole))
-		unregister_console(&netconsole);
 	dynamic_netconsole_exit();
 	unregister_netdevice_notifier(&netconsole_netdev_notifier);
 	flush_workqueue(netconsole_wq);

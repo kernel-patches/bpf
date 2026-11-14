@@ -153,6 +153,11 @@ OPEN Alliance TC6 Framework
 - Forwards the received Ethernet frame from 10Base-T1x MAC-PHY to n/w
   subsystem.
 
+- If supported and enabled, timestamps are stored in the skb. Transmit
+  timestamps are requested via the TSC header field and read from
+  timestamp capture register A, B or C. Receive timestamps are
+  prepended to the frame when the RTSA footer bit is set.
+
 Data Transaction
 ~~~~~~~~~~~~~~~~
 
@@ -457,7 +462,15 @@ The include/linux/oa_tc6.h defines the following functions:
                                            struct net_device *netdev, \
                                            struct oa_tc6_quirks *quirks)
 
-Initialize OA TC6 lib.
+Initialize OA TC6 lib. The device specific modifiers of the protocol are
+passed in the quirk_flags field of struct oa_tc6_quirks, which is optional
+and may be NULL:
+
+- OA_TC6_BROKEN_PHY: Leave MDIO bus registration and PHY connection to the
+  vendor driver instead of the framework.
+- OA_TC6_CONFIG_RX_CUT_THROUGH: Enable receive cut-through in the CONFIG0
+  register. It is ignored if the MAC-PHY does not report receive cut-through
+  capability.
 
 .. c:function:: void oa_tc6_exit(struct oa_tc6 *tc6)
 
@@ -496,3 +509,69 @@ the MAC-PHY.
 Zero align receive frame feature can be enabled to align all receive ethernet
 frames data to start at the beginning of any receive data chunk payload with a
 start word offset (SWO) of zero.
+
+.. c:function:: int oa_tc6_tx_credit_threshold_set(struct oa_tc6 *tc6, \
+                                                   u8 thresh);
+
+Sets the minimum number of free transmit credits that must be available
+before the MAC-PHY asserts the interrupt. The default is one credit
+according to OPEN Alliance 10BASE-T1x MAC-PHY Serial Interface specification.
+
+The thresh argument is the encoded TXCTHRESH field value of the CONFIG0
+register, not the credit count:
+
+- 0: one or more credits (default)
+- 1: four or more credits
+- 2: eight or more credits (OA_TC6_CONFIG0_TXCTHRESH_8)
+- 3: sixteen or more credits
+
+A value above 3 does not fit the field and fails with -EINVAL.
+
+.. c:function:: int oa_tc6_ptp_register(struct oa_tc6 *tc6, \
+                                        struct ptp_clock_info *info);
+
+Registers the PTP hardware clock (PHC) with the kernel. Returns 0 immediately
+when the MAC-PHY does not support hardware timestamp. Otherwise it sets the
+name field of ptp_clock_info and registers the clock. Initialization of the
+other fields in the ptp_clock_info structure is left to the vendor as the
+PHC registers and their programming are vendor specific. The fields max_adj,
+owner, and all the functions for the clock operations, like adjfine,
+gettimex64, settime64, adjtime are expected to be initialized in the
+structure before registering the hardware clock.
+
+.. c:function:: void oa_tc6_ptp_unregister(struct oa_tc6 *tc6);
+
+Unregisters the PTP hardware clock.
+
+.. c:function:: int oa_tc6_get_ts_info(struct oa_tc6 *tc6, \
+                                       struct kernel_ethtool_ts_info *info);
+
+Provides timestamp related settings that are supported to ethtool.
+
+.. c:function:: void oa_tc6_hwtstamp_get(struct oa_tc6 *tc6, \
+                                         struct kernel_hwtstamp_config *cfg);
+
+Returns hardware timestamp configuration. Part of net_device_ops callbacks.
+
+.. c:function:: void oa_tc6_get_ts_stats(struct oa_tc6 *tc6, \
+                                         struct ethtool_ts_stats *stats);
+
+Provides hardware timestamp related traffic statistics for ethtool.
+
+.. c:function:: int oa_tc6_hwtstamp_set(struct oa_tc6 *tc6, \
+                                        struct kernel_hwtstamp_config *cfg);
+
+Helper to set hardware timestamp configuration. Part of net_device_ops
+callbacks.
+
+.. c:function:: int oa_tc6_write_register_mms(struct oa_tc6 *tc6, \
+                                              u8 mms, u16 address, \
+                                              u32 value);
+
+Write a single register addressed by @mms and @address in the MAC-PHY.
+
+.. c:function:: int oa_tc6_read_register_mms(struct oa_tc6 *tc6, \
+                                             u8 mms, u16 address, \
+                                             u32 *value);
+
+Read a single register addressed by @mms and @address in the MAC-PHY.

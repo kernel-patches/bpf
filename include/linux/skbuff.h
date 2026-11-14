@@ -269,10 +269,35 @@
 #define SKB_MAX_HEAD(X)		(SKB_MAX_ORDER((X), 0))
 #define SKB_MAX_ALLOC		(SKB_MAX_ORDER(0, 2))
 
+#define MAX_TCP_HEADER	L1_CACHE_ALIGN(128 + MAX_HEADER)
+
+/* This should be increased if a protocol with a bigger head is added. */
+#define GRO_MAX_HEAD (MAX_HEADER + 128)
+#define GRO_MAX_HEAD_PAD (GRO_MAX_HEAD + NET_SKB_PAD + NET_IP_ALIGN)
+
+#define SKB_SMALL_HEAD_SIZE SKB_HEAD_ALIGN(max(MAX_TCP_HEADER,		\
+					       GRO_MAX_HEAD_PAD))
+
+/* SKB_SMALL_HEAD_CACHE_SIZE is the size used for the skbuff_small_head
+ * kmem_cache. The non-power-of-2 padding is kept for historical reasons and
+ * to avoid potential collisions with generic kmalloc bucket sizes.
+ */
+#define SKB_SMALL_HEAD_CACHE_SIZE			\
+	(is_power_of_2(SKB_SMALL_HEAD_SIZE) ?		\
+	 (SKB_SMALL_HEAD_SIZE + L1_CACHE_BYTES) :	\
+	 SKB_SMALL_HEAD_SIZE)
+
 /* return minimum truesize of one skb containing X bytes of data */
 #define SKB_TRUESIZE(X) ((X) +						\
 			 SKB_DATA_ALIGN(sizeof(struct sk_buff)) +	\
 			 SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
+
+/* return estimated truesize allocated by alloc_skb(X) via kmalloc_reserve() */
+#define SKB_ALLOCSIZE(X)					\
+	((SKB_HEAD_ALIGN(X) <= SKB_SMALL_HEAD_CACHE_SIZE ?	\
+	  SKB_SMALL_HEAD_CACHE_SIZE :				\
+	  kmalloc_size_roundup(SKB_HEAD_ALIGN(X))) +		\
+	 SKB_DATA_ALIGN(sizeof(struct sk_buff)))
 
 struct net_device;
 struct scatterlist;
@@ -534,12 +559,17 @@ enum {
 #define SKBFL_ALL_ZEROCOPY	(SKBFL_ZEROCOPY_FRAG | SKBFL_PURE_ZEROCOPY | \
 				 SKBFL_DONT_ORPHAN | SKBFL_MANAGED_FRAG_REFS)
 
-struct ubuf_info_ops {
-	void (*complete)(struct sk_buff *, struct ubuf_info *,
-			 bool zerocopy_success);
-	/* has to be compatible with skb_zcopy_set() */
-	int (*link_skb)(struct sk_buff *skb, struct ubuf_info *uarg);
+enum ubuf_info_type {
+	UBUF_TYPE_NONE = 0,
+	UBUF_TYPE_MSG_ZEROCOPY,
+	UBUF_TYPE_IO_URING,
+	UBUF_TYPE_TPACKET,
+	UBUF_TYPE_VHOST,
+	UBUF_TYPE_XENVIF,
 };
+
+typedef void (*ubuf_complete_fn)(struct sk_buff *skb, struct ubuf_info *uarg,
+				 bool zerocopy_success);
 
 /*
  * The callback notifies userspace to release buffers when skb DMA is done in
@@ -550,8 +580,8 @@ struct ubuf_info_ops {
  * The desc field is used to track userspace buffer index.
  */
 struct ubuf_info {
-	const struct ubuf_info_ops *ops;
 	refcount_t refcnt;
+	u8 type;
 	u8 flags;
 };
 
@@ -1757,7 +1787,9 @@ static inline void skb_set_end_offset(struct sk_buff *skb, unsigned int offset)
 }
 #endif
 
-extern const struct ubuf_info_ops msg_zerocopy_ubuf_ops;
+void net_zcopy_register(enum ubuf_info_type type, ubuf_complete_fn fn);
+void net_zcopy_complete(struct sk_buff *skb, struct ubuf_info *uarg,
+			bool zerocopy_success);
 
 struct ubuf_info *msg_zerocopy_realloc(struct sock *sk, size_t size,
 				       struct ubuf_info *uarg, bool devmem);
@@ -1843,13 +1875,13 @@ static inline void skb_zcopy_set(struct sk_buff *skb, struct ubuf_info *uarg,
 static inline void net_zcopy_put(struct ubuf_info *uarg)
 {
 	if (uarg)
-		uarg->ops->complete(NULL, uarg, true);
+		net_zcopy_complete(NULL, uarg, true);
 }
 
 static inline void net_zcopy_put_abort(struct ubuf_info *uarg, bool have_uref)
 {
 	if (uarg) {
-		if (uarg->ops == &msg_zerocopy_ubuf_ops)
+		if (uarg->type == UBUF_TYPE_MSG_ZEROCOPY)
 			msg_zerocopy_put_abort(uarg, have_uref);
 		else if (have_uref)
 			net_zcopy_put(uarg);
@@ -1862,7 +1894,7 @@ static inline void skb_zcopy_clear(struct sk_buff *skb, bool zerocopy_success)
 	struct ubuf_info *uarg = skb_zcopy(skb);
 
 	if (uarg) {
-		uarg->ops->complete(skb, uarg, zerocopy_success);
+		net_zcopy_complete(skb, uarg, zerocopy_success);
 
 		skb_shinfo(skb)->flags &= ~SKBFL_ALL_ZEROCOPY;
 	}
@@ -2684,6 +2716,7 @@ static inline void skb_add_rx_frag_netmem(struct sk_buff *skb, int i,
 					  int size, unsigned int truesize)
 {
 	DEBUG_NET_WARN_ON_ONCE(size > truesize);
+	DEBUG_NET_WARN_ON_ONCE(!netmem_can_retain(netmem));
 
 	skb_fill_netmem_desc(skb, i, netmem, off, size);
 	skb->len += size;
@@ -3752,33 +3785,30 @@ int skb_cow_data_for_xdp(struct page_pool *pool, struct sk_buff **pskb,
  * skb_frag_address - gets the address of the data contained in a paged fragment
  * @frag: the paged fragment buffer
  *
- * Returns: the address of the data within @frag. The page must already
- * be mapped.
+ * Returns: the address of the data within @frag, or %NULL if the CPU cannot
+ * read it.
  */
 static inline void *skb_frag_address(const skb_frag_t *frag)
 {
-	if (!skb_frag_page(frag))
+	void *ptr = netmem_address(skb_frag_netmem(frag));
+
+	if (!ptr)
 		return NULL;
 
-	return page_address(skb_frag_page(frag)) + skb_frag_off(frag);
+	return ptr + skb_frag_off(frag);
 }
 
 /**
  * skb_frag_address_safe - gets the address of the data contained in a paged fragment
  * @frag: the paged fragment buffer
  *
- * Returns: the address of the data within @frag. Checks that the page
- * is mapped and returns %NULL otherwise.
+ * Returns: the address of the data within @frag. Checks that the memory
+ * is mapped and readable and returns %NULL otherwise.
  */
 static inline void *skb_frag_address_safe(const skb_frag_t *frag)
 {
-	struct page *page = skb_frag_page(frag);
-	void *ptr;
+	void *ptr = netmem_address(skb_frag_netmem(frag));
 
-	if (!page)
-		return NULL;
-
-	ptr = page_address(page);
 	if (unlikely(!ptr))
 		return NULL;
 
@@ -4280,8 +4310,10 @@ void skb_free_datagram(struct sock *sk, struct sk_buff *skb);
 int skb_kill_datagram(struct sock *sk, struct sk_buff *skb, unsigned int flags);
 int skb_copy_bits(const struct sk_buff *skb, int offset, void *to, int len);
 int skb_store_bits(struct sk_buff *skb, int offset, const void *from, int len);
-__wsum skb_copy_and_csum_bits(const struct sk_buff *skb, int offset, u8 *to,
-			      int len);
+int __must_check skb_copy_and_csum_bits(const struct sk_buff *skb, int offset,
+					u8 *to, int len, __wsum *csump);
+int __must_check skb_checksum_full(const struct sk_buff *skb, int offset,
+				   int len, __wsum *csump);
 int skb_splice_bits(struct sk_buff *skb, struct sock *sk, unsigned int offset,
 		    struct pipe_inode_info *pipe, unsigned int len,
 		    unsigned int flags);
@@ -4330,6 +4362,8 @@ static inline int memcpy_to_msg(struct msghdr *msg, void *data, int len)
 
 __wsum skb_checksum(const struct sk_buff *skb, int offset, int len,
 		    __wsum csum);
+int __must_check skb_crc32c_full(const struct sk_buff *skb, int offset,
+				 int len, u32 *crcp);
 u32 skb_crc32c(const struct sk_buff *skb, int offset, int len, u32 crc);
 
 static inline void * __must_check
@@ -4890,7 +4924,7 @@ static inline void skb_checksum_complete_unset(struct sk_buff *skb)
  *   0: checksum is validated or try to in skb_checksum_complete. In the latter
  *	case the ip_summed will not be CHECKSUM_UNNECESSARY and the pseudo
  *	checksum is stored in skb->csum for use in __skb_checksum_complete
- *   non-zero: value of invalid checksum
+ *   non-zero: value of invalid checksum, or 1 if the skb can't be checksummed
  *
  */
 static inline __sum16 __skb_checksum_validate_complete(struct sk_buff *skb,
@@ -4930,7 +4964,7 @@ static inline __wsum null_compute_pseudo(struct sk_buff *skb, int proto)
  *
  * Return values:
  *   0: checksum is validated or try to in skb_checksum_complete
- *   non-zero: value of invalid checksum
+ *   non-zero: value of invalid checksum, or 1 if the skb can't be checksummed
  */
 #define __skb_checksum_validate(skb, proto, complete,			\
 				zero_okay, check, compute_pseudo)	\

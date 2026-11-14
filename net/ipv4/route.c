@@ -150,6 +150,8 @@ static struct neighbour *ipv4_dst_neigh_lookup(const struct dst_entry *dst,
 					       struct sk_buff *skb,
 					       const void *daddr);
 static void ipv4_confirm_neigh(const struct dst_entry *dst, const void *daddr);
+static struct fib_nh_exception *find_exception(struct fib_nh_common *nhc,
+					       __be32 daddr);
 
 static struct dst_ops ipv4_dst_ops = {
 	.family =		AF_INET,
@@ -392,6 +394,27 @@ static inline int ip_rt_proc_init(void)
 	return 0;
 }
 #endif /* CONFIG_PROC_FS */
+
+/*
+ * Draw rt_genid bumps from one sequence shared by all netns. A route keeps
+ * the genid of the netns it was created in, and is checked against the netns
+ * its device is in now, so distinct values make that check fail once the
+ * device has moved. Every netns starts at 0, which the sequence never hands
+ * out, and inserting a route bumps the genid, so cached routes carry values
+ * drawn from the sequence.
+ */
+static atomic_t rt_genid_seq;
+
+void rt_genid_bump_ipv4(struct net *net)
+{
+	int genid;
+
+	do {
+		genid = atomic_inc_return(&rt_genid_seq);
+	} while (!genid);
+	atomic_set(&net->ipv4.rt_genid, genid);
+}
+EXPORT_SYMBOL_GPL(rt_genid_bump_ipv4);
 
 static inline bool rt_is_expired(const struct rtable *rth)
 {
@@ -916,6 +939,7 @@ void ip_rt_send_redirect(struct sk_buff *skb)
 	struct inet_peer *peer;
 	int log_martians;
 	struct net *net;
+	u64 backoff;
 	int vif;
 
 	rcu_read_lock();
@@ -954,10 +978,10 @@ void ip_rt_send_redirect(struct sk_buff *skb)
 	/* Check for load limit; set rate_last to the latest sent
 	 * redirect.
 	 */
+	backoff = (u64)ip_rt_redirect_load << min(peer->n_redirects, 31U);
+	backoff = min_t(u64, backoff, MAX_JIFFY_OFFSET);
 	if (peer->n_redirects == 0 ||
-	    time_after(jiffies,
-		       (peer->rate_last +
-			(ip_rt_redirect_load << peer->n_redirects)))) {
+	    time_after(jiffies, peer->rate_last + (unsigned long)backoff)) {
 		__be32 gw = rt_nexthop(rt, ip_hdr(skb)->daddr);
 
 		icmp_send(skb, ICMP_REDIRECT, ICMP_REDIR_HOST, gw);
@@ -1054,6 +1078,26 @@ out:	kfree_skb_reason(skb, reason);
 	return 0;
 }
 
+#ifdef CONFIG_IP_ROUTE_MULTIPATH
+/* The mtu a path currently uses for daddr, as ipv4_mtu() would report it. */
+static u32 fib_nhc_mtu(struct fib_nh_common *nhc, const struct fib_info *fi,
+		       __be32 daddr)
+{
+	struct fib_nh_exception *fnhe = find_exception(nhc, daddr);
+	u32 mtu = 0;
+
+	if (fnhe && fnhe->fnhe_genid == fnhe_genid(dev_net(nhc->nhc_dev)))
+		mtu = fnhe->fnhe_pmtu;
+	if (!mtu)
+		mtu = fi->fib_mtu;
+	if (!mtu)
+		mtu = READ_ONCE(nhc->nhc_dev->mtu);
+	mtu = min(mtu, IP_MAX_MTU);
+
+	return mtu - lwtunnel_headroom(nhc->nhc_lwtstate, mtu);
+}
+#endif
+
 static void __ip_rt_update_pmtu(struct rtable *rt, struct flowi4 *fl4, u32 mtu)
 {
 	struct dst_entry *dst = &rt->dst;
@@ -1093,6 +1137,14 @@ static void __ip_rt_update_pmtu(struct rtable *rt, struct flowi4 *fl4, u32 mtu)
 				nhc = fib_info_nhc(res.fi, nhsel);
 				if (!nhc)
 					break;
+				/* old_mtu above is the mtu of the path dst
+				 * is on, don't raise what another path
+				 * uses. A locked mtu clears DF and goes
+				 * to every path.
+				 */
+				if (!lock &&
+				    mtu > fib_nhc_mtu(nhc, res.fi, fl4->daddr))
+					continue;
 				update_or_create_fnhe(nhc, fl4->daddr, 0, mtu, lock,
 						      jiffies + net->ipv4.ip_rt_mtu_expires);
 			}
@@ -2858,36 +2910,34 @@ struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *fl4,
 		goto make_route;
 	}
 
-	err = fib_lookup(net, fl4, res, 0);
+	err = fib_lookup(net, fl4, res, FIB_LOOKUP_REPORT_MISS);
 	if (err) {
 		res->fi = NULL;
 		res->table = NULL;
 		if (fl4->flowi4_oif &&
-		    (ipv4_is_multicast(fl4->daddr) || !fl4->flowi4_l3mdev)) {
-			/* Apparently, routing tables are wrong. Assume,
-			 * that the destination is on link.
+		    (ipv4_is_multicast(fl4->daddr) ||
+		     (!fl4->flowi4_l3mdev && err == -ESRCH))) {
+			/* When oif is specified, fib_lookup() is called
+			 * primarily to determine if the destination is
+			 * accessible directly or through a gateway. It also
+			 * checks whether there are any traffic restrictions
+			 * (blackhole, prohibit, unreachable), or if there's a
+			 * routing lookup miss.
 			 *
-			 * WHY? DW.
-			 * Because we are allowed to send to iface
-			 * even if it has NO routes and NO assigned
-			 * addresses. When oif is specified, routing
-			 * tables are looked up with only one purpose:
-			 * to catch if destination is gatewayed, rather than
-			 * direct. Moreover, if MSG_DONTROUTE is set,
-			 * we send packet, ignoring both routing tables
-			 * and ifaddr state. --ANK
-			 *
-			 *
-			 * We could make it even if oif is unknown,
-			 * likely IPv6, but we do not.
+			 * This fallback path is always taken for multicast,
+			 * regardless of any restrictions or misses. Non-vrf
+			 * unicast does honor restrictions, but falls back if
+			 * there's a miss. The destination is assumed on-link
+			 * for both.
 			 */
-
 			if (fl4->saddr == 0)
 				fl4->saddr = inet_select_addr(dev_out, 0,
 							      RT_SCOPE_LINK);
 			res->type = RTN_UNICAST;
 			goto make_route;
 		}
+		/* Reverse the mapping induced by FIB_LOOKUP_REPORT_MISS. */
+		err = err == -ESRCH ? -ENETUNREACH : err;
 		rth = ERR_PTR(err);
 		goto out;
 	}
@@ -3582,7 +3632,8 @@ static struct ctl_table ipv4_route_table[] = {
 		.data		= &ip_rt_redirect_load,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
 	},
 	{
 		.procname	= "redirect_number",

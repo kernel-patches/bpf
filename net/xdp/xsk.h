@@ -34,6 +34,21 @@ static inline struct xdp_sock *xdp_sk(struct sock *sk)
 
 void xsk_map_try_sock_delete(struct xsk_map *map, struct xdp_sock *xs,
 			     struct xdp_sock __rcu **map_entry);
+struct xsk_pp;
+
+struct xsk_pp *xsk_pp_create(struct xsk_buff_pool *pool);
+void xsk_pp_put(struct xsk_pp *pp);
+bool xsk_pp_supported(struct net_device *dev);
+int xsk_pp_bind(struct xsk_buff_pool *pool, struct net_device *dev,
+		u16 queue_id);
+void xsk_pp_unbind(struct xsk_buff_pool *pool);
+int xsk_pp_wakeup(struct xsk_pp *pp);
+void xsk_pp_flush(struct xsk_pp *pp);
+bool xsk_pp_queue_buf(struct xsk_pp *pp, struct xdp_buff *xdp);
+int xsk_pp_rcv_zc(struct xsk_pp *pp, struct xdp_sock *xs,
+		  struct xdp_buff *xdp);
+bool xsk_pp_claim_copy(struct xsk_pp *pp, u64 *addrs, u32 n);
+int xp_alloc_heads(struct xsk_buff_pool *pool);
 void xsk_clear_pool_at_qid(struct net_device *dev, u16 queue_id);
 int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
 			u16 queue_id);

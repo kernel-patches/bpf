@@ -21,6 +21,12 @@
 #include <linux/vmalloc.h>
 
 struct iovec;
+struct keyring_link;
+
+struct keyring_edit {
+	struct keyring_link *new;
+	struct keyring_link *old;
+};
 
 #ifdef __KDEBUG
 #define kenter(FMT, ...) \
@@ -98,13 +104,13 @@ extern int __key_move_lock(struct key *l_keyring, struct key *u_keyring,
 			   const struct keyring_index_key *index_key);
 extern int __key_link_begin(struct key *keyring,
 			    const struct keyring_index_key *index_key,
-			    struct assoc_array_edit **_edit);
+			    struct keyring_edit *edit);
 extern int __key_link_check_live_key(struct key *keyring, struct key *key);
 extern void __key_link(struct key *keyring, struct key *key,
-		       struct assoc_array_edit **_edit);
+		       struct keyring_edit *edit);
 extern void __key_link_end(struct key *keyring,
 			   const struct keyring_index_key *index_key,
-			   struct assoc_array_edit *edit);
+			   struct keyring_edit *edit);
 
 extern key_ref_t find_key_to_update(key_ref_t keyring_ref,
 				    const struct keyring_index_key *index_key);
@@ -122,7 +128,7 @@ struct keyring_search_context {
 #define KEYRING_SEARCH_SKIP_EXPIRED	0x0020	/* Ignore expired keys (intention to replace) */
 #define KEYRING_SEARCH_RECURSE		0x0040	/* Search child keyrings also */
 
-	int (*iterator)(const void *object, void *iterator_data);
+	int (*iterator)(const struct key *key, void *iterator_data);
 
 	/* Internal stuff */
 	int			skipped_ret;

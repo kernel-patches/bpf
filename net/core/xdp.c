@@ -23,6 +23,8 @@
 #include <trace/events/xdp.h>
 #include <net/xdp_sock_drv.h>
 
+#include "dev.h"
+
 #define REG_STATE_NEW		0x0
 #define REG_STATE_REGISTERED	0x1
 #define REG_STATE_UNREGISTERED	0x2
@@ -559,9 +561,40 @@ void xdp_return_buff(struct xdp_buff *xdp)
 			     xdp->rxq->mem.type, true, xdp);
 
 out:
-	__xdp_return(virt_to_netmem(xdp->data), xdp->rxq->mem.type, true, xdp);
+	__xdp_return(xdp_buff_head_netmem(xdp), xdp->rxq->mem.type, true, xdp);
 }
 EXPORT_SYMBOL_GPL(xdp_return_buff);
+
+bool __xdp_buff_needs_copy(const struct xdp_buff *xdp)
+{
+	const struct skb_shared_info *sinfo;
+	u32 i;
+
+	/* Provider buffers come only from page pool queues */
+	if (xdp->rxq->mem.type != MEM_TYPE_PAGE_POOL)
+		return false;
+	if (!netmem_can_retain(xdp_buff_head_netmem(xdp)))
+		return true;
+	if (likely(!xdp_buff_has_frags(xdp)))
+		return false;
+
+	sinfo = xdp_get_shared_info_from_buff(xdp);
+	for (i = 0; i < sinfo->nr_frags; i++) {
+		if (!netmem_can_retain(skb_frag_netmem(&sinfo->frags[i])))
+			return true;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(__xdp_buff_needs_copy);
+
+static void xdp_release_copied(struct xdp_buff *xdp)
+{
+	if (xdp->rxq->mem.type == MEM_TYPE_XSK_BUFF_POOL)
+		xsk_buff_free(xdp);
+	else
+		xdp_return_buff(xdp);
+}
 
 void xdp_attachment_setup(struct xdp_attachment_info *info,
 			  struct netdev_bpf *bpf)
@@ -573,12 +606,18 @@ void xdp_attachment_setup(struct xdp_attachment_info *info,
 }
 EXPORT_SYMBOL_GPL(xdp_attachment_setup);
 
-struct xdp_frame *xdp_convert_zc_to_xdp_frame(struct xdp_buff *xdp)
+/* @xdp stays with the caller, also on success */
+struct xdp_frame *xdp_copy_buff_to_frame(const struct xdp_buff *xdp)
 {
 	unsigned int metasize, totsize;
 	void *addr, *data_to_copy;
 	struct xdp_frame *xdpf;
 	struct page *page;
+
+	/* Copies are linear. XSK frames lose their frags, as before. */
+	if (unlikely(xdp_buff_has_frags(xdp)) &&
+	    xdp->rxq->mem.type != MEM_TYPE_XSK_BUFF_POOL)
+		return NULL;
 
 	/* Clone into a MEM_TYPE_PAGE_ORDER0 xdp_frame. */
 	metasize = xdp_data_meta_unsupported(xdp) ? 0 :
@@ -607,7 +646,17 @@ struct xdp_frame *xdp_convert_zc_to_xdp_frame(struct xdp_buff *xdp)
 	xdpf->frame_sz = PAGE_SIZE;
 	xdpf->mem_type = MEM_TYPE_PAGE_ORDER0;
 
-	xsk_buff_free(xdp);
+	return xdpf;
+}
+
+struct xdp_frame *xdp_convert_zc_to_xdp_frame(struct xdp_buff *xdp)
+{
+	struct xdp_frame *xdpf;
+
+	xdpf = xdp_copy_buff_to_frame(xdp);
+	if (xdpf)
+		xdp_release_copied(xdp);
+
 	return xdpf;
 }
 EXPORT_SYMBOL_GPL(xdp_convert_zc_to_xdp_frame);
@@ -627,16 +676,21 @@ EXPORT_SYMBOL_GPL(xdp_warn);
  * &xdp_buff: allocate an skb head from the NAPI percpu cache, initialize
  * skb data pointers and offsets, set the recycle bit if the buff is
  * PP-backed, Rx queue index, protocol and update frags info.
+ * A buffer that the stack must not keep is copied and released, see
+ * xdp_buff_needs_copy(). On error, @xdp is not released.
  *
  * Return: new &sk_buff on success, %NULL on error.
  */
-struct sk_buff *xdp_build_skb_from_buff(const struct xdp_buff *xdp)
+struct sk_buff *xdp_build_skb_from_buff(struct xdp_buff *xdp)
 {
 	const struct xdp_rxq_info *rxq = xdp->rxq;
 	const struct skb_shared_info *sinfo;
 	struct sk_buff *skb;
 	u32 nr_frags = 0;
 	int metalen;
+
+	if (unlikely(xdp_buff_needs_copy(xdp)))
+		return xdp_build_skb_from_zc(xdp);
 
 	if (unlikely(xdp_buff_has_frags(xdp))) {
 		sinfo = xdp_get_shared_info_from_buff(xdp);
@@ -674,12 +728,12 @@ struct sk_buff *xdp_build_skb_from_buff(const struct xdp_buff *xdp)
 EXPORT_SYMBOL_GPL(xdp_build_skb_from_buff);
 
 /**
- * xdp_copy_frags_from_zc - copy frags from XSk buff to skb
+ * xdp_copy_frags_from_zc - copy frags from an &xdp_buff to an skb
  * @skb: skb to copy frags to
- * @xdp: XSk &xdp_buff from which the frags will be copied
+ * @xdp: XSk buff, or buffer that the stack must not keep
  * @pp: &page_pool backing page allocation, if available
  *
- * Copy all frags from XSk &xdp_buff to the skb to pass it up the stack.
+ * Copy all frags from @xdp to the skb to pass it up the stack.
  * Allocate a new buffer for each frag, copy it and attach to the skb.
  *
  * Return: true on success, false on netmem allocation fail.
@@ -724,14 +778,14 @@ static noinline bool xdp_copy_frags_from_zc(struct sk_buff *skb,
 }
 
 /**
- * xdp_build_skb_from_zc - create an skb from XSk &xdp_buff
- * @xdp: source XSk buff
+ * xdp_build_skb_from_zc - create an skb from a copy of an &xdp_buff
+ * @xdp: source XSk buff, or buffer that the stack must not keep
  *
- * Similar to xdp_build_skb_from_buff(), but for XSk frames. Allocate an skb
+ * Similar to xdp_build_skb_from_buff(), but copies @xdp. Allocate an skb
  * head, new buffer for the head, copy the data and initialize the skb fields.
  * If there are frags, allocate new buffers for them and copy.
  * Buffers are allocated from the system percpu pools to try recycling them.
- * If new skb was built successfully, @xdp is returned to XSk pool's freelist.
+ * If new skb was built successfully, @xdp is released to its owner.
  * On error, it remains untouched and the caller must take care of this.
  *
  * Return: new &sk_buff on success, %NULL on error.
@@ -781,7 +835,7 @@ struct sk_buff *xdp_build_skb_from_zc(struct xdp_buff *xdp)
 		goto out;
 	}
 
-	xsk_buff_free(xdp);
+	xdp_release_copied(xdp);
 
 	skb->protocol = eth_type_trans(skb, rxq->dev);
 

@@ -74,9 +74,12 @@ enum mana_priv_flag_bits {
 /* 8-pkt mode packs up to 2 packets per PPI entry */
 #define MANA_CQE_COAL_PKTS_8 8
 
-/* Default/max interrupt moderation settings */
-#define MANA_INTR_MODR_USEC_DEF 0
-#define MANA_INTR_MODR_COMP_DEF 0
+/* Default/min interrupt moderation settings */
+#define MANA_INTR_MODR_USEC_DEF 1
+#define MANA_INTR_MODR_COMP_DEF 1
+
+#define MANA_INTR_MODR_USEC_MIN 1
+#define MANA_INTR_MODR_COMP_MIN 1
 
 #define MANA_ADAPTIVE_RX_DEF true
 #define MANA_ADAPTIVE_TX_DEF true
@@ -93,6 +96,8 @@ enum mana_priv_flag_bits {
 #define MANA_STATS_EQ_COUNT 1
 
 #define MANA_RX_FRAG_ALIGNMENT 64
+
+#define MANA_TX_TIMEOUT_RESET_THRESHOLD (2 * 60 * HZ)
 
 struct mana_stats_rx {
 	u64 packets;
@@ -449,6 +454,7 @@ struct mana_tx_qp {
 struct mana_ethtool_stats {
 	u64 stop_queue;
 	u64 wake_queue;
+	u64 tx_cqe_poll_recovery;
 	u64 tx_cqe_err;
 	u64 tx_cqe_unknown_type;
 	u64 tx_linear_pkt_cnt;
@@ -568,6 +574,7 @@ struct mana_port_context {
 	struct net_device *ndev;
 	struct work_struct queue_reset_work;
 
+	unsigned long last_tx_timeout;
 	/* Debug knob to log TX timeout but skip recovery reset */
 	bool tx_timeout_skip_reset;
 

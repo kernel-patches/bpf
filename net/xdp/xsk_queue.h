@@ -156,17 +156,24 @@ static inline bool xp_unused_options_set(u32 options)
 	return options & ~(XDP_PKT_CONTD | XDP_TX_METADATA);
 }
 
+static inline u32 xp_desc_meta_len(struct xsk_buff_pool *pool,
+				   struct xdp_desc *desc)
+{
+	return desc->options & XDP_TX_METADATA ? pool->tx_metadata_len : 0;
+}
+
 static inline bool xp_aligned_validate_desc(struct xsk_buff_pool *pool,
 					    struct xdp_desc *desc)
 {
+	u32 meta = xp_desc_meta_len(pool, desc);
 	u64 len = desc->len;
 	u64 addr, offset;
 
 	if (!len)
 		return false;
 
-	/* Can overflow if desc->addr < pool->tx_metadata_len */
-	if (check_sub_overflow(desc->addr, pool->tx_metadata_len, &addr))
+	/* Can overflow if desc->addr < meta */
+	if (check_sub_overflow(desc->addr, meta, &addr))
 		return false;
 
 	offset = addr & (pool->chunk_size - 1);
@@ -176,7 +183,7 @@ static inline bool xp_aligned_validate_desc(struct xsk_buff_pool *pool,
 	 * (pool->chunk_size is ``u32``), @len is guaranteed
 	 * to be <= ``U32_MAX``.
 	 */
-	if (offset + len + pool->tx_metadata_len > pool->chunk_size)
+	if (offset + len + meta > pool->chunk_size)
 		return false;
 
 	if (addr >= pool->addrs_cnt)
@@ -191,6 +198,7 @@ static inline bool xp_aligned_validate_desc(struct xsk_buff_pool *pool,
 static inline bool xp_unaligned_validate_desc(struct xsk_buff_pool *pool,
 					      struct xdp_desc *desc)
 {
+	u32 meta = xp_desc_meta_len(pool, desc);
 	u64 len = desc->len;
 	u64 addr, end;
 
@@ -198,13 +206,13 @@ static inline bool xp_unaligned_validate_desc(struct xsk_buff_pool *pool,
 		return false;
 
 	/* Can't overflow: @len is guaranteed to be <= ``U32_MAX`` */
-	len += pool->tx_metadata_len;
+	len += meta;
 	if (len > pool->chunk_size)
 		return false;
 
 	/* Can overflow if desc->addr is close to 0 */
 	if (check_sub_overflow(xp_unaligned_add_offset_to_addr(desc->addr),
-			       pool->tx_metadata_len, &addr))
+			       meta, &addr))
 		return false;
 
 	if (addr >= pool->addrs_cnt)

@@ -667,7 +667,8 @@ select_by_hash:
 	if (!nsk)
 		nsk = reuseport_select_sock_by_hash(reuse, hash, socks);
 
-	if (IS_ERR_OR_NULL(nsk) || unlikely(!refcount_inc_not_zero(&nsk->sk_refcnt))) {
+	if (IS_ERR_OR_NULL(nsk) ||
+	    unlikely(!refcount_inc_not_zero_acquire(&nsk->sk_refcnt))) {
 		nsk = NULL;
 		goto failure;
 	}

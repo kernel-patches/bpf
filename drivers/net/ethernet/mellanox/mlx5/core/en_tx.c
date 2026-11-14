@@ -182,6 +182,7 @@ mlx5e_txwqe_build_dsegs(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 			unsigned char *skb_data, u16 headlen,
 			struct mlx5_wqe_data_seg *dseg)
 {
+	bool dd = test_bit(MLX5E_SQ_STATE_DATA_DIRECT, &sq->state);
 	dma_addr_t dma_addr = 0;
 	u8 num_dma          = 0;
 	int i;
@@ -211,7 +212,8 @@ mlx5e_txwqe_build_dsegs(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 			goto dma_unmap_wqe_err;
 
 		dseg->addr       = cpu_to_be64(dma_addr);
-		dseg->lkey       = sq->mkey_be;
+		dseg->lkey       = dd && skb_frag_is_net_iov(frag) ?
+				   sq->crossing_mkey_be : sq->mkey_be;
 		dseg->byte_count = cpu_to_be32(fsz);
 
 		mlx5e_dma_push_netmem(sq, skb_frag_netmem(frag), dma_addr, fsz);
@@ -365,6 +367,7 @@ static void mlx5e_tx_flush(struct mlx5e_txqsq *sq)
 	};
 
 	wqe = mlx5e_post_nop(&sq->wq, sq->sqn, &sq->pc);
+	mlx5e_tx_check_stop(sq);
 	mlx5e_notify_hw(&sq->wq, sq->pc, sq->uar_map, &wqe->ctrl);
 }
 
@@ -672,8 +675,13 @@ netdev_tx_t mlx5e_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	/* May send SKBs and WQEs. */
-	if (unlikely(!mlx5e_accel_tx_begin(dev, sq, skb, &accel)))
+	if (unlikely(!mlx5e_accel_tx_begin(dev, sq, skb, &accel))) {
+		/* The skb was dropped: ring the doorbell which the previous
+		 * ones may have deferred to it
+		 */
+		mlx5e_tx_flush(sq);
 		return NETDEV_TX_OK;
+	}
 
 	mlx5e_sq_xmit_prepare(sq, skb, &accel, &attr);
 

@@ -7461,6 +7461,8 @@ static void i40e_vsi_reinit_locked(struct i40e_vsi *vsi)
 
 	while (test_and_set_bit(__I40E_CONFIG_BUSY, pf->state))
 		usleep_range(1000, 2000);
+	/* required by i40e_down() */
+	set_bit(__I40E_VSI_DOWN, vsi->state);
 	i40e_down(vsi);
 
 	i40e_up(vsi);

@@ -3379,6 +3379,9 @@ static int tg3_nvram_write_block_unbuffered(struct tg3 *tp, u32 offset, u32 len,
 	u32 nvram_cmd;
 	u8 *tmp;
 
+	if (!pagesize)
+		return -EINVAL;
+
 	tmp = kmalloc(pagesize, GFP_KERNEL);
 	if (tmp == NULL)
 		return -ENOMEM;
@@ -3399,13 +3402,14 @@ static int tg3_nvram_write_block_unbuffered(struct tg3 *tp, u32 offset, u32 len,
 			break;
 
 		page_off = offset & pagemask;
-		size = pagesize;
+		size = pagesize - page_off;
 		if (len < size)
 			size = len;
 
 		len -= size;
 
 		memcpy(tmp + page_off, buf, size);
+		buf += size;
 
 		offset = offset + (pagesize - page_off);
 
@@ -4267,8 +4271,38 @@ static void tg3_power_down_prepare(struct tg3 *tp)
 	return;
 }
 
+static void tg3_ncsi_pll_tlp_clk(struct tg3 *tp, bool enable)
+{
+	u32 val;
+
+	if (tg3_asic_rev(tp) != ASIC_REV_5720)
+		return;
+
+	/* The register is shared by both functions of the device. */
+	if (tg3_ape_lock(tp, TG3_APE_LOCK_GPIO))
+		return;
+
+	val = tr32(TG3_CPMU_PLL_CTRL_STAT);
+	if (enable)
+		val |= CPMU_PLL_TLP_CLCK_SRC_NCSI_PLL;
+	else
+		val &= ~CPMU_PLL_TLP_CLCK_SRC_NCSI_PLL;
+	tw32(TG3_CPMU_PLL_CTRL_STAT, val);
+
+	tg3_ape_unlock(tp, TG3_APE_LOCK_GPIO);
+}
+
+static void tg3_wol_select_pll_clk(struct tg3 *tp)
+{
+	if (device_may_wakeup(&tp->pdev->dev) &&
+	    tg3_flag(tp, WOL_ENABLE) &&
+	    tp->link_config.active_speed == SPEED_1000)
+		tg3_ncsi_pll_tlp_clk(tp, true);
+}
+
 static void tg3_power_down(struct tg3 *tp)
 {
+	tg3_wol_select_pll_clk(tp);
 	pci_wake_from_d3(tp->pdev, tg3_flag(tp, WOL_ENABLE));
 	pci_set_power_state(tp->pdev, PCI_D3hot);
 }
@@ -8866,6 +8900,13 @@ static int tg3_alloc_consistent(struct tg3 *tp)
 						      GFP_KERNEL);
 		if (!tnapi->hw_status)
 			goto err_out;
+
+		if (tg3_asic_rev(tp) == ASIC_REV_57766 &&
+		    (lower_32_bits(tnapi->status_mapping) & 0xffff0000) ==
+		    0xffff0000)
+			dev_warn(&tp->pdev->dev,
+				 "Status block at DMA address %pad may cause TX timeouts on this device\n",
+				 &tnapi->status_mapping);
 
 		sblk = tnapi->hw_status;
 
@@ -16008,19 +16049,21 @@ static void tg3_probe_ncsi(struct tg3 *tp)
 
 static void tg3_read_dash_ver(struct tg3 *tp)
 {
-	int vlen;
-	u32 apedata;
 	char *fwtype;
-
-	apedata = tg3_ape_read32(tp, TG3_APE_FW_VERSION);
+	u32 apedata;
+	int vlen;
 
 	if (tg3_flag(tp, APE_HAS_NCSI))
 		fwtype = "NCSI";
 	else if (tp->pdev->device == TG3PCI_DEVICE_TIGON3_5725)
 		fwtype = "SMASH";
+	else if (tg3_asic_rev(tp) == ASIC_REV_5719 ||
+		 tg3_asic_rev(tp) == ASIC_REV_5720)
+		return;
 	else
 		fwtype = "DASH";
 
+	apedata = tg3_ape_read32(tp, TG3_APE_FW_VERSION);
 	vlen = strlen(tp->fw_ver);
 
 	snprintf(&tp->fw_ver[vlen], TG3_VER_SIZE - vlen, " %s v%d.%d.%d.%d",
@@ -17756,6 +17799,7 @@ static int tg3_init_one(struct pci_dev *pdev,
 	u64 dma_mask, persist_dma_mask;
 	netdev_features_t features = 0;
 	u8 addr[ETH_ALEN] __aligned(2);
+	u64 test_dma_mask = 0;
 
 	err = pci_enable_device(pdev);
 	if (err) {
@@ -17878,6 +17922,8 @@ static int tg3_init_one(struct pci_dev *pdev,
 		goto err_out_apeunmap;
 	}
 
+	tg3_ncsi_pll_tlp_clk(tp, false);
+
 	/* The EPB bridge inside 5714, 5715, and 5780 and any
 	 * device behind the EPB cannot support DMA addresses > 40-bit.
 	 * On 64-bit systems with IOMMU, use 40-bit dma_mask.
@@ -17895,15 +17941,22 @@ static int tg3_init_one(struct pci_dev *pdev,
 		persist_dma_mask = dma_mask = DMA_BIT_MASK(64);
 
 	if (tg3_asic_rev(tp) == ASIC_REV_57766)
-		persist_dma_mask = DMA_BIT_MASK(31);
+		test_dma_mask = DMA_BIT_MASK(31);
 
 	/* Configure DMA attributes. */
 	if (dma_mask > DMA_BIT_MASK(32)) {
 		err = dma_set_mask(&pdev->dev, dma_mask);
 		if (!err) {
 			features |= NETIF_F_HIGHDMA;
-			err = dma_set_coherent_mask(&pdev->dev,
-						    persist_dma_mask);
+			if (!test_dma_mask ||
+			    dma_set_coherent_mask(&pdev->dev,
+						  test_dma_mask)) {
+				if (test_dma_mask)
+					dev_warn(&pdev->dev,
+						 "Unable to set 31 bit coherent DMA mask, workaround not applied\n");
+				err = dma_set_coherent_mask(&pdev->dev,
+							    persist_dma_mask);
+			}
 			if (err < 0) {
 				dev_err(&pdev->dev, "Unable to obtain 64 bit "
 					"DMA for consistent allocations\n");
@@ -18207,6 +18260,7 @@ static int tg3_suspend(struct device *device)
 	tg3_full_unlock(tp);
 
 	tg3_power_down_prepare(tp);
+	tg3_wol_select_pll_clk(tp);
 
 unlock:
 	rtnl_unlock();
@@ -18225,6 +18279,8 @@ static int tg3_resume(struct device *device)
 		goto unlock;
 
 	netif_device_attach(dev);
+
+	tg3_ncsi_pll_tlp_clk(tp, false);
 
 	netdev_lock(dev);
 	tg3_full_lock(tp, 0);

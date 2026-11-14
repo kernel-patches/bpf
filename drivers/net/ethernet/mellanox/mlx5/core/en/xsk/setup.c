@@ -160,21 +160,37 @@ err_close_rq:
 err_close_rx_cq:
 	mlx5e_close_cq(&c->xskrq.cq);
 
+	/* Close uses xsk_pool to decide whether XSK queues need teardown,
+	 * so clear it if XSK open fails.
+	 */
+	c->xskrq.xsk_pool = NULL;
+	c->xsksq.xsk_pool = NULL;
+
 	return err;
 }
 
-void mlx5e_close_xsk(struct mlx5e_channel *c)
+void mlx5e_close_xsk_pre_sync(struct mlx5e_channel *c)
 {
 	clear_bit(MLX5E_CHANNEL_STATE_XSK, c->state);
-	synchronize_net(); /* Sync with NAPI. */
+}
 
+void mlx5e_close_xsk_post_sync(struct mlx5e_channel *c)
+{
+	/* Caller guarantees that NAPI can no longer access the XSK queues. */
 	mlx5e_close_rq(&c->xskrq);
 	mlx5e_close_cq(&c->xskrq.cq);
-	mlx5e_close_xdpsq(&c->xsksq);
+	mlx5e_close_xdpsq_post_sync(&c->xsksq);
 	mlx5e_close_cq(&c->xsksq.cq);
 
 	memset(&c->xskrq, 0, sizeof(c->xskrq));
 	memset(&c->xsksq, 0, sizeof(c->xsksq));
+}
+
+void mlx5e_close_xsk(struct mlx5e_channel *c)
+{
+	mlx5e_close_xsk_pre_sync(c);
+	synchronize_net(); /* Sync with XSK wakeup and NAPI. */
+	mlx5e_close_xsk_post_sync(c);
 }
 
 void mlx5e_activate_xsk(struct mlx5e_channel *c)
@@ -189,7 +205,7 @@ void mlx5e_activate_xsk(struct mlx5e_channel *c)
 	/* TX queue is created active. */
 }
 
-void mlx5e_deactivate_xsk(struct mlx5e_channel *c)
+void mlx5e_deactivate_xsk_pre_sync(struct mlx5e_channel *c)
 {
 	/* ICOSQ recovery may reactivate XSKRQ if clear_bit is called in the
 	 * middle of recovery. Suspend the recovery to avoid it.
@@ -197,7 +213,12 @@ void mlx5e_deactivate_xsk(struct mlx5e_channel *c)
 	mlx5e_reporter_icosq_suspend_recovery(c);
 	clear_bit(MLX5E_RQ_STATE_ENABLED, &c->xskrq.state);
 	mlx5e_reporter_icosq_resume_recovery(c);
-	synchronize_net(); /* Sync with NAPI to prevent mlx5e_post_rx_wqes. */
 
 	/* TX queue is disabled on close. */
+}
+
+void mlx5e_deactivate_xsk(struct mlx5e_channel *c)
+{
+	mlx5e_deactivate_xsk_pre_sync(c);
+	synchronize_net(); /* Sync with NAPI to prevent mlx5e_post_rx_wqes. */
 }

@@ -243,7 +243,7 @@ psp_sock_set_tx_key(struct sock *sk, struct psp_dev *psd, struct psp_assoc *pas,
 	pas->upgrade_seq = tcp_sk(sk)->rcv_nxt;
 
 	icsk = inet_csk(sk);
-	icsk->icsk_ext_hdr_len += psp_sk_overhead(sk);
+	icsk->icsk_mtup.search_high += psp_sk_overhead(sk);
 	icsk->icsk_sync_mss(sk, icsk->icsk_pmtu_cookie);
 
 	return err;
@@ -314,10 +314,13 @@ void psp_twsk_init(struct inet_timewait_sock *tw, const struct sock *sk)
 {
 	struct psp_assoc *pas = psp_sk_assoc(sk);
 
-	if (pas)
+	if (pas) {
 		refcount_inc(&pas->refcnt);
+		/* like the full socket case in psp_sock_set_tx_key() */
+		if (pas->tx.spi)
+			tw->tw_validate_xmit_skb = psp_validate_xmit;
+	}
 	rcu_assign_pointer(tw->psp_assoc, pas);
-	tw->tw_validate_xmit_skb = psp_validate_xmit;
 }
 
 void psp_twsk_assoc_free(struct inet_timewait_sock *tw)

@@ -13,6 +13,24 @@ ALL_TESTS="
 
 lib_dir=$(dirname "$0")
 source ${lib_dir}/bond_topo_3d1c.sh
+
+# The ARP/NS monitor marks a slave down when it has received nothing for too
+# long: ~250ms for the active slave and ~350ms for a backup slave with
+# arp_interval 100. The backups only receive the copies of the active slave's
+# probes that the gateway bridge forwards, but the active slave also gets the
+# replies to the pings in bond_check_connection(). If the active slave goes
+# down right after such a reply, it times out in the same monitor run as the
+# backups, and the new active slave is then not picked by prio. Wait two
+# monitor intervals, so that at least one more probe is sent and all slaves
+# last received that probe.
+bond_link_down()
+{
+	local slave=$1
+
+	sleep 0.2
+	ip -n ${s_ns} link set "$slave" down
+}
+
 c_maddr="33:33:ff:00:00:10"
 g_maddr="33:33:ff:00:02:54"
 
@@ -97,12 +115,12 @@ prio_test()
 	check_active_slave eth1
 
 	# active slave should be the higher prio slave
-	ip -n ${s_ns} link set $active_slave down
+	bond_link_down $active_slave
 	check_active_slave eth2
 	bond_check_connection "fail over"
 
 	# when only 1 slave is up
-	ip -n ${s_ns} link set $active_slave down
+	bond_link_down $active_slave
 	check_active_slave eth0
 	bond_check_connection "only 1 slave up"
 
@@ -134,7 +152,7 @@ prio_test()
 			;;
 		"2")
 			check_active_slave "$pre_active_slave"
-			ip -n ${s_ns} link set $active_slave down
+			bond_link_down $active_slave
 			bond_check_connection "pre_active slave down"
 			check_active_slave "eth1"
 			;;
@@ -153,7 +171,7 @@ prio_test()
 		check_err $? "eth3 prio is not -50"
 		check_active_slave "eth1"
 
-		ip -n ${s_ns} link set $active_slave down
+		bond_link_down $active_slave
 		check_active_slave "eth0"
 		bond_check_connection "change slave prio"
 	fi

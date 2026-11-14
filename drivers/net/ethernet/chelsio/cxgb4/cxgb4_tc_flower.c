@@ -316,6 +316,17 @@ static int cxgb4_validate_flow_match(struct netlink_ext_ack *extack,
 		return -EOPNOTSUPP;
 	}
 
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ENC_KEYID)) {
+		struct flow_match_enc_keyid match;
+
+		flow_rule_match_enc_keyid(rule, &match);
+		if (be32_to_cpu(match.key->keyid) >> ENCAP_VNI_BITWIDTH) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Tunnel key does not fit the 24 bit VNI");
+			return -EOPNOTSUPP;
+		}
+	}
+
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_BASIC)) {
 		struct flow_match_basic match;
 

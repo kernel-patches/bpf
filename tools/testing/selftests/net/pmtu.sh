@@ -203,6 +203,19 @@
 #	on host A and B on lo reachable via both routers. Host A and B
 #	addresses have multipath routes to each other, b_r1 mtu = 1500.
 #	Check that PMTU exceptions are created for both paths.
+#
+# - pmtu_ipv6_mp_exceptions
+#	Same as above but with IPv6
+#
+# - pmtu_ipv4_mp_asym_exceptions
+#	Same topology as pmtu_ipv4_mp_exceptions, with b_r1 mtu = 1400,
+#	a_r2 mtu = 1350 and b_r2 mtu = 1300. Pick a flow through each router
+#	and check that a Packet Too Big from R1 creates a PMTU exception on
+#	the path via R1 only, as the path via R2 can't carry 1400, then that
+#	a flow through R2 lowers the PMTU of both paths
+#
+# - pmtu_ipv6_mp_asym_exceptions
+#	Same as above but with IPv6
 
 source lib.sh
 
@@ -272,7 +285,10 @@ tests="
 	list_flush_ipv6_exception	ipv6: list and flush cached exceptions	1
 	pmtu_ipv4_route_change		ipv4: PMTU exception w/route replace	1
 	pmtu_ipv6_route_change		ipv6: PMTU exception w/route replace	1
-	pmtu_ipv4_mp_exceptions		ipv4: PMTU multipath nh exceptions	1"
+	pmtu_ipv4_mp_exceptions		ipv4: PMTU multipath nh exceptions	1
+	pmtu_ipv6_mp_exceptions		ipv6: PMTU multipath nh exceptions	1
+	pmtu_ipv4_mp_asym_exceptions	ipv4: PMTU multipath nh exceptions, asymmetric MTUs	1
+	pmtu_ipv6_mp_asym_exceptions	ipv6: PMTU multipath nh exceptions, asymmetric MTUs	1"
 
 # Addressing and routing for tests with routers: four network segments, with
 # index SEGMENT between 1 and 4, a common prefix (PREFIX4 or PREFIX6) and an
@@ -350,7 +366,11 @@ tunnel6_b_addr="fd00:2::b"
 tunnel6_mask="64"
 
 host4_a_addr="192.168.99.99"
+host4_a_net="192.168.97"
 host4_b_addr="192.168.88.88"
+
+host6_a_addr="fc00:1000::a"
+host6_b_addr="fc00:1001::b"
 
 dummy6_0_prefix="fc00:1000::"
 dummy6_1_prefix="fc00:1001::"
@@ -994,49 +1014,112 @@ setup_ovs_bridge() {
 }
 
 setup_multipath_new() {
-	# Set up host A with multipath routes to host B host4_b_addr
-	run_cmd ${ns_a} ip addr add ${host4_a_addr} dev lo
-	run_cmd ${ns_a} ip nexthop add id 401 via ${prefix4}.${a_r1}.2 dev veth_A-R1
-	run_cmd ${ns_a} ip nexthop add id 402 via ${prefix4}.${a_r2}.2 dev veth_A-R2
-	run_cmd ${ns_a} ip nexthop add id 403 group 401/402
-	run_cmd ${ns_a} ip route add ${host4_b_addr} src ${host4_a_addr} nhid 403
+	family=${1}
 
-	# Set up host B with multipath routes to host A host4_a_addr
-	run_cmd ${ns_b} ip addr add ${host4_b_addr} dev lo
-	run_cmd ${ns_b} ip nexthop add id 401 via ${prefix4}.${b_r1}.2 dev veth_B-R1
-	run_cmd ${ns_b} ip nexthop add id 402 via ${prefix4}.${b_r2}.2 dev veth_B-R2
-	run_cmd ${ns_b} ip nexthop add id 403 group 401/402
-	run_cmd ${ns_b} ip route add ${host4_a_addr} src ${host4_b_addr} nhid 403
+	if [ ${family} -eq 4 ]; then
+		host_a_addr=${host4_a_addr}
+		host_b_addr=${host4_b_addr}
+		nh_a_r1=${prefix4}.${a_r1}.2
+		nh_a_r2=${prefix4}.${a_r2}.2
+		nh_b_r1=${prefix4}.${b_r1}.2
+		nh_b_r2=${prefix4}.${b_r2}.2
+	else
+		host_a_addr=${host6_a_addr}
+		host_b_addr=${host6_b_addr}
+		nh_a_r1=${prefix6}:${a_r1}::2
+		nh_a_r2=${prefix6}:${a_r2}::2
+		nh_b_r1=${prefix6}:${b_r1}::2
+		nh_b_r2=${prefix6}:${b_r2}::2
+	fi
+
+	# Set up host A with multipath routes to host B host_b_addr
+	run_cmd ${ns_a} ip addr add ${host_a_addr} dev lo
+	run_cmd ${ns_a} ip nexthop add id ${family}01 via ${nh_a_r1} dev veth_A-R1
+	run_cmd ${ns_a} ip nexthop add id ${family}02 via ${nh_a_r2} dev veth_A-R2
+	run_cmd ${ns_a} ip nexthop add id ${family}03 group ${family}01/${family}02
+	run_cmd ${ns_a} ip route add ${host_b_addr} src ${host_a_addr} nhid ${family}03
+
+	# Set up host B with multipath routes to host A host_a_addr
+	run_cmd ${ns_b} ip addr add ${host_b_addr} dev lo
+	run_cmd ${ns_b} ip nexthop add id ${family}01 via ${nh_b_r1} dev veth_B-R1
+	run_cmd ${ns_b} ip nexthop add id ${family}02 via ${nh_b_r2} dev veth_B-R2
+	run_cmd ${ns_b} ip nexthop add id ${family}03 group ${family}01/${family}02
+	run_cmd ${ns_b} ip route add ${host_a_addr} src ${host_b_addr} nhid ${family}03
 }
 
 setup_multipath_old() {
-	# Set up host A with multipath routes to host B host4_b_addr
-	run_cmd ${ns_a} ip addr add ${host4_a_addr} dev lo
-	run_cmd ${ns_a} ip route add ${host4_b_addr} \
-			src ${host4_a_addr} \
-			nexthop via ${prefix4}.${a_r1}.2 weight 1 \
-			nexthop via ${prefix4}.${a_r2}.2 weight 1
+	family=${1}
 
-	# Set up host B with multipath routes to host A host4_a_addr
-	run_cmd ${ns_b} ip addr add ${host4_b_addr} dev lo
-	run_cmd ${ns_b} ip route add ${host4_a_addr} \
-			src ${host4_b_addr} \
-			nexthop via ${prefix4}.${b_r1}.2 weight 1 \
-			nexthop via ${prefix4}.${b_r2}.2 weight 1
+	if [ ${family} -eq 4 ]; then
+		host_a_addr=${host4_a_addr}
+		host_b_addr=${host4_b_addr}
+		nh_a_r1=${prefix4}.${a_r1}.2
+		nh_a_r2=${prefix4}.${a_r2}.2
+		nh_b_r1=${prefix4}.${b_r1}.2
+		nh_b_r2=${prefix4}.${b_r2}.2
+	else
+		host_a_addr=${host6_a_addr}
+		host_b_addr=${host6_b_addr}
+		nh_a_r1=${prefix6}:${a_r1}::2
+		nh_a_r2=${prefix6}:${a_r2}::2
+		nh_b_r1=${prefix6}:${b_r1}::2
+		nh_b_r2=${prefix6}:${b_r2}::2
+	fi
+
+	# Set up host A with multipath routes to host B host_b_addr
+	run_cmd ${ns_a} ip addr add ${host_a_addr} dev lo
+	run_cmd ${ns_a} ip route add ${host_b_addr} \
+			src ${host_a_addr} \
+			nexthop via ${nh_a_r1} weight 1 \
+			nexthop via ${nh_a_r2} weight 1
+
+	# Set up host B with multipath routes to host A host_a_addr
+	run_cmd ${ns_b} ip addr add ${host_b_addr} dev lo
+	run_cmd ${ns_b} ip route add ${host_a_addr} \
+			src ${host_b_addr} \
+			nexthop via ${nh_b_r1} weight 1 \
+			nexthop via ${nh_b_r2} weight 1
 }
 
+
 setup_multipath() {
-	if [ "$USE_NH" = "yes" ]; then
-		setup_multipath_new
+	family="$1"
+
+	if [ ${family} -eq 4 ]; then
+		host_a_addr=${host4_a_addr}
+		host_b_addr=${host4_b_addr}
+		nh_r1_a=${prefix4}.${a_r1}.1
+		nh_r1_b=${prefix4}.${b_r1}.1
+		nh_r2_a=${prefix4}.${a_r2}.1
+		nh_r2_b=${prefix4}.${b_r2}.1
 	else
-		setup_multipath_old
+		host_a_addr=${host6_a_addr}
+		host_b_addr=${host6_b_addr}
+		nh_r1_a=${prefix6}:${a_r1}::1
+		nh_r1_b=${prefix6}:${b_r1}::1
+		nh_r2_a=${prefix6}:${a_r2}::1
+		nh_r2_b=${prefix6}:${b_r2}::1
+	fi
+
+	if [ "$USE_NH" = "yes" ]; then
+		setup_multipath_new ${family}
+	else
+		setup_multipath_old ${family}
 	fi
 
 	# Set up routers with routes to dummies
-	run_cmd ${ns_r1} ip route add ${host4_a_addr} via ${prefix4}.${a_r1}.1
-	run_cmd ${ns_r2} ip route add ${host4_a_addr} via ${prefix4}.${a_r2}.1
-	run_cmd ${ns_r1} ip route add ${host4_b_addr} via ${prefix4}.${b_r1}.1
-	run_cmd ${ns_r2} ip route add ${host4_b_addr} via ${prefix4}.${b_r2}.1
+	run_cmd ${ns_r1} ip route add ${host_a_addr} via ${nh_r1_a}
+	run_cmd ${ns_r2} ip route add ${host_a_addr} via ${nh_r2_a}
+	run_cmd ${ns_r1} ip route add ${host_b_addr} via ${nh_r1_b}
+	run_cmd ${ns_r2} ip route add ${host_b_addr} via ${nh_r2_b}
+}
+
+setup_multipath4() {
+	setup_multipath 4
+}
+
+setup_multipath6() {
+	setup_multipath 6
 }
 
 setup() {
@@ -2377,8 +2460,18 @@ test_pmtu_ipv6_route_change() {
 	test_pmtu_ipvX_route_change 6
 }
 
-test_pmtu_ipv4_mp_exceptions() {
-	setup namespaces routing multipath || return $ksft_skip
+test_pmtu_ipvX_mp_exceptions() {
+	family=${1}
+
+	if [ ${family} -eq 4 ]; then
+		ping=ping
+		dst="${host4_b_addr}"
+	else
+		ping=${ping6}
+		dst="${host6_b_addr}"
+	fi
+
+	setup namespaces routing multipath${family} || return $ksft_skip
 
 	trace "${ns_a}"  veth_A-R1    "${ns_r1}" veth_R1-A \
 	      "${ns_r1}" veth_R1-B    "${ns_b}"  veth_B-R1 \
@@ -2395,16 +2488,128 @@ test_pmtu_ipv4_mp_exceptions() {
 	mtu "${ns_r2}" veth_R2-A 2000
 	mtu "${ns_r2}" veth_R2-B 1500
 	mtu "${ns_b}"  veth_B-R2 1500
-
 	# Ping and expect two nexthop exceptions for two routes
-	run_cmd ${ns_a} ping -q -M want -i 0.1 -c 1 -s 1800 "${host4_b_addr}"
+	run_cmd ${ns_a} ${ping} -q -M want -i 0.1 -c 1 -s 1800 "${dst}"
 
 	# Check that exceptions have been created with the correct PMTU
-	pmtu_a_R1="$(route_get_dst_pmtu_from_exception "${ns_a}" "${host4_b_addr}" oif veth_A-R1)"
-	pmtu_a_R2="$(route_get_dst_pmtu_from_exception "${ns_a}" "${host4_b_addr}" oif veth_A-R2)"
-
+	pmtu_a_R1="$(route_get_dst_pmtu_from_exception "${ns_a}" "${dst}" oif veth_A-R1)"
+	pmtu_a_R2="$(route_get_dst_pmtu_from_exception "${ns_a}" "${dst}" oif veth_A-R2)"
 	check_pmtu_value "1500" "${pmtu_a_R1}" "exceeding MTU (veth_A-R1)" || return 1
 	check_pmtu_value "1500" "${pmtu_a_R2}" "exceeding MTU (veth_A-R2)" || return 1
+}
+
+test_pmtu_ipv4_mp_exceptions() {
+	test_pmtu_ipvX_mp_exceptions 4
+}
+
+# Find a flow from host A to ${2} that goes out through ${3}: a source
+# address out of ${host4_a_net}, added to lo as needed, since the IPv4
+# multipath hash covers addresses only, or an IPv6 flow label, in hex as
+# both ip and ping take it, for a packet sent from ${host6_a_addr}
+mp_flow_via() {
+	family="${1}"
+	dst="${2}"
+	oif="${3}"
+
+	for i in $(seq 1 32); do
+		if [ ${family} -eq 4 ]; then
+			flow="${host4_a_net}.${i}"
+			${ns_a} ip addr add ${flow}/32 dev lo 2>/dev/null
+			out="$(${ns_a} ip route get ${dst} from ${flow} 2>/dev/null)"
+		else
+			flow="$(printf "0x%x" ${i})"
+			out="$(${ns_a} ip route get ${dst} from ${host6_a_addr} \
+				ipproto 58 flowlabel ${flow} 2>/dev/null)"
+		fi
+		case "${out}" in
+		*" dev ${oif} "*)
+			echo "${flow}"
+			return 0
+			;;
+		esac
+	done
+
+	return 1
+}
+
+test_pmtu_ipvX_mp_asym_exceptions() {
+	family=${1}
+
+	if [ ${family} -eq 4 ]; then
+		ping=ping
+		dst="${host4_b_addr}"
+	else
+		ping=${ping6}
+		dst="${host6_b_addr}"
+	fi
+
+	setup namespaces routing multipath${family} || return $ksft_skip
+
+	trace "${ns_a}"  veth_A-R1    "${ns_r1}" veth_R1-A \
+	      "${ns_r1}" veth_R1-B    "${ns_b}"  veth_B-R1 \
+	      "${ns_a}"  veth_A-R2    "${ns_r2}" veth_R2-A \
+	      "${ns_r2}" veth_R2-B    "${ns_b}"  veth_B-R2
+
+	if [ ${family} -eq 4 ]; then
+		# Routes back to the source addresses mp_flow_via() picks
+		run_cmd ${ns_r1} ip route add ${host4_a_net}.0/24 via ${prefix4}.${a_r1}.1
+		run_cmd ${ns_r2} ip route add ${host4_a_net}.0/24 via ${prefix4}.${a_r2}.1
+	else
+		${ns_a} ip route get ${dst} ipproto 58 flowlabel 0x1 >/dev/null 2>&1 || {
+			err "  ip route get flowlabel not supported"; return $ksft_skip; }
+	fi
+
+	# Set up initial MTU values: 1400 behind R1, 1350 to R2, 1300 behind R2
+	mtu "${ns_a}"  veth_A-R1 2000
+	mtu "${ns_r1}" veth_R1-A 2000
+	mtu "${ns_r1}" veth_R1-B 1400
+	mtu "${ns_b}"  veth_B-R1 1400
+
+	mtu "${ns_a}"  veth_A-R2 1350
+	mtu "${ns_r2}" veth_R2-A 1350
+	mtu "${ns_r2}" veth_R2-B 1300
+	mtu "${ns_b}"  veth_B-R2 1300
+
+	flow_r1="$(mp_flow_via ${family} ${dst} veth_A-R1)" || {
+		err "  no flow through veth_A-R1 found"; return 1; }
+	flow_r2="$(mp_flow_via ${family} ${dst} veth_A-R2)" || {
+		err "  no flow through veth_A-R2 found"; return 1; }
+	if [ ${family} -eq 4 ]; then
+		ping_r1="${ping} -I ${flow_r1}"
+		ping_r2="${ping} -I ${flow_r2}"
+	else
+		ping_r1="${ping} -I ${host6_a_addr} -F ${flow_r1}"
+		ping_r2="${ping} -I ${host6_a_addr} -F ${flow_r2}"
+	fi
+
+	# A Packet Too Big from R1 is cached on the path via R1, not on the
+	# path via R2, whose link can't carry 1400
+	run_cmd ${ns_a} ${ping_r1} -q -M want -i 0.1 -c 1 -s 1800 "${dst}"
+
+	pmtu_a_R1="$(route_get_dst_pmtu_from_exception "${ns_a}" "${dst}" oif veth_A-R1)"
+	pmtu_a_R2="$(route_get_dst_pmtu_from_exception "${ns_a}" "${dst}" oif veth_A-R2)"
+	check_pmtu_value "1400" "${pmtu_a_R1}" "exceeding MTU via R1 (veth_A-R1)" || return 1
+	check_pmtu_value "" "${pmtu_a_R2}" "exceeding MTU via R1 (veth_A-R2)" || return 1
+
+	# The lower MTU behind R2 lowers the PMTU of both paths
+	run_cmd ${ns_a} ${ping_r2} -q -M want -i 0.1 -c 1 -s 1300 "${dst}"
+
+	pmtu_a_R1="$(route_get_dst_pmtu_from_exception "${ns_a}" "${dst}" oif veth_A-R1)"
+	pmtu_a_R2="$(route_get_dst_pmtu_from_exception "${ns_a}" "${dst}" oif veth_A-R2)"
+	check_pmtu_value "1300" "${pmtu_a_R1}" "exceeding MTU via R2 (veth_A-R1)" || return 1
+	check_pmtu_value "1300" "${pmtu_a_R2}" "exceeding MTU via R2 (veth_A-R2)" || return 1
+}
+
+test_pmtu_ipv4_mp_asym_exceptions() {
+	test_pmtu_ipvX_mp_asym_exceptions 4
+}
+
+test_pmtu_ipv6_mp_asym_exceptions() {
+	test_pmtu_ipvX_mp_asym_exceptions 6
+}
+
+test_pmtu_ipv6_mp_exceptions() {
+	test_pmtu_ipvX_mp_exceptions 6
 }
 
 usage() {

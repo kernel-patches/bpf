@@ -11,6 +11,7 @@
 #include <linux/irqdomain.h>
 #include <linux/export.h>
 #include <linux/uaccess.h>
+#include <linux/vmalloc.h>
 
 #include <net/mana/mana.h>
 #include <net/mana/hw_channel.h>
@@ -141,22 +142,26 @@ int mana_gd_init_registers(struct gdma_context *gc)
 		return mana_gd_init_vf_regs(gc);
 }
 
-/* Suppress logging when we set timeout to zero */
+/* Cancellation and unpublication make teardown request failures expected. */
 bool mana_need_log(struct gdma_context *gc, int err)
 {
 	struct hw_channel_context *hwc;
+	bool need_log = true;
+	unsigned long flags;
 
-	if (err != -ETIMEDOUT)
+	if (err != -ETIMEDOUT && err != -ENODEV)
 		return true;
 
 	if (!gc)
 		return true;
 
+	spin_lock_irqsave(&gc->hwc_lock, flags);
 	hwc = gc->hwc.driver_data;
-	if (hwc && hwc->hwc_timeout == 0)
-		return false;
+	if (!hwc || !mana_hwc_timeout_read(hwc))
+		need_log = false;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
 
-	return true;
+	return need_log;
 }
 
 int mana_gd_query_max_resources(struct gdma_context *gc)
@@ -309,7 +314,8 @@ int mana_gd_query_max_resources(struct gdma_context *gc)
 	return 0;
 }
 
-static int mana_gd_query_hwc_timeout(struct gdma_context *gc, u32 *timeout_val)
+static int mana_gd_query_hwc_timeout(struct gdma_context *gc, u32 timeout_ms,
+				     u32 *new_timeout_ms)
 {
 	struct gdma_query_hwc_timeout_resp resp = {};
 	struct gdma_query_hwc_timeout_req req = {};
@@ -317,12 +323,12 @@ static int mana_gd_query_hwc_timeout(struct gdma_context *gc, u32 *timeout_val)
 
 	mana_gd_init_req_hdr(&req.hdr, GDMA_QUERY_HWC_TIMEOUT,
 			     sizeof(req), sizeof(resp));
-	req.timeout_ms = *timeout_val;
+	req.timeout_ms = timeout_ms;
 	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
 	if (err || resp.hdr.status)
 		return err ? err : -EPROTO;
 
-	*timeout_val = resp.timeout_ms;
+	*new_timeout_ms = resp.timeout_ms;
 
 	return 0;
 }
@@ -377,11 +383,47 @@ int mana_gd_detect_devices(struct gdma_context *gc)
 int mana_gd_send_request(struct gdma_context *gc, u32 req_len, const void *req,
 			 u32 resp_len, void *resp)
 {
-	struct hw_channel_context *hwc = gc->hwc.driver_data;
+	struct hw_channel_context *hwc;
+	unsigned long flags;
+	int err;
 
-	return mana_hwc_send_request(hwc, req_len, req, resp_len, resp);
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	hwc = gc->hwc.driver_data;
+	if (!hwc) {
+		spin_unlock_irqrestore(&gc->hwc_lock, flags);
+		return -ENODEV;
+	}
+	hwc->active_senders++;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
+
+	err = mana_hwc_send_request(hwc, req_len, req, resp_len, resp);
+
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	if (--hwc->active_senders == 0)
+		wake_up(&gc->hwc_drain_waitq);
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
+
+	return err;
 }
 EXPORT_SYMBOL_NS(mana_gd_send_request, "NET_MANA");
+
+int mana_gd_cancel_hwc_timeout(struct gdma_context *gc)
+{
+	struct hw_channel_context *hwc;
+	unsigned long flags;
+	int err = 0;
+
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	hwc = gc->hwc.driver_data;
+	if (hwc)
+		mana_hwc_timeout_cancel(hwc);
+	else
+		err = -ENODEV;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
+
+	return err;
+}
+EXPORT_SYMBOL_NS(mana_gd_cancel_hwc_timeout, "NET_MANA");
 
 int mana_gd_alloc_memory(struct gdma_context *gc, unsigned int length,
 			 struct gdma_mem_info *gmi, bool allow_scatter)
@@ -547,12 +589,26 @@ static int mana_gd_disable_queue(struct gdma_queue *queue)
 #define DOORBELL_OFFSET_EQ	0xFF8
 #define DOORBELL_OFFSET_DIM	0x820
 
+bool mana_gd_is_valid_doorbell(struct gdma_context *gc, u32 db_id)
+{
+	if (!gc->db_page_size || gc->db_page_off >= gc->bar0_size)
+		return false;
+
+	return gc->db_page_off +
+	       gc->db_page_size * ((u64)db_id + 1) <= gc->bar0_size;
+}
+
 static void mana_gd_ring_doorbell(struct gdma_context *gc, u32 db_index,
 				  enum gdma_queue_type q_type, u32 qid,
 				  u32 tail_ptr, u8 num_req, u8 client_offset)
 {
-	void __iomem *addr = gc->db_page_base + gc->db_page_size * db_index;
 	union gdma_doorbell_entry e = {};
+	void __iomem *addr;
+
+	if (unlikely(db_index == INVALID_DOORBELL))
+		return;
+
+	addr = gc->db_page_base + gc->db_page_size * db_index;
 
 	addr += client_offset;
 
@@ -645,6 +701,11 @@ void mana_gd_ring_dim(struct gdma_queue *cq, u32 mod_usec, bool mod_usec_vld,
 {
 	struct gdma_context *gc = cq->gdma_dev->gdma_context;
 	u32 dim_val;
+
+	mod_usec = clamp_t(u32, mod_usec, MANA_INTR_MODR_USEC_MIN,
+			   MANA_INTR_MODR_USEC_MAX);
+	mod_comps = clamp_t(u32, mod_comps, MANA_INTR_MODR_COMP_MIN,
+			    MANA_INTR_MODR_COMP_MAX);
 
 	/* Convert the DIM values to doorbell parameters */
 	dim_val = FIELD_PREP(MANA_INTR_MODR_USEC_MAX, mod_usec) |
@@ -760,8 +821,14 @@ void mana_gd_free_service_wq(struct gdma_context *gc)
 static void mana_gd_schedule_eq_cqs(struct gdma_queue *eq)
 {
 	struct gdma_context *gc = eq->gdma_dev->gdma_context;
+	struct gdma_queue **cq_table;
 	struct gdma_queue *cq;
 	u8 i;
+
+	/* The IRQ's RCU read-side section protects this table snapshot. */
+	cq_table = smp_load_acquire(&gc->cq_table);
+	if (!cq_table)
+		return;
 
 	for (i = 0; i < GDMA_EQ_MAX_CHILD_CQ; i++) {
 		cq = rcu_dereference(eq->eq.child_cq[i]);
@@ -770,7 +837,7 @@ static void mana_gd_schedule_eq_cqs(struct gdma_queue *eq)
 			continue;
 
 		if (cq->id >= READ_ONCE(gc->max_num_cqs) ||
-		    !gc->cq_table || gc->cq_table[cq->id] != cq)
+		    READ_ONCE(cq_table[cq->id]) != cq)
 			continue;
 
 		if (cq->cq.callback)
@@ -785,6 +852,7 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 	union gdma_eqe_info eqe_info;
 	enum gdma_eqe_type type;
 	struct gdma_event event;
+	struct gdma_queue **cq_table;
 	struct gdma_queue *cq;
 	struct gdma_eqe *eqe;
 	u32 cq_id;
@@ -796,11 +864,16 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 	switch (type) {
 	case GDMA_EQE_COMPLETION:
 		cq_id = eqe->details[0] & 0xFFFFFF;
-		if (WARN_ON_ONCE(cq_id >= gc->max_num_cqs))
+		/* The IRQ handler's RCU read-side section protects the table
+		 * until HWC teardown has fenced its EQ and waited for readers.
+		 */
+		cq_table = smp_load_acquire(&gc->cq_table);
+		if (!cq_table || cq_id >= READ_ONCE(gc->max_num_cqs))
 			break;
 
-		cq = gc->cq_table[cq_id];
-		if (WARN_ON_ONCE(!cq || cq->type != GDMA_CQ || cq->id != cq_id))
+		cq = READ_ONCE(cq_table[cq_id]);
+		if (!cq || WARN_ON_ONCE(cq->type != GDMA_CQ ||
+					cq->id != cq_id))
 			break;
 
 		if (cq->cq.callback)
@@ -983,7 +1056,9 @@ static void mana_gd_deregister_irq(struct gdma_queue *queue)
 	synchronize_rcu();
 }
 
-int mana_gd_test_eq(struct gdma_context *gc, struct gdma_queue *eq)
+static int mana_gd_test_eq_request(struct gdma_context *gc,
+				   struct hw_channel_context *hwc,
+				   struct gdma_queue *eq)
 {
 	struct gdma_generate_test_event_req req = {};
 	struct gdma_general_resp resp = {};
@@ -1001,7 +1076,12 @@ int mana_gd_test_eq(struct gdma_context *gc, struct gdma_queue *eq)
 	req.hdr.dev_id = eq->gdma_dev->dev_id;
 	req.queue_index = eq->id;
 
-	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+	if (hwc)
+		err = mana_hwc_send_request(hwc, sizeof(req), &req,
+					    sizeof(resp), &resp);
+	else
+		err = mana_gd_send_request(gc, sizeof(req), &req,
+					   sizeof(resp), &resp);
 	if (err) {
 		if (mana_need_log(gc, err))
 			dev_err(dev, "test_eq failed: %d\n", err);
@@ -1032,21 +1112,41 @@ out:
 	return err;
 }
 
-static void mana_gd_destroy_eq(struct gdma_context *gc, bool flush_evenets,
+int mana_gd_test_eq(struct gdma_context *gc, struct gdma_queue *eq)
+{
+	return mana_gd_test_eq_request(gc, NULL, eq);
+}
+
+int mana_gd_test_hwc_eq(struct hw_channel_context *hwc,
+			struct gdma_queue *eq)
+{
+	return mana_gd_test_eq_request(hwc->gdma_dev->gdma_context, hwc, eq);
+}
+
+static void mana_gd_destroy_eq(struct gdma_context *gc, bool flush_events,
 			       struct gdma_queue *queue)
 {
 	int err;
 
-	if (flush_evenets) {
+	if (queue->eq.msix_index == INVALID_PCI_MSIX_INDEX)
+		return;
+
+	if (flush_events) {
 		err = mana_gd_test_eq(gc, queue);
 		if (err && mana_need_log(gc, err))
 			dev_warn(gc->dev, "Failed to flush EQ: %d\n", err);
 	}
 
 	mana_gd_deregister_irq(queue);
+	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
 
 	if (queue->eq.disable_needed)
 		mana_gd_disable_queue(queue);
+}
+
+void mana_gd_fence_eq(struct gdma_context *gc, struct gdma_queue *queue)
+{
+	mana_gd_destroy_eq(gc, false, queue);
 }
 
 static int mana_gd_create_eq(struct gdma_dev *gd,
@@ -1258,9 +1358,10 @@ static int mana_gd_create_dma_region(struct gdma_dev *gd,
 	if (gmi->nr_pages == 0 && !MANA_PAGE_ALIGNED(gmi->virt_addr))
 		return -EINVAL;
 
+	/* The caller must keep the HWC alive throughout queue creation. */
 	hwc = gc->hwc.driver_data;
 	req_msg_size = struct_size(req, page_addr_list, num_page);
-	if (req_msg_size > hwc->max_req_msg_size)
+	if (req_msg_size > mana_hwc_get_max_req_size(hwc))
 		return -EINVAL;
 
 	req = kzalloc(req_msg_size, GFP_KERNEL);
@@ -1460,9 +1561,12 @@ int mana_gd_verify_vf_version(struct gdma_context *gc)
 	struct gdma_verify_ver_resp resp = {};
 	struct gdma_verify_ver_req req = {};
 	struct hw_channel_context *hwc;
+	u32 timeout_ms;
 	int err;
 
+	/* The setup caller must exclude concurrent HWC teardown. */
 	hwc = gc->hwc.driver_data;
+
 	mana_gd_init_req_hdr(&req.hdr, GDMA_VERIFY_VF_DRIVER_VERSION,
 			     sizeof(req), sizeof(resp));
 
@@ -1500,12 +1604,16 @@ int mana_gd_verify_vf_version(struct gdma_context *gc)
 			   &gc->pf_cap_flags1);
 
 	if (resp.pf_cap_flags1 & GDMA_DRV_CAP_FLAG_1_HWC_TIMEOUT_RECONFIG) {
-		err = mana_gd_query_hwc_timeout(gc, &hwc->hwc_timeout);
+		err = mana_gd_query_hwc_timeout(gc,
+						mana_hwc_timeout_read(hwc),
+						&timeout_ms);
 		if (err) {
 			dev_err(gc->dev, "Failed to set the hwc timeout %d\n", err);
 			return err;
 		}
-		dev_dbg(gc->dev, "set the hwc timeout to %u\n", hwc->hwc_timeout);
+		mana_hwc_timeout_update(hwc, timeout_ms);
+		dev_dbg(gc->dev, "set the hwc timeout to %u\n",
+			mana_hwc_timeout_read(hwc));
 	}
 	return 0;
 }
@@ -1533,13 +1641,7 @@ int mana_gd_register_device(struct gdma_dev *gd)
 		return err ? err : -EPROTO;
 	}
 
-	/* Validate that doorbell page for db_id is within the BAR0 region.
-	 * In mana_gd_ring_doorbell(), the address is calculated as:
-	 *   addr = db_page_base + db_page_size * db_id
-	 *        = (bar0_va + db_page_off) + (db_page_size * db_id)
-	 * So we need: db_page_off + db_page_size * (db_id + 1) <= bar0_size
-	 */
-	if (gc->db_page_off + gc->db_page_size * ((u64)resp.db_id + 1) > gc->bar0_size) {
+	if (!mana_gd_is_valid_doorbell(gc, resp.db_id)) {
 		dev_err(gc->dev, "Doorbell ID %u out of range\n", resp.db_id);
 		return -EPROTO;
 	}
@@ -1907,44 +2009,45 @@ struct gdma_irq_context *mana_gd_get_gic(struct gdma_context *gc,
 	const struct gdma_bus_ops *ops = gc->bus_ops;
 	struct gdma_irq_context *gic;
 	bool dyn_msix = false;
-	int msi, irq, err;
+	int msix_index, irq, err;
 
 	mutex_lock(&gc->gic_mutex);
 
 	if (use_msi_bitmap) {
-		msi = find_first_zero_bit(gc->msi_bitmap, gc->num_msix_usable);
-		if (msi >= gc->num_msix_usable) {
+		msix_index = find_first_zero_bit(gc->msi_bitmap,
+						 gc->num_msix_usable);
+		if (msix_index >= gc->num_msix_usable) {
 			dev_err(gc->dev, "No free MSI vectors available\n");
 			gic = ERR_PTR(-ENOSPC);
 			goto out;
 		}
-		*msi_requested = msi;
+		*msi_requested = msix_index;
 	} else {
-		msi = *msi_requested;
+		msix_index = *msi_requested;
 	}
 
-	gic = xa_load(&gc->irq_contexts, msi);
+	gic = xa_load(&gc->irq_contexts, msix_index);
 	if (gic) {
 		refcount_inc(&gic->refcount);
 		if (use_msi_bitmap) {
 			gic->bitmap_refs++;
-			set_bit(msi, gc->msi_bitmap);
+			set_bit(msix_index, gc->msi_bitmap);
 		}
 		goto out;
 	}
 
-	irq = ops->msix_virq(gc, msi);
+	irq = ops->msix_virq(gc, msix_index);
 	if (irq == -EINVAL) {
 		/* A bus that sizes its vector pool up front has nothing left
 		 * to hand out once every vector has been claimed.
 		 */
 		if (!ops->msix_alloc_at) {
-			dev_err(gc->dev, "No IRQ for MSI %d\n", msi);
+			dev_err(gc->dev, "No IRQ for MSI %d\n", msix_index);
 			gic = ERR_PTR(-ENOENT);
 			goto out;
 		}
 
-		irq = ops->msix_alloc_at(gc, &msi);
+		irq = ops->msix_alloc_at(gc, &msix_index);
 		if (irq < 0) {
 			dev_err(gc->dev, "Failed to alloc irq msi %d err %d\n",
 				*msi_requested, irq);
@@ -1953,19 +2056,19 @@ struct gdma_irq_context *mana_gd_get_gic(struct gdma_context *gc,
 		}
 
 		dyn_msix = true;
-		*msi_requested = msi;
+		*msi_requested = msix_index;
 	}
 
 	gic = kzalloc_obj(*gic);
 	if (!gic) {
 		gic = ERR_PTR(-ENOMEM);
 		if (dyn_msix)
-			ops->msix_free(gc, msi, irq);
+			ops->msix_free(gc, msix_index, irq);
 		goto out;
 	}
 
 	gic->handler = mana_gd_process_eq_events;
-	gic->msi = msi;
+	gic->msi = msix_index;
 	gic->irq = irq;
 	INIT_LIST_HEAD(&gic->eq_list);
 	spin_lock_init(&gic->lock);
@@ -1984,28 +2087,41 @@ struct gdma_irq_context *mana_gd_get_gic(struct gdma_context *gc,
 		kfree(gic);
 		gic = ERR_PTR(err);
 		if (dyn_msix)
-			ops->msix_free(gc, msi, irq);
+			ops->msix_free(gc, msix_index, irq);
 		goto out;
+	}
+
+	if (dyn_msix && ops->setup_dyn_affinity) {
+		err = ops->setup_dyn_affinity(gc, irq, msix_index);
+		if (err) {
+			free_irq(irq, gic);
+			kfree(gic);
+			gic = ERR_PTR(err);
+			ops->msix_free(gc, msix_index, irq);
+			goto out;
+		}
 	}
 
 	gic->dyn_msix = dyn_msix;
 	refcount_set(&gic->refcount, 1);
 	gic->bitmap_refs = use_msi_bitmap ? 1 : 0;
 
-	err = xa_err(xa_store(&gc->irq_contexts, msi, gic, GFP_KERNEL));
+	err = xa_err(xa_store(&gc->irq_contexts, msix_index, gic, GFP_KERNEL));
 	if (err) {
 		dev_err(gc->dev, "Failed to store irq context for msi %d: %d\n",
-			msi, err);
+			msix_index, err);
+		if (dyn_msix)
+			irq_update_affinity_hint(irq, NULL);
 		free_irq(irq, gic);
 		kfree(gic);
 		gic = ERR_PTR(err);
 		if (dyn_msix)
-			ops->msix_free(gc, msi, irq);
+			ops->msix_free(gc, msix_index, irq);
 		goto out;
 	}
 
 	if (use_msi_bitmap)
-		set_bit(msi, gc->msi_bitmap);
+		set_bit(msix_index, gc->msi_bitmap);
 
 out:
 	mutex_unlock(&gc->gic_mutex);
@@ -2112,6 +2228,13 @@ void mana_gd_cleanup(struct gdma_context *gc)
 	dev_dbg(gc->dev, "mana gdma cleanup successful\n");
 }
 EXPORT_SYMBOL_NS(mana_gd_cleanup, "NET_MANA");
+
+void mana_gd_free_context(struct gdma_context *gc)
+{
+	mana_hwc_free_retained_channel(gc);
+	vfree(gc);
+}
+EXPORT_SYMBOL_NS(mana_gd_free_context, "NET_MANA");
 
 static int __init gdma_core_init(void)
 {

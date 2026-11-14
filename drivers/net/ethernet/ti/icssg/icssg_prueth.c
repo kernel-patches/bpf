@@ -213,6 +213,8 @@ static void icssg_enable_fw_offload(struct prueth *prueth)
 
 	for (mac = PRUETH_MAC0; mac < PRUETH_NUM_MACS; mac++) {
 		emac = prueth->emac[mac];
+		if (!emac)
+			continue;
 		if (prueth->is_hsr_offload_mode) {
 			if (emac->ndev->features & NETIF_F_HW_HSR_TAG_RM)
 				icssg_set_port_state(emac, ICSSG_EMAC_HSR_RX_OFFLOAD_ENABLE);
@@ -240,6 +242,17 @@ static void icssg_enable_fw_offload(struct prueth *prueth)
 				if (prueth->is_switch_mode)
 					icssg_set_port_state(emac, ICSSG_EMAC_PORT_VLAN_AWARE_ENABLE);
 			}
+		}
+
+		/* Re-apply flooding state cleared by firmware restart.
+		 * In switch mode, flooding is managed by the bridge via
+		 * switchdev callbacks, not tracked by these flags.
+		 */
+		if (!prueth->is_switch_mode && netif_running(emac->ndev)) {
+			if (emac->uc_flooding_enabled)
+				icssg_set_port_state(emac, ICSSG_EMAC_PORT_UC_FLOODING_ENABLE);
+			if (emac->mc_flooding_enabled)
+				icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_ENABLE);
 		}
 	}
 }
@@ -1100,7 +1113,7 @@ static int emac_ndo_open(struct net_device *ndev)
 
 	prueth->emacs_initialized++;
 
-	queue_work(system_long_wq, &emac->stats_work.work);
+	queue_work(system_dfl_long_wq, &emac->stats_work.work);
 
 	return 0;
 
@@ -1286,15 +1299,22 @@ static void emac_ndo_set_rx_mode_work(struct work_struct *work)
 	icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_DISABLE);
 
 	if (promisc) {
+		emac->uc_flooding_enabled = true;
+		emac->mc_flooding_enabled = true;
 		icssg_set_port_state(emac, ICSSG_EMAC_PORT_UC_FLOODING_ENABLE);
 		icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_ENABLE);
 		return;
 	}
 
 	if (allmulti) {
+		emac->mc_flooding_enabled = true;
+		emac->uc_flooding_enabled = false;
 		icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_ENABLE);
 		return;
 	}
+
+	emac->uc_flooding_enabled = false;
+	emac->mc_flooding_enabled = false;
 
 	if (emac->prueth->is_hsr_offload_mode) {
 		/* Track basic add/delete via callbacks */
@@ -1837,6 +1857,14 @@ static int prueth_emac_restart(struct prueth *prueth)
 	struct prueth_emac *emac1 = prueth->emac[PRUETH_MAC1];
 	int ret;
 
+	/* Halt phylib to stop emac_adjust_link() from issuing R30 commands
+	 * to the PRU while the firmware is stopped.
+	 */
+	if (emac0->ndev->phydev)
+		phy_stop(emac0->ndev->phydev);
+	if (emac1->ndev->phydev)
+		phy_stop(emac1->ndev->phydev);
+
 	/* Detach the net_device for both PRUeth ports*/
 	if (netif_running(emac0->ndev))
 		netif_device_detach(emac0->ndev);
@@ -1847,20 +1875,20 @@ static int prueth_emac_restart(struct prueth *prueth)
 	ret = icssg_set_port_state(emac0, ICSSG_EMAC_PORT_DISABLE);
 	ret |= icssg_set_port_state(emac1, ICSSG_EMAC_PORT_DISABLE);
 	if (ret)
-		return ret;
+		goto restart_phy;
 
 	/* Stop both pru cores for both PRUeth ports*/
 	ret = prueth_emac_common_stop(prueth);
 	if (ret) {
 		dev_err(prueth->dev, "Failed to stop the firmwares");
-		return ret;
+		goto restart_phy;
 	}
 
 	/* Start both pru cores for both PRUeth ports */
 	ret = prueth_emac_common_start(prueth);
 	if (ret) {
 		dev_err(prueth->dev, "Failed to start the firmwares");
-		return ret;
+		goto restart_phy;
 	}
 
 	/* Enable forwarding for both PRUeth ports */
@@ -1870,6 +1898,13 @@ static int prueth_emac_restart(struct prueth *prueth)
 	/* Attache net_device for both PRUeth ports */
 	netif_device_attach(emac0->ndev);
 	netif_device_attach(emac1->ndev);
+
+restart_phy:
+	/* Resume phylib now that the firmware is running again. */
+	if (emac0->ndev->phydev)
+		phy_start(emac0->ndev->phydev);
+	if (emac1->ndev->phydev)
+		phy_start(emac1->ndev->phydev);
 
 	return ret;
 }
@@ -1919,7 +1954,8 @@ static int prueth_netdevice_port_link(struct net_device *ndev,
 		    prueth->br_members & BIT(PRUETH_PORT_MII1)) {
 			prueth->is_switch_mode = true;
 			prueth->default_vlan = PRUETH_DFLT_VLAN_SW;
-			emac->port_vlan = prueth->default_vlan;
+			prueth->emac[PRUETH_MAC0]->port_vlan = prueth->default_vlan;
+			prueth->emac[PRUETH_MAC1]->port_vlan = prueth->default_vlan;
 			icssg_change_mode(prueth);
 		}
 	}
@@ -1945,6 +1981,7 @@ static void prueth_netdevice_port_unlink(struct net_device *ndev)
 			dev_err(prueth->dev, "Failed to restart the firmwares, aborting the process");
 			return;
 		}
+		icssg_enable_fw_offload(prueth);
 	}
 
 	prueth_offload_fwd_mark_update(prueth);
@@ -2009,6 +2046,7 @@ static void prueth_hsr_port_unlink(struct net_device *ndev)
 			dev_err(prueth->dev, "Failed to restart the firmwares, aborting the process");
 			return;
 		}
+		icssg_enable_fw_offload(prueth);
 		netdev_dbg(ndev, "Disabling HSR Offload mode\n");
 	}
 }
@@ -2217,24 +2255,34 @@ static int prueth_probe(struct platform_device *pdev)
 		if (ret < 0) {
 			dev_err(dev, "%pOF error reading port_id %d\n",
 				eth_node, ret);
+			continue;
 		}
 
-		of_node_get(eth_node);
+		if (reg != 0 && reg != 1) {
+			dev_err(dev, "port reg should be 0 or 1\n");
+			continue;
+		}
+
+		if ((reg == 0 && eth0_node) || (reg == 1 && eth1_node)) {
+			dev_err(dev, "port reg %d already in use\n", reg);
+			ret = -ENODEV;
+			of_node_put(eth_node);
+			of_node_put(eth_ports_node);
+			goto put_cores;
+		}
 
 		if (reg == 0) {
-			eth0_node = eth_node;
+			eth0_node = of_node_get(eth_node);
 			if (!of_device_is_available(eth0_node)) {
 				of_node_put(eth0_node);
 				eth0_node = NULL;
 			}
 		} else if (reg == 1) {
-			eth1_node = eth_node;
+			eth1_node = of_node_get(eth_node);
 			if (!of_device_is_available(eth1_node)) {
 				of_node_put(eth1_node);
 				eth1_node = NULL;
 			}
-		} else {
-			dev_err(dev, "port reg should be 0 or 1\n");
 		}
 	}
 
@@ -2246,25 +2294,21 @@ static int prueth_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	if (eth0_node == eth1_node) {
-		dev_err(dev, "port0 and port1 can't have same reg\n");
-		of_node_put(eth0_node);
-		return -ENODEV;
-	}
-
 	prueth->eth_node[PRUETH_MAC0] = eth0_node;
 	prueth->eth_node[PRUETH_MAC1] = eth1_node;
 
 	prueth->miig_rt = syscon_regmap_lookup_by_phandle(np, "ti,mii-g-rt");
 	if (IS_ERR(prueth->miig_rt)) {
 		dev_err(dev, "couldn't get ti,mii-g-rt syscon regmap\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto put_cores;
 	}
 
 	prueth->mii_rt = syscon_regmap_lookup_by_phandle(np, "ti,mii-rt");
 	if (IS_ERR(prueth->mii_rt)) {
 		dev_err(dev, "couldn't get ti,mii-rt syscon regmap\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto put_cores;
 	}
 
 	prueth->pa_stats = syscon_regmap_lookup_by_phandle(np, "ti,pa-stats");

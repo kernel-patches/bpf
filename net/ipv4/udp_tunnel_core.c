@@ -84,8 +84,9 @@ void setup_udp_tunnel_sock(struct net *net, struct sock *sk,
 	udp_sk(sk)->encap_err_rcv = cfg->encap_err_rcv;
 	udp_sk(sk)->encap_err_lookup = cfg->encap_err_lookup;
 	udp_sk(sk)->encap_destroy = cfg->encap_destroy;
-	udp_sk(sk)->gro_receive = cfg->gro_receive;
-	udp_sk(sk)->gro_complete = cfg->gro_complete;
+	WRITE_ONCE(udp_sk(sk)->gro_complete, cfg->gro_complete);
+	/* Pairs with smp_load_acquire() in udp_gro_receive(). */
+	smp_store_release(&udp_sk(sk)->gro_receive, cfg->gro_receive);
 
 	udp_tunnel_encap_enable(sk);
 

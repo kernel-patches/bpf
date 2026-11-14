@@ -67,7 +67,6 @@ static inline void tcp_orphan_count_dec(void)
 
 void tcp_time_wait(struct sock *sk, int state, int timeo);
 
-#define MAX_TCP_HEADER	L1_CACHE_ALIGN(128 + MAX_HEADER)
 #define MAX_TCP_OPTION_SPACE 40
 #define TCP_MIN_SND_MSS		48
 #define TCP_MIN_GSO_SIZE	(TCP_MIN_SND_MSS - MAX_TCP_OPTION_SPACE)
@@ -498,8 +497,7 @@ void tcp_init_sock(struct sock *sk);
 void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb);
 __poll_t tcp_poll(struct file *file, struct socket *sock,
 		      struct poll_table_struct *wait);
-int do_tcp_getsockopt(struct sock *sk, int level,
-		      int optname, sockptr_t optval, sockptr_t optlen);
+int do_tcp_getsockopt(struct sock *sk, int level, int optname, sockopt_t *sopt);
 int tcp_getsockopt(struct sock *sk, int level, int optname,
 		   char __user *optval, int __user *optlen);
 bool tcp_bpf_bypass_getsockopt(int level, int optname);
@@ -516,6 +514,13 @@ int __tcp_set_rcvlowat(struct sock *sk, int val, bool wakeup);
 int tcp_set_rcvlowat(struct sock *sk, int val);
 void tcp_set_rcvbuf(struct sock *sk, int val);
 int tcp_set_window_clamp(struct sock *sk, int val);
+
+static inline bool tcp_want_rx_tstamp_cmsg(const struct sock *sk)
+{
+	return READ_ONCE(sk->sk_flags) &
+		((1UL << SOCK_RCVTSTAMP) |
+		 (1UL << SOCK_TIMESTAMPING_ANY));
+}
 
 static inline void
 tcp_update_recv_tstamps(struct sk_buff *skb,
@@ -2881,6 +2886,15 @@ void tcp_get_available_ulp(char *buf, size_t len);
 void tcp_cleanup_ulp(struct sock *sk);
 void tcp_update_ulp(struct sock *sk, struct proto *p,
 		    void (*write_space)(struct sock *sk));
+
+static inline bool tcp_kcm_attached(const struct sock *sk)
+{
+#if IS_ENABLED(CONFIG_AF_KCM)
+	return tcp_sk(sk)->kcm_attached;
+#else
+	return false;
+#endif
+}
 
 #define MODULE_ALIAS_TCP_ULP(name)				\
 	MODULE_INFO(alias, name);		\

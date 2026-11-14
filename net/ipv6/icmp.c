@@ -322,9 +322,12 @@ static int icmpv6_getfrag(void *from, char *to, int offset, int len, int odd, st
 	struct icmpv6_msg *msg = (struct icmpv6_msg *) from;
 	struct sk_buff *org_skb = msg->skb;
 	__wsum csum;
+	int err;
 
-	csum = skb_copy_and_csum_bits(org_skb, msg->offset + offset,
-				      to, len);
+	err = skb_copy_and_csum_bits(org_skb, msg->offset + offset,
+				     to, len, &csum);
+	if (err)
+		return err;
 	skb->csum = csum_block_add(skb->csum, csum, odd);
 	if (!(msg->type & ICMPV6_INFOMSG_MASK))
 		nf_ct_attach(skb, org_skb);
@@ -778,6 +781,13 @@ void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 
 	np = inet6_sk(sk);
 
+	/* Don't send parts of a decrypted skb onto the network, see
+	 * __icmp_send(): no error about a received skb. Before the rate
+	 * limit, so that a suppressed error costs no credit.
+	 */
+	if (unlikely(skb_is_decrypted(skb) && skb->skb_iif))
+		goto out_unlock;
+
 	if (!icmpv6_xrlim_allow(sk, type, &fl6, apply_ratelimit))
 		goto out_unlock;
 
@@ -798,6 +808,15 @@ void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 	dst = icmpv6_route_lookup(net, skb, sk, &fl6);
 	if (IS_ERR(dst))
 		goto out_unlock;
+
+	/* An error about a locally originated decrypted skb is sent only if
+	 * it is routed to a local address.
+	 */
+	if (unlikely(skb_is_decrypted(skb)) &&
+	    !(dst_rt6_info(dst)->rt6i_flags & RTF_LOCAL)) {
+		dst_release(dst);
+		goto out_unlock;
+	}
 
 	ipc6.hlimit = ip6_sk_dst_hoplimit(np, &fl6, dst);
 

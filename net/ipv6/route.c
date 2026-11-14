@@ -2917,12 +2917,55 @@ static bool rt6_cache_allowed_for_pmtu(const struct rt6_info *rt)
 		(rt->rt6i_flags & RTF_PCPU || rcu_access_pointer(rt->from));
 }
 
+struct rt6_pmtu_arg {
+	struct fib6_result	res;
+	const struct in6_addr	*daddr;
+	const struct in6_addr	*saddr;
+	u32			mtu;
+};
+
+/* Cache a pmtu on one path of a route, never raising what the path
+ * uses for daddr. An existing exception is updated in place, a new
+ * one would lose a gateway learned from a redirect.
+ */
+static int rt6_nh_update_pmtu(struct fib6_nh *nh, void *_arg)
+{
+	struct rt6_pmtu_arg *arg = _arg;
+	struct fib6_result *res = &arg->res;
+	struct rt6_info *rt;
+
+	res->nh = nh;
+	rt = rt6_find_cached_rt(res, arg->daddr, arg->saddr);
+	if (rt) {
+		if (arg->mtu < dst6_mtu(&rt->dst)) {
+			rt6_do_update_pmtu(rt, arg->mtu);
+			fib6_nh_update_exception(nh, res->f6i->fib6_src.plen,
+						 rt);
+		}
+		return 0;
+	}
+
+	if (arg->mtu >= fib6_mtu(res))
+		return 0;
+
+	rt = ip6_rt_cache_alloc(res, arg->daddr, arg->saddr);
+	if (rt) {
+		rt6_do_update_pmtu(rt, arg->mtu);
+		if (rt6_insert_exception(rt, res))
+			dst_release_immediate(&rt->dst);
+	}
+
+	return 0;
+}
+
 static void __ip6_rt_update_pmtu(struct dst_entry *dst, const struct sock *sk,
 				 const struct ipv6hdr *iph, u32 mtu,
 				 bool confirm_neigh)
 {
-	const struct in6_addr *daddr, *saddr;
+	struct rt6_pmtu_arg arg = { .mtu = mtu };
 	struct rt6_info *rt6 = dst_rt6_info(dst);
+	const struct in6_addr *daddr, *saddr;
+	struct fib6_info *f6i, *sibling;
 
 	/* Note: do *NOT* check dst_metric_locked(dst, RTAX_MTU)
 	 * IPv6 pmtu discovery isn't optional, so 'mtu lock' cannot disable it.
@@ -2945,55 +2988,55 @@ static void __ip6_rt_update_pmtu(struct dst_entry *dst, const struct sock *sk,
 
 	if (mtu < IPV6_MIN_MTU)
 		return;
-	if (mtu >= dst6_mtu(dst))
-		return;
 
-	if (!rt6_cache_allowed_for_pmtu(rt6)) {
+	rcu_read_lock();
+	/* A dst that is a cached exception, or can't have one, is updated
+	 * itself: the walk below is keyed by daddr and may not find it, a
+	 * socket with a routing header holds the dst of the first hop while
+	 * daddr is the final destination.
+	 */
+	if (!rt6_cache_allowed_for_pmtu(rt6) && mtu < dst6_mtu(dst)) {
 		rt6_do_update_pmtu(rt6, mtu);
 		/* update rt6_ex->stamp for cache */
 		if (rt6->rt6i_flags & RTF_CACHE)
 			rt6_update_exception_stamp_rt(rt6);
-	} else if (daddr) {
-		struct fib6_result res = {};
-		struct rt6_info *nrt6;
-
-		rcu_read_lock();
-		res.f6i = rcu_dereference(rt6->from);
-		if (!res.f6i)
-			goto out_unlock;
-
-		res.fib6_flags = res.f6i->fib6_flags;
-		res.fib6_type = res.f6i->fib6_type;
-
-		if (res.f6i->nh) {
-			struct fib6_nh_match_arg arg = {
-				.dev = dst_dev_rcu(dst),
-				.gw = &rt6->rt6i_gateway,
-			};
-
-			nexthop_for_each_fib6_nh(res.f6i->nh,
-						 fib6_nh_find_match, &arg);
-
-			/* fib6_info uses a nexthop that does not have fib6_nh
-			 * using the dst->dev + gw. Should be impossible.
-			 */
-			if (!arg.match)
-				goto out_unlock;
-
-			res.nh = arg.match;
-		} else {
-			res.nh = res.f6i->fib6_nh;
-		}
-
-		nrt6 = ip6_rt_cache_alloc(&res, daddr, saddr);
-		if (nrt6) {
-			rt6_do_update_pmtu(nrt6, mtu);
-			if (rt6_insert_exception(nrt6, &res))
-				dst_release_immediate(&nrt6->dst);
-		}
-out_unlock:
-		rcu_read_unlock();
 	}
+
+	f6i = rcu_dereference(rt6->from);
+	/* Don't walk the siblings of a route being removed from the tree */
+	if (!daddr || !f6i || !rcu_access_pointer(f6i->fib6_node))
+		goto out;
+
+	arg.daddr = daddr;
+	arg.saddr = saddr;
+	arg.res.f6i = f6i;
+	arg.res.fib6_flags = f6i->fib6_flags;
+	arg.res.fib6_type = f6i->fib6_type;
+
+	/* The lookup in ip6_update_pmtu() doesn't hash on the protocol and
+	 * ports, dst may be another path than the too big packet took:
+	 * cache the pmtu on every path it lowers.
+	 */
+	if (f6i->nh) {
+		nexthop_for_each_fib6_nh(f6i->nh, rt6_nh_update_pmtu, &arg);
+		goto out;
+	}
+
+	rt6_nh_update_pmtu(f6i->fib6_nh, &arg);
+
+	/* fib6_del_route() zeroes fib6_nsiblings before unlinking f6i, stop
+	 * then as the walk would never get back to its head.
+	 */
+	list_for_each_entry_rcu(sibling, &f6i->fib6_siblings, fib6_siblings) {
+		arg.res.f6i = sibling;
+		arg.res.fib6_flags = sibling->fib6_flags;
+		arg.res.fib6_type = sibling->fib6_type;
+		rt6_nh_update_pmtu(sibling->fib6_nh, &arg);
+		if (!READ_ONCE(f6i->fib6_nsiblings))
+			break;
+	}
+out:
+	rcu_read_unlock();
 }
 
 static void ip6_rt_update_pmtu(struct dst_entry *dst, struct sock *sk,
@@ -5814,6 +5857,7 @@ static int rt6_fill_node(struct net *net, struct sk_buff *skb,
 	struct nlmsghdr *nlh;
 	struct rtmsg *rtm;
 	long expires = 0;
+	int err = -EMSGSIZE;
 
 	nlh = nlmsg_put(skb, portid, seq, type, sizeof(*rtm), flags);
 	if (!nlh)
@@ -5868,13 +5912,16 @@ static int rt6_fill_node(struct net *net, struct sk_buff *skb,
 #endif
 	if (iif) {
 #ifdef CONFIG_IPV6_MROUTE
-		if (ipv6_addr_is_multicast(&rt6_dst->addr)) {
-			int err = ip6mr_get_route(net, skb, rtm, portid);
+		if (ipv6_addr_is_multicast(&rt6_dst->addr) &&
+		    atomic_read(&net->ipv6.devconf_all->mc_forwarding)) {
+			int ret = ip6mr_get_route(net, skb, rtm, portid);
 
-			if (err == 0)
+			if (ret == 0)
 				return 0;
-			if (err < 0)
+			if (ret < 0) {
+				err = ret;
 				goto nla_put_failure;
+			}
 		} else
 #endif
 			if (nla_put_u32(skb, RTA_IIF, iif))
@@ -5997,7 +6044,7 @@ static int rt6_fill_node(struct net *net, struct sk_buff *skb,
 
 nla_put_failure:
 	nlmsg_cancel(skb, nlh);
-	return -EMSGSIZE;
+	return err;
 }
 
 static int fib6_info_nh_uses_dev(struct fib6_nh *nh, void *arg)
@@ -6610,6 +6657,8 @@ static int ipv6_sysctl_rtcache_flush(const struct ctl_table *ctl, int write,
 	return 0;
 }
 
+static unsigned int ip6_rt_gc_elasticity_max = 31;
+
 static const struct ctl_table ipv6_route_table_template[] = {
 	{
 		.procname	=	"max_size",
@@ -6656,9 +6705,10 @@ static const struct ctl_table ipv6_route_table_template[] = {
 	{
 		.procname	=	"gc_elasticity",
 		.data		=	&init_net.ipv6.sysctl.ip6_rt_gc_elasticity,
-		.maxlen		=	sizeof(int),
+		.maxlen		=	sizeof(u8),
 		.mode		=	0644,
-		.proc_handler	=	proc_dointvec,
+		.proc_handler	=	proc_dou8vec_minmax,
+		.extra2		=	&ip6_rt_gc_elasticity_max,
 	},
 	{
 		.procname	=	"mtu_expires",

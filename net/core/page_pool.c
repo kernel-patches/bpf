@@ -34,6 +34,10 @@
 
 DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
 
+/* Enabled while a pool of a provider without MP_CAP_RETAIN exists. */
+DEFINE_STATIC_KEY_FALSE(page_pool_restricted);
+EXPORT_SYMBOL(page_pool_restricted);
+
 #define DEFER_TIME (msecs_to_jiffies(1000))
 #define DEFER_WARN_INTERVAL (60 * HZ)
 
@@ -188,6 +192,53 @@ static void page_pool_struct_check(void)
 				    PAGE_POOL_FRAG_GROUP_ALIGN);
 }
 
+/**
+ * netmem_can_retain() - may the stack keep @netmem after the RX poll
+ * @netmem: netmem to check
+ *
+ * Context: the caller holds @netmem through its page pool. A plain page
+ * reference does not keep the page in its pool.
+ * Return: false if @netmem belongs to a memory provider without
+ * MP_CAP_RETAIN.
+ */
+bool netmem_can_retain(netmem_ref netmem)
+{
+	const struct memory_provider_ops *ops;
+
+	netmem = netmem_compound_head(netmem);
+	if (!netmem_is_pp(netmem))
+		return true;
+
+	ops = netmem_get_pp(netmem)->mp_ops;
+	return !ops || ops->caps & MP_CAP_RETAIN;
+}
+EXPORT_SYMBOL(netmem_can_retain);
+
+static int page_pool_select_mp(struct page_pool *pool,
+			       const struct pp_memory_provider_params *mpp,
+			       u32 rxq_mp_gen)
+{
+	const struct memory_provider_ops *ops = mpp->mp_ops;
+	unsigned int flags = pool->slow.flags;
+	bool readable;
+
+	if (!ops)
+		return 0;
+
+	readable = ops->caps & MP_CAP_READABLE;
+	if (flags & PP_FLAG_MEM_PROVIDER) {
+		if (!readable && !(flags & PP_FLAG_ALLOW_UNREADABLE_NETMEM))
+			return -EOPNOTSUPP;
+	} else if (readable) {
+		return 0;
+	}
+
+	pool->mp_priv = mpp->mp_priv;
+	pool->mp_ops = ops;
+	pool->mp_gen = rxq_mp_gen;
+	return 0;
+}
+
 static int page_pool_init(struct page_pool *pool,
 			  const struct page_pool_params *params,
 			  int cpuid)
@@ -272,12 +323,14 @@ static int page_pool_init(struct page_pool *pool,
 
 	xa_init_flags(&pool->dma_mapped, XA_FLAGS_ALLOC1);
 
-	if (pool->slow.flags & PP_FLAG_ALLOW_UNREADABLE_NETMEM) {
+	if (pool->slow.flags & (PP_FLAG_MEM_PROVIDER |
+				PP_FLAG_ALLOW_UNREADABLE_NETMEM)) {
 		netdev_assert_locked(pool->slow.netdev);
 		rxq = __netif_get_rx_queue(pool->slow.netdev,
 					   pool->slow.queue_idx);
-		pool->mp_priv = rxq->mp_params.mp_priv;
-		pool->mp_ops = rxq->mp_params.mp_ops;
+		err = page_pool_select_mp(pool, &rxq->mp_params, rxq->mp_gen);
+		if (err)
+			goto free_ptr_ring;
 	}
 
 	if (pool->mp_ops) {
@@ -299,6 +352,8 @@ static int page_pool_init(struct page_pool *pool,
 		}
 
 		static_branch_inc(&page_pool_mem_providers);
+		if (!(pool->mp_ops->caps & MP_CAP_RETAIN))
+			static_branch_inc(&page_pool_restricted);
 	} else if (pool->p.order > MAX_PAGE_ORDER) {
 		err = -EINVAL;
 		goto free_ptr_ring;
@@ -327,6 +382,8 @@ static void page_pool_uninit(struct page_pool *pool)
 #endif
 
 	if (pool->mp_ops) {
+		if (!(pool->mp_ops->caps & MP_CAP_RETAIN))
+			static_branch_dec(&page_pool_restricted);
 		pool->mp_ops->destroy(pool);
 		static_branch_dec(&page_pool_mem_providers);
 	}
@@ -1070,6 +1127,9 @@ netmem_ref page_pool_alloc_frag_netmem(struct page_pool *pool,
 	unsigned int max_size = PAGE_SIZE << pool->p.order;
 	netmem_ref netmem = pool->frag_page;
 
+	if (static_branch_unlikely(&page_pool_mem_providers) &&
+	    WARN_ON_ONCE(!page_pool_supports_frag(pool)))
+		return 0;
 	if (WARN_ON(size > max_size))
 		return 0;
 
@@ -1341,7 +1401,7 @@ bool net_mp_niov_set_dma_addr(struct net_iov *niov, dma_addr_t addr)
 }
 
 /* Associate a niov with a page pool. Should follow with a matching
- * net_mp_niov_clear_page_pool()
+ * net_mp_niov_clear_page_pool() or net_mp_release_page_pool_bulk()
  */
 void net_mp_niov_set_page_pool(struct page_pool *pool, struct net_iov *niov)
 {
@@ -1361,4 +1421,36 @@ void net_mp_niov_clear_page_pool(struct net_iov *niov)
 	netmem_ref netmem = net_iov_to_netmem(niov);
 
 	page_pool_clear_pp_info(netmem);
+}
+
+/**
+ * net_mp_release_page_pool_bulk() - take net_iovs back from a page pool
+ * @pool: page pool that holds one reference to each net_iov
+ * @netmems: net_iovs of the memory provider of @pool
+ * @count: number of entries in @netmems
+ *
+ * A memory provider takes net_iovs out of a page pool without
+ * ->release_netmem(), for example to give them to userspace. @pool may be
+ * freed on return.
+ */
+void net_mp_release_page_pool_bulk(struct page_pool *pool,
+				   netmem_ref *netmems, u32 count)
+{
+	bool trace = trace_page_pool_state_release_enabled();
+	atomic_t *release_cnt = &pool->pages_state_release_cnt;
+	int released;
+	u32 i;
+
+	for (i = 0; i < count; i++) {
+		DEBUG_NET_WARN_ON_ONCE(netmem_get_pp(netmems[i]) != pool);
+		page_pool_clear_pp_info(netmems[i]);
+		if (!trace)
+			continue;
+
+		released = atomic_inc_return_relaxed(release_cnt);
+		trace_page_pool_state_release(pool, netmems[i], released);
+	}
+
+	if (!trace)
+		atomic_add(count, release_cnt);
 }

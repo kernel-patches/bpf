@@ -529,6 +529,9 @@ static int inet6_netconf_msgsize_devconf(int type)
 	if (all || type == NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN)
 		size += nla_total_size(4);
 
+	if (all || type == NETCONFA_FORCE_FORWARDING)
+		size += nla_total_size(4);
+
 	return size;
 }
 
@@ -576,6 +579,11 @@ static int inet6_netconf_fill_devconf(struct sk_buff *skb, int ifindex,
 	if ((all || type == NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN) &&
 	    nla_put_s32(skb, NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN,
 			READ_ONCE(devconf->ignore_routes_with_linkdown)) < 0)
+		goto nla_put_failure;
+
+	if ((all || type == NETCONFA_FORCE_FORWARDING) &&
+	    nla_put_s32(skb, NETCONFA_FORCE_FORWARDING,
+			READ_ONCE(devconf->force_forwarding)) < 0)
 		goto nla_put_failure;
 
 out:
@@ -863,8 +871,12 @@ static void addrconf_forward_change(struct net *net, __s32 newf)
 		if (idev) {
 			int changed = (!idev->cnf.forwarding) ^ (!newf);
 			/* Disabling all.forwarding sets 0 to force_forwarding for all interfaces */
-			if (newf == 0)
+			if (newf == 0 && idev->cnf.force_forwarding) {
 				WRITE_ONCE(idev->cnf.force_forwarding, 0);
+				inet6_netconf_notify_devconf(net, RTM_NEWNETCONF,
+							     NETCONFA_FORCE_FORWARDING,
+							     dev->ifindex, &idev->cnf);
+			}
 
 			WRITE_ONCE(idev->cnf.forwarding, newf);
 			if (changed)
@@ -905,6 +917,14 @@ static int addrconf_fixup_forwarding(const struct ctl_table *table, int *p, int 
 						     net->ipv6.devconf_dflt);
 
 		addrconf_forward_change(net, newf);
+		/* Disabling all.forwarding also resets all.force_forwarding */
+		if (newf == 0 && net->ipv6.devconf_all->force_forwarding) {
+			WRITE_ONCE(net->ipv6.devconf_all->force_forwarding, 0);
+			inet6_netconf_notify_devconf(net, RTM_NEWNETCONF,
+						     NETCONFA_FORCE_FORWARDING,
+						     NETCONFA_IFINDEX_ALL,
+						     net->ipv6.devconf_all);
+		}
 		if ((!newf) ^ (!old))
 			inet6_netconf_notify_devconf(net, RTM_NEWNETCONF,
 						     NETCONFA_FORWARDING,
@@ -6829,7 +6849,7 @@ static int addrconf_sysctl_force_forwarding(const struct ctl_table *ctl, int wri
 	struct net *net = ctl->extra2;
 	int *valp = ctl->data;
 	int new_val = *valp;
-	int old_val = *valp;
+	int old_val;
 	int ret;
 
 	tmp_ctl.extra1 = SYSCTL_ZERO;
@@ -6837,35 +6857,41 @@ static int addrconf_sysctl_force_forwarding(const struct ctl_table *ctl, int wri
 	tmp_ctl.data = &new_val;
 
 	ret = proc_douintvec_minmax(&tmp_ctl, write, buffer, lenp, ppos);
+	if (ret || !write)
+		return ret;
 
-	if (write && old_val != new_val) {
-		if (!rtnl_net_trylock(net))
-			return restart_syscall();
+	if (!rtnl_net_trylock(net))
+		return restart_syscall();
 
-		WRITE_ONCE(*valp, new_val);
+	old_val = *valp;
+	WRITE_ONCE(*valp, new_val);
 
-		if (valp == &net->ipv6.devconf_dflt->force_forwarding) {
+	if (valp == &net->ipv6.devconf_dflt->force_forwarding) {
+		if (old_val != new_val)
 			inet6_netconf_notify_devconf(net, RTM_NEWNETCONF,
 						     NETCONFA_FORCE_FORWARDING,
 						     NETCONFA_IFINDEX_DEFAULT,
 						     net->ipv6.devconf_dflt);
-		} else if (valp == &net->ipv6.devconf_all->force_forwarding) {
+	} else if (valp == &net->ipv6.devconf_all->force_forwarding) {
+		if (old_val != new_val)
 			inet6_netconf_notify_devconf(net, RTM_NEWNETCONF,
 						     NETCONFA_FORCE_FORWARDING,
 						     NETCONFA_IFINDEX_ALL,
 						     net->ipv6.devconf_all);
 
-			addrconf_force_forward_change(net, new_val);
-		} else {
-			inet6_netconf_notify_devconf(net, RTM_NEWNETCONF,
-						     NETCONFA_FORCE_FORWARDING,
-						     idev->dev->ifindex,
-						     &idev->cnf);
-		}
-		rtnl_net_unlock(net);
+		/* Like all.forwarding, apply to every interface even if
+		 * all.force_forwarding did not change.
+		 */
+		addrconf_force_forward_change(net, new_val);
+	} else if (old_val != new_val) {
+		inet6_netconf_notify_devconf(net, RTM_NEWNETCONF,
+					     NETCONFA_FORCE_FORWARDING,
+					     idev->dev->ifindex,
+					     &idev->cnf);
 	}
+	rtnl_net_unlock(net);
 
-	return ret;
+	return 0;
 }
 
 static int minus_one = -1;

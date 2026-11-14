@@ -459,6 +459,8 @@ struct gdma_context;
  *	allocate their whole pool up front leave this NULL.
  * @msix_free: Release a vector obtained from @msix_alloc_at. Only needed
  *	by buses that implement @msix_alloc_at.
+ * @setup_dyn_affinity: Place a vector obtained from @msix_alloc_at on a
+ *	CPU. Only needed by buses that implement @msix_alloc_at.
  * @msix_vec_count: Return the number of entries in the device MSI-X table,
  *	used to clamp the vector count the core asks for. Buses that cannot
  *	report a table size leave this NULL and the clamp is skipped.
@@ -481,6 +483,8 @@ struct gdma_bus_ops {
 	int (*msix_virq)(struct gdma_context *gc, int msi);
 	int (*msix_alloc_at)(struct gdma_context *gc, int *msi);
 	void (*msix_free)(struct gdma_context *gc, int msi, int irq);
+	int (*setup_dyn_affinity)(struct gdma_context *gc, unsigned int irq,
+				  unsigned int msix_index);
 	int (*msix_vec_count)(struct gdma_context *gc);
 	int (*setup_hwc_irqs)(struct gdma_context *gc);
 	int (*setup_remaining_irqs)(struct gdma_context *gc);
@@ -544,6 +548,15 @@ struct gdma_context {
 	/* Hardware communication channel (HWC) */
 	struct gdma_dev		hwc;
 
+	/* Sender drain; the final wakeup runs under hwc_lock. */
+	wait_queue_head_t	hwc_drain_waitq;
+
+	/* Protects runtime HWC publication and active sender references.
+	 * Setup owns an unpublished HWC directly; timeout updates use atomic
+	 * access helpers and do not require this lock.
+	 */
+	spinlock_t		hwc_lock;
+
 	/* Azure network adapter */
 	struct gdma_dev		mana;
 
@@ -596,7 +609,12 @@ int mana_gd_create_mana_wq_cq(struct gdma_dev *gd,
 
 void mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue);
 
+/* Remove an EQ from interrupt dispatch without freeing its queue memory. */
+void mana_gd_fence_eq(struct gdma_context *gc, struct gdma_queue *queue);
+
 int mana_gd_poll_cq(struct gdma_queue *cq, struct gdma_comp *comp, int num_cqe);
+
+bool mana_gd_is_valid_doorbell(struct gdma_context *gc, u32 db_id);
 
 void mana_gd_ring_cq(struct gdma_queue *cq, u8 arm_bit);
 
@@ -776,6 +794,9 @@ enum {
 /* Driver supports handling throttled EQEs */
 #define GDMA_DRV_CAP_FLAG_1_THROTTLED_EVENT_QUEUE BIT_ULL(32)
 
+/* Enforce min 1 usec, 1 frames for Interrupt Moderation */
+#define GDMA_DRV_CAP_FLAG_1_SET_MIN_INTR_MOD_VALUE BIT_ULL(33)
+
 /* Capabilities in the PCI-only group below rely on dynamic MSI-X allocation
  * and on the servicing and reset paths reached through
  * mana_schedule_serv_work(). Transports that provide neither leave
@@ -801,7 +822,8 @@ enum {
 	 GDMA_DRV_CAP_FLAG_1_EQ_MSI_UNSHARE_MULTI_VPORT | \
 	 GDMA_DRV_CAP_FLAG_1_DYN_INTERRUPT_MODERATION | \
 	 GDMA_DRV_CAP_FLAG_1_NON_CONTIGUOUS_BUFFERS | \
-	 GDMA_DRV_CAP_FLAG_1_THROTTLED_EVENT_QUEUE)
+	 GDMA_DRV_CAP_FLAG_1_THROTTLED_EVENT_QUEUE | \
+	 GDMA_DRV_CAP_FLAG_1_SET_MIN_INTR_MOD_VALUE)
 
 #define GDMA_DRV_CAP_FLAGS2 0
 
@@ -1146,6 +1168,7 @@ int mana_gd_verify_vf_version(struct gdma_context *gc);
 int mana_gd_query_max_resources(struct gdma_context *gc);
 int mana_gd_setup(struct gdma_context *gc);
 void mana_gd_cleanup(struct gdma_context *gc);
+void mana_gd_free_context(struct gdma_context *gc);
 int mana_gd_detect_devices(struct gdma_context *gc);
 int mana_gd_init_registers(struct gdma_context *gc);
 irqreturn_t mana_gd_intr(int irq, void *arg);
@@ -1187,6 +1210,8 @@ void mana_gd_free_memory(struct gdma_mem_info *gmi);
 
 int mana_gd_send_request(struct gdma_context *gc, u32 req_len, const void *req,
 			 u32 resp_len, void *resp);
+
+int mana_gd_cancel_hwc_timeout(struct gdma_context *gc);
 
 int mana_gd_destroy_dma_region(struct gdma_context *gc, u64 dma_region_handle);
 void mana_register_debugfs(void);

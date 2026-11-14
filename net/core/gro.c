@@ -528,6 +528,7 @@ found_ptype:
 	*(u32 *)&NAPI_GRO_CB(skb)->zeroed = 0;
 	NAPI_GRO_CB(skb)->flush = skb_has_frag_list(skb);
 	NAPI_GRO_CB(skb)->count = 1;
+	NAPI_GRO_CB(skb)->udp_tunnel_gro_count = 0;
 	if (unlikely(skb_is_gso(skb))) {
 		NAPI_GRO_CB(skb)->count = skb_shinfo(skb)->gso_segs;
 		/* Only support TCP and non DODGY users, with a sane gso_segs. */
@@ -819,10 +820,17 @@ EXPORT_SYMBOL(napi_gro_frags);
  */
 __sum16 __skb_gro_checksum_complete(struct sk_buff *skb)
 {
-	__wsum wsum;
+	__wsum wsum = 0;
 	__sum16 sum;
 
-	wsum = skb_checksum(skb, skb_gro_offset(skb), skb_gro_len(skb), 0);
+	/* If the data can't be checksummed it can't be valid either, and
+	 * NAPI_GRO_CB(skb)->csum only holds the pseudo checksum.
+	 */
+	if (skb_checksum_full(skb, skb_gro_offset(skb), skb_gro_len(skb),
+			      &wsum)) {
+		NAPI_GRO_CB(skb)->csum_valid = 0;
+		return (__force __sum16)1;
+	}
 
 	/* NAPI_GRO_CB(skb)->csum holds pseudo checksum */
 	sum = csum_fold(csum_add(NAPI_GRO_CB(skb)->csum, wsum));

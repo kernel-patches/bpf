@@ -596,8 +596,6 @@ struct mlx5_priv {
 	struct mlx5_debugfs_entries dbg;
 
 	/* start: alloc stuff */
-	/* protect buffer allocation according to numa node */
-	struct mutex            alloc_mutex;
 	int                     numa_node;
 
 	struct mlx5_frag_buf_node_pools **frag_buf_node_pools;
@@ -678,6 +676,7 @@ struct mlx5e_resources {
 		u32                        pdn;
 		struct mlx5_td             td;
 		u32			   mkey;
+		u32			   data_direct_crossing_mkey;
 		struct mlx5_sq_bfreg      *bfregs;
 		unsigned int               num_bfregs;
 #define MLX5_MAX_NUM_TC 8

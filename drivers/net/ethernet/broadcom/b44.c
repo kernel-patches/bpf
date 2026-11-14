@@ -2126,14 +2126,14 @@ static int b44_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	if (!netif_running(dev))
 		goto out;
 
-	spin_lock_irq(&bp->lock);
 	if (bp->flags & B44_FLAG_EXTERNAL_PHY) {
 		BUG_ON(!dev->phydev);
 		err = phy_mii_ioctl(dev->phydev, ifr, cmd);
 	} else {
+		spin_lock_irq(&bp->lock);
 		err = generic_mii_ioctl(&bp->mii_if, if_mii(ifr), cmd, NULL);
+		spin_unlock_irq(&bp->lock);
 	}
-	spin_unlock_irq(&bp->lock);
 out:
 	return err;
 }

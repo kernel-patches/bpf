@@ -151,6 +151,23 @@ static bool nfp_flower_check_higher_than_l3(struct flow_rule *rule)
 }
 
 static int
+nfp_flower_check_tun_vni(struct flow_rule *rule,
+			 struct netlink_ext_ack *extack)
+{
+	struct flow_match_enc_keyid enc_keyid;
+
+	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ENC_KEYID))
+		return 0;
+
+	flow_rule_match_enc_keyid(rule, &enc_keyid);
+	if (be32_to_cpu(enc_keyid.key->keyid) < VXLAN_N_VID)
+		return 0;
+
+	NL_SET_ERR_MSG_MOD(extack, "unsupported offload: tunnel key does not fit the 24 bit VNI");
+	return -EOPNOTSUPP;
+}
+
+static int
 nfp_flower_calc_opt_layer(struct flow_dissector_key_enc_opts *enc_opts,
 			  u32 *key_layer_two, int *key_size, bool ipv6,
 			  struct netlink_ext_ack *extack)
@@ -411,6 +428,10 @@ nfp_flower_calculate_key_layers(struct nfp_app *app,
 				NL_SET_ERR_MSG_MOD(extack, "unsupported offload: ingress netdev does not match the expected tunnel type");
 				return -EOPNOTSUPP;
 			}
+
+			err = nfp_flower_check_tun_vni(rule, extack);
+			if (err)
+				return err;
 		}
 	}
 
