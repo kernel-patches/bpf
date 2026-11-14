@@ -24285,6 +24285,15 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/crypto/rockchip,rk3288-crypto.yaml
 F:	drivers/crypto/rockchip/
 
+ROCKCHIP EDP TRANSMITTER PHY DRIVER
+M:	Damon Ding <damon.ding@rock-chips.com>
+M:	Heiko Stuebner <heiko@sntech.de>
+L:	linux-rockchip@lists.infradead.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/phy/rockchip,rk3568-edp-phy.yaml
+F:	Documentation/devicetree/bindings/soc/rockchip/rockchip,rk3568-edp-phy-grf.yaml
+F:	drivers/phy/rockchip/phy-rockchip-naneng-edp.c
+
 ROCKCHIP I2S TDM DRIVER
 M:	Nicolas Frattaroli <frattaroli.nicolas@gmail.com>
 L:	linux-rockchip@lists.infradead.org
