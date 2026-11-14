@@ -5017,6 +5017,7 @@ void wake_up_new_task(struct task_struct *p)
 	struct rq_flags rf;
 	struct rq *rq;
 	int wake_flags = WF_FORK;
+	int en_flags = ENQUEUE_NOCLOCK | ENQUEUE_INITIAL;
 
 	raw_spin_lock_irqsave(&p->pi_lock, rf.flags);
 	WRITE_ONCE(p->__state, TASK_RUNNING);
@@ -5030,11 +5031,13 @@ void wake_up_new_task(struct task_struct *p)
 	 */
 	p->recent_used_cpu = task_cpu(p);
 	__set_task_cpu(p, select_task_rq(p, task_cpu(p), &wake_flags));
+	if (wake_flags & WF_RQ_SELECTED)
+		en_flags |= ENQUEUE_RQ_SELECTED;
 	rq = __task_rq_lock(p, &rf);
 	update_rq_clock(rq);
 	post_init_entity_util_avg(p);
 
-	activate_task(rq, p, ENQUEUE_NOCLOCK | ENQUEUE_INITIAL);
+	activate_task(rq, p, en_flags);
 	trace_sched_wakeup_new(p);
 	wakeup_preempt(rq, p, wake_flags);
 	if (p->sched_class->task_woken) {
@@ -7819,6 +7822,18 @@ void rt_mutex_setprio(struct task_struct *p, struct task_struct *pi_task)
 
 	if (prev_class != next_class)
 		queue_flag |= DEQUEUE_CLASS;
+
+	/*
+	 * PI boost can route @p out of sched_ext: policy stays SCHED_EXT but
+	 * __setscheduler_class() follows the effective rt prio, and rt/fair
+	 * may have retained @p on the rq as a blocked donor. Block it before
+	 * sched_change_begin() records the queued state, the same way the
+	 * other entry points into sched_ext do.
+	 */
+#ifdef CONFIG_SCHED_CLASS_EXT
+	if ((queue_flag & DEQUEUE_CLASS) && next_class == &ext_sched_class)
+		scx_prepare_task_sched_change(p);
+#endif
 
 	scoped_guard (sched_change, p, queue_flag) {
 		/*
