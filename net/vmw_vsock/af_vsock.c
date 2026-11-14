@@ -1704,6 +1704,16 @@ static void vsock_connect_timeout(struct work_struct *work)
 	sock_put(sk);
 }
 
+/* Avoid breaking the socket when another thread has changed its sock->state
+ * while we were asleep.
+ */
+static void vsock_connect_close(struct socket *sock)
+{
+	sock->sk->sk_state = TCP_CLOSE;
+	if (sock->state == SS_CONNECTING)
+		sock->state = SS_UNCONNECTED;
+}
+
 static int vsock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 			 int addr_len, int flags)
 {
@@ -1862,8 +1872,7 @@ static int vsock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 			 * sk_state == TCP_SYN_SENT, which hereby we break.
 			 * In such case VIRTIO_VSOCK_OP_RST will follow.
 			 */
-			sk->sk_state = TCP_CLOSE;
-			sock->state = SS_UNCONNECTED;
+			vsock_connect_close(sock);
 
 			/* Try to cancel VIRTIO_VSOCK_OP_REQUEST skb sent out by
 			 * transport->connect().
@@ -1877,10 +1886,8 @@ static int vsock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 	}
 
 	err = sock_error(sk);
-	if (err) {
-		sk->sk_state = TCP_CLOSE;
-		sock->state = SS_UNCONNECTED;
-	}
+	if (err)
+		vsock_connect_close(sock);
 
 out_wait:
 	finish_wait(sk_sleep(sk), &wait);
