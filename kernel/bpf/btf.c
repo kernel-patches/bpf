@@ -3682,6 +3682,36 @@ const char *btf_find_decl_tag_value(const struct btf *btf, const struct btf_type
 	return value;
 }
 
+/*
+ * The value of the decl tag "<tag_key><value>" on a function of the kernel or of
+ * a module. The build sorts their BTF by name: the tags with one key are
+ * neighbours, and so are those with one value.
+ *
+ * Only the own types of btf are searched, not its base. With the BTF of a module
+ * func_id can be a FUNC of vmlinux: it stands for the function of that name in the
+ * module. What the build found in the code of vmlinux is not true for it.
+ */
+const char *btf_find_func_tag_value(const struct btf *btf, u32 func_id, const char *tag_key)
+{
+	int id, n = btf_nr_types(btf), len = strlen(tag_key);
+	const char *name = NULL;
+	u32 name_off = 0;
+
+	for (id = btf_find_by_name_kind_bsearch(btf, tag_key); id < n; id++) {
+		const struct btf_type *t = btf_type_by_id(btf, id);
+
+		if (t->name_off != name_off) {
+			name_off = t->name_off;
+			name = btf_name_by_offset(btf, name_off);
+			if (strncmp(name, tag_key, len))
+				break;
+		}
+		if (t->type == func_id && btf_type_is_decl_tag(t))
+			return name + len;
+	}
+	return NULL;
+}
+
 static int
 btf_find_graph_root(const struct btf *btf, const struct btf_type *pt,
 		    const struct btf_type *t, int comp_idx, u32 off,
