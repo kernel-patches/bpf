@@ -53,6 +53,19 @@ int rawtp_test(void *ctx)
 	return 0;
 }
 
+__u64 tp_ips[128];
+int my_pid;
+
+SEC("tp/bpf_testmod/bpf_testmod_test_read")
+int tp_test(void *ctx)
+{
+	if (bpf_get_current_pid_tgid() >> 32 != my_pid)
+		return 0;
+
+	bpf_get_stack(ctx, tp_ips, sizeof(tp_ips), 0);
+	return 0;
+}
+
 SEC("fentry/bpf_testmod_stacktrace_test")
 int fentry_test(struct pt_regs *ctx)
 {
