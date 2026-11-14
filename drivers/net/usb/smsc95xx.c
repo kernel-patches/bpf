@@ -215,8 +215,8 @@ done:
 	return ret;
 }
 
-static void smsc95xx_mdio_write(struct usbnet *dev, int phy_id, int idx,
-				int regval)
+static int smsc95xx_mdio_write(struct usbnet *dev, int phy_id, int idx,
+			       int regval)
 {
 	u32 val, addr;
 	int ret;
@@ -255,6 +255,12 @@ static void smsc95xx_mdio_write(struct usbnet *dev, int phy_id, int idx,
 
 done:
 	mutex_unlock(&dev->phy_mutex);
+
+	/* Ignore -ENODEV error during disconnect() */
+	if (ret == -ENODEV)
+		return 0;
+
+	return ret;
 }
 
 static int smsc95xx_mdiobus_reset(struct mii_bus *bus)
@@ -306,8 +312,7 @@ static int smsc95xx_mdiobus_write(struct mii_bus *bus, int phy_id, int idx,
 {
 	struct usbnet *dev = bus->priv;
 
-	smsc95xx_mdio_write(dev, phy_id, idx, regval);
-	return 0;
+	return smsc95xx_mdio_write(dev, phy_id, idx, regval);
 }
 
 static int __must_check smsc95xx_wait_eeprom(struct usbnet *dev)
