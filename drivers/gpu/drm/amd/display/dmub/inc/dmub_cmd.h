@@ -3813,6 +3813,11 @@ enum dmub_cmd_psr_type {
 	 * Set PSR power option
 	 */
 	DMUB_CMD__SET_PSR_POWER_OPT = 7,
+	/**
+	 * Set whether an external (non-eDP) display is connected.
+	 * While set, FW skips HUBP/DPG memory control for PSR.
+	 */
+	DMUB_CMD__PSR_SET_EXTERNAL_DISPLAY_CONNECTED = 8,
 };
 
 /**
@@ -4564,6 +4569,44 @@ struct dmub_rb_cmd_psr_set_power_opt {
 	struct dmub_cmd_psr_set_power_opt_data psr_set_power_opt_data;
 };
 
+/**
+ * Data passed from driver to FW in a DMUB_CMD__PSR_SET_EXTERNAL_DISPLAY_CONNECTED command.
+ */
+struct dmub_cmd_psr_set_external_display_connected_data {
+	/**
+	 * PSR control version.
+	 */
+	uint8_t cmd_version;
+	/**
+	 * Panel Instance.
+	 * Panel instance to identify which psr_state to use
+	 * Currently the support is only for 0 or 1
+	 */
+	uint8_t panel_inst;
+	/**
+	 * 1 if an external (non-eDP) display is connected, 0 otherwise.
+	 */
+	uint8_t external_display_connected;
+	/**
+	 * Explicit padding to 4 byte boundary.
+	 */
+	uint8_t pad;
+};
+
+/**
+ * Definition of a DMUB_CMD__PSR_SET_EXTERNAL_DISPLAY_CONNECTED command.
+ */
+struct dmub_rb_cmd_psr_set_external_display_connected {
+	/**
+	 * Command header.
+	 */
+	struct dmub_cmd_header header;
+	/**
+	 * Definition of a DMUB_CMD__PSR_SET_EXTERNAL_DISPLAY_CONNECTED command.
+	 */
+	struct dmub_cmd_psr_set_external_display_connected_data psr_set_external_display_connected_data;
+};
+
 enum dmub_alpm_mode {
 	ALPM_AUXWAKE = 0,
 	ALPM_AUXLESS = 1,
@@ -4762,6 +4805,7 @@ enum dmub_cmd_replay_general_subtype {
 	REPLAY_GENERAL_CMD_SET_CONTINUOUSLY_RESYNC,
 	REPLAY_GENERAL_CMD_SET_COASTING_VTOTAL_WITHOUT_FRAME_UPDATE,
 	REPLAY_GENERAL_CMD_LIVE_CAPTURE_WITH_CVT,
+	REPLAY_GENERAL_CMD_SET_EXTERNAL_DISPLAY_CONNECTED,
 };
 
 struct dmub_alpm_auxless_data {
@@ -7942,6 +7986,10 @@ union dmub_rb_cmd {
 	 * Definition of a DMUB_CMD__SET_PSR_POWER_OPT command.
 	 */
 	struct dmub_rb_cmd_psr_set_power_opt psr_set_power_opt;
+	/**
+	 * Definition of a DMUB_CMD__PSR_SET_EXTERNAL_DISPLAY_CONNECTED command.
+	 */
+	struct dmub_rb_cmd_psr_set_external_display_connected psr_set_external_display_connected;
 	/**
 	 * Definition of a DMUB_CMD__PLAT_54186_WA command.
 	 */
