@@ -5908,7 +5908,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 	case BPF_PROG_TYPE_CGROUP_DEVICE:
 	case BPF_PROG_TYPE_CGROUP_SYSCTL:
 	case BPF_PROG_TYPE_CGROUP_SOCKOPT:
-		ret = cgroup_bpf_link_attach(attr, prog);
+		ret = cgroup_bpf_link_attach(attr, prog, log);
 		break;
 	case BPF_PROG_TYPE_EXT:
 		ret = bpf_tracing_prog_attach(prog,
@@ -5931,7 +5931,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 		else if (prog->expected_attach_type == BPF_TRACE_ITER)
 			ret = bpf_iter_link_attach(attr, uattr, prog, log);
 		else if (prog->expected_attach_type == BPF_LSM_CGROUP)
-			ret = cgroup_bpf_link_attach(attr, prog);
+			ret = cgroup_bpf_link_attach(attr, prog, log);
 		else if (is_tracing_multi(prog->expected_attach_type))
 			ret = bpf_tracing_multi_attach(prog, attr, log);
 		else
