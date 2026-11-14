@@ -24,6 +24,13 @@
 struct cred;
 struct module;
 
+/* Exact or prefix name query, optionally in one module. */
+struct kallsyms_name_query {
+	const char *name;
+	size_t cmp_len;		/* bytes to compare; includes NUL if exact */
+	const char *modname;	/* NULL matches any module */
+};
+
 static inline int is_kernel_text(unsigned long addr)
 {
 	if (__is_kernel_text(addr))
