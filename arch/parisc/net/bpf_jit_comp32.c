@@ -705,6 +705,35 @@ static void emit_alu_r32(const s8 *dst, const s8 *src,
 	bpf_put_reg32(dst, rd, ctx);
 }
 
+/* dst = sign_extend(src, width) */
+static void emit_movsx_r(const s8 *dst, const s8 *src,
+			 struct hppa_jit_context *ctx, u8 width, bool is64)
+{
+	const s8 *tmp1 = regmap[TMP_REG_1];
+	const s8 *tmp2 = regmap[TMP_REG_2];
+	const s8 *rs = bpf_get_reg32(src, tmp2, ctx);
+	const s8 *rd;
+
+	if (is64)
+		rd = bpf_get_reg64_ref(dst, tmp1, false, ctx);
+	else
+		rd = bpf_get_reg32_ref(dst, tmp1, ctx);
+
+	/* Low word: sign-extend the field, or copy it for a 32-bit extension */
+	if (width == 32)
+		emit_hppa_copy(lo(rs), lo(rd), ctx);
+	else
+		emit(hppa_extrws(lo(rs), 31, 32 - width, lo(rd)), ctx);
+
+	if (is64) {
+		/* High word: copies of the sign bit */
+		emit(hppa_extrws(lo(rd), 0, 31, hi(rd)), ctx);
+		bpf_put_reg64(dst, rd, ctx);
+	} else {
+		bpf_put_reg32(dst, rd, ctx);
+	}
+}
+
 static int emit_branch_r64(const s8 *src1, const s8 *src2, s32 paoff,
 			   struct hppa_jit_context *ctx, const u8 op)
 {
@@ -1145,7 +1174,12 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct hppa_jit_context *ctx,
 	switch (code) {
 	/* dst = src */
 	case BPF_ALU64 | BPF_MOV | BPF_X:
-
+		if (off == 8 || off == 16 || off == 32) {
+			/* Sign-extending mov: dst = (s8,s16,s32)src */
+			emit_movsx_r(dst, src, ctx, off, true);
+			break;
+		}
+		fallthrough;
 	case BPF_ALU64 | BPF_ADD | BPF_X:
 	case BPF_ALU64 | BPF_ADD | BPF_K:
 
@@ -1194,6 +1228,11 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct hppa_jit_context *ctx,
 		if (imm == 1) {
 			/* Special mov32 for zext. */
 			emit_zext64(dst, ctx);
+			break;
+		}
+		if (off == 8 || off == 16) {
+			/* Sign-extending mov32: dst = (s8,s16)src */
+			emit_movsx_r(dst, src, ctx, off, false);
 			break;
 		}
 		fallthrough;
