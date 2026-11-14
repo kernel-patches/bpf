@@ -957,7 +957,7 @@ static struct env *get_loop_env(struct scev *scev, int loop_header, int insn_idx
 	if (e)
 		return e;
 
-	e = kzalloc(sizeof(*e), GFP_KERNEL_ACCOUNT);
+	e = kzalloc_obj(*e, GFP_KERNEL_ACCOUNT);
 	if (!e)
 		return NULL;
 
@@ -2634,11 +2634,11 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header, i
 	if (!cur_loop && !can_compute_subprog_scev(env, sub))
 		return 0;
 
-	cur_env = kzalloc(sizeof(*cur_env), GFP_KERNEL_ACCOUNT);
+	cur_env = kzalloc_obj(*cur_env, GFP_KERNEL_ACCOUNT);
 	if (!cur_env)
 		goto nomem;
 	if (log_level2) {
-		old_env = kzalloc(sizeof(*old_env), GFP_KERNEL_ACCOUNT);
+		old_env = kzalloc_obj(*old_env, GFP_KERNEL_ACCOUNT);
 		if (!old_env)
 			goto nomem;
 	}
@@ -3353,7 +3353,7 @@ int bpf_init_scev(struct bpf_verifier_env *env)
 	struct scev *scev;
 	u32 r;
 
-	scev = kzalloc(sizeof(struct scev), GFP_KERNEL_ACCOUNT);
+	scev = kzalloc_obj(struct scev, GFP_KERNEL_ACCOUNT);
 	if (!scev)
 		return -ENOMEM;
 	env->scev = scev;
@@ -3370,8 +3370,10 @@ int bpf_init_scev(struct bpf_verifier_env *env)
 	for (r = 0; r < REG_EXPR_ID(REGS_NUM); r++)
 		set_expr_base(scev, &scev->exprs[r], r);
 	scev->exprs_cnt = REG_EXPR_ID(REGS_NUM);
-	scev->envs = kvcalloc(env->prog->len, sizeof(*scev->envs), GFP_KERNEL_ACCOUNT);
-	scev->discovered = kvcalloc(env->prog->len, sizeof(*scev->discovered), GFP_KERNEL_ACCOUNT);
+	scev->envs = kvzalloc_objs(*scev->envs, env->prog->len,
+				   GFP_KERNEL_ACCOUNT);
+	scev->discovered = kvzalloc_objs(*scev->discovered, env->prog->len,
+					 GFP_KERNEL_ACCOUNT);
 	if (!scev->envs || !scev->discovered)
 		goto nomem;
 	/*
