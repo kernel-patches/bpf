@@ -77,6 +77,7 @@ struct mc_pattern {
 /* An instruction, in hex, and what text_arch.decode() has to say about it at MC_TEST_ADDR */
 struct mc_test {
 	const char *code;
+	/* uses and load are compared only if uses is set */
 	struct text_insn insn;
 };
 

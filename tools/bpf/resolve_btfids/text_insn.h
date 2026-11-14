@@ -49,6 +49,9 @@ struct text_insn {
 	bool nop;	/* It does nothing */
 	/* The registers which it writes, but for dst */
 	u32 defs;
+	/* The registers which it reads. TEXT_ALL_REGS if the decoder does not know it */
+	u32 uses;
+	bool load;	/* It reads memory */
 	u64 imm, imm2;
 	/* For the user of the decoder */
 	u64 addr;

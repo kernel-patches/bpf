@@ -16,6 +16,7 @@ static const struct mc_pattern x86_patterns[] = {
 	{ "MOV64ri32",		TEXT_MOV_IMM, .imm = 1 },
 	{ "OR32ri8",		TEXT_MOV_IMM, .imm = 2, .predicates = { IMM(2, -1) } },
 	{ "OR64ri8",		TEXT_MOV_IMM, .imm = 2, .predicates = { IMM(2, -1) } },
+	{ "XOR32rr",		TEXT_MOV_IMM, VALUE(0), .predicates = { SAME_REG(1, 2) } },
 	{ "MOV32rr",		TEXT_MOV, .src = 1 },
 	{ "MOV64rr",		TEXT_MOV, .src = 1 },
 	{ "MOVSX64rr32",	TEXT_SEXT32, .src = 1 },
@@ -51,6 +52,7 @@ static const struct mc_test x86_tests[] = {
 	T("48 83 c8 ff",	  TEXT_MOV_IMM, IMMS(-1, -1)),			/* or $-1, %rax */
 	T("83 c8 f0",		  TEXT_OTHER, .defs = BIT(RAX)),		/* or $-16, %eax */
 	T("48 83 c8 f0",	  TEXT_OTHER, .defs = BIT(RAX)),		/* or $-16, %rax */
+	T("31 c0",		  TEXT_MOV_IMM, .is32 = true),			/* xor %eax, %eax */
 	T("19 c0",		  TEXT_MOV_IMM, .is32 = true, IMMS(0xffffffff, 0)),	/* sbb %eax, %eax */
 	T("48 19 c0",		  TEXT_MOV_IMM, IMMS(-1, 0)),			/* sbb %rax, %rax */
 	T("19 d8",		  TEXT_OTHER, .defs = BIT(RAX)),		/* sbb %ebx, %eax */
@@ -103,6 +105,11 @@ static const struct mc_test x86_tests[] = {
 	T("48 0f bd c3",	  TEXT_OTHER, .defs = BIT(RAX)),		/* bsr %rbx, %rax */
 	T("80 e3 01",		  TEXT_OTHER, .defs = BIT(RBX)),		/* and $1, %bl */
 	T("48 0f c1 13",	  TEXT_OTHER, .defs = BIT(RDX)),		/* xadd %rdx, (%rbx) */
+	/* What is read */
+	T("48 8d 47 40",	  TEXT_OTHER, .defs = BIT(RAX), .uses = BIT(RDI)),	/* lea 0x40(%rdi), %rax */
+	T("48 8b 47 40",	  TEXT_OTHER, .defs = BIT(RAX), .uses = BIT(RDI), .load = true), /* mov 0x40(%rdi), %rax */
+	T("89 04 cb",		  TEXT_OTHER, .uses = BIT(RAX) | BIT(RBX) | BIT(RCX)),	/* mov %eax, (%rbx,%rcx,8) */
+	T("50",			  TEXT_OTHER, .defs = BIT(RSP), .uses = BIT(RAX) | BIT(RSP)),	/* push %rax */
 	/* The control flow */
 	T("eb 10",		  TEXT_BRANCH, .imm = MC_TEST_ADDR + 0x12),	/* jmp */
 	T("ff e0",		  TEXT_BRANCH),					/* jmp *%rax */
