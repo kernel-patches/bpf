@@ -319,13 +319,17 @@ static int invalidate_keyring_keys(struct key *keyring)
 	struct key *current_key;
 	int rc;
 
+	down_read(&keyring->sem);
 	keyring_payload_len = key_type_keyring.read(keyring, NULL, 0);
 	num_keys = keyring_payload_len / sizeof(key_serial_t);
 	key_array = kzalloc_objs(key_serial_t, num_keys);
-	if (!key_array)
+	if (!key_array) {
+		up_read(&keyring->sem);
 		return -ENOMEM;
+	}
 
 	rc = key_type_keyring.read(keyring, (char *)key_array, keyring_payload_len);
+	up_read(&keyring->sem);
 	if (rc != keyring_payload_len) {
 		pr_dbf_msg("Couldn't read keyring payload");
 		goto out;
