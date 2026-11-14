@@ -931,7 +931,7 @@ static int rockchip_pm_add_one_domain(struct rockchip_pmu *pmu,
 err_unprepare_clocks:
 	clk_bulk_unprepare(pd->num_clks, pd->clks);
 err_put_clocks:
-	clk_bulk_put(pd->num_clks, pd->clks);
+	clk_bulk_put(i, pd->clks);
 	return error;
 }
 
