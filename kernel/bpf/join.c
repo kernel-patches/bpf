@@ -424,6 +424,9 @@ static bool join_func(struct bpf_join_state *js, struct bpf_func_state *fd,
 			return false;
 		if (!join_loop_stack(fa, fb))
 			return false;
+		jid_note(js, fa->frame_id, fb->frame_id);
+	} else if (!jid_strict_ok(js, fa->frame_id, fb->frame_id)) {
+		return false;
 	}
 
 	for (i = 0; i < MAX_BPF_REG; i++) {

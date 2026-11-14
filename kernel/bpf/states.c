@@ -628,6 +628,9 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	    old->entry_preempt_locks != cur->entry_preempt_locks)
 		return false;
 
+	if (!check_ids(old->frame_id, cur->frame_id, &env->idmap_scratch))
+		return false;
+
 	for (i = 0; i < MAX_BPF_REG; i++)
 		if (((1 << i) & live_regs) &&
 		    !regsafe(env, &old->regs[i], &cur->regs[i], &env->idmap_scratch))
