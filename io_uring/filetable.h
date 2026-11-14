@@ -37,7 +37,7 @@ static inline void io_file_bitmap_set(struct io_file_table *table, int bit)
 #define FFS_ISREG		0x2UL
 #define FFS_MASK		~(FFS_NOWAIT|FFS_ISREG)
 
-static inline unsigned int io_slot_flags(struct io_rsrc_node *node)
+static inline io_req_flags_t io_slot_flags(struct io_rsrc_node *node)
 {
 
 	return (node->file_ptr & ~FFS_MASK) << REQ_F_SUPPORT_NOWAIT_BIT;
