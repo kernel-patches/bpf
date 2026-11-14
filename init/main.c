@@ -1493,7 +1493,7 @@ static void __init do_initcalls(void)
 
 	for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++) {
 		/* Parser modifies command_line, restore it each time */
-		strcpy(command_line, saved_command_line);
+		strscpy(command_line, saved_command_line, len);
 		do_initcall_level(level, command_line);
 	}
 
