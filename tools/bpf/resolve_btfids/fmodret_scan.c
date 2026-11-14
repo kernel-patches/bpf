@@ -21,16 +21,56 @@
 #define MAX_ERRNO	4095
 #define MAX_SUBFUNCS	3
 
+/* The function at an address, whatever its names are. See scan_set_proto() */
+struct callee {
+	uint64_t addr;
+	u32 pointers;	/* the registers */
+	bool effect;
+};
+
 struct scan {
 	const struct image *img;
 	uint64_t return_thunk;
 	uint64_t entry_hook;
+	struct callee *callees;		/* one for each of img->funcs, sorted by address */
 	/* The function which is being looked at */
 	struct text_flow flow;
 	size_t max_insns;
 	int64_t *values;
 	size_t nr_values, max_values;
 };
+
+static int cmp_callee(const void *va, const void *vb)
+{
+	const struct callee *a = va, *b = vb;
+
+	return a->addr > b->addr ? 1 : a->addr < b->addr ? -1 : 0;
+}
+
+/* Of two names for ADDR always the same one is found */
+static struct callee *callee_at(const struct scan *s, uint64_t addr)
+{
+	const struct callee key = { .addr = addr };
+
+	return bsearch(&key, s->callees, s->img->nr_funcs, sizeof(key), cmp_callee);
+}
+
+const struct text_arch *scan_arch(const struct scan *s)
+{
+	return s->flow.arch;
+}
+
+void scan_set_proto(struct scan *s, const struct image_func *f, unsigned int pointers, bool effect)
+{
+	struct callee *callee = callee_at(s, f->addr);
+	unsigned int i;
+
+	callee->effect = effect;
+	callee->pointers = 0;
+	for (i = 0; i < s->flow.arch->nr_args; i++)
+		if (pointers & BIT(i))
+			callee->pointers |= BIT(s->flow.arch->args[i]);
+}
 
 /* Append the instructions of SIZE bytes at ADDR */
 static int decode(struct scan *s, uint64_t addr, uint64_t size)
@@ -45,15 +85,21 @@ static int decode(struct scan *s, uint64_t addr, uint64_t size)
 		return -EINVAL;
 	for (off = 0; off < size; off += flow->insns[flow->nr_insns++].len) {
 		const struct image_reloc *reloc;
+		const struct callee *callee;
 		struct text_insn *insn;
 
 		if (flow->nr_insns == s->max_insns) {
 			size_t max = s->max_insns ? 2 * s->max_insns : 1024;
 			struct text_facts *facts = realloc(flow->facts, max * sizeof(*facts));
+			struct text_reach *reach;
 
 			if (!facts)
 				return -ENOMEM;
 			flow->facts = facts;
+			reach = realloc(flow->reach, max * sizeof(*reach));
+			if (!reach)
+				return -ENOMEM;
+			flow->reach = reach;
 			insn = realloc(flow->insns, max * sizeof(*insn));
 			if (!insn)
 				return -ENOMEM;
@@ -78,6 +124,11 @@ static int decode(struct scan *s, uint64_t addr, uint64_t size)
 			insn->kind = TEXT_OTHER;
 			insn->nop = true;
 		}
+		if (insn->kind != TEXT_CALL)
+			continue;
+		callee = callee_at(s, insn->imm);
+		if (callee && callee->effect)
+			insn->pointers = callee->pointers;
 	}
 	return 0;
 }
@@ -160,6 +211,8 @@ int scan_func(struct scan *s, const struct image_func *f, const int64_t **values
 		return err;
 	if (!has_entry_nop(flow, f->addr))
 		return 0;
+	s->flow.entry = f->addr;
+	s->flow.args = callee_at(s, f->addr)->pointers;
 	text_flow_fold(&s->flow);
 	text_flow_solve(&s->flow);
 
@@ -171,6 +224,8 @@ int scan_func(struct scan *s, const struct image_func *f, const int64_t **values
 		unsigned int n;
 
 		if (insn->kind != TEXT_MOV_IMM && insn->kind != TEXT_SELECT_IMM)
+			continue;
+		if (flow->reach[i].path == TEXT_EFFECT_PATH)
 			continue;
 		out = text_flow_out(flow, i);
 		for (n = 0; n < 2 && !err; n++) {
@@ -190,6 +245,7 @@ struct scan *scan_open(const struct image *img)
 {
 	struct scan *s = calloc(1, sizeof(*s));
 	GElf_Ehdr ehdr;
+	size_t i;
 
 	if (!s || !gelf_getehdr(img->elf, &ehdr))
 		goto err;
@@ -203,6 +259,12 @@ struct scan *scan_open(const struct image *img)
 		s->return_thunk = image_symbol(img, s->flow.arch->return_thunk);
 	if (s->flow.arch->entry_hook)
 		s->entry_hook = image_symbol(img, s->flow.arch->entry_hook);
+	s->callees = calloc(img->nr_funcs, sizeof(*s->callees));
+	if (!s->callees)
+		goto err;
+	for (i = 0; i < img->nr_funcs; i++)
+		s->callees[i].addr = img->funcs[i].addr;
+	qsort(s->callees, img->nr_funcs, sizeof(*s->callees), cmp_callee);
 	return s;
 err:
 	free(s);
@@ -215,6 +277,8 @@ void scan_close(struct scan *s)
 		return;
 	free(s->flow.insns);
 	free(s->flow.facts);
+	free(s->flow.reach);
+	free(s->callees);
 	free(s->values);
 	free(s);
 }

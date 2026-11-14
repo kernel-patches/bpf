@@ -56,11 +56,17 @@ struct text_insn {
 	/* For the user of the decoder */
 	u64 addr;
 	u32 target;	/* the index of the instruction at imm */
+	/* Of a TEXT_CALL: the registers with pointers to objects which the callee changes */
+	u32 pointers;
 };
 
 struct text_arch {
 	u8 retval;		/* the register with the return value */
+	u8 args[8], nr_args;	/* the registers with the arguments */
+	/* How the parameters take them, as in struct bpf_jit_arg_abi */
+	bool even_reg_align, backfill_after_stack;
 	u32 caller_saved;	/* the registers which a call may write */
+	u32 stack_pointer;	/* a mask, 0 if it is not one of the registers */
 	/* A branch to this symbol is a return */
 	const char *return_thunk;
 	/*

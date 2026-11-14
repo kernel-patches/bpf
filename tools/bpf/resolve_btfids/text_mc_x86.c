@@ -123,8 +123,12 @@ static const struct mc_test x86_tests[] = {
 const struct mc_arch mc_arch = {
 	.arch = {
 		.retval = RAX,
+		.args = { RDI, RSI, RDX, RCX, R8, R9 },
+		.nr_args = 6,
+		.backfill_after_stack = true,
 		.caller_saved = BIT(RAX) | BIT(RCX) | BIT(RDX) | BIT(RSI) | BIT(RDI) |
 				BIT(R8) | BIT(R9) | BIT(R10) | BIT(R11),
+		.stack_pointer = BIT(RSP),
 		.return_thunk = "__x86_return_thunk",
 		.entry_hook = "__fentry__",
 	},
