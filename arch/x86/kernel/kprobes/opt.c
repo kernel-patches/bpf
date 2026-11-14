@@ -37,12 +37,11 @@
 unsigned long __recover_optprobed_insn(kprobe_opcode_t *buf, unsigned long addr)
 {
 	struct optimized_kprobe *op;
+	struct kprobe_iter iter;
 	struct kprobe *kp;
 	long offs;
-	int i;
 
-	for (i = 0; i < JMP32_INSN_SIZE; i++) {
-		kp = get_kprobe((void *)addr - i);
+	for_each_kprobe(iter, kp, addr - (JMP32_INSN_SIZE - 1), addr) {
 		/* This function only handles jump-optimized kprobe */
 		if (kp && kprobe_optimized(kp)) {
 			op = container_of(kp, struct optimized_kprobe, kp);
@@ -202,14 +201,19 @@ NOKPROBE_SYMBOL(optimized_callback);
 
 static int copy_optimized_instructions(u8 *dest, u8 *src, u8 *real)
 {
+	struct kprobe_iter iter;
+	unsigned long addr;
+	struct kprobe *kp;
 	struct insn insn;
 	int len = 0, ret;
 
-	while (len < JMP32_INSN_SIZE) {
-		ret = __copy_instruction(dest + len, src + len, real + len, &insn);
+	addr = (unsigned long)src;
+	for_each_addr_kprobe(iter, kp, addr, (unsigned long)src + JMP32_INSN_SIZE - 1) {
+		ret = __copy_instruction(dest + len, src + len, real + len, &insn, &kp);
 		if (!ret || !can_boost(&insn, src + len))
 			return -EINVAL;
 		len += ret;
+		addr += ret;
 	}
 	/* Check whether the address range is reserved */
 	if (ftrace_text_reserved(src, src + len - 1) ||
@@ -258,7 +262,9 @@ static int insn_jump_into_range(struct insn *insn, unsigned long start, int len)
 /* Decode whole function to ensure any instructions don't jump into target */
 static int can_optimize(unsigned long paddr)
 {
-	unsigned long addr, size = 0, offset = 0;
+	unsigned long addr, end, size = 0, offset = 0;
+	struct kprobe_iter iter;
+	struct kprobe *kp;
 	struct insn insn;
 	kprobe_opcode_t buf[MAX_INSN_SIZE];
 
@@ -280,7 +286,8 @@ static int can_optimize(unsigned long paddr)
 
 	/* Decode instructions */
 	addr = paddr - offset;
-	while (addr < paddr - offset + size) { /* Decode until function end */
+	end = paddr - offset + size - 1;
+	for_each_addr_kprobe(iter, kp, addr, end) { /* Decode until function end */
 		unsigned long recovered_insn;
 		int ret;
 
@@ -290,7 +297,7 @@ static int can_optimize(unsigned long paddr)
 			 * we can't optimize kprobe in this function.
 			 */
 			return 0;
-		recovered_insn = recover_probed_instruction(buf, addr);
+		recovered_insn = recover_probed_instruction(buf, addr, &kp);
 		if (!recovered_insn)
 			return 0;
 
@@ -335,12 +342,13 @@ static int can_optimize(unsigned long paddr)
 /* Check optimized_kprobe can actually be optimized. */
 int arch_check_optimized_kprobe(struct optimized_kprobe *op)
 {
-	int i;
+	unsigned long start = (unsigned long)op->kp.addr;
+	unsigned long end = start + op->optinsn.size - 1;
+	struct kprobe_iter iter;
 	struct kprobe *p;
 
-	for (i = 1; i < op->optinsn.size; i++) {
-		p = get_kprobe(op->kp.addr + i);
-		if (p && !kprobe_disarmed(p))
+	for_each_kprobe(iter, p, start + 1, end) {
+		if (!kprobe_disarmed(p))
 			return -EEXIST;
 	}
 

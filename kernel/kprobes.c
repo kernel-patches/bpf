@@ -64,6 +64,7 @@ static int kprobes_initialized;
  * - RCU hlist traversal under disabling preempt (breakpoint handlers)
  */
 static struct hlist_head kprobe_table[KPROBE_TABLE_SIZE];
+static struct rb_root kprobe_tree = RB_ROOT;
 
 /* NOTE: change this value only with 'kprobe_mutex' held */
 static bool kprobes_all_disarmed;
@@ -395,6 +396,112 @@ struct kprobe *get_kprobe(void *addr)
 }
 NOKPROBE_SYMBOL(get_kprobe);
 
+static void kprobe_tree_insert(struct kprobe *p)
+{
+	struct rb_node **link = &kprobe_tree.rb_node, *parent = NULL;
+	unsigned long addr = (unsigned long)p->addr;
+
+	lockdep_assert_held(&kprobe_mutex);
+	while (*link) {
+		struct kprobe *kp = rb_entry(*link, struct kprobe, rb_node);
+		unsigned long kp_addr = (unsigned long)kp->addr;
+
+		parent = *link;
+		if (addr < kp_addr)
+			link = &(*link)->rb_left;
+		else if (addr > kp_addr)
+			link = &(*link)->rb_right;
+		else {
+			WARN_ON_ONCE(1);
+			return;
+		}
+	}
+
+	rb_link_node(&p->rb_node, parent, link);
+	rb_insert_color(&p->rb_node, &kprobe_tree);
+}
+
+static void kprobe_tree_erase(struct kprobe *p)
+{
+	lockdep_assert_held(&kprobe_mutex);
+	rb_erase(&p->rb_node, &kprobe_tree);
+	RB_CLEAR_NODE(&p->rb_node);
+}
+
+static void kprobe_tree_replace(struct kprobe *old, struct kprobe *new)
+{
+	lockdep_assert_held(&kprobe_mutex);
+	rb_replace_node(&old->rb_node, &new->rb_node, &kprobe_tree);
+	RB_CLEAR_NODE(&old->rb_node);
+}
+
+struct kprobe *kprobe_iter_start(struct kprobe_iter *iter, unsigned long start,
+				 unsigned long end)
+{
+	struct rb_node *node = kprobe_tree.rb_node;
+	struct kprobe *kp, *next = NULL;
+
+	lockdep_assert_held(&kprobe_mutex);
+	iter->next = NULL;
+	iter->end = end;
+	if (start > end)
+		return NULL;
+
+	while (node) {
+		kp = rb_entry(node, struct kprobe, rb_node);
+		if ((unsigned long)kp->addr >= start) {
+			next = kp;
+			node = node->rb_left;
+		} else {
+			node = node->rb_right;
+		}
+	}
+
+	iter->next = next;
+	return kprobe_iter_next(iter);
+}
+
+struct kprobe *kprobe_iter_next(struct kprobe_iter *iter)
+{
+	struct kprobe *kp = iter->next;
+	struct rb_node *node;
+
+	lockdep_assert_held(&kprobe_mutex);
+	if (!kp || (unsigned long)kp->addr > iter->end) {
+		iter->next = NULL;
+		return NULL;
+	}
+
+	node = rb_next(&kp->rb_node);
+	iter->next = node ? rb_entry(node, struct kprobe, rb_node) : NULL;
+	return kp;
+}
+
+/* Address iteration retains the candidate in iter->next until addr passes it. */
+struct kprobe *kprobe_addr_iter_start(struct kprobe_iter *iter,
+				      unsigned long start, unsigned long end)
+{
+	iter->next = kprobe_iter_start(iter, start, end);
+	return kprobe_addr_iter_next(iter, start);
+}
+
+/* Addresses must be nondecreasing; return NULL at addresses without a probe. */
+struct kprobe *kprobe_addr_iter_next(struct kprobe_iter *iter,
+				     unsigned long addr)
+{
+	struct kprobe *kp = iter->next;
+
+	lockdep_assert_held(&kprobe_mutex);
+	while (kp && (unsigned long)kp->addr < addr) {
+		kprobe_iter_next(iter);
+		kp = iter->next;
+	}
+	if (!kp || (unsigned long)kp->addr > iter->end)
+		return NULL;
+
+	return (unsigned long)kp->addr == addr ? kp : NULL;
+}
+
 static int aggr_pre_handler(struct kprobe *p, struct pt_regs *regs);
 
 /* Return true if 'p' is an aggregator */
@@ -484,23 +591,25 @@ bool kprobe_disarmed(struct kprobe *p)
  */
 static struct kprobe *get_optimized_kprobe(kprobe_opcode_t *addr)
 {
-	int i;
-	struct kprobe *p;
+	unsigned long offset = MAX_OPTIMIZED_LENGTH / sizeof(kprobe_opcode_t) - 1;
+	unsigned long addr_val = (unsigned long)addr;
+	struct kprobe *p, *candidate = NULL;
 	struct optimized_kprobe *op;
+	struct kprobe_iter iter;
 
-	/* Don't check i == 0, since that is a breakpoint case. */
-	for (i = 1; i < MAX_OPTIMIZED_LENGTH / sizeof(kprobe_opcode_t); i++) {
-		p = get_kprobe(addr - i);
+	/* Don't check addr itself, since that is a breakpoint case. */
+	for_each_kprobe(iter, p, addr_val - offset, addr_val - 1) {
 		/* A disabled probe can have prepared, but inactive, optinsns. */
-		if (!p || !kprobe_optready(p) || kprobe_disarmed(p))
+		if (!kprobe_optready(p) || kprobe_disarmed(p))
 			continue;
 
+		/* The iterator walks low to high; keep the nearest matching probe. */
 		op = container_of(p, struct optimized_kprobe, kp);
 		if (arch_within_optimized_kprobe(op, addr))
-			return p;
+			candidate = p;
 	}
 
-	return NULL;
+	return candidate;
 }
 
 #define OPTPROBE_GEN_MAX 2
@@ -647,6 +756,7 @@ static void do_unoptimize_kprobes(struct list_head *unopt_list,
 			 * (reclaiming is done by do_free_cleaned_kprobes().)
 			 */
 			hlist_del_init_rcu(&op->kp.hlist);
+			kprobe_tree_erase(&op->kp);
 		} else {
 			/*
 			 * Keep on cooling_list until the quiescence period
@@ -726,6 +836,7 @@ static void optprobe_finalize_generation(struct optprobe_generation *gen)
 			 * it will be reclaimed after the next quiescence period.
 			 */
 			hlist_del_init_rcu(&op->kp.hlist);
+			kprobe_tree_erase(&op->kp);
 			list_move(&op->list, &optprobe_gens[optprobe_cur_gen].freeing_list);
 			kick_kprobe_optimizer();
 		} else {
@@ -1011,6 +1122,7 @@ static void unoptimize_kprobe(struct kprobe *p, bool force)
 					arch_disarm_kprobe(&op->kp);
 				if (kprobe_unused(&op->kp)) {
 					hlist_del_init_rcu(&op->kp.hlist);
+					kprobe_tree_erase(&op->kp);
 					list_move(&op->list, &cur->freeing_list);
 				} else {
 					list_move(&op->list, &cur->cooling_list);
@@ -1026,6 +1138,7 @@ static void unoptimize_kprobe(struct kprobe *p, bool force)
 				if (!kprobe_gone(&op->kp))
 					arch_disarm_kprobe(&op->kp);
 				hlist_del_init_rcu(&op->kp.hlist);
+				kprobe_tree_erase(&op->kp);
 				list_move(&op->list, &cur->freeing_list);
 				kick_kprobe_optimizer();
 			}
@@ -1085,6 +1198,7 @@ static void kill_optimized_kprobe(struct kprobe *p)
 		if (kprobe_unused(p)) {
 			if (optprobe_queued_unopt(op) || optprobe_queued_cooling(op)) {
 				hlist_del_init_rcu(&op->kp.hlist);
+				kprobe_tree_erase(&op->kp);
 				list_move(&op->list,
 					  &optprobe_gens[optprobe_cur_gen].freeing_list);
 				kick_kprobe_optimizer();
@@ -1609,6 +1723,7 @@ static void init_aggr_kprobe(struct kprobe *ap, struct kprobe *p)
 
 	list_add_rcu(&p->list, &ap->list);
 	hlist_replace_rcu(&p->hlist, &ap->hlist);
+	kprobe_tree_replace(p, ap);
 }
 
 /*
@@ -1959,11 +2074,13 @@ static int __register_kprobe(struct kprobe *p)
 	INIT_HLIST_NODE(&p->hlist);
 	hlist_add_head_rcu(&p->hlist,
 		       &kprobe_table[hash_ptr(p->addr, KPROBE_HASH_BITS)]);
+	kprobe_tree_insert(p);
 
 	if (!kprobes_all_disarmed && !kprobe_disabled(p)) {
 		ret = arm_kprobe(p);
 		if (ret) {
 			hlist_del_rcu(&p->hlist);
+			kprobe_tree_erase(p);
 			synchronize_rcu();
 			arch_remove_kprobe(p);
 			return ret;
@@ -2096,6 +2213,7 @@ static int __unregister_kprobe_top(struct kprobe *p)
 		 * unoptimizing.
 		 */
 		hlist_del_rcu(&ap->hlist);
+		kprobe_tree_erase(ap);
 		return 0;
 	}
 

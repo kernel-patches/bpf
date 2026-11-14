@@ -201,12 +201,11 @@ bool can_boost(struct insn *insn, void *addr)
 }
 
 static unsigned long
-__recover_probed_insn(kprobe_opcode_t *buf, unsigned long addr)
+__recover_probed_insn(kprobe_opcode_t *buf, unsigned long addr, struct kprobe **kpp)
 {
-	struct kprobe *kp;
+	struct kprobe *kp = kpp ? *kpp : get_kprobe((void *)addr);
 	bool faddr;
 
-	kp = get_kprobe((void *)addr);
 	faddr = ftrace_location(addr) == addr;
 	/*
 	 * Use the current code if it is not modified by Kprobe
@@ -251,7 +250,8 @@ __recover_probed_insn(kprobe_opcode_t *buf, unsigned long addr)
  * for preventing to release referencing kprobes.
  * Returns zero if the instruction can not get recovered (or access failed).
  */
-unsigned long recover_probed_instruction(kprobe_opcode_t *buf, unsigned long addr)
+unsigned long recover_probed_instruction(kprobe_opcode_t *buf, unsigned long addr,
+					 struct kprobe **kp)
 {
 	unsigned long __addr;
 
@@ -259,7 +259,7 @@ unsigned long recover_probed_instruction(kprobe_opcode_t *buf, unsigned long add
 	if (__addr != addr)
 		return __addr;
 
-	return __recover_probed_insn(buf, addr);
+	return __recover_probed_insn(buf, addr, kp);
 }
 
 /* Check if insn is INT or UD */
@@ -287,6 +287,8 @@ static inline bool is_exception_insn(struct insn *insn)
 static bool can_probe(unsigned long paddr)
 {
 	unsigned long addr, __addr, offset = 0;
+	struct kprobe_iter iter;
+	struct kprobe *kp;
 	struct insn insn;
 	kprobe_opcode_t buf[MAX_INSN_SIZE];
 
@@ -295,7 +297,9 @@ static bool can_probe(unsigned long paddr)
 
 	/* Decode instructions */
 	addr = paddr - offset;
-	while (addr < paddr) {
+	for_each_addr_kprobe(iter, kp, addr, paddr) {
+		if (addr == paddr)
+			break;
 		/*
 		 * Check if the instruction has been modified by another
 		 * kprobe, in which case we replace the breakpoint by the
@@ -304,7 +308,7 @@ static bool can_probe(unsigned long paddr)
 		 * relative-jump. Since the relative-jump itself is
 		 * normally used, we just go through if there is no kprobe.
 		 */
-		__addr = recover_probed_instruction(buf, addr);
+		__addr = recover_probed_instruction(buf, addr, &kp);
 		if (!__addr)
 			return false;
 
@@ -327,7 +331,7 @@ static bool can_probe(unsigned long paddr)
 	if (addr != paddr)
 		return false;
 
-	__addr = recover_probed_instruction(buf, addr);
+	__addr = recover_probed_instruction(buf, addr, &kp);
 	if (!__addr)
 		return false;
 
@@ -391,10 +395,10 @@ kprobe_opcode_t *arch_adjust_kprobe_addr(unsigned long addr, unsigned long offse
  * instruction, displacement must be adjust by @real, not @dest.
  * This returns the length of copied instruction, or 0 if it has an error.
  */
-int __copy_instruction(u8 *dest, u8 *src, u8 *real, struct insn *insn)
+int __copy_instruction(u8 *dest, u8 *src, u8 *real, struct insn *insn, struct kprobe **kp)
 {
 	kprobe_opcode_t buf[MAX_INSN_SIZE];
-	unsigned long recovered_insn = recover_probed_instruction(buf, (unsigned long)src);
+	unsigned long recovered_insn = recover_probed_instruction(buf, (unsigned long)src, kp);
 	int ret;
 
 	if (!recovered_insn || !insn)
@@ -731,7 +735,7 @@ static int arch_copy_kprobe(struct kprobe *p)
 	int ret, len;
 
 	/* Copy an instruction with recovering if other optprobe modifies it.*/
-	len = __copy_instruction(buf, p->addr, p->ainsn.insn, &insn);
+	len = __copy_instruction(buf, p->addr, p->ainsn.insn, &insn, NULL);
 	if (!len)
 		return -EINVAL;
 

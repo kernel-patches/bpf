@@ -8,6 +8,7 @@
  */
 #include <linux/memory.h>
 #include <linux/uaccess.h>
+#include <linux/cache.h>
 #include <linux/module.h>
 #include <linux/list.h>
 #include <linux/slab.h>
@@ -21,6 +22,18 @@
 
 /* mutex to protect coming/going of the jump_label table */
 static DEFINE_MUTEX(jump_label_mutex);
+
+struct jump_entry_index {
+	struct jump_entry *base;
+	unsigned int nr;
+	u32 entries[];
+};
+
+/*
+ * Index jump entries by code address for text reservation lookups. The jump
+ * table itself is sorted by static-key address, then by code address per key.
+ */
+static struct jump_entry_index *jump_entry_index;
 
 void jump_label_lock(void)
 {
@@ -377,6 +390,81 @@ static int addr_conflict(struct jump_entry *entry, void *start, void *end)
 	if (jump_entry_code(entry) <= (unsigned long)end &&
 	    jump_entry_code(entry) + jump_entry_size(entry) > (unsigned long)start)
 		return 1;
+
+	return 0;
+}
+
+static int jump_entry_index_cmp(const void *a, const void *b, const void *priv)
+{
+	const struct jump_entry *base = priv;
+	unsigned int ia = *(u32 *)a;
+	unsigned int ib = *(u32 *)b;
+	unsigned long ca = jump_entry_code(base + ia);
+	unsigned long cb = jump_entry_code(base + ib);
+
+	if (ca < cb)
+		return -1;
+	if (ca > cb)
+		return 1;
+	return 0;
+}
+
+static struct jump_entry_index *
+jump_entry_index_alloc(struct jump_entry *start, struct jump_entry *stop)
+{
+	unsigned int i, nr = stop - start;
+	struct jump_entry_index *index;
+
+	if (!nr)
+		return NULL;
+
+	index = kvmalloc_flex(*index, entries, nr, GFP_KERNEL);
+	if (!index)
+		return NULL;
+
+	index->nr = nr;
+	index->base = start;
+	for (i = 0; i < nr; i++)
+		index->entries[i] = i;
+
+	sort_r(index->entries, nr, sizeof(index->entries[0]),
+	       jump_entry_index_cmp, NULL, start);
+	return index;
+}
+
+static int jump_entry_index_text_reserved(struct jump_entry_index *index,
+					  void *start, void *end, bool init)
+{
+	unsigned long start_addr = (unsigned long)start;
+	unsigned long end_addr = (unsigned long)end;
+	unsigned int low = 0, high = index->nr, i;
+
+	/* Find the first entry after @start. */
+	while (low < high) {
+		unsigned int mid = low + (high - low) / 2;
+		unsigned long addr = jump_entry_code(index->base + index->entries[mid]);
+
+		if (addr <= start_addr)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+
+	/* The preceding entry may start before @start and overlap it. */
+	if (low)
+		low--;
+
+	for (i = low; i < index->nr; i++) {
+		struct jump_entry *entry = index->base + index->entries[i];
+		unsigned long addr = jump_entry_code(entry);
+
+		/* Later entries cannot overlap once this address is past @end. */
+		if (addr > end_addr)
+			break;
+		if ((init || !jump_entry_is_init(entry)) &&
+		    addr_conflict(entry, start, end))
+			return 1;
+	}
 
 	return 0;
 }
@@ -869,8 +957,16 @@ early_initcall(jump_label_init_module);
  */
 int jump_label_text_reserved(void *start, void *end)
 {
+	struct jump_entry_index *index;
 	bool init = system_state < SYSTEM_RUNNING;
-	int ret = __jump_label_text_reserved(__start___jump_table,
+	int ret;
+
+	/* Pairs with the release in jump_entry_index_build(). */
+	index = smp_load_acquire(&jump_entry_index);
+	if (index)
+		ret = jump_entry_index_text_reserved(index, start, end, init);
+	else
+		ret = __jump_label_text_reserved(__start___jump_table,
 			__stop___jump_table, start, end, init);
 
 	if (ret)
@@ -908,6 +1004,23 @@ static void jump_label_update(struct static_key *key)
 	if (entry)
 		__jump_label_update(key, entry, stop, init);
 }
+
+static int __init jump_entry_index_build(void)
+{
+	struct jump_entry_index *index;
+
+	/*
+	 * Build the index in an initcall so normal memory allocation is
+	 * available; jump_label_init() runs before that.
+	 */
+	index = jump_entry_index_alloc(__start___jump_table, __stop___jump_table);
+
+	/* Publish the initialized index to jump_label_text_reserved(). */
+	smp_store_release(&jump_entry_index, index);
+
+	return 0;
+}
+late_initcall(jump_entry_index_build);
 
 #ifdef CONFIG_STATIC_KEYS_SELFTEST
 static DEFINE_STATIC_KEY_TRUE(sk_true);

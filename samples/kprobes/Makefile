@@ -4,3 +4,4 @@
 
 obj-$(CONFIG_SAMPLE_KPROBES) += kprobe_example.o
 obj-$(CONFIG_SAMPLE_KRETPROBES) += kretprobe_example.o
+obj-$(CONFIG_SAMPLE_KPROBES_MANY) += kprobe_many_example.o

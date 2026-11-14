@@ -15,6 +15,18 @@ extern struct static_call_site __start_static_call_sites[],
 extern struct static_call_tramp_key __start_static_call_tramp_key[],
 				    __stop_static_call_tramp_key[];
 
+struct static_call_site_index {
+	struct static_call_site *base;
+	unsigned int nr;
+	u32 entries[];
+};
+
+/*
+ * Index static call sites by code address for text reservation lookups.
+ * The site table itself is sorted by static-call-key address.
+ */
+static struct static_call_site_index *static_call_site_index;
+
 int static_call_initialized;
 
 /*
@@ -41,7 +53,7 @@ static void static_call_unlock(void)
 	mutex_unlock(&static_call_mutex);
 }
 
-static inline void *static_call_addr(struct static_call_site *site)
+static inline void *static_call_addr(const struct static_call_site *site)
 {
 	return (void *)((long)site->addr + (long)&site->addr);
 }
@@ -301,6 +313,79 @@ static int addr_conflict(struct static_call_site *site, void *start, void *end)
 	return 0;
 }
 
+static int static_call_site_index_cmp(const void *a, const void *b, const void *priv)
+{
+	const struct static_call_site *base = priv;
+	unsigned int ia = *(u32 *)a;
+	unsigned int ib = *(u32 *)b;
+	unsigned long ca = (unsigned long)static_call_addr(base + ia);
+	unsigned long cb = (unsigned long)static_call_addr(base + ib);
+
+	return cmp_int(ca, cb);
+}
+
+static struct static_call_site_index *
+static_call_site_index_alloc(struct static_call_site *start,
+			     struct static_call_site *stop)
+{
+	struct static_call_site_index *index;
+	unsigned int nr = stop - start;
+	unsigned int i;
+
+	if (!nr)
+		return NULL;
+
+	index = kvmalloc_flex(*index, entries, nr, GFP_KERNEL);
+	if (!index)
+		return NULL;
+
+	index->nr = nr;
+	index->base = start;
+	for (i = 0; i < nr; i++)
+		index->entries[i] = i;
+
+	sort_r(index->entries, nr, sizeof(index->entries[0]),
+	       static_call_site_index_cmp, NULL, start);
+
+	return index;
+}
+
+static int
+static_call_site_index_text_reserved(struct static_call_site_index *index,
+				     void *start, void *end, bool init)
+{
+	unsigned int low = 0, high = index->nr, i;
+
+	/* Find the first site after @start. */
+	while (low < high) {
+		unsigned int mid = low + (high - low) / 2;
+		void *addr = static_call_addr(index->base + index->entries[mid]);
+
+		if (addr <= start)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+
+	/* The preceding site may overlap @start. */
+	if (low)
+		low--;
+
+	for (i = low; i < index->nr; i++) {
+		struct static_call_site *site = index->base + index->entries[i];
+		void *addr = static_call_addr(site);
+
+		/* Later sites cannot overlap once this address is past @end. */
+		if (addr > end)
+			break;
+		if ((init || !static_call_is_init(site)) &&
+		    addr_conflict(site, start, end))
+			return 1;
+	}
+
+	return 0;
+}
+
 static int __static_call_text_reserved(struct static_call_site *iter_start,
 				       struct static_call_site *iter_stop,
 				       void *start, void *end, bool init)
@@ -483,7 +568,15 @@ static inline int __static_call_mod_text_reserved(void *start, void *end)
 int static_call_text_reserved(void *start, void *end)
 {
 	bool init = system_state < SYSTEM_RUNNING;
-	int ret = __static_call_text_reserved(__start_static_call_sites,
+	struct static_call_site_index *index;
+	int ret;
+
+	/* Pairs with the release in static_call_site_index_build(). */
+	index = smp_load_acquire(&static_call_site_index);
+	if (index)
+		ret = static_call_site_index_text_reserved(index, start, end, init);
+	else
+		ret = __static_call_text_reserved(__start_static_call_sites,
 			__stop_static_call_sites, start, end, init);
 
 	if (ret)
@@ -521,6 +614,23 @@ int __init static_call_init(void)
 	return 0;
 }
 early_initcall(static_call_init);
+
+static int __init static_call_site_index_build(void)
+{
+	struct static_call_site_index *index;
+
+	/*
+	 * Build the index in an initcall so normal memory allocation is
+	 * available, static_call_init() can run before that.
+	 */
+	index = static_call_site_index_alloc(__start_static_call_sites,
+					     __stop_static_call_sites);
+
+	/* Publish the initialized index to static_call_text_reserved(). */
+	smp_store_release(&static_call_site_index, index);
+	return 0;
+}
+late_initcall(static_call_site_index_build);
 
 #ifdef CONFIG_STATIC_CALL_SELFTEST
 
