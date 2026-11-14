@@ -35,8 +35,7 @@ struct DmaSampleDriver;
 struct DmaSampleData<'bound> {
     pdev: &'bound pci::Device<Bound>,
     ca: Coherent<'bound, [MyStruct]>,
-    #[pin]
-    sgt: SGTable<Owned<VVec<u8>>>,
+    sgt: SGTable<Owned<'bound, VVec<u8>>>,
 }
 
 const TEST_VALUES: [(u32, u32); 5] = [
@@ -96,13 +95,9 @@ impl pci::Driver for DmaSampleDriver {
             let size = 4 * page::PAGE_SIZE;
             let pages = VVec::with_capacity(size, GFP_KERNEL)?;
 
-            let sgt = SGTable::new(pdev.as_ref(), pages, DataDirection::ToDevice, GFP_KERNEL);
+            let sgt = SGTable::new(pdev.as_ref(), pages, DataDirection::ToDevice, GFP_KERNEL)?;
 
-            Ok(try_pin_init!(Self::Data {
-                pdev,
-                ca,
-                sgt <- sgt,
-            }))
+            Ok(try_pin_init!(Self::Data { pdev, ca, sgt }))
         })
     }
 }

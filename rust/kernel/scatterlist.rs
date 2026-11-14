@@ -19,7 +19,8 @@
 //! The main entry point is the [`SGTable`] type, which represents a complete scatter-gather table.
 //! It can be either:
 //!
-//! - An owned table ([`SGTable<Owned<P>>`]), created from a Rust memory buffer (e.g., [`VVec`]).
+//! - An owned table ([`SGTable<Owned<'a, P>>`]), created from a Rust memory buffer (e.g.,
+//!   [`VVec`]) and tied to the [`Device<Bound>`] lifetime.
 //!   This type manages the allocation of the `struct sg_table`, the DMA mapping of the buffer, and
 //!   the automatic cleanup of all resources.
 //! - A borrowed reference (&[`SGTable`]), which provides safe, read-only access to a table that was
@@ -33,15 +34,13 @@ use crate::{
     alloc::allocator::VmallocPageIter,
     bindings,
     device::{Bound, Device},
-    devres::Devres,
     dma,
     error,
     page,
     prelude::*,
-    sync::aref::ARef,
     types::Opaque, //
 };
-use core::{ops::Deref, ptr::NonNull};
+use core::ops::Deref;
 
 /// A single entry in a scatter-gather list.
 ///
@@ -123,9 +122,7 @@ unsafe impl Sync for Borrowed {}
 ///
 /// All [`SGTable`] variants can be iterated over the individual [`SGEntry`]s.
 #[repr(transparent)]
-#[pin_data]
 pub struct SGTable<T: private::Sealed = Borrowed> {
-    #[pin]
     inner: T,
 }
 
@@ -177,71 +174,46 @@ impl SGTable {
 ///
 /// # Invariants
 ///
-/// - `sgt` is a valid pointer to a `struct sg_table` for the entire lifetime of the
-///   [`DmaMappedSgt`].
 /// - `sgt` is always DMA mapped.
-struct DmaMappedSgt {
-    sgt: NonNull<bindings::sg_table>,
-    dev: ARef<Device>,
+struct DmaMappedSgt<'a> {
+    dev: &'a Device<Bound>,
+    sgt: RawSGTable,
     dir: dma::DataDirection,
 }
 
-// SAFETY: `DmaMappedSgt` can be sent to any task.
-unsafe impl Send for DmaMappedSgt {}
-
-// SAFETY: `DmaMappedSgt` has no interior mutability and can be accessed concurrently.
-unsafe impl Sync for DmaMappedSgt {}
-
-impl DmaMappedSgt {
-    /// # Safety
-    ///
-    /// - `sgt` must be a valid pointer to a `struct sg_table` for the entire lifetime of the
-    ///   returned [`DmaMappedSgt`].
-    /// - The caller must guarantee that `sgt` remains DMA mapped for the entire lifetime of
-    ///   [`DmaMappedSgt`].
-    unsafe fn new(
-        sgt: NonNull<bindings::sg_table>,
-        dev: &Device<Bound>,
-        dir: dma::DataDirection,
-    ) -> Result<Self> {
+impl<'a> DmaMappedSgt<'a> {
+    /// Takes ownership of `sgt` and maps it for DMA.
+    fn new(dev: &'a Device<Bound>, sgt: RawSGTable, dir: dma::DataDirection) -> Result<Self> {
         // SAFETY:
         // - `dev.as_raw()` is a valid pointer to a `struct device`, which is guaranteed to be
         //   bound to a driver for the duration of this call.
-        // - `sgt` is a valid pointer to a `struct sg_table`.
+        // - `sgt.as_raw()` is a valid pointer to a `struct sg_table`.
         error::to_result(unsafe {
-            bindings::dma_map_sgtable(dev.as_raw(), sgt.as_ptr(), dir.into(), 0)
+            bindings::dma_map_sgtable(dev.as_raw(), sgt.as_raw(), dir.into(), 0)
         })?;
 
-        // INVARIANT: By the safety requirements of this function it is guaranteed that `sgt` is
-        // valid for the entire lifetime of this object instance.
-        Ok(Self {
-            sgt,
-            dev: dev.into(),
-            dir,
-        })
+        // INVARIANT: `sgt` was successfully DMA mapped and is owned by this object until drop.
+        Ok(Self { dev, sgt, dir })
     }
 }
 
-impl Drop for DmaMappedSgt {
+impl Drop for DmaMappedSgt<'_> {
     #[inline]
     fn drop(&mut self) {
         // SAFETY:
         // - `self.dev.as_raw()` is a pointer to a valid `struct device`.
         // - `self.dev` is the same device the mapping has been created for in `Self::new()`.
-        // - `self.sgt.as_ptr()` is a valid pointer to a `struct sg_table` by the type invariants
-        //   of `Self`.
+        // - `self.sgt.as_raw()` is a valid pointer to a `struct sg_table` for the lifetime of
+        //   `self`.
         // - `self.dir` is the same `dma::DataDirection` the mapping has been created with in
         //   `Self::new()`.
         unsafe {
-            bindings::dma_unmap_sgtable(self.dev.as_raw(), self.sgt.as_ptr(), self.dir.into(), 0)
+            bindings::dma_unmap_sgtable(self.dev.as_raw(), self.sgt.as_raw(), self.dir.into(), 0)
         };
     }
 }
 
 /// A transparent wrapper around a `struct sg_table`.
-///
-/// While we could also create the `struct sg_table` in the constructor of [`Owned`], we can't tear
-/// down the `struct sg_table` in [`Owned::drop`]; the drop order in [`Owned`] matters.
 #[repr(transparent)]
 struct RawSGTable(Opaque<bindings::sg_table>);
 
@@ -307,39 +279,27 @@ impl Drop for RawSGTable {
 /// A [`SGTable<Owned>`] signifies that the [`SGTable`] owns all associated resources:
 ///
 /// - The backing memory pages.
-/// - The `struct sg_table` allocation (`sgt`).
-/// - The DMA mapping, managed through a [`Devres`]-managed `DmaMappedSgt`.
+/// - The DMA mapping, released before the table and backing pages are freed.
 ///
 /// Users interact with this type through the [`SGTable`] handle and do not need to manage
 /// [`Owned`] directly.
-#[pin_data]
-pub struct Owned<P> {
+pub struct Owned<'a, P> {
     // Note: The drop order is relevant; we first have to unmap the `struct sg_table`, then free the
     // `struct sg_table` and finally free the backing pages.
-    #[pin]
-    dma: Devres<DmaMappedSgt>,
-    #[pin]
-    sgt: RawSGTable,
+    dma: DmaMappedSgt<'a>,
     _pages: P,
 }
 
-// SAFETY: `Owned` can be sent to any task if `P` can be send to any task.
-unsafe impl<P: Send> Send for Owned<P> {}
-
-// SAFETY: `Owned` has no interior mutability and can be accessed concurrently if `P` can be
-// accessed concurrently.
-unsafe impl<P: Sync> Sync for Owned<P> {}
-
-impl<P> Owned<P>
+impl<'a, P> Owned<'a, P>
 where
-    for<'a> P: page::AsPageIter<Iter<'a> = VmallocPageIter<'a>> + 'static,
+    for<'b> P: page::AsPageIter<Iter<'b> = VmallocPageIter<'b>> + 'static,
 {
     fn new(
-        dev: &Device<Bound>,
+        dev: &'a Device<Bound>,
         mut pages: P,
         dir: dma::DataDirection,
         flags: alloc::Flags,
-    ) -> Result<impl PinInit<Self, Error> + '_> {
+    ) -> Result<Self> {
         let page_iter = pages.page_iter();
         let size = page_iter.size();
 
@@ -367,34 +327,22 @@ where
 
         let max_segment = max_mapping_size.min(max_seg_size);
 
-        Ok(try_pin_init!(&this in Self {
-            // SAFETY:
-            // - `page_vec` is a `KVec` of valid `struct page *` obtained from `pages`.
-            // - The pages contained in `pages` remain valid for the entire lifetime of the
-            //   `RawSGTable`.
-            sgt: unsafe { RawSGTable::new(&mut page_vec, size, max_segment, flags) }?,
-            dma <- {
-                // SAFETY: `this` is a valid pointer to uninitialized memory.
-                let sgt = unsafe { &raw mut (*this.as_ptr()).sgt }.cast();
+        // SAFETY:
+        // - `page_vec` is a `KVec` of valid `struct page *` obtained from `pages`.
+        // - The pages contained in `pages` remain valid for the entire lifetime of the
+        //   `RawSGTable`.
+        let sgt = unsafe { RawSGTable::new(&mut page_vec, size, max_segment, flags) }?;
 
-                // SAFETY: `sgt` is guaranteed to be non-null.
-                let sgt = unsafe { NonNull::new_unchecked(sgt) };
-
-                // SAFETY:
-                // - It is guaranteed that the object returned by `DmaMappedSgt::new` won't out-live
-                //   `sgt`.
-                // - `sgt` is never DMA unmapped manually.
-                // - `sgt` is structurally pinned and therefore cannot move.
-                Devres::new(dev, unsafe { DmaMappedSgt::new(sgt, dev, dir) })
-            },
+        Ok(Self {
+            dma: DmaMappedSgt::new(dev, sgt, dir)?,
             _pages: pages,
-        }))
+        })
     }
 }
 
-impl<P> SGTable<Owned<P>>
+impl<'a, P> SGTable<Owned<'a, P>>
 where
-    for<'a> P: page::AsPageIter<Iter<'a> = VmallocPageIter<'a>> + 'static,
+    for<'b> P: page::AsPageIter<Iter<'b> = VmallocPageIter<'b>> + 'static,
 {
     /// Allocates a new scatter-gather table from the given pages and maps it for DMA.
     ///
@@ -403,8 +351,7 @@ where
     /// pages of `P`, and maps the table for DMA with the specified [`Device`] and
     /// [`dma::DataDirection`].
     ///
-    /// The DMA mapping is managed through [`Devres`], ensuring that the DMA mapping is unmapped
-    /// once the associated [`Device`] is unbound, or when the [`SGTable<Owned>`] is dropped.
+    /// The table is tied to the [`Device<Bound>`] lifetime and unmaps the DMA mapping when dropped.
     ///
     /// # Parameters
     ///
@@ -428,38 +375,38 @@ where
     ///     let size = 4 * page::PAGE_SIZE;
     ///     let pages = VVec::<u8>::with_capacity(size, GFP_KERNEL)?;
     ///
-    ///     let sgt = KBox::pin_init(SGTable::new(
+    ///     let sgt = SGTable::new(
     ///         dev,
     ///         pages,
     ///         dma::DataDirection::ToDevice,
     ///         GFP_KERNEL,
-    ///     ), GFP_KERNEL)?;
+    ///     )?;
     ///
     ///     Ok(())
     /// }
     /// ```
     pub fn new(
-        dev: &Device<Bound>,
+        dev: &'a Device<Bound>,
         pages: P,
         dir: dma::DataDirection,
         flags: alloc::Flags,
-    ) -> impl PinInit<Self, Error> + '_ {
-        try_pin_init!(Self {
-            inner <- Owned::new(dev, pages, dir, flags)?
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: Owned::new(dev, pages, dir, flags)?,
         })
     }
 }
 
-impl<P> Deref for SGTable<Owned<P>> {
+impl<P> Deref for SGTable<Owned<'_, P>> {
     type Target = SGTable;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
         // SAFETY:
-        // - `self.inner.sgt.as_raw()` is a valid pointer to a `struct sg_table` for the entire
+        // - `self.inner.dma.sgt.as_raw()` is a valid pointer to a `struct sg_table` for the entire
         //   lifetime of `self`.
         // - The backing `struct sg_table` is not modified for the entire lifetime of `self`.
-        unsafe { SGTable::from_raw(self.inner.sgt.as_raw()) }
+        unsafe { SGTable::from_raw(self.inner.dma.sgt.as_raw()) }
     }
 }
 
@@ -467,7 +414,7 @@ mod private {
     pub trait Sealed {}
 
     impl Sealed for super::Borrowed {}
-    impl<P> Sealed for super::Owned<P> {}
+    impl<P> Sealed for super::Owned<'_, P> {}
 }
 
 /// An [`Iterator`] over the DMA mapped [`SGEntry`] items of an [`SGTable`].
