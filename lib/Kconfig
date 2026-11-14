@@ -349,20 +349,6 @@ config XARRAY_MULTI
 	  Support entries which occupy multiple consecutive indices in the
 	  XArray.
 
-config ASSOCIATIVE_ARRAY
-	bool
-	help
-	  Generic associative array.  Can be searched and iterated over whilst
-	  it is being modified.  It is also reasonably quick to search and
-	  modify.  The algorithms are non-recursive, and the trees are highly
-	  capacious.
-
-	  See:
-
-		Documentation/core-api/assoc_array.rst
-
-	  for more information.
-
 config CLOSURES
 	bool
 
