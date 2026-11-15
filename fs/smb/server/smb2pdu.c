@@ -8998,6 +8998,10 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 	    (file_info->Attributes & FILE_ATTRIBUTE_TEMPORARY_LE))
 		return -EINVAL;
 
+	rc = mnt_want_write_file(filp);
+	if (rc)
+		return rc;
+
 	crtime = (s64)le64_to_cpu(file_info->CreationTime);
 	if (crtime > 0)
 		fp->create_time = crtime;
@@ -9025,7 +9029,8 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 		if (!S_ISDIR(inode->i_mode) &&
 		    file_info->Attributes & FILE_ATTRIBUTE_DIRECTORY_LE) {
 			pr_err("can't change a file to a directory\n");
-			return -EINVAL;
+			rc = -EINVAL;
+			goto out;
 		}
 
 		if (!(S_ISDIR(inode->i_mode) && file_info->Attributes == FILE_ATTRIBUTE_NORMAL_LE))
@@ -9046,7 +9051,7 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 			XATTR_DOSINFO_ITIME;
 
 		rc = ksmbd_vfs_set_dos_attrib_xattr(idmap, &filp->f_path, &da,
-				true);
+				false);
 		if (rc)
 			ksmbd_debug(SMB,
 				    "failed to restore file attribute in EA\n");
@@ -9057,13 +9062,17 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 		struct dentry *dentry = filp->f_path.dentry;
 		struct inode *inode = d_inode(dentry);
 
-		if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
-			return -EACCES;
+		if (IS_IMMUTABLE(inode) || IS_APPEND(inode)) {
+			rc = -EACCES;
+			goto out;
+		}
 
 		inode_lock(inode);
 		rc = notify_change(idmap, dentry, &attrs, NULL);
 		inode_unlock(inode);
 	}
+out:
+	mnt_drop_write_file(filp);
 	return rc;
 }
 
