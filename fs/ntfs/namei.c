@@ -429,7 +429,7 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 	struct mft_record *ni_mrec, *dni_mrec;
 	struct super_block *sb = dir_ni->vol->sb;
 	struct inode *rollback_data_vi = NULL, *rollback_sd_vi = NULL;
-	struct inode *rollback_rp_vi = NULL;
+	struct inode *rollback_rp_vi = NULL, *rollback_al_vi = NULL;
 	__le64 parent_mft_ref;
 	u64 child_mft_ref;
 	__le16 ea_size;
@@ -748,6 +748,10 @@ err_out:
 				     &rollback_rp_vi))
 			ntfs_error(sb, "Failed to roll back REPARSE_POINT attribute.");
 	}
+	if (NInoAttrList(ni) &&
+	    ntfs_attr_remove(ni, AT_ATTRIBUTE_LIST, AT_UNNAMED, 0,
+			     &rollback_al_vi))
+		ntfs_error(sb, "Failed to roll back ATTRIBUTE_LIST attribute.");
 	/*
 	 * Free extent MFT records (should not exist any with current
 	 * ntfs_create implementation, but for any case if something will be
@@ -772,6 +776,8 @@ err_out:
 	mutex_unlock(&dir_ni->mrec_lock);
 	mutex_unlock(&ni->mrec_lock);
 
+	if (rollback_al_vi)
+		iput(rollback_al_vi);
 	if (rollback_rp_vi)
 		iput(rollback_rp_vi);
 	if (rollback_data_vi)
