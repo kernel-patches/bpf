@@ -6152,14 +6152,69 @@ got_empty:
 	return pcs;
 }
 
+static __always_inline bool can_free_to_pcs(struct slab *slab)
+{
+	int slab_node;
+	int numa_node;
+
+	if (!IS_ENABLED(CONFIG_NUMA))
+		goto check_pfmemalloc;
+
+	slab_node = slab_nid(slab);
+
+#ifdef CONFIG_HAVE_MEMORYLESS_NODES
+	/*
+	 * numa_mem_id() points to the closest node with memory so only allow
+	 * objects from that node to the percpu sheaves
+	 */
+	numa_node = numa_mem_id();
+
+	if (likely(slab_node == numa_node))
+		goto check_pfmemalloc;
+#else
+
+	/*
+	 * numa_mem_id() is only a wrapper to numa_node_id() which is where this
+	 * cpu belongs to, but it might be a memoryless node anyway. We don't
+	 * know what the closest node is.
+	 */
+	numa_node = numa_node_id();
+
+	/* freed object is from this cpu's node, proceed */
+	if (likely(slab_node == numa_node))
+		goto check_pfmemalloc;
+
+	/*
+	 * Freed object isn't from this cpu's node, but that node is memoryless
+	 * or only has ZONE_MOVABLE memory, which slab cannot allocate from.
+	 * Proceed as it's better to cache remote objects than falling back to
+	 * the slowpath for everything. The allocation side can never obtain
+	 * a local object anyway, if none exist. We don't have numa_mem_id() to
+	 * point to the closest node as we would on a proper memoryless node
+	 * setup.
+	 */
+	if (unlikely(!node_state(numa_node, N_NORMAL_MEMORY)))
+		goto check_pfmemalloc;
+#endif
+
+	return false;
+
+check_pfmemalloc:
+	return likely(!slab_test_pfmemalloc(slab));
+}
+
 /*
  * Free an object to the percpu sheaves.
  * The object is expected to have passed slab_free_hook() already.
  */
 static __fastpath_inline
-bool free_to_pcs(struct kmem_cache *s, void *object, bool allow_spin)
+bool free_to_pcs(struct kmem_cache *s, struct slab *slab, void *object,
+		 unsigned int free_flags)
 {
 	struct slub_percpu_sheaves *pcs;
+
+	if (unlikely(!can_free_to_pcs(slab)))
+		return false;
 
 	if (!local_trylock(&s->cpu_sheaves->lock))
 		return false;
@@ -6167,6 +6222,7 @@ bool free_to_pcs(struct kmem_cache *s, void *object, bool allow_spin)
 	pcs = this_cpu_ptr(s->cpu_sheaves);
 
 	if (unlikely(pcs->main->size == s->sheaf_capacity)) {
+		bool allow_spin = free_flags_allow_spinning(free_flags);
 
 		pcs = __pcs_replace_full_main(s, pcs, allow_spin);
 		if (unlikely(!pcs))
@@ -6378,57 +6434,6 @@ fail:
 	if (!IS_ENABLED(CONFIG_PREEMPT_RT))
 		lock_map_release(&kfree_rcu_sheaf_map);
 	return false;
-}
-
-static __always_inline bool can_free_to_pcs(struct slab *slab)
-{
-	int slab_node;
-	int numa_node;
-
-	if (!IS_ENABLED(CONFIG_NUMA))
-		goto check_pfmemalloc;
-
-	slab_node = slab_nid(slab);
-
-#ifdef CONFIG_HAVE_MEMORYLESS_NODES
-	/*
-	 * numa_mem_id() points to the closest node with memory so only allow
-	 * objects from that node to the percpu sheaves
-	 */
-	numa_node = numa_mem_id();
-
-	if (likely(slab_node == numa_node))
-		goto check_pfmemalloc;
-#else
-
-	/*
-	 * numa_mem_id() is only a wrapper to numa_node_id() which is where this
-	 * cpu belongs to, but it might be a memoryless node anyway. We don't
-	 * know what the closest node is.
-	 */
-	numa_node = numa_node_id();
-
-	/* freed object is from this cpu's node, proceed */
-	if (likely(slab_node == numa_node))
-		goto check_pfmemalloc;
-
-	/*
-	 * Freed object isn't from this cpu's node, but that node is memoryless
-	 * or only has ZONE_MOVABLE memory, which slab cannot allocate from.
-	 * Proceed as it's better to cache remote objects than falling back to
-	 * the slowpath for everything. The allocation side can never obtain
-	 * a local object anyway, if none exist. We don't have numa_mem_id() to
-	 * point to the closest node as we would on a proper memoryless node
-	 * setup.
-	 */
-	if (unlikely(!node_state(numa_node, N_NORMAL_MEMORY)))
-		goto check_pfmemalloc;
-#endif
-
-	return false;
-
-check_pfmemalloc:
-	return likely(!slab_test_pfmemalloc(slab));
 }
 
 /*
@@ -6673,7 +6678,7 @@ void slab_free(struct kmem_cache *s, struct slab *slab, void *object,
 	if (unlikely(!slab_free_hook(s, object, free_flags)))
 		return;
 
-	if (likely(can_free_to_pcs(slab)) && likely(free_to_pcs(s, object, true)))
+	if (likely(free_to_pcs(s, slab, object, free_flags)))
 		return;
 
 	__slab_free(s, slab, object, object, 1, addr);
@@ -6687,7 +6692,6 @@ void memcg_alloc_abort_single(struct kmem_cache *s, void *object,
 			      unsigned int alloc_flags)
 {
 	struct slab *slab = virt_to_slab(object);
-	bool allow_spin = alloc_flags_allow_spinning(alloc_flags);
 	unsigned int free_flags = to_free_flags(alloc_flags);
 
 	if (slab_want_init_on_free(s))
@@ -6698,11 +6702,10 @@ void memcg_alloc_abort_single(struct kmem_cache *s, void *object,
 	if (unlikely(!slab_free_hook(s, object, free_flags)))
 		return;
 
-	if (likely(can_free_to_pcs(slab)) &&
-	    likely(free_to_pcs(s, object, allow_spin)))
+	if (likely(free_to_pcs(s, slab, object, free_flags)))
 		return;
 
-	if (likely(allow_spin))
+	if (likely(free_flags_allow_spinning(free_flags)))
 		__slab_free(s, slab, object, object, 1, _RET_IP_);
 	else
 		defer_free(s, object);
@@ -7022,7 +7025,7 @@ void kfree_nolock(const void *object)
 	if (unlikely(!slab_free_hook(s, x, free_flags)))
 		return;
 
-	if (likely(can_free_to_pcs(slab)) && likely(free_to_pcs(s, x, false)))
+	if (likely(free_to_pcs(s, slab, x, free_flags)))
 		return;
 
 	/*
