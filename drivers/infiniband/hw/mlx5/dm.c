@@ -208,10 +208,14 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DM_MAP_OP_ADDR)(
 		attrs, MLX5_IB_ATTR_DM_MAP_OP_ADDR_REQ_HANDLE);
 	struct mlx5_ib_dev *dev = to_mdev(uobj->context->device);
 	struct ib_dm *ibdm = uobj->object;
+	struct mlx5_ib_dm *mdm = to_mdm(ibdm);
 	struct mlx5_ib_dm_memic *dm = to_memic(ibdm);
 	struct mlx5_ib_dm_op_entry *op_entry;
 	int err;
 	u8 op;
+
+	if (mdm->type != MLX5_IB_UAPI_DM_TYPE_MEMIC)
+		return -EOPNOTSUPP;
 
 	err = uverbs_copy_from(&op, attrs, MLX5_IB_ATTR_DM_MAP_OP_ADDR_REQ_OP);
 	if (err)
