@@ -1286,18 +1286,15 @@ static int __init initcall_blacklist(char *str)
 	struct blacklist_entry *entry;
 
 	/* str argument is a comma-separated list of functions */
-	do {
-		str_entry = strsep(&str, ",");
-		if (str_entry) {
-			pr_debug("blacklisting initcall %s\n", str_entry);
-			entry = memblock_alloc_or_panic(sizeof(*entry),
-					       SMP_CACHE_BYTES);
-			entry->buf = memblock_alloc_or_panic(strlen(str_entry) + 1,
-						    SMP_CACHE_BYTES);
-			strcpy(entry->buf, str_entry);
-			list_add(&entry->next, &blacklisted_initcalls);
-		}
-	} while (str_entry);
+	while ((str_entry = strsep(&str, ","))) {
+		size_t buf_size = strlen(str_entry) + 1;
+
+		pr_debug("blacklisting initcall %s\n", str_entry);
+		entry = memblock_alloc_or_panic(sizeof(*entry), SMP_CACHE_BYTES);
+		entry->buf = memblock_alloc_or_panic(buf_size, SMP_CACHE_BYTES);
+		strscpy(entry->buf, str_entry, buf_size);
+		list_add(&entry->next, &blacklisted_initcalls);
+	}
 
 	return 1;
 }
