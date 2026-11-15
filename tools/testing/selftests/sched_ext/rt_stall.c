@@ -21,6 +21,9 @@
 #define CORE_ID		0	/* CPU to pin tasks to */
 #define RUN_TIME        5	/* How long to run the test in seconds */
 
+static cpu_set_t old_mask;
+static bool affinity_saved;
+
 /* Signal the parent that setup is complete by writing to a pipe */
 static void signal_ready(int fd)
 {
@@ -82,43 +85,57 @@ static void set_sched(int policy, int priority)
 	}
 }
 
-/* Get process runtime from /proc/<pid>/stat */
+/* Get process runtime from CPU clock */
 static float get_process_runtime(int pid)
 {
-	char path[256];
-	FILE *file;
-	long utime, stime;
-	int fields;
+	clockid_t clk;
+	struct timespec ts;
+	int err;
 
-	snprintf(path, sizeof(path), "/proc/%d/stat", pid);
-	file = fopen(path, "r");
-	if (file == NULL) {
-		perror("Failed to open stat file");
+	err = clock_getcpuclockid(pid, &clk);
+	if (err) {
+		fprintf(stderr, "Failed to get clock ID: %s\n", strerror(err));
 		return -1;
 	}
 
-	/* Skip the first 13 fields and read the 14th and 15th */
-	fields = fscanf(file,
-			"%*d %*s %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu",
-			&utime, &stime);
-	fclose(file);
-
-	if (fields != 2) {
-		fprintf(stderr, "Failed to read stat file\n");
+	if (clock_gettime(clk, &ts) == -1) {
+		perror("Failed to get clock time");
 		return -1;
 	}
 
-	/* Calculate the total time spent in the process */
-	long total_time = utime + stime;
-	long ticks_per_second = sysconf(_SC_CLK_TCK);
-	float runtime_seconds = total_time * 1.0 / ticks_per_second;
+	return ts.tv_sec + ts.tv_nsec / 1e9;
+}
 
-	return runtime_seconds;
+/* Move parent off of CORE_ID so it doesn't share DL server budget */
+static int pin_parent_off_core(void)
+{
+	if (sched_getaffinity(0, sizeof(old_mask), &old_mask) != 0) {
+		perror("sched_getaffinity");
+		return -1;
+	}
+
+	for (int cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+		if (CPU_ISSET(cpu, &old_mask) && cpu != CORE_ID) {
+			cpu_set_t mask;
+
+			CPU_ZERO(&mask);
+			CPU_SET(cpu, &mask);
+			if (sched_setaffinity(0, sizeof(mask), &mask)) {
+				perror("sched_setaffinity");
+				return -1;
+			}
+			affinity_saved = true;
+			return 0;
+		}
+	}
+
+	return 1; /* No other CPU available */
 }
 
 static enum scx_test_status setup(void **ctx)
 {
 	struct rt_stall *skel;
+	int err;
 
 	if (!__COMPAT_struct_has_field("rq", "ext_server")) {
 		fprintf(stderr, "SKIP: ext DL server not supported\n");
@@ -131,6 +148,9 @@ static enum scx_test_status setup(void **ctx)
 	SCX_FAIL_IF(rt_stall__load(skel), "Failed to load skel");
 
 	*ctx = skel;
+
+	err = pin_parent_off_core();
+	SCX_FAIL_IF(err == -1, "Failed to pin parent CPU");
 
 	return SCX_TEST_PASS;
 }
@@ -145,11 +165,15 @@ static bool sched_stress_test(bool is_ext)
 	 * that the EXT deadline server is working correctly. A percentage
 	 * less than 4% indicates a bug where RT tasks can potentially
 	 * stall SCHED_EXT tasks, causing the test to fail.
+	 *
+	 * The DL server budget is per-CPU and shared with all other
+	 * EXT/FAIR tasks on CORE_ID (e.g., kthreads, ksoftirqd). The EXT
+	 * task may get slightly less than 5% on a noisy system due to this.
 	 */
 	const float expected_min_ratio = 0.04; /* 4% */
 	const char *class_str = is_ext ? "EXT" : "FAIR";
 
-	float ext_runtime, rt_runtime, actual_ratio;
+	float ext_runtime_start, rt_runtime_start, ext_runtime, rt_runtime, actual_ratio;
 	int ext_pid, rt_pid;
 	int ext_ready[2], rt_ready[2];
 	bool ret = false;
@@ -201,6 +225,23 @@ static bool sched_stress_test(bool is_ext)
 	if (!wait_ready(ext_ready[0]) || !wait_ready(rt_ready[0]))
 		goto out_kill;
 
+	/*
+	 * The parent can be delayed before reaching sleep(). Record each task's
+	 * CPU time right before calling sleep() so only time used during the
+	 * measurement window is counted.
+	 */
+	ext_runtime_start = get_process_runtime(ext_pid);
+	if (ext_runtime_start == -1) {
+		fprintf(stderr, "Failed to read %s task runtime\n", class_str);
+		goto out_kill;
+	}
+
+	rt_runtime_start = get_process_runtime(rt_pid);
+	if (rt_runtime_start == -1) {
+		fprintf(stderr, "Failed to read RT task runtime\n");
+		goto out_kill;
+	}
+
 	/* Let the processes run for the specified time */
 	sleep(RUN_TIME);
 
@@ -218,6 +259,8 @@ static bool sched_stress_test(bool is_ext)
 		goto out_kill;
 	}
 
+	ext_runtime = ext_runtime - ext_runtime_start;
+	rt_runtime = rt_runtime - rt_runtime_start;
 	/* Verify that the scx task got enough runtime */
 	actual_ratio = ext_runtime / (ext_runtime + rt_runtime);
 	fprintf(stderr, "%s task ran %.3fs, RT task ran %.3fs (%.2f%% of runtime)\n",
@@ -283,6 +326,9 @@ static enum scx_test_status run(void *ctx)
 static void cleanup(void *ctx)
 {
 	struct rt_stall *skel = ctx;
+
+	if (affinity_saved)
+		sched_setaffinity(0, sizeof(old_mask), &old_mask);
 
 	rt_stall__destroy(skel);
 }
