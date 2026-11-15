@@ -188,6 +188,40 @@
 },
 
 /*
+ * Creative Technology, Ltd Live! Cam Chat HD [VF0790]
+ * Same audio interface layout as the VF0770 above. The 24-bit altsettings
+ * advertise the same wMaxPacketSize as their 16-bit counterparts, so only
+ * 3/4 of the frames fit into each packet and the audio is chopped. Only
+ * report the 16-bit 48kHz altsetting.
+ */
+{
+	USB_AUDIO_DEVICE(0x041e, 0x4097),
+	QUIRK_DRIVER_INFO {
+		QUIRK_DATA_COMPOSITE {
+			{ QUIRK_DATA_STANDARD_MIXER(2) },
+			{
+				QUIRK_DATA_AUDIOFORMAT(3) {
+					.formats = SNDRV_PCM_FMTBIT_S16_LE,
+					.channels = 2,
+					.fmt_bits = 16,
+					.iface = 3,
+					.altsetting = 4,
+					.altset_idx = 4,
+					.endpoint = 0x82,
+					.ep_attr = 0x05,
+					.rates = SNDRV_PCM_RATE_48000,
+					.rate_min = 48000,
+					.rate_max = 48000,
+					.nr_rates = 1,
+					.rate_table = (unsigned int[]) { 48000 },
+				},
+			},
+			QUIRK_COMPOSITE_END
+		},
+	},
+},
+
+/*
  * HP Wireless Audio
  * When not ignored, causes instability issues for some users, forcing them to
  * skip the entire module.
