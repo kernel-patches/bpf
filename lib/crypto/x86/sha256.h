@@ -27,7 +27,6 @@ DEFINE_STATIC_CALL(sha256_blocks_x86, sha256_blocks_generic);
 	}
 
 DEFINE_X86_SHA256_FN(sha256_blocks_ssse3, sha256_transform_ssse3);
-DEFINE_X86_SHA256_FN(sha256_blocks_avx, sha256_transform_avx);
 DEFINE_X86_SHA256_FN(sha256_blocks_avx2, sha256_transform_rorx);
 DEFINE_X86_SHA256_FN(sha256_blocks_ni, sha256_ni_transform);
 
@@ -104,14 +103,9 @@ static void sha256_mod_init_arch(void)
 		   boot_cpu_has(X86_FEATURE_PHE_EN) &&
 		   boot_cpu_data.x86 >= 0x07) {
 		static_call_update(sha256_blocks_x86, sha256_blocks_phe);
-	} else if (boot_cpu_has(X86_FEATURE_AVX)) {
-		if (boot_cpu_has(X86_FEATURE_AVX2) &&
-		    boot_cpu_has(X86_FEATURE_BMI2))
-			static_call_update(sha256_blocks_x86,
-					   sha256_blocks_avx2);
-		else
-			static_call_update(sha256_blocks_x86,
-					   sha256_blocks_avx);
+	} else if (boot_cpu_has(X86_FEATURE_AVX2) &&
+		   boot_cpu_has(X86_FEATURE_BMI2)) {
+		static_call_update(sha256_blocks_x86, sha256_blocks_avx2);
 	} else if (boot_cpu_has(X86_FEATURE_SSSE3)) {
 		static_call_update(sha256_blocks_x86, sha256_blocks_ssse3);
 	}

@@ -330,7 +330,6 @@ libsha256-$(CONFIG_PPC) += powerpc/sha256-spe-asm.o
 libsha256-$(CONFIG_RISCV) += riscv/sha256-riscv64-zvknha_or_zvknhb-zvkb.o
 libsha256-$(CONFIG_SPARC) += sparc/sha256_asm.o
 libsha256-$(CONFIG_X86) += x86/sha256-ssse3-asm.o \
-			   x86/sha256-avx-asm.o \
 			   x86/sha256-avx2-asm.o \
 			   x86/sha256-ni-asm.o
 endif # CONFIG_CRYPTO_LIB_SHA256_ARCH
@@ -358,7 +357,6 @@ endif
 libsha512-$(CONFIG_RISCV) += riscv/sha512-riscv64-zvknhb-zvkb.o
 libsha512-$(CONFIG_SPARC) += sparc/sha512_asm.o
 libsha512-$(CONFIG_X86) += x86/sha512-ssse3-asm.o \
-			   x86/sha512-avx-asm.o \
 			   x86/sha512-avx2-asm.o
 endif # CONFIG_CRYPTO_LIB_SHA512_ARCH
 
