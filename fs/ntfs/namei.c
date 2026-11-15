@@ -911,6 +911,58 @@ static int ntfs_test_inode_attr(struct inode *vi, void *data)
 	return 0;
 }
 
+static int ntfs_match_dirty_attr(struct inode *vi, u64 mft_no, void *data)
+{
+	struct ntfs_inode *ni = NTFS_I(vi);
+	int found = 0;
+
+	if (ni->mft_no != mft_no || !NInoAttr(ni) ||
+	    ntfs_inode_is_named_stream(ni))
+		return 0;
+
+	spin_lock(&vi->i_lock);
+	if (!(inode_state_read(vi) & (I_NEW | I_CREATING | I_FREEING | I_WILL_FREE)) &&
+	    (mapping_tagged(vi->i_mapping, PAGECACHE_TAG_DIRTY) ||
+	     mapping_tagged(vi->i_mapping, PAGECACHE_TAG_WRITEBACK))) {
+		__iget(vi);
+		found = 1;
+	}
+	spin_unlock(&vi->i_lock);
+	return found;
+}
+
+/*
+ * Return with the target's mrec_lock held and its internal attributes clean.
+ * Rename also needs the source locked first. Drop both locks for writeback,
+ * then rescan under the locks to catch concurrent attribute conversions.
+ * Directory mrec_locks must not be held by the caller.
+ */
+static int ntfs_lock_unlink_inodes(struct ntfs_inode *ni,
+				   struct ntfs_inode *source_ni)
+{
+	struct inode *attr_vi;
+	int err;
+
+	for (;;) {
+		if (source_ni)
+			mutex_lock_nested(&source_ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
+		mutex_lock_nested(&ni->mrec_lock, source_ni ?
+				  NTFS_INODE_MUTEX_NORMAL_2 : NTFS_INODE_MUTEX_NORMAL);
+		attr_vi = find_inode_nowait(VFS_I(ni)->i_sb, ni->mft_no,
+					    ntfs_match_dirty_attr, NULL);
+		if (!attr_vi)
+			return 0;
+		mutex_unlock(&ni->mrec_lock);
+		if (source_ni)
+			mutex_unlock(&source_ni->mrec_lock);
+
+		err = filemap_write_and_wait(attr_vi->i_mapping);
+		iput(attr_vi);
+		if (err)
+			return err;
+	}
+}
+
 static void ntfs_cleanup_deleted_inode(struct ntfs_inode *ni)
 {
 	struct inode *attr_vi;
@@ -961,7 +1013,9 @@ static int ntfs_delete(struct ntfs_inode *ni, struct ntfs_inode *dir_ni,
 	ntfs_debug("Entering.\n");
 
 	if (need_lock == true) {
-		mutex_lock_nested(&ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
+		err = ntfs_lock_unlink_inodes(ni, NULL);
+		if (err)
+			return err;
 		mutex_lock_nested(&dir_ni->mrec_lock, NTFS_INODE_MUTEX_PARENT);
 	}
 
@@ -1454,9 +1508,13 @@ static int ntfs_rename(const struct mnt_idmap *idmap, struct inode *old_dir,
 
 	ntfs_set_volume_flags(vol, VOLUME_IS_DIRTY);
 
-	mutex_lock_nested(&old_ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
-	if (new_ni)
-		mutex_lock_nested(&new_ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL_2);
+	if (new_ni) {
+		err = ntfs_lock_unlink_inodes(new_ni, old_ni);
+		if (err)
+			goto out_names;
+	} else {
+		mutex_lock_nested(&old_ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
+	}
 
 	if (old_dir == new_dir) {
 		mutex_lock_nested(&old_dir_ni->mrec_lock, NTFS_INODE_MUTEX_PARENT);
@@ -1540,6 +1598,7 @@ err_out:
 	mutex_unlock(&old_ni->mrec_lock);
 	if (new_ni)
 		ntfs_cleanup_deleted_inode(new_ni);
+out_names:
 	if (uname_new)
 		kmem_cache_free(ntfs_name_cache, uname_new);
 	if (uname_old)

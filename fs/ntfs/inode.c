@@ -4093,9 +4093,11 @@ s64 ntfs_inode_attr_pwrite(struct inode *vi, s64 pos, s64 count, u8 *buf, bool s
 	/*
 	 * A zero-link attribute inode is evicted at the final iput(), even
 	 * if its base file has since been linked. Write its data before
-	 * eviction can discard the dirty pages.
+	 * eviction can discard the dirty pages. Also cover the interval after
+	 * unlink clears the base inode's link count but before attribute cleanup.
 	 */
-	if (!vi->i_nlink && !ntfs_inode_is_named_stream(ni))
+	if ((!vi->i_nlink || !VFS_I(base_ni)->i_nlink) &&
+	    !ntfs_inode_is_named_stream(ni))
 		sync = true;
 
 	if (ntfs_inode_is_named_stream(ni)) {
