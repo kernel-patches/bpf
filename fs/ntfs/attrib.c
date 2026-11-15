@@ -3039,8 +3039,13 @@ add_non_resident:
 		(val && (ntfs_inode_attr_pwrite(attr_vi, 0, size, val, false) != size))) {
 		err = -EIO;
 		ntfs_error(sb, "Failed to initialize just added attribute");
-		if (ntfs_attr_rm(attr_ni))
+		if (ntfs_attr_rm(attr_ni)) {
 			ntfs_error(sb, "Failed to remove just added attribute");
+		} else {
+			NInoClearDirty(attr_ni);
+			clear_nlink(attr_vi);
+			remove_inode_hash(attr_vi);
+		}
 		iput(attr_vi);
 		goto err_out;
 	}
