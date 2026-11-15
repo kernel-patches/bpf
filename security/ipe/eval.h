@@ -42,6 +42,7 @@ struct ipe_eval_ctx {
 	enum ipe_hook_type hook;
 
 	const struct file *file;
+	int file_err;
 	bool initramfs;
 #ifdef CONFIG_IPE_PROP_DM_VERITY
 	const struct ipe_bdev *ipe_bdev;

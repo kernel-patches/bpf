@@ -102,7 +102,11 @@ void ipe_build_eval_ctx(struct ipe_eval_ctx *ctx,
 
 	if (file) {
 		build_ipe_sb_ctx(ctx, file);
-		ino = d_real_inode(file->f_path.dentry);
+		ino = d_real_data_inode(file->f_path.dentry);
+		if (IS_ERR(ino)) {
+			ctx->file_err = PTR_ERR(ino);
+			return;
+		}
 		build_ipe_bdev_ctx(ctx, ino);
 		build_ipe_inode_ctx(ctx, ino);
 	}
@@ -333,6 +337,15 @@ int ipe_evaluate_event(const struct ipe_eval_ctx *const ctx)
 	if (!pol) {
 		rcu_read_unlock();
 		return 0;
+	}
+
+	/*
+	 * Without the inode hosting the data none of the properties of the
+	 * file can be evaluated. Refuse it unless IPE is permissive.
+	 */
+	if (ctx->file_err) {
+		rcu_read_unlock();
+		return READ_ONCE(enforce) ? -EACCES : 0;
 	}
 
 	if (ctx->op == IPE_OP_INVALID) {
