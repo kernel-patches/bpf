@@ -1010,16 +1010,17 @@ const struct xattr_handler * const ntfs_xattr_handlers[] = {
 // clang-format on
 
 #ifdef CONFIG_NTFS_FS_POSIX_ACL
-struct posix_acl *ntfs_get_acl(const struct mnt_idmap *idmap, struct dentry *dentry,
-			       int type)
+struct posix_acl *ntfs_get_acl(struct inode *inode, int type, bool rcu)
 {
-	struct inode *inode = d_inode(dentry);
 	struct ntfs_inode *ni = NTFS_I(inode);
 	const char *name;
 	size_t name_len;
 	struct posix_acl *acl;
 	int err;
 	void *buf = NULL;
+
+	if (rcu)
+		return ERR_PTR(-ECHILD);
 
 	/* Possible values of 'type' was already checked above. */
 	if (type == ACL_TYPE_ACCESS) {
@@ -1048,9 +1049,6 @@ struct posix_acl *ntfs_get_acl(const struct mnt_idmap *idmap, struct dentry *den
 		acl = NULL;
 	else
 		acl = ERR_PTR(err);
-
-	if (!IS_ERR(acl))
-		set_cached_acl(inode, type, acl);
 
 	kfree(buf);
 
