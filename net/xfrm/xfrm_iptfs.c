@@ -1914,6 +1914,13 @@ nospace:
 			continue;
 		}
 
+		/* The queued skb outlives our RCU section, so pin its dst. */
+		if (!skb_dst_force(skb)) {
+			XFRM_INC_STATS(net, LINUX_MIB_XFRMOUTERROR);
+			kfree_skb(skb);
+			continue;
+		}
+
 		/* Enqueue to send in tunnel */
 		ok = iptfs_enqueue(xtfs, skb);
 		if (!ok)
