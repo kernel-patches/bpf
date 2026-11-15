@@ -5515,6 +5515,7 @@ int ntfs_attr_rm(struct ntfs_inode *ni)
 	/* Free cluster allocation. */
 	if (NInoNonResident(ni)) {
 		struct ntfs_attr_search_ctx *ctx;
+		s64 freed;
 
 		err = ntfs_attr_map_whole_runlist(ni);
 		if (err)
@@ -5525,10 +5526,12 @@ int ntfs_attr_rm(struct ntfs_inode *ni)
 			return -ENOMEM;
 		}
 
-		ret = ntfs_cluster_free(ni, 0, -1, ctx);
-		if (ret < 0)
+		freed = ntfs_cluster_free(ni, 0, -1, ctx);
+		if (freed < 0) {
+			ret = freed;
 			ntfs_error(sb,
 				"Failed to free cluster allocation. Leaving inconstant metadata.\n");
+		}
 		ntfs_attr_put_search_ctx(ctx);
 	}
 
