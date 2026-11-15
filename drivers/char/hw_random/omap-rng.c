@@ -493,7 +493,7 @@ static int omap_rng_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_register;
 
-	ret = devm_hwrng_register(&pdev->dev, &priv->rng);
+	ret = hwrng_register(&priv->rng);
 	if (ret)
 		goto err_register;
 
@@ -520,6 +520,7 @@ static void omap_rng_remove(struct platform_device *pdev)
 {
 	struct omap_rng_dev *priv = platform_get_drvdata(pdev);
 
+	hwrng_unregister(&priv->rng);
 
 	priv->pdata->cleanup(priv);
 
