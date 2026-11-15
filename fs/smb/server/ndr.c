@@ -271,15 +271,15 @@ int ndr_decode_dos_attr(struct ndr *n, struct xattr_dos_attrib *da)
 
 		ret = ndr_read_int64(n, &da->create_time);
 	} else {
-		ret = ndr_read_int32(n, NULL);
+		ret = ndr_read_int32(n, &da->ea_size);
 		if (ret)
 			return ret;
 
-		ret = ndr_read_int64(n, NULL);
+		ret = ndr_read_int64(n, &da->size);
 		if (ret)
 			return ret;
 
-		ret = ndr_read_int64(n, NULL);
+		ret = ndr_read_int64(n, &da->alloc_size);
 		if (ret)
 			return ret;
 
@@ -287,7 +287,7 @@ int ndr_decode_dos_attr(struct ndr *n, struct xattr_dos_attrib *da)
 		if (ret)
 			return ret;
 
-		ret = ndr_read_int64(n, NULL);
+		ret = ndr_read_int64(n, &da->change_time);
 	}
 
 	return ret;
