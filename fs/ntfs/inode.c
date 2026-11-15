@@ -2955,6 +2955,10 @@ int __ntfs_write_inode(struct inode *vi, int sync)
 		return 0;
 	}
 
+	/* Failed creations retain I_CREATING after discard_new_inode(). */
+	if (inode_state_read_once(vi) & I_CREATING)
+		return 0;
+
 	/* igrab prevents vi from being evicted while mrec_lock is hold. */
 	if (igrab(vi) != NULL)
 		need_iput = true;
