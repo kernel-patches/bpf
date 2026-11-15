@@ -2064,7 +2064,7 @@ static int __ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_s
 		base_ni = ni;
 	else
 		base_ni = ni->ext.base_ntfs_ino;
-	sync = NInoAttr(ni) && !vi->i_nlink &&
+	sync = NInoAttr(ni) && (!vi->i_nlink || !VFS_I(base_ni)->i_nlink) &&
 		!ntfs_inode_is_named_stream(ni);
 	m = map_mft_record(base_ni);
 	if (IS_ERR(m)) {
