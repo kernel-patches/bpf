@@ -1485,11 +1485,9 @@ static inline u64 ttm_get_node_memory_size(int nid)
 /**
  * ttm_pool_mgr_init - Initialize globals
  *
- * @num_pages: default number of pages
- *
  * Initialize the global locks and lists for the MM shrinker.
  */
-int ttm_pool_mgr_init(unsigned long num_pages)
+int ttm_pool_mgr_init(void)
 {
 	unsigned int i;
 
