@@ -770,10 +770,8 @@ int netkit_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 			       attr->attach_flags, attr->relative_fd,
 			       attr->expected_revision);
 	if (!ret) {
-		if (entry != entry_new) {
+		if (entry != entry_new)
 			netkit_entry_update(dev, entry_new);
-			netkit_entry_sync();
-		}
 		bpf_mprog_commit(entry);
 	}
 out:
@@ -852,10 +850,8 @@ static int netkit_link_prog_attach(struct bpf_link *link, u32 flags,
 	ret = bpf_mprog_attach(entry, &entry_new, link->prog, link, NULL, flags,
 			       id_or_fd, revision);
 	if (!ret) {
-		if (entry != entry_new) {
+		if (entry != entry_new)
 			netkit_entry_update(dev, entry_new);
-			netkit_entry_sync();
-		}
 		bpf_mprog_commit(entry);
 	}
 	return ret;
