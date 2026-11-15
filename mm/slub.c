@@ -2696,9 +2696,10 @@ struct rcu_delayed_free {
  * - __kcsan_check_access()
  */
 static __always_inline
-bool slab_free_hook(struct kmem_cache *s, void *x, bool init,
-		    bool after_rcu_delay)
+bool slab_free_hook(struct kmem_cache *s, void *x, unsigned int free_flags)
 {
+	bool init = free_flags & SLAB_FREE_INIT;
+	bool after_rcu_delay = free_flags & SLAB_FREE_AFTER_RCU_DELAY;
 	/* Are the object contents still accessible? */
 	bool still_accessible = (s->flags & SLAB_TYPESAFE_BY_RCU) && !after_rcu_delay;
 
@@ -2788,10 +2789,10 @@ bool slab_free_freelist_hook(struct kmem_cache *s, void **head, void **tail,
 	void *object;
 	void *next = *head;
 	void *old_tail = *tail;
-	bool init;
+	unsigned int free_flags = SLAB_FREE_DEFAULT;
 
 	if (is_kfence_address(next)) {
-		slab_free_hook(s, next, false, false);
+		slab_free_hook(s, next, free_flags);
 		return false;
 	}
 
@@ -2799,14 +2800,15 @@ bool slab_free_freelist_hook(struct kmem_cache *s, void **head, void **tail,
 	*head = NULL;
 	*tail = NULL;
 
-	init = slab_want_init_on_free(s);
+	if (slab_want_init_on_free(s))
+		free_flags |= SLAB_FREE_INIT;
 
 	do {
 		object = next;
 		next = get_freepointer(s, object);
 
 		/* If object's reuse doesn't have to be delayed */
-		if (likely(slab_free_hook(s, object, init, false))) {
+		if (likely(slab_free_hook(s, object, free_flags))) {
 			/* Move object to the new freelist */
 			set_freepointer(s, object, *head);
 			*head = object;
@@ -3027,10 +3029,13 @@ static void sheaf_flush_unused(struct kmem_cache *s, struct slab_sheaf *sheaf)
 static bool __rcu_free_sheaf_prepare(struct kmem_cache *s,
 				     struct slab_sheaf *sheaf)
 {
-	bool init = slab_want_init_on_free(s);
+	unsigned int free_flags = SLAB_FREE_AFTER_RCU_DELAY;
 	void **p = &sheaf->objects[0];
 	unsigned int i = 0;
 	bool pfmemalloc = false;
+
+	if (slab_want_init_on_free(s))
+		free_flags |= SLAB_FREE_INIT;
 
 	while (i < sheaf->size) {
 		struct slab *slab = virt_to_slab(p[i]);
@@ -3038,7 +3043,7 @@ static bool __rcu_free_sheaf_prepare(struct kmem_cache *s,
 		memcg_slab_free_hook(s, slab, p + i, 1);
 		alloc_tagging_slab_free_hook(s, slab, p + i, 1);
 
-		if (unlikely(!slab_free_hook(s, p[i], init, true))) {
+		if (unlikely(!slab_free_hook(s, p[i], free_flags))) {
 			p[i] = p[--sheaf->size];
 			continue;
 		}
@@ -6483,9 +6488,12 @@ no_empty:
  */
 static void free_to_pcs_bulk(struct kmem_cache *s, size_t size, void **p)
 {
-	bool init = slab_want_init_on_free(s);
+	unsigned int free_flags = SLAB_FREE_DEFAULT;
 	void **remote_objects = p;
 	unsigned int remote_nr = 0;
+
+	if (slab_want_init_on_free(s))
+		free_flags |= SLAB_FREE_INIT;
 
 	/*
 	 * Process the free hooks and separate out remote objects by
@@ -6501,7 +6509,7 @@ static void free_to_pcs_bulk(struct kmem_cache *s, size_t size, void **p)
 		memcg_slab_free_hook(s, slab, p + i, 1);
 		alloc_tagging_slab_free_hook(s, slab, p + i, 1);
 
-		if (unlikely(!slab_free_hook(s, p[i], init, false))) {
+		if (unlikely(!slab_free_hook(s, p[i], free_flags))) {
 			p[i] = p[--size];
 			continue;
 		}
@@ -6631,10 +6639,15 @@ static __fastpath_inline
 void slab_free(struct kmem_cache *s, struct slab *slab, void *object,
 	       unsigned long addr)
 {
+	unsigned int free_flags = SLAB_FREE_DEFAULT;
+
+	if (slab_want_init_on_free(s))
+		free_flags |= SLAB_FREE_INIT;
+
 	memcg_slab_free_hook(s, slab, &object, 1);
 	alloc_tagging_slab_free_hook(s, slab, &object, 1);
 
-	if (unlikely(!slab_free_hook(s, object, slab_want_init_on_free(s), false)))
+	if (unlikely(!slab_free_hook(s, object, free_flags)))
 		return;
 
 	if (likely(can_free_to_pcs(slab)) && likely(free_to_pcs(s, object, true)))
@@ -6650,10 +6663,14 @@ static noinline
 void memcg_alloc_abort_single(struct kmem_cache *s, void *object)
 {
 	struct slab *slab = virt_to_slab(object);
+	unsigned int free_flags = SLAB_FREE_DEFAULT;
+
+	if (slab_want_init_on_free(s))
+		free_flags |= SLAB_FREE_INIT;
 
 	alloc_tagging_slab_free_hook(s, slab, &object, 1);
 
-	if (likely(slab_free_hook(s, object, slab_want_init_on_free(s), false)))
+	if (likely(slab_free_hook(s, object, free_flags)))
 		__slab_free(s, slab, object, object, 1, _RET_IP_);
 }
 #endif
@@ -6682,6 +6699,7 @@ static void slab_free_after_rcu_debug(struct rcu_head *rcu_head)
 	void *object = delayed_free->object;
 	struct slab *slab = virt_to_slab(object);
 	struct kmem_cache *s;
+	unsigned int free_flags = SLAB_FREE_AFTER_RCU_DELAY;
 
 	kfree(delayed_free);
 
@@ -6695,8 +6713,11 @@ static void slab_free_after_rcu_debug(struct rcu_head *rcu_head)
 	if (WARN_ON(!(s->flags & SLAB_TYPESAFE_BY_RCU)))
 		return;
 
+	if (slab_want_init_on_free(s))
+		free_flags |= SLAB_FREE_INIT;
+
 	/* resume freeing */
-	if (slab_free_hook(s, object, slab_want_init_on_free(s), true)) {
+	if (slab_free_hook(s, object, free_flags)) {
 		__slab_free(s, slab, object, object, 1, _THIS_IP_);
 		stat(s, FREE_SLOWPATH);
 	}

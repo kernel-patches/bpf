@@ -24,8 +24,10 @@
 #define SLAB_ALLOC_NO_RECURSE	0x04 /* prevent kmalloc() recursion */
 #define SLAB_ALLOC_NO_OBJ_EXT	0x08 /* prevent obj_exts array allocation */
 
-#define SLAB_FREE_DEFAULT	0x00 /* no flags */
-#define SLAB_FREE_NOLOCK	0x01 /* spinning not allowed */
+#define SLAB_FREE_DEFAULT		0x00 /* no flags */
+#define SLAB_FREE_NOLOCK		0x01 /* spinning not allowed */
+#define SLAB_FREE_INIT			0x02 /* zero the object on free */
+#define SLAB_FREE_AFTER_RCU_DELAY	0x04 /* RCU grace period has elapsed */
 
 static inline unsigned int to_alloc_flags(unsigned int free_flags)
 {
