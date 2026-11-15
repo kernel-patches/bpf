@@ -25,6 +25,7 @@
 #include <linux/cpu.h>
 #include <linux/errno.h>
 #include <linux/init.h>
+#include <linux/jump_label.h>
 #include <linux/string.h>
 #include <linux/ioport.h>
 #include <linux/panic_notifier.h>
@@ -578,6 +579,10 @@ setup_arch(char **cmdline_p)
 	   DMA windows and the like.  */
 	if (alpha_mv.init_arch)
 		alpha_mv.init_arch();
+
+	/* Early options may change static keys and configure DMA CMA. */
+	jump_label_init();
+	parse_early_param();
 
 	/* Reserve standard resources.  */
 	reserve_std_resources();
