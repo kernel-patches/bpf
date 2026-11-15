@@ -336,12 +336,17 @@ static SUNXI_CCU_MP_WITH_MUX_GATE(emce_clk, "emce", ce_parents, 0x6b0,
 static SUNXI_CCU_GATE(bus_emce_clk, "bus-emce", "psi-ahb1-ahb2",
 		      0x6bc, BIT(0), 0);
 
+/*
+ * The mux only switches while both parents run. pll-ve is off at boot, so
+ * moving the clock away from it would otherwise leave the VP9 decoder
+ * without a clock until pll-ve gets enabled for the video engine.
+ */
 static const char * const vp9_parents[] = { "pll-ve", "pll-periph0-2x" };
 static SUNXI_CCU_M_WITH_MUX_GATE(vp9_clk, "vp9", vp9_parents, 0x6c0,
 				       0, 3,	/* M */
 				       24, 1,	/* mux */
 				       BIT(31),	/* gate */
-				       0);
+				       CLK_OPS_PARENT_ENABLE);
 
 static SUNXI_CCU_GATE(bus_vp9_clk, "bus-vp9", "psi-ahb1-ahb2",
 		      0x6cc, BIT(0), 0);

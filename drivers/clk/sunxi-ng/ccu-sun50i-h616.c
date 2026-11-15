@@ -489,8 +489,17 @@ static SUNXI_CCU_MP_WITH_MUX_GATE(spi1_clk, "spi1", nand_spi_parents, 0x944,
 static SUNXI_CCU_GATE(bus_spi0_clk, "bus-spi0", "ahb3", 0x96c, BIT(0), 0);
 static SUNXI_CCU_GATE(bus_spi1_clk, "bus-spi1", "ahb3", 0x96c, BIT(1), 0);
 
-static SUNXI_CCU_GATE(emac_25m_clk, "emac-25m", "ahb3", 0x970,
-		      BIT(31) | BIT(30), 0);
+/*
+ * The EPHY 25 MHz clock is PLL_PERI0(1X) / 24, gated by both the special
+ * clock gate (bit 31) and the PLL_PERI0 input gate (bit 30).
+ */
+static const struct clk_hw *emac_25m_parents[] = {
+	&pll_periph0_clk.common.hw
+};
+
+static SUNXI_CCU_GATE_HWS_WITH_PREDIV(emac_25m_clk, "emac-25m",
+				      emac_25m_parents, 0x970,
+				      BIT(31) | BIT(30), 24, 0);
 
 static SUNXI_CCU_GATE(bus_emac0_clk, "bus-emac0", "ahb3", 0x97c, BIT(0), 0);
 static SUNXI_CCU_GATE(bus_emac1_clk, "bus-emac1", "ahb3", 0x97c, BIT(1), 0);
@@ -520,7 +529,7 @@ static struct ccu_div spdif_clk = {
 		.hw.init	= CLK_HW_INIT_PARENTS("spdif",
 						      audio_parents,
 						      &ccu_div_ops,
-						      0),
+						      CLK_SET_RATE_PARENT),
 	},
 };
 
@@ -1235,12 +1244,15 @@ static int sun50i_h616_ccu_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	/*
+	 * Re-lock the CPU PLL after any rate changes. Must be registered
+	 * before the mux notifier, so CPU goes back to a locked PLL.
+	 */
+	ccu_pll_notifier_register(&sun50i_h616_pll_cpu_nb);
+
 	/* Reparent CPU during CPU PLL rate changes */
 	ccu_mux_notifier_register(pll_cpux_clk.common.hw.clk,
 				  &sun50i_h616_cpu_nb);
-
-	/* Re-lock the CPU PLL after any rate changes */
-	ccu_pll_notifier_register(&sun50i_h616_pll_cpu_nb);
 
 	/* Reparent GPU during GPU PLL rate changes */
 	ccu_mux_notifier_register(pll_gpu_clk.common.hw.clk,

@@ -195,6 +195,8 @@
 	vmmc-supply = <&reg_dcdc1>;
 	vqmmc-supply = <&reg_dcdc1>;
 	bus-width = <8>;
+	max-frequency = <37500000>;
+	cap-mmc-hw-reset;
 	non-removable;
 	status = "okay";
 };
