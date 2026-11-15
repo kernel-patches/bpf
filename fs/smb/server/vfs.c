@@ -2334,6 +2334,10 @@ int ksmbd_vfs_set_init_posix_acl(const struct mnt_idmap *idmap,
 	}
 	posix_state_to_acl(&acl_state, acls->a_entries);
 
+	rc = mnt_want_write(path->mnt);
+	if (rc)
+		goto out;
+
 	rc = set_posix_acl(idmap, dentry, ACL_TYPE_ACCESS, acls);
 	if (rc < 0)
 		ksmbd_debug(SMB, "Set posix acl(ACL_TYPE_ACCESS) failed, rc : %d\n",
@@ -2345,7 +2349,9 @@ int ksmbd_vfs_set_init_posix_acl(const struct mnt_idmap *idmap,
 			ksmbd_debug(SMB, "Set posix acl(ACL_TYPE_DEFAULT) failed, rc : %d\n",
 				    rc);
 	}
+	mnt_drop_write(path->mnt);
 
+out:
 	free_acl_state(&acl_state);
 	posix_acl_release(acls);
 	return rc;

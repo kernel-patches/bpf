@@ -3719,7 +3719,7 @@ static noinline int smb2_set_stream_name_xattr(const struct path *path,
 			};
 			rc = ksmbd_vfs_setxattr(idmap, path, xattr_stream_name,
 						(void *)afpinfo_empty,
-						sizeof(afpinfo_empty), 0, false);
+						sizeof(afpinfo_empty), 0, true);
 			return rc < 0 ? rc : 0;
 		}
 		ksmbd_debug(SMB, "XATTR stream name lookup failed: %d\n", rc);
@@ -3729,7 +3729,7 @@ static noinline int smb2_set_stream_name_xattr(const struct path *path,
 	if (!test_tree_conn_flag(fp->tcon, KSMBD_TREE_CONN_FLAG_WRITABLE))
 		return -EACCES;
 
-	rc = ksmbd_vfs_setxattr(idmap, path, xattr_stream_name, NULL, 0, 0, false);
+	rc = ksmbd_vfs_setxattr(idmap, path, xattr_stream_name, NULL, 0, 0, true);
 	if (rc < 0)
 		pr_err("Failed to store XATTR stream name :%d\n", rc);
 	else
@@ -3944,7 +3944,7 @@ static int smb2_create_sd_buffer(struct ksmbd_work *work,
 	    sizeof(struct create_sd_buf_req))
 		return -EINVAL;
 	return set_info_sec(work->conn, work->tcon, path, &sd_buf->ntsd,
-			    le32_to_cpu(sd_buf->ccontext.DataLength), true, false,
+			    le32_to_cpu(sd_buf->ccontext.DataLength), true, true,
 			    true, true);
 }
 
@@ -5075,7 +5075,7 @@ resolve_path:
 
 			rc = smb2_set_ea(&ea_buf->ea,
 					 le32_to_cpu(ea_buf->ccontext.DataLength),
-					 &path, false);
+					 &path, true);
 			if (rc == -EOPNOTSUPP)
 				rc = 0;
 			else if (rc)
@@ -5280,7 +5280,7 @@ resolve_path:
 								    &path,
 								    pntsd,
 								    pntsd_size,
-								    false);
+								    true);
 					kvfree(pntsd);
 					if (rc)
 						pr_err("failed to store ntacl in xattr : %d\n",

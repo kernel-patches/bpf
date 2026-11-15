@@ -1443,7 +1443,7 @@ pass:
 			pntsd_size += sizeof(struct smb_acl) + nt_size;
 		}
 
-		ksmbd_vfs_set_sd_xattr(conn, idmap, path, pntsd, pntsd_size, false);
+		ksmbd_vfs_set_sd_xattr(conn, idmap, path, pntsd, pntsd_size, true);
 		kfree(pntsd);
 	}
 
