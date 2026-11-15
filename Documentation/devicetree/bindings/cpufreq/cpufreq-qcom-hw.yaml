@@ -28,6 +28,7 @@ properties:
               - qcom,sdm670-cpufreq-hw
               - qcom,sdm845-cpufreq-hw
               - qcom,sm6115-cpufreq-hw
+              - qcom,sm6125-cpufreq-hw
               - qcom,sm6350-cpufreq-hw
               - qcom,sm8150-cpufreq-hw
           - const: qcom,cpufreq-hw
@@ -146,6 +147,7 @@ allOf:
               - qcom,sdm845-cpufreq-hw
               - qcom,sm4450-cpufreq-epss
               - qcom,sm6115-cpufreq-hw
+              - qcom,sm6125-cpufreq-hw
               - qcom,sm6350-cpufreq-hw
               - qcom,sm6375-cpufreq-epss
     then:
