@@ -6648,7 +6648,11 @@ void defer_kfree_rcu(struct kvfree_rcu_head *head)
 /* Must be called before flush_rcu_sheaves_on_cache() */
 void deferred_work_barrier(void)
 {
+	static DEFINE_MUTEX(barrier_mutex);
 	int cpu;
+
+	/* irq_work_sync() may use rcuwait that requires serialization */
+	guard(mutex)(&barrier_mutex);
 
 	for_each_possible_cpu(cpu)
 		irq_work_sync(&per_cpu_ptr(&deferred_percpu_work, cpu)->work);
