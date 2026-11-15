@@ -19,6 +19,7 @@ obj-$(CONFIG_SRM_ENV)	+= srm_env.o
 obj-$(CONFIG_MODULES)	+= module.o
 obj-$(CONFIG_PERF_EVENTS) += perf_event.o
 obj-$(CONFIG_HAVE_PERF_REGS) += perf_regs.o
+obj-$(CONFIG_JUMP_LABEL) += jump_label.o
 obj-$(CONFIG_RTC_DRV_ALPHA) += rtc.o
 
 ifdef CONFIG_ALPHA_GENERIC
