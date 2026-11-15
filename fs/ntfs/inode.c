@@ -4090,6 +4090,14 @@ s64 ntfs_inode_attr_pwrite(struct inode *vi, s64 pos, s64 count, u8 *buf, bool s
 
 	WARN_ON(!NInoAttr(ni));
 
+	/*
+	 * A zero-link attribute inode is evicted at the final iput(), even
+	 * if its base file has since been linked. Write its data before
+	 * eviction can discard the dirty pages.
+	 */
+	if (!vi->i_nlink && !ntfs_inode_is_named_stream(ni))
+		sync = true;
+
 	if (ntfs_inode_is_named_stream(ni)) {
 		if (NInoEncrypted(ni))
 			return -EACCES;

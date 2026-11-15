@@ -16,6 +16,7 @@
  * Copyright (c) 2010 Erik Larsson
  */
 
+#include <linux/bio.h>
 #include <linux/string_choices.h>
 #include <linux/writeback.h>
 #include <linux/iomap.h>
@@ -1961,6 +1962,40 @@ int ntfs_resident_attr_value_resize(struct mft_record *m, struct attr_record *a,
 	return 0;
 }
 
+/* Write the resident value to its new clusters before committing conversion. */
+static int ntfs_attr_write_conversion(struct ntfs_volume *vol, struct folio *folio,
+				      const struct runlist_element *rl, u32 size)
+{
+	unsigned int offset = 0;
+
+	size = round_up(size, vol->sector_size);
+	while (size) {
+		struct bio *bio;
+		unsigned int len;
+		int err;
+
+		if (!rl->length || rl->lcn < 0)
+			return -EIO;
+		len = min_t(s64, size, ntfs_cluster_to_bytes(vol, rl->length));
+		bio = bio_alloc(vol->sb->s_bdev, 1, REQ_OP_WRITE | REQ_SYNC,
+				GFP_NOIO);
+		bio->bi_iter.bi_sector =
+			ntfs_bytes_to_bio_sector(ntfs_cluster_to_bytes(vol, rl->lcn));
+		if (!bio_add_folio(bio, folio, len, offset)) {
+			bio_put(bio);
+			return -EIO;
+		}
+		err = submit_bio_wait(bio);
+		bio_put(bio);
+		if (err)
+			return err;
+		offset += len;
+		size -= len;
+		rl++;
+	}
+	return 0;
+}
+
 /*
  * ntfs_attr_make_non_resident - convert a resident to a non-resident attribute
  * @ni:		ntfs inode describing the attribute to convert
@@ -2004,6 +2039,7 @@ static int __ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_s
 	int mp_size, mp_ofs, name_ofs, arec_size, err, err2;
 	u32 attr_size;
 	u8 old_res_attr_flags;
+	bool sync;
 
 	if (NInoNonResident(ni)) {
 		ntfs_warning(vol->sb,
@@ -2028,6 +2064,8 @@ static int __ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_s
 		base_ni = ni;
 	else
 		base_ni = ni->ext.base_ntfs_ino;
+	sync = NInoAttr(ni) && !vi->i_nlink &&
+		!ntfs_inode_is_named_stream(ni);
 	m = map_mft_record(base_ni);
 	if (IS_ERR(m)) {
 		err = PTR_ERR(m);
@@ -2150,6 +2188,18 @@ static int __ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_s
 		folio_mark_uptodate(folio);
 	}
 
+	/*
+	 * A zero-link attribute inode can be evicted by the caller's iput().
+	 * Write its data before changing the record so an I/O failure leaves
+	 * the resident value intact. Normal writeback would take mrec_lock,
+	 * which callers may already hold.
+	 */
+	if (folio && sync) {
+		err = ntfs_attr_write_conversion(vol, folio, rl, attr_size);
+		if (err)
+			goto rl_err_out;
+	}
+
 	/* Backup the attribute flag. */
 	old_res_attr_flags = a->data.resident.flags;
 	/* Resize the resident part of the attribute record. */
@@ -2238,7 +2288,8 @@ static int __ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_s
 	unmap_mft_record(base_ni);
 	up_write(&ni->runlist.lock);
 	if (folio) {
-		iomap_dirty_folio(vi->i_mapping, folio);
+		if (!sync)
+			iomap_dirty_folio(vi->i_mapping, folio);
 		folio_unlock(folio);
 		folio_put(folio);
 	}
@@ -5040,8 +5091,11 @@ attr_resize_again:
 			continue;
 		}
 
-		if (__ntfs_attr_make_non_resident(NTFS_I(tvi), value_len, true)) {
+		err = __ntfs_attr_make_non_resident(NTFS_I(tvi), value_len, true);
+		if (err) {
 			iput(tvi);
+			if (err != -ENOSPC && err != -EPERM && err != -EAGAIN)
+				goto put_err_out;
 			continue;
 		}
 
