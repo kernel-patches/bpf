@@ -342,12 +342,14 @@ static int process_measurement(struct file *file, const struct cred *cred,
 
 	/*
 	 * On stacked filesystems, detect and re-evaluate file data and
-	 * metadata changes.
+	 * metadata changes. If the inode hosting the data can't be resolved
+	 * we can't tell whether the data changed. Re-evaluate the file then
+	 * and let ima_collect_measurement() fail.
 	 */
-	real_inode = d_real_inode(file_dentry(file));
+	real_inode = d_real_data_inode(file_dentry(file));
 	if (real_inode != inode &&
 	    (action & IMA_DO_MASK) && (iint->flags & IMA_DONE_MASK)) {
-		if (!IS_I_VERSION(real_inode) ||
+		if (IS_ERR(real_inode) || !IS_I_VERSION(real_inode) ||
 		    integrity_inode_attrs_changed(&iint->real_inode,
 						  real_inode)) {
 			iint->flags &= ~IMA_DONE_MASK;
