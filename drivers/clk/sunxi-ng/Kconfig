@@ -127,6 +127,7 @@ config SUN8I_DE2_CCU
 	tristate "Support for the Allwinner SoCs DE2 CCU"
 	default ARCH_SUNXI
 	depends on MACH_SUN8I || ARM64 || RISCV || COMPILE_TEST
+	select REGMAP_MMIO
 
 config SUN8I_R40_CCU
 	tristate "Support for the Allwinner R40 CCU"
