@@ -874,15 +874,24 @@ int v4l2_m2m_streamoff(struct file *file, struct v4l2_m2m_ctx *m2m_ctx,
 	unsigned long flags_job, flags;
 	int ret;
 
+	q_ctx = get_queue_ctx(m2m_ctx, type);
+	m2m_dev = m2m_ctx->m2m_dev;
+
+	if (type != q_ctx->q.type)
+		return -EINVAL;
+
 	/* wait until the current context is dequeued from job_queue */
 	v4l2_m2m_cancel_job(m2m_ctx);
 
-	q_ctx = get_queue_ctx(m2m_ctx, type);
 	ret = vb2_streamoff(&q_ctx->q, type);
-	if (ret)
+	if (ret) {
+		spin_lock_irqsave(&m2m_dev->job_spinlock, flags_job);
+		m2m_ctx->job_flags &= ~TRANS_ABORT;
+		spin_unlock_irqrestore(&m2m_dev->job_spinlock, flags_job);
+		v4l2_m2m_try_schedule(m2m_ctx);
 		return ret;
+	}
 
-	m2m_dev = m2m_ctx->m2m_dev;
 	spin_lock_irqsave(&m2m_dev->job_spinlock, flags_job);
 	/* We should not be scheduled anymore, since we're dropping a queue. */
 	if (m2m_ctx->job_flags & TRANS_QUEUED)
