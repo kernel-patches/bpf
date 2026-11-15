@@ -1230,7 +1230,8 @@ void ipv6_sysctl_unregister(void);
 int ipv6_sock_mc_join(struct sock *sk, int ifindex,
 		      const struct in6_addr *addr);
 int ipv6_sock_mc_join_ssm(struct sock *sk, int ifindex,
-			  const struct in6_addr *addr, unsigned int mode);
+			  const struct in6_addr *addr, unsigned int mode,
+			  int *resolved_ifindex);
 int ipv6_sock_mc_drop(struct sock *sk, int ifindex,
 		      const struct in6_addr *addr);
 

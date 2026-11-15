@@ -164,15 +164,18 @@ static int do_ipv6_mcast_group_source(struct sock *sk, int optname,
 		add = 0;
 	} else if (optname == MCAST_JOIN_SOURCE_GROUP) {
 		struct sockaddr_in6 *psin6;
+		int resolved_ifindex;
 		int retv;
 
 		psin6 = (struct sockaddr_in6 *)&greqs.gsr_group;
 		retv = ipv6_sock_mc_join_ssm(sk, greqs.gsr_interface,
 					     &psin6->sin6_addr,
-					     MCAST_INCLUDE);
+					     MCAST_INCLUDE,
+					     &resolved_ifindex);
 		/* prior join w/ different source is ok */
 		if (retv && retv != -EADDRINUSE)
 			return retv;
+		greqs.gsr_interface = resolved_ifindex;
 		omode = MCAST_INCLUDE;
 		add = 1;
 	} else /* MCAST_LEAVE_SOURCE_GROUP */ {
