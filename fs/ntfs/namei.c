@@ -429,6 +429,7 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 	struct mft_record *ni_mrec, *dni_mrec;
 	struct super_block *sb = dir_ni->vol->sb;
 	struct inode *rollback_data_vi = NULL, *rollback_sd_vi = NULL;
+	struct inode *rollback_rp_vi = NULL;
 	__le64 parent_mft_ref;
 	u64 child_mft_ref;
 	__le16 ea_size;
@@ -740,8 +741,13 @@ err_out:
 			ntfs_error(sb, "Failed to roll back DATA attribute.\n");
 	}
 
-	if (rollback_reparse)
-		ntfs_delete_reparse_index(ni);
+	if (rollback_reparse) {
+		if (ntfs_delete_reparse_index(ni) < 0)
+			ntfs_error(sb, "Failed to roll back reparse index entry.");
+		if (ntfs_attr_remove(ni, AT_REPARSE_POINT, AT_UNNAMED, 0,
+				     &rollback_rp_vi))
+			ntfs_error(sb, "Failed to roll back REPARSE_POINT attribute.");
+	}
 	/*
 	 * Free extent MFT records (should not exist any with current
 	 * ntfs_create implementation, but for any case if something will be
@@ -766,6 +772,8 @@ err_out:
 	mutex_unlock(&dir_ni->mrec_lock);
 	mutex_unlock(&ni->mrec_lock);
 
+	if (rollback_rp_vi)
+		iput(rollback_rp_vi);
 	if (rollback_data_vi)
 		iput(rollback_data_vi);
 	if (rollback_sd_vi)
