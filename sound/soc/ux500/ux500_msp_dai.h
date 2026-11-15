@@ -34,7 +34,6 @@ enum ux500_msp_clock_id {
 
 struct ux500_msp_i2s_drvdata {
 	struct ux500_msp *msp;
-	struct regulator *reg_vape;
 	unsigned int fmt;
 	unsigned int configured;
 	unsigned int tx_mask;
