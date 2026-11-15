@@ -1834,6 +1834,34 @@ static noinline void check_create_range_5(struct xarray *xa,
 	xa_destroy(xa);
 }
 
+#ifdef CONFIG_XARRAY_MULTI
+static noinline void check_create_range_spare(struct xarray *xa)
+{
+	XA_STATE_ORDER(xas, xa, 0, XA_CHUNK_SHIFT);
+	bool spare_left;
+
+	XA_BUG_ON(xa, !xa_empty(xa));
+
+	/* Model a failed allocation followed by a successful xas_nomem(). */
+	xas_set_err(&xas, -ENOMEM);
+	XA_BUG_ON(xa, !xas_nomem(&xas, GFP_KERNEL));
+
+	/* Model another user populating the tree before the retry. */
+	xa_insert_index(xa, 0);
+	xa_insert_index(xa, 1);
+
+	xas_lock(&xas);
+	xas_create_range(&xas);
+	xas_unlock(&xas);
+
+	XA_BUG_ON(xa, xas_error(&xas));
+	spare_left = xas.xa_alloc != NULL;
+	xas_destroy(&xas);
+	XA_BUG_ON(xa, spare_left);
+	xa_destroy(xa);
+}
+#endif
+
 static noinline void check_create_range(struct xarray *xa)
 {
 	unsigned int order;
@@ -1867,6 +1895,9 @@ static noinline void check_create_range(struct xarray *xa)
 	}
 
 	check_create_range_3();
+#ifdef CONFIG_XARRAY_MULTI
+	check_create_range_spare(xa);
+#endif
 }
 
 static noinline void __check_store_range(struct xarray *xa, unsigned long first,
