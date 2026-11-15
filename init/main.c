@@ -28,6 +28,7 @@
 #include <linux/init.h>
 #include <linux/initrd.h>
 #include <linux/memblock.h>
+#include <linux/overflow.h>
 #include <linux/acpi.h>
 #include <linux/bootconfig.h>
 #include <linux/console.h>
@@ -1275,7 +1276,7 @@ static void __init do_ctors(void)
 #ifdef CONFIG_KALLSYMS
 struct blacklist_entry {
 	struct list_head next;
-	char *buf;
+	char buf[];
 };
 
 static __initdata_or_module LIST_HEAD(blacklisted_initcalls);
@@ -1290,8 +1291,8 @@ static int __init initcall_blacklist(char *str)
 		size_t buf_size = strlen(str_entry) + 1;
 
 		pr_debug("blacklisting initcall %s\n", str_entry);
-		entry = memblock_alloc_or_panic(sizeof(*entry), SMP_CACHE_BYTES);
-		entry->buf = memblock_alloc_or_panic(buf_size, SMP_CACHE_BYTES);
+		entry = memblock_alloc_or_panic(struct_size(entry, buf, buf_size),
+						SMP_CACHE_BYTES);
 		strscpy(entry->buf, str_entry, buf_size);
 		list_add(&entry->next, &blacklisted_initcalls);
 	}
