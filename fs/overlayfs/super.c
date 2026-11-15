@@ -42,7 +42,7 @@ static struct dentry *ovl_d_real(struct dentry *dentry, enum d_real_type type)
 	}
 
 	if (!d_is_reg(dentry)) {
-		/* d_real_inode() is only relevant for regular files */
+		/* d_real() is only relevant for regular files */
 		return dentry;
 	}
 
@@ -57,17 +57,18 @@ static struct dentry *ovl_d_real(struct dentry *dentry, enum d_real_type type)
 	}
 
 	/*
-	 * Best effort lazy lookup of lowerdata for D_REAL_DATA case to return
-	 * the real lowerdata dentry. Callers may ask for files that were never
-	 * opened, e.g. for uprobes or O_PATH files, so the lookup can fail
-	 * here. Return the overlayfs dentry then.
+	 * Lazy lookup of lowerdata for the D_REAL_DATA case to return the real
+	 * lowerdata dentry. Callers may ask for files that were never opened,
+	 * e.g., for uprobes or O_PATH files, and the lookup or the verity
+	 * validation can fail. Return the error then, just like ovl_open()
+	 * would. Callers of d_real() have to deal with that.
 	 */
 	err = ovl_verify_lowerdata(dentry);
 	if (err)
-		return dentry;
+		return ERR_PTR(err);
 	lower = ovl_dentry_lowerdata(dentry);
-	if (!lower)
-		goto bug;
+	if (WARN_ON_ONCE(!lower))
+		return ERR_PTR(-EIO);
 
 real_lower:
 	/* Handle recursion into stacked lower fs */
