@@ -3580,7 +3580,14 @@ static int smb2_set_ea(struct smb2_ea_info *eabuf, unsigned int buf_len,
 		if (!eabuf->EaNameLength)
 			goto next;
 
-		if (eabuf->name[eabuf->EaNameLength]) {
+		/*
+		 * The name is EaNameLength bytes and a terminating NUL, with no
+		 * NUL inside it: the xattr name ends at the first NUL, so one
+		 * inside would also get past smb2_is_private_ea().
+		 */
+		if (eabuf->name[eabuf->EaNameLength] ||
+		    strnlen(eabuf->name, eabuf->EaNameLength) !=
+		    eabuf->EaNameLength) {
 			rc = -EBADMSG;
 			break;
 		}
