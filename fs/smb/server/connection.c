@@ -352,6 +352,32 @@ bool ksmbd_conn_lookup_dialect(struct ksmbd_conn *c)
 	return ret;
 }
 
+/* Caller holds conn->request_lock */
+static void __ksmbd_conn_set_request_id(struct ksmbd_work *work)
+{
+	struct smb2_hdr *hdr = smb_get_msg(work->request_buf);
+
+	if (hdr->ProtocolId != SMB2_PROTO_NUMBER)
+		return;
+
+	work->req_mid = hdr->MessageId;
+	work->req_cmd = hdr->Command;
+	work->req_id_valid = true;
+}
+
+/*
+ * Record the MessageId and Command of a request whose request_buf now holds
+ * a plain SMB2 header, after decryption and decompression replaced it
+ */
+void ksmbd_conn_set_request_id(struct ksmbd_work *work)
+{
+	struct ksmbd_conn *conn = work->conn;
+
+	spin_lock(&conn->request_lock);
+	__ksmbd_conn_set_request_id(work);
+	spin_unlock(&conn->request_lock);
+}
+
 void ksmbd_conn_enqueue_request(struct ksmbd_work *work)
 {
 	struct ksmbd_conn *conn = work->conn;
@@ -363,6 +389,7 @@ void ksmbd_conn_enqueue_request(struct ksmbd_work *work)
 	atomic_inc(&conn->req_running);
 	if (requests_queue) {
 		spin_lock(&conn->request_lock);
+		__ksmbd_conn_set_request_id(work);
 		list_add_tail(&work->request_entry, requests_queue);
 		spin_unlock(&conn->request_lock);
 	}

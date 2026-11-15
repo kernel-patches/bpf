@@ -10705,7 +10705,6 @@ int smb2_cancel(struct ksmbd_work *work)
 {
 	struct ksmbd_conn *conn = work->conn;
 	struct smb2_hdr *hdr = smb_get_msg(work->request_buf);
-	struct smb2_hdr *chdr;
 	struct ksmbd_work *iter;
 	struct list_head *command_list;
 
@@ -10722,8 +10721,6 @@ int smb2_cancel(struct ksmbd_work *work)
 		spin_lock(&conn->request_lock);
 		list_for_each_entry(iter, command_list,
 				    async_request_entry) {
-			chdr = smb_get_msg(iter->request_buf);
-
 			if (iter->async_id !=
 			    le64_to_cpu(hdr->Id.AsyncId))
 				continue;
@@ -10743,7 +10740,7 @@ int smb2_cancel(struct ksmbd_work *work)
 			ksmbd_debug(SMB,
 				    "smb2 with AsyncId %llu cancelled command = 0x%x\n",
 				    le64_to_cpu(hdr->Id.AsyncId),
-				    le16_to_cpu(chdr->Command));
+				    le16_to_cpu(iter->req_cmd));
 			if (iter->cancel_fn)
 				iter->cancel_fn(iter->cancel_argv);
 			break;
@@ -10754,10 +10751,13 @@ int smb2_cancel(struct ksmbd_work *work)
 
 		spin_lock(&conn->request_lock);
 		list_for_each_entry(iter, command_list, request_entry) {
-			chdr = smb_get_msg(iter->request_buf);
-
-			if (chdr->MessageId != hdr->MessageId ||
-			    iter == work)
+			/*
+			 * request_buf of another work may be replaced while
+			 * it is decrypted or decompressed, so match on the
+			 * MessageId recorded under request_lock instead.
+			 */
+			if (iter == work || !iter->req_id_valid ||
+			    iter->req_mid != hdr->MessageId)
 				continue;
 
 			if (cmpxchg(&iter->state, KSMBD_WORK_ACTIVE,
@@ -10767,7 +10767,7 @@ int smb2_cancel(struct ksmbd_work *work)
 			ksmbd_debug(SMB,
 				    "smb2 with mid %llu cancelled command = 0x%x\n",
 				    le64_to_cpu(hdr->MessageId),
-				    le16_to_cpu(chdr->Command));
+				    le16_to_cpu(iter->req_cmd));
 			if (iter->cancel_fn)
 				iter->cancel_fn(iter->cancel_argv);
 			break;

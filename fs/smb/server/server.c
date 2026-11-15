@@ -295,6 +295,8 @@ static void __handle_ksmbd_work(struct ksmbd_work *work,
 			ksmbd_conn_abort(conn);
 			return;
 		}
+
+		ksmbd_conn_set_request_id(work);
 	}
 
 	if (conn->ops->allocate_rsp_buf(work))

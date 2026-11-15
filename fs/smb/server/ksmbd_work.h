@@ -36,6 +36,13 @@ struct ksmbd_work {
 
 	/* Pointer to received SMB header */
 	void                            *request_buf;
+	/*
+	 * MessageId and Command of the request, set under conn->request_lock
+	 * once request_buf holds a plain SMB2 header, for smb2_cancel()
+	 */
+	__le64                          req_mid;
+	__le16                          req_cmd;
+	bool                            req_id_valid;
 	/* Response buffer */
 	void                            *response_buf;
 
