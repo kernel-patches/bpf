@@ -231,7 +231,7 @@ static int evm_calc_hmac_or_hash(struct dentry *dentry,
 				 uint8_t type, struct evm_digest *data,
 				 struct evm_iint_cache *iint)
 {
-	struct inode *inode = d_inode(d_real(dentry, D_REAL_METADATA));
+	struct inode *inode = d_real_metadata_inode(dentry);
 	struct xattr_list *xattr;
 	struct shash_desc *desc;
 	size_t xattr_size = 0;
