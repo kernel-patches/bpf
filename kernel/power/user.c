@@ -154,7 +154,7 @@ static ssize_t snapshot_read(struct file *filp, char __user *buf,
 		if (res <= 0)
 			goto Unlock;
 	} else {
-		res = PAGE_SIZE - pg_offp;
+		res = PAGE_SIZE;
 	}
 
 	res = simple_read_from_buffer(buf, count, &pg_offp,
