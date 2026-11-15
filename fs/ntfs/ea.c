@@ -1019,11 +1019,7 @@ struct posix_acl *ntfs_get_acl(const struct mnt_idmap *idmap, struct dentry *den
 	size_t name_len;
 	struct posix_acl *acl;
 	int err;
-	void *buf;
-
-	buf = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (!buf)
-		return ERR_PTR(-ENOMEM);
+	void *buf = NULL;
 
 	/* Possible values of 'type' was already checked above. */
 	if (type == ACL_TYPE_ACCESS) {
@@ -1035,7 +1031,14 @@ struct posix_acl *ntfs_get_acl(const struct mnt_idmap *idmap, struct dentry *den
 	}
 
 	mutex_lock(&ni->mrec_lock);
-	err = ntfs_get_ea(inode, name, name_len, buf, PATH_MAX);
+	err = ntfs_get_ea(inode, name, name_len, NULL, 0);
+	if (err > 0) {
+		buf = kmalloc(err, GFP_NOFS);
+		if (!buf)
+			err = -ENOMEM;
+		else
+			err = ntfs_get_ea(inode, name, name_len, buf, err);
+	}
 	mutex_unlock(&ni->mrec_lock);
 
 	/* Translate extended attribute to acl. */
