@@ -887,6 +887,9 @@ int BPF_PROG(test_populate, struct task_struct *task, u64 clone_flags)
 		break;
 	}
 
+	if (!err && bpf_cpumask_weight((const struct cpumask *)mask) != nr_cpus / 2)
+		err = 5;
+
 out:
 	bpf_cpumask_release(mask);
 
