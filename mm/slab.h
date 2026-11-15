@@ -37,6 +37,14 @@ static inline unsigned int to_alloc_flags(unsigned int free_flags)
 		return SLAB_ALLOC_DEFAULT;
 }
 
+static inline unsigned int to_free_flags(unsigned int alloc_flags)
+{
+	if (alloc_flags & SLAB_ALLOC_NOLOCK)
+		return SLAB_FREE_NOLOCK;
+	else
+		return SLAB_FREE_DEFAULT;
+}
+
 static inline bool alloc_flags_allow_spinning(const unsigned int alloc_flags)
 {
 	return !(alloc_flags & SLAB_ALLOC_NOLOCK);
