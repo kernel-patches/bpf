@@ -467,7 +467,7 @@ __bpf_kfunc int bpf_cpumask_populate(struct bpf_cpumask *cpumask, void *src, siz
 		!IS_ALIGNED(source, sizeof(long)))
 		return -EINVAL;
 
-	bitmap_copy(cpumask_bits(&cpumask->cpumask), src, nr_cpu_ids);
+	bitmap_copy_clear_tail(cpumask_bits(&cpumask->cpumask), src, nr_cpu_ids);
 
 	return 0;
 }
