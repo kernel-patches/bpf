@@ -664,6 +664,8 @@ void qcom_nandc_unalloc(struct qcom_nand_controller *nandc)
 
 		if (nandc->cmd_chan)
 			dma_release_channel(nandc->cmd_chan);
+
+		qcom_free_bam_transaction(nandc);
 	} else {
 		if (nandc->chan)
 			dma_release_channel(nandc->chan);
