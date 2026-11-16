@@ -52,54 +52,6 @@ enum {
 	BRANCH = 2,
 };
 
-static void mark_subprog_changes_pkt_data(struct bpf_verifier_env *env, int off)
-{
-	struct bpf_subprog_info *subprog;
-
-	subprog = bpf_find_containing_subprog(env, off);
-	subprog->changes_pkt_data = true;
-}
-
-static void mark_subprog_might_sleep(struct bpf_verifier_env *env, int off)
-{
-	struct bpf_subprog_info *subprog;
-
-	subprog = bpf_find_containing_subprog(env, off);
-	subprog->might_sleep = true;
-}
-
-static void mark_subprog_might_throw(struct bpf_verifier_env *env, int off)
-{
-	struct bpf_subprog_info *subprog;
-
-	subprog = bpf_find_containing_subprog(env, off);
-	subprog->might_throw = true;
-}
-
-/*
- * 't' is an index of a call-site.
- * 'w' is a callee entry point.
- * Eventually this function would be called when env->cfg.insn_state[w] == EXPLORED.
- * DFS traversal order guarantees that callee's effect marks are correct at that
- * moment, unless the callee calls one of its callers: see close_callee_effects().
- * Returns true if the marks of the caller changed.
- */
-static bool merge_callee_effects(struct bpf_verifier_env *env, int t, int w)
-{
-	struct bpf_subprog_info *caller, *callee;
-
-	caller = bpf_find_containing_subprog(env, t);
-	callee = bpf_find_containing_subprog(env, w);
-	if (caller->changes_pkt_data >= callee->changes_pkt_data &&
-	    caller->might_sleep >= callee->might_sleep &&
-	    caller->might_throw >= callee->might_throw)
-		return false;
-	caller->changes_pkt_data |= callee->changes_pkt_data;
-	caller->might_sleep |= callee->might_sleep;
-	caller->might_throw |= callee->might_throw;
-	return true;
-}
-
 enum {
 	DONE_EXPLORING = 0,
 	KEEP_EXPLORING = 1,
@@ -169,19 +121,13 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 				bool visit_callee)
 {
 	int ret, insn_sz;
-	int w;
 
 	insn_sz = bpf_is_ldimm64(&insns[t]) ? 2 : 1;
 	ret = push_insn(t, t + insn_sz, FALLTHROUGH, env);
 	if (ret)
 		return ret;
 
-	if (visit_callee) {
-		w = t + insns[t].imm + 1;
-		merge_callee_effects(env, t, w);
-		ret = push_insn(t, w, BRANCH, env);
-	}
-	return ret;
+	return visit_callee ? push_insn(t, t + insns[t].imm + 1, BRANCH, env) : 0;
 }
 
 struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem)
@@ -628,98 +574,63 @@ static int visit_gotox_insn(int t, struct bpf_verifier_env *env)
 	return keep_exploring ? KEEP_EXPLORING : DONE_EXPLORING;
 }
 
-/*
- * Return pointers to functions in the read-only map that ld_imm64 instruction
- * 't' loads the address of, or of its value, if there are any.
- */
-static struct bpf_func_ptr *insn_func_ptrs(struct bpf_verifier_env *env, int t, u32 *cnt)
-{
-	struct bpf_insn *insn = &env->prog->insnsi[t];
-
-	*cnt = 0;
-	if (!env->func_ptr_cnt || !bpf_is_ldimm64(insn))
-		return NULL;
-	if (insn->src_reg != BPF_PSEUDO_MAP_VALUE &&
-	    insn->src_reg != BPF_PSEUDO_MAP_IDX_VALUE &&
-	    insn->src_reg != BPF_PSEUDO_MAP_FD &&
-	    insn->src_reg != BPF_PSEUDO_MAP_IDX)
-		return NULL;
-
-	return bpf_map_func_ptrs(env, env->used_maps[env->insn_aux_data[t].map_index], cnt);
-}
+enum {
+	CHANGES_PKT_DATA = BIT(0),
+	MIGHT_SLEEP	 = BIT(1),
+	MIGHT_THROW	 = BIT(2),
+};
 
 /*
- * ld_imm64 that loads the address of a map that has pointers to functions
- * is similar to ld_imm64 with BPF_PSEUDO_FUNC that loads the address of one
- * function: any of them may be read from the map and called via callx later.
- * Treat it as a call of all of them.
+ * A subprog does what its callees do. The load of the address of a function counts as a call.
+ * So does the load of the address of a map with pointers to functions:
+ *
+ *   f1: r1 = map ll  --+
+ *                      +--> node of the map --> all functions in the map
+ *   f2: r1 = map ll  --+
  */
-static int visit_func_ptrs_insn(int t, struct bpf_verifier_env *env,
-				struct bpf_func_ptr *ptrs, u32 cnt)
+static int merge_callee_effects(struct bpf_verifier_env *env)
 {
-	int *insn_stack = env->cfg.insn_stack;
-	int *insn_state = env->cfg.insn_state;
-	int ret, w;
-	u32 i;
-
-	ret = push_insn(t, t + 2, FALLTHROUGH, env);
-	if (ret)
-		return ret;
-
-	/*
-	 * Explore one function at a time like push_insn() does, so that
-	 * DISCOVERED function is a caller of 't' and not the one that waits in
-	 * insn_stack[], which merge_callee_effects() relies on.
-	 */
-	for (i = 0; i < cnt; i++) {
-		w = ptrs[i].xlated_off;
-		if (insn_state[w])
-			continue;
-
-		if (env->cfg.cur_stack >= env->prog->len)
-			return -E2BIG;
-
-		insn_stack[env->cfg.cur_stack++] = w;
-		insn_state[w] = DISCOVERED;
-		return KEEP_EXPLORING;
-	}
-
-	/* all functions are explored, their effects are known */
-	for (i = 0; i < cnt; i++) {
-		w = ptrs[i].xlated_off;
-		merge_callee_effects(env, t, w);
-
-		/* the same mark as push_insn() leaves on a branch target */
-		mark_jump_target(env, w);
-	}
-	return DONE_EXPLORING;
-}
-
-/*
- * A subprog that calls one of its callers is EXPLORED before that caller is: it
- * took the marks that the caller had so far, and so did everybody who called it
- * since. Merge again at every call until nothing changes.
- */
-static void close_callee_effects(struct bpf_verifier_env *env)
-{
+	struct bpf_subprog_info *si = env->subprog_info;
 	struct bpf_insn *insn = env->prog->insnsi;
-	struct bpf_func_ptr *ptrs;
-	bool changed;
-	u32 cnt, j;
-	int t;
+	u32 cnt = env->subprog_cnt, n, s, t;
+	struct bpf_call_graph cg;
+	struct bpf_func_ptr *ptr;
+	int err;
 
-	do {
-		changed = false;
-		for (t = 0; t < env->prog->len; t++) {
+	err = bpf_call_graph_init(&cg, cnt + env->used_map_cnt);
+	for (s = 0; s < cnt && !err; s++) {
+		cg.marks[s] = (si[s].changes_pkt_data ? CHANGES_PKT_DATA : 0) |
+			      (si[s].might_sleep ? MIGHT_SLEEP : 0) |
+			      (si[s].might_throw ? MIGHT_THROW : 0);
+		for (t = si[s].start; t < si[s + 1].start && !err; t++) {
 			if (bpf_pseudo_call(&insn[t]) || bpf_pseudo_func(&insn[t]))
-				changed |= merge_callee_effects(env, t, t + insn[t].imm + 1);
-			ptrs = insn_func_ptrs(env, t, &cnt);
-			for (j = 0; j < cnt; j++)
-				changed |= merge_callee_effects(env, t, ptrs[j].xlated_off);
-			if (bpf_is_ldimm64(&insn[t]))
-				t++;
+				err = bpf_call_graph_add(&cg, s, bpf_find_subprog(env,
+							 t + insn[t].imm + 1));
+			else if (bpf_is_ldimm64(&insn[t]) && insn[t].src_reg &&
+				 insn[t].src_reg != BPF_PSEUDO_BTF_ID)
+				err = bpf_call_graph_add(&cg, s,
+							 cnt + env->insn_aux_data[t].map_index);
 		}
-	} while (changed);
+	}
+	for (s = 0; s < env->used_map_cnt; s++) {
+		ptr = bpf_map_func_ptrs(env, env->used_maps[s], &n);
+		for (; n-- && !err; ptr++)
+			err = bpf_must_abort() ? -EINTR :
+			      bpf_call_graph_add(&cg, cnt + s,
+						 bpf_find_subprog(env, ptr->xlated_off));
+	}
+	if (err)
+		goto out;
+	bpf_call_graph_sort(&cg, 0);
+	bpf_call_graph_mark_callers(&cg, U16_MAX, 0);
+	for (s = 0; s < cnt; s++) {
+		si[s].changes_pkt_data = cg.marks[s] & CHANGES_PKT_DATA;
+		si[s].might_sleep = cg.marks[s] & MIGHT_SLEEP;
+		si[s].might_throw = cg.marks[s] & MIGHT_THROW;
+	}
+out:
+	bpf_call_graph_free(&cg);
+	return err;
 }
 
 /* Visits the instruction at index t and returns one of the following:
@@ -730,16 +641,11 @@ static void close_callee_effects(struct bpf_verifier_env *env)
 static int visit_insn(int t, struct bpf_verifier_env *env)
 {
 	struct bpf_insn *insns = env->prog->insnsi, *insn = &insns[t];
-	struct bpf_func_ptr *ptrs;
+	struct bpf_subprog_info *sub;
 	int ret, off, insn_sz;
-	u32 cnt;
 
 	if (bpf_pseudo_func(insn))
 		return visit_func_call_insn(t, insns, env, true);
-
-	ptrs = insn_func_ptrs(env, t, &cnt);
-	if (ptrs)
-		return visit_func_ptrs_insn(t, env, ptrs, cnt);
 
 	/* All non-branch instructions have a single fall-through edge. */
 	if (BPF_CLASS(insn->code) != BPF_JMP &&
@@ -760,6 +666,7 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		 */
 		if (bpf_is_sync_callback_calling_insn(insn))
 			mark_calls_callback(env, t);
+		sub = bpf_find_containing_subprog(env, t);
 		if (bpf_helper_call(insn)) {
 			const struct bpf_func_proto *fp;
 
@@ -770,11 +677,11 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 			 * elimination.
 			 */
 			if (ret == 0 && fp->might_sleep)
-				mark_subprog_might_sleep(env, t);
+				sub->might_sleep = true;
 			/* nobody knows yet whether the dynptr is that of an skb */
 			if (bpf_helper_changes_pkt_data(insn->imm) ||
 			    insn->imm == BPF_FUNC_dynptr_write)
-				mark_subprog_changes_pkt_data(env, t);
+				sub->changes_pkt_data = true;
 		} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			struct bpf_call_arg_meta meta;
 
@@ -785,11 +692,11 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 			 * dead code elimination.
 			 */
 			if (ret == 0 && bpf_is_kfunc_sleepable(&meta))
-				mark_subprog_might_sleep(env, t);
+				sub->might_sleep = true;
 			if (ret == 0 && bpf_is_kfunc_pkt_changing(&meta))
-				mark_subprog_changes_pkt_data(env, t);
+				sub->changes_pkt_data = true;
 			if (ret == 0 && bpf_is_throw_kfunc(insn))
-				mark_subprog_might_throw(env, t);
+				sub->might_throw = true;
 		}
 		return visit_func_call_insn(t, insns, env, insn->src_reg == BPF_PSEUDO_CALL);
 
@@ -828,7 +735,8 @@ int bpf_check_cfg(struct bpf_verifier_env *env)
 {
 	int insn_cnt = env->prog->len;
 	int *insn_stack, *insn_state;
-	int ex_insn_beg, i, ret = 0;
+	int i, root, ret = 0;
+	u32 ptr = 0;
 
 	insn_state = env->cfg.insn_state = kvzalloc_objs(int, insn_cnt,
 							 BPF_VERIFIER_GFP);
@@ -842,15 +750,12 @@ int bpf_check_cfg(struct bpf_verifier_env *env)
 		return -ENOMEM;
 	}
 
-	ex_insn_beg = env->exception_callback_subprog
-		      ? env->subprog_info[env->exception_callback_subprog].start
-		      : 0;
-
-	insn_state[0] = DISCOVERED; /* mark 1st insn as discovered */
-	insn_stack[0] = 0; /* 0 is the first instruction */
+	root = 0; /* 0 is the first instruction */
+walk_cfg:
+	insn_state[root] = DISCOVERED;
+	insn_stack[0] = root;
 	env->cfg.cur_stack = 1;
 
-walk_cfg:
 	while (env->cfg.cur_stack > 0) {
 		int t = insn_stack[env->cfg.cur_stack - 1];
 
@@ -877,11 +782,16 @@ walk_cfg:
 		goto err_free;
 	}
 
-	if (ex_insn_beg && insn_state[ex_insn_beg] != EXPLORED) {
-		insn_state[ex_insn_beg] = DISCOVERED;
-		insn_stack[0] = ex_insn_beg;
-		env->cfg.cur_stack = 1;
+	root = env->subprog_info[env->exception_callback_subprog].start;
+	if (insn_state[root] != EXPLORED)
 		goto walk_cfg;
+
+	/* callx can call what the maps point to */
+	while (ptr < env->func_ptr_cnt) {
+		root = env->func_ptrs[ptr++].xlated_off;
+		mark_jump_target(env, root);
+		if (insn_state[root] != EXPLORED)
+			goto walk_cfg;
 	}
 
 	for (i = 0; i < insn_cnt; i++) {
@@ -910,8 +820,8 @@ walk_cfg:
 			i++; /* skip second half of ldimm64 */
 		}
 	}
-	ret = 0; /* cfg looks good */
-	close_callee_effects(env);
+	/* cfg looks good */
+	ret = merge_callee_effects(env);
 	env->prog->aux->changes_pkt_data = env->subprog_info[0].changes_pkt_data;
 	env->prog->aux->might_sleep = env->subprog_info[0].might_sleep;
 
