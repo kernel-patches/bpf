@@ -502,7 +502,5 @@ int hv_drm_mode_config_init(struct hv_drm_device *hv)
 	if (ret)
 		return ret;
 
-	drm_mode_config_reset(dev);
-
-	return 0;
+	return drm_mode_config_create_initial_state(dev);
 }
