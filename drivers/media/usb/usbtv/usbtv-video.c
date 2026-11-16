@@ -865,7 +865,7 @@ error:
 		dev_warn(usbtv->dev, "Failed to submit a control request.\n");
 
 	kfree(data);
-	return ret;
+	return ret < 0 ? ret : 0;
 }
 
 static const struct v4l2_ctrl_ops usbtv_ctrl_ops = {
