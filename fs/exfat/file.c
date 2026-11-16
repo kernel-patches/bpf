@@ -81,7 +81,7 @@ static void exfat_pagecache_isize_extended(struct inode *inode, loff_t from,
 	folio_put(folio);
 }
 
-static int exfat_cont_expand(struct inode *inode, loff_t size)
+static int __exfat_cont_expand(struct inode *inode, loff_t size)
 {
 	int ret;
 	unsigned int num_clusters, new_num_clusters, last_clu;
@@ -156,6 +156,17 @@ out:
 free_clu:
 	exfat_free_cluster(inode, &clu);
 	return -EIO;
+}
+
+static int exfat_cont_expand(struct inode *inode, loff_t size)
+{
+	int ret;
+
+	inode_dio_wait(inode);
+	filemap_invalidate_lock(inode->i_mapping);
+	ret = __exfat_cont_expand(inode, size);
+	filemap_invalidate_unlock(inode->i_mapping);
+	return ret;
 }
 
 /*
