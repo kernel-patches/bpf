@@ -1073,14 +1073,10 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 	}
 
 	/* Get the optional generated clock */
-	dev->gclk = devm_clk_get(&pdev->dev, "gclk");
-	if (IS_ERR(dev->gclk)) {
-		if (PTR_ERR(dev->gclk) == -EPROBE_DEFER)
-			return -EPROBE_DEFER;
-		dev_warn(&pdev->dev,
-			 "generated clock not found: %d\n", err);
-		dev->gclk = NULL;
-	}
+	dev->gclk = devm_clk_get_optional(&pdev->dev, "gclk");
+	if (IS_ERR(dev->gclk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(dev->gclk),
+				     "failed to get the generated clock\n");
 
 	dev->soc = of_device_get_match_data(&pdev->dev);
 	err = mchp_i2s_mcc_soc_data_parse(pdev, dev);
