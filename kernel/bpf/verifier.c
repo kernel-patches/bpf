@@ -15407,7 +15407,6 @@ bpf_helper_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *ins
 	case ARG_PTR_TO_MAP_KEY:
 	case ARG_PTR_TO_MAP_VALUE: {
 		bool is_key = base_type(at) == ARG_PTR_TO_MAP_KEY;
-		u64 val;
 		int i, map_reg;
 
 		for (i = 0; i < arg; i++) {
@@ -15443,23 +15442,9 @@ scan_all_maps:
 		 */
 		exact_size = false;
 		access_type |= BPF_READ;
-		val = 0;
-		for (i = 0; i < env->used_map_cnt; i++) {
-			struct bpf_map *map = env->used_maps[i];
-			u32 sz = is_key ? map->key_size : map->value_size;
-
-			if (sz > val)
-				val = sz;
-			if (map->inner_map_meta) {
-				sz = is_key ? map->inner_map_meta->key_size
-					    : map->inner_map_meta->value_size;
-				if (sz > val)
-					val = sz;
-			}
-		}
-		if (!val)
+		size = is_key ? env->max_key_size : env->max_value_size;
+		if (!size)
 			return info;
-		size = val;
 		goto out;
 	}
 	case ARG_PTR_TO_MEM:
@@ -22021,26 +22006,21 @@ static int __add_used_btf(struct bpf_verifier_env *env, struct btf *btf)
 {
 	struct btf_mod_pair *btf_mod;
 	int ret = 0;
-	int i;
 
 	/* check whether we recorded this BTF (and maybe module) already */
-	for (i = 0; i < env->used_btf_cnt; i++)
-		if (env->used_btfs[i].btf == btf)
-			goto ret_put;
+	if (bpf_index_find(&env->used_index, (unsigned long)btf) >= 0)
+		goto ret_put;
 
 	if (env->signature) {
 		verbose(env, "signed program cannot bind any BTF\n");
 		ret = -EACCES;
 		goto ret_put;
 	}
-	if (env->used_btf_cnt >= MAX_USED_BTFS) {
-		verbose(env, "The total number of btfs per program has reached the limit of %u\n",
-			MAX_USED_BTFS);
-		ret = -E2BIG;
+	btf_mod = bpf_table_next(env->used_btfs, env->used_btf_cnt);
+	if (!btf_mod) {
+		ret = -ENOMEM;
 		goto ret_put;
 	}
-
-	btf_mod = &env->used_btfs[env->used_btf_cnt];
 	btf_mod->btf = btf;
 	btf_mod->module = NULL;
 
@@ -22053,8 +22033,7 @@ static int __add_used_btf(struct bpf_verifier_env *env, struct btf *btf)
 		}
 	}
 
-	env->used_btf_cnt++;
-	return 0;
+	return bpf_index_add(&env->used_index, (unsigned long)btf, env->used_btf_cnt++);
 
 ret_put:
 	/* Either error or this BTF was already added */
@@ -22347,6 +22326,8 @@ static int claim_used_maps(struct bpf_verifier_env *env)
 
 		if (map->map_type != BPF_MAP_TYPE_INSN_ARRAY)
 			continue;
+		if (!bpf_table_next(env->insn_array_maps, env->insn_array_map_cnt))
+			return -ENOMEM;
 		err = bpf_insn_array_init(map, env->prog);
 		if (err) {
 			verbose(env, "Failed to properly initialize insn array\n");
@@ -22360,12 +22341,13 @@ static int claim_used_maps(struct bpf_verifier_env *env)
 
 static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 {
+	struct bpf_map *inner = map->inner_map_meta ?: map;
 	int i, err;
 
 	/* check whether we recorded this map already */
-	for (i = 0; i < env->used_map_cnt; i++)
-		if (env->used_maps[i] == map)
-			return i;
+	i = bpf_index_find(&env->used_index, (unsigned long)map);
+	if (i >= 0)
+		return i;
 
 	if (env->signature &&
 	    env->prog->aux->sig.verdict == BPF_SIG_VERIFIED) {
@@ -22373,15 +22355,16 @@ static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 			map->name);
 		return -EACCES;
 	}
-	if (env->used_map_cnt >= MAX_USED_MAPS) {
-		verbose(env, "The total number of maps per program has reached the limit of %u\n",
-			MAX_USED_MAPS);
-		return -E2BIG;
-	}
 
 	err = check_map_prog_compatibility(env, map, env->prog);
 	if (err)
 		return err;
+
+	if (!bpf_table_next(env->used_maps, env->used_map_cnt) ||
+	    bpf_index_add(&env->used_index, (unsigned long)map, env->used_map_cnt))
+		return -ENOMEM;
+	env->max_key_size = max3(env->max_key_size, map->key_size, inner->key_size);
+	env->max_value_size = max3(env->max_value_size, map->value_size, inner->value_size);
 
 	if (bpf_prog_runs_sleepable(env->prog))
 		atomic64_inc(&map->sleepable_refcnt);
@@ -23010,12 +22993,14 @@ static void release_maps(struct bpf_verifier_env *env)
 {
 	__bpf_free_used_maps(env->prog->aux, env->used_maps,
 			     env->used_map_cnt);
+	kvfree(env->used_maps);
 }
 
 /* drop refcnt of maps used by the rejected program */
 static void release_btfs(struct bpf_verifier_env *env)
 {
 	__bpf_free_used_btfs(env->used_btfs, env->used_btf_cnt);
+	kvfree(env->used_btfs);
 }
 
 /* convert pseudo BPF_LD_IMM64 into generic BPF_LD_IMM64 */
@@ -24615,39 +24600,31 @@ static int add_fd_from_fd_array(struct bpf_verifier_env *env, u32 idx, int fd)
 	return PTR_ERR(map);
 }
 
-/*
- * A continuous fd_array is resolved into an in-memory cache with one slot
- * per entry. The bound here is deliberately generous and not derived from
- * the per-program object limits: Duplicate entries /are/ permitted, and
- * the number of distinct maps and BTFs a program can bind is enforced when
- * each entry is resolved by __add_used_map() and __add_used_btf().
- */
-#define MAX_FD_ARRAY_CNT 4096
-
+/* A continuous fd_array is resolved into an in-memory cache with one slot per entry. */
 static int process_fd_array_continuous(struct bpf_verifier_env *env,
 				       bpfptr_t fd_array, u32 cnt)
 {
 	int fd, ret;
 	u32 i;
 
-	if (cnt > MAX_FD_ARRAY_CNT) {
-		verbose(env, "fd_array has too many entries (%u, max %u)\n",
-			cnt, MAX_FD_ARRAY_CNT);
+	if (!env->bpf_capable && cnt > BPF_MAXINSNS) {
+		verbose(env, "fd_array has too many entries (%u, max %u)\n", cnt, BPF_MAXINSNS);
 		return -E2BIG;
 	}
 
-	env->fd_array = kvzalloc_objs(*env->fd_array, cnt, BPF_VERIFIER_GFP);
-	if (!env->fd_array)
-		return -ENOMEM;
-	env->fd_array_cnt = cnt;
 	for (i = 0; i < cnt; i++) {
+		if (bpf_must_abort())
+			return -EINTR;
 		if (copy_from_bpfptr_offset(&fd, fd_array,
 					    (size_t)i * sizeof(fd), sizeof(fd)))
 			return -EFAULT;
+		if (!bpf_table_next(env->fd_array, i))
+			return -ENOMEM;
 		ret = add_fd_from_fd_array(env, i, fd);
 		if (ret)
 			return ret;
 	}
+	env->fd_array_cnt = cnt;
 	return 0;
 }
 
@@ -25557,35 +25534,11 @@ skip_full_check:
 	if (ret)
 		goto err_release_maps;
 
-	if (env->used_map_cnt) {
-		/* if program passed verifier, update used_maps in bpf_prog_info */
-		env->prog->aux->used_maps = kmalloc_objs(env->used_maps[0],
-							 env->used_map_cnt,
-							 BPF_VERIFIER_GFP);
-
-		if (!env->prog->aux->used_maps) {
-			ret = -ENOMEM;
-			goto err_release_maps;
-		}
-
-		memcpy(env->prog->aux->used_maps, env->used_maps,
-		       sizeof(env->used_maps[0]) * env->used_map_cnt);
-		env->prog->aux->used_map_cnt = env->used_map_cnt;
-	}
-	if (env->used_btf_cnt) {
-		/* if program passed verifier, update used_btfs in bpf_prog_aux */
-		env->prog->aux->used_btfs = kmalloc_objs(env->used_btfs[0],
-							 env->used_btf_cnt,
-							 BPF_VERIFIER_GFP);
-		if (!env->prog->aux->used_btfs) {
-			ret = -ENOMEM;
-			goto err_release_maps;
-		}
-
-		memcpy(env->prog->aux->used_btfs, env->used_btfs,
-		       sizeof(env->used_btfs[0]) * env->used_btf_cnt);
-		env->prog->aux->used_btf_cnt = env->used_btf_cnt;
-	}
+	/* if program passed verifier, it gets the tables */
+	env->prog->aux->used_maps = env->used_maps;
+	env->prog->aux->used_map_cnt = env->used_map_cnt;
+	env->prog->aux->used_btfs = env->used_btfs;
+	env->prog->aux->used_btf_cnt = env->used_btf_cnt;
 	if (env->used_map_cnt || env->used_btf_cnt) {
 		/* program is valid. Convert pseudo bpf_ld_imm64 into generic
 		 * bpf_ld_imm64 instructions
@@ -25642,6 +25595,8 @@ err_free_env:
 	vfree(env->insn_aux_data);
 	bpf_patch_list_free(env);
 	kvfree(env->fd_array);
+	kvfree(env->used_index.slots);
+	kvfree(env->insn_array_maps);
 	bpf_free_scev(env);
 	kvfree(env->walk_insns);
 	bpf_flow_free(env);

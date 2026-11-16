@@ -6291,8 +6291,8 @@ static int bpf_prog_bind_map(union bpf_attr *attr)
 			goto out_unlock;
 		}
 
-	used_maps_new = kmalloc_objs(used_maps_new[0],
-				     prog->aux->used_map_cnt + 1);
+	used_maps_new = kvmalloc_objs(used_maps_new[0],
+				      prog->aux->used_map_cnt + 1);
 	if (!used_maps_new) {
 		ret = -ENOMEM;
 		goto out_unlock;
@@ -6310,7 +6310,7 @@ static int bpf_prog_bind_map(union bpf_attr *attr)
 	prog->aux->used_map_cnt++;
 	prog->aux->used_maps = used_maps_new;
 
-	kfree(used_maps_old);
+	kvfree(used_maps_old);
 
 out_unlock:
 	mutex_unlock(&prog->aux->used_maps_mutex);
