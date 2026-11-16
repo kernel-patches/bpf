@@ -281,6 +281,7 @@ struct btf {
 	char name[MODULE_NAME_LEN];
 	bool kernel_btf;
 	__u32 *base_id_map; /* map from distilled base BTF -> vmlinux BTF ids */
+	u32 *next_tag; /* see btf_link_decl_tags() */
 };
 
 enum verifier_phase {
@@ -1907,6 +1908,7 @@ static void btf_free(struct btf *btf)
 	if (!btf_is_vmlinux(btf))
 		kvfree(btf->data);
 	kvfree(btf->base_id_map);
+	kvfree(btf->next_tag);
 	kfree(btf);
 }
 
@@ -3636,13 +3638,45 @@ static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
 	return BTF_FIELD_FOUND;
 }
 
+/* For BTF of programs: next_tag[type] -> its first tag, next_tag[tag] -> its next tag, ... 0 */
+static int btf_link_decl_tags(struct btf *btf)
+{
+	u32 i;
+
+	btf->next_tag = kvcalloc(btf->nr_types, sizeof(u32), GFP_KERNEL | __GFP_NOWARN);
+	if (!btf->next_tag)
+		return -ENOMEM;
+	for (i = btf->nr_types; --i;) {
+		if (!btf_type_is_decl_tag(btf->types[i]))
+			continue;
+		btf->next_tag[i] = btf->next_tag[btf->types[i]->type];
+		btf->next_tag[btf->types[i]->type] = i;
+	}
+	return 0;
+}
+
+static int btf_type_ptr_cmp(const void *a, const void *b)
+{
+	return cmp_int(*(void **)a, *(void **)b);
+}
+
+/* last_id is 0 for the first tag */
 int btf_find_next_decl_tag(const struct btf *btf, const struct btf_type *pt,
 			   int comp_idx, const char *tag_key, int last_id)
 {
+	int i = last_id ?: btf_named_start_id(btf, false) - 1, n = btf_nr_types(btf);
 	int len = strlen(tag_key);
-	int i, n;
+	struct btf_type **p;
 
-	for (i = last_id + 1, n = btf_nr_types(btf); i < n; i++) {
+	if (btf->next_tag && !last_id) {
+		/* the types are in the order of their ids in btf->data */
+		p = bsearch(&pt, btf->types + 1, n - 1, sizeof(*p), btf_type_ptr_cmp);
+		if (!p)
+			return -ENOENT;
+		i = p - btf->types;
+	}
+
+	while ((i = btf->next_tag ? btf->next_tag[i] ?: n : i + 1) < n) {
 		const struct btf_type *t = btf_type_by_id(btf, i);
 
 		if (!btf_type_is_decl_tag(t))
@@ -3665,8 +3699,7 @@ const char *btf_find_decl_tag_value(const struct btf *btf, const struct btf_type
 	const struct btf_type *t;
 	int len, id;
 
-	id = btf_find_next_decl_tag(btf, pt, comp_idx, tag_key,
-				    btf_named_start_id(btf, false) - 1);
+	id = btf_find_next_decl_tag(btf, pt, comp_idx, tag_key, 0);
 	if (id < 0)
 		return ERR_PTR(id);
 
@@ -6519,7 +6552,7 @@ static struct btf *btf_parse(const union bpf_attr *attr, bpfptr_t uattr,
 	if (err)
 		goto errout;
 
-	err = btf_parse_type_sec(env);
+	err = btf_parse_type_sec(env) ?: btf_link_decl_tags(btf);
 	if (err)
 		goto errout;
 
@@ -8677,8 +8710,8 @@ static int btf_scan_decl_tags(struct bpf_verifier_env *env,
 			      const struct btf_type *fn_t,
 			      u32 arg_idx, bool is_global, u32 *tags)
 {
-	int id = btf_named_start_id(btf, false) - 1;
 	const char tag_key[] = "arg:";
+	int id = 0;
 	static const struct {
 		const char *tag_value;
 		enum btf_arg_tag arg_tag;
