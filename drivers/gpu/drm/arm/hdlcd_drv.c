@@ -318,7 +318,9 @@ static int hdlcd_probe(struct platform_device *pdev)
 		aperture_remove_all_conflicting_devices(hdlcd_driver.name);
 	}
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		goto err_vblank;
 	drm_kms_helper_poll_init(drm);
 
 #ifdef CONFIG_DEBUG_FS
