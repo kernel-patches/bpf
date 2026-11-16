@@ -3954,8 +3954,7 @@ static int smb2_create_sd_buffer(struct ksmbd_work *work,
 	/* parse_sec_desc() refuses a length shorter than the SD header */
 	pntsd = smb2_context_data(context);
 	return set_info_sec(work->conn, work->tcon, path, pntsd,
-			    le32_to_cpu(context->DataLength), true, true,
-			    true, true);
+			    le32_to_cpu(context->DataLength), true, true, true);
 }
 
 static int ksmbd_acls_fattr(struct smb_fattr *fattr,
@@ -5276,8 +5275,7 @@ resolve_path:
 								    idmap,
 								    &path,
 								    pntsd,
-								    pntsd_size,
-								    true);
+								    pntsd_size);
 					kvfree(pntsd);
 					if (rc)
 						pr_err("failed to store ntacl in xattr : %d\n",
@@ -9419,7 +9417,7 @@ static int smb2_set_info_sec(struct ksmbd_file *fp, int addition_info,
 		return -EACCES;
 
 	return set_info_sec(fp->conn, fp->tcon, &fp->filp->f_path, pntsd,
-			buf_len, false, true,
+			buf_len, false,
 			fp->conn->dialect == SMB311_PROT_ID && fp->is_posix_ctxt,
 			addition_info & DACL_SECINFO);
 }

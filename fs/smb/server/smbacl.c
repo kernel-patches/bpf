@@ -1443,7 +1443,7 @@ pass:
 			pntsd_size += sizeof(struct smb_acl) + nt_size;
 		}
 
-		ksmbd_vfs_set_sd_xattr(conn, idmap, path, pntsd, pntsd_size, true);
+		ksmbd_vfs_set_sd_xattr(conn, idmap, path, pntsd, pntsd_size);
 		kfree(pntsd);
 	}
 
@@ -1905,7 +1905,7 @@ static unsigned int smb_parent_derived_rights(struct ksmbd_conn *conn,
 
 int set_info_sec(struct ksmbd_conn *conn, struct ksmbd_tree_connect *tcon,
 		 const struct path *path, struct smb_ntsd *pntsd, int ntsd_len,
-		 bool type_check, bool get_write, bool posix_open,
+		 bool type_check, bool posix_open,
 		 bool dacl_requested)
 {
 	int rc;
@@ -1948,11 +1948,9 @@ int set_info_sec(struct ksmbd_conn *conn, struct ksmbd_tree_connect *tcon,
 				   (fattr.cf_mode & 0777);
 
 	ksmbd_vfs_remove_acl_xattrs(idmap, path);
-	if (get_write) {
-		rc = mnt_want_write(path->mnt);
-		if (rc)
-			goto out;
-	}
+	rc = mnt_want_write(path->mnt);
+	if (rc)
+		goto out;
 
 	/* Update posix acls */
 	if (IS_ENABLED(CONFIG_FS_POSIX_ACL) && fattr.cf_dacls) {
@@ -1975,8 +1973,7 @@ int set_info_sec(struct ksmbd_conn *conn, struct ksmbd_tree_connect *tcon,
 	inode_lock(inode);
 	rc = notify_change(idmap, path->dentry, &newattrs, NULL);
 	inode_unlock(inode);
-	if (get_write)
-		mnt_drop_write(path->mnt);
+	mnt_drop_write(path->mnt);
 	if (rc)
 		goto out;
 
@@ -1987,8 +1984,7 @@ int set_info_sec(struct ksmbd_conn *conn, struct ksmbd_tree_connect *tcon,
 	if (test_share_config_flag(tcon->share_conf, KSMBD_SHARE_FLAG_ACL_XATTR)) {
 		/* Update WinACL in xattr */
 		ksmbd_vfs_remove_sd_xattrs(idmap, path);
-		ksmbd_vfs_set_sd_xattr(conn, idmap, path, pntsd, ntsd_len,
-				get_write);
+		ksmbd_vfs_set_sd_xattr(conn, idmap, path, pntsd, ntsd_len);
 	}
 
 out:
