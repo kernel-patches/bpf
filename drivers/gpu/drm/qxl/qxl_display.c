@@ -1312,7 +1312,10 @@ int qxl_modeset_init(struct qxl_device *qdev)
 	if (ret)
 		goto destroy_monitors_object;
 
-	drm_mode_config_reset(&qdev->ddev);
+	ret = drm_mode_config_create_initial_state(&qdev->ddev);
+	if (ret)
+		goto destroy_monitors_object;
+
 	return 0;
 
 destroy_monitors_object:
