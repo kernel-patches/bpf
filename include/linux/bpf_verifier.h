@@ -742,6 +742,33 @@ struct bpf_iarray {
 	u32 items[];
 };
 
+/*
+ * Make room for entry 'cnt' of a table that has 'cnt' entries, return the new entry.
+ * The table doubles: 1, 2, 4, 8, ... It is not a stack: 'cnt' never goes down.
+ */
+#define bpf_table_next(tab, cnt)							\
+	({										\
+		typeof(tab) __tab = (tab);						\
+		size_t __cap = 2 * (size_t)(cnt) ?: 1;					\
+		if (!((cnt) & ((cnt) - 1)))						\
+			__tab = kvrealloc(__tab, array_size(__cap, sizeof(*__tab)),	\
+					  BPF_VERIFIER_GFP);				\
+		__tab ? &((tab) = __tab)[cnt] : NULL;					\
+	})
+
+/* key -> number of an entry of a table */
+struct bpf_index {
+	struct bpf_index_slot {
+		u64 key;
+		u32 next_val;	/* value + 1, 0 if the slot is free */
+	} *slots;
+	u32 cnt;
+	u8 bits;
+};
+
+int bpf_index_find(const struct bpf_index *index, u64 key);
+int bpf_index_add(struct bpf_index *index, u64 key, u32 val);
+
 #define iarray_for_each(item, arr)						\
 	for (int ___idx = 0;							\
 	     ___idx < (arr)->cnt && ({ item = (arr)->items[___idx]; 1; });	\
@@ -969,9 +996,6 @@ struct bpf_insn_aux_data {
 	/* additional information about the loop if this instruction is a loop header */
 	struct bpf_loop *loop;
 };
-
-#define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
-#define MAX_USED_BTFS 64 /* max number of BTFs accessed by one BPF program */
 
 /*
  * Longest line the verifier log can carry: tmp_str_buf, see
@@ -1259,9 +1283,12 @@ struct bpf_verifier_env {
 	u32 *walk_insns;		/* the insns that were looked at in each of them */
 	u32 max_arena_stack_depth;	/* of all call chains */
 	struct bpf_verifier_state *cur_state; /* current verifier state */
-	struct bpf_map *used_maps[MAX_USED_MAPS]; /* array of map's used by eBPF program */
-	struct btf_mod_pair used_btfs[MAX_USED_BTFS]; /* array of BTF's used by BPF program */
-	struct bpf_map *insn_array_maps[MAX_USED_MAPS]; /* array of INSN_ARRAY map's to be relocated */
+	struct bpf_map **used_maps;	/* array of map's used by eBPF program */
+	struct btf_mod_pair *used_btfs;	/* array of BTF's used by BPF program */
+	struct bpf_index used_index;	/* address of a map or BTF -> entry of these two */
+	struct bpf_map **insn_array_maps; /* array of INSN_ARRAY map's to be relocated */
+	u32 max_key_size;		/* of all used maps and their inner maps */
+	u32 max_value_size;
 	u32 used_map_cnt;		/* number of used maps */
 	u32 used_btf_cnt;		/* number of used BTF objects */
 	u32 insn_array_map_cnt;		/* number of used maps of type BPF_MAP_TYPE_INSN_ARRAY */
