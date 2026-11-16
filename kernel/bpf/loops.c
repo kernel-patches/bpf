@@ -96,78 +96,117 @@ static int idoms_intersect(struct bpf_verifier_env *env, int a, int b)
 	return a;
 }
 
-/* See "A Simple, Fast Dominance Algorithm" by Cooper et al. for details. */
-static int compute_subprog_idoms(struct bpf_verifier_env *env, struct bpf_iarray **preds,
-				int subprog_idx)
+/* An insn. The nodes are in the order of a depth-first walk, node 0 is none. */
+struct idom_node {
+	u32 insn;
+	u32 parent;	/* in the walk */
+	u32 semi;	/* semidominator */
+	u32 idom;
+	u32 up;		/* a parent, or a parent of it, once the node is done */
+	u32 min;	/* the node with the lowest 'semi' on the way to 'up' */
+	u32 bucket;	/* list of the nodes whose 'semi' this node is */
+	u32 next;	/* in that list. Before that the next successor for the walk */
+};
+
+/* The node with the lowest 'semi' on the way up from node 'id'. Makes the way short. */
+static u32 idom_eval(struct idom_node *nodes, u32 *path, u32 id)
 {
-	struct bpf_subprog_info *subprog = &env->subprog_info[subprog_idx];
-	int start = subprog->start;
-	int po_first = subprog->postorder_start;
-	int po_last = (subprog + 1)->postorder_start - 1;
-	int *idoms = env->idoms;
-	int po_num, pred;
-	bool changed;
+	struct idom_node *node, *up;
+	u32 cnt = 0, cur;
 
-	idoms[start] = start;
-	changed = true;
-	do {
-		changed = false;
-		/*
-		 * Iterate in reverse postorder, skipping the subprog entry:
-		 * insn_postorder[po_last] is the subprogram entry.
-		 */
-		for (po_num = po_last - 1; po_num >= po_first; po_num--) {
-			int idx = env->cfg.insn_postorder[po_num];
-			int new_idom = -1;
-
-			iarray_for_each(pred, preds[idx]) {
-				if (bpf_must_abort())
-					return -EINTR;
-
-				if (idoms[pred] == -1)
-					continue;
-				if (new_idom == -1)
-					new_idom = pred;
-				else
-					new_idom = idoms_intersect(env, pred, new_idom);
-			}
-			if (new_idom != -1 && idoms[idx] != new_idom) {
-				idoms[idx] = new_idom;
-				changed = true;
-			}
-		}
-	} while (changed);
-	idoms[start] = -1;
-	return 0;
+	for (cur = id; nodes[nodes[cur].up].up; cur = nodes[cur].up)
+		path[cnt++] = cur;
+	while (cnt--) {
+		node = &nodes[path[cnt]];
+		up = &nodes[node->up];
+		if (nodes[up->min].semi < nodes[node->min].semi)
+			node->min = up->min;
+		node->up = up->up;
+	}
+	return nodes[id].min;
 }
 
+/*
+ * See "A Fast Algorithm for Finding Dominators in a Flowgraph" by Lengauer and Tarjan.
+ *
+ *   1 -> 2 -> 3 -> 4      walk:          parent[4] = 3
+ *   |              ^      from the end:  semi[4] = 1
+ *   +-> 5 ---------+      from the top:  idom[4] = 1
+ */
 int bpf_compute_idoms(struct bpf_verifier_env *env)
 {
-	struct bpf_iarray **preds;
-	u32 len = env->prog->len;
-	int *idoms, i, err = 0;
+	u32 len = env->prog->len, cnt = 0, i, insn, id, cur, best, *num, *path;
+	struct bpf_iarray **preds, *succ;
+	struct idom_node *nodes, *node;
+	int err = -ENOMEM;
 
 	preds = compute_predecessors(env);
-	if (!preds)
-		return -ENOMEM;
+	env->idoms = kvmalloc_objs(*env->idoms, len, BPF_VERIFIER_GFP);
+	nodes = kvzalloc_objs(*nodes, len + 1, BPF_VERIFIER_GFP);
+	/* insn -> node */
+	num = kvzalloc_objs(*num, 2 * (size_t)len, BPF_VERIFIER_GFP);
+	path = num + len;
+	if (!preds || !env->idoms || !nodes || !num)
+		goto out;
+	memset(env->idoms, 0xff, len * sizeof(*env->idoms));
 
-	idoms = kvzalloc_objs(*idoms, len, BPF_VERIFIER_GFP);
-	if (!idoms) {
-		kvfree(preds);
-		return -ENOMEM;
-	}
-
-	env->idoms = idoms;
-	for (i = 0; i < len; i++)
-		idoms[i] = -1;
-
+	err = -EINTR;
 	for (i = 0; i < env->subprog_cnt; i++) {
-		err = compute_subprog_idoms(env, preds, i);
-		if (err)
-			break;
+		insn = env->subprog_info[i].start;
+		for (cur = 0;; insn = succ->items[nodes[cur].next++]) {
+			if (!num[insn]) {
+				num[insn] = ++cnt;
+				nodes[cnt] = (struct idom_node){ insn, cur, cnt, .min = cnt };
+				cur = cnt;
+			}
+			if (bpf_must_abort())
+				goto out;
+			/* go back to a node that has a successor left */
+			for (; cur; cur = nodes[cur].parent) {
+				succ = bpf_insn_successors(env, nodes[cur].insn);
+				if (nodes[cur].next < succ->cnt)
+					break;
+			}
+			if (!cur)
+				break;
+		}
 	}
 
+	for (id = cnt; id; id--) {
+		node = &nodes[id];
+		if (!node->parent)
+			continue;
+		iarray_for_each(insn, preds[node->insn]) {
+			if (bpf_must_abort())
+				goto out;
+			if (!num[insn])
+				continue;
+			best = idom_eval(nodes, path, num[insn]);
+			node->semi = min(node->semi, nodes[best].semi);
+		}
+		node->next = nodes[node->semi].bucket;
+		nodes[node->semi].bucket = id;
+		node->up = node->parent;
+		for (cur = nodes[node->parent].bucket; cur; cur = nodes[cur].next) {
+			best = idom_eval(nodes, path, cur);
+			nodes[cur].idom = nodes[best].semi < nodes[cur].semi ? best : node->parent;
+		}
+		nodes[node->parent].bucket = 0;
+	}
+
+	for (id = 1; id <= cnt; id++) {
+		node = &nodes[id];
+		if (!node->parent)
+			continue;
+		if (node->idom != node->semi)
+			node->idom = nodes[node->idom].idom;
+		env->idoms[node->insn] = nodes[node->idom].insn;
+	}
+	err = 0;
+out:
 	kvfree(preds);
+	kvfree(nodes);
+	kvfree(num);
 	return err;
 }
 
