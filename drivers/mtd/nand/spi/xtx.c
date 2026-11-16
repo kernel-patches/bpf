@@ -22,6 +22,9 @@
 #define XT26XXXD_STATUS_ECC_8_CORRECTED     (3)
 #define XT26XXXD_STATUS_ECC_UNCOR_ERROR     (2)
 
+#define XT26G0XC_STATUS_ECC_MASK	GENMASK(7, 4)
+#define XT26G0XC_STATUS_ECC_UNCOR_ERROR	(0xf)
+
 static SPINAND_OP_VARIANTS(read_cache_variants,
 		SPINAND_PAGE_READ_FROM_CACHE_1S_4S_4S_OP(0, 1, NULL, 0, 0),
 		SPINAND_PAGE_READ_FROM_CACHE_1S_1S_4S_OP(0, 1, NULL, 0, 0),
@@ -138,6 +141,21 @@ static int xt26xxxd_ecc_get_status(struct spinand_device *spinand,
 
 	return -EINVAL;
 }
+
+static int xt26g0xc_ecc_get_status(struct spinand_device *spinand,
+				   u8 status)
+{
+	u8 eccsr = FIELD_GET(XT26G0XC_STATUS_ECC_MASK, status);
+
+	if (eccsr <= 8)
+		return eccsr;
+
+	if (eccsr == XT26G0XC_STATUS_ECC_UNCOR_ERROR)
+		return -EBADMSG;
+
+	return -EINVAL;
+}
+
 static const struct spinand_info xtx_spinand_table[] = {
 	SPINAND_INFO("XT26G01A",
 		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_ADDR, 0xE1),
@@ -249,6 +267,16 @@ static const struct spinand_info xtx_spinand_table[] = {
 		     0,
 		     SPINAND_ECCINFO(&xt26xxxd_ooblayout,
 				     xt26xxxd_ecc_get_status)),
+	SPINAND_INFO("XT26G04C",
+		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_ADDR, 0x13),
+		     NAND_MEMORG(1, 4096, 256, 64, 2048, 40, 1, 1, 1),
+		     NAND_ECCREQ(8, 512),
+		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
+					      &write_cache_variants,
+					      &update_cache_variants),
+		     SPINAND_HAS_QE_BIT,
+		     SPINAND_ECCINFO(&xt26xxxd_ooblayout,
+				     xt26g0xc_ecc_get_status)),
 };
 
 static const struct spinand_manufacturer_ops xtx_spinand_manuf_ops = {
