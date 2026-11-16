@@ -429,19 +429,19 @@ static int debug_enable_func(void)
 		if (!drvdata)
 			continue;
 
-		ret = pm_runtime_get_sync(drvdata->dev);
+		ret = pm_runtime_resume_and_get(drvdata->dev);
 		if (ret < 0)
 			goto err;
-		else
-			cpumask_set_cpu(cpu, &mask);
+
+		cpumask_set_cpu(cpu, &mask);
 	}
 
 	return 0;
 
 err:
 	/*
-	 * If pm_runtime_get_sync() has failed, need rollback on
-	 * all the other CPUs that have been enabled before that.
+	 * If runtime resume has failed, roll back all the other CPUs
+	 * that have been enabled before that.
 	 */
 	for_each_cpu(cpu, &mask) {
 		drvdata = per_cpu(debug_drvdata, cpu);
