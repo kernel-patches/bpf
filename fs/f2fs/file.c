@@ -2314,7 +2314,7 @@ static long f2fs_fallocate(struct file *file, int mode,
 	}
 
 	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode))) {
-		if (f2fs_is_atomic_file(inode) || f2fs_compressed_file(inode)) {
+		if (f2fs_compressed_file(inode)) {
 			ret = -EOPNOTSUPP;
 			goto out;
 		}
@@ -2358,6 +2358,23 @@ out:
 	return ret;
 }
 
+/*
+ * Abort atomic writes with inode_lock held. Until i_size is restored, GC,
+ * page faults and reads would see the i_size of the aborted writes, so keep
+ * them away as f2fs_ioc_start_atomic_write() does.
+ */
+static void f2fs_abort_atomic_write_locked(struct inode *inode, bool clean)
+{
+	if (!f2fs_is_atomic_file(inode))
+		return;
+
+	f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+	filemap_invalidate_lock(inode->i_mapping);
+	f2fs_abort_atomic_write(inode, clean);
+	filemap_invalidate_unlock(inode->i_mapping);
+	f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+}
+
 static int f2fs_release_file(struct inode *inode, struct file *filp)
 {
 	if (atomic_dec_and_test(&F2FS_I(inode)->open_count))
@@ -2372,7 +2389,7 @@ static int f2fs_release_file(struct inode *inode, struct file *filp)
 		return 0;
 
 	inode_lock(inode);
-	f2fs_abort_atomic_write(inode, true);
+	f2fs_abort_atomic_write_locked(inode, true);
 	inode_unlock(inode);
 
 	return 0;
@@ -2391,7 +2408,7 @@ static int f2fs_file_flush(struct file *file, fl_owner_t id)
 	if (F2FS_I(inode)->atomic_write_task == current &&
 				(current->flags & PF_EXITING)) {
 		inode_lock(inode);
-		f2fs_abort_atomic_write(inode, true);
+		f2fs_abort_atomic_write_locked(inode, true);
 		inode_unlock(inode);
 	}
 
@@ -2568,9 +2585,6 @@ static int f2fs_ioc_start_atomic_write(struct file *filp, bool truncate)
 	loff_t isize;
 	int ret;
 
-	if (f2fs_has_subpage_blocks(sbi))
-		return -EOPNOTSUPP;
-
 	if (!(filp->f_mode & FMODE_WRITE))
 		return -EBADF;
 
@@ -2702,7 +2716,7 @@ static int f2fs_ioc_commit_atomic_write(struct file *filp)
 		if (!ret)
 			ret = f2fs_do_sync_file(filp, 0, LLONG_MAX, 0, true);
 
-		f2fs_abort_atomic_write(inode, ret);
+		f2fs_abort_atomic_write_locked(inode, ret);
 	} else {
 		ret = f2fs_do_sync_file(filp, 0, LLONG_MAX, 1, false);
 	}
@@ -2730,7 +2744,7 @@ static int f2fs_ioc_abort_atomic_write(struct file *filp)
 
 	inode_lock(inode);
 
-	f2fs_abort_atomic_write(inode, true);
+	f2fs_abort_atomic_write_locked(inode, true);
 
 	inode_unlock(inode);
 

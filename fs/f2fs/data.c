@@ -4698,7 +4698,7 @@ static int f2fs_write_cache_folios(struct address_space *mapping,
 		}
 
 		if (f2fs_has_subpage_blocks(sbi) &&
-		    (f2fs_compressed_file(inode) || f2fs_is_atomic_file(inode))) {
+		    f2fs_compressed_file(inode)) {
 			WARN_ON_ONCE(1);
 			mapping_set_error(mapping, -EOPNOTSUPP);
 			folio_clear_dirty_for_io(folio);
@@ -5325,7 +5325,7 @@ static int prepare_large_folio_write_begin(struct inode *inode,
 	int err = 0;
 
 	if (f2fs_has_subpage_blocks(sbi) &&
-	    (f2fs_compressed_file(inode) || f2fs_is_atomic_file(inode)))
+	    f2fs_compressed_file(inode))
 		return -EOPNOTSUPP;
 
 	/*
@@ -5441,13 +5441,16 @@ static int prepare_large_folio_atomic_write_begin(struct inode *inode,
 	/* Inline data must have been converted before reaching here. */
 	f2fs_bug_on(sbi, f2fs_has_inline_data(inode));
 
-	start = folio->index + (ori_off >> PAGE_SHIFT);
-	end = folio->index + ((ori_off + len - 1) >> PAGE_SHIFT);
+	start = f2fs_folio_lblk(sbi, folio) + F2FS_BYTES_TO_BLK(sbi, ori_off);
+	end = f2fs_folio_lblk(sbi, folio) +
+		F2FS_BYTES_TO_BLK(sbi, ori_off + len - 1);
 
 	for (index = start; index <= end; index++) {
+		loff_t block_start = F2FS_BLK_TO_BYTES(sbi, index);
+		loff_t block_end = block_start + F2FS_BLKSIZE(sbi);
 		block_t blkaddr = NULL_ADDR;
 		bool node_changed = false;
-		size_t off = (index - folio->index) << PAGE_SHIFT;
+		size_t off = f2fs_folio_byte_offset(sbi, folio, index);
 
 		err = prepare_atomic_write_begin(sbi, inode, index,
 						&blkaddr, &node_changed,
@@ -5455,12 +5458,17 @@ static int prepare_large_folio_atomic_write_begin(struct inode *inode,
 		if (err)
 			return err;
 
+		/* Skip read if the write covers the entire block. */
+		if (pos <= block_start && pos + len >= block_end)
+			goto balance;
+
 		if (f2fs_ffs_test_blk_uptodate(folio, index))
 			goto balance;
 
 		if (blkaddr == NEW_ADDR) {
-			folio_zero_segment(folio, off, off + PAGE_SIZE);
-			f2fs_ffs_mark_subrange_uptodate(folio, off, PAGE_SIZE);
+			folio_zero_segment(folio, off, off + F2FS_BLKSIZE(sbi));
+			f2fs_ffs_mark_subrange_uptodate(folio, off,
+							F2FS_BLKSIZE(sbi));
 			goto balance;
 		}
 
@@ -5517,7 +5525,7 @@ static int f2fs_write_begin(const struct kiocb *iocb,
 	}
 
 	if (f2fs_has_subpage_blocks(sbi) &&
-	    (f2fs_compressed_file(inode) || f2fs_is_atomic_file(inode))) {
+	    f2fs_compressed_file(inode)) {
 		err = -EOPNOTSUPP;
 		goto fail;
 	}

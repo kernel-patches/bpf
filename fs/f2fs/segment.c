@@ -186,6 +186,13 @@ bool f2fs_need_SSR(struct f2fs_sb_info *sbi)
 			SM_I(sbi)->min_ssr_sections + reserved_sections(sbi));
 }
 
+/*
+ * The callers hold i_gc_rwsem[WRITE] and invalidate_lock as
+ * f2fs_ioc_start_atomic_write() does, so that no page is read, by GC either,
+ * or made writable between dropping the page cache and restoring i_size, i.e.
+ * with the i_size of the aborted writes. Only the eviction does not, as no one
+ * else uses the inode then.
+ */
 void f2fs_abort_atomic_write(struct inode *inode, bool clean)
 {
 	struct f2fs_inode_info *fi = F2FS_I(inode);
