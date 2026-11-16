@@ -563,9 +563,9 @@ static const u8 xe2_rcs_offsets[] = {
 	REG16(0x5a8),           /* [0x37] CONTEXT_SCHEDULING_ATTRIBUTES */
 	REG16(0x5ac),           /* [0x39] PREEMPTION_STATUS */
 
-	NOP(6),                 /* [0x41] */
-	LRI(1, 0),              /* [0x47] */
-	REG(0x0c8),             /* [0x48] R_PWR_CLK_STATE */
+	NOP(6),                 /* [0x3b] */
+	LRI(1, 0),              /* [0x41] */
+	REG(0x0c8),             /* [0x42] R_PWR_CLK_STATE */
 
 	0
 };
