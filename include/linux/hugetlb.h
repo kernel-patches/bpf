@@ -698,6 +698,8 @@ struct hstate {
 	unsigned long free_huge_pages;
 	unsigned long resv_huge_pages;
 	unsigned long surplus_huge_pages;
+	/* Included in nr_huge_pages; not exported separately to userspace. */
+	unsigned long temporary_huge_pages;
 	unsigned long nr_overcommit_huge_pages;
 	struct list_head hugepage_activelist;
 	struct list_head hugepage_freelists[MAX_NUMNODES];
@@ -705,6 +707,7 @@ struct hstate {
 	unsigned int nr_huge_pages_node[MAX_NUMNODES];
 	unsigned int free_huge_pages_node[MAX_NUMNODES];
 	unsigned int surplus_huge_pages_node[MAX_NUMNODES];
+	unsigned int temporary_huge_pages_node[MAX_NUMNODES];
 	char name[HSTATE_NAME_LEN];
 };
 
