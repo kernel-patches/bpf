@@ -3610,8 +3610,12 @@ int bpf_optimize_bpf_loop(struct bpf_verifier_env *env)
 		struct bpf_loop_inline_state *inline_state =
 			&env->insn_aux_data[i].loop_inline_state;
 
-		/* the callback that takes a stack in arena is not for a call from the program */
+		/*
+		 * The callback that takes a stack in arena is not for a call from the program.
+		 * The callback of a loop without iterations is dead code, it goes away.
+		 */
 		if (is_bpf_loop_call(insn) && inline_state->fit_for_inline &&
+		    env->insn_aux_data[subprogs[inline_state->callback_subprogno].start].seen &&
 		    !subprogs[inline_state->callback_subprogno].arena_stack_entry) {
 			stack_depth_extra = BPF_REG_SIZE * 3 + stack_depth_roundup;
 			err = inline_bpf_loop(env, i,
