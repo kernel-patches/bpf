@@ -299,7 +299,7 @@ static int hdlcd_probe(struct platform_device *pdev)
 
 	ret = pm_runtime_set_active(dev);
 	if (ret)
-		goto err_pm_active;
+		goto err_unload;
 
 	pm_runtime_enable(dev);
 
@@ -335,10 +335,9 @@ static int hdlcd_probe(struct platform_device *pdev)
 
 err_register:
 	drm_kms_helper_poll_fini(drm);
+	drm_atomic_helper_shutdown(drm);
 err_vblank:
 	pm_runtime_disable(drm->dev);
-err_pm_active:
-	drm_atomic_helper_shutdown(drm);
 err_unload:
 	hdlcd_irq_uninstall(hdlcd);
 	of_reserved_mem_device_release(drm->dev);
