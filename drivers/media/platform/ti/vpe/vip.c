@@ -3149,6 +3149,7 @@ do_free_dropq:
 do_free_hwlist:
 	vpdma_hwlist_release(dev->shared->vpdma, stream->list_num);
 do_free_stream:
+	port->cap_streams[stream_id] = NULL;
 	kfree(stream);
 	return ret;
 }
