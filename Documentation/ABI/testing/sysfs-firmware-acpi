@@ -275,3 +275,15 @@ Description:
 
 		remote_region_id: ID associated with access by agents
 		non-local to this range of addresses.
+
+What:		/sys/firmware/acpi/tables/data/BDAT
+Date:		October 2026
+Contact:	Jamie Nguyen <jamien@nvidia.com>
+Description:
+		The BIOS data structure referenced by the ACPI BDAT (BIOS Data
+		ACPI Table). It starts with a "BDATHEAD" header and holds data
+		published by firmware, such as memory training results. The
+		file size is the structure size given in that header.
+
+		The format is defined by the BDAT Interface Specification,
+		published by the UEFI Forum. The file is readable by root only.

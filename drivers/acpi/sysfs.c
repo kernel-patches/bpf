@@ -372,6 +372,7 @@ static int acpi_table_attr_init(struct kobject *tables_obj,
 			 table_attr->instance);
 		strcat(table_attr->filename, instance_str);
 	}
+	acpi_put_table(header);
 
 	table_attr->attr.size = table_header->length;
 	table_attr->attr.read = acpi_table_show;
@@ -454,14 +455,13 @@ static int acpi_bert_data_init(void *th, struct acpi_data_attr *data_attr)
 	struct acpi_table_bert *bert = th;
 
 	if (bert->header.length < sizeof(struct acpi_table_bert) ||
-	    bert->region_length < sizeof(struct acpi_bert_region)) {
-		kfree(data_attr);
+	    bert->region_length < sizeof(struct acpi_bert_region))
 		return -EINVAL;
-	}
+
 	data_attr->addr = bert->address;
 	data_attr->attr.size = bert->region_length;
 
-	return sysfs_create_bin_file(tables_data_kobj, &data_attr->attr);
+	return 0;
 }
 
 static int acpi_ccel_data_init(void *th, struct acpi_data_attr *data_attr)
@@ -469,14 +469,62 @@ static int acpi_ccel_data_init(void *th, struct acpi_data_attr *data_attr)
 	struct acpi_table_ccel *ccel = th;
 
 	if (ccel->header.length < sizeof(struct acpi_table_ccel) ||
-	    !ccel->log_area_start_address || !ccel->log_area_minimum_length) {
-		kfree(data_attr);
+	    !ccel->log_area_start_address || !ccel->log_area_minimum_length)
 		return -EINVAL;
-	}
+
 	data_attr->addr = ccel->log_area_start_address;
 	data_attr->attr.size = ccel->log_area_minimum_length;
 
-	return sysfs_create_bin_file(tables_data_kobj, &data_attr->attr);
+	return 0;
+}
+
+/*
+ * The BDAT table only holds the address of the BIOS data structure. Its
+ * size is in the structure's own header ("BDAT Interface Specification"
+ * v4.0, section 4).
+ */
+struct acpi_bdat_data_header {
+	char signature[8];	/* "BDATHEAD" */
+	u32 size;		/* whole structure, including this header */
+	u16 crc16;
+	u16 reserved;
+	u16 primary_version;
+	u16 secondary_version;
+	u32 oem_offset;
+	u32 reserved1;
+	u32 reserved2;
+} __packed;
+
+static int acpi_bdat_data_init(void *th, struct acpi_data_attr *data_attr)
+{
+	struct acpi_table_bdat *bdat = th;
+	struct acpi_bdat_data_header hdr;
+	void __iomem *base;
+	u64 end;
+
+	if (bdat->header.length < sizeof(struct acpi_table_bdat) ||
+	    bdat->gas.space_id != ACPI_ADR_SPACE_SYSTEM_MEMORY ||
+	    !bdat->gas.address)
+		return -EINVAL;
+
+	/* acpi_os_map_iomem() can't handle a range that wraps around */
+	if (check_add_overflow(bdat->gas.address, sizeof(hdr), &end))
+		return -EINVAL;
+
+	base = acpi_os_map_iomem(bdat->gas.address, sizeof(hdr));
+	if (!base)
+		return -ENOMEM;
+	memcpy_fromio(&hdr, base, sizeof(hdr));
+	acpi_os_unmap_iomem(base, sizeof(hdr));
+
+	if (memcmp(hdr.signature, "BDATHEAD", sizeof(hdr.signature)) ||
+	    hdr.size < sizeof(hdr))
+		return -EINVAL;
+
+	data_attr->addr = bdat->gas.address;
+	data_attr->attr.size = hdr.size;
+
+	return 0;
 }
 
 static struct acpi_data_obj {
@@ -485,6 +533,7 @@ static struct acpi_data_obj {
 } acpi_data_objs[] = {
 	{ ACPI_SIG_BERT, acpi_bert_data_init },
 	{ ACPI_SIG_CCEL, acpi_ccel_data_init },
+	{ ACPI_SIG_BDAT, acpi_bdat_data_init },
 };
 
 #define NUM_ACPI_DATA_OBJS ARRAY_SIZE(acpi_data_objs)
@@ -492,7 +541,7 @@ static struct acpi_data_obj {
 static int acpi_table_data_init(struct acpi_table_header *th, struct acpi_table_attr *table_attr)
 {
 	struct acpi_data_attr *data_attr;
-	int i;
+	int i, ret;
 
 	for (i = 0; i < NUM_ACPI_DATA_OBJS; i++) {
 		if (ACPI_COMPARE_NAMESEG(th->signature, acpi_data_objs[i].name)) {
@@ -504,7 +553,13 @@ static int acpi_table_data_init(struct acpi_table_header *th, struct acpi_table_
 			data_attr->attr.attr.mode = 0400;
 			strscpy(data_attr->filename, table_attr->filename);
 			data_attr->attr.attr.name = data_attr->filename;
-			return acpi_data_objs[i].fn(th, data_attr);
+			ret = acpi_data_objs[i].fn(th, data_attr);
+			if (!ret)
+				ret = sysfs_create_bin_file(tables_data_kobj,
+							    &data_attr->attr);
+			if (ret)
+				kfree(data_attr);
+			return ret;
 		}
 	}
 	return 0;
@@ -539,15 +594,19 @@ static int acpi_tables_sysfs_init(void)
 			continue;
 
 		table_attr = kzalloc_obj(*table_attr);
-		if (!table_attr)
+		if (!table_attr) {
+			acpi_put_table(table_header);
 			break;
+		}
 
 		if (acpi_table_attr_init(tables_kobj, table_attr, table_header)) {
 			kfree(table_attr);
+			acpi_put_table(table_header);
 			break;
 		}
 		list_add_tail(&table_attr->node, &acpi_table_attr_list);
 		acpi_table_data_init(table_header, table_attr);
+		acpi_put_table(table_header);
 	}
 
 	kobject_uevent(tables_kobj, KOBJ_ADD);
