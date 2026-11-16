@@ -772,7 +772,9 @@ static int gm12u320_usb_probe(struct usb_interface *interface,
 	if (ret)
 		return ret;
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ret;
 
 	usb_set_intfdata(interface, dev);
 	ret = drm_dev_register(dev, 0);
