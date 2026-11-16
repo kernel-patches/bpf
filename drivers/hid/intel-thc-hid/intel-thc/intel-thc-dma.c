@@ -911,6 +911,7 @@ static int thc_swdma_read_completion(struct thc_device *dev)
  * @read_len: The pointer of the read data length
  *
  * Oversized frames are discarded without copying data and @read_len is zero.
+ * The completed transaction is restored before returning the read error.
  *
  * Return: 0 on success, other error codes on failed.
  */
@@ -949,12 +950,11 @@ int thc_swdma_read_safe(struct thc_device *dev, void *write_buff, size_t write_l
 
 	ret = thc_dma_read(dev, &dev->dma_ctx->dma_config[THC_SWDMA],
 			   read_buff, read_buff_len, read_len, NULL);
-	if (ret)
-		goto end;
-
-	ret = thc_swdma_read_completion(dev);
 
 end:
+	if (thc_swdma_read_completion(dev))
+		dev_err(dev->dev, "Failed to restore DMA after SWDMA read\n");
+
 	mutex_unlock(&dev->thc_bus_lock);
 	return ret;
 }
