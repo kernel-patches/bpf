@@ -402,8 +402,8 @@ int bpf_check_core_relo(struct bpf_verifier_env *env,
 			break;
 		}
 
-		err = bpf_core_apply(&ctx, &core_relo, i,
-				     &prog->insnsi[core_relo.insn_off / 8]);
+		err = bpf_must_abort() ? -EINTR :
+		      bpf_core_apply(&ctx, &core_relo, i, &prog->insnsi[core_relo.insn_off / 8]);
 		if (err)
 			break;
 		bpfptr_add(&u_core_relo, rec_size);

@@ -6,7 +6,6 @@
 #include <linux/filter.h>
 #include <linux/vmalloc.h>
 #include <linux/perf_event.h>
-#include <linux/sched/signal.h>
 #include <net/xdp.h>
 #include "disasm.h"
 
@@ -166,19 +165,6 @@ static int get_callee_stack_depth(struct bpf_verifier_env *env,
 #endif
 
 /*
- * A post-verification rewriting pass can queue a patch for each instruction
- * of a large program. Keep the primitives that queue them killable and
- * preemptible.
- */
-static bool bpf_rewrite_must_abort(void)
-{
-	if (fatal_signal_pending(current))
-		return true;
-	cond_resched();
-	return false;
-}
-
-/*
  * Queue the replacement of insn 'off' by 'patch[0..len)' until
  * bpf_patch_list_commit(), see __bpf_patch_list_add(). Replacing one insn by
  * one moves nothing and is done right away in the program, unless 'off' has a
@@ -190,7 +176,7 @@ struct bpf_insn *bpf_patch_list_add(struct bpf_verifier_env *env, u32 off,
 	struct bpf_patch_list *pl = &env->patch_list;
 	struct bpf_insn_patch *p = pl->cnt ? &pl->patches[pl->cnt - 1] : NULL;
 
-	if (bpf_rewrite_must_abort())
+	if (bpf_must_abort())
 		return ERR_PTR(-EINTR);
 
 	if (verifier_bug_if(!len || off >= env->prog->len ||
@@ -221,7 +207,7 @@ int bpf_patch_list_del(struct bpf_verifier_env *env, u32 off)
 {
 	struct bpf_patch_list *pl = &env->patch_list;
 
-	if (bpf_rewrite_must_abort())
+	if (bpf_must_abort())
 		return -EINTR;
 
 	if (verifier_bug_if(off >= env->prog->len ||
@@ -240,7 +226,7 @@ int bpf_patch_list_insert(struct bpf_verifier_env *env, u32 off,
 	struct bpf_insn_patch *p = pl->cnt ? &pl->patches[pl->cnt - 1] : NULL;
 	int err;
 
-	if (bpf_rewrite_must_abort())
+	if (bpf_must_abort())
 		return -EINTR;
 
 	if (verifier_bug_if(!cnt || off >= env->prog->len ||
