@@ -428,6 +428,9 @@ static void tbnet_tear_down(struct tbnet *net, bool send_logout)
 		tbnet_free_buffers(&net->rx_ring);
 		tbnet_free_buffers(&net->tx_ring);
 
+		dev_kfree_skb_any(net->skb);
+		net->skb = NULL;
+
 		tb_xdomain_release_in_hopid(net->xd, net->remote_transmit_path);
 		net->remote_transmit_path = 0;
 	}
