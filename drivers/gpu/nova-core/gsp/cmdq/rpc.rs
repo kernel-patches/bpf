@@ -402,6 +402,6 @@ impl CmdqInner<'_> {
             }
         };
 
-        self.await_msg_with(f)
+        self.await_msg_with(Cmdq::RECEIVE_TIMEOUT, f)
     }
 }

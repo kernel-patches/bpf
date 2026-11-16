@@ -696,7 +696,7 @@ impl CmdqInner<'_> {
     /// Consumes messages from the queue until a message that satisfies `f` is encountered, and
     /// returns the result of `f`.
     ///
-    /// The message is waited for up to [`Cmdq::RECEIVE_TIMEOUT`] from the call.
+    /// The message is waited for up to `timeout` from the call.
     ///
     /// `f` is expected to return `Ok(Some(_))` with the result to return to the caller, and
     /// `Ok(None)` to signal that the received message was not the one expected (such messages are
@@ -710,9 +710,10 @@ impl CmdqInner<'_> {
     /// - Any error returned by `f`.
     fn await_msg_with<R>(
         &mut self,
+        timeout: Delta,
         f: impl Fn(GspParsedMessage<'_>) -> Result<Option<R>>,
     ) -> Result<R> {
-        let deadline = Instant::<Monotonic>::now() + Cmdq::RECEIVE_TIMEOUT;
+        let deadline = Instant::<Monotonic>::now() + timeout;
         loop {
             let remaining = deadline - Instant::<Monotonic>::now();
             if remaining.is_negative() {
