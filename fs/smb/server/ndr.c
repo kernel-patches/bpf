@@ -191,9 +191,11 @@ int ndr_encode_dos_attr(struct ndr *n, struct xattr_dos_attrib *da)
 	if (ret)
 		return ret;
 
-	ret = ndr_write_int32(n, da->version);
+	ret = ndr_write_int16(n, da->version);
 	if (ret)
 		return ret;
+
+	n->offset = ALIGN(n->offset, 4);
 
 	ret = ndr_write_int32(n, da->flags);
 	if (ret)
@@ -229,7 +231,7 @@ int ndr_encode_dos_attr(struct ndr *n, struct xattr_dos_attrib *da)
 int ndr_decode_dos_attr(struct ndr *n, struct xattr_dos_attrib *da)
 {
 	char hex_attr[12];
-	unsigned int version2;
+	__u16 version2;
 	int ret;
 
 	n->offset = 0;
@@ -246,7 +248,7 @@ int ndr_decode_dos_attr(struct ndr *n, struct xattr_dos_attrib *da)
 		return -EINVAL;
 	}
 
-	ret = ndr_read_int32(n, &version2);
+	ret = ndr_read_int16(n, &version2);
 	if (ret)
 		return ret;
 
@@ -255,6 +257,17 @@ int ndr_decode_dos_attr(struct ndr *n, struct xattr_dos_attrib *da)
 		       da->version, version2);
 		return -EINVAL;
 	}
+
+	/*
+	 * Old ksmbd v3 blobs may have two extra bytes after the discriminator.
+	 * Use their length to recognize this layout.
+	 */
+	if (da->version == 3 &&
+	    n->length == n->offset + sizeof(__u16) +
+			 3 * sizeof(__u32) + 4 * sizeof(__u64))
+		n->offset += sizeof(__u16);
+	else
+		n->offset = ALIGN(n->offset, 4);
 
 	ret = ndr_read_int32(n, &da->flags);
 	if (ret)
