@@ -1635,21 +1635,28 @@ static void bulk_vmemmap_restore_error(struct hstate *h,
 		 * If are able to restore vmemmap and free one hugetlb page, we
 		 * quit processing the list to retry the bulk operation.
 		 */
-		list_for_each_entry_safe(folio, t_folio, folio_list, lru)
-			if (hugetlb_vmemmap_restore_folio(h, folio)) {
-				list_del(&folio->lru);
-				spin_lock_irq(&hugetlb_lock);
-				add_hugetlb_folio(h, folio, true);
-				spin_unlock_irq(&hugetlb_lock);
-			} else {
-				list_del(&folio->lru);
+		list_for_each_entry_safe(folio, t_folio, folio_list, lru) {
+			list_del(&folio->lru);
+			/*
+			 * remove_hugetlb_folio() already cleared the hugetlb flag
+			 * for folios whose vmemmap was not optimized, so they can
+			 * be freed without restoring vmemmap.
+			 */
+			if (folio_test_hugetlb(folio)) {
+				if (hugetlb_vmemmap_restore_folio(h, folio)) {
+					spin_lock_irq(&hugetlb_lock);
+					add_hugetlb_folio(h, folio, true);
+					spin_unlock_irq(&hugetlb_lock);
+					continue;
+				}
 				spin_lock_irq(&hugetlb_lock);
 				__folio_clear_hugetlb(folio);
 				spin_unlock_irq(&hugetlb_lock);
-				update_and_free_hugetlb_folio(h, folio, false);
-				cond_resched();
-				break;
 			}
+			update_and_free_hugetlb_folio(h, folio, false);
+			cond_resched();
+			break;
+		}
 	}
 }
 
