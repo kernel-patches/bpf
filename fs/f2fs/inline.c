@@ -463,10 +463,6 @@ static int f2fs_move_inline_dirents(struct inode *dir,
 	memcpy(dst.dentry, src.dentry, SIZE_OF_DIR_ENTRY * src.max);
 	memcpy(dst.filename, src.filename, src.max * F2FS_SLOT_LEN);
 
-	if (!folio_test_uptodate(folio))
-		folio_mark_uptodate(folio);
-	folio_mark_dirty(folio);
-
 	/* clear inline dir and flag after data writeback */
 	f2fs_truncate_inline_inode(dir, ientry, 0);
 
@@ -484,6 +480,8 @@ static int f2fs_move_inline_dirents(struct inode *dir,
 	f2fs_i_depth_write(dir, 1);
 	if (i_size_read(dir) < F2FS_BLKSIZE(F2FS_I_SB(dir)))
 		f2fs_i_size_write(dir, F2FS_BLKSIZE(F2FS_I_SB(dir)));
+
+	f2fs_mark_dentry_folio_dirty(dir, folio, 0);
 out:
 	f2fs_folio_put(folio, true);
 	return err;
