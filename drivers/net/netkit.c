@@ -772,7 +772,7 @@ int netkit_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	if (!ret) {
 		if (entry != entry_new) {
 			netkit_entry_update(dev, entry_new);
-			netkit_entry_sync();
+			bpf_mprog_defer_sync(entry);
 		}
 		bpf_mprog_commit(entry);
 	}
@@ -854,7 +854,7 @@ static int netkit_link_prog_attach(struct bpf_link *link, u32 flags,
 	if (!ret) {
 		if (entry != entry_new) {
 			netkit_entry_update(dev, entry_new);
-			netkit_entry_sync();
+			bpf_mprog_defer_sync(entry);
 		}
 		bpf_mprog_commit(entry);
 	}
