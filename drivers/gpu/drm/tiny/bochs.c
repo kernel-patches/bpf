@@ -683,9 +683,7 @@ static int bochs_kms_init(struct bochs_device *bochs)
 	if (ret)
 		return ret;
 
-	drm_mode_config_reset(dev);
-
-	return 0;
+	return drm_mode_config_create_initial_state(dev);
 }
 
 /* ---------------------------------------------------------------------- */
