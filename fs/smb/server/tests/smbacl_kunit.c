@@ -280,10 +280,46 @@ out:
 	fput(file);
 }
 
+/*
+ * Storing a descriptor must leave the caller's buffer unchanged.
+ * Check both a successful store and rejection of a short length.
+ */
+static void ksmbd_vfs_set_sd_xattr_keeps_caller_sd_test(struct kunit *test)
+{
+	struct file *file;
+	struct smb_ntsd *pntsd, *orig;
+	int ntsd_size, rc;
+
+	pntsd = build_boundary_ntsd(test, &test_owner_sid, FILE_READ_DATA,
+				    FILE_WRITE_DATA, &ntsd_size);
+	KUNIT_ASSERT_NOT_NULL(test, pntsd);
+	orig = kunit_kmalloc(test, ntsd_size, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, orig);
+	memcpy(orig, pntsd, ntsd_size);
+
+	file = shmem_file_setup("ksmbd-kunit-sd-copy", 0,
+				mk_vma_flags(VMA_NORESERVE_BIT));
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, file);
+
+	rc = ksmbd_vfs_set_sd_xattr(NULL, mnt_idmap(file->f_path.mnt),
+				    &file->f_path, pntsd, ntsd_size);
+	KUNIT_EXPECT_EQ(test, 0, rc);
+	KUNIT_EXPECT_MEMEQ(test, pntsd, orig, ntsd_size);
+
+	rc = ksmbd_vfs_set_sd_xattr(NULL, mnt_idmap(file->f_path.mnt),
+				    &file->f_path, pntsd,
+				    sizeof(struct smb_ntsd) - 1);
+	KUNIT_EXPECT_EQ(test, -EINVAL, rc);
+	KUNIT_EXPECT_MEMEQ(test, pntsd, orig, ntsd_size);
+
+	fput(file);
+}
+
 static struct kunit_case ksmbd_smbacl_test_cases[] = {
 	KUNIT_CASE(ksmbd_dacl_walk_must_stop_at_declared_size),
 	KUNIT_CASE(ksmbd_smb_check_perm_dacl_boundary_test),
 	KUNIT_CASE(ksmbd_smb_check_perm_dacl_maximal_boundary_test),
+	KUNIT_CASE(ksmbd_vfs_set_sd_xattr_keeps_caller_sd_test),
 	{}
 };
 

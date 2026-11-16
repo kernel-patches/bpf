@@ -1699,7 +1699,7 @@ out:
 int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 			   const struct mnt_idmap *idmap,
 			   const struct path *path,
-			   struct smb_ntsd *pntsd, int len)
+			   const struct smb_ntsd *pntsd, int len)
 {
 	int rc;
 	struct ndr sd_ndr = {0}, acl_ndr = {0};
@@ -1707,6 +1707,15 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 	struct xattr_smb_acl *smb_acl, *def_smb_acl = NULL;
 	struct dentry *dentry = path->dentry;
 	struct inode *inode = d_inode(dentry);
+	struct smb_ntsd *sd;
+
+	if (len < (int)sizeof(struct smb_ntsd))
+		return -EINVAL;
+
+	/* Shift the offsets in a copy and leave the caller's SD as it is */
+	sd = kmemdup(pntsd, len, KSMBD_DEFAULT_GFP);
+	if (!sd)
+		return -ENOMEM;
 
 	acl.version = 4;
 	acl.hash_type = XATTR_SD_HASH_TYPE_SHA256;
@@ -1715,14 +1724,14 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 	memcpy(acl.desc, "posix_acl", 9);
 	acl.desc_len = 10;
 
-	pntsd->osidoffset =
-		cpu_to_le32(le32_to_cpu(pntsd->osidoffset) + NDR_NTSD_OFFSETOF);
-	pntsd->gsidoffset =
-		cpu_to_le32(le32_to_cpu(pntsd->gsidoffset) + NDR_NTSD_OFFSETOF);
-	pntsd->dacloffset =
-		cpu_to_le32(le32_to_cpu(pntsd->dacloffset) + NDR_NTSD_OFFSETOF);
+	sd->osidoffset =
+		cpu_to_le32(le32_to_cpu(sd->osidoffset) + NDR_NTSD_OFFSETOF);
+	sd->gsidoffset =
+		cpu_to_le32(le32_to_cpu(sd->gsidoffset) + NDR_NTSD_OFFSETOF);
+	sd->dacloffset =
+		cpu_to_le32(le32_to_cpu(sd->dacloffset) + NDR_NTSD_OFFSETOF);
 
-	acl.sd_buf = (char *)pntsd;
+	acl.sd_buf = sd;
 	acl.sd_size = len;
 
 	sha256(acl.sd_buf, acl.sd_size, acl.hash);
@@ -1765,6 +1774,7 @@ out:
 	kfree(acl_ndr.data);
 	kfree(smb_acl);
 	kfree(def_smb_acl);
+	kfree(sd);
 	return rc;
 }
 EXPORT_SYMBOL_IF_KUNIT(ksmbd_vfs_set_sd_xattr);
