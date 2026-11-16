@@ -126,7 +126,9 @@ static int armada_drm_bind(struct device *dev)
 	if (ret)
 		goto err_comp;
 
-	drm_mode_config_reset(&priv->drm);
+	ret = drm_mode_config_create_initial_state(&priv->drm);
+	if (ret)
+		goto err_comp;
 
 	drm_kms_helper_poll_init(&priv->drm);
 
