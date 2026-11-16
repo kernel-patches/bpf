@@ -1254,12 +1254,15 @@ static int sun50i_h616_ccu_probe(struct platform_device *pdev)
 	ccu_mux_notifier_register(pll_cpux_clk.common.hw.clk,
 				  &sun50i_h616_cpu_nb);
 
+	/*
+	 * Re-lock the GPU PLL after any rate changes. Must be registered
+	 * before the mux notifier, so GPU goes back to a locked PLL.
+	 */
+	ccu_pll_notifier_register(&sun50i_h616_pll_gpu_nb);
+
 	/* Reparent GPU during GPU PLL rate changes */
 	ccu_mux_notifier_register(pll_gpu_clk.common.hw.clk,
 				  &sun50i_h616_gpu_nb);
-
-	/* Re-lock the GPU PLL after any rate changes */
-	ccu_pll_notifier_register(&sun50i_h616_pll_gpu_nb);
 
 	return 0;
 }
