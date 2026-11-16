@@ -171,7 +171,7 @@ u64 uncore_msr_read_counter(struct intel_uncore_box *box, struct perf_event *eve
 {
 	u64 count;
 
-	rdmsrq(event->hw.event_base, count);
+	count = rdmsrq(event->hw.event_base);
 
 	return count;
 }

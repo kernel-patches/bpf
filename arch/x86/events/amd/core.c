@@ -663,7 +663,7 @@ static inline u64 amd_pmu_get_global_status(void)
 	u64 status;
 
 	/* PerfCntrGlobalStatus is read-only */
-	rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS, status);
+	status = rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS);
 
 	return status;
 }
@@ -683,7 +683,7 @@ static bool amd_pmu_test_overflow_topbit(int idx)
 {
 	u64 counter;
 
-	rdmsrq(x86_pmu_event_addr(idx), counter);
+	counter = rdmsrq(x86_pmu_event_addr(idx));
 
 	return !(counter & BIT_ULL(x86_pmu.cntval_bits - 1));
 }

@@ -38,7 +38,7 @@ static u64 hv_apic_icr_read(void)
 {
 	u64 reg_val;
 
-	rdmsrq(HV_X64_MSR_ICR, reg_val);
+	reg_val = rdmsrq(HV_X64_MSR_ICR);
 	return reg_val;
 }
 
@@ -64,10 +64,10 @@ static u32 hv_apic_read(u32 reg)
 
 	switch (reg) {
 	case APIC_EOI:
-		rdmsrq(HV_X64_MSR_EOI, reg_val.q);
+		reg_val.q = rdmsrq(HV_X64_MSR_EOI);
 		return reg_val.l;
 	case APIC_TASKPRI:
-		rdmsrq(HV_X64_MSR_TPR, reg_val.q);
+		reg_val.q = rdmsrq(HV_X64_MSR_TPR);
 		return reg_val.l;
 
 	default:

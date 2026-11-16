@@ -105,7 +105,7 @@ static bool split_lock_verify_msr(bool on)
 		ctrl &= ~MSR_TEST_CTRL_SPLIT_LOCK_DETECT;
 	if (wrmsrq_safe(MSR_TEST_CTRL, ctrl))
 		return false;
-	rdmsrq(MSR_TEST_CTRL, tmp);
+	tmp = rdmsrq(MSR_TEST_CTRL);
 	return ctrl == tmp;
 }
 
@@ -145,7 +145,7 @@ static void __init __split_lock_setup(void)
 		return;
 	}
 
-	rdmsrq(MSR_TEST_CTRL, msr_test_ctrl_cache);
+	msr_test_ctrl_cache = rdmsrq(MSR_TEST_CTRL);
 
 	if (!split_lock_verify_msr(true)) {
 		pr_info("MSR access failed: Disabled\n");
@@ -305,7 +305,7 @@ void bus_lock_init(void)
 	if (!boot_cpu_has(X86_FEATURE_BUS_LOCK_DETECT))
 		return;
 
-	rdmsrq(MSR_IA32_DEBUGCTLMSR, val);
+	val = rdmsrq(MSR_IA32_DEBUGCTLMSR);
 
 	if ((boot_cpu_has(X86_FEATURE_SPLIT_LOCK_DETECT) &&
 	    (sld_state == sld_warn || sld_state == sld_fatal)) ||
@@ -383,7 +383,7 @@ static void __init split_lock_setup(struct cpuinfo_x86 *c)
 	 * MSR_IA32_CORE_CAPS_SPLIT_LOCK_DETECT is.  All CPUs that set
 	 * it have split lock detection.
 	 */
-	rdmsrq(MSR_IA32_CORE_CAPS, ia32_core_caps);
+	ia32_core_caps = rdmsrq(MSR_IA32_CORE_CAPS);
 	if (ia32_core_caps & MSR_IA32_CORE_CAPS_SPLIT_LOCK_DETECT)
 		goto supported;
 

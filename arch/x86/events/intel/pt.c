@@ -196,7 +196,7 @@ static int __init pt_pmu_hw_init(void)
 	int ret;
 	long i;
 
-	rdmsrq(MSR_PLATFORM_INFO, reg);
+	reg = rdmsrq(MSR_PLATFORM_INFO);
 	pt_pmu.max_nonturbo_ratio = (reg & 0xff00) >> 8;
 
 	/*
@@ -232,7 +232,7 @@ static int __init pt_pmu_hw_init(void)
 		 * "IA32_VMX_MISC[bit 14]" being 1 means PT can trace
 		 * post-VMXON.
 		 */
-		rdmsrq(MSR_IA32_VMX_MISC, reg);
+		reg = rdmsrq(MSR_IA32_VMX_MISC);
 		if (reg & BIT(14))
 			pt_pmu.vmx = true;
 	}
@@ -934,7 +934,7 @@ static void pt_handle_status(struct pt *pt)
 	int advance = 0;
 	u64 status;
 
-	rdmsrq(MSR_IA32_RTIT_STATUS, status);
+	status = rdmsrq(MSR_IA32_RTIT_STATUS);
 
 	if (status & RTIT_STATUS_ERROR) {
 		pr_err_ratelimited("ToPA ERROR encountered, trying to recover\n");
@@ -993,12 +993,12 @@ static void pt_read_offset(struct pt_buffer *buf)
 	struct topa_page *tp;
 
 	if (!buf->single) {
-		rdmsrq(MSR_IA32_RTIT_OUTPUT_BASE, pt->output_base);
+		pt->output_base = rdmsrq(MSR_IA32_RTIT_OUTPUT_BASE);
 		tp = phys_to_virt(pt->output_base);
 		buf->cur = &tp->topa;
 	}
 
-	rdmsrq(MSR_IA32_RTIT_OUTPUT_MASK, pt->output_mask);
+	pt->output_mask = rdmsrq(MSR_IA32_RTIT_OUTPUT_MASK);
 	/* offset within current output region */
 	buf->output_off = pt->output_mask >> 32;
 	/* index of current output region within this table */
@@ -1621,7 +1621,7 @@ static void pt_event_start(struct perf_event *event, int mode)
 			 * PMI might have just cleared these, so resume_allowed
 			 * must be checked again also.
 			 */
-			rdmsrq(MSR_IA32_RTIT_STATUS, status);
+			status = rdmsrq(MSR_IA32_RTIT_STATUS);
 			if (!(status & (RTIT_STATUS_TRIGGEREN |
 					RTIT_STATUS_ERROR |
 					RTIT_STATUS_STOPPED)) &&

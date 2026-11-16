@@ -202,7 +202,7 @@ static int __init early_root_info_init(void)
 
 	/* need to take out [0, TOM) for RAM*/
 	address = MSR_K8_TOP_MEM1;
-	rdmsrq(address, val);
+	val = rdmsrq(address);
 	end = (val & 0xffffff800000ULL);
 	printk(KERN_INFO "TOM: %016llx aka %lldM\n", end, end>>20);
 	if (end < (1ULL<<32))
@@ -293,12 +293,12 @@ static int __init early_root_info_init(void)
 	/* need to take out [4G, TOM2) for RAM*/
 	/* SYS_CFG */
 	address = MSR_AMD64_SYSCFG;
-	rdmsrq(address, val);
+	val = rdmsrq(address);
 	/* TOP_MEM2 is enabled? */
 	if (val & (1<<21)) {
 		/* TOP_MEM2 */
 		address = MSR_K8_TOP_MEM2;
-		rdmsrq(address, val);
+		val = rdmsrq(address);
 		end = (val & 0xffffff800000ULL);
 		printk(KERN_INFO "TOM2: %016llx aka %lldM\n", end, end>>20);
 		subtract_range(range, RANGE_NUM, 1ULL<<32, end);
@@ -341,7 +341,7 @@ static int amd_bus_cpu_online(unsigned int cpu)
 {
 	u64 reg;
 
-	rdmsrq(MSR_AMD64_NB_CFG, reg);
+	reg = rdmsrq(MSR_AMD64_NB_CFG);
 	if (!(reg & ENABLE_CF8_EXT_CFG)) {
 		reg |= ENABLE_CF8_EXT_CFG;
 		wrmsrq(MSR_AMD64_NB_CFG, reg);

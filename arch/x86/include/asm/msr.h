@@ -173,14 +173,13 @@ static inline u64 native_read_pmc(int counter)
 #include <asm/paravirt.h>
 #else
 #include <linux/errno.h>
-/*
- * Access to machine-specific registers (available on 586 and better only)
- * Note: the rd* operations modify the parameters directly (without using
- * pointer indirection), this allows gcc to optimize better
- */
 
-#define rdmsrq(msr, val)			\
-	((val) = native_read_msr((msr)))
+/* Access to machine-specific registers (available on 586 and better only) */
+
+static __always_inline u64 rdmsrq(u32 msr)
+{
+	return native_read_msr(msr);
+}
 
 static inline void wrmsrq(u32 msr, u64 val)
 {
@@ -237,7 +236,7 @@ int wrmsr_safe_regs_on_cpu(unsigned int cpu, u32 regs[8]);
 #else  /*  CONFIG_SMP  */
 static inline int rdmsrq_on_cpu(unsigned int cpu, u32 msr_no, u64 *q)
 {
-	rdmsrq(msr_no, *q);
+	*q = rdmsrq(msr_no);
 	return 0;
 }
 static inline int wrmsrq_on_cpu(unsigned int cpu, u32 msr_no, u64 q)

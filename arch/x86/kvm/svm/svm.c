@@ -4758,8 +4758,8 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu, u64 run_flags)
 		vmcb_mark_all_clean(svm->vmcb);
 
 		if (!msr_write_intercepted(svm, MSR_AMD64_PERF_CNTR_GLOBAL_CTL))
-			rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_CTL,
-			       vcpu_to_pmu(vcpu)->global_ctrl);
+			vcpu_to_pmu(vcpu)->global_ctrl =
+				rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_CTL);
 	}
 
 	/* if exit due to PF check for async PF */
@@ -5622,7 +5622,7 @@ static __init void svm_adjust_mmio_mask(void)
 		return;
 
 	/* If memory encryption is not enabled, use existing mask */
-	rdmsrq(MSR_AMD64_SYSCFG, msr);
+	msr = rdmsrq(MSR_AMD64_SYSCFG);
 	if (!(msr & MSR_AMD64_SYSCFG_MEM_ENCRYPT))
 		return;
 

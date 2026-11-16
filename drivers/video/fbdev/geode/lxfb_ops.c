@@ -127,7 +127,7 @@ static void lx_set_dotpll(u32 pllval)
 	struct msr dotpll;
 	int i;
 
-	rdmsrq(MSR_GLCP_DOTPLL, dotpll.q);
+	dotpll.q = rdmsrq(MSR_GLCP_DOTPLL);
 
 	if ((dotpll.l & MSR_GLCP_DOTPLL_LOCK) && (dotpll.h == pllval))
 		return;
@@ -145,7 +145,7 @@ static void lx_set_dotpll(u32 pllval)
 	/* Now, loop for the lock bit */
 
 	for (i = 0; i < 1000; i++) {
-		rdmsrq(MSR_GLCP_DOTPLL, dotpll.q);
+		dotpll.q = rdmsrq(MSR_GLCP_DOTPLL);
 		if (dotpll.l & MSR_GLCP_DOTPLL_LOCK)
 			break;
 	}
@@ -316,7 +316,7 @@ unsigned int lx_framebuffer_size(void)
 		struct msr msr;
 
 		/* The number of pages is (PMAX - PMIN)+1 */
-		rdmsrq(MSR_GLIU_P2D_RO0, msr.q);
+		msr.q = rdmsrq(MSR_GLIU_P2D_RO0);
 
 		/* PMAX */
 		val = ((msr.h & 0xff) << 12) | ((msr.l & 0xfff00000) >> 20);
@@ -359,7 +359,7 @@ void lx_set_mode(struct fb_info *info)
 
 	/* Set output mode */
 
-	rdmsrq(MSR_LX_GLD_MSR_CONFIG, msrval);
+	msrval = rdmsrq(MSR_LX_GLD_MSR_CONFIG);
 	msrval &= ~MSR_LX_GLD_MSR_CONFIG_FMT;
 
 	if (par->output & OUTPUT_PANEL) {
@@ -420,7 +420,7 @@ void lx_set_mode(struct fb_info *info)
 
 	/* Set default watermark values */
 
-	rdmsrq(MSR_LX_SPARE_MSR, msrval);
+	msrval = rdmsrq(MSR_LX_SPARE_MSR);
 
 	msrval &= ~(MSR_LX_SPARE_MSR_DIS_CFIFO_HGO
 			| MSR_LX_SPARE_MSR_VFIFO_ARB_SEL
@@ -592,10 +592,10 @@ static void lx_save_regs(struct lxfb_par *par)
 	} while ((i & GP_BLT_STATUS_PB) || !(i & GP_BLT_STATUS_CE));
 
 	/* save MSRs */
-	rdmsrq(MSR_LX_MSR_PADSEL, par->msr.padsel);
-	rdmsrq(MSR_GLCP_DOTPLL, par->msr.dotpll);
-	rdmsrq(MSR_LX_GLD_MSR_CONFIG, par->msr.dfglcfg);
-	rdmsrq(MSR_LX_SPARE_MSR, par->msr.dcspare);
+	par->msr.padsel = rdmsrq(MSR_LX_MSR_PADSEL);
+	par->msr.dotpll = rdmsrq(MSR_GLCP_DOTPLL);
+	par->msr.dfglcfg = rdmsrq(MSR_LX_GLD_MSR_CONFIG);
+	par->msr.dcspare = rdmsrq(MSR_LX_SPARE_MSR);
 
 	write_dc(par, DC_UNLOCK, DC_UNLOCK_UNLOCK);
 

@@ -1261,13 +1261,13 @@ static inline void pt_save_msr(struct pt_ctx *ctx, u32 addr_range)
 {
 	u32 i;
 
-	rdmsrq(MSR_IA32_RTIT_STATUS, ctx->status);
-	rdmsrq(MSR_IA32_RTIT_OUTPUT_BASE, ctx->output_base);
-	rdmsrq(MSR_IA32_RTIT_OUTPUT_MASK, ctx->output_mask);
-	rdmsrq(MSR_IA32_RTIT_CR3_MATCH, ctx->cr3_match);
+	ctx->status = rdmsrq(MSR_IA32_RTIT_STATUS);
+	ctx->output_base = rdmsrq(MSR_IA32_RTIT_OUTPUT_BASE);
+	ctx->output_mask = rdmsrq(MSR_IA32_RTIT_OUTPUT_MASK);
+	ctx->cr3_match = rdmsrq(MSR_IA32_RTIT_CR3_MATCH);
 	for (i = 0; i < addr_range; i++) {
-		rdmsrq(MSR_IA32_RTIT_ADDR0_A + i * 2, ctx->addr_a[i]);
-		rdmsrq(MSR_IA32_RTIT_ADDR0_B + i * 2, ctx->addr_b[i]);
+		ctx->addr_a[i] = rdmsrq(MSR_IA32_RTIT_ADDR0_A + i * 2);
+		ctx->addr_b[i] = rdmsrq(MSR_IA32_RTIT_ADDR0_B + i * 2);
 	}
 }
 
@@ -1280,7 +1280,7 @@ static void pt_guest_enter(struct vcpu_vmx *vmx)
 	 * GUEST_IA32_RTIT_CTL is already set in the VMCS.
 	 * Save host state before VM entry.
 	 */
-	rdmsrq(MSR_IA32_RTIT_CTL, vmx->pt_desc.host.ctl);
+	vmx->pt_desc.host.ctl = rdmsrq(MSR_IA32_RTIT_CTL);
 	if (vmx->pt_desc.guest.ctl & RTIT_CTL_TRACEEN) {
 		wrmsrq(MSR_IA32_RTIT_CTL, 0);
 		pt_save_msr(&vmx->pt_desc.host, vmx->pt_desc.num_address_ranges);
@@ -1418,7 +1418,7 @@ static void vmx_prepare_switch_to_host(struct vcpu_vmx *vmx)
 	++vmx->vcpu.stat.host_state_reload;
 
 #ifdef CONFIG_X86_64
-	rdmsrq(MSR_KERNEL_GS_BASE, vmx->msr_guest_kernel_gs_base);
+	vmx->msr_guest_kernel_gs_base = rdmsrq(MSR_KERNEL_GS_BASE);
 #endif
 	if (host_state->ldt_sel || (host_state->gs_sel & 7)) {
 		vmx_load_ldt(host_state->ldt_sel);
@@ -2694,7 +2694,7 @@ static int adjust_vmx_controls(u32 ctl_min, u32 ctl_opt, u32 msr, u32 *result)
 	struct msr vmx_msr;
 	u32 ctl = ctl_min | ctl_opt;
 
-	rdmsrq(msr, vmx_msr.q);
+	vmx_msr.q = rdmsrq(msr);
 
 	ctl &= vmx_msr.h;  /* bit == 0 in high word ==> must be zero */
 	ctl |= vmx_msr.l;  /* bit == 1 in low word  ==> must be one  */
@@ -2711,7 +2711,7 @@ static u64 adjust_vmx_controls64(u64 ctl_opt, u32 msr)
 {
 	u64 allowed;
 
-	rdmsrq(msr, allowed);
+	allowed = rdmsrq(msr);
 
 	return  ctl_opt & allowed;
 }
@@ -2907,7 +2907,7 @@ static int setup_vmcs_config(struct vmcs_config *vmcs_conf,
 		break;
 	}
 
-	rdmsrq(MSR_IA32_VMX_BASIC, basic_msr);
+	basic_msr = rdmsrq(MSR_IA32_VMX_BASIC);
 
 	/* IA-32 SDM Vol 3B: VMCS size is never greater than 4kB. */
 	if (vmx_basic_vmcs_size(basic_msr) > PAGE_SIZE)
@@ -2927,7 +2927,7 @@ static int setup_vmcs_config(struct vmcs_config *vmcs_conf,
 	if (vmx_basic_vmcs_mem_type(basic_msr) != X86_MEMTYPE_WB)
 		return -EIO;
 
-	rdmsrq(MSR_IA32_VMX_MISC, misc_msr);
+	misc_msr = rdmsrq(MSR_IA32_VMX_MISC);
 
 	vmcs_conf->basic = basic_msr;
 	vmcs_conf->pin_based_exec_ctrl = _pin_based_exec_control;
@@ -4504,7 +4504,7 @@ void vmx_set_constant_host_state(struct vcpu_vmx *vmx)
 
 	vmcs_writel(HOST_RIP, (unsigned long)vmx_vmexit); /* 22.2.5 */
 
-	rdmsrq(MSR_IA32_SYSENTER_CS, val.q);
+	val.q = rdmsrq(MSR_IA32_SYSENTER_CS);
 	vmcs_write32(HOST_IA32_SYSENTER_CS, val.l);
 
 	/*
@@ -4516,11 +4516,11 @@ void vmx_set_constant_host_state(struct vcpu_vmx *vmx)
 	if (!IS_ENABLED(CONFIG_IA32_EMULATION) && !IS_ENABLED(CONFIG_X86_32))
 		vmcs_writel(HOST_IA32_SYSENTER_ESP, 0);
 
-	rdmsrq(MSR_IA32_SYSENTER_EIP, tmpl);
+	tmpl = rdmsrq(MSR_IA32_SYSENTER_EIP);
 	vmcs_writel(HOST_IA32_SYSENTER_EIP, tmpl);   /* 22.2.3 */
 
 	if (vmcs_config.vmexit_ctrl & VM_EXIT_LOAD_IA32_PAT) {
-		rdmsrq(MSR_IA32_CR_PAT, val.q);
+		val.q = rdmsrq(MSR_IA32_CR_PAT);
 		vmcs_write64(HOST_IA32_PAT, val.q);
 	}
 
@@ -7897,7 +7897,7 @@ static __init u64 vmx_get_perf_capabilities(void)
 		return 0;
 
 	if (boot_cpu_has(X86_FEATURE_PDCM))
-		rdmsrq(MSR_IA32_PERF_CAPABILITIES, host_perf_cap);
+		host_perf_cap = rdmsrq(MSR_IA32_PERF_CAPABILITIES);
 
 	if (!cpu_feature_enabled(X86_FEATURE_ARCH_LBR) &&
 	    !enable_mediated_pmu) {
@@ -8545,7 +8545,7 @@ __init int vmx_hardware_setup(void)
 	vmx_setup_user_return_msrs();
 
 	if (boot_cpu_has(X86_FEATURE_MPX)) {
-		rdmsrq(MSR_IA32_BNDCFGS, host_bndcfgs);
+		host_bndcfgs = rdmsrq(MSR_IA32_BNDCFGS);
 		WARN_ONCE(host_bndcfgs, "BNDCFGS in host will be lost");
 	}
 

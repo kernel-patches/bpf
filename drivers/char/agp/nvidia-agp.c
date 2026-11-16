@@ -72,8 +72,8 @@ static int nvidia_init_iorr(u32 base, u32 size)
 	/* If not found, determine the uppermost available iorr */
 	free_iorr_addr = AMD_K7_NUM_IORR;
 	for (iorr_addr = 0; iorr_addr < AMD_K7_NUM_IORR; iorr_addr++) {
-		rdmsrq(IORR_BASE0 + 2 * iorr_addr, base_msr.q);
-		rdmsrq(IORR_MASK0 + 2 * iorr_addr, mask_msr.q);
+		base_msr.q = rdmsrq(IORR_BASE0 + 2 * iorr_addr);
+		mask_msr.q = rdmsrq(IORR_MASK0 + 2 * iorr_addr);
 
 		if ((base_msr.l & 0xfffff000) == (base & 0xfffff000))
 			break;
@@ -94,7 +94,7 @@ static int nvidia_init_iorr(u32 base, u32 size)
     wrmsrq(IORR_BASE0 + 2 * iorr_addr, base_msr.q);
     wrmsrq(IORR_MASK0 + 2 * iorr_addr, mask_msr.q);
 
-    rdmsrq(SYSCFG, sys_msr.q);
+    sys_msr.q = rdmsrq(SYSCFG);
     sys_msr.l |= 0x00100000;
     wrmsrq(SYSCFG, sys_msr.q);
 

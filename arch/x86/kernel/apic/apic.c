@@ -1193,7 +1193,7 @@ void disable_local_APIC(void)
 	if (enabled_via_apicbase) {
 		struct msr val;
 
-		rdmsrq(MSR_IA32_APICBASE, val.q);
+		val.q = rdmsrq(MSR_IA32_APICBASE);
 		val.l &= ~MSR_IA32_APICBASE_ENABLE;
 		wrmsrq(MSR_IA32_APICBASE, val.q);
 	}
@@ -1710,7 +1710,7 @@ static bool x2apic_hw_locked(void)
 
 	x86_arch_cap_msr = x86_read_arch_cap_msr();
 	if (x86_arch_cap_msr & ARCH_CAP_XAPIC_DISABLE) {
-		rdmsrq(MSR_IA32_XAPIC_DISABLE_STATUS, msr);
+		msr = rdmsrq(MSR_IA32_XAPIC_DISABLE_STATUS);
 		return (msr & LEGACY_XAPIC_DISABLED);
 	}
 	return false;
@@ -1723,7 +1723,7 @@ static void __x2apic_disable(void)
 	if (!boot_cpu_has(X86_FEATURE_APIC))
 		return;
 
-	rdmsrq(MSR_IA32_APICBASE, msr);
+	msr = rdmsrq(MSR_IA32_APICBASE);
 	if (!(msr & X2APIC_ENABLE))
 		return;
 	/* Disable xapic and x2apic first and then reenable xapic mode */
@@ -1736,7 +1736,7 @@ static void __x2apic_enable(void)
 {
 	u64 msr;
 
-	rdmsrq(MSR_IA32_APICBASE, msr);
+	msr = rdmsrq(MSR_IA32_APICBASE);
 	if (msr & X2APIC_ENABLE)
 		return;
 	wrmsrq(MSR_IA32_APICBASE, msr | X2APIC_ENABLE);
@@ -1976,7 +1976,7 @@ static bool __init apic_verify(unsigned long addr)
 
 	/* The BIOS may have set up the APIC at some other address */
 	if (boot_cpu_data.x86 >= 6) {
-		rdmsrq(MSR_IA32_APICBASE, val.q);
+		val.q = rdmsrq(MSR_IA32_APICBASE);
 		if (val.l & MSR_IA32_APICBASE_ENABLE)
 			addr = val.l & MSR_IA32_APICBASE_BASE;
 	}
@@ -1999,7 +1999,7 @@ bool __init apic_force_enable(unsigned long addr)
 	 * and AMD K7 (Model > 1) or later.
 	 */
 	if (boot_cpu_data.x86 >= 6) {
-		rdmsrq(MSR_IA32_APICBASE, val.q);
+		val.q = rdmsrq(MSR_IA32_APICBASE);
 		if (!(val.l & MSR_IA32_APICBASE_ENABLE)) {
 			pr_info("Local APIC disabled by BIOS -- reenabling.\n");
 			val.l &= ~MSR_IA32_APICBASE_BASE;
@@ -2476,7 +2476,7 @@ static void lapic_resume(void *data)
 		 * SMP! We'll need to do this as part of the CPU restore!
 		 */
 		if (boot_cpu_data.x86 >= 6) {
-			rdmsrq(MSR_IA32_APICBASE, val.q);
+			val.q = rdmsrq(MSR_IA32_APICBASE);
 			val.l &= ~MSR_IA32_APICBASE_BASE;
 			val.l |= MSR_IA32_APICBASE_ENABLE | mp_lapic_addr;
 			wrmsrq(MSR_IA32_APICBASE, val.q);

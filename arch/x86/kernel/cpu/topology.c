@@ -151,7 +151,7 @@ static __init bool check_for_real_bsp(u32 apic_id)
 	 * kernel must rely on the firmware enumeration order.
 	 */
 	if (has_apic_base) {
-		rdmsrq(MSR_IA32_APICBASE, msr);
+		msr = rdmsrq(MSR_IA32_APICBASE);
 		is_bsp = !!(msr & MSR_IA32_APICBASE_BSP);
 	}
 

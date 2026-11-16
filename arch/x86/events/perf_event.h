@@ -1678,11 +1678,11 @@ static __always_inline void __amd_pmu_lbr_disable(void)
 {
 	u64 dbg_ctl, dbg_extn_cfg;
 
-	rdmsrq(MSR_AMD_DBG_EXTN_CFG, dbg_extn_cfg);
+	dbg_extn_cfg = rdmsrq(MSR_AMD_DBG_EXTN_CFG);
 	wrmsrq(MSR_AMD_DBG_EXTN_CFG, dbg_extn_cfg & ~DBG_EXTN_CFG_LBRV2EN);
 
 	if (cpu_feature_enabled(X86_FEATURE_AMD_LBR_PMC_FREEZE)) {
-		rdmsrq(MSR_IA32_DEBUGCTLMSR, dbg_ctl);
+		dbg_ctl = rdmsrq(MSR_IA32_DEBUGCTLMSR);
 		wrmsrq(MSR_IA32_DEBUGCTLMSR, dbg_ctl & ~DEBUGCTLMSR_FREEZE_LBRS_ON_PMI);
 	}
 }
@@ -1836,7 +1836,7 @@ static __always_inline void __intel_pmu_lbr_disable(void)
 {
 	u64 debugctl;
 
-	rdmsrq(MSR_IA32_DEBUGCTLMSR, debugctl);
+	debugctl = rdmsrq(MSR_IA32_DEBUGCTLMSR);
 	debugctl &= ~(DEBUGCTLMSR_LBR | DEBUGCTLMSR_FREEZE_LBRS_ON_PMI);
 	wrmsrq(MSR_IA32_DEBUGCTLMSR, debugctl);
 }

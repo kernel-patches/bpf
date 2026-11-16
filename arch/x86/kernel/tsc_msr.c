@@ -179,15 +179,15 @@ unsigned long cpu_khz_from_msr(void)
 
 	freq_desc = (struct freq_desc *)id->driver_data;
 	if (freq_desc->use_msr_plat) {
-		rdmsrq(MSR_PLATFORM_INFO, val.q);
+		val.q = rdmsrq(MSR_PLATFORM_INFO);
 		ratio = (val.l >> 8) & 0xff;
 	} else {
-		rdmsrq(MSR_IA32_PERF_STATUS, val.q);
+		val.q = rdmsrq(MSR_IA32_PERF_STATUS);
 		ratio = (val.h >> 8) & 0x1f;
 	}
 
 	/* Get FSB FREQ ID */
-	rdmsrq(MSR_FSB_FREQ, val.q);
+	val.q = rdmsrq(MSR_FSB_FREQ);
 	index = val.l & freq_desc->mask;
 	md = &freq_desc->muldiv[index];
 

@@ -150,10 +150,10 @@ static inline int paravirt_write_msr_safe(u32 msr, u64 val)
 	return PVOP_CALL2(int, pv_ops, cpu.write_msr_safe, msr, val);
 }
 
-#define rdmsrq(msr, val)			\
-do {						\
-	val = paravirt_read_msr(msr);		\
-} while (0)
+static __always_inline u64 rdmsrq(u32 msr)
+{
+	return paravirt_read_msr(msr);
+}
 
 static inline void wrmsrq(u32 msr, u64 val)
 {

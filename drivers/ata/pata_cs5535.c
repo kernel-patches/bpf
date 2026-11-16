@@ -110,7 +110,7 @@ static void cs5535_set_piomode(struct ata_port *ap, struct ata_device *adev)
 	       pio_cmd_timings[cmdmode] | pio_timings[mode]);
 
 	/* Set the PIO "format 1" bit in the DMA timing register */
-	rdmsrq(ATAC_CH0D0_DMA + 2 * adev->devno, reg);
+	reg = rdmsrq(ATAC_CH0D0_DMA + 2 * adev->devno);
 	wrmsrq(ATAC_CH0D0_DMA + 2 * adev->devno, reg | 0x80000000UL);
 }
 
@@ -132,7 +132,7 @@ static void cs5535_set_dmamode(struct ata_port *ap, struct ata_device *adev)
 	u32 reg;
 	int mode = adev->dma_mode;
 
-	rdmsrq(ATAC_CH0D0_DMA + 2 * adev->devno, reg);
+	reg = rdmsrq(ATAC_CH0D0_DMA + 2 * adev->devno);
 	reg &= 0x80000000UL;
 	if (mode >= XFER_UDMA_0)
 		reg |= udma_timings[mode - XFER_UDMA_0];

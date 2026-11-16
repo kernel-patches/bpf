@@ -84,7 +84,7 @@ static int cs5536_read(struct pci_dev *pdev, int reg, u32 *val)
 {
 #ifdef MAYBE_USE_MSR
 	if (unlikely(use_msr)) {
-		rdmsrq(MSR_IDE_CFG + reg, *val);
+		*val = rdmsrq(MSR_IDE_CFG + reg);
 		return 0;
 	}
 #endif

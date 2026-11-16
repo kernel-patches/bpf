@@ -180,7 +180,7 @@ static inline unsigned long get_debugctlmsr(void)
 	if (boot_cpu_data.x86 < 6)
 		return 0;
 #endif
-	rdmsrq(MSR_IA32_DEBUGCTLMSR, debugctlmsr);
+	debugctlmsr = rdmsrq(MSR_IA32_DEBUGCTLMSR);
 
 	return debugctlmsr;
 }

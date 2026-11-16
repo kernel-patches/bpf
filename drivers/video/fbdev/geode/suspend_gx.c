@@ -21,8 +21,8 @@ static void gx_save_regs(struct gxfb_par *par)
 	} while (i & (GP_BLT_STATUS_BLT_PENDING | GP_BLT_STATUS_BLT_BUSY));
 
 	/* save MSRs */
-	rdmsrq(MSR_GX_MSR_PADSEL, par->msr.padsel);
-	rdmsrq(MSR_GLCP_DOTPLL, par->msr.dotpll);
+	par->msr.padsel = rdmsrq(MSR_GX_MSR_PADSEL);
+	par->msr.dotpll = rdmsrq(MSR_GLCP_DOTPLL);
 
 	write_dc(par, DC_UNLOCK, DC_UNLOCK_UNLOCK);
 
@@ -43,7 +43,7 @@ static void gx_set_dotpll(uint32_t dotpll_hi)
 	struct msr dotpll;
 	int i;
 
-	rdmsrq(MSR_GLCP_DOTPLL, dotpll.q);
+	dotpll.q = rdmsrq(MSR_GLCP_DOTPLL);
 	dotpll.l |= MSR_GLCP_DOTPLL_DOTRESET;
 	dotpll.l &= ~MSR_GLCP_DOTPLL_BYPASS;
 	dotpll.h = dotpll_hi;
@@ -51,7 +51,7 @@ static void gx_set_dotpll(uint32_t dotpll_hi)
 
 	/* wait for the PLL to lock */
 	for (i = 0; i < 200; i++) {
-		rdmsrq(MSR_GLCP_DOTPLL, dotpll.q);
+		dotpll.q = rdmsrq(MSR_GLCP_DOTPLL);
 		if (dotpll.l & MSR_GLCP_DOTPLL_LOCK)
 			break;
 		udelay(1);

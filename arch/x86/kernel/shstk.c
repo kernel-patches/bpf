@@ -231,7 +231,7 @@ static unsigned long get_user_shstk_addr(void)
 
 	fpregs_lock_and_load();
 
-	rdmsrq(MSR_IA32_PL3_SSP, ssp);
+	ssp = rdmsrq(MSR_IA32_PL3_SSP);
 
 	fpregs_unlock();
 
@@ -248,7 +248,7 @@ int shstk_pop(u64 *val)
 
 	fpregs_lock_and_load();
 
-	rdmsrq(MSR_IA32_PL3_SSP, ssp);
+	ssp = rdmsrq(MSR_IA32_PL3_SSP);
 	if (val && get_user(*val, (__user u64 *)ssp))
 		ret = -EFAULT;
 	else
@@ -268,7 +268,7 @@ int shstk_push(u64 val)
 
 	fpregs_lock_and_load();
 
-	rdmsrq(MSR_IA32_PL3_SSP, ssp);
+	ssp = rdmsrq(MSR_IA32_PL3_SSP);
 	ssp -= SS_FRAME_SIZE;
 	ret = write_user_shstk_64((__user void *)ssp, val);
 	if (!ret)
@@ -497,7 +497,7 @@ static int wrss_control(bool enable)
 		return 0;
 
 	fpregs_lock_and_load();
-	rdmsrq(MSR_IA32_U_CET, msrval);
+	msrval = rdmsrq(MSR_IA32_U_CET);
 
 	if (enable) {
 		features_set(ARCH_SHSTK_WRSS);

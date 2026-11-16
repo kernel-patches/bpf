@@ -151,7 +151,7 @@ static int via_rng_init(struct hwrng *rng)
 	 * does not say to write them as zero, so I make a guess that
 	 * we restore the values we find in the register.
 	 */
-	rdmsrq(MSR_VIA_RNG, val.q);
+	val.q = rdmsrq(MSR_VIA_RNG);
 
 	old_lo = val.l;
 	val.l &= ~(0x7f << VIA_STRFILT_CNT_SHIFT);
@@ -175,7 +175,7 @@ static int via_rng_init(struct hwrng *rng)
 
 	/* perhaps-unnecessary sanity check; remove after testing if
 	   unneeded */
-	rdmsrq(MSR_VIA_RNG, val.q);
+	val.q = rdmsrq(MSR_VIA_RNG);
 	if ((val.l & VIA_RNG_ENABLE) == 0) {
 		pr_err(PFX "cannot enable VIA C3 RNG, aborting\n");
 		return -ENODEV;

@@ -40,7 +40,7 @@ static void init_vmx_capabilities(struct cpuinfo_x86 *c)
 	 * as they exist on any CPU that supports VMX, i.e. we want the WARN if
 	 * the RDMSR faults.
 	 */
-	rdmsrq(MSR_IA32_VMX_PROCBASED_CTLS, val.q);
+	val.q = rdmsrq(MSR_IA32_VMX_PROCBASED_CTLS);
 	supported = val.h;
 	c->vmx_capability[PRIMARY_CTLS] = supported;
 
@@ -53,7 +53,7 @@ static void init_vmx_capabilities(struct cpuinfo_x86 *c)
 	c->vmx_capability[TERTIARY_CTLS_LOW] = val.l;
 	c->vmx_capability[TERTIARY_CTLS_HIGH] = val.h;
 
-	rdmsrq(MSR_IA32_VMX_PINBASED_CTLS, val.q);
+	val.q = rdmsrq(MSR_IA32_VMX_PINBASED_CTLS);
 	supported = val.h;
 	rdmsrq_safe(MSR_IA32_VMX_VMFUNC, &val.q);
 	funcs = val.h;

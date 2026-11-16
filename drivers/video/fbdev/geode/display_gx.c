@@ -26,7 +26,7 @@ unsigned int gx_frame_buffer_size(void)
 		struct msr msr;
 
 		/* The number of pages is (PMAX - PMIN)+1 */
-		rdmsrq(MSR_GLIU_P2D_RO0, msr.q);
+		msr.q = rdmsrq(MSR_GLIU_P2D_RO0);
 
 		/* PMAX */
 		val = ((msr.h & 0xff) << 12) | ((msr.l & 0xfff00000) >> 20);

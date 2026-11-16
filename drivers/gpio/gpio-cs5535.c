@@ -148,7 +148,7 @@ int cs5535_gpio_set_irq(unsigned group, unsigned irq)
 	if (group > 7 || irq > 15)
 		return -EINVAL;
 
-	rdmsrq(MSR_PIC_ZSEL_HIGH, val.q);
+	val.q = rdmsrq(MSR_PIC_ZSEL_HIGH);
 
 	val.l &= ~(0xF << (group * 4));
 	val.l |= (irq & 0xF) << (group * 4);

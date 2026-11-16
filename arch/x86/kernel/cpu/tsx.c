@@ -35,7 +35,7 @@ static void tsx_disable(void)
 {
 	u64 tsx;
 
-	rdmsrq(MSR_IA32_TSX_CTRL, tsx);
+	tsx = rdmsrq(MSR_IA32_TSX_CTRL);
 
 	/* Force all transactions to immediately abort */
 	tsx |= TSX_CTRL_RTM_DISABLE;
@@ -55,7 +55,7 @@ static void tsx_enable(void)
 {
 	u64 tsx;
 
-	rdmsrq(MSR_IA32_TSX_CTRL, tsx);
+	tsx = rdmsrq(MSR_IA32_TSX_CTRL);
 
 	/* Enable the RTM feature in the cpu */
 	tsx &= ~TSX_CTRL_RTM_DISABLE;
@@ -126,11 +126,11 @@ static void tsx_clear_cpuid(void)
 	 */
 	if (boot_cpu_has(X86_FEATURE_RTM_ALWAYS_ABORT) &&
 	    boot_cpu_has(X86_FEATURE_TSX_FORCE_ABORT)) {
-		rdmsrq(MSR_TSX_FORCE_ABORT, msr);
+		msr = rdmsrq(MSR_TSX_FORCE_ABORT);
 		msr |= MSR_TFA_TSX_CPUID_CLEAR;
 		wrmsrq(MSR_TSX_FORCE_ABORT, msr);
 	} else if (cpu_feature_enabled(X86_FEATURE_MSR_TSX_CTRL)) {
-		rdmsrq(MSR_IA32_TSX_CTRL, msr);
+		msr = rdmsrq(MSR_IA32_TSX_CTRL);
 		msr |= TSX_CTRL_CPUID_CLEAR;
 		wrmsrq(MSR_IA32_TSX_CTRL, msr);
 	}
@@ -157,7 +157,7 @@ static void tsx_dev_mode_disable(void)
 	    !cpu_feature_enabled(X86_FEATURE_SRBDS_CTRL))
 		return;
 
-	rdmsrq(MSR_IA32_MCU_OPT_CTRL, mcu_opt_ctrl);
+	mcu_opt_ctrl = rdmsrq(MSR_IA32_MCU_OPT_CTRL);
 
 	if (mcu_opt_ctrl & RTM_ALLOW) {
 		mcu_opt_ctrl &= ~RTM_ALLOW;

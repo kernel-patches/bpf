@@ -1570,7 +1570,7 @@ static void __init check_tdx_erratum(void)
 	 * Some TDX-capable CPUs have an erratum where the current VMCS is
 	 * cleared after calling into P-SEAMLDR.
 	 */
-	rdmsrq(MSR_IA32_VMX_BASIC, basic_msr);
+	basic_msr = rdmsrq(MSR_IA32_VMX_BASIC);
 	if (!(basic_msr & VMX_BASIC_NO_SEAMRET_INVD_VMCS))
 		setup_force_cpu_bug(X86_BUG_SEAMRET_INVD_VMCS);
 }

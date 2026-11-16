@@ -1088,7 +1088,7 @@ static void __init detect_art(void)
 	if (art_base_clk.denominator < ART_MIN_DENOMINATOR)
 		return;
 
-	rdmsrq(MSR_IA32_TSC_ADJUST, art_base_clk.offset);
+	art_base_clk.offset = rdmsrq(MSR_IA32_TSC_ADJUST);
 
 	/* Make this sticky over multiple CPU init calls */
 	setup_force_cpu_cap(X86_FEATURE_ART);

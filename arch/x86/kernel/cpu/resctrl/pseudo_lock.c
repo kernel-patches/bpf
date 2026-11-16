@@ -250,7 +250,7 @@ int resctrl_arch_measure_cycles_lat_fn(void *_plr)
 	/*
 	 * Disable hardware prefetchers.
 	 */
-	rdmsrq(MSR_MISC_FEATURE_CONTROL, saved);
+	saved = rdmsrq(MSR_MISC_FEATURE_CONTROL);
 	wrmsrq(MSR_MISC_FEATURE_CONTROL, prefetch_disable_bits);
 	mem_r = READ_ONCE(plr->kmem);
 	/*
@@ -346,7 +346,7 @@ static int measure_residency_fn(struct perf_event_attr *miss_attr,
 	/*
 	 * Disable hardware prefetchers.
 	 */
-	rdmsrq(MSR_MISC_FEATURE_CONTROL, saved);
+	saved = rdmsrq(MSR_MISC_FEATURE_CONTROL);
 	wrmsrq(MSR_MISC_FEATURE_CONTROL, prefetch_disable_bits);
 
 	/* Initialize rest of local variables */

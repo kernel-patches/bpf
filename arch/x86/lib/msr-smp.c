@@ -15,7 +15,7 @@ static void __rdmsr_on_cpu(void *info)
 	else
 		reg = &rv->reg;
 
-	rdmsrq(rv->msr_no, reg->q);
+	reg->q = rdmsrq(rv->msr_no);
 }
 
 static void __wrmsr_on_cpu(void *info)

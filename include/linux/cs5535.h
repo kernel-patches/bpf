@@ -51,7 +51,7 @@ static inline int cs5535_pic_unreqz_select_high(unsigned int group,
 {
 	struct msr val;
 
-	rdmsrq(MSR_PIC_ZSEL_HIGH, val.q);
+	val.q = rdmsrq(MSR_PIC_ZSEL_HIGH);
 	val.l &= ~(0xF << (group * 4));
 	val.l |= (irq & 0xF) << (group * 4);
 	wrmsrq(MSR_PIC_ZSEL_HIGH, val.q);

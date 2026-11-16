@@ -13,7 +13,7 @@ amd_get_mtrr(unsigned int reg, unsigned long *base,
 	unsigned long val;
 	struct msr msr;
 
-	rdmsrq(MSR_K6_UWCCR, msr.q);
+	msr.q = rdmsrq(MSR_K6_UWCCR);
 	/* Upper dword is region 1, lower is region 0 */
 	if (reg == 1)
 		val = msr.h;
@@ -67,7 +67,7 @@ amd_set_mtrr(unsigned int reg, unsigned long base, unsigned long size, mtrr_type
 	/*
 	 * Low is MTRR0, High MTRR 1
 	 */
-	rdmsrq(MSR_K6_UWCCR, msr.q);
+	msr.q = rdmsrq(MSR_K6_UWCCR);
 	regs[0] = msr.l;
 	regs[1] = msr.h;
 

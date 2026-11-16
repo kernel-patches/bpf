@@ -323,7 +323,7 @@ static bool intel_pmu_handle_lbr_msrs_access(struct kvm_vcpu *vcpu,
 		int err = 0;
 
 		if (read)
-			rdmsrq(index, msr_info->data);
+			msr_info->data = rdmsrq(index);
 		else
 			err = wrmsrq_safe(index, msr_info->data);
 		__set_bit(INTEL_PMC_IDX_FIXED_VLBR, vcpu_to_pmu(vcpu)->pmc_in_use);
@@ -787,7 +787,7 @@ static bool intel_pmu_is_mediated_pmu_supported(struct x86_pmu_capability *host_
 	u64 host_perf_cap = 0;
 
 	if (boot_cpu_has(X86_FEATURE_PDCM))
-		rdmsrq(MSR_IA32_PERF_CAPABILITIES, host_perf_cap);
+		host_perf_cap = rdmsrq(MSR_IA32_PERF_CAPABILITIES);
 
 	/*
 	 * Require v4+ for MSR_CORE_PERF_GLOBAL_STATUS_SET, and full-width
@@ -816,7 +816,7 @@ static void intel_mediated_pmu_load(struct kvm_vcpu *vcpu)
 	struct kvm_pmu *pmu = vcpu_to_pmu(vcpu);
 	u64 global_status, toggle;
 
-	rdmsrq(MSR_CORE_PERF_GLOBAL_STATUS, global_status);
+	global_status = rdmsrq(MSR_CORE_PERF_GLOBAL_STATUS);
 	toggle = pmu->global_status ^ global_status;
 	if (global_status & toggle)
 		wrmsrq(MSR_CORE_PERF_GLOBAL_OVF_CTRL, global_status & toggle);
@@ -831,7 +831,7 @@ static void intel_mediated_pmu_put(struct kvm_vcpu *vcpu)
 	struct kvm_pmu *pmu = vcpu_to_pmu(vcpu);
 
 	/* MSR_CORE_PERF_GLOBAL_CTRL is already saved at VM-exit. */
-	rdmsrq(MSR_CORE_PERF_GLOBAL_STATUS, pmu->global_status);
+	pmu->global_status = rdmsrq(MSR_CORE_PERF_GLOBAL_STATUS);
 
 	/* Clear hardware MSR_CORE_PERF_GLOBAL_STATUS MSR, if non-zero. */
 	if (pmu->global_status)

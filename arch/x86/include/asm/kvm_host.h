@@ -1880,7 +1880,7 @@ static inline unsigned long read_msr(unsigned long msr)
 {
 	u64 value;
 
-	rdmsrq(msr, value);
+	value = rdmsrq(msr);
 	return value;
 }
 #endif

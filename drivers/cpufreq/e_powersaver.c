@@ -99,7 +99,7 @@ static unsigned int eps_get(unsigned int cpu)
 		return 0;
 
 	/* Return current frequency */
-	rdmsrq(MSR_IA32_PERF_STATUS, val);
+	val = rdmsrq(MSR_IA32_PERF_STATUS);
 	return centaur->fsb * ((val >> 8) & 0xff);
 }
 
@@ -111,11 +111,11 @@ static int eps_set_state(struct eps_cpu_data *centaur,
 	int i;
 
 	/* Wait while CPU is busy */
-	rdmsrq(MSR_IA32_PERF_STATUS, val);
+	val = rdmsrq(MSR_IA32_PERF_STATUS);
 	i = 0;
 	while (val & ((1 << 16) | (1 << 17))) {
 		udelay(16);
-		rdmsrq(MSR_IA32_PERF_STATUS, val);
+		val = rdmsrq(MSR_IA32_PERF_STATUS);
 		i++;
 		if (unlikely(i > 64)) {
 			return -ENODEV;
@@ -127,7 +127,7 @@ static int eps_set_state(struct eps_cpu_data *centaur,
 	i = 0;
 	do {
 		udelay(16);
-		rdmsrq(MSR_IA32_PERF_STATUS, val);
+		val = rdmsrq(MSR_IA32_PERF_STATUS);
 		i++;
 		if (unlikely(i > 64)) {
 			return -ENODEV;
@@ -139,7 +139,7 @@ static int eps_set_state(struct eps_cpu_data *centaur,
 	u8 current_multiplier, current_voltage;
 
 	/* Print voltage and multiplier */
-	rdmsrq(MSR_IA32_PERF_STATUS, val);
+	val = rdmsrq(MSR_IA32_PERF_STATUS);
 	current_voltage = val & 0xff;
 	pr_info("Current voltage = %dmV\n", current_voltage * 16 + 700);
 	current_multiplier = (val >> 8) & 0xff;
@@ -194,12 +194,12 @@ static int eps_cpu_init(struct cpufreq_policy *policy)
 
 	switch (c->x86_model) {
 	case 10:
-		rdmsrq(0x1153, val);
+		val = rdmsrq(0x1153);
 		brand = (((val >> 2) ^ val) >> 18) & 3;
 		pr_cont("Model A ");
 		break;
 	case 13:
-		rdmsrq(0x1154, val);
+		val = rdmsrq(0x1154);
 		brand = (((val >> 4) ^ (val >> 2))) & 0x000000ff;
 		pr_cont("Model D ");
 		break;
@@ -223,12 +223,12 @@ static int eps_cpu_init(struct cpufreq_policy *policy)
 		return -ENODEV;
 	}
 	/* Enable Enhanced PowerSaver */
-	rdmsrq(MSR_IA32_MISC_ENABLE, val);
+	val = rdmsrq(MSR_IA32_MISC_ENABLE);
 	if (!(val & MSR_IA32_MISC_ENABLE_ENHANCED_SPEEDSTEP)) {
 		val |= MSR_IA32_MISC_ENABLE_ENHANCED_SPEEDSTEP;
 		wrmsrq(MSR_IA32_MISC_ENABLE, val);
 		/* Can be locked at 0 */
-		rdmsrq(MSR_IA32_MISC_ENABLE, val);
+		val = rdmsrq(MSR_IA32_MISC_ENABLE);
 		if (!(val & MSR_IA32_MISC_ENABLE_ENHANCED_SPEEDSTEP)) {
 			pr_info("Can't enable Enhanced PowerSaver\n");
 			return -ENODEV;
@@ -236,7 +236,7 @@ static int eps_cpu_init(struct cpufreq_policy *policy)
 	}
 
 	/* Print voltage and multiplier */
-	rdmsrq(MSR_IA32_PERF_STATUS, val);
+	val = rdmsrq(MSR_IA32_PERF_STATUS);
 	current_voltage = val & 0xff;
 	pr_info("Current voltage = %dmV\n", current_voltage * 16 + 700);
 	current_multiplier = (val >> 8) & 0xff;
