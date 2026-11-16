@@ -5400,7 +5400,7 @@ unsigned long move_hugetlb_page_tables(struct vm_area_struct *vma,
 }
 
 /* Must be called after rmap removal. */
-static void hugetlb_folio_restore_rsv_on_unmap(struct vm_area_struct *vma,
+void hugetlb_folio_restore_rsv_on_unmap(struct vm_area_struct *vma,
 		struct folio *folio)
 {
 	struct hstate *h = hstate_vma(vma);
@@ -5461,6 +5461,8 @@ static void hugetlb_unmap_range(struct mmu_gather *tlb,
 	last_addr_mask = hugetlb_mask_last_page(h);
 	address = start;
 	for (; address < end; address += sz) {
+		bool delay_rmap = false;
+
 		ptep = hugetlb_walk(vma, address, sz);
 		if (!ptep) {
 			address |= last_addr_mask;
@@ -5533,18 +5535,45 @@ static void hugetlb_unmap_range(struct mmu_gather *tlb,
 					make_pte_marker(PTE_MARKER_UFFD_WP),
 					sz);
 		hugetlb_count_sub(pages_per_huge_page(h), mm);
-		hugetlb_remove_rmap(folio);
+		/*
+		 * hugetlb_wp() uses mapcount to decide whether an anonymous
+		 * folio can be reused. Delay rmap removal until stale TLB
+		 * entries are gone, unless the mm has no users left.
+		 */
+		if (folio_test_anon(folio) && !tlb->fullmm) {
+			delay_rmap = tlb_delay_rmap(tlb);
+			/*
+			 * Without delay-rmap support, just flush before
+			 * dropping the PTL. Except with MMU_GATHER_NO_GATHER
+			 * where clearing already flushed the TLB.
+			 */
+			if (!delay_rmap && !IS_ENABLED(CONFIG_MMU_GATHER_NO_GATHER))
+				flush_hugetlb_tlb_range(vma, address, address + sz);
+		}
+		if (!delay_rmap)
+			hugetlb_remove_rmap(folio);
 		spin_unlock(ptl);
 
-		hugetlb_folio_restore_rsv_on_unmap(vma, folio);
+		if (!delay_rmap)
+			hugetlb_folio_restore_rsv_on_unmap(vma, folio);
 
-		tlb_remove_page_size(tlb, folio_page(folio, 0),
-				     folio_size(folio));
+		if (__tlb_remove_page_size(tlb, folio_page(folio, 0), sz,
+					   delay_rmap)) {
+			tlb_flush_mmu_tlbonly(tlb);
+			tlb_flush_rmaps(tlb, vma);
+			tlb_flush_mmu(tlb);
+		}
 		/*
 		 * If we were instructed to unmap a specific folio, we're done.
 		 */
 		if (folio_provided)
 			break;
+	}
+
+	if (tlb->delayed_rmap) {
+		tlb_flush_mmu_tlbonly(tlb);
+		tlb_flush_rmaps(tlb, vma);
+		tlb_flush_mmu(tlb);
 	}
 }
 
