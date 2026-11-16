@@ -638,7 +638,13 @@ static inline struct inode *d_backing_inode(const struct dentry *upper)
  * If dentry is on a union/overlay, then return the underlying, real dentry.
  * Otherwise return the dentry itself.
  *
+ * For D_REAL_DATA the union/overlay may have to look up the data first. This
+ * can sleep and it can fail. Callers must handle errors for D_REAL_METADATA
+ * as well.
+ *
  * See also: Documentation/filesystems/vfs.rst
+ *
+ * Return: The real dentry, or an ERR_PTR() if it can't be resolved.
  */
 static inline struct dentry *d_real(struct dentry *dentry, enum d_real_type type)
 {
