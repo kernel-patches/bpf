@@ -2782,6 +2782,11 @@ static inline void file_end_write(struct file *file)
 	sb_end_write(file_inode(file)->i_sb);
 }
 
+DEFINE_GUARD(file_write,
+	     struct file *,
+	     file_start_write(_T),
+	     file_end_write(_T))
+
 /**
  * kiocb_start_write - get write access to a superblock for async file io
  * @iocb: the io context we want to submit the write with
@@ -2802,6 +2807,28 @@ static inline void kiocb_start_write(struct kiocb *iocb)
 }
 
 /**
+ * kiocb_start_write_trylock - try to get write access to a superblock for
+ *			       async file io
+ * @iocb: the io context we want to submit the write with
+ *
+ * This is kiocb_start_write() for a submission that must not wait until a
+ * frozen filesystem is thawed. Should be matched with a call to
+ * kiocb_end_write() if it succeeds.
+ *
+ * Return: true if write access was acquired, false if it wasn't.
+ */
+static inline bool kiocb_start_write_trylock(struct kiocb *iocb)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+
+	if (!sb_start_write_trylock(inode->i_sb))
+		return false;
+	/* Fool lockdep just like kiocb_start_write() does. */
+	__sb_writers_release(inode->i_sb, SB_FREEZE_WRITE);
+	return true;
+}
+
+/**
  * kiocb_end_write - drop write access to a superblock after async file io
  * @iocb: the io context we sumbitted the write with
  *
@@ -2816,6 +2843,54 @@ static inline void kiocb_end_write(struct kiocb *iocb)
 	 */
 	__sb_writers_acquired(inode->i_sb, SB_FREEZE_WRITE);
 	sb_end_write(inode->i_sb);
+}
+
+/**
+ * kiocb_end_write_iter - drop write access after kiocb_write_iter()
+ * @iocb: the io context the write was submitted with
+ *
+ * Drop write access if @iocb still holds it and clear IOCB_WRITE. This
+ * does nothing for reads and for writes kiocb_write_iter() already
+ * finished. So the completion callback can call it for any I/O.
+ */
+static inline void kiocb_end_write_iter(struct kiocb *iocb)
+{
+	if (!(iocb->ki_flags & IOCB_WRITE))
+		return;
+	iocb->ki_flags &= ~IOCB_WRITE;
+	kiocb_end_write(iocb);
+}
+
+/**
+ * kiocb_write_iter - submit a write with write access to the superblock
+ * @iocb: the io context to submit the write with
+ * @iter: the data to write
+ *
+ * Get write access, mark @iocb with IOCB_WRITE and call ->write_iter().
+ * A write that wasn't queued drops write access before this returns. A
+ * queued write keeps it until the completion callback calls
+ * kiocb_end_write_iter(). With IOCB_NOWAIT this fails with -EAGAIN
+ * instead of waiting for a frozen filesystem.
+ *
+ * Return: On success the number of bytes written or -EIOCBQUEUED is
+ *         returned. On failure a negative error code is returned.
+ */
+static inline ssize_t kiocb_write_iter(struct kiocb *iocb,
+				       struct iov_iter *iter)
+{
+	ssize_t ret;
+
+	if (iocb->ki_flags & IOCB_NOWAIT) {
+		if (!kiocb_start_write_trylock(iocb))
+			return -EAGAIN;
+	} else {
+		kiocb_start_write(iocb);
+	}
+	iocb->ki_flags |= IOCB_WRITE;
+	ret = iocb->ki_filp->f_op->write_iter(iocb, iter);
+	if (ret != -EIOCBQUEUED)
+		kiocb_end_write_iter(iocb);
+	return ret;
 }
 
 /*
