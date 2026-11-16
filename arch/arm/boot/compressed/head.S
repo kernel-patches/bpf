@@ -1450,7 +1450,8 @@ __enter_kernel_from_hyp:
 		b	__enter_kernel
 
 ENTRY(efi_enter_kernel)
-		mov	r4, r0			@ preserve image base
+		ldr	r4, [r0]		@ preserve image base
+		add	r4, r4, r0
 		mov	r8, r1			@ preserve DT pointer
 
 		adr_l	r0, call_cache_fn
