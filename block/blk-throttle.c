@@ -453,7 +453,8 @@ static void throtl_dequeue_tg(struct throtl_grp *tg)
 static void throtl_schedule_pending_timer(struct throtl_service_queue *sq,
 					  unsigned long expires)
 {
-	unsigned long max_expire = jiffies + 8 * DFL_THROTL_SLICE;
+	unsigned long j = jiffies;
+	unsigned long max_expire = j + 8 * DFL_THROTL_SLICE;
 
 	/*
 	 * Since we are adjusting the throttle limit dynamically, the sleep
@@ -466,7 +467,7 @@ static void throtl_schedule_pending_timer(struct throtl_service_queue *sq,
 		expires = max_expire;
 	mod_timer(&sq->pending_timer, expires);
 	throtl_log(sq, "schedule timer. delay=%lu jiffies=%lu",
-		   expires - jiffies, jiffies);
+		   expires - j, j);
 }
 
 /**
