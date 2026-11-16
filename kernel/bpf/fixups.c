@@ -198,7 +198,6 @@ struct bpf_insn *bpf_patch_list_add(struct bpf_verifier_env *env, u32 off,
 		return insn;
 	}
 
-	/* -ERANGE takes a second patch with a 16-bit jump back out of it: no pass has one */
 	return __bpf_patch_list_add(pl, env->prog, off, patch, len);
 }
 
@@ -218,13 +217,11 @@ int bpf_patch_list_del(struct bpf_verifier_env *env, u32 off)
 	return __bpf_patch_list_del(pl, env->prog, off);
 }
 
-/* Queue insns to go in front of insn 'off', see __bpf_patch_list_insert(). */
-int bpf_patch_list_insert(struct bpf_verifier_env *env, u32 off,
-			  const struct bpf_insn *insns, u32 cnt)
+static int patch_list_insert(struct bpf_verifier_env *env, u32 off,
+			     const struct bpf_insn *insns, u32 cnt, bool behind)
 {
 	struct bpf_patch_list *pl = &env->patch_list;
 	struct bpf_insn_patch *p = pl->cnt ? &pl->patches[pl->cnt - 1] : NULL;
-	int err;
 
 	if (bpf_must_abort())
 		return -EINTR;
@@ -234,11 +231,21 @@ int bpf_patch_list_insert(struct bpf_verifier_env *env, u32 off,
 			    env, "insns inserted at %u out of order", off))
 		return -EFAULT;
 
-	err = __bpf_patch_list_insert(pl, env->prog, off, insns, cnt);
-	if (err == -ERANGE)
-		verbose(env, "insn %d cannot be patched due to 16-bit range\n",
-			env->insn_aux_data[off].orig_idx);
-	return err;
+	return __bpf_patch_list_insert(pl, env->prog, off, insns, cnt, behind);
+}
+
+/* Queue insns to go in front of insn 'off', see __bpf_patch_list_insert(). */
+int bpf_patch_list_insert(struct bpf_verifier_env *env, u32 off,
+			  const struct bpf_insn *insns, u32 cnt)
+{
+	return patch_list_insert(env, off, insns, cnt, false);
+}
+
+/* Queue insns to go behind insn 'off', which does not fall through. They are not dead code. */
+int bpf_patch_list_append(struct bpf_verifier_env *env, u32 off,
+			  const struct bpf_insn *insns, u32 cnt)
+{
+	return patch_list_insert(env, off, insns, cnt, true);
 }
 
 void bpf_patch_list_free(struct bpf_verifier_env *env)
@@ -255,20 +262,24 @@ static void patch_list_adj_aux(struct bpf_prog *prog, struct bpf_insn_patch *p,
 			       const struct bpf_insn_aux_data *old,
 			       struct bpf_insn_aux_data *slot)
 {
-	struct bpf_insn_aux_data *last = slot + p->len - 1;
+	struct bpf_insn_aux_data *last = slot + p->self;
 	struct bpf_insn *orig = &p->orig;
 	u32 i;
 
+	memset(slot, 0, sizeof(*slot) * p->len);
 	*last = *old;
 	/* Recompute zext_dst: the last insn of the patch need not be the patched one. */
-	last->zext_dst = bpf_insn_def32(prog, &patch[p->len - 1]) >= 0;
-	memset(slot, 0, sizeof(*slot) * (p->len - 1));
+	last->zext_dst = bpf_insn_def32(prog, &patch[p->self]) >= 0;
 
-	for (i = 0; i < p->len - 1; i++) {
+	for (i = 0; i < p->len; i++) {
+		if (i == p->self)
+			continue;
 		/* Expand the seen count of the patched insn to the patch. */
-		slot[i].seen = last->seen;
+		slot[i].seen = last->seen ?: i > p->self;
 		/* messages name the insn of the original program */
 		slot[i].orig_idx = last->orig_idx;
+		/* for may_goto in front of the insn, see bpf_insert_loop_guards() */
+		slot[i].live_regs_before = last->live_regs_before;
 		slot[i].zext_dst = bpf_insn_def32(prog, &patch[i]) >= 0;
 		/*
 		 * A copy of the patched insn keeps its marking. Any other
@@ -288,12 +299,12 @@ static void patch_list_adj_aux(struct bpf_prog *prog, struct bpf_insn_patch *p,
 	 * systematically mark it for non-stack access if it is not the patched
 	 * insn, otherwise keep the original marking.
 	 */
-	if (bpf_is_mem_insn(&patch[p->len - 1]) &&
-	    memcmp(&patch[p->len - 1], orig, sizeof(*orig)))
+	if (bpf_is_mem_insn(&patch[p->self]) &&
+	    memcmp(&patch[p->self], orig, sizeof(*orig)))
 		last->non_stack_access = true;
 
 	/* indirect jumps to the replaced insn land on p->target */
-	if (last->indirect_target && p->target != p->len - 1) {
+	if (last->indirect_target && p->target != p->self) {
 		slot[p->target].indirect_target = 1;
 		last->indirect_target = 0;
 	}
@@ -325,6 +336,28 @@ static void patch_list_drop_removed(struct bpf_verifier_env *env)
 	}
 }
 
+/*
+ * Make room for the insns that patch_image_relax() added.
+ * A jump to dead code is dead code, see bpf_opt_hard_wire_dead_code_branches().
+ */
+static void patch_list_relax_aux(const struct bpf_patch_image *img, struct bpf_insn_aux_data *data)
+{
+	const u32 *map = img->relaxed;
+	u32 i, k, to;
+
+	for (i = img->short_cnt; i--;)
+		data[map[i]] = data[i];
+	for (i = 0; i < img->short_cnt; i++) {
+		for (k = map[i] + 1; k < map[i + 1]; k++) {
+			to = k + 1 + bpf_jmp_offset(&img->insns[k]);
+			data[k] = (struct bpf_insn_aux_data){
+				.orig_idx = data[map[i]].orig_idx,
+				.seen = data[map[i]].seen ? data[to].seen : 0,
+			};
+		}
+	}
+}
+
 /* Fill 'data', the aux data of the new image, from the aux data of the old one. */
 static void patch_list_remap_aux(struct bpf_verifier_env *env,
 				 const struct bpf_patch_image *img,
@@ -332,22 +365,24 @@ static void patch_list_remap_aux(struct bpf_verifier_env *env,
 {
 	struct bpf_patch_list *pl = &env->patch_list;
 	struct bpf_insn_patch *p;
-	u32 i, k, end;
+	u32 i, k, end, pos;
 
-	for (i = 0, k = 0; i < img->cnt; i = end) {
+	for (i = 0, k = 0, pos = 0; i < img->cnt; i = end) {
 		if (k < pl->cnt && pl->patches[k].off == i) {
 			p = &pl->patches[k++];
 			if (p->len)
 				patch_list_adj_aux(env->prog, p, &pl->insns[p->start],
-						   &env->insn_aux_data[i],
-						   &data[img->new_off[i]]);
+						   &env->insn_aux_data[i], &data[pos]);
+			pos += p->len;
 			end = i + 1;
 			continue;
 		}
 		end = k < pl->cnt ? pl->patches[k].off : img->cnt;
-		memcpy(data + img->new_off[i], env->insn_aux_data + i,
-		       sizeof(*data) * (end - i));
+		memcpy(data + pos, env->insn_aux_data + i, sizeof(*data) * (end - i));
+		pos += end - i;
 	}
+	if (img->relaxed)
+		patch_list_relax_aux(img, data);
 	vfree(env->insn_aux_data);
 	env->insn_aux_data = data;
 	env->insn_aux_data_len = img->new_cnt;
@@ -494,11 +529,6 @@ int bpf_patch_list_commit(struct bpf_verifier_env *env)
 		goto out;
 
 	err = bpf_patch_list_build(pl, prog, &img);
-	if (err == -ERANGE) {
-		verbose(env, "insn %d cannot be patched due to 16-bit range\n",
-			env->insn_aux_data[img.bad].orig_idx);
-		goto out;
-	}
 	if (verifier_bug_if(err == -EFAULT, env, "insn %u jumps out of the program",
 			    img.bad))
 		goto out;
@@ -535,52 +565,6 @@ out:
 	return err;
 }
 
-/*
- * insn was moved down by delta insns inside its own patch. Operands relative
- * to the pc that point in front of the old position did not move with it.
- */
-static int bpf_adj_moved_insn(struct bpf_insn *insn, u32 delta)
-{
-	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
-	s64 off = insn->imm, off_min = S32_MIN;
-	bool is_imm = true;
-
-	if (bpf_pseudo_func(insn) || bpf_pseudo_call(insn)) {
-		/* subprog that started at the old position starts with the patch */
-		if (off >= 0)
-			return 0;
-	} else if ((class == BPF_JMP || class == BPF_JMP32) &&
-		   op != BPF_CALL && op != BPF_EXIT) {
-		if (insn->code != (BPF_JMP32 | BPF_JA)) {
-			off = insn->off;
-			off_min = S16_MIN;
-			is_imm = false;
-		}
-		/* jump to itself stays */
-		if (off >= -1)
-			return 0;
-	} else {
-		return 0;
-	}
-
-	off -= delta;
-	if (off < off_min)
-		return -ERANGE;
-	if (is_imm)
-		insn->imm = off;
-	else
-		insn->off = off;
-	return 0;
-}
-
-static bool jumps_to_itself(const struct bpf_insn *insn)
-{
-	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
-
-	return (class == BPF_JMP || class == BPF_JMP32) && op != BPF_CALL && op != BPF_EXIT &&
-	       insn->code != (BPF_JMP32 | BPF_JA) && insn->off == -1;
-}
-
 /* How a subprog leaves when it is out of budget, see push_budget_exit() */
 static struct bpf_insn budget_exit_insn(struct bpf_verifier_env *env, struct bpf_subprog_info *sub)
 {
@@ -592,204 +576,61 @@ static struct bpf_insn budget_exit_insn(struct bpf_verifier_env *env, struct bpf
 }
 
 /*
- * may_goto has 16 bits for the offset, and what is between it and its target is going
- * to grow: may_goto itself becomes 10 insns, 14 when it has to save a register.
- */
-#define BPF_GUARD_NEAR	2048
-
-static bool guard_leaves_subprog(const struct bpf_insn_aux_data *aux)
-{
-	return aux->loop_guard && !aux->guard_no_unwind;
-}
-
-/*
- * 'r0 = 0; exit' behind the last insn of the subprog, for all its guards that are near.
- * Returns the number of insns that are going to be added.
- */
-static int append_budget_exit(struct bpf_verifier_env *env, int s)
-{
-	struct bpf_subprog_info *sub = &env->subprog_info[s];
-	int last = (sub + 1)->start - 1, n = 0, i;
-	struct bpf_insn buf[4], *insn;
-
-	for (i = max_t(int, sub->start, last + 1 - BPF_GUARD_NEAR); i <= last; i++)
-		if (guard_leaves_subprog(&env->insn_aux_data[i]))
-			break;
-	if (i > last)
-		return 0;
-
-	buf[n++] = env->prog->insnsi[last];
-	buf[n++] = BPF_MOV64_IMM(BPF_REG_0, 0);
-	if (bpf_ret_reg_pair(env, s))
-		buf[n++] = BPF_MOV64_IMM(BPF_REG_2, 0);
-	buf[n++] = budget_exit_insn(env, sub);
-	insn = bpf_patch_list_add(env, last, buf, n);
-	return IS_ERR(insn) ? PTR_ERR(insn) : n - 1;
-}
-
-/*
  * Add may_goto in front of the insns that the main pass marked, see
  * check_loop_guard(). It verified the edge from the insn to where may_goto goes.
+ *
+ *	may_goto to		or	may_goto leave		see push_budget_exit()
+ *	insn				insn
+ *					...
+ *					last insn of the subprog
+ *				leave:	r0 = 0
+ *					exit
+ *
+ * bpf_do_misc_fixups() keeps the address of the count of may_goto in a register that is
+ * dead at the may_goto. What is live in front of the insn is live in front of its guard.
+ * Nothing else is:
+ *  - The guard of a jump goes where the jump goes.
+ *  - What is live where the guard at the head of a loop goes is live at the head,
+ *    see bpf_head_guard_target().
+ *  - On the way out of the subprog R0, and R2 of a pair, are set to 0.
  */
 int bpf_insert_loop_guards(struct bpf_verifier_env *env)
 {
+	struct bpf_insn patch[2] = { BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 0, 0) };
+	struct bpf_insn leave[3] = { BPF_MOV64_IMM(BPF_REG_0, 0) };
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	int len = env->prog->len, i, r, s, to, n, jmp, err = 0;
-	struct bpf_insn *patch, *insn;
-	int *target, *leave, *moved;
-	bool indirect;
-	u16 *zero;
-	s64 off;
+	struct bpf_subprog_info *sub;
+	struct bpf_insn *insn;
+	int i, s, n, err;
+	bool leaves;
 
-	for (i = 0; i < len; i++)
-		if (aux[i].loop_guard)
-			break;
-	if (i == len)
-		return 0;
-
-	/*
-	 * Where the subprog has 'r0 = 0; exit', 0 if it has none. And how far that moved
-	 * the subprog: guard_to is from the time before.
-	 */
-	leave = kvcalloc(2 * env->subprog_cnt, sizeof(int), BPF_VERIFIER_GFP);
-	if (!leave)
-		return -ENOMEM;
-	moved = leave + env->subprog_cnt;
-	for (s = 0; s < env->subprog_cnt && !err; s++) {
-		leave[s] = append_budget_exit(env, s);
-		if (leave[s] < 0)
-			err = leave[s];
-	}
-	/* A guard cannot jump into a patch that is in the list: 'r0 = 0' has no index yet. */
-	err = err ?: bpf_patch_list_commit(env);
-	if (err) {
-		kvfree(leave);
-		return err;
-	}
-	aux = env->insn_aux_data;
-	len = env->prog->len;
-	for (s = 0, n = 0; s < env->subprog_cnt; s++) {
-		moved[s] = n;
-		n += leave[s];
-		if (!leave[s])
+	for (s = 0; s < env->subprog_cnt; s++) {
+		sub = &env->subprog_info[s];
+		n = bpf_ret_reg_pair(env, s) ? 3 : 2;
+		leaves = false;
+		for (i = sub->start; i < sub[1].start; i++) {
+			if (!aux[i].loop_guard)
+				continue;
+			/* A jump to itself is a back edge. It goes through may_goto too. */
+			patch[1] = env->prog->insnsi[i];
+			insn = bpf_patch_list_add(env, i, patch, 2);
+			if (IS_ERR(insn))
+				return PTR_ERR(insn);
+			if (aux[i].guard_no_unwind)
+				bpf_patch_list_jump(&env->patch_list, insn - 1, aux[i].guard_to, 0);
+			else
+				bpf_patch_list_jump(&env->patch_list, insn - 1, sub[1].start, n);
+			leaves |= !aux[i].guard_no_unwind;
+		}
+		if (!leaves)
 			continue;
-		i = env->subprog_info[s + 1].start;
-		leave[s] = i - leave[s];
-		/*
-		 * The list gives what is known about an insn to the last insn of its patch,
-		 * but for indirect_target. Here the original insn is the first one.
-		 */
-		indirect = aux[leave[s] - 1].indirect_target;
-		swap(aux[leave[s] - 1], aux[i - 1]);
-		aux[leave[s] - 1].indirect_target = indirect;
-		aux[i - 1].indirect_target = false;
-		/* the last insn may be dead code */
-		while (--i >= leave[s])
-			aux[i].seen = 1;
+		leave[1] = BPF_MOV64_IMM(BPF_REG_2, 0);
+		leave[n - 1] = budget_exit_insn(env, sub);
+		err = bpf_patch_list_append(env, i - 1, leave, n);
+		if (err)
+			return err;
 	}
-
-	/* where the guard of the insn goes */
-	target = kvcalloc(len, sizeof(int), BPF_VERIFIER_GFP);
-	zero = kvcalloc(len, sizeof(u16), BPF_VERIFIER_GFP);
-	patch = kvcalloc(8, sizeof(*patch), BPF_VERIFIER_GFP);
-	if (!target || !zero || !patch) {
-		err = -ENOMEM;
-		goto out;
-	}
-	for (i = 0; i < len; i++) {
-		s = bpf_find_containing_subprog(env, i) - env->subprog_info;
-		target[i] = aux[i].loop_guard ? aux[i].guard_to + moved[s] : -1;
-		if (guard_leaves_subprog(&aux[i])) {
-			/* see push_budget_exit() */
-			if (leave[s] && leave[s] - i <= BPF_GUARD_NEAR) {
-				target[i] = leave[s];
-			} else {
-				target[i] = -2;
-				zero[i] = BIT(BPF_REG_0);
-				if (bpf_ret_reg_pair(env, s))
-					zero[i] |= BIT(BPF_REG_2);
-			}
-		}
-	}
-
-	for (i = 0; i < len; i++) {
-		to = target[i];
-		if (to == -1)
-			continue;
-		/*
-		 *	may_goto to		or	may_goto +1
-		 *	insn				goto +N
-		 *					r0 = 0, ...
-		 *					exit
-		 *					insn
-		 */
-		n = 0;
-		if (zero[i]) {
-			patch[n++] = BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 1, 0);
-			patch[n++] = BPF_JMP_A(hweight16(zero[i]) + 1);
-			for (r = BPF_REG_0; r < BPF_REG_FP; r++)
-				if (zero[i] & BIT(r))
-					patch[n++] = BPF_MOV64_IMM(r, 0);
-		}
-		jmp = n++;
-		/* What is behind moves with this patch. The other patches are not there yet. */
-		if (to == -2)
-			off = 0;
-		else if (to > i)
-			off = to - i + n - jmp - 1;
-		else
-			off = to - (i + jmp) - 1;
-		if (off > S16_MAX || off < S16_MIN) {
-			verbose(env, "exit of the loop is too far from insn %d for may_goto\n", i);
-			err = -ERANGE;
-			break;
-		}
-		patch[jmp] = BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, off, 0);
-		if (to == -2)
-			patch[jmp] = budget_exit_insn(env, bpf_find_containing_subprog(env, i));
-		patch[n] = env->prog->insnsi[i];
-		/* A jump to itself is a back edge. It goes through may_goto like the others. */
-		if (jumps_to_itself(&patch[n]))
-			patch[n].off -= n;
-		else
-			err = bpf_adj_moved_insn(&patch[n], n);
-		if (err) {
-			verbose(env, "insn %d cannot be patched due to 16-bit range\n", i);
-			break;
-		}
-		n++;
-		insn = bpf_patch_list_add(env, i, patch, n);
-		if (IS_ERR(insn)) {
-			err = PTR_ERR(insn);
-			break;
-		}
-	}
-	err = err ?: bpf_patch_list_commit(env);
-	if (err)
-		goto out;
-	/*
-	 * bpf_do_misc_fixups() keeps the address of the count of may_goto in a register that is
-	 * dead at the may_goto. A new insn has no live_regs_before: all registers would be dead.
-	 * What is live in front of the insn is live in front of its guard. Nothing else is:
-	 *  - The guard of a jump goes where the jump goes.
-	 *  - What is live where the guard at the head of a loop goes is live at the head,
-	 *    see bpf_head_guard_target().
-	 *  - On the way out of the subprog R0, and R2 of a pair, are set to 0.
-	 */
-	aux = env->insn_aux_data;
-	for (i = 0, n = 0; i < len; i++) {
-		if (target[i] == -1)
-			continue;
-		r = zero[i] ? 3 + hweight16(zero[i]) : 1;
-		aux[i + n].live_regs_before = aux[i + n + r].live_regs_before;
-		n += r;
-	}
-out:
-	kvfree(leave);
-	kvfree(target);
-	kvfree(zero);
-	kvfree(patch);
-	return err;
+	return bpf_patch_list_commit(env);
 }
 
 /*
@@ -1530,13 +1371,7 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			struct bpf_insn *patch = insn_buf;
 
 			*patch++ = BPF_ST_NOSPEC();
-			*patch = *insn;
-			ret = bpf_adj_moved_insn(patch++, 1);
-			if (ret) {
-				verbose(env, "insn %d cannot be patched due to 16-bit range\n",
-					env->insn_aux_data[i].orig_idx);
-				return ret;
-			}
+			*patch++ = *insn;
 			cnt = patch - insn_buf;
 			insn = bpf_patch_list_add(env, i, insn_buf, cnt);
 			if (IS_ERR(insn))
@@ -2262,12 +2097,10 @@ int bpf_fixup_call_args(struct bpf_verifier_env *env)
 	return err;
 }
 
-/* The function requires that first instruction in 'patch' is insnsi[prog->len - 1] */
 static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *patch, int len)
 {
 	struct bpf_subprog_info *info = env->subprog_info;
 	int err, cnt = env->subprog_cnt;
-	struct bpf_insn *last;
 	struct bpf_prog *prog;
 
 	/* We only reserve one slot for hidden subprogs in subprog_info. */
@@ -2275,19 +2108,13 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 		verifier_bug(env, "only one hidden subprog supported");
 		return -EFAULT;
 	}
-	/*
-	 * We're not patching any existing instruction, just appending the new
-	 * ones for the hidden subprog.
-	 */
-	last = bpf_patch_list_add(env, env->prog->len - 1, patch, len);
-	if (IS_ERR(last))
-		return PTR_ERR(last);
-	err = bpf_patch_list_commit(env);
+	err = bpf_patch_list_append(env, env->prog->len - 1, patch, len) ?:
+	      bpf_patch_list_commit(env);
 	if (err)
 		return err;
 	prog = env->prog;
 	info[cnt + 1].start = info[cnt].start;
-	info[cnt].start = prog->len - len + 1;
+	info[cnt].start = prog->len - len;
 	/* The patch ends with the exit. */
 	info[cnt].exit_idx = prog->len - 1;
 	env->subprog_cnt++;
@@ -2296,43 +2123,16 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 }
 
 /*
- * Expand may_goto: load the count from the stack, jump to the target of
- * may_goto when it is zero, then the tail that updates the count.
- * 'off' is the offset of may_goto, 'reach' how far it jumps once the patches
- * queued so far are applied, see may_goto_off().
- * Use gotol when 'reach' is too far for 16-bit offset of a conditional jump.
- */
-static int may_goto_expand(struct bpf_insn *insn_buf, int off, int reach,
-			   int stack_off, const struct bpf_insn *tail, int tail_cnt)
-{
-	int cnt = 0;
-
-	/* Forward jump has to step over the tail */
-	off = off >= 0 ? off + tail_cnt : off - 1;
-	reach = reach >= 0 ? reach + tail_cnt : reach - 1;
-
-	insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_AX, BPF_REG_10, stack_off);
-	if (reach == (s16)reach) {
-		insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, off);
-	} else {
-		insn_buf[cnt++] = BPF_JMP_IMM(BPF_JNE, BPF_REG_AX, 0, 1);
-		insn_buf[cnt++] = BPF_JMP32_A(off >= 0 ? off : off - 1);
-	}
-	memcpy(insn_buf + cnt, tail, tail_cnt * sizeof(*tail));
-	return cnt + tail_cnt;
-}
-
-/*
  * Timed may_goto. All may_goto of a prog use one count and one timestamp: per-cpu memory of the
  * prog, set in the first insns of the main prog, and by the callers of async callbacks.
  * @reg holds the address. It is a register that is dead at the may_goto, or R0 that is saved at
- * @save_off in the stack. See may_goto_expand() for @off and @reach.
+ * @save_off in the stack. @jmp is the insn that goes where may_goto goes.
  */
-static int may_goto_expand_timed(struct bpf_insn *insn_buf, int off, int reach,
+static int may_goto_expand_timed(struct bpf_insn *insn_buf, int *jmp,
 				 struct bpf_timed_may_goto __percpu *tmg, int reg, int save_off)
 {
 	struct bpf_insn ld_tmg[] = { BPF_LD_IMM64(reg, (__force unsigned long)tmg) };
-	int cnt = 0, jmp, tail_cnt = save_off ? 6 : 5;
+	int cnt = 0;
 
 	if (save_off)
 		insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_10, reg, save_off);
@@ -2343,19 +2143,9 @@ static int may_goto_expand_timed(struct bpf_insn *insn_buf, int off, int reach,
 	if (save_off) {
 		insn_buf[cnt++] = BPF_JMP_IMM(BPF_JNE, BPF_REG_AX, 0, 2);
 		insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, reg, BPF_REG_10, save_off);
-		jmp = cnt++;
-		insn_buf[jmp] = BPF_JMP32_A(off >= 0 ? off + tail_cnt : off - jmp);
-	} else {
-		jmp = cnt;
-		off = off >= 0 ? off + tail_cnt : off - jmp;
-		reach = reach >= 0 ? reach + tail_cnt : reach - jmp;
-		if (reach == (s16)reach) {
-			insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, off);
-		} else {
-			insn_buf[cnt++] = BPF_JMP_IMM(BPF_JNE, BPF_REG_AX, 0, 1);
-			insn_buf[cnt++] = BPF_JMP32_A(off >= 0 ? off : off - 1);
-		}
 	}
+	*jmp = cnt;
+	insn_buf[cnt++] = save_off ? BPF_JMP32_A(0) : BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, 0);
 	insn_buf[cnt++] = BPF_ALU64_IMM(BPF_SUB, BPF_REG_AX, 1);
 	insn_buf[cnt++] = BPF_JMP_IMM(BPF_JNE, BPF_REG_AX, 0, 2);
 	/* AX is the argument and the return value */
@@ -2365,27 +2155,6 @@ static int may_goto_expand_timed(struct bpf_insn *insn_buf, int off, int reach,
 	if (save_off)
 		insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, reg, BPF_REG_10, save_off);
 	return cnt;
-}
-
-/*
- * The offset of may_goto at 'idx' once the patches queued in front are applied.
- * The patches that a forward may_goto jumps over aren't queued yet, so its
- * offset stays as it is.
- */
-static int may_goto_off(struct bpf_verifier_env *env, const struct bpf_insn *insn,
-			u32 idx)
-{
-	struct bpf_patch_list *pl = &env->patch_list;
-	u32 tgt = idx + insn->off + 1;
-	int off = insn->off;
-	u32 k = pl->cnt;
-
-	if (off >= 0)
-		return off;
-	/* all queued patches are in front of idx */
-	while (k > 0 && pl->patches[k - 1].off >= tgt)
-		off -= pl->patches[--k].len - 1;
-	return off;
 }
 
 #ifdef CONFIG_64BIT
@@ -2599,7 +2368,6 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 	if (env->seen_exception && !env->exception_callback_subprog) {
 		struct bpf_insn *patch = insn_buf;
 
-		*patch++ = env->prog->insnsi[insn_cnt - 1];
 		*patch++ = BPF_MOV64_REG(BPF_REG_0, BPF_REG_1);
 		*patch++ = BPF_EXIT_INSN();
 		ret = add_hidden_subprog(env, insn_buf, patch - insn_buf);
@@ -2846,7 +2614,7 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 
 		if (bpf_is_may_goto_insn(insn) && timed_may_goto) {
 			u16 live = env->insn_aux_data[i].live_regs_before;
-			int reg, save_off = 0;
+			int reg, jmp, save_off = 0, to = i + insn->off + 1;
 
 			/* a register that is dead here holds the address of the count */
 			for (reg = BPF_REG_0; reg <= BPF_REG_9; reg++)
@@ -2865,28 +2633,26 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 				prog->aux->timed_may_goto = tmg;
 			}
 			prog->jit_required = 1;
-			cnt = may_goto_expand_timed(insn_buf, insn->off, may_goto_off(env, insn, i),
-						    tmg, reg, save_off);
+			cnt = may_goto_expand_timed(insn_buf, &jmp, tmg, reg, save_off);
 
 			insn = bpf_patch_list_add(env, i, insn_buf, cnt);
 			if (IS_ERR(insn))
 				return PTR_ERR(insn);
+			bpf_patch_list_jump(&env->patch_list, insn - (cnt - 1 - jmp), to, 0);
 			goto next_insn;
 		} else if (bpf_is_may_goto_insn(insn)) {
-			int stack_off = -stack_depth - 8;
-			struct bpf_insn tail[] = {
-				BPF_ALU64_IMM(BPF_SUB, BPF_REG_AX, 1),
-				BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_AX, stack_off),
-			};
+			int stack_off = -stack_depth - 8, to = i + insn->off + 1;
 
 			stack_depth_extra = 8;
-			cnt = may_goto_expand(insn_buf, insn->off,
-					      may_goto_off(env, insn, i),
-					      stack_off, tail, ARRAY_SIZE(tail));
+			insn_buf[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_AX, BPF_REG_10, stack_off);
+			insn_buf[1] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, 0);
+			insn_buf[2] = BPF_ALU64_IMM(BPF_SUB, BPF_REG_AX, 1);
+			insn_buf[3] = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_AX, stack_off);
 
-			insn = bpf_patch_list_add(env, i, insn_buf, cnt);
+			insn = bpf_patch_list_add(env, i, insn_buf, 4);
 			if (IS_ERR(insn))
 				return PTR_ERR(insn);
+			bpf_patch_list_jump(&env->patch_list, insn - 2, to, 0);
 			goto next_insn;
 		}
 
@@ -3521,9 +3287,7 @@ static int inline_bpf_loop(struct bpf_verifier_env *env, int position,
 	int reg_loop_ctx = BPF_REG_8;
 
 	struct bpf_insn *insn_buf = env->insn_buf;
-	u32 callback_start;
 	struct bpf_insn *last;
-	s32 callback_offset;
 	u32 cnt = 0;
 
 	/* This represents an inlined version of bpf_iter.c:bpf_loop,
@@ -3565,19 +3329,13 @@ static int inline_bpf_loop(struct bpf_verifier_env *env, int position,
 	insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_7, BPF_REG_10, r7_offset);
 	insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_8, BPF_REG_10, r8_offset);
 
-	/*
-	 * Note: insn_buf[12] is the BPF_CALL_REL instruction. Jumps and calls
-	 * out of a patch are relative to the patch placed at 'position': its
-	 * 'cnt' insns push what is behind 'position' down by cnt - 1.
-	 */
-	callback_start = env->subprog_info[callback_subprogno].start;
-	callback_offset = callback_start - position;
-	if (callback_start > position)
-		callback_offset += cnt - 1;
-	insn_buf[12].imm = callback_offset - 12 - 1;
-
 	last = bpf_patch_list_add(env, position, insn_buf, cnt);
-	return PTR_ERR_OR_ZERO(last);
+	if (IS_ERR(last))
+		return PTR_ERR(last);
+	/* insn_buf[12] is the BPF_CALL_REL instruction */
+	bpf_patch_list_jump(&env->patch_list, last - (cnt - 1 - 12),
+			    env->subprog_info[callback_subprogno].start, 0);
+	return 0;
 }
 
 static bool is_bpf_loop_call(struct bpf_insn *insn)
