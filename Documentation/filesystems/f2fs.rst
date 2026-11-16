@@ -319,7 +319,12 @@ compress_algorithm=%s:%d Control compress algorithm and its compress level, now,
 				 =========      ===========
 
 compress_log_size=%u	 Support configuring compress cluster size. The size will
-			 be 4KB * (1 << %u). The default and minimum sizes are 16KB.
+			 be block size * (1 << %u). The default and minimum sizes
+			 are four blocks, i.e. 16KB with 4KB blocks. A cluster has
+			 to cover at least one page, so they are one page if a page
+			 has more than four blocks, e.g. 64KB with 4KB blocks on a
+			 64KB page kernel, where a file with a smaller cluster
+			 cannot be opened (-EOPNOTSUPP).
 compress_extension=%s	 Support adding specified extension, so that f2fs can enable
 			 compression on those corresponding files, e.g. if all files
 			 with '.ext' has high compression rate, we can set the '.ext'

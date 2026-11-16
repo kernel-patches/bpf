@@ -1447,6 +1447,11 @@ static int f2fs_check_compression(struct fs_context *fc,
 		ctx_clear_opt_mask(ctx, F2FS_MOUNT_COMPRESS_CACHE);
 		return 0;
 	}
+	if ((ctx->spec_mask & F2FS_SPEC_compress_log_size) &&
+	    F2FS_CTX_INFO(ctx).compress_log_size < min_compress_log_size(sbi)) {
+		f2fs_err(sbi, "Compress cluster log size is out of range");
+		return -EINVAL;
+	}
 	if (ctx->spec_mask & F2FS_SPEC_compress_extension) {
 		cnt = F2FS_CTX_INFO(ctx).compress_ext_cnt;
 		for (i = 0; i < F2FS_CTX_INFO(ctx).compress_ext_cnt; i++) {
@@ -2630,7 +2635,7 @@ static void default_options(struct f2fs_sb_info *sbi, bool remount)
 	F2FS_OPTION(sbi).s_resgid = make_kgid(&init_user_ns, F2FS_DEF_RESGID);
 	if (f2fs_sb_has_compression(sbi)) {
 		F2FS_OPTION(sbi).compress_algorithm = COMPRESS_LZ4;
-		F2FS_OPTION(sbi).compress_log_size = MIN_COMPRESS_LOG_SIZE;
+		F2FS_OPTION(sbi).compress_log_size = min_compress_log_size(sbi);
 		F2FS_OPTION(sbi).compress_ext_cnt = 0;
 		F2FS_OPTION(sbi).compress_mode = COMPR_MODE_FS;
 	}

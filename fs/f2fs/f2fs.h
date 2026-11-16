@@ -1696,7 +1696,7 @@ struct compress_ctx {
 	unsigned int nr_rpages;		/* total page number in rpages */
 	struct page **cpages;		/* pages store compressed data in cluster */
 	unsigned int nr_cpages;		/* total page number in cpages */
-	unsigned int valid_nr_cpages;	/* valid page number in cpages */
+	unsigned int valid_nr_cblocks;	/* valid block number in cpages */
 	void *rbuf;			/* virtual mapped address on rpages */
 	struct compress_data *cbuf;	/* virtual mapped address on cpages */
 	size_t rlen;			/* valid data length in rbuf */
@@ -1712,7 +1712,9 @@ struct compress_io_ctx {
 	struct inode *inode;		/* inode the context belong to */
 	struct page **rpages;		/* pages store raw data in cluster */
 	unsigned int nr_rpages;		/* total page number in rpages */
-	atomic_t pending_pages;		/* in-flight compressed page count */
+	atomic_t pending_blocks;	/* in-flight compressed block count */
+	struct page **cpages;		/* bounce pages store compressed data */
+	unsigned int nr_cpages;		/* total page number in cpages */
 };
 
 /* Context for decompressing one cluster on the read IO path */
@@ -1727,6 +1729,7 @@ struct decompress_io_ctx {
 	unsigned int nr_rpages;		/* total page number in rpages */
 	struct page **cpages;		/* pages store compressed data in cluster */
 	unsigned int nr_cpages;		/* total page number in cpages */
+	unsigned int valid_nr_cblocks;	/* valid compressed block number */
 	struct page **tpages;		/* temp pages to pad holes in cluster */
 	void *rbuf;			/* virtual mapped address on rpages */
 	struct compress_data *cbuf;	/* virtual mapped address on cpages */
@@ -1734,16 +1737,16 @@ struct decompress_io_ctx {
 	size_t clen;			/* valid data length in cbuf */
 
 	/*
-	 * The number of compressed pages remaining to be read in this cluster.
-	 * This is initially nr_cpages.  It is decremented by 1 each time a page
-	 * has been read (or failed to be read).  When it reaches 0, the cluster
-	 * is decompressed (or an error is reported).
+	 * The number of compressed blocks remaining to be read in this cluster.
+	 * This is initially valid_nr_cblocks.  It is decremented by the number
+	 * of blocks each time they have been read (or failed to be read).  When
+	 * it reaches 0, the cluster is decompressed (or an error is reported).
 	 *
 	 * If an error occurs before all the pages have been submitted for I/O,
 	 * then this will never reach 0.  In this case the I/O submitter is
 	 * responsible for calling f2fs_decompress_end_io() instead.
 	 */
-	atomic_t remaining_pages;
+	atomic_t remaining_blocks;
 
 	/*
 	 * Number of references to this decompress_io_ctx.
@@ -1770,7 +1773,7 @@ struct decompress_io_ctx {
 #define NULL_CLUSTER			((unsigned int)(~0))
 #define MIN_COMPRESS_LOG_SIZE		2
 #define MAX_COMPRESS_LOG_SIZE		8
-#define MAX_COMPRESS_WINDOW_SIZE(log_size)	((PAGE_SIZE) << (log_size))
+#define MAX_COMPRESS_WINDOW_SIZE(sbi, log_size)	((F2FS_BLKSIZE(sbi)) << (log_size))
 
 struct f2fs_gc_kthread {
 	struct task_struct *f2fs_gc_task;
@@ -2337,6 +2340,12 @@ static inline unsigned int f2fs_blocks_per_folio(struct f2fs_sb_info *sbi,
 }
 
 #define F2FS_LOG_BLKS_PER_PAGE(sbi)	(PAGE_SHIFT - (sbi)->log_blocksize)
+
+static inline unsigned int min_compress_log_size(struct f2fs_sb_info *sbi)
+{
+	return max_t(unsigned int, MIN_COMPRESS_LOG_SIZE,
+			F2FS_LOG_BLKS_PER_PAGE(sbi));
+}
 
 static inline bool f2fs_has_subpage_blocks(struct f2fs_sb_info *sbi)
 {
@@ -3017,16 +3026,6 @@ static inline void inode_sub_dirty_blocks(struct inode *inode,
 		sub_cache_counts(sbi, F2FS_DIRTY_DATA, nr_blocks);
 	if (IS_NOQUOTA(inode))
 		sub_cache_counts(sbi, F2FS_DIRTY_QDATA, nr_blocks);
-}
-
-static inline void inode_inc_dirty_block(struct inode *inode)
-{
-	inode_add_dirty_blocks(inode, 1);
-}
-
-static inline void inode_dec_dirty_block(struct inode *inode)
-{
-	inode_sub_dirty_blocks(inode, 1);
 }
 
 static inline void inc_atomic_write_cnt(struct inode *inode)
@@ -4993,20 +4992,22 @@ enum cluster_check_type {
 bool f2fs_is_compressed_page(struct folio *folio);
 struct folio *f2fs_compress_control_folio(struct folio *folio);
 int f2fs_prepare_compress_overwrite(struct inode *inode,
-			struct page **pagep, pgoff_t index, void **fsdata);
+			struct page **pagep, pgoff_t lblk, void **fsdata);
 bool f2fs_compress_write_end(struct inode *inode, void *fsdata,
-					pgoff_t index, unsigned copied);
+					pgoff_t lblk, unsigned int copied);
 int f2fs_truncate_partial_cluster(struct inode *inode, u64 from, bool lock);
-void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio);
+void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio,
+				unsigned int nr_blocks);
 bool f2fs_is_compress_backend_ready(struct inode *inode);
 bool f2fs_is_compress_level_valid(int alg, int lvl);
 int __init f2fs_init_compress_mempool(void);
 void f2fs_destroy_compress_mempool(void);
 void f2fs_decompress_cluster(struct decompress_io_ctx *dic, bool in_task);
-void f2fs_end_read_compressed_page(struct folio *folio, bool failed,
-				block_t blkaddr, bool in_task);
+void f2fs_end_read_compressed_page(struct folio *folio, size_t offset,
+				bool failed, block_t blkaddr,
+				unsigned int nr_blocks, bool in_task);
 bool f2fs_cluster_is_empty(struct compress_ctx *cc);
-bool f2fs_cluster_can_merge_page(struct compress_ctx *cc, pgoff_t index);
+bool f2fs_cluster_can_merge_block(struct compress_ctx *cc, pgoff_t lblk);
 bool f2fs_all_cluster_page_ready(struct compress_ctx *cc, struct page **pages,
 				int index, int nr_pages, bool uptodate);
 bool f2fs_sanity_check_cluster(struct dnode_of_data *dn);
@@ -5015,13 +5016,13 @@ int f2fs_write_multi_pages(struct compress_ctx *cc,
 						int *submitted,
 						struct writeback_control *wbc,
 						enum iostat_type io_type);
-int f2fs_is_compressed_cluster(struct inode *inode, pgoff_t index);
-bool f2fs_is_sparse_cluster(struct inode *inode, pgoff_t index);
+int f2fs_is_compressed_cluster(struct inode *inode, pgoff_t lblk);
+bool f2fs_is_sparse_cluster(struct inode *inode, pgoff_t lblk);
 void f2fs_update_read_extent_tree_range_compressed(struct inode *inode,
 				pgoff_t fofs, block_t blkaddr,
 				unsigned int llen, unsigned int c_len);
 int f2fs_read_multi_pages(struct compress_ctx *cc, struct bio **bio_ret,
-				unsigned nr_pages, sector_t *last_block_in_bio,
+				unsigned int nr_blocks, sector_t *last_block_in_bio,
 				struct readahead_control *rac, bool for_write);
 struct decompress_io_ctx *f2fs_alloc_dic(struct compress_ctx *cc);
 void f2fs_decompress_end_io(struct decompress_io_ctx *dic, bool failed,
@@ -5039,8 +5040,8 @@ int __init f2fs_init_compress_cache(void);
 void f2fs_destroy_compress_cache(void);
 void f2fs_invalidate_compress_pages_range(struct f2fs_sb_info *sbi,
 					block_t blkaddr, unsigned int len);
-bool f2fs_load_compressed_folio(struct f2fs_sb_info *sbi, struct folio *folio,
-								block_t blkaddr);
+bool f2fs_load_compressed_block(struct f2fs_sb_info *sbi, struct folio *folio,
+				size_t offset, block_t blkaddr);
 void f2fs_invalidate_compress_pages(struct f2fs_sb_info *sbi, nid_t ino);
 #define inc_compr_inode_stat(inode)					\
 	do {								\
@@ -5074,7 +5075,8 @@ static inline void f2fs_destroy_compress_mempool(void) { }
 static inline void f2fs_decompress_cluster(struct decompress_io_ctx *dic,
 				bool in_task) { }
 static inline void f2fs_end_read_compressed_page(struct folio *folio,
-				bool failed, block_t blkaddr, bool in_task)
+				size_t offset, bool failed, block_t blkaddr,
+				unsigned int nr_blocks, bool in_task)
 {
 	WARN_ON_ONCE(1);
 }
@@ -5092,17 +5094,18 @@ static inline int __init f2fs_init_compress_cache(void) { return 0; }
 static inline void f2fs_destroy_compress_cache(void) { }
 static inline void f2fs_invalidate_compress_pages_range(struct f2fs_sb_info *sbi,
 				block_t blkaddr, unsigned int len) { }
-static inline bool f2fs_load_compressed_folio(struct f2fs_sb_info *sbi,
-		struct folio *folio, block_t blkaddr) { return false; }
+static inline bool f2fs_load_compressed_block(struct f2fs_sb_info *sbi,
+		struct folio *folio, size_t offset,
+		block_t blkaddr) { return false; }
 static inline void f2fs_invalidate_compress_pages(struct f2fs_sb_info *sbi,
 							nid_t ino) { }
 #define inc_compr_inode_stat(inode)		do { } while (0)
 static inline int f2fs_is_compressed_cluster(
 				struct inode *inode,
-				pgoff_t index) { return 0; }
+				pgoff_t lblk) { return 0; }
 static inline bool f2fs_is_sparse_cluster(
 				struct inode *inode,
-				pgoff_t index) { return true; }
+				pgoff_t lblk) { return true; }
 static inline void f2fs_update_read_extent_tree_range_compressed(
 				struct inode *inode,
 				pgoff_t fofs, block_t blkaddr,

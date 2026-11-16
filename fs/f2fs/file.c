@@ -179,7 +179,7 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 
 #ifdef CONFIG_F2FS_FS_COMPRESSION
 	if (f2fs_compressed_file(inode)) {
-		int ret = f2fs_is_compressed_cluster(inode, pidx);
+		int ret = f2fs_is_compressed_cluster(inode, bidx);
 
 		if (ret < 0) {
 			err = ret;
@@ -1032,7 +1032,8 @@ int f2fs_truncate_blocks(struct inode *inode, u64 from, bool lock)
 	 */
 	if (f2fs_compressed_file(inode))
 		free_from = round_up(from,
-				F2FS_I(inode)->i_cluster_size << PAGE_SHIFT);
+				F2FS_BLK_TO_BYTES(F2FS_I_SB(inode),
+					F2FS_I(inode)->i_cluster_size));
 #endif
 
 	err = f2fs_do_truncate_blocks(inode, free_from, lock);
@@ -2311,13 +2312,6 @@ static long f2fs_fallocate(struct file *file, int mode,
 			FALLOC_FL_ZERO_RANGE | FALLOC_FL_INSERT_RANGE))) {
 		ret = -EOPNOTSUPP;
 		goto out;
-	}
-
-	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode))) {
-		if (f2fs_compressed_file(inode)) {
-			ret = -EOPNOTSUPP;
-			goto out;
-		}
 	}
 
 	ret = file_modified(file);
@@ -4522,9 +4516,6 @@ static int f2fs_release_compress_blocks(struct file *filp, unsigned long arg)
 	int ret;
 	int writecount;
 
-	if (f2fs_has_subpage_blocks(sbi))
-		return -EOPNOTSUPP;
-
 	if (!f2fs_sb_has_compression(sbi))
 		return -EOPNOTSUPP;
 
@@ -4719,9 +4710,6 @@ static int f2fs_reserve_compress_blocks(struct file *filp, unsigned long arg)
 	pgoff_t page_idx = 0, last_idx;
 	unsigned int reserved_blocks = 0;
 	int ret;
-
-	if (f2fs_has_subpage_blocks(sbi))
-		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_compression(sbi))
 		return -EOPNOTSUPP;
@@ -5044,9 +5032,6 @@ static int f2fs_ioc_set_compress_option(struct file *filp, unsigned long arg)
 	struct f2fs_comp_option option;
 	int ret = 0;
 
-	if (f2fs_has_subpage_blocks(sbi))
-		return -EOPNOTSUPP;
-
 	if (!f2fs_sb_has_compression(sbi))
 		return -EOPNOTSUPP;
 
@@ -5057,7 +5042,7 @@ static int f2fs_ioc_set_compress_option(struct file *filp, unsigned long arg)
 				sizeof(option)))
 		return -EFAULT;
 
-	if (option.log_cluster_size < MIN_COMPRESS_LOG_SIZE ||
+	if (option.log_cluster_size < min_compress_log_size(sbi) ||
 		option.log_cluster_size > MAX_COMPRESS_LOG_SIZE ||
 		option.algorithm >= COMPRESS_MAX)
 		return -EINVAL;
@@ -5151,15 +5136,15 @@ static int redirty_blocks(struct inode *inode, pgoff_t page_idx, int len)
 		off = offset_in_folio(folio, (loff_t)redirty_idx << PAGE_SHIFT);
 		dlen = (size_t)(next_idx - redirty_idx) << PAGE_SHIFT;
 
-		if (folio_test_large(folio)) {
+		if (f2fs_is_multiblock_folio(F2FS_I_SB(inode), folio)) {
 			/*
-			 * A compressed inode can keep using large folios, in
+			 * f2fs_folio_mark_dirty() does not dirty the blocks of a folio
+			 * state.  A compressed inode can keep using large folios, in
 			 * which case the compression flag only works as a hint
 			 * until the inode is evicted.  Update the subpage dirty
 			 * bitmap as well, otherwise f2fs_write_cache_folios()
 			 * finds no dirty range and skips the whole folio.
 			 */
-			f2fs_ffs_find_or_alloc(folio);
 			f2fs_ffs_mark_subrange_dirty(folio, off, dlen);
 		}
 
@@ -5178,11 +5163,8 @@ static int f2fs_ioc_decompress_file(struct file *filp)
 	struct inode *inode = file_inode(filp);
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_inode_info *fi = F2FS_I(inode);
-	pgoff_t page_idx = 0, last_idx, cluster_idx;
+	pgoff_t lblk = 0, last_idx, cluster_idx;
 	int ret;
-
-	if (f2fs_has_subpage_blocks(sbi))
-		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_compression(sbi) ||
 			F2FS_OPTION(sbi).compress_mode != COMPR_MODE_USER)
@@ -5220,12 +5202,14 @@ static int f2fs_ioc_decompress_file(struct file *filp)
 	last_idx >>= fi->i_log_cluster_size;
 
 	for (cluster_idx = 0; cluster_idx < last_idx; cluster_idx++) {
-		page_idx = cluster_idx << fi->i_log_cluster_size;
+		lblk = cluster_idx << fi->i_log_cluster_size;
 
-		if (!f2fs_is_compressed_cluster(inode, page_idx))
+		if (!f2fs_is_compressed_cluster(inode, lblk))
 			continue;
 
-		ret = redirty_blocks(inode, page_idx, fi->i_cluster_size);
+		ret = redirty_blocks(inode,
+			f2fs_lblk_to_folio_index(sbi, lblk),
+			fi->i_cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi));
 		if (ret < 0)
 			break;
 
@@ -5262,11 +5246,8 @@ static int f2fs_ioc_compress_file(struct file *filp)
 	struct inode *inode = file_inode(filp);
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_inode_info *fi = F2FS_I(inode);
-	pgoff_t page_idx = 0, last_idx, cluster_idx;
+	pgoff_t lblk = 0, last_idx, cluster_idx;
 	int ret;
-
-	if (f2fs_has_subpage_blocks(sbi))
-		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_compression(sbi) ||
 			F2FS_OPTION(sbi).compress_mode != COMPR_MODE_USER)
@@ -5310,12 +5291,14 @@ static int f2fs_ioc_compress_file(struct file *filp)
 	last_idx >>= fi->i_log_cluster_size;
 
 	for (cluster_idx = 0; cluster_idx < last_idx; cluster_idx++) {
-		page_idx = cluster_idx << fi->i_log_cluster_size;
+		lblk = cluster_idx << fi->i_log_cluster_size;
 
-		if (f2fs_is_sparse_cluster(inode, page_idx))
+		if (f2fs_is_sparse_cluster(inode, lblk))
 			continue;
 
-		ret = redirty_blocks(inode, page_idx, fi->i_cluster_size);
+		ret = redirty_blocks(inode,
+			f2fs_lblk_to_folio_index(sbi, lblk),
+			fi->i_cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi));
 		if (ret < 0)
 			break;
 
