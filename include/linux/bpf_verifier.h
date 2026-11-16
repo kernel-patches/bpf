@@ -1975,6 +1975,21 @@ static inline int bpf_head_guard_target(const struct bpf_verifier_env *env, int 
 }
 bool bpf_subprog_is_global(const struct bpf_verifier_env *env, int subprog);
 
+/* The first field that ends behind 'off'. The fields are sorted and do not overlap. */
+static inline u32 btf_record_first_field(const struct btf_record *rec, s64 off)
+{
+	u32 l = 0, r = rec->cnt, m;
+
+	while (l < r) {
+		m = (l + r) / 2;
+		if (rec->fields[m].offset + rec->fields[m].size <= off)
+			l = m + 1;
+		else
+			r = m;
+	}
+	return l;
+}
+
 /* Kinds of member a by-value struct or union may be composed of. */
 enum btf_member_kind {
 	BTF_MEMBER_SCALAR	= BIT(0), /* an int or an enum */

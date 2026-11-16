@@ -193,11 +193,6 @@ struct bpf_map_ops {
 	const struct bpf_iter_seq_info *iter_seq_info;
 };
 
-enum {
-	/* Support at most 11 fields in a BTF type */
-	BTF_FIELDS_MAX	   = 11,
-};
-
 enum btf_field_type {
 	BPF_SPIN_LOCK  = (1 << 0),
 	BPF_TIMER      = (1 << 1),
