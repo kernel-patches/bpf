@@ -109,6 +109,15 @@ struct folio *memfd_alloc_folio(struct file *memfd, pgoff_t idx)
 			goto out_unlock;
 		}
 
+		/* Let the caller retry if we raced with population. */
+		folio = filemap_get_folio(memfd->f_mapping,
+					  idx << huge_page_order(h));
+		if (!IS_ERR(folio)) {
+			folio_put(folio);
+			err = -EEXIST;
+			goto out_unlock;
+		}
+
 		nr_resv = hugetlb_reserve_pages(inode, idx, idx + 1, NULL, EMPTY_VMA_FLAGS);
 		if (nr_resv < 0) {
 			err = nr_resv;
