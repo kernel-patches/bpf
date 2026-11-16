@@ -614,6 +614,15 @@ static int mchp_pdmc_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
+static int mchp_pdmc_hw_free(struct snd_pcm_substream *substream,
+			     struct snd_soc_dai *dai)
+{
+	struct mchp_pdmc *dd = snd_soc_dai_get_drvdata(dai);
+
+	atomic_set(&dd->busy_stream, 0);
+	return 0;
+}
+
 static void mchp_pdmc_noise_filter_workaround(struct mchp_pdmc *dd)
 {
 	u32 tmp, steps = 16;
@@ -748,6 +757,7 @@ static const struct snd_soc_dai_ops mchp_pdmc_dai_ops = {
 	.set_fmt	= mchp_pdmc_set_fmt,
 	.startup	= mchp_pdmc_startup,
 	.hw_params	= mchp_pdmc_hw_params,
+	.hw_free	= mchp_pdmc_hw_free,
 	.trigger	= mchp_pdmc_trigger,
 	.pcm_new	= &mchp_pdmc_pcm_new,
 	.auto_selectable_formats	= &mchp_selectable_formats,
@@ -1120,8 +1130,6 @@ pm_runtime_suspend:
 static void mchp_pdmc_remove(struct platform_device *pdev)
 {
 	struct mchp_pdmc *dd = platform_get_drvdata(pdev);
-
-	atomic_set(&dd->busy_stream, 0);
 
 	if (!pm_runtime_status_suspended(dd->dev))
 		mchp_pdmc_runtime_suspend(dd->dev);
