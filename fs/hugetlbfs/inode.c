@@ -157,7 +157,8 @@ static int hugetlbfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 		goto out;
 
 	ret = 0;
-	if (vma_test(vma, VMA_WRITE_BIT) && inode->i_size < len)
+	if (vma_test(vma, VMA_WRITE_BIT) && inode->i_size < len &&
+	    !(HUGETLBFS_I(inode)->seals & F_SEAL_GROW))
 		i_size_write(inode, len);
 out:
 	inode_unlock(inode);
