@@ -169,7 +169,7 @@ static int sy7636a_regulator_probe(struct i2c_client *client)
 	if (IS_ERR(gdp))
 		return dev_err_probe(dev, PTR_ERR(gdp), "Power good GPIO fault\n");
 
-	data = devm_kzalloc(dev, sizeof(struct sy7636a_data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, struct sy7636a_data);
 	if (!data)
 		return -ENOMEM;
 
