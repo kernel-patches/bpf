@@ -233,10 +233,10 @@ static int scmi_pinctrl_attributes(const struct scmi_protocol_handle *ph,
 	 * on error just carry on and use already provided short name.
 	 */
 	if (ext_name_flag)
-		ret = ph->hops->extended_name_get(ph, PINCTRL_NAME_GET,
-						  selector, (u32 *)&type, name,
-						  SCMI_MAX_STR_SIZE);
-	return ret;
+		ph->hops->extended_name_get(ph, PINCTRL_NAME_GET,
+					    selector, (u32 *)&type, name,
+					    SCMI_MAX_STR_SIZE);
+	return 0;
 }
 
 struct scmi_pinctrl_ipriv {
