@@ -385,6 +385,58 @@ do {									\
 })
 #endif
 
+/**
+ * smp_cond_load_acquire_timeout() - (Spin) wait for cond with ACQUIRE ordering
+ * until a timeout expires.
+ * @ptr: pointer to the variable to wait on.
+ * @cond_expr: boolean expression to wait for.
+ * @time_expr_ns: monotonic expression that evaluates to time in ns or,
+ *  on failure, returns zero or a negative value.
+ * @timeout_ns: timeout value in ns. A timeout value of zero is treated
+ *  as the minimum wait so we evaluate cond_expr at least once.
+ * (Both of the above are assumed to be compatible with s64.)
+ *
+ * Equivalent to using smp_cond_load_acquire() on the condition variable with
+ * a timeout.
+ */
+#ifndef smp_cond_load_acquire_timeout
+#define smp_cond_load_acquire_timeout(ptr, cond_expr,			\
+				      time_expr_ns, timeout_ns)		\
+({									\
+	typeof(ptr) __PTRA = (ptr);					\
+	s64 __scl_timeout_ns = (s64)(timeout_ns);			\
+	__unqual_scalar_typeof(*(ptr)) VAL;				\
+	bool __scl_timed_out = false;					\
+									\
+	if (unlikely(__scl_timeout_ns < 0))				\
+		__scl_timed_out = true;					\
+	else								\
+		VAL = __smp_cond_load_relaxed_timeout(__PTRA,		\
+						      cond_expr,	\
+						      time_expr_ns,	\
+						      __scl_timeout_ns,	\
+						     __scl_timed_out);	\
+									\
+	/*								\
+	 * We return after a timeout or, having waited on the control	\
+	 * dependency. In the first case, the control-dependency might	\
+	 * not be present so we provide full ACQUIRE ordering.		\
+	 *								\
+	 * In the second case, cond_expr provides a control-dependency	\
+	 * on VAL, which orders any subsequent STOREs after the LOAD,	\
+	 * taking care of the LOAD->STORE ordering.			\
+	 *								\
+	 * Provide the remaining LOAD->LOAD ordering.			\
+	 */								\
+	if (unlikely(__scl_timed_out))					\
+		VAL = smp_load_acquire(__PTRA);				\
+	else								\
+		smp_acquire__after_ctrl_dep();				\
+									\
+	(typeof(*(ptr)))VAL;						\
+})
+#endif
+
 /*
  * pmem_wmb() ensures that all stores for which the modification
  * are written to persistent storage by preceding instructions have
