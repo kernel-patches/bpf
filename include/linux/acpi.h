@@ -1548,6 +1548,12 @@ extern bool acpi_has_watchdog(void);
 static inline bool acpi_has_watchdog(void) { return false; }
 #endif
 
+#if IS_REACHABLE(CONFIG_ACPI_TAD) && IS_ENABLED(CONFIG_RTC_CLASS)
+bool acpi_has_rtc(void);
+#else
+static inline bool acpi_has_rtc(void) { return false; }
+#endif
+
 #ifdef CONFIG_ACPI_SPCR_TABLE
 extern bool qdf2400_e44_present;
 int acpi_parse_spcr(bool enable_earlycon, bool enable_console);

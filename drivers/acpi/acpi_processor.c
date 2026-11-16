@@ -903,6 +903,13 @@ int acpi_processor_evaluate_cst(acpi_handle handle, u32 cpu,
 			continue;
 		}
 
+		if (obj->buffer.length < sizeof(*reg)) {
+			acpi_handle_info(handle,
+					 FW_BUG "Skipping _CST C%d due to data corruption\n",
+					 i);
+			continue;
+		}
+
 		reg = (struct acpi_power_register *)obj->buffer.pointer;
 
 		obj = &element->package.elements[1];

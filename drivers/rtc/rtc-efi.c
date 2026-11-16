@@ -10,6 +10,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/acpi.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/stringify.h>
@@ -251,6 +252,9 @@ static int __init efi_rtc_probe(struct platform_device *dev)
 	efi_time_t eft;
 	efi_time_cap_t cap;
 	efi_bool_t enabled, pending;
+
+	if (acpi_has_rtc())
+		return -ENODEV;
 
 	/* First check if the RTC is usable */
 	if (efi.get_time(&eft, &cap) != EFI_SUCCESS)

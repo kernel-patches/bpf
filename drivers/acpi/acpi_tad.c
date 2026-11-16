@@ -622,8 +622,51 @@ static const struct attribute_group acpi_tad_group = {
 
 __ATTRIBUTE_GROUPS(acpi_tad);
 
+static const struct acpi_device_id acpi_tad_ids[] = {
+	{"ACPI000E", 0},
+	{}
+};
+
 #ifdef CONFIG_RTC_CLASS
 /* RTC class device interface */
+
+static int acpi_tad_rtc_match(struct device *dev, const void *data)
+{
+	unsigned long long caps;
+	acpi_status status;
+
+	if (!acpi_match_device(acpi_tad_ids, dev))
+		return 0;
+
+	status = acpi_evaluate_integer(ACPI_HANDLE(dev), "_GCP", NULL, &caps);
+
+	return ACPI_SUCCESS(status) && (caps & ACPI_TAD_RT);
+}
+
+/**
+ * acpi_has_rtc - Check if the RTC should be driven via the ACPI TAD
+ *
+ * Check if there is a TAD implementing the real time methods that this driver
+ * will register an RTC class device for.
+ *
+ * Return: %true if the RTC should be driven via the ACPI TAD, %false otherwise.
+ */
+bool acpi_has_rtc(void)
+{
+	struct device *dev;
+
+	if (acpi_disabled)
+		return false;
+
+	dev = bus_find_device(&platform_bus_type, NULL, NULL,
+			      acpi_tad_rtc_match);
+	if (!dev)
+		return false;
+
+	put_device(dev);
+	return true;
+}
+EXPORT_SYMBOL_GPL(acpi_has_rtc);
 
 static void acpi_tad_rt_to_tm(struct acpi_tad_rt *rt, struct rtc_time *tm)
 {
@@ -893,11 +936,6 @@ static int acpi_tad_probe(struct platform_device *pdev)
 
 	return 0;
 }
-
-static const struct acpi_device_id acpi_tad_ids[] = {
-	{"ACPI000E", 0},
-	{}
-};
 
 static struct platform_driver acpi_tad_driver = {
 	.driver = {

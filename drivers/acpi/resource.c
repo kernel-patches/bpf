@@ -554,6 +554,12 @@ static const struct dmi_system_id irq1_edge_low_force_override[] = {
 		},
 	},
 	{
+		/* MECHREVO Jiaolong17 Series GM7RG7M */
+		.matches = {
+			DMI_MATCH(DMI_BOARD_NAME, "GM7RG7M"),
+		},
+	},
+	{
 		/* XMG APEX 17 (M23) */
 		.matches = {
 			DMI_MATCH(DMI_BOARD_NAME, "GMxBGxx"),
