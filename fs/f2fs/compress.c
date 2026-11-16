@@ -1090,7 +1090,7 @@ static void set_cluster_dirty(struct compress_ctx *cc)
 		if (!cc->rpages[i])
 			continue;
 		folio = page_folio(cc->rpages[i]);
-		folio_mark_dirty(folio);
+		f2fs_folio_mark_dirty(folio);
 		folio_set_f2fs_gcing(folio);
 	}
 }

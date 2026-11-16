@@ -1324,29 +1324,6 @@ static void __remove_dirty_inode(struct inode *inode, enum inode_type type)
 	stat_dec_dirty_inode(F2FS_I_SB(inode), type);
 }
 
-/*
- * Account @nr dirty blocks (negative when dirtiness is cleared) for @inode.
- */
-void f2fs_account_dirty_blocks(struct inode *inode, int nr)
-{
-	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-	enum inode_type type = S_ISDIR(inode->i_mode) ? DIR_INODE : FILE_INODE;
-
-	if (!nr)
-		return;
-
-	spin_lock(&sbi->inode_lock[type]);
-	if (nr > 0) {
-		if (type != FILE_INODE || test_opt(sbi, DATA_FLUSH))
-			__add_dirty_inode(inode, type);
-		inode_add_dirty_blocks(inode, nr);
-	} else {
-		inode_sub_dirty_blocks(inode, -nr);
-		__remove_dirty_inode(inode, type);
-	}
-	spin_unlock(&sbi->inode_lock[type]);
-}
-
 void f2fs_update_dirty_folio(struct inode *inode, struct folio *folio)
 {
 	if (!S_ISDIR(inode->i_mode) && !S_ISREG(inode->i_mode) &&
@@ -1354,16 +1331,13 @@ void f2fs_update_dirty_folio(struct inode *inode, struct folio *folio)
 		return;
 
 	/*
-	 * Large folios have a subpage dirty bitmap, so defer their dirty accounting
-	 * to the f2fs_ffs_*subrange_dirty*() helpers.  This avoids nesting
-	 * ffs->state_lock with the inode dirty list lock.
+	 * The dirty blocks of a folio with a folio state are accounted when
+	 * their dirty bits are set. Without it, every block of the folio is
+	 * dirty.
 	 */
-	if (f2fs_folio_has_ffs(folio)) {
-		folio_set_f2fs_reference(folio);
-		return;
-	}
-
-	f2fs_account_dirty_blocks(inode, 1);
+	if (!f2fs_folio_has_ffs(folio))
+		f2fs_account_dirty_blocks(inode,
+			f2fs_blocks_per_folio(F2FS_I_SB(inode), folio));
 
 	folio_set_f2fs_reference(folio);
 }
@@ -1382,6 +1356,33 @@ void f2fs_remove_dirty_inode(struct inode *inode)
 
 	spin_lock(&sbi->inode_lock[type]);
 	__remove_dirty_inode(inode, type);
+	spin_unlock(&sbi->inode_lock[type]);
+}
+
+/*
+ * Account @nr dirty blocks (negative when they are cleaned) for @inode.
+ */
+void f2fs_account_dirty_blocks(struct inode *inode, int nr)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	enum inode_type type = S_ISDIR(inode->i_mode) ? DIR_INODE : FILE_INODE;
+
+	if (!nr)
+		return;
+
+	if (!S_ISDIR(inode->i_mode) && !S_ISREG(inode->i_mode) &&
+			!S_ISLNK(inode->i_mode))
+		return;
+
+	if (nr < 0) {
+		inode_sub_dirty_blocks(inode, -nr);
+		return;
+	}
+
+	spin_lock(&sbi->inode_lock[type]);
+	if (type != FILE_INODE || test_opt(sbi, DATA_FLUSH))
+		__add_dirty_inode(inode, type);
+	inode_add_dirty_blocks(inode, nr);
 	spin_unlock(&sbi->inode_lock[type]);
 }
 

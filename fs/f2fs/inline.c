@@ -187,7 +187,7 @@ int f2fs_convert_inline_folio(struct dnode_of_data *dn, struct folio *folio)
 	f2fs_bug_on(F2FS_F_SB(folio), folio_test_writeback(folio));
 
 	f2fs_do_read_inline_data(folio, dn->inode_entry);
-	folio_mark_dirty(folio);
+	f2fs_folio_mark_dirty(folio);
 
 	/* clear dirty state */
 	dirty = folio_clear_dirty_for_io(folio);
@@ -196,10 +196,23 @@ int f2fs_convert_inline_folio(struct dnode_of_data *dn, struct folio *folio)
 	folio_start_writeback(folio);
 	fio.old_blkaddr = dn->data_blkaddr;
 	set_inode_flag(dn->inode, FI_HOT_DATA);
+	if (f2fs_is_multiblock_folio(fio.sbi, folio)) {
+		struct f2fs_folio_state *ffs = f2fs_ffs_find_or_alloc(folio);
+
+		atomic_inc(&ffs->write_blocks_pending);
+	}
 	f2fs_outplace_write_data(dn, &fio);
+	/* Drop the pending write that a failed submission leaves behind. */
+	if (!fio.submitted && f2fs_is_multiblock_folio(fio.sbi, folio))
+		f2fs_ffs_put_write_pending(folio, 1);
 	f2fs_folio_wait_writeback(folio, true, true);
 	if (dirty) {
-		inode_dec_dirty_block(dn->inode);
+		/*
+		 * The folio of inline data was dirtied without a folio state,
+		 * so it was accounted as a whole.
+		 */
+		f2fs_account_dirty_blocks(dn->inode,
+				-(int)f2fs_blocks_per_folio(fio.sbi, folio));
 		f2fs_remove_dirty_inode(dn->inode);
 	}
 

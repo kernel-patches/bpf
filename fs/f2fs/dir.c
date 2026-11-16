@@ -57,7 +57,7 @@ void f2fs_mark_dentry_folio_dirty(struct inode *dir, struct folio *folio,
 	} else if (!folio_test_uptodate(folio)) {
 		folio_mark_uptodate(folio);
 	}
-	folio_mark_dirty(folio);
+	f2fs_folio_mark_dirty(folio);
 }
 
 static unsigned long dir_blocks(struct inode *inode)
@@ -979,9 +979,9 @@ void f2fs_delete_entry(struct f2fs_dir_entry *dentry, void *dentry_block,
 		if (!f2fs_has_subpage_blocks(sbi)) {
 			folio_clear_uptodate(folio);
 			folio_detach_private(folio);
-			inode_dec_dirty_block(dir);
 		}
 
+		f2fs_folio_clear_dirty_blocks(folio, true);
 		f2fs_remove_dirty_inode(dir);
 	}
 keep_dirty:

@@ -258,7 +258,7 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 
 	if (folio_test_large(folio))
 		f2fs_ffs_mark_subrange_dirty(folio, 0, dirty_len);
-	folio_mark_dirty(folio);
+	f2fs_folio_mark_dirty(folio);
 
 	f2fs_update_iostat(sbi, inode, APP_MAPPED_IO, dirty_len);
 	f2fs_update_time(sbi, REQ_TIME);
@@ -856,7 +856,7 @@ truncate_out:
 		 */
 		f2fs_ffs_mark_subrange_dirty(folio, folio_off,
 				blk_end - folio_off);
-		folio_mark_dirty(folio);
+		f2fs_folio_mark_dirty(folio);
 	}
 	f2fs_folio_put(folio, true);
 	return 0;
@@ -1339,7 +1339,7 @@ static int fill_zero(struct inode *inode, pgoff_t index,
 	 * f2fs_get_new_data_folio() above.
 	 */
 	f2fs_ffs_mark_subrange_dirty(folio, folio_off, len);
-	folio_mark_dirty(folio);
+	f2fs_folio_mark_dirty(folio);
 	f2fs_folio_put(folio, true);
 	return 0;
 }
@@ -1627,7 +1627,7 @@ static int __clone_blkaddrs(struct inode *src_inode, struct inode *dst_inode,
 				f2fs_ffs_mark_subrange_dirty(fdst, dst_off,
 						F2FS_BLKSIZE(sbi));
 			}
-			folio_mark_dirty(fdst);
+			f2fs_folio_mark_dirty(fdst);
 			if (same_folio && i_size_read(dst_inode) <
 			    F2FS_BLK_TO_BYTES(sbi, dst + i + 1))
 				f2fs_i_size_write(dst_inode,
@@ -3222,7 +3222,7 @@ do_map:
 			f2fs_ffs_mark_subrange_dirty(folio,
 				offset_in_folio(folio, (loff_t)idx << PAGE_SHIFT),
 				PAGE_SIZE);
-			folio_mark_dirty(folio);
+			f2fs_folio_mark_dirty(folio);
 			folio_set_f2fs_gcing(folio);
 			f2fs_folio_put(folio, true);
 
@@ -4967,7 +4967,7 @@ static int redirty_blocks(struct inode *inode, pgoff_t page_idx, int len)
 			f2fs_ffs_mark_subrange_dirty(folio, off, dlen);
 		}
 
-		folio_mark_dirty(folio);
+		f2fs_folio_mark_dirty(folio);
 		folio_set_f2fs_gcing(folio);
 		redirty_idx = folio_next_index(folio);
 		folio_unlock(folio);
@@ -5561,12 +5561,13 @@ static int f2fs_preallocate_blocks(struct kiocb *iocb, struct iov_iter *iter,
 			return ret;
 	}
 
-	if (!dio && mapping_large_folio_support(inode->i_mapping)) {
+	if (!dio && f2fs_has_multiblock_folios(inode)) {
 		/*
-		 * Preallocate all blocks touched by a large-folio buffered write so
-		 * the regular write_begin path does not need to unlock the folio for
-		 * f2fs_balance_fs().  Rechecking large-folio state after unlock is
-		 * unreliable since partial truncation can split the folio.
+		 * Preallocate all blocks touched by a multiblock-folio buffered
+		 * write so the regular write_begin path does not need to unlock
+		 * the folio for f2fs_balance_fs().  Rechecking large-folio
+		 * state after unlock is unreliable since partial truncation can
+		 * split the folio.
 		 */
 		map.m_lblk = F2FS_BYTES_TO_BLK(sbi, pos);
 		map.m_len = F2FS_BLK_ALIGN(sbi, pos + count);

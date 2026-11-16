@@ -1586,7 +1586,7 @@ static int move_data_cache_block(struct inode *inode, block_t bidx, int gc_type,
 		}
 		if (has_ffs)
 			f2fs_ffs_mark_subrange_dirty(folio, foff, F2FS_BLKSIZE(sbi));
-		folio_mark_dirty(folio);
+		f2fs_folio_mark_dirty(folio);
 		folio_set_f2fs_gcing(folio);
 	} else {
 		struct f2fs_io_info fio = {
@@ -1611,15 +1611,15 @@ retry:
 
 		if (has_ffs)
 			f2fs_ffs_mark_subrange_dirty(folio, foff, F2FS_BLKSIZE(sbi));
-		folio_mark_dirty(folio);
+		f2fs_folio_mark_dirty(folio);
 		if (folio_clear_dirty_for_io(folio)) {
-			if (!has_ffs) {
-				inode_dec_dirty_block(inode);
-				f2fs_remove_dirty_inode(inode);
-			} else if (f2fs_ffs_clear_subrange_dirty_and_test(folio,
-						foff, F2FS_BLKSIZE(sbi))) {
-				folio_mark_dirty(folio);
-			}
+			/* The other dirty blocks keep the folio dirty. */
+			if (!has_ffs)
+				f2fs_folio_clear_dirty_blocks(folio, true);
+			else if (f2fs_ffs_clear_subrange_dirty_and_test(folio,
+						foff, F2FS_BLKSIZE(sbi)))
+				f2fs_folio_mark_dirty(folio);
+			f2fs_remove_dirty_inode(inode);
 		}
 
 		folio_set_f2fs_gcing(folio);
@@ -1638,7 +1638,7 @@ retry:
 				if (has_ffs)
 					f2fs_ffs_mark_subrange_dirty(folio, foff,
 							F2FS_BLKSIZE(sbi));
-				folio_mark_dirty(folio);
+				f2fs_folio_mark_dirty(folio);
 				folio_set_f2fs_gcing(folio);
 			} else if (!f2fs_ffs_has_dirty_subpage(folio)) {
 				/* migrate this block in later GC */

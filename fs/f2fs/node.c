@@ -1700,10 +1700,13 @@ static void flush_inline_data(struct f2fs_sb_info *sbi, nid_t ino)
 		goto folio_out;
 
 	ret = f2fs_write_inline_data(inode, folio);
-	inode_dec_dirty_block(inode);
-	f2fs_remove_dirty_inode(inode);
-	if (ret)
-		folio_mark_dirty(folio);
+	if (ret) {
+		/* Keep it dirty as it was, with its dirty blocks accounted. */
+		filemap_dirty_folio(folio->mapping, folio);
+	} else {
+		f2fs_folio_clear_dirty_blocks(folio, true);
+		f2fs_remove_dirty_inode(inode);
+	}
 folio_out:
 	f2fs_folio_put(folio, true);
 iput_out:
