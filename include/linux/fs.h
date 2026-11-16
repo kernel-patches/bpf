@@ -2782,6 +2782,11 @@ static inline void file_end_write(struct file *file)
 	sb_end_write(file_inode(file)->i_sb);
 }
 
+DEFINE_GUARD(file_write,
+	     struct file *,
+	     file_start_write(_T),
+	     file_end_write(_T))
+
 /**
  * kiocb_start_write - get write access to a superblock for async file io
  * @iocb: the io context we want to submit the write with
