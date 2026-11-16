@@ -58,15 +58,13 @@ static struct dentry *ovl_d_real(struct dentry *dentry, enum d_real_type type)
 
 	/*
 	 * Best effort lazy lookup of lowerdata for D_REAL_DATA case to return
-	 * the real lowerdata dentry.  The only current caller of d_real() with
-	 * D_REAL_DATA is d_real_inode() from trace_uprobe and this caller is
-	 * likely going to be followed reading from the file, before placing
-	 * uprobes on offset within the file, so lowerdata should be available
-	 * when setting the uprobe.
+	 * the real lowerdata dentry. Callers may ask for files that were never
+	 * opened, e.g. for uprobes or O_PATH files, so the lookup can fail
+	 * here. Return the overlayfs dentry then.
 	 */
 	err = ovl_verify_lowerdata(dentry);
 	if (err)
-		goto bug;
+		return dentry;
 	lower = ovl_dentry_lowerdata(dentry);
 	if (!lower)
 		goto bug;
