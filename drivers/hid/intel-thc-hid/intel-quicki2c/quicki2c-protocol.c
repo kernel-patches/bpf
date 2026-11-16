@@ -122,8 +122,8 @@ int quicki2c_get_report_descriptor(struct quicki2c_device *qcdev)
 	size_t read_len = le16_to_cpu(qcdev->dev_desc.report_desc_len);
 	u32 prd_len = read_len;
 
-	return thc_swdma_read(qcdev->thc_hw, (u8 *)&desc_reg, HIDI2C_REG_LEN,
-			      &prd_len, qcdev->report_descriptor, &read_len);
+	return thc_swdma_read_safe(qcdev->thc_hw, (u8 *)&desc_reg, HIDI2C_REG_LEN,
+				   &prd_len, qcdev->report_descriptor, read_len, &read_len);
 }
 
 int quicki2c_get_report(struct quicki2c_device *qcdev, u8 report_type,
@@ -153,7 +153,8 @@ int quicki2c_get_report(struct quicki2c_device *qcdev, u8 report_type,
 
 	rpt = (struct hidi2c_report_packet *)qcdev->input_buf;
 
-	ret = thc_swdma_read(qcdev->thc_hw, qcdev->report_buf, len, NULL, rpt, &read_len);
+	ret = thc_swdma_read_safe(qcdev->thc_hw, qcdev->report_buf, len, NULL, rpt,
+				  HIDI2C_PACKET_LEN(qcdev->input_len), &read_len);
 	if (ret) {
 		dev_err_once(qcdev->dev, "Get report failed, ret %d, read len (%zu vs %zu)\n",
 			     ret, read_len, buf_len);

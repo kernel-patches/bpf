@@ -292,9 +292,12 @@ static int handle_input_report(struct quicki2c_device *qcdev)
 	int ret;
 
 	while (!rx_dma_finished) {
-		ret = thc_rxdma_read(qcdev->thc_hw, THC_RXDMA2,
-				     (u8 *)pkt, &report_len,
-				     &rx_dma_finished);
+		ret = thc_rxdma_read_safe(qcdev->thc_hw, THC_RXDMA2, (u8 *)pkt,
+					  HIDI2C_PACKET_LEN(qcdev->input_len), &report_len,
+					  &rx_dma_finished);
+		if (ret == -EMSGSIZE)
+			continue;
+
 		if (ret)
 			return ret;
 
