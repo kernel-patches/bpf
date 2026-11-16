@@ -10,6 +10,7 @@ TEST_GEN_PROGS := dev_in_maps
 TEST_GEN_PROGS += set_layers_via_fds
 TEST_GEN_PROGS += idmapped_mounts
 TEST_GEN_PROGS += automount_in_layer
+TEST_GEN_PROGS += pseudo_datadir
 
 include ../../lib.mk
 
