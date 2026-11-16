@@ -1332,6 +1332,7 @@ struct bpf_verifier_env {
 	/* What a pointer that was read from a table of functions may point to. */
 	struct bpf_func_set **func_sets;
 	u32 func_set_cnt;
+	struct bpf_index func_set_index;
 	bool has_callx;
 	/*
 	 * Call graph edges created by callx instructions. A bitmap of
@@ -1718,8 +1719,8 @@ static inline bool bpf_register_is_null(struct bpf_reg_state *reg)
 bool bpf_map_is_rdonly(const struct bpf_map *map);
 /* Sorted, no function is there twice */
 struct bpf_func_set {
-	u16 cnt;
-	u16 subprog[] __counted_by(cnt);
+	u32 cnt;
+	u32 subprog[] __counted_by(cnt);
 };
 
 struct bpf_func_ptr *bpf_map_func_ptrs(struct bpf_verifier_env *env,
