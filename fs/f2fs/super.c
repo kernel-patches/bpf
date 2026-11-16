@@ -4173,13 +4173,6 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 		return -EFSCORRUPTED;
 	}
 
-	/* Subpage block size is enabled after all paths support it. */
-	if (le32_to_cpu(raw_super->log_blocksize) != PAGE_SHIFT) {
-		f2fs_info(sbi, "Subpage block size (%u) is not supported yet",
-			  le32_to_cpu(raw_super->log_blocksize));
-		return -EOPNOTSUPP;
-	}
-
 	/* check log blocks per segment */
 	if (le32_to_cpu(raw_super->log_blocks_per_seg) != 9) {
 		f2fs_info(sbi, "Invalid log blocks per segment (%u)",
