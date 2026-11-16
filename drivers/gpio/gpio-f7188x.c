@@ -508,7 +508,7 @@ static int f7188x_gpio_probe(struct platform_device *pdev)
 	struct f7188x_gpio_data *data;
 	bool nct5104d_bank_0 = true, nct5104d_bank_1 = true;
 
-	data = devm_kzalloc(&pdev->dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(&pdev->dev, *data);
 	if (!data)
 		return -ENOMEM;
 
