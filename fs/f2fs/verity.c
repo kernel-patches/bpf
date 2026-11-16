@@ -32,11 +32,6 @@
 
 #define F2FS_VERIFY_VER	(1)
 
-static inline loff_t f2fs_verity_metadata_pos(const struct inode *inode)
-{
-	return round_up(inode->i_size, 65536);
-}
-
 /*
  * Write some verity metadata to the inode for FS_IOC_ENABLE_VERITY.
  * kernel_write() can't be used because the file descriptor is readonly.
@@ -93,9 +88,6 @@ static int f2fs_begin_enable_verity(struct file *filp)
 {
 	struct inode *inode = file_inode(filp);
 	int err;
-
-	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)))
-		return -EOPNOTSUPP;
 
 	if (f2fs_verity_in_progress(inode))
 		return -EBUSY;

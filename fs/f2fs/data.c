@@ -1671,7 +1671,7 @@ int f2fs_reserve_block(struct dnode_of_data *dn, pgoff_t index)
 static inline struct fsverity_info *f2fs_need_verity(const struct inode *inode,
 						     pgoff_t idx)
 {
-	if (idx < DIV_ROUND_UP(inode->i_size, PAGE_SIZE))
+	if (idx < F2FS_BLK_ALIGN(F2FS_SB(inode->i_sb), inode->i_size))
 		return fsverity_get_info(inode);
 	return NULL;
 }
@@ -2619,7 +2619,12 @@ out:
 
 static inline loff_t f2fs_readpage_limit(struct inode *inode)
 {
-	if (IS_ENABLED(CONFIG_FS_VERITY) && IS_VERITY(inode))
+	/*
+	 * The verity metadata is past i_size. GC can read it while verity is
+	 * being enabled, so do not zero it.
+	 */
+	if (IS_ENABLED(CONFIG_FS_VERITY) &&
+	    (IS_VERITY(inode) || f2fs_verity_in_progress(inode)))
 		return F2FS_BLK_TO_BYTES(F2FS_I_SB(inode),
 				max_file_blocks(F2FS_I_SB(inode), inode));
 
@@ -2913,10 +2918,10 @@ static unsigned int f2fs_folio_valid_blocks(struct inode *inode,
 	pgoff_t last_lblk = F2FS_BLK_ALIGN(sbi, i_size_read(inode));
 	pgoff_t first_lblk = f2fs_folio_lblk(sbi, folio);
 
-	if (f2fs_verity_in_progress(inode))
-		return nr_blocks;
 	if (first_lblk < last_lblk)
 		return min_t(pgoff_t, nr_blocks, last_lblk - first_lblk);
+	if (f2fs_verity_in_progress(inode))
+		return nr_blocks;
 	return 0;
 }
 
@@ -3409,7 +3414,14 @@ next_folio:
 	index = f2fs_folio_lblk(sbi, folio);
 	offset = 0;
 	nr_blocks = f2fs_blocks_per_folio(sbi, folio);
-	last_block_in_file = F2FS_BLK_ALIGN(sbi, f2fs_readpage_limit(inode));
+	/*
+	 * A data read of a verity file, which has vi, stops at i_size. A
+	 * pinned file can have blocks past EOF that were allocated without
+	 * being zeroed, and fs-verity rejects non-zero data past EOF. Only
+	 * the reads of the verity metadata, which have no vi, go past i_size.
+	 */
+	last_block_in_file = F2FS_BLK_ALIGN(sbi, vi ? i_size_read(inode) :
+					    f2fs_readpage_limit(inode));
 
 	for (; nr_blocks;
 	     nr_blocks -= len_blks, max_nr_blocks -= len_blks,
@@ -3719,7 +3731,7 @@ static int f2fs_read_data_folio(struct file *file, struct folio *folio)
 			return ret;
 	}
 
-	vi = f2fs_need_verity(inode, folio->index);
+	vi = f2fs_need_verity(inode, f2fs_folio_lblk(F2FS_I_SB(inode), folio));
 	if (vi)
 		fsverity_readahead(vi, folio->index, folio_nr_pages(folio));
 	return f2fs_mpage_readpages(inode, vi, NULL, folio);
@@ -3739,7 +3751,8 @@ static void f2fs_readahead(struct readahead_control *rac)
 	if (f2fs_has_inline_data(inode))
 		return;
 
-	vi = f2fs_need_verity(inode, readahead_index(rac));
+	vi = f2fs_need_verity(inode, F2FS_BYTES_TO_BLK(F2FS_I_SB(inode),
+						      readahead_pos(rac)));
 	if (vi)
 		fsverity_readahead(vi, readahead_index(rac),
 				   readahead_count(rac));
@@ -4777,7 +4790,7 @@ retry:
 			op_locked = true;
 		}
 
-		if (!verity_in_progress) {
+		if (!verity_in_progress || end_pos <= f2fs_verity_metadata_pos(inode)) {
 			poff = offset_in_folio(folio, isize);
 			end_index = isize >> PAGE_SHIFT;
 
