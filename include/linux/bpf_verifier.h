@@ -901,7 +901,6 @@ struct bpf_insn_aux_data {
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
 		struct bpf_map_ptr_state map_ptr_state;
-		s32 call_imm;			/* saved imm field of call insn */
 		u32 alu_limit;			/* limit for add/sub register with pointer */
 		struct {
 			u32 map_index;		/* index into used_maps[] */
@@ -1077,8 +1076,6 @@ struct bpf_verifier_log *bpf_log_attr_create_vlog(struct bpf_log_attr *attr_log,
 						  struct bpf_common_attr *common, bpfptr_t uattr,
 						  u32 size);
 int bpf_log_attr_finalize(struct bpf_log_attr *attr, struct bpf_verifier_log *log);
-
-#define BPF_MAX_SUBPROGS 1024
 
 /*
  * A pointer to a static subprog in the value of a frozen read-only array map:
@@ -1354,9 +1351,9 @@ struct bpf_verifier_env {
 	struct bpf_verifier_log log;
 	struct bpf_diag *diag;
 	struct bpf_func_proto bpf_subprog_scratch;
-	struct bpf_subprog_info subprog_info[BPF_MAX_SUBPROGS + 2]; /* max + 2 for the fake and exception subprogs */
+	struct bpf_subprog_info *subprog_info;
 	/* subprog indices sorted in topological order: leaves first, callers last */
-	int subprog_topo_order[BPF_MAX_SUBPROGS + 2];
+	int *subprog_topo_order;
 	/*
 	 * Pointers to static subprogs found in frozen read-only maps of the
 	 * program, see resolve_func_ptrs(). Sorted by map and map_off.

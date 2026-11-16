@@ -2365,7 +2365,8 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 	struct func_instance *prev_instance = NULL;
 	int j, err;
 
-	if (++env->liveness->subprog_calls > 10000) {
+	/* a subprog on its own is analyzed once, chains of calls multiply */
+	if (depth && ++env->liveness->subprog_calls > 10000) {
 		verbose(env, "liveness analysis exceeded complexity limit (%d calls)\n",
 			env->liveness->subprog_calls);
 		return -E2BIG;
@@ -2817,7 +2818,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	struct bpf_insn *insns = env->prog->insnsi;
 	struct insn_live_regs *state;
 	int insn_cnt = env->prog->len;
-	int err = 0, i, subprog, start, end;
+	int err = 0, i, n = 0, subprog, start, end, *order;
 	bool changed, ret_reg_pair;
 
 	/* Use the following algorithm:
@@ -2840,7 +2841,8 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	 *   any instruction.
 	 */
 	state = kvzalloc_objs(*state, insn_cnt, BPF_VERIFIER_GFP);
-	if (!state) {
+	order = kvzalloc_objs(*order, insn_cnt, BPF_VERIFIER_GFP);
+	if (!state || !order) {
 		err = -ENOMEM;
 		goto out;
 	}
@@ -2852,6 +2854,15 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 
 		for (i = start; i < end; ++i)
 			compute_insn_live_regs(env, &insns[i], &state[i], ret_reg_pair);
+	}
+
+	/* callees first, so a chain of calls takes one round */
+	for (i = 0; i < env->subprog_cnt; i++) {
+		subprog = env->subprog_topo_order[i];
+		start = env->subprog_info[subprog].postorder_start;
+		end = env->subprog_info[subprog + 1].postorder_start;
+		while (start < end)
+			order[n++] = env->cfg.insn_postorder[start++];
 	}
 
 	changed = true;
@@ -2882,7 +2893,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 			goto out;
 		}
 		for (i = 0; i < env->cfg.cur_postorder; ++i) {
-			int insn_idx = env->cfg.insn_postorder[i];
+			int insn_idx = order[i];
 			struct insn_live_regs *live = &state[insn_idx];
 			struct bpf_iarray *succ;
 			u32 new_out = 0;
@@ -2943,6 +2954,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	 */
 	err = bpf_compute_subprog_arg_access(env);
 out:
+	kvfree(order);
 	kvfree(state);
 	return err;
 }

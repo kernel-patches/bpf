@@ -1672,6 +1672,11 @@ static int resolve_func_ptrs(struct bpf_verifier_env *env, struct bpf_prog *prog
 	return 0;
 }
 
+static int insn_callee(struct bpf_verifier_env *env, int idx)
+{
+	return bpf_find_subprog(env, idx + env->prog->insnsi[idx].imm + 1);
+}
+
 static int jit_subprogs(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog, **func, *tmp;
@@ -1681,57 +1686,21 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	void *old_bpf_func;
 	int err, num_exentries;
 
-	for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
-		if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn))
-			continue;
-
-		/* Upon error here we cannot fall back to interpreter but
-		 * need a hard reject of the program. Thus -EFAULT is
-		 * propagated in any case.
-		 */
-		subprog = bpf_find_subprog(env, i + insn->imm + 1);
-		if (verifier_bug_if(subprog < 0, env, "No program to jit at insn %d",
-				    i + insn->imm + 1))
-			return -EFAULT;
-		/* temporarily remember subprog id inside insn instead of
-		 * aux_data, since next loop will split up all insns into funcs
-		 */
-		insn->off = subprog;
-		/* remember original imm in case JIT fails and fallback
-		 * to interpreter will be needed
-		 */
-		env->insn_aux_data[i].call_imm = insn->imm;
-		/* point imm to __bpf_call_base+1 from JITs point of view */
-		insn->imm = 1;
-		if (bpf_pseudo_func(insn)) {
-#if defined(MODULES_VADDR)
-			u64 addr = MODULES_VADDR;
-#else
-			u64 addr = VMALLOC_START;
-#endif
-			/* jit (e.g. x86_64) may emit fewer instructions
-			 * if it learns a u32 imm is the same as a u64 imm.
-			 * Set close enough to possible prog address.
-			 */
-			insn[0].imm = (u32)addr;
-			insn[1].imm = addr >> 32;
-		}
-	}
-
 	err = bpf_prog_alloc_jited_linfo(prog);
 	if (err)
-		goto out_undo_insn;
+		goto out_done;
 
 	err = -ENOMEM;
-	func = kzalloc_objs(prog, env->subprog_cnt);
+	func = kvzalloc_objs(prog, env->subprog_cnt, BPF_VERIFIER_GFP);
 	if (!func)
-		goto out_undo_insn;
+		goto out_done;
 
 	for (i = 0; i < env->subprog_cnt; i++) {
 		subprog_start = subprog_end;
 		subprog_end = env->subprog_info[i + 1].start;
 
 		len = subprog_end - subprog_start;
+		err = -ENOMEM;
 		/* bpf_prog_run() doesn't call subprogs directly,
 		 * hence main prog stats include the runtime of subprogs.
 		 * subprogs don't have IDs and not reachable via prog_get_next_id
@@ -1744,6 +1713,32 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		       len * sizeof(struct bpf_insn));
 		func[i]->type = prog->type;
 		func[i]->len = len;
+		for (j = 0, insn = func[i]->insnsi; j < len; j++, insn++) {
+			if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn))
+				continue;
+			/* a hard reject, there is no fall back to the interpreter */
+			subprog = insn_callee(env, subprog_start + j);
+			if (verifier_bug_if(subprog < 0, env, "No program to jit at insn %d",
+					    subprog_start + j)) {
+				err = -EFAULT;
+				goto out_free;
+			}
+			/* JITs take the address from aux->func[] in the last pass */
+			insn->imm = subprog;
+			if (bpf_pseudo_func(insn)) {
+#if defined(MODULES_VADDR)
+				u64 addr = MODULES_VADDR;
+#else
+				u64 addr = VMALLOC_START;
+#endif
+				/* jit (e.g. x86_64) may emit fewer instructions
+				 * if it learns a u32 imm is the same as a u64 imm.
+				 * Set close enough to possible prog address.
+				 */
+				insn[0].imm = (u32)addr;
+				insn[1].imm = addr >> 32;
+			}
+		}
 		if (bpf_prog_calc_tag(func[i]))
 			goto out_free;
 		func[i]->is_func = 1;
@@ -1821,7 +1816,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			err = -ENOTSUPP;
 			goto out_free;
 		}
-		cond_resched();
+		err = -EINTR;
+		if (bpf_must_abort())
+			goto out_free;
 	}
 
 	/* at this point all bpf functions were successfully JITed
@@ -1831,28 +1828,17 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	for (i = 0; i < env->subprog_cnt; i++) {
 		insn = func[i]->insnsi;
 		for (j = 0; j < func[i]->len; j++, insn++) {
-			if (bpf_pseudo_func(insn)) {
-				subprog = insn->off;
-				insn[0].imm = (u32)(long)func[subprog]->bpf_func;
-				insn[1].imm = ((u64)(long)func[subprog]->bpf_func) >> 32;
+			if (!bpf_pseudo_func(insn))
 				continue;
-			}
-			if (!bpf_pseudo_call(insn))
-				continue;
-			subprog = insn->off;
-			insn->imm = BPF_CALL_IMM(func[subprog]->bpf_func);
+			subprog = insn_callee(env, func[i]->aux->subprog_start + j);
+			insn[0].imm = (u32)(long)func[subprog]->bpf_func;
+			insn[1].imm = ((u64)(long)func[subprog]->bpf_func) >> 32;
 		}
 
 		/* we use the aux data to keep a list of the start addresses
 		 * of the JITed images for each function in the program
 		 *
-		 * for some architectures, such as powerpc64, the imm field
-		 * might not be large enough to hold the offset of the start
-		 * address of the callee's JITed image from __bpf_call_base
-		 *
-		 * in such cases, we can lookup the start address of a callee
-		 * by using its subprog id, available from the off field of
-		 * the call instruction, as an index for this list
+		 * the imm field of a call has the subprog id, an index for this list
 		 */
 		func[i]->aux->func = func;
 		func[i]->aux->func_cnt = env->subprog_cnt - env->hidden_subprog_cnt;
@@ -1866,7 +1852,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			err = -ENOTSUPP;
 			goto out_free;
 		}
-		cond_resched();
+		err = -EINTR;
+		if (bpf_must_abort())
+			goto out_free;
 	}
 
 	/* the addresses of all functions are final */
@@ -1900,19 +1888,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	 * prog consistent for later dump requests, so they can
 	 * later look the same as if they were interpreted only.
 	 */
-	for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
-		if (bpf_pseudo_func(insn)) {
-			insn[0].imm = env->insn_aux_data[i].call_imm;
-			insn[1].imm = insn->off;
-			insn->off = 0;
-			continue;
-		}
-		if (!bpf_pseudo_call(insn))
-			continue;
-		insn->imm = env->insn_aux_data[i].call_imm;
-		subprog = bpf_find_subprog(env, i + insn->imm + 1);
-		insn->off = subprog;
-	}
+	for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++)
+		if (bpf_pseudo_func(insn))
+			insn[1].imm = insn_callee(env, i);
 
 	prog->jited = 1;
 	prog->bpf_func = func[0]->bpf_func;
@@ -1946,17 +1924,16 @@ out_free:
 		func[i]->aux->poke_tab = NULL;
 		bpf_jit_free(func[i]);
 	}
-	kfree(func);
-out_undo_insn:
+	kvfree(func);
+out_done:
 	bpf_prog_jit_attempt_done(prog);
 	return err;
 }
 
 int bpf_jit_subprogs(struct bpf_verifier_env *env)
 {
-	int err, i;
+	int err;
 	bool blinded = false;
-	struct bpf_insn *insn;
 	struct bpf_prog *prog, *orig_prog;
 	u32 *orig_subprog_starts;
 
@@ -1992,28 +1969,11 @@ int bpf_jit_subprogs(struct bpf_verifier_env *env)
 	return 0;
 
 out_jit_err:
-	if (blinded) {
-		bpf_jit_prog_release_other(orig_prog, prog);
-		/* roll back to the clean original prog */
-		prog = env->prog = orig_prog;
-		goto out_restore;
-	} else {
-		if (err != -EFAULT) {
-			/*
-			 * We will fall back to interpreter mode when err is not -EFAULT, before
-			 * that, insn->off and insn->imm should be restored to their original
-			 * values since they were modified by jit_subprogs.
-			 */
-			for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
-				if (!bpf_pseudo_call(insn))
-					continue;
-				insn->off = 0;
-				insn->imm = env->insn_aux_data[i].call_imm;
-			}
-		}
+	if (!blinded)
 		goto out_cleanup;
-	}
-
+	bpf_jit_prog_release_other(orig_prog, prog);
+	/* roll back to the clean original prog */
+	prog = env->prog = orig_prog;
 out_restore:
 	bpf_restore_subprog_starts(env, orig_subprog_starts);
 	kvfree(orig_subprog_starts);
