@@ -870,15 +870,15 @@ static int ioc3eth_probe(struct platform_device *pdev)
 		goto out_free;
 	}
 
-	if (devm_request_irq(&pdev->dev, dev->irq, ioc3_interrupt,
-			     IRQF_SHARED, "ioc3-eth", dev)) {
+	spin_lock_init(&ip->ioc3_lock);
+	timer_setup(&ip->ioc3_timer, ioc3_timer, 0);
+
+	if (request_irq(dev->irq, ioc3_interrupt, IRQF_SHARED, "ioc3-eth",
+			dev)) {
 		dev_err(&pdev->dev, "Can't get irq %d\n", dev->irq);
 		err = -ENODEV;
 		goto out_free;
 	}
-
-	spin_lock_init(&ip->ioc3_lock);
-	timer_setup(&ip->ioc3_timer, ioc3_timer, 0);
 
 	ioc3_stop(ip);
 
@@ -951,6 +951,7 @@ static int ioc3eth_probe(struct platform_device *pdev)
 	return 0;
 
 out_stop:
+	free_irq(dev->irq, dev);
 	timer_delete_sync(&ip->ioc3_timer);
 	if (ip->rxr)
 		dma_free_coherent(ip->dma_dev, RX_RING_SIZE, ip->rxr,
@@ -969,6 +970,7 @@ static void ioc3eth_remove(struct platform_device *pdev)
 	struct ioc3_private *ip = netdev_priv(dev);
 
 	unregister_netdev(dev);
+	free_irq(dev->irq, dev);
 	timer_delete_sync(&ip->ioc3_timer);
 
 	dma_free_coherent(ip->dma_dev, RX_RING_SIZE, ip->rxr, ip->rxr_dma);
