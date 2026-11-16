@@ -3836,106 +3836,106 @@ end:
 	return type;
 }
 
-/* Repeat a number of fields for a specified number of times.
+/*
+ * A walk over the members of a type and of the structs in it. A struct is entered once.
+ * The next member of that type gets a copy of the fields that were found:
  *
- * Copy the fields starting from the first field and repeat them for
- * repeat_cnt times. The fields are repeated by adding the offset of each
- * field with
- *   (i + 1) * elem_size
- * where i is the repeat index and elem_size is the size of an element.
+ *   struct in  { kptr p; };
+ *   struct out { struct in a; long x; struct in b[2]; };
+ *                enter 'in'           copy from a, twice
  */
-static int btf_repeat_fields(struct btf_field_info *info, int info_cnt,
-			     u32 field_cnt, u32 repeat_cnt, u32 elem_size)
+struct btf_field_walk {
+	struct btf_field_info *info;
+	u32 cnt;
+	u32 field_mask;
+	u32 seen_mask;
+	struct btf_field_scope {
+		const struct btf_type *t;
+		u32 off;	/* in the outer type */
+		u32 nelems;
+		u32 first;	/* its fields in 'info' */
+		u32 cnt;
+		u32 next;	/* member to look at */
+		u32 parent;
+	} *scopes;
+	u32 scope;		/* the current one */
+	struct bpf_index index;	/* address of the type -> scope */
+};
+
+/* An allocated object has 4096 bytes at most */
+#define BTF_OBJ_FIELDS_MAX (SZ_4K / sizeof(u64))
+
+static int btf_add_field(struct btf_field_walk *w, struct btf_field_info info)
 {
-	u32 i, j, total_cnt, total_repeats;
-	u32 cur;
+	struct btf_field_info *last = w->cnt ? &w->info[w->cnt - 1] : NULL;
 
-	/* Ensure not repeating fields that should not be repeated. */
-	for (i = 0; i < field_cnt; i++) {
-		switch (info[i].type) {
-		case BPF_KPTR_UNREF:
-		case BPF_KPTR_REF:
-		case BPF_KPTR_PERCPU:
-		case BPF_UPTR:
-		case BPF_LIST_HEAD:
-		case BPF_RB_ROOT:
-			break;
-		default:
-			return -EINVAL;
-		}
-	}
-
-	if (check_add_overflow(repeat_cnt, 1, &total_repeats) ||
-	    check_mul_overflow(field_cnt, total_repeats, &total_cnt) ||
-	    total_cnt > (u32)info_cnt)
-		return -E2BIG;
-
-	cur = field_cnt;
-	for (i = 0; i < repeat_cnt; i++) {
-		memcpy(&info[cur], &info[0], field_cnt * sizeof(info[0]));
-		for (j = 0; j < field_cnt; j++)
-			info[cur++].off += (i + 1) * elem_size;
-	}
-
+	if (last && info.off < last->off + btf_field_type_size(last->type))
+		return -EEXIST;
+	if ((w->field_mask & BPF_GRAPH_NODE) && w->cnt == BTF_OBJ_FIELDS_MAX)
+		return -EFBIG;
+	if (bpf_must_abort())
+		return -EINTR;
+	if (!bpf_table_next(w->info, w->cnt))
+		return -ENOMEM;
+	w->info[w->cnt++] = info;
 	return 0;
 }
 
-static int btf_find_struct_field(const struct btf *btf,
-				 const struct btf_type *t, u32 field_mask,
-				 struct btf_field_info *info, int info_cnt,
-				 u32 level, u32 *seen_mask);
-
-/* Find special fields in the struct type of a field.
- *
- * This function is used to find fields of special types that is not a
- * global variable or a direct field of a struct type. It also handles the
- * repetition if it is the element type of an array.
- */
-static int btf_find_nested_struct(const struct btf *btf, const struct btf_type *t,
-				  u32 off, u32 nelems,
-				  u32 field_mask, struct btf_field_info *info,
-				  int info_cnt, u32 level, u32 *seen_mask)
+/* Copy 'cnt' fields from 'first' on to 'nelems' elements. The first copy is 'by' bytes off. */
+static int btf_repeat_fields(struct btf_field_walk *w, u32 first, u32 cnt, u32 by,
+			     u32 nelems, u32 elem_size, bool array)
 {
-	int ret, err, i;
+	struct btf_field_info info;
+	u32 i, j;
+	int err;
 
-	level++;
-	if (level >= MAX_RESOLVE_DEPTH)
-		return -E2BIG;
-
-	ret = btf_find_struct_field(btf, t, field_mask, info, info_cnt, level, seen_mask);
-
-	if (ret <= 0)
-		return ret;
-
-	/* Shift the offsets of the nested struct fields to the offsets
-	 * related to the container.
-	 */
-	for (i = 0; i < ret; i++)
-		info[i].off += off;
-
-	if (nelems > 1) {
-		err = btf_repeat_fields(info, info_cnt, ret, nelems - 1, t->size);
-		if (err == 0)
-			ret *= nelems;
-		else
-			ret = err;
+	for (i = 0; i < nelems && cnt; i++, by += elem_size) {
+		for (j = first; j < first + cnt; j++) {
+			info = w->info[j];
+			info.off += by;
+			if (array && !(info.type & (BPF_KPTR | BPF_UPTR | BPF_GRAPH_ROOT)))
+				return -EINVAL;
+			if (info.type & w->seen_mask)
+				return -E2BIG;
+			err = btf_add_field(w, info);
+			if (err)
+				return err;
+		}
 	}
+	return 0;
+}
 
-	return ret;
+static int btf_enter_struct(struct btf_field_walk *w, const struct btf_type *t, u32 off, u32 nelems)
+{
+	int i = bpf_index_find(&w->index, (unsigned long)t);
+	struct btf_field_scope *s;
+
+	if (i >= 0) {
+		s = &w->scopes[i];
+		return btf_repeat_fields(w, s->first, s->cnt, off - s->off, nelems, t->size,
+					 nelems > 1);
+	}
+	i = w->index.cnt;
+	s = bpf_table_next(w->scopes, i);
+	if (!s || bpf_index_add(&w->index, (unsigned long)t, i))
+		return -ENOMEM;
+	*s = (struct btf_field_scope){
+		.t = t, .off = off, .nelems = nelems, .first = w->cnt, .parent = w->scope,
+	};
+	w->scope = i;
+	return 0;
 }
 
 static int btf_find_field_one(const struct btf *btf,
 			      const struct btf_type *var,
 			      const struct btf_type *var_type,
 			      int var_idx,
-			      u32 off, u32 expected_size,
-			      u32 field_mask, u32 *seen_mask,
-			      struct btf_field_info *info, int info_cnt,
-			      u32 level)
+			      u32 base, u32 off, u32 expected_size,
+			      struct btf_field_walk *w)
 {
 	int ret, align, sz, field_type;
-	struct btf_field_info tmp;
 	const struct btf_array *array;
+	struct btf_field_info info;
 	u32 i, nelems = 1;
 
 	/* Walk into array types to find the element type and the number of
@@ -3952,15 +3952,13 @@ static int btf_find_field_one(const struct btf *btf,
 		return 0;
 
 	field_type = btf_get_field_type(btf, var_type,
-					field_mask, seen_mask, &align, &sz);
+					w->field_mask, &w->seen_mask, &align, &sz);
 	/* Look into variables of struct types */
 	if (!field_type && __btf_type_is_struct(var_type)) {
 		sz = var_type->size;
 		if (expected_size && expected_size != sz * nelems)
 			return 0;
-		ret = btf_find_nested_struct(btf, var_type, off, nelems, field_mask,
-					     &info[0], info_cnt, level, seen_mask);
-		return ret;
+		return btf_enter_struct(w, var_type, base + off, nelems);
 	}
 
 	if (field_type == 0)
@@ -3972,6 +3970,7 @@ static int btf_find_field_one(const struct btf *btf,
 		return 0;
 	if (off % align)
 		return 0;
+	off += base;
 
 	switch (field_type) {
 	case BPF_SPIN_LOCK:
@@ -3983,8 +3982,7 @@ static int btf_find_field_one(const struct btf *btf,
 	case BPF_REFCOUNT:
 	case BPF_TASK_WORK:
 	case BPF_RCU_HEAD:
-		ret = btf_find_struct(btf, var_type, off, sz, field_type,
-				      info_cnt ? &info[0] : &tmp);
+		ret = btf_find_struct(btf, var_type, off, sz, field_type, &info);
 		if (ret < 0)
 			return ret;
 		break;
@@ -3992,17 +3990,14 @@ static int btf_find_field_one(const struct btf *btf,
 	case BPF_KPTR_REF:
 	case BPF_KPTR_PERCPU:
 	case BPF_UPTR:
-		ret = btf_find_kptr(btf, var_type, off, sz,
-				    info_cnt ? &info[0] : &tmp, field_mask);
+		ret = btf_find_kptr(btf, var_type, off, sz, &info, w->field_mask);
 		if (ret < 0)
 			return ret;
 		break;
 	case BPF_LIST_HEAD:
 	case BPF_RB_ROOT:
 		ret = btf_find_graph_root(btf, var, var_type,
-					  var_idx, off, sz,
-					  info_cnt ? &info[0] : &tmp,
-					  field_type);
+					  var_idx, off, sz, &info, field_type);
 		if (ret < 0)
 			return ret;
 		break;
@@ -4012,81 +4007,51 @@ static int btf_find_field_one(const struct btf *btf,
 
 	if (ret == BTF_FIELD_IGNORE)
 		return 0;
-	if (!info_cnt)
-		return -E2BIG;
-	if (nelems > 1) {
-		ret = btf_repeat_fields(info, info_cnt, 1, nelems - 1, sz);
-		if (ret < 0)
-			return ret;
-	}
-	return nelems;
-}
-
-static int btf_find_struct_field(const struct btf *btf,
-				 const struct btf_type *t, u32 field_mask,
-				 struct btf_field_info *info, int info_cnt,
-				 u32 level, u32 *seen_mask)
-{
-	int ret, idx = 0;
-	const struct btf_member *member;
-	u32 i, off;
-
-	for_each_member(i, t, member) {
-		const struct btf_type *member_type = btf_type_by_id(btf,
-								    member->type);
-
-		off = __btf_member_bit_offset(t, member);
-		if (off % 8)
-			/* valid C code cannot generate such BTF */
-			return -EINVAL;
-		off /= 8;
-
-		ret = btf_find_field_one(btf, t, member_type, i,
-					 off, 0,
-					 field_mask, seen_mask,
-					 &info[idx], info_cnt - idx, level);
-		if (ret < 0)
-			return ret;
-		idx += ret;
-	}
-	return idx;
-}
-
-static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
-				u32 field_mask, struct btf_field_info *info,
-				int info_cnt, u32 level, u32 *seen_mask)
-{
-	int ret, idx = 0;
-	const struct btf_var_secinfo *vsi;
-	u32 i, off;
-
-	for_each_vsi(i, t, vsi) {
-		const struct btf_type *var = btf_type_by_id(btf, vsi->type);
-		const struct btf_type *var_type = btf_type_by_id(btf, var->type);
-
-		off = vsi->offset;
-		ret = btf_find_field_one(btf, var, var_type, -1, off, vsi->size,
-					 field_mask, seen_mask,
-					 &info[idx], info_cnt - idx,
-					 level);
-		if (ret < 0)
-			return ret;
-		idx += ret;
-	}
-	return idx;
+	return btf_add_field(w, info) ?:
+	       btf_repeat_fields(w, w->cnt - 1, 1, sz, nelems - 1, sz, true);
 }
 
 static int btf_find_field(const struct btf *btf, const struct btf_type *t,
-			  u32 field_mask, struct btf_field_info *info,
-			  int info_cnt)
+			  struct btf_field_walk *w)
 {
-	u32 seen_mask = 0;
+	const struct btf_var_secinfo *vsi;
+	const struct btf_member *member;
+	struct btf_field_scope *s;
+	const struct btf_type *var;
+	u32 i, off;
+	int err;
 
-	if (__btf_type_is_struct(t))
-		return btf_find_struct_field(btf, t, field_mask, info, info_cnt, 0, &seen_mask);
-	else if (btf_type_is_datasec(t))
-		return btf_find_datasec_var(btf, t, field_mask, info, info_cnt, 0, &seen_mask);
-	return -EINVAL;
+	if (!__btf_type_is_struct(t) && !btf_type_is_datasec(t))
+		return -EINVAL;
+
+	for (err = btf_enter_struct(w, t, 0, 1); !err;) {
+		if (bpf_must_abort())
+			return -EINTR;
+		s = &w->scopes[w->scope];
+		i = s->next++;
+		if (i == btf_type_vlen(s->t)) {
+			if (!w->scope)
+				break;
+			s->cnt = w->cnt - s->first;
+			w->scope = s->parent;
+			err = btf_repeat_fields(w, s->first, s->cnt, s->t->size, s->nelems - 1,
+						s->t->size, true);
+		} else if (btf_type_is_datasec(s->t)) {
+			vsi = btf_type_var_secinfo(s->t) + i;
+			var = btf_type_by_id(btf, vsi->type);
+			err = btf_find_field_one(btf, var, btf_type_by_id(btf, var->type), -1,
+						 0, vsi->offset, vsi->size, w);
+		} else {
+			member = btf_type_member(s->t) + i;
+			off = __btf_member_bit_offset(s->t, member);
+			if (off % 8)
+				/* valid C code cannot generate such BTF */
+				return -EINVAL;
+			err = btf_find_field_one(btf, s->t, btf_type_by_id(btf, member->type), i,
+						 s->off, off / 8, 0, w);
+		}
+	}
+	return err;
 }
 
 /* Callers have to ensure the life cycle of btf if it is program BTF */
@@ -4238,37 +4203,29 @@ static int btf_parse_rb_root(const struct btf *btf, struct btf_field *field,
 					    __alignof__(struct bpf_rb_node));
 }
 
-static int btf_field_cmp(const void *_a, const void *_b, const void *priv)
-{
-	const struct btf_field *a = (const struct btf_field *)_a;
-	const struct btf_field *b = (const struct btf_field *)_b;
-
-	if (a->offset < b->offset)
-		return -1;
-	else if (a->offset > b->offset)
-		return 1;
-	return 0;
-}
-
 struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type *t,
 				    u32 field_mask, u32 value_size)
 {
-	struct btf_field_info info_arr[BTF_FIELDS_MAX];
-	u32 next_off = 0, field_type_size;
+	struct btf_field_info *info_arr __free(kvfree) = NULL;
+	struct btf_field_walk w = { .field_mask = field_mask };
+	u32 field_type_size;
 	struct btf_record *rec;
 	int ret, i, cnt;
 
-	ret = btf_find_field(btf, t, field_mask, info_arr, ARRAY_SIZE(info_arr));
+	ret = btf_find_field(btf, t, &w);
+	kvfree(w.scopes);
+	kvfree(w.index.slots);
+	info_arr = w.info;
 	if (ret < 0)
 		return ERR_PTR(ret);
-	if (!ret)
+	if (!w.cnt)
 		return NULL;
 
-	cnt = ret;
+	cnt = w.cnt;
 	/* This needs to be kzalloc to zero out padding and unused fields, see
 	 * comment in btf_record_equal.
 	 */
-	rec = kzalloc_flex(*rec, fields, cnt, GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	rec = kvzalloc_flex(*rec, fields, cnt, BPF_VERIFIER_GFP);
 	if (!rec)
 		return ERR_PTR(-ENOMEM);
 
@@ -4286,11 +4243,10 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 			ret = -EFAULT;
 			goto end;
 		}
-		if (info_arr[i].off < next_off) {
-			ret = -EEXIST;
+		if (bpf_must_abort()) {
+			ret = -EINTR;
 			goto end;
 		}
-		next_off = info_arr[i].off + field_type_size;
 
 		rec->field_mask |= info_arr[i].type;
 		rec->fields[i].offset = info_arr[i].off;
@@ -4378,9 +4334,6 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 		ret = -EINVAL;
 		goto end;
 	}
-
-	sort_r(rec->fields, rec->cnt, sizeof(struct btf_field), btf_field_cmp,
-	       NULL, rec);
 
 	return rec;
 end:
@@ -6369,6 +6322,10 @@ btf_parse_struct_metas(struct bpf_verifier_log *log, struct btf *btf)
 			ret = -EINVAL;
 			goto free_aof;
 		}
+		if (bpf_must_abort()) {
+			ret = -EINTR;
+			goto free_aof;
+		}
 
 		ret = btf_find_kptr(btf, t, 0, 0, &tmp, BPF_KPTR);
 		if (ret != BTF_FIELD_FOUND)
@@ -6426,6 +6383,9 @@ btf_parse_struct_metas(struct bpf_verifier_log *log, struct btf *btf)
 		record = btf_parse_fields(btf, t, BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK | BPF_LIST_HEAD | BPF_LIST_NODE |
 						  BPF_RB_ROOT | BPF_RB_NODE | BPF_REFCOUNT |
 						  BPF_KPTR, t->size);
+		/* It cannot be allocated. A map has its own record. */
+		if (record == ERR_PTR(-EFBIG))
+			continue;
 		/* The record cannot be unset, treat it as an error if so */
 		if (IS_ERR_OR_NULL(record)) {
 			ret = PTR_ERR_OR_ZERO(record) ?: -EFAULT;
@@ -8170,15 +8130,11 @@ int btf_struct_access(struct bpf_verifier_log *log,
 		if (!meta)
 			break;
 		rec = meta->record;
-		for (i = 0; i < rec->cnt; i++) {
-			struct btf_field *field = &rec->fields[i];
-			u32 offset = field->offset;
-			if (off < offset + field->size && offset < off + size) {
-				bpf_log(log,
-					"direct access to %s is disallowed\n",
-					btf_field_type_name(field->type));
-				return -EACCES;
-			}
+		i = btf_record_first_field(rec, off);
+		if (i < rec->cnt && rec->fields[i].offset < off + size) {
+			bpf_log(log, "direct access to %s is disallowed\n",
+				btf_field_type_name(rec->fields[i].type));
+			return -EACCES;
 		}
 		break;
 	}
