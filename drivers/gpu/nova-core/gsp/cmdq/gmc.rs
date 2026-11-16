@@ -3,6 +3,8 @@
 
 //! Support for the GMC (GPU Management Controller) API message type on the GSP command queue.
 
+use core::convert::Infallible;
+
 use kernel::{
     device,
     prelude::*,
@@ -53,8 +55,8 @@ pub(crate) trait CommandToGsp {
     /// after the GMC API header.
     type Command: FromBytes + AsBytes;
 
-    /// Type of the reply expected from the GSP, or [`NoReply`] for commands that don't have a
-    /// reply.
+    /// Type of the reply expected from the GSP. Can be [`NoReply`] for commands that don't have a
+    /// reply, or `()` for commands that only expect a status code without a reply payload.
     type Reply;
 
     /// Largest reply this command accepts, in bytes. Zero for commands that the GSP does not
@@ -176,6 +178,17 @@ pub(crate) trait MessageFromGsp: Sized {
     fn read(
         payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>,
     ) -> Result<Self, Self::InitError>;
+}
+
+/// Reply type for commands that the GSP answers with a status and no payload.
+impl MessageFromGsp for () {
+    type InitError = Infallible;
+
+    fn read(
+        _payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>,
+    ) -> Result<Self, Self::InitError> {
+        Ok(())
+    }
 }
 
 /// A GMC message ready to be processed from the message queue.
