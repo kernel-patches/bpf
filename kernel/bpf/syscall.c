@@ -14,6 +14,7 @@
 #include <linux/slab.h>
 #include <linux/sched/signal.h>
 #include <linux/vmalloc.h>
+#include <linux/maple_tree.h>
 #include <linux/mmzone.h>
 #include <linux/anon_inodes.h>
 #include <linux/fdtable.h>
@@ -5015,32 +5016,23 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 	return fd;
 }
 
-static const struct bpf_map *bpf_map_from_imm(const struct bpf_prog *prog,
-					      unsigned long addr, u32 *off,
-					      u32 *type)
+/* address of a map, addresses of its value -> map */
+static int bpf_prog_map_addrs(const struct bpf_prog *prog, struct maple_tree *mt)
 {
-	const struct bpf_map *map;
-	int i;
+	struct bpf_map *map;
+	int i, err = 0;
+	u64 addr;
 
-	mutex_lock(&prog->aux->used_maps_mutex);
-	for (i = 0, *off = 0; i < prog->aux->used_map_cnt; i++) {
+	guard(mutex)(&prog->aux->used_maps_mutex);
+	for (i = 0; i < prog->aux->used_map_cnt && !err; i++) {
 		map = prog->aux->used_maps[i];
-		if (map == (void *)addr) {
-			*type = BPF_PSEUDO_MAP_FD;
-			goto out;
-		}
-		if (!map->ops->map_direct_value_meta)
-			continue;
-		if (!map->ops->map_direct_value_meta(map, addr, off)) {
-			*type = BPF_PSEUDO_MAP_VALUE;
-			goto out;
-		}
+		err = mtree_store(mt, (unsigned long)map, map, GFP_USER);
+		if (!err && map->ops->map_direct_value_meta &&
+		    !map->ops->map_direct_value_addr(map, &addr, 0))
+			err = mtree_store_range(mt, addr, addr + map->value_size - 1, map,
+						GFP_USER);
 	}
-	map = NULL;
-
-out:
-	mutex_unlock(&prog->aux->used_maps_mutex);
-	return map;
+	return err;
 }
 
 static void prepare_dump_pseudo_call(struct bpf_insn *insn)
@@ -5069,16 +5061,19 @@ static void prepare_dump_pseudo_call(struct bpf_insn *insn)
 static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog,
 					      const struct cred *f_cred)
 {
+	struct bpf_insn *insns = NULL;
 	const struct bpf_map *map;
-	struct bpf_insn *insns;
-	u32 off, type;
+	struct maple_tree maps;
+	u32 off;
 	u64 imm;
 	u8 code;
 	int i;
 
-	insns = kvmemdup(prog->insnsi, bpf_prog_insn_size(prog), GFP_USER | __GFP_NOWARN);
+	mt_init(&maps);
+	if (!bpf_prog_map_addrs(prog, &maps))
+		insns = kvmemdup(prog->insnsi, bpf_prog_insn_size(prog), GFP_USER | __GFP_NOWARN);
 	if (!insns)
-		return insns;
+		goto out;
 
 	for (i = 0; i < prog->len; i++) {
 		code = insns[i].code;
@@ -5120,15 +5115,18 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog,
 			continue;
 
 		imm = ((u64)insns[i + 1].imm << 32) | (u32)insns[i].imm;
-		map = bpf_map_from_imm(prog, imm, &off, &type);
-		if (map) {
-			insns[i].src_reg = type;
-			insns[i].imm = map->id;
-			insns[i + 1].imm = off;
+		map = mtree_load(&maps, imm);
+		if (!map || imm > ULONG_MAX)
 			continue;
-		}
+		off = 0;
+		insns[i].src_reg = BPF_PSEUDO_MAP_FD;
+		if (imm != (unsigned long)map && !map->ops->map_direct_value_meta(map, imm, &off))
+			insns[i].src_reg = BPF_PSEUDO_MAP_VALUE;
+		insns[i].imm = map->id;
+		insns[i + 1].imm = off;
 	}
-
+out:
+	mtree_destroy(&maps);
 	return insns;
 }
 
