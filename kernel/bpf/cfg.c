@@ -238,6 +238,134 @@ int bpf_index_add(struct bpf_index *index, u64 key, u32 val)
 	return 0;
 }
 
+int bpf_call_graph_init(struct bpf_call_graph *cg, u32 cnt)
+{
+	*cg = (struct bpf_call_graph){ .cnt = cnt };
+	/* the last 4 parts are for bpf_call_graph_sort() */
+	cg->first = kvcalloc(8 * (size_t)cnt + 1, sizeof(u32), BPF_VERIFIER_GFP);
+	cg->marks = kvcalloc(cnt, sizeof(u16), BPF_VERIFIER_GFP);
+	if (!cg->first || !cg->marks)
+		return -ENOMEM;
+	cg->postorder = cg->first + cnt + 1;
+	cg->order = cg->postorder + cnt;
+	cg->cycle = cg->order + cnt;
+	return 0;
+}
+
+void bpf_call_graph_free(struct bpf_call_graph *cg)
+{
+	kvfree(cg->first);
+	kvfree(cg->callee);
+	kvfree(cg->marks);
+}
+
+/* Callers come in increasing order */
+int bpf_call_graph_add(struct bpf_call_graph *cg, u32 caller, u32 callee)
+{
+	if (WARN_ON_ONCE(callee >= cg->cnt))
+		return -EFAULT;
+	if (!bpf_table_next(cg->callee, cg->edge_cnt))
+		return -ENOMEM;
+	while (cg->next <= caller)
+		cg->first[cg->next++] = cg->edge_cnt;
+	cg->callee[cg->edge_cnt++] = callee;
+	return 0;
+}
+
+/*
+ * Tarjan's algorithm. Calls of the nodes that have a mark in 'skip' do not count.
+ *
+ *   main -> f1 -> f2 -> f3      postorder:  f3 f2 f1 main
+ *           ^     |             order:      f3 f2 f1 main    callees first, a cycle in a row
+ *           +-----+             cycle:      0  1  1  3       where the cycle starts in 'order'
+ */
+void bpf_call_graph_sort(struct bpf_call_graph *cg, u16 skip)
+{
+	u32 cnt = cg->cnt, *low = cg->cycle + cnt, *edge = low + cnt, *path = edge + cnt;
+	u32 *open = path + cnt, depth = 0, top = 0, num = 0, done = 0, post = 0, i, s, j;
+
+	while (cg->next <= cnt)
+		cg->first[cg->next++] = cg->edge_cnt;
+	/* low: 0 - not visited, U32_MAX - is in 'order' */
+	memset(low, 0, cnt * sizeof(*low));
+	for (i = 0; i < cnt; i++) {
+		if (!low[i])
+			path[depth++] = i;
+		while (depth) {
+			s = path[depth - 1];
+			if (!low[s]) {
+				/* until the node is in 'order': its number */
+				low[s] = cg->cycle[s] = ++num;
+				edge[s] = cg->first[s];
+				open[top++] = s;
+			}
+			if (edge[s] < cg->first[s + 1]) {
+				j = cg->callee[edge[s]];
+				if (cg->marks[j] & skip) {
+					edge[s]++;
+				} else if (!low[j]) {
+					path[depth++] = j;
+				} else {
+					low[s] = min(low[s], low[j]);
+					edge[s]++;
+				}
+				continue;
+			}
+			depth--;
+			cg->postorder[post++] = s;
+			if (low[s] != cg->cycle[s])
+				continue;
+			for (j = done; low[s] != U32_MAX; done++) {
+				cg->order[done] = open[--top];
+				cg->cycle[open[top]] = j;
+				low[open[top]] = U32_MAX;
+			}
+		}
+	}
+}
+
+bool bpf_call_graph_recursive(const struct bpf_call_graph *cg, u32 s)
+{
+	u32 j;
+
+	bpf_for_each_callee(cg, s, j)
+		if (cg->cycle[j] == cg->cycle[s])
+			return true;
+	return false;
+}
+
+/* What a node has of 'mask', all nodes that it gets to have */
+void bpf_call_graph_mark_callees(struct bpf_call_graph *cg, u16 mask)
+{
+	u32 start, end, i, j;
+	u16 m;
+
+	for (end = cg->cnt; end; end = start) {
+		start = cg->cycle[cg->order[end - 1]];
+		for (i = start, m = 0; i < end; i++)
+			m |= cg->marks[cg->order[i]] & mask;
+		for (i = start; i < end; i++)
+			bpf_for_each_callee(cg, cg->order[i], j)
+				cg->marks[j] |= m;
+	}
+}
+
+/* What a node has of 'mask', all nodes that get to it have. 'skip' is that of the sort. */
+void bpf_call_graph_mark_callers(struct bpf_call_graph *cg, u16 mask, u16 skip)
+{
+	u32 start, end, j;
+	u16 m;
+
+	for (start = 0; start < cg->cnt; start = end) {
+		for (end = start, m = 0; end < cg->cnt && cg->cycle[cg->order[end]] == start; end++)
+			bpf_for_each_callee(cg, cg->order[end], j)
+				if (!(cg->marks[j] & skip))
+					m |= cg->marks[j] & mask;
+		for (j = start; j < end; j++)
+			cg->marks[cg->order[j]] |= m;
+	}
+}
+
 static int copy_insn_array(struct bpf_map *map, u32 start, u32 end, u32 *items)
 {
 	struct bpf_insn_array_value *value;

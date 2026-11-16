@@ -125,7 +125,8 @@ int global_func_many_chains(void *ctx)
 
 /*
  * r1 is the number of calls that follow, so main -> fs15 .. fs0 and main -> fs31 .. fs16
- * are executed: 17 frames each. main -> fs31 .. fs0 is in the call graph: 33 frames.
+ * are executed: 17 frames each. With main -> fs16 -> fs15 no call is dead code, and
+ * main -> fs31 .. fs0 is in the call graph: 33 frames.
  * libbpf puts fs15() .. fs0() in front of their second caller fs16().
  */
 #undef F_0
@@ -138,6 +139,15 @@ SEC("syscall")
 __failure __msg("the call stack of 32 frames is too deep !")
 __load_if_JITed()
 __naked int static_func_deep_stack_second_caller(void)
+{
+	asm volatile ("r1 = 15; call fs15; r1 = 15; call fs31; r1 = 1; call fs16; exit;"
+		      ::: __clobber_all);
+}
+
+SEC("syscall")
+__success
+__load_if_JITed()
+__naked int static_func_deep_stack_dead_call(void)
 {
 	asm volatile ("r1 = 15; call fs15; r1 = 15; call fs31; exit;" ::: __clobber_all);
 }

@@ -769,6 +769,32 @@ struct bpf_index {
 int bpf_index_find(const struct bpf_index *index, u64 key);
 int bpf_index_add(struct bpf_index *index, u64 key, u32 val);
 
+/* A graph of calls. The nodes are subprogs, and behind them what stands for a set of subprogs. */
+struct bpf_call_graph {
+	u32 cnt;	/* nodes */
+	u32 edge_cnt;
+	u32 *callee;	/* node s calls callee[first[s]] .. callee[first[s + 1] - 1] */
+	u32 *first;
+	/* see bpf_call_graph_sort() */
+	u32 *postorder;
+	u32 *order;
+	u32 *cycle;
+	u16 *marks;	/* of the user of the graph */
+	u32 next;	/* nodes that have 'first' */
+};
+
+#define bpf_for_each_callee(cg, s, j)							\
+	for (u32 ___e = (cg)->first[s];							\
+	     ___e < (cg)->first[(s) + 1] && ({ j = (cg)->callee[___e]; 1; }); ___e++)
+
+int bpf_call_graph_init(struct bpf_call_graph *cg, u32 cnt);
+int bpf_call_graph_add(struct bpf_call_graph *cg, u32 caller, u32 callee);
+void bpf_call_graph_sort(struct bpf_call_graph *cg, u16 skip);
+bool bpf_call_graph_recursive(const struct bpf_call_graph *cg, u32 s);
+void bpf_call_graph_mark_callees(struct bpf_call_graph *cg, u16 mask);
+void bpf_call_graph_mark_callers(struct bpf_call_graph *cg, u16 mask, u16 skip);
+void bpf_call_graph_free(struct bpf_call_graph *cg);
+
 #define iarray_for_each(item, arr)						\
 	for (int ___idx = 0;							\
 	     ___idx < (arr)->cnt && ({ item = (arr)->items[___idx]; 1; });	\
@@ -1088,6 +1114,7 @@ struct bpf_subprog_info {
 	 * U32_MAX when it has none.
 	 */
 	u32 exit_idx;
+	u32 callx_edge; /* 1 + the first of its env->callx_edges, 0 if none */
 	struct bpf_iarray *jt; /* jump table shared by all gotox of this subprogram */
 	u16 stack_depth; /* max. stack depth used by this function */
 	u16 stack_extra;
@@ -1341,13 +1368,12 @@ struct bpf_verifier_env {
 	u32 func_set_cnt;
 	struct bpf_index func_set_index;
 	bool has_callx;
-	/*
-	 * Call graph edges created by callx instructions. A bitmap of
-	 * subprog_cnt * subprog_cnt bits, where bit (caller * subprog_cnt + callee)
-	 * is set when the main verification pass sees 'caller' calling 'callee'
-	 * via callx. Allocated when the first such edge is recorded.
-	 */
-	unsigned long *callx_edges;
+	/* What callx and helpers call, a list for each caller, see record_callx_edge() */
+	struct bpf_callx_edge {
+		u32 callee;
+		u32 next;	/* 1 + the next edge of the caller, 0 if none */
+	} *callx_edges;
+	struct bpf_index callx_index;
 	struct bpf_idmap idmap_scratch;
 	struct {
 		int *insn_state;
