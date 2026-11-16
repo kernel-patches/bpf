@@ -1208,6 +1208,10 @@ struct bpf_insn_patch {
 	u32 len;
 	u32 start;		/* first insn of the patch in bpf_patch_list.insns */
 	u32 target;		/* insn of the patch that jumps to 'off' land on */
+	u32 self;		/* insn of the patch that stands for insn 'off' */
+	u32 jmp;		/* 1 + insn of the patch that goes to insn 'jmp_to', 0 if none */
+	u32 jmp_to;
+	u32 jmp_back;		/* or to that many insns in front of the patch of it */
 	struct bpf_insn orig;	/* the replaced insn when the patch was queued */
 };
 
@@ -1230,7 +1234,9 @@ struct bpf_patch_image {
 	u32 *new_off;
 	u32 *new_tgt;
 	u32 *new_linfo;
+	u32 *relaxed;		/* insn before patch_image_relax() -> insn after it */
 	u32 cnt;
+	u32 short_cnt;		/* insns before patch_image_relax() */
 	u32 new_cnt;
 	u32 nr_linfo;
 	s32 grow;
@@ -1256,7 +1262,8 @@ struct bpf_insn *__bpf_patch_list_add(struct bpf_patch_list *pl,
 int __bpf_patch_list_del(struct bpf_patch_list *pl, const struct bpf_prog *prog,
 			 u32 off);
 int __bpf_patch_list_insert(struct bpf_patch_list *pl, const struct bpf_prog *prog,
-			    u32 off, const struct bpf_insn *insns, u32 cnt);
+			    u32 off, const struct bpf_insn *insns, u32 cnt, bool behind);
+void bpf_patch_list_jump(struct bpf_patch_list *pl, const struct bpf_insn *insn, u32 to, u32 back);
 void bpf_patch_list_release(struct bpf_patch_list *pl);
 int bpf_patch_list_build(const struct bpf_patch_list *pl, const struct bpf_prog *prog,
 			 struct bpf_patch_image *img);
@@ -2266,6 +2273,8 @@ static inline void bpf_patch_list_free(struct bpf_verifier_env *env)
 }
 #endif
 int bpf_patch_list_del(struct bpf_verifier_env *env, u32 off);
+int bpf_patch_list_append(struct bpf_verifier_env *env, u32 off,
+			  const struct bpf_insn *insns, u32 cnt);
 int bpf_patch_list_insert(struct bpf_verifier_env *env, u32 off,
 			  const struct bpf_insn *insns, u32 cnt);
 

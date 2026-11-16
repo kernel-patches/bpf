@@ -126,28 +126,122 @@ __naked void patch_list_may_goto(void)
 	: __clobber_all);
 }
 
-/*
- * The conditional jump skips 8200 divisions, which their patches turn into
- * 32800 insns, too far for its 16-bit offset.
- */
-SEC("raw_tp")
-__description("patch list: jump pushed out of range by patches")
-__failure __msg("insn 2 cannot be patched due to 16-bit range")
-__naked void patch_list_jump_out_of_range(void)
+/* the JITs that support gotol */
+#if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64) || \
+	defined(__TARGET_ARCH_powerpc) || defined(__TARGET_ARCH_s390) || \
+	defined(__TARGET_ARCH_loongarch) || \
+	(defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64)
+
+/* The patches turn 8200 divisions into 32800 insns, too far for a 16-bit offset. */
+#define DIVS ".rept 8200; r7 /= r6; .endr;"
+
+/* len is not 0 and mark is 0, which the verifier doesn't know */
+#define FAR_JUMP(name, field)				\
+__naked void name(void)					\
+{							\
+	asm volatile (					\
+	"r6 = *(u32 *)(r1 + %[off]);"			\
+	"r7 = 1;"					\
+	"r0 = 1;"					\
+	"if r6 == 0 goto 0f;"				\
+	DIVS						\
+	"r0 = 2;"					\
+"0:	exit;"						\
+	:						\
+	: __imm_const(off, offsetof(struct __sk_buff, field)) \
+	: __clobber_all);				\
+}
+
+SEC("tc")
+__description("patch list: far jump, taken")
+__success __retval(1)
+__arch_x86_64
+__arch_arm64
+__xlated("3: if r6 == 0x0 goto pc+1")
+__xlated("4: goto pc+1")
+__xlated("5: gotol pc+32801")
+FAR_JUMP(patch_list_far_jump_taken, mark)
+
+SEC("tc")
+__description("patch list: far jump, not taken")
+__success __retval(2)
+FAR_JUMP(patch_list_far_jump_not_taken, len)
+
+/* The first jump is in range until the second one gets two more insns. */
+SEC("tc")
+__description("patch list: far jump over a far jump")
+__success __retval(1)
+__naked void patch_list_far_jump_over_far_jump(void)
 {
-	asm volatile ("					\
-	call %[bpf_get_prandom_u32];			\
-	r1 = r0;					\
-	if r0 == 0 goto 0f;				\
-	.rept 8200;					\
-	r0 /= r1;					\
-	.endr;						\
-0:	r0 = 0;						\
-	exit;						\
-"	:
-	: __imm(bpf_get_prandom_u32)
+	asm volatile (
+	"r6 = *(u32 *)(r1 + %[mark]);"
+	"r7 = 1;"
+	"r0 = 1;"
+	"if r6 == 0 goto 0f;"
+	"if r6 == 1 goto 1f;"
+	".rept 8191; r7 /= r6; .endr;"
+	"r0 = 2;"
+	"r0 = 2;"
+"0:	exit;"
+"1:	r0 = 3;"
+	"exit;"
+	:
+	: __imm_const(mark, offsetof(struct __sk_buff, mark))
 	: __clobber_all);
 }
+
+SEC("tc")
+__description("patch list: far goto, far jump back, far may_goto")
+__success __retval(3)
+__naked void patch_list_far_loop(void)
+{
+	asm volatile (
+	"r6 = *(u32 *)(r1 + %[len]);"
+	"r7 = 1;"
+	"r0 = 0;"
+	"goto 1f;"
+"0:	.8byte %[may_goto];"
+	DIVS
+	"r0 += 1;"
+"1:	if r0 < 3 goto 0b;"
+	"exit;"
+	:
+	: __imm_const(len, offsetof(struct __sk_buff, len)),
+	  __imm_insn(may_goto, BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 8202, 0))
+	: __clobber_all);
+}
+
+/* The loop has no bound. The verifier adds may_goto at its head, the exit is far. */
+#define FAR_GUARD(name, off, expect)				\
+__naked __noinline __used static unsigned long name##_func(void) \
+{							\
+	asm volatile (					\
+"0:	call %[bpf_get_prandom_u32];"			\
+	"if r0 != 1 goto +1;"				\
+	"goto 0b;"					\
+	".rept 33000; r3 = 0; .endr;"			\
+	"if r0 != 2 goto +1;"				\
+	".8byte %[back];"				\
+	"r1 = %[far_data] ll;"				\
+	"r0 = *(u8 *)(r1 + " #off ");"			\
+	"exit;"						\
+	:						\
+	: __imm(bpf_get_prandom_u32),			\
+	  __imm_addr(far_data),				\
+	  __imm_insn(back, BPF_JMP32_A(-33005))		\
+	: __clobber_all);				\
+}							\
+SEC("tc") expect					\
+__naked void name(void)					\
+{							\
+	asm volatile ("call " #name "_func; exit;" ::: __clobber_all); \
+}
+
+char far_data[8] SEC(".data.far") = { [7] = 9 };
+
+FAR_GUARD(patch_list_far_guard, 7, __success __retval(9))
+FAR_GUARD(patch_list_far_guard_bad, 8, __failure __msg("invalid access to map value"))
+#endif
 
 /* the JITs that support gotox, as in verifier_gotox.c */
 #if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64) || \
@@ -220,8 +314,9 @@ __arch_arm64
 __success
 __xlated("12: if r6 != 0x0 goto pc-3")
 __xlated("...")
-__xlated("32783: if r13 != 0x0 goto pc+1")
-__xlated("32784: gotol pc-32773")
+__xlated("32783: if r13 == 0x0 goto pc+1")
+__xlated("32784: goto pc+1")
+__xlated("32785: gotol pc-32774")
 __naked void patch_list_may_goto_gotol(void)
 {
 	asm volatile ("					\
