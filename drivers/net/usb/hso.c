@@ -2393,6 +2393,7 @@ static void hso_net_init(struct net_device *net)
 	net->flags = IFF_POINTOPOINT | IFF_NOARP | IFF_MULTICAST;
 	net->type = ARPHRD_NONE;
 	net->mtu = DEFAULT_MTU - 14;
+	net->max_mtu = MUX_BULK_TX_BUF_SIZE - 14;
 	net->tx_queue_len = 10;
 	net->ethtool_ops = &ops;
 
