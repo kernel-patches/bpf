@@ -129,6 +129,8 @@ struct cache_detail {
 		struct proc_dir_entry	*procfs;
 		struct dentry		*pipefs;
 	};
+	/* channel file in @procfs, for proc_poll_notify(); under queue_lock */
+	struct proc_dir_entry	*procfs_channel;
 	struct net		*net;
 };
 
