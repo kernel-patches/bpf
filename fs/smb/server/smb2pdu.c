@@ -12285,11 +12285,6 @@ int smb2_ioctl(struct ksmbd_work *work)
 	{
 		struct file_sparse sparse = {0};
 
-		if (in_buf_len && in_buf_len < sizeof(struct file_sparse)) {
-			ret = -EINVAL;
-			goto out;
-		}
-
 		*(u8 *)&sparse = 1;
 		ret = fsctl_set_sparse(work, id, in_buf_len ?
 				       (struct file_sparse *)buffer : &sparse);
