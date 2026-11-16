@@ -178,7 +178,7 @@ resources, scheduled and executed.
   queueing CPU's softirq context in the queueing order.
 
   All BH workqueues must have 0 ``max_active`` and ``WQ_HIGHPRI`` is the
-  only allowed additional flag.
+  only allowed additional flag. ``WQ_PERCPU`` is implied.
 
   BH work items cannot sleep. All other features such as delayed queueing,
   flushing and canceling are supported.
@@ -190,6 +190,9 @@ resources, scheduled and executed.
   This flag is the complement of ``WQ_UNBOUND``.
 
 ``WQ_UNBOUND``
+  Workqueues without ``WQ_PERCPU`` are unbound by default, except for
+  ``WQ_BH`` workqueues, which are always per-CPU.
+
   Work items queued to an unbound wq are served by the special
   worker-pools which host workers which are not bound to any
   specific CPU.  This makes the wq behave as a simple execution
@@ -375,9 +378,9 @@ Guidelines
   wq and potentially lead to deadlock. It should utilize its own
   dedicated workqueue rather than the system wq.
 
-* Unless work items are expected to consume a huge amount of CPU
-  cycles, using a bound wq is usually beneficial due to the increased
-  level of locality in wq operations and work item execution.
+* Use ``WQ_PERCPU`` only if work items benefit from the increased level
+  of locality in wq operations and work item execution. Otherwise, the
+  default unbound wq is usually the better choice.
 
 
 Affinity Scopes
