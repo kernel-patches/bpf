@@ -309,6 +309,9 @@ enum resolve_mode {
 					 */
 };
 
+/* It bounds the time of the loops that compare or print names */
+#define BTF_MAX_NAME_LEN 4096
+
 #define MAX_RESOLVE_DEPTH 32
 
 struct btf_sec_info {
@@ -320,6 +323,7 @@ struct btf_verifier_env {
 	struct btf *btf;
 	u8 *visit_states;
 	struct resolve_vertex stack[MAX_RESOLVE_DEPTH];
+	unsigned long *names;	/* offsets of the strings that can be names */
 	struct bpf_verifier_log log;
 	u32 log_type_id;
 	u32 top_stack;
@@ -685,10 +689,15 @@ s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 				return id;
 		}
 	} else {
+		/* only the tags in BTF of a program have long names */
+		bool slow = !btf->kernel_btf && strlen(name) > KSYM_NAME_LEN;
+
 		for (id = btf_start_id(btf); id < total; id++) {
 			t = btf_type_by_id(btf, id);
 			if (BTF_INFO_KIND(t->info) != kind)
 				continue;
+			if (slow && bpf_must_abort())
+				return -EINTR;
 			tname = btf_name_by_offset(btf, t->name_off);
 			if (strcmp(tname, name) == 0)
 				return id;
@@ -913,49 +922,6 @@ const char *btf_str_by_offset(const struct btf *btf, u32 offset)
 		return &btf->strings[offset];
 
 	return NULL;
-}
-
-/* Names in BTF of Rust are not C identifiers. Allow any printable character */
-static bool btf_name_valid_identifier(const struct btf *btf, u32 offset)
-{
-	/* offset must be valid */
-	const char *src = btf_str_by_offset(btf, offset);
-	const char *src_limit;
-
-	if (!isprint(*src))
-		return false;
-
-	/* set a limit on identifier length */
-	src_limit = src + KSYM_NAME_LEN;
-	src++;
-	while (*src && src < src_limit) {
-		if (!isprint(*src))
-			return false;
-		src++;
-	}
-
-	return !*src;
-}
-
-/* Allow any printable character in DATASEC names */
-static bool btf_name_valid_section(const struct btf *btf, u32 offset)
-{
-	/* offset must be valid */
-	const char *src = btf_str_by_offset(btf, offset);
-	const char *src_limit;
-
-	if (!*src)
-		return false;
-
-	/* set a limit on identifier length */
-	src_limit = src + KSYM_NAME_LEN;
-	while (*src && src < src_limit) {
-		if (!isprint(*src))
-			return false;
-		src++;
-	}
-
-	return !*src;
 }
 
 static const char *__btf_name_by_offset(const struct btf *btf, u32 offset)
@@ -1993,7 +1959,19 @@ nomem:
 static void btf_verifier_env_free(struct btf_verifier_env *env)
 {
 	kvfree(env->visit_states);
+	kvfree(env->names);
 	kfree(env);
+}
+
+/* Names in BTF of Rust are not C identifiers. Allow any printable character */
+static bool btf_name_valid(const struct btf_verifier_env *env, u32 offset)
+{
+	const struct btf *btf = env->btf;
+
+	/* offset must be valid */
+	if (offset < btf->start_str_off)
+		return *btf_str_by_offset(btf, offset);
+	return test_bit(offset - btf->start_str_off, env->names);
 }
 
 static bool env_type_is_resolve_sink(const struct btf_verifier_env *env,
@@ -2768,7 +2746,7 @@ static int btf_ref_type_check_meta(struct btf_verifier_env *env,
 	 */
 	if (BTF_INFO_KIND(t->info) == BTF_KIND_TYPEDEF) {
 		if (!t->name_off ||
-		    !btf_name_valid_identifier(env->btf, t->name_off)) {
+		    !btf_name_valid(env, t->name_off)) {
 			btf_verifier_log_type(env, t, "Invalid name");
 			return -EINVAL;
 		}
@@ -3030,7 +3008,7 @@ static s32 btf_fwd_check_meta(struct btf_verifier_env *env,
 
 	/* fwd type must have a valid name */
 	if (!t->name_off ||
-	    !btf_name_valid_identifier(env->btf, t->name_off)) {
+	    !btf_name_valid(env, t->name_off)) {
 		btf_verifier_log_type(env, t, "Invalid name");
 		return -EINVAL;
 	}
@@ -3353,7 +3331,7 @@ static s32 btf_struct_check_meta(struct btf_verifier_env *env,
 
 	/* struct type either no name or a valid one */
 	if (t->name_off &&
-	    !btf_name_valid_identifier(env->btf, t->name_off)) {
+	    !btf_name_valid(env, t->name_off)) {
 		btf_verifier_log_type(env, t, "Invalid name");
 		return -EINVAL;
 	}
@@ -3371,7 +3349,7 @@ static s32 btf_struct_check_meta(struct btf_verifier_env *env,
 
 		/* struct member either no name or a valid one */
 		if (member->name_off &&
-		    !btf_name_valid_identifier(btf, member->name_off)) {
+		    !btf_name_valid(env, member->name_off)) {
 			btf_verifier_log_member(env, t, member, "Invalid name");
 			return -EINVAL;
 		}
@@ -4162,6 +4140,8 @@ static int btf_parse_graph_root(const struct btf *btf,
 	 * verify its type.
 	 */
 	for_each_member(i, t, member) {
+		if (bpf_must_abort())
+			return -EINTR;
 		if (strcmp(info->graph_root.node_name,
 			   __btf_name_by_offset(btf, member->name_off)))
 			continue;
@@ -4640,7 +4620,7 @@ static s32 btf_enum_check_meta(struct btf_verifier_env *env,
 
 	/* enum type either no name or a valid one */
 	if (t->name_off &&
-	    !btf_name_valid_identifier(env->btf, t->name_off)) {
+	    !btf_name_valid(env, t->name_off)) {
 		btf_verifier_log_type(env, t, "Invalid name");
 		return -EINVAL;
 	}
@@ -4656,7 +4636,7 @@ static s32 btf_enum_check_meta(struct btf_verifier_env *env,
 
 		/* enum member must have a valid name */
 		if (!enums[i].name_off ||
-		    !btf_name_valid_identifier(btf, enums[i].name_off)) {
+		    !btf_name_valid(env, enums[i].name_off)) {
 			btf_verifier_log_type(env, t, "Invalid name");
 			return -EINVAL;
 		}
@@ -4748,7 +4728,7 @@ static s32 btf_enum64_check_meta(struct btf_verifier_env *env,
 
 	/* enum type either no name or a valid one */
 	if (t->name_off &&
-	    !btf_name_valid_identifier(env->btf, t->name_off)) {
+	    !btf_name_valid(env, t->name_off)) {
 		btf_verifier_log_type(env, t, "Invalid name");
 		return -EINVAL;
 	}
@@ -4764,7 +4744,7 @@ static s32 btf_enum64_check_meta(struct btf_verifier_env *env,
 
 		/* enum member must have a valid name */
 		if (!enums[i].name_off ||
-		    !btf_name_valid_identifier(btf, enums[i].name_off)) {
+		    !btf_name_valid(env, enums[i].name_off)) {
 			btf_verifier_log_type(env, t, "Invalid name");
 			return -EINVAL;
 		}
@@ -5054,7 +5034,7 @@ static s32 btf_locsec_check_meta(struct btf_verifier_env *env,
 	}
 
 	if (!t->name_off ||
-	    !btf_name_valid_section(env->btf, t->name_off)) {
+	    !btf_name_valid(env, t->name_off)) {
 		btf_verifier_log_type(env, t, "Invalid name");
 		return -EINVAL;
 	}
@@ -5246,7 +5226,7 @@ static s32 btf_func_check_meta(struct btf_verifier_env *env,
 			       u32 meta_left)
 {
 	if (!t->name_off ||
-	    !btf_name_valid_identifier(env->btf, t->name_off)) {
+	    !btf_name_valid(env, t->name_off)) {
 		btf_verifier_log_type(env, t, "Invalid name");
 		return -EINVAL;
 	}
@@ -5315,7 +5295,7 @@ static s32 btf_var_check_meta(struct btf_verifier_env *env,
 	}
 
 	if (!t->name_off ||
-	    !btf_name_valid_identifier(env->btf, t->name_off)) {
+	    !btf_name_valid(env, t->name_off)) {
 		btf_verifier_log_type(env, t, "Invalid name");
 		return -EINVAL;
 	}
@@ -5381,7 +5361,7 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 	}
 
 	if (!t->name_off ||
-	    !btf_name_valid_section(env->btf, t->name_off)) {
+	    !btf_name_valid(env, t->name_off)) {
 		btf_verifier_log_type(env, t, "Invalid name");
 		return -EINVAL;
 	}
@@ -5768,7 +5748,7 @@ static int btf_func_proto_check(struct btf_verifier_env *env,
 
 		if (args[i].name_off &&
 		    (!btf_name_offset_valid(btf, args[i].name_off) ||
-		     !btf_name_valid_identifier(btf, args[i].name_off))) {
+		     !btf_name_valid(env, args[i].name_off))) {
 			btf_verifier_log_type(env, t,
 					      "Invalid arg#%u", i + 1);
 			return -EINVAL;
@@ -6067,6 +6047,7 @@ static int btf_parse_str_sec(struct btf_verifier_env *env)
 	const struct btf_header *hdr;
 	struct btf *btf = env->btf;
 	const char *start, *end;
+	u32 i, len = 0;
 
 	hdr = &btf->hdr;
 	start = btf->nohdr_data + hdr->str_off;
@@ -6089,6 +6070,21 @@ static int btf_parse_str_sec(struct btf_verifier_env *env)
 	if (!btf->base_btf && start[0]) {
 		btf_verifier_log(env, "Invalid string section");
 		return -EINVAL;
+	}
+
+	/* many names can share one long string: look at each byte once */
+	kvfree(env->names);
+	env->names = kvcalloc(BITS_TO_LONGS(hdr->str_len), sizeof(long),
+			      GFP_KERNEL | __GFP_NOWARN);
+	if (!env->names)
+		return -ENOMEM;
+	for (i = hdr->str_len; i--;) {
+		if (!start[i])
+			len = 0;
+		else if (!isprint(start[i]))
+			len = BTF_MAX_NAME_LEN;
+		else if (len++ < BTF_MAX_NAME_LEN)
+			__set_bit(i, env->names);
 	}
 
 	return 0;
