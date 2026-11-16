@@ -2520,10 +2520,8 @@ static void *get_highmem_page_buffer(struct page *page,
 	 * use a "safe" page frame to store the loaded page.
 	 */
 	pbe = chain_alloc(ca, sizeof(struct highmem_pbe));
-	if (!pbe) {
-		swsusp_free();
+	if (!pbe)
 		return ERR_PTR(-ENOMEM);
-	}
 	pbe->orig_page = page;
 	if (safe_highmem_pages > 0) {
 		struct page *tmp;
@@ -2702,7 +2700,6 @@ static int prepare_image(struct memory_bitmap *new_bm, struct memory_bitmap *bm,
 	return 0;
 
  Free:
-	swsusp_free();
 	return error;
 }
 
@@ -2737,10 +2734,8 @@ static void *get_buffer(struct memory_bitmap *bm, struct chain_allocator *ca)
 	 * use a "safe" page frame to store the loaded page.
 	 */
 	pbe = chain_alloc(ca, sizeof(struct pbe));
-	if (!pbe) {
-		swsusp_free();
+	if (!pbe)
 		return ERR_PTR(-ENOMEM);
-	}
 	pbe->orig_address = page_address(page);
 	pbe->address = __get_safe_page(ca->gfp_mask);
 	if (!pbe->address)
