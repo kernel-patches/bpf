@@ -2109,16 +2109,17 @@ static bool file_backed_vma_is_retractable(struct vm_area_struct *vma)
 		return false;
 
 	/*
-	 * If the VMA contains guard regions then we can't collapse it.
+	 * Preserve guard and poison markers when retracting page tables.
 	 *
-	 * This is set atomically on guard marker installation under mmap/VMA
+	 * These flags are set atomically on marker installation under mmap/VMA
 	 * read lock, and here we may not hold any VMA or mmap lock at all.
 	 *
 	 * This is therefore serialised on the PTE page table lock, which is
-	 * obtained on guard region installation after the flag is set, so this
+	 * obtained on marker installation after the flag is set, so this
 	 * check being performed under this lock excludes races.
 	 */
-	if (vma_test_atomic_flag(vma, VMA_MAYBE_GUARD_BIT))
+	if (vma_test_atomic_flag(vma, VMA_MAYBE_GUARD_BIT) ||
+	    vma_test_atomic_flag(vma, VMA_MAYBE_UFFD_POISON_BIT))
 		return false;
 
 	return true;
