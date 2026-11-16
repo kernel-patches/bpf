@@ -3620,6 +3620,7 @@ static void test_tail_call(void)
 		{ (~0ULL << 32) | 2, TAIL_FALL }, { ~0ULL, TAIL_FALL },
 	};
 	LIBBPF_OPTS(bpf_prog_load_opts, lopts,
+		.prog_flags = BPF_F_ANY_ALIGNMENT,
 		.log_buf = log,
 		.log_size = sizeof(log),
 	);
