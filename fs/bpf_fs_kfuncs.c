@@ -491,11 +491,20 @@ __bpf_kfunc int bpf_sock_read_xattr(struct socket *sock, const char *name__str,
  * inode itself is returned; for any file on a non-union filesystem the inode
  * attached to @file is returned.
  *
- * Return: The inode hosting @file's data, or NULL.
+ * The union/overlay may have to look up the data first, e.g., when @file was
+ * opened with O_PATH or the program runs before the file is opened. If that
+ * fails NULL is returned.
+ *
+ * Return: The inode hosting @file's data, or NULL if it can't be resolved.
  */
 __bpf_kfunc struct inode *bpf_real_data_inode(struct file *file)
 {
-	return d_real_inode(file_dentry(file));
+	struct inode *inode;
+
+	inode = d_real_data_inode(file_dentry(file));
+	if (IS_ERR(inode))
+		return NULL;
+	return inode;
 }
 
 __bpf_kfunc_end_defs();
