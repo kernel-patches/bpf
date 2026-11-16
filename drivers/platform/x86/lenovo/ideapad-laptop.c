@@ -1166,6 +1166,13 @@ static const struct dmi_system_id ideapad_dytc_v4_allow_table[] = {
 			DMI_MATCH(DMI_PRODUCT_VERSION, "IdeaPad 5 15ITL05")
 		}
 	},
+	{
+		/* V14 G2 ITL */
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_VERSION, "V14 G2 ITL")
+		}
+	},
 	{}
 };
 
