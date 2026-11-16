@@ -514,6 +514,7 @@ static void zloop_rw_complete(struct kiocb *iocb, long ret)
 {
 	struct zloop_cmd *cmd = container_of(iocb, struct zloop_cmd, iocb);
 
+	kiocb_end_write_iter(iocb);
 	cmd->ret = ret;
 	zloop_put_cmd(cmd);
 }
@@ -567,7 +568,7 @@ static int zloop_do_rw(struct zloop_cmd *cmd)
 	cmd->iocb.ki_ioprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_NONE, 0);
 
 	if (rw == ITER_SOURCE)
-		return zone->file->f_op->write_iter(&cmd->iocb, &iter);
+		return kiocb_write_iter(&cmd->iocb, &iter);
 	return zone->file->f_op->read_iter(&cmd->iocb, &iter);
 }
 
