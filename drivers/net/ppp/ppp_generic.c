@@ -174,7 +174,7 @@ struct channel {
 	struct ppp_file	file;		/* stuff for read/write/poll */
 	struct list_head list;		/* link in all/new_channels list */
 	struct ppp_channel *chan;	/* public channel data structure */
-	struct mutex chan_sem;		/* protects `chan' during chan ioctl */
+	struct mutex chan_sem;		/* protects chan ioctl; serializes connect/unregister */
 	spinlock_t	downl;		/* protects `chan', file.xq dequeue */
 	struct ppp __rcu *ppp;		/* ppp unit we're connected to */
 	struct net	*chan_net;	/* the net channel belongs to */
@@ -754,7 +754,9 @@ static long ppp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		case PPPIOCCONNECT:
 			if (get_user(unit, p))
 				break;
+			mutex_lock(&pch->chan_sem);
 			err = ppp_connect_channel(pch, unit);
+			mutex_unlock(&pch->chan_sem);
 			break;
 
 		case PPPIOCDISCONN:
@@ -3079,11 +3081,14 @@ ppp_unregister_channel(struct ppp_channel *chan)
 	chan->ppp = NULL;
 
 	/*
+	 * Prevent PPPIOCCONNECT from reattaching the channel during removal.
+	 */
+	mutex_lock(&pch->chan_sem);
+	/*
 	 * This ensures that we have returned from any calls into
 	 * the channel's start_xmit or ioctl routine before we proceed.
 	 */
 	ppp_disconnect_channel(pch);
-	mutex_lock(&pch->chan_sem);
 	spin_lock_bh(&pch->downl);
 	pch->chan = NULL;
 	spin_unlock_bh(&pch->downl);
