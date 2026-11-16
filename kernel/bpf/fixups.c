@@ -1950,8 +1950,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->arena_stack_size = prog->aux->arena_stack_size;
 		func[i]->aux->arena_stack_entry = env->subprog_info[i].arena_stack_entry;
 		func[i]->aux->uses_arena_insns = bpf_prog_has_arena_insns(func[i]);
-		func[i]->aux->used_maps = env->used_maps;
-		func[i]->aux->used_map_cnt = env->used_map_cnt;
+		func[i]->aux->used_maps = env->insn_array_maps;
+		func[i]->aux->used_map_cnt = env->insn_array_map_cnt;
 		num_exentries = 0;
 		insn = func[i]->insnsi;
 		for (j = 0; j < func[i]->len; j++, insn++) {
