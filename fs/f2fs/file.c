@@ -3202,6 +3202,41 @@ static int f2fs_ioc_write_checkpoint(struct file *filp)
 	return ret;
 }
 
+/*
+ * Return the locked folio of a block to redirty it for defragmentation.
+ *
+ * A compressed file is read through ->read_folio(), which decompresses the
+ * cluster: f2fs_get_lock_data_folio() would read the mapped block as it is
+ * and leave compressed data in the page cache. A multi-block folio is read
+ * the same way, in one I/O instead of one synchronous read per block.
+ */
+static struct folio *f2fs_get_defrag_folio(struct file *filp, pgoff_t bidx)
+{
+	struct inode *inode = file_inode(filp);
+	struct address_space *mapping = inode->i_mapping;
+	pgoff_t index = f2fs_lblk_to_folio_index(F2FS_I_SB(inode), bidx);
+	struct folio *folio;
+
+	if (!f2fs_compressed_file(inode) && !f2fs_has_multiblock_folios(inode))
+		return f2fs_get_lock_data_folio(inode, bidx, true);
+
+repeat:
+	folio = read_mapping_folio(mapping, index, filp);
+	if (IS_ERR(folio))
+		return folio;
+
+	folio_lock(folio);
+	if (unlikely(folio->mapping != mapping)) {
+		f2fs_folio_put(folio, true);
+		goto repeat;
+	}
+	if (unlikely(!folio_test_uptodate(folio))) {
+		f2fs_folio_put(folio, true);
+		return ERR_PTR(-EIO);
+	}
+	return folio;
+}
+
 static int f2fs_defragment_range(struct f2fs_sb_info *sbi,
 					struct file *filp,
 					struct f2fs_defragment *range)
@@ -3327,7 +3362,7 @@ do_map:
 						cnt < BLKS_PER_SEG(sbi)) {
 			struct folio *folio;
 
-			folio = f2fs_get_lock_data_folio(inode, idx, true);
+			folio = f2fs_get_defrag_folio(filp, idx);
 			if (IS_ERR(folio)) {
 				err = PTR_ERR(folio);
 				goto clear_out;
@@ -3336,8 +3371,8 @@ do_map:
 			f2fs_folio_wait_writeback(folio, true, true);
 
 			f2fs_ffs_mark_subrange_dirty(folio,
-				offset_in_folio(folio, (loff_t)idx << PAGE_SHIFT),
-				PAGE_SIZE);
+				f2fs_folio_byte_offset(sbi, folio, idx),
+				F2FS_BLKSIZE(sbi));
 			f2fs_folio_mark_dirty(folio);
 			folio_set_f2fs_gcing(folio);
 			f2fs_folio_put(folio, true);
@@ -3377,9 +3412,6 @@ static int f2fs_ioc_defragment(struct file *filp, unsigned long arg)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_defragment range;
 	int err;
-
-	if (f2fs_has_subpage_blocks(sbi))
-		return -EOPNOTSUPP;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
