@@ -1097,12 +1097,11 @@ struct input_seq_state {
 	int input_devices_state;
 };
 
-static __poll_t input_proc_devices_poll(struct file *file, poll_table *wait)
+static __poll_t input_proc_devices_poll(struct file *file)
 {
 	struct seq_file *seq = file->private_data;
 	struct input_seq_state *state = seq->private;
 
-	pde_poll_wait(file, wait);
 	if (state->input_devices_state != input_devices_state) {
 		state->input_devices_state = input_devices_state;
 		return EPOLLIN | EPOLLRDNORM;

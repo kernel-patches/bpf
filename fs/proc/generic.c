@@ -441,6 +441,9 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 {
 	const struct proc_ops *proc_ops = pde->proc_ops;
 
+	/* nothing of this applies to these, see proc_create_fops() */
+	if (pde_has_proc_fops(pde))
+		return 0;
 	if (!proc_ops)
 		return 0;
 
@@ -456,8 +459,7 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 	}
 	if (pde_is_seq_file(pde)) {
 		/* procfs reads and seeks through the seq_file itself */
-		if (WARN_ON_ONCE(proc_ops->proc_read || proc_ops->proc_read_iter ||
-				 proc_ops->proc_lseek))
+		if (WARN_ON_ONCE(proc_ops->proc_lseek))
 			return -EINVAL;
 		/* and frees it, see pde_seq_release() */
 		if (WARN_ON_ONCE(proc_ops->proc_release == seq_release ||
@@ -465,11 +467,8 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 				 proc_ops->proc_release == single_release))
 			return -EINVAL;
 		pde->flags |= PROC_ENTRY_proc_lseek;
-	} else {
-		if (proc_ops->proc_read_iter)
-			pde->flags |= PROC_ENTRY_proc_read_iter;
-		if (proc_ops->proc_lseek)
-			pde->flags |= PROC_ENTRY_proc_lseek;
+	} else if (proc_ops->proc_lseek) {
+		pde->flags |= PROC_ENTRY_proc_lseek;
 	}
 	if (proc_ops->proc_poll)
 		pde->flags |= PROC_ENTRY_proc_poll;
@@ -478,16 +477,14 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 	if (proc_ops->proc_mmap)
 		pde->flags |= PROC_ENTRY_proc_mmap;
 	if (proc_ops->proc_write_buf) {
-		if (WARN_ON_ONCE(proc_ops->proc_write))
-			return -EINVAL;
 		pde->flags |= PROC_ENTRY_proc_write_buf;
 		pde->write_size = proc_ops->proc_write_size ?: PAGE_SIZE - 1;
 		if (proc_ops->proc_flags & PROC_ENTRY_SHORT_WRITES)
 			pde->flags |= PROC_ENTRY_SHORT_WRITES;
 	}
 	if (proc_ops->proc_read_buf) {
-		if (WARN_ON_ONCE(pde_is_seq_file(pde) || proc_ops->proc_read ||
-				 proc_ops->proc_read_iter))
+		/* procfs reads through the seq_file itself */
+		if (WARN_ON_ONCE(pde_is_seq_file(pde)))
 			return -EINVAL;
 		pde->flags |= PROC_ENTRY_proc_read_buf;
 		pde->read_size = proc_ops->proc_read_size ?: PAGE_SIZE;
@@ -495,13 +492,6 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 			pde->flags |= PROC_ENTRY_FULL_READS;
 	}
 	if (proc_ops->proc_ioctl_buf) {
-		if (WARN_ON_ONCE(proc_ops->proc_ioctl))
-			return -EINVAL;
-#ifdef CONFIG_COMPAT
-		/* 32-bit tasks go through the table as well */
-		if (WARN_ON_ONCE(proc_ops->proc_compat_ioctl))
-			return -EINVAL;
-#endif
 		/* the table says what procfs copies, see pde_ioctl_arg() */
 		if (WARN_ON_ONCE(!proc_ops->proc_ioctl_args ||
 				 !proc_ops->proc_nr_ioctl_args))
@@ -519,7 +509,7 @@ static int pde_init_open_node(struct proc_dir_entry *pde)
 {
 	struct pde_open_node *on;
 
-	if (!S_ISREG(pde->mode))
+	if (!S_ISREG(pde->mode) || pde_has_proc_fops(pde))
 		return 0;
 	if (!pde_has_proc_poll(pde) && !pde_tracks_files(pde))
 		return 0;
@@ -824,6 +814,25 @@ struct proc_dir_entry *proc_create(const char *name, umode_t mode,
 }
 EXPORT_SYMBOL(proc_create);
 
+/*
+ * For the built-in entries that read straight into userspace and are never
+ * removed, kcore, kmsg, the kpage files, profile and kallsyms. procfs doesn't
+ * mediate these at all, their file_operations go into the inode as they are.
+ * Not exported on purpose, everything else uses struct proc_ops.
+ */
+struct proc_dir_entry *proc_create_fops(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, const struct file_operations *fops)
+{
+	struct proc_dir_entry *p;
+
+	p = proc_create_reg(name, mode, &parent, NULL);
+	if (!p)
+		return NULL;
+	p->proc_fops = fops;
+	p->flags |= PROC_ENTRY_proc_fops | PROC_ENTRY_PERMANENT;
+	return proc_register(parent, p, NULL);
+}
+
 /* procfs owns the seq_file of these, see pde_seq_start() */
 static const struct proc_ops proc_seq_ops = {
 	/* not permanent -- can call into arbitrary seq_operations */
@@ -845,6 +854,41 @@ struct proc_dir_entry *proc_create_seq_private(const char *name, umode_t mode,
 	return proc_register(parent, p, NULL);
 }
 EXPORT_SYMBOL(proc_create_seq_private);
+
+/*
+ * The seq_file entries that are never removed and so never pinned, see
+ * pde_pin(). The flag has to be set before proc_register() publishes the
+ * entry. Not exported, modules' /proc files aren't permanent because modules
+ * aren't permanent.
+ */
+struct proc_dir_entry *proc_create_seq_permanent(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, const struct seq_operations *ops)
+{
+	struct proc_dir_entry *p;
+
+	p = proc_create_reg(name, mode, &parent, NULL);
+	if (!p)
+		return NULL;
+	p->proc_ops = &proc_seq_ops;
+	p->seq_ops = ops;
+	p->flags |= PROC_ENTRY_proc_seq_ops | PROC_ENTRY_PERMANENT;
+	return proc_register(parent, p, NULL);
+}
+
+struct proc_dir_entry *proc_create_single_permanent(const char *name,
+		umode_t mode, struct proc_dir_entry *parent,
+		int (*show)(struct seq_file *, void *))
+{
+	struct proc_dir_entry *p;
+
+	p = proc_create_reg(name, mode, &parent, NULL);
+	if (!p)
+		return NULL;
+	p->proc_ops = &proc_seq_ops;
+	p->single_show = show;
+	p->flags |= PROC_ENTRY_proc_show | PROC_ENTRY_PERMANENT;
+	return proc_register(parent, p, NULL);
+}
 
 struct proc_dir_entry *__proc_create_single_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent,
@@ -1035,14 +1079,4 @@ ssize_t proc_simple_write(struct file *f, char *buf, size_t size, loff_t *_pos)
 		return -EINVAL;
 	ret = pde->write(f, buf, size);
 	return ret == 0 ? size : ret;
-}
-
-/*
- * Not exported to modules:
- * modules' /proc files aren't permanent because modules aren't permanent.
- */
-void impl_proc_make_permanent(struct proc_dir_entry *pde)
-{
-	if (pde)
-		pde_make_permanent(pde);
 }

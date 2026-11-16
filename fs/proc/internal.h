@@ -41,6 +41,8 @@ struct proc_dir_entry {
 	union {
 		const struct proc_ops *proc_ops;
 		const struct file_operations *proc_dir_ops;
+		/* of a permanent entry procfs doesn't mediate, see proc_create_fops() */
+		const struct file_operations *proc_fops;
 	};
 	union {
 		const struct seq_operations *seq_ops;
@@ -88,17 +90,9 @@ static inline bool pde_is_permanent(const struct proc_dir_entry *pde)
 	return pde->flags & PROC_ENTRY_PERMANENT;
 }
 
-/* This is for builtin code, not even for modules which are compiled in. */
-static inline void pde_make_permanent(struct proc_dir_entry *pde)
+static inline bool pde_has_proc_fops(const struct proc_dir_entry *pde)
 {
-	/* Ensure magic flag does something. */
-	static_assert(PROC_ENTRY_PERMANENT != 0);
-	pde->flags |= PROC_ENTRY_PERMANENT;
-}
-
-static inline bool pde_has_proc_read_iter(const struct proc_dir_entry *pde)
-{
-	return pde->flags & PROC_ENTRY_proc_read_iter;
+	return pde->flags & PROC_ENTRY_proc_fops;
 }
 
 static inline bool pde_has_proc_lseek(const struct proc_dir_entry *pde)

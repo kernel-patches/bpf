@@ -17,6 +17,7 @@ struct seq_operations;
 enum {
 	/*
 	 * All /proc entries using this ->proc_ops instance are never removed.
+	 * procfs calls into them without pinning them.
 	 *
 	 * If in doubt, ignore this flag.
 	 */
@@ -26,7 +27,7 @@ enum {
 	PROC_ENTRY_PERMANENT		= 1U << 0,
 #endif
 
-	PROC_ENTRY_proc_read_iter	= 1U << 1,
+	PROC_ENTRY_proc_fops		= 1U << 2,
 	PROC_ENTRY_proc_lseek		= 1U << 3,
 	PROC_ENTRY_proc_seq_ops		= 1U << 4,
 	PROC_ENTRY_proc_show		= 1U << 5,
@@ -75,9 +76,6 @@ struct proc_ioctl_arg {
 struct proc_ops {
 	unsigned int proc_flags;
 	int	(*proc_open)(struct inode *, struct file *);
-	ssize_t	(*proc_read)(struct file *, char __user *, size_t, loff_t *);
-	ssize_t (*proc_read_iter)(struct kiocb *, struct iov_iter *);
-	ssize_t	(*proc_write)(struct file *, const char __user *, size_t, loff_t *);
 	/*
 	 * mandatory unless nonseekable_open() or equivalent is used, procfs
 	 * seeks seq_file entries itself
@@ -85,16 +83,13 @@ struct proc_ops {
 	loff_t	(*proc_lseek)(struct file *, loff_t, int);
 	int	(*proc_release)(struct inode *, struct file *);
 	/*
-	 * procfs owns a wait queue for an entry with a ->proc_poll(). The
-	 * method sleeps the poller on it with pde_poll_wait() and the owner
-	 * wakes the pollers with proc_poll_notify(). A poll on a removed
-	 * entry reports EPOLLERR | EPOLLPRI.
+	 * procfs owns a wait queue for an entry with a ->proc_poll() and
+	 * does the poll_wait() on it before it calls the method, which only
+	 * reports the mask. The owner wakes the pollers with
+	 * proc_poll_notify(). A poll on a removed entry reports
+	 * EPOLLERR | EPOLLPRI.
 	 */
-	__poll_t (*proc_poll)(struct file *, struct poll_table_struct *);
-	long	(*proc_ioctl)(struct file *, unsigned int, unsigned long);
-#ifdef CONFIG_COMPAT
-	long	(*proc_compat_ioctl)(struct file *, unsigned int, unsigned long);
-#endif
+	__poll_t (*proc_poll)(struct file *);
 	/*
 	 * procfs pins the entry around ->proc_mmap() and wraps the
 	 * vm_operations of the mapping so that ->open(), ->fault(),
@@ -234,6 +229,9 @@ extern struct proc_dir_entry *proc_create_data(const char *, umode_t,
 					       struct proc_dir_entry *,
 					       const struct proc_ops *,
 					       void *);
+struct proc_dir_entry *proc_create_fops(const char *name, umode_t mode,
+		struct proc_dir_entry *parent,
+		const struct file_operations *fops);
 /* @key instead of the proc_ops as the lockdep class of the pin, for a
  * creator that serves different things behind one proc_ops. */
 struct proc_dir_entry *proc_create_data_key(const char *name, umode_t mode,
@@ -258,7 +256,6 @@ extern void proc_remove(struct proc_dir_entry *);
 extern void remove_proc_entry(const char *, struct proc_dir_entry *);
 extern int remove_proc_subtree(const char *, struct proc_dir_entry *);
 void proc_poll_notify(struct proc_dir_entry *pde);
-void pde_poll_wait(struct file *file, struct poll_table_struct *pts);
 
 struct proc_dir_entry *proc_create_net_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent, const struct seq_operations *ops,
@@ -348,6 +345,10 @@ static inline struct proc_dir_entry *
 proc_create_data(const char *name, umode_t mode, struct proc_dir_entry *parent,
 		 const struct proc_ops *proc_ops, void *data)
 { return NULL; }
+static inline struct proc_dir_entry *
+proc_create_fops(const char *name, umode_t mode, struct proc_dir_entry *parent,
+		 const struct file_operations *fops)
+{ return NULL; }
 
 static inline struct proc_dir_entry *
 proc_create_data_key(const char *name, umode_t mode, struct proc_dir_entry *parent,
@@ -364,7 +365,6 @@ static inline void proc_remove(struct proc_dir_entry *de) {}
 #define remove_proc_entry(name, parent) do {} while (0)
 static inline int remove_proc_subtree(const char *name, struct proc_dir_entry *parent) { return 0; }
 static inline void proc_poll_notify(struct proc_dir_entry *pde) {}
-static inline void pde_poll_wait(struct file *file, struct poll_table_struct *pts) {}
 
 #define proc_create_net_data(name, mode, parent, ops, state_size, data) ({NULL;})
 #define proc_create_net_data_write(name, mode, parent, ops, write, state_size, data) ({NULL;})
@@ -399,16 +399,16 @@ static inline struct pid_namespace *proc_pid_ns(struct super_block *sb)
 
 bool proc_ns_file(const struct file *file);
 
+/*
+ * Entries that are never removed. Built-in code only, modules' /proc files
+ * aren't permanent because modules aren't permanent.
+ */
 #if defined CONFIG_PROC_FS && !defined MODULE
-void impl_proc_make_permanent(struct proc_dir_entry *pde);
+struct proc_dir_entry *proc_create_seq_permanent(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, const struct seq_operations *ops);
+struct proc_dir_entry *proc_create_single_permanent(const char *name,
+		umode_t mode, struct proc_dir_entry *parent,
+		int (*show)(struct seq_file *, void *));
 #endif
-
-static inline void proc_make_permanent(struct proc_dir_entry *pde)
-{
-	/* Don't give matches to modules. */
-#if defined CONFIG_PROC_FS && !defined MODULE
-	impl_proc_make_permanent(pde);
-#endif
-}
 
 #endif /* _LINUX_PROC_FS_H */

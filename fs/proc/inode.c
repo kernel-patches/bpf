@@ -413,6 +413,9 @@ static loff_t proc_reg_llseek(struct file *file, loff_t offset, int whence)
 	struct proc_dir_entry *pde = PDE(file_inode(file));
 	loff_t rv;
 
+	/* procfs seeks through the seq_file itself, see pde_seq_start() */
+	if (pde_is_seq_file(pde))
+		return seq_lseek(file, offset, whence);
 	if (!pde_pin(pde))
 		return -EINVAL;
 	rv = pde->proc_ops->proc_lseek(file, offset, whence);
@@ -477,42 +480,12 @@ static ssize_t pde_read_buf(struct proc_dir_entry *pde, struct kiocb *iocb,
 static ssize_t proc_reg_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
 	struct proc_dir_entry *pde = PDE(file_inode(iocb->ki_filp));
-	ssize_t ret;
 
+	/* procfs reads through the seq_file itself, see pde_seq_start() */
+	if (pde_is_seq_file(pde))
+		return seq_read_iter(iocb, iter);
 	if (pde_has_proc_read_buf(pde))
 		return pde_read_buf(pde, iocb, iter);
-	if (!pde_pin(pde))
-		return -EIO;
-	ret = pde->proc_ops->proc_read_iter(iocb, iter);
-	pde_unpin(pde);
-	return ret;
-}
-
-static ssize_t pde_read(struct proc_dir_entry *pde, struct file *file, char __user *buf, size_t count, loff_t *ppos)
-{
-	const auto read = pde->proc_ops->proc_read;
-	if (read)
-		return read(file, buf, count, ppos);
-	return -EIO;
-}
-
-static ssize_t proc_reg_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
-{
-	struct proc_dir_entry *pde = PDE(file_inode(file));
-	ssize_t rv;
-
-	if (!pde_pin(pde))
-		return -EIO;
-	rv = pde_read(pde, file, buf, count, ppos);
-	pde_unpin(pde);
-	return rv;
-}
-
-static ssize_t pde_write(struct proc_dir_entry *pde, struct file *file, const char __user *buf, size_t count, loff_t *ppos)
-{
-	const auto write = pde->proc_ops->proc_write;
-	if (write)
-		return write(file, buf, count, ppos);
 	return -EIO;
 }
 
@@ -520,11 +493,12 @@ static ssize_t pde_write(struct proc_dir_entry *pde, struct file *file, const ch
  * procfs copies in what is written before it pins the entry. A writer that
  * faults on its buffer then doesn't hold up remove_proc_entry().
  */
-static ssize_t pde_write_buf(struct proc_dir_entry *pde, struct file *file,
-			     const char __user *ubuf, size_t count, loff_t *ppos)
+static ssize_t pde_write_buf(struct proc_dir_entry *pde, struct kiocb *iocb,
+			     struct iov_iter *from)
 {
+	struct file *file = iocb->ki_filp;
+	size_t count = iov_iter_count(from), size;
 	char *buf __free(kvfree) = NULL;
-	size_t size;
 	ssize_t rv;
 
 	size = pde->write_size;
@@ -536,29 +510,26 @@ static ssize_t pde_write_buf(struct proc_dir_entry *pde, struct file *file,
 	buf = kvmalloc(count + 1, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
-	if (copy_from_user(buf, ubuf, count))
+	if (copy_from_iter(buf, count, from) != count)
 		return -EFAULT;
 	buf[count] = '\0';
 
 	if (!pde_pin(pde))
 		return -EIO;
-	rv = pde->proc_ops->proc_write_buf(file, buf, count, ppos);
+	/* a stream has no position, like with ->write() */
+	rv = pde->proc_ops->proc_write_buf(file, buf, count,
+			(file->f_mode & FMODE_STREAM) ? NULL : &iocb->ki_pos);
 	pde_unpin(pde);
 	return rv;
 }
 
-static ssize_t proc_reg_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+static ssize_t proc_reg_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
-	struct proc_dir_entry *pde = PDE(file_inode(file));
-	ssize_t rv;
+	struct proc_dir_entry *pde = PDE(file_inode(iocb->ki_filp));
 
 	if (pde_has_proc_write_buf(pde))
-		return pde_write_buf(pde, file, buf, count, ppos);
-	if (!pde_pin(pde))
-		return -EIO;
-	rv = pde_write(pde, file, buf, count, ppos);
-	pde_unpin(pde);
-	return rv;
+		return pde_write_buf(pde, iocb, from);
+	return -EIO;
 }
 
 /*
@@ -575,9 +546,10 @@ static __poll_t proc_reg_poll(struct file *file, struct poll_table_struct *pts)
 
 	if (!pde_has_proc_poll(pde))
 		return DEFAULT_POLLMASK;
+	poll_wait(file, &pde->open->poll, pts);
 	if (!pde_pin(pde))
 		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
-	rv = pde->proc_ops->proc_poll(file, pts);
+	rv = pde->proc_ops->proc_poll(file);
 	pde_unpin(pde);
 	return rv;
 }
@@ -599,34 +571,6 @@ void proc_poll_notify(struct proc_dir_entry *pde)
 	wake_up_interruptible_all(&pde->open->poll);
 }
 EXPORT_SYMBOL_GPL(proc_poll_notify);
-
-/**
- * pde_poll_wait - sleep a poller on the wait queue procfs owns for an entry
- * @file: the file ->proc_poll() was called with
- * @pts: the poll_table ->proc_poll() was called with
- *
- * For a ->proc_poll() whose owner wakes the pollers with proc_poll_notify().
- * procfs doesn't do this for every entry yet: one that still sleeps its
- * pollers on a queue of its own would be on two queues for one poll then,
- * and Linux AIO supports one queue per file, see aio_poll_queue_proc(). Once
- * every entry sleeps on the procfs queue the poll_wait() moves into
- * proc_reg_poll().
- */
-void pde_poll_wait(struct file *file, struct poll_table_struct *pts)
-{
-	struct proc_dir_entry *pde = PDE(file_inode(file));
-
-	poll_wait(file, &pde->open->poll, pts);
-}
-EXPORT_SYMBOL_GPL(pde_poll_wait);
-
-static long pde_ioctl(struct proc_dir_entry *pde, struct file *file, unsigned int cmd, unsigned long arg)
-{
-	const auto ioctl = pde->proc_ops->proc_ioctl;
-	if (ioctl)
-		return ioctl(file, cmd, arg);
-	return -ENOTTY;
-}
 
 /* the table lives in proc_ops, which goes away with the entry */
 static bool pde_ioctl_arg(struct proc_dir_entry *pde, unsigned int cmd,
@@ -684,38 +628,20 @@ static long pde_ioctl_buf(struct proc_dir_entry *pde, struct file *file,
 static long proc_reg_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct proc_dir_entry *pde = PDE(file_inode(file));
-	long rv;
 
 	if (pde_has_proc_ioctl_buf(pde))
 		return pde_ioctl_buf(pde, file, cmd, (void __user *)arg, arg);
-	if (!pde_pin(pde))
-		return -ENOTTY;
-	rv = pde_ioctl(pde, file, cmd, arg);
-	pde_unpin(pde);
-	return rv;
-}
-
-#ifdef CONFIG_COMPAT
-static long pde_compat_ioctl(struct proc_dir_entry *pde, struct file *file, unsigned int cmd, unsigned long arg)
-{
-	const auto compat_ioctl = pde->proc_ops->proc_compat_ioctl;
-	if (compat_ioctl)
-		return compat_ioctl(file, cmd, arg);
 	return -ENOTTY;
 }
 
+#ifdef CONFIG_COMPAT
 static long proc_reg_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct proc_dir_entry *pde = PDE(file_inode(file));
-	long rv;
 
 	if (pde_has_proc_ioctl_buf(pde))
 		return pde_ioctl_buf(pde, file, cmd, compat_ptr(arg), arg);
-	if (!pde_pin(pde))
-		return -ENOTTY;
-	rv = pde_compat_ioctl(pde, file, cmd, arg);
-	pde_unpin(pde);
-	return rv;
+	return -ENOTTY;
 }
 #else
 #define proc_reg_compat_ioctl NULL
@@ -981,44 +907,11 @@ out:
 	return 0;
 }
 
-/* For seq_file entries, see pde_seq_ops. */
-static const struct file_operations proc_seq_file_ops = {
-	.llseek		= seq_lseek,
-	.read_iter	= seq_read_iter,
-	.splice_read	= copy_splice_read,
-	.write		= proc_reg_write,
-	.poll		= proc_reg_poll,
-	.unlocked_ioctl	= proc_reg_unlocked_ioctl,
-	.compat_ioctl	= proc_reg_compat_ioctl,
-	.mmap		= proc_reg_mmap,
-	.get_unmapped_area = proc_reg_get_unmapped_area,
-#ifndef CONFIG_MMU
-	.mmap_capabilities = proc_reg_mmap_capabilities,
-#endif
-	.open		= proc_reg_open,
-	.release	= proc_reg_release,
-};
-
 static const struct file_operations proc_reg_file_ops = {
 	.llseek		= proc_reg_llseek,
-	.read		= proc_reg_read,
-	.write		= proc_reg_write,
-	.poll		= proc_reg_poll,
-	.unlocked_ioctl	= proc_reg_unlocked_ioctl,
-	.compat_ioctl	= proc_reg_compat_ioctl,
-	.mmap		= proc_reg_mmap,
-	.get_unmapped_area = proc_reg_get_unmapped_area,
-#ifndef CONFIG_MMU
-	.mmap_capabilities = proc_reg_mmap_capabilities,
-#endif
-	.open		= proc_reg_open,
-	.release	= proc_reg_release,
-};
-
-static const struct file_operations proc_iter_file_ops = {
-	.llseek		= proc_reg_llseek,
 	.read_iter	= proc_reg_read_iter,
-	.write		= proc_reg_write,
+	.write_iter	= proc_reg_write_iter,
+	.splice_write	= iter_file_splice_write,
 	.splice_read	= copy_splice_read,
 	.poll		= proc_reg_poll,
 	.unlocked_ioctl	= proc_reg_unlocked_ioctl,
@@ -1082,10 +975,8 @@ struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 
 	if (S_ISREG(inode->i_mode)) {
 		inode->i_op = de->proc_iops;
-		if (pde_is_seq_file(de))
-			inode->i_fop = &proc_seq_file_ops;
-		else if (pde_has_proc_read_iter(de) || pde_has_proc_read_buf(de))
-			inode->i_fop = &proc_iter_file_ops;
+		if (pde_has_proc_fops(de))
+			inode->i_fop = de->proc_fops;
 		else
 			inode->i_fop = &proc_reg_file_ops;
 	} else if (S_ISDIR(inode->i_mode)) {
