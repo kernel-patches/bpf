@@ -829,9 +829,9 @@ EXPORT_SYMBOL(proc_create);
 
 /*
  * For the built-in entries that read straight into userspace and are never
- * removed, kcore, kmsg, the kpage files and profile. procfs doesn't mediate
- * these at all, their file_operations go into the inode as they are. Not
- * exported on purpose, everything else uses struct proc_ops.
+ * removed, kcore, kmsg, the kpage files, profile and kallsyms. procfs doesn't
+ * mediate these at all, their file_operations go into the inode as they are.
+ * Not exported on purpose, everything else uses struct proc_ops.
  */
 struct proc_dir_entry *proc_create_fops(const char *name, umode_t mode,
 		struct proc_dir_entry *parent, const struct file_operations *fops)
