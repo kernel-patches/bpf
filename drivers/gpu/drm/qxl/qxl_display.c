@@ -1310,10 +1310,14 @@ int qxl_modeset_init(struct qxl_device *qdev)
 
 	ret = drm_vblank_init(&qdev->ddev, qxl_num_crtc);
 	if (ret)
-		return ret;
+		goto destroy_monitors_object;
 
 	drm_mode_config_reset(&qdev->ddev);
 	return 0;
+
+destroy_monitors_object:
+	qxl_destroy_monitors_object(qdev);
+	return ret;
 }
 
 void qxl_modeset_fini(struct qxl_device *qdev)
