@@ -15,6 +15,8 @@
 #include <linux/types.h>
 #include <linux/ptrace.h>
 
+#define MAX_ERRNO 4095
+
 #if defined(_MIPS_SIM) && _MIPS_SIM == _MIPS_SIM_NABI32
 /*
  * MIPS N32 is the only architecture where __kernel_ulong_t
@@ -131,7 +133,7 @@ static const long long bad_error_rval[] = {
 	0,
 	1,
 	ESRCH,
-	-4095 - 1,	/* -MAX_ERRNO - 1 */
+	-MAX_ERRNO - 1,
 	-2147483647LL - 1,
 #if __SIZEOF_LONG__ > 4
 	0x100000000LL,
@@ -322,6 +324,27 @@ TEST(set_syscall_info)
 				}
 			}, {
 				{ 0, tracer_pid }, { 1, -EISDIR }
+			}
+		},
+
+		/* change scno, change non-error rval to -MAX_ERRNO */
+		{
+			{
+				{
+					__NR_chdir,
+					{
+						dummy[0], dummy[1], dummy[2],
+						dummy[3], dummy[4], dummy[5]
+					}
+				}, {
+					__NR_getppid,
+					{
+						dummy[0], dummy[1], dummy[2],
+						dummy[3], dummy[4], dummy[5]
+					}
+				}
+			}, {
+				{ 0, tracer_pid }, { 1, -MAX_ERRNO }
 			}
 		},
 
