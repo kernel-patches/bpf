@@ -450,9 +450,7 @@ static int adp_setup_mode_config(struct adp_drv_private *adp)
 		return ret;
 	}
 
-	drm_mode_config_reset(drm);
-
-	return 0;
+	return drm_mode_config_create_initial_state(drm);
 }
 
 static int adp_parse_of(struct platform_device *pdev, struct adp_drv_private *adp)
