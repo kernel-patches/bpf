@@ -95,9 +95,6 @@ static __always_inline u64 native_rdmsrq(u32 msr)
 	return __rdmsr(msr);
 }
 
-#define native_wrmsr(msr, low, high)			\
-	__wrmsrq((msr), (u64)(high) << 32 | (low))
-
 #define native_wrmsrq(msr, val)				\
 	__wrmsrq((msr), (val))
 
