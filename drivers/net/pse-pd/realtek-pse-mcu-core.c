@@ -69,10 +69,14 @@
 /* Nominal PSE rail; 802.3at/bt operating range. */
 #define RTPSE_MCU_PSE_VOLTAGE_UV		54000000
 
+/* RTPSE_MCU_CMD_SET_POWER_MGMT_MODE values */
+#define RTPSE_MCU_POWER_MGMT_DYNAMIC_PRIO	0x02	/* dynamic, with port priority */
+
 enum rtpse_mcu_cmd {
 	RTPSE_MCU_CMD_SET_GLOBAL_STATE,
 	RTPSE_MCU_CMD_GET_SYSTEM_INFO,
 	RTPSE_MCU_CMD_GET_EXT_CONFIG,
+	RTPSE_MCU_CMD_SET_POWER_MGMT_MODE,
 
 	RTPSE_MCU_CMD_PORT_ENABLE,
 	RTPSE_MCU_CMD_PORT_SET_POWER_LIMIT_TYPE,
@@ -370,6 +374,26 @@ static int rtpse_mcu_set_global_state(struct rtpse_mcu_ctrl *pse, bool enable)
 
 	rtpse_mcu_msg_init(&req, opc->op);
 	req.payload[0] = enable ? 0x1 : 0x0;
+
+	ret = rtpse_mcu_do_xfer(pse, &req, &resp);
+	if (ret)
+		return ret;
+
+	return (resp.payload[0] == 0x0) ? 0 : -EIO;
+}
+
+static int rtpse_mcu_set_power_mgmt_mode(struct rtpse_mcu_ctrl *pse)
+{
+	struct rtpse_mcu_msg req, resp;
+	const struct rtpse_mcu_opcode *opc;
+	int ret;
+
+	opc = &pse->dialect->opcode[RTPSE_MCU_CMD_SET_POWER_MGMT_MODE];
+	if (!opc->valid)
+		return -EOPNOTSUPP;
+
+	rtpse_mcu_msg_init(&req, opc->op);
+	req.payload[0] = RTPSE_MCU_POWER_MGMT_DYNAMIC_PRIO;
 
 	ret = rtpse_mcu_do_xfer(pse, &req, &resp);
 	if (ret)
@@ -838,6 +862,12 @@ int rtpse_mcu_register(struct rtpse_mcu_ctrl *pse)
 	if (ret)
 		return ret;
 
+	/* ensure the MCU does dynamic power management with priorities */
+	ret = rtpse_mcu_set_power_mgmt_mode(pse);
+	if (ret)
+		return dev_err_probe(pse->dev, ret,
+				     "failed to set power management mode\n");
+
 	/*
 	 * Some boards gate all ports through a hardware line; deassert it only
 	 * after the MCU is confirmed, so a discover failure never ungates the
@@ -956,6 +986,7 @@ static const struct rtpse_mcu_dialect rtpse_mcu_dialect_gen2 = {
 		[RTPSE_MCU_CMD_SET_GLOBAL_STATE]	= RTPSE_MCU_OP(0x00),
 		[RTPSE_MCU_CMD_GET_SYSTEM_INFO]		= RTPSE_MCU_OP(0x40),
 		[RTPSE_MCU_CMD_GET_EXT_CONFIG]		= RTPSE_MCU_OP(0x4a),
+		[RTPSE_MCU_CMD_SET_POWER_MGMT_MODE]	= RTPSE_MCU_OP(0x10),
 
 		[RTPSE_MCU_CMD_PORT_ENABLE]		= RTPSE_MCU_OP(0x01),
 		[RTPSE_MCU_CMD_PORT_SET_POWER_LIMIT_TYPE] = RTPSE_MCU_OP(0x12),
@@ -976,6 +1007,7 @@ static const struct rtpse_mcu_dialect rtpse_mcu_dialect_gen1 = {
 	.opcode = {
 		[RTPSE_MCU_CMD_GET_SYSTEM_INFO]		= RTPSE_MCU_OP(0x20),
 		[RTPSE_MCU_CMD_GET_EXT_CONFIG]		= RTPSE_MCU_OP(0x2b),
+		[RTPSE_MCU_CMD_SET_POWER_MGMT_MODE]	= RTPSE_MCU_OP(0x17),
 
 		[RTPSE_MCU_CMD_PORT_ENABLE]		= RTPSE_MCU_OP(0x00),
 		[RTPSE_MCU_CMD_PORT_SET_POWER_LIMIT_TYPE] = RTPSE_MCU_OP(0x15),
