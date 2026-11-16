@@ -3,6 +3,7 @@
 #define __LINUX_DCACHE_H
 
 #include <linux/atomic.h>
+#include <linux/err.h>
 #include <linux/list.h>
 #include <linux/math.h>
 #include <linux/rculist.h>
@@ -658,6 +659,50 @@ static inline struct inode *d_real_inode(const struct dentry *dentry)
 {
 	/* This usage of d_real() results in const dentry */
 	return d_inode(d_real((struct dentry *) dentry, D_REAL_DATA));
+}
+
+/**
+ * d_real_data_inode - Return the real inode hosting the data
+ * @dentry: The dentry to query
+ *
+ * If @dentry is a regular file on a union/overlay, then return the
+ * underlying, real inode that hosts its data. Otherwise return d_inode().
+ *
+ * The union/overlay may have to look up the data first. This can sleep and it
+ * can fail, e.g., because the data is missing or because its verity digest
+ * doesn't match.
+ *
+ * Return: The real inode hosting the data of @dentry, or an ERR_PTR() if it
+ * can't be resolved.
+ */
+static inline struct inode *d_real_data_inode(struct dentry *dentry)
+{
+	struct dentry *real;
+
+	real = d_real(dentry, D_REAL_DATA);
+	if (IS_ERR(real))
+		return ERR_CAST(real);
+	return d_inode(real);
+}
+
+/**
+ * d_real_metadata_inode - Return the real inode hosting the metadata
+ * @dentry: The dentry to query
+ *
+ * If @dentry is a regular file on a union/overlay, then return the
+ * underlying, real inode that hosts its metadata. Otherwise return d_inode().
+ *
+ * Return: The real inode hosting the metadata of @dentry, or an ERR_PTR() if
+ * it can't be resolved.
+ */
+static inline struct inode *d_real_metadata_inode(struct dentry *dentry)
+{
+	struct dentry *real;
+
+	real = d_real(dentry, D_REAL_METADATA);
+	if (IS_ERR(real))
+		return ERR_CAST(real);
+	return d_inode(real);
 }
 
 struct name_snapshot {
