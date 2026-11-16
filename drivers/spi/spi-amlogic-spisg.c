@@ -707,7 +707,7 @@ static int aml_spisg_clk_init(struct spisg_device *spisg, void __iomem *base)
 
 	clk_set_min_rate(spisg->pclk, SPISG_PCLK_RATE_MIN);
 
-	tbl = devm_kcalloc(dev, (DIV_NUM + 1), sizeof(*tbl), GFP_KERNEL);
+	tbl = devm_kzalloc_objs(dev, *tbl, (DIV_NUM + 1));
 	if (!tbl)
 		return -ENOMEM;
 
@@ -717,7 +717,7 @@ static int aml_spisg_clk_init(struct spisg_device *spisg, void __iomem *base)
 	}
 	spisg->tbl = tbl;
 
-	div = devm_kzalloc(dev, sizeof(*div), GFP_KERNEL);
+	div = devm_kzalloc_obj(dev, *div);
 	if (!div)
 		return -ENOMEM;
 
