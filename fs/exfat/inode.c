@@ -134,6 +134,9 @@ void exfat_sync_inode(struct inode *inode)
  * Input: inode, (logical) clu_offset, target allocation area
  * Output: errcode, cluster number
  * *clu = (~0), if it's unable to allocate a new cluster
+ *
+ * For !create, *count is limited to the part of the range backed by the
+ * cluster chain; the caller reports the remainder as a hole.
  */
 int exfat_map_cluster(struct inode *inode, unsigned int clu_offset,
 		unsigned int *clu, unsigned int *count, int create,
@@ -153,9 +156,15 @@ int exfat_map_cluster(struct inode *inode, unsigned int clu_offset,
 	    *count > num_clusters - clu_offset)
 		num_to_be_allocated = clu_offset + *count - num_clusters;
 
-	if (!create && (num_to_be_allocated > 0)) {
-		*clu = EXFAT_EOF_CLUSTER;
-		return 0;
+	if (!create && num_to_be_allocated > 0) {
+		if (clu_offset >= num_clusters) {
+			*clu = EXFAT_EOF_CLUSTER;
+			return 0;
+		}
+
+		/* Range straddles the chain end: map the valid prefix only. */
+		*count = num_clusters - clu_offset;
+		num_to_be_allocated = 0;
 	}
 
 	*clu = last_clu = ei->start_clu;
