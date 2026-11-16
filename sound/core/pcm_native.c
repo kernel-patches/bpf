@@ -1127,7 +1127,13 @@ int snd_pcm_status64(struct snd_pcm_substream *substream,
 	status->trigger_tstamp_sec = runtime->trigger_tstamp.tv_sec;
 	status->trigger_tstamp_nsec = runtime->trigger_tstamp.tv_nsec;
 	if (snd_pcm_running(substream)) {
-		snd_pcm_update_hw_ptr(substream);
+		if (snd_pcm_update_hw_ptr(substream) < 0) {
+			/* update_hw_ptr may have put us in xrun state, update state */
+			status->state = runtime->state;
+			status->suspended_state = runtime->suspended_state;
+			status->trigger_tstamp_sec = runtime->trigger_tstamp.tv_sec;
+			status->trigger_tstamp_nsec = runtime->trigger_tstamp.tv_nsec;
+		}
 		if (runtime->tstamp_mode == SNDRV_PCM_TSTAMP_ENABLE) {
 			status->tstamp_sec = runtime->status->tstamp.tv_sec;
 			status->tstamp_nsec =
@@ -3820,39 +3826,27 @@ static __poll_t snd_pcm_poll(struct file *file, poll_table *wait)
 /*
  * mmap status record
  */
-static vm_fault_t snd_pcm_mmap_status_fault(struct vm_fault *vmf)
-{
-	struct snd_pcm_substream *substream = vmf->vma->vm_private_data;
-	struct snd_pcm_runtime *runtime;
-	
-	if (substream == NULL)
-		return VM_FAULT_SIGBUS;
-	runtime = substream->runtime;
-	vmf->page = virt_to_page(runtime->status);
-	get_page(vmf->page);
-	return 0;
-}
-
-static const struct vm_operations_struct snd_pcm_vm_ops_status =
-{
-	.fault =	snd_pcm_mmap_status_fault,
-};
-
 static int snd_pcm_mmap_status(struct snd_pcm_substream *substream, struct file *file,
-			       struct vm_area_struct *area)
+			       struct vm_area_struct *vma)
 {
-	long size;
-	if (!(area->vm_flags & VM_READ))
-		return -EINVAL;
-	size = area->vm_end - area->vm_start;
-	if (size != PAGE_ALIGN(sizeof(struct snd_pcm_mmap_status)))
-		return -EINVAL;
-	area->vm_ops = &snd_pcm_vm_ops_status;
-	area->vm_private_data = substream;
-	vm_flags_mod(area, VM_DONTEXPAND | VM_DONTDUMP,
-		     VM_WRITE | VM_MAYWRITE);
+	const unsigned long size = vma->vm_end - vma->vm_start;
+	struct snd_pcm_runtime *runtime;
+	struct page *page;
 
-	return 0;
+	BUILD_BUG_ON(sizeof(struct snd_pcm_mmap_status) > PAGE_SIZE);
+
+	if (!(vma->vm_flags & VM_READ))
+		return -EINVAL;
+	if (size != PAGE_SIZE)
+		return -EINVAL;
+
+	vm_flags_mod(vma, VM_DONTEXPAND | VM_DONTDUMP,
+		     VM_WRITE | VM_MAYWRITE);
+	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
+
+	runtime = substream->runtime;
+	page = virt_to_page(runtime->status);
+	return vm_insert_page(vma, vma->vm_start, page);
 }
 
 /*

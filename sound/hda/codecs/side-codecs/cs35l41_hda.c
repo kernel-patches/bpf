@@ -1898,8 +1898,7 @@ static int cs35l41_hda_read_acpi(struct cs35l41_hda *cs35l41, const char *hid, i
 	}
 
 	cs35l41->dacpi = adev;
-	struct device *physdev __free(put_device) =
-		get_device(acpi_get_first_physical_node(adev));
+	struct device *physdev __free(put_device) = acpi_bus_get_primary_device(adev);
 	if (!physdev)
 		return -ENODEV;
 
@@ -1945,7 +1944,7 @@ int cs35l41_hda_probe(struct device *dev, const char *device_name, int id, int i
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
 
-	cs35l41 = devm_kzalloc(dev, sizeof(*cs35l41), GFP_KERNEL);
+	cs35l41 = devm_kzalloc_obj(dev, *cs35l41);
 	if (!cs35l41)
 		return -ENOMEM;
 

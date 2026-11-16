@@ -100,8 +100,7 @@ static int tas2781_read_acpi(struct tasdevice_priv *p, const char *hid)
 		return -ENODEV;
 	}
 
-	struct device *physdev __free(put_device) =
-		get_device(acpi_get_first_physical_node(adev));
+	struct device *physdev __free(put_device) = acpi_bus_get_primary_device(adev);
 	ret = acpi_dev_get_resources(adev, &resources, tas2781_get_i2c_res, p);
 	if (ret < 0) {
 		dev_err(p->dev, "Failed to get ACPI resource.\n");
@@ -610,11 +609,11 @@ static int tas2781_hda_i2c_probe(struct i2c_client *clt)
 	const char *device_name;
 	int ret;
 
-	tas_hda = devm_kzalloc(&clt->dev, sizeof(*tas_hda), GFP_KERNEL);
+	tas_hda = devm_kzalloc_obj(&clt->dev, *tas_hda);
 	if (!tas_hda)
 		return -ENOMEM;
 
-	hda_priv = devm_kzalloc(&clt->dev, sizeof(*hda_priv), GFP_KERNEL);
+	hda_priv = devm_kzalloc_obj(&clt->dev, *hda_priv);
 	if (!hda_priv)
 		return -ENOMEM;
 
