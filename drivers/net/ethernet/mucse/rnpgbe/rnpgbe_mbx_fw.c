@@ -72,9 +72,11 @@ static int mucse_mbx_get_info(struct mucse_hw *hw)
 	int err;
 
 	err = mucse_fw_send_cmd_wait_resp(hw, &req, &reply);
-	if (!err)
+	if (!err) {
 		hw->pfvfnum = FIELD_GET(GENMASK_U16(7, 0),
 					le16_to_cpu(reply.r.hw_info.pfnum));
+		hw->fw_version = le32_to_cpu(reply.r.hw_info.fw_version);
+	}
 
 	return err;
 }

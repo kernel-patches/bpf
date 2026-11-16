@@ -46,6 +46,7 @@ struct mucse_hw {
 	struct mucse_mbx_info mbx;
 	int port;
 	int speed;
+	u32 fw_version;
 	bool link;
 	u16 cycles_per_us;
 	u8 pfvfnum;
@@ -256,6 +257,8 @@ int rnpgbe_set_rx_mode(struct net_device *netdev,
 		       struct netdev_hw_addr_list *uc,
 		       struct netdev_hw_addr_list *mc);
 void rnpgbe_set_link(struct mucse_hw *hw, bool linkup);
+
+extern const struct ethtool_ops rnpgbe_ethtool_ops;
 
 /* Device IDs */
 #define PCI_VENDOR_ID_MUCSE               0x8848
