@@ -1533,12 +1533,18 @@ static void request_modules(struct cx231xx *dev)
 	schedule_work(&dev->request_module_wk);
 }
 
+static void cancel_request_modules(struct cx231xx *dev)
+{
+	cancel_work_sync(&dev->request_module_wk);
+}
+
 static void flush_request_modules(struct cx231xx *dev)
 {
 	flush_work(&dev->request_module_wk);
 }
 #else
 #define request_modules(dev)
+#define cancel_request_modules(dev)
 #define flush_request_modules(dev)
 #endif /* CONFIG_MODULES */
 
@@ -1900,8 +1906,10 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 	if (!retval)
 		retval = media_device_register(dev->media_dev);
 #endif
-	if (retval < 0)
-		cx231xx_release_resources(dev);
+	if (retval < 0) {
+		cancel_request_modules(dev);
+		goto err_video_alt;
+	}
 	return retval;
 
 err_video_alt:
