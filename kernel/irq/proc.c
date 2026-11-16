@@ -188,29 +188,13 @@ static ssize_t irq_affinity_list_proc_write(struct file *file,
 	return write_irq_affinity(1, file, buffer, count, pos);
 }
 
-static int irq_affinity_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, irq_affinity_proc_show, pde_data(inode));
-}
-
-static int irq_affinity_list_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, irq_affinity_list_proc_show, pde_data(inode));
-}
-
 static const struct proc_ops irq_affinity_proc_ops = {
-	.proc_open	= irq_affinity_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= irq_affinity_proc_show,
 	.proc_write	= irq_affinity_proc_write,
 };
 
 static const struct proc_ops irq_affinity_list_proc_ops = {
-	.proc_open	= irq_affinity_list_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= irq_affinity_list_proc_show,
 	.proc_write	= irq_affinity_list_proc_write,
 };
 
@@ -263,16 +247,8 @@ out:
 	return err;
 }
 
-static int default_affinity_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, default_affinity_show, pde_data(inode));
-}
-
 static const struct proc_ops default_affinity_proc_ops = {
-	.proc_open	= default_affinity_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= default_affinity_show,
 	.proc_write	= default_affinity_write,
 };
 

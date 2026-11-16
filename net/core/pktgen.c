@@ -549,17 +549,9 @@ static ssize_t pgctrl_write(struct file *file, const char __user *buf,
 	return count;
 }
 
-static int pgctrl_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, pgctrl_show, pde_data(inode));
-}
-
 static const struct proc_ops pktgen_proc_ops = {
-	.proc_open	= pgctrl_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
+	.proc_show	= pgctrl_show,
 	.proc_write	= pgctrl_write,
-	.proc_release	= single_release,
 };
 
 static int pktgen_if_show(struct seq_file *seq, void *v)
@@ -1869,17 +1861,9 @@ static ssize_t pktgen_if_write(struct file *file,
 	return -EINVAL;
 }
 
-static int pktgen_if_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, pktgen_if_show, pde_data(inode));
-}
-
 static const struct proc_ops pktgen_if_proc_ops = {
-	.proc_open	= pktgen_if_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
+	.proc_show	= pktgen_if_show,
 	.proc_write	= pktgen_if_write,
-	.proc_release	= single_release,
 };
 
 static int pktgen_thread_show(struct seq_file *seq, void *v)
@@ -2009,17 +1993,9 @@ out:
 	return ret;
 }
 
-static int pktgen_thread_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, pktgen_thread_show, pde_data(inode));
-}
-
 static const struct proc_ops pktgen_thread_proc_ops = {
-	.proc_open	= pktgen_thread_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
+	.proc_show	= pktgen_thread_show,
 	.proc_write	= pktgen_thread_write,
-	.proc_release	= single_release,
 };
 
 /* Think find or remove for NN */

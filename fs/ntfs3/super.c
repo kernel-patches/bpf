@@ -548,11 +548,6 @@ static int ntfs3_volinfo(struct seq_file *m, void *o)
 	return 0;
 }
 
-static int ntfs3_volinfo_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ntfs3_volinfo, pde_data(inode));
-}
-
 /* read /proc/fs/ntfs3/<dev>/label */
 static int ntfs3_label_show(struct seq_file *m, void *o)
 {
@@ -598,23 +593,12 @@ out:
 	return ret;
 }
 
-static int ntfs3_label_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ntfs3_label_show, pde_data(inode));
-}
-
 static const struct proc_ops ntfs3_volinfo_fops = {
-	.proc_read = seq_read,
-	.proc_lseek = seq_lseek,
-	.proc_release = single_release,
-	.proc_open = ntfs3_volinfo_open,
+	.proc_show = ntfs3_volinfo,
 };
 
 static const struct proc_ops ntfs3_label_fops = {
-	.proc_read = seq_read,
-	.proc_lseek = seq_lseek,
-	.proc_release = single_release,
-	.proc_open = ntfs3_label_open,
+	.proc_show = ntfs3_label_show,
 	.proc_write = ntfs3_label_write,
 };
 

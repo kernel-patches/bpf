@@ -881,11 +881,6 @@ static int dispatch_proc_show(struct seq_file *m, void *v)
 	return ibm->read(m);
 }
 
-static int dispatch_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, dispatch_proc_show, pde_data(inode));
-}
-
 static ssize_t dispatch_proc_write(struct file *file,
 			const char __user *userbuf,
 			size_t count, loff_t *pos)
@@ -910,10 +905,7 @@ static ssize_t dispatch_proc_write(struct file *file,
 }
 
 static const struct proc_ops dispatch_proc_ops = {
-	.proc_open	= dispatch_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= dispatch_proc_show,
 	.proc_write	= dispatch_proc_write,
 };
 

@@ -670,11 +670,6 @@ static const struct seq_operations scsi_devinfo_seq_ops = {
 	.show	= devinfo_seq_show,
 };
 
-static int proc_scsi_devinfo_open(struct inode *inode, struct file *file)
-{
-	return seq_open(file, &scsi_devinfo_seq_ops);
-}
-
 /*
  * proc_scsi_dev_info_write - allow additions to scsi_dev_info_list via /proc.
  *
@@ -714,11 +709,8 @@ out:
 }
 
 static const struct proc_ops scsi_devinfo_proc_ops = {
-	.proc_open	= proc_scsi_devinfo_open,
-	.proc_read	= seq_read,
+	.proc_seq_ops	= &scsi_devinfo_seq_ops,
 	.proc_write	= proc_scsi_devinfo_write,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release,
 };
 #endif /* CONFIG_SCSI_PROC_FS */
 

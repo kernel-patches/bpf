@@ -584,17 +584,9 @@ static int vcpudispatch_stats_display(struct seq_file *p, void *v)
 	return 0;
 }
 
-static int vcpudispatch_stats_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, vcpudispatch_stats_display, NULL);
-}
-
 static const struct proc_ops vcpudispatch_stats_proc_ops = {
-	.proc_open	= vcpudispatch_stats_open,
-	.proc_read	= seq_read,
+	.proc_show	= vcpudispatch_stats_display,
 	.proc_write	= vcpudispatch_stats_write,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
 };
 
 static ssize_t vcpudispatch_stats_freq_write(struct file *file,
@@ -628,17 +620,9 @@ static int vcpudispatch_stats_freq_display(struct seq_file *p, void *v)
 	return 0;
 }
 
-static int vcpudispatch_stats_freq_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, vcpudispatch_stats_freq_display, NULL);
-}
-
 static const struct proc_ops vcpudispatch_stats_freq_proc_ops = {
-	.proc_open	= vcpudispatch_stats_freq_open,
-	.proc_read	= seq_read,
+	.proc_show	= vcpudispatch_stats_freq_display,
 	.proc_write	= vcpudispatch_stats_freq_write,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
 };
 
 static int __init vcpudispatch_stats_procfs_init(void)

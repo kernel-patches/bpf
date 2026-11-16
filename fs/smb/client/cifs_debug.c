@@ -357,10 +357,6 @@ static int cifs_debug_dirs_proc_show(struct seq_file *m, void *v)
 }
 
 #ifdef CONFIG_CIFS_DEBUG
-static int cifs_debug_dirs_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, cifs_debug_dirs_proc_show, NULL);
-}
 
 /* Drop all cached directory entries across all CIFS mounts. */
 static ssize_t cifs_debug_dirs_proc_write(struct file *file, const char __user *buffer,
@@ -393,10 +389,7 @@ static ssize_t cifs_debug_dirs_proc_write(struct file *file, const char __user *
 }
 
 static const struct proc_ops cifs_debug_dirs_proc_ops = {
-	.proc_open	= cifs_debug_dirs_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= cifs_debug_dirs_proc_show,
 	.proc_write	= cifs_debug_dirs_proc_write,
 };
 #endif /* CONFIG_CIFS_DEBUG */
@@ -859,16 +852,8 @@ static int cifs_stats_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int cifs_stats_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, cifs_stats_proc_show, NULL);
-}
-
 static const struct proc_ops cifs_stats_proc_ops = {
-	.proc_open	= cifs_stats_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= cifs_stats_proc_show,
 	.proc_write	= cifs_stats_proc_write,
 };
 
@@ -1012,11 +997,6 @@ static int cifsFYI_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int cifsFYI_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, cifsFYI_proc_show, NULL);
-}
-
 static ssize_t cifsFYI_proc_write(struct file *file, const char __user *buffer,
 		size_t count, loff_t *ppos)
 {
@@ -1038,10 +1018,7 @@ static ssize_t cifsFYI_proc_write(struct file *file, const char __user *buffer,
 }
 
 static const struct proc_ops cifsFYI_proc_ops = {
-	.proc_open	= cifsFYI_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= cifsFYI_proc_show,
 	.proc_write	= cifsFYI_proc_write,
 };
 
@@ -1049,11 +1026,6 @@ static int cifs_linux_ext_proc_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%d\n", linuxExtEnabled);
 	return 0;
-}
-
-static int cifs_linux_ext_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, cifs_linux_ext_proc_show, NULL);
 }
 
 static ssize_t cifs_linux_ext_proc_write(struct file *file,
@@ -1069,10 +1041,7 @@ static ssize_t cifs_linux_ext_proc_write(struct file *file,
 }
 
 static const struct proc_ops cifs_linux_ext_proc_ops = {
-	.proc_open	= cifs_linux_ext_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= cifs_linux_ext_proc_show,
 	.proc_write	= cifs_linux_ext_proc_write,
 };
 
@@ -1080,11 +1049,6 @@ static int cifs_lookup_cache_proc_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%d\n", lookupCacheEnabled);
 	return 0;
-}
-
-static int cifs_lookup_cache_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, cifs_lookup_cache_proc_show, NULL);
 }
 
 static ssize_t cifs_lookup_cache_proc_write(struct file *file,
@@ -1100,10 +1064,7 @@ static ssize_t cifs_lookup_cache_proc_write(struct file *file,
 }
 
 static const struct proc_ops cifs_lookup_cache_proc_ops = {
-	.proc_open	= cifs_lookup_cache_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= cifs_lookup_cache_proc_show,
 	.proc_write	= cifs_lookup_cache_proc_write,
 };
 
@@ -1111,11 +1072,6 @@ static int traceSMB_proc_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%d\n", traceSMB);
 	return 0;
-}
-
-static int traceSMB_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, traceSMB_proc_show, NULL);
 }
 
 static ssize_t traceSMB_proc_write(struct file *file, const char __user *buffer,
@@ -1131,10 +1087,7 @@ static ssize_t traceSMB_proc_write(struct file *file, const char __user *buffer,
 }
 
 static const struct proc_ops traceSMB_proc_ops = {
-	.proc_open	= traceSMB_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= traceSMB_proc_show,
 	.proc_write	= traceSMB_proc_write,
 };
 
@@ -1142,11 +1095,6 @@ static int cifs_security_flags_proc_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "0x%x\n", global_secflags);
 	return 0;
-}
-
-static int cifs_security_flags_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, cifs_security_flags_proc_show, NULL);
 }
 
 /*
@@ -1234,10 +1182,7 @@ static ssize_t cifs_security_flags_proc_write(struct file *file,
 }
 
 static const struct proc_ops cifs_security_flags_proc_ops = {
-	.proc_open	= cifs_security_flags_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= cifs_security_flags_proc_show,
 	.proc_write	= cifs_security_flags_proc_write,
 };
 
@@ -1271,16 +1216,8 @@ static int cifs_mount_params_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int cifs_mount_params_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, cifs_mount_params_proc_show, NULL);
-}
-
 static const struct proc_ops cifs_mount_params_proc_ops = {
-	.proc_open	= cifs_mount_params_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show = cifs_mount_params_proc_show,
 	/* No need for write for now */
 	/* .proc_write	= cifs_mount_params_proc_write, */
 };

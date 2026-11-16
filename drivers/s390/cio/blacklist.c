@@ -397,18 +397,9 @@ static const struct seq_operations cio_ignore_proc_seq_ops = {
 	.show  = cio_ignore_proc_seq_show,
 };
 
-static int
-cio_ignore_proc_open(struct inode *inode, struct file *file)
-{
-	return seq_open_private(file, &cio_ignore_proc_seq_ops,
-				sizeof(struct ccwdev_iter));
-}
-
 static const struct proc_ops cio_ignore_proc_ops = {
-	.proc_open	= cio_ignore_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release_private,
+	.proc_seq_ops	= &cio_ignore_proc_seq_ops,
+	.proc_state_size = sizeof(struct ccwdev_iter),
 	.proc_write	= cio_ignore_write,
 };
 

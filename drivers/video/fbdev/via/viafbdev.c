@@ -1119,11 +1119,6 @@ static int viafb_dvp0_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int viafb_dvp0_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, viafb_dvp0_proc_show, NULL);
-}
-
 static ssize_t viafb_dvp0_proc_write(struct file *file,
 	const char __user *buffer, size_t count, loff_t *pos)
 {
@@ -1172,10 +1167,7 @@ static ssize_t viafb_dvp0_proc_write(struct file *file,
 }
 
 static const struct proc_ops viafb_dvp0_proc_ops = {
-	.proc_open	= viafb_dvp0_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= viafb_dvp0_proc_show,
 	.proc_write	= viafb_dvp0_proc_write,
 };
 
@@ -1187,11 +1179,6 @@ static int viafb_dvp1_proc_show(struct seq_file *m, void *v)
 	dvp1_clk_dri = viafb_read_reg(VIASR, SR65) & 0x03;
 	seq_printf(m, "%x %x %x\n", dvp1, dvp1_data_dri, dvp1_clk_dri);
 	return 0;
-}
-
-static int viafb_dvp1_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, viafb_dvp1_proc_show, NULL);
 }
 
 static ssize_t viafb_dvp1_proc_write(struct file *file,
@@ -1236,10 +1223,7 @@ static ssize_t viafb_dvp1_proc_write(struct file *file,
 }
 
 static const struct proc_ops viafb_dvp1_proc_ops = {
-	.proc_open	= viafb_dvp1_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= viafb_dvp1_proc_show,
 	.proc_write	= viafb_dvp1_proc_write,
 };
 
@@ -1249,11 +1233,6 @@ static int viafb_dfph_proc_show(struct seq_file *m, void *v)
 	dfp_high = viafb_read_reg(VIACR, CR97) & 0x0f;
 	seq_printf(m, "%x\n", dfp_high);
 	return 0;
-}
-
-static int viafb_dfph_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, viafb_dfph_proc_show, NULL);
 }
 
 static ssize_t viafb_dfph_proc_write(struct file *file,
@@ -1270,10 +1249,7 @@ static ssize_t viafb_dfph_proc_write(struct file *file,
 }
 
 static const struct proc_ops viafb_dfph_proc_ops = {
-	.proc_open	= viafb_dfph_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= viafb_dfph_proc_show,
 	.proc_write	= viafb_dfph_proc_write,
 };
 
@@ -1283,11 +1259,6 @@ static int viafb_dfpl_proc_show(struct seq_file *m, void *v)
 	dfp_low = viafb_read_reg(VIACR, CR99) & 0x0f;
 	seq_printf(m, "%x\n", dfp_low);
 	return 0;
-}
-
-static int viafb_dfpl_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, viafb_dfpl_proc_show, NULL);
 }
 
 static ssize_t viafb_dfpl_proc_write(struct file *file,
@@ -1304,10 +1275,7 @@ static ssize_t viafb_dfpl_proc_write(struct file *file,
 }
 
 static const struct proc_ops viafb_dfpl_proc_ops = {
-	.proc_open	= viafb_dfpl_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= viafb_dfpl_proc_show,
 	.proc_write	= viafb_dfpl_proc_write,
 };
 
@@ -1341,11 +1309,6 @@ static int viafb_vt1636_proc_show(struct seq_file *m, void *v)
 		break;
 	}
 	return 0;
-}
-
-static int viafb_vt1636_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, viafb_vt1636_proc_show, NULL);
 }
 
 static ssize_t viafb_vt1636_proc_write(struct file *file,
@@ -1439,10 +1402,7 @@ static ssize_t viafb_vt1636_proc_write(struct file *file,
 }
 
 static const struct proc_ops viafb_vt1636_proc_ops = {
-	.proc_open	= viafb_vt1636_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= viafb_vt1636_proc_show,
 	.proc_write	= viafb_vt1636_proc_write,
 };
 
@@ -1490,11 +1450,6 @@ static int viafb_iga1_odev_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int viafb_iga1_odev_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, viafb_iga1_odev_proc_show, NULL);
-}
-
 static ssize_t viafb_iga1_odev_proc_write(struct file *file,
 	const char __user *buffer, size_t count, loff_t *pos)
 {
@@ -1516,10 +1471,7 @@ static ssize_t viafb_iga1_odev_proc_write(struct file *file,
 }
 
 static const struct proc_ops viafb_iga1_odev_proc_ops = {
-	.proc_open	= viafb_iga1_odev_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= viafb_iga1_odev_proc_show,
 	.proc_write	= viafb_iga1_odev_proc_write,
 };
 
@@ -1527,11 +1479,6 @@ static int viafb_iga2_odev_proc_show(struct seq_file *m, void *v)
 {
 	via_odev_to_seq(m, viaparinfo->shared->iga2_devices);
 	return 0;
-}
-
-static int viafb_iga2_odev_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, viafb_iga2_odev_proc_show, NULL);
 }
 
 static ssize_t viafb_iga2_odev_proc_write(struct file *file,
@@ -1555,10 +1502,7 @@ static ssize_t viafb_iga2_odev_proc_write(struct file *file,
 }
 
 static const struct proc_ops viafb_iga2_odev_proc_ops = {
-	.proc_open	= viafb_iga2_odev_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= viafb_iga2_odev_proc_show,
 	.proc_write	= viafb_iga2_odev_proc_write,
 };
 

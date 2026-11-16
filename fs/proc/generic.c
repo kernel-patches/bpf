@@ -40,6 +40,8 @@ void pde_free(struct proc_dir_entry *pde)
 		kfree(pde->data);
 	if (pde->name != pde->inline_name)
 		kfree(pde->name);
+	kfree(pde->open);
+	kfree(pde->seq_direct);
 	kmem_cache_free(proc_dir_entry_cache, pde);
 }
 
@@ -301,22 +303,16 @@ struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry,
 }
 
 /*
- * Where the next readdir resumes. The entries are counted, so one that is
- * added or removed in front of the position would shift what the next call
- * returns. The name of the last entry emitted doesn't move.
+ * Remember @name as the entry the listing is behind at @pos. If this can't
+ * the next call counts from the start.
  */
-struct proc_dir_cursor {
-	loff_t pos;			/* the position behind the entry */
-	unsigned int len;
-	char name[NAME_MAX + 1];
-};
-
-/* If this can't remember the entry the next call counts from the start. */
-static void proc_dir_cursor_set(struct file *file, struct proc_dir_entry *de,
-				loff_t pos)
+void proc_dir_cursor_set(struct file *file, const char *name, unsigned int len,
+			 loff_t pos)
 {
 	struct proc_dir_cursor *cursor = file->private_data;
 
+	if (len > NAME_MAX)
+		return;
 	if (!cursor) {
 		cursor = kmalloc_obj(*cursor, GFP_KERNEL_ACCOUNT);
 		if (!cursor)
@@ -324,8 +320,8 @@ static void proc_dir_cursor_set(struct file *file, struct proc_dir_entry *de,
 		file->private_data = cursor;
 	}
 	cursor->pos = pos;
-	cursor->len = de->namelen;
-	memcpy(cursor->name, de->name, de->namelen);
+	cursor->len = len;
+	memcpy(cursor->name, name, len);
 }
 
 int proc_dir_release(struct inode *inode, struct file *file)
@@ -343,7 +339,7 @@ int proc_dir_release(struct inode *inode, struct file *file)
 int proc_readdir_de(struct file *file, struct dir_context *ctx,
 		    struct proc_dir_entry *de)
 {
-	struct proc_dir_cursor *cursor = file->private_data;
+	const struct proc_dir_cursor *cursor;
 	struct proc_dir_entry *dir = de;
 	int i;
 
@@ -351,7 +347,8 @@ int proc_readdir_de(struct file *file, struct dir_context *ctx,
 		return 0;
 
 	read_lock(&proc_subdir_lock);
-	if (cursor && cursor->pos == ctx->pos) {
+	cursor = proc_dir_cursor_at(file, ctx->pos);
+	if (cursor) {
 		/* Resume after the last entry emitted, wherever it is now. */
 		de = pde_subdir_after(dir, cursor->name, cursor->len);
 	} else {
@@ -375,7 +372,7 @@ int proc_readdir_de(struct file *file, struct dir_context *ctx,
 			return 0;
 		}
 		ctx->pos++;
-		proc_dir_cursor_set(file, de, ctx->pos);
+		proc_dir_cursor_set(file, de->name, de->namelen, ctx->pos);
 		read_lock(&proc_subdir_lock);
 		/* Removed in the meantime, go on after its name. */
 		if (RB_EMPTY_NODE(&de->subdir_node))
@@ -440,34 +437,166 @@ static const struct inode_operations proc_dir_inode_operations = {
 	.setattr	= proc_setattr,
 };
 
-static void pde_set_flags(struct proc_dir_entry *pde)
+static int pde_set_flags(struct proc_dir_entry *pde)
 {
 	const struct proc_ops *proc_ops = pde->proc_ops;
 
 	if (!proc_ops)
-		return;
+		return 0;
 
 	if (proc_ops->proc_flags & PROC_ENTRY_PERMANENT)
 		pde->flags |= PROC_ENTRY_PERMANENT;
-	if (proc_ops->proc_read_iter)
-		pde->flags |= PROC_ENTRY_proc_read_iter;
-#ifdef CONFIG_COMPAT
-	if (proc_ops->proc_compat_ioctl)
-		pde->flags |= PROC_ENTRY_proc_compat_ioctl;
-#endif
-	if (proc_ops->proc_lseek)
+	if (proc_ops->proc_seq_ops) {
+		pde->seq_ops = proc_ops->proc_seq_ops;
+		pde->state_size = proc_ops->proc_state_size;
+		pde->flags |= PROC_ENTRY_proc_seq_ops;
+	} else if (proc_ops->proc_show) {
+		pde->single_show = proc_ops->proc_show;
+		pde->flags |= PROC_ENTRY_proc_show;
+	}
+	if (pde_is_seq_file(pde)) {
+		/* procfs reads and seeks through the seq_file itself */
+		if (WARN_ON_ONCE(proc_ops->proc_read || proc_ops->proc_read_iter ||
+				 proc_ops->proc_lseek))
+			return -EINVAL;
+		/* and frees it, see pde_seq_release() */
+		if (WARN_ON_ONCE(proc_ops->proc_release == seq_release ||
+				 proc_ops->proc_release == seq_release_private ||
+				 proc_ops->proc_release == single_release))
+			return -EINVAL;
 		pde->flags |= PROC_ENTRY_proc_lseek;
+	} else {
+		if (proc_ops->proc_read_iter)
+			pde->flags |= PROC_ENTRY_proc_read_iter;
+		if (proc_ops->proc_lseek)
+			pde->flags |= PROC_ENTRY_proc_lseek;
+	}
+	if (proc_ops->proc_poll)
+		pde->flags |= PROC_ENTRY_proc_poll;
+	if (proc_ops->proc_release)
+		pde->flags |= PROC_ENTRY_proc_release;
+	if (proc_ops->proc_mmap)
+		pde->flags |= PROC_ENTRY_proc_mmap;
+	if (proc_ops->proc_write_buf) {
+		if (WARN_ON_ONCE(proc_ops->proc_write))
+			return -EINVAL;
+		pde->flags |= PROC_ENTRY_proc_write_buf;
+		pde->write_size = proc_ops->proc_write_size ?: PAGE_SIZE - 1;
+		if (proc_ops->proc_flags & PROC_ENTRY_SHORT_WRITES)
+			pde->flags |= PROC_ENTRY_SHORT_WRITES;
+	}
+	if (proc_ops->proc_read_buf) {
+		if (WARN_ON_ONCE(pde_is_seq_file(pde) || proc_ops->proc_read ||
+				 proc_ops->proc_read_iter))
+			return -EINVAL;
+		pde->flags |= PROC_ENTRY_proc_read_buf;
+		pde->read_size = proc_ops->proc_read_size ?: PAGE_SIZE;
+		if (proc_ops->proc_flags & PROC_ENTRY_FULL_READS)
+			pde->flags |= PROC_ENTRY_FULL_READS;
+	}
+	if (proc_ops->proc_ioctl_buf) {
+		if (WARN_ON_ONCE(proc_ops->proc_ioctl))
+			return -EINVAL;
+#ifdef CONFIG_COMPAT
+		/* 32-bit tasks go through the table as well */
+		if (WARN_ON_ONCE(proc_ops->proc_compat_ioctl))
+			return -EINVAL;
+#endif
+		/* the table says what procfs copies, see pde_ioctl_arg() */
+		if (WARN_ON_ONCE(!proc_ops->proc_ioctl_args ||
+				 !proc_ops->proc_nr_ioctl_args))
+			return -EINVAL;
+		pde->flags |= PROC_ENTRY_proc_ioctl_buf;
+	} else if (WARN_ON_ONCE(proc_ops->proc_ioctl_args ||
+				proc_ops->proc_nr_ioctl_args)) {
+		return -EINVAL;
+	}
+	return 0;
+}
+
+/* The open node, see struct pde_open_node. */
+static int pde_init_open_node(struct proc_dir_entry *pde)
+{
+	struct pde_open_node *on;
+
+	if (!S_ISREG(pde->mode))
+		return 0;
+	if (!pde_has_proc_poll(pde) && !pde_tracks_files(pde))
+		return 0;
+	on = kzalloc_obj(*on);
+	if (!on)
+		return -ENOMEM;
+	INIT_LIST_HEAD(&on->files);
+	init_waitqueue_head(&on->poll);
+	pde->open = on;
+	return 0;
+}
+
+/*
+ * The seq_operations of a seq_file entry: procfs's start and stop around the
+ * entry's own next and show, see pde_seq_start().
+ */
+static int pde_init_seq_direct(struct proc_dir_entry *pde)
+{
+	struct seq_operations *ops;
+
+	if (!pde_is_seq_file(pde))
+		return 0;
+	ops = kmalloc_obj(*ops);
+	if (!ops)
+		return -ENOMEM;
+	ops->start = pde_seq_start;
+	ops->stop = pde_seq_stop;
+	if (pde_has_proc_seq_ops(pde)) {
+		ops->next = pde->seq_ops->next;
+		ops->show = pde->seq_ops->show;
+	} else {
+		ops->next = pde_single_next;
+		ops->show = pde->single_show;
+	}
+	pde->seq_direct = ops;
+	return 0;
+}
+
+static void pde_lockdep_init(struct proc_dir_entry *pde,
+			     struct lock_class_key *key)
+{
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	const void *k = key;
+
+	if (!pde_lockdep(pde))
+		return;
+	/*
+	 * To lockdep the pin is a read lock that proc_entry_rundown() takes
+	 * the write side of, see use_pde(). The entries that share
+	 * seq_operations or proc_ops run the same code pinned, so they share
+	 * a class, and those are static objects that lockdep takes as its
+	 * key. The entries that only share a show function get a key per
+	 * registration site instead, see proc_create_single_data(), or the
+	 * key the creator handed in, see proc_create_data_key().
+	 */
+	if (!k)
+		k = pde_has_proc_seq_ops(pde) ? (const void *)pde->seq_ops :
+						pde->proc_ops;
+	lockdep_init_map(&pde->dep_map, "pde->in_use",
+			 (struct lock_class_key *)k, 0);
+#endif
 }
 
 /* returns the registered entry, or frees dp and returns NULL on failure */
 struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
-		struct proc_dir_entry *dp)
+		struct proc_dir_entry *dp, struct lock_class_key *key)
 {
 	if (proc_alloc_inum(&dp->low_ino))
 		goto out_free_entry;
 
-	if (!S_ISDIR(dp->mode))
-		pde_set_flags(dp);
+	if (!S_ISDIR(dp->mode) && pde_set_flags(dp))
+		goto out_free_inum;
+	if (pde_init_open_node(dp))
+		goto out_free_inum;
+	if (pde_init_seq_direct(dp))
+		goto out_free_inum;
+	pde_lockdep_init(dp, key);
 
 	write_lock(&proc_subdir_lock);
 	dp->parent = dir;
@@ -546,7 +675,6 @@ static struct proc_dir_entry *__proc_create(struct proc_dir_entry **parent,
 	ent->subdir = RB_ROOT;
 	refcount_set(&ent->refcnt, 1);
 	spin_lock_init(&ent->pde_unload_lock);
-	INIT_LIST_HEAD(&ent->pde_openers);
 	proc_set_user(ent, (*parent)->uid, (*parent)->gid);
 
 	/* Revalidate everything under /proc/${pid}/net */
@@ -570,7 +698,7 @@ struct proc_dir_entry *proc_symlink(const char *name,
 		ent->data = kmemdup(dest, ent->size + 1, GFP_KERNEL);
 		if (ent->data) {
 			ent->proc_iops = &proc_link_inode_operations;
-			ent = proc_register(parent, ent);
+			ent = proc_register(parent, ent, NULL);
 		} else {
 			pde_free(ent);
 			ent = NULL;
@@ -596,7 +724,7 @@ struct proc_dir_entry *_proc_mkdir(const char *name, umode_t mode,
 		if (force_lookup) {
 			pde_force_lookup(ent);
 		}
-		ent = proc_register(parent, ent);
+		ent = proc_register(parent, ent, NULL);
 	}
 	return ent;
 }
@@ -633,7 +761,7 @@ struct proc_dir_entry *proc_create_mount_point(const char *name)
 		ent->data = NULL;
 		ent->proc_dir_ops = NULL;
 		ent->proc_iops = NULL;
-		ent = proc_register(parent, ent);
+		ent = proc_register(parent, ent, NULL);
 	}
 	return ent;
 }
@@ -669,9 +797,24 @@ struct proc_dir_entry *proc_create_data(const char *name, umode_t mode,
 	if (!p)
 		return NULL;
 	p->proc_ops = proc_ops;
-	return proc_register(parent, p);
+	return proc_register(parent, p, NULL);
 }
 EXPORT_SYMBOL(proc_create_data);
+
+struct proc_dir_entry *proc_create_data_key(const char *name, umode_t mode,
+		struct proc_dir_entry *parent,
+		const struct proc_ops *proc_ops, void *data,
+		struct lock_class_key *key)
+{
+	struct proc_dir_entry *p;
+
+	p = proc_create_reg(name, mode, &parent, data);
+	if (!p)
+		return NULL;
+	p->proc_ops = proc_ops;
+	return proc_register(parent, p, key);
+}
+EXPORT_SYMBOL_GPL(proc_create_data_key);
  
 struct proc_dir_entry *proc_create(const char *name, umode_t mode,
 				   struct proc_dir_entry *parent,
@@ -681,30 +824,9 @@ struct proc_dir_entry *proc_create(const char *name, umode_t mode,
 }
 EXPORT_SYMBOL(proc_create);
 
-static int proc_seq_open(struct inode *inode, struct file *file)
-{
-	struct proc_dir_entry *de = PDE(inode);
-
-	if (de->state_size)
-		return seq_open_private(file, de->seq_ops, de->state_size);
-	return seq_open(file, de->seq_ops);
-}
-
-static int proc_seq_release(struct inode *inode, struct file *file)
-{
-	struct proc_dir_entry *de = PDE(inode);
-
-	if (de->state_size)
-		return seq_release_private(inode, file);
-	return seq_release(inode, file);
-}
-
+/* procfs owns the seq_file of these, see pde_seq_start() */
 static const struct proc_ops proc_seq_ops = {
 	/* not permanent -- can call into arbitrary seq_operations */
-	.proc_open	= proc_seq_open,
-	.proc_read_iter	= seq_read_iter,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= proc_seq_release,
 };
 
 struct proc_dir_entry *proc_create_seq_private(const char *name, umode_t mode,
@@ -719,39 +841,27 @@ struct proc_dir_entry *proc_create_seq_private(const char *name, umode_t mode,
 	p->proc_ops = &proc_seq_ops;
 	p->seq_ops = ops;
 	p->state_size = state_size;
-	return proc_register(parent, p);
+	p->flags |= PROC_ENTRY_proc_seq_ops;
+	return proc_register(parent, p, NULL);
 }
 EXPORT_SYMBOL(proc_create_seq_private);
 
-static int proc_single_open(struct inode *inode, struct file *file)
-{
-	struct proc_dir_entry *de = PDE(inode);
-
-	return single_open(file, de->single_show, de->data);
-}
-
-static const struct proc_ops proc_single_ops = {
-	/* not permanent -- can call into arbitrary ->single_show */
-	.proc_open	= proc_single_open,
-	.proc_read_iter = seq_read_iter,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
-};
-
-struct proc_dir_entry *proc_create_single_data(const char *name, umode_t mode,
+struct proc_dir_entry *__proc_create_single_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent,
-		int (*show)(struct seq_file *, void *), void *data)
+		int (*show)(struct seq_file *, void *), void *data,
+		struct lock_class_key *key)
 {
 	struct proc_dir_entry *p;
 
 	p = proc_create_reg(name, mode, &parent, data);
 	if (!p)
 		return NULL;
-	p->proc_ops = &proc_single_ops;
+	p->proc_ops = &proc_seq_ops;
 	p->single_show = show;
-	return proc_register(parent, p);
+	p->flags |= PROC_ENTRY_proc_show;
+	return proc_register(parent, p, key);
 }
-EXPORT_SYMBOL(proc_create_single_data);
+EXPORT_SYMBOL(__proc_create_single_data);
 
 void proc_set_size(struct proc_dir_entry *de, loff_t size)
 {
@@ -911,26 +1021,19 @@ void proc_remove(struct proc_dir_entry *de)
 EXPORT_SYMBOL(proc_remove);
 
 /*
- * Pull a user buffer into memory and pass it to the file's write handler if
- * one is supplied.  The ->write() method is permitted to modify the
- * kernel-side buffer.
+ * Pass what was written to the file's write handler if one is supplied. The
+ * ->write() method is permitted to modify the buffer.
  */
-ssize_t proc_simple_write(struct file *f, const char __user *ubuf, size_t size,
-			  loff_t *_pos)
+ssize_t proc_simple_write(struct file *f, char *buf, size_t size, loff_t *_pos)
 {
 	struct proc_dir_entry *pde = PDE(file_inode(f));
-	char *buf;
 	int ret;
 
 	if (!pde->write)
 		return -EACCES;
-	if (size == 0 || size > PAGE_SIZE - 1)
+	if (size == 0)
 		return -EINVAL;
-	buf = memdup_user_nul(ubuf, size);
-	if (IS_ERR(buf))
-		return PTR_ERR(buf);
 	ret = pde->write(f, buf, size);
-	kfree(buf);
 	return ret == 0 ? size : ret;
 }
 

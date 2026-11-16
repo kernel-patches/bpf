@@ -31,11 +31,6 @@ static int exitcode_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int exitcode_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, exitcode_proc_show, NULL);
-}
-
 static ssize_t exitcode_proc_write(struct file *file,
 		const char __user *buffer, size_t count, loff_t *pos)
 {
@@ -57,10 +52,7 @@ static ssize_t exitcode_proc_write(struct file *file,
 }
 
 static const struct proc_ops exitcode_proc_ops = {
-	.proc_open	= exitcode_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= exitcode_proc_show,
 	.proc_write	= exitcode_proc_write,
 };
 

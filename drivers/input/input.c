@@ -1218,18 +1218,10 @@ static const struct seq_operations input_devices_seq_ops = {
 	.show	= input_devices_seq_show,
 };
 
-static int input_proc_devices_open(struct inode *inode, struct file *file)
-{
-	return seq_open_private(file, &input_devices_seq_ops,
-				sizeof(struct input_seq_state));
-}
-
 static const struct proc_ops input_devices_proc_ops = {
-	.proc_open	= input_proc_devices_open,
+	.proc_seq_ops	= &input_devices_seq_ops,
+	.proc_state_size = sizeof(struct input_seq_state),
 	.proc_poll	= input_proc_devices_poll,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release_private,
 };
 
 static void *input_handlers_seq_start(struct seq_file *seq, loff_t *pos)
@@ -1279,17 +1271,9 @@ static const struct seq_operations input_handlers_seq_ops = {
 	.show	= input_handlers_seq_show,
 };
 
-static int input_proc_handlers_open(struct inode *inode, struct file *file)
-{
-	return seq_open_private(file, &input_handlers_seq_ops,
-				sizeof(struct input_seq_state));
-}
-
 static const struct proc_ops input_handlers_proc_ops = {
-	.proc_open	= input_proc_handlers_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release_private,
+	.proc_seq_ops = &input_handlers_seq_ops,
+	.proc_state_size = sizeof(struct input_seq_state),
 };
 
 static int __init input_proc_init(void)

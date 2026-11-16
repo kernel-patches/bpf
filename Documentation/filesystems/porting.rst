@@ -1422,3 +1422,15 @@ helpers take a ``const struct mnt_idmap *``. mnt_idmap() and file_mnt_idmap()
 return one. The idmapping is immutable so nothing should have modified it
 anyway. References are taken and dropped via mnt_idmap_get() and
 mnt_idmap_put() as before, both accept a const pointer.
+
+---
+
+**mandatory**
+
+procfs wraps the vm_operations of a mapping made by ->proc_mmap() so
+that ->open(), ->fault(), ->page_mkwrite() and ->access() run with the
+entry pinned, like for a kernfs file. Nothing else of them is called, a
+mapping with a ->close() is refused, and every mapping of an entry has
+to use the same vm_operations. Removing the entry unmaps the mappings
+in its own address space and a fault into one of them is SIGBUS from
+then on.

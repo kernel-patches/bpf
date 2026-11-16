@@ -516,28 +516,9 @@ static const struct seq_operations scsi_seq_ops = {
 	.show	= scsi_seq_show
 };
 
-/**
- * proc_scsi_open - glue function
- * @inode: not used
- * @file: passed to single_open()
- *
- * Associates proc_scsi_show with this file
- */
-static int proc_scsi_open(struct inode *inode, struct file *file)
-{
-	/*
-	 * We don't really need this for the write case but it doesn't
-	 * harm either.
-	 */
-	return seq_open(file, &scsi_seq_ops);
-}
-
 static const struct proc_ops scsi_scsi_proc_ops = {
-	.proc_open	= proc_scsi_open,
-	.proc_read	= seq_read,
+	.proc_seq_ops	= &scsi_seq_ops,
 	.proc_write	= proc_scsi_write,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release,
 };
 
 /**

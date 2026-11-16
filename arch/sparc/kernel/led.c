@@ -60,11 +60,6 @@ static int led_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int led_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, led_proc_show, NULL);
-}
-
 static ssize_t led_proc_write(struct file *file, const char __user *buffer,
 			      size_t count, loff_t *ppos)
 {
@@ -107,10 +102,7 @@ static ssize_t led_proc_write(struct file *file, const char __user *buffer,
 }
 
 static const struct proc_ops led_proc_ops = {
-	.proc_open	= led_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= led_proc_show,
 	.proc_write	= led_proc_write,
 };
 #endif

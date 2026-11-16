@@ -246,11 +246,6 @@ static int dasd_stats_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int dasd_stats_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, dasd_stats_proc_show, NULL);
-}
-
 static ssize_t dasd_stats_proc_write(struct file *file,
 		const char __user *user_buf, size_t user_len, loff_t *pos)
 {
@@ -316,10 +311,7 @@ out_error:
 }
 
 static const struct proc_ops dasd_stats_proc_ops = {
-	.proc_open	= dasd_stats_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= dasd_stats_proc_show,
 	.proc_write	= dasd_stats_proc_write,
 };
 
