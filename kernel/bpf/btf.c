@@ -6015,6 +6015,22 @@ static int btf_check_all_types(struct btf_verifier_env *env)
 		return err;
 
 	env->phase++;
+	/*
+	 * Structs and arrays go first. A walk from a pointer stops at them and hides this loop:
+	 *   ptr -> typedef -> array -+
+	 *             ^--------------+
+	 */
+	for (i = btf->base_btf ? 0 : 1; i < btf->nr_types; i++) {
+		type_id = btf->start_id + i;
+		t = btf_type_by_id(btf, type_id);
+
+		if ((btf_type_is_struct(t) || btf_type_is_array(t)) &&
+		    !env_type_is_resolved(env, type_id)) {
+			err = btf_resolve(env, t, type_id);
+			if (err)
+				return err;
+		}
+	}
 	for (i = btf->base_btf ? 0 : 1; i < btf->nr_types; i++) {
 		type_id = btf->start_id + i;
 		t = btf_type_by_id(btf, type_id);
