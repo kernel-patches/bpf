@@ -950,6 +950,7 @@ static struct testmod_uprobe uprobe = {
 
 static __always_inline int testmod_register_uprobe(loff_t offset)
 {
+	struct inode *inode;
 	int err = -EBUSY;
 
 	if (uprobe.uprobe)
@@ -964,8 +965,14 @@ static __always_inline int testmod_register_uprobe(loff_t offset)
 	if (err)
 		goto out;
 
-	uprobe.uprobe = uprobe_register(d_real_inode(uprobe.path.dentry),
-					offset, 0, &uprobe.consumer);
+	inode = d_real_data_inode(uprobe.path.dentry);
+	if (IS_ERR(inode)) {
+		err = PTR_ERR(inode);
+		path_put(&uprobe.path);
+		goto out;
+	}
+
+	uprobe.uprobe = uprobe_register(inode, offset, 0, &uprobe.consumer);
 	if (IS_ERR(uprobe.uprobe)) {
 		err = PTR_ERR(uprobe.uprobe);
 		path_put(&uprobe.path);
