@@ -6007,8 +6007,8 @@ static int f2fs_migrate_blocks(struct inode *inode, block_t start_blk,
 			}
 
 			f2fs_ffs_mark_subrange_dirty(folio,
-				offset_in_folio(folio, (loff_t)blkidx << PAGE_SHIFT),
-				PAGE_SIZE);
+				f2fs_folio_byte_offset(sbi, folio, blkidx),
+				F2FS_BLKSIZE(sbi));
 			f2fs_folio_mark_dirty(folio);
 			f2fs_folio_put(folio, true);
 		}
@@ -6040,8 +6040,10 @@ static int check_swap_activate(struct swap_info_struct *sis,
 	struct address_space *mapping = swap_file->f_mapping;
 	struct inode *inode = mapping->host;
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	unsigned int blks_per_page = F2FS_BLKS_PER_PAGE(sbi);
 	block_t cur_lblock;
 	block_t last_lblock;
+	block_t max_lblock;
 	block_t pblock;
 	block_t lowest_pblock = -1;
 	block_t highest_pblock = 0;
@@ -6056,9 +6058,12 @@ static int check_swap_activate(struct swap_info_struct *sis,
 	 * to be very smart.
 	 */
 	cur_lblock = 0;
-	last_lblock = F2FS_BYTES_TO_BLK(sbi, i_size_read(inode));
+	/* swap uses whole pages only; ignore a partial tail page */
+	last_lblock = round_down(F2FS_BYTES_TO_BLK(sbi, i_size_read(inode)),
+				 blks_per_page);
+	max_lblock = min_t(u64, last_lblock, (u64)sis->max * blks_per_page);
 
-	while (cur_lblock < last_lblock && cur_lblock < sis->max) {
+	while (cur_lblock < max_lblock) {
 		struct f2fs_map_blocks map;
 		bool last_extent = false;
 retry:
@@ -6093,7 +6098,7 @@ retry:
 			not_aligned++;
 
 			nr_pblocks = roundup(nr_pblocks, blks_per_sec);
-			if (cur_lblock + nr_pblocks > sis->max)
+			if (cur_lblock + nr_pblocks > max_lblock)
 				nr_pblocks -= blks_per_sec;
 
 			/* this extent is last one */
@@ -6114,20 +6119,28 @@ retry:
 			goto retry;
 		}
 
-		if (cur_lblock + nr_pblocks >= sis->max)
-			nr_pblocks = sis->max - cur_lblock;
+		if (cur_lblock + nr_pblocks >= max_lblock)
+			nr_pblocks = max_lblock - cur_lblock;
+
+		if (pblock % blks_per_page || nr_pblocks % blks_per_page) {
+			f2fs_err(sbi, "Swapfile extent is not aligned to PAGE_SIZE");
+			ret = -EINVAL;
+			goto out;
+		}
 
 		if (cur_lblock) {	/* exclude the header page */
-			if (pblock < lowest_pblock)
-				lowest_pblock = pblock;
-			if (pblock + nr_pblocks - 1 > highest_pblock)
-				highest_pblock = pblock + nr_pblocks - 1;
+			if (pblock / blks_per_page < lowest_pblock)
+				lowest_pblock = pblock / blks_per_page;
+			if ((pblock + nr_pblocks) / blks_per_page - 1 > highest_pblock)
+				highest_pblock = (pblock + nr_pblocks) / blks_per_page - 1;
 		}
 
 		/*
 		 * We found a PAGE_SIZE-length, PAGE_SIZE-aligned run of blocks
 		 */
-		ret = add_swap_extent(sis, cur_lblock, nr_pblocks, pblock);
+		ret = add_swap_extent(sis, cur_lblock / blks_per_page,
+				      nr_pblocks / blks_per_page,
+				      pblock / blks_per_page);
 		if (ret < 0)
 			goto out;
 		nr_extents += ret;
@@ -6136,9 +6149,9 @@ retry:
 	ret = nr_extents;
 	*span = 1 + highest_pblock - lowest_pblock;
 	if (cur_lblock == 0)
-		cur_lblock = 1;	/* force Empty message */
-	sis->max = cur_lblock;
-	sis->pages = cur_lblock - 1;
+		cur_lblock = blks_per_page;	/* force Empty message */
+	sis->max = cur_lblock / blks_per_page;
+	sis->pages = sis->max - 1;
 out:
 	if (not_aligned)
 		f2fs_warn(sbi, "Swapfile (%u) is not align to section: 1) creat(), 2) ioctl(F2FS_IOC_SET_PIN_FILE), 3) fallocate(%lu * N)",
