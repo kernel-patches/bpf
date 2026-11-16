@@ -265,6 +265,24 @@ const struct iomap_ops exfat_write_iomap_ops = {
 	.iomap_next	= exfat_write_iomap_next,
 };
 
+static void exfat_iomap_put_folio(struct inode *inode, loff_t pos,
+				  unsigned int copied, struct folio *folio)
+{
+	if (copied) {
+		struct exfat_inode_info *ei = EXFAT_I(inode);
+
+		if (exfat_advance_valid_size(ei, pos + copied))
+			mark_inode_dirty(inode);
+	}
+
+	folio_unlock(folio);
+	folio_put(folio);
+}
+
+const struct iomap_write_ops exfat_iomap_write_ops = {
+	.put_folio	= exfat_iomap_put_folio,
+};
+
 /*
  * exfat_writeback_range - Map folio during writeback
  *
