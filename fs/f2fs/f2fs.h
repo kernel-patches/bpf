@@ -836,7 +836,7 @@ struct f2fs_map_blocks {
 	unsigned int m_len;
 	unsigned int m_flags;
 	unsigned long m_last_pblk;	/* last allocated block, only used for DIO in LFS mode */
-	pgoff_t *m_next_pgofs;		/* point next possible non-hole pgofs */
+	pgoff_t *m_next_blkofs;		/* point next possible non-hole blkofs */
 	pgoff_t *m_next_extent;		/* point to next possible extent */
 	int m_seg_type;
 	bool m_may_create;		/* indicate it is from write path */
@@ -2347,6 +2347,12 @@ static inline bool f2fs_is_multiblock_folio(struct f2fs_sb_info *sbi,
 					    const struct folio *folio)
 {
 	return folio_size(folio) > F2FS_BLKSIZE(sbi);
+}
+
+static inline bool f2fs_has_multiblock_folios(struct inode *inode)
+{
+	return mapping_large_folio_support(inode->i_mapping) ||
+		f2fs_has_subpage_blocks(F2FS_I_SB(inode));
 }
 
 static inline pgoff_t f2fs_folio_lblk(struct f2fs_sb_info *sbi,
@@ -4240,7 +4246,7 @@ bool f2fs_is_checkpointed_node(struct f2fs_sb_info *sbi, nid_t nid);
 bool f2fs_need_inode_block_update(struct f2fs_sb_info *sbi, nid_t ino);
 int f2fs_get_node_info(struct f2fs_sb_info *sbi, nid_t nid,
 				struct node_info *ni, bool checkpoint_context);
-pgoff_t f2fs_get_next_page_offset(struct dnode_of_data *dn, pgoff_t pgofs);
+pgoff_t f2fs_get_next_block_offset(struct dnode_of_data *dn, pgoff_t blkofs);
 int f2fs_get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode);
 int f2fs_truncate_inode_blocks(struct inode *inode, pgoff_t from);
 int f2fs_truncate_xattr_node(struct inode *inode);
@@ -4502,11 +4508,11 @@ int f2fs_reserve_new_blocks(struct dnode_of_data *dn, blkcnt_t count);
 int f2fs_reserve_new_block(struct dnode_of_data *dn);
 int f2fs_get_block_locked(struct dnode_of_data *dn, pgoff_t index);
 int f2fs_reserve_block(struct dnode_of_data *dn, pgoff_t index);
-struct folio *f2fs_get_read_data_folio(struct inode *inode, pgoff_t index,
-		blk_opf_t op_flags, bool for_write, pgoff_t *next_pgofs);
-struct folio *f2fs_find_data_folio(struct inode *inode, pgoff_t index,
-		pgoff_t *next_pgofs);
-struct folio *f2fs_get_lock_data_folio(struct inode *inode, pgoff_t index,
+struct folio *f2fs_get_read_data_folio(struct inode *inode, pgoff_t bidx,
+		blk_opf_t op_flags, bool for_write, pgoff_t *next_blkofs);
+struct folio *f2fs_find_data_folio(struct inode *inode, pgoff_t bidx,
+		pgoff_t *next_blkofs);
+struct folio *f2fs_get_lock_data_folio(struct inode *inode, pgoff_t bidx,
 			bool for_write);
 struct folio *f2fs_get_new_data_folio(struct inode *inode,
 			struct f2fs_cached_block *ientry, pgoff_t index, bool new_i_size);

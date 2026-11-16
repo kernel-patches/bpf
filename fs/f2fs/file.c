@@ -571,7 +571,7 @@ static loff_t f2fs_seek_block(struct file *file, loff_t offset, int whence)
 		} else if (err == -ENOENT) {
 			/* direct node does not exists */
 			if (whence == SEEK_DATA) {
-				pgofs = f2fs_get_next_page_offset(&dn, pgofs);
+				pgofs = f2fs_get_next_block_offset(&dn, pgofs);
 				continue;
 			} else {
 				goto found;
@@ -1356,7 +1356,7 @@ int f2fs_truncate_hole(struct inode *inode, pgoff_t pg_start, pgoff_t pg_end)
 		err = f2fs_get_dnode_of_data(&dn, pg_start, LOOKUP_NODE);
 		if (err) {
 			if (err == -ENOENT) {
-				pg_start = f2fs_get_next_page_offset(&dn,
+				pg_start = f2fs_get_next_block_offset(&dn,
 								pg_start);
 				continue;
 			}
@@ -2026,7 +2026,7 @@ static int f2fs_expand_inode_data(struct inode *inode, loff_t offset,
 					loff_t len, int mode)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-	struct f2fs_map_blocks map = { .m_next_pgofs = NULL,
+	struct f2fs_map_blocks map = { .m_next_blkofs = NULL,
 			.m_next_extent = NULL, .m_seg_type = NO_CHECK_TYPE,
 			.m_may_create = true };
 	struct f2fs_gc_control gc_control = { .victim_segno = NULL_SEGNO,
@@ -3095,7 +3095,7 @@ static int f2fs_defragment_range(struct f2fs_sb_info *sbi,
 					.m_seg_type = NO_CHECK_TYPE,
 					.m_may_create = false };
 	struct extent_info ei = {};
-	pgoff_t pg_start, pg_end, next_pgofs;
+	pgoff_t pg_start, pg_end, next_blkofs;
 	unsigned int total = 0, sec_num;
 	block_t blk_end = 0;
 	bool fragmented = false;
@@ -3139,7 +3139,7 @@ static int f2fs_defragment_range(struct f2fs_sb_info *sbi,
 	}
 
 	map.m_lblk = pg_start;
-	map.m_next_pgofs = &next_pgofs;
+	map.m_next_blkofs = &next_blkofs;
 
 	/*
 	 * lookup mapping info in dnode page cache, skip defragmenting if all
@@ -3153,7 +3153,7 @@ static int f2fs_defragment_range(struct f2fs_sb_info *sbi,
 			goto out;
 
 		if (!(map.m_flags & F2FS_MAP_FLAGS)) {
-			map.m_lblk = next_pgofs;
+			map.m_lblk = next_blkofs;
 			continue;
 		}
 
@@ -3200,7 +3200,7 @@ do_map:
 			goto clear_out;
 
 		if (!(map.m_flags & F2FS_MAP_FLAGS)) {
-			map.m_lblk = next_pgofs;
+			map.m_lblk = next_blkofs;
 			goto check;
 		}
 
@@ -4092,7 +4092,7 @@ int f2fs_precache_extents(struct inode *inode)
 
 	map.m_lblk = 0;
 	map.m_pblk = 0;
-	map.m_next_pgofs = NULL;
+	map.m_next_blkofs = NULL;
 	map.m_next_extent = &m_next_extent;
 	map.m_seg_type = NO_CHECK_TYPE;
 	map.m_may_create = false;
@@ -4385,7 +4385,7 @@ static int f2fs_release_compress_blocks(struct file *filp, unsigned long arg)
 		if (ret) {
 			f2fs_unlock_op(sbi, &lc);
 			if (ret == -ENOENT) {
-				page_idx = f2fs_get_next_page_offset(&dn,
+				page_idx = f2fs_get_next_block_offset(&dn,
 								page_idx);
 				ret = 0;
 				continue;
@@ -4567,7 +4567,7 @@ static int f2fs_reserve_compress_blocks(struct file *filp, unsigned long arg)
 		if (ret) {
 			f2fs_unlock_op(sbi, &lc);
 			if (ret == -ENOENT) {
-				page_idx = f2fs_get_next_page_offset(&dn,
+				page_idx = f2fs_get_next_block_offset(&dn,
 								page_idx);
 				ret = 0;
 				continue;
@@ -4735,7 +4735,7 @@ static int f2fs_sec_trim_file(struct file *filp, unsigned long arg)
 		ret = f2fs_get_dnode_of_data(&dn, index, LOOKUP_NODE);
 		if (ret) {
 			if (ret == -ENOENT) {
-				index = f2fs_get_next_page_offset(&dn, index);
+				index = f2fs_get_next_block_offset(&dn, index);
 				continue;
 			}
 			goto out;

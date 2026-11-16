@@ -145,13 +145,8 @@ static void f2fs_finish_read_bio(struct bio *bio, bool in_task)
 
 	bio_for_each_folio_all(fi, bio) {
 		struct folio *folio = fi.folio;
-		/*
-		 * Cache sbi before the pending count is dropped: a sync reader
-		 * may then release the folio while this bio is still in its
-		 * end_io, so F2FS_F_SB(folio) is no longer safe to use below.
-		 */
-		struct f2fs_sb_info *sbi = F2FS_F_SB(folio);
-		unsigned nr_pages = fi.length >> PAGE_SHIFT;
+		struct f2fs_sb_info *sbi;
+		unsigned int nr_blocks;
 		bool finished = true;
 		bool uptodate = bio->bi_status == BLK_STS_OK;
 
@@ -164,6 +159,10 @@ static void f2fs_finish_read_bio(struct bio *bio, bool in_task)
 			continue;
 		}
 
+		sbi = F2FS_F_SB(folio);
+		nr_blocks = F2FS_BYTES_TO_BLK(sbi, fi.length);
+		sub_cache_counts(sbi, F2FS_RD_DATA, nr_blocks);
+
 		if (f2fs_folio_has_ffs(folio)) {
 			struct f2fs_folio_state *ffs =
 				(struct f2fs_folio_state *)folio->private;
@@ -172,13 +171,10 @@ static void f2fs_finish_read_bio(struct bio *bio, bool in_task)
 			if (uptodate)
 				uptodate = __ffs_mark_subrange_uptodate(folio, ffs,
 						fi.offset, fi.length);
-			ffs->read_blocks_pending -= nr_pages;
+			ffs->read_blocks_pending -= nr_blocks;
 			finished = !ffs->read_blocks_pending;
 			spin_unlock_irqrestore(&ffs->state_lock, flags);
 		}
-
-		while (nr_pages--)
-			dec_cache_count(sbi, F2FS_RD_DATA);
 
 		if (finished)
 			folio_end_read(folio, uptodate);
@@ -1477,7 +1473,7 @@ out:
 
 static struct bio *f2fs_grab_read_bio(struct inode *inode,
 				      struct fsverity_info *vi, block_t blkaddr,
-				      unsigned nr_pages, blk_opf_t op_flag,
+				      unsigned int nr_blocks, blk_opf_t op_flag,
 				      pgoff_t first_idx, bool for_write)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
@@ -1487,7 +1483,7 @@ static struct bio *f2fs_grab_read_bio(struct inode *inode,
 	sector_t sector;
 	struct block_device *bdev = f2fs_target_device(sbi, blkaddr, &sector);
 
-	bio = bio_alloc_bioset(bdev, bio_max_segs(nr_pages),
+	bio = bio_alloc_bioset(bdev, bio_max_segs(nr_blocks),
 			       REQ_OP_READ | op_flag,
 			       for_write ? GFP_NOIO : GFP_KERNEL, &f2fs_bioset);
 	bio->bi_iter.bi_sector = sector;
@@ -1521,27 +1517,29 @@ static struct bio *f2fs_grab_read_bio(struct inode *inode,
 }
 
 /* This can handle encryption stuffs */
-static void f2fs_submit_page_read(struct inode *inode, struct fsverity_info *vi,
-				  struct folio *folio, pgoff_t index,
-				  block_t blkaddr, blk_opf_t op_flags,
-				  bool for_write)
+static void f2fs_submit_block_read(struct inode *inode,
+				   struct fsverity_info *vi,
+				   struct folio *folio, pgoff_t bidx,
+				   block_t blkaddr, blk_opf_t op_flags,
+				   bool for_write)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct bio *bio;
 	size_t offset = 0;
 
-	if (f2fs_folio_has_ffs(folio)) {
-		offset = offset_in_folio(folio, (loff_t)index << PAGE_SHIFT);
+	if (f2fs_is_multiblock_folio(sbi, folio)) {
+		f2fs_ffs_find_or_alloc(folio);
+		offset = f2fs_folio_byte_offset(sbi, folio, bidx);
 		f2fs_update_read_folio_pending(folio, 1);
 	}
 
-	bio = f2fs_grab_read_bio(inode, vi, blkaddr, 1, op_flags, index,
+	bio = f2fs_grab_read_bio(inode, vi, blkaddr, 1, op_flags, bidx,
 				 for_write);
 
 	/* wait for GCed page writeback via generic cache */
 	f2fs_wait_on_block_writeback(inode, blkaddr);
 
-	if (!bio_add_folio(bio, folio, PAGE_SIZE, offset))
+	if (!bio_add_folio(bio, folio, F2FS_BLKSIZE(sbi), offset))
 		f2fs_bug_on(sbi, 1);
 
 	inc_cache_count(sbi, F2FS_RD_DATA);
@@ -1550,12 +1548,12 @@ static void f2fs_submit_page_read(struct inode *inode, struct fsverity_info *vi,
 }
 
 /*
- * Synchronously read a single 4K subpage by reusing f2fs_submit_page_read()
+ * Synchronously read a single block by reusing f2fs_submit_block_read()
  * so that iostat, trace, blk-crypto and post-read handling are all preserved.
  * The caller must have already allocated ffs for the folio.
  */
-static int f2fs_submit_page_read_sync(struct inode *inode, struct folio *folio,
-				      pgoff_t index, block_t blkaddr)
+static int f2fs_submit_block_read_sync(struct inode *inode, struct folio *folio,
+				       pgoff_t index, block_t blkaddr)
 {
 	struct f2fs_folio_state *ffs =
 		(struct f2fs_folio_state *)folio->private;
@@ -1567,8 +1565,8 @@ static int f2fs_submit_page_read_sync(struct inode *inode, struct folio *folio,
 	 * We are holding the folio lock, so use GFP_NOIO for the bio
 	 * allocation to avoid entering mm reclaim.
 	 */
-	f2fs_submit_page_read(inode, NULL, folio, index, blkaddr,
-			      REQ_OP_READ, true);
+	f2fs_submit_block_read(inode, NULL, folio, index, blkaddr,
+			       REQ_OP_READ, true);
 
 	/* Wait until all bios have completed (pending drops back to our bias). */
 	while (READ_ONCE(ffs->read_blocks_pending) != 1)
@@ -1680,24 +1678,23 @@ static inline struct fsverity_info *f2fs_need_verity(const struct inode *inode,
 	return NULL;
 }
 
-struct folio *f2fs_get_read_data_folio(struct inode *inode, pgoff_t index,
-		blk_opf_t op_flags, bool for_write, pgoff_t *next_pgofs)
+struct folio *f2fs_get_read_data_folio(struct inode *inode, pgoff_t bidx,
+		blk_opf_t op_flags, bool for_write, pgoff_t *next_blkofs)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct address_space *mapping = inode->i_mapping;
+	pgoff_t f_index = f2fs_lblk_to_folio_index(sbi, bidx);
 	struct dnode_of_data dn;
 	struct folio *folio;
 	int err;
 
-	folio = f2fs_grab_cache_folio(mapping, index, for_write);
+	folio = f2fs_grab_cache_folio(mapping, f_index, for_write);
 	if (IS_ERR(folio))
 		return folio;
 
-	if (folio_test_large(folio))
-		f2fs_ffs_find_or_alloc(folio);
-
-	if (f2fs_lookup_read_extent_cache_block(inode, index,
+	if (f2fs_lookup_read_extent_cache_block(inode, bidx,
 						&dn.data_blkaddr)) {
-		if (!f2fs_is_valid_blkaddr(F2FS_I_SB(inode), dn.data_blkaddr,
+		if (!f2fs_is_valid_blkaddr(sbi, dn.data_blkaddr,
 						DATA_GENERIC_ENHANCE_READ)) {
 			err = -EFSCORRUPTED;
 			goto put_err;
@@ -1706,29 +1703,29 @@ struct folio *f2fs_get_read_data_folio(struct inode *inode, pgoff_t index,
 	}
 
 	set_new_dnode(&dn, inode, NULL, NULL, 0);
-	err = f2fs_get_dnode_of_data(&dn, index, LOOKUP_NODE);
+	err = f2fs_get_dnode_of_data(&dn, bidx, LOOKUP_NODE);
 	if (err) {
-		if (err == -ENOENT && next_pgofs)
-			*next_pgofs = f2fs_get_next_page_offset(&dn, index);
+		if (err == -ENOENT && next_blkofs)
+			*next_blkofs = f2fs_get_next_block_offset(&dn, bidx);
 		goto put_err;
 	}
 	f2fs_put_dnode(&dn);
 
 	if (unlikely(dn.data_blkaddr == NULL_ADDR)) {
 		err = -ENOENT;
-		if (next_pgofs)
-			*next_pgofs = index + 1;
+		if (next_blkofs)
+			*next_blkofs = bidx + 1;
 		goto put_err;
 	}
 	if (dn.data_blkaddr != NEW_ADDR &&
-			!f2fs_is_valid_blkaddr(F2FS_I_SB(inode),
+			!f2fs_is_valid_blkaddr(sbi,
 						dn.data_blkaddr,
 						DATA_GENERIC_ENHANCE)) {
 		err = -EFSCORRUPTED;
 		goto put_err;
 	}
 got_it:
-	if (f2fs_ffs_test_blk_uptodate(folio, index)) {
+	if (f2fs_ffs_test_blk_uptodate(folio, bidx)) {
 		folio_unlock(folio);
 		return folio;
 	}
@@ -1741,17 +1738,17 @@ got_it:
 	 * f2fs_init_inode_metadata.
 	 */
 	if (dn.data_blkaddr == NEW_ADDR) {
-		size_t offset = offset_in_folio(folio,
-						(loff_t)index << PAGE_SHIFT);
+		size_t offset = f2fs_folio_byte_offset(sbi, folio, bidx);
 
-		folio_zero_segment(folio, offset, offset + PAGE_SIZE);
-		f2fs_ffs_mark_subrange_uptodate(folio, offset, PAGE_SIZE);
+		folio_zero_segment(folio, offset, offset + F2FS_BLKSIZE(sbi));
+		f2fs_ffs_mark_subrange_uptodate(folio, offset, F2FS_BLKSIZE(sbi));
 		folio_unlock(folio);
 		return folio;
 	}
 
-	f2fs_submit_page_read(inode, f2fs_need_verity(inode, index),
-			      folio, index, dn.data_blkaddr, op_flags, for_write);
+	f2fs_submit_block_read(inode, f2fs_need_verity(inode, bidx),
+			       folio, bidx, dn.data_blkaddr, op_flags,
+			       for_write);
 	return folio;
 
 put_err:
@@ -1759,32 +1756,53 @@ put_err:
 	return ERR_PTR(err);
 }
 
-struct folio *f2fs_find_data_folio(struct inode *inode, pgoff_t index,
-					pgoff_t *next_pgofs)
+struct folio *f2fs_find_data_folio(struct inode *inode, pgoff_t bidx,
+					pgoff_t *next_blkofs)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct address_space *mapping = inode->i_mapping;
+	pgoff_t f_index = f2fs_lblk_to_folio_index(sbi, bidx);
 	struct folio *folio;
 
-	folio = f2fs_filemap_get_folio(mapping, index, FGP_ACCESSED, 0);
+	folio = f2fs_filemap_get_folio(mapping, f_index, FGP_ACCESSED, 0);
 	if (IS_ERR(folio))
 		goto read;
 	if (folio_test_uptodate(folio))
 		return folio;
-	f2fs_folio_put(folio, false);
+	/* The folio state is freed under the folio lock. */
+	folio_lock(folio);
+	if (folio->mapping == mapping &&
+	    f2fs_ffs_test_blk_uptodate(folio, bidx)) {
+		folio_unlock(folio);
+		return folio;
+	}
+	f2fs_folio_put(folio, true);
 
 read:
-	folio = f2fs_get_read_data_folio(inode, index, 0, false, next_pgofs);
+	folio = f2fs_get_read_data_folio(inode, bidx, 0, false, next_blkofs);
 	if (IS_ERR(folio))
 		return folio;
 
 	if (folio_test_uptodate(folio))
 		return folio;
 
-	folio_wait_locked(folio);
-	if (unlikely(!folio_test_uptodate(folio))) {
-		f2fs_folio_put(folio, false);
+	folio_lock(folio);
+	if (unlikely(folio->mapping != mapping ||
+		     !f2fs_ffs_test_blk_uptodate(folio, bidx))) {
+		/*
+		 * Reclaim can free the folio state of a clean folio while it
+		 * is unlocked, losing the uptodate state of the block.
+		 */
+		bool freed = folio->mapping == mapping &&
+			     f2fs_is_multiblock_folio(sbi, folio) &&
+			     !f2fs_folio_has_ffs(folio);
+
+		f2fs_folio_put(folio, true);
+		if (freed)
+			goto read;
 		return ERR_PTR(-EIO);
 	}
+	folio_unlock(folio);
 	return folio;
 }
 
@@ -1793,13 +1811,15 @@ read:
  * Because, the callers, functions in dir.c and GC, should be able to know
  * whether this page exists or not.
  */
-struct folio *f2fs_get_lock_data_folio(struct inode *inode, pgoff_t index,
+struct folio *f2fs_get_lock_data_folio(struct inode *inode, pgoff_t bidx,
 							bool for_write)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct address_space *mapping = inode->i_mapping;
 	struct folio *folio;
 
-	folio = f2fs_get_read_data_folio(inode, index, 0, for_write, NULL);
+repeat:
+	folio = f2fs_get_read_data_folio(inode, bidx, 0, for_write, NULL);
 	if (IS_ERR(folio))
 		return folio;
 
@@ -1812,15 +1832,17 @@ struct folio *f2fs_get_lock_data_folio(struct inode *inode, pgoff_t index,
 	}
 
 	/*
-	 * ffs can be released while the folio was unlocked above.  Rebuild it
-	 * for a fully uptodate folio; a partially uptodate one cannot be
-	 * rebuilt and will fail the subpage check below.
+	 * ffs can be released while the folio was unlocked above, losing the
+	 * uptodate state of the blocks of a partially uptodate folio. Read the
+	 * block again in that case.
 	 */
-	if (folio_test_large(folio) && !f2fs_folio_has_ffs(folio))
-		f2fs_ffs_find_or_alloc(folio);
+	if (unlikely(!f2fs_ffs_test_blk_uptodate(folio, bidx))) {
+		bool freed = f2fs_is_multiblock_folio(sbi, folio) &&
+			     !f2fs_folio_has_ffs(folio);
 
-	if (unlikely(!f2fs_ffs_test_blk_uptodate(folio, index))) {
 		f2fs_folio_put(folio, true);
+		if (freed)
+			goto repeat;
 		return ERR_PTR(-EIO);
 	}
 	return folio;
@@ -1838,12 +1860,14 @@ struct folio *f2fs_get_lock_data_folio(struct inode *inode, pgoff_t index,
 struct folio *f2fs_get_new_data_folio(struct inode *inode,
 		struct f2fs_cached_block *ientry, pgoff_t index, bool new_i_size)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct address_space *mapping = inode->i_mapping;
+	pgoff_t f_index = f2fs_lblk_to_folio_index(sbi, index);
 	struct folio *folio;
 	struct dnode_of_data dn;
 	int err;
 
-	folio = f2fs_grab_cache_folio(mapping, index, true);
+	folio = f2fs_grab_cache_folio(mapping, f_index, true);
 	if (IS_ERR(folio)) {
 		/*
 		 * before exiting, we should make sure ientry will be released
@@ -1866,25 +1890,24 @@ struct folio *f2fs_get_new_data_folio(struct inode *inode,
 		goto got_it;
 
 	if (dn.data_blkaddr == NEW_ADDR) {
-		size_t off = offset_in_folio(folio,
-					(loff_t)index << PAGE_SHIFT);
+		size_t off = f2fs_folio_byte_offset(sbi, folio, index);
 
-		folio_zero_segment(folio, off, off + PAGE_SIZE);
-		f2fs_ffs_mark_subrange_uptodate(folio, off, PAGE_SIZE);
+		folio_zero_segment(folio, off, off + F2FS_BLKSIZE(sbi));
+		f2fs_ffs_mark_subrange_uptodate(folio, off, F2FS_BLKSIZE(sbi));
 	} else {
 		f2fs_folio_put(folio, true);
 
 		/* if ientry exists, blkaddr should be NEW_ADDR */
-		f2fs_bug_on(F2FS_I_SB(inode), ientry);
+		f2fs_bug_on(sbi, ientry);
 		folio = f2fs_get_lock_data_folio(inode, index, true);
 		if (IS_ERR(folio))
 			return folio;
 	}
 got_it:
 	if (new_i_size && i_size_read(inode) <
-				F2FS_BLK_TO_BYTES(F2FS_I_SB(inode), index + 1))
+				F2FS_BLK_TO_BYTES(sbi, index + 1))
 		f2fs_i_size_write(inode,
-				F2FS_BLK_TO_BYTES(F2FS_I_SB(inode), index + 1));
+				F2FS_BLK_TO_BYTES(sbi, index + 1));
 	return folio;
 }
 
@@ -1965,7 +1988,7 @@ int f2fs_get_block_locked(struct dnode_of_data *dn, pgoff_t index)
 
 static int f2fs_map_no_dnode(struct inode *inode,
 		struct f2fs_map_blocks *map, struct dnode_of_data *dn,
-		pgoff_t pgoff)
+		pgoff_t blkofs)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 
@@ -1978,10 +2001,10 @@ static int f2fs_map_no_dnode(struct inode *inode,
 	    (is_sbi_flag_set(sbi, SBI_IS_SHUTDOWN) || f2fs_cp_error(sbi)))
 		return -EIO;
 
-	if (map->m_next_pgofs)
-		*map->m_next_pgofs = f2fs_get_next_page_offset(dn, pgoff);
+	if (map->m_next_blkofs)
+		*map->m_next_blkofs = f2fs_get_next_block_offset(dn, blkofs);
 	if (map->m_next_extent)
-		*map->m_next_extent = f2fs_get_next_page_offset(dn, pgoff);
+		*map->m_next_extent = f2fs_get_next_block_offset(dn, blkofs);
 	return 0;
 }
 
@@ -2188,19 +2211,19 @@ next_block:
 			goto sync_out;
 		case F2FS_GET_BLOCK_FIEMAP:
 			if (blkaddr == NULL_ADDR) {
-				if (map->m_next_pgofs)
-					*map->m_next_pgofs = pgofs + 1;
+				if (map->m_next_blkofs)
+					*map->m_next_blkofs = pgofs + 1;
 				goto sync_out;
 			}
 			break;
 		case F2FS_GET_BLOCK_DIO:
-			if (map->m_next_pgofs)
-				*map->m_next_pgofs = pgofs + 1;
+			if (map->m_next_blkofs)
+				*map->m_next_blkofs = pgofs + 1;
 			break;
 		default:
 			/* for defragment case */
-			if (map->m_next_pgofs)
-				*map->m_next_pgofs = pgofs + 1;
+			if (map->m_next_blkofs)
+				*map->m_next_blkofs = pgofs + 1;
 			goto sync_out;
 		}
 	}
@@ -2341,7 +2364,7 @@ static bool __f2fs_overwrite_io(struct inode *inode, loff_t pos, size_t len,
 		return false;
 
 	map.m_lblk = F2FS_BYTES_TO_BLK(F2FS_I_SB(inode), pos);
-	map.m_next_pgofs = NULL;
+	map.m_next_blkofs = NULL;
 	map.m_next_extent = NULL;
 	map.m_seg_type = NO_CHECK_TYPE;
 	map.m_may_create = false;
@@ -2444,7 +2467,7 @@ int f2fs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_map_blocks map;
 	sector_t start_blk, last_blk, blk_len, max_len;
-	pgoff_t next_pgofs;
+	pgoff_t next_blkofs;
 	u64 logical = 0, phys = 0, size = 0;
 	u32 flags = 0;
 	int ret = 0;
@@ -2494,7 +2517,7 @@ next:
 	memset(&map, 0, sizeof(map));
 	map.m_lblk = start_blk;
 	map.m_len = blk_len;
-	map.m_next_pgofs = &next_pgofs;
+	map.m_next_blkofs = &next_blkofs;
 	map.m_seg_type = NO_CHECK_TYPE;
 
 	if (compr_cluster) {
@@ -2508,7 +2531,7 @@ next:
 
 	/* HOLE */
 	if (!compr_cluster && !(map.m_flags & F2FS_MAP_FLAGS)) {
-		start_blk = next_pgofs;
+		start_blk = next_blkofs;
 
 		if (F2FS_BLK_TO_BYTES(sbi, start_blk) < maxbytes)
 			goto prep_next;
@@ -2644,7 +2667,7 @@ static int f2fs_read_single_page(struct inode *inode, struct fsverity_info *vi,
 		if (block_in_file > map->m_lblk &&
 			block_in_file < (map->m_lblk + map->m_len))
 			goto got_it;
-	} else if (block_in_file < *map->m_next_pgofs) {
+	} else if (block_in_file < *map->m_next_blkofs) {
 		goto got_it;
 	}
 
@@ -3209,23 +3232,26 @@ static bool find_next_valid_block(const struct folio *folio,
 				  size_t orig_off, size_t *need_off,
 				  size_t len)
 {
+	struct f2fs_sb_info *sbi = F2FS_M_SB(folio->mapping);
 	size_t start = orig_off;
 	size_t end = start + len;
 	size_t head, tail;
 	pgoff_t index;
 
-	if (start & (PAGE_SIZE - 1)) {
-		head = round_down(start, PAGE_SIZE);
-		index = folio->index + (head >> PAGE_SHIFT);
+	if (start & F2FS_BLKSIZE_MASK(sbi)) {
+		head = round_down(start, F2FS_BLKSIZE(sbi));
+		index = f2fs_folio_lblk(sbi, folio) +
+			F2FS_BYTES_TO_BLK(sbi, head);
 		if (!f2fs_ffs_test_blk_uptodate(folio, index)) {
 			*need_off = head;
 			return true;
 		}
 	}
 
-	if (end & (PAGE_SIZE - 1)) {
-		tail = round_down(end, PAGE_SIZE);
-		index = folio->index + (tail >> PAGE_SHIFT);
+	if (end & F2FS_BLKSIZE_MASK(sbi)) {
+		tail = round_down(end, F2FS_BLKSIZE(sbi));
+		index = f2fs_folio_lblk(sbi, folio) +
+			F2FS_BYTES_TO_BLK(sbi, tail);
 		if (!f2fs_ffs_test_blk_uptodate(folio, index)) {
 			*need_off = tail;
 			return true;
@@ -3248,26 +3274,34 @@ static unsigned int ffs_next_nonuptodate_subpage(struct f2fs_folio_state *ffs,
 }
 
 static void f2fs_skip_fully_uptodate_front(struct folio *folio,
-			pgoff_t *index, pgoff_t *offset, unsigned int *nrpages,
-			unsigned int *max_nr_pages)
+			pgoff_t *index, pgoff_t *offset, unsigned int *nr_blocks,
+			unsigned int *max_nr_blocks)
 {
 	struct f2fs_folio_state *ffs;
 	unsigned int next, skipped;
 
-	if (!f2fs_folio_has_ffs(folio) || !*nrpages)
+	if (folio_test_uptodate(folio)) {
+		*index += *nr_blocks;
+		*offset += *nr_blocks;
+		*max_nr_blocks -= *nr_blocks;
+		*nr_blocks = 0;
+		return;
+	}
+
+	if (!f2fs_folio_has_ffs(folio) || !*nr_blocks)
 		return;
 
 	ffs = (struct f2fs_folio_state *)folio->private;
 	next = ffs_next_nonuptodate_subpage(ffs, *offset,
-					    *offset + *nrpages - 1);
+					    *offset + *nr_blocks - 1);
 	skipped = next - *offset;
 	if (!skipped)
 		return;
 
 	*index += skipped;
 	*offset += skipped;
-	*nrpages -= skipped;
-	*max_nr_pages -= skipped;
+	*nr_blocks -= skipped;
+	*max_nr_blocks -= skipped;
 }
 
 static void f2fs_truncate_read_extent(struct inode *inode, struct folio *folio,
@@ -3278,7 +3312,7 @@ static void f2fs_truncate_read_extent(struct inode *inode, struct folio *folio,
 	struct f2fs_folio_state *ffs;
 	unsigned int next, end;
 
-	if (!f2fs_folio_has_ffs(folio) || *len_blks <= 1)
+	if (*len_blks <= 1)
 		return;
 
 	if (f2fs_is_multi_device(sbi)) {
@@ -3289,8 +3323,11 @@ static void f2fs_truncate_read_extent(struct inode *inode, struct folio *folio,
 	}
 	*len_blks = min_t(unsigned int, *len_blks,
 			  (unsigned int)fscrypt_limit_io_blocks(inode,
-							folio->index + offset,
-							*len_blks));
+					f2fs_folio_lblk(sbi, folio) + offset,
+					*len_blks));
+
+	if (!f2fs_folio_has_ffs(folio) || *len_blks <= 1)
+		return;
 
 	ffs = (struct f2fs_folio_state *)folio->private;
 	end = offset + *len_blks - 1;
@@ -3303,13 +3340,16 @@ static int f2fs_read_data_large_folio(struct inode *inode,
 		struct fsverity_info *vi,
 		struct readahead_control *rac, struct folio *folio)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct bio *bio = NULL;
 	sector_t last_block_in_bio = 0;
 	struct f2fs_map_blocks map = {0, };
-	pgoff_t index, offset, next_pgofs = 0;
-	unsigned max_nr_pages = rac ? readahead_count(rac) :
-				folio_nr_pages(folio);
-	unsigned nrpages, len_blks;
+	pgoff_t index, offset, next_blkofs = 0;
+	unsigned int max_nr_blocks = rac ?
+				(readahead_count(rac) << F2FS_LOG_BLKS_PER_PAGE(sbi)) :
+				f2fs_blocks_per_folio(sbi, folio);
+	unsigned int nr_blocks, len_blks;
+	sector_t last_block_in_file;
 	struct f2fs_folio_state *ffs;
 	int ret = 0;
 	bool folio_in_bio = false;
@@ -3322,34 +3362,34 @@ next_folio:
 	if (!folio)
 		goto out;
 
-	f2fs_update_read_folio_count(F2FS_I_SB(inode), folio);
+	f2fs_update_read_folio_count(sbi, folio);
 
 	folio_in_bio = false;
-	ffs = NULL;
-	if (folio_test_large(folio)) {
-		/*
-		 * Allocate the folio state before doing anything with the
-		 * folio, so that the block mapping helpers below can rely on
-		 * it.
-		 */
-		ffs = f2fs_ffs_find_or_alloc(folio);
-	}
-	index = folio->index;
+	index = f2fs_folio_lblk(sbi, folio);
 	offset = 0;
-	nrpages = folio_nr_pages(folio);
+	nr_blocks = f2fs_blocks_per_folio(sbi, folio);
+	last_block_in_file = F2FS_BLK_ALIGN(sbi, f2fs_readpage_limit(inode));
 
-	for (; nrpages;
-	     nrpages -= len_blks, max_nr_pages -= len_blks,
+	for (; nr_blocks;
+	     nr_blocks -= len_blks, max_nr_blocks -= len_blks,
 	     index += len_blks, offset += len_blks) {
 		sector_t block_nr;
+		bool whole_folio_in_bio;
 		unsigned int i;
+		size_t page_offset;
 
 		len_blks = 1;
 
 		f2fs_skip_fully_uptodate_front(folio, &index, &offset,
-					       &nrpages, &max_nr_pages);
-		if (!nrpages)
+					       &nr_blocks, &max_nr_blocks);
+		if (!nr_blocks)
 			break;
+
+		page_offset = F2FS_BLK_TO_BYTES(sbi, offset);
+
+		/* The blocks past EOF are zeroed below without mapping. */
+		if (index >= last_block_in_file)
+			goto got_it;
 
 		/*
 		 * Map blocks using the previous result first.
@@ -3358,7 +3398,7 @@ next_folio:
 			if (index > map.m_lblk &&
 				index < (map.m_lblk + map.m_len))
 				goto got_it;
-		} else if (index < next_pgofs) {
+		} else if (index < next_blkofs) {
 			/* hole case */
 			goto got_it;
 		}
@@ -3368,26 +3408,30 @@ next_folio:
 		 * done with this page.
 		 */
 		memset(&map, 0, sizeof(map));
-		map.m_next_pgofs = &next_pgofs;
+		map.m_next_blkofs = &next_blkofs;
 		map.m_seg_type = NO_CHECK_TYPE;
 		map.m_lblk = index;
-		map.m_len = max_nr_pages;
+		map.m_len = max_nr_blocks;
 
 		ret = f2fs_map_blocks(inode, &map, F2FS_GET_BLOCK_DEFAULT);
 		if (ret)
 			goto err_out;
 got_it:
-		if ((map.m_flags & F2FS_MAP_MAPPED)) {
+		/* Zero the blocks past EOF, as f2fs_read_single_page() does. */
+		if ((map.m_flags & F2FS_MAP_MAPPED) &&
+		    index < last_block_in_file) {
 			block_nr = map.m_pblk + index - map.m_lblk;
 
-			len_blks = min_t(unsigned int, nrpages, max_nr_pages);
+			len_blks = min_t(unsigned int, nr_blocks, max_nr_blocks);
 			len_blks = min_t(unsigned int, len_blks,
 					(unsigned int)(map.m_lblk + map.m_len - index));
+			len_blks = min_t(unsigned int, len_blks,
+					 last_block_in_file - index);
 			f2fs_truncate_read_extent(inode, folio, offset,
 						  block_nr, &len_blks);
 
 			for (i = 0; i < len_blks; i++) {
-				if (!f2fs_is_valid_blkaddr(F2FS_I_SB(inode),
+				if (!f2fs_is_valid_blkaddr(sbi,
 						block_nr + i,
 						DATA_GENERIC_ENHANCE_READ)) {
 					ret = -EFSCORRUPTED;
@@ -3395,18 +3439,21 @@ got_it:
 				}
 			}
 
+			whole_folio_in_bio = !f2fs_folio_has_ffs(folio) &&
+					offset == 0 &&
+					len_blks == f2fs_blocks_per_folio(sbi, folio);
 		} else {
-			size_t page_offset = offset << PAGE_SHIFT;
-
-			folio_zero_range(folio, page_offset, PAGE_SIZE);
-			if (vi && !fsverity_verify_blocks(vi, folio, PAGE_SIZE, page_offset)) {
+			folio_zero_range(folio, page_offset, F2FS_BLKSIZE(sbi));
+			if (vi && !fsverity_verify_blocks(vi, folio,
+					F2FS_BLKSIZE(sbi), page_offset)) {
 				ret = -EIO;
 				goto err_out;
 			}
-			if (folio_test_large(folio)) {
+			if (f2fs_is_multiblock_folio(sbi, folio)) {
+				ffs = f2fs_ffs_find_or_alloc(folio);
 				spin_lock_irq(&ffs->state_lock);
 				__ffs_mark_subrange_uptodate(folio, ffs,
-						page_offset, PAGE_SIZE);
+						page_offset, F2FS_BLKSIZE(sbi));
 				spin_unlock_irq(&ffs->state_lock);
 			}
 			continue;
@@ -3415,7 +3462,10 @@ got_it:
 		/* We must increment read_blocks_pending before possible BIOs submitting
 		 * to prevent from premature folio_end_read() call on folio
 		 */
-		if (folio_test_large(folio)) {
+		ffs = NULL;
+		if (f2fs_is_multiblock_folio(sbi, folio) && !whole_folio_in_bio) {
+			ffs = f2fs_ffs_find_or_alloc(folio);
+
 			/* set the bitmap to wait */
 			f2fs_update_read_folio_pending(folio, len_blks);
 		}
@@ -3424,16 +3474,16 @@ got_it:
 		 * This page will go to BIO.  Do we need to send this
 		 * BIO off first?
 		 */
-		if (bio && (!page_is_mergeable(F2FS_I_SB(inode), bio,
+		if (bio && (!page_is_mergeable(sbi, bio,
 						last_block_in_bio, block_nr) ||
 			!f2fs_crypt_mergeable_bio(bio, inode, index, NULL))) {
 submit_and_realloc:
-			f2fs_submit_read_bio(F2FS_I_SB(inode), bio, DATA);
+			f2fs_submit_read_bio(sbi, bio, DATA);
 			bio = NULL;
 		}
 		if (bio == NULL)
 			bio = f2fs_grab_read_bio(inode, vi,
-					block_nr, max_nr_pages,
+					block_nr, max_nr_blocks,
 					f2fs_ra_op_flags(rac),
 					index, false);
 
@@ -3444,33 +3494,33 @@ submit_and_realloc:
 		for (i = 0; i < len_blks; i++)
 			f2fs_wait_on_block_writeback(inode, block_nr + i);
 
-		if (!bio_add_folio(bio, folio,
-				len_blks * F2FS_BLKSIZE(F2FS_I_SB(inode)),
-				offset << PAGE_SHIFT))
+		if (!bio_add_folio(bio, folio, F2FS_BLK_TO_BYTES(sbi, len_blks),
+					page_offset))
 			goto submit_and_realloc;
 
 		folio_in_bio = true;
-		for (i = 0; i < len_blks; i++)
-			inc_cache_count(F2FS_I_SB(inode), F2FS_RD_DATA);
-		f2fs_update_iostat(F2FS_I_SB(inode), NULL, FS_DATA_READ_IO,
-				len_blks * F2FS_BLKSIZE(F2FS_I_SB(inode)));
+		add_cache_counts(sbi, F2FS_RD_DATA, len_blks);
+		f2fs_update_iostat(sbi, NULL, FS_DATA_READ_IO,
+				F2FS_BLK_TO_BYTES(sbi, len_blks));
 		last_block_in_bio = block_nr + len_blks - 1;
 	}
 	trace_f2fs_read_folio(folio, DATA);
-err_out:
-	if (!folio_in_bio)
-		folio_end_read(folio, !ret);
-	if (ret)
-		goto out;
+	if (!folio_in_bio) {
+		if (!folio_test_uptodate(folio))
+			folio_mark_uptodate(folio);
+		folio_unlock(folio);
+	}
 	if (rac) {
 		folio = readahead_folio(rac);
 		goto next_folio;
 	}
 out:
-	f2fs_submit_read_bio(F2FS_I_SB(inode), bio, DATA);
-	if (ret && folio_in_bio) {
-		/* Wait bios and clear uptodate. */
-		folio_lock(folio);
+	f2fs_submit_read_bio(sbi, bio, DATA);
+	return ret;
+err_out:
+	f2fs_submit_read_bio(sbi, bio, DATA);
+	/* The read completion unlocks a folio in the bio, not uptodate. */
+	if (!folio_in_bio) {
 		folio_clear_uptodate(folio);
 		folio_unlock(folio);
 	}
@@ -3501,13 +3551,12 @@ static int f2fs_mpage_readpages(struct inode *inode, struct fsverity_info *vi,
 	pgoff_t nc_cluster_idx = NULL_CLUSTER;
 	pgoff_t index;
 #endif
-	pgoff_t next_pgofs = 0;
+	pgoff_t next_blkofs = 0;
 	unsigned nr_pages = rac ? readahead_count(rac) : 1;
-	struct address_space *mapping = rac ? rac->mapping : folio->mapping;
 	unsigned max_nr_pages = nr_pages;
 	int ret = 0;
 
-	if (mapping_large_folio_support(mapping))
+	if (f2fs_has_multiblock_folios(inode))
 		return f2fs_read_data_large_folio(inode, vi, rac, folio);
 
 #ifdef CONFIG_F2FS_FS_COMPRESSION
@@ -3522,7 +3571,7 @@ static int f2fs_mpage_readpages(struct inode *inode, struct fsverity_info *vi,
 	map.m_lblk = 0;
 	map.m_len = 0;
 	map.m_flags = 0;
-	map.m_next_pgofs = &next_pgofs;
+	map.m_next_blkofs = &next_blkofs;
 	map.m_next_extent = NULL;
 	map.m_seg_type = NO_CHECK_TYPE;
 	map.m_may_create = false;
@@ -3895,7 +3944,7 @@ out:
 	/*
 	 * Do not clear gcing flag on failure here: the caller will redirty
 	 * the folio and keep the flag so that it can be guaranteed by
-	 * checkpoint, or drop the flag by itself, e.g. move_data_page().
+	 * checkpoint, or drop the flag by itself, e.g. move_data_cache_block().
 	 */
 	if (!submitted && pending_added)
 		f2fs_ffs_put_write_pending(folio, 1);
@@ -5276,7 +5325,7 @@ static int prepare_large_folio_write_begin(struct inode *inode,
 					  DATA_GENERIC_ENHANCE_READ))
 			return -EFSCORRUPTED;
 
-		err = f2fs_submit_page_read_sync(inode, folio, index, blkaddr);
+		err = f2fs_submit_block_read_sync(inode, folio, index, blkaddr);
 		if (err)
 			return err;
 	}
@@ -5327,8 +5376,7 @@ static int prepare_large_folio_atomic_write_begin(struct inode *inode,
 					   DATA_GENERIC_ENHANCE_READ))
 			return -EFSCORRUPTED;
 
-		err = f2fs_submit_page_read_sync(inode, folio, index,
-						blkaddr);
+		err = f2fs_submit_block_read_sync(inode, folio, index, blkaddr);
 		if (err)
 			return err;
 balance:
@@ -5485,9 +5533,9 @@ repeat:
 		 * folio's owner; otherwise an unencrypted @inode whose COW inode
 		 * is encrypted hits a NULL ->i_crypt_info on decryption.
 		 */
-		f2fs_submit_page_read(inode,
-				      NULL, /* can't write to fsverity files */
-				      folio, index, blkaddr, 0, true);
+		f2fs_submit_block_read(inode,
+				       NULL, /* can't write to fsverity files */
+				       folio, index, blkaddr, 0, true);
 
 		folio_lock(folio);
 		if (unlikely(folio->mapping != mapping)) {
@@ -5636,6 +5684,16 @@ bool f2fs_release_folio(struct folio *folio, gfp_t wait)
 	if (folio_test_dirty(folio))
 		return false;
 
+	/*
+	 * The folio state holds the uptodate state of the blocks of a folio
+	 * that is not fully uptodate. Keep it while the folio has users other
+	 * than the caller, e.g. a dentry lookup that parses a block without
+	 * the folio lock, so that the block is not read again under them.
+	 */
+	if (f2fs_folio_has_ffs(folio) && !folio_test_uptodate(folio) &&
+	    folio_ref_count(folio) > folio_expected_ref_count(folio) + 1)
+		return false;
+
 	ffs_detach_free(folio);
 	return true;
 }
@@ -5728,7 +5786,7 @@ static sector_t f2fs_bmap(struct address_space *mapping, sector_t block)
 		memset(&map, 0, sizeof(map));
 		map.m_lblk = block;
 		map.m_len = 1;
-		map.m_next_pgofs = NULL;
+		map.m_next_blkofs = NULL;
 		map.m_seg_type = NO_CHECK_TYPE;
 
 		if (!f2fs_map_blocks(inode, &map, F2FS_GET_BLOCK_BMAP))
@@ -5847,7 +5905,7 @@ retry:
 		memset(&map, 0, sizeof(map));
 		map.m_lblk = cur_lblock;
 		map.m_len = last_lblock - cur_lblock;
-		map.m_next_pgofs = NULL;
+		map.m_next_blkofs = NULL;
 		map.m_next_extent = NULL;
 		map.m_seg_type = NO_CHECK_TYPE;
 		map.m_may_create = false;
@@ -5987,6 +6045,43 @@ static void f2fs_swap_deactivate(struct file *file)
 }
 #endif
 
+static bool f2fs_is_partially_uptodate(struct folio *folio, size_t from,
+				       size_t count)
+{
+	struct inode *inode = folio->mapping->host;
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	struct f2fs_folio_state *ffs;
+	unsigned int first, last, i;
+
+	if (folio_test_uptodate(folio))
+		return true;
+
+	if (f2fs_has_inline_data(inode) || !f2fs_is_multiblock_folio(sbi, folio))
+		return false;
+
+	if (!f2fs_folio_has_ffs(folio))
+		return false;
+
+	if (from >= folio_size(folio))
+		return false;
+
+	count = min_t(size_t, folio_size(folio) - from, count);
+	if (!count)
+		return false;
+
+	first = F2FS_BYTES_TO_BLK(sbi, from);
+	last = F2FS_BYTES_TO_BLK(sbi, from + count - 1);
+
+	ffs = folio->private;
+
+	for (i = first; i <= last; i++) {
+		if (!test_bit(i, ffs->state))
+			return false;
+	}
+
+	return true;
+}
+
 const struct address_space_operations f2fs_dblock_aops = {
 	.read_folio	= f2fs_read_data_folio,
 	.readahead	= f2fs_readahead,
@@ -5997,6 +6092,7 @@ const struct address_space_operations f2fs_dblock_aops = {
 	.migrate_folio	= filemap_migrate_folio,
 	.invalidate_folio = f2fs_invalidate_folio,
 	.release_folio	= f2fs_release_folio,
+	.is_partially_uptodate = f2fs_is_partially_uptodate,
 	.bmap		= f2fs_bmap,
 	.swap_activate  = f2fs_swap_activate,
 	.swap_deactivate = f2fs_swap_deactivate,
@@ -6087,13 +6183,13 @@ static int f2fs_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_map_blocks map = { NULL, };
-	pgoff_t next_pgofs = 0;
+	pgoff_t next_blkofs = 0;
 	int err;
 
 	map.m_lblk = F2FS_BYTES_TO_BLK(sbi, offset);
 	map.m_len = F2FS_BYTES_TO_BLK(sbi, offset + length - 1) -
 							map.m_lblk + 1;
-	map.m_next_pgofs = &next_pgofs;
+	map.m_next_blkofs = &next_blkofs;
 	map.m_seg_type = f2fs_rw_hint_to_seg_type(F2FS_I_SB(inode),
 						inode->i_write_hint);
 	if (flags & IOMAP_WRITE && iomap->private) {
@@ -6146,7 +6242,7 @@ static int f2fs_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 			return -ENOTBLK;
 
 		if (map.m_pblk == NULL_ADDR) {
-			iomap->length = F2FS_BLK_TO_BYTES(sbi, next_pgofs) -
+			iomap->length = F2FS_BLK_TO_BYTES(sbi, next_blkofs) -
 							iomap->offset;
 			iomap->type = IOMAP_HOLE;
 		} else if (map.m_pblk == NEW_ADDR) {
