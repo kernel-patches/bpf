@@ -872,7 +872,7 @@ static void f2fs_pre_evict_inode(struct inode *inode)
 	    test_opt(sbi, COMPRESS_CACHE) && f2fs_compressed_file(inode))
 		f2fs_invalidate_compress_pages(sbi, inode->i_ino);
 
-	f2fs_bug_on(sbi, get_dirty_pages(inode));
+	f2fs_bug_on(sbi, get_dirty_blocks(inode));
 	f2fs_remove_dirty_inode(inode);
 	f2fs_remove_donate_inode(inode);
 

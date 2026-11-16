@@ -957,7 +957,7 @@ struct f2fs_inode_info {
 	unsigned long flags[BITS_TO_LONGS(FI_MAX)];	/* use to pass per-file flags */
 	unsigned int ioprio_hint;	/* hint for IO priority */
 	struct f2fs_rwsem i_sem;	/* protect fi info */
-	atomic_t dirty_pages;		/* # of dirty pages */
+	atomic_t dirty_blocks;		/* # of dirty blocks */
 	f2fs_hash_t chash;		/* hash value of given file name */
 	unsigned int clevel;		/* maximum level of given file name */
 	struct task_struct *task;	/* lookup and create consistency */
@@ -2336,6 +2336,8 @@ static inline unsigned int f2fs_blocks_per_folio(struct f2fs_sb_info *sbi,
 	return F2FS_BYTES_TO_BLK(sbi, folio_size(folio));
 }
 
+#define F2FS_LOG_BLKS_PER_PAGE(sbi)	(PAGE_SHIFT - (sbi)->log_blocksize)
+
 static inline bool f2fs_has_subpage_blocks(struct f2fs_sb_info *sbi)
 {
 	return F2FS_BLKSIZE(sbi) < PAGE_SIZE;
@@ -2979,40 +2981,36 @@ static inline void dec_cache_count(struct f2fs_sb_info *sbi, int count_type)
 	sub_cache_counts(sbi, count_type, 1);
 }
 
-/*
- * Account @nr dirty pages for @inode; one page is
- * (PAGE_SIZE >> log_blocksize) filesystem blocks.
- */
-static inline void inode_add_dirty_blocks(struct inode *inode, int nr)
+static inline void inode_add_dirty_blocks(struct inode *inode,
+					  unsigned int nr_blocks)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-	int blocks = nr * (PAGE_SIZE >> sbi->log_blocksize);
 
-	atomic_add(blocks, &F2FS_I(inode)->dirty_pages);
+	atomic_add(nr_blocks, &F2FS_I(inode)->dirty_blocks);
 	if (S_ISDIR(inode->i_mode))
-		add_cache_counts(sbi, F2FS_DIRTY_DENTS, blocks);
+		add_cache_counts(sbi, F2FS_DIRTY_DENTS, nr_blocks);
 	else
-		add_cache_counts(sbi, F2FS_DIRTY_DATA, blocks);
+		add_cache_counts(sbi, F2FS_DIRTY_DATA, nr_blocks);
 	if (IS_NOQUOTA(inode))
-		add_cache_counts(sbi, F2FS_DIRTY_QDATA, blocks);
+		add_cache_counts(sbi, F2FS_DIRTY_QDATA, nr_blocks);
 }
 
-static inline void inode_sub_dirty_blocks(struct inode *inode, int nr)
+static inline void inode_sub_dirty_blocks(struct inode *inode,
+					  unsigned int nr_blocks)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-	int blocks = nr * (PAGE_SIZE >> sbi->log_blocksize);
 
 	if (!S_ISDIR(inode->i_mode) && !S_ISREG(inode->i_mode) &&
 			!S_ISLNK(inode->i_mode))
 		return;
 
-	atomic_sub(blocks, &F2FS_I(inode)->dirty_pages);
+	atomic_sub(nr_blocks, &F2FS_I(inode)->dirty_blocks);
 	if (S_ISDIR(inode->i_mode))
-		sub_cache_counts(sbi, F2FS_DIRTY_DENTS, blocks);
+		sub_cache_counts(sbi, F2FS_DIRTY_DENTS, nr_blocks);
 	else
-		sub_cache_counts(sbi, F2FS_DIRTY_DATA, blocks);
+		sub_cache_counts(sbi, F2FS_DIRTY_DATA, nr_blocks);
 	if (IS_NOQUOTA(inode))
-		sub_cache_counts(sbi, F2FS_DIRTY_QDATA, blocks);
+		sub_cache_counts(sbi, F2FS_DIRTY_QDATA, nr_blocks);
 }
 
 static inline void inode_inc_dirty_block(struct inode *inode)
@@ -3052,9 +3050,9 @@ static inline s64 get_nr_caches(struct f2fs_sb_info *sbi, int count_type)
 	return atomic_read(&sbi->nr_caches[count_type]);
 }
 
-static inline int get_dirty_pages(struct inode *inode)
+static inline int get_dirty_blocks(struct inode *inode)
 {
-	return atomic_read(&F2FS_I(inode)->dirty_pages);
+	return atomic_read(&F2FS_I(inode)->dirty_blocks);
 }
 
 static inline int get_blocktype_secs(struct f2fs_sb_info *sbi, int block_type)

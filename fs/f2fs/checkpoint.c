@@ -1316,7 +1316,7 @@ static void __remove_dirty_inode(struct inode *inode, enum inode_type type)
 {
 	int flag = (type == DIR_INODE) ? FI_DIRTY_DIR : FI_DIRTY_FILE;
 
-	if (get_dirty_pages(inode) || !is_inode_flag_set(inode, flag))
+	if (get_dirty_blocks(inode) || !is_inode_flag_set(inode, flag))
 		return;
 
 	list_del_init(&F2FS_I(inode)->dirty_list);
@@ -1325,7 +1325,7 @@ static void __remove_dirty_inode(struct inode *inode, enum inode_type type)
 }
 
 /*
- * Account @nr dirty pages (negative when dirtiness is cleared) for @inode.
+ * Account @nr dirty blocks (negative when dirtiness is cleared) for @inode.
  */
 void f2fs_account_dirty_blocks(struct inode *inode, int nr)
 {
