@@ -1019,7 +1019,7 @@ static struct btrfs_raid_bio *alloc_rbio(struct btrfs_fs_info *fs_info,
 	}
 
 	bio_list_init(&rbio->bio_list);
-	init_waitqueue_head(&rbio->io_wait);
+	init_completion(&rbio->io_done);
 	INIT_LIST_HEAD(&rbio->plug_list);
 	spin_lock_init(&rbio->bio_list_lock);
 	INIT_LIST_HEAD(&rbio->stripe_cache);
@@ -1619,7 +1619,19 @@ static void raid_wait_read_end_io(struct bio *bio)
 
 	bio_put(bio);
 	if (atomic_dec_and_test(&rbio->stripes_pending))
-		wake_up(&rbio->io_wait);
+		complete(&rbio->io_done);
+}
+
+/*
+ * Prepare to wait for the nr bios about to be submitted. With none there is
+ * nothing to wait for.
+ */
+static void rbio_prepare_io_wait(struct btrfs_raid_bio *rbio, int nr)
+{
+	reinit_completion(&rbio->io_done);
+	atomic_set(&rbio->stripes_pending, nr);
+	if (nr == 0)
+		complete(&rbio->io_done);
 }
 
 static void submit_read_wait_bio_list(struct btrfs_raid_bio *rbio,
@@ -1627,7 +1639,7 @@ static void submit_read_wait_bio_list(struct btrfs_raid_bio *rbio,
 {
 	struct bio *bio;
 
-	atomic_set(&rbio->stripes_pending, bio_list_size(bio_list));
+	rbio_prepare_io_wait(rbio, bio_list_size(bio_list));
 	while ((bio = bio_list_pop(bio_list))) {
 		bio->bi_end_io = raid_wait_read_end_io;
 
@@ -1640,7 +1652,7 @@ static void submit_read_wait_bio_list(struct btrfs_raid_bio *rbio,
 		submit_bio(bio);
 	}
 
-	wait_event(rbio->io_wait, atomic_read(&rbio->stripes_pending) == 0);
+	wait_for_completion_io(&rbio->io_done);
 }
 
 static int alloc_rbio_data_pages(struct btrfs_raid_bio *rbio)
@@ -2329,7 +2341,7 @@ static void raid_wait_write_end_io(struct bio *bio)
 		rbio_update_error_bitmap(rbio, bio);
 	bio_put(bio);
 	if (atomic_dec_and_test(&rbio->stripes_pending))
-		wake_up(&rbio->io_wait);
+		complete(&rbio->io_done);
 }
 
 static void submit_write_bios(struct btrfs_raid_bio *rbio,
@@ -2337,7 +2349,7 @@ static void submit_write_bios(struct btrfs_raid_bio *rbio,
 {
 	struct bio *bio;
 
-	atomic_set(&rbio->stripes_pending, bio_list_size(bio_list));
+	rbio_prepare_io_wait(rbio, bio_list_size(bio_list));
 	while ((bio = bio_list_pop(bio_list))) {
 		bio->bi_end_io = raid_wait_write_end_io;
 
@@ -2444,7 +2456,7 @@ static void rmw_rbio(struct btrfs_raid_bio *rbio)
 	/* We should have at least one bio assembled. */
 	ASSERT(bio_list_size(&bio_list));
 	submit_write_bios(rbio, &bio_list);
-	wait_event(rbio->io_wait, atomic_read(&rbio->stripes_pending) == 0);
+	wait_for_completion_io(&rbio->io_done);
 
 	/* We may have more errors than our tolerance during the read. */
 	for (sectornr = 0; sectornr < rbio->stripe_nsectors; sectornr++) {
@@ -2915,7 +2927,9 @@ static void scrub_rbio(struct btrfs_raid_bio *rbio)
 	 * and writeback the good content.
 	 */
 	ret = finish_parity_scrub(rbio);
-	wait_event(rbio->io_wait, atomic_read(&rbio->stripes_pending) == 0);
+	/* It submitted its writes if and only if it returned 0. */
+	if (ret == 0)
+		wait_for_completion_io(&rbio->io_done);
 	for (sector_nr = 0; sector_nr < rbio->stripe_nsectors; sector_nr++) {
 		int found_errors;
 

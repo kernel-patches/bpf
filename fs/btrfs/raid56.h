@@ -175,7 +175,8 @@ struct btrfs_raid_bio {
 
 	atomic_t stripes_pending;
 
-	wait_queue_head_t io_wait;
+	/* Completed by the last end_io when stripes_pending drops to zero. */
+	struct completion io_done;
 
 	/* Bitmap to record which horizontal stripe has data */
 	unsigned long dbitmap;
