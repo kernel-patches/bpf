@@ -243,6 +243,33 @@ int mucse_mbx_set_link(struct mucse_hw *hw, u32 advertising, bool autoneg,
 }
 
 /**
+ * mucse_mbx_get_link - Query firmware link settings and capabilities
+ * @hw: hardware information structure
+ * @info: firmware link information returned on success
+ *
+ * Return: 0 on success, negative errno on failure
+ */
+int mucse_mbx_get_link(struct mucse_hw *hw, struct mucse_link_info *info)
+{
+	union mbx_fw_cmd_req_u req = {
+		.r = {
+			.datalen = cpu_to_le16(MUCSE_MBX_REQ_HDR_LEN +
+					       sizeof(req.r.get_link)),
+			.opcode = cpu_to_le16(GET_LANE_STATUS),
+			.get_link.port = cpu_to_le32(hw->port),
+		},
+	};
+	union mbx_fw_cmd_reply_u reply = {};
+	int err;
+
+	err = mucse_fw_send_cmd_wait_resp(hw, &req, &reply);
+	if (!err)
+		*info = reply.r.link_info;
+
+	return err;
+}
+
+/**
  * mucse_mbx_phyup - Request that firmware bring the PHY up or down
  * @hw: pointer to the HW structure
  * @is_phyup: true for up, false for down
@@ -435,6 +462,8 @@ static void mucse_mbx_fw_req_handler(struct mucse_hw *hw,
 
 		hw->speed = le16_to_cpu(req->link_stat.st.speed);
 		hw->duplex = req->link_stat.st.flags & DUPLEX_BIT;
+		hw->mdix = FIELD_GET(ST_STATUS_MDIX_MASK,
+				     le16_to_cpu(req->link_stat.st.status));
 		rnpgbe_set_link(hw, mucse_link_is_up(hw, req));
 		/* update regs to notify link info is received */
 		mucse_update_link_status_reg(hw, req);

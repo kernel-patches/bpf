@@ -68,8 +68,32 @@ int rnpgbe_reset_hw(struct mucse_hw *hw)
  **/
 int rnpgbe_setup_default_link(struct mucse_hw *hw)
 {
-	return mucse_mbx_set_link(hw, RNPGBE_DEFAULT_ADV, true, 0, 0,
-				  ETH_TP_MDI_AUTO);
+	u32 advertising = hw->link_config.supported & RNPGBE_DEFAULT_ADV;
+	bool autoneg = hw->link_config.status & MUCSE_LINK_TP;
+	u8 duplex = DUPLEX_UNKNOWN;
+	u32 speed = SPEED_UNKNOWN;
+	int err;
+
+	if (!autoneg) {
+		advertising &= RNPGBE_FW_ADV_1000_FULL;
+		speed = SPEED_1000;
+		duplex = DUPLEX_FULL;
+	}
+
+	err = mucse_mbx_set_link(hw, advertising, autoneg,
+				 autoneg ? 0 : speed, autoneg ? 0 : duplex,
+				 ETH_TP_MDI_AUTO);
+	if (!err) {
+		hw->link_config.advertising = advertising;
+		hw->link_config.speed = speed;
+		hw->link_config.duplex = duplex;
+		if (autoneg)
+			hw->link_config.status |= MUCSE_LINK_AUTONEG;
+		else
+			hw->link_config.status &= ~MUCSE_LINK_AUTONEG;
+	}
+
+	return err;
 }
 
 /**
