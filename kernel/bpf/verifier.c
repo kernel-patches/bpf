@@ -2602,31 +2602,14 @@ int bpf_find_subprog(struct bpf_verifier_env *env, int off)
 	return p - env->subprog_info;
 }
 
-static int add_subprog(struct bpf_verifier_env *env, int off)
+static int add_subprog(struct bpf_verifier_env *env, unsigned long *starts, int off)
 {
-	struct bpf_subprog_info *subprog = env->subprog_info;
-	int insn_cnt = env->prog->len;
-	int i;
-
-	if (off >= insn_cnt || off < 0) {
+	if (off >= env->prog->len || off < 0) {
 		verbose(env, "call to invalid destination\n");
 		return -EINVAL;
 	}
-	i = bpf_find_subprog(env, off);
-	if (i >= 0)
-		return i;
-	if (env->subprog_cnt >= BPF_MAX_SUBPROGS) {
-		verbose(env, "too many subprograms\n");
-		return -E2BIG;
-	}
-	/*
-	 * Determine subprog starts. The end is one before the next starts.
-	 * The array stays sorted: subprogs that start after 'off' move up.
-	 */
-	for (i = env->subprog_cnt++; i > 0 && subprog[i - 1].start > off; i--)
-		subprog[i] = subprog[i - 1];
-	subprog[i] = (struct bpf_subprog_info){ .start = off, .exit_idx = U32_MAX };
-	return i;
+	__set_bit(off, starts);
+	return 0;
 }
 
 static int bpf_find_exception_callback_insn_off(struct bpf_verifier_env *env)
@@ -3103,15 +3086,17 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 
 static int add_subprogs(struct bpf_verifier_env *env)
 {
-	struct bpf_subprog_info *subprog = env->subprog_info;
-	int i, ret, insn_cnt = env->prog->len, ex_cb_insn;
+	int i, cnt, ret, insn_cnt = env->prog->len, ex_cb_insn;
+	unsigned long *starts __free(kvfree) = NULL;
 	struct bpf_insn *insn = env->prog->insnsi;
 	const char *operation, *suggestion;
+	struct bpf_subprog_info *subprog;
 
+	starts = kvcalloc(BITS_TO_LONGS(insn_cnt), sizeof(long), BPF_VERIFIER_GFP);
+	if (!starts)
+		return -ENOMEM;
 	/* Add entry function. */
-	ret = add_subprog(env, 0);
-	if (ret)
-		return ret;
+	__set_bit(0, starts);
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn))
@@ -3133,7 +3118,7 @@ static int add_subprogs(struct bpf_verifier_env *env)
 			return -EPERM;
 		}
 
-		ret = add_subprog(env, i + insn->imm + 1);
+		ret = add_subprog(env, starts, i + insn->imm + 1);
 		if (ret < 0)
 			return ret;
 	}
@@ -3148,7 +3133,7 @@ static int add_subprogs(struct bpf_verifier_env *env)
 		struct bpf_prog_aux *aux = env->prog->aux;
 
 		for (i = 1; i < aux->func_info_cnt; i++) {
-			ret = add_subprog(env, aux->func_info[i].insn_off);
+			ret = add_subprog(env, starts, aux->func_info[i].insn_off);
 			if (ret < 0)
 				return ret;
 		}
@@ -3162,23 +3147,32 @@ static int add_subprogs(struct bpf_verifier_env *env)
 	/* If ex_cb_insn > 0, this means that the main program has a subprog
 	 * marked using BTF decl tag to serve as the exception callback.
 	 */
-	if (ex_cb_insn) {
-		ret = add_subprog(env, ex_cb_insn);
-		if (ret < 0)
-			return ret;
-		for (i = 1; i < env->subprog_cnt; i++) {
-			if (env->subprog_info[i].start != ex_cb_insn)
-				continue;
-			env->exception_callback_subprog = i;
-			bpf_mark_subprog_exc_cb(env, i);
-			break;
-		}
+	ret = add_subprog(env, starts, ex_cb_insn);
+	if (ret < 0)
+		return ret;
+
+	/* + 2 for the fake and the hidden subprogs */
+	cnt = bitmap_weight(starts, insn_cnt);
+	subprog = env->subprog_info = kvcalloc(cnt + 2, sizeof(*subprog), BPF_VERIFIER_GFP);
+	env->subprog_topo_order = kvcalloc(cnt, sizeof(int), BPF_VERIFIER_GFP);
+	if (!subprog || !env->subprog_topo_order)
+		return -ENOMEM;
+
+	/* Determine subprog starts. The end is one before the next starts. */
+	for_each_set_bit(i, starts, insn_cnt) {
+		subprog[env->subprog_cnt].start = i;
+		subprog[env->subprog_cnt++].exit_idx = U32_MAX;
 	}
 
 	/* Add a fake 'exit' subprog which could simplify subprog iteration
 	 * logic. 'subprog_cnt' should not be increased.
 	 */
-	subprog[env->subprog_cnt].start = insn_cnt;
+	subprog[cnt].start = insn_cnt;
+
+	if (ex_cb_insn) {
+		env->exception_callback_subprog = bpf_find_subprog(env, ex_cb_insn);
+		bpf_mark_subprog_exc_cb(env, env->exception_callback_subprog);
+	}
 
 	if (env->log.level & BPF_LOG_LEVEL2)
 		for (i = 0; i < env->subprog_cnt; i++)
@@ -25365,6 +25359,8 @@ err_free_env:
 	kvfree(env->func_set_index.slots);
 	bpf_diag_free(env);
 	kvfree(env->idoms);
+	kvfree(env->subprog_info);
+	kvfree(env->subprog_topo_order);
 	kvfree(env);
 	return ret;
 }

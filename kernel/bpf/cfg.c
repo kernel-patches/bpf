@@ -478,7 +478,7 @@ void bpf_free_subprog_jts(struct bpf_verifier_env *env)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(env->subprog_info); i++) {
+	for (i = 0; i < env->subprog_cnt; i++) {
 		kvfree(env->subprog_info[i].jt);
 		env->subprog_info[i].jt = NULL;
 	}

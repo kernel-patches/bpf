@@ -2465,7 +2465,7 @@ static void __bpf_prog_put_rcu(struct rcu_head *rcu)
 	kvfree(aux->jited_linfo);
 	kvfree(aux->linfo);
 	kvfree(aux->func_info);
-	kfree(aux->func_info_aux);
+	kvfree(aux->func_info_aux);
 	free_uid(aux->user);
 	security_bpf_prog_free(aux->prog);
 	bpf_prog_free(aux->prog);
@@ -5035,7 +5035,22 @@ static int bpf_prog_map_addrs(const struct bpf_prog *prog, struct maple_tree *mt
 	return err;
 }
 
-static void prepare_dump_pseudo_call(struct bpf_insn *insn)
+/* the id of the subprog that starts at insn 'start' */
+static u32 bpf_prog_find_func(const struct bpf_prog *prog, u32 start)
+{
+	u32 l = 0, r = prog->aux->real_func_cnt, m;
+
+	while (r - l > 1) {
+		m = (l + r) / 2;
+		if (prog->aux->func[m]->aux->subprog_start <= start)
+			l = m;
+		else
+			r = m;
+	}
+	return l;
+}
+
+static void prepare_dump_pseudo_call(const struct bpf_prog *prog, struct bpf_insn *insn, u32 idx)
 {
 	s32 call_off = insn->imm;
 
@@ -5044,12 +5059,12 @@ static void prepare_dump_pseudo_call(struct bpf_insn *insn)
 	 * 1. For interpreter (BPF_CALL_ARGS): insn->off is the index of
 	 *    interpreters_args array, so here using bpf_call_args_imm()
 	 *    to get the real address offset.
-	 * 2. For JIT (BPF_CALL): insn->off is the subprog id.
+	 * 2. For JIT (BPF_CALL): the subprog id.
 	 */
 	if (insn->code == (BPF_JMP | BPF_CALL_ARGS))
 		insn->imm = bpf_call_args_imm(insn->off);
 	else
-		insn->imm = insn->off;
+		insn->imm = bpf_prog_find_func(prog, idx + call_off + 1);
 
 	/* Avoid dumping a truncated and misleading pc-relative offset. */
 	if (call_off > S16_MAX || call_off < S16_MIN)
@@ -5093,7 +5108,7 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog,
 		    code == (BPF_JMP | BPF_CALL_ARGS)) {
 			/* Restore the legacy xlated dump layout. */
 			if (insns[i].src_reg == BPF_PSEUDO_CALL)
-				prepare_dump_pseudo_call(&insns[i]);
+				prepare_dump_pseudo_call(prog, &insns[i], i);
 			if (code == (BPF_JMP | BPF_CALL_ARGS))
 				insns[i].code = BPF_JMP | BPF_CALL;
 			if (!bpf_dump_raw_ok(f_cred))

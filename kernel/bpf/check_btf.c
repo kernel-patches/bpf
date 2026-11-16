@@ -163,8 +163,7 @@ static int check_btf_func(struct bpf_verifier_env *env,
 	urecord = make_bpfptr(attr->func_info, uattr.is_kernel);
 
 	krecord = prog->aux->func_info;
-	info_aux = kzalloc_objs(*info_aux, nfuncs,
-				BPF_VERIFIER_GFP);
+	info_aux = kvzalloc_objs(*info_aux, nfuncs, BPF_VERIFIER_GFP);
 	if (!info_aux)
 		return -ENOMEM;
 
@@ -207,7 +206,7 @@ static int check_btf_func(struct bpf_verifier_env *env,
 	return 0;
 
 err_free:
-	kfree(info_aux);
+	kvfree(info_aux);
 	return ret;
 }
 
