@@ -3688,7 +3688,11 @@ out:
 
 void test_jit_insns(void)
 {
-	RUN_TESTS(jit_insns_arena);
+	if (libbpf_probe_bpf_map_type(BPF_MAP_TYPE_ARENA, NULL))
+		RUN_TESTS(jit_insns_arena);
+	else
+		SKIP_TESTS(jit_insns_arena);
+
 	if (test__start_subtest("alu_imm"))
 		test_alu_imm();
 	if (test__start_subtest("alu_reg"))
