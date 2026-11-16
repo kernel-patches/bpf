@@ -297,9 +297,9 @@ int cxl_internal_send_cmd(struct cxl_mailbox *cxl_mbox,
 	if (rc)
 		return rc;
 
-	if (mbox_cmd->return_code != CXL_MBOX_CMD_RC_SUCCESS &&
-	    mbox_cmd->return_code != CXL_MBOX_CMD_RC_BACKGROUND)
-		return cxl_mbox_cmd_rc2errno(mbox_cmd);
+	rc = cxl_mbox_cmd_rc2errno(mbox_cmd);
+	if (rc)
+		return rc;
 
 	if (!out_size)
 		return 0;
