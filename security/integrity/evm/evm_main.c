@@ -763,11 +763,11 @@ static void evm_reset_status(struct inode *inode)
 /**
  * evm_metadata_changed: Detect changes to the metadata
  * @inode: a file's inode
- * @metadata_inode: metadata inode
+ * @metadata_inode: metadata inode, or an ERR_PTR() if it can't be resolved
  *
  * On a stacked filesystem detect whether the metadata has changed. If this is
- * the case reset the evm_status associated with the inode that represents the
- * file.
+ * the case, or if the metadata inode can't be resolved, reset the evm_status
+ * associated with the inode that represents the file.
  */
 bool evm_metadata_changed(struct inode *inode, struct inode *metadata_inode)
 {
@@ -775,7 +775,8 @@ bool evm_metadata_changed(struct inode *inode, struct inode *metadata_inode)
 	bool ret = false;
 
 	if (iint) {
-		ret = (!IS_I_VERSION(metadata_inode) ||
+		ret = (IS_ERR(metadata_inode) ||
+		       !IS_I_VERSION(metadata_inode) ||
 		       integrity_inode_attrs_changed(&iint->metadata_inode,
 						     metadata_inode));
 		if (ret)
