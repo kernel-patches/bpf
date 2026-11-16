@@ -199,6 +199,8 @@ bool should_fail(struct fault_attr *attr, ssize_t size)
 }
 EXPORT_SYMBOL_GPL(should_fail);
 
+#define FAULT_RATELIMIT_INTERVAL_MAX_MS	(INT_MAX / DIV_ROUND_UP(HZ, MSEC_PER_SEC))
+
 #ifdef CONFIG_FAULT_INJECTION_DEBUG_FS
 
 static int debugfs_ul_set(void *data, u64 val)
@@ -219,6 +221,29 @@ static void debugfs_create_ul(const char *name, umode_t mode,
 			      struct dentry *parent, unsigned long *value)
 {
 	debugfs_create_file(name, mode, parent, value, &fops_ul);
+}
+
+static int debugfs_ratelimit_interval_set(void *data, u64 val)
+{
+	val = min_t(u64, val, FAULT_RATELIMIT_INTERVAL_MAX_MS);
+	*(int *)data = msecs_to_jiffies(val);
+
+	return 0;
+}
+
+static int debugfs_ratelimit_interval_get(void *data, u64 *val)
+{
+	*val = jiffies_to_msecs(*(int *)data);
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(fops_ratelimit_interval, debugfs_ratelimit_interval_get,
+			debugfs_ratelimit_interval_set, "%llu\n");
+
+static void debugfs_create_ratelimit_interval(const char *name, umode_t mode,
+					      struct dentry *parent, int *value)
+{
+	debugfs_create_file(name, mode, parent, value, &fops_ratelimit_interval);
 }
 
 #ifdef CONFIG_FAULT_INJECTION_STACKTRACE_FILTER
@@ -260,8 +285,8 @@ struct dentry *fault_create_debugfs_attr(const char *name,
 	debugfs_create_atomic_t("times", mode, dir, &attr->times);
 	debugfs_create_atomic_t("space", mode, dir, &attr->space);
 	debugfs_create_ul("verbose", mode, dir, &attr->verbose);
-	debugfs_create_u32("verbose_ratelimit_interval_ms", mode, dir,
-			   &attr->ratelimit_state.interval);
+	debugfs_create_ratelimit_interval("verbose_ratelimit_interval_ms", mode,
+					  dir, &attr->ratelimit_state.interval);
 	debugfs_create_u32("verbose_ratelimit_burst", mode, dir,
 			   &attr->ratelimit_state.burst);
 	debugfs_create_bool("task-filter", mode, dir, &attr->task_filter);
@@ -394,11 +419,36 @@ FAULT_CONFIGFS_ATTR(interval, ulong);
 FAULT_CONFIGFS_ATTR(times, atomic_t);
 FAULT_CONFIGFS_ATTR(space, atomic_t);
 FAULT_CONFIGFS_ATTR(verbose, ulong);
-FAULT_CONFIGFS_ATTR_NAMED(ratelimit_interval, "verbose_ratelimit_interval_ms",
-		ratelimit_state.interval, uint);
 FAULT_CONFIGFS_ATTR_NAMED(ratelimit_burst, "verbose_ratelimit_burst",
 		ratelimit_state.burst, uint);
 FAULT_CONFIGFS_ATTR_NAMED(task_filter, "task-filter", task_filter, bool);
+
+static ssize_t fault_ratelimit_interval_show(struct config_item *item, char *page)
+{
+	struct fault_config *config = to_fault_config(item);
+	unsigned int msecs = jiffies_to_msecs(config->attr.ratelimit_state.interval);
+
+	return fault_uint_attr_show(msecs, page);
+}
+
+static ssize_t fault_ratelimit_interval_store(struct config_item *item, const char *page,
+		size_t count)
+{
+	struct fault_config *config = to_fault_config(item);
+	unsigned int msecs;
+	int result;
+
+	result = kstrtouint(page, 0, &msecs);
+	if (result < 0)
+		return result;
+
+	msecs = min_t(unsigned int, msecs, FAULT_RATELIMIT_INTERVAL_MAX_MS);
+	config->attr.ratelimit_state.interval = msecs_to_jiffies(msecs);
+
+	return count;
+}
+
+CONFIGFS_ATTR_NAMED(fault_, ratelimit_interval, "verbose_ratelimit_interval_ms");
 
 #ifdef CONFIG_FAULT_INJECTION_STACKTRACE_FILTER
 
