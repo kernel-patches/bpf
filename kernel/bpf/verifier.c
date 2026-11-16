@@ -4839,48 +4839,43 @@ static int check_map_access(struct bpf_verifier_env *env, struct bpf_reg_state *
 	if (IS_ERR_OR_NULL(map->record))
 		return 0;
 	rec = map->record;
-	for (i = 0; i < rec->cnt; i++) {
+	/* If any part of a field can be touched by load/store, reject this program. */
+	for (i = btf_record_first_field(rec, reg_smin(reg) + off);
+	     i < rec->cnt && rec->fields[i].offset < reg_umax(reg) + off + size; i++) {
 		struct btf_field *field = &rec->fields[i];
 		u32 p = field->offset;
 
-		/* If any part of a field  can be touched by load/store, reject
-		 * this program. To check that [x1, x2) overlaps with [y1, y2),
-		 * it is sufficient to check x1 < y2 && y1 < x2.
-		 */
-		if (reg_smin(reg) + off < p + field->size &&
-		    p < reg_umax(reg) + off + size) {
-			switch (field->type) {
-			case BPF_KPTR_UNREF:
-			case BPF_KPTR_REF:
-			case BPF_KPTR_PERCPU:
-			case BPF_UPTR:
-				if (src != ACCESS_DIRECT) {
-					verbose(env, "%s cannot be accessed indirectly by helper\n",
-						btf_field_type_name(field->type));
-					return -EACCES;
-				}
-				if (!tnum_is_const(reg->var_off)) {
-					verbose(env, "%s access cannot have variable offset\n",
-						btf_field_type_name(field->type));
-					return -EACCES;
-				}
-				if (p != off + reg->var_off.value) {
-					verbose(env, "%s access misaligned expected=%u off=%llu\n",
-						btf_field_type_name(field->type),
-						p, off + reg->var_off.value);
-					return -EACCES;
-				}
-				if (size != bpf_size_to_bytes(BPF_DW)) {
-					verbose(env, "%s access size must be BPF_DW\n",
-						btf_field_type_name(field->type));
-					return -EACCES;
-				}
-				break;
-			default:
-				verbose(env, "%s cannot be accessed directly by load/store\n",
+		switch (field->type) {
+		case BPF_KPTR_UNREF:
+		case BPF_KPTR_REF:
+		case BPF_KPTR_PERCPU:
+		case BPF_UPTR:
+			if (src != ACCESS_DIRECT) {
+				verbose(env, "%s cannot be accessed indirectly by helper\n",
 					btf_field_type_name(field->type));
 				return -EACCES;
 			}
+			if (!tnum_is_const(reg->var_off)) {
+				verbose(env, "%s access cannot have variable offset\n",
+					btf_field_type_name(field->type));
+				return -EACCES;
+			}
+			if (p != off + reg->var_off.value) {
+				verbose(env, "%s access misaligned expected=%u off=%llu\n",
+					btf_field_type_name(field->type),
+					p, off + reg->var_off.value);
+				return -EACCES;
+			}
+			if (size != bpf_size_to_bytes(BPF_DW)) {
+				verbose(env, "%s access size must be BPF_DW\n",
+					btf_field_type_name(field->type));
+				return -EACCES;
+			}
+			break;
+		default:
+			verbose(env, "%s cannot be accessed directly by load/store\n",
+				btf_field_type_name(field->type));
+			return -EACCES;
 		}
 	}
 	return 0;

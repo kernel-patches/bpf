@@ -703,7 +703,7 @@ void btf_record_free(struct btf_record *rec)
 			continue;
 		}
 	}
-	kfree(rec);
+	kvfree(rec);
 }
 
 void bpf_map_free_record(struct bpf_map *map)
@@ -721,7 +721,7 @@ struct btf_record *btf_record_dup(const struct btf_record *rec)
 	if (IS_ERR_OR_NULL(rec))
 		return NULL;
 	size = struct_size(rec, fields, rec->cnt);
-	new_rec = kmemdup(rec, size, GFP_KERNEL | __GFP_NOWARN);
+	new_rec = kvmemdup(rec, size, BPF_VERIFIER_GFP);
 	if (!new_rec)
 		return ERR_PTR(-ENOMEM);
 	/* Do a deep copy of the btf_record */
@@ -1293,6 +1293,8 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 				       BPF_RB_ROOT | BPF_REFCOUNT | BPF_WORKQUEUE | BPF_UPTR |
 				       BPF_TASK_WORK | BPF_RCU_HEAD,
 				       map->value_size);
+	if (map->record == ERR_PTR(-ENOMEM) || map->record == ERR_PTR(-EINTR))
+		return PTR_ERR(map->record);
 	if (!IS_ERR_OR_NULL(map->record)) {
 		int i;
 

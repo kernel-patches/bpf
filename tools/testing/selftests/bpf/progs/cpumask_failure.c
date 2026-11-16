@@ -15,7 +15,6 @@ struct kptr_nested_array_2 {
 };
 
 struct kptr_nested_array_1 {
-	/* Make btf_parse_fields() in map_create() return -E2BIG */
 	struct kptr_nested_array_2 d_2[CPUMASK_KPTR_FIELDS_MAX + 1];
 };
 
@@ -213,8 +212,8 @@ int BPF_PROG(test_global_mask_rcu_no_null_check, struct task_struct *task, u64 c
 }
 
 SEC("tp_btf/task_newtask")
-__failure __msg("has no valid kptr")
-int BPF_PROG(test_invalid_nested_array, struct task_struct *task, u64 clone_flags)
+__success
+int BPF_PROG(test_big_nested_array, struct task_struct *task, u64 clone_flags)
 {
 	struct bpf_cpumask *local, *prev;
 
