@@ -207,19 +207,19 @@ static int psp_init(struct psp_device *psp)
 	if (!psp_check_tee_support(psp)) {
 		ret = tee_dev_init(psp);
 		if (ret)
-			return ret;
+			goto e_sev;
 	}
 
 	if (!psp_check_sfs_support(psp)) {
 		ret = sfs_dev_init(psp);
 		if (ret)
-			return ret;
+			goto e_tee;
 	}
 
 	if (psp->vdata->platform_access) {
 		ret = platform_access_dev_init(psp);
 		if (ret)
-			return ret;
+			goto e_sfs;
 	}
 
 	/* dbc must come after platform access as it tests the feature */
@@ -227,15 +227,28 @@ static int psp_init(struct psp_device *psp)
 	    psp->capability.dbc_thru_ext) {
 		ret = dbc_dev_init(psp);
 		if (ret)
-			return ret;
+			goto e_platform_access;
 	}
 
 	/* HSTI uses platform access on some systems. */
 	ret = psp_init_hsti(psp);
 	if (ret)
-		return ret;
+		goto e_dbc;
 
 	return 0;
+
+e_dbc:
+	dbc_dev_destroy(psp);
+e_platform_access:
+	platform_access_dev_destroy(psp);
+e_sfs:
+	sfs_dev_destroy(psp);
+e_tee:
+	tee_dev_destroy(psp);
+e_sev:
+	sev_dev_destroy(psp);
+
+	return ret;
 }
 
 int psp_dev_init(struct sp_device *sp)
