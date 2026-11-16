@@ -1,0 +1,33 @@
+[
+  {
+    "name": "kernel",
+    "directory": "selftests/bpf",
+    "pattern": "*.bpf.o",
+    "filter": "selftests/bpf/veristat.cfg"
+  },
+  {
+    "name": "cilium",
+    "directory": "cilium-build-output/bpf",
+    "pattern": "*.o"
+  },
+  {
+    "name": "scx",
+    "directory": "scx-build-output/bpf",
+    "pattern": "*.bpf.o"
+  },
+  {
+    "name": "wprof",
+    "directory": "wprof-build-output/bpf",
+    "pattern": "*.bpf.o"
+  },
+  {
+    "name": "retsnoop",
+    "directory": "retsnoop-build-output/bpf",
+    "pattern": "*.bpf.o"
+  },
+  {
+    "name": "blazesym",
+    "directory": "blazesym-build-output/bpf",
+    "pattern": "*.bpf.o"
+  }
+]
