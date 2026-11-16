@@ -195,7 +195,7 @@ int bpf_vlog_stash(struct bpf_verifier_log *log, u64 pos, struct bpf_vlog_stash 
 	stash->lost_end = log->end_pos - to;
 	stash->len = to - from;
 	/* as large as the buffer at worst: fail before the OOM killer is called */
-	stash->buf = kvzalloc(stash->len, GFP_KERNEL_ACCOUNT | __GFP_NOWARN | __GFP_RETRY_MAYFAIL);
+	stash->buf = kvzalloc(stash->len, BPF_VERIFIER_GFP);
 	if (!stash->buf)
 		return -ENOMEM;
 	/* two pieces if it wraps around */

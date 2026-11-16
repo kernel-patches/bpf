@@ -188,7 +188,7 @@ struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem)
 	size_t new_size = sizeof(struct bpf_iarray) + n_elem * sizeof(old->items[0]);
 	struct bpf_iarray *new;
 
-	new = kvrealloc(old, new_size, GFP_KERNEL_ACCOUNT);
+	new = kvrealloc(old, new_size, BPF_VERIFIER_GFP);
 	if (!new) {
 		/* this is what callers always want, so simplify the call site */
 		kvfree(old);
@@ -663,12 +663,12 @@ int bpf_check_cfg(struct bpf_verifier_env *env)
 	int ex_insn_beg, i, ret = 0;
 
 	insn_state = env->cfg.insn_state = kvzalloc_objs(int, insn_cnt,
-							 GFP_KERNEL_ACCOUNT);
+							 BPF_VERIFIER_GFP);
 	if (!insn_state)
 		return -ENOMEM;
 
 	insn_stack = env->cfg.insn_stack = kvzalloc_objs(int, insn_cnt,
-							 GFP_KERNEL_ACCOUNT);
+							 BPF_VERIFIER_GFP);
 	if (!insn_stack) {
 		kvfree(insn_state);
 		return -ENOMEM;
@@ -771,10 +771,10 @@ int bpf_compute_postorder(struct bpf_verifier_env *env)
 	struct dfs_state *state = NULL;
 	struct bpf_iarray *succ = NULL;
 
-	postorder_nums = kvzalloc_objs(int, env->prog->len, GFP_KERNEL_ACCOUNT);
-	postorder = kvzalloc_objs(int, env->prog->len, GFP_KERNEL_ACCOUNT);
-	stack = kvzalloc_objs(int, env->prog->len, GFP_KERNEL_ACCOUNT);
-	state = kvzalloc_objs(struct dfs_state, env->prog->len, GFP_KERNEL_ACCOUNT);
+	postorder_nums = kvzalloc_objs(int, env->prog->len, BPF_VERIFIER_GFP);
+	postorder = kvzalloc_objs(int, env->prog->len, BPF_VERIFIER_GFP);
+	stack = kvzalloc_objs(int, env->prog->len, BPF_VERIFIER_GFP);
+	state = kvzalloc_objs(struct dfs_state, env->prog->len, BPF_VERIFIER_GFP);
 	if (!postorder_nums || !postorder || !stack || !state) {
 		kvfree(postorder_nums);
 		kvfree(postorder);

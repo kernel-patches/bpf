@@ -46,7 +46,7 @@ struct bpf_join_state {
 static struct bpf_join_state *join_state(struct bpf_verifier_env *env)
 {
 	if (!env->join) {
-		env->join = kvzalloc_obj(*env->join, GFP_KERNEL_ACCOUNT);
+		env->join = kvzalloc_obj(*env->join, BPF_VERIFIER_GFP);
 		if (env->join)
 			env->join->env = env;
 	}

@@ -13,6 +13,10 @@
 #include <linux/freezer.h>
 #include <linux/sched/signal.h>
 
+/* No memory fails the load. It does not wake up the OOM killer. */
+#define BPF_GFP_MAYFAIL (__GFP_RETRY_MAYFAIL | __GFP_NOWARN)
+#define BPF_VERIFIER_GFP (GFP_KERNEL_ACCOUNT | BPF_GFP_MAYFAIL)
+
 /*
  * For each loop that can run long. The caller returns -EINTR.
  *   killed          the task dies

@@ -180,7 +180,7 @@ int bpf_prog_alloc_jited_linfo(struct bpf_prog *prog)
 
 	prog->aux->jited_linfo = kvzalloc_objs(*prog->aux->jited_linfo,
 					       prog->aux->nr_linfo,
-					       bpf_memcg_flags(GFP_KERNEL | __GFP_NOWARN));
+					       bpf_memcg_flags(GFP_KERNEL | BPF_GFP_MAYFAIL));
 	if (!prog->aux->jited_linfo)
 		return -ENOMEM;
 
@@ -309,7 +309,7 @@ int bpf_prog_calc_tag(struct bpf_prog *fp)
 	bool was_ld_map;
 	u32 i;
 
-	dst = __vmalloc(size, GFP_KERNEL_ACCOUNT);
+	dst = __vmalloc(size, BPF_VERIFIER_GFP);
 	if (!dst)
 		return -ENOMEM;
 
@@ -349,7 +349,7 @@ static int patch_list_reserve_patch(struct bpf_patch_list *pl)
 		return 0;
 
 	cap = max(pl->cap * 2, 16U);
-	p = kvrealloc(pl->patches, array_size(cap, sizeof(*p)), GFP_KERNEL_ACCOUNT);
+	p = kvrealloc(pl->patches, array_size(cap, sizeof(*p)), BPF_VERIFIER_GFP);
 	if (!p)
 		return -ENOMEM;
 	pl->patches = p;
@@ -366,7 +366,7 @@ static int patch_list_reserve_insns(struct bpf_patch_list *pl, u32 cnt)
 		return 0;
 
 	cap = max3(pl->insn_cap * 2, pl->insn_cnt + cnt, 64U);
-	insns = kvrealloc(pl->insns, array_size(cap, sizeof(*insns)), GFP_KERNEL_ACCOUNT);
+	insns = kvrealloc(pl->insns, array_size(cap, sizeof(*insns)), BPF_VERIFIER_GFP);
 	if (!insns)
 		return -ENOMEM;
 	pl->insns = insns;
@@ -619,7 +619,7 @@ static int patch_image_map_linfo(struct bpf_patch_image *img, const struct bpf_p
 	const struct bpf_line_info *linfo = prog->aux->linfo;
 	u32 i, j, pos, next, nr = prog->aux->nr_linfo;
 
-	img->new_linfo = kvmalloc_array(nr + 1, sizeof(u32), GFP_KERNEL_ACCOUNT);
+	img->new_linfo = kvmalloc_array(nr + 1, sizeof(u32), BPF_VERIFIER_GFP);
 	if (!img->new_linfo)
 		return -ENOMEM;
 	img->nr_linfo = nr;
@@ -656,8 +656,8 @@ int bpf_patch_list_build(const struct bpf_patch_list *pl, const struct bpf_prog 
 
 	memset(img, 0, sizeof(*img));
 	img->cnt = cnt;
-	img->new_off = kvmalloc_array(cnt + 1, sizeof(u32), GFP_KERNEL_ACCOUNT);
-	img->new_tgt = kvmalloc_array(cnt + 1, sizeof(u32), GFP_KERNEL_ACCOUNT);
+	img->new_off = kvmalloc_array(cnt + 1, sizeof(u32), BPF_VERIFIER_GFP);
+	img->new_tgt = kvmalloc_array(cnt + 1, sizeof(u32), BPF_VERIFIER_GFP);
 	if (!img->new_off || !img->new_tgt)
 		return -ENOMEM;
 
@@ -678,7 +678,7 @@ int bpf_patch_list_build(const struct bpf_patch_list *pl, const struct bpf_prog 
 			return err;
 	}
 
-	img->insns = kvmalloc_array(img->new_cnt, sizeof(*img->insns), GFP_KERNEL_ACCOUNT);
+	img->insns = kvmalloc_array(img->new_cnt, sizeof(*img->insns), BPF_VERIFIER_GFP);
 	if (!img->insns)
 		return -ENOMEM;
 
@@ -3017,10 +3017,10 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 	prog = bpf_jit_blind_constants(env, prog);
 	/*
 	 * Fall back to the interpreter after blinding failures, except when
-	 * the loader was killed.
+	 * the load has to stop or has no memory.
 	 */
 	if (IS_ERR(prog)) {
-		if (PTR_ERR(prog) == -EINTR)
+		if (PTR_ERR(prog) == -EINTR || (env && PTR_ERR(prog) == -ENOMEM))
 			return prog;
 		goto out_restore;
 	}
