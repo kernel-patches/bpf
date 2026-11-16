@@ -655,19 +655,6 @@ static inline struct dentry *d_real(struct dentry *dentry, enum d_real_type type
 }
 
 /**
- * d_real_inode - Return the real inode hosting the data
- * @dentry: The dentry to query
- *
- * If dentry is on a union/overlay, then return the underlying, real inode.
- * Otherwise return d_inode().
- */
-static inline struct inode *d_real_inode(const struct dentry *dentry)
-{
-	/* This usage of d_real() results in const dentry */
-	return d_inode(d_real((struct dentry *) dentry, D_REAL_DATA));
-}
-
-/**
  * d_real_data_inode - Return the real inode hosting the data
  * @dentry: The dentry to query
  *
