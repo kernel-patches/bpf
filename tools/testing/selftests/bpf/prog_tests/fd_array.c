@@ -376,6 +376,11 @@ static void check_fd_array_cnt__fd_array_with_trash(void)
 	if (!ASSERT_EQ(prog_fd, -EINVAL, "prog should have been rejected with -EINVAL"))
 		goto cleanup;
 
+	/* trash 3: the table grows with the entries that are read */
+	prog_fd = load_test_prog((int *)8, 1 << 30);
+	if (!ASSERT_EQ(prog_fd, -EFAULT, "prog should have been rejected with -EFAULT"))
+		goto cleanup;
+
 	/* Validate that the prog is ok if trash is removed */
 	Close(extra_fds[2]);
 	extra_fds[2] = new_btf();
@@ -394,22 +399,27 @@ cleanup:
 }
 
 /*
- * Test that a program with too big fd_array can't be loaded.
+ * Test that the numbers of maps, BTFs and entries of fd_array are not limited.
  */
-static void check_fd_array_cnt__fd_array_too_big(void)
+static void check_fd_array_cnt__fd_array_big(void)
 {
-	int extra_fds[65];
-	int prog_fd = -1;
-	int i;
+	static int extra_fds[5000];
+	const int objs = 300;
+	__u32 nr_map_ids = 0;
+	int prog_fd, i, j;
 
-	for (i = 0; i < 65; i++) {
-		extra_fds[i] = new_map();
-		if (!ASSERT_GE(extra_fds[i], 0, "new_map"))
+	for (i = 0; i < objs; i++) {
+		extra_fds[i] = i % 2 ? new_map() : new_btf();
+		if (!ASSERT_GE(extra_fds[i], 0, "new_obj"))
 			goto cleanup_fds;
 	}
+	for (j = objs; j < ARRAY_SIZE(extra_fds); j++)
+		extra_fds[j] = extra_fds[j % objs];
 
-	prog_fd = load_test_prog(extra_fds, 65);
-	ASSERT_EQ(prog_fd, -E2BIG, "prog should have been rejected with -E2BIG");
+	prog_fd = load_test_prog(extra_fds, ARRAY_SIZE(extra_fds));
+	if (ASSERT_GE(prog_fd, 0, "prog should have been loaded"))
+		check_expected_map_ids(prog_fd, objs / 2 + 1, NULL, &nr_map_ids);
+	Close(prog_fd);
 
 cleanup_fds:
 	while (i-- > 0)
@@ -436,6 +446,6 @@ void test_fd_array_cnt(void)
 	if (test__start_subtest("fd-array-trash-input"))
 		check_fd_array_cnt__fd_array_with_trash();
 
-	if (test__start_subtest("fd-array-2big"))
-		check_fd_array_cnt__fd_array_too_big();
+	if (test__start_subtest("fd-array-big"))
+		check_fd_array_cnt__fd_array_big();
 }

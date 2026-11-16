@@ -3,6 +3,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
+#include <linux/hash.h>
 #include <linux/sort.h>
 
 #include "diagnostics.h"
@@ -197,6 +198,44 @@ struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem)
 
 	new->cnt = n_elem;
 	return new;
+}
+
+static struct bpf_index_slot *index_slot(const struct bpf_index *index, u64 key)
+{
+	u32 i = hash_64(key, index->bits);
+
+	while (index->slots[i].next_val && index->slots[i].key != key)
+		i = (i + 1) & (BIT(index->bits) - 1);
+	return &index->slots[i];
+}
+
+/* Returns the value of 'key', -1 if there is none */
+int bpf_index_find(const struct bpf_index *index, u64 key)
+{
+	return index->cnt ? index_slot(index, key)->next_val - 1 : -1;
+}
+
+/* 'key' is new. At most a half of the slots is taken. */
+int bpf_index_add(struct bpf_index *index, u64 key, u32 val)
+{
+	struct bpf_index old = *index;
+	u32 i;
+
+	if (2 * old.cnt >= BIT(old.bits) - 1) {
+		index->slots = kvcalloc(BIT(old.bits + 2), sizeof(*old.slots), BPF_VERIFIER_GFP);
+		if (!index->slots) {
+			index->slots = old.slots;
+			return -ENOMEM;
+		}
+		index->bits += 2;
+		for (i = 0; old.cnt && i < BIT(old.bits); i++)
+			if (old.slots[i].next_val)
+				*index_slot(index, old.slots[i].key) = old.slots[i];
+		kvfree(old.slots);
+	}
+	*index_slot(index, key) = (struct bpf_index_slot){ key, val + 1 };
+	index->cnt++;
+	return 0;
 }
 
 static int copy_insn_array(struct bpf_map *map, u32 start, u32 end, u32 *items)
