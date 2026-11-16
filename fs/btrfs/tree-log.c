@@ -434,7 +434,7 @@ static int process_one_buffer(struct extent_buffer *eb,
 
 		if (btrfs_buffer_uptodate(eb, gen, NULL) && level == 0) {
 			ret = btrfs_exclude_logged_extents(eb);
-			if (ret)
+			if (unlikely(ret))
 				btrfs_abort_transaction(trans, ret);
 		}
 	}
@@ -2943,7 +2943,7 @@ static int clean_log_buffer(struct btrfs_trans_handle *trans,
 		int ret;
 
 		ret = btrfs_pin_reserved_extent(trans, eb);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 		return ret;
 	}
@@ -3019,7 +3019,7 @@ static noinline int walk_down_log_tree(struct btrfs_path *path, int *level,
 			path->slots[*level]++;
 			if (wc->free) {
 				ret = btrfs_read_extent_buffer(next, &check);
-				if (ret) {
+				if (unlikely(ret)) {
 					free_extent_buffer(next);
 					if (trans)
 						btrfs_abort_transaction(trans, ret);
@@ -3038,7 +3038,7 @@ static noinline int walk_down_log_tree(struct btrfs_path *path, int *level,
 			continue;
 		}
 		ret = btrfs_read_extent_buffer(next, &check);
-		if (ret) {
+		if (unlikely(ret)) {
 			free_extent_buffer(next);
 			if (trans)
 				btrfs_abort_transaction(trans, ret);
@@ -3617,7 +3617,7 @@ static void free_log_tree(struct btrfs_trans_handle *trans,
 
 	if (log->node) {
 		ret = walk_log_tree(&wc);
-		if (ret) {
+		if (unlikely(ret)) {
 			/*
 			 * We weren't able to traverse the entire log tree, the
 			 * typical scenario is getting an -EIO when reading an

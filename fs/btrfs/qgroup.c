@@ -1446,7 +1446,7 @@ int btrfs_quota_disable(struct btrfs_fs_info *fs_info)
 	ret = btrfs_free_tree_block(trans, btrfs_root_id(quota_root),
 				    quota_root->node, 0, 1);
 
-	if (ret < 0)
+	if (unlikely(ret < 0))
 		btrfs_abort_transaction(trans, ret);
 
 out:
@@ -1631,7 +1631,7 @@ int btrfs_add_qgroup_relation(struct btrfs_trans_handle *trans, u64 src, u64 dst
 		int ret2;
 
 		ret2 = del_qgroup_relation_item(trans, src, dst);
-		if (ret2 < 0)
+		if (unlikely(ret2 < 0))
 			btrfs_abort_transaction(trans, ret);
 		goto out;
 	}

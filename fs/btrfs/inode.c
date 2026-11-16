@@ -4607,7 +4607,7 @@ static int btrfs_unlink_subvol(struct btrfs_trans_handle *trans,
 	inode_inc_iversion(&dir->vfs_inode);
 	inode_set_mtime_to_ts(&dir->vfs_inode, inode_set_ctime_current(&dir->vfs_inode));
 	ret = btrfs_update_inode_fallback(trans, dir);
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 out:
 	fscrypt_free_filename(&fname);
@@ -5213,7 +5213,7 @@ static int maybe_insert_hole(struct btrfs_inode *inode, u64 offset, u64 len)
 	}
 
 	ret = btrfs_insert_hole_extent(trans, root, btrfs_ino(inode), offset, len);
-	if (ret) {
+	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 	} else {
 		btrfs_update_inode_bytes(inode, 0, drop_args.bytes_found);
@@ -6826,7 +6826,7 @@ int btrfs_create_new_inode(struct btrfs_trans_handle *trans,
 			if (ret)
 				goto discard;
 			ret = btrfs_update_inode(trans, BTRFS_I(inode));
-			if (ret) {
+			if (unlikely(ret)) {
 				btrfs_abort_transaction(trans, ret);
 				goto discard;
 			}
@@ -6910,7 +6910,7 @@ int btrfs_add_link(struct btrfs_trans_handle *trans,
 	update_time_after_link_or_unlink(parent_inode);
 
 	ret = btrfs_update_inode(trans, parent_inode);
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 	return ret;
 
@@ -6921,13 +6921,13 @@ fail_dir_item:
 
 		ret2 = btrfs_del_root_ref(trans, key.objectid, btrfs_root_id(root),
 					  parent_ino, &local_index, name);
-		if (ret2)
+		if (unlikely(ret2))
 			btrfs_abort_transaction(trans, ret2);
 	} else if (add_backref) {
 		int ret2;
 
 		ret2 = btrfs_del_inode_ref(trans, root, name, ino, parent_ino, NULL);
-		if (ret2)
+		if (unlikely(ret2))
 			btrfs_abort_transaction(trans, ret2);
 	}
 
@@ -9280,7 +9280,7 @@ next:
 			range_end = round_up(i_size, fs_info->sectorsize);
 			ret = btrfs_inode_set_file_extent_range(BTRFS_I(inode),
 					range_start, range_end - range_start);
-			if (ret) {
+			if (unlikely(ret)) {
 				btrfs_abort_transaction(trans, ret);
 				btrfs_end_transaction(trans);
 				break;

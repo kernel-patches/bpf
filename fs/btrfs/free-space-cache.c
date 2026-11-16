@@ -241,7 +241,7 @@ int btrfs_truncate_free_space_cache(struct btrfs_trans_handle *trans,
 	ret = btrfs_update_inode(trans, inode);
 
 fail:
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 
 	return ret;

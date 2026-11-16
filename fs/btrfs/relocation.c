@@ -1760,7 +1760,7 @@ out:
 
 	if (ret == 0) {
 		ret = insert_dirty_subvol(trans, rc, root);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 	}
 
@@ -3834,7 +3834,7 @@ static void delete_orphan_inode(struct btrfs_trans_handle *trans,
 	}
 	ret = btrfs_del_item(trans, root, path);
 out:
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 }
 
@@ -5157,26 +5157,26 @@ static int do_remap_reloc_trans(struct btrfs_fs_info *fs_info,
 
 	if (bg_needs_free_space) {
 		ret = btrfs_add_block_group_free_space(trans, dest_bg);
-		if (ret) {
+		if (unlikely(ret)) {
 			btrfs_abort_transaction(trans, ret);
 			goto fail;
 		}
 	}
 
 	ret = copy_remapped_data(fs_info, start, new_addr, length);
-	if (ret) {
+	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		goto fail;
 	}
 
 	ret = btrfs_remove_from_free_space_tree(trans, new_addr, length);
-	if (ret) {
+	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		goto fail;
 	}
 
 	ret = add_remap_entry(trans, path, src_bg, start, new_addr, length);
-	if (ret) {
+	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		goto fail;
 	}

@@ -450,7 +450,7 @@ delete_extent_item:
 		 */
 		path->slots[0] = del_slot;
 		ret = btrfs_del_items(trans, root, path, del_slot, del_nr);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 	}
 
@@ -773,7 +773,7 @@ again:
 
 mark_dirty:
 	ret = btrfs_inode_set_file_extent_range(inode, start, end - start);
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 
 	return ret;
@@ -2121,7 +2121,7 @@ static int fill_holes(struct btrfs_trans_handle *trans,
 		btrfs_set_file_extent_generation(leaf, fi, trans->transid);
 		if (del_slot >= 0) {
 			ret = btrfs_del_items(trans, root, path, del_slot, 1);
-			if (ret) {
+			if (unlikely(ret)) {
 				btrfs_abort_transaction(trans, ret);
 				btrfs_release_path(path);
 				return ret;

@@ -4468,7 +4468,7 @@ static noinline int btrfs_del_leaf(struct btrfs_trans_handle *trans,
 	refcount_inc(&leaf->refs);
 	ret = btrfs_free_tree_block(trans, btrfs_root_id(root), leaf, 0, 1);
 	free_extent_buffer_stale(leaf);
-	if (ret < 0)
+	if (unlikely(ret < 0))
 		btrfs_abort_transaction(trans, ret);
 
 	return ret;

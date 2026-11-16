@@ -2929,19 +2929,19 @@ void btrfs_create_pending_block_groups(struct btrfs_trans_handle *trans)
 		index = btrfs_bg_flags_to_raid_index(block_group->flags);
 
 		ret = insert_block_group_item(trans, block_group);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 		if (!test_bit(BLOCK_GROUP_FLAG_CHUNK_ITEM_INSERTED,
 			      &block_group->runtime_flags)) {
 			mutex_lock(&fs_info->chunk_mutex);
 			ret = btrfs_chunk_alloc_add_chunk_item(trans, block_group);
 			mutex_unlock(&fs_info->chunk_mutex);
-			if (ret)
+			if (unlikely(ret))
 				btrfs_abort_transaction(trans, ret);
 		}
 		ret = insert_dev_extents(trans, block_group->start,
 					 block_group->length);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 		btrfs_add_block_group_free_space(trans, block_group);
 
@@ -3443,7 +3443,7 @@ again:
 				drop_reserve = false;
 			}
 			spin_unlock(&cur_trans->dirty_bgs_lock);
-		} else if (ret) {
+		} else if (unlikely(ret)) {
 			btrfs_abort_transaction(trans, ret);
 		}
 
@@ -3513,7 +3513,7 @@ int btrfs_write_dirty_block_groups(struct btrfs_trans_handle *trans)
 			ret = btrfs_run_delayed_refs(trans, U64_MAX);
 		if (!ret) {
 			ret = update_block_group_item(trans, path, cache);
-			if (ret)
+			if (unlikely(ret))
 				btrfs_abort_transaction(trans, ret);
 		}
 
