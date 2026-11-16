@@ -8491,10 +8491,15 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 	}
 
 	if (test_share_config_flag(work->tcon->share_conf,
-				   KSMBD_SHARE_FLAG_ACL_XATTR))
+				   KSMBD_SHARE_FLAG_ACL_XATTR)) {
 		ppntsd_size = ksmbd_vfs_get_sd_xattr(work->conn, idmap,
 						     fp->filp->f_path.dentry,
 						     &ppntsd);
+		if (ppntsd_size < 0 && !smb_no_stored_sd(ppntsd_size)) {
+			rc = ppntsd_size == -ENOMEM ? -ENOMEM : -EIO;
+			goto release_acl;
+		}
+	}
 
 	/* Check if sd buffer size exceeds response buffer size */
 	max_len = smb2_calc_max_out_buf_len(work,

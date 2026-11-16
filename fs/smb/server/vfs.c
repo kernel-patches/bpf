@@ -1630,13 +1630,15 @@ static struct xattr_smb_acl *ksmbd_vfs_make_xattr_posix_acl(const struct mnt_idm
 
 	posix_acls = get_inode_acl(inode, acl_type);
 	if (IS_ERR_OR_NULL(posix_acls))
-		return NULL;
+		return ERR_CAST(posix_acls);
 
 	smb_acl = kzalloc(sizeof(struct xattr_smb_acl) +
 			  sizeof(struct xattr_acl_entry) * posix_acls->a_count,
 			  KSMBD_DEFAULT_GFP);
-	if (!smb_acl)
+	if (!smb_acl) {
+		smb_acl = ERR_PTR(-ENOMEM);
 		goto out;
+	}
 
 	smb_acl->count = posix_acls->a_count;
 	pa_entry = posix_acls->a_entries;
@@ -1712,11 +1714,17 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 
 	sha256(acl.sd_buf, acl.sd_size, acl.hash);
 
+	/* A POSIX ACL that cannot be read is hashed as none, as before */
 	smb_acl = ksmbd_vfs_make_xattr_posix_acl(idmap, inode,
 						 ACL_TYPE_ACCESS);
-	if (S_ISDIR(inode->i_mode))
+	if (IS_ERR(smb_acl))
+		smb_acl = NULL;
+	if (S_ISDIR(inode->i_mode)) {
 		def_smb_acl = ksmbd_vfs_make_xattr_posix_acl(idmap, inode,
 							     ACL_TYPE_DEFAULT);
+		if (IS_ERR(def_smb_acl))
+			def_smb_acl = NULL;
+	}
 
 	rc = ndr_encode_posix_acl(&acl_ndr, idmap, inode,
 				  smb_acl, def_smb_acl);
@@ -1770,11 +1778,23 @@ int ksmbd_vfs_get_sd_xattr(struct ksmbd_conn *conn,
 	if (rc)
 		goto out_free;
 
+	/* ACL read failures must not masquerade as a stale SD */
 	smb_acl = ksmbd_vfs_make_xattr_posix_acl(idmap, inode,
 						 ACL_TYPE_ACCESS);
-	if (S_ISDIR(inode->i_mode))
+	if (IS_ERR(smb_acl)) {
+		rc = PTR_ERR(smb_acl) == -ENOMEM ? -ENOMEM : -EIO;
+		smb_acl = NULL;
+		goto out_free;
+	}
+	if (S_ISDIR(inode->i_mode)) {
 		def_smb_acl = ksmbd_vfs_make_xattr_posix_acl(idmap, inode,
 							     ACL_TYPE_DEFAULT);
+		if (IS_ERR(def_smb_acl)) {
+			rc = PTR_ERR(def_smb_acl) == -ENOMEM ? -ENOMEM : -EIO;
+			def_smb_acl = NULL;
+			goto out_free;
+		}
+	}
 
 	rc = ndr_encode_posix_acl(&acl_ndr, idmap, inode, smb_acl,
 				  def_smb_acl);

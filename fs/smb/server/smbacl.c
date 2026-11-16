@@ -1545,8 +1545,11 @@ int smb_check_perm_dacl(struct ksmbd_conn *conn, const struct path *path,
 	ksmbd_debug(SMB, "check permission using windows acl\n");
 	pntsd_size = ksmbd_vfs_get_sd_xattr(conn, idmap,
 					    path->dentry, &pntsd);
-	if (pntsd_size <= 0 || !pntsd)
+	if (pntsd_size <= 0 || !pntsd) {
+		if (pntsd_size < 0 && !smb_no_stored_sd(pntsd_size))
+			rc = pntsd_size == -ENOMEM ? -ENOMEM : -EACCES;
 		goto err_out;
+	}
 
 	dacl_offset = le32_to_cpu(pntsd->dacloffset);
 	if (!dacl_offset ||
