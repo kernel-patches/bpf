@@ -6613,8 +6613,9 @@ fini:
 }
 
 /*
- * Zero the blocks of a zone that is being reset. The store can be smaller
- * than the device, so wrap around at its end like do_device_access() does.
+ * Zero the blocks of a zone that is being reset, and reset their protection
+ * information. The store can be smaller than the device, so wrap around at
+ * its end like do_device_access() does.
  */
 static void zbc_zero_blocks(struct sdeb_store_info *sip, sector_t lba,
 			    sector_t num)
@@ -6632,6 +6633,14 @@ static void zbc_zero_blocks(struct sdeb_store_info *sip, sector_t lba,
 	       (num - rest) * sdebug_sector_size);
 	if (rest)
 		memset(sip->storep, 0, rest * sdebug_sector_size);
+
+	if (!sip->dif_storep)
+		return;
+
+	memset(sip->dif_storep + block, 0xff,
+	       (num - rest) * sizeof(*sip->dif_storep));
+	if (rest)
+		memset(sip->dif_storep, 0xff, rest * sizeof(*sip->dif_storep));
 }
 
 static void zbc_rwp_zone(struct sdebug_dev_info *devip,
