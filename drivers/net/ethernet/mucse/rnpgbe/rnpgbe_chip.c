@@ -232,6 +232,29 @@ static void rnpgbe_clear_rar(struct mucse_hw *hw, u32 index)
 	mucse_hw_wr32(hw, RNPGBE_RX_RAR_LOW(index), 0);
 }
 
+/**
+ * rnpgbe_set_mac_address - Change the interface's primary MAC address
+ * @netdev: network interface
+ * @addr: socket address containing the new MAC address
+ *
+ * Return: 0 on success, negative errno for an invalid address
+ */
+int rnpgbe_set_mac_address(struct net_device *netdev, void *addr)
+{
+	struct mucse *mucse = netdev_priv(netdev);
+	struct sockaddr *sa = addr;
+	int err;
+
+	err = eth_prepare_mac_addr_change(netdev, addr);
+	if (err)
+		return err;
+
+	rnpgbe_set_rar(&mucse->hw, 0, sa->sa_data);
+	eth_commit_mac_addr_change(netdev, addr);
+
+	return 0;
+}
+
 int rnpgbe_set_rx_mode(struct net_device *netdev,
 		       struct netdev_hw_addr_list *uc,
 		       struct netdev_hw_addr_list *mc)
