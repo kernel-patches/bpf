@@ -154,6 +154,7 @@ struct tbnet_ring {
  * @handler: ThunderboltIP configuration protocol handler
  * @dev: Networking device
  * @napi: NAPI structure for Rx polling
+ * @napi_enabled: Is NAPI currently enabled
  * @stats: Network statistics
  * @skb: Network packet that is currently processed on Rx path
  * @command_id: ID used for next configuration protocol packet
@@ -185,6 +186,7 @@ struct tbnet {
 	struct tb_protocol_handler handler;
 	struct net_device *dev;
 	struct napi_struct napi;
+	bool napi_enabled;
 	struct tbnet_stats stats;
 	struct sk_buff *skb;
 	atomic_t command_id;
@@ -366,6 +368,21 @@ static void tbnet_free_buffers(struct tbnet_ring *ring)
 	ring->prod = 0;
 }
 
+static inline void tbnet_napi_enable(struct tbnet *net)
+{
+	napi_enable(&net->napi);
+	net->napi_enabled = true;
+	/* Run once in case an Rx interrupt arrived while NAPI was disabled */
+	napi_schedule(&net->napi);
+}
+
+static inline void tbnet_napi_disable(struct tbnet *net)
+{
+	if (net->napi_enabled)
+		napi_disable(&net->napi);
+	net->napi_enabled = false;
+}
+
 static void tbnet_tear_down(struct tbnet *net, bool send_logout)
 {
 	netif_carrier_off(net->dev);
@@ -403,6 +420,8 @@ static void tbnet_tear_down(struct tbnet *net, bool send_logout)
 					       net->rx_ring.ring->hop);
 		if (ret)
 			netdev_warn(net->dev, "failed to disable DMA paths\n");
+
+		tbnet_napi_disable(net);
 
 		tb_ring_stop(net->rx_ring.ring);
 		tb_ring_stop(net->tx_ring.ring);
@@ -506,7 +525,7 @@ static unsigned int tbnet_available_buffers(const struct tbnet_ring *ring)
 static int tbnet_alloc_rx_buffers(struct tbnet *net, unsigned int nbuffers)
 {
 	struct tbnet_ring *ring = &net->rx_ring;
-	int ret;
+	int ret = 0;
 
 	while (nbuffers--) {
 		struct device *dma_dev = tb_ring_dma_device(ring->ring);
@@ -524,14 +543,16 @@ static int tbnet_alloc_rx_buffers(struct tbnet *net, unsigned int nbuffers)
 		tf->page = dev_alloc_pages(TBNET_RX_PAGE_ORDER);
 		if (!tf->page) {
 			ret = -ENOMEM;
-			goto err_free;
+			break;
 		}
 
 		dma_addr = dma_map_page(dma_dev, tf->page, 0,
 					TBNET_RX_PAGE_SIZE, DMA_FROM_DEVICE);
 		if (dma_mapping_error(dma_dev, dma_addr)) {
+			__free_pages(tf->page, TBNET_RX_PAGE_ORDER);
+			tf->page = NULL;
 			ret = -ENOMEM;
-			goto err_free;
+			break;
 		}
 
 		tf->frame.buffer_phy = dma_addr;
@@ -540,16 +561,19 @@ static int tbnet_alloc_rx_buffers(struct tbnet *net, unsigned int nbuffers)
 		trace_tbnet_alloc_rx_frame(index, tf->page, dma_addr,
 					   DMA_FROM_DEVICE);
 
-		tb_ring_rx_more(ring->ring, &tf->frame);
+		ret = tb_ring_rx_more(ring->ring, &tf->frame);
+		if (ret) {
+			dma_unmap_page(dma_dev, dma_addr, TBNET_RX_PAGE_SIZE,
+				       DMA_FROM_DEVICE);
+			__free_pages(tf->page, TBNET_RX_PAGE_ORDER);
+			tf->page = NULL;
+			break;
+		}
 
 		ring->prod++;
 	}
 
 	tb_ring_notify(ring->ring);
-	return 0;
-
-err_free:
-	tbnet_free_buffers(ring);
 	return ret;
 }
 
@@ -678,7 +702,9 @@ static void tbnet_connected_work(struct work_struct *work)
 
 	ret = tbnet_alloc_tx_buffers(net);
 	if (ret)
-		goto err_free_rx_buffers;
+		goto err_stop_rings;
+
+	tbnet_napi_enable(net);
 
 	ret = tb_xdomain_enable_paths(net->xd, net->local_transmit_path,
 				      net->tx_ring.ring->hop,
@@ -686,7 +712,7 @@ static void tbnet_connected_work(struct work_struct *work)
 				      net->rx_ring.ring->hop);
 	if (ret) {
 		netdev_err(net->dev, "failed to enable DMA paths\n");
-		goto err_free_tx_buffers;
+		goto err_napi;
 	}
 
 	netif_carrier_on(net->dev);
@@ -695,13 +721,13 @@ static void tbnet_connected_work(struct work_struct *work)
 	netdev_dbg(net->dev, "network traffic started\n");
 	return;
 
-err_free_tx_buffers:
-	tbnet_free_buffers(&net->tx_ring);
-err_free_rx_buffers:
-	tbnet_free_buffers(&net->rx_ring);
+err_napi:
+	tbnet_napi_disable(net);
 err_stop_rings:
 	tb_ring_stop(net->rx_ring.ring);
 	tb_ring_stop(net->tx_ring.ring);
+	tbnet_free_buffers(&net->rx_ring);
+	tbnet_free_buffers(&net->tx_ring);
 	tb_xdomain_release_in_hopid(net->xd, net->remote_transmit_path);
 	tbnet_connect_failed(net);
 }
@@ -827,9 +853,16 @@ static bool tbnet_check_frame(struct tbnet *net, const struct tbnet_frame *tf,
 static int tbnet_poll(struct napi_struct *napi, int budget)
 {
 	struct tbnet *net = container_of(napi, struct tbnet, napi);
-	unsigned int cleaned_count = tbnet_available_buffers(&net->rx_ring);
 	struct device *dma_dev = tb_ring_dma_device(net->rx_ring.ring);
-	unsigned int rx_packets = 0;
+	unsigned int cleaned_count, rx_packets = 0;
+	bool no_buffers = false;
+
+	if (!budget)
+		return 0;
+
+	/* Buffers a previous run was not able to return to the ring */
+	cleaned_count = tb_ring_size(net->rx_ring.ring) -
+			tbnet_available_buffers(&net->rx_ring);
 
 	while (rx_packets < budget) {
 		const struct thunderbolt_ip_frame_header *hdr;
@@ -846,7 +879,9 @@ static int tbnet_poll(struct napi_struct *napi, int budget)
 		 * time.
 		 */
 		if (cleaned_count >= MAX_SKB_FRAGS) {
-			tbnet_alloc_rx_buffers(net, cleaned_count);
+			if (tbnet_alloc_rx_buffers(net, cleaned_count) ==
+			    -ENOMEM)
+				no_buffers = true;
 			cleaned_count = 0;
 		}
 
@@ -918,10 +953,18 @@ static int tbnet_poll(struct napi_struct *napi, int budget)
 		}
 	}
 
-	if (cleaned_count)
-		tbnet_alloc_rx_buffers(net, cleaned_count);
+	if (cleaned_count &&
+	    tbnet_alloc_rx_buffers(net, cleaned_count) == -ENOMEM)
+		no_buffers = true;
 
 	if (rx_packets >= budget)
+		return budget;
+
+	/*
+	 * We were not able to fill the RX ring for more buffers on this
+	 * run. Keep the polling enabled to retry the allocation.
+	 */
+	if (no_buffers && !tbnet_available_buffers(&net->rx_ring))
 		return budget;
 
 	napi_complete_done(napi, rx_packets);
@@ -989,7 +1032,6 @@ static int tbnet_open(struct net_device *dev)
 	tb_ring_throttling(net->tx_ring.ring, TBNET_THROTTLING);
 	tb_ring_throttling(net->rx_ring.ring, TBNET_THROTTLING);
 
-	napi_enable(&net->napi);
 	start_login(net);
 
 	return 0;
@@ -998,8 +1040,6 @@ static int tbnet_open(struct net_device *dev)
 static int tbnet_stop(struct net_device *dev)
 {
 	struct tbnet *net = netdev_priv(dev);
-
-	napi_disable(&net->napi);
 
 	cancel_work_sync(&net->disconnect_work);
 	tbnet_tear_down(net, true);
