@@ -1064,13 +1064,10 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 	if (err)
 		return err;
 
-	dev->pclk = devm_clk_get(&pdev->dev, "pclk");
-	if (IS_ERR(dev->pclk)) {
-		err = PTR_ERR(dev->pclk);
-		dev_err(&pdev->dev,
-			"failed to get the peripheral clock: %d\n", err);
-		return err;
-	}
+	dev->pclk = devm_clk_get_enabled(&pdev->dev, "pclk");
+	if (IS_ERR(dev->pclk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(dev->pclk),
+				     "failed to get/enable the peripheral clock\n");
 
 	/* Get the optional generated clock */
 	dev->gclk = devm_clk_get_optional(&pdev->dev, "gclk");
@@ -1087,19 +1084,11 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 	dev->regmap = regmap;
 	platform_set_drvdata(pdev, dev);
 
-	err = clk_prepare_enable(dev->pclk);
-	if (err) {
-		dev_err(&pdev->dev,
-			"failed to enable the peripheral clock: %d\n", err);
-		return err;
-	}
-
 	err = devm_snd_soc_register_component(&pdev->dev,
 					      &mchp_i2s_mcc_component,
 					      &mchp_i2s_mcc_dai, 1);
 	if (err) {
 		dev_err(&pdev->dev, "failed to register DAI: %d\n", err);
-		clk_disable_unprepare(dev->pclk);
 		return err;
 	}
 
@@ -1109,7 +1098,6 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 	err = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (err) {
 		dev_err(&pdev->dev, "failed to register PCM: %d\n", err);
-		clk_disable_unprepare(dev->pclk);
 		return err;
 	}
 
@@ -1121,20 +1109,12 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void mchp_i2s_mcc_remove(struct platform_device *pdev)
-{
-	struct mchp_i2s_mcc_dev *dev = platform_get_drvdata(pdev);
-
-	clk_disable_unprepare(dev->pclk);
-}
-
 static struct platform_driver mchp_i2s_mcc_driver = {
 	.driver		= {
 		.name	= "mchp_i2s_mcc",
 		.of_match_table	= mchp_i2s_mcc_dt_ids,
 	},
 	.probe		= mchp_i2s_mcc_probe,
-	.remove		= mchp_i2s_mcc_remove,
 };
 module_platform_driver(mchp_i2s_mcc_driver);
 
