@@ -50,6 +50,7 @@ struct bpf_gen {
 	struct ksym_desc *ksyms;
 	__u32 nr_ksyms;
 	int fd_array;
+	int prog_fds;
 	int nr_fd_array;
 	/*
 	 * Maps with pointers to functions, that programs get their own copies
@@ -61,7 +62,7 @@ struct bpf_gen {
 };
 
 void bpf_gen__init(struct bpf_gen *gen, int log_level, int nr_progs, int nr_maps,
-		   int max_func_ptr_maps);
+		   int max_func_ptr_maps, int nr_kfuncs);
 int bpf_gen__finish(struct bpf_gen *gen, int nr_progs, int nr_maps);
 void bpf_gen__free(struct bpf_gen *gen);
 void bpf_gen__load_btf(struct bpf_gen *gen, const void *raw_data, __u32 raw_size);
