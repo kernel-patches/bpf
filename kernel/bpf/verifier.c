@@ -21790,11 +21790,8 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		struct bpf_insn_aux_data *insn_aux;
 		int err;
 
-		if (signal_pending(current))
-			return -EAGAIN;
-
-		if (need_resched())
-			cond_resched();
+		if (bpf_must_abort())
+			return -EINTR;
 
 		/* no insn makes as many ids as there are from here to BPF_INHERITED_ID */
 		if (env->id_gen >= BPF_MAX_ID) {
@@ -22988,8 +22985,8 @@ static int resolve_func_ptrs(struct bpf_verifier_env *env)
 			continue;
 
 		for (off = 0; off + sizeof(u64) <= map->value_size; off += sizeof(u64)) {
-			if (!(off % SZ_64K))
-				cond_resched();
+			if (bpf_must_abort())
+				return -EINTR;
 			val = *(u64 *)(unsigned long)(addr + off);
 			if (!val || val % sizeof(struct bpf_insn) ||
 			    val / sizeof(struct bpf_insn) >= insn_cnt)
@@ -25306,6 +25303,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	/* Serialize verification of unprivileged programs. */
 	if (!is_priv)
 		mutex_lock(&bpf_verifier_lock);
+	ret = -EINTR;
+	if (bpf_must_abort())
+		goto skip_full_check;
 
 	len = env->insn_aux_data_len = env->prog->len;
 	env->insn_aux_data =

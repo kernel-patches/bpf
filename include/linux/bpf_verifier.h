@@ -10,6 +10,22 @@
 #include <linux/tnum.h>
 #include <linux/cnum.h>
 #include <linux/math64.h> /* for div_s64_rem() */
+#include <linux/freezer.h>
+#include <linux/sched/signal.h>
+
+/*
+ * For each loop that can run long. The caller returns -EINTR.
+ *   killed          the task dies
+ *   freezer waits   the task freezes, then bpf() starts again
+ *   other signals   wait for the end of the load
+ */
+static inline bool bpf_must_abort(void)
+{
+	cond_resched();
+	return task_sigpending(current) &&
+	       (__fatal_signal_pending(current) || freezing(current) ||
+		(READ_ONCE(current->jobctl) & JOBCTL_TRAP_FREEZE));
+}
 
 /*
  * Mathematical modulo, the residue of 'v' modulo 'step', normalized to [0, step).
