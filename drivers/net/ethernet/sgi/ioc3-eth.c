@@ -152,19 +152,37 @@ static inline int ioc3_alloc_skb(struct ioc3_private *ip, struct sk_buff **skb,
 }
 
 #ifdef CONFIG_PCI_XTALK_BRIDGE
+/* A Bridge 64-bit direct-mapped DMA address carries the target widget in
+ * bits 63:60 and the DMA attributes below it.  An address in the 32-bit
+ * direct window carries neither, so attributes OR-ed onto one form a
+ * 64-bit address aimed at widget 0.
+ */
 static inline unsigned long ioc3_map(dma_addr_t addr, unsigned long attr)
 {
+	if (!(addr & PCI64_ATTR_TARG_MASK))
+		return addr;
+
 	return (addr & ~PCI64_ATTR_BAR) | attr;
 }
 
-#define ERBAR_VAL	(ERBAR_BARRIER_BIT << ERBAR_RXBARR_SHIFT)
+/* The RX barrier's upper address bits follow the same form. */
+static inline u32 ioc3_erbar(dma_addr_t addr)
+{
+	if (!(addr & PCI64_ATTR_TARG_MASK))
+		return 0;
+
+	return ERBAR_BARRIER_BIT << ERBAR_RXBARR_SHIFT;
+}
 #else
 static inline unsigned long ioc3_map(dma_addr_t addr, unsigned long attr)
 {
 	return addr;
 }
 
-#define ERBAR_VAL	0
+static inline u32 ioc3_erbar(dma_addr_t addr)
+{
+	return 0;
+}
 #endif
 
 static int ioc3eth_nvmem_match(struct device *dev, const void *data)
@@ -727,7 +745,7 @@ static void ioc3_init(struct net_device *dev)
 	readl(&regs->emcr);
 
 	/* Misc registers  */
-	writel(ERBAR_VAL, &regs->erbar);
+	writel(ioc3_erbar(ip->rxr_dma), &regs->erbar);
 	readl(&regs->etcdc);			/* Clear on read */
 	writel(15, &regs->ercsr);		/* RX low watermark  */
 	writel(0, &regs->ertr);			/* Interrupt immediately */
