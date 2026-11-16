@@ -419,7 +419,6 @@ static int hibmc_load(struct drm_device *dev)
 	return 0;
 
 err:
-	hibmc_unload(dev);
 	drm_err(dev, "failed to initialize drm driver: %d\n", ret);
 	return ret;
 }
