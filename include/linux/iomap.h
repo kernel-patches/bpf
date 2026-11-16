@@ -800,6 +800,8 @@ extern struct bio_set iomap_ioend_bioset;
 #ifdef CONFIG_BLOCK
 int iomap_bio_read_folio_range(const struct iomap_iter *iter,
 		struct iomap_read_folio_ctx *ctx, size_t plen);
+int iomap_bio_read_folio_range_sync(const struct iomap_iter *iter,
+		struct folio *folio, loff_t pos, size_t len);
 void iomap_bio_submit_read_endio(const struct iomap_iter *iter,
 		struct iomap_read_folio_ctx *ctx, bio_end_io_t end_io);
 
@@ -825,6 +827,13 @@ static inline void iomap_bio_readahead(struct readahead_control *rac,
 	};
 
 	iomap_readahead(ops, &ctx, NULL);
+}
+#else /* !CONFIG_BLOCK */
+static inline int iomap_bio_read_folio_range_sync(const struct iomap_iter *iter,
+		struct folio *folio, loff_t pos, size_t len)
+{
+	WARN_ON_ONCE(1);
+	return -EIO;
 }
 #endif /* CONFIG_BLOCK */
 
