@@ -3793,7 +3793,9 @@ dm_mst_test_alloc_dsc_link_ctx(struct kunit *test, int total_avail_slots)
 			drmm_connector_init(ctx->drm, &ctx->aconnector->base,
 					    &dm_mst_test_dsc_link_conn_funcs,
 					    DRM_MODE_CONNECTOR_DisplayPort, NULL), 0);
-	drm_mode_config_reset(ctx->drm);
+
+	KUNIT_ASSERT_EQ(test,
+			drm_mode_config_create_initial_state(ctx->drm), 0);
 
 	KUNIT_ASSERT_EQ(test,
 			drm_dp_mst_topology_mgr_init(&ctx->aconnector->mst_mgr, ctx->drm,

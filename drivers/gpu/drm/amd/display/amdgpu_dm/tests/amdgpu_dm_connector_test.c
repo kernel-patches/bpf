@@ -9965,7 +9965,8 @@ dm_test_force_ctx_alloc(struct kunit *test, const struct drm_connector_funcs *fu
 	encoder->crtc = crtc;
 	ctx->aconnector->base.encoder = encoder;
 
-	drm_mode_config_reset(ctx->drm);
+	KUNIT_ASSERT_EQ(test,
+			drm_mode_config_create_initial_state(ctx->drm), 0);
 
 	drm_modeset_acquire_init(&ctx->acquire_ctx, 0);
 	ctx->drm->mode_config.acquire_ctx = &ctx->acquire_ctx;
