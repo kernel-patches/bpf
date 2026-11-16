@@ -3859,6 +3859,12 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		err = -EINVAL;
 		goto out_unlock;
 	}
+	/* The same for tail calls, see bpf_prog_test_run_syscall(). */
+	if (prog->type == BPF_PROG_TYPE_EXT && tgt_prog->type == BPF_PROG_TYPE_SYSCALL &&
+	    prog->aux->tail_call_reachable && !tgt_prog->aux->tail_call_reachable) {
+		err = -EINVAL;
+		goto out_unlock;
+	}
 
 	err = bpf_link_prime(&link->link.link, &link_primer);
 	if (err)
@@ -6668,6 +6674,7 @@ int kern_sys_bpf(int cmd, union bpf_attr *attr, unsigned int size)
 			return PTR_ERR(prog);
 
 		if (attr->test.ctx_size_in < prog->aux->max_ctx_offset ||
+		    (prog->aux->tail_call_reachable && attr->test.ctx_size_in < U16_MAX) ||
 		    attr->test.ctx_size_in > U16_MAX) {
 			bpf_prog_put(prog);
 			return -EINVAL;
