@@ -2690,48 +2690,28 @@ static int bpf_find_exception_callback_insn_off(struct bpf_verifier_env *env)
 	return ret;
 }
 
-#define MAX_KFUNC_BTFS	256
-
 struct bpf_kfunc_btf {
 	struct btf *btf;
 	struct module *module;
-	u16 offset;
 };
 
 struct bpf_kfunc_btf_tab {
-	struct bpf_kfunc_btf descs[MAX_KFUNC_BTFS];
+	struct bpf_kfunc_btf *descs;
 	u32 nr_descs;
 };
 
-static int kfunc_desc_cmp_by_id_off(const void *a, const void *b)
+/* The key of env->kfunc_index. The BTF of a module has func_id 0. */
+static u64 kfunc_key(u32 func_id, u16 offset, bool specialized)
 {
-	const struct bpf_kfunc_desc *d0 = a;
-	const struct bpf_kfunc_desc *d1 = b;
-
-	/* func_id is not greater than BTF_MAX_TYPE */
-	return d0->func_id - d1->func_id ?: d0->offset - d1->offset;
-}
-
-static int kfunc_btf_cmp_by_off(const void *a, const void *b)
-{
-	const struct bpf_kfunc_btf *d0 = a;
-	const struct bpf_kfunc_btf *d1 = b;
-
-	return d0->offset - d1->offset;
+	return func_id | (u64)offset << 32 | (u64)specialized << 48;
 }
 
 static struct bpf_kfunc_desc *
-find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset)
+find_kfunc_desc(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 {
-	struct bpf_kfunc_desc desc = {
-		.func_id = func_id,
-		.offset = offset,
-	};
-	struct bpf_kfunc_desc_tab *tab;
+	int i = bpf_index_find(&env->kfunc_index, kfunc_key(func_id, offset, false));
 
-	tab = prog->aux->kfunc_tab;
-	return bsearch(&desc, tab->descs, tab->nr_base_descs,
-		       sizeof(tab->descs[0]), kfunc_desc_cmp_by_id_off);
+	return func_id && i >= 0 ? &env->prog->aux->kfunc_tab->descs[i] : NULL;
 }
 
 int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
@@ -2831,50 +2811,38 @@ static struct btf *fd_array_get_btf(struct bpf_verifier_env *env, u32 idx)
 static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,
 					 s16 offset)
 {
-	struct bpf_kfunc_btf kf_btf = { .offset = offset };
-	struct bpf_kfunc_btf_tab *tab;
+	struct bpf_kfunc_btf_tab *tab = env->prog->aux->kfunc_btf_tab;
+	int i = bpf_index_find(&env->kfunc_index, kfunc_key(0, offset, false));
 	struct bpf_kfunc_btf *b;
 	struct module *mod;
 	struct btf *btf;
 
-	tab = env->prog->aux->kfunc_btf_tab;
-	b = bsearch(&kf_btf, tab->descs, tab->nr_descs,
-		    sizeof(tab->descs[0]), kfunc_btf_cmp_by_off);
-	if (!b) {
-		if (tab->nr_descs == MAX_KFUNC_BTFS) {
-			verbose(env, "too many different module BTFs\n");
-			return ERR_PTR(-E2BIG);
-		}
+	if (i >= 0)
+		return tab->descs[i].btf;
 
-		btf = fd_array_get_btf(env, offset);
-		if (IS_ERR(btf))
-			return btf;
-		if (!btf_is_module(btf)) {
-			verbose(env, "BTF fd for kfunc is not a module BTF\n");
-			btf_put(btf);
-			return ERR_PTR(-EINVAL);
-		}
+	b = bpf_table_next(tab->descs, tab->nr_descs);
+	if (!b)
+		return ERR_PTR(-ENOMEM);
 
-		mod = btf_try_get_module(btf);
-		if (!mod) {
-			btf_put(btf);
-			return ERR_PTR(-ENXIO);
-		}
-
-		b = &tab->descs[tab->nr_descs++];
-		b->btf = btf;
-		b->module = mod;
-		b->offset = offset;
-
-		/* sort() reorders entries by value, so b may no longer point
-		 * to the right entry after this
-		 */
-		sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
-		     kfunc_btf_cmp_by_off, NULL);
-	} else {
-		btf = b->btf;
+	btf = fd_array_get_btf(env, offset);
+	if (IS_ERR(btf))
+		return btf;
+	if (!btf_is_module(btf)) {
+		verbose(env, "BTF fd for kfunc is not a module BTF\n");
+		btf_put(btf);
+		return ERR_PTR(-EINVAL);
 	}
 
+	mod = btf_try_get_module(btf);
+	if (!mod) {
+		btf_put(btf);
+		return ERR_PTR(-ENXIO);
+	}
+
+	b->btf = btf;
+	b->module = mod;
+	if (bpf_index_add(&env->kfunc_index, kfunc_key(0, offset, false), tab->nr_descs++))
+		return ERR_PTR(-ENOMEM);
 	return btf;
 }
 
@@ -2887,6 +2855,7 @@ void bpf_free_kfunc_btf_tab(struct bpf_kfunc_btf_tab *tab)
 		module_put(tab->descs[tab->nr_descs].module);
 		btf_put(tab->descs[tab->nr_descs].btf);
 	}
+	kvfree(tab->descs);
 	kfree(tab);
 }
 
@@ -2908,22 +2877,14 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 
 static struct btf *find_kfunc_desc_btf_cached(struct bpf_verifier_env *env, s16 offset)
 {
-	struct bpf_kfunc_btf kf_btf = { .offset = offset };
-	struct bpf_kfunc_btf_tab *tab;
-	struct bpf_kfunc_btf *b;
+	int i = bpf_index_find(&env->kfunc_index, kfunc_key(0, offset, false));
 
 	if (!offset)
 		return btf_vmlinux ?: ERR_PTR(-ENOENT);
 	if (offset < 0)
 		return ERR_PTR(-EINVAL);
 
-	tab = env->prog->aux->kfunc_btf_tab;
-	if (!tab)
-		return ERR_PTR(-ENOENT);
-
-	b = bsearch(&kf_btf, tab->descs, tab->nr_descs,
-		    sizeof(tab->descs[0]), kfunc_btf_cmp_by_off);
-	return b ? b->btf : ERR_PTR(-ENOENT);
+	return i >= 0 ? env->prog->aux->kfunc_btf_tab->descs[i].btf : ERR_PTR(-ENOENT);
 }
 
 #define KF_IMPL_SUFFIX "_impl"
@@ -3081,18 +3042,8 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 		prog_aux->kfunc_btf_tab = btf_tab;
 	}
 
-	if (find_kfunc_desc(env->prog, func_id, offset))
+	if (find_kfunc_desc(env, func_id, offset))
 		return 0;
-
-	if (tab->nr_base_descs == MAX_KFUNC_DESCS) {
-		verbose(env, "too many different kernel function calls\n");
-		return -E2BIG;
-	}
-	if (tab->nr_descs != tab->nr_base_descs) {
-		verifier_bug(env, "unexpected specialized func desc found (%d descs, %d base descs)",
-			     tab->nr_descs, tab->nr_base_descs);
-		return -EFAULT;
-	}
 
 	err = fetch_kfunc_meta(env, func_id, offset, &kfunc);
 	if (err)
@@ -3133,12 +3084,9 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	meta.func_name = kfunc.name;
 	meta.kfunc_flags = kfunc.flags ? *kfunc.flags : 0;
 
-	tab = krealloc(tab, struct_size(tab, descs, tab->nr_descs + 1), BPF_VERIFIER_GFP);
-	if (!tab)
+	desc = bpf_table_next(tab->descs, tab->nr_descs);
+	if (!desc)
 		return -ENOMEM;
-	prog_aux->kfunc_tab = tab;
-
-	desc = &tab->descs[tab->nr_descs];
 	memset(desc, 0, sizeof(*desc));
 
 	err = gen_kfunc_arg_proto(env, &meta, &func_model, &desc->proto);
@@ -3149,11 +3097,7 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	desc->offset = offset;
 	desc->addr = addr;
 	desc->func_model = func_model;
-	tab->nr_descs++;
-	tab->nr_base_descs++;
-	sort(tab->descs, tab->nr_base_descs, sizeof(tab->descs[0]),
-	     kfunc_desc_cmp_by_id_off, NULL);
-	return 0;
+	return bpf_index_add(&env->kfunc_index, kfunc_key(func_id, offset, false), tab->nr_descs++);
 }
 
 static int add_subprogs(struct bpf_verifier_env *env)
@@ -3260,7 +3204,7 @@ static int add_kfuncs(struct bpf_verifier_env *env)
 			return -EPERM;
 		}
 
-		ret = bpf_add_kfunc_call(env, insn->imm, insn->off);
+		ret = bpf_must_abort() ? -EINTR : bpf_add_kfunc_call(env, insn->imm, insn->off);
 		if (ret < 0)
 			return ret;
 	}
@@ -15042,7 +14986,7 @@ bool bpf_needs_fixed_stack_off(struct bpf_verifier_env *env, int insn_idx)
 		if (bpf_get_helper_proto(env, insn->imm, &fn) < 0)
 			return false;
 	} else if (bpf_pseudo_kfunc_call(insn)) {
-		desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+		desc = find_kfunc_desc(env, insn->imm, insn->off);
 		if (!desc)
 			return false;
 		fn = &desc->proto;
@@ -15520,7 +15464,7 @@ static u16 call_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	u16 mask = 0;
 
 	if (bpf_pseudo_kfunc_call(insn)) {
-		desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+		desc = find_kfunc_desc(env, insn->imm, insn->off);
 		if (!desc)
 			return 0;
 		fn = &desc->proto;
@@ -15961,7 +15905,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	func_name = meta.func_name;
 	insn_aux = &env->insn_aux_data[insn_idx];
 
-	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+	desc = find_kfunc_desc(env, insn->imm, insn->off);
 	if (!desc) {
 		verifier_bug(env, "kfunc descriptor not found for func_id %u", insn->imm);
 		return -EFAULT;
@@ -24703,64 +24647,21 @@ static int specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc 
 	return 0;
 }
 
-static int add_kfunc_desc_target(struct bpf_verifier_env *env,
-				 const struct bpf_kfunc_desc *target_desc,
-				 u16 base_desc_idx, u16 *desc_idx)
+/* A kfunc has at most one specialized target. Returns the index of its descriptor. */
+static int add_specialized_kfunc(struct bpf_verifier_env *env, const struct bpf_kfunc_desc *desc)
 {
-	struct bpf_kfunc_desc desc = *target_desc;
-	struct bpf_kfunc_desc_tab *new_tab;
-	struct bpf_kfunc_desc_tab *tab;
-	struct bpf_prog_aux *prog_aux;
-	u32 i;
+	struct bpf_kfunc_desc_tab *tab = env->prog->aux->kfunc_tab;
+	u64 key = kfunc_key(desc->func_id, desc->offset, true);
+	int i = bpf_index_find(&env->kfunc_index, key);
 
-	prog_aux = env->prog->aux;
-	tab = prog_aux->kfunc_tab;
-
-	if (base_desc_idx >= tab->nr_base_descs) {
-		verifier_bug(env, "kfunc desc_idx %d out of bounds (%d descriptors)",
-				base_desc_idx, tab->nr_base_descs);
-		return -EFAULT;
-	}
-	if (tab->descs[base_desc_idx].func_id != desc.func_id) {
-		verifier_bug(env, "kfunc desc %d has invalid id (expected %d, got %d)",
-				base_desc_idx, tab->descs[base_desc_idx].func_id, desc.func_id);
-		return -EFAULT;
-	}
-	if (tab->descs[base_desc_idx].offset != desc.offset) {
-		verifier_bug(env, "kfunc desc %d has invalid offset (expected %d, got %d)",
-				base_desc_idx, tab->descs[base_desc_idx].offset, desc.offset);
-		return -EFAULT;
-	}
-
-	if (tab->descs[base_desc_idx].addr == desc.addr) {
-		*desc_idx = base_desc_idx;
-		return 0;
-	}
-
-	for (i = tab->nr_base_descs; i < tab->nr_descs; i++) {
-		if (tab->descs[i].func_id == desc.func_id &&
-		    tab->descs[i].offset == desc.offset &&
-		    tab->descs[i].addr == desc.addr) {
-			*desc_idx = i;
-			return 0;
-		}
-	}
-
-	if (tab->nr_descs == MAX_KFUNC_CALL_DESCS) {
-		verbose(env, "too many different kernel function call targets\n");
-		return -E2BIG;
-	}
-
-	new_tab = krealloc(tab, struct_size(tab, descs, tab->nr_descs + 1),
-			   BPF_VERIFIER_GFP);
-	if (!new_tab)
+	if (i >= 0)
+		return verifier_bug_if(tab->descs[i].addr != desc->addr, env,
+				       "two targets of kfunc %u", desc->func_id) ? -EFAULT : i;
+	if (!bpf_table_next(tab->descs, tab->nr_descs) ||
+	    bpf_index_add(&env->kfunc_index, key, tab->nr_descs))
 		return -ENOMEM;
-	tab = new_tab;
-	prog_aux->kfunc_tab = tab;
-
-	*desc_idx = tab->nr_descs;
-	tab->descs[tab->nr_descs++] = desc;
-	return 0;
+	tab->descs[tab->nr_descs] = *desc;
+	return tab->nr_descs++;
 }
 
 static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
@@ -24786,9 +24687,8 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	struct bpf_kfunc_desc desc_copy;
 	struct bpf_kfunc_desc *desc;
 	unsigned long call_imm;
-	u16 base_desc_idx, desc_idx;
+	int err, desc_idx;
 	bool near_call;
-	int err;
 
 	if (!insn->imm) {
 		verbose(env, "invalid kernel function call not eliminated in verifier pass\n");
@@ -24801,13 +24701,13 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 * __bpf_call_base, unless the JIT needs to call functions that are
 	 * further than 32 bits away (bpf_jit_supports_far_kfunc_call()).
 	 */
-	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+	desc = find_kfunc_desc(env, insn->imm, insn->off);
 	if (!desc) {
 		verifier_bug(env, "kernel function descriptor not found for func_id %u",
 			     insn->imm);
 		return -EFAULT;
 	}
-	base_desc_idx = desc - env->prog->aux->kfunc_tab->descs;
+	desc_idx = desc - env->prog->aux->kfunc_tab->descs;
 
 	near_call = !bpf_jit_supports_far_kfunc_call();
 	desc_copy = *desc;
@@ -24827,9 +24727,15 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn->imm = call_imm;
 	}
 
-	err = add_kfunc_desc_target(env, desc, base_desc_idx, &desc_idx);
-	if (err)
-		return err;
+	if (desc->addr != env->prog->aux->kfunc_tab->descs[desc_idx].addr)
+		desc_idx = add_specialized_kfunc(env, desc);
+	if (desc_idx < 0)
+		return desc_idx;
+	/* JITs find the descriptor by insn->off */
+	if (desc_idx > U16_MAX) {
+		verbose(env, "too many different kernel function calls\n");
+		return -E2BIG;
+	}
 	insn->off = desc_idx;
 
 	if (is_bpf_obj_new_kfunc(desc->func_id) || is_bpf_percpu_obj_new_kfunc(desc->func_id)) {
@@ -25596,6 +25502,7 @@ err_free_env:
 	bpf_patch_list_free(env);
 	kvfree(env->fd_array);
 	kvfree(env->used_index.slots);
+	kvfree(env->kfunc_index.slots);
 	kvfree(env->insn_array_maps);
 	bpf_free_scev(env);
 	kvfree(env->walk_insns);

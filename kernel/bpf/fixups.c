@@ -122,10 +122,10 @@ bpf_jit_find_kfunc_model(const struct bpf_prog *prog,
 	struct bpf_kfunc_desc_tab *tab;
 
 	tab = prog->aux->kfunc_tab;
-	if (insn->off < 0 || insn->off >= tab->nr_descs)
+	if ((u16)insn->off >= tab->nr_descs)
 		return NULL;
 
-	res = &tab->descs[insn->off];
+	res = &tab->descs[(u16)insn->off];
 	if (bpf_jit_supports_far_kfunc_call()) {
 		if (res->func_id != insn->imm)
 			return NULL;

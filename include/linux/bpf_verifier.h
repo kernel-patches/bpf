@@ -1286,6 +1286,7 @@ struct bpf_verifier_env {
 	struct bpf_map **used_maps;	/* array of map's used by eBPF program */
 	struct btf_mod_pair *used_btfs;	/* array of BTF's used by BPF program */
 	struct bpf_index used_index;	/* address of a map or BTF -> entry of these two */
+	struct bpf_index kfunc_index;	/* see kfunc_key() */
 	struct bpf_map **insn_array_maps; /* array of INSN_ARRAY map's to be relocated */
 	u32 max_key_size;		/* of all used maps and their inner maps */
 	u32 max_value_size;
@@ -2195,11 +2196,6 @@ enum bpf_reg_arg_type {
 	DST_OP_NO_MARK	/* same as above, check only, don't mark */
 };
 
-#define MAX_KFUNC_DESCS 256
-/* Each kfunc can have its canonical and one specialized call target. */
-#define MAX_KFUNC_CALL_DESCS (MAX_KFUNC_DESCS * 2)
-static_assert(MAX_KFUNC_CALL_DESCS <= S16_MAX + 1);
-
 struct bpf_kfunc_desc {
 	struct btf_func_model func_model;
 	struct bpf_func_proto proto;
@@ -2209,19 +2205,16 @@ struct bpf_kfunc_desc {
 };
 
 struct bpf_kfunc_desc_tab {
+	struct bpf_kfunc_desc *descs;
 	u32 nr_descs;
-	u32 nr_base_descs;
-	/* Sorted by func_id (BTF ID) and offset (fd_array offset) during
-	 * verification. JITs use the descriptor index stored in the finalized
-	 * call's off field. The first nr_base_descs entries are the canonical
-	 * descriptors used for verifier lookups. Call specialization may append
-	 * immutable descriptors for additional targets.
-	 *
-	 * Grown one entry at a time by bpf_add_kfunc_call() and during
-	 * call specialization.
-	 */
-	struct bpf_kfunc_desc descs[];
 };
+
+static inline void bpf_free_kfunc_tab(struct bpf_kfunc_desc_tab *tab)
+{
+	if (tab)
+		kvfree(tab->descs);
+	kfree(tab);
+}
 
 /* Functions exported from verifier.c, used by fixups.c */
 void bpf_mark_subprog_exc_cb(struct bpf_verifier_env *env, int subprog);
