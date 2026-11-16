@@ -822,23 +822,12 @@ static int __init acpi_button_init(void)
 			lid_init_state = ACPI_BUTTON_LID_INIT_METHOD;
 	}
 
-	/*
-	 * Modules such as nouveau.ko and i915.ko have a link time dependency
-	 * on acpi_lid_open(), and would therefore not be loadable on ACPI
-	 * capable kernels booted in non-ACPI mode if the return value of
-	 * platform_driver_register() is returned from here with ACPI disabled
-	 * when this driver is built as a module.
-	 */
-	if (acpi_disabled)
-		return 0;
-
 	return platform_driver_register(&acpi_button_driver);
 }
 
 static void __exit acpi_button_exit(void)
 {
-	if (!acpi_disabled)
-		platform_driver_unregister(&acpi_button_driver);
+	platform_driver_unregister(&acpi_button_driver);
 }
 
 module_init(acpi_button_init);
