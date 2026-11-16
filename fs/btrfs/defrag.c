@@ -674,17 +674,20 @@ iterate:
 
 		btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
 
-		/*
-		 * We may go one slot back to INODE_REF/XATTR item, then
-		 * need to go forward until we reach an EXTENT_DATA.
-		 * But we should still has the correct ino as key.objectid.
-		 */
-		if (WARN_ON(key.objectid < ino) || key.type < BTRFS_EXTENT_DATA_KEY)
+		if (WARN_ON(key.objectid < ino))
 			goto next;
 
 		/* It's beyond our target range, definitely not extent found */
 		if (key.objectid > ino || key.type > BTRFS_EXTENT_DATA_KEY)
 			goto not_found;
+
+		/*
+		 * We may go one slot back to INODE_REF/XATTR item, then
+		 * need to go forward until we reach an EXTENT_DATA.
+		 * But we should still has the correct ino as key.objectid.
+		 */
+		if (key.type < BTRFS_EXTENT_DATA_KEY)
+			goto next;
 
 		/*
 		 *	|	|<- File extent ->|
