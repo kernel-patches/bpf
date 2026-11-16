@@ -201,10 +201,10 @@ The value returned from vma_needs_reservation() is generally
 If a reservation does not exist, and there is a subpool associated with the
 mapping the subpool is consulted to determine if it contains reservations.
 If the subpool contains reservations, one can be used for this allocation.
-However, in every case the avoid_reserve argument overrides the use of
-a reservation for the allocation.  After determining whether a reservation
-exists and can be used for the allocation, the routine dequeue_huge_page_vma()
-is called.  This routine takes two arguments related to reservations:
+However, avoid_reserve only applies to reservations from the reservation map.
+After determining whether a reservation exists and can be used for the
+allocation, the routine dequeue_huge_page_vma() is called.  This routine takes
+two arguments related to reservations:
 
 - avoid_reserve, this is the same value/argument passed to
   alloc_hugetlb_folio().
@@ -256,6 +256,10 @@ compensate.  See the section
 :ref:`Reservation Map Helper Routines <resv_map_helpers>` for more
 information on these routines.
 
+For CoW mappings, alloc_hugetlb_folio() calls
+folio_clear_hugetlb_restore_reserve() if the reservation came from the subpool.
+This makes free_huge_folio() return the reservation to the subpool on error.
+
 
 Instantiate Huge Pages
 ======================
@@ -284,14 +288,13 @@ be adjusted (see the section
 :ref:`Consuming Reservations/Allocating a Huge Page <consume_resv>`
 for information on how these are set).
 
-The routine first calls hugepage_subpool_put_pages() for the page.  If this
-routine returns a value of 0 (which does not equal the value passed 1) it
-indicates reserves are associated with the subpool, and this newly free page
-must be used to keep the number of subpool reserves above the minimum size.
-Therefore, the global resv_huge_pages counter is incremented in this case.
+If folio_test_hugetlb_restore_reserve() is false, hugepage_subpool_put_pages()
+returns the page to the subpool.  A return value of 0 means the page must restore
+a subpool reservation, so the global resv_huge_pages counter is incremented.
 
-If the PagePrivate flag was set in the page, the global resv_huge_pages counter
-will always be incremented.
+Otherwise, resv_huge_pages is incremented without calling
+hugepage_subpool_put_pages(): the restored reservation still counts as used in
+the subpool.
 
 .. _sub_pool_resv:
 
