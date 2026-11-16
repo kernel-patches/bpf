@@ -73,19 +73,16 @@ static ssize_t rproc_coredump_write(struct file *filp,
 				    loff_t *ppos)
 {
 	struct rproc *rproc = filp->private_data;
-	int ret, err = 0;
+	int err = 0;
 	char buf[20];
 
-	if (count < 1 || count > sizeof(buf))
+	if (count < 1 || count >= sizeof(buf))
 		return -EINVAL;
 
-	ret = copy_from_user(buf, user_buf, count);
-	if (ret)
+	if (copy_from_user(buf, user_buf, count))
 		return -EFAULT;
 
-	/* remove end of line */
-	if (buf[count - 1] == '\n')
-		buf[count - 1] = '\0';
+	buf[count] = '\0';
 
 	if (rproc->state == RPROC_CRASHED) {
 		dev_err(&rproc->dev, "can't change coredump configuration\n");
@@ -93,11 +90,11 @@ static ssize_t rproc_coredump_write(struct file *filp,
 		goto out;
 	}
 
-	if (!strncmp(buf, "disabled", count)) {
+	if (sysfs_streq(buf, "disabled")) {
 		rproc->dump_conf = RPROC_COREDUMP_DISABLED;
-	} else if (!strncmp(buf, "enabled", count)) {
+	} else if (sysfs_streq(buf, "enabled")) {
 		rproc->dump_conf = RPROC_COREDUMP_ENABLED;
-	} else if (!strncmp(buf, "inline", count)) {
+	} else if (sysfs_streq(buf, "inline")) {
 		rproc->dump_conf = RPROC_COREDUMP_INLINE;
 	} else {
 		dev_err(&rproc->dev, "Invalid coredump configuration\n");
@@ -211,26 +208,22 @@ rproc_recovery_write(struct file *filp, const char __user *user_buf,
 {
 	struct rproc *rproc = filp->private_data;
 	char buf[10];
-	int ret;
 
-	if (count < 1 || count > sizeof(buf))
+	if (count < 1 || count >= sizeof(buf))
 		return -EINVAL;
 
-	ret = copy_from_user(buf, user_buf, count);
-	if (ret)
+	if (copy_from_user(buf, user_buf, count))
 		return -EFAULT;
 
-	/* remove end of line */
-	if (buf[count - 1] == '\n')
-		buf[count - 1] = '\0';
+	buf[count] = '\0';
 
-	if (!strncmp(buf, "enabled", count)) {
+	if (sysfs_streq(buf, "enabled")) {
 		/* change the flag and begin the recovery process if needed */
 		rproc->recovery_disabled = false;
 		rproc_trigger_recovery(rproc);
-	} else if (!strncmp(buf, "disabled", count)) {
+	} else if (sysfs_streq(buf, "disabled")) {
 		rproc->recovery_disabled = true;
-	} else if (!strncmp(buf, "recover", count)) {
+	} else if (sysfs_streq(buf, "recover")) {
 		/* begin the recovery process without changing the flag */
 		rproc_trigger_recovery(rproc);
 	} else {
