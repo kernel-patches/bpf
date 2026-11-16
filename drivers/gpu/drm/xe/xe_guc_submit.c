@@ -10,6 +10,7 @@
 #include <linux/bitmap.h>
 #include <linux/circ_buf.h>
 #include <linux/dma-fence-array.h>
+#include <linux/iopoll.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_managed.h>
@@ -1908,6 +1909,32 @@ static void guc_exec_queue_destroy_async(struct xe_exec_queue *q)
 {
 	INIT_WORK(&q->guc->destroy_async, __guc_exec_queue_destroy_async);
 	xe_destroy_wq_queue(&q->guc->destroy_async);
+}
+
+/**
+ * xe_guc_submit_wait_id_released() - Wait for an exec queue's teardown
+ * @guc: the GuC
+ * @guc_id: GuC ID of an exec queue whose last reference was dropped
+ *
+ * Wait for @guc_id to be released, which happens only after GuC acknowledges
+ * the deregistration, then flush the destroy worker so the queue's LRCs are
+ * freed on return.
+ *
+ * Return: 0 on success, -ETIMEDOUT on timeout.
+ */
+int xe_guc_submit_wait_id_released(struct xe_guc *guc, u32 guc_id)
+{
+	void *entry;
+	int ret;
+
+	ret = read_poll_timeout(xa_load, entry, !entry, 100, USEC_PER_SEC, false,
+				&guc->submission_state.exec_queue_lookup, guc_id);
+	if (ret)
+		return ret;
+
+	xe_destroy_wq_flush();
+
+	return 0;
 }
 
 static void __guc_exec_queue_process_msg_cleanup(struct xe_sched_msg *msg,

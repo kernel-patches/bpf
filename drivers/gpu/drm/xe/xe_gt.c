@@ -395,6 +395,7 @@ int xe_gt_record_default_lrcs(struct xe_gt *gt)
 
 	for_each_hw_engine(hwe, gt, id) {
 		struct xe_exec_queue *q, *nop_q;
+		u32 q_id, nop_id = 0;
 		void *default_lrc;
 
 		if (gt->default_lrc[hwe->class])
@@ -416,6 +417,7 @@ int xe_gt_record_default_lrcs(struct xe_gt *gt)
 				  hwe->name, q);
 			return err;
 		}
+		q_id = q->guc->id;
 
 		/* Prime golden LRC with known good state */
 		err = emit_wa_job(gt, q);
@@ -433,6 +435,7 @@ int xe_gt_record_default_lrcs(struct xe_gt *gt)
 				  hwe->name, nop_q);
 			goto put_exec_queue;
 		}
+		nop_id = nop_q->guc->id;
 
 		/* Switch to different LRC */
 		err = emit_nop_job(gt, nop_q);
@@ -454,6 +457,16 @@ put_exec_queue:
 		xe_exec_queue_put(q);
 		if (err)
 			break;
+
+		/* No LRC GGTT range may be freed while the next engine is recorded */
+		err = xe_guc_submit_wait_id_released(&gt->uc.guc, q_id);
+		if (!err)
+			err = xe_guc_submit_wait_id_released(&gt->uc.guc, nop_id);
+		if (err) {
+			xe_gt_err(gt, "hwe %s: context teardown timed out (%pe)\n",
+				  hwe->name, ERR_PTR(err));
+			break;
+		}
 	}
 
 	return err;
