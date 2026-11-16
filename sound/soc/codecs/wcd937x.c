@@ -3049,7 +3049,7 @@ static int wcd937x_probe(struct platform_device *pdev)
 #endif /* CONFIG_TYPEC */
 	int ret;
 
-	wcd937x = devm_kzalloc(dev, sizeof(*wcd937x), GFP_KERNEL);
+	wcd937x = devm_kzalloc_obj(dev, *wcd937x);
 	if (!wcd937x)
 		return -ENOMEM;
 

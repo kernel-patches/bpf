@@ -361,16 +361,18 @@ static struct snd_soc_pcm_runtime *soc_new_pcm_runtime(
 	/*
 	 * for rtd
 	 */
-	rtd = devm_kzalloc(dev,
-			   struct_size(rtd, components,
-				       dai_link->num_cpus +
-				       dai_link->num_codecs +
-				       dai_link->num_platforms),
-			   GFP_KERNEL);
+	rtd = devm_kzalloc_flex(dev, *rtd, components,
+				dai_link->num_cpus + dai_link->num_codecs + dai_link->num_platforms);
 	if (!rtd) {
 		device_unregister(dev);
 		return NULL;
 	}
+	/*
+	 * devm_kzalloc_flex() presets the __counted_by() counter to the
+	 * allocated size when the compiler has __builtin_counted_by_ref(),
+	 * but snd_soc_rtd_add_component() expects it to start from zero.
+	 */
+	rtd->num_components = 0;
 
 	rtd->dev = dev;
 	INIT_LIST_HEAD(&rtd->list);
@@ -389,9 +391,8 @@ static struct snd_soc_pcm_runtime *soc_new_pcm_runtime(
 	/*
 	 * for rtd->dais
 	 */
-	rtd->dais = devm_kcalloc(dev, dai_link->num_cpus + dai_link->num_codecs,
-					sizeof(struct snd_soc_dai *),
-					GFP_KERNEL);
+	rtd->dais = devm_kzalloc_objs(dev, struct snd_soc_dai *,
+				      dai_link->num_cpus + dai_link->num_codecs);
 	if (!rtd->dais)
 		goto free_rtd;
 
@@ -594,7 +595,7 @@ EXPORT_SYMBOL_GPL(snd_soc_resume);
 struct of_phandle_args *snd_soc_copy_dai_args(struct device *dev,
 					      const struct of_phandle_args *args)
 {
-	struct of_phandle_args *ret = devm_kzalloc(dev, sizeof(*ret), GFP_KERNEL);
+	struct of_phandle_args *ret = devm_kzalloc_obj(dev, *ret);
 
 	if (!ret)
 		return NULL;
@@ -1473,7 +1474,7 @@ struct snd_soc_component *snd_soc_component_new(struct device *dev, const char *
 {
 	struct snd_soc_component *component;
 
-	component = devm_kzalloc(dev, sizeof(*component), GFP_KERNEL);
+	component = devm_kzalloc_obj(dev, *component);
 	if (!component)
 		return ERR_PTR(-ENOMEM);
 
@@ -1653,8 +1654,7 @@ int snd_soc_of_parse_audio_simple_widgets(struct snd_soc_card *card,
 
 	num_widgets /= 2;
 
-	widgets = devm_kcalloc(card->dev, num_widgets, sizeof(*widgets),
-			       GFP_KERNEL);
+	widgets = devm_kzalloc_objs(card->dev, *widgets, num_widgets);
 	if (!widgets) {
 		dev_err(card->dev,
 			"ASoC: Could not allocate memory for widgets\n");
@@ -1718,8 +1718,7 @@ int snd_soc_of_parse_pin_switches(struct snd_soc_card *card, const char *prop)
 	if (!of_property_present(dev->of_node, prop))
 		return 0;
 
-	strings = devm_kcalloc(dev, nb_controls_max,
-			       sizeof(*strings), GFP_KERNEL);
+	strings = devm_kzalloc_objs(dev, *strings, nb_controls_max);
 	if (!strings)
 		return -ENOMEM;
 
@@ -1730,8 +1729,7 @@ int snd_soc_of_parse_pin_switches(struct snd_soc_card *card, const char *prop)
 
 	nb_controls = (unsigned int)ret;
 
-	controls = devm_kcalloc(dev, nb_controls,
-				sizeof(*controls), GFP_KERNEL);
+	controls = devm_kzalloc_objs(dev, *controls, nb_controls);
 	if (!controls)
 		return -ENOMEM;
 
@@ -1882,8 +1880,7 @@ int snd_soc_of_parse_audio_routing(struct snd_soc_card *card,
 	}
 	num_routes /= 2;
 
-	routes = devm_kcalloc(card->dev, num_routes, sizeof(*routes),
-			      GFP_KERNEL);
+	routes = devm_kzalloc_objs(card->dev, *routes, num_routes);
 	if (!routes) {
 		dev_err(card->dev,
 			"ASoC: Could not allocate DAPM route table\n");
@@ -1931,7 +1928,7 @@ int snd_soc_of_parse_aux_devs(struct snd_soc_card *card, const char *propname)
 		return num;
 	}
 
-	aux = devm_kcalloc(card->dev, num, sizeof(*aux), GFP_KERNEL);
+	aux = devm_kzalloc_objs(card->dev, *aux, num);
 	if (!aux)
 		return -ENOMEM;
 	card->aux_dev = aux;
@@ -2369,7 +2366,7 @@ static int __snd_soc_of_get_dai_link_component_alloc(
 			dev_err(dev, "Bad phandle in 'sound-dai'\n");
 		return num;
 	}
-	component = devm_kcalloc(dev, num, sizeof(*component), GFP_KERNEL);
+	component = devm_kzalloc_objs(dev, *component, num);
 	if (!component)
 		return -ENOMEM;
 
@@ -2394,6 +2391,18 @@ void snd_soc_of_put_dai_link_codecs(struct snd_soc_dai_link *dai_link)
 		__snd_soc_of_put_component(component);
 }
 EXPORT_SYMBOL_GPL(snd_soc_of_put_dai_link_codecs);
+
+/* dai_name belongs to the component, which can unbind before the card. */
+static int snd_soc_of_dup_dai_name(struct device *dev,
+				   struct snd_soc_dai_link_component *dlc)
+{
+	if (!dlc->dai_name)
+		return 0;
+
+	dlc->dai_name = devm_kstrdup_const(dev, dlc->dai_name, GFP_KERNEL);
+
+	return dlc->dai_name ? 0 : -ENOMEM;
+}
 
 /*
  * snd_soc_of_get_dai_link_codecs - Parse a list of CODECs in the devicetree
@@ -2424,6 +2433,8 @@ int snd_soc_of_get_dai_link_codecs(struct device *dev,
 	/* Parse the list */
 	for_each_link_codecs(dai_link, index, component) {
 		ret = snd_soc_of_get_dlc(of_node, NULL, component, index);
+		if (!ret)
+			ret = snd_soc_of_dup_dai_name(dev, component);
 		if (ret)
 			goto err;
 	}
@@ -2479,6 +2490,8 @@ int snd_soc_of_get_dai_link_cpus(struct device *dev,
 	/* Parse the list */
 	for_each_link_cpus(dai_link, index, component) {
 		ret = snd_soc_of_get_dlc(of_node, NULL, component, index);
+		if (!ret)
+			ret = snd_soc_of_dup_dai_name(dev, component);
 		if (ret)
 			goto err;
 	}

@@ -2194,7 +2194,7 @@ static int twl4030_codec_probe(struct platform_device *pdev)
 	struct twl4030_priv *twl4030;
 	int ret;
 
-	twl4030 = devm_kzalloc(&pdev->dev, sizeof(*twl4030), GFP_KERNEL);
+	twl4030 = devm_kzalloc_obj(&pdev->dev, *twl4030);
 	if (!twl4030)
 		return -ENOMEM;
 

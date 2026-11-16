@@ -1763,7 +1763,7 @@ static int cpcap_codec_probe(struct platform_device *pdev)
 
 	platform_device_set_of_node(pdev, codec_node);
 
-	cpcap = devm_kzalloc(&pdev->dev, sizeof(*cpcap), GFP_KERNEL);
+	cpcap = devm_kzalloc_obj(&pdev->dev, *cpcap);
 	if (!cpcap)
 		return -ENOMEM;
 
