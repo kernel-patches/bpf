@@ -1059,11 +1059,6 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	err = devm_request_irq(&pdev->dev, irq, mchp_i2s_mcc_interrupt, 0,
-			       dev_name(&pdev->dev), dev);
-	if (err)
-		return err;
-
 	dev->pclk = devm_clk_get_enabled(&pdev->dev, "pclk");
 	if (IS_ERR(dev->pclk))
 		return dev_err_probe(&pdev->dev, PTR_ERR(dev->pclk),
@@ -1083,6 +1078,11 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 	dev->dev = &pdev->dev;
 	dev->regmap = regmap;
 	platform_set_drvdata(pdev, dev);
+
+	err = devm_request_irq(&pdev->dev, irq, mchp_i2s_mcc_interrupt, 0,
+			       dev_name(&pdev->dev), dev);
+	if (err)
+		return err;
 
 	err = devm_snd_soc_register_component(&pdev->dev,
 					      &mchp_i2s_mcc_component,
