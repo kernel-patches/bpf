@@ -1125,6 +1125,9 @@ static int load_image(struct swap_map_handle *handle,
 				nr_pages / m * 10);
 		nr_pages++;
 	}
+	/* Stop flushing pages on load failure. */
+	if (ret < 0)
+		clean_pages_on_read = false;
 	err2 = hib_wait_io(&hb);
 	hib_finish_batch(&hb);
 	stop = ktime_get();
@@ -1137,6 +1140,7 @@ static int load_image(struct swap_map_handle *handle,
 			ret = -ENODATA;
 	}
 	swsusp_show_speed(start, stop, nr_to_read, "Read");
+	clean_pages_on_read = false;
 	return ret;
 }
 
