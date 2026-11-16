@@ -324,8 +324,12 @@ static irqreturn_t quickspi_irq_thread_handler(int irq, void *dev_id)
 
 	if (int_mask & BIT(THC_RXDMA2_INT)) {
 		while (!read_finished) {
-			ret = thc_rxdma_read(qsdev->thc_hw, THC_RXDMA2, qsdev->input_buf,
-					     &input_len, &read_finished);
+			ret = thc_rxdma_read_safe(qsdev->thc_hw, THC_RXDMA2, qsdev->input_buf,
+						  HIDSPI_INPUT_BODY_SIZE(qsdev->input_len),
+						  &input_len, &read_finished);
+			if (ret == -EMSGSIZE)
+				continue;
+
 			if (ret) {
 				err_recover = 1;
 				goto end;
@@ -550,7 +554,7 @@ static int quickspi_alloc_report_buf(struct quickspi_device *qsdev)
 		return -ENOMEM;
 
 	max_input_len = max(le16_to_cpu(qsdev->dev_desc.rep_desc_len),
-			    le16_to_cpu(qsdev->dev_desc.max_input_len));
+			    le16_to_cpu(qsdev->dev_desc.max_input_len)) + QUICKSPI_DMA_EXTRA_BYTE;
 
 	qsdev->input_buf = devm_kzalloc(qsdev->dev,
 					HIDSPI_INPUT_BODY_SIZE(max_input_len), GFP_KERNEL);
@@ -560,7 +564,7 @@ static int quickspi_alloc_report_buf(struct quickspi_device *qsdev)
 	qsdev->input_len = max_input_len;
 
 	max_report_len = max(le16_to_cpu(qsdev->dev_desc.max_output_len),
-			     le16_to_cpu(qsdev->dev_desc.max_input_len));
+			     le16_to_cpu(qsdev->dev_desc.max_input_len)) + QUICKSPI_DMA_EXTRA_BYTE;
 
 	/*
 	 * write_cmd_to_txdma() writes the output report header ahead of the
