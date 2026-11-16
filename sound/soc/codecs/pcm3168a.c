@@ -797,6 +797,7 @@ int pcm3168a_probe(struct device *dev, struct regmap *regmap)
 					      ARRAY_SIZE(pcm3168a->dai_drv));
 	if (ret) {
 		dev_err(dev, "failed to register component: %d\n", ret);
+		pm_runtime_disable(dev);
 		goto err_regulator;
 	}
 
