@@ -738,9 +738,16 @@ int ksmbd_vfs_check_rename_share(struct ksmbd_work *work,
 				 const struct path *old_path)
 {
 	struct ksmbd_file *parent_fp;
+	struct dentry *parent;
 	int err = 0;
 
-	parent_fp = ksmbd_lookup_fd_inode(old_path->dentry->d_parent);
+	parent = dget_parent(old_path->dentry);
+	if (!d_inode(parent)) {
+		dput(parent);
+		return 0;
+	}
+	parent_fp = ksmbd_lookup_fd_inode(parent);
+	dput(parent);
 	if (!parent_fp)
 		return 0;
 
