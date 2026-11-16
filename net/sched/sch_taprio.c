@@ -589,6 +589,13 @@ static int taprio_enqueue_one(struct sk_buff *skb, struct Qdisc *sch,
 			      struct Qdisc *child, struct sk_buff **to_free)
 {
 	struct taprio_sched *q = qdisc_priv(sch);
+	int ret;
+
+	if (unlikely(qdisc_backlog_overflow(sch, skb))) {
+		qdisc_qstats_overlimit(sch);
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
 
 	/* sk_flags are only safe to use on full sockets. */
 	if (skb->sk && sk_fullsock(skb->sk) && sock_flag(skb->sk, SOCK_TXTIME)) {
@@ -600,10 +607,13 @@ static int taprio_enqueue_one(struct sk_buff *skb, struct Qdisc *sch,
 			return qdisc_drop(skb, sch, to_free);
 	}
 
-	qdisc_qstats_backlog_inc(sch, skb);
-	qdisc_qlen_inc(sch);
+	ret = qdisc_enqueue(skb, child, to_free);
+	if (ret == NET_XMIT_SUCCESS) {
+		qdisc_qstats_backlog_inc(sch, skb);
+		qdisc_qlen_inc(sch);
+	}
 
-	return qdisc_enqueue(skb, child, to_free);
+	return ret;
 }
 
 static int taprio_enqueue_segmented(struct sk_buff *skb, struct Qdisc *sch,
@@ -623,7 +633,6 @@ static int taprio_enqueue_segmented(struct sk_buff *skb, struct Qdisc *sch,
 		skb_mark_not_on_list(segs);
 		qdisc_skb_cb(segs)->pkt_len = segs->len;
 		qdisc_skb_cb(segs)->pkt_segs = 1;
-		slen += segs->len;
 
 		/* FIXME: we should be segmenting to a smaller size
 		 * rather than dropping these
@@ -637,6 +646,7 @@ static int taprio_enqueue_segmented(struct sk_buff *skb, struct Qdisc *sch,
 			if (net_xmit_drop_count(ret))
 				qdisc_qstats_drop(sch);
 		} else {
+			slen += segs->len;
 			numsegs++;
 		}
 	}

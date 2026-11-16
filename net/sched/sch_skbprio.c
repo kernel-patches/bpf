@@ -70,10 +70,17 @@ static int skbprio_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 {
 	const unsigned int max_priority = SKBPRIO_MAX_PRIORITY - 1;
 	struct skbprio_sched_data *q = qdisc_priv(sch);
-	struct sk_buff_head *qdisc;
 	struct sk_buff_head *lp_qdisc;
+	struct sk_buff_head *qdisc;
+	unsigned int to_drop_len;
 	struct sk_buff *to_drop;
 	u16 prio, lp;
+
+	if (unlikely(qdisc_backlog_overflow(sch, skb))) {
+		qdisc_qstats_overlimit(sch);
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
 
 	/* Obtain the priority of @skb. */
 	prio = min(skb->priority, max_priority);
@@ -113,10 +120,11 @@ static int skbprio_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	lp_qdisc = &q->qdiscs[lp];
 	to_drop = __skb_dequeue_tail(lp_qdisc);
 	BUG_ON(!to_drop);
+	to_drop_len = qdisc_pkt_len(to_drop);
 	qdisc_qstats_backlog_dec(sch, to_drop);
 	qdisc_drop(to_drop, sch, to_free);
 
-	q->qstats[lp].backlog -= qdisc_pkt_len(to_drop);
+	q->qstats[lp].backlog -= to_drop_len;
 	q->qstats[lp].drops++;
 	q->qstats[lp].overlimits++;
 
@@ -132,6 +140,11 @@ static int skbprio_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 	if (prio > q->highest_prio)
 		q->highest_prio = prio;
+
+	/* The parent does not book this packet on CN, so pass the net
+	 * change on instead.
+	 */
+	qdisc_tree_reduce_backlog(sch, 0, to_drop_len - qdisc_pkt_len(skb));
 
 	return NET_XMIT_CN;
 }

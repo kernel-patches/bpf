@@ -420,6 +420,12 @@ static int ets_qdisc_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	struct ets_class *cl;
 	int err = 0;
 
+	if (unlikely(qdisc_backlog_overflow(sch, skb))) {
+		qdisc_qstats_overlimit(sch);
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
+
 	cl = ets_classify(skb, sch, &err);
 	if (!cl) {
 		if (err & __NET_XMIT_BYPASS)

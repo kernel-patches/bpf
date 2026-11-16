@@ -168,6 +168,12 @@ static int etf_enqueue_timesortedlist(struct sk_buff *nskb, struct Qdisc *sch,
 	ktime_t txtime = nskb->tstamp;
 	bool leftmost = true;
 
+	if (unlikely(qdisc_backlog_overflow(sch, nskb))) {
+		qdisc_qstats_overlimit(sch);
+		return qdisc_drop_reason(nskb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
+
 	if (!is_packet_valid(sch, nskb)) {
 		report_sock_error(nskb, EINVAL,
 				  SO_EE_CODE_TXTIME_INVALID_PARAM);
