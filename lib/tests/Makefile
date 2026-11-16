@@ -60,3 +60,4 @@ obj-$(CONFIG_RATELIMIT_KUNIT_TEST) += test_ratelimit.o
 obj-$(CONFIG_UUID_KUNIT_TEST) += uuid_kunit.o
 
 obj-$(CONFIG_TEST_RUNTIME_MODULE)		+= module/
+obj-$(CONFIG_BARRIER_TIMEOUT_KUNIT_TEST) += barrier_timeout_kunit.o
