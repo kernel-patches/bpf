@@ -47,7 +47,7 @@ REP400(MANY_FUNC)
 #define SETS400(mask) "r7 = r6; r7 &= " #mask "; r7 += r8;" REP400(SET_LOAD)
 
 SEC("socket")
-__failure __msg("more than 4096 sets of functions")
+__success __retval(11)
 __naked void callx_rodata_4400_sets(void)
 {
 	asm volatile (
@@ -64,6 +64,35 @@ __naked void callx_rodata_4400_sets(void)
 		: __imm(bpf_get_prandom_u32)
 		: __clobber_all);
 }
+
+#define TABLE_5000(name, last, mask)				\
+__naked void name(void)						\
+{								\
+	asm volatile (						\
+		RODATA(tab, ".rept 2500; .quad many000; .quad many001; .endr;" last) \
+		"call %[bpf_get_prandom_u32];"			\
+		"r0 &= 8191;"					\
+		"if r0 < " #mask " goto +1;"			\
+		"r0 = 0;"					\
+		"r0 <<= 3;"					\
+		"r2 = tab_%= ll;"				\
+		"r2 += r0;"					\
+		"r2 = *(u64 *)(r2 + 0);"			\
+		"r1 = 10;"					\
+		"callx r2;"					\
+		"exit;"						\
+		:						\
+		: __imm(bpf_get_prandom_u32)			\
+		: __clobber_all);				\
+}
+
+SEC("socket")
+__success __retval(11)
+TABLE_5000(callx_rodata_5000_pointers, "", 5000)
+
+SEC("socket")
+__failure __msg("overlaps with a pointer to a function")
+TABLE_5000(callx_rodata_5000_pointers_and_data, ".quad 1;", 5001)
 
 /* 3 states that have no join get to a table of 400 functions: 3 states, and not 1200 */
 SEC("socket")

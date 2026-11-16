@@ -18,6 +18,7 @@
 #include <linux/vmalloc.h>
 #include <linux/stringify.h>
 #include <linux/bsearch.h>
+#include <linux/jhash.h>
 #include <linux/sort.h>
 #include <linux/perf_event.h>
 #include <linux/ctype.h>
@@ -6503,17 +6504,6 @@ int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val,
 	return 0;
 }
 
-static int cmp_func_ptrs(const void *_a, const void *_b)
-{
-	const struct bpf_func_ptr *a = _a, *b = _b;
-
-	if (a->map != b->map)
-		return a->map < b->map ? -1 : 1;
-	if (a->map_off != b->map_off)
-		return a->map_off < b->map_off ? -1 : 1;
-	return 0;
-}
-
 /* Find the first pointer to a function at or after 'off' in the value of 'map' */
 static u32 func_ptr_lower_bound(struct bpf_verifier_env *env, const struct bpf_map *map, u64 off)
 {
@@ -7164,14 +7154,6 @@ static void mark_reg_func_ptr(struct bpf_verifier_env *env, struct bpf_reg_state
 	regs[regno].subprogno = subprog;
 }
 
-static int cmp_u16(const void *a, const void *b)
-{
-	return *(const u16 *)a - *(const u16 *)b;
-}
-
-/* that many different sets at most: each load from a table looks through all of them */
-#define BPF_MAX_FUNC_SETS 4096
-
 /*
  * A load from a table of functions gives one register: a pointer to one of a set of functions.
  * One state for each function would differ in nothing else up to the call, and there every
@@ -7179,48 +7161,38 @@ static int cmp_u16(const void *a, const void *b)
  * Equal sets have the same number, so registers are compared as they are.
  */
 static int mark_reg_func_set(struct bpf_verifier_env *env, struct bpf_reg_state *regs, int regno,
-			     u16 *subprogs, u32 cnt)
+			     const u32 *subprogs, u32 n)
 {
-	struct bpf_func_set **sets, *set;
-	u32 i, n = 0;
+	struct bpf_func_set *set;
+	u64 key;
+	int i;
 
-	sort(subprogs, cnt, sizeof(*subprogs), cmp_u16, NULL);
-	for (i = 0; i < cnt; i++)
-		if (!n || subprogs[n - 1] != subprogs[i])
-			subprogs[n++] = subprogs[i];
 	mark_reg_func_ptr(env, regs, regno, n == 1 ? subprogs[0] : 0);
 	if (n == 1)
 		return 0;
 
-	for (i = 0; i < env->func_set_cnt; i++) {
+	/* sets with the same hash have keys in a row */
+	key = (u64)jhash2(subprogs, n, 0) << 32;
+	for (; (i = bpf_index_find(&env->func_set_index, key)) >= 0; key++) {
 		set = env->func_sets[i];
 		if (set->cnt == n && !memcmp(set->subprog, subprogs, n * sizeof(*subprogs)))
 			break;
 	}
-	if (i == env->func_set_cnt) {
-		if (i == BPF_MAX_FUNC_SETS) {
-			verbose(env, "more than %d sets of functions\n", BPF_MAX_FUNC_SETS);
-			return -E2BIG;
-		}
-		sets = krealloc_array(env->func_sets, i + 1, sizeof(*sets), BPF_VERIFIER_GFP);
-		if (!sets)
+	if (i < 0) {
+		i = env->func_set_cnt;
+		if (!bpf_table_next(env->func_sets, i) ||
+		    bpf_index_add(&env->func_set_index, key, i))
 			return -ENOMEM;
-		env->func_sets = sets;
-		set = kzalloc_flex(*set, subprog, n, BPF_VERIFIER_GFP);
+		set = kvzalloc_flex(*set, subprog, n, BPF_VERIFIER_GFP);
 		if (!set)
 			return -ENOMEM;
 		set->cnt = n;
 		memcpy(set->subprog, subprogs, n * sizeof(*subprogs));
-		sets[env->func_set_cnt++] = set;
+		env->func_sets[env->func_set_cnt++] = set;
 	}
 	regs[regno].func_set = i + 1;
 	return 0;
 }
-
-/* a read from a table of functions yields one of that many at most */
-#define BPF_MAX_FUNC_PTR_TARGETS BPF_MAX_SUBPROGS
-/* and that many pointers at most are next to what is read at variable offset */
-#define BPF_MAX_FUNC_PTR_RANGE 4096
 
 /* Count up to 'limit' offsets in [min_off, max_off] that the read is possible at */
 static u32 count_read_offsets(struct tnum offs, u64 min_off, u64 max_off, u32 limit)
@@ -7263,7 +7235,8 @@ static int check_func_ptr_read(struct bpf_verifier_env *env, struct bpf_reg_stat
 	struct tnum offs = tnum_add(reg->var_off, tnum_const(off));
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_map *map = reg->map_ptr;
-	u16 *targets __free(kfree) = NULL;
+	unsigned long *found __free(kvfree) = NULL;
+	u32 *targets __free(kvfree) = NULL;
 	struct bpf_func_ptr *ptrs;
 	u32 i, cnt, n = 0;
 	u64 o, lo, hi;
@@ -7272,13 +7245,14 @@ static int check_func_ptr_read(struct bpf_verifier_env *env, struct bpf_reg_stat
 	ptrs = bpf_map_range_func_ptrs(env, map, min_off, max_off - min_off + size, &cnt);
 	if (!ptrs)
 		return -ENOENT;
-	if (cnt > BPF_MAX_FUNC_PTR_RANGE)
-		goto overlap;
-	targets = kmalloc_array(BPF_MAX_FUNC_PTR_TARGETS, sizeof(*targets), BPF_VERIFIER_GFP);
-	if (!targets)
+	targets = kvmalloc_array(min(cnt, env->subprog_cnt), sizeof(*targets), BPF_VERIFIER_GFP);
+	found = kvcalloc(BITS_TO_LONGS(env->subprog_cnt), sizeof(long), BPF_VERIFIER_GFP);
+	if (!targets || !found)
 		return -ENOMEM;
 
 	for (i = 0; i < cnt; i++) {
+		if (bpf_must_abort())
+			return -EINTR;
 		/* the offsets at which the read overlaps with the pointer */
 		lo = ptrs[i].map_off >= size ? ptrs[i].map_off - size + 1 : 0;
 		lo = max(lo, min_off);
@@ -7288,17 +7262,13 @@ static int check_func_ptr_read(struct bpf_verifier_env *env, struct bpf_reg_stat
 				continue;
 			if (o != ptrs[i].map_off || size != sizeof(u64) || value_regno < 0)
 				goto overlap;
-			if (n == BPF_MAX_FUNC_PTR_TARGETS) {
-				verbose(env, "read from map '%s' may yield more than %d pointers to functions\n",
-					map->name, BPF_MAX_FUNC_PTR_TARGETS);
-				return -E2BIG;
-			}
 			subprog = bpf_find_subprog(env, ptrs[i].xlated_off);
 			if (verifier_bug_if(subprog <= 0, env,
 					    "no function at insn %u for map '%s' offset %u",
 					    ptrs[i].xlated_off, map->name, ptrs[i].map_off))
 				return -EFAULT;
-			targets[n++] = subprog;
+			__set_bit(subprog, found);
+			n++;
 		}
 	}
 	/* pointers are next to what is read, e.g. the data of an array of vtables */
@@ -7313,6 +7283,9 @@ static int check_func_ptr_read(struct bpf_verifier_env *env, struct bpf_reg_stat
 	if (err)
 		return err;
 
+	n = 0;
+	for_each_set_bit(subprog, found, env->subprog_cnt)
+		targets[n++] = subprog;
 	return mark_reg_func_set(env, regs, value_regno, targets, n);
 
 overlap:
@@ -22834,29 +22807,11 @@ next_insn:
 	return claim_used_maps(env);
 }
 
-/* that many pointers to functions are recognized in the maps of a program at most */
-#define BPF_MAX_FUNC_PTRS (1 << 20)
-
 static int add_func_ptr(struct bpf_verifier_env *env, struct bpf_map *map, u32 map_off,
 			u32 xlated_off)
 {
-	struct bpf_func_ptr *ptrs;
-
-	if (env->func_ptr_cnt == BPF_MAX_FUNC_PTRS) {
-		verbose(env, "too many pointers to functions in maps, the limit is %d\n",
-			BPF_MAX_FUNC_PTRS);
-		return -E2BIG;
-	}
-
-	/* grow by doubling, the array is sorted and searched later */
-	if (!(env->func_ptr_cnt & (env->func_ptr_cnt - 1))) {
-		ptrs = kvrealloc(env->func_ptrs,
-				 array_size(max(2 * env->func_ptr_cnt, 16U), sizeof(*ptrs)),
-				 BPF_VERIFIER_GFP);
-		if (!ptrs)
-			return -ENOMEM;
-		env->func_ptrs = ptrs;
-	}
+	if (!bpf_table_next(env->func_ptrs, env->func_ptr_cnt))
+		return -ENOMEM;
 	env->func_ptrs[env->func_ptr_cnt++] = (struct bpf_func_ptr){
 		.map = map,
 		.map_off = map_off,
@@ -22864,6 +22819,11 @@ static int add_func_ptr(struct bpf_verifier_env *env, struct bpf_map *map, u32 m
 		.xlated_off = xlated_off,
 	};
 	return 0;
+}
+
+static int cmp_maps(const void *a, const void *b)
+{
+	return cmp_int(*(const unsigned long *)a, *(const unsigned long *)b);
 }
 
 /*
@@ -22890,17 +22850,24 @@ static int add_func_ptr(struct bpf_verifier_env *env, struct bpf_map *map, u32 m
  */
 static int resolve_func_ptrs(struct bpf_verifier_env *env)
 {
+	struct bpf_map *map, **maps __free(kvfree) = NULL;
 	int insn_cnt = env->prog->len;
 	int i, err, subprog;
-	struct bpf_map *map;
 	u64 addr, val;
 	u32 off;
 
-	if (!env->has_callx || !env->allow_ptr_leaks)
+	if (!env->has_callx || !env->allow_ptr_leaks || !env->used_map_cnt)
 		return 0;
 
+	/* with the maps in order the pointers are in order */
+	maps = kvmalloc_objs(*maps, env->used_map_cnt, BPF_VERIFIER_GFP);
+	if (!maps)
+		return -ENOMEM;
+	memcpy(maps, env->used_maps, env->used_map_cnt * sizeof(*maps));
+	sort(maps, env->used_map_cnt, sizeof(*maps), cmp_maps, NULL);
+
 	for (i = 0; i < env->used_map_cnt; i++) {
-		map = env->used_maps[i];
+		map = maps[i];
 		/* coincidences in maps that are shared with other programs don't matter */
 		if (READ_ONCE(map->user) != (unsigned long)env->prog->aux)
 			continue;
@@ -22926,9 +22893,6 @@ static int resolve_func_ptrs(struct bpf_verifier_env *env)
 				return err;
 		}
 	}
-	if (env->func_ptr_cnt)
-		sort(env->func_ptrs, env->func_ptr_cnt, sizeof(*env->func_ptrs),
-		     cmp_func_ptrs, NULL);
 	return 0;
 }
 
@@ -25516,8 +25480,9 @@ err_free_env:
 	kvfree(env->callx_edges);
 	kvfree(env->func_ptrs);
 	for (i = 0; i < env->func_set_cnt; i++)
-		kfree(env->func_sets[i]);
-	kfree(env->func_sets);
+		kvfree(env->func_sets[i]);
+	kvfree(env->func_sets);
+	kvfree(env->func_set_index.slots);
 	bpf_diag_free(env);
 	kvfree(env->idoms);
 	kvfree(env);
