@@ -3254,10 +3254,6 @@ static int gfx_v7_0_rlc_init(struct amdgpu_device *adev)
 			return r;
 	}
 
-	/* init spm vmid with 0xf */
-	if (adev->gfx.rlc.funcs->update_spm_vmid)
-		adev->gfx.rlc.funcs->update_spm_vmid(adev, 0, adev->vm_manager.spm_vmid);
-
 	return 0;
 }
 
@@ -3478,6 +3474,10 @@ static int gfx_v7_0_rlc_resume(struct amdgpu_device *adev)
 		WREG32(mmRLC_DRIVER_CPDMA_STATUS, 0);
 
 	adev->gfx.rlc.funcs->start(adev);
+
+	/* init spm vmid with 0xf */
+	if (adev->gfx.rlc.funcs->update_spm_vmid)
+		adev->gfx.rlc.funcs->update_spm_vmid(adev, 0, adev->vm_manager.spm_vmid);
 
 	return 0;
 }
