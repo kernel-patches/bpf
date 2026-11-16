@@ -1231,6 +1231,10 @@ int reconfigure_super(struct fs_context *fc)
 		remount_ro = (fc->sb_flags & SB_RDONLY) && !sb_rdonly(sb);
 	}
 
+	/* An error made the filesystem read-only until it is unmounted. */
+	if (remount_rw && sb_emergency_ro(sb))
+		return -EROFS;
+
 	if (remount_ro) {
 		if (!hlist_empty(&sb->s_pins)) {
 			super_unlock_excl(sb);
@@ -2516,6 +2520,16 @@ retry:
 		goto retry;
 	}
 
+	/*
+	 * After an error nothing gets synced anymore while the flusher may
+	 * still write, so a new freeze can't give a stable filesystem. Joining
+	 * a freeze that is already in effect above is fine.
+	 */
+	if (sb_emergency_ro(sb)) {
+		deactivate_locked_super(sb);
+		return -EROFS;
+	}
+
 	if (sb_rdonly(sb)) {
 		/* Nothing to do really... */
 		WARN_ON_ONCE(freeze_inc(sb, who) > 1);
@@ -2538,6 +2552,9 @@ retry:
 
 	/* All writers are done so after syncing there won't be dirty data */
 	ret = sync_filesystem(sb);
+	/* An error while we waited for the writers means nothing was synced. */
+	if (!ret && sb_emergency_ro(sb))
+		ret = -EROFS;
 	if (ret) {
 		sb->s_writers.frozen = SB_UNFROZEN;
 		sb_freeze_unlock(sb, SB_FREEZE_PAGEFAULT);

@@ -71,7 +71,9 @@ void ext2_evict_inode(struct inode * inode)
 	struct ext2_block_alloc_info *rsv;
 	int want_delete = 0;
 
-	if (!inode->i_nlink && !is_bad_inode(inode)) {
+	/* After an error made us read-only the inode is left to e2fsck. */
+	if (!inode->i_nlink && !is_bad_inode(inode) &&
+	    !sb_emergency_ro(inode->i_sb)) {
 		want_delete = 1;
 		dquot_initialize(inode);
 	} else {

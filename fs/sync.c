@@ -39,8 +39,9 @@ int sync_filesystem(struct super_block *sb)
 
 	/*
 	 * No point in syncing out anything if the filesystem is read-only.
+	 * After an error made it read-only nothing is pushed out anymore.
 	 */
-	if (sb_rdonly(sb))
+	if (sb_rdonly_any(sb))
 		return 0;
 
 	/*
@@ -73,13 +74,13 @@ EXPORT_SYMBOL(sync_filesystem);
 
 static void sync_inodes_one_sb(struct super_block *sb, void *arg)
 {
-	if (!sb_rdonly(sb))
+	if (!sb_rdonly_any(sb))
 		sync_inodes_sb(sb);
 }
 
 static void sync_fs_one_sb(struct super_block *sb, void *arg)
 {
-	if (!sb_rdonly(sb) && !(sb->s_iflags & SB_I_SKIP_SYNC) &&
+	if (!sb_rdonly_any(sb) && !(sb->s_iflags & SB_I_SKIP_SYNC) &&
 	    sb->s_op->sync_fs)
 		sb->s_op->sync_fs(sb, *(int *)arg);
 }
@@ -160,6 +161,9 @@ SYSCALL_DEFINE1(syncfs, int, fd)
 	if (ret)
 		return ret;
 	ret = sync_filesystem(sb);
+	/* An error made the filesystem read-only. */
+	if (!ret && sb_emergency_ro(sb))
+		ret = -EROFS;
 	up_read(&sb->s_umount);
 
 	ret2 = errseq_check_and_advance(&sb->s_wb_err, &fd_file(f)->f_sb_err);
@@ -184,6 +188,10 @@ int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 
 	if (!file->f_op->fsync)
 		return -EINVAL;
+	/* Nothing is written back after an error, don't claim it is. */
+	if (!special_file(file_inode(file)->i_mode) &&
+	    sb_emergency_ro(file_inode(file)->i_sb))
+		return -EROFS;
 	if (!datasync)
 		sync_lazytime(inode);
 	return file->f_op->fsync(file, start, end, datasync);

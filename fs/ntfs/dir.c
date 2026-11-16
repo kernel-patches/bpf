@@ -1131,8 +1131,9 @@ static int ntfs_dir_fsync(struct file *filp, loff_t start, loff_t end,
 
 	ntfs_debug("Entering for inode 0x%llx.", ni->mft_no);
 
-	if (NVolShutdown(vol))
-		return -EIO;
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
 
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
 	if (!ctx)

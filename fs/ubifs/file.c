@@ -898,6 +898,13 @@ static int do_writepage(struct folio *folio, size_t len)
 
 	folio_start_writeback(folio);
 
+	/* Nothing gets written after an error, drop the folio. */
+	if (unlikely(c->ro_error)) {
+		err = -EROFS;
+		mapping_set_error(folio->mapping, err);
+		goto out;
+	}
+
 	block = folio->index << UBIFS_BLOCKS_PER_PAGE_SHIFT;
 	for (;;) {
 		blen = min_t(size_t, len, UBIFS_BLOCK_SIZE);
@@ -918,6 +925,7 @@ static int do_writepage(struct folio *folio, size_t len)
 		ubifs_ro_mode(c, err);
 	}
 
+out:
 	ubifs_assert(c, folio->private != NULL);
 	if (folio_test_checked(folio))
 		release_new_page_budget(c);
@@ -996,6 +1004,10 @@ static int ubifs_writepage(struct folio *folio, struct writeback_control *wbc)
 		err = 0;
 		goto out_unlock;
 	}
+
+	/* After an error do_writepage() drops the folio. */
+	if (unlikely(c->ro_error))
+		return do_writepage(folio, len);
 
 	spin_lock(&ui->ui_lock);
 	synced_i_size = ui->synced_i_size;

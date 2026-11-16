@@ -857,7 +857,8 @@ static int btrfs_remap_file_range_prep(struct file *file_in, loff_t pos_in,
 	if (!(remap_flags & REMAP_FILE_DEDUP)) {
 		struct btrfs_root *root_out = inode_out->root;
 
-		if (btrfs_root_readonly(root_out))
+		if (btrfs_root_readonly(root_out) ||
+		    btrfs_fs_rdonly(root_out->fs_info))
 			return -EROFS;
 
 		ASSERT(inode_in->vfs_inode.i_sb == inode_out->vfs_inode.i_sb);

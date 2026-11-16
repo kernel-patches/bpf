@@ -739,9 +739,11 @@ static int __ntfs_write_iomap_begin(struct inode *inode, loff_t offset,
 {
 	struct ntfs_inode *ni = NTFS_I(inode);
 	struct ntfs_inode *mrec_ni;
+	int err;
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	err = ntfs_emergency_state(ni->vol);
+	if (err)
+		return err;
 
 	if (!NInoNonResident(ni)) {
 		mrec_ni = ntfs_inode_is_named_stream(ni) ?

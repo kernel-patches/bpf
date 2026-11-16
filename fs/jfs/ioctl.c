@@ -116,6 +116,10 @@ long jfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 
+		/* Don't trust the block map after an error. */
+		if (sb_emergency_ro(sb))
+			return -EROFS;
+
 		if (!bdev_max_discard_sectors(sb->s_bdev)) {
 			jfs_warn("FITRIM not supported on device");
 			return -EOPNOTSUPP;

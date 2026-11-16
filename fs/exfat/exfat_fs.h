@@ -375,6 +375,16 @@ static inline int exfat_forced_shutdown(struct super_block *sb)
 	return test_bit(EXFAT_FLAGS_SHUTDOWN, &EXFAT_SB(sb)->s_exfat_flags);
 }
 
+/* -EIO after a forced shutdown, -EROFS after an error with errors=remount-ro */
+static inline int exfat_emergency_state(struct super_block *sb)
+{
+	if (unlikely(exfat_forced_shutdown(sb)))
+		return -EIO;
+	if (unlikely(sb_emergency_ro(sb)))
+		return -EROFS;
+	return 0;
+}
+
 /*
  * If ->i_mode can't hold 0222 (i.e. ATTR_RO), we use ->i_attrs to
  * save ATTR_RO instead of ->i_mode.
