@@ -27,6 +27,15 @@ config CRYPTO_LIB_AES_CCM_KUNIT_TEST
 	help
 	  KUnit tests for the AES-CCM authenticated encryption algorithm.
 
+config CRYPTO_LIB_AES_CTR_KUNIT_TEST
+	tristate "KUnit tests for AES-CTR" if !KUNIT_ALL_TESTS
+	depends on KUNIT && CRYPTO_LIB_AES_CTR
+	default KUNIT_ALL_TESTS
+	select CRYPTO_LIB_BENCHMARK_VISIBLE
+	# This test uses BLAKE2s, but that's always built-in.
+	help
+	  KUnit tests for the AES-CTR stream cipher.
+
 config CRYPTO_LIB_AES_ECB_KUNIT_TEST
 	tristate "KUnit tests for AES-ECB" if !KUNIT_ALL_TESTS
 	depends on KUNIT && CRYPTO_LIB_AES_ECB
