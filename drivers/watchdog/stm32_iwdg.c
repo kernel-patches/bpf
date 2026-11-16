@@ -31,6 +31,7 @@
 #define IWDG_SR		0x0C /* Status Register */
 #define IWDG_WINR	0x10 /* Windows Register */
 #define IWDG_EWCR	0x14 /* Early Wake-up Register */
+#define IWDG_VERR	0x3F4 /* Version Register */
 
 /* IWDG_KR register bit mask */
 #define KR_KEY_RELOAD	0xAAAA /* reload counter enable */
@@ -53,6 +54,9 @@
 #define EWCR_EWIT	GENMASK(11, 0) /* Watchdog counter window value */
 #define EWCR_EWIC	BIT(14) /* Watchdog early interrupt acknowledge */
 #define EWCR_EWIE	BIT(15) /* Watchdog early interrupt enable */
+
+/* IWDG_VERR register mask */
+#define VERR_MASK	GENMASK(7, 0)
 
 /* set timeout to 100000 us */
 #define TIMEOUT_US	100000
@@ -83,6 +87,7 @@ struct stm32_iwdg {
 	struct clk		*clk_lsi;
 	struct clk		*clk_pclk;
 	unsigned int		rate;
+	unsigned int		hw_version;
 	spinlock_t		lock; /* serialize IWDG_EWCR register access */
 };
 
@@ -358,6 +363,8 @@ static int stm32_iwdg_probe(struct platform_device *pdev)
 	wdd->min_timeout = DIV_ROUND_UP((RLR_MIN + 1) * PR_MIN, wdt->rate);
 	wdd->max_hw_heartbeat_ms = ((RLR_MAX + 1) * wdt->data->max_prescaler *
 				    1000) / wdt->rate;
+
+	wdt->hw_version = reg_read(wdt->regs, IWDG_VERR) & VERR_MASK;
 
 	watchdog_set_drvdata(wdd, wdt);
 	watchdog_set_nowayout(wdd, WATCHDOG_NOWAYOUT);
