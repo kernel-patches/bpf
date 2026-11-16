@@ -1110,14 +1110,13 @@ static int snd_mixart_free(struct mixart_mgr *mgr)
  */
 static ssize_t snd_mixart_BA0_read(struct snd_info_entry *entry,
 				   void *file_private_data,
-				   struct file *file, char __user *buf,
+				   struct file *file, char *buf,
 				   size_t count, loff_t pos)
 {
 	struct mixart_mgr *mgr = entry->private_data;
 
 	count = count & ~3; /* make sure the read size is a multiple of 4 bytes */
-	if (copy_to_user_fromio(buf, MIXART_MEM(mgr, pos), count))
-		return -EFAULT;
+	memcpy_fromio(buf, MIXART_MEM(mgr, pos), count);
 	return count;
 }
 
@@ -1126,14 +1125,13 @@ static ssize_t snd_mixart_BA0_read(struct snd_info_entry *entry,
  */
 static ssize_t snd_mixart_BA1_read(struct snd_info_entry *entry,
 				   void *file_private_data,
-				   struct file *file, char __user *buf,
+				   struct file *file, char *buf,
 				   size_t count, loff_t pos)
 {
 	struct mixart_mgr *mgr = entry->private_data;
 
 	count = count & ~3; /* make sure the read size is a multiple of 4 bytes */
-	if (copy_to_user_fromio(buf, MIXART_REG(mgr, pos), count))
-		return -EFAULT;
+	memcpy_fromio(buf, MIXART_REG(mgr, pos), count);
 	return count;
 }
 

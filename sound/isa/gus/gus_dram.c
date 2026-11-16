@@ -45,7 +45,7 @@ int snd_gus_dram_write(struct snd_gus_card *gus, char __user *buffer,
 	return snd_gus_dram_poke(gus, buffer, address, size);
 }
 
-static int snd_gus_dram_peek(struct snd_gus_card *gus, char __user *_buffer,
+static int snd_gus_dram_peek(struct snd_gus_card *gus, char *_buffer,
 			     unsigned int address, unsigned int size,
 			     int rom)
 {
@@ -67,15 +67,14 @@ static int snd_gus_dram_peek(struct snd_gus_card *gus, char __user *_buffer,
 			while (size2--)
 				*pbuffer++ = snd_gf1_peek(gus, address++);
 		}
-		if (copy_to_user(_buffer, buffer, size1))
-			return -EFAULT;
+		memcpy(_buffer, buffer, size1);
 		size -= size1;
 		_buffer += size1;
 	}
 	return 0;
 }
 
-int snd_gus_dram_read(struct snd_gus_card *gus, char __user *buffer,
+int snd_gus_dram_read(struct snd_gus_card *gus, char *buffer,
 		      unsigned int address, unsigned int size,
 		      int rom)
 {

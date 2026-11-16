@@ -1082,13 +1082,13 @@ static int input_attach_handler(struct input_dev *dev, struct input_handler *han
 #ifdef CONFIG_PROC_FS
 
 static struct proc_dir_entry *proc_bus_input_dir;
-static DECLARE_WAIT_QUEUE_HEAD(input_devices_poll_wait);
+static struct proc_dir_entry *proc_bus_input_devices;
 static int input_devices_state;
 
 static inline void input_wakeup_procfs_readers(void)
 {
 	input_devices_state++;
-	wake_up(&input_devices_poll_wait);
+	proc_poll_notify(proc_bus_input_devices);
 }
 
 struct input_seq_state {
@@ -1102,7 +1102,7 @@ static __poll_t input_proc_devices_poll(struct file *file, poll_table *wait)
 	struct seq_file *seq = file->private_data;
 	struct input_seq_state *state = seq->private;
 
-	poll_wait(file, &input_devices_poll_wait, wait);
+	pde_poll_wait(file, wait);
 	if (state->input_devices_state != input_devices_state) {
 		state->input_devices_state = input_devices_state;
 		return EPOLLIN | EPOLLRDNORM;
@@ -1284,9 +1284,9 @@ static int __init input_proc_init(void)
 	if (!proc_bus_input_dir)
 		return -ENOMEM;
 
-	entry = proc_create("devices", 0, proc_bus_input_dir,
-			    &input_devices_proc_ops);
-	if (!entry)
+	proc_bus_input_devices = proc_create("devices", 0, proc_bus_input_dir,
+					     &input_devices_proc_ops);
+	if (!proc_bus_input_devices)
 		goto fail1;
 
 	entry = proc_create("handlers", 0, proc_bus_input_dir,
@@ -1297,6 +1297,7 @@ static int __init input_proc_init(void)
 	return 0;
 
  fail2:	remove_proc_entry("devices", proc_bus_input_dir);
+	proc_bus_input_devices = NULL;
  fail1: remove_proc_entry("bus/input", NULL);
 	return -ENOMEM;
 }
@@ -1304,6 +1305,7 @@ static int __init input_proc_init(void)
 static void input_proc_exit(void)
 {
 	remove_proc_entry("devices", proc_bus_input_dir);
+	proc_bus_input_devices = NULL;
 	remove_proc_entry("handlers", proc_bus_input_dir);
 	remove_proc_entry("bus/input", NULL);
 }

@@ -9763,7 +9763,7 @@ static ssize_t scarlett2_devmap_read(
 	struct snd_info_entry *entry,
 	void                  *file_private_data,
 	struct file           *file,
-	char __user           *buf,
+	char                  *buf,
 	size_t                 count,
 	loff_t                 pos)
 {
@@ -9785,7 +9785,7 @@ static ssize_t scarlett2_devmap_read(
 	while (count > 0) {
 		/* SCARLETT2_USB_GET_DEVMAP reads only on block boundaries,
 		 * so we need to read a whole block and copy the requested
-		 * chunk to userspace.
+		 * chunk out of it.
 		 */
 
 		__le32 req;
@@ -9800,7 +9800,7 @@ static ssize_t scarlett2_devmap_read(
 					 block_size,
 					 entry->size - block_start);
 
-		/* size of the chunk to copy to userspace */
+		/* size of the chunk to copy out of the block */
 		size_t copy_size = min_t(size_t, count, read_size - offset);
 
 		/* request the block */
@@ -9810,8 +9810,7 @@ static ssize_t scarlett2_devmap_read(
 		if (err < 0)
 			return copied ? copied : err;
 
-		if (copy_to_user(buf, resp_buf + offset, copy_size))
-			return -EFAULT;
+		memcpy(buf, resp_buf + offset, copy_size);
 
 		buf += copy_size;
 		pos += copy_size;
