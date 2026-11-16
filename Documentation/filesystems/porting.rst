@@ -1422,3 +1422,13 @@ helpers take a ``const struct mnt_idmap *``. mnt_idmap() and file_mnt_idmap()
 return one. The idmapping is immutable so nothing should have modified it
 anyway. References are taken and dropped via mnt_idmap_get() and
 mnt_idmap_put() as before, both accept a const pointer.
+
+---
+
+**mandatory**
+
+d_real_inode() is gone. d_real() can fail for D_REAL_DATA now and returns an
+ERR_PTR() then, e.g., when overlayfs can't look up the data of a metacopy file
+in a data-only layer. Use d_real_data_inode(), which returns the inode hosting
+the data or an ERR_PTR(), and handle the error. Use d_real_metadata_inode() for
+the inode hosting the metadata and handle its errors as well.
