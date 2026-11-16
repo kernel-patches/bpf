@@ -1647,11 +1647,17 @@ static DEFINE_PER_CPU(struct bpf_raw_tp_regs, bpf_raw_tp_regs);
 static DEFINE_PER_CPU(int, bpf_raw_tp_nest_level);
 static struct pt_regs *get_bpf_raw_tp_regs(void)
 {
-	struct bpf_raw_tp_regs *tp_regs = this_cpu_ptr(&bpf_raw_tp_regs);
-	int nest_level = this_cpu_inc_return(bpf_raw_tp_nest_level);
+	struct bpf_raw_tp_regs *tp_regs;
+	int nest_level;
+
+	/* The slots nest: a task must not be preempted while it holds one */
+	preempt_disable();
+	tp_regs = this_cpu_ptr(&bpf_raw_tp_regs);
+	nest_level = this_cpu_inc_return(bpf_raw_tp_nest_level);
 
 	if (nest_level > ARRAY_SIZE(tp_regs->regs)) {
 		this_cpu_dec(bpf_raw_tp_nest_level);
+		preempt_enable();
 		return ERR_PTR(-EBUSY);
 	}
 
@@ -1661,6 +1667,7 @@ static struct pt_regs *get_bpf_raw_tp_regs(void)
 static void put_bpf_raw_tp_regs(void)
 {
 	this_cpu_dec(bpf_raw_tp_nest_level);
+	preempt_enable();
 }
 
 BPF_CALL_5(bpf_perf_event_output_raw_tp, struct bpf_raw_tracepoint_args *, args,
