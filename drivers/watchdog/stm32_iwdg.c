@@ -31,6 +31,7 @@
 #define IWDG_SR		0x0C /* Status Register */
 #define IWDG_WINR	0x10 /* Windows Register */
 #define IWDG_EWCR	0x14 /* Early Wake-up Register */
+#define IWDG_ICR	0x18 /* Interrupt Clear Register */
 #define IWDG_VERR	0x3F4 /* Version Register */
 
 /* IWDG_KR register bit mask */
@@ -56,11 +57,14 @@
 #define EWCR_EWIC	BIT(14) /* Watchdog early interrupt acknowledge */
 #define EWCR_EWIE	BIT(15) /* Watchdog early interrupt enable */
 
+#define ICR_EWIC	BIT(15) /* Watchdog early interrupt acknowledge */
+
 /* IWDG_VERR register mask */
 #define VERR_MASK	GENMASK(7, 0)
 
 /* IWDG Compatibility */
 #define ONF_MIN_VER	0x31
+#define ICR_MIN_VER	0x40
 
 /* set timeout to 100000 us */
 #define TIMEOUT_US	100000
@@ -203,13 +207,17 @@ static irqreturn_t stm32_iwdg_isr(int irq, void *wdog_arg)
 	unsigned long flags;
 	u32 reg;
 
-	spin_lock_irqsave(&wdt->lock, flags);
+	if (wdt->hw_version >= ICR_MIN_VER) {
+		reg_write(wdt->regs, IWDG_ICR, ICR_EWIC);
+	} else {
+		spin_lock_irqsave(&wdt->lock, flags);
 
-	reg = readl(wdt->regs + IWDG_EWCR);
-	reg |= EWCR_EWIC;
-	writel(reg, wdt->regs + IWDG_EWCR);
+		reg = readl(wdt->regs + IWDG_EWCR);
+		reg |= EWCR_EWIC;
+		writel(reg, wdt->regs + IWDG_EWCR);
 
-	spin_unlock_irqrestore(&wdt->lock, flags);
+		spin_unlock_irqrestore(&wdt->lock, flags);
+	}
 
 	watchdog_notify_pretimeout(wdd);
 
