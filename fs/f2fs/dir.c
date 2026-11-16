@@ -39,8 +39,7 @@ extern struct kmem_cache *f2fs_cf_name_slab;
 
 static unsigned long dir_blocks(struct inode *inode)
 {
-	return ((unsigned long long) (i_size_read(inode) + PAGE_SIZE - 1))
-							>> PAGE_SHIFT;
+	return F2FS_BLK_ALIGN(F2FS_I_SB(inode), i_size_read(inode));
 }
 
 static unsigned int dir_buckets(unsigned int level, int dir_level)

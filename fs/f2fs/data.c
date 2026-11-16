@@ -1897,8 +1897,9 @@ struct folio *f2fs_get_new_data_folio(struct inode *inode,
 	}
 got_it:
 	if (new_i_size && i_size_read(inode) <
-				((loff_t)(index + 1) << PAGE_SHIFT))
-		f2fs_i_size_write(inode, ((loff_t)(index + 1) << PAGE_SHIFT));
+				F2FS_BLK_TO_BYTES(F2FS_I_SB(inode), index + 1))
+		f2fs_i_size_write(inode,
+				F2FS_BLK_TO_BYTES(F2FS_I_SB(inode), index + 1));
 	return folio;
 }
 

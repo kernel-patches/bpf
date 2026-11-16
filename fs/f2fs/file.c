@@ -1543,7 +1543,7 @@ static int __clone_blkaddrs(struct inode *src_inode, struct inode *dst_inode,
 		if (do_replace[i] || blkaddr[i] == NULL_ADDR) {
 			struct dnode_of_data dn;
 			struct node_info ni;
-			size_t new_size;
+			loff_t new_size;
 			pgoff_t ilen;
 
 			set_new_dnode(&dn, dst_inode, NULL, NULL, 0);
@@ -1576,7 +1576,7 @@ static int __clone_blkaddrs(struct inode *src_inode, struct inode *dst_inode,
 				}
 				dn.ofs_in_node++;
 				i++;
-				new_size = (loff_t)(dst + i) << PAGE_SHIFT;
+				new_size = F2FS_BLK_TO_BYTES(sbi, dst + i);
 				if (dst_inode->i_size < new_size)
 					f2fs_i_size_write(dst_inode, new_size);
 			} while (--ilen && (do_replace[i] || blkaddr[i] == NULL_ADDR));
@@ -1593,7 +1593,7 @@ static int __clone_blkaddrs(struct inode *src_inode, struct inode *dst_inode,
 				return PTR_ERR(fsrc);
 
 			src_off = offset_in_folio(fsrc,
-						(loff_t)(src + i) << PAGE_SHIFT);
+						F2FS_BLK_TO_BYTES(sbi, src + i));
 
 			/*
 			 * For same-inode operations (collapse/insert), src and
@@ -1623,10 +1623,10 @@ static int __clone_blkaddrs(struct inode *src_inode, struct inode *dst_inode,
 			}
 
 			dst_off = offset_in_folio(fdst,
-					(loff_t)(dst + i) << PAGE_SHIFT);
+					F2FS_BLK_TO_BYTES(sbi, dst + i));
 			f2fs_folio_wait_writeback(fdst, true, true);
 			memcpy_folio(fdst, dst_off, fsrc, src_off,
-				    PAGE_SIZE);
+				    F2FS_BLKSIZE(sbi));
 			if (folio_test_large(fdst)) {
 				if (!f2fs_ffs_find_or_alloc(fdst)) {
 					f2fs_folio_put(fdst, true);
@@ -1635,15 +1635,15 @@ static int __clone_blkaddrs(struct inode *src_inode, struct inode *dst_inode,
 					return -ENOMEM;
 				}
 				f2fs_ffs_mark_subrange_uptodate(fdst,
-							dst_off, PAGE_SIZE);
+						dst_off, F2FS_BLKSIZE(sbi));
 				f2fs_ffs_mark_subrange_dirty(fdst, dst_off,
-							    PAGE_SIZE);
+						F2FS_BLKSIZE(sbi));
 			}
 			folio_mark_dirty(fdst);
 			if (same_folio && i_size_read(dst_inode) <
-			    ((loff_t)(dst + i + 1) << PAGE_SHIFT))
+			    F2FS_BLK_TO_BYTES(sbi, dst + i + 1))
 				f2fs_i_size_write(dst_inode,
-					((loff_t)(dst + i + 1) << PAGE_SHIFT));
+					F2FS_BLK_TO_BYTES(sbi, dst + i + 1));
 			folio_set_f2fs_gcing(fdst);
 			f2fs_folio_put(fdst, true);
 			if (!same_folio)
@@ -1715,9 +1715,9 @@ static int f2fs_do_collapse(struct inode *inode, loff_t offset, loff_t len)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_lock_context lc;
-	pgoff_t nrpages = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
-	pgoff_t start = offset >> PAGE_SHIFT;
-	pgoff_t end = (offset + len) >> PAGE_SHIFT;
+	pgoff_t nrpages = F2FS_BLK_ALIGN(sbi, i_size_read(inode));
+	pgoff_t start = F2FS_BYTES_TO_BLK(sbi, offset);
+	pgoff_t end = F2FS_BYTES_TO_BLK(sbi, offset + len);
 	int ret;
 
 	f2fs_balance_fs(sbi, true);
@@ -1988,10 +1988,10 @@ static int f2fs_insert_range(struct inode *inode, loff_t offset, loff_t len)
 	if (ret)
 		return ret;
 
-	pg_start = offset >> PAGE_SHIFT;
-	pg_end = (offset + len) >> PAGE_SHIFT;
+	pg_start = F2FS_BYTES_TO_BLK(sbi, offset);
+	pg_end = F2FS_BYTES_TO_BLK(sbi, offset + len);
 	delta = pg_end - pg_start;
-	idx = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+	idx = F2FS_BLK_ALIGN(sbi, i_size_read(inode));
 
 	/* avoid gc operation during block exchange */
 	f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
@@ -3104,10 +3104,10 @@ static int f2fs_defragment_range(struct f2fs_sb_info *sbi,
 	f2fs_balance_fs(sbi, true);
 
 	inode_lock(inode);
-	pg_start = range->start >> PAGE_SHIFT;
+	pg_start = F2FS_BYTES_TO_BLK(sbi, range->start);
 	pg_end = min_t(pgoff_t,
-				(range->start + range->len) >> PAGE_SHIFT,
-				DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE));
+				F2FS_BYTES_TO_BLK(sbi, range->start + range->len),
+				F2FS_BLK_ALIGN(sbi, i_size_read(inode)));
 
 	if (is_inode_flag_set(inode, FI_COMPRESS_RELEASED) ||
 		f2fs_is_atomic_file(inode)) {
@@ -3124,8 +3124,8 @@ static int f2fs_defragment_range(struct f2fs_sb_info *sbi,
 
 	/* writeback all dirty pages in the range */
 	err = filemap_write_and_wait_range(inode->i_mapping,
-						(loff_t)pg_start << PAGE_SHIFT,
-						((loff_t)pg_end << PAGE_SHIFT) - 1);
+						F2FS_BLK_TO_BYTES(sbi, pg_start),
+						F2FS_BLK_TO_BYTES(sbi, pg_end) - 1);
 	if (err)
 		goto out;
 
@@ -3249,7 +3249,7 @@ out:
 unlock_out:
 	inode_unlock(inode);
 	if (!err) {
-		range->len = (u64)total << PAGE_SHIFT;
+		range->len = F2FS_BLK_TO_BYTES(sbi, total);
 		stat_inc_defrag_blk_count(sbi, total);
 	}
 	return err;
@@ -4354,7 +4354,7 @@ static int f2fs_release_compress_blocks(struct file *filp, unsigned long arg)
 	f2fs_down_write(&fi->i_gc_rwsem[WRITE]);
 	filemap_invalidate_lock(inode->i_mapping);
 
-	last_idx = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+	last_idx = F2FS_BLK_ALIGN(sbi, i_size_read(inode));
 
 	while (page_idx < last_idx) {
 		struct dnode_of_data dn;
@@ -4532,7 +4532,7 @@ static int f2fs_reserve_compress_blocks(struct file *filp, unsigned long arg)
 	f2fs_down_write(&fi->i_gc_rwsem[WRITE]);
 	filemap_invalidate_lock(inode->i_mapping);
 
-	last_idx = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+	last_idx = F2FS_BLK_ALIGN(sbi, i_size_read(inode));
 
 	while (page_idx < last_idx) {
 		struct dnode_of_data dn;
@@ -4997,7 +4997,7 @@ static int f2fs_ioc_decompress_file(struct file *filp)
 	if (!atomic_read(&fi->i_compr_blocks))
 		goto out;
 
-	last_idx = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+	last_idx = F2FS_BLK_ALIGN(sbi, i_size_read(inode));
 	last_idx >>= fi->i_log_cluster_size;
 
 	for (cluster_idx = 0; cluster_idx < last_idx; cluster_idx++) {
@@ -5084,7 +5084,7 @@ static int f2fs_ioc_compress_file(struct file *filp)
 
 	set_inode_flag(inode, FI_ENABLE_COMPRESS);
 
-	last_idx = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+	last_idx = F2FS_BLK_ALIGN(sbi, i_size_read(inode));
 	last_idx >>= fi->i_log_cluster_size;
 
 	for (cluster_idx = 0; cluster_idx < last_idx; cluster_idx++) {

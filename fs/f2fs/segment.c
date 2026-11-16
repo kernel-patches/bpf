@@ -285,6 +285,7 @@ retry:
 static void __complete_revoke_list(struct inode *inode, struct list_head *head,
 					bool revoke)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct revoke_entry *cur, *tmp;
 	pgoff_t start_index = 0;
 	bool truncate = is_inode_flag_set(inode, FI_ATOMIC_REPLACE);
@@ -303,7 +304,7 @@ static void __complete_revoke_list(struct inode *inode, struct list_head *head,
 	}
 
 	if (!revoke && truncate)
-		f2fs_do_truncate_blocks(inode, start_index * PAGE_SIZE, false);
+		f2fs_do_truncate_blocks(inode, F2FS_BLK_TO_BYTES(sbi, start_index), false);
 }
 
 static int __f2fs_commit_atomic_write(struct inode *inode)
@@ -315,7 +316,7 @@ static int __f2fs_commit_atomic_write(struct inode *inode)
 	struct list_head revoke_list;
 	block_t blkaddr;
 	struct dnode_of_data dn;
-	pgoff_t len = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+	pgoff_t len = F2FS_BLK_ALIGN(sbi, i_size_read(inode));
 	pgoff_t off = 0, blen, index;
 	int ret = 0, i;
 
