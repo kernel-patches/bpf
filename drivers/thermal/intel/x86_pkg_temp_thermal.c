@@ -327,7 +327,7 @@ static int pkg_temp_thermal_device_add(unsigned int cpu)
 	if (!thres_count)
 		return -ENODEV;
 
-	thres_count = clamp_val(thres_count, 0, MAX_NUMBER_OF_TRIPS);
+	thres_count = clamp(thres_count, 0, MAX_NUMBER_OF_TRIPS);
 
 	tj_max = intel_tcc_get_tjmax(cpu);
 	if (tj_max < 0)
