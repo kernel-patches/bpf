@@ -366,13 +366,14 @@ static int __compute_subprog_jts(struct bpf_verifier_env *env)
 		}
 
 		old_cnt = subprog->jt ? subprog->jt->cnt : 0;
-		jt = bpf_iarray_realloc(subprog->jt, old_cnt + jt_cur->cnt);
+		jt = bpf_iarray_realloc(subprog->jt, roundup_pow_of_two(old_cnt + jt_cur->cnt));
 		if (!jt) {
 			subprog->jt = NULL;
 			kvfree(jt_cur);
 			return -ENOMEM;
 		}
 		memcpy(jt->items + old_cnt, jt_cur->items, jt_cur->cnt << 2);
+		jt->cnt = old_cnt + jt_cur->cnt;
 		subprog->jt = jt;
 
 		kvfree(jt_cur);
