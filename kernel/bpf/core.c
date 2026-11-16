@@ -1595,7 +1595,6 @@ int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 			  const struct bpf_insn *insn, bool extra_pass,
 			  u64 *func_addr, bool *func_addr_fixed)
 {
-	s16 off = insn->off;
 	s32 imm = insn->imm;
 	u8 *addr;
 	int err;
@@ -1609,8 +1608,8 @@ int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 		if (!extra_pass)
 			addr = NULL;
 		else if (prog->aux->func &&
-			 off >= 0 && off < prog->aux->real_func_cnt)
-			addr = (u8 *)prog->aux->func[off]->bpf_func;
+			 imm >= 0 && imm < prog->aux->real_func_cnt)
+			addr = (u8 *)prog->aux->func[imm]->bpf_func;
 		else
 			return -EINVAL;
 	} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
@@ -3519,7 +3518,7 @@ static void bpf_prog_free_images(struct work_struct *work)
 		bpf_jit_free(aux->func[i]);
 	}
 	if (aux->real_func_cnt) {
-		kfree(aux->func);
+		kvfree(aux->func);
 		bpf_prog_unlock_free(aux->prog);
 	} else {
 		bpf_jit_free(aux->prog);
