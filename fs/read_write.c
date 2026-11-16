@@ -928,7 +928,7 @@ out:
 EXPORT_SYMBOL(vfs_iter_read);
 
 /*
- * Caller is responsible for calling kiocb_end_write() on completion
+ * Caller is responsible for calling kiocb_end_write_iter() on completion
  * if async iocb was queued.
  */
 ssize_t vfs_iocb_iter_write(struct file *file, struct kiocb *iocb,
@@ -951,10 +951,7 @@ ssize_t vfs_iocb_iter_write(struct file *file, struct kiocb *iocb,
 	if (ret < 0)
 		return ret;
 
-	kiocb_start_write(iocb);
-	ret = file->f_op->write_iter(iocb, iter);
-	if (ret != -EIOCBQUEUED)
-		kiocb_end_write(iocb);
+	ret = kiocb_write_iter(iocb, iter);
 	if (ret > 0)
 		fsnotify_modify(file);
 
