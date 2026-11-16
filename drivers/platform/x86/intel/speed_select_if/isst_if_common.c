@@ -614,12 +614,12 @@ static long isst_if_def_ioctl(struct file *file, unsigned int cmd,
 	default:
 		for (i = 0; i < ISST_IF_DEV_MAX; ++i) {
 			struct isst_if_cmd_cb *cb = &punit_callbacks[i];
-			int ret;
 
 			if (cb->def_ioctl) {
-				ret = cb->def_ioctl(file, cmd, arg);
-				if (!ret)
-					return ret;
+				long def_ret = cb->def_ioctl(file, cmd, arg);
+
+				if (def_ret != -ENOTTY)
+					return def_ret;
 			}
 		}
 		break;
