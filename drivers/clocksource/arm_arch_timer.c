@@ -884,7 +884,7 @@ u32 arch_timer_get_rate(void)
 	return arch_timer_rate;
 }
 
-bool arch_timer_evtstrm_available(void)
+bool noinstr arch_timer_evtstrm_available(void)
 {
 	/*
 	 * We might get called from a preemptible context. This is fine
