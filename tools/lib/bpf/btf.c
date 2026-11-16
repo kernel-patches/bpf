@@ -4067,6 +4067,8 @@ static int btf_dedup_strings(struct btf_dedup *d);
 static int btf_dedup_prim_types(struct btf_dedup *d);
 static int btf_dedup_struct_types(struct btf_dedup *d);
 static int btf_dedup_ref_types(struct btf_dedup *d);
+static int btf_dedup_vars(struct btf_dedup *d);
+static int btf_dedup_decl_tags(struct btf_dedup *d);
 static int btf_dedup_resolve_fwds(struct btf_dedup *d);
 static int btf_dedup_compact_types(struct btf_dedup *d);
 static int btf_dedup_remap_types(struct btf_dedup *d);
@@ -4175,16 +4177,18 @@ static int btf_dedup_remap_types(struct btf_dedup *d);
  * Algorithm summary
  * =================
  *
- * Algorithm completes its work in 7 separate passes:
+ * Algorithm completes its work in 9 separate passes:
  *
  * 1. Strings deduplication.
  * 2. Primitive types deduplication (int, enum, fwd).
  * 3. Struct/union types deduplication.
  * 4. Resolve unambiguous forward declarations.
  * 5. Reference types deduplication (pointers, typedefs, arrays, funcs, func
- *    protos, and const/volatile/restrict modifiers).
- * 6. Types compaction.
- * 7. Types remapping.
+ *    protos, and const/volatile/restrict modifiers), except declaration tags.
+ * 6. Variable deduplication, including incoming declaration tag sets.
+ * 7. Declaration tag deduplication, using canonical target IDs.
+ * 8. Types compaction.
+ * 9. Types remapping.
  *
  * Algorithm determines canonical type descriptor, which is a single
  * representative type for each truly unique type. This canonical type is the
@@ -4255,6 +4259,16 @@ int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts)
 	err = btf_dedup_ref_types(d);
 	if (err < 0) {
 		pr_debug("btf_dedup_ref_types failed: %s\n", errstr(err));
+		goto done;
+	}
+	err = btf_dedup_vars(d);
+	if (err < 0) {
+		pr_debug("btf_dedup_vars failed: %s\n", errstr(err));
+		goto done;
+	}
+	err = btf_dedup_decl_tags(d);
+	if (err < 0) {
+		pr_debug("btf_dedup_decl_tags failed: %s\n", errstr(err));
 		goto done;
 	}
 	err = btf_dedup_compact_types(d);
@@ -4417,8 +4431,8 @@ static struct btf_dedup *btf_dedup_new(struct btf *btf, const struct btf_dedup_o
 	for (i = 1; i < type_cnt; i++) {
 		struct btf_type *t = btf_type_by_id(d->btf, i);
 
-		/* VAR, DATASEC and LOCSEC are never deduped and are self-canonical */
-		if (btf_is_var(t) || btf_is_datasec(t) || btf_is_locsec(t))
+		/* DATASEC and LOCSEC are never deduped and are self-canonical */
+		if (btf_is_datasec(t) || btf_is_locsec(t))
 			d->map[i] = i;
 		else
 			d->map[i] = BTF_UNPROCESSED_ID;
@@ -4934,7 +4948,10 @@ static int btf_dedup_prep(struct btf_dedup *d)
 		case BTF_KIND_VAR:
 		case BTF_KIND_DATASEC:
 		case BTF_KIND_LOCSEC:
-			/* VAR DATASEC and LOCSEC are never hash/deduplicated */
+			/*
+			 * Variables are indexed later, together with their tags.
+			 * DATASEC and LOCSEC are never deduplicated.
+			 */
 			continue;
 		case BTF_KIND_CONST:
 		case BTF_KIND_VOLATILE:
@@ -5903,12 +5920,144 @@ static int btf_dedup_ref_type(struct btf_dedup *d, __u32 type_id)
 	return new_id;
 }
 
+struct btf_var_tag {
+	__u32 target;
+	__u32 name;
+	bool kflag; /* Distinguish declaration attributes from ordinary tags. */
+};
+
+static int btf_var_tag_cmp(const void *p1, const void *p2)
+{
+	const struct btf_var_tag *a = p1, *b = p2;
+
+	if (a->target != b->target)
+		return a->target < b->target ? -1 : 1;
+	if (a->name != b->name)
+		return a->name < b->name ? -1 : 1;
+	return (a->kflag > b->kflag) - (a->kflag < b->kflag);
+}
+
+static int btf_dedup_vars(struct btf_dedup *d)
+{
+	__u32 type_cnt = btf__type_cnt(d->btf), nr_tags = 0, n = 0;
+	struct btf_var_tag *tags;
+	struct hashmap_entry *entry;
+	struct btf_type *t, *cand;
+	__u32 *starts, id, i, cand_id, count;
+	int err = -ENOMEM;
+	long h;
+
+	/*
+	 * Create a sorted set of incoming DECL_TAGs for each VAR. Equivalent
+	 * VARs are only merged if they have identical DECL_TAG sets.
+	 */
+	for (id = 1; id < type_cnt; id++) {
+		t = btf_type_by_id(d->btf, id);
+		if (!btf_is_decl_tag(t))
+			continue;
+		if (t->type >= type_cnt)
+			return -EINVAL;
+		if (btf_is_var(btf_type_by_id(d->btf, t->type)))
+			nr_tags++;
+	}
+	tags = calloc(nr_tags ?: 1, sizeof(*tags));
+	starts = calloc(type_cnt + 1, sizeof(*starts));
+	if (!tags || !starts)
+		goto out;
+	for (id = 1; id < type_cnt; id++) {
+		t = btf_type_by_id(d->btf, id);
+		if (!btf_is_decl_tag(t))
+			continue;
+		if (!btf_is_var(btf_type_by_id(d->btf, t->type)))
+			continue;
+		tags[n++] = (struct btf_var_tag) {
+			.target = t->type,
+			.name = t->name_off,
+			.kflag = btf_kflag(t),
+		};
+	}
+	qsort(tags, n, sizeof(*tags), btf_var_tag_cmp);
+	for (i = 0, n = 0; i < nr_tags; i++) {
+		if (n && !btf_var_tag_cmp(&tags[n - 1], &tags[i]))
+			continue;
+		tags[n++] = tags[i];
+		starts[tags[n - 1].target + 1]++;
+	}
+	for (id = 1; id <= type_cnt; id++)
+		starts[id] += starts[id - 1];
+
+	for (id = 1; id < type_cnt; id++) {
+		t = btf_type_by_id(d->btf, id);
+		if (!btf_is_var(t))
+			continue;
+		if (id >= d->btf->start_id)
+			t->type = resolve_type_id(d, t->type);
+		h = hash_combine(btf_hash_common(t), btf_var(t)->linkage);
+		count = starts[id + 1] - starts[id];
+		h = hash_combine(h, count);
+		for (i = starts[id]; i < starts[id + 1]; i++) {
+			h = hash_combine(h, tags[i].name);
+			h = hash_combine(h, tags[i].kflag);
+		}
+		d->map[id] = id;
+		if (id >= d->btf->start_id) {
+			for_each_dedup_cand(d, entry, h) {
+				cand_id = entry->value;
+				cand = btf_type_by_id(d->btf, cand_id);
+				if (!btf_is_var(cand) || !btf_equal_common(t, cand) ||
+				    btf_var(t)->linkage != btf_var(cand)->linkage ||
+				    count != starts[cand_id + 1] - starts[cand_id])
+					continue;
+				for (i = 0; i < count; i++) {
+					struct btf_var_tag *a = &tags[starts[id] + i];
+					struct btf_var_tag *b = &tags[starts[cand_id] + i];
+
+					if (a->name != b->name || a->kflag != b->kflag)
+						break;
+				}
+				if (i == count) {
+					d->map[id] = cand_id;
+					break;
+				}
+			}
+		}
+		if (d->map[id] == id && btf_dedup_table_add(d, h, id))
+			goto out;
+	}
+	err = 0;
+out:
+	free(tags);
+	free(starts);
+	return err;
+}
+
 static int btf_dedup_ref_types(struct btf_dedup *d)
 {
 	int i, err;
 
 	for (i = 0; i < d->btf->nr_types; i++) {
-		err = btf_dedup_ref_type(d, d->btf->start_id + i);
+		__u32 id = d->btf->start_id + i;
+		struct btf_type *t = btf_type_by_id(d->btf, id);
+
+		if (btf_is_decl_tag(t) || btf_is_var(t))
+			continue;
+		err = btf_dedup_ref_type(d, id);
+		if (err < 0)
+			return err;
+	}
+	return 0;
+}
+
+static int btf_dedup_decl_tags(struct btf_dedup *d)
+{
+	int i, err;
+
+	for (i = 0; i < d->btf->nr_types; i++) {
+		__u32 id = d->btf->start_id + i;
+
+		if (!btf_is_decl_tag(btf_type_by_id(d->btf, id)))
+			continue;
+		err = btf_dedup_ref_type(d, id);
 		if (err < 0)
 			return err;
 	}
