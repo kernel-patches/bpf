@@ -204,11 +204,11 @@ static int flow_compute_order(struct bpf_verifier_env *env, struct bpf_flow *flo
 	int err = -ENOMEM;
 
 	/* lists of members are indexed by loop head, len is the function */
-	next = kvmalloc_array(len, sizeof(int), GFP_KERNEL_ACCOUNT);
-	head = kvmalloc_array(len + 1, sizeof(int), GFP_KERNEL_ACCOUNT);
-	tail = kvmalloc_array(len + 1, sizeof(int), GFP_KERNEL_ACCOUNT);
-	stack = kvmalloc_array(len + 1, sizeof(int), GFP_KERNEL_ACCOUNT);
-	linked = kvcalloc(BITS_TO_LONGS(len), sizeof(long), GFP_KERNEL_ACCOUNT);
+	next = kvmalloc_array(len, sizeof(int), BPF_VERIFIER_GFP);
+	head = kvmalloc_array(len + 1, sizeof(int), BPF_VERIFIER_GFP);
+	tail = kvmalloc_array(len + 1, sizeof(int), BPF_VERIFIER_GFP);
+	stack = kvmalloc_array(len + 1, sizeof(int), BPF_VERIFIER_GFP);
+	linked = kvcalloc(BITS_TO_LONGS(len), sizeof(long), BPF_VERIFIER_GFP);
 	if (!next || !head || !tail || !stack || !linked)
 		goto out;
 
@@ -478,7 +478,7 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env)
 	struct bpf_loop *loop;
 	u32 *seen;
 
-	seen = kvcalloc(len, sizeof(*seen), GFP_KERNEL_ACCOUNT);
+	seen = kvcalloc(len, sizeof(*seen), BPF_VERIFIER_GFP);
 	if (!seen)
 		return -ENOMEM;
 
@@ -504,11 +504,10 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env)
 		if (!loop)
 			continue;
 		/* a deep nest of loops takes long */
-		if (signal_pending(current)) {
-			ret = -EAGAIN;
+		if (bpf_must_abort()) {
+			ret = -EINTR;
 			break;
 		}
-		cond_resched();
 		loop->rt_bounded = flow_loop_is_bounded(env, h);
 		/* also when it's bounded: the main pass may find that it's not */
 		flow_place_guards(env, h, seen);
@@ -860,8 +859,8 @@ int bpf_flow_compute_kinds(struct bpf_verifier_env *env)
 	bool lost = true;
 	u16 *ret;
 
-	kinds = kvmalloc_array(len, sizeof(*kinds), GFP_KERNEL_ACCOUNT);
-	ret = kvmalloc_array(env->subprog_cnt, sizeof(*ret), GFP_KERNEL_ACCOUNT);
+	kinds = kvmalloc_array(len, sizeof(*kinds), BPF_VERIFIER_GFP);
+	ret = kvmalloc_array(env->subprog_cnt, sizeof(*ret), BPF_VERIFIER_GFP);
 	if (!kinds || !ret) {
 		kvfree(kinds);
 		kvfree(ret);
@@ -884,11 +883,10 @@ int bpf_flow_compute_kinds(struct bpf_verifier_env *env)
 	for (n = 0; lost; n++) {
 		lost = false;
 		/* a chain of calls takes a round for each link */
-		if (signal_pending(current)) {
-			err = -EAGAIN;
+		if (bpf_must_abort()) {
+			err = -EINTR;
 			break;
 		}
-		cond_resched();
 		for (j = 0; j < cnt; j++) {
 			/* it has callees first */
 			s = env->subprog_topo_order[n & 1 ? j : cnt - 1 - j];
@@ -1017,12 +1015,12 @@ static int flow_compute_need_const(struct bpf_verifier_env *env, struct flow_nee
 	u16 *gen, callx_regs = 0, pair = BIT(BPF_REG_0) | BIT(BPF_REG_2);
 	u8 *ret, class, op;
 
-	need = kvcalloc(env->prog->len, sizeof(*need), GFP_KERNEL_ACCOUNT);
-	gen = kvcalloc(env->prog->len, sizeof(u16), GFP_KERNEL_ACCOUNT);
+	need = kvcalloc(env->prog->len, sizeof(*need), BPF_VERIFIER_GFP);
+	gen = kvcalloc(env->prog->len, sizeof(u16), BPF_VERIFIER_GFP);
 	/* the callers need what the subprog returns: r0, and r2 of a pair */
-	ret = kvcalloc(env->subprog_cnt, sizeof(u8), GFP_KERNEL_ACCOUNT);
+	ret = kvcalloc(env->subprog_cnt, sizeof(u8), BPF_VERIFIER_GFP);
 	if (flag)
-		ahead = kvcalloc(env->prog->len, sizeof(*need), GFP_KERNEL_ACCOUNT);
+		ahead = kvcalloc(env->prog->len, sizeof(*need), BPF_VERIFIER_GFP);
 	*pneed = need;
 	if (!need || !gen || !ret || (flag && !ahead)) {
 		kvfree(ahead);
@@ -1068,11 +1066,10 @@ static int flow_compute_need_const(struct bpf_verifier_env *env, struct flow_nee
 again:
 	while (any && changed) {
 		changed = false;
-		if (signal_pending(current)) {
-			err = -EAGAIN;
+		if (bpf_must_abort()) {
+			err = -EINTR;
 			break;
 		}
-		cond_resched();
 		for (s = 0; callx && s < env->subprog_cnt; s++)
 			if (env->subprog_info[s].addr_taken)
 				callx_regs |= need[env->subprog_info[s].start].regs;
@@ -1488,9 +1485,9 @@ static int flow_compute_loop_rungs(struct bpf_verifier_env *env, const u32 *at, 
 
 	/* for each insn, for the current insn, for each jump back */
 	syms = kvmalloc_array((size_t)nr + 1 + loop->backedges_cnt, n * sizeof(*syms),
-			      GFP_KERNEL_ACCOUNT);
+			      BPF_VERIFIER_GFP);
 	/* for each root, and the result for each place */
-	roots = kvcalloc(3 * n, sizeof(*roots), GFP_KERNEL_ACCOUNT);
+	roots = kvcalloc(3 * n, sizeof(*roots), BPF_VERIFIER_GFP);
 	if (!syms || !roots)
 		goto out;
 	memset(syms, 0xff, (size_t)nr * n * sizeof(*syms));
@@ -1569,7 +1566,7 @@ static int flow_compute_loop_rungs(struct bpf_verifier_env *env, const u32 *at, 
 	err = 0;
 	if (!cnt)
 		goto out;
-	loop->rungs = kvcalloc(cnt, sizeof(*loop->rungs), GFP_KERNEL_ACCOUNT);
+	loop->rungs = kvcalloc(cnt, sizeof(*loop->rungs), BPF_VERIFIER_GFP);
 	if (!loop->rungs) {
 		err = -ENOMEM;
 		goto out;
@@ -1598,7 +1595,7 @@ static int flow_compute_rungs(struct bpf_verifier_env *env)
 		;
 	if (h == env->prog->len)
 		return 0;
-	at = kvmalloc_array(total, sizeof(*at), GFP_KERNEL_ACCOUNT);
+	at = kvmalloc_array(total, sizeof(*at), BPF_VERIFIER_GFP);
 	if (!at)
 		return -ENOMEM;
 	for (k = 0; k < total; k++) {
@@ -1619,11 +1616,10 @@ static int flow_compute_rungs(struct bpf_verifier_env *env)
 			depth++;
 		if (depth >= LOOP_STACK_SIZE)
 			continue;
-		if (signal_pending(current)) {
-			err = -EAGAIN;
+		if (bpf_must_abort()) {
+			err = -EINTR;
 			break;
 		}
-		cond_resched();
 		err = flow_compute_loop_rungs(env, at, total, h);
 	}
 	kvfree(at);
@@ -1640,22 +1636,22 @@ int bpf_flow_prepare(struct bpf_verifier_env *env)
 	struct bpf_flow *flow;
 	u8 *preds;
 
-	flow = kzalloc_obj(*flow, GFP_KERNEL_ACCOUNT);
+	flow = kzalloc_obj(*flow, BPF_VERIFIER_GFP);
 	if (!flow)
 		return -ENOMEM;
 	env->flow = flow;
 	INIT_LIST_HEAD(&flow->kept);
 	flow->pending = RB_ROOT_CACHED;
 
-	flow->pos = kvcalloc(len, sizeof(u32), GFP_KERNEL_ACCOUNT);
-	flow->rank = kvcalloc(env->subprog_cnt + 1, sizeof(u32), GFP_KERNEL_ACCOUNT);
-	flow->point = kvcalloc(BITS_TO_LONGS(len), sizeof(long), GFP_KERNEL_ACCOUNT);
-	flow->keep = kvcalloc(BITS_TO_LONGS(len), sizeof(long), GFP_KERNEL_ACCOUNT);
-	flow->states = kvmalloc_array(len, sizeof(*flow->states), GFP_KERNEL_ACCOUNT);
-	flow->enter = kvmalloc_array(len, sizeof(*flow->enter), GFP_KERNEL_ACCOUNT);
-	flow->nr_states = kvcalloc(len, sizeof(u32), GFP_KERNEL_ACCOUNT);
-	flow->funcs = kvcalloc(env->subprog_cnt + 1, sizeof(*flow->funcs), GFP_KERNEL_ACCOUNT);
-	preds = kvcalloc(len, 1, GFP_KERNEL_ACCOUNT);
+	flow->pos = kvcalloc(len, sizeof(u32), BPF_VERIFIER_GFP);
+	flow->rank = kvcalloc(env->subprog_cnt + 1, sizeof(u32), BPF_VERIFIER_GFP);
+	flow->point = kvcalloc(BITS_TO_LONGS(len), sizeof(long), BPF_VERIFIER_GFP);
+	flow->keep = kvcalloc(BITS_TO_LONGS(len), sizeof(long), BPF_VERIFIER_GFP);
+	flow->states = kvmalloc_array(len, sizeof(*flow->states), BPF_VERIFIER_GFP);
+	flow->enter = kvmalloc_array(len, sizeof(*flow->enter), BPF_VERIFIER_GFP);
+	flow->nr_states = kvcalloc(len, sizeof(u32), BPF_VERIFIER_GFP);
+	flow->funcs = kvcalloc(env->subprog_cnt + 1, sizeof(*flow->funcs), BPF_VERIFIER_GFP);
+	preds = kvcalloc(len, 1, BPF_VERIFIER_GFP);
 	if (!flow->pos || !flow->rank || !flow->point || !flow->keep || !flow->states ||
 	    !flow->enter ||
 	    !flow->nr_states || !flow->funcs || !preds) {
@@ -1812,7 +1808,7 @@ bool bpf_flow_is_point(struct bpf_verifier_env *env, int insn_idx)
 struct bpf_verifier_state *bpf_flow_keep_state(struct bpf_verifier_env *env,
 					       const struct bpf_verifier_state *st)
 {
-	struct flow_kept *k = kzalloc_obj(*k, GFP_KERNEL_ACCOUNT);
+	struct flow_kept *k = kzalloc_obj(*k, BPF_VERIFIER_GFP);
 
 	if (!k)
 		return NULL;
@@ -1919,13 +1915,13 @@ static int flow_entry_new(struct bpf_flow *flow)
 
 	if (flow->entry_cnt + 1 >= flow->entry_cap) {
 		cap = max(64U, flow->entry_cap * 2);
-		entries = kvrealloc(flow->entries, cap * sizeof(*entries), GFP_KERNEL_ACCOUNT);
+		entries = kvrealloc(flow->entries, cap * sizeof(*entries), BPF_VERIFIER_GFP);
 		if (!entries)
 			return -ENOMEM;
 		flow->entries = entries;
 		flow->entry_cap = cap;
 	}
-	e = kmalloc_obj(*e, GFP_KERNEL_ACCOUNT);
+	e = kmalloc_obj(*e, BPF_VERIFIER_GFP);
 	if (!e)
 		return -ENOMEM;
 	e->up = e;
@@ -1945,7 +1941,7 @@ static int flow_unite(struct bpf_flow *flow, u32 a, u32 b)
 		return 0;
 	if (flow->united_cnt == flow->united_cap) {
 		cap = max(16U, flow->united_cap * 2);
-		u = kvrealloc(flow->united, cap * sizeof(*u), GFP_KERNEL_ACCOUNT);
+		u = kvrealloc(flow->united, cap * sizeof(*u), BPF_VERIFIER_GFP);
 		if (!u)
 			return -ENOMEM;
 		flow->united = u;
@@ -2737,12 +2733,10 @@ static int flow_merge(struct bpf_verifier_env *env, struct flow_set *set,
 	int prev = s->prev_insn_idx;
 
 again:
-	if (signal_pending(current)) {
-		err = -EAGAIN;
+	if (bpf_must_abort()) {
+		err = -EINTR;
 		goto err_free;
 	}
-	if (need_resched())
-		cond_resched();
 
 	/* again after a join: an offset may not be a constant any more, a pointer may be gone */
 	flow_shape_ctx(&s->st, &s->shape);
@@ -2887,7 +2881,7 @@ err_free:
 
 static struct flow_state *flow_new_state(struct bpf_verifier_env *env, int prev_insn_idx)
 {
-	struct flow_state *s = kzalloc_obj(*s, GFP_KERNEL_ACCOUNT);
+	struct flow_state *s = kzalloc_obj(*s, BPF_VERIFIER_GFP);
 	struct bpf_flow *flow = env->flow;
 
 	if (!s)
@@ -3212,7 +3206,7 @@ int bpf_flow_call(struct bpf_verifier_env *env, struct bpf_verifier_state *calle
 	struct flow_state *w;
 	int id;
 
-	w = kzalloc_obj(*w, GFP_KERNEL_ACCOUNT);
+	w = kzalloc_obj(*w, BPF_VERIFIER_GFP);
 	if (!w)
 		return -ENOMEM;
 	w->st = *caller;
@@ -3277,7 +3271,7 @@ int bpf_flow_exit(struct bpf_verifier_env *env, struct bpf_verifier_state *st, i
 		kfree(o);
 	}
 
-	x = kzalloc_obj(*x, GFP_KERNEL_ACCOUNT);
+	x = kzalloc_obj(*x, BPF_VERIFIER_GFP);
 	if (!x)
 		return -ENOMEM;
 	x->st = *st;
@@ -3374,9 +3368,9 @@ void bpf_flow_print_way(struct bpf_verifier_env *env, u64 log_pos, int head, int
 	u32 from = flow->from, cnt = 0;
 	unsigned long *seen;
 
-	seen = bitmap_zalloc(flow->len, GFP_KERNEL_ACCOUNT);
+	seen = bitmap_zalloc(flow->len, BPF_VERIFIER_GFP);
 	way = kvmalloc_array(bitmap_weight(flow->point, flow->len), sizeof(*way),
-			     GFP_KERNEL_ACCOUNT);
+			     BPF_VERIFIER_GFP);
 	if (!seen || !way)
 		goto out;
 
@@ -3397,7 +3391,7 @@ void bpf_flow_print_way(struct bpf_verifier_env *env, u64 log_pos, int head, int
 	if (!cnt || bpf_vlog_stash(&env->log, log_pos, &stash))
 		goto out;
 	env->prev_linfo = NULL;
-	while (cnt-- && !signal_pending(current)) {
+	while (cnt-- && !bpf_must_abort()) {
 		w = &way[cnt];
 		if (w->s) {
 			verbose(env, "from %d to %d:", w->s->prev_insn_idx, w->head);
@@ -3409,7 +3403,6 @@ void bpf_flow_print_way(struct bpf_verifier_env *env, u64 log_pos, int head, int
 			bpf_verbose_insn(env, &insns[i]);
 			verbose(env, "\n");
 		}
-		cond_resched();
 	}
 	bpf_vlog_unstash(&env->log, &stash);
 out:

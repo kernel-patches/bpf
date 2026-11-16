@@ -10,6 +10,26 @@
 #include <linux/tnum.h>
 #include <linux/cnum.h>
 #include <linux/math64.h> /* for div_s64_rem() */
+#include <linux/freezer.h>
+#include <linux/sched/signal.h>
+
+/* No memory fails the load. It does not wake up the OOM killer. */
+#define BPF_GFP_MAYFAIL (__GFP_RETRY_MAYFAIL | __GFP_NOWARN)
+#define BPF_VERIFIER_GFP (GFP_KERNEL_ACCOUNT | BPF_GFP_MAYFAIL)
+
+/*
+ * For each loop that can run long. The caller returns -EINTR.
+ *   killed          the task dies
+ *   freezer waits   the task freezes, then bpf() starts again
+ *   other signals   wait for the end of the load
+ */
+static inline bool bpf_must_abort(void)
+{
+	cond_resched();
+	return task_sigpending(current) &&
+	       (__fatal_signal_pending(current) || freezing(current) ||
+		(READ_ONCE(current->jobctl) & JOBCTL_TRAP_FREEZE));
+}
 
 /*
  * Mathematical modulo, the residue of 'v' modulo 'step', normalized to [0, step).
@@ -722,6 +742,59 @@ struct bpf_iarray {
 	u32 items[];
 };
 
+/*
+ * Make room for entry 'cnt' of a table that has 'cnt' entries, return the new entry.
+ * The table doubles: 1, 2, 4, 8, ... It is not a stack: 'cnt' never goes down.
+ */
+#define bpf_table_next(tab, cnt)							\
+	({										\
+		typeof(tab) __tab = (tab);						\
+		size_t __cap = 2 * (size_t)(cnt) ?: 1;					\
+		if (!((cnt) & ((cnt) - 1)))						\
+			__tab = kvrealloc(__tab, array_size(__cap, sizeof(*__tab)),	\
+					  BPF_VERIFIER_GFP);				\
+		__tab ? &((tab) = __tab)[cnt] : NULL;					\
+	})
+
+/* key -> number of an entry of a table */
+struct bpf_index {
+	struct bpf_index_slot {
+		u64 key;
+		u32 next_val;	/* value + 1, 0 if the slot is free */
+	} *slots;
+	u32 cnt;
+	u8 bits;
+};
+
+int bpf_index_find(const struct bpf_index *index, u64 key);
+int bpf_index_add(struct bpf_index *index, u64 key, u32 val);
+
+/* A graph of calls. The nodes are subprogs, and behind them what stands for a set of subprogs. */
+struct bpf_call_graph {
+	u32 cnt;	/* nodes */
+	u32 edge_cnt;
+	u32 *callee;	/* node s calls callee[first[s]] .. callee[first[s + 1] - 1] */
+	u32 *first;
+	/* see bpf_call_graph_sort() */
+	u32 *postorder;
+	u32 *order;
+	u32 *cycle;
+	u16 *marks;	/* of the user of the graph */
+	u32 next;	/* nodes that have 'first' */
+};
+
+#define bpf_for_each_callee(cg, s, j)							\
+	for (u32 ___e = (cg)->first[s];							\
+	     ___e < (cg)->first[(s) + 1] && ({ j = (cg)->callee[___e]; 1; }); ___e++)
+
+int bpf_call_graph_init(struct bpf_call_graph *cg, u32 cnt);
+int bpf_call_graph_add(struct bpf_call_graph *cg, u32 caller, u32 callee);
+void bpf_call_graph_sort(struct bpf_call_graph *cg, u16 skip);
+bool bpf_call_graph_recursive(const struct bpf_call_graph *cg, u32 s);
+void bpf_call_graph_mark_callees(struct bpf_call_graph *cg, u16 mask);
+void bpf_call_graph_mark_callers(struct bpf_call_graph *cg, u16 mask, u16 skip);
+void bpf_call_graph_free(struct bpf_call_graph *cg);
+
 #define iarray_for_each(item, arr)						\
 	for (int ___idx = 0;							\
 	     ___idx < (arr)->cnt && ({ item = (arr)->items[___idx]; 1; });	\
@@ -828,7 +901,6 @@ struct bpf_insn_aux_data {
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
 		struct bpf_map_ptr_state map_ptr_state;
-		s32 call_imm;			/* saved imm field of call insn */
 		u32 alu_limit;			/* limit for add/sub register with pointer */
 		struct {
 			u32 map_index;		/* index into used_maps[] */
@@ -950,9 +1022,6 @@ struct bpf_insn_aux_data {
 	struct bpf_loop *loop;
 };
 
-#define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
-#define MAX_USED_BTFS 64 /* max number of BTFs accessed by one BPF program */
-
 /*
  * Longest line the verifier log can carry: tmp_str_buf, see
  * TMP_STR_BUF_LEN, plus its prefix.
@@ -1008,8 +1077,6 @@ struct bpf_verifier_log *bpf_log_attr_create_vlog(struct bpf_log_attr *attr_log,
 						  u32 size);
 int bpf_log_attr_finalize(struct bpf_log_attr *attr, struct bpf_verifier_log *log);
 
-#define BPF_MAX_SUBPROGS 1024
-
 /*
  * A pointer to a static subprog in the value of a frozen read-only array map:
  * a 64-bit value that is the offset in bytes of the first instruction of
@@ -1044,6 +1111,7 @@ struct bpf_subprog_info {
 	 * U32_MAX when it has none.
 	 */
 	u32 exit_idx;
+	u32 callx_edge; /* 1 + the first of its env->callx_edges, 0 if none */
 	struct bpf_iarray *jt; /* jump table shared by all gotox of this subprogram */
 	u16 stack_depth; /* max. stack depth used by this function */
 	u16 stack_extra;
@@ -1164,6 +1232,10 @@ struct bpf_insn_patch {
 	u32 len;
 	u32 start;		/* first insn of the patch in bpf_patch_list.insns */
 	u32 target;		/* insn of the patch that jumps to 'off' land on */
+	u32 self;		/* insn of the patch that stands for insn 'off' */
+	u32 jmp;		/* 1 + insn of the patch that goes to insn 'jmp_to', 0 if none */
+	u32 jmp_to;
+	u32 jmp_back;		/* or to that many insns in front of the patch of it */
 	struct bpf_insn orig;	/* the replaced insn when the patch was queued */
 };
 
@@ -1186,7 +1258,9 @@ struct bpf_patch_image {
 	u32 *new_off;
 	u32 *new_tgt;
 	u32 *new_linfo;
+	u32 *relaxed;		/* insn before patch_image_relax() -> insn after it */
 	u32 cnt;
+	u32 short_cnt;		/* insns before patch_image_relax() */
 	u32 new_cnt;
 	u32 nr_linfo;
 	s32 grow;
@@ -1212,7 +1286,8 @@ struct bpf_insn *__bpf_patch_list_add(struct bpf_patch_list *pl,
 int __bpf_patch_list_del(struct bpf_patch_list *pl, const struct bpf_prog *prog,
 			 u32 off);
 int __bpf_patch_list_insert(struct bpf_patch_list *pl, const struct bpf_prog *prog,
-			    u32 off, const struct bpf_insn *insns, u32 cnt);
+			    u32 off, const struct bpf_insn *insns, u32 cnt, bool behind);
+void bpf_patch_list_jump(struct bpf_patch_list *pl, const struct bpf_insn *insn, u32 to, u32 back);
 void bpf_patch_list_release(struct bpf_patch_list *pl);
 int bpf_patch_list_build(const struct bpf_patch_list *pl, const struct bpf_prog *prog,
 			 struct bpf_patch_image *img);
@@ -1239,9 +1314,13 @@ struct bpf_verifier_env {
 	u32 *walk_insns;		/* the insns that were looked at in each of them */
 	u32 max_arena_stack_depth;	/* of all call chains */
 	struct bpf_verifier_state *cur_state; /* current verifier state */
-	struct bpf_map *used_maps[MAX_USED_MAPS]; /* array of map's used by eBPF program */
-	struct btf_mod_pair used_btfs[MAX_USED_BTFS]; /* array of BTF's used by BPF program */
-	struct bpf_map *insn_array_maps[MAX_USED_MAPS]; /* array of INSN_ARRAY map's to be relocated */
+	struct bpf_map **used_maps;	/* array of map's used by eBPF program */
+	struct btf_mod_pair *used_btfs;	/* array of BTF's used by BPF program */
+	struct bpf_index used_index;	/* address of a map or BTF -> entry of these two */
+	struct bpf_index kfunc_index;	/* see kfunc_key() */
+	struct bpf_map **insn_array_maps; /* array of INSN_ARRAY map's to be relocated */
+	u32 max_key_size;		/* of all used maps and their inner maps */
+	u32 max_value_size;
 	u32 used_map_cnt;		/* number of used maps */
 	u32 used_btf_cnt;		/* number of used BTF objects */
 	u32 insn_array_map_cnt;		/* number of used maps of type BPF_MAP_TYPE_INSN_ARRAY */
@@ -1272,9 +1351,9 @@ struct bpf_verifier_env {
 	struct bpf_verifier_log log;
 	struct bpf_diag *diag;
 	struct bpf_func_proto bpf_subprog_scratch;
-	struct bpf_subprog_info subprog_info[BPF_MAX_SUBPROGS + 2]; /* max + 2 for the fake and exception subprogs */
+	struct bpf_subprog_info *subprog_info;
 	/* subprog indices sorted in topological order: leaves first, callers last */
-	int subprog_topo_order[BPF_MAX_SUBPROGS + 2];
+	int *subprog_topo_order;
 	/*
 	 * Pointers to static subprogs found in frozen read-only maps of the
 	 * program, see resolve_func_ptrs(). Sorted by map and map_off.
@@ -1284,14 +1363,14 @@ struct bpf_verifier_env {
 	/* What a pointer that was read from a table of functions may point to. */
 	struct bpf_func_set **func_sets;
 	u32 func_set_cnt;
+	struct bpf_index func_set_index;
 	bool has_callx;
-	/*
-	 * Call graph edges created by callx instructions. A bitmap of
-	 * subprog_cnt * subprog_cnt bits, where bit (caller * subprog_cnt + callee)
-	 * is set when the main verification pass sees 'caller' calling 'callee'
-	 * via callx. Allocated when the first such edge is recorded.
-	 */
-	unsigned long *callx_edges;
+	/* What callx and helpers call, a list for each caller, see record_callx_edge() */
+	struct bpf_callx_edge {
+		u32 callee;
+		u32 next;	/* 1 + the next edge of the caller, 0 if none */
+	} *callx_edges;
+	struct bpf_index callx_index;
 	struct bpf_idmap idmap_scratch;
 	struct {
 		int *insn_state;
@@ -1670,8 +1749,8 @@ static inline bool bpf_register_is_null(struct bpf_reg_state *reg)
 bool bpf_map_is_rdonly(const struct bpf_map *map);
 /* Sorted, no function is there twice */
 struct bpf_func_set {
-	u16 cnt;
-	u16 subprog[] __counted_by(cnt);
+	u32 cnt;
+	u32 subprog[] __counted_by(cnt);
 };
 
 struct bpf_func_ptr *bpf_map_func_ptrs(struct bpf_verifier_env *env,
@@ -1895,6 +1974,21 @@ static inline int bpf_head_guard_target(const struct bpf_verifier_env *env, int 
 	return aux->guard_at_header ? aux->guard_to : -1;
 }
 bool bpf_subprog_is_global(const struct bpf_verifier_env *env, int subprog);
+
+/* The first field that ends behind 'off'. The fields are sorted and do not overlap. */
+static inline u32 btf_record_first_field(const struct btf_record *rec, s64 off)
+{
+	u32 l = 0, r = rec->cnt, m;
+
+	while (l < r) {
+		m = (l + r) / 2;
+		if (rec->fields[m].offset + rec->fields[m].size <= off)
+			l = m + 1;
+		else
+			r = m;
+	}
+	return l;
+}
 
 /* Kinds of member a by-value struct or union may be composed of. */
 enum btf_member_kind {
@@ -2148,11 +2242,6 @@ enum bpf_reg_arg_type {
 	DST_OP_NO_MARK	/* same as above, check only, don't mark */
 };
 
-#define MAX_KFUNC_DESCS 256
-/* Each kfunc can have its canonical and one specialized call target. */
-#define MAX_KFUNC_CALL_DESCS (MAX_KFUNC_DESCS * 2)
-static_assert(MAX_KFUNC_CALL_DESCS <= S16_MAX + 1);
-
 struct bpf_kfunc_desc {
 	struct btf_func_model func_model;
 	struct bpf_func_proto proto;
@@ -2162,19 +2251,16 @@ struct bpf_kfunc_desc {
 };
 
 struct bpf_kfunc_desc_tab {
+	struct bpf_kfunc_desc *descs;
 	u32 nr_descs;
-	u32 nr_base_descs;
-	/* Sorted by func_id (BTF ID) and offset (fd_array offset) during
-	 * verification. JITs use the descriptor index stored in the finalized
-	 * call's off field. The first nr_base_descs entries are the canonical
-	 * descriptors used for verifier lookups. Call specialization may append
-	 * immutable descriptors for additional targets.
-	 *
-	 * Grown one entry at a time by bpf_add_kfunc_call() and during
-	 * call specialization.
-	 */
-	struct bpf_kfunc_desc descs[];
 };
+
+static inline void bpf_free_kfunc_tab(struct bpf_kfunc_desc_tab *tab)
+{
+	if (tab)
+		kvfree(tab->descs);
+	kfree(tab);
+}
 
 /* Functions exported from verifier.c, used by fixups.c */
 void bpf_mark_subprog_exc_cb(struct bpf_verifier_env *env, int subprog);
@@ -2225,6 +2311,8 @@ static inline void bpf_patch_list_free(struct bpf_verifier_env *env)
 }
 #endif
 int bpf_patch_list_del(struct bpf_verifier_env *env, u32 off);
+int bpf_patch_list_append(struct bpf_verifier_env *env, u32 off,
+			  const struct bpf_insn *insns, u32 cnt);
 int bpf_patch_list_insert(struct bpf_verifier_env *env, u32 off,
 			  const struct bpf_insn *insns, u32 cnt);
 

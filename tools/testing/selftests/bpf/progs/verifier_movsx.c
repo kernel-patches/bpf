@@ -437,7 +437,7 @@ __success_unpriv
 __xlated_unpriv("w0 = 0")
 __xlated_unpriv("exit")
 __xlated_unpriv("nospec") /* inserted to prevent `frame pointer is read only` */
-__xlated_unpriv("goto pc-1")
+__xlated_unpriv("goto pc-2")
 #endif
 __naked void mov64sx_s32_varoff_2(void)
 {
@@ -465,7 +465,7 @@ __success_unpriv
 __xlated_unpriv("w0 = 0")
 __xlated_unpriv("exit")
 __xlated_unpriv("nospec") /* inserted to prevent `frame pointer is read only` */
-__xlated_unpriv("goto pc-1")
+__xlated_unpriv("goto pc-2")
 #endif
 __naked void mov64sx_s32_varoff_3(void)
 {

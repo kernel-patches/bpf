@@ -3323,16 +3323,22 @@ populate_extable:
 			/* call */
 		case BPF_JMP | BPF_CALL: {
 			const struct btf_func_model *fm = NULL;
-			bool arena_sp_args = false;
+			bool arena_sp_args = false, fixed;
+			u64 addr;
 
-			func = (u8 *) __bpf_call_base + imm32;
+			/* subprogs have addresses in the last pass */
+			err = bpf_jit_get_func_addr(bpf_prog, insn, bpf_prog->aux->func, &addr,
+						    &fixed);
+			if (err)
+				return err;
+			func = (u8 *)addr;
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
 				u8 *tcc_load = prog;
 
 				LOAD_TAIL_CALL_CNT_PTR(stack_depth);
 				ip += prog - tcc_load;
 			}
-			if (!imm32)
+			if (fixed && !imm32)
 				return -EINVAL;
 			if (arena_sp && call_clobbers_arena_sp(insn)) {
 				u8 *start = prog;

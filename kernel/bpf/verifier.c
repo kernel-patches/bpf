@@ -18,6 +18,7 @@
 #include <linux/vmalloc.h>
 #include <linux/stringify.h>
 #include <linux/bsearch.h>
+#include <linux/jhash.h>
 #include <linux/sort.h>
 #include <linux/perf_event.h>
 #include <linux/ctype.h>
@@ -1417,7 +1418,7 @@ static void *realloc_array(void *arr, size_t old_n, size_t new_n, size_t size)
 		goto out;
 
 	alloc_size = kmalloc_size_roundup(size_mul(new_n, size));
-	new_arr = krealloc(arr, alloc_size, GFP_KERNEL_ACCOUNT);
+	new_arr = krealloc(arr, alloc_size, BPF_VERIFIER_GFP);
 	if (!new_arr) {
 		kfree(arr);
 		return NULL;
@@ -1434,7 +1435,7 @@ out:
 static int copy_reference_state(struct bpf_verifier_state *dst, const struct bpf_verifier_state *src)
 {
 	dst->refs = copy_array(dst->refs, src->refs, src->acquired_refs,
-			       sizeof(struct bpf_reference_state), GFP_KERNEL_ACCOUNT);
+			       sizeof(struct bpf_reference_state), BPF_VERIFIER_GFP);
 	if (!dst->refs)
 		return -ENOMEM;
 
@@ -1453,7 +1454,7 @@ static int copy_stack_state(struct bpf_func_state *dst, const struct bpf_func_st
 	size_t n = bpf_stack_nr_slots(src);
 
 	dst->stack = copy_array(dst->stack, src->stack, n, sizeof(struct bpf_stack_state),
-				GFP_KERNEL_ACCOUNT);
+				BPF_VERIFIER_GFP);
 	if (!dst->stack)
 		return -ENOMEM;
 
@@ -1464,7 +1465,7 @@ static int copy_stack_state(struct bpf_func_state *dst, const struct bpf_func_st
 	if (n) {
 		dst->stack_arg_regs = copy_array(dst->stack_arg_regs, src->stack_arg_regs, n,
 						 sizeof(struct bpf_reg_state),
-						 GFP_KERNEL_ACCOUNT);
+						 BPF_VERIFIER_GFP);
 		if (!dst->stack_arg_regs)
 			return -ENOMEM;
 	}
@@ -1765,7 +1766,7 @@ static int copy_func_state(struct bpf_func_state *dst,
 	/* Instruction accounting is path-local, not part of verifier state. */
 	dst->insns_subtotal = 0;
 	dst->loop_stack = copy_array(dst->loop_stack, src->loop_stack, src->loop_stack_cnt,
-				     sizeof(*src->loop_stack), GFP_KERNEL_ACCOUNT);
+				     sizeof(*src->loop_stack), BPF_VERIFIER_GFP);
 	if (!dst->loop_stack)
 		return -ENOMEM;
 	return copy_stack_state(dst, src);
@@ -1797,7 +1798,7 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 	for (i = 0; i <= src->curframe; i++) {
 		dst = dst_state->frame[i];
 		if (!dst) {
-			dst = kzalloc_obj(*dst, GFP_KERNEL_ACCOUNT);
+			dst = kzalloc_obj(*dst, BPF_VERIFIER_GFP);
 			if (!dst)
 				return -ENOMEM;
 			dst_state->frame[i] = dst;
@@ -1829,7 +1830,7 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 	struct bpf_verifier_stack_elem *elem;
 	int err;
 
-	elem = kzalloc_obj(struct bpf_verifier_stack_elem, GFP_KERNEL_ACCOUNT);
+	elem = kzalloc_obj(struct bpf_verifier_stack_elem, BPF_VERIFIER_GFP);
 	if (!elem)
 		return ERR_PTR(-ENOMEM);
 
@@ -2544,7 +2545,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	struct bpf_verifier_stack_elem *elem;
 	struct bpf_func_state *frame;
 
-	elem = kzalloc_obj(struct bpf_verifier_stack_elem, GFP_KERNEL_ACCOUNT);
+	elem = kzalloc_obj(struct bpf_verifier_stack_elem, BPF_VERIFIER_GFP);
 	if (!elem)
 		return ERR_PTR(-ENOMEM);
 
@@ -2558,7 +2559,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	 * Initialize it similar to do_check_common().
 	 */
 	elem->st.in_sleepable = is_sleepable;
-	frame = kzalloc_obj(*frame, GFP_KERNEL_ACCOUNT);
+	frame = kzalloc_obj(*frame, BPF_VERIFIER_GFP);
 	if (!frame)
 		return ERR_PTR(-ENOMEM);
 	init_func_state(env, frame,
@@ -2601,31 +2602,14 @@ int bpf_find_subprog(struct bpf_verifier_env *env, int off)
 	return p - env->subprog_info;
 }
 
-static int add_subprog(struct bpf_verifier_env *env, int off)
+static int add_subprog(struct bpf_verifier_env *env, unsigned long *starts, int off)
 {
-	struct bpf_subprog_info *subprog = env->subprog_info;
-	int insn_cnt = env->prog->len;
-	int i;
-
-	if (off >= insn_cnt || off < 0) {
+	if (off >= env->prog->len || off < 0) {
 		verbose(env, "call to invalid destination\n");
 		return -EINVAL;
 	}
-	i = bpf_find_subprog(env, off);
-	if (i >= 0)
-		return i;
-	if (env->subprog_cnt >= BPF_MAX_SUBPROGS) {
-		verbose(env, "too many subprograms\n");
-		return -E2BIG;
-	}
-	/*
-	 * Determine subprog starts. The end is one before the next starts.
-	 * The array stays sorted: subprogs that start after 'off' move up.
-	 */
-	for (i = env->subprog_cnt++; i > 0 && subprog[i - 1].start > off; i--)
-		subprog[i] = subprog[i - 1];
-	subprog[i] = (struct bpf_subprog_info){ .start = off, .exit_idx = U32_MAX };
-	return i;
+	__set_bit(off, starts);
+	return 0;
 }
 
 static int bpf_find_exception_callback_insn_off(struct bpf_verifier_env *env)
@@ -2690,48 +2674,28 @@ static int bpf_find_exception_callback_insn_off(struct bpf_verifier_env *env)
 	return ret;
 }
 
-#define MAX_KFUNC_BTFS	256
-
 struct bpf_kfunc_btf {
 	struct btf *btf;
 	struct module *module;
-	u16 offset;
 };
 
 struct bpf_kfunc_btf_tab {
-	struct bpf_kfunc_btf descs[MAX_KFUNC_BTFS];
+	struct bpf_kfunc_btf *descs;
 	u32 nr_descs;
 };
 
-static int kfunc_desc_cmp_by_id_off(const void *a, const void *b)
+/* The key of env->kfunc_index. The BTF of a module has func_id 0. */
+static u64 kfunc_key(u32 func_id, u16 offset, bool specialized)
 {
-	const struct bpf_kfunc_desc *d0 = a;
-	const struct bpf_kfunc_desc *d1 = b;
-
-	/* func_id is not greater than BTF_MAX_TYPE */
-	return d0->func_id - d1->func_id ?: d0->offset - d1->offset;
-}
-
-static int kfunc_btf_cmp_by_off(const void *a, const void *b)
-{
-	const struct bpf_kfunc_btf *d0 = a;
-	const struct bpf_kfunc_btf *d1 = b;
-
-	return d0->offset - d1->offset;
+	return func_id | (u64)offset << 32 | (u64)specialized << 48;
 }
 
 static struct bpf_kfunc_desc *
-find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset)
+find_kfunc_desc(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 {
-	struct bpf_kfunc_desc desc = {
-		.func_id = func_id,
-		.offset = offset,
-	};
-	struct bpf_kfunc_desc_tab *tab;
+	int i = bpf_index_find(&env->kfunc_index, kfunc_key(func_id, offset, false));
 
-	tab = prog->aux->kfunc_tab;
-	return bsearch(&desc, tab->descs, tab->nr_base_descs,
-		       sizeof(tab->descs[0]), kfunc_desc_cmp_by_id_off);
+	return func_id && i >= 0 ? &env->prog->aux->kfunc_tab->descs[i] : NULL;
 }
 
 int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
@@ -2831,50 +2795,38 @@ static struct btf *fd_array_get_btf(struct bpf_verifier_env *env, u32 idx)
 static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,
 					 s16 offset)
 {
-	struct bpf_kfunc_btf kf_btf = { .offset = offset };
-	struct bpf_kfunc_btf_tab *tab;
+	struct bpf_kfunc_btf_tab *tab = env->prog->aux->kfunc_btf_tab;
+	int i = bpf_index_find(&env->kfunc_index, kfunc_key(0, offset, false));
 	struct bpf_kfunc_btf *b;
 	struct module *mod;
 	struct btf *btf;
 
-	tab = env->prog->aux->kfunc_btf_tab;
-	b = bsearch(&kf_btf, tab->descs, tab->nr_descs,
-		    sizeof(tab->descs[0]), kfunc_btf_cmp_by_off);
-	if (!b) {
-		if (tab->nr_descs == MAX_KFUNC_BTFS) {
-			verbose(env, "too many different module BTFs\n");
-			return ERR_PTR(-E2BIG);
-		}
+	if (i >= 0)
+		return tab->descs[i].btf;
 
-		btf = fd_array_get_btf(env, offset);
-		if (IS_ERR(btf))
-			return btf;
-		if (!btf_is_module(btf)) {
-			verbose(env, "BTF fd for kfunc is not a module BTF\n");
-			btf_put(btf);
-			return ERR_PTR(-EINVAL);
-		}
+	b = bpf_table_next(tab->descs, tab->nr_descs);
+	if (!b)
+		return ERR_PTR(-ENOMEM);
 
-		mod = btf_try_get_module(btf);
-		if (!mod) {
-			btf_put(btf);
-			return ERR_PTR(-ENXIO);
-		}
-
-		b = &tab->descs[tab->nr_descs++];
-		b->btf = btf;
-		b->module = mod;
-		b->offset = offset;
-
-		/* sort() reorders entries by value, so b may no longer point
-		 * to the right entry after this
-		 */
-		sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
-		     kfunc_btf_cmp_by_off, NULL);
-	} else {
-		btf = b->btf;
+	btf = fd_array_get_btf(env, offset);
+	if (IS_ERR(btf))
+		return btf;
+	if (!btf_is_module(btf)) {
+		verbose(env, "BTF fd for kfunc is not a module BTF\n");
+		btf_put(btf);
+		return ERR_PTR(-EINVAL);
 	}
 
+	mod = btf_try_get_module(btf);
+	if (!mod) {
+		btf_put(btf);
+		return ERR_PTR(-ENXIO);
+	}
+
+	b->btf = btf;
+	b->module = mod;
+	if (bpf_index_add(&env->kfunc_index, kfunc_key(0, offset, false), tab->nr_descs++))
+		return ERR_PTR(-ENOMEM);
 	return btf;
 }
 
@@ -2887,6 +2839,7 @@ void bpf_free_kfunc_btf_tab(struct bpf_kfunc_btf_tab *tab)
 		module_put(tab->descs[tab->nr_descs].module);
 		btf_put(tab->descs[tab->nr_descs].btf);
 	}
+	kvfree(tab->descs);
 	kfree(tab);
 }
 
@@ -2908,22 +2861,14 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 
 static struct btf *find_kfunc_desc_btf_cached(struct bpf_verifier_env *env, s16 offset)
 {
-	struct bpf_kfunc_btf kf_btf = { .offset = offset };
-	struct bpf_kfunc_btf_tab *tab;
-	struct bpf_kfunc_btf *b;
+	int i = bpf_index_find(&env->kfunc_index, kfunc_key(0, offset, false));
 
 	if (!offset)
 		return btf_vmlinux ?: ERR_PTR(-ENOENT);
 	if (offset < 0)
 		return ERR_PTR(-EINVAL);
 
-	tab = env->prog->aux->kfunc_btf_tab;
-	if (!tab)
-		return ERR_PTR(-ENOENT);
-
-	b = bsearch(&kf_btf, tab->descs, tab->nr_descs,
-		    sizeof(tab->descs[0]), kfunc_btf_cmp_by_off);
-	return b ? b->btf : ERR_PTR(-ENOENT);
+	return i >= 0 ? env->prog->aux->kfunc_btf_tab->descs[i].btf : ERR_PTR(-ENOENT);
 }
 
 #define KF_IMPL_SUFFIX "_impl"
@@ -3057,7 +3002,7 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 			return -EINVAL;
 		}
 
-		tab = kzalloc_obj(*tab, GFP_KERNEL_ACCOUNT);
+		tab = kzalloc_obj(*tab, BPF_VERIFIER_GFP);
 		if (!tab)
 			return -ENOMEM;
 		prog_aux->kfunc_tab = tab;
@@ -3075,24 +3020,14 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 		return 0;
 
 	if (!btf_tab && offset) {
-		btf_tab = kzalloc_obj(*btf_tab, GFP_KERNEL_ACCOUNT);
+		btf_tab = kzalloc_obj(*btf_tab, BPF_VERIFIER_GFP);
 		if (!btf_tab)
 			return -ENOMEM;
 		prog_aux->kfunc_btf_tab = btf_tab;
 	}
 
-	if (find_kfunc_desc(env->prog, func_id, offset))
+	if (find_kfunc_desc(env, func_id, offset))
 		return 0;
-
-	if (tab->nr_base_descs == MAX_KFUNC_DESCS) {
-		verbose(env, "too many different kernel function calls\n");
-		return -E2BIG;
-	}
-	if (tab->nr_descs != tab->nr_base_descs) {
-		verifier_bug(env, "unexpected specialized func desc found (%d descs, %d base descs)",
-			     tab->nr_descs, tab->nr_base_descs);
-		return -EFAULT;
-	}
 
 	err = fetch_kfunc_meta(env, func_id, offset, &kfunc);
 	if (err)
@@ -3133,12 +3068,9 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	meta.func_name = kfunc.name;
 	meta.kfunc_flags = kfunc.flags ? *kfunc.flags : 0;
 
-	tab = krealloc(tab, struct_size(tab, descs, tab->nr_descs + 1), GFP_KERNEL_ACCOUNT);
-	if (!tab)
+	desc = bpf_table_next(tab->descs, tab->nr_descs);
+	if (!desc)
 		return -ENOMEM;
-	prog_aux->kfunc_tab = tab;
-
-	desc = &tab->descs[tab->nr_descs];
 	memset(desc, 0, sizeof(*desc));
 
 	err = gen_kfunc_arg_proto(env, &meta, &func_model, &desc->proto);
@@ -3149,24 +3081,22 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	desc->offset = offset;
 	desc->addr = addr;
 	desc->func_model = func_model;
-	tab->nr_descs++;
-	tab->nr_base_descs++;
-	sort(tab->descs, tab->nr_base_descs, sizeof(tab->descs[0]),
-	     kfunc_desc_cmp_by_id_off, NULL);
-	return 0;
+	return bpf_index_add(&env->kfunc_index, kfunc_key(func_id, offset, false), tab->nr_descs++);
 }
 
 static int add_subprogs(struct bpf_verifier_env *env)
 {
-	struct bpf_subprog_info *subprog = env->subprog_info;
-	int i, ret, insn_cnt = env->prog->len, ex_cb_insn;
+	int i, cnt, ret, insn_cnt = env->prog->len, ex_cb_insn;
+	unsigned long *starts __free(kvfree) = NULL;
 	struct bpf_insn *insn = env->prog->insnsi;
 	const char *operation, *suggestion;
+	struct bpf_subprog_info *subprog;
 
+	starts = kvcalloc(BITS_TO_LONGS(insn_cnt), sizeof(long), BPF_VERIFIER_GFP);
+	if (!starts)
+		return -ENOMEM;
 	/* Add entry function. */
-	ret = add_subprog(env, 0);
-	if (ret)
-		return ret;
+	__set_bit(0, starts);
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn))
@@ -3188,7 +3118,7 @@ static int add_subprogs(struct bpf_verifier_env *env)
 			return -EPERM;
 		}
 
-		ret = add_subprog(env, i + insn->imm + 1);
+		ret = add_subprog(env, starts, i + insn->imm + 1);
 		if (ret < 0)
 			return ret;
 	}
@@ -3203,7 +3133,7 @@ static int add_subprogs(struct bpf_verifier_env *env)
 		struct bpf_prog_aux *aux = env->prog->aux;
 
 		for (i = 1; i < aux->func_info_cnt; i++) {
-			ret = add_subprog(env, aux->func_info[i].insn_off);
+			ret = add_subprog(env, starts, aux->func_info[i].insn_off);
 			if (ret < 0)
 				return ret;
 		}
@@ -3217,23 +3147,32 @@ static int add_subprogs(struct bpf_verifier_env *env)
 	/* If ex_cb_insn > 0, this means that the main program has a subprog
 	 * marked using BTF decl tag to serve as the exception callback.
 	 */
-	if (ex_cb_insn) {
-		ret = add_subprog(env, ex_cb_insn);
-		if (ret < 0)
-			return ret;
-		for (i = 1; i < env->subprog_cnt; i++) {
-			if (env->subprog_info[i].start != ex_cb_insn)
-				continue;
-			env->exception_callback_subprog = i;
-			bpf_mark_subprog_exc_cb(env, i);
-			break;
-		}
+	ret = add_subprog(env, starts, ex_cb_insn);
+	if (ret < 0)
+		return ret;
+
+	/* + 2 for the fake and the hidden subprogs */
+	cnt = bitmap_weight(starts, insn_cnt);
+	subprog = env->subprog_info = kvcalloc(cnt + 2, sizeof(*subprog), BPF_VERIFIER_GFP);
+	env->subprog_topo_order = kvcalloc(cnt, sizeof(int), BPF_VERIFIER_GFP);
+	if (!subprog || !env->subprog_topo_order)
+		return -ENOMEM;
+
+	/* Determine subprog starts. The end is one before the next starts. */
+	for_each_set_bit(i, starts, insn_cnt) {
+		subprog[env->subprog_cnt].start = i;
+		subprog[env->subprog_cnt++].exit_idx = U32_MAX;
 	}
 
 	/* Add a fake 'exit' subprog which could simplify subprog iteration
 	 * logic. 'subprog_cnt' should not be increased.
 	 */
-	subprog[env->subprog_cnt].start = insn_cnt;
+	subprog[cnt].start = insn_cnt;
+
+	if (ex_cb_insn) {
+		env->exception_callback_subprog = bpf_find_subprog(env, ex_cb_insn);
+		bpf_mark_subprog_exc_cb(env, env->exception_callback_subprog);
+	}
 
 	if (env->log.level & BPF_LOG_LEVEL2)
 		for (i = 0; i < env->subprog_cnt; i++)
@@ -3260,7 +3199,7 @@ static int add_kfuncs(struct bpf_verifier_env *env)
 			return -EPERM;
 		}
 
-		ret = bpf_add_kfunc_call(env, insn->imm, insn->off);
+		ret = bpf_must_abort() ? -EINTR : bpf_add_kfunc_call(env, insn->imm, insn->off);
 		if (ret < 0)
 			return ret;
 	}
@@ -3268,7 +3207,8 @@ static int add_kfuncs(struct bpf_verifier_env *env)
 	return 0;
 }
 
-static void find_subprog_properties(struct bpf_verifier_env *env)
+/* Before the main pass all insns count, after it those that were 'seen' */
+static void find_subprog_properties(struct bpf_verifier_env *env, bool seen)
 {
 	struct bpf_subprog_info *subprog = env->subprog_info;
 	struct bpf_insn *insn = env->prog->insnsi;
@@ -3277,10 +3217,15 @@ static void find_subprog_properties(struct bpf_verifier_env *env)
 	for (cur_subprog = 0; cur_subprog < env->subprog_cnt; cur_subprog++) {
 		int i;
 
+		subprog[cur_subprog].has_tail_call = false;
+		subprog[cur_subprog].tail_call_reachable = false;
+		subprog[cur_subprog].has_ld_abs = false;
 		for (i = subprog[cur_subprog].start;
 		     i < subprog[cur_subprog + 1].start; i++) {
 			u8 code = insn[i].code;
 
+			if (seen && !env->insn_aux_data[i].seen)
+				continue;
 			if (code == (BPF_JMP | BPF_CALL) &&
 			    insn[i].src_reg == 0 &&
 			    insn[i].imm == BPF_FUNC_tail_call) {
@@ -3365,31 +3310,16 @@ next:
  */
 static int record_callx_edge(struct bpf_verifier_env *env, int caller, int callee)
 {
-	u32 cnt = env->subprog_cnt;
+	u32 *first = &env->subprog_info[caller].callx_edge, cnt = env->callx_index.cnt;
+	u64 key = (u64)caller << 32 | callee;
 
-	if (!env->callx_edges) {
-		env->callx_edges = kvcalloc(BITS_TO_LONGS(cnt * cnt), sizeof(long),
-					    GFP_KERNEL_ACCOUNT);
-		if (!env->callx_edges)
-			return -ENOMEM;
-	}
-	__set_bit(caller * cnt + callee, env->callx_edges);
+	if (bpf_index_find(&env->callx_index, key) >= 0)
+		return 0;
+	if (!bpf_table_next(env->callx_edges, cnt) || bpf_index_add(&env->callx_index, key, cnt))
+		return -ENOMEM;
+	env->callx_edges[cnt] = (struct bpf_callx_edge){ callee, *first };
+	*first = cnt + 1;
 	return 0;
-}
-
-/*
- * Return the first subprog with the number >= 'from' that 'caller' calls
- * via callx, or -1 when there is none.
- */
-static int next_callx_callee(struct bpf_verifier_env *env, int caller, int from)
-{
-	u32 cnt = env->subprog_cnt;
-	unsigned long bit, end = (caller + 1) * cnt;
-
-	if (!env->callx_edges || from >= cnt)
-		return -1;
-	bit = find_next_bit(env->callx_edges, end, caller * cnt + from);
-	return bit < end ? bit - caller * cnt : -1;
 }
 
 /*
@@ -3458,93 +3388,40 @@ static int sort_subprogs_topo(struct bpf_verifier_env *env)
 	struct bpf_subprog_info *si = env->subprog_info;
 	int *insn_postorder = env->cfg.insn_postorder;
 	struct bpf_insn *insn = env->prog->insnsi;
-	int cnt = env->subprog_cnt;
-	int *dfs_stack = NULL;
-	int top = 0, order = 0;
-	int i, ret = 0;
-	u8 *color = NULL;
+	int cnt = env->subprog_cnt, i, j, idx, ret;
+	struct bpf_call_graph cg;
 
-	color = kvzalloc_objs(*color, cnt, GFP_KERNEL_ACCOUNT);
-	dfs_stack = kvmalloc_objs(*dfs_stack, cnt, GFP_KERNEL_ACCOUNT);
-	if (!color || !dfs_stack) {
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	/*
-	 * DFS post-order traversal.
-	 * Color values: 0 = unvisited, 1 = on stack, 2 = done.
-	 */
+	ret = bpf_call_graph_init(&cg, cnt);
 	for (i = 0; i < cnt; i++) {
-		if (color[i])
-			continue;
-		color[i] = 1;
-		dfs_stack[top++] = i;
-
-		while (top > 0) {
-			int cur = dfs_stack[top - 1];
-			int po_start = si[cur].postorder_start;
-			int po_end = si[cur + 1].postorder_start;
-			bool pushed = false;
-			int j;
-
-			for (j = po_start; j < po_end; j++) {
-				int idx = insn_postorder[j];
-				int callee;
-
-				if (bpf_is_callx(&insn[idx])) {
-					/* find a callee that is not explored yet */
-					callee = -1;
-					do {
-						callee = next_callx_callee(env, cur, callee + 1);
-					} while (callee >= 0 && color[callee] == 2);
-					if (callee < 0)
-						continue;
-				} else if (bpf_pseudo_call(&insn[idx]) || bpf_pseudo_func(&insn[idx])) {
-					callee = bpf_find_subprog(env, idx + insn[idx].imm + 1);
-					if (callee < 0) {
-						ret = -EFAULT;
-						goto out;
-					}
-				} else {
-					continue;
-				}
-				if (color[callee] == 2)
-					continue;
-				/*
-				 * The call that is its own target never returns. It is
-				 * also what libbpf leaves in place of a call that it
-				 * could not resolve.
-				 */
-				if (bpf_pseudo_call(&insn[idx]) && insn[idx].imm == -1) {
-					verbose(env, "call at insn %d calls itself\n", idx);
-					ret = -EINVAL;
-					goto out;
-				}
-				/* recursion: the order within the cycle is arbitrary */
-				if (color[callee] == 1)
-					continue;
-				color[callee] = 1;
-				dfs_stack[top++] = callee;
-				pushed = true;
+		for (j = si[i].postorder_start; j < si[i + 1].postorder_start && !ret; j++) {
+			idx = insn_postorder[j];
+			if (!bpf_pseudo_call(&insn[idx]) && !bpf_pseudo_func(&insn[idx]))
+				continue;
+			/*
+			 * The call that is its own target never returns. It is
+			 * also what libbpf leaves in place of a call that it
+			 * could not resolve.
+			 */
+			if (bpf_pseudo_call(&insn[idx]) && insn[idx].imm == -1) {
+				verbose(env, "call at insn %d calls itself\n", idx);
+				ret = -EINVAL;
 				break;
 			}
-
-			if (!pushed) {
-				color[cur] = 2;
-				env->subprog_topo_order[order++] = cur;
-				top--;
-			}
+			ret = bpf_call_graph_add(&cg, i,
+						 bpf_find_subprog(env, idx + insn[idx].imm + 1));
 		}
 	}
+	if (ret)
+		goto out;
+	bpf_call_graph_sort(&cg, 0);
+	memcpy(env->subprog_topo_order, cg.postorder, cnt * sizeof(u32));
 
 	if (env->log.level & BPF_LOG_LEVEL2)
 		for (i = 0; i < cnt; i++)
 			verbose(env, "topo_order[%d] = %s\n",
 				i, bpf_subprog_name(env, env->subprog_topo_order[i]));
 out:
-	kvfree(dfs_stack);
-	kvfree(color);
+	bpf_call_graph_free(&cg);
 	return ret;
 }
 
@@ -4962,48 +4839,43 @@ static int check_map_access(struct bpf_verifier_env *env, struct bpf_reg_state *
 	if (IS_ERR_OR_NULL(map->record))
 		return 0;
 	rec = map->record;
-	for (i = 0; i < rec->cnt; i++) {
+	/* If any part of a field can be touched by load/store, reject this program. */
+	for (i = btf_record_first_field(rec, reg_smin(reg) + off);
+	     i < rec->cnt && rec->fields[i].offset < reg_umax(reg) + off + size; i++) {
 		struct btf_field *field = &rec->fields[i];
 		u32 p = field->offset;
 
-		/* If any part of a field  can be touched by load/store, reject
-		 * this program. To check that [x1, x2) overlaps with [y1, y2),
-		 * it is sufficient to check x1 < y2 && y1 < x2.
-		 */
-		if (reg_smin(reg) + off < p + field->size &&
-		    p < reg_umax(reg) + off + size) {
-			switch (field->type) {
-			case BPF_KPTR_UNREF:
-			case BPF_KPTR_REF:
-			case BPF_KPTR_PERCPU:
-			case BPF_UPTR:
-				if (src != ACCESS_DIRECT) {
-					verbose(env, "%s cannot be accessed indirectly by helper\n",
-						btf_field_type_name(field->type));
-					return -EACCES;
-				}
-				if (!tnum_is_const(reg->var_off)) {
-					verbose(env, "%s access cannot have variable offset\n",
-						btf_field_type_name(field->type));
-					return -EACCES;
-				}
-				if (p != off + reg->var_off.value) {
-					verbose(env, "%s access misaligned expected=%u off=%llu\n",
-						btf_field_type_name(field->type),
-						p, off + reg->var_off.value);
-					return -EACCES;
-				}
-				if (size != bpf_size_to_bytes(BPF_DW)) {
-					verbose(env, "%s access size must be BPF_DW\n",
-						btf_field_type_name(field->type));
-					return -EACCES;
-				}
-				break;
-			default:
-				verbose(env, "%s cannot be accessed directly by load/store\n",
+		switch (field->type) {
+		case BPF_KPTR_UNREF:
+		case BPF_KPTR_REF:
+		case BPF_KPTR_PERCPU:
+		case BPF_UPTR:
+			if (src != ACCESS_DIRECT) {
+				verbose(env, "%s cannot be accessed indirectly by helper\n",
 					btf_field_type_name(field->type));
 				return -EACCES;
 			}
+			if (!tnum_is_const(reg->var_off)) {
+				verbose(env, "%s access cannot have variable offset\n",
+					btf_field_type_name(field->type));
+				return -EACCES;
+			}
+			if (p != off + reg->var_off.value) {
+				verbose(env, "%s access misaligned expected=%u off=%llu\n",
+					btf_field_type_name(field->type),
+					p, off + reg->var_off.value);
+				return -EACCES;
+			}
+			if (size != bpf_size_to_bytes(BPF_DW)) {
+				verbose(env, "%s access size must be BPF_DW\n",
+					btf_field_type_name(field->type));
+				return -EACCES;
+			}
+			break;
+		default:
+			verbose(env, "%s cannot be accessed directly by load/store\n",
+				btf_field_type_name(field->type));
+			return -EACCES;
 		}
 	}
 	return 0;
@@ -5502,120 +5374,73 @@ static int round_up_stack_depth(struct bpf_verifier_env *env, int stack_depth)
 	return round_up(max_t(u32, stack_depth, 1), 32);
 }
 
-/*
- * A set of subprogs is a bitmap. The call graph has a set for every subprog:
- * calls + s * BITS_TO_LONGS(cnt) are the subprogs that s calls. Make it
- * the subprogs that s gets to, through any number of calls.
- */
-static void close_call_graph(unsigned long *calls, int cnt)
-{
-	int words = BITS_TO_LONGS(cnt);
-	int j, s;
+enum {
+	CG_LIVE		= BIT(0), /* what the kernel calls and what that gets to */
+	CG_IN_CB	= BIT(1), /* callbacks and what they get to */
+	CG_IN_ASYNC_CB	= BIT(2), /* async callbacks and what they get to */
+	CG_IN_RECURSION	= BIT(3), /* recursive subprogs and what they get to */
+	CG_TAIL_CALL	= BIT(4), /* subprogs that get to a tail call */
+	CG_ARENA_SP	= BIT(5), /* subprogs that get to r12 */
+	CG_CB		= BIT(6),
+	CG_GLOBAL	= BIT(7),
+};
 
-	for (j = 0; j < cnt; j++)
-		for (s = 0; s < cnt; s++)
-			if (test_bit(j, calls + s * words))
-				bitmap_or(calls + s * words, calls + s * words,
-					  calls + j * words, cnt);
-}
+#define for_each_marked_subprog(cg, s, mark) \
+	for (s = 0; s < (cg)->cnt; s++) if (!((cg)->marks[s] & (mark))) {} else
 
 /*
  * Who calls whom. It's known after the main verification pass, which finds out
- * what callx and the helpers that take callbacks call.
+ * what callx and the helpers that take callbacks call, and what is dead code.
  *
  * What follows for a subprog from its callers, or from what it calls, is computed
  * over this graph and not by a walk of one chain of calls after another: the
  * number of chains grows exponentially, and there is no end to them when subprogs
  * call themselves.
  */
-struct bpf_call_graph {
-	int cnt; /* subprogs */
-	int words; /* longs in a set of subprogs */
-	unsigned long *calls; /* calls + s * words: the subprogs that s calls */
-	unsigned long *reach; /* reach + s * words: the subprogs that s gets to */
-	unsigned long *live; /* what the kernel calls and what that gets to */
-	unsigned long *in_cb; /* callbacks and what they get to */
-	unsigned long *in_async_cb; /* async callbacks and what they get to */
-	unsigned long *in_recursion; /* recursive subprogs and what they get to */
-	unsigned long *tail_calls; /* subprogs that have a tail call */
-	unsigned long *arena_sp; /* subprogs that count on r12 of the caller */
-};
-
-static unsigned long *subprog_calls(struct bpf_call_graph *cg, int s)
-{
-	return cg->calls + s * cg->words;
-}
-
-static unsigned long *subprog_reach(struct bpf_call_graph *cg, int s)
-{
-	return cg->reach + s * cg->words;
-}
-
-/* add the subprog and what it gets to */
-static void add_reach(struct bpf_call_graph *cg, unsigned long *set, int s)
-{
-	__set_bit(s, set);
-	bitmap_or(set, set, subprog_reach(cg, s), cg->cnt);
-}
-
 static int build_call_graph(struct bpf_verifier_env *env, struct bpf_call_graph *cg)
 {
 	struct bpf_subprog_info *si = env->subprog_info;
 	struct bpf_insn *insn = env->prog->insnsi;
-	int cnt = env->subprog_cnt, words = BITS_TO_LONGS(cnt);
-	int i, j, s;
+	int cnt = env->subprog_cnt, i, s, err;
 
-	cg->cnt = cnt;
-	cg->words = words;
-	cg->calls = kvcalloc((2 * cnt + 6) * words, sizeof(long), GFP_KERNEL_ACCOUNT);
-	if (!cg->calls)
-		return -ENOMEM;
-	cg->reach = cg->calls + cnt * words;
-	cg->live = cg->reach + cnt * words;
-	cg->in_cb = cg->live + words;
-	cg->in_async_cb = cg->in_cb + words;
-	cg->in_recursion = cg->in_async_cb + words;
-	cg->tail_calls = cg->in_recursion + words;
-	cg->arena_sp = cg->tail_calls + words;
-
+	err = bpf_call_graph_init(cg, cnt);
 	for (s = 0; s < cnt; s++) {
-		for (i = si[s].start; i < si[s + 1].start; i++) {
-			/* the subprog that takes the address of a subprog counts as its caller */
-			if (!bpf_pseudo_call(insn + i) && !bpf_pseudo_func(insn + i))
-				continue;
-			j = bpf_find_subprog(env, i + insn[i].imm + 1);
-			if (verifier_bug_if(j < 0, env, "callee not found at insn %d",
-					    i + insn[i].imm + 1))
-				return -EFAULT;
-			/*
-			 * async callbacks don't increase bpf prog stack size
-			 * unless called directly
-			 */
-			if (si[j].is_async_cb && !bpf_pseudo_call(insn + i))
-				continue;
-			__set_bit(j, subprog_calls(cg, s));
-		}
-		/* the callees of callx and the callbacks of helpers, see record_callx_edge() */
-		for (j = next_callx_callee(env, s, 0); j >= 0; j = next_callx_callee(env, s, j + 1))
-			__set_bit(j, subprog_calls(cg, s));
+		for (i = si[s].start; i < si[s + 1].start && !err; i++)
+			if (bpf_pseudo_call(insn + i) && env->insn_aux_data[i].seen)
+				err = bpf_call_graph_add(cg, s, bpf_find_subprog(env,
+							 i + insn[i].imm + 1));
+		/* the callees of callx and the callbacks of helpers */
+		for (i = si[s].callx_edge; i && !err; i = env->callx_edges[i - 1].next)
+			err = bpf_call_graph_add(cg, s, env->callx_edges[i - 1].callee);
 	}
-	memcpy(cg->reach, cg->calls, cnt * words * sizeof(long));
-	close_call_graph(cg->reach, cnt);
+	if (err)
+		return err;
+	bpf_call_graph_sort(cg, 0);
 
 	for (s = 0; s < cnt; s++)
 		if (!s || si[s].is_async_cb)
-			add_reach(cg, cg->live, s);
-	for_each_set_bit(s, cg->live, cnt) {
-		if (si[s].is_cb)
-			add_reach(cg, cg->in_cb, s);
-		if (si[s].is_async_cb)
-			add_reach(cg, cg->in_async_cb, s);
-		if (test_bit(s, subprog_reach(cg, s)))
-			add_reach(cg, cg->in_recursion, s);
-		if (si[s].has_tail_call)
-			__set_bit(s, cg->tail_calls);
-	}
+			cg->marks[s] = CG_LIVE;
+	bpf_call_graph_mark_callees(cg, CG_LIVE);
+	for_each_marked_subprog(cg, s, CG_LIVE)
+		cg->marks[s] |= (si[s].is_cb ? CG_CB | CG_IN_CB : 0) |
+				(si[s].is_async_cb ? CG_IN_ASYNC_CB : 0) |
+				(bpf_call_graph_recursive(cg, s) ? CG_IN_RECURSION : 0) |
+				(si[s].has_tail_call ? CG_TAIL_CALL : 0) |
+				(si[s].uses_arena_sp ? CG_ARENA_SP : 0) |
+				(bpf_subprog_is_global(env, s) ? CG_GLOBAL : 0);
+	bpf_call_graph_mark_callees(cg, CG_IN_CB | CG_IN_ASYNC_CB | CG_IN_RECURSION);
+	bpf_call_graph_mark_callers(cg, CG_TAIL_CALL, 0);
 	return 0;
+}
+
+static bool subprog_calls(struct bpf_call_graph *cg, u32 caller, u32 callee)
+{
+	u32 j;
+
+	bpf_for_each_callee(cg, caller, j)
+		if (j == callee)
+			return true;
+	return false;
 }
 
 /* the insn of subprog 'caller' that is the edge to subprog 'callee' */
@@ -5625,13 +5450,9 @@ static int find_call_insn(struct bpf_verifier_env *env, int caller, int callee)
 	struct bpf_insn *insn = env->prog->insnsi;
 	int i, end = si[caller + 1].start;
 
-	for (i = si[caller].start; i < end; i++) {
-		if (!bpf_pseudo_call(insn + i) &&
-		    (!bpf_pseudo_func(insn + i) || si[callee].is_async_cb))
-			continue;
-		if (i + insn[i].imm + 1 == si[callee].start)
+	for (i = si[caller].start; i < end; i++)
+		if (bpf_pseudo_call(insn + i) && i + insn[i].imm + 1 == si[callee].start)
 			return i;
-	}
 	/* It's not recorded which callx or helper calls what. Take the first one. */
 	for (i = si[caller].start; i < end - 1; i++)
 		if (bpf_is_callx(insn + i) || bpf_calls_callback(env, i))
@@ -5644,8 +5465,8 @@ static int check_exception_cb(struct bpf_verifier_env *env, struct bpf_call_grap
 {
 	int cb = env->exception_callback_subprog, s;
 
-	for_each_set_bit(s, cg->live, cg->cnt) {
-		if (!cb || !test_bit(cb, subprog_calls(cg, s)))
+	for_each_marked_subprog(cg, s, CG_LIVE) {
+		if (!cb || !subprog_calls(cg, s, cb))
 			continue;
 		verbose(env, "insn %d cannot call exception cb directly\n",
 			find_call_insn(env, s, cb));
@@ -5666,8 +5487,8 @@ static int check_recursion(struct bpf_verifier_env *env, struct bpf_call_graph *
 {
 	int j, s;
 
-	for_each_set_bit(s, cg->live, cg->cnt) {
-		if (!test_bit(s, subprog_reach(cg, s))) {
+	for_each_marked_subprog(cg, s, CG_LIVE) {
+		if (!bpf_call_graph_recursive(cg, s)) {
 			env->subprog_info[s].recursive = false;
 			continue;
 		}
@@ -5696,9 +5517,8 @@ static int check_recursion(struct bpf_verifier_env *env, struct bpf_call_graph *
 			return -EOPNOTSUPP;
 		}
 		/* the last call of the cycle */
-		for_each_set_bit(j, subprog_reach(cg, s), cg->cnt)
-			if (test_bit(s, subprog_calls(cg, j)))
-				break;
+		for (j = 0; cg->cycle[j] != cg->cycle[s] || !subprog_calls(cg, j, s); j++)
+			;
 		verbose(env, "recursive call from %s() to %s()\n",
 			bpf_subprog_name(env, j), bpf_subprog_name(env, s));
 		bpf_diag_program_structure(
@@ -5717,13 +5537,13 @@ static int check_callbacks(struct bpf_verifier_env *env, struct bpf_call_graph *
 	struct bpf_insn *insn = env->prog->insnsi;
 	int i, s;
 
-	for_each_set_bit(s, cg->in_cb, cg->cnt) {
+	for_each_marked_subprog(cg, s, CG_IN_CB) {
 		if (si[s].has_ld_abs) {
 			verbose(env, "cannot use BPF_LD_[ABS|IND] within callback\n");
 			return -EINVAL;
 		}
 		for (i = si[s].start; i < si[s + 1].start; i++) {
-			if (!bpf_is_throw_kfunc(insn + i))
+			if (!bpf_is_throw_kfunc(insn + i) || !env->insn_aux_data[i].seen)
 				continue;
 			verbose(env,
 				"bpf_throw kfunc (insn %d) cannot be called from callback subprog %d\n",
@@ -5744,9 +5564,8 @@ static int check_tail_calls(struct bpf_verifier_env *env, struct bpf_call_graph 
 	struct bpf_subprog_info *si = env->subprog_info;
 	int s;
 
-	for_each_set_bit(s, cg->live, cg->cnt) {
-		if (!si[s].has_tail_call &&
-		    !bitmap_intersects(subprog_reach(cg, s), cg->tail_calls, cg->cnt))
+	for_each_marked_subprog(cg, s, CG_LIVE) {
+		if (!(cg->marks[s] & CG_TAIL_CALL))
 			continue;
 		if (si[s].is_cb) {
 			verbose(env, "cannot tail call within callback\n");
@@ -5778,32 +5597,18 @@ static int check_tail_calls(struct bpf_verifier_env *env, struct bpf_call_graph 
  */
 static void mark_arena_stack_entries(struct bpf_verifier_env *env, struct bpf_call_graph *cg)
 {
-	struct bpf_subprog_info *si = env->subprog_info;
-	bool changed;
 	int s;
 
-	do {
-		changed = false;
-		for_each_set_bit(s, cg->live, cg->cnt) {
-			if (test_bit(s, cg->arena_sp) || si[s].arena_stack_entry)
-				continue;
-			if (!si[s].uses_arena_sp &&
-			    !bitmap_intersects(subprog_calls(cg, s), cg->arena_sp, cg->cnt))
-				continue;
-			if (si[s].is_cb) {
-				si[s].arena_stack_entry = true;
-				continue;
-			}
-			__set_bit(s, cg->arena_sp);
-			changed = true;
-		}
-	} while (changed);
+	bpf_call_graph_sort(cg, CG_CB);
+	bpf_call_graph_mark_callers(cg, CG_ARENA_SP, CG_CB);
+	for_each_marked_subprog(cg, s, CG_CB)
+		env->subprog_info[s].arena_stack_entry = cg->marks[s] & CG_ARENA_SP;
 }
 
 /* temporary state used for call frame depth calculation */
 struct bpf_subprog_call_depth_info {
-	int caller; /* the caller that has the most on the stack. -1: the kernel */
-	int depth; /* the most that the frames of the callers take. -1: not known yet */
+	int calls; /* the number of frames that take the most on the stack */
+	int depth; /* the most that the frames of the callers take */
 	int arena_depth; /* the same in the stack in arena */
 	int frame; /* the most consecutive static call stack frames on top of stack */
 };
@@ -5818,53 +5623,67 @@ static int subprog_stack_size(struct bpf_verifier_env *env, int s)
 	return round_up_stack_depth(env, sub->stack_depth);
 }
 
+static void max_call_depth(struct bpf_subprog_call_depth_info *to,
+			   const struct bpf_subprog_call_depth_info *from)
+{
+	if (from->depth > to->depth || !to->calls) {
+		to->depth = max(to->depth, from->depth);
+		to->calls = from->calls;
+	}
+	to->arena_depth = max(to->arena_depth, from->arena_depth);
+}
+
 /*
  * A subprog is entered with no more than what one of its callers is entered with plus
  * the frame of that caller. Not when both are recursive: the callee checks the stack at run
- * time. A cycle adds nothing, so this comes to an end.
+ * time. A cycle adds nothing: all subprogs on it have the same.
+ * The count of frames starts anew in a global subprog.
  */
 static void compute_call_depth(struct bpf_verifier_env *env, struct bpf_call_graph *cg,
 			       struct bpf_subprog_call_depth_info *dinfo)
 {
+	struct bpf_subprog_call_depth_info in, out, *callee;
 	struct bpf_subprog_info *si = env->subprog_info;
-	struct bpf_subprog_call_depth_info *callee;
-	int depth, arena_depth, frame, j, s;
-	bool changed;
+	u32 start, end, i, j, s;
+	int frame;
 
-	for (s = 0; s < cg->cnt; s++) {
-		dinfo[s].caller = -1;
-		dinfo[s].depth = !s || si[s].is_async_cb ? 0 : -1;
-	}
-	do {
-		cond_resched();
-		changed = false;
-		for_each_set_bit(s, cg->live, cg->cnt) {
-			if (dinfo[s].depth < 0)
+	memset(dinfo, 0, cg->cnt * sizeof(*dinfo));
+	bpf_call_graph_sort(cg, 0);
+	for (end = cg->cnt; end; end = start) {
+		start = cg->cycle[cg->order[end - 1]];
+		for (i = start, in = dinfo[cg->order[i]]; i < end; i++)
+			max_call_depth(&in, &dinfo[cg->order[i]]);
+		for (i = start; i < end; i++) {
+			s = cg->order[i];
+			if (!(cg->marks[s] & CG_LIVE))
 				continue;
-			for_each_set_bit(j, subprog_calls(cg, s), cg->cnt) {
-				callee = &dinfo[j];
-				depth = dinfo[s].depth;
-				arena_depth = dinfo[s].arena_depth;
+			bpf_for_each_callee(cg, s, j) {
+				out = in;
+				out.calls++;
 				if (!si[s].recursive || !si[j].recursive) {
-					depth += subprog_stack_size(env, s);
-					arena_depth += si[s].arena_stack_depth;
+					out.depth += subprog_stack_size(env, s);
+					out.arena_depth += si[s].arena_stack_depth;
 				}
-				frame = dinfo[s].frame + !si[j].recursive;
-				if (bpf_subprog_is_global(env, j))
-					frame = 0;
-				if (depth <= callee->depth && arena_depth <= callee->arena_depth &&
-				    frame <= callee->frame)
-					continue;
-				if (depth > callee->depth) {
-					callee->depth = depth;
-					callee->caller = s;
-				}
-				callee->arena_depth = max(callee->arena_depth, arena_depth);
-				callee->frame = max(callee->frame, frame);
-				changed = true;
+				max_call_depth(&dinfo[j], &out);
 			}
 		}
-	} while (changed);
+	}
+
+	bpf_call_graph_sort(cg, CG_GLOBAL);
+	for (end = cg->cnt; end; end = start) {
+		start = cg->cycle[cg->order[end - 1]];
+		for (i = start, frame = 0; i < end; i++)
+			frame = max(frame, dinfo[cg->order[i]].frame);
+		for (i = start; i < end; i++) {
+			bpf_for_each_callee(cg, cg->order[i], j) {
+				callee = &dinfo[j];
+				if (!(cg->marks[cg->order[i]] & CG_LIVE) ||
+				    (cg->marks[j] & CG_GLOBAL))
+					continue;
+				callee->frame = max(callee->frame, frame + !si[j].recursive);
+			}
+		}
+	}
 }
 
 /*
@@ -5882,7 +5701,7 @@ static int pad_recursive_frames(struct bpf_verifier_env *env, struct bpf_call_gr
 	u32 arena_frame = 0, depth = 0, room, frame;
 	int s;
 
-	for_each_set_bit(s, cg->live, cg->cnt) {
+	for_each_marked_subprog(cg, s, CG_LIVE) {
 		depth = max_t(u32, depth, dinfo[s].arena_depth + si[s].arena_stack_depth);
 		if (si[s].recursive)
 			arena_frame = max(arena_frame, si[s].arena_stack_depth);
@@ -5894,7 +5713,7 @@ static int pad_recursive_frames(struct bpf_verifier_env *env, struct bpf_call_gr
 	room = BPF_ARENA_STACK_MAX - depth - 2 * arena_frame;
 	env->max_arena_stack_depth = BPF_ARENA_STACK_MAX;
 
-	for_each_set_bit(s, cg->live, cg->cnt) {
+	for_each_marked_subprog(cg, s, CG_LIVE) {
 		if (!si[s].recursive)
 			continue;
 		frame = DIV_ROUND_UP(si[s].arena_stack_depth * (THREAD_SIZE / 2), room);
@@ -5912,9 +5731,9 @@ static int check_call_depth(struct bpf_verifier_env *env, struct bpf_call_graph 
 {
 	struct bpf_subprog_info *si = env->subprog_info;
 	struct bpf_subprog_call_depth_info *dinfo;
-	int depth, total, tmp, s, err;
+	int depth, s, err;
 
-	dinfo = kvzalloc_objs(*dinfo, cg->cnt, GFP_KERNEL_ACCOUNT);
+	dinfo = kvzalloc_objs(*dinfo, cg->cnt, BPF_VERIFIER_GFP);
 	if (!dinfo)
 		return -ENOMEM;
 	compute_call_depth(env, cg, dinfo);
@@ -5924,7 +5743,7 @@ static int check_call_depth(struct bpf_verifier_env *env, struct bpf_call_graph 
 	if (err)
 		compute_call_depth(env, cg, dinfo);
 
-	for_each_set_bit(s, cg->live, cg->cnt) {
+	for_each_marked_subprog(cg, s, CG_LIVE) {
 		/* A caller of it is over a limit. That one is reported, not what it calls. */
 		if (dinfo[s].frame > MAX_CALL_FRAMES || dinfo[s].depth > env->stack_limit ||
 		    dinfo[s].arena_depth > BPF_ARENA_STACK_MAX)
@@ -5979,7 +5798,7 @@ static int check_call_depth(struct bpf_verifier_env *env, struct bpf_call_graph 
 		 */
 		depth = dinfo[s].depth;
 		/* nor of the frames of recursive subprogs, see bpf_insert_recursion_checks() */
-		si[s].in_recursion = test_bit(s, cg->in_recursion);
+		si[s].in_recursion = cg->marks[s] & CG_IN_RECURSION;
 		if (si[s].in_recursion)
 			depth += THREAD_SIZE / 2;
 		if (s && si[s].has_tail_call && depth >= 256) {
@@ -6004,12 +5823,8 @@ static int check_call_depth(struct bpf_verifier_env *env, struct bpf_call_graph 
 		if (depth > env->max_stack_depth)
 			env->max_stack_depth = depth;
 		if (depth > env->stack_limit) {
-			total = 0;
-			for (tmp = s; tmp >= 0; tmp = dinfo[tmp].caller)
-				total++;
-
 			verbose(env, "combined stack size of %d calls is %d. Too large\n",
-				total, depth);
+				dinfo[s].calls + 1, depth);
 			goto out;
 		}
 	}
@@ -6054,22 +5869,16 @@ static int mark_recursive_subprogs(struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *si = env->subprog_info;
 	struct bpf_insn *insn = env->prog->insnsi;
-	int cnt = env->subprog_cnt, words = BITS_TO_LONGS(cnt);
-	unsigned long *calls, *taken, *callx;
+	int cnt = env->subprog_cnt, i, j, s, err;
+	struct bpf_call_graph cg;
 	bool plain_callx = false;
-	int i, j, s, err = 0;
 
-	/* calls + s * words: the subprogs that s calls */
-	calls = kvcalloc((cnt + 2) * words, sizeof(long), GFP_KERNEL_ACCOUNT);
-	if (!calls)
-		return -ENOMEM;
-	taken = calls + cnt * words;
-	callx = taken + words;
-
+	/* callx calls node 'cnt', which calls each subprog whose address is taken */
+	err = bpf_call_graph_init(&cg, cnt + 1);
 	for (s = 0; s < cnt; s++) {
-		for (i = si[s].start; i < si[s + 1].start; i++) {
+		for (i = si[s].start; i < si[s + 1].start && !err; i++) {
 			if (bpf_is_callx(&insn[i])) {
-				__set_bit(s, callx);
+				err = bpf_call_graph_add(&cg, s, cnt);
 				if (!bpf_is_unwind_goto(&insn[i + 1]))
 					plain_callx = true;
 			}
@@ -6083,8 +5892,8 @@ static int mark_recursive_subprogs(struct bpf_verifier_env *env)
 				 */
 				if (!j && bpf_pseudo_call(&insn[i])) {
 					verbose(env, "recursive call of the main program\n");
-					kvfree(calls);
-					return -EINVAL;
+					err = -EINVAL;
+					goto out;
 				}
 				/* the helper that calls a callback doesn't expect it to unwind */
 				if (bpf_pseudo_func(&insn[i]) || !bpf_is_unwind_goto(&insn[i + 1]))
@@ -6095,9 +5904,9 @@ static int mark_recursive_subprogs(struct bpf_verifier_env *env)
 				 */
 				if (bpf_pseudo_call(&insn[i]) ||
 				    !func_is_kept_for_later(env, i, si[s + 1].start))
-					__set_bit(j, calls + s * words);
+					err = bpf_call_graph_add(&cg, s, j);
 				if (bpf_pseudo_func(&insn[i]))
-					__set_bit(j, taken);
+					si[j].addr_taken = true;
 			}
 			if (bpf_is_ldimm64(&insn[i]))
 				i++;
@@ -6106,19 +5915,20 @@ static int mark_recursive_subprogs(struct bpf_verifier_env *env)
 	for (i = 0; i < env->func_ptr_cnt; i++) {
 		j = bpf_find_subprog(env, env->func_ptrs[i].xlated_off);
 		if (j >= 0)
-			__set_bit(j, taken);
+			si[j].addr_taken = true;
 	}
-	for_each_set_bit(s, callx, cnt)
-		bitmap_or(calls + s * words, calls + s * words, taken, cnt);
-	for_each_set_bit(s, taken, cnt)
-		si[s].addr_taken = true;
+	for (s = 0; s < cnt && !err; s++)
+		if (si[s].addr_taken)
+			err = bpf_call_graph_add(&cg, cnt, s);
+	if (err)
+		goto out;
 
 	/*
 	 * Callers of a global subprog look at can_unwind before the subprog is verified.
 	 * The main prog returns to the kernel.
 	 */
 	for (s = 0; s < cnt; s++) {
-		if (plain_callx && test_bit(s, taken))
+		if (plain_callx && si[s].addr_taken)
 			si[s].plain_call = true;
 		si[s].bail_unwinds = si[s].can_unwind ||
 				     (s && !si[s].plain_call && !bpf_subprog_is_global(env, s) &&
@@ -6126,10 +5936,10 @@ static int mark_recursive_subprogs(struct bpf_verifier_env *env)
 				      !bpf_prog_is_offloaded(env->prog->aux));
 	}
 
-	close_call_graph(calls, cnt);
+	bpf_call_graph_sort(&cg, 0);
 
 	for (s = 0; s < cnt; s++) {
-		if (!test_bit(s, calls + s * words))
+		if (!bpf_call_graph_recursive(&cg, s))
 			continue;
 		err = -EINVAL;
 		if (!s) {
@@ -6162,7 +5972,8 @@ static int mark_recursive_subprogs(struct bpf_verifier_env *env)
 		si[s].recursive = true;
 		err = 0;
 	}
-	kvfree(calls);
+out:
+	bpf_call_graph_free(&cg);
 	return err;
 }
 
@@ -6170,9 +5981,10 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 {
 	enum priv_stack_mode priv_stack_mode = PRIV_STACK_UNKNOWN;
 	struct bpf_subprog_info *si = env->subprog_info;
-	struct bpf_call_graph cg = {};
+	struct bpf_call_graph cg;
 	int s, ret;
 
+	find_subprog_properties(env, true);
 	for (int i = 0; i < env->subprog_cnt; i++) {
 		if (si[i].has_tail_call) {
 			/* the stack in arena wouldn't be returned */
@@ -6201,7 +6013,7 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		goto out;
 	mark_arena_stack_entries(env, &cg);
 
-	for_each_set_bit(s, cg.live, cg.cnt) {
+	for_each_marked_subprog(&cg, s, CG_LIVE) {
 		/*
 		 * All async_cb subprogs use normal kernel stack. If a particular
 		 * subprog appears in both main prog and async_cb subtree, that
@@ -6209,7 +6021,7 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		 * The private stack has room for one frame of a subprog.
 		 * x86-64 uses R9 for both private stack frame pointer and arg6.
 		 */
-		if (priv_stack_mode != PRIV_STACK_ADAPTIVE || test_bit(s, cg.in_async_cb) ||
+		if (priv_stack_mode != PRIV_STACK_ADAPTIVE || (cg.marks[s] & CG_IN_ASYNC_CB) ||
 		    si[s].recursive || (IS_ENABLED(CONFIG_X86_64) && si[s].stack_arg_cnt)) {
 			si[s].priv_stack_mode = NO_PRIV_STACK;
 			continue;
@@ -6227,7 +6039,7 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 
 	ret = check_call_depth(env, &cg);
 out:
-	kvfree(cg.calls);
+	bpf_call_graph_free(&cg);
 	return ret;
 }
 
@@ -6556,17 +6368,6 @@ int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val,
 	default:
 		return -EINVAL;
 	}
-	return 0;
-}
-
-static int cmp_func_ptrs(const void *_a, const void *_b)
-{
-	const struct bpf_func_ptr *a = _a, *b = _b;
-
-	if (a->map != b->map)
-		return a->map < b->map ? -1 : 1;
-	if (a->map_off != b->map_off)
-		return a->map_off < b->map_off ? -1 : 1;
 	return 0;
 }
 
@@ -7220,14 +7021,6 @@ static void mark_reg_func_ptr(struct bpf_verifier_env *env, struct bpf_reg_state
 	regs[regno].subprogno = subprog;
 }
 
-static int cmp_u16(const void *a, const void *b)
-{
-	return *(const u16 *)a - *(const u16 *)b;
-}
-
-/* that many different sets at most: each load from a table looks through all of them */
-#define BPF_MAX_FUNC_SETS 4096
-
 /*
  * A load from a table of functions gives one register: a pointer to one of a set of functions.
  * One state for each function would differ in nothing else up to the call, and there every
@@ -7235,48 +7028,39 @@ static int cmp_u16(const void *a, const void *b)
  * Equal sets have the same number, so registers are compared as they are.
  */
 static int mark_reg_func_set(struct bpf_verifier_env *env, struct bpf_reg_state *regs, int regno,
-			     u16 *subprogs, u32 cnt)
+			     const u32 *subprogs, u32 n)
 {
-	struct bpf_func_set **sets, *set;
-	u32 i, n = 0;
+	struct bpf_func_set *set;
+	u64 key;
+	int i;
 
-	sort(subprogs, cnt, sizeof(*subprogs), cmp_u16, NULL);
-	for (i = 0; i < cnt; i++)
-		if (!n || subprogs[n - 1] != subprogs[i])
-			subprogs[n++] = subprogs[i];
 	mark_reg_func_ptr(env, regs, regno, n == 1 ? subprogs[0] : 0);
 	if (n == 1)
 		return 0;
 
-	for (i = 0; i < env->func_set_cnt; i++) {
+	/* sets with the same hash have keys in a row */
+	key = (u64)jhash2(subprogs, n, 0) << 32;
+	for (; (i = bpf_index_find(&env->func_set_index, key)) >= 0; key++) {
 		set = env->func_sets[i];
 		if (set->cnt == n && !memcmp(set->subprog, subprogs, n * sizeof(*subprogs)))
 			break;
 	}
-	if (i == env->func_set_cnt) {
-		if (i == BPF_MAX_FUNC_SETS) {
-			verbose(env, "more than %d sets of functions\n", BPF_MAX_FUNC_SETS);
-			return -E2BIG;
+	if (i < 0) {
+		i = env->func_set_cnt;
+		set = kvzalloc_flex(*set, subprog, n, BPF_VERIFIER_GFP);
+		/* nothing fails between the entry of the index and the set that it stands for */
+		if (!set || !bpf_table_next(env->func_sets, i) ||
+		    bpf_index_add(&env->func_set_index, key, i)) {
+			kvfree(set);
+			return -ENOMEM;
 		}
-		sets = krealloc_array(env->func_sets, i + 1, sizeof(*sets), GFP_KERNEL_ACCOUNT);
-		if (!sets)
-			return -ENOMEM;
-		env->func_sets = sets;
-		set = kzalloc_flex(*set, subprog, n, GFP_KERNEL_ACCOUNT);
-		if (!set)
-			return -ENOMEM;
 		set->cnt = n;
 		memcpy(set->subprog, subprogs, n * sizeof(*subprogs));
-		sets[env->func_set_cnt++] = set;
+		env->func_sets[env->func_set_cnt++] = set;
 	}
 	regs[regno].func_set = i + 1;
 	return 0;
 }
-
-/* a read from a table of functions yields one of that many at most */
-#define BPF_MAX_FUNC_PTR_TARGETS BPF_MAX_SUBPROGS
-/* and that many pointers at most are next to what is read at variable offset */
-#define BPF_MAX_FUNC_PTR_RANGE 4096
 
 /* Count up to 'limit' offsets in [min_off, max_off] that the read is possible at */
 static u32 count_read_offsets(struct tnum offs, u64 min_off, u64 max_off, u32 limit)
@@ -7319,7 +7103,8 @@ static int check_func_ptr_read(struct bpf_verifier_env *env, struct bpf_reg_stat
 	struct tnum offs = tnum_add(reg->var_off, tnum_const(off));
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_map *map = reg->map_ptr;
-	u16 *targets __free(kfree) = NULL;
+	unsigned long *found __free(kvfree) = NULL;
+	u32 *targets __free(kvfree) = NULL;
 	struct bpf_func_ptr *ptrs;
 	u32 i, cnt, n = 0;
 	u64 o, lo, hi;
@@ -7328,13 +7113,14 @@ static int check_func_ptr_read(struct bpf_verifier_env *env, struct bpf_reg_stat
 	ptrs = bpf_map_range_func_ptrs(env, map, min_off, max_off - min_off + size, &cnt);
 	if (!ptrs)
 		return -ENOENT;
-	if (cnt > BPF_MAX_FUNC_PTR_RANGE)
-		goto overlap;
-	targets = kmalloc_array(BPF_MAX_FUNC_PTR_TARGETS, sizeof(*targets), GFP_KERNEL_ACCOUNT);
-	if (!targets)
+	targets = kvmalloc_array(min(cnt, env->subprog_cnt), sizeof(*targets), BPF_VERIFIER_GFP);
+	found = kvcalloc(BITS_TO_LONGS(env->subprog_cnt), sizeof(long), BPF_VERIFIER_GFP);
+	if (!targets || !found)
 		return -ENOMEM;
 
 	for (i = 0; i < cnt; i++) {
+		if (bpf_must_abort())
+			return -EINTR;
 		/* the offsets at which the read overlaps with the pointer */
 		lo = ptrs[i].map_off >= size ? ptrs[i].map_off - size + 1 : 0;
 		lo = max(lo, min_off);
@@ -7344,17 +7130,13 @@ static int check_func_ptr_read(struct bpf_verifier_env *env, struct bpf_reg_stat
 				continue;
 			if (o != ptrs[i].map_off || size != sizeof(u64) || value_regno < 0)
 				goto overlap;
-			if (n == BPF_MAX_FUNC_PTR_TARGETS) {
-				verbose(env, "read from map '%s' may yield more than %d pointers to functions\n",
-					map->name, BPF_MAX_FUNC_PTR_TARGETS);
-				return -E2BIG;
-			}
 			subprog = bpf_find_subprog(env, ptrs[i].xlated_off);
 			if (verifier_bug_if(subprog <= 0, env,
 					    "no function at insn %u for map '%s' offset %u",
 					    ptrs[i].xlated_off, map->name, ptrs[i].map_off))
 				return -EFAULT;
-			targets[n++] = subprog;
+			__set_bit(subprog, found);
+			n++;
 		}
 	}
 	/* pointers are next to what is read, e.g. the data of an array of vtables */
@@ -7369,6 +7151,9 @@ static int check_func_ptr_read(struct bpf_verifier_env *env, struct bpf_reg_stat
 	if (err)
 		return err;
 
+	n = 0;
+	for_each_set_bit(subprog, found, env->subprog_cnt)
+		targets[n++] = subprog;
 	return mark_reg_func_set(env, regs, value_regno, targets, n);
 
 overlap:
@@ -11313,7 +11098,7 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	}
 
 	caller = state->frame[state->curframe];
-	callee = kzalloc_obj(*callee, GFP_KERNEL_ACCOUNT);
+	callee = kzalloc_obj(*callee, BPF_VERIFIER_GFP);
 	if (!callee)
 		return -ENOMEM;
 	state->frame[state->curframe + 1] = callee;
@@ -11674,7 +11459,7 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 	struct bpf_verifier_state entry = {};
 	int i, err;
 
-	callee = kzalloc_obj(*callee, GFP_KERNEL_ACCOUNT);
+	callee = kzalloc_obj(*callee, BPF_VERIFIER_GFP);
 	if (!callee)
 		return -ENOMEM;
 	entry.frame[0] = callee;
@@ -12153,7 +11938,7 @@ static int check_func_callx_set(struct bpf_verifier_env *env, int regno, int *in
 				return PTR_ERR(branch);
 			continue;
 		}
-		copy = kzalloc_obj(*copy, GFP_KERNEL_ACCOUNT);
+		copy = kzalloc_obj(*copy, BPF_VERIFIER_GFP);
 		if (!copy)
 			return -ENOMEM;
 		err = bpf_copy_verifier_state(copy, cur);
@@ -15042,7 +14827,7 @@ bool bpf_needs_fixed_stack_off(struct bpf_verifier_env *env, int insn_idx)
 		if (bpf_get_helper_proto(env, insn->imm, &fn) < 0)
 			return false;
 	} else if (bpf_pseudo_kfunc_call(insn)) {
-		desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+		desc = find_kfunc_desc(env, insn->imm, insn->off);
 		if (!desc)
 			return false;
 		fn = &desc->proto;
@@ -15407,7 +15192,6 @@ bpf_helper_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *ins
 	case ARG_PTR_TO_MAP_KEY:
 	case ARG_PTR_TO_MAP_VALUE: {
 		bool is_key = base_type(at) == ARG_PTR_TO_MAP_KEY;
-		u64 val;
 		int i, map_reg;
 
 		for (i = 0; i < arg; i++) {
@@ -15443,23 +15227,9 @@ scan_all_maps:
 		 */
 		exact_size = false;
 		access_type |= BPF_READ;
-		val = 0;
-		for (i = 0; i < env->used_map_cnt; i++) {
-			struct bpf_map *map = env->used_maps[i];
-			u32 sz = is_key ? map->key_size : map->value_size;
-
-			if (sz > val)
-				val = sz;
-			if (map->inner_map_meta) {
-				sz = is_key ? map->inner_map_meta->key_size
-					    : map->inner_map_meta->value_size;
-				if (sz > val)
-					val = sz;
-			}
-		}
-		if (!val)
+		size = is_key ? env->max_key_size : env->max_value_size;
+		if (!size)
 			return info;
-		size = val;
 		goto out;
 	}
 	case ARG_PTR_TO_MEM:
@@ -15535,7 +15305,7 @@ static u16 call_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	u16 mask = 0;
 
 	if (bpf_pseudo_kfunc_call(insn)) {
-		desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+		desc = find_kfunc_desc(env, insn->imm, insn->off);
 		if (!desc)
 			return 0;
 		fn = &desc->proto;
@@ -15976,7 +15746,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	func_name = meta.func_name;
 	insn_aux = &env->insn_aux_data[insn_idx];
 
-	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+	desc = find_kfunc_desc(env, insn->imm, insn->off);
 	if (!desc) {
 		verifier_bug(env, "kfunc descriptor not found for func_id %u", insn->imm);
 		return -EFAULT;
@@ -21367,7 +21137,7 @@ static int flow_try_walk(struct bpf_verifier_env *env, struct loop_stack_entry *
 	entry->walk_id = env->walk_cnt + 1;
 	if (is_power_of_2(entry->walk_id)) {
 		walk_insns = kvrealloc(env->walk_insns, 2 * entry->walk_id * sizeof(u32),
-				       GFP_KERNEL_ACCOUNT);
+				       BPF_VERIFIER_GFP);
 		if (!walk_insns)
 			return -ENOMEM;
 		env->walk_insns = walk_insns;
@@ -21790,11 +21560,8 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		struct bpf_insn_aux_data *insn_aux;
 		int err;
 
-		if (signal_pending(current))
-			return -EAGAIN;
-
-		if (need_resched())
-			cond_resched();
+		if (bpf_must_abort())
+			return -EINTR;
 
 		/* no insn makes as many ids as there are from here to BPF_INHERITED_ID */
 		if (env->id_gen >= BPF_MAX_ID) {
@@ -22024,26 +21791,21 @@ static int __add_used_btf(struct bpf_verifier_env *env, struct btf *btf)
 {
 	struct btf_mod_pair *btf_mod;
 	int ret = 0;
-	int i;
 
 	/* check whether we recorded this BTF (and maybe module) already */
-	for (i = 0; i < env->used_btf_cnt; i++)
-		if (env->used_btfs[i].btf == btf)
-			goto ret_put;
+	if (bpf_index_find(&env->used_index, (unsigned long)btf) >= 0)
+		goto ret_put;
 
 	if (env->signature) {
 		verbose(env, "signed program cannot bind any BTF\n");
 		ret = -EACCES;
 		goto ret_put;
 	}
-	if (env->used_btf_cnt >= MAX_USED_BTFS) {
-		verbose(env, "The total number of btfs per program has reached the limit of %u\n",
-			MAX_USED_BTFS);
-		ret = -E2BIG;
+	btf_mod = bpf_table_next(env->used_btfs, env->used_btf_cnt);
+	if (!btf_mod) {
+		ret = -ENOMEM;
 		goto ret_put;
 	}
-
-	btf_mod = &env->used_btfs[env->used_btf_cnt];
 	btf_mod->btf = btf;
 	btf_mod->module = NULL;
 
@@ -22056,8 +21818,7 @@ static int __add_used_btf(struct bpf_verifier_env *env, struct btf *btf)
 		}
 	}
 
-	env->used_btf_cnt++;
-	return 0;
+	return bpf_index_add(&env->used_index, (unsigned long)btf, env->used_btf_cnt++);
 
 ret_put:
 	/* Either error or this BTF was already added */
@@ -22350,6 +22111,8 @@ static int claim_used_maps(struct bpf_verifier_env *env)
 
 		if (map->map_type != BPF_MAP_TYPE_INSN_ARRAY)
 			continue;
+		if (!bpf_table_next(env->insn_array_maps, env->insn_array_map_cnt))
+			return -ENOMEM;
 		err = bpf_insn_array_init(map, env->prog);
 		if (err) {
 			verbose(env, "Failed to properly initialize insn array\n");
@@ -22363,12 +22126,13 @@ static int claim_used_maps(struct bpf_verifier_env *env)
 
 static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 {
+	struct bpf_map *inner = map->inner_map_meta ?: map;
 	int i, err;
 
 	/* check whether we recorded this map already */
-	for (i = 0; i < env->used_map_cnt; i++)
-		if (env->used_maps[i] == map)
-			return i;
+	i = bpf_index_find(&env->used_index, (unsigned long)map);
+	if (i >= 0)
+		return i;
 
 	if (env->signature &&
 	    env->prog->aux->sig.verdict == BPF_SIG_VERIFIED) {
@@ -22376,15 +22140,16 @@ static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 			map->name);
 		return -EACCES;
 	}
-	if (env->used_map_cnt >= MAX_USED_MAPS) {
-		verbose(env, "The total number of maps per program has reached the limit of %u\n",
-			MAX_USED_MAPS);
-		return -E2BIG;
-	}
 
 	err = check_map_prog_compatibility(env, map, env->prog);
 	if (err)
 		return err;
+
+	if (!bpf_table_next(env->used_maps, env->used_map_cnt) ||
+	    bpf_index_add(&env->used_index, (unsigned long)map, env->used_map_cnt))
+		return -ENOMEM;
+	env->max_key_size = max3(env->max_key_size, map->key_size, inner->key_size);
+	env->max_value_size = max3(env->max_value_size, map->value_size, inner->value_size);
 
 	if (bpf_prog_runs_sleepable(env->prog))
 		atomic64_inc(&map->sleepable_refcnt);
@@ -22910,29 +22675,11 @@ next_insn:
 	return claim_used_maps(env);
 }
 
-/* that many pointers to functions are recognized in the maps of a program at most */
-#define BPF_MAX_FUNC_PTRS (1 << 20)
-
 static int add_func_ptr(struct bpf_verifier_env *env, struct bpf_map *map, u32 map_off,
 			u32 xlated_off)
 {
-	struct bpf_func_ptr *ptrs;
-
-	if (env->func_ptr_cnt == BPF_MAX_FUNC_PTRS) {
-		verbose(env, "too many pointers to functions in maps, the limit is %d\n",
-			BPF_MAX_FUNC_PTRS);
-		return -E2BIG;
-	}
-
-	/* grow by doubling, the array is sorted and searched later */
-	if (!(env->func_ptr_cnt & (env->func_ptr_cnt - 1))) {
-		ptrs = kvrealloc(env->func_ptrs,
-				 array_size(max(2 * env->func_ptr_cnt, 16U), sizeof(*ptrs)),
-				 GFP_KERNEL_ACCOUNT);
-		if (!ptrs)
-			return -ENOMEM;
-		env->func_ptrs = ptrs;
-	}
+	if (!bpf_table_next(env->func_ptrs, env->func_ptr_cnt))
+		return -ENOMEM;
 	env->func_ptrs[env->func_ptr_cnt++] = (struct bpf_func_ptr){
 		.map = map,
 		.map_off = map_off,
@@ -22940,6 +22687,11 @@ static int add_func_ptr(struct bpf_verifier_env *env, struct bpf_map *map, u32 m
 		.xlated_off = xlated_off,
 	};
 	return 0;
+}
+
+static int cmp_maps(const void *a, const void *b)
+{
+	return cmp_int(*(const unsigned long *)a, *(const unsigned long *)b);
 }
 
 /*
@@ -22966,17 +22718,24 @@ static int add_func_ptr(struct bpf_verifier_env *env, struct bpf_map *map, u32 m
  */
 static int resolve_func_ptrs(struct bpf_verifier_env *env)
 {
+	struct bpf_map *map, **maps __free(kvfree) = NULL;
 	int insn_cnt = env->prog->len;
 	int i, err, subprog;
-	struct bpf_map *map;
 	u64 addr, val;
 	u32 off;
 
-	if (!env->has_callx || !env->allow_ptr_leaks)
+	if (!env->has_callx || !env->allow_ptr_leaks || !env->used_map_cnt)
 		return 0;
 
+	/* with the maps in order the pointers are in order */
+	maps = kvmalloc_objs(*maps, env->used_map_cnt, BPF_VERIFIER_GFP);
+	if (!maps)
+		return -ENOMEM;
+	memcpy(maps, env->used_maps, env->used_map_cnt * sizeof(*maps));
+	sort(maps, env->used_map_cnt, sizeof(*maps), cmp_maps, NULL);
+
 	for (i = 0; i < env->used_map_cnt; i++) {
-		map = env->used_maps[i];
+		map = maps[i];
 		/* coincidences in maps that are shared with other programs don't matter */
 		if (READ_ONCE(map->user) != (unsigned long)env->prog->aux)
 			continue;
@@ -22988,8 +22747,8 @@ static int resolve_func_ptrs(struct bpf_verifier_env *env)
 			continue;
 
 		for (off = 0; off + sizeof(u64) <= map->value_size; off += sizeof(u64)) {
-			if (!(off % SZ_64K))
-				cond_resched();
+			if (bpf_must_abort())
+				return -EINTR;
 			val = *(u64 *)(unsigned long)(addr + off);
 			if (!val || val % sizeof(struct bpf_insn) ||
 			    val / sizeof(struct bpf_insn) >= insn_cnt)
@@ -23002,9 +22761,6 @@ static int resolve_func_ptrs(struct bpf_verifier_env *env)
 				return err;
 		}
 	}
-	if (env->func_ptr_cnt)
-		sort(env->func_ptrs, env->func_ptr_cnt, sizeof(*env->func_ptrs),
-		     cmp_func_ptrs, NULL);
 	return 0;
 }
 
@@ -23013,12 +22769,14 @@ static void release_maps(struct bpf_verifier_env *env)
 {
 	__bpf_free_used_maps(env->prog->aux, env->used_maps,
 			     env->used_map_cnt);
+	kvfree(env->used_maps);
 }
 
 /* drop refcnt of maps used by the rejected program */
 static void release_btfs(struct bpf_verifier_env *env)
 {
 	__bpf_free_used_btfs(env->used_btfs, env->used_btf_cnt);
+	kvfree(env->used_btfs);
 }
 
 /* convert pseudo BPF_LD_IMM64 into generic BPF_LD_IMM64 */
@@ -23101,7 +22859,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog,
 	env->prev_linfo = NULL;
 	env->pass_cnt++;
 
-	state = kzalloc_obj(struct bpf_verifier_state, GFP_KERNEL_ACCOUNT);
+	state = kzalloc_obj(struct bpf_verifier_state, BPF_VERIFIER_GFP);
 	if (!state)
 		return -ENOMEM;
 	state->curframe = 0;
@@ -23110,7 +22868,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog,
 	/* nobody knows what the callers of a global function or of an extension hold */
 	state->callers_unknown = subprog || env->prog->type == BPF_PROG_TYPE_EXT;
 	env->no_rcu_read_lock = context == BPF_FUNC_CTX_NO_RCU_LOCK;
-	state->frame[0] = kzalloc_obj(struct bpf_func_state, GFP_KERNEL_ACCOUNT);
+	state->frame[0] = kzalloc_obj(struct bpf_func_state, BPF_VERIFIER_GFP);
 	if (!state->frame[0]) {
 		kfree(state);
 		return -ENOMEM;
@@ -23395,7 +23153,7 @@ static void add_insns_of_callees(struct bpf_verifier_env *env)
 	struct bpf_insn *insn = env->prog->insnsi;
 	int *added, i, j, s, c;
 
-	added = kvcalloc(env->subprog_cnt, sizeof(*added), GFP_KERNEL_ACCOUNT);
+	added = kvcalloc(env->subprog_cnt, sizeof(*added), BPF_VERIFIER_GFP);
 	if (!added)
 		return;
 	/* callees first */
@@ -23450,7 +23208,7 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 int bpf_prog_ctx_arg_info_init(struct bpf_prog *prog,
 			       const struct bpf_ctx_arg_aux *info, u32 cnt)
 {
-	prog->aux->ctx_arg_info = kmemdup_array(info, cnt, sizeof(*info), GFP_KERNEL_ACCOUNT);
+	prog->aux->ctx_arg_info = kmemdup_array(info, cnt, sizeof(*info), BPF_VERIFIER_GFP);
 	prog->aux->ctx_arg_info_size = cnt;
 
 	return prog->aux->ctx_arg_info ? 0 : -ENOMEM;
@@ -24618,39 +24376,31 @@ static int add_fd_from_fd_array(struct bpf_verifier_env *env, u32 idx, int fd)
 	return PTR_ERR(map);
 }
 
-/*
- * A continuous fd_array is resolved into an in-memory cache with one slot
- * per entry. The bound here is deliberately generous and not derived from
- * the per-program object limits: Duplicate entries /are/ permitted, and
- * the number of distinct maps and BTFs a program can bind is enforced when
- * each entry is resolved by __add_used_map() and __add_used_btf().
- */
-#define MAX_FD_ARRAY_CNT 4096
-
+/* A continuous fd_array is resolved into an in-memory cache with one slot per entry. */
 static int process_fd_array_continuous(struct bpf_verifier_env *env,
 				       bpfptr_t fd_array, u32 cnt)
 {
 	int fd, ret;
 	u32 i;
 
-	if (cnt > MAX_FD_ARRAY_CNT) {
-		verbose(env, "fd_array has too many entries (%u, max %u)\n",
-			cnt, MAX_FD_ARRAY_CNT);
+	if (!env->bpf_capable && cnt > BPF_MAXINSNS) {
+		verbose(env, "fd_array has too many entries (%u, max %u)\n", cnt, BPF_MAXINSNS);
 		return -E2BIG;
 	}
 
-	env->fd_array = kvzalloc_objs(*env->fd_array, cnt, GFP_KERNEL_ACCOUNT);
-	if (!env->fd_array)
-		return -ENOMEM;
-	env->fd_array_cnt = cnt;
 	for (i = 0; i < cnt; i++) {
+		if (bpf_must_abort())
+			return -EINTR;
 		if (copy_from_bpfptr_offset(&fd, fd_array,
 					    (size_t)i * sizeof(fd), sizeof(fd)))
 			return -EFAULT;
+		if (!bpf_table_next(env->fd_array, i))
+			return -ENOMEM;
 		ret = add_fd_from_fd_array(env, i, fd);
 		if (ret)
 			return ret;
 	}
+	env->fd_array_cnt = cnt;
 	return 0;
 }
 
@@ -24729,64 +24479,21 @@ static int specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc 
 	return 0;
 }
 
-static int add_kfunc_desc_target(struct bpf_verifier_env *env,
-				 const struct bpf_kfunc_desc *target_desc,
-				 u16 base_desc_idx, u16 *desc_idx)
+/* A kfunc has at most one specialized target. Returns the index of its descriptor. */
+static int add_specialized_kfunc(struct bpf_verifier_env *env, const struct bpf_kfunc_desc *desc)
 {
-	struct bpf_kfunc_desc desc = *target_desc;
-	struct bpf_kfunc_desc_tab *new_tab;
-	struct bpf_kfunc_desc_tab *tab;
-	struct bpf_prog_aux *prog_aux;
-	u32 i;
+	struct bpf_kfunc_desc_tab *tab = env->prog->aux->kfunc_tab;
+	u64 key = kfunc_key(desc->func_id, desc->offset, true);
+	int i = bpf_index_find(&env->kfunc_index, key);
 
-	prog_aux = env->prog->aux;
-	tab = prog_aux->kfunc_tab;
-
-	if (base_desc_idx >= tab->nr_base_descs) {
-		verifier_bug(env, "kfunc desc_idx %d out of bounds (%d descriptors)",
-				base_desc_idx, tab->nr_base_descs);
-		return -EFAULT;
-	}
-	if (tab->descs[base_desc_idx].func_id != desc.func_id) {
-		verifier_bug(env, "kfunc desc %d has invalid id (expected %d, got %d)",
-				base_desc_idx, tab->descs[base_desc_idx].func_id, desc.func_id);
-		return -EFAULT;
-	}
-	if (tab->descs[base_desc_idx].offset != desc.offset) {
-		verifier_bug(env, "kfunc desc %d has invalid offset (expected %d, got %d)",
-				base_desc_idx, tab->descs[base_desc_idx].offset, desc.offset);
-		return -EFAULT;
-	}
-
-	if (tab->descs[base_desc_idx].addr == desc.addr) {
-		*desc_idx = base_desc_idx;
-		return 0;
-	}
-
-	for (i = tab->nr_base_descs; i < tab->nr_descs; i++) {
-		if (tab->descs[i].func_id == desc.func_id &&
-		    tab->descs[i].offset == desc.offset &&
-		    tab->descs[i].addr == desc.addr) {
-			*desc_idx = i;
-			return 0;
-		}
-	}
-
-	if (tab->nr_descs == MAX_KFUNC_CALL_DESCS) {
-		verbose(env, "too many different kernel function call targets\n");
-		return -E2BIG;
-	}
-
-	new_tab = krealloc(tab, struct_size(tab, descs, tab->nr_descs + 1),
-			   GFP_KERNEL_ACCOUNT);
-	if (!new_tab)
+	if (i >= 0)
+		return verifier_bug_if(tab->descs[i].addr != desc->addr, env,
+				       "two targets of kfunc %u", desc->func_id) ? -EFAULT : i;
+	if (!bpf_table_next(tab->descs, tab->nr_descs) ||
+	    bpf_index_add(&env->kfunc_index, key, tab->nr_descs))
 		return -ENOMEM;
-	tab = new_tab;
-	prog_aux->kfunc_tab = tab;
-
-	*desc_idx = tab->nr_descs;
-	tab->descs[tab->nr_descs++] = desc;
-	return 0;
+	tab->descs[tab->nr_descs] = *desc;
+	return tab->nr_descs++;
 }
 
 static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
@@ -24812,9 +24519,8 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	struct bpf_kfunc_desc desc_copy;
 	struct bpf_kfunc_desc *desc;
 	unsigned long call_imm;
-	u16 base_desc_idx, desc_idx;
+	int err, desc_idx;
 	bool near_call;
-	int err;
 
 	if (!insn->imm) {
 		verbose(env, "invalid kernel function call not eliminated in verifier pass\n");
@@ -24827,13 +24533,13 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 * __bpf_call_base, unless the JIT needs to call functions that are
 	 * further than 32 bits away (bpf_jit_supports_far_kfunc_call()).
 	 */
-	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+	desc = find_kfunc_desc(env, insn->imm, insn->off);
 	if (!desc) {
 		verifier_bug(env, "kernel function descriptor not found for func_id %u",
 			     insn->imm);
 		return -EFAULT;
 	}
-	base_desc_idx = desc - env->prog->aux->kfunc_tab->descs;
+	desc_idx = desc - env->prog->aux->kfunc_tab->descs;
 
 	near_call = !bpf_jit_supports_far_kfunc_call();
 	desc_copy = *desc;
@@ -24853,9 +24559,15 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn->imm = call_imm;
 	}
 
-	err = add_kfunc_desc_target(env, desc, base_desc_idx, &desc_idx);
-	if (err)
-		return err;
+	if (desc->addr != env->prog->aux->kfunc_tab->descs[desc_idx].addr)
+		desc_idx = add_specialized_kfunc(env, desc);
+	if (desc_idx < 0)
+		return desc_idx;
+	/* JITs find the descriptor by insn->off */
+	if (desc_idx > U16_MAX) {
+		verbose(env, "too many different kernel function calls\n");
+		return -E2BIG;
+	}
 	insn->off = desc_idx;
 
 	if (is_bpf_obj_new_kfunc(desc->func_id) || is_bpf_percpu_obj_new_kfunc(desc->func_id)) {
@@ -25139,7 +24851,7 @@ static int bpf_prog_verify_signature(struct bpf_verifier_env *env,
 		err = -E2BIG;
 		goto out;
 	}
-	data = kvmalloc(data_sz, GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+	data = kvmalloc(data_sz, BPF_VERIFIER_GFP | __GFP_ZERO);
 	if (!data) {
 		err = -ENOMEM;
 		goto out;
@@ -25254,7 +24966,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	/* 'struct bpf_verifier_env' can be global, but since it's not small,
 	 * allocate/free it every time bpf_check() is called
 	 */
-	env = kvzalloc_obj(struct bpf_verifier_env, GFP_KERNEL_ACCOUNT);
+	env = kvzalloc_obj(struct bpf_verifier_env, BPF_VERIFIER_GFP);
 	if (!env)
 		return -ENOMEM;
 
@@ -25306,11 +25018,14 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	/* Serialize verification of unprivileged programs. */
 	if (!is_priv)
 		mutex_lock(&bpf_verifier_lock);
+	ret = -EINTR;
+	if (bpf_must_abort())
+		goto skip_full_check;
 
 	len = env->insn_aux_data_len = env->prog->len;
 	env->insn_aux_data =
 		__vmalloc(array_size(sizeof(struct bpf_insn_aux_data), len),
-			  GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+			  BPF_VERIFIER_GFP | __GFP_ZERO);
 	ret = -ENOMEM;
 	if (!env->insn_aux_data)
 		goto skip_full_check;
@@ -25352,7 +25067,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
-	find_subprog_properties(env);
+	find_subprog_properties(env, false);
 
 	/* Validate BTF before reporting subprogram layout errors. */
 	ret = bpf_check_btf_info(env, attr, uattr);
@@ -25557,35 +25272,11 @@ skip_full_check:
 	if (ret)
 		goto err_release_maps;
 
-	if (env->used_map_cnt) {
-		/* if program passed verifier, update used_maps in bpf_prog_info */
-		env->prog->aux->used_maps = kmalloc_objs(env->used_maps[0],
-							 env->used_map_cnt,
-							 GFP_KERNEL_ACCOUNT);
-
-		if (!env->prog->aux->used_maps) {
-			ret = -ENOMEM;
-			goto err_release_maps;
-		}
-
-		memcpy(env->prog->aux->used_maps, env->used_maps,
-		       sizeof(env->used_maps[0]) * env->used_map_cnt);
-		env->prog->aux->used_map_cnt = env->used_map_cnt;
-	}
-	if (env->used_btf_cnt) {
-		/* if program passed verifier, update used_btfs in bpf_prog_aux */
-		env->prog->aux->used_btfs = kmalloc_objs(env->used_btfs[0],
-							 env->used_btf_cnt,
-							 GFP_KERNEL_ACCOUNT);
-		if (!env->prog->aux->used_btfs) {
-			ret = -ENOMEM;
-			goto err_release_maps;
-		}
-
-		memcpy(env->prog->aux->used_btfs, env->used_btfs,
-		       sizeof(env->used_btfs[0]) * env->used_btf_cnt);
-		env->prog->aux->used_btf_cnt = env->used_btf_cnt;
-	}
+	/* if program passed verifier, it gets the tables */
+	env->prog->aux->used_maps = env->used_maps;
+	env->prog->aux->used_map_cnt = env->used_map_cnt;
+	env->prog->aux->used_btfs = env->used_btfs;
+	env->prog->aux->used_btf_cnt = env->used_btf_cnt;
 	if (env->used_map_cnt || env->used_btf_cnt) {
 		/* program is valid. Convert pseudo bpf_ld_imm64 into generic
 		 * bpf_ld_imm64 instructions
@@ -25642,6 +25333,9 @@ err_free_env:
 	vfree(env->insn_aux_data);
 	bpf_patch_list_free(env);
 	kvfree(env->fd_array);
+	kvfree(env->used_index.slots);
+	kvfree(env->kfunc_index.slots);
+	kvfree(env->insn_array_maps);
 	bpf_free_scev(env);
 	kvfree(env->walk_insns);
 	bpf_flow_free(env);
@@ -25652,12 +25346,16 @@ err_free_env:
 	kvfree(env->succ);
 	kvfree(env->gotox_tmp_buf);
 	kvfree(env->callx_edges);
+	kvfree(env->callx_index.slots);
 	kvfree(env->func_ptrs);
 	for (i = 0; i < env->func_set_cnt; i++)
-		kfree(env->func_sets[i]);
-	kfree(env->func_sets);
+		kvfree(env->func_sets[i]);
+	kvfree(env->func_sets);
+	kvfree(env->func_set_index.slots);
 	bpf_diag_free(env);
 	kvfree(env->idoms);
+	kvfree(env->subprog_info);
+	kvfree(env->subprog_topo_order);
 	kvfree(env);
 	return ret;
 }

@@ -626,7 +626,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R0 invalid mem access 'scalar'` */
-__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("goto pc-2") /* sanitized dead code */
 __xlated_unpriv("exit")
 #endif
 __naked void _32bit_and_64bit_arithmetic_test1(void)
@@ -655,7 +655,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R0 invalid mem access 'scalar'` */
-__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("goto pc-2") /* sanitized dead code */
 __xlated_unpriv("exit")
 #endif
 __naked void _32bit_and_64bit_arithmetic_test2(void)
@@ -709,7 +709,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("if r1 != 0x0 goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R0 min value is outside of the allowed memory range` */
-__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("goto pc-2") /* sanitized dead code */
 __xlated_unpriv("r0 = 0")
 #endif
 __naked void reg_0_reg_xor_1(void)
@@ -742,7 +742,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("if w1 != 0x0 goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R0 min value is outside of the allowed memory range` */
-__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("goto pc-2") /* sanitized dead code */
 __xlated_unpriv("r0 = 0")
 #endif
 __naked void reg32_0_reg32_xor_1(void)
@@ -775,7 +775,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("if r1 > 0x0 goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R0 min value is outside of the allowed memory range` */
-__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("goto pc-2") /* sanitized dead code */
 __xlated_unpriv("r0 = 0")
 #endif
 __naked void reg_2_reg_xor_3(void)
@@ -862,7 +862,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("if r1 >= 0x0 goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R0 min value is outside of the allowed memory range` */
-__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("goto pc-2") /* sanitized dead code */
 __xlated_unpriv("r0 = 0")
 #endif
 __naked void reg_0_reg_xor_3(void)
@@ -896,7 +896,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("if w1 >= 0x0 goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R0 min value is outside of the allowed memory range` */
-__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("goto pc-2") /* sanitized dead code */
 __xlated_unpriv("r0 = 0")
 #endif
 __naked void reg32_0_reg32_xor_3(void)

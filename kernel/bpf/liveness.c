@@ -121,7 +121,7 @@ static struct func_instance *call_instance(struct bpf_verifier_env *env,
 	if (f)
 		return f;
 
-	f = kvzalloc_obj(*f, GFP_KERNEL_ACCOUNT);
+	f = kvzalloc_obj(*f, BPF_VERIFIER_GFP);
 	if (!f)
 		return ERR_PTR(-ENOMEM);
 	f->callsite = lookup_key;
@@ -155,7 +155,7 @@ static struct func_instance *lookup_instance(struct bpf_verifier_env *env,
 
 int bpf_stack_liveness_init(struct bpf_verifier_env *env)
 {
-	env->liveness = kvzalloc_obj(*env->liveness, GFP_KERNEL_ACCOUNT);
+	env->liveness = kvzalloc_obj(*env->liveness, BPF_VERIFIER_GFP);
 	if (!env->liveness)
 		return -ENOMEM;
 	hash_init(env->liveness->func_instances);
@@ -216,7 +216,7 @@ static struct frame_masks *widen_frame_masks(struct func_instance *instance,
 
 	if (old && old->words >= words)
 		return old;
-	new = kvzalloc_flex(*new, bits, frame_mask_words(instance, words), GFP_KERNEL_ACCOUNT);
+	new = kvzalloc_flex(*new, bits, frame_mask_words(instance, words), BPF_VERIFIER_GFP);
 	if (!new)
 		return NULL;
 	new->words = words;
@@ -456,7 +456,7 @@ static inline bool update_insn(struct bpf_verifier_env *env, struct func_instanc
 }
 
 /* Fixed-point computation of @live_before marks */
-static void update_instance(struct bpf_verifier_env *env, struct func_instance *instance)
+static int update_instance(struct bpf_verifier_env *env, struct func_instance *instance)
 {
 	u32 i, frame, po_start, po_end;
 	int *insn_postorder = env->cfg.insn_postorder;
@@ -469,6 +469,8 @@ static void update_instance(struct bpf_verifier_env *env, struct func_instance *
 	po_end = (subprog + 1)->postorder_start;
 	/* repeat until fixed point is reached */
 	do {
+		if (bpf_must_abort())
+			return -EINTR;
 		changed = false;
 		for (frame = 0; frame <= instance->depth; frame++) {
 			if (!instance->frames[frame])
@@ -482,6 +484,7 @@ static void update_instance(struct bpf_verifier_env *env, struct func_instance *
 			}
 		}
 	} while (changed);
+	return 0;
 }
 
 static bool is_live_before(struct func_instance *instance, u32 insn_idx, u32 frameno, u32 half_spi,
@@ -812,7 +815,7 @@ static int print_instances(struct bpf_verifier_env *env)
 	cnt = 0;
 	hash_for_each(liveness->func_instances, bkt, instance, hl_node)
 		cnt++;
-	sorted_instances = kvmalloc_objs(*sorted_instances, cnt, GFP_KERNEL_ACCOUNT);
+	sorted_instances = kvmalloc_objs(*sorted_instances, cnt, BPF_VERIFIER_GFP);
 	if (!sorted_instances)
 		return -ENOMEM;
 	cnt = 0;
@@ -2078,15 +2081,15 @@ static noinline_for_stack int compute_subprog_args(struct bpf_verifier_env *env,
 	bool changed;
 	int i, p, r, err = -ENOMEM;
 
-	at_in = kvmalloc_objs(*at_in, len, GFP_KERNEL_ACCOUNT);
+	at_in = kvmalloc_objs(*at_in, len, BPF_VERIFIER_GFP);
 	if (!at_in)
 		goto err_free;
 
-	at_stack_in = kvmalloc_objs(*at_stack_in, (size_t)len * nslots, GFP_KERNEL_ACCOUNT);
+	at_stack_in = kvmalloc_objs(*at_stack_in, (size_t)len * nslots, BPF_VERIFIER_GFP);
 	if (!at_stack_in)
 		goto err_free;
 
-	at_stack_out = kvmalloc_objs(*at_stack_out, nslots, GFP_KERNEL_ACCOUNT);
+	at_stack_out = kvmalloc_objs(*at_stack_out, nslots, BPF_VERIFIER_GFP);
 	if (!at_stack_out)
 		goto err_free;
 
@@ -2130,6 +2133,9 @@ redo:
 		struct bpf_iarray *succ;
 		int ti;
 
+		err = -EINTR;
+		if (bpf_must_abort())
+			goto err_free;
 		if (!arg_is_visited(&at_in[i][0]) && !arg_is_visited(&at_in[i][1]))
 			continue;
 
@@ -2184,7 +2190,7 @@ redo:
 			struct spill_snapshot *snap;
 
 			kvfree(env->callsite_at_stack[idx]);
-			env->callsite_at_stack[idx] = kvmalloc_flex(*snap, at, nslots, GFP_KERNEL_ACCOUNT);
+			env->callsite_at_stack[idx] = kvmalloc_flex(*snap, at, nslots, BPF_VERIFIER_GFP);
 			snap = env->callsite_at_stack[idx];
 			if (!snap) {
 				err = -ENOMEM;
@@ -2315,7 +2321,7 @@ static struct func_instance *fresh_instance(struct func_instance *src)
 {
 	struct func_instance *f;
 
-	f = kvzalloc_obj(*f, GFP_KERNEL_ACCOUNT);
+	f = kvzalloc_obj(*f, BPF_VERIFIER_GFP);
 	if (!f)
 		return ERR_PTR(-ENOMEM);
 	f->callsite = src->callsite;
@@ -2359,14 +2365,15 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 	struct func_instance *prev_instance = NULL;
 	int j, err;
 
-	if (++env->liveness->subprog_calls > 10000) {
+	/* a subprog on its own is analyzed once, chains of calls multiply */
+	if (depth && ++env->liveness->subprog_calls > 10000) {
 		verbose(env, "liveness analysis exceeded complexity limit (%d calls)\n",
 			env->liveness->subprog_calls);
 		return -E2BIG;
 	}
 
-	if (need_resched())
-		cond_resched();
+	if (bpf_must_abort())
+		return -EINTR;
 
 	/*
 	 * When an instance is reused (must_write_initialized == true),
@@ -2524,8 +2531,7 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 		if (err)
 			return err;
 	}
-	update_instance(env, instance);
-	return 0;
+	return update_instance(env, instance);
 
 out_free:
 	if (prev_instance)
@@ -2541,15 +2547,15 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 	struct subprog_at_info *info;
 	int k, err = 0;
 
-	info = kvzalloc_objs(*info, env->subprog_cnt, GFP_KERNEL_ACCOUNT);
+	info = kvzalloc_objs(*info, env->subprog_cnt, BPF_VERIFIER_GFP);
 	if (!info)
 		return -ENOMEM;
 
 	env->callsite_at_stack = kvzalloc_objs(*env->callsite_at_stack, insn_cnt,
-					       GFP_KERNEL_ACCOUNT);
+					       BPF_VERIFIER_GFP);
 	env->liveness->callee_args = kvcalloc(MAX_CALL_FRAMES * MAX_AT_TRACK_REGS,
 					      sizeof(*env->liveness->callee_args),
-					      GFP_KERNEL_ACCOUNT);
+					      BPF_VERIFIER_GFP);
 	if (!env->callsite_at_stack || !env->liveness->callee_args) {
 		err = -ENOMEM;
 		insn_cnt = env->callsite_at_stack ? insn_cnt : 0;
@@ -2812,7 +2818,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	struct bpf_insn *insns = env->prog->insnsi;
 	struct insn_live_regs *state;
 	int insn_cnt = env->prog->len;
-	int err = 0, i, subprog, start, end;
+	int err = 0, i, n = 0, subprog, start, end, *order;
 	bool changed, ret_reg_pair;
 
 	/* Use the following algorithm:
@@ -2834,8 +2840,9 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	 * - repeat the computation while {in,out} fields changes for
 	 *   any instruction.
 	 */
-	state = kvzalloc_objs(*state, insn_cnt, GFP_KERNEL_ACCOUNT);
-	if (!state) {
+	state = kvzalloc_objs(*state, insn_cnt, BPF_VERIFIER_GFP);
+	order = kvzalloc_objs(*order, insn_cnt, BPF_VERIFIER_GFP);
+	if (!state || !order) {
 		err = -ENOMEM;
 		goto out;
 	}
@@ -2847,6 +2854,15 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 
 		for (i = start; i < end; ++i)
 			compute_insn_live_regs(env, &insns[i], &state[i], ret_reg_pair);
+	}
+
+	/* callees first, so a chain of calls takes one round */
+	for (i = 0; i < env->subprog_cnt; i++) {
+		subprog = env->subprog_topo_order[i];
+		start = env->subprog_info[subprog].postorder_start;
+		end = env->subprog_info[subprog + 1].postorder_start;
+		while (start < end)
+			order[n++] = env->cfg.insn_postorder[start++];
 	}
 
 	changed = true;
@@ -2872,13 +2888,12 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 
 		changed = false;
 		/* a cycle of calls takes a round for each link */
-		if (signal_pending(current)) {
-			err = -EAGAIN;
+		if (bpf_must_abort()) {
+			err = -EINTR;
 			goto out;
 		}
-		cond_resched();
 		for (i = 0; i < env->cfg.cur_postorder; ++i) {
-			int insn_idx = env->cfg.insn_postorder[i];
+			int insn_idx = order[i];
 			struct insn_live_regs *live = &state[insn_idx];
 			struct bpf_iarray *succ;
 			u32 new_out = 0;
@@ -2939,6 +2954,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	 */
 	err = bpf_compute_subprog_arg_access(env);
 out:
+	kvfree(order);
 	kvfree(state);
 	return err;
 }

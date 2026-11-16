@@ -253,7 +253,7 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 	int i, r, t;
 
 	/* kvzalloc zeroes memory, so all entries start as CONST_ARG_UNVISITED (0) */
-	ci_in = kvzalloc_objs(*ci_in, insn_cnt, GFP_KERNEL_ACCOUNT);
+	ci_in = kvzalloc_objs(*ci_in, insn_cnt, BPF_VERIFIER_GFP);
 	if (!ci_in)
 		return -ENOMEM;
 
@@ -278,6 +278,10 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 	}
 
 redo:
+	if (bpf_must_abort()) {
+		kvfree(ci_in);
+		return -EINTR;
+	}
 	changed = false;
 	for (i = env->cfg.cur_postorder - 1; i >= 0; i--) {
 		int idx = env->cfg.insn_postorder[i];
@@ -568,7 +572,7 @@ int bpf_compute_leave_conds(struct bpf_verifier_env *env)
 	bool jump;
 	u64 any;
 
-	env->leave_conds = kvcalloc(env->prog->len, sizeof(*p), GFP_KERNEL_ACCOUNT);
+	env->leave_conds = kvcalloc(env->prog->len, sizeof(*p), BPF_VERIFIER_GFP);
 	if (!env->leave_conds)
 		return -ENOMEM;
 	for (i = 0; i < env->cfg.cur_postorder; i++) {

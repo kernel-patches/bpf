@@ -615,7 +615,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("if r0 == 0x0 goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R7 invalid mem access 'scalar'` */
-__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("goto pc-2") /* sanitized dead code */
 __xlated_unpriv("exit")
 #endif
 __naked void alu32_mov_u32_const(void)

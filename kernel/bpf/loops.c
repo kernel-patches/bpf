@@ -2,7 +2,6 @@
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 
 #include <linux/slab.h>
-#include <linux/sched/signal.h>
 #include <linux/bpf_verifier.h>
 
 static bool is_cfg_jump(struct bpf_insn *insn)
@@ -29,7 +28,7 @@ static struct bpf_iarray **compute_predecessors(struct bpf_verifier_env *env)
 	size_t sz;
 	void *tmp;
 
-	num_preds = kvzalloc_objs(u32, prog->len, GFP_KERNEL_ACCOUNT);
+	num_preds = kvzalloc_objs(u32, prog->len, BPF_VERIFIER_GFP);
 	if (!num_preds)
 		return NULL;
 
@@ -50,7 +49,7 @@ static struct bpf_iarray **compute_predecessors(struct bpf_verifier_env *env)
 			i++;
 	}
 
-	result = kvzalloc(sz, GFP_KERNEL_ACCOUNT);
+	result = kvzalloc(sz, BPF_VERIFIER_GFP);
 	if (!result) {
 		kvfree(num_preds);
 		return NULL;
@@ -97,82 +96,117 @@ static int idoms_intersect(struct bpf_verifier_env *env, int a, int b)
 	return a;
 }
 
-/* See "A Simple, Fast Dominance Algorithm" by Cooper et al. for details. */
-static int compute_subprog_idoms(struct bpf_verifier_env *env, struct bpf_iarray **preds,
-				int subprog_idx)
+/* An insn. The nodes are in the order of a depth-first walk, node 0 is none. */
+struct idom_node {
+	u32 insn;
+	u32 parent;	/* in the walk */
+	u32 semi;	/* semidominator */
+	u32 idom;
+	u32 up;		/* a parent, or a parent of it, once the node is done */
+	u32 min;	/* the node with the lowest 'semi' on the way to 'up' */
+	u32 bucket;	/* list of the nodes whose 'semi' this node is */
+	u32 next;	/* in that list. Before that the next successor for the walk */
+};
+
+/* The node with the lowest 'semi' on the way up from node 'id'. Makes the way short. */
+static u32 idom_eval(struct idom_node *nodes, u32 *path, u32 id)
 {
-	struct bpf_subprog_info *subprog = &env->subprog_info[subprog_idx];
-	int start = subprog->start;
-	int po_first = subprog->postorder_start;
-	int po_last = (subprog + 1)->postorder_start - 1;
-	int *idoms = env->idoms;
-	int po_num, pred;
-	u32 work = 0;
-	bool changed;
+	struct idom_node *node, *up;
+	u32 cnt = 0, cur;
 
-	idoms[start] = start;
-	changed = true;
-	do {
-		changed = false;
-		/*
-		 * Iterate in reverse postorder, skipping the subprog entry:
-		 * insn_postorder[po_last] is the subprogram entry.
-		 */
-		for (po_num = po_last - 1; po_num >= po_first; po_num--) {
-			int idx = env->cfg.insn_postorder[po_num];
-			int new_idom = -1;
-
-			iarray_for_each(pred, preds[idx]) {
-				if (++work % 1024 == 0) {
-					if (signal_pending(current))
-						return -EAGAIN;
-					cond_resched();
-				}
-
-				if (idoms[pred] == -1)
-					continue;
-				if (new_idom == -1)
-					new_idom = pred;
-				else
-					new_idom = idoms_intersect(env, pred, new_idom);
-			}
-			if (new_idom != -1 && idoms[idx] != new_idom) {
-				idoms[idx] = new_idom;
-				changed = true;
-			}
-		}
-	} while (changed);
-	idoms[start] = -1;
-	return 0;
+	for (cur = id; nodes[nodes[cur].up].up; cur = nodes[cur].up)
+		path[cnt++] = cur;
+	while (cnt--) {
+		node = &nodes[path[cnt]];
+		up = &nodes[node->up];
+		if (nodes[up->min].semi < nodes[node->min].semi)
+			node->min = up->min;
+		node->up = up->up;
+	}
+	return nodes[id].min;
 }
 
+/*
+ * See "A Fast Algorithm for Finding Dominators in a Flowgraph" by Lengauer and Tarjan.
+ *
+ *   1 -> 2 -> 3 -> 4      walk:          parent[4] = 3
+ *   |              ^      from the end:  semi[4] = 1
+ *   +-> 5 ---------+      from the top:  idom[4] = 1
+ */
 int bpf_compute_idoms(struct bpf_verifier_env *env)
 {
-	struct bpf_iarray **preds;
-	u32 len = env->prog->len;
-	int *idoms, i, err = 0;
+	u32 len = env->prog->len, cnt = 0, i, insn, id, cur, best, *num, *path;
+	struct bpf_iarray **preds, *succ;
+	struct idom_node *nodes, *node;
+	int err = -ENOMEM;
 
 	preds = compute_predecessors(env);
-	if (!preds)
-		return -ENOMEM;
+	env->idoms = kvmalloc_objs(*env->idoms, len, BPF_VERIFIER_GFP);
+	nodes = kvzalloc_objs(*nodes, len + 1, BPF_VERIFIER_GFP);
+	/* insn -> node */
+	num = kvzalloc_objs(*num, 2 * (size_t)len, BPF_VERIFIER_GFP);
+	path = num + len;
+	if (!preds || !env->idoms || !nodes || !num)
+		goto out;
+	memset(env->idoms, 0xff, len * sizeof(*env->idoms));
 
-	idoms = kvzalloc_objs(*idoms, len, GFP_KERNEL_ACCOUNT);
-	if (!idoms) {
-		kvfree(preds);
-		return -ENOMEM;
-	}
-
-	env->idoms = idoms;
-	for (i = 0; i < len; i++)
-		idoms[i] = -1;
-
+	err = -EINTR;
 	for (i = 0; i < env->subprog_cnt; i++) {
-		err = compute_subprog_idoms(env, preds, i);
-		if (err)
-			break;
+		insn = env->subprog_info[i].start;
+		for (cur = 0;; insn = succ->items[nodes[cur].next++]) {
+			if (!num[insn]) {
+				num[insn] = ++cnt;
+				nodes[cnt] = (struct idom_node){ insn, cur, cnt, .min = cnt };
+				cur = cnt;
+			}
+			if (bpf_must_abort())
+				goto out;
+			/* go back to a node that has a successor left */
+			for (; cur; cur = nodes[cur].parent) {
+				succ = bpf_insn_successors(env, nodes[cur].insn);
+				if (nodes[cur].next < succ->cnt)
+					break;
+			}
+			if (!cur)
+				break;
+		}
 	}
 
+	for (id = cnt; id; id--) {
+		node = &nodes[id];
+		if (!node->parent)
+			continue;
+		iarray_for_each(insn, preds[node->insn]) {
+			if (bpf_must_abort())
+				goto out;
+			if (!num[insn])
+				continue;
+			best = idom_eval(nodes, path, num[insn]);
+			node->semi = min(node->semi, nodes[best].semi);
+		}
+		node->next = nodes[node->semi].bucket;
+		nodes[node->semi].bucket = id;
+		node->up = node->parent;
+		for (cur = nodes[node->parent].bucket; cur; cur = nodes[cur].next) {
+			best = idom_eval(nodes, path, cur);
+			nodes[cur].idom = nodes[best].semi < nodes[cur].semi ? best : node->parent;
+		}
+		nodes[node->parent].bucket = 0;
+	}
+
+	for (id = 1; id <= cnt; id++) {
+		node = &nodes[id];
+		if (!node->parent)
+			continue;
+		if (node->idom != node->semi)
+			node->idom = nodes[node->idom].idom;
+		env->idoms[node->insn] = nodes[node->idom].insn;
+	}
+	err = 0;
+out:
 	kvfree(preds);
+	kvfree(nodes);
+	kvfree(num);
 	return err;
 }
 
@@ -217,7 +251,7 @@ static int add_exit(struct bpf_loop *loop, int from, int to)
 	}
 	if (!loop->exits) {
 		loop->exits = kvzalloc_objs(*loop->exits, MAX_LOOP_EXITS,
-					    GFP_KERNEL_ACCOUNT);
+					    BPF_VERIFIER_GFP);
 		if (!loop->exits)
 			return -ENOMEM;
 	}
@@ -234,7 +268,7 @@ static int mark_as_header(struct bpf_verifier_env *env, int h)
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 
 	if (!aux[h].loop) {
-		aux[h].loop = kvzalloc_obj(struct bpf_loop, GFP_KERNEL_ACCOUNT);
+		aux[h].loop = kvzalloc_obj(struct bpf_loop, BPF_VERIFIER_GFP);
 		if (!aux[h].loop)
 			return -ENOMEM;
 	}
@@ -416,24 +450,15 @@ static int compute_loops_in_subprog(struct bpf_verifier_env *env, struct loops_d
 	int *stack = dfs->stack;
 	int s, h, err, cur, stack_sz;
 	struct bpf_iarray *succ;
-	u32 i;
 
 	stack[0] = start;
 	state[start].traversed = true;
 	state[start].next_succ = 0;
 	dfs_pos[start] = 1;
 	stack_sz = 1;
-	i = 0;
 	do {
-		/*
-		 * The algorithm should be very fast in practice,
-		 * guard against pathological inputs, just in case.
-		 */
-		if ((++i % 1024) == 0) {
-			if (signal_pending(current))
-				return -EAGAIN;
-			cond_resched();
-		}
+		if (bpf_must_abort())
+			return -EINTR;
 
 		cur = stack[stack_sz - 1];
 		succ = bpf_insn_successors(env, cur);
@@ -556,9 +581,9 @@ int bpf_compute_loops(struct bpf_verifier_env *env)
 	struct bpf_iarray *succ;
 	struct bpf_loop *loop;
 
-	dfs.dfs_pos = kvzalloc_objs(int, len, GFP_KERNEL_ACCOUNT);
-	dfs.state = kvzalloc_objs(struct dfs_state, len, GFP_KERNEL_ACCOUNT);
-	dfs.stack = kvzalloc_objs(int, len, GFP_KERNEL_ACCOUNT);
+	dfs.dfs_pos = kvzalloc_objs(int, len, BPF_VERIFIER_GFP);
+	dfs.state = kvzalloc_objs(struct dfs_state, len, BPF_VERIFIER_GFP);
+	dfs.stack = kvzalloc_objs(int, len, BPF_VERIFIER_GFP);
 	if (!dfs.dfs_pos || !dfs.state || !dfs.stack) {
 		err = -ENOMEM;
 		goto out;

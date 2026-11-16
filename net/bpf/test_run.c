@@ -1687,8 +1687,8 @@ int bpf_prog_test_run_syscall(struct bpf_prog *prog,
 {
 	void __user *ctx_in = u64_to_user_ptr(kattr->test.ctx_in);
 	__u32 ctx_size_in = kattr->test.ctx_size_in;
+	u32 retval, size = ctx_size_in;
 	void *ctx = NULL;
-	u32 retval;
 	int err = 0;
 
 	/* doesn't support data_in/out, ctx_out, duration, or repeat or flags */
@@ -1702,10 +1702,18 @@ int bpf_prog_test_run_syscall(struct bpf_prog *prog,
 	    ctx_size_in > U16_MAX)
 		return -EINVAL;
 
-	if (ctx_size_in) {
-		ctx = memdup_user(ctx_in, ctx_size_in);
-		if (IS_ERR(ctx))
-			return PTR_ERR(ctx);
+	/* the target of a tail call can use that much */
+	if (prog->aux->tail_call_reachable)
+		size = max_t(u32, size, U16_MAX);
+
+	if (size) {
+		ctx = kvzalloc(size, GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+		if (!ctx)
+			return -ENOMEM;
+		if (copy_from_user(ctx, ctx_in, ctx_size_in)) {
+			err = -EFAULT;
+			goto out;
+		}
 	}
 
 	rcu_read_lock_trace();
@@ -1720,7 +1728,7 @@ int bpf_prog_test_run_syscall(struct bpf_prog *prog,
 		if (copy_to_user(ctx_in, ctx, ctx_size_in))
 			err = -EFAULT;
 out:
-	kfree(ctx);
+	kvfree(ctx);
 	return err;
 }
 
