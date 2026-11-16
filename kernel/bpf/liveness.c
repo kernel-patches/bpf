@@ -121,7 +121,7 @@ static struct func_instance *call_instance(struct bpf_verifier_env *env,
 	if (f)
 		return f;
 
-	f = kvzalloc_obj(*f, GFP_KERNEL_ACCOUNT);
+	f = kvzalloc_obj(*f, BPF_VERIFIER_GFP);
 	if (!f)
 		return ERR_PTR(-ENOMEM);
 	f->callsite = lookup_key;
@@ -155,7 +155,7 @@ static struct func_instance *lookup_instance(struct bpf_verifier_env *env,
 
 int bpf_stack_liveness_init(struct bpf_verifier_env *env)
 {
-	env->liveness = kvzalloc_obj(*env->liveness, GFP_KERNEL_ACCOUNT);
+	env->liveness = kvzalloc_obj(*env->liveness, BPF_VERIFIER_GFP);
 	if (!env->liveness)
 		return -ENOMEM;
 	hash_init(env->liveness->func_instances);
@@ -216,7 +216,7 @@ static struct frame_masks *widen_frame_masks(struct func_instance *instance,
 
 	if (old && old->words >= words)
 		return old;
-	new = kvzalloc_flex(*new, bits, frame_mask_words(instance, words), GFP_KERNEL_ACCOUNT);
+	new = kvzalloc_flex(*new, bits, frame_mask_words(instance, words), BPF_VERIFIER_GFP);
 	if (!new)
 		return NULL;
 	new->words = words;
@@ -815,7 +815,7 @@ static int print_instances(struct bpf_verifier_env *env)
 	cnt = 0;
 	hash_for_each(liveness->func_instances, bkt, instance, hl_node)
 		cnt++;
-	sorted_instances = kvmalloc_objs(*sorted_instances, cnt, GFP_KERNEL_ACCOUNT);
+	sorted_instances = kvmalloc_objs(*sorted_instances, cnt, BPF_VERIFIER_GFP);
 	if (!sorted_instances)
 		return -ENOMEM;
 	cnt = 0;
@@ -2081,15 +2081,15 @@ static noinline_for_stack int compute_subprog_args(struct bpf_verifier_env *env,
 	bool changed;
 	int i, p, r, err = -ENOMEM;
 
-	at_in = kvmalloc_objs(*at_in, len, GFP_KERNEL_ACCOUNT);
+	at_in = kvmalloc_objs(*at_in, len, BPF_VERIFIER_GFP);
 	if (!at_in)
 		goto err_free;
 
-	at_stack_in = kvmalloc_objs(*at_stack_in, (size_t)len * nslots, GFP_KERNEL_ACCOUNT);
+	at_stack_in = kvmalloc_objs(*at_stack_in, (size_t)len * nslots, BPF_VERIFIER_GFP);
 	if (!at_stack_in)
 		goto err_free;
 
-	at_stack_out = kvmalloc_objs(*at_stack_out, nslots, GFP_KERNEL_ACCOUNT);
+	at_stack_out = kvmalloc_objs(*at_stack_out, nslots, BPF_VERIFIER_GFP);
 	if (!at_stack_out)
 		goto err_free;
 
@@ -2190,7 +2190,7 @@ redo:
 			struct spill_snapshot *snap;
 
 			kvfree(env->callsite_at_stack[idx]);
-			env->callsite_at_stack[idx] = kvmalloc_flex(*snap, at, nslots, GFP_KERNEL_ACCOUNT);
+			env->callsite_at_stack[idx] = kvmalloc_flex(*snap, at, nslots, BPF_VERIFIER_GFP);
 			snap = env->callsite_at_stack[idx];
 			if (!snap) {
 				err = -ENOMEM;
@@ -2321,7 +2321,7 @@ static struct func_instance *fresh_instance(struct func_instance *src)
 {
 	struct func_instance *f;
 
-	f = kvzalloc_obj(*f, GFP_KERNEL_ACCOUNT);
+	f = kvzalloc_obj(*f, BPF_VERIFIER_GFP);
 	if (!f)
 		return ERR_PTR(-ENOMEM);
 	f->callsite = src->callsite;
@@ -2546,15 +2546,15 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 	struct subprog_at_info *info;
 	int k, err = 0;
 
-	info = kvzalloc_objs(*info, env->subprog_cnt, GFP_KERNEL_ACCOUNT);
+	info = kvzalloc_objs(*info, env->subprog_cnt, BPF_VERIFIER_GFP);
 	if (!info)
 		return -ENOMEM;
 
 	env->callsite_at_stack = kvzalloc_objs(*env->callsite_at_stack, insn_cnt,
-					       GFP_KERNEL_ACCOUNT);
+					       BPF_VERIFIER_GFP);
 	env->liveness->callee_args = kvcalloc(MAX_CALL_FRAMES * MAX_AT_TRACK_REGS,
 					      sizeof(*env->liveness->callee_args),
-					      GFP_KERNEL_ACCOUNT);
+					      BPF_VERIFIER_GFP);
 	if (!env->callsite_at_stack || !env->liveness->callee_args) {
 		err = -ENOMEM;
 		insn_cnt = env->callsite_at_stack ? insn_cnt : 0;
@@ -2839,7 +2839,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	 * - repeat the computation while {in,out} fields changes for
 	 *   any instruction.
 	 */
-	state = kvzalloc_objs(*state, insn_cnt, GFP_KERNEL_ACCOUNT);
+	state = kvzalloc_objs(*state, insn_cnt, BPF_VERIFIER_GFP);
 	if (!state) {
 		err = -ENOMEM;
 		goto out;

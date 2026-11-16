@@ -63,7 +63,7 @@ static int prepare_btf_func(struct bpf_verifier_env *env,
 	urecord = make_bpfptr(attr->func_info, uattr.is_kernel);
 	min_size = min_t(u32, krec_size, urec_size);
 
-	krecord = kvcalloc(nfuncs, krec_size, GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	krecord = kvcalloc(nfuncs, krec_size, BPF_VERIFIER_GFP);
 	if (!krecord)
 		return -ENOMEM;
 
@@ -164,7 +164,7 @@ static int check_btf_func(struct bpf_verifier_env *env,
 
 	krecord = prog->aux->func_info;
 	info_aux = kzalloc_objs(*info_aux, nfuncs,
-				GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+				BPF_VERIFIER_GFP);
 	if (!info_aux)
 		return -ENOMEM;
 
@@ -242,7 +242,7 @@ static int check_btf_line(struct bpf_verifier_env *env,
 	 * pass in a smaller bpf_line_info object.
 	 */
 	linfo = kvzalloc_objs(struct bpf_line_info, nr_linfo,
-			      GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+			      BPF_VERIFIER_GFP);
 	if (!linfo)
 		return -ENOMEM;
 

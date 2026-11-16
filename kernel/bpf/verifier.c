@@ -1417,7 +1417,7 @@ static void *realloc_array(void *arr, size_t old_n, size_t new_n, size_t size)
 		goto out;
 
 	alloc_size = kmalloc_size_roundup(size_mul(new_n, size));
-	new_arr = krealloc(arr, alloc_size, GFP_KERNEL_ACCOUNT);
+	new_arr = krealloc(arr, alloc_size, BPF_VERIFIER_GFP);
 	if (!new_arr) {
 		kfree(arr);
 		return NULL;
@@ -1434,7 +1434,7 @@ out:
 static int copy_reference_state(struct bpf_verifier_state *dst, const struct bpf_verifier_state *src)
 {
 	dst->refs = copy_array(dst->refs, src->refs, src->acquired_refs,
-			       sizeof(struct bpf_reference_state), GFP_KERNEL_ACCOUNT);
+			       sizeof(struct bpf_reference_state), BPF_VERIFIER_GFP);
 	if (!dst->refs)
 		return -ENOMEM;
 
@@ -1453,7 +1453,7 @@ static int copy_stack_state(struct bpf_func_state *dst, const struct bpf_func_st
 	size_t n = bpf_stack_nr_slots(src);
 
 	dst->stack = copy_array(dst->stack, src->stack, n, sizeof(struct bpf_stack_state),
-				GFP_KERNEL_ACCOUNT);
+				BPF_VERIFIER_GFP);
 	if (!dst->stack)
 		return -ENOMEM;
 
@@ -1464,7 +1464,7 @@ static int copy_stack_state(struct bpf_func_state *dst, const struct bpf_func_st
 	if (n) {
 		dst->stack_arg_regs = copy_array(dst->stack_arg_regs, src->stack_arg_regs, n,
 						 sizeof(struct bpf_reg_state),
-						 GFP_KERNEL_ACCOUNT);
+						 BPF_VERIFIER_GFP);
 		if (!dst->stack_arg_regs)
 			return -ENOMEM;
 	}
@@ -1765,7 +1765,7 @@ static int copy_func_state(struct bpf_func_state *dst,
 	/* Instruction accounting is path-local, not part of verifier state. */
 	dst->insns_subtotal = 0;
 	dst->loop_stack = copy_array(dst->loop_stack, src->loop_stack, src->loop_stack_cnt,
-				     sizeof(*src->loop_stack), GFP_KERNEL_ACCOUNT);
+				     sizeof(*src->loop_stack), BPF_VERIFIER_GFP);
 	if (!dst->loop_stack)
 		return -ENOMEM;
 	return copy_stack_state(dst, src);
@@ -1797,7 +1797,7 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 	for (i = 0; i <= src->curframe; i++) {
 		dst = dst_state->frame[i];
 		if (!dst) {
-			dst = kzalloc_obj(*dst, GFP_KERNEL_ACCOUNT);
+			dst = kzalloc_obj(*dst, BPF_VERIFIER_GFP);
 			if (!dst)
 				return -ENOMEM;
 			dst_state->frame[i] = dst;
@@ -1829,7 +1829,7 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 	struct bpf_verifier_stack_elem *elem;
 	int err;
 
-	elem = kzalloc_obj(struct bpf_verifier_stack_elem, GFP_KERNEL_ACCOUNT);
+	elem = kzalloc_obj(struct bpf_verifier_stack_elem, BPF_VERIFIER_GFP);
 	if (!elem)
 		return ERR_PTR(-ENOMEM);
 
@@ -2544,7 +2544,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	struct bpf_verifier_stack_elem *elem;
 	struct bpf_func_state *frame;
 
-	elem = kzalloc_obj(struct bpf_verifier_stack_elem, GFP_KERNEL_ACCOUNT);
+	elem = kzalloc_obj(struct bpf_verifier_stack_elem, BPF_VERIFIER_GFP);
 	if (!elem)
 		return ERR_PTR(-ENOMEM);
 
@@ -2558,7 +2558,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	 * Initialize it similar to do_check_common().
 	 */
 	elem->st.in_sleepable = is_sleepable;
-	frame = kzalloc_obj(*frame, GFP_KERNEL_ACCOUNT);
+	frame = kzalloc_obj(*frame, BPF_VERIFIER_GFP);
 	if (!frame)
 		return ERR_PTR(-ENOMEM);
 	init_func_state(env, frame,
@@ -3057,7 +3057,7 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 			return -EINVAL;
 		}
 
-		tab = kzalloc_obj(*tab, GFP_KERNEL_ACCOUNT);
+		tab = kzalloc_obj(*tab, BPF_VERIFIER_GFP);
 		if (!tab)
 			return -ENOMEM;
 		prog_aux->kfunc_tab = tab;
@@ -3075,7 +3075,7 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 		return 0;
 
 	if (!btf_tab && offset) {
-		btf_tab = kzalloc_obj(*btf_tab, GFP_KERNEL_ACCOUNT);
+		btf_tab = kzalloc_obj(*btf_tab, BPF_VERIFIER_GFP);
 		if (!btf_tab)
 			return -ENOMEM;
 		prog_aux->kfunc_btf_tab = btf_tab;
@@ -3133,7 +3133,7 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	meta.func_name = kfunc.name;
 	meta.kfunc_flags = kfunc.flags ? *kfunc.flags : 0;
 
-	tab = krealloc(tab, struct_size(tab, descs, tab->nr_descs + 1), GFP_KERNEL_ACCOUNT);
+	tab = krealloc(tab, struct_size(tab, descs, tab->nr_descs + 1), BPF_VERIFIER_GFP);
 	if (!tab)
 		return -ENOMEM;
 	prog_aux->kfunc_tab = tab;
@@ -3369,7 +3369,7 @@ static int record_callx_edge(struct bpf_verifier_env *env, int caller, int calle
 
 	if (!env->callx_edges) {
 		env->callx_edges = kvcalloc(BITS_TO_LONGS(cnt * cnt), sizeof(long),
-					    GFP_KERNEL_ACCOUNT);
+					    BPF_VERIFIER_GFP);
 		if (!env->callx_edges)
 			return -ENOMEM;
 	}
@@ -3464,8 +3464,8 @@ static int sort_subprogs_topo(struct bpf_verifier_env *env)
 	int i, ret = 0;
 	u8 *color = NULL;
 
-	color = kvzalloc_objs(*color, cnt, GFP_KERNEL_ACCOUNT);
-	dfs_stack = kvmalloc_objs(*dfs_stack, cnt, GFP_KERNEL_ACCOUNT);
+	color = kvzalloc_objs(*color, cnt, BPF_VERIFIER_GFP);
+	dfs_stack = kvmalloc_objs(*dfs_stack, cnt, BPF_VERIFIER_GFP);
 	if (!color || !dfs_stack) {
 		ret = -ENOMEM;
 		goto out;
@@ -5567,7 +5567,7 @@ static int build_call_graph(struct bpf_verifier_env *env, struct bpf_call_graph 
 
 	cg->cnt = cnt;
 	cg->words = words;
-	cg->calls = kvcalloc((2 * cnt + 6) * words, sizeof(long), GFP_KERNEL_ACCOUNT);
+	cg->calls = kvcalloc((2 * cnt + 6) * words, sizeof(long), BPF_VERIFIER_GFP);
 	if (!cg->calls)
 		return -ENOMEM;
 	cg->reach = cg->calls + cnt * words;
@@ -5914,7 +5914,7 @@ static int check_call_depth(struct bpf_verifier_env *env, struct bpf_call_graph 
 	struct bpf_subprog_call_depth_info *dinfo;
 	int depth, total, tmp, s, err;
 
-	dinfo = kvzalloc_objs(*dinfo, cg->cnt, GFP_KERNEL_ACCOUNT);
+	dinfo = kvzalloc_objs(*dinfo, cg->cnt, BPF_VERIFIER_GFP);
 	if (!dinfo)
 		return -ENOMEM;
 	compute_call_depth(env, cg, dinfo);
@@ -6060,7 +6060,7 @@ static int mark_recursive_subprogs(struct bpf_verifier_env *env)
 	int i, j, s, err = 0;
 
 	/* calls + s * words: the subprogs that s calls */
-	calls = kvcalloc((cnt + 2) * words, sizeof(long), GFP_KERNEL_ACCOUNT);
+	calls = kvcalloc((cnt + 2) * words, sizeof(long), BPF_VERIFIER_GFP);
 	if (!calls)
 		return -ENOMEM;
 	taken = calls + cnt * words;
@@ -7258,11 +7258,11 @@ static int mark_reg_func_set(struct bpf_verifier_env *env, struct bpf_reg_state 
 			verbose(env, "more than %d sets of functions\n", BPF_MAX_FUNC_SETS);
 			return -E2BIG;
 		}
-		sets = krealloc_array(env->func_sets, i + 1, sizeof(*sets), GFP_KERNEL_ACCOUNT);
+		sets = krealloc_array(env->func_sets, i + 1, sizeof(*sets), BPF_VERIFIER_GFP);
 		if (!sets)
 			return -ENOMEM;
 		env->func_sets = sets;
-		set = kzalloc_flex(*set, subprog, n, GFP_KERNEL_ACCOUNT);
+		set = kzalloc_flex(*set, subprog, n, BPF_VERIFIER_GFP);
 		if (!set)
 			return -ENOMEM;
 		set->cnt = n;
@@ -7330,7 +7330,7 @@ static int check_func_ptr_read(struct bpf_verifier_env *env, struct bpf_reg_stat
 		return -ENOENT;
 	if (cnt > BPF_MAX_FUNC_PTR_RANGE)
 		goto overlap;
-	targets = kmalloc_array(BPF_MAX_FUNC_PTR_TARGETS, sizeof(*targets), GFP_KERNEL_ACCOUNT);
+	targets = kmalloc_array(BPF_MAX_FUNC_PTR_TARGETS, sizeof(*targets), BPF_VERIFIER_GFP);
 	if (!targets)
 		return -ENOMEM;
 
@@ -11313,7 +11313,7 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	}
 
 	caller = state->frame[state->curframe];
-	callee = kzalloc_obj(*callee, GFP_KERNEL_ACCOUNT);
+	callee = kzalloc_obj(*callee, BPF_VERIFIER_GFP);
 	if (!callee)
 		return -ENOMEM;
 	state->frame[state->curframe + 1] = callee;
@@ -11674,7 +11674,7 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 	struct bpf_verifier_state entry = {};
 	int i, err;
 
-	callee = kzalloc_obj(*callee, GFP_KERNEL_ACCOUNT);
+	callee = kzalloc_obj(*callee, BPF_VERIFIER_GFP);
 	if (!callee)
 		return -ENOMEM;
 	entry.frame[0] = callee;
@@ -12153,7 +12153,7 @@ static int check_func_callx_set(struct bpf_verifier_env *env, int regno, int *in
 				return PTR_ERR(branch);
 			continue;
 		}
-		copy = kzalloc_obj(*copy, GFP_KERNEL_ACCOUNT);
+		copy = kzalloc_obj(*copy, BPF_VERIFIER_GFP);
 		if (!copy)
 			return -ENOMEM;
 		err = bpf_copy_verifier_state(copy, cur);
@@ -21367,7 +21367,7 @@ static int flow_try_walk(struct bpf_verifier_env *env, struct loop_stack_entry *
 	entry->walk_id = env->walk_cnt + 1;
 	if (is_power_of_2(entry->walk_id)) {
 		walk_insns = kvrealloc(env->walk_insns, 2 * entry->walk_id * sizeof(u32),
-				       GFP_KERNEL_ACCOUNT);
+				       BPF_VERIFIER_GFP);
 		if (!walk_insns)
 			return -ENOMEM;
 		env->walk_insns = walk_insns;
@@ -22925,7 +22925,7 @@ static int add_func_ptr(struct bpf_verifier_env *env, struct bpf_map *map, u32 m
 	if (!(env->func_ptr_cnt & (env->func_ptr_cnt - 1))) {
 		ptrs = kvrealloc(env->func_ptrs,
 				 array_size(max(2 * env->func_ptr_cnt, 16U), sizeof(*ptrs)),
-				 GFP_KERNEL_ACCOUNT);
+				 BPF_VERIFIER_GFP);
 		if (!ptrs)
 			return -ENOMEM;
 		env->func_ptrs = ptrs;
@@ -23098,7 +23098,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog,
 	env->prev_linfo = NULL;
 	env->pass_cnt++;
 
-	state = kzalloc_obj(struct bpf_verifier_state, GFP_KERNEL_ACCOUNT);
+	state = kzalloc_obj(struct bpf_verifier_state, BPF_VERIFIER_GFP);
 	if (!state)
 		return -ENOMEM;
 	state->curframe = 0;
@@ -23107,7 +23107,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog,
 	/* nobody knows what the callers of a global function or of an extension hold */
 	state->callers_unknown = subprog || env->prog->type == BPF_PROG_TYPE_EXT;
 	env->no_rcu_read_lock = context == BPF_FUNC_CTX_NO_RCU_LOCK;
-	state->frame[0] = kzalloc_obj(struct bpf_func_state, GFP_KERNEL_ACCOUNT);
+	state->frame[0] = kzalloc_obj(struct bpf_func_state, BPF_VERIFIER_GFP);
 	if (!state->frame[0]) {
 		kfree(state);
 		return -ENOMEM;
@@ -23392,7 +23392,7 @@ static void add_insns_of_callees(struct bpf_verifier_env *env)
 	struct bpf_insn *insn = env->prog->insnsi;
 	int *added, i, j, s, c;
 
-	added = kvcalloc(env->subprog_cnt, sizeof(*added), GFP_KERNEL_ACCOUNT);
+	added = kvcalloc(env->subprog_cnt, sizeof(*added), BPF_VERIFIER_GFP);
 	if (!added)
 		return;
 	/* callees first */
@@ -23447,7 +23447,7 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 int bpf_prog_ctx_arg_info_init(struct bpf_prog *prog,
 			       const struct bpf_ctx_arg_aux *info, u32 cnt)
 {
-	prog->aux->ctx_arg_info = kmemdup_array(info, cnt, sizeof(*info), GFP_KERNEL_ACCOUNT);
+	prog->aux->ctx_arg_info = kmemdup_array(info, cnt, sizeof(*info), BPF_VERIFIER_GFP);
 	prog->aux->ctx_arg_info_size = cnt;
 
 	return prog->aux->ctx_arg_info ? 0 : -ENOMEM;
@@ -24636,7 +24636,7 @@ static int process_fd_array_continuous(struct bpf_verifier_env *env,
 		return -E2BIG;
 	}
 
-	env->fd_array = kvzalloc_objs(*env->fd_array, cnt, GFP_KERNEL_ACCOUNT);
+	env->fd_array = kvzalloc_objs(*env->fd_array, cnt, BPF_VERIFIER_GFP);
 	if (!env->fd_array)
 		return -ENOMEM;
 	env->fd_array_cnt = cnt;
@@ -24775,7 +24775,7 @@ static int add_kfunc_desc_target(struct bpf_verifier_env *env,
 	}
 
 	new_tab = krealloc(tab, struct_size(tab, descs, tab->nr_descs + 1),
-			   GFP_KERNEL_ACCOUNT);
+			   BPF_VERIFIER_GFP);
 	if (!new_tab)
 		return -ENOMEM;
 	tab = new_tab;
@@ -25136,7 +25136,7 @@ static int bpf_prog_verify_signature(struct bpf_verifier_env *env,
 		err = -E2BIG;
 		goto out;
 	}
-	data = kvmalloc(data_sz, GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+	data = kvmalloc(data_sz, BPF_VERIFIER_GFP | __GFP_ZERO);
 	if (!data) {
 		err = -ENOMEM;
 		goto out;
@@ -25251,7 +25251,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	/* 'struct bpf_verifier_env' can be global, but since it's not small,
 	 * allocate/free it every time bpf_check() is called
 	 */
-	env = kvzalloc_obj(struct bpf_verifier_env, GFP_KERNEL_ACCOUNT);
+	env = kvzalloc_obj(struct bpf_verifier_env, BPF_VERIFIER_GFP);
 	if (!env)
 		return -ENOMEM;
 
@@ -25310,7 +25310,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	len = env->insn_aux_data_len = env->prog->len;
 	env->insn_aux_data =
 		__vmalloc(array_size(sizeof(struct bpf_insn_aux_data), len),
-			  GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+			  BPF_VERIFIER_GFP | __GFP_ZERO);
 	ret = -ENOMEM;
 	if (!env->insn_aux_data)
 		goto skip_full_check;
@@ -25561,7 +25561,7 @@ skip_full_check:
 		/* if program passed verifier, update used_maps in bpf_prog_info */
 		env->prog->aux->used_maps = kmalloc_objs(env->used_maps[0],
 							 env->used_map_cnt,
-							 GFP_KERNEL_ACCOUNT);
+							 BPF_VERIFIER_GFP);
 
 		if (!env->prog->aux->used_maps) {
 			ret = -ENOMEM;
@@ -25576,7 +25576,7 @@ skip_full_check:
 		/* if program passed verifier, update used_btfs in bpf_prog_aux */
 		env->prog->aux->used_btfs = kmalloc_objs(env->used_btfs[0],
 							 env->used_btf_cnt,
-							 GFP_KERNEL_ACCOUNT);
+							 BPF_VERIFIER_GFP);
 		if (!env->prog->aux->used_btfs) {
 			ret = -ENOMEM;
 			goto err_release_maps;
