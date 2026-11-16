@@ -24,11 +24,11 @@ static void early_init_transmeta(struct cpuinfo_x86 *c)
 
 static void init_transmeta(struct cpuinfo_x86 *c)
 {
-	u64 msr;
-	unsigned int max, dummy;
-	unsigned int cms_rev1, cms_rev2;
 	unsigned int cpu_rev, cpu_freq = 0, cpu_flags, new_cpu_rev;
+	unsigned int cms_rev1, cms_rev2;
+	unsigned int max, dummy;
 	char cpu_info[65];
+	u64 msr;
 
 	early_init_transmeta(c);
 
