@@ -2840,6 +2840,54 @@ static inline void kiocb_end_write(struct kiocb *iocb)
 	sb_end_write(inode->i_sb);
 }
 
+/**
+ * kiocb_end_write_iter - drop write access after kiocb_write_iter()
+ * @iocb: the io context the write was submitted with
+ *
+ * Drop write access if @iocb still holds it and clear IOCB_WRITE. This
+ * does nothing for reads and for writes kiocb_write_iter() already
+ * finished. So the completion callback can call it for any I/O.
+ */
+static inline void kiocb_end_write_iter(struct kiocb *iocb)
+{
+	if (!(iocb->ki_flags & IOCB_WRITE))
+		return;
+	iocb->ki_flags &= ~IOCB_WRITE;
+	kiocb_end_write(iocb);
+}
+
+/**
+ * kiocb_write_iter - submit a write with write access to the superblock
+ * @iocb: the io context to submit the write with
+ * @iter: the data to write
+ *
+ * Get write access, mark @iocb with IOCB_WRITE and call ->write_iter().
+ * A write that wasn't queued drops write access before this returns. A
+ * queued write keeps it until the completion callback calls
+ * kiocb_end_write_iter(). With IOCB_NOWAIT this fails with -EAGAIN
+ * instead of waiting for a frozen filesystem.
+ *
+ * Return: On success the number of bytes written or -EIOCBQUEUED is
+ *         returned. On failure a negative error code is returned.
+ */
+static inline ssize_t kiocb_write_iter(struct kiocb *iocb,
+				       struct iov_iter *iter)
+{
+	ssize_t ret;
+
+	if (iocb->ki_flags & IOCB_NOWAIT) {
+		if (!kiocb_start_write_trylock(iocb))
+			return -EAGAIN;
+	} else {
+		kiocb_start_write(iocb);
+	}
+	iocb->ki_flags |= IOCB_WRITE;
+	ret = iocb->ki_filp->f_op->write_iter(iocb, iter);
+	if (ret != -EIOCBQUEUED)
+		kiocb_end_write_iter(iocb);
+	return ret;
+}
+
 /*
  * This is used for regular files where some users -- especially the
  * currently executed binary in a process, previously handled via
