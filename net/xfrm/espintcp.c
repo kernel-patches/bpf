@@ -48,7 +48,7 @@ static void handle_esp(struct sk_buff *skb, struct sock *sk)
 	}
 	local_bh_disable();
 #if IS_ENABLED(CONFIG_IPV6)
-	if (sk->sk_family == AF_INET6)
+	if (skb->protocol == htons(ETH_P_IPV6))
 		xfrm6_rcv_encap(skb, IPPROTO_ESP, 0, TCP_ENCAP_ESPINTCP);
 	else
 #endif
