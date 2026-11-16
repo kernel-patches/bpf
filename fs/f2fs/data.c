@@ -4804,6 +4804,16 @@ retry:
 			}
 		}
 
+		if (f2fs_has_inline_data(inode)) {
+			err = f2fs_write_inline_data(inode, folio);
+			if (!err) {
+				f2fs_folio_clear_dirty_blocks(folio, true);
+				goto retry_out;
+			}
+			folio_redirty_for_writepage(wbc, folio);
+			goto retry_out;
+		}
+
 		folio_start_writeback(folio);
 
 		/*
@@ -4992,8 +5002,7 @@ static int __f2fs_write_data_pages(struct address_space *mapping,
 	account_writeback(inode, true);
 
 	blk_start_plug(&plug);
-	if (f2fs_has_multiblock_folios(inode) &&
-	    !f2fs_has_inline_data(inode))
+	if (f2fs_has_multiblock_folios(inode))
 		ret = f2fs_write_cache_folios(mapping, wbc, io_type);
 	else
 		ret = f2fs_write_cache_pages(mapping, wbc, io_type);
@@ -5060,6 +5069,16 @@ void f2fs_write_failed(struct inode *inode, loff_t to)
 	}
 }
 
+/* Fill @folio from the inline data for a write within the inline area */
+static void prepare_inline_write_begin(struct inode *inode,
+		struct folio *folio, struct f2fs_cached_block *ientry)
+{
+	f2fs_do_read_inline_data(folio, ientry);
+	set_inode_flag(inode, FI_DATA_EXIST);
+	if (inode->i_nlink)
+		f2fs_cache_set_inline(ientry);
+}
+
 static int prepare_write_begin(struct f2fs_sb_info *sbi,
 			struct folio *folio, loff_t pos, unsigned int len,
 			block_t *blk_addr, bool *node_changed)
@@ -5113,10 +5132,7 @@ restart:
 
 	if (f2fs_has_inline_data(inode)) {
 		if (pos + len <= MAX_INLINE_DATA(inode)) {
-			f2fs_do_read_inline_data(folio, ientry);
-			set_inode_flag(inode, FI_DATA_EXIST);
-			if (inode->i_nlink)
-				f2fs_cache_set_inline(ientry);
+			prepare_inline_write_begin(inode, folio, ientry);
 			goto out;
 		}
 		err = f2fs_convert_inline_folio(&dn, folio);
@@ -5535,7 +5551,8 @@ static int f2fs_write_begin(const struct kiocb *iocb,
 	 * and #0 page. The locking rule for inline_data conversion should be:
 	 * folio_lock(folio #0) -> folio_lock(inode_page)
 	 */
-	if (index != 0 || f2fs_has_subpage_blocks(sbi)) {
+	if (index != 0 || (f2fs_has_subpage_blocks(sbi) &&
+			   pos + len > MAX_INLINE_DATA(inode))) {
 		err = f2fs_convert_inline_inode(inode);
 		if (err)
 			goto fail;
@@ -5591,6 +5608,23 @@ repeat:
 	/* Clamp the write length to the folio size. */
 	blen = min_t(unsigned int, len,
 		     folio_size(folio) - offset_in_folio(folio, pos));
+
+	if (f2fs_has_inline_data(inode) && f2fs_is_multiblock_folio(sbi, folio)) {
+		struct f2fs_lock_context lc;
+		struct f2fs_cached_block *ientry;
+
+		f2fs_map_lock(sbi, &lc, F2FS_GET_BLOCK_PRE_AIO);
+		ientry = f2fs_get_inode_cache(sbi, inode->i_ino);
+		if (IS_ERR(ientry)) {
+			f2fs_map_unlock(sbi, &lc, F2FS_GET_BLOCK_PRE_AIO);
+			err = PTR_ERR(ientry);
+			goto put_folio;
+		}
+		prepare_inline_write_begin(inode, folio, ientry);
+		f2fs_put_cache(ientry, true);
+		f2fs_map_unlock(sbi, &lc, F2FS_GET_BLOCK_PRE_AIO);
+		return 0;
+	}
 
 	/*
 	 * Flush the cached IO of this folio before touching it, especially
@@ -5700,7 +5734,8 @@ static int f2fs_write_end(const struct kiocb *iocb,
 	if (!folio_test_uptodate(folio)) {
 		if (unlikely(copied != len)) {
 			copied = 0;
-		} else if (f2fs_is_multiblock_folio(F2FS_I_SB(inode), folio)) {
+		} else if (f2fs_is_multiblock_folio(F2FS_I_SB(inode), folio) &&
+			   !f2fs_has_inline_data(inode)) {
 			f2fs_ffs_mark_subrange_uptodate(folio,
 					offset_in_folio(folio, pos), len);
 		} else {
@@ -5727,7 +5762,8 @@ static int f2fs_write_end(const struct kiocb *iocb,
 	if (!copied)
 		goto unlock_out;
 
-	if (f2fs_is_multiblock_folio(F2FS_I_SB(inode), folio))
+	if (f2fs_is_multiblock_folio(F2FS_I_SB(inode), folio) &&
+	    !f2fs_has_inline_data(inode))
 		f2fs_ffs_mark_subrange_dirty(folio, offset_in_folio(folio, pos),
 								   copied);
 	f2fs_folio_mark_dirty(folio);
