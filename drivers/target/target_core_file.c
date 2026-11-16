@@ -268,6 +268,7 @@ static void cmd_rw_aio_complete(struct kiocb *iocb, long ret)
 	struct target_core_file_cmd *cmd;
 
 	cmd = container_of(iocb, struct target_core_file_cmd, iocb);
+	kiocb_end_write_iter(iocb);
 	cmd->ret = ret;
 	cmd_rw_aio_put(cmd);
 }
@@ -311,7 +312,7 @@ fd_execute_rw_aio(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 		aio_cmd->iocb.ki_flags |= IOCB_DSYNC;
 
 	if (is_write)
-		ret = file->f_op->write_iter(&aio_cmd->iocb, &iter);
+		ret = kiocb_write_iter(&aio_cmd->iocb, &iter);
 	else
 		ret = file->f_op->read_iter(&aio_cmd->iocb, &iter);
 
