@@ -1630,13 +1630,17 @@ static inline void f2fs_clear_bit(unsigned int nr, char *addr);
  * folio->private is a wrapped pointer.
  */
 
+#define F2FS_FOLIO_STATE_MAGIC		0xF5F2FF50
+
 struct f2fs_folio_state {
+	u32			magic;
 	spinlock_t		state_lock;
-	unsigned int		read_pages_pending;
-	atomic_t		write_pages_pending;
+	unsigned int		read_blocks_pending;
+	atomic_t		write_blocks_pending;
 	unsigned long		private_flags;
-	/* state[0..nr_subpages - 1] tracks uptodate subpages.
-	 * state[nr_subpages..2 * nr_subpages - 1] tracks dirty subpages.
+	/*
+	 * state[0..nr_blocks - 1] tracks uptodate blocks.
+	 * state[nr_blocks..2 * nr_blocks - 1] tracks dirty blocks.
 	 */
 	unsigned long		state[];
 };
@@ -2337,6 +2341,12 @@ static inline bool f2fs_has_subpage_blocks(struct f2fs_sb_info *sbi)
 	return F2FS_BLKSIZE(sbi) < PAGE_SIZE;
 }
 
+static inline bool f2fs_is_multiblock_folio(struct f2fs_sb_info *sbi,
+					    const struct folio *folio)
+{
+	return folio_size(folio) > F2FS_BLKSIZE(sbi);
+}
+
 static inline pgoff_t f2fs_folio_lblk(struct f2fs_sb_info *sbi,
 				      const struct folio *folio)
 {
@@ -2483,18 +2493,9 @@ static inline bool f2fs_folio_has_ffs(const struct folio *folio)
 {
 	unsigned long private = (unsigned long)folio->private;
 
-	if (!folio_test_large(folio) || !private)
+	if (!private || (private & BIT(F2FS_FOLIO_PRIVATE_NOT_POINTER)))
 		return false;
-
-	/*
-	 * A large folio should always carry f2fs_folio_state rather than
-	 * non-pointer private flags at its folio->private.
-	 */
-	if (unlikely(test_bit(F2FS_FOLIO_PRIVATE_NOT_POINTER, &private))) {
-		f2fs_bug_on(F2FS_F_SB(folio), 1);
-		return false;
-	}
-	return true;
+	return *((u32 *)private) == F2FS_FOLIO_STATE_MAGIC;
 }
 
 static inline void clear_sbi_flag(struct f2fs_sb_info *sbi, unsigned int type)
@@ -4528,6 +4529,10 @@ void f2fs_ffs_mark_subrange_dirty(struct folio *folio, size_t offset, size_t len
 bool f2fs_ffs_has_dirty_subpage(struct folio *folio);
 bool f2fs_ffs_clear_subrange_dirty_and_test(struct folio *folio, size_t offset,
 					    size_t len);
+void f2fs_ffs_clear_subrange_uptodate(struct folio *folio, size_t offset,
+				      size_t len);
+bool f2fs_ffs_dirty_blk_range(struct folio *folio, unsigned int from,
+			      unsigned int to, unsigned int *start, unsigned int *count);
 void f2fs_write_failed(struct inode *inode, loff_t to);
 void f2fs_invalidate_folio(struct folio *folio, size_t offset, size_t length);
 bool f2fs_release_folio(struct folio *folio, gfp_t wait);

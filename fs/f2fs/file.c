@@ -238,12 +238,6 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 		goto out_sem;
 	}
 
-	if (folio_test_large(folio) && !f2fs_ffs_find_or_alloc(folio)) {
-		folio_unlock(folio);
-		err = -ENOMEM;
-		goto out_sem;
-	}
-
 	nr = DIV_ROUND_UP(dirty_len, PAGE_SIZE);
 
 	for (i = 0; i < nr; i++) {
@@ -1628,12 +1622,6 @@ static int __clone_blkaddrs(struct inode *src_inode, struct inode *dst_inode,
 			memcpy_folio(fdst, dst_off, fsrc, src_off,
 				    F2FS_BLKSIZE(sbi));
 			if (folio_test_large(fdst)) {
-				if (!f2fs_ffs_find_or_alloc(fdst)) {
-					f2fs_folio_put(fdst, true);
-					if (!same_folio)
-						f2fs_folio_put(fsrc, true);
-					return -ENOMEM;
-				}
 				f2fs_ffs_mark_subrange_uptodate(fdst,
 						dst_off, F2FS_BLKSIZE(sbi));
 				f2fs_ffs_mark_subrange_dirty(fdst, dst_off,
@@ -4975,16 +4963,12 @@ static int redirty_blocks(struct inode *inode, pgoff_t page_idx, int len)
 			 * bitmap as well, otherwise f2fs_write_cache_folios()
 			 * finds no dirty range and skips the whole folio.
 			 */
-			if (!f2fs_ffs_find_or_alloc(folio)) {
-				ret = -ENOMEM;
-				goto next;
-			}
+			f2fs_ffs_find_or_alloc(folio);
 			f2fs_ffs_mark_subrange_dirty(folio, off, dlen);
 		}
 
 		folio_mark_dirty(folio);
 		folio_set_f2fs_gcing(folio);
-next:
 		redirty_idx = folio_next_index(folio);
 		folio_unlock(folio);
 		folio_put_refs(folio, 2);

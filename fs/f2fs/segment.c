@@ -4176,7 +4176,7 @@ static void do_write_block(struct f2fs_summary *sum, struct f2fs_io_info *fio)
 				fio->old_blkaddr, fio->new_blkaddr, err);
 			/*
 			 * For a large folio, the caller rolls back
-			 * write_pages_pending and ends writeback when the last
+			 * write_blocks_pending and ends writeback when the last
 			 * pending write is gone.
 			 */
 			if (!f2fs_folio_has_ffs(folio))
