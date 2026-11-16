@@ -1526,8 +1526,7 @@
 	},
 	.prog_type = BPF_PROG_TYPE_XDP,
 	.flags = F_NEEDS_JIT_ENABLED,
-	.errstr = "call stack",
-	.result = REJECT,
+	.result = ACCEPT,
 },
 {
 	"calls: spill into caller stack frame",

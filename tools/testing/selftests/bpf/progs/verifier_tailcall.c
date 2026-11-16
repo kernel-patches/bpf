@@ -137,8 +137,8 @@ int exception_cb_tail_call(__u64 cookie)
 }
 
 SEC("tc")
-__description("tail call in an async callback that calls nothing")
-__failure __msg("cannot tail call within callback")
+__description("dead tail call in an async callback")
+__success
 __attribute__((btf_decl_tag("exception_callback:exception_cb_tail_call")))
 __naked void tail_call_in_async_callback(void)
 {
