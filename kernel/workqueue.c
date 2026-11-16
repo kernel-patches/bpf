@@ -6154,6 +6154,7 @@ static struct workqueue_struct *__alloc_workqueue(const char *fmt,
 						  unsigned int flags,
 						  int max_active, va_list args)
 {
+	bool wq_dropped_percpu = false;
 	struct workqueue_struct *wq;
 	size_t wq_size;
 	int name_len;
@@ -6163,6 +6164,23 @@ static struct workqueue_struct *__alloc_workqueue(const char *fmt,
 			return NULL;
 		if (WARN_ON_ONCE(max_active))
 			return NULL;
+		flags |= WQ_PERCPU;
+	}
+
+	/*
+	 * Default to WQ_UNBOUND if neither WQ_PERCPU nor WQ_UNBOUND is set,
+	 * and drop WQ_PERCPU if both are. This must happen before the WQ_RT
+	 * check, which rejects workqueues without WQ_UNBOUND, and before
+	 * computing wq_size, which depends on WQ_UNBOUND. It must also
+	 * happen before the WQ_POWER_EFFICIENT override, which would
+	 * otherwise drop WQ_PERCPU when wq_power_efficient is enabled and
+	 * hide a caller passing both flags from the warning below.
+	 */
+	if (!(flags & (WQ_UNBOUND | WQ_PERCPU))) {
+		flags |= WQ_UNBOUND;
+	} else if (unlikely((flags & WQ_PERCPU) && (flags & WQ_UNBOUND))) {
+		flags &= ~WQ_PERCPU;
+		wq_dropped_percpu = true;
 	}
 
 	if (WARN_ON_ONCE((flags & WQ_RT) &&
@@ -6193,22 +6211,9 @@ static struct workqueue_struct *__alloc_workqueue(const char *fmt,
 		pr_warn_once("workqueue: name exceeds WQ_NAME_LEN. Truncating to: %s\n",
 			     wq->name);
 
-	/*
-	 * One among WQ_PERCPU and WQ_UNBOUND must be set, but not both.
-	 * - If neither is set, default to WQ_PERCPU
-	 * - If both are set, default to WQ_UNBOUND
-	 *
-	 * This code can be removed after workqueue are unbound by default
-	 */
-	if (unlikely(!(flags & (WQ_UNBOUND | WQ_PERCPU)))) {
-		WARN_ONCE(1, "workqueue: %s is using neither WQ_PERCPU or WQ_UNBOUND. "
-			  "Setting WQ_PERCPU.\n", wq->name);
-		flags |= WQ_PERCPU;
-	} else if (unlikely((flags & WQ_PERCPU) && (flags & WQ_UNBOUND))) {
-		WARN_ONCE(1, "workqueue: %s uses both WQ_PERCPU and WQ_UNBOUND. "
-			  "Dropped WQ_PERCPU, keeping WQ_UNBOUND.\n", wq->name);
-		flags &= ~WQ_PERCPU;
-	}
+	WARN_ONCE(wq_dropped_percpu,
+		  "workqueue: %s uses both WQ_PERCPU and WQ_UNBOUND. "
+		  "Dropped WQ_PERCPU, keeping WQ_UNBOUND.\n", wq->name);
 
 	if (flags & WQ_BH) {
 		/*

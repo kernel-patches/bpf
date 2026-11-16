@@ -378,11 +378,11 @@ enum wq_flags {
 	WQ_SYSFS		= 1 << 6, /* visible in sysfs, see workqueue_sysfs_register() */
 
 	/*
-	 * Per-cpu workqueues are generally preferred because they tend to
-	 * show better performance thanks to cache locality.  Per-cpu
-	 * workqueues exclude the scheduler from choosing the CPU to
-	 * execute the worker threads, which has an unfortunate side effect
-	 * of increasing power consumption.
+	 * Workqueues are unbound by default. Per-cpu (WQ_PERCPU) workqueues
+	 * exclude the scheduler from choosing the CPU to execute the worker
+	 * threads, which has an unfortunate side effect of increasing power
+	 * consumption. WQ_POWER_EFFICIENT workqueue are per-CPU only if explicitly
+	 * marked WQ_PERCPU.
 	 *
 	 * The scheduler considers a CPU idle if it doesn't have any task
 	 * to execute and tries to keep idle cores idle to conserve power;
@@ -392,19 +392,16 @@ enum wq_flags {
 	 * turn may lead to more scheduling choices which are sub-optimal
 	 * in terms of power consumption.
 	 *
-	 * Workqueues marked with WQ_POWER_EFFICIENT are per-cpu by default
-	 * but become unbound if workqueue.power_efficient kernel param is
-	 * specified.  Per-cpu workqueues which are identified to
-	 * contribute significantly to power-consumption are identified and
-	 * marked with this flag and enabling the power_efficient mode
-	 * leads to noticeable power saving at the cost of small
-	 * performance disadvantage.
+	 * Per-cpu workqueues observed to contribute significantly to power
+	 * consumption are marked with WQ_POWER_EFFICIENT. They become
+	 * unbound if the workqueue.power_efficient kernel param is
+	 * specified.
 	 *
 	 * http://thread.gmane.org/gmane.linux.kernel/1480396
 	 */
 	WQ_POWER_EFFICIENT	= 1 << 7,
 	WQ_PERCPU		= 1 << 8, /* bound to a specific cpu */
-	WQ_RT			= 1 << 9, /* real-time priority, valid only with WQ_UNBOUND */
+	WQ_RT			= 1 << 9, /* real-time priority, invalid with WQ_PERCPU */
 
 	__WQ_DESTROYING		= 1 << 15, /* internal: workqueue is destroying */
 	__WQ_DRAINING		= 1 << 16, /* internal: workqueue is draining */
