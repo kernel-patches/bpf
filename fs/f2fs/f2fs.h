@@ -1372,11 +1372,11 @@ struct f2fs_io_info {
 };
 
 #define F2FS_FIO_LBLK(fio)						\
-	(((fio)->folio)->index + (fio)->folio_offset)
+	(f2fs_folio_lblk((fio)->sbi, (fio)->folio) + (fio)->folio_offset)
 #define F2FS_FIO_BLKCNT(fio)						\
 	((fio)->folio_blkcnt)
 #define F2FS_FIO_BIO_OFFSET(fio)					\
-	((fio)->folio_offset << PAGE_SHIFT)
+	F2FS_BLK_TO_BYTES((fio)->sbi, (fio)->folio_offset)
 #define F2FS_FIO_BIO_SIZE(fio)					\
 	F2FS_BLK_TO_BYTES((fio)->sbi, F2FS_FIO_BLKCNT(fio))
 
@@ -2326,19 +2326,59 @@ static inline void make_dentry_ptr_block(struct inode *inode,
 					SIZE_OF_DIR_ENTRY * entries;
 }
 
+static inline unsigned int f2fs_blocks_per_folio(struct f2fs_sb_info *sbi,
+						 const struct folio *folio)
+{
+	return F2FS_BYTES_TO_BLK(sbi, folio_size(folio));
+}
+
+static inline bool f2fs_has_subpage_blocks(struct f2fs_sb_info *sbi)
+{
+	return F2FS_BLKSIZE(sbi) < PAGE_SIZE;
+}
+
+static inline pgoff_t f2fs_folio_lblk(struct f2fs_sb_info *sbi,
+				      const struct folio *folio)
+{
+	return F2FS_BYTES_TO_BLK(sbi, folio_pos(folio));
+}
+
+static inline pgoff_t f2fs_lblk_to_folio_index(struct f2fs_sb_info *sbi,
+					       pgoff_t index)
+{
+	return F2FS_BLK_TO_BYTES(sbi, index) >> PAGE_SHIFT;
+}
+
+static inline pgoff_t f2fs_folio_blk_offset(struct f2fs_sb_info *sbi,
+					     const struct folio *folio,
+					     pgoff_t index)
+{
+	return index - f2fs_folio_lblk(sbi, folio);
+}
+
+static inline size_t f2fs_folio_byte_offset(struct f2fs_sb_info *sbi,
+					     const struct folio *folio,
+					     pgoff_t index)
+{
+	return F2FS_BLK_TO_BYTES(sbi, f2fs_folio_blk_offset(sbi, folio, index));
+}
+
+static inline void *f2fs_folio_lblk_address(struct f2fs_sb_info *sbi,
+					    struct folio *folio, pgoff_t index)
+{
+	return folio_address(folio) + f2fs_folio_byte_offset(sbi, folio, index);
+}
+
 static inline struct f2fs_super_block *F2FS_RAW_SUPER(struct f2fs_sb_info *sbi)
 {
 	return (struct f2fs_super_block *)(sbi->raw_super);
 }
 
-static inline struct f2fs_super_block *F2FS_SUPER_BLOCK(struct folio *folio,
-								pgoff_t index)
+static inline struct f2fs_super_block *
+F2FS_SUPER_BLOCK(struct f2fs_sb_info *sbi, struct folio *folio, pgoff_t index)
 {
-	pgoff_t idx_in_folio = index % folio_nr_pages(folio);
-
 	return (struct f2fs_super_block *)
-		(page_address(folio_page(folio, idx_in_folio)) +
-						F2FS_SUPER_OFFSET);
+		(f2fs_folio_lblk_address(sbi, folio, index) + F2FS_SUPER_OFFSET);
 }
 
 static inline struct f2fs_checkpoint *F2FS_CKPT(struct f2fs_sb_info *sbi)
@@ -3905,11 +3945,10 @@ static inline bool f2fs_is_time_consistent(struct inode *inode)
 
 static inline bool f2fs_skip_inode_update(struct inode *inode, int dsync)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	bool ret;
 
 	if (dsync) {
-		struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-
 		spin_lock(&sbi->inode_lock[DIRTY_META]);
 		ret = list_empty(&F2FS_I(inode)->gdirty_list);
 		spin_unlock(&sbi->inode_lock[DIRTY_META]);
@@ -3917,7 +3956,7 @@ static inline bool f2fs_skip_inode_update(struct inode *inode, int dsync)
 	}
 	if (!is_inode_flag_set(inode, FI_AUTO_RECOVER) ||
 			file_keep_isize(inode) ||
-			i_size_read(inode) & ~PAGE_MASK)
+			i_size_read(inode) & F2FS_BLKSIZE_MASK(sbi))
 		return false;
 
 	if (!f2fs_is_time_consistent(inode))

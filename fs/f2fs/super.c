@@ -1613,8 +1613,8 @@ static int f2fs_check_opt_consistency(struct fs_context *fc,
 		min_size = MIN_INLINE_XATTR_SIZE;
 		max_size = MAX_INLINE_XATTR_SIZE(F2FS_BLKSIZE(sbi));
 
-		if (F2FS_OPTION(sbi).inline_xattr_size < min_size ||
-				F2FS_OPTION(sbi).inline_xattr_size > max_size) {
+		if (F2FS_CTX_INFO(ctx).inline_xattr_size < min_size ||
+				F2FS_CTX_INFO(ctx).inline_xattr_size > max_size) {
 			f2fs_err(sbi, "inline xattr size is out of range: %d ~ %d",
 				 min_size, max_size);
 			return -EINVAL;
@@ -4000,7 +4000,7 @@ static int __f2fs_commit_super(struct f2fs_sb_info *sbi, struct folio *folio,
 	folio_lock(folio);
 	folio_wait_writeback(folio);
 	if (update)
-		memcpy(F2FS_SUPER_BLOCK(folio, index), F2FS_RAW_SUPER(sbi),
+		memcpy(F2FS_SUPER_BLOCK(sbi, folio, index), F2FS_RAW_SUPER(sbi),
 					sizeof(struct f2fs_super_block));
 	folio_mark_dirty(folio);
 	folio_clear_dirty_for_io(folio);
@@ -4010,9 +4010,10 @@ static int __f2fs_commit_super(struct f2fs_sb_info *sbi, struct folio *folio,
 	bio = bio_alloc(sbi->sb->s_bdev, 1, opf, GFP_NOFS);
 
 	/* it doesn't need to set crypto context for superblock update */
-	bio->bi_iter.bi_sector = SECTOR_FROM_BLOCK(sbi, folio->index);
+	bio->bi_iter.bi_sector = SECTOR_FROM_BLOCK(sbi, index);
 
-	if (!bio_add_folio(bio, folio, folio_size(folio), 0))
+	if (!bio_add_folio(bio, folio, F2FS_BLKSIZE(sbi),
+			   f2fs_folio_byte_offset(sbi, folio, index)))
 		f2fs_bug_on(sbi, 1);
 
 	ret = submit_bio_wait(bio);
@@ -4025,7 +4026,7 @@ static int __f2fs_commit_super(struct f2fs_sb_info *sbi, struct folio *folio,
 static inline bool sanity_check_area_boundary(struct f2fs_sb_info *sbi,
 					struct folio *folio, pgoff_t index)
 {
-	struct f2fs_super_block *raw_super = F2FS_SUPER_BLOCK(folio, index);
+	struct f2fs_super_block *raw_super = F2FS_SUPER_BLOCK(sbi, folio, index);
 	struct super_block *sb = sbi->sb;
 	u32 segment0_blkaddr = le32_to_cpu(raw_super->segment0_blkaddr);
 	u32 cp_blkaddr = le32_to_cpu(raw_super->cp_blkaddr);
@@ -4107,11 +4108,13 @@ static inline bool sanity_check_area_boundary(struct f2fs_sb_info *sbi,
 			res = "internally";
 		} else {
 			/*
-			 * __f2fs_commit_super() will access log_blocksize
-			 * in SECTOR_FROM_BLOCK(), init it in advance.
+			 * __f2fs_commit_super() will access log_blocksize and
+			 * blocksize to locate the superblock, init them in
+			 * advance.
 			 */
 			sbi->log_blocksize =
 				le32_to_cpu(raw_super->log_blocksize);
+			sbi->blocksize = BIT(sbi->log_blocksize);
 			err = __f2fs_commit_super(sbi, folio, index, false);
 			res = err ? "failed" : "done";
 		}
@@ -4129,7 +4132,7 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 {
 	block_t segment_count, segs_per_sec, secs_per_zone, segment_count_main;
 	block_t total_sections, blocks_per_seg;
-	struct f2fs_super_block *raw_super = F2FS_SUPER_BLOCK(folio, index);
+	struct f2fs_super_block *raw_super = F2FS_SUPER_BLOCK(sbi, folio, index);
 	size_t crc_offset = 0;
 	__u32 crc = 0;
 
@@ -4155,12 +4158,21 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 		}
 	}
 
-	/* only support block_size equals to PAGE_SIZE */
-	if (le32_to_cpu(raw_super->log_blocksize) != PAGE_SHIFT) {
-		f2fs_info(sbi, "Invalid log_blocksize (%u), supports only %u",
+	/* Keep one or more filesystem blocks in each base-page folio. */
+	if (le32_to_cpu(raw_super->log_blocksize) <
+			F2FS_MIN_LOG_BLOCKSIZE ||
+			le32_to_cpu(raw_super->log_blocksize) > F2FS_MAX_LOG_BLOCKSIZE) {
+		f2fs_info(sbi, "Invalid log_blocksize (%u), supports %u..%u",
 			  le32_to_cpu(raw_super->log_blocksize),
-			  PAGE_SHIFT);
+			  F2FS_MIN_LOG_BLOCKSIZE, F2FS_MAX_LOG_BLOCKSIZE);
 		return -EFSCORRUPTED;
+	}
+
+	/* Subpage block size is enabled after all paths support it. */
+	if (le32_to_cpu(raw_super->log_blocksize) != PAGE_SHIFT) {
+		f2fs_info(sbi, "Subpage block size (%u) is not supported yet",
+			  le32_to_cpu(raw_super->log_blocksize));
+		return -EOPNOTSUPP;
 	}
 
 	/* check log blocks per segment */
@@ -4172,7 +4184,7 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 
 	/* Currently, support 512/1024/2048/4096/16K bytes sector size */
 	if (le32_to_cpu(raw_super->log_sectorsize) >
-				F2FS_MAX_LOG_SECTOR_SIZE ||
+				le32_to_cpu(raw_super->log_blocksize) ||
 		le32_to_cpu(raw_super->log_sectorsize) <
 				F2FS_MIN_LOG_SECTOR_SIZE) {
 		f2fs_info(sbi, "Invalid log sectorsize (%u)",
@@ -4181,7 +4193,7 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 	}
 	if (le32_to_cpu(raw_super->log_sectors_per_block) +
 		le32_to_cpu(raw_super->log_sectorsize) !=
-			F2FS_MAX_LOG_SECTOR_SIZE) {
+			le32_to_cpu(raw_super->log_blocksize)) {
 		f2fs_info(sbi, "Invalid log sectors per block(%u) log sectorsize(%u)",
 			  le32_to_cpu(raw_super->log_sectors_per_block),
 			  le32_to_cpu(raw_super->log_sectorsize));
@@ -4697,6 +4709,61 @@ static int init_blkz_info(struct f2fs_sb_info *sbi, int devi)
 }
 #endif
 
+static int check_super_block(struct f2fs_sb_info *sbi,
+			     struct f2fs_super_block *super,
+			     int block, int *valid_super_block,
+			     struct f2fs_super_block **raw_super)
+{
+	struct folio *folio;
+	int err;
+
+	folio = read_mapping_folio(sbi->sb->s_bdev->bd_mapping,
+				   f2fs_lblk_to_folio_index(sbi, block), NULL);
+	if (IS_ERR(folio)) {
+		f2fs_err(sbi, "Unable to read %dth superblock", block + 1);
+		return PTR_ERR(folio);
+	}
+
+	if (block) {
+		struct f2fs_super_block *raw =
+				F2FS_SUPER_BLOCK(sbi, folio, block);
+		bool magic_ok = le32_to_cpu(raw->magic) == F2FS_SUPER_MAGIC;
+		u32 log_bs = le32_to_cpu(raw->log_blocksize);
+
+		/* Skip unmatched magic during probing to avoid noisy logs */
+		if (!*raw_super && !magic_ok) {
+			err = -ENOENT;
+			goto out_put;
+		}
+
+		/*
+		 * The 2nd superblock was located with sbi->log_blocksize.
+		 * Check it before sanity_check_raw_super(), which may write
+		 * the superblock back with its own log_blocksize. Leave an
+		 * unmatched magic for sanity_check_raw_super() to report.
+		 */
+		if (magic_ok && log_bs != sbi->log_blocksize) {
+			f2fs_info(sbi, "Mismatched log_blocksize (%u) in 2nd superblock, expected %u",
+				  log_bs, sbi->log_blocksize);
+			err = -EFSCORRUPTED;
+			goto out_put;
+		}
+	}
+
+	err = sanity_check_raw_super(sbi, folio, block);
+	if (!err && !*raw_super) {
+		memcpy(super, F2FS_SUPER_BLOCK(sbi, folio, block),
+		       sizeof(*super));
+		*valid_super_block = block;
+		*raw_super = super;
+		sbi->log_blocksize = le32_to_cpu(super->log_blocksize);
+		sbi->blocksize = BIT(sbi->log_blocksize);
+	}
+out_put:
+	folio_put(folio);
+	return err;
+}
+
 /*
  * Read f2fs raw super block.
  * Because we have two copies of super block, so read both of them
@@ -4707,52 +4774,54 @@ static int read_raw_super_block(struct f2fs_sb_info *sbi,
 			struct f2fs_super_block **raw_super,
 			int *valid_super_block, int *recovery)
 {
-	struct super_block *sb = sbi->sb;
-	int block;
-	struct folio *folio;
 	struct f2fs_super_block *super;
-	int err = 0;
+	int log_bs, err, ret, err2 = -ENOENT;
 
 	super = kzalloc_obj(struct f2fs_super_block);
 	if (!super)
 		return -ENOMEM;
 
-	for (block = 0; block < 2; block++) {
-		folio = read_mapping_folio(sb->s_bdev->bd_mapping, block, NULL);
-		if (IS_ERR(folio)) {
-			f2fs_err(sbi, "Unable to read %dth superblock",
-				 block + 1);
-			err = PTR_ERR(folio);
-			*recovery = 1;
-			continue;
-		}
-
-		/* sanity checking of raw super */
-		err = sanity_check_raw_super(sbi, folio, block);
-		if (err) {
-			f2fs_err(sbi, "Can't find valid F2FS filesystem in %dth superblock",
-				 block + 1);
-			folio_put(folio);
-			*recovery = 1;
-			continue;
-		}
-
-		if (!*raw_super) {
-			memcpy(super, F2FS_SUPER_BLOCK(folio, block),
-							sizeof(*super));
-			*valid_super_block = block;
-			*raw_super = super;
-		}
-		folio_put(folio);
+	/* 1. Read 1st superblock (block 0) */
+	err = check_super_block(sbi, super, 0, valid_super_block, raw_super);
+	if (err) {
+		f2fs_err(sbi, "Can't find valid F2FS filesystem in 1st superblock");
+		*recovery = 1;
 	}
 
-	/* No valid superblock */
-	if (!*raw_super)
-		kfree(super);
-	else
-		err = 0;
+	/* 2. Read 2nd superblock (block 1) */
+	if (*raw_super) {
+		if (check_super_block(sbi, super, 1, valid_super_block, raw_super)) {
+			f2fs_err(sbi, "Can't find valid F2FS filesystem in 2nd superblock");
+			*recovery = 1;
+		}
+	} else {
+		for (log_bs = F2FS_MIN_LOG_BLOCKSIZE;
+		     log_bs <= F2FS_MAX_LOG_BLOCKSIZE; log_bs++) {
+			sbi->log_blocksize = log_bs;
+			sbi->blocksize = BIT(log_bs);
+			ret = check_super_block(sbi, super, 1, valid_super_block,
+						raw_super);
+			if (!ret)
+				break;
+			/* A 2nd superblock was found: do not probe larger blocks. */
+			if (ret != -ENOENT) {
+				err2 = ret;
+				break;
+			}
+		}
+		if (!*raw_super)
+			f2fs_err(sbi, "Can't find valid F2FS filesystem in 2nd superblock");
+	}
 
-	return err;
+	/*
+	 * No valid superblock: return the error of the 2nd superblock if one
+	 * was found, or the error of the 1st superblock otherwise.
+	 */
+	if (!*raw_super) {
+		kfree(super);
+		return err2 != -ENOENT ? err2 : err;
+	}
+	return 0;
 }
 
 int f2fs_commit_super(struct f2fs_sb_info *sbi, bool recover)
@@ -4777,7 +4846,8 @@ int f2fs_commit_super(struct f2fs_sb_info *sbi, bool recover)
 
 	/* write back-up superblock first */
 	index = sbi->valid_super_block ? 0 : 1;
-	folio = read_mapping_folio(sbi->sb->s_bdev->bd_mapping, index, NULL);
+	folio = read_mapping_folio(sbi->sb->s_bdev->bd_mapping,
+				f2fs_lblk_to_folio_index(sbi, index), NULL);
 	if (IS_ERR(folio))
 		return PTR_ERR(folio);
 	err = __f2fs_commit_super(sbi, folio, index, true);
@@ -4789,7 +4859,8 @@ int f2fs_commit_super(struct f2fs_sb_info *sbi, bool recover)
 
 	/* write current valid superblock */
 	index = sbi->valid_super_block;
-	folio = read_mapping_folio(sbi->sb->s_bdev->bd_mapping, index, NULL);
+	folio = read_mapping_folio(sbi->sb->s_bdev->bd_mapping,
+				f2fs_lblk_to_folio_index(sbi, index), NULL);
 	if (IS_ERR(folio))
 		return PTR_ERR(folio);
 	err = __f2fs_commit_super(sbi, folio, index, true);
@@ -5262,6 +5333,13 @@ try_onemore:
 		spin_lock_init(&sbi->inode_lock[i]);
 	}
 	mutex_init(&sbi->flush_lock);
+
+	/*
+	 * The 1st superblock is at F2FS_SUPER_OFFSET of block 0 for every
+	 * block size, so locate it with the minimum supported block size.
+	 */
+	sbi->log_blocksize = F2FS_MIN_LOG_BLOCKSIZE;
+	sbi->blocksize = F2FS_MIN_BLKSIZE;
 
 	err = read_raw_super_block(sbi, &raw_super, &valid_super_block,
 								&recovery);

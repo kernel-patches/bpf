@@ -2207,6 +2207,15 @@ static long f2fs_fallocate(struct file *file, int mode,
 		goto out;
 	}
 
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode))) {
+		if ((mode & (FALLOC_FL_COLLAPSE_RANGE | FALLOC_FL_INSERT_RANGE)) ||
+		    f2fs_is_pinned_file(inode) || f2fs_is_atomic_file(inode) ||
+		    f2fs_compressed_file(inode)) {
+			ret = -EOPNOTSUPP;
+			goto out;
+		}
+	}
+
 	ret = file_modified(file);
 	if (ret)
 		goto out;
@@ -2454,6 +2463,9 @@ static int f2fs_ioc_start_atomic_write(struct file *filp, bool truncate)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	loff_t isize;
 	int ret;
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
 
 	if (!(filp->f_mode & FMODE_WRITE))
 		return -EBADF;
@@ -3262,6 +3274,9 @@ static int f2fs_ioc_defragment(struct file *filp, unsigned long arg)
 	struct f2fs_defragment range;
 	int err;
 
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
+
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -3483,6 +3498,9 @@ static int __f2fs_ioc_move_range(struct file *filp,
 static int f2fs_ioc_move_range(struct file *filp, unsigned long arg)
 {
 	struct f2fs_move_range range;
+
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(file_inode(filp))))
+		return -EOPNOTSUPP;
 
 	if (copy_from_user(&range, (struct f2fs_move_range __user *)arg,
 							sizeof(range)))
@@ -3733,6 +3751,9 @@ static int f2fs_ioc_set_pin_file(struct file *filp, unsigned long arg)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	__u32 pin;
 	int ret = 0;
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
 
 	if (get_user(pin, (__u32 __user *)arg))
 		return -EFAULT;
@@ -4114,6 +4135,9 @@ static int f2fs_ioc_resize_fs(struct file *filp, unsigned long arg)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(file_inode(filp));
 	__u64 block_count;
 
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
+
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -4130,6 +4154,9 @@ static int f2fs_ioc_resize_fs(struct file *filp, unsigned long arg)
 static int f2fs_ioc_enable_verity(struct file *filp, unsigned long arg)
 {
 	struct inode *inode = file_inode(filp);
+
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)))
+		return -EOPNOTSUPP;
 
 	f2fs_update_time(F2FS_I_SB(inode), REQ_TIME);
 
@@ -4310,6 +4337,9 @@ static int f2fs_release_compress_blocks(struct file *filp, unsigned long arg)
 	unsigned int released_blocks = 0;
 	int ret;
 	int writecount;
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_compression(sbi))
 		return -EOPNOTSUPP;
@@ -4505,6 +4535,9 @@ static int f2fs_reserve_compress_blocks(struct file *filp, unsigned long arg)
 	pgoff_t page_idx = 0, last_idx;
 	unsigned int reserved_blocks = 0;
 	int ret;
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_compression(sbi))
 		return -EOPNOTSUPP;
@@ -4827,6 +4860,9 @@ static int f2fs_ioc_set_compress_option(struct file *filp, unsigned long arg)
 	struct f2fs_comp_option option;
 	int ret = 0;
 
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
+
 	if (!f2fs_sb_has_compression(sbi))
 		return -EOPNOTSUPP;
 
@@ -4965,6 +5001,9 @@ static int f2fs_ioc_decompress_file(struct file *filp)
 	pgoff_t page_idx = 0, last_idx, cluster_idx;
 	int ret;
 
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
+
 	if (!f2fs_sb_has_compression(sbi) ||
 			F2FS_OPTION(sbi).compress_mode != COMPR_MODE_USER)
 		return -EOPNOTSUPP;
@@ -5045,6 +5084,9 @@ static int f2fs_ioc_compress_file(struct file *filp)
 	struct f2fs_inode_info *fi = F2FS_I(inode);
 	pgoff_t page_idx = 0, last_idx, cluster_idx;
 	int ret;
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_compression(sbi) ||
 			F2FS_OPTION(sbi).compress_mode != COMPR_MODE_USER)
