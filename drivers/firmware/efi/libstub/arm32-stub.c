@@ -3,6 +3,7 @@
  * Copyright (C) 2013 Linaro Ltd;  <roy.franz@linaro.org>
  */
 #include <linux/efi.h>
+#include <linux/sysfb.h>
 #include <asm/efi.h>
 
 #include "efistub.h"
@@ -74,6 +75,46 @@ void efi_handle_post_ebs_state(void)
 {
 	get_cpu_state(&efi_entry_state->cpsr_after_ebs,
 		      &efi_entry_state->sctlr_after_ebs);
+}
+
+static efi_guid_t primary_display_guid = LINUX_EFI_PRIMARY_DISPLAY_TABLE_GUID;
+
+struct sysfb_display_info *
+alloc_primary_display(const struct efi_image_info *image_info)
+{
+	struct sysfb_display_info *dpy;
+	efi_status_t status;
+
+	/*
+	 * Unlike on other architectures, where we can directly fill out the
+	 * sysfb_primary_display structure in the loaded kernel image, we need
+	 * to allocate a buffer to hold its contents while we hand over to the
+	 * kernel proper from the decompressor.
+	 */
+	status = efi_bs_call(allocate_pool, EFI_ACPI_RECLAIM_MEMORY,
+			     sizeof(*dpy), (void **)&dpy);
+
+	if (status != EFI_SUCCESS)
+		return NULL;
+
+	memset(dpy, 0, sizeof(*dpy));
+
+	status = efi_bs_call(install_configuration_table,
+			     &primary_display_guid, dpy);
+	if (status == EFI_SUCCESS)
+		return dpy;
+
+	efi_bs_call(free_pool, dpy);
+	return NULL;
+}
+
+void free_primary_display(struct sysfb_display_info *dpy)
+{
+       if (!dpy)
+               return;
+
+       efi_bs_call(install_configuration_table, &primary_display_guid, NULL);
+       efi_bs_call(free_pool, dpy);
 }
 
 /* last unaligned u32 in the image carries the uncompressed size */

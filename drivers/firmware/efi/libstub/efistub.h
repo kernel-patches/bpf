@@ -1224,7 +1224,6 @@ void efi_retrieve_eventlog(void);
 struct sysfb_display_info *
 alloc_primary_display(const struct efi_image_info *image_info);
 
-struct sysfb_display_info *__alloc_primary_display(void);
 void free_primary_display(struct sysfb_display_info *dpy);
 
 void efi_cache_sync_image(unsigned long image_base,

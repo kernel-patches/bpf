@@ -7,6 +7,7 @@
 #include <linux/memblock.h>
 #include <linux/screen_info.h>
 #include <linux/sizes.h>
+#include <linux/sysfb.h>
 
 #include <asm/efi.h>
 #include <asm/mach/map.h>
@@ -91,12 +92,35 @@ int __init efi_create_mapping(struct mm_struct *mm, efi_memory_desc_t *md)
 	return 0;
 }
 
+static unsigned long __initdata primary_display_table = EFI_INVALID_TABLE_ADDR;
 static unsigned long __initdata cpu_state_table = EFI_INVALID_TABLE_ADDR;
 
 const efi_config_table_type_t efi_arch_tables[] __initconst = {
+	{LINUX_EFI_PRIMARY_DISPLAY_TABLE_GUID, &primary_display_table},
 	{LINUX_EFI_ARM_CPU_STATE_TABLE_GUID, &cpu_state_table},
 	{}
 };
+
+static void __init load_primary_display_table(void)
+{
+	struct sysfb_display_info *dpy;
+
+	if (primary_display_table == EFI_INVALID_TABLE_ADDR)
+		return;
+
+	dpy = early_memremap(primary_display_table, sizeof(*dpy));
+	if (!dpy) {
+		pr_err("Could not map primary_display config table\n");
+		return;
+	}
+	sysfb_primary_display = *dpy;
+	memset(dpy, 0, sizeof(*dpy));
+	early_memunmap(dpy, sizeof(*dpy));
+
+	if (memblock_is_map_memory(sysfb_primary_display.screen.lfb_base))
+		memblock_mark_nomap(sysfb_primary_display.screen.lfb_base,
+				    sysfb_primary_display.screen.lfb_size);
+}
 
 static void __init load_cpu_state_table(void)
 {
@@ -135,6 +159,9 @@ static void __init load_cpu_state_table(void)
 void __init arm_efi_init(void)
 {
 	efi_init();
+
+	if (IS_ENABLED(CONFIG_SYSFB) || IS_ENABLED(CONFIG_FIRMWARE_EDID))
+		load_primary_display_table();
 
 	/* ARM does not permit early mappings to persist across paging_init() */
 	efi_memmap_unmap();

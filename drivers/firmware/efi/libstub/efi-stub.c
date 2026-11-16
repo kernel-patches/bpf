@@ -48,6 +48,20 @@
 static u64 virtmap_base = EFI_RT_VIRTUAL_BASE;
 static bool flat_va_mapping = (EFI_RT_VIRTUAL_OFFSET != 0);
 
+/*
+ * By default, populate the core kernel's copy of sysfb_primary_display
+ * directly. This works for both the EFI stub that is incorporated into the
+ * core kernel and for the zboot decompressor, as both have access to the
+ * location of the variable inside the loaded kernel image via image_info.
+ *
+ * ARM overrides these, as it uses a configuration table instead.
+ */
+struct sysfb_display_info * __weak
+alloc_primary_display(const struct efi_image_info *image_info)
+{
+	return efistub_sysfb_display_info(image_info);
+}
+
 void __weak free_primary_display(struct sysfb_display_info *dpy)
 { }
 

@@ -26,12 +26,6 @@ void __weak efi_cache_sync_image(unsigned long image_base,
 	// executable code loaded into memory to be safe for execution.
 }
 
-struct sysfb_display_info *
-alloc_primary_display(const struct efi_image_info *image_info)
-{
-	return efistub_sysfb_display_info(image_info);
-}
-
 static
 const struct efi_image_info *zboot_get_image_info(unsigned long image_base)
 {

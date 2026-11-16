@@ -9,19 +9,6 @@
 
 extern const struct efi_image_info efistub_image_info;
 
-struct sysfb_display_info *
-alloc_primary_display(const struct efi_image_info *image_info)
-{
-	if (IS_ENABLED(CONFIG_ARM))
-		return __alloc_primary_display();
-
-	if (IS_ENABLED(CONFIG_EFI_EARLYCON) ||
-	    IS_ENABLED(CONFIG_SYSFB))
-		return efistub_sysfb_display_info(image_info);
-
-	return NULL;
-}
-
 /*
  * EFI entry point for the generic EFI stub used by ARM, arm64, RISC-V and
  * LoongArch. This is the entrypoint that is described in the PE/COFF header
