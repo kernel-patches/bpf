@@ -12,15 +12,33 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/timex.h>
+#include <linux/math64.h>
+#include <linux/types.h>
+#include <asm/param.h>
 
 #include <clocksource/arm_arch_timer.h>
 
-#define USECS_TO_CYCLES(time_usecs)			\
-	xloops_to_cycles((time_usecs) * 0x10C7UL)
+/* 2**32 / 1000000 (rounded up) */
+#define __usecs_to_xloops_mult	0x10C7UL
 
-static inline unsigned long xloops_to_cycles(unsigned long xloops)
+/* 2**32 / 1000000000 (rounded up) */
+#define __nsecs_to_xloops_mult	0x5UL
+
+static inline u64 xloops_to_cycles(u64 xloops)
 {
-	return (xloops * loops_per_jiffy * HZ) >> 32;
+	u64 loops_per_sec = (u64)loops_per_jiffy * HZ;
+
+	return mul_u64_u64_shr(xloops, loops_per_sec, 32);
+}
+
+static inline u64 usecs_to_cycles(u64 time_usecs)
+{
+	return xloops_to_cycles(time_usecs * __usecs_to_xloops_mult);
+}
+
+static inline u64 nsecs_to_cycles(u64 time_nsecs)
+{
+	return xloops_to_cycles(time_nsecs * __nsecs_to_xloops_mult);
 }
 
 /*
@@ -54,7 +72,7 @@ void __delay(unsigned long cycles)
 			wfet(end);
 	} else 	if (arch_timer_evtstrm_available()) {
 		const cycles_t timer_evt_period =
-			USECS_TO_CYCLES(ARCH_TIMER_EVT_STREAM_PERIOD_US);
+			usecs_to_cycles(ARCH_TIMER_EVT_STREAM_PERIOD_US);
 
 		while ((__delay_cycles() - start + timer_evt_period) < cycles)
 			wfe();
@@ -65,6 +83,12 @@ void __delay(unsigned long cycles)
 }
 EXPORT_SYMBOL(__delay);
 
+u64 arm64_wfet_deadline(u64 timeout_ns)
+{
+	return __delay_cycles() + nsecs_to_cycles(timeout_ns);
+}
+EXPORT_SYMBOL_GPL(arm64_wfet_deadline);
+
 inline void __const_udelay(unsigned long xloops)
 {
 	__delay(xloops_to_cycles(xloops));
@@ -73,12 +97,12 @@ EXPORT_SYMBOL(__const_udelay);
 
 void __udelay(unsigned long usecs)
 {
-	__const_udelay(usecs * 0x10C7UL); /* 2**32 / 1000000 (rounded up) */
+	__const_udelay(usecs * __usecs_to_xloops_mult);
 }
 EXPORT_SYMBOL(__udelay);
 
 void __ndelay(unsigned long nsecs)
 {
-	__const_udelay(nsecs * 0x5UL); /* 2**32 / 1000000000 (rounded up) */
+	__const_udelay(nsecs * __nsecs_to_xloops_mult);
 }
 EXPORT_SYMBOL(__ndelay);

@@ -86,6 +86,8 @@ static inline notrace u64 arch_timer_read_cntvct_el0(void)
 	return cnt;
 }
 
+u64 arm64_wfet_deadline(u64 timeout_ns);
+
 #define arch_timer_reg_read_stable(reg)					\
 	({								\
 		erratum_handler(read_ ## reg)();			\
