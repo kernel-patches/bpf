@@ -6604,7 +6604,13 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 SYSCALL_DEFINE5(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, size,
 		struct bpf_common_attr __user *, uattr_common, unsigned int, size_common)
 {
-	return __sys_bpf(cmd, USER_BPFPTR(uattr), size, USER_BPFPTR(uattr_common), size_common);
+	int err = __sys_bpf(cmd, USER_BPFPTR(uattr), size, USER_BPFPTR(uattr_common), size_common);
+
+	/* bpf_must_abort() ended the command, nothing of it is left */
+	if (err == -EINTR && task_sigpending(current) &&
+	    (cmd == BPF_PROG_LOAD || cmd == BPF_BTF_LOAD || cmd == BPF_MAP_CREATE))
+		return -ERESTARTNOINTR;
+	return err;
 }
 
 static bool syscall_prog_is_valid_access(int off, int size,

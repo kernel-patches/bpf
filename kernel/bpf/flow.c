@@ -504,11 +504,10 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env)
 		if (!loop)
 			continue;
 		/* a deep nest of loops takes long */
-		if (signal_pending(current)) {
-			ret = -EAGAIN;
+		if (bpf_must_abort()) {
+			ret = -EINTR;
 			break;
 		}
-		cond_resched();
 		loop->rt_bounded = flow_loop_is_bounded(env, h);
 		/* also when it's bounded: the main pass may find that it's not */
 		flow_place_guards(env, h, seen);
@@ -884,11 +883,10 @@ int bpf_flow_compute_kinds(struct bpf_verifier_env *env)
 	for (n = 0; lost; n++) {
 		lost = false;
 		/* a chain of calls takes a round for each link */
-		if (signal_pending(current)) {
-			err = -EAGAIN;
+		if (bpf_must_abort()) {
+			err = -EINTR;
 			break;
 		}
-		cond_resched();
 		for (j = 0; j < cnt; j++) {
 			/* it has callees first */
 			s = env->subprog_topo_order[n & 1 ? j : cnt - 1 - j];
@@ -1068,11 +1066,10 @@ static int flow_compute_need_const(struct bpf_verifier_env *env, struct flow_nee
 again:
 	while (any && changed) {
 		changed = false;
-		if (signal_pending(current)) {
-			err = -EAGAIN;
+		if (bpf_must_abort()) {
+			err = -EINTR;
 			break;
 		}
-		cond_resched();
 		for (s = 0; callx && s < env->subprog_cnt; s++)
 			if (env->subprog_info[s].addr_taken)
 				callx_regs |= need[env->subprog_info[s].start].regs;
@@ -1619,11 +1616,10 @@ static int flow_compute_rungs(struct bpf_verifier_env *env)
 			depth++;
 		if (depth >= LOOP_STACK_SIZE)
 			continue;
-		if (signal_pending(current)) {
-			err = -EAGAIN;
+		if (bpf_must_abort()) {
+			err = -EINTR;
 			break;
 		}
-		cond_resched();
 		err = flow_compute_loop_rungs(env, at, total, h);
 	}
 	kvfree(at);
@@ -2737,12 +2733,10 @@ static int flow_merge(struct bpf_verifier_env *env, struct flow_set *set,
 	int prev = s->prev_insn_idx;
 
 again:
-	if (signal_pending(current)) {
-		err = -EAGAIN;
+	if (bpf_must_abort()) {
+		err = -EINTR;
 		goto err_free;
 	}
-	if (need_resched())
-		cond_resched();
 
 	/* again after a join: an offset may not be a constant any more, a pointer may be gone */
 	flow_shape_ctx(&s->st, &s->shape);
@@ -3397,7 +3391,7 @@ void bpf_flow_print_way(struct bpf_verifier_env *env, u64 log_pos, int head, int
 	if (!cnt || bpf_vlog_stash(&env->log, log_pos, &stash))
 		goto out;
 	env->prev_linfo = NULL;
-	while (cnt-- && !signal_pending(current)) {
+	while (cnt-- && !bpf_must_abort()) {
 		w = &way[cnt];
 		if (w->s) {
 			verbose(env, "from %d to %d:", w->s->prev_insn_idx, w->head);
@@ -3409,7 +3403,6 @@ void bpf_flow_print_way(struct bpf_verifier_env *env, u64 log_pos, int head, int
 			bpf_verbose_insn(env, &insns[i]);
 			verbose(env, "\n");
 		}
-		cond_resched();
 	}
 	bpf_vlog_unstash(&env->log, &stash);
 out:

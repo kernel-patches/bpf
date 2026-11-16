@@ -2,7 +2,6 @@
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 
 #include <linux/slab.h>
-#include <linux/sched/signal.h>
 #include <linux/bpf_verifier.h>
 
 static bool is_cfg_jump(struct bpf_insn *insn)
@@ -107,7 +106,6 @@ static int compute_subprog_idoms(struct bpf_verifier_env *env, struct bpf_iarray
 	int po_last = (subprog + 1)->postorder_start - 1;
 	int *idoms = env->idoms;
 	int po_num, pred;
-	u32 work = 0;
 	bool changed;
 
 	idoms[start] = start;
@@ -123,11 +121,8 @@ static int compute_subprog_idoms(struct bpf_verifier_env *env, struct bpf_iarray
 			int new_idom = -1;
 
 			iarray_for_each(pred, preds[idx]) {
-				if (++work % 1024 == 0) {
-					if (signal_pending(current))
-						return -EAGAIN;
-					cond_resched();
-				}
+				if (bpf_must_abort())
+					return -EINTR;
 
 				if (idoms[pred] == -1)
 					continue;
@@ -416,24 +411,15 @@ static int compute_loops_in_subprog(struct bpf_verifier_env *env, struct loops_d
 	int *stack = dfs->stack;
 	int s, h, err, cur, stack_sz;
 	struct bpf_iarray *succ;
-	u32 i;
 
 	stack[0] = start;
 	state[start].traversed = true;
 	state[start].next_succ = 0;
 	dfs_pos[start] = 1;
 	stack_sz = 1;
-	i = 0;
 	do {
-		/*
-		 * The algorithm should be very fast in practice,
-		 * guard against pathological inputs, just in case.
-		 */
-		if ((++i % 1024) == 0) {
-			if (signal_pending(current))
-				return -EAGAIN;
-			cond_resched();
-		}
+		if (bpf_must_abort())
+			return -EINTR;
 
 		cur = stack[stack_sz - 1];
 		succ = bpf_insn_successors(env, cur);

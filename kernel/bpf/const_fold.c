@@ -278,6 +278,10 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 	}
 
 redo:
+	if (bpf_must_abort()) {
+		kvfree(ci_in);
+		return -EINTR;
+	}
 	changed = false;
 	for (i = env->cfg.cur_postorder - 1; i >= 0; i--) {
 		int idx = env->cfg.insn_postorder[i];

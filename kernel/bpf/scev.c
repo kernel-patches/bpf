@@ -2664,11 +2664,10 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header, i
 		idx = *min_heap_peek_inline(worklist);
 		min_heap_pop_inline(worklist, &worklist_cb, env->cfg.postorder_nums);
 		start = idx;
-		if (signal_pending(current)) {
-			err = -EAGAIN;
+		if (bpf_must_abort()) {
+			err = -EINTR;
 			goto out;
 		}
-		cond_resched();
 
 		/* join_successor() maps nested-loop entries to their representative header. */
 		nested_loop = idx != cur_header ? aux[idx].loop : NULL;
@@ -3265,9 +3264,8 @@ int bpf_compute_scev(struct bpf_verifier_env *env)
 		idx = postorder[i];
 		if (!aux[idx].need_scev)
 			continue;
-		if (signal_pending(current))
-			return -EAGAIN;
-		cond_resched();
+		if (bpf_must_abort())
+			return -EINTR;
 		header = bpf_loop_at_index(env, idx);
 		err = aux[idx].loop
 		      ? compute_header_scevs(env, header)

@@ -456,7 +456,7 @@ static inline bool update_insn(struct bpf_verifier_env *env, struct func_instanc
 }
 
 /* Fixed-point computation of @live_before marks */
-static void update_instance(struct bpf_verifier_env *env, struct func_instance *instance)
+static int update_instance(struct bpf_verifier_env *env, struct func_instance *instance)
 {
 	u32 i, frame, po_start, po_end;
 	int *insn_postorder = env->cfg.insn_postorder;
@@ -469,6 +469,8 @@ static void update_instance(struct bpf_verifier_env *env, struct func_instance *
 	po_end = (subprog + 1)->postorder_start;
 	/* repeat until fixed point is reached */
 	do {
+		if (bpf_must_abort())
+			return -EINTR;
 		changed = false;
 		for (frame = 0; frame <= instance->depth; frame++) {
 			if (!instance->frames[frame])
@@ -482,6 +484,7 @@ static void update_instance(struct bpf_verifier_env *env, struct func_instance *
 			}
 		}
 	} while (changed);
+	return 0;
 }
 
 static bool is_live_before(struct func_instance *instance, u32 insn_idx, u32 frameno, u32 half_spi,
@@ -2130,6 +2133,9 @@ redo:
 		struct bpf_iarray *succ;
 		int ti;
 
+		err = -EINTR;
+		if (bpf_must_abort())
+			goto err_free;
 		if (!arg_is_visited(&at_in[i][0]) && !arg_is_visited(&at_in[i][1]))
 			continue;
 
@@ -2365,8 +2371,8 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 		return -E2BIG;
 	}
 
-	if (need_resched())
-		cond_resched();
+	if (bpf_must_abort())
+		return -EINTR;
 
 	/*
 	 * When an instance is reused (must_write_initialized == true),
@@ -2524,8 +2530,7 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 		if (err)
 			return err;
 	}
-	update_instance(env, instance);
-	return 0;
+	return update_instance(env, instance);
 
 out_free:
 	if (prev_instance)
@@ -2872,11 +2877,10 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 
 		changed = false;
 		/* a cycle of calls takes a round for each link */
-		if (signal_pending(current)) {
-			err = -EAGAIN;
+		if (bpf_must_abort()) {
+			err = -EINTR;
 			goto out;
 		}
-		cond_resched();
 		for (i = 0; i < env->cfg.cur_postorder; ++i) {
 			int insn_idx = env->cfg.insn_postorder[i];
 			struct insn_live_regs *live = &state[insn_idx];
