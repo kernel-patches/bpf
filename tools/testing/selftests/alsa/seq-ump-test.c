@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Test the conversion of MIDI 1.0 sequencer events to UMP.
+ * Test the sequencer conversion of MIDI 1.0 events to UMP, and of UMP
+ * packets between MIDI 1.0 and MIDI 2.0 clients.
  *
- * A legacy client sends CC and CONTROL14 events to a UMP client, and the
- * test checks the packets that the UMP client receives. The converter keeps
- * its RPN/NRPN state per destination port and channel, so each test uses
- * new clients.
+ * A client sends events to a UMP client, and the test checks the packets
+ * that the UMP client receives. The converter keeps its RPN/NRPN state
+ * per destination port and channel, so each test uses new clients.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -124,6 +124,48 @@ static int send_event(struct seq_client *src, struct seq_client *dst,
 	return 0;
 }
 
+static int send_note(struct seq_client *src, struct seq_client *dst,
+		     int type, int ch, int note, int velocity)
+{
+	struct snd_seq_event ev;
+
+	memset(&ev, 0, sizeof(ev));
+	ev.type = type;
+	ev.flags = SNDRV_SEQ_TIME_STAMP_TICK | SNDRV_SEQ_EVENT_LENGTH_FIXED;
+	ev.queue = SNDRV_SEQ_QUEUE_DIRECT;
+	ev.source.client = src->id;
+	ev.source.port = src->port;
+	ev.dest.client = dst->id;
+	ev.dest.port = dst->port;
+	ev.data.note.channel = ch;
+	ev.data.note.note = note;
+	ev.data.note.velocity = velocity;
+	if (write(src->fd, &ev, sizeof(ev)) != sizeof(ev))
+		return -errno;
+	return 0;
+}
+
+/* send a UMP packet from a UMP client */
+static int send_ump(struct seq_client *src, struct seq_client *dst,
+		    unsigned int w0, unsigned int w1)
+{
+	struct snd_seq_ump_event ev;
+
+	memset(&ev, 0, sizeof(ev));
+	ev.flags = SNDRV_SEQ_TIME_STAMP_TICK | SNDRV_SEQ_EVENT_LENGTH_FIXED |
+		   SNDRV_SEQ_EVENT_UMP;
+	ev.queue = SNDRV_SEQ_QUEUE_DIRECT;
+	ev.source.client = src->id;
+	ev.source.port = src->port;
+	ev.dest.client = dst->id;
+	ev.dest.port = dst->port;
+	ev.ump[0] = w0;
+	ev.ump[1] = w1;
+	if (write(src->fd, &ev, sizeof(ev)) != sizeof(ev))
+		return -errno;
+	return 0;
+}
+
 /*
  * Read what the UMP client received until it is quiet, and keep the
  * packets of message type @mt. Returns the number of packets kept.
@@ -212,11 +254,11 @@ static int send_events(struct seq_client *src, struct seq_client *dst,
 				 ARRAY_SIZE(ev)));			\
 } while (0)
 
-/* compare the RPN/NRPN packets received with the expected ones */
-#define EXPECT_PACKETS(...) do {					\
+/* compare the packets of message type @mt with the expected ones */
+#define EXPECT_MT_PACKETS(mt, ...) do {					\
 	const struct packet want[] = { __VA_ARGS__ };			\
 	struct packet got[MAX_PACKETS];					\
-	int n = read_packets(&self->dst, 4, got);			\
+	int n = read_packets(&self->dst, mt, got);			\
 	int i;								\
 									\
 	ASSERT_EQ((int)ARRAY_SIZE(want), n);				\
@@ -226,11 +268,21 @@ static int send_events(struct seq_client *src, struct seq_client *dst,
 	}								\
 } while (0)
 
+/* compare the MIDI 2.0 channel voice packets received */
+#define EXPECT_PACKETS(...)	EXPECT_MT_PACKETS(4, __VA_ARGS__)
+
 #define EXPECT_NO_PACKETS() do {					\
 	struct packet got[MAX_PACKETS];					\
 									\
 	EXPECT_EQ(0, read_packets(&self->dst, 4, got));			\
 } while (0)
+
+#define SEND_NOTE(type, ch, note, velocity)				\
+	ASSERT_EQ(0, send_note(&self->src, &self->dst,			\
+			       SNDRV_SEQ_EVENT_##type, ch, note, velocity))
+
+#define SEND_UMP(w0, w1) \
+	ASSERT_EQ(0, send_ump(&self->src, &self->dst, w0, w1))
 
 /* RPN 0/1 with Data Entry */
 TEST_F(seq_ump, rpn)
@@ -416,6 +468,20 @@ TEST_F(seq_ump, c14_null_nrpn_keeps_rpn_number)
 	EXPECT_PACKETS({ RPN(0, 0, 1), data14(0x10, 0) });
 }
 
+/* a note-on with zero velocity is a note-off */
+TEST_F(seq_ump, note_on_zero_velocity)
+{
+	SEND_NOTE(NOTEON, 1, 60, 0);
+	EXPECT_PACKETS({ 0x40813c00, 0 });
+}
+
+/* a key pressure of zero is a key pressure, not a note-off */
+TEST_F(seq_ump, key_pressure)
+{
+	SEND_NOTE(KEYPRESS, 2, 64, 0);
+	EXPECT_PACKETS({ 0x40a24000, 0 });
+}
+
 /* a UMP MIDI 1.0 client gets the CCs as they are, RPN selection included */
 TEST(midi1_passthrough)
 {
@@ -447,6 +513,111 @@ TEST(midi1_passthrough)
 
 	close_client(&src);
 	close_client(&dst);
+}
+
+/* a pair of clients whose MIDI versions each test chooses */
+FIXTURE(seq_pair) {
+	struct seq_client src;
+	struct seq_client dst;
+};
+
+FIXTURE_SETUP(seq_pair)
+{
+	self->src.fd = -1;
+	self->dst.fd = -1;
+}
+
+FIXTURE_TEARDOWN(seq_pair)
+{
+	close_client(&self->src);
+	close_client(&self->dst);
+}
+
+static int open_pair(struct seq_client *dst, int dst_version,
+		     struct seq_client *src, int src_version, int *skip)
+{
+	int err;
+
+	err = open_client(dst, dst_version, CAP_IN, skip);
+	if (!err)
+		err = open_client(src, src_version, CAP_OUT, skip);
+	return err;
+}
+
+/* to UMP MIDI 1.0, a key pressure of zero is a key pressure */
+TEST_F(seq_pair, midi1_key_pressure)
+{
+	int skip = 0;
+	int err;
+
+	err = open_pair(&self->dst, SNDRV_SEQ_CLIENT_UMP_MIDI_1_0,
+			&self->src, 0, &skip);
+	if (skip)
+		SKIP(return, "UMP sequencer client unavailable: %s",
+		     strerror(-err));
+	ASSERT_EQ(0, err);
+
+	SEND_NOTE(KEYPRESS, 2, 64, 0x50);
+	SEND_NOTE(KEYPRESS, 2, 64, 0);
+	EXPECT_MT_PACKETS(2, { 0x20a24050, 0 }, { 0x20a24000, 0 });
+}
+
+/* to UMP MIDI 1.0, a note-on with zero velocity is a note-off */
+TEST_F(seq_pair, midi1_note_on_zero_velocity)
+{
+	int skip = 0;
+	int err;
+
+	err = open_pair(&self->dst, SNDRV_SEQ_CLIENT_UMP_MIDI_1_0,
+			&self->src, 0, &skip);
+	if (skip)
+		SKIP(return, "UMP sequencer client unavailable: %s",
+		     strerror(-err));
+	ASSERT_EQ(0, err);
+
+	SEND_NOTE(NOTEON, 1, 60, 0);
+	EXPECT_MT_PACKETS(2, { 0x20813c00, 0 });
+}
+
+/* UMP MIDI 1.0 to MIDI 2.0: a note-on with zero velocity is a note-off */
+TEST_F(seq_pair, ump_midi1_to_midi2_note)
+{
+	int skip = 0;
+	int err;
+
+	err = open_pair(&self->dst, SNDRV_SEQ_CLIENT_UMP_MIDI_2_0,
+			&self->src, SNDRV_SEQ_CLIENT_UMP_MIDI_1_0, &skip);
+	if (skip)
+		SKIP(return, "UMP sequencer client unavailable: %s",
+		     strerror(-err));
+	ASSERT_EQ(0, err);
+
+	SEND_UMP(0x20913c00, 0);
+	EXPECT_PACKETS({ 0x40813c00, 0 });
+}
+
+/*
+ * UMP MIDI 2.0 to MIDI 1.0: a note-on whose velocity scales down to zero
+ * stays a note-on with velocity 1, and a note-off stays a note-off
+ */
+TEST_F(seq_pair, ump_midi2_to_midi1_note)
+{
+	int skip = 0;
+	int err;
+
+	err = open_pair(&self->dst, SNDRV_SEQ_CLIENT_UMP_MIDI_1_0,
+			&self->src, SNDRV_SEQ_CLIENT_UMP_MIDI_2_0, &skip);
+	if (skip)
+		SKIP(return, "UMP sequencer client unavailable: %s",
+		     strerror(-err));
+	ASSERT_EQ(0, err);
+
+	SEND_UMP(0x40913c00, 0xc8000000);
+	SEND_UMP(0x40913c00, 0x01000000);
+	SEND_UMP(0x40913c00, 0);
+	SEND_UMP(0x40813c00, 0);
+	EXPECT_MT_PACKETS(2, { 0x20913c64, 0 }, { 0x20913c01, 0 },
+			  { 0x20913c01, 0 }, { 0x20813c00, 0 });
 }
 
 TEST_HARNESS_MAIN
