@@ -315,7 +315,7 @@ static union cpuid_1_eax ucode_rev_to_cpuid(unsigned int val)
 
 static u32 get_patch_level(void)
 {
-	u32 rev, dummy __always_unused;
+	u32 rev;
 
 	if (IS_ENABLED(CONFIG_MICROCODE_DBG) && x86_hypervisor_present) {
 		int cpu = smp_processor_id();
@@ -332,7 +332,7 @@ static u32 get_patch_level(void)
 		return microcode_rev[cpu];
 	}
 
-	native_rdmsr(MSR_AMD64_PATCH_LEVEL, rev, dummy);
+	rev = native_rdmsrq(MSR_AMD64_PATCH_LEVEL);
 	if (!rev) {
 		if (x86_family(bsp_cpuid_1_eax) < 0x17)
 			return rev;
