@@ -13,32 +13,6 @@
 #include "exfat_fs.h"
 #include "iomap.h"
 
-/*
- * exfat_file_write_dio_end_io - Direct I/O write completion handler
- *
- * Updates i_size if the write extended the file. Called from the dio layer
- * after I/O completion.
- */
-static int exfat_file_write_dio_end_io(struct kiocb *iocb, ssize_t size,
-		int error, unsigned int flags)
-{
-	struct inode *inode = file_inode(iocb->ki_filp);
-
-	if (error)
-		return error;
-
-	if (size && i_size_read(inode) < iocb->ki_pos + size) {
-		i_size_write(inode, iocb->ki_pos + size);
-		mark_inode_dirty(inode);
-	}
-
-	return 0;
-}
-
-const struct iomap_dio_ops exfat_write_dio_ops = {
-	.end_io		= exfat_file_write_dio_end_io,
-};
-
 static int __exfat_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		unsigned int flags, struct iomap *iomap, bool may_alloc,
 		loff_t valid_size)
@@ -49,6 +23,9 @@ static int __exfat_iomap_begin(struct inode *inode, loff_t offset, loff_t length
 	loff_t cluster_offset, cluster_length;
 	int err;
 	bool balloc = false;
+
+	if ((flags & IOMAP_OVERWRITE_ONLY) && offset + length > valid_size)
+		return -EAGAIN;
 
 	iomap->validity_cookie = valid_size;
 
@@ -75,6 +52,27 @@ static int __exfat_iomap_begin(struct inode *inode, loff_t offset, loff_t length
 	mutex_lock(&sbi->s_lock);
 	iomap->bdev = inode->i_sb->s_bdev;
 	iomap->offset = offset;
+
+	if (may_alloc && flags & IOMAP_DIRECT) {
+		unsigned int allocated = exfat_bytes_to_cluster(sbi,
+							exfat_ondisk_size(inode));
+		unsigned int first = exfat_bytes_to_cluster(sbi, offset);
+
+		/* Allocate the gap before mapping a write beyond the last cluster. */
+		while (allocated < first) {
+			unsigned int count = first - allocated, clu;
+
+			err = exfat_map_cluster(inode, allocated, &clu, &count,
+						true, NULL);
+			if (err)
+				goto out;
+			if (WARN_ON_ONCE(!count)) {
+				err = -EIO;
+				goto out;
+			}
+			allocated += count;
+		}
+	}
 
 	err = exfat_map_cluster(inode, exfat_bytes_to_cluster(sbi, offset),
 			&cluster, &num_clusters, may_alloc, &balloc);
@@ -112,7 +110,11 @@ static int __exfat_iomap_begin(struct inode *inode, loff_t offset, loff_t length
 	iomap->type = IOMAP_MAPPED;
 	iomap->flags = IOMAP_F_MERGED;
 
-	if (may_alloc || flags & IOMAP_ZERO) {
+	/* Cached VDL update may still need to be persisted for O_DSYNC. */
+	if (flags & IOMAP_OVERWRITE_ONLY)
+		iomap->flags |= IOMAP_F_DIRTY;
+
+	if (may_alloc || flags & (IOMAP_ZERO | IOMAP_OVERWRITE_ONLY)) {
 		if (balloc)
 			iomap->flags |= IOMAP_F_NEW;
 	} else {
@@ -156,21 +158,39 @@ out:
 	return err;
 }
 
-static int exfat_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
-		unsigned int flags, struct iomap *iomap, struct iomap *srcmap)
+static int exfat_iomap_next(const struct iomap_iter *iter,
+			   struct iomap *iomap, struct iomap *srcmap)
 {
-	return __exfat_iomap_begin(inode, offset, length, flags, iomap, false,
-				exfat_get_valid_size(EXFAT_I(inode)));
+	const loff_t *dio_valid_size = iter->private;
+	loff_t valid_size;
+	int ret;
+
+	if (iomap->length) {
+		ret = iomap_iter_continue(iter, iomap, srcmap, 0);
+		if (ret <= 0)
+			return ret;
+	}
+	if (iter->flags & IOMAP_DIRECT)
+		valid_size = *dio_valid_size;
+	else
+		valid_size = exfat_get_valid_size(EXFAT_I(iter->inode));
+	ret = __exfat_iomap_begin(iter->inode, iter->pos, iter->len,
+				 iter->flags, iomap, false, valid_size);
+	return ret ?: 1;
 }
 
 static int exfat_write_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		unsigned int flags, struct iomap *iomap, struct iomap *srcmap)
 {
-	return __exfat_iomap_begin(inode, offset, length, flags, iomap, true,
-				exfat_get_valid_size(EXFAT_I(inode)));
-}
+	int ret;
 
-static DEFINE_IOMAP_ITER_NEXT(exfat_iomap_next, exfat_iomap_begin);
+	ret = __exfat_iomap_begin(inode, offset, length, flags, iomap, true,
+				  exfat_get_valid_size(EXFAT_I(inode)));
+	if (!ret && (flags & IOMAP_DIRECT) &&
+	    offset + iomap->length > iomap->validity_cookie)
+		iomap->flags |= IOMAP_F_DIRTY;
+	return ret;
+}
 
 const struct iomap_ops exfat_iomap_ops = {
 	.iomap_next = exfat_iomap_next,
@@ -199,36 +219,40 @@ static const struct iomap_ops exfat_swap_iomap_ops = {
 #endif
 
 /*
- * exfat_write_iomap_end - Update the state after write
- *
- * Extends ->valid_size to cover the newly written range.
- * Marks the inode dirty if metadata was changed.
+ * exfat_write_iomap_end - Record buffered file size changes
  */
 static int exfat_write_iomap_end(struct inode *inode, loff_t pos, loff_t length,
 		ssize_t written, unsigned int flags, struct iomap *iomap)
 {
-	struct exfat_inode_info *ei = EXFAT_I(inode);
-	bool dirtied = false;
-	loff_t end;
-
 	if (!written)
 		return 0;
 
-	end = pos + written;
-
-	if (exfat_advance_valid_size(ei, end))
-		dirtied = true;
-
-	exfat_advance_zeroed_size(ei, end);
-
-	if (dirtied || iomap->flags & IOMAP_F_SIZE_CHANGED)
+	if (iomap->flags & IOMAP_F_SIZE_CHANGED)
 		mark_inode_dirty(inode);
 
 	return written;
 }
 
-static DEFINE_IOMAP_ITER_NEXT_END(exfat_write_iomap_next,
-		exfat_write_iomap_begin, exfat_write_iomap_end);
+static int exfat_write_iomap_next(const struct iomap_iter *iter,
+				  struct iomap *iomap, struct iomap *srcmap)
+{
+	int ret;
+
+	ret = iomap_iter_next(iter, iomap, srcmap, exfat_write_iomap_begin,
+			      exfat_write_iomap_end);
+	if (ret == -ENOSPC && (iter->flags & IOMAP_DIRECT)) {
+		const struct exfat_dio *dio = iter->private;
+
+		/*
+		 * ENOTBLK makes iomap wait for the submitted bios and report
+		 * a short write only if they succeeded.
+		 */
+		if (iter->pos > dio->start)
+			return -ENOTBLK;
+	}
+
+	return ret;
+}
 
 const struct iomap_ops exfat_write_iomap_ops = {
 	.iomap_next	= exfat_write_iomap_next,
@@ -309,6 +333,48 @@ const struct iomap_write_ops exfat_iomap_write_ops = {
 	.put_folio	= exfat_iomap_put_folio,
 	.iomap_valid	= exfat_iomap_valid,
 	.read_folio_range = exfat_iomap_read_folio_range,
+};
+
+/*
+ * Gap zeroing follows the direct write. Keep completed data intact when the
+ * gap and the write share a filesystem block.
+ */
+static int exfat_dio_gap_read_folio_range(const struct iomap_iter *iter,
+		struct folio *folio, loff_t pos, size_t len)
+{
+	const struct exfat_dio *dio = iter->private;
+	loff_t valid = iter->iomap.validity_cookie;
+	loff_t end = pos + len;
+	loff_t start, stop;
+	int error;
+
+	if (pos < valid || end > dio->start) {
+		error = iomap_bio_read_folio_range_sync(iter, folio, pos, len);
+		if (error)
+			return error;
+	} else {
+		folio_zero_range(folio, offset_in_folio(folio, pos), len);
+		return 0;
+	}
+
+	start = max(pos, valid);
+	stop = min(end, dio->start);
+	if (start < stop)
+		folio_zero_segment(folio, offset_in_folio(folio, start),
+				   offset_in_folio(folio, pos) + stop - pos);
+
+	start = max(pos, dio->start + dio->completed);
+	if (start < end)
+		folio_zero_segment(folio, offset_in_folio(folio, start),
+				   offset_in_folio(folio, pos) + len);
+	return 0;
+}
+
+const struct iomap_write_ops exfat_dio_gap_write_ops = {
+	.get_folio	= exfat_iomap_get_folio,
+	.put_folio	= exfat_iomap_put_folio,
+	.iomap_valid	= exfat_iomap_valid,
+	.read_folio_range = exfat_dio_gap_read_folio_range,
 };
 
 /*

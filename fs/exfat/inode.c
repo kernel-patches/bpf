@@ -73,25 +73,16 @@ int __exfat_write_inode(struct inode *inode, int sync)
 			     &ep->dentry.file.access_date,
 			     NULL);
 
-	/*
-	 * During a DIO write, valid_size is updated eagerly in iomap_end (so
-	 * that concurrent buffered reads see IOMAP_MAPPED) while i_size is
-	 * updated asynchronously in end_io.  The FAT chain was already
-	 * extended to cover ceil(valid_size/cluster_size) clusters.  Use the
-	 * maximum so the on-disk size field always covers the FAT chain,
-	 * preventing fsck from reporting "more clusters are allocated".
-	 */
-	on_disk_size = max_t(unsigned long long, i_size_read(inode),
-			valid_size);
+	/* Direct writes publish the completed size in their end_io handler. */
+	on_disk_size = i_size_read(inode);
 
 	if (ei->start_clu == EXFAT_EOF_CLUSTER)
 		on_disk_size = 0;
 	/*
-	 * valid_size on disk must reflect only confirmed data (up to i_size)
-	 * and must not exceed on_disk_size.
+	 * Truncate can publish a smaller i_size before lowering valid_size.
+	 * Never record a valid_size greater than the recorded file size.
 	 */
-	on_disk_valid_size = min_t(unsigned long long, valid_size,
-			i_size_read(inode));
+	on_disk_valid_size = min_t(unsigned long long, valid_size, on_disk_size);
 	if (ei->start_clu == EXFAT_EOF_CLUSTER)
 		on_disk_valid_size = 0;
 
