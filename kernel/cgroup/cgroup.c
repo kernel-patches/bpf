@@ -4232,7 +4232,7 @@ static __poll_t cgroup_pressure_poll(struct kernfs_open_file *of,
 {
 	struct cgroup_file_ctx *ctx = of->priv;
 
-	return psi_trigger_poll(&ctx->psi.trigger, of->file, pt);
+	return psi_trigger_poll(&ctx->psi.trigger, pt);
 }
 
 static void cgroup_pressure_release(struct kernfs_open_file *of)

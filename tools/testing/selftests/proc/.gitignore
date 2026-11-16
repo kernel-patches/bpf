@@ -22,6 +22,7 @@
 /proc-uptime-001
 /proc-uptime-002
 /proc-pidns
+/proc-remove-slow-config-reader
 /proc-remove-slow-sysctl
 /proc-remove-slow-reader
 /proc-remove-mapped
