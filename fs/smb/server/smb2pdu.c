@@ -3937,7 +3937,7 @@ static int smb2_create_sd_buffer(struct ksmbd_work *work,
 				 const struct path *path)
 {
 	struct create_context *context;
-	struct create_sd_buf_req *sd_buf;
+	struct smb_ntsd *pntsd;
 
 	if (!req->CreateContextsOffset)
 		return -ENOENT;
@@ -3951,13 +3951,10 @@ static int smb2_create_sd_buffer(struct ksmbd_work *work,
 
 	ksmbd_debug(SMB,
 		    "Set ACLs using SMB2_CREATE_SD_BUFFER context\n");
-	sd_buf = (struct create_sd_buf_req *)context;
-	if (le16_to_cpu(context->DataOffset) +
-	    le32_to_cpu(context->DataLength) <
-	    sizeof(struct create_sd_buf_req))
-		return -EINVAL;
-	return set_info_sec(work->conn, work->tcon, path, &sd_buf->ntsd,
-			    le32_to_cpu(sd_buf->ccontext.DataLength), true, true,
+	/* parse_sec_desc() refuses a length shorter than the SD header */
+	pntsd = smb2_context_data(context);
+	return set_info_sec(work->conn, work->tcon, path, pntsd,
+			    le32_to_cpu(context->DataLength), true, true,
 			    true, true);
 }
 
@@ -4118,7 +4115,7 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 		switch (dh_idx) {
 		case DURABLE_RECONN_V2:
 		{
-			struct create_durable_handle_reconnect_v2 *recon_v2;
+			struct durable_reconnect_context_v2 *recon_v2;
 			u32 flags;
 
 			if (dh_info->type == DURABLE_RECONN ||
@@ -4127,20 +4124,19 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 				goto out;
 			}
 
-			if (le32_to_cpu(context->DataLength) <
-			    sizeof(recon_v2->dcontext)) {
+			if (le32_to_cpu(context->DataLength) < sizeof(*recon_v2)) {
 				err = -EINVAL;
 				goto out;
 			}
 
-			recon_v2 = (struct create_durable_handle_reconnect_v2 *)context;
-			flags = le32_to_cpu(recon_v2->dcontext.Flags);
+			recon_v2 = smb2_context_data(context);
+			flags = le32_to_cpu(recon_v2->Flags);
 			if (flags & ~SMB2_DHANDLE_FLAG_PERSISTENT) {
 				err = -EINVAL;
 				goto out;
 			}
 			dh_info->persistent = flags & SMB2_DHANDLE_FLAG_PERSISTENT;
-			persistent_id = recon_v2->dcontext.Fid.PersistentFileId;
+			persistent_id = recon_v2->Fid.PersistentFileId;
 			dh_info->fp = ksmbd_lookup_durable_fd(persistent_id);
 			if (!dh_info->fp) {
 				ksmbd_debug(SMB, "Failed to get durable handle state\n");
@@ -4149,15 +4145,15 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 			}
 
 			/* A zero VolatileFileId means that the client did not specify it. */
-			if (recon_v2->dcontext.Fid.VolatileFileId &&
+			if (recon_v2->Fid.VolatileFileId &&
 			    dh_info->fp->durable_volatile_id !=
-			    recon_v2->dcontext.Fid.VolatileFileId) {
+			    recon_v2->Fid.VolatileFileId) {
 				err = -EBADF;
 				ksmbd_put_durable_fd(dh_info->fp);
 				goto out;
 			}
 
-			if (memcmp(dh_info->fp->create_guid, recon_v2->dcontext.CreateGuid,
+			if (memcmp(dh_info->fp->create_guid, recon_v2->CreateGuid,
 				   SMB2_CREATE_GUID_SIZE)) {
 				err = -EBADF;
 				ksmbd_put_durable_fd(dh_info->fp);
@@ -4180,7 +4176,7 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 		}
 		case DURABLE_RECONN:
 		{
-			create_durable_reconn_t *recon;
+			struct durable_reconnect_context *recon;
 
 			if (dh_info->type == DURABLE_RECONN_V2 ||
 			    dh_info->type == DURABLE_REQ_V2) {
@@ -4188,14 +4184,13 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 				goto out;
 			}
 
-			if (le32_to_cpu(context->DataLength) <
-			    sizeof(recon->Data)) {
+			if (le32_to_cpu(context->DataLength) < sizeof(*recon)) {
 				err = -EINVAL;
 				goto out;
 			}
 
-			recon = (create_durable_reconn_t *)context;
-			persistent_id = recon->Data.Fid.PersistentFileId;
+			recon = smb2_context_data(context);
+			persistent_id = recon->PersistentFileId;
 			dh_info->fp = ksmbd_lookup_durable_fd(persistent_id);
 			if (!dh_info->fp) {
 				ksmbd_debug(SMB, "Failed to get durable handle state\n");
@@ -4204,9 +4199,9 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 			}
 
 			/* A zero VolatileFileId means that the client did not specify it. */
-			if (recon->Data.Fid.VolatileFileId &&
+			if (recon->VolatileFileId &&
 			    dh_info->fp->durable_volatile_id !=
-			    recon->Data.Fid.VolatileFileId) {
+			    recon->VolatileFileId) {
 				err = -EBADF;
 				ksmbd_put_durable_fd(dh_info->fp);
 				goto out;
@@ -4220,7 +4215,7 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 		}
 		case DURABLE_REQ_V2:
 		{
-			struct create_durable_req_v2 *durable_v2_blob;
+			struct durable_context_v2_req *durable_v2_blob;
 
 			if (dh_info->type == DURABLE_RECONN ||
 			    dh_info->type == DURABLE_RECONN_V2) {
@@ -4229,24 +4224,23 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 			}
 
 			if (le32_to_cpu(context->DataLength) <
-			    sizeof(durable_v2_blob->dcontext)) {
+			    sizeof(*durable_v2_blob)) {
 				err = -EINVAL;
 				goto out;
 			}
 
-			durable_v2_blob =
-				(struct create_durable_req_v2 *)context;
-			if (le32_to_cpu(durable_v2_blob->dcontext.Flags) &
+			durable_v2_blob = smb2_context_data(context);
+			if (le32_to_cpu(durable_v2_blob->Flags) &
 			    ~SMB2_DHANDLE_FLAG_PERSISTENT) {
 				err = -EINVAL;
 				goto out;
 			}
 			ksmbd_debug(SMB, "Request for durable v2 open\n");
-			dh_info->CreateGuid = durable_v2_blob->dcontext.CreateGuid;
+			dh_info->CreateGuid = durable_v2_blob->CreateGuid;
 			dh_info->persistent =
-				le32_to_cpu(durable_v2_blob->dcontext.Flags) &
+				le32_to_cpu(durable_v2_blob->Flags) &
 				SMB2_DHANDLE_FLAG_PERSISTENT;
-			dh_info->fp = ksmbd_lookup_fd_cguid(durable_v2_blob->dcontext.CreateGuid);
+			dh_info->fp = ksmbd_lookup_fd_cguid(durable_v2_blob->CreateGuid);
 			if (dh_info->fp) {
 				if (!memcmp(conn->ClientGUID, dh_info->fp->client_guid,
 					    SMB2_CLIENT_GUID_SIZE)) {
@@ -4306,7 +4300,7 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 			if ((lc && (lc->req_state & SMB2_LEASE_HANDLE_CACHING_LE)) ||
 			    req_op_level == SMB2_OPLOCK_LEVEL_BATCH) {
 				dh_info->timeout =
-					le32_to_cpu(durable_v2_blob->dcontext.Timeout);
+					le32_to_cpu(durable_v2_blob->Timeout);
 				dh_info->type = dh_idx;
 			}
 			break;
@@ -4520,7 +4514,7 @@ int smb2_open(struct ksmbd_work *work)
 	struct kstat stat;
 	struct create_context *context;
 	struct lease_ctx_info *lc = NULL;
-	struct create_ea_buf_req *ea_buf = NULL;
+	struct create_context *ea_ctx = NULL;
 	struct oplock_info *opinfo;
 	struct durable_info dh_info = {0};
 	__le32 *next_ptr = NULL;
@@ -4563,8 +4557,6 @@ int smb2_open(struct ksmbd_work *work)
 			rc = PTR_ERR(context);
 			goto err_out2;
 		} else if (context) {
-			struct create_posix *posix = (struct create_posix *)context;
-
 			if (conn->dialect != SMB311_PROT_ID) {
 				rsp->hdr.Status = STATUS_INVALID_INFO_CLASS;
 				rc = -ENOTTY;
@@ -4578,15 +4570,14 @@ int smb2_open(struct ksmbd_work *work)
 				rc = -EOPNOTSUPP;
 				goto err_out2;
 			}
-			if (le16_to_cpu(context->DataOffset) +
-				le32_to_cpu(context->DataLength) <
-			    sizeof(struct create_posix) - 4) {
+			/* The data starts with the 4-byte Mode */
+			if (le32_to_cpu(context->DataLength) < sizeof(__le32)) {
 				rc = -EINVAL;
 				goto err_out2;
 			}
 			ksmbd_debug(SMB, "get posix context\n");
 
-			posix_mode = le32_to_cpu(posix->Mode);
+			posix_mode = get_unaligned_le32(smb2_context_data(context));
 			posix_ctxt = true;
 		}
 	}
@@ -4806,10 +4797,9 @@ int smb2_open(struct ksmbd_work *work)
 			rc = PTR_ERR(context);
 			goto err_out2;
 		} else if (context) {
-			ea_buf = (struct create_ea_buf_req *)context;
-			if (le16_to_cpu(context->DataOffset) +
-			    le32_to_cpu(context->DataLength) <
-			    sizeof(struct create_ea_buf_req)) {
+			ea_ctx = context;
+			if (le32_to_cpu(context->DataLength) <
+			    sizeof(struct smb2_ea_info)) {
 				rc = -EINVAL;
 				goto err_out2;
 			}
@@ -5079,15 +5069,9 @@ resolve_path:
 
 		created = true;
 		idmap = mnt_idmap(path.mnt);
-		if (ea_buf) {
-			if (le32_to_cpu(ea_buf->ccontext.DataLength) <
-			    sizeof(struct smb2_ea_info)) {
-				rc = -EINVAL;
-				goto err_out;
-			}
-
-			rc = smb2_set_ea(&ea_buf->ea,
-					 le32_to_cpu(ea_buf->ccontext.DataLength),
+		if (ea_ctx) {
+			rc = smb2_set_ea(smb2_context_data(ea_ctx),
+					 le32_to_cpu(ea_ctx->DataLength),
 					 &path, true);
 			if (rc == -EOPNOTSUPP)
 				rc = 0;
@@ -5417,10 +5401,10 @@ resolve_path:
 	}
 
 	if (req->CreateContextsOffset) {
-		struct create_alloc_size_req *az_req;
+		struct create_context *az_req;
 
-		az_req = (struct create_alloc_size_req *)smb2_find_context_vals(req,
-					SMB2_CREATE_ALLOCATION_SIZE, 4);
+		az_req = smb2_find_context_vals(req,
+						SMB2_CREATE_ALLOCATION_SIZE, 4);
 		if (IS_ERR(az_req)) {
 			rc = PTR_ERR(az_req);
 			goto err_out1;
@@ -5428,13 +5412,11 @@ resolve_path:
 			   test_tree_conn_flag(tcon, KSMBD_TREE_CONN_FLAG_WRITABLE)) {
 			int err;
 
-			if (le16_to_cpu(az_req->ccontext.DataOffset) +
-			    le32_to_cpu(az_req->ccontext.DataLength) <
-			    sizeof(struct create_alloc_size_req)) {
+			if (le32_to_cpu(az_req->DataLength) < sizeof(__le64)) {
 				rc = -EINVAL;
 				goto err_out1;
 			}
-			alloc_size = le64_to_cpu(az_req->AllocationSize);
+			alloc_size = get_unaligned_le64(smb2_context_data(az_req));
 			fp->allocation_size_set = true;
 			ksmbd_debug(SMB,
 				    "request smb2 create allocate size : %llu\n",
