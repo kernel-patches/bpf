@@ -54,6 +54,7 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a9";
 			reg = <0x300>;
+			power-domains = <&pm_domains DOMAIN_VARM>;
 			clocks = <&prcmu_clk PRCMU_ARMSS>;
 			clock-names = "cpu";
 			clock-latency = <20000>;
@@ -63,6 +64,7 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a9";
 			reg = <0x301>;
+			power-domains = <&pm_domains DOMAIN_VARM>;
 		};
 	};
 
@@ -154,6 +156,7 @@
 			reg = <0x40020000 0x40000>;
 			#address-cells = <1>;
 			#size-cells = <1>;
+			power-domains = <&pm_domains DOMAIN_ESRAM_12>;
 			ranges = <0 0x40020000 0x40000>;
 		};
 		sram@40060000 {
@@ -162,6 +165,7 @@
 			reg = <0x40060000 0x40000>;
 			#address-cells = <1>;
 			#size-cells = <1>;
+			power-domains = <&pm_domains DOMAIN_ESRAM_34>;
 			ranges = <0 0x40060000 0x40000>;
 
 			lcla: sram@20000 {
@@ -181,7 +185,7 @@
 		ptm@801ae000 {
 			compatible = "arm,coresight-etm3x", "arm,primecell";
 			reg = <0x801ae000 0x1000>;
-
+			power-domains = <&pm_domains DOMAIN_VARM>;
 			clocks = <&prcmu_clk PRCMU_APETRACECLK>, <&prcmu_clk PRCMU_APEATCLK>;
 			clock-names = "apb_pclk", "atclk";
 			cpu = <&CPU0>;
@@ -197,7 +201,7 @@
 		ptm@801af000 {
 			compatible = "arm,coresight-etm3x", "arm,primecell";
 			reg = <0x801af000 0x1000>;
-
+			power-domains = <&pm_domains DOMAIN_VARM>;
 			clocks = <&prcmu_clk PRCMU_APETRACECLK>, <&prcmu_clk PRCMU_APEATCLK>;
 			clock-names = "apb_pclk", "atclk";
 			cpu = <&CPU1>;
@@ -213,7 +217,7 @@
 		funnel@801a6000 {
 			compatible = "arm,coresight-dynamic-funnel", "arm,primecell";
 			reg = <0x801a6000 0x1000>;
-
+			power-domains = <&pm_domains DOMAIN_VARM>;
 			clocks = <&prcmu_clk PRCMU_APETRACECLK>, <&prcmu_clk PRCMU_APEATCLK>;
 			clock-names = "apb_pclk", "atclk";
 			out-ports {
@@ -249,6 +253,7 @@
 			compatible = "arm,coresight-static-replicator";
 			clocks = <&prcmu_clk PRCMU_APEATCLK>;
 			clock-names = "atclk";
+			power-domains = <&pm_domains DOMAIN_VARM>;
 
 			out-ports {
 				#address-cells = <1>;
@@ -280,7 +285,7 @@
 		tpiu@80190000 {
 			compatible = "arm,coresight-tpiu", "arm,primecell";
 			reg = <0x80190000 0x1000>;
-
+			power-domains = <&pm_domains DOMAIN_VARM>;
 			clocks = <&prcmu_clk PRCMU_APETRACECLK>, <&prcmu_clk PRCMU_APEATCLK>;
 			clock-names = "apb_pclk", "atclk";
 			in-ports {
@@ -295,7 +300,7 @@
 		etb@801a4000 {
 			compatible = "arm,coresight-etb10", "arm,primecell";
 			reg = <0x801a4000 0x1000>;
-
+			power-domains = <&pm_domains DOMAIN_VARM>;
 			clocks = <&prcmu_clk PRCMU_APETRACECLK>, <&prcmu_clk PRCMU_APEATCLK>;
 			clock-names = "apb_pclk", "atclk";
 			in-ports {
@@ -314,11 +319,13 @@
 			interrupt-controller;
 			reg = <0xa0411000 0x1000>,
 			      <0xa0410100 0x100>;
+			power-domains = <&pm_domains DOMAIN_VARM>;
 		};
 
 		scu@a0410000 {
 			compatible = "arm,cortex-a9-scu";
 			reg = <0xa0410000 0x100>;
+			power-domains = <&pm_domains DOMAIN_VARM>;
 		};
 
 		/*
@@ -326,6 +333,7 @@
 		 * and various things like spin tables
 		 */
 		backupram@80150000 {
+			/* This memory is in the VSAFE (always on) power domain */
 			compatible = "ste,dbx500-backupram";
 			reg = <0x80150000 0x2000>;
 		};
@@ -334,6 +342,7 @@
 			compatible = "arm,pl310-cache";
 			reg = <0xa0412000 0x1000>;
 			interrupts = <GIC_SPI 13 IRQ_TYPE_LEVEL_HIGH>;
+			power-domains = <&pm_domains DOMAIN_VARM>;
 			cache-unified;
 			cache-level = <2>;
 		};
@@ -346,6 +355,18 @@
 		pm_domains: power-controller {
 			compatible = "stericsson,ux500-pm-domains";
 			#power-domain-cells = <1>;
+			power-domains = <&pm_domains DOMAIN_VAPE>,
+					<&pm_domains DOMAIN_VAPE>,
+					<&pm_domains DOMAIN_VAPE>,
+					<&pm_domains DOMAIN_VAPE>,
+					<&pm_domains DOMAIN_VAPE>,
+					<&pm_domains DOMAIN_VAPE>;
+			power-domains-child-ids = <DOMAIN_SVA_MMDSP>,
+						 <DOMAIN_SVA_PIPE>,
+						 <DOMAIN_SIA_MMDSP>,
+						 <DOMAIN_SIA_PIPE>,
+						 <DOMAIN_SGA>,
+						 <DOMAIN_B2R2_MCDE>;
 		};
 
 		clocks {
@@ -357,6 +378,7 @@
 			reg = <0x8012f000 0x1000>, <0x8011f000 0x1000>,
 			    <0x8000f000 0x1000>, <0xa03ff000 0x1000>,
 			    <0xa03cf000 0x1000>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 
 			prcmu_clk: prcmu-clock {
 				#clock-cells = <1>;
@@ -393,7 +415,7 @@
 			compatible = "st,nomadik-mtu";
 			reg = <0xa03c6000 0x1000>;
 			interrupts = <GIC_SPI 4 IRQ_TYPE_LEVEL_HIGH>;
-
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 			clocks = <&prcmu_clk PRCMU_TIMCLK>, <&prcc_pclk 6 6>;
 			clock-names = "timclk", "apb_pclk";
 		};
@@ -402,7 +424,7 @@
 			compatible = "arm,cortex-a9-twd-timer";
 			reg = <0xa0410600 0x20>;
 			interrupts = <GIC_PPI 13 (GIC_CPU_MASK_RAW(3) | IRQ_TYPE_LEVEL_HIGH)>;
-
+			power-domains = <&pm_domains DOMAIN_VARM>;
 			clocks = <&smp_twd_clk>;
 		};
 
@@ -410,14 +432,15 @@
 			compatible = "arm,cortex-a9-twd-wdt";
 			reg = <0xa0410620 0x20>;
 			interrupts = <GIC_PPI 14 (GIC_CPU_MASK_RAW(3) | IRQ_TYPE_LEVEL_HIGH)>;
+			power-domains = <&pm_domains DOMAIN_VARM>;
 			clocks = <&smp_twd_clk>;
 		};
 
 		rtc@80154000 {
+			/* This peripheral is in the VSAFE (always on) power domain */
 			compatible = "arm,pl031", "arm,primecell";
 			reg = <0x80154000 0x1000>;
 			interrupts = <GIC_SPI 18 IRQ_TYPE_LEVEL_HIGH>;
-
 			clocks = <&rtc_clk>;
 			clock-names = "apb_pclk";
 		};
@@ -435,6 +458,7 @@
 			gpio-bank = <0>;
 			gpio-ranges = <&pinctrl 0 0 32>;
 			clocks = <&prcc_pclk 1 9>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		gpio1: gpio@8012e080 {
@@ -450,6 +474,7 @@
 			gpio-bank = <1>;
 			gpio-ranges = <&pinctrl 0 32 5>;
 			clocks = <&prcc_pclk 1 9>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		gpio2: gpio@8000e000 {
@@ -465,6 +490,7 @@
 			gpio-bank = <2>;
 			gpio-ranges = <&pinctrl 0 64 32>;
 			clocks = <&prcc_pclk 3 8>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		gpio3: gpio@8000e080 {
@@ -480,6 +506,7 @@
 			gpio-bank = <3>;
 			gpio-ranges = <&pinctrl 0 96 2>;
 			clocks = <&prcc_pclk 3 8>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		gpio4: gpio@8000e100 {
@@ -495,6 +522,7 @@
 			gpio-bank = <4>;
 			gpio-ranges = <&pinctrl 0 128 32>;
 			clocks = <&prcc_pclk 3 8>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		gpio5: gpio@8000e180 {
@@ -510,6 +538,7 @@
 			gpio-bank = <5>;
 			gpio-ranges = <&pinctrl 0 160 12>;
 			clocks = <&prcc_pclk 3 8>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		gpio6: gpio@8011e000 {
@@ -525,6 +554,7 @@
 			gpio-bank = <6>;
 			gpio-ranges = <&pinctrl 0 192 32>;
 			clocks = <&prcc_pclk 2 11>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		gpio7: gpio@8011e080 {
@@ -540,6 +570,7 @@
 			gpio-bank = <7>;
 			gpio-ranges = <&pinctrl 0 224 7>;
 			clocks = <&prcc_pclk 2 11>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		gpio8: gpio@a03fe000 {
@@ -555,6 +586,7 @@
 			gpio-bank = <8>;
 			gpio-ranges = <&pinctrl 0 256 12>;
 			clocks = <&prcc_pclk 5 1>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		pinctrl: pinctrl {
@@ -570,6 +602,7 @@
 			reg = <0xa03e0000 0x10000>;
 			interrupts = <GIC_SPI 23 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "mc";
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 
 			dr_mode = "otg";
 
@@ -613,9 +646,11 @@
 			memcpy-channels = <56 57 58 59 60>;
 
 			clocks = <&prcmu_clk PRCMU_DMACLK>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		prcmu: prcmu@80157000 {
+			/* This peripheral is in the VSAFE (always on) power domain */
 			compatible = "stericsson,db8500-prcmu", "syscon";
 			reg = <0x80157000 0x2000>, <0x801b0000 0x8000>, <0x801b8000 0x1000>;
 			reg-names = "prcmu", "prcmu-tcpm", "prcmu-tcdm";
@@ -641,6 +676,10 @@
 				#thermal-sensor-cells = <0>;
 			};
 
+			/*
+			 * TODO: Delete these bogus regulators and replace with power
+			 * domains.
+			 */
 			db8500-prcmu-regulators {
 				compatible = "stericsson,db8500-prcmu-regulator";
 
@@ -932,6 +971,7 @@
 
 			clocks = <&prcc_kclk 1 0>, <&prcc_pclk 1 0>;
 			clock-names = "uart", "apb_pclk";
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 			resets = <&prcc_reset DB8500_PRCC_1 DB8500_PRCC_1_RESET_UART0>;
 
 			status = "disabled";
@@ -948,6 +988,7 @@
 
 			clocks = <&prcc_kclk 1 1>, <&prcc_pclk 1 1>;
 			clock-names = "uart", "apb_pclk";
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 			resets = <&prcc_reset DB8500_PRCC_1 DB8500_PRCC_1_RESET_UART1>;
 
 			status = "disabled";
@@ -964,6 +1005,7 @@
 
 			clocks = <&prcc_kclk 3 6>, <&prcc_pclk 3 6>;
 			clock-names = "uart", "apb_pclk";
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 			resets = <&prcc_reset DB8500_PRCC_3 DB8500_PRCC_3_RESET_UART2>;
 
 			status = "disabled";
@@ -1076,7 +1118,9 @@
 			#sound-dai-cells = <0>;
 			reg = <0x80123000 0x1000>;
 			interrupts = <GIC_SPI 31 IRQ_TYPE_LEVEL_HIGH>;
+			/* TODO: delete and replace with power-domain handling */
 			v-ape-supply = <&db8500_vape_reg>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 
 			dmas = <&dma 31 0 0x12>, /* Logical - DevToMem - HighPrio */
 			       <&dma 31 0 0x10>; /* Logical - MemToDev - HighPrio */
@@ -1094,7 +1138,9 @@
 			#sound-dai-cells = <0>;
 			reg = <0x80124000 0x1000>;
 			interrupts = <GIC_SPI 62 IRQ_TYPE_LEVEL_HIGH>;
+			/* TODO: delete and replace with power-domain handling */
 			v-ape-supply = <&db8500_vape_reg>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 
 			/* This DMA channel only exist on DB8500 v1 */
 			dmas = <&dma 30 0 0x10>; /* Logical - MemToDev - HighPrio */
@@ -1113,7 +1159,9 @@
 			#sound-dai-cells = <0>;
 			reg = <0x80117000 0x1000>;
 			interrupts = <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>;
+			/* TODO: delete and replace with power-domain handling */
 			v-ape-supply = <&db8500_vape_reg>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 
 			dmas = <&dma 14 0 0x12>, /* Logical  - DevToMem - HighPrio */
 			       <&dma 14 1 0x19>; /* Physical Chan 1 - MemToDev
@@ -1132,7 +1180,9 @@
 			#sound-dai-cells = <0>;
 			reg = <0x80125000 0x1000>;
 			interrupts = <GIC_SPI 62 IRQ_TYPE_LEVEL_HIGH>;
+			/* TODO: delete and replace with power-domain handling */
 			v-ape-supply = <&db8500_vape_reg>;
+			power-domains = <&pm_domains DOMAIN_VAPE>;
 
 			/* This DMA channel only exist on DB8500 v2 */
 			dmas = <&dma 30 0 0x12>; /* Logical - DevToMem - HighPrio */
@@ -1174,14 +1224,17 @@
 					  "combined";
 			clocks = <&prcmu_clk PRCMU_ACLK>, <&prcmu_clk PRCMU_SGACLK>;
 			clock-names = "bus", "core";
+			power-domains = <&pm_domains DOMAIN_SGA>;
+			/* TODO: delete and replace with power-domain handling */
 			mali-supply = <&db8500_sga_reg>;
-			power-domains = <&pm_domains DOMAIN_VAPE>;
 		};
 
 		mcde@a0350000 {
 			compatible = "ste,mcde";
 			reg = <0xa0350000 0x1000>;
 			interrupts = <GIC_SPI 48 IRQ_TYPE_LEVEL_HIGH>;
+			power-domains = <&pm_domains DOMAIN_B2R2_MCDE>;
+			/* TODO: delete and replace with power-domain handling */
 			epod-supply = <&db8500_b2r2_mcde_reg>;
 			clocks = <&prcmu_clk PRCMU_MCDECLK>, /* Main MCDE clock */
 				 <&prcmu_clk PRCMU_LCDCLK>, /* LCD clock */
