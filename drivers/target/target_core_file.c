@@ -584,7 +584,8 @@ fd_execute_unmap(struct se_cmd *cmd, sector_t lba, sector_t nolb)
 		if (!file->f_op->fallocate)
 			return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 
-		ret = file->f_op->fallocate(file, mode, pos, len);
+		scoped_guard(file_write, file)
+			ret = file->f_op->fallocate(file, mode, pos, len);
 		if (ret < 0) {
 			pr_warn("FILEIO: fallocate() failed: %d\n", ret);
 			return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
