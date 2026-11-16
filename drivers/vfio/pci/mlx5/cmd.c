@@ -518,7 +518,7 @@ static int mlx5vf_add_pages(struct page ***page_list, unsigned int npages)
 
 err:
 	for (i = 0; i < done; i++)
-		__free_page(*page_list[i]);
+		__free_page((*page_list)[i]);
 
 	kvfree(*page_list);
 	*page_list = NULL;
