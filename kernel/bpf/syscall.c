@@ -3074,13 +3074,13 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	}
 
 	/* plain bpf_prog allocation */
-	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER);
+	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER | BPF_GFP_MAYFAIL);
 	if (!prog) {
 		if (dst_prog)
 			bpf_prog_put(dst_prog);
 		if (attach_btf)
 			btf_put(attach_btf);
-		err = -EINVAL;
+		err = -ENOMEM;
 		goto put_token;
 	}
 
@@ -3103,7 +3103,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	prog->aux->user = get_current_user();
 	prog->len = attr->insn_cnt;
 
-	err = bpf_prog_stream_init(prog, GFP_USER);
+	err = bpf_prog_stream_init(prog, GFP_USER | BPF_GFP_MAYFAIL);
 	if (err)
 		goto free_prog;
 

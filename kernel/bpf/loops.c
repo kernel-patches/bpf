@@ -28,7 +28,7 @@ static struct bpf_iarray **compute_predecessors(struct bpf_verifier_env *env)
 	size_t sz;
 	void *tmp;
 
-	num_preds = kvzalloc_objs(u32, prog->len, GFP_KERNEL_ACCOUNT);
+	num_preds = kvzalloc_objs(u32, prog->len, BPF_VERIFIER_GFP);
 	if (!num_preds)
 		return NULL;
 
@@ -49,7 +49,7 @@ static struct bpf_iarray **compute_predecessors(struct bpf_verifier_env *env)
 			i++;
 	}
 
-	result = kvzalloc(sz, GFP_KERNEL_ACCOUNT);
+	result = kvzalloc(sz, BPF_VERIFIER_GFP);
 	if (!result) {
 		kvfree(num_preds);
 		return NULL;
@@ -151,7 +151,7 @@ int bpf_compute_idoms(struct bpf_verifier_env *env)
 	if (!preds)
 		return -ENOMEM;
 
-	idoms = kvzalloc_objs(*idoms, len, GFP_KERNEL_ACCOUNT);
+	idoms = kvzalloc_objs(*idoms, len, BPF_VERIFIER_GFP);
 	if (!idoms) {
 		kvfree(preds);
 		return -ENOMEM;
@@ -212,7 +212,7 @@ static int add_exit(struct bpf_loop *loop, int from, int to)
 	}
 	if (!loop->exits) {
 		loop->exits = kvzalloc_objs(*loop->exits, MAX_LOOP_EXITS,
-					    GFP_KERNEL_ACCOUNT);
+					    BPF_VERIFIER_GFP);
 		if (!loop->exits)
 			return -ENOMEM;
 	}
@@ -229,7 +229,7 @@ static int mark_as_header(struct bpf_verifier_env *env, int h)
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 
 	if (!aux[h].loop) {
-		aux[h].loop = kvzalloc_obj(struct bpf_loop, GFP_KERNEL_ACCOUNT);
+		aux[h].loop = kvzalloc_obj(struct bpf_loop, BPF_VERIFIER_GFP);
 		if (!aux[h].loop)
 			return -ENOMEM;
 	}
@@ -542,9 +542,9 @@ int bpf_compute_loops(struct bpf_verifier_env *env)
 	struct bpf_iarray *succ;
 	struct bpf_loop *loop;
 
-	dfs.dfs_pos = kvzalloc_objs(int, len, GFP_KERNEL_ACCOUNT);
-	dfs.state = kvzalloc_objs(struct dfs_state, len, GFP_KERNEL_ACCOUNT);
-	dfs.stack = kvzalloc_objs(int, len, GFP_KERNEL_ACCOUNT);
+	dfs.dfs_pos = kvzalloc_objs(int, len, BPF_VERIFIER_GFP);
+	dfs.state = kvzalloc_objs(struct dfs_state, len, BPF_VERIFIER_GFP);
+	dfs.stack = kvzalloc_objs(int, len, BPF_VERIFIER_GFP);
 	if (!dfs.dfs_pos || !dfs.state || !dfs.stack) {
 		err = -ENOMEM;
 		goto out;

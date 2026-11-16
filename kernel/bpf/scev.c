@@ -275,7 +275,7 @@ static void exprs_ht_add(struct scev *scev, u32 id)
 /* @cap is a power of two. No warning for a size that kvmalloc() rejects. */
 static int grow_exprs(struct scev *scev, u32 cap)
 {
-	gfp_t gfp = GFP_KERNEL_ACCOUNT | __GFP_NOWARN;
+	gfp_t gfp = BPF_VERIFIER_GFP;
 	void *tmp;
 	u32 id;
 
@@ -957,11 +957,11 @@ static struct env *get_loop_env(struct scev *scev, int loop_header, int insn_idx
 	if (e)
 		return e;
 
-	e = kzalloc_obj(*e, GFP_KERNEL_ACCOUNT);
+	e = kzalloc_obj(*e, BPF_VERIFIER_GFP);
 	if (!e)
 		return NULL;
 
-	tmp = krealloc(envs, struct_size(envs, entries, cnt + 1), GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+	tmp = krealloc(envs, struct_size(envs, entries, cnt + 1), BPF_VERIFIER_GFP | __GFP_ZERO);
 	if (!tmp) {
 		kfree(e);
 		return NULL;
@@ -1812,7 +1812,7 @@ static int worklist_push(struct bpf_verifier_env *env, int loop_header, int idx)
 		int *data;
 
 		data = kvrealloc(worklist->data, array_size(size, sizeof(*data)),
-				GFP_KERNEL_ACCOUNT);
+				BPF_VERIFIER_GFP);
 		if (!data)
 			return -ENOMEM;
 		worklist->data = data;
@@ -2300,7 +2300,7 @@ static int grow_array(void *p, u32 cnt, u32 *cap, size_t size)
 
 	if (cnt < *cap)
 		return 0;
-	tmp = kvrealloc(*(void **)p, array_size(new_cap, size), GFP_KERNEL_ACCOUNT);
+	tmp = kvrealloc(*(void **)p, array_size(new_cap, size), BPF_VERIFIER_GFP);
 	if (!tmp)
 		return -ENOMEM;
 	*(void **)p = tmp;
@@ -2567,7 +2567,7 @@ static int find_linked_regs(struct bpf_verifier_env *env, struct env *e, int h, 
 		q->refine = test_bit(k, roots);
 	}
 	if (!envs) {
-		envs = kzalloc(sizeof(*envs), GFP_KERNEL_ACCOUNT);
+		envs = kzalloc(sizeof(*envs), BPF_VERIFIER_GFP);
 		if (!envs)
 			return -ENOMEM;
 		scev->envs[idx] = envs;
@@ -2634,11 +2634,11 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header, i
 	if (!cur_loop && !can_compute_subprog_scev(env, sub))
 		return 0;
 
-	cur_env = kzalloc_obj(*cur_env, GFP_KERNEL_ACCOUNT);
+	cur_env = kzalloc_obj(*cur_env, BPF_VERIFIER_GFP);
 	if (!cur_env)
 		goto nomem;
 	if (log_level2) {
-		old_env = kzalloc_obj(*old_env, GFP_KERNEL_ACCOUNT);
+		old_env = kzalloc_obj(*old_env, BPF_VERIFIER_GFP);
 		if (!old_env)
 			goto nomem;
 	}
@@ -3351,7 +3351,7 @@ int bpf_init_scev(struct bpf_verifier_env *env)
 	struct scev *scev;
 	u32 r;
 
-	scev = kzalloc_obj(struct scev, GFP_KERNEL_ACCOUNT);
+	scev = kzalloc_obj(struct scev, BPF_VERIFIER_GFP);
 	if (!scev)
 		return -ENOMEM;
 	env->scev = scev;
@@ -3369,9 +3369,9 @@ int bpf_init_scev(struct bpf_verifier_env *env)
 		set_expr_base(scev, &scev->exprs[r], r);
 	scev->exprs_cnt = REG_EXPR_ID(REGS_NUM);
 	scev->envs = kvzalloc_objs(*scev->envs, env->prog->len,
-				   GFP_KERNEL_ACCOUNT);
+				   BPF_VERIFIER_GFP);
 	scev->discovered = kvzalloc_objs(*scev->discovered, env->prog->len,
-					 GFP_KERNEL_ACCOUNT);
+					 BPF_VERIFIER_GFP);
 	if (!scev->envs || !scev->discovered)
 		goto nomem;
 	/*

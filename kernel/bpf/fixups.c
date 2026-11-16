@@ -507,11 +507,11 @@ int bpf_patch_list_commit(struct bpf_verifier_env *env)
 
 	err = -ENOMEM;
 	data = __vmalloc(array_size(img.new_cnt, sizeof(*data)),
-			 GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+			 BPF_VERIFIER_GFP | __GFP_ZERO);
 	if (!data)
 		goto out;
 
-	prog = bpf_prog_realloc(prog, bpf_prog_size(img.new_cnt), GFP_USER);
+	prog = bpf_prog_realloc(prog, bpf_prog_size(img.new_cnt), GFP_USER | BPF_GFP_MAYFAIL);
 	if (!prog)
 		goto out;
 	env->prog = prog;
@@ -651,7 +651,7 @@ int bpf_insert_loop_guards(struct bpf_verifier_env *env)
 	 * Where the subprog has 'r0 = 0; exit', 0 if it has none. And how far that moved
 	 * the subprog: guard_to is from the time before.
 	 */
-	leave = kvcalloc(2 * env->subprog_cnt, sizeof(int), GFP_KERNEL_ACCOUNT);
+	leave = kvcalloc(2 * env->subprog_cnt, sizeof(int), BPF_VERIFIER_GFP);
 	if (!leave)
 		return -ENOMEM;
 	moved = leave + env->subprog_cnt;
@@ -689,9 +689,9 @@ int bpf_insert_loop_guards(struct bpf_verifier_env *env)
 	}
 
 	/* where the guard of the insn goes */
-	target = kvcalloc(len, sizeof(int), GFP_KERNEL_ACCOUNT);
-	zero = kvcalloc(len, sizeof(u16), GFP_KERNEL_ACCOUNT);
-	patch = kvcalloc(8, sizeof(*patch), GFP_KERNEL_ACCOUNT);
+	target = kvcalloc(len, sizeof(int), BPF_VERIFIER_GFP);
+	zero = kvcalloc(len, sizeof(u16), BPF_VERIFIER_GFP);
+	patch = kvcalloc(8, sizeof(*patch), BPF_VERIFIER_GFP);
 	if (!target || !zero || !patch) {
 		err = -ENOMEM;
 		goto out;
@@ -1259,7 +1259,7 @@ int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 	unsigned long *removed;
 	int i, next, err = 0;
 
-	removed = kvcalloc(BITS_TO_LONGS(insn_cnt), sizeof(long), GFP_KERNEL_ACCOUNT);
+	removed = kvcalloc(BITS_TO_LONGS(insn_cnt), sizeof(long), BPF_VERIFIER_GFP);
 	if (!removed)
 		return -ENOMEM;
 
@@ -1768,7 +1768,7 @@ static u32 *bpf_dup_subprog_starts(struct bpf_verifier_env *env)
 {
 	u32 *starts = NULL;
 
-	starts = kvmalloc_objs(u32, env->subprog_cnt, GFP_KERNEL_ACCOUNT);
+	starts = kvmalloc_objs(u32, env->subprog_cnt, BPF_VERIFIER_GFP);
 	if (starts) {
 		for (int i = 0; i < env->subprog_cnt; i++)
 			starts[i] = env->subprog_info[i].start;
@@ -1902,7 +1902,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		 * subprogs don't have IDs and not reachable via prog_get_next_id
 		 * func[i]->stats will never be accessed and stays NULL
 		 */
-		func[i] = bpf_prog_alloc_no_stats(bpf_prog_size(len), GFP_USER);
+		func[i] = bpf_prog_alloc_no_stats(bpf_prog_size(len), GFP_USER | BPF_GFP_MAYFAIL);
 		if (!func[i])
 			goto out_free;
 		memcpy(func[i]->insnsi, &prog->insnsi[subprog_start],
@@ -2215,7 +2215,7 @@ int bpf_fixup_call_args(struct bpf_verifier_env *env)
 		err = bpf_jit_subprogs(env);
 		if (err == 0)
 			return 0;
-		if (err == -EFAULT || err == -EINTR)
+		if (err == -EFAULT || err == -EINTR || err == -ENOMEM)
 			return err;
 	}
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
@@ -2859,7 +2859,7 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			}
 			if (!tmg) {
 				tmg = alloc_percpu_gfp(struct bpf_timed_may_goto,
-						       GFP_KERNEL_ACCOUNT);
+						       BPF_VERIFIER_GFP);
 				if (!tmg)
 					return -ENOMEM;
 				prog->aux->timed_may_goto = tmg;

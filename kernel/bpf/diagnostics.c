@@ -234,7 +234,7 @@ int bpf_diag_init(struct bpf_verifier_env *env)
 	if (!bpf_diag_enabled(env))
 		return 0;
 
-	env->diag = kzalloc_obj(struct bpf_diag, GFP_KERNEL_ACCOUNT);
+	env->diag = kzalloc_obj(struct bpf_diag, BPF_VERIFIER_GFP);
 	if (!env->diag)
 		return -ENOMEM;
 
@@ -266,7 +266,7 @@ static char *diag_fmt_alloc(struct bpf_verifier_env *env, size_t size)
 	}
 
 	capacity = max_t(size_t, BPF_DIAG_FMT_CHUNK_SIZE, size);
-	chunk = kmalloc_flex(*chunk, data, capacity, GFP_KERNEL_ACCOUNT);
+	chunk = kmalloc_flex(*chunk, data, capacity, BPF_VERIFIER_GFP);
 	if (!chunk)
 		return NULL;
 
@@ -456,7 +456,7 @@ static void diag_append_history(struct bpf_verifier_env *env,
 		goto rotate;
 
 	cap = min(log->cap ? log->cap * 2 : 64, max_events);
-	events = kvrealloc(log->events, array_size(cap, sizeof(*events)), GFP_KERNEL_ACCOUNT);
+	events = kvrealloc(log->events, array_size(cap, sizeof(*events)), BPF_VERIFIER_GFP);
 	if (!events) {
 		log->growth_failed = true;
 		goto rotate;
@@ -542,7 +542,7 @@ static void diag_vprint_indented(struct bpf_verifier_env *env, const char *fmt, 
 	if (!bpf_diag_enabled(env))
 		return;
 
-	buf = kvasprintf(GFP_KERNEL_ACCOUNT, fmt, args);
+	buf = kvasprintf(BPF_VERIFIER_GFP, fmt, args);
 	if (!buf) {
 		diag_write(env, "%s<failed to allocate diagnostic text>\n", BPF_DIAG_TEXT_INDENT);
 		return;
