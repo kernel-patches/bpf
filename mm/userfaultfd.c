@@ -971,6 +971,9 @@ static __always_inline ssize_t mfill_atomic(struct userfaultfd_ctx *ctx,
 	if (err)
 		goto out;
 
+	if (uffd_flags_mode_is(flags, MFILL_ATOMIC_POISON))
+		vma_set_atomic_flag(state.vma, VMA_MAYBE_UFFD_POISON_BIT);
+
 	/*
 	 * If this is a HUGETLB vma, pass off to appropriate routine
 	 */
