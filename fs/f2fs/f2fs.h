@@ -4094,7 +4094,7 @@ int f2fs_getattr(const struct mnt_idmap *idmap, const struct path *path,
 		 struct kstat *stat, u32 request_mask, unsigned int flags);
 int f2fs_setattr(const struct mnt_idmap *idmap, struct dentry *dentry,
 		 struct iattr *attr);
-int f2fs_truncate_hole(struct inode *inode, pgoff_t pg_start, pgoff_t pg_end);
+int f2fs_truncate_hole(struct inode *inode, pgoff_t blk_start, pgoff_t blk_end);
 void f2fs_truncate_data_blocks_range(struct dnode_of_data *dn, int count);
 int f2fs_do_shutdown(struct f2fs_sb_info *sbi, unsigned int flag,
 						bool readonly, bool need_lock);
@@ -4542,6 +4542,8 @@ void f2fs_ffs_clear_subrange_uptodate(struct folio *folio, size_t offset,
 				      size_t len);
 bool f2fs_ffs_dirty_blk_range(struct folio *folio, unsigned int from,
 			      unsigned int to, unsigned int *start, unsigned int *count);
+int f2fs_prepare_subpage_mkwrite(struct inode *inode, struct folio *folio,
+				 loff_t pos, unsigned int len, bool need_alloc);
 void f2fs_write_failed(struct inode *inode, loff_t to);
 void f2fs_invalidate_folio(struct folio *folio, size_t offset, size_t length);
 bool f2fs_release_folio(struct folio *folio, gfp_t wait);
