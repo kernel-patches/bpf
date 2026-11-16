@@ -55,6 +55,7 @@ fixes; they should go to the maintainer of the subsystem in question.
 For example, in a documentation build I grabbed a pair of warnings nearly
 at random::
 
+  user@PC$ ./scripts/kernel-doc --none drivers/devfreq/devfreq.c
   ./drivers/devfreq/devfreq.c:1818: warning: bad line:
   	- Resource-managed devfreq_register_notifier()
   ./drivers/devfreq/devfreq.c:1854: warning: bad line:
