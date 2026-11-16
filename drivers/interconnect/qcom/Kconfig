@@ -31,6 +31,19 @@ config INTERCONNECT_QCOM_GLYMUR
 	  This is a driver for the Qualcomm Network-on-Chip on glymur-based
 	  platforms.
 
+config INTERCONNECT_QCOM_HALLIDAY
+	tristate "Qualcomm Halliday interconnect driver"
+	depends on INTERCONNECT_QCOM_RPMH_POSSIBLE
+	depends on ARM64 || COMPILE_TEST
+	select INTERCONNECT_QCOM_RPMH
+	select INTERCONNECT_QCOM_BCM_VOTER
+	default ARCH_QCOM
+	help
+	  This is a driver for the Qualcomm Network-on-Chip on Halliday-based
+	  platforms (SXR2250P / Snapdragon XR2+ Gen 2). It aggregates the
+	  bandwidth requests of the devices and votes for them through the
+	  RPMh Bus Clock Manager.
+
 config INTERCONNECT_QCOM_HAWI
 	tristate "Qualcomm HAWI interconnect driver"
 	depends on INTERCONNECT_QCOM_RPMH_POSSIBLE
