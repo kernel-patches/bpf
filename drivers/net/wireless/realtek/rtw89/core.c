@@ -3972,7 +3972,8 @@ static bool rtw89_core_skb_pn_valid(struct rtw89_dev *rtwdev,
 	if (!ieee80211_is_data_qos(hdr->frame_control))
 		return true;
 
-	if (!desc_info->hw_dec || !desc_info->addr1_match)
+	if (!desc_info->hw_dec || !desc_info->addr1_match ||
+	    desc_info->sw_dec || desc_info->icv_err || desc_info->crc32_err)
 		return true;
 
 	guard(rcu)();
