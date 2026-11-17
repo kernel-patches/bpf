@@ -194,101 +194,11 @@ arch_test_bit_acquire(unsigned long nr, const volatile unsigned long *addr)
 	return retval;
 }
 
-/*
- * ffz - find first zero in word.
- * @word: The word to search
- *
- * Undefined if no zero exists, so code should check against ~0UL first.
- */
-static inline long __attribute_const__ ffz(int x)
-{
-	int r;
-
-	asm("%0 = ct1(%1);\n"
-		: "=&r" (r)
-		: "r" (x));
-	return r;
-}
-
-/*
- * fls - find last (most-significant) bit set
- * @x: the word to search
- *
- * This is defined the same way as ffs.
- * Note fls(0) = 0, fls(1) = 1, fls(0x80000000) = 32.
- */
-static inline __attribute_const__ int fls(unsigned int x)
-{
-	int r;
-
-	asm("{ %0 = cl0(%1);}\n"
-		"%0 = sub(#32,%0);\n"
-		: "=&r" (r)
-		: "r" (x)
-		: "p0");
-
-	return r;
-}
-
-/*
- * ffs - find first bit set
- * @x: the word to search
- *
- * This is defined the same way as
- * the libc and compiler builtin ffs routines, therefore
- * differs in spirit from the above ffz (man ffs).
- */
-static inline __attribute_const__ int ffs(int x)
-{
-	int r;
-
-	asm("{ P0 = cmp.eq(%1,#0); %0 = ct0(%1);}\n"
-		"{ if (P0) %0 = #0; if (!P0) %0 = add(%0,#1);}\n"
-		: "=&r" (r)
-		: "r" (x)
-		: "p0");
-
-	return r;
-}
-
-/*
- * __ffs - find first bit in word.
- * @word: The word to search
- *
- * Undefined if no bit exists, so code should check against 0 first.
- *
- * bits_per_long assumed to be 32
- * numbering starts at 0 I think (instead of 1 like ffs)
- */
-static inline __attribute_const__ unsigned long __ffs(unsigned long word)
-{
-	int num;
-
-	asm("%0 = ct0(%1);\n"
-		: "=&r" (num)
-		: "r" (word));
-
-	return num;
-}
-
-/*
- * __fls - find last (most-significant) set bit in a long word
- * @word: the word to search
- *
- * Undefined if no set bit exists, so code should check against 0 first.
- * bits_per_long assumed to be 32
- */
-static inline __attribute_const__ unsigned long __fls(unsigned long word)
-{
-	int num;
-
-	asm("%0 = cl0(%1);\n"
-		"%0 = sub(#31,%0);\n"
-		: "=&r" (num)
-		: "r" (word));
-
-	return num;
-}
+#include <asm-generic/bitops/builtin-__ffs.h>
+#include <asm-generic/bitops/builtin-ffs.h>
+#include <asm-generic/bitops/builtin-__fls.h>
+#include <asm-generic/bitops/builtin-fls.h>
+#include <asm-generic/bitops/ffz.h>
 
 #include <asm-generic/bitops/lock.h>
 #include <asm-generic/bitops/non-instrumented-non-atomic.h>
