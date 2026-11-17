@@ -852,7 +852,7 @@ static int sata_dwc_port_start(struct ata_port *ap)
 
 	err = phy_power_on(hsdev->phy);
 	if (err)
-		goto CLEANUP_ALLOC;
+		goto CLEANUP_DMA;
 
 	for (i = 0; i < SATA_DWC_QCMD_MAX; i++)
 		hsdevp->cmd_issued[i] = SATA_DWC_CMD_ISSUED_NOT;
@@ -879,6 +879,8 @@ static int sata_dwc_port_start(struct ata_port *ap)
 	dev_dbg(ap->dev, "%s: done\n", __func__);
 	return 0;
 
+CLEANUP_DMA:
+	dma_release_channel(hsdevp->chan);
 CLEANUP_ALLOC:
 	kfree(hsdevp);
 CLEANUP:
