@@ -1081,6 +1081,13 @@ static bool bnxt_tc_can_offload(struct bnxt *bp, struct bnxt_tc_flow *flow)
 		return false;
 	}
 
+	/* Currently tunnel id cannot be partial wildcard */
+	if ((flow->flags & BNXT_TC_FLOW_FLAGS_TUNL_ID) &&
+	    flow->tun_mask.tun_id != key32_to_tunnel_id(cpu_to_be32(U32_MAX))) {
+		netdev_info(bp->dev, "Wildcard match unsupported for tunnel id\n");
+		return false;
+	}
+
 	/* Currently Ethertype must be set */
 	if (!is_exactmatch(&flow->l2_mask.ether_type,
 			   sizeof(flow->l2_mask.ether_type))) {
