@@ -3261,8 +3261,11 @@ static int sev_misc_init(struct sev_device *sev)
 		misc->fops = &sev_fops;
 
 		ret = misc_register(misc);
-		if (ret)
+		if (ret) {
+			kfree(misc_dev);
+			misc_dev = NULL;
 			return ret;
+		}
 
 		kref_init(&misc_dev->refcount);
 	} else {
