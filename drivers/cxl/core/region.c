@@ -1593,12 +1593,15 @@ static int cxl_port_parent_interleave(struct cxl_port *port,
 			parent_iw /= 3;
 	} else {
 		struct cxl_region_ref *parent_rr;
-		struct cxl_decoder *parent_cxld;
 
+		/*
+		 * The granularity of a passthrough (iw == 1) decoder is a
+		 * hardware don't-care, so use the parent port's effective
+		 * interleave state rather than the parent decoder's settings.
+		 */
 		parent_rr = cxl_rr_load(parent_port, cxlr);
-		parent_cxld = parent_rr->decoder;
-		parent_ig = parent_cxld->interleave_granularity;
-		parent_iw = parent_cxld->interleave_ways;
+		parent_ig = parent_rr->eff_ig;
+		parent_iw = parent_rr->eff_iw;
 	}
 
 	if (!granularity_valid(parent_ig)) {
@@ -1641,7 +1644,13 @@ static int cxl_port_calc_interleave(struct cxl_port *port, struct cxl_region *cx
 		return -EINVAL;
 	}
 
-	/* Finer-than-root regions refine granularity toward the endpoints */
+	/*
+	 * Finer-than-root regions refine granularity toward the endpoints.
+	 * Otherwise interleave granularity is a multiple of @parent_port
+	 * granularity, and the multiplier is the parent port interleave ways.
+	 * A passthrough decoder does not interleave, so it takes the parent
+	 * granularity.
+	 */
 	if (cxl_region_is_finer_than_root(cxlr)) {
 		ig = parent_ig / iw;
 
@@ -1652,6 +1661,8 @@ static int cxl_port_calc_interleave(struct cxl_port *port, struct cxl_region *cx
 				ig, p->interleave_granularity);
 			return -ENXIO;
 		}
+	} else if (iw == 1) {
+		ig = parent_ig;
 	} else {
 		ig = parent_ig * parent_iw;
 	}
@@ -1670,6 +1681,12 @@ static int cxl_port_calc_interleave(struct cxl_port *port, struct cxl_region *cx
 			dev_name(&cxld->dev), iw, cxlsd->nr_targets);
 		return -ENXIO;
 	}
+
+	if (iw == 1)
+		cxl_rr->eff_iw = parent_iw;
+	else
+		cxl_rr->eff_iw = iw;
+	cxl_rr->eff_ig = ig;
 
 	*out_iw = iw;
 	*out_ig = ig;
@@ -1701,6 +1718,9 @@ static int cxl_port_setup_decoder(struct cxl_port *port, struct cxl_region *cxlr
 				cxld->hpa_range.start, cxld->hpa_range.end);
 			return -ENXIO;
 		}
+		/* Report the effective granularity, not the register value */
+		if (iw == 1)
+			cxld->interleave_granularity = ig;
 	} else {
 		rc = check_interleave_cap(cxld, iw, ig);
 		if (rc) {

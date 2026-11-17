@@ -252,12 +252,16 @@ static struct {
 	} cfmws11;
 	struct {
 		struct acpi_cedt_cfmws cfmws;
-		u32 target[3];
+		u32 target[2];
 	} cfmws12;
 	struct {
 		struct acpi_cedt_cfmws cfmws;
 		u32 target[3];
 	} cfmws13;
+	struct {
+		struct acpi_cedt_cfmws cfmws;
+		u32 target[3];
+	} cfmws14;
 	struct {
 		struct acpi_cedt_cfmws cfmws;
 		u32 target[1];
@@ -266,6 +270,10 @@ static struct {
 		struct acpi_cedt_cxims cxims;
 		u64 xormap_list[2];
 	} cxims0;
+	struct {
+		struct acpi_cedt_cxims cxims;
+		u64 xormap_list[1];
+	} cxims1;
 } __packed mock_cedt = {
 	.cedt = {
 		.header = {
@@ -452,7 +460,7 @@ static struct {
 		},
 		.target = { 1 },
 	},
-	/* .cfmws8,9,10 use ACPI_CEDT_CFMWS_ARITHMETIC_XOR */
+	/* .cfmws8,9,10,11 use ACPI_CEDT_CFMWS_ARITHMETIC_XOR */
 	.cfmws8 = {
 		.cfmws = {
 			.header = {
@@ -501,11 +509,32 @@ static struct {
 		},
 		.target = { 0, 1, 2, },
 	},
+	/*
+	 * A 2-way root at 16K, the maximum granularity encodable in
+	 * hardware. Passthrough decoders below it must carry the 16K
+	 * interleave through rather than multiply it.
+	 */
 	.cfmws11 = {
 		.cfmws = {
 			.header = {
 				.type = ACPI_CEDT_TYPE_CFMWS,
 				.length = sizeof(mock_cedt.cfmws11),
+			},
+			.interleave_arithmetic = ACPI_CEDT_CFMWS_ARITHMETIC_XOR,
+			.interleave_ways = 1,
+			.granularity = 6,
+			.restrictions = ACPI_CEDT_CFMWS_RESTRICT_HOSTONLYMEM |
+					ACPI_CEDT_CFMWS_RESTRICT_PMEM,
+			.qtg_id = FAKE_QTG_ID,
+			.window_size = SZ_256M * 8UL,
+		},
+		.target = { 0, 1, },
+	},
+	.cfmws12 = {
+		.cfmws = {
+			.header = {
+				.type = ACPI_CEDT_TYPE_CFMWS,
+				.length = sizeof(mock_cedt.cfmws12),
 			},
 			.interleave_ways = 1,
 			.granularity = 4,
@@ -516,11 +545,11 @@ static struct {
 		},
 		.target = { 4, 5, },
 	},
-	.cfmws12 = {
+	.cfmws13 = {
 		.cfmws = {
 			.header = {
 				.type = ACPI_CEDT_TYPE_CFMWS,
-				.length = sizeof(mock_cedt.cfmws12),
+				.length = sizeof(mock_cedt.cfmws13),
 			},
 			.interleave_ways = 8,
 			.granularity = 1,
@@ -531,11 +560,11 @@ static struct {
 		},
 		.target = { 4, 5, 6, },
 	},
-	.cfmws13 = {
+	.cfmws14 = {
 		.cfmws = {
 			.header = {
 				.type = ACPI_CEDT_TYPE_CFMWS,
-				.length = sizeof(mock_cedt.cfmws13),
+				.length = sizeof(mock_cedt.cfmws14),
 			},
 			.interleave_ways = 8,
 			.granularity = 2,
@@ -573,6 +602,18 @@ static struct {
 		},
 		.xormap_list = { 0x404100, 0x808200, },
 	},
+	/* CXIMS for the 16K (hbig = 6) 2-way root, cfmws11 */
+	.cxims1 = {
+		.cxims = {
+			.header = {
+				.type = ACPI_CEDT_TYPE_CXIMS,
+				.length = sizeof(mock_cedt.cxims1),
+			},
+			.hbig = 6,
+			.nr_xormaps = 1,
+		},
+		.xormap_list = { 0x0, },
+	},
 };
 
 static struct acpi_cedt_cfmws type2_cfmws0 = {
@@ -601,10 +642,11 @@ struct acpi_cedt_cfmws *mock_cfmws[] = {
 	[8] = &mock_cedt.cfmws8.cfmws,
 	[9] = &mock_cedt.cfmws9.cfmws,
 	[10] = &mock_cedt.cfmws10.cfmws,
-	/* Dedicated finer-than-root granularity topology */
 	[11] = &mock_cedt.cfmws11.cfmws,
+	/* Dedicated finer-than-root granularity topology */
 	[12] = &mock_cedt.cfmws12.cfmws,
 	[13] = &mock_cedt.cfmws13.cfmws,
+	[14] = &mock_cedt.cfmws14.cfmws,
 };
 
 static int cfmws_start;
@@ -612,12 +654,13 @@ static int cfmws_end;
 #define CFMWS_MOD_ARRAY_START 0
 #define CFMWS_MOD_ARRAY_END   7
 #define CFMWS_XOR_ARRAY_START 8
-#define CFMWS_XOR_ARRAY_END   10
-#define CFMWS_FINER_GRAN_ARRAY_START 11
-#define CFMWS_FINER_GRAN_ARRAY_END   13
+#define CFMWS_XOR_ARRAY_END   11
+#define CFMWS_FINER_GRAN_ARRAY_START 12
+#define CFMWS_FINER_GRAN_ARRAY_END   14
 
-struct acpi_cedt_cxims *mock_cxims[1] = {
+struct acpi_cedt_cxims *mock_cxims[2] = {
 	[0] = &mock_cedt.cxims0.cxims,
+	[1] = &mock_cedt.cxims1.cxims,
 };
 
 static struct acpi_cedt_cfmws *mock_auto_region_cfmws(void)
@@ -1644,13 +1687,17 @@ static void mock_init_hdm_type3_cxled(struct cxl_endpoint_decoder *cxled,
 		iter->commit_end = 0;
 		/*
 		 * Switch targets 2 endpoints, while host bridge targets
-		 * one root port
+		 * one root port. Like some platform firmware, program the
+		 * passthrough host bridge with a granularity that differs
+		 * from the region's, since hardware ignores it at 1-way.
 		 */
-		if (i == 0)
+		if (i == 0) {
 			cxld->interleave_ways = 2;
-		else
+			cxld->interleave_granularity = 4096;
+		} else {
 			cxld->interleave_ways = 1;
-		cxld->interleave_granularity = 4096;
+			cxld->interleave_granularity = 256;
+		}
 		cxld->hpa_range = (struct range) {
 			.start = base,
 			.end = base + mock_auto_region_size - 1,
