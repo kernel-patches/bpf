@@ -20,12 +20,6 @@ struct folio_batch;
 unsigned long invalidate_mapping_pages(struct address_space *mapping,
 					pgoff_t start, pgoff_t end);
 
-static inline void invalidate_remote_inode(struct inode *inode)
-{
-	if (S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode) ||
-	    S_ISLNK(inode->i_mode))
-		invalidate_mapping_pages(inode->i_mapping, 0, -1);
-}
 int invalidate_inode_pages2(struct address_space *mapping);
 int invalidate_inode_pages2_range(struct address_space *mapping,
 		pgoff_t start, pgoff_t end);
@@ -296,11 +290,6 @@ static inline bool mapping_release_always(const struct address_space *mapping)
 static inline void mapping_set_release_always(struct address_space *mapping)
 {
 	set_bit(AS_RELEASE_ALWAYS, &mapping->flags);
-}
-
-static inline void mapping_clear_release_always(struct address_space *mapping)
-{
-	clear_bit(AS_RELEASE_ALWAYS, &mapping->flags);
 }
 
 static inline bool mapping_stable_writes(const struct address_space *mapping)
