@@ -44,6 +44,7 @@
 #include "xe_svm.h"
 #include "xe_sync.h"
 #include "xe_trace_bo.h"
+#include "xe_ttm_stolen_mgr.h"
 #include "xe_validation.h"
 #include "xe_vm.h"
 #include "xe_vram.h"
@@ -943,6 +944,10 @@ static u64 xe_migrate_res_sizes(struct xe_migrate *m, struct xe_res_cursor *cur)
 
 static bool xe_migrate_allow_identity(u64 size, const struct xe_res_cursor *cur)
 {
+	/* Stolen is not mapped into identity mapping */
+	if (cur->mem_type == XE_PL_STOLEN)
+		return false;
+
 	/* If the chunk is not fragmented, allow identity map. */
 	return cur->size >= size;
 }
@@ -1024,26 +1029,23 @@ static void emit_pte(struct xe_migrate *m,
 
 		while (chunk--) {
 			u64 addr, flags = 0;
-			bool devmem = false;
 
 			addr = xe_res_dma(cur) & PAGE_MASK;
-			if (is_vram) {
-				if (vm->flags & XE_VM_FLAG_64K) {
-					u64 va = cur_ofs * XE_PAGE_SIZE / 8;
+			/* Stolen sysmem also needs gpu offset */
+			addr += vram_region_gpu_offset(res);
 
-					xe_assert(xe, (va & (SZ_64K - 1)) ==
-						  (addr & (SZ_64K - 1)));
+			if (is_vram && vm->flags & XE_VM_FLAG_64K) {
+				u64 va = cur_ofs * XE_PAGE_SIZE / 8;
 
-					flags |= XE_PTE_PS64;
-				}
+				xe_assert(xe, (va & (SZ_64K - 1)) ==
+					  (addr & (SZ_64K - 1)));
 
-				addr += vram_region_gpu_offset(res);
-				devmem = true;
+				flags |= XE_PTE_PS64;
 			}
 
 			addr = vm->pt_ops->pte_encode_addr(m->tile->xe,
 							   addr, pat_index,
-							   0, devmem, flags);
+							   0, is_vram, flags);
 			bb->cs[bb->len++] = lower_32_bits(addr);
 			bb->cs[bb->len++] = upper_32_bits(addr);
 
@@ -1248,6 +1250,24 @@ static u32 xe_migrate_ccs_copy(struct xe_migrate *m,
 	return flush_flags;
 }
 
+static bool is_devmem(struct xe_bo *bo, struct ttm_resource *res)
+{
+	if (mem_type_is_vram(res->mem_type))
+		return true;
+
+	/*
+	 * Stolen is only device memory on newer platforms.
+	 *
+	 * On older platforms where stolen is mapped to GGTT,
+	 * it is mapped as system memory.
+	 */
+	if (res->mem_type != XE_PL_STOLEN ||
+	    xe_ttm_stolen_cpu_access_needs_ggtt(xe_bo_device(bo)))
+		return false;
+
+	return true;
+}
+
 static struct dma_fence *__xe_migrate_copy(struct xe_migrate *m,
 					   struct xe_bo *src_bo,
 					   struct xe_bo *dst_bo,
@@ -1268,8 +1288,8 @@ static struct dma_fence *__xe_migrate_copy(struct xe_migrate *m,
 	int err;
 	bool src_is_pltt = src->mem_type == XE_PL_TT;
 	bool dst_is_pltt = dst->mem_type == XE_PL_TT;
-	bool src_is_vram = mem_type_is_vram(src->mem_type);
-	bool dst_is_vram = mem_type_is_vram(dst->mem_type);
+	bool src_is_vram = is_devmem(src_bo, src);
+	bool dst_is_vram = is_devmem(dst_bo, dst);
 	bool type_device = src_bo->ttm.type == ttm_bo_type_device;
 	bool needs_ccs_emit = type_device && xe_migrate_needs_ccs_emit(xe);
 	bool copy_ccs = xe_device_has_flat_ccs(xe) &&
@@ -1292,11 +1312,11 @@ static struct dma_fence *__xe_migrate_copy(struct xe_migrate *m,
 	if (src_bo != dst_bo && XE_WARN_ON(xe_bo_size(src_bo) != xe_bo_size(dst_bo)))
 		return ERR_PTR(-EINVAL);
 
-	if (!src_is_vram)
+	if (!src_is_vram && src->mem_type != XE_PL_STOLEN)
 		xe_res_first_sg(xe_bo_sg(src_bo), 0, size, &src_it);
 	else
 		xe_res_first(src, 0, size, &src_it);
-	if (!dst_is_vram)
+	if (!dst_is_vram && dst->mem_type != XE_PL_STOLEN)
 		xe_res_first_sg(xe_bo_sg(dst_bo), 0, size, &dst_it);
 	else
 		xe_res_first(dst, 0, size, &dst_it);
@@ -1969,7 +1989,7 @@ struct dma_fence *xe_migrate_clear(struct xe_migrate *m,
 				   struct ttm_resource *dst,
 				   u32 clear_flags)
 {
-	bool clear_vram = mem_type_is_vram(dst->mem_type);
+	bool clear_vram = is_devmem(bo, dst);
 	bool clear_bo_data = XE_MIGRATE_CLEAR_FLAG_BO_DATA & clear_flags;
 	bool clear_ccs = XE_MIGRATE_CLEAR_FLAG_CCS_DATA & clear_flags;
 	struct xe_gt *gt = m->tile->primary_gt;
@@ -1987,7 +2007,7 @@ struct dma_fence *xe_migrate_clear(struct xe_migrate *m,
 	if (!clear_bo_data && clear_ccs && !IS_DGFX(xe))
 		clear_only_system_ccs = true;
 
-	if (!clear_vram)
+	if (!clear_vram && dst->mem_type != XE_PL_STOLEN)
 		xe_res_first_sg(xe_bo_sg(bo), 0, xe_bo_size(bo), &src_it);
 	else
 		xe_res_first(src, 0, xe_bo_size(bo), &src_it);
