@@ -292,7 +292,7 @@ static inline int pm_runtime_get_if_in_use(struct device *dev)
 }
 static inline int pm_runtime_get_if_active(struct device *dev)
 {
-	return -EINVAL;
+	return 1;
 }
 static inline int __pm_runtime_set_status(struct device *dev,
 					    unsigned int status) { return 0; }
