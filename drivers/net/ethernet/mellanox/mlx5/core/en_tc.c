@@ -2257,6 +2257,7 @@ static int mlx5e_get_flow_tunnel_id(struct mlx5e_priv *priv,
 	struct tunnel_match_enc_opts tun_enc_opts;
 	struct mlx5_rep_uplink_priv *uplink_priv;
 	struct mlx5_flow_attr *attr = flow->attr;
+	struct flow_match_enc_keyid enc_keyid;
 	struct mlx5e_rep_priv *uplink_rpriv;
 	struct tunnel_match_key tunnel_key;
 	bool enc_opts_is_dont_care = true;
@@ -2264,6 +2265,16 @@ static int mlx5e_get_flow_tunnel_id(struct mlx5e_priv *priv,
 	struct mlx5_eswitch *esw;
 	u32 value, mask;
 	int err;
+
+	/* The mapping restores the tunnel id of a packet missing in hardware */
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ENC_KEYID)) {
+		flow_rule_match_enc_keyid(rule, &enc_keyid);
+		if (enc_keyid.mask->keyid != cpu_to_be32(U32_MAX)) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Partial match of tunnel key in chains isn't supported");
+			return -EOPNOTSUPP;
+		}
+	}
 
 	esw = priv->mdev->priv.eswitch;
 	uplink_rpriv = mlx5_eswitch_get_uplink_priv(esw, REP_ETH);
