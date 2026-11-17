@@ -277,7 +277,7 @@ int drain(void *ctx)
 }
 
 /*
- * A tracing prog with large frames: they are in a private stack.
+ * A kprobe.multi prog with large frames: they are in a private stack.
  */
 int priv_stack_spun, priv_stack_cb_spun;
 
@@ -296,8 +296,8 @@ static int priv_stack_cb(__u64 i, int *spun)
 	return 0;
 }
 
-SEC("fentry/bpf_fentry_test1")
-int BPF_PROG(priv_stack)
+SEC("kprobe.multi/bpf_fentry_test1")
+int BPF_KPROBE(priv_stack)
 {
 	volatile char buf[128] = {};
 	int i, n = buf[zero & 127], spun = 0;
@@ -307,5 +307,15 @@ int BPF_PROG(priv_stack)
 	bpf_loop(TRIES, priv_stack_cb, &spun, zero);
 	priv_stack_spun = n;
 	priv_stack_cb_spun = spun;
+	return 0;
+}
+
+/*
+ * No tests in here, just to trigger 'bpf_fentry_test*'
+ * through tracing test_run
+ */
+SEC("fentry/bpf_modify_return_test")
+int BPF_PROG(trigger)
+{
 	return 0;
 }

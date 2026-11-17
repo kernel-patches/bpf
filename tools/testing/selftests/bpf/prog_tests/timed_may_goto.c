@@ -131,10 +131,14 @@ out:
 static void test_priv_stack(struct timed_may_goto_user *skel)
 {
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
-	int fd = bpf_program__fd(skel->progs.priv_stack);
+	int fd = bpf_program__fd(skel->progs.trigger);
 	struct bpf_link *link;
 
 	link = bpf_program__attach(skel->progs.priv_stack);
+	if (!link && errno == EOPNOTSUPP) {
+		test__skip();
+		return;
+	}
 	if (!ASSERT_OK_PTR(link, "attach"))
 		return;
 	ASSERT_OK(bpf_prog_test_run_opts(fd, &opts), "test_run");
