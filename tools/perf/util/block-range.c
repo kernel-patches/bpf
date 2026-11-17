@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "block-range.h"
 #include "annotate.h"
+#include "symbol.h"
 #include <assert.h>
 #include <stdlib.h>
 
@@ -323,10 +324,16 @@ double block_range__coverage(struct block_range *br)
 	}
 
 	sym = br->sym;
-	if (!sym)
+	if (!sym || !symbol__annotated(sym))
 		return -1;
 
-	branch = symbol__annotation(sym)->branch;
+	branch = NULL;
+	{
+		struct annotation *notes = symbol__annotation(sym);
+
+		if (notes)
+			branch = notes->branch;
+	}
 	if (!branch)
 		return -1;
 

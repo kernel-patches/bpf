@@ -79,8 +79,7 @@ enum symbol_idle_kind {
 #define SYMBOL_FLAG_ANNOTATE2       (1 << 12)
 #define SYMBOL_FLAG_IFUNC_ALIAS     (1 << 13)
 /**
- * A symtab entry. When allocated this may be preceded by an annotation (see
- * symbol__annotation) and/or a browser_index (see symbol__browser_index).
+ * A symtab entry.
  */
 struct symbol {
 	struct rb_node	rb_node;
@@ -173,11 +172,6 @@ static inline int __symbol__join_symfs(char *bf, size_t size, const char *path)
 
 extern int vmlinux_path__nr_entries;
 extern char **vmlinux_path;
-
-static inline void *symbol__priv(struct symbol *sym)
-{
-	return ((void *)sym) - symbol_conf.priv_size;
-}
 
 struct ref_reloc_sym {
 	const char	*name;

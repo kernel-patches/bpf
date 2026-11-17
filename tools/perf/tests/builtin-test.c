@@ -2431,7 +2431,6 @@ int cmd_test(int argc, const char **argv)
 		test_timeout = 0;
 	}
 
-	symbol_conf.priv_size = sizeof(int);
 	symbol_conf.try_vmlinux_path = true;
 
 

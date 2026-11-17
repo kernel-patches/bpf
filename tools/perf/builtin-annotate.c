@@ -441,8 +441,11 @@ static void hists__find_annotations(struct hists *hists,
 				goto find_next;
 		}
 
+		if (!symbol__annotated(he->ms.sym))
+			goto find_next;
+
 		notes = symbol__annotation(he->ms.sym);
-		if (notes->src == NULL) {
+		if (!notes || notes->src == NULL) {
 find_next:
 			if (key == K_LEFT || key == '<')
 				nd = rb_prev(nd);
