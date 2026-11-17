@@ -245,6 +245,24 @@ static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
 	memset(&psph->iv, 0, sizeof(psph->iv));
 }
 
+/* UDP+PSP goes in at the transport header, the protocol of the fixed IP
+ * header becomes UDP, and TCP the PSP next header: TCP must directly follow
+ * the fixed header. It doesn't with IPv6 extension headers, whose last one
+ * holds the L4 protocol.
+ */
+static bool psp_dev_encap_ok(const struct sk_buff *skb)
+{
+	u32 network_len = skb_network_header_len(skb);
+
+	if (skb->protocol == htons(ETH_P_IP))
+		return ip_hdr(skb)->protocol == IPPROTO_TCP &&
+		       network_len == ip_hdrlen(skb);
+	if (skb->protocol == htons(ETH_P_IPV6))
+		return ipv6_hdr(skb)->nexthdr == IPPROTO_TCP &&
+		       network_len == sizeof(struct ipv6hdr);
+	return false;
+}
+
 /* Encapsulate a TCP packet with PSP by adding the UDP+PSP headers and filling
  * them in.
  */
@@ -255,8 +273,7 @@ bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 	u32 ethr_len = skb_mac_header_len(skb);
 	u32 bufflen = ethr_len + network_len;
 
-	if (skb->protocol != htons(ETH_P_IP) &&
-	    skb->protocol != htons(ETH_P_IPV6))
+	if (!psp_dev_encap_ok(skb))
 		return false;
 
 	if (skb_cow_head(skb, PSP_ENCAP_HLEN))
