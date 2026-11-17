@@ -4,7 +4,10 @@
 #include <linux/btf.h>
 #include <linux/cacheflush.h>
 #include <linux/err.h>
+#include <linux/file.h>
+#include <linux/interval_tree_generic.h>
 #include <linux/irq_work.h>
+#include <linux/memfd.h>
 #include "linux/filter.h"
 #include <linux/llist.h>
 #include <linux/mman.h>
@@ -14,6 +17,7 @@
 #include <linux/printk.h>
 #include <linux/ratelimit.h>
 #include <linux/rbtree_latch.h>
+#include <linux/security.h>
 #include <asm/tlbflush.h>
 #include "range_tree.h"
 
@@ -64,7 +68,9 @@ struct bpf_arena {
 	struct vm_struct *kern_vm;
 	struct page *scratch_page;
 	struct range_tree rt;
-	/* protects rt and nr_pages */
+	/* pages the arena didn't allocate, see struct arena_import */
+	struct rb_root_cached imports;
+	/* protects rt, imports and nr_pages */
 	rqspinlock_t spinlock;
 	/* number of pages currently populated in the arena */
 	u64 nr_pages;
@@ -113,6 +119,28 @@ struct arena_free_span {
 	unsigned long uaddr;
 	u32 page_cnt;
 };
+
+/*
+ * Pages mapped by one import, pinned once each. They are released together,
+ * when the arena frees any of them or is destroyed.
+ */
+struct arena_import {
+	struct rb_node rb;
+	long subtree_last;
+	/* on a list while being released */
+	struct list_head head;
+	struct page **pages;
+	/* the file, with write access on its inode */
+	struct file *file;
+	long pgoff;
+	long page_cnt;
+	u32 uaddr;	/* lower 32 bits of the user address */
+};
+
+#define IMPORT_START(imp)	((imp)->pgoff)
+#define IMPORT_LAST(imp)	((imp)->pgoff + (imp)->page_cnt - 1)
+INTERVAL_TREE_DEFINE(struct arena_import, rb, long, subtree_last, IMPORT_START, IMPORT_LAST,
+		     static inline __maybe_unused, arena_import_it)
 
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena)
 {
@@ -210,6 +238,8 @@ static long compute_pgoff(struct bpf_arena *arena, long uaddr)
 struct apply_range_data {
 	struct bpf_arena *arena;
 	struct llist_head *pages;
+	/* imported pages, they can't be linked through pcp_llist */
+	struct page **ext_pages;
 	int i;
 };
 
@@ -221,17 +251,21 @@ struct clear_range_data {
 static int apply_range_set_cb(pte_t *pte, unsigned long addr, void *data)
 {
 	struct apply_range_data *d = data;
-	struct llist_node *node;
+	struct llist_node *node = NULL;
 	struct page *page;
 	pte_t pteval;
 
 	if (!data)
 		return 0;
 
-	node = READ_ONCE(d->pages->first);
-	if (WARN_ON_ONCE(!node))
-		return -EINVAL;
-	page = llist_entry(node, struct page, pcp_llist);
+	if (d->ext_pages) {
+		page = d->ext_pages[d->i];
+	} else {
+		node = READ_ONCE(d->pages->first);
+		if (WARN_ON_ONCE(!node))
+			return -EINVAL;
+		page = llist_entry(node, struct page, pcp_llist);
+	}
 	/* paranoia, similar to vmap_pages_pte_range() */
 	if (WARN_ON_ONCE(!pfn_valid(page_to_pfn(page))))
 		return -EINVAL;
@@ -264,8 +298,11 @@ static int apply_range_set_cb(pte_t *pte, unsigned long addr, void *data)
 		return -EBUSY;
 	set_pte_at(&init_mm, addr, pte, pteval);
 #endif
-	WARN_ON_ONCE(llist_del_first(d->pages) != node);
 	d->i++;
+	/* Imported pages are accounted to their supplier */
+	if (!node)
+		return 0;
+	WARN_ON_ONCE(llist_del_first(d->pages) != node);
 	WRITE_ONCE(d->arena->nr_pages, d->arena->nr_pages + 1);
 	return 0;
 }
@@ -324,6 +361,47 @@ static int apply_range_set_scratch_cb(pte_t *pte, unsigned long addr, void *data
 	return 0;
 }
 
+static int apply_range_clear_ext_cb(pte_t *pte, unsigned long addr, void *data)
+{
+	ptep_get_and_clear(&init_mm, addr, pte);
+	return 0;
+}
+
+/* Under arena->spinlock, or when nothing else can use the arena anymore */
+static struct arena_import *arena_find_import(struct bpf_arena *arena, long pgoff)
+{
+	return arena_import_it_iter_first(&arena->imports, pgoff, pgoff);
+}
+
+static u64 arena_import_kaddr(struct bpf_arena *arena, struct arena_import *imp)
+{
+	return bpf_arena_get_kern_vm_start(arena) + imp->uaddr;
+}
+
+/* Like arena_find_import(), the caller flushes the TLB after */
+static void arena_unmap_import(struct bpf_arena *arena, struct arena_import *imp)
+{
+	apply_to_existing_page_range(&init_mm, arena_import_kaddr(arena, imp),
+				     imp->page_cnt << PAGE_SHIFT, apply_range_clear_ext_cb, NULL);
+}
+
+static void arena_flush_import(struct bpf_arena *arena, struct arena_import *imp)
+{
+	u64 kaddr = arena_import_kaddr(arena, imp);
+
+	flush_tlb_kernel_range(kaddr, kaddr + (imp->page_cnt << PAGE_SHIFT));
+}
+
+static void arena_release_import(struct arena_import *imp)
+{
+	/* BPF programs write through the kernel mapping, which doesn't track dirty */
+	unpin_user_pages_dirty_lock(imp->pages, imp->page_cnt, true);
+	put_write_access(file_inode(imp->file));
+	fput(imp->file);
+	kvfree(imp->pages);
+	kfree(imp);
+}
+
 static int populate_pgtable_except_pte(struct bpf_arena *arena)
 {
 	/* Populate intermediates for the recovery range (4 GiB + upper half-guard). */
@@ -375,6 +453,7 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 		arena->user_vm_end = arena->user_vm_start + vm_range;
 
 	INIT_LIST_HEAD(&arena->vma_list);
+	arena->imports = RB_ROOT_CACHED;
 	init_llist_head(&arena->free_spans);
 	init_irq_work(&arena->free_irq, arena_free_irq);
 	INIT_WORK(&arena->free_work, arena_free_worker);
@@ -443,6 +522,15 @@ static void arena_map_destroy(struct work_struct *work)
 {
 	struct bpf_arena *arena = container_of(to_rcu_work(work), struct bpf_arena,
 					     destroy_work);
+	struct arena_import *imp;
+
+	/* Imported pages go back to their supplier */
+	while ((imp = arena_import_it_iter_first(&arena->imports, 0, LONG_MAX))) {
+		arena_import_it_remove(imp, &arena->imports);
+		arena_unmap_import(arena, imp);
+		arena_flush_import(arena, imp);
+		arena_release_import(imp);
+	}
 
 	/*
 	 * free_vm_area() calls remove_vm_area() that calls free_unmap_vmap_area().
@@ -569,7 +657,7 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	struct mem_cgroup *new_memcg, *old_memcg;
 	LLIST_HEAD(pages);
 	struct page *page, *new_page = NULL;
-	struct apply_range_data data;
+	struct apply_range_data data = {};
 	vm_fault_t fault_ret;
 	long kbase, kaddr;
 	unsigned long flags;
@@ -605,6 +693,15 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 
 	page = vmalloc_to_page((void *)kaddr);
 	if (page) {
+		/*
+		 * Not the arena's: user space maps the file or the device the
+		 * pages come from
+		 */
+		if (arena_find_import(arena, vmf->pgoff)) {
+			fault_ret = (arena->map.map_flags & BPF_F_SEGV_ON_FAULT)
+				    ? VM_FAULT_SIGSEGV : VM_FAULT_SIGBUS;
+			goto out_err_locked;
+		}
 		if (page == arena->scratch_page) {
 			/* BPF triggered scratch here; don't lazy-alloc over it */
 			fault_ret = (arena->map.map_flags & BPF_F_SEGV_ON_FAULT)
@@ -855,7 +952,7 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 	long page_cnt_max = (arena->user_vm_end - arena->user_vm_start) >> PAGE_SHIFT;
 	u64 kern_vm_start = bpf_arena_get_kern_vm_start(arena);
 	struct mem_cgroup *new_memcg, *old_memcg;
-	struct apply_range_data data;
+	struct apply_range_data data = {};
 	LLIST_HEAD(pages);
 	long mapped = 0;
 	unsigned long flags;
@@ -1010,9 +1107,12 @@ static int arena_free_range(struct bpf_arena *arena, long uaddr, long page_cnt)
 	u64 full_uaddr = clear_lo32(arena->user_vm_start) + uaddr;
 	long kaddr = bpf_arena_get_kern_vm_start(arena) + uaddr;
 	long pgoff = compute_pgoff(arena, uaddr);
+	long first = pgoff, last = pgoff + page_cnt - 1;
+	struct arena_import *imp, *tmp;
 	struct clear_range_data cdata;
 	struct llist_node *pos, *t;
 	LLIST_HEAD(free_pages);
+	LIST_HEAD(imports);
 	unsigned long flags;
 	struct page *page;
 	int ret;
@@ -1033,6 +1133,15 @@ static int arena_free_range(struct bpf_arena *arena, long uaddr, long page_cnt)
 		return 0;
 	}
 
+	/* Imports are released whole, also the ones that are only partly in the range */
+	while ((imp = arena_import_it_iter_first(&arena->imports, pgoff, pgoff + page_cnt - 1))) {
+		first = min(first, IMPORT_START(imp));
+		last = max(last, IMPORT_LAST(imp));
+		arena_import_it_remove(imp, &arena->imports);
+		arena_unmap_import(arena, imp);
+		list_add(&imp->head, &imports);
+	}
+
 	cdata.arena = arena;
 	cdata.free_pages = &free_pages;
 	/* clear ptes and collect struct pages */
@@ -1050,6 +1159,8 @@ static int arena_free_range(struct bpf_arena *arena, long uaddr, long page_cnt)
 
 	/* ensure no stale TLB entries */
 	flush_tlb_kernel_range(kaddr, kaddr + (page_cnt * PAGE_SIZE));
+	list_for_each_entry(imp, &imports, head)
+		arena_flush_import(arena, imp);
 
 	if (page_cnt > 1)
 		/* bulk zap if multiple pages being freed */
@@ -1070,8 +1181,15 @@ static int arena_free_range(struct bpf_arena *arena, long uaddr, long page_cnt)
 	/* The callers hold no other rqspinlock, so this one can only time out */
 	while (raw_res_spin_lock_irqsave(&arena->spinlock, flags))
 		cond_resched();
-	range_tree_set(&arena->rt, pgoff, page_cnt);
+	/*
+	 * The range and the imports it overlaps are contiguous: set them at once,
+	 * so that the imports need no more range tree nodes than the range alone
+	 */
+	range_tree_set(&arena->rt, first, last - first + 1);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+
+	list_for_each_entry_safe(imp, tmp, &imports, head)
+		arena_release_import(imp);
 	return 0;
 }
 
@@ -1272,6 +1390,160 @@ out:
 	return ret;
 }
 
+/*
+ * Map @page_cnt pages that the arena didn't allocate at @uaddr, which must be
+ * free. On success the arena keeps @pages, their pins and the write access on
+ * @file until it releases them, see struct arena_import.
+ */
+static int arena_map_ext_pages(struct bpf_arena *arena, long uaddr, struct page **pages,
+			       long page_cnt, struct file *file)
+{
+	/* The first mmap() may be setting the user range: a non-zero start is final */
+	u64 user_vm_start = READ_ONCE(arena->user_vm_start);
+	struct apply_range_data data = { .arena = arena, .ext_pages = pages };
+	struct mem_cgroup *new_memcg, *old_memcg;
+	long page_cnt_max, pgoff, kaddr;
+	struct arena_import *imp;
+	unsigned long flags;
+	int ret;
+
+	if (!user_vm_start)
+		return -EINVAL;
+	page_cnt_max = ((long)READ_ONCE(arena->user_vm_end) - (long)user_vm_start) >> PAGE_SHIFT;
+	if (!uaddr || (uaddr & ~PAGE_MASK) || page_cnt > page_cnt_max)
+		return -EINVAL;
+	pgoff = (u32)(uaddr - (u32)user_vm_start) >> PAGE_SHIFT;
+	if (pgoff > page_cnt_max - page_cnt)
+		return -EINVAL;
+	kaddr = bpf_arena_get_kern_vm_start(arena) + (u32)uaddr;
+
+	imp = kmalloc_obj(*imp, GFP_KERNEL_ACCOUNT);
+	if (!imp)
+		return -ENOMEM;
+	imp->pages = pages;
+	imp->file = file;
+	imp->pgoff = pgoff;
+	imp->page_cnt = page_cnt;
+	imp->uaddr = (u32)uaddr;
+
+	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
+	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
+		ret = -EBUSY;
+		goto out;
+	}
+	ret = is_range_tree_set(&arena->rt, pgoff, page_cnt) ? -EBUSY :
+	      range_tree_clear(&arena->rt, pgoff, page_cnt);
+	if (!ret) {
+		/* The page tables are there, and a free range has no pages */
+		WARN_ON_ONCE(apply_to_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
+						 apply_range_set_cb, &data));
+		flush_vmap_cache(kaddr, page_cnt << PAGE_SHIFT);
+		get_file(file);
+		arena_import_it_insert(imp, &arena->imports);
+	}
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+out:
+	bpf_map_memcg_exit(old_memcg, new_memcg);
+	if (ret)
+		kfree(imp);
+	return ret;
+}
+
+/*
+ * Import the pages of a memfd or of a file on tmpfs or hugetlbfs. Every file
+ * there has seals: one that isn't a memfd reports F_SEAL_SEAL alone. Other
+ * files have none and can't be imported.
+ */
+static int arena_import_file(struct bpf_arena *arena, long uaddr, u32 page_cnt,
+			     struct file *file, u64 off)
+{
+	long i, nr_folios, first, cnt = 0;
+	struct folio **folios;
+	struct page **pages;
+	pgoff_t folio_off;
+	int seals, ret;
+
+	/*
+	 * Like a writable open: exec of the file fails with -ETXTBSY until the
+	 * pages are released, and a file being executed can't be imported.
+	 * Keeping the file open isn't enough, a memfd holds no write access.
+	 */
+	ret = get_write_access(file_inode(file));
+	if (ret)
+		return ret;
+
+	folios = kvmalloc_array(page_cnt, sizeof(*folios), GFP_KERNEL_ACCOUNT);
+	pages = kvmalloc_array(page_cnt, sizeof(*pages), GFP_KERNEL_ACCOUNT);
+	if (!folios || !pages) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	/*
+	 * Adding F_SEAL_WRITE takes the inode lock and fails while pages are
+	 * pinned: hold it until they are, like udmabuf
+	 */
+	inode_lock_shared(file_inode(file));
+	seals = memfd_get_seals(file);
+	if (seals < 0)
+		nr_folios = -EINVAL;
+	else if ((seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) || IS_APPEND(file_inode(file)))
+		nr_folios = -EPERM;
+	else
+		nr_folios = memfd_pin_folios(file, off,
+					     off + ((u64)page_cnt << PAGE_SHIFT) - 1,
+					     folios, page_cnt, &folio_off);
+	inode_unlock_shared(file_inode(file));
+	if (nr_folios <= 0) {
+		ret = nr_folios ?: -EINVAL;
+		goto out;
+	}
+
+	/* One pin per page, like pin_user_pages() */
+	for (i = 0; i < nr_folios; i++, folio_off = 0) {
+		first = cnt;
+		for (; folio_off < folio_size(folios[i]) && cnt < page_cnt;
+		     folio_off += PAGE_SIZE)
+			pages[cnt++] = folio_page(folios[i], folio_off >> PAGE_SHIFT);
+		if (cnt - first > 1 && folio_add_pins(folios[i], cnt - first - 1)) {
+			unpin_folios(folios + i, nr_folios - i);
+			cnt = first;
+			ret = -ENOMEM;
+			goto out;
+		}
+	}
+
+	ret = cnt == page_cnt ? arena_map_ext_pages(arena, uaddr, pages, page_cnt, file) : -EINVAL;
+out:
+	if (ret) {
+		unpin_user_pages(pages, cnt);
+		kvfree(pages);
+		put_write_access(file_inode(file));
+	}
+	kvfree(folios);
+	return ret;
+}
+
+static int arena_import_memfd(struct bpf_arena *arena, long uaddr, u32 page_cnt, int fd,
+			      u64 off)
+{
+	int ret;
+
+	if (off & ~PAGE_MASK)
+		return -EINVAL;
+
+	CLASS(fd, f)(fd);
+	if (fd_empty(f))
+		return -EBADF;
+	/* BPF programs read and write it like a shared mapping, which needs the same */
+	if ((fd_file(f)->f_mode & (FMODE_READ | FMODE_WRITE)) != (FMODE_READ | FMODE_WRITE))
+		return -EPERM;
+	ret = security_mmap_file(fd_file(f), PROT_READ | PROT_WRITE, MAP_SHARED);
+	if (ret)
+		return ret;
+	return arena_import_file(arena, uaddr, page_cnt, fd_file(f), off);
+}
+
 static void arena_free_worker(struct work_struct *work)
 {
 	struct bpf_arena *arena = container_of(work, struct bpf_arena, free_work);
@@ -1369,6 +1641,42 @@ __bpf_kfunc int bpf_arena_reserve_pages(void *p__map, void *ptr__ign, u32 page_c
 
 	return arena_reserve_pages(arena, (long)ptr__ign, page_cnt);
 }
+
+/**
+ * bpf_arena_import_memfd - map the pages of a memfd into an arena
+ * @p__map: the arena
+ * @addr__ign: page-aligned arena address where the pages are mapped
+ * @page_cnt: number of pages to import
+ * @fd: memfd, or file on tmpfs or hugetlbfs, open for reading and writing
+ * @off: page-aligned offset in the file
+ *
+ * Pin the pages of @fd at @off and map them at @addr__ign, which must be free.
+ * They stay until bpf_arena_free_pages() frees any of them, which releases the
+ * whole import, or until the arena is destroyed. Their content stays in the
+ * file. User space accesses them by mapping @fd: the arena mapping raises
+ * SIGBUS (SIGSEGV with BPF_F_SEGV_ON_FAULT) at their addresses. The first page
+ * of an arena that starts on a 4GB boundary can't be imported: its address
+ * reaches the kfunc as NULL.
+ *
+ * F_SEAL_SHRINK is not required, a file on tmpfs can't be sealed. The supplier
+ * must not shrink the file below the imported range or punch holes in it: the
+ * arena would keep the pages it pinned, which are no longer the file's.
+ *
+ * While its pages are imported, the file can't be executed, as when it's open
+ * for writing, and a file being executed can't be imported.
+ *
+ * Return: 0 on success, negative error code otherwise.
+ */
+__bpf_kfunc int bpf_arena_import_memfd(void *p__map, void *addr__ign, u32 page_cnt,
+				       int fd, u64 off)
+{
+	struct bpf_map *map = p__map;
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+
+	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || page_cnt > map->max_entries)
+		return -EINVAL;
+	return arena_import_memfd(arena, (long)addr__ign, page_cnt, fd, off);
+}
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(arena_kfuncs)
@@ -1382,9 +1690,19 @@ static const struct btf_kfunc_id_set common_kfunc_set = {
 	.set   = &arena_kfuncs,
 };
 
+BTF_KFUNCS_START(arena_syscall_kfuncs)
+BTF_ID_FLAGS(func, bpf_arena_import_memfd, KF_ARENA_ARG2 | KF_SLEEPABLE)
+BTF_KFUNCS_END(arena_syscall_kfuncs)
+
+static const struct btf_kfunc_id_set syscall_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set   = &arena_syscall_kfuncs,
+};
+
 static int __init kfunc_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &common_kfunc_set);
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &common_kfunc_set) ?:
+	       register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &syscall_kfunc_set);
 }
 late_initcall(kfunc_init);
 
