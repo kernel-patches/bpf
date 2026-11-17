@@ -45,6 +45,7 @@ MODULE_DEVICE_TABLE(acpi, processor_device_ids);
 static struct device_driver acpi_processor_driver = {
 	.name = "processor",
 	.bus = &cpu_subsys,
+	.suppress_bind_attrs = true,
 	.acpi_match_table = processor_device_ids,
 	.remove = acpi_processor_stop,
 };
