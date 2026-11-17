@@ -929,6 +929,15 @@ int ip6_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 			mtu = IPV6_MIN_MTU;
 	}
 
+	/* PSP and TLS offload need the packet's L4 header, which non-initial
+	 * fragments do not have. Checked after the too-big checks above,
+	 * so that PMTUD for a local socket works.
+	 */
+	if (unlikely(skb_is_decrypted(skb))) {
+		err = -EMSGSIZE;
+		goto fail;
+	}
+
 	if (np) {
 		u32 frag_size = READ_ONCE(np->frag_size);
 
