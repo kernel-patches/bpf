@@ -3,6 +3,8 @@
 top_srcdir = ../../../../..
 
 TEST_PROGS := \
+	hsr_gro_superpacket.sh \
+	hsr_ordered_forwarding.sh \
 	hsr_ping.sh \
 	hsr_prp_redbox.sh \
 	hsr_redbox.sh \
@@ -10,6 +12,9 @@ TEST_PROGS := \
 	prp_ping.sh \
 # end of TEST_PROGS
 
-TEST_FILES += hsr_common.sh
+TEST_FILES += \
+	hsr_common.sh \
+	hsr_gro_superpacket.py \
+# end of TEST_FILES
 
 include ../../lib.mk
