@@ -53,10 +53,11 @@ enum xspdif_clk_div {
 
 struct spdif_dev_data {
 	u32 mode;
-	u32 aclk;
 	bool rx_chsts_updated;
 	void __iomem *base;
 	struct clk *axi_clk;
+	struct clk *axis_clk;
+	struct clk *aud_clk;
 	wait_queue_head_t chsts_q;
 };
 
@@ -117,8 +118,15 @@ static int xlnx_spdif_hw_params(struct snd_pcm_substream *substream,
 	enum xspdif_clk_div clk_cfg;
 	u32 val, clk_div;
 	struct spdif_dev_data *ctx = dev_get_drvdata(dai->dev);
+	unsigned long rate;
 
-	clk_div = DIV_ROUND_CLOSEST(ctx->aclk, XSPDIF_MAX_CHANNELS *
+	rate = clk_get_rate(ctx->aud_clk);
+	if (!rate) {
+		dev_err(dai->dev, "aud_clk_i rate is not available\n");
+		return -EINVAL;
+	}
+
+	clk_div = DIV_ROUND_CLOSEST(rate, XSPDIF_MAX_CHANNELS *
 				    XSPDIF_AES_SAMPLE_WIDTH *
 				    params_rate(params));
 
@@ -271,8 +279,18 @@ static int xlnx_spdif_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret, "cannot get SPDIF mode\n");
 
 	if (ctx->mode) {
+		ctx->axis_clk = devm_clk_get_optional_enabled(dev, "s_axis_aclk");
+		if (IS_ERR(ctx->axis_clk))
+			return dev_err_probe(dev, PTR_ERR(ctx->axis_clk),
+					     "failed to get s_axis_aclk\n");
+
 		dai_drv = &xlnx_spdif_tx_dai;
 	} else {
+		ctx->axis_clk = devm_clk_get_optional_enabled(dev, "m_axis_aclk");
+		if (IS_ERR(ctx->axis_clk))
+			return dev_err_probe(dev, PTR_ERR(ctx->axis_clk),
+					     "failed to get m_axis_aclk\n");
+
 		ret = platform_get_irq(pdev, 0);
 		if (ret < 0)
 			return ret;
@@ -287,9 +305,10 @@ static int xlnx_spdif_probe(struct platform_device *pdev)
 		dai_drv = &xlnx_spdif_rx_dai;
 	}
 
-	ret = device_property_read_u32(dev, "xlnx,aud_clk_i", &ctx->aclk);
-	if (ret < 0)
-		return dev_err_probe(dev, ret, "cannot get aud_clk_i value\n");
+	ctx->aud_clk = devm_clk_get_enabled(dev, "aud_clk_i");
+	if (IS_ERR(ctx->aud_clk))
+		return dev_err_probe(dev, PTR_ERR(ctx->aud_clk),
+				     "failed to get aud_clk_i\n");
 
 	dev_set_drvdata(dev, ctx);
 
