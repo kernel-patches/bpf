@@ -32,6 +32,8 @@ struct sparx5_rr_router_leg {
 	struct list_head leg_list_node; /* Router member */
 	u16 vmid; /* Internal id */
 	u16 vid; /* VLAN id */
+	/* The bridge carries vid as a vlan of its own. */
+	bool vlan_present;
 };
 
 static void sparx5_rr_schedule_work(struct sparx5 *sparx5,
@@ -40,9 +42,10 @@ static void sparx5_rr_schedule_work(struct sparx5 *sparx5,
 	queue_work(sparx5->router->sparx5_router_owq, work);
 }
 
-static void sparx5_rr_legs_reconcile_schedule(struct sparx5 *sparx5)
+void sparx5_rr_legs_reconcile_schedule(struct sparx5 *sparx5)
 {
-	sparx5_rr_schedule_work(sparx5, &sparx5->router->legs_work);
+	if (sparx5->router)
+		sparx5_rr_schedule_work(sparx5, &sparx5->router->legs_work);
 }
 
 static void sparx5_rr_split_mac(const unsigned char *mac, u32 split,
@@ -100,6 +103,19 @@ sparx5_rr_leg_find_by_vid(struct sparx5 *sparx5, u16 vid)
 	return NULL;
 }
 
+static bool sparx5_rr_bridge_has_legs(struct sparx5 *sparx5,
+				      const struct net_device *bridge)
+{
+	struct sparx5_rr_router_leg *leg;
+
+	list_for_each_entry(leg, &sparx5->router->leg_list, leg_list_node) {
+		if (vlan_dev_real_dev(leg->dev) == bridge)
+			return true;
+	}
+
+	return false;
+}
+
 static void sparx5_rr_leg_base_mac_set(struct sparx5 *sparx5,
 				       const unsigned char *mac)
 {
@@ -154,6 +170,16 @@ static void sparx5_rr_leg_hw_uc_set(struct sparx5 *sparx5,
 		 ANA_L3_RLEG_CTRL(leg->vmid));
 }
 
+/* Route ingress on the leg only while the kernel would receive on it: the
+ * upper is up and the bridge carries its vid.
+ */
+static void sparx5_rr_leg_hw_uc_update(struct sparx5 *sparx5,
+				       struct sparx5_rr_router_leg *leg)
+{
+	sparx5_rr_leg_hw_uc_set(sparx5, leg,
+				netif_running(leg->dev) && leg->vlan_present);
+}
+
 static void sparx5_rr_leg_hw_init(struct sparx5 *sparx5,
 				  struct sparx5_rr_router_leg *leg)
 {
@@ -172,7 +198,7 @@ static void sparx5_rr_leg_hw_init(struct sparx5 *sparx5,
 		 ANA_L3_RLEG_CTRL_RLEG_EVID, sparx5,
 		 ANA_L3_RLEG_CTRL(leg->vmid));
 
-	sparx5_rr_leg_hw_uc_set(sparx5, leg, true);
+	sparx5_rr_leg_hw_uc_update(sparx5, leg);
 
 	/* Configure egress VLAN in rewriter */
 	spx5_rmw(REW_RLEG_CTRL_RLEG_EVID_SET(leg->vid), REW_RLEG_CTRL_RLEG_EVID,
@@ -260,6 +286,15 @@ static void sparx5_rr_router_leg_destroy(struct sparx5_rr_router_leg *leg)
 	kfree(leg);
 }
 
+static bool sparx5_rr_bridge_vlan_present(struct net_device *bridge, u16 vid)
+{
+	struct bridge_vlan_info info;
+
+	return !br_vlan_get_info(bridge, vid, &info) &&
+	       info.flags & BRIDGE_VLAN_INFO_BRENTRY &&
+	       !(info.flags & BRIDGE_VLAN_INFO_UNTAGGED);
+}
+
 static struct sparx5_rr_router_leg *
 sparx5_rr_router_leg_create(struct sparx5 *sparx5, struct net_device *dev,
 			    u16 vid, struct netlink_ext_ack *extack)
@@ -284,6 +319,9 @@ sparx5_rr_router_leg_create(struct sparx5 *sparx5, struct net_device *dev,
 
 	/* Global router leg base MAC tracks the bridge MAC. */
 	sparx5_rr_leg_base_mac_set(sparx5, vlan_dev_real_dev(dev)->dev_addr);
+
+	leg->vlan_present = sparx5_rr_bridge_vlan_present(vlan_dev_real_dev(dev),
+							  vid);
 
 	list_add(&leg->leg_list_node, &sparx5->router->leg_list);
 	sparx5_rr_leg_hw_init(sparx5, leg);
@@ -476,7 +514,7 @@ static int sparx5_rr_inet6addr_event(struct notifier_block *nb,
 	struct net_device *dev = if6->idev->dev;
 	struct sparx5_router *router;
 
-	if (event != NETDEV_DOWN)
+	if (event != NETDEV_UP && event != NETDEV_DOWN)
 		return NOTIFY_DONE;
 
 	if (!net_eq(dev_net(dev), &init_net))
@@ -529,6 +567,20 @@ static int sparx5_rr_inetaddr_valid_event(struct notifier_block *nb,
 					       ivi->extack);
 }
 
+static void sparx5_rr_leg_withdraw(struct sparx5 *sparx5,
+				   struct net_device *dev)
+{
+	struct sparx5_rr_router_leg *leg;
+
+	mutex_lock(&sparx5->router->lock);
+	leg = sparx5_rr_leg_find_by_dev(sparx5, dev);
+	if (leg) {
+		sparx5_rr_router_leg_destroy(leg);
+		sparx5_rr_legs_reconcile_schedule(sparx5);
+	}
+	mutex_unlock(&sparx5->router->lock);
+}
+
 /* Called with RTNL. */
 static int sparx5_rr_netdevice_event(struct notifier_block *nb,
 				     unsigned long event, void *ptr)
@@ -547,6 +599,36 @@ static int sparx5_rr_netdevice_event(struct notifier_block *nb,
 	sparx5 = router->sparx5;
 
 	switch (event) {
+	case NETDEV_PRECHANGEUPPER: {
+		struct netdev_notifier_changeupper_info *upper_info = ptr;
+
+		if (upper_info->linking && upper_info->master)
+			sparx5_rr_leg_withdraw(sparx5, dev);
+		break;
+	}
+	case NETDEV_CHANGEUPPER:
+		if (is_vlan_dev(dev))
+			sparx5_rr_legs_reconcile_schedule(sparx5);
+		break;
+	case NETDEV_UP:
+	case NETDEV_DOWN:
+		mutex_lock(&router->lock);
+		leg = sparx5_rr_leg_find_by_dev(sparx5, dev);
+		if (leg)
+			sparx5_rr_leg_hw_uc_update(sparx5, leg);
+		mutex_unlock(&router->lock);
+		break;
+	case NETDEV_PRE_CHANGEADDR:
+		sparx5_rr_leg_withdraw(sparx5, dev);
+		break;
+	case NETDEV_CHANGEADDR:
+		mutex_lock(&router->lock);
+		if (sparx5_rr_bridge_has_legs(sparx5, dev))
+			sparx5_rr_leg_base_mac_set(sparx5, dev->dev_addr);
+		mutex_unlock(&router->lock);
+		if (is_vlan_dev(dev))
+			sparx5_rr_legs_reconcile_schedule(sparx5);
+		break;
 	case NETDEV_UNREGISTER:
 		mutex_lock(&router->lock);
 		leg = sparx5_rr_leg_find_by_dev(sparx5, dev);
@@ -568,19 +650,66 @@ static void sparx5_rr_router_legs_flush(struct sparx5 *sparx5)
 		sparx5_rr_router_leg_destroy(leg);
 }
 
-static void sparx5_rr_legs_reconcile(struct sparx5 *sparx5)
+/* Follow a vlan of the bridge itself, the kernel only receives on a vlan
+ * upper while the bridge carries its vid.
+ */
+void sparx5_rr_bridge_vlan_clear(struct sparx5 *sparx5,
+				 const struct net_device *bridge, u16 vid)
+{
+	struct sparx5_rr_router_leg *leg;
+
+	if (!sparx5->router)
+		return;
+
+	mutex_lock(&sparx5->router->lock);
+	list_for_each_entry(leg, &sparx5->router->leg_list, leg_list_node) {
+		if (leg->vid != vid || vlan_dev_real_dev(leg->dev) != bridge)
+			continue;
+		leg->vlan_present = false;
+		sparx5_rr_leg_hw_uc_update(sparx5, leg);
+	}
+	sparx5_rr_legs_reconcile_schedule(sparx5);
+	mutex_unlock(&sparx5->router->lock);
+}
+
+void sparx5_rr_legs_reconcile(struct sparx5 *sparx5)
 {
 	struct sparx5_rr_router_leg *leg, *tmp;
+	struct net_device *bridge, *dev;
 	struct sparx5_router *router;
+	struct list_head *iter;
 
 	ASSERT_RTNL();
 
 	router = sparx5->router;
+	if (!router)
+		return;
 
 	mutex_lock(&router->lock);
 	list_for_each_entry_safe(leg, tmp, &router->leg_list, leg_list_node) {
-		if (sparx5_rr_dev_addr_list_empty(leg->dev))
+		if (sparx5_rr_dev_addr_list_empty(leg->dev) ||
+		    !sparx5_rr_dev_real_is_vlan_aware(sparx5, leg->dev)) {
 			sparx5_rr_router_leg_destroy(leg);
+			continue;
+		}
+
+		bridge = vlan_dev_real_dev(leg->dev);
+		leg->vlan_present = sparx5_rr_bridge_vlan_present(bridge,
+								  leg->vid);
+		sparx5_rr_leg_hw_uc_update(sparx5, leg);
+	}
+
+	bridge = sparx5->hw_bridge_dev;
+	if (!bitmap_empty(sparx5->bridge_mask, SPX5_PORTS) && bridge) {
+		netdev_for_each_upper_dev_rcu(bridge, dev, iter) {
+			if (!is_vlan_dev(dev) ||
+			    sparx5_rr_dev_addr_list_empty(dev))
+				continue;
+			if (__sparx5_rr_inetaddr_event(sparx5, dev, NETDEV_UP,
+						       NULL) && net_ratelimit())
+				netdev_warn(dev,
+					    "Failed to offload L3 router leg\n");
+		}
 	}
 	mutex_unlock(&router->lock);
 }
@@ -681,6 +810,7 @@ int sparx5_rr_router_init(struct sparx5 *sparx5)
 
 	INIT_LIST_HEAD(&r->leg_list);
 
+	/* The exported helpers use leg_list once sparx5->router is set. */
 	sparx5->router = r;
 
 	r->sparx5_router_owq = alloc_ordered_workqueue("sparx5_router_owq", 0);
