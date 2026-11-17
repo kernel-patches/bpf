@@ -2454,7 +2454,7 @@ static int insert_page_into_pte_locked(struct vm_area_struct *vma, pte_t *pte,
 	pte_t pteval = ptep_get(pte);
 
 	if (!pte_none(pteval)) {
-		if (!mkwrite)
+		if (!mkwrite || !pte_present(pteval))
 			return -EBUSY;
 
 		/* see insert_pfn(). */
