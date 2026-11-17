@@ -19,6 +19,15 @@
 #define FILE_SIZE (32 * 1024 * 1024UL)
 #define BUF_SIZE (64 * 1024)
 
+/*
+ * memcg stats are flushed lazily: reading memory.stat only flushes once
+ * pending updates exceed MEMCG_CHARGE_BATCH * num_online_cpus(), so on a
+ * large machine the write may only show up after the periodic flusher
+ * (every 2s, later on a busy machine) has run.
+ */
+#define MEMCG_STAT_RETRIES		40
+#define MEMCG_STAT_RETRY_DELAY_US	(250 * 1000)
+
 struct reclaim_args {
 	__u64 cgroup_id;
 	__u64 size;
@@ -32,18 +41,79 @@ struct reclaim_args {
  * routinely run from a tmpfs working directory, so both candidates need the
  * check.
  */
-static const char *workload_dir(void)
+static const char * const workload_dirs[] = { "/tmp", "." };
+
+static bool usable_dir(const char *dir)
 {
-	static const char * const dirs[] = { "/tmp", "." };
 	struct statfs st;
+
+	return !statfs(dir, &st) && st.f_type != TMPFS_MAGIC &&
+	       st.f_type != RAMFS_MAGIC && !access(dir, W_OK);
+}
+
+static bool memcg_stat(const char *stat, const char *key,
+		       unsigned long long *val)
+{
+	char needle[32];
+	const char *p;
+
+	snprintf(needle, sizeof(needle), "\n%s ", key);
+	p = strstr(stat, needle);
+	return p && sscanf(p + strlen(needle), "%llu", val) == 1;
+}
+
+/*
+ * statfs() only sees the top of a stacking filesystem: when /tmp is an
+ * overlayfs over tmpfs, as in virtme-ng guests, the check above passes but
+ * the data still ends up as shmem. Wait for the write to show up in the
+ * cgroup's stats ("file" includes shmem) and report how much of it is shmem.
+ * Both keys are always present, so failing to read them is an error.
+ */
+static int read_shmem_charge(const char *cg, unsigned long long *shmem)
+{
+	static char buf[8192];
+	unsigned long long file = 0;
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(dirs); i++)
-		if (!statfs(dirs[i], &st) && st.f_type != TMPFS_MAGIC &&
-		    st.f_type != RAMFS_MAGIC && !access(dirs[i], W_OK))
-			return dirs[i];
+	for (i = 0; i < MEMCG_STAT_RETRIES; i++) {
+		if (!ASSERT_OK(read_cgroup_file(cg, "memory.stat", buf,
+						sizeof(buf)), "read memory.stat") ||
+		    !ASSERT_TRUE(memcg_stat(buf, "file", &file), "parse file") ||
+		    !ASSERT_TRUE(memcg_stat(buf, "shmem", shmem), "parse shmem"))
+			return -1;
+		if (file >= FILE_SIZE / 2)
+			return 0;
+		usleep(MEMCG_STAT_RETRY_DELAY_US);
+	}
 
-	return NULL;
+	ASSERT_GE(file, FILE_SIZE / 2, "file in memory.stat");
+	return -1;
+}
+
+/* Charge FILE_SIZE of clean page cache to the current cgroup. */
+static int write_data_file(const char *dir, char *path, size_t len)
+{
+	static char buf[BUF_SIZE];
+	off_t off;
+	int fd;
+
+	snprintf(path, len, "%s/memcg_proactive_reclaim_XXXXXX", dir);
+	fd = mkstemp(path);
+	if (!ASSERT_GE(fd, 0, "mkstemp"))
+		return -1;
+
+	for (off = 0; off < (off_t)FILE_SIZE; off += sizeof(buf))
+		if (!ASSERT_EQ(write(fd, buf, sizeof(buf)),
+			       (ssize_t)sizeof(buf), "write"))
+			goto err;
+	if (!ASSERT_OK(fsync(fd), "fsync"))
+		goto err;
+
+	return fd;
+err:
+	close(fd);
+	unlink(path);
+	return -1;
 }
 
 void test_memcg_proactive_reclaim(void)
@@ -55,48 +125,67 @@ void test_memcg_proactive_reclaim(void)
 		    .ctx_in = &args,
 		    .ctx_size_in = sizeof(args));
 
-	char data_file[PATH_MAX];
-	static char buf[BUF_SIZE];
+	char data_file[PATH_MAX], cg[64];
+	unsigned long long shmem;
 	__u64 cgroup_id;
-	const char *dir;
-	off_t off;
-	int cg_fd = -1, data_fd = -1, err;
+	int cg_fd = -1, data_fd = -1, err, i;
+
+	if (!ASSERT_OK(setup_cgroup_environment(), "setup_cgroup_environment"))
+		return;
 
 	/*
-	 * Both candidate directories can be unusable: tmpfs (initramfs-based
-	 * CI, for instance) or a read-only mount. That is an environment
-	 * limitation, not a test failure.
+	 * Try each candidate in a cgroup of its own, so that the stats of one
+	 * attempt do not leak into the next.
 	 */
-	dir = workload_dir();
-	if (!dir) {
-		test__skip();
-		return;
+	for (i = 0; i < ARRAY_SIZE(workload_dirs); i++) {
+		if (!usable_dir(workload_dirs[i]))
+			continue;
+
+		snprintf(cg, sizeof(cg), CG_PATH "_%d", i);
+		cg_fd = create_and_get_cgroup(cg);
+		if (!ASSERT_OK_FD(cg_fd, "create_and_get_cgroup"))
+			goto out;
+		if (!ASSERT_OK(join_cgroup(cg), "join_cgroup"))
+			goto out;
+
+		data_fd = write_data_file(workload_dirs[i], data_file,
+					  sizeof(data_file));
+		if (data_fd < 0 || read_shmem_charge(cg, &shmem))
+			goto out;
+
+		/*
+		 * All or nothing: the file is either entirely shmem (tmpfs,
+		 * possibly under a stacking filesystem) or not shmem at all
+		 * (disk-backed), so half of FILE_SIZE is a safe midpoint.
+		 */
+		if (shmem < FILE_SIZE / 2)
+			break;
+
+		printf("%s: %s is backed by shmem (%llu MiB charged)\n",
+		       __func__, workload_dirs[i], shmem >> 20);
+		close(data_fd);
+		unlink(data_file);
+		data_fd = -1;
+		close(cg_fd);
+		cg_fd = -1;
 	}
 
-	snprintf(data_file, sizeof(data_file),
-		 "%s/memcg_proactive_reclaim_XXXXXX", dir);
-	data_fd = mkstemp(data_file);
-	if (!ASSERT_GE(data_fd, 0, "mkstemp"))
-		return;
-
-	cg_fd = cgroup_setup_and_join(CG_PATH);
-	if (!ASSERT_OK_FD(cg_fd, "cgroup_setup_and_join"))
+	/*
+	 * No candidate is usable: tmpfs (initramfs-based CI, for instance),
+	 * a read-only mount, or a stacking filesystem on top of tmpfs. That is
+	 * an environment limitation, not a test failure.
+	 */
+	if (data_fd < 0) {
+		test__skip();
 		goto out;
+	}
 
-	cgroup_id = get_cgroup_id(CG_PATH);
+	cgroup_id = get_cgroup_id(cg);
 	if (!ASSERT_GT(cgroup_id, 0, "get_cgroup_id"))
 		goto out;
 
 	skel = memcg_proactive_reclaim__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "open_and_load"))
-		goto out;
-
-	/* Charge FILE_SIZE of clean page cache to the cgroup. */
-	for (off = 0; off < (off_t)FILE_SIZE; off += sizeof(buf))
-		if (!ASSERT_EQ(write(data_fd, buf, sizeof(buf)),
-			       (ssize_t)sizeof(buf), "write"))
-			goto out;
-	if (!ASSERT_OK(fsync(data_fd), "fsync"))
 		goto out;
 
 	args.cgroup_id = cgroup_id;
