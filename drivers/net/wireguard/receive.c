@@ -452,6 +452,10 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 	       (state = atomic_read_acquire(&PACKET_CB(skb)->state)) !=
 		       PACKET_STATE_UNCRYPTED) {
 		wg_prev_queue_drop_peeked(&peer->rx_queue);
+		if (unlikely(state == PACKET_STATE_DRAIN)) {
+			complete(PACKET_CB(skb)->completion);
+			break;
+		}
 		keypair = PACKET_CB(skb)->keypair;
 		free = true;
 

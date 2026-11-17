@@ -77,6 +77,16 @@ bool wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *skb)
 	return true;
 }
 
+void wg_prev_queue_enqueue_sentinel(struct prev_queue *queue, struct sk_buff *skb,
+				    struct completion *completion)
+{
+	PACKET_CB(skb)->completion = completion;
+	atomic_set_release(&PACKET_CB(skb)->state, PACKET_STATE_DRAIN);
+	/* Reserve an extra slot even if the queue is full. */
+	atomic_inc(&queue->count);
+	__wg_prev_queue_enqueue(queue, skb);
+}
+
 struct sk_buff *wg_prev_queue_dequeue(struct prev_queue *queue)
 {
 	struct sk_buff *tail = queue->tail, *next = smp_load_acquire(&NEXT(tail));

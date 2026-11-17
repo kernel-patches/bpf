@@ -93,6 +93,10 @@ static void peer_make_dead(struct wg_peer *peer)
 
 static void peer_remove_after_dead(struct wg_peer *peer)
 {
+	struct sk_buff tx = { }, rx = { };
+	DECLARE_COMPLETION_ONSTACK(tx_done);
+	DECLARE_COMPLETION_ONSTACK(rx_done);
+
 	WARN_ON(!peer->is_dead);
 
 	/* No more keypairs can be created for this peer, since is_dead protects
@@ -105,28 +109,32 @@ static void peer_remove_after_dead(struct wg_peer *peer)
 	 */
 	wg_timers_stop(peer);
 
-	/* The transition between packet encryption/decryption queues isn't
-	 * guarded by is_dead, but each reference's life is strictly bounded by
-	 * two generations: once for parallel crypto and once for serial
-	 * ingestion, so we can simply flush twice, and be sure that we no
-	 * longer have references inside these queues.
+	/* While is_dead guards against new TX/RX, there may be existing items
+	 * in encryption/decryption queues. To address that, queue a sentinel
+	 * on those queues and wait for completion for both tx/rx queues.
 	 */
+	wg_prev_queue_enqueue_sentinel(&peer->tx_queue, &tx, &tx_done);
+	wg_prev_queue_enqueue_sentinel(&peer->rx_queue, &rx, &rx_done);
+	queue_work_on(wg_cpumask_choose_online(&peer->serial_work_cpu, peer->internal_id),
+		      peer->device->packet_crypt_wq, &peer->transmit_packet_work);
+	napi_schedule(&peer->napi);
+	wait_for_completion(&tx_done);
+	wait_for_completion(&rx_done);
 
-	/* a) For encrypt/decrypt. */
-	flush_workqueue(peer->device->packet_crypt_wq);
-	/* b.1) For send (but not receive, since that's napi). */
-	flush_workqueue(peer->device->packet_crypt_wq);
-	/* b.2.1) For receive (but not send, since that's wq). */
-	napi_disable(&peer->napi);
-	/* b.2.1) It's now safe to remove the napi struct, which must be done
-	 * here from process context.
+	/* Handle edge cases where a consumer can finish a packet before crypto
+	 * helper schedules the consumer again. Use RCU sync to ensure that all
+	 * notification helpers finish.
 	 */
+	synchronize_rcu();
+
+	/* Keep the sentinels alive until both consumers have finished. */
+	flush_work(&peer->transmit_packet_work);
+	napi_disable(&peer->napi);
+	/* netif_napi_del() must run in process context. */
 	netif_napi_del(&peer->napi);
 
-	/* Ensure any workstructs we own (like transmit_handshake_work or
-	 * clear_peer_work) no longer are in use.
-	 */
-	flush_workqueue(peer->device->handshake_send_wq);
+	/* wg_timers_stop() already flushed clear_peer_work. */
+	flush_work(&peer->transmit_handshake_work);
 
 	/* After the above flushes, a peer might still be active in a few
 	 * different contexts: 1) from xmit(), before hitting is_dead and

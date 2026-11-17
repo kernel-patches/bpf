@@ -7,6 +7,7 @@
 #define _WG_QUEUEING_H
 
 #include "peer.h"
+#include <linux/completion.h>
 #include <linux/types.h>
 #include <linux/skbuff.h>
 #include <linux/ip.h>
@@ -53,12 +54,16 @@ void wg_packet_encrypt_worker(struct work_struct *work);
 enum packet_state {
 	PACKET_STATE_UNCRYPTED,
 	PACKET_STATE_CRYPTED,
-	PACKET_STATE_DEAD
+	PACKET_STATE_DEAD,
+	PACKET_STATE_DRAIN
 };
 
 struct packet_cb {
 	u64 nonce;
-	struct noise_keypair *keypair;
+	union {
+		struct noise_keypair *keypair;
+		struct completion *completion;
+	};
 	atomic_t state;
 	u32 mtu;
 	u8 ds;
@@ -133,6 +138,10 @@ void wg_prev_queue_init(struct prev_queue *queue);
 /* Multi producer */
 bool wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *skb);
 
+/* Called only after packet admission has stopped. */
+void wg_prev_queue_enqueue_sentinel(struct prev_queue *queue, struct sk_buff *skb,
+				    struct completion *completion);
+
 /* Single consumer */
 struct sk_buff *wg_prev_queue_dequeue(struct prev_queue *queue);
 
@@ -176,15 +185,16 @@ static inline int wg_queue_enqueue_per_device_and_peer(
 
 static inline void wg_queue_enqueue_per_peer_tx(struct sk_buff *skb, enum packet_state state)
 {
-	/* We take a reference, because as soon as we call atomic_set, the
-	 * peer can be freed from below us.
-	 */
+	/* Keep the peer alive across state publication and TX scheduling. */
 	struct wg_peer *peer = wg_peer_get(PACKET_PEER(skb));
 
+	/* Teardown waits for this section after the drain sentinel completes. */
+	rcu_read_lock();
 	atomic_set_release(&PACKET_CB(skb)->state, state);
 	queue_work_on(wg_cpumask_choose_online(&peer->serial_work_cpu, peer->internal_id),
 		      peer->device->packet_crypt_wq, &peer->transmit_packet_work);
 	wg_peer_put(peer);
+	rcu_read_unlock();
 }
 
 static inline void wg_queue_enqueue_per_peer_rx(struct sk_buff *skb, enum packet_state state)
@@ -194,9 +204,11 @@ static inline void wg_queue_enqueue_per_peer_rx(struct sk_buff *skb, enum packet
 	 */
 	struct wg_peer *peer = wg_peer_get(PACKET_PEER(skb));
 
+	rcu_read_lock();
 	atomic_set_release(&PACKET_CB(skb)->state, state);
 	napi_schedule(&peer->napi);
 	wg_peer_put(peer);
+	rcu_read_unlock();
 }
 
 #ifdef DEBUG
