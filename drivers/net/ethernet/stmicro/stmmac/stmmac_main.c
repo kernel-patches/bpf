@@ -5467,13 +5467,14 @@ error_dma_unmap:
 static int stmmac_xdp_get_tx_queue(struct stmmac_priv *priv,
 				   int cpu)
 {
+	unsigned int num_tx_queues = priv->xmit_qdisc.num_tx_queues;
 	int index = cpu;
 
 	if (unlikely(index < 0))
 		index = 0;
 
-	while (index >= priv->plat->tx_queues_to_use)
-		index -= priv->plat->tx_queues_to_use;
+	while (index >= num_tx_queues)
+		index -= num_tx_queues;
 
 	return index;
 }
