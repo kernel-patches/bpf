@@ -10759,8 +10759,15 @@ void perf_report_aux_output_id(struct perf_event *event, u64 hw_id)
 }
 EXPORT_SYMBOL_GPL(perf_report_aux_output_id);
 
+/*
+ * @period is the period of the interval that just ended. PMU drivers
+ * re-arm the counter before calling perf_event_overflow(), which sets
+ * hwc->last_period to the period of the next interval, so the overflow
+ * path passes the sample's period instead.
+ */
 static int
-__perf_event_account_interrupt(struct perf_event *event, int throttle)
+__perf_event_account_interrupt(struct perf_event *event, int throttle,
+			       u64 period)
 {
 	struct hw_perf_event *hwc = &event->hw;
 	int ret = 0;
@@ -10788,7 +10795,7 @@ __perf_event_account_interrupt(struct perf_event *event, int throttle)
 		hwc->freq_time_stamp = now;
 
 		if (delta > 0 && delta < 2*TICK_NSEC)
-			perf_adjust_period(event, delta, hwc->last_period, true);
+			perf_adjust_period(event, delta, period, true);
 	}
 
 	return ret;
@@ -10796,7 +10803,7 @@ __perf_event_account_interrupt(struct perf_event *event, int throttle)
 
 int perf_event_account_interrupt(struct perf_event *event)
 {
-	return __perf_event_account_interrupt(event, 1);
+	return __perf_event_account_interrupt(event, 1, event->hw.last_period);
 }
 
 static inline bool sample_is_allowed(struct perf_event *event, struct pt_regs *regs)
@@ -10927,7 +10934,7 @@ static int __perf_event_overflow(struct perf_event *event,
 	if (unlikely(!is_sampling_event(event)))
 		return 0;
 
-	ret = __perf_event_account_interrupt(event, throttle);
+	ret = __perf_event_account_interrupt(event, throttle, data->period);
 
 	if (event->attr.aux_pause)
 		perf_event_aux_pause(event->aux_event, true);
