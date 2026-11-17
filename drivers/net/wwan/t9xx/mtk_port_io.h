@@ -17,7 +17,12 @@ struct mtk_port_ops {
 	void (*exit)(struct mtk_port *port);
 	void (*enable)(struct mtk_port *port);
 	void (*disable)(struct mtk_port *port);
+	/* recv and tx_complete may sleep, but also run from HIF teardown with
+	 * trans->submit_lock held: they must not take a lock that is ever held
+	 * across a call into the HIF.
+	 */
 	int (*recv)(struct mtk_port *port, struct sk_buff *skb);
+	void (*tx_complete)(struct mtk_port *port);
 };
 
 const struct mtk_port_ops *mtk_port_get_ops(enum mtk_port_type type);
