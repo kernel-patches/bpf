@@ -7,7 +7,10 @@
 #include <linux/file.h>
 #include <linux/interval_tree_generic.h>
 #include <linux/irq_work.h>
+#include <linux/magic.h>
 #include <linux/memfd.h>
+#include <linux/memory_hotplug.h>
+#include <linux/memremap.h>
 #include "linux/filter.h"
 #include <linux/llist.h>
 #include <linux/mman.h>
@@ -130,7 +133,9 @@ struct arena_import {
 	/* on a list while being released */
 	struct list_head head;
 	struct page **pages;
-	/* the file, with write access on its inode */
+	/* device pages: one reference keeps them all, NULL otherwise */
+	struct dev_pagemap *pgmap;
+	/* file pages: the file, with write access on its inode, NULL otherwise */
 	struct file *file;
 	long pgoff;
 	long page_cnt;
@@ -404,8 +409,12 @@ static void arena_release_import(struct arena_import *imp)
 {
 	/* BPF programs write through the kernel mapping, which doesn't track dirty */
 	unpin_user_pages_dirty_lock(imp->pages, imp->page_cnt, true);
-	put_write_access(file_inode(imp->file));
-	fput(imp->file);
+	/* After the pins: the memmap of device pages goes away with it */
+	put_dev_pagemap(imp->pgmap);
+	if (imp->file) {
+		put_write_access(file_inode(imp->file));
+		fput(imp->file);
+	}
 	kvfree(imp->pages);
 	kfree(imp);
 }
@@ -1401,11 +1410,11 @@ out:
 
 /*
  * Map @page_cnt pages that the arena didn't allocate at @uaddr, which must be
- * free. On success the arena keeps @pages, their pins and the write access on
- * @file until it releases them, see struct arena_import.
+ * free. On success the arena keeps @pages, their pins, @pgmap and the write
+ * access on @file until it releases them, see struct arena_import.
  */
 static int arena_map_ext_pages(struct bpf_arena *arena, long uaddr, struct page **pages,
-			       long page_cnt, struct file *file)
+			       long page_cnt, struct dev_pagemap *pgmap, struct file *file)
 {
 	/* The first mmap() may be setting the user range: a non-zero start is final */
 	u64 user_vm_start = READ_ONCE(arena->user_vm_start);
@@ -1430,6 +1439,7 @@ static int arena_map_ext_pages(struct bpf_arena *arena, long uaddr, struct page 
 	if (!imp)
 		return -ENOMEM;
 	imp->pages = pages;
+	imp->pgmap = pgmap;
 	imp->file = file;
 	imp->pgoff = pgoff;
 	imp->page_cnt = page_cnt;
@@ -1447,7 +1457,8 @@ static int arena_map_ext_pages(struct bpf_arena *arena, long uaddr, struct page 
 		WARN_ON_ONCE(apply_to_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
 						 apply_range_set_cb, &data));
 		flush_vmap_cache(kaddr, page_cnt << PAGE_SHIFT);
-		get_file(file);
+		if (file)
+			get_file(file);
 		arena_import_it_insert(imp, &arena->imports);
 	}
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
@@ -1522,7 +1533,8 @@ static int arena_import_file(struct bpf_arena *arena, long uaddr, u32 page_cnt,
 		}
 	}
 
-	ret = cnt == page_cnt ? arena_map_ext_pages(arena, uaddr, pages, page_cnt, file) : -EINVAL;
+	ret = cnt == page_cnt ? arena_map_ext_pages(arena, uaddr, pages, page_cnt, NULL, file) :
+	      -EINVAL;
 out:
 	if (ret) {
 		unpin_user_pages(pages, cnt);
@@ -1551,6 +1563,82 @@ static int arena_import_memfd(struct bpf_arena *arena, long uaddr, u32 page_cnt,
 	if (ret)
 		return ret;
 	return arena_import_file(arena, uaddr, page_cnt, fd_file(f), off);
+}
+
+/*
+ * A device-dax file maps the inode of its dax_device, which lives on the dax
+ * pseudo filesystem, whatever CONFIG_FS_DAX says (S_DAX is 0 without it).
+ */
+static bool vma_is_devdax(struct vm_area_struct *vma)
+{
+	struct file *file = vma->vm_file;
+
+	return file && file->f_mapping->host->i_sb->s_magic == DAXFS_MAGIC;
+}
+
+/*
+ * Import the device-dax pages mapped at [src, src + page_cnt * PAGE_SIZE) in
+ * the calling task. Only device-dax is accepted: other drivers hand out
+ * MEMORY_DEVICE_GENERIC pages too (e.g. Xen grants).
+ */
+static int arena_import_dax(struct bpf_arena *arena, long uaddr, u32 page_cnt, u64 src)
+{
+	struct mm_struct *mm = current->mm;
+	struct dev_pagemap *pgmap = NULL;
+	struct vm_area_struct *vma;
+	long i, pinned = 0;
+	struct page **pages;
+	int ret = -EINVAL;
+
+	/* A sleepable callback, like a bpf_wq one, may run without an address space */
+	if (!mm || (src & ~PAGE_MASK))
+		return -EINVAL;
+
+	pages = kvmalloc_array(page_cnt, sizeof(*pages), GFP_KERNEL_ACCOUNT);
+	if (!pages)
+		return -ENOMEM;
+
+	/*
+	 * A pin doesn't keep the memmap of device pages: an unbind can free it
+	 * until a dev_pagemap reference is held, but only under mem_hotplug_lock,
+	 * which nests outside of mmap_lock
+	 */
+	get_online_mems();
+	mmap_read_lock(mm);
+	vma = vma_lookup(mm, src);
+	if (!vma || !vma_is_devdax(vma) ||
+	    ((unsigned long)page_cnt << PAGE_SHIFT) > vma->vm_end - src)
+		goto out_unlock;
+	pinned = pin_user_pages(src, page_cnt, FOLL_WRITE | FOLL_LONGTERM, pages);
+	if (pinned < 0)
+		ret = pinned;
+	else if (pinned == page_cnt && is_zone_device_page(pages[0]))
+		pgmap = get_dev_pagemap(page_to_pfn(pages[0]));
+	if (pgmap && pgmap->type == MEMORY_DEVICE_GENERIC) {
+		ret = 0;
+		/* All of the pages are on the device of the mapping */
+		for (i = 1; i < pinned; i++)
+			if (!is_zone_device_page(pages[i]) || page_pgmap(pages[i]) != pgmap)
+				ret = -EINVAL;
+	}
+	/* Still under the lock: there may be no dev_pagemap reference */
+	if (ret && pinned > 0) {
+		unpin_user_pages(pages, pinned);
+		pinned = 0;
+	}
+out_unlock:
+	mmap_read_unlock(mm);
+	put_online_mems();
+
+	if (!ret)
+		ret = arena_map_ext_pages(arena, uaddr, pages, page_cnt, pgmap, NULL);
+	if (ret) {
+		if (pinned > 0)
+			unpin_user_pages(pages, pinned);
+		put_dev_pagemap(pgmap);
+		kvfree(pages);
+	}
+	return ret;
 }
 
 static void arena_free_worker(struct work_struct *work)
@@ -1686,6 +1774,38 @@ __bpf_kfunc int bpf_arena_import_memfd(void *p__map, void *addr__ign, u32 page_c
 		return -EINVAL;
 	return arena_import_memfd(arena, (long)addr__ign, page_cnt, fd, off);
 }
+
+/**
+ * bpf_arena_import_dax - map device-dax pages of the calling task into an arena
+ * @p__map: the arena
+ * @addr__ign: page-aligned arena address where the pages are mapped
+ * @page_cnt: number of pages to import
+ * @src: page-aligned address of a writable device-dax mapping in the calling task
+ *
+ * Pin the pages backing @src and map them at @addr__ign, like
+ * bpf_arena_import_memfd() does with the pages of a file. The whole range must
+ * be in one mapping of a device-dax device, e.g. the /dev/daxX.Y that a guest
+ * gets from a virtio-pmem or NVDIMM device backed by host memory, which the
+ * host imports by file. User space keeps accessing the pages through @src.
+ *
+ * Imported pages keep the device in use: unbinding or removing it blocks until
+ * the arena releases them, for as long as a map fd or a bpffs pin keeps the
+ * arena alive.
+ *
+ * BPF programs have no machine check recovery: on a real NVDIMM, the supplier
+ * has to keep bad pages out of the arena.
+ *
+ * Return: 0 on success, negative error code otherwise.
+ */
+__bpf_kfunc int bpf_arena_import_dax(void *p__map, void *addr__ign, u32 page_cnt, u64 src)
+{
+	struct bpf_map *map = p__map;
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+
+	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || page_cnt > map->max_entries)
+		return -EINVAL;
+	return arena_import_dax(arena, (long)addr__ign, page_cnt, src);
+}
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(arena_kfuncs)
@@ -1702,6 +1822,7 @@ static const struct btf_kfunc_id_set common_kfunc_set = {
 
 BTF_KFUNCS_START(arena_syscall_kfuncs)
 BTF_ID_FLAGS(func, bpf_arena_import_memfd, KF_ARENA_ARG2 | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_arena_import_dax, KF_ARENA_ARG2 | KF_SLEEPABLE)
 BTF_KFUNCS_END(arena_syscall_kfuncs)
 
 static const struct btf_kfunc_id_set syscall_kfunc_set = {
