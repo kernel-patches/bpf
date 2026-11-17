@@ -439,8 +439,8 @@ static int cpuidle_coupled_clear_pokes(int cpu)
 
 static bool cpuidle_coupled_any_pokes_pending(struct cpuidle_coupled *coupled)
 {
-	return cpumask_first_and_and(cpu_online_mask, &coupled->coupled_cpus,
-				     &cpuidle_coupled_poke_pending) < nr_cpu_ids;
+	return cpumask_intersects_and(cpu_online_mask, &coupled->coupled_cpus,
+				      &cpuidle_coupled_poke_pending);
 }
 
 /**
