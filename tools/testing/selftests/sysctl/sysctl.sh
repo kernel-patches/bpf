@@ -351,6 +351,56 @@ test_int_jiffies_negative()
 	assert_content "$t" "1" || RET=$KSFT_FAIL
 }
 
+# Writing 1 ms reads back 10, 4, 3 and 1 ms at HZ=100, 250, 300 and 1000
+# respectively. Here we make sure that it is >= to 1.
+test_jiffies_conv_roundup_on_write()
+{
+	local m="${SYSCTL}/int_ms_jiffies"
+	local l="${SYSCTL}/ulong_ms_jiffies"
+	local f got
+
+	[[ -f "$m" && -f "$l" ]] || { RET=$KSFT_SKIP; return; }
+
+	for f in "$m" "$l"; do
+		if ! printf '%s' "1" > "$f" 2>/dev/null; then
+			ktap_print_msg "$f: write of 1 rejected"
+			RET=$KSFT_FAIL
+			continue
+		fi
+		got=$(cat "$f")
+		if [[ ! "$got" =~ ^[0-9]+$ ]] || (( got < 1 )); then
+			ktap_print_msg "$f: wrote 1, got '$got', want >= 1"
+			RET=$KSFT_FAIL
+		fi
+	done
+}
+
+# Check that writing back what was just read does not change it again.
+test_jiffies_conv_stable_rewrite()
+{
+	local m="${SYSCTL}/int_ms_jiffies"
+	local l="${SYSCTL}/ulong_ms_jiffies"
+	local orig=$RANDOM
+	local f first
+
+	[[ -f "$m" && -f "$l" ]] || { RET=$KSFT_SKIP; return; }
+
+	for f in "$m" "$l"; do
+		if ! printf '%s' "$orig" > "$f" 2>/dev/null; then
+			ktap_print_msg "$f: write of $orig rejected"
+			RET=$KSFT_FAIL
+			continue
+		fi
+		first=$(cat "$f")
+		if ! printf '%s' "$first" > "$f" 2>/dev/null; then
+			ktap_print_msg "$f: rewrite of '$first' rejected"
+			RET=$KSFT_FAIL
+			continue
+		fi
+		assert_content "$f" "$first" || RET=$KSFT_FAIL
+	done
+}
+
 test_uint_plain()
 {
 	local t="${SYSCTL}/uint_0001"
