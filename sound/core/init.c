@@ -385,6 +385,9 @@ struct snd_card *snd_card_ref(int idx)
 {
 	struct snd_card *card;
 
+	if (WARN_ON(idx < 0 || idx >= SNDRV_CARDS))
+		return NULL;
+
 	guard(mutex)(&snd_card_mutex);
 	card = snd_cards[idx];
 	if (card)
@@ -396,6 +399,9 @@ EXPORT_SYMBOL_GPL(snd_card_ref);
 /* return non-zero if a card is already locked */
 int snd_card_locked(int card)
 {
+	if (WARN_ON(card < 0 || card >= SNDRV_CARDS))
+		return 0;
+
 	guard(mutex)(&snd_card_mutex);
 	return test_bit(card, snd_cards_lock);
 }
