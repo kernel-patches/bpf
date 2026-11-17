@@ -1049,9 +1049,8 @@ EXPORT_SYMBOL_GPL(fwnode_remove_software_node);
  * @dev: The device the software node is meant for.
  * @node: The software node.
  *
- * This function will make @node the secondary firmware node pointer of @dev. If
- * @dev has no primary node, then @node will become the primary node. The
- * function will register @node automatically if it wasn't already registered.
+ * Register @node if it was not already registered and make it the secondary
+ * firmware node of @dev.
  */
 int device_add_software_node(struct device *dev, const struct software_node *node)
 {
@@ -1092,7 +1091,8 @@ EXPORT_SYMBOL_GPL(device_add_software_node);
  * device_remove_software_node - Remove device's software node
  * @dev: The device with the software node.
  *
- * This function will unregister the software node of @dev.
+ * Remove a software node added by device_add_software_node() and
+ * deregister it if this is the last reference.
  */
 void device_remove_software_node(struct device *dev)
 {
