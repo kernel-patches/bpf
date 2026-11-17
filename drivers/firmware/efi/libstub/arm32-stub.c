@@ -128,18 +128,14 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 	efistub_image_info._text_offset =
 		kernel_base + TEXT_OFFSET - (u32)&efistub_image_info;
 
-	*reserve_addr = kernel_base + slack;
-	*reserve_size = alloc_size;
+	kernel_base += slack;
 
 	/* now free the parts that we will not use */
-	efi_free(*reserve_addr - alloc_base, alloc_base);	/* no-op if 0 */
-	efi_free(alloc_base + margin - *reserve_addr, *reserve_addr + alloc_size);
+	efi_free(kernel_base - alloc_base, alloc_base);	/* no-op if 0 */
+	efi_free(alloc_base + margin - kernel_base, kernel_base + alloc_size);
 
-	*image_addr = kernel_base + TEXT_OFFSET;
-	*image_size = 0;
-
-	efi_debug("image addr == 0x%lx, reserve_addr == 0x%lx\n",
-		  *image_addr, *reserve_addr);
+	*image_addr = kernel_base;
+	*image_size = alloc_size;
 
 	return EFI_SUCCESS;
 }
