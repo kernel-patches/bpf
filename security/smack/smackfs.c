@@ -1516,7 +1516,7 @@ static ssize_t smk_write_net6addr(struct file *file, const char __user *buf,
 			fullmask.s6_addr16[i] = 0xffff;
 			m -= 16;
 		} else if (m > 0) {
-			fullmask.s6_addr16[i] = (1 << m) - 1;
+			fullmask.s6_addr16[i] = htons(0xffff << (16 - m));
 			m = 0;
 		} else
 			fullmask.s6_addr16[i] = 0;
