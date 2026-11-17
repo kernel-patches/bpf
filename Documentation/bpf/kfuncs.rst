@@ -800,6 +800,89 @@ procedure is followed for removal:
 3. After the deprecation period the kfunc will be removed. At this point, BPF
    programs calling the kfunc will be rejected by the verifier.
 
+3.2 Changing a kfunc's prototype
+--------------------------------
+
+libbpf binds a kfunc by name, ignoring any ``___suffix`` in the BPF program's
+declaration, if the declared prototype is compatible with the kernel's.
+Otherwise, it looks for a kfunc named ``<name>___<anything>`` with a compatible
+prototype.
+
+Prototypes are compatible if they have the same number of parameters and the
+same kind (integer, enum, pointer, struct, union, ...) of each parameter and of
+the return value. A pointer's kind includes the kind it points to: ``int *``
+and ``struct task_struct *`` differ, ``struct file *`` and
+``struct task_struct *`` don't. Integer sizes and signedness don't matter, nor
+do the names and members of structs, unions and enums. Typedefs, ``const`` and
+``volatile`` are looked through.
+
+A change that keeps the prototype compatible, e.g. widening an integer or adding
+``const``, is done in place. Otherwise the new prototype keeps the name, and the
+old one stays available as ``<name>___v1`` (``___v2`` for the next change, and
+so on) for a deprecation period, usually as a thin wrapper registered with the
+same flags:
+
+.. code-block:: c
+
+	__bpf_kfunc int bpf_foo(struct task_struct *p, u64 flags)
+	{
+		...
+	}
+
+	/* bpf_foo() before flags was added */
+	__bpf_kfunc int bpf_foo___v1(struct task_struct *p)
+	{
+		return bpf_foo(p, 0);
+	}
+
+	BTF_ID_FLAGS(func, bpf_foo, KF_RCU)
+	BTF_ID_FLAGS(func, bpf_foo___v1, KF_RCU)
+
+BPF programs built against either prototype then load:
+
+.. code-block:: c
+
+	/* built against the old prototype: binds bpf_foo___v1 */
+	extern int bpf_foo(struct task_struct *p) __ksym;
+
+	/* built against the new prototype: binds bpf_foo */
+	extern int bpf_foo(struct task_struct *p, u64 flags) __ksym;
+
+Only libbpf 1.9 and later look for ``bpf_foo___v1``. Older libbpf and light
+skeletons see only ``bpf_foo``, as after an in-place change.
+
+Two kfuncs whose names differ only in the ``___`` suffix must not have
+compatible prototypes: libbpf couldn't tell them apart, and ``resolve_btfids``
+fails the build. The one exception is an alias of ``<name>``: a kfunc with the
+identical prototype, parameter names included (BTF dedup compares them).
+
+For example, this widens an offset to 64 bits and keeps the old prototype as
+``bpf_bar___v1``:
+
+.. code-block:: c
+
+	__bpf_kfunc int bpf_bar(const struct bpf_dynptr *p, u64 offset);
+
+	/* bpf_bar() before offset was widened */
+	__bpf_kfunc int bpf_bar___v1(const struct bpf_dynptr *p, u32 offset);
+
+``resolve_btfids`` rejects it::
+
+	ERROR: resolve_btfids: kfuncs bpf_bar and bpf_bar___v1 have compatible prototypes, libbpf cannot tell them apart
+
+Widening keeps the prototype compatible, so it is done in place instead: drop
+``bpf_bar___v1``, and programs built against the old prototype bind
+``bpf_bar``.
+
+Give the new prototype a new name that doesn't start with ``<name>___`` if
+programs loaded by older libbpf or light skeletons must keep working, or if the
+prototypes are compatible but the change breaks callers, e.g. two integer
+parameters swap places.
+
+Don't rename a ``<name>___vN`` kfunc in place: BPF programs may call it by that
+name. To give its prototype to ``<name>``, keep it as an alias for a
+deprecation period.
+
 4. Core kfuncs
 ==============
 
