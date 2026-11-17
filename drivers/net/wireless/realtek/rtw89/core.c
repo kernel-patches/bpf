@@ -5560,6 +5560,7 @@ static void rtw89_track_work(struct wiphy *wiphy, struct wiphy_work *work)
 	rtw89_core_bcn_track(rtwdev);
 	rtw89_phy_stat_track(rtwdev);
 	rtw89_phy_env_monitor_track(rtwdev);
+	rtw89_phy_dtp_track(rtwdev);
 	rtw89_phy_dig(rtwdev);
 	rtw89_core_rfk_track(rtwdev);
 	rtw89_phy_ra_update(rtwdev);
@@ -5786,6 +5787,7 @@ int rtw89_core_sta_link_add(struct rtw89_dev *rtwdev,
 	int ret;
 
 	rtwsta_link->prev_rssi = 0;
+	rtwsta_link->dtp_enabled = false;
 	ewma_rssi_init(&rtwsta_link->avg_rssi);
 	ewma_snr_init(&rtwsta_link->avg_snr);
 	ewma_evm_init(&rtwsta_link->evm_1ss);
@@ -6026,6 +6028,9 @@ int rtw89_core_sta_link_remove(struct rtw89_dev *rtwdev,
 	const struct ieee80211_vif *vif = rtwvif_link_to_vif(rtwvif_link);
 	const struct ieee80211_sta *sta = rtwsta_link_to_sta(rtwsta_link);
 	int ret;
+
+	if (rtw89_chip_support_dtp(rtwdev))
+		rtw89_phy_dtp_set_pwr_ctrl(rtwdev, rtwsta_link->mac_id, false);
 
 	if (vif->type == NL80211_IFTYPE_STATION && !sta->tdls) {
 		rtw89_reg_6ghz_recalc(rtwdev, rtwvif_link, false);

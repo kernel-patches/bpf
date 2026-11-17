@@ -225,6 +225,35 @@ static const struct rtw89_rrsr_cfgs rtw8922d_rrsr_cfgs = {
 	.rsc = {R_BE_PTCL_RRSR1, B_BE_RSC_MASK, 2},
 };
 
+static const struct rtw89_reg_def rtw8922d_nhm_th[RTW89_NHM_TH_NUM] = {
+	{R_NHM_CFG_BE4, B_NHM_TH0_MSK},
+	{R_NHM_TH1_BE4, B_NHM_TH1_MSK},
+	{R_NHM_TH1_BE4, B_NHM_TH2_MSK},
+	{R_NHM_TH1_BE4, B_NHM_TH3_MSK},
+	{R_NHM_TH1_BE4, B_NHM_TH4_MSK},
+	{R_NHM_TH5_BE4, B_NHM_TH5_MSK},
+	{R_NHM_TH5_BE4, B_NHM_TH6_MSK},
+	{R_NHM_TH5_BE4, B_NHM_TH7_MSK},
+	{R_NHM_TH5_BE4, B_NHM_TH8_MSK},
+	{R_NHM_TH9_BE4, B_NHM_TH9_MSK},
+	{R_NHM_TH9_BE4, B_NHM_TH10_MSK},
+};
+
+static const struct rtw89_reg_def rtw8922d_nhm_rpt[RTW89_NHM_RPT_NUM] = {
+	{R_NHM_CNT0_BE4, B_NHM_CNT0_MSK},
+	{R_NHM_CNT0_BE4, B_NHM_CNT1_MSK},
+	{R_NHM_CNT2_BE4, B_NHM_CNT2_MSK},
+	{R_NHM_CNT2_BE4, B_NHM_CNT3_MSK},
+	{R_NHM_CNT4_BE4, B_NHM_CNT4_MSK},
+	{R_NHM_CNT4_BE4, B_NHM_CNT5_MSK},
+	{R_NHM_CNT6_BE4, B_NHM_CNT6_MSK},
+	{R_NHM_CNT6_BE4, B_NHM_CNT7_MSK},
+	{R_NHM_CNT8_BE4, B_NHM_CNT8_MSK},
+	{R_NHM_CNT8_BE4, B_NHM_CNT9_MSK},
+	{R_NHM_CNT10_BE4, B_NHM_CNT10_MSK},
+	{R_NHM_CNT10_BE4, B_NHM_CNT11_MSK},
+};
+
 static const struct rtw89_rfkill_regs rtw8922d_rfkill_regs = {
 	.pinmux = {R_BE_GPIO8_15_FUNC_SEL,
 		   B_BE_PINMUX_GPIO9_FUNC_SEL_MASK,
@@ -3780,6 +3809,7 @@ const struct rtw89_chip_info rtw8922d_chip_info = {
 	.wde_qempty_mgq_grpsel	= 8,
 	.rf_base_addr		= {0x3e000, 0x3f000},
 	.thermal_th		= {0xac, 0xb4},
+	.dtp_thermal_th		= 0xa2,
 	.pwr_on_seq		= NULL,
 	.pwr_off_seq		= NULL,
 	.bb_table		= NULL,
@@ -3882,8 +3912,8 @@ const struct rtw89_chip_info rtw8922d_chip_info = {
 	.cfo_hw_comp            = true,
 	.dcfo_comp		= NULL,
 	.dcfo_comp_sft		= 0,
-	.nhm_report		= NULL,
-	.nhm_th			= NULL,
+	.nhm_report		= &rtw8922d_nhm_rpt,
+	.nhm_th			= &rtw8922d_nhm_th,
 	.imr_info		= NULL,
 	.imr_dmac_table		= &rtw8922d_imr_dmac_table,
 	.imr_cmac_table		= &rtw8922d_imr_cmac_table,

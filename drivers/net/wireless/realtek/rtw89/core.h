@@ -4553,6 +4553,12 @@ enum rtw89_dig_noisy_level {
 	RTW89_DIG_NOISY_LEVEL_MAX = 3,
 };
 
+#define RTW89_DTP_RSSI_TH -23 /* dBm */
+#define RTW89_DTP_TX_PWR_CAP 3 /* dBm */
+#define RTW89_DTP_FLOOR_UP_GAP 3 /* dB */
+#define RTW89_DTP_THERMAL_GAP 2 /* in unit of thermal value */
+#define RTW89_DTP_NHM_FAIL_MAX 3 /* consecutive invalid samples */
+
 enum rtw89_gi_ltf {
 	RTW89_GILTF_LGI_4XHE32 = 0,
 	RTW89_GILTF_SGI_4XHE08 = 1,
@@ -4738,6 +4744,8 @@ struct rtw89_sta_link {
 	u32 ampdu_max_time:4;
 	bool cctl_tx_retry_limit;
 	u32 data_tx_cnt_lmt:6;
+
+	bool dtp_enabled;
 };
 
 #define RTW89_EFUSE_SN_LEN 5
@@ -5832,6 +5840,7 @@ struct rtw89_chip_info {
 	u8 wde_qempty_mgq_grpsel;
 	u32 rf_base_addr[2];
 	u8 thermal_th[2];
+	u8 dtp_thermal_th;
 	u8 support_macid_num;
 	u8 support_link_num;
 	u8 support_chanctx_num;
@@ -6477,6 +6486,13 @@ struct rtw89_chanctx {
 	struct rtw89_chanctx_cfg *cfg;
 };
 
+struct rtw89_dtp_info {
+	bool is_noisy;
+	u8 nhm_fail_cnt;
+	bool bb_wrap_en;
+	bool bb_wrap_valid;
+};
+
 struct rtw89_edcca_bak {
 	u8 a;
 	u8 p;
@@ -6494,6 +6510,7 @@ enum rtw89_dm_type {
 	RTW89_DM_DIG_PD,
 	RTW89_DM_VCORE,
 	RTW89_DM_REGD_LEARN,
+	RTW89_DM_DTP,
 };
 
 #define RTW89_THERMAL_PROT_LV_MAX 5
@@ -6575,6 +6592,7 @@ enum rtw89_flags {
 	RTW89_FLAG_UNPLUGGED,
 	RTW89_FLAG_SHUTDOWN,
 	RTW89_FLAG_REGD_LEARNING,
+	RTW89_FLAG_DTP_EN,
 
 	NUM_OF_RTW89_FLAGS,
 };
@@ -7242,6 +7260,8 @@ struct rtw89_env_monitor_info {
 	u32 nhm_mntr_time;
 	u16 nhm_result[RTW89_NHM_RPT_NUM];
 	u8 nhm_th[RTW89_NHM_RPT_NUM];
+	u8 nhm_ratio;
+	bool nhm_bg_ongoing;
 	struct rtw89_nhm_report *nhm_his[RTW89_BAND_NUM];
 	struct list_head nhm_rpt_list;
 	u8 edcca_clm_ratio;
@@ -7805,6 +7825,7 @@ struct rtw89_dev {
 		struct rtw89_tx_stat_info tx_stat;
 		struct rtw89_diag_bb diag;
 		struct rtw89_phy_path_diff path_diff;
+		struct rtw89_dtp_info dtp;
 	} bbs[RTW89_PHY_NUM];
 
 	struct wiphy_delayed_work track_work;
@@ -8947,6 +8968,11 @@ static inline void rtw89_chip_rfk_init_late(struct rtw89_dev *rtwdev)
 
 	if (chip->ops->rfk_init_late)
 		chip->ops->rfk_init_late(rtwdev);
+}
+
+static inline bool rtw89_chip_support_dtp(struct rtw89_dev *rtwdev)
+{
+	return rtwdev->chip->dtp_thermal_th;
 }
 
 static inline void rtw89_chip_rfk_band_changed(struct rtw89_dev *rtwdev,

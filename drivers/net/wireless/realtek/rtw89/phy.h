@@ -223,6 +223,9 @@ enum rtw89_env_monitor_result_level {
 #define RTW89_NOISE_DEFAULT -96
 #define RTW89_NHM_MNTR_TIME 40
 #define RTW89_NHM_TH_FACTOR 1
+#define RTW89_NHM_RATIO_TH 2
+#define RTW89_NHM_RATIO_TH_GAP 1
+#define RTW89_NHM_RATIO_FAIL U8_MAX
 
 #define CCX_US_BASE_RATIO 4
 enum rtw89_ccx_unit {
@@ -455,6 +458,8 @@ struct rtw89_ccx_regs {
 	u32 nhm_en_mask;
 	u32 nhm_method;
 	u32 nhm_pwr_method_msk;
+	u32 nhm_filter;
+	u32 nhm_filter_mask;
 	u32 edcca_clm_rdy;
 	u32 edcca_clm_rdy_mask;
 	u32 edcca_clm_cnt;
@@ -1254,6 +1259,13 @@ void rtw89_phy_config_edcca(struct rtw89_dev *rtwdev,
 			    struct rtw89_bb_ctx *bb, bool scan);
 void rtw89_phy_edcca_track(struct rtw89_dev *rtwdev);
 void rtw89_phy_edcca_thre_calc(struct rtw89_dev *rtwdev, struct rtw89_bb_ctx *bb);
+void rtw89_phy_dtp_track(struct rtw89_dev *rtwdev);
+void rtw89_phy_dtp_set_pwr_ctrl(struct rtw89_dev *rtwdev, u8 mac_id,
+				bool enable_pwrctrl);
+int rtw89_phy_bb_wrap_dtp_en(struct rtw89_dev *rtwdev,
+			     enum rtw89_phy_idx phy_idx, bool en);
+void rtw89_phy_bb_wrap_dtp_set_pwr_ctrl(struct rtw89_dev *rtwdev, u8 mac_id,
+					bool en, s8 dbm);
 enum rtw89_rf_path_bit rtw89_phy_get_kpath(struct rtw89_dev *rtwdev,
 					   enum rtw89_phy_idx phy_idx);
 enum rtw89_rf_path rtw89_phy_get_syn_sel(struct rtw89_dev *rtwdev,

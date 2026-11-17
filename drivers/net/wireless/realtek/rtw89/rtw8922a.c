@@ -3238,6 +3238,7 @@ const struct rtw89_chip_info rtw8922a_chip_info = {
 	.wde_qempty_mgq_grpsel	= 4,
 	.rf_base_addr		= {0xe000, 0xf000},
 	.thermal_th		= {0xad, 0xb4},
+	.dtp_thermal_th		= 0,
 	.pwr_on_seq		= NULL,
 	.pwr_off_seq		= NULL,
 	.bb_table		= NULL,

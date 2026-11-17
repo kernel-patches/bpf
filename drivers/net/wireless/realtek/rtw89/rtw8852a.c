@@ -2388,6 +2388,7 @@ const struct rtw89_chip_info rtw8852a_chip_info = {
 	.wde_qempty_mgq_grpsel	= 16,
 	.rf_base_addr		= {0xc000, 0xd000},
 	.thermal_th		= {0x32, 0x35},
+	.dtp_thermal_th		= 0,
 	.pwr_on_seq		= pwr_on_seq_8852a,
 	.pwr_off_seq		= pwr_off_seq_8852a,
 	.bb_table		= &rtw89_8852a_phy_bb_table,
