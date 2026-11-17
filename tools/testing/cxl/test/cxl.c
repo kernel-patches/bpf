@@ -1374,13 +1374,17 @@ static void mock_init_hdm_type3_cxled(struct cxl_endpoint_decoder *cxled,
 		iter->commit_end = 0;
 		/*
 		 * Switch targets 2 endpoints, while host bridge targets
-		 * one root port
+		 * one root port. Like some platform firmware, program the
+		 * passthrough host bridge with a granularity that differs
+		 * from the region's, since hardware ignores it at 1-way.
 		 */
-		if (i == 0)
+		if (i == 0) {
 			cxld->interleave_ways = 2;
-		else
+			cxld->interleave_granularity = 4096;
+		} else {
 			cxld->interleave_ways = 1;
-		cxld->interleave_granularity = 4096;
+			cxld->interleave_granularity = 256;
+		}
 		cxld->hpa_range = (struct range) {
 			.start = base,
 			.end = base + mock_auto_region_size - 1,
