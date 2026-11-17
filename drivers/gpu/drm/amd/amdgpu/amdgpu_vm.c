@@ -1219,7 +1219,8 @@ int amdgpu_vm_update_range(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 	if (!unlocked && !dma_fence_is_signaled(vm->last_unlocked)) {
 		struct dma_fence *tmp = dma_fence_get_stub();
 
-		amdgpu_bo_fence(vm->root.bo, vm->last_unlocked, true);
+		dma_resv_add_fence(vm->root.bo->tbo.base.resv, vm->last_unlocked,
+				   DMA_RESV_USAGE_BOOKKEEP);
 		swap(vm->last_unlocked, tmp);
 		dma_fence_put(tmp);
 	}
