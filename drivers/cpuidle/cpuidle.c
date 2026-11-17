@@ -39,6 +39,7 @@ LIST_HEAD(cpuidle_detected_devices);
 static int enabled_devices;
 static int off __read_mostly;
 static int initialized __read_mostly;
+static bool paused;	/* Protected by cpuidle_lock */
 
 int cpuidle_disabled(void)
 {
@@ -481,7 +482,12 @@ __cpuidle u64 cpuidle_poll_time(struct cpuidle_driver *drv,
  */
 void cpuidle_install_idle_handler(void)
 {
-	if (enabled_devices) {
+	/*
+	 * Do not reinstall the idle handler while cpuidle is paused for a
+	 * system transition, even if a nested cpuidle_resume_and_unlock()
+	 * (e.g. from the ACPI processor CPU online callback) asks for it.
+	 */
+	if (enabled_devices && !paused) {
 		/* Make sure all changes finished before we switch to new idle */
 		smp_wmb();
 		initialized = 1;
@@ -531,6 +537,7 @@ EXPORT_SYMBOL_GPL(cpuidle_resume_and_unlock);
 void cpuidle_pause(void)
 {
 	mutex_lock(&cpuidle_lock);
+	paused = true;
 	cpuidle_uninstall_idle_handler();
 	mutex_unlock(&cpuidle_lock);
 }
@@ -539,6 +546,7 @@ void cpuidle_pause(void)
 void cpuidle_resume(void)
 {
 	mutex_lock(&cpuidle_lock);
+	paused = false;
 	cpuidle_install_idle_handler();
 	mutex_unlock(&cpuidle_lock);
 }
