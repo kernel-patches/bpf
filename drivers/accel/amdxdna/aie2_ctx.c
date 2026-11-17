@@ -404,8 +404,18 @@ aie2_sched_job_run(struct drm_sched_job *sched_job)
 	trace_xdna_job(sched_job, hwctx->name, "job run",
 		       job->seq, job->drv_cmd ? job->drv_cmd->opcode : DEFAULT_IO);
 
-	if (!hwctx->priv->mbox_chann)
-		return NULL;
+	/*
+	 * The firmware context is gone, but the scheduler keeps draining the
+	 * entity, for example from drm_sched_entity_destroy(). Returning NULL
+	 * would make the DRM scheduler signal the job fence without an error
+	 * and user space would see the command as successfully completed.
+	 * Abort the job instead. Driver internal commands have no command BO.
+	 */
+	if (!hwctx->priv->mbox_chann) {
+		if (cmd_abo)
+			amdxdna_cmd_set_state(cmd_abo, ERT_CMD_STATE_ABORT);
+		return ERR_PTR(-ECANCELED);
+	}
 
 	if (!mmget_not_zero(job->mm))
 		return ERR_PTR(-ESRCH);
