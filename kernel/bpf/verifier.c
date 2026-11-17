@@ -6153,6 +6153,7 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		if (round_up_stack_depth(env, si[s].stack_depth) >= BPF_PRIV_STACK_MIN_SIZE) {
 			si[s].priv_stack_mode = PRIV_STACK_ADAPTIVE;
 			env->prog->aux->jits_use_priv_stack = true;
+			env->prog->recur_per_cpu = true;
 		}
 	}
 
@@ -13070,6 +13071,10 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (err)
 		return err;
 
+	/* A per-CPU value stays the run's own only while no other run starts on the CPU */
+	if (meta.map.ptr && bpf_map_is_percpu_map(meta.map.ptr->map_type))
+		env->prog->recur_per_cpu = true;
+
 	err = record_func_map(env, &meta, func_id, insn_idx);
 	if (err)
 		return err;
@@ -13096,6 +13101,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	switch (func_id) {
 	case BPF_FUNC_tail_call:
+		/* The target runs without a recursion check of its own */
+		env->prog->recur_per_cpu = true;
 		err = check_resource_leak(env, false, true, "tail_call");
 		if (err)
 			return err;
@@ -13210,6 +13217,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	{
 		struct bpf_reg_state *reg = &regs[BPF_REG_1];
 		const struct btf_type *type;
+
+		env->prog->recur_per_cpu = true;
 
 		if (reg->type & MEM_RCU) {
 			type = btf_type_by_id(reg->btf, reg->btf_id);
@@ -19591,6 +19600,8 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 		__mark_reg_known(dst_reg, aux->map_off);
 		dst_reg->type = PTR_TO_MAP_VALUE;
 		dst_reg->map_ptr = map;
+		if (bpf_map_is_percpu_map(map->map_type))
+			env->prog->recur_per_cpu = true;
 		WARN_ON_ONCE(map->map_type != BPF_MAP_TYPE_INSN_ARRAY &&
 			     map->max_entries != 1);
 		/* We want reg->id to be same (0) as map_value is not distinct */
