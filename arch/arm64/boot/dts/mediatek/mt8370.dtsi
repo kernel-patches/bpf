@@ -16,8 +16,16 @@
 
 		cpu-map {
 			cluster0 {
-				/delete-node/ core4;
-				/delete-node/ core5;
+				core4 {
+					cpu = <&cpu6>;
+				};
+
+				core5 {
+					cpu = <&cpu7>;
+				};
+
+				/delete-node/ core6;
+				/delete-node/ core7;
 			};
 		};
 	};
