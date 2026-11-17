@@ -9513,6 +9513,130 @@ static int bpf_object__resolve_ksym_var_btf_id(struct bpf_object *obj,
 	return 0;
 }
 
+/* t is the bpf_kfunc decl tag of FUNC id */
+static inline bool btf_is_kfunc_tag(const struct btf *btf, const struct btf_type *t, int id)
+{
+	const char *name;
+
+	if (!btf_is_decl_tag(t) || t->type != id)
+		return false;
+	if (btf_decl_tag(t)->component_idx != -1)
+		return false;
+	name = btf__name_by_offset(btf, t->name_off);
+	return strcmp(name, "bpf_kfunc") == 0;
+}
+
+/* FUNC id has the bpf_kfunc decl tag */
+static bool btf_is_kfunc(const struct btf *btf, int id)
+{
+	__u32 i, n;
+
+	btf_name_prefix_range(btf, "bpf_kfunc", &i, &n);
+	for (; i < n; i++) {
+		if (btf_is_kfunc_tag(btf, btf__type_by_id(btf, i), id))
+			return true;
+	}
+	return false;
+}
+
+/* id is a kfunc named <name>___<flavor>, where len is strlen(name) */
+static bool btf_is_kfunc_flavor(const struct btf *btf, int id, const char *name, size_t len)
+{
+	const struct btf_type *t = btf__type_by_id(btf, id);
+	const char *kname;
+
+	if (!btf_is_func(t))
+		return false;
+	kname = btf__name_by_offset(btf, t->name_off);
+	if (strncmp(kname, name, len) != 0)
+		return false;
+	/* kname is <name> itself, already tried by the exact lookup */
+	if (kname[len] == '\0')
+		return false;
+	if (bpf_core_essential_name_len(kname) != len)
+		return false;
+	return btf_is_kfunc(btf, id);
+}
+
+/*
+ * Find the kfunc named <name>___<flavor> among btf's own types whose
+ * prototype is compatible with ext's.
+ *
+ * Returns the kfunc's type id, 0 if no flavor is compatible, -ESRCH if there
+ * are no flavors, or -ENOTUNIQ if more than one is compatible.
+ */
+static int find_kfunc_flavor(const struct bpf_object *obj, const struct extern_desc *ext,
+			     const struct btf *btf)
+{
+	const char *name = ext->essent_name ?: ext->name;
+	size_t len = strlen(name);
+	bool has_flavors = false;
+	int found = 0;
+	__u32 i, n;
+
+	btf_name_prefix_range(btf, name, &i, &n);
+	for (; i < n; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+
+		if (!btf_is_kfunc_flavor(btf, i, name, len))
+			continue;
+		has_flavors = true;
+		if (bpf_core_types_are_compat(obj->btf, ext->ksym.type_id, btf, t->type) <= 0)
+			continue;
+		if (found)
+			return -ENOTUNIQ;
+		found = i;
+	}
+	if (!has_flavors)
+		return -ESRCH;
+	return found;
+}
+
+/*
+ * Like find_ksym_btf_id(), but for a ___flavor of ext's kfunc: vmlinux first,
+ * then the first module that has any. *res_btf and *res_mod_btf are only set
+ * when a compatible flavor is found.
+ */
+static int find_kfunc_flavor_btf_id(struct bpf_object *obj, const struct extern_desc *ext,
+				    struct btf **res_btf, struct module_btf **res_mod_btf)
+{
+	struct module_btf *mod_btf = NULL;
+	struct btf *btf = obj->btf_vmlinux;
+	int i, id, err;
+
+	id = find_kfunc_flavor(obj, ext, btf);
+	if (id == -ESRCH) {
+		err = load_module_btfs(obj);
+		if (err)
+			return err;
+
+		for (i = 0; i < obj->btf_module_cnt && id == -ESRCH; i++) {
+			mod_btf = &obj->btf_modules[i];
+			btf = mod_btf->btf;
+			id = find_kfunc_flavor(obj, ext, btf);
+		}
+	}
+	if (id > 0) {
+		*res_btf = btf;
+		*res_mod_btf = mod_btf;
+	}
+	return id;
+}
+
+/* ext's kfunc is missing, or kfunc_id's prototype is incompatible with ext's */
+static bool need_kfunc_flavor(const struct bpf_object *obj, const struct extern_desc *ext,
+			      const struct btf *kern_btf, int kfunc_id)
+{
+	const struct btf_type *t;
+
+	if (kfunc_id == -ESRCH)
+		return true;
+	if (kfunc_id < 0)
+		return false;
+	t = btf__type_by_id(kern_btf, kfunc_id);
+	return bpf_core_types_are_compat(obj->btf, ext->ksym.type_id, kern_btf, t->type) <= 0;
+}
+
 static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 						struct extern_desc *ext)
 {
@@ -9526,6 +9650,17 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 
 	kfunc_id = find_ksym_btf_id(obj, ext->essent_name ?: ext->name, BTF_KIND_FUNC, &kern_btf,
 				    &mod_btf);
+	if (need_kfunc_flavor(obj, ext, kern_btf, kfunc_id)) {
+		ret = find_kfunc_flavor_btf_id(obj, ext, &kern_btf, &mod_btf);
+		if (ret == -ENOTUNIQ) {
+			/* an error even if declared __weak: ambiguity isn't absence */
+			pr_warn("extern (func ksym) '%s': more than one compatible kfunc flavor\n",
+				ext->name);
+			return ret;
+		}
+		if (ret && ret != -ESRCH)
+			kfunc_id = ret;
+	}
 	if (kfunc_id < 0) {
 		if (kfunc_id == -ESRCH && ext->is_weak)
 			return 0;
@@ -9579,8 +9714,9 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 	 * {kernel_btf_id, kernel_btf_obj_fd} -> fixup ld_imm64.
 	 */
 	ext->ksym.kernel_btf_obj_fd = mod_btf ? mod_btf->fd : 0;
-	pr_debug("extern (func ksym) '%s': resolved to %s [%d]\n",
-		 ext->name, mod_btf ? mod_btf->name : "vmlinux", kfunc_id);
+	pr_debug("extern (func ksym) '%s': resolved to %s '%s' [%d]\n",
+		 ext->name, mod_btf ? mod_btf->name : "vmlinux",
+		 btf__name_by_offset(kern_btf, kern_func->name_off), kfunc_id);
 
 	return 0;
 }

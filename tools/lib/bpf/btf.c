@@ -1164,6 +1164,32 @@ static __s32 btf_find_type_by_name_bsearch(const struct btf *btf, const char *na
 	return btf__type_cnt(btf);
 }
 
+/*
+ * Set [*start, *end) to the IDs of btf's own types that can have a name
+ * starting with prefix. On BTF sorted by name these are exactly the ones that
+ * do, a contiguous run found by binary search; otherwise all own types.
+ */
+void btf_name_prefix_range(const struct btf *btf, const char *prefix, __u32 *start, __u32 *end)
+{
+	__u32 i, n = btf__type_cnt(btf);
+	size_t len = strlen(prefix);
+
+	if (btf->named_start_id <= 0) {
+		*start = btf->start_id;
+		*end = n;
+		return;
+	}
+	*start = btf_find_type_by_name_bsearch(btf, prefix, btf->named_start_id);
+	for (i = *start; i < n; i++) {
+		const struct btf_type *t = btf_type_by_id(btf, i);
+		const char *name = btf__str_by_offset(btf, t->name_off);
+
+		if (strncmp(name, prefix, len) != 0)
+			break;
+	}
+	*end = i;
+}
+
 static __s32 btf_find_by_name_kind(const struct btf *btf, int start_id,
 				   const char *type_name, __s32 kind)
 {
