@@ -1425,6 +1425,7 @@ int regmap_reinit_cache(struct regmap *map, const struct regmap_config *config)
 
 	regmap_debugfs_exit(map);
 	regcache_exit(map);
+	map->cache_ops = NULL;
 
 	map->max_register = config->max_register;
 	map->max_register_is_set = map->max_register ?: config->max_register_is_0;
@@ -1435,22 +1436,29 @@ int regmap_reinit_cache(struct regmap *map, const struct regmap_config *config)
 	map->writeable_noinc_reg = config->writeable_noinc_reg;
 	map->readable_noinc_reg = config->readable_noinc_reg;
 	map->reg_default_cb = config->reg_default_cb;
-	map->cache_type = config->cache_type;
 
 	ret = regmap_set_name(map, config);
 	if (ret)
-		return ret;
+		goto err_none;
 
 	map->cache_bypass = false;
 	map->cache_only = false;
 
+	map->cache_type = config->cache_type;
 	ret = regcache_init(map, config);
 	if (ret)
-		return ret;
+		goto err_none;
 
 	regmap_debugfs_init(map);
 
 	return 0;
+
+err_none:
+	map->cache_ops = NULL;
+	map->cache_type = REGCACHE_NONE;
+	map->cache_bypass = true;
+	map->cache_only = false;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(regmap_reinit_cache);
 

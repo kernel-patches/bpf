@@ -122,8 +122,11 @@ static int regcache_hw_init(struct regmap *map, int count)
 
 static void regcache_hw_exit(struct regmap *map)
 {
-	if (map->cache_free)
+	if (map->cache_free) {
 		kfree(map->reg_defaults_raw);
+		map->reg_defaults_raw = NULL;
+		map->cache_free = false;
+	}
 }
 
 static int regcache_locked_op(struct regmap *map,
@@ -276,18 +279,20 @@ err_exit:
 	}
 err_free_reg_defaults:
 	kfree(map->reg_defaults);
+	map->reg_defaults = NULL;
 
 	return ret;
 }
 
 void regcache_exit(struct regmap *map)
 {
+	regcache_hw_exit(map);
+
 	if (map->cache_type == REGCACHE_NONE)
 		return;
 
 	BUG_ON(!map->cache_ops);
 
-	regcache_hw_exit(map);
 	if (map->cache_ops->exit) {
 		dev_dbg(map->dev, "Destroying %s cache\n",
 			map->cache_ops->name);
@@ -296,6 +301,7 @@ void regcache_exit(struct regmap *map)
 
 	kfree(map->reg_defaults);
 	map->reg_defaults = NULL;
+	map->cache_dirty = false;
 }
 
 /**
