@@ -1234,8 +1234,6 @@ bad2:
 	kfree(td);
 bad:
 	dm_btree_remove(&pmd->tl_info, pmd->root, &key, &pmd->root);
-	dm_btree_remove(&pmd->details_info, pmd->details_root,
-			&key, &pmd->details_root);
 	return r;
 }
 
