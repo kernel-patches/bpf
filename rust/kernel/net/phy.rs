@@ -406,58 +406,6 @@ impl<T: Driver> Adapter<T> {
     /// # Safety
     ///
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
-    unsafe extern "C" fn match_phy_device_callback(
-        phydev: *mut bindings::phy_device,
-        _phydrv: *const bindings::phy_driver,
-    ) -> c_int {
-        // SAFETY: This callback is called only in contexts
-        // where we hold `phy_device->lock`, so the accessors on
-        // `Device` are okay to call.
-        let dev = unsafe { Device::from_raw(phydev) };
-        T::match_phy_device(dev).into()
-    }
-
-    /// # Safety
-    ///
-    /// `phydev` must be passed by the corresponding callback in `phy_driver`.
-    unsafe extern "C" fn read_mmd_callback(
-        phydev: *mut bindings::phy_device,
-        devnum: i32,
-        regnum: u16,
-    ) -> i32 {
-        from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
-            let dev = unsafe { Device::from_raw(phydev) };
-            // CAST: the C side verifies devnum < 32.
-            let ret = T::read_mmd(dev, devnum as u8, regnum)?;
-            Ok(ret.into())
-        })
-    }
-
-    /// # Safety
-    ///
-    /// `phydev` must be passed by the corresponding callback in `phy_driver`.
-    unsafe extern "C" fn write_mmd_callback(
-        phydev: *mut bindings::phy_device,
-        devnum: i32,
-        regnum: u16,
-        val: u16,
-    ) -> i32 {
-        from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
-            let dev = unsafe { Device::from_raw(phydev) };
-            T::write_mmd(dev, devnum as u8, regnum, val)?;
-            Ok(0)
-        })
-    }
-
-    /// # Safety
-    ///
-    /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn link_change_notify_callback(phydev: *mut bindings::phy_device) {
         // SAFETY: This callback is called only in contexts
         // where we hold `phy_device->lock`, so the accessors on
@@ -511,11 +459,6 @@ pub const fn create_phy_driver<T: Driver>() -> DriverVTable {
         } else {
             None
         },
-        match_phy_device: if T::HAS_MATCH_PHY_DEVICE {
-            Some(Adapter::<T>::match_phy_device_callback)
-        } else {
-            None
-        },
         suspend: if T::HAS_SUSPEND {
             Some(Adapter::<T>::suspend_callback)
         } else {
@@ -533,16 +476,6 @@ pub const fn create_phy_driver<T: Driver>() -> DriverVTable {
         },
         read_status: if T::HAS_READ_STATUS {
             Some(Adapter::<T>::read_status_callback)
-        } else {
-            None
-        },
-        read_mmd: if T::HAS_READ_MMD {
-            Some(Adapter::<T>::read_mmd_callback)
-        } else {
-            None
-        },
-        write_mmd: if T::HAS_WRITE_MMD {
-            Some(Adapter::<T>::write_mmd_callback)
         } else {
             None
         },
@@ -588,12 +521,6 @@ pub trait Driver {
         build_error!(VTABLE_DEFAULT_ERROR)
     }
 
-    /// Returns true if this is a suitable driver for the given phydev.
-    /// If not implemented, matching is based on [`Driver::PHY_DEVICE_ID`].
-    fn match_phy_device(_dev: &Device) -> bool {
-        false
-    }
-
     /// Configures the advertisement and resets auto-negotiation
     /// if auto-negotiation is enabled.
     fn config_aneg(_dev: &mut Device) -> Result {
@@ -612,16 +539,6 @@ pub trait Driver {
 
     /// Resumes the hardware, restoring state if needed.
     fn resume(_dev: &mut Device) -> Result {
-        build_error!(VTABLE_DEFAULT_ERROR)
-    }
-
-    /// Overrides the default MMD read function for reading a MMD register.
-    fn read_mmd(_dev: &mut Device, _devnum: u8, _regnum: u16) -> Result<u16> {
-        build_error!(VTABLE_DEFAULT_ERROR)
-    }
-
-    /// Overrides the default MMD write function for writing a MMD register.
-    fn write_mmd(_dev: &mut Device, _devnum: u8, _regnum: u16, _val: u16) -> Result {
         build_error!(VTABLE_DEFAULT_ERROR)
     }
 
