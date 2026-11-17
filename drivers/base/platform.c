@@ -708,9 +708,10 @@ EXPORT_SYMBOL_GPL(platform_device_add_data);
  *
  * Assign an OF node to this platform device. Internally keep track of the
  * reference count. Devices created with platform_device_alloc() must use this
- * function instead of assigning the node manually. This function must not be
- * called for a platform device that already has a software node as its primary
- * firmware node assigned.
+ * function instead of assigning the node manually.
+ *
+ * This function must not be called for a platform device that already has a
+ * software node or secondary firmware node assigned.
  */
 void platform_device_set_of_node(struct platform_device *pdev,
 				 struct device_node *np)
@@ -726,21 +727,24 @@ EXPORT_SYMBOL_GPL(platform_device_set_of_node);
  *
  * Assign a firmware node to this platform device. Internally keep track of the
  * reference count. Devices created with platform_device_alloc() must use this
- * function instead of assigning the node manually. This function must not be
- * called for a platform device that already has a software node as its primary
- * firmware node assigned.
+ * function instead of assigning the node manually.
+ *
+ * This function must not be called for a platform device that already has a
+ * software node or secondary firmware node assigned.
  */
 void platform_device_set_fwnode(struct platform_device *pdev,
 				struct fwnode_handle *fwnode)
 {
+	struct fwnode_handle *old = pdev->dev.fwnode;
+
 	/*
-	 * If we call this function for a platform device whose primary
-	 * firmware node is a software node, we'll never end up calling the
-	 * symmetric software_node_notify_remove(). There are no users for this
-	 * right now in the tree so just disallow it.
+	 * A secondary firmware node may be lost as set_primary_fwnode() is
+	 * not used here, and software_node_notify_remove() is not called for
+	 * a registered device with a software node, warn for now.
 	 */
-	WARN_ON(is_software_node(dev_fwnode(&pdev->dev)));
-	fwnode_handle_put(pdev->dev.fwnode);
+	WARN_ON(old && (old->secondary || is_software_node(old)));
+
+	fwnode_handle_put(old);
 	device_set_node(&pdev->dev, fwnode_handle_get(fwnode));
 }
 EXPORT_SYMBOL_GPL(platform_device_set_fwnode);
@@ -751,15 +755,19 @@ EXPORT_SYMBOL_GPL(platform_device_set_fwnode);
  * @dev2: device whose OF node to reuse
  *
  * Reuses the OF node of another device in this platform device while
- * internally keeping track of reference counting. This function must not be
- * called for a platform device that already has a software node as its primary
- * firmware node assigned.
+ * internally keeping track of reference counting.
+ *
+ * This function must not be called for a platform device that already has a
+ * software node or secondary firmware node assigned.
  */
 void platform_device_set_of_node_from_dev(struct platform_device *pdev,
 					  const struct device *dev2)
 {
+	struct fwnode_handle *old = pdev->dev.fwnode;
+
 	/* See platform_device_set_fwnode(). */
-	WARN_ON(is_software_node(dev_fwnode(&pdev->dev)));
+	WARN_ON(old && (old->secondary || is_software_node(old)));
+
 	device_set_of_node_from_dev(&pdev->dev, dev2);
 	pdev->dev.fwnode = of_fwnode_handle(pdev->dev.of_node);
 }
