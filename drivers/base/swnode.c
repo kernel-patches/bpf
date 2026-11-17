@@ -1163,8 +1163,8 @@ void software_node_notify(struct device *dev)
 		return;
 
 	/*
-	 * When the software node is the device's secondary firmware node,
-	 * the core only records the owning device on the primary fwnode
+	 * When a device has both a primary and a secondary firmware node the
+	 * core only records the owning device in the primary node
 	 * (see device_add()). fw_devlink resolves a supplier device through
 	 * fwnode->dev, so without this a consumer referencing the software
 	 * node could never find the supplier device and would defer forever.
@@ -1199,9 +1199,8 @@ void software_node_notify_remove(struct device *dev)
 	sysfs_remove_link(&dev->kobj, "software_node");
 
 	/*
-	 * Drop the device pointer mirrored onto a secondary software node in
-	 * software_node_notify(). For a primary software node the core owns
-	 * fwnode->dev and clears it in device_del().
+	 * Clear any device pointer set in a secondary software node in
+	 * software_node_notify().
 	 */
 	if (!device_match_fwnode(dev, &swnode->fwnode) && swnode->fwnode.dev == dev)
 		swnode->fwnode.dev = NULL;
