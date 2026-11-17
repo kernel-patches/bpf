@@ -4518,8 +4518,16 @@ static char *alloc_one_pg_vec_page(unsigned long order)
 	char *buffer;
 	gfp_t gfp_flags = GFP_KERNEL_ACCOUNT | __GFP_COMP |
 			  __GFP_ZERO | __GFP_NOWARN | __GFP_NORETRY;
+	gfp_t first_gfp_flags = gfp_flags;
 
-	buffer = (char *) __get_free_pages(gfp_flags, order);
+	/*
+	 * A contiguous block is only an optimization because vmalloc works
+	 * too. Do not stall in reclaim or compaction to get one.
+	 */
+	if (order)
+		first_gfp_flags &= ~__GFP_DIRECT_RECLAIM;
+
+	buffer = (char *) __get_free_pages(first_gfp_flags, order);
 	if (buffer)
 		return buffer;
 
