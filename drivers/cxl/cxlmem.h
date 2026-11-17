@@ -162,7 +162,7 @@ static inline struct cxl_ep *cxl_ep_load(struct cxl_port *port,
  */
 #define CMD_CMD_RC_TABLE							\
 	C(SUCCESS, 0, NULL),							\
-	C(BACKGROUND, -ENXIO, "background cmd started successfully"),           \
+	C(BACKGROUND, 0, "background cmd started successfully"),		\
 	C(INPUT, -ENXIO, "cmd input was invalid"),				\
 	C(UNSUPPORTED, -ENXIO, "cmd is not supported"),				\
 	C(INTERNAL, -ENXIO, "internal device error"),				\
