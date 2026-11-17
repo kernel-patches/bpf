@@ -937,14 +937,13 @@ struct pyrf_callchain_node {
 	PyObject_HEAD
 	u64 ip;
 	struct map *map;
-	struct symbol *sym;
-	char *sym_name;
+	struct dso_symbol ds;
 };
 
 static void pyrf_callchain_node__delete(struct pyrf_callchain_node *pnode)
 {
 	map__put(pnode->map);
-	free(pnode->sym_name);
+	dso_symbol__exit(&pnode->ds);
 	Py_TYPE(pnode)->tp_free((PyObject *)pnode);
 }
 
@@ -957,27 +956,22 @@ static PyObject *pyrf_callchain_node__get_ip(struct pyrf_callchain_node *pnode,
 static PyObject *pyrf_callchain_node__get_symbol(struct pyrf_callchain_node *pnode,
 						 void *closure __maybe_unused)
 {
-	if (pnode->sym_name)
-		return PyUnicode_FromString(pnode->sym_name);
-	if (pnode->sym)
-		return PyUnicode_FromString(pnode->sym->name);
+	if (pnode->ds.sym)
+		return PyUnicode_FromString(pnode->ds.sym->name);
 	return PyUnicode_FromString("[unknown]");
 }
 
 static PyObject *pyrf_callchain_node__get_dso(struct pyrf_callchain_node *pnode,
 					      void *closure __maybe_unused)
 {
+	struct dso *dso = pnode->ds.dso ?: (pnode->map ? map__dso(pnode->map) : NULL);
 	const char *dsoname = "[unknown]";
 
-	if (pnode->map) {
-		struct dso *dso = map__dso(pnode->map);
-
-		if (dso) {
-			if (symbol_conf.show_kernel_path && dso__long_name(dso))
-				dsoname = dso__long_name(dso);
-			else
-				dsoname = dso__name(dso);
-		}
+	if (dso) {
+		if (symbol_conf.show_kernel_path && dso__long_name(dso))
+			dsoname = dso__long_name(dso);
+		else
+			dsoname = dso__name(dso);
 	}
 	return PyUnicode_FromString(dsoname);
 }
@@ -987,11 +981,11 @@ static PyObject *pyrf_callchain_node__get_sym_offset(struct pyrf_callchain_node 
 {
 	u64 addr;
 
-	if (!pnode->sym)
+	if (!pnode->ds.sym || (!pnode->map && !pnode->ip))
 		Py_RETURN_NONE;
 
 	addr = pnode->map ? map__map_ip(pnode->map, pnode->ip) : pnode->ip;
-	return PyLong_FromUnsignedLongLong(addr - pnode->sym->start);
+	return PyLong_FromUnsignedLongLong(addr - pnode->ds.sym->start);
 }
 
 static PyGetSetDef pyrf_callchain_node__getset[] = {
@@ -1015,8 +1009,7 @@ static PyTypeObject pyrf_callchain_node__type = {
 struct pyrf_callchain_frame {
 	u64 ip;
 	struct map *map;
-	struct symbol *sym;
-	char *sym_name;
+	struct dso_symbol ds;
 };
 
 struct pyrf_callchain {
@@ -1030,7 +1023,7 @@ static void pyrf_callchain__delete(struct pyrf_callchain *pchain)
 	if (pchain->frames) {
 		for (u64 i = 0; i < pchain->nr_frames; i++) {
 			map__put(pchain->frames[i].map);
-			free(pchain->frames[i].sym_name);
+			dso_symbol__exit(&pchain->frames[i].ds);
 		}
 		free(pchain->frames);
 	}
@@ -1060,8 +1053,7 @@ static PyObject *pyrf_callchain__item(PyObject *obj, Py_ssize_t i)
 
 	pnode->ip = pchain->frames[i].ip;
 	pnode->map = map__get(pchain->frames[i].map);
-	pnode->sym = pchain->frames[i].sym;
-	pnode->sym_name = pchain->frames[i].sym_name ? strdup(pchain->frames[i].sym_name) : NULL;
+	dso_symbol__copy(&pnode->ds, &pchain->frames[i].ds);
 
 	return (PyObject *)pnode;
 }
@@ -1111,10 +1103,16 @@ static int pyrf_sample_event__resolve_callchain(struct pyrf_event *pevent)
 		return -ENOMEM;
 	}
 	for (u64 i = 0; i < pchain->nr_frames; i++) {
+		struct dso_symbol ds;
+
 		node = callchain_cursor_current(cursor);
+		ds = (struct dso_symbol){
+			.dso = (node->ms.sym && node->ms.map) ? map__dso(node->ms.map) : NULL,
+			.sym = node->ms.sym,
+		};
 		pchain->frames[i].ip = node->ip;
 		pchain->frames[i].map = map__get(node->ms.map);
-		pchain->frames[i].sym = node->ms.sym;
+		dso_symbol__copy(&pchain->frames[i].ds, &ds);
 		callchain_cursor_advance(cursor);
 	}
 	pevent->callchain = (PyObject *)pchain;
@@ -4504,10 +4502,9 @@ static PyObject *pyrf_call_path__to_callchain(const struct call_path *cp,
 		struct pyrf_callchain_frame *frame = &pchain->frames[--nr_frames];
 
 		frame->ip = pos->ip;
-		frame->sym = NULL;
-		frame->sym_name = pos->sym ? strdup(pos->sym->name) : NULL;
+		dso_symbol__copy(&frame->ds, &pos->ds);
 		frame->map = NULL;
-		if (thread) {
+		if (thread && !pos->ds.sym) {
 			struct addr_location al;
 			u8 cpumode = pos->in_kernel ? PERF_RECORD_MISC_KERNEL
 						    : PERF_RECORD_MISC_USER;
@@ -4515,8 +4512,6 @@ static PyObject *pyrf_call_path__to_callchain(const struct call_path *cp,
 			addr_location__init(&al);
 			thread__find_map(thread, cpumode, pos->ip, &al);
 			frame->map = map__get(al.map);
-			if (frame->map)
-				frame->sym = pos->sym;
 			addr_location__exit(&al);
 		}
 	}

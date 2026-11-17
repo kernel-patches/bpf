@@ -361,12 +361,18 @@ static struct call_path *call_path_from_sample(struct db_export *dbe,
 		db_ids_from_al(dbe, &al, &dso_db_id, &sym_db_id, &offset);
 
 		/* add node to the call path tree if it doesn't exist */
-		current = call_path__findnew(dbe->cpr, current,
-					     al.sym, node->ip,
-					     kernel_start);
+		{
+			struct dso_symbol ds = dso_symbol__from_al(&al);
+
+			current = call_path__findnew(dbe->cpr, current,
+						     &ds, node->ip,
+						     kernel_start);
+		}
 
 		callchain_cursor_advance(cursor);
 		addr_location__exit(&al);
+		if (!current)
+			break;
 	}
 
 	/* Reset the callchain order to its prior value. */
