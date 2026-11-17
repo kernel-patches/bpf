@@ -716,6 +716,9 @@ struct cxl_ep {
  * @nr_targets_set: track how many targets have been programmed during setup
  * @nr_eps: number of endpoints beneath @port
  * @nr_targets: number of distinct targets needed to reach @nr_eps
+ * @eff_iw: effective interleave ways at @port, set by the nearest
+ *	    interleaving decoder at or above @port
+ * @eff_ig: effective interleave granularity at @port, set as for @eff_iw
  */
 struct cxl_region_ref {
 	struct cxl_port *port;
@@ -725,6 +728,8 @@ struct cxl_region_ref {
 	int nr_targets_set;
 	int nr_eps;
 	int nr_targets;
+	int eff_iw;
+	int eff_ig;
 };
 
 /*
