@@ -325,6 +325,7 @@ static const struct sparx5_consts lan969x_consts = {
 	.qres_max_prio_idx   = 315,
 	.qres_max_colour_idx = 323,
 	.tod_pin             = 4,
+	.vmid_cnt            = 127,
 	.vcaps               = lan969x_vcaps,
 	.vcap_stats          = &lan969x_vcap_stats,
 	.vcaps_cfg           = lan969x_vcap_inst_cfg,

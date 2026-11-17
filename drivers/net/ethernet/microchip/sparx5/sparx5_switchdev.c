@@ -227,8 +227,11 @@ static void sparx5_port_bridge_leave(struct sparx5_port *port,
 	switchdev_bridge_port_unoffload(port->ndev, NULL, NULL, NULL);
 
 	clear_bit(port->portno, sparx5->bridge_mask);
-	if (bitmap_empty(sparx5->bridge_mask, SPX5_PORTS))
+	if (bitmap_empty(sparx5->bridge_mask, SPX5_PORTS)) {
+		/* L3 offload has no datapath left on this bridge. */
+		sparx5_rr_bridge_legs_flush(sparx5, bridge);
 		sparx5->hw_bridge_dev = NULL;
+	}
 
 	/* Clear bridge vlan settings before updating the port settings */
 	port->vlan_aware = 0;
