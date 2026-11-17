@@ -1056,7 +1056,6 @@ EXPORT_SYMBOL_GPL(i2c_new_client_device);
 void i2c_unregister_device(struct i2c_client *client)
 {
 	struct fwnode_handle *fwnode;
-	bool fwnode_is_software_node;
 
 	if (IS_ERR_OR_NULL(client))
 		return;
@@ -1067,14 +1066,12 @@ void i2c_unregister_device(struct i2c_client *client)
 	else if (is_acpi_device_node(fwnode))
 		acpi_device_clear_enumerated(to_acpi_device_node(fwnode));
 
-	fwnode_is_software_node = is_software_node(fwnode);
 	device_remove_software_node(&client->dev);
 	/*
-	 * If the firmware node is a software node, its reference count
-	 * was decremented by device_remove_software_node().
+	 * Must be done after device_remove_software_node() which may have
+	 * freed a secondary firmware node and cleared the fwnode pointer.
 	 */
-	if (!fwnode_is_software_node)
-		fwnode_handle_put(fwnode);
+	fwnode_handle_put(dev_fwnode(&client->dev));
 	device_unregister(&client->dev);
 }
 EXPORT_SYMBOL_GPL(i2c_unregister_device);

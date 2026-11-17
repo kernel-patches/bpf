@@ -1102,6 +1102,9 @@ void device_remove_software_node(struct device *dev)
 	if (!swnode)
 		return;
 
+	if (fwnode_is_primary(&swnode->fwnode))
+		return;
+
 	if (device_is_registered(dev))
 		software_node_notify_remove(dev);
 

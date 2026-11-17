@@ -598,15 +598,14 @@ static void platform_device_release(struct device *dev)
 {
 	struct platform_object *pa = container_of(dev, struct platform_object,
 						  pdev.dev);
-	bool fwnode_is_software_node = is_software_node(dev_fwnode(dev));
 
 	device_remove_software_node(dev);
 	/*
-	 * If the firmware node is a software node, its reference count
-	 * was decremented by device_remove_software_node().
+	 * Must be done after device_remove_software_node() which may have
+	 * freed a secondary firmware node and cleared the fwnode pointer.
 	 */
-	if (!fwnode_is_software_node)
-		fwnode_handle_put(pa->pdev.dev.fwnode);
+	fwnode_handle_put(dev_fwnode(dev));
+
 	kfree(pa->pdev.dev.platform_data);
 	kfree(pa->pdev.mfd_cell);
 	kfree(pa->pdev.resource);
