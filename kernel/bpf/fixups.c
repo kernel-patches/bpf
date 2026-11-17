@@ -2540,6 +2540,7 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 				if (!tmg)
 					return -ENOMEM;
 				prog->aux->timed_may_goto = tmg;
+				prog->recur_per_cpu = true;
 			}
 			prog->jit_required = 1;
 			cnt = may_goto_expand_timed(insn_buf, &jmp, tmg, reg, save_off);
