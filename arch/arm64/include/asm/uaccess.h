@@ -174,6 +174,9 @@ static inline void __user *__uaccess_mask_ptr(const void __user *ptr)
 	return safe_ptr;
 }
 
+/* __uaccess_mask_ptr() prevents speculative accesses to kernel addresses. */
+#define user_access_may_speculate_kernel_addr() false
+
 /*
  * The "__xxx" versions of the user access functions do not verify the address
  * space - it must have been done previously with a separate "access_ok()"
