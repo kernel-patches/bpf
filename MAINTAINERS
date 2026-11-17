@@ -2152,11 +2152,6 @@ M:	Khuong Dinh <khuong@os.amperecomputing.com>
 S:	Supported
 F:	arch/arm64/boot/dts/apm/
 
-APPLIED MICRO (APM) X-GENE SOC EDAC
-S:	Orphan
-F:	Documentation/devicetree/bindings/edac/apm,xgene-edac.yaml
-F:	drivers/edac/xgene_edac.c
-
 APPLIED MICRO (APM) X-GENE SOC ETHERNET (V2) DRIVER
 M:	Iyappan Subramanian <iyappan@os.amperecomputing.com>
 M:	Keyur Chudgar <keyur@os.amperecomputing.com>
@@ -9631,11 +9626,6 @@ L:	linux-mips@vger.kernel.org
 S:	Maintained
 F:	drivers/edac/octeon_edac*
 
-EDAC-CAVIUM THUNDERX
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/thunderx_edac*
-
 EDAC-CORE
 M:	Borislav Petkov <bp@alien8.de>
 M:	Tony Luck <tony.luck@intel.com>
@@ -9658,11 +9648,6 @@ M:	Lei Wang <lewan@microsoft.com>
 L:	linux-edac@vger.kernel.org
 S:	Supported
 F:	drivers/edac/dmc520_edac.c
-
-EDAC-E752X
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/e752x_edac.c
 
 EDAC-E7XXX
 L:	linux-edac@vger.kernel.org
@@ -9688,16 +9673,6 @@ L:	linux-edac@vger.kernel.org
 S:	Maintained
 F:	drivers/edac/i10nm_base.c
 
-EDAC-I3000
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/i3000_edac.c
-
-EDAC-I3200
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/i3200_edac.c
-
 EDAC-I5000
 R:	Andrew Luebke <andrew.luebke@gmail.com>
 L:	linux-edac@vger.kernel.org
@@ -9722,11 +9697,6 @@ L:	linux-edac@vger.kernel.org
 S:	Maintained
 F:	drivers/edac/i7core_edac.c
 
-EDAC-I82975X
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/i82975x_edac.c
-
 EDAC-IE31200
 M:	Jason Baron <jbaron@akamai.com>
 L:	linux-edac@vger.kernel.org
@@ -9745,11 +9715,6 @@ M:	Tony Luck <tony.luck@intel.com>
 L:	linux-edac@vger.kernel.org
 S:	Maintained
 F:	drivers/edac/intel-bff.c
-
-EDAC-MPC85XX
-L:	linux-edac@vger.kernel.org
-S:	Orphan
-F:	drivers/edac/mpc85xx_edac.[ch]
 
 EDAC-NPCM
 M:	Marvin Lin <kflin@nuvoton.com>
@@ -9797,10 +9762,19 @@ L:	linux-edac@vger.kernel.org
 S:	Odd Fixes
 F:	drivers/edac/ti_edac.c
 
-EDAC-X38
+EDAC ORPHANED DRIVERS
 L:	linux-edac@vger.kernel.org
 S:	Orphan
+F:	Documentation/devicetree/bindings/edac/apm,xgene-edac.yaml
+F:	drivers/edac/e752x_edac.c
+F:	drivers/edac/i3000_edac.c
+F:	drivers/edac/i3200_edac.c
+F:	drivers/edac/i82875p_edac.c
+F:	drivers/edac/i82975x_edac.c
+F:	drivers/edac/mpc85xx_edac.[ch]
+F:	drivers/edac/thunderx_edac*
 F:	drivers/edac/x38_edac.c
+F:	drivers/edac/xgene_edac.c
 
 EDIROL UA-101/UA-1000 DRIVER
 M:	Clemens Ladisch <clemens@ladisch.de>
