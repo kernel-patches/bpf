@@ -237,8 +237,11 @@ static int sfs_misc_init(struct sfs_device *sfs)
 		misc->mode = 0600;
 
 		ret = misc_register(misc);
-		if (ret)
+		if (ret) {
+			kfree(misc_dev);
+			misc_dev = NULL;
 			return ret;
+		}
 
 		kref_init(&misc_dev->refcount);
 	} else {
