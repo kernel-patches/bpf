@@ -741,15 +741,17 @@ int iscsit_check_post_dataout(
 	}
 }
 
-void iscsit_handle_time2retain_timeout(struct timer_list *t)
+void iscsit_time2retain_work(struct work_struct *work)
 {
-	struct iscsit_session *sess = timer_container_of(sess, t,
-							 time2retain_timer);
+	struct iscsit_session *sess = container_of(work, struct iscsit_session,
+						   time2retain_work);
 	struct iscsi_portal_group *tpg = sess->tpg;
 	struct se_portal_group *se_tpg = &tpg->tpg_se_tpg;
 
 	spin_lock_bh(&se_tpg->session_lock);
-	if (sess->time2retain_timer_flags & ISCSI_TF_STOP) {
+	/* A stop after the timer fired takes ->time2retain_fired back. */
+	if (!atomic_xchg(&sess->time2retain_fired, 0) ||
+	    (sess->time2retain_timer_flags & ISCSI_TF_STOP)) {
 		spin_unlock_bh(&se_tpg->session_lock);
 		return;
 	}
@@ -767,6 +769,15 @@ void iscsit_handle_time2retain_timeout(struct timer_list *t)
 	iscsit_fill_cxn_timeout_err_stats(sess);
 	spin_unlock_bh(&se_tpg->session_lock);
 	iscsit_close_session(sess, false);
+}
+
+void iscsit_handle_time2retain_timeout(struct timer_list *t)
+{
+	struct iscsit_session *sess = timer_container_of(sess, t,
+							 time2retain_timer);
+
+	atomic_set(&sess->time2retain_fired, 1);
+	queue_work(system_dfl_wq, &sess->time2retain_work);
 }
 
 void iscsit_start_time2retain_handler(struct iscsit_session *sess)
@@ -814,6 +825,7 @@ int iscsit_stop_time2retain_timer(struct iscsit_session *sess)
 	timer_delete_sync(&sess->time2retain_timer);
 
 	spin_lock(&se_tpg->session_lock);
+	atomic_set(&sess->time2retain_fired, 0);
 	sess->time2retain_timer_flags &= ~ISCSI_TF_RUNNING;
 	pr_debug("Stopped Time2Retain Timer for SID: %u\n",
 			sess->sid);
