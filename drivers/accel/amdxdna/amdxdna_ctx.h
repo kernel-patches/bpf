@@ -145,6 +145,11 @@ enum amdxdna_job_opcode {
 
 struct amdxdna_drv_cmd {
 	enum amdxdna_job_opcode	opcode;
+	/*
+	 * Written by the firmware response handler only. Set it to U32_MAX
+	 * before submitting, so a job which never reaches firmware, and thus
+	 * gets no response, is not mistaken for a successful command.
+	 */
 	u32			result;
 	struct kref		refcnt;
 };
