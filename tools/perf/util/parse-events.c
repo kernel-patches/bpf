@@ -1562,8 +1562,10 @@ static int parse_events_add_pmu(struct parse_events_state *parse_state,
 	if (const_parsed_terms) {
 		int ret = parse_events_terms__copy(const_parsed_terms, &parsed_terms);
 
-		if (ret)
+		if (ret) {
+			parse_events_terms__exit(&parsed_terms);
 			return ret;
+		}
 	}
 	fix_raw(&parsed_terms, pmu);
 
@@ -1665,8 +1667,10 @@ int parse_events_multi_pmu_add(struct parse_events_state *parse_state,
 	if (const_parsed_terms) {
 		int ret = parse_events_terms__copy(const_parsed_terms, &parsed_terms);
 
-		if (ret)
+		if (ret) {
+			parse_events_terms__exit(&parsed_terms);
 			return ret;
+		}
 	}
 
 	config = strdup(event_name);
