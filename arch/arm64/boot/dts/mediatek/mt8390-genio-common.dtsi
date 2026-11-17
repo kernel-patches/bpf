@@ -216,6 +216,8 @@
 
 	usb_hub_fixed_3v3: regulator-6 {
 		compatible = "regulator-fixed";
+		pinctrl-names = "default";
+		pinctrl-0 = <&usb_hub_3v3_pins>;
 		regulator-name = "vhub_3v3";
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
@@ -512,18 +514,11 @@
 		connector {
 			compatible = "usb-c-connector";
 			label = "USB-C";
-			data-role = "dual";
-			op-sink-microwatt = <10000000>;
-			power-role = "dual";
-			try-power-role  = "sink";
+			data-role = "host";
+			power-role = "source";
 			pd-revision = /bits/ 8 <0x03 0x00 0x01 0x08>;
 
-			sink-pdos = <PDO_FIXED(5000, 2000,
-					       PDO_FIXED_DUAL_ROLE |
-					       PDO_FIXED_DATA_SWAP)>;
-			source-pdos = <PDO_FIXED(5000, 2000,
-						 PDO_FIXED_DUAL_ROLE |
-						 PDO_FIXED_DATA_SWAP)>;
+			source-pdos = <PDO_FIXED(5000, 1000, 0)>;
 
 			altmodes {
 				displayport {
@@ -539,14 +534,14 @@
 				port@0 {
 					reg = <0>;
 					typec_con_hs: endpoint {
-						remote-endpoint = <&mtu3_hs1_role_sw>;
+						remote-endpoint = <&usb_2_0_p2>;
 					};
 				};
 
 				port@1 {
 					reg = <1>;
 					typec_con_ss: endpoint {
-						remote-endpoint = <&xhci_ss_ep>;
+						remote-endpoint = <&usb_3_0_p2>;
 					};
 				};
 
@@ -1256,15 +1251,17 @@
 
 	};
 
+	usb_hub_3v3_pins: usb-hub-3v3-pins {
+		pins-usb-hub-3v3-en {
+			pinmux = <PINMUX_GPIO112__FUNC_B_GPIO112>;
+			output-high;
+		};
+	};
+
 	usb1_default_pins: usb1-default-pins {
 		pins-valid {
 			pinmux = <PINMUX_GPIO88__FUNC_I0_VBUSVALID_1P>;
 			input-enable;
-		};
-
-		pins-usb-hub-3v3-en {
-			pinmux = <PINMUX_GPIO112__FUNC_B_GPIO112>;
-			output-high;
 		};
 	};
 
@@ -1528,19 +1525,12 @@
 };
 
 &ssusb1 {
-	dr_mode = "otg";
-	usb-role-switch;
+	dr_mode = "host";
 	wakeup-source;
 	vusb33-supply = <&mt6359_vusb_ldo_reg>;
 	pinctrl-0 = <&usb1_default_pins>;
 	pinctrl-names = "default";
 	status = "okay";
-
-	port {
-		mtu3_hs1_role_sw: endpoint {
-			remote-endpoint = <&typec_con_hs>;
-		};
-	};
 };
 
 &xhci1 {
@@ -1549,25 +1539,45 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 
-	hub_2_0: hub@1 {
+	hub_3_0: hub@1 {
 		compatible = "usb451,8025";
 		reg = <1>;
-		peer-hub = <&hub_3_0>;
-		reset-gpios = <&pio 7 GPIO_ACTIVE_HIGH>;
-		vdd-supply = <&usb_hub_fixed_3v3>;
-	};
-
-	hub_3_0: hub@2 {
-		compatible = "usb451,8027";
-		reg = <2>;
 		peer-hub = <&hub_2_0>;
 		reset-gpios = <&pio 7 GPIO_ACTIVE_HIGH>;
 		vdd-supply = <&usb_hub_fixed_3v3>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@2 {
+				reg = <2>;
+
+				usb_3_0_p2: endpoint {
+					remote-endpoint = <&typec_con_ss>;
+				};
+			};
+		};
 	};
 
-	port {
-		xhci_ss_ep: endpoint {
-			remote-endpoint = <&typec_con_ss>;
+	hub_2_0: hub@2 {
+		compatible = "usb451,8027";
+		reg = <2>;
+		peer-hub = <&hub_3_0>;
+		reset-gpios = <&pio 7 GPIO_ACTIVE_HIGH>;
+		vdd-supply = <&usb_hub_fixed_3v3>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@2 {
+				reg = <2>;
+
+				usb_2_0_p2: endpoint {
+					remote-endpoint = <&typec_con_hs>;
+				};
+			};
 		};
 	};
 };

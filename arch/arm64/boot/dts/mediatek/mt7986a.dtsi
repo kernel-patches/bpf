@@ -579,7 +579,7 @@
 			reg = <0 0x15140000 0 0x40000>;
 			#address-cells = <1>;
 			#size-cells = <1>;
-			ranges = <0 0x15140000 0 0x40000>;
+			ranges = <0 0x0 0x15140000 0x40000>;
 		};
 
 		wo_ccif0: syscon@151a5000 {
