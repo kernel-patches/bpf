@@ -635,17 +635,26 @@ waitq_timeout:
 	}
 
 	/*
-	 * Either somebody is queued behind us or _Q_PENDING_VAL got set
-	 * which will then detect the remaining tail and queue behind us
-	 * ensuring we'll see a @next.
+	 * Either somebody is queued behind us or _Q_PENDING_VAL got set.
+	 * Unlike in qspinlock, the waiter that set _Q_PENDING_VAL may return
+	 * without queueing behind us (AA check, trylock fallback).
 	 */
 	set_locked(lock);
 
 	/*
 	 * contended path; wait for next if not observed yet, release.
+	 *
+	 * If we are still the tail, nobody has queued behind us and nobody
+	 * will link into our node, so reset the tail instead of waiting for
+	 * @next forever with the lock held.
+	 *
+	 * n,*,1 -> 0,*,1
 	 */
-	if (!next)
-		next = smp_cond_load_relaxed(&node->next, (VAL));
+	while (!next && !(next = READ_ONCE(node->next))) {
+		if (try_cmpxchg_tail(lock, tail, 0))
+			goto release;
+		cpu_relax();
+	}
 
 	arch_mcs_spin_unlock_contended(&next->locked);
 
