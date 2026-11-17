@@ -5760,6 +5760,7 @@ static void trace__exit(struct trace *trace)
 	thread__zput(trace->current);
 	strlist__delete(trace->ev_qualifier);
 	zfree(&trace->ev_qualifier_ids.entries);
+	zfree(&trace->filter_pids.entries);
 	if (trace->syscalls.table) {
 		for (size_t i = 0; i < trace->syscalls.table_size; i++)
 			syscall__delete(trace->syscalls.table[i]);
