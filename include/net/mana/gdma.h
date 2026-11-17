@@ -5,6 +5,7 @@
 #define _GDMA_H
 
 #include <linux/dma-mapping.h>
+#include <linux/errno.h>
 #include <linux/netdevice.h>
 #include <rdma/ib_verbs.h>
 
@@ -548,6 +549,15 @@ struct gdma_context {
 	/* Hardware communication channel (HWC) */
 	struct gdma_dev		hwc;
 
+	/* Sender drain; the final wakeup runs under hwc_lock. */
+	wait_queue_head_t	hwc_drain_waitq;
+
+	/* Protects runtime HWC publication and active sender references.
+	 * Setup owns an unpublished HWC directly; timeout updates use atomic
+	 * access helpers and do not require this lock.
+	 */
+	spinlock_t		hwc_lock;
+
 	/* Azure network adapter */
 	struct gdma_dev		mana;
 
@@ -598,7 +608,13 @@ int mana_gd_create_mana_wq_cq(struct gdma_dev *gd,
 			      const struct gdma_queue_spec *spec,
 			      struct gdma_queue **queue_ptr);
 
-void mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue);
+int mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue);
+
+/* Local HWC rejection does not revoke the device's DMA ownership. */
+static inline bool mana_gd_is_request_rejected(int err)
+{
+	return err == -ENOTCONN || err == -ENODEV || err == -EMSGSIZE;
+}
 
 /* Remove an EQ from interrupt dispatch without freeing its queue memory. */
 void mana_gd_fence_eq(struct gdma_context *gc, struct gdma_queue *queue);
@@ -1199,6 +1215,8 @@ void mana_gd_free_memory(struct gdma_mem_info *gmi);
 
 int mana_gd_send_request(struct gdma_context *gc, u32 req_len, const void *req,
 			 u32 resp_len, void *resp);
+
+int mana_gd_cancel_hwc_timeout(struct gdma_context *gc);
 
 int mana_gd_destroy_dma_region(struct gdma_context *gc, u64 dma_region_handle);
 void mana_register_debugfs(void);

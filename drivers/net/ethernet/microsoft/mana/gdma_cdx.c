@@ -221,6 +221,8 @@ static int mana_cdx_gd_probe(struct cdx_device *cdx_dev)
 
 	mutex_init(&gc->eq_test_event_mutex);
 	mutex_init(&gc->gic_mutex);
+	spin_lock_init(&gc->hwc_lock);
+	init_waitqueue_head(&gc->hwc_drain_waitq);
 	dev_set_drvdata(&cdx_dev->dev, gc);
 	gc->bar0_pa = cdx_resource_start(cdx_dev, 0);
 	gc->bar0_size = cdx_resource_len(cdx_dev, 0);

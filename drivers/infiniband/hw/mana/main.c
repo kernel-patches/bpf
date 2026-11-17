@@ -282,6 +282,7 @@ int mana_ib_create_kernel_queue(struct mana_ib_dev *mdev, u32 size, enum gdma_qu
 
 	queue->id = INVALID_QUEUE_ID;
 	queue->gdma_region = GDMA_INVALID_DMA_REGION;
+	queue->retain_dma = false;
 	spec.type = type;
 	spec.monitor_avl_buf = false;
 	spec.queue_size = size;
@@ -303,6 +304,7 @@ int mana_ib_create_queue(struct mana_ib_dev *mdev, u64 addr, u32 size,
 	queue->umem = NULL;
 	queue->id = INVALID_QUEUE_ID;
 	queue->gdma_region = GDMA_INVALID_DMA_REGION;
+	queue->retain_dma = false;
 
 	if (is_cq)
 		umem = ib_umem_get_cq_buf_or_va(&mdev->ib_dev, NULL, addr,
@@ -326,19 +328,30 @@ int mana_ib_create_queue(struct mana_ib_dev *mdev, u64 addr, u32 size,
 
 	return 0;
 free_umem:
+	if (mana_gd_is_request_rejected(err) &&
+	    queue->gdma_region != GDMA_INVALID_DMA_REGION) {
+		queue->umem = umem;
+		queue->retain_dma = true;
+		return err;
+	}
 	ib_umem_release(umem);
 	return err;
 }
 
-void mana_ib_destroy_queue(struct mana_ib_dev *mdev, struct mana_ib_queue *queue)
+int mana_ib_destroy_queue(struct mana_ib_dev *mdev, struct mana_ib_queue *queue)
 {
-	/* Ignore return code as there is not much we can do about it.
-	 * The error message is printed inside.
-	 */
-	mana_ib_gd_destroy_dma_region(mdev, queue->gdma_region);
+	int err;
+
+	if (READ_ONCE(queue->retain_dma))
+		return -ENOTCONN;
+
+	err = mana_ib_gd_destroy_dma_region(mdev, queue->gdma_region);
+	if (mana_gd_is_request_rejected(err))
+		return err;
 	ib_umem_release(queue->umem);
 	if (queue->kmem)
-		mana_gd_destroy_queue(mdev_to_gc(mdev), queue->kmem);
+		return mana_gd_destroy_queue(mdev_to_gc(mdev), queue->kmem);
+	return 0;
 }
 
 static int
@@ -503,8 +516,15 @@ static int mana_ib_gd_create_dma_region(struct mana_ib_dev *dev, struct ib_umem 
 			      max_pgs_add_cmd);
 	}
 
-	if (err)
-		mana_ib_gd_destroy_dma_region(dev, *gdma_region);
+	if (err) {
+		int destroy_err;
+
+		destroy_err = mana_ib_gd_destroy_dma_region(dev, *gdma_region);
+		if (mana_gd_is_request_rejected(destroy_err))
+			err = destroy_err;
+		else
+			*gdma_region = GDMA_INVALID_DMA_REGION;
+	}
 
 out:
 	kfree(request_buf);
@@ -824,6 +844,7 @@ int mana_ib_create_eqs(struct mana_ib_dev *mdev)
 	struct gdma_context *gc = mdev_to_gc(mdev);
 	struct gdma_queue_spec spec = {};
 	struct gdma_irq_context *gic;
+	int destroy_err;
 	int err, i, msi;
 
 	spec.type = GDMA_EQ;
@@ -841,7 +862,8 @@ int mana_ib_create_eqs(struct mana_ib_dev *mdev)
 
 	err = mana_gd_create_mana_eq(mdev->gdma_dev, &spec, &mdev->fatal_err_eq);
 	if (err) {
-		mana_gd_put_gic(gc, false, 0);
+		if (!mana_gd_is_request_rejected(err))
+			mana_gd_put_gic(gc, false, 0);
 		return err;
 	}
 	mdev->fatal_err_eq->eq.irq = gic->irq;
@@ -865,7 +887,8 @@ int mana_ib_create_eqs(struct mana_ib_dev *mdev)
 
 		err = mana_gd_create_mana_eq(mdev->gdma_dev, &spec, &mdev->eqs[i]);
 		if (err) {
-			mana_gd_put_gic(gc, false, msi);
+			if (!mana_gd_is_request_rejected(err))
+				mana_gd_put_gic(gc, false, msi);
 			goto destroy_eqs;
 		}
 		mdev->eqs[i]->eq.irq = gic->irq;
@@ -875,28 +898,33 @@ int mana_ib_create_eqs(struct mana_ib_dev *mdev)
 
 destroy_eqs:
 	while (i-- > 0) {
-		mana_gd_destroy_queue(gc, mdev->eqs[i]);
-		mana_gd_put_gic(gc, false, (i + 1) % gc->num_msix_usable);
+		msi = (i + 1) % gc->num_msix_usable;
+		destroy_err = mana_gd_destroy_queue(gc, mdev->eqs[i]);
+		if (!mana_gd_is_request_rejected(destroy_err))
+			mana_gd_put_gic(gc, false, msi);
 	}
 	kfree(mdev->eqs);
 destroy_fatal_eq:
-	mana_gd_destroy_queue(gc, mdev->fatal_err_eq);
-	mana_gd_put_gic(gc, false, 0);
+	destroy_err = mana_gd_destroy_queue(gc, mdev->fatal_err_eq);
+	if (!mana_gd_is_request_rejected(destroy_err))
+		mana_gd_put_gic(gc, false, 0);
 	return err;
 }
 
 void mana_ib_destroy_eqs(struct mana_ib_dev *mdev)
 {
 	struct gdma_context *gc = mdev_to_gc(mdev);
-	int i, msi;
+	int err, i, msi;
 
-	mana_gd_destroy_queue(gc, mdev->fatal_err_eq);
-	mana_gd_put_gic(gc, false, 0);
+	err = mana_gd_destroy_queue(gc, mdev->fatal_err_eq);
+	if (!mana_gd_is_request_rejected(err))
+		mana_gd_put_gic(gc, false, 0);
 
 	for (i = 0; i < mdev->ib_dev.num_comp_vectors; i++) {
-		mana_gd_destroy_queue(gc, mdev->eqs[i]);
 		msi = (i + 1) % gc->num_msix_usable;
-		mana_gd_put_gic(gc, false, msi);
+		err = mana_gd_destroy_queue(gc, mdev->eqs[i]);
+		if (!mana_gd_is_request_rejected(err))
+			mana_gd_put_gic(gc, false, msi);
 	}
 
 	kfree(mdev->eqs);
@@ -1037,6 +1065,7 @@ int mana_ib_gd_destroy_cq(struct mana_ib_dev *mdev, struct mana_ib_cq *cq)
 	struct gdma_context *gc = mdev_to_gc(mdev);
 	struct mana_rnic_destroy_cq_resp resp = {};
 	struct mana_rnic_destroy_cq_req req = {};
+	int err;
 
 	if (cq->cq_handle == INVALID_MANA_HANDLE)
 		return 0;
@@ -1046,7 +1075,10 @@ int mana_ib_gd_destroy_cq(struct mana_ib_dev *mdev, struct mana_ib_cq *cq)
 	req.adapter = mdev->adapter_handle;
 	req.cq_handle = cq->cq_handle;
 
-	return mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+	if (!err && !resp.hdr.status)
+		WRITE_ONCE(cq->queue.retain_dma, false);
+	return err;
 }
 
 int mana_ib_gd_create_rc_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp,

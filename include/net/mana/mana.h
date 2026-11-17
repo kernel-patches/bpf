@@ -1165,8 +1165,8 @@ int mana_create_wq_obj(struct mana_port_context *apc,
 		       struct mana_obj_spec *cq_spec,
 		       mana_handle_t *wq_obj);
 
-void mana_destroy_wq_obj(struct mana_port_context *apc, u32 wq_type,
-			 mana_handle_t wq_obj);
+int mana_destroy_wq_obj(struct mana_port_context *apc, u32 wq_type,
+			mana_handle_t wq_obj);
 
 int mana_cfg_vport(struct mana_port_context *apc, u32 protection_dom_id,
 		   u32 doorbell_pg_id, bool check_channel_changing);

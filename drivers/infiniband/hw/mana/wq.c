@@ -64,7 +64,9 @@ int mana_ib_destroy_wq(struct ib_wq *ibwq, struct ib_udata *udata)
 
 	mdev = container_of(ib_dev, struct mana_ib_dev, ib_dev);
 
-	mana_ib_destroy_queue(mdev, &wq->queue);
+	err = mana_ib_destroy_queue(mdev, &wq->queue);
+	if (mana_gd_is_request_rejected(err))
+		return err;
 
 	kfree(wq);
 

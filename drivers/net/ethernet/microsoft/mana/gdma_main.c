@@ -142,22 +142,26 @@ int mana_gd_init_registers(struct gdma_context *gc)
 		return mana_gd_init_vf_regs(gc);
 }
 
-/* Suppress logging when we set timeout to zero */
+/* Cancellation and unpublication make teardown request failures expected. */
 bool mana_need_log(struct gdma_context *gc, int err)
 {
 	struct hw_channel_context *hwc;
+	bool need_log = true;
+	unsigned long flags;
 
-	if (err != -ETIMEDOUT)
+	if (err != -ETIMEDOUT && err != -ENOTCONN && err != -ENODEV)
 		return true;
 
 	if (!gc)
 		return true;
 
+	spin_lock_irqsave(&gc->hwc_lock, flags);
 	hwc = gc->hwc.driver_data;
-	if (hwc && hwc->hwc_timeout == 0)
-		return false;
+	if (!hwc || !mana_hwc_timeout_read(hwc))
+		need_log = false;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
 
-	return true;
+	return need_log;
 }
 
 int mana_gd_query_max_resources(struct gdma_context *gc)
@@ -310,7 +314,8 @@ int mana_gd_query_max_resources(struct gdma_context *gc)
 	return 0;
 }
 
-static int mana_gd_query_hwc_timeout(struct gdma_context *gc, u32 *timeout_val)
+static int mana_gd_query_hwc_timeout(struct gdma_context *gc, u32 timeout_ms,
+				     u32 *new_timeout_ms)
 {
 	struct gdma_query_hwc_timeout_resp resp = {};
 	struct gdma_query_hwc_timeout_req req = {};
@@ -318,12 +323,12 @@ static int mana_gd_query_hwc_timeout(struct gdma_context *gc, u32 *timeout_val)
 
 	mana_gd_init_req_hdr(&req.hdr, GDMA_QUERY_HWC_TIMEOUT,
 			     sizeof(req), sizeof(resp));
-	req.timeout_ms = *timeout_val;
+	req.timeout_ms = timeout_ms;
 	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
 	if (err || resp.hdr.status)
 		return err ? err : -EPROTO;
 
-	*timeout_val = resp.timeout_ms;
+	*new_timeout_ms = resp.timeout_ms;
 
 	return 0;
 }
@@ -378,11 +383,47 @@ int mana_gd_detect_devices(struct gdma_context *gc)
 int mana_gd_send_request(struct gdma_context *gc, u32 req_len, const void *req,
 			 u32 resp_len, void *resp)
 {
-	struct hw_channel_context *hwc = gc->hwc.driver_data;
+	struct hw_channel_context *hwc;
+	unsigned long flags;
+	int err;
 
-	return mana_hwc_send_request(hwc, req_len, req, resp_len, resp);
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	hwc = gc->hwc.driver_data;
+	if (!hwc) {
+		spin_unlock_irqrestore(&gc->hwc_lock, flags);
+		return -ENODEV;
+	}
+	hwc->active_senders++;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
+
+	err = mana_hwc_send_request(hwc, req_len, req, resp_len, resp);
+
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	if (--hwc->active_senders == 0)
+		wake_up(&gc->hwc_drain_waitq);
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
+
+	return err;
 }
 EXPORT_SYMBOL_NS(mana_gd_send_request, "NET_MANA");
+
+int mana_gd_cancel_hwc_timeout(struct gdma_context *gc)
+{
+	struct hw_channel_context *hwc;
+	unsigned long flags;
+	int err = 0;
+
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	hwc = gc->hwc.driver_data;
+	if (hwc)
+		mana_hwc_timeout_cancel(hwc);
+	else
+		err = -ENODEV;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
+
+	return err;
+}
+EXPORT_SYMBOL_NS(mana_gd_cancel_hwc_timeout, "NET_MANA");
 
 int mana_gd_alloc_memory(struct gdma_context *gc, unsigned int length,
 			 struct gdma_mem_info *gmi, bool allow_scatter)
@@ -1001,7 +1042,9 @@ static void mana_gd_deregister_irq(struct gdma_queue *queue)
 	synchronize_rcu();
 }
 
-int mana_gd_test_eq(struct gdma_context *gc, struct gdma_queue *eq)
+static int mana_gd_test_eq_request(struct gdma_context *gc,
+				   struct hw_channel_context *hwc,
+				   struct gdma_queue *eq)
 {
 	struct gdma_generate_test_event_req req = {};
 	struct gdma_general_resp resp = {};
@@ -1019,9 +1062,14 @@ int mana_gd_test_eq(struct gdma_context *gc, struct gdma_queue *eq)
 	req.hdr.dev_id = eq->gdma_dev->dev_id;
 	req.queue_index = eq->id;
 
-	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+	if (hwc)
+		err = mana_hwc_send_request(hwc, sizeof(req), &req,
+					    sizeof(resp), &resp);
+	else
+		err = mana_gd_send_request(gc, sizeof(req), &req,
+					   sizeof(resp), &resp);
 	if (err) {
-		if (mana_need_log(gc, err))
+		if (hwc || mana_need_log(gc, err))
 			dev_err(dev, "test_eq failed: %d\n", err);
 		goto out;
 	}
@@ -1050,25 +1098,41 @@ out:
 	return err;
 }
 
-static void mana_gd_destroy_eq(struct gdma_context *gc, bool flush_events,
-			       struct gdma_queue *queue)
+int mana_gd_test_eq(struct gdma_context *gc, struct gdma_queue *eq)
+{
+	return mana_gd_test_eq_request(gc, NULL, eq);
+}
+
+int mana_gd_test_hwc_eq(struct hw_channel_context *hwc,
+			struct gdma_queue *eq)
+{
+	return mana_gd_test_eq_request(hwc->gdma_dev->gdma_context, hwc, eq);
+}
+
+static int mana_gd_destroy_eq(struct gdma_context *gc, bool flush_events,
+			      struct gdma_queue *queue)
 {
 	int err;
 
-	if (queue->eq.msix_index == INVALID_PCI_MSIX_INDEX)
-		return;
+	if (queue->eq.msix_index != INVALID_PCI_MSIX_INDEX) {
+		if (flush_events) {
+			err = mana_gd_test_eq(gc, queue);
+			if (err && mana_need_log(gc, err))
+				dev_warn(gc->dev, "Failed to flush EQ: %d\n",
+					 err);
+		}
 
-	if (flush_events) {
-		err = mana_gd_test_eq(gc, queue);
-		if (err && mana_need_log(gc, err))
-			dev_warn(gc->dev, "Failed to flush EQ: %d\n", err);
+		mana_gd_deregister_irq(queue);
+		queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
 	}
 
-	mana_gd_deregister_irq(queue);
-	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
+	if (!queue->eq.disable_needed)
+		return 0;
 
-	if (queue->eq.disable_needed)
-		mana_gd_disable_queue(queue);
+	err = mana_gd_disable_queue(queue);
+	if (!err)
+		queue->eq.disable_needed = false;
+	return err;
 }
 
 void mana_gd_fence_eq(struct gdma_context *gc, struct gdma_queue *queue)
@@ -1122,7 +1186,8 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 	return 0;
 out:
 	dev_err(dev, "Failed to create EQ: %d\n", err);
-	mana_gd_destroy_eq(gc, false, queue);
+	if (mana_gd_is_request_rejected(mana_gd_destroy_eq(gc, false, queue)))
+		err = -ENOTCONN;
 	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
 	return err;
 }
@@ -1259,7 +1324,7 @@ int mana_gd_destroy_dma_region(struct gdma_context *gc, u64 dma_region_handle)
 		if (mana_need_log(gc, err))
 			dev_err(gc->dev, "Failed to destroy DMA region: %d, 0x%x\n",
 				err, resp.hdr.status);
-		return -EPROTO;
+		return mana_gd_is_request_rejected(err) ? err : -EPROTO;
 	}
 
 	return 0;
@@ -1285,6 +1350,7 @@ static int mana_gd_create_dma_region(struct gdma_dev *gd,
 	if (gmi->nr_pages == 0 && !MANA_PAGE_ALIGNED(gmi->virt_addr))
 		return -EINVAL;
 
+	/* The caller must keep the HWC alive throughout queue creation. */
 	hwc = gc->hwc.driver_data;
 	req_msg_size = struct_size(req, page_addr_list, num_page);
 	if (req_msg_size > hwc->max_req_msg_size)
@@ -1390,7 +1456,10 @@ int mana_gd_create_mana_eq(struct gdma_dev *gd,
 out:
 	dev_err(gc->dev, "Failed to create queue type %d of size: %u, err: %d\n",
 		spec->type, spec->queue_size, err);
-	mana_gd_free_memory(gmi);
+	if (!mana_gd_is_request_rejected(err) ||
+	    (gmi->dma_region_handle == GDMA_INVALID_DMA_REGION &&
+	     !queue->eq.disable_needed))
+		mana_gd_free_memory(gmi);
 free_q:
 	kfree(queue);
 	return err;
@@ -1451,13 +1520,16 @@ free_q:
 }
 EXPORT_SYMBOL_NS(mana_gd_create_mana_wq_cq, "NET_MANA");
 
-void mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue)
+int mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue)
 {
 	struct gdma_mem_info *gmi = &queue->mem_info;
+	int err;
 
 	switch (queue->type) {
 	case GDMA_EQ:
-		mana_gd_destroy_eq(gc, queue->eq.disable_needed, queue);
+		err = mana_gd_destroy_eq(gc, queue->eq.disable_needed, queue);
+		if (mana_gd_is_request_rejected(err))
+			return err;
 		break;
 
 	case GDMA_CQ:
@@ -1473,12 +1545,15 @@ void mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue)
 	default:
 		dev_err(gc->dev, "Can't destroy unknown queue: type=%d\n",
 			queue->type);
-		return;
+		return -EINVAL;
 	}
 
-	mana_gd_destroy_dma_region(gc, gmi->dma_region_handle);
+	err = mana_gd_destroy_dma_region(gc, gmi->dma_region_handle);
+	if (mana_gd_is_request_rejected(err))
+		return err;
 	mana_gd_free_memory(gmi);
 	kfree(queue);
+	return 0;
 }
 EXPORT_SYMBOL_NS(mana_gd_destroy_queue, "NET_MANA");
 
@@ -1487,9 +1562,12 @@ int mana_gd_verify_vf_version(struct gdma_context *gc)
 	struct gdma_verify_ver_resp resp = {};
 	struct gdma_verify_ver_req req = {};
 	struct hw_channel_context *hwc;
+	u32 timeout_ms;
 	int err;
 
+	/* The setup caller must exclude concurrent HWC teardown. */
 	hwc = gc->hwc.driver_data;
+
 	mana_gd_init_req_hdr(&req.hdr, GDMA_VERIFY_VF_DRIVER_VERSION,
 			     sizeof(req), sizeof(resp));
 
@@ -1527,12 +1605,16 @@ int mana_gd_verify_vf_version(struct gdma_context *gc)
 			   &gc->pf_cap_flags1);
 
 	if (resp.pf_cap_flags1 & GDMA_DRV_CAP_FLAG_1_HWC_TIMEOUT_RECONFIG) {
-		err = mana_gd_query_hwc_timeout(gc, &hwc->hwc_timeout);
+		err = mana_gd_query_hwc_timeout(gc,
+						mana_hwc_timeout_read(hwc),
+						&timeout_ms);
 		if (err) {
 			dev_err(gc->dev, "Failed to set the hwc timeout %d\n", err);
 			return err;
 		}
-		dev_dbg(gc->dev, "set the hwc timeout to %u\n", hwc->hwc_timeout);
+		mana_hwc_timeout_update(hwc, timeout_ms);
+		dev_dbg(gc->dev, "set the hwc timeout to %u\n",
+			mana_hwc_timeout_read(hwc));
 	}
 	return 0;
 }
