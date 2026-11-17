@@ -210,22 +210,6 @@ config SYSFB
 	select BOOT_VESA_SUPPORT
 	select SCREEN_INFO
 
-config SYSFB_SIMPLEFB
-	bool "Mark VGA/VBE/EFI FB as generic system framebuffer (deprecated)"
-	depends on X86 || EFI
-	select SYSFB
-	help
-	  Firmware often provides initial graphics framebuffers so the BIOS,
-	  bootloader or kernel can show basic video-output during boot for
-	  user-guidance and debugging.
-
-	  This option, if enabled, marks VBE/EFI framebuffers as system
-	  framebuffers so the generic simpledrm driver can be used.
-
-	  This option is deprecated and will be removed in the near future. If
-	  unsure, say N and select efidrm, vesadrm instead. The dedicated DRM
-	  drivers provide the same functionality plus additional features.
-
 config TH1520_AON_PROTOCOL
 	tristate "Always-On firmware protocol"
 	depends on ARCH_THEAD || COMPILE_TEST
