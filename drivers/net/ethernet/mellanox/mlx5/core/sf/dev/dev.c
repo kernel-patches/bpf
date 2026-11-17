@@ -328,6 +328,17 @@ int mlx5_sf_dev_notifier_init(struct mlx5_core_dev *dev)
 	return mlx5_vhca_event_notifier_register(dev, &dev->priv.sf_dev_nb);
 }
 
+static void mlx5_sf_dev_destroy_all(struct mlx5_sf_dev_table *table)
+{
+	struct mlx5_sf_dev *sf_dev;
+	unsigned long index;
+
+	xa_for_each(&table->devices, index, sf_dev) {
+		xa_erase(&table->devices, index);
+		mlx5_sf_dev_remove_aux(table->dev, sf_dev);
+	}
+}
+
 void mlx5_sf_dev_table_create(struct mlx5_core_dev *dev)
 {
 	struct mlx5_sf_dev_table *table;
@@ -360,22 +371,12 @@ void mlx5_sf_dev_table_create(struct mlx5_core_dev *dev)
 arm_err:
 	mlx5_sf_dev_destroy_active_works(table);
 	mlx5_vhca_event_work_queues_flush(dev);
+	mlx5_sf_dev_destroy_all(table);
 add_active_err:
 	kfree(table);
 	dev->priv.sf_dev_table = NULL;
 table_err:
 	mlx5_core_err(dev, "SF DEV table create err = %d\n", err);
-}
-
-static void mlx5_sf_dev_destroy_all(struct mlx5_sf_dev_table *table)
-{
-	struct mlx5_sf_dev *sf_dev;
-	unsigned long index;
-
-	xa_for_each(&table->devices, index, sf_dev) {
-		xa_erase(&table->devices, index);
-		mlx5_sf_dev_remove_aux(table->dev, sf_dev);
-	}
 }
 
 void mlx5_sf_dev_notifier_cleanup(struct mlx5_core_dev *dev)
