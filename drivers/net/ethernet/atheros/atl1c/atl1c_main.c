@@ -248,6 +248,26 @@ void atl1c_reinit_locked(struct atl1c_adapter *adapter)
 	clear_bit(__AT_RESETTING, &adapter->flags);
 }
 
+/* atl1c_clean_rx() looks at the carrier only when it is entered.  Once the
+ * carrier is off, wait for the polls that are already past that test, so
+ * that the link-down path can reset the RX rings.  A poll that starts later
+ * sees the carrier off and leaves the rings alone.
+ *
+ * A disabled NAPI keeps NAPI_STATE_SCHED set, which is why this is not
+ * napi_synchronize(): stop waiting when the interface is down.  atl1c_up()
+ * gets here before napi_enable(), and atl1c_down() quiesces NAPI itself.
+ */
+static void atl1c_rx_poll_sync(struct atl1c_adapter *adapter)
+{
+	int i;
+
+	for (i = 0; i < adapter->rx_queue_count; ++i)
+		while (test_bit(NAPI_STATE_SCHED,
+				&adapter->rrd_ring[i].napi.state) &&
+		       !test_bit(__AT_DOWN, &adapter->flags))
+			usleep_range(1000, 2000);
+}
+
 static void atl1c_check_link_status(struct atl1c_adapter *adapter)
 {
 	struct atl1c_hw *hw = &adapter->hw;
@@ -265,6 +285,7 @@ static void atl1c_check_link_status(struct atl1c_adapter *adapter)
 	if (!link) {
 		/* link down */
 		netif_carrier_off(netdev);
+		atl1c_rx_poll_sync(adapter);
 		hw->hibernate = true;
 		if (atl1c_reset_mac(hw) != 0)
 			if (netif_msg_hw(adapter))
