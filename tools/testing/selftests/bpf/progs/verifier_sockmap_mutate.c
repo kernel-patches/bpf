@@ -16,13 +16,13 @@ struct sock {
 struct bpf_iter__sockmap {
 	union {
 		struct sock *sk;
-	};
+	} __attribute__((preserve_access_index));
 } __attribute__((preserve_access_index));
 
 struct bpf_iter__unix {
 	union {
 		struct sock *unix_sk;
-	};
+	} __attribute__((preserve_access_index));
 } __attribute__((preserve_access_index));
 
 struct {
