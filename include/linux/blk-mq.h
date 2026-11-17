@@ -523,6 +523,10 @@ enum hctx_type {
  * @tag_list_lock: Serializes tag_list accesses.
  * @tag_list:	   List of the request queues that use this tag set. See also
  *		   request_queue.tag_set_list.
+ * @quiesce_lock:  Serializes blk_mq_[un]quiesce_tagset() against each other
+ *		   and against a request queue being added to @tag_list.
+ * @quiesce_depth: How often blk_mq_quiesce_tagset() has been called without
+ *		   blk_mq_unquiesce_tagset().
  * @srcu:	   Use as lock when type of the request queue is blocking
  *		   (BLK_MQ_F_BLOCKING).
  * @update_nr_hwq_lock:
@@ -548,6 +552,8 @@ struct blk_mq_tag_set {
 
 	struct mutex		tag_list_lock;
 	struct list_head	tag_list;
+	spinlock_t		quiesce_lock;
+	unsigned int		quiesce_depth;
 	struct srcu_struct	*srcu;
 
 	struct rw_semaphore	update_nr_hwq_lock;
@@ -1012,6 +1018,13 @@ static inline struct request *blk_mq_rq_from_pdu(void *pdu)
 static inline void *blk_mq_rq_to_pdu(struct request *rq)
 {
 	return rq + 1;
+}
+
+static inline bool blk_mq_rq_is_dmabuf(struct request *rq)
+{
+	if (!IS_ENABLED(CONFIG_DMA_SHARED_BUFFER))
+		return false;
+	return rq->bio && op_is_dmabuf(rq->bio->bi_opf);
 }
 
 static inline struct blk_mq_hw_ctx *queue_hctx(struct request_queue *q, int id)
