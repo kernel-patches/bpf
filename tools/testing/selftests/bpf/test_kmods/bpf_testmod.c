@@ -1926,6 +1926,27 @@ __bpf_kfunc void bpf_kfunc_trigger_ctx_check(void)
 	irq_work_queue(&ctx_check_irq);
 }
 
+/*
+ * A kfunc family for the kfunc_flavors test: bpf_kfunc_flavor() has the
+ * current prototype, ___v1 an older one, and ___v2 is an alias with its exact
+ * prototype. ___v2 negates the result, so that the test can tell which of the
+ * two it called.
+ */
+__bpf_kfunc int bpf_kfunc_flavor(int a, int b)
+{
+	return a + b;
+}
+
+__bpf_kfunc int bpf_kfunc_flavor___v1(int a)
+{
+	return bpf_kfunc_flavor(a, 0);
+}
+
+__bpf_kfunc int bpf_kfunc_flavor___v2(int a, int b)
+{
+	return -bpf_kfunc_flavor(a, b);
+}
+
 BTF_KFUNCS_START(bpf_testmod_check_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_testmod_test_mod_kfunc, KF_SPINLOCK_SAFE)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test1)
@@ -2017,6 +2038,9 @@ BTF_ID_FLAGS(func, bpf_kfunc_implicit_arg, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_implicit_arg_legacy, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_implicit_arg_legacy_impl)
 BTF_ID_FLAGS(func, bpf_kfunc_trigger_ctx_check)
+BTF_ID_FLAGS(func, bpf_kfunc_flavor)
+BTF_ID_FLAGS(func, bpf_kfunc_flavor___v1)
+BTF_ID_FLAGS(func, bpf_kfunc_flavor___v2)
 BTF_KFUNCS_END(bpf_testmod_check_kfunc_ids)
 
 static int bpf_testmod_ops_init(struct btf *btf)

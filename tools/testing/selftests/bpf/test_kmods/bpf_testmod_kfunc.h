@@ -381,4 +381,8 @@ void bpf_testmod_test_hardirq_fn(void);
 void bpf_testmod_test_softirq_fn(void);
 void bpf_kfunc_trigger_ctx_check(void) __ksym;
 
+int bpf_kfunc_flavor(int a, int b) __ksym;
+int bpf_kfunc_flavor___v1(int a) __ksym;
+int bpf_kfunc_flavor___v2(int a, int b) __ksym;
+
 #endif /* _BPF_TESTMOD_KFUNC_H */
