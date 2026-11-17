@@ -303,7 +303,7 @@ struct exfat_inode_info {
 	 * concurrent update can never regress the value or tear on 32-bit.
 	 */
 	atomic64_t valid_size;
-	/* block-aligned size zeroed in the page cache (>= valid_size) */
+	/* Initialized cache prefix, including block tails; may lag after DIO. */
 	atomic64_t zeroed_size;
 	/* hash by i_location */
 	struct hlist_node i_hash_fat;
