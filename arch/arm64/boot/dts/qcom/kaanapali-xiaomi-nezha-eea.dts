@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2026, Igor Belwon <igor.belwon@mentallysanemainliners.org>
+ */
+
+/dts-v1/;
+
+#include "kaanapali-xiaomi-nezha-common.dtsi"
+
+/ {
+	model = "Xiaomi 17 Ultra (EU)";
+	compatible = "xiaomi,nezha-eea", "xiaomi,nezha", "qcom,kaanapali";
+};
+
+/* Battery model: BM6P */
+&battery {
+	voltage-min-design-microvolt = <3200000>;
+	energy-full-design-microwatt-hours = <22860000>;
+	charge-full-design-microamp-hours = <6000000>;
+};

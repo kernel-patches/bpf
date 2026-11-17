@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Copyright (c) 2026 Oleksii Onchul <oleksiionchul@gmail.com>
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+
+#include "eliza.dtsi"
+#include "pm7550-eliza.dtsi"
+#include "pmk8550-eliza.dtsi"
+
+/ {
+	model = "Nothing Phone (4a) Pro";
+	compatible = "nothing,froggerpro", "qcom,eliza";
+	chassis-type = "handset";
+
+	aliases {
+		serial0 = &uart13;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	clocks {
+		xo_board: xo-board {
+			compatible = "fixed-clock";
+			clock-frequency = <76800000>;
+			#clock-cells = <0>;
+		};
+
+		sleep_clk: sleep-clk {
+			compatible = "fixed-clock";
+			clock-frequency = <32764>;
+			#clock-cells = <0>;
+		};
+
+		bi_tcxo_div2: bi-tcxo-div2-clk {
+			compatible = "fixed-factor-clock";
+			#clock-cells = <0>;
+
+			clocks = <&rpmhcc RPMH_CXO_CLK>;
+			clock-mult = <1>;
+			clock-div = <2>;
+		};
+
+		bi_tcxo_ao_div2: bi-tcxo-ao-div2-clk {
+			compatible = "fixed-factor-clock";
+			#clock-cells = <0>;
+
+			clocks = <&rpmhcc RPMH_CXO_CLK_A>;
+			clock-mult = <1>;
+			clock-div = <2>;
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		pinctrl-0 = <&assist_default>, <&volume_up_default>;
+		pinctrl-names = "default";
+
+		key-assist {
+			label = "Assistant";
+			gpios = <&tlmm 34 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_ASSISTANT>;
+		};
+
+		key-volume-up {
+			label = "Volume Up";
+			gpios = <&pm7550_gpios 6 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+		};
+	};
+
+	reserved-memory {
+		chipinfo@81cf4000 {
+			reg = <0x0 0x81cf4000 0x0 0x1000>;
+			no-map;
+		};
+
+		ramoops@81f00000 {
+			compatible = "ramoops";
+			reg = <0x0 0x81f00000 0x0 0x300000>;
+			record-size = <0x40000>;
+			console-size = <0x200000>;
+			ecc-size = <16>;
+			no-map;
+		};
+
+		/* Keep the bootloader framebuffer out of Linux memory. */
+		framebuffer@fc800000 {
+			reg = <0x0 0xfc800000 0x0 (1260 * 2800 * 4)>;
+			no-map;
+		};
+	};
+};
+
+&adspslpi_mem {
+	/* Stock firmware reserves 74 MiB for ADSP/SLPI. */
+	reg = <0x0 0x99e00000 0x0 0x4a00000>;
+};
+
+&pm7550_gpios {
+	volume_up_default: volume-up-default-state {
+		pins = "gpio6";
+		function = PMIC_GPIO_FUNC_NORMAL;
+		power-source = <1>;
+		bias-pull-up;
+	};
+};
+
+&pmk8550_gpios {
+	pinctrl-0 = <&pmk8550_sleep_clk_default>;
+	pinctrl-names = "default";
+
+	pmk8550_sleep_clk_default: sleep-clk-default-state {
+		pins = "gpio3";
+		function = PMIC_GPIO_FUNC_FUNC1;
+		input-disable;
+		output-enable;
+		bias-disable;
+		power-source = <0>;
+	};
+};
+
+&pon_pwrkey {
+	status = "okay";
+};
+
+&pon_resin {
+	linux,code = <KEY_VOLUMEDOWN>;
+
+	status = "okay";
+};
+
+&tlmm {
+	gpio-reserved-ranges = <20 4>,   /* NFC SPI */
+			       <111 2>,  /* WCN UART1 */
+			       <118 1>;  /* NFC Secure I/O */
+
+	assist_default: assist-default-state {
+		pins = "gpio34";
+		function = "gpio";
+		bias-pull-up;
+	};
+};
+
+&uart13 {
+	compatible = "qcom,geni-debug-uart";
+
+	status = "okay";
+};
