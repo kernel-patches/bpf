@@ -1025,10 +1025,10 @@ static __init void rdt_init_res_defs_amd(void)
 			r->cache.arch_has_sparse_bitmasks = true;
 			r->cache.min_cbm_bits = 0;
 		} else if (r->rid == RDT_RESOURCE_MBA) {
-			hw_res->msr_base = MSR_IA32_MBA_BW_BASE;
+			hw_res->msr_base = MSR_AMD64_MBA_BW_BASE;
 			hw_res->msr_update = mba_wrmsr_amd;
 		} else if (r->rid == RDT_RESOURCE_SMBA) {
-			hw_res->msr_base = MSR_IA32_SMBA_BW_BASE;
+			hw_res->msr_base = MSR_AMD64_SMBA_BW_BASE;
 			hw_res->msr_update = mba_wrmsr_amd;
 		}
 	}

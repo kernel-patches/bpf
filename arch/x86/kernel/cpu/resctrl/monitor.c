@@ -498,13 +498,13 @@ static void resctrl_abmc_set_one_amd(void *arg)
 	bool *enable = arg;
 
 	if (*enable)
-		msr_set_bit(MSR_IA32_L3_QOS_EXT_CFG, ABMC_ENABLE_BIT);
+		msr_set_bit(MSR_AMD64_L3_QOS_EXT_CFG, ABMC_ENABLE_BIT);
 	else
-		msr_clear_bit(MSR_IA32_L3_QOS_EXT_CFG, ABMC_ENABLE_BIT);
+		msr_clear_bit(MSR_AMD64_L3_QOS_EXT_CFG, ABMC_ENABLE_BIT);
 }
 
 /*
- * ABMC enable/disable requires update of L3_QOS_EXT_CFG MSR on all the CPUs
+ * ABMC enable/disable requires update of MSR_AMD64_L3_QOS_EXT_CFG on all the CPUs
  * associated with all monitor domains.
  */
 static void _resctrl_abmc_enable(struct rdt_resource *r, bool enable)
@@ -542,7 +542,7 @@ static void resctrl_abmc_config_one_amd(void *info)
 {
 	union l3_qos_abmc_cfg *abmc_cfg = info;
 
-	wrmsrq(MSR_IA32_L3_QOS_ABMC_CFG, abmc_cfg->full);
+	wrmsrq(MSR_AMD64_L3_QOS_ABMC_CFG, abmc_cfg->full);
 }
 
 /*
