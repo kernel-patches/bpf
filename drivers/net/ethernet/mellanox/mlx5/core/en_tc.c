@@ -2786,6 +2786,10 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 		err = mlx5e_tc_verify_tunnel_ecn(priv, f, &match_inner_ecn);
 		if (err)
 			return err;
+	} else if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ENC_KEYID)) {
+		err = mlx5e_tc_tun_parse_outer_key(priv, spec, f, fs_type);
+		if (err)
+			return err;
 	}
 
 	err = mlx5e_flower_parse_meta(filter_dev, f);

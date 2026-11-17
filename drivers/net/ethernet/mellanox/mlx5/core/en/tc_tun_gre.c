@@ -3,6 +3,7 @@
 
 #include <net/gre.h>
 #include "en/tc_tun.h"
+#include "fs_core.h"
 
 static bool mlx5e_tc_tun_can_offload_gretap(struct mlx5e_priv *priv)
 {
@@ -89,6 +90,35 @@ static int mlx5e_tc_tun_parse_gretap(struct mlx5e_priv *priv,
 	return 0;
 }
 
+static int
+mlx5e_tc_tun_parse_outer_key_gre(struct mlx5e_priv *priv,
+				 struct mlx5_flow_spec *spec,
+				 struct netlink_ext_ack *extack,
+				 u32 key, u32 mask,
+				 enum fs_flow_table_type fs_type)
+{
+	void *misc_c, *misc_v;
+
+	if (!MLX5_CAP_FLOWTABLE_TYPE(priv->mdev,
+				     ft_field_support.outer_gre_key,
+				     fs_type)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Matching on GRE key is not supported");
+		return -EOPNOTSUPP;
+	}
+
+	misc_c = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
+			      misc_parameters);
+	misc_v = MLX5_ADDR_OF(fte_match_param, spec->match_value,
+			      misc_parameters);
+
+	MLX5_SET(fte_match_set_misc, misc_c, gre_key.key, mask);
+	MLX5_SET(fte_match_set_misc, misc_v, gre_key.key, key);
+	spec->match_criteria_enable |= MLX5_MATCH_MISC_PARAMETERS;
+
+	return 0;
+}
+
 struct mlx5e_tc_tunnel gre_tunnel = {
 	.tunnel_type          = MLX5E_TC_TUNNEL_TYPE_GRETAP,
 	.match_level          = MLX5_MATCH_L3,
@@ -98,5 +128,6 @@ struct mlx5e_tc_tunnel gre_tunnel = {
 	.generate_ip_tun_hdr  = mlx5e_gen_ip_tunnel_header_gretap,
 	.parse_udp_ports      = NULL,
 	.parse_tunnel         = mlx5e_tc_tun_parse_gretap,
+	.parse_outer_key      = mlx5e_tc_tun_parse_outer_key_gre,
 	.encap_info_equal     = mlx5e_tc_tun_encap_info_equal_generic,
 };
