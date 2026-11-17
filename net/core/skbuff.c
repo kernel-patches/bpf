@@ -2342,6 +2342,8 @@ struct sk_buff *__pskb_copy_fclone(struct sk_buff *skb, int headroom,
 	}
 
 	skb_copy_header(n, skb);
+	if (skb_mac_header_was_set(n) && skb_mac_offset(n) < 0)
+		skb_unset_mac_header(n);
 out:
 	return n;
 }
