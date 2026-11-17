@@ -22,6 +22,9 @@ properties:
               - qcom,db845c-sndcard
           - const: qcom,sdm845-sndcard
       - items:
+          - const: qcom,sm8350-sndcard
+          - const: qcom,sm8250-sndcard
+      - items:
           - enum:
               - qcom,eliza-sndcard
               - qcom,hawi-sndcard
