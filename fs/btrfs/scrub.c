@@ -80,9 +80,6 @@ enum scrub_stripe_flags {
 	/* Set when @mirror_num, @dev, @physical and @logical are set. */
 	SCRUB_STRIPE_FLAG_INITIALIZED,
 
-	/* Set when the read-repair is finished. */
-	SCRUB_STRIPE_FLAG_REPAIR_DONE,
-
 	/*
 	 * Set for data stripes if it's triggered from P/Q stripe.
 	 * During such scrub, we should not report errors in data stripes, nor
@@ -153,7 +150,9 @@ struct scrub_stripe {
 	/* From btrfs_chunk_map::stripe_len. Should not exceed BTRFS_STRIPE_LEN. */
 	u32 stripe_len;
 	wait_queue_head_t io_wait;
-	wait_queue_head_t repair_wait;
+
+	/* Completed when the read-repair is finished. */
+	struct completion repair_done;
 
 	/*
 	 * Indicate the states of the stripe.  Bits are defined in
@@ -359,7 +358,7 @@ static int init_scrub_stripe(struct btrfs_fs_info *fs_info,
 	stripe->state = 0;
 
 	init_waitqueue_head(&stripe->io_wait);
-	init_waitqueue_head(&stripe->repair_wait);
+	init_completion(&stripe->repair_done);
 	atomic_set(&stripe->pending_io, 0);
 	spin_lock_init(&stripe->write_error_lock);
 
@@ -1234,8 +1233,7 @@ out:
 	}
 
 	scrub_stripe_report_errors(sctx, stripe, &errors);
-	set_bit(SCRUB_STRIPE_FLAG_REPAIR_DONE, &stripe->state);
-	wake_up(&stripe->repair_wait);
+	complete_all(&stripe->repair_done);
 }
 
 static void scrub_read_endio(struct btrfs_bio *bbio)
@@ -1762,6 +1760,7 @@ static void scrub_reset_stripe(struct scrub_stripe *stripe)
 	stripe->nr_meta_extents = 0;
 	stripe->nr_data_extents = 0;
 	stripe->state = 0;
+	reinit_completion(&stripe->repair_done);
 
 	for (int i = 0; i < stripe->nr_sectors; i++) {
 		stripe->sectors[i].csum = NULL;
@@ -1960,8 +1959,7 @@ static int flush_scrub_stripes(struct scrub_ctx *sctx)
 	for (int i = 0; i < nr_stripes; i++) {
 		stripe = &sctx->stripes[i];
 
-		wait_event(stripe->repair_wait,
-			   test_bit(SCRUB_STRIPE_FLAG_REPAIR_DONE, &stripe->state));
+		wait_for_completion(&stripe->repair_done);
 	}
 
 	/* Submit for dev-replace. */
@@ -2236,8 +2234,7 @@ static int scrub_raid56_parity_stripe(struct scrub_ctx *sctx,
 	for (int i = 0; i < data_stripes; i++) {
 		stripe = &sctx->raid56_data_stripes[i];
 
-		wait_event(stripe->repair_wait,
-			   test_bit(SCRUB_STRIPE_FLAG_REPAIR_DONE, &stripe->state));
+		wait_for_completion(&stripe->repair_done);
 	}
 	/* For now, no zoned support for RAID56. */
 	ASSERT(!btrfs_is_zoned(sctx->fs_info));
