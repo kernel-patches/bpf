@@ -395,10 +395,9 @@ impl<T: Driver> Adapter<T> {
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn suspend_callback(phydev: *mut bindings::phy_device) -> c_int {
         from_result(|| {
-            // SAFETY: The C core code ensures that the accessors on
-            // `Device` are okay to call even though `phy_device->lock`
-            // might not be held.
-            let dev = unsafe { Device::from_raw(phydev) };
+            // SAFETY: `phy_suspend()` does not take `phy_device->lock`, and `phy_state_machine()`
+            // calls it right after dropping the lock. This is the `MaybeLocked` context.
+            let dev = unsafe { Device::<MaybeLocked>::from_raw(phydev) };
             T::suspend(dev)?;
             Ok(0)
         })
@@ -572,7 +571,7 @@ pub trait Driver {
     }
 
     /// Suspends the hardware, saving state if needed.
-    fn suspend(_dev: &mut Device) -> Result {
+    fn suspend(_dev: &mut Device<MaybeLocked>) -> Result {
         build_error!(VTABLE_DEFAULT_ERROR)
     }
 
