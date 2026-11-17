@@ -1084,13 +1084,13 @@ nf_queue_entry_dup(struct nf_queue_entry *e)
  */
 static void nf_bridge_adjust_skb_data(struct sk_buff *skb)
 {
-	if (nf_bridge_info_get(skb))
+	if (nf_bridge_info_get(skb) && skb_mac_header_was_set(skb))
 		__skb_push(skb, skb_mac_header_len(skb));
 }
 
 static void nf_bridge_adjust_segmented_data(struct sk_buff *skb)
 {
-	if (nf_bridge_info_get(skb))
+	if (nf_bridge_info_get(skb) && skb_mac_header_was_set(skb))
 		__skb_pull(skb, skb_mac_header_len(skb));
 }
 #else
