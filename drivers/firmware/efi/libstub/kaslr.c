@@ -82,9 +82,8 @@ static bool check_image_region(u64 base, u64 size)
 
 /**
  * efi_kaslr_relocate_kernel() - Relocate the kernel (random if KASLR enabled)
- * @image_addr:		Pointer to the current kernel location
- * @reserve_addr:	Pointer to the relocated kernel location
- * @reserve_size:	Size of the relocated kernel
+ * @image_addr:		Pointer to variable carrying the image base address
+ * @alloc_size:		Pointer to variable carrying the allocated size
  * @kernel_size:	Size of the text + data
  * @kernel_codesize:	Size of the text
  * @kernel_memsize:	Size of the text + data + bss
@@ -97,13 +96,13 @@ static bool check_image_region(u64 base, u64 size)
  * Return:	status code, EFI_SUCCESS if relocation is successful
  */
 efi_status_t efi_kaslr_relocate_kernel(unsigned long *image_addr,
-				       unsigned long *reserve_addr,
-				       unsigned long *reserve_size,
+				       unsigned long *alloc_size,
 				       unsigned long kernel_size,
 				       unsigned long kernel_codesize,
 				       unsigned long kernel_memsize,
 				       u32 phys_seed)
 {
+	unsigned long kernel_base = *image_addr;
 	efi_status_t status;
 	u64 min_kimg_align = efi_get_kimg_min_align();
 
@@ -112,8 +111,8 @@ efi_status_t efi_kaslr_relocate_kernel(unsigned long *image_addr,
 		 * If KASLR is enabled, and we have some randomness available,
 		 * locate the kernel at a randomized offset in physical memory.
 		 */
-		status = efi_random_alloc(*reserve_size, min_kimg_align,
-					  reserve_addr, phys_seed,
+		status = efi_random_alloc(kernel_memsize, min_kimg_align,
+					  image_addr, phys_seed,
 					  EFI_LOADER_CODE, 0, EFI_ALLOC_LIMIT);
 		if (status != EFI_SUCCESS)
 			efi_warn("efi_random_alloc() failed: 0x%lx\n", status);
@@ -122,33 +121,32 @@ efi_status_t efi_kaslr_relocate_kernel(unsigned long *image_addr,
 	}
 
 	if (status != EFI_SUCCESS) {
-		if (!check_image_region(*image_addr, kernel_memsize)) {
+		if (!check_image_region(kernel_base, kernel_memsize)) {
 			efi_err("FIRMWARE BUG: Image BSS overlaps adjacent EFI memory region\n");
-		} else if (IS_ALIGNED(*image_addr, min_kimg_align) &&
-			   (*image_addr + kernel_memsize) < EFI_ALLOC_LIMIT) {
+		} else if (IS_ALIGNED(kernel_base, min_kimg_align) &&
+			   (kernel_base + kernel_memsize) < EFI_ALLOC_LIMIT) {
 			/*
 			 * Just execute from wherever we were loaded by the
 			 * UEFI PE/COFF loader if the placement is suitable.
 			 */
-			*reserve_size = 0;
 			return EFI_SUCCESS;
 		}
 
-		status = efi_allocate_pages_aligned(*reserve_size, reserve_addr,
+		status = efi_allocate_pages_aligned(kernel_memsize, image_addr,
 						    ULONG_MAX, min_kimg_align,
 						    EFI_LOADER_CODE);
 
 		if (status != EFI_SUCCESS) {
 			efi_err("Failed to relocate kernel\n");
-			*reserve_size = 0;
 			return status;
 		}
 	}
 
-	memcpy((void *)*reserve_addr, (void *)*image_addr, kernel_size);
-	*image_addr = *reserve_addr;
+	memcpy((void *)*image_addr, (void *)kernel_base, kernel_size);
+	*alloc_size = kernel_memsize;
+
 	efi_icache_sync(*image_addr, *image_addr + kernel_codesize);
-	efi_remap_image(*image_addr, *reserve_size, kernel_codesize);
+	efi_remap_image(*image_addr, kernel_memsize, kernel_codesize);
 
 	return status;
 }

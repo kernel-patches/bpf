@@ -35,10 +35,9 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 	kernel_size = _edata - _text;
 	kernel_codesize = __inittext_end - _text;
 	kernel_memsize = kernel_size + (_end - _edata);
-	*reserve_size = kernel_memsize;
 	*image_addr = (unsigned long)_text;
 
-	return efi_kaslr_relocate_kernel(image_addr, reserve_addr, reserve_size,
+	return efi_kaslr_relocate_kernel(image_addr, image_size,
 					 kernel_size, kernel_codesize, kernel_memsize,
 					 efi_kaslr_get_phys_seed(image_handle));
 }
