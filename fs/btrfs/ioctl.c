@@ -3343,6 +3343,15 @@ static long btrfs_ioctl_logical_to_ino(struct btrfs_fs_info *fs_info,
 	if (ret < 0)
 		return ret;
 
+	/*
+	 * Copy only what we found instead of the whole data container. If for
+	 * example 'size' is 16M and we found only 1 inode, it's wasteful to
+	 * copy 16M instead of sizeof(*inodes) + 1 * sizeof(u64)).
+	 * For each inode we find we add 3 elements to the inodes->val array:
+	 * inode number, offset and root ID.
+	 */
+	if (size > sizeof(*inodes))
+		size = sizeof(*inodes) + inodes->elem_cnt * sizeof(u64);
 	ret = copy_to_user((void __user *)(unsigned long)loi->inodes, inodes,
 			   size);
 	if (ret)
