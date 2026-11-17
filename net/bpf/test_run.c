@@ -748,9 +748,6 @@ __bpf_prog_test_run_raw_tp(void *data)
 	struct bpf_raw_tp_test_run_info *info = data;
 	struct srcu_ctr __percpu *scp = NULL;
 	struct bpf_trace_run_ctx run_ctx = {};
-	struct bpf_run_ctx *old_run_ctx;
-
-	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
 
 	if (info->prog->sleepable) {
 		scp = rcu_read_lock_tasks_trace();
@@ -759,7 +756,7 @@ __bpf_prog_test_run_raw_tp(void *data)
 		rcu_read_lock();
 	}
 
-	if (unlikely(!bpf_prog_get_recursion_context(info->prog))) {
+	if (unlikely(!bpf_prog_enter_run_ctx(info->prog, &run_ctx.run_ctx))) {
 		bpf_prog_inc_misses_counter(info->prog);
 		goto out;
 	}
@@ -767,7 +764,7 @@ __bpf_prog_test_run_raw_tp(void *data)
 	info->retval = bpf_prog_run(info->prog, info->ctx);
 
 out:
-	bpf_prog_put_recursion_context(info->prog);
+	bpf_prog_exit_run_ctx(info->prog, &run_ctx.run_ctx);
 
 	if (info->prog->sleepable) {
 		migrate_enable();
@@ -775,8 +772,6 @@ out:
 	} else {
 		rcu_read_unlock();
 	}
-
-	bpf_reset_run_ctx(old_run_ctx);
 }
 
 int bpf_prog_test_run_raw_tp(struct bpf_prog *prog,

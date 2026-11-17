@@ -2038,6 +2038,25 @@ static inline bool bpf_prog_check_recur(const struct bpf_prog *prog)
 	}
 }
 
+/* Is the recursion of @prog checked per task, so that two tasks can run it at once on a CPU? */
+static inline bool bpf_prog_recur_per_task(const struct bpf_prog *prog)
+{
+	if (prog->recur_per_cpu)
+		return false;
+
+	switch (resolve_prog_type(prog)) {
+	case BPF_PROG_TYPE_RAW_TRACEPOINT:
+	case BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE:
+	/* It may be attached to a syscall tracepoint */
+	case BPF_PROG_TYPE_TRACEPOINT:
+		return true;
+	case BPF_PROG_TYPE_TRACING:
+		return bpf_prog_check_recur(prog);
+	default:
+		return false;
+	}
+}
+
 #define BPF_REG_TRUSTED_MODIFIERS (MEM_ALLOC | PTR_TRUSTED | NON_OWN_REF)
 
 static inline bool bpf_type_has_unsafe_modifiers(u32 type)
