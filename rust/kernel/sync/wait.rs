@@ -229,7 +229,6 @@ impl WaitQueue {
     /// Performs a single non-exclusive prepare-to-wait / finish-wait cycle, calling `schedule_fn`
     /// in between. Non-exclusive waiters are all woken by [`wake_up()`](Self::wake_up).
     #[inline]
-    #[expect(unused)]
     pub(super) fn wait_once<F, R>(&self, wait_state: c_int, schedule_fn: F) -> R
     where
         F: FnOnce() -> R,

@@ -163,6 +163,31 @@ impl CondVar {
         crate::current!().signal_pending()
     }
 
+    /// Releases the lock and waits non-exclusively in interruptible and freezable mode.
+    ///
+    /// Like [`CondVar::wait_interruptible_freezable`], but registers the current task as a
+    /// non-exclusive waiter.
+    ///
+    /// The lock is reacquired before returning. The wait may also end due to a signal or a
+    /// spurious wakeup.
+    ///
+    /// No lock other than the one released through `guard` should be held, since the task may
+    /// be frozen while sleeping.
+    ///
+    /// Returns whether there is a signal pending.
+    #[must_use = "the caller must check whether a signal is pending"]
+    pub fn wait_interruptible_freezable_nonexclusive<T: ?Sized, B: Backend>(
+        &self,
+        guard: &mut Guard<'_, T, B>,
+    ) -> bool {
+        self.wq.wait_once(TASK_INTERRUPTIBLE | TASK_FREEZABLE, || {
+            guard.do_unlocked(|| {
+                task::schedule_timeout(Delta::from_jiffies(task::MAX_SCHEDULE_TIMEOUT))
+            })
+        });
+        crate::current!().signal_pending()
+    }
+
     /// Releases the lock and waits for a notification in interruptible mode.
     ///
     /// Atomically releases the given lock (whose ownership is proven by the guard) and puts the
@@ -185,7 +210,7 @@ impl CondVar {
         }
     }
 
-    /// Calls the kernel function to notify one thread synchronously.
+    /// Wakes all non-exclusive waiters and one exclusive waiter synchronously.
     ///
     /// This method behaves like `notify_one`, except that it hints to the scheduler that the
     /// current thread expects to sleep soon.
@@ -194,7 +219,7 @@ impl CondVar {
         self.wq.wake_up_sync();
     }
 
-    /// Wakes a single waiter up, if any.
+    /// Wakes all non-exclusive waiters and one exclusive waiter, if any.
     ///
     /// This is not 'sticky' in the sense that if no thread is waiting, the notification is lost
     /// completely (as opposed to automatically waking up the next waiter).
