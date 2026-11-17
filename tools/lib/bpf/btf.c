@@ -4069,6 +4069,7 @@ static int btf_dedup_struct_types(struct btf_dedup *d);
 static int btf_dedup_ref_types(struct btf_dedup *d);
 static int btf_dedup_vars(struct btf_dedup *d);
 static int btf_dedup_decl_tags(struct btf_dedup *d);
+static int btf_dedup_datasecs(struct btf_dedup *d);
 static int btf_dedup_resolve_fwds(struct btf_dedup *d);
 static int btf_dedup_compact_types(struct btf_dedup *d);
 static int btf_dedup_remap_types(struct btf_dedup *d);
@@ -4177,7 +4178,7 @@ static int btf_dedup_remap_types(struct btf_dedup *d);
  * Algorithm summary
  * =================
  *
- * Algorithm completes its work in 9 separate passes:
+ * Algorithm completes its work in 10 separate passes:
  *
  * 1. Strings deduplication.
  * 2. Primitive types deduplication (int, enum, fwd).
@@ -4187,8 +4188,9 @@ static int btf_dedup_remap_types(struct btf_dedup *d);
  *    protos, and const/volatile/restrict modifiers), except declaration tags.
  * 6. Variable deduplication, including incoming declaration tag sets.
  * 7. Declaration tag deduplication, using canonical target IDs.
- * 8. Types compaction.
- * 9. Types remapping.
+ * 8. Duplicate DATASEC entry removal.
+ * 9. Types compaction.
+ * 10. Types remapping.
  *
  * Algorithm determines canonical type descriptor, which is a single
  * representative type for each truly unique type. This canonical type is the
@@ -4269,6 +4271,11 @@ int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts)
 	err = btf_dedup_decl_tags(d);
 	if (err < 0) {
 		pr_debug("btf_dedup_decl_tags failed: %s\n", errstr(err));
+		goto done;
+	}
+	err = btf_dedup_datasecs(d);
+	if (err < 0) {
+		pr_debug("btf_dedup_datasecs failed: %s\n", errstr(err));
 		goto done;
 	}
 	err = btf_dedup_compact_types(d);
@@ -6064,6 +6071,96 @@ static int btf_dedup_decl_tags(struct btf_dedup *d)
 	/* we won't need d->dedup_table anymore */
 	hashmap__free(d->dedup_table);
 	d->dedup_table = NULL;
+	return 0;
+}
+
+struct btf_dedup_secinfo {
+	struct btf_var_secinfo var;
+	__u32 name;
+};
+
+static int btf_dedup_secinfo_cmp(const void *p1, const void *p2)
+{
+	const struct btf_dedup_secinfo *a = p1, *b = p2;
+
+	if (a->name != b->name)
+		return a->name < b->name ? -1 : 1;
+	if (a->var.offset != b->var.offset)
+		return a->var.offset < b->var.offset ? -1 : 1;
+	if (a->var.type != b->var.type)
+		return a->var.type < b->var.type ? -1 : 1;
+	return (a->var.size > b->var.size) - (a->var.size < b->var.size);
+}
+
+static int btf_dedup_secinfo_offset_cmp(const void *p1, const void *p2)
+{
+	const struct btf_var_secinfo *a = p1, *b = p2;
+
+	if (a->offset != b->offset)
+		return a->offset < b->offset ? -1 : 1;
+	if (a->type != b->type)
+		return a->type < b->type ? -1 : 1;
+	return (a->size > b->size) - (a->size < b->size);
+}
+
+/*
+ * Shrink DATASECs before compaction, while the original type offsets still
+ * locate subsequent records. Base DATASECs must remain unchanged.
+ */
+static int btf_dedup_datasecs(struct btf_dedup *d)
+{
+	struct btf_dedup_secinfo *entries, *prev;
+	struct btf_var_secinfo *vars;
+	struct btf_type *t, *var;
+	__u32 id, i, n, nr, name;
+	__u64 end;
+
+	for (id = d->btf->start_id; id < btf__type_cnt(d->btf); id++) {
+		t = btf_type_by_id(d->btf, id);
+		if (!btf_is_datasec(t))
+			continue;
+		nr = btf_vlen(t);
+		if (!nr)
+			continue;
+		entries = calloc(nr, sizeof(*entries));
+		if (!entries)
+			return -ENOMEM;
+		vars = btf_var_secinfos(t);
+		for (i = 0; i < nr; i++) {
+			if (vars[i].type >= btf__type_cnt(d->btf)) {
+				free(entries);
+				return -EINVAL;
+			}
+			entries[i].var = vars[i];
+			entries[i].var.type = resolve_type_id(d, vars[i].type);
+			var = btf_type_by_id(d->btf, entries[i].var.type);
+			entries[i].name = var->name_off;
+		}
+		qsort(entries, nr, sizeof(*entries), btf_dedup_secinfo_cmp);
+		n = 0;
+		end = 0;
+		name = 0;
+		prev = NULL;
+		for (i = 0; i < nr; i++) {
+			if (prev && !btf_dedup_secinfo_cmp(prev, &entries[i]))
+				continue;
+			if (prev && name == entries[i].name && entries[i].var.size &&
+			    entries[i].var.offset < end)
+				pr_warn("DATASEC '%s': overlapping variables named '%s' at offset %#x\n",
+					btf__str_by_offset(d->btf, t->name_off),
+					btf__str_by_offset(d->btf, name), entries[i].var.offset);
+			if (!prev || name != entries[i].name) {
+				name = entries[i].name;
+				end = 0;
+			}
+			end = max(end, (__u64)entries[i].var.offset + entries[i].var.size);
+			vars[n++] = entries[i].var;
+			prev = &entries[i];
+		}
+		free(entries);
+		qsort(vars, n, sizeof(*vars), btf_dedup_secinfo_offset_cmp);
+		t->info = btf_type_info(BTF_KIND_DATASEC, n, btf_kflag(t));
+	}
 	return 0;
 }
 
