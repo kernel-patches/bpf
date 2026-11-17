@@ -16,6 +16,8 @@
 #include "mtk_ctrl_plane.h"
 #include "mtk_trans_ctrl.h"
 
+struct mtk_fsm_param;
+
 #define TXQ(N)					(N)
 #define RXQ(N)					(N)
 
@@ -101,6 +103,12 @@ struct txq {
 	u32 wr_idx;
 	u32 free_idx;
 	bool tx_started;
+	/* Set by err_work while it stops this queue, and left set if the
+	 * stop failed: the device may still be walking the ring, so new
+	 * requests are refused with -EPIPE and the ones already queued are
+	 * kept.  Read under ring_lock by the producer.
+	 */
+	bool is_stopping;
 };
 
 struct cldma_dev {
@@ -109,10 +117,12 @@ struct cldma_dev {
 };
 
 int mtk_cldma_init(struct mtk_ctrl_trans *trans);
+void mtk_cldma_quiesce(struct mtk_ctrl_trans *trans);
 void mtk_cldma_exit(struct mtk_ctrl_trans *trans);
 int mtk_cldma_submit_tx(void *dev, struct sk_buff *skb);
 int mtk_cldma_get_tx_budget(void *dev, enum mtk_hif_id hif_id, u32 qno);
 int mtk_cldma_trb_process(void *dev, struct sk_buff *skb);
+void mtk_cldma_fsm_state_listener(struct mtk_fsm_param *param, struct mtk_ctrl_trans *trans);
 int mtk_cldma_check_ch_cfg(void *dev, struct queue_info *que);
 
 #endif

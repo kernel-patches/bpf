@@ -189,7 +189,7 @@ static int mtk_port_tbl_create(struct mtk_port_mngr *port_mngr, const struct mtk
 	return 0;
 }
 
-static void mtk_port_tbl_destroy(struct mtk_port_mngr *port_mngr)
+static void mtk_port_disable(struct mtk_port_mngr *port_mngr)
 {
 	struct mtk_port *port;
 	unsigned long index;
@@ -199,7 +199,18 @@ static void mtk_port_tbl_destroy(struct mtk_port_mngr *port_mngr)
 	do {
 		xa_for_each(&port_mngr->port_tbl[tbl_type], index, port)
 			mtk_port_get_ops(port->info.type)->disable(port);
+	} while (++tbl_type < PORT_TBL_MAX);
+}
 
+static void mtk_port_tbl_destroy(struct mtk_port_mngr *port_mngr)
+{
+	struct mtk_port *port;
+	unsigned long index;
+	int tbl_type;
+
+	mtk_port_disable(port_mngr);
+	tbl_type = PORT_TBL_SAP;
+	do {
 		xa_for_each(&port_mngr->port_tbl[tbl_type], index, port)
 			mtk_port_free(port_mngr, port);
 	} while (++tbl_type < PORT_TBL_MAX);
@@ -599,6 +610,51 @@ int mtk_port_ch_disable(struct mtk_port *port)
 	kref_put(&trb->kref, mtk_port_trb_free);
 
 	return ret;
+}
+
+void mtk_port_mngr_fsm_state_handler(struct mtk_fsm_param *fsm_param, void *arg)
+{
+	struct mtk_port_mngr *port_mngr;
+
+	if (!fsm_param || !arg)
+		return;
+
+	port_mngr = arg;
+
+	switch (fsm_param->to) {
+	case FSM_STATE_OFF:
+		mtk_port_disable(port_mngr);
+		break;
+	default:
+		break;
+	}
+}
+
+void mtk_port_mngr_fsm_state_handler_late(struct mtk_fsm_param *fsm_param, void *arg)
+{
+	struct mtk_port_mngr *port_mngr;
+	struct mtk_port *port;
+
+	if (!fsm_param || !arg)
+		return;
+
+	port_mngr = arg;
+
+	switch (fsm_param->to) {
+	case FSM_STATE_BOOTUP:
+		if (fsm_param->fsm_flag & FSM_F_MD_HS_START) {
+			port = mtk_port_search_by_id(port_mngr, CCCI_CONTROL_RX);
+			if (port)
+				mtk_port_get_ops(port->info.type)->enable(port);
+		} else if (fsm_param->fsm_flag & FSM_F_SAP_HS_START) {
+			port = mtk_port_search_by_id(port_mngr, CCCI_SAP_CONTROL_RX);
+			if (port)
+				mtk_port_get_ops(port->info.type)->enable(port);
+		}
+		break;
+	default:
+		break;
+	}
 }
 
 int mtk_port_mngr_init(struct mtk_ctrl_blk *ctrl_blk, const struct mtk_port_cfg *port_cfg,
