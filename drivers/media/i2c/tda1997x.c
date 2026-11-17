@@ -1891,17 +1891,18 @@ static int tda1997x_set_edid(struct v4l2_subdev *sd, struct v4l2_edid *edid)
 
 	tda1997x_disable_edid(sd);
 
+	/* store state */
+	memset(state->edid.edid, 0, sizeof(state->edid.edid));
+	memcpy(state->edid.edid, edid->edid, edid->blocks * 128);
+	state->edid.blocks = edid->blocks;
+
 	/* write base EDID */
 	for (i = 0; i < 128; i++)
-		io_write(sd, REG_EDID_IN_BYTE0 + i, edid->edid[i]);
+		io_write(sd, REG_EDID_IN_BYTE0 + i, state->edid.edid[i]);
 
 	/* write CEA Extension */
 	for (i = 0; i < 128; i++)
-		io_write(sd, REG_EDID_IN_BYTE128 + i, edid->edid[i+128]);
-
-	/* store state */
-	memcpy(state->edid.edid, edid->edid, 256);
-	state->edid.blocks = edid->blocks;
+		io_write(sd, REG_EDID_IN_BYTE128 + i, state->edid.edid[i + 128]);
 
 	tda1997x_enable_edid(sd);
 
