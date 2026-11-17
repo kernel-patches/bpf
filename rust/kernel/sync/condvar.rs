@@ -5,21 +5,29 @@
 //! This module allows Rust code to use the kernel's [`struct wait_queue_head`] as a condition
 //! variable.
 
-use super::{lock::Backend, lock::Guard, LockClassKey};
+use super::{
+    lock::Backend,
+    lock::Guard,
+    LockClassKey,
+    WaitQueue, //
+};
+
 use crate::{
-    ffi::{c_int, c_long},
-    str::{CStr, CStrExt as _},
+    prelude::*,
+    str::CStr,
     task::{
-        MAX_SCHEDULE_TIMEOUT, TASK_FREEZABLE, TASK_INTERRUPTIBLE, TASK_NORMAL, TASK_UNINTERRUPTIBLE,
+        MAX_SCHEDULE_TIMEOUT,
+        TASK_FREEZABLE,
+        TASK_INTERRUPTIBLE,
+        TASK_UNINTERRUPTIBLE, //
     },
     time::{
         Delta,
         Jiffy, //
     },
-    types::Opaque,
 };
-use core::{marker::PhantomPinned, pin::Pin, ptr};
-use pin_init::{pin_data, pin_init, PinInit};
+
+use core::pin::Pin;
 
 /// Creates a [`CondVar`] initialiser with the given name and a newly-created lock class.
 #[macro_export]
@@ -84,33 +92,14 @@ pub use new_condvar;
 #[pin_data]
 pub struct CondVar {
     #[pin]
-    pub(crate) wait_queue_head: Opaque<bindings::wait_queue_head>,
-
-    /// A condvar needs to be pinned because it contains a [`struct list_head`] that is
-    /// self-referential, so it cannot be safely moved once it is initialised.
-    ///
-    /// [`struct list_head`]: srctree/include/linux/types.h
-    #[pin]
-    _pin: PhantomPinned,
+    pub(crate) wq: WaitQueue,
 }
-
-// SAFETY: `CondVar` only uses a `struct wait_queue_head`, which is safe to use on any thread.
-unsafe impl Send for CondVar {}
-
-// SAFETY: `CondVar` only uses a `struct wait_queue_head`, which is safe to use on multiple threads
-// concurrently.
-unsafe impl Sync for CondVar {}
 
 impl CondVar {
     /// Constructs a new condvar initialiser.
     pub fn new(name: &'static CStr, key: Pin<&'static LockClassKey>) -> impl PinInit<Self> {
         pin_init!(Self {
-            _pin: PhantomPinned,
-            // SAFETY: `slot` is valid while the closure is called and both `name` and `key` have
-            // static lifetimes so they live indefinitely.
-            wait_queue_head <- Opaque::ffi_init(|slot| unsafe {
-                bindings::__init_waitqueue_head(slot, name.as_char_ptr(), key.as_ptr())
-            }),
+            wq <- WaitQueue::new(name, key),
         })
     }
 
@@ -120,23 +109,10 @@ impl CondVar {
         guard: &mut Guard<'_, T, B>,
         timeout_in_jiffies: c_long,
     ) -> c_long {
-        let wait = Opaque::<bindings::wait_queue_entry>::uninit();
-
-        // SAFETY: `wait` points to valid memory.
-        unsafe { bindings::init_wait(wait.get()) };
-
-        // SAFETY: Both `wait` and `wait_queue_head` point to valid memory.
-        unsafe {
-            bindings::prepare_to_wait_exclusive(self.wait_queue_head.get(), wait.get(), wait_state)
-        };
-
-        // SAFETY: Switches to another thread. The timeout can be any number.
-        let ret = guard.do_unlocked(|| unsafe { bindings::schedule_timeout(timeout_in_jiffies) });
-
-        // SAFETY: Both `wait` and `wait_queue_head` point to valid memory.
-        unsafe { bindings::finish_wait(self.wait_queue_head.get(), wait.get()) };
-
-        ret
+        self.wq.wait_once_exclusive(wait_state, || {
+            // SAFETY: Switches to another thread. The timeout can be any number.
+            guard.do_unlocked(|| unsafe { bindings::schedule_timeout(timeout_in_jiffies) })
+        })
     }
 
     /// Releases the lock and waits for a notification in uninterruptible mode.
@@ -211,28 +187,13 @@ impl CondVar {
         }
     }
 
-    /// Calls the kernel function to notify the appropriate number of threads.
-    fn notify(&self, count: c_int) {
-        // SAFETY: `wait_queue_head` points to valid memory.
-        unsafe {
-            bindings::__wake_up(
-                self.wait_queue_head.get(),
-                TASK_NORMAL,
-                count,
-                ptr::null_mut(),
-            )
-        };
-    }
-
     /// Calls the kernel function to notify one thread synchronously.
     ///
     /// This method behaves like `notify_one`, except that it hints to the scheduler that the
-    /// current thread is about to go to sleep, so it should schedule the target thread on the same
-    /// CPU.
+    /// current thread expects to sleep soon.
     #[inline]
     pub fn notify_sync(&self) {
-        // SAFETY: `wait_queue_head` points to valid memory.
-        unsafe { bindings::__wake_up_sync(self.wait_queue_head.get(), TASK_NORMAL) };
+        self.wq.wake_up_sync();
     }
 
     /// Wakes a single waiter up, if any.
@@ -241,7 +202,7 @@ impl CondVar {
     /// completely (as opposed to automatically waking up the next waiter).
     #[inline]
     pub fn notify_one(&self) {
-        self.notify(1);
+        self.wq.wake_up();
     }
 
     /// Wakes all waiters up, if any.
@@ -250,7 +211,7 @@ impl CondVar {
     /// completely (as opposed to automatically waking up the next waiter).
     #[inline]
     pub fn notify_all(&self) {
-        self.notify(0);
+        self.wq.wake_up_all();
     }
 }
 
