@@ -1917,6 +1917,136 @@ out:
 	return err;
 }
 
+static const char *func_name(const struct btf *btf, u32 id)
+{
+	return btf__name_by_offset(btf, btf__type_by_id(btf, id)->name_off);
+}
+
+static int cmp_essential_names(const void *a, const void *b, void *priv)
+{
+	const char *na = func_name(priv, *(u32 *)a);
+	const char *nb = func_name(priv, *(u32 *)b);
+	size_t la = btf_essential_name_len(na);
+	size_t lb = btf_essential_name_len(nb);
+	int r = strncmp(na, nb, min(la, lb));
+
+	if (r != 0)
+		return r;
+	if (la == lb)
+		return 0;
+	return la < lb ? -1 : 1;
+}
+
+/*
+ * Returns 1 if libbpf can't tell kfuncs a and b of one family apart, 0 if it
+ * can, or a negative error.
+ */
+static int kfuncs_are_ambiguous(const struct btf *btf, u32 a, u32 b, u32 unsuffixed_proto)
+{
+	const char *na = func_name(btf, a), *nb = func_name(btf, b);
+	u32 pa = btf__type_by_id(btf, a)->type;
+	u32 pb = btf__type_by_id(btf, b)->type;
+	int ret;
+
+	if (pa == pb && pa == unsuffixed_proto) {
+		pr_debug("kfuncs %s and %s: alias\n", na, nb);
+		return 0;
+	}
+	ret = btf_types_are_compat(btf, pa, btf, pb);
+	if (ret < 0) {
+		pr_err("ERROR: resolve_btfids: failed to compare kfuncs %s and %s: %d\n",
+		       na, nb, ret);
+		return ret;
+	}
+	if (ret == 0)
+		pr_debug("kfuncs %s and %s: distinct\n", na, nb);
+	return ret;
+}
+
+static int check_kfunc_family(const struct btf *btf, const u32 *ids, u32 cnt, u32 start_id)
+{
+	size_t len = btf_essential_name_len(func_name(btf, ids[0]));
+	u32 unsuffixed_proto = 0;
+	int err, bad = 0;
+
+	for (u32 i = 0; i < cnt; i++) {
+		const char *name = func_name(btf, ids[i]);
+
+		if (name[len] == '\0')
+			unsuffixed_proto = btf__type_by_id(btf, ids[i])->type;
+	}
+
+	for (u32 i = 0; i < cnt; i++) {
+		for (u32 j = i + 1; j < cnt; j++) {
+			/* base BTF pairs were checked when building vmlinux */
+			if (ids[i] < start_id && ids[j] < start_id)
+				continue;
+			err = kfuncs_are_ambiguous(btf, ids[i], ids[j], unsuffixed_proto);
+			if (err < 0)
+				return err;
+			if (err == 0)
+				continue;
+			pr_err("ERROR: resolve_btfids: kfuncs %s and %s have compatible prototypes, libbpf cannot tell them apart\n",
+			       func_name(btf, ids[i]), func_name(btf, ids[j]));
+			bad++;
+		}
+	}
+
+	return bad ? -EINVAL : 0;
+}
+
+/*
+ * Fail if libbpf can't tell apart two kfuncs sharing an essential name, i.e.
+ * if bpf_core_types_are_compat() finds their prototypes compatible. An alias
+ * of the unsuffixed kfunc, which has its type id after dedup, is allowed:
+ * libbpf binds the unsuffixed kfunc first.
+ *
+ * Kfuncs are recognized by their bpf_kfunc decl tags: these are what libbpf
+ * looks at, and for a module they also cover the vmlinux kfuncs in base BTF.
+ */
+static int check_kfunc_families(struct btf *btf)
+{
+	const struct btf *base = btf__base_btf(btf);
+	u32 start_id = base ? btf__type_cnt(base) : 1;
+	u32 type_cnt = btf__type_cnt(btf);
+	u32 *ids = NULL, nr_ids = 0, cap = 0;
+	int ret, err = 0;
+
+	for (u32 id = 1; id < type_cnt; id++) {
+		const struct btf_type *t = btf__type_by_id(btf, id);
+		const char *tag_name;
+
+		if (!btf_is_decl_tag(t))
+			continue;
+		if (btf_decl_tag(t)->component_idx != -1)
+			continue;
+		tag_name = btf__name_by_offset(btf, t->name_off);
+		if (strcmp(tag_name, DECL_TAG_KFUNC) != 0)
+			continue;
+		err = ensure_mem(&ids, &cap, nr_ids + 1);
+		if (err)
+			goto out;
+		ids[nr_ids++] = t->type;
+	}
+
+	qsort_r(ids, nr_ids, sizeof(*ids), cmp_essential_names, btf);
+
+	for (u32 i = 0, j; i < nr_ids; i = j) {
+		for (j = i + 1; j < nr_ids; j++) {
+			if (cmp_essential_names(&ids[i], &ids[j], btf) != 0)
+				break;
+		}
+		if (j - i < 2)
+			continue;
+		ret = check_kfunc_family(btf, ids + i, j - i, start_id);
+		if (ret)
+			err = ret;
+	}
+out:
+	free(ids);
+	return err;
+}
+
 static int finalize_btf(struct object *obj)
 {
 	struct btf *base_btf = obj->base_btf, *btf = obj->btf;
@@ -1927,6 +2057,10 @@ static int finalize_btf(struct object *obj)
 		pr_err("FAILED to dedup BTF: %s\n", strerror(errno));
 		return err;
 	}
+
+	err = check_kfunc_families(obj->btf);
+	if (err)
+		return err;
 
 	if (obj->base_btf && obj->distill_base) {
 		err = btf__distill_base(obj->btf, &base_btf, &btf);

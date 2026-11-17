@@ -13,6 +13,17 @@ void btf_sha256(const void *data, size_t len,
 	libbpf_sha256(data, len, out);
 }
 
+size_t btf_essential_name_len(const char *name)
+{
+	return bpf_core_essential_name_len(name);
+}
+
+int btf_types_are_compat(const struct btf *btf1, __u32 id1,
+			 const struct btf *btf2, __u32 id2)
+{
+	return bpf_core_types_are_compat(btf1, id1, btf2, id2);
+}
+
 /*
  * Marks `root_id` and local types reachable from it with `color`.
  * `colors` is indexed by source ID; worklist has room for every local type.
