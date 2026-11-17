@@ -3160,8 +3160,13 @@ void btrfs_check_active_zone_reservation(struct btrfs_fs_info *fs_info)
 			continue;
 
 		for (int i = 0; i < map->num_stripes; i++) {
-			struct btrfs_zoned_device_info *zinfo = map->stripes[i].dev->zone_info;
+			struct btrfs_device *device = map->stripes[i].dev;
+			struct btrfs_zoned_device_info *zinfo = device->zone_info;
 			u64 physical = map->stripes[i].physical;
+
+			/* A missing device has no zone_info. */
+			if (!device->bdev)
+				continue;
 
 			if (!test_bit(physical >> zinfo->zone_size_shift, zinfo->active_zones))
 				continue;
