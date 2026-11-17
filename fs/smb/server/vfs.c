@@ -1829,7 +1829,8 @@ int ksmbd_vfs_get_sd_xattr(struct ksmbd_conn *conn,
 	sha256(acl_ndr.data, acl_ndr.offset, cmp_hash);
 
 	if (memcmp(cmp_hash, acl.posix_acl_hash, XATTR_SD_HASH_SIZE)) {
-		pr_err("hash value diff\n");
+		ksmbd_debug(SMB, "stored SD of %pd is stale, not used\n",
+			    dentry);
 		rc = -EINVAL;
 		goto out_free;
 	}
