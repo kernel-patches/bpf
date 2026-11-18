@@ -204,7 +204,8 @@ static void kernfs_init_inode(struct kernfs_node *kn, struct inode *inode)
 	inode->i_generation = kernfs_gen(kn);
 
 	set_default_inode_attr(inode, kn->mode);
-	kernfs_refresh_inode(kn, inode);
+	scoped_guard(rwsem_read, &kernfs_root(kn)->kernfs_iattr_rwsem)
+		kernfs_refresh_inode(kn, inode);
 
 	/* initialize inode according to type */
 	switch (kernfs_type(kn)) {
@@ -267,6 +268,9 @@ static int kernfs_inode_test(struct inode *inode, void *data)
  * The caller holds kernfs_rwsem for reading, so @kn cannot be removed
  * while the inode is inserted and __kernfs_remove() always finds it to
  * clear its i_nlink.  @inode is consumed.
+ *
+ * The caller allocates @inode before taking kernfs_rwsem, because the
+ * allocation can block in reclaim and hold up other users of the lock.
  *
  * Returns the inode now attached to @kn, which is @inode unless one was
  * already hashed for it (e.g. by a file handle decode), or NULL if @kn

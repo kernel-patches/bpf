@@ -1251,8 +1251,11 @@ static struct dentry *kernfs_iop_lookup(struct inode *dir,
 	struct kernfs_node *parent = dir->i_private;
 	struct kernfs_node *kn;
 	struct kernfs_root *root;
-	struct inode *inode = NULL;
+	struct inode *inode = NULL, *new;
 	const struct ns_common *ns = NULL;
+
+	/* allocate outside kernfs_rwsem, see kernfs_get_inode_locked() */
+	new = new_inode(dir->i_sb);
 
 	root = kernfs_root(parent);
 	down_read(&root->kernfs_rwsem);
@@ -1267,9 +1270,13 @@ static struct dentry *kernfs_iop_lookup(struct inode *dir,
 		 */
 		if (!kernfs_active(kn)) {
 			up_read(&root->kernfs_rwsem);
+			iput(new);
 			return NULL;
 		}
-		inode = kernfs_get_inode(dir->i_sb, kn);
+		if (new) {
+			inode = kernfs_get_inode_locked(new, kn);
+			new = NULL;
+		}
 		if (!inode)
 			inode = ERR_PTR(-ENOMEM);
 	}
@@ -1282,6 +1289,7 @@ static struct dentry *kernfs_iop_lookup(struct inode *dir,
 	if (!IS_ERR(inode))
 		kernfs_set_rev(parent, dentry);
 	up_read(&root->kernfs_rwsem);
+	iput(new);
 
 	/* instantiate and hash (possibly negative) dentry */
 	return d_splice_alias(inode, dentry);
@@ -1300,7 +1308,7 @@ static struct dentry *kernfs_iop_mkdir(const struct mnt_idmap *idmap,
 	int ret;
 
 	if (!scops || !scops->mkdir)
-		return ERR_PTR(-EPERM);
+		return ERR_PTR(-EOPNOTSUPP);
 
 	/* allocated up front so that we never fail after creating the node */
 	inode = new_inode(dir->i_sb);
