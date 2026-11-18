@@ -127,6 +127,8 @@ static int xe_file_open(struct drm_device *dev, struct drm_file *file)
 		put_task_struct(task);
 	}
 
+	xe_debugfs_client_add(file);
+
 	return 0;
 }
 
