@@ -447,6 +447,8 @@ struct intel_excl_cntrs {
 struct x86_perf_task_context;
 #define MAX_LBR_ENTRIES		32
 
+#define LBR_STACK_SIZE		struct_size_t(struct perf_branch_stack, entries, MAX_LBR_ENTRIES)
+
 enum {
 	LBR_FORMAT_32		= 0x00,
 	LBR_FORMAT_LIP		= 0x01,
@@ -525,8 +527,7 @@ struct cpu_hw_events {
 	 */
 	int				lbr_users;
 	int				lbr_pebs_users;
-	struct perf_branch_stack	lbr_stack;
-	struct perf_branch_entry	lbr_entries[MAX_LBR_ENTRIES];
+	u64				__lbr_stack[LBR_STACK_SIZE / sizeof(u64)];
 	u64				lbr_counters[MAX_LBR_ENTRIES]; /* branch stack extra */
 	union {
 		struct er_account		*lbr_sel;
@@ -587,6 +588,20 @@ struct cpu_hw_events {
 
 	struct pmu			*pmu;
 };
+
+static __always_inline struct perf_branch_stack *cpu_lbr_stack(struct cpu_hw_events *cpuc)
+{
+	return (struct perf_branch_stack *)cpuc->__lbr_stack;
+}
+
+static __always_inline void cpu_init_lbr_stack(struct cpu_hw_events *cpuc, int nr)
+{
+	/*
+	 * Initialize the branch-stack count before populating entries[]
+	 * to avoid UBSAN complaints from the __counted_by(nr) flexible array.
+	 */
+	cpu_lbr_stack(cpuc)->nr = nr;
+}
 
 #define __EVENT_CONSTRAINT_RANGE(c, e, n, m, w, o, f) {	\
 	{ .idxmsk64 = (n) },		\

@@ -2827,9 +2827,10 @@ __intel_pmu_snapshot_branch_stack(struct perf_branch_entry *entries,
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 
 	intel_pmu_lbr_read();
-	cnt = min_t(unsigned int, cnt, cpuc->lbr_stack.nr);
+	cnt = min_t(unsigned int, cnt, cpu_lbr_stack(cpuc)->nr);
 
-	memcpy(entries, cpuc->lbr_entries, sizeof(struct perf_branch_entry) * cnt);
+	memcpy(entries, cpu_lbr_stack(cpuc)->entries,
+	       sizeof(struct perf_branch_entry) * cnt);
 
 	/*
 	 * This path may be entered from the PMI handler through

@@ -763,6 +763,11 @@ void brbe_read_filtered_entries(struct perf_branch_stack *branch_stack,
 
 	prepare_event_branch_type_mask(branch_sample_type, event_type_mask);
 
+	/*
+	 * Initialize the branch_stack->nr before populating entries[]
+	 * to avoid UBSAN complaints from the __counted_by(nr) flexible array.
+	 */
+	branch_stack->nr = nr_hw;
 	for (int bank = 0; bank < nr_banks; bank++) {
 		int nr_remaining = nr_hw - (bank * BRBE_BANK_MAX_ENTRIES);
 		int nr_this_bank = min(nr_remaining, BRBE_BANK_MAX_ENTRIES);

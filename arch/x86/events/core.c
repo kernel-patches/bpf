@@ -2197,7 +2197,7 @@ int x86_pmu_handle_irq(struct pt_regs *regs)
 
 		perf_sample_data_init(&data, 0, last_period);
 
-		perf_sample_save_brstack(&data, event, &cpuc->lbr_stack, NULL);
+		perf_sample_save_brstack(&data, event, cpu_lbr_stack(cpuc), NULL);
 
 		perf_event_overflow(event, &data, regs);
 	}

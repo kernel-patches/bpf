@@ -2010,8 +2010,7 @@ void intel_pmu_pebs_disable_all(void)
 static int intel_pmu_pebs_fixup_ip(struct pt_regs *regs)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
-	unsigned long from = cpuc->lbr_entries[0].from;
-	unsigned long old_to, to = cpuc->lbr_entries[0].to;
+	unsigned long from, old_to, to;
 	unsigned long ip = regs->ip;
 	int is_64bit = 0;
 	void *kaddr;
@@ -2026,7 +2025,12 @@ static int intel_pmu_pebs_fixup_ip(struct pt_regs *regs)
 	/*
 	 * No LBR entry, no basic block, no rewinding
 	 */
-	if (!cpuc->lbr_stack.nr || !from || !to)
+	if (!cpu_lbr_stack(cpuc)->nr)
+		return 0;
+
+	from = cpu_lbr_stack(cpuc)->entries[0].from;
+	to = cpu_lbr_stack(cpuc)->entries[0].to;
+	if (!from || !to)
 		return 0;
 
 	/*
@@ -2318,7 +2322,7 @@ static void setup_pebs_fixed_sample_data(struct perf_event *event,
 	if (x86_pmu.intel_cap.pebs_format >= 3)
 		setup_pebs_time(event, data, pebs->tsc);
 
-	perf_sample_save_brstack(data, event, &cpuc->lbr_stack, NULL);
+	perf_sample_save_brstack(data, event, cpu_lbr_stack(cpuc), NULL);
 }
 
 static void adaptive_pebs_save_regs(struct pt_regs *regs,

@@ -282,7 +282,6 @@ void amd_brs_drain(void)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 	struct perf_event *event = cpuc->events[0];
-	struct perf_branch_entry *br = cpuc->lbr_entries;
 	union amd_debug_extn_cfg cfg;
 	u32 i, nr = 0, num, tos, start;
 	u32 shift = 64 - boot_cpu_data.x86_virt_bits;
@@ -317,6 +316,8 @@ void amd_brs_drain(void)
 
 	num = tos - start + 1;
 
+	cpu_init_lbr_stack(cpuc, num);
+
 	/*
 	 * BRS is only one pass (saturation) from MSROFF to depth-1
 	 * MSROFF wraps to zero when buffer is full
@@ -343,7 +344,7 @@ void amd_brs_drain(void)
 		if (!amd_brs_match_plm(event, from, to))
 			continue;
 
-		br[nr] = (struct perf_branch_entry){
+		cpu_lbr_stack(cpuc)->entries[nr] = (struct perf_branch_entry){
 			.from	= from,
 			.to	= to,
 		};
@@ -351,7 +352,7 @@ void amd_brs_drain(void)
 	}
 empty:
 	/* Record number of sampled branches */
-	cpuc->lbr_stack.nr = nr;
+	cpu_lbr_stack(cpuc)->nr = nr;
 }
 
 /*

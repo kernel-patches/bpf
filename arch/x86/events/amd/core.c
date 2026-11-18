@@ -928,7 +928,8 @@ static int amd_pmu_handle_irq(struct pt_regs *regs)
  * details. It's up to caller to provide enough space in *entries* to fit all
  * LBR records, otherwise returned result will be truncated to *cnt* entries.
  */
-static int amd_pmu_v2_snapshot_branch_stack(struct perf_branch_entry *entries, unsigned int cnt)
+static int amd_pmu_v2_snapshot_branch_stack(struct perf_branch_entry *entries,
+					    unsigned int cnt)
 {
 	struct cpu_hw_events *cpuc;
 	unsigned long flags;
@@ -948,8 +949,9 @@ static int amd_pmu_v2_snapshot_branch_stack(struct perf_branch_entry *entries, u
 	__amd_pmu_lbr_disable();
 
 	amd_pmu_lbr_read();
-	cnt = min(cnt, cpuc->lbr_stack.nr);
-	memcpy(entries, cpuc->lbr_entries, sizeof(struct perf_branch_entry) * cnt);
+	cnt = min(cnt, cpu_lbr_stack(cpuc)->nr);
+	memcpy(entries, cpu_lbr_stack(cpuc)->entries,
+	       sizeof(struct perf_branch_entry) * cnt);
 
 	if (pmu_enabled) {
 		cpuc->enabled = 1;
@@ -1023,7 +1025,7 @@ static int amd_pmu_v2_handle_irq(struct pt_regs *regs)
 		if (!x86_perf_event_set_period(event))
 			continue;
 
-		perf_sample_save_brstack(&data, event, &cpuc->lbr_stack, NULL);
+		perf_sample_save_brstack(&data, event, cpu_lbr_stack(cpuc), NULL);
 
 		perf_event_overflow(event, &data, regs);
 	}

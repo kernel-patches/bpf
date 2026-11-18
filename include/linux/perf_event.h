@@ -115,7 +115,7 @@ static __always_inline bool perf_raw_frag_last(const struct perf_raw_frag *frag)
 struct perf_branch_stack {
 	u64				nr;
 	u64				hw_idx;
-	struct perf_branch_entry	entries[];
+	struct perf_branch_entry	entries[] __counted_by(nr);
 };
 
 struct task_struct;

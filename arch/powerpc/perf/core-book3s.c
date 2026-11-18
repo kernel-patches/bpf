@@ -30,6 +30,8 @@
 #define BHRB_PREDICTION		0x0000000000000001
 #define BHRB_EA			0xFFFFFFFFFFFFFFFCUL
 
+#define BHRB_STACK_SIZE		struct_size_t(struct perf_branch_stack, entries, BHRB_MAX_ENTRIES)
+
 struct cpu_hw_events {
 	int n_events;
 	int n_percpu;
@@ -54,8 +56,7 @@ struct cpu_hw_events {
 	u64				bhrb_filter;	/* BHRB HW branch filter */
 	unsigned int			bhrb_users;
 	void				*bhrb_context;
-	struct	perf_branch_stack	bhrb_stack;
-	struct	perf_branch_entry	bhrb_entries[BHRB_MAX_ENTRIES];
+	u64				__bhrb_stack[BHRB_STACK_SIZE / sizeof(u64)];
 	u64				ic_init;
 
 	/* Store the PMC values */
@@ -175,6 +176,20 @@ static bool regs_use_siar(struct pt_regs *regs)
 	 * is something random.
 	 */
 	return ((TRAP(regs) == INTERRUPT_PERFMON) && regs->result);
+}
+
+static __always_inline struct perf_branch_stack *cpu_bhrb_stack(struct cpu_hw_events *cpuc)
+{
+	return (struct perf_branch_stack *)cpuc->__bhrb_stack;
+}
+
+static __always_inline void cpu_init_bhrb_stack(struct cpu_hw_events *cpuc, int nr)
+{
+	/*
+	 * Initialize the branch-stack count before populating entries[]
+	 * to avoid UBSAN complaints from the __counted_by(nr) flexible array.
+	 */
+	cpu_bhrb_stack(cpuc)->nr = nr;
 }
 
 /*
@@ -487,12 +502,15 @@ static __u64 power_pmu_bhrb_to(u64 addr)
 /* Processing BHRB entries */
 static void power_pmu_bhrb_read(struct perf_event *event, struct cpu_hw_events *cpuhw)
 {
+	struct perf_branch_stack *bhrb = cpu_bhrb_stack(cpuhw);
+	int r_index, u_index, pred;
 	u64 val;
 	u64 addr;
-	int r_index, u_index, pred;
 
 	r_index = 0;
 	u_index = 0;
+
+	cpu_init_bhrb_stack(cpuhw, ppmu->bhrb_nr);
 	while (r_index < ppmu->bhrb_nr) {
 		/* Assembly read function */
 		val = read_bhrb(r_index++);
@@ -541,9 +559,9 @@ static void power_pmu_bhrb_read(struct perf_event *event, struct cpu_hw_events *
 				/* Target branches use two entries
 				 * (ie. computed gotos/XL form)
 				 */
-				cpuhw->bhrb_entries[u_index].to = addr;
-				cpuhw->bhrb_entries[u_index].mispred = pred;
-				cpuhw->bhrb_entries[u_index].predicted = ~pred;
+				bhrb->entries[u_index].to = addr;
+				bhrb->entries[u_index].mispred = pred;
+				bhrb->entries[u_index].predicted = ~pred;
 
 				/* Get from address in next entry */
 				val = read_bhrb(r_index++);
@@ -554,22 +572,21 @@ static void power_pmu_bhrb_read(struct perf_event *event, struct cpu_hw_events *
 					r_index--;
 					addr = 0;
 				}
-				cpuhw->bhrb_entries[u_index].from = addr;
+				bhrb->entries[u_index].from = addr;
 			} else {
 				/* Branches to immediate field 
 				   (ie I or B form) */
-				cpuhw->bhrb_entries[u_index].from = addr;
-				cpuhw->bhrb_entries[u_index].to =
-					power_pmu_bhrb_to(addr);
-				cpuhw->bhrb_entries[u_index].mispred = pred;
-				cpuhw->bhrb_entries[u_index].predicted = ~pred;
+				bhrb->entries[u_index].from = addr;
+				bhrb->entries[u_index].to = power_pmu_bhrb_to(addr);
+				bhrb->entries[u_index].mispred = pred;
+				bhrb->entries[u_index].predicted = ~pred;
 			}
 			u_index++;
 
 		}
 	}
-	cpuhw->bhrb_stack.nr = u_index;
-	cpuhw->bhrb_stack.hw_idx = -1ULL;
+	bhrb->nr = u_index;
+	bhrb->hw_idx = -1ULL;
 	return;
 }
 
@@ -2332,7 +2349,7 @@ static void record_and_restart(struct perf_event *event, unsigned long val,
 			struct cpu_hw_events *cpuhw;
 			cpuhw = this_cpu_ptr(&cpu_hw_events);
 			power_pmu_bhrb_read(event, cpuhw);
-			perf_sample_save_brstack(&data, event, &cpuhw->bhrb_stack, NULL);
+			perf_sample_save_brstack(&data, event, cpu_bhrb_stack(cpuhw), NULL);
 		}
 
 		if (event->attr.sample_type & PERF_SAMPLE_DATA_SRC &&

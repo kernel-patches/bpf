@@ -104,15 +104,18 @@ static void amd_pmu_lbr_filter(void)
 	bool compress = false;
 	bool fused_only = false;
 	u64 from, to;
+	int lbr_nr;
 
 	/* If sampling all branches, there is nothing to filter */
 	if (((br_sel & X86_BR_ALL) == X86_BR_ALL) &&
 	    ((br_sel & X86_BR_TYPE_SAVE) != X86_BR_TYPE_SAVE))
 		fused_only = true;
 
-	for (i = 0; i < cpuc->lbr_stack.nr; i++) {
-		from = cpuc->lbr_entries[i].from;
-		to = cpuc->lbr_entries[i].to;
+	for (i = 0; i < cpu_lbr_stack(cpuc)->nr; i++) {
+		struct perf_branch_entry *be = &cpu_lbr_stack(cpuc)->entries[i];
+
+		from = be->from;
+		to = be->to;
 		type = branch_type_fused(from, to, 0, &offset);
 
 		/*
@@ -121,37 +124,41 @@ static void amd_pmu_lbr_filter(void)
 		 * actual branch
 		 */
 		if (offset) {
-			cpuc->lbr_entries[i].from += offset;
+			be->from += offset;
 			if (fused_only)
 				continue;
 		}
 
 		/* If type does not correspond, then discard */
 		if (type == X86_BR_NONE || (br_sel & type) != type ||
-		    (!(br_sel & X86_BR_KERNEL) && kernel_ip(cpuc->lbr_entries[i].from))) {
-			cpuc->lbr_entries[i].from = 0;	/* mark invalid */
+		    (!(br_sel & X86_BR_KERNEL) && kernel_ip(be->from))) {
+			be->from = 0;	/* mark invalid */
 			compress = true;
 		}
 
 		if ((br_sel & X86_BR_TYPE_SAVE) == X86_BR_TYPE_SAVE)
-			cpuc->lbr_entries[i].type = common_branch_type(type);
+			be->type = common_branch_type(type);
 	}
 
 	if (!compress)
 		return;
 
 	/* Remove all invalid entries */
-	for (i = 0; i < cpuc->lbr_stack.nr; ) {
-		if (!cpuc->lbr_entries[i].from) {
+	lbr_nr = cpu_lbr_stack(cpuc)->nr;
+	for (i = 0; i < lbr_nr; ) {
+		if (!cpu_lbr_stack(cpuc)->entries[i].from) {
 			j = i;
-			while (++j < cpuc->lbr_stack.nr)
-				cpuc->lbr_entries[j - 1] = cpuc->lbr_entries[j];
-			cpuc->lbr_stack.nr--;
-			if (!cpuc->lbr_entries[i].from)
+			while (++j < lbr_nr) {
+				cpu_lbr_stack(cpuc)->entries[j - 1] =
+					cpu_lbr_stack(cpuc)->entries[j];
+			}
+			lbr_nr--;
+			if (!cpu_lbr_stack(cpuc)->entries[i].from)
 				continue;
 		}
 		i++;
 	}
+	cpu_lbr_stack(cpuc)->nr = lbr_nr;
 }
 
 static const int lbr_spec_map[PERF_BR_SPEC_MAX] = {
@@ -164,14 +171,15 @@ static const int lbr_spec_map[PERF_BR_SPEC_MAX] = {
 void amd_pmu_lbr_read(void)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
-	struct perf_branch_entry *br = cpuc->lbr_entries;
 	struct branch_entry entry;
 	int out = 0, idx, i;
 
 	if (!cpuc->lbr_users) {
-		cpuc->lbr_stack.nr = 0;
+		cpu_lbr_stack(cpuc)->nr = 0;
 		return;
 	}
+
+	cpu_init_lbr_stack(cpuc, x86_pmu.lbr_nr);
 
 	for (i = 0; i < x86_pmu.lbr_nr; i++) {
 		entry.from.full	= amd_pmu_lbr_get_from(i);
@@ -204,7 +212,7 @@ void amd_pmu_lbr_read(void)
 		 */
 		idx = (entry.to.split.valid << 1) | entry.to.split.spec;
 
-		br[out] = (struct perf_branch_entry){
+		cpu_lbr_stack(cpuc)->entries[out] = (struct perf_branch_entry){
 			.from		= sign_ext_branch_ip(entry.from.split.ip),
 			.to		= sign_ext_branch_ip(entry.to.split.ip),
 			.mispred	= entry.from.split.mispredict,
@@ -214,13 +222,13 @@ void amd_pmu_lbr_read(void)
 		out++;
 	}
 
-	cpuc->lbr_stack.nr = out;
+	cpu_lbr_stack(cpuc)->nr = out;
 
 	/*
 	 * Internal register renaming always ensures that LBR From[0] and
 	 * LBR To[0] always represent the TOS
 	 */
-	cpuc->lbr_stack.hw_idx = 0;
+	cpu_lbr_stack(cpuc)->hw_idx = 0;
 
 	/* Perform further software filtering */
 	amd_pmu_lbr_filter();

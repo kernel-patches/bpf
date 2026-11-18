@@ -200,7 +200,7 @@ void intel_pmu_lbr_reset(void)
 
 	x86_pmu.lbr_reset();
 
-	cpuc->lbr_stack.nr = 0;
+	cpu_lbr_stack(cpuc)->nr = 0;
 	cpuc->last_task_ctx = NULL;
 	cpuc->last_log_id = 0;
 	if (!cpu_feature_enabled(X86_FEATURE_ARCH_LBR) && cpuc->lbr_select)
@@ -743,10 +743,10 @@ void intel_pmu_lbr_disable_all(void)
 void intel_pmu_lbr_read_32(struct cpu_hw_events *cpuc)
 {
 	unsigned long mask = x86_pmu.lbr_nr - 1;
-	struct perf_branch_entry *br = cpuc->lbr_entries;
 	u64 tos = intel_pmu_lbr_tos();
 	int i;
 
+	cpu_init_lbr_stack(cpuc, x86_pmu.lbr_nr);
 	for (i = 0; i < x86_pmu.lbr_nr; i++) {
 		unsigned long lbr_idx = (tos - i) & mask;
 		union {
@@ -759,14 +759,13 @@ void intel_pmu_lbr_read_32(struct cpu_hw_events *cpuc)
 
 		rdmsrq(x86_pmu.lbr_from + lbr_idx, msr_lastbranch.lbr);
 
-		*br = (struct perf_branch_entry){
+		cpu_lbr_stack(cpuc)->entries[i] = (struct perf_branch_entry){
 			.from	= msr_lastbranch.from,
 			.to	= msr_lastbranch.to,
 		};
-		br++;
 	}
-	cpuc->lbr_stack.nr = i;
-	cpuc->lbr_stack.hw_idx = tos;
+	cpu_lbr_stack(cpuc)->nr = i;
+	cpu_lbr_stack(cpuc)->hw_idx = tos;
 }
 
 /*
@@ -778,7 +777,6 @@ void intel_pmu_lbr_read_64(struct cpu_hw_events *cpuc)
 {
 	bool need_info = false, call_stack = false;
 	unsigned long mask = x86_pmu.lbr_nr - 1;
-	struct perf_branch_entry *br = cpuc->lbr_entries;
 	u64 tos = intel_pmu_lbr_tos();
 	int i;
 	int out = 0;
@@ -790,6 +788,7 @@ void intel_pmu_lbr_read_64(struct cpu_hw_events *cpuc)
 			call_stack = true;
 	}
 
+	cpu_init_lbr_stack(cpuc, num);
 	for (i = 0; i < num; i++) {
 		unsigned long lbr_idx = (tos - i) & mask;
 		u64 from, to, mis = 0, pred = 0, in_tx = 0, abort = 0;
@@ -850,7 +849,7 @@ void intel_pmu_lbr_read_64(struct cpu_hw_events *cpuc)
 		if (abort && x86_pmu.lbr_double_abort && out > 0)
 			out--;
 
-		br[out] = (struct perf_branch_entry){
+		cpu_lbr_stack(cpuc)->entries[out] = (struct perf_branch_entry){
 			.from		= from,
 			.to		= to,
 			.mispred	= mis,
@@ -861,8 +860,8 @@ void intel_pmu_lbr_read_64(struct cpu_hw_events *cpuc)
 		};
 		out++;
 	}
-	cpuc->lbr_stack.nr = out;
-	cpuc->lbr_stack.hw_idx = tos;
+	cpu_lbr_stack(cpuc)->nr = out;
+	cpu_lbr_stack(cpuc)->hw_idx = tos;
 }
 
 static DEFINE_STATIC_KEY_FALSE(x86_lbr_mispred);
@@ -906,15 +905,14 @@ static_assert((64 - PERF_BRANCH_ENTRY_INFO_BITS_MAX) > LBR_INFO_BR_CNTR_NUM * LB
 static void intel_pmu_store_lbr(struct cpu_hw_events *cpuc,
 				struct lbr_entry *entries)
 {
-	struct perf_branch_entry *e;
 	struct lbr_entry *lbr;
 	u64 from, to, info;
 	bool mispred;
 	int i;
 
+	cpu_init_lbr_stack(cpuc, x86_pmu.lbr_nr);
 	for (i = 0; i < x86_pmu.lbr_nr; i++) {
 		lbr = entries ? &entries[i] : NULL;
-		e = &cpuc->lbr_entries[i];
 
 		from = rdlbr_from(i, lbr);
 		/*
@@ -928,7 +926,7 @@ static void intel_pmu_store_lbr(struct cpu_hw_events *cpuc,
 
 		mispred = get_lbr_mispred(info);
 
-		*e = (struct perf_branch_entry){
+		cpu_lbr_stack(cpuc)->entries[i] = (struct perf_branch_entry){
 			.from		= from,
 			.to		= to,
 			.mispred	= mispred,
@@ -938,18 +936,18 @@ static void intel_pmu_store_lbr(struct cpu_hw_events *cpuc,
 			.cycles		= get_lbr_cycles(info),
 			.type		= get_lbr_br_type(info),
 			/*
-			 * Leverage the reserved field of
-			 * cpuc->lbr_entries[i] to temporarily store the
-			 * branch counters information. The later code will
-			 * decide what content can be disclosed to the perf
-			 * tool. Pleae see intel_pmu_lbr_counters_reorder().
+			 * Leverage the reserved field of LBR entries to
+			 * temporarily store the branch counters information.
+			 * The later code will decide what content can be
+			 * disclosed to the perf tool.
+			 * Please see intel_pmu_lbr_counters_reorder().
 			 */
 			.reserved	= (info >> LBR_INFO_BR_CNTR_OFFSET) &
 					  LBR_INFO_BR_CNTR_FULL_MASK,
 		};
 	}
 
-	cpuc->lbr_stack.nr = i;
+	cpu_lbr_stack(cpuc)->nr = i;
 }
 
 /*
@@ -975,15 +973,15 @@ static void intel_pmu_lbr_counters_reorder(struct cpu_hw_events *cpuc,
 
 	WARN_ON_ONCE(!pos);
 
-	for (i = 0; i < cpuc->lbr_stack.nr; i++) {
-		src = cpuc->lbr_entries[i].reserved;
+	for (i = 0; i < cpu_lbr_stack(cpuc)->nr; i++) {
+		src = cpu_lbr_stack(cpuc)->entries[i].reserved;
 		dst = 0;
 		for (j = 0; j < pos; j++) {
 			cnt = (src >> (order[j] * LBR_INFO_BR_CNTR_BITS)) & LBR_INFO_BR_CNTR_MASK;
 			dst |= cnt << j * LBR_INFO_BR_CNTR_BITS;
 		}
 		cpuc->lbr_counters[i] = dst;
-		cpuc->lbr_entries[i].reserved = 0;
+		cpu_lbr_stack(cpuc)->entries[i].reserved = 0;
 	}
 }
 
@@ -993,11 +991,11 @@ void intel_pmu_lbr_save_brstack(struct perf_sample_data *data,
 {
 	if (is_branch_counters_group(event)) {
 		intel_pmu_lbr_counters_reorder(cpuc, event);
-		perf_sample_save_brstack(data, event, &cpuc->lbr_stack, cpuc->lbr_counters);
+		perf_sample_save_brstack(data, event, cpu_lbr_stack(cpuc), cpuc->lbr_counters);
 		return;
 	}
 
-	perf_sample_save_brstack(data, event, &cpuc->lbr_stack, NULL);
+	perf_sample_save_brstack(data, event, cpu_lbr_stack(cpuc), NULL);
 }
 
 static void intel_pmu_arch_lbr_read(struct cpu_hw_events *cpuc)
@@ -1020,7 +1018,7 @@ static void intel_pmu_arch_lbr_read_xsave(struct cpu_hw_events *cpuc)
 		intel_pmu_store_lbr(cpuc, xsave->lbr.entries);
 	} else {
 		/* Clear the LBR stack to avoid leaking stale entries. */
-		cpuc->lbr_stack.nr = 0;
+		cpu_lbr_stack(cpuc)->nr = 0;
 	}
 }
 
@@ -1030,7 +1028,7 @@ void intel_pmu_lbr_read(void)
 
 	if (!cpuc->lbr_users || vlbr_exclude_host()) {
 		/* Reset lbr_stack.nr to prevent stale data leakage. */
-		cpuc->lbr_stack.nr = 0;
+		cpu_lbr_stack(cpuc)->nr = 0;
 		return;
 	}
 
@@ -1230,21 +1228,23 @@ static const int arch_lbr_br_type_map[ARCH_LBR_BR_TYPE_MAP_MAX] = {
 static void
 intel_pmu_lbr_filter(struct cpu_hw_events *cpuc)
 {
-	u64 from, to;
 	int br_sel = cpuc->br_sel;
 	int i, j, type, from_plm, to_plm;
 	bool compress = false;
+	u64 from, to;
+	int lbr_nr;
 
 	/* if sampling all branches, then nothing to filter */
 	if (((br_sel & X86_BR_ALL) == X86_BR_ALL) &&
 	    ((br_sel & X86_BR_TYPE_SAVE) != X86_BR_TYPE_SAVE))
 		return;
 
-	for (i = 0; i < cpuc->lbr_stack.nr; i++) {
+	for (i = 0; i < cpu_lbr_stack(cpuc)->nr; i++) {
+		struct perf_branch_entry *be = &cpu_lbr_stack(cpuc)->entries[i];
 
-		from = cpuc->lbr_entries[i].from;
-		to = cpuc->lbr_entries[i].to;
-		type = cpuc->lbr_entries[i].type;
+		from = be->from;
+		to = be->to;
+		type = be->type;
 
 		/*
 		 * Parse the branch type recorded in LBR_x_INFO MSR.
@@ -1256,9 +1256,9 @@ intel_pmu_lbr_filter(struct cpu_hw_events *cpuc)
 			to_plm = kernel_ip(to) ? X86_BR_KERNEL : X86_BR_USER;
 			type = arch_lbr_br_type_map[type] | to_plm;
 		} else
-			type = branch_type(from, to, cpuc->lbr_entries[i].abort);
+			type = branch_type(from, to, be->abort);
 		if (type != X86_BR_NONE && (br_sel & X86_BR_ANYTX)) {
-			if (cpuc->lbr_entries[i].in_tx)
+			if (be->in_tx)
 				type |= X86_BR_IN_TX;
 			else
 				type |= X86_BR_NO_TX;
@@ -1272,31 +1272,34 @@ intel_pmu_lbr_filter(struct cpu_hw_events *cpuc)
 		 */
 		if (type == X86_BR_NONE || (br_sel & type) != type ||
 		    (!(br_sel & X86_BR_KERNEL) && (from_plm & X86_BR_KERNEL))) {
-			cpuc->lbr_entries[i].from = 0;
+			be->from = 0;
 			compress = true;
 		}
 
 		if ((br_sel & X86_BR_TYPE_SAVE) == X86_BR_TYPE_SAVE)
-			cpuc->lbr_entries[i].type = common_branch_type(type);
+			be->type = common_branch_type(type);
 	}
 
 	if (!compress)
 		return;
 
 	/* remove all entries with from=0 */
-	for (i = 0; i < cpuc->lbr_stack.nr; ) {
-		if (!cpuc->lbr_entries[i].from) {
+	lbr_nr = cpu_lbr_stack(cpuc)->nr;
+	for (i = 0; i < lbr_nr; ) {
+		if (!cpu_lbr_stack(cpuc)->entries[i].from) {
 			j = i;
-			while (++j < cpuc->lbr_stack.nr) {
-				cpuc->lbr_entries[j-1] = cpuc->lbr_entries[j];
+			while (++j < lbr_nr) {
+				cpu_lbr_stack(cpuc)->entries[j-1] =
+					cpu_lbr_stack(cpuc)->entries[j];
 				cpuc->lbr_counters[j-1] = cpuc->lbr_counters[j];
 			}
-			cpuc->lbr_stack.nr--;
-			if (!cpuc->lbr_entries[i].from)
+			lbr_nr--;
+			if (!cpu_lbr_stack(cpuc)->entries[i].from)
 				continue;
 		}
 		i++;
 	}
+	cpu_lbr_stack(cpuc)->nr = lbr_nr;
 }
 
 void intel_pmu_store_pebs_lbrs(struct lbr_entry *lbr)
@@ -1306,9 +1309,9 @@ void intel_pmu_store_pebs_lbrs(struct lbr_entry *lbr)
 	/* Cannot get TOS for large PEBS and Arch LBR */
 	if (cpu_feature_enabled(X86_FEATURE_ARCH_LBR) ||
 	    (cpuc->n_pebs == cpuc->n_large_pebs))
-		cpuc->lbr_stack.hw_idx = -1ULL;
+		cpu_lbr_stack(cpuc)->hw_idx = -1ULL;
 	else
-		cpuc->lbr_stack.hw_idx = intel_pmu_lbr_tos();
+		cpu_lbr_stack(cpuc)->hw_idx = intel_pmu_lbr_tos();
 
 	intel_pmu_store_lbr(cpuc, lbr);
 	intel_pmu_lbr_filter(cpuc);
