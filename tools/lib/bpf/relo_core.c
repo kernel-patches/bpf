@@ -861,6 +861,13 @@ static int bpf_core_calc_type_relo(const struct bpf_core_relo *relo,
 	return 0;
 }
 
+static __u64 bpf_core_enumval(const struct btf_type *t, int idx)
+{
+	if (btf_is_enum(t))
+		return btf_enum_value(t, btf_enum(t) + idx);
+	return btf_enum64_value(btf_enum64(t) + idx);
+}
+
 static int bpf_core_calc_enumval_relo(const struct bpf_core_relo *relo,
 				      const struct bpf_core_spec *spec,
 				      __u64 *val)
@@ -875,10 +882,7 @@ static int bpf_core_calc_enumval_relo(const struct bpf_core_relo *relo,
 		if (!spec)
 			return -EUCLEAN; /* request instruction poisoning */
 		t = btf_type_by_id(spec->btf, spec->spec[0].type_id);
-		if (btf_is_enum(t))
-			*val = btf_enum(t)[spec->spec[0].idx].val;
-		else
-			*val = btf_enum64_value(btf_enum64(t) + spec->spec[0].idx);
+		*val = bpf_core_enumval(t, spec->spec[0].idx);
 		break;
 	default:
 		return -EOPNOTSUPP;

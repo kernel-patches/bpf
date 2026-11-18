@@ -525,6 +525,11 @@ static inline struct btf_enum *btf_enum(const struct btf_type *t)
 	return (struct btf_enum *)(t + 1);
 }
 
+static inline u64 btf_enum_value(const struct btf_type *t, const struct btf_enum *e)
+{
+	return btf_type_kflag(t) ? (s64)e->val : (u32)e->val;
+}
+
 static inline struct btf_enum64 *btf_enum64(const struct btf_type *t)
 {
 	return (struct btf_enum64 *)(t + 1);
