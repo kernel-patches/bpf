@@ -314,6 +314,27 @@ struct enic {
 	enum enic_admin_chan_state admin_chan_state;
 	/* Blocks sends throughout close, partial open and timeout recovery. */
 	bool mbox_send_disabled;
+	/* A send timeout leaves WQ descriptor ownership unresolved until channel
+	 * shutdown proves that both admin queues stopped.
+	 */
+	bool mbox_tx_poisoned;
+	/* After a lost or inconsistent reply, the VF cannot know whether the PF
+	 * applied the request. Reconnect during the next open or reset.
+	 */
+	bool vf_mbox_reconnect_required;
+	/* Suppress self-requeue while a reset worker is already attempting the
+	 * reconnect. The fault generation records a fault arriving during recovery
+	 * so one later generation is not lost. A failed handshake remains
+	 * quarantined until a later external recovery event or close/open.
+	 */
+	bool vf_mbox_recovery_active;
+	u32 vf_mbox_fault_generation;
+	/* One slow-path-owned predicate keeps the RX hot path fail-closed while
+	 * VF registration is lost or receive state may not match the PF.
+	 */
+	bool vf_rx_quarantined;
+	/* RTNL protects software open/stop pairing; this does not prove DMA stop. */
+	bool datapath_open;
 	struct vnic_wq admin_wq;
 	struct vnic_rq admin_rq;
 	struct vnic_cq admin_cq[2];
@@ -346,6 +367,10 @@ struct enic {
 	struct completion mbox_comp;
 	struct mutex vf_mbox_request_lock; /* serializes VF request lifetimes */
 	spinlock_t mbox_state_lock;	/* protects expected reply state */
+	spinlock_t vf_ack_lock;		/* protects vf_ack_list */
+	struct list_head vf_ack_list;
+	struct work_struct vf_ack_work;
+	unsigned int vf_ack_count;
 	u64 mbox_expected_msg_num;
 	u8 mbox_expected_reply;
 	bool mbox_initialized;

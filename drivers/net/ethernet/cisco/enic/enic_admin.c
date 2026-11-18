@@ -134,14 +134,22 @@ unsigned int enic_admin_wq_cq_service(struct enic *enic)
  */
 #define ENIC_ADMIN_MSG_MAX	256
 
+static void enic_admin_rx_lost(struct enic *enic)
+{
+	if (enic_is_sriov_vf_v2(enic))
+		enic_mbox_vf_require_reconnect(enic);
+}
+
 static void enic_admin_msg_enqueue(struct enic *enic, void *buf,
 				   unsigned int len)
 {
 	struct enic_admin_msg *msg;
 
 	msg = kmalloc_flex(*msg, data, len);
-	if (!msg)
+	if (!msg) {
+		enic_admin_rx_lost(enic);
 		return;
+	}
 
 	msg->len = len;
 	memcpy(msg->data, buf, len);
@@ -154,6 +162,7 @@ static void enic_admin_msg_enqueue(struct enic *enic, void *buf,
 			netdev_warn(enic->netdev,
 				    "admin msg backlog full (%u); dropping\n",
 				    ENIC_ADMIN_MSG_MAX);
+		enic_admin_rx_lost(enic);
 		return;
 	}
 	list_add_tail(&msg->list, &enic->admin_msg_list);
@@ -167,6 +176,7 @@ unsigned int enic_admin_rq_cq_service(struct enic *enic)
 	struct vnic_rq *rq = &enic->admin_rq;
 	struct cq_enet_rq_desc *rq_desc;
 	struct vnic_rq_buf *buf;
+	u16 sender_vlan;
 	u16 bwf, bytes_written;
 	unsigned int work = 0;
 	void *desc;
@@ -186,6 +196,14 @@ unsigned int enic_admin_rq_cq_service(struct enic *enic)
 		 */
 		dma_rmb();
 		buf = rq->to_clean;
+		rq_desc = desc;
+		sender_vlan = le16_to_cpu(rq_desc->vlan);
+
+		/* A V2 VF's only valid admin-channel peer is its PF. Drop any
+		 * other sender before malformed CQ state can trigger recovery.
+		 */
+		if (enic_is_sriov_vf_v2(enic) && sender_vlan != 0)
+			goto next_desc;
 
 		/* Decode the actual number of bytes hardware wrote into
 		 * the RX buffer.  buf->len is the static allocation size
@@ -193,11 +211,12 @@ unsigned int enic_admin_rq_cq_service(struct enic *enic)
 		 * beyond the actual DMA payload.  bytes_written_flags is at
 		 * the same offset in every cq_enet_rq_desc[_32|_64] variant.
 		 */
-		rq_desc = desc;
 		bwf = le16_to_cpu(rq_desc->bytes_written_flags);
 		bytes_written = bwf & CQ_ENET_RQ_DESC_BYTES_WRITTEN_MASK;
-		if (bytes_written > buf->len)
+		if (bytes_written > buf->len) {
+			enic_admin_rx_lost(enic);
 			goto next_desc;
+		}
 
 		dma_sync_single_for_cpu(&enic->pdev->dev,
 					buf->dma_addr, buf->len,
@@ -212,23 +231,22 @@ unsigned int enic_admin_rq_cq_service(struct enic *enic)
 		if (bwf & CQ_ENET_RQ_DESC_FLAGS_TRUNCATED) {
 			netdev_warn_once(enic->netdev,
 					 "admin RQ: truncated message dropped\n");
+			enic_admin_rx_lost(enic);
 			goto next_desc;
 		}
 		if (!(rq_desc->flags & CQ_ENET_RQ_DESC_FLAGS_FCS_OK)) {
 			netdev_warn_once(enic->netdev,
 					 "admin RQ: bad FCS, dropping message\n");
+			enic_admin_rx_lost(enic);
 			goto next_desc;
 		}
 
 		if (enic->admin_rq_handler) {
-			u16 sender_vlan;
-
 			/* Firmware sets the CQ VLAN field to identify the
 			 * sender: 0 = PF, 1-based = VF index.  Overwrite
 			 * the untrusted src_vnic_id in the MBOX header with
 			 * the hardware-verified value.
 			 */
-			sender_vlan = le16_to_cpu(rq_desc->vlan);
 			if (bytes_written >= sizeof(struct enic_mbox_hdr)) {
 				struct enic_mbox_hdr *hdr = buf->os_buf;
 
@@ -726,6 +744,11 @@ int enic_admin_channel_close(struct enic *enic)
 		enic_admin_teardown_intr(enic);
 		cancel_work_sync(&enic->link_notify_work);
 		cancel_work_sync(&enic->admin_msg_work);
+		/* admin_msg_work is the sole VF ACK producer. Drain it before
+		 * the ACK worker so no producer can race the final purge.
+		 */
+		if (enic_is_sriov_vf_v2(enic))
+			enic_mbox_vf_ack_cancel(enic);
 		enic_admin_msg_drain(enic);
 	}
 
@@ -771,6 +794,7 @@ int enic_admin_channel_close(struct enic *enic)
 	}
 
 	enic_admin_channel_release(enic);
+	WRITE_ONCE(enic->mbox_tx_poisoned, false);
 	mutex_unlock(&enic->mbox_lock);
 
 	/* Firmware rejection does not undermine the WQ/RQ proof. */
@@ -797,6 +821,7 @@ int enic_admin_channel_final_recheck(struct enic *enic)
 	}
 
 	enic_admin_channel_release(enic);
+	WRITE_ONCE(enic->mbox_tx_poisoned, false);
 	mutex_unlock(&enic->mbox_lock);
 	netdev_info(enic->netdev,
 		    "Admin queues stopped during final teardown; releasing DMA graph\n");
