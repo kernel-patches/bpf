@@ -1800,6 +1800,7 @@ __writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 	struct address_space *mapping = inode->i_mapping;
 	long nr_to_write = wbc->nr_to_write;
 	unsigned dirty;
+	bool pages_cleared = false;
 	int ret;
 
 	WARN_ON(!(inode_state_read_once(inode) & I_SYNC));
@@ -1839,30 +1840,42 @@ __writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 	 * after handling timestamp expiration, as that may dirty the inode too.
 	 */
 	spin_lock(&inode->i_lock);
-	dirty = inode_state_read(inode) & I_DIRTY;
+	dirty = inode_state_read(inode) & I_DIRTY_INODE;
 	inode_state_clear(inode, dirty);
+	if (inode_state_read(inode) & I_DIRTY_PAGES &&
+	    !mapping_tagged(mapping, PAGECACHE_TAG_DIRTY)) {
+		inode_state_clear(inode, I_DIRTY_PAGES);
+		pages_cleared = true;
+	}
 
 	/*
 	 * Paired with smp_mb() in __mark_inode_dirty().  This allows
 	 * __mark_inode_dirty() to test i_state without grabbing i_lock -
 	 * either they see the I_DIRTY bits cleared or we see the dirtied
-	 * inode.
+	 * inode or folio tag.
 	 *
-	 * I_DIRTY_PAGES is always cleared together above even if @mapping
-	 * still has dirty pages.  The flag is reinstated after smp_mb() if
-	 * necessary.  This guarantees that either __mark_inode_dirty()
-	 * sees clear I_DIRTY_PAGES or we see PAGECACHE_TAG_DIRTY.
+	 * I_DIRTY_PAGES handling is hairy. The clearing above can race with
+	 * filemap_dirty_folio() so we don't see dirty tag yet but
+	 * __mark_inode_dirty() doesn't see I_DIRTY_PAGES cleared either. So we
+	 * have to recheck after smp_mb() and possibly reinstate I_DIRTY_PAGES.
+	 * We have to be careful with reinstating and only do that if we really
+	 * cleared I_DIRTY_PAGES. Only in that case we are guaranteed the inode
+	 * is already in the dirty list and so it doesn't need to be (nor
+	 * should be) moved. If we didn't clear I_DIRTY_PAGES, then either the
+	 * inode is already in the dirty list or we race with
+	 * filemap_dirty_folio() which will eventually call
+	 * __mark_inode_dirty() to set I_DIRTY_PAGES and place inode in
+	 * appropriate dirty list.
 	 */
 	smp_mb();
 
-	if (mapping_tagged(mapping, PAGECACHE_TAG_DIRTY))
+	if (pages_cleared && mapping_tagged(mapping, PAGECACHE_TAG_DIRTY))
 		inode_state_set(inode, I_DIRTY_PAGES);
-	else if (unlikely(inode_state_read(inode) & I_PINNING_NETFS_WB)) {
-		if (!(inode_state_read(inode) & I_DIRTY_PAGES)) {
-			inode_state_clear(inode, I_PINNING_NETFS_WB);
-			wbc->unpinned_netfs_wb = true;
-			dirty |= I_PINNING_NETFS_WB; /* Cause write_inode */
-		}
+	if (unlikely(inode_state_read(inode) & I_PINNING_NETFS_WB) &&
+	    !(inode_state_read(inode) & I_DIRTY_PAGES)) {
+		inode_state_clear(inode, I_PINNING_NETFS_WB);
+		wbc->unpinned_netfs_wb = true;
+		dirty |= I_PINNING_NETFS_WB; /* Cause write_inode */
 	}
 
 	spin_unlock(&inode->i_lock);
@@ -1955,22 +1968,31 @@ static int writeback_single_inode(struct inode *inode,
 	 * as it can be finally deleted at this moment.
 	 */
 	if (!(inode_state_read(inode) & I_FREEING)) {
+		enum inode_state_flags_enum istate = inode_state_read(inode);
+
 		/*
-		 * If the inode is now fully clean, then it can be safely
-		 * removed from its writeback list (if any). Otherwise the
-		 * flusher threads are responsible for the writeback lists.
+		 * __mark_inode_dirty() is responsible for promoting inode to
+		 * the proper list (b_attached -> b_dirty_time -> b_dirty).
+		 * Here we are responsible for demoting inode after some dirty
+		 * bits were cleared.
+		 *
+		 * If the inode is now fully clean, then it can be safely moved
+		 * to b_attached list. If the inode is dirty, we don't want to
+		 * touch it - it should be already put to the dirty list by
+		 * __mark_inode_dirty() and we'd just unnecessarily clobber the
+		 * dirtied_when stamp (which is particularly problematic when
+		 * we were called from sync_inode_metadata()). We also cannot
+		 * touch the dirty list association when I_SYNC_QUEUED is set
+		 * and flush worker is responsible for it. Otherwise move the
+		 * inode to b_dirty_time list as that's the only remaining
+		 * possibility.
 		 */
-		if (!(inode_state_read(inode) & I_DIRTY_ALL))
+		if (!(istate & I_DIRTY_ALL))
 			inode_cgwb_move_to_attached(inode, wb);
-		else if (!(inode_state_read(inode) & I_SYNC_QUEUED)) {
-			if ((inode_state_read(inode) & I_DIRTY))
-				redirty_tail_locked(inode, wb);
-			else if (inode_state_read(inode) & I_DIRTY_TIME) {
-				inode->dirtied_when = jiffies;
-				inode_io_list_move_locked(inode,
-							  wb,
-							  &wb->b_dirty_time);
-			}
+		else if (!(istate & I_SYNC_QUEUED) && !(istate & I_DIRTY)) {
+			WARN_ON_ONCE(!(istate & I_DIRTY_TIME));
+			inode->dirtied_when = jiffies;
+			inode_io_list_move_locked(inode, wb, &wb->b_dirty_time);
 		}
 	}
 
