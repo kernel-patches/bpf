@@ -624,20 +624,23 @@ waitq_timeout:
 	 * Otherwise, we only need to grab the lock.
 	 */
 
-	/*
-	 * Note: at this point: (val & _Q_PENDING_MASK) == 0, because of the
-	 *       above wait condition, therefore any concurrent setting of
-	 *       PENDING will make the uncontended transition fail.
-	 */
 	if ((val & _Q_TAIL_MASK) == tail) {
-		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL))
-			goto release; /* No contention */
+		u32 new = _Q_LOCKED_VAL;
+
+		for (;;) {
+			if (atomic_try_cmpxchg_relaxed(&lock->val, &val, new))
+				goto release; /* No queued successor */
+			if ((val & _Q_TAIL_MASK) != tail)
+				break;
+			/* A pending claimant can abandon before publishing a tail. */
+			new = _Q_LOCKED_VAL | (val & _Q_PENDING_MASK);
+		}
 	}
 
 	/*
-	 * Either somebody is queued behind us or _Q_PENDING_VAL got set
-	 * which will then detect the remaining tail and queue behind us
-	 * ensuring we'll see a @next.
+	 * A different tail proves that a successor will publish node->next.
+	 * Preserve pending while installing ownership; a racing claimant may
+	 * still be undoing its speculative reservation against this queue.
 	 */
 	set_locked(lock);
 
