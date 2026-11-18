@@ -280,6 +280,10 @@ static inline int srcu_read_lock_held(const struct srcu_struct *ssp)
  * with __guarded_by(ssp) as it would complicate annotations for writers, we
  * choose the following strategy: srcu_dereference_check() calls this helper
  * that checks that the passed ssp is held, and then fake-acquires 'RCU'.
+ * srcu_dereference_check() only calls this helper if @c is the compile-time
+ * constant 0 because otherwise its callers may satisfy the condition @c
+ * instead of holding ssp, e.g. on the update side. srcu_dereference_notrace()
+ * passes 1 as @c and hence calls this helper explicitly.
  */
 static inline void __srcu_read_lock_must_hold(const struct srcu_struct *ssp) __must_hold_shared(ssp) { }
 
@@ -297,7 +301,8 @@ static inline void __srcu_read_lock_must_hold(const struct srcu_struct *ssp) __m
  */
 #define srcu_dereference_check(p, ssp, c)					\
 ({										\
-	__srcu_read_lock_must_hold(ssp);					\
+	if (const_true(!(c)))							\
+		__srcu_read_lock_must_hold(ssp);				\
 	__acquire_shared_ctx_lock(RCU);					\
 	__auto_type __v = __rcu_dereference_check((p), __UNIQUE_ID(rcu),	\
 				(c) || srcu_read_lock_held(ssp), __rcu);	\
@@ -323,7 +328,11 @@ static inline void __srcu_read_lock_must_hold(const struct srcu_struct *ssp) __m
  * @ssp: pointer to the srcu_struct, which is used to check that we
  *	really are in an SRCU read-side critical section.
  */
-#define srcu_dereference_notrace(p, ssp) srcu_dereference_check((p), (ssp), 1)
+#define srcu_dereference_notrace(p, ssp)				\
+({									\
+	__srcu_read_lock_must_hold(ssp);				\
+	srcu_dereference_check((p), (ssp), 1);				\
+})
 
 /**
  * srcu_read_lock - register a new reader for an SRCU-protected structure.
