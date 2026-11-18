@@ -1006,8 +1006,11 @@ static int check_create(struct nand_chip *this, uint8_t *buf,
 				continue;
 
 			/* Create the table in memory by scanning the chip(s) */
-			if (!(this->bbt_options & NAND_BBT_CREATE_EMPTY))
-				create_bbt(this, buf, bd, chipsel);
+			if (!(this->bbt_options & NAND_BBT_CREATE_EMPTY)) {
+				res = create_bbt(this, buf, bd, chipsel);
+				if (res)
+					return res;
+			}
 
 			td->version[i] = 1;
 			if (md)
