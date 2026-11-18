@@ -5047,6 +5047,22 @@ int btrfs_truncate_block(struct btrfs_inode *inode, u64 offset, u64 start, u64 e
 	if (!need_truncate_head && !need_truncate_tail)
 		goto out;
 
+	/*
+	 * Before zeroing the tail or head of the block, wait for any async
+	 * direct IO writes in progress to complete, otherwise if they complete
+	 * after we dirty the folio, they will trigger a warning when trying to
+	 * invalidate the page cache and call errseq_set() on the mapping (which
+	 * makes the next fsync fail with -EIO), because the folio is dirty:
+	 *
+	 * iomap_dio_complete()
+	 *    kiocb_invalidate_post_direct_write()
+	 *       invalidate_inode_pages2_range()
+	 *       dio_warn_stale_pagecache()
+	 *          --> calls errseq_set() making next fsync fail
+	 *          --> triggers warning
+	 */
+	inode_dio_wait(&inode->vfs_inode);
+
 	block_start = round_down(offset, blocksize);
 	block_end = block_start + blocksize - 1;
 
