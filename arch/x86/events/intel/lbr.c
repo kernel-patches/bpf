@@ -1317,6 +1317,7 @@ void intel_pmu_store_pebs_lbrs(struct lbr_entry *lbr)
 
 	intel_pmu_store_lbr(lbr, cpu_lbr_stack(cpuc));
 	intel_pmu_lbr_filter(cpuc, cpu_lbr_stack(cpuc), cpuc->lbr_counters);
+	cpuc->lbr_stack_live = false;
 }
 
 /*

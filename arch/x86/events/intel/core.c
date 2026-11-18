@@ -4054,8 +4054,14 @@ static int handle_pmi_common(struct pt_regs *regs, u64 status)
 
 		perf_sample_data_init(&data, 0, last_period);
 
-		if (has_branch_stack(event))
+		if (has_branch_stack(event)) {
+			if (!cpuc->lbr_stack_live) {
+				intel_pmu_lbr_read(cpu_lbr_stack(cpuc),
+						   cpuc->lbr_counters);
+				cpuc->lbr_stack_live = true;
+			}
 			intel_pmu_lbr_save_brstack(&data, cpuc, event);
+		}
 
 		x86_pmu_clear_perf_regs(regs);
 		x86_pmu_update_perf_regs(event, &data, regs, false);
@@ -4111,12 +4117,16 @@ static int intel_pmu_handle_irq(struct pt_regs *regs)
 
 	loops = 0;
 again:
+	cpuc->lbr_stack_live = false;
 	/*
-	 * No need to read the LBR stack when all LBR users are PEBS events,
-	 * since the PEBS handler updates it.
+	 * If PEBS can't record LBRs, draining PEBS can't overwrite the
+	 * LBR stack, so read it here at PMI entry. Otherwise, it is read
+	 * after PEBS draining when needed.
 	 */
-	if (cpuc->lbr_users != cpuc->lbr_pebs_users)
+	if (cpuc->lbr_users > 0 && !intel_pmu_has_pebs_lbr(cpuc->pmu)) {
 		intel_pmu_lbr_read(cpu_lbr_stack(cpuc), cpuc->lbr_counters);
+		cpuc->lbr_stack_live = true;
+	}
 
 	/*
 	 * Keep the LBR state frozen throughout PMI handling so that the PMI

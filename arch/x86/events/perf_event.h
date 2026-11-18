@@ -525,6 +525,7 @@ struct cpu_hw_events {
 	/*
 	 * Intel LBR bits
 	 */
+	bool				lbr_stack_live; /* If LBR stack holds the live LBR state */
 	int				lbr_users;
 	int				lbr_pebs_users;
 	u64				__lbr_stack[LBR_STACK_SIZE / sizeof(u64)];
