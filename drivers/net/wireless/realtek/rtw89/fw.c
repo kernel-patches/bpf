@@ -5171,7 +5171,7 @@ int rtw89_fw_h2c_update_beacon(struct rtw89_dev *rtwdev,
 		skb_put_data(skb_beacon, noa_data, noa_len);
 	}
 
-	hdr = (struct ieee80211_hdr *)skb_beacon;
+	hdr = (struct ieee80211_hdr *)skb_beacon->data;
 	tim_offset -= ieee80211_hdrlen(hdr->frame_control);
 
 	bcn_total_len = len + skb_beacon->len;
@@ -5250,7 +5250,7 @@ int rtw89_fw_h2c_update_beacon_be(struct rtw89_dev *rtwdev,
 		skb_put_data(skb_beacon, noa_data, noa_len);
 	}
 
-	hdr = (struct ieee80211_hdr *)skb_beacon;
+	hdr = (struct ieee80211_hdr *)skb_beacon->data;
 	tim_offset -= ieee80211_hdrlen(hdr->frame_control);
 
 	bcn_total_len = len + skb_beacon->len;
