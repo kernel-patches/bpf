@@ -1466,7 +1466,11 @@ static struct rt6_info *ip6_rt_pcpu_alloc(const struct fib6_result *res)
 
 static bool rt6_is_valid(const struct rt6_info *rt6)
 {
-	return rt6->sernum == rt_genid_ipv6(dev_net(rt6->dst.dev));
+	/* Reject the initial sernum, which every netns shares and which a
+	 * route can record before its insertion bumps the sernum.
+	 */
+	return rt6->sernum != 1 &&
+	       rt6->sernum == rt_genid_ipv6(dev_net(rt6->dst.dev));
 }
 
 /* It should be called with rcu_read_lock() acquired */
