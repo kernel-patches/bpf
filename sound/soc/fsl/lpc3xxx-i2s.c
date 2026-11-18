@@ -82,8 +82,7 @@ static int lpc3xxx_i2s_startup(struct snd_pcm_substream *substream, struct snd_s
 
 	if (flag & i2s_info_p->streams_in_use) {
 		dev_warn(dev, "I2S channel is busy\n");
-		ret = -EBUSY;
-		return ret;
+		return -EBUSY;
 	}
 
 	if (i2s_info_p->streams_in_use == 0) {
@@ -199,12 +198,12 @@ static int lpc3xxx_i2s_hw_params(struct snd_pcm_substream *substream,
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		regmap_write(regs, LPC3XXX_REG_I2S_DMA1,
-			     LPC3XXX_I2S_DMA1_TX_EN | LPC3XXX_I2S_DMA0_TX_DEPTH(4));
+			     LPC3XXX_I2S_DMA1_TX_EN | LPC3XXX_I2S_DMA1_TX_DEPTH(4));
 		regmap_write(regs, LPC3XXX_REG_I2S_TX_RATE, (clkx << 8) | clky);
 		regmap_write(regs, LPC3XXX_REG_I2S_DAO, tmp);
 	} else {
 		regmap_write(regs, LPC3XXX_REG_I2S_DMA0,
-			     LPC3XXX_I2S_DMA0_RX_EN | LPC3XXX_I2S_DMA1_RX_DEPTH(4));
+			     LPC3XXX_I2S_DMA0_RX_EN | LPC3XXX_I2S_DMA0_RX_DEPTH(4));
 		regmap_write(regs, LPC3XXX_REG_I2S_RX_RATE, (clkx << 8) | clky);
 		regmap_write(regs, LPC3XXX_REG_I2S_DAI, tmp);
 	}
@@ -320,7 +319,7 @@ static int lpc32xx_i2s_probe(struct platform_device *pdev)
 	i2s_info_p->regs = devm_regmap_init_mmio(dev, iomem, &lpc32xx_i2s_regconfig);
 	if (IS_ERR(i2s_info_p->regs))
 		return dev_err_probe(dev, PTR_ERR(i2s_info_p->regs),
-				     "failed to init register map: %pe\n", i2s_info_p->regs);
+				     "failed to init register map\n");
 
 	i2s_info_p->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(i2s_info_p->clk))
