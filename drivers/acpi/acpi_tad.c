@@ -623,8 +623,8 @@ static const struct attribute_group acpi_tad_group = {
 __ATTRIBUTE_GROUPS(acpi_tad);
 
 static const struct acpi_device_id acpi_tad_ids[] = {
-	{"ACPI000E", 0},
-	{}
+	{ .id = "ACPI000E" },
+	{ }
 };
 
 #ifdef CONFIG_RTC_CLASS

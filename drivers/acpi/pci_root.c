@@ -41,8 +41,8 @@ static int acpi_pci_root_scan_dependent(struct acpi_device *adev)
 				| OSC_PCI_MSI_SUPPORT)
 
 static const struct acpi_device_id root_device_ids[] = {
-	{"PNP0A03", 0},
-	{"", 0},
+	{ .id = "PNP0A03" },
+	{ }
 };
 
 static struct acpi_scan_handler pci_root_handler = {

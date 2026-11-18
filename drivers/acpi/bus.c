@@ -66,7 +66,7 @@ static const struct dmi_system_id dsdt_dmi_table[] __initconst = {
 		DMI_MATCH(DMI_PRODUCT_NAME, "Satellite"),
 		},
 	},
-	{}
+	{ }
 };
 #endif
 

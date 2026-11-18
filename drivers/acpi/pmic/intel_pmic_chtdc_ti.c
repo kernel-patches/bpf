@@ -127,7 +127,7 @@ static int chtdc_ti_pmic_opregion_probe(struct platform_device *pdev)
 
 static const struct platform_device_id chtdc_ti_pmic_opregion_id_table[] = {
 	{ .name = "chtdc_ti_region" },
-	{},
+	{ }
 };
 
 static struct platform_driver chtdc_ti_pmic_opregion_driver = {

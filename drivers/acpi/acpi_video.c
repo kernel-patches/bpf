@@ -92,7 +92,7 @@ enum acpi_video_level_idx {
 
 static const struct auxiliary_device_id video_bus_auxiliary_id_table[] = {
 	{ .name = "acpi.video_bus" },
-	{},
+	{ }
 };
 MODULE_DEVICE_TABLE(auxiliary, video_bus_auxiliary_id_table);
 
@@ -518,7 +518,7 @@ static const struct dmi_system_id video_dmi_table[] = {
 		DMI_MATCH(DMI_PRODUCT_NAME, "EasyNote MZ35"),
 		},
 	},
-	{}
+	{ }
 };
 
 static unsigned long long

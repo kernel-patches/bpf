@@ -1075,9 +1075,9 @@ static int acpi_bus_extract_wakeup_device_power_package(struct acpi_device *dev)
 static bool acpi_wakeup_gpe_init(struct acpi_device *device)
 {
 	static const struct acpi_device_id button_device_ids[] = {
-		{"PNP0C0D", 0},	/* Lid */
-		{"PNP0C0E", 0},	/* Sleep button */
-		{"", 0},
+		{ .id = "PNP0C0D" },	/* Lid */
+		{ .id = "PNP0C0E" },	/* Sleep button */
+		{ }
 	};
 	struct acpi_device_wakeup *wakeup = &device->wakeup;
 	const struct acpi_device_id *match;
@@ -1800,8 +1800,8 @@ static bool acpi_is_indirect_io_slave(struct acpi_device *device)
 {
 	struct acpi_device *parent = acpi_dev_parent(device);
 	static const struct acpi_device_id indirect_io_hosts[] = {
-		{"HISI0191", 0},
-		{}
+		{ .id = "HISI0191" },
+		{ }
 	};
 
 	return parent && !acpi_match_device_ids(parent, indirect_io_hosts);
@@ -1821,34 +1821,34 @@ static bool acpi_device_enumeration_by_parent(struct acpi_device *device)
 	 * by the drivers/platform/x86/serial-multi-instantiate.c driver, which
 	 * knows which client device id to use for each resource.
 	 */
-		{"AWDZ8399", },
-		{"BSG1160", },
-		{"BSG2150", },
-		{"CSC3551", },
-		{"CSC3554", },
-		{"CSC3556", },
-		{"CSC3557", },
-		{"INT33FE", },
-		{"INT3515", },
-		{"TXNW2781", },
+		{ .id = "AWDZ8399" },
+		{ .id = "BSG1160" },
+		{ .id = "BSG2150" },
+		{ .id = "CSC3551" },
+		{ .id = "CSC3554" },
+		{ .id = "CSC3556" },
+		{ .id = "CSC3557" },
+		{ .id = "INT33FE" },
+		{ .id = "INT3515" },
+		{ .id = "TXNW2781" },
 		/* Non-conforming _HID for Cirrus Logic already released */
-		{"CLSA0100", },
-		{"CLSA0101", },
-		{"CLSA0102", },
+		{ .id = "CLSA0100" },
+		{ .id = "CLSA0101" },
+		{ .id = "CLSA0102" },
 	/*
 	 * Some ACPI devs contain SerialBus resources even though they are not
 	 * attached to a serial bus at all.
 	 */
-		{"MSHW0028", },
+		{ .id = "MSHW0028" },
 	/*
 	 * HIDs of device with an UartSerialBusV2 resource for which userspace
 	 * expects a regular tty cdev to be created (instead of the in kernel
 	 * serdev) and which have a kernel driver which expects a platform_dev
 	 * such as the rfkill-gpio driver.
 	 */
-		{"BCM4752", },
-		{"LNV4752", },
-		{}
+		{ .id = "BCM4752" },
+		{ .id = "LNV4752" },
+		{ }
 	};
 
 	if (acpi_is_indirect_io_slave(device))
@@ -2355,8 +2355,8 @@ static void acpi_default_enumeration(struct acpi_device *device)
 }
 
 static const struct acpi_device_id generic_device_ids[] = {
-	{ACPI_DT_NAMESPACE_HID, },
-	{"", },
+	{ .id = ACPI_DT_NAMESPACE_HID },
+	{ }
 };
 
 static int acpi_generic_device_attach(struct acpi_device *adev,

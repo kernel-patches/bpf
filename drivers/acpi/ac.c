@@ -32,8 +32,8 @@ MODULE_DESCRIPTION("ACPI AC Adapter Driver");
 MODULE_LICENSE("GPL");
 
 static const struct acpi_device_id ac_device_ids[] = {
-	{"ACPI0003", 0},
-	{"", 0},
+	{ .id = "ACPI0003" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, ac_device_ids);
 
@@ -199,7 +199,7 @@ static const struct dmi_system_id ac_dmi_table[]  __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "32597CG"),
 		},
 	},
-	{},
+	{ }
 };
 
 static int acpi_ac_probe(struct platform_device *pdev)
