@@ -577,7 +577,8 @@ static int __init unknown_bootoption(char *param, char *val,
 	 * 1. LILO/Grub pass "BOOT_IMAGE=...";
 	 * 2. kexec/kdump (kexec-tools) pass "kexec".
 	 */
-	const char *bootloader[] = { "BOOT_IMAGE=", "kexec", NULL };
+	static const char * const bootloader[] __initconst = { "BOOT_IMAGE=", "kexec" };
+	unsigned int i;
 
 	/* Handle params aliased to sysctls */
 	if (sysctl_is_alias(param))
@@ -586,7 +587,7 @@ static int __init unknown_bootoption(char *param, char *val,
 	repair_env_string(param, val);
 
 	/* Handle bootloader identifier */
-	for (int i = 0; bootloader[i]; i++) {
+	for (i = 0; i < ARRAY_SIZE(bootloader); i++) {
 		if (strstarts(param, bootloader[i]))
 			return 0;
 	}
@@ -604,7 +605,6 @@ static int __init unknown_bootoption(char *param, char *val,
 
 	if (val) {
 		/* Environment option */
-		unsigned int i;
 		for (i = 0; envp_init[i]; i++) {
 			if (!strncmp(param, envp_init[i], len+1))
 				break;
@@ -616,7 +616,6 @@ static int __init unknown_bootoption(char *param, char *val,
 		envp_init[i] = param;
 	} else {
 		/* Command line option */
-		unsigned int i;
 		for (i = 0; argv_init[i]; i++) {
 			if (i == MAX_INIT_ARGS) {
 				panic_later = "init";
