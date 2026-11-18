@@ -1114,6 +1114,16 @@ netdev_tx_t enetc_xmit(struct sk_buff *skb, struct net_device *ndev)
 }
 EXPORT_SYMBOL_GPL(enetc_xmit);
 
+static bool enetc_skb_l4_too_deep(const struct sk_buff *skb)
+{
+	unsigned int l4_offset = skb_checksum_start_offset(skb);
+
+	if (skb_vlan_tag_present(skb))
+		l4_offset += VLAN_HLEN;
+
+	return l4_offset >= ENETC_TX_CSUM_MAX_L4_OFFSET;
+}
+
 netdev_features_t enetc_features_check(struct sk_buff *skb,
 				       struct net_device *ndev,
 				       netdev_features_t features)
@@ -1121,6 +1131,12 @@ netdev_features_t enetc_features_check(struct sk_buff *skb,
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 
 	features = vlan_features_check(skb, features);
+
+	if (priv->active_offloads & ENETC_F_TXCSUM &&
+	    skb->ip_summed == CHECKSUM_PARTIAL && enetc_skb_l4_too_deep(skb)) {
+		features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
+		return features;
+	}
 
 	if (!skb_is_gso(skb) || enetc_skb_uses_lso(priv, skb))
 		return features;

@@ -75,6 +75,7 @@ struct enetc_lso_t {
 	int	total_len; /* total data length, not include LSO header */
 };
 
+#define ENETC_TX_CSUM_MAX_L4_OFFSET	127
 #define ENETC_LSO_MAX_DATA_LEN		SZ_256K
 
 #define ENETC_RX_MAXFRM_SIZE	ENETC_MAC_MAXFRM_SIZE
