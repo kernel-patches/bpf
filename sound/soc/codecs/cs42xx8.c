@@ -671,6 +671,7 @@ static int cs42xx8_runtime_resume(struct device *dev)
 	return 0;
 
 err_bulk:
+	regcache_cache_only(cs42xx8->regmap, true);
 	regulator_bulk_disable(ARRAY_SIZE(cs42xx8->supplies),
 			       cs42xx8->supplies);
 err_clk:
