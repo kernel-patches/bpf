@@ -219,7 +219,7 @@ static void check_unclaimed_mmio_pre(struct intel_display *display,
 		drm_dbg_kms(display->drm,
 			    "Unclaimed access detected before %s register 0x%x\n",
 			    write ? "write to" : "read from",
-			    i915_mmio_reg_offset(reg));
+			    intel_reg_offset(reg));
 }
 
 static void check_unclaimed_mmio_post(struct intel_display *display,
@@ -234,7 +234,7 @@ static void check_unclaimed_mmio_post(struct intel_display *display,
 		     display->mmio.funcs->check_for_unclaimed_mmio(display),
 		     "Unclaimed %s register 0x%x\n",
 		     write ? "write to" : "read from",
-		     i915_mmio_reg_offset(reg)))
+		     intel_reg_offset(reg)))
 		/* Only report the first N failures */
 		display->params.mmio_debug--;
 }
