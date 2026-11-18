@@ -793,36 +793,6 @@ out:
 }
 
 /*
- * Where the next readdir resumes. The entries are counted, so one that is
- * registered or unregistered in front of the position would shift what
- * the next call returns. The name of the last entry emitted doesn't move.
- */
-struct sysctl_cursor {
-	loff_t pos;			/* the position behind the entry */
-	int len;
-	char name[NAME_MAX + 1];
-};
-
-/* If this can't remember the entry the next call counts from the start. */
-static void sysctl_cursor_set(struct file *file, const char *name, int len,
-			      loff_t pos)
-{
-	struct sysctl_cursor *cursor = file->private_data;
-
-	if (len > NAME_MAX)
-		return;
-	if (!cursor) {
-		cursor = kmalloc_obj(*cursor, GFP_KERNEL_ACCOUNT);
-		if (!cursor)
-			return;
-		file->private_data = cursor;
-	}
-	cursor->pos = pos;
-	cursor->len = len;
-	memcpy(cursor->name, name, len);
-}
-
-/*
  * The inode number and type of the entry @d holds, instantiating its dentry
  * if there is none. Needs the header pinned, proc_sys_make_inode() checks
  * for itself that the table is still registered.
@@ -876,7 +846,7 @@ static int proc_sys_fill_dirent(struct file *file, struct sysctl_dirent *d)
 static int proc_sys_readdir(struct file *file, struct dir_context *ctx)
 {
 	struct ctl_table_header *head = PROC_I(file_inode(file))->sysctl;
-	struct sysctl_cursor *cursor = file->private_data;
+	const struct proc_dir_cursor *cursor;
 	struct sysctl_dirent d = {};
 	struct ctl_dir *ctl_dir;
 	int err;
@@ -893,7 +863,8 @@ static int proc_sys_readdir(struct file *file, struct dir_context *ctx)
 	 * that moved the position away from it counts from the start, like
 	 * seeking to an arbitrary position always did.
 	 */
-	if (cursor && cursor->pos == ctx->pos) {
+	cursor = proc_dir_cursor_at(file, ctx->pos);
+	if (cursor) {
 		err = sysctl_dir_next(ctl_dir, &d, cursor->name, cursor->len);
 	} else {
 		loff_t pos = 2;
@@ -915,17 +886,11 @@ static int proc_sys_readdir(struct file *file, struct dir_context *ctx)
 				break;
 		}
 		ctx->pos++;
-		sysctl_cursor_set(file, d.name, d.len, ctx->pos);
+		proc_dir_cursor_set(file, d.name, d.len, ctx->pos);
 		err = sysctl_dir_next(ctl_dir, &d, d.name, d.len);
 	}
 	sysctl_dir_done(&d);
 	return err;
-}
-
-static int proc_sys_dir_release(struct inode *inode, struct file *file)
-{
-	kfree(file->private_data);
-	return 0;
 }
 
 static int proc_sys_permission(const struct mnt_idmap *idmap,
@@ -1007,7 +972,7 @@ static const struct file_operations proc_sys_dir_file_operations = {
 	.read		= generic_read_dir,
 	.iterate_shared	= proc_sys_readdir,
 	.llseek		= generic_file_llseek,
-	.release	= proc_sys_dir_release,
+	.release	= proc_dir_release,
 };
 
 static const struct inode_operations proc_sys_inode_operations = {

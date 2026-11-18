@@ -10,6 +10,7 @@
 /proc-net-dev-lseek
 /proc-readdir-churn
 /proc-empty-vm
+/proc-pid-setuid-exec
 /proc-pid-vm
 /proc-self-map-files-001
 /proc-self-map-files-002
@@ -21,12 +22,17 @@
 /proc-uptime-001
 /proc-uptime-002
 /proc-pidns
+/proc-remove-slow-config-reader
 /proc-remove-slow-sysctl
+/proc-remove-slow-reader
+/proc-remove-mapped
 /proc-remove-slow-readlink
 /proc-unmountable
+/proc-remove-slow-writer
 /read
 /self
 /setns-dcache
 /setns-sysvipc
+/proc-remove-polled
 /proc-sysctl-readdir-churn
 /thread-self

@@ -9,11 +9,13 @@
 #include <linux/proc_ns.h>
 #include <linux/refcount.h>
 #include <linux/spinlock.h>
+#include <linux/lockdep.h>
 #include <linux/atomic.h>
 #include <linux/binfmts.h>
 #include <linux/sched/coredump.h>
 #include <linux/sched/task.h>
 #include <linux/mm.h>
+#include <linux/wait.h>
 
 struct ctl_table_header;
 struct mempolicy;
@@ -35,34 +37,43 @@ struct proc_dir_entry {
 	 */
 	atomic_t in_use;
 	refcount_t refcnt;
-	struct list_head pde_openers;	/* who did ->open, but not ->release */
-	/* protects ->pde_openers and all struct pde_opener instances */
-	spinlock_t pde_unload_lock;
-	struct completion *pde_unload_completion;
 	const struct inode_operations *proc_iops;
 	union {
 		const struct proc_ops *proc_ops;
 		const struct file_operations *proc_dir_ops;
+		/* of a permanent entry procfs doesn't mediate, see proc_create_fops() */
+		const struct file_operations *proc_fops;
 	};
 	union {
 		const struct seq_operations *seq_ops;
 		int (*single_show)(struct seq_file *, void *);
 	};
+	/* the open files procfs has to know, see struct pde_open_node */
+	struct pde_open_node *open;
+	/* the seq_operations of the seq_file, see pde_init_seq_direct() */
+	struct seq_operations *seq_direct;
 	proc_write_t write;
 	void *data;
 	unsigned int state_size;
+	unsigned int write_size;
+	unsigned int read_size;
 	unsigned int low_ino;
 	nlink_t nlink;
 	kuid_t uid;
 	kgid_t gid;
+	/* protects ->open->files and all struct pde_opener instances */
+	spinlock_t pde_unload_lock;
 	loff_t size;
 	struct proc_dir_entry *parent;
 	struct rb_root subdir;
 	struct rb_node subdir_node;
 	char *name;
 	umode_t mode;
-	u8 flags;
+	u16 flags;
 	u8 namelen;
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map dep_map;	/* the pin as a lock, see use_pde() */
+#endif
 	char inline_name[];
 } __randomize_layout;
 
@@ -79,31 +90,85 @@ static inline bool pde_is_permanent(const struct proc_dir_entry *pde)
 	return pde->flags & PROC_ENTRY_PERMANENT;
 }
 
-/* This is for builtin code, not even for modules which are compiled in. */
-static inline void pde_make_permanent(struct proc_dir_entry *pde)
+static inline bool pde_has_proc_fops(const struct proc_dir_entry *pde)
 {
-	/* Ensure magic flag does something. */
-	static_assert(PROC_ENTRY_PERMANENT != 0);
-	pde->flags |= PROC_ENTRY_PERMANENT;
-}
-
-static inline bool pde_has_proc_read_iter(const struct proc_dir_entry *pde)
-{
-	return pde->flags & PROC_ENTRY_proc_read_iter;
-}
-
-static inline bool pde_has_proc_compat_ioctl(const struct proc_dir_entry *pde)
-{
-#ifdef CONFIG_COMPAT
-	return pde->flags & PROC_ENTRY_proc_compat_ioctl;
-#else
-	return false;
-#endif
+	return pde->flags & PROC_ENTRY_proc_fops;
 }
 
 static inline bool pde_has_proc_lseek(const struct proc_dir_entry *pde)
 {
 	return pde->flags & PROC_ENTRY_proc_lseek;
+}
+
+static inline bool pde_has_proc_seq_ops(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_seq_ops;
+}
+
+static inline bool pde_has_proc_show(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_show;
+}
+
+static inline bool pde_has_proc_write_buf(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_write_buf;
+}
+
+static inline bool pde_has_short_writes(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_SHORT_WRITES;
+}
+
+static inline bool pde_has_proc_read_buf(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_read_buf;
+}
+
+static inline bool pde_has_full_reads(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_FULL_READS;
+}
+
+static inline bool pde_has_proc_ioctl_buf(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_ioctl_buf;
+}
+
+static inline bool pde_has_proc_poll(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_poll;
+}
+
+/*
+ * procfs has to know the open files of an entry whose ->proc_release() it
+ * calls at removal and whose mappings it undoes then. A permanent entry is
+ * never removed and skips all that, see proc_reg_open(). This looks at the
+ * flags and not at the proc_ops: the last close of a file can come after
+ * the entry was removed and the proc_ops freed with their module, see
+ * proc_reg_release().
+ */
+static inline bool pde_tracks_files(const struct proc_dir_entry *pde)
+{
+	if (pde_is_permanent(pde))
+		return false;
+	return pde->flags & (PROC_ENTRY_proc_release | PROC_ENTRY_proc_mmap);
+}
+
+/* procfs owns the seq_file, see pde_seq_start() */
+static inline bool pde_is_seq_file(const struct proc_dir_entry *pde)
+{
+	return pde_has_proc_seq_ops(pde) || pde_has_proc_show(pde);
+}
+
+/* Only regular files are pinned, and only their map is initialized. */
+static inline bool pde_lockdep(const struct proc_dir_entry *pde)
+{
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	return S_ISREG(pde->mode);
+#else
+	return false;
+#endif
 }
 
 extern struct kmem_cache *proc_dir_entry_cache;
@@ -265,6 +330,14 @@ int proc_nochmod_setattr(const struct mnt_idmap *idmap, struct dentry *dentry,
 extern void proc_pid_evict_inode(struct proc_inode *);
 extern struct inode *proc_pid_make_inode(struct super_block *, struct task_struct *, umode_t);
 extern void pid_update_inode(struct task_struct *, struct inode *);
+int proc_exec_id_single_open(struct inode *inode, struct file *file,
+			     int (*show)(struct seq_file *, void *));
+int proc_exec_id_single_release(struct inode *inode, struct file *file);
+int proc_exec_id_dir_open(struct inode *inode, struct file *file);
+int proc_exec_id_dir_release(struct inode *inode, struct file *file);
+int proc_exec_id_lock(const struct file *file, struct task_struct *task,
+		      u64 *exec_id);
+void proc_exec_id_unlock(struct task_struct *task);
 extern int pid_delete_dentry(const struct dentry *);
 extern int proc_pid_readdir(struct file *, struct dir_context *);
 struct dentry *proc_pid_lookup(struct dentry *, unsigned int);
@@ -282,11 +355,37 @@ bool proc_fill_cache(struct file *, struct dir_context *, const char *, unsigned
 struct proc_dir_entry *proc_create_reg(const char *name, umode_t mode,
 		struct proc_dir_entry **parent, void *data);
 struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
-		struct proc_dir_entry *dp);
+		struct proc_dir_entry *dp,
+		struct lock_class_key *key);
 extern struct dentry *proc_lookup(struct inode *, struct dentry *, unsigned int);
 struct dentry *proc_lookup_de(struct inode *, struct dentry *, struct proc_dir_entry *);
 extern int proc_readdir(struct file *, struct dir_context *);
 int proc_readdir_de(struct file *, struct dir_context *, struct proc_dir_entry *);
+
+/*
+ * Where the next readdir resumes. The entries are counted, so one that is
+ * added or removed in front of the position would shift what the next call
+ * returns. The name of the last entry emitted doesn't move. The directory's
+ * file keeps it, see proc_dir_release().
+ */
+struct proc_dir_cursor {
+	loff_t pos;			/* the position behind the entry */
+	unsigned int len;
+	char name[NAME_MAX + 1];
+};
+
+/* The entry to resume after, if the position is still the one behind it. */
+static inline const struct proc_dir_cursor *
+proc_dir_cursor_at(struct file *file, loff_t pos)
+{
+	const struct proc_dir_cursor *cursor = file->private_data;
+
+	if (cursor && cursor->pos == pos)
+		return cursor;
+	return NULL;
+}
+void proc_dir_cursor_set(struct file *file, const char *name, unsigned int len,
+			 loff_t pos);
 int proc_dir_release(struct inode *, struct file *);
 
 static inline void pde_get(struct proc_dir_entry *pde)
@@ -299,7 +398,7 @@ static inline bool is_empty_pde(const struct proc_dir_entry *pde)
 {
 	return S_ISDIR(pde->mode) && !pde->proc_iops;
 }
-extern ssize_t proc_simple_write(struct file *, const char __user *, size_t, loff_t *);
+extern ssize_t proc_simple_write(struct file *, char *, size_t, loff_t *);
 
 /*
  * inode.c
@@ -310,6 +409,22 @@ struct pde_opener {
 	bool closing;
 	struct completion *c;
 } __randomize_layout;
+
+/*
+ * What procfs keeps for the open files of an entry: the files themselves if
+ * it has to call their ->proc_release() and undo their mappings when the
+ * entry is removed, that is for an entry with a ->proc_release() or a
+ * ->proc_mmap(), and the wait queue their pollers sleep on for an entry with
+ * a ->proc_poll(). Allocated with the entry, see proc_register().
+ */
+struct pde_open_node {
+	/* who did ->open, but not ->release, see pde_tracks_files() */
+	struct list_head files;
+	/* of its mappings, the same for all of them, see pde_mmap() */
+	const struct vm_operations_struct *vm_ops;
+	/* what poll() and epoll wait on, see proc_poll_notify() */
+	wait_queue_head_t poll;
+};
 extern const struct inode_operations proc_link_inode_operations;
 extern const struct inode_operations proc_pid_link_inode_operations;
 extern const struct super_operations proc_sops;
@@ -318,6 +433,9 @@ void proc_init_kmemcache(void);
 void proc_invalidate_siblings_dcache(struct hlist_head *inodes, spinlock_t *lock);
 void set_proc_pid_nlink(void);
 extern struct inode *proc_get_inode(struct super_block *, struct proc_dir_entry *);
+void *pde_seq_start(struct seq_file *m, loff_t *pos);
+void pde_seq_stop(struct seq_file *m, void *v);
+void *pde_single_next(struct seq_file *m, void *v, loff_t *pos);
 extern void proc_entry_rundown(struct proc_dir_entry *);
 
 /*

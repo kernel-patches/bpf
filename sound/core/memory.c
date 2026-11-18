@@ -7,31 +7,8 @@
 
 #include <linux/export.h>
 #include <linux/io.h>
-#include <linux/uaccess.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
-
-/**
- * copy_to_user_fromio - copy data from mmio-space to user-space
- * @dst: the destination pointer on user-space
- * @src: the source pointer on mmio
- * @count: the data size to copy in bytes
- *
- * Copies the data from mmio-space to user-space.
- *
- * Return: Zero if successful, or non-zero on failure.
- */
-int copy_to_user_fromio(void __user *dst, const volatile void __iomem *src, size_t count)
-{
-	struct iov_iter iter;
-
-	if (import_ubuf(ITER_DEST, dst, count, &iter))
-		return -EFAULT;
-	if (copy_to_iter_fromio((const void __iomem *)src, count, &iter) != count)
-		return -EFAULT;
-	return 0;
-}
-EXPORT_SYMBOL(copy_to_user_fromio);
 
 /**
  * copy_to_iter_fromio - copy data from mmio-space to iov_iter
@@ -67,28 +44,6 @@ size_t copy_to_iter_fromio(const void __iomem *src, size_t count,
 #endif
 }
 EXPORT_SYMBOL(copy_to_iter_fromio);
-
-/**
- * copy_from_user_toio - copy data from user-space to mmio-space
- * @dst: the destination pointer on mmio-space
- * @src: the source pointer on user-space
- * @count: the data size to copy in bytes
- *
- * Copies the data from user-space to mmio-space.
- *
- * Return: Zero if successful, or non-zero on failure.
- */
-int copy_from_user_toio(volatile void __iomem *dst, const void __user *src, size_t count)
-{
-	struct iov_iter iter;
-
-	if (import_ubuf(ITER_SOURCE, (void __user *)src, count, &iter))
-		return -EFAULT;
-	if (copy_from_iter_toio((void __iomem *)dst, count, &iter) != count)
-		return -EFAULT;
-	return 0;
-}
-EXPORT_SYMBOL(copy_from_user_toio);
 
 /**
  * copy_from_iter_toio - copy data from iov_iter to mmio-space

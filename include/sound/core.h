@@ -291,8 +291,6 @@ static inline int snd_minor_info_oss_init(void) { return 0; }
 
 /* memory.c */
 
-int copy_to_user_fromio(void __user *dst, const volatile void __iomem *src, size_t count);
-int copy_from_user_toio(volatile void __iomem *dst, const void __user *src, size_t count);
 
 /* init.c */
 

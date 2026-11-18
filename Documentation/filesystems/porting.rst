@@ -1445,3 +1445,71 @@ ERR_PTR() then, e.g., when overlayfs can't look up the data of a metacopy file
 in a data-only layer. Use d_real_data_inode(), which returns the inode hosting
 the data or an ERR_PTR(), and handle the error. Use d_real_metadata_inode() for
 the inode hosting the metadata and handle its errors as well.
+
+---
+
+**mandatory**
+
+procfs wraps the vm_operations of a mapping made by ->proc_mmap() so
+that ->open(), ->fault(), ->page_mkwrite() and ->access() run with the
+entry pinned, like for a kernfs file. Nothing else of them is called, a
+mapping with a ->close() is refused, and every mapping of an entry has
+to use the same vm_operations. Removing the entry unmaps the mappings
+in its own address space and a fault into one of them is SIGBUS from
+then on.
+
+---
+
+**mandatory**
+
+->proc_write() is gone. Implement ->proc_write_buf() instead. procfs
+copies what is written into a NUL-terminated kernel buffer of at most
+->proc_write_size bytes, PAGE_SIZE - 1 if that's 0, before it pins the
+entry and calls the method with it, so the method never touches
+userspace. Larger writes fail with -EINVAL unless the entry asks for
+PROC_ENTRY_SHORT_WRITES. The position is NULL for a stream.
+
+---
+
+**mandatory**
+
+->proc_ioctl() and ->proc_compat_ioctl() are gone. Implement
+->proc_ioctl_buf() and list the commands in ->proc_ioctl_args with how
+many bytes each copies in and out, PROC_IOCTL_IOC() fills that in for a
+command that encodes its argument. procfs copies the argument in before
+it pins the entry, calls the method with the kernel copy and copies it
+back out after unpinning the entry if the ioctl succeeded. A command
+that isn't in the table fails with -ENOTTY, 32-bit tasks go through the
+same table.
+
+---
+
+**mandatory**
+
+->proc_read() and ->proc_read_iter() are gone. Implement
+->proc_read_buf() instead. It fills a kernel buffer of at most
+->proc_read_size bytes, PAGE_SIZE if that's 0, which procfs copies to
+userspace after it unpinned the entry, so the method never touches
+userspace. Larger reads come up short unless the entry asks for
+PROC_ENTRY_FULL_READS. seq_file entries are read by procfs itself, see
+proc_create_seq() and friends. An initializer that still names
+->proc_read fails to build, seq_read() included.
+
+---
+
+**mandatory**
+
+->proc_poll() takes the file only. procfs owns a wait queue for the
+entry and does the poll_wait() on it before it calls the method, which
+only reports the mask. Wake the pollers with proc_poll_notify(). A poll
+on a removed entry reports EPOLLERR | EPOLLPRI.
+
+---
+
+**mandatory**
+
+pde_make_permanent() and proc_make_permanent() are gone. An entry that is
+never removed is created with the flag already set, PROC_ENTRY_PERMANENT
+in ->proc_flags for a proc_ops entry, proc_create_seq_permanent() or
+proc_create_single_permanent() for a seq_file one, so that nothing can
+pin it before it is permanent.

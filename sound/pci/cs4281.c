@@ -1104,25 +1104,23 @@ static void snd_cs4281_proc_read(struct snd_info_entry *entry,
 
 static ssize_t snd_cs4281_BA0_read(struct snd_info_entry *entry,
 				   void *file_private_data,
-				   struct file *file, char __user *buf,
+				   struct file *file, char *buf,
 				   size_t count, loff_t pos)
 {
 	struct cs4281 *chip = entry->private_data;
 	
-	if (copy_to_user_fromio(buf, chip->ba0 + pos, count))
-		return -EFAULT;
+	memcpy_fromio(buf, chip->ba0 + pos, count);
 	return count;
 }
 
 static ssize_t snd_cs4281_BA1_read(struct snd_info_entry *entry,
 				   void *file_private_data,
-				   struct file *file, char __user *buf,
+				   struct file *file, char *buf,
 				   size_t count, loff_t pos)
 {
 	struct cs4281 *chip = entry->private_data;
 	
-	if (copy_to_user_fromio(buf, chip->ba1 + pos, count))
-		return -EFAULT;
+	memcpy_fromio(buf, chip->ba1 + pos, count);
 	return count;
 }
 
