@@ -684,6 +684,9 @@ features have not been used.  If the lower tree is modified and any of these
 features has been used, the behavior of the overlay is undefined,
 though it will not result in a crash or deadlock.
 
+When offline changes to the lower tree are not allowed, the lower tree
+is also not allowed to be a pseudo kernel filesystem (e.g. sysfs).
+
 When the overlay NFS export feature is enabled, overlay filesystems
 behavior on offline changes of the underlying lower layer is different
 than the behavior when NFS export is disabled.
