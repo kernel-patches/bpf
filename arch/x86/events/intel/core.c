@@ -2819,17 +2819,26 @@ static void intel_pmu_enable_all(int added)
 	__intel_pmu_enable_all(false);
 }
 
+struct lbr_snapshot {
+	u64 __lbr_stack[LBR_STACK_SIZE / sizeof(u64)];
+	u64 counters[MAX_LBR_ENTRIES];
+};
+static DEFINE_PER_CPU(struct lbr_snapshot, lbr_snapshot);
+
 static noinline int
 __intel_pmu_snapshot_branch_stack(struct perf_branch_entry *entries,
 				  unsigned int cnt, unsigned long flags,
 				  int pmu_enabled, int lbr_enabled)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+	struct lbr_snapshot *bpf = this_cpu_ptr(&lbr_snapshot);
+	struct perf_branch_stack *lbr_stack;
 
-	intel_pmu_lbr_read(cpu_lbr_stack(cpuc), cpuc->lbr_counters);
-	cnt = min_t(unsigned int, cnt, cpu_lbr_stack(cpuc)->nr);
+	lbr_stack = (struct perf_branch_stack *)bpf->__lbr_stack;
+	intel_pmu_lbr_read(lbr_stack, bpf->counters);
+	cnt = min_t(unsigned int, cnt, lbr_stack->nr);
 
-	memcpy(entries, cpu_lbr_stack(cpuc)->entries,
+	memcpy(entries, lbr_stack->entries,
 	       sizeof(struct perf_branch_entry) * cnt);
 
 	/*
