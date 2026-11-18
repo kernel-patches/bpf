@@ -81,6 +81,34 @@ static int mount_upperdir(const char *upper, const char *work)
 	return 0;
 }
 
+/* Mount an overlayfs with an upper layer and extra options. */
+static int mount_upper_opts(const char *lowerdir, const char *upper,
+			    const char *work, const char *extra)
+{
+	char opts[256];
+
+	snprintf(opts, sizeof(opts), "lowerdir=%s,upperdir=%s,workdir=%s,%s",
+		 lowerdir, upper, work, extra);
+	if (sys_mount("overlay", "/tmp/merged", "overlay", 0, opts))
+		return -errno;
+	if (umount2("/tmp/merged", 0))
+		return -errno;
+	return 0;
+}
+
+/* The index needs xattrs and file handles on the upper layer. */
+static bool have_index(void)
+{
+	struct stat st;
+
+	if (mkdir("/tmp/iupper", 0755) || mkdir("/tmp/iwork", 0755))
+		return false;
+	if (mount_upper_opts("/tmp/lower", "/tmp/iupper", "/tmp/iwork",
+			     "index=on"))
+		return false;
+	return !stat("/tmp/iwork/index", &st);
+}
+
 /* Create an overlayfs with "upperdir" and "workdir" through fsconfig. */
 static int fsmount_upper(const char *upper, const char *work, bool by_fd)
 {
@@ -201,6 +229,75 @@ TEST(lowerdir_sysfs_with_datadir)
 	EXPECT_EQ(mount_lowerdir("/sys/kernel::/tmp/data"), -EINVAL);
 	EXPECT_EQ(fsmount_layers("/sys/kernel", "/tmp/data", false), -EINVAL);
 	EXPECT_EQ(fsmount_layers("/sys/kernel", "/tmp/data", true), -EINVAL);
+}
+
+#define INDEX_OPTS "index=on," LEGACY_OPTS
+
+/*
+ * sysfs and ramfs don't support file handles, so the index falls back to off
+ * and the mount is a legacy setup, whatever the order of the lower layers.
+ */
+TEST(lowerdir_sysfs_index)
+{
+	ASSERT_EQ(setup_tmp(), 0);
+	if (!have_index())
+		SKIP(return, "overlayfs index not supported on tmpfs");
+	ASSERT_EQ(mkdir("/tmp/ramfs", 0755), 0);
+	ASSERT_EQ(sys_mount("ramfs", "/tmp/ramfs", "ramfs", 0, NULL), 0);
+
+	EXPECT_EQ(mount_upper_opts("/sys/kernel", "/tmp/upper", "/tmp/work",
+				   INDEX_OPTS), 0);
+	EXPECT_EQ(mount_upper_opts("/tmp/lower:/sys/kernel", "/tmp/upper",
+				   "/tmp/work", INDEX_OPTS), 0);
+	EXPECT_EQ(mount_upper_opts("/sys/kernel:/tmp/ramfs", "/tmp/upper",
+				   "/tmp/work", INDEX_OPTS), 0);
+	EXPECT_EQ(mount_upper_opts("/tmp/ramfs:/sys/kernel", "/tmp/upper",
+				   "/tmp/work", INDEX_OPTS), 0);
+}
+
+/*
+ * Like CONFIG_OVERLAY_FS_NFS_EXPORT=y with redirect_dir=off and
+ * CONFIG_OVERLAY_FS_REDIRECT_ALWAYS_FOLLOW=n: nfs_export turns on the index in
+ * a non-upper mount that never uses it.  sysfs doesn't support file handles,
+ * so both fall back to off.
+ */
+#define NFS_EXPORT_OPTS "nfs_export=on,redirect_dir=nofollow,metacopy=off"
+
+TEST(lowerdir_sysfs_nfs_export)
+{
+	ASSERT_EQ(setup_tmp(), 0);
+
+	EXPECT_EQ(mount_lowerdir_opts("/sys/kernel:/tmp/lower",
+				      NFS_EXPORT_OPTS), 0);
+	EXPECT_EQ(mount_lowerdir_opts("/tmp/lower:/sys/kernel",
+				      NFS_EXPORT_OPTS), 0);
+}
+
+/*
+ * cgroup2 supports file handles, so the index stays on and cgroup2 is refused
+ * as lower layer, unless the mount falls back to read-only without a workdir.
+ */
+TEST(lowerdir_cgroup2_index)
+{
+	ASSERT_EQ(setup_tmp(), 0);
+	if (!have_index())
+		SKIP(return, "overlayfs index not supported on tmpfs");
+	ASSERT_EQ(mkdir("/tmp/cgroup", 0755), 0);
+	if (sys_mount("cgroup2", "/tmp/cgroup", "cgroup2", 0, NULL))
+		SKIP(return, "cgroup2 not supported");
+
+	EXPECT_EQ(mount_upper_opts("/tmp/cgroup", "/tmp/upper", "/tmp/work",
+				   INDEX_OPTS), -EINVAL);
+	EXPECT_EQ(mount_upper_opts("/tmp/cgroup", "/tmp/upper", "/tmp/work",
+				   "index=off," LEGACY_OPTS), 0);
+
+	/* A tmpfs with three inodes has no room for the workdir */
+	ASSERT_EQ(mkdir("/tmp/full", 0755), 0);
+	ASSERT_EQ(sys_mount("tmpfs", "/tmp/full", "tmpfs", 0, "nr_inodes=3"), 0);
+	ASSERT_EQ(mkdir("/tmp/full/upper", 0755), 0);
+	ASSERT_EQ(mkdir("/tmp/full/work", 0755), 0);
+	EXPECT_EQ(mount_upper_opts("/tmp/cgroup", "/tmp/full/upper",
+				   "/tmp/full/work", INDEX_OPTS), 0);
 }
 
 /*
