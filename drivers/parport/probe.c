@@ -52,7 +52,7 @@ static void pretty_print(struct parport *port, int device)
 
 static void parse_data(struct parport *port, int device, char *str)
 {
-	char *txt = kmalloc(strlen(str)+1, GFP_KERNEL);
+	char *txt = kstrdup(str, GFP_KERNEL);
 	char *p = txt, *q;
 	int guessed_class = PARPORT_CLASS_UNSPEC;
 	struct parport_device_info *info = &port->probe_info[device + 1];
@@ -61,7 +61,6 @@ static void parse_data(struct parport *port, int device, char *str)
 		pr_warn("%s probe: memory squeeze\n", port->name);
 		return;
 	}
-	strcpy(txt, str);
 	while (p) {
 		char *sep;
 		q = strchr(p, ';');
