@@ -353,6 +353,13 @@ static void free_all_urbs(rtl8150_t * dev)
 	usb_free_urb(dev->intr_urb);
 }
 
+static void terminate_all_urbs(rtl8150_t *dev)
+{
+	usb_poison_urb(dev->rx_urb);
+	usb_poison_urb(dev->tx_urb);
+	usb_poison_urb(dev->intr_urb);
+}
+
 static void unlink_all_urbs(rtl8150_t * dev)
 {
 	usb_kill_urb(dev->rx_urb);
@@ -970,7 +977,8 @@ static void rtl8150_disconnect(struct usb_interface *intf)
 		set_bit(RTL8150_UNPLUG, &dev->flags);
 		tasklet_kill(&dev->tl);
 		unregister_netdev(dev->netdev);
-		unlink_all_urbs(dev);
+		terminate_all_urbs(dev);
+		tasklet_kill(&dev->tl);
 		free_all_urbs(dev);
 		free_skb_pool(dev);
 		dev_kfree_skb(dev->rx_skb);
