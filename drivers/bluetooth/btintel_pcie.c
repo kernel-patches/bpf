@@ -658,6 +658,7 @@ static inline void btintel_pcie_dump_debug_registers(struct hci_dev *hdev)
 }
 
 static inline bool btintel_pcie_in_d3(struct btintel_pcie_data *data);
+static void btintel_pcie_user_dump_req_worker(struct work_struct *work);
 
 static int btintel_pcie_send_sync(struct btintel_pcie_data *data,
 				  struct sk_buff *skb, u32 pkt_type, u16 opcode)
@@ -4116,6 +4117,7 @@ static void btintel_pcie_probe_cleanup(struct btintel_pcie_data *data)
 	btintel_pcie_disable_interrupts(data);
 	btintel_pcie_synchronize_irqs(data);
 
+	disable_work_sync(&data->user_dump_req_work);
 	disable_work_sync(&data->coredump_work);
 	disable_work_sync(&data->hwexp_work);
 	disable_work_sync(&data->fwtrigger_work);
@@ -4596,6 +4598,8 @@ static void btintel_pcie_reset_work(struct work_struct *wk)
 	if (!data)
 		goto out;
 
+	disable_work_sync(&data->user_dump_req_work);
+
 	btintel_pcie_mask_hw_rfkill(data);
 	btintel_pcie_synchronize_irqs(data);
 	disable_delayed_work_sync(&data->hw_rfkill_work);
@@ -4632,6 +4636,7 @@ static void btintel_pcie_reset_work(struct work_struct *wk)
 	}
 
 	if (btintel_pcie_perform_flr(data)) {
+		enable_work(&data->user_dump_req_work);
 		enable_work(&data->coredump_work);
 		enable_work(&data->hwexp_work);
 		enable_work(&data->fwtrigger_work);
@@ -4947,6 +4952,7 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 	INIT_WORK(&data->fwtrigger_work, btintel_pcie_fwtrigger_worker);
 	INIT_WORK(&data->mbox_work, btintel_pcie_mbox_worker);
 	INIT_DELAYED_WORK(&data->user_dump_work, btintel_pcie_user_dump_worker);
+	INIT_WORK(&data->user_dump_req_work, btintel_pcie_user_dump_req_worker);
 
 	data->boot_stage_cache = 0x00;
 	data->img_resp_cache = 0x00;
@@ -5039,6 +5045,7 @@ static void btintel_pcie_remove(struct pci_dev *pdev)
 	 * the disable counters stay >= 1 even after reset_work()'s
 	 * balanced enable_work() (counter 2 -> 1, never reaching 0).
 	 */
+	disable_work_sync(&data->user_dump_req_work);
 	disable_work_sync(&data->coredump_work);
 	disable_work_sync(&data->hwexp_work);
 	disable_work_sync(&data->fwtrigger_work);
@@ -5088,7 +5095,6 @@ static void btintel_pcie_remove(struct pci_dev *pdev)
 	pci_set_drvdata(pdev, NULL);
 }
 
-#ifdef CONFIG_DEV_COREDUMP
 static u32 btintel_pcie_ipc_ctrl_toggle(struct btintel_pcie_data *data, u32 bits)
 {
 	unsigned long flags;
@@ -5115,13 +5121,26 @@ static void btintel_pcie_trigger_fw_dump_collect(struct btintel_pcie_data *data)
 		    "IPC doorbell sent to FW for DBGC flush (IPC_CTRL=0x%08x)", reg);
 }
 
-static void btintel_pcie_coredump(struct device *dev)
+static bool btintel_pcie_fw_operational(struct btintel_pcie_data *data)
 {
-	struct  pci_dev *pdev = to_pci_dev(dev);
-	struct btintel_pcie_data *data = pci_get_drvdata(pdev);
+	return test_bit(BTINTEL_PCIE_SETUP_DONE, &data->flags) &&
+	       !test_bit(BTINTEL_PCIE_RECOVERY_IN_PROGRESS, &data->flags);
+}
 
-	if (!data)
+/* Drained by reset_work() before the device is quiesced */
+static void btintel_pcie_user_dump_req_worker(struct work_struct *work)
+{
+	struct btintel_pcie_data *data = container_of(work,
+					struct btintel_pcie_data, user_dump_req_work);
+
+	if (!data->hdev)
 		return;
+
+	if (!btintel_pcie_fw_operational(data)) {
+		bt_dev_warn(data->hdev,
+			    "coredump rejected: firmware not operational");
+		return;
+	}
 
 	if (test_bit(BTINTEL_PCIE_COREDUMP_INPROGRESS, &data->flags) ||
 	    test_bit(BTINTEL_PCIE_FWTRIGGER_DUMP_INPROGRESS, &data->flags)) {
@@ -5143,9 +5162,8 @@ static void btintel_pcie_coredump(struct device *dev)
 		return;
 	}
 
-	/* Only a halted core cannot answer the doorbell. FW services it
-	 * regardless of host setup or recovery state, so no other state
-	 * needs to be excluded; collect directly here.
+	/* Only a halted core cannot answer the doorbell; collect directly
+	 * here.
 	 */
 	if (test_bit(BTINTEL_PCIE_CORE_HALTED, &data->flags)) {
 		btintel_pcie_queue_coredump(data,
@@ -5163,9 +5181,8 @@ static void btintel_pcie_coredump(struct device *dev)
 	 * runs with the flag clear and leaves it set without a timer.
 	 *
 	 * The flag/arm/doorbell sequence is not atomic against the interrupt
-	 * handler or reset. A firmware trigger while the request is pending
-	 * may take the user-dump reason, and a reset in it may leave the flag
-	 * set until the next reset. Both are rare and do not affect the dump
+	 * handler. A firmware trigger while the request is pending may take
+	 * the user-dump reason. This is rare and does not affect the dump
 	 * contents.
 	 */
 	set_bit(BTINTEL_PCIE_USER_TRIGGERED_DUMP, &data->flags);
@@ -5178,6 +5195,26 @@ static void btintel_pcie_coredump(struct device *dev)
 	}
 
 	btintel_pcie_trigger_fw_dump_collect(data);
+}
+
+#ifdef CONFIG_DEV_COREDUMP
+static void btintel_pcie_coredump(struct device *dev)
+{
+	struct  pci_dev *pdev = to_pci_dev(dev);
+	struct btintel_pcie_data *data = pci_get_drvdata(pdev);
+
+	if (!data)
+		return;
+
+	if (!btintel_pcie_fw_operational(data)) {
+		bt_dev_warn(data->hdev,
+			    "coredump rejected: firmware not operational");
+		return;
+	}
+
+	if (!queue_work(data->dump_workqueue, &data->user_dump_req_work))
+		bt_dev_warn(data->hdev,
+			    "coredump rejected: request pending or workqueue disabled");
 }
 #endif
 
@@ -5290,6 +5327,7 @@ static int btintel_pcie_suspend_late(struct device *dev, pm_message_t mesg)
 	 * request, then let an in-flight timeout worker and any queued dump
 	 * finish before the device enters D3.
 	 */
+	cancel_work_sync(&data->user_dump_req_work);
 	clear_bit(BTINTEL_PCIE_USER_TRIGGERED_DUMP, &data->flags);
 	cancel_delayed_work_sync(&data->user_dump_work);
 	flush_work(&data->fwtrigger_work);

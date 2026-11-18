@@ -818,6 +818,7 @@ struct btintel_pcie_data {
 	struct work_struct	fwtrigger_work;
 	struct work_struct	mbox_work;
 	struct delayed_work	user_dump_work;
+	struct work_struct	user_dump_req_work;
 
 	struct dma_pool	*dma_pool;
 	dma_addr_t	dma_p_addr;
