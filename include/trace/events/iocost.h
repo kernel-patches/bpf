@@ -181,6 +181,63 @@ TRACE_EVENT(iocost_ioc_vrate_adj,
 	)
 );
 
+/*
+ * Periodic per-device summary, emitted once per period before the vrate
+ * adjustment and the period transition in ioc_timer_fn(). Unlike the
+ * state-change events above, this fires every period the controller is
+ * running, including steady states, and one final time before the
+ * controller goes idle, so the transition to dormancy is directly
+ * visible. It carries the overall controller state so basic monitoring
+ * doesn't require drgn.
+ *
+ * vrate is the current vrate in vtime units, where one IO time second
+ * is VTIME_PER_SEC (2^37) vtime and cost.vrate in io.stat reports the
+ * same value as a percentage of that base.
+ *
+ * nr_active is the number of iocgs on the active list when the event
+ * fires, gathered only when the tracepoint is enabled.
+ * usage_pct is the active iocgs' raw usage deltas summed over the period,
+ * as a percentage of the period wall time, the input to debt forgiveness
+ * decisions, before any per-iocg in-flight usage correction (donation
+ * decisions use the per-iocg usage after that correction). It can
+ * exceed 100% when concurrent service-time estimates exceed wall time.
+ */
+TRACE_EVENT(iocost_ioc_tick,
+
+	TP_PROTO(struct ioc *ioc, const struct ioc_now *now,
+		 int nr_active, u64 usage_us_sum),
+
+	TP_ARGS(ioc, now, nr_active, usage_us_sum),
+
+	TP_STRUCT__entry (
+		__string(devname, ioc_name(ioc))
+		__field(u64, cur_period)
+		__field(u32, period_us)
+		__field(u64, vrate)
+		__field(int, busy_level)
+		__field(int, nr_active)
+		__field(u64, usage_pct)
+	),
+
+	TP_fast_assign(
+		__assign_str(devname);
+		__entry->cur_period = atomic64_read(&ioc->cur_period);
+		__entry->period_us = ioc->period_us;
+		__entry->vrate = ioc->vtime_base_rate;
+		__entry->busy_level = ioc->busy_level;
+		__entry->nr_active = nr_active;
+		__entry->usage_pct = now->now > ioc->period_at ?
+			div64_u64(usage_us_sum * 100,
+				  now->now - ioc->period_at) : 0;
+	),
+
+	TP_printk("[%s] period=%llu:%uus vrate=%llu busy=%d active=%d usage=%llu%%",
+		__get_str(devname), __entry->cur_period, __entry->period_us,
+		__entry->vrate, __entry->busy_level, __entry->nr_active,
+		__entry->usage_pct
+	)
+);
+
 TRACE_EVENT(iocost_iocg_forgive_debt,
 
 	TP_PROTO(struct ioc_gq *iocg, const char *path, struct ioc_now *now,
