@@ -128,7 +128,13 @@ int create_user_ns(struct cred *new)
 	if (!ns)
 		goto fail_dec;
 
-	ns->parent_could_setfcap = cap_raised(new->cap_effective, CAP_SETFCAP);
+	/*
+	 * verify_root_map() relies on this once the creator only has
+	 * capabilities in the new namespace.  Let LSMs deny it, but do not
+	 * audit: the creator may never map uid 0.
+	 */
+	ns->parent_could_setfcap =
+		!security_capable(new, parent_ns, CAP_SETFCAP, CAP_OPT_NOAUDIT);
 
 	ret = ns_common_init(ns);
 	if (ret)
