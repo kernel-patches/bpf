@@ -1356,6 +1356,7 @@ ENTRY(aes_sparc64_cbc_decrypt_256)
 	 nop
 ENDPROC(aes_sparc64_cbc_decrypt_256)
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CTR)
 	.align		32
 ENTRY(aes_sparc64_ctr_crypt_128)
 	/* %o0=key, %o1=input, %o2=output, %o3=len, %o4=IV */
@@ -1363,7 +1364,7 @@ ENTRY(aes_sparc64_ctr_crypt_128)
 	ldx		[%o4 + 0x08], %g7
 	subcc		%o3, 0x10, %o3
 	ldx		[%o0 + 0x00], %g1
-	be		10f
+	be,pn		%xcc, 10f
 	 ldx		[%o0 + 0x08], %g2
 1:	xor		%g1, %g3, %o5
 	MOVXTOD_O5_F0
@@ -1424,7 +1425,7 @@ ENTRY(aes_sparc64_ctr_crypt_192)
 	ldx		[%o4 + 0x08], %g7
 	subcc		%o3, 0x10, %o3
 	ldx		[%o0 + 0x00], %g1
-	be		10f
+	be,pn		%xcc, 10f
 	 ldx		[%o0 + 0x08], %g2
 1:	xor		%g1, %g3, %o5
 	MOVXTOD_O5_F0
@@ -1485,7 +1486,7 @@ ENTRY(aes_sparc64_ctr_crypt_256)
 	ldx		[%o4 + 0x08], %g7
 	subcc		%o3, 0x10, %o3
 	ldx		[%o0 + 0x00], %g1
-	be		10f
+	be,pn		%xcc, 10f
 	 ldx		[%o0 + 0x08], %g2
 1:	xor		%g1, %g3, %o5
 	MOVXTOD_O5_F0
@@ -1542,6 +1543,7 @@ ENTRY(aes_sparc64_ctr_crypt_256)
 	retl
 	 stx		%g7, [%o4 + 0x08]
 ENDPROC(aes_sparc64_ctr_crypt_256)
+#endif /* CONFIG_CRYPTO_LIB_AES_CTR */
 
 #if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_XTS)
 	/* XTS.  The tweak is kept in %l0/%l1 as little-endian words, so that

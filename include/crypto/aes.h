@@ -332,12 +332,6 @@ void aes_sparc64_cbc_decrypt_192(const u64 *key, const u64 *input, u64 *output,
 				 unsigned int len, u64 *iv);
 void aes_sparc64_cbc_decrypt_256(const u64 *key, const u64 *input, u64 *output,
 				 unsigned int len, u64 *iv);
-void aes_sparc64_ctr_crypt_128(const u64 *key, const u64 *input, u64 *output,
-			       unsigned int len, u64 *iv);
-void aes_sparc64_ctr_crypt_192(const u64 *key, const u64 *input, u64 *output,
-			       unsigned int len, u64 *iv);
-void aes_sparc64_ctr_crypt_256(const u64 *key, const u64 *input, u64 *output,
-			       unsigned int len, u64 *iv);
 #endif
 
 /**
