@@ -110,10 +110,13 @@ void __init paging_init(void)
 void mark_rodata_ro(void)
 {
 	unsigned long size = __end_ro_after_init - __start_ro_after_init;
+	int rc;
 
 	if (cpu_has_nx())
 		system_ctl_set_bit(0, CR0_INSTRUCTION_EXEC_PROTECTION_BIT);
-	__set_memory_ro(__start_ro_after_init, __end_ro_after_init);
+	rc = __set_memory_ro(__start_ro_after_init, __end_ro_after_init);
+	if (rc)
+		panic("%s() failed, err = %d\n", __func__, rc);
 	pr_info("Write protected read-only-after-init data: %luk\n", size >> 10);
 }
 
