@@ -9,10 +9,10 @@
 #include "xe_pcode.h"
 #include "xe_pcode_api.h"
 #include "xe_tile_sysfs.h"
-#include "xe_vram_freq.h"
+#include "xe_vram_config.h"
 
 /**
- * DOC: Xe VRAM freq
+ * DOC: Xe VRAM config
  *
  * Provides sysfs entries for vram frequency in tile
  *
@@ -93,14 +93,14 @@ static void vram_freq_sysfs_fini(void *arg)
 }
 
 /**
- * xe_vram_freq_sysfs_init - Initialize vram frequency sysfs component
+ * xe_vram_config_sysfs_init - Initialize vram configuration sysfs component
  * @tile: Xe Tile object
  *
  * It needs to be initialized after the main tile component is ready
  *
  * Returns: 0 on success, negative error code on error.
  */
-int xe_vram_freq_sysfs_init(struct xe_tile *tile)
+int xe_vram_config_sysfs_init(struct xe_tile *tile)
 {
 	struct xe_device *xe = tile_to_xe(tile);
 	struct kobject *kobj;
