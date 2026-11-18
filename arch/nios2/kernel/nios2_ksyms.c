@@ -21,25 +21,3 @@ EXPORT_SYMBOL(memmove);
 /* memory management */
 
 EXPORT_SYMBOL(flush_icache_range);
-
-/*
- * libgcc functions - functions that are used internally by the
- * compiler...  (prototypes are not correct though, but that
- * doesn't really matter since they're not versioned).
- */
-#define DECLARE_EXPORT(name)	extern void name(void); EXPORT_SYMBOL(name)
-
-DECLARE_EXPORT(__gcc_bcmp);
-DECLARE_EXPORT(__divsi3);
-DECLARE_EXPORT(__moddi3);
-DECLARE_EXPORT(__modsi3);
-DECLARE_EXPORT(__udivmoddi4);
-DECLARE_EXPORT(__udivsi3);
-DECLARE_EXPORT(__umoddi3);
-DECLARE_EXPORT(__umodsi3);
-DECLARE_EXPORT(__muldi3);
-DECLARE_EXPORT(__mulsi3);
-DECLARE_EXPORT(__ucmpdi2);
-DECLARE_EXPORT(__lshrdi3);
-DECLARE_EXPORT(__ashldi3);
-DECLARE_EXPORT(__ashrdi3);

@@ -337,6 +337,16 @@ obj-$(CONFIG_GENERIC_LIB_LSHRDI3) += lshrdi3.o
 obj-$(CONFIG_GENERIC_LIB_MULDI3) += muldi3.o
 obj-$(CONFIG_GENERIC_LIB_CMPDI2) += cmpdi2.o
 obj-$(CONFIG_GENERIC_LIB_UCMPDI2) += ucmpdi2.o
+obj-$(CONFIG_GENERIC_LIB_MULSI3) += mulsi3.o
+
+divmod-needed := $(or \
+	$(CONFIG_GENERIC_LIB_DIVSI3),\
+	$(CONFIG_GENERIC_LIB_MODSI3),\
+	$(CONFIG_GENERIC_LIB_UDIVSI3),\
+	$(CONFIG_GENERIC_LIB_UMODSI3))
+obj-$(divmod-needed) += divmod.o
+
+
 obj-$(CONFIG_OBJAGG) += objagg.o
 
 # pldmfw library
