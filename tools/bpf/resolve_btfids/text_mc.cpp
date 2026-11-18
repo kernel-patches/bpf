@@ -195,6 +195,8 @@ bool read_opcodes()
 		auto it = by_name.find(pattern->opcode);
 
 		if (it == by_name.end()) {
+			if (pattern->optional)
+				continue;
 			error() << "no opcode " << pattern->opcode << "\n";
 			ok = false;
 		} else if (pattern->kind == TEXT_RETURN) {
