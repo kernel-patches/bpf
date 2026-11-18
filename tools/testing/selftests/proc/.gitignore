@@ -23,6 +23,7 @@
 /proc-pidns
 /proc-remove-slow-sysctl
 /proc-remove-slow-readlink
+/proc-unmountable
 /read
 /self
 /setns-dcache
