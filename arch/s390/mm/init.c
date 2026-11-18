@@ -74,6 +74,7 @@ void __init arch_setup_zero_pages(void)
 {
 	unsigned long total_pages = memblock_estimated_nr_free_pages();
 	unsigned int order;
+	int rc;
 
 	/* Latest machines require a mapping granularity of 512KB */
 	order = 7;
@@ -86,7 +87,9 @@ void __init arch_setup_zero_pages(void)
 
 	zero_page_mask = ((PAGE_SIZE << order) - 1) & PAGE_MASK;
 
-	set_memory_ro(empty_zero_page, 1UL << order);
+	rc = set_memory_ro(empty_zero_page, 1UL << order);
+	if (rc)
+		panic("%s() failed, err = %d\n", __func__, rc);
 }
 
 void __init arch_zone_limits_init(unsigned long *max_zone_pfns)
