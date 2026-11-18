@@ -932,22 +932,31 @@ static int amd_pmu_v2_snapshot_branch_stack(struct perf_branch_entry *entries, u
 {
 	struct cpu_hw_events *cpuc;
 	unsigned long flags;
+	int pmu_enabled;
+	int lbr_enabled;
 
 	/*
 	 * The sequence of steps to freeze LBR should be completely inlined
 	 * and contain no branches to minimize contamination of LBR snapshot
 	 */
 	local_irq_save(flags);
+	cpuc = this_cpu_ptr(&cpu_hw_events);
+	pmu_enabled = cpuc->enabled;
+	lbr_enabled = cpuc->lbr_enabled;
+	cpuc->enabled = 0;
 	amd_pmu_core_disable_all();
 	__amd_pmu_lbr_disable();
-
-	cpuc = this_cpu_ptr(&cpu_hw_events);
 
 	amd_pmu_lbr_read();
 	cnt = min(cnt, cpuc->lbr_stack.nr);
 	memcpy(entries, cpuc->lbr_entries, sizeof(struct perf_branch_entry) * cnt);
 
-	amd_pmu_v2_enable_all(0);
+	if (pmu_enabled) {
+		cpuc->enabled = 1;
+		amd_pmu_core_enable_all();
+	}
+	if (lbr_enabled)
+		amd_pmu_lbr_enable_all();
 	local_irq_restore(flags);
 
 	return cnt;
