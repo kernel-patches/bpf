@@ -105,6 +105,7 @@ static int __exfat_cont_expand(struct inode *inode, loff_t size)
 	if (ret)
 		return ret;
 
+	mutex_lock(&sbi->s_lock);
 	num_clusters = exfat_bytes_to_cluster(sbi, exfat_ondisk_size(inode));
 	/* integer overflow is already checked in inode_newsize_ok(). */
 	new_num_clusters = exfat_bytes_to_cluster_round_up(sbi, size);
@@ -116,7 +117,7 @@ static int __exfat_cont_expand(struct inode *inode, loff_t size)
 		exfat_chain_set(&clu, ei->start_clu, num_clusters, ei->flags);
 		ret = exfat_find_last_cluster(sb, &clu, &last_clu);
 		if (ret)
-			return ret;
+			goto unlock;
 
 		clu.dir = last_clu + 1;
 	} else {
@@ -130,7 +131,7 @@ static int __exfat_cont_expand(struct inode *inode, loff_t size)
 	ret = exfat_alloc_cluster(inode, new_num_clusters - num_clusters,
 			&clu, inode_needs_sync(inode), false);
 	if (ret)
-		return ret;
+		goto unlock;
 
 	/* Append new clusters to chain */
 	if (num_clusters) {
@@ -147,15 +148,19 @@ static int __exfat_cont_expand(struct inode *inode, loff_t size)
 	ei->flags = clu.flags;
 
 out:
+	inode->i_blocks = round_up(size, sbi->cluster_size) >> 9;
 	inode_set_mtime_to_ts(inode, inode_set_ctime_current(inode));
+	mutex_unlock(&sbi->s_lock);
+
 	/*
 	 * When extending file size, call exfat_pagecache_isize_extended()
 	 * to update i_size and ensure the straddling folio is properly
 	 * marked RO so page_mkwrite() is called and post-EOF area is zeroed.
+	 *
+	 * It takes the folio lock; call it without s_lock (writeback uses
+	 * folio lock -> s_lock).
 	 */
 	exfat_pagecache_isize_extended(inode, oldsize, size);
-
-	inode->i_blocks = round_up(size, sbi->cluster_size) >> 9;
 	mark_inode_dirty(inode);
 
 	if (IS_SYNC(inode))
@@ -165,7 +170,10 @@ out:
 
 free_clu:
 	exfat_free_cluster(inode, &clu);
-	return -EIO;
+	ret = -EIO;
+unlock:
+	mutex_unlock(&sbi->s_lock);
+	return ret;
 }
 
 static int exfat_cont_expand(struct inode *inode, loff_t size)
