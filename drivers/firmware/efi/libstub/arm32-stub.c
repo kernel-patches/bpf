@@ -76,6 +76,12 @@ void efi_handle_post_ebs_state(void)
 		      &efi_entry_state->sctlr_after_ebs);
 }
 
+/* last unaligned u32 in the image carries the uncompressed size */
+extern u32 input_data_end[] __aligned(1);
+
+/* entry #3 in the zimage magic table carries the kernel's BSS size */
+extern u32 zimage_magic_table[] asm("_table_start");
+
 efi_status_t handle_kernel_image(unsigned long *image_addr,
 				 unsigned long *image_size,
 				 unsigned long *reserve_addr,
@@ -83,18 +89,22 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 				 efi_loaded_image_t *image,
 				 efi_handle_t image_handle)
 {
-	const int slack = TEXT_OFFSET - 5 * PAGE_SIZE;
-	int alloc_size = MAX_UNCOMP_KERNEL_SIZE + EFI_PHYS_ALIGN;
+	unsigned long kernel_memsize = input_data_end[-1] + zimage_magic_table[3];
+	const int pgdir_size = (4 + IS_ENABLED(CONFIG_ARM_LPAE)) * PAGE_SIZE;
+	int alloc_size = pgdir_size + ALIGN(kernel_memsize, EFI_PAGE_SIZE);
+	const int slack = TEXT_OFFSET - pgdir_size;
+	const unsigned long margin = max(EFI_PHYS_ALIGN, slack);
 	unsigned long alloc_base, kernel_base;
 	efi_status_t status;
 
 	/*
 	 * Allocate space for the decompressed kernel as low as possible.
-	 * The region should be 16 MiB aligned, but the first 'slack' bytes
+	 * The region should be 2 MiB aligned, but the first 'slack' bytes
 	 * are not used by Linux, so we allow those to be occupied by the
 	 * firmware.
 	 */
-	status = efi_low_alloc_above(alloc_size, EFI_PAGE_SIZE, &alloc_base, 0x0);
+	status = efi_low_alloc_above(alloc_size + margin, EFI_PAGE_SIZE,
+				     &alloc_base, 0x0);
 	if (status != EFI_SUCCESS) {
 		efi_err("Unable to allocate memory for uncompressed kernel.\n");
 		return status;
@@ -103,7 +113,7 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 	if ((alloc_base % EFI_PHYS_ALIGN) > slack) {
 		/*
 		 * More than 'slack' bytes are already occupied at the base of
-		 * the allocation, so we need to advance to the next 16 MiB block.
+		 * the allocation, so we need to advance to the next 2 MiB block.
 		 */
 		kernel_base = round_up(alloc_base, EFI_PHYS_ALIGN);
 		efi_info("Free memory starts at 0x%lx, setting kernel_base to 0x%lx\n",
@@ -113,16 +123,11 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 	}
 
 	*reserve_addr = kernel_base + slack;
-	*reserve_size = MAX_UNCOMP_KERNEL_SIZE;
+	*reserve_size = alloc_size;
 
 	/* now free the parts that we will not use */
-	if (*reserve_addr > alloc_base) {
-		efi_bs_call(free_pages, alloc_base,
-			    (*reserve_addr - alloc_base) / EFI_PAGE_SIZE);
-		alloc_size -= *reserve_addr - alloc_base;
-	}
-	efi_bs_call(free_pages, *reserve_addr + MAX_UNCOMP_KERNEL_SIZE,
-		    (alloc_size - MAX_UNCOMP_KERNEL_SIZE) / EFI_PAGE_SIZE);
+	efi_free(*reserve_addr - alloc_base, alloc_base);	/* no-op if 0 */
+	efi_free(alloc_base + margin - *reserve_addr, *reserve_addr + alloc_size);
 
 	*image_addr = kernel_base + TEXT_OFFSET;
 	*image_size = 0;
