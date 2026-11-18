@@ -751,7 +751,7 @@ err_free_tdma:
 	mv_cesa_ahash_dma_cleanup(req);
 
 err:
-	mv_cesa_ahash_last_cleanup(req);
+	mv_cesa_ahash_dma_last_cleanup(req);
 
 	return ret;
 }
