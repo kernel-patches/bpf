@@ -5479,8 +5479,8 @@ int rawnand_dt_parse_gpio_cs(struct device *dev, struct gpio_desc ***cs_array,
 		return -ENOMEM;
 
 	for (i = 0; i < ndescs; i++) {
-		descs[i] = gpiod_get_index_optional(dev, "cs", i,
-						    GPIOD_OUT_HIGH);
+		descs[i] = devm_gpiod_get_index_optional(dev, "cs", i,
+							 GPIOD_OUT_HIGH);
 		if (IS_ERR(descs[i]))
 			return PTR_ERR(descs[i]);
 	}
