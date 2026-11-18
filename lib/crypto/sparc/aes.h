@@ -133,6 +133,29 @@ static void aes_decrypt_arch(const struct aes_key *key,
 	}
 }
 
+static __always_inline void aes_sparc64_load_round_keys(aes_encrypt_arg key_arg,
+							bool enc)
+{
+	const struct aes_enckey *key = key_arg.enc_key;
+	const u64 *rk = key->k.sparc_rndkeys;
+
+	if (enc) {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_load_encrypt_keys_128(rk);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_load_encrypt_keys_192(rk);
+		else
+			aes_sparc64_load_encrypt_keys_256(rk);
+	} else {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_load_decrypt_keys_128(rk);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_load_decrypt_keys_192(rk);
+		else
+			aes_sparc64_load_decrypt_keys_256(rk);
+	}
+}
+
 #if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_XTS)
 void aes_sparc64_xts_encrypt_128(const u64 *key, const u64 *input, u64 *output,
 				 size_t len, u64 tweak[2]);
@@ -167,22 +190,17 @@ aes_xts_crypt_sparc64(u8 *dst, const u8 *src, size_t len,
 	else
 		aes_encrypt_arch(&key->tweak_key, (u8 *)t, tweak);
 
-	if (k->len == AES_KEYSIZE_128) {
-		if (enc) {
-			aes_sparc64_load_encrypt_keys_128(rk);
+	aes_sparc64_load_round_keys(k, enc);
+	if (enc) {
+		if (k->len == AES_KEYSIZE_128)
 			aes_sparc64_xts_encrypt_128(rk, in, out, len, t);
-		} else {
-			aes_sparc64_load_decrypt_keys_128(rk);
-			aes_sparc64_xts_decrypt_128(rk_end, in, out, len, t);
-		}
-	} else {
-		if (enc) {
-			aes_sparc64_load_encrypt_keys_256(rk);
+		else
 			aes_sparc64_xts_encrypt_256(rk, in, out, len, t);
-		} else {
-			aes_sparc64_load_decrypt_keys_256(rk);
+	} else {
+		if (k->len == AES_KEYSIZE_128)
+			aes_sparc64_xts_decrypt_128(rk_end, in, out, len, t);
+		else
 			aes_sparc64_xts_decrypt_256(rk_end, in, out, len, t);
-		}
 	}
 	fprs_write(0);
 
