@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0+
 /* Copyright 2025-2026 NXP */
 
+#include <linux/device/driver.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 
 #include "phy-fsl-lynx-core.h"
@@ -319,12 +321,70 @@ static struct phy *lynx_xlate(struct device *dev,
 	return priv->lane[idx].phy ?: ERR_PTR(-ENODEV);
 }
 
+/* Get the PHYs on the signal path between the lane and the connector, such as
+ * the channels of a retimer, from the "phys" property of the lane node.
+ *
+ * The lane can be used without them, so if a retimer is not available or not
+ * described correctly, for example because its driver is not enabled, skip it
+ * with a warning instead of keeping the whole SerDes from probing.
+ */
+static int lynx_lane_get_retimers(struct lynx_priv *priv,
+				  struct lynx_lane *lane,
+				  struct device_node *dn)
+{
+	struct device *dev = priv->dev;
+	struct phy *retimer;
+	int num, i, err;
+
+	lane->num_retimers = 0;
+
+	if (!dn || !of_property_present(dn, "phys"))
+		return 0;
+
+	num = of_count_phandle_with_args(dn, "phys", "#phy-cells");
+	if (num <= 0) {
+		dev_warn(dev, "%pOF: invalid \"phys\", skipping\n", dn);
+		return 0;
+	}
+
+	if (num > LYNX_MAX_RETIMERS) {
+		dev_warn(dev,
+			 "%pOF: ignoring %d \"phys\" over the maximum of %d\n",
+			 dn, num - LYNX_MAX_RETIMERS, LYNX_MAX_RETIMERS);
+		num = LYNX_MAX_RETIMERS;
+	}
+
+	for (i = 0; i < num; i++) {
+		retimer = devm_of_phy_get_by_index(dev, dn, i);
+		if (!IS_ERR(retimer)) {
+			lane->retimer[lane->num_retimers++] = retimer;
+			continue;
+		}
+
+		err = PTR_ERR(retimer);
+		if (err == -EPROBE_DEFER)
+			err = driver_deferred_probe_check_state(dev);
+		if (err == -EPROBE_DEFER)
+			return err;
+
+		dev_warn(dev, "%pOF: ignoring phys[%d]: %pe\n", dn, i,
+			 ERR_PTR(err));
+	}
+
+	return 0;
+}
+
 static int lynx_probe_lane(struct lynx_priv *priv, int id,
 			   struct device_node *dn,
 			   const struct phy_ops *phy_ops)
 {
 	struct lynx_lane *lane = &priv->lane[id];
 	struct phy *phy;
+	int err;
+
+	err = lynx_lane_get_retimers(priv, lane, dn);
+	if (err)
+		return err;
 
 	phy = devm_phy_create(priv->dev, dn, phy_ops);
 	if (IS_ERR(phy))

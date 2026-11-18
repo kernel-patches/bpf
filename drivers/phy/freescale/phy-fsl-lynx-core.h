@@ -9,6 +9,8 @@
 #include <soc/fsl/phy-fsl-lynx.h>
 
 #define LYNX_NUM_PLL				2
+/* Enough for a retimer with a generic PHY per direction */
+#define LYNX_MAX_RETIMERS			2
 #define LYNX_QUIRK_HAS_HARDCODED_USXGMII	BIT(0)
 
 struct lynx_priv;
@@ -33,6 +35,8 @@ struct lynx_pll {
 struct lynx_lane {
 	struct lynx_priv *priv;
 	struct phy *phy;
+	struct phy *retimer[LYNX_MAX_RETIMERS];
+	int num_retimers;
 	bool powered_up;
 	bool init;
 	unsigned int id;
