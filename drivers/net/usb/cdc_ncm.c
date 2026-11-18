@@ -1509,9 +1509,26 @@ static void cdc_ncm_txpath_bh(struct tasklet_struct *t)
 		cdc_ncm_tx_timeout_start(ctx);
 		spin_unlock(&ctx->mtx);
 	} else if (dev->net != NULL) {
-		ctx->tx_reason_timeout++;	/* count reason for transmitting */
 		spin_unlock(&ctx->mtx);
 		netif_tx_lock_bh(dev->net);
+		spin_lock(&ctx->mtx);
+		/* usbnet drops the whole NTB if its queue is stopped. While
+		 * TX URBs are in flight, or completed but not yet reaped by
+		 * usbnet_bh(), the queue will be woken again, so keep any
+		 * buffered frames and retry a timer interval later.
+		 */
+		if (ctx->timer_interval &&
+		    (ctx->tx_curr_skb || ctx->tx_rem_skb) &&
+		    netif_running(dev->net) && netif_queue_stopped(dev->net) &&
+		    (skb_queue_len_lockless(&dev->txq) ||
+		     skb_queue_len_lockless(&dev->done))) {
+			cdc_ncm_tx_timeout_start(ctx);
+			spin_unlock(&ctx->mtx);
+			netif_tx_unlock_bh(dev->net);
+			return;
+		}
+		ctx->tx_reason_timeout++;
+		spin_unlock(&ctx->mtx);
 		usbnet_start_xmit(NULL, dev->net);
 		netif_tx_unlock_bh(dev->net);
 	} else {
