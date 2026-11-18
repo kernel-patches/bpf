@@ -936,14 +936,12 @@ int ovl_fs_params_verify(const struct ovl_fs_context *ctx,
 		config->redirect_mode = follow_mode;
 
 	/*
-	 * This is to make the logic below simpler.  It doesn't make any other
-	 * difference, since redirect_dir=on is only used for upper.
+	 * metacopy -> redirect_dir dependency.
+	 * metacopy needs to create redirects in upper and to follow redirects
+	 * in a non-upper mount.
 	 */
-	if (!config->upperdir && config->redirect_mode == OVL_REDIRECT_FOLLOW)
-		config->redirect_mode = OVL_REDIRECT_ON;
-
-	/* metacopy -> redirect_dir dependency */
-	if (config->metacopy && config->redirect_mode != OVL_REDIRECT_ON) {
+	if (config->metacopy && config->redirect_mode != OVL_REDIRECT_ON &&
+	    (config->upperdir || config->redirect_mode != OVL_REDIRECT_FOLLOW)) {
 		if (set.metacopy && set.redirect) {
 			pr_err("conflicting options: metacopy=on,redirect_dir=%s\n",
 			       ovl_redirect_mode_name(redirect_opt));
@@ -959,7 +957,9 @@ int ovl_fs_params_verify(const struct ovl_fs_context *ctx,
 			config->metacopy = false;
 		} else {
 			/* Automatically enable redirect otherwise. */
-			config->redirect_mode = OVL_REDIRECT_ON;
+			config->redirect_mode = config->upperdir ?
+						OVL_REDIRECT_ON :
+						OVL_REDIRECT_FOLLOW;
 		}
 	}
 
