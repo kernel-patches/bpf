@@ -172,6 +172,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_MT6358
 	imply SND_SOC_MT6359
 	imply SND_SOC_MT6660
+	imply SND_SOC_NAU8310
 	imply SND_SOC_NAU8315
 	imply SND_SOC_NAU8325
 	imply SND_SOC_NAU8360
@@ -2908,6 +2909,19 @@ config SND_SOC_MT6660
 	  speaker protection, multi-band DRC, equalizer functions.
 	  Select N if you don't have MT6660 on board.
 	  Select M to build this as module.
+
+config SND_SOC_NAU8310
+	tristate "Nuvoton Technology Corporation NAU83G10/G20 Mono Boosted Amplifier"
+	depends on I2C
+	select FW_LOADER
+	help
+	  The NAU83G10 (boosted) and NAU83G20 are mono Class-D amplifiers
+	  featuring integrated DSP and I/V sense. They use real-time voltage
+	  and current feedback for speaker excursion control to protect the
+	  speaker and enhance sound quality.
+	  Additionally, the NAU83G10 includes a built-in boost converter
+	  that can step up a battery supply (VBAT, minimum 2.9V) to deliver
+	  an output voltage of up to 12V based on the peak signal.
 
 config SND_SOC_NAU8315
 	tristate "Nuvoton Technology Corporation NAU8315 CODEC"
