@@ -4063,7 +4063,13 @@ static int intel_pmu_handle_irq(struct pt_regs *regs)
 	loops = 0;
 again:
 	intel_pmu_lbr_read();
-	intel_pmu_ack_status(status);
+
+	/*
+	 * Keep the LBR state frozen throughout PMI handling so that the PMI
+	 * processing itself does not pollute the LBR state.
+	 */
+	intel_pmu_ack_status(status & ~GLOBAL_STATUS_LBRS_FROZEN);
+
 	if (++loops > 100) {
 		static bool warned;
 
@@ -4082,10 +4088,13 @@ again:
 	 * Repeat if there is more work to be done:
 	 */
 	status = intel_pmu_get_status();
-	if (status)
+	if (status & ~GLOBAL_STATUS_LBRS_FROZEN)
 		goto again;
 
 done:
+	if (status & GLOBAL_STATUS_LBRS_FROZEN)
+		intel_pmu_ack_status(status & GLOBAL_STATUS_LBRS_FROZEN);
+
 	if (mid_ack)
 		apic_write(APIC_LVTPC, APIC_DM_NMI);
 	/* Only restore PMU state when it's active. See x86_pmu_disable(). */
