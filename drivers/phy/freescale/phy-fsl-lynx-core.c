@@ -374,9 +374,200 @@ static int lynx_lane_get_retimers(struct lynx_priv *priv,
 	return 0;
 }
 
+/* The PHYs of the lane are brought up before the lane, in the order of
+ * "phys", and taken down after it, also in the order of "phys". If one of them
+ * fails to come up, the ones already brought up are undone and the error is
+ * returned. If one of them fails to go down, the error is only logged, so that
+ * all of them get a chance to go down.
+ */
+static int lynx_init(struct phy *phy)
+{
+	struct lynx_lane *lane = phy_get_drvdata(phy);
+	struct phy *retimer;
+	int i, err, ret;
+
+	for (i = 0; i < lane->num_retimers; i++) {
+		retimer = lane->retimer[i];
+		err = phy_init(retimer);
+		if (err) {
+			dev_err(&phy->dev, "phy_init failed on %s: %pe\n",
+				dev_name(&retimer->dev), ERR_PTR(err));
+			goto err_exit_retimers;
+		}
+	}
+
+	err = lane->priv->drv_ops->init(phy);
+	if (err)
+		goto err_exit_retimers;
+
+	return 0;
+
+err_exit_retimers:
+	while (i--) {
+		retimer = lane->retimer[i];
+		ret = phy_exit(retimer);
+		if (ret)
+			dev_err(&phy->dev, "phy_exit failed on %s: %pe\n",
+				dev_name(&retimer->dev), ERR_PTR(ret));
+	}
+
+	return err;
+}
+
+static int lynx_exit(struct phy *phy)
+{
+	struct lynx_lane *lane = phy_get_drvdata(phy);
+	struct phy *retimer;
+	int i, err;
+
+	/* If the lane fails its .exit() callback, the PHY core does not
+	 * decrement its init_count, and the consumer may retry. In that case,
+	 * return directly without calling phy_exit() on the downstream retimer
+	 * PHYs so that we avoid an unbalance of their init_count field.
+	 */
+	err = lane->priv->drv_ops->exit(phy);
+	if (err)
+		return err;
+
+	/* A failure of a downstream PHY is only logged. There is no point
+	 * stopping and returning an error.
+	 */
+	for (i = 0; i < lane->num_retimers; i++) {
+		retimer = lane->retimer[i];
+		err = phy_exit(retimer);
+		if (err)
+			dev_err(&phy->dev, "phy_exit failed on %s: %pe\n",
+				dev_name(&retimer->dev), ERR_PTR(err));
+	}
+
+	return 0;
+}
+
+static int lynx_power_on(struct phy *phy)
+{
+	struct lynx_lane *lane = phy_get_drvdata(phy);
+	struct phy *retimer;
+	int i, err, ret;
+
+	for (i = 0; i < lane->num_retimers; i++) {
+		retimer = lane->retimer[i];
+		err = phy_power_on(retimer);
+		if (err) {
+			dev_err(&phy->dev, "phy_power_on failed on %s: %pe\n",
+				dev_name(&retimer->dev), ERR_PTR(err));
+			goto err_power_off_retimers;
+		}
+	}
+
+	err = lane->priv->drv_ops->power_on(phy);
+	if (err)
+		goto err_power_off_retimers;
+
+	return 0;
+
+err_power_off_retimers:
+	while (i--) {
+		retimer = lane->retimer[i];
+		ret = phy_power_off(retimer);
+		if (ret)
+			dev_err(&phy->dev, "phy_power_off failed on %s: %pe\n",
+				dev_name(&retimer->dev), ERR_PTR(ret));
+	}
+
+	return err;
+}
+
+static int lynx_power_off(struct phy *phy)
+{
+	struct lynx_lane *lane = phy_get_drvdata(phy);
+	struct phy *retimer;
+	int i, err;
+
+	/* If the lane fails to power_off, the PHY core keeps it counted as up,
+	 * and the consumer may retry. Leave the downstream retimer PHYs of the
+	 * lane up too, so that the retry does not take them down twice and
+	 * unbalance their counters.
+	 */
+	err = lane->priv->drv_ops->power_off(phy);
+	if (err)
+		return err;
+
+	/* A failure of a downstream PHY is only logged. Returning it would
+	 * make the PHY core keep the lane counted as on, although its own op
+	 * already turned it off, and a later phy_power_on() would then not
+	 * turn it back on.
+	 */
+	for (i = 0; i < lane->num_retimers; i++) {
+		retimer = lane->retimer[i];
+		err = phy_power_off(retimer);
+		if (err)
+			dev_err(&phy->dev, "phy_power_off failed on %s: %pe\n",
+				dev_name(&retimer->dev), ERR_PTR(err));
+	}
+
+	return 0;
+}
+
+/* There is no rollback if one of the PHYs fails, because there is no previous
+ * mode to go back to: the submode is not recorded by the PHY core or by the
+ * retimer drivers. The next phy_set_mode_ext() from the consumer reconfigures
+ * the whole signal path.
+ */
+static int lynx_set_mode(struct phy *phy, enum phy_mode mode, int submode)
+{
+	struct lynx_lane *lane = phy_get_drvdata(phy);
+	struct phy *retimer;
+	int i, err;
+
+	for (i = 0; i < lane->num_retimers; i++) {
+		retimer = lane->retimer[i];
+		err = phy_set_mode_ext(retimer, mode, submode);
+		if (err)
+			return err;
+	}
+
+	return lane->priv->drv_ops->set_mode(phy, mode, submode);
+}
+
+static int lynx_validate(struct phy *phy, enum phy_mode mode, int submode,
+			 union phy_configure_opts *opts)
+{
+	struct lynx_lane *lane = phy_get_drvdata(phy);
+	struct phy *retimer;
+	int i, err;
+
+	for (i = 0; i < lane->num_retimers; i++) {
+		retimer = lane->retimer[i];
+		/* A retimer PHY that cannot validate the mode, including one
+		 * without .validate (-EOPNOTSUPP), makes the lane fail as
+		 * well.
+		 */
+		err = phy_validate(retimer, mode, submode, opts);
+		if (err)
+			return err;
+	}
+
+	return lane->priv->drv_ops->validate(phy, mode, submode, opts);
+}
+
+/* The ops installed on the lane PHYs, for every lane. They call the ops of the
+ * driver, after the ones of the PHYs of the lane. .owner is not set here, see
+ * lynx_probe().
+ *
+ * The ops of the driver are called without checking for NULL: the Lynx 10G and
+ * 28G drivers, the only users of this core, implement all of them.
+ */
+static const struct phy_ops lynx_ops = {
+	.init		= lynx_init,
+	.exit		= lynx_exit,
+	.power_on	= lynx_power_on,
+	.power_off	= lynx_power_off,
+	.set_mode	= lynx_set_mode,
+	.validate	= lynx_validate,
+};
+
 static int lynx_probe_lane(struct lynx_priv *priv, int id,
-			   struct device_node *dn,
-			   const struct phy_ops *phy_ops)
+			   struct device_node *dn)
 {
 	struct lynx_lane *lane = &priv->lane[id];
 	struct phy *phy;
@@ -386,7 +577,7 @@ static int lynx_probe_lane(struct lynx_priv *priv, int id,
 	if (err)
 		return err;
 
-	phy = devm_phy_create(priv->dev, dn, phy_ops);
+	phy = devm_phy_create(priv->dev, dn, &priv->phy_ops);
 	if (IS_ERR(phy))
 		return PTR_ERR(phy);
 
@@ -400,7 +591,7 @@ static int lynx_probe_lane(struct lynx_priv *priv, int id,
 }
 
 int lynx_probe(struct platform_device *pdev, const struct lynx_info *info,
-	       const struct phy_ops *phy_ops)
+	       const struct phy_ops *drv_ops)
 {
 	struct device *dev = &pdev->dev;
 	struct phy_provider *provider;
@@ -423,6 +614,9 @@ int lynx_probe(struct platform_device *pdev, const struct lynx_info *info,
 
 	priv->dev = dev;
 	priv->info = info;
+	priv->drv_ops = drv_ops;
+	priv->phy_ops = lynx_ops;
+	priv->phy_ops.owner = drv_ops->owner;
 	priv->big_endian = device_property_read_bool(dev, "big-endian");
 	dev_set_drvdata(dev, priv);
 	spin_lock_init(&priv->pcc_lock);
@@ -467,7 +661,7 @@ int lynx_probe(struct platform_device *pdev, const struct lynx_info *info,
 				return -EINVAL;
 			}
 
-			err = lynx_probe_lane(priv, reg, child, phy_ops);
+			err = lynx_probe_lane(priv, reg, child);
 			if (err) {
 				of_node_put(child);
 				return err;
@@ -475,7 +669,7 @@ int lynx_probe(struct platform_device *pdev, const struct lynx_info *info,
 		}
 	} else {
 		for (int i = priv->info->first_lane; i < priv->info->num_lanes; i++) {
-			err = lynx_probe_lane(priv, i, NULL, phy_ops);
+			err = lynx_probe_lane(priv, i, NULL);
 			if (err)
 				return err;
 		}
