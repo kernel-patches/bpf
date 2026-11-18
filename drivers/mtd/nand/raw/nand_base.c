@@ -840,7 +840,7 @@ static int nand_setup_interface(struct nand_chip *chip, int chipnr)
 {
 	const struct nand_controller_ops *ops = chip->controller->ops;
 	u8 tmode_param[ONFI_SUBFEATURE_PARAM_LEN] = { }, request;
-	int ret;
+	int ret, reset_ret;
 
 	if (!nand_controller_can_setup_interface(chip))
 		return 0;
@@ -909,12 +909,15 @@ err_reset_chip:
 	 * Fallback to mode 0 if the chip explicitly did not ack the chosen
 	 * timing mode.
 	 */
-	nand_reset_interface(chip, chipnr);
+	reset_ret = nand_reset_interface(chip, chipnr);
+	if (reset_ret)
+		return ret ?: reset_ret;
+
 	nand_select_target(chip, chipnr);
-	nand_reset_op(chip);
+	reset_ret = nand_reset_op(chip);
 	nand_deselect_target(chip);
 
-	return ret;
+	return ret ?: reset_ret;
 }
 
 /**
