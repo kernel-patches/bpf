@@ -198,6 +198,7 @@ void intel_pmu_lbr_reset(void)
 
 	x86_pmu.lbr_reset();
 
+	cpuc->lbr_stack.nr = 0;
 	cpuc->last_task_ctx = NULL;
 	cpuc->last_log_id = 0;
 	if (!cpu_feature_enabled(X86_FEATURE_ARCH_LBR) && cpuc->lbr_select)
@@ -1010,9 +1011,15 @@ static void intel_pmu_arch_lbr_read_xsave(struct cpu_hw_events *cpuc)
 		intel_pmu_store_lbr(cpuc, NULL);
 		return;
 	}
+	xsave->header.xfeatures = 0;
 	xsaves(&xsave->xsave, XFEATURE_MASK_LBR);
 
-	intel_pmu_store_lbr(cpuc, xsave->lbr.entries);
+	if (xsave->header.xfeatures & XFEATURE_MASK_LBR) {
+		intel_pmu_store_lbr(cpuc, xsave->lbr.entries);
+	} else {
+		/* Clear the LBR stack to avoid leaking stale entries. */
+		cpuc->lbr_stack.nr = 0;
+	}
 }
 
 void intel_pmu_lbr_read(void)
