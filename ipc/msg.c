@@ -82,6 +82,7 @@ struct msg_receiver {
 	long			r_maxsize;
 
 	struct msg_msg		*r_msg;
+	bool			r_expunge;
 };
 
 /* one msg_sender for each sleeping sender */
@@ -255,6 +256,8 @@ static void expunge_all(struct msg_queue *msq, int res,
 		struct task_struct *r_tsk;
 
 		r_tsk = get_task_struct(msr->r_tsk);
+		/* IPC_RMID must still find this waiter and set -EIDRM. */
+		msr->r_expunge = true;
 
 		/* see MSG_BARRIER for purpose/pairing */
 		smp_store_release(&msr->r_msg, ERR_PTR(res));
@@ -819,6 +822,9 @@ static inline int pipelined_send(struct msg_queue *msq, struct msg_msg *msg,
 	struct msg_receiver *msr, *t;
 
 	list_for_each_entry_safe(msr, t, &msq->q_receivers, r_list) {
+		/* IPC_SET needs the receiver to recheck its access. */
+		if (msr->r_expunge)
+			continue;
 		if (testmsg(msg, msr->r_msgtype, msr->r_mode) &&
 		    !security_msg_queue_msgrcv(&msq->q_perm, msg, msr->r_tsk,
 					       msr->r_msgtype, msr->r_mode)) {
@@ -1178,6 +1184,7 @@ static long do_msgrcv(int msqid, void __user *buf, size_t bufsz, long msgtyp, in
 			goto out_unlock0;
 		}
 
+		msr_d.r_expunge = false;
 		list_add_tail(&msr_d.r_list, &msq->q_receivers);
 		msr_d.r_tsk = current;
 		msr_d.r_msgtype = msgtyp;
