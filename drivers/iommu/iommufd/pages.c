@@ -1964,7 +1964,6 @@ int iopt_area_fill_domains(struct iopt_area *area, struct iopt_pages *pages)
 	return 0;
 
 out_unmap:
-	pfn_reader_release_pins(&pfns);
 	xa_for_each(&area->iopt->domains, unmap_index, domain) {
 		unsigned long end_index;
 
@@ -1984,6 +1983,18 @@ out_unmap:
 					area, domain, iopt_area_index(area),
 					end_index - 1);
 		} else {
+			/*
+			 * The last domain is the only one that unpins, so the
+			 * reader's pins must be released before the unpin and
+			 * its update_unpinned(): npinned still counts them
+			 * while last_npinned predates the fill. No domain maps
+			 * the failing batch any more: the earlier domains
+			 * were just unmapped by this loop, the failing domain
+			 * rolled back its partial mapping in
+			 * batch_to_domain(), and the later domains never
+			 * installed it.
+			 */
+			pfn_reader_release_pins(&pfns);
 			iopt_area_unfill_partial_domain(area, pages, domain,
 							end_index);
 		}
