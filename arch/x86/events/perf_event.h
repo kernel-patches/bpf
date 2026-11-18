@@ -1982,7 +1982,7 @@ void intel_pmu_pebs_late_setup(struct cpu_hw_events *cpuc);
 
 void intel_pmu_drain_pebs_buffer(void);
 
-void intel_pmu_store_pebs_lbrs(struct lbr_entry *lbr);
+void intel_pmu_store_pebs_lbrs(struct lbr_entry *lbr, unsigned int lbr_nr);
 
 void intel_pebs_init(void);
 

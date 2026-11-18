@@ -2603,12 +2603,13 @@ static void setup_pebs_adaptive_sample_data(struct perf_event *event,
 
 	if (format_group & PEBS_DATACFG_LBRS) {
 		struct lbr_entry *lbr = next_record;
-		int num_lbr = ((format_group >> PEBS_DATACFG_LBR_SHIFT)
-					& 0xff) + 1;
+		unsigned int num_lbr;
+
+		num_lbr = ((format_group >> PEBS_DATACFG_LBR_SHIFT) & 0xff) + 1;
 		next_record = next_record + num_lbr * sizeof(struct lbr_entry);
 
 		if (has_branch_stack(event)) {
-			intel_pmu_store_pebs_lbrs(lbr);
+			intel_pmu_store_pebs_lbrs(lbr, num_lbr);
 			intel_pmu_lbr_save_brstack(data, cpuc, event);
 		}
 	}
@@ -2789,7 +2790,7 @@ again:
 	if (header->lbr) {
 		struct arch_pebs_lbr_header *lbr_header = next_record;
 		struct lbr_entry *lbr;
-		int num_lbr;
+		unsigned int num_lbr;
 
 		next_record = lbr_header + 1;
 		lbr = next_record;
@@ -2800,7 +2801,7 @@ again:
 		next_record += num_lbr * sizeof(struct lbr_entry);
 
 		if (has_branch_stack(event)) {
-			intel_pmu_store_pebs_lbrs(lbr);
+			intel_pmu_store_pebs_lbrs(lbr, num_lbr);
 			intel_pmu_lbr_save_brstack(data, cpuc, event);
 		}
 	}

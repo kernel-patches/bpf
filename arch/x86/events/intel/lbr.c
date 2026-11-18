@@ -906,7 +906,7 @@ static __always_inline u16 get_lbr_cycles(u64 info)
 
 static_assert((64 - PERF_BRANCH_ENTRY_INFO_BITS_MAX) > LBR_INFO_BR_CNTR_NUM * LBR_INFO_BR_CNTR_BITS);
 
-static void intel_pmu_store_lbr(struct lbr_entry *entries,
+static void intel_pmu_store_lbr(struct lbr_entry *entries, unsigned int lbr_nr,
 				struct perf_branch_stack *lbr_stack)
 {
 	struct perf_branch_entry *e;
@@ -915,8 +915,8 @@ static void intel_pmu_store_lbr(struct lbr_entry *entries,
 	bool mispred;
 	int i;
 
-	cpu_init_lbr_stack(lbr_stack, x86_pmu.lbr_nr);
-	for (i = 0; i < x86_pmu.lbr_nr; i++) {
+	cpu_init_lbr_stack(lbr_stack, lbr_nr);
+	for (i = 0; i < lbr_nr; i++) {
 		lbr = entries ? &entries[i] : NULL;
 		e = &lbr_stack->entries[i];
 
@@ -1020,7 +1020,7 @@ void intel_pmu_lbr_save_brstack(struct perf_sample_data *data,
 static void intel_pmu_arch_lbr_read(struct cpu_hw_events *cpuc,
 				    struct perf_branch_stack *lbr_stack)
 {
-	intel_pmu_store_lbr(NULL, lbr_stack);
+	intel_pmu_store_lbr(NULL, x86_pmu.lbr_nr, lbr_stack);
 }
 
 static void
@@ -1030,14 +1030,15 @@ intel_pmu_arch_lbr_read_xsave(struct cpu_hw_events *cpuc,
 	struct x86_perf_task_context_arch_lbr_xsave *xsave = cpuc->lbr_xsave;
 
 	if (!xsave) {
-		intel_pmu_store_lbr(NULL, lbr_stack);
+		intel_pmu_store_lbr(NULL, x86_pmu.lbr_nr, lbr_stack);
 		return;
 	}
 	xsave->header.xfeatures = 0;
 	xsaves(&xsave->xsave, XFEATURE_MASK_LBR);
 
 	if (xsave->header.xfeatures & XFEATURE_MASK_LBR) {
-		intel_pmu_store_lbr(xsave->lbr.entries, lbr_stack);
+		intel_pmu_store_lbr(xsave->lbr.entries,
+				    x86_pmu.lbr_nr, lbr_stack);
 	} else {
 		/* Clear the LBR stack to avoid leaking stale entries. */
 		lbr_stack->nr = 0;
@@ -1317,7 +1318,7 @@ intel_pmu_lbr_filter(struct cpu_hw_events *cpuc,
 	lbr_stack->nr = lbr_nr;
 }
 
-void intel_pmu_store_pebs_lbrs(struct lbr_entry *lbr)
+void intel_pmu_store_pebs_lbrs(struct lbr_entry *lbr, unsigned int lbr_nr)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 
@@ -1328,7 +1329,8 @@ void intel_pmu_store_pebs_lbrs(struct lbr_entry *lbr)
 	else
 		cpu_lbr_stack(cpuc)->hw_idx = intel_pmu_lbr_tos();
 
-	intel_pmu_store_lbr(lbr, cpu_lbr_stack(cpuc));
+	intel_pmu_store_lbr(lbr, min(lbr_nr, x86_pmu.lbr_nr),
+			    cpu_lbr_stack(cpuc));
 	intel_pmu_lbr_filter(cpuc, cpu_lbr_stack(cpuc), cpuc->lbr_counters);
 	cpuc->lbr_stack_live = false;
 }
