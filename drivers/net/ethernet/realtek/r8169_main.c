@@ -5978,7 +5978,14 @@ static int rtl8169_runtime_suspend(struct device *device)
 		return 0;
 	}
 
-	rtnl_lock();
+	/*
+	 * Do not block on RTNL.
+	 * Other callers holding RTNL may wait for suspend to complete
+	 * in pm_runtime_get_sync(), which would deadlock.
+	 */
+	if (!rtnl_trylock())
+		return -EBUSY;
+
 	__rtl8169_set_wol(tp, WAKE_PHY);
 	rtl8169_net_suspend(tp);
 	rtnl_unlock();
