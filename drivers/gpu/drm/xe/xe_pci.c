@@ -506,6 +506,7 @@ static const struct xe_device_desc nvlp_desc = {
 	.has_flat_ccs = 1,
 	.has_page_reclaim_hw_assist = true,
 	.has_pre_prod_wa = true,
+	.has_pxp = true,
 	.has_sriov = true,
 	.max_gt_per_tile = 2,
 	MULTI_LRC_MASK,
