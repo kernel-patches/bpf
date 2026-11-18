@@ -173,11 +173,17 @@ TEST(datadir_tmpfs)
 	EXPECT_EQ(fsmount_layers("/tmp/lower", "/tmp/data", true), 0);
 }
 
+/*
+ * Pseudo lower layers are only allowed in legacy setups.  Explicitly turn off
+ * the features that may be enabled by kernel config defaults.
+ */
+#define LEGACY_OPTS "redirect_dir=off,metacopy=off"
+
 TEST(lowerdir_sysfs)
 {
 	ASSERT_EQ(setup_tmp(), 0);
 
-	EXPECT_EQ(mount_lowerdir("/sys/kernel:/tmp/lower"), 0);
+	EXPECT_EQ(mount_lowerdir_opts("/sys/kernel:/tmp/lower", LEGACY_OPTS), 0);
 }
 
 TEST(lowerdir_sysfs_redirect_dir_on)
