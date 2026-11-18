@@ -1653,7 +1653,7 @@ static int cs35l45_bst_bpe_set_mode(struct cs35l45_private *cs35l45, u32 *output
 		if ((release_mode != CS35L45_BST_BPE_IL_RELEASE_MODE_INSTANT) &&
 		    (release_mode != CS35L45_BST_BPE_IL_RELEASE_MODE_COUNTER))
 			return dev_err_probe(cs35l45->dev, -EINVAL,
-					     "Invalid boost BPE indductor current release mode\n");
+					     "Invalid boost BPE inductor current release mode\n");
 
 		mask |= CS35L45_BST_BPE_IL_LIM_MODE_MASK;
 		packed |= FIELD_PREP(CS35L45_BST_BPE_IL_LIM_MODE_MASK, release_mode);
