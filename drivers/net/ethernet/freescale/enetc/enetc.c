@@ -674,6 +674,17 @@ static void enetc_tso_complete_csum(struct enetc_bdr *tx_ring, struct tso_t *tso
 	}
 }
 
+static int enetc_tso_count_descs(const struct sk_buff *skb)
+{
+	int count = tso_count_descs(skb);
+
+	/* Each segment also needs an extension BD for VLAN insertion */
+	if (skb_vlan_tag_present(skb))
+		count += skb_shinfo(skb)->gso_segs;
+
+	return count;
+}
+
 static int enetc_lso_count_descs(const struct sk_buff *skb)
 {
 	/* 4 BDs: 1 BD for LSO header + 1 BD for extended BD + 1 BD
@@ -1034,7 +1045,7 @@ static netdev_tx_t enetc_start_xmit(struct sk_buff *skb,
 
 			count = enetc_lso_hw_offload(tx_ring, skb);
 		} else {
-			if (enetc_bd_unused(tx_ring) < tso_count_descs(skb)) {
+			if (enetc_bd_unused(tx_ring) < enetc_tso_count_descs(skb)) {
 				netif_stop_subqueue(ndev, tx_ring->index);
 				return NETDEV_TX_BUSY;
 			}
@@ -1114,7 +1125,7 @@ netdev_features_t enetc_features_check(struct sk_buff *skb,
 	if (!skb_is_gso(skb) || enetc_skb_uses_lso(priv, skb))
 		return features;
 
-	if (tso_count_descs(skb) >= priv->tx_bd_count)
+	if (enetc_tso_count_descs(skb) >= priv->tx_bd_count)
 		features &= ~NETIF_F_GSO_MASK;
 
 	return features;
