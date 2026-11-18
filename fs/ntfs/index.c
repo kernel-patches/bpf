@@ -654,8 +654,9 @@ static struct index_root *ntfs_ir_lookup(struct ntfs_inode *ni, __le16 *name,
 
 	ntfs_debug("Entering\n");
 	*ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!*ctx) {
+	if (IS_ERR(*ctx)) {
 		ntfs_error(ni->vol->sb, "%s, Failed to get search context", __func__);
+		*ctx = NULL;
 		return NULL;
 	}
 
@@ -1100,8 +1101,9 @@ static int ntfs_ibm_add(struct ntfs_index_context *icx)
 
 	ntfs_debug("Entering\n");
 
-	if (ntfs_attr_exist(icx->idx_ni, AT_BITMAP, icx->name, icx->name_len))
-		return 0;
+	ret = ntfs_attr_exist(icx->idx_ni, AT_BITMAP, icx->name, icx->name_len);
+	if (ret)
+		return ret < 0 ? ret : 0;
 	/*
 	 * AT_BITMAP must be at least 8 bytes.
 	 */
@@ -1343,7 +1345,11 @@ static int ntfs_ia_add(struct ntfs_index_context *icx)
 	if (ret)
 		return ret;
 
-	if (!ntfs_attr_exist(icx->idx_ni, AT_INDEX_ALLOCATION, icx->name, icx->name_len)) {
+	ret = ntfs_attr_exist(icx->idx_ni, AT_INDEX_ALLOCATION, icx->name,
+			      icx->name_len);
+	if (ret < 0)
+		return ret;
+	if (!ret) {
 		ret = ntfs_attr_add(icx->idx_ni, AT_INDEX_ALLOCATION, icx->name,
 					icx->name_len, NULL, 0);
 		if (ret) {

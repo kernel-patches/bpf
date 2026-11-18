@@ -391,8 +391,8 @@ static int ntfs_non_resident_dealloc_clusters(struct ntfs_inode *ni)
 	int err = 0;
 
 	actx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!actx)
-		return -ENOMEM;
+	if (IS_ERR(actx))
+		return PTR_ERR(actx);
 	WARN_ON(actx->mrec->link_count != 0);
 
 	/**
@@ -798,8 +798,9 @@ static int ntfs_read_locked_inode(struct inode *vi)
 	}
 
 	ctx = ntfs_attr_get_search_ctx(ni, m);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 
@@ -1410,8 +1411,9 @@ static int ntfs_read_locked_attr_inode(struct inode *base_vi, struct inode *vi)
 		goto err_out;
 	}
 	ctx = ntfs_attr_get_search_ctx(base_ni, m);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 	/* Find the attribute. */
@@ -1675,8 +1677,9 @@ static int ntfs_read_locked_index_inode(struct inode *base_vi, struct inode *vi)
 		goto err_out;
 	}
 	ctx = ntfs_attr_get_search_ctx(base_ni, m);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 	/* Find the index root attribute. */
@@ -2067,8 +2070,9 @@ int ntfs_read_inode_mount(struct inode *vi)
 	vi->i_mapping->a_ops = &ntfs_mft_aops;
 
 	ctx = ntfs_attr_get_search_ctx(ni, m);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto err_out;
 	}
 
@@ -2677,8 +2681,8 @@ static int ntfs_inode_sync_standard_information(struct inode *vi, struct mft_rec
 
 	/* Update the access times in the standard information attribute. */
 	ctx = ntfs_attr_get_search_ctx(ni, m);
-	if (unlikely(!ctx))
-		return -ENOMEM;
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 	err = ntfs_attr_lookup(AT_STANDARD_INFORMATION, NULL, 0,
 			CASE_SENSITIVE, 0, NULL, 0, ctx);
 	if (unlikely(err)) {
@@ -2778,8 +2782,8 @@ int ntfs_inode_sync_filename(struct ntfs_inode *ni)
 	ntfs_debug("Entering for inode %llu\n", ni->mft_no);
 
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx)
-		return -ENOMEM;
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 
 	/* Collect the reparse tag, if any */
 	reparse_tag = cpu_to_le32(0);
@@ -3271,8 +3275,9 @@ int ntfs_inode_add_attrlist(struct ntfs_inode *ni)
 
 	/* Form attribute list. */
 	ctx = ntfs_attr_get_search_ctx(ni, ni_mrec);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto err_out;
 	}
 
@@ -3643,9 +3648,9 @@ int ntfs_inode_free_space(struct ntfs_inode *ni, int size)
 		return 0;
 
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(sb, "%s, Failed to get search context", __func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 
 	/*
@@ -3767,10 +3772,11 @@ s64 ntfs_inode_attr_pread(struct inode *vi, s64 pos, s64 count, u8 *buf)
 		u8 *attr;
 
 		ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-		if (!ctx) {
+		if (IS_ERR(ctx)) {
 			ntfs_error(vi->i_sb, "Failed to get attr search ctx");
-			err = -ENOMEM;
+			err = PTR_ERR(ctx);
 			mutex_unlock(&mrec_ni->mrec_lock);
+			ctx = NULL;
 			goto out;
 		}
 
@@ -4117,9 +4123,10 @@ s64 ntfs_inode_attr_pwrite(struct inode *vi, s64 pos, s64 count, u8 *buf, bool s
 	}
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vi->i_sb, "Failed to get attr search ctx");
-		ret = -ENOMEM;
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out_unlock;
 	}
 

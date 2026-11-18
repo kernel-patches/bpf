@@ -1473,9 +1473,10 @@ alloc_cluster:
 		goto undo_alloc;
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, mrec);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.");
-		ret = -ENOMEM;
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto undo_alloc;
 	}
 	ret = ntfs_attr_lookup(mftbmp_ni->type, mftbmp_ni->name,
@@ -1673,9 +1674,10 @@ static int ntfs_mft_bitmap_extend_initialized_nolock(struct ntfs_volume *vol)
 		return PTR_ERR(mrec);
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, mrec);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.");
-		ret = -ENOMEM;
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 	ret = ntfs_attr_lookup(mftbmp_ni->type, mftbmp_ni->name,
@@ -1724,9 +1726,10 @@ static int ntfs_mft_bitmap_extend_initialized_nolock(struct ntfs_volume *vol)
 		return ret;
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, mrec);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.%s", es);
 		NVolSetErrors(vol);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 	if (ntfs_attr_lookup(mftbmp_ni->type, mftbmp_ni->name,
@@ -1912,9 +1915,10 @@ static int ntfs_mft_data_extend_allocation_nolock(struct ntfs_volume *vol)
 		goto undo_alloc;
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, mrec);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.");
-		ret = -ENOMEM;
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto undo_alloc;
 	}
 	ret = ntfs_attr_lookup(mft_ni->type, mft_ni->name, mft_ni->name_len,
@@ -2663,10 +2667,11 @@ have_alloc_rec:
 		goto undo_data_init;
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, m);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.");
-		err = -ENOMEM;
+		err = PTR_ERR(ctx);
 		unmap_mft_record(mft_ni);
+		ctx = NULL;
 		goto undo_data_init;
 	}
 	err = ntfs_attr_lookup(mft_ni->type, mft_ni->name, mft_ni->name_len,

@@ -94,8 +94,9 @@ static int ntfs_read_iomap_begin_resident(struct inode *inode, loff_t offset, lo
 	mutex_lock(&base_ni->mrec_lock);
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out;
 	}
 
@@ -667,8 +668,9 @@ static int ntfs_write_iomap_begin_resident(struct inode *inode, loff_t offset,
 	char *kattr;
 
 	ctx = ntfs_attr_get_search_ctx(mrec_ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out;
 	}
 

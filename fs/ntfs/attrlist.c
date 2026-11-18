@@ -362,9 +362,10 @@ int ntfs_attrlist_entry_add(struct ntfs_inode *ni, struct attr_record *attr)
 
 	/* Find place for the new entry. */
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
 		ntfs_error(ni->vol->sb, "Failed to get search context");
+		ctx = NULL;
 		goto err_out;
 	}
 	if (attr->non_resident)

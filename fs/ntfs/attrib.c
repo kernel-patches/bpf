@@ -121,8 +121,9 @@ int ntfs_map_runlist_nolock(struct ntfs_inode *ni, s64 vcn, struct ntfs_attr_sea
 		if (IS_ERR(m))
 			return PTR_ERR(m);
 		ctx = ntfs_attr_get_search_ctx(base_ni, m);
-		if (unlikely(!ctx)) {
-			err = -ENOMEM;
+		if (IS_ERR(ctx)) {
+			err = PTR_ERR(ctx);
+			ctx = NULL;
 			goto err_out;
 		}
 	} else {
@@ -1658,13 +1659,13 @@ int ntfs_attr_lookup(const __le32 type, const __le16 *name,
  *
  * Initialize the attribute search context @ctx with @ni and @mrec.
  */
-static bool ntfs_attr_init_search_ctx(struct ntfs_attr_search_ctx *ctx,
-		struct ntfs_inode *ni, struct mft_record *mrec)
+static int ntfs_attr_init_search_ctx(struct ntfs_attr_search_ctx *ctx,
+				     struct ntfs_inode *ni, struct mft_record *mrec)
 {
 	if (!mrec) {
 		mrec = map_mft_record(ni);
 		if (IS_ERR(mrec))
-			return false;
+			return PTR_ERR(mrec);
 		ctx->mapped_mrec = true;
 	} else {
 		ctx->mapped_mrec = false;
@@ -1680,7 +1681,7 @@ static bool ntfs_attr_init_search_ctx(struct ntfs_attr_search_ctx *ctx,
 	ctx->base_mrec = NULL;
 	ctx->base_attr = NULL;
 	ctx->mapped_base_mrec = false;
-	return true;
+	return 0;
 }
 
 /*
@@ -1724,23 +1725,22 @@ void ntfs_attr_reinit_search_ctx(struct ntfs_attr_search_ctx *ctx)
  * @mrec:	mft record with which to initialize the search context
  *
  * Allocate a new attribute search context, initialize it with @ni and @mrec,
- * and return it. Return NULL if allocation failed.
+ * and return it. Return ERR_PTR(-errno) on allocation or mapping failure.
  */
 struct ntfs_attr_search_ctx *ntfs_attr_get_search_ctx(struct ntfs_inode *ni,
 		struct mft_record *mrec)
 {
 	struct ntfs_attr_search_ctx *ctx;
-	bool init;
+	int err;
 
 	ctx = kmem_cache_alloc(ntfs_attr_ctx_cache, GFP_NOFS);
-	if (ctx) {
-		init = ntfs_attr_init_search_ctx(ctx, ni, mrec);
-		if (init == false) {
-			kmem_cache_free(ntfs_attr_ctx_cache, ctx);
-			ctx = NULL;
-		}
+	if (!ctx)
+		return ERR_PTR(-ENOMEM);
+	err = ntfs_attr_init_search_ctx(ctx, ni, mrec);
+	if (err) {
+		kmem_cache_free(ntfs_attr_ctx_cache, ctx);
+		return ERR_PTR(err);
 	}
-
 	return ctx;
 }
 
@@ -2074,8 +2074,9 @@ static int __ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_s
 		goto err_out;
 	}
 	ctx = ntfs_attr_get_search_ctx(base_ni, m);
-	if (unlikely(!ctx)) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto err_out;
 	}
 	err = ntfs_attr_lookup(ni->type, ni->name, ni->name_len,
@@ -2440,8 +2441,8 @@ int ntfs_attr_set_initialized_size(struct ntfs_inode *ni, loff_t new_size)
 		return -EINVAL;
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx)
-		return -ENOMEM;
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 
 	err = ntfs_attr_lookup(ni->type, ni->name, ni->name_len,
 			       CASE_SENSITIVE, 0, NULL, 0, ctx);
@@ -2541,10 +2542,10 @@ int ntfs_resident_attr_record_add(struct ntfs_inode *ni, __le32 type,
 
 	/* Locate place where record should be. */
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(ni->vol->sb, "%s: Failed to get search context",
 				__func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 	/*
 	 * Use ntfs_attr_find instead of ntfs_attr_lookup to find place for
@@ -2665,9 +2666,9 @@ static int ntfs_non_resident_attr_record_add(struct ntfs_inode *ni, __le32 type,
 
 	/* Locate place where record should be. */
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		pr_err("%s: Failed to get search context\n", __func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 	/*
 	 * Use ntfs_attr_find instead of ntfs_attr_lookup to find place for
@@ -3244,9 +3245,10 @@ int ntfs_attr_open(struct ntfs_inode *ni, const __le32 type,
 	}
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
 		pr_err("%s: Failed to get search context\n", __func__);
+		ctx = NULL;
 		goto err_out;
 	}
 
@@ -3420,9 +3422,9 @@ int ntfs_attr_map_whole_runlist(struct ntfs_inode *ni)
 		base_ni = ni;
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(sb, "%s: Failed to get search context", __func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 
 	/* Map all attribute extents one by one. */
@@ -3549,9 +3551,9 @@ int ntfs_attr_record_move_to(struct ntfs_attr_search_ctx *ctx, struct ntfs_inode
 	/* Find place in MFT record where attribute will be moved. */
 	a = ctx->attr;
 	nctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!nctx) {
+	if (IS_ERR(nctx)) {
 		ntfs_error(sb, "%s: Failed to get search context", __func__);
-		return -ENOMEM;
+		return PTR_ERR(nctx);
 	}
 
 	/*
@@ -3902,9 +3904,9 @@ retry:
 		base_ni = ni;
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(sb, "%s: Failed to get search context", __func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 
 	/* Fill attribute records with new mapping pairs. */
@@ -4460,9 +4462,10 @@ static int ntfs_non_resident_attr_shrink(struct ntfs_inode *ni,
 		}
 
 		ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-		if (!ctx) {
+		if (IS_ERR(ctx)) {
 			ntfs_error(vol->sb, "%s: Failed to get search context", __func__);
-			err = -ENOMEM;
+			err = PTR_ERR(ctx);
+			ctx = NULL;
 			goto unlock_runlist;
 		}
 
@@ -4513,9 +4516,9 @@ static int ntfs_non_resident_attr_shrink(struct ntfs_inode *ni,
 
 	/* Get the first attribute record. */
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "%s: Failed to get search context", __func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 
 	err = ntfs_attr_lookup(ni->type, ni->name, ni->name_len,
@@ -4832,10 +4835,11 @@ static int ntfs_non_resident_attr_expand(struct ntfs_inode *ni, const s64 newsiz
 	}
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
 		if (ni->allocated_size == org_alloc_size)
 			return err;
+		ctx = NULL;
 		goto rollback;
 	}
 
@@ -4946,9 +4950,9 @@ attr_resize_again:
 
 	/* Get the attribute record that needs modification. */
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(sb, "%s: Failed to get search context", __func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 
 	err = ntfs_attr_lookup(attr_ni->type, attr_ni->name, attr_ni->name_len,
@@ -5410,9 +5414,9 @@ int ntfs_attr_map_cluster(struct ntfs_inode *ni, s64 vcn_start, s64 *lcn_start,
 		return err;
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "%s: Failed to get search context", __func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 
 	err = ntfs_attr_lookup(ni->type, ni->name, ni->name_len,
@@ -5599,9 +5603,9 @@ int ntfs_attr_rm(struct ntfs_inode *ni)
 		if (err)
 			return err;
 		ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-		if (!ctx) {
+		if (IS_ERR(ctx)) {
 			ntfs_error(sb, "%s: Failed to get search context", __func__);
-			return -ENOMEM;
+			return PTR_ERR(ctx);
 		}
 
 		freed = ntfs_cluster_free(ni, 0, -1, ctx);
@@ -5615,9 +5619,9 @@ int ntfs_attr_rm(struct ntfs_inode *ni)
 
 	/* Search for attribute extents and remove them all. */
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(sb, "%s: Failed to get search context", __func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 	while (!(err = ntfs_attr_lookup(ni->type, ni->name, ni->name_len,
 				CASE_SENSITIVE, 0, NULL, 0, ctx))) {
@@ -5638,6 +5642,7 @@ int ntfs_attr_rm(struct ntfs_inode *ni)
 	return ret;
 }
 
+/* Return 1 if present, 0 if absent, or a negative errno on failure. */
 int ntfs_attr_exist(struct ntfs_inode *ni, const __le32 type, __le16 *name,
 		u32 name_len)
 {
@@ -5648,10 +5653,10 @@ int ntfs_attr_exist(struct ntfs_inode *ni, const __le32 type, __le16 *name,
 	ntfs_debug("Entering\n");
 
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(ni->vol->sb, "%s: Failed to get search context",
 				__func__);
-		return 0;
+		return PTR_ERR(ctx);
 	}
 
 	ic = type == AT_DATA && name_len ? IGNORE_CASE : CASE_SENSITIVE;
@@ -5659,7 +5664,9 @@ int ntfs_attr_exist(struct ntfs_inode *ni, const __le32 type, __le16 *name,
 			0, NULL, 0, ctx);
 	ntfs_attr_put_search_ctx(ctx);
 
-	return !ret;
+	if (ret == -ENOENT)
+		return 0;
+	return ret ? ret : 1;
 }
 
 /*
@@ -5833,8 +5840,8 @@ int ntfs_non_resident_attr_insert_range(struct ntfs_inode *ni, s64 start_vcn, s6
 		return ret;
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
-		ret = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		ret = PTR_ERR(ctx);
 		return ret;
 	}
 
@@ -5922,8 +5929,9 @@ int ntfs_non_resident_attr_collapse_range(struct ntfs_inode *ni, s64 start_vcn, 
 	up_write(&ni->runlist.lock);
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
-		ret = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out_rl;
 	}
 
@@ -6041,8 +6049,9 @@ int ntfs_attr_fallocate(struct ntfs_inode *ni, loff_t start, loff_t byte_len, bo
 	}
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, mrec);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out_unmap;
 	}
 

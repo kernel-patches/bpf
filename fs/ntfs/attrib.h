@@ -158,8 +158,8 @@ struct runlist_element *ntfs_attr_vcn_to_rl(struct ntfs_inode *ni, s64 vcn, s64 
  *
  *	int err;
  *	struct ntfs_attr_search_ctx *ctx = ntfs_attr_get_search_ctx(ni, NULL);
- *	if (!ctx)
- *		// Error code is in errno. Handle this case.
+ *	if (IS_ERR(ctx))
+ *		// PTR_ERR(ctx) is the error code. Handle this case.
  *	while (!(err = ntfs_attrs_walk(ctx))) {
  *		struct attr_record *attr = ctx->attr;
  *		// attr now contains the next attribute. Do whatever you want

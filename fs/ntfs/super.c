@@ -498,8 +498,9 @@ static int ntfs_write_volume_flags(struct ntfs_volume *vol,
 		goto done;
 
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto put_unm_err_out;
 	}
 
@@ -621,8 +622,9 @@ int ntfs_write_volume_label(struct ntfs_volume *vol, char *label)
 
 	mutex_lock(&vol_ni->mrec_lock);
 	ctx = ntfs_attr_get_search_ctx(vol_ni, NULL);
-	if (!ctx) {
-		ret = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out;
 	}
 
@@ -1814,8 +1816,10 @@ iput_volume_failed:
 	}
 
 	ctx = ntfs_attr_get_search_ctx(NTFS_I(vol->vol_ino), m);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
+		ret = PTR_ERR(ctx);
 		ntfs_error(sb, "Failed to get attribute search context.");
+		ctx = NULL;
 		goto get_ctx_vol_failed;
 	}
 

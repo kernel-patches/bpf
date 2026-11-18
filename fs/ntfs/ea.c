@@ -181,7 +181,7 @@ static inline int ea_packed_size(const struct ea_attr *p_ea)
 	return 5 + p_ea->ea_name_length + le16_to_cpu(p_ea->ea_value_length);
 }
 
-/* Unlike ntfs_attr_exist(), preserve lookup errors. */
+/* Return -ENOENT when the attribute is absent. */
 static int ntfs_ea_attr_lookup(struct ntfs_inode *ni, __le32 type)
 {
 	struct ntfs_attr_search_ctx *ctx;
@@ -192,8 +192,9 @@ static int ntfs_ea_attr_lookup(struct ntfs_inode *ni, __le32 type)
 	if (IS_ERR(mrec))
 		return PTR_ERR(mrec);
 	ctx = ntfs_attr_get_search_ctx(ni, mrec);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out;
 	}
 	err = ntfs_attr_lookup(type, AT_UNNAMED, 0, CASE_SENSITIVE,
@@ -684,8 +685,9 @@ static int ntfs_new_attr_flags(struct ntfs_inode *ni, __le32 fattr)
 		return PTR_ERR(m);
 
 	ctx = ntfs_attr_get_search_ctx(ni, m);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto err_out;
 	}
 
