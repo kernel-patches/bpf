@@ -1054,7 +1054,7 @@ static int __init hp_wmi_charge_control_setup(struct device *dev)
 	scoped_guard(mutex, &hp_wmi_charge_lock)
 		hp_wmi_charge_behaviour = behaviour;
 
-	return devm_battery_hook_register(dev, &hp_wmi_charge_battery_hook);
+	return devm_acpi_battery_hook_register(dev, &hp_wmi_charge_battery_hook);
 }
 #else
 static int __init hp_wmi_charge_control_setup(struct device *dev)

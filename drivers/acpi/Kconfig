@@ -171,8 +171,12 @@ config ACPI_AC
 	  To compile this driver as a module, choose M here:
 	  the module will be called ac.
 
+config ACPI_BATTERY_HOOKS
+	tristate
+
 config ACPI_BATTERY
 	tristate "Battery"
+	select ACPI_BATTERY_HOOKS
 	select POWER_SUPPLY
 	default y
 	help
@@ -445,6 +449,7 @@ config ACPI_HOTPLUG_IOAPIC
 config ACPI_SBS
 	tristate "Smart Battery System"
 	depends on X86 && ACPI_EC
+	select ACPI_BATTERY_HOOKS
 	select POWER_SUPPLY
 	help
 	  This driver supports the Smart Battery System, another

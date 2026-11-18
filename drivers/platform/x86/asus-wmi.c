@@ -1701,14 +1701,14 @@ static void asus_wmi_battery_init(struct asus_wmi *asus)
 	asus->battery_rsoc_available = false;
 	if (asus_wmi_dev_is_present(asus, ASUS_WMI_DEVID_RSOC)) {
 		asus->battery_rsoc_available = true;
-		battery_hook_register(&battery_hook);
+		acpi_battery_hook_register(&battery_hook);
 	}
 }
 
 static void asus_wmi_battery_exit(struct asus_wmi *asus)
 {
 	if (asus->battery_rsoc_available)
-		battery_hook_unregister(&battery_hook);
+		acpi_battery_hook_unregister(&battery_hook);
 }
 
 /* LEDs ***********************************************************************/

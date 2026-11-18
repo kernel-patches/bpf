@@ -2217,8 +2217,8 @@ static int ideapad_check_features(struct ideapad_private *priv)
 			priv->battery_hook.remove_battery = ideapad_battery_remove;
 			priv->battery_hook.name = "Ideapad Battery Extension";
 
-			err = devm_battery_hook_register(&priv->platform_device->dev,
-							 &priv->battery_hook);
+			err = devm_acpi_battery_hook_register(&priv->platform_device->dev,
+							      &priv->battery_hook);
 			if (err)
 				return err;
 		}

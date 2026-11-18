@@ -10077,13 +10077,13 @@ static int __init tpacpi_battery_init(struct ibm_init_struct *ibm)
 					battery_quirk_table,
 					ARRAY_SIZE(battery_quirk_table));
 
-	battery_hook_register(&battery_hook);
+	acpi_battery_hook_register(&battery_hook);
 	return 0;
 }
 
 static void tpacpi_battery_exit(void)
 {
-	battery_hook_unregister(&battery_hook);
+	acpi_battery_hook_unregister(&battery_hook);
 }
 
 static struct ibm_struct battery_driver_data = {
