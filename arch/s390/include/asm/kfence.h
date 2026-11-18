@@ -15,7 +15,8 @@ static __always_inline bool arch_kfence_init_pool(void)
 #ifdef CONFIG_KFENCE
 	unsigned long pool_pages = KFENCE_POOL_SIZE >> PAGE_SHIFT;
 
-	set_memory_4k((unsigned long)__kfence_pool, pool_pages);
+	if (set_memory_4k((unsigned long)__kfence_pool, pool_pages))
+		return false;
 #endif
 	return true;
 }
