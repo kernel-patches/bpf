@@ -8126,11 +8126,19 @@ int btf_struct_access(struct bpf_verifier_log *log,
 		if (!meta)
 			break;
 		rec = meta->record;
-		i = btf_record_first_field(rec, off);
-		if (i < rec->cnt && rec->fields[i].offset < off + size) {
-			bpf_log(log, "direct access to %s is disallowed\n",
-				btf_field_type_name(rec->fields[i].type));
-			return -EACCES;
+		for (i = btf_record_first_field(rec, min_off);
+		     i < rec->cnt && rec->fields[i].offset < max_off + size; i++) {
+			struct btf_field *field = &rec->fields[i];
+			/* An access at 'lo' or above ends after the start of the field. */
+			s64 lo = max(min_off, (s64)field->offset - size + 1);
+
+			/* Round up to min_off + k * step. The step is never 0. */
+			lo += imod(min_off - lo, reg->step);
+			if (lo <= max_off && lo < field->offset + field->size) {
+				bpf_log(log, "direct access to %s is disallowed\n",
+					btf_field_type_name(field->type));
+				return -EACCES;
+			}
 		}
 		break;
 	}
