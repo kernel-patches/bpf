@@ -1785,8 +1785,9 @@ static void cfg80211_rehash_bss(struct cfg80211_registered_device *rdev,
 	lockdep_assert_held(&rdev->bss_lock);
 
 	rb_erase(&bss->rbn, &rdev->bss_tree);
+	RB_CLEAR_NODE(&bss->rbn);
 	if (!rb_insert_bss(rdev, bss)) {
-		list_del(&bss->list);
+		list_del_init(&bss->list);
 		if (!list_empty(&bss->hidden_list))
 			list_del_init(&bss->hidden_list);
 		if (!list_empty(&bss->pub.nontrans_list))
