@@ -459,6 +459,7 @@ enum shikra_functions {
 	msm_mux_emac1_ptp_pps,
 	msm_mux_ext_mclk,
 	msm_mux_gcc_gp,
+	msm_mux_gp_mn,
 	msm_mux_gsm0_tx,
 	msm_mux_i2s0,
 	msm_mux_i2s1,
@@ -664,6 +665,10 @@ static const char *const ext_mclk_groups[] = {
 
 static const char *const gcc_gp_groups[] = {
 	"gpio45", "gpio53", "gpio61", "gpio88", "gpio89", "gpio110",
+};
+
+static const char *const gp_mn_groups[] = {
+	"gpio87",
 };
 
 static const char *const gsm0_tx_groups[] = {
@@ -945,6 +950,7 @@ static const struct pinfunction shikra_functions[] = {
 	MSM_PIN_FUNCTION(emac1_ptp_pps),
 	MSM_PIN_FUNCTION(ext_mclk),
 	MSM_PIN_FUNCTION(gcc_gp),
+	MSM_PIN_FUNCTION(gp_mn),
 	MSM_PIN_FUNCTION(gsm0_tx),
 	MSM_PIN_FUNCTION(i2s0),
 	MSM_PIN_FUNCTION(i2s1),
@@ -1103,7 +1109,7 @@ static const struct msm_pingroup shikra_groups[] = {
 	[84] = PINGROUP(84, uim1, _, _, _, _, _, _, _, _, _, _),
 	[85] = PINGROUP(85, emac0_ptp_aux, emac0_ptp_pps, _, _, _, _, _, _, _, _, _),
 	[86] = PINGROUP(86, mdp_vsync_p, mdp_vsync_out0, mdp_vsync_out1, _, _, _, _, _, _, _, _),
-	[87] = PINGROUP(87, _, pwm, _, _, _, _, _, _, _, _, _),
+	[87] = PINGROUP(87, gp_mn, pwm, _, _, _, _, _, _, _, _, _),
 	[88] = PINGROUP(88, gcc_gp, _, dac_calib, _, _, _, _, _, _, _, _),
 	[89] = PINGROUP(89, gcc_gp, _, dac_calib, _, _, _, _, _, _, _, _),
 	[90] = PINGROUP(90, usb0_phy_ps, _, dac_calib, _, _, _, _, _, _, _, _),
