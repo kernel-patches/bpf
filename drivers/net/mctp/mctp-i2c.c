@@ -857,6 +857,24 @@ static int mctp_i2c_ndo_open(struct net_device *dev)
 	return 0;
 }
 
+static struct mctp_i2c_dev *mctp_i2c_find_dev(struct mctp_i2c_client *mcli,
+					      struct i2c_adapter *adap)
+{
+	struct mctp_i2c_dev *midev = NULL, *m = NULL;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mcli->sel_lock, flags);
+	/* List size is limited by number of MCTP netdevs on a single hardware bus */
+	list_for_each_entry(m, &mcli->devs, list)
+		if (m->adapter == adap) {
+			midev = m;
+			break;
+		}
+	spin_unlock_irqrestore(&mcli->sel_lock, flags);
+
+	return midev;
+}
+
 static int mctp_i2c_add_netdev(struct mctp_i2c_client *mcli,
 			       struct i2c_adapter *adap)
 {
@@ -876,6 +894,9 @@ static int mctp_i2c_add_netdev(struct mctp_i2c_client *mcli,
 	}
 
 	WARN_ON(!mutex_is_locked(&driver_clients_lock));
+	if (mctp_i2c_find_dev(mcli, adap))
+		return 0;
+
 	snprintf(namebuf, sizeof(namebuf), "mctpi2c%d", adap->nr);
 	ndev = alloc_netdev(sizeof(*midev), namebuf, NET_NAME_ENUM, mctp_i2c_net_setup);
 	if (!ndev) {
@@ -920,19 +941,10 @@ err:
 static void mctp_i2c_remove_netdev(struct mctp_i2c_client *mcli,
 				   struct i2c_adapter *adap)
 {
-	struct mctp_i2c_dev *midev = NULL, *m = NULL;
-	unsigned long flags;
+	struct mctp_i2c_dev *midev;
 
 	WARN_ON(!mutex_is_locked(&driver_clients_lock));
-	spin_lock_irqsave(&mcli->sel_lock, flags);
-	/* List size is limited by number of MCTP netdevs on a single hardware bus */
-	list_for_each_entry(m, &mcli->devs, list)
-		if (m->adapter == adap) {
-			midev = m;
-			break;
-		}
-	spin_unlock_irqrestore(&mcli->sel_lock, flags);
-
+	midev = mctp_i2c_find_dev(mcli, adap);
 	if (midev)
 		mctp_i2c_unregister(midev);
 }
@@ -1077,6 +1089,79 @@ static void mctp_i2c_remove(struct i2c_client *client)
 	mutex_unlock(&driver_clients_lock);
 }
 
+/* Returns the named adapter in mcli's mux tree, with a reference held */
+static struct i2c_adapter *mctp_i2c_find_named(struct mctp_i2c_client *mcli,
+					       const char *name)
+{
+	struct i2c_adapter *adap = NULL, *root = NULL;
+	struct device *dev;
+
+	dev = bus_find_device_by_name(&i2c_bus_type, NULL, name);
+	if (!dev)
+		return ERR_PTR(-ENODEV);
+
+	adap = mctp_i2c_get_adapter(dev, &root);
+	if (!adap || root != mcli->client->adapter) {
+		put_device(dev);
+		return ERR_PTR(-EINVAL);
+	}
+	return adap;
+}
+
+static ssize_t mctp_i2c_controller_write(struct device *dev, const char *buf,
+					 size_t count, bool add)
+{
+	struct mctp_i2c_client *mcli = i2c_get_clientdata(to_i2c_client(dev));
+	struct i2c_adapter *adap;
+	int rc = 0;
+
+	if (!ns_capable(current->nsproxy->net_ns->user_ns, CAP_NET_ADMIN))
+		return -EPERM;
+
+	mutex_lock(&driver_clients_lock);
+	adap = mctp_i2c_find_named(mcli, buf);
+	if (IS_ERR(adap)) {
+		rc = PTR_ERR(adap);
+		goto out;
+	}
+
+	if (add && mctp_i2c_find_dev(mcli, adap))
+		rc = -EEXIST;
+	else if (add)
+		rc = mctp_i2c_add_netdev(mcli, adap);
+	else if (!mctp_i2c_find_dev(mcli, adap))
+		rc = -ENODEV;
+	else
+		mctp_i2c_remove_netdev(mcli, adap);
+	put_device(&adap->dev);
+out:
+	mutex_unlock(&driver_clients_lock);
+	return rc < 0 ? rc : count;
+}
+
+static ssize_t add_mctp_controller_store(struct device *dev,
+					 struct device_attribute *attr,
+					 const char *buf, size_t count)
+{
+	return mctp_i2c_controller_write(dev, buf, count, true);
+}
+static DEVICE_ATTR_WO(add_mctp_controller);
+
+static ssize_t remove_mctp_controller_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
+{
+	return mctp_i2c_controller_write(dev, buf, count, false);
+}
+static DEVICE_ATTR_WO(remove_mctp_controller);
+
+static struct attribute *mctp_i2c_attrs[] = {
+	&dev_attr_add_mctp_controller.attr,
+	&dev_attr_remove_mctp_controller.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(mctp_i2c);
+
 /* We look for a 'mctp-controller' property on I2C busses as they are
  * added/deleted, creating/removing netdevs as required.
  */
@@ -1090,6 +1175,8 @@ static int mctp_i2c_notifier_call(struct notifier_block *nb,
 		mctp_i2c_notify_add(dev);
 		break;
 	case BUS_NOTIFY_DEL_DEVICE:
+	/* A sysfs write can add a netdev after DEL_DEVICE */
+	case BUS_NOTIFY_REMOVED_DEVICE:
 		mctp_i2c_notify_del(dev);
 		break;
 	}
@@ -1116,6 +1203,7 @@ static struct i2c_driver mctp_i2c_driver = {
 	.driver = {
 		.name = "mctp-i2c-interface",
 		.of_match_table = mctp_i2c_of_match,
+		.dev_groups = mctp_i2c_groups,
 	},
 	.probe = mctp_i2c_probe,
 	.remove = mctp_i2c_remove,
