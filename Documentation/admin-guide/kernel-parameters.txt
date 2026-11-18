@@ -5239,7 +5239,10 @@ Kernel parameters
 				off: Turn realloc off
 				on: Turn realloc on
 		realloc		same as realloc=on
-		noari		do not use PCIe ARI.
+		noari		do not use PCIe ARI. Bridges above devices
+				preserved across a Live Update keep the ARI
+				Forwarding Enable setting from the previous
+				kernel.
 		noats		[PCIE, Intel-IOMMU, AMD-IOMMU]
 				do not use PCIe ATS (and IOMMU device IOTLB).
 		pcie_scan_all	Scan all possible PCIe devices.  Otherwise we

@@ -188,6 +188,11 @@
  *    same after Live Update. Note that a device will use its adopted ACS
  *    controls for the lifetime of its struct pci_dev (i.e. even after
  *    pci_liveupdate_finish()).
+ *
+ *  * The PCI core adopts ARI Forwarding Enable on bridges above incoming
+ *    preserved devices, even with pci=noari, until all preserved devices below
+ *    the bridge have finished. This keeps the preserved devices on the bridge's
+ *    secondary bus addressable with the same function numbers.
  */
 
 #define pr_fmt(fmt) "PCI: liveupdate: " fmt
@@ -888,6 +893,37 @@ int pci_liveupdate_adopt_acs(struct pci_dev *dev)
 		panic("%s: No ACS save buffer for preserved device\n",
 		      pci_name(dev));
 
+	return 0;
+}
+
+/**
+ * pci_liveupdate_adopt_ari() - Adopt ARI configuration
+ * @dev: The PCI device to adopt ARI configuration for
+ *
+ * For devices preserved across a Live Update, read the ARI state from
+ * hardware and adopt it. This ensures the device continues to use the ARI
+ * configuration established by the previous kernel.
+ *
+ * Return: 0 on success, or -EINVAL if the device was not preserved.
+ */
+int pci_liveupdate_adopt_ari(struct pci_dev *dev)
+{
+	u16 val;
+
+	guard(rwsem_read)(&pci_liveupdate.rwsem);
+
+	/*
+	 * Unlike ACS, only adopt ARI while the bridge is incoming-preserved.
+	 * Once all devices below the bridge have finished, recomputing ARI
+	 * Forwarding Enable yields the same result for the same device, and
+	 * must be allowed to change if a different device is hot-plugged.
+	 */
+	if (!dev->liveupdate.incoming)
+		return -EINVAL;
+
+	pcie_capability_read_word(dev, PCI_EXP_DEVCTL2, &val);
+
+	dev->ari_enabled = !!(val & PCI_EXP_DEVCTL2_ARI);
 	return 0;
 }
 
