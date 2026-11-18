@@ -3972,7 +3972,7 @@ static int handle_pmi_common(struct pt_regs *regs, u64 status)
 		 */
 		if (cpuc->events[INTEL_PMC_IDX_FIXED_SLOTS] &&
 		    is_pebs_counter_event_group(cpuc->events[INTEL_PMC_IDX_FIXED_SLOTS]))
-			status &= ~GLOBAL_STATUS_PERF_METRICS_OVF_BIT;
+			status &= ~GLOBAL_STATUS_PERF_METRICS_OVF;
 	}
 
 	/*
@@ -3987,7 +3987,7 @@ static int handle_pmi_common(struct pt_regs *regs, u64 status)
 
 		if (cpuc->events[INTEL_PMC_IDX_FIXED_SLOTS] &&
 		    is_pebs_counter_event_group(cpuc->events[INTEL_PMC_IDX_FIXED_SLOTS]))
-			status &= ~GLOBAL_STATUS_PERF_METRICS_OVF_BIT;
+			status &= ~GLOBAL_STATUS_PERF_METRICS_OVF;
 	}
 
 	/*
