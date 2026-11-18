@@ -196,23 +196,27 @@ static void wb_queue_work(struct bdi_writeback *wb,
 	spin_unlock_irq(&wb->work_lock);
 }
 
-static bool wb_wait_for_completion_cb(struct wb_completion *done)
+static bool wb_wait_for_completion_cb(struct wb_completion *done,
+				      struct backing_dev_info *bdi)
 {
 	unsigned long timeout = sysctl_hung_task_timeout_secs;
 	unsigned long waited_secs = (jiffies - done->wait_start) / HZ;
+	int left = atomic_read(&done->cnt);
 
 	done->progress_stamp = jiffies;
-	if (timeout && (waited_secs > timeout))
+	if (left && timeout && (waited_secs > timeout))
 		pr_info("INFO: The task %s:%d has been waiting for writeback "
-			"completion for more than %lu seconds.",
-			current->comm, current->pid, waited_secs);
+			"completion for more than %lu seconds (bdi %s, work items left: %d).\n",
+			current->comm, current->pid, waited_secs,
+			bdi_dev_name(bdi), left);
 
-	return !atomic_read(&done->cnt);
+	return !left;
 }
 
 /**
  * wb_wait_for_completion - wait for completion of bdi_writeback_works
  * @done: target wb_completion
+ * @bdi: bdi work items were issued to, NULL for the memcg foreign flushes
  *
  * Wait for one or more work items issued to @bdi with their ->done field
  * set to @done, which should have been initialized with
@@ -220,11 +224,21 @@ static bool wb_wait_for_completion_cb(struct wb_completion *done)
  * are completed.  Work items which are waited upon aren't freed
  * automatically on completion.
  */
-void wb_wait_for_completion(struct wb_completion *done)
+void wb_wait_for_completion(struct wb_completion *done,
+			    struct backing_dev_info *bdi)
 {
+	unsigned long timeout, waited;
+
 	done->wait_start = jiffies;
 	atomic_dec(&done->cnt);		/* put down the initial count */
-	wait_event(*done->waitq, wb_wait_for_completion_cb(done));
+	wait_event(*done->waitq, wb_wait_for_completion_cb(done, bdi));
+
+	timeout = sysctl_hung_task_timeout_secs;
+	waited = jiffies - done->wait_start;
+	if (timeout && waited > timeout * HZ)
+		pr_info("The task %s:%d waited %lu seconds for writeback completion on bdi %s\n",
+			current->comm, current->pid, waited / HZ,
+			bdi_dev_name(bdi));
 }
 
 #ifdef CONFIG_CGROUP_WRITEBACK
@@ -1231,7 +1245,7 @@ restart:
 		last_wb = wb;
 
 		rcu_read_unlock();
-		wb_wait_for_completion(&fallback_work_done);
+		wb_wait_for_completion(&fallback_work_done, bdi);
 		goto restart;
 	}
 	rcu_read_unlock();
@@ -3039,7 +3053,7 @@ static void __writeback_inodes_sb_nr(struct super_block *sb, unsigned long nr,
 	WARN_ON(!rwsem_is_locked(&sb->s_umount));
 
 	bdi_split_work_to_wbs(sb->s_bdi, &work, skip_if_busy);
-	wb_wait_for_completion(&done);
+	wb_wait_for_completion(&done, bdi);
 }
 
 /**
@@ -3136,7 +3150,7 @@ void sync_inodes_sb(struct super_block *sb)
 	/* protect against inode wb switch, see inode_switch_wbs_work_fn() */
 	bdi_down_write_wb_switch_rwsem(bdi);
 	bdi_split_work_to_wbs(bdi, &work, false);
-	wb_wait_for_completion(&done);
+	wb_wait_for_completion(&done, bdi);
 	bdi_up_write_wb_switch_rwsem(bdi);
 
 	wait_sb_inodes(sb);
