@@ -1254,6 +1254,8 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 		return ERR_PTR(-EINVAL);
 	}
 
+	/* Needed by ovl_allow_offline_changes() */
+	ofs->numdatalayer = ctx->nr_data;
 	err = -EINVAL;
 	for (i = 0; i < ctx->nr; i++) {
 		l = &ctx->lower[i];
@@ -1295,7 +1297,6 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 		lowerstack[i].dentry = dget(l->path.dentry);
 		lowerstack[i].layer = &ofs->layers[i + 1];
 	}
-	ofs->numdatalayer = ctx->nr_data;
 
 	return oe;
 }
