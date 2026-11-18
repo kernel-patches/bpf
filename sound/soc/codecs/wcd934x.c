@@ -1702,7 +1702,6 @@ static int wcd934x_slim_set_hw_params(struct wcd934x_codec *wcd,
 	/* Configure slave interface device */
 	list_for_each_entry(ch, slim_ch_list, list) {
 		cfg->ch_count++;
-		payload |= 1 << ch->shift;
 		cfg->port_mask |= BIT(ch->port);
 	}
 
@@ -1712,6 +1711,14 @@ static int wcd934x_slim_set_hw_params(struct wcd934x_codec *wcd,
 
 	i = 0;
 	list_for_each_entry(ch, slim_ch_list, list) {
+		/*
+		 * Each port carries its own channel mask.  Accumulating the bits
+		 * across the whole list and writing the sum into every port would
+		 * enable the other channels on a port that only gets one of them
+		 * allocated on the bus; the codec then overruns the port's TX FIFO
+		 * ("overflow error on TX port N").
+		 */
+		payload = BIT(ch->shift);
 		cfg->chs[i++] = ch->ch_num;
 		if (direction == SNDRV_PCM_STREAM_PLAYBACK) {
 			/* write to interface device */
