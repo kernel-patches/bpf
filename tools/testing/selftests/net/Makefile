@@ -238,8 +238,6 @@ BPFTOOL ?= bpftool
 HAS_BPFTOOL := $(shell $(BPFTOOL) version >/dev/null 2>&1 && echo y)
 ifeq ($(HAS_BPFTOOL),y)
 COND_GEN_FILES += xdp_hw_metadata
-else
-$(warning excluding xdp_hw_metadata, bpftool not installed or not working)
 endif
 
 TEST_GEN_FILES += $(COND_GEN_FILES)

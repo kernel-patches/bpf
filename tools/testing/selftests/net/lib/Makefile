@@ -10,8 +10,6 @@ BPFTOOL ?= bpftool
 HAS_BPFTOOL := $(shell $(BPFTOOL) version >/dev/null 2>&1 && echo y)
 ifeq ($(HAS_BPFTOOL),y)
 COND_GEN_FILES += xskxceiver
-else
-$(warning excluding xskxceiver, bpftool not installed or not working)
 endif
 
 TEST_FILES := \
