@@ -630,21 +630,31 @@ static int cxl_mem_ecs_set_attrbs(struct device *dev,
 			       0, NULL);
 }
 
-static u8 cxl_get_ecs_log_entry_type(u8 log_cap, u16 config)
+static int cxl_get_ecs_log_entry_type(u8 log_cap, u16 config, u32 *val)
 {
-	return FIELD_GET(CXL_ECS_LOG_ENTRY_TYPE_MASK, log_cap);
+	*val = FIELD_GET(CXL_ECS_LOG_ENTRY_TYPE_MASK, log_cap);
+
+	return 0;
 }
 
-static u16 cxl_get_ecs_threshold(u8 log_cap, u16 config)
+static int cxl_get_ecs_threshold(u8 log_cap, u16 config, u32 *val)
 {
 	u8 index = FIELD_GET(CXL_ECS_THRESHOLD_COUNT_MASK, config);
 
-	return ecs_supp_threshold[index];
+	if (index >= ARRAY_SIZE(ecs_supp_threshold) ||
+	    !ecs_supp_threshold[index])
+		return -EINVAL;
+
+	*val = ecs_supp_threshold[index];
+
+	return 0;
 }
 
-static u8 cxl_get_ecs_count_mode(u8 log_cap, u16 config)
+static int cxl_get_ecs_count_mode(u8 log_cap, u16 config, u32 *val)
 {
-	return FIELD_GET(CXL_ECS_COUNT_MODE_MASK, config);
+	*val = FIELD_GET(CXL_ECS_COUNT_MODE_MASK, config);
+
+	return 0;
 }
 
 #define CXL_ECS_GET_ATTR(attrb)						    \
@@ -661,9 +671,7 @@ static u8 cxl_get_ecs_count_mode(u8 log_cap, u16 config)
 		if (ret)						    \
 			return ret;					    \
 									    \
-		*val = cxl_get_ecs_##attrb(log_cap, config);		    \
-									    \
-		return 0;						    \
+		return cxl_get_ecs_##attrb(log_cap, config, val);	    \
 	}
 
 CXL_ECS_GET_ATTR(log_entry_type)
