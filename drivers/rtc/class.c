@@ -343,12 +343,13 @@ static void devm_rtc_unregister_device(void *data)
 {
 	struct rtc_device *rtc = data;
 
+	/* the entry's reader takes ops_lock and the removal waits for it */
+	rtc_proc_del_device(rtc);
 	mutex_lock(&rtc->ops_lock);
 	/*
 	 * Remove innards of this RTC, then disable it, before
 	 * letting any rtc_class_open() users access it again
 	 */
-	rtc_proc_del_device(rtc);
 	if (!test_bit(RTC_NO_CDEV, &rtc->flags))
 		cdev_device_del(&rtc->char_dev, &rtc->dev);
 	rtc->ops = NULL;

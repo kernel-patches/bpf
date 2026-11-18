@@ -521,15 +521,15 @@ struct dentry *devpts_pty_new(struct pts_fs_info *fsi, int index, void *priv)
 
 	sprintf(s, "%d", index);
 
-	dentry = d_alloc_name(root, s);
-	if (!dentry) {
+	dentry = simple_start_creating(root, s);
+	if (IS_ERR(dentry)) {
 		iput(inode);
-		return ERR_PTR(-ENOMEM);
+		return dentry;
 	}
 	dentry->d_fsdata = priv;
 	d_make_persistent(dentry, inode);
 	fsnotify_create(d_inode(root), dentry);
-	dput(dentry);
+	simple_done_creating(dentry);
 	return dentry; // borrowed
 }
 

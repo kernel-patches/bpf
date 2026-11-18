@@ -44,7 +44,7 @@ int cachefiles_preset_object_xattr(struct cachefiles_object *object, struct file
 	unsigned int len = object->cookie->aux_len;
 	int ret;
 
-	buf = kzalloc(sizeof(struct cachefiles_xattr) + min(len, sizeof(__be64)), GFP_KERNEL);
+	buf = kzalloc(sizeof(struct cachefiles_xattr) + max(len, sizeof(__be64)), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
