@@ -2836,6 +2836,7 @@ __intel_pmu_snapshot_branch_stack(struct perf_branch_entry *entries,
 
 	lbr_stack = (struct perf_branch_stack *)bpf->__lbr_stack;
 	intel_pmu_lbr_read(lbr_stack, bpf->counters);
+	intel_pmu_lbr_clear_raw_counters(lbr_stack);
 	cnt = min_t(unsigned int, cnt, lbr_stack->nr);
 
 	memcpy(entries, lbr_stack->entries,

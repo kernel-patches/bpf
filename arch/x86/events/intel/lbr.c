@@ -991,6 +991,18 @@ static void intel_pmu_lbr_counters_reorder(struct cpu_hw_events *cpuc,
 	}
 }
 
+void intel_pmu_lbr_clear_raw_counters(struct perf_branch_stack *lbr_stack)
+{
+	int i;
+
+	if (!(x86_pmu.flags & PMU_FL_BR_CNTR))
+		return;
+
+	/* The reserved field holds the raw branch counters. */
+	for (i = 0; i < lbr_stack->nr; i++)
+		lbr_stack->entries[i].reserved = 0;
+}
+
 void intel_pmu_lbr_save_brstack(struct perf_sample_data *data,
 				struct cpu_hw_events *cpuc,
 				struct perf_event *event)
@@ -1001,6 +1013,7 @@ void intel_pmu_lbr_save_brstack(struct perf_sample_data *data,
 		return;
 	}
 
+	intel_pmu_lbr_clear_raw_counters(cpu_lbr_stack(cpuc));
 	perf_sample_save_brstack(data, event, cpu_lbr_stack(cpuc), NULL);
 }
 
