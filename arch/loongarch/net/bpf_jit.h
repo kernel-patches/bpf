@@ -52,6 +52,15 @@ do {										\
 #define is_signed_imm52(val)	signed_imm_check(val, 52)
 #define is_unsigned_imm12(val)	unsigned_imm_check(val, 12)
 
+/*
+ * ldptr.{w,d} and stptr.{w,d} take a 14-bit signed immediate in units of
+ * 4 bytes: they reach a multiple of 4 in [-32768, 32764], passed as off >> 2.
+ */
+static inline bool is_ptr_off(int off)
+{
+	return !(off & 3) && is_signed_imm16(off);
+}
+
 static inline int bpf2la_offset(int bpf_insn, int off, const struct jit_ctx *ctx)
 {
 	/* BPF JMP offset is relative to the next instruction */
