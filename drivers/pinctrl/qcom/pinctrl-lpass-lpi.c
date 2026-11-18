@@ -611,5 +611,9 @@ void lpi_pinctrl_remove(struct platform_device *pdev)
 }
 EXPORT_SYMBOL_GPL(lpi_pinctrl_remove);
 
+EXPORT_GPL_DEV_PM_OPS(lpi_pinctrl_pm_ops) = {
+	RUNTIME_PM_OPS(pm_clk_suspend, pm_clk_resume, NULL)
+};
+
 MODULE_DESCRIPTION("QTI LPI GPIO pin control driver");
 MODULE_LICENSE("GPL");
