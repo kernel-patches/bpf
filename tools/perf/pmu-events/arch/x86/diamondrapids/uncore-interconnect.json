@@ -1,0 +1,218 @@
+[
+    {
+        "BriefDescription": "UNC_SCA_RBT_INSERT.DATA_FWD",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x5B",
+        "EventName": "UNC_SCA_RBT_INSERT.DATA_FWD",
+        "PerPkg": "1",
+        "UMask": "0x1",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "UNC_SCA_RBT_OCCUPANCY.DATA_FWD",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x58",
+        "EventName": "UNC_SCA_RBT_OCCUPANCY.DATA_FWD",
+        "PerPkg": "1",
+        "UMask": "0x1",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP with the opcode FsRdCur",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_FSRDCUR",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_FSRDCUR",
+        "UMask": "0x23e0304",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP with the opcode ItoMWr_Opt",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_ITOMWR_OPT",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_ITOMWR_OPT",
+        "UMask": "0x3360304",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP with the opcode MemPushWr",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MEMPUSHWR",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MEMPUSHWR",
+        "UMask": "0x32e0304",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP which misses the cache with the opcode FsRdCur",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_FSRDCUR",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_FSRDCUR",
+        "UMask": "0x23e0204",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP which misses the cache with the opcode ItoMWr_Opt",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_ITOMWR_OPT",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_ITOMWR_OPT",
+        "UMask": "0x3360204",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP which misses the cache with the opcode MemPushWr",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_MEMPUSHWR",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_MEMPUSHWR",
+        "UMask": "0x32e0204",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP which misses the cache with the opcode SpecItoM",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_SPECITOM",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_SPECITOM",
+        "UMask": "0x31e0204",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP which misses the cache with the opcode WCiLF",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_WCILF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_MISS_WCILF",
+        "UMask": "0x21e0204",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP with the opcode SpecItoM",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_SPECITOM",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_SPECITOM",
+        "UMask": "0x31e0304",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Counts once per cache line access from HIOP with the opcode WCiLF",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_WCILF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_SCA_TOR_INSERTS.PRQ_HIOP_WCILF",
+        "UMask": "0x21e0304",
+        "Unit": "SCA"
+    },
+    {
+        "BriefDescription": "Agent to fabric requests",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x0E",
+        "EventName": "UNC_UBR_UFI_A2F_TXN_COUNT.REQ",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_UBR_UFI_A2F_TXN_COUNT.REQ",
+        "UMask": "0xc000000f",
+        "Unit": "UBR"
+    },
+    {
+        "BriefDescription": "Agent to fabric responses",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x0E",
+        "EventName": "UNC_UBR_UFI_A2F_TXN_COUNT.RSP",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_UBR_UFI_A2F_TXN_COUNT.RSP",
+        "UMask": "0xc0000047",
+        "Unit": "UBR"
+    },
+    {
+        "BriefDescription": "Agent to fabric snoops",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x0E",
+        "EventName": "UNC_UBR_UFI_A2F_TXN_COUNT.SNP",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_UBR_UFI_A2F_TXN_COUNT.SNP",
+        "UMask": "0xc0000017",
+        "Unit": "UBR"
+    },
+    {
+        "BriefDescription": "Agent to fabric writebacks",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x0E",
+        "EventName": "UNC_UBR_UFI_A2F_TXN_COUNT.WB",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_UBR_UFI_A2F_TXN_COUNT.WB",
+        "UMask": "0xc0000027",
+        "Unit": "UBR"
+    },
+    {
+        "BriefDescription": "Fabric to agent requests",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x0D",
+        "EventName": "UNC_UBR_UFI_F2A_TXN_COUNT.REQ",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_UBR_UFI_F2A_TXN_COUNT.REQ",
+        "UMask": "0xf",
+        "Unit": "UBR"
+    },
+    {
+        "BriefDescription": "Fabric to agent responses",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x0D",
+        "EventName": "UNC_UBR_UFI_F2A_TXN_COUNT.RSP",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_UBR_UFI_F2A_TXN_COUNT.RSP",
+        "UMask": "0x47",
+        "Unit": "UBR"
+    },
+    {
+        "BriefDescription": "Fabric to agent snoops",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x0D",
+        "EventName": "UNC_UBR_UFI_F2A_TXN_COUNT.SNP",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_UBR_UFI_F2A_TXN_COUNT.SNP",
+        "UMask": "0x17",
+        "Unit": "UBR"
+    },
+    {
+        "BriefDescription": "Fabric to agent writebacks",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x0D",
+        "EventName": "UNC_UBR_UFI_F2A_TXN_COUNT.WB",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_UBR_UFI_F2A_TXN_COUNT.WB",
+        "UMask": "0x27",
+        "Unit": "UBR"
+    },
+    {
+        "BriefDescription": "ULA Clockticks",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x01",
+        "EventName": "UNC_ULA_CLOCKTICKS",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_ULA_CLOCKTICKS",
+        "Unit": "ULA"
+    },
+    {
+        "BriefDescription": "UNC_ULA_UFI_F2A_TXN_COUNT.DATA_CH",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x09",
+        "EventName": "UNC_ULA_UFI_F2A_TXN_COUNT.DATA_CH",
+        "PerPkg": "1",
+        "UMask": "0x31007ffd",
+        "Unit": "ULA"
+    }
+]
