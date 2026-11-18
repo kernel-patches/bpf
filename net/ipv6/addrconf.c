@@ -6357,17 +6357,17 @@ static void __ipv6_ifa_notify(int event, struct inet6_ifaddr *ifp)
 		/*
 		 * If the address was optimistic we inserted the route at the
 		 * start of our DAD process, so we don't need to do it again.
-		 * If the device was taken down in the middle of the DAD
-		 * cycle there is a race where we could get here without a
-		 * host route, so nothing to insert. That will be fixed when
-		 * the device is brought up.
+		 * Otherwise, if the host route is gone while the device is up
+		 * (e.g. dropped by addrconf_ifdown() for a low MTU and the
+		 * address kept by keep_addr_on_down), regenerate it.
 		 */
-		if (ifp->rt && !rcu_access_pointer(ifp->rt->fib6_node)) {
-			ip6_ins_rt(net, ifp->rt);
-		} else if (!ifp->rt && (ifp->idev->dev->flags & IFF_UP)) {
-			pr_warn("BUG: Address %pI6c on device %s is missing its host route.\n",
-				&ifp->addr, ifp->idev->dev->name);
+		if (!ifp->rt && (ifp->idev->dev->flags & IFF_UP)) {
+			if (fixup_permanent_addr(net, ifp->idev, ifp))
+				pr_warn("BUG: Address %pI6c on device %s is missing its host route.\n",
+					&ifp->addr, ifp->idev->dev->name);
 		}
+		if (ifp->rt && !rcu_access_pointer(ifp->rt->fib6_node))
+			ip6_ins_rt(net, ifp->rt);
 
 		if (ifp->idev->cnf.forwarding)
 			addrconf_join_anycast(ifp);
