@@ -1300,7 +1300,7 @@ static enum hrtimer_restart perf_mux_hrtimer_handler(struct hrtimer *hr)
 	return rotations ? HRTIMER_RESTART : HRTIMER_NORESTART;
 }
 
-static void __perf_mux_hrtimer_init(struct perf_cpu_pmu_context *cpc, int cpu)
+static void __perf_mux_hrtimer_init(struct perf_cpu_pmu_context *cpc)
 {
 	struct hrtimer *timer = &cpc->hrtimer;
 	struct pmu *pmu = cpc->epc.pmu;
@@ -13027,7 +13027,7 @@ int perf_pmu_register(struct pmu *_pmu, const char *name, int type)
 
 		*per_cpu_ptr(pmu->cpu_pmu_context, cpu) = cpc;
 		__perf_init_event_pmu_context(&cpc->epc, pmu);
-		__perf_mux_hrtimer_init(cpc, cpu);
+		__perf_mux_hrtimer_init(cpc);
 	}
 
 	if (pmu_bus_running && !pmu->dev) {
