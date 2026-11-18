@@ -102,17 +102,7 @@ static bool dpc_completed(struct pci_dev *pdev)
  */
 bool pci_dpc_recovered(struct pci_dev *pdev)
 {
-	struct pci_host_bridge *host;
-
 	if (!pdev->dpc_cap)
-		return false;
-
-	/*
-	 * Synchronization between hotplug and DPC is not supported
-	 * if DPC is owned by firmware and EDR is not enabled.
-	 */
-	host = pci_find_host_bridge(pdev->bus);
-	if (!host->native_dpc && !IS_ENABLED(CONFIG_PCIE_EDR))
 		return false;
 
 	/*
