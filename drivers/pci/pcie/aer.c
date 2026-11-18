@@ -403,20 +403,21 @@ void pci_aer_init(struct pci_dev *dev)
 {
 	int n;
 
-	dev->aer_cap = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ERR);
-	if (!dev->aer_cap)
+	if (!pci_is_pcie(dev))
 		return;
 
 	dev->aer_info = kzalloc_obj(*dev->aer_info);
-	if (!dev->aer_info) {
-		dev->aer_cap = 0;
+	if (!dev->aer_info)
 		return;
-	}
 
 	ratelimit_state_init(&dev->aer_info->correctable_ratelimit,
 			     DEFAULT_RATELIMIT_INTERVAL, DEFAULT_RATELIMIT_BURST);
 	ratelimit_state_init(&dev->aer_info->nonfatal_ratelimit,
 			     DEFAULT_RATELIMIT_INTERVAL, DEFAULT_RATELIMIT_BURST);
+
+	dev->aer_cap = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ERR);
+	if (!dev->aer_cap)
+		goto enable;
 
 	/*
 	 * We save/restore PCI_ERR_UNCOR_MASK, PCI_ERR_UNCOR_SEVER,
@@ -438,6 +439,9 @@ void pci_aer_init(struct pci_dev *dev)
 					       PCI_ERR_COR_ADV_NFAT, 0);
 
 	pci_aer_clear_status(dev);
+enable:
+	if (pcie_aer_is_native(dev))
+		pcie_clear_device_status(dev);
 
 	if (pci_aer_available())
 		pci_enable_pcie_error_reporting(dev);
@@ -988,14 +992,12 @@ void aer_print_error(struct aer_err_info *info, int i)
 	if (!info->ratelimit_print[i])
 		goto anfe;
 
-	if (!info->status) {
-		pci_err(dev, "%s Bus Error: severity=%s (Inaccessible)\n",
-			bus_type, aer_error_severity_string[info->severity]);
-		return;
-	}
+	aer_printk(level, dev, "%s Bus Error: severity=%s%s\n",
+		   bus_type, aer_error_severity_string[info->severity],
+		   info->status ? "" : " (no details available)");
 
-	aer_printk(level, dev, "%s Bus Error: severity=%s\n",
-		   bus_type, aer_error_severity_string[info->severity]);
+	if (!info->status)
+		return;
 
 	aer_printk(level, dev, "  device [%04x:%04x] error status/mask=%08x/%08x\n",
 		   dev->vendor, dev->device, info->status, info->mask);
@@ -1204,8 +1206,11 @@ static bool is_error_source(struct pci_dev *dev, struct aer_err_info *e_info)
 	if (!(reg16 & PCI_EXP_AER_FLAGS))
 		return false;
 
-	if (!aer)
-		return false;
+	if (!aer) {
+		pcie_capability_read_word(dev, PCI_EXP_DEVSTA, &reg16);
+		return reg16 & severity2devsta[e_info->severity] &&
+		       !PCI_POSSIBLE_ERROR(reg16);
+	}
 
 	/* Check if error is recorded */
 	if (e_info->severity == AER_CORRECTABLE) {
@@ -1521,6 +1526,7 @@ int aer_get_device_error_info(struct aer_err_info *info, int i)
 {
 	struct pci_dev *dev;
 	int type, aer;
+	u16 devsta;
 
 	if (i >= AER_MAX_MULTI_ERR_DEVICES)
 		return 0;
@@ -1531,13 +1537,22 @@ int aer_get_device_error_info(struct aer_err_info *info, int i)
 
 	/* Must reset in this function */
 	info->status = 0;
+	info->mask = 0;
 	info->anfe_status = 0;
+	info->first_error = 0;
 	info->tlp_header_valid = 0;
 	info->is_cxl = pcie_is_cxl(dev);
 
 	/* The device might not support AER */
-	if (!aer)
-		return 0;
+	if (!aer) {
+		if (info->severity != AER_CORRECTABLE) {
+			pcie_capability_read_word(dev, PCI_EXP_DEVSTA, &devsta);
+			if (devsta & PCI_EXP_DEVSTA_URD &&
+			    !PCI_POSSIBLE_ERROR(devsta))
+				info->status = PCI_ERR_UNC_UNSUP;
+		}
+		return 1;
+	}
 
 	if (info->severity == AER_CORRECTABLE) {
 		pci_read_config_dword(dev, aer + PCI_ERR_COR_STATUS,
