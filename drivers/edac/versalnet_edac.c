@@ -70,6 +70,8 @@
 #define XDDR5_BUS_WIDTH_32		1
 #define XDDR5_BUS_WIDTH_16		2
 
+#define RPMSG_CHAN_NAME	"error_ipc"
+
 /**
  * struct ecc_error_info - ECC error log information.
  * @burstpos:		Burst position.
@@ -713,21 +715,21 @@ static int rpmsg_cb(struct rpmsg_device *rpdev, void *data,
 }
 
 static struct rpmsg_device_id amd_rpmsg_id_table[] = {
-	{ .name = "error_ipc" },
+	{ .name = RPMSG_CHAN_NAME },
 	{ },
 };
 MODULE_DEVICE_TABLE(rpmsg, amd_rpmsg_id_table);
 
 static int rpmsg_probe(struct rpmsg_device *rpdev)
 {
-	struct rpmsg_channel_info chinfo;
+	struct rpmsg_channel_info chinfo = {
+		.src	= RPMSG_ADDR_ANY,
+		.dst	= rpdev->dst,
+		.name	= RPMSG_CHAN_NAME,
+	};
 	struct mc_priv *pg;
 
 	pg = (struct mc_priv *)amd_rpmsg_id_table[0].driver_data;
-	chinfo.src = RPMSG_ADDR_ANY;
-	chinfo.dst = rpdev->dst;
-	strscpy(chinfo.name, amd_rpmsg_id_table[0].name,
-		strlen(amd_rpmsg_id_table[0].name));
 
 	pg->ept = rpmsg_create_ept(rpdev, rpmsg_cb, NULL, chinfo);
 	if (!pg->ept)
