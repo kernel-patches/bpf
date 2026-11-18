@@ -2220,6 +2220,16 @@
         "Unit": "cpu_core"
     },
     {
+        "BriefDescription": "Cycles where at least 10 uops was executed per-thread",
+        "Counter": "3",
+        "CounterMask": "10",
+        "EventCode": "0xb1",
+        "EventName": "UOPS_EXECUTED.CYCLES_GE_10",
+        "SampleAfterValue": "2000003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
         "BriefDescription": "Cycles where at least 2 uops were executed per-thread",
         "Counter": "3",
         "CounterMask": "2",
@@ -2248,6 +2258,26 @@
         "EventCode": "0xb1",
         "EventName": "UOPS_EXECUTED.CYCLES_GE_4",
         "PublicDescription": "Cycles where at least 4 uops were executed per-thread.",
+        "SampleAfterValue": "2000003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "Cycles where at least 6 uops was executed per-thread",
+        "Counter": "3",
+        "CounterMask": "6",
+        "EventCode": "0xb1",
+        "EventName": "UOPS_EXECUTED.CYCLES_GE_6",
+        "SampleAfterValue": "2000003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "Cycles where at least 8 uops was executed per-thread",
+        "Counter": "3",
+        "CounterMask": "8",
+        "EventCode": "0xb1",
+        "EventName": "UOPS_EXECUTED.CYCLES_GE_8",
         "SampleAfterValue": "2000003",
         "UMask": "0x1",
         "Unit": "cpu_core"
@@ -2463,6 +2493,51 @@
         "EventName": "VEC_DISPATCHED.V0",
         "SampleAfterValue": "1000003",
         "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "Counts number of vector uops dispatched on VEC1",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0xb4",
+        "EventName": "VEC_DISPATCHED.V1",
+        "SampleAfterValue": "1000003",
+        "UMask": "0x2",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "Counts number of vector uops dispatched on VEC2",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0xb4",
+        "EventName": "VEC_DISPATCHED.V2",
+        "SampleAfterValue": "1000003",
+        "UMask": "0x4",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "Counts number of vector uops dispatched on VEC3",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0xb4",
+        "EventName": "VEC_DISPATCHED.V3",
+        "SampleAfterValue": "1000003",
+        "UMask": "0x8",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "Counts number of vector uops dispatched on VEC4",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0xb4",
+        "EventName": "VEC_DISPATCHED.V4",
+        "SampleAfterValue": "1000003",
+        "UMask": "0x10",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "Counts number of vector uops dispatched on VEC5",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0xb4",
+        "EventName": "VEC_DISPATCHED.V5",
+        "SampleAfterValue": "1000003",
+        "UMask": "0x20",
         "Unit": "cpu_core"
     }
 ]
