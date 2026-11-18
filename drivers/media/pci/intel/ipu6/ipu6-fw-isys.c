@@ -649,9 +649,8 @@ int ipu6_isys_isr_one(struct ipu6_bus_device *adev)
 	case IPU6_FW_ISYS_RESP_TYPE_FRAME_EOF:
 		ipu6_isys_csi2_eof_event_by_stream(stream);
 		dev_dbg(&adev->auxdev.dev,
-			"eof: handle %d: (index %u), timestamp 0x%16.16llx\n",
-			resp->stream_handle,
-			stream->seq[stream->seq_index].sequence, ts);
+			"eof: handle %d: timestamp 0x%16.16llx\n",
+			resp->stream_handle, ts);
 		break;
 	case IPU6_FW_ISYS_RESP_TYPE_STATS_DATA_READY:
 		break;
