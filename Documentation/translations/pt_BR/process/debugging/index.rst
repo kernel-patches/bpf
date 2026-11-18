@@ -11,10 +11,10 @@ Guias gerais
    :maxdepth: 1
 
    userspace_debugging_guide
+   driver_development_debugging_guide
 
 Todolist:
 
-*   driver_development_debugging_guide
 *   gdb-kernel-debugging
 *   kgdb
 
