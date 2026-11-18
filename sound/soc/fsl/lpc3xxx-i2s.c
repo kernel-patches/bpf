@@ -82,8 +82,7 @@ static int lpc3xxx_i2s_startup(struct snd_pcm_substream *substream, struct snd_s
 
 	if (flag & i2s_info_p->streams_in_use) {
 		dev_warn(dev, "I2S channel is busy\n");
-		ret = -EBUSY;
-		return ret;
+		return -EBUSY;
 	}
 
 	if (i2s_info_p->streams_in_use == 0) {
@@ -320,7 +319,7 @@ static int lpc32xx_i2s_probe(struct platform_device *pdev)
 	i2s_info_p->regs = devm_regmap_init_mmio(dev, iomem, &lpc32xx_i2s_regconfig);
 	if (IS_ERR(i2s_info_p->regs))
 		return dev_err_probe(dev, PTR_ERR(i2s_info_p->regs),
-				     "failed to init register map: %pe\n", i2s_info_p->regs);
+				     "failed to init register map\n");
 
 	i2s_info_p->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(i2s_info_p->clk))
