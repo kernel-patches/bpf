@@ -50,6 +50,11 @@ struct mc_predicate {
  * has, and DEFS.
  * With NOP the instruction is a nop if the first predicate holds.
  *
+ * An opcode which this LLVM does not have is an error, unless the pattern is
+ * OPTIONAL: then it is left out. That is for an opcode which LLVM split off
+ * from another one in some release, while the pattern of the old one stays
+ * for the releases before. The tests show that one of the two matches.
+ *
  * A pattern of kind TEXT_RETURN names a return to the caller. isReturn() holds
  * for a return from an exception as well, which does not hand the return value
  * register to a caller. Without such a pattern it is an opcode like any other,
@@ -71,6 +76,7 @@ struct mc_pattern {
 	s64 value;
 	u32 defs;		/* of TEXT_OTHER */
 	bool nop;		/* of TEXT_OTHER */
+	bool optional;		/* the opcode is missing in some LLVM releases */
 	struct mc_predicate predicates[2];
 };
 

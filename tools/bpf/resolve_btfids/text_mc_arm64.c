@@ -25,6 +25,8 @@ static const struct mc_pattern arm64_patterns[] = {
 	/* HINT: nop, bti, yield, wfe ... */
 	{ "HINT", TEXT_OTHER }, { "AUTIASP", TEXT_OTHER }, { "PRFMui", TEXT_OTHER },
 	{ "HINT", TEXT_OTHER, .nop = true, .predicates = { IMM(0, 0) } },	/* nop */
+	/* LLVM 24 decodes nop as NOP, not as HINT #0 */
+	{ "NOP", TEXT_OTHER, .nop = true, .optional = true },
 	{ "DMB", TEXT_OTHER }, { "MRS", TEXT_OTHER }, { "MSR", TEXT_OTHER },
 	{ "STLRB", TEXT_OTHER }, { "STLRW", TEXT_OTHER },
 	WX("LDXR", "", TEXT_OTHER), WX("STXR", "", TEXT_OTHER), WX("STLXR", "", TEXT_OTHER),
