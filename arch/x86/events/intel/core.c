@@ -4045,7 +4045,7 @@ static int handle_pmi_common(struct pt_regs *regs, u64 status)
 		 * The PEBS buffer has to be drained before handling the A-PMI
 		 */
 		if (is_pebs_counter_event_group(event))
-			static_call(x86_pmu_drain_pebs)(regs, &data);
+			intel_pmu_drain_pebs_buffer();
 
 		last_period = event->hw.last_period;
 

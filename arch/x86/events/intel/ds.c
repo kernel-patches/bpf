@@ -1262,6 +1262,14 @@ unlock:
 	return 1;
 }
 
+/*
+ * Drain the pending PEBS buffer for the current CPU.
+ * This helper should only be used to drain a PEBS buffer which
+ * hasn't overflowed yet, e.g. on a context switch with large PEBS,
+ * because the NULL regs argument passed to x86_pmu_drain_pebs()
+ * makes the records be processed with perf_event_output() rather
+ * than perf_event_overflow().
+ */
 void intel_pmu_drain_pebs_buffer(void)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
