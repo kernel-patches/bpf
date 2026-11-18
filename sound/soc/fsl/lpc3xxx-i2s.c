@@ -198,12 +198,12 @@ static int lpc3xxx_i2s_hw_params(struct snd_pcm_substream *substream,
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		regmap_write(regs, LPC3XXX_REG_I2S_DMA1,
-			     LPC3XXX_I2S_DMA1_TX_EN | LPC3XXX_I2S_DMA0_TX_DEPTH(4));
+			     LPC3XXX_I2S_DMA1_TX_EN | LPC3XXX_I2S_DMA1_TX_DEPTH(4));
 		regmap_write(regs, LPC3XXX_REG_I2S_TX_RATE, (clkx << 8) | clky);
 		regmap_write(regs, LPC3XXX_REG_I2S_DAO, tmp);
 	} else {
 		regmap_write(regs, LPC3XXX_REG_I2S_DMA0,
-			     LPC3XXX_I2S_DMA0_RX_EN | LPC3XXX_I2S_DMA1_RX_DEPTH(4));
+			     LPC3XXX_I2S_DMA0_RX_EN | LPC3XXX_I2S_DMA0_RX_DEPTH(4));
 		regmap_write(regs, LPC3XXX_REG_I2S_RX_RATE, (clkx << 8) | clky);
 		regmap_write(regs, LPC3XXX_REG_I2S_DAI, tmp);
 	}
