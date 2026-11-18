@@ -3906,8 +3906,9 @@ static int handle_pmi_common(struct pt_regs *regs, u64 status)
 {
 	struct perf_sample_data data;
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
-	int bit;
+	bool lbr_counter_cleared = false;
 	int handled = 0;
+	int bit;
 
 	inc_perf_irq_stat();
 
@@ -4080,12 +4081,19 @@ static int handle_pmi_common(struct pt_regs *regs, u64 status)
 		perf_sample_data_init(&data, 0, last_period);
 
 		if (has_branch_stack(event)) {
-			if (!cpuc->lbr_stack_live) {
+			/*
+			 * Re-read the LBR stack if it no longer holds the live state,
+			 * or if an earlier LBR event already cleared the raw counters
+			 * that this event needs.
+			 */
+			if (!cpuc->lbr_stack_live ||
+			    (lbr_counter_cleared && is_branch_counters_group(event))) {
 				intel_pmu_lbr_read(cpu_lbr_stack(cpuc),
 						   cpuc->lbr_counters);
 				cpuc->lbr_stack_live = true;
 			}
 			intel_pmu_lbr_save_brstack(&data, cpuc, event);
+			lbr_counter_cleared = true;
 		}
 
 		x86_pmu_clear_perf_regs(regs);
