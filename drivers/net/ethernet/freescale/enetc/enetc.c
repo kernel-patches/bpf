@@ -1138,7 +1138,19 @@ netdev_features_t enetc_features_check(struct sk_buff *skb,
 		return features;
 	}
 
-	if (!skb_is_gso(skb) || enetc_skb_uses_lso(priv, skb))
+	if (!skb_is_gso(skb))
+		return features;
+
+	/* In case NETIF_F_HW_VLAN_CTAG_TX is disabled, validate_xmit_vlan()
+	 * has not yet run and a VLAN may still be in the hwaccel area, so we
+	 * need to be one step ahead
+	 */
+	if (enetc_lso_get_hdr_len(skb) > TSO_HEADER_SIZE - VLAN_HLEN) {
+		features &= ~NETIF_F_GSO_MASK;
+		return features;
+	}
+
+	if (enetc_skb_uses_lso(priv, skb))
 		return features;
 
 	if (enetc_tso_count_descs(skb) >= priv->tx_bd_count)
