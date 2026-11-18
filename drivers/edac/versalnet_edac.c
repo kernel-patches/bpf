@@ -765,11 +765,14 @@ static void versal_edac_release(struct device *dev)
 static void remove_one_mc(struct mc_priv *priv, int i)
 {
 	struct mem_ctl_info *mci;
+	struct device *dev;
 
 	mci = priv->mci[i];
-	device_unregister(mci->pdev);
-	edac_mc_del_mc(mci->pdev);
+	dev = mci->pdev;
+
+	edac_mc_del_mc(dev);
 	edac_mc_free(mci);
+	device_unregister(dev);
 }
 
 static int init_one_mc(struct mc_priv *priv, struct platform_device *pdev, int i)
