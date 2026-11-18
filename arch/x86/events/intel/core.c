@@ -4001,6 +4001,11 @@ static int intel_pmu_handle_irq(struct pt_regs *regs)
 	 * It needs to be restored when leaving the handler.
 	 */
 	pmu_enabled = cpuc->enabled;
+
+	/* If PMU version < 4, LBR freeze disables LBR. */
+	if (x86_pmu.version < 4)
+		cpuc->lbr_enabled = 0;
+
 	/*
 	 * In general, the early ACK is only applied for old platforms.
 	 * For the big core starts from Haswell, the late ACK should be

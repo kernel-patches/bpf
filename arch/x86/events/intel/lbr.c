@@ -132,6 +132,8 @@ static void __intel_pmu_lbr_enable(bool pmi)
 	if (pmi && x86_pmu.version >= 4)
 		return;
 
+	cpuc->lbr_enabled = 1;
+
 	/*
 	 * No need to reprogram LBR_SELECT in a PMI, as it
 	 * did not change.

@@ -399,6 +399,8 @@ void amd_pmu_lbr_enable_all(void)
 	if (!cpuc->lbr_users || !x86_pmu.lbr_nr)
 		return;
 
+	cpuc->lbr_enabled = 1;
+
 	/* Set hardware branch filter */
 	if (cpuc->lbr_select) {
 		lbr_select = cpuc->lbr_sel->config & LBR_SELECT_MASK;
