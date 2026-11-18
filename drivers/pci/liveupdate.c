@@ -123,6 +123,9 @@
  *
  *  * The device cannot be a Virtual Function (VF).
  *
+ *  * The device cannot require device-specific quirks to enable Access
+ *    Control Services (ACS).
+ *
  * Driver Binding
  * ==============
  *
@@ -174,6 +177,17 @@
  * bus, since the bus numbers of the failed bridge can no longer be read from
  * hardware and handing them to another bridge would let an unrelated device
  * inherit the BDF of a preserved device.
+ *
+ * Handling Preserved Devices
+ * ==========================
+ *
+ * The PCI core handles preserved devices differently in the following ways:
+ *
+ *  * The PCI core adopts all ACS controls enabled on incoming preserved devices
+ *    rather than assigning new ones, so TLP routing and IOMMU groups stay the
+ *    same after Live Update. Note that a device will use its adopted ACS
+ *    controls for the lifetime of its struct pci_dev (i.e. even after
+ *    pci_liveupdate_finish()).
  */
 
 #define pr_fmt(fmt) "PCI: liveupdate: " fmt
@@ -189,6 +203,7 @@
 #include <linux/slab.h>
 
 #include "liveupdate.h"
+#include "pci.h"
 
 /**
  * struct pci_liveupdate_global - Global state for PCI Live Update support
@@ -540,6 +555,15 @@ static int pci_liveupdate_preserve_device(struct pci_flb_outgoing *outgoing,
 		return -EINVAL;
 	}
 
+	/*
+	 * Do not preserve devices that rely on device-specific ACS equivalents
+	 * since that would complicate keeping ACS constant across Live Update.
+	 */
+	if (pci_need_dev_specific_enable_acs(dev)) {
+		pci_warn(dev, "Refusing to preserve device that relies on ACS quirks\n");
+		return -EINVAL;
+	}
+
 	if (dev_ser) {
 		/*
 		 * Endpoint devices can only be preserved once. Bridges are
@@ -815,6 +839,57 @@ void pci_liveupdate_finish(struct pci_dev *dev)
 	pci_liveupdate_flb_put_incoming();
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_finish);
+
+/**
+ * pci_liveupdate_adopt_acs() - Adopt ACS controls
+ * @dev: The PCI device to adopt ACS controls for
+ *
+ * For devices preserved across a Live Update, leave the ACS controls
+ * established by the previous kernel alone instead of programming new ones.
+ * The adopted controls are recorded by the pci_save_state() call in
+ * pci_bus_add_device(), so they are reapplied by pci_restore_state() if the
+ * device is subsequently reset.
+ *
+ * Panics if the device has an ACS capability but no ACS save buffer, since the
+ * adopted controls would be lost on the first reset.
+ *
+ * Return: 0 if the ACS controls were adopted, or -EINVAL if the device was not
+ * preserved.
+ */
+int pci_liveupdate_adopt_acs(struct pci_dev *dev)
+{
+	/*
+	 * Check if the device was preserved over a previous Live Update (even
+	 * if it has already gone through pci_liveupdate_finish()). This ensures
+	 * that the device continues to use the ACS controls established by the
+	 * previous kernel.
+	 */
+	if (!dev->liveupdate.was_incoming)
+		return -EINVAL;
+
+	/*
+	 * The previous kernel does not preserve devices that require
+	 * device-specific quirks to enable ACS, so the controls being adopted
+	 * live entirely in the ACS capability. If such a quirk matches anyway
+	 * (e.g. it was added in the current kernel), ignore it rather than
+	 * reprogram a device in the path of a preserved device's memory
+	 * transactions.
+	 */
+	if (pci_need_dev_specific_enable_acs(dev))
+		pci_warn(dev, "Ignoring device-specific ACS quirk, adopting ACS controls from previous kernel\n");
+
+	/*
+	 * The adopted controls must be captured in the ACS save buffer so that
+	 * they are reapplied if the device is later reset. Without it, e.g.
+	 * because it could not be allocated, the first reset would silently
+	 * drop them.
+	 */
+	if (dev->acs_cap && !pci_find_saved_ext_cap(dev, PCI_EXT_CAP_ID_ACS))
+		panic("%s: No ACS save buffer for preserved device\n",
+		      pci_name(dev));
+
+	return 0;
+}
 
 /**
  * pci_liveupdate_is_incoming() - Check if a device is incoming-preserved

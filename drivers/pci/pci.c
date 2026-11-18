@@ -35,6 +35,8 @@
 #include <linux/aer.h>
 #include <linux/bitfield.h>
 #include <linux/suspend.h>
+
+#include "liveupdate.h"
 #include "pci.h"
 
 DEFINE_MUTEX(pci_slot_mutex);
@@ -1071,9 +1073,13 @@ static void pci_allocate_acs_save_buffer(struct pci_dev *dev)
 	/*
 	 * Devices that rely on device-specific quirks to enable an ACS
 	 * equivalent keep that configuration outside of the ACS Control
-	 * register, so they are configured from scratch on restore.
+	 * register, so they are configured from scratch on restore. The
+	 * exception is devices preserved across a Live Update, which always
+	 * adopt the ACS controls established by the previous kernel and need
+	 * the buffer to keep them across resets.
 	 */
-	if (pci_need_dev_specific_enable_acs(dev))
+	if (pci_need_dev_specific_enable_acs(dev) &&
+	    !pci_liveupdate_was_incoming(dev))
 		return;
 
 	/* dev->acs_cap is not set yet, pci_acs_init() runs later */
@@ -1169,6 +1175,9 @@ void pci_enable_acs(struct pci_dev *dev)
 	struct pci_acs caps;
 	bool enable_acs = false;
 	int pos;
+
+	if (!pci_liveupdate_adopt_acs(dev))
+		return;
 
 	/* If an iommu is present we start with kernel default caps */
 	if (pci_acs_enable) {
