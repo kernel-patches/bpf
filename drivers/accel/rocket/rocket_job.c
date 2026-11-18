@@ -61,7 +61,7 @@ static struct dma_fence *rocket_fence_create(struct rocket_core *core)
 		return ERR_PTR(-ENOMEM);
 
 	dma_fence_init(fence, &rocket_fence_ops, &core->fence_lock,
-		       core->fence_context, ++core->emit_seqno);
+		       core->fence_context, ++core->emit_seqno, 0);
 
 	return fence;
 }

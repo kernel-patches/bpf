@@ -36,7 +36,7 @@ static struct dma_fence *__mock_fence(u64 context, u64 seqno)
 		return NULL;
 
 	spin_lock_init(&f->lock);
-	dma_fence_init(&f->base, &mock_ops, &f->lock, context, seqno);
+	dma_fence_init(&f->base, &mock_ops, &f->lock, context, seqno, 0);
 
 	return &f->base;
 }

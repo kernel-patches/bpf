@@ -103,6 +103,12 @@ struct dma_fence {
 	int error;
 };
 
+/** enum dma_fence_flag_bits - internal dma_fence flags
+ *
+ * These flags are all only for internal usage, except for
+ * @DMA_FENCE_FLAG_SEQNO64_BIT and the user bits beginning at
+ * @DMA_FENCE_FLAG_USER_BITS.
+ */
 enum dma_fence_flag_bits {
 	DMA_FENCE_FLAG_INITIALIZED_BIT,
 	DMA_FENCE_FLAG_INLINE_LOCK_BIT,
@@ -110,6 +116,7 @@ enum dma_fence_flag_bits {
 	DMA_FENCE_FLAG_SIGNALED_BIT,
 	DMA_FENCE_FLAG_TIMESTAMP_BIT,
 	DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT,
+
 	DMA_FENCE_FLAG_USER_BITS, /* must always be last member */
 };
 
@@ -279,11 +286,10 @@ struct dma_fence_ops {
 };
 
 void dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops,
-		    spinlock_t *lock, u64 context, u64 seqno);
-
+		    spinlock_t *lock, u64 context, u64 seqno,
+		    unsigned long flags);
 void dma_fence_init64(struct dma_fence *fence, const struct dma_fence_ops *ops,
 		      spinlock_t *lock, u64 context, u64 seqno);
-
 void dma_fence_release(struct kref *kref);
 void dma_fence_free(struct dma_fence *fence);
 void dma_fence_describe(struct dma_fence *fence, struct seq_file *seq);

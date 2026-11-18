@@ -76,7 +76,7 @@ struct virtio_gpu_fence *virtio_gpu_fence_alloc(struct virtio_gpu_device *vgdev,
 	 */
 
 	dma_fence_init(&fence->f, &virtio_gpu_fence_ops, &drv->lock,
-		       fence_context, 0);
+		       fence_context, 0, 0);
 
 	return fence;
 }

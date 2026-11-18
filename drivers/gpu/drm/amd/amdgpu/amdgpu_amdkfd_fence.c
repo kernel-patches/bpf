@@ -77,7 +77,7 @@ struct amdgpu_amdkfd_fence *amdgpu_amdkfd_fence_create(u64 context,
 	spin_lock_init(&fence->lock);
 	fence->context_id = context_id;
 	dma_fence_init(&fence->base, &amdkfd_fence_ops, &fence->lock,
-		   context, atomic_inc_return(&fence_seq));
+		   context, atomic_inc_return(&fence_seq), 0);
 
 	return fence;
 }

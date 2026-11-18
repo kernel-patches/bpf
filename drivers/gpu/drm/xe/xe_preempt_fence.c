@@ -154,7 +154,7 @@ xe_preempt_fence_arm(struct xe_preempt_fence *pfence, struct xe_exec_queue *q,
 	pfence->q = xe_exec_queue_get(q);
 	spin_lock_init(&pfence->lock);
 	dma_fence_init(&pfence->base, &preempt_fence_ops,
-		      &pfence->lock, context, seqno);
+		      &pfence->lock, context, seqno, 0);
 
 	return &pfence->base;
 }

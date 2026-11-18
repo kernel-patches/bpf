@@ -1904,7 +1904,7 @@ static int iio_buffer_enqueue_dmabuf(struct iio_dev_buffer_pair *ib,
 	 * the dma_fence.
 	 */
 	dma_fence_init(&fence->base, &iio_buffer_dma_fence_ops,
-		       &fence->lock, priv->context, seqno);
+		       &fence->lock, priv->context, seqno, 0);
 
 	ret = iio_dma_resv_lock(dmabuf, nonblock);
 	if (ret)

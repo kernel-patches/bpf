@@ -97,7 +97,7 @@ static struct lima_fence *lima_fence_create(struct lima_sched_pipe *pipe)
 
 	fence->pipe = pipe;
 	dma_fence_init(&fence->base, &lima_fence_ops, &pipe->fence_lock,
-		       pipe->fence_context, ++pipe->fence_seqno);
+		       pipe->fence_context, ++pipe->fence_seqno, 0);
 
 	return fence;
 }

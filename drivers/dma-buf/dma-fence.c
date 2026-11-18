@@ -122,7 +122,7 @@ static const struct dma_fence_ops dma_fence_stub_ops = {
 
 static int __init dma_fence_init_stub(void)
 {
-	dma_fence_init(&dma_fence_stub, &dma_fence_stub_ops, NULL, 0, 0);
+	dma_fence_init(&dma_fence_stub, &dma_fence_stub_ops, NULL, 0, 0, 0);
 	set_bit(DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT,
 		&dma_fence_stub.flags);
 	dma_fence_signal(&dma_fence_stub);
@@ -156,7 +156,7 @@ struct dma_fence *dma_fence_allocate_private_stub(ktime_t timestamp)
 	if (fence == NULL)
 		return NULL;
 
-	dma_fence_init(fence, &dma_fence_stub_ops, NULL, 0, 0);
+	dma_fence_init(fence, &dma_fence_stub_ops, NULL, 0, 0, 0);
 	set_bit(DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT,
 		&fence->flags);
 
@@ -1087,6 +1087,21 @@ __dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops,
 	trace_dma_fence_init(fence);
 }
 
+static bool dma_fence_flags_valid(unsigned long flags)
+{
+	const unsigned long valid_fence_bits =
+		BIT(DMA_FENCE_FLAG_SEQNO64_BIT);
+	const unsigned long valid_user_bits =
+		GENMASK(
+			BITS_PER_TYPE(unsigned long) - 1,
+			DMA_FENCE_FLAG_USER_BITS
+		       );
+	const unsigned long invalid_bits =
+		~(valid_fence_bits | valid_user_bits);
+
+	return !(flags & invalid_bits);
+}
+
 /**
  * dma_fence_init - Initialize a custom fence.
  * @fence: the fence to initialize
@@ -1094,6 +1109,7 @@ __dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops,
  * @lock: optional irqsafe spinlock to use for locking this fence
  * @context: the execution context this fence is run on
  * @seqno: a linear increasing sequence number for this context
+ * @flags: flags modifying a fence's behavior
  *
  * Initializes an allocated fence, the caller doesn't have to keep its
  * refcount after committing with this fence, but it will need to hold a
@@ -1108,12 +1124,18 @@ __dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops,
  * introduction of the callback, but the external lock is still around. New
  * users MUST NOT use external locks, as they force the issuer to outlive all
  * fences that reference the lock.
+ *
+ * The @flags you can specify here are either DMA_FENCE_FLAG_SEQNO64_BIT or
+ * user-specified bits >= DMA_FENCE_FLAG_USER_BITS.
  */
 void
 dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops,
-	       spinlock_t *lock, u64 context, u64 seqno)
+	       spinlock_t *lock, u64 context, u64 seqno,
+	       unsigned long flags)
 {
-	__dma_fence_init(fence, ops, lock, context, seqno, 0UL);
+	WARN_ON(!dma_fence_flags_valid(flags));
+
+	__dma_fence_init(fence, ops, lock, context, seqno, flags);
 }
 EXPORT_SYMBOL(dma_fence_init);
 
