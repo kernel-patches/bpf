@@ -671,18 +671,22 @@ void vmem_unmap_4k_page(unsigned long addr)
 
 void __init vmem_map_init(void)
 {
-	__set_memory_rox(_stext, _etext);
-	__set_memory_ro(_etext, __end_rodata);
-	__set_memory_rox(__stext_amode31, __etext_amode31);
+	int rc;
+
+	rc  = __set_memory_rox(_stext, _etext);
+	rc |= __set_memory_ro(_etext, __end_rodata);
+	rc |= __set_memory_rox(__stext_amode31, __etext_amode31);
 	/*
 	 * If the BEAR-enhancement facility is not installed the first
 	 * prefix page is used to return to the previous context with
 	 * an LPSWE instruction and therefore must be executable.
 	 */
 	if (!cpu_has_bear())
-		set_memory_x(0, 1);
+		rc |= set_memory_x(0, 1);
 	if (debug_pagealloc_enabled())
-		__set_memory_4k(__va(0), absolute_pointer(__va(0)) + ident_map_size);
+		rc |= __set_memory_4k(__va(0), absolute_pointer(__va(0)) + ident_map_size);
+	if (rc)
+		panic("Failed to set kernel mapping permissions");
 	pr_info("Write protected kernel read-only data: %luk\n",
 		(unsigned long)(__end_rodata - _stext) >> 10);
 }
