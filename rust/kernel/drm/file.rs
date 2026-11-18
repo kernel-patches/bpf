@@ -18,7 +18,7 @@ pub trait DriverFile {
     type Driver: drm::Driver;
 
     /// Open a new file (called when a client opens the DRM device).
-    fn open(device: &drm::Device<Self::Driver>) -> Result<Pin<KBox<Self>>>;
+    fn open(device: &drm::Device<Self::Driver>) -> impl PinInit<Self, Error>;
 }
 
 /// An open DRM File.
@@ -70,7 +70,8 @@ impl<T: DriverFile> File<T> {
         // SAFETY: `raw_file` is a valid pointer to a `struct drm_file`.
         let file = unsafe { File::<T>::from_raw(raw_file) };
 
-        let inner = match T::open(drm) {
+        let init = T::open(drm);
+        let inner = match KBox::try_pin_init(init, GFP_KERNEL) {
             Err(e) => {
                 return e.to_errno();
             }

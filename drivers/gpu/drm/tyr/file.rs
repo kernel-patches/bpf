@@ -25,8 +25,8 @@ pub(crate) type TyrDrmFile = drm::file::File<TyrDrmFileData>;
 impl drm::file::DriverFile for TyrDrmFileData {
     type Driver = TyrDrmDriver;
 
-    fn open(_dev: &drm::Device<Self::Driver>) -> Result<Pin<KBox<Self>>> {
-        KBox::try_pin_init(try_pin_init!(Self {}), GFP_KERNEL)
+    fn open(_dev: &drm::Device<Self::Driver>) -> impl PinInit<Self, Error> {
+        Ok(Self {})
     }
 }
 

@@ -607,8 +607,8 @@ mod tests {
     impl drm::file::DriverFile for KunitFile {
         type Driver = KunitDriver;
 
-        fn open(_dev: &drm::Device<KunitDriver>) -> Result<Pin<KBox<Self>>> {
-            Ok(KBox::new(Self, GFP_KERNEL)?.into())
+        fn open(_dev: &drm::Device<KunitDriver>) -> impl PinInit<Self, Error> {
+            Ok(Self)
         }
     }
 
