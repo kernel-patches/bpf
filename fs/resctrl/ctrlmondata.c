@@ -279,6 +279,7 @@ next:
 			goto next;
 		}
 	}
+	rdt_last_cmd_printf("Invalid domain %lu\n", dom_id);
 	return -EINVAL;
 }
 
