@@ -17445,7 +17445,7 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 			netdev_err(bp->dev, "Not enough rings available.\n");
 			rc = -ENOMEM;
 		}
-		goto init_err_pci_clean;
+		goto init_err_auxdev;
 	}
 
 	bnxt_fw_init_one_p3(bp);
@@ -17457,7 +17457,7 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	rc = bnxt_init_int_mode(bp);
 	if (rc)
-		goto init_err_pci_clean;
+		goto init_err_auxdev;
 
 	/* No TC has been set yet and rings may have been trimmed due to
 	 * limited MSIX, so we re-initialize the TX rings per TC.
@@ -17471,7 +17471,7 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 			if (!bnxt_pf_wq) {
 				dev_err(&pdev->dev, "Unable to create workqueue.\n");
 				rc = -ENOMEM;
-				goto init_err_pci_clean;
+				goto init_err_auxdev;
 			}
 		}
 		rc = bnxt_init_tc(bp);
@@ -17509,12 +17509,13 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	return 0;
 init_err_cleanup:
-	bnxt_aux_devices_uninit(bp);
-	bnxt_auxdev_id_free(bp, bp->auxdev_id);
 	bnxt_dl_unregister(bp);
 init_err_dl:
 	bnxt_shutdown_tc(bp);
 	bnxt_clear_int_mode(bp);
+init_err_auxdev:
+	bnxt_aux_devices_uninit(bp);
+	bnxt_auxdev_id_free(bp, bp->auxdev_id);
 
 init_err_pci_clean:
 	bnxt_hwrm_func_drv_unrgtr(bp);
