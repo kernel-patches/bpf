@@ -2645,6 +2645,12 @@ static int __init init_hw_perf_events(void)
 	if (!x86_pmu.config_mask)
 		x86_pmu.config_mask = X86_RAW_EVENT_MASK;
 
+	if (x86_pmu.lbr_nr > MAX_LBR_ENTRIES) {
+		pr_warn("LBR depth %d exceeds max %d, disabling LBR\n",
+			x86_pmu.lbr_nr, MAX_LBR_ENTRIES);
+		x86_pmu.lbr_nr = 0;
+	}
+
 	perf_events_lapic_init();
 	register_nmi_handler(NMI_LOCAL, perf_event_nmi_handler, 0, "PMI");
 
