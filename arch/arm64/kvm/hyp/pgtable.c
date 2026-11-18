@@ -1671,16 +1671,27 @@ static int stage2_free_walker(const struct kvm_pgtable_visit_ctx *ctx,
 	}
 }
 
-void kvm_pgtable_stage2_destroy_range(struct kvm_pgtable *pgt,
-				       u64 addr, u64 size)
+s64 kvm_pgtable_stage2_destroy_range(struct kvm_pgtable *pgt,
+				     u64 addr, u64 size)
 {
 	struct kvm_pgtable_walker walker = {
 		.cb	= stage2_free_walker,
 		.flags	= KVM_PGTABLE_WALK_LEAF |
 			  KVM_PGTABLE_WALK_TABLE_POST,
 	};
+	struct kvm_pgtable_walk_data data = {
+		.walker	= &walker,
+		.start	= addr,
+		.addr	= addr,
+		.end	= addr + size,
+	};
+	int ret;
 
-	WARN_ON(kvm_pgtable_walk(pgt, addr, size, &walker));
+	ret = _kvm_pgtable_walk(pgt, &data);
+	if (ret)
+		return ret;
+
+	return data.addr;
 }
 
 void kvm_pgtable_stage2_destroy_pgd(struct kvm_pgtable *pgt)
@@ -1699,7 +1710,7 @@ void kvm_pgtable_stage2_destroy_pgd(struct kvm_pgtable *pgt)
 
 void kvm_pgtable_stage2_destroy(struct kvm_pgtable *pgt)
 {
-	kvm_pgtable_stage2_destroy_range(pgt, 0, BIT(pgt->ia_bits));
+	WARN_ON(kvm_pgtable_stage2_destroy_range(pgt, 0, BIT(pgt->ia_bits)) < 0);
 	kvm_pgtable_stage2_destroy_pgd(pgt);
 }
 
