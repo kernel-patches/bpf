@@ -1352,8 +1352,14 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 			}
 			break;
 		case BPF_DW:
-			move_imm(ctx, t1, off);
-			emit_insn(ctx, ldxd, dst, src, t1);
+			if (is_signed_imm12(off)) {
+				emit_insn(ctx, ldd, dst, src, off);
+			} else if (is_aligned_signed_imm16(off)) {
+				emit_insn(ctx, ldptrd, dst, src, off >> 2);
+			} else {
+				move_imm(ctx, t1, off);
+				emit_insn(ctx, ldxd, dst, src, t1);
+			}
 			break;
 		}
 
