@@ -679,10 +679,13 @@ a crash or deadlock.
 
 Offline changes, when the overlay is not mounted, are allowed to the
 upper tree.  Offline changes to the lower tree are only allowed if the
-"metacopy", "index", "xino" and "redirect_dir" features
-have not been used.  If the lower tree is modified and any of these
+"metacopy", "index", "xino", "redirect_dir" and data-only lower layers
+features have not been used.  If the lower tree is modified and any of these
 features has been used, the behavior of the overlay is undefined,
 though it will not result in a crash or deadlock.
+
+When offline changes to the lower tree are not allowed, the lower tree
+is also not allowed to be a pseudo kernel filesystem (e.g. sysfs).
 
 When the overlay NFS export feature is enabled, overlay filesystems
 behavior on offline changes of the underlying lower layer is different
