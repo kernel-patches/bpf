@@ -1101,6 +1101,12 @@ static int emac_ndo_open(struct net_device *ndev)
 
 	icssg_mii_update_mtu(prueth->mii_rt, slice, ndev->max_mtu);
 
+	/* Re-program FT3 filters and classifier OR tables from the persistent
+	 * rule list. icssg_class_default() called above resets all classifiers,
+	 * so rules must be restored here on every open/restart.
+	 */
+	icssg_rxnfc_rule_restore(emac);
+
 	ret = request_threaded_irq(emac->tx_ts_irq, NULL, prueth_tx_ts_irq,
 				   IRQF_ONESHOT, dev_name(dev), emac);
 	if (ret)
@@ -1714,6 +1720,9 @@ static int prueth_netdev_init(struct prueth *prueth,
 	emac->xdp_prog = NULL;
 	emac->ndev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
 	INIT_WORK(&emac->rx_mode_work, emac_ndo_set_rx_mode_work);
+
+	/* Initialize RX flow classification */
+	icssg_rxnfc_rule_init(emac);
 
 	INIT_DELAYED_WORK(&emac->stats_work, icssg_stats_work_handler);
 

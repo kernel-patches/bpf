@@ -1830,6 +1830,10 @@ void prueth_netdev_exit(struct prueth *prueth,
 	if (of_phy_is_fixed_link(emac->phy_node))
 		of_phy_deregister_fixed_link(emac->phy_node);
 
+	/* Free any rules added while the interface was down */
+	if (!emac->is_sr1)
+		icssg_rxnfc_rule_cleanup(emac);
+
 	pruss_release_mem_region(prueth->pruss, &emac->dram);
 	free_netdev(emac->ndev);
 	prueth->emac[mac] = NULL;

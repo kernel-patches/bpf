@@ -300,6 +300,62 @@ static int emac_set_per_queue_coalesce(struct net_device *ndev, u32 queue,
 	return 0;
 }
 
+static u32 emac_get_rx_ring_count(struct net_device *ndev)
+{
+	struct prueth_emac *emac = netdev_priv(ndev);
+
+	return emac->rx_flow_num;
+}
+
+static int emac_get_rxnfc(struct net_device *ndev, struct ethtool_rxnfc *info,
+			  u32 *rule_locs)
+{
+	struct prueth_emac *emac = netdev_priv(ndev);
+	int ret = 0;
+
+	if (emac->is_sr1)
+		return -EOPNOTSUPP;
+
+	switch (info->cmd) {
+	case ETHTOOL_GRXCLSRLCNT:
+		info->rule_cnt = emac->rxnfc.rxnfc_rule_count;
+		info->data = ICSSG_RXNFC_MAX_RULES | RX_CLS_LOC_SPECIAL;
+		break;
+	case ETHTOOL_GRXCLSRULE:
+		ret = icssg_rxnfc_rule_get(emac, info->fs.location, &info->fs);
+		break;
+	case ETHTOOL_GRXCLSRLALL: {
+		u32 rule_cnt = 0;
+
+		ret = icssg_rxnfc_rule_get_all(emac, rule_locs,
+					       info->rule_cnt, &rule_cnt);
+		info->rule_cnt = rule_cnt;
+		break;
+	}
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	return ret;
+}
+
+static int emac_set_rxnfc(struct net_device *ndev, struct ethtool_rxnfc *info)
+{
+	struct prueth_emac *emac = netdev_priv(ndev);
+
+	if (emac->is_sr1)
+		return -EOPNOTSUPP;
+
+	switch (info->cmd) {
+	case ETHTOOL_SRXCLSRLINS:
+		return icssg_rxnfc_rule_add(emac, info);
+	case ETHTOOL_SRXCLSRLDEL:
+		return icssg_rxnfc_rule_del(emac, info->fs.location);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
 const struct ethtool_ops icssg_ethtool_ops = {
 	.get_drvinfo = emac_get_drvinfo,
 	.get_msglevel = emac_get_msglevel,
@@ -323,5 +379,8 @@ const struct ethtool_ops icssg_ethtool_ops = {
 	.set_eee = emac_set_eee,
 	.nway_reset = emac_nway_reset,
 	.get_rmon_stats = emac_get_rmon_stats,
+	.get_rx_ring_count = emac_get_rx_ring_count,
+	.get_rxnfc = emac_get_rxnfc,
+	.set_rxnfc = emac_set_rxnfc,
 };
 EXPORT_SYMBOL_GPL(icssg_ethtool_ops);

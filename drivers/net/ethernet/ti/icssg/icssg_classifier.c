@@ -105,6 +105,14 @@ enum ft1_cfg_type {
 	((BIT(slot) << RX_CLASS_FT_FT1_MATCH_SHIFT) & \
 	RX_CLASS_FT_FT1_MATCH_MASK)
 
+#define RX_CLASS_FT_FT3_MATCH(slot)	\
+	((BIT(slot) << RX_CLASS_FT_FT3_MATCH_SHIFT) & \
+	RX_CLASS_FT_FT3_MATCH_MASK)
+
+/* FT3 Configuration registers and modes */
+#define FT3_CFG_REGISTER_EQUAL		(1U)
+#define FT3_CFG_REGISTER_VLAN_SKIP	BIT(2)
+
 /* HSR/PRP protocol frame filtering */
 #define HSR_PTP_ETHERTYPE_OFFSET	0x12
 #define PRP_PTP_ETHERTYPE_OFFSET	0x0C
@@ -532,3 +540,402 @@ void icssg_ft3_hsr_configurations(struct regmap *miig_rt, int slice,
 	}
 }
 EXPORT_SYMBOL_GPL(icssg_ft3_hsr_configurations);
+
+/* RX Flow Classification (ethtool) rule management */
+
+/* Allocate free FT3 slot, avoiding reserved slot 14 */
+static int allocate_ft3_slot(struct prueth_emac *emac)
+{
+	u16 used = emac->rxnfc.ft3_slots_used | ICSSG_FT3_RESERVED_SLOTS;
+	int slot;
+
+	for (slot = 0; slot < ICSSG_NUM_FT3_SLOTS; slot++) {
+		if (!(used & BIT(slot))) {
+			emac->rxnfc.ft3_slots_used |= BIT(slot);
+			return slot;
+		}
+	}
+	return -ENOSPC;
+}
+
+/* Free allocated FT3 slot */
+static void free_ft3_slot(struct prueth_emac *emac, int slot)
+{
+	emac->rxnfc.ft3_slots_used &= ~BIT(slot);
+}
+
+/* Program FT3 filter slot with ethertype pattern */
+static void icssg_ft3_program_filter(struct regmap *miig_rt, int slice,
+				     int slot, struct icssg_rxnfc_rule *rule)
+{
+	const struct ethtool_rx_flow_spec *fs = &rule->flow_spec;
+	u16 ether_type;
+
+	/* Extract EtherType from flow spec (network byte order) */
+	ether_type = fs->h_u.ether_spec.h_proto;
+
+	/* Deactivate filter before programming */
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_CFG), 0);
+
+	/* EtherType is at byte 12 in standard Ethernet frames */
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_START),
+		     PRP_PTP_ETHERTYPE_OFFSET);
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_START_AUTO), 0);
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_START_OFFSET), 0);
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_JUMP_OFFSET), 0);
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_LEN), 0);
+
+	/* FT3 compares a 32-bit LE word at FT3_START. EtherType occupies the
+	 * lower 16 bits of that word. FT3_T_MASK=0xFFFF0000 masks the upper
+	 * 16 bits (payload bytes), so only the lower 16 bits are compared.
+	 *
+	 * h_proto is __be16 (network byte order). On LE the raw integer value
+	 * equals the lower 16 bits of the LE 32-bit word at the EtherType
+	 * offset in the frame — e.g. IPv4 0x0800 BE → h_proto = 0x0008 on LE,
+	 * which is exactly what FT3 sees in the lower 16 bits of the word at
+	 * byte 12. No conversion needed; using be16_to_cpu() here would invert
+	 * the byte order and break the match.
+	 * Reference: FT3_PTP_PATTERN = 0xF788 = htons(0x88F7) = raw h_proto value.
+	 */
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_T),
+		     (__force u32)ether_type);
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_T_MASK), FT3_ETHERTYPE_MASK);
+
+	/* Enable filter: register-equal mode */
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_CFG),
+		     FT3_CFG_REGISTER_EQUAL);
+}
+
+/* Disable FT3 filter slot */
+static void icssg_ft3_disable_filter(struct regmap *miig_rt, int slice, int slot)
+{
+	regmap_write(miig_rt, FT3_N_REG(slice, slot, FT3_CFG), 0);
+}
+
+/* Update RX classifiers for all active FT3 rules.
+ * Classifier N maps to RX flow N (firmware routes classifier-N hits to
+ * UDMA flow rx_flow_id_base + N). Build a per-classifier OR table so
+ * that each target queue gets its own classifier entry.
+ */
+static void icssg_rxnfc_classifier_update(struct prueth_emac *emac)
+{
+	struct prueth *prueth = emac->prueth;
+	struct regmap *miig_rt = prueth->miig_rt;
+	int slice = prueth_emac_slice(emac);
+	u32 or_table[ICSSG_NUM_CLASSIFIERS] = { };
+	struct icssg_rxnfc_rule *rule;
+	int n;
+
+	if (slice < 0)
+		return;
+
+	/* Build per-classifier OR table: classifier index = target queue index */
+	list_for_each_entry(rule, &emac->rxnfc.rules, list) {
+		int cls = rule->queue_index;
+
+		if (cls < emac->rx_flow_num)
+			or_table[cls] |= RX_CLASS_FT_FT3_MATCH(rule->ft3_slot);
+	}
+
+	/* Write OR tables for classifiers 0..rx_flow_num-1. Only update
+	 * classifiers within the user-flow range to avoid disturbing HSR/PRP
+	 * classifiers (e.g. 10/11) beyond it. Use RX_CLASS_N_REG with
+	 * RX_CLASS_OR_EN — NOT RX_CLASS_OR_REG which uses rx_class_or_base
+	 * (= rx_class_base + 4), causing an off-by-4 that lands on AND_EN of
+	 * classifier n+1 instead of OR_EN of classifier n.
+	 */
+	for (n = 0; n < emac->rx_flow_num; n++) {
+		regmap_write(miig_rt,
+			     RX_CLASS_N_REG(slice, n, RX_CLASS_OR_EN),
+			     or_table[n]);
+	}
+}
+
+/* Validate rule parameters */
+static int validate_rule(struct prueth_emac *emac,
+			 struct ethtool_rx_flow_spec *fs)
+{
+	/* Only ETHER_FLOW supported; reject extension flags */
+	if (fs->flow_type != ETHER_FLOW)
+		return -EOPNOTSUPP;
+
+	/* Only exact EtherType match supported — reject partial proto mask,
+	 * non-zero MAC address masks, and flow extension flags.
+	 */
+	if (fs->m_u.ether_spec.h_proto != htons(0xFFFF))
+		return -EOPNOTSUPP;
+	if (!is_zero_ether_addr(fs->m_u.ether_spec.h_dest) ||
+	    !is_zero_ether_addr(fs->m_u.ether_spec.h_source))
+		return -EOPNOTSUPP;
+
+	/* Check RX queue is valid */
+	if (fs->ring_cookie >= emac->rx_flow_num)
+		return -EINVAL;
+
+	return 0;
+}
+
+/* Check if identical rule already exists */
+static bool rule_exists(struct prueth_emac *emac,
+			struct ethtool_rx_flow_spec *fs)
+{
+	struct icssg_rxnfc_rule *rule;
+
+	list_for_each_entry(rule, &emac->rxnfc.rules, list) {
+		if (rule->flow_spec.flow_type == fs->flow_type &&
+		    rule->flow_spec.h_u.ether_spec.h_proto ==
+		    fs->h_u.ether_spec.h_proto) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Initialize RX flow classification */
+void icssg_rxnfc_rule_init(struct prueth_emac *emac)
+{
+	INIT_LIST_HEAD(&emac->rxnfc.rules);
+	mutex_init(&emac->rxnfc.rxnfc_lock);
+	emac->rxnfc.rxnfc_rule_count = 0;
+	emac->rxnfc.ft3_slots_used = ICSSG_FT3_RESERVED_SLOTS; /* Mark slot 14 reserved */
+}
+EXPORT_SYMBOL_GPL(icssg_rxnfc_rule_init);
+
+/* Restore RX flow classification hardware state from the in-memory rule list.
+ * Call after icssg_class_default() resets the classifier registers on open or
+ * after firmware restart so that existing rules take effect again.
+ */
+void icssg_rxnfc_rule_restore(struct prueth_emac *emac)
+{
+	struct prueth *prueth = emac->prueth;
+	struct regmap *miig_rt = prueth->miig_rt;
+	int slice = prueth_emac_slice(emac);
+	struct icssg_rxnfc_rule *rule;
+
+	if (slice < 0)
+		return;
+
+	mutex_lock(&emac->rxnfc.rxnfc_lock);
+
+	list_for_each_entry(rule, &emac->rxnfc.rules, list)
+		icssg_ft3_program_filter(miig_rt, slice, rule->ft3_slot, rule);
+
+	icssg_rxnfc_classifier_update(emac);
+
+	mutex_unlock(&emac->rxnfc.rxnfc_lock);
+}
+EXPORT_SYMBOL_GPL(icssg_rxnfc_rule_restore);
+
+/* Cleanup RX flow classification */
+void icssg_rxnfc_rule_cleanup(struct prueth_emac *emac)
+{
+	struct prueth *prueth = emac->prueth;
+	struct regmap *miig_rt = prueth->miig_rt;
+	int slice = prueth_emac_slice(emac);
+	struct icssg_rxnfc_rule *rule, *tmp;
+	int n;
+
+	if (slice < 0)
+		return;
+
+	mutex_lock(&emac->rxnfc.rxnfc_lock);
+
+	/* Disable all active FT3 filters */
+	list_for_each_entry_safe(rule, tmp, &emac->rxnfc.rules, list) {
+		icssg_ft3_disable_filter(miig_rt, slice, rule->ft3_slot);
+		free_ft3_slot(emac, rule->ft3_slot);
+		list_del(&rule->list);
+		kfree(rule);
+	}
+
+	emac->rxnfc.rxnfc_rule_count = 0;
+	emac->rxnfc.ft3_slots_used = ICSSG_FT3_RESERVED_SLOTS;
+
+	/* Clear user-rule classifier OR tables; stop at rx_flow_num to avoid
+	 * disturbing HSR/PRP classifiers beyond the user-flow range.
+	 */
+	for (n = 0; n < emac->rx_flow_num; n++)
+		regmap_write(miig_rt,
+			     RX_CLASS_N_REG(slice, n, RX_CLASS_OR_EN), 0);
+
+	mutex_unlock(&emac->rxnfc.rxnfc_lock);
+}
+EXPORT_SYMBOL_GPL(icssg_rxnfc_rule_cleanup);
+
+/* Add a new RX flow classification rule */
+int icssg_rxnfc_rule_add(struct prueth_emac *emac, struct ethtool_rxnfc *info)
+{
+	struct ethtool_rx_flow_spec *fs = &info->fs;
+	struct prueth *prueth = emac->prueth;
+	struct regmap *miig_rt = prueth->miig_rt;
+	int slice = prueth_emac_slice(emac);
+	struct icssg_rxnfc_rule *rule;
+	int ft3_slot;
+	int ret;
+
+	if (slice < 0)
+		return -EINVAL;
+
+	/* Validate rule parameters */
+	ret = validate_rule(emac, fs);
+	if (ret)
+		return ret;
+
+	/* Validate explicit location: reject special specifiers, out-of-range
+	 * values, and the reserved slot 14 used by HSR/PRP.
+	 */
+	if (fs->location != RX_CLS_LOC_ANY) {
+		if (fs->location >= ICSSG_RXNFC_MAX_RULES ||
+		    BIT(fs->location) & ICSSG_FT3_RESERVED_SLOTS)
+			return -EINVAL;
+	}
+
+	mutex_lock(&emac->rxnfc.rxnfc_lock);
+
+	/* Check max rules */
+	if (emac->rxnfc.rxnfc_rule_count >= ICSSG_RXNFC_MAX_RULES) {
+		ret = -ENOSPC;
+		goto unlock;
+	}
+
+	/* Check for duplicate flow spec */
+	if (rule_exists(emac, fs)) {
+		ret = -EEXIST;
+		goto unlock;
+	}
+
+	/* Allocate FT3 slot. For explicit locations, the location IS the FT3
+	 * slot — this keeps location and slot aligned so rule_del operates on
+	 * the correct hardware slot. For RX_CLS_LOC_ANY, auto-allocate the
+	 * lowest free slot and assign it as the location.
+	 */
+	if (fs->location != RX_CLS_LOC_ANY) {
+		ft3_slot = fs->location;
+		if (emac->rxnfc.ft3_slots_used & BIT(ft3_slot)) {
+			ret = -EBUSY;
+			goto unlock;
+		}
+		emac->rxnfc.ft3_slots_used |= BIT(ft3_slot);
+	} else {
+		ft3_slot = allocate_ft3_slot(emac);
+		if (ft3_slot < 0) {
+			ret = -ENOSPC;
+			goto unlock;
+		}
+		fs->location = ft3_slot;
+	}
+
+	/* Allocate rule structure */
+	rule = kzalloc(sizeof(*rule), GFP_KERNEL);
+	if (!rule) {
+		ret = -ENOMEM;
+		free_ft3_slot(emac, ft3_slot);
+		goto unlock;
+	}
+
+	/* Program FT3 hardware */
+	rule->flow_spec = *fs;
+	rule->ft3_slot = ft3_slot;
+	rule->queue_index = fs->ring_cookie;
+	rule->location = fs->location;
+
+	icssg_ft3_program_filter(miig_rt, slice, ft3_slot, rule);
+
+	/* Add to rule list */
+	list_add(&rule->list, &emac->rxnfc.rules);
+	emac->rxnfc.rxnfc_rule_count++;
+
+	/* Update classifier */
+	icssg_rxnfc_classifier_update(emac);
+
+	ret = 0;
+
+unlock:
+	mutex_unlock(&emac->rxnfc.rxnfc_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(icssg_rxnfc_rule_add);
+
+/* Delete a RX flow classification rule */
+int icssg_rxnfc_rule_del(struct prueth_emac *emac, u32 location)
+{
+	struct prueth *prueth = emac->prueth;
+	struct regmap *miig_rt = prueth->miig_rt;
+	int slice = prueth_emac_slice(emac);
+	struct icssg_rxnfc_rule *rule, *tmp;
+	int ret = -ENOENT;
+
+	if (slice < 0)
+		return -EINVAL;
+
+	mutex_lock(&emac->rxnfc.rxnfc_lock);
+
+	list_for_each_entry_safe(rule, tmp, &emac->rxnfc.rules, list) {
+		if (rule->location == location) {
+			icssg_ft3_disable_filter(miig_rt, slice, rule->ft3_slot);
+			free_ft3_slot(emac, rule->ft3_slot);
+			list_del(&rule->list);
+			kfree(rule);
+			emac->rxnfc.rxnfc_rule_count--;
+			icssg_rxnfc_classifier_update(emac);
+			ret = 0;
+			break;
+		}
+	}
+
+	mutex_unlock(&emac->rxnfc.rxnfc_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(icssg_rxnfc_rule_del);
+
+/* Get single RX flow classification rule */
+int icssg_rxnfc_rule_get(struct prueth_emac *emac, u32 location,
+			 struct ethtool_rx_flow_spec *fs)
+{
+	struct icssg_rxnfc_rule *rule;
+	int ret = -ENOENT;
+
+	mutex_lock(&emac->rxnfc.rxnfc_lock);
+
+	list_for_each_entry(rule, &emac->rxnfc.rules, list) {
+		if (rule->location == location) {
+			*fs = rule->flow_spec;
+			ret = 0;
+			break;
+		}
+	}
+
+	mutex_unlock(&emac->rxnfc.rxnfc_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(icssg_rxnfc_rule_get);
+
+/* Get all RX flow classification rules */
+int icssg_rxnfc_rule_get_all(struct prueth_emac *emac, u32 *rule_locs,
+			     u32 rule_locs_capacity, u32 *rule_cnt)
+{
+	struct icssg_rxnfc_rule *rule;
+	u32 count = 0;
+	int ret = 0;
+
+	mutex_lock(&emac->rxnfc.rxnfc_lock);
+
+	list_for_each_entry(rule, &emac->rxnfc.rules, list) {
+		if (!rule_locs) {
+			/* Caller passed rule_cnt=0: just count active rules */
+			count++;
+			continue;
+		}
+		if (count >= rule_locs_capacity) {
+			ret = -EMSGSIZE;
+			break;
+		}
+		rule_locs[count++] = rule->location;
+	}
+
+	*rule_cnt = count;
+
+	mutex_unlock(&emac->rxnfc.rxnfc_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(icssg_rxnfc_rule_get_all);

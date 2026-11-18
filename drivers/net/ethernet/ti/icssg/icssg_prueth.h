@@ -11,6 +11,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
 #include <linux/etherdevice.h>
+#include <linux/ethtool.h>
 #include <linux/genalloc.h>
 #include <linux/if_vlan.h>
 #include <linux/if_hsr.h>
@@ -192,6 +193,26 @@ struct prueth_swdata {
 /* Minimum coalesce time in usecs for both Tx and Rx */
 #define ICSSG_MIN_COALESCE_USECS 20
 
+/* RX flow classification (ethtool) */
+#define ICSSG_RXNFC_MAX_RULES    15      /* Max user-installable rules */
+#define ICSSG_FT3_RESERVED_SLOTS BIT(14) /* Slot 14 reserved for HSR/PRP */
+
+/* RX flow classification rule structure */
+struct icssg_rxnfc_rule {
+	struct list_head list;
+	struct ethtool_rx_flow_spec flow_spec;  /* User-provided filter */
+	u16 ft3_slot;                            /* Allocated FT3 slot (0-15, excluding 14) */
+	int location;                            /* Rule location (user-provided) */
+	u32 queue_index;                         /* RX flow to route matches to */
+};
+
+struct prueth_rxnfc {
+	struct list_head rules;
+	struct mutex rxnfc_lock;
+	unsigned int rxnfc_rule_count;
+	u16 ft3_slots_used;
+};
+
 /* data for each emac port */
 struct prueth_emac {
 	bool is_sr1;
@@ -256,6 +277,9 @@ struct prueth_emac {
 	struct xdp_attachment_info xdpi;
 	int xsk_qid;
 	unsigned long *xsk_queues;
+
+	/* RX flow classification via ethtool */
+	struct prueth_rxnfc rxnfc;
 };
 
 /* The buf includes headroom compatible with both skb and xdpf */
@@ -399,6 +423,17 @@ static inline int prueth_emac_slice(struct prueth_emac *emac)
 		return -EINVAL;
 	}
 }
+
+/* RX flow classification functions */
+void icssg_rxnfc_rule_init(struct prueth_emac *emac);
+void icssg_rxnfc_rule_restore(struct prueth_emac *emac);
+void icssg_rxnfc_rule_cleanup(struct prueth_emac *emac);
+int icssg_rxnfc_rule_add(struct prueth_emac *emac, struct ethtool_rxnfc *info);
+int icssg_rxnfc_rule_del(struct prueth_emac *emac, u32 location);
+int icssg_rxnfc_rule_get(struct prueth_emac *emac, u32 location,
+			 struct ethtool_rx_flow_spec *fs);
+int icssg_rxnfc_rule_get_all(struct prueth_emac *emac, u32 *rule_locs,
+			     u32 rule_locs_capacity, u32 *rule_cnt);
 
 extern const struct ethtool_ops icssg_ethtool_ops;
 extern const struct dev_pm_ops prueth_dev_pm_ops;
