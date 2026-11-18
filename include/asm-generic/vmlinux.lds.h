@@ -686,13 +686,27 @@
 #define BTF_INLINE
 #endif
 
-#ifdef CONFIG_DEBUG_INFO_BTF_INLINE_MODULE
+#ifdef CONFIG_DEBUG_INFO_BTF_GLOBAL
+#define BTF_GLOBAL							\
+	. = ALIGN(PAGE_SIZE);						\
+	.BTF.global : AT(ADDR(.BTF.global) - LOAD_OFFSET) {		\
+		BOUNDED_SECTION_BY(.BTF.global, _BTF_global)		\
+	}
+#else
+#define BTF_GLOBAL
+#endif
+
+#if defined(CONFIG_DEBUG_INFO_BTF_INLINE_MODULE) || \
+	defined(CONFIG_DEBUG_INFO_BTF_GLOBAL_MODULE)
 /* __MODULE_NAME_LEN + SHA-256 digest + u32 BTF size */
 #ifdef CONFIG_64BIT
 #define BTF_LINK_SIZE	(64 - 8 + 32 + 4)
 #else
 #define BTF_LINK_SIZE	(64 - 4 + 32 + 4)
 #endif
+#endif
+
+#ifdef CONFIG_DEBUG_INFO_BTF_INLINE_MODULE
 #define BTF_INLINE_LINK						\
 	. = ALIGN(PAGE_SIZE);					\
 	.BTF.inline.link : AT(ADDR(.BTF.inline.link) - LOAD_OFFSET) { \
@@ -705,6 +719,19 @@
 #define BTF_INLINE_LINK
 #endif
 
+#ifdef CONFIG_DEBUG_INFO_BTF_GLOBAL_MODULE
+#define BTF_GLOBAL_LINK						\
+	. = ALIGN(PAGE_SIZE);					\
+	.BTF.global.link : AT(ADDR(.BTF.global.link) - LOAD_OFFSET) { \
+		__start_BTF_global_link = .;			\
+		BYTE(0)						\
+		. += BTF_LINK_SIZE - 1;				\
+		__stop_BTF_global_link = .;				\
+	}
+#else
+#define BTF_GLOBAL_LINK
+#endif
+
 #ifdef CONFIG_DEBUG_INFO_BTF
 #define BTF								\
 	. = ALIGN(PAGE_SIZE);						\
@@ -713,6 +740,8 @@
 	}								\
 	BTF_INLINE							\
 	BTF_INLINE_LINK						\
+	BTF_GLOBAL							\
+	BTF_GLOBAL_LINK						\
 	. = ALIGN(PAGE_SIZE);						\
 	.BTF_ids : AT(ADDR(.BTF_ids) - LOAD_OFFSET) {			\
 		*(.BTF_ids)						\

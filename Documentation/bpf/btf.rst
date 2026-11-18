@@ -1284,3 +1284,27 @@ provides an extensive set of BTF-related tests.
 .. Links
 .. _tools/testing/selftests/bpf/prog_tests/btf.c:
    https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/tools/testing/selftests/bpf/prog_tests/btf.c
+
+8. Kernel global variable information
+====================================
+
+``CONFIG_DEBUG_INFO_BTF_GLOBAL`` enables type information for non-per-CPU
+variables, including static variables, with pahole v1.28 or later. The
+variable and data section records and their declaration tags are placed in
+``.BTF.global`` sections, as split BTF relative to the corresponding kernel
+or module ``.BTF``. Supporting types and per-CPU variables remain in the
+main BTF. No variable or data section filtering is applied.
+
+With ``y``, vmlinux's global BTF is embedded in the kernel image. With
+``m``, it is carried in ``btf_vmlinux_global.ko``, which is loaded on demand
+when reading or mapping ``/sys/kernel/btf/vmlinux.global``. The payload is
+checked against the size and SHA-256 digest in vmlinux's
+``.BTF.global.link``. Both configurations expose the same split BTF format
+at ``/sys/kernel/btf/vmlinux.global``.
+
+For ordinary modules, both configurations embed ``.BTF.global`` in the
+module file and expose it at ``/sys/kernel/btf/<module>.global`` while the
+module is loaded. External modules' global BTF is relocated along with the
+main module BTF before being exposed. Readers must use the corresponding
+module BTF as the base of this extension; it is independent of any
+``.inline`` extension.
