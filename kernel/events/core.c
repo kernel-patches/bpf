@@ -13012,12 +13012,6 @@ int perf_pmu_register(struct pmu *_pmu, const char *name, int type)
 	pmu->type = pmu_type.id;
 	atomic_set(&pmu->exclusive_cnt, 0);
 
-	if (pmu_bus_running && !pmu->dev) {
-		int ret = pmu_dev_alloc(pmu);
-		if (ret)
-			return ret;
-	}
-
 	pmu->cpu_pmu_context = alloc_percpu(struct perf_cpu_pmu_context *);
 	if (!pmu->cpu_pmu_context)
 		return -ENOMEM;
@@ -13034,6 +13028,12 @@ int perf_pmu_register(struct pmu *_pmu, const char *name, int type)
 		*per_cpu_ptr(pmu->cpu_pmu_context, cpu) = cpc;
 		__perf_init_event_pmu_context(&cpc->epc, pmu);
 		__perf_mux_hrtimer_init(cpc, cpu);
+	}
+
+	if (pmu_bus_running && !pmu->dev) {
+		int ret = pmu_dev_alloc(pmu);
+		if (ret)
+			return ret;
 	}
 
 	if (!pmu->start_txn) {
