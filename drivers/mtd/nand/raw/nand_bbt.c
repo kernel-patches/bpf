@@ -1027,6 +1027,8 @@ static int check_create(struct nand_chip *this, uint8_t *buf,
 				i--;
 				continue;
 			}
+			if (res < 0 && !mtd_is_bitflip(res))
+				return res;
 		}
 		/* If they weren't versioned, read both */
 		if (rd2) {
@@ -1038,6 +1040,8 @@ static int check_create(struct nand_chip *this, uint8_t *buf,
 				i--;
 				continue;
 			}
+			if (res2 < 0 && !mtd_is_bitflip(res2))
+				return res2;
 		}
 
 		/* Scrub the flash table(s)? */
