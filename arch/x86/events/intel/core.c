@@ -2821,7 +2821,8 @@ static void intel_pmu_enable_all(int added)
 
 static noinline int
 __intel_pmu_snapshot_branch_stack(struct perf_branch_entry *entries,
-				  unsigned int cnt, unsigned long flags)
+				  unsigned int cnt, unsigned long flags,
+				  int pmu_enabled, int lbr_enabled)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 
@@ -2829,7 +2830,21 @@ __intel_pmu_snapshot_branch_stack(struct perf_branch_entry *entries,
 	cnt = min_t(unsigned int, cnt, cpuc->lbr_stack.nr);
 
 	memcpy(entries, cpuc->lbr_entries, sizeof(struct perf_branch_entry) * cnt);
-	intel_pmu_enable_all(0);
+
+	/*
+	 * This path may be entered from the PMI handler through
+	 * bpf_overflow_handler(), so only re-enable what was enabled
+	 * on entry. On PMU version < 4 the LBR freeze disables LBR,
+	 * so it must stay disabled. On version 4 and later, LBR is
+	 * only frozen and can be re-enabled.
+	 */
+	if (pmu_enabled) {
+		cpuc->enabled = 1;
+		___intel_pmu_enable_all();
+	}
+	if (lbr_enabled)
+		intel_pmu_lbr_enable_all(false);
+
 	local_irq_restore(flags);
 	return cnt;
 }
@@ -2837,27 +2852,43 @@ __intel_pmu_snapshot_branch_stack(struct perf_branch_entry *entries,
 static int
 intel_pmu_snapshot_branch_stack(struct perf_branch_entry *entries, unsigned int cnt)
 {
+	struct cpu_hw_events *cpuc;
 	unsigned long flags;
+	int pmu_enabled;
+	int lbr_enabled;
 
 	/* must not have branches... */
 	local_irq_save(flags);
+	cpuc = this_cpu_ptr(&cpu_hw_events);
+	pmu_enabled = cpuc->enabled;
+	lbr_enabled = cpuc->lbr_enabled;
+	cpuc->enabled = 0;
 	__intel_pmu_disable_all(false); /* we don't care about BTS */
 	__intel_pmu_lbr_disable();
 	/*            ... until here */
-	return __intel_pmu_snapshot_branch_stack(entries, cnt, flags);
+	return __intel_pmu_snapshot_branch_stack(entries, cnt, flags,
+						 pmu_enabled, lbr_enabled);
 }
 
 static int
 intel_pmu_snapshot_arch_branch_stack(struct perf_branch_entry *entries, unsigned int cnt)
 {
+	struct cpu_hw_events *cpuc;
 	unsigned long flags;
+	int pmu_enabled;
+	int lbr_enabled;
 
 	/* must not have branches... */
 	local_irq_save(flags);
+	cpuc = this_cpu_ptr(&cpu_hw_events);
+	pmu_enabled = cpuc->enabled;
+	lbr_enabled = cpuc->lbr_enabled;
+	cpuc->enabled = 0;
 	__intel_pmu_disable_all(false); /* we don't care about BTS */
 	__intel_pmu_arch_lbr_disable();
 	/*            ... until here */
-	return __intel_pmu_snapshot_branch_stack(entries, cnt, flags);
+	return __intel_pmu_snapshot_branch_stack(entries, cnt, flags,
+						 pmu_enabled, lbr_enabled);
 }
 
 /*
