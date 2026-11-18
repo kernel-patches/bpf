@@ -909,12 +909,13 @@ ENTRY(aes_sparc64_load_decrypt_keys_256)
 	 ldd		[%o0 + 0x00], %f62
 ENDPROC(aes_sparc64_load_decrypt_keys_256)
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_ECB)
 	.align		32
 ENTRY(aes_sparc64_ecb_encrypt_128)
 	/* %o0=key, %o1=input, %o2=output, %o3=len */
 	ldx		[%o0 + 0x00], %g1
 	subcc		%o3, 0x10, %o3
-	be		10f
+	be,pn		%xcc, 10f
 	 ldx		[%o0 + 0x08], %g2
 1:	ldx		[%o1 + 0x00], %g3
 	ldx		[%o1 + 0x08], %g7
@@ -957,7 +958,7 @@ ENTRY(aes_sparc64_ecb_encrypt_192)
 	/* %o0=key, %o1=input, %o2=output, %o3=len */
 	ldx		[%o0 + 0x00], %g1
 	subcc		%o3, 0x10, %o3
-	be		10f
+	be,pn		%xcc, 10f
 	 ldx		[%o0 + 0x08], %g2
 1:	ldx		[%o1 + 0x00], %g3
 	ldx		[%o1 + 0x08], %g7
@@ -1000,7 +1001,7 @@ ENTRY(aes_sparc64_ecb_encrypt_256)
 	/* %o0=key, %o1=input, %o2=output, %o3=len */
 	ldx		[%o0 + 0x00], %g1
 	subcc		%o3, 0x10, %o3
-	be		10f
+	be,pn		%xcc, 10f
 	 ldx		[%o0 + 0x08], %g2
 1:	ldx		[%o1 + 0x00], %g3
 	ldx		[%o1 + 0x08], %g7
@@ -1047,7 +1048,7 @@ ENTRY(aes_sparc64_ecb_decrypt_128)
 	/* %o0=&key[key_len], %o1=input, %o2=output, %o3=len */
 	ldx		[%o0 - 0x10], %g1
 	subcc		%o3, 0x10, %o3
-	be		10f
+	be,pn		%xcc, 10f
 	 ldx		[%o0 - 0x08], %g2
 1:	ldx		[%o1 + 0x00], %g3
 	ldx		[%o1 + 0x08], %g7
@@ -1090,7 +1091,7 @@ ENTRY(aes_sparc64_ecb_decrypt_192)
 	/* %o0=&key[key_len], %o1=input, %o2=output, %o3=len */
 	ldx		[%o0 - 0x10], %g1
 	subcc		%o3, 0x10, %o3
-	be		10f
+	be,pn		%xcc, 10f
 	 ldx		[%o0 - 0x08], %g2
 1:	ldx		[%o1 + 0x00], %g3
 	ldx		[%o1 + 0x08], %g7
@@ -1134,7 +1135,7 @@ ENTRY(aes_sparc64_ecb_decrypt_256)
 	ldx		[%o0 - 0x10], %g1
 	subcc		%o3, 0x10, %o3
 	ldx		[%o0 - 0x08], %g2
-	be		10f
+	be,pn		%xcc, 10f
 	 sub		%o0, 0xf0, %o0
 1:	ldx		[%o1 + 0x00], %g3
 	ldx		[%o1 + 0x08], %g7
@@ -1175,6 +1176,7 @@ ENTRY(aes_sparc64_ecb_decrypt_256)
 11:	retl
 	 nop
 ENDPROC(aes_sparc64_ecb_decrypt_256)
+#endif /* CONFIG_CRYPTO_LIB_AES_ECB */
 
 	.align		32
 ENTRY(aes_sparc64_cbc_encrypt_128)

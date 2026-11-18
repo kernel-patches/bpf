@@ -21,12 +21,6 @@ EXPORT_SYMBOL_GPL(aes_sparc64_load_encrypt_keys_256);
 EXPORT_SYMBOL_GPL(aes_sparc64_load_decrypt_keys_128);
 EXPORT_SYMBOL_GPL(aes_sparc64_load_decrypt_keys_192);
 EXPORT_SYMBOL_GPL(aes_sparc64_load_decrypt_keys_256);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_encrypt_128);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_encrypt_192);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_encrypt_256);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_decrypt_128);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_decrypt_192);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_decrypt_256);
 EXPORT_SYMBOL_GPL(aes_sparc64_cbc_encrypt_128);
 EXPORT_SYMBOL_GPL(aes_sparc64_cbc_encrypt_192);
 EXPORT_SYMBOL_GPL(aes_sparc64_cbc_encrypt_256);
@@ -163,6 +157,94 @@ static __always_inline void aes_sparc64_load_round_keys(aes_encrypt_arg key_arg,
  * back to integer copies, but QEMU may emulate older CPUs with +crypto.)
  */
 #define MISALIGNED_CHUNK_SIZE (8 * AES_BLOCK_SIZE)
+
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_ECB)
+void aes_sparc64_ecb_encrypt_128(const u64 *key, const u64 *input, u64 *output,
+				 size_t len);
+void aes_sparc64_ecb_encrypt_192(const u64 *key, const u64 *input, u64 *output,
+				 size_t len);
+void aes_sparc64_ecb_encrypt_256(const u64 *key, const u64 *input, u64 *output,
+				 size_t len);
+void aes_sparc64_ecb_decrypt_128(const u64 *key_end, const u64 *input,
+				 u64 *output, size_t len);
+void aes_sparc64_ecb_decrypt_192(const u64 *key_end, const u64 *input,
+				 u64 *output, size_t len);
+void aes_sparc64_ecb_decrypt_256(const u64 *key_end, const u64 *input,
+				 u64 *output, size_t len);
+
+static __always_inline void aes_sparc64_ecb_crypt(const struct aes_enckey *key,
+						  const u64 *in, u64 *out,
+						  size_t len, bool enc)
+{
+	const u64 *rk = key->k.sparc_rndkeys;
+	const u64 *rk_end = &rk[2 * (key->nrounds + 1)];
+
+	if (enc) {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_ecb_encrypt_128(rk, in, out, len);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_ecb_encrypt_192(rk, in, out, len);
+		else
+			aes_sparc64_ecb_encrypt_256(rk, in, out, len);
+	} else {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_ecb_decrypt_128(rk_end, in, out, len);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_ecb_decrypt_192(rk_end, in, out, len);
+		else
+			aes_sparc64_ecb_decrypt_256(rk_end, in, out, len);
+	}
+}
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+static __always_inline bool aes_ecb_crypt_sparc64(u8 *dst, const u8 *src,
+						  size_t len,
+						  aes_encrypt_arg key_arg,
+						  bool enc)
+{
+	const struct aes_enckey *key = key_arg.enc_key;
+
+	if (!static_branch_likely(&have_aes_opcodes))
+		return false;
+
+	aes_sparc64_load_round_keys(key, enc);
+
+	if (IS_ALIGNED((uintptr_t)src | (uintptr_t)dst, 8)) {
+		aes_sparc64_ecb_crypt(key, (const u64 *)src, (u64 *)dst, len,
+				      enc);
+	} else {
+		u64 tmp[MISALIGNED_CHUNK_SIZE / sizeof(u64)];
+
+		do {
+			size_t n = min(len, sizeof(tmp));
+
+			memcpy(tmp, src, n);
+			aes_sparc64_ecb_crypt(key, tmp, tmp, n, enc);
+			memcpy(dst, tmp, n);
+			src += n;
+			dst += n;
+			len -= n;
+		} while (len);
+		memzero_explicit(tmp, sizeof(tmp));
+	}
+	fprs_write(0);
+	return true;
+}
+
+#define aes_ecb_encrypt_arch aes_ecb_encrypt_arch
+static bool aes_ecb_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 const struct aes_enckey *key)
+{
+	return aes_ecb_crypt_sparc64(dst, src, len, key, true);
+}
+
+#define aes_ecb_decrypt_arch aes_ecb_decrypt_arch
+static bool aes_ecb_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 const struct aes_key *key)
+{
+	return aes_ecb_crypt_sparc64(dst, src, len, key, false);
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_ECB */
 
 #if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CTR)
 void aes_sparc64_ctr_crypt_128(const u64 *key, const u64 *input, u64 *output,

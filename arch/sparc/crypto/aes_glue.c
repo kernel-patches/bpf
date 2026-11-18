@@ -34,10 +34,6 @@
 struct aes_ops {
 	void (*load_encrypt_keys)(const u64 *key);
 	void (*load_decrypt_keys)(const u64 *key);
-	void (*ecb_encrypt)(const u64 *key, const u64 *input, u64 *output,
-			    unsigned int len);
-	void (*ecb_decrypt)(const u64 *key, const u64 *input, u64 *output,
-			    unsigned int len);
 	void (*cbc_encrypt)(const u64 *key, const u64 *input, u64 *output,
 			    unsigned int len, u64 *iv);
 	void (*cbc_decrypt)(const u64 *key, const u64 *input, u64 *output,
@@ -54,8 +50,6 @@ struct crypto_sparc64_aes_ctx {
 static struct aes_ops aes128_ops = {
 	.load_encrypt_keys	= aes_sparc64_load_encrypt_keys_128,
 	.load_decrypt_keys	= aes_sparc64_load_decrypt_keys_128,
-	.ecb_encrypt		= aes_sparc64_ecb_encrypt_128,
-	.ecb_decrypt		= aes_sparc64_ecb_decrypt_128,
 	.cbc_encrypt		= aes_sparc64_cbc_encrypt_128,
 	.cbc_decrypt		= aes_sparc64_cbc_decrypt_128,
 };
@@ -63,8 +57,6 @@ static struct aes_ops aes128_ops = {
 static struct aes_ops aes192_ops = {
 	.load_encrypt_keys	= aes_sparc64_load_encrypt_keys_192,
 	.load_decrypt_keys	= aes_sparc64_load_decrypt_keys_192,
-	.ecb_encrypt		= aes_sparc64_ecb_encrypt_192,
-	.ecb_decrypt		= aes_sparc64_ecb_decrypt_192,
 	.cbc_encrypt		= aes_sparc64_cbc_encrypt_192,
 	.cbc_decrypt		= aes_sparc64_cbc_decrypt_192,
 };
@@ -72,8 +64,6 @@ static struct aes_ops aes192_ops = {
 static struct aes_ops aes256_ops = {
 	.load_encrypt_keys	= aes_sparc64_load_encrypt_keys_256,
 	.load_decrypt_keys	= aes_sparc64_load_decrypt_keys_256,
-	.ecb_encrypt		= aes_sparc64_ecb_encrypt_256,
-	.ecb_decrypt		= aes_sparc64_ecb_decrypt_256,
 	.cbc_encrypt		= aes_sparc64_cbc_encrypt_256,
 	.cbc_decrypt		= aes_sparc64_cbc_decrypt_256,
 };
@@ -107,55 +97,6 @@ static int aes_set_key_skcipher(struct crypto_skcipher *tfm, const u8 *in_key,
 	ctx->key_length = key_len;
 
 	return 0;
-}
-
-static int ecb_encrypt(struct skcipher_request *req)
-{
-	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
-	const struct crypto_sparc64_aes_ctx *ctx = crypto_skcipher_ctx(tfm);
-	struct skcipher_walk walk;
-	unsigned int nbytes;
-	int err;
-
-	err = skcipher_walk_virt(&walk, req, true);
-	if (err)
-		return err;
-
-	ctx->ops->load_encrypt_keys(&ctx->key[0]);
-	while ((nbytes = walk.nbytes) != 0) {
-		ctx->ops->ecb_encrypt(&ctx->key[0], walk.src.virt.addr,
-				      walk.dst.virt.addr,
-				      round_down(nbytes, AES_BLOCK_SIZE));
-		err = skcipher_walk_done(&walk, nbytes % AES_BLOCK_SIZE);
-	}
-	fprs_write(0);
-	return err;
-}
-
-static int ecb_decrypt(struct skcipher_request *req)
-{
-	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
-	const struct crypto_sparc64_aes_ctx *ctx = crypto_skcipher_ctx(tfm);
-	const u64 *key_end;
-	struct skcipher_walk walk;
-	unsigned int nbytes;
-	int err;
-
-	err = skcipher_walk_virt(&walk, req, true);
-	if (err)
-		return err;
-
-	ctx->ops->load_decrypt_keys(&ctx->key[0]);
-	key_end = &ctx->key[ctx->expanded_key_length / sizeof(u64)];
-	while ((nbytes = walk.nbytes) != 0) {
-		ctx->ops->ecb_decrypt(key_end, walk.src.virt.addr,
-				      walk.dst.virt.addr,
-				      round_down(nbytes, AES_BLOCK_SIZE));
-		err = skcipher_walk_done(&walk, nbytes % AES_BLOCK_SIZE);
-	}
-	fprs_write(0);
-
-	return err;
 }
 
 static int cbc_encrypt(struct skcipher_request *req)
@@ -211,19 +152,6 @@ static int cbc_decrypt(struct skcipher_request *req)
 
 static struct skcipher_alg skcipher_algs[] = {
 	{
-		.base.cra_name		= "ecb(aes)",
-		.base.cra_driver_name	= "ecb-aes-sparc64",
-		.base.cra_priority	= SPARC_CR_OPCODE_PRIORITY,
-		.base.cra_blocksize	= AES_BLOCK_SIZE,
-		.base.cra_ctxsize	= sizeof(struct crypto_sparc64_aes_ctx),
-		.base.cra_alignmask	= 7,
-		.base.cra_module	= THIS_MODULE,
-		.min_keysize		= AES_MIN_KEY_SIZE,
-		.max_keysize		= AES_MAX_KEY_SIZE,
-		.setkey			= aes_set_key_skcipher,
-		.encrypt		= ecb_encrypt,
-		.decrypt		= ecb_decrypt,
-	}, {
 		.base.cra_name		= "cbc(aes)",
 		.base.cra_driver_name	= "cbc-aes-sparc64",
 		.base.cra_priority	= SPARC_CR_OPCODE_PRIORITY,

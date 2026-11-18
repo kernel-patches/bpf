@@ -308,18 +308,6 @@ void aes_sparc64_load_encrypt_keys_256(const u64 *key);
 void aes_sparc64_load_decrypt_keys_128(const u64 *key);
 void aes_sparc64_load_decrypt_keys_192(const u64 *key);
 void aes_sparc64_load_decrypt_keys_256(const u64 *key);
-void aes_sparc64_ecb_encrypt_128(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_encrypt_192(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_encrypt_256(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_decrypt_128(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_decrypt_192(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_decrypt_256(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
 void aes_sparc64_cbc_encrypt_128(const u64 *key, const u64 *input, u64 *output,
 				 unsigned int len, u64 *iv);
 void aes_sparc64_cbc_encrypt_192(const u64 *key, const u64 *input, u64 *output,
