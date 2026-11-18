@@ -1324,15 +1324,13 @@ static void __perf_mux_hrtimer_init(struct perf_cpu_pmu_context *cpc)
 static int perf_mux_hrtimer_restart(struct perf_cpu_pmu_context *cpc)
 {
 	struct hrtimer *timer = &cpc->hrtimer;
-	unsigned long flags;
 
-	raw_spin_lock_irqsave(&cpc->hrtimer_lock, flags);
+	guard(raw_spinlock_irqsave)(&cpc->hrtimer_lock);
 	if (!cpc->hrtimer_active) {
 		cpc->hrtimer_active = 1;
 		hrtimer_forward_now(timer, cpc->hrtimer_interval);
 		hrtimer_start_expires(timer, HRTIMER_MODE_ABS_PINNED_HARD);
 	}
-	raw_spin_unlock_irqrestore(&cpc->hrtimer_lock, flags);
 
 	return 0;
 }
