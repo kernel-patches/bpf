@@ -904,6 +904,8 @@ static const struct core_reloc_test_case test_cases[] = {
 		.named_val2 = 2,
 		.anon_val1 = 0x10,
 		.anon_val2 = 0x20,
+		.uint_val1 = 0x80000001,
+		.uint_val2 = 0xffffffff,
 	}),
 	ENUMVAL_CASE(enumval___diff, {
 		.named_val1_exists = true,
