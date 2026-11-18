@@ -23,7 +23,12 @@ struct icssg_flow_cfg {
 #define PRUETH_NAV_SW_DATA_SIZE	16	/* SW related data size */
 #define PRUETH_MAX_TX_DESC	512
 #define PRUETH_MAX_RX_DESC	512
-#define PRUETH_MAX_RX_FLOWS	1	/* excluding default flow */
+
+/* There are 4 Tx DMA channels, but the highest priority is CH3 (thread 3)
+ * and lower three are lower priority channels or threads.
+ */
+#define PRUETH_MAX_TX_QUEUES	4
+#define PRUETH_MAX_RX_FLOWS	8
 #define PRUETH_RX_FLOW_DATA	0
 
 /* Defines for forwarding path buffer pools:

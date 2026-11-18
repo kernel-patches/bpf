@@ -140,13 +140,14 @@ static int emac_set_channels(struct net_device *ndev,
 {
 	struct prueth_emac *emac = netdev_priv(ndev);
 
-	/* Check if interface is up. Can change the num queues when
-	 * the interface is down.
+	/* Check if interface is up. Can't change the num queues when
+	 * the interface is up.
 	 */
 	if (netif_running(emac->ndev))
 		return -EBUSY;
 
 	emac->tx_ch_num = ch->tx_count;
+	emac->rx_flow_num = ch->rx_count;
 
 	if (emac->is_sr1)
 		emac->tx_ch_num++;
@@ -159,7 +160,7 @@ static void emac_get_channels(struct net_device *ndev,
 {
 	struct prueth_emac *emac = netdev_priv(ndev);
 
-	ch->max_rx = 1;
+	ch->max_rx = ICSSG_MAX_RFLOWS;
 	ch->max_tx = PRUETH_MAX_TX_QUEUES;
 
 	/* Disable multiple TX channels due to timeouts
@@ -167,7 +168,7 @@ static void emac_get_channels(struct net_device *ndev,
 	if (emac->is_sr1)
 		ch->max_tx = 1;
 
-	ch->rx_count = 1;
+	ch->rx_count = emac->rx_flow_num;
 	ch->tx_count = emac->tx_ch_num;
 
 	if (emac->is_sr1)
@@ -213,11 +214,13 @@ static int emac_get_coalesce(struct net_device *ndev,
 			     struct netlink_ext_ack *extack)
 {
 	struct prueth_emac *emac = netdev_priv(ndev);
+	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth_rx_flow *flow = &rx_chn->flows[0];
 	struct prueth_tx_chn *tx_chn;
 
 	tx_chn = &emac->tx_chns[0];
 
-	coal->rx_coalesce_usecs = emac->rx_pace_timeout_ns / 1000;
+	coal->rx_coalesce_usecs = flow->rx_pace_timeout_ns / 1000;
 	coal->tx_coalesce_usecs = tx_chn->tx_pace_timeout_ns / 1000;
 
 	return 0;
@@ -245,8 +248,10 @@ static int emac_set_coalesce(struct net_device *ndev,
 			     struct netlink_ext_ack *extack)
 {
 	struct prueth_emac *emac = netdev_priv(ndev);
+	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
 	struct prueth *prueth = emac->prueth;
 	struct prueth_tx_chn *tx_chn;
+	int i;
 
 	tx_chn = &emac->tx_chns[0];
 
@@ -264,7 +269,8 @@ static int emac_set_coalesce(struct net_device *ndev,
 		coal->tx_coalesce_usecs = ICSSG_MIN_COALESCE_USECS;
 	}
 
-	emac->rx_pace_timeout_ns = coal->rx_coalesce_usecs * 1000;
+	for (i = 0; i < emac->rx_flow_num; i++)
+		rx_chn->flows[i].rx_pace_timeout_ns = coal->rx_coalesce_usecs * 1000;
 	tx_chn->tx_pace_timeout_ns = coal->tx_coalesce_usecs * 1000;
 
 	return 0;
