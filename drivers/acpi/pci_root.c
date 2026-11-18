@@ -1055,6 +1055,19 @@ struct pci_bus *acpi_pci_root_create(struct acpi_pci_root *root,
 	ext_ctrl = root->osc_ext_control_set;
 
 	/*
+	 * Firmware that predates the _OSC DPC control bit grants AER but
+	 * masks DPC.  Link DPC control to AER control, as PCIe r7.0 sec
+	 * 6.2.11 recommends.
+	 */
+	if (IS_ENABLED(CONFIG_PCIE_DPC) &&
+	    (ctrl & OSC_PCI_EXPRESS_AER_CONTROL) &&
+	    !(ctrl & OSC_PCI_EXPRESS_DPC_CONTROL)) {
+		decode_osc_control(root, "OS assuming control (AER granted) of",
+				   OSC_PCI_EXPRESS_DPC_CONTROL);
+		ctrl |= OSC_PCI_EXPRESS_DPC_CONTROL;
+	}
+
+	/*
 	 * If the user specified "pcie_ports=native", use the PCIe port
 	 * services regardless of what _OSC says, i.e., proceed as though the
 	 * platform had granted us control of them.  "pcie_ports=dpc-native"
