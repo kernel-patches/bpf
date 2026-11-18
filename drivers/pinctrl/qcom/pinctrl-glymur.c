@@ -645,6 +645,7 @@ enum glymur_functions {
 	msm_mux_gcc_gp1,
 	msm_mux_gcc_gp2,
 	msm_mux_gcc_gp3,
+	msm_mux_gp_mn,
 	msm_mux_host2wlan_sol,
 	msm_mux_i2c0_s_scl,
 	msm_mux_i2c0_s_sda,
@@ -929,6 +930,10 @@ static const char *const gcc_gp2_groups[] = {
 static const char *const gcc_gp3_groups[] = {
 	"gpio74",
 	"gpio82",
+};
+
+static const char *const gp_mn_groups[] = {
+	"gpio53",
 };
 
 static const char *const host2wlan_sol_groups[] = {
@@ -1344,6 +1349,7 @@ static const struct pinfunction glymur_functions[] = {
 	MSM_PIN_FUNCTION(gcc_gp1),
 	MSM_PIN_FUNCTION(gcc_gp2),
 	MSM_PIN_FUNCTION(gcc_gp3),
+	MSM_PIN_FUNCTION(gp_mn),
 	MSM_PIN_FUNCTION(host2wlan_sol),
 	MSM_PIN_FUNCTION(i2c0_s_scl),
 	MSM_PIN_FUNCTION(i2c0_s_sda),
@@ -1494,7 +1500,7 @@ static const struct msm_pingroup glymur_groups[] = {
 			ddr_pxi, _, _, _, _, _),
 	[52] = PINGROUP(52, qup1_se5, qup1_se7, jitter_bist, atest_usb, ddr_pxi, _, _, _,
 			_, _, _),
-	[53] = PINGROUP(53, qup1_se5, qup1_se7, _, atest_usb, ddr_pxi, _, _, _, _, _, _),
+	[53] = PINGROUP(53, qup1_se5, qup1_se7, gp_mn, atest_usb, ddr_pxi, _, _, _, _, _, _),
 	[54] = PINGROUP(54, qup1_se5, qup1_se7, ddr_bist_start, atest_usb, ddr_pxi, _, _,
 			_, _, _, _),
 	[55] = PINGROUP(55, qup1_se5, qup1_se7, ddr_bist_stop, atest_usb, ddr_pxi, _, _,
