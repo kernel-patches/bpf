@@ -2803,14 +2803,33 @@ out:
 	ublk_put_disk(disk);
 }
 
+static void ublk_complete_cancelled_cmd(struct ublk_queue *ubq,
+					struct ublk_io *io,
+					unsigned int issue_flags)
+{
+	struct io_uring_cmd *cmd = NULL;
+	bool done;
+
+	spin_lock(&ubq->cancel_lock);
+	done = !!(io->flags & UBLK_IO_FLAG_CANCELED);
+	if (!done) {
+		io->flags |= UBLK_IO_FLAG_CANCELED;
+		/* dependency ordered against smp_wmb() in ublk_prep_cancel() */
+		cmd = READ_ONCE(io->cmd);
+		io->cmd = NULL;
+	}
+	spin_unlock(&ubq->cancel_lock);
+
+	if (!done && cmd)
+		io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT, issue_flags);
+}
+
 static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 		unsigned int issue_flags)
 {
 	struct ublk_io *io = &ubq->ios[tag];
 	struct ublk_device *ub = ubq->dev;
-	struct io_uring_cmd *cmd = NULL;
 	struct request *req;
-	bool done;
 
 	if (!(io->flags & UBLK_IO_FLAG_ACTIVE))
 		return;
@@ -2829,18 +2848,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	if (req && blk_mq_request_started(req) && req->tag == tag)
 		return;
 
-	spin_lock(&ubq->cancel_lock);
-	done = !!(io->flags & UBLK_IO_FLAG_CANCELED);
-	if (!done) {
-		io->flags |= UBLK_IO_FLAG_CANCELED;
-		/* dependency ordered against smp_wmb() in ublk_prep_cancel() */
-		cmd = READ_ONCE(io->cmd);
-		io->cmd = NULL;
-	}
-	spin_unlock(&ubq->cancel_lock);
-
-	if (!done && cmd)
-		io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT, issue_flags);
+	ublk_complete_cancelled_cmd(ubq, io, issue_flags);
 }
 
 /*
@@ -3571,6 +3579,10 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 			req->__sector = addr;
 		if (compl)
 			__ublk_complete_rq(req, io, ublk_dev_need_map_io(ub), NULL);
+
+		/* Quiesce may have scanned this slot before this command arrived. */
+		if (unlikely(READ_ONCE(ubq->canceling)))
+			ublk_complete_cancelled_cmd(ubq, io, issue_flags);
 		break;
 	}
 	case UBLK_IO_NEED_GET_DATA:
