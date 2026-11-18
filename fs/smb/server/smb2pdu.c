@@ -5271,15 +5271,9 @@ resolve_path:
 						goto err_out;
 					}
 
-					rc = ksmbd_vfs_set_sd_xattr(conn,
-								    idmap,
-								    &path,
-								    pntsd,
-								    pntsd_size);
+					ksmbd_vfs_set_sd_xattr(conn, idmap, &path,
+							       pntsd, pntsd_size);
 					kvfree(pntsd);
-					if (rc)
-						pr_err("failed to store ntacl in xattr : %d\n",
-						       rc);
 				}
 			}
 		}

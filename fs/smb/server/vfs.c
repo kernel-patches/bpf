@@ -1767,7 +1767,8 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 				XATTR_NAME_SD, sd_ndr.data,
 				sd_ndr.offset, 0, true);
 	if (rc < 0)
-		pr_err("Failed to store XATTR ntacl :%d\n", rc);
+		pr_warn_ratelimited("failed to store the security descriptor of %pd: %d\n",
+				    dentry, rc);
 
 out:
 	kfree(sd_ndr.data);
