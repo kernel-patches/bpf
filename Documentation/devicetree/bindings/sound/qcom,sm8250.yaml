@@ -40,6 +40,7 @@ properties:
           - fairphone,fp4-sndcard
           - fairphone,fp5-sndcard
           - motorola,dubai-sndcard
+          - motorola,vantage-sndcard
           - qcom,apq8096-sndcard
           - qcom,glymur-sndcard
           - qcom,nord-sndcard
