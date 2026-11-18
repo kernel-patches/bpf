@@ -594,13 +594,13 @@ static __always_inline struct perf_branch_stack *cpu_lbr_stack(struct cpu_hw_eve
 	return (struct perf_branch_stack *)cpuc->__lbr_stack;
 }
 
-static __always_inline void cpu_init_lbr_stack(struct cpu_hw_events *cpuc, int nr)
+static __always_inline void cpu_init_lbr_stack(struct perf_branch_stack *lbr_stack, int nr)
 {
 	/*
 	 * Initialize the branch-stack count before populating entries[]
 	 * to avoid UBSAN complaints from the __counted_by(nr) flexible array.
 	 */
-	cpu_lbr_stack(cpuc)->nr = nr;
+	lbr_stack->nr = nr;
 }
 
 #define __EVENT_CONSTRAINT_RANGE(c, e, n, m, w, o, f) {	\
@@ -1207,7 +1207,8 @@ struct x86_pmu {
 	unsigned int	lbr_counters:4;
 
 	void		(*lbr_reset)(void);
-	void		(*lbr_read)(struct cpu_hw_events *cpuc);
+	void		(*lbr_read)(struct cpu_hw_events *cpuc,
+				    struct perf_branch_stack *lbr_stack);
 	void		(*lbr_save)(void *ctx);
 	void		(*lbr_restore)(void *ctx);
 
@@ -2007,11 +2008,14 @@ void intel_pmu_lbr_enable_all(bool pmi);
 
 void intel_pmu_lbr_disable_all(void);
 
-void intel_pmu_lbr_read(void);
+void intel_pmu_lbr_read(struct perf_branch_stack *lbr_stack,
+			u64 *lbr_counters);
 
-void intel_pmu_lbr_read_32(struct cpu_hw_events *cpuc);
+void intel_pmu_lbr_read_32(struct cpu_hw_events *cpuc,
+			   struct perf_branch_stack *lbr_stack);
 
-void intel_pmu_lbr_read_64(struct cpu_hw_events *cpuc);
+void intel_pmu_lbr_read_64(struct cpu_hw_events *cpuc,
+			   struct perf_branch_stack *lbr_stack);
 
 void intel_pmu_lbr_save(void *ctx);
 

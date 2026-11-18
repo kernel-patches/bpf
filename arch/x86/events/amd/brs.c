@@ -316,7 +316,7 @@ void amd_brs_drain(void)
 
 	num = tos - start + 1;
 
-	cpu_init_lbr_stack(cpuc, num);
+	cpu_init_lbr_stack(cpu_lbr_stack(cpuc), num);
 
 	/*
 	 * BRS is only one pass (saturation) from MSROFF to depth-1

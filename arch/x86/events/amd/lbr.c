@@ -179,7 +179,7 @@ void amd_pmu_lbr_read(void)
 		return;
 	}
 
-	cpu_init_lbr_stack(cpuc, x86_pmu.lbr_nr);
+	cpu_init_lbr_stack(cpu_lbr_stack(cpuc), x86_pmu.lbr_nr);
 
 	for (i = 0; i < x86_pmu.lbr_nr; i++) {
 		entry.from.full	= amd_pmu_lbr_get_from(i);
