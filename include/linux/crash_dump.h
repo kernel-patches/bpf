@@ -6,6 +6,7 @@
 #include <linux/proc_fs.h>
 #include <linux/elf.h>
 #include <linux/pgtable.h>
+#include <linux/uio.h>
 #include <uapi/linux/vmcore.h>
 
 /* For IS_ENABLED(CONFIG_CRASH_DUMP) */
@@ -32,6 +33,27 @@ ssize_t copy_oldmem_page(struct iov_iter *i, unsigned long pfn, size_t csize,
 		unsigned long offset);
 ssize_t copy_oldmem_page_encrypted(struct iov_iter *iter, unsigned long pfn,
 				   size_t csize, unsigned long offset);
+
+/**
+ * copy_oldmem_to_iter - copy from the crashed kernel's memory
+ * @src: where in the mapped page of the crashed kernel to copy from
+ * @count: how many bytes to copy
+ * @iter: where to copy them
+ *
+ * The memory of the crashed kernel may well have uncorrectable errors.
+ * Where the architecture has a machine check safe copy a machine check
+ * in the copy ends it short, like a fault would, instead of taking the
+ * capture kernel down. Everywhere else this is copy_to_iter().
+ *
+ * Return: the number of bytes copied, like copy_to_iter().
+ */
+static inline size_t copy_oldmem_to_iter(const void *src, size_t count,
+					 struct iov_iter *iter)
+{
+	if (check_copy_size(src, count, true))
+		return _copy_mc_to_iter(src, count, iter);
+	return 0;
+}
 
 void vmcore_cleanup(void);
 

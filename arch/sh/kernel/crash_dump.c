@@ -20,7 +20,10 @@ ssize_t copy_oldmem_page(struct iov_iter *iter, unsigned long pfn,
 		return 0;
 
 	vaddr = ioremap(pfn << PAGE_SHIFT, PAGE_SIZE);
-	csize = copy_to_iter(vaddr + offset, csize, iter);
+	if (!vaddr)
+		return -ENOMEM;
+
+	csize = copy_oldmem_to_iter(vaddr + offset, csize, iter);
 	iounmap(vaddr);
 
 	return csize;
