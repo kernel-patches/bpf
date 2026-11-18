@@ -4027,24 +4027,48 @@ static int handle_pmi_common(struct pt_regs *regs, u64 status)
 			continue;
 
 		/*
-		 * There may be unprocessed PEBS records in the PEBS buffer,
-		 * which still stores the previous values.
-		 * Process those records first before handling the latest value.
-		 * For example,
-		 * A is a regular counter
-		 * B is a PEBS event which reads A
-		 * C is a PEBS event
+		 * Drain any pending PEBS records before handling the overflow
+		 * for the event in two cases:
 		 *
-		 * The following can happen:
-		 * B-assist			A=1
-		 * C				A=2
-		 * B-assist			A=3
-		 * A-overflow-PMI		A=4
-		 * C-assist-PMI (PEBS buffer)	A=5
+		 * 1) The event belongs to a PEBS counter event group. Other
+		 *    PEBS events may record the previous count for this event.
+		 *    If those buffered PEBS records are processed only after
+		 *    intel_pmu_save_and_restart() updates the count, the counter
+		 *    value will be corrupted.
 		 *
-		 * The PEBS buffer has to be drained before handling the A-PMI
+		 *    Example:
+		 *    A = regular counter
+		 *    B = PEBS event that reads A
+		 *    C = PEBS event
+		 *
+		 *    Sequence:
+		 *    B-assist            A=1
+		 *    C                   A=2
+		 *    B-assist            A=3
+		 *    A-overflow-PMI      A=4
+		 *    C-assist-PMI (PEBS) A=5
+		 *
+		 *    Therefore, the PEBS buffer must be drained before handling
+		 *    the A overflow.
+		 *
+		 * 2) The event needs a branch stack, but active PEBS LBR users
+		 *    may drain the PEBS buffer and overwrite the live LBR
+		 *    snapshot updated by the PMI handler. This can happen,
+		 *    for example, when:
+		 *
+		 *    - the event belongs to a SAMPLE_READ group that includes
+		 *      a PEBS event which snapshots the LBR stack; a later
+		 *      perf_event_overflow() may call perf_output_read_group(),
+		 *      which drains the PEBS buffer via intel_pmu_read_event();
+		 *    - the overflow triggers group throttling, disabling a PEBS
+		 *      LBR event and causing intel_pmu_disable_event() to drain
+		 *      the PEBS buffer before the live LBR snapshot is output.
+		 *
+		 *    Therefore, drain the PEBS buffer whenever the event needs
+		 *    a branch stack and PEBS LBR users are active.
 		 */
-		if (is_pebs_counter_event_group(event))
+		if (is_pebs_counter_event_group(event) ||
+		    (has_branch_stack(event) && cpuc->lbr_pebs_users > 0))
 			intel_pmu_drain_pebs_buffer();
 
 		last_period = event->hw.last_period;
