@@ -97,7 +97,7 @@ pub mod internal {
 /// fn foo(device: &kernel::drm::Device<Self, kernel::drm::Registered>,
 ///        reg_data: &Self::RegistrationData<'_>,
 ///        data: &mut uapi::argument_type,
-///        file: &kernel::drm::File<Self::File>,
+///        file: &kernel::drm::File<Self>,
 /// ) -> Result<u32>
 /// ```
 /// where `Self` is the drm::drv::Driver implementation these ioctls are being declared within.
@@ -192,7 +192,9 @@ macro_rules! declare_drm_ioctls {
                             // There is no concurrent access or aliasing; no other references
                             // to this object exist during this call.
                             let data = unsafe { &mut *(raw_data.cast::<$crate::uapi::$struct>()) };
-                            // SAFETY: This is just the DRM file structure
+                            // SAFETY:
+                            // - The DRM core provides a valid file for this device.
+                            // - `guard` is held for the entire use of the file reference.
                             let file = unsafe { $crate::drm::File::from_raw(raw_file) };
 
                             match guard.registration_data_with(|reg_data| {

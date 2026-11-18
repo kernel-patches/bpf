@@ -19,13 +19,16 @@ use crate::driver::{
 #[pin_data]
 pub(crate) struct TyrDrmFileData {}
 
-/// Convenience type alias for our DRM `File` type
-pub(crate) type TyrDrmFile = drm::file::File<TyrDrmFileData>;
+/// Convenience type alias for our DRM `File` type.
+pub(crate) type TyrDrmFile = drm::file::File<TyrDrmDriver>;
 
-impl drm::file::DriverFile for TyrDrmFileData {
+impl drm::file::DriverFile<'_> for TyrDrmFileData {
     type Driver = TyrDrmDriver;
 
-    fn open(_dev: &drm::Device<Self::Driver>) -> impl PinInit<Self, Error> {
+    fn open(
+        _device: &TyrDrmDevice<Registered>,
+        _reg_data: &TyrDrmRegistrationData<'_>,
+    ) -> impl PinInit<Self, Error> {
         Ok(Self {})
     }
 }

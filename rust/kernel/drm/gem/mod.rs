@@ -76,7 +76,7 @@ pub(crate) use impl_aref_for_gem_obj;
 ///
 /// [`Driver`]: drm::Driver
 /// [`DriverFile`]: drm::file::DriverFile
-pub type DriverFile<T> = drm::File<<<T as DriverObject>::Driver as drm::Driver>::File>;
+pub type DriverFile<T> = drm::File<<T as DriverObject>::Driver>;
 
 /// A type alias for retrieving the current [`AllocImpl`] for a given [`DriverObject`].
 ///
@@ -136,7 +136,9 @@ extern "C" fn open_callback<T: DriverObject>(
         return ENODEV.to_errno();
     };
 
-    // SAFETY: `open_callback` is only ever called with a valid pointer to a `struct drm_file`.
+    // SAFETY:
+    // - Handle creation ensures the valid file belongs to the object's device (`T::Driver`).
+    // - `_guard` is held for the entire use of the file reference.
     let file = unsafe { DriverFile::<T>::from_raw(raw_file) };
 
     // SAFETY:
@@ -164,7 +166,9 @@ extern "C" fn close_callback<T: DriverObject>(
         return;
     };
 
-    // SAFETY: `open_callback` is only ever called with a valid pointer to a `struct drm_file`.
+    // SAFETY:
+    // - Handle creation ensures the valid file belongs to the object's device (`T::Driver`).
+    // - `_guard` is held for the entire use of the file reference.
     let file = unsafe { DriverFile::<T>::from_raw(raw_file) };
 
     // SAFETY: `close_callback` is specified in the AllocOps structure for `Object<T>`, ensuring
@@ -188,6 +192,18 @@ impl<T: DriverObject, Ctx: DeviceContext> IntoGEMObject for Object<T, Ctx> {
 
 /// Base operations shared by all GEM object classes
 pub trait BaseObject: IntoGEMObject {
+    /// Returns the DRM device that owns this GEM object.
+    #[inline]
+    fn device(&self) -> &drm::Device<Self::Driver>
+    where
+        Self: AllocImpl,
+    {
+        // SAFETY:
+        // - `self.as_raw()` points to a valid GEM object whose device is valid for this borrow.
+        // - The sealed `AllocImpl` implementations identify the device's driver as `Self::Driver`.
+        unsafe { drm::Device::from_raw((*self.as_raw()).dev) }
+    }
+
     /// Returns the size of the object in bytes.
     fn size(&self) -> usize {
         // SAFETY: `self.as_raw()` is guaranteed to be a pointer to a valid `struct drm_gem_object`.
@@ -196,26 +212,32 @@ pub trait BaseObject: IntoGEMObject {
 
     /// Creates a new handle for the object associated with a given `File`
     /// (or returns an existing one).
-    fn create_handle<D, F>(&self, file: &drm::File<F>) -> Result<u32>
+    ///
+    /// Returns [`EINVAL`] if the object and file belong to different DRM devices.
+    fn create_handle<D>(&self, file: &drm::File<D>) -> Result<u32>
     where
         Self: AllocImpl<Driver = D>,
-        D: drm::Driver<Object = Self, File = F>,
-        F: drm::file::DriverFile<Driver = D>,
+        D: drm::Driver<Object = Self>,
     {
+        if self.device().as_raw() != file.device().as_raw() {
+            return Err(EINVAL);
+        }
+
         let mut handle: u32 = 0;
-        // SAFETY: The arguments are all valid per the type invariants.
+        // SAFETY:
+        // - The pointers are valid per the type invariants.
+        // - The object and file belong to the same DRM device.
         to_result(unsafe {
-            bindings::drm_gem_handle_create(file.as_raw().cast(), self.as_raw(), &mut handle)
+            bindings::drm_gem_handle_create(file.as_raw(), self.as_raw(), &mut handle)
         })?;
         Ok(handle)
     }
 
     /// Looks up an object by its handle for a given `File`.
-    fn lookup_handle<D, F>(file: &drm::File<F>, handle: u32) -> Result<ARef<Self>>
+    fn lookup_handle<D>(file: &drm::File<D>, handle: u32) -> Result<ARef<Self>>
     where
         Self: AllocImpl<Driver = D> + AlwaysRefCounted,
-        D: drm::Driver<Object = Self, File = F>,
-        F: drm::file::DriverFile<Driver = D>,
+        D: drm::Driver<Object = Self>,
     {
         // SAFETY: The arguments are all valid per the type invariants.
         let ptr = unsafe { bindings::drm_gem_object_lookup(file.as_raw().cast(), handle) };

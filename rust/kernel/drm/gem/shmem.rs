@@ -604,10 +604,13 @@ mod tests {
         desc: c"Kunit",
     };
 
-    impl drm::file::DriverFile for KunitFile {
+    impl drm::file::DriverFile<'_> for KunitFile {
         type Driver = KunitDriver;
 
-        fn open(_dev: &drm::Device<KunitDriver>) -> impl PinInit<Self, Error> {
+        fn open(
+            _device: &drm::Device<KunitDriver, drm::Registered>,
+            _reg_data: &(),
+        ) -> impl PinInit<Self, Error> {
             Ok(Self)
         }
     }
@@ -629,7 +632,7 @@ mod tests {
     impl drm::Driver for KunitDriver {
         type Data = KunitData;
         type RegistrationData<'a> = ();
-        type File = KunitFile;
+        type File<'a> = KunitFile;
         type Object = Object<KunitObject>;
         type ParentDevice<Ctx: device::DeviceContext> = faux::Device<Ctx>;
 
