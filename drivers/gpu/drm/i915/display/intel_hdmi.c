@@ -561,8 +561,10 @@ void hsw_write_infoframe(struct intel_encoder *encoder,
 	      !crtc_state->has_panel_replay && type == DP_SDP_VSC))
 		val |= hsw_infoframe_enable(type);
 
-	if (type == DP_SDP_VSC)
+	if (type == DP_SDP_VSC) {
+		val &= ~VSC_SELECT_MASK;
 		val |= VSC_DIP_HW_DATA_SW_HEA;
+	}
 
 	intel_de_write(display, ctl_reg, val);
 	intel_de_posting_read(display, ctl_reg);
