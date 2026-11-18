@@ -616,7 +616,7 @@ void intel_pmu_lbr_add(struct perf_event *event)
 	 * be 'new'. Conversely, a new event can get installed through the
 	 * context switch path for the first time.
 	 */
-	if (x86_pmu.intel_cap.pebs_baseline && event->attr.precise_ip > 0)
+	if (intel_pmu_has_pebs_lbr(event->pmu) && event->attr.precise_ip > 0)
 		cpuc->lbr_pebs_users++;
 	perf_sched_cb_inc(event->pmu);
 	if (!cpuc->lbr_users++ && !event->total_time_running)
@@ -687,7 +687,7 @@ void intel_pmu_lbr_del(struct perf_event *event)
 	if (event->hw.flags & PERF_X86_EVENT_LBR_SELECT)
 		cpuc->lbr_select = 0;
 
-	if (x86_pmu.intel_cap.pebs_baseline && event->attr.precise_ip > 0)
+	if (intel_pmu_has_pebs_lbr(event->pmu) && event->attr.precise_ip > 0)
 		cpuc->lbr_pebs_users--;
 	cpuc->lbr_users--;
 	WARN_ON_ONCE(cpuc->lbr_users < 0);

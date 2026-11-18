@@ -2096,6 +2096,13 @@ static inline bool intel_pmu_has_pebs(void)
 	return x86_pmu.ds_pebs || x86_pmu.arch_pebs;
 }
 
+static inline bool intel_pmu_has_pebs_lbr(struct pmu *pmu)
+{
+	if (x86_pmu.arch_pebs)
+		return hybrid(pmu, arch_pebs_cap).caps & ARCH_PEBS_LBR;
+	return x86_pmu.intel_cap.pebs_baseline;
+}
+
 #else /* CONFIG_CPU_SUP_INTEL */
 
 static inline void reserve_ds_buffers(void)
