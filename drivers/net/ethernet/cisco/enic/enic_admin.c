@@ -728,6 +728,8 @@ int enic_admin_channel_close(struct enic *enic)
 	int rq_err;
 	int wq_err;
 
+	if (enic_is_sriov_vf_v2(enic))
+		enic_vf_admin_mac_quiesce(enic);
 	if (!enic->has_admin_channel)
 		return 0;
 	if (READ_ONCE(enic->admin_chan_state) == ENIC_ADMIN_CHAN_DOWN)

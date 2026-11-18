@@ -357,6 +357,9 @@ struct enic {
 	spinlock_t vf_link_state_lock;
 	enum enic_vf_link_state vf_link_state;
 	bool vf_link_running;
+	/* Last station address which may still be installed at the PF. */
+	u8 vf_station_addr[ETH_ALEN] __aligned(2);
+	bool vf_station_addr_valid;
 
 	/* MBOX protocol state — mbox_lock serializes admin WQ sends */
 	struct mutex mbox_lock;
@@ -373,6 +376,16 @@ struct enic {
 	struct list_head vf_ack_list;
 	struct work_struct vf_ack_work;
 	unsigned int vf_ack_count;
+	struct delayed_work vf_admin_mac_work;
+	spinlock_t vf_admin_mac_lock;	/* protects pending admin MAC */
+	u8 vf_admin_mac[ETH_ALEN];
+	u8 vf_admin_mac_random_addr[ETH_ALEN];
+	bool vf_admin_mac_pending;
+	bool vf_admin_mac_random_valid;
+	bool vf_admin_mac_work_enabled;
+	bool vf_admin_mac_recovery_attempted;
+	u32 vf_admin_mac_generation;
+	u8 vf_admin_mac_retries;
 	u64 mbox_expected_msg_num;
 	u8 mbox_expected_reply;
 	int mbox_reply_status;
@@ -506,6 +519,10 @@ static inline int enic_dma_map_check(struct enic *enic, dma_addr_t dma_addr)
 }
 
 void enic_reset_addr_lists(struct enic *enic);
+void enic_vf_admin_mac_notify(struct enic *enic, const u8 *addr);
+void enic_vf_admin_mac_quiesce(struct enic *enic);
+void enic_vf_admin_mac_rearm(struct enic *enic);
+void enic_vf_admin_mac_purge(struct enic *enic);
 int enic_sriov_enabled(struct enic *enic);
 int enic_is_valid_vf(struct enic *enic, int vf);
 int enic_is_dynamic(struct enic *enic);
