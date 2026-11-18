@@ -148,6 +148,32 @@
  * This lets the PCI core keep the bridges above preserved devices forwarding
  * their memory transactions, without changes in routing, throughout the Live
  * Update.
+ *
+ * BDF Stability
+ * =============
+ *
+ * The PCI core guarantees that preserved devices can be identified by the same
+ * bus, device, and function numbers for as long as they are preserved
+ * (including across kexec). To accomplish this, the PCI core keeps the
+ * secondary and subordinate bus numbers that the previous kernel programmed
+ * into bridges, if the previous kernel preserved any device. This is true even
+ * if the kernel would otherwise reassign all bus numbers, e.g. with
+ * pci=assign-busses. The PCI core trusts the bus numbers programmed by the
+ * previous kernel.
+ *
+ * Bridges that do not have bus numbers are assigned new ones as usual, so
+ * hot-adding a bridge keeps working, both during and after a Live Update. The
+ * two-pass bridge scan ensures such bridges are only assigned bus numbers above
+ * those already claimed by preserved bridges.
+ *
+ * If a preserved bridge comes up without a valid bus number configuration, e.g.
+ * because it was reset during kexec, the PCI core refuses to assign it new bus
+ * numbers and does not enumerate anything below it. Assigning new bus numbers
+ * would silently change the BDF of every preserved device in its hierarchy. The
+ * PCI core also stops assigning bus numbers to the other bridges on the same
+ * bus, since the bus numbers of the failed bridge can no longer be read from
+ * hardware and handing them to another bridge would let an unrelated device
+ * inherit the BDF of a preserved device.
  */
 
 #define pr_fmt(fmt) "PCI: liveupdate: " fmt
@@ -168,9 +194,13 @@
  * struct pci_liveupdate_global - Global state for PCI Live Update support
  * @rwsem: Reader/writer semaphore used to protect the incoming and outgoing
  *         FLBs, and the references to them in struct pci_dev.
+ * @had_incoming: True if the previous kernel preserved at least one PCI device.
+ *                Set when the incoming FLB is retrieved and never cleared, so
+ *                it stays true after Live Update finishes.
  */
 struct pci_liveupdate_global {
 	struct rw_semaphore rwsem;
+	bool had_incoming;
 };
 
 static struct pci_liveupdate_global pci_liveupdate = {
@@ -340,6 +370,9 @@ static int pci_flb_retrieve(struct liveupdate_flb_op_args *args)
 			      PCI_SLOT(dev_ser->bdf), PCI_FUNC(dev_ser->bdf),
 			      ret);
 	}
+
+	if (!xa_empty(&incoming->xa))
+		pci_liveupdate.had_incoming = true;
 
 	args->obj = incoming;
 	return 0;
@@ -630,6 +663,52 @@ static void pci_liveupdate_flb_put_incoming(void)
 	liveupdate_flb_put_incoming(&pci_liveupdate_flb);
 }
 
+/**
+ * pci_liveupdate_preserve_bus_numbers() - Check whether to keep bus numbers
+ *
+ * Bus numbers are preserved on every bridge, for the lifetime of the kernel, if
+ * the previous kernel preserved any device. The incoming FLB is retrieved while
+ * setting up the first device, before any bridge is scanned, so the answer does
+ * not change during enumeration. See "BDF Stability" in the PCI Live Update
+ * documentation.
+ *
+ * Return: True if the PCI core should keep the bus numbers that the previous
+ * kernel programmed into bridges, false otherwise.
+ */
+bool pci_liveupdate_preserve_bus_numbers(void)
+{
+	return pci_liveupdate.had_incoming;
+}
+
+/**
+ * pci_liveupdate_refuse_bus_numbers() - Check for unsafe bus number assignment
+ * @bus: The PCI bus the bus numbers would be assigned from.
+ * @dev: The PCI bridge device the bus numbers would be assigned to.
+ *
+ * A bridge that was preserved by the previous kernel but came up without a
+ * valid bus number configuration has no child bus after the first pass of the
+ * bridge scan. Bus numbers must not be assigned from @bus while such a bridge
+ * is on it, including to the failed bridge itself. See "BDF Stability" in the
+ * PCI Live Update documentation.
+ *
+ * Return: True if @dev must not be assigned bus numbers, false otherwise.
+ */
+bool pci_liveupdate_refuse_bus_numbers(struct pci_bus *bus, struct pci_dev *dev)
+{
+	struct pci_dev *bridge;
+
+	for_each_pci_bridge(bridge, bus) {
+		if (!bridge->liveupdate.was_incoming || bridge->subordinate)
+			continue;
+
+		pci_err(dev, "Not assigning bus numbers, preserved bridge %s lost its bus number configuration\n",
+			pci_name(bridge));
+		return true;
+	}
+
+	return false;
+}
+
 void pci_liveupdate_setup_device(struct pci_dev *dev)
 {
 	struct pci_flb_incoming *incoming;
@@ -658,6 +737,8 @@ void pci_liveupdate_setup_device(struct pci_dev *dev)
 
 	pci_info(dev, "Device was preserved by previous kernel across Live Update\n");
 	dev->liveupdate.incoming = dev_ser;
+	dev->liveupdate.was_incoming = true;
+
 	pci_liveupdate_flb_put_incoming();
 }
 
