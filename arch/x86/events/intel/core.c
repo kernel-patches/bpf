@@ -3168,10 +3168,47 @@ static __always_inline bool intel_pmu_needs_branch_stack(struct perf_event *even
 	return event->hw.flags & PERF_X86_EVENT_NEEDS_BRANCH_STACK;
 }
 
+static inline bool is_pure_branch_counter(struct perf_event *event)
+{
+	return is_sampling_event(event) &&
+	       has_branch_stack(event) &&
+	       branch_sample_counters(event) &&
+	       !intel_pmu_needs_branch_stack(event);
+}
+
+/*
+ * A pure branch counter event clears PERF_X86_EVENT_NEEDS_BRANCH_STACK,
+ * so intel_pmu_lbr_add()/intel_pmu_lbr_del() do not update lbr_users
+ * and lbr_pebs_users. Handle the accounting explicitly here instead.
+ * See intel_pmu_hw_config() for details.
+ */
+static void
+intel_pmu_account_pure_branch_counter(struct perf_event *event, bool add)
+{
+	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
+
+	if (!x86_pmu.lbr_nr)
+		return;
+
+	if (add) {
+		cpuc->lbr_users++;
+		if (intel_pmu_has_pebs_lbr(event->pmu) && event->attr.precise_ip)
+			cpuc->lbr_pebs_users++;
+	} else {
+		cpuc->lbr_users--;
+		if (intel_pmu_has_pebs_lbr(event->pmu) && event->attr.precise_ip)
+			cpuc->lbr_pebs_users--;
+		WARN_ON_ONCE(cpuc->lbr_users < 0);
+		WARN_ON_ONCE(cpuc->lbr_pebs_users < 0);
+	}
+}
+
 static void intel_pmu_del_event(struct perf_event *event)
 {
 	if (intel_pmu_needs_branch_stack(event))
 		intel_pmu_lbr_del(event);
+	if (is_pure_branch_counter(event))
+		intel_pmu_account_pure_branch_counter(event, false);
 	if (event->attr.precise_ip)
 		intel_pmu_pebs_del(event);
 	if (is_pebs_counter_event_group(event) ||
@@ -3734,6 +3771,8 @@ static void intel_pmu_add_event(struct perf_event *event)
 		intel_pmu_pebs_add(event);
 	if (intel_pmu_needs_branch_stack(event))
 		intel_pmu_lbr_add(event);
+	if (is_pure_branch_counter(event))
+		intel_pmu_account_pure_branch_counter(event, true);
 	if (is_pebs_counter_event_group(event) ||
 	    is_acr_event_group(event))
 		this_cpu_ptr(&cpu_hw_events)->n_late_setup++;
