@@ -2783,12 +2783,10 @@ static __always_inline void intel_pmu_disable_all(void)
 	intel_pmu_lbr_disable_all();
 }
 
-static void __intel_pmu_enable_all(int added, bool pmi)
+static void ___intel_pmu_enable_all(void)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 	u64 intel_ctrl = hybrid(cpuc->pmu, intel_ctrl);
-
-	intel_pmu_lbr_enable_all(pmi);
 
 	if (cpuc->fixed_ctrl_val != cpuc->active_fixed_ctrl_val) {
 		wrmsrq(MSR_ARCH_PERFMON_FIXED_CTR_CTRL, cpuc->fixed_ctrl_val);
@@ -2809,10 +2807,16 @@ static void __intel_pmu_enable_all(int added, bool pmi)
 	}
 }
 
+static void __intel_pmu_enable_all(bool pmi)
+{
+	intel_pmu_lbr_enable_all(pmi);
+	___intel_pmu_enable_all();
+}
+
 static void intel_pmu_enable_all(int added)
 {
 	static_call_cond(x86_pmu_pebs_enable_all)();
-	__intel_pmu_enable_all(added, false);
+	__intel_pmu_enable_all(false);
 }
 
 static noinline int
@@ -4056,7 +4060,7 @@ done:
 	/* Only restore PMU state when it's active. See x86_pmu_disable(). */
 	cpuc->enabled = pmu_enabled;
 	if (pmu_enabled)
-		__intel_pmu_enable_all(0, true);
+		__intel_pmu_enable_all(true);
 	intel_bts_enable_local();
 
 	/*
