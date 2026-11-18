@@ -3037,10 +3037,10 @@ static struct generic_pm_domain *genpd_get_from_provider(
 
 	/* Check if we have such a provider in our array */
 	list_for_each_entry(provider, &of_genpd_providers, link) {
-		if (provider->node == genpdspec->np)
+		if (provider->node == genpdspec->np) {
 			genpd = provider->xlate(genpdspec, provider->data);
-		if (!IS_ERR(genpd))
 			break;
+		}
 	}
 
 	mutex_unlock(&of_genpd_mutex);
