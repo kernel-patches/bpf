@@ -1327,6 +1327,35 @@ struct macb_context {
 	struct macb_txq		txq[MACB_MAX_QUEUES];
 };
 
+/**
+ * struct macb_queue_enst_config - Configuration for Enhanced Scheduled Traffic
+ * @start_time_mask:  Bitmask representing the start time for the queue
+ * @on_time_bytes:    "on" time nsec expressed in bytes
+ * @off_time_bytes:   "off" time nsec expressed in bytes
+ *
+ * This structure holds the configuration parameters for an ENST queue,
+ * used to control time-based transmission scheduling in the MACB driver.
+ */
+struct macb_queue_enst_config {
+	u32 start_time_mask;
+	u32 on_time_bytes;
+	u32 off_time_bytes;
+};
+
+/**
+ * struct macb_enst - Cached Enhanced Scheduled Traffic configuration
+ * @queues:     per-queue timing (zeroed for queues without schedule)
+ * @speed_mbps: link speed the timings were computed for, 0 if no schedule
+ * @queue_mask: queues enabled by the current schedule, 0 if no schedule
+ *
+ * The timings are expressed in bytes, so they depend on the link speed.
+ */
+struct macb_enst {
+	struct macb_queue_enst_config	queues[MACB_MAX_QUEUES];
+	u32				speed_mbps;
+	u32				queue_mask;
+};
+
 struct macb {
 	void __iomem		*regs;
 	bool			native_io;
@@ -1427,11 +1456,14 @@ struct macb {
 
 	/* Redundant to netif_carrier_ok(), but set under bp->mac_cfg_lock. */
 	bool			link_up;
+	u32			speed_mbps;
 
 	u32	rx_intr_mask;
 
 	struct macb_pm_data pm_data;
 	const struct macb_usrio_config *usrio;
+
+	struct macb_enst enst;
 };
 
 #ifdef CONFIG_MACB_USE_HWSTAMP
@@ -1530,21 +1562,6 @@ static inline void macb_queue_isr_clear(struct macb *bp,
 struct macb_platform_data {
 	struct clk	*pclk;
 	struct clk	*hclk;
-};
-
-/**
- * struct macb_queue_enst_config - Configuration for Enhanced Scheduled Traffic
- * @start_time_mask:  Bitmask representing the start time for the queue
- * @on_time_bytes:    "on" time nsec expressed in bytes
- * @off_time_bytes:   "off" time nsec expressed in bytes
- *
- * This structure holds the configuration parameters for an ENST queue,
- * used to control time-based transmission scheduling in the MACB driver.
- */
-struct macb_queue_enst_config {
-	u32 start_time_mask;
-	u32 on_time_bytes;
-	u32 off_time_bytes;
 };
 
 #endif /* _MACB_H */

@@ -847,6 +847,7 @@ static void macb_mac_link_down(struct phylink_config *config, unsigned int mode,
 	mutex_lock(&bp->mac_cfg_lock);
 
 	bp->link_up = false;
+	bp->speed_mbps = 0;
 
 	if (!(bp->caps & MACB_CAPS_MACB_IS_EMAC))
 		for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue)
@@ -955,6 +956,43 @@ static void gem_shuffle_tx_rings(struct macb *bp)
 		gem_shuffle_tx_one_ring(queue);
 }
 
+static void macb_apply_enst_config(struct macb *bp)
+{
+	struct macb_queue_enst_config *config;
+	struct macb_queue *queue;
+	u32 queue_mask;
+	size_t q;
+
+	/* Short-circuit to avoid writing to invalid register offsets */
+	if (!(bp->caps & MACB_CAPS_QBV))
+		return;
+
+	guard(spinlock_irqsave)(&bp->lock);
+
+	/* Disable ENST for all queues.
+	 * Reconfiguring timings must be done with ENST disabled.
+	 */
+	queue_mask = BIT_U32(bp->num_queues) - 1;
+	gem_writel(bp, ENST_CONTROL,
+		   queue_mask << GEM_ENST_DISABLE_QUEUE_OFFSET);
+
+	for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
+		/* Configure queue timing registers.
+		 *
+		 * Those fields must be zero if the queue has ENST disabled:
+		 * notice we don't bother reading bp->enst.queue_mask & BIT(q).
+		 */
+		config = &bp->enst.queues[q];
+		queue_writel(queue, ENST_START_TIME, config->start_time_mask);
+		queue_writel(queue, ENST_ON_TIME, config->on_time_bytes);
+		queue_writel(queue, ENST_OFF_TIME, config->off_time_bytes);
+	}
+
+	/* Enable ENST for all configured queues in one write */
+	if (bp->enst.queue_mask)
+		gem_writel(bp, ENST_CONTROL, bp->enst.queue_mask);
+}
+
 static void macb_mac_link_up(struct phylink_config *config,
 			     struct phy_device *phydev,
 			     unsigned int mode, phy_interface_t interface,
@@ -972,6 +1010,7 @@ static void macb_mac_link_up(struct phylink_config *config,
 	spin_lock_irqsave(&bp->lock, flags);
 
 	bp->link_up = true;
+	bp->speed_mbps = speed > 0 ? speed : 0;
 
 	ctrl = macb_or_gem_readl(bp, NCFGR);
 
@@ -1008,6 +1047,15 @@ static void macb_mac_link_up(struct phylink_config *config,
 							gem_readl(bp, HS_MAC_CONFIG)));
 
 	spin_unlock_irqrestore(&bp->lock, flags);
+
+	if (bp->enst.speed_mbps && speed != bp->enst.speed_mbps) {
+		netdev_warn(bp->netdev,
+			    "TAPRIO dropped because link speed changed\n");
+
+		memset(&bp->enst, 0, sizeof(bp->enst));
+	}
+
+	macb_apply_enst_config(bp);
 
 	if (!(bp->caps & MACB_CAPS_MACB_IS_EMAC)) {
 		macb_set_tx_clk(bp, speed);
@@ -4754,19 +4802,23 @@ static int macb_taprio_setup_replace(struct net_device *netdev,
 				     struct tc_taprio_qopt_offload *conf)
 {
 	u64 total_on_time = 0, start_time_sec = 0, start_time = conf->base_time;
-	u32 configured_queues = 0, speed = 0, start_time_nsec;
-	struct macb_queue_enst_config *enst_queue;
-	struct ethtool_link_ksettings kset = {};
+	u32 configured_queues = 0, start_time_nsec;
 	struct macb *bp = netdev_priv(netdev);
 	struct tc_taprio_sched_entry *entry;
-	struct macb_queue *queue;
-	u32 queue_mask;
+	struct macb_enst config = {};
 	u8 queue_id;
-	size_t i, q;
-	int err;
+	u64 off;
+	size_t i;
+
+	guard(mutex)(&bp->mac_cfg_lock);
+
+	if (unlikely(!bp->speed_mbps)) {
+		netdev_err(netdev, "Invalid speed, link-down?\n");
+		return -EINVAL;
+	}
 
 	if (conf->num_entries > bp->num_queues) {
-		netdev_err(netdev, "Too many TAPRIO entries: %zu > %d queues\n",
+		netdev_err(netdev, "Too many TAPRIO entries: %zu > %u active queues\n",
 			   conf->num_entries, bp->num_queues);
 		return -EINVAL;
 	}
@@ -4777,23 +4829,6 @@ static int macb_taprio_setup_replace(struct net_device *netdev,
 		return -ERANGE;
 	}
 
-	/* Get the current link speed */
-	err = phylink_ethtool_ksettings_get(bp->phylink, &kset);
-	if (unlikely(err)) {
-		netdev_err(netdev, "Failed to get link settings: %d\n", err);
-		return err;
-	}
-
-	speed = kset.base.speed;
-	if (unlikely(speed == SPEED_UNKNOWN || !speed)) {
-		netdev_err(netdev, "Invalid speed %d, link-down?\n", speed);
-		return -EINVAL;
-	}
-
-	enst_queue = kzalloc_objs(*enst_queue, bp->num_queues);
-	if (unlikely(!enst_queue))
-		return -ENOMEM;
-
 	/* Pre-validate all entries before making any hardware changes */
 	for (i = 0; i < conf->num_entries; i++) {
 		entry = &conf->entries[i];
@@ -4801,25 +4836,23 @@ static int macb_taprio_setup_replace(struct net_device *netdev,
 		if (entry->command != TC_TAPRIO_CMD_SET_GATES) {
 			netdev_err(netdev, "Entry %zu: unsupported command %d\n",
 				   i, entry->command);
-			err = -EOPNOTSUPP;
-			goto cleanup;
+			return -EOPNOTSUPP;
 		}
 
 		/* Validate gate_mask: must be nonzero, single queue, and within range */
 		if (!is_power_of_2(entry->gate_mask)) {
 			netdev_err(netdev, "Entry %zu: gate_mask 0x%x is not a power of 2 (only one queue per entry allowed)\n",
 				   i, entry->gate_mask);
-			err = -EINVAL;
-			goto cleanup;
+			return -EINVAL;
 		}
 
 		/* gate_mask must not select queues outside the valid queues */
 		queue_id = order_base_2(entry->gate_mask);
 		if (queue_id >= bp->num_queues) {
-			netdev_err(netdev, "Entry %zu: gate_mask 0x%x exceeds queue range (max_queues=%d)\n",
-				   i, entry->gate_mask, bp->num_queues);
-			err = -EINVAL;
-			goto cleanup;
+			netdev_err(netdev, "Entry %zu: gate_mask 0x%x exceeds active queue range (num_queues=%u)\n",
+				   i, entry->gate_mask,
+				   bp->num_queues);
+			return -EINVAL;
 		}
 
 		/* Check for start time limits */
@@ -4828,34 +4861,33 @@ static int macb_taprio_setup_replace(struct net_device *netdev,
 		if (start_time_sec > GENMASK(GEM_START_TIME_SEC_SIZE - 1, 0)) {
 			netdev_err(netdev, "Entry %zu: Start time %llu s exceeds hardware limit\n",
 				   i, start_time_sec);
-			err = -ERANGE;
-			goto cleanup;
+			return -ERANGE;
 		}
 
 		/* Check for on time limit */
-		if (entry->interval > enst_max_hw_interval(speed)) {
+		if (entry->interval > enst_max_hw_interval(bp->speed_mbps)) {
 			netdev_err(netdev, "Entry %zu: interval %u ns exceeds hardware limit %llu ns\n",
-				   i, entry->interval, enst_max_hw_interval(speed));
-			err = -ERANGE;
-			goto cleanup;
+				   i, entry->interval,
+				   enst_max_hw_interval(bp->speed_mbps));
+			return -ERANGE;
 		}
 
 		/* Check for off time limit*/
-		if ((conf->cycle_time - entry->interval) > enst_max_hw_interval(speed)) {
+		off = conf->cycle_time - entry->interval;
+		if (off > enst_max_hw_interval(bp->speed_mbps)) {
 			netdev_err(netdev, "Entry %zu: off_time %llu ns exceeds hardware limit %llu ns\n",
-				   i, conf->cycle_time - entry->interval,
-				   enst_max_hw_interval(speed));
-			err = -ERANGE;
-			goto cleanup;
+				   i, off,
+				   enst_max_hw_interval(bp->speed_mbps));
+			return -ERANGE;
 		}
 
-		enst_queue[queue_id].start_time_mask =
+		config.queues[queue_id].start_time_mask =
 			(start_time_sec << GEM_START_TIME_SEC_OFFSET) |
 			start_time_nsec;
-		enst_queue[queue_id].on_time_bytes =
-			enst_ns_to_hw_units(entry->interval, speed);
-		enst_queue[queue_id].off_time_bytes =
-			enst_ns_to_hw_units(conf->cycle_time - entry->interval, speed);
+		config.queues[queue_id].on_time_bytes =
+			enst_ns_to_hw_units(entry->interval, bp->speed_mbps);
+		config.queues[queue_id].off_time_bytes =
+			enst_ns_to_hw_units(off, bp->speed_mbps);
 
 		configured_queues |= entry->gate_mask;
 		total_on_time += entry->interval;
@@ -4866,81 +4898,46 @@ static int macb_taprio_setup_replace(struct net_device *netdev,
 	if (total_on_time > conf->cycle_time) {
 		netdev_err(netdev, "Total ON %llu ns exceeds cycle time %llu ns\n",
 			   total_on_time, conf->cycle_time);
-		err = -EINVAL;
-		goto cleanup;
+		return -EINVAL;
 	}
 
 	netdev_dbg(netdev, "TAPRIO setup: %zu entries, base_time=%lld ns, cycle_time=%llu ns\n",
 		   conf->num_entries, conf->base_time, conf->cycle_time);
 
-	/* All validations passed - proceed with hardware configuration */
-	scoped_guard(spinlock_irqsave, &bp->lock) {
-		/* Disable ENST queues if running before configuring */
-		queue_mask = BIT_U32(bp->num_queues) - 1;
-		gem_writel(bp, ENST_CONTROL,
-			   queue_mask << GEM_ENST_DISABLE_QUEUE_OFFSET);
+	config.queue_mask = configured_queues;
+	config.speed_mbps = bp->speed_mbps;
+	bp->enst = config;
 
-		for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
-			/* Configure queue timing registers */
-			queue_writel(queue, ENST_START_TIME,
-				     enst_queue[q].start_time_mask);
-			queue_writel(queue, ENST_ON_TIME,
-				     enst_queue[q].on_time_bytes);
-			queue_writel(queue, ENST_OFF_TIME,
-				     enst_queue[q].off_time_bytes);
-		}
-
-		/* Enable ENST for all configured queues in one write */
-		gem_writel(bp, ENST_CONTROL, configured_queues);
-	}
+	macb_apply_enst_config(bp);
 
 	netdev_info(netdev, "TAPRIO configuration completed successfully: %zu entries, %d queues configured\n",
 		    conf->num_entries, hweight32(configured_queues));
 
-cleanup:
-	kfree(enst_queue);
-	return err;
+	return 0;
 }
 
 static void macb_taprio_destroy(struct net_device *netdev)
 {
 	struct macb *bp = netdev_priv(netdev);
-	struct macb_queue *queue;
-	u32 queue_mask;
-	unsigned int q;
+
+	guard(mutex)(&bp->mac_cfg_lock);
 
 	netdev_reset_tc(netdev);
-	queue_mask = BIT_U32(bp->num_queues) - 1;
+	memset(&bp->enst, 0, sizeof(bp->enst));
 
-	scoped_guard(spinlock_irqsave, &bp->lock) {
-		/* Single disable command for all queues */
-		gem_writel(bp, ENST_CONTROL,
-			   queue_mask << GEM_ENST_DISABLE_QUEUE_OFFSET);
+	if (bp->link_up)
+		macb_apply_enst_config(bp);
 
-		/* Clear all queue ENST registers in batch */
-		for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
-			queue_writel(queue, ENST_START_TIME, 0);
-			queue_writel(queue, ENST_ON_TIME, 0);
-			queue_writel(queue, ENST_OFF_TIME, 0);
-		}
-	}
 	netdev_info(netdev, "TAPRIO destroy: All gates disabled\n");
 }
 
 static int macb_setup_taprio(struct net_device *netdev,
 			     struct tc_taprio_qopt_offload *taprio)
 {
-	struct macb *bp = netdev_priv(netdev);
 	int err = 0;
 
 	if (unlikely(!(netdev->hw_features & NETIF_F_HW_TC)))
 		return -EOPNOTSUPP;
-
-	/* Check if Device is in runtime suspend */
-	if (unlikely(pm_runtime_suspended(&bp->pdev->dev))) {
-		netdev_err(netdev, "Device is in runtime suspend\n");
-		return -EOPNOTSUPP;
-	}
 
 	switch (taprio->cmd) {
 	case TAPRIO_CMD_REPLACE:
