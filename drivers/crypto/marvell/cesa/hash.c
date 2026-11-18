@@ -796,8 +796,11 @@ static int mv_cesa_ahash_queue_req(struct ahash_request *req)
 
 	ret = mv_cesa_queue_req(&req->base, &creq->base);
 
-	if (mv_cesa_req_needs_cleanup(&req->base, ret))
+	if (mv_cesa_req_needs_cleanup(&req->base, ret)) {
+		if (creq->last_req)
+			mv_cesa_ahash_last_cleanup(req);
 		mv_cesa_ahash_cleanup(req);
+	}
 
 	return ret;
 }
