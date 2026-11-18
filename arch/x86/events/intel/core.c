@@ -4072,7 +4072,12 @@ static int intel_pmu_handle_irq(struct pt_regs *regs)
 
 	loops = 0;
 again:
-	intel_pmu_lbr_read(cpu_lbr_stack(cpuc), cpuc->lbr_counters);
+	/*
+	 * No need to read the LBR stack when all LBR users are PEBS events,
+	 * since the PEBS handler updates it.
+	 */
+	if (cpuc->lbr_users != cpuc->lbr_pebs_users)
+		intel_pmu_lbr_read(cpu_lbr_stack(cpuc), cpuc->lbr_counters);
 
 	/*
 	 * Keep the LBR state frozen throughout PMI handling so that the PMI

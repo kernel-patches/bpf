@@ -1042,15 +1042,6 @@ void intel_pmu_lbr_read(struct perf_branch_stack *lbr_stack,
 		return;
 	}
 
-	/*
-	 * Don't read when all LBRs users are using adaptive PEBS.
-	 *
-	 * This could be smarter and actually check the event,
-	 * but this simple approach seems to work for now.
-	 */
-	if (cpuc->lbr_users == cpuc->lbr_pebs_users)
-		return;
-
 	x86_pmu.lbr_read(cpuc, lbr_stack);
 
 	intel_pmu_lbr_filter(cpuc, lbr_stack, lbr_counters);
