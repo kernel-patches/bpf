@@ -162,12 +162,19 @@ static int pf_change_mode(struct xe_device *xe, enum xe_sriov_provisioning_mode 
 		return 0;
 
 	if (mode == XE_SRIOV_PROVISIONING_MODE_AUTO) {
+		int err;
+
 		if (xe_sriov_pf_num_vfs(xe)) {
 			xe_sriov_dbg(xe, "can't restore %s: VFs must be disabled!\n",
 				     mode_to_string(mode));
 			return -EBUSY;
 		}
 		pf_unprovision_all_vfs(xe);
+
+		/* custom PF EQ/PT/sched_if_idle would block fair VF scheduling */
+		err = pf_reprovision_default(xe);
+		if (err)
+			return err;
 	}
 
 	xe_sriov_dbg(xe, "mode %s changed to %s by %ps\n",
