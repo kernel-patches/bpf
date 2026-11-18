@@ -57,7 +57,7 @@ kernel?
 
 Nesse caso, sua gama de ferramentas disponíveis é muito maior. Você
 pode encontrar as ferramentas
-no :doc:`/process/debugging/driver_development_debugging_guide`.
+no :doc:`driver_development_debugging_guide`.
 
 A temporização é um fator?
 --------------------------
