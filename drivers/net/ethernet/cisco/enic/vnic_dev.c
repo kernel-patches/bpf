@@ -721,17 +721,23 @@ int vnic_dev_hang_reset(struct vnic_dev *vdev, int arg)
 {
 	u64 a0 = (u32)arg, a1 = 0;
 	int wait = 1000;
-	int err;
 
+	vdev->hang_reset_uses_soft_reset = false;
 	if (vnic_dev_capable(vdev, CMD_HANG_RESET)) {
 		return vnic_dev_cmd(vdev, CMD_HANG_RESET,
 				&a0, &a1, wait);
-	} else {
-		err = vnic_dev_soft_reset(vdev, arg);
-		if (err)
-			return err;
-		return vnic_dev_init(vdev, 0);
 	}
+
+	/* enic_dev_wait() polls SOFT_RESET_STATUS. INIT follows reset completion
+	 * in the driver, after the ordinary close has succeeded.
+	 */
+	vdev->hang_reset_uses_soft_reset = true;
+	return vnic_dev_soft_reset(vdev, arg);
+}
+
+bool vnic_dev_hang_reset_uses_soft_reset(struct vnic_dev *vdev)
+{
+	return vdev->hang_reset_uses_soft_reset;
 }
 
 int vnic_dev_hang_reset_done(struct vnic_dev *vdev, int *done)
@@ -741,6 +747,9 @@ int vnic_dev_hang_reset_done(struct vnic_dev *vdev, int *done)
 	int err;
 
 	*done = 0;
+
+	if (vdev->hang_reset_uses_soft_reset)
+		return vnic_dev_soft_reset_done(vdev, done);
 
 	if (vnic_dev_capable(vdev, CMD_HANG_RESET_STATUS)) {
 		err = vnic_dev_cmd(vdev, CMD_HANG_RESET_STATUS,

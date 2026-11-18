@@ -95,6 +95,7 @@ struct vnic_dev {
 	dma_addr_t stats_pa;
 	struct vnic_sriov_stats *sriov_stats;
 	dma_addr_t sriov_stats_pa;
+	bool hang_reset_uses_soft_reset;
 	struct vnic_devcmd_fw_info *fw_info;
 	dma_addr_t fw_info_pa;
 	enum vnic_proxy_type proxy;
@@ -160,6 +161,7 @@ int vnic_dev_intr_coal_timer_info(struct vnic_dev *vdev);
 int vnic_dev_hang_reset(struct vnic_dev *vdev, int arg);
 int vnic_dev_soft_reset(struct vnic_dev *vdev, int arg);
 int vnic_dev_hang_reset_done(struct vnic_dev *vdev, int *done);
+bool vnic_dev_hang_reset_uses_soft_reset(struct vnic_dev *vdev);
 int vnic_dev_soft_reset_done(struct vnic_dev *vdev, int *done);
 void vnic_dev_set_intr_mode(struct vnic_dev *vdev,
 	enum vnic_dev_intr_mode intr_mode);
