@@ -22,22 +22,29 @@ static int setup_tmp(void)
 	if (sys_mount("tmpfs", "/tmp", "tmpfs", 0, NULL))
 		return -errno;
 	if (mkdir("/tmp/lower", 0755) || mkdir("/tmp/data", 0755) ||
+	    mkdir("/tmp/upper", 0755) || mkdir("/tmp/work", 0755) ||
 	    mkdir("/tmp/merged", 0755))
 		return -errno;
 	return 0;
 }
 
-/* Mount an overlayfs with the legacy "lowerdir=" option. */
-static int mount_lowerdir(const char *lowerdir)
+/* Mount an overlayfs with the legacy "lowerdir=" option and extra options. */
+static int mount_lowerdir_opts(const char *lowerdir, const char *extra)
 {
 	char opts[256];
 
-	snprintf(opts, sizeof(opts), "lowerdir=%s", lowerdir);
+	snprintf(opts, sizeof(opts), "lowerdir=%s%s%s", lowerdir,
+		 extra ? "," : "", extra ? extra : "");
 	if (sys_mount("overlay", "/tmp/merged", "overlay", MS_RDONLY, opts))
 		return -errno;
 	if (umount2("/tmp/merged", 0))
 		return -errno;
 	return 0;
+}
+
+static int mount_lowerdir(const char *lowerdir)
+{
+	return mount_lowerdir_opts(lowerdir, NULL);
 }
 
 static int set_layer(int fd_context, const char *key, const char *path,
@@ -57,6 +64,54 @@ static int set_layer(int fd_context, const char *key, const char *path,
 	if (sys_fsconfig(fd_context, FSCONFIG_SET_FD, key, NULL, fd))
 		ret = -errno;
 	close(fd);
+	return ret;
+}
+
+/* Mount an overlayfs with the legacy "upperdir=" and "workdir=" options. */
+static int mount_upperdir(const char *upper, const char *work)
+{
+	char opts[256];
+
+	snprintf(opts, sizeof(opts), "lowerdir=/tmp/lower,upperdir=%s,workdir=%s",
+		 upper, work);
+	if (sys_mount("overlay", "/tmp/merged", "overlay", 0, opts))
+		return -errno;
+	if (umount2("/tmp/merged", 0))
+		return -errno;
+	return 0;
+}
+
+/* Create an overlayfs with "upperdir" and "workdir" through fsconfig. */
+static int fsmount_upper(const char *upper, const char *work, bool by_fd)
+{
+	int fd_context, fd_mnt, ret;
+
+	fd_context = sys_fsopen("overlay", FSOPEN_CLOEXEC);
+	if (fd_context < 0)
+		return -errno;
+
+	ret = set_layer(fd_context, "lowerdir+", "/tmp/lower", by_fd);
+	if (ret)
+		goto out;
+	ret = set_layer(fd_context, "upperdir", upper, by_fd);
+	if (ret)
+		goto out;
+	ret = set_layer(fd_context, "workdir", work, by_fd);
+	if (ret)
+		goto out;
+
+	if (sys_fsconfig(fd_context, FSCONFIG_CMD_CREATE, NULL, NULL, 0)) {
+		ret = -errno;
+		goto out;
+	}
+
+	fd_mnt = sys_fsmount(fd_context, FSMOUNT_CLOEXEC, 0);
+	if (fd_mnt < 0)
+		ret = -errno;
+	else
+		close(fd_mnt);
+out:
+	close(fd_context);
 	return ret;
 }
 
@@ -123,9 +178,45 @@ TEST(lowerdir_sysfs)
 	ASSERT_EQ(setup_tmp(), 0);
 
 	EXPECT_EQ(mount_lowerdir("/sys/kernel:/tmp/lower"), 0);
-	EXPECT_EQ(mount_lowerdir("/sys/kernel::/tmp/data"), 0);
-	EXPECT_EQ(fsmount_layers("/sys/kernel", "/tmp/data", false), 0);
-	EXPECT_EQ(fsmount_layers("/sys/kernel", "/tmp/data", true), 0);
+}
+
+TEST(lowerdir_sysfs_redirect_dir_on)
+{
+	ASSERT_EQ(setup_tmp(), 0);
+
+	EXPECT_EQ(mount_lowerdir_opts("/sys/kernel:/tmp/lower",
+				      "redirect_dir=on"), -EINVAL);
+}
+
+TEST(lowerdir_sysfs_with_datadir)
+{
+	ASSERT_EQ(setup_tmp(), 0);
+
+	EXPECT_EQ(mount_lowerdir("/sys/kernel::/tmp/data"), -EINVAL);
+	EXPECT_EQ(fsmount_layers("/sys/kernel", "/tmp/data", false), -EINVAL);
+	EXPECT_EQ(fsmount_layers("/sys/kernel", "/tmp/data", true), -EINVAL);
+}
+
+/*
+ * Without the check, sysfs as upperdir falls back to a read-only mount
+ * because the work dir cannot be created.
+ */
+TEST(upperdir_sysfs)
+{
+	ASSERT_EQ(setup_tmp(), 0);
+
+	EXPECT_EQ(mount_upperdir("/sys/block", "/sys/bus"), -EINVAL);
+	EXPECT_EQ(fsmount_upper("/sys/block", "/sys/bus", false), -EINVAL);
+	EXPECT_EQ(fsmount_upper("/sys/block", "/sys/bus", true), -EINVAL);
+}
+
+TEST(upperdir_tmpfs)
+{
+	ASSERT_EQ(setup_tmp(), 0);
+
+	EXPECT_EQ(mount_upperdir("/tmp/upper", "/tmp/work"), 0);
+	EXPECT_EQ(fsmount_upper("/tmp/upper", "/tmp/work", false), 0);
+	EXPECT_EQ(fsmount_upper("/tmp/upper", "/tmp/work", true), 0);
 }
 
 TEST_HARNESS_MAIN
