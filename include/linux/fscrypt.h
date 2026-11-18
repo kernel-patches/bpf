@@ -50,6 +50,7 @@ struct fscrypt_name {
 };
 
 #define FSTR_INIT(n, l)		{ .name = n, .len = l }
+#define FSTR(n)			((struct fscrypt_str)FSTR_INIT(n, strlen(n)))
 #define FSTR_TO_QSTR(f)		QSTR_INIT((f)->name, (f)->len)
 #define fname_name(p)		((p)->disk_name.name)
 #define fname_len(p)		((p)->disk_name.len)
