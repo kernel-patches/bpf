@@ -26,12 +26,6 @@ use crate::{
     types::{
         NotThreadSafe,
         Opaque, //
-    },
-    workqueue::{
-        HasDelayedWork,
-        HasWork,
-        Work,
-        WorkItem, //
     }, //
 };
 use core::{
@@ -40,10 +34,7 @@ use core::{
     marker::PhantomData,
     mem,
     ops::Deref,
-    ptr::{
-        self,
-        NonNull, //
-    },
+    ptr::NonNull, //
 };
 
 /// A reference to a `struct drm_minor` with RAII release.
@@ -210,7 +201,11 @@ impl<T: drm::Driver> UnregisteredDevice<T> {
         open: Some(drm::File::<T>::open_callback),
         postclose: Some(drm::File::<T>::postclose_callback),
         unload: None,
-        release: Some(Device::<T>::release),
+        release: {
+            // The DRM core frees the device without running a Rust destructor.
+            const_assert!(!mem::needs_drop::<Device<T, Normal>>());
+            None
+        },
         master_set: None,
         master_drop: None,
         debugfs_init: None,
@@ -286,53 +281,24 @@ impl<T: drm::Driver> UnregisteredDevice<T> {
     /// Create a new `UnregisteredDevice` for a `drm::Driver`.
     ///
     /// This can be used to create a [`Registration`](kernel::drm::Registration).
-    pub fn new(
-        dev: &T::ParentDevice<device::Bound>,
-        data: impl PinInit<T::Data, Error>,
-    ) -> Result<Self> {
+    pub fn new(dev: &T::ParentDevice<device::Bound>) -> Result<Self> {
         // `__drm_dev_alloc` uses `kmalloc()` to allocate memory, hence ensure a `kmalloc()`
         // compatible `Layout`.
         let layout = Kmalloc::aligned_layout(Layout::new::<Device<T, Normal>>());
 
-        // Use a temporary vtable without a `release` callback until `data` is initialized, so
-        // init failure can release the DRM device without dropping uninitialized fields.
-        let alloc_vtable = bindings::drm_driver {
-            release: None,
-            ..Self::VTABLE
-        };
-
         // SAFETY:
-        // - `alloc_vtable` reference remains valid until no longer used,
-        // - `dev` is valid by its type invarants,
+        // - The vtable has static storage duration.
+        // - `dev` is valid by its type invariants.
         let raw_drm: *mut Device<T, Normal> = unsafe {
             bindings::__drm_dev_alloc(
                 dev.as_ref().as_raw(),
-                &alloc_vtable,
+                const { &Self::VTABLE },
                 layout.size(),
                 mem::offset_of!(Device<T, Normal>, dev),
             )
         }
         .cast();
         let raw_drm = NonNull::new(from_err_ptr(raw_drm)?).ok_or(ENOMEM)?;
-
-        // SAFETY: `raw_drm` is a valid pointer to `Self`, given that `__drm_dev_alloc` was
-        // successful.
-        let drm_dev = unsafe { Device::into_drm_device(raw_drm) };
-
-        // SAFETY: `raw_drm` is a valid pointer to `Self`.
-        let raw_data = unsafe { ptr::addr_of_mut!((*raw_drm.as_ptr()).data) };
-
-        // SAFETY:
-        // - `raw_data` is a valid pointer to uninitialized memory.
-        // - `raw_data` will not move until it is dropped.
-        unsafe { pin_init::raw_try_init(raw_data, data) }.inspect_err(|_| {
-            // SAFETY: `__drm_dev_alloc()` was successful, hence `drm_dev` must be valid and the
-            // refcount must be non-zero.
-            unsafe { bindings::drm_dev_put(drm_dev) };
-        })?;
-
-        // SAFETY: `drm_dev` is still private to this function.
-        unsafe { (*drm_dev).driver = const { &Self::VTABLE } };
 
         // SAFETY: `raw_drm` is valid; no concurrent access before registration.
         unsafe { (*raw_drm.as_ptr()).registration_data = UnsafeCell::new(NonNull::dangling()) };
@@ -374,7 +340,6 @@ impl<T: drm::Driver> UnregisteredDevice<T> {
 #[repr(C)]
 pub struct Device<T: drm::Driver, C: DeviceContext = Normal> {
     dev: Opaque<bindings::drm_device>,
-    data: T::Data,
     pub(super) registration_data: UnsafeCell<NonNull<T::RegistrationData<'static>>>,
     pub(super) open_count: Atomic<u64>,
     pub(super) open_count_wq: WaitQueue,
@@ -422,16 +387,6 @@ impl<T: drm::Driver, C: DeviceContext> Device<T, C> {
 
         // SAFETY: `ptr` is valid by the safety requirements of this function.
         unsafe { &*ptr.cast() }
-    }
-
-    extern "C" fn release(ptr: *mut bindings::drm_device) {
-        // SAFETY: `ptr` is a valid pointer to a `struct drm_device` and embedded in `Self`.
-        let this = unsafe { Self::from_drm_device(ptr) };
-
-        // SAFETY:
-        // - When `release` runs it is guaranteed that there is no further access to `this`.
-        // - `this` is valid for dropping.
-        unsafe { core::ptr::drop_in_place(this) };
     }
 
     /// Change the [`DeviceContext`] for a [`Device`].
@@ -550,14 +505,6 @@ impl<T: drm::Driver> Drop for RegistrationGuard<'_, T> {
     }
 }
 
-impl<T: drm::Driver> Deref for Device<T> {
-    type Target = T::Data;
-
-    fn deref(&self) -> &Self::Target {
-        &self.data
-    }
-}
-
 impl<T: drm::Driver> Deref for Device<T, Registered> {
     type Target = Device<T>;
 
@@ -629,62 +576,3 @@ unsafe impl<T: drm::Driver, C: DeviceContext> Send for Device<T, C> {}
 // SAFETY: A `drm::Device` can be shared among threads because all immutable methods are protected
 // by the synchronization in `struct drm_device`.
 unsafe impl<T: drm::Driver, C: DeviceContext> Sync for Device<T, C> {}
-
-impl<T: drm::Driver, const ID: u64> WorkItem<ID> for Device<T>
-where
-    T::Data: WorkItem<ID, Pointer = ARef<Self>>,
-    T::Data: HasWork<Self, ID>,
-{
-    type Pointer = ARef<Self>;
-
-    fn run(ptr: ARef<Self>) {
-        T::Data::run(ptr);
-    }
-}
-
-// SAFETY:
-//
-// - `raw_get_work` and `work_container_of` return valid pointers by relying on
-// `T::Data::raw_get_work` and `container_of`. In particular, `T::Data` is
-// stored inline in `drm::Device`, so the `container_of` call is valid.
-//
-// - The two methods are true inverses of each other: given `ptr: *mut
-// Device<T, C>`, `raw_get_work` will return a `*mut Work<Device<T, C>, ID>` through
-// `T::Data::raw_get_work` and given a `ptr: *mut Work<Device<T, C>, ID>`,
-// `work_container_of` will return a `*mut Device<T, C>` through `container_of`.
-unsafe impl<T, C, const ID: u64> HasWork<Self, ID> for Device<T, C>
-where
-    T: drm::Driver,
-    T::Data: HasWork<Self, ID>,
-    C: DeviceContext,
-{
-    unsafe fn raw_get_work(ptr: *mut Self) -> *mut Work<Self, ID> {
-        // SAFETY: The caller promises that `ptr` points to a valid `Device<T, C>`.
-        let data_ptr = unsafe { &raw mut (*ptr).data };
-
-        // SAFETY: `data_ptr` is a valid pointer to `T::Data`.
-        unsafe { T::Data::raw_get_work(data_ptr) }
-    }
-
-    unsafe fn work_container_of(ptr: *mut Work<Self, ID>) -> *mut Self {
-        // SAFETY: The caller promises that `ptr` points at a `Work` field in
-        // `T::Data`.
-        let data_ptr = unsafe { T::Data::work_container_of(ptr) };
-
-        // SAFETY: `T::Data` is stored as the `data` field in `Device<T, C>`.
-        unsafe { crate::container_of!(data_ptr, Self, data) }
-    }
-}
-
-// SAFETY: Our `HasWork<T, ID>` implementation returns a `work_struct` that is
-// stored in the `work` field of a `delayed_work` with the same access rules as
-// the `work_struct` owing to the bound on `T::Data: HasDelayedWork<Device<T, C>,
-// ID>`, which requires that `T::Data::raw_get_work` return a `work_struct` that
-// is inside a `delayed_work`.
-unsafe impl<T, C, const ID: u64> HasDelayedWork<Self, ID> for Device<T, C>
-where
-    T: drm::Driver,
-    T::Data: HasDelayedWork<Self, ID>,
-    C: DeviceContext,
-{
-}

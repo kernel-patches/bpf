@@ -118,9 +118,6 @@ pub trait AllocImpl: super::private::Sealed + drm::gem::IntoGEMObject {
 /// drm_driver` to be registered in the DRM subsystem.
 #[vtable]
 pub trait Driver {
-    /// Context data associated with the DRM driver
-    type Data: Sync + Send;
-
     /// Data owned by the [`Registration`] and accessible within a
     /// [`RegistrationGuard`](drm::RegistrationGuard) critical section via
     /// [`Device::registration_data_with()`](drm::Device::registration_data_with).

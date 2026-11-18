@@ -71,7 +71,7 @@ impl auxiliary::Driver for NovaDriver {
     ) -> impl PinInit<Self::Data<'bound>, Error> + 'bound {
         try_pin_init!(Self::Data {
             reg <- {
-                let drm = drm::UnregisteredDevice::<Self>::new(adev, Ok(()))?;
+                let drm = drm::UnregisteredDevice::<Self>::new(adev)?;
 
                 let reg_data = DrmRegData {
                     api: NovaCoreApi::of(adev)?,
@@ -88,7 +88,6 @@ impl auxiliary::Driver for NovaDriver {
 
 #[vtable]
 impl drm::Driver for NovaDriver {
-    type Data = ();
     type RegistrationData<'a> = DrmRegData<'a>;
     type File<'a> = File;
     type Object = gem::Object<NovaObject>;

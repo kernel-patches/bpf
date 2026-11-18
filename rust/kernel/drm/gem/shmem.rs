@@ -589,8 +589,6 @@ mod tests {
 
     // The bare minimum needed to create a fake drm driver for kunit
 
-    #[pin_data]
-    struct KunitData {}
     struct KunitDriver;
     struct KunitFile;
     #[pin_data]
@@ -630,7 +628,6 @@ mod tests {
 
     #[vtable]
     impl drm::Driver for KunitDriver {
-        type Data = KunitData;
         type RegistrationData<'a> = ();
         type File<'a> = KunitFile;
         type Object = Object<KunitObject>;
@@ -642,10 +639,9 @@ mod tests {
 
     fn create_drm_dev() -> Result<(faux::Registration, UnregisteredDevice<KunitDriver>)> {
         // Create a faux DRM device so we can test gem object creation.
-        let data = try_pin_init!(KunitData {});
         let reg = faux::Registration::new(c"Kunit", None)?;
         let fdev = reg.as_ref();
-        let drm = UnregisteredDevice::new(fdev, data)?;
+        let drm = UnregisteredDevice::new(fdev)?;
 
         Ok((reg, drm))
     }
