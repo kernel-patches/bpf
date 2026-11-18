@@ -399,7 +399,7 @@ out_free_cache:
  */
 bool __mnt_is_readonly(const struct vfsmount *mnt)
 {
-	return (mnt->mnt_flags & MNT_READONLY) || sb_rdonly(mnt->mnt_sb);
+	return (mnt->mnt_flags & MNT_READONLY) || sb_rdonly_any(mnt->mnt_sb);
 }
 EXPORT_SYMBOL_GPL(__mnt_is_readonly);
 
@@ -1999,9 +1999,11 @@ static void shrink_submounts(struct mount *mnt);
 
 static int do_umount_root(struct super_block *sb)
 {
-	int ret = 0;
+	int ret;
 
-	down_write(&sb->s_umount);
+	ret = down_write_killable(&sb->s_umount);
+	if (ret)
+		return ret;
 	if (!sb_rdonly(sb)) {
 		struct fs_context *fc;
 
@@ -3529,8 +3531,14 @@ static bool can_change_locked_flags(struct mount *mnt, unsigned int mnt_flags)
 static int change_mount_ro_state(struct mount *mnt, unsigned int mnt_flags)
 {
 	bool readonly_request = (mnt_flags & MNT_READONLY);
+	/*
+	 * Not __mnt_is_readonly(), the emergency state doesn't make the mount
+	 * read-only and MNT_READONLY must not be set without holding writers.
+	 */
+	bool readonly = (mnt->mnt.mnt_flags & MNT_READONLY) ||
+			sb_rdonly(mnt->mnt.mnt_sb);
 
-	if (readonly_request == __mnt_is_readonly(&mnt->mnt))
+	if (readonly_request == readonly)
 		return 0;
 
 	if (readonly_request)
@@ -3600,7 +3608,9 @@ static int do_reconfigure_mnt(const struct path *path, unsigned int mnt_flags)
 	 * We're only checking whether the superblock is read-only not
 	 * changing it, so only take down_read(&sb->s_umount).
 	 */
-	down_read(&sb->s_umount);
+	ret = down_read_killable(&sb->s_umount);
+	if (ret)
+		return ret;
 	lock_mount_hash();
 	ret = change_mount_ro_state(mnt, mnt_flags);
 	if (ret == 0)
@@ -3646,8 +3656,9 @@ static int do_remount(const struct path *path, int sb_flags,
 	fc->oldapi = true;
 
 	err = parse_monolithic_mount_data(fc, data);
+	if (!err)
+		err = down_write_killable(&sb->s_umount);
 	if (!err) {
-		down_write(&sb->s_umount);
 		err = -EPERM;
 		if (ns_capable(sb->s_user_ns, CAP_SYS_ADMIN)) {
 			err = reconfigure_super(fc);
@@ -5605,6 +5616,9 @@ static void statmount_sb_basic(struct kstatmount *s)
 	s->sm.sb_dev_minor = MINOR(sb->s_dev);
 	s->sm.sb_magic = sb->s_magic;
 	s->sm.sb_flags = sb->s_flags & (SB_RDONLY|SB_SYNCHRONOUS|SB_DIRSYNC|SB_LAZYTIME);
+	/* An error made the filesystem read-only, SB_RDONLY stays clear. */
+	if (sb_emergency_ro(sb))
+		s->sm.sb_flags |= SB_RDONLY;
 }
 
 static void statmount_mnt_parent(struct kstatmount *s, const struct mount *m)

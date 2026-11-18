@@ -587,10 +587,9 @@ struct inode *ntfs_create_named_stream(const struct mnt_idmap *idmap,
 
 	base_ni = NTFS_I(base_vi);
 	mutex_lock(&base_ni->mrec_lock);
-	if (NVolShutdown(base_ni->vol)) {
-		err = -EIO;
+	err = ntfs_emergency_state(base_ni->vol);
+	if (err)
 		goto out_unlock;
-	}
 	if (NInoBeingDeleted(base_ni) || !base_vi->i_nlink) {
 		err = -ENOENT;
 		goto out_unlock;
@@ -613,10 +612,9 @@ struct inode *ntfs_create_named_stream(const struct mnt_idmap *idmap,
 		else
 			err = -EEXIST;
 	} else if (err == -ENOENT) {
-		if (NVolShutdown(base_ni->vol)) {
-			err = -EIO;
+		err = ntfs_emergency_state(base_ni->vol);
+		if (err)
 			goto out_put_ctx;
-		}
 		err = ntfs_attr_add(base_ni, AT_DATA, stream_name, stream_len,
 				NULL, 0);
 		if (!err) {
@@ -926,8 +924,9 @@ static int ntfs_stream_setattr(const struct mnt_idmap *idmap,
 	bool claimed = false;
 	int err;
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	err = ntfs_emergency_state(ni->vol);
+	if (err)
+		return err;
 
 	if (!(attr->ia_valid & ATTR_FILE)) {
 		err = ntfs_stream_claim(inode);
@@ -954,16 +953,16 @@ static int ntfs_stream_update_time_common(struct inode *inode,
 	struct inode *base_vi = VFS_I(base_ni);
 	int err;
 
-	if (NVolShutdown(base_ni->vol))
-		return -EIO;
+	err = ntfs_emergency_state(base_ni->vol);
+	if (err)
+		return err;
 	if (flags & IOCB_NOWAIT)
 		return -EAGAIN;
 
 	mutex_lock(&base_ni->mrec_lock);
-	if (NVolShutdown(base_ni->vol)) {
-		err = -EIO;
+	err = ntfs_emergency_state(base_ni->vol);
+	if (err)
 		goto out_mrec;
-	}
 	err = ntfs_stream_inode_validate(inode);
 	if (!err) {
 		err = generic_update_time(base_vi, type, flags);
@@ -1028,10 +1027,9 @@ static int ntfs_stream_finish_remove(struct inode *attr_vi)
 	truncate_inode_pages(attr_vi->i_mapping, 0);
 
 	mutex_lock(&ni->mrec_lock);
-	if (NVolShutdown(ni->vol)) {
-		err = -EIO;
+	err = ntfs_emergency_state(ni->vol);
+	if (err)
 		goto out_unlock;
-	}
 	if (NInoBeingDeleted(ni) || !VFS_I(ni)->i_nlink) {
 		remove_inode_hash(attr_vi);
 		err = 0;
@@ -1092,8 +1090,9 @@ int ntfs_remove_named_stream(struct ntfs_inode *ni, __le16 *uname,
 
 	if (!ni || !uname || uname_len == 0)
 		return -EINVAL;
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	err = ntfs_emergency_state(ni->vol);
+	if (err)
+		return err;
 	if ((ni->flags & FILE_ATTR_READONLY) ||
 	    IS_APPEND(VFS_I(ni)) || IS_IMMUTABLE(VFS_I(ni)))
 		return -EPERM;
@@ -1245,10 +1244,12 @@ static int ntfs_stream_ioctl_get_inode(struct inode *base_vi, __le16 *sname,
 	*stream_vi = NULL;
 
 	mutex_lock(&base_ni->mrec_lock);
-	if (NVolShutdown(base_ni->vol)) {
-		err = -EIO;
+	if (create)
+		err = ntfs_emergency_state(base_ni->vol);
+	else
+		err = NVolShutdown(base_ni->vol) ? -EIO : 0;
+	if (err)
 		goto out_unlock;
-	}
 	if (NInoBeingDeleted(base_ni) || !base_vi->i_nlink) {
 		err = -ENOENT;
 		goto out_unlock;

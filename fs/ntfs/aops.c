@@ -263,8 +263,9 @@ static int ntfs_writepages(struct address_space *mapping,
 	bool need_iput = false;
 	int ret;
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	ret = ntfs_emergency_state(ni->vol);
+	if (ret)
+		return ret;
 
 	if (!NInoNonResident(ni))
 		return 0;

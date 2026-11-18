@@ -47,7 +47,7 @@ struct inode *jfs_iget(struct super_block *sb, unsigned long ino)
 		inode->i_fop = &jfs_dir_operations;
 	} else if (S_ISLNK(inode->i_mode)) {
 		if (inode->i_size >= IDATASIZE) {
-			inode->i_op = &page_symlink_inode_operations;
+			inode->i_op = &jfs_symlink_inode_operations;
 			inode_nohighmem(inode);
 			inode->i_mapping->a_ops = &jfs_aops;
 		} else {
@@ -172,6 +172,15 @@ void jfs_evict_inode(struct inode *inode)
 	clear_inode(inode);
 	dquot_drop(inode);
 
+	/*
+	 * Writeback commits the anonymous transactions of allocations. If the
+	 * filesystem went read-only without a sync, e.g. after an error,
+	 * nothing did.
+	 */
+	if (ji->atlhead) {
+		WARN_ON_ONCE(!sb_rdonly_any(inode->i_sb));
+		txAbortAnon(inode);
+	}
 	BUG_ON(!list_empty(&ji->anon_inode_list));
 
 	spin_lock_irq(&ji->ag_lock);
@@ -186,6 +195,10 @@ void jfs_evict_inode(struct inode *inode)
 void jfs_dirty_inode(struct inode *inode, int flags)
 {
 	static int noisy = 5;
+
+	/* After an error only allocations under way still get committed. */
+	if (sb_emergency_ro(inode->i_sb) && !READ_ONCE(JFS_IP(inode)->atlhead))
+		return;
 
 	if (isReadOnly(inode)) {
 		if (!special_file(inode->i_mode) && noisy) {

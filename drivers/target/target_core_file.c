@@ -15,6 +15,7 @@
 #include <linux/timer.h>
 #include <linux/blkdev.h>
 #include <linux/slab.h>
+#include <linux/refcount.h>
 #include <linux/spinlock.h>
 #include <linux/module.h>
 #include <linux/vmalloc.h>
@@ -251,23 +252,33 @@ static void fd_destroy_device(struct se_device *dev)
 
 struct target_core_file_cmd {
 	unsigned long	len;
+	long		ret;
 	struct se_cmd	*cmd;
+	refcount_t	ref;
 	struct kiocb	iocb;
 	struct bio_vec	bvecs[];
 };
+
+static void cmd_rw_aio_put(struct target_core_file_cmd *cmd)
+{
+	if (!refcount_dec_and_test(&cmd->ref))
+		return;
+
+	if (cmd->ret != cmd->len)
+		target_complete_cmd(cmd->cmd, SAM_STAT_CHECK_CONDITION);
+	else
+		target_complete_cmd(cmd->cmd, SAM_STAT_GOOD);
+	kfree(cmd);
+}
 
 static void cmd_rw_aio_complete(struct kiocb *iocb, long ret)
 {
 	struct target_core_file_cmd *cmd;
 
 	cmd = container_of(iocb, struct target_core_file_cmd, iocb);
-
-	if (ret != cmd->len)
-		target_complete_cmd(cmd->cmd, SAM_STAT_CHECK_CONDITION);
-	else
-		target_complete_cmd(cmd->cmd, SAM_STAT_GOOD);
-
-	kfree(cmd);
+	kiocb_end_write_iter(iocb);
+	cmd->ret = ret;
+	cmd_rw_aio_put(cmd);
 }
 
 static sense_reason_t
@@ -296,6 +307,8 @@ fd_execute_rw_aio(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 
 	iov_iter_bvec(&iter, is_write, aio_cmd->bvecs, sgl_nents, len);
 
+	/* The filesystem may still use the kiocb after it queued the I/O. */
+	refcount_set(&aio_cmd->ref, 2);
 	aio_cmd->cmd = cmd;
 	aio_cmd->len = len;
 	aio_cmd->iocb.ki_pos = cmd->t_task_lba * dev->dev_attrib.block_size;
@@ -307,12 +320,13 @@ fd_execute_rw_aio(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 		aio_cmd->iocb.ki_flags |= IOCB_DSYNC;
 
 	if (is_write)
-		ret = file->f_op->write_iter(&aio_cmd->iocb, &iter);
+		ret = kiocb_write_iter(&aio_cmd->iocb, &iter);
 	else
 		ret = file->f_op->read_iter(&aio_cmd->iocb, &iter);
 
 	if (ret != -EIOCBQUEUED)
 		cmd_rw_aio_complete(&aio_cmd->iocb, ret);
+	cmd_rw_aio_put(aio_cmd);
 
 	return 0;
 }
@@ -578,7 +592,8 @@ fd_execute_unmap(struct se_cmd *cmd, sector_t lba, sector_t nolb)
 		if (!file->f_op->fallocate)
 			return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 
-		ret = file->f_op->fallocate(file, mode, pos, len);
+		scoped_guard(file_write, file)
+			ret = file->f_op->fallocate(file, mode, pos, len);
 		if (ret < 0) {
 			pr_warn("FILEIO: fallocate() failed: %d\n", ret);
 			return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
