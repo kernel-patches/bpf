@@ -3522,6 +3522,7 @@ int ntfs_attr_record_move_to(struct ntfs_attr_search_ctx *ctx, struct ntfs_inode
 	struct ntfs_attr_search_ctx *nctx;
 	struct attr_record *a;
 	int err;
+	int remove_err = 0, cleanup_err = 0;
 	u32 ic;
 	struct mft_record *ni_mrec;
 	struct super_block *sb;
@@ -3576,7 +3577,7 @@ int ntfs_attr_record_move_to(struct ntfs_attr_search_ctx *ctx, struct ntfs_inode
 	/* Make space and move attribute. */
 	ni_mrec = map_mft_record(ni);
 	if (IS_ERR(ni_mrec)) {
-		err = -EIO;
+		err = PTR_ERR(ni_mrec);
 		goto put_err_out;
 	}
 
@@ -3591,7 +3592,16 @@ int ntfs_attr_record_move_to(struct ntfs_attr_search_ctx *ctx, struct ntfs_inode
 	nctx->attr->instance = nctx->mrec->next_attr_instance;
 	nctx->mrec->next_attr_instance =
 		cpu_to_le16((le16_to_cpu(nctx->mrec->next_attr_instance) + 1) & 0xffff);
-	ntfs_attr_record_resize(ctx->mrec, a, 0);
+	err = ntfs_attr_record_resize(ctx->mrec, a, 0);
+	if (err) {
+		err = -EFSCORRUPTED;
+		remove_err = err;
+		if (ntfs_attr_record_resize(ni_mrec, nctx->attr, 0))
+			cleanup_err = -EFSCORRUPTED;
+		mark_mft_record_dirty(ni);
+		unmap_mft_record(ni);
+		goto put_err_out;
+	}
 	mark_mft_record_dirty(ctx->ntfs_ino);
 	mark_mft_record_dirty(ni);
 
@@ -3602,6 +3612,14 @@ int ntfs_attr_record_move_to(struct ntfs_attr_search_ctx *ctx, struct ntfs_inode
 	unmap_mft_record(ni);
 put_err_out:
 	ntfs_attr_put_search_ctx(nctx);
+	if (remove_err) {
+		NVolSetErrors(ni->vol);
+		ntfs_error(sb, "Failed to remove source attribute record");
+	}
+	if (cleanup_err) {
+		NVolSetErrors(ni->vol);
+		ntfs_error(sb, "Failed to remove destination attribute copy");
+	}
 	return err;
 }
 
