@@ -141,6 +141,12 @@ struct aer_info {
 					PCI_ERR_ROOT_MULTI_COR_RCV |	\
 					PCI_ERR_ROOT_MULTI_UNCOR_RCV)
 
+static const u8 severity2devsta[] = {
+	[AER_NONFATAL]    = PCI_EXP_DEVSTA_NFED,
+	[AER_FATAL]       = PCI_EXP_DEVSTA_FED,
+	[AER_CORRECTABLE] = PCI_EXP_DEVSTA_CED,
+};
+
 static bool pcie_aer_disable;
 static pci_ers_result_t aer_root_reset(struct pci_dev *dev);
 
@@ -1314,6 +1320,17 @@ bool is_aer_internal_error(struct aer_err_info *info)
 }
 #endif
 
+static void pcie_clear_device_status_sev(struct pci_dev *dev, u8 severity,
+					 u32 uncor_status)
+{
+	u16 devsta = severity2devsta[severity];
+
+	if (uncor_status & PCI_ERR_UNC_UNSUP)
+		devsta |= PCI_EXP_DEVSTA_URD;
+
+	pcie_capability_write_word(dev, PCI_EXP_DEVSTA, devsta);
+}
+
 /**
  * pci_aer_handle_error - handle logging error into an event log
  * @dev: pointer to pci_dev data structure of error source device
@@ -1344,7 +1361,8 @@ static void pci_aer_handle_error(struct pci_dev *dev, struct aer_err_info *info)
 			if (pdrv && pdrv->err_handler &&
 			    pdrv->err_handler->cor_error_detected)
 				pdrv->err_handler->cor_error_detected(dev);
-			pcie_clear_device_status(dev);
+			pcie_clear_device_status_sev(dev, AER_CORRECTABLE,
+						     info->anfe_status);
 		}
 	} else if (info->severity == AER_NONFATAL)
 		pcie_do_recovery(dev, pci_channel_io_normal, aer_root_reset);
