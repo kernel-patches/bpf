@@ -5341,6 +5341,7 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 	const struct btf_var_secinfo *vsi;
 	u64 last_vsi_end_off = 0, sum = 0;
 	u32 i, meta_needed;
+	bool is_ro;
 
 	meta_needed = btf_type_vlen(t) * sizeof(*vsi);
 	if (meta_left < meta_needed) {
@@ -5366,6 +5367,7 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 		return -EINVAL;
 	}
 
+	is_ro = strncmp(btf_str_by_offset(env->btf, t->name_off), ".ro", 3) == 0;
 	btf_verifier_log_type(env, t, NULL);
 
 	for_each_vsi(i, t, vsi) {
@@ -5376,7 +5378,12 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 			return -EINVAL;
 		}
 
-		if (vsi->offset < last_vsi_end_off || vsi->offset >= t->size) {
+		/*
+		 * Vars may not overlap, except in read-only sections where the
+		 * compiler might alias identical constants.
+		 */
+		if ((!is_ro && vsi->offset < last_vsi_end_off)
+		    || vsi->offset >= t->size) {
 			btf_verifier_log_vsi(env, t, vsi,
 					     "Invalid offset");
 			return -EINVAL;
@@ -5399,7 +5406,7 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 		sum += vsi->size;
 	}
 
-	if (t->size < sum) {
+	if (!is_ro && t->size < sum) {
 		btf_verifier_log_type(env, t, "Invalid btf_info size");
 		return -EINVAL;
 	}
