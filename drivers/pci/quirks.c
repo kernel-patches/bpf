@@ -5215,12 +5215,16 @@ static int pci_quirk_loongson_acs(struct pci_dev *dev, u16 acs_flags)
  * SFxxx 1G NICs(em).
  * RP1000/RP2000 10G NICs(sp).
  * FF5xxx 40G/25G/10G NICs(aml).
+ * FF6xxx 100G/25G/10G NICs(am).
  */
 static int  pci_quirk_wangxun_nic_acs(struct pci_dev *dev, u16 acs_flags)
 {
 	switch (dev->device) {
 	case 0x0100 ... 0x010F: /* EM */
 	case 0x1001: case 0x2001: /* SP */
+	case 0x4010: case 0x4012: case 0x4014: /* AM 10G */
+	case 0x4025: case 0x4125: case 0x4325: case 0x4425: /* AM 25G */
+	case 0x4101: case 0x4103: case 0x4105: case 0x4107: /* AM 100G */
 	case 0x5010: case 0x5025: case 0x5040: /* AML */
 	case 0x5110: case 0x5125: case 0x5140: /* AML */
 		return pci_acs_ctrl_enabled(acs_flags,
