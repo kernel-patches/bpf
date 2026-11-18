@@ -2183,6 +2183,13 @@ ipv4_compat_mode()
 	stop_ip_monitor $ipmout 3
 	log_test $? 0 "IPv4 compat mode on - nexthop change"
 
+	run_cmd "$IP route add 192.0.2.1/32 nhid 122"
+	log_test $? 0 "IPv4 compat mode on - add route for flush"
+	run_cmd "$IP route flush to exact 192.0.2.1/32"
+	log_test $? 0 "IPv4 compat mode on - route flush"
+	check_route "192.0.2.1" ""
+	log_test $? 0 "IPv4 compat mode on - route removed by flush"
+
 	sysctl_nexthop_compat_mode_set 0 "IPv4"
 
 	# cleanup
