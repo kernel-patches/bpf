@@ -1762,6 +1762,7 @@ static struct cpufreq_driver cppc_cpufreq_driver = {
 	.offline = cppc_cpufreq_cpu_offline,
 	.suspend = cppc_cpufreq_cpu_suspend,
 	.resume = cppc_cpufreq_cpu_resume,
+	.boost_enabled = true,
 	.set_boost = cppc_cpufreq_set_boost,
 	.attr = cppc_cpufreq_attr,
 	.name = "cppc_cpufreq",
