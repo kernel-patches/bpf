@@ -2760,12 +2760,12 @@ static int vmw_cmd_dx_check_subresource(struct vmw_private *dev_priv,
 		};
 	} *cmd;
 
-	BUILD_BUG_ON(offsetof(typeof(*cmd), r_body.sid) !=
-		     offsetof(typeof(*cmd), sid));
-	BUILD_BUG_ON(offsetof(typeof(*cmd), i_body.sid) !=
-		     offsetof(typeof(*cmd), sid));
-	BUILD_BUG_ON(offsetof(typeof(*cmd), u_body.sid) !=
-		     offsetof(typeof(*cmd), sid));
+	BUILD_BUG_ON(struct_offset(cmd, r_body.sid) !=
+		     struct_offset(cmd, sid));
+	BUILD_BUG_ON(struct_offset(cmd, i_body.sid) !=
+		     struct_offset(cmd, sid));
+	BUILD_BUG_ON(struct_offset(cmd, u_body.sid) !=
+		     struct_offset(cmd, sid));
 
 	cmd = container_of(header, typeof(*cmd), header);
 	if (!vmw_cmd_body_fits(header, sizeof(cmd->sid)))
