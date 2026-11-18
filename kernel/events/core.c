@@ -12968,6 +12968,7 @@ static void perf_pmu_free(struct pmu *pmu)
 			struct perf_cpu_pmu_context *cpc;
 
 			cpc = *per_cpu_ptr(pmu->cpu_pmu_context, cpu);
+			hrtimer_cancel(&cpc->hrtimer);
 			if (!cpc)
 				continue;
 			if (cpc->epc.embedded) {
