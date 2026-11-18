@@ -47,6 +47,10 @@ int nvmet_file_ns_enable(struct nvmet_ns *ns)
 		return ret;
 	}
 
+	ret = file_check_backing(ns->file, FMODE_READ | FMODE_WRITE, S_IFBLK);
+	if (ret)
+		goto err;
+
 	nvmet_file_ns_revalidate(ns);
 
 	/*

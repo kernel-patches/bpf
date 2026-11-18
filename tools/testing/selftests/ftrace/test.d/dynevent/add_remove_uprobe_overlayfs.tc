@@ -1,0 +1,96 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# description: Generic dynamic event - add/remove uprobe events on overlayfs
+# requires: uprobe_events error_log setfattr:program readelf:program
+
+grep -qw overlay /proc/filesystems || modprobe overlay 2> /dev/null || :
+if ! grep -qw overlay /proc/filesystems; then
+  echo "No overlayfs support. skipped."
+  exit_unsupported
+fi
+
+echo 0 > events/enable
+echo > dynamic_events
+
+OVL=$TMPDIR/ovl
+mkdir $OVL
+mount -t tmpfs tmpfs $OVL
+
+cleanup() {
+  echo 0 > events/enable
+  echo > uprobe_events
+  umount $OVL/merged 2> /dev/null || :
+  umount $OVL 2> /dev/null || :
+}
+trap cleanup EXIT
+
+mkdir $OVL/lower $OVL/data $OVL/merged
+
+# A metacopy file whose data lives in the data-only layer.
+REALBIN=`readlink -f /bin/sh`
+cp $REALBIN $OVL/data/sh
+truncate -s `stat -c %s $REALBIN` $OVL/lower/sh
+chmod 755 $OVL/lower/sh
+if ! setfattr -n trusted.overlay.metacopy $OVL/lower/sh; then
+  echo "No tmpfs xattr support. skipped."
+  exit_unsupported
+fi
+setfattr -n trusted.overlay.redirect -v /sh $OVL/lower/sh
+
+# A metacopy file whose data doesn't exist.
+touch $OVL/lower/broken
+setfattr -n trusted.overlay.metacopy $OVL/lower/broken
+setfattr -n trusted.overlay.redirect -v /missing $OVL/lower/broken
+
+mount -t overlay overlay -o lowerdir=$OVL/lower::$OVL/data $OVL/merged
+
+TAINT_WARN=512
+TAINTED=`cat /proc/sys/kernel/tainted`
+
+# The data of the broken file can't be resolved so the probe must fail
+# right away and not only when it is enabled.
+echo > error_log
+if echo "p:broken $OVL/merged/broken:0x0" >> uprobe_events; then
+  echo "uprobe on a file without data was created"
+  exit_fail
+fi
+grep -q "trace_uprobe: error: Failed to resolve the data of the given file" error_log
+! grep -q broken uprobe_events
+test ! -d events/uprobes/broken
+
+# Get the entry point virtual address from ELF header and convert it to
+# a file offset. See add_remove_uprobe.tc.
+ENTRY=`readelf -hW ${REALBIN} | grep "Entry point" | awk '{print $NF}'`
+ENTRY_DEC=$(printf '%d' "$ENTRY")
+OFFSET=$ENTRY
+while IFS= read -r line; do
+    set -- $line
+    [ "$1" = "LOAD" ] || continue
+    VA_DEC=$(printf '%d' "$3")
+    OFF_DEC=$(printf '%d' "$2")
+    FSZ_DEC=$(printf '%d' "$5")
+    if [ "$ENTRY_DEC" -ge "$VA_DEC" ] && [ "$ENTRY_DEC" -lt "$((VA_DEC + FSZ_DEC))" ]; then
+        OFFSET=$(printf '0x%x' "$((ENTRY_DEC - VA_DEC + OFF_DEC))")
+        break
+    fi
+done << EOF
+$(readelf -lW ${REALBIN} | grep LOAD)
+EOF
+
+# The data of the metacopy file is looked up when the probe is created.
+echo "p:myevent $OVL/merged/sh:${OFFSET}" >> uprobe_events
+grep -q myevent uprobe_events
+test -d events/uprobes/myevent
+
+echo 1 > events/uprobes/myevent/enable
+echo 'ls' | $OVL/merged/sh > /dev/null
+echo 0 > events/uprobes/myevent/enable
+grep -q myevent trace
+
+echo "-:myevent" >> uprobe_events
+! grep -q myevent uprobe_events
+
+# Nothing above may have warned.
+test $((`cat /proc/sys/kernel/tainted` & TAINT_WARN)) -eq $((TAINTED & TAINT_WARN))
+
+clear_trace

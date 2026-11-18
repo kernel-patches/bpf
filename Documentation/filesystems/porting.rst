@@ -1435,3 +1435,13 @@ directory has been created.  Filesystems that cannot do this, those
 that implement ->atomic_open() and those whose ->mkdir() drops the
 parent's i_rwsem, must set SB_I_NO_ATOMIC_MKDIR in sb->s_iflags, which
 makes that flag combination fail with -EOPNOTSUPP before any lookup.
+
+---
+
+**mandatory**
+
+d_real_inode() is gone. d_real() can fail for D_REAL_DATA now and returns an
+ERR_PTR() then, e.g., when overlayfs can't look up the data of a metacopy file
+in a data-only layer. Use d_real_data_inode(), which returns the inode hosting
+the data or an ERR_PTR(), and handle the error. Use d_real_metadata_inode() for
+the inode hosting the metadata and handle its errors as well.

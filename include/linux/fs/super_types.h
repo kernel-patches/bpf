@@ -360,5 +360,6 @@ struct super_block {
 #define SB_I_ALLOW_HSM	0x00004000	/* Allow HSM events on this superblock */
 #define SB_I_NO_DATA_INTEGRITY	0x00008000 /* fs cannot guarantee data persistence on sync */
 #define SB_I_NO_ATOMIC_MKDIR	0x00010000 /* no O_CREAT|O_DIRECTORY on this fs */
+#define SB_I_PSEUDO	0x00020000	/* regular files are kernel interfaces, not storage */
 
 #endif /* _LINUX_FS_SUPER_TYPES_H */

@@ -1374,6 +1374,13 @@ defined:
 	for returning the real underlying dentry that refers to the inode
 	hosting the file's data or metadata respectively.
 
+	For D_REAL_DATA the filesystem may have to look up the data first,
+	e.g., for a file that was never opened.  If that fails an ERR_PTR()
+	is returned and callers must handle it.  Callers must handle an
+	ERR_PTR() for D_REAL_METADATA as well.  Most callers should use
+	d_real_data_inode() or d_real_metadata_inode() instead of calling
+	d_real() directly.
+
 	For non-regular files, the 'dentry' argument is returned.
 
 ``d_unalias_trylock``
