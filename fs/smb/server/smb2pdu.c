@@ -8510,11 +8510,13 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 
 	scratch_len = smb_acl_sec_desc_scratch_len(&fattr, ppntsd,
 			ppntsd_size, addition_info);
-	if (!scratch_len || scratch_len == SIZE_MAX) {
+	if (!scratch_len || scratch_len > SIZE_MAX - 7) {
 		rc = -EFBIG;
 		goto release_acl;
 	}
 
+	/* A compound response pads the descriptor to 8 bytes in this buffer */
+	scratch_len = ALIGN(scratch_len, 8);
 	pntsd = kvzalloc(scratch_len, KSMBD_DEFAULT_GFP);
 	if (!pntsd) {
 		rc = -ENOMEM;
