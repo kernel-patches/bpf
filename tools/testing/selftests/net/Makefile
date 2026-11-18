@@ -28,6 +28,7 @@ TEST_PROGS := \
 	cork_fragsize.py \
 	double_udp_encap.sh \
 	drop_monitor_tests.sh \
+	dualpi2_head.sh \
 	ecmp_rehash.sh \
 	exception_cache.sh \
 	fcnal-ipv4.sh \
@@ -150,6 +151,7 @@ TEST_PROGS_EXTENDED := \
 TEST_GEN_FILES := \
 	bind_bhash \
 	cmsg_sender \
+	dualpi2_head \
 	fin_ack_lat \
 	hwtstamp_config \
 	io_uring_zerocopy_tx \
