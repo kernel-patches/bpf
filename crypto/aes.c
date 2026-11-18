@@ -628,6 +628,7 @@ static struct skcipher_alg skcipher_algs[] = {
 		.base.cra_name = "cbc(aes)",
 		.base.cra_driver_name = "cbc-aes-lib",
 		.base.cra_priority = (IS_ENABLED(CONFIG_RISCV) ||
+				      IS_ENABLED(CONFIG_SPARC) ||
 				      IS_ENABLED(CONFIG_X86)) ? 500 : 110,
 		.base.cra_blocksize = AES_BLOCK_SIZE,
 		.base.cra_ctxsize = sizeof(struct aes_key),
@@ -650,12 +651,12 @@ static struct skcipher_alg skcipher_algs[] = {
 	!(IS_ENABLED(CONFIG_ARM) || \
 	  IS_ENABLED(CONFIG_ARM64) || \
 	  IS_ENABLED(CONFIG_PPC) || \
-	  IS_ENABLED(CONFIG_S390) || \
-	  IS_ENABLED(CONFIG_SPARC))
+	  IS_ENABLED(CONFIG_S390))
 	{
 		.base.cra_name = "cts(cbc(aes))",
 		.base.cra_driver_name = "cts-cbc-aes-lib",
 		.base.cra_priority = (IS_ENABLED(CONFIG_RISCV) ||
+				      IS_ENABLED(CONFIG_SPARC) ||
 				      IS_ENABLED(CONFIG_X86)) ? 500 : 110,
 		.base.cra_blocksize = AES_BLOCK_SIZE,
 		.base.cra_ctxsize = sizeof(struct aes_key),

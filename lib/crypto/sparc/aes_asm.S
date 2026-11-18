@@ -1178,6 +1178,7 @@ ENTRY(aes_sparc64_ecb_decrypt_256)
 ENDPROC(aes_sparc64_ecb_decrypt_256)
 #endif /* CONFIG_CRYPTO_LIB_AES_ECB */
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CBC)
 	.align		32
 ENTRY(aes_sparc64_cbc_encrypt_128)
 	/* %o0=key, %o1=input, %o2=output, %o3=len, %o4=IV */
@@ -1357,6 +1358,7 @@ ENTRY(aes_sparc64_cbc_decrypt_256)
 	retl
 	 nop
 ENDPROC(aes_sparc64_cbc_decrypt_256)
+#endif /* CONFIG_CRYPTO_LIB_AES_CBC */
 
 #if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CTR)
 	.align		32
