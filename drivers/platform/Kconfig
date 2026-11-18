@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 config PLATFORM_PROFILE
-	tristate "Platform profile support"
+	tristate "Platform profile support" if COMPILE_TEST
 	help
 	  Provide a common sysfs interface for selecting platform power,
 	  performance and cooling profiles. Platform-specific provider drivers
