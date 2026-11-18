@@ -1571,6 +1571,7 @@ BPF_CALL_4(bpf_read_branch_records, struct bpf_perf_event_data_kern *, ctx,
 	static const u32 br_entry_size = sizeof(struct perf_branch_entry);
 	struct perf_branch_stack *br_stack = ctx->data->br_stack;
 	u32 to_copy;
+	u64 nr;
 
 	if (unlikely(flags & ~BPF_F_GET_BRANCH_RECORDS_SIZE))
 		return -EINVAL;
@@ -1581,13 +1582,14 @@ BPF_CALL_4(bpf_read_branch_records, struct bpf_perf_event_data_kern *, ctx,
 	if (unlikely(!br_stack))
 		return -ENOENT;
 
+	nr = perf_event_brstack_depth(ctx->event, br_stack);
 	if (flags & BPF_F_GET_BRANCH_RECORDS_SIZE)
-		return br_stack->nr * br_entry_size;
+		return nr * br_entry_size;
 
 	if (!buf || (size % br_entry_size != 0))
 		return -EINVAL;
 
-	to_copy = min_t(u32, br_stack->nr * br_entry_size, size);
+	to_copy = min_t(u32, nr * br_entry_size, size);
 	memcpy(buf, br_stack->entries, to_copy);
 
 	return to_copy;
