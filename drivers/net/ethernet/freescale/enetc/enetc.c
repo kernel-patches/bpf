@@ -695,6 +695,14 @@ static int enetc_lso_get_hdr_len(const struct sk_buff *skb)
 	return hdr_len;
 }
 
+static bool enetc_skb_uses_lso(const struct enetc_ndev_priv *priv,
+			       const struct sk_buff *skb)
+{
+	/* LSO data unit lengths of up to 256KB are supported */
+	return priv->active_offloads & ENETC_F_LSO &&
+	       (skb->len - enetc_lso_get_hdr_len(skb)) <= ENETC_LSO_MAX_DATA_LEN;
+}
+
 static void enetc_lso_start(struct sk_buff *skb, struct enetc_lso_t *lso)
 {
 	lso->lso_seg_size = skb_shinfo(skb)->gso_size;
@@ -1018,10 +1026,7 @@ static netdev_tx_t enetc_start_xmit(struct sk_buff *skb,
 	tx_ring = priv->tx_ring[skb->queue_mapping];
 
 	if (skb_is_gso(skb)) {
-		/* LSO data unit lengths of up to 256KB are supported */
-		if (priv->active_offloads & ENETC_F_LSO &&
-		    (skb->len - enetc_lso_get_hdr_len(skb)) <=
-		    ENETC_LSO_MAX_DATA_LEN) {
+		if (enetc_skb_uses_lso(priv, skb)) {
 			if (enetc_bd_unused(tx_ring) < enetc_lso_count_descs(skb)) {
 				netif_stop_subqueue(ndev, tx_ring->index);
 				return NETDEV_TX_BUSY;
@@ -1097,6 +1102,24 @@ netdev_tx_t enetc_xmit(struct sk_buff *skb, struct net_device *ndev)
 	return enetc_start_xmit(skb, ndev);
 }
 EXPORT_SYMBOL_GPL(enetc_xmit);
+
+netdev_features_t enetc_features_check(struct sk_buff *skb,
+				       struct net_device *ndev,
+				       netdev_features_t features)
+{
+	struct enetc_ndev_priv *priv = netdev_priv(ndev);
+
+	features = vlan_features_check(skb, features);
+
+	if (!skb_is_gso(skb) || enetc_skb_uses_lso(priv, skb))
+		return features;
+
+	if (tso_count_descs(skb) >= priv->tx_bd_count)
+		features &= ~NETIF_F_GSO_MASK;
+
+	return features;
+}
+EXPORT_SYMBOL_GPL(enetc_features_check);
 
 static irqreturn_t enetc_msix(int irq, void *data)
 {
