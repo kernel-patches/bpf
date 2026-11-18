@@ -15,6 +15,17 @@
 #include "sof-priv.h"
 #include "sof-audio.h"
 
+/* the maximum value as snd_soc_info_volsw() reports it */
+static int sof_mixer_max(const struct soc_mixer_control *sm)
+{
+	int max = sm->max - sm->min;
+
+	if (sm->platform_max && sm->platform_max < max)
+		max = sm->platform_max;
+
+	return max;
+}
+
 int snd_sof_volume_get(struct snd_kcontrol *kcontrol,
 		       struct snd_ctl_elem_value *ucontrol)
 {
@@ -50,20 +61,16 @@ int snd_sof_volume_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info 
 	struct soc_mixer_control *sm = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_sof_control *scontrol = sm->dobj.private;
 	unsigned int channels = scontrol->num_channels;
-	int platform_max;
+	int max = sof_mixer_max(sm);
 
-	if (!sm->platform_max)
-		sm->platform_max = sm->max;
-	platform_max = sm->platform_max;
-
-	if (platform_max == 1 && !strstr(kcontrol->id.name, " Volume"))
+	if (max == 1 && !strstr(kcontrol->id.name, " Volume"))
 		uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
 	else
 		uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
 
 	uinfo->count = channels;
 	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = platform_max - sm->min;
+	uinfo->value.integer.max = max;
 	return 0;
 }
 
