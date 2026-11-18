@@ -79,18 +79,19 @@ static void remap(struct btf *btf, const __u32 *id_map, __u32 src_start_id)
 }
 
 /*
- * Split the `src` into `main_out` base and `inline_out`,
- * according to `colors` array. Relative ordering remains
- * the same as in `src`.
+ * Split src into a main BTF and sibling inline and global extensions,
+ * according to colors. Preserve relative ordering within each output.
+ * Both extensions refer to the final main BTF, never to each other.
  */
 int btf_split_by_color(struct btf *src, const __u8 *colors,
-		       struct btf **main_out, struct btf **inline_out)
+		       struct btf **main_out, struct btf **inline_out,
+		       struct btf **global_out)
 {
 	LIBBPF_OPTS(btf_new_opts, opts,
 		    .base_btf = (struct btf *)btf__base_btf(src),
 		    .add_layout = btf_header(src)->layout_len != 0,
 	);
-	struct btf *main_btf, *inline_btf = NULL;
+	struct btf *main_btf, *inline_btf = NULL, *global_btf = NULL;
 	__u32 start_id = opts.base_btf ? btf__type_cnt(opts.base_btf) : 1;
 	__u32 type_cnt = btf__type_cnt(src);
 	__u32 *id_map, i;
@@ -98,6 +99,7 @@ int btf_split_by_color(struct btf *src, const __u8 *colors,
 
 	*main_out = NULL;
 	*inline_out = NULL;
+	*global_out = NULL;
 	id_map = malloc((type_cnt - start_id ?: 1) * sizeof(*id_map));
 	if (!id_map)
 		return -ENOMEM;
@@ -107,7 +109,7 @@ int btf_split_by_color(struct btf *src, const __u8 *colors,
 	btf__set_endianness(main_btf, btf__endianness(src));
 	/* Copy MAIN and SHARED marked types to `main_out`. */
 	for (i = start_id; i < type_cnt; i++) {
-		if (colors[i] == BTF_COLOR_LOC)
+		if (colors[i] == BTF_COLOR_LOC || colors[i] == BTF_COLOR_GLOBAL)
 			continue;
 		err = btf__add_type(main_btf, src, btf__type_by_id(src, i));
 		if (err < 0)
@@ -131,13 +133,29 @@ int btf_split_by_color(struct btf *src, const __u8 *colors,
 			goto out;
 		id_map[i - start_id] = err;
 	}
+	global_btf = btf__new_empty_split(main_btf);
+	if (!global_btf) {
+		err = -ENOMEM;
+		goto out;
+	}
+	for (i = start_id; i < type_cnt; i++) {
+		if (colors[i] != BTF_COLOR_GLOBAL)
+			continue;
+		err = btf__add_type(global_btf, src, btf__type_by_id(src, i));
+		if (err < 0)
+			goto out;
+		id_map[i - start_id] = err;
+	}
 	remap(main_btf, id_map, start_id);
 	remap(inline_btf, id_map, start_id);
+	remap(global_btf, id_map, start_id);
 	*main_out = main_btf;
 	*inline_out = inline_btf;
+	*global_out = global_btf;
 	free(id_map);
 	return 0;
 out:
+	btf__free(global_btf);
 	btf__free(inline_btf);
 	btf__free(main_btf);
 	free(id_map);

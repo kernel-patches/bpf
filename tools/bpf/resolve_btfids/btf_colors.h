@@ -9,6 +9,7 @@ enum btf_color {
 	BTF_COLOR_MAIN = 1,
 	BTF_COLOR_LOC = 2,
 	BTF_COLOR_SHARED = BTF_COLOR_MAIN | BTF_COLOR_LOC,
+	BTF_COLOR_GLOBAL = 4,
 };
 
 #define BTF_SHA256_DIGEST_LENGTH	32
@@ -19,6 +20,7 @@ void btf_mark_reachable(struct btf *btf, __u32 root, enum btf_color color,
 			__u8 *colors, __u32 *worklist);
 
 int btf_split_by_color(struct btf *src, const __u8 *colors,
-		       struct btf **main_out, struct btf **inline_out);
+		       struct btf **main_out, struct btf **inline_out,
+		       struct btf **global_out);
 
 #endif
