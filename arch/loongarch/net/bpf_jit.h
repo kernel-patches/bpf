@@ -45,12 +45,16 @@ do {										\
 } while (0)
 
 #define is_signed_imm12(val)	signed_imm_check(val, 12)
-#define is_signed_imm14(val)	signed_imm_check(val, 14)
 #define is_signed_imm16(val)	signed_imm_check(val, 16)
 #define is_signed_imm26(val)	signed_imm_check(val, 26)
 #define is_signed_imm32(val)	signed_imm_check(val, 32)
 #define is_signed_imm52(val)	signed_imm_check(val, 52)
 #define is_unsigned_imm12(val)	unsigned_imm_check(val, 12)
+
+static inline bool is_aligned_signed_imm16(int off)
+{
+	return !(off & 3) && is_signed_imm16(off);
+}
 
 static inline int bpf2la_offset(int bpf_insn, int off, const struct jit_ctx *ctx)
 {
