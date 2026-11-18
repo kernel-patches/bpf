@@ -387,6 +387,8 @@ SYM_CODE_START(return_to_handler)
 	movq RAX(%rsp), %rax
 
 	addq $(FRAME_SIZE) + 8, %rsp
+	/* The return address is only in %rdi now, the unwinder cannot follow. */
+	UNWIND_HINT_UNDEFINED
 
 	/*
 	 * Jump back to the old return address. This cannot be JMP_NOSPEC rdi
