@@ -1116,8 +1116,8 @@ static int __create_thin(struct dm_pool_metadata *pmd,
 
 	r = dm_btree_lookup(&pmd->details_info, pmd->details_root,
 			    &key, NULL);
-	if (!r)
-		return -EEXIST;
+	if (r != -ENODATA)
+		return r ? r : -EEXIST;
 
 	/*
 	 * Create an empty btree for the mappings.
@@ -1193,8 +1193,8 @@ static int __create_snap(struct dm_pool_metadata *pmd,
 	/* check this device is unused */
 	r = dm_btree_lookup(&pmd->details_info, pmd->details_root,
 			    &dev_key, NULL);
-	if (!r)
-		return -EEXIST;
+	if (r != -ENODATA)
+		return r ? r : -EEXIST;
 
 	/* find the mapping tree for the origin */
 	r = dm_btree_lookup(&pmd->tl_info, pmd->root, &key, &value);
