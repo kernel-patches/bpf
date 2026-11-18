@@ -5130,10 +5130,17 @@ static int intel_pmu_hw_config(struct perf_event *event)
 		 * require any branch stack setup.
 		 * Clear the bit to avoid unnecessary branch stack setup.
 		 */
-		if (0 == (event->attr.branch_sample_type &
-			  ~(PERF_SAMPLE_BRANCH_PLM_ALL |
-			    PERF_SAMPLE_BRANCH_COUNTERS)))
-			event->hw.flags  &= ~PERF_X86_EVENT_NEEDS_BRANCH_STACK;
+		if (!(event->attr.branch_sample_type &
+		      ~(PERF_SAMPLE_BRANCH_PLM_ALL | PERF_SAMPLE_BRANCH_COUNTERS))) {
+			event->hw.flags &= ~PERF_X86_EVENT_NEEDS_BRANCH_STACK;
+			/*
+			 * A pure branch counter event doesn't set up the LBR
+			 * itself. It must stay grouped with a normal branch
+			 * event which configures the LBR for it. Otherwise,
+			 * the LBR cannot be configured correctly.
+			 */
+			event->event_caps |= PERF_EV_CAP_SIBLING;
+		}
 
 		/*
 		 * Force the leader to be a LBR event. So LBRs can be reset
