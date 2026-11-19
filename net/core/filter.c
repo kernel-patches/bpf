@@ -8123,8 +8123,7 @@ BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 
 	if (!sk || flags != 0)
 		return -EINVAL;
-	if (egress && (!sk_fullsock(sk) || !sk_is_refcounted(sk) ||
-		       skb_is_decrypted(skb)))
+	if (egress && (!sk_fullsock(sk) || skb_is_decrypted(skb)))
 		return -EOPNOTSUPP;
 	refcounted = egress || sk_is_refcounted(sk);
 	if (unlikely(dev_net(skb->dev) != sock_net(sk)))

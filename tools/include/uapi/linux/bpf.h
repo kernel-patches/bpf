@@ -4612,7 +4612,8 @@ union bpf_attr {
  *		interfere with successful delivery to the socket.
  *
  *		This operation is valid from TC ingress and egress paths.
- *		On egress, only full refcounted sockets are accepted.
+ *		On egress, only full sockets are accepted. Assignment takes an
+ *		skb-owned reference and releases any previous send-side owner.
  *		Software GSO segmentation after assignment is unsupported.
  *
  *		The *flags* argument must be zero.
@@ -4626,7 +4627,7 @@ union bpf_attr {
  *		**-ENETUNREACH** if the socket is unreachable (wrong netns).
  *
  *		**-EOPNOTSUPP** if the socket is unhashed, or TC egress uses
- *		a non-full or non-refcounted socket or a decrypted packet.
+ *		a non-full socket or a decrypted packet.
  *
  * long bpf_sk_assign(struct bpf_sk_lookup *ctx, struct bpf_sock *sk, u64 flags)
  *	Description
