@@ -128,9 +128,20 @@ static int led_pwm_add(struct device *dev, struct led_pwm_priv *priv,
 		{
 		uint64_t brightness;
 
+		/* A disabled PWM's duty cycle does not describe its output. */
+		if (!led_data->pwmstate.enabled)
+			break;
+
+		if (led_data->pwmstate.duty_cycle > led_data->pwmstate.period)
+			return dev_err_probe(dev, -EINVAL,
+					     "PWM duty cycle exceeds period for %s\n",
+					     led->name);
+
 		brightness = led->max_brightness;
 		brightness *= led_data->pwmstate.duty_cycle;
 		do_div(brightness, led_data->pwmstate.period);
+		if (led_data->active_low)
+			brightness = led->max_brightness - brightness;
 		led_data->cdev.brightness = brightness;
 		}
 		break;
