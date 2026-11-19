@@ -35,9 +35,22 @@ sit9531x_dpll_is_xo_pin(const struct sit9531x_dpll_pin *pin)
 }
 
 /*
+ * A frozen PLL with an empty table is in forced holdover; report holdover only
+ * while its holdover memory is valid.
+ */
+static enum dpll_lock_status
+sit9531x_dpll_frozen_status(const struct sit9531x_chan *chan)
+{
+	if (!chan->prio_mask && !chan->ho_valid)
+		return DPLL_LOCK_STATUS_UNLOCKED;
+
+	return DPLL_LOCK_STATUS_HOLDOVER;
+}
+
+/*
  * Report the lock status from the last poll: outer LOL (page 0 reg 0x06), PLL
- * mode (PLL page reg 0x31), inner LOL (reg 0x92), holdover freeze (reg 0x0A)
- * and holdover-valid (PLL page reg 0x06).
+ * mode (PLL page reg 0x31), inner LOL (reg 0x92), holdover freeze (reg 0x0A),
+ * holdover-valid (PLL page reg 0x06) and priority table.
  */
 static int
 sit9531x_dpll_lock_status_get(const struct dpll_device *dpll, void *dpll_priv,
@@ -71,7 +84,7 @@ sit9531x_dpll_lock_status_get(const struct dpll_device *dpll, void *dpll_priv,
 		 * The core reports the error detail only with an unlocked or
 		 * holdover status.
 		 */
-		*status = chan->ho_freeze ? DPLL_LOCK_STATUS_HOLDOVER :
+		*status = chan->ho_freeze ? sit9531x_dpll_frozen_status(chan) :
 					    DPLL_LOCK_STATUS_UNLOCKED;
 	} else if (chan->mode) {
 		/*
@@ -84,8 +97,8 @@ sit9531x_dpll_lock_status_get(const struct dpll_device *dpll, void *dpll_priv,
 		 * Test freeze before lock: a frozen PLL tracks no reference
 		 * whatever its outer loss-of-lock bit reads.
 		 */
-		*status = DPLL_LOCK_STATUS_HOLDOVER;
-	} else if (chan->locked) {
+		*status = sit9531x_dpll_frozen_status(chan);
+	} else if (sit9531x_chan_tracking(chan)) {
 		if (chan->ho_valid)
 			*status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
 		else
@@ -155,6 +168,120 @@ const struct dpll_device_ops sit9531x_dpll_device_ops = {
 	.supported_modes_get	= sit9531x_dpll_supported_modes_get,
 };
 
+/*
+ * Pin-state contract. An input is SELECTABLE while listed in this PLL's
+ * priority table and DISCONNECTED otherwise; CONNECTED is refused because the
+ * device selects by priority. Operstate is ACTIVE when the device feeds the PLL
+ * this input (chan->routed_ref), the PLL is tracking and the lane has signal;
+ * NO_SIGNAL on loss of signal; QUAL_FAILED on frequency drift; STANDBY
+ * otherwise. The routed reference is used because on loss of signal the device
+ * falls back to another listed source and leaves the selection naming the lost
+ * one. On manual input select, the routed input is CONNECTED. The XO pin is
+ * always CONNECTED.
+ */
+
+/* Caller must hold sitdev->multiop_lock. */
+static void
+sit9531x_dpll_selection_state_get(struct sit9531x_dev *sitdev,
+				  const struct sit9531x_dpll *sitdpll,
+				  u8 pin_id, enum dpll_pin_state *state)
+{
+	const struct sit9531x_chan *chan;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	chan = sit9531x_chan_state_get(sitdev, sitdpll->id);
+
+	if (chan->manual_input) {
+		if (chan->routed_ref == pin_id && !chan->stale)
+			*state = DPLL_PIN_STATE_CONNECTED;
+		else
+			*state = DPLL_PIN_STATE_DISCONNECTED;
+		return;
+	}
+
+	if (chan->prio_mask & BIT(sit9531x_input_hw_src(pin_id)))
+		*state = DPLL_PIN_STATE_SELECTABLE;
+	else
+		*state = DPLL_PIN_STATE_DISCONNECTED;
+}
+
+/* Caller must hold sitdev->multiop_lock. */
+static bool
+sit9531x_dpll_selection_active(struct sit9531x_dev *sitdev,
+			       const struct sit9531x_dpll *sitdpll, u8 pin_id)
+{
+	const struct sit9531x_chan *chan;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	chan = sit9531x_chan_state_get(sitdev, sitdpll->id);
+
+	if (chan->routed_ref != pin_id || !sit9531x_chan_tracking(chan))
+		return false;
+
+	/*
+	 * Do not report a lane without signal as locked, whatever the lock bit
+	 * says; the PLL is about to switch away from it.
+	 */
+	if (pin_id < sitdev->info->num_inputs &&
+	    sit9531x_ref_state_get(sitdev, pin_id)->los)
+		return false;
+
+	return true;
+}
+
+/* Caller must hold sitdev->multiop_lock. */
+static void
+sit9531x_dpll_selection_operstate_get(struct sit9531x_dev *sitdev,
+				      const struct sit9531x_dpll *sitdpll,
+				      u8 pin_id,
+				      enum dpll_pin_operstate *operstate)
+{
+	const struct sit9531x_ref *ref;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (sit9531x_dpll_selection_active(sitdev, sitdpll, pin_id)) {
+		*operstate = DPLL_PIN_OPERSTATE_ACTIVE;
+		return;
+	}
+
+	if (pin_id < sitdev->info->num_inputs) {
+		ref = sit9531x_ref_state_get(sitdev, pin_id);
+		if (ref->los) {
+			*operstate = DPLL_PIN_OPERSTATE_NO_SIGNAL;
+			return;
+		}
+		if (ref->qual_fail) {
+			*operstate = DPLL_PIN_OPERSTATE_QUAL_FAILED;
+			return;
+		}
+	}
+
+	*operstate = DPLL_PIN_OPERSTATE_STANDBY;
+}
+
+static int
+sit9531x_dpll_input_pin_operstate_on_dpll_get(const struct dpll_pin *pin,
+					      void *pin_priv,
+					      const struct dpll_device *dpll,
+					      void *dpll_priv,
+					      enum dpll_pin_operstate *state,
+					      struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+
+	mutex_lock(&sitdev->multiop_lock);
+	sit9531x_dpll_selection_operstate_get(sitdev, sitdpll, dpin->id,
+					      state);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return 0;
+}
+
 static int
 sit9531x_dpll_input_pin_direction_get(const struct dpll_pin *pin,
 				      void *pin_priv,
@@ -167,8 +294,123 @@ sit9531x_dpll_input_pin_direction_get(const struct dpll_pin *pin,
 	return 0;
 }
 
+static int
+sit9531x_dpll_input_pin_state_on_dpll_get(const struct dpll_pin *pin,
+					  void *pin_priv,
+					  const struct dpll_device *dpll,
+					  void *dpll_priv,
+					  enum dpll_pin_state *state,
+					  struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+
+	mutex_lock(&sitdev->multiop_lock);
+	sit9531x_dpll_selection_state_get(sitdev, sitdpll, dpin->id, state);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return 0;
+}
+
+/*
+ * The input receiver is shared by all DPLLs and is switched off when
+ * ref->pll_mask becomes empty.
+ */
+static int
+sit9531x_dpll_input_pin_state_on_dpll_set(const struct dpll_pin *pin,
+					  void *pin_priv,
+					  const struct dpll_device *dpll,
+					  void *dpll_priv,
+					  enum dpll_pin_state state,
+					  struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	struct sit9531x_ref *ref = &sitdev->ref[dpin->id];
+	u8 hw_src = sit9531x_input_hw_src(dpin->id);
+	u8 pll_bit = BIT(sitdpll->id);
+	bool enabled_here = false;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	switch (state) {
+	case DPLL_PIN_STATE_DISCONNECTED:
+		if (!sit9531x_input_prio_present(sitdev, sitdpll->id, hw_src) &&
+		    !ref->off_pending) {
+			rc = 0;
+			break;
+		}
+		rc = sit9531x_input_prio_remove(sitdev, sitdpll->id, hw_src);
+		if (rc && sit9531x_input_prio_present(sitdev, sitdpll->id,
+						      hw_src))
+			break;
+		ref->pll_mask &= ~pll_bit;
+		if (!ref->pll_mask) {
+			int off_rc = sit9531x_input_disable(sitdev, dpin->id);
+
+			if (off_rc && !rc)
+				rc = off_rc;
+		}
+		break;
+	case DPLL_PIN_STATE_CONNECTED:
+		NL_SET_ERR_MSG(extack,
+			       "Device selects its reference by priority; use selectable");
+		rc = -EOPNOTSUPP;
+		break;
+	case DPLL_PIN_STATE_SELECTABLE:
+		/*
+		 * The receiver can be off even when this PLL already lists the
+		 * input.
+		 */
+		if (!ref->enabled) {
+			rc = sit9531x_input_enable(sitdev, dpin->id);
+			if (rc)
+				break;
+			enabled_here = true;
+		}
+		rc = sit9531x_input_prio_add(sitdev, sitdpll->id, hw_src);
+		if (rc && !sit9531x_input_prio_present(sitdev, sitdpll->id,
+						       hw_src)) {
+			if (enabled_here && !ref->pll_mask)
+				sit9531x_input_disable(sitdev, dpin->id);
+			break;
+		}
+		ref->pll_mask |= pll_bit;
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc == -ENOSPC)
+		NL_SET_ERR_MSG(extack,
+			       "Priority table is full of unique sources on this PLL");
+	else if (rc && rc != -EOPNOTSUPP && rc != -EINVAL)
+		NL_SET_ERR_MSG(extack, "Failed to set input pin state");
+
+	return rc;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
+	.state_on_dpll_set	= sit9531x_dpll_input_pin_state_on_dpll_set,
+	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
+};
+
+/*
+ * For a PLL on manual input select: the select pins or register choose the
+ * reference, so the pin has no state setter and no priority.
+ */
+static const struct dpll_pin_ops sit9531x_dpll_input_pin_manual_ops = {
+	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
+	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
 };
 
 /*
@@ -223,10 +465,15 @@ static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 const struct dpll_pin_ops *
 sit9531x_dpll_pin_ops_get(const struct sit9531x_dpll_pin *pin)
 {
+	const struct sit9531x_dev *sitdev = pin->dpll->dev;
+
 	if (!sit9531x_dpll_is_input_pin(pin))
 		return &sit9531x_dpll_output_pin_ops;
 	if (sit9531x_dpll_is_xo_pin(pin))
 		return &sit9531x_dpll_xo_pin_ops;
+	/* Read once at probe, before any pin is registered. */
+	if (sit9531x_chan_state_get(sitdev, pin->dpll->id)->manual_input)
+		return &sit9531x_dpll_input_pin_manual_ops;
 	return &sit9531x_dpll_input_pin_ops;
 }
 
