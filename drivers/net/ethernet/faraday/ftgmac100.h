@@ -57,6 +57,9 @@
 #define FTGMAC100_OFFSET_RX_RUNT	0xc0
 #define FTGMAC100_OFFSET_RX_CRCER_FTL	0xc4
 #define FTGMAC100_OFFSET_RX_COL_LOST	0xc8
+/* reserved 0xcc - 0x178 */
+#define FTGMAC100_OFFSET_TXR_BADDR_HIGH	0x17c
+#define FTGMAC100_OFFSET_RXR_BADDR_HIGH	0x18c
 
 /*
  * Interrupt status register & interrupt enable register
@@ -226,6 +229,7 @@ struct ftgmac100_txdes {
 #define FTGMAC100_TXDES1_TX2FIC		(1 << 30)
 #define FTGMAC100_TXDES1_TXIC		(1 << 31)
 
+#define FTGMAC100_TXDES2_TXBUF_BADR_HI	GENMASK(18, 16)
 /*
  * Receive descriptor, aligned to 16 bytes
  */
@@ -271,5 +275,7 @@ struct ftgmac100_rxdes {
 #define FTGMAC100_RXDES1_TCP_CHKSUM_ERR	(1 << 25)
 #define FTGMAC100_RXDES1_UDP_CHKSUM_ERR	(1 << 26)
 #define FTGMAC100_RXDES1_IP_CHKSUM_ERR	(1 << 27)
+
+#define FTGMAC100_RXDES2_RXBUF_BADR_HI	GENMASK(18, 16)
 
 #endif /* __FTGMAC100_H */
