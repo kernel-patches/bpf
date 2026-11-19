@@ -51,6 +51,7 @@ struct acpi_ged_event {
 	unsigned int gsi;
 	unsigned int irq;
 	acpi_handle handle;
+	bool wake_enabled;
 };
 
 static irqreturn_t acpi_ged_irq_handler(int irq, void *data)
@@ -81,6 +82,7 @@ static acpi_status acpi_ged_request_interrupt(struct acpi_resource *ares,
 	struct acpi_resource_extended_irq *pext = &ares->data.extended_irq;
 	char ev_name[5];
 	u8 trigger;
+	int ret;
 
 	if (ares->type == ACPI_RESOURCE_TYPE_END_TAG)
 		return AE_OK;
@@ -133,9 +135,32 @@ static acpi_status acpi_ged_request_interrupt(struct acpi_resource *ares,
 		return AE_ERROR;
 	}
 
+	if (r.flags & IORESOURCE_IRQ_WAKECAPABLE) {
+		ret = enable_irq_wake(irq);
+		if (ret)
+			dev_warn(dev, "failed to enable wakeup for irq %u: %d\n",
+				 irq, ret);
+		else
+			event->wake_enabled = true;
+	}
+
 	dev_dbg(dev, "GED listening GSI %u @ IRQ %u\n", gsi, irq);
 	list_add_tail(&event->node, &geddev->event_list);
 	return AE_OK;
+}
+
+static void ged_release_events(struct acpi_ged_device *geddev)
+{
+	struct acpi_ged_event *event, *next;
+
+	list_for_each_entry_safe(event, next, &geddev->event_list, node) {
+		if (event->wake_enabled)
+			disable_irq_wake(event->irq);
+		free_irq(event->irq, event);
+		list_del(&event->node);
+		dev_dbg(geddev->dev, "GED releasing GSI %u @ IRQ %u\n",
+			event->gsi, event->irq);
+	}
 }
 
 static int ged_probe(struct platform_device *pdev)
@@ -153,6 +178,7 @@ static int ged_probe(struct platform_device *pdev)
 				       acpi_ged_request_interrupt, geddev);
 	if (ACPI_FAILURE(acpi_ret)) {
 		dev_err(&pdev->dev, "unable to parse the _CRS record\n");
+		ged_release_events(geddev);
 		return -EINVAL;
 	}
 	platform_set_drvdata(pdev, geddev);
@@ -163,14 +189,8 @@ static int ged_probe(struct platform_device *pdev)
 static void ged_shutdown(struct platform_device *pdev)
 {
 	struct acpi_ged_device *geddev = platform_get_drvdata(pdev);
-	struct acpi_ged_event *event, *next;
 
-	list_for_each_entry_safe(event, next, &geddev->event_list, node) {
-		free_irq(event->irq, event);
-		list_del(&event->node);
-		dev_dbg(geddev->dev, "GED releasing GSI %u @ IRQ %u\n",
-			 event->gsi, event->irq);
-	}
+	ged_release_events(geddev);
 }
 
 static void ged_remove(struct platform_device *pdev)
