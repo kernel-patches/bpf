@@ -1044,18 +1044,18 @@ static int
 yt921x_vlan_filtering(struct yt921x_priv *priv, int port, bool vlan_filtering)
 {
 	struct dsa_port *dp = dsa_to_port(&priv->ds, port);
-	struct net_device *bdev;
+	struct net_device *brport;
 	u16 pvid;
 	u32 mask;
 	u32 ctrl;
 	int res;
 
-	bdev = dsa_port_bridge_dev_get(dp);
+	brport = dsa_port_to_bridge_port(dp);
 
-	if (!bdev || !vlan_filtering)
+	if (!brport || !vlan_filtering)
 		pvid = YT921X_VID_UNWARE;
 	else
-		br_vlan_get_pvid(bdev, &pvid);
+		br_vlan_get_pvid(brport, &pvid);
 	res = yt921x_port_set_pvid(priv, port, pvid);
 	if (res)
 		return res;
@@ -1194,16 +1194,16 @@ yt921x_dsa_port_vlan_del(struct dsa_switch *ds, int port,
 	mutex_lock(&priv->reg_lock);
 	do {
 		struct dsa_port *dp = dsa_to_port(ds, port);
-		struct net_device *bdev;
+		struct net_device *brport;
 
 		res = yt921x_vlan_del(priv, port, vid);
 		if (res)
 			break;
 
-		bdev = dsa_port_bridge_dev_get(dp);
-		if (bdev) {
-			br_vlan_get_pvid(bdev, &pvid);
-			if (pvid == vid)
+		brport = dsa_port_to_bridge_port(dp);
+		if (brport) {
+			br_vlan_get_pvid(brport, &pvid);
+			if (!pvid)
 				res = yt921x_pvid_clear(priv, port);
 		}
 	} while (0);
@@ -1231,19 +1231,19 @@ yt921x_dsa_port_vlan_add(struct dsa_switch *ds, int port,
 	mutex_lock(&priv->reg_lock);
 	do {
 		struct dsa_port *dp = dsa_to_port(ds, port);
-		struct net_device *bdev;
+		struct net_device *brport;
 
 		res = yt921x_vlan_add(priv, port, vid,
 				      vlan->flags & BRIDGE_VLAN_INFO_UNTAGGED);
 		if (res)
 			break;
 
-		bdev = dsa_port_bridge_dev_get(dp);
-		if (bdev) {
+		brport = dsa_port_to_bridge_port(dp);
+		if (brport) {
 			if (vlan->flags & BRIDGE_VLAN_INFO_PVID) {
 				res = yt921x_pvid_set(priv, port, vid);
 			} else {
-				br_vlan_get_pvid(bdev, &pvid);
+				br_vlan_get_pvid(brport, &pvid);
 				if (pvid == vid)
 					res = yt921x_pvid_clear(priv, port);
 			}
