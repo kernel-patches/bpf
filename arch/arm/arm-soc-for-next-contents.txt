@@ -38,3 +38,8 @@ arm/fixes
 	<no branch> (109d5fda6c07649d4bb9270fd99f5c75e3e49fde)
 		https://github.com/Broadcom/stblinux tags/arm-soc/for-7.4/drivers-fixes
 
+soc/newsoc
+	newsoc/ambarella
+		Merge branch 'newsoc/ambarella' into soc/newsoc
+		contains ambarella/common
+
