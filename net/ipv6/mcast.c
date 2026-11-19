@@ -363,6 +363,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 	struct ipv6_mc_socklist *pmc;
 	struct inet6_dev *idev;
 	int leavegroup = 0;
+	int oldmode = -1;
 	int i, j;
 	int err;
 
@@ -407,8 +408,9 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 		}
 	} else if (pmc->sfmode != omode) {
 		/* allow mode switches for empty-set filters */
+		oldmode = pmc->sfmode;
 		ip6_mc_add_src(idev, group, omode, 0, NULL, 0);
-		ip6_mc_del_src(idev, group, pmc->sfmode, 0, NULL, 0);
+		ip6_mc_del_src(idev, group, oldmode, 0, NULL, 0);
 		pmc->sfmode = omode;
 	}
 
@@ -486,7 +488,12 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 	newpsl->sl_addr[i - 1] = *source;
 
 	/* update the interface list */
-	ip6_mc_add_src(idev, group, omode, 1, source, 1);
+	err = ip6_mc_add_src(idev, group, omode, 1, source, 1);
+	if (err) {
+		sock_kfree_s(sk, newpsl,
+			     struct_size(newpsl, sl_addr, newpsl->sl_max));
+		goto done;
+	}
 
 	if (psl)
 		atomic_sub(struct_size(psl, sl_addr, psl->sl_max),
@@ -495,6 +502,11 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 	kfree_rcu(psl, rcu);
 	err = 0;
 done:
+	if (err && oldmode >= 0) {
+		ip6_mc_add_src(idev, group, oldmode, 0, NULL, 0);
+		ip6_mc_del_src(idev, group, omode, 0, NULL, 0);
+		pmc->sfmode = oldmode;
+	}
 	mutex_unlock(&idev->mc_lock);
 	in6_dev_put(idev);
 	if (leavegroup)

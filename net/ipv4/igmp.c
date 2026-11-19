@@ -2498,9 +2498,10 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 	struct ip_mc_socklist *pmc;
 	struct in_device *in_dev = NULL;
 	struct inet_sock *inet = inet_sk(sk);
-	struct ip_sf_socklist *psl;
+	struct ip_sf_socklist *newpsl = NULL, *psl;
 	struct net *net = sock_net(sk);
 	int leavegroup = 0;
+	int oldmode = -1;
 	int i, j, rv;
 
 	if (!ipv4_is_multicast(addr))
@@ -2541,9 +2542,10 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		}
 	} else if (pmc->sfmode != omode) {
 		/* allow mode switches for empty-set filters */
+		oldmode = pmc->sfmode;
 		ip_mc_add_src(in_dev, &mreqs->imr_multiaddr, omode, 0, NULL, 0);
-		ip_mc_del_src(in_dev, &mreqs->imr_multiaddr, pmc->sfmode, 0,
-			NULL, 0);
+		ip_mc_del_src(in_dev, &mreqs->imr_multiaddr, oldmode, 0,
+			      NULL, 0);
 		pmc->sfmode = omode;
 	}
 
@@ -2580,8 +2582,17 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		err = -ENOBUFS;
 		goto done;
 	}
+	rv = 1;	/* > 0 for insert logic below if sl_count is 0 */
+	for (i = 0; psl && i < psl->sl_count; i++) {
+		rv = memcmp(&psl->sl_addr[i], &mreqs->imr_sourceaddr,
+			    sizeof(__be32));
+		if (rv == 0)
+			break;
+	}
+	if (rv == 0)		/* address already there is an error */
+		goto done;
+
 	if (!psl || psl->sl_count == psl->sl_max) {
-		struct ip_sf_socklist *newpsl;
 		int count = IP_SFBLOCK;
 
 		if (psl)
@@ -2593,10 +2604,30 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 			goto done;
 		}
 		newpsl->sl_max = count;
-		newpsl->sl_count = count - IP_SFBLOCK;
+		newpsl->sl_count = psl ? psl->sl_count : 0;
 		if (psl) {
-			for (i = 0; i < psl->sl_count; i++)
-				newpsl->sl_addr[i] = psl->sl_addr[i];
+			for (j = 0; j < psl->sl_count; j++)
+				newpsl->sl_addr[j] = psl->sl_addr[j];
+		}
+		for (j = newpsl->sl_count - 1; j >= i; j--)
+			newpsl->sl_addr[j + 1] = newpsl->sl_addr[j];
+		newpsl->sl_addr[i] = mreqs->imr_sourceaddr;
+		newpsl->sl_count++;
+	}
+
+	/* update the interface list */
+	err = ip_mc_add_src(in_dev, &mreqs->imr_multiaddr, omode, 1,
+			    &mreqs->imr_sourceaddr, 1);
+	if (err) {
+		if (newpsl)
+			sock_kfree_s(sk, newpsl,
+				     struct_size(newpsl, sl_addr,
+						 newpsl->sl_max));
+		goto done;
+	}
+
+	if (newpsl) {
+		if (psl) {
 			/* decrease mem now to avoid the memleak warning */
 			atomic_sub(struct_size(psl, sl_addr, psl->sl_max),
 				   &sk->sk_omem_alloc);
@@ -2604,26 +2635,19 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		rcu_assign_pointer(pmc->sflist, newpsl);
 		if (psl)
 			kfree_rcu(psl, rcu);
-		psl = newpsl;
+	} else {
+		for (j = psl->sl_count - 1; j >= i; j--)
+			psl->sl_addr[j + 1] = psl->sl_addr[j];
+		psl->sl_addr[i] = mreqs->imr_sourceaddr;
+		psl->sl_count++;
 	}
-	rv = 1;	/* > 0 for insert logic below if sl_count is 0 */
-	for (i = 0; i < psl->sl_count; i++) {
-		rv = memcmp(&psl->sl_addr[i], &mreqs->imr_sourceaddr,
-			sizeof(__be32));
-		if (rv == 0)
-			break;
-	}
-	if (rv == 0)		/* address already there is an error */
-		goto done;
-	for (j = psl->sl_count-1; j >= i; j--)
-		psl->sl_addr[j+1] = psl->sl_addr[j];
-	psl->sl_addr[i] = mreqs->imr_sourceaddr;
-	psl->sl_count++;
-	err = 0;
-	/* update the interface list */
-	ip_mc_add_src(in_dev, &mreqs->imr_multiaddr, omode, 1,
-		&mreqs->imr_sourceaddr, 1);
 done:
+	if (err && oldmode >= 0) {
+		ip_mc_add_src(in_dev, &mreqs->imr_multiaddr, oldmode, 0,
+			      NULL, 0);
+		ip_mc_del_src(in_dev, &mreqs->imr_multiaddr, omode, 0, NULL, 0);
+		pmc->sfmode = oldmode;
+	}
 	if (leavegroup)
 		err = ip_mc_leave_group(sk, &imr);
 	return err;

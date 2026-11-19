@@ -723,7 +723,9 @@ static int do_mcast_group_source(struct sock *sk, int optname,
 {
 	struct group_source_req greqs;
 	struct ip_mreq_source mreqs;
+	struct ip_mreqn joined = {};
 	struct sockaddr_in *psin;
+	bool drop_group = false;
 	int omode, add, err;
 
 	err = copy_group_source_from_sockptr(&greqs, optval, optlen);
@@ -747,23 +749,24 @@ static int do_mcast_group_source(struct sock *sk, int optname,
 		omode = MCAST_EXCLUDE;
 		add = 0;
 	} else if (optname == MCAST_JOIN_SOURCE_GROUP) {
-		struct ip_mreqn mreq;
-
 		psin = (struct sockaddr_in *)&greqs.gsr_group;
-		mreq.imr_multiaddr = psin->sin_addr;
-		mreq.imr_address.s_addr = 0;
-		mreq.imr_ifindex = greqs.gsr_interface;
-		err = ip_mc_join_group_ssm(sk, &mreq, MCAST_INCLUDE);
+		joined.imr_multiaddr = psin->sin_addr;
+		joined.imr_ifindex = greqs.gsr_interface;
+		err = ip_mc_join_group_ssm(sk, &joined, MCAST_INCLUDE);
 		if (err && err != -EADDRINUSE)
 			return err;
-		greqs.gsr_interface = mreq.imr_ifindex;
+		drop_group = !err;
+		greqs.gsr_interface = joined.imr_ifindex;
 		omode = MCAST_INCLUDE;
 		add = 1;
 	} else /* MCAST_LEAVE_SOURCE_GROUP */ {
 		omode = MCAST_INCLUDE;
 		add = 0;
 	}
-	return ip_mc_source(add, omode, sk, &mreqs, greqs.gsr_interface);
+	err = ip_mc_source(add, omode, sk, &mreqs, greqs.gsr_interface);
+	if (err && drop_group)
+		ip_mc_leave_group(sk, &joined);
+	return err;
 }
 
 static int ip_set_mcast_msfilter(struct sock *sk, sockptr_t optval, int optlen)
@@ -1286,7 +1289,9 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 	case IP_ADD_SOURCE_MEMBERSHIP:
 	case IP_DROP_SOURCE_MEMBERSHIP:
 	{
+		struct ip_mreqn joined = {};
 		struct ip_mreq_source mreqs;
+		bool drop_group = false;
 		int omode, add;
 
 		if (optlen != sizeof(struct ip_mreq_source))
@@ -1302,14 +1307,12 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 			omode = MCAST_EXCLUDE;
 			add = 0;
 		} else if (optname == IP_ADD_SOURCE_MEMBERSHIP) {
-			struct ip_mreqn mreq;
-
-			mreq.imr_multiaddr.s_addr = mreqs.imr_multiaddr;
-			mreq.imr_address.s_addr = mreqs.imr_interface;
-			mreq.imr_ifindex = 0;
-			err = ip_mc_join_group_ssm(sk, &mreq, MCAST_INCLUDE);
+			joined.imr_multiaddr.s_addr = mreqs.imr_multiaddr;
+			joined.imr_address.s_addr = mreqs.imr_interface;
+			err = ip_mc_join_group_ssm(sk, &joined, MCAST_INCLUDE);
 			if (err && err != -EADDRINUSE)
 				break;
+			drop_group = !err;
 			omode = MCAST_INCLUDE;
 			add = 1;
 		} else /* IP_DROP_SOURCE_MEMBERSHIP */ {
@@ -1317,6 +1320,8 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 			add = 0;
 		}
 		err = ip_mc_source(add, omode, sk, &mreqs, 0);
+		if (err && drop_group)
+			ip_mc_leave_group(sk, &joined);
 		break;
 	}
 	case MCAST_JOIN_GROUP:

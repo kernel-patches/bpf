@@ -145,6 +145,7 @@ static int do_ipv6_mcast_group_source(struct sock *sk, int optname,
 		sockptr_t optval, int optlen)
 {
 	struct group_source_req greqs;
+	bool drop_group = false;
 	int omode, add;
 	int ret;
 
@@ -173,13 +174,21 @@ static int do_ipv6_mcast_group_source(struct sock *sk, int optname,
 		/* prior join w/ different source is ok */
 		if (retv && retv != -EADDRINUSE)
 			return retv;
+		drop_group = !retv;
 		omode = MCAST_INCLUDE;
 		add = 1;
 	} else /* MCAST_LEAVE_SOURCE_GROUP */ {
 		omode = MCAST_INCLUDE;
 		add = 0;
 	}
-	return ip6_mc_source(add, omode, sk, &greqs);
+	ret = ip6_mc_source(add, omode, sk, &greqs);
+	if (ret && drop_group) {
+		struct sockaddr_in6 *psin6;
+
+		psin6 = (struct sockaddr_in6 *)&greqs.gsr_group;
+		ipv6_sock_mc_drop(sk, greqs.gsr_interface, &psin6->sin6_addr);
+	}
+	return ret;
 }
 
 static int ipv6_set_mcast_msfilter(struct sock *sk, sockptr_t optval,
