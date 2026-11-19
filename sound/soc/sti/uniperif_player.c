@@ -117,7 +117,6 @@ static irqreturn_t uni_player_irq_handler(int irq, void *dev_id)
 		if (!player->underflow_enabled) {
 			dev_err(player->dev,
 				"unexpected Underflow recovering\n");
-			ret = -EPERM;
 			snd_pcm_stream_unlock(player->substream);
 			return ret;
 		}
