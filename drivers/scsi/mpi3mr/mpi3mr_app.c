@@ -1309,17 +1309,24 @@ static long mpi3mr_enable_logdata(struct mpi3mr_ioc *mrioc,
 	struct bsg_job *job)
 {
 	struct mpi3mr_logdata_enable logdata_enable;
+	unsigned long flags;
+	u16 entry_sz;
+	u8 *buf;
 
 	if (!mrioc->logdata_buf) {
-		mrioc->logdata_entry_sz =
+		entry_sz =
 		    (mrioc->reply_sz - (sizeof(struct mpi3_event_notification_reply) - 4))
 		    + MPI3MR_BSG_LOGDATA_ENTRY_HEADER_SZ;
-		mrioc->logdata_buf_idx = 0;
-		mrioc->logdata_buf = kcalloc(MPI3MR_BSG_LOGDATA_MAX_ENTRIES,
-		    mrioc->logdata_entry_sz, GFP_KERNEL);
-
-		if (!mrioc->logdata_buf)
+		buf = kcalloc(MPI3MR_BSG_LOGDATA_MAX_ENTRIES, entry_sz,
+			      GFP_KERNEL);
+		if (!buf)
 			return -ENOMEM;
+
+		spin_lock_irqsave(&mrioc->logdata_lock, flags);
+		mrioc->logdata_entry_sz = entry_sz;
+		mrioc->logdata_buf_idx = 0;
+		mrioc->logdata_buf = buf;
+		spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
 	}
 
 	memset(&logdata_enable, 0, sizeof(logdata_enable));
@@ -1346,11 +1353,15 @@ static long mpi3mr_enable_logdata(struct mpi3mr_ioc *mrioc,
 static long mpi3mr_get_logdata(struct mpi3mr_ioc *mrioc,
 	struct bsg_job *job)
 {
-	u16 entry_sz = mrioc->logdata_entry_sz;
+	unsigned long flags;
+	u16 entry_sz;
 	u32 num_entries, sz;
+	long rval = -EINVAL;
 
+	spin_lock_irqsave(&mrioc->logdata_lock, flags);
+	entry_sz = mrioc->logdata_entry_sz;
 	if ((!mrioc->logdata_buf) || (job->request_payload.payload_len < entry_sz))
-		return -EINVAL;
+		goto out;
 
 	num_entries = job->request_payload.payload_len / entry_sz;
 	if (num_entries > MPI3MR_BSG_LOGDATA_MAX_ENTRIES)
@@ -1361,9 +1372,11 @@ static long mpi3mr_get_logdata(struct mpi3mr_ioc *mrioc,
 		sg_copy_from_buffer(job->request_payload.sg_list,
 				    job->request_payload.sg_cnt,
 				    mrioc->logdata_buf, sz);
-		return 0;
+		rval = 0;
 	}
-	return -EINVAL;
+out:
+	spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
+	return rval;
 }
 
 /**
@@ -3020,13 +3033,18 @@ out:
 void mpi3mr_app_save_logdata_th(struct mpi3mr_ioc *mrioc, char *event_data,
 	u16 event_data_size)
 {
-	u32 index = mrioc->logdata_buf_idx;
+	u32 index;
 	size_t entry_payload_len, sz;
 	struct mpi3mr_logdata_entry *entry;
+	unsigned long flags;
 
-	if (!(mrioc->logdata_buf))
+	spin_lock_irqsave(&mrioc->logdata_lock, flags);
+	if (!(mrioc->logdata_buf)) {
+		spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
 		return;
+	}
 
+	index = mrioc->logdata_buf_idx;
 	entry = (struct mpi3mr_logdata_entry *)
 		(mrioc->logdata_buf + (index * mrioc->logdata_entry_sz));
 	entry->valid_entry = 1;
@@ -3039,6 +3057,7 @@ void mpi3mr_app_save_logdata_th(struct mpi3mr_ioc *mrioc, char *event_data,
 	memcpy(entry->data, event_data, sz);
 	mrioc->logdata_buf_idx =
 		((++index) % MPI3MR_BSG_LOGDATA_MAX_ENTRIES);
+	spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
 	atomic64_inc(&event_counter);
 }
 

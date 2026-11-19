@@ -5029,6 +5029,7 @@ void mpi3mr_memset_buffers(struct mpi3mr_ioc *mrioc)
 void mpi3mr_free_mem(struct mpi3mr_ioc *mrioc)
 {
 	u16 i, j;
+	unsigned long flags;
 	struct mpi3mr_intr_info *intr_info;
 	struct diag_buffer_desc *diag_buffer;
 
@@ -5197,8 +5198,10 @@ void mpi3mr_free_mem(struct mpi3mr_ioc *mrioc)
 	kfree(mrioc->throttle_groups);
 	mrioc->throttle_groups = NULL;
 
+	spin_lock_irqsave(&mrioc->logdata_lock, flags);
 	kfree(mrioc->logdata_buf);
 	mrioc->logdata_buf = NULL;
+	spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
 
 }
 

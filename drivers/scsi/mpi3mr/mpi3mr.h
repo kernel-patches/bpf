@@ -1169,6 +1169,7 @@ struct scmd_priv {
  * @logdata_buf: Circular buffer to store log data entries
  * @logdata_buf_idx: Index of entry in buffer to store
  * @logdata_entry_sz: log data entry size
+ * @logdata_lock: Lock for the log data buffer, index and entry size
  * @adm_req_q_bar_writeq_lock: Admin request queue lock
  * @adm_reply_q_bar_writeq_lock: Admin reply queue lock
  * @pend_large_data_sz: Counter to track pending large data
@@ -1378,6 +1379,7 @@ struct mpi3mr_ioc {
 	u8 *logdata_buf;
 	u16 logdata_buf_idx;
 	u16 logdata_entry_sz;
+	spinlock_t logdata_lock;
 	spinlock_t adm_req_q_bar_writeq_lock;
 	spinlock_t adm_reply_q_bar_writeq_lock;
 
