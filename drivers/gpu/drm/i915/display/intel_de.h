@@ -87,12 +87,19 @@ int intel_de_wait_for_clear_ms(struct intel_display *display, intel_reg_t reg,
 			       u32 mask, unsigned int timeout_ms);
 
 /*
- * Unlocked mmio-accessors, think carefully before using these.
+ * Unlocked mmio-accessors, think carefully before using these. Generally only
+ * highly performance sensitive code should use these (eg. vblank evade critical
+ * section, or interrupt handlers).
  *
  * Certain architectures will die if the same cacheline is concurrently accessed
- * by different clients (e.g. on Ivybridge). Access to registers should
- * therefore generally be serialised, by either the dev_priv->uncore.lock or
+ * by different clients (e.g. on Ivybridge/Haswell). Access to registers should
+ * therefore generally be serialised, by either the display->mmio.lock or
  * a more localised lock guarding all access to that bank of registers.
+ *
+ * DMC wakelock will not be taken by these. It must be done manually,
+ * if needed. See intel_dmc_wl.c for which registers need the wakelock.
+ *
+ * These will also skip the mmio_debug unclaimed register detection.
  */
 u32 intel_de_read_fw(struct intel_display *display, intel_reg_t reg);
 void intel_de_write_fw(struct intel_display *display, intel_reg_t reg, u32 val);
