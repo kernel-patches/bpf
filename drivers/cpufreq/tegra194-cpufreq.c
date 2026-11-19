@@ -42,6 +42,7 @@
 struct tegra_cpu_data {
 	u32 cpuid;
 	u32 clusterid;
+	u32 clkid;		/* performance-domain id */
 	void __iomem *freq_core_reg;
 };
 
@@ -421,7 +422,8 @@ static unsigned int tegra194_get_speed(u32 cpu)
 	int ret;
 
 	if (clusterid >= data->soc->num_clusters ||
-	    cpuid >= data->soc->maxcpus_per_cluster)
+	    cpuid >= data->soc->maxcpus_per_cluster ||
+	    !data->bpmp_luts[clusterid])
 		return 0;
 
 	/* reconstruct actual cpu freq using counters */
@@ -534,21 +536,45 @@ static int tegra194_cpufreq_init(struct cpufreq_policy *policy)
 {
 	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
 	int maxcpus_per_cluster = data->soc->maxcpus_per_cluster;
-	u32 clusterid = data->cpu_data[policy->cpu].clusterid;
 	struct cpufreq_frequency_table *freq_table;
 	struct cpufreq_frequency_table *bpmp_lut;
-	u32 start_cpu, cpu;
+	struct of_phandle_args args;
+	u32 start_cpu, cpu, clusterid;
 	int ret;
 
+	/* Covers all possible CPUs, so offline siblings are grouped too. */
+	ret = of_perf_domain_get_sharing_cpumask(policy->cpu, "performance-domains",
+						 "#performance-domain-cells",
+						 policy->cpus, &args);
+	if (!ret) {
+		if (args.args_count != 1) {
+			pr_err("cpufreq: cpu%u: invalid #performance-domain-cells\n",
+			       policy->cpu);
+			of_node_put(args.np);
+			return -EINVAL;
+		}
+
+		for_each_cpu(cpu, policy->cpus)
+			data->cpu_data[cpu].clkid = args.args[0];
+
+		of_node_put(args.np);
+	} else if (ret == -ENOENT) {
+		/* Legacy grouping for DTs without performance-domains. */
+		start_cpu = rounddown(policy->cpu, maxcpus_per_cluster);
+		for (cpu = start_cpu; cpu < (start_cpu + maxcpus_per_cluster); cpu++)
+			if (cpu_possible(cpu))
+				cpumask_set_cpu(cpu, policy->cpus);
+	} else {
+		pr_err("cpufreq: cpu%u: failed to get performance domain: %d\n",
+		       policy->cpu, ret);
+		return ret;
+	}
+
+	/* The BPMP LUT is indexed by the MPIDR cluster id, not clkid. */
+	clusterid = data->cpu_data[policy->cpu].clusterid;
 	if (clusterid >= data->soc->num_clusters || !data->bpmp_luts[clusterid])
 		return -EINVAL;
 
-	start_cpu = rounddown(policy->cpu, maxcpus_per_cluster);
-	/* set same policy for all cpus in a cluster */
-	for (cpu = start_cpu; cpu < (start_cpu + maxcpus_per_cluster); cpu++) {
-		if (cpu_possible(cpu))
-			cpumask_set_cpu(cpu, policy->cpus);
-	}
 	policy->cpuinfo.transition_latency = TEGRA_CPUFREQ_TRANSITION_LATENCY;
 
 	bpmp_lut = data->bpmp_luts[clusterid];
