@@ -39,6 +39,16 @@ enum nbl_chan_state {
 	NBL_CHAN_STATE_NBITS
 };
 
+struct nbl_board_port_info {
+	u8 eth_num;
+	u8 eth_speed;
+	u8 p4_version;
+	u8 rsv[5];
+};
+
+static_assert(sizeof(struct nbl_board_port_info) == 8,
+	      "nbl_board_port_info size must be 8 bytes");
+
 struct nbl_chan_send_info {
 	void *arg;
 	size_t arg_len;
