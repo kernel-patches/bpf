@@ -8,6 +8,7 @@
  */
 
 #include <linux/hardirq.h>
+#include <linux/memory.h>
 #include <linux/uaccess.h>
 #include <linux/ftrace.h>
 #include <linux/kernel.h>
@@ -89,6 +90,8 @@ int ftrace_init_nop(struct module *mod, struct dyn_ftrace *rec)
 
 	BUILD_BUG_ON(sizeof(struct ftrace_hotpatch_trampoline) !=
 		     SIZEOF_FTRACE_HOTPATCH_TRAMPOLINE);
+
+	guard(mutex)(&text_mutex);
 
 	next_trampoline = &next_vmlinux_trampoline;
 	trampolines_end = __ftrace_hotpatch_trampolines_end;
@@ -247,13 +250,21 @@ int ftrace_update_ftrace_func(ftrace_func_t func)
 	return 0;
 }
 
+void ftrace_arch_code_modify_prepare(void)
+	__acquires(&text_mutex)
+{
+	mutex_lock(&text_mutex);
+}
+
 void arch_ftrace_update_code(int command)
 {
 	ftrace_modify_all_code(command);
 }
 
 void ftrace_arch_code_modify_post_process(void)
+	__releases(&text_mutex)
 {
+	mutex_unlock(&text_mutex);
 	/*
 	 * Flush any pre-fetched instructions on all
 	 * CPUs to make the new code visible.

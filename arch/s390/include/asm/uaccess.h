@@ -384,15 +384,6 @@ static __always_inline unsigned long __must_check clear_user(void __user *to, un
 	return __clear_user(to, n);
 }
 
-void *__s390_kernel_write(void *dst, const void *src, size_t size);
-
-static inline void *s390_kernel_write(void *dst, const void *src, size_t size)
-{
-	if (__is_defined(__DECOMPRESSOR))
-		return memcpy(dst, src, size);
-	return __s390_kernel_write(dst, src, size);
-}
-
 void __noreturn __mvc_kernel_nofault_bad(void);
 
 #if defined(CONFIG_CC_HAS_ASM_GOTO_OUTPUT) && defined(CONFIG_CC_HAS_ASM_AOR_FORMAT_FLAGS)
