@@ -3273,6 +3273,10 @@ void mpi3mr_os_handle_events(struct mpi3mr_ioc *mrioc,
 		break;
 	}
 	case MPI3_EVENT_DEVICE_INFO_CHANGED:
+	{
+		process_evt_bh = 1;
+		break;
+	}
 	case MPI3_EVENT_LOG_DATA:
 
 		if (mrioc->reply_sz > offsetof(struct mpi3_event_notification_reply, event_data))
