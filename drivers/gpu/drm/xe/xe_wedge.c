@@ -6,6 +6,7 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_managed.h>
 
+#include "xe_assert.h"
 #include "xe_defaults.h"
 #include "xe_device.h"
 #include "xe_gt.h"
@@ -55,6 +56,43 @@
  *   firmware and restore device to normal operation.
  */
 
+/**
+ * xe_wedge_get() - Acquire wedge reference
+ * @xe: xe device instance
+ *
+ * Get runtime PM reference and block critical path execution.
+ *
+ * Use this for driver internal usecases which require temporarily blocking
+ * userspace access to the device during autonomous recovery, like PCIe FLR
+ * and bus reset. For everything else, use xe_wedge_declare().
+ */
+void xe_wedge_get(struct xe_device *xe)
+{
+	int ref;
+
+	/* We should not be runtime suspending as long as critical paths are blocked */
+	xe_pm_runtime_get_noresume(xe);
+
+	ref = atomic_inc_return(&xe->wedged.ref);
+	xe_assert(xe, ref > 0);
+}
+
+/**
+ * xe_wedge_put() - Relinquish wedge reference
+ * @xe: xe device instance
+ *
+ * Restore critical path execution and put runtime PM reference.
+ */
+void xe_wedge_put(struct xe_device *xe)
+{
+	int ref;
+
+	ref = atomic_dec_return(&xe->wedged.ref);
+	xe_assert(xe, ref >= 0);
+
+	xe_pm_runtime_put(xe);
+}
+
 static void wedge_work(struct work_struct *work)
 {
 	struct xe_device *xe = container_of(work, struct xe_device, wedged.work);
@@ -97,11 +135,11 @@ void xe_wedge_declare(struct xe_device *xe, unsigned long method)
 		return;
 	}
 
-	if (atomic_xchg(&xe->wedged.flag, 1))
+	if (atomic_xchg(&xe->wedged.perm, 1))
 		return;
 
+	xe_wedge_get(xe);
 	xe->needs_flr_on_fini = true;
-	xe_pm_runtime_get_noresume(xe);
 
 	xe_log_err_fatal(xe, WEDGED, -EIO, "Device declared wedged!\n");
 	xe_err_once(xe, "IOCTLs and executions are now blocked!\n"
@@ -241,8 +279,10 @@ static void xe_wedge_fini(struct drm_device *drm, void *arg)
 
 	disable_work_sync(&xe->wedged.work);
 
-	if (atomic_read(&xe->wedged.flag))
-		xe_pm_runtime_put(xe);
+	if (xe_wedged_permanent(xe))
+		xe_wedge_put(xe);
+
+	xe_assert(xe, !xe_wedged(xe));
 }
 
 /**

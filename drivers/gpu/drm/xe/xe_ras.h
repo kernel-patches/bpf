@@ -25,5 +25,7 @@ bool xe_ras_get_disable_vram_page_offline(struct xe_device *xe);
 u32 xe_ras_get_max_pages(struct xe_device *xe);
 int xe_ras_get_counter_response(struct xe_device *xe, const struct xe_ras_error_class *counter,
 				struct xe_ras_get_counter_response *response);
+bool xe_ras_is_aer_internal_error(struct xe_device *xe);
+void xe_ras_set_aer_internal_error(struct xe_device *xe);
 
 #endif

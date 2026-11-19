@@ -41,6 +41,7 @@ int xe_pm_block_on_suspend(struct xe_device *xe);
 int xe_pm_wait_all_c6(struct xe_device *xe);
 void xe_pm_might_block_on_suspend(void);
 int xe_pm_module_init(void);
+bool xe_pm_needs_bo_evict(struct xe_device *xe, bool hibernate);
 
 static inline void __xe_pm_runtime_noop(struct xe_device *xe) {}
 

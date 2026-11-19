@@ -47,6 +47,7 @@
 #include "xe_ring_ops_types.h"
 #include "xe_sched_job.h"
 #include "xe_sleep.h"
+#include "xe_tlb_inval.h"
 #include "xe_trace.h"
 #include "xe_uc_fw.h"
 #include "xe_vm.h"
@@ -265,6 +266,7 @@ static void guc_submit_fini(void *arg)
 
 	/* Forcefully kill any remaining exec queues */
 	xe_guc_ct_stop(&guc->ct);
+	xe_tlb_inval_reset(&guc_to_gt(guc)->tlb_inval);
 	guc_submit_reset_prepare(guc);
 	xe_guc_softreset(guc);
 	xe_guc_submit_stop(guc);
@@ -2225,6 +2227,14 @@ err_free:
 	return err;
 }
 
+static void guc_exec_queue_reinit_kernel(struct xe_exec_queue *q)
+{
+	xe_gt_assert(q->gt, q->flags & EXEC_QUEUE_FLAG_KERNEL);
+
+	atomic_set(&q->guc->state, 0);
+	xe_sched_reinit(&q->guc->sched);
+}
+
 static void guc_exec_queue_kill(struct xe_exec_queue *q)
 {
 	trace_xe_exec_queue_kill(q);
@@ -2719,6 +2729,7 @@ static u64 guc_exec_queue_reset_status(struct xe_exec_queue *q)
  */
 static const struct xe_exec_queue_ops guc_exec_queue_ops = {
 	.init = guc_exec_queue_init,
+	.reinit_kernel = guc_exec_queue_reinit_kernel,
 	.kill = guc_exec_queue_kill,
 	.fini = guc_exec_queue_fini,
 	.destroy = guc_exec_queue_destroy,
