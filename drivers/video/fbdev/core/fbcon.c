@@ -666,7 +666,7 @@ static void fbcon_prepare_logo(struct vc_data *vc, struct fb_info *info,
 	logo_height = fb_prepare_logo(info, par->rotate);
 	logo_lines = DIV_ROUND_UP(logo_height, vc->vc_font.height);
 	logo_lines = min(logo_lines, rows);
-	logo_lines = min(logo_lines, new_rows - 1);
+	logo_lines = min(logo_lines, new_rows);
 	if (logo_lines <= 0) {
 		logo_lines = 0;
 		logo_shown = FBCON_LOGO_DONTSHOW;
@@ -734,7 +734,9 @@ static void fbcon_prepare_logo(struct vc_data *vc, struct fb_info *info,
 		pr_info("fbcon: disable boot-logo (boot-logo bigger than screen).\n");
 	} else {
 		logo_shown = FBCON_LOGO_DRAW;
-		vc->vc_top = logo_lines;
+		/* keep vc_top if logo covers whole screen */
+		if (logo_lines < vc->vc_bottom)
+			vc->vc_top = logo_lines;
 	}
 }
 #endif /* MODULE */
@@ -2270,7 +2272,9 @@ static bool fbcon_switch(struct vc_data *vc)
 
 		logo_shown = fg_console;
 		fb_show_logo(info, par->rotate);
-		update_region(vc,
+		/* avoid screen update on full screen sized logo */
+		if (vc->vc_top)
+			update_region(vc,
 			      vc->vc_origin + vc->vc_size_row * vc->vc_top,
 			      vc->vc_size_row * (vc->vc_bottom -
 						 vc->vc_top) / 2);
