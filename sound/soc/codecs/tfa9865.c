@@ -92,8 +92,12 @@ static int tfa9865_ampe_event(struct snd_soc_dapm_widget *w,
 static bool tfa9865_volatile_reg(struct device *dev, unsigned int reg)
 {
 	switch (reg) {
-	case TFA9865_SYS_CTRL0 ... TFA9865_DEVICE_INFO:
-	case 0x10 ... 0x15:	/* status and interrupt flags */
+	case TFA9865_SYS_CTRL0:		/* I2CR clears itself */
+	case TFA9865_HIDE_UNHIDE_KEY:
+	case 0x10 ... 0x15:		/* status and interrupt flags */
+	case TFA9865_KEY1:
+	case TFA9865_KEY2:
+	case TFA9865_KEY1_SEED:
 		return true;
 	default:
 		return false;
@@ -106,7 +110,7 @@ static const struct regmap_config tfa9865_regmap = {
 	.max_register = 0xff,
 
 	.volatile_reg = tfa9865_volatile_reg,
-	.cache_type = REGCACHE_NONE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
 static const char * const tdmspks_text[] = { "Left", "Right" };
@@ -274,6 +278,9 @@ static int tfa9865_init(struct tfa9865 *tfa9865)
 	if (ret)
 		return ret;
 	usleep_range(1000, 2000);
+
+	/* The reset changed every register, forget what was read before */
+	regcache_drop_region(regmap, 0, tfa9865_regmap.max_register);
 
 	/* Leave power down to make the protected registers accessible */
 	regmap_clear_bits(regmap, TFA9865_SYS_CTRL0, BIT(TFA9865_SYS_CTRL0_PWDN));
