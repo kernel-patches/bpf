@@ -1117,6 +1117,7 @@ static long mpi3mr_bsg_upload_hdb(struct mpi3mr_ioc *mrioc,
 	struct diag_buffer_desc *diag_buffer;
 	uint32_t data_out_size;
 	uint32_t data_in_size;
+	u32 end;
 
 	data_out_size = job->request_payload.payload_len;
 	data_in_size = job->reply_payload.payload_len;
@@ -1151,7 +1152,8 @@ static long mpi3mr_bsg_upload_hdb(struct mpi3mr_ioc *mrioc,
 		return -EINVAL;
 	}
 
-	if ((upload_hdb.start_offset + upload_hdb.length) > diag_buffer->size) {
+	if (check_add_overflow(upload_hdb.start_offset, upload_hdb.length, &end) ||
+	    end > diag_buffer->size) {
 		dprint_bsg_err(mrioc,
 		    "%s: invalid start offset %d, length %d for type %d\n",
 		    __func__, upload_hdb.start_offset, upload_hdb.length,
