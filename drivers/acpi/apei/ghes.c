@@ -1276,7 +1276,7 @@ static void ghes_add_timer(struct ghes *ghes)
 		return;
 	}
 	expire = jiffies + msecs_to_jiffies(g->notify.poll_interval);
-	ghes->timer.expires = round_jiffies_relative(expire);
+	ghes->timer.expires = expire;
 	add_timer(&ghes->timer);
 }
 
