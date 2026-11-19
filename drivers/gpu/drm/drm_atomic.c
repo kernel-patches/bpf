@@ -742,6 +742,7 @@ drm_atomic_get_colorop_state(struct drm_atomic_commit *state,
 	struct drm_colorop_state *colorop_state;
 
 	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, state->checked);
 
 	colorop_state = drm_atomic_get_new_colorop_state(state, colorop);
 	if (colorop_state)
