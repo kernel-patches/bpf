@@ -635,7 +635,6 @@ static int omap_prm_domain_attach_clock(struct device *dev,
 static int omap_prm_domain_attach_dev(struct generic_pm_domain *domain,
 				      struct device *dev)
 {
-	struct generic_pm_domain_data *genpd_data;
 	struct of_phandle_args pd_args;
 	struct omap_prm_domain *prmd;
 	struct device_node *np;
@@ -654,9 +653,6 @@ static int omap_prm_domain_attach_dev(struct generic_pm_domain *domain,
 			 prmd->pd.name, pd_args.args_count);
 	of_node_put(pd_args.np);
 
-	genpd_data = dev_gpd_data(dev);
-	genpd_data->data = NULL;
-
 	ret = omap_prm_domain_attach_clock(dev, prmd);
 	if (ret)
 		return ret;
@@ -667,12 +663,8 @@ static int omap_prm_domain_attach_dev(struct generic_pm_domain *domain,
 static void omap_prm_domain_detach_dev(struct generic_pm_domain *domain,
 				       struct device *dev)
 {
-	struct generic_pm_domain_data *genpd_data;
-
 	if (!pm_clk_no_clocks(dev))
 		pm_clk_destroy(dev);
-	genpd_data = dev_gpd_data(dev);
-	genpd_data->data = NULL;
 }
 
 static int omap_prm_domain_init(struct device *dev, struct omap_prm *prm)
