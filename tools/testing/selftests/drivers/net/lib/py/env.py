@@ -125,14 +125,17 @@ class NetDrvEpEnv(NetDrvEnvBase):
     which can be used to send traffic in.
 
     For local testing it creates two network namespaces and a pair
-    of netdevsim devices.
+    of netdevsim devices, or a veth pair with veth_test. The veth_test
+    attribute tells whether the env runs over the veth pair, which it
+    never does with NETIF.
     """
 
     # Network prefixes used for local tests
     sw_v4_pfx = "192.0.2."
     sw_v6_pfx = "2001:db8::"
 
-    def __init__(self, src_path, nsim_test=None, queue_count=None):
+    def __init__(self, src_path, nsim_test=None, queue_count=None,
+                 veth_test=False):
         super().__init__(src_path)
 
         self._stats_settle_time = None
@@ -144,9 +147,14 @@ class NetDrvEpEnv(NetDrvEnvBase):
         self._netns = None
         self._ns = None
         self._ns_peer = None
+        self._veth = None
+        self.veth_test = False
 
         self.addr_v        = { "4": None, "6": None }
         self.remote_addr_v = { "4": None, "6": None }
+
+        if nsim_test and veth_test:
+            raise ValueError("veth_test conflicts with nsim_test=True")
 
         if "NETIF" in self.env:
             if nsim_test is True:
@@ -162,12 +170,15 @@ class NetDrvEpEnv(NetDrvEnvBase):
             kind = self.env["REMOTE_TYPE"]
             args = self.env["REMOTE_ARGS"]
         else:
-            if nsim_test is False:
+            if veth_test:
+                self.create_local_veth()
+                self.veth_test = True
+                self.dev = ip("-d link show dev " + self._veth, json=True)[0]
+            elif nsim_test is False:
                 raise KsftXfailEx("Test does not work on netdevsim")
-
-            self.create_local()
-
-            self.dev = self._ns.nsims[0].dev
+            else:
+                self.create_local()
+                self.dev = self._ns.nsims[0].dev
 
             self.addr_v["4"] = self.sw_v4_pfx + "1"
             self.addr_v["6"] = self.sw_v6_pfx + "1"
@@ -210,6 +221,18 @@ class NetDrvEpEnv(NetDrvEnvBase):
 
         self._setup_sw_ifaces(self._ns.nsims[0].ifname,
                               self._ns_peer.nsims[0].ifname)
+
+    def create_local_veth(self):
+        """Create a veth pair, with the peer in a network namespace."""
+        self._netns = NetNS()
+
+        # The peer takes the same name in its own network namespace.
+        veth = "veth" + self._netns.name
+        ip(f"link add {veth} type veth "
+           f"peer name {veth} netns {self._netns.name}")
+        self._veth = veth
+
+        self._setup_sw_ifaces(veth, veth)
 
     def _setup_sw_ifaces(self, ifname, peer_ifname):
         """Address and bring up a local interface and its peer in _netns."""
@@ -283,6 +306,9 @@ class NetDrvEpEnv(NetDrvEnvBase):
         if self._ns_peer:
             self._ns_peer.remove()
             self._ns_peer = None
+        if self._veth:
+            ip(f"link del dev {self._veth}")
+            self._veth = None
         if self._netns:
             del self._netns
             self._netns = None

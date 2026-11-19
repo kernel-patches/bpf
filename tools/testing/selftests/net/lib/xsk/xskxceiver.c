@@ -55,6 +55,9 @@
  *    l. If multi-buffer is supported, try various nasty combinations of descriptors to
  *       check if they pass the validation or not
  *
+ * On a physical device, drivers/net/xsk.py runs the hardware cases in
+ * zero-copy mode, with an SKB-mode peer on a remote host.
+ *
  * Flow:
  * -----
  * - drivers/net/xsk.py starts two processes: Tx and Rx
