@@ -5114,8 +5114,11 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 			scsi_tgt_priv_data->wslen = tgt_dev->wslen;
 			if (tgt_dev->dev_type == MPI3_DEVICE_DEVFORM_VD)
 				scsi_tgt_priv_data->throttle_group = tgt_dev->dev_spec.vd_inf.tg;
-		} else
+		} else {
+			if (tgt_dev)
+				mpi3mr_tgtdev_put(tgt_dev);
 			retval = -ENXIO;
+		}
 	} else if (mrioc->sas_transport_enabled && !starget->channel) {
 		rphy = dev_to_rphy(starget->dev.parent);
 		tgt_dev = __mpi3mr_get_tgtdev_by_addr_and_rphy(mrioc,
@@ -5132,8 +5135,11 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 			tgt_dev->starget = starget;
 			atomic_set(&scsi_tgt_priv_data->block_io, 0);
 			retval = 0;
-		} else
+		} else {
+			if (tgt_dev)
+				mpi3mr_tgtdev_put(tgt_dev);
 			retval = -ENXIO;
+		}
 	}
 	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
 

@@ -2575,9 +2575,10 @@ static u8 mpi3mr_get_port_id_by_rphy(struct mpi3mr_ioc *mrioc, struct sas_rphy *
 
 		tgtdev = __mpi3mr_get_tgtdev_by_addr_and_rphy(mrioc,
 			    rphy->identify.sas_address, rphy);
-		if (tgtdev && tgtdev->dev_spec.sas_sata_inf.hba_port) {
-			port_id =
-				tgtdev->dev_spec.sas_sata_inf.hba_port->port_id;
+		if (tgtdev) {
+			if (tgtdev->dev_spec.sas_sata_inf.hba_port)
+				port_id =
+					tgtdev->dev_spec.sas_sata_inf.hba_port->port_id;
 			mpi3mr_tgtdev_put(tgtdev);
 		}
 		spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
