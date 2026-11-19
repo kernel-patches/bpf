@@ -123,7 +123,7 @@ rio_read_config(struct file *filp, struct kobject *kobj,
 	u8 *data = (u8 *) buf;
 
 	/* Several chips lock up trying to read undefined config space */
-	if (capable(CAP_SYS_ADMIN))
+	if (file_ns_capable(filp, &init_user_ns, CAP_SYS_ADMIN))
 		size = RIO_MAINT_SPACE_SZ;
 
 	if (off >= size)
