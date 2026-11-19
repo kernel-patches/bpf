@@ -250,11 +250,13 @@ static void check_unclaimed_mmio_pre(struct intel_display *display,
 	if (!display->params.mmio_debug)
 		return;
 
-	if (display->mmio.funcs->check_for_unclaimed_mmio(display))
-		drm_dbg_kms(display->drm,
-			    "Unclaimed access detected before %s register 0x%x\n",
-			    write ? "write to" : "read from",
-			    intel_reg_offset(reg));
+	if (!display->mmio.funcs->check_for_unclaimed_mmio(display))
+		return;
+
+	drm_dbg_kms(display->drm,
+		    "Unclaimed access detected before %s register 0x%x\n",
+		    write ? "write to" : "read from",
+		    intel_reg_offset(reg));
 }
 
 static void check_unclaimed_mmio_post(struct intel_display *display,
@@ -265,13 +267,16 @@ static void check_unclaimed_mmio_post(struct intel_display *display,
 	if (!display->params.mmio_debug)
 		return;
 
-	if (drm_WARN(display->drm,
-		     display->mmio.funcs->check_for_unclaimed_mmio(display),
-		     "Unclaimed %s register 0x%x\n",
-		     write ? "write to" : "read from",
-		     intel_reg_offset(reg)))
-		/* Only report the first N failures */
-		display->params.mmio_debug--;
+	if (!display->mmio.funcs->check_for_unclaimed_mmio(display))
+		return;
+
+	drm_WARN(display->drm, true,
+		 "Unclaimed %s register 0x%x\n",
+		 write ? "write to" : "read from",
+		 intel_reg_offset(reg));
+
+	/* Only report the first N failures */
+	display->params.mmio_debug--;
 }
 
 bool intel_de_unclaimed_mmio_detected(struct intel_display *display)
@@ -300,17 +305,19 @@ bool intel_de_arm_unclaimed_mmio_detection(struct intel_display *display)
 	if (display->mmio.unclaimed_mmio_check <= 0)
 		goto out;
 
-	if (display->mmio.funcs->check_for_unclaimed_mmio(display)) {
-		if (!display->params.mmio_debug) {
-			drm_dbg_kms(display->drm,
-				    "Unclaimed register detected, "
-				    "enabling oneshot unclaimed register reporting. "
-				    "Please use i915.mmio_debug=N for more information.\n");
-			display->params.mmio_debug++;
-		}
-		display->mmio.unclaimed_mmio_check--;
-		ret = true;
+	if (!display->mmio.funcs->check_for_unclaimed_mmio(display))
+		goto out;
+
+	if (!display->params.mmio_debug) {
+		drm_dbg_kms(display->drm,
+			    "Unclaimed register detected, "
+			    "enabling oneshot unclaimed register reporting. "
+			    "Please use i915.mmio_debug=N for more information.\n");
+		display->params.mmio_debug++;
 	}
+
+	display->mmio.unclaimed_mmio_check--;
+	ret = true;
 
 out:
 	spin_unlock_irq(&display->mmio.lock);
