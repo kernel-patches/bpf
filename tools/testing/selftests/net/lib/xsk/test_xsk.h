@@ -83,7 +83,6 @@ typedef int (*test_func_t)(struct test_spec *test);
 struct xsk_socket_info {
 	struct xsk_ring_cons rx;
 	struct xsk_ring_prod tx;
-	struct xsk_umem_info *umem_real;
 	struct xsk_umem_info *umem;
 	struct xsk_socket *xsk;
 	struct pkt_stream *pkt_stream;
@@ -108,18 +107,10 @@ struct xsk_umem_info {
 	u32 frame_headroom;
 	void *buffer;
 	u32 frame_size;
-	u32 base_addr;
 	u32 fill_size;
 	u32 comp_size;
 	bool unaligned_mode;
 };
-
-struct set_hw_ring {
-	u32 default_tx;
-	u32 default_rx;
-};
-
-int hw_ring_size_reset(struct ifobject *ifobj);
 
 struct ifobject {
 	char ifname[MAX_INTERFACE_NAME_CHARS];
@@ -131,7 +122,6 @@ struct ifobject {
 	struct bpf_map *xskmap;
 	struct bpf_program *xdp_prog;
 	struct ethtool_ringparam ring;
-	struct set_hw_ring set_ring;
 	enum test_mode mode;
 	int ifindex;
 	int mtu;
@@ -145,7 +135,6 @@ struct ifobject {
 	bool busy_poll;
 	bool use_fill_ring;
 	bool release_rx;
-	bool shared_umem;
 	bool use_metadata;
 	bool unaligned_supp;
 	bool multi_buff_supp;
@@ -204,7 +193,6 @@ struct test_spec {
 	u16 current_step;
 	u16 nb_sockets;
 	bool fail;
-	bool set_ring;
 	bool adjust_tail;
 	bool adjust_tail_support;
 	bool poll_tmout;

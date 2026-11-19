@@ -336,7 +336,6 @@ int main(int argc, char **argv)
 	u32 i, j, failed_tests = 0, nb_tests;
 	int modes = TEST_MODE_SKB + 1;
 	struct test_spec test;
-	bool shared_netdev;
 	int ret;
 
 	/* Use libbpf 1.0 API mode */
@@ -383,10 +382,6 @@ int main(int argc, char **argv)
 		ksft_exit_xfail();
 	}
 
-	shared_netdev = (ifobj_tx->ifindex == ifobj_rx->ifindex);
-	ifobj_tx->shared_umem = shared_netdev;
-	ifobj_rx->shared_umem = shared_netdev;
-
 	if (!validate_interface(ifobj_tx) || !validate_interface(ifobj_rx))
 		print_usage(argv);
 
@@ -397,11 +392,8 @@ int main(int argc, char **argv)
 	}
 
 	ret = get_hw_ring_size(ifobj_tx->ifname, &ifobj_tx->ring);
-	if (!ret) {
+	if (!ret)
 		ifobj_tx->hw_ring_size_supp = true;
-		ifobj_tx->set_ring.default_tx = ifobj_tx->ring.tx_pending;
-		ifobj_tx->set_ring.default_rx = ifobj_tx->ring.rx_pending;
-	}
 
 	if (init_iface(ifobj_rx, worker_testapp_validate_rx) ||
 	    init_iface(ifobj_tx, worker_testapp_validate_tx)) {
@@ -452,9 +444,6 @@ int main(int argc, char **argv)
 				failed_tests++;
 		}
 	}
-
-	if (ifobj_tx->hw_ring_size_supp)
-		hw_ring_size_reset(ifobj_tx);
 
 	pkt_stream_delete(tx_pkt_stream_default);
 	pkt_stream_delete(rx_pkt_stream_default);

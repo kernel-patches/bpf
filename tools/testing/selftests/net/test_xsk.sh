@@ -71,9 +71,6 @@
 # Set up veth interfaces and leave them up so xskxceiver can be launched in a debugger:
 #   sudo ./test_xsk.sh -d
 #
-# Run test suite for physical device in loopback mode
-#   sudo ./test_xsk.sh -i IFACE
-#
 # Run test suite in a specific mode only [skb,drv,zc]
 #   sudo ./test_xsk.sh -m MODE
 #
@@ -88,14 +85,11 @@
 
 . xsk_prereqs.sh
 
-ETH=""
-
-while getopts "vi:dm:lt:h" flag
+while getopts "vdm:lt:h" flag
 do
 	case "${flag}" in
 		v) verbose=1;;
 		d) debug=1;;
-		i) ETH=${OPTARG};;
 		m) MODE=${OPTARG};;
 		l) list=1;;
 		t) TEST=${OPTARG};;
@@ -162,21 +156,16 @@ if [[ $help -eq 1 ]]; then
         exit
 fi
 
-if [ ! -z $ETH ]; then
-	VETH0=${ETH}
-	VETH1=${ETH}
-else
-	validate_root_exec
-	validate_veth_support ${VETH0}
-	validate_ip_utility
-	setup_vethPairs
+validate_root_exec
+validate_veth_support ${VETH0}
+validate_ip_utility
+setup_vethPairs
 
-	retval=$?
-	if [ $retval -ne 0 ]; then
-		test_status $retval "${TEST_NAME}"
-		cleanup_exit ${VETH0} ${VETH1}
-		exit $retval
-	fi
+retval=$?
+if [ $retval -ne 0 ]; then
+	test_status $retval "${TEST_NAME}"
+	cleanup_exit ${VETH0} ${VETH1}
+	exit $retval
 fi
 
 
@@ -208,11 +197,7 @@ fi
 
 exec_xskxceiver
 
-if [ -z $ETH ]; then
-	cleanup_exit ${VETH0} ${VETH1}
-else
-	cleanup_iface ${ETH} ${MTU}
-fi
+cleanup_exit ${VETH0} ${VETH1}
 
 if [[ $list -eq 1 ]]; then
     exit
@@ -221,18 +206,12 @@ fi
 TEST_NAME="XSK_SELFTESTS_${VETH0}_BUSY_POLL"
 busy_poll=1
 
-if [ -z $ETH ]; then
-	setup_vethPairs
-fi
+setup_vethPairs
 exec_xskxceiver
 
 ## END TESTS
 
-if [ -z $ETH ]; then
-	cleanup_exit ${VETH0} ${VETH1}
-else
-	cleanup_iface ${ETH} ${MTU}
-fi
+cleanup_exit ${VETH0} ${VETH1}
 
 failures=0
 echo -e "\nSummary:"
