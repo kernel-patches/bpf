@@ -106,7 +106,7 @@ static int aw_cali_svc_cali_en(struct aw_device *aw_dev, bool cali_en)
 	aw_dev_dsp_enable(aw_dev, false);
 	if (cali_en) {
 		regmap_update_bits(aw_dev->regmap, AW88399_DBGCTRL_REG,
-				~AW883XX_DSP_NG_EN_MASK, AW883XX_DSP_NG_EN_DISABLE_VALUE);
+				~AW88399_DSP_NG_EN_MASK, AW88399_DSP_NG_EN_DISABLE_VALUE);
 		aw_dev_dsp_write(aw_dev, AW88399_DSP_LOW_POWER_SWITCH_CFG_ADDR,
 				AW88399_DSP_LOW_POWER_SWITCH_DISABLE, AW_DSP_16_DATA);
 
@@ -166,7 +166,7 @@ static void aw_cali_svc_backup_info(struct aw_device *aw_dev)
 	unsigned int reg_val, dsp_val;
 
 	regmap_read(aw_dev->regmap, AW88399_DBGCTRL_REG, &reg_val);
-	backup_desc->dsp_ng_cfg = reg_val & (~AW883XX_DSP_NG_EN_MASK);
+	backup_desc->dsp_ng_cfg = reg_val & (~AW88399_DSP_NG_EN_MASK);
 
 	aw_dev_dsp_read(aw_dev, AW88399_DSP_LOW_POWER_SWITCH_CFG_ADDR, &dsp_val, AW_DSP_16_DATA);
 
@@ -178,7 +178,7 @@ static void aw_cali_svc_recover_info(struct aw_device *aw_dev)
 	struct aw_cali_backup_desc *backup_desc = &aw_dev->cali_desc.backup_info;
 
 	regmap_update_bits(aw_dev->regmap, AW88399_DBGCTRL_REG,
-			~AW883XX_DSP_NG_EN_MASK, backup_desc->dsp_ng_cfg);
+			~AW88399_DSP_NG_EN_MASK, backup_desc->dsp_ng_cfg);
 
 	aw_dev_dsp_write(aw_dev, AW88399_DSP_LOW_POWER_SWITCH_CFG_ADDR,
 			backup_desc->dsp_lp_cfg, AW_DSP_16_DATA);
