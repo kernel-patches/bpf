@@ -460,12 +460,78 @@ static int sit9531x_output_forced_hiz(struct sit9531x_dev *sitdev,
 	return 0;
 }
 
+/* Re-read an output's mute state. Caller must hold sitdev->multiop_lock. */
+int sit9531x_output_state_refresh(struct sit9531x_dev *sitdev, u8 out_idx)
+{
+	bool muted, part;
+	int rc;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	rc = sit9531x_output_forced_hiz(sitdev, out_idx, &muted, &part);
+	if (rc)
+		return rc;
+
+	sitdev->out[out_idx].enabled = !muted;
+	sitdev->out[out_idx].part_muted = part;
+	sitdev->out[out_idx].state_stale = false;
+
+	return 0;
+}
+
+static int sit9531x_hiz_set_bit(struct sit9531x_dev *sitdev,
+				unsigned int reg, u8 bit, bool set)
+{
+	u8 cur, new_val;
+	int rc;
+
+	rc = sit9531x_read_u8(sitdev, reg, &cur);
+	if (rc)
+		return rc;
+
+	new_val = set ? (cur | BIT(bit)) : (cur & ~BIT(bit));
+
+	return sit9531x_write_u8(sitdev, reg, new_val);
+}
+
+/*
+ * The Page 3 debug key opens every debug register of the output system while
+ * it holds the unlock value.
+ */
+static int sit9531x_outsys_debug_open(struct sit9531x_dev *sitdev)
+{
+	int rc;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
+			       SIT9531X_DEBUG_UNLOCK_VAL);
+	if (rc)
+		sit9531x_write_close(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
+				     SIT9531X_DEBUG_LOCK_VAL);
+
+	return rc;
+}
+
+static void sit9531x_outsys_debug_close(struct sit9531x_dev *sitdev)
+{
+	int rc;
+
+	rc = sit9531x_write_close(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
+				  SIT9531X_DEBUG_LOCK_VAL);
+	sitdev->outsys_key_pending = !!rc;
+	if (rc)
+		dev_warn(sitdev->dev, "output debug block left unlocked: %d\n",
+			 rc);
+}
+
 #define SIT9531X_LOOP_LOCK_TRIES	3
 
-/* Close the loops and lock the debug block without committing */
-static void sit9531x_prg_abort(struct sit9531x_dev *sitdev)
+/*
+ * Leave PRG_CMD: re-lock the loops and close the debug window. The sleep is
+ * the settling time after loop lock.
+ */
+static int sit9531x_prg_relock(struct sit9531x_dev *sitdev)
 {
-	int rc = -EIO;
+	int rc = 0;
 	u8 attempt;
 
 	for (attempt = 0; attempt < SIT9531X_LOOP_LOCK_TRIES; attempt++) {
@@ -477,30 +543,49 @@ static void sit9531x_prg_abort(struct sit9531x_dev *sitdev)
 	}
 	if (rc)
 		dev_err(sitdev->dev,
-			"output loops left unlocked after a failed entry: %d\n",
+			"output loops left unlocked after programming: %d\n",
 			rc);
 
-	sit9531x_write_u8(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
-			  SIT9531X_DEBUG_LOCK_VAL);
+	sitdev->loops_open = !!rc;
+
+	msleep(100);
+
+	sit9531x_outsys_debug_close(sitdev);
+
+	return rc;
 }
 
 /*
- * Unlock the Page 3 debug registers and enter PRG_CMD; output-system writes
- * take effect only in this state.
+ * Update the NVM bank and leave PRG_CMD. The bank update is issued once per
+ * programming sequence; a loop re-lock retried later does not repeat it.
+ */
+static int sit9531x_prg_commit(struct sit9531x_dev *sitdev)
+{
+	int rc, rc2;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
+			       SIT9531X_UPDATE_NVM);
+	rc2 = sit9531x_prg_relock(sitdev);
+
+	return rc ? rc : rc2;
+}
+
+/*
+ * Open the Page 3 debug window and enter PRG_CMD; the output divider takes
+ * effect only in this state.
  */
 static int sit9531x_prg_enter(struct sit9531x_dev *sitdev)
 {
 	int rc;
 
-	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
-			       SIT9531X_DEBUG_UNLOCK_VAL);
+	rc = sit9531x_outsys_debug_open(sitdev);
 	if (rc)
 		return rc;
 
 	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
 			       SIT9531X_PRG_CMD_STATE);
 	if (rc) {
-		sit9531x_prg_abort(sitdev);
+		sit9531x_prg_relock(sitdev);
 		return rc;
 	}
 
@@ -508,51 +593,144 @@ static int sit9531x_prg_enter(struct sit9531x_dev *sitdev)
 }
 
 /*
- * Update the NVM shadow and re-lock the loops after sit9531x_prg_enter(). The
- * sleep is the settling time after loop lock.
+ * Mute or unmute every Hi-Z pair of a slot. The force registers are outside
+ * the NVM, so no directive is written, as in Output_Disable_Control_HiZ.py.
+ * Caller must hold the debug window open.
  */
-static int sit9531x_prg_commit(struct sit9531x_dev *sitdev)
+static int sit9531x_output_hiz_write(struct sit9531x_dev *sitdev, u8 slot,
+				     bool mute, u8 keep)
 {
-	int rc, rc2 = 0, rc3;
-	u8 attempt;
+	u8 mask[SIT9531X_HIZ_PAIRS], state[SIT9531X_HIZ_PAIRS];
+	struct sit9531x_hiz_pair p[SIT9531X_HIZ_PAIRS];
+	int i, rc, undo_rc;
 
-	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
-			       SIT9531X_UPDATE_NVM);
+	sit9531x_output_get_hiz_regs(slot, p);
 
-	for (attempt = 0; attempt < SIT9531X_LOOP_LOCK_TRIES; attempt++) {
-		rc2 = sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
-					SIT9531X_LOOP_LOCK);
-		if (!rc2)
-			break;
-		usleep_range(1000, 2000);
+	if (!mute) {
+		for (i = 0; i < SIT9531X_HIZ_PAIRS; i++) {
+			/* A pad the loaded configuration forces stays forced */
+			if (keep & BIT(i))
+				continue;
+			rc = sit9531x_hiz_set_bit(sitdev, p[i].mask, p[i].bit,
+						  false);
+			if (rc)
+				return rc;
+		}
+		return 0;
 	}
-	if (rc2)
-		dev_err(sitdev->dev,
-			"output loops left unlocked after programming: %d\n",
-			rc2);
 
-	sitdev->loops_open = !!rc2;
-
-	msleep(100);
+	for (i = 0; i < SIT9531X_HIZ_PAIRS; i++) {
+		rc = sit9531x_read_u8(sitdev, p[i].state, &state[i]);
+		if (rc)
+			return rc;
+		rc = sit9531x_read_u8(sitdev, p[i].mask, &mask[i]);
+		if (rc)
+			return rc;
+	}
 
 	/*
-	 * The debug key register unlocks every debug register while it holds
-	 * the unlock value.
+	 * STATE before MASK: enabling the override first can drive the pad for
+	 * one I2C transfer.
 	 */
-	rc3 = sit9531x_write_close(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
-				   SIT9531X_DEBUG_LOCK_VAL);
+	for (i = 0; i < SIT9531X_HIZ_PAIRS; i++) {
+		rc = sit9531x_hiz_set_bit(sitdev, p[i].state, p[i].bit, false);
+		if (!rc)
+			rc = sit9531x_hiz_set_bit(sitdev, p[i].mask, p[i].bit,
+						  true);
+		if (rc)
+			break;
+	}
+	if (!rc)
+		return 0;
 
+	for (; i >= 0; i--) {
+		u8 bit = BIT(p[i].bit);
+
+		undo_rc = sit9531x_hiz_set_bit(sitdev, p[i].mask, p[i].bit,
+					       mask[i] & bit);
+		if (!undo_rc)
+			undo_rc = sit9531x_hiz_set_bit(sitdev, p[i].state,
+						       p[i].bit,
+						       state[i] & bit);
+		if (undo_rc)
+			dev_err(sitdev->dev,
+				"slot%u: Hi-Z override left part applied (%d)\n",
+				slot, undo_rc);
+	}
+
+	return rc;
+}
+
+/* Caller must hold sitdev->multiop_lock. */
+int sit9531x_output_disable(struct sit9531x_dev *sitdev, u8 index)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	int rc, state_rc;
+	bool muted, part;
+	u8 slot;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (index >= info->num_outputs)
+		return -EINVAL;
+
+	slot = info->clkout_map[index];
+	rc = sit9531x_outsys_debug_open(sitdev);
 	if (rc)
 		return rc;
-	if (rc2)
-		return rc2;
 
-	if (rc3)
-		dev_warn(sitdev->dev,
-			 "output debug block left unlocked after programming: %d\n",
-			 rc3);
+	rc = sit9531x_output_hiz_write(sitdev, slot, true, 0);
+	sit9531x_outsys_debug_close(sitdev);
 
-	return 0;
+	/* Read back the Hi-Z state */
+	state_rc = sit9531x_output_forced_hiz(sitdev, index, &muted, &part);
+	if (!state_rc) {
+		sitdev->out[index].enabled = !muted;
+		sitdev->out[index].part_muted = part;
+		sitdev->out[index].state_stale = false;
+	} else {
+		sitdev->out[index].state_stale = true;
+		if (!rc)
+			rc = state_rc;
+	}
+
+	return rc;
+}
+
+/* Caller must hold sitdev->multiop_lock. */
+int sit9531x_output_enable(struct sit9531x_dev *sitdev, u8 index)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	int rc, state_rc;
+	bool muted, part;
+	u8 slot;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (index >= info->num_outputs)
+		return -EINVAL;
+
+	slot = info->clkout_map[index];
+	rc = sit9531x_outsys_debug_open(sitdev);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_hiz_write(sitdev, slot, false,
+				       sitdev->out[index].hiz_keep);
+	sit9531x_outsys_debug_close(sitdev);
+
+	state_rc = sit9531x_output_forced_hiz(sitdev, index, &muted, &part);
+	if (!state_rc) {
+		sitdev->out[index].enabled = !muted;
+		sitdev->out[index].part_muted = part;
+		sitdev->out[index].state_stale = false;
+	} else {
+		sitdev->out[index].state_stale = true;
+		if (!rc)
+			rc = state_rc;
+	}
+
+	return rc;
 }
 
 /*
@@ -2085,6 +2263,24 @@ static int sit9531x_out_state_fetch(struct sit9531x_dev *sitdev, u8 index)
 		return rc;
 
 	sitdev->out[index].part_muted = part;
+	sitdev->out[index].state_stale = false;
+
+	/* Record the pads the loaded configuration forces on a driven output */
+	out->hiz_keep = 0;
+	if (part) {
+		struct sit9531x_hiz_pair p[SIT9531X_HIZ_PAIRS];
+		bool forced;
+		int i;
+
+		sit9531x_output_get_hiz_regs(slot, p);
+		for (i = 0; i < SIT9531X_HIZ_PAIRS; i++) {
+			rc = sit9531x_hiz_pair_forced(sitdev, &p[i], &forced);
+			if (rc)
+				return rc;
+			if (forced)
+				out->hiz_keep |= BIT(i);
+		}
+	}
 
 	/*
 	 * Each PLL page holds a 12-bit output-enable mask: OUT_MAP_LO bits 0-7
@@ -2445,7 +2641,9 @@ sit9531x_dev_chan_states_update(struct sit9531x_dev *sitdev)
 
 	/* Retry pending writes first so the reads below see their result */
 	if (sitdev->loops_open)
-		sit9531x_prg_commit(sitdev);
+		sit9531x_prg_relock(sitdev);
+	else if (sitdev->outsys_key_pending)
+		sit9531x_outsys_debug_close(sitdev);
 
 	sit9531x_input_off_retry(sitdev);
 	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
@@ -2772,10 +2970,12 @@ static void sit9531x_dev_stop(struct sit9531x_dev *sitdev)
 
 	mutex_lock(&sitdev->multiop_lock);
 	if (sitdev->loops_open) {
-		sit9531x_prg_commit(sitdev);
+		sit9531x_prg_relock(sitdev);
 		if (sitdev->loops_open)
 			dev_warn(sitdev->dev,
 				 "output loops left unlocked at removal\n");
+	} else if (sitdev->outsys_key_pending) {
+		sit9531x_outsys_debug_close(sitdev);
 	}
 	mutex_unlock(&sitdev->multiop_lock);
 }
@@ -2855,7 +3055,7 @@ static void sit9531x_dpll_pin_unregister(struct sit9531x_dpll_pin *pin)
 	 * Clear before unregistering: callbacks test it under the DPLL device
 	 * lock, which dpll_pin_unregister() also takes.
 	 */
-	pin->dpll_pin = NULL;
+	WRITE_ONCE(pin->dpll_pin, NULL);
 
 	dpll_pin_unregister(sitdpll->dpll_dev, dpll_pin, ops, pin);
 	dpll_pin_put(dpll_pin, &pin->tracker);
@@ -2891,20 +3091,33 @@ static void sit9531x_dpll_pins_unregister(struct sit9531x_dpll *sitdpll)
 	}
 }
 
-/* Check if the pin class has a state callback, which the DPLL core requires */
+/*
+ * An output is registered when routed to this DPLL, whether or not it is
+ * driving.
+ */
 static bool sit9531x_dpll_pin_is_registrable(struct sit9531x_dpll *sitdpll,
 					     enum dpll_pin_direction dir,
 					     u8 index)
 {
 	struct sit9531x_dev *sitdev = sitdpll->dev;
 
-	if (dir != DPLL_PIN_DIRECTION_INPUT)
+	if (dir == DPLL_PIN_DIRECTION_INPUT) {
+		if (index == SIT9531X_MAX_INPUTS)
+			return true;
+		if (index == SIT9531X_INTSYNC_PIN_ID)
+			return false;
+
+		return sit9531x_input_pin_is_registrable(sitdev, index);
+	}
+
+	if (index == SIT9531X_INTSYNC_OUT_PIN_ID)
 		return false;
 
-	if (index == SIT9531X_MAX_INPUTS)
-		return true;
+	if (index >= sitdev->info->num_outputs)
+		return false;
 
-	return sit9531x_input_pin_is_registrable(sitdev, index);
+	return sitdev->out[index].pll_idx == sitdpll->id &&
+	       sitdev->out[index].routed;
 }
 
 static int sit9531x_dpll_pins_register(struct sit9531x_dpll *sitdpll)
