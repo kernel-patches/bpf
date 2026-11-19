@@ -22641,9 +22641,8 @@ T:	git git://linuxtv.org/media.git
 F:	drivers/media/cec/usb/pulse8/
 
 PURELIFI PLFXLC DRIVER
-M:	Srinivasan Raju <srini.raju@purelifi.com>
 L:	linux-wireless@vger.kernel.org
-S:	Supported
+S:	Orphan
 F:	drivers/net/wireless/purelifi/
 
 PVRUSB2 VIDEO4LINUX DRIVER
