@@ -359,8 +359,8 @@ int nbl_res_intr_destroy_msix_map(struct nbl_resource_mgt *res_mgt,
  * configuration intact).  The bitmap pools are therefore sized for peak,
  * not maximum, concurrent use: a reconfigure of the same or a smaller
  * size still fails with -EAGAIN when the pool is nearly exhausted.  The
- * in-tree caller asks for one non-net vector per PF, far below
- * NBL_MAX_OTHER_INTERRUPT.
+ * in-tree caller (nbl_dev_cfg_msix_map(), from nbl_dev_start()) asks for
+ * one non-net vector per PF, far below NBL_MAX_OTHER_INTERRUPT.
  *
  * Serialization: this function takes intr_mgt->lock internally to
  * protect the global vector bitmaps and per-function state against
