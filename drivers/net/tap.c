@@ -868,23 +868,6 @@ static ssize_t tap_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	return ret;
 }
 
-static struct tap_dev *tap_get_tap_dev(struct tap_queue *q)
-{
-	struct tap_dev *tap;
-
-	ASSERT_RTNL();
-	tap = rtnl_dereference(q->tap);
-	if (tap)
-		dev_hold(tap->dev);
-
-	return tap;
-}
-
-static void tap_put_tap_dev(struct tap_dev *tap)
-{
-	dev_put(tap->dev);
-}
-
 static int tap_ioctl_set_queue(struct file *file, unsigned int flags)
 {
 	struct tap_queue *q = file->private_data;
@@ -1042,7 +1025,7 @@ static long tap_ioctl(struct file *file, unsigned int cmd,
 
 	case SIOCGIFHWADDR:
 		rtnl_lock();
-		tap = tap_get_tap_dev(q);
+		tap = rtnl_dereference(q->tap);
 		if (!tap) {
 			rtnl_unlock();
 			return -ENOLINK;
@@ -1053,7 +1036,6 @@ static long tap_ioctl(struct file *file, unsigned int cmd,
 		if (copy_to_user(&ifr->ifr_name, tap->dev->name, IFNAMSIZ) ||
 		    copy_to_user(&ifr->ifr_hwaddr, &ss, sizeof(ifr->ifr_hwaddr)))
 			ret = -EFAULT;
-		tap_put_tap_dev(tap);
 		rtnl_unlock();
 		return ret;
 
@@ -1061,7 +1043,7 @@ static long tap_ioctl(struct file *file, unsigned int cmd,
 		if (copy_from_user(&ss, &ifr->ifr_hwaddr, sizeof(ifr->ifr_hwaddr)))
 			return -EFAULT;
 		rtnl_lock();
-		tap = tap_get_tap_dev(q);
+		tap = rtnl_dereference(q->tap);
 		if (!tap) {
 			rtnl_unlock();
 			return -ENOLINK;
@@ -1070,7 +1052,6 @@ static long tap_ioctl(struct file *file, unsigned int cmd,
 			ret = -EINVAL;
 		else
 			ret = dev_set_mac_address_user(tap->dev, &ss, NULL);
-		tap_put_tap_dev(tap);
 		rtnl_unlock();
 		return ret;
 
