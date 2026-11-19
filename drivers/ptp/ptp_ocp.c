@@ -368,6 +368,8 @@ struct ptp_ocp {
 	struct pci_dev		*pdev;
 	struct device		dev;
 	spinlock_t		lock;
+	/* Protected by lock; blocks timestamp arming during teardown. */
+	bool			ts_stopping;
 	struct ocp_reg __iomem	*reg;
 	struct tod_reg __iomem	*tod;
 	struct pps_reg __iomem	*pps_to_ext;
@@ -2551,6 +2553,15 @@ ptp_ocp_ts_enable(void *priv, u32 req, bool enable)
 	struct ptp_ocp_ext_src *ext = priv;
 	struct ts_reg __iomem *reg = ext->mem;
 	struct ptp_ocp *bp = ext->bp;
+	unsigned long flags;
+	bool need_sync = false;
+	int err = 0;
+
+	spin_lock_irqsave(&bp->lock, flags);
+	if (enable && bp->ts_stopping) {
+		err = -ENODEV;
+		goto out;
+	}
 
 	if (ext == bp->pps) {
 		u32 old_map = bp->pps_req_map;
@@ -2560,9 +2571,9 @@ ptp_ocp_ts_enable(void *priv, u32 req, bool enable)
 		else
 			bp->pps_req_map &= ~req;
 
-		/* if no state change, just return */
-		if ((!!old_map ^ !!bp->pps_req_map) == 0)
-			return 0;
+		/* Teardown must drain IRQs even if another disable cleared the map. */
+		if ((!!old_map ^ !!bp->pps_req_map) == 0 && !bp->ts_stopping)
+			goto out;
 	}
 
 	if (enable) {
@@ -2570,16 +2581,21 @@ ptp_ocp_ts_enable(void *priv, u32 req, bool enable)
 		iowrite32(1, &reg->intr_mask);
 		iowrite32(1, &reg->intr);
 	} else {
-		int irq_vec = pci_irq_vector(bp->pdev, ext->irq_vec);
-
 		iowrite32(0, &reg->intr_mask);
 		iowrite32(0, &reg->enable);
 		ioread32(&reg->intr_mask);
+		need_sync = true;
+	}
+
+out:
+	spin_unlock_irqrestore(&bp->lock, flags);
+	if (need_sync) {
+		int irq_vec = pci_irq_vector(bp->pdev, ext->irq_vec);
+
 		if (irq_vec > 0)
 			synchronize_irq(irq_vec);
 	}
-
-	return 0;
+	return err;
 }
 
 static void
@@ -5750,12 +5766,17 @@ ptp_ocp_detach_sysfs(struct ptp_ocp *bp)
 static void
 ptp_ocp_detach(struct ptp_ocp *bp)
 {
+	unsigned long flags;
 	int i;
 
 	ptp_ocp_debugfs_remove_device(bp);
 	ptp_ocp_detach_sysfs(bp);
 	ptp_ocp_attr_group_del(bp);
 	timer_delete_sync(&bp->watchdog);
+	/* Drain in-flight enables and prevent rearming before unregister. */
+	spin_lock_irqsave(&bp->lock, flags);
+	bp->ts_stopping = true;
+	spin_unlock_irqrestore(&bp->lock, flags);
 	/* Disable interrupts on all timestampers */
 	if (bp->ts0)
 		ptp_ocp_ts_enable(bp->ts0, 0, false);
