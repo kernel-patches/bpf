@@ -27,6 +27,8 @@
 #define SIT9531X_MAX_INPUTS		8
 #define SIT9531X_NUM_INPUT_PAIRS	(SIT9531X_MAX_INPUTS / 2)
 #define SIT9531X_MAX_OUTPUTS		12
+/* Output phase-adjust range advertised to the core, +/-1 ms in ps */
+#define SIT9531X_OUT_PHASE_ADJ_MAX_PS	1000000000
 /*
  * INTSYNC, the inter-PLL sync line, is two pins: an input pin on the PLL that
  * locks to it, numbered after the inputs and the xtal, and an output pin on the
@@ -111,6 +113,13 @@ struct sit9531x_ref {
  * @routed: mapped to @pll_idx by the initial configuration; an unrouted
  *   output has no pin
  * @pll_idx: PLL driving this output (0-3)
+ * @phase_stale: programmed delay may differ from @phase_adj
+ * @phase_armed: non-zero in-range delay programmed; a rate change re-times it
+ * @phase_adj: realized delay in whole VCO cycles plus 30 ps steps, in the
+ *   form nearer to zero; an out-of-range profile delay is held as the
+ *   positive decode
+ * @retime_pending: re-timed delay not yet applied; the poll applies @retime_ps
+ * @retime_ps: delay to apply while @retime_pending
  */
 struct sit9531x_out {
 	u64		freq;
@@ -122,6 +131,11 @@ struct sit9531x_out {
 	u8		hiz_keep;
 	bool		routed;
 	u8		pll_idx;
+	s64		phase_adj;
+	bool		phase_armed;
+	bool		phase_stale;
+	bool		retime_pending;
+	s32		retime_ps;
 };
 
 /*
@@ -148,6 +162,8 @@ struct sit9531x_out {
  *   rewrites the table
  * @reselect_armed: no poll since probe or resume; the first poll rewrites
  *   the table of a PLL in holdover while a listed source has signal
+ * @flush_pending: output divider realignment flush not yet triggered after
+ *   a rate or delay commit
  * @table_pending: priority table partly written or not latched; the PLL
  *   stays in forced holdover
  * @table_back: table reported and to be rewritten while @table_pending
@@ -176,6 +192,7 @@ struct sit9531x_chan {
 	bool		ho_release_pending;
 	u8		live_top;
 	bool		reselect_armed;
+	bool		flush_pending;
 	bool		table_pending;
 	u8		table_back[SIT9531X_PRIO_MAX_SLOTS];
 	u8		prio_srcs[SIT9531X_PRIO_MAX_SLOTS];
@@ -215,6 +232,10 @@ struct sit9531x_chan {
  *   band; written under @multiop_lock
  * @loops_open: output loops not yet re-locked
  * @outsys_key_pending: output-system debug key not closed
+ * @flush_ctrl_pending: @flush_ctrl still to be written back
+ * @flush_ctrl: trigger register value to restore
+ * @flush_arm_pending: bit per PLL whose flush enable is still to be restored
+ * @flush_armed: of those, the PLLs the profile arms
  */
 struct sit9531x_dev {
 	struct device			*dev;
@@ -247,6 +268,10 @@ struct sit9531x_dev {
 
 	bool			loops_open;
 	bool			outsys_key_pending;
+	bool			flush_ctrl_pending;
+	u8			flush_ctrl;
+	u8			flush_arm_pending;
+	u8			flush_armed;
 };
 
 int sit9531x_read_u8(struct sit9531x_dev *sitdev, unsigned int reg,
@@ -283,6 +308,11 @@ int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 			     u8 pll_idx, u64 frequency);
 int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
 			     u64 *frequency);
+
+int sit9531x_output_phase_read(struct sit9531x_dev *sitdev, u8 out_idx,
+			       s64 *phase_ps, bool *beyond);
+int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
+				     u8 out_idx, s32 phase_ps);
 
 static inline u8 sit9531x_pll_page(u8 pll_idx)
 {
