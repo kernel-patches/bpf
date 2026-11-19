@@ -159,6 +159,35 @@
 #define SIT9531X_DEBUG_LOCK_VAL			0x00
 
 /*
+ * Per-output phase delay: 34-bit coarse in VCO cycles plus a 3-bit fine
+ * field in 30 ps steps, in a five-byte block PROG6..PROG2:
+ *
+ *   base + 0     PROG6  [7:5] OPSTG_VCASC_BUMP (preserve)
+ *                       [4:2] PRG_RST_FINE_DELAY[2:0]
+ *                       [1:0] PRG_RST_DELAY[33:32]
+ *   base + 1..4  PROG5..PROG2  PRG_RST_DELAY[31:0], MSB first
+ *
+ * Block base is 0x15 + 16 * (slot % 6), slot from clkout_map[]; slots 0-5
+ * on page 3, 6-11 on page 4.
+ */
+#define SIT9531X_OUT_PRG_DELAY_BASE		0x15
+#define SIT9531X_OUT_PRG_SLOT_STRIDE		0x10
+#define SIT9531X_OUT_PRG_BYTES			5
+#define SIT9531X_OUT_PRG_OPSTG_MASK		0xE0
+#define SIT9531X_OUT_PRG_FINE_SHIFT		2
+#define SIT9531X_OUT_PRG_FINE_MASK		0x1C	/* bits [4:2] */
+#define SIT9531X_OUT_PRG_COARSE_HI_MASK		0x03	/* bits [1:0] */
+/*
+ * The divider takes two VCO cycles to act on a programmed delay; the encoded
+ * value includes them, as in the reference flow.
+ */
+#define SIT9531X_OUT_PRG_DIVO_CYCLES	2
+
+#define SIT9531X_OUT_PRG_FINE_STEP_PS		30
+#define SIT9531X_OUT_PRG_FINE_MAX		7	/* 3-bit field */
+#define SIT9531X_OUT_PRG_COARSE_BITS		34
+
+/*
  * Register-triggered phase flush: DIVO_PHASE_SEL_REG selects the register
  * trigger; pulsing DIVO_PHASE_TRIG high then low flushes. Preserve the OEb
  * trigger bits [7:6].
