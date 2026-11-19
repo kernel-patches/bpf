@@ -1204,8 +1204,11 @@ static int es9356_sdca_dev_resume(struct device *dev)
 	}
 
 	regcache_cache_only(es9356->regmap, false);
-	regcache_sync(es9356->regmap);
-	return 0;
+	ret = regcache_sync(es9356->regmap);
+	if (ret)
+		regcache_cache_only(es9356->regmap, true);
+
+	return ret;
 }
 
 static const struct dev_pm_ops es9356_sdca_pm = {
