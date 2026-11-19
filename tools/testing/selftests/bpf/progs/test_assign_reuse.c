@@ -26,8 +26,16 @@ union {
 
 const volatile __u16 dest_port;
 const volatile bool select_sock;
+const volatile bool classic_action;
+const volatile bool redirect_action;
+const volatile bool pass_observer;
+const volatile bool check_redirect;
+const volatile bool drop_after_assign;
 __u64 assign_calls;
 __u64 assign_errors;
+__u64 redirected_packets;
+__u64 redirected_sockets;
+__u64 completed_packets;
 
 struct {
 	__u64 expected_cookie;
@@ -165,6 +173,20 @@ assign_sk(struct __sk_buff *skb, typeof(exchanges[0]) *exchange)
 	bpf_sk_release(sk);
 	if (ret)
 		return TC_ACT_SHOT;
+	if (classic_action) {
+		skb->mark = 1;
+		if (redirect_action)
+			return bpf_redirect(skb->ifindex, BPF_F_INGRESS);
+		return TC_ACT_PIPE;
+	}
+	if (check_redirect) {
+		if (drop_after_assign) {
+			__sync_lock_test_and_set(&completed_packets, assign_calls);
+			return TC_ACT_SHOT;
+		}
+		skb->mark = 1;
+		return bpf_redirect(skb->ifindex, BPF_F_INGRESS);
+	}
 	if (select_sock)
 		return bpf_redirect(skb->ifindex, BPF_F_INGRESS);
 	return TC_ACT_OK;
@@ -212,12 +234,19 @@ maybe_assign_udp(struct __sk_buff *skb, struct udphdr *uh)
 	return assign_sk(skb, exchange);
 }
 
-SEC("tc")
-int tc_main(struct __sk_buff *skb)
+static __always_inline int process_packet(struct __sk_buff *skb)
 {
 	void *data_end = (void *)(long)skb->data_end;
 	void *data = (void *)(long)skb->data;
 	struct ethhdr *eth;
+
+	if (check_redirect && skb->mark == 1) {
+		__sync_fetch_and_add(&redirected_packets, 1);
+		if (skb->sk)
+			__sync_fetch_and_add(&redirected_sockets, 1);
+		__sync_lock_test_and_set(&completed_packets, redirected_packets);
+		return pass_observer ? TC_ACT_OK : TC_ACT_SHOT;
+	}
 
 	eth = (struct ethhdr *)(data);
 	if (eth + 1 > data_end)
@@ -248,4 +277,16 @@ int tc_main(struct __sk_buff *skb)
 		else
 			return TC_ACT_SHOT;
 	}
+}
+
+SEC("tc")
+int tc_main(struct __sk_buff *skb)
+{
+	return process_packet(skb);
+}
+
+SEC("action")
+int action_assign(struct __sk_buff *skb)
+{
+	return process_packet(skb);
 }

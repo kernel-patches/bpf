@@ -70,6 +70,22 @@ static int config_contains(const char *pat)
 	return 0;
 }
 
+bool kernel_config_has(const char *entry)
+{
+	return config_contains(entry) == 1;
+}
+
+bool kernel_config_disabled(const char *name)
+{
+	char pattern[128];
+	int ret;
+
+	ret = snprintf(pattern, sizeof(pattern), "# %s is not set", name);
+	if (ret < 0 || ret >= sizeof(pattern))
+		return false;
+	return kernel_config_has(pattern);
+}
+
 static bool cmdline_contains(const char *pat)
 {
 	int fd, cnt, ret = false;

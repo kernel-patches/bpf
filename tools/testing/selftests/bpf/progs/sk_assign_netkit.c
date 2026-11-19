@@ -12,10 +12,14 @@
 
 const volatile __u16 dest_port;
 const volatile __u16 proxy_port;
+const volatile bool measure_queue;
 __u64 listener_assignments;
 __u64 established_assignments;
 __u64 assign_errors;
 __u64 request_rejections;
+__u64 measurement_started;
+__u64 measurement_done;
+__u64 blocked_syns;
 struct bpf_sock_tuple probe_tuple;
 __u32 probe_len;
 __u32 probe_state;
@@ -64,6 +68,18 @@ int assign_socket(struct __sk_buff *skb)
 	}
 	if (th + 1 > data_end || th->dest != bpf_htons(dest_port))
 		return TCX_PASS;
+	if (measure_queue) {
+		skb->mark = 0;
+		if (th->syn && !th->ack) {
+			if (__sync_val_compare_and_swap(&measurement_started, 0, 1)) {
+				__sync_fetch_and_add(&blocked_syns, 1);
+				return TCX_DROP;
+			}
+			skb->mark = 1;
+		} else if (!__sync_val_compare_and_swap(&measurement_done, 0, 0)) {
+			return TCX_DROP;
+		}
+	}
 	if (ipv4) {
 		tuple.ipv4.sport = th->source;
 		tuple.ipv4.dport = th->dest;
