@@ -300,6 +300,18 @@ config GPIO_CLPS711X
 	help
 	  Say yes here to support GPIO on CLPS711X SoCs.
 
+config GPIO_CS75XX
+	tristate "Cortina Systems CS75xx GPIO support"
+	depends on OF
+	select GPIO_GENERIC
+	select GPIOLIB_IRQCHIP
+	help
+	  Say yes here to support the GPIO banks of the Cortina Systems
+	  CS75xx SoCs, including their interrupts.
+
+	  This driver can also be built as a module. If so, the module
+	  will be called gpio-cs75xx.
+
 config GPIO_DAVINCI
 	tristate "TI Davinci/Keystone GPIO support"
 	default y if ARCH_DAVINCI
