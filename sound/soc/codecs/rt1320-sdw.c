@@ -2829,6 +2829,8 @@ _dmic_vol_:
 			reg_base = SDW_SDCA_CTL(FUNC_NUM_MIC, RT1320_SDCA_ENT_FU113, RT1320_SDCA_CTL_FU_VOLUME, CH_01);
 			regmap_read(rt1320->mbq_regmap, reg_base + i, &regvalue[i]);
 			break;
+		default:
+			return -EINVAL;
 		}
 
 		gain_val[i] = ucontrol->value.integer.value[i];
@@ -2859,6 +2861,8 @@ _dmic_vol_:
 			reg_base = SDW_SDCA_CTL(FUNC_NUM_MIC, RT1320_SDCA_ENT_FU113, RT1320_SDCA_CTL_FU_VOLUME, CH_01);
 			err = regmap_write(rt1320->mbq_regmap, reg_base + i, gain_val[i]);
 			break;
+		default:
+			return -EINVAL;
 		}
 
 		if (err < 0)
@@ -2917,6 +2921,8 @@ _dmic_vol_:
 			reg_base = SDW_SDCA_CTL(FUNC_NUM_MIC, RT1320_SDCA_ENT_FU113, RT1320_SDCA_CTL_FU_VOLUME, CH_01);
 			regmap_read(rt1320->mbq_regmap, reg_base + i, &regvalue);
 			break;
+		default:
+			return -EINVAL;
 		}
 
 		ctl = p->max - (((0x1e00 - regvalue) & 0xffff) / interval_offset);
