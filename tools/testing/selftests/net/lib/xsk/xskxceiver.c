@@ -176,7 +176,7 @@ static void print_usage(char **argv)
 		"  -v, --verbose        Verbose output\n"
 		"  -b, --busy-poll      Enable busy poll\n"
 		"  -m, --mode           Mode to run: skb, drv or zc\n"
-		"  -l, --list           List all available tests\n"
+		"  -l, --list           List all tests and the roles they test on hardware\n"
 		"  -t, --test           Test case to run, a number from -l\n"
 		"  -e, --endpoint       Role of this endpoint: rx or tx\n"
 		"  -p, --peer           Control host: IPv4/IPv6 address or hostname\n"
@@ -220,13 +220,31 @@ static void bind_iface(struct ifobject *ifobj, const char *ifname, char **argv)
 	ifobj->orig_mtu = ifobj->dev_mtu;
 }
 
+/* List each test followed by the roles that it tests on hardware, if any. */
 static void print_tests(void)
+{
+	const struct test_group *group;
+	u32 i, j, id = 0;
+
+	printf("Tests:\n");
+	for (i = 0; i < ARRAY_SIZE(test_groups); i++) {
+		group = &test_groups[i];
+		for (j = 0; j < group->nb_tests; j++, id++)
+			printf("%u: %s%s%s\n", id, group->tests[j].name,
+			       group->hw_rx ? " rx" : "", group->hw_tx ? " tx" : "");
+	}
+}
+
+static const struct test_spec *find_test(u32 id)
 {
 	u32 i;
 
-	printf("Tests:\n");
-	for (i = 0; i < ARRAY_SIZE(tests); i++)
-		printf("%u: %s\n", i, tests[i].name);
+	for (i = 0; i < ARRAY_SIZE(test_groups); i++) {
+		if (id < test_groups[i].nb_tests)
+			return &test_groups[i].tests[id];
+		id -= test_groups[i].nb_tests;
+	}
+	return NULL;
 }
 
 static void parse_command_line(struct ifobject *ifobj_tx, struct ifobject *ifobj_rx, int argc,
@@ -468,8 +486,8 @@ static int setup_peer(struct ifobject *local, struct ifobject *shadow,
 int main(int argc, char **argv)
 {
 	u32 cache_line_size, max_frags, umem_tailroom;
-	const size_t total_tests = ARRAY_SIZE(tests);
 	struct ifobject *ifobj_tx, *ifobj_rx;
+	const struct test_spec *test_to_run;
 	struct ifobject *shadow_ifobj;
 	struct ifobject *local_ifobj;
 	struct xsk_peer *peer = NULL;
@@ -515,7 +533,8 @@ int main(int argc, char **argv)
 	ifobj_tx->caps.umem_tailroom = umem_tailroom;
 	ifobj_rx->caps.umem_tailroom = umem_tailroom;
 
-	if (opt_run_test != RUN_ALL_TESTS && opt_run_test >= total_tests) {
+	test_to_run = find_test(opt_run_test);
+	if (!test_to_run) {
 		ksft_print_msg("Error: test %u does not exist.\n", opt_run_test);
 		ksft_exit_xfail();
 	}
@@ -558,7 +577,7 @@ int main(int argc, char **argv)
 	}
 
 	ksft_set_plan(1);
-	test_init(&test, ifobj_tx, ifobj_rx, opt_mode, &tests[opt_run_test]);
+	test_init(&test, ifobj_tx, ifobj_rx, opt_mode, test_to_run);
 	ret = run_pkt_test(&test);
 
 out:
