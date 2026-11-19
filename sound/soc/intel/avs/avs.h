@@ -357,8 +357,6 @@ int avs_register_component(struct device *dev, const char *name,
 int avs_register_all_boards(struct avs_dev *adev);
 void avs_unregister_all_boards(struct avs_dev *adev);
 
-int avs_parse_sched_cfg(struct avs_dev *adev, const char *buf, size_t len);
-
 /* Filesystems integration */
 
 extern const struct attribute_group *avs_attr_groups[];

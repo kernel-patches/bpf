@@ -240,5 +240,4 @@ int rt711_sdca_io_init(struct device *dev, struct sdw_slave *slave);
 int rt711_sdca_init(struct device *dev, struct regmap *regmap,
 	       struct regmap *mbq_regmap, struct sdw_slave *slave);
 
-int rt711_sdca_jack_detect(struct rt711_sdca_priv *rt711, bool *hp, bool *mic);
 #endif /* __RT711_SDCA_H__ */
