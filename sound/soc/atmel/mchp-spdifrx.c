@@ -709,7 +709,6 @@ static int mchp_spdifrx_ulock_get(struct snd_kcontrol *kcontrol,
 	struct mchp_spdifrx_mixer_control *ctrl = &dev->control;
 	u32 val;
 	int ret;
-	bool ulock_old = ctrl->ulock;
 
 	mutex_lock(&dev->mlock);
 
@@ -735,7 +734,7 @@ static int mchp_spdifrx_ulock_get(struct snd_kcontrol *kcontrol,
 unlock:
 	mutex_unlock(&dev->mlock);
 
-	return ulock_old != ctrl->ulock;
+	return ret;
 }
 
 static int mchp_spdifrx_badf_get(struct snd_kcontrol *kcontrol,
