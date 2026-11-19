@@ -958,6 +958,9 @@ yt921x_dsa_port_fdb_del(struct dsa_switch *ds, int port,
 	struct yt921x_priv *priv = dsa_to_yt921x_priv(ds);
 	int res;
 
+	if (is_multicast_ether_addr(addr))
+		return 0;
+
 	mutex_lock(&priv->reg_lock);
 	res = yt921x_fdb_leave(priv, addr, vid, BIT(port));
 	mutex_unlock(&priv->reg_lock);
@@ -971,6 +974,12 @@ yt921x_dsa_port_fdb_add(struct dsa_switch *ds, int port,
 {
 	struct yt921x_priv *priv = dsa_to_yt921x_priv(ds);
 	int res;
+
+	/* The software bridge never forwards according to an FDB entry with a
+	 * multicast MAC, do not touch it from the FDB path
+	 */
+	if (is_multicast_ether_addr(addr))
+		return 0;
 
 	mutex_lock(&priv->reg_lock);
 	res = yt921x_fdb_join(priv, addr, vid, BIT(port));
