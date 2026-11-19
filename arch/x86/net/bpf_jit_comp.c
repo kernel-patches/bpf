@@ -9,12 +9,10 @@
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
 #include <linux/bitfield.h>
-#include <linux/init.h>
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
-#include <linux/execmem.h>
 #include <linux/extable.h>
 #include <asm/extable.h>
 #include <asm/ftrace.h>
@@ -37,23 +35,15 @@ void __asan_store8(void *p);
 
 static bool all_callee_regs_used[4] = {true, true, true, true};
 
-static void *trampoline_size_image;
-
-static int __init init_trampoline_size_image(void)
-{
-	/*
-	 * The generated trampoline contains calls and jumps with 32bit relative
-	 * offsets, so the scratch image must be in the execmem range.
-	 * On x86, module data and executable memory share the same address range,
-	 * so using EXECMEM_MODULE_DATA to get writable memory.
-	 */
-	trampoline_size_image = execmem_alloc(EXECMEM_MODULE_DATA, PAGE_SIZE);
-	return trampoline_size_image ? 0 : -ENOMEM;
-}
-late_initcall(init_trampoline_size_image);
-
 static u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
 {
+	/*
+	 * arch_bpf_trampoline_size() has no image. Its cursor starts at NULL,
+	 * so it is not a kernel address: count, do not store.
+	 */
+	if ((long)ptr >= 0)
+		return ptr + len;
+
 	if (len == 1)
 		*ptr = bytes;
 	else if (len == 2)
@@ -598,10 +588,24 @@ static int emit_call(u8 **pprog, void *func, void *ip)
 	return emit_patch(pprog, func, ip, 0xE8);
 }
 
+/* x86_call_depth_emit_accounting() stores. Let emit_code() decide about that. */
+static int emit_call_depth_accounting(u8 **pprog, void *func, void *ip)
+{
+	u8 temp[BPF_MAX_INSN_SIZE + BPF_INSN_SAFETY];
+	u8 *prog = *pprog, *end = temp;
+	int i, len;
+
+	len = x86_call_depth_emit_accounting(&end, func, ip);
+	for (i = 0; i < len; i++)
+		EMIT1(temp[i]);
+	*pprog = prog;
+	return len;
+}
+
 static int emit_rsb_call(u8 **pprog, void *func, void *ip)
 {
 	OPTIMIZER_HIDE_VAR(func);
-	ip += x86_call_depth_emit_accounting(pprog, func, ip);
+	ip += emit_call_depth_accounting(pprog, func, ip);
 	return emit_patch(pprog, func, ip, 0xE8);
 }
 
@@ -4075,8 +4079,7 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
 
 	/* replace 2 nops with JE insn, since jmp target is known */
-	jmp_insn[0] = X86_JE;
-	jmp_insn[1] = prog - jmp_insn - 2;
+	emit_code(jmp_insn, X86_JE + ((prog - jmp_insn - 2) << 8), 2);
 
 	/* arg1: mov rdi, progs[i] */
 	emit_mov_imm64(&prog, BPF_REG_1, (long) p >> 32, (u32) (long) p);
@@ -4392,7 +4395,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		 * Direct-call fentry stub, as such it needs accounting for the
 		 * __fentry__ call.
 		 */
-		x86_call_depth_emit_accounting(&prog, NULL, image);
+		emit_call_depth_accounting(&prog, NULL, image);
 	}
 	EMIT1(0x55);		 /* push rbp */
 	EMIT3(0x48, 0x89, 0xE5); /* mov rbp, rsp */
@@ -4547,7 +4550,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	}
 	emit_return(&prog, image + (prog - (u8 *)rw_image));
 	/* Make sure the trampoline generation logic doesn't overflow */
-	if (WARN_ON_ONCE(prog > (u8 *)rw_image_end - BPF_INSN_SAFETY)) {
+	if (rw_image && WARN_ON_ONCE(prog > (u8 *)rw_image_end - BPF_INSN_SAFETY)) {
 		ret = -EFAULT;
 		goto cleanup;
 	}
@@ -4607,12 +4610,11 @@ int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 {
 	struct bpf_tramp_image im = {};
 
-	if (!trampoline_size_image)
-		return -ENOMEM;
-
-	return __arch_prepare_bpf_trampoline(&im, trampoline_size_image,
-					     trampoline_size_image + PAGE_SIZE,
-					     trampoline_size_image, m, flags,
+	/*
+	 * No image: emit_code() counts. The calls and jumps have 32-bit offsets
+	 * from where the image is going to be. func_addr is in their range.
+	 */
+	return __arch_prepare_bpf_trampoline(&im, NULL, NULL, func_addr, m, flags,
 					     tnodes, func_addr);
 }
 
