@@ -559,9 +559,10 @@ static int graph_parse_node_multi_nm(struct simple_util_priv *priv,
 
 		struct device_node *mcodec_ep_n __free(device_node) = of_graph_get_remote_endpoint(mcpu_ep_n);
 		struct device_node *mcodec_port __free(device_node) = ep_to_port(mcodec_ep_n);
+		struct device_node *ports __free(device_node) = port_to_ports(mcodec_port);
 
 		ret = -EINVAL;
-		if (mcodec_ports != port_to_ports(mcodec_port))
+		if (mcodec_ports != ports)
 			break;
 
 		for_each_of_graph_port(mcodec_ports, mcodec_port_i) {
@@ -1117,7 +1118,7 @@ static int graph_counter(struct device_node *lnk)
 	 * ignore first lnk part
 	 */
 	if (graph_lnk_is_multi(lnk)) {
-		struct device_node *ports = port_to_ports(lnk);
+		struct device_node *ports __free(device_node) = port_to_ports(lnk);
 
 		/*
 		 * CPU/Codec = N:M case has many endpoints.
