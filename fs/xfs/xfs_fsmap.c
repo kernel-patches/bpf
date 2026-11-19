@@ -760,7 +760,7 @@ xfs_getfsmap_rtdev_rtbitmap(
 	xfs_rgnumber_t			start_rgno, end_rgno;
 	struct xfs_rtgroup		*rtg = NULL;
 	uint64_t			eofs;
-	int				error;
+	int				error = 0;
 
 	eofs = XFS_FSB_TO_BB(mp, mp->m_sb.sb_rblocks);
 	if (keys[0].fmr_physical >= eofs)
