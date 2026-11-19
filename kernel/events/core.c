@@ -10819,6 +10819,9 @@ static int bpf_overflow_handler(struct perf_event *event,
 	prog = READ_ONCE(event->prog);
 	if (prog) {
 		perf_prepare_sample(data, event, regs);
+		/* bpf_perf_event_data::addr is readable without PERF_SAMPLE_ADDR */
+		if (!(data->sample_flags & PERF_SAMPLE_ADDR))
+			data->addr = 0;
 		ret = bpf_prog_run(prog, &ctx);
 	}
 	rcu_read_unlock();
