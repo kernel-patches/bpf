@@ -57,8 +57,11 @@ struct read_counters_work {
 	struct tegra_cpu_ctr c;
 };
 
+struct tegra194_cpufreq_data;
+
 struct tegra_cpufreq_ops {
-	void (*read_counters)(struct tegra_cpu_ctr *c);
+	void (*sample_counters)(struct tegra194_cpufreq_data *data,
+				struct tegra_cpu_ctr *c);
 	void (*set_cpu_ndiv)(struct cpufreq_policy *policy, u64 ndiv);
 	void (*get_cpu_cluster_id)(u32 *cpuid, u32 *clusterid);
 	int (*get_cpu_ndiv)(u32 cpu, u32 cpuid, u32 clusterid, u64 *ndiv);
@@ -187,43 +190,22 @@ static void tegra234_set_cpu_ndiv(struct cpufreq_policy *policy, u64 ndiv)
  *     [63:32] PLLP counter: Counts at fixed frequency (408 MHz)
  *     [31:0] Core clock counter: Counts on every core clock cycle
  */
-static void tegra234_read_counters(struct tegra_cpu_ctr *c)
+static void tegra234_sample_counters(struct tegra194_cpufreq_data *data,
+				     struct tegra_cpu_ctr *c)
 {
-	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
 	void __iomem *actmon_reg;
-	u32 delta_refcnt;
-	int cnt = 0;
 	u64 val;
 
 	actmon_reg = CORE_ACTMON_CNTR_REG(data, data->cpu_data[c->cpu].clusterid,
 					  data->cpu_data[c->cpu].cpuid);
 
 	val = readq(actmon_reg);
-	c->last_refclk_cnt = upper_32_bits(val);
-	c->last_coreclk_cnt = lower_32_bits(val);
-
-	/*
-	 * The sampling window is based on the minimum number of reference
-	 * clock cycles which is known to give a stable value of CPU frequency.
-	 */
-	do {
-		val = readq(actmon_reg);
-		c->refclk_cnt = upper_32_bits(val);
-		c->coreclk_cnt = lower_32_bits(val);
-		if (c->refclk_cnt < c->last_refclk_cnt)
-			delta_refcnt = c->refclk_cnt + (MAX_CNT - c->last_refclk_cnt);
-		else
-			delta_refcnt = c->refclk_cnt - c->last_refclk_cnt;
-		if (++cnt >= 0xFFFF) {
-			pr_warn("cpufreq: problem with refclk on cpu:%d, delta_refcnt:%u, cnt:%d\n",
-				c->cpu, delta_refcnt, cnt);
-			break;
-		}
-	} while (delta_refcnt < data->soc->refclk_delta_min);
+	c->refclk_cnt = upper_32_bits(val);
+	c->coreclk_cnt = lower_32_bits(val);
 }
 
 static struct tegra_cpufreq_ops tegra234_cpufreq_ops = {
-	.read_counters = tegra234_read_counters,
+	.sample_counters = tegra234_sample_counters,
 	.get_cpu_cluster_id = tegra234_get_cpu_cluster_id,
 	.get_cpu_ndiv = tegra234_get_cpu_ndiv,
 	.set_cpu_ndiv = tegra234_set_cpu_ndiv,
@@ -281,35 +263,13 @@ static inline u32 map_ndiv_to_freq(struct mrq_cpu_ndiv_limits_response
 	return nltbl->ref_clk_hz / KHZ * ndiv / (nltbl->pdiv * nltbl->mdiv);
 }
 
-static void tegra194_read_counters(struct tegra_cpu_ctr *c)
+static void tegra194_sample_counters(struct tegra194_cpufreq_data *data,
+				     struct tegra_cpu_ctr *c)
 {
-	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
-	u32 delta_refcnt;
-	int cnt = 0;
-	u64 val;
+	u64 val = read_freq_feedback();
 
-	val = read_freq_feedback();
-	c->last_refclk_cnt = lower_32_bits(val);
-	c->last_coreclk_cnt = upper_32_bits(val);
-
-	/*
-	 * The sampling window is based on the minimum number of reference
-	 * clock cycles which is known to give a stable value of CPU frequency.
-	 */
-	do {
-		val = read_freq_feedback();
-		c->refclk_cnt = lower_32_bits(val);
-		c->coreclk_cnt = upper_32_bits(val);
-		if (c->refclk_cnt < c->last_refclk_cnt)
-			delta_refcnt = c->refclk_cnt + (MAX_CNT - c->last_refclk_cnt);
-		else
-			delta_refcnt = c->refclk_cnt - c->last_refclk_cnt;
-		if (++cnt >= 0xFFFF) {
-			pr_warn("cpufreq: problem with refclk on cpu:%d, delta_refcnt:%u, cnt:%d\n",
-				c->cpu, delta_refcnt, cnt);
-			break;
-		}
-	} while (delta_refcnt < data->soc->refclk_delta_min);
+	c->refclk_cnt = lower_32_bits(val);
+	c->coreclk_cnt = upper_32_bits(val);
 }
 
 static void tegra_read_counters(struct work_struct *work)
@@ -317,6 +277,8 @@ static void tegra_read_counters(struct work_struct *work)
 	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
 	struct read_counters_work *read_counters_work;
 	struct tegra_cpu_ctr *c;
+	u32 delta_refcnt;
+	int cnt = 0;
 
 	/*
 	 * ref_clk_counter(32 bit counter) runs on constant clk,
@@ -334,7 +296,26 @@ static void tegra_read_counters(struct work_struct *work)
 					  work);
 	c = &read_counters_work->c;
 
-	data->soc->ops->read_counters(c);
+	data->soc->ops->sample_counters(data, c);
+	c->last_refclk_cnt = c->refclk_cnt;
+	c->last_coreclk_cnt = c->coreclk_cnt;
+
+	/*
+	 * The sampling window is based on the minimum number of reference
+	 * clock cycles which is known to give a stable value of CPU frequency.
+	 */
+	do {
+		data->soc->ops->sample_counters(data, c);
+		if (c->refclk_cnt < c->last_refclk_cnt)
+			delta_refcnt = c->refclk_cnt + (MAX_CNT - c->last_refclk_cnt);
+		else
+			delta_refcnt = c->refclk_cnt - c->last_refclk_cnt;
+		if (++cnt >= 0xFFFF) {
+			pr_warn("cpufreq: problem with refclk on cpu:%d, delta_refcnt:%u, cnt:%d\n",
+				c->cpu, delta_refcnt, cnt);
+			break;
+		}
+	} while (delta_refcnt < data->soc->refclk_delta_min);
 }
 
 /*
@@ -638,7 +619,7 @@ static struct cpufreq_driver tegra194_cpufreq_driver = {
 };
 
 static struct tegra_cpufreq_ops tegra194_cpufreq_ops = {
-	.read_counters = tegra194_read_counters,
+	.sample_counters = tegra194_sample_counters,
 	.get_cpu_cluster_id = tegra194_get_cpu_cluster_id,
 	.get_cpu_ndiv = tegra194_get_cpu_ndiv,
 	.set_cpu_ndiv = tegra194_set_cpu_ndiv,
