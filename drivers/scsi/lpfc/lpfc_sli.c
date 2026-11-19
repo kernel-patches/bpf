@@ -22287,11 +22287,12 @@ lpfc_read_object(struct lpfc_hba *phba, char *rdobject, uint32_t *datap,
 {
 	struct lpfc_mbx_read_object *read_object;
 	LPFC_MBOXQ_t *mbox;
-	int rc, length, eof, j, byte_cnt = 0;
+	int rc, length, eof, byte_cnt = 0;
 	uint32_t shdr_status, shdr_add_status;
 	union lpfc_sli4_cfg_shdr *shdr;
 	struct lpfc_dmabuf *pcmd;
 	u32 rd_object_name[LPFC_MBX_OBJECT_NAME_LEN_DW] = {0};
+	size_t len, j;
 
 	mbox = mempool_alloc(phba->mbox_mem_pool, GFP_KERNEL);
 	if (!mbox)
@@ -22311,8 +22312,9 @@ lpfc_read_object(struct lpfc_hba *phba, char *rdobject, uint32_t *datap,
 
 	memset((void *)read_object->u.request.rd_object_name, 0,
 	       LPFC_OBJ_NAME_SZ);
-	scnprintf((char *)rd_object_name, sizeof(rd_object_name), rdobject);
-	for (j = 0; j < strlen(rdobject); j++)
+	len = scnprintf((char *)rd_object_name, sizeof(rd_object_name), "%s",
+			rdobject);
+	for (j = 0; j < DIV_ROUND_UP(len, sizeof(u32)); j++)
 		read_object->u.request.rd_object_name[j] =
 			cpu_to_le32(rd_object_name[j]);
 
