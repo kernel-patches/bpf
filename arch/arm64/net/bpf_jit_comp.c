@@ -2980,7 +2980,33 @@ bool bpf_jit_supports_large_stack(void)
 	return true;
 }
 
+/*
+ * A program returns 64 bits. The caller of the traced function, or of the
+ * struct_ops member, reads only the low ret_size bytes of x0. Extend them to
+ * 64 bits as the return type says. That is the value which the trampoline
+ * tests, which fexit programs read and which the caller gets.
+ */
+static void emit_narrow_ret(struct jit_ctx *ctx, const struct btf_func_model *m)
+{
+	int msb = m->ret_size * 8 - 1;
+
+	if (!m->ret_size || m->ret_size >= sizeof(u64))
+		return;
+
+	if (m->ret_flags & BTF_FMODEL_SIGNED_ARG)
+		emit(A64_SBFM(1, A64_R(0), A64_R(0), 0, msb), ctx);
+	else
+		emit(A64_UBFM(1, A64_R(0), A64_R(0), 0, msb), ctx);
+
+	if (m->ret_flags & BTF_FMODEL_BOOL_RET) {
+		/* The caller may assume that a bool is 0 or 1 */
+		emit(A64_CBZ(1, A64_R(0), 2), ctx);
+		emit(A64_MOVZ(1, A64_R(0), 1, 0), ctx);
+	}
+}
+
 static void invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_image *im,
+			    const struct btf_func_model *m,
 			    struct bpf_tramp_node *node, int bargs_off,
 			    int retval_off, int run_ctx_off, bool save_ret)
 {
@@ -3034,8 +3060,10 @@ static void invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 
 	emit_call((const u64)p->bpf_func, ctx);
 
-	if (save_ret)
+	if (save_ret) {
+		emit_narrow_ret(ctx, m);
 		emit(A64_STR64I(A64_R(0), A64_SP, retval_off), ctx);
+	}
 
 	if (ctx->image) {
 		int offset = &ctx->image[ctx->idx] - branch;
@@ -3055,6 +3083,7 @@ static void invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 }
 
 static void invoke_bpf_mod_ret(struct jit_ctx *ctx, struct bpf_tramp_image *im,
+			       const struct btf_func_model *m,
 			       struct bpf_tramp_nodes *tn, int bargs_off,
 			       int retval_off, int run_ctx_off, __le32 **branches)
 {
@@ -3065,7 +3094,7 @@ static void invoke_bpf_mod_ret(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 	 */
 	emit(A64_STR64I(A64_ZR, A64_SP, retval_off), ctx);
 	for (i = 0; i < tn->nr_nodes; i++) {
-		invoke_bpf_prog(ctx, im, tn->nodes[i], bargs_off, retval_off,
+		invoke_bpf_prog(ctx, im, m, tn->nodes[i], bargs_off, retval_off,
 				run_ctx_off, true);
 		/* if (*(u64 *)(sp + retval_off) !=  0)
 		 *	goto do_fexit;
@@ -3459,7 +3488,7 @@ static int prepare_trampoline(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 			store_func_meta(ctx, meta, func_meta_off);
 			cookie_bargs_off--;
 		}
-		invoke_bpf_prog(ctx, im, fentry->nodes[i], bargs_off,
+		invoke_bpf_prog(ctx, im, m, fentry->nodes[i], bargs_off,
 				retval_off, run_ctx_off,
 				flags & BPF_TRAMP_F_RET_FENTRY_RET);
 	}
@@ -3470,7 +3499,7 @@ static int prepare_trampoline(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 		if (!branches)
 			return -ENOMEM;
 
-		invoke_bpf_mod_ret(ctx, im, fmod_ret, bargs_off, retval_off,
+		invoke_bpf_mod_ret(ctx, im, m, fmod_ret, bargs_off, retval_off,
 				   run_ctx_off, branches);
 	}
 
@@ -3504,7 +3533,7 @@ static int prepare_trampoline(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 			store_func_meta(ctx, meta, func_meta_off);
 			cookie_bargs_off--;
 		}
-		invoke_bpf_prog(ctx, im, fexit->nodes[i], bargs_off, retval_off,
+		invoke_bpf_prog(ctx, im, m, fexit->nodes[i], bargs_off, retval_off,
 				run_ctx_off, false);
 	}
 

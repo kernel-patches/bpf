@@ -19983,14 +19983,12 @@ static int check_fmodret_retval(struct bpf_verifier_env *env, int regno,
 	}
 
 	/*
-	 * "w0 = -22" zero-extends, the caller of an int function sees -22. The
-	 * trampoline tests all 64 bits: 1 << 32 would skip the function, and the
-	 * caller would see 0. So the low 32 bits decide only if the high ones are 0.
+	 * "w0 = -22" zero-extends. The trampoline sign-extends the low 32 bits of
+	 * the value for an int function, so its caller sees -22. The low 32 bits
+	 * decide if the high ones are 0. Else the 64 bits have to be in the list.
 	 *
-	 * That is right where the ABI leaves the high 32 bits of an int in the
-	 * return value register open: x86-64, arm64. s390x, riscv64, ppc64 and
-	 * loongarch want it sign-extended: look here before one of them is added
-	 * to CONFIG_BPF_FMODRET_SCAN.
+	 * The trampolines of x86-64, arm64 and s390x do that: look here before
+	 * another architecture is added to CONFIG_BPF_FMODRET_SCAN.
 	 */
 	t = btf_type_skip_modifiers(aux->attach_btf, aux->attach_func_proto->type, NULL);
 	if (t->size == 4 && reg_umax(reg) <= U32_MAX) {

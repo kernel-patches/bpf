@@ -8385,6 +8385,8 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 	}
 	m->ret_size = ret;
 	m->ret_flags = __get_type_fmodel_flags(t);
+	if (ret == 1 && btf_type_is_int(t) && (btf_int_encoding(t) & BTF_INT_BOOL))
+		m->ret_flags |= BTF_FMODEL_BOOL_RET;
 
 	for (i = 0; i < nargs; i++) {
 		if (i == nargs - 1 && args[i].type == 0) {

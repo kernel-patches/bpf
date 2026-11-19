@@ -2551,8 +2551,6 @@ struct bpf_tramp_jit {
 	int r14_off;		/* Offset of saved %r14, has to be at the
 				 * bottom */
 	int do_fexit;		/* do_fexit: label */
-	int skip[BPF_MAX_TRAMP_LINKS];	/* skip: labels after each prog */
-	int nr_progs;
 };
 
 static void load_imm64(struct bpf_jit *jit, int dst_reg, u64 val)
@@ -2580,18 +2578,15 @@ static int invoke_bpf_prog(struct bpf_tramp_jit *tjit,
 			 offsetof(struct bpf_tramp_run_ctx, bpf_cookie);
 	struct bpf_prog *p = node->link->prog;
 	void *skip = jit->prg_buf + jit->prg;
-	int idx = tjit->nr_progs++;
+	int nop = jit->prg;
 	int patch;
-
-	if (idx >= ARRAY_SIZE(tjit->skip))
-		return -E2BIG;
 
 	/*
 	 * nop, patched to skip this prog when it is detached
 	 */
 
 	/* brcl 0,skip */
-	EMIT6_PCREL_RILC(0xc0040000, 0, tjit->skip[idx]);
+	EMIT6_PCREL_RILC(0xc0040000, 0, 0);
 
 	/*
 	 * run_ctx.cookie = node->cookie;
@@ -2653,7 +2648,8 @@ static int invoke_bpf_prog(struct bpf_tramp_jit *tjit,
 	EMIT6_PCREL_RILB_PTR(0xc0050000, REG_14, bpf_trampoline_exit(p));
 
 	/* skip: */
-	tjit->skip[idx] = jit->prg;
+	if (jit->prg_buf)
+		*(u32 *)&jit->prg_buf[nop + 2] = (jit->prg - nop) >> 1;
 	bpf_tramp_image_add_skip(im, p, skip, jit->prg_buf + jit->prg);
 
 	return 0;
@@ -2717,8 +2713,6 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	u64 func_meta;
 	int i, j;
 
-	/* The skip labels are taken from the previous pass. */
-	tjit->nr_progs = 0;
 	if (im)
 		im->nr_skips = 0;
 
@@ -3043,10 +3037,6 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image,
 	if (ret < 0)
 		return ret;
 	if (tjit.common.prg > (char *)image_end - (char *)image)
-		/*
-		 * Use the same error code as for exceeding
-		 * BPF_MAX_TRAMP_LINKS.
-		 */
 		return -E2BIG;
 
 	tjit.common.prg = 0;
