@@ -2,6 +2,7 @@
 config SUPERH
 	def_bool y
 	select ARCH_32BIT_OFF_T
+	select ARCH_DEFAULT_CRASH_DUMP
 	select ARCH_HAS_CPU_CACHE_ALIASING
 	select ARCH_HAVE_NMI_SAFE_CMPXCHG if (GUSA_RB || CPU_SH4A)
 	select ARCH_HAS_BINFMT_FLAT if !MMU
@@ -15,6 +16,9 @@ config SUPERH
 	select ARCH_MIGHT_HAVE_PC_PARPORT
 	select ARCH_WANT_IPC_PARSE_VERSION
 	select ARCH_NEED_CMPXCHG_1_EMU
+	select ARCH_SUPPORTS_CRASH_DUMP if BROKEN_ON_SMP
+	select ARCH_SUPPORTS_KEXEC if MMU
+	select ARCH_SUPPORTS_KEXEC_JUMP
 	select BINFMT_FLAT_NO_DATA_START_OFFSET if !MMU
 	select CPU_NO_EFFICIENT_FFS
 	select DMA_DECLARE_COHERENT
@@ -533,18 +537,6 @@ endmenu
 menu "Kernel features"
 
 source "kernel/Kconfig.hz"
-
-config ARCH_SUPPORTS_KEXEC
-	def_bool MMU
-
-config ARCH_SUPPORTS_CRASH_DUMP
-	def_bool BROKEN_ON_SMP
-
-config ARCH_DEFAULT_CRASH_DUMP
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_JUMP
-	def_bool y
 
 config PHYSICAL_START
 	hex "Physical address where the kernel is loaded" if (EXPERT || CRASH_DUMP)

@@ -83,6 +83,7 @@ config S390
 	select ALTERNATE_USER_ADDRESS_SPACE
 	select ARCH_32BIT_USTAT_F_TINODE
 	select ARCH_CORRECT_STACKTRACE_ON_KRETPROBE
+	select ARCH_DEFAULT_CRASH_DUMP
 	select ARCH_ENABLE_MEMORY_HOTPLUG if SPARSEMEM
 	select ARCH_ENABLE_SPLIT_PMD_PTLOCK if PGTABLE_LEVELS > 2
 	select ARCH_HAS_PMD_SOFTLEAVES if TRANSPARENT_HUGEPAGE
@@ -150,9 +151,14 @@ config S390
 	select ARCH_STACKWALK
 	select ARCH_SUPPORTS_ATOMIC_RMW
 	select ARCH_SUPPORTS_CFI
+	select ARCH_SUPPORTS_CRASH_DUMP
 	select ARCH_SUPPORTS_DEBUG_PAGEALLOC
 	select ARCH_SUPPORTS_HUGETLBFS
 	select ARCH_SUPPORTS_INT128 if CC_HAS_INT128 && CC_IS_CLANG
+	select ARCH_SUPPORTS_KEXEC
+	select ARCH_SUPPORTS_KEXEC_FILE
+	select ARCH_SUPPORTS_KEXEC_PURGATORY
+	select ARCH_SUPPORTS_KEXEC_SIG
 	select ARCH_SUPPORTS_MSEAL_SYSTEM_MAPPINGS
 	select ARCH_HAS_PTE_PROTNONE
 	select ARCH_SUPPORTS_NUMA_BALANCING
@@ -311,28 +317,6 @@ config ARCH_CC_CAN_LINK
 config ARCH_USERFLAGS
 	string
 	default "-m64"
-
-config ARCH_SUPPORTS_KEXEC
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_FILE
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_SIG
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_PURGATORY
-	def_bool y
-
-config ARCH_SUPPORTS_CRASH_DUMP
-	def_bool y
-	help
-	  Refer to <file:Documentation/arch/s390/zfcpdump.rst> for more details on this.
-	  This option also enables s390 zfcpdump.
-	  See also <file:Documentation/arch/s390/zfcpdump.rst>
-
-config ARCH_DEFAULT_CRASH_DUMP
-	def_bool y
 
 menu "Processor type and features"
 
