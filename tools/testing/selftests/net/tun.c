@@ -683,6 +683,37 @@ TEST_F(tun_vnet_gso, vlan_tcpv4_gso_no_csum_64k)
 	ASSERT_EQ(ret, len);
 }
 
+TEST_F(tun_vnet_gso, padded_hdr_len_exceeds_payload)
+{
+	const int hdr_size = 512;
+	uint8_t pkt[512 + ETH_HLEN] = { 0 };
+	struct virtio_net_hdr *vh = (void *)pkt;
+	ssize_t ret;
+
+	ASSERT_EQ(ioctl(self->fd, TUNSETVNETHDRSZ, &hdr_size), 0);
+	vh->hdr_len = 256;
+	build_eth(pkt + hdr_size, ETH_P_IP, param_hwaddr_outer_src,
+		  param_hwaddr_outer_dst);
+
+	ret = write(self->fd, pkt, sizeof(pkt));
+	ASSERT_EQ(ret, -1);
+	ASSERT_EQ(errno, EINVAL);
+}
+
+TEST_F(tun_vnet_gso, padded_hdr_len_zero)
+{
+	const int hdr_size = 512;
+	uint8_t pkt[512 + ETH_HLEN] = { 0 };
+	ssize_t ret;
+
+	ASSERT_EQ(ioctl(self->fd, TUNSETVNETHDRSZ, &hdr_size), 0);
+	build_eth(pkt + hdr_size, ETH_P_IP, param_hwaddr_outer_src,
+		  param_hwaddr_outer_dst);
+
+	ret = write(self->fd, pkt, sizeof(pkt));
+	ASSERT_EQ(ret, sizeof(pkt));
+}
+
 FIXTURE(tun_vnet_udptnl)
 {
 	char ifname[IFNAMSIZ];
