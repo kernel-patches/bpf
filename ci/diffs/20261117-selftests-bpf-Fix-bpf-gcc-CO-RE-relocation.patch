@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jiayuan Chen <jiayuan.chen@linux.dev>
+Date: Tue, 17 Nov 2026 20:24:13 +0800
+Subject: [PATCH] selftests/bpf: Fix bpf-gcc CO-RE relocation in verifier_sockmap_mutate
+
+bpf-gcc fails to load test_trace_iter_unix:
+
+  Error: #766/6 verifier_sockmap_mutate/test_trace_iter_unix
+  libbpf: elf: skipping section(3) .data (size 0)
+  libbpf: elf: skipping unrecognized data section(18) .comment
+  run_subtest:PASS:obj_open_mem 0 nsec
+  libbpf: prog 'test_trace_iter_unix': relo #0: insn #0 (LDX/ST/STX) accesses field incorrectly. ...
+  libbpf: prog 'test_trace_iter_unix': BPF program load failed: -EINVAL
+  libbpf: prog 'test_trace_iter_unix': failed to load: -EINVAL
+  libbpf: failed to load object 'verifier_sockmap_mutate'
+  run_subtest:PASS:unexpected_load_success 0 nsec
+  validate_msgs:FAIL:1014 expect_msg
+  VERIFIER LOG:
+  =============
+  0: R1=ctx() R10=fp0
+  ;  @ verifier_sockmap_mutate.c:124
+  0: <invalid CO-RE relocation>
+  failed to resolve CO-RE relocation <byte_off> [4] struct bpf_iter__unix (0:0 @ offset 0)
+  processed 1 insns (limit 1000000) max_states_per_insn 0 total_states 0 peak_states 0 mark_read 0
+  =============
+  EXPECTED   SUBSTR: 'cannot update sockmap in this context'
+
+GCC only applies preserve_access_index to types that carry the attribute
+themselves. The anonymous union holding the sock pointer doesn't, so the
+CO-RE access stops at the union ("0:0") instead of reaching the pointer
+("0:0:0"), and libbpf rejects the relocation.
+
+Fixes: e16c83fa764f ("selftests/bpf: Add negative test for sockmap update from non-sockmap iter")
+Signed-off-by: Jiayuan Chen <jiayuan.chen@linux.dev>
+---
+ .../selftests/bpf/progs/verifier_sockmap_mutate.c     | 11 ++---------
+ 1 file changed, 2 insertions(+), 9 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/progs/verifier_sockmap_mutate.c b/tools/testing/selftests/bpf/progs/verifier_sockmap_mutate.c
+index 1516fe1524bb..0dbbc5ad1de9 100644
+--- a/tools/testing/selftests/bpf/progs/verifier_sockmap_mutate.c
++++ b/tools/testing/selftests/bpf/progs/verifier_sockmap_mutate.c
+@@ -10,19 +10,12 @@
+ 
+ char _license[] SEC("license") = "GPL";
+ 
+-struct sock {
+-} __attribute__((preserve_access_index));
+-
+ struct bpf_iter__sockmap {
+-	union {
+-		struct sock *sk;
+-	};
++	struct sock *sk;
+ } __attribute__((preserve_access_index));
+ 
+ struct bpf_iter__unix {
+-	union {
+-		struct sock *unix_sk;
+-	};
++	struct sock *unix_sk;
+ } __attribute__((preserve_access_index));
+ 
+ struct {
