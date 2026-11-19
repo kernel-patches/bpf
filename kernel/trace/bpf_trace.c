@@ -3305,6 +3305,9 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	if (!is_uprobe_multi(prog))
 		return -EINVAL;
 
+	if (prog->kprobe_override)
+		return -EINVAL;
+
 	flags = attr->link_create.uprobe_multi.flags;
 	if (flags & ~(BPF_F_UPROBE_MULTI_RETURN | BPF_F_UPROBE_MULTI_PATH_FD))
 		return -EINVAL;
