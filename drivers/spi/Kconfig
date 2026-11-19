@@ -1258,6 +1258,18 @@ config SPI_TI_QSPI
 	  This device supports single, dual and quad read support, while
 	  it only supports single write mode.
 
+config SPI_TI_QSPI_KUNIT_TEST
+	bool "KUnit test for TI QSPI controller driver" if !KUNIT_ALL_TESTS
+	depends on KUNIT=y && SPI_TI_QSPI=y
+	default KUNIT_ALL_TESTS
+	help
+	  This option builds the KUnit test suite for the TI QSPI controller
+	  driver. It verifies that a transfer timeout finalizes the message
+	  with -ETIMEDOUT and writes QSPI_INVAL to end the frame. The test
+	  runs only where MMIO can be emulated (UML) and is skipped elsewhere.
+
+	  If unsure, say N.
+
 config SPI_TLE62X0
 	tristate "Infineon TLE62X0 (for power switching)"
 	depends on SYSFS
