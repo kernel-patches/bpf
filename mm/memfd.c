@@ -72,12 +72,6 @@ struct folio *memfd_alloc_folio(struct file *memfd, pgoff_t idx)
 	gfp_t gfp_mask;
 
 	if (is_file_hugepages(memfd)) {
-		/*
-		 * The folio would most likely be accessed by a DMA driver,
-		 * therefore, we have zone memory constraints where we can
-		 * alloc from. Also, the folio will be pinned for an indefinite
-		 * amount of time, so it is not expected to be migrated away.
-		 */
 		struct inode *inode = file_inode(memfd);
 		struct hstate *h = hstate_file(memfd);
 		int err = -ENOMEM;
@@ -85,7 +79,6 @@ struct folio *memfd_alloc_folio(struct file *memfd, pgoff_t idx)
 		u32 hash;
 
 		gfp_mask = htlb_alloc_mask(h);
-		gfp_mask &= ~(__GFP_HIGHMEM | __GFP_MOVABLE);
 		idx >>= huge_page_order(h);
 
 		/*
