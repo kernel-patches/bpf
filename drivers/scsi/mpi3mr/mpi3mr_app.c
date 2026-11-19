@@ -2379,6 +2379,26 @@ static int mpi3mr_map_data_buffer_dma(struct mpi3mr_ioc *mrioc,
 	drv_buf->num_dma_desc = needed_desc;
 	return 0;
 }
+
+/**
+ * mpi3mr_bsg_is_dout_be - Check if a buffer entry uses the data out buffer
+ * @buf_type: Buffer entry type
+ *
+ * Return: true if the entry is taken from the data out buffer and
+ * false if it is taken from the data in buffer.
+ */
+static bool mpi3mr_bsg_is_dout_be(u8 buf_type)
+{
+	switch (buf_type) {
+	case MPI3MR_BSG_BUFTYPE_RAIDMGMT_CMD:
+	case MPI3MR_BSG_BUFTYPE_DATA_OUT:
+	case MPI3MR_BSG_BUFTYPE_MPI_REQUEST:
+		return true;
+	default:
+		return false;
+	}
+}
+
 /**
  * mpi3mr_bsg_process_mpt_cmds - MPI Pass through BSG handler
  * @job: BSG job reference
@@ -2423,7 +2443,7 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	u8 *din_buf = NULL, *dout_buf = NULL;
 	u8 *sgl_iter = NULL, *sgl_din_iter = NULL, *sgl_dout_iter = NULL;
 	u16 rmc_size  = 0, desc_count = 0;
-	size_t req_min;
+	size_t req_min, buf_left;
 
 	bsg_req = job->request;
 	karg = (struct mpi3mr_bsg_mptcmd *)&bsg_req->cmd.mptcmd;
@@ -2503,6 +2523,19 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	drv_buf_iter = drv_bufs;
 
 	for (count = 0; count < bufcnt; count++, buf_entries++, drv_buf_iter++) {
+		if (mpi3mr_bsg_is_dout_be(buf_entries->buf_type))
+			buf_left = job->request_payload.payload_len -
+			    (sgl_dout_iter - dout_buf);
+		else
+			buf_left = job->reply_payload.payload_len -
+			    (sgl_din_iter - din_buf);
+		if (buf_entries->buf_len > buf_left) {
+			dprint_bsg_err(mrioc, "%s: buffer entry %u exceeds the payload\n",
+			    __func__, count);
+			mutex_unlock(&mrioc->bsg_cmds.mutex);
+			rval = -EINVAL;
+			goto out;
+		}
 
 		switch (buf_entries->buf_type) {
 		case MPI3MR_BSG_BUFTYPE_RAIDMGMT_CMD:
