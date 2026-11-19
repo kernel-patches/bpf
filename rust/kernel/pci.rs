@@ -106,6 +106,9 @@ unsafe impl<T: Driver> driver::RegistrationOps for Adapter<T> {
             (*pdrv.get()).remove = Some(Self::remove_callback);
             (*pdrv.get()).id_table = T::ID_TABLE.as_ptr();
             (*pdrv.get()).driver_managed_dma = T::DRIVER_MANAGED_DMA.is_some();
+            if T::HAS_RESET_PREPARE || T::HAS_RESET_DONE {
+                (*pdrv.get()).err_handler = &Self::ERROR_HANDLERS;
+            }
             if T::HAS_SRIOV_ENABLE {
                 (*pdrv.get()).sriov_configure = Some(Self::sriov_configure_callback);
             }
@@ -178,6 +181,54 @@ impl<T: Driver> Adapter<T> {
         // before `devres_release_all()` in `device_unbind_cleanup()` is sufficient.
         drop(data);
     }
+
+    extern "C" fn reset_prepare_callback(pdev: *mut bindings::pci_dev) {
+        // SAFETY: The PCI core only ever calls the reset_prepare callback with a valid pointer to
+        // a `struct pci_dev`, while holding the device lock.
+        //
+        // INVARIANT: `pdev` is valid for the duration of `reset_prepare_callback()`.
+        let pdev = unsafe { &*pdev.cast::<Device<device::CoreInternal<'_>>>() };
+
+        // SAFETY: The PCI core only calls this callback for a device bound to this driver. The
+        // device lock excludes `probe_callback()` and `remove_callback()`, so the stored pointer
+        // has type `T::Data<'_>` and remains valid throughout this callback.
+        let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
+
+        T::reset_prepare(pdev, data);
+    }
+
+    extern "C" fn reset_done_callback(pdev: *mut bindings::pci_dev) {
+        // SAFETY: The PCI core only ever calls the reset_done callback with a valid pointer to a
+        // `struct pci_dev`, while holding the device lock.
+        //
+        // INVARIANT: `pdev` is valid for the duration of `reset_done_callback()`.
+        let pdev = unsafe { &*pdev.cast::<Device<device::CoreInternal<'_>>>() };
+
+        // SAFETY: The PCI core only calls this callback for a device bound to this driver. The
+        // device lock excludes `probe_callback()` and `remove_callback()`, so the stored pointer
+        // has type `T::Data<'_>` and remains valid throughout this callback.
+        let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
+
+        T::reset_done(pdev, data);
+    }
+
+    const ERROR_HANDLERS: bindings::pci_error_handlers = bindings::pci_error_handlers {
+        error_detected: None,
+        mmio_enabled: None,
+        slot_reset: None,
+        reset_prepare: if T::HAS_RESET_PREPARE {
+            Some(Self::reset_prepare_callback)
+        } else {
+            None
+        },
+        reset_done: if T::HAS_RESET_DONE {
+            Some(Self::reset_done_callback)
+        } else {
+            None
+        },
+        resume: None,
+        cor_error_detected: None,
+    };
 }
 
 /// Declares a kernel module that exposes a single PCI driver.
@@ -401,6 +452,14 @@ pub trait Driver {
     fn unbind<'bound>(dev: &'bound Device<device::Core<'_>>, this: Pin<&Self::Data<'bound>>) {
         let _ = (dev, this);
     }
+
+    /// Called before a PCI reset, with the device lock held.
+    #[optional]
+    fn reset_prepare<'bound>(_dev: &Device<device::Core<'_>>, _this: Pin<&Self::Data<'bound>>);
+
+    /// Called after a PCI reset attempt, with the device lock held.
+    #[optional]
+    fn reset_done<'bound>(_dev: &Device<device::Core<'_>>, _this: Pin<&Self::Data<'bound>>);
 
     /// Enables Single Root I/O Virtualization (SR-IOV) for a PF.
     ///
