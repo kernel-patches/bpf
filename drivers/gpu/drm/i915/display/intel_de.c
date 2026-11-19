@@ -242,12 +242,16 @@ static bool vlv_check_for_unclaimed_mmio(struct intel_display *display)
 	return true;
 }
 
+static bool mmio_debug_is_enabled(struct intel_display *display)
+{
+	return !!READ_ONCE(display->params.mmio_debug) ||
+		READ_ONCE(display->mmio.mmio_debug_oneshot);
+}
+
 static void check_unclaimed_mmio_pre(struct intel_display *display,
 				     intel_reg_t reg, bool write)
 {
-	lockdep_assert_held(&display->mmio.lock);
-
-	if (!display->params.mmio_debug)
+	if (!mmio_debug_is_enabled(display))
 		return;
 
 	if (!display->mmio.funcs->check_for_unclaimed_mmio(display))
@@ -262,9 +266,7 @@ static void check_unclaimed_mmio_pre(struct intel_display *display,
 static void check_unclaimed_mmio_post(struct intel_display *display,
 				      intel_reg_t reg, bool write)
 {
-	lockdep_assert_held(&display->mmio.lock);
-
-	if (!display->params.mmio_debug)
+	if (!mmio_debug_is_enabled(display))
 		return;
 
 	if (!display->mmio.funcs->check_for_unclaimed_mmio(display))
@@ -275,8 +277,7 @@ static void check_unclaimed_mmio_post(struct intel_display *display,
 		 write ? "write to" : "read from",
 		 intel_reg_offset(reg));
 
-	/* Only report the first N failures */
-	display->params.mmio_debug--;
+	WRITE_ONCE(display->mmio.mmio_debug_oneshot, false);
 }
 
 bool intel_de_unclaimed_mmio_detected(struct intel_display *display)
@@ -286,43 +287,36 @@ bool intel_de_unclaimed_mmio_detected(struct intel_display *display)
 	if (!display->mmio.funcs->check_for_unclaimed_mmio)
 		return false;
 
-	spin_lock_irq(&display->mmio.lock);
-	ret = display->mmio.funcs->check_for_unclaimed_mmio(display);
-	spin_unlock_irq(&display->mmio.lock);
+	if (display->mmio.funcs->check_for_unclaimed_mmio_needs_lock) {
+		spin_lock_irq(&display->mmio.lock);
+		ret = display->mmio.funcs->check_for_unclaimed_mmio(display);
+		spin_unlock_irq(&display->mmio.lock);
+	} else {
+		ret = display->mmio.funcs->check_for_unclaimed_mmio(display);
+	}
 
 	return ret;
 }
 
 bool intel_de_arm_unclaimed_mmio_detection(struct intel_display *display)
 {
-	bool ret = false;
-
-	if (!display->mmio.funcs->check_for_unclaimed_mmio)
+	if (!READ_ONCE(display->mmio.unclaimed_mmio_check))
 		return false;
 
-	spin_lock_irq(&display->mmio.lock);
+	if (!intel_de_unclaimed_mmio_detected(display))
+		return false;
 
-	if (display->mmio.unclaimed_mmio_check <= 0)
-		goto out;
-
-	if (!display->mmio.funcs->check_for_unclaimed_mmio(display))
-		goto out;
-
-	if (!display->params.mmio_debug) {
+	if (!READ_ONCE(display->params.mmio_debug)) {
 		drm_dbg_kms(display->drm,
 			    "Unclaimed register detected, "
 			    "enabling oneshot unclaimed register reporting. "
-			    "Please use i915.mmio_debug=N for more information.\n");
-		display->params.mmio_debug++;
+			    "Please use i915.mmio_debug=1 for more information.\n");
+		WRITE_ONCE(display->mmio.mmio_debug_oneshot, true);
 	}
 
-	display->mmio.unclaimed_mmio_check--;
-	ret = true;
+	WRITE_ONCE(display->mmio.unclaimed_mmio_check, false);
 
-out:
-	spin_unlock_irq(&display->mmio.lock);
-
-	return ret;
+	return true;
 }
 
 #define __MMIO_WAKELOCK		BIT(0)
@@ -474,12 +468,14 @@ static const struct intel_mmio_funcs hsw_mmio_funcs = {
 	.read = hsw_mmio_read,
 	.write = hsw_mmio_write,
 	.check_for_unclaimed_mmio = hsw_check_for_unclaimed_mmio,
+	.check_for_unclaimed_mmio_needs_lock = true,
 };
 
 static const struct intel_mmio_funcs vlv_mmio_funcs = {
 	.read = hsw_mmio_read,
 	.write = hsw_mmio_write,
 	.check_for_unclaimed_mmio = vlv_check_for_unclaimed_mmio,
+	.check_for_unclaimed_mmio_needs_lock = true,
 };
 
 #define LNL_MMIO_FLAGS __MMIO_WAKELOCK
@@ -539,7 +535,7 @@ void intel_de_init(struct intel_display *display)
 	}
 
 	if (display->mmio.funcs->check_for_unclaimed_mmio)
-		display->mmio.unclaimed_mmio_check = 1;
+		WRITE_ONCE(display->mmio.unclaimed_mmio_check, true);
 
 	/* clear out unclaimed reg detection bit someone else left behind */
 	if (intel_de_unclaimed_mmio_detected(display))

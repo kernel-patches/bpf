@@ -13,6 +13,7 @@ struct intel_mmio_funcs {
 	u32 (*read)(struct intel_display *display, intel_reg_t reg);
 	void (*write)(struct intel_display *display, intel_reg_t reg, u32 val);
 	bool (*check_for_unclaimed_mmio)(struct intel_display *display);
+	bool check_for_unclaimed_mmio_needs_lock;
 };
 
 void intel_de_init(struct intel_display *display);
