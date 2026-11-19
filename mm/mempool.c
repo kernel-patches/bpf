@@ -361,7 +361,7 @@ EXPORT_SYMBOL(mempool_create_node_noprof);
  *
  * Return: %0 on success, negative error code otherwise.
  */
-int mempool_resize(struct mempool *pool, int new_min_nr)
+int mempool_resize_noprof(struct mempool *pool, int new_min_nr)
 {
 	void *element;
 	void **new_elements;
@@ -422,7 +422,7 @@ out_unlock:
 out:
 	return 0;
 }
-EXPORT_SYMBOL(mempool_resize);
+EXPORT_SYMBOL(mempool_resize_noprof);
 
 static unsigned int mempool_alloc_from_pool(struct mempool *pool, void **elems,
 		unsigned int count, unsigned int allocated,
