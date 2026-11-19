@@ -1113,15 +1113,10 @@ static int mchp_spdifrx_probe(struct platform_device *pdev)
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
 
-	/* Request IRQ. */
+	/* Get IRQ. */
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
-
-	err = devm_request_irq(&pdev->dev, irq, mchp_spdif_interrupt, 0,
-			       dev_name(&pdev->dev), dev);
-	if (err)
-		return err;
 
 	/* Get the peripheral clock */
 	dev->pclk = devm_clk_get(&pdev->dev, "pclk");
@@ -1167,6 +1162,12 @@ static int mchp_spdifrx_probe(struct platform_device *pdev)
 			return err;
 		}
 	}
+
+	/* Request IRQ. */
+	err = devm_request_irq(&pdev->dev, irq, mchp_spdif_interrupt, 0,
+			       dev_name(&pdev->dev), dev);
+	if (err)
+		return err;
 
 	dev->capture.addr	= (dma_addr_t)mem->start + SPDIFRX_RHR;
 	dev->capture.maxburst	= 1;
