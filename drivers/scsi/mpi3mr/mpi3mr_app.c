@@ -1690,6 +1690,13 @@ static long mpi3mr_bsg_process_drv_cmds(struct bsg_job *job)
 	struct mpi3mr_bsg_packet *bsg_req = NULL;
 	struct mpi3mr_bsg_drv_cmd *drvrcmd = NULL;
 
+	if (job->request_len <
+	    offsetofend(struct mpi3mr_bsg_packet, cmd.drvrcmd.opcode)) {
+		pr_err("%s: invalid BSG driver command length(%u)\n",
+		    MPI3MR_DRIVER_NAME, job->request_len);
+		return -EINVAL;
+	}
+
 	bsg_req = job->request;
 	drvrcmd = &bsg_req->cmd.drvrcmd;
 
@@ -2416,9 +2423,21 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	u8 *din_buf = NULL, *dout_buf = NULL;
 	u8 *sgl_iter = NULL, *sgl_din_iter = NULL, *sgl_dout_iter = NULL;
 	u16 rmc_size  = 0, desc_count = 0;
+	size_t req_min;
 
 	bsg_req = job->request;
 	karg = (struct mpi3mr_bsg_mptcmd *)&bsg_req->cmd.mptcmd;
+
+	req_min = offsetof(struct mpi3mr_bsg_packet,
+	    cmd.mptcmd.buf_entry_list.buf_entry);
+	if (job->request_len >= req_min)
+		req_min += karg->buf_entry_list.num_of_entries *
+		    sizeof(struct mpi3mr_buf_entry);
+	if (job->request_len < req_min) {
+		pr_err("%s: invalid BSG MPT command length(%u), need %zu\n",
+		    MPI3MR_DRIVER_NAME, job->request_len, req_min);
+		return -EINVAL;
+	}
 
 	mrioc = mpi3mr_bsg_verify_adapter(karg->mrioc_id);
 	if (!mrioc)
@@ -2995,6 +3014,12 @@ static int mpi3mr_bsg_request(struct bsg_job *job)
 
 	struct mpi3mr_bsg_packet *bsg_req = job->request;
 
+	if (job->request_len < offsetofend(struct mpi3mr_bsg_packet, cmd_type)) {
+		pr_err("%s: invalid BSG request length(%u)\n",
+		    MPI3MR_DRIVER_NAME, job->request_len);
+		goto out;
+	}
+
 	switch (bsg_req->cmd_type) {
 	case MPI3MR_DRV_CMD:
 		rval = mpi3mr_bsg_process_drv_cmds(job);
@@ -3008,6 +3033,7 @@ static int mpi3mr_bsg_request(struct bsg_job *job)
 		break;
 	}
 
+out:
 	bsg_job_done(job, rval, reply_payload_rcv_len);
 
 	return 0;
