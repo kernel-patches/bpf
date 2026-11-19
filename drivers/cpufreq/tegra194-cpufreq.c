@@ -22,7 +22,6 @@
 #define KHZ                     1000
 #define REF_CLK_MHZ             408 /* 408 MHz */
 #define CPUFREQ_TBL_STEP_HZ     (50 * KHZ * KHZ)
-#define MAX_CNT                 ~0U
 
 #define MAX_DELTA_KHZ          115200
 
@@ -48,8 +47,8 @@ struct tegra_cpu_data {
 
 struct tegra_cpu_ctr {
 	u32 cpu;
-	u32 coreclk_cnt, last_coreclk_cnt;
-	u32 refclk_cnt, last_refclk_cnt;
+	u64 coreclk_cnt, last_coreclk_cnt;
+	u64 refclk_cnt, last_refclk_cnt;
 };
 
 struct read_counters_work {
@@ -69,6 +68,7 @@ struct tegra_cpufreq_ops {
 
 struct tegra_cpufreq_soc {
 	struct tegra_cpufreq_ops *ops;
+	u64 cnt_mask;
 	int maxcpus_per_cluster;
 	unsigned int num_clusters;
 	phys_addr_t actmon_cntr_base;
@@ -221,6 +221,7 @@ static struct tegra_cpufreq_ops tegra234_cpufreq_ops = {
 
 static const struct tegra_cpufreq_soc tegra234_cpufreq_soc = {
 	.ops = &tegra234_cpufreq_ops,
+	.cnt_mask = U32_MAX,
 	.actmon_cntr_base = 0x9000,
 	.maxcpus_per_cluster = 4,
 	.num_clusters = 3,
@@ -229,6 +230,7 @@ static const struct tegra_cpufreq_soc tegra234_cpufreq_soc = {
 
 static const struct tegra_cpufreq_soc tegra238_cpufreq_soc = {
 	.ops = &tegra234_cpufreq_ops,
+	.cnt_mask = U32_MAX,
 	.actmon_cntr_base = 0x4000,
 	.maxcpus_per_cluster = 8,
 	.num_clusters = 1,
@@ -315,7 +317,7 @@ static void tegra_read_counters(struct work_struct *work)
 	do {
 		data->soc->ops->sample_counters(data, c);
 		delta_refcnt = tegra_counter_delta(c->refclk_cnt, c->last_refclk_cnt,
-						   MAX_CNT);
+						   data->soc->cnt_mask);
 		if (++cnt >= 0xFFFF) {
 			pr_warn("cpufreq: problem with refclk on cpu:%d, delta_refcnt:%llu, cnt:%d\n",
 				c->cpu, delta_refcnt, cnt);
@@ -347,8 +349,10 @@ static void tegra_read_counters(struct work_struct *work)
  */
 static unsigned int tegra194_calculate_speed(u32 cpu)
 {
+	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
 	struct read_counters_work read_counters_work;
 	struct tegra_cpu_ctr c;
+	u64 cnt_mask = data->soc->cnt_mask;
 	u64 delta_refcnt;
 	u64 delta_ccnt;
 	u64 rate_mhz;
@@ -363,11 +367,11 @@ static unsigned int tegra194_calculate_speed(u32 cpu)
 	flush_work(&read_counters_work.work);
 	c = read_counters_work.c;
 
-	delta_ccnt = tegra_counter_delta(c.coreclk_cnt, c.last_coreclk_cnt, MAX_CNT);
+	delta_ccnt = tegra_counter_delta(c.coreclk_cnt, c.last_coreclk_cnt, cnt_mask);
 	if (!delta_ccnt)
 		return 0;
 
-	delta_refcnt = tegra_counter_delta(c.refclk_cnt, c.last_refclk_cnt, MAX_CNT);
+	delta_refcnt = tegra_counter_delta(c.refclk_cnt, c.last_refclk_cnt, cnt_mask);
 	if (!delta_refcnt) {
 		pr_debug("cpufreq: %d is idle, delta_refcnt: 0\n", cpu);
 		return 0;
@@ -626,6 +630,7 @@ static struct tegra_cpufreq_ops tegra194_cpufreq_ops = {
 
 static const struct tegra_cpufreq_soc tegra194_cpufreq_soc = {
 	.ops = &tegra194_cpufreq_ops,
+	.cnt_mask = U32_MAX,
 	.maxcpus_per_cluster = 2,
 	.num_clusters = 4,
 	.refclk_delta_min = 16000,
@@ -721,7 +726,8 @@ static int tegra194_cpufreq_probe(struct platform_device *pdev)
 
 	soc = of_device_get_match_data(&pdev->dev);
 
-	if (soc->ops && soc->maxcpus_per_cluster && soc->num_clusters && soc->refclk_delta_min) {
+	if (soc->ops && soc->maxcpus_per_cluster && soc->num_clusters &&
+	    soc->refclk_delta_min && soc->cnt_mask) {
 		data->soc = soc;
 	} else {
 		dev_err(&pdev->dev, "soc data missing\n");
