@@ -628,6 +628,25 @@ out:
 	return ret;
 }
 
+/*
+ * Whether a stored ACE is for the principal of a POSIX ACL entry. The entry
+ * for uid 0 is shown as S-1-22-1-0. sid_to_id() also maps the server domain
+ * SID with RID 0 to uid 0, so a stored ACE with that SID counts as well.
+ */
+static bool ace_is_for_entry(const struct smb_sid *ace_sid,
+			     const struct smb_sid *sid, bool root)
+{
+	const struct smb_sid *dom = &server_conf.domain_sid;
+
+	if (ace_sid->num_subauth == sid->num_subauth &&
+	    !compare_sids(ace_sid, sid))
+		return true;
+
+	return root && ace_sid->num_subauth == dom->num_subauth + 1 &&
+	       !compare_sids(ace_sid, dom) &&
+	       !ace_sid->sub_auth[dom->num_subauth];
+}
+
 static void set_posix_acl_entries_dacl(const struct mnt_idmap *idmap,
 				       struct smb_ace *pndace,
 				       struct smb_fattr *fattr, u16 *num_aces,
@@ -646,6 +665,7 @@ static void set_posix_acl_entries_dacl(const struct mnt_idmap *idmap,
 	pace = fattr->cf_acls->a_entries;
 	for (i = 0; i < fattr->cf_acls->a_count; i++, pace++) {
 		int flags = 0;
+		bool root = false;
 
 		sid = kmalloc_obj(struct smb_sid, KSMBD_DEFAULT_GFP);
 		if (!sid)
@@ -656,8 +676,10 @@ static void set_posix_acl_entries_dacl(const struct mnt_idmap *idmap,
 			unsigned int sid_type = SIDOWNER;
 
 			uid = posix_acl_uid_translate(idmap, pace);
-			if (!uid)
+			if (!uid) {
 				sid_type = SIDUNIX_USER;
+				root = true;
+			}
 			id_to_sid(uid, sid_type, sid);
 		} else if (pace->e_tag == ACL_GROUP) {
 			gid_t gid;
@@ -672,8 +694,7 @@ static void set_posix_acl_entries_dacl(const struct mnt_idmap *idmap,
 		}
 		ntace = pndace;
 		for (j = 0; j < existing_nt_aces; j++) {
-			if (ntace->sid.sub_auth[ntace->sid.num_subauth - 1] ==
-					sid->sub_auth[sid->num_subauth - 1])
+			if (ace_is_for_entry(&ntace->sid, sid, root))
 				goto pass_same_sid;
 			ntace = (struct smb_ace *)((char *)ntace +
 					le16_to_cpu(ntace->size));
