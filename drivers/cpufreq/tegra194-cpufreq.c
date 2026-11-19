@@ -110,6 +110,14 @@ static int tegra_cpufreq_set_bw(struct cpufreq_policy *policy, unsigned long fre
 	return ret;
 }
 
+static u64 tegra_counter_delta(u64 after, u64 before, u64 mask)
+{
+	if (after < before)
+		return after + (mask - before);
+
+	return after - before;
+}
+
 static void tegra_get_cpu_mpidr(void *mpidr)
 {
 	*((u64 *)mpidr) = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
@@ -277,7 +285,7 @@ static void tegra_read_counters(struct work_struct *work)
 	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
 	struct read_counters_work *read_counters_work;
 	struct tegra_cpu_ctr *c;
-	u32 delta_refcnt;
+	u64 delta_refcnt;
 	int cnt = 0;
 
 	/*
@@ -306,12 +314,10 @@ static void tegra_read_counters(struct work_struct *work)
 	 */
 	do {
 		data->soc->ops->sample_counters(data, c);
-		if (c->refclk_cnt < c->last_refclk_cnt)
-			delta_refcnt = c->refclk_cnt + (MAX_CNT - c->last_refclk_cnt);
-		else
-			delta_refcnt = c->refclk_cnt - c->last_refclk_cnt;
+		delta_refcnt = tegra_counter_delta(c->refclk_cnt, c->last_refclk_cnt,
+						   MAX_CNT);
 		if (++cnt >= 0xFFFF) {
-			pr_warn("cpufreq: problem with refclk on cpu:%d, delta_refcnt:%u, cnt:%d\n",
+			pr_warn("cpufreq: problem with refclk on cpu:%d, delta_refcnt:%llu, cnt:%d\n",
 				c->cpu, delta_refcnt, cnt);
 			break;
 		}
@@ -343,9 +349,9 @@ static unsigned int tegra194_calculate_speed(u32 cpu)
 {
 	struct read_counters_work read_counters_work;
 	struct tegra_cpu_ctr c;
-	u32 delta_refcnt;
-	u32 delta_ccnt;
-	u32 rate_mhz;
+	u64 delta_refcnt;
+	u64 delta_ccnt;
+	u64 rate_mhz;
 
 	/*
 	 * Reconstruct cpu frequency over an observation/sampling window.
@@ -357,23 +363,16 @@ static unsigned int tegra194_calculate_speed(u32 cpu)
 	flush_work(&read_counters_work.work);
 	c = read_counters_work.c;
 
-	if (c.coreclk_cnt < c.last_coreclk_cnt)
-		delta_ccnt = c.coreclk_cnt + (MAX_CNT - c.last_coreclk_cnt);
-	else
-		delta_ccnt = c.coreclk_cnt - c.last_coreclk_cnt;
+	delta_ccnt = tegra_counter_delta(c.coreclk_cnt, c.last_coreclk_cnt, MAX_CNT);
 	if (!delta_ccnt)
 		return 0;
 
-	/* ref clock is 32 bits */
-	if (c.refclk_cnt < c.last_refclk_cnt)
-		delta_refcnt = c.refclk_cnt + (MAX_CNT - c.last_refclk_cnt);
-	else
-		delta_refcnt = c.refclk_cnt - c.last_refclk_cnt;
+	delta_refcnt = tegra_counter_delta(c.refclk_cnt, c.last_refclk_cnt, MAX_CNT);
 	if (!delta_refcnt) {
 		pr_debug("cpufreq: %d is idle, delta_refcnt: 0\n", cpu);
 		return 0;
 	}
-	rate_mhz = ((unsigned long)(delta_ccnt * REF_CLK_MHZ)) / delta_refcnt;
+	rate_mhz = delta_ccnt * REF_CLK_MHZ / delta_refcnt;
 
 	return (rate_mhz * KHZ); /* in KHz */
 }
