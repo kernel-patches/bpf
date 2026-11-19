@@ -49,6 +49,13 @@ struct core_reloc_enumval_output {
 	long uint_val2;
 };
 
+#ifdef __clang__
+#define UINT_ENUM_VALUE(v) bpf_core_enum_value(enum named_uint_enum, v)
+#else
+/* GCC's __builtin_preserve_enum_value() returns int */
+#define UINT_ENUM_VALUE(v) (unsigned int)bpf_core_enum_value(enum named_uint_enum, v)
+#endif
+
 SEC("raw_tracepoint/sys_enter")
 int test_core_enumval(void *ctx)
 {
@@ -75,9 +82,9 @@ int test_core_enumval(void *ctx)
 
 	/* enum named_uint_enum is optional */
 	if (bpf_core_enum_value_exists(enum named_uint_enum, UINT_ENUM_VAL1))
-		out->uint_val1 = bpf_core_enum_value(enum named_uint_enum, UINT_ENUM_VAL1);
+		out->uint_val1 = UINT_ENUM_VALUE(UINT_ENUM_VAL1);
 	if (bpf_core_enum_value_exists(enum named_uint_enum, UINT_ENUM_VAL2))
-		out->uint_val2 = bpf_core_enum_value(enum named_uint_enum, UINT_ENUM_VAL2);
+		out->uint_val2 = UINT_ENUM_VALUE(UINT_ENUM_VAL2);
 #else
 	data.skip = true;
 #endif
