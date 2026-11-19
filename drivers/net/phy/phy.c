@@ -1522,9 +1522,8 @@ EXPORT_SYMBOL(phy_request_interrupt);
  */
 void phy_free_interrupt(struct phy_device *phydev)
 {
-	phy_disable_interrupts(phydev);
-
 	mutex_lock(&phydev->irq_pm_lock);
+	phy_disable_interrupts(phydev);
 	free_irq(phydev->irq, phydev);
 	/* free_irq() shuts down a line left without users and the next request
 	 * resets its depth; mdio_bus_phy_resume_irq() enables a shared line.
