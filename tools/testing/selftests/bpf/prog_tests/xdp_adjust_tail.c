@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
 #include <network_helpers.h>
+#include <linux/if_link.h>
+#include <net/if.h>
+#include "xdp_dummy.skel.h"
 
 static void test_xdp_adjust_tail_shrink(void)
 {
@@ -355,6 +358,52 @@ out:
 	bpf_object__close(obj);
 }
 
+/* bpf_prog_test_run_xdp() runs on the rxq of lo's queue 0, where generic
+ * XDP sets the mem type of the frags it hands to its program. Let generic
+ * XDP see a packet on lo first, then free test_run frags from the program.
+ */
+static void test_xdp_adjust_frags_tail_shrink_after_generic(void)
+{
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+		.sin_port = htons(9),
+	};
+	struct netns_obj *ns = NULL;
+	struct xdp_dummy *skel;
+	int fd = -1, lo;
+
+	skel = xdp_dummy__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "xdp_dummy__open_and_load"))
+		return;
+
+	ns = netns_new("xdp_adjust_tail_ns", true);
+	if (!ASSERT_OK_PTR(ns, "netns_new"))
+		goto out;
+
+	SYS(out, "ip link set dev lo up");
+	lo = if_nametoindex("lo");
+	if (!ASSERT_GT(lo, 0, "lo ifindex"))
+		goto out;
+
+	if (!ASSERT_OK(bpf_xdp_attach(lo, bpf_program__fd(skel->progs.xdp_dummy_prog),
+				      XDP_FLAGS_SKB_MODE, NULL), "attach generic XDP"))
+		goto out;
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (ASSERT_GE(fd, 0, "socket"))
+		ASSERT_EQ(sendto(fd, "x", 1, 0, (struct sockaddr *)&addr, sizeof(addr)),
+			  1, "sendto");
+	bpf_xdp_detach(lo, XDP_FLAGS_SKB_MODE, NULL);
+
+	test_xdp_adjust_frags_tail_shrink();
+out:
+	if (fd >= 0)
+		close(fd);
+	netns_free(ns);
+	xdp_dummy__destroy(skel);
+}
+
 void test_xdp_adjust_tail(void)
 {
 	int page_size = getpagesize();
@@ -367,6 +416,8 @@ void test_xdp_adjust_tail(void)
 		test_xdp_adjust_tail_grow2();
 	if (test__start_subtest("xdp_adjust_frags_tail_shrink"))
 		test_xdp_adjust_frags_tail_shrink();
+	if (test__start_subtest("xdp_adjust_frags_tail_shrink_after_generic"))
+		test_xdp_adjust_frags_tail_shrink_after_generic();
 	if (test__start_subtest("xdp_adjust_frags_tail_grow")) {
 		if (page_size == 65536)
 			test_xdp_adjust_frags_tail_grow_64k();
