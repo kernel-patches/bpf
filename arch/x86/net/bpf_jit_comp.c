@@ -4004,6 +4004,35 @@ static void restore_regs(u8 **prog, const u8 *pos_of_slot, int nr_slots,
 	}
 }
 
+/*
+ * A program returns 64 bits. The caller of the traced function, or of the
+ * struct_ops member, reads only the low ret_size bytes of rax. Extend them to
+ * 64 bits as the return type says. That is the value which the trampoline
+ * tests, which fexit programs read and which the caller gets.
+ */
+static void emit_narrow_ret(const struct btf_func_model *m, u8 **pprog)
+{
+	u8 *prog = *pprog;
+
+	if (m->ret_flags & BTF_FMODEL_BOOL_RET) {
+		/* The caller may assume that a bool is 0 or 1 */
+		EMIT2(0x84, 0xC0);       /* test al, al */
+		EMIT3(0x0F, 0x95, 0xC0); /* setne al */
+	}
+
+	/* movsx rax, al | ax | eax. Nothing for 8 bytes */
+	if (m->ret_flags & BTF_FMODEL_SIGNED_ARG)
+		emit_movsx_reg(&prog, m->ret_size * 8, true, BPF_REG_0, BPF_REG_0);
+	else if (m->ret_size == 1)
+		EMIT3(0x0F, 0xB6, 0xC0); /* movzx eax, al */
+	else if (m->ret_size == 2)
+		EMIT3(0x0F, 0xB7, 0xC0); /* movzx eax, ax */
+	else if (m->ret_size == 4)
+		EMIT2(0x89, 0xC0);       /* mov eax, eax */
+
+	*pprog = prog;
+}
+
 static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 			   struct bpf_tramp_image *im,
 			   struct bpf_tramp_node *node, int stack_size,
@@ -4075,8 +4104,10 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 	 * BPF_TRAMP_FENTRY trampoline may need to return the return
 	 * value of BPF_PROG_TYPE_STRUCT_OPS prog.
 	 */
-	if (save_ret)
+	if (save_ret) {
+		emit_narrow_ret(m, &prog);
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
+	}
 
 	/* replace 2 nops with JE insn, since jmp target is known */
 	emit_code(jmp_insn, X86_JE + ((prog - jmp_insn - 2) << 8), 2);
