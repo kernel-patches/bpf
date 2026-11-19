@@ -1285,6 +1285,9 @@ struct bpf_prog_offload {
 /* The argument is nullable. */
 #define BTF_FMODEL_NULLABLE_ARG		BIT(3)
 
+/* The return value is a bool. */
+#define BTF_FMODEL_BOOL_RET		BIT(4)
+
 struct btf_func_model {
 	u8 ret_size;
 	u8 ret_flags;
