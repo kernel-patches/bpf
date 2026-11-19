@@ -473,7 +473,7 @@ drm_atomic_get_crtc_state(struct drm_atomic_commit *state,
 	int ret;
 	struct drm_crtc_state *crtc_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
 	drm_WARN_ON(state->dev, state->checked);
 
 	crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
@@ -666,7 +666,7 @@ drm_atomic_get_plane_state(struct drm_atomic_commit *state,
 	int ret;
 	struct drm_plane_state *plane_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
 	drm_WARN_ON(state->dev, state->checked);
 
 	/* the legacy pointers should never be set */
@@ -741,7 +741,7 @@ drm_atomic_get_colorop_state(struct drm_atomic_commit *state,
 	int ret;
 	struct drm_colorop_state *colorop_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
 	drm_WARN_ON(state->dev, state->checked);
 
 	colorop_state = drm_atomic_get_new_colorop_state(state, colorop);
@@ -1144,7 +1144,7 @@ drm_atomic_get_private_obj_state(struct drm_atomic_commit *state,
 	int ret;
 	struct drm_private_state *obj_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
 	drm_WARN_ON(state->dev, state->checked);
 
 	obj_state = drm_atomic_get_new_private_obj_state(state, obj);
@@ -1459,7 +1459,7 @@ drm_atomic_get_connector_state(struct drm_atomic_commit *state,
 	struct drm_mode_config *config = &connector->dev->mode_config;
 	struct drm_connector_state *connector_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
 	drm_WARN_ON(state->dev, state->checked);
 
 	ret = drm_modeset_lock(&config->connection_mutex, state->acquire_ctx);
