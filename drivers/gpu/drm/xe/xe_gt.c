@@ -68,7 +68,6 @@
 #include "xe_vm.h"
 #include "xe_wa.h"
 #include "xe_wedge.h"
-#include "xe_wopcm.h"
 
 #define GRDOM_RESET_TIMEOUT_MS	5
 
@@ -875,10 +874,6 @@ static int do_gt_restart(struct xe_gt *gt)
 
 	xe_gt_mcr_set_implicit_defaults(gt);
 	xe_reg_sr_apply_mmio(&gt->reg_sr, gt);
-
-	err = xe_wopcm_init(&gt->uc.wopcm);
-	if (err)
-		return err;
 
 	for_each_hw_engine(hwe, gt, id)
 		xe_hw_engine_enable_ring(hwe);

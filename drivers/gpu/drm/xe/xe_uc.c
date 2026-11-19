@@ -5,8 +5,10 @@
 
 #include "xe_uc.h"
 
+#include "regs/xe_guc_regs.h"
 #include "xe_assert.h"
 #include "xe_device.h"
+#include "xe_force_wake.h"
 #include "xe_gsc.h"
 #include "xe_gt.h"
 #include "xe_gt_printk.h"
@@ -18,10 +20,11 @@
 #include "xe_guc_engine_activity.h"
 #include "xe_guc_submit.h"
 #include "xe_huc.h"
+#include "xe_mmio.h"
 #include "xe_sriov.h"
+#include "xe_tile.h"
 #include "xe_uc_fw.h"
 #include "xe_wedge.h"
-#include "xe_wopcm.h"
 
 static struct xe_gt *
 uc_to_gt(struct xe_uc *uc)
@@ -52,6 +55,126 @@ err:
 	return ret;
 }
 
+static bool __wopcm_regs_locked(struct xe_gt *gt,
+				u32 *guc_wopcm_base, u32 *guc_wopcm_size)
+{
+	u32 reg_base = xe_mmio_read32(&gt->mmio, DMA_GUC_WOPCM_OFFSET);
+	u32 reg_size = xe_mmio_read32(&gt->mmio, GUC_WOPCM_SIZE);
+
+	if (!(reg_size & GUC_WOPCM_SIZE_LOCKED) ||
+	    !(reg_base & GUC_WOPCM_OFFSET_VALID))
+		return false;
+
+	*guc_wopcm_base = reg_base & GUC_WOPCM_OFFSET_MASK;
+	*guc_wopcm_size = reg_size & GUC_WOPCM_SIZE_MASK;
+	return true;
+}
+
+static int __wopcm_init_regs(struct xe_gt *gt, u32 base, u32 size)
+{
+	u32 huc_agent = xe_uc_fw_is_available(&gt->uc.huc.fw) ? HUC_LOADING_AGENT_GUC : 0;
+	u32 mask;
+	int err;
+
+	xe_gt_assert(gt, !(base & ~GUC_WOPCM_OFFSET_MASK));
+	xe_gt_assert(gt, !(size & ~GUC_WOPCM_SIZE_MASK));
+
+	mask = GUC_WOPCM_SIZE_MASK | GUC_WOPCM_SIZE_LOCKED;
+	err = xe_mmio_write32_and_verify(&gt->mmio, GUC_WOPCM_SIZE, size, mask,
+					 size | GUC_WOPCM_SIZE_LOCKED);
+	if (err)
+		goto err_out;
+
+	mask = GUC_WOPCM_OFFSET_MASK | GUC_WOPCM_OFFSET_VALID | huc_agent;
+	err = xe_mmio_write32_and_verify(&gt->mmio, DMA_GUC_WOPCM_OFFSET,
+					 base | huc_agent, mask,
+					 base | huc_agent |
+					 GUC_WOPCM_OFFSET_VALID);
+	if (err)
+		goto err_out;
+
+	xe_gt_dbg(gt, "Programmed GuC WOPCM [b=%uK, s=%uK]\n", base / SZ_1K, size / SZ_1K);
+
+	return 0;
+
+err_out:
+	xe_gt_notice(gt, "Failed to init uC WOPCM registers to [b=%uK, s=%uK]!\n",
+		     base / SZ_1K, size / SZ_1K);
+	xe_gt_notice(gt, "%s(%#x)=%#x\n", "DMA_GUC_WOPCM_OFFSET",
+		     DMA_GUC_WOPCM_OFFSET.addr,
+		     xe_mmio_read32(&gt->mmio, DMA_GUC_WOPCM_OFFSET));
+	xe_gt_notice(gt, "%s(%#x)=%#x\n", "GUC_WOPCM_SIZE",
+		     GUC_WOPCM_SIZE.addr,
+		     xe_mmio_read32(&gt->mmio, GUC_WOPCM_SIZE));
+
+	return err;
+}
+
+static int uc_program_wopcm(struct xe_uc *uc)
+{
+	struct xe_gt *gt = uc_to_gt(uc);
+	struct xe_tile *tile = gt_to_tile(gt);
+	u32 huc_fw_size = xe_uc_fw_get_upload_size(&gt->uc.huc.fw);
+	u32 wopcm_size = xe_tile_wopcm_size(tile);
+	u32 guc_wopcm_base;
+	u32 guc_wopcm_size;
+	bool locked;
+
+	if (!xe_uc_fw_is_supported(&gt->uc.guc.fw))
+		return -ENODEV;
+
+	xe_force_wake_assert_held(gt_to_fw(gt), XE_FW_GT);
+
+	locked = __wopcm_regs_locked(gt, &guc_wopcm_base, &guc_wopcm_size);
+	if (locked) {
+		/*
+		 * We trust the programming to have been done correctly. If
+		 * something is wrong we'll catch it at FW load time.
+		 */
+		xe_gt_dbg(gt, "GuC WOPCM is already locked [b=%uK, s=%uK]\n",
+			  guc_wopcm_base / SZ_1K, guc_wopcm_size / SZ_1K);
+		return 0;
+	}
+
+	/*
+	 * WOPCM partitioning on platforms with a media GT is more complex,
+	 * because both GTs share the same WOPCM space. However, on all
+	 * platforms with media GT we expect the registers to be preprogrammed
+	 * by BIOS/IFWI, so we should never have to do the programming ourselves
+	 * and can therefore skip the implementation.
+	 */
+	if (XE_WARN_ON(tile->media_gt)) {
+		xe_gt_err(gt, "WOPCM not locked on platform with media GT\n");
+		return -EIO;
+	}
+
+	/*
+	 * On legacy HW (pre-PVC) where the driver is responsible for
+	 * programming the WOPCM registers, the WOPCM is divided into three
+	 * regions, in order from bottom to top:
+	 * 1 - The HuC region, which contains the HuC firmware + a 16KB reserved
+	 *     section.
+	 * 2 - The GuC region, which contains the GuC firmware + a reserved
+	 *     section for GuC's usage.
+	 * 3 - A reserved region for HW contexts, which is 36KB in size.
+	 *
+	 * To keep the math simple, we remove the HW context region from the
+	 * WOPCM size, calculate the size of region 1 and then leave the
+	 * remaining area for region 2. The official binaries are guaranteed to
+	 * fit in the WOPCM, so the math below can only go wrong if a user is
+	 * manipulating the blobs. In such a scenario, we'll catch the error at
+	 * FW load time, so no need to double verify it here.
+	 */
+	wopcm_size -= (SZ_32K + SZ_4K);
+
+	guc_wopcm_base = huc_fw_size + SZ_16K;
+	guc_wopcm_base = ALIGN(guc_wopcm_base, 1UL << GUC_WOPCM_OFFSET_SHIFT);
+
+	guc_wopcm_size = wopcm_size - guc_wopcm_base; /* already 4KB aligned */
+
+	return __wopcm_init_regs(gt, guc_wopcm_base, guc_wopcm_size);
+}
+
 int xe_uc_init(struct xe_uc *uc)
 {
 	int ret;
@@ -76,7 +199,7 @@ int xe_uc_init(struct xe_uc *uc)
 		return 0;
 
 	if (!IS_SRIOV_VF(uc_to_xe(uc))) {
-		ret = xe_wopcm_init(&uc->wopcm);
+		ret = uc_program_wopcm(uc);
 		if (ret)
 			goto err;
 	}
@@ -192,6 +315,10 @@ int xe_uc_load_hw(struct xe_uc *uc)
 
 	if (IS_SRIOV_VF(uc_to_xe(uc)))
 		return vf_uc_load_hw(uc);
+
+	ret = uc_program_wopcm(uc);
+	if (ret)
+		return ret;
 
 	ret = xe_huc_upload(&uc->huc);
 	if (ret)
