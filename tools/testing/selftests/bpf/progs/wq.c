@@ -3,6 +3,7 @@
  */
 
 #include "bpf_experimental.h"
+#include <errno.h>
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 #include "../test_kmods/bpf_testmod_kfunc.h"
@@ -136,6 +137,67 @@ static int wq_cb_sleepable(void *map, int *key, void *value)
 	bpf_kfunc_call_test_sleepable();
 	ok_sleepable |= (1 << offset);
 	return 0;
+}
+
+SEC("syscall")
+__retval(-ENOENT)
+long test_deleted_wq(void *ctx)
+{
+	struct hmap_elem empty = {}, *value;
+	int key = 0;
+
+	if (bpf_map_update_elem(&hmap_malloc, &key, &empty, BPF_NOEXIST))
+		return 1;
+	value = bpf_map_lookup_elem(&hmap_malloc, &key);
+	if (!value)
+		return 2;
+	if (bpf_map_delete_elem(&hmap_malloc, &key))
+		return 3;
+	if (bpf_wq_init(&value->work, &hmap_malloc, 0))
+		return 4;
+	return bpf_wq_set_callback(&value->work, wq_callback, 0);
+}
+
+#define WQ_USERCNT_RETRY EAGAIN
+#define WQ_USERCNT_SETUP_FAIL 1
+#define WQ_USERCNT_CLEANUP_FAIL 2
+
+/*
+ * The host runs this after dropping all user references to hmap_malloc.
+ * Use positive EAGAIN for a reuse miss. Return the setter result only
+ * after deleting the inserted element.
+ */
+SEC("syscall")
+long test_wq_usercnt_reuse(void *ctx)
+{
+	struct hmap_elem empty = {}, *value;
+	long init_ret, result;
+	int key = 0;
+
+	if (bpf_map_update_elem(&hmap_malloc, &key, &empty, BPF_NOEXIST))
+		return WQ_USERCNT_SETUP_FAIL;
+
+	value = bpf_map_lookup_elem(&hmap_malloc, &key);
+	if (!value) {
+		result = WQ_USERCNT_SETUP_FAIL;
+		goto delete;
+	}
+
+	init_ret = bpf_wq_init(&value->work, &hmap_malloc, 0);
+	if (init_ret == -EBUSY) {
+		result = bpf_wq_set_callback(&value->work, wq_callback, 0);
+	} else if (init_ret == -EPERM) {
+		/* The retained idle callback was not reused. */
+		result = WQ_USERCNT_RETRY;
+	} else {
+		/* init 0 or another error is a setup failure, not a miss. */
+		result = WQ_USERCNT_SETUP_FAIL;
+	}
+
+delete:
+	if (bpf_map_delete_elem(&hmap_malloc, &key))
+		return WQ_USERCNT_CLEANUP_FAIL;
+	return result;
 }
 
 SEC("tc")
