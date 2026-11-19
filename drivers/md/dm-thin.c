@@ -355,11 +355,16 @@ struct thin_c {
 	struct rb_root sort_bio_list; /* sorted list of deferred bios */
 
 	/*
-	 * Ensures the thin is not destroyed until the worker has finished
-	 * iterating the active_thins list.
+	 * Ensures the thin stays on the active_thins list until the workers
+	 * have moved past it while iterating the list.
 	 */
 	refcount_t refcount;
 	struct completion can_destroy;
+	/*
+	 * Keeps new active_thin walkers from grabbing the table while
+	 * thin_dtr() is waiting for the existing holders to finish.
+	 */
+	bool dying;
 };
 
 /*----------------------------------------------------------------*/
@@ -652,8 +657,11 @@ static void error_retry_list_with_code(struct pool *pool, blk_status_t error)
 	struct thin_c *tc;
 
 	rcu_read_lock();
-	list_for_each_entry_rcu(tc, &pool->active_thins, list)
+	list_for_each_entry_rcu(tc, &pool->active_thins, list) {
+		if (READ_ONCE(tc->dying))
+			continue;
 		error_thin_bio_list(tc, &tc->retry_on_resume_list, error);
+	}
 	rcu_read_unlock();
 }
 
@@ -2318,25 +2326,29 @@ static void process_thin_deferred_cells(struct thin_c *tc)
 	} while (!list_empty(&cells));
 }
 
-static void thin_get(struct thin_c *tc);
+static bool thin_tryget(struct thin_c *tc);
 static void thin_put(struct thin_c *tc);
 
 /*
  * We can't hold rcu_read_lock() around code that can block.  So we
  * find a thin with the rcu lock held; bump a refcount; then drop
- * the lock.
+ * the lock. Skip the thins marked as dying or whose refcount thin_dtr()
+ * already dropped to zero.
  */
 static struct thin_c *get_first_thin(struct pool *pool)
 {
-	struct thin_c *tc = NULL;
+	struct thin_c *tc;
 
 	rcu_read_lock();
-	tc = list_first_or_null_rcu(&pool->active_thins, struct thin_c, list);
-	if (tc)
-		thin_get(tc);
+	list_for_each_entry_rcu(tc, &pool->active_thins, list) {
+		if (thin_tryget(tc)) {
+			rcu_read_unlock();
+			return tc;
+		}
+	}
 	rcu_read_unlock();
 
-	return tc;
+	return NULL;
 }
 
 static struct thin_c *get_next_thin(struct pool *pool, struct thin_c *tc)
@@ -2345,7 +2357,8 @@ static struct thin_c *get_next_thin(struct pool *pool, struct thin_c *tc)
 
 	rcu_read_lock();
 	list_for_each_entry_continue_rcu(tc, &pool->active_thins, list) {
-		thin_get(tc);
+		if (!thin_tryget(tc))
+			continue;
 		thin_put(old_tc);
 		rcu_read_unlock();
 		return tc;
@@ -2817,6 +2830,8 @@ static void requeue_bios(struct pool *pool)
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(tc, &pool->active_thins, list) {
+		if (READ_ONCE(tc->dying))
+			continue;
 		spin_lock_irq(&tc->lock);
 		bio_list_merge(&tc->deferred_bio_list, &tc->retry_on_resume_list);
 		bio_list_init(&tc->retry_on_resume_list);
@@ -4131,9 +4146,9 @@ static struct target_type pool_target = {
  * Thin target methods
  *--------------------------------------------------------------
  */
-static void thin_get(struct thin_c *tc)
+static bool thin_tryget(struct thin_c *tc)
 {
-	refcount_inc(&tc->refcount);
+	return !READ_ONCE(tc->dying) && refcount_inc_not_zero(&tc->refcount);
 }
 
 static void thin_put(struct thin_c *tc)
@@ -4146,13 +4161,15 @@ static void thin_dtr(struct dm_target *ti)
 {
 	struct thin_c *tc = ti->private;
 
+	WRITE_ONCE(tc->dying, true);
+
+	thin_put(tc);
+	wait_for_completion(&tc->can_destroy);
+
 	spin_lock_irq(&tc->pool->lock);
 	list_del_rcu(&tc->list);
 	spin_unlock_irq(&tc->pool->lock);
 	synchronize_rcu();
-
-	thin_put(tc);
-	wait_for_completion(&tc->can_destroy);
 
 	mutex_lock(&dm_thin_pool_table.mutex);
 
