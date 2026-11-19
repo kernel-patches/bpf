@@ -1032,6 +1032,19 @@ static int insn_bytes_to_bpf_size(__u32 sz)
 	}
 }
 
+/* A 32-bit enum value is in the low 32 bits of the ld_imm64, extended as
+ * the compiler chooses: clang zero-extends an unsigned value, GCC
+ * sign-extends every value, as its __builtin_preserve_enum_value() returns
+ * int. Check whether the instruction has the sign-extended form of an
+ * unsigned value, so that the target value gets that form too.
+ */
+static bool bpf_core_enumval_is_sext(const struct bpf_core_relo *relo,
+				     __u64 imm, __u64 orig_val)
+{
+	return relo->kind == BPF_CORE_ENUMVAL_VALUE && orig_val <= UINT_MAX &&
+	       imm != orig_val && imm == (__u64)(__s32)orig_val;
+}
+
 /*
  * Patch relocatable BPF instruction.
  *
@@ -1148,6 +1161,11 @@ int bpf_core_patch_insn(const char *prog_name, struct bpf_insn *insn,
 			return bpf_core_poison_insn(prog_name, relo_idx, insn, insn_idx);
 
 		imm = (__u32)insn[0].imm | ((__u64)insn[1].imm << 32);
+		if (res->validate && bpf_core_enumval_is_sext(relo, imm, orig_val)) {
+			orig_val = imm;
+			if (new_val <= UINT_MAX)
+				new_val = (__s32)new_val;
+		}
 		if (res->validate && imm != orig_val) {
 			pr_warn("prog '%s': relo #%d: unexpected insn #%d (LDIMM64) value: got %llu, exp %llu -> %llu\n",
 				prog_name, relo_idx,
