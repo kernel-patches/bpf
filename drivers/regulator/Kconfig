@@ -519,6 +519,17 @@ config REGULATOR_LM363X
 	  One boost output voltage is configurable and always on.
 	  Other LDOs are used for the display module.
 
+config REGULATOR_LM51772
+	tristate "TI LM51772 voltage regulator"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  This driver supports the TI LM51772 buck-boost controller, designed
+	  for USB Power Delivery applications. It provides a software
+	  configurable buck-boost output voltage and a fixed auxiliary 5 V LDO
+	  output, both controlled over I2C. The driver supports voltage
+	  setting, current limiting and fault/thermal reporting.
+
 config REGULATOR_LOCHNAGAR
 	tristate "Cirrus Logic Lochnagar regulator driver"
 	depends on MFD_LOCHNAGAR
@@ -1622,9 +1633,11 @@ config REGULATOR_SUN20I
 
 config REGULATOR_SY7636A
 	tristate "Silergy SY7636A voltage regulator"
-	depends on MFD_SY7636A
+	depends on I2C
+	select AUXILIARY_BUS
+	select REGMAP_I2C
 	help
-	  This driver supports Silergy SY3686A voltage regulator.
+	  This driver supports Silergy SY7636A voltage regulator.
 
 config REGULATOR_SY8106A
 	tristate "Silergy SY8106A regulator"
@@ -1878,6 +1891,17 @@ config REGULATOR_VQMMC_IPQ4019
 	  This driver provides support for the VQMMC LDO I/0
 	  voltage regulator of the IPQ4019 SD/EMMC controller.
 
+config REGULATOR_WL2868C
+	tristate "Will Semiconductor WL2868C regulator"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Support the seven LDO outputs of the Will Semiconductor WL2868C
+	  camera power management IC.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called wl2868c-regulator.
+
 config REGULATOR_WM831X
 	tristate "Wolfson Microelectronics WM831x PMIC regulators"
 	depends on MFD_WM831X
@@ -1915,5 +1939,13 @@ config REGULATOR_QCOM_LABIBB
 	  based PMIC implementations. LAB can be used as positive
 	  boost regulator and IBB can be used as a negative boost regulator
 	  for LCD display panel.
+
+config REGULATOR_QCOM_LCDB
+	tristate "Qualcomm LCDB regulator support"
+	depends on SPMI || COMPILE_TEST
+	help
+	  This driver supports the LCDB (LCD bias) block found on Qualcomm
+	  PMICs such as PMI632, PM6150L and PM8150L. It provides the positive
+	  (LDO) and negative (NCP) bias rails for LCD panels.
 
 endif
