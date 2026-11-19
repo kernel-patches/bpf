@@ -536,39 +536,6 @@ static void active_cacheline_remove(struct dma_debug_entry *entry)
 }
 
 /*
- * Dump mappings entries on kernel space for debugging purposes
- */
-void debug_dma_dump_mappings(struct device *dev)
-{
-	int idx;
-	phys_addr_t cln;
-
-	for (idx = 0; idx < HASH_SIZE; idx++) {
-		struct hash_bucket *bucket = &dma_entry_hash[idx];
-		struct dma_debug_entry *entry;
-		unsigned long flags;
-
-		spin_lock_irqsave(&bucket->lock, flags);
-		list_for_each_entry(entry, &bucket->list, list) {
-			if (!dev || dev == entry->dev) {
-				cln = to_cacheline_number(entry);
-				dev_info(entry->dev,
-					 "%s idx %d P=%pa D=%llx L=%llx cln=%pa %s %s attrs=0x%lx\n",
-					 type2name[entry->type], idx,
-					 &entry->paddr, entry->dev_addr,
-					 entry->size, &cln,
-					 dir2name[entry->direction],
-					 maperr2str[entry->map_err_type],
-					 entry->attrs);
-			}
-		}
-		spin_unlock_irqrestore(&bucket->lock, flags);
-
-		cond_resched();
-	}
-}
-
-/*
  * Dump mappings entries on user space via debugfs
  */
 static int dump_show(struct seq_file *seq, void *v)
