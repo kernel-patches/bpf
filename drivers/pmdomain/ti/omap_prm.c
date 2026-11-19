@@ -44,7 +44,6 @@ struct omap_prm_domain {
 	u16 pwrstst;
 	const struct omap_prm_domain_map *cap;
 	u32 pwrstctrl_saved;
-	unsigned int uses_pm_clk:1;
 };
 
 struct omap_rst_map {
@@ -630,8 +629,6 @@ static int omap_prm_domain_attach_clock(struct device *dev,
 		return error;
 	}
 
-	prmd->uses_pm_clk = 1;
-
 	return 0;
 }
 
@@ -671,10 +668,8 @@ static void omap_prm_domain_detach_dev(struct generic_pm_domain *domain,
 				       struct device *dev)
 {
 	struct generic_pm_domain_data *genpd_data;
-	struct omap_prm_domain *prmd;
 
-	prmd = genpd_to_prm_domain(domain);
-	if (prmd->uses_pm_clk)
+	if (!pm_clk_no_clocks(dev))
 		pm_clk_destroy(dev);
 	genpd_data = dev_gpd_data(dev);
 	genpd_data->data = NULL;
