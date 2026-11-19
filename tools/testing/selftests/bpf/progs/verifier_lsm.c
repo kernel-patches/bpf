@@ -188,6 +188,55 @@ int BPF_PROG(null_check, struct file *file)
 	return 0;
 }
 
+SEC("lsm/task_setscheduler")
+__description("not null checking nullable attr in bpf_lsm_task_setscheduler")
+__failure __msg("invalid mem access 'trusted_ptr_or_null_'")
+int BPF_PROG(task_setscheduler_attr_no_null_check, struct task_struct *p,
+	     const struct sched_attr *attr, const struct cpumask *in_mask)
+{
+	__u32 policy;
+
+	policy = attr->sched_policy;
+	__sink(policy);
+
+	return 0;
+}
+
+SEC("lsm/task_setscheduler")
+__description("not null checking nullable in_mask in bpf_lsm_task_setscheduler")
+__failure __msg("invalid mem access 'trusted_ptr_or_null_'")
+int BPF_PROG(task_setscheduler_mask_no_null_check, struct task_struct *p,
+	     const struct sched_attr *attr, const struct cpumask *in_mask)
+{
+	unsigned long bits;
+
+	bits = in_mask->bits[0];
+	__sink(bits);
+
+	return 0;
+}
+
+SEC("lsm/task_setscheduler")
+__description("null checking nullable pointers in bpf_lsm_task_setscheduler")
+__success
+int BPF_PROG(task_setscheduler_null_check, struct task_struct *p,
+	     const struct sched_attr *attr, const struct cpumask *in_mask)
+{
+	unsigned long bits;
+	__u32 policy;
+
+	if (attr) {
+		policy = attr->sched_policy;
+		__sink(policy);
+	}
+	if (in_mask) {
+		bits = in_mask->bits[0];
+		__sink(bits);
+	}
+
+	return 0;
+}
+
 SEC("lsm_cgroup/file_open")
 __description("sleepable lsm_cgroup program is rejected")
 __failure __msg("Program of this type cannot be sleepable")

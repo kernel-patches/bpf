@@ -86,6 +86,15 @@ int mprotect_count = 0;
 int bprm_count = 0;
 __u32 inode_identity_idmap_seen = 0;
 __u32 inode_idmapped_mount_seen = 0;
+__u32 setsched_seen = 0;
+__u32 setsched_affinity_cpu = 0;
+int setsched_deny = 0;
+
+#define SCHED_BATCH			3
+#define SCHED_FLAG_RESET_ON_FORK	0x01
+#define SCHED_FLAG_KEEP_POLICY		0x08
+
+bool bpf_cpumask_test_cpu(u32 cpu, const struct cpumask *cpumask) __ksym __weak;
 
 enum {
 	INODE_IDMAP_CREATE	= 1U << 0,
@@ -94,6 +103,14 @@ enum {
 	INODE_IDMAP_MKDIR	= 1U << 3,
 	INODE_IDMAP_MKNOD	= 1U << 4,
 	INODE_IDMAP_PERMISSION	= 1U << 5,
+};
+
+enum {
+	SETSCHED_SAW_ATTR		= 1U << 0,
+	SETSCHED_SAW_SETPARAM		= 1U << 1,
+	SETSCHED_SAW_KEEP_POLICY	= 1U << 2,
+	SETSCHED_SAW_AFFINITY		= 1U << 3,
+	SETSCHED_SAW_BOTH_NULL		= 1U << 4,
 };
 
 static __always_inline bool is_monitored_idmap(struct mnt_idmap *idmap)
@@ -162,6 +179,40 @@ int BPF_PROG(test_inode_permission, struct mnt_idmap *idmap,
 	     struct inode *inode, int mask, int ret)
 {
 	return record_inode_idmap(idmap, INODE_IDMAP_PERMISSION, ret);
+}
+
+SEC("lsm/task_setscheduler")
+int BPF_PROG(test_task_setscheduler, struct task_struct *p,
+	     const struct sched_attr *attr, const struct cpumask *in_mask,
+	     int ret)
+{
+	__s32 pid = bpf_get_current_pid_tgid() >> 32;
+
+	if (ret || !monitored_pid || monitored_pid != pid)
+		return ret;
+
+	if (attr && !in_mask) {
+		if (attr->sched_policy == SCHED_BATCH &&
+		    (attr->sched_flags & SCHED_FLAG_RESET_ON_FORK)) {
+			if (p->policy != SCHED_BATCH)
+				setsched_seen |= SETSCHED_SAW_ATTR;
+			else if (attr->sched_flags & SCHED_FLAG_KEEP_POLICY)
+				setsched_seen |= SETSCHED_SAW_KEEP_POLICY;
+			else
+				setsched_seen |= SETSCHED_SAW_SETPARAM;
+		}
+	} else if (!attr && in_mask) {
+		if (bpf_cpumask_test_cpu(setsched_affinity_cpu, in_mask))
+			setsched_seen |= SETSCHED_SAW_AFFINITY;
+	} else if (!attr && !in_mask) {
+		if (p->pid != pid)
+			setsched_seen |= SETSCHED_SAW_BOTH_NULL;
+	}
+
+	if (setsched_deny)
+		return -EPERM;
+
+	return 0;
 }
 
 SEC("lsm/file_mprotect")

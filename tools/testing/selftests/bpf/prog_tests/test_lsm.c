@@ -21,8 +21,30 @@
 
 char *CMD_ARGS[] = {"true", NULL};
 
+#ifndef SCHED_RESET_ON_FORK
+#define SCHED_RESET_ON_FORK	0x40000000
+#endif
+
+#ifndef SCHED_FLAG_KEEP_POLICY
+#define SCHED_FLAG_KEEP_POLICY	0x08
+#endif
+
+struct test_sched_attr {
+	__u32 size;
+	__u32 sched_policy;
+	__u64 sched_flags;
+	__s32 sched_nice;
+	__u32 sched_priority;
+	__u64 sched_runtime;
+	__u64 sched_deadline;
+	__u64 sched_period;
+	__u32 sched_util_min;
+	__u32 sched_util_max;
+};
+
 enum {
 	INODE_IDMAP_ALL = (1U << 6) - 1,
+	SETSCHED_SAW_ALL = (1U << 5) - 1,
 };
 
 int exec_cmd(int *monitored_pid)
@@ -255,6 +277,141 @@ out:
 	return ret;
 }
 
+static int find_first_cpu(const cpu_set_t *mask)
+{
+	int cpu;
+
+	for (cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+		if (CPU_ISSET(cpu, mask))
+			return cpu;
+	}
+
+	return -1;
+}
+
+static int test_lsm_task_setscheduler(struct lsm *skel)
+{
+	struct test_sched_attr sattr = {
+		.size = sizeof(sattr),
+		.sched_flags = SCHED_FLAG_KEEP_POLICY,
+	};
+	struct sched_param param = {}, saved_param = {};
+	cpu_set_t mask, saved_mask;
+	char timerslack_path[64];
+	int cpu, saved_policy = -1;
+	pid_t child_pid = -1, waited;
+	bool restore_sched = false;
+	bool restore_aff = false;
+	int len, ret = -1;
+
+	saved_policy = sched_getscheduler(0);
+	if (!ASSERT_GE(saved_policy, 0, "sched_getscheduler"))
+		return -1;
+	if (!ASSERT_OK(sched_getparam(0, &saved_param), "sched_getparam"))
+		return -1;
+	restore_sched = true;
+
+	if (!ASSERT_OK(sched_getaffinity(0, sizeof(saved_mask), &saved_mask),
+		       "sched_getaffinity"))
+		goto out;
+	restore_aff = true;
+
+	cpu = find_first_cpu(&saved_mask);
+	if (!ASSERT_GE(cpu, 0, "find_first_cpu"))
+		goto out;
+
+	if (saved_policy != SCHED_OTHER &&
+	    !ASSERT_OK(sched_setscheduler(0, SCHED_OTHER, &param),
+		       "sched_setscheduler_other"))
+		goto out;
+
+	child_pid = fork();
+	if (!ASSERT_GE(child_pid, 0, "fork"))
+		goto out;
+	if (child_pid == 0) {
+		pause();
+		_exit(0);
+	}
+
+	len = snprintf(timerslack_path, sizeof(timerslack_path),
+		       "/proc/%d/timerslack_ns", child_pid);
+	if (!ASSERT_GE(len, 0, "timerslack_snprintf") ||
+	    !ASSERT_LT(len, sizeof(timerslack_path), "timerslack_snprintf_len"))
+		goto out;
+
+	skel->bss->setsched_seen = 0;
+	skel->bss->setsched_affinity_cpu = cpu;
+	skel->bss->setsched_deny = 0;
+
+	if (!ASSERT_OK(sched_setscheduler(0, SCHED_BATCH | SCHED_RESET_ON_FORK,
+					  &param),
+		       "sched_setscheduler_batch"))
+		goto out;
+	if (!ASSERT_OK(sched_setparam(0, &param), "sched_setparam_batch"))
+		goto out;
+	if (!ASSERT_OK(syscall(__NR_sched_setattr, 0, &sattr, 0),
+		       "sched_setattr_keep_policy"))
+		goto out;
+	if (!ASSERT_EQ(sched_getscheduler(0),
+		       SCHED_BATCH | SCHED_RESET_ON_FORK,
+		       "sched_getscheduler_reset_on_fork"))
+		goto out;
+
+	CPU_ZERO(&mask);
+	CPU_SET(cpu, &mask);
+	if (!ASSERT_OK(sched_setaffinity(0, sizeof(mask), &mask),
+		       "sched_setaffinity"))
+		goto out;
+
+	if (!ASSERT_OK(write_file(timerslack_path, "0"), "timerslack_ns_allow"))
+		goto out;
+
+	if (!ASSERT_EQ(skel->bss->setsched_seen, SETSCHED_SAW_ALL,
+		       "setsched_seen"))
+		goto out;
+
+	skel->bss->setsched_deny = 1;
+
+	if (!ASSERT_EQ(sched_setscheduler(0, SCHED_BATCH, &param), -1,
+		       "sched_setscheduler_deny") ||
+	    !ASSERT_EQ(errno, EPERM, "sched_setscheduler_deny_errno"))
+		goto out;
+
+	if (!ASSERT_EQ(sched_setparam(0, &param), -1, "sched_setparam_deny") ||
+	    !ASSERT_EQ(errno, EPERM, "sched_setparam_deny_errno"))
+		goto out;
+
+	if (!ASSERT_EQ(syscall(__NR_sched_setattr, 0, &sattr, 0), -1,
+		       "sched_setattr_deny") ||
+	    !ASSERT_EQ(errno, EPERM, "sched_setattr_deny_errno"))
+		goto out;
+
+	if (!ASSERT_EQ(sched_setaffinity(0, sizeof(mask), &mask), -1,
+		       "sched_setaffinity_deny") ||
+	    !ASSERT_EQ(errno, EPERM, "sched_setaffinity_deny_errno"))
+		goto out;
+
+	if (!ASSERT_EQ(write_file(timerslack_path, "0"), -1,
+		       "timerslack_ns_deny") ||
+	    !ASSERT_EQ(errno, EPERM, "timerslack_ns_deny_errno"))
+		goto out;
+
+	ret = 0;
+out:
+	skel->bss->setsched_deny = 0;
+	if (child_pid > 0) {
+		kill(child_pid, SIGKILL);
+		do {
+			waited = waitpid(child_pid, NULL, 0);
+		} while (waited < 0 && errno == EINTR);
+	}
+	if (restore_aff)
+		sched_setaffinity(0, sizeof(saved_mask), &saved_mask);
+	if (restore_sched)
+		sched_setscheduler(0, saved_policy, &saved_param);
+	return ret;
+}
+
 static int test_lsm(struct lsm *skel)
 {
 	struct bpf_link *link;
@@ -282,6 +439,10 @@ static int test_lsm(struct lsm *skel)
 	if (!ASSERT_OK(err, "test_lsm_inode_idmap"))
 		return err;
 
+	err = test_lsm_task_setscheduler(skel);
+	if (!ASSERT_OK(err, "test_lsm_task_setscheduler"))
+		return err;
+
 	err = stack_mprotect();
 	if (!ASSERT_EQ(err, -1, "stack_mprotect") ||
 	    !ASSERT_EQ(errno, EPERM, "stack_mprotect"))
@@ -302,6 +463,9 @@ static int test_lsm(struct lsm *skel)
 	skel->bss->mprotect_count = 0;
 	skel->bss->inode_identity_idmap_seen = 0;
 	skel->bss->inode_idmapped_mount_seen = 0;
+	skel->bss->setsched_seen = 0;
+	skel->bss->setsched_affinity_cpu = 0;
+	skel->bss->setsched_deny = 0;
 	return 0;
 }
 
