@@ -1358,6 +1358,7 @@ int inet_csk_listen_start(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct inet_sock *inet = inet_sk(sk);
+	bool bound;
 	int err;
 
 	err = inet_ulp_can_listen(sk);
@@ -1374,6 +1375,7 @@ int inet_csk_listen_start(struct sock *sk)
 	 * It is OK, because this socket enters to hash table only
 	 * after validation is complete.
 	 */
+	bound = !!icsk->icsk_bind_hash;
 	inet_sk_state_store(sk, TCP_LISTEN);
 	err = sk->sk_prot->get_port(sk, inet->inet_num);
 	if (!err) {
@@ -1387,6 +1389,10 @@ int inet_csk_listen_start(struct sock *sk)
 	}
 
 	inet_sk_set_state(sk, TCP_CLOSE);
+	if (!bound && icsk->icsk_bind_hash) {
+		inet->inet_sport = 0;
+		inet_put_port(sk);
+	}
 
 	/* A Fast Open child accepted before a previous shutdown() of this
 	 * listener might have queued its request in rskq_rst_head while
