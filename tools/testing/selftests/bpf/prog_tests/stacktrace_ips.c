@@ -2,7 +2,7 @@
 #include <test_progs.h>
 #include "stacktrace_ips.skel.h"
 
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(__aarch64__)
 static int check_stacktrace_ips(int fd, __u32 key, int cnt, ...)
 {
 	__u64 ips[PERF_MAX_STACK_DEPTH];
@@ -45,6 +45,12 @@ static int check_stacktrace_ips(int fd, __u32 key, int cnt, ...)
 out:
 	free_kallsyms_local(ksyms);
 	return err;
+}
+
+/* arm64 always unwinds kernel stacks through frame records */
+static bool unwinder_ok(struct stacktrace_ips *skel)
+{
+	return skel->kconfig->CONFIG_UNWINDER_ORC || skel->kconfig->CONFIG_ARM64;
 }
 
 static void test_stacktrace_ips_kprobe_multi(bool retprobe)
@@ -106,7 +112,7 @@ static void test_stacktrace_ips_raw_tp(void)
 	if (!ASSERT_OK_PTR(skel, "stacktrace_ips__open_and_load"))
 		return;
 
-	if (!skel->kconfig->CONFIG_UNWINDER_ORC) {
+	if (!unwinder_ok(skel)) {
 		test__skip();
 		goto cleanup;
 	}
@@ -149,7 +155,7 @@ static void test_stacktrace_ips_tp(void)
 	if (!ASSERT_OK_PTR(skel, "stacktrace_ips__open_and_load"))
 		return;
 
-	if (!skel->kconfig->CONFIG_UNWINDER_ORC) {
+	if (!unwinder_ok(skel)) {
 		test__skip();
 		goto cleanup;
 	}
@@ -244,7 +250,8 @@ static void test_stacktrace_ips_trampoline(bool retprobe)
 	if (!ASSERT_OK_PTR(skel, "stacktrace_ips__open_and_load"))
 		return;
 
-	if (!skel->kconfig->CONFIG_UNWINDER_ORC) {
+	/* on arm64, fexit stacks also have a frame for the traced function */
+	if ((retprobe && !skel->kconfig->CONFIG_UNWINDER_ORC) || !unwinder_ok(skel)) {
 		test__skip();
 		goto cleanup;
 	}
