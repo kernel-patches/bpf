@@ -844,20 +844,16 @@ static int cyttsp5_probe(struct device *dev, struct regmap *regmap, int irq,
 	ts->supplies[1].supply = "vddio";
 	error = devm_regulator_bulk_get(dev, ARRAY_SIZE(ts->supplies),
 					ts->supplies);
-	if (error) {
-		dev_err(ts->dev, "Failed to get regulators, error %d\n", error);
-		return error;
-	}
+	if (error)
+		return dev_err_probe(ts->dev, error, "Failed to get regulators\n");
 
 	error = devm_add_action_or_reset(dev, cyttsp5_cleanup, ts);
 	if (error)
 		return error;
 
 	error = regulator_bulk_enable(ARRAY_SIZE(ts->supplies), ts->supplies);
-	if (error) {
-		dev_err(ts->dev, "Failed to enable regulators, error %d\n", error);
-		return error;
-	}
+	if (error)
+		return dev_err_probe(ts->dev, error, "Failed to enable regulators\n");
 
 	ts->input = devm_input_allocate_device(dev);
 	if (!ts->input) {
@@ -874,8 +870,7 @@ static int cyttsp5_probe(struct device *dev, struct regmap *regmap, int irq,
 	ts->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(ts->reset_gpio)) {
 		error = PTR_ERR(ts->reset_gpio);
-		dev_err(dev, "Failed to request reset gpio, error %d\n", error);
-		return error;
+		return dev_err_probe(dev, error, "Failed to request reset gpio\n");
 	}
 
 	fsleep(10); /* Ensure long-enough reset pulse (minimum 10us). */
@@ -887,22 +882,16 @@ static int cyttsp5_probe(struct device *dev, struct regmap *regmap, int irq,
 
 	error = devm_request_threaded_irq(dev, irq, NULL, cyttsp5_handle_irq,
 					  IRQF_ONESHOT, name, ts);
-	if (error) {
-		dev_err(dev, "unable to request IRQ\n");
-		return error;
-	}
+	if (error)
+		return dev_err_probe(dev, error, "unable to request IRQ\n");
 
 	error = cyttsp5_startup(ts);
-	if (error) {
-		dev_err(ts->dev, "Fail initial startup r=%d\n", error);
-		return error;
-	}
+	if (error)
+		return dev_err_probe(ts->dev, error, "Fail initial startup\n");
 
 	error = cyttsp5_parse_dt_key_code(dev);
-	if (error < 0) {
-		dev_err(ts->dev, "Error while parsing dts %d\n", error);
-		return error;
-	}
+	if (error < 0)
+		return dev_err_probe(ts->dev, error, "Error while parsing dts\n");
 
 	touchscreen_parse_properties(ts->input, true, &ts->prop);
 
