@@ -228,7 +228,7 @@ static struct sk_buff *cbs_dequeue_soft(struct Qdisc *sch)
 	if (unlikely(atomic64_read(&q->port_rate) == 0))
 		q->last = now;
 	else
-		q->last = now + div64_s64(len * NSEC_PER_SEC,
+		q->last = now + div64_s64((s64)len * NSEC_PER_SEC,
 					  atomic64_read(&q->port_rate));
 
 	return skb;
