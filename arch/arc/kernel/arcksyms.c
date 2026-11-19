@@ -7,29 +7,6 @@
 
 #include <linux/module.h>
 
-/* libgcc functions, not part of kernel sources */
-extern void __ashldi3(void);
-extern void __ashrdi3(void);
-extern void __divsi3(void);
-extern void __lshrdi3(void);
-extern void __modsi3(void);
-extern void __muldi3(void);
-extern void __ucmpdi2(void);
-extern void __udivsi3(void);
-extern void __umodsi3(void);
-extern void __cmpdi2(void);
-
-EXPORT_SYMBOL(__ashldi3);
-EXPORT_SYMBOL(__ashrdi3);
-EXPORT_SYMBOL(__divsi3);
-EXPORT_SYMBOL(__lshrdi3);
-EXPORT_SYMBOL(__modsi3);
-EXPORT_SYMBOL(__muldi3);
-EXPORT_SYMBOL(__ucmpdi2);
-EXPORT_SYMBOL(__udivsi3);
-EXPORT_SYMBOL(__umodsi3);
-EXPORT_SYMBOL(__cmpdi2);
-
 /* ARC optimised assembler routines */
 EXPORT_SYMBOL(memset);
 EXPORT_SYMBOL(memcpy);
