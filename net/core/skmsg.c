@@ -574,9 +574,6 @@ static int sk_psock_skb_ingress_enqueue(struct sk_buff *skb,
 			return num_sge;
 	}
 
-#if IS_ENABLED(CONFIG_BPF_STREAM_PARSER)
-	psock->ingress_bytes += len;
-#endif
 	copied = len;
 	msg->sg.start = 0;
 	msg->sg.size = copied;
@@ -642,8 +639,21 @@ static int sk_psock_skb_ingress_self(struct sk_psock *psock, struct sk_buff *skb
 	 */
 	msg->sk = sk;
 	err = sk_psock_skb_ingress_enqueue(skb, off, len, psock, sk, msg, take_ref);
-	if (err < 0)
+	if (err < 0) {
 		kfree(msg);
+		/*
+		 * A strparser skb comes in without an owner and read_sock counts
+		 * it as consumed once it is left to the backlog. Drop the owner
+		 * again, or sk_psock_skb_ingress() takes the skb->sk == sk path
+		 * and recvmsg() counts it a second time.
+		 */
+		if (skb_bpf_strparser(skb))
+			skb_orphan(skb);
+	}
+#if IS_ENABLED(CONFIG_BPF_STREAM_PARSER)
+	else
+		psock->ingress_bytes += len;
+#endif
 	return err;
 }
 
@@ -694,7 +704,7 @@ static void sk_psock_backlog(struct work_struct *work)
 	 * before sk_socket freed. If refcnt increment fails, it indicates
 	 * sock_map_close() completed with sk_socket potentially already freed.
 	 */
-	if (!sk_psock_get(psock->sk))
+	if (!refcount_inc_not_zero(&psock->refcnt))
 		return;
 	mutex_lock(&psock->work_mutex);
 	while ((skb = skb_peek(&psock->ingress_skb))) {
@@ -869,6 +879,18 @@ static void sk_psock_destroy(struct work_struct *work)
 {
 	struct sk_psock *psock = container_of(to_rcu_work(work),
 					      struct sk_psock, rwork);
+
+	if (sk_psock_test_state(psock, SK_PSOCK_STRP_DONE_PENDING)) {
+		/* Parser link gone, other links keep the psock alive */
+		sk_psock_done_strp(psock);
+		write_lock_bh(&psock->sk->sk_callback_lock);
+		sk_psock_clear_state(psock, SK_PSOCK_RX_STRP_ENABLED);
+		sk_psock_clear_state(psock, SK_PSOCK_STRP_DONE_PENDING);
+		write_unlock_bh(&psock->sk->sk_callback_lock);
+		sk_psock_put(psock->sk, psock);
+		return;
+	}
+
 	/* No sk_callback_lock since already detached. */
 
 	sk_psock_done_strp(psock);
@@ -1196,6 +1218,18 @@ void sk_psock_stop_strp(struct sock *sk, struct sk_psock *psock)
 	WRITE_ONCE(sk->sk_data_ready, psock->saved_data_ready);
 	WRITE_ONCE(psock->saved_data_ready, NULL);
 	strp_stop(&psock->strp);
+}
+
+/* Called with sk_callback_lock held while a link still holds the psock */
+void sk_psock_queue_strp_done(struct sk_psock *psock)
+{
+	if (!sk_psock_test_state(psock, SK_PSOCK_RX_STRP_ENABLED) ||
+	    test_and_set_bit(SK_PSOCK_STRP_DONE_PENDING, &psock->state))
+		return;
+
+	refcount_inc(&psock->refcnt);
+	INIT_WORK(&psock->rwork.work, sk_psock_destroy);
+	schedule_work(&psock->rwork.work);
 }
 
 static void sk_psock_done_strp(struct sk_psock *psock)

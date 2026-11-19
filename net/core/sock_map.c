@@ -115,6 +115,33 @@ put_prog:
 	return ret;
 }
 
+/*
+ * Wait for the strparser of a removed parser link to be torn down, so that
+ * a new parser can be attached right after the old one was removed.
+ */
+static void sock_map_strp_done_wait(struct bpf_map *map, struct sock *sk)
+{
+	struct sk_psock *psock;
+
+	if (!READ_ONCE(sock_map_progs(map)->stream_parser))
+		return;
+
+	rcu_read_lock();
+	read_lock_bh(&sk->sk_callback_lock);
+	psock = sk_psock(sk);
+	if (!psock ||
+	    !sk_psock_test_state(psock, SK_PSOCK_STRP_DONE_PENDING) ||
+	    !refcount_inc_not_zero(&psock->refcnt))
+		psock = NULL;
+	read_unlock_bh(&sk->sk_callback_lock);
+	rcu_read_unlock();
+	if (!psock)
+		return;
+
+	flush_work(&psock->rwork.work);
+	sk_psock_put(sk, psock);
+}
+
 static void sock_map_sk_acquire(struct sock *sk)
 	__acquires(&sk->sk_lock.slock)
 {
@@ -169,8 +196,10 @@ static void sock_map_del_link(struct sock *sk,
 
 	write_lock_bh(&sk->sk_callback_lock);
 	if (psock->saved_data_ready) {
-		if (strp_stop)
+		if (strp_stop) {
 			sk_psock_stop_strp(sk, psock);
+			sk_psock_queue_strp_done(psock);
+		}
 		if (verdict_stop)
 			sk_psock_stop_verdict(sk, psock);
 
@@ -297,6 +326,13 @@ no_progs:
 	}
 
 	write_lock_bh(&sk->sk_callback_lock);
+	if (stream_parser &&
+	    sk_psock_test_state(psock, SK_PSOCK_RX_STRP_ENABLED)) {
+		write_unlock_bh(&sk->sk_callback_lock);
+		sk_psock_put(sk, psock);
+		ret = -EBUSY;
+		goto out_progs;
+	}
 	if (msg_parser)
 		psock_set_prog(&psock->progs.msg_parser, msg_parser);
 	if (stream_parser)
@@ -350,6 +386,19 @@ out:
 	return ret;
 }
 
+/*
+ * The listener frees a child that nobody has accepted yet without waiting
+ * for the owner of its socket lock. Unlink such a child without the lock,
+ * as a delete does.
+ */
+static bool sock_map_free_lock_sk(struct sock *sk)
+{
+	if (!READ_ONCE(sk->sk_socket))
+		return false;
+	lock_sock(sk);
+	return true;
+}
+
 static void sock_map_free(struct bpf_map *map)
 {
 	struct bpf_stab *stab = container_of(map, struct bpf_stab, map);
@@ -366,12 +415,15 @@ static void sock_map_free(struct bpf_map *map)
 
 		sk = xchg(psk, NULL);
 		if (sk) {
+			bool locked;
+
 			sock_hold(sk);
-			lock_sock(sk);
+			locked = sock_map_free_lock_sk(sk);
 			rcu_read_lock();
 			sock_map_unref(sk, psk);
 			rcu_read_unlock();
-			release_sock(sk);
+			if (locked)
+				release_sock(sk);
 			sock_put(sk);
 		}
 	}
@@ -597,6 +649,7 @@ int sock_map_update_elem_sys(struct bpf_map *map, void *key, void *value,
 		goto out;
 	}
 
+	sock_map_strp_done_wait(map, sk);
 	sock_map_sk_acquire(sk);
 	if (!sock_map_sk_state_allowed(sk))
 		ret = -EOPNOTSUPP;
@@ -1191,12 +1244,15 @@ static void sock_hash_free(struct bpf_map *map)
 		 * link to sockhash.
 		 */
 		hlist_for_each_entry_safe(elem, node, &unlink_list, node) {
+			bool locked;
+
 			hlist_del(&elem->node);
-			lock_sock(elem->sk);
+			locked = sock_map_free_lock_sk(elem->sk);
 			rcu_read_lock();
 			sock_map_unref(elem->sk, elem);
 			rcu_read_unlock();
-			release_sock(elem->sk);
+			if (locked)
+				release_sock(elem->sk);
 			sock_put(elem->sk);
 			sock_hash_free_elem(htab, elem);
 		}
@@ -1726,6 +1782,7 @@ retry:
 		sock_map_remove_links(sk, psock);
 		rcu_read_unlock();
 		sk_psock_stop(psock);
+		sk_psock_set_state(psock, SK_PSOCK_CLOSING);
 		release_sock(sk);
 		cancel_delayed_work_sync(&psock->work);
 		sk_psock_put(sk, psock);
