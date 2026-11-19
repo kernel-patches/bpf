@@ -5427,7 +5427,7 @@ Kernel parameters
 			execution priority.
 
 	ppc_strict_facility_enable
-			[PPC,ENABLE] This option catches any kernel floating point,
+			[PPC,EARLY] This option catches any kernel floating point,
 			Altivec, VSX and SPE outside of regions specifically
 			allowed (eg kernel_enable_fpu()/kernel_disable_fpu()).
 			There is some performance impact when enabling this.
