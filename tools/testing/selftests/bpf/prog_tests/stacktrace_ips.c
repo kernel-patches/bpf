@@ -137,6 +137,58 @@ cleanup:
 	stacktrace_ips__destroy(skel);
 }
 
+static void test_stacktrace_ips_tp(void)
+{
+	__u64 traceiter_addr, read_addr, *ips;
+	struct stacktrace_ips *skel;
+	struct ksyms *ksyms = NULL;
+	struct ksym *ksym;
+	int i;
+
+	skel = stacktrace_ips__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "stacktrace_ips__open_and_load"))
+		return;
+
+	if (!skel->kconfig->CONFIG_UNWINDER_ORC) {
+		test__skip();
+		goto cleanup;
+	}
+
+	skel->bss->my_pid = getpid();
+
+	skel->links.tp_test = bpf_program__attach(skel->progs.tp_test);
+	if (!ASSERT_OK_PTR(skel->links.tp_test, "bpf_program__attach"))
+		goto cleanup;
+
+	trigger_module_test_read(1);
+
+	ksyms = load_kallsyms_local();
+	if (!ASSERT_OK_PTR(ksyms, "load_kallsyms_local"))
+		goto cleanup;
+	traceiter_addr = ksym_get_addr_local(ksyms, "__traceiter_bpf_testmod_test_read");
+	read_addr = ksym_get_addr_local(ksyms, "bpf_testmod_test_read");
+
+	/*
+	 * Depending on static calls and inlining, __traceiter_bpf_testmod_test_read
+	 * may or may not be in front of bpf_testmod_test_read.
+	 */
+	ips = skel->bss->tp_ips;
+	ksym = ksym_search_local(ksyms, ips[0]);
+	if (!ASSERT_OK_PTR(ksym, "ksym_search_local"))
+		goto cleanup;
+	i = ksym->addr == traceiter_addr ? 1 : 0;
+
+	ksym = ksym_search_local(ksyms, ips[i]);
+	if (!ASSERT_OK_PTR(ksym, "ksym_search_local"))
+		goto cleanup;
+	ASSERT_EQ(ksym->addr, read_addr, "stack_cmp");
+	ASSERT_NEQ(ips[i], ips[i + 1], "stack_dup");
+
+cleanup:
+	free_kallsyms_local(ksyms);
+	stacktrace_ips__destroy(skel);
+}
+
 static void test_stacktrace_ips_kprobe(bool retprobe)
 {
 	LIBBPF_OPTS(bpf_kprobe_opts, opts,
@@ -238,6 +290,8 @@ static void __test_stacktrace_ips(void)
 		test_stacktrace_ips_kprobe_multi(true);
 	if (test__start_subtest("raw_tp"))
 		test_stacktrace_ips_raw_tp();
+	if (test__start_subtest("tp"))
+		test_stacktrace_ips_tp();
 	if (test__start_subtest("kprobe"))
 		test_stacktrace_ips_kprobe(false);
 	if (test__start_subtest("kretprobe"))
