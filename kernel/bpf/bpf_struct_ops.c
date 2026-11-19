@@ -646,7 +646,7 @@ int bpf_struct_ops_prepare_trampoline(struct bpf_tramp_nodes *tnodes,
 	void *image = *_image;
 	int size;
 
-	tnodes[BPF_TRAMP_FENTRY].nodes[0] = node;
+	tnodes[BPF_TRAMP_FENTRY].nodes = &node;
 	tnodes[BPF_TRAMP_FENTRY].nr_nodes = 1;
 
 	if (model->ret_size > 0)
