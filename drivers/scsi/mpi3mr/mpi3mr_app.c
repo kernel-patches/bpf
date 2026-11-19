@@ -1966,7 +1966,7 @@ static unsigned int mpi3mr_get_nvme_data_fmt(
 {
 	u8 format = 0;
 
-	format = ((nvme_encap_request->command[0] & 0xc000) >> 14);
+	format = ((le32_to_cpu(nvme_encap_request->command[0]) & 0xc000) >> 14);
 	return format;
 
 }
@@ -1995,10 +1995,10 @@ static int mpi3mr_build_nvme_sgl(struct mpi3mr_ioc *mrioc,
 	u16 available_sges = 0, i;
 	u32 sge_element_size = sizeof(struct mpi3mr_nvme_pt_sge);
 	struct mpi3mr_buf_map *drv_buf_iter = drv_bufs;
-	u64 sgemod_mask = ((u64)((mrioc->facts.sge_mod_mask) <<
-			    mrioc->facts.sge_mod_shift) << 32);
-	u64 sgemod_val = ((u64)(mrioc->facts.sge_mod_value) <<
-			  mrioc->facts.sge_mod_shift) << 32;
+	__le64 sgemod_mask = cpu_to_le64(((u64)((mrioc->facts.sge_mod_mask) <<
+			    mrioc->facts.sge_mod_shift) << 32));
+	__le64 sgemod_val = cpu_to_le64(((u64)(mrioc->facts.sge_mod_value) <<
+			  mrioc->facts.sge_mod_shift) << 32);
 	u32 size;
 
 	nvme_sgl = (struct mpi3mr_nvme_pt_sge *)
@@ -2094,10 +2094,10 @@ static int mpi3mr_build_nvme_prp(struct mpi3mr_ioc *mrioc,
 	size_t length = 0, desc_len;
 	u8 count;
 	struct mpi3mr_buf_map *drv_buf_iter = drv_bufs;
-	u64 sgemod_mask = ((u64)((mrioc->facts.sge_mod_mask) <<
-			    mrioc->facts.sge_mod_shift) << 32);
-	u64 sgemod_val = ((u64)(mrioc->facts.sge_mod_value) <<
-			  mrioc->facts.sge_mod_shift) << 32;
+	__le64 sgemod_mask = cpu_to_le64(((u64)((mrioc->facts.sge_mod_mask) <<
+			    mrioc->facts.sge_mod_shift) << 32));
+	__le64 sgemod_val = cpu_to_le64(((u64)(mrioc->facts.sge_mod_value) <<
+			  mrioc->facts.sge_mod_shift) << 32);
 	u16 dev_handle = le16_to_cpu(nvme_encap_request->dev_handle);
 	struct mpi3mr_tgt_dev *tgtdev;
 	u16 desc_count = 0;
