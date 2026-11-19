@@ -3,19 +3,13 @@
 #include <test_progs.h>
 #include "bpf_util.h"
 
+/* More programs than fit into the image of a trampoline */
+#define CNT 128
+
 void serial_test_fexit_stress(void)
 {
-	int bpf_max_tramp_links, err, i;
-	int *fd, *fexit_fd, *link_fd;
-
-	bpf_max_tramp_links = get_bpf_max_tramp_links();
-	if (!ASSERT_GE(bpf_max_tramp_links, 1, "bpf_max_tramp_links"))
-		return;
-	fd = calloc(bpf_max_tramp_links * 2, sizeof(*fd));
-	if (!ASSERT_OK_PTR(fd, "fd"))
-		return;
-	fexit_fd = fd;
-	link_fd = fd + bpf_max_tramp_links;
+	int fexit_fd[CNT] = {}, link_fd[CNT] = {};
+	int err, i;
 
 	const struct bpf_insn trace_program[] = {
 		BPF_MOV64_IMM(BPF_REG_0, 0),
@@ -34,7 +28,7 @@ void serial_test_fexit_stress(void)
 		goto out;
 	trace_opts.attach_btf_id = err;
 
-	for (i = 0; i < bpf_max_tramp_links; i++) {
+	for (i = 0; i < CNT; i++) {
 		fexit_fd[i] = bpf_prog_load(BPF_PROG_TYPE_TRACING, NULL, "GPL",
 					    trace_program,
 					    ARRAY_SIZE(trace_program),
@@ -42,19 +36,22 @@ void serial_test_fexit_stress(void)
 		if (!ASSERT_GE(fexit_fd[i], 0, "fexit load"))
 			goto out;
 		link_fd[i] = bpf_link_create(fexit_fd[i], 0, BPF_TRACE_FEXIT, NULL);
-		if (!ASSERT_GE(link_fd[i], 0, "fexit attach"))
-			goto out;
+		if (link_fd[i] < 0)
+			break;
 	}
+	/* The image is full */
+	if (!ASSERT_GT(i, 1, "attached") || !ASSERT_LT(i, CNT, "attached") ||
+	    !ASSERT_EQ(link_fd[i], -E2BIG, "fexit attach"))
+		goto out;
 
 	err = bpf_prog_test_run_opts(fexit_fd[0], &topts);
 	ASSERT_OK(err, "bpf_prog_test_run_opts");
 
 out:
-	for (i = 0; i < bpf_max_tramp_links; i++) {
+	for (i = 0; i < CNT; i++) {
 		if (link_fd[i] > 0)
 			close(link_fd[i]);
 		if (fexit_fd[i] > 0)
 			close(fexit_fd[i]);
 	}
-	free(fd);
 }
