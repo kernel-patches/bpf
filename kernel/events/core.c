@@ -1366,6 +1366,12 @@ void perf_pmu_enable(struct pmu *pmu)
 		pmu->pmu_enable(pmu);
 }
 
+bool perf_pmu_enabled(struct pmu *pmu)
+{
+	int *count = &this_cpc(pmu)->pmu_disable_count;
+	return *count == 0;
+}
+
 static void perf_assert_pmu_disabled(struct pmu *pmu)
 {
 	int *count = &this_cpc(pmu)->pmu_disable_count;
@@ -11159,6 +11165,9 @@ static int perf_swevent_match(struct perf_event *event,
 				u32 event_id,
 				struct pt_regs *regs)
 {
+	if (!perf_pmu_enabled(event->pmu))
+		return 0;
+
 	if (event->attr.type != type)
 		return 0;
 
@@ -11537,6 +11546,9 @@ static int perf_tp_event_match(struct perf_event *event,
 				struct perf_raw_record *raw,
 				struct pt_regs *regs)
 {
+	if (!perf_pmu_enabled(event->pmu))
+		return 0;
+
 	if (event->hw.state & PERF_HES_STOPPED)
 		return 0;
 	/*
