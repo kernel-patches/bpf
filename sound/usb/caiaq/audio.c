@@ -332,13 +332,14 @@ static void read_in_urb_mode0(struct snd_usb_caiaqdev *cdev,
 			      const struct usb_iso_packet_descriptor *iso)
 {
 	unsigned char *usb_buf = urb->transfer_buffer + iso->offset;
+	unsigned int len = rounddown(iso->actual_length, cdev->n_streams);
 	struct snd_pcm_substream *sub;
 	int stream, i;
 
 	if (all_substreams_zero(cdev->sub_capture))
 		return;
 
-	for (i = 0; i < iso->actual_length;) {
+	for (i = 0; i < len;) {
 		for (stream = 0; stream < cdev->n_streams; stream++, i++) {
 			sub = cdev->sub_capture[stream];
 			if (sub) {
@@ -360,11 +361,13 @@ static void read_in_urb_mode2(struct snd_usb_caiaqdev *cdev,
 			      const struct usb_iso_packet_descriptor *iso)
 {
 	unsigned char *usb_buf = urb->transfer_buffer + iso->offset;
+	unsigned int len = rounddown(iso->actual_length,
+				     cdev->n_streams * BYTES_PER_SAMPLE_USB);
 	unsigned char check_byte;
 	struct snd_pcm_substream *sub;
 	int stream, i;
 
-	for (i = 0; i < iso->actual_length;) {
+	for (i = 0; i < len;) {
 		if (i % (cdev->n_streams * BYTES_PER_SAMPLE_USB) == 0) {
 			for (stream = 0;
 			     stream < cdev->n_streams;
@@ -407,6 +410,8 @@ static void read_in_urb_mode3(struct snd_usb_caiaqdev *cdev,
 			      const struct usb_iso_packet_descriptor *iso)
 {
 	unsigned char *usb_buf = urb->transfer_buffer + iso->offset;
+	unsigned int len = rounddown(iso->actual_length, cdev->n_streams *
+				     BYTES_PER_SAMPLE_USB * CHANNELS_PER_STREAM);
 	struct device *dev = caiaqdev_to_dev(cdev);
 	int stream, i;
 
@@ -414,7 +419,7 @@ static void read_in_urb_mode3(struct snd_usb_caiaqdev *cdev,
 	if (iso->actual_length % (BYTES_PER_SAMPLE_USB * CHANNELS_PER_STREAM))
 		return;
 
-	for (i = 0; i < iso->actual_length;) {
+	for (i = 0; i < len;) {
 		for (stream = 0; stream < cdev->n_streams; stream++) {
 			struct snd_pcm_substream *sub = cdev->sub_capture[stream];
 			char *audio_buf = NULL;
@@ -495,10 +500,11 @@ static void fill_out_urb_mode_0(struct snd_usb_caiaqdev *cdev,
 				const struct usb_iso_packet_descriptor *iso)
 {
 	unsigned char *usb_buf = urb->transfer_buffer + iso->offset;
+	unsigned int len = rounddown(iso->length, cdev->n_streams);
 	struct snd_pcm_substream *sub;
 	int stream, i;
 
-	for (i = 0; i < iso->length;) {
+	for (i = 0; i < len;) {
 		for (stream = 0; stream < cdev->n_streams; stream++, i++) {
 			sub = cdev->sub_playback[stream];
 			if (sub) {
@@ -516,12 +522,14 @@ static void fill_out_urb_mode_0(struct snd_usb_caiaqdev *cdev,
 		}
 
 		/* fill in the check bytes */
-		if (cdev->spec.data_alignment == 2 &&
+		if (cdev->spec.data_alignment == 2 && i < len &&
 		    i % (cdev->n_streams * BYTES_PER_SAMPLE_USB) ==
 		        (cdev->n_streams * CHANNELS_PER_STREAM))
 			for (stream = 0; stream < cdev->n_streams; stream++, i++)
 				usb_buf[i] = MAKE_CHECKBYTE(cdev, stream, i);
 	}
+
+	memset(usb_buf + len, 0, iso->length - len);
 }
 
 static void fill_out_urb_mode_3(struct snd_usb_caiaqdev *cdev,
@@ -529,9 +537,11 @@ static void fill_out_urb_mode_3(struct snd_usb_caiaqdev *cdev,
 				const struct usb_iso_packet_descriptor *iso)
 {
 	unsigned char *usb_buf = urb->transfer_buffer + iso->offset;
+	unsigned int len = rounddown(iso->length, cdev->n_streams *
+				     BYTES_PER_SAMPLE_USB * CHANNELS_PER_STREAM);
 	int stream, i;
 
-	for (i = 0; i < iso->length;) {
+	for (i = 0; i < len;) {
 		for (stream = 0; stream < cdev->n_streams; stream++) {
 			struct snd_pcm_substream *sub = cdev->sub_playback[stream];
 			char *audio_buf = NULL;
@@ -565,6 +575,8 @@ static void fill_out_urb_mode_3(struct snd_usb_caiaqdev *cdev,
 			}
 		}
 	}
+
+	memset(usb_buf + len, 0, iso->length - len);
 }
 
 static inline void fill_out_urb(struct snd_usb_caiaqdev *cdev,
