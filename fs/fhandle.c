@@ -254,9 +254,11 @@ static int vfs_dentry_acceptable(void *context, struct dentry *dentry)
 	/*
 	 * exportfs_decode_fh_raw() does not call acceptable() callback with
 	 * a disconnected directory dentry, so we should have reached either
-	 * mount fd directory or sb root.
+	 * mount fd directory or sb root. Multi-root filesystems have more
+	 * than one root.
 	 */
-	if (ctx->fh_flags & EXPORT_FH_DIR_ONLY)
+	if ((ctx->fh_flags & EXPORT_FH_DIR_ONLY) &&
+	    !(root->d_sb->s_iflags & SB_I_MULTIROOT))
 		WARN_ON_ONCE(d != root && d != root->d_sb->s_root);
 	dput(d);
 	return retval;
