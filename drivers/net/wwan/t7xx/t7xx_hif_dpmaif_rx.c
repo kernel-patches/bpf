@@ -632,9 +632,9 @@ static int t7xx_dpmaif_set_data_to_skb(const struct dpmaif_rx_queue *rxq,
 	unsigned long long data_bus_addr, data_base_addr;
 	struct device *dev = rxq->dpmaif_ctrl->dev;
 	struct dpmaif_bat_skb *bat_skb;
-	unsigned int data_len;
+	unsigned int data_len, tailroom, max_len;
 	struct sk_buff *skb;
-	int data_offset;
+	unsigned long long data_offset;
 
 	bat_skb = rxq->bat_req->bat_skb;
 	bat_skb += t7xx_normal_pit_bid(pkt_info);
@@ -643,22 +643,35 @@ static int t7xx_dpmaif_set_data_to_skb(const struct dpmaif_rx_queue *rxq,
 	data_bus_addr = le32_to_cpu(pkt_info->pd.data_addr_h);
 	data_bus_addr = (data_bus_addr << 32) + le32_to_cpu(pkt_info->pd.data_addr_l);
 	data_base_addr = bat_skb->data_bus_addr;
-	data_offset = data_bus_addr - data_base_addr;
 	data_len = FIELD_GET(PD_PIT_DATA_LEN, le32_to_cpu(pkt_info->header));
 	skb = bat_skb->skb;
 	skb->len = 0;
 	skb_reset_tail_pointer(skb);
-	skb_reserve(skb, data_offset);
 
-	if (skb->tail + data_len > skb->end) {
-		dev_err(dev, "No buffer space available\n");
-		return -ENOBUFS;
+	if (data_bus_addr < data_base_addr) {
+		dev_err_ratelimited(dev, "Invalid PIT data address\n");
+		goto err_drop;
 	}
 
+	data_offset = data_bus_addr - data_base_addr;
+	tailroom = skb_tailroom(skb);
+	max_len = min(tailroom, bat_skb->data_len);
+	if (data_offset > max_len || data_len > max_len - data_offset) {
+		dev_err_ratelimited(dev, "Invalid PIT data offset or length\n");
+		goto err_drop;
+	}
+
+	skb_reserve(skb, (int)data_offset);
 	skb_put(skb, data_len);
 	skb_info->cur_skb = skb;
 	bat_skb->skb = NULL;
 	return 0;
+
+err_drop:
+	dev_kfree_skb_any(skb);
+	bat_skb->skb = NULL;
+	t7xx_dpmaif_set_bat_mask(rxq->bat_req, t7xx_normal_pit_bid(pkt_info));
+	return -ENOBUFS;
 }
 
 static int t7xx_dpmaif_get_rx_pkt(struct dpmaif_rx_queue *rxq,
@@ -674,7 +687,7 @@ static int t7xx_dpmaif_get_rx_pkt(struct dpmaif_rx_queue *rxq,
 
 	ret = t7xx_dpmaif_set_data_to_skb(rxq, pkt_info, skb_info);
 	if (ret < 0) {
-		dev_err(rxq->dpmaif_ctrl->dev, "RX set data to skb failed: %d\n", ret);
+		dev_err_ratelimited(rxq->dpmaif_ctrl->dev, "RX set data to skb failed: %d\n", ret);
 		return ret;
 	}
 
