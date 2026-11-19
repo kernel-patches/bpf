@@ -2504,7 +2504,15 @@ int testapp_hw_sw_min_ring_size(struct test_spec *test)
 int testapp_hw_sw_max_ring_size(struct test_spec *test)
 {
 	u32 max_descs = XSK_RING_PROD__DEFAULT_NUM_DESCS * 4;
+	u32 batch_size;
 	int ret;
+
+	/* The second step sends batches of tx_max_pending - 8 descriptors. */
+	if (test->ifobj_tx->hw_ring_size_supp &&
+	    test->ifobj_tx->ring.tx_max_pending <= 8) {
+		ksft_print_msg("HW TX ring too small.\n");
+		return TEST_SKIP;
+	}
 
 	test->set_ring = true;
 	test->total_steps = 2;
@@ -2513,6 +2521,9 @@ int testapp_hw_sw_max_ring_size(struct test_spec *test)
 	test->ifobj_rx->xsk->umem->num_frames = max_descs;
 	test->ifobj_rx->xsk->umem->fill_size = max_descs;
 	test->ifobj_rx->xsk->umem->comp_size = max_descs;
+	test->ifobj_tx->xsk->umem->num_frames = max_descs;
+	test->ifobj_tx->xsk->umem->fill_size = max_descs;
+	test->ifobj_tx->xsk->umem->comp_size = max_descs;
 	test->ifobj_tx->xsk->batch_size = XSK_RING_PROD__DEFAULT_NUM_DESCS;
 	test->ifobj_rx->xsk->batch_size = XSK_RING_PROD__DEFAULT_NUM_DESCS;
 
@@ -2521,10 +2532,12 @@ int testapp_hw_sw_max_ring_size(struct test_spec *test)
 		return ret;
 
 	/* Set batch_size to 8152 for testing, as the ice HW ignores the 3 lowest bits when
-	 * updating the Rx HW tail register.
+	 * updating the Rx HW tail register. __send_pkts() waits until a whole batch fits
+	 * in the XSK TX ring, so keep it below that ring's size on NICs with larger rings.
 	 */
-	test->ifobj_tx->xsk->batch_size = test->ifobj_tx->ring.tx_max_pending - 8;
-	test->ifobj_rx->xsk->batch_size = test->ifobj_tx->ring.tx_max_pending - 8;
+	batch_size = min(test->ifobj_tx->ring.tx_max_pending, max_descs) - 8;
+	test->ifobj_tx->xsk->batch_size = batch_size;
+	test->ifobj_rx->xsk->batch_size = batch_size;
 	if (pkt_stream_replace(test, max_descs, MIN_PKT_SIZE)) {
 		clean_sockets(test, test->ifobj_tx);
 		clean_sockets(test, test->ifobj_rx);
