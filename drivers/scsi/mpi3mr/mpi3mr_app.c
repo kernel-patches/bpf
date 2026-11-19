@@ -2601,14 +2601,6 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 				rval = -EINVAL;
 				goto out;
 			}
-			if (sgl_iter + mpi_msg_size >
-			    dout_buf + job->request_payload.payload_len) {
-				dprint_bsg_err(mrioc, "%s: MPI request buf exceeds dout_buf\n",
-					       __func__);
-				mutex_unlock(&mrioc->bsg_cmds.mutex);
-				rval = -EINVAL;
-				goto out;
-			}
 			memcpy(mpi_req, sgl_iter, mpi_msg_size);
 			break;
 		default:
@@ -2618,21 +2610,6 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 		if (invalid_be) {
 			dprint_bsg_err(mrioc, "%s: invalid buffer entries passed\n",
 				__func__);
-			mutex_unlock(&mrioc->bsg_cmds.mutex);
-			rval = -EINVAL;
-			goto out;
-		}
-
-		if (sgl_dout_iter > (dout_buf + job->request_payload.payload_len)) {
-			dprint_bsg_err(mrioc, "%s: data_out buffer length mismatch\n",
-				       __func__);
-			mutex_unlock(&mrioc->bsg_cmds.mutex);
-			rval = -EINVAL;
-			goto out;
-		}
-		if (sgl_din_iter > (din_buf + job->reply_payload.payload_len)) {
-			dprint_bsg_err(mrioc, "%s: data_in buffer length mismatch\n",
-				       __func__);
 			mutex_unlock(&mrioc->bsg_cmds.mutex);
 			rval = -EINVAL;
 			goto out;
