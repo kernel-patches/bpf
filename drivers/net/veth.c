@@ -741,7 +741,7 @@ static void veth_xdp_rcv_bulk_skb(struct veth_rq *rq, void **frames,
 	}
 }
 
-static void veth_xdp_get(struct xdp_buff *xdp)
+static void veth_xdp_get_shared(struct xdp_buff *xdp)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
 	int i;
@@ -754,12 +754,36 @@ static void veth_xdp_get(struct xdp_buff *xdp)
 		netmem_inc_ref(skb_frag_netmem(&sinfo->frags[i]));
 }
 
+static void veth_xdp_get_pp(struct xdp_buff *xdp)
+{
+	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
+	int i;
+
+	page_pool_ref_netmem(netmem_compound_head(virt_to_netmem(xdp->data)));
+	if (likely(!xdp_buff_has_frags(xdp)))
+		return;
+
+	for (i = 0; i < sinfo->nr_frags; i++) {
+		netmem_ref netmem = skb_frag_netmem(&sinfo->frags[i]);
+
+		page_pool_ref_netmem(netmem_compound_head(netmem));
+	}
+}
+
+static void veth_xdp_get(struct xdp_buff *xdp)
+{
+	if (xdp->rxq->mem.type == MEM_TYPE_PAGE_POOL)
+		veth_xdp_get_pp(xdp);
+	else
+		veth_xdp_get_shared(xdp);
+}
+
 static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 					struct xdp_buff *xdp,
 					struct sk_buff **pskb)
 {
 	struct sk_buff *skb = *pskb;
-	u32 frame_sz;
+	bool pp_cow = false;
 
 	if (skb_shared(skb) || skb_head_is_locked(skb) ||
 	    skb_is_nonlinear(skb) ||
@@ -768,21 +792,17 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 			goto drop;
 
 		skb = *pskb;
+		pp_cow = true;
 	}
 
-	/* SKB "head" area always have tailroom for skb_shared_info */
-	frame_sz = skb_end_pointer(skb) - skb->head;
-	frame_sz += SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
-	xdp_init_buff(xdp, frame_sz, &rq->xdp_rxq);
-	xdp_prepare_buff(xdp, skb->head, skb_headroom(skb),
-			 skb_headlen(skb), true);
-
-	if (skb_shinfo(skb)->nr_frags) {
-		skb_shinfo(skb)->xdp_frags_size = skb->data_len;
-		xdp_buff_set_frags_flag(xdp);
-	} else {
-		xdp_buff_clear_frags_flag(xdp);
-	}
+	xdp_convert_skb_to_buff(skb, xdp, &rq->xdp_rxq);
+	/* Unlike generic XDP, XDP_{TX,REDIRECT} turn the buff into an
+	 * xdp_frame, which later releases the head via mem.type as well.
+	 * Only claim page_pool memory when the whole buffer was copied into
+	 * rq->page_pool above; an skb that skipped the CoW is linear.
+	 */
+	if (!pp_cow)
+		rq->xdp_rxq.mem = rq->xdp_mem;
 	*pskb = skb;
 
 	return 0;
@@ -830,7 +850,6 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 	case XDP_TX:
 		veth_xdp_get(xdp);
 		consume_skb(skb);
-		xdp->rxq->mem = rq->xdp_mem;
 		if (unlikely(veth_xdp_tx(rq, xdp, bq) < 0)) {
 			trace_xdp_exception(rq->dev, xdp_prog, act);
 			stats->rx_drops++;
@@ -842,7 +861,6 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 	case XDP_REDIRECT:
 		veth_xdp_get(xdp);
 		consume_skb(skb);
-		xdp->rxq->mem = rq->xdp_mem;
 		if (xdp_do_redirect(rq->dev, xdp, xdp_prog)) {
 			stats->rx_drops++;
 			goto err_xdp;
