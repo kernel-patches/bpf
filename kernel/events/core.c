@@ -10970,7 +10970,7 @@ static int __perf_event_overflow(struct perf_event *event,
 		 * claim the pending_work before task_work_add() recurses.
 		 */
 		if (cmpxchg_local(&event->pending_work, 0, 1) == 0) {
-			if (!task_work_add(current, &event->pending_task, notify_mode)) {
+			if (!task_work_add(event->ctx->task, &event->pending_task, notify_mode)) {
 				event->pending_work = pending_id;
 				local_inc(&event->ctx->nr_no_switch_fast);
 				WARN_ON_ONCE(!atomic_long_inc_not_zero(&event->refcount));
