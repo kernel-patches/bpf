@@ -440,6 +440,18 @@ static u32 ionic_fec_type_to_ethtool(u8 fec_type)
 	}
 }
 
+/* Firmware that predates status.fec_type leaves it zero, which reads as
+ * FEC off.  With autoneg disabled the port runs the configured mode, so
+ * only trust status.fec_type on an autoneg link.
+ */
+static u8 ionic_active_fec_type(const struct ionic_port_info *port_info)
+{
+	if (READ_ONCE(port_info->config.an_enable))
+		return READ_ONCE(port_info->status.fec_type);
+
+	return READ_ONCE(port_info->config.fec_type);
+}
+
 static int ionic_get_fecparam(struct net_device *netdev,
 			      struct ethtool_fecparam *fec)
 {
@@ -449,8 +461,10 @@ static int ionic_get_fecparam(struct net_device *netdev,
 	lif = netdev_priv(netdev);
 	port_info = lif->ionic->idev.port_info;
 
-	fec->active_fec = ionic_fec_type_to_ethtool(port_info->config.fec_type);
-	fec->fec = ionic_fec_type_to_ethtool(port_info->config.fec_type);
+	fec->active_fec =
+		ionic_fec_type_to_ethtool(ionic_active_fec_type(port_info));
+	fec->fec =
+		ionic_fec_type_to_ethtool(READ_ONCE(port_info->config.fec_type));
 
 	return 0;
 }
