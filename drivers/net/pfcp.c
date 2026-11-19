@@ -61,7 +61,7 @@ static int pfcp_encap_recv(struct sock *sk, struct sk_buff *skb)
 		goto drop;
 
 	pfcp = rcu_dereference_sk_user_data(sk);
-	if (unlikely(!pfcp))
+	if (unlikely(!pfcp || !pfcp->dev || !netif_running(pfcp->dev)))
 		goto drop;
 
 	unparsed = pfcp_hdr(skb);
