@@ -588,6 +588,17 @@ static enum sas_linkrate mpi3mr_convert_phy_link_rate(u8 link_rate)
 }
 
 /**
+ * mpi3mr_lowest_phy - Get the lowest phy number in a phy mask
+ * @phy_mask: Phy mask of the port
+ *
+ * Return: The lowest phy number, or -1 if the mask is empty.
+ */
+static int mpi3mr_lowest_phy(u64 phy_mask)
+{
+	return phy_mask ? __ffs64(phy_mask) : -1;
+}
+
+/**
  * mpi3mr_delete_sas_phy - Remove a single phy from port
  * @mrioc: Adapter instance reference
  * @mr_sas_port: Internal Port object
@@ -613,7 +624,7 @@ static void mpi3mr_delete_sas_phy(struct mpi3mr_ioc *mrioc,
 		mr_sas_port->phy_mask &= ~BIT_ULL(mr_sas_phy->phy_id);
 
 		if (mr_sas_port->lowest_phy == mr_sas_phy->phy_id)
-			mr_sas_port->lowest_phy = ffs(mr_sas_port->phy_mask) - 1;
+			mr_sas_port->lowest_phy = mpi3mr_lowest_phy(mr_sas_port->phy_mask);
 	}
 	sas_port_delete_phy(mr_sas_port->port, mr_sas_phy->phy);
 	mr_sas_phy->phy_belongs_to_port = 0;
@@ -644,7 +655,7 @@ static void mpi3mr_add_sas_phy(struct mpi3mr_ioc *mrioc,
 		mr_sas_port->phy_mask |= BIT_ULL(mr_sas_phy->phy_id);
 
 		if (mr_sas_phy->phy_id < mr_sas_port->lowest_phy)
-			mr_sas_port->lowest_phy = ffs(mr_sas_port->phy_mask) - 1;
+			mr_sas_port->lowest_phy = mpi3mr_lowest_phy(mr_sas_port->phy_mask);
 	}
 	sas_port_add_phy(mr_sas_port->port, mr_sas_phy->phy);
 	mr_sas_phy->phy_belongs_to_port = 1;
@@ -1427,7 +1438,7 @@ static struct mpi3mr_sas_port *mpi3mr_sas_port_add(struct mpi3mr_ioc *mrioc,
 	}
 
 	if (mr_sas_node->host_node)
-		mr_sas_port->lowest_phy = ffs(mr_sas_port->phy_mask) - 1;
+		mr_sas_port->lowest_phy = mpi3mr_lowest_phy(mr_sas_port->phy_mask);
 
 	if (mr_sas_port->remote_identify.device_type == SAS_END_DEVICE) {
 		tgtdev = mpi3mr_get_tgtdev_by_addr(mrioc,
