@@ -1131,8 +1131,7 @@ static int mt8173_afe_pcm_dev_probe(struct platform_device *pdev)
 	afe->runtime_resume = mt8173_afe_runtime_resume;
 	afe->runtime_suspend = mt8173_afe_runtime_suspend;
 
-	ret = devm_snd_soc_register_component(dev, &mtk_afe_pcm_platform,
-					      NULL, 0);
+	ret = snd_soc_register_component(dev, &mtk_afe_pcm_platform, NULL, 0);
 	if (ret)
 		goto err_pm_disable;
 
@@ -1140,7 +1139,7 @@ static int mt8173_afe_pcm_dev_probe(struct platform_device *pdev)
 				    mt8173_afe_pcm_dais,
 				    ARRAY_SIZE(mt8173_afe_pcm_dais));
 	if (ret)
-		goto err_pm_disable;
+		goto err_cleanup_components;
 
 	ret = snd_soc_register_component(dev, &mt8173_afe_hdmi_dai_component,
 				    mt8173_afe_hdmi_dais,
