@@ -861,6 +861,13 @@ static int bpf_core_calc_type_relo(const struct bpf_core_relo *relo,
 	return 0;
 }
 
+static __u64 bpf_core_enumval(const struct btf_type *t, int idx)
+{
+	if (btf_is_enum(t))
+		return btf_enum_value(t, btf_enum(t) + idx);
+	return btf_enum64_value(btf_enum64(t) + idx);
+}
+
 static int bpf_core_calc_enumval_relo(const struct bpf_core_relo *relo,
 				      const struct bpf_core_spec *spec,
 				      __u64 *val)
@@ -875,10 +882,7 @@ static int bpf_core_calc_enumval_relo(const struct bpf_core_relo *relo,
 		if (!spec)
 			return -EUCLEAN; /* request instruction poisoning */
 		t = btf_type_by_id(spec->btf, spec->spec[0].type_id);
-		if (btf_is_enum(t))
-			*val = btf_enum(t)[spec->spec[0].idx].val;
-		else
-			*val = btf_enum64_value(btf_enum64(t) + spec->spec[0].idx);
+		*val = bpf_core_enumval(t, spec->spec[0].idx);
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -1029,6 +1033,20 @@ static int insn_bytes_to_bpf_size(__u32 sz)
 }
 
 /*
+ * A 32-bit enum value is in the low 32 bits of the ld_imm64, extended as
+ * the compiler chooses: clang zero-extends an unsigned value, GCC
+ * sign-extends every value, as its __builtin_preserve_enum_value() returns
+ * int. Check whether the instruction has the sign-extended form of an
+ * unsigned value, so that the target value gets that form too.
+ */
+static bool bpf_core_enumval_is_sext(const struct bpf_core_relo *relo,
+				     __u64 imm, __u64 orig_val)
+{
+	return relo->kind == BPF_CORE_ENUMVAL_VALUE && orig_val <= UINT_MAX &&
+	       imm != orig_val && imm == (__u64)(__s32)orig_val;
+}
+
+/*
  * Patch relocatable BPF instruction.
  *
  * Patched value is determined by relocation kind and target specification.
@@ -1144,6 +1162,11 @@ int bpf_core_patch_insn(const char *prog_name, struct bpf_insn *insn,
 			return bpf_core_poison_insn(prog_name, relo_idx, insn, insn_idx);
 
 		imm = (__u32)insn[0].imm | ((__u64)insn[1].imm << 32);
+		if (res->validate && bpf_core_enumval_is_sext(relo, imm, orig_val)) {
+			orig_val = imm;
+			if (new_val <= UINT_MAX)
+				new_val = (__s32)new_val;
+		}
 		if (res->validate && imm != orig_val) {
 			pr_warn("prog '%s': relo #%d: unexpected insn #%d (LDIMM64) value: got %llu, exp %llu -> %llu\n",
 				prog_name, relo_idx,
