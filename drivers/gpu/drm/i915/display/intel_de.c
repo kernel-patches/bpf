@@ -482,6 +482,26 @@ static const struct intel_mmio_funcs vlv_mmio_funcs = {
 	.check_for_unclaimed_mmio_needs_lock = true,
 };
 
+#define TGL_MMIO_FLAGS __MMIO_UNCLAIMED
+
+static u32 tgl_mmio_read(struct intel_display *display, intel_reg_t reg)
+{
+	return __intel_de_read(display, reg, TGL_MMIO_FLAGS);
+}
+
+static void tgl_mmio_write(struct intel_display *display, intel_reg_t reg, u32 val)
+{
+	__intel_de_write(display, reg, val, TGL_MMIO_FLAGS);
+}
+
+#undef TGL_MMIO_FLAGS
+
+static const struct intel_mmio_funcs tgl_mmio_funcs = {
+	.read = tgl_mmio_read,
+	.write = tgl_mmio_write,
+	.check_for_unclaimed_mmio = hsw_check_for_unclaimed_mmio,
+};
+
 #define LNL_MMIO_FLAGS __MMIO_WAKELOCK
 
 static u32 lnl_mmio_read(struct intel_display *display, intel_reg_t reg)
@@ -522,8 +542,10 @@ void intel_de_init(struct intel_display *display)
 	 * rid of driver_is_i915().
 	 */
 	if (driver_is_i915()) {
-		if (DISPLAY_VER(display) >= 9 ||
-		    display->platform.broadwell || display->platform.haswell)
+		if (DISPLAY_VER(display) >= 12)
+			display->mmio.funcs = &tgl_mmio_funcs;
+		else if (DISPLAY_VER(display) >= 9 ||
+			 display->platform.broadwell || display->platform.haswell)
 			display->mmio.funcs = &hsw_mmio_funcs;
 		else if (display->platform.valleyview || display->platform.cherryview)
 			display->mmio.funcs = &vlv_mmio_funcs;
