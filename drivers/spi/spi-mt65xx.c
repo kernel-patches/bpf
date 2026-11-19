@@ -1294,8 +1294,6 @@ static int mtk_spi_probe(struct platform_device *pdev)
 		clk_disable_unprepare(mdata->spi_hclk);
 	}
 
-	cpu_latency_qos_add_request(&mdata->qos_request, PM_QOS_DEFAULT_VALUE);
-
 	if (mdata->dev_comp->need_pad_sel) {
 		if (mdata->pad_num != host->num_chipselect)
 			return dev_err_probe(dev, -EINVAL,
@@ -1322,11 +1320,13 @@ static int mtk_spi_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register irq\n");
 
+	cpu_latency_qos_add_request(&mdata->qos_request, PM_QOS_DEFAULT_VALUE);
 	pm_runtime_enable(dev);
 
 	ret = spi_register_controller(host);
 	if (ret) {
 		pm_runtime_disable(dev);
+		cpu_latency_qos_remove_request(&mdata->qos_request);
 		return dev_err_probe(dev, ret, "failed to register host\n");
 	}
 

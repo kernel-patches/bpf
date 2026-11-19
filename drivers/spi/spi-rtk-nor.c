@@ -552,7 +552,6 @@ err_pm_disable:
 	pm_runtime_put_noidle(dev);
 	pm_runtime_disable(dev);
 	pm_runtime_set_suspended(dev);
-	pm_runtime_dont_use_autosuspend(dev);
 	reset_control_assert(host->rstc);
 	clk_disable_unprepare(host->clk);
 
@@ -573,7 +572,6 @@ static void rtk_spi_remove(struct platform_device *pdev)
 	pm_runtime_put_noidle(dev);
 	pm_runtime_disable(dev);
 	pm_runtime_set_suspended(dev);
-	pm_runtime_dont_use_autosuspend(dev);
 	reset_control_assert(host->rstc);
 	clk_disable_unprepare(host->clk);
 }

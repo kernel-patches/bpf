@@ -1398,6 +1398,19 @@ config SPI_DMA_KUNIT_TEST
 
 	  If unsure say N.
 
+config SPI_CORE_KUNIT_TEST
+	tristate "KUnit tests for SPI core message optimize state" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  Build KUnit tests for the SPI core message optimize state. The tests
+	  register a fake controller and check that spi_async() and spi_sync()
+	  undo the optimization of a message they fail to queue, that a
+	  message optimized by the peripheral driver is left alone, and that a
+	  successful transfer optimizes and unoptimizes exactly once.
+
+	  If unsure say N.
+
 config SPI_LOOPBACK_TEST
 	tristate "spi loopback test framework support"
 	depends on m

@@ -154,23 +154,19 @@ static int ti_qspi_setup(struct spi_device *spi)
 
 	ret = pm_runtime_resume_and_get(qspi->dev);
 	if (ret < 0) {
-		dev_err(qspi->dev, "pm_runtime_get_sync() failed\n");
+		dev_err(qspi->dev, "pm_runtime_resume_and_get() failed\n");
 		return ret;
 	}
 
-	ret = pm_runtime_put_autosuspend(qspi->dev);
-	if (ret < 0) {
-		dev_err(qspi->dev, "pm_runtime_put_autosuspend() failed\n");
-		return ret;
-	}
+	pm_runtime_put_autosuspend(qspi->dev);
 
 	return 0;
 }
 
-static void ti_qspi_setup_clk(struct ti_qspi *qspi, u32 speed_hz)
+static int ti_qspi_setup_clk(struct ti_qspi *qspi, u32 speed_hz)
 {
 	struct ti_qspi_regs *ctx_reg = &qspi->ctx_reg;
-	int clk_div;
+	int clk_div, ret;
 	u32 clk_ctrl_reg, clk_rate, clk_ctrl_new;
 
 	clk_rate = clk_get_rate(qspi->fclk);
@@ -178,7 +174,9 @@ static void ti_qspi_setup_clk(struct ti_qspi *qspi, u32 speed_hz)
 	clk_div = clamp(clk_div, 0, QSPI_CLK_DIV_MAX);
 	dev_dbg(qspi->dev, "hz: %d, clock divider %d\n", speed_hz, clk_div);
 
-	pm_runtime_resume_and_get(qspi->dev);
+	ret = pm_runtime_resume_and_get(qspi->dev);
+	if (ret < 0)
+		return ret;
 
 	clk_ctrl_new = QSPI_CLK_EN | clk_div;
 	if (ctx_reg->clkctrl != clk_ctrl_new) {
@@ -195,6 +193,8 @@ static void ti_qspi_setup_clk(struct ti_qspi *qspi, u32 speed_hz)
 	}
 
 	pm_runtime_put_autosuspend(qspi->dev);
+
+	return 0;
 }
 
 static void ti_qspi_restore_ctx(struct ti_qspi *qspi)
@@ -452,8 +452,7 @@ static int ti_qspi_dma_xfer(struct ti_qspi *qspi, dma_addr_t dma_dst,
 		return -EIO;
 	}
 
-	tx->callback = ti_qspi_dma_callback;
-	tx->callback_param = qspi;
+	dmaengine_desc_set_callback(tx, ti_qspi_dma_callback, NULL, qspi);
 	cookie = dmaengine_submit(tx);
 	reinit_completion(&qspi->transfer_complete);
 
@@ -621,7 +620,9 @@ static int ti_qspi_exec_mem_op(struct spi_mem *mem,
 	mutex_lock(&qspi->list_lock);
 
 	if (!qspi->mmap_enabled || qspi->current_cs != spi_get_chipselect(mem->spi, 0)) {
-		ti_qspi_setup_clk(qspi, op->max_freq);
+		ret = ti_qspi_setup_clk(qspi, op->max_freq);
+		if (ret)
+			goto unlock;
 		ti_qspi_enable_memory_map(mem->spi);
 	}
 	ti_qspi_setup_mmap_read(mem->spi, op->cmd.opcode, op->data.buswidth,
@@ -646,6 +647,7 @@ static int ti_qspi_exec_mem_op(struct spi_mem *mem,
 			      op->data.nbytes);
 	}
 
+unlock:
 	mutex_unlock(&qspi->list_lock);
 
 	return ret;
@@ -704,7 +706,11 @@ static int ti_qspi_start_transfer_one(struct spi_controller *host,
 		wlen = t->bits_per_word >> 3;
 		transfer_len_words = min(t->len / wlen, frame_len_words);
 
-		ti_qspi_setup_clk(qspi, t->speed_hz);
+		ret = ti_qspi_setup_clk(qspi, t->speed_hz);
+		if (ret) {
+			mutex_unlock(&qspi->list_lock);
+			return ret;
+		}
 		ret = qspi_transfer_msg(qspi, t, transfer_len_words * wlen);
 		if (ret) {
 			dev_dbg(qspi->dev, "transfer message failed\n");
@@ -833,6 +839,7 @@ static int ti_qspi_probe(struct platform_device *pdev)
 	if (IS_ERR(qspi->fclk)) {
 		ret = PTR_ERR(qspi->fclk);
 		dev_err(&pdev->dev, "could not get clk: %d\n", ret);
+		return ret;
 	}
 
 	pm_runtime_use_autosuspend(&pdev->dev);
@@ -902,7 +909,6 @@ static void ti_qspi_remove(struct platform_device *pdev)
 
 	spi_unregister_controller(qspi->host);
 
-	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
 	ti_qspi_dma_cleanup(qspi);
