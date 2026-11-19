@@ -7723,6 +7723,7 @@ struct rtw89_dev {
 	const struct rtw89_io_ops *io;
 
 	bool dbcc_en;
+	bool support_chanctx;
 	bool support_mlo;
 	enum rtw89_mlo_dbcc_mode mlo_dbcc_mode;
 	struct rtw89_hw_scan_info scan_info;

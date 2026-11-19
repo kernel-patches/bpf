@@ -97,6 +97,13 @@ static int rtw89_ops_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
 
 	rtw89_leave_ps_mode(rtwdev);
 
+	if (!rtwdev->support_chanctx &&
+	    changed & IEEE80211_CONF_CHANGE_IDLE &&
+	    changed & IEEE80211_CONF_CHANGE_MONITOR &&
+	    !(hw->conf.flags & IEEE80211_CONF_IDLE) &&
+	    hw->conf.flags & IEEE80211_CONF_MONITOR)
+		changed |= IEEE80211_CONF_CHANGE_CHANNEL;
+
 	if ((changed & IEEE80211_CONF_CHANGE_IDLE) &&
 	    !(hw->conf.flags & IEEE80211_CONF_IDLE))
 		rtw89_leave_ips(rtwdev);
