@@ -800,7 +800,7 @@ static int rk3588_dfi_init(struct rockchip_dfi *dfi)
 
 	if (dfi->ddr_type == ROCKCHIP_DDRTYPE_LPDDR5) {
 		regmap_read(regmap_pmu, RK3588_PMUGRF_OS_REG6, &reg6);
-		dfi->lp5_bank_mode = FIELD_GET(RK3588_PMUGRF_OS_REG6_LP5_BANK_MODE, reg6) << 7;
+		dfi->lp5_bank_mode = FIELD_GET(RK3588_PMUGRF_OS_REG6_LP5_BANK_MODE, reg6);
 		dfi->lp5_ckr = FIELD_GET(RK3588_PMUGRF_OS_REG6_LP5_CKR, reg6);
 		if (dfi->lp5_ckr)
 			dfi->count_multiplier *= 2;
