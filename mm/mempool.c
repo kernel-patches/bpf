@@ -243,7 +243,7 @@ void mempool_destroy(struct mempool *pool)
 }
 EXPORT_SYMBOL(mempool_destroy);
 
-int mempool_init_node(struct mempool *pool, int min_nr,
+static int mempool_init_node_noprof(struct mempool *pool, int min_nr,
 		mempool_alloc_t *alloc_fn, mempool_free_t *free_fn,
 		void *pool_data, gfp_t gfp_mask, int node_id)
 {
@@ -257,8 +257,9 @@ int mempool_init_node(struct mempool *pool, int min_nr,
 	 * max() used here to ensure storage for at least 1 element to support
 	 * zero minimum pool
 	 */
-	pool->elements = kmalloc_array_node(max(1, min_nr), sizeof(void *),
-					    gfp_mask, node_id);
+	pool->elements = kmalloc_array_node_noprof(max(1, min_nr),
+						   sizeof(void *), gfp_mask,
+						   node_id);
 	if (!pool->elements)
 		return -ENOMEM;
 
@@ -279,7 +280,6 @@ int mempool_init_node(struct mempool *pool, int min_nr,
 
 	return 0;
 }
-EXPORT_SYMBOL(mempool_init_node);
 
 /**
  * mempool_init - initialize a memory pool
@@ -299,8 +299,8 @@ int mempool_init_noprof(struct mempool *pool, int min_nr,
 		mempool_alloc_t *alloc_fn, mempool_free_t *free_fn,
 		void *pool_data)
 {
-	return mempool_init_node(pool, min_nr, alloc_fn, free_fn,
-				 pool_data, GFP_KERNEL, NUMA_NO_NODE);
+	return mempool_init_node_noprof(pool, min_nr, alloc_fn, free_fn,
+					pool_data, GFP_KERNEL, NUMA_NO_NODE);
 
 }
 EXPORT_SYMBOL(mempool_init_noprof);
@@ -333,8 +333,8 @@ struct mempool *mempool_create_node_noprof(int min_nr,
 	if (!pool)
 		return NULL;
 
-	if (mempool_init_node(pool, min_nr, alloc_fn, free_fn, pool_data,
-			      gfp_mask, node_id)) {
+	if (mempool_init_node_noprof(pool, min_nr, alloc_fn, free_fn,
+				     pool_data, gfp_mask, node_id)) {
 		kfree(pool);
 		return NULL;
 	}
@@ -386,7 +386,8 @@ int mempool_resize_noprof(struct mempool *pool, int new_min_nr)
 	spin_unlock_irqrestore(&pool->lock, flags);
 
 	/* Grow the pool */
-	new_elements = kmalloc_objs(*new_elements, new_min_nr);
+	new_elements = kmalloc_array_noprof(new_min_nr, sizeof(*new_elements),
+					    GFP_KERNEL);
 	if (!new_elements)
 		return -ENOMEM;
 
