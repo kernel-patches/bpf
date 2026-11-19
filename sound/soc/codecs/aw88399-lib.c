@@ -957,7 +957,7 @@ static int aw_dev_update_reg_container(struct aw88399 *aw88399,
 			else
 				aw_dev->dsp_cfg = AW88399_DEV_DSP_WORK;
 
-			reg_val &= (AW88399_HMUTE_MASK | AW88399_PWDN_MASK |
+			reg_val &= (AW88399_HMUTE_MASK & AW88399_PWDN_MASK &
 						AW88399_DSPBY_MASK);
 			reg_val |= (AW88399_HMUTE_ENABLE_VALUE | AW88399_PWDN_POWER_DOWN_VALUE |
 						AW88399_DSPBY_BYPASS_VALUE);
