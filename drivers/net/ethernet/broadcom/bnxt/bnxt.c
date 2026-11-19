@@ -478,6 +478,64 @@ static void bnxt_txr_db_kick(struct bnxt *bp, struct bnxt_tx_ring_info *txr,
 	txr->kick_pending = 0;
 }
 
+static unsigned int bnxt_tx_buf_extra_bds(unsigned int len)
+{
+	return len > BNXT_TX_MAX_BD_LEN ?
+	       DIV_ROUND_UP(len, BNXT_TX_SPLIT_BD_LEN) - 1 : 0;
+}
+
+static unsigned int bnxt_tx_buf_first_bd_len(unsigned int len)
+{
+	return len > BNXT_TX_MAX_BD_LEN ? BNXT_TX_SPLIT_BD_LEN : len;
+}
+
+static unsigned int bnxt_tx_nr_data_bds(const struct sk_buff *skb)
+{
+	const struct skb_shared_info *shinfo = skb_shinfo(skb);
+	unsigned int i, bds;
+
+	if (likely(skb->len <= BNXT_TX_MAX_BD_LEN))
+		return shinfo->nr_frags;
+
+	/* Count data BDs, excluding the first head BD and the extended BD. */
+	bds = shinfo->nr_frags + bnxt_tx_buf_extra_bds(skb_headlen(skb));
+	for (i = 0; i < shinfo->nr_frags; i++)
+		bds += bnxt_tx_buf_extra_bds(skb_frag_size(&shinfo->frags[i]));
+
+	return bds;
+}
+
+/* Fill the BDs for the tail of a mapped buffer that didn't fit in its
+ * first BD.  Only the first BD of the buffer holds the DMA unmap info.
+ * Returns the last BD filled.
+ */
+static struct tx_bd *bnxt_tx_split_buf(struct bnxt *bp,
+				       struct bnxt_tx_ring_info *txr,
+				       u16 *prod, dma_addr_t mapping,
+				       unsigned int len)
+{
+	struct bnxt_sw_tx_bd *tx_buf;
+	unsigned int bd_len;
+	struct tx_bd *txbd;
+
+	do {
+		*prod = NEXT_TX(*prod);
+		txbd = &txr->tx_desc_ring[TX_RING(bp, *prod)][TX_IDX(*prod)];
+		tx_buf = &txr->tx_buf_ring[RING_TX(bp, *prod)];
+		dma_unmap_len_set(tx_buf, len, 0);
+
+		bd_len = min(len, BNXT_TX_SPLIT_BD_LEN);
+		txbd->tx_bd_haddr = cpu_to_le64(mapping);
+		txbd->tx_bd_len_flags_type =
+			cpu_to_le32(bd_len << TX_BD_LEN_SHIFT);
+
+		mapping += bd_len;
+		len -= bd_len;
+	} while (len);
+
+	return txbd;
+}
+
 static netdev_tx_t bnxt_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct bnxt *bp = netdev_priv(dev);
@@ -489,8 +547,8 @@ static netdev_tx_t bnxt_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	unsigned int length;
 	u32 len, free_size, vlan_tag_flags, cfa_action, flags;
 	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
+	u16 prod, last_frag, nr_bds, txts_prod;
 	struct pci_dev *pdev = bp->pdev;
-	u16 prod, last_frag, txts_prod;
 	struct bnxt_tx_ring_info *txr;
 	struct bnxt_sw_tx_bd *tx_buf;
 	__le32 lflags = 0;
@@ -546,8 +604,17 @@ static netdev_tx_t bnxt_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto tx_kick_pending;
 	}
 
+	/* Data BDs after the long BD and the extended BD */
+	nr_bds = bnxt_tx_nr_data_bds(skb);
+	if (unlikely(nr_bds > TX_MAX_FRAGS)) {
+		/* bnxt_features_check() makes the stack segment these */
+		netdev_warn_once(dev, "SKB needs too many (%d) TX BDs, max supported is %d\n",
+				 nr_bds, TX_MAX_FRAGS);
+		goto tx_free;
+	}
+
 	free_size = bnxt_tx_avail(bp, txr);
-	if (unlikely(free_size < skb_shinfo(skb)->nr_frags + 2)) {
+	if (unlikely(free_size < nr_bds + 2)) {
 		/* We must have raced with NAPI cleanup */
 		if (net_ratelimit() && txr->kick_pending)
 			netif_warn(bp, tx_err, dev,
@@ -565,7 +632,7 @@ static netdev_tx_t bnxt_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	tx_buf = &txr->tx_buf_ring[RING_TX(bp, prod)];
 	tx_buf->skb = skb;
-	tx_buf->nr_frags = last_frag;
+	tx_buf->nr_frags = nr_bds;
 
 	vlan_tag_flags = 0;
 	cfa_action = bnxt_xmit_get_cfa_action(skb);
@@ -689,11 +756,11 @@ normal_tx:
 
 	dma_unmap_addr_set(tx_buf, mapping, mapping);
 	dma_unmap_len_set(tx_buf, len, len);
-	flags = (len << TX_BD_LEN_SHIFT) | TX_BD_TYPE_LONG_TX_BD |
-		TX_BD_CNT(last_frag + 2);
+	flags = (bnxt_tx_buf_first_bd_len(len) << TX_BD_LEN_SHIFT) |
+		TX_BD_TYPE_LONG_TX_BD | TX_BD_CNT(nr_bds + 2);
 
 	txbd->tx_bd_haddr = cpu_to_le64(mapping);
-	txbd->tx_bd_opaque = SET_TX_OPAQUE(bp, txr, prod, 2 + last_frag);
+	txbd->tx_bd_opaque = SET_TX_OPAQUE(bp, txr, prod, 2 + nr_bds);
 
 	prod = NEXT_TX(prod);
 	txbd1 = bnxt_init_ext_bd(bp, txr, prod, lflags, vlan_tag_flags,
@@ -731,13 +798,17 @@ normal_tx:
 	if (unlikely(length >= ARRAY_SIZE(bnxt_lhint_arr))) {
 		dev_warn_ratelimited(&pdev->dev, "Dropped oversize %d bytes TX packet.\n",
 				     skb->len);
-		i = 0;
-		goto tx_dma_error;
+		goto tx_unmap_head;
 	}
 	flags |= bnxt_lhint_arr[length];
 	txbd->tx_bd_len_flags_type = cpu_to_le32(flags);
 
 	txbd0 = txbd;
+	if (unlikely(len > BNXT_TX_MAX_BD_LEN))
+		txbd = bnxt_tx_split_buf(bp, txr, &prod,
+					 mapping + BNXT_TX_SPLIT_BD_LEN,
+					 len - BNXT_TX_SPLIT_BD_LEN);
+
 	for (i = 0; i < last_frag; i++) {
 		frag = &skb_shinfo(skb)->frags[i];
 		prod = NEXT_TX(prod);
@@ -757,8 +828,13 @@ normal_tx:
 
 		txbd->tx_bd_haddr = cpu_to_le64(mapping);
 
-		flags = len << TX_BD_LEN_SHIFT;
+		flags = bnxt_tx_buf_first_bd_len(len) << TX_BD_LEN_SHIFT;
 		txbd->tx_bd_len_flags_type = cpu_to_le32(flags);
+
+		if (unlikely(len > BNXT_TX_MAX_BD_LEN))
+			txbd = bnxt_tx_split_buf(bp, txr, &prod,
+						 mapping + BNXT_TX_SPLIT_BD_LEN,
+						 len - BNXT_TX_SPLIT_BD_LEN);
 	}
 
 	txbd->tx_bd_len_flags_type |= cpu_to_le32(TX_BD_FLAGS_PACKET_END);
@@ -784,7 +860,7 @@ normal_tx:
 
 tx_done:
 
-	if (unlikely(bnxt_tx_avail(bp, txr) <= MAX_SKB_FRAGS + 1)) {
+	if (unlikely(bnxt_tx_avail(bp, txr) < BNXT_TX_MAX_SKB_BDS)) {
 		if (txr->kick_pending)
 			bnxt_txr_db_kick(bp, txr, prod);
 
@@ -794,25 +870,24 @@ tx_done:
 	return NETDEV_TX_OK;
 
 tx_dma_error:
-	last_frag = i;
-
-	/* start back at beginning and unmap skb */
-	prod = txr->tx_prod;
-	tx_buf = &txr->tx_buf_ring[RING_TX(bp, prod)];
-	dma_unmap_single(&pdev->dev, dma_unmap_addr(tx_buf, mapping),
-			 skb_headlen(skb), DMA_TO_DEVICE);
-	prod = NEXT_TX(prod);
-
-	/* unmap remaining mapped pages */
-	for (i = 0; i < last_frag; i++) {
+	/* unmap the BDs between the extended BD and the failed one */
+	nr_bds = prod - txr->tx_prod - 2;
+	prod = NEXT_TX(txr->tx_prod);
+	for (i = 0; i < nr_bds; i++) {
 		prod = NEXT_TX(prod);
 		tx_buf = &txr->tx_buf_ring[RING_TX(bp, prod)];
-		frag = &skb_shinfo(skb)->frags[i];
+		if (!dma_unmap_len(tx_buf, len))
+			continue;
 		netmem_dma_unmap_page_attrs(&pdev->dev,
 					    dma_unmap_addr(tx_buf, mapping),
-					    skb_frag_size(frag),
+					    dma_unmap_len(tx_buf, len),
 					    DMA_TO_DEVICE, 0);
 	}
+
+tx_unmap_head:
+	tx_buf = &txr->tx_buf_ring[RING_TX(bp, txr->tx_prod)];
+	dma_unmap_single(&pdev->dev, dma_unmap_addr(tx_buf, mapping),
+			 skb_headlen(skb), DMA_TO_DEVICE);
 
 tx_free:
 	dev_kfree_skb_any(skb);
@@ -14323,6 +14398,12 @@ static netdev_features_t bnxt_features_check(struct sk_buff *skb,
 	u8 *l4_proto;
 
 	features = vlan_features_check(skb, features);
+
+#if (BNXT_TX_MAX_SKB_BDS > TX_MAX_BD_CNT)
+	/* Let the stack segment skbs that exceed the TX BD limit per packet. */
+	if (unlikely(bnxt_tx_nr_data_bds(skb) > TX_MAX_FRAGS))
+		features &= ~NETIF_F_GSO_MASK;
+#endif
 
 	/* SW USO pads at most the last segment; let the stack segment skbs
 	 * where every segment would be shorter than BNXT_MIN_PKT_SIZE.
