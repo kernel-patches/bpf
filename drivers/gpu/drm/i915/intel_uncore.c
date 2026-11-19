@@ -27,7 +27,6 @@
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 
-#include "display/intel_display_core.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_regs.h"
