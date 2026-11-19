@@ -96,12 +96,16 @@ static void __dma_sync_page(phys_addr_t paddr, size_t size, int dir)
 	struct page *page = pfn_to_page(paddr >> PAGE_SHIFT);
 	unsigned offset = paddr & ~PAGE_MASK;
 
+	if (!size)
+		return;
+
 #ifdef CONFIG_HIGHMEM
-	__dma_sync_page_highmem(page, offset, size, dir);
-#else
-	unsigned long start = (unsigned long)page_address(page) + offset;
-	__dma_sync((void *)start, size, dir);
+	if (PageHighMem(pfn_to_page(PHYS_PFN(paddr + size - 1)))) {
+		__dma_sync_page_highmem(page, offset, size, dir);
+		return;
+	}
 #endif
+	__dma_sync(page_address(page) + offset, size, dir);
 }
 
 void arch_sync_dma_for_device(phys_addr_t paddr, size_t size,
