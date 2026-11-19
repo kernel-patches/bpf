@@ -984,16 +984,20 @@ cleanup:
 	return NULL;
 }
 
-static struct tracing_multi_rollback **fillers_load_and_link(int max)
+/* More programs than fit into the image of a trampoline */
+#define FILLERS_MAX 128
+
+/* Attach programs to bpf_fentry_test10 until the image of its trampoline is full */
+static struct tracing_multi_rollback **fillers_load_and_link(void)
 {
 	struct tracing_multi_rollback **skels, *skel;
 	int i, err;
 
-	skels = calloc(max + 1, sizeof(*skels));
+	skels = calloc(FILLERS_MAX, sizeof(*skels));
 	if (!ASSERT_OK_PTR(skels, "calloc"))
 		return NULL;
 
-	for (i = 0; i < max; i++) {
+	for (i = 0; i < FILLERS_MAX; i++) {
 		skel = skels[i] = tracing_multi_rollback__open();
 		if (!ASSERT_OK_PTR(skels[i], "tracing_multi_rollback__open"))
 			goto cleanup;
@@ -1005,14 +1009,18 @@ static struct tracing_multi_rollback **fillers_load_and_link(int max)
 			goto cleanup;
 
 		skel->links.filler = bpf_program__attach_trace(skel->progs.filler);
-		if (!ASSERT_OK_PTR(skels[i]->links.filler, "bpf_program__attach_trace"))
-			goto cleanup;
+		err = libbpf_get_error(skel->links.filler);
+		if (err)
+			break;
 	}
+
+	if (!ASSERT_EQ(err, -E2BIG, "bpf_program__attach_trace"))
+		goto cleanup;
 
 	return skels;
 
 cleanup:
-	fillers_cleanup(skels, i + 1);
+	fillers_cleanup(skels, FILLERS_MAX);
 	return NULL;
 }
 
@@ -1023,14 +1031,9 @@ static void test_rollback_unlink(void)
 	struct tracing_multi_rollback **fillers;
 	size_t cnt = FUNCS_CNT;
 	__u32 *ids = NULL;
-	int err, max;
+	int err;
 
-	max = get_bpf_max_tramp_links();
-	if (!ASSERT_GE(max, 1, "bpf_max_tramp_links"))
-		return;
-
-	/* Attach maximum allowed programs to bpf_fentry_test10 */
-	fillers = fillers_load_and_link(max);
+	fillers = fillers_load_and_link();
 	if (!ASSERT_OK_PTR(fillers, "fillers_load_and_link"))
 		return;
 
@@ -1047,8 +1050,8 @@ static void test_rollback_unlink(void)
 
 	/*
 	 * Attach tracing_multi link on bpf_fentry_test1-10, which will
-	 * fail on bpf_fentry_test10 function, because it already has
-	 * maximum allowed programs attached.
+	 * fail on bpf_fentry_test10 function, because the image of its
+	 * trampoline is full.
 	 *
 	 * The rollback needs to unlink already link-ed trampolines and
 	 * put all of them.
@@ -1079,7 +1082,7 @@ static void test_rollback_unlink(void)
 	tracing_multi_rollback_run(skel);
 
 cleanup:
-	fillers_cleanup(fillers, max);
+	fillers_cleanup(fillers, FILLERS_MAX);
 	tracing_multi_rollback__destroy(extra);
 	tracing_multi_rollback__destroy(skel);
 	free(ids);

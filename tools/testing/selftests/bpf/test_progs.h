@@ -501,8 +501,6 @@ int compare_stack_ips(int smap_fd, int amap_fd, int stack_trace_len);
 int trigger_module_test_read(int read_sz);
 int trigger_module_test_write(int write_sz);
 int write_sysctl(const char *sysctl, const char *value);
-int get_bpf_max_tramp_links_from(struct btf *btf);
-int get_bpf_max_tramp_links(void);
 
 struct netns_obj;
 struct netns_obj *netns_new(const char *name, bool open);
