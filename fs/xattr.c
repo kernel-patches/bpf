@@ -152,9 +152,9 @@ xattr_permission(const struct mnt_idmap *idmap, struct inode *inode,
 	}
 
 	/*
-	 * In the user.* namespace, only regular files and directories can have
-	 * extended attributes. For sticky directories, only the owner and
-	 * privileged users can write attributes.
+	 * In the user.* namespace, only regular files, directories, and
+	 * sockets can have extended attributes. For sticky directories and
+	 * sockets, only the owner and privileged users can write attributes.
 	 */
 	if (!strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN)) {
 		switch (inode->i_mode & S_IFMT) {
@@ -163,13 +163,13 @@ xattr_permission(const struct mnt_idmap *idmap, struct inode *inode,
 		case S_IFDIR:
 			if (!(inode->i_mode & S_ISVTX))
 				break;
+			fallthrough;
+		case S_IFSOCK:
 			if (!(mask & MAY_WRITE))
 				break;
 			if (inode_owner_or_capable(idmap, inode))
 				break;
 			return -EPERM;
-		case S_IFSOCK:
-			break;
 		default:
 			return xattr_permission_error(mask);
 		}
