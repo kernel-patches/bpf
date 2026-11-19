@@ -533,6 +533,8 @@ recheck:
 		return -EINVAL;
 
 	if (user) {
+		struct sched_attr lsm_attr = *attr;
+
 		retval = user_check_sched_setscheduler(p, attr, policy, reset_on_fork);
 		if (retval)
 			return retval;
@@ -540,7 +542,12 @@ recheck:
 		if (attr->sched_flags & SCHED_FLAG_SUGOV)
 			return -EINVAL;
 
-		retval = security_task_setscheduler(p);
+		lsm_attr.sched_policy = policy;
+		if (reset_on_fork)
+			lsm_attr.sched_flags |= SCHED_FLAG_RESET_ON_FORK;
+		else
+			lsm_attr.sched_flags &= ~SCHED_FLAG_RESET_ON_FORK;
+		retval = security_task_setscheduler(p, &lsm_attr, NULL);
 		if (retval)
 			return retval;
 	}
@@ -1215,7 +1222,7 @@ long sched_setaffinity(pid_t pid, const struct cpumask *in_mask)
 			return -EPERM;
 	}
 
-	retval = security_task_setscheduler(p);
+	retval = security_task_setscheduler(p, NULL, in_mask);
 	if (retval)
 		return retval;
 

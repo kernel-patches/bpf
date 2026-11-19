@@ -2595,7 +2595,7 @@ static ssize_t timerslack_ns_write(struct file *file, const char __user *buf,
 		}
 		rcu_read_unlock();
 
-		err = security_task_setscheduler(p);
+		err = security_task_setscheduler(p, NULL, NULL);
 		if (err) {
 			count = err;
 			goto out;

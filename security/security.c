@@ -3262,17 +3262,28 @@ int security_task_setrlimit(struct task_struct *p, unsigned int resource,
 }
 
 /**
- * security_task_setscheduler() - Check if setting sched policy/param is allowed
+ * security_task_setscheduler() - Check if setting sched policy/param/affinity is allowed
  * @p: target task
+ * @attr: requested scheduling attributes, or NULL if not changing parameters
+ * @in_mask: user-requested CPU affinity mask for sched_setaffinity(), the
+ *           destination cpuset's effective_cpus mask for cpuset cgroup
+ *           migration and CLONE_INTO_CGROUP, or NULL otherwise
  *
- * Check permission before setting scheduling policy and/or parameters of
- * process @p.
+ * Check permission before setting the scheduling policy, parameters, and/or
+ * CPU affinity of process @p, or migrating/cloning @p into a cpuset. Note
+ * that during cpuset migration and CLONE_INTO_CGROUP, @in_mask reflects the
+ * destination cpuset's effective CPU configuration rather than a per-task
+ * pinning request, and may be passed even when the effective CPU mask itself
+ * does not change (for example, on cgroup v1 migrations or when only memory
+ * nodes change on cgroup v2).
  *
  * Return: Returns 0 if permission is granted.
  */
-int security_task_setscheduler(struct task_struct *p)
+int security_task_setscheduler(struct task_struct *p,
+			       const struct sched_attr *attr,
+			       const struct cpumask *in_mask)
 {
-	return call_int_hook(task_setscheduler, p);
+	return call_int_hook(task_setscheduler, p, attr, in_mask);
 }
 
 /**
