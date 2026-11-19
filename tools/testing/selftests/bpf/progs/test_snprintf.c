@@ -32,6 +32,14 @@ long noarg_ret = 0;
 
 long nobuf_ret = 0;
 
+char fill_511[512] = {};
+char ovf_out[64] = {};
+long ip4_ovf_ret = 0;
+long ip6_ovf_ret = 0;
+long sym_ovf_ret = 0;
+long sym_full_ret = 0;
+long ip6_tail_ovf_ret = 0;
+
 extern const void schedule __ksym;
 
 SEC("raw_tp/sys_enter")
@@ -70,6 +78,19 @@ int handler(const void *ctx)
 	noarg_ret = BPF_SNPRINTF(noarg_out, sizeof(noarg_out), "simple case");
 	/* No buffer */
 	nobuf_ret = BPF_SNPRINTF(NULL, 0, "only interested in length %d", 60);
+	/* Scratch buffer overflow checks */
+	__builtin_memset(fill_511, 'A', sizeof(fill_511) - 1);
+	ip4_ovf_ret = BPF_SNPRINTF(ovf_out, sizeof(ovf_out), "%s%pi4%pi4",
+				   fill_511 + 7, &ex_ipv4, &ex_ipv4);
+	ip6_ovf_ret = BPF_SNPRINTF(ovf_out, sizeof(ovf_out), "%s%pI6%pI6",
+				   fill_511 + 21, &ex_ipv6, &ex_ipv6);
+	sym_ovf_ret = BPF_SNPRINTF(ovf_out, sizeof(ovf_out), "%s%pB%pB",
+				   fill_511 + 7, &schedule, &schedule);
+	sym_full_ret = BPF_SNPRINTF(ovf_out, sizeof(ovf_out), "%s%pB",
+				    fill_511, &schedule);
+	ip6_tail_ovf_ret = BPF_SNPRINTF(ovf_out, sizeof(ovf_out), "%s%pI6%lld",
+					fill_511 + 21, &ex_ipv6,
+					0x123456789abcdef0ULL);
 
 	return 0;
 }
