@@ -227,7 +227,8 @@ static inline void alloc_tag_sub(union codetag_ref *ref, size_t bytes)
 
 static inline void alloc_tag_set_inaccurate(struct alloc_tag *tag)
 {
-	tag->ct.flags |= CODETAG_FLAG_INACCURATE;
+	if (tag)
+		tag->ct.flags |= CODETAG_FLAG_INACCURATE;
 }
 
 static inline bool alloc_tag_is_inaccurate(struct alloc_tag *tag)
