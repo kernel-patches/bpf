@@ -116,9 +116,9 @@ void test_summarization_freplace(void)
 	};
 	char buf[64];
 
-	for (int t = 0; t < 2; t++) {
-		for (int i = 0; i < ARRAY_SIZE(mains); ++i) {
-			for (int j = 0; j < ARRAY_SIZE(replacements); ++j) {
+	for (int t = 0; t < ARRAY_SIZE(mains); t++) {
+		for (int i = 0; i < ARRAY_SIZE(mains[t]); ++i) {
+			for (int j = 0; j < ARRAY_SIZE(replacements[t]); ++j) {
 				snprintf(buf, sizeof(buf), "%s_with_%s",
 					 mains[t][i].to_be_replaced, replacements[t][j].func);
 				if (!test__start_subtest(buf))
