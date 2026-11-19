@@ -147,6 +147,13 @@ static const struct sysfs_ops mlog_attr_ops = {
 static struct kobj_type mlog_ktype = {
 	.default_groups = mlog_default_groups,
 	.sysfs_ops      = &mlog_attr_ops,
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): mlog_kset is
+	 * a static struct kset in tristate module ocfs2_nodemanager, and
+	 * mlog_sys_shutdown() calls kset_unregister(); unloading the module
+	 * unmaps the static storage without waiting for final kobject cleanup.
+	 */
+	.release        = NULL,
 };
 
 static struct kset mlog_kset = {

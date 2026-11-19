@@ -892,6 +892,14 @@ static const struct attribute_group ualink_xcp_info_group = {
 };
 
 static const struct kobj_type ualink_xcp_info_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix):
+	 * xcp->ualink.kobj is embedded in adev->xcp_mgr;
+	 * amdgpu_ualink_xcp_sysfs_remove() calls kobject_put() and
+	 * amdgpu_device_fini_sw() later calls kfree(adev->xcp_mgr) without
+	 * waiting for final kobject cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &kobj_sysfs_ops
 };
 
