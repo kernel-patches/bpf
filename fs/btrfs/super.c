@@ -2240,7 +2240,7 @@ static int btrfs_control_open(struct inode *inode, struct file *file)
 static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 				unsigned long arg)
 {
-	struct btrfs_ioctl_vol_args *vol = NULL;
+	struct btrfs_ioctl_vol_args AUTO_KFREE(vol);
 	struct btrfs_device *device = NULL;
 	dev_t devt = 0;
 	int ret = -ENOTTY;
@@ -2267,7 +2267,7 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 			return PTR_ERR(vol);
 		ret = btrfs_check_ioctl_vol_args_path(vol);
 		if (ret < 0)
-			goto out;
+			return ret;
 		break;
 	}
 
@@ -2314,8 +2314,6 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 		break;
 	}
 
-out:
-	kfree(vol);
 	return ret;
 }
 
