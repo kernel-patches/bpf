@@ -850,19 +850,21 @@ static void acpi_tad_remove(void *data)
 
 	device_init_wakeup(dev, false);
 
-	scoped_guard(pm_runtime_noresume, dev) {
-		if (dd->capabilities & ACPI_TAD_AC_WAKE) {
-			acpi_tad_disable_timer(dev, ACPI_TAD_AC_TIMER);
-			acpi_tad_clear_status(dev, ACPI_TAD_AC_TIMER);
-		}
-		if (dd->capabilities & ACPI_TAD_DC_WAKE) {
-			acpi_tad_disable_timer(dev, ACPI_TAD_DC_TIMER);
-			acpi_tad_clear_status(dev, ACPI_TAD_DC_TIMER);
-		}
+	guard(pm_runtime_noresume)(dev);
+
+	if (dd->capabilities & ACPI_TAD_AC_WAKE) {
+		acpi_tad_disable_timer(dev, ACPI_TAD_AC_TIMER);
+		acpi_tad_clear_status(dev, ACPI_TAD_AC_TIMER);
+	}
+	if (dd->capabilities & ACPI_TAD_DC_WAKE) {
+		acpi_tad_disable_timer(dev, ACPI_TAD_DC_TIMER);
+		acpi_tad_clear_status(dev, ACPI_TAD_DC_TIMER);
 	}
 
-	pm_runtime_suspend(dev);
 	pm_runtime_disable(dev);
+	/* Allow the parent and suppliers (if any) to suspend. */
+	pm_runtime_set_suspended(dev);
+	/* No need to power down, the PM domain detach will take care of it. */
 }
 
 static int acpi_tad_probe(struct platform_device *pdev)
