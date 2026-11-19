@@ -2935,8 +2935,10 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 				MPI3MR_BSG_MPI_REPLY_BUFTYPE_STATUS;
 			status_desc = (struct mpi3_status_reply_descriptor *)
 			    bsg_reply_buf->reply_buf;
-			status_desc->ioc_status = mrioc->bsg_cmds.ioc_status;
-			status_desc->ioc_log_info = mrioc->bsg_cmds.ioc_loginfo;
+			status_desc->ioc_status =
+			    cpu_to_le16(mrioc->bsg_cmds.ioc_status);
+			status_desc->ioc_log_info =
+			    cpu_to_le32(mrioc->bsg_cmds.ioc_loginfo);
 		}
 		tmplen = min(drv_buf_iter->kern_buf_len,
 			drv_buf_iter->bsg_buf_len);
