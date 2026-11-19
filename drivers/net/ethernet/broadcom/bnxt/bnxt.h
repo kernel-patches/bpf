@@ -26,6 +26,7 @@
 #include <linux/interrupt.h>
 #include <linux/rhashtable.h>
 #include <linux/crash_dump.h>
+#include <linux/sizes.h>
 #include <net/devlink.h>
 #include <net/dst_metadata.h>
 #include <net/xdp.h>
@@ -89,6 +90,20 @@ struct tx_bd {
 #define TX_MAX_BD_CNT	32
 
 #define TX_MAX_FRAGS		(TX_MAX_BD_CNT - 2)
+
+/* Largest length that fits in TX_BD_LEN. */
+#define BNXT_TX_MAX_BD_LEN	0xffff
+
+/* BD length for split buffers, a multiple of 4K so that 64K frags don't
+ * end with a 1-byte BD.
+ */
+#define BNXT_TX_SPLIT_BD_LEN	(BNXT_TX_MAX_BD_LEN & ~(SZ_4K - 1))
+
+/* Most BDs one skb can need: one per frag, extra BDs from splitting,
+ * plus the long BD and the extended BD.
+ */
+#define BNXT_TX_MAX_SKB_BDS	\
+	(MAX_SKB_FRAGS + GSO_MAX_SIZE / BNXT_TX_SPLIT_BD_LEN + 2)
 
 struct tx_bd_ext {
 	__le32 tx_bd_hsize_lflags;
@@ -824,10 +839,8 @@ struct nqe_cn {
 #define BNXT_MAX_RX_JUM_DESC_CNT	(RX_DESC_CNT * MAX_RX_AGG_PAGES - 1)
 #define BNXT_MAX_TX_DESC_CNT		(TX_DESC_CNT * MAX_TX_PAGES - 1)
 
-/* Minimum TX BDs for a TX packet with MAX_SKB_FRAGS + 1.  We need one extra
- * BD because the first TX BD is always a long BD.
- */
-#define BNXT_MIN_TX_DESC_CNT		(MAX_SKB_FRAGS + 2)
+/* Minimum TX BDs to fit the largest TX packet. */
+#define BNXT_MIN_TX_DESC_CNT		BNXT_TX_MAX_SKB_BDS
 
 #define RX_RING(bp, x)	(((x) & (bp)->rx_ring_mask) >> (BNXT_PAGE_SHIFT - 4))
 #define RX_AGG_RING(bp, x)	(((x) & (bp)->rx_agg_ring_mask) >>	\
