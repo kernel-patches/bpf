@@ -138,7 +138,17 @@ static void *tcf_csum_skb_nextlayer(struct sk_buff *skb,
 	int ntkoff = skb_network_offset(skb);
 	int hl = ihl + jhl;
 
+	/* Three distinct requirements, and each needs its own test.  ipl is the
+	 * extent the callers read to, so it has to be pullable; it has to cover
+	 * the jhl-byte header; and that header has to be pullable in its own
+	 * right, because ipl + ntkoff is an unsigned int plus an int and a
+	 * caller that has not bounded ipl can wrap it, after which the first
+	 * test passes without pulling anything.  skb_try_make_writable() does
+	 * not stand in for that: it copies a cloned skb and ignores its length
+	 * argument otherwise.
+	 */
 	if (!pskb_may_pull(skb, ipl + ntkoff) || (ipl < hl) ||
+	    !pskb_may_pull(skb, hl + ntkoff) ||
 	    skb_try_make_writable(skb, hl + ntkoff))
 		return NULL;
 	else
@@ -449,7 +459,8 @@ fail:
 	return 0;
 }
 
-static int tcf_csum_ipv6_hopopts(struct ipv6_opt_hdr *ip6xh, unsigned int ixhl,
+static int tcf_csum_ipv6_hopopts(struct sk_buff *skb,
+				 struct ipv6_opt_hdr *ip6xh, unsigned int ixhl,
 				 unsigned int *pl)
 {
 	int off, len, optlen;
@@ -463,13 +474,28 @@ static int tcf_csum_ipv6_hopopts(struct ipv6_opt_hdr *ip6xh, unsigned int ixhl,
 		case IPV6_TLV_PAD1:
 			optlen = 1;
 			break;
-		case IPV6_TLV_JUMBO:
+		case IPV6_TLV_JUMBO: {
+			unsigned int avail = skb->len - skb_network_offset(skb);
+			u32 pkt_len;
+
 			optlen = xh[off + 1] + 2;
 			if (optlen != 6 || len < 6 || (off & 3) != 2)
 				/* wrong jumbo option length/alignment */
 				return 0;
-			*pl = ntohl(*(__be32 *)(xh + off + 2));
+			pkt_len = ntohl(*(__be32 *)(xh + off + 2));
+			/* RFC 2675: a jumbogram carries payload_len 0 and more
+			 * than IPV6_MAXPLEN bytes.  Reject anything else, and
+			 * anything the skb cannot back: callers take this as
+			 * the extent of the packet and read that far into it.
+			 */
+			if (pkt_len <= IPV6_MAXPLEN || ipv6_hdr(skb)->payload_len)
+				return 0;
+			if (avail < sizeof(struct ipv6hdr) ||
+			    pkt_len > avail - sizeof(struct ipv6hdr))
+				return 0;
+			*pl = pkt_len;
 			goto done;
+		}
 		default:
 			optlen = xh[off + 1] + 2;
 			if (optlen > len)
@@ -521,7 +547,7 @@ static int tcf_csum_ipv6(struct sk_buff *skb, u32 update_flags)
 				goto fail;
 			ip6xh = (void *)(skb_network_header(skb) + hl);
 			if ((nexthdr == NEXTHDR_HOP) &&
-			    !(tcf_csum_ipv6_hopopts(ip6xh, ixhl, &pl)))
+			    !(tcf_csum_ipv6_hopopts(skb, ip6xh, ixhl, &pl)))
 				goto fail;
 			nexthdr = ip6xh->nexthdr;
 			hl += ixhl;
