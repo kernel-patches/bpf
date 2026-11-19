@@ -105,6 +105,7 @@ unsafe impl<T: Driver> driver::RegistrationOps for Adapter<T> {
             (*pdrv.get()).probe = Some(Self::probe_callback);
             (*pdrv.get()).remove = Some(Self::remove_callback);
             (*pdrv.get()).id_table = T::ID_TABLE.as_ptr();
+            (*pdrv.get()).driver_managed_dma = T::DRIVER_MANAGED_DMA.is_some();
             if T::HAS_SRIOV_ENABLE {
                 (*pdrv.get()).sriov_configure = Some(Self::sriov_configure_callback);
             }
@@ -293,6 +294,24 @@ unsafe impl RawDeviceIdIndex for DeviceId {
     const DRIVER_DATA_OFFSET: usize = core::mem::offset_of!(bindings::pci_device_id, driver_data);
 }
 
+/// Marker for a driver that manages DMA ownership of its devices by itself.
+///
+/// The driver core does not claim the default DMA domain for the devices of such a driver. See
+/// [`Driver::DRIVER_MANAGED_DMA`].
+pub struct DriverManagedDma<D: ?Sized>(PhantomData<fn() -> *mut D>);
+
+impl<D: ?Sized> DriverManagedDma<D> {
+    /// Declares that driver `D` manages DMA ownership of its devices by itself.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that devices bound to `D` are not used for DMA allocations or
+    /// mappings through the kernel DMA API, directly or through helpers.
+    pub const unsafe fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
 /// `IdTable` type for PCI.
 pub type IdTable<T> = &'static dyn kernel::device_id::IdTable<DeviceId, T>;
 
@@ -355,6 +374,10 @@ pub trait Driver {
 
     /// The table of device ids supported by the driver.
     const ID_TABLE: IdTable<Self::IdInfo>;
+
+    /// Set if the driver manages DMA ownership of its devices by itself, instead of using the
+    /// default DMA domain. Construct with [`DriverManagedDma::new`].
+    const DRIVER_MANAGED_DMA: Option<DriverManagedDma<Self>> = None;
 
     /// PCI driver probe.
     ///
