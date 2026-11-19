@@ -666,7 +666,7 @@ static void fbcon_prepare_logo(struct vc_data *vc, struct fb_info *info,
 	logo_height = fb_prepare_logo(info, par->rotate);
 	logo_lines = DIV_ROUND_UP(logo_height, vc->vc_font.height);
 	logo_lines = min(logo_lines, rows);
-	logo_lines = min(logo_lines, new_rows - 1);
+	logo_lines = min(logo_lines, new_rows);
 	if (logo_lines <= 0) {
 		logo_lines = 0;
 		logo_shown = FBCON_LOGO_DONTSHOW;
