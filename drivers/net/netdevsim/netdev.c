@@ -53,7 +53,8 @@ static void nsim_start_peer_tx_queue(struct net_device *dev, struct nsim_rq *rq)
 
 	/* TX device */
 	peer_dev = peer_ns->netdev;
-	if (dev->real_num_tx_queues != peer_dev->num_rx_queues)
+	if (dev->real_num_tx_queues != peer_dev->num_rx_queues ||
+	    idx >= peer_dev->real_num_tx_queues)
 		goto out;
 
 	txq = netdev_get_tx_queue(peer_dev, idx);
