@@ -21,7 +21,7 @@ static const char * const error_severity[] = DRM_XE_RAS_ERROR_SEVERITY_NAMES;
 static int drm_ras_counter_get(struct xe_device *xe, struct xe_drm_ras_counter *info,
 			       u32 error_id, int *idx)
 {
-	if (xe_wedged(xe) && xe->wedged.mode != XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET)
+	if (xe_wedged(xe) && !xe_wedge_mode_is_no_reset(xe))
 		return -ECANCELED;
 
 	if (!info || !info[error_id].name)

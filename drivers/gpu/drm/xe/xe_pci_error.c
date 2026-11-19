@@ -179,7 +179,7 @@ static pci_ers_result_t xe_pci_error_mmio_enabled(struct pci_dev *pdev)
 	action = xe_ras_process_errors(xe);
 
 	/* User wants to debug the error, prevent reset */
-	if (xe->wedged.mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET) {
+	if (xe_wedge_mode_is_no_reset(xe)) {
 		xe_wedge_declare(xe, DRM_WEDGE_RECOVERY_NONE);
 		return PCI_ERS_RESULT_DISCONNECT;
 	}
