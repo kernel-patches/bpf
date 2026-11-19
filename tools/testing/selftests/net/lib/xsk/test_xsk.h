@@ -86,6 +86,8 @@ struct xsk_peer;
 /* The control channel to the other endpoint. */
 void xsk_set_endpoint(struct xsk_peer *peer);
 int xsk_set_flow(const char *src_ip, const char *dst_ip, u16 port);
+void xsk_set_max_frags(u32 max_frags);
+void xsk_set_timeout(u32 timeout);
 
 struct xsk_socket_info {
 	struct xsk_ring_cons rx;
@@ -126,6 +128,7 @@ struct xsk_umem_info {
 #define XSK_CAP_HW_RING          (1U << 3)
 #define XSK_CAP_DRV              (1U << 4)
 #define XSK_CAP_ZC               (1U << 5)
+#define XSK_CAP_ZC_ADVERTISED    (1U << 6)
 
 struct xsk_caps {
 	u32 flags;
@@ -149,7 +152,11 @@ struct ifobject {
 	struct ethtool_ringparam ring;
 	enum test_mode mode;
 	int ifindex;
+	u32 queue_id;
 	int mtu;
+	/* Device MTU, which an SKB-mode endpoint may keep above mtu. */
+	int dev_mtu;
+	int orig_mtu;
 	u32 bind_flags;
 	bool tx_on;
 	bool rx_on;

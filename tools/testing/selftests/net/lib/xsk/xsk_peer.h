@@ -12,8 +12,10 @@ void xsk_peer_close(struct xsk_peer *peer);
 
 int xsk_peer_ready(struct xsk_peer *peer);
 void xsk_peer_abort(struct xsk_peer *peer);
+void xsk_peer_skip(struct xsk_peer *peer, int timeout_ms);
 int xsk_peer_rx_progress(struct xsk_peer *peer, u32 pkts);
 int xsk_peer_tx_sync(struct xsk_peer *peer);
 bool xsk_peer_closed(struct xsk_peer *peer);
+bool xsk_peer_skipped(struct xsk_peer *peer);
 
 #endif /* XSK_PEER_H_ */

@@ -120,6 +120,9 @@ static const char *opt_dst_ip;
 static const struct ether_addr *opt_dst_mac;
 static struct ether_addr dst_mac;
 static u16 opt_udp_port;
+static u32 opt_queue;
+static u32 opt_max_frags;
+static u32 opt_timeout = 3;
 
 enum {
 	OPT_LISTEN = 256,
@@ -127,6 +130,9 @@ enum {
 	OPT_DST_IP,
 	OPT_DST_MAC,
 	OPT_UDP_PORT,
+	OPT_QUEUE,
+	OPT_MAX_FRAGS,
+	OPT_TIMEOUT,
 };
 
 static void __exit_with_error(int error, const char *file, const char *func, int line)
@@ -137,49 +143,6 @@ static void __exit_with_error(int error, const char *file, const char *func, int
 }
 
 #define exit_with_error(error) __exit_with_error(error, __FILE__, __func__, __LINE__)
-
-static bool ifobj_zc_avail(struct ifobject *ifobject)
-{
-	size_t umem_sz = DEFAULT_UMEM_BUFFERS * XSK_UMEM__DEFAULT_FRAME_SIZE;
-	int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
-	struct xsk_socket_info *xsk;
-	struct xsk_umem_info *umem;
-	bool zc_avail = false;
-	void *bufs;
-	int ret;
-
-	bufs = mmap(NULL, umem_sz, PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
-	if (bufs == MAP_FAILED)
-		exit_with_error(errno);
-
-	umem = calloc(1, sizeof(struct xsk_umem_info));
-	if (!umem) {
-		munmap(bufs, umem_sz);
-		exit_with_error(ENOMEM);
-	}
-	umem->frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE;
-	ret = xsk_configure_umem(ifobject, umem, bufs, umem_sz);
-	if (ret)
-		exit_with_error(-ret);
-
-	xsk = calloc(1, sizeof(struct xsk_socket_info));
-	if (!xsk)
-		goto out;
-	ifobject->bind_flags = XDP_USE_NEED_WAKEUP | XDP_ZEROCOPY;
-	ifobject->rx_on = true;
-	xsk->rxqsize = XSK_RING_CONS__DEFAULT_NUM_DESCS;
-	ret = xsk_configure_socket(xsk, umem, ifobject, false);
-	if (!ret)
-		zc_avail = true;
-
-	xsk_socket__delete(xsk->xsk);
-	free(xsk);
-out:
-	munmap(umem->buffer, umem_sz);
-	xsk_umem__delete(umem->umem);
-	free(umem);
-	return zc_avail;
-}
 
 static struct option long_options[] = {
 	{"interface", required_argument, 0, 'i'},
@@ -196,6 +159,9 @@ static struct option long_options[] = {
 	{"dst-ip", required_argument, 0, OPT_DST_IP},
 	{"dst-mac", required_argument, 0, OPT_DST_MAC},
 	{"udp-port", required_argument, 0, OPT_UDP_PORT},
+	{"queue", required_argument, 0, OPT_QUEUE},
+	{"max-frags", required_argument, 0, OPT_MAX_FRAGS},
+	{"timeout", required_argument, 0, OPT_TIMEOUT},
 	{"help", no_argument, 0, 'h'},
 	{0, 0, 0, 0}
 };
@@ -220,6 +186,9 @@ static void print_usage(char **argv)
 		"      --dst-ip IP      Destination address, of the same family\n"
 		"      --dst-mac MAC    Destination MAC address of the test packets\n"
 		"      --udp-port PORT  UDP destination port, and source port of socket 0\n"
+		"      --queue N        AF_XDP queue to bind (default 0)\n"
+		"      --max-frags N    Fragment limit for TOO_MANY_FRAGS (default by mode)\n"
+		"      --timeout SEC    Traffic and link timeout (default 3)\n"
 		"  -h, --help           Display this help and exit\n";
 
 	ksft_print_msg(str, basename(argv[0]));
@@ -244,6 +213,11 @@ static void bind_iface(struct ifobject *ifobj, const char *ifname, char **argv)
 		ksft_print_msg("Error: cannot initialize interface %s\n", ifobj->ifname);
 		ksft_exit_fail();
 	}
+	if (xsk_get_mtu(ifobj->ifname, &ifobj->dev_mtu)) {
+		ksft_print_msg("Error: cannot read MTU of interface %s\n", ifobj->ifname);
+		ksft_exit_fail();
+	}
+	ifobj->orig_mtu = ifobj->dev_mtu;
 }
 
 static void print_tests(void)
@@ -259,6 +233,7 @@ static void parse_command_line(struct ifobject *ifobj_tx, struct ifobject *ifobj
 			       char **argv)
 {
 	int option_index, c;
+	unsigned long val;
 
 	opterr = 0;
 
@@ -329,6 +304,23 @@ static void parse_command_line(struct ifobject *ifobj_tx, struct ifobject *ifobj
 		case OPT_UDP_PORT:
 			opt_udp_port = strtoul(optarg, NULL, 10);
 			break;
+		case OPT_QUEUE:
+			opt_queue = strtoul(optarg, NULL, 10);
+			break;
+		case OPT_MAX_FRAGS:
+			/* It sizes the packet array of TOO_MANY_FRAGS. */
+			val = strtoul(optarg, NULL, 10);
+			if (val > 0xffff)
+				print_usage(argv);
+			opt_max_frags = val;
+			break;
+		case OPT_TIMEOUT:
+			/* Passed on in milliseconds, as an int. */
+			val = strtoul(optarg, NULL, 10);
+			if (!val || val > 0xffff)
+				print_usage(argv);
+			opt_timeout = val;
+			break;
 		case 'h':
 		default:
 			print_usage(argv);
@@ -352,7 +344,12 @@ static int run_pkt_test(struct test_spec *test)
 	int ret;
 
 	ret = test->test_func(test);
+	pkt_stream_restore_default(test);
+	return ret;
+}
 
+static void report_pkt_test(struct test_spec *test, int ret)
+{
 	switch (ret) {
 	case TEST_PASS:
 		ksft_test_result_pass("PASS: %s %s%s\n", mode_string(test), busy_poll_string(test),
@@ -370,9 +367,6 @@ static int run_pkt_test(struct test_spec *test)
 		ksft_test_result_fail("FAIL: %s %s%s -- Unexpected returned value (%d)\n",
 				      mode_string(test), busy_poll_string(test), test->name, ret);
 	}
-
-	pkt_stream_restore_default(test);
-	return ret;
 }
 
 static bool is_xdp_supported(int ifindex)
@@ -403,12 +397,14 @@ static bool is_xdp_supported(int ifindex)
 	return true;
 }
 
+/* Probe only the mode that the endpoint runs in. */
 static u32 detect_mode_caps(struct ifobject *ifobj)
 {
-	if (is_xdp_supported(ifobj->ifindex)) {
+	if (opt_mode == TEST_MODE_ZC && ifobj_has_cap(ifobj, XSK_CAP_ZC_ADVERTISED)) {
+		/* Trust the advertised flag; an XDP_ZEROCOPY bind never falls back to copy. */
+		ifobj_set_cap(ifobj, XSK_CAP_DRV | XSK_CAP_ZC);
+	} else if (opt_mode == TEST_MODE_DRV && is_xdp_supported(ifobj->ifindex)) {
 		ifobj_set_cap(ifobj, XSK_CAP_DRV);
-		if (ifobj_zc_avail(ifobj))
-			ifobj_set_cap(ifobj, XSK_CAP_ZC);
 	}
 
 	return ifobj->caps.flags;
@@ -423,8 +419,10 @@ static bool mode_supported(enum test_mode mode, u32 caps)
 	return caps & XSK_CAP_ZC;
 }
 
-static void cleanup_iface(struct ifobject *ifobj)
+static int cleanup_iface(struct ifobject *ifobj)
 {
+	int err = 0;
+
 	/* A peer shadow has a skeleton but no bound interface. */
 	if (!ifobj_is_local(ifobj))
 		goto unload;
@@ -432,8 +430,16 @@ static void cleanup_iface(struct ifobject *ifobj)
 	if (ifobj->xdp_prog)
 		xsk_detach_xdp_program(ifobj->ifindex,
 				       mode_to_xdp_flags(ifobj->mode));
+	/* After the detach, as an attached program can cap the MTU. */
+	if (ifobj->dev_mtu != ifobj->orig_mtu) {
+		err = xsk_set_mtu(ifobj->ifindex, ifobj->orig_mtu);
+		if (err)
+			ksft_print_msg("Failed to restore MTU %d on %s\n",
+				       ifobj->orig_mtu, ifobj->ifname);
+	}
 unload:
 	xsk_unload_xdp_programs(ifobj);
+	return err;
 }
 
 /* Connect the two endpoints without negotiating the remote NIC's capabilities. */
@@ -470,6 +476,7 @@ int main(int argc, char **argv)
 	struct test_spec test = {};
 	int ret = TEST_FAILURE;
 	u32 caps;
+	int err;
 
 	/* Use libbpf 1.0 API mode */
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -513,6 +520,8 @@ int main(int argc, char **argv)
 		ksft_exit_xfail();
 	}
 
+	xsk_set_max_frags(opt_max_frags);
+	xsk_set_timeout(opt_timeout);
 	/* Before the default packet streams, which have its minimum size. */
 	if (xsk_set_flow(opt_src_ip, opt_dst_ip, opt_udp_port))
 		print_usage(argv);
@@ -528,6 +537,7 @@ int main(int argc, char **argv)
 		shadow_ifobj = ifobj_tx;
 	}
 	bind_iface(local_ifobj, opt_ifname, argv);
+	local_ifobj->queue_id = opt_queue;
 	caps = detect_mode_caps(local_ifobj);
 
 	test.tx_pkt_stream_default = pkt_stream_generate(DEFAULT_PKT_CNT, MIN_PKT_SIZE);
@@ -553,8 +563,17 @@ int main(int argc, char **argv)
 
 out:
 	xsk_set_endpoint(NULL);
-	cleanup_iface(ifobj_tx);
-	cleanup_iface(ifobj_rx);
+	err = cleanup_iface(ifobj_tx);
+	err |= cleanup_iface(ifobj_rx);
+	/* xsk.py trusts a passed or skipped endpoint to have undone the MTU. */
+	if (err)
+		ret = TEST_FAILURE;
+	/* After the cleanup, which can still fail a case that ran. */
+	if (test.test_func)
+		report_pkt_test(&test, ret);
+	/* The peer skips the case too, rather than fail on the closed connection. */
+	if (ret == TEST_SKIP)
+		xsk_peer_skip(peer, opt_timeout * 1000);
 	xsk_peer_close(peer);
 	pkt_stream_delete(test.tx_pkt_stream_default);
 	pkt_stream_delete(test.rx_pkt_stream_default);

@@ -827,3 +827,37 @@ int xsk_get_mac(const char *ifname, u8 mac[ETH_ALEN])
 		memcpy(mac, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
 	return err;
 }
+
+int xsk_get_mtu(const char *ifname, int *mtu)
+{
+	struct ifreq ifr = {};
+	int err;
+
+	err = xsk_ifreq_ioctl(ifname, SIOCGIFMTU, &ifr);
+	if (!err)
+		*mtu = ifr.ifr_mtu;
+	return err;
+}
+
+/* ETHTOOL_GLINK reports the carrier. SIOCGIFFLAGS cannot: IFF_LOWER_UP does
+ * not fit in ifr_flags, and IFF_RUNNING follows the carrier only once the link
+ * watch runs. A driver without .get_link has nothing to wait for.
+ */
+int xsk_wait_link_up(const char *ifname, int timeout_ms)
+{
+	struct ethtool_value edata = { .cmd = ETHTOOL_GLINK };
+	struct ifreq ifr = { .ifr_data = (void *)&edata };
+	int err;
+
+	for (;;) {
+		err = xsk_ifreq_ioctl(ifname, SIOCETHTOOL, &ifr);
+		if (err == -EOPNOTSUPP)
+			return 0;
+		if (err || edata.data)
+			return err;
+		if (timeout_ms <= 0)
+			return -ETIMEDOUT;
+		usleep(100 * 1000);
+		timeout_ms -= 100;
+	}
+}

@@ -24,6 +24,7 @@ enum xsk_peer_msg_type {
 	XSK_PEER_READY = 1,
 	XSK_PEER_PROGRESS,
 	XSK_PEER_ABORT,
+	XSK_PEER_SKIP,
 };
 
 struct xsk_peer_msg {
@@ -37,6 +38,7 @@ struct xsk_peer {
 	u32 acked;
 	bool ready_seen;
 	bool closed;
+	bool skipped;
 };
 
 static int io_full(int fd, void *buf, size_t len, bool write_op)
@@ -110,6 +112,11 @@ static int peer_recv_one(struct xsk_peer *peer)
 		return 0;
 	case XSK_PEER_ABORT:
 		return -ECANCELED;
+	case XSK_PEER_SKIP:
+		/* The peer skips the case and closes the connection. */
+		peer->closed = true;
+		peer->skipped = true;
+		return -EOPNOTSUPP;
 	default:
 		return -EPROTO;
 	}
@@ -145,6 +152,16 @@ int xsk_peer_ready(struct xsk_peer *peer)
 	int err;
 
 	err = peer_send(peer, XSK_PEER_READY, 0);
+	/*
+	 * Read what a gone peer left, such as a SKIP, up to the end, even if its
+	 * READY came early.
+	 */
+	if (peer_gone(err)) {
+		do {
+			err = peer_recv_one(peer);
+		} while (!err);
+		return err;
+	}
 	while (!err && !peer->ready_seen)
 		err = peer_recv_one(peer);
 	if (err)
@@ -160,6 +177,30 @@ void xsk_peer_abort(struct xsk_peer *peer)
 {
 	if (peer && !peer->closed)
 		peer_send(peer, XSK_PEER_ABORT, 0);
+}
+
+/*
+ * Tell the peer that this endpoint skips the case, so that it skips too.
+ * Closing with unread data, or getting data once closed, resets the
+ * connection and drops the SKIP if the peer has yet to acknowledge it, as
+ * when a NIC reset holds the link down. So read until the peer closes.
+ */
+void xsk_peer_skip(struct xsk_peer *peer, int timeout_ms)
+{
+	struct pollfd pfd = { .events = POLLIN };
+	struct xsk_peer_msg msg;
+	int ret;
+
+	if (!peer || peer->closed || peer_send(peer, XSK_PEER_SKIP, 0))
+		return;
+
+	shutdown(peer->fd, SHUT_WR);
+	pfd.fd = peer->fd;
+	do {
+		ret = poll(&pfd, 1, timeout_ms);
+		if (ret > 0)
+			ret = read(peer->fd, &msg, sizeof(msg));
+	} while (ret > 0 || (ret < 0 && errno == EINTR));
 }
 
 int xsk_peer_rx_progress(struct xsk_peer *peer, u32 pkts)
@@ -193,6 +234,11 @@ int xsk_peer_tx_sync(struct xsk_peer *peer)
 bool xsk_peer_closed(struct xsk_peer *peer)
 {
 	return peer->closed;
+}
+
+bool xsk_peer_skipped(struct xsk_peer *peer)
+{
+	return peer->skipped;
 }
 
 static int accept_tmout(int lfd)

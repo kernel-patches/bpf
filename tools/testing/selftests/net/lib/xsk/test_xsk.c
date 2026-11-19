@@ -48,6 +48,8 @@ static union {
 } flow_src, flow_dst;
 static u16 udp_port;
 static u32 pkt_hdr_size;
+static u32 max_frags_override;
+static u32 thread_tmout = THREAD_TMOUT;
 
 bool opt_verbose;
 int min_pkt_size;
@@ -127,6 +129,16 @@ int xsk_set_flow(const char *src_ip, const char *dst_ip, u16 port)
 	 */
 	min_pkt_size = ALIGN(pkt_hdr_size + MIN_PAYLOAD_SIZE, 8);
 	return 0;
+}
+
+void xsk_set_max_frags(u32 max_frags)
+{
+	max_frags_override = max_frags;
+}
+
+void xsk_set_timeout(u32 timeout)
+{
+	thread_tmout = timeout;
 }
 
 /* Add up buf as big-endian 16-bit words, len being even. */
@@ -322,7 +334,8 @@ int xsk_configure_socket(struct xsk_socket_info *xsk, struct xsk_umem_info *umem
 
 	txr = ifobject->tx_on ? &xsk->tx : NULL;
 	rxr = ifobject->rx_on ? &xsk->rx : NULL;
-	return xsk_socket__create(&xsk->xsk, ifobject->ifindex, 0, umem->umem, rxr, txr, &cfg);
+	return xsk_socket__create(&xsk->xsk, ifobject->ifindex, ifobject->queue_id,
+				  umem->umem, rxr, txr, &cfg);
 }
 
 static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
@@ -381,7 +394,7 @@ static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 	test->nb_sockets = 1;
 	test->adjust_tail = false;
 	test->adjust_tail_support = false;
-	test->mtu = MAX_ETH_PKT_SIZE;
+	test->mtu = ETH_DATA_LEN;
 	test->xdp_prog_rx = ifobj_rx->xdp_progs->progs.xsk_def_prog;
 	test->xskmap_rx = ifobj_rx->xdp_progs->maps.xsk;
 	test->xdp_prog_tx = ifobj_tx->xdp_progs->progs.xsk_def_prog;
@@ -445,14 +458,25 @@ static void test_spec_set_xdp_prog(struct test_spec *test, struct bpf_program *x
 	test->xskmap_tx = xskmap_tx;
 }
 
-static int test_spec_set_mtu_ifobj(struct ifobject *ifobj, int mtu)
+/* An MTU change can reset a NIC. An SKB-mode endpoint runs a case at any
+ * larger MTU, as generic XDP does not limit it, so only raise its MTU.
+ */
+static bool mtu_change_needed(struct ifobject *ifobj, enum test_mode mode, int mtu)
+{
+	if (mode == TEST_MODE_SKB)
+		return ifobj->dev_mtu < mtu;
+	return ifobj->dev_mtu != mtu;
+}
+
+static int test_spec_set_mtu_ifobj(struct ifobject *ifobj, enum test_mode mode, int mtu)
 {
 	int err;
 
-	if (ifobj_is_local(ifobj) && ifobj->mtu != mtu) {
+	if (ifobj_is_local(ifobj) && mtu_change_needed(ifobj, mode, mtu)) {
 		err = xsk_set_mtu(ifobj->ifindex, mtu);
 		if (err)
 			return err;
+		ifobj->dev_mtu = mtu;
 	}
 
 	ifobj->mtu = mtu;
@@ -463,11 +487,11 @@ static int test_spec_set_mtu(struct test_spec *test, int mtu)
 {
 	int err;
 
-	err = test_spec_set_mtu_ifobj(test->ifobj_rx, mtu);
+	err = test_spec_set_mtu_ifobj(test->ifobj_rx, test->mode, mtu);
 	if (err)
 		return err;
 
-	return test_spec_set_mtu_ifobj(test->ifobj_tx, mtu);
+	return test_spec_set_mtu_ifobj(test->ifobj_tx, test->mode, mtu);
 }
 
 void pkt_stream_reset(struct pkt_stream *pkt_stream)
@@ -1253,7 +1277,7 @@ bool all_packets_received(struct test_spec *test, struct xsk_socket_info *xsk, u
 
 static int receive_pkts(struct test_spec *test)
 {
-	struct timeval tv_end, tv_now, tv_timeout = {THREAD_TMOUT, 0};
+	struct timeval tv_end, tv_now, tv_timeout = {thread_tmout, 0};
 	DECLARE_BITMAP(bitmap, test->nb_sockets);
 	struct xsk_socket_info *xsk;
 	u32 sock_num = 0;
@@ -1309,6 +1333,11 @@ static int __send_pkts(struct ifobject *ifobject, struct xsk_socket_info *xsk,
 	if (pkts_in_flight >= (int)((umem_size(umem) - xsk->batch_size * buffer_len) /
 	    buffer_len) && !test_timeout) {
 		/* Only RX progress reports can lower pkts_in_flight. */
+		if (xsk_peer_skipped(ctrl_peer)) {
+			ksft_print_msg("RX skipped the case with %d packets in flight\n",
+				       pkts_in_flight);
+			return TEST_SKIP;
+		}
 		if (xsk_peer_closed(ctrl_peer)) {
 			ksft_print_msg("ERROR: [%s] RX exited with %d packets in flight\n",
 				       __func__, pkts_in_flight);
@@ -1425,7 +1454,7 @@ static int __send_pkts(struct ifobject *ifobject, struct xsk_socket_info *xsk,
 
 static int wait_for_tx_completion(struct xsk_socket_info *xsk)
 {
-	struct timeval tv_end, tv_now, tv_timeout = {THREAD_TMOUT, 0};
+	struct timeval tv_end, tv_now, tv_timeout = {thread_tmout, 0};
 	int ret;
 
 	ret = gettimeofday(&tv_now, NULL);
@@ -1708,19 +1737,25 @@ static int thread_common_ops(struct test_spec *test, struct ifobject *ifobject)
 	if (ret)
 		return ret;
 
+	ifobject->xsk = &ifobject->xsk_arr[0];
+
+	/* Before the bind: a zero-copy driver posts its RX buffers then, or in
+	 * a poll it schedules then. Otherwise it waits for a wakeup, and the
+	 * peer can send before the RX endpoint gets to it.
+	 */
+	if (ifobject->rx_on) {
+		ret = xsk_populate_fill_ring(umem, ifobject->xsk->pkt_stream,
+					     ifobject->use_fill_ring);
+		if (ret)
+			return ret;
+	}
+
 	ret = xsk_configure(test, ifobject, umem);
 	if (ret)
 		return ret;
 
-	ifobject->xsk = &ifobject->xsk_arr[0];
-
 	if (!ifobject->rx_on)
 		return 0;
-
-	ret = xsk_populate_fill_ring(umem, ifobject->xsk->pkt_stream,
-				     ifobject->use_fill_ring);
-	if (ret)
-		return ret;
 
 	for (i = 0; i < test->nb_sockets; i++) {
 		ret = xsk_update_xskmap(ifobject->xskmap, ifobject->xsk_arr[i].xsk, i);
@@ -1791,14 +1826,43 @@ static int testapp_validate_rx_endpoint(struct test_spec *test,
 	return err;
 }
 
+/* An MTU or XDP program change can reset a NIC, which takes the link down on
+ * both hosts. Each endpoint makes those changes before it is ready, so once
+ * both are, wait while the local link is down. This is best effort: it misses
+ * a reset that a driver has yet to start, and one on the bind of a TX socket,
+ * which comes after the wait.
+ */
+static int wait_link_up(struct test_spec *test)
+{
+	struct ifobject *ifobj = test->ifobj_tx;
+	int err;
+
+	if (!ifobj_is_local(ifobj))
+		ifobj = test->ifobj_rx;
+	err = xsk_wait_link_up(ifobj->ifname, thread_tmout * 1000);
+	if (err) {
+		ksft_print_msg("Link on %s is not up at step %u: %d (%s)\n",
+			       ifobj->ifname, test->current_step, err, strerror(-err));
+		xsk_peer_abort(ctrl_peer);
+	}
+	return err;
+}
+
 static int sync_endpoints(struct test_spec *test)
 {
 	int err = xsk_peer_ready(ctrl_peer);
 
-	if (err)
+	if (err && xsk_peer_skipped(ctrl_peer)) {
+		ksft_print_msg("The peer endpoint skipped the case at step %u\n",
+			       test->current_step);
+		return TEST_SKIP;
+	}
+	if (err) {
 		ksft_print_msg("Endpoint synchronization failed at step %u: %d (%s)\n",
 			       test->current_step, err, strerror(-err));
-	return err;
+		return err;
+	}
+	return wait_link_up(test);
 }
 
 int worker_testapp_validate_tx(struct test_spec *test)
@@ -1810,7 +1874,7 @@ int worker_testapp_validate_tx(struct test_spec *test)
 		return err;
 
 	err = testapp_validate_tx_endpoint(test, test->ifobj_tx);
-	if (err) {
+	if (err && err != TEST_SKIP) {
 		ksft_print_msg("TX endpoint traffic failed at step %u: %d\n",
 			       test->current_step, err);
 		xsk_peer_abort(ctrl_peer);
@@ -1905,6 +1969,10 @@ static int xsk_attach_xdp_progs(struct test_spec *test, struct ifobject *ifobj_r
 	if (!ifobj_tx || !ifobj_is_local(ifobj_tx))
 		return 0;
 
+	/* A ZC driver can require XDP to be enabled for TX wakeups. */
+	if (!ifobj_tx->rx_on && test->mode != TEST_MODE_ZC)
+		return 0;
+
 	if (xdp_prog_changed_tx(test))
 		err = xsk_reattach_xdp(ifobj_tx, test->xdp_prog_tx, test->xskmap_tx, test->mode);
 
@@ -1986,6 +2054,8 @@ skip_mbuf_check:
 		clean_umem(test, ifobj1, ifobj2);
 	}
 
+	if (err == TEST_SKIP)
+		return TEST_SKIP;
 	return err ? TEST_FAILURE : TEST_PASS;
 }
 
@@ -2012,11 +2082,12 @@ static int testapp_validate_traffic_single_thread(struct test_spec *test, struct
 
 int testapp_teardown(struct test_spec *test)
 {
-	int i;
+	int i, ret;
 
 	for (i = 0; i < MAX_TEARDOWN_ITER; i++) {
-		if (testapp_validate_traffic(test))
-			return TEST_FAILURE;
+		ret = testapp_validate_traffic(test);
+		if (ret)
+			return ret;
 		test_spec_reset(test);
 	}
 
@@ -2042,8 +2113,9 @@ int testapp_bidirectional(struct test_spec *test)
 	test->ifobj_tx->rx_on = true;
 	test->ifobj_rx->tx_on = true;
 	test->total_steps = 2;
-	if (testapp_validate_traffic(test))
-		return TEST_FAILURE;
+	res = testapp_validate_traffic(test);
+	if (res)
+		return res;
 
 	print_verbose("Switching Tx/Rx direction\n");
 	swap_directions(&test->ifobj_rx, &test->ifobj_tx);
@@ -2076,10 +2148,13 @@ static int swap_xsk_resources(struct test_spec *test)
 
 int testapp_xdp_prog_cleanup(struct test_spec *test)
 {
+	int ret;
+
 	test->total_steps = 2;
 	test->nb_sockets = 2;
-	if (testapp_validate_traffic(test))
-		return TEST_FAILURE;
+	ret = testapp_validate_traffic(test);
+	if (ret)
+		return ret;
 
 	if (swap_xsk_resources(test)) {
 		clean_sockets(test, test->ifobj_rx);
@@ -2361,7 +2436,9 @@ int testapp_too_many_frags(struct test_spec *test)
 	u32 max_frags, i;
 	int ret = TEST_FAILURE;
 
-	if (test->mode == TEST_MODE_ZC) {
+	if (max_frags_override) {
+		max_frags = max_frags_override;
+	} else if (test->mode == TEST_MODE_ZC) {
 		max_frags = xsk_get_cap(test, xdp_zc_max_segs);
 	} else {
 		max_frags = xsk_get_cap(test, max_skb_frags);
@@ -2457,6 +2534,7 @@ static int detect_ifobj_caps(struct ifobject *ifobj)
 	if (query_opts.feature_flags & NETDEV_XDP_ACT_RX_SG)
 		ifobj_set_cap(ifobj, XSK_CAP_MBUF);
 	if (query_opts.feature_flags & NETDEV_XDP_ACT_XSK_ZEROCOPY) {
+		ifobj_set_cap(ifobj, XSK_CAP_ZC_ADVERTISED);
 		if (query_opts.xdp_zc_max_segs > 1) {
 			ifobj_set_cap(ifobj, XSK_CAP_MBUF_ZC);
 			ifobj->caps.xdp_zc_max_segs = query_opts.xdp_zc_max_segs;
@@ -2705,9 +2783,18 @@ int testapp_adjust_tail_shrink_mb(struct test_spec *test)
 	return testapp_adjust_tail(test, -XSK_UMEM__MAX_FRAME_SIZE, XSK_UMEM__LARGE_FRAME_SIZE * 2);
 }
 
+/* Generic XDP leaves no room to grow the tail. Only the RX endpoint runs the
+ * program on the test flow, and the TX endpoint, which does not know the mode
+ * of its peer, learns about the skip from it.
+ */
+static bool adjust_tail_grow_skip(struct test_spec *test)
+{
+	return ifobj_is_local(test->ifobj_rx) && test->mode == TEST_MODE_SKB;
+}
+
 int testapp_adjust_tail_grow(struct test_spec *test)
 {
-	if (test->mode == TEST_MODE_SKB)
+	if (adjust_tail_grow_skip(test))
 		return TEST_SKIP;
 
 	/* Grow by 4 bytes for testing purpose */
@@ -2718,7 +2805,7 @@ int testapp_adjust_tail_grow_mb(struct test_spec *test)
 {
 	u32 grow_size;
 
-	if (test->mode == TEST_MODE_SKB)
+	if (adjust_tail_grow_skip(test))
 		return TEST_SKIP;
 
 	/* worst case scenario is when underlying setup will work on 3k
