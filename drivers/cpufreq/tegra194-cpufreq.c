@@ -5,6 +5,7 @@
 
 #include <linux/cpu.h>
 #include <linux/cpufreq.h>
+#include <linux/cpuhotplug.h>
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -13,7 +14,7 @@
 #include <linux/slab.h>
 #include <linux/units.h>
 
-#include <asm/smp_plat.h>
+#include <asm/cputype.h>
 
 #include <soc/tegra/bpmp.h>
 #include <soc/tegra/bpmp-abi.h>
@@ -59,7 +60,7 @@ struct read_counters_work {
 struct tegra_cpufreq_ops {
 	void (*read_counters)(struct tegra_cpu_ctr *c);
 	void (*set_cpu_ndiv)(struct cpufreq_policy *policy, u64 ndiv);
-	void (*get_cpu_cluster_id)(u32 cpu, u32 *cpuid, u32 *clusterid);
+	void (*get_cpu_cluster_id)(u32 *cpuid, u32 *clusterid);
 	int (*get_cpu_ndiv)(u32 cpu, u32 cpuid, u32 clusterid, u64 *ndiv);
 };
 
@@ -77,6 +78,8 @@ struct tegra194_cpufreq_data {
 	const struct tegra_cpufreq_soc *soc;
 	bool icc_dram_bw_scaling;
 	struct tegra_cpu_data *cpu_data;
+	enum cpuhp_state cpuhp_state;
+	struct hlist_node cpuhp_node;
 };
 
 static struct workqueue_struct *read_counters_wq;
@@ -109,11 +112,11 @@ static void tegra_get_cpu_mpidr(void *mpidr)
 	*((u64 *)mpidr) = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
 }
 
-static void tegra234_get_cpu_cluster_id(u32 cpu, u32 *cpuid, u32 *clusterid)
+static void tegra234_get_cpu_cluster_id(u32 *cpuid, u32 *clusterid)
 {
 	u64 mpidr;
 
-	smp_call_function_single(cpu, tegra_get_cpu_mpidr, &mpidr, true);
+	tegra_get_cpu_mpidr(&mpidr);
 
 	if (cpuid)
 		*cpuid = MPIDR_AFFINITY_LEVEL(mpidr, 1);
@@ -121,11 +124,45 @@ static void tegra234_get_cpu_cluster_id(u32 cpu, u32 *cpuid, u32 *clusterid)
 		*clusterid = MPIDR_AFFINITY_LEVEL(mpidr, 2);
 }
 
+static int tegra_cpufreq_cpu_online(unsigned int cpu, struct hlist_node *node)
+{
+	struct tegra194_cpufreq_data *data;
+	u32 cpuid, clusterid;
+
+	data = hlist_entry(node, struct tegra194_cpufreq_data, cpuhp_node);
+
+	data->soc->ops->get_cpu_cluster_id(&cpuid, &clusterid);
+
+	data->cpu_data[cpu].cpuid = cpuid;
+	data->cpu_data[cpu].clusterid = clusterid;
+
+	if (clusterid >= data->soc->num_clusters ||
+	    cpuid >= data->soc->maxcpus_per_cluster) {
+		pr_warn_once("cpufreq: cpu%u: bad MPIDR (cluster %u, core %u)\n",
+			     cpu, clusterid, cpuid);
+		return 0;
+	}
+
+	/* Derive per-core register address only when ccplex MMIO is mapped. */
+	if (data->regs) {
+		u32 index = clusterid * data->soc->maxcpus_per_cluster + cpuid;
+
+		data->cpu_data[cpu].freq_core_reg =
+			SCRATCH_FREQ_CORE_REG(data, index);
+	}
+
+	return 0;
+}
+
 static int tegra234_get_cpu_ndiv(u32 cpu, u32 cpuid, u32 clusterid, u64 *ndiv)
 {
 	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
+	void __iomem *reg = data->cpu_data[cpu].freq_core_reg;
 
-	*ndiv = readl(data->cpu_data[cpu].freq_core_reg) & NDIV_MASK;
+	if (!reg)
+		return -EINVAL;
+
+	*ndiv = readl(reg) & NDIV_MASK;
 
 	return 0;
 }
@@ -135,8 +172,12 @@ static void tegra234_set_cpu_ndiv(struct cpufreq_policy *policy, u64 ndiv)
 	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
 	u32 cpu;
 
-	for_each_cpu(cpu, policy->cpus)
-		writel(ndiv, data->cpu_data[cpu].freq_core_reg);
+	for_each_cpu(cpu, policy->cpus) {
+		void __iomem *reg = data->cpu_data[cpu].freq_core_reg;
+
+		if (reg)
+			writel(ndiv, reg);
+	}
 }
 
 /*
@@ -204,11 +245,11 @@ static const struct tegra_cpufreq_soc tegra238_cpufreq_soc = {
 	.refclk_delta_min = 16000,
 };
 
-static void tegra194_get_cpu_cluster_id(u32 cpu, u32 *cpuid, u32 *clusterid)
+static void tegra194_get_cpu_cluster_id(u32 *cpuid, u32 *clusterid)
 {
 	u64 mpidr;
 
-	smp_call_function_single(cpu, tegra_get_cpu_mpidr, &mpidr, true);
+	tegra_get_cpu_mpidr(&mpidr);
 
 	if (cpuid)
 		*cpuid = MPIDR_AFFINITY_LEVEL(mpidr, 0);
@@ -386,16 +427,21 @@ static unsigned int tegra194_get_speed(u32 cpu)
 {
 	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
 	u32 clusterid = data->cpu_data[cpu].clusterid;
+	u32 cpuid = data->cpu_data[cpu].cpuid;
 	struct cpufreq_frequency_table *pos;
 	unsigned int rate;
 	u64 ndiv;
 	int ret;
 
+	if (clusterid >= data->soc->num_clusters ||
+	    cpuid >= data->soc->maxcpus_per_cluster)
+		return 0;
+
 	/* reconstruct actual cpu freq using counters */
 	rate = tegra194_calculate_speed(cpu);
 
 	/* get last written ndiv value */
-	ret = data->soc->ops->get_cpu_ndiv(cpu, data->cpu_data[cpu].cpuid, clusterid, &ndiv);
+	ret = data->soc->ops->get_cpu_ndiv(cpu, cpuid, clusterid, &ndiv);
 	if (WARN_ON_ONCE(ret))
 		return rate;
 
@@ -681,28 +727,6 @@ tegra_cpufreq_bpmp_read_lut(struct platform_device *pdev, struct tegra_bpmp *bpm
 	return freq_table;
 }
 
-static int tegra194_cpufreq_store_physids(unsigned int cpu, struct tegra194_cpufreq_data *data)
-{
-	int num_cpus = data->soc->maxcpus_per_cluster * data->soc->num_clusters;
-	u32 cpuid, clusterid;
-	u64 mpidr_id;
-
-	if (cpu > (num_cpus - 1)) {
-		pr_err("cpufreq: wrong num of cpus or clusters in soc data\n");
-		return -EINVAL;
-	}
-
-	data->soc->ops->get_cpu_cluster_id(cpu, &cpuid, &clusterid);
-
-	mpidr_id = (clusterid * data->soc->maxcpus_per_cluster) + cpuid;
-
-	data->cpu_data[cpu].cpuid = cpuid;
-	data->cpu_data[cpu].clusterid = clusterid;
-	data->cpu_data[cpu].freq_core_reg = SCRATCH_FREQ_CORE_REG(data, mpidr_id);
-
-	return 0;
-}
-
 static int tegra194_cpufreq_probe(struct platform_device *pdev)
 {
 	const struct tegra_cpufreq_soc *soc;
@@ -710,7 +734,6 @@ static int tegra194_cpufreq_probe(struct platform_device *pdev)
 	struct tegra_bpmp *bpmp;
 	struct device *cpu_dev;
 	int err, i;
-	u32 cpu;
 
 	data = devm_kzalloc_obj(&pdev->dev, *data);
 	if (!data)
@@ -735,6 +758,12 @@ static int tegra194_cpufreq_probe(struct platform_device *pdev)
 		data->regs = devm_platform_ioremap_resource(pdev, 0);
 		if (IS_ERR(data->regs))
 			return PTR_ERR(data->regs);
+	}
+
+	if (nr_cpu_ids > data->soc->num_clusters *
+			 data->soc->maxcpus_per_cluster) {
+		dev_err(&pdev->dev, "wrong num of cpus or clusters in soc data\n");
+		return -EINVAL;
 	}
 
 	data->cpu_data = devm_kzalloc_objs(&pdev->dev, *data->cpu_data,
@@ -764,11 +793,24 @@ static int tegra194_cpufreq_probe(struct platform_device *pdev)
 		}
 	}
 
-	for_each_possible_cpu(cpu) {
-		err = tegra194_cpufreq_store_physids(cpu, data);
-		if (err)
-			goto err_free_res;
-	}
+	/*
+	 * Install the hotplug state before cpufreq_register_driver(), so that
+	 * cpu_data is filled in before cpufreq uses a CPU. This covers the
+	 * CPUs online now and those onlined later.
+	 *
+	 * cpufreq_get_driver_data() returns NULL until the driver is
+	 * registered. The _multi variant passes the callback its data
+	 * through cpuhp_node instead.
+	 */
+	err = cpuhp_setup_state_multi(CPUHP_AP_ONLINE_DYN, "cpufreq/tegra194:online",
+				      tegra_cpufreq_cpu_online, NULL);
+	if (err < 0)
+		goto err_free_res;
+	data->cpuhp_state = err;
+
+	err = cpuhp_state_add_instance(data->cpuhp_state, &data->cpuhp_node);
+	if (err)
+		goto remove_cpuhp_state;
 
 	tegra194_cpufreq_driver.driver_data = data;
 
@@ -776,7 +818,7 @@ static int tegra194_cpufreq_probe(struct platform_device *pdev)
 	cpu_dev = get_cpu_device(0);
 	if (!cpu_dev) {
 		err = -EPROBE_DEFER;
-		goto err_free_res;
+		goto remove_cpuhp_instance;
 	}
 
 	if (dev_pm_opp_of_get_opp_desc_node(cpu_dev)) {
@@ -789,6 +831,10 @@ static int tegra194_cpufreq_probe(struct platform_device *pdev)
 	if (!err)
 		goto put_bpmp;
 
+remove_cpuhp_instance:
+	cpuhp_state_remove_instance(data->cpuhp_state, &data->cpuhp_node);
+remove_cpuhp_state:
+	cpuhp_remove_multi_state(data->cpuhp_state);
 err_free_res:
 	tegra194_cpufreq_free_resources();
 put_bpmp:
@@ -798,7 +844,11 @@ put_bpmp:
 
 static void tegra194_cpufreq_remove(struct platform_device *pdev)
 {
+	struct tegra194_cpufreq_data *data = platform_get_drvdata(pdev);
+
 	cpufreq_unregister_driver(&tegra194_cpufreq_driver);
+	cpuhp_state_remove_instance(data->cpuhp_state, &data->cpuhp_node);
+	cpuhp_remove_multi_state(data->cpuhp_state);
 	tegra194_cpufreq_free_resources();
 }
 
