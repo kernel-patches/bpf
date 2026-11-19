@@ -138,10 +138,9 @@ static inline int __tun_vnet_hdr_get(int sz, unsigned int flags,
 		hdr->hdr_len = cpu_to_tun_vnet16(flags, hdr_len);
 	}
 
+	iov_iter_advance(from, sz - parsed_size);
 	if (hdr_len > iov_iter_count(from))
 		return -EINVAL;
-
-	iov_iter_advance(from, sz - parsed_size);
 
 	return hdr_len;
 }
