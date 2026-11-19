@@ -12,6 +12,7 @@
 #include "nbl_include/nbl_def_hw.h"
 #include "nbl_include/nbl_def_resource.h"
 #include "nbl_include/nbl_def_dispatch.h"
+#include "nbl_include/nbl_def_dev.h"
 #include "nbl_include/nbl_def_common.h"
 #include "nbl_core.h"
 
@@ -53,7 +54,27 @@ struct nbl_adapter *nbl_core_init(struct pci_dev *pdev,
 	ret = nbl_disp_init(adapter);
 	if (ret)
 		goto out_res_remove;
+
+	/*
+	 * Arm bus mastering before nbl_dev_init() hands the mailbox queues
+	 * to the hardware: it writes the ring addresses, sets QUEUE_EN and
+	 * rings the RX tail doorbell, and the device cannot fetch those
+	 * descriptors with Bus Master Enable clear - nothing re-kicks the
+	 * queue afterwards.  This is the first point where it is safe to
+	 * turn it on, because the MSI-X map scrub that must run with DMA
+	 * off (nbl_intr_setup_mgt(), called from nbl_res_init_leonis()
+	 * above) has already completed; see the comment in nbl_probe().
+	 */
+	pci_set_master(pdev);
+
+	ret = nbl_dev_init(adapter);
+	if (ret)
+		goto out_clear_master;
 	return adapter;
+
+out_clear_master:
+	pci_clear_master(pdev);
+	nbl_disp_remove(adapter);
 out_res_remove:
 	nbl_res_remove_leonis(adapter);
 out_chan_remove:
@@ -66,6 +87,7 @@ out:
 
 void nbl_core_remove(struct nbl_adapter *adapter)
 {
+	nbl_dev_remove(adapter);
 	nbl_disp_remove(adapter);
 	nbl_res_remove_leonis(adapter);
 	nbl_chan_remove_common(adapter);
@@ -270,7 +292,9 @@ static int nbl_probe(struct pci_dev *pdev,
 	dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64));
 
 	/*
-	 * Bus mastering is enabled only after nbl_core_init() returns.
+	 * Bus mastering stays off until the resource layer has scrubbed
+	 * FUNCTION_MSIX_MAP; nbl_core_init() runs that scrub and only then
+	 * enables it, right before the mailbox queues are armed.
 	 *
 	 * FUNCTION_MSIX_MAP survives a kexec or a forced unload without
 	 * FLR and there is no .shutdown callback to scrub it, so at this
@@ -281,17 +305,21 @@ static int nbl_probe(struct pci_dev *pdev,
 	 * reused memory is Bus Master Enable, which the PCI core cleared
 	 * on the way into this kernel.  nbl_intr_setup_mgt() invalidates
 	 * the entries from inside nbl_core_init(); enabling bus mastering
-	 * before that would re-open the window.  Everything up to that
-	 * point is host-side setup plus MMIO and nothing in it waits for
-	 * the device, so it does not need bus mastering.
+	 * before that would re-open the window.  What must not run with it
+	 * off either is nbl_dev_init(), which hands the mailbox rings to
+	 * the device, so nbl_core_init() turns it on between the two.
 	 */
 	adapter = nbl_core_init(pdev, &param);
 	if (IS_ERR(adapter)) {
 		dev_err(dev, "Nbl adapter init fail: %pe\n", adapter);
+		/*
+		 * nbl_core_init() enables bus mastering before its last
+		 * step, which is the one that failed.
+		 */
+		pci_clear_master(pdev);
 		return PTR_ERR(adapter);
 	}
 
-	pci_set_master(pdev);
 	pci_set_drvdata(pdev, adapter);
 
 	return 0;
