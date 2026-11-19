@@ -79,6 +79,20 @@ static int gpio_wdt_start(struct watchdog_device *wdd)
 	return gpio_wdt_ping(wdd);
 }
 
+/* Take over a running watchdog without changing the GPIO level */
+static int gpio_wdt_adopt(struct gpio_wdt_priv *priv)
+{
+	int level = gpiod_get_value_cansleep(priv->gpiod);
+
+	if (level < 0)
+		return level;
+
+	priv->state = level;
+	set_bit(WDOG_HW_RUNNING, &priv->wdd.status);
+
+	return gpiod_direction_output(priv->gpiod, priv->state);
+}
+
 static int gpio_wdt_stop(struct watchdog_device *wdd)
 {
 	struct gpio_wdt_priv *priv = watchdog_get_drvdata(wdd);
@@ -112,6 +126,7 @@ static int gpio_wdt_probe(struct platform_device *pdev)
 	enum gpiod_flags gflags;
 	unsigned int hw_margin;
 	const char *algo;
+	bool adopt = false;
 	int ret;
 
 	priv = devm_kzalloc_obj(dev, *priv);
@@ -120,12 +135,17 @@ static int gpio_wdt_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, priv);
 
+	priv->always_running = device_property_read_bool(dev, "always-running");
+
 	ret = device_property_read_string(dev, "hw_algo", &algo);
 	if (ret)
 		return ret;
 	if (!strcmp(algo, "toggle")) {
 		priv->hw_algo = HW_ALGO_TOGGLE;
-		gflags = GPIOD_IN;
+		/* Switching the GPIO to input could cause an edge */
+		adopt = priv->always_running &&
+			device_property_present(dev, "hw-min-interval-ms");
+		gflags = adopt ? GPIOD_ASIS : GPIOD_IN;
 	} else if (!strcmp(algo, "level")) {
 		priv->hw_algo = HW_ALGO_LEVEL;
 		gflags = GPIOD_OUT_LOW;
@@ -168,8 +188,6 @@ static int gpio_wdt_probe(struct platform_device *pdev)
 			return -EINVAL;
 	}
 
-	priv->always_running = device_property_read_bool(dev, "always-running");
-
 	watchdog_set_drvdata(&priv->wdd, priv);
 
 	priv->wdd.info		= &gpio_wdt_ident;
@@ -184,8 +202,13 @@ static int gpio_wdt_probe(struct platform_device *pdev)
 
 	watchdog_stop_on_reboot(&priv->wdd);
 
-	if (priv->always_running)
+	if (adopt) {
+		ret = gpio_wdt_adopt(priv);
+		if (ret)
+			return ret;
+	} else if (priv->always_running) {
 		gpio_wdt_start(&priv->wdd);
+	}
 
 	return devm_watchdog_register_device(dev, &priv->wdd);
 }
