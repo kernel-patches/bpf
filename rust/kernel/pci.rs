@@ -106,7 +106,7 @@ unsafe impl<T: Driver> driver::RegistrationOps for Adapter<T> {
             (*pdrv.get()).remove = Some(Self::remove_callback);
             (*pdrv.get()).id_table = T::ID_TABLE.as_ptr();
             (*pdrv.get()).driver_managed_dma = T::DRIVER_MANAGED_DMA.is_some();
-            if T::HAS_RESET_PREPARE || T::HAS_RESET_DONE {
+            if T::HAS_ERROR_DETECTED || T::HAS_RESET_PREPARE || T::HAS_RESET_DONE {
                 (*pdrv.get()).err_handler = &Self::ERROR_HANDLERS;
             }
             if T::HAS_SRIOV_ENABLE {
@@ -212,8 +212,36 @@ impl<T: Driver> Adapter<T> {
         T::reset_done(pdev, data);
     }
 
+    extern "C" fn error_detected_callback(
+        pdev: *mut bindings::pci_dev,
+        state: bindings::pci_channel_state_t,
+    ) -> bindings::pci_ers_result_t {
+        // SAFETY: PCI error recovery only ever calls the error_detected callback with a valid
+        // pointer to a `struct pci_dev`. AER (`report_error_detected()`) and EEH hold the device
+        // lock while calling it.
+        //
+        // INVARIANT: `pdev` is valid for the duration of `error_detected_callback()`.
+        let pdev = unsafe { &*pdev.cast::<Device<device::CoreInternal<'_>>>() };
+
+        // SAFETY: PCI error recovery only calls this callback for a device bound to this driver.
+        // The device lock excludes `probe_callback()` and `remove_callback()`, so the stored
+        // pointer has type `T::Data<'_>` and remains valid throughout this callback.
+        let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
+
+        let Some(state) = ChannelState::from_raw(state) else {
+            // PCI error recovery only reports the states `ChannelState` represents.
+            return ErsResult::None.as_raw();
+        };
+
+        T::error_detected(pdev, data, state).as_raw()
+    }
+
     const ERROR_HANDLERS: bindings::pci_error_handlers = bindings::pci_error_handlers {
-        error_detected: None,
+        error_detected: if T::HAS_ERROR_DETECTED {
+            Some(Self::error_detected_callback)
+        } else {
+            None
+        },
         mmio_enabled: None,
         slot_reset: None,
         reset_prepare: if T::HAS_RESET_PREPARE {
@@ -363,6 +391,55 @@ impl<D: ?Sized> DriverManagedDma<D> {
     }
 }
 
+/// The state of the I/O channel to a device, as reported by PCI error recovery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelState {
+    /// The I/O channel remains operational.
+    Normal,
+    /// I/O to the device is blocked.
+    Frozen,
+    /// The device has permanently failed.
+    PermanentFailure,
+}
+
+impl ChannelState {
+    fn from_raw(state: bindings::pci_channel_state_t) -> Option<Self> {
+        match state {
+            bindings::pci_channel_io_normal => Some(Self::Normal),
+            bindings::pci_channel_io_frozen => Some(Self::Frozen),
+            bindings::pci_channel_io_perm_failure => Some(Self::PermanentFailure),
+            _ => None,
+        }
+    }
+}
+
+/// The result a driver reports to PCI error recovery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErsResult {
+    /// The driver has no result to report.
+    None,
+    /// The driver can recover without a slot reset.
+    CanRecover,
+    /// The driver needs the slot to be reset.
+    NeedReset,
+    /// The device has failed completely and cannot be recovered.
+    Disconnect,
+    /// The driver has fully recovered and the device is operational.
+    Recovered,
+}
+
+impl ErsResult {
+    fn as_raw(self) -> bindings::pci_ers_result_t {
+        match self {
+            Self::None => bindings::pci_ers_result_PCI_ERS_RESULT_NONE,
+            Self::CanRecover => bindings::pci_ers_result_PCI_ERS_RESULT_CAN_RECOVER,
+            Self::NeedReset => bindings::pci_ers_result_PCI_ERS_RESULT_NEED_RESET,
+            Self::Disconnect => bindings::pci_ers_result_PCI_ERS_RESULT_DISCONNECT,
+            Self::Recovered => bindings::pci_ers_result_PCI_ERS_RESULT_RECOVERED,
+        }
+    }
+}
+
 /// `IdTable` type for PCI.
 pub type IdTable<T> = &'static dyn kernel::device_id::IdTable<DeviceId, T>;
 
@@ -460,6 +537,14 @@ pub trait Driver {
     /// Called after a PCI reset attempt, with the device lock held.
     #[optional]
     fn reset_done<'bound>(_dev: &Device<device::Core<'_>>, _this: Pin<&Self::Data<'bound>>);
+
+    /// Handle a PCI error and return the PCI recovery result, with the device lock held.
+    #[optional]
+    fn error_detected<'bound>(
+        _dev: &Device<device::Core<'_>>,
+        _this: Pin<&Self::Data<'bound>>,
+        _state: ChannelState,
+    ) -> ErsResult;
 
     /// Enables Single Root I/O Virtualization (SR-IOV) for a PF.
     ///
