@@ -42,7 +42,7 @@ $(OUTPUT)/xskxceiver: $(XSK_SRCS) $(wildcard xsk/*.h) \
 	$(call msg,CC,,$@)
 	$(Q)$(CC) -I$(top_srcdir)/tools/include $(CFLAGS) -I$(OUTPUT) \
 		-I$(SCRATCH_DIR)/include \
-		$(XSK_SRCS) $(BPFOBJ) $(LDLIBS) -lelf -lz -lpthread -o $@
+		$(XSK_SRCS) $(BPFOBJ) $(LDLIBS) -lelf -lz -o $@
 
 # TEST_GEN_FILES lacks xskxceiver when bpftool fails; clean it anyway.
 EXTRA_CLEAN += $(OUTPUT)/xskxceiver
