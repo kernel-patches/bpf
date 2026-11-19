@@ -296,7 +296,7 @@ static int aw88399_dev_get_vcalk(struct aw88399 *aw88399, int16_t *vcalk)
 	else
 		vcalk_val = vcalkh_val | vcalkl_val;
 
-	if (vcalk_val & AW88399_EF_VSN_GESLP_SIGN_MASK)
+	if (vcalk_val & (~AW88399_EF_VSN_GESLP_SIGN_MASK))
 		vcalk_val = vcalk_val | AW88399_EF_VSN_GESLP_SIGN_NEG;
 	*vcalk = (int16_t)vcalk_val;
 
