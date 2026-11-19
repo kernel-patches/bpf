@@ -1425,7 +1425,10 @@ static irqreturn_t phy_interrupt(int irq, void *phy_dat)
 	if (IS_ENABLED(CONFIG_PM_SLEEP) && READ_ONCE(phydev->irq_suspended)) {
 		struct net_device *netdev = phydev->attached_dev;
 
-		if (netdev) {
+		/* With MAC-managed PM, a postponed interrupt cannot tell
+		 * Wake-on-LAN from a link change the MAC causes.
+		 */
+		if (netdev && !phydev->mac_managed_pm) {
 			struct device *parent = netdev->dev.parent;
 
 			if (netdev->ethtool->wol_enabled)
@@ -1492,8 +1495,10 @@ void phy_request_interrupt(struct phy_device *phydev)
 
 	/* A line without users restarts at depth 0, so our disable is gone */
 	mutex_lock(&phydev->irq_pm_lock);
-	if (phydev->irq_rerun && !irq_has_action(phydev->irq_rerun_line))
+	if (phydev->irq_rerun && !irq_has_action(phydev->irq_rerun_line)) {
 		phydev->irq_rerun = false;
+		phydev->irq_wake_enabled = false;
+	}
 	mutex_unlock(&phydev->irq_pm_lock);
 
 	err = request_threaded_irq(phydev->irq, NULL, phy_interrupt,
@@ -1528,8 +1533,10 @@ void phy_free_interrupt(struct phy_device *phydev)
 	/* free_irq() shuts down a line left without users and the next request
 	 * resets its depth; mdio_bus_phy_resume_irq() enables a shared line.
 	 */
-	if (!irq_has_action(phydev->irq))
+	if (!irq_has_action(phydev->irq)) {
 		phydev->irq_rerun = false;
+		phydev->irq_wake_enabled = false;
+	}
 	mutex_unlock(&phydev->irq_pm_lock);
 }
 EXPORT_SYMBOL(phy_free_interrupt);

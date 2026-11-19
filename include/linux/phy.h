@@ -650,10 +650,12 @@ struct phy_oatc14_sqi_capability {
  * @mdix_ctrl: User setting of crossover
  * @pma_extable: Cached value of PMA/PMD Extended Abilities Register
  * @interrupts: Flag interrupts have been enabled
- * @irq_suspended: Flag indicating PHY is suspended and therefore interrupt
- *                 handling shall be postponed until PHY has resumed
+ * @irq_suspended: Flag indicating a system sleep transition, so interrupt
+ *                 handling shall be postponed until the PHY has resumed
  * @irq_rerun: Set by the postponed interrupt that disabled the line
  * @irq_rerun_line: The line the postponed interrupt disabled
+ * @irq_wake_enabled: Set while @irq_rerun_line is enabled for the noirq
+ *                    phase, as it wakes the system
  * @default_timestamp: Flag indicating whether we are using the phy
  *		       timestamp as the default one
  * @interface: enum phy_interface_t value
@@ -735,6 +737,7 @@ struct phy_device {
 	bool irq_suspended;
 	bool irq_rerun;
 	int irq_rerun_line;
+	bool irq_wake_enabled;
 
 	unsigned default_timestamp:1;
 

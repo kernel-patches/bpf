@@ -18,6 +18,7 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/irq.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/mdio.h>
@@ -377,10 +378,13 @@ static __maybe_unused int mdio_bus_phy_suspend(struct device *dev)
 	struct phy_device *phydev = to_phy_device(dev);
 	int ret;
 
+	/* An interrupt can fire while the MAC has the MDIO bus powered
+	 * down, whether or not the MAC manages PHY PM.
+	 */
+	mdio_bus_phy_suspend_irq(phydev);
+
 	if (phydev->mac_managed_pm)
 		return 0;
-
-	mdio_bus_phy_suspend_irq(phydev);
 
 	/* We must stop the state machine manually, otherwise it stops out of
 	 * control, possibly with the phydev->lock held. Upon resume, netdev
@@ -414,8 +418,10 @@ static __maybe_unused int mdio_bus_phy_resume(struct device *dev)
 	struct phy_device *phydev = to_phy_device(dev);
 	int ret;
 
-	if (phydev->mac_managed_pm)
+	if (phydev->mac_managed_pm) {
+		mdio_bus_phy_resume_irq(phydev);
 		return 0;
+	}
 
 	if (!phydev->suspended_by_mdio_bus)
 		goto no_resume;
@@ -446,8 +452,46 @@ no_resume:
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(mdio_bus_phy_pm_ops, mdio_bus_phy_suspend,
-			 mdio_bus_phy_resume);
+static __maybe_unused int mdio_bus_phy_suspend_noirq(struct device *dev)
+{
+	struct phy_device *phydev = to_phy_device(dev);
+	struct irq_data *d;
+
+	mutex_lock(&phydev->irq_pm_lock);
+	/* We enable the line a postponed interrupt disabled if the irq core
+	 * armed it for wakeup, so that it wakes the system.
+	 */
+	if (phydev->irq_rerun) {
+		d = irq_get_irq_data(phydev->irq_rerun_line);
+		if (d && irqd_irq_disabled(d) && irqd_is_wakeup_armed(d)) {
+			enable_irq(phydev->irq_rerun_line);
+			phydev->irq_wake_enabled = true;
+		}
+	}
+	mutex_unlock(&phydev->irq_pm_lock);
+
+	return 0;
+}
+
+static __maybe_unused int mdio_bus_phy_resume_noirq(struct device *dev)
+{
+	struct phy_device *phydev = to_phy_device(dev);
+
+	mutex_lock(&phydev->irq_pm_lock);
+	if (phydev->irq_wake_enabled) {
+		phydev->irq_wake_enabled = false;
+		disable_irq_nosync(phydev->irq_rerun_line);
+	}
+	mutex_unlock(&phydev->irq_pm_lock);
+
+	return 0;
+}
+
+static const struct dev_pm_ops mdio_bus_phy_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(mdio_bus_phy_suspend, mdio_bus_phy_resume)
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(mdio_bus_phy_suspend_noirq,
+				      mdio_bus_phy_resume_noirq)
+};
 
 /**
  * genphy_match_phy_device - match a PHY device with a PHY driver
