@@ -963,6 +963,10 @@ int bpf_bprintf_prepare(const char *fmt, u32 fmt_size, const u64 *raw_args,
 						       (tmp_buf_end - tmp_buf),
 						       "%pB",
 						       (void *)(long)raw_args[num_spec]);
+					if (err >= tmp_buf_end - tmp_buf) {
+						err = -ENOSPC;
+						goto out;
+					}
 					tmp_buf += (err + 1);
 				}
 
@@ -983,7 +987,7 @@ int bpf_bprintf_prepare(const char *fmt, u32 fmt_size, const u64 *raw_args,
 				goto nocopy_fmt;
 
 			sizeof_cur_ip = (fmt[i] == '4') ? 4 : 16;
-			if (tmp_buf_end - tmp_buf < sizeof_cur_ip) {
+			if (tmp_buf_end - tmp_buf < (ptrdiff_t)sizeof_cur_ip) {
 				err = -ENOSPC;
 				goto out;
 			}
@@ -1002,6 +1006,10 @@ int bpf_bprintf_prepare(const char *fmt, u32 fmt_size, const u64 *raw_args,
 			ip_spec[3] = fmt[i];
 			err = snprintf(tmp_buf, tmp_buf_end - tmp_buf,
 				       ip_spec, &cur_ip);
+			if (err >= tmp_buf_end - tmp_buf) {
+				err = -ENOSPC;
+				goto out;
+			}
 
 			tmp_buf += err + 1;
 			num_spec++;
@@ -1076,7 +1084,7 @@ fmt_str:
 nocopy_fmt:
 		if (tmp_buf) {
 			tmp_buf = PTR_ALIGN(tmp_buf, sizeof(u32));
-			if (tmp_buf_end - tmp_buf < sizeof_cur_arg) {
+			if (tmp_buf_end - tmp_buf < (ptrdiff_t)sizeof_cur_arg) {
 				err = -ENOSPC;
 				goto out;
 			}
