@@ -2818,8 +2818,12 @@ int unpoison_memory(unsigned long pfn)
 	 * flag in folio->private, which stays set on the leaked folio.
 	 */
 	if (folio_test_large(folio) &&
-	    folio_test_hugetlb_raw_hwp_unreliable(folio))
+	    folio_test_hugetlb_raw_hwp_unreliable(folio)) {
+		unpoison_pr_info("%#lx: cannot unpoison, poisoned subpages are unknown\n",
+				 pfn, &unpoison_rs);
+
 		goto unlock_mutex;
+	}
 
 	ghp = get_hwpoison_page(p, MF_UNPOISON);
 	if (!ghp) {
