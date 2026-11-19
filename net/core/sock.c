@@ -2818,6 +2818,10 @@ static bool can_skb_orphan_partial(const struct sk_buff *skb)
  */
 void skb_orphan_partial(struct sk_buff *skb)
 {
+#ifdef CONFIG_INET
+	if (skb->destructor == sock_pfree_ref)
+		return;
+#endif
 	if (skb_is_tcp_pure_ack(skb))
 		return;
 

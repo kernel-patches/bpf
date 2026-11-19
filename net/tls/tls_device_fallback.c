@@ -194,8 +194,9 @@ static void complete_skb(struct sk_buff *nskb, struct sk_buff *skb, int headln)
 
 	update_chksum(nskb, headln);
 
-	/* sock_efree means skb must gone through skb_orphan_partial() */
-	if (nskb->destructor == sock_efree)
+	/* these skbs hold a socket ref but aren't charged to sk_wmem_alloc */
+	if (nskb->destructor == sock_efree ||
+	    nskb->destructor == sock_pfree_ref)
 		return;
 
 	delta = nskb->truesize - skb->truesize;

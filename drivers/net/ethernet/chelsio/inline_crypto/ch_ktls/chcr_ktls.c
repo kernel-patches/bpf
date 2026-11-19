@@ -1669,7 +1669,10 @@ static void chcr_ktls_copy_record_in_skb(struct sk_buff *nskb,
 	nskb->truesize += record->len;
 	nskb->sk = skb->sk;
 	nskb->destructor = skb->destructor;
-	refcount_add(nskb->truesize, &nskb->sk->sk_wmem_alloc);
+	if (nskb->destructor == sock_pfree_ref)
+		sock_hold(nskb->sk);
+	else
+		refcount_add(nskb->truesize, &nskb->sk->sk_wmem_alloc);
 }
 
 /*

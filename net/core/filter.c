@@ -2559,14 +2559,17 @@ int skb_do_redirect(struct sk_buff *skb)
 	if (unlikely(!dev))
 		goto out_drop;
 
+#ifdef CONFIG_INET
 	/*
-	 * Prefetched sockets may borrow a listener under RCU. Orphan them
-	 * before redirects that can outlive this section. Peer ingress
-	 * stays in the same RCU section.
+	 * Prefetched listeners may be borrowed under RCU. Drop borrowed
+	 * assignments before redirects that can outlive this section.
+	 * Peer ingress stays in the same RCU section.
 	 */
-	if (skb_sk_is_prefetched(skb) &&
+	if (skb->destructor == sock_pfree &&
+	    !sk_is_refcounted(skb->sk) &&
 	    (!(flags & BPF_F_PEER) || (flags & BPF_F_EGRESS)))
 		skb_orphan(skb);
+#endif
 	if (flags & BPF_F_PEER) {
 		dev = skb_get_peer_dev(dev);
 		if (unlikely(!dev ||
@@ -8115,21 +8118,26 @@ static const struct bpf_func_proto bpf_tcp_gen_syncookie_proto = {
 
 BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 {
+	bool egress = !skb_at_tc_ingress(skb);
+	bool refcounted;
+
 	if (!sk || flags != 0)
 		return -EINVAL;
-	if (!skb_at_tc_ingress(skb))
+	if (egress && (!sk_fullsock(sk) || !sk_is_refcounted(sk) ||
+		       skb_is_decrypted(skb)))
 		return -EOPNOTSUPP;
+	refcounted = egress || sk_is_refcounted(sk);
 	if (unlikely(dev_net(skb->dev) != sock_net(sk)))
 		return -ENETUNREACH;
 	if (sk_unhashed(sk))
 		return -EOPNOTSUPP;
-	if (sk_is_refcounted(sk) &&
+	if (refcounted &&
 	    unlikely(!refcount_inc_not_zero_acquire(&sk->sk_refcnt)))
 		return -ENOENT;
 
 	skb_orphan(skb);
 	skb->sk = sk;
-	skb->destructor = sock_pfree;
+	skb->destructor = egress ? sock_pfree_ref : sock_pfree;
 
 	return 0;
 }

@@ -4611,7 +4611,9 @@ union bpf_attr {
  *		**bpf_clone_redirect**\ () or other methods outside of BPF may
  *		interfere with successful delivery to the socket.
  *
- *		This operation is only valid from TC ingress path.
+ *		This operation is valid from TC ingress and egress paths.
+ *		On egress, only full refcounted sockets are accepted.
+ *		Software GSO segmentation after assignment is unsupported.
  *
  *		The *flags* argument must be zero.
  *	Return
@@ -4623,8 +4625,8 @@ union bpf_attr {
  *
  *		**-ENETUNREACH** if the socket is unreachable (wrong netns).
  *
- *		**-EOPNOTSUPP** if the operation is not supported, for example
- *		a call from outside of TC ingress.
+ *		**-EOPNOTSUPP** if the socket is unhashed, or TC egress uses
+ *		a non-full or non-refcounted socket or a decrypted packet.
  *
  * long bpf_sk_assign(struct bpf_sk_lookup *ctx, struct bpf_sock *sk, u64 flags)
  *	Description
