@@ -541,6 +541,16 @@ static int ufs_mtk_mphy_power_on(struct ufs_hba *hba, bool on)
 		if (ufs_mtk_is_va09_supported(hba)) {
 			ufs_mtk_va09_pwr_ctrl(res, 0);
 			ret = regulator_disable(host->reg_va09);
+			if (ret) {
+				/*
+				 * The va09 regulator stays enabled, so
+				 * bring the M-PHY back up to keep the
+				 * software state in sync with the
+				 * hardware.
+				 */
+				ufs_mtk_va09_pwr_ctrl(res, 1);
+				phy_power_on(mphy);
+			}
 		}
 	}
 out:
