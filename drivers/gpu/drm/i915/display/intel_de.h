@@ -8,19 +8,12 @@
 
 #include "intel_display_core.h"
 #include "intel_dsb.h"
-#include "intel_uncore.h"
-#include "intel_uncore_trace.h"
 
 struct intel_mmio_funcs {
 	u32 (*read)(struct intel_display *display, intel_reg_t reg);
 	void (*write)(struct intel_display *display, intel_reg_t reg, u32 val);
 	bool (*check_for_unclaimed_mmio)(struct intel_display *display);
 };
-
-static inline struct intel_uncore *__to_uncore(struct intel_display *display)
-{
-	return display->mmio.uncore;
-}
 
 void intel_de_init(struct intel_display *display);
 bool intel_de_unclaimed_mmio_detected(struct intel_display *display);
@@ -101,23 +94,8 @@ int intel_de_wait_for_clear_ms(struct intel_display *display, intel_reg_t reg,
  * therefore generally be serialised, by either the dev_priv->uncore.lock or
  * a more localised lock guarding all access to that bank of registers.
  */
-static inline u32
-intel_de_read_fw(struct intel_display *display, intel_reg_t reg)
-{
-	u32 val;
-
-	val = intel_uncore_read_fw(__to_uncore(display), reg);
-	trace_i915_reg_rw(false, reg, val, sizeof(val), true);
-
-	return val;
-}
-
-static inline void
-intel_de_write_fw(struct intel_display *display, intel_reg_t reg, u32 val)
-{
-	trace_i915_reg_rw(true, reg, val, sizeof(val), true);
-	intel_uncore_write_fw(__to_uncore(display), reg, val);
-}
+u32 intel_de_read_fw(struct intel_display *display, intel_reg_t reg);
+void intel_de_write_fw(struct intel_display *display, intel_reg_t reg, u32 val);
 
 static inline u32
 intel_de_rmw_fw(struct intel_display *display, intel_reg_t reg, u32 clear, u32 set)

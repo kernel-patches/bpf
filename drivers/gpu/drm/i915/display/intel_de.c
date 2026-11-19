@@ -10,6 +10,13 @@
 #include "intel_de.h"
 #include "intel_display_regs.h"
 #include "intel_display_rpm.h"
+#include "intel_uncore.h"
+#include "intel_uncore_trace.h"
+
+static inline struct intel_uncore *__to_uncore(struct intel_display *display)
+{
+	return display->mmio.uncore;
+}
 
 static int intel_de_wait_for_register(struct intel_display *display,
 				      intel_reg_t reg, u32 mask, u32 value,
@@ -165,11 +172,39 @@ u16 intel_de_read16(struct intel_display *display, intel_reg_t reg)
 	return intel_uncore_read16(__to_uncore(display), reg);
 }
 
+static __always_inline u32
+__intel_de_read_fw(struct intel_display *display, intel_reg_t reg)
+{
+	u32 val;
+
+	val = intel_uncore_read_fw(__to_uncore(display), reg);
+	trace_i915_reg_rw(false, reg, val, sizeof(val), true);
+
+	return val;
+}
+
+static __always_inline void
+__intel_de_write_fw(struct intel_display *display, intel_reg_t reg, u32 val)
+{
+	trace_i915_reg_rw(true, reg, val, sizeof(val), true);
+	intel_uncore_write_fw(__to_uncore(display), reg, val);
+}
+
+u32 intel_de_read_fw(struct intel_display *display, intel_reg_t reg)
+{
+	return __intel_de_read_fw(display, reg);
+}
+
+void intel_de_write_fw(struct intel_display *display, intel_reg_t reg, u32 val)
+{
+	__intel_de_write_fw(display, reg, val);
+}
+
 static bool hsw_check_for_unclaimed_mmio(struct intel_display *display)
 {
 	u32 dbg;
 
-	dbg = intel_de_read_fw(display, FPGA_DBG);
+	dbg = __intel_de_read_fw(display, FPGA_DBG);
 	if (likely(!(dbg & FPGA_DBG_RM_NOCLAIM)))
 		return false;
 
@@ -189,7 +224,7 @@ static bool hsw_check_for_unclaimed_mmio(struct intel_display *display)
 		drm_err(display->drm,
 			"Lost access to MMIO BAR; all registers now read back as 0xFFFFFFFF!\n");
 
-	intel_de_write_fw(display, FPGA_DBG, FPGA_DBG_RM_NOCLAIM);
+	__intel_de_write_fw(display, FPGA_DBG, FPGA_DBG_RM_NOCLAIM);
 
 	return true;
 }
@@ -198,11 +233,11 @@ static bool vlv_check_for_unclaimed_mmio(struct intel_display *display)
 {
 	u32 cer;
 
-	cer = intel_de_read_fw(display, CLAIM_ER);
+	cer = __intel_de_read_fw(display, CLAIM_ER);
 	if (likely(!(cer & (CLAIM_ER_OVERFLOW | CLAIM_ER_CTR_MASK))))
 		return false;
 
-	intel_de_write_fw(display, CLAIM_ER, CLAIM_ER_CLR);
+	__intel_de_write_fw(display, CLAIM_ER, CLAIM_ER_CLR);
 
 	return true;
 }
@@ -348,7 +383,7 @@ __intel_de_read(struct intel_display *display, intel_reg_t reg,
 	__mmio_lock_pre(display, &irqflags, mmio_flags);
 	__mmio_unclaimed_pre(display, reg, false, mmio_flags);
 
-	val = intel_de_read_fw(display, reg);
+	val = __intel_de_read_fw(display, reg);
 
 	__mmio_unclaimed_post(display, reg, false, mmio_flags);
 	__mmio_lock_post(display, irqflags, mmio_flags);
@@ -369,7 +404,7 @@ __intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val,
 	__mmio_lock_pre(display, &irqflags, mmio_flags);
 	__mmio_unclaimed_pre(display, reg, true, mmio_flags);
 
-	intel_de_write_fw(display, reg, val);
+	__intel_de_write_fw(display, reg, val);
 
 	__mmio_unclaimed_post(display, reg, true, mmio_flags);
 	__mmio_lock_post(display, irqflags, mmio_flags);
