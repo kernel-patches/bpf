@@ -393,6 +393,7 @@ static netdev_tx_t lan966x_port_xmit(struct sk_buff *skb,
 	struct lan966x_port *port = netdev_priv(dev);
 	struct lan966x *lan966x = port->lan966x;
 	__be32 ifh[IFH_LEN];
+	netdev_tx_t ret;
 	int err;
 
 	memset(ifh, 0x0, sizeof(__be32) * IFH_LEN);
@@ -405,8 +406,11 @@ static netdev_tx_t lan966x_port_xmit(struct sk_buff *skb,
 
 	if (port->lan966x->ptp && skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) {
 		err = lan966x_ptp_txtstamp_request(port, skb);
-		if (err)
-			return err;
+		if (err) {
+			dev_kfree_skb_any(skb);
+			dev->stats.tx_dropped++;
+			return NETDEV_TX_OK;
+		}
 
 		lan966x_ifh_set_rew_op(ifh, LAN966X_SKB_CB(skb)->rew_op);
 		lan966x_ifh_set_oam_type(ifh, LAN966X_SKB_CB(skb)->pdu_type);
@@ -415,12 +419,12 @@ static netdev_tx_t lan966x_port_xmit(struct sk_buff *skb,
 
 	spin_lock(&lan966x->tx_lock);
 	if (port->lan966x->fdma)
-		err = lan966x->ops->fdma_xmit(skb, ifh, dev);
+		ret = lan966x->ops->fdma_xmit(skb, ifh, dev);
 	else
-		err = lan966x_port_ifh_xmit(skb, ifh, dev);
+		ret = lan966x_port_ifh_xmit(skb, ifh, dev);
 	spin_unlock(&lan966x->tx_lock);
 
-	return err;
+	return ret;
 }
 
 static int lan966x_port_change_mtu(struct net_device *dev, int new_mtu)
