@@ -64,7 +64,9 @@
  * - One process listens on a TCP control port (--listen), the other one
  *   connects to it and the two synchronize each test step over that
  *   connection
- * - Tx process Transmits a number of packets from veth<xxxx> to veth<yyyy>
+ * - Tx process transmits a number of UDP packets over IPv4 or IPv6 from
+ *   veth<xxxx> to veth<yyyy>, and the XDP program of Rx passes other traffic
+ *   to the stack
  * - Rx process verifies if all packets were received and delivered in-order,
  *   and have the right content
  */
@@ -81,6 +83,7 @@
 #include <linux/align.h>
 #include <arpa/inet.h>
 #include <net/if.h>
+#include <netinet/ether.h>
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -112,9 +115,18 @@ static bool opt_listen;
 static const char *opt_peer_host;
 static const char *opt_peer_port;
 static const char *opt_ifname;
+static const char *opt_src_ip;
+static const char *opt_dst_ip;
+static const struct ether_addr *opt_dst_mac;
+static struct ether_addr dst_mac;
+static u16 opt_udp_port;
 
 enum {
 	OPT_LISTEN = 256,
+	OPT_SRC_IP,
+	OPT_DST_IP,
+	OPT_DST_MAC,
+	OPT_UDP_PORT,
 };
 
 static void __exit_with_error(int error, const char *file, const char *func, int line)
@@ -180,6 +192,10 @@ static struct option long_options[] = {
 	{"peer", required_argument, 0, 'p'},
 	{"peer-port", required_argument, 0, 'P'},
 	{"listen", no_argument, 0, OPT_LISTEN},
+	{"src-ip", required_argument, 0, OPT_SRC_IP},
+	{"dst-ip", required_argument, 0, OPT_DST_IP},
+	{"dst-mac", required_argument, 0, OPT_DST_MAC},
+	{"udp-port", required_argument, 0, OPT_UDP_PORT},
 	{"help", no_argument, 0, 'h'},
 	{0, 0, 0, 0}
 };
@@ -187,7 +203,8 @@ static struct option long_options[] = {
 static void print_usage(char **argv)
 {
 	const char *str =
-		"  Usage: %s -i IFACE -e rx|tx -m MODE -t TEST -p HOST -P PORT [OPTIONS]\n"
+		"  Usage: %s -i IFACE -e rx|tx -m MODE -t TEST -p HOST -P PORT\n"
+		"                    --src-ip IP --dst-ip IP --dst-mac MAC --udp-port PORT [OPTIONS]\n"
 		"  Options:\n"
 		"  -i, --interface      Use interface\n"
 		"  -v, --verbose        Verbose output\n"
@@ -199,6 +216,10 @@ static void print_usage(char **argv)
 		"  -p, --peer           Control host: IPv4/IPv6 address or hostname\n"
 		"  -P, --peer-port      Control TCP port\n"
 		"      --listen         Listen on the control port instead of connecting\n"
+		"      --src-ip IP      IPv4 or IPv6 source address of the test packets\n"
+		"      --dst-ip IP      Destination address, of the same family\n"
+		"      --dst-mac MAC    Destination MAC address of the test packets\n"
+		"      --udp-port PORT  UDP destination port, and source port of socket 0\n"
 		"  -h, --help           Display this help and exit\n";
 
 	ksft_print_msg(str, basename(argv[0]));
@@ -294,6 +315,20 @@ static void parse_command_line(struct ifobject *ifobj_tx, struct ifobject *ifobj
 		case OPT_LISTEN:
 			opt_listen = true;
 			break;
+		case OPT_SRC_IP:
+			opt_src_ip = optarg;
+			break;
+		case OPT_DST_IP:
+			opt_dst_ip = optarg;
+			break;
+		case OPT_DST_MAC:
+			opt_dst_mac = ether_aton_r(optarg, &dst_mac);
+			if (!opt_dst_mac)
+				print_usage(argv);
+			break;
+		case OPT_UDP_PORT:
+			opt_udp_port = strtoul(optarg, NULL, 10);
+			break;
 		case 'h':
 		default:
 			print_usage(argv);
@@ -302,7 +337,8 @@ static void parse_command_line(struct ifobject *ifobj_tx, struct ifobject *ifobj
 
 	if (!opt_ifname || opt_endpoint_role == XSK_ENDPOINT_NONE || !opt_peer_host ||
 	    !*opt_peer_host || !opt_peer_port || opt_run_test == RUN_ALL_TESTS ||
-	    opt_mode == TEST_MODE_ALL)
+	    opt_mode == TEST_MODE_ALL || !opt_src_ip || !opt_dst_ip || !opt_dst_mac ||
+	    !opt_udp_port)
 		print_usage(argv);
 }
 
@@ -417,6 +453,8 @@ static int setup_peer(struct ifobject *local, struct ifobject *shadow,
 	}
 
 	shadow->caps = local->caps;
+	memcpy(shadow->caps.mac, opt_dst_mac->ether_addr_octet, ETH_ALEN);
+
 	xsk_set_endpoint(*peer);
 	return TEST_PASS;
 }
@@ -474,6 +512,10 @@ int main(int argc, char **argv)
 		ksft_print_msg("Error: test %u does not exist.\n", opt_run_test);
 		ksft_exit_xfail();
 	}
+
+	/* Before the default packet streams, which have its minimum size. */
+	if (xsk_set_flow(opt_src_ip, opt_dst_ip, opt_udp_port))
+		print_usage(argv);
 
 	/* swap_directions() swaps the workers, so the shadow needs one too. */
 	ifobj_tx->func_ptr = worker_testapp_validate_tx;

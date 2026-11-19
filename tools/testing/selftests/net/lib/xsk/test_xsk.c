@@ -3,10 +3,14 @@
 #include <bpf/bpf.h>
 #include <errno.h>
 #include <limits.h>
+#include <linux/align.h>
 #include <linux/bitmap.h>
 #include <linux/if_link.h>
 #include <linux/mman.h>
 #include <linux/netdev.h>
+#include <linux/ip.h>
+#include <linux/ipv6.h>
+#include <linux/udp.h>
 #include <poll.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -20,14 +24,14 @@
 #include "xsk_xdp_progs.skel.h"
 
 #define DEFAULT_BATCH_SIZE		64
-#define MIN_PKT_SIZE			64
+/* Payload of the smallest packet, which is 64 bytes over IPv4 */
+#define MIN_PAYLOAD_SIZE		20
 #define MAX_ETH_JUMBO_SIZE		9000
 #define MAX_INTERFACES			2
 #define MAX_TEARDOWN_ITER		10
 #define MAX_TX_BUDGET_DEFAULT		32
 #define PKT_DUMP_NB_TO_PRINT		16
-/* Just to align the data in the packet */
-#define PKT_HDR_SIZE			(sizeof(struct ethhdr) + 2)
+#define PKT_HDR_SIZE			pkt_hdr_size
 #define POLL_TMOUT			1000
 #define THREAD_TMOUT			3
 #define UMEM_HEADROOM_TEST_SIZE		128
@@ -36,9 +40,17 @@
 #define XSK_UMEM__LARGE_FRAME_SIZE	(3 * 1024)
 #define XSK_UMEM__MAX_FRAME_SIZE	(4 * 1024)
 
-static const u8 g_mac[ETH_ALEN] = {0x55, 0x44, 0x33, 0x22, 0x11, 0x00};
+/* The test flow, UDP over IPv4 or IPv6 */
+static int flow_family;
+static union {
+	struct in_addr v4;
+	struct in6_addr v6;
+} flow_src, flow_dst;
+static u16 udp_port;
+static u32 pkt_hdr_size;
 
 bool opt_verbose;
+int min_pkt_size;
 
 int pkts_in_flight;
 static struct xsk_peer *ctrl_peer;
@@ -80,19 +92,132 @@ static int pacing_tx_sync(void)
  */
 static void write_payload(void *dest, u32 pkt_nb, u32 start, u32 size)
 {
-	u32 *ptr = (u32 *)dest, i;
+	u32 *ptr = (u32 *)dest, i, words = size / sizeof(*ptr);
 
 	start /= sizeof(*ptr);
-	size /= sizeof(*ptr);
-	for (i = 0; i < size; i++)
+	for (i = 0; i < words; i++)
 		ptr[i] = htonl(pkt_nb << 16 | (i + start));
+	/* The UDP checksum counts a partial last word as zero. */
+	memset(ptr + words, 0, size % sizeof(*ptr));
 }
 
-static void gen_eth_hdr(struct xsk_socket_info *xsk, struct ethhdr *eth_hdr)
+int xsk_set_flow(const char *src_ip, const char *dst_ip, u16 port)
 {
+	u32 ip_hdr_size;
+
+	if (inet_pton(AF_INET, src_ip, &flow_src) == 1 &&
+	    inet_pton(AF_INET, dst_ip, &flow_dst) == 1) {
+		flow_family = AF_INET;
+		ip_hdr_size = sizeof(struct iphdr);
+	} else if (inet_pton(AF_INET6, src_ip, &flow_src) == 1 &&
+		   inet_pton(AF_INET6, dst_ip, &flow_dst) == 1) {
+		flow_family = AF_INET6;
+		ip_hdr_size = sizeof(struct ipv6hdr);
+	} else {
+		return -EINVAL;
+	}
+	if (!port)
+		return -EINVAL;
+
+	udp_port = port;
+	pkt_hdr_size = sizeof(struct ethhdr) + ip_hdr_size +
+		       sizeof(struct udphdr) + PKT_HDR_PAD;
+	/* A multiple of 8, so that a packet that a case puts MIN_PKT_SIZE / 2
+	 * before a boundary keeps its payload 4-byte aligned.
+	 */
+	min_pkt_size = ALIGN(pkt_hdr_size + MIN_PAYLOAD_SIZE, 8);
+	return 0;
+}
+
+/* Add up buf as big-endian 16-bit words, len being even. */
+static u32 csum_add(u32 sum, const void *buf, size_t len)
+{
+	const u8 *pos = buf;
+
+	for (; len > 1; len -= 2, pos += 2)
+		sum += pos[0] << 8 | pos[1];
+	return sum;
+}
+
+static u16 csum_fold(u32 sum)
+{
+	while (sum >> 16)
+		sum = (sum & 0xffff) + (sum >> 16);
+	return htons((u16)~sum);
+}
+
+/* The sum of the payload of len bytes that write_payload() writes: each
+ * word holds pkt_nb and the index of the word in its two 16-bit halves.
+ */
+static u32 payload_csum(u32 pkt_nb, u32 len)
+{
+	u32 words = len / sizeof(u32);
+
+	return words * (pkt_nb & 0xffff) + words * (words - 1) / 2;
+}
+
+static u16 udp6_csum(const struct ipv6hdr *ip6, const struct udphdr *udp, u32 pkt_nb)
+{
+	u32 len = ntohs(udp->len), sum;
+
+	sum = csum_add(0, &ip6->saddr, sizeof(ip6->saddr));
+	sum = csum_add(sum, &ip6->daddr, sizeof(ip6->daddr));
+	sum += len + IPPROTO_UDP;
+	sum = csum_add(sum, udp, sizeof(*udp));
+	/* The pad in front of the payload is zero. */
+	sum += payload_csum(pkt_nb, len - sizeof(*udp) - PKT_HDR_PAD);
+	return csum_fold(sum) ?: 0xffff;
+}
+
+static void gen_pkt_hdr(struct xsk_socket_info *xsk, void *data, u32 pkt_nb, u32 total_len)
+{
+	u32 ip_len = total_len - sizeof(struct ethhdr);
+	struct ethhdr *eth_hdr = data;
+	struct udphdr udp = {
+		.source = htons(xsk->src_port),
+		.dest = htons(udp_port),
+	};
+	void *ptr = eth_hdr + 1;
+
 	memcpy(eth_hdr->h_dest, xsk->dst_mac, ETH_ALEN);
 	memcpy(eth_hdr->h_source, xsk->src_mac, ETH_ALEN);
-	eth_hdr->h_proto = htons(ETH_P_LOOPBACK);
+
+	if (flow_family == AF_INET6) {
+		struct ipv6hdr ip6 = {
+			.version = 6,
+			.payload_len = htons(ip_len - sizeof(ip6)),
+			.nexthdr = IPPROTO_UDP,
+			.hop_limit = 64,
+			.saddr = flow_src.v6,
+			.daddr = flow_dst.v6,
+		};
+
+		eth_hdr->h_proto = htons(ETH_P_IPV6);
+		udp.len = ip6.payload_len;
+		udp.check = udp6_csum(&ip6, &udp, pkt_nb);
+		memcpy(ptr, &ip6, sizeof(ip6));
+		ptr += sizeof(ip6);
+	} else {
+		/* Without a checksum, which UDP over IPv4 does not require */
+		struct iphdr ip = {
+			.version = 4,
+			.ihl = 5,
+			.ttl = 64,
+			.protocol = IPPROTO_UDP,
+			.tot_len = htons(ip_len),
+			.saddr = flow_src.v4.s_addr,
+			.daddr = flow_dst.v4.s_addr,
+		};
+
+		eth_hdr->h_proto = htons(ETH_P_IP);
+		udp.len = htons(ip_len - sizeof(ip));
+		ip.check = csum_fold(csum_add(0, &ip, sizeof(ip)));
+		memcpy(ptr, &ip, sizeof(ip));
+		ptr += sizeof(ip);
+	}
+
+	memcpy(ptr, &udp, sizeof(udp));
+	memset(ptr + sizeof(udp), 0, PKT_HDR_PAD);
 }
 
 u32 mode_to_xdp_flags(enum test_mode mode)
@@ -207,6 +332,7 @@ static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 
 	for (i = 0; i < MAX_INTERFACES; i++) {
 		struct ifobject *ifobj = i ? ifobj_rx : ifobj_tx;
+		struct ifobject *peer = i ? ifobj_tx : ifobj_rx;
 		struct xsk_umem_info *umem;
 
 		ifobj->xsk = &ifobj->xsk_arr[0];
@@ -238,10 +364,10 @@ static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 			else
 				xsk->pkt_stream = test->rx_pkt_stream_default;
 
-			memcpy(xsk->src_mac, g_mac, ETH_ALEN);
-			memcpy(xsk->dst_mac, g_mac, ETH_ALEN);
-			xsk->src_mac[5] += ((j * 2) + 0);
-			xsk->dst_mac[5] += ((j * 2) + 1);
+			memcpy(xsk->src_mac, ifobj->caps.mac, ETH_ALEN);
+			memcpy(xsk->dst_mac, peer->caps.mac, ETH_ALEN);
+			/* xsk_xdp_shared_umem() picks the socket by it. */
+			xsk->src_port = udp_port + j;
 		}
 
 		ifobj->xsk->umem->num_frames = DEFAULT_UMEM_BUFFERS;
@@ -442,6 +568,19 @@ static u32 pkt_nb_frags(u32 frame_size, struct pkt_stream *pkt_stream, struct pk
 	return nb_frags;
 }
 
+/* A verbatim stream has one entry per descriptor, so add up the packet's. */
+static u32 pkt_total_len(struct pkt_stream *pkt_stream, struct pkt *pkt, u32 nb_frags)
+{
+	u32 i, len = 0;
+
+	if (!pkt_stream->verbatim)
+		return pkt->len;
+
+	for (i = 0; i < nb_frags; i++)
+		len += pkt[i].len;
+	return len;
+}
+
 static bool set_pkt_valid(int offset, u32 len)
 {
 	return len <= MAX_ETH_JUMBO_SIZE;
@@ -626,7 +765,7 @@ static void pkt_stream_cancel(struct pkt_stream *pkt_stream)
 }
 
 static void pkt_generate(struct xsk_socket_info *xsk, struct xsk_umem_info *umem, u64 addr, u32 len,
-			 u32 pkt_nb, u32 bytes_written)
+			 u32 total_len, u32 pkt_nb, u32 bytes_written)
 {
 	void *data = xsk_umem__get_data(umem->buffer, addr);
 
@@ -634,7 +773,7 @@ static void pkt_generate(struct xsk_socket_info *xsk, struct xsk_umem_info *umem
 		return;
 
 	if (!bytes_written) {
-		gen_eth_hdr(xsk, data);
+		gen_pkt_hdr(xsk, data, pkt_nb, total_len);
 
 		len -= PKT_HDR_SIZE;
 		data += PKT_HDR_SIZE;
@@ -727,10 +866,11 @@ static void pkt_print_data(u32 *data, u32 cnt)
 	}
 }
 
+/* With eth_header, len counts the bytes after the test header. */
 static void pkt_dump(void *pkt, u32 len, bool eth_header)
 {
 	struct ethhdr *ethhdr = pkt;
-	u32 i, *data;
+	u32 i, words, *data;
 
 	if (eth_header) {
 		/*extract L2 frame */
@@ -748,12 +888,13 @@ static void pkt_dump(void *pkt, u32 len, bool eth_header)
 	}
 
 	/*extract L5 frame */
+	words = len / sizeof(u32);
 	ksft_print_msg("\nDEBUG>> L5: seqnum: ");
-	pkt_print_data(data, PKT_DUMP_NB_TO_PRINT);
+	pkt_print_data(data, min_t(u32, words, PKT_DUMP_NB_TO_PRINT));
 	ksft_print_msg("....");
-	if (len > PKT_DUMP_NB_TO_PRINT * sizeof(u32)) {
+	if (words > PKT_DUMP_NB_TO_PRINT) {
 		ksft_print_msg("\n.... ");
-		pkt_print_data(data + len / sizeof(u32) - PKT_DUMP_NB_TO_PRINT,
+		pkt_print_data(data + words - PKT_DUMP_NB_TO_PRINT,
 			       PKT_DUMP_NB_TO_PRINT);
 	}
 	ksft_print_msg("\n---------------------------------------\n");
@@ -792,31 +933,12 @@ static bool is_metadata_correct(struct pkt *pkt, void *buffer, u64 addr)
 	return true;
 }
 
-static int is_adjust_tail_supported(struct xsk_xdp_progs *skel_rx, bool *supported)
+static bool is_adjust_tail_supported(struct xsk_xdp_progs *skel_rx)
 {
-	struct bpf_map *data_map;
-	int adjust_value = 0;
-	int key = 0;
-	int ret;
-
-	data_map = bpf_object__find_map_by_name(skel_rx->obj, "xsk_xdp_.bss");
-	if (!data_map || !bpf_map__is_internal(data_map)) {
-		ksft_print_msg("Error: could not find bss section of XDP program\n");
-		return -EINVAL;
-	}
-
-	ret = bpf_map_lookup_elem(bpf_map__fd(data_map), &key, &adjust_value);
-	if (ret) {
-		ksft_print_msg("Error: bpf_map_lookup_elem failed with error %d\n", ret);
-		return ret;
-	}
-
 	/* Set the 'adjust_value' variable to -EOPNOTSUPP in the XDP program if the adjust_tail
 	 * helper is not supported. Skip the adjust_tail test case in this scenario.
 	 */
-	*supported = adjust_value != -EOPNOTSUPP;
-
-	return 0;
+	return skel_rx->bss->adjust_value != -EOPNOTSUPP;
 }
 
 static bool is_frag_valid(struct xsk_umem_info *umem, u64 addr, u32 len, u32 expected_pkt_nb,
@@ -833,6 +955,11 @@ static bool is_frag_valid(struct xsk_umem_info *umem, u64 addr, u32 len, u32 exp
 	}
 	if (!umem->unaligned_mode && addr % umem->frame_size + len > umem->frame_size) {
 		ksft_print_msg("Frag crosses frame boundary addr: %llx len: %u\n",
+			       (unsigned long long)addr, len);
+		return false;
+	}
+	if (len < (bytes_processed ? 0 : PKT_HDR_SIZE) + sizeof(*pkt_data)) {
+		ksft_print_msg("Frag too short addr: %llx len: %u\n",
 			       (unsigned long long)addr, len);
 		return false;
 	}
@@ -877,12 +1004,13 @@ error:
 	return false;
 }
 
-static bool is_pkt_valid(struct pkt *pkt, void *buffer, u64 addr, u32 len)
+static bool is_pkt_valid(struct pkt *pkt, void *buffer, u64 addr, u32 frag_len, u32 len)
 {
 	if (pkt->len != len) {
 		ksft_print_msg("[%s] expected packet length [%d], got length [%d]\n",
 			       __func__, pkt->len, len);
-		pkt_dump(xsk_umem__get_data(buffer, addr), len, true);
+		/* Only the first fragment, which holds the header, is at addr. */
+		pkt_dump(xsk_umem__get_data(buffer, addr), frag_len - PKT_HDR_SIZE, true);
 		return false;
 	}
 
@@ -980,7 +1108,7 @@ static int complete_pkts(struct xsk_socket_info *xsk, int batch_size)
 
 static int __receive_pkts(struct test_spec *test, struct xsk_socket_info *xsk)
 {
-	u32 frags_processed = 0, nb_frags = 0, pkt_len = 0;
+	u32 frags_processed = 0, nb_frags = 0, pkt_len = 0, first_len = 0;
 	u32 idx_rx = 0, idx_fq = 0, rcvd, pkts_sent = 0;
 	struct pkt_stream *pkt_stream = xsk->pkt_stream;
 	struct ifobject *ifobj = test->ifobj_rx;
@@ -1057,8 +1185,10 @@ static int __receive_pkts(struct test_spec *test, struct xsk_socket_info *xsk)
 		    !is_metadata_correct(pkt, umem->buffer, addr)))
 			return TEST_FAILURE;
 
-		if (!nb_frags++)
+		if (!nb_frags++) {
 			first_addr = addr;
+			first_len = desc->len;
+		}
 		frags_processed++;
 		pkt_len += desc->len;
 		if (ifobj->use_fill_ring)
@@ -1068,7 +1198,7 @@ static int __receive_pkts(struct test_spec *test, struct xsk_socket_info *xsk)
 			continue;
 
 		/* The complete packet has been received */
-		if (!is_pkt_valid(pkt, umem->buffer, first_addr, pkt_len) ||
+		if (!is_pkt_valid(pkt, umem->buffer, first_addr, first_len, pkt_len) ||
 		    !is_offset_correct(umem, pkt, addr))
 			return TEST_FAILURE;
 
@@ -1218,7 +1348,7 @@ static int __send_pkts(struct ifobject *ifobject, struct xsk_socket_info *xsk,
 
 	for (i = 0; i < xsk->batch_size; i++) {
 		struct pkt *pkt = pkt_stream_get_next_tx_pkt(pkt_stream);
-		u32 nb_frags_left, nb_frags, bytes_written = 0;
+		u32 nb_frags_left, nb_frags, total_len, bytes_written = 0;
 
 		if (!pkt)
 			break;
@@ -1230,6 +1360,7 @@ static int __send_pkts(struct ifobject *ifobject, struct xsk_socket_info *xsk,
 			break;
 		}
 		nb_frags_left = nb_frags;
+		total_len = pkt_total_len(pkt_stream, pkt, nb_frags);
 
 		while (nb_frags_left--) {
 			struct xdp_desc *tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, idx + i);
@@ -1246,8 +1377,8 @@ static int __send_pkts(struct ifobject *ifobject, struct xsk_socket_info *xsk,
 				tx_desc->options = 0;
 			}
 			if (pkt->valid)
-				pkt_generate(xsk, umem, tx_desc->addr, tx_desc->len, pkt->pkt_nb,
-					     bytes_written);
+				pkt_generate(xsk, umem, tx_desc->addr, tx_desc->len, total_len,
+					     pkt->pkt_nb, bytes_written);
 			bytes_written += tx_desc->len;
 
 			print_verbose("Tx addr: %llx len: %u options: %u pkt_nb: %u\n",
@@ -1640,7 +1771,6 @@ static int testapp_prepare_rx_endpoint(struct test_spec *test,
 static int testapp_validate_rx_endpoint(struct test_spec *test,
 					struct ifobject *ifobject)
 {
-	bool supported;
 	int err;
 
 	err = receive_pkts(test);
@@ -1653,9 +1783,7 @@ static int testapp_validate_rx_endpoint(struct test_spec *test,
 	if (!test->adjust_tail)
 		return err;
 
-	if (is_adjust_tail_supported(ifobject->xdp_progs, &supported))
-		return TEST_FAILURE;
-	if (!supported) {
+	if (!is_adjust_tail_supported(ifobject->xdp_progs)) {
 		test->adjust_tail_support = false;
 		return TEST_PASS;
 	}
@@ -2293,6 +2421,8 @@ int xsk_load_xdp_programs(struct ifobject *ifobj)
 	if (libbpf_get_error(ifobj->xdp_progs))
 		return libbpf_get_error(ifobj->xdp_progs);
 
+	/* The shadow's copy too, swapped directions attach its programs. */
+	ifobj->xdp_progs->bss->test_port = udp_port;
 	return 0;
 }
 
@@ -2350,6 +2480,12 @@ int init_iface(struct ifobject *ifobj)
 	err = xsk_load_xdp_programs(ifobj);
 	if (err) {
 		ksft_print_msg("Error loading XDP program\n");
+		return err;
+	}
+
+	err = xsk_get_mac(ifobj->ifname, ifobj->caps.mac);
+	if (err) {
+		ksft_print_msg("Error reading interface MAC address\n");
 		return err;
 	}
 

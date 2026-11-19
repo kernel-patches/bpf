@@ -24,7 +24,7 @@
 #define DEFAULT_PKT_CNT			(4 * 1024)
 #define DEFAULT_UMEM_BUFFERS		(DEFAULT_PKT_CNT / 4)
 #define HUGEPAGE_SIZE			(2 * 1024 * 1024)
-#define MIN_PKT_SIZE			64
+#define MIN_PKT_SIZE			min_pkt_size
 #define MAX_ETH_PKT_SIZE		1518
 #define MAX_INTERFACE_NAME_CHARS	16
 #define MAX_TEST_NAME_SIZE		48
@@ -35,6 +35,8 @@
 #define SMP_CACHE_BYTES_PATH "/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size"
 
 extern bool opt_verbose;
+/* The smallest test packet, set by xsk_set_flow() */
+extern int min_pkt_size;
 #define print_verbose(x...) do { if (opt_verbose) ksft_print_msg(x); } while (0)
 
 
@@ -83,6 +85,7 @@ struct xsk_peer;
 
 /* The control channel to the other endpoint. */
 void xsk_set_endpoint(struct xsk_peer *peer);
+int xsk_set_flow(const char *src_ip, const char *dst_ip, u16 port);
 
 struct xsk_socket_info {
 	struct xsk_ring_cons rx;
@@ -95,6 +98,7 @@ struct xsk_socket_info {
 	u32 batch_size;
 	u8 dst_mac[ETH_ALEN];
 	u8 src_mac[ETH_ALEN];
+	u16 src_port;
 	bool check_consumer;
 };
 
@@ -129,6 +133,7 @@ struct xsk_caps {
 	u32 max_skb_frags;
 	u32 umem_tailroom;
 	u32 tx_max_pending;
+	u8 mac[ETH_ALEN];
 };
 
 struct ifobject {
