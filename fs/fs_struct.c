@@ -53,6 +53,21 @@ static inline int replace_path(struct path *p, const struct path *old, const str
 	return 1;
 }
 
+static inline int replace_fs_paths(struct fs_struct *fs,
+				   const struct path *old_root,
+				   const struct path *new_root)
+{
+	int hits = 0;
+
+	write_seqlock(&fs->seq);
+	hits += replace_path(&fs->root, old_root, new_root);
+	hits += replace_path(&fs->pwd, old_root, new_root);
+	for (int i = 0; i < hits; i++)
+		path_get(new_root);
+	write_sequnlock(&fs->seq);
+	return hits;
+}
+
 void chroot_fs_refs(const struct path *old_root, const struct path *new_root)
 {
 	struct task_struct *g, *p;
@@ -66,20 +81,15 @@ void chroot_fs_refs(const struct path *old_root, const struct path *new_root)
 
 		task_lock(p);
 		fs = p->real_fs;
-		if (fs) {
-			int hits = 0;
-			write_seqlock(&fs->seq);
-			hits += replace_path(&fs->root, old_root, new_root);
-			hits += replace_path(&fs->pwd, old_root, new_root);
-			while (hits--) {
-				count++;
-				path_get(new_root);
-			}
-			write_sequnlock(&fs->seq);
-		}
+		if (fs)
+			count += replace_fs_paths(fs, old_root, new_root);
 		task_unlock(p);
 	}
 	read_unlock(&tasklist_lock);
+
+	/* Kernel lookups and usermodehelpers use it even if no task shares it. */
+	count += replace_fs_paths(userspace_init_fs, old_root, new_root);
+
 	while (count--)
 		path_put(old_root);
 }
