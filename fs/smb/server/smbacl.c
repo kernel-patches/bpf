@@ -1077,8 +1077,15 @@ int build_sec_desc(const struct mnt_idmap *idmap,
 	pntsd->sacloffset = 0;
 	pntsd->revision = cpu_to_le16(1);
 	pntsd->type = cpu_to_le16(SELF_RELATIVE);
-	if (ppntsd)
+	if (ppntsd) {
 		pntsd->type |= ppntsd->type;
+		/* These DACL flags are returned only with the DACL */
+		if (!(addition_info & DACL_SECINFO))
+			pntsd->type &= ~cpu_to_le16(DACL_PRESENT |
+						    DACL_DEFAULTED |
+						    DACL_AUTO_INHERITED |
+						    DACL_PROTECTED);
+	}
 
 	if (addition_info & OWNER_SECINFO) {
 		pntsd->osidoffset = cpu_to_le32(offset);
