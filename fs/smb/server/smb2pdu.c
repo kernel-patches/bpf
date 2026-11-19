@@ -9522,8 +9522,10 @@ err_out:
 		rsp->hdr.Status = STATUS_EA_LIST_INCONSISTENT;
 	else if (rc == -EMSGSIZE)
 		rsp->hdr.Status = STATUS_INFO_LENGTH_MISMATCH;
-	else if (rc == -ENOSPC || rc == -EFBIG)
+	else if (rc == -ENOSPC || rc == -EFBIG || rc == -E2BIG)
 		rsp->hdr.Status = STATUS_DISK_FULL;
+	else if (rc == -ENOMEM)
+		rsp->hdr.Status = STATUS_INSUFFICIENT_RESOURCES;
 	else if (rc == -ESHARE)
 		rsp->hdr.Status = STATUS_SHARING_VIOLATION;
 	else if (rc == -ENOENT)
