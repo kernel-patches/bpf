@@ -71,6 +71,7 @@ struct tegra_cpufreq_soc {
 	u64 cnt_mask;
 	int maxcpus_per_cluster;
 	unsigned int num_clusters;
+	bool needs_mmio;
 	phys_addr_t actmon_cntr_base;
 	u32 refclk_delta_min;
 };
@@ -222,6 +223,7 @@ static struct tegra_cpufreq_ops tegra234_cpufreq_ops = {
 static const struct tegra_cpufreq_soc tegra234_cpufreq_soc = {
 	.ops = &tegra234_cpufreq_ops,
 	.cnt_mask = U32_MAX,
+	.needs_mmio = true,
 	.actmon_cntr_base = 0x9000,
 	.maxcpus_per_cluster = 4,
 	.num_clusters = 3,
@@ -231,6 +233,7 @@ static const struct tegra_cpufreq_soc tegra234_cpufreq_soc = {
 static const struct tegra_cpufreq_soc tegra238_cpufreq_soc = {
 	.ops = &tegra234_cpufreq_ops,
 	.cnt_mask = U32_MAX,
+	.needs_mmio = true,
 	.actmon_cntr_base = 0x4000,
 	.maxcpus_per_cluster = 8,
 	.num_clusters = 1,
@@ -739,8 +742,7 @@ static int tegra194_cpufreq_probe(struct platform_device *pdev)
 	if (!data->bpmp_luts)
 		return -ENOMEM;
 
-	if (soc->actmon_cntr_base) {
-		/* mmio registers are used for frequency request and re-construction */
+	if (soc->needs_mmio) {
 		data->regs = devm_platform_ioremap_resource(pdev, 0);
 		if (IS_ERR(data->regs))
 			return PTR_ERR(data->regs);
