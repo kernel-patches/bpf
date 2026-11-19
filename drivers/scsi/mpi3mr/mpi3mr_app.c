@@ -1499,7 +1499,7 @@ static long mpi3mr_get_all_tgt_info(struct mpi3mr_ioc *mrioc,
 	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
 
 	if ((job->request_payload.payload_len <= sizeof(u64)) ||
-		list_empty(&mrioc->tgtdev_list)) {
+		!num_devices) {
 		sg_copy_from_buffer(job->request_payload.sg_list,
 				    job->request_payload.sg_cnt,
 				    &num_devices, sizeof(num_devices));
