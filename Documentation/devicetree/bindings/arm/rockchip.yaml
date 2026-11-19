@@ -366,6 +366,7 @@ properties:
       - description: FriendlyElec NanoPi RK3528 series boards
         items:
           - enum:
+              - friendlyarm,nanopi-neo3-plus
               - friendlyarm,nanopi-r28s
               - friendlyarm,nanopi-zero2
           - const: rockchip,rk3528
