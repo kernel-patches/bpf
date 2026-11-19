@@ -607,6 +607,33 @@ bool sit9531x_input_prio_present(struct sit9531x_dev *sitdev, u8 pll_idx,
 }
 
 /*
+ * @input_idx is in hardware encoding (see sit9531x_input_hw_src()). A source
+ * the PLL has never listed reports the last slot index, 10. Caller must hold
+ * sitdev->multiop_lock.
+ */
+int sit9531x_input_prio_get(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 *prio)
+{
+	const struct sit9531x_chan *chan;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+	input_idx = sit9531x_prio_src_canon(sitdev, input_idx);
+	if (input_idx >= SIT9531X_PRIO_NUM_SRC)
+		return -EINVAL;
+
+	chan = &sitdev->chan[pll_idx];
+	if (chan->cfg_known & BIT(input_idx))
+		*prio = chan->cfg_prio[input_idx];
+	else
+		*prio = SIT9531X_PRIO_MAX_SLOTS - 1;
+
+	return 0;
+}
+
+/*
  * Take the configured priorities from the hardware table: a listed source gets
  * the first slot it occupies.
  */
@@ -736,7 +763,8 @@ static u8 sit9531x_prio_top_live(const struct sit9531x_dev *sitdev,
  * until it loses signal.
  */
 static u8 sit9531x_prio_activesel_pick(struct sit9531x_dev *sitdev,
-				       const u8 *old, const u8 *srcs, u8 cur)
+				       const u8 *old, const u8 *srcs, u8 cur,
+				       u8 routed)
 {
 	u8 top, i;
 
@@ -744,6 +772,12 @@ static u8 sit9531x_prio_activesel_pick(struct sit9531x_dev *sitdev,
 	if (top != SIT9531X_PRIO_SRC_NONE &&
 	    top != sit9531x_prio_top_live(sitdev, old))
 		return top;
+
+	if (sit9531x_prio_src_usable(routed) &&
+	    sit9531x_prio_src_live(sitdev, routed))
+		for (i = 0; i < SIT9531X_PRIO_MAX_SLOTS; i++)
+			if (srcs[i] == routed)
+				return routed;
 
 	cur = sit9531x_prio_src_canon(sitdev, cur & SIT9531X_PRIO_NIBBLE_MASK);
 
@@ -827,12 +861,19 @@ static int sit9531x_prio_table_commit(struct sit9531x_dev *sitdev, u8 pll_idx,
 
 	if (!empty) {
 		u8 sel = sit9531x_prio_slot_get(val, slot + 1);
+		u8 routed = SIT9531X_PRIO_SRC_NONE;
 
+		/*
+		 * The pick needs the signal state now, not as of the last poll;
+		 * the routed source is the last poll's sample.
+		 */
 		rc = sit9531x_input_mon_fetch(sitdev);
 		if (rc)
 			goto rollback;
+		if (!chan->stale && chan->routed_ref != SIT9531X_REF_INVALID)
+			routed = sit9531x_input_hw_src(chan->routed_ref);
 		sel = sit9531x_prio_activesel_pick(sitdev, chan->prio_srcs,
-						   srcs, sel);
+						   srcs, sel, routed);
 		val = sit9531x_prio_slot_set(val, slot + 1, sel);
 	}
 
@@ -981,6 +1022,59 @@ static int sit9531x_prio_table_apply(struct sit9531x_dev *sitdev, u8 pll_idx,
 		return 0;
 
 	return sit9531x_prio_table_commit(sitdev, pll_idx, srcs);
+}
+
+/*
+ * Check if the device holds the table the configured priorities give for
+ * @members.
+ */
+static bool sit9531x_prio_table_held(struct sit9531x_dev *sitdev, u8 pll_idx,
+				     u16 members)
+{
+	u8 srcs[SIT9531X_PRIO_MAX_SLOTS];
+
+	sit9531x_prio_table_build(sitdev, pll_idx, members, srcs);
+
+	return !memcmp(srcs, sitdev->chan[pll_idx].prio_srcs, sizeof(srcs));
+}
+
+/*
+ * @input_idx is in hardware encoding (0-11, see sit9531x_input_hw_src()). A
+ * source not in the table keeps the priority for when it is connected. Caller
+ * must hold sitdev->multiop_lock.
+ */
+int sit9531x_input_prio_set(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 prio)
+{
+	struct sit9531x_chan *chan;
+	u16 old_known;
+	u8 old_prio;
+	int rc;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+	input_idx = sit9531x_prio_src_canon(sitdev, input_idx);
+	if (input_idx >= SIT9531X_PRIO_NUM_SRC)
+		return -EINVAL;
+
+	chan = &sitdev->chan[pll_idx];
+	old_prio = chan->cfg_prio[input_idx];
+	old_known = chan->cfg_known;
+	chan->cfg_prio[input_idx] = prio;
+	chan->cfg_known |= BIT(input_idx);
+
+	if (!(chan->prio_mask & BIT(input_idx)))
+		return 0;
+
+	rc = sit9531x_prio_table_apply(sitdev, pll_idx, chan->prio_mask);
+	if (rc && !sit9531x_prio_table_held(sitdev, pll_idx, chan->prio_mask)) {
+		chan->cfg_prio[input_idx] = old_prio;
+		chan->cfg_known = old_known;
+	}
+
+	return rc;
 }
 
 /*
@@ -2226,6 +2320,14 @@ static int sit9531x_dpll_pins_register(struct sit9531x_dpll *sitdpll)
 			rc = PTR_ERR(pin);
 			goto error;
 		}
+
+		/*
+		 * Taken before the pin is published; see
+		 * sit9531x_dpll_pin_baseline().
+		 */
+		mutex_lock(&sitdpll->dev->multiop_lock);
+		sit9531x_dpll_pin_baseline(pin);
+		mutex_unlock(&sitdpll->dev->multiop_lock);
 
 		rc = sit9531x_dpll_pin_register(pin, index);
 		if (rc) {
