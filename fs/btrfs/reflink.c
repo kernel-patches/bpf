@@ -150,8 +150,12 @@ static int copy_inline_to_page(struct btrfs_inode *inode,
 	 *
 	 * So what's in the range [500, 4095] corresponds to zeroes.
 	 */
-	if (datal < block_size)
-		folio_zero_range(folio, datal, block_size - datal);
+	if (datal < block_size) {
+		const size_t foffset = offset_in_folio(folio, file_offset) + datal;
+		const size_t zero_len = round_up(foffset, block_size) - foffset;
+
+		folio_zero_range(folio, foffset, zero_len);
+	}
 
 	btrfs_folio_set_uptodate(fs_info, folio, file_offset, block_size);
 	btrfs_folio_set_dirty(fs_info, folio, file_offset, block_size);
