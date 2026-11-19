@@ -402,8 +402,15 @@ static void mpi3mr_process_admin_reply_desc(struct mpi3mr_ioc *mrioc,
 		addr_desc = (struct mpi3_address_reply_descriptor *)reply_desc;
 		*reply_dma = le64_to_cpu(addr_desc->reply_frame_address);
 		def_reply = mpi3mr_get_reply_virt_addr(mrioc, *reply_dma);
-		if (!def_reply)
+		if (!def_reply) {
+			ioc_err(mrioc, "def_reply is NULL, invalid reply_frame_address\n");
+			/*
+			 * Do not let the caller repost an address that
+			 * failed virt-addr lookup back to the hardware.
+			 */
+			*reply_dma = 0;
 			goto out;
+		}
 		host_tag = le16_to_cpu(def_reply->host_tag);
 		ioc_status = le16_to_cpu(def_reply->ioc_status);
 		if (ioc_status &
