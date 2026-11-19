@@ -788,6 +788,8 @@ struct mpi3mr_tgt_dev *mpi3mr_get_tgtdev_by_handle(
 	return tgtdev;
 }
 
+static atomic64_t mpi3mr_stgt_seq = ATOMIC64_INIT(0);
+
 /**
  * mpi3mr_tgtdev_block_io_inc - Block I/O on the SCSI target of a tgtdev
  * @mrioc: Adapter instance reference
@@ -797,44 +799,49 @@ struct mpi3mr_tgt_dev *mpi3mr_get_tgtdev_by_handle(
  * private data is looked up and incremented under tgtdev_lock, which is
  * also held when the target is destroyed.
  *
- * Return: The private data that was incremented, to be handed back when
- * block_io is decremented. NULL if the tgtdev has no private data.
+ * Return: Sequence number of the private data that was incremented, to be
+ * handed back when block_io is decremented. 0 if the tgtdev has no private
+ * data.
  */
-struct mpi3mr_stgt_priv_data *mpi3mr_tgtdev_block_io_inc(struct mpi3mr_ioc *mrioc,
-							 struct mpi3mr_tgt_dev *tgtdev)
+u64 mpi3mr_tgtdev_block_io_inc(struct mpi3mr_ioc *mrioc,
+			       struct mpi3mr_tgt_dev *tgtdev)
 {
-	struct mpi3mr_stgt_priv_data *stgt_priv = NULL;
+	struct mpi3mr_stgt_priv_data *stgt_priv;
 	unsigned long flags;
+	u64 seq = 0;
 
 	spin_lock_irqsave(&mrioc->tgtdev_lock, flags);
 	stgt_priv = tgtdev->stgt_priv;
-	if (stgt_priv)
+	if (stgt_priv) {
 		atomic_inc(&stgt_priv->block_io);
+		seq = stgt_priv->seq;
+	}
 	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
-	return stgt_priv;
+	return seq;
 }
 
 /**
  * mpi3mr_tgtdev_block_io_dec - Undo mpi3mr_tgtdev_block_io_inc
  * @mrioc: Adapter instance reference
  * @tgtdev: Target device reference, held by the caller
- * @stgt_priv: Value returned by mpi3mr_tgtdev_block_io_inc
+ * @seq: Value returned by mpi3mr_tgtdev_block_io_inc
  *
- * Decrement block_io only if the tgtdev still has the same private data.
- * If the target was removed meanwhile the private data is gone and there
- * is nothing to undo.
+ * Decrement block_io only if the tgtdev still has the private data that was
+ * incremented. A private data allocated later at the same address has a
+ * different sequence number and is left alone.
  */
 void mpi3mr_tgtdev_block_io_dec(struct mpi3mr_ioc *mrioc,
-				struct mpi3mr_tgt_dev *tgtdev,
-				struct mpi3mr_stgt_priv_data *stgt_priv)
+				struct mpi3mr_tgt_dev *tgtdev, u64 seq)
 {
+	struct mpi3mr_stgt_priv_data *stgt_priv;
 	unsigned long flags;
 
-	if (!stgt_priv)
+	if (!seq)
 		return;
 
 	spin_lock_irqsave(&mrioc->tgtdev_lock, flags);
-	if (tgtdev->stgt_priv == stgt_priv)
+	stgt_priv = tgtdev->stgt_priv;
+	if (stgt_priv && stgt_priv->seq == seq)
 		atomic_dec_if_positive(&stgt_priv->block_io);
 	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
 }
@@ -5140,6 +5147,8 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 	scsi_tgt_priv_data = kzalloc_obj(*scsi_tgt_priv_data);
 	if (!scsi_tgt_priv_data)
 		return -ENOMEM;
+
+	scsi_tgt_priv_data->seq = atomic64_inc_return(&mpi3mr_stgt_seq);
 
 	starget->hostdata = scsi_tgt_priv_data;
 

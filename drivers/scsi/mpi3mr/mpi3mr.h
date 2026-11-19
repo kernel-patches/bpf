@@ -831,6 +831,7 @@ static inline void mpi3mr_tgtdev_put(struct mpi3mr_tgt_dev *s)
  * @perst_id: FW assigned Persistent ID
  * @num_luns: Number of Logical Units
  * @block_io: I/O blocked to the device or not
+ * @seq: Sequence number, unique for every allocated private data
  * @dev_removed: Device removed in the Firmware
  * @dev_removedelay: Device is waiting to be removed in FW
  * @dev_type: Device type
@@ -849,6 +850,7 @@ struct mpi3mr_stgt_priv_data {
 	u16 perst_id;
 	u32 num_luns;
 	atomic_t block_io;
+	u64 seq;
 	u8 dev_removed;
 	u8 dev_removedelay;
 	u8 dev_type;
@@ -1535,11 +1537,10 @@ int mpi3mr_issue_tm(struct mpi3mr_ioc *mrioc, u8 tm_type,
 	u16 handle, uint lun, u16 htag, ulong timeout,
 	struct mpi3mr_drv_cmd *drv_cmd,
 	u8 *resp_code, struct scsi_cmnd *scmd);
-struct mpi3mr_stgt_priv_data *mpi3mr_tgtdev_block_io_inc(struct mpi3mr_ioc *mrioc,
-							 struct mpi3mr_tgt_dev *tgtdev);
+u64 mpi3mr_tgtdev_block_io_inc(struct mpi3mr_ioc *mrioc,
+			       struct mpi3mr_tgt_dev *tgtdev);
 void mpi3mr_tgtdev_block_io_dec(struct mpi3mr_ioc *mrioc,
-				struct mpi3mr_tgt_dev *tgtdev,
-				struct mpi3mr_stgt_priv_data *stgt_priv);
+				struct mpi3mr_tgt_dev *tgtdev, u64 seq);
 struct mpi3mr_tgt_dev *mpi3mr_get_tgtdev_by_handle(
 	struct mpi3mr_ioc *mrioc, u16 handle);
 void mpi3mr_pel_get_seqnum_complete(struct mpi3mr_ioc *mrioc,
