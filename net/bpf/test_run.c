@@ -1348,6 +1348,7 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	u32 repeat = kattr->test.repeat;
 	struct netdev_rx_queue *rxqueue;
 	struct skb_shared_info *sinfo;
+	struct xdp_rxq_info rxq;
 	struct xdp_buff xdp = {};
 	int i, ret = -EINVAL;
 	struct xdp_md *ctx;
@@ -1425,6 +1426,14 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	ret = xdp_convert_md_to_buff(ctx, &xdp);
 	if (ret)
 		goto free_data;
+
+	/* xdp.rxq points to the rxq info of a real device queue, which
+	 * generic XDP updates for every packet it runs on. Use a private
+	 * copy with the mem type of the frags allocated below.
+	 */
+	rxq = *xdp.rxq;
+	rxq.mem = (struct xdp_mem_info){ .type = MEM_TYPE_PAGE_SHARED };
+	xdp.rxq = &rxq;
 
 	size = linear_sz;
 	if (unlikely(kattr->test.data_size_in > size)) {
