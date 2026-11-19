@@ -767,6 +767,13 @@ noinline void bpf_testmod_stacktrace_test_1(void)
 
 int bpf_testmod_fentry_ok;
 
+noinline bool bpf_testmod_modify_return_bool(void)
+{
+	asm volatile ("");
+	return false;
+}
+ALLOW_ERROR_INJECTION(bpf_testmod_modify_return_bool, TRUE);
+
 noinline ssize_t
 bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 		      const struct bin_attribute *bin_attr,
@@ -855,6 +862,8 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 	    bpf_testmod_fentry_test11(16, (void *)17, 18, 19, (void *)20,
 			21, 22, 23, 24, 25, 26) != 231)
 		goto out;
+
+	(void)bpf_testmod_modify_return_bool();
 
 	bpf_testmod_stacktrace_test_1();
 

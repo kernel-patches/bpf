@@ -7,6 +7,7 @@
 #include <test_progs.h>
 #include <unistd.h>
 #include "modify_return.skel.h"
+#include "modify_return_width.skel.h"
 
 #define LOWER(x) ((x) & 0xffff)
 #define UPPER(x) ((x) >> 16)
@@ -64,6 +65,56 @@ void test_modify_return(void)
 	run_test(-EINVAL /* input_retval */,
 		 0 /* want_side_effect */,
 		 -EINVAL * 2 /* want_ret */);
+}
+
+/*
+ * The trampoline fits what an fmod_ret program returns to the return type of
+ * the function: int for bpf_modify_return_test(), bool for the one of bpf_testmod.
+ * Serial: get_func_args_test modifies the value of the first one for each task.
+ */
+void serial_test_modify_return_width(void)
+{
+#if defined(__x86_64__) || defined(__aarch64__)
+	static const struct {
+		__u64 value;			/* The fmod_ret programs return it */
+		bool int_called;		/* Is bpf_modify_return_test() called? */
+		__u64 int_ret, bool_ret;	/* The fexit programs read it */
+	} tests[] = {
+		{ 1ULL << 32,		true,  4,       0 },
+		{ 0x100,		false, 0x100,   0 },
+		{ 2,			false, 2,       1 },
+		{ -EINVAL,		false, -EINVAL, 1 },
+		{ (__u32)-EINVAL,	false, -EINVAL, 1 },
+	};
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct modify_return_width *skel;
+	int i;
+
+	skel = modify_return_width__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+	skel->bss->pid = getpid();
+	if (!ASSERT_OK(modify_return_width__attach(skel), "attach"))
+		goto out;
+
+	for (i = 0; i < ARRAY_SIZE(tests); i++) {
+		skel->bss->value = tests[i].value;
+		skel->bss->int_ret = -1;
+		skel->bss->bool_ret = -1;
+		ASSERT_OK(bpf_prog_test_run_opts(bpf_program__fd(skel->progs.mod_int), &topts),
+			  "test_run");
+		ASSERT_OK(trigger_module_test_read(1), "trigger_read");
+
+		/* bpf_modify_return_test2() has the other side effect */
+		ASSERT_EQ(UPPER(topts.retval), 1 + tests[i].int_called, "int_called");
+		ASSERT_EQ(skel->bss->int_ret, tests[i].int_ret, "int_ret");
+		ASSERT_EQ(skel->bss->bool_ret, tests[i].bool_ret, "bool_ret");
+	}
+out:
+	modify_return_width__destroy(skel);
+#else
+	test__skip();
+#endif
 }
 
 void test_modify_return_graph(void)

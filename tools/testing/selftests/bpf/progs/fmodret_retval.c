@@ -85,7 +85,7 @@ __naked void negated_bool(void)
 	::: __clobber_all);
 }
 
-/* Not 0, so the function is not called, but the caller would see 0 */
+/* 0 for the trampoline and for the caller, but not one of the 64-bit values of the list */
 SEC("fmod_ret/bpf_testmod_retval_called")
 __failure __msg("R0 should be 0 or one of -27,-22")
 __naked void high_bits(void)
