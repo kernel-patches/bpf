@@ -2470,7 +2470,7 @@ static int x1600_mac_pins[] = {
 	0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c,
 };
 
-static int x1600_sfc_funcs[] = { 0, 0, 0, 0, 0, 0, 2, };
+static u8 x1600_sfc_funcs[] = { 0, 0, 0, 0, 0, 0, 2, };
 
 static const struct group_desc x1600_groups[] = {
 	INGENIC_PIN_GROUP("uart0-data", x1600_uart0_data, 0),
