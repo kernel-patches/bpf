@@ -382,12 +382,16 @@ int mtk_build_eint(struct mtk_pinctrl *hw, struct platform_device *pdev)
 		return -ENOMEM;
 
 	count_reg_names = of_property_count_strings(np, "reg-names");
-	if (count_reg_names < 0)
-		return -EINVAL;
+	if (count_reg_names < 0) {
+		ret = -EINVAL;
+		goto err_free_base;
+	}
 
 	hw->eint->nbase = count_reg_names - (int)hw->soc->nbase_names;
-	if (hw->eint->nbase <= 0)
-		return -EINVAL;
+	if (hw->eint->nbase <= 0) {
+		ret = -EINVAL;
+		goto err_free_base;
+	}
 
 	hw->eint->base = devm_kmalloc_array(&pdev->dev, hw->eint->nbase,
 					    sizeof(*hw->eint->base), GFP_KERNEL | __GFP_ZERO);
