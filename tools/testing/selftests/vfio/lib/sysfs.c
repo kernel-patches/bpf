@@ -33,15 +33,12 @@ static void readlink_base(const char *path, const char *data_fmt, void *out_data
 	VFIO_ASSERT_EQ(ret, 1);
 }
 
-static int sysfs_val_get_int(const char *component, const char *name,
-			     const char *file)
+static int sysfs_path_get_int(const char *path)
 {
-	char path[PATH_MAX];
 	char buf[32];
 	int ret;
 	int fd;
 
-	snprintf_assert(path, PATH_MAX, "/sys/bus/pci/%s/%s/%s", component, name, file);
 	fd = open(path, O_RDONLY);
 	if (fd < 0)
 		return fd;
@@ -54,6 +51,15 @@ static int sysfs_val_get_int(const char *component, const char *name,
 	VFIO_ASSERT_EQ(errno, 0, "sysfs path \"%s\" is not an integer: \"%s\"\n", path, buf);
 
 	return ret;
+}
+
+static int sysfs_val_get_int(const char *component, const char *name,
+			     const char *file)
+{
+	char path[PATH_MAX];
+
+	snprintf_assert(path, PATH_MAX, "/sys/bus/pci/%s/%s/%s", component, name, file);
+	return sysfs_path_get_int(path);
 }
 
 static int sysfs_val_set(const char *component, const char *name,
@@ -169,4 +175,18 @@ char *sysfs_driver_get(const char *bdf)
 	VFIO_ASSERT_NOT_NULL(out_driver);
 
 	return out_driver;
+}
+
+/**
+ * sysfs_kernel_warn_count_get() - Get the number of kernel warnings since boot
+ *
+ * Read /sys/kernel/warn_count, which counts the warnings (e.g. WARN(), KASAN,
+ * and UBSAN reports) the kernel has encountered since boot.
+ *
+ * Return: The number of warnings, or a negative value if the kernel does not
+ * support /sys/kernel/warn_count.
+ */
+int sysfs_kernel_warn_count_get(void)
+{
+	return sysfs_path_get_int("/sys/kernel/warn_count");
 }
