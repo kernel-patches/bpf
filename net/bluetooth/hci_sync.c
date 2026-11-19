@@ -1226,16 +1226,26 @@ static int hci_disable_ext_adv_instance_sync(struct hci_dev *hdev, u8 instance)
 	struct hci_cp_ext_adv_set *set;
 	u8 data[sizeof(*cp) + sizeof(*set) * 1];
 	u8 size;
-	struct adv_info *adv = NULL;
+	u8 handle = instance;
 
 	/* If request specifies an instance that doesn't exist, fail */
 	if (instance > 0) {
+		struct adv_info *adv;
+		bool enabled = false;
+
+		hci_dev_lock(hdev);
 		adv = hci_find_adv_instance(hdev, instance);
+		if (adv) {
+			enabled = adv->enabled;
+			handle = adv->handle;
+		}
+		hci_dev_unlock(hdev);
+
 		if (!adv)
 			return -EINVAL;
 
 		/* If not enabled there is nothing to do */
-		if (!adv->enabled)
+		if (!enabled)
 			return 0;
 	}
 
@@ -1248,7 +1258,7 @@ static int hci_disable_ext_adv_instance_sync(struct hci_dev *hdev, u8 instance)
 	cp->num_of_sets = !!instance;
 	cp->enable = 0x00;
 
-	set->handle = adv ? adv->handle : instance;
+	set->handle = handle;
 
 	size = sizeof(*cp) + sizeof(*set) * cp->num_of_sets;
 
@@ -2197,9 +2207,13 @@ int hci_schedule_adv_instance_sync(struct hci_dev *hdev, u8 instance,
 	if (hdev->adv_instance_timeout)
 		return -EBUSY;
 
+	hci_dev_lock(hdev);
+
 	adv = hci_find_adv_instance(hdev, instance);
-	if (!adv)
+	if (!adv) {
+		hci_dev_unlock(hdev);
 		return -ENOENT;
+	}
 
 	/* A zero timeout means unlimited advertising. As long as there is
 	 * only one instance, duration should be ignored. We still set a timeout
@@ -2228,6 +2242,8 @@ int hci_schedule_adv_instance_sync(struct hci_dev *hdev, u8 instance,
 				   adv->mesh ? msecs_to_jiffies(timeout) :
 					       secs_to_jiffies(timeout));
 	}
+
+	hci_dev_unlock(hdev);
 
 	/* If we're just re-scheduling the same instance again then do not
 	 * execute any HCI commands. This happens when a single instance is
@@ -3876,7 +3892,9 @@ int hci_powered_update_sync(struct hci_dev *hdev)
 	 * registration is required so that LE SMP can clearly decide if
 	 * the public address or static address is used.
 	 */
+	hci_dev_lock(hdev);
 	smp_register(hdev);
+	hci_dev_unlock(hdev);
 
 	err = hci_write_ssp_mode_sync(hdev, 0x01);
 	if (err)
@@ -6106,6 +6124,11 @@ int hci_dev_close_sync(struct hci_dev *hdev)
 	hci_discovery_set_state(hdev, DISCOVERY_STOPPED);
 
 	auto_off = hci_dev_test_and_clear_flag(hdev, HCI_AUTO_OFF);
+
+	/* Nothing is going to send the mesh transmissions left, whether or not
+	 * mgmt is told about the controller being powered off.
+	 */
+	mgmt_mesh_flush(hdev);
 
 	if (!auto_off && !hci_dev_test_flag(hdev, HCI_USER_CHANNEL) &&
 	    hci_dev_test_flag(hdev, HCI_MGMT))
