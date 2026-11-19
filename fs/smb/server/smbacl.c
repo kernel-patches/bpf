@@ -1399,56 +1399,33 @@ pass:
 		if (le16_to_cpu(parent_pntsd->type) & DACL_AUTO_INHERITED)
 			pntsd->type |= cpu_to_le16(DACL_AUTO_INHERITED);
 		pntsd_size = sizeof(struct smb_ntsd);
-		pntsd->osidoffset = parent_pntsd->osidoffset;
-		pntsd->gsidoffset = parent_pntsd->gsidoffset;
-		pntsd->dacloffset = parent_pntsd->dacloffset;
 
-		if ((u64)le32_to_cpu(pntsd->osidoffset) + powner_sid_size >
-		    pntsd_alloc_size) {
-			rc = -EINVAL;
-			kfree(pntsd);
-			goto free_aces_base;
-		}
-
-		if ((u64)le32_to_cpu(pntsd->gsidoffset) + pgroup_sid_size >
-		    pntsd_alloc_size) {
-			rc = -EINVAL;
-			kfree(pntsd);
-			goto free_aces_base;
-		}
-
-		if ((u64)le32_to_cpu(pntsd->dacloffset) + sizeof(struct smb_acl) + nt_size >
-		    pntsd_alloc_size) {
-			rc = -EINVAL;
-			kfree(pntsd);
-			goto free_aces_base;
-		}
-
-		if (pntsd->osidoffset) {
-			struct smb_sid *owner_sid = (struct smb_sid *)((char *)pntsd +
-					le32_to_cpu(pntsd->osidoffset));
-			memcpy(owner_sid, powner_sid, powner_sid_size);
+		/*
+		 * Lay out the child as owner, group and DACL. The parent may
+		 * store its components in another order, so its offsets do
+		 * not fit the child.
+		 */
+		if (powner_sid) {
+			pntsd->osidoffset = cpu_to_le32(pntsd_size);
+			memcpy((char *)pntsd + pntsd_size, powner_sid,
+			       powner_sid_size);
 			pntsd_size += powner_sid_size;
 		}
 
-		if (pntsd->gsidoffset) {
-			struct smb_sid *group_sid = (struct smb_sid *)((char *)pntsd +
-					le32_to_cpu(pntsd->gsidoffset));
-			memcpy(group_sid, pgroup_sid, pgroup_sid_size);
+		if (pgroup_sid) {
+			pntsd->gsidoffset = cpu_to_le32(pntsd_size);
+			memcpy((char *)pntsd + pntsd_size, pgroup_sid,
+			       pgroup_sid_size);
 			pntsd_size += pgroup_sid_size;
 		}
 
-		if (pntsd->dacloffset) {
-			struct smb_ace *pace;
-
-			pdacl = (struct smb_acl *)((char *)pntsd + le32_to_cpu(pntsd->dacloffset));
-			pdacl->revision = cpu_to_le16(2);
-			pdacl->size = cpu_to_le16(sizeof(struct smb_acl) + nt_size);
-			pdacl->num_aces = cpu_to_le16(ace_cnt);
-			pace = (struct smb_ace *)((char *)pdacl + sizeof(struct smb_acl));
-			memcpy(pace, aces_base, nt_size);
-			pntsd_size += sizeof(struct smb_acl) + nt_size;
-		}
+		pntsd->dacloffset = cpu_to_le32(pntsd_size);
+		pdacl = (struct smb_acl *)((char *)pntsd + pntsd_size);
+		pdacl->revision = cpu_to_le16(2);
+		pdacl->size = cpu_to_le16(sizeof(struct smb_acl) + nt_size);
+		pdacl->num_aces = cpu_to_le16(ace_cnt);
+		memcpy((char *)pdacl + sizeof(struct smb_acl), aces_base, nt_size);
+		pntsd_size += sizeof(struct smb_acl) + nt_size;
 
 		ksmbd_vfs_set_sd_xattr(conn, idmap, path, pntsd, pntsd_size);
 		kfree(pntsd);
