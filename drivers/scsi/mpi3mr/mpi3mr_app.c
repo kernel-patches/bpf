@@ -266,8 +266,8 @@ int mpi3mr_issue_diag_buf_post(struct mpi3mr_ioc *mrioc,
 	diag_buf_post_req.host_tag = cpu_to_le16(MPI3MR_HOSTTAG_INITCMDS);
 	diag_buf_post_req.function = MPI3_FUNCTION_DIAG_BUFFER_POST;
 	diag_buf_post_req.type = diag_buffer->type;
-	diag_buf_post_req.address = le64_to_cpu(diag_buffer->dma_addr);
-	diag_buf_post_req.length = le32_to_cpu(diag_buffer->size);
+	diag_buf_post_req.address = cpu_to_le64(diag_buffer->dma_addr);
+	diag_buf_post_req.length = cpu_to_le32(diag_buffer->size);
 
 	if (diag_buffer->is_segmented)
 		diag_buf_post_req.msg_flags |= MPI3_DIAG_BUFFER_POST_MSGFLAGS_SEGMENTED;
