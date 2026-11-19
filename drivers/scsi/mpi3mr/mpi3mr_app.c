@@ -1346,7 +1346,8 @@ static long mpi3mr_enable_logdata(struct mpi3mr_ioc *mrioc,
 static long mpi3mr_get_logdata(struct mpi3mr_ioc *mrioc,
 	struct bsg_job *job)
 {
-	u16 num_entries, sz, entry_sz = mrioc->logdata_entry_sz;
+	u16 entry_sz = mrioc->logdata_entry_sz;
+	u32 num_entries, sz;
 
 	if ((!mrioc->logdata_buf) || (job->request_payload.payload_len < entry_sz))
 		return -EINVAL;
