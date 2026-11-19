@@ -123,8 +123,8 @@ struct bpf_prog;
 #define BTF_LINK_SHA256_LEN	32
 
 /*
- * A .BTF.link or .BTF.inline.link section identifies the module which
- * carries a vmlinux BTF section.  The module name is NUL terminated and the
+ * A .BTF.link, .BTF.inline.link or .BTF.global.link section identifies the
+ * module carrying a vmlinux BTF section. The module name is NUL terminated and the
  * field is padded to __MODULE_NAME_LEN.
  */
 struct btf_link {

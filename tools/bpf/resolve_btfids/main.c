@@ -150,9 +150,11 @@ struct object {
 	struct btf *btf;
 	struct btf *base_btf;
 	struct btf *inline_btf;
+	struct btf *global_btf;
 	struct btf *orig_btf;
 	bool distill_base;
 	bool extract_inline;
+	bool extract_global;
 
 	struct {
 		int		 fd;
@@ -1829,23 +1831,75 @@ static int color_btf(struct object *obj, __u8 *colors)
 	return 0;
 }
 
-static int extract_inline_btf(struct object *obj)
+static void color_global_btf(struct btf *btf, __u8 *colors)
 {
-	struct btf *btf = obj->btf, *main_btf, *inline_btf;
+	const struct btf *base = btf__base_btf(btf);
+	u32 start_id = base ? btf__type_cnt(base) : 1;
+	u32 type_cnt = btf__type_cnt(btf), i, j;
+
+	/*
+	 * BTF has always contained all data structure types, regardless of
+	 * whether they are referenced by a VAR. Enabling global variable BTF
+	 * does not introduce new types other than VAR or DATASEC. As a result,
+	 * there's no need to propagate colors from the VARs down to referenced
+	 * types. Mark the percpu data as MAIN and all other VAR / DATASEC to be
+	 * included in the global output. This overwrites prior coloring, if it
+	 * was done.
+	 */
+	for (i = start_id; i < type_cnt; i++)
+		if (btf_is_var(btf__type_by_id(btf, i)))
+			colors[i] = BTF_COLOR_GLOBAL;
+	for (i = start_id; i < type_cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+		const struct btf_var_secinfo *vsi;
+		u8 color;
+
+		if (!btf_is_datasec(t))
+			continue;
+		color = !strcmp(btf__name_by_offset(btf, t->name_off), ".data..percpu") ?
+			BTF_COLOR_MAIN : BTF_COLOR_GLOBAL;
+		colors[i] = color;
+		vsi = btf_var_secinfos(t);
+		for (j = 0; j < btf_vlen(t); j++)
+			if (vsi[j].type >= start_id)
+				colors[vsi[j].type] = color;
+	}
+	/* Mark DECL_TAGs the same as the VAR they modify */
+	for (i = start_id; i < type_cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+
+		if (btf_is_decl_tag(t) && t->type >= start_id &&
+		    colors[t->type] == BTF_COLOR_GLOBAL)
+			colors[i] = BTF_COLOR_GLOBAL;
+	}
+}
+
+static int split_btf(struct object *obj)
+{
+	struct btf *btf = obj->btf, *main_btf, *inline_btf, *global_btf;
 	__u8 *colors;
 	int err;
 
 	colors = calloc(btf__type_cnt(btf), sizeof(*colors));
 	if (!colors)
 		return -ENOMEM;
-	err = color_btf(obj, colors);
+	err = obj->extract_inline ? color_btf(obj, colors) : 0;
 	if (err)
 		goto out;
-	err = btf_split_by_color(btf, colors, &main_btf, &inline_btf);
+	if (obj->extract_global)
+		color_global_btf(btf, colors);
+	err = btf_split_by_color(btf, colors, &main_btf, &inline_btf, &global_btf);
 	if (!err) {
 		obj->orig_btf = btf;
 		obj->btf = main_btf;
-		obj->inline_btf = inline_btf;
+		if (obj->extract_inline)
+			obj->inline_btf = inline_btf;
+		else
+			btf__free(inline_btf);
+		if (obj->extract_global)
+			obj->global_btf = global_btf;
+		else
+			btf__free(global_btf);
 	}
 out:
 	free(colors);
@@ -1947,10 +2001,10 @@ static int finalize_btf(struct object *obj)
 		return err;
 	}
 
-	if (obj->extract_inline) {
-		err = extract_inline_btf(obj);
+	if (obj->extract_inline || obj->extract_global) {
+		err = split_btf(obj);
 		if (err) {
-			pr_err("FAILED to extract inline BTF: %s\n", strerror(-err));
+			pr_err("FAILED to split BTF: %s\n", strerror(-err));
 			return err;
 		}
 	}
@@ -2119,6 +2173,8 @@ int main(int argc, const char **argv)
 			    "distill --btf_base and emit .BTF.base section data"),
 		OPT_BOOLEAN(0, "inline", &obj.extract_inline,
 			    "extract location BTF into a .BTF.inline file"),
+		OPT_BOOLEAN(0, "global", &obj.extract_global,
+			    "extract non-per-CPU variables into a .BTF.global file"),
 		OPT_BOOLEAN(0, "fmodret_scan", &fmodret_scan,
 			    "tag the functions which return errors as fmod_ret targets"),
 		OPT_CALLBACK(0, "btf_link", &btf_links, "section:module:btf-file",
@@ -2220,16 +2276,23 @@ dump_btf:
 		if (err)
 			goto out;
 	}
+	if (obj.global_btf) {
+		err = make_out_path(out_path, sizeof(out_path), obj.path, BTF_ELF_SEC ".global");
+		err = err ?: dump_raw_btf(obj.global_btf, out_path);
+		if (err)
+			goto out;
+	}
 
 	err = fatal_warnings && warnings ? -1 : 0;
 out:
 	free_btf_links(&btf_links);
 	/*
-	 * Free BTFs in reverse dependency order.  inline_btf borrows obj.btf;
+	 * Free BTFs in reverse dependency order. global/inline borrow obj.btf;
 	 * obj.btf can borrow a base owned by orig_btf or obj.base_btf, and
 	 * orig_btf can also borrow obj.base_btf.
 	 */
 	btf__free(obj.inline_btf);
+	btf__free(obj.global_btf);
 	btf__free(obj.btf);
 	btf__free(obj.orig_btf);
 	btf__free(obj.base_btf);

@@ -74,6 +74,7 @@ modules.order
 /vmlinux.thinlto-index
 /vmlinux.unstripped
 /vmlinux.BTF.inline
+/vmlinux.BTF.global
 /vmlinux-gdb.py
 /vmlinuz
 /System.map

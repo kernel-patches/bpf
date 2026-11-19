@@ -5341,6 +5341,7 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 	const struct btf_var_secinfo *vsi;
 	u64 last_vsi_end_off = 0, sum = 0;
 	u32 i, meta_needed;
+	bool is_ro;
 
 	meta_needed = btf_type_vlen(t) * sizeof(*vsi);
 	if (meta_left < meta_needed) {
@@ -5366,6 +5367,7 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 		return -EINVAL;
 	}
 
+	is_ro = strncmp(btf_str_by_offset(env->btf, t->name_off), ".ro", 3) == 0;
 	btf_verifier_log_type(env, t, NULL);
 
 	for_each_vsi(i, t, vsi) {
@@ -5376,7 +5378,12 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 			return -EINVAL;
 		}
 
-		if (vsi->offset < last_vsi_end_off || vsi->offset >= t->size) {
+		/*
+		 * Vars may not overlap, except in read-only sections where the
+		 * compiler might alias identical constants.
+		 */
+		if ((!is_ro && vsi->offset < last_vsi_end_off)
+		    || vsi->offset >= t->size) {
 			btf_verifier_log_vsi(env, t, vsi,
 					     "Invalid offset");
 			return -EINVAL;
@@ -5399,7 +5406,7 @@ static s32 btf_datasec_check_meta(struct btf_verifier_env *env,
 		sum += vsi->size;
 	}
 
-	if (t->size < sum) {
+	if (!is_ro && t->size < sum) {
 		btf_verifier_log_type(env, t, "Invalid btf_info size");
 		return -EINVAL;
 	}
@@ -7041,14 +7048,31 @@ errout:
 	return ERR_PTR(err);
 }
 
-static int btf_rebase_inline(struct btf *inline_btf,
-			     const struct btf *module_btf,
-			     const u32 *module_id_map,
-			     const u32 *module_str_map,
-			     u32 old_module_type_cnt)
+enum btf_module_extra_kind {
+	BTF_MODULE_INLINE,
+	BTF_MODULE_GLOBAL,
+	NR_BTF_MODULE_EXTRAS,
+};
+
+static const char * const btf_extra_suffixes[] = {
+	[BTF_MODULE_INLINE] = "inline",
+	[BTF_MODULE_GLOBAL] = "global",
+};
+
+struct btf_module_extra {
+	void *data;
+	unsigned int size;
+	struct bin_attribute *sysfs_attr;
+};
+
+static int btf_rebase_extra(struct btf *extra_btf,
+			    const struct btf *module_btf,
+			    const u32 *module_id_map,
+			    const u32 *module_str_map,
+			    u32 old_module_type_cnt)
 {
-	u32 old_start_id = inline_btf->start_id;
-	u32 old_start_str_off = inline_btf->start_str_off;
+	u32 old_start_id = extra_btf->start_id;
+	u32 old_start_str_off = extra_btf->start_str_off;
 	u32 old_module_start_str_off = old_start_str_off - module_btf->hdr.str_len;
 	u32 new_start_id = btf_nr_types(module_btf);
 	u32 new_start_str_off = module_btf->start_str_off + module_btf->hdr.str_len;
@@ -7057,14 +7081,14 @@ static int btf_rebase_inline(struct btf *inline_btf,
 	u32 i;
 
 	/*
-	 * The inline BTF was parsed relative to the original module BTF. Its
+	 * The extra BTF was parsed relative to the original module BTF. Its
 	 * base IDs must therefore use the map generated when that BTF was
-	 * relocated, while IDs for inline-local types only move by the change
+	 * relocated, while IDs for extension-local types only move by the change
 	 * in the module BTF's starting ID.
 	 */
-	for (i = 0; i < inline_btf->nr_types; i++) {
+	for (i = 0; i < extra_btf->nr_types; i++) {
 		struct btf_field_iter it;
-		struct btf_type *t = inline_btf->types[i];
+		struct btf_type *t = extra_btf->types[i];
 		u32 *id, *str_off;
 		int err;
 
@@ -7103,26 +7127,24 @@ static int btf_rebase_inline(struct btf *inline_btf,
 		}
 	}
 
-	btf_set_base_btf(inline_btf, module_btf);
-	btf_check_sorted(inline_btf);
+	btf_set_base_btf(extra_btf, module_btf);
+	btf_check_sorted(extra_btf);
 	return 0;
 }
 
 static struct btf *btf_parse_module(const char *module_name, const void *data,
 				    unsigned int data_size, void *base_data,
 				    unsigned int base_data_size,
-				    const void *inline_data,
-				    unsigned int inline_data_size,
-				    void **relocated_inline_data)
+				    struct btf_module_extra *extras)
 {
-	struct btf *btf = NULL, *inline_btf = NULL, *vmlinux_btf, *base_btf = NULL;
+	struct btf *btf = NULL, *vmlinux_btf, *base_btf = NULL;
+	struct btf *extra_btfs[NR_BTF_MODULE_EXTRAS] = {};
 	struct btf_verifier_env *env = NULL;
 	struct bpf_verifier_log *log;
 	u32 *module_str_map = NULL;
 	u32 old_module_type_cnt;
-	int err = 0;
+	int i, err = 0;
 
-	*relocated_inline_data = NULL;
 	vmlinux_btf = bpf_get_btf_vmlinux();
 	if (IS_ERR(vmlinux_btf))
 		return vmlinux_btf;
@@ -7154,13 +7176,18 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 	}
 	old_module_type_cnt = btf_nr_types(btf);
 
-	if (inline_data_size) {
-		inline_btf = btf_parse_split(env, module_name, inline_data,
-					     inline_data_size, btf);
-		if (IS_ERR(inline_btf)) {
-			pr_warn("failed to validate module [%s] inline BTF: %ld\n",
-				module_name, PTR_ERR(inline_btf));
-			inline_btf = NULL;
+	for (i = 0; i < NR_BTF_MODULE_EXTRAS; i++) {
+		struct btf_module_extra *extra = &extras[i];
+		const void *extra_data = extra->data;
+
+		extra->data = NULL;
+		if (!extra->size)
+			continue;
+		extra_btfs[i] = btf_parse_split(env, module_name, extra_data, extra->size, btf);
+		if (IS_ERR(extra_btfs[i])) {
+			pr_warn("failed to validate module [%s] %s BTF: %ld\n",
+				module_name, btf_extra_suffixes[i], PTR_ERR(extra_btfs[i]));
+			extra_btfs[i] = NULL;
 		}
 	}
 
@@ -7173,18 +7200,21 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 		base_btf = vmlinux_btf;
 	}
 
-	if (inline_btf) {
-		err = btf_rebase_inline(inline_btf, btf, btf->base_id_map,
-					module_str_map, old_module_type_cnt);
+	for (i = 0; i < NR_BTF_MODULE_EXTRAS; i++) {
+		struct btf *extra_btf = extra_btfs[i];
+
+		if (!extra_btf)
+			continue;
+		err = btf_rebase_extra(extra_btf, btf, btf->base_id_map,
+				       module_str_map, old_module_type_cnt);
 		if (err) {
-			pr_warn("failed to relocate module [%s] inline BTF: %d\n",
-				module_name, err);
-			btf_free(inline_btf);
+			pr_warn("failed to relocate module [%s] %s BTF: %d\n",
+				module_name, btf_extra_suffixes[i], err);
 		} else {
-			*relocated_inline_data = inline_btf->data;
-			inline_btf->data = NULL;
-			btf_free(inline_btf);
+			extras[i].data = extra_btf->data;
+			extra_btf->data = NULL;
 		}
+		btf_free(extra_btf);
 	}
 
 	/*
@@ -7202,8 +7232,9 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 errout:
 	kvfree(module_str_map);
 	btf_verifier_env_free(env);
-	if (inline_btf)
-		btf_free(inline_btf);
+	for (i = 0; i < NR_BTF_MODULE_EXTRAS; i++)
+		if (extra_btfs[i])
+			btf_free(extra_btfs[i]);
 	if (!IS_ERR(base_btf) && base_btf != vmlinux_btf)
 		btf_free(base_btf);
 	if (btf)
@@ -9345,8 +9376,7 @@ struct btf_module {
 	struct module *module;
 	struct btf *btf;
 	struct bin_attribute *sysfs_attr;
-	struct bin_attribute *sysfs_inline_attr;
-	void *btf_inline_data;
+	struct btf_module_extra extras[NR_BTF_MODULE_EXTRAS];
 	int flags;
 };
 
@@ -9355,12 +9385,12 @@ static DEFINE_MUTEX(btf_module_mutex);
 
 static void purge_cand_cache(struct btf *btf);
 
-#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_INLINE)
-extern char __start_BTF_inline_link[];
-extern char __stop_BTF_inline_link[];
-
-static struct bin_attribute *vmlinux_inline_attr;
-static const struct btf_link *vmlinux_inline_link;
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_INLINE) || IS_MODULE(CONFIG_DEBUG_INFO_BTF_GLOBAL)
+struct btf_vmlinux_extra {
+	/* The payload is published through attr->private after module load. */
+	struct bin_attribute *attr;
+	const struct btf_link *link;
+};
 
 static const struct btf_link *btf_parse_link(void *start, unsigned int size)
 {
@@ -9396,68 +9426,100 @@ static bool btf_verify_link(const struct btf_link *link, const struct module *mo
 	return true;
 }
 
-static void btf_vmlinux_inline_lazy_init(void)
+static void btf_vmlinux_extra_init(struct btf_vmlinux_extra *extra,
+				   char *start, char *stop, const char *name)
 {
-	vmlinux_inline_link = btf_parse_link(__start_BTF_inline_link,
-					     __stop_BTF_inline_link -
-					     __start_BTF_inline_link);
-	if (!vmlinux_inline_link) {
-		pr_warn("invalid vmlinux inline BTF link\n");
+	extra->link = btf_parse_link(start, stop - start);
+	if (!extra->link) {
+		pr_warn("invalid vmlinux %s BTF link\n", name);
 		return;
 	}
-	vmlinux_inline_attr = sysfs_btf_add("vmlinux.inline", NULL,
-					    vmlinux_inline_link->btf_size, true,
-					    vmlinux_inline_link->module_name);
-	if (IS_ERR(vmlinux_inline_attr)) {
-		pr_warn("failed to register vmlinux inline BTF in sysfs: %ld\n",
-			PTR_ERR(vmlinux_inline_attr));
-		vmlinux_inline_attr = NULL;
+	extra->attr = sysfs_btf_add(name, NULL, extra->link->btf_size, true,
+				    extra->link->module_name);
+	if (IS_ERR(extra->attr)) {
+		pr_warn("failed to register %s BTF in sysfs: %ld\n",
+			name, PTR_ERR(extra->attr));
+		extra->attr = NULL;
 	}
 }
 
-static bool btf_module_is_vmlinux_inline(const struct module *mod)
+static bool btf_module_is_extra(const struct btf_vmlinux_extra *extra,
+				const struct module *mod)
 {
-	return vmlinux_inline_link && !strcmp(mod->name, vmlinux_inline_link->module_name);
+	return extra->link && !strcmp(mod->name, extra->link->module_name);
 }
 
-static int btf_module_handle_vmlinux_inline(const struct module *mod)
+static int btf_module_load_extra(const struct btf_vmlinux_extra *extra,
+				 const struct module *mod,
+				 const void *src, unsigned int size)
 {
 	void *data;
 
-	if (!mod->btf_inline_data ||
-	    mod->btf_inline_data_size != vmlinux_inline_link->btf_size)
+	if (!src || size != extra->link->btf_size)
 		return -EINVAL;
-
-	data = vmalloc_user(mod->btf_inline_data_size);
+	data = vmalloc_user(size);
 	if (!data)
 		return -ENOMEM;
-	memcpy(data, mod->btf_inline_data, mod->btf_inline_data_size);
-
-	if (!btf_verify_link(vmlinux_inline_link, mod, data, mod->btf_inline_data_size) ||
-	    !sysfs_btf_update(vmlinux_inline_attr, data)) {
+	memcpy(data, src, size);
+	if (!btf_verify_link(extra->link, mod, data, size) ||
+	    !sysfs_btf_update(extra->attr, data)) {
 		kvfree(data);
 		return -EINVAL;
 	}
 	return 0;
 }
+#endif
 
-#else
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_INLINE)
+extern char __start_BTF_inline_link[], __stop_BTF_inline_link[];
 
-static bool btf_module_is_vmlinux_inline(const struct module *mod)
+static struct btf_vmlinux_extra vmlinux_inline;
+#endif
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_GLOBAL)
+extern char __start_BTF_global_link[], __stop_BTF_global_link[];
+
+static struct btf_vmlinux_extra vmlinux_global;
+#endif
+
+static void btf_vmlinux_extras_init(void)
 {
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_INLINE)
+	btf_vmlinux_extra_init(&vmlinux_inline, __start_BTF_inline_link,
+			       __stop_BTF_inline_link, "vmlinux.inline");
+#endif
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_GLOBAL)
+	btf_vmlinux_extra_init(&vmlinux_global, __start_BTF_global_link,
+			       __stop_BTF_global_link, "vmlinux.global");
+#endif
+}
+
+static bool btf_module_is_vmlinux_extra(const struct module *mod)
+{
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_INLINE)
+	if (btf_module_is_extra(&vmlinux_inline, mod))
+		return true;
+#endif
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_GLOBAL)
+	if (btf_module_is_extra(&vmlinux_global, mod))
+		return true;
+#endif
 	return false;
 }
 
-static int btf_module_handle_vmlinux_inline(const struct module *mod)
+static int btf_module_handle_vmlinux_extra(const struct module *mod)
 {
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_INLINE)
+	if (btf_module_is_extra(&vmlinux_inline, mod))
+		return btf_module_load_extra(&vmlinux_inline, mod,
+					     mod->btf_inline_data, mod->btf_inline_data_size);
+#endif
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_GLOBAL)
+	if (btf_module_is_extra(&vmlinux_global, mod))
+		return btf_module_load_extra(&vmlinux_global, mod,
+					     mod->btf_global_data, mod->btf_global_data_size);
+#endif
 	return 0;
 }
-
-static void btf_vmlinux_inline_lazy_init(void)
-{
-}
-
-#endif /* IS_MODULE(CONFIG_DEBUG_INFO_BTF_INLINE) */
 
 static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			     void *module)
@@ -9466,9 +9528,7 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 	struct module *mod = module;
 	struct bin_attribute *attr;
 	struct btf *btf;
-	void *inline_data = NULL, *relocated_inline_data = NULL;
-	unsigned int inline_data_size = 0;
-	int err = 0;
+	int i, err = 0;
 
 	if (op != MODULE_STATE_COMING && op != MODULE_STATE_LIVE &&
 	    op != MODULE_STATE_GOING)
@@ -9476,17 +9536,10 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 
 	switch (op) {
 	case MODULE_STATE_COMING:
-		if (btf_module_is_vmlinux_inline(mod)) {
-			err = btf_module_handle_vmlinux_inline(mod);
+		if (btf_module_is_vmlinux_extra(mod)) {
+			err = btf_module_handle_vmlinux_extra(mod);
 			break;
 		}
-
-#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF_INLINE)
-		if (mod->btf_inline_data_size) {
-			inline_data = mod->btf_inline_data;
-			inline_data_size = mod->btf_inline_data_size;
-		}
-#endif
 		if (!mod->btf_data_size)
 			break;
 		btf_mod = kzalloc_obj(*btf_mod);
@@ -9494,10 +9547,17 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			err = -ENOMEM;
 			goto out;
 		}
+#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF_INLINE)
+		btf_mod->extras[BTF_MODULE_INLINE].data = mod->btf_inline_data;
+		btf_mod->extras[BTF_MODULE_INLINE].size = mod->btf_inline_data_size;
+#endif
+#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF_GLOBAL)
+		btf_mod->extras[BTF_MODULE_GLOBAL].data = mod->btf_global_data;
+		btf_mod->extras[BTF_MODULE_GLOBAL].size = mod->btf_global_data_size;
+#endif
 		btf = btf_parse_module(mod->name, mod->btf_data, mod->btf_data_size,
 				       mod->btf_base_data, mod->btf_base_data_size,
-				       inline_data, inline_data_size,
-				       &relocated_inline_data);
+				       btf_mod->extras);
 		if (IS_ERR(btf)) {
 			kfree(btf_mod);
 			if (!IS_ENABLED(CONFIG_MODULE_ALLOW_BTF_MISMATCH)) {
@@ -9512,7 +9572,8 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		err = btf_alloc_id(btf);
 		if (err) {
 			btf_free(btf);
-			kvfree(relocated_inline_data);
+			for (i = 0; i < NR_BTF_MODULE_EXTRAS; i++)
+				kvfree(btf_mod->extras[i].data);
 			kfree(btf_mod);
 			goto out;
 		}
@@ -9521,7 +9582,6 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		mutex_lock(&btf_module_mutex);
 		btf_mod->module = module;
 		btf_mod->btf = btf;
-		btf_mod->btf_inline_data = relocated_inline_data;
 		list_add(&btf_mod->list, &btf_modules);
 		mutex_unlock(&btf_module_mutex);
 
@@ -9532,19 +9592,20 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		}
 		btf_mod->sysfs_attr = attr;
 
-		if (relocated_inline_data) {
-			char name[MODULE_NAME_LEN + sizeof(".inline")];
+		for (i = 0; i < NR_BTF_MODULE_EXTRAS; i++) {
+			struct btf_module_extra *extra = &btf_mod->extras[i];
+			char name[MODULE_NAME_LEN + sizeof(".global")];
 
-			snprintf(name, sizeof(name), "%s.inline", mod->name);
-			attr = sysfs_btf_add(name, relocated_inline_data,
-					     inline_data_size, false, NULL);
+			if (!extra->data)
+				continue;
+			snprintf(name, sizeof(name), "%s.%s", mod->name, btf_extra_suffixes[i]);
+			attr = sysfs_btf_add(name, extra->data, extra->size, false, NULL);
 			if (IS_ERR(attr)) {
-				kvfree(relocated_inline_data);
-				btf_mod->btf_inline_data = NULL;
-				err = 0;
-				break;
+				kvfree(extra->data);
+				extra->data = NULL;
+				continue;
 			}
-			btf_mod->sysfs_inline_attr = attr;
+			extra->sysfs_attr = attr;
 		}
 		break;
 	case MODULE_STATE_LIVE:
@@ -9578,9 +9639,13 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			list_del(&btf_mod->list);
 			if (btf_mod->sysfs_attr)
 				sysfs_btf_remove(btf_mod->sysfs_attr);
-			if (btf_mod->sysfs_inline_attr)
-				sysfs_btf_remove(btf_mod->sysfs_inline_attr);
-			kvfree(btf_mod->btf_inline_data);
+			for (i = 0; i < NR_BTF_MODULE_EXTRAS; i++) {
+				struct btf_module_extra *extra = &btf_mod->extras[i];
+
+				if (extra->sysfs_attr)
+					sysfs_btf_remove(extra->sysfs_attr);
+				kvfree(extra->data);
+			}
 			purge_cand_cache(btf_mod->btf);
 			btf_put(btf_mod->btf);
 			kfree(btf_mod);
@@ -9599,7 +9664,7 @@ static struct notifier_block btf_module_nb = {
 
 static int __init btf_module_init(void)
 {
-	btf_vmlinux_inline_lazy_init();
+	btf_vmlinux_extras_init();
 	register_module_notifier(&btf_module_nb);
 	return 0;
 }

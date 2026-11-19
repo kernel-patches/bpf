@@ -31,6 +31,29 @@
 static int duration = 0;
 static bool always_log;
 
+static bool btf_dedup_equal_payloads(const struct btf_type *test_type,
+				    const struct btf_type *expect_type)
+{
+	const struct btf_var_secinfo *test_vsi, *expect_vsi;
+	int i;
+
+	if (btf_is_var(test_type))
+		return ASSERT_EQ(btf_var(test_type)->linkage, btf_var(expect_type)->linkage,
+				 "var_linkage");
+	if (!btf_is_datasec(test_type))
+		return true;
+
+	test_vsi = btf_var_secinfos(test_type);
+	expect_vsi = btf_var_secinfos(expect_type);
+	for (i = 0; i < btf_vlen(test_type); i++) {
+		if (!ASSERT_EQ(test_vsi[i].type, expect_vsi[i].type, "datasec_var_type") ||
+		    !ASSERT_EQ(test_vsi[i].offset, expect_vsi[i].offset, "datasec_var_offset") ||
+		    !ASSERT_EQ(test_vsi[i].size, expect_vsi[i].size, "datasec_var_size"))
+			return false;
+	}
+	return true;
+}
+
 #undef CHECK
 #define CHECK(condition, format...) _CHECK(condition, "check", duration, format)
 
@@ -7580,7 +7603,7 @@ static struct btf_dedup_test dedup_tests[] = {
 	},
 },
 {
-	.descr = "dedup: datasec and vars pass-through",
+	.descr = "dedup: datasec pass-through",
 	.input = {
 		.raw_types = {
 			/* int */
@@ -7610,17 +7633,141 @@ static struct btf_dedup_test dedup_tests[] = {
 			/* .bss section */				/* [3] */
 			BTF_TYPE_ENC(NAME_NTH(1), BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 1), 4),
 			BTF_VAR_SECINFO_ENC(2, 0, 4),
-			/* another static int t */
-			BTF_VAR_ENC(NAME_NTH(2), 1, 0),			/* [4] */
-			/* another .bss section */			/* [5] */
+			/* another .bss section */			/* [4] */
 			BTF_TYPE_ENC(NAME_NTH(1), BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 1), 4),
-			BTF_VAR_SECINFO_ENC(4, 0, 4),
+			BTF_VAR_SECINFO_ENC(2, 0, 4),
 			BTF_END_RAW,
 		},
 		BTF_STR_SEC("\0.bss\0t"),
 	},
 	.opts = {
 		.force_collisions = true
+	},
+},
+{
+	.descr = "dedup: vars with different linkages",
+	.input = {
+		.raw_types = {
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4), /* [1] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [2] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [3] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_GLOBAL_ALLOCATED), /* [4] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_GLOBAL_ALLOCATED), /* [5] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_GLOBAL_EXTERN), /* [6] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_GLOBAL_EXTERN), /* [7] */
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t"),
+	},
+	.expect = {
+		.raw_types = {
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4), /* [1] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [2] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_GLOBAL_ALLOCATED), /* [3] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_GLOBAL_EXTERN), /* [4] */
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t"),
+	},
+	.opts = {
+		.force_collisions = true,
+	},
+},
+{
+	.descr = "dedup: vars with different decl tag sets",
+	.input = {
+		.raw_types = {
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4), /* [1] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [2] untagged */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [3] tag a */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [4] tag b */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [5] tag a */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [6] attr a */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [7] tags a, b */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [8] tags b, a */
+			BTF_DECL_TAG_ENC(NAME_NTH(2), 3, -1), /* [9] */
+			BTF_DECL_TAG_ENC(NAME_NTH(3), 4, -1), /* [10] */
+			BTF_DECL_TAG_ENC(NAME_NTH(2), 5, -1), /* [11] */
+			BTF_DECL_ATTR_ENC(NAME_NTH(2), 6, -1), /* [12] */
+			BTF_DECL_TAG_ENC(NAME_NTH(2), 7, -1), /* [13] */
+			BTF_DECL_TAG_ENC(NAME_NTH(3), 7, -1), /* [14] */
+			BTF_DECL_TAG_ENC(NAME_NTH(3), 8, -1), /* [15] */
+			BTF_DECL_TAG_ENC(NAME_NTH(2), 8, -1), /* [16] */
+			BTF_DECL_TAG_ENC(NAME_NTH(2), 5, -1), /* [17] duplicate tag */
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t\0a\0b"),
+	},
+	.expect = {
+		.raw_types = {
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4), /* [1] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [2] untagged */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [3] tag a */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [4] tag b */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [5] attr a */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [6] tags a, b */
+			BTF_DECL_TAG_ENC(NAME_NTH(2), 3, -1), /* [7] */
+			BTF_DECL_TAG_ENC(NAME_NTH(3), 4, -1), /* [8] */
+			BTF_DECL_ATTR_ENC(NAME_NTH(2), 5, -1), /* [9] */
+			BTF_DECL_TAG_ENC(NAME_NTH(2), 6, -1), /* [10] */
+			BTF_DECL_TAG_ENC(NAME_NTH(3), 6, -1), /* [11] */
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t\0a\0b"),
+	},
+	.opts = {
+		.force_collisions = true,
+	},
+},
+{
+	.descr = "dedup: datasec entries",
+	.input = {
+		.raw_types = {
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4), /* [1] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [2] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [3] duplicate */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_GLOBAL_ALLOCATED), /* [4] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [5] tag a */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [6] tag b */
+			BTF_DECL_TAG_ENC(NAME_NTH(2), 5, -1), /* [7] */
+			BTF_DECL_TAG_ENC(NAME_NTH(3), 6, -1), /* [8] */
+			/* .data section */				/* [9] */
+			BTF_TYPE_ENC(NAME_NTH(4), BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 8), 16),
+			BTF_VAR_SECINFO_ENC(3, 0, 4),
+			BTF_VAR_SECINFO_ENC(2, 0, 4),
+			BTF_VAR_SECINFO_ENC(4, 0, 4),
+			BTF_VAR_SECINFO_ENC(5, 0, 4),
+			BTF_VAR_SECINFO_ENC(6, 0, 4),
+			BTF_VAR_SECINFO_ENC(5, 0, 4),
+			BTF_VAR_SECINFO_ENC(2, 8, 4),
+			BTF_VAR_SECINFO_ENC(2, 8, 2),
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t\0a\0b\0.data"),
+	},
+	.expect = {
+		.raw_types = {
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4), /* [1] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [2] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_GLOBAL_ALLOCATED), /* [3] */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [4] tag a */
+			BTF_VAR_ENC(NAME_NTH(1), 1, BTF_VAR_STATIC), /* [5] tag b */
+			BTF_DECL_TAG_ENC(NAME_NTH(2), 4, -1), /* [6] */
+			BTF_DECL_TAG_ENC(NAME_NTH(3), 5, -1), /* [7] */
+			/* .data section */				/* [8] */
+			BTF_TYPE_ENC(NAME_NTH(4), BTF_INFO_ENC(BTF_KIND_DATASEC, 0, 6), 16),
+			BTF_VAR_SECINFO_ENC(2, 0, 4),
+			BTF_VAR_SECINFO_ENC(3, 0, 4),
+			BTF_VAR_SECINFO_ENC(4, 0, 4),
+			BTF_VAR_SECINFO_ENC(5, 0, 4),
+			BTF_VAR_SECINFO_ENC(2, 8, 2),
+			BTF_VAR_SECINFO_ENC(2, 8, 4),
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t\0a\0b\0.data"),
+	},
+	.opts = {
+		.force_collisions = true,
 	},
 },
 {
@@ -8558,6 +8705,8 @@ static void do_test_dedup(unsigned int test_num)
 			err = -1;
 			goto done;
 		}
+		if (!btf_dedup_equal_payloads(test_type, expect_type))
+			goto done;
 	}
 
 done:

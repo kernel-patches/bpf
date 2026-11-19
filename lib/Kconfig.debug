@@ -450,6 +450,21 @@ config DEBUG_INFO_BTF_INLINE
 	  The information describes inline locations and how to retrieve their
 	  associated parameters.
 
+config DEBUG_INFO_BTF_GLOBAL
+	tristate "Provide information about global variables in BTF"
+	default m
+	depends on DEBUG_INFO_BTF && PAHOLE_VERSION >= 128 && SYSFS
+	select DEBUG_INFO_BTF_MODULES if MODULES
+	help
+	  Generate type information for non-per-CPU variables in .BTF.global
+	  sections, as split BTF relative to the kernel or module BTF. Per-CPU
+	  variables and supporting types remain in the main BTF.
+
+	  If Y, embed the vmlinux global BTF in the kernel image. If M, provide
+	  it in btf_vmlinux_global.ko, loaded on demand when accessing
+	  /sys/kernel/btf/vmlinux.global. Both choices expose variable information
+	  with a ".global" suffix in /sys/kernel/btf, including for modules.
+
 config MODULE_ALLOW_BTF_MISMATCH
 	bool "Allow loading modules with non-matching BTF type info"
 	depends on DEBUG_INFO_BTF_MODULES

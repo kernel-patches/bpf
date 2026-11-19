@@ -69,6 +69,7 @@ esac
 gen_btf_data()
 {
 	inline=${BTF_INLINE:+--inline}
+	global=${BTF_GLOBAL:+--global}
 	btf1="${ELF_FILE}.BTF.1"
 	${PAHOLE} -J ${PAHOLE_FLAGS}			\
 		${BTF_BASE:+--btf_base ${BTF_BASE}}	\
@@ -78,6 +79,7 @@ gen_btf_data()
 	${RESOLVE_BTFIDS} ${RESOLVE_BTFIDS_FLAGS}	\
 		${BTF_BASE:+--btf_base ${BTF_BASE}}	\
 		${inline}				\
+		${global}				\
 		--btf ${btf1} "${ELF_FILE}"
 }
 
@@ -93,19 +95,25 @@ gen_btf_o()
 	${OBJCOPY} --add-section .BTF=${ELF_FILE}.BTF \
 		--set-section-flags .BTF=alloc,readonly ${btf_data}
 	ONLY_SEC="--only-section=.BTF"
-	btf_inline=${ELF_FILE}.BTF.inline
-	if [ "${BTF_INLINE}" = "m" ]; then
-		if [ -f "${btf_inline}" ]; then
-			cp "${btf_inline}" "${objtree}/vmlinux.BTF.inline"
-		else
-			rm -f "${objtree}/vmlinux.BTF.inline"
+	for extra in inline global; do
+		case "${extra}" in
+		inline) mode=${BTF_INLINE} ;;
+		global) mode=${BTF_GLOBAL} ;;
+		esac
+		btf_extra=${ELF_FILE}.BTF.${extra}
+		if [ "${mode}" = "m" ]; then
+			if [ -f "${btf_extra}" ]; then
+				cp "${btf_extra}" "${objtree}/vmlinux.BTF.${extra}"
+			else
+				rm -f "${objtree}/vmlinux.BTF.${extra}"
+			fi
 		fi
-	fi
-	if [ "${BTF_INLINE}" = "y" ] && [ -f "${btf_inline}" ]; then
-		${OBJCOPY} --add-section .BTF.inline=${btf_inline} \
-			--set-section-flags .BTF.inline=alloc,readonly ${btf_data}
-		ONLY_SEC="${ONLY_SEC} --only-section=.BTF.inline"
-	fi
+		if [ "${mode}" = "y" ] && [ -f "${btf_extra}" ]; then
+			${OBJCOPY} --add-section .BTF.${extra}=${btf_extra} \
+				--set-section-flags .BTF.${extra}=alloc,readonly ${btf_data}
+			ONLY_SEC="${ONLY_SEC} --only-section=.BTF.${extra}"
+		fi
+	done
 	${OBJCOPY} ${ONLY_SEC} --strip-all ${btf_data}
 
 	# Change e_type to ET_REL so that it can be used to link final vmlinux.
@@ -127,15 +135,21 @@ embed_btf_data()
 	if [ -f "${btf_base}" ]; then
 		${OBJCOPY} --add-section .BTF.base=${btf_base} ${ELF_FILE}
 	fi
-	btf_inline=${ELF_FILE}.BTF.inline
-	case "${ELF_FILE}" in
-	*/btf_vmlinux_inline.ko)
-		btf_inline=${BTF_BASE}.BTF.inline
-		;;
-	esac
-	if [ -n "${BTF_INLINE}" ] && [ -f "${btf_inline}" ]; then
-		${OBJCOPY} --add-section .BTF.inline=${btf_inline} ${ELF_FILE}
-	fi
+	for extra in inline global; do
+		case "${extra}" in
+		inline) mode=${BTF_INLINE} ;;
+		global) mode=${BTF_GLOBAL} ;;
+		esac
+		btf_extra=${ELF_FILE}.BTF.${extra}
+		case "${ELF_FILE}" in
+		*/btf_vmlinux_${extra}.ko)
+			btf_extra=${BTF_BASE}.BTF.${extra}
+			;;
+		esac
+		if [ -n "${mode}" ] && [ -f "${btf_extra}" ]; then
+			${OBJCOPY} --add-section .BTF.${extra}=${btf_extra} ${ELF_FILE}
+		fi
+	done
 	btf_ids="${ELF_FILE}.BTF_ids"
 	if [ -f "${btf_ids}" ]; then
 		${RESOLVE_BTFIDS} --patch_btfids ${btf_ids} ${ELF_FILE}
@@ -148,6 +162,8 @@ cleanup()
 	rm -f "${ELF_FILE}.BTF"
 	rm -f "${ELF_FILE}.BTF.inline"
 	rm -f "${ELF_FILE}.BTF.inline.link"
+	rm -f "${ELF_FILE}.BTF.global"
+	rm -f "${ELF_FILE}.BTF.global.link"
 	if [ "${BTFGEN_MODE}" = "module" ]; then
 		rm -f "${ELF_FILE}.BTF.base"
 		rm -f "${ELF_FILE}.BTF_ids"

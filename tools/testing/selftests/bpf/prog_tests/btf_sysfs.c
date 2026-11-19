@@ -11,7 +11,32 @@
 #include <unistd.h>
 
 #define BTF_SYSFS_DIR		"/sys/kernel/btf"
-#define BTF_INLINE_SUFFIX	".inline"
+
+static void test_btf_global_types(struct btf *btf)
+{
+	__u32 start_id = btf__type_cnt(btf__base_btf(btf));
+	__u32 i;
+
+	for (i = start_id; i < btf__type_cnt(btf); i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+
+		if (!ASSERT_TRUE(btf_is_var(t) || btf_is_datasec(t) || btf_is_decl_tag(t),
+				 "global_record_kind"))
+			return;
+		if (btf_is_var(t))
+			ASSERT_LT(t->type, start_id, "global_variable_type_in_base");
+		if (btf_is_datasec(t))
+			ASSERT_NEQ(strcmp(btf__name_by_offset(btf, t->name_off), ".data..percpu"),
+				   0, "percpu_section_in_base");
+		if (btf_is_decl_tag(t)) {
+			if (!ASSERT_GE(t->type, start_id, "global_decl_tag_target_in_global") ||
+			    !ASSERT_LT(t->type, btf__type_cnt(btf), "global_decl_tag_target_valid"))
+				return;
+			ASSERT_TRUE(btf_is_var(btf__type_by_id(btf, t->type)),
+				    "global_decl_tag_target_is_var");
+		}
+	}
+}
 
 static void test_btf_mmap_sysfs(const char *path, struct btf *base)
 {
@@ -84,7 +109,7 @@ cleanup:
 		close(fd);
 }
 
-static void test_btf_inline_sysfs_all(void)
+static void test_btf_extra_sysfs_all(const char *suffix)
 {
 	struct btf *vmlinux_btf;
 	struct dirent *dentry;
@@ -102,11 +127,11 @@ static void test_btf_inline_sysfs_all(void)
 	}
 
 	while ((dentry = readdir(dir)) != NULL) {
-		struct btf *base_btf = NULL, *module_btf = NULL, *inline_btf = NULL;
-		char btf_path[PATH_MAX], inline_path[PATH_MAX];
+		struct btf *base_btf = NULL, *module_btf = NULL, *extra_btf = NULL;
+		char btf_path[PATH_MAX], extra_path[PATH_MAX];
 		struct stat st;
 
-		/* Skip ".", ".." and "foo.inline" */
+		/* Skip ".", ".." and BTF extensions such as "foo.global". */
 		if (strstr(dentry->d_name, "."))
 			continue;
 
@@ -115,9 +140,9 @@ static void test_btf_inline_sysfs_all(void)
 
 		if (snprintf(btf_path, sizeof(btf_path), "%s/%s",
 			     BTF_SYSFS_DIR, dentry->d_name) >= sizeof(btf_path) ||
-		    snprintf(inline_path, sizeof(inline_path), "%s/%s%s",
-			     BTF_SYSFS_DIR, dentry->d_name, BTF_INLINE_SUFFIX) >=
-			     sizeof(inline_path)) {
+		    snprintf(extra_path, sizeof(extra_path), "%s/%s%s",
+			     BTF_SYSFS_DIR, dentry->d_name, suffix) >=
+			     sizeof(extra_path)) {
 			ASSERT_FAIL("BTF sysfs path is too long\n");
 			break;
 		}
@@ -134,20 +159,23 @@ static void test_btf_inline_sysfs_all(void)
 			}
 			base_btf = module_btf;
 		}
-		if (stat(inline_path, &st)) {
+		if (stat(extra_path, &st)) {
 			err = errno;
 			if (err != ENOENT)
-				ASSERT_OK(err, "stat_inline_btf");
+				ASSERT_OK(err, "stat_extra_btf");
 			btf__free(module_btf);
 			continue;
 		}
 		if (base_btf == vmlinux_btf)
-			test_btf_mmap_sysfs(inline_path, base_btf);
-		inline_btf = btf__parse_split(inline_path, base_btf);
-		err = libbpf_get_error(inline_btf);
-		if (!err)
-			btf__free(inline_btf);
-		ASSERT_OK(err, "parse_inline_btf");
+			test_btf_mmap_sysfs(extra_path, base_btf);
+		extra_btf = btf__parse_split(extra_path, base_btf);
+		err = libbpf_get_error(extra_btf);
+		if (!err) {
+			if (!strcmp(suffix, ".global"))
+				test_btf_global_types(extra_btf);
+			btf__free(extra_btf);
+		}
+		ASSERT_OK(err, "parse_extra_btf");
 		btf__free(module_btf);
 	}
 	closedir(dir);
@@ -158,5 +186,6 @@ static void test_btf_inline_sysfs_all(void)
 void test_btf_sysfs(void)
 {
 	test_btf_mmap_sysfs("/sys/kernel/btf/vmlinux", NULL);
-	test_btf_inline_sysfs_all();
+	test_btf_extra_sysfs_all(".inline");
+	test_btf_extra_sysfs_all(".global");
 }

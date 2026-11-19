@@ -56,6 +56,12 @@ endif
 
 targets += $(modules:%.o=%.ko) $(modules:%.o=%.mod.o) .module-common.o
 
+ifeq ($(KBUILD_EXTMOD),)
+ifeq ($(CONFIG_DEBUG_INFO_BTF_GLOBAL),m)
+kernel/bpf/btf_vmlinux_global.ko: $(objtree)/vmlinux.BTF.global
+endif
+endif
+
 # Add FORCE to the prerequisites of a target to force it to be always rebuilt.
 # ---------------------------------------------------------------------------
 
