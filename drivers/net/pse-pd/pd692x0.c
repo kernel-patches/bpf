@@ -1473,6 +1473,8 @@ pd692x0_fw_recv_resp(const struct i2c_client *client, unsigned long ms_timeout,
 
 	/* Read remaining characters */
 	ret = i2c_master_recv(client, fw_msg_buf + 1, msg_size - 1);
+	if (ret < 0)
+		return FW_UPLOAD_ERR_RW_ERROR;
 	if (strncmp(fw_msg_buf, msg_ok, msg_size)) {
 		dev_err(&client->dev,
 			"Wrong FW download process answer (%*pE)\n",
@@ -1483,9 +1485,10 @@ pd692x0_fw_recv_resp(const struct i2c_client *client, unsigned long ms_timeout,
 	return FW_UPLOAD_ERR_NONE;
 }
 
-static int pd692x0_fw_write_line(const struct i2c_client *client,
-				 const char line[PD692X0_FW_LINE_MAX_SZ],
-				 const bool last_line)
+static enum fw_upload_err
+pd692x0_fw_write_line(const struct i2c_client *client,
+		      const char line[PD692X0_FW_LINE_MAX_SZ],
+		      const bool last_line)
 {
 	int ret;
 
@@ -1496,19 +1499,12 @@ static int pd692x0_fw_write_line(const struct i2c_client *client,
 		line++;
 	}
 
-	if (last_line) {
-		ret = pd692x0_fw_recv_resp(client, 100, "TP\r\n",
-					   sizeof("TP\r\n") - 1);
-		if (ret)
-			return ret;
-	} else {
-		ret = pd692x0_fw_recv_resp(client, 100, "T*\r\n",
-					   sizeof("T*\r\n") - 1);
-		if (ret)
-			return ret;
-	}
+	if (last_line)
+		return pd692x0_fw_recv_resp(client, 100, "TP\r\n",
+					    sizeof("TP\r\n") - 1);
 
-	return FW_UPLOAD_ERR_NONE;
+	return pd692x0_fw_recv_resp(client, 100, "T*\r\n",
+				    sizeof("T*\r\n") - 1);
 }
 
 static enum fw_upload_err pd692x0_fw_reset(const struct i2c_client *client)
@@ -1524,7 +1520,7 @@ static enum fw_upload_err pd692x0_fw_reset(const struct i2c_client *client)
 		dev_err(&client->dev,
 			"Failed to reset the controller (%pe)\n",
 			ERR_PTR(ret));
-		return ret;
+		return FW_UPLOAD_ERR_RW_ERROR;
 	}
 
 	timeout = msecs_to_jiffies(10000) + jiffies;
@@ -1563,6 +1559,7 @@ static enum fw_upload_err pd692x0_fw_prepare(struct fw_upload *fwl,
 	struct pd692x0_priv *priv = fwl->dd_handle;
 	const struct i2c_client *client = priv->client;
 	enum pd692x0_fw_state last_fw_state;
+	enum fw_upload_err err;
 	int ret;
 
 	priv->cancel_request = false;
@@ -1596,12 +1593,12 @@ static enum fw_upload_err pd692x0_fw_prepare(struct fw_upload *fwl,
 		}
 	}
 
-	ret = pd692x0_fw_recv_resp(client, 100, "TPE\r\n", sizeof("TPE\r\n") - 1);
-	if (ret)
+	err = pd692x0_fw_recv_resp(client, 100, "TPE\r\n", sizeof("TPE\r\n") - 1);
+	if (err)
 		goto err_out;
 
 	if (priv->cancel_request) {
-		ret = FW_UPLOAD_ERR_CANCELED;
+		err = FW_UPLOAD_ERR_CANCELED;
 		goto err_out;
 	}
 
@@ -1610,7 +1607,7 @@ static enum fw_upload_err pd692x0_fw_prepare(struct fw_upload *fwl,
 err_out:
 	pd692x0_fw_reset(priv->client);
 	priv->fw_state = last_fw_state;
-	return ret;
+	return err;
 }
 
 static enum fw_upload_err pd692x0_fw_write(struct fw_upload *fwl,
@@ -1620,6 +1617,7 @@ static enum fw_upload_err pd692x0_fw_write(struct fw_upload *fwl,
 	struct pd692x0_priv *priv = fwl->dd_handle;
 	char line[PD692X0_FW_LINE_MAX_SZ];
 	const struct i2c_client *client;
+	enum fw_upload_err err;
 	int ret, i;
 	char cmd;
 
@@ -1636,17 +1634,17 @@ static enum fw_upload_err pd692x0_fw_write(struct fw_upload *fwl,
 		return FW_UPLOAD_ERR_RW_ERROR;
 	}
 
-	ret = pd692x0_fw_recv_resp(client, 100, "TOE\r\n", sizeof("TOE\r\n") - 1);
-	if (ret)
-		return ret;
+	err = pd692x0_fw_recv_resp(client, 100, "TOE\r\n", sizeof("TOE\r\n") - 1);
+	if (err)
+		return err;
 
-	ret = pd692x0_fw_recv_resp(client, 5000, "TE\r\n", sizeof("TE\r\n") - 1);
-	if (ret)
+	err = pd692x0_fw_recv_resp(client, 5000, "TE\r\n", sizeof("TE\r\n") - 1);
+	if (err)
 		dev_warn(&client->dev,
 			 "Failed to erase internal memory, however still try to write Firmware\n");
 
-	ret = pd692x0_fw_recv_resp(client, 100, "TPE\r\n", sizeof("TPE\r\n") - 1);
-	if (ret)
+	err = pd692x0_fw_recv_resp(client, 100, "TPE\r\n", sizeof("TPE\r\n") - 1);
+	if (err)
 		dev_warn(&client->dev,
 			 "Failed to erase internal memory, however still try to write Firmware\n");
 
@@ -1660,18 +1658,18 @@ static enum fw_upload_err pd692x0_fw_write(struct fw_upload *fwl,
 		dev_err(&client->dev,
 			"Failed to boot programming mode (%pe)\n",
 			ERR_PTR(ret));
-		return ret;
+		return FW_UPLOAD_ERR_RW_ERROR;
 	}
 
-	ret = pd692x0_fw_recv_resp(client, 100, "TOP\r\n", sizeof("TOP\r\n") - 1);
-	if (ret)
-		return ret;
+	err = pd692x0_fw_recv_resp(client, 100, "TOP\r\n", sizeof("TOP\r\n") - 1);
+	if (err)
+		return err;
 
 	i = 0;
 	while (i < size) {
 		ret = pd692x0_fw_get_next_line(data, line, size - i);
 		if (ret < 0) {
-			ret = FW_UPLOAD_ERR_FW_INVALID;
+			err = FW_UPLOAD_ERR_FW_INVALID;
 			goto err;
 		}
 
@@ -1680,17 +1678,17 @@ static enum fw_upload_err pd692x0_fw_write(struct fw_upload *fwl,
 		if (line[0] == 'S' && line[1] == '0') {
 			continue;
 		} else if (line[0] == 'S' && line[1] == '7') {
-			ret = pd692x0_fw_write_line(client, line, true);
-			if (ret)
+			err = pd692x0_fw_write_line(client, line, true);
+			if (err)
 				goto err;
 		} else {
-			ret = pd692x0_fw_write_line(client, line, false);
-			if (ret)
+			err = pd692x0_fw_write_line(client, line, false);
+			if (err)
 				goto err;
 		}
 
 		if (priv->cancel_request) {
-			ret = FW_UPLOAD_ERR_CANCELED;
+			err = FW_UPLOAD_ERR_CANCELED;
 			goto err;
 		}
 	}
@@ -1703,7 +1701,7 @@ static enum fw_upload_err pd692x0_fw_write(struct fw_upload *fwl,
 err:
 	strscpy_pad(line, "S7\r\n", sizeof(line));
 	pd692x0_fw_write_line(client, line, true);
-	return ret;
+	return err;
 }
 
 static enum fw_upload_err pd692x0_fw_poll_complete(struct fw_upload *fwl)
@@ -1711,13 +1709,14 @@ static enum fw_upload_err pd692x0_fw_poll_complete(struct fw_upload *fwl)
 	struct pd692x0_priv *priv = fwl->dd_handle;
 	const struct i2c_client *client = priv->client;
 	struct pd692x0_msg_ver ver;
+	enum fw_upload_err err;
 	int ret;
 
 	priv->fw_state = PD692X0_FW_COMPLETE;
 
-	ret = pd692x0_fw_reset(client);
-	if (ret)
-		return ret;
+	err = pd692x0_fw_reset(client);
+	if (err)
+		return err;
 
 	ver = pd692x0_get_sw_version(priv);
 	if (ver.maj_sw_ver < PD692X0_FW_MAJ_VER) {
