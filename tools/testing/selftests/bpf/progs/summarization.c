@@ -61,7 +61,7 @@ int main_might_sleep_with_subprogs(struct pt_regs *ctx)
 }
 
 SEC("?uprobe.s")
-int main_might_sleep(struct pt_regs *ctx)
+int main_might_sleep(struct pt_regs *ctx __arg_ctx)
 {
 	int i;
 
@@ -70,7 +70,7 @@ int main_might_sleep(struct pt_regs *ctx)
 }
 
 SEC("?uprobe.s")
-int main_does_not_sleep(struct pt_regs *ctx)
+int main_does_not_sleep(struct pt_regs *ctx __arg_ctx)
 {
 	return 0;
 }
