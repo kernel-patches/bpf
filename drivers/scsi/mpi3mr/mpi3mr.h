@@ -885,6 +885,7 @@ struct mpi3mr_sdev_priv_data {
  * struct mpi3mr_drv_cmd - Internal command tracker
  *
  * @mutex: Command mutex
+ * @state_lock: Protects the state, the sense buffer and the callback
  * @done: Completeor for wakeup
  * @reply: Firmware reply for internal commands
  * @sensebuf: Sensebuf for SCSI IO commands
@@ -901,6 +902,7 @@ struct mpi3mr_sdev_priv_data {
  */
 struct mpi3mr_drv_cmd {
 	struct mutex mutex;
+	spinlock_t state_lock;
 	struct completion done;
 	void *reply;
 	u8 *sensebuf;

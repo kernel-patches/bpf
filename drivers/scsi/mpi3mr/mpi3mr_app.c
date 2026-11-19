@@ -2447,7 +2447,9 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	u8 *sgl_iter = NULL, *sgl_din_iter = NULL, *sgl_dout_iter = NULL;
 	u16 rmc_size  = 0, desc_count = 0;
 	size_t req_min, buf_left;
-	bool prp_owned = false, timed_out = false;
+	bool prp_owned = false, timed_out = false, completed;
+	unsigned long flags;
+	u16 cmd_state;
 
 	bsg_req = job->request;
 	karg = (struct mpi3mr_bsg_mptcmd *)&bsg_req->cmd.mptcmd;
@@ -2795,11 +2797,13 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 			block_seq = mpi3mr_tgtdev_block_io_inc(mrioc, tgtdev);
 	}
 
+	spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
 	mrioc->bsg_cmds.state = MPI3MR_CMD_PENDING;
 	mrioc->bsg_cmds.is_waiting = 1;
 	mrioc->bsg_cmds.callback = NULL;
 	mrioc->bsg_cmds.is_sense = 0;
 	mrioc->bsg_cmds.sensebuf = sense_buff_k;
+	spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
 	memset(mrioc->bsg_cmds.reply, 0, mrioc->reply_sz);
 	mpi_header->host_tag = cpu_to_le16(MPI3MR_HOSTTAG_BSG_CMDS);
 	if (mrioc->logging_level & MPI3_DEBUG_BSG_INFO) {
@@ -2820,7 +2824,9 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 
 
 	if (rval) {
+		spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
 		mrioc->bsg_cmds.is_waiting = 0;
+		spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
 		dprint_bsg_err(mrioc,
 		    "%s: posting bsg request is failed\n", __func__);
 		rval = -EAGAIN;
@@ -2836,11 +2842,16 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 		mpi3mr_tgtdev_block_io_dec(mrioc, tgtdev, block_seq);
 		mpi3mr_tgtdev_put(tgtdev);
 	}
-	if (!(mrioc->bsg_cmds.state & MPI3MR_CMD_COMPLETE)) {
-		timed_out = true;
+	spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
+	cmd_state = mrioc->bsg_cmds.state;
+	completed = cmd_state & MPI3MR_CMD_COMPLETE;
+	if (!completed)
 		mrioc->bsg_cmds.is_waiting = 0;
+	spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
+	if (!completed) {
+		timed_out = true;
 		rval = -EAGAIN;
-		if (mrioc->bsg_cmds.state & MPI3MR_CMD_RESET)
+		if (cmd_state & MPI3MR_CMD_RESET)
 			goto out_unlock;
 		if (((mpi_header->function != MPI3_FUNCTION_SCSI_IO) &&
 		    (mpi_header->function != MPI3_FUNCTION_NVME_ENCAPSULATED))
@@ -2870,8 +2881,11 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 			    MPI3MR_HOSTTAG_BLK_TMS, MPI3MR_RESETTM_TIMEOUT,
 			    &mrioc->host_tm_cmds, &resp_code, NULL);
 		}
-		if (!(mrioc->bsg_cmds.state & MPI3MR_CMD_COMPLETE) &&
-		    !(mrioc->bsg_cmds.state & MPI3MR_CMD_RESET))
+		spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
+		cmd_state = mrioc->bsg_cmds.state;
+		spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
+		if (!(cmd_state & MPI3MR_CMD_COMPLETE) &&
+		    !(cmd_state & MPI3MR_CMD_RESET))
 			mpi3mr_soft_reset_handler(mrioc,
 			    MPI3MR_RESET_FROM_APP_TIMEOUT, 1);
 		goto out_unlock;
@@ -2947,14 +2961,17 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 
 out_unlock:
 	if (prp_owned) {
+		spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
+		cmd_state = mrioc->bsg_cmds.state;
+		spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
 		/*
 		 * Do not free the PRP list if a timed out command may still be
 		 * using it. Leaking it is safer than letting the controller read
 		 * freed memory.
 		 */
 		if (!timed_out ||
-		    (mrioc->bsg_cmds.state & MPI3MR_CMD_COMPLETE) ||
-		    ((mrioc->bsg_cmds.state & MPI3MR_CMD_RESET) &&
+		    (cmd_state & MPI3MR_CMD_COMPLETE) ||
+		    ((cmd_state & MPI3MR_CMD_RESET) &&
 		    !mrioc->unrecoverable))
 			dma_free_coherent(&mrioc->pdev->dev, mrioc->prp_sz,
 			    mrioc->prp_list_virt, mrioc->prp_list_dma);
@@ -2966,9 +2983,11 @@ out_unlock:
 					    job->reply_payload.sg_cnt,
 					    din_buf, job->reply_payload.payload_len);
 	}
+	spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
 	mrioc->bsg_cmds.is_sense = 0;
 	mrioc->bsg_cmds.sensebuf = NULL;
 	mrioc->bsg_cmds.state = MPI3MR_CMD_NOTUSED;
+	spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
 	mutex_unlock(&mrioc->bsg_cmds.mutex);
 out:
 	kfree(sense_buff_k);

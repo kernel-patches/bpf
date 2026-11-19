@@ -442,6 +442,9 @@ static void mpi3mr_process_admin_reply_desc(struct mpi3mr_ioc *mrioc,
 
 	cmdptr = mpi3mr_get_drv_cmd(mrioc, host_tag, def_reply);
 	if (cmdptr) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&cmdptr->state_lock, flags);
 		if (cmdptr->state & MPI3MR_CMD_PENDING) {
 			cmdptr->state |= MPI3MR_CMD_COMPLETE;
 			cmdptr->ioc_loginfo = ioc_loginfo;
@@ -466,6 +469,7 @@ static void mpi3mr_process_admin_reply_desc(struct mpi3mr_ioc *mrioc,
 			} else if (cmdptr->callback)
 				cmdptr->callback(mrioc, cmdptr);
 		}
+		spin_unlock_irqrestore(&cmdptr->state_lock, flags);
 	}
 out:
 	if (sense_buf)
@@ -5333,6 +5337,9 @@ void mpi3mr_cleanup_ioc(struct mpi3mr_ioc *mrioc)
 static inline void mpi3mr_drv_cmd_comp_reset(struct mpi3mr_ioc *mrioc,
 	struct mpi3mr_drv_cmd *cmdptr)
 {
+	unsigned long flags;
+
+	spin_lock_irqsave(&cmdptr->state_lock, flags);
 	if (cmdptr->state & MPI3MR_CMD_PENDING) {
 		cmdptr->state |= MPI3MR_CMD_RESET;
 		cmdptr->state &= ~MPI3MR_CMD_PENDING;
@@ -5342,6 +5349,7 @@ static inline void mpi3mr_drv_cmd_comp_reset(struct mpi3mr_ioc *mrioc,
 		} else if (cmdptr->callback)
 			cmdptr->callback(mrioc, cmdptr);
 	}
+	spin_unlock_irqrestore(&cmdptr->state_lock, flags);
 }
 
 /**

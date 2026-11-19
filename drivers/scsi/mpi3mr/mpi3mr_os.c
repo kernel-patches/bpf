@@ -5585,6 +5585,7 @@ static inline void mpi3mr_init_drv_cmd(struct mpi3mr_drv_cmd *cmdptr,
 	u16 host_tag)
 {
 	mutex_init(&cmdptr->mutex);
+	spin_lock_init(&cmdptr->state_lock);
 	cmdptr->reply = NULL;
 	cmdptr->state = MPI3MR_CMD_NOTUSED;
 	cmdptr->dev_handle = MPI3MR_INVALID_DEV_HANDLE;
@@ -5735,6 +5736,8 @@ mpi3mr_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	mpi3mr_init_drv_cmd(&mrioc->cfg_cmds, MPI3MR_HOSTTAG_CFG_CMDS);
 	mpi3mr_init_drv_cmd(&mrioc->transport_cmds,
 	    MPI3MR_HOSTTAG_TRANSPORT_CMDS);
+	mpi3mr_init_drv_cmd(&mrioc->pel_cmds, MPI3MR_HOSTTAG_PEL_WAIT);
+	mpi3mr_init_drv_cmd(&mrioc->pel_abort_cmd, MPI3MR_HOSTTAG_PEL_ABORT);
 
 	for (i = 0; i < MPI3MR_NUM_DEVRMCMD; i++)
 		mpi3mr_init_drv_cmd(&mrioc->dev_rmhs_cmds[i],
