@@ -1870,6 +1870,7 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		 * The rest of the buffer is mapped from userspace.
 		 */
 		copylen = min(hdr_len ? hdr_len : GOODCOPY_LEN, good_linear);
+		copylen = min_t(size_t, copylen, len);
 		linear = copylen;
 		iov_iter_advance(&i, copylen);
 		if (iov_iter_npages(&i, INT_MAX) <= MAX_SKB_FRAGS)
