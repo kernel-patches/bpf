@@ -741,6 +741,7 @@ enum mpi3mr_dev_state {
  *
  * @list: List pointer
  * @starget: Scsi_target pointer
+ * @stgt_priv: Private data of the scsi_target
  * @dev_handle: FW device handle
  * @parent_handle: FW parent device handle
  * @slot: Slot number
@@ -766,6 +767,7 @@ enum mpi3mr_dev_state {
 struct mpi3mr_tgt_dev {
 	struct list_head list;
 	struct scsi_target *starget;
+	struct mpi3mr_stgt_priv_data *stgt_priv;
 	u16 dev_handle;
 	u16 parent_handle;
 	u16 slot;
@@ -1533,6 +1535,11 @@ int mpi3mr_issue_tm(struct mpi3mr_ioc *mrioc, u8 tm_type,
 	u16 handle, uint lun, u16 htag, ulong timeout,
 	struct mpi3mr_drv_cmd *drv_cmd,
 	u8 *resp_code, struct scsi_cmnd *scmd);
+struct mpi3mr_stgt_priv_data *mpi3mr_tgtdev_block_io_inc(struct mpi3mr_ioc *mrioc,
+							 struct mpi3mr_tgt_dev *tgtdev);
+void mpi3mr_tgtdev_block_io_dec(struct mpi3mr_ioc *mrioc,
+				struct mpi3mr_tgt_dev *tgtdev,
+				struct mpi3mr_stgt_priv_data *stgt_priv);
 struct mpi3mr_tgt_dev *mpi3mr_get_tgtdev_by_handle(
 	struct mpi3mr_ioc *mrioc, u16 handle);
 void mpi3mr_pel_get_seqnum_complete(struct mpi3mr_ioc *mrioc,

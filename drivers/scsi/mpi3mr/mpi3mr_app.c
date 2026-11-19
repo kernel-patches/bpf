@@ -2439,7 +2439,7 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	struct mpi3_scsi_task_mgmt_request *tm_req;
 	u32 erbsz = MPI3MR_SENSE_BUF_SZ, tmplen;
 	u16 dev_handle;
-	struct mpi3mr_tgt_dev *tgtdev;
+	struct mpi3mr_tgt_dev *tgtdev = NULL;
 	struct mpi3mr_stgt_priv_data *stgt_priv = NULL;
 	struct mpi3mr_bsg_in_reply_buf *bsg_reply_buf = NULL;
 	u32 din_size = 0, dout_size = 0;
@@ -2791,14 +2791,8 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	}
 	if (block_io) {
 		tgtdev = mpi3mr_get_tgtdev_by_handle(mrioc, dev_handle);
-		if (tgtdev) {
-			if (tgtdev->starget && tgtdev->starget->hostdata) {
-				stgt_priv = (struct mpi3mr_stgt_priv_data *)
-				    tgtdev->starget->hostdata;
-				atomic_inc(&stgt_priv->block_io);
-			}
-			mpi3mr_tgtdev_put(tgtdev);
-		}
+		if (tgtdev)
+			stgt_priv = mpi3mr_tgtdev_block_io_inc(mrioc, tgtdev);
 	}
 
 	mrioc->bsg_cmds.state = MPI3MR_CMD_PENDING;
@@ -2830,14 +2824,18 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 		dprint_bsg_err(mrioc,
 		    "%s: posting bsg request is failed\n", __func__);
 		rval = -EAGAIN;
-		if (block_io && stgt_priv)
-			atomic_dec(&stgt_priv->block_io);
+		if (tgtdev) {
+			mpi3mr_tgtdev_block_io_dec(mrioc, tgtdev, stgt_priv);
+			mpi3mr_tgtdev_put(tgtdev);
+		}
 		goto out_unlock;
 	}
 	wait_for_completion_timeout(&mrioc->bsg_cmds.done,
 	    (karg->timeout * HZ));
-	if (block_io && stgt_priv)
-		atomic_dec(&stgt_priv->block_io);
+	if (tgtdev) {
+		mpi3mr_tgtdev_block_io_dec(mrioc, tgtdev, stgt_priv);
+		mpi3mr_tgtdev_put(tgtdev);
+	}
 	if (!(mrioc->bsg_cmds.state & MPI3MR_CMD_COMPLETE)) {
 		timed_out = true;
 		mrioc->bsg_cmds.is_waiting = 0;

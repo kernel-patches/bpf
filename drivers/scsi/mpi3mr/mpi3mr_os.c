@@ -789,6 +789,57 @@ struct mpi3mr_tgt_dev *mpi3mr_get_tgtdev_by_handle(
 }
 
 /**
+ * mpi3mr_tgtdev_block_io_inc - Block I/O on the SCSI target of a tgtdev
+ * @mrioc: Adapter instance reference
+ * @tgtdev: Target device reference, held by the caller
+ *
+ * Increment block_io of the SCSI target private data of the tgtdev. The
+ * private data is looked up and incremented under tgtdev_lock, which is
+ * also held when the target is destroyed.
+ *
+ * Return: The private data that was incremented, to be handed back when
+ * block_io is decremented. NULL if the tgtdev has no private data.
+ */
+struct mpi3mr_stgt_priv_data *mpi3mr_tgtdev_block_io_inc(struct mpi3mr_ioc *mrioc,
+							 struct mpi3mr_tgt_dev *tgtdev)
+{
+	struct mpi3mr_stgt_priv_data *stgt_priv = NULL;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mrioc->tgtdev_lock, flags);
+	stgt_priv = tgtdev->stgt_priv;
+	if (stgt_priv)
+		atomic_inc(&stgt_priv->block_io);
+	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
+	return stgt_priv;
+}
+
+/**
+ * mpi3mr_tgtdev_block_io_dec - Undo mpi3mr_tgtdev_block_io_inc
+ * @mrioc: Adapter instance reference
+ * @tgtdev: Target device reference, held by the caller
+ * @stgt_priv: Value returned by mpi3mr_tgtdev_block_io_inc
+ *
+ * Decrement block_io only if the tgtdev still has the same private data.
+ * If the target was removed meanwhile the private data is gone and there
+ * is nothing to undo.
+ */
+void mpi3mr_tgtdev_block_io_dec(struct mpi3mr_ioc *mrioc,
+				struct mpi3mr_tgt_dev *tgtdev,
+				struct mpi3mr_stgt_priv_data *stgt_priv)
+{
+	unsigned long flags;
+
+	if (!stgt_priv)
+		return;
+
+	spin_lock_irqsave(&mrioc->tgtdev_lock, flags);
+	if (tgtdev->stgt_priv == stgt_priv)
+		atomic_dec_if_positive(&stgt_priv->block_io);
+	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
+}
+
+/**
  * __mpi3mr_get_tgtdev_by_perst_id -Get tgtdev from persist ID
  * @mrioc: Adapter instance reference
  * @persist_id: Persistent ID
@@ -4948,6 +4999,8 @@ static void mpi3mr_target_destroy(struct scsi_target *starget)
 	    (tgt_dev->perst_id == starget->id))
 		tgt_dev->starget = NULL;
 	if (tgt_dev) {
+		if (tgt_dev->stgt_priv == scsi_tgt_priv_data)
+			tgt_dev->stgt_priv = NULL;
 		scsi_tgt_priv_data->tgt_dev = NULL;
 		scsi_tgt_priv_data->perst_id = 0;
 		mpi3mr_tgtdev_put(tgt_dev);
@@ -5100,6 +5153,7 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 			scsi_tgt_priv_data->dev_type = tgt_dev->dev_type;
 			scsi_tgt_priv_data->tgt_dev = tgt_dev;
 			tgt_dev->starget = starget;
+			tgt_dev->stgt_priv = scsi_tgt_priv_data;
 			atomic_set(&scsi_tgt_priv_data->block_io, 0);
 			retval = 0;
 			if ((tgt_dev->dev_type == MPI3_DEVICE_DEVFORM_PCIE) &&
@@ -5133,6 +5187,7 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 			scsi_tgt_priv_data->io_throttle_enabled = tgt_dev->io_throttle_enabled;
 			scsi_tgt_priv_data->wslen = tgt_dev->wslen;
 			tgt_dev->starget = starget;
+			tgt_dev->stgt_priv = scsi_tgt_priv_data;
 			atomic_set(&scsi_tgt_priv_data->block_io, 0);
 			retval = 0;
 		} else {
