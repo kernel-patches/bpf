@@ -2062,7 +2062,8 @@ static int ip_mc_del1_src(struct ip_mc_list *pmc, int sfmode,
 #ifdef CONFIG_IP_MULTICAST
 		if (psf->sf_oldin &&
 		    !IGMP_V1_SEEN(in_dev) && !IGMP_V2_SEEN(in_dev)) {
-			struct ip_sf_list *dpsf = kmalloc_obj(*dpsf, GFP_ATOMIC);
+			struct ip_sf_list *dpsf = kmalloc_obj(*dpsf,
+							     GFP_ATOMIC | __GFP_ACCOUNT);
 
 			if (dpsf) {
 				*dpsf = *psf;
@@ -2162,7 +2163,7 @@ static int ip_mc_add1_src(struct ip_mc_list *pmc, int sfmode,
 		psf_prev = psf;
 	}
 	if (!psf) {
-		psf = kzalloc_obj(*psf, GFP_ATOMIC);
+		psf = kzalloc_obj(*psf, GFP_ATOMIC | __GFP_ACCOUNT);
 		if (!psf)
 			return -ENOBUFS;
 		psf->sf_inaddr = *psfsrc;
@@ -2244,7 +2245,8 @@ static int sf_setstate(struct ip_mc_list *pmc)
 					break;
 			}
 			if (!dpsf) {
-				dpsf = kmalloc_obj(*dpsf, GFP_ATOMIC);
+				dpsf = kmalloc_obj(*dpsf,
+						   GFP_ATOMIC | __GFP_ACCOUNT);
 				if (!dpsf)
 					continue;
 				*dpsf = *psf;

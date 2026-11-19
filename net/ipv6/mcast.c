@@ -91,7 +91,8 @@ static int ip6_mc_add_src(struct inet6_dev *idev, const struct in6_addr *pmca,
 static int ip6_mc_leave_src(struct sock *sk, struct ipv6_mc_socklist *iml,
 			    struct inet6_dev *idev);
 static int __ipv6_dev_mc_inc(struct net_device *dev,
-			     const struct in6_addr *addr, unsigned int mode);
+			     const struct in6_addr *addr, unsigned int mode,
+			     gfp_t gfp);
 
 #define MLD_QRV_DEFAULT		2
 /* RFC3810, 9.2. Query Interval */
@@ -232,7 +233,7 @@ static int __ipv6_sock_mc_join(struct sock *sk, int ifindex,
 	RCU_INIT_POINTER(mc_lst->sflist, NULL);
 
 	/* now add/increase the group membership on the device */
-	err = __ipv6_dev_mc_inc(dev, addr, mode);
+	err = __ipv6_dev_mc_inc(dev, addr, mode, GFP_KERNEL_ACCOUNT);
 
 	dev_put(dev);
 
@@ -788,7 +789,7 @@ static void mld_add_delrec(struct inet6_dev *idev, struct ifmcaddr6 *im)
 	 * for deleted items allows change reports to use common code with
 	 * non-deleted or query-response MCA's.
 	 */
-	pmc = kzalloc_obj(*pmc);
+	pmc = kzalloc_obj(*pmc, GFP_KERNEL_ACCOUNT);
 	if (!pmc)
 		return;
 
@@ -912,13 +913,13 @@ static void ma_put(struct ifmcaddr6 *mc)
 
 static struct ifmcaddr6 *mca_alloc(struct inet6_dev *idev,
 				   const struct in6_addr *addr,
-				   unsigned int mode)
+				   unsigned int mode, gfp_t gfp)
 {
 	struct ifmcaddr6 *mc;
 
 	mc_assert_locked(idev);
 
-	mc = kzalloc_obj(*mc);
+	mc = kzalloc_obj(*mc, gfp);
 	if (!mc)
 		return NULL;
 
@@ -981,7 +982,8 @@ error:
  *	device multicast group inc (add if not found)
  */
 static int __ipv6_dev_mc_inc(struct net_device *dev,
-			     const struct in6_addr *addr, unsigned int mode)
+			     const struct in6_addr *addr, unsigned int mode,
+			     gfp_t gfp)
 {
 	struct inet6_dev *idev;
 	struct ifmcaddr6 *mc;
@@ -1009,7 +1011,7 @@ static int __ipv6_dev_mc_inc(struct net_device *dev,
 		}
 	}
 
-	mc = mca_alloc(idev, addr, mode);
+	mc = mca_alloc(idev, addr, mode, gfp);
 	if (!mc) {
 		mutex_unlock(&idev->mc_lock);
 		in6_dev_put(idev);
@@ -1029,7 +1031,7 @@ static int __ipv6_dev_mc_inc(struct net_device *dev,
 
 int ipv6_dev_mc_inc(struct net_device *dev, const struct in6_addr *addr)
 {
-	return __ipv6_dev_mc_inc(dev, addr, MCAST_EXCLUDE);
+	return __ipv6_dev_mc_inc(dev, addr, MCAST_EXCLUDE, GFP_KERNEL);
 }
 EXPORT_SYMBOL(ipv6_dev_mc_inc);
 
@@ -2402,7 +2404,8 @@ static int ip6_mc_del1_src(struct ifmcaddr6 *pmc, int sfmode,
 
 		if (psf->sf_oldin && !(pmc->mca_flags & MAF_NOREPORT) &&
 		    !mld_in_v1_mode(idev)) {
-			struct ip6_sf_list *dpsf = kmalloc_obj(*dpsf);
+			struct ip6_sf_list *dpsf = kmalloc_obj(*dpsf,
+							      GFP_KERNEL_ACCOUNT);
 
 			if (dpsf) {
 				*dpsf = *psf;
@@ -2487,7 +2490,7 @@ static int ip6_mc_add1_src(struct ifmcaddr6 *pmc, int sfmode,
 		psf_prev = psf;
 	}
 	if (!psf) {
-		psf = kzalloc_obj(*psf);
+		psf = kzalloc_obj(*psf, GFP_KERNEL_ACCOUNT);
 		if (!psf)
 			return -ENOBUFS;
 
@@ -2572,7 +2575,7 @@ static int sf_setstate(struct ifmcaddr6 *pmc)
 				    &psf->sf_addr))
 					break;
 			if (!dpsf) {
-				dpsf = kmalloc_obj(*dpsf);
+				dpsf = kmalloc_obj(*dpsf, GFP_KERNEL_ACCOUNT);
 				if (!dpsf)
 					continue;
 				*dpsf = *psf;
