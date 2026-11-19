@@ -209,6 +209,21 @@ pub struct DeviceId(bindings::pci_device_id);
 impl DeviceId {
     const PCI_ANY_ID: u32 = !0;
 
+    /// Create a new `pci::DeviceId` for a VFIO driver from a vendor and device ID.
+    ///
+    /// The ID matches every device with this vendor and device ID, whatever its class. Matching
+    /// through this entry requires `driver_override` to select the driver. The module alias
+    /// generated for the ID has the `vfio_pci:` prefix, which lets userspace find the VFIO driver
+    /// for a device.
+    ///
+    /// Equivalent to C's `PCI_DRIVER_OVERRIDE_DEVICE_VFIO` macro.
+    #[inline]
+    pub const fn from_id_vfio_override(vendor: Vendor, device: u32) -> Self {
+        let mut id = Self::from_id(vendor, device);
+        id.0.override_only = bindings::PCI_ID_F_VFIO_DRIVER_OVERRIDE;
+        id
+    }
+
     /// Equivalent to C's `PCI_DEVICE` macro.
     ///
     /// Create a new `pci::DeviceId` from a vendor and device ID.
