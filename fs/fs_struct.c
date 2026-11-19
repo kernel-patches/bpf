@@ -165,46 +165,24 @@ int unshare_fs_struct(void)
 EXPORT_SYMBOL_GPL(unshare_fs_struct);
 
 /*
- * PID 1 may choose to stop sharing fs_struct state with us.
- * Either via unshare(CLONE_FS) or unshare(CLONE_NEWNS). Of
- * course, PID 1 could have chosen to create arbitrary process
- * trees that all share fs_struct state via CLONE_FS. This is a
- * strong statement: We only care about PID 1 aka the thread-group
- * leader so subthread's fs_struct state doesn't matter.
+ * PID 1 may stop sharing userspace_init_fs via unshare(CLONE_FS) or
+ * unshare(CLONE_NEWNS) which implies CLONE_FS. That doesn't mean it's
+ * done with it. Android's init unshares to create a second mount
+ * namespace and setns()s right back while its threads keep sharing
+ * userspace_init_fs.
  *
- * PID 1 unsharing fs_struct state is a bug. PID 1 relies on
- * various kthreads to be able to perform work based on its
- * fs_struct state. Breaking that contract sucks for both sides.
- * So just don't bother with extra work for this. No sane init
- * system should ever do this.
- *
- * On older kernels if PID 1 unshared its filesystem state with us the
- * kernel simply used the stale fs_struct state implicitly pinning
- * anything that PID 1 had last used. Even if PID 1 might've moved on to
- * some completely different fs_struct state and might've even unmounted
- * the old root.
- *
- * This has hilarious consequences: Think continuing to dump coredump
- * state into an implicitly pinned directory somewhere. Calling random
- * binaries in the old rootfs via usermodehelpers.
- *
- * Be aggressive about this: We simply reject operating on stale
- * fs_struct state by reverting to nullfs. Every kworker that does
- * lookups after this point will fail. Every usermodehelper call will
- * fail. Tough luck but let's be kind and emit a warning to userspace.
+ * So never change userspace_init_fs behind userspace's back. Kthreads
+ * and usermodehelpers keep using what PID 1 left behind, just like
+ * they kept using init_fs before PID 1 got its own fs_struct.
  */
 static inline void validate_fs_switch(struct fs_struct *old_fs)
 {
-	might_sleep();
-
 	if (likely(current->pid != 1))
 		return;
 	/* @old_fs may be dangling but for comparison it's fine */
 	if (old_fs != userspace_init_fs)
 		return;
-	pr_warn("VFS: Pid 1 stopped sharing filesystem state\n");
-	set_fs_root(userspace_init_fs, &init_fs.root);
-	set_fs_pwd(userspace_init_fs, &init_fs.root);
+	pr_info("VFS: Pid 1 stopped sharing filesystem state\n");
 }
 
 struct fs_struct *switch_fs_struct(struct fs_struct *new_fs)
