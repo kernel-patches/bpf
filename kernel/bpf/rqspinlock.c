@@ -378,9 +378,7 @@ int __lockfunc resilient_queued_spin_lock_slowpath(rqspinlock_t *lock, u32 val)
 	/*
 	 * If we observe contention, there is a concurrent locker.
 	 *
-	 * Undo and queue; our setting of PENDING might have made the
-	 * n,0,0 -> 0,0,0 transition fail and it will now be waiting
-	 * on @next to become !NULL.
+	 * Undo and queue.
 	 */
 	if (unlikely(val & ~_Q_LOCKED_MASK)) {
 
@@ -616,29 +614,24 @@ waitq_timeout:
 	/*
 	 * claim the lock:
 	 *
-	 * n,0,0 -> 0,0,1 : lock, uncontended
+	 * n,*,0 -> 0,*,1 : lock, uncontended
 	 * *,*,0 -> *,*,1 : lock, contended
 	 *
-	 * If the queue head is the only one in the queue (lock value == tail)
-	 * and nobody is pending, clear the tail code and grab the lock.
-	 * Otherwise, we only need to grab the lock.
+	 * If the queue head is the only one in the queue, clear the tail code
+	 * and grab the lock. Otherwise, we only need to grab the lock.
+	 *
+	 * A waiter that sets PENDING now may leave with -EDEADLK and never
+	 * queue behind us, so retry as long as the tail is ours. PENDING
+	 * belongs to that waiter, keep it. It either clears the bit or, on
+	 * x86, no longer sees our tail and becomes the pending waiter.
 	 */
-
-	/*
-	 * Note: at this point: (val & _Q_PENDING_MASK) == 0, because of the
-	 *       above wait condition, therefore any concurrent setting of
-	 *       PENDING will make the uncontended transition fail.
-	 */
-	if ((val & _Q_TAIL_MASK) == tail) {
-		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL))
-			goto release; /* No contention */
+	while ((val & _Q_TAIL_MASK) == tail) {
+		if (atomic_try_cmpxchg_relaxed(&lock->val, &val,
+					       (val & _Q_PENDING_MASK) | _Q_LOCKED_VAL))
+			goto release;
 	}
 
-	/*
-	 * Either somebody is queued behind us or _Q_PENDING_VAL got set
-	 * which will then detect the remaining tail and queue behind us
-	 * ensuring we'll see a @next.
-	 */
+	/* Somebody is queued behind us, ensuring we'll see a @next. */
 	set_locked(lock);
 
 	/*
