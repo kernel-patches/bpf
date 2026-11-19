@@ -746,7 +746,7 @@ int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 		if (optlen > 64*1024)
 			break;
 
-		opt = sock_kmalloc(sk, sizeof(*opt) + optlen, GFP_KERNEL);
+		opt = sock_kmalloc(sk, sizeof(*opt) + optlen, GFP_KERNEL_ACCOUNT);
 		retv = -ENOBUFS;
 		if (!opt)
 			break;

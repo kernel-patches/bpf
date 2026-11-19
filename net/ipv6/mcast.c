@@ -213,7 +213,8 @@ static int __ipv6_sock_mc_join(struct sock *sk, int ifindex,
 			return -EADDRINUSE;
 	}
 
-	mc_lst = sock_kmalloc(sk, sizeof(struct ipv6_mc_socklist), GFP_KERNEL);
+	mc_lst = sock_kmalloc(sk, sizeof(struct ipv6_mc_socklist),
+			      GFP_KERNEL_ACCOUNT);
 	if (!mc_lst)
 		return -ENOMEM;
 
@@ -436,7 +437,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 		} else {
 			newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr,
 							      psl->sl_count - 1),
-					      GFP_KERNEL);
+					      GFP_KERNEL_ACCOUNT);
 			if (!newpsl) {
 				atomic_add(struct_size(psl, sl_addr, psl->sl_max),
 					   &sk->sk_omem_alloc);
@@ -474,7 +475,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 
 	i = psl ? psl->sl_count + 1 : 1;
 	newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr, i),
-			      GFP_KERNEL);
+			      GFP_KERNEL_ACCOUNT);
 	if (!newpsl) {
 		err = -ENOBUFS;
 		goto done;
@@ -565,7 +566,7 @@ int ip6_mc_msfilter(struct sock *sk, struct group_filter *gsf,
 	if (gsf->gf_numsrc) {
 		newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr,
 						      gsf->gf_numsrc),
-				      GFP_KERNEL);
+				      GFP_KERNEL_ACCOUNT);
 		if (!newpsl) {
 			err = -ENOBUFS;
 			goto done;

@@ -2388,7 +2388,7 @@ static int __ip_mc_join_group(struct sock *sk, struct ip_mreqn *imr,
 	err = -ENOBUFS;
 	if (count >= READ_ONCE(net->ipv4.sysctl_igmp_max_memberships))
 		goto done;
-	iml = sock_kmalloc(sk, sizeof(*iml), GFP_KERNEL);
+	iml = sock_kmalloc(sk, sizeof(*iml), GFP_KERNEL_ACCOUNT);
 	if (!iml)
 		goto done;
 
@@ -2598,7 +2598,7 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		if (psl)
 			count += psl->sl_max;
 		newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr, count),
-				      GFP_KERNEL);
+				      GFP_KERNEL_ACCOUNT);
 		if (!newpsl) {
 			err = -ENOBUFS;
 			goto done;
@@ -2701,7 +2701,7 @@ int ip_mc_msfilter(struct sock *sk, struct ip_msfilter *msf, int ifindex)
 	if (msf->imsf_numsrc) {
 		newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr,
 						      msf->imsf_numsrc),
-				      GFP_KERNEL);
+				      GFP_KERNEL_ACCOUNT);
 		if (!newpsl) {
 			err = -ENOBUFS;
 			goto done;
