@@ -180,7 +180,7 @@ void test_assign_reuse(void)
 
 	tok = open_netns(NS_TEST);
 	if (!ASSERT_OK_PTR(tok, "netns token"))
-		return;
+		goto cleanup;
 
 	if (test__start_subtest("tcpv4"))
 		run_assign_reuse(AF_INET, SOCK_STREAM, "127.0.0.1", PORT);
