@@ -1079,6 +1079,15 @@ static const struct dev_pm_ops mchp_spdifrx_pm_ops = {
 		       NULL)
 };
 
+/* Runtime suspend the device on cleanup if necessary */
+static void mchp_spdifrx_runtime_suspend_action(void *data)
+{
+	struct device *dev = data;
+
+	if (!pm_runtime_status_suspended(dev))
+		mchp_spdifrx_runtime_suspend(dev);
+}
+
 static int mchp_spdifrx_probe(struct platform_device *pdev)
 {
 	struct mchp_spdifrx_dev *dev;
@@ -1141,11 +1150,22 @@ static int mchp_spdifrx_probe(struct platform_device *pdev)
 	dev->regmap = regmap;
 	platform_set_drvdata(pdev, dev);
 
-	pm_runtime_enable(dev->dev);
+	err = devm_add_action(dev->dev, mchp_spdifrx_runtime_suspend_action,
+			      dev->dev);
+	if (err)
+		return err;
+
+	err = devm_pm_runtime_enable(dev->dev);
+	if (err)
+		return err;
 	if (!pm_runtime_enabled(dev->dev)) {
 		err = mchp_spdifrx_runtime_resume(dev->dev);
-		if (err)
-			goto pm_runtime_disable;
+		if (err) {
+			devm_remove_action(dev->dev,
+					   mchp_spdifrx_runtime_suspend_action,
+					   dev->dev);
+			return err;
+		}
 	}
 
 	dev->capture.addr	= (dma_addr_t)mem->start + SPDIFRX_RHR;
@@ -1154,7 +1174,7 @@ static int mchp_spdifrx_probe(struct platform_device *pdev)
 	err = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (err) {
 		dev_err(&pdev->dev, "failed to register PCM: %d\n", err);
-		goto pm_runtime_suspend;
+		return err;
 	}
 
 	err = devm_snd_soc_register_component(&pdev->dev,
@@ -1162,34 +1182,17 @@ static int mchp_spdifrx_probe(struct platform_device *pdev)
 					      &mchp_spdifrx_dai, 1);
 	if (err) {
 		dev_err(&pdev->dev, "fail to register dai\n");
-		goto pm_runtime_suspend;
+		return err;
 	}
 
 	regmap_read(regmap, SPDIFRX_VERSION, &vers);
 	dev_info(&pdev->dev, "hw version: %#lx\n", vers & SPDIFRX_VERSION_MASK);
 
 	return 0;
-
-pm_runtime_suspend:
-	if (!pm_runtime_status_suspended(dev->dev))
-		mchp_spdifrx_runtime_suspend(dev->dev);
-pm_runtime_disable:
-	pm_runtime_disable(dev->dev);
-	return err;
-}
-
-static void mchp_spdifrx_remove(struct platform_device *pdev)
-{
-	struct mchp_spdifrx_dev *dev = platform_get_drvdata(pdev);
-
-	pm_runtime_disable(dev->dev);
-	if (!pm_runtime_status_suspended(dev->dev))
-		mchp_spdifrx_runtime_suspend(dev->dev);
 }
 
 static struct platform_driver mchp_spdifrx_driver = {
 	.probe	= mchp_spdifrx_probe,
-	.remove = mchp_spdifrx_remove,
 	.driver	= {
 		.name	= "mchp_spdifrx",
 		.of_match_table = mchp_spdifrx_dt_ids,
