@@ -2082,7 +2082,7 @@ static int mpi3mr_build_nvme_prp(struct mpi3mr_ioc *mrioc,
 			    mrioc->facts.sge_mod_shift) << 32);
 	u64 sgemod_val = ((u64)(mrioc->facts.sge_mod_value) <<
 			  mrioc->facts.sge_mod_shift) << 32;
-	u16 dev_handle = nvme_encap_request->dev_handle;
+	u16 dev_handle = le16_to_cpu(nvme_encap_request->dev_handle);
 	struct mpi3mr_tgt_dev *tgtdev;
 	u16 desc_count = 0;
 
@@ -2782,7 +2782,7 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 		tm_req = (struct mpi3_scsi_task_mgmt_request *)mpi_req;
 		if (tm_req->task_type !=
 		    MPI3_SCSITASKMGMT_TASKTYPE_ABORT_TASK) {
-			dev_handle = tm_req->dev_handle;
+			dev_handle = le16_to_cpu(tm_req->dev_handle);
 			block_io = 1;
 		}
 	}
@@ -2861,10 +2861,11 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 			(mpi_header->function == MPI3_BSG_FUNCTION_SCSI_IO)) {
 			dprint_bsg_err(mrioc, "%s: bsg request timedout after %d seconds,\n"
 				"issuing target reset to (0x%04x)\n", __func__,
-				karg->timeout, mpi_header->function_dependent);
+				karg->timeout,
+				le16_to_cpu(mpi_header->function_dependent));
 			mpi3mr_issue_tm(mrioc,
 			    MPI3_SCSITASKMGMT_TASKTYPE_TARGET_RESET,
-			    mpi_header->function_dependent, 0,
+			    le16_to_cpu(mpi_header->function_dependent), 0,
 			    MPI3MR_HOSTTAG_BLK_TMS, MPI3MR_RESETTM_TIMEOUT,
 			    &mrioc->host_tm_cmds, &resp_code, NULL);
 		}
