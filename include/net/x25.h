@@ -13,6 +13,7 @@
 #include <linux/x25.h>
 #include <linux/slab.h>
 #include <linux/refcount.h>
+#include <linux/workqueue.h>
 #include <net/sock.h>
 
 #define	X25_ADDR_LEN			16
@@ -143,6 +144,7 @@ struct x25_neigh {
 	struct sk_buff_head	queue;
 	unsigned long		t20;
 	struct timer_list	t20timer;
+	struct work_struct	kill_work;
 	unsigned long		global_facil_mask;
 	refcount_t		refcnt;
 };
@@ -317,6 +319,7 @@ extern struct list_head x25_forward_list;
 extern rwlock_t x25_forward_list_lock;
 extern struct list_head x25_neigh_list;
 extern rwlock_t x25_neigh_list_lock;
+extern struct workqueue_struct *x25_wq;
 
 int x25_proc_init(void);
 void x25_proc_exit(void);

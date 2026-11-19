@@ -222,6 +222,7 @@ static int x25_device_event(struct notifier_block *this, unsigned long event,
 			nb = x25_get_neigh(dev);
 			if (nb) {
 				x25_link_terminated(nb);
+				flush_work(&nb->kill_work);
 				x25_neigh_put(nb);
 			}
 			x25_route_device_down(dev);
@@ -1790,9 +1791,13 @@ static int __init x25_init(void)
 {
 	int rc;
 
+	x25_wq = alloc_workqueue("x25", WQ_PERCPU, 0);
+	if (!x25_wq)
+		return -ENOMEM;
+
 	rc = proto_register(&x25_proto, 0);
 	if (rc)
-		goto out;
+		goto out_wq;
 
 	rc = sock_register(&x25_family_ops);
 	if (rc)
@@ -1825,6 +1830,8 @@ out_sock:
 	sock_unregister(AF_X25);
 out_proto:
 	proto_unregister(&x25_proto);
+out_wq:
+	destroy_workqueue(x25_wq);
 	goto out;
 }
 module_init(x25_init);
@@ -1843,6 +1850,8 @@ static void __exit x25_exit(void)
 
 	sock_unregister(AF_X25);
 	proto_unregister(&x25_proto);
+
+	destroy_workqueue(x25_wq);
 }
 module_exit(x25_exit);
 

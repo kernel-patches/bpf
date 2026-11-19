@@ -31,6 +31,8 @@
 LIST_HEAD(x25_neigh_list);
 DEFINE_RWLOCK(x25_neigh_list_lock);
 
+struct workqueue_struct *x25_wq;
+
 static void x25_t20timer_expiry(struct timer_list *);
 
 static void x25_transmit_restart_confirmation(struct x25_neigh *nb);
@@ -58,6 +60,25 @@ static inline void x25_stop_t20timer(struct x25_neigh *nb)
 	timer_delete(&nb->t20timer);
 }
 
+static void x25_kill_by_neigh_work(struct work_struct *work)
+{
+	struct x25_neigh *nb = container_of(work, struct x25_neigh, kill_work);
+
+	x25_kill_by_neigh(nb);
+	dev_put(nb->dev);
+	x25_neigh_put(nb);
+}
+
+static void x25_defer_kill_by_neigh(struct x25_neigh *nb)
+{
+	x25_neigh_hold(nb);
+	dev_hold(nb->dev);
+	if (!queue_work(x25_wq, &nb->kill_work)) {
+		dev_put(nb->dev);
+		x25_neigh_put(nb);
+	}
+}
+
 /*
  *	This handles all restart and diagnostic frames.
  */
@@ -82,7 +103,7 @@ void x25_link_control(struct sk_buff *skb, struct x25_neigh *nb,
 			break;
 		case X25_LINK_STATE_3:
 			/* clear existing virtual calls */
-			x25_kill_by_neigh(nb);
+			x25_defer_kill_by_neigh(nb);
 
 			x25_transmit_restart_confirmation(nb);
 			break;
@@ -97,7 +118,7 @@ void x25_link_control(struct sk_buff *skb, struct x25_neigh *nb,
 			break;
 		case X25_LINK_STATE_3:
 			/* clear existing virtual calls */
-			x25_kill_by_neigh(nb);
+			x25_defer_kill_by_neigh(nb);
 
 			x25_transmit_restart_request(nb);
 			nb->state = X25_LINK_STATE_2;
@@ -254,7 +275,7 @@ void x25_link_terminated(struct x25_neigh *nb)
 	x25_stop_t20timer(nb);
 
 	/* Out of order: clear existing virtual calls (X.25 03/93 4.6.3) */
-	x25_kill_by_neigh(nb);
+	x25_defer_kill_by_neigh(nb);
 }
 
 /*
@@ -269,6 +290,7 @@ void x25_link_device_up(struct net_device *dev)
 
 	skb_queue_head_init(&nb->queue);
 	timer_setup(&nb->t20timer, x25_t20timer_expiry, 0);
+	INIT_WORK(&nb->kill_work, x25_kill_by_neigh_work);
 
 	dev_hold(dev);
 	nb->dev      = dev;
