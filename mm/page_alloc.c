@@ -1251,8 +1251,7 @@ void __pgalloc_tag_add(struct page *page, struct task_struct *task,
 		 * clear the tag ref later when page_ext is initialized.
 		 */
 		alloc_tag_add_early_pfn(page_to_pfn(page), alloc_flags);
-		if (task->alloc_tag)
-			alloc_tag_set_inaccurate(task->alloc_tag);
+		alloc_tag_set_inaccurate(task->alloc_tag);
 	}
 }
 
