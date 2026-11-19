@@ -13,15 +13,18 @@
 #include "xe_ggtt.h"
 #include "xe_memirq.h"
 #include "xe_migrate.h"
+#include "xe_mmio.h"
 #include "xe_pcode.h"
 #include "xe_sa.h"
 #include "xe_svm.h"
 #include "xe_tile.h"
+#include "xe_tile_printk.h"
 #include "xe_tile_sysfs.h"
 #include "xe_ttm_vram_mgr.h"
 #include "xe_vram.h"
 #include "xe_vram_types.h"
 #include "xe_wa.h"
+#include "regs/xe_regs.h"
 
 /**
  * DOC: Multi-tile Design
@@ -223,6 +226,64 @@ int xe_tile_init(struct xe_tile *tile)
 void xe_tile_migrate_wait(struct xe_tile *tile)
 {
 	xe_migrate_wait(tile->migrate);
+}
+
+/**
+ * xe_tile_wopcm_init() - cache the WOPCM size for the tile.
+ * @tile: The tile for which to cache the WOPCM size.
+ *
+ * This function reads the WOPCM size from the hardware and caches it in the tile
+ * structure. It does not perform any memory allocations. The cached value can
+ * be retrieved later using xe_tile_wopcm_size().
+ * This function can't be called on VFs since VFs don't have access to the
+ * register holding the WOPCM size.
+ *
+ * Returns: 0 on success, negative error code on error.
+ */
+int xe_tile_wopcm_init(struct xe_tile *tile)
+{
+	u32 wopcm_size;
+	u64 val;
+
+	if (IS_SRIOV_VF(tile_to_xe(tile)))
+		return 0;
+
+	val = xe_mmio_read64_2x32(&tile->mmio, STOLEN_RESERVED);
+	val = REG_FIELD_GET64(WOPCM_SIZE_MASK, val);
+
+	switch (val) {
+	case 0x5 ... 0x6:
+		val--;
+		fallthrough;
+	case 0x0 ... 0x3:
+		wopcm_size = (1U << val) * SZ_1M;
+		break;
+	default:
+		WARN(1, "Missing case wopcm_size=%llx\n", val);
+		return -EIO;
+	}
+
+	tile->mem.wopcm_size = wopcm_size;
+
+	xe_tile_info(tile, "WOPCM size: %uKB\n", wopcm_size / 1024);
+	return 0;
+}
+
+/**
+ * xe_tile_wopcm_size() - get the WOPCM size for the tile.
+ * @tile: The tile for which to get the WOPCM size.
+ *
+ * This function returns the cached WOPCM size for the tile. This function must
+ * be called after xe_tile_wopcm_init() has been called for the tile.
+ * This function can't be called on VFs since VFs don't have access to the
+ * register holding the WOPCM size.
+ *
+ * Returns: The cached WOPCM size in bytes.
+ */
+u32 xe_tile_wopcm_size(struct xe_tile *tile)
+{
+	xe_assert(tile_to_xe(tile), tile->mem.wopcm_size != 0);
+	return tile->mem.wopcm_size;
 }
 
 #if IS_ENABLED(CONFIG_DRM_XE_PAGEMAP)

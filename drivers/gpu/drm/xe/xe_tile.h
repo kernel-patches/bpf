@@ -19,6 +19,9 @@ int xe_tile_alloc_vram(struct xe_tile *tile);
 
 void xe_tile_migrate_wait(struct xe_tile *tile);
 
+int xe_tile_wopcm_init(struct xe_tile *tile);
+u32 xe_tile_wopcm_size(struct xe_tile *tile);
+
 static inline bool xe_tile_is_root(struct xe_tile *tile)
 {
 	return tile->id == 0;

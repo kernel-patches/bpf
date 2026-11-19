@@ -47,15 +47,16 @@
 #include "xe_sleep.h"
 #include "xe_sriov.h"
 #include "xe_sriov_pf_migration.h"
+#include "xe_tile.h"
 #include "xe_uc.h"
 #include "xe_uc_fw.h"
 #include "xe_wa.h"
-#include "xe_wopcm.h"
 
 static u32 guc_bo_ggtt_addr(struct xe_guc *guc,
 			    struct xe_bo *bo)
 {
-	struct xe_device *xe = guc_to_xe(guc);
+	struct xe_tile *tile = gt_to_tile(guc_to_gt(guc));
+	struct xe_device *xe = tile_to_xe(tile);
 	u32 addr;
 
 	/*
@@ -64,10 +65,12 @@ static u32 guc_bo_ggtt_addr(struct xe_guc *guc,
 	 * might be different for each tile. So, just always ask for the address
 	 * on the target GuC.
 	 */
-	addr = __xe_bo_ggtt_addr(bo, gt_to_tile(guc_to_gt(guc))->id);
+	addr = __xe_bo_ggtt_addr(bo, tile->id);
+
+	if (!IS_SRIOV_VF(xe))
+		xe_assert(xe, addr >= xe_tile_wopcm_size(tile));
 
 	/* GuC addresses above GUC_GGTT_TOP don't map through the GTT */
-	xe_assert(xe, addr >= xe_wopcm_size(guc_to_xe(guc)));
 	xe_assert(xe, addr < GUC_GGTT_TOP);
 	xe_assert(xe, xe_bo_size(bo) <= GUC_GGTT_TOP - addr);
 
