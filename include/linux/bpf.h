@@ -24,6 +24,7 @@
 #include <linux/kallsyms.h>
 #include <linux/capability.h>
 #include <linux/sched/mm.h>
+#include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/percpu-refcount.h>
 #include <linux/stddef.h>
@@ -1343,26 +1344,18 @@ static inline u32 btf_func_model_arg_slots(const struct btf_func_model *m, u32 a
  */
 #define BPF_TRAMP_F_INDIRECT		BIT(8)
 
-/* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
- * bytes on x86. The trampoline image has to fit in PAGE_SIZE.
+/*
+ * The image of a trampoline is not larger, also where pages are. That limits
+ * the number of programs: the index of a session cookie fits in its 8 bits,
+ * and the offsets into the stack frame fit in the instructions of each JIT.
  */
-enum {
-#if defined(__s390x__) || defined(__powerpc64__)
-	BPF_MAX_TRAMP_LINKS = 27,
-#elif defined(__x86_64__)
-	BPF_MAX_TRAMP_LINKS = 36,
-#elif defined(__aarch64__)
-	BPF_MAX_TRAMP_LINKS = 37,
-#else
-	BPF_MAX_TRAMP_LINKS = 38,
-#endif
-};
+#define BPF_TRAMP_IMAGE_MAX_SIZE	SZ_4K
 
 #define BPF_TRAMP_COOKIE_INDEX_SHIFT	8
 #define BPF_TRAMP_IS_RETURN_SHIFT	63
 
 struct bpf_tramp_nodes {
-	struct bpf_tramp_node *nodes[BPF_MAX_TRAMP_LINKS];
+	struct bpf_tramp_node **nodes;
 	int nr_nodes;
 };
 
