@@ -2498,10 +2498,10 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 	struct ip_mc_socklist *pmc;
 	struct in_device *in_dev = NULL;
 	struct inet_sock *inet = inet_sk(sk);
-	struct ip_sf_socklist *psl;
+	struct ip_sf_socklist *newpsl, *psl;
 	struct net *net = sock_net(sk);
 	int leavegroup = 0;
-	int i, j, rv;
+	int count, i, j, rv;
 
 	if (!ipv4_is_multicast(addr))
 		return -EINVAL;
@@ -2564,13 +2564,33 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 			goto done;
 		}
 
+		atomic_sub(struct_size(psl, sl_addr, psl->sl_max),
+			&sk->sk_omem_alloc);
+		if (psl->sl_count == 1) {
+			newpsl = NULL;
+		} else {
+			newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr,
+				psl->sl_count - 1), GFP_KERNEL);
+			if (!newpsl) {
+				atomic_add(struct_size(psl, sl_addr, psl->sl_max),
+					&sk->sk_omem_alloc);
+				err = -ENOBUFS;
+				goto done;
+			}
+			newpsl->sl_max = psl->sl_count - 1;
+			newpsl->sl_count = psl->sl_count - 1;
+			for (j = 0; j < i; j++)
+				newpsl->sl_addr[j] = psl->sl_addr[j];
+			for (j = i + 1; j < psl->sl_count; j++)
+				newpsl->sl_addr[j - 1] = psl->sl_addr[j];
+		}
+
 		/* update the interface filter */
 		ip_mc_del_src(in_dev, &mreqs->imr_multiaddr, omode, 1,
 			&mreqs->imr_sourceaddr, 1);
 
-		for (j = i+1; j < psl->sl_count; j++)
-			psl->sl_addr[j-1] = psl->sl_addr[j];
-		psl->sl_count--;
+		rcu_assign_pointer(pmc->sflist, newpsl);
+		kfree_rcu(psl, rcu);
 		err = 0;
 		goto done;
 	}
@@ -2580,49 +2600,52 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		err = -ENOBUFS;
 		goto done;
 	}
-	if (!psl || psl->sl_count == psl->sl_max) {
-		struct ip_sf_socklist *newpsl;
-		int count = IP_SFBLOCK;
 
-		if (psl)
-			count += psl->sl_max;
-		newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr, count),
-				      GFP_KERNEL);
-		if (!newpsl) {
-			err = -ENOBUFS;
-			goto done;
+	rv = 1;
+	if (psl) {
+		for (i = 0; i < psl->sl_count; i++) {
+			rv = memcmp(&psl->sl_addr[i], &mreqs->imr_sourceaddr,
+				sizeof(__be32));
+			if (rv == 0)
+				break;
 		}
-		newpsl->sl_max = count;
-		newpsl->sl_count = count - IP_SFBLOCK;
-		if (psl) {
-			for (i = 0; i < psl->sl_count; i++)
-				newpsl->sl_addr[i] = psl->sl_addr[i];
-			/* decrease mem now to avoid the memleak warning */
-			atomic_sub(struct_size(psl, sl_addr, psl->sl_max),
-				   &sk->sk_omem_alloc);
-		}
-		rcu_assign_pointer(pmc->sflist, newpsl);
-		if (psl)
-			kfree_rcu(psl, rcu);
-		psl = newpsl;
 	}
-	rv = 1;	/* > 0 for insert logic below if sl_count is 0 */
-	for (i = 0; i < psl->sl_count; i++) {
-		rv = memcmp(&psl->sl_addr[i], &mreqs->imr_sourceaddr,
-			sizeof(__be32));
-		if (rv == 0)
-			break;
-	}
+
 	if (rv == 0)		/* address already there is an error */
 		goto done;
-	for (j = psl->sl_count-1; j >= i; j--)
-		psl->sl_addr[j+1] = psl->sl_addr[j];
-	psl->sl_addr[i] = mreqs->imr_sourceaddr;
-	psl->sl_count++;
-	err = 0;
+
+	i = psl ? psl->sl_count + 1 : 1;
+	count = IP_SFBLOCK;
+	if (psl)
+		count += psl->sl_max;
+	newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr, count),
+		GFP_KERNEL);
+	if (!newpsl) {
+		err = -ENOBUFS;
+		goto done;
+	}
+	newpsl->sl_max = count;
+	newpsl->sl_count = i;
+	if (psl) {
+		for (j = 0; j < psl->sl_count; j++)
+			newpsl->sl_addr[j] = psl->sl_addr[j];
+	}
+	newpsl->sl_addr[i - 1] = mreqs->imr_sourceaddr;
+
 	/* update the interface list */
 	ip_mc_add_src(in_dev, &mreqs->imr_multiaddr, omode, 1,
 		&mreqs->imr_sourceaddr, 1);
+
+	if (psl) {
+		/* decrease mem now to avoid the memleak warning */
+		atomic_sub(struct_size(psl, sl_addr, psl->sl_max),
+			&sk->sk_omem_alloc);
+	}
+	rcu_assign_pointer(pmc->sflist, newpsl);
+	if (psl)
+		kfree_rcu(psl, rcu);
+	err = 0;
+
 done:
 	if (leavegroup)
 		err = ip_mc_leave_group(sk, &imr);
