@@ -646,6 +646,7 @@ static int sock_bindtoindex_locked(struct sock *sk, int ifindex)
 
 	/* Paired with all READ_ONCE() done locklessly. */
 	WRITE_ONCE(sk->sk_bound_dev_if, ifindex);
+	sk->sk_userlocks &= ~SOCK_CONNECT_IFINDEX;
 
 	if (sk->sk_prot->rehash)
 		sk->sk_prot->rehash(sk);

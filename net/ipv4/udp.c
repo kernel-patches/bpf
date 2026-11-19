@@ -2190,7 +2190,10 @@ int __udp_disconnect(struct sock *sk, int flags)
 	WRITE_ONCE(inet->inet_daddr, 0);
 	inet->inet_dport = 0;
 	sock_rps_reset_rxhash(sk);
-	WRITE_ONCE(sk->sk_bound_dev_if, 0);
+	if (sk->sk_userlocks & SOCK_CONNECT_IFINDEX) {
+		WRITE_ONCE(sk->sk_bound_dev_if, 0);
+		sk->sk_userlocks &= ~SOCK_CONNECT_IFINDEX;
+	}
 	if (!(sk->sk_userlocks & SOCK_BINDADDR_LOCK)) {
 		inet_reset_saddr(sk);
 		if (sk->sk_prot->rehash &&

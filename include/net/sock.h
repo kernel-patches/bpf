@@ -1538,6 +1538,10 @@ static inline int __sk_prot_rehash(struct sock *sk)
  * define SOCK_CONNECT_BIND - &sock->sk_userlocks flag for auto-bind at connect() time
  */
 #define SOCK_CONNECT_BIND	16
+/**
+ * define SOCK_CONNECT_IFINDEX - &sock->sk_userlocks flag for scoped connect() ifindex
+ */
+#define SOCK_CONNECT_IFINDEX	32
 
 struct socket_alloc {
 	struct socket socket;

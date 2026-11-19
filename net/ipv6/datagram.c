@@ -240,6 +240,8 @@ ipv4_connected:
 			err = -EINVAL;
 			goto out;
 		}
+		if (!old_bound_dev_if)
+			sk->sk_userlocks |= SOCK_CONNECT_IFINDEX;
 	}
 
 	/* save the current peer information before updating it */
@@ -264,6 +266,8 @@ ipv4_connected:
 		sk->sk_v6_daddr = old_daddr;
 		np->flow_label = old_fl6_flowlabel;
 		inet->inet_dport = old_dport;
+		if (!old_bound_dev_if)
+			sk->sk_userlocks &= ~SOCK_CONNECT_IFINDEX;
 		WRITE_ONCE(sk->sk_bound_dev_if, old_bound_dev_if);
 		goto out;
 	}
