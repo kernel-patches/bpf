@@ -502,8 +502,8 @@ enum avs_hw_cfg_params {
 };
 
 enum avs_iface_version {
-	AVS_AVS_VER_1_5 = 0x10005,
-	AVS_AVS_VER_1_8 = 0x10008,
+	AVS_IFACE_VER_1_5 = 0x10005,
+	AVS_IFACE_VER_1_8 = 0x10008,
 };
 
 enum avs_i2s_version {
