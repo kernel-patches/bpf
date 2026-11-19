@@ -100,6 +100,7 @@ struct tls_sw_context_tx {
 	struct tls_rec *open_rec;
 	struct list_head tx_list;
 	atomic_t encrypt_pending;
+	int abort_err; /* error of the send that aborted TX, never cleared */
 	u8 async_capable:1;
 
 #define BIT_TX_SCHEDULED	0
