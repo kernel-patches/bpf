@@ -33,7 +33,7 @@ include ../../lib.mk
 BPF_PROG_DIRS := xsk
 include ../bpf.mk
 
-# AF_XDP test engine used by net/test_xsk.sh.
+# AF_XDP test engine used by drivers/net/xsk.py.
 XSK_SRCS := $(filter-out %.bpf.c,$(wildcard xsk/*.c)) \
 	$(top_srcdir)/tools/lib/find_bit.c
 
