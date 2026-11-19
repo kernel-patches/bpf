@@ -2444,6 +2444,7 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	u8 *sgl_iter = NULL, *sgl_din_iter = NULL, *sgl_dout_iter = NULL;
 	u16 rmc_size  = 0, desc_count = 0;
 	size_t req_min, buf_left;
+	bool prp_owned = false, timed_out = false;
 
 	bsg_req = job->request;
 	karg = (struct mpi3mr_bsg_mptcmd *)&bsg_req->cmd.mptcmd;
@@ -2748,6 +2749,8 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 				mutex_unlock(&mrioc->bsg_cmds.mutex);
 				goto out;
 			}
+			if (mrioc->prp_list_virt)
+				prp_owned = true;
 		} else if (nvme_fmt == MPI3MR_NVME_DATA_FORMAT_SGL1 ||
 			nvme_fmt == MPI3MR_NVME_DATA_FORMAT_SGL2) {
 			if (mpi3mr_build_nvme_sgl(mrioc,
@@ -2833,6 +2836,7 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	if (block_io && stgt_priv)
 		atomic_dec(&stgt_priv->block_io);
 	if (!(mrioc->bsg_cmds.state & MPI3MR_CMD_COMPLETE)) {
+		timed_out = true;
 		mrioc->bsg_cmds.is_waiting = 0;
 		rval = -EAGAIN;
 		if (mrioc->bsg_cmds.state & MPI3MR_CMD_RESET)
@@ -2871,12 +2875,6 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 		goto out_unlock;
 	}
 	dprint_bsg_info(mrioc, "%s: bsg request is completed\n", __func__);
-
-	if (mrioc->prp_list_virt) {
-		dma_free_coherent(&mrioc->pdev->dev, mrioc->prp_sz,
-		    mrioc->prp_list_virt, mrioc->prp_list_dma);
-		mrioc->prp_list_virt = NULL;
-	}
 
 	if ((mrioc->bsg_cmds.ioc_status & MPI3_IOCSTATUS_STATUS_MASK)
 	     != MPI3_IOCSTATUS_SUCCESS) {
@@ -2946,6 +2944,20 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	}
 
 out_unlock:
+	if (prp_owned) {
+		/*
+		 * Do not free the PRP list if a timed out command may still be
+		 * using it. Leaking it is safer than letting the controller read
+		 * freed memory.
+		 */
+		if (!timed_out ||
+		    (mrioc->bsg_cmds.state & MPI3MR_CMD_COMPLETE) ||
+		    ((mrioc->bsg_cmds.state & MPI3MR_CMD_RESET) &&
+		    !mrioc->unrecoverable))
+			dma_free_coherent(&mrioc->pdev->dev, mrioc->prp_sz,
+			    mrioc->prp_list_virt, mrioc->prp_list_dma);
+		mrioc->prp_list_virt = NULL;
+	}
 	if (din_buf) {
 		job->reply_payload_rcv_len =
 			sg_copy_from_buffer(job->reply_payload.sg_list,
