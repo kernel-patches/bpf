@@ -5345,19 +5345,35 @@ int pci_reset_function(struct pci_dev *dev)
 	 * no upstream bridge configuration to hold consistent.
 	 */
 	bridge = pci_upstream_bridge(dev);
-	if (bridge)
-		pci_dev_lock(bridge);
 
-	pci_dev_lock(dev);
+	/*
+	 * Take the device locks, bridge before device, before blocking
+	 * config access to either of them.  device_lock() can sleep for as
+	 * long as another task holds it, e.g. a driver unbind waiting for
+	 * a vfio user to release the device.  If config access to the
+	 * bridge were already blocked at that point, every config read of
+	 * the bridge (lspci, sysfs "config") would sleep in pci_wait_cfg()
+	 * for the same time.
+	 */
+	if (bridge)
+		device_lock(&bridge->dev);
+	device_lock(&dev->dev);
+	if (bridge)
+		pci_cfg_access_lock(bridge);
+	pci_cfg_access_lock(dev);
+
 	pci_dev_save_and_disable(dev);
 
 	rc = __pci_reset_function_locked(dev);
 
 	pci_dev_restore(dev);
-	pci_dev_unlock(dev);
 
+	pci_cfg_access_unlock(dev);
 	if (bridge)
-		pci_dev_unlock(bridge);
+		pci_cfg_access_unlock(bridge);
+	device_unlock(&dev->dev);
+	if (bridge)
+		device_unlock(&bridge->dev);
 
 	return rc;
 }
