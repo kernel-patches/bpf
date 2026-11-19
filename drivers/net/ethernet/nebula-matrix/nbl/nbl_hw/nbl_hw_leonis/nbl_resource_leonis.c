@@ -277,6 +277,10 @@ static int nbl_res_start(struct nbl_resource_mgt *res_mgt)
 		ret = nbl_res_ctrl_dev_vsi_info_init(res_mgt);
 		if (ret)
 			return ret;
+
+		ret = nbl_intr_mgt_start(res_mgt);
+		if (ret)
+			return ret;
 	}
 
 	return 0;
@@ -307,8 +311,36 @@ int nbl_res_init_leonis(struct nbl_adapter *adap)
 
 void nbl_res_remove_leonis(struct nbl_adapter *adap)
 {
+	struct nbl_resource_mgt *res_mgt = adap->core.res_mgt;
+	struct nbl_common_info *common = &adap->common;
+
+	if (!res_mgt)
+		return;
+
 	/*
-	 * No resource release here because all memory uses devm managed
-	 * allocation
+	 * Tear down all MSI-X maps before destroying coherent tables.
+	 * This is critical on the control PF, whose table carries the map
+	 * entries installed for every configured function: they must be
+	 * invalidated in hardware before the tables backing them are
+	 * freed, otherwise the device keeps DMA-reading released pages.
+	 *
+	 * Sibling PFs are unbound by the device-link ordering, but that
+	 * does not mean their entries are gone: a destroy_msix_map RPC
+	 * that timed out leaves the control PF owning that function's map
+	 * entry, its net/other bitmap bits and its coherent table.  That is
+	 * why nbl_intr_mgt_stop() walks every configured function instead
+	 * of relying on the siblings having cleaned up after themselves,
+	 * and the walk must stay for that case.
+	 */
+	if (common->has_ctrl && res_mgt->intr_mgt)
+		nbl_intr_mgt_stop(res_mgt);
+
+	/* Note:
+	 * per-function interrupts arrays (kcalloc) are freed by
+	 * nbl_intr_mgt_stop().
+	 * MSIX coherent tables are freed by nbl_intr_mgt_stop() too, after
+	 * the last quiesce window and with bus mastering already cleared.
+	 * intr_mgt itself (devm_kzalloc) is released by devres after this
+	 * function returns
 	 */
 }
