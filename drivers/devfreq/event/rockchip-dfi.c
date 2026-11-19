@@ -291,7 +291,7 @@ static int rockchip_dfi_get_event(struct devfreq_event_dev *edev,
 				  struct devfreq_event_data *edata)
 {
 	struct rockchip_dfi *dfi = devfreq_event_get_drvdata(edev);
-	struct dmc_count count;
+	struct dmc_count count = {};
 	struct dmc_count *last = &dfi->last_event_count;
 	u32 access = 0, clock_cycles = 0;
 	int i;
@@ -462,7 +462,7 @@ static u64 rockchip_ddr_perf_event_get_count(struct perf_event *event)
 {
 	struct rockchip_dfi *dfi = container_of(event->pmu, struct rockchip_dfi, pmu);
 	int blen = dfi->burst_len;
-	struct dmc_count total, now;
+	struct dmc_count total = {}, now = {};
 	unsigned int seq;
 	u64 count = 0;
 	int i;
@@ -577,7 +577,7 @@ static void rockchip_ddr_perf_event_del(struct perf_event *event, int flags)
 static enum hrtimer_restart rockchip_dfi_timer(struct hrtimer *timer)
 {
 	struct rockchip_dfi *dfi = container_of(timer, struct rockchip_dfi, timer);
-	struct dmc_count now, total;
+	struct dmc_count now = {}, total = {};
 
 	rockchip_dfi_read_counters(dfi, &now);
 
