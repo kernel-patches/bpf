@@ -628,8 +628,11 @@ static int mctp_i2c_tx_thread(void *data)
 	unsigned long flags;
 
 	for (;;) {
-		if (kthread_should_stop())
+		if (kthread_should_stop()) {
+			/* Only the rt_mutex owner may release the bus lock */
+			mctp_i2c_unlock_reset(midev);
 			break;
+		}
 
 		spin_lock_irqsave(&midev->tx_queue.lock, flags);
 		skb = __skb_dequeue(&midev->tx_queue);
@@ -782,11 +785,46 @@ static struct mctp_i2c_dev *mctp_i2c_midev_init(struct net_device *dev,
 	return midev;
 }
 
+/* Removes midev from the parent i2c client and moves sel off it.
+ * Safe to call more than once.
+ */
+static void mctp_i2c_midev_detach(struct mctp_i2c_dev *midev)
+{
+	struct mctp_i2c_client *mcli = midev->client;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mcli->sel_lock, flags);
+	if (list_empty(&midev->list)) {
+		spin_unlock_irqrestore(&mcli->sel_lock, flags);
+		return;
+	}
+	list_del_init(&midev->list);
+	if (mcli->sel == midev) {
+		struct mctp_i2c_dev *first;
+
+		first = list_first_entry_or_null(&mcli->devs, struct mctp_i2c_dev, list);
+		__mctp_i2c_device_select(mcli, first);
+	}
+	spin_unlock_irqrestore(&mcli->sel_lock, flags);
+}
+
+/* The unlock marker is embedded in midev, so keep it from kfree_skb() */
+static void mctp_i2c_tx_purge(struct mctp_i2c_dev *midev)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&midev->tx_queue.lock, flags);
+	if (midev->unlock_marker.next)
+		__skb_unlink(&midev->unlock_marker, &midev->tx_queue);
+	spin_unlock_irqrestore(&midev->tx_queue.lock, flags);
+
+	skb_queue_purge(&midev->tx_queue);
+}
+
 /* Counterpart of mctp_i2c_midev_init */
 static void mctp_i2c_midev_free(struct mctp_i2c_dev *midev)
 {
 	struct mctp_i2c_client *mcli = midev->client;
-	unsigned long flags;
 
 	if (midev->tx_thread) {
 		kthread_stop(midev->tx_thread);
@@ -797,17 +835,9 @@ static void mctp_i2c_midev_free(struct mctp_i2c_dev *midev)
 	mctp_i2c_unlock_reset(midev);
 
 	/* Remove the netdev from the parent i2c client. */
-	spin_lock_irqsave(&mcli->sel_lock, flags);
-	list_del(&midev->list);
-	if (mcli->sel == midev) {
-		struct mctp_i2c_dev *first;
+	mctp_i2c_midev_detach(midev);
 
-		first = list_first_entry_or_null(&mcli->devs, struct mctp_i2c_dev, list);
-		__mctp_i2c_device_select(mcli, first);
-	}
-	spin_unlock_irqrestore(&mcli->sel_lock, flags);
-
-	skb_queue_purge(&midev->tx_queue);
+	mctp_i2c_tx_purge(midev);
 	put_device(&midev->adapter->dev);
 	put_device(&mcli->client->dev);
 }
@@ -827,8 +857,13 @@ static void mctp_i2c_unregister(struct mctp_i2c_dev *midev)
 	spin_unlock_irqrestore(&midev->lock, flags);
 	wait_for_completion(&midev->rx_done);
 
+	/* Release sel's reference on the netdev, otherwise
+	 * mctp_unregister_netdev() blocks waiting for it.
+	 */
+	mctp_i2c_midev_detach(midev);
+
 	mctp_unregister_netdev(midev->ndev);
-	/* midev has been freed now by mctp_i2c_ndo_uninit callback */
+	mctp_i2c_midev_free(midev);
 
 	free_netdev(midev->ndev);
 }
@@ -837,11 +872,11 @@ static void mctp_i2c_ndo_uninit(struct net_device *dev)
 {
 	struct mctp_i2c_dev *midev = netdev_priv(dev);
 
-	/* Perform cleanup here to ensure that mcli->sel isn't holding
-	 * a reference that would prevent unregister_netdevice()
-	 * from completing.
+	/* Drop sel's reference and queued skbs before unregister waits
+	 * for the last netdev reference. midev is freed elsewhere.
 	 */
-	mctp_i2c_midev_free(midev);
+	mctp_i2c_midev_detach(midev);
+	mctp_i2c_tx_purge(midev);
 }
 
 static int mctp_i2c_ndo_open(struct net_device *dev)
