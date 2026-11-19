@@ -276,7 +276,8 @@ static int __rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
 int rtnl_talk(struct rtnl_handle *rtnl, struct nlmsghdr *n,
 	      struct nlmsghdr **answer)
 {
-	return __rtnl_talk(rtnl, n, answer, true, NULL);
+	return __rtnl_talk(rtnl, n, answer,
+			   !(rtnl->flags & RTNL_HANDLE_F_SUPPRESS_NLERR), NULL);
 }
 
 int addattr(struct nlmsghdr *n, int maxlen, int type)
