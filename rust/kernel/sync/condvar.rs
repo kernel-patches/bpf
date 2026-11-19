@@ -5,18 +5,29 @@
 //! This module allows Rust code to use the kernel's [`struct wait_queue_head`] as a condition
 //! variable.
 
-use super::{lock::Backend, lock::Guard, LockClassKey};
-use crate::{
-    ffi::{c_int, c_long},
-    str::{CStr, CStrExt as _},
-    task::{
-        MAX_SCHEDULE_TIMEOUT, TASK_FREEZABLE, TASK_INTERRUPTIBLE, TASK_NORMAL, TASK_UNINTERRUPTIBLE,
-    },
-    time::Jiffies,
-    types::Opaque,
+use super::{
+    lock::Backend,
+    lock::Guard,
+    LockClassKey,
+    WaitQueue, //
 };
-use core::{marker::PhantomPinned, pin::Pin, ptr};
-use pin_init::{pin_data, pin_init, PinInit};
+
+use crate::{
+    prelude::*,
+    str::CStr,
+    task::{
+        self,
+        TASK_FREEZABLE,
+        TASK_INTERRUPTIBLE,
+        TASK_UNINTERRUPTIBLE, //
+    },
+    time::{
+        Delta,
+        Jiffy, //
+    },
+};
+
+use core::pin::Pin;
 
 /// Creates a [`CondVar`] initialiser with the given name and a newly-created lock class.
 #[macro_export]
@@ -81,33 +92,14 @@ pub use new_condvar;
 #[pin_data]
 pub struct CondVar {
     #[pin]
-    pub(crate) wait_queue_head: Opaque<bindings::wait_queue_head>,
-
-    /// A condvar needs to be pinned because it contains a [`struct list_head`] that is
-    /// self-referential, so it cannot be safely moved once it is initialised.
-    ///
-    /// [`struct list_head`]: srctree/include/linux/types.h
-    #[pin]
-    _pin: PhantomPinned,
+    pub(crate) wq: WaitQueue,
 }
-
-// SAFETY: `CondVar` only uses a `struct wait_queue_head`, which is safe to use on any thread.
-unsafe impl Send for CondVar {}
-
-// SAFETY: `CondVar` only uses a `struct wait_queue_head`, which is safe to use on multiple threads
-// concurrently.
-unsafe impl Sync for CondVar {}
 
 impl CondVar {
     /// Constructs a new condvar initialiser.
     pub fn new(name: &'static CStr, key: Pin<&'static LockClassKey>) -> impl PinInit<Self> {
         pin_init!(Self {
-            _pin: PhantomPinned,
-            // SAFETY: `slot` is valid while the closure is called and both `name` and `key` have
-            // static lifetimes so they live indefinitely.
-            wait_queue_head <- Opaque::ffi_init(|slot| unsafe {
-                bindings::__init_waitqueue_head(slot, name.as_char_ptr(), key.as_ptr())
-            }),
+            wq <- WaitQueue::new(name, key),
         })
     }
 
@@ -115,25 +107,11 @@ impl CondVar {
         &self,
         wait_state: c_int,
         guard: &mut Guard<'_, T, B>,
-        timeout_in_jiffies: c_long,
-    ) -> c_long {
-        let wait = Opaque::<bindings::wait_queue_entry>::uninit();
-
-        // SAFETY: `wait` points to valid memory.
-        unsafe { bindings::init_wait(wait.get()) };
-
-        // SAFETY: Both `wait` and `wait_queue_head` point to valid memory.
-        unsafe {
-            bindings::prepare_to_wait_exclusive(self.wait_queue_head.get(), wait.get(), wait_state)
-        };
-
-        // SAFETY: Switches to another thread. The timeout can be any number.
-        let ret = guard.do_unlocked(|| unsafe { bindings::schedule_timeout(timeout_in_jiffies) });
-
-        // SAFETY: Both `wait` and `wait_queue_head` point to valid memory.
-        unsafe { bindings::finish_wait(self.wait_queue_head.get(), wait.get()) };
-
-        ret
+        timeout: Delta<Jiffy>,
+    ) -> Delta<Jiffy> {
+        self.wq.wait_once_exclusive(wait_state, || {
+            guard.do_unlocked(|| task::schedule_timeout(timeout))
+        })
     }
 
     /// Releases the lock and waits for a notification in uninterruptible mode.
@@ -143,7 +121,11 @@ impl CondVar {
     /// [`CondVar::notify_one`] or [`CondVar::notify_all`]. Note that it may also wake up
     /// spuriously.
     pub fn wait<T: ?Sized, B: Backend>(&self, guard: &mut Guard<'_, T, B>) {
-        self.wait_internal(TASK_UNINTERRUPTIBLE, guard, MAX_SCHEDULE_TIMEOUT);
+        self.wait_internal(
+            TASK_UNINTERRUPTIBLE,
+            guard,
+            Delta::from_jiffies(task::MAX_SCHEDULE_TIMEOUT),
+        );
     }
 
     /// Releases the lock and waits for a notification in interruptible mode.
@@ -154,7 +136,11 @@ impl CondVar {
     /// Returns whether there is a signal pending.
     #[must_use = "wait_interruptible returns if a signal is pending, so the caller must check the return value"]
     pub fn wait_interruptible<T: ?Sized, B: Backend>(&self, guard: &mut Guard<'_, T, B>) -> bool {
-        self.wait_internal(TASK_INTERRUPTIBLE, guard, MAX_SCHEDULE_TIMEOUT);
+        self.wait_internal(
+            TASK_INTERRUPTIBLE,
+            guard,
+            Delta::from_jiffies(task::MAX_SCHEDULE_TIMEOUT),
+        );
         crate::current!().signal_pending()
     }
 
@@ -172,8 +158,33 @@ impl CondVar {
         self.wait_internal(
             TASK_INTERRUPTIBLE | TASK_FREEZABLE,
             guard,
-            MAX_SCHEDULE_TIMEOUT,
+            Delta::from_jiffies(task::MAX_SCHEDULE_TIMEOUT),
         );
+        crate::current!().signal_pending()
+    }
+
+    /// Releases the lock and waits non-exclusively in interruptible and freezable mode.
+    ///
+    /// Like [`CondVar::wait_interruptible_freezable`], but registers the current task as a
+    /// non-exclusive waiter.
+    ///
+    /// The lock is reacquired before returning. The wait may also end due to a signal or a
+    /// spurious wakeup.
+    ///
+    /// No lock other than the one released through `guard` should be held, since the task may
+    /// be frozen while sleeping.
+    ///
+    /// Returns whether there is a signal pending.
+    #[must_use = "the caller must check whether a signal is pending"]
+    pub fn wait_interruptible_freezable_nonexclusive<T: ?Sized, B: Backend>(
+        &self,
+        guard: &mut Guard<'_, T, B>,
+    ) -> bool {
+        self.wq.wait_once(TASK_INTERRUPTIBLE | TASK_FREEZABLE, || {
+            guard.do_unlocked(|| {
+                task::schedule_timeout(Delta::from_jiffies(task::MAX_SCHEDULE_TIMEOUT))
+            })
+        });
         crate::current!().signal_pending()
     }
 
@@ -182,53 +193,39 @@ impl CondVar {
     /// Atomically releases the given lock (whose ownership is proven by the guard) and puts the
     /// thread to sleep. It wakes up when notified by [`CondVar::notify_one`] or
     /// [`CondVar::notify_all`], or when a timeout occurs, or when the thread receives a signal.
+    ///
+    /// A negative timeout is treated as zero.
     #[must_use = "wait_interruptible_timeout returns if a signal is pending, so the caller must check the return value"]
     pub fn wait_interruptible_timeout<T: ?Sized, B: Backend>(
         &self,
         guard: &mut Guard<'_, T, B>,
-        jiffies: Jiffies,
+        timeout: Delta<Jiffy>,
     ) -> CondVarTimeoutResult {
-        let jiffies = jiffies.try_into().unwrap_or(MAX_SCHEDULE_TIMEOUT);
-        let res = self.wait_internal(TASK_INTERRUPTIBLE, guard, jiffies);
+        let remaining = self.wait_internal(TASK_INTERRUPTIBLE, guard, timeout);
 
-        match (res as Jiffies, crate::current!().signal_pending()) {
-            (jiffies, true) => CondVarTimeoutResult::Signal { jiffies },
-            (0, false) => CondVarTimeoutResult::Timeout,
-            (jiffies, false) => CondVarTimeoutResult::Woken { jiffies },
+        match (remaining, current!().signal_pending()) {
+            (remainder, true) => CondVarTimeoutResult::Signal { remainder },
+            (Delta::ZERO, false) => CondVarTimeoutResult::Timeout,
+            (remainder, false) => CondVarTimeoutResult::Woken { remainder },
         }
     }
 
-    /// Calls the kernel function to notify the appropriate number of threads.
-    fn notify(&self, count: c_int) {
-        // SAFETY: `wait_queue_head` points to valid memory.
-        unsafe {
-            bindings::__wake_up(
-                self.wait_queue_head.get(),
-                TASK_NORMAL,
-                count,
-                ptr::null_mut(),
-            )
-        };
-    }
-
-    /// Calls the kernel function to notify one thread synchronously.
+    /// Wakes all non-exclusive waiters and one exclusive waiter synchronously.
     ///
     /// This method behaves like `notify_one`, except that it hints to the scheduler that the
-    /// current thread is about to go to sleep, so it should schedule the target thread on the same
-    /// CPU.
+    /// current thread expects to sleep soon.
     #[inline]
     pub fn notify_sync(&self) {
-        // SAFETY: `wait_queue_head` points to valid memory.
-        unsafe { bindings::__wake_up_sync(self.wait_queue_head.get(), TASK_NORMAL) };
+        self.wq.wake_up_sync();
     }
 
-    /// Wakes a single waiter up, if any.
+    /// Wakes all non-exclusive waiters and one exclusive waiter, if any.
     ///
     /// This is not 'sticky' in the sense that if no thread is waiting, the notification is lost
     /// completely (as opposed to automatically waking up the next waiter).
     #[inline]
     pub fn notify_one(&self) {
-        self.notify(1);
+        self.wq.wake_up();
     }
 
     /// Wakes all waiters up, if any.
@@ -237,7 +234,7 @@ impl CondVar {
     /// completely (as opposed to automatically waking up the next waiter).
     #[inline]
     pub fn notify_all(&self) {
-        self.notify(0);
+        self.wq.wake_up_all();
     }
 }
 
@@ -248,11 +245,11 @@ pub enum CondVarTimeoutResult {
     /// Somebody woke us up.
     Woken {
         /// Remaining sleep duration.
-        jiffies: Jiffies,
+        remainder: Delta<Jiffy>,
     },
     /// A signal occurred.
     Signal {
         /// Remaining sleep duration.
-        jiffies: Jiffies,
+        remainder: Delta<Jiffy>,
     },
 }
