@@ -4,6 +4,7 @@
  */
 
 #include <linux/cpu.h>
+#include <linux/cpufeature.h>
 #include <linux/cpufreq.h>
 #include <linux/cpuhotplug.h>
 #include <linux/dma-mapping.h>
@@ -14,7 +15,9 @@
 #include <linux/slab.h>
 #include <linux/units.h>
 
+#include <asm/arch_timer.h>
 #include <asm/cputype.h>
+#include <asm/sysreg.h>
 
 #include <soc/tegra/bpmp.h>
 #include <soc/tegra/bpmp-abi.h>
@@ -35,6 +38,18 @@
 #define CLUSTER_ACTMON_BASE(data, cl) \
 			(data->regs + (MMCRAB_CLUSTER_BASE(cl) + data->soc->actmon_cntr_base))
 #define CORE_ACTMON_CNTR_REG(data, cl, cpu)	(CLUSTER_ACTMON_BASE(data, cl) + CORE_OFFSET(cpu))
+
+/*
+ * Tegra264 requests a frequency by writing the NDIV to a core_freq_req
+ * register in the CCPLEX register space.
+ *
+ * Two clusters that share a clock form a performance domain.
+ * Each domain has one core_freq_req register. The registers are grouped
+ * in blocks, two domains per block.
+ */
+#define T264_CORE_FREQ_REQ_BLOCK_SIZE		0x400000
+#define T264_CORE_FREQ_REQ_BLOCK_DOMAIN0_OFFSET	0x40000
+#define T264_CORE_FREQ_REQ_BLOCK_DOMAIN1_OFFSET	0x50000
 
 /* cpufreq transisition latency */
 #define TEGRA_CPUFREQ_TRANSITION_LATENCY (300 * 1000) /* unit in nanoseconds */
@@ -70,6 +85,8 @@ struct tegra_cpufreq_ops {
 struct tegra_cpufreq_soc {
 	struct tegra_cpufreq_ops *ops;
 	u64 cnt_mask;
+	/* AMU's constant counter ticks at the system counter rate. */
+	bool ref_clk_from_cntfrq;
 	int maxcpus_per_cluster;
 	unsigned int num_clusters;
 	bool needs_mmio;
@@ -79,8 +96,10 @@ struct tegra_cpufreq_soc {
 
 struct tegra194_cpufreq_data {
 	void __iomem *regs;
+	resource_size_t regs_size;
 	struct cpufreq_frequency_table **bpmp_luts;
 	const struct tegra_cpufreq_soc *soc;
+	u32 ref_clk_mhz;
 	bool icc_dram_bw_scaling;
 	struct tegra_cpu_data *cpu_data;
 	enum cpuhp_state cpuhp_state;
@@ -241,6 +260,83 @@ static const struct tegra_cpufreq_soc tegra238_cpufreq_soc = {
 	.refclk_delta_min = 16000,
 };
 
+static void __iomem *tegra264_core_freq_req_reg(struct tegra194_cpufreq_data *data,
+						u32 clkid)
+{
+	u64 offset = (u64)(clkid / 2) * T264_CORE_FREQ_REQ_BLOCK_SIZE;
+
+	offset += (clkid % 2) ? T264_CORE_FREQ_REQ_BLOCK_DOMAIN1_OFFSET :
+				T264_CORE_FREQ_REQ_BLOCK_DOMAIN0_OFFSET;
+
+	/*
+	 * clkid comes from the device tree. Reject an index whose 32-bit
+	 * register does not fit in the mapped region.
+	 */
+	if (offset + sizeof(u32) > data->regs_size)
+		return NULL;
+
+	return data->regs + offset;
+}
+
+static int tegra264_get_cpu_ndiv(u32 cpu, u32 cpuid, u32 clusterid, u64 *ndiv)
+{
+	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
+	u32 clkid = data->cpu_data[cpu].clkid;
+	void __iomem *reg;
+
+	reg = tegra264_core_freq_req_reg(data, clkid);
+	if (!reg)
+		return -EINVAL;
+
+	*ndiv = readl(reg) & NDIV_MASK;
+
+	return 0;
+}
+
+static void tegra264_set_cpu_ndiv(struct cpufreq_policy *policy, u64 ndiv)
+{
+	struct tegra194_cpufreq_data *data = cpufreq_get_driver_data();
+	u32 clkid = data->cpu_data[policy->cpu].clkid;
+	void __iomem *reg;
+
+	reg = tegra264_core_freq_req_reg(data, clkid);
+	if (reg)
+		writel(ndiv, reg);
+}
+
+/*
+ * The AMU counters are per-CPU system registers, so this must run on the CPU
+ * it samples. tegra194_calculate_speed() queues it there with queue_work_on().
+ */
+static void tegra264_sample_counters(struct tegra194_cpufreq_data *data,
+				     struct tegra_cpu_ctr *c)
+{
+	unsigned long flags;
+
+	/* Keep interrupts off so both counters are read at the same moment. */
+	local_irq_save(flags);
+	c->coreclk_cnt = read_sysreg_s(SYS_AMEVCNTR0_CORE_EL0);
+	c->refclk_cnt = read_sysreg_s(SYS_AMEVCNTR0_CONST_EL0);
+	local_irq_restore(flags);
+}
+
+static struct tegra_cpufreq_ops tegra264_cpufreq_ops = {
+	.sample_counters = tegra264_sample_counters,
+	.get_cpu_cluster_id = tegra234_get_cpu_cluster_id,
+	.get_cpu_ndiv = tegra264_get_cpu_ndiv,
+	.set_cpu_ndiv = tegra264_set_cpu_ndiv,
+};
+
+static const struct tegra_cpufreq_soc tegra264_cpufreq_soc = {
+	.ops = &tegra264_cpufreq_ops,
+	.cnt_mask = U64_MAX,
+	.ref_clk_from_cntfrq = true,
+	.needs_mmio = true,
+	.maxcpus_per_cluster = 1,
+	.num_clusters = 14,
+	.refclk_delta_min = 16000,
+};
+
 static void tegra194_get_cpu_cluster_id(u32 *cpuid, u32 *clusterid)
 {
 	u64 mpidr;
@@ -342,11 +438,11 @@ static void tegra_read_counters(struct work_struct *work)
  *	- Return Kcycles/second, freq in KHz
  *
  *	delta time period = x sec
- *			  = delta ref_clk_counter / (408 * 10^6) sec
+ *			  = delta ref_clk_counter / (ref_clk_mhz * 10^6) sec
  *	freq in Hz = cycles/sec
  *		   = (delta cycles / x sec
- *		   = (delta cycles * 408 * 10^6) / delta ref_clk_counter
- *	in KHz	   = (delta cycles * 408 * 10^3) / delta ref_clk_counter
+ *		   = (delta cycles * ref_clk_mhz * 10^6) / delta ref_clk_counter
+ *	in KHz	   = (delta cycles * ref_clk_mhz * 10^3) / delta ref_clk_counter
  *
  * @cpu - logical cpu whose freq to be updated
  * Returns freq in KHz on success, 0 if cpu is offline
@@ -380,7 +476,7 @@ static unsigned int tegra194_calculate_speed(u32 cpu)
 		pr_debug("cpufreq: %d is idle, delta_refcnt: 0\n", cpu);
 		return 0;
 	}
-	rate_mhz = delta_ccnt * REF_CLK_MHZ / delta_refcnt;
+	rate_mhz = delta_ccnt * data->ref_clk_mhz / delta_refcnt;
 
 	return (rate_mhz * KHZ); /* in KHz */
 }
@@ -741,6 +837,42 @@ tegra_cpufreq_bpmp_read_lut(struct platform_device *pdev, struct tegra_bpmp *bpm
 	return freq_table;
 }
 
+/*
+ * When the CCPLEX provides performance domains, the domain index selects the
+ * frequency request register. A CPU without "performance-domains" would fall
+ * back to domain 0, so require the property on every CPU.
+ */
+static int tegra_cpufreq_check_perf_domains(struct device *dev)
+{
+	struct device_node *np;
+	unsigned int cpu;
+	bool found;
+
+	if (!of_property_present(dev->of_node, "#performance-domain-cells"))
+		return 0;
+
+	for_each_possible_cpu(cpu) {
+		np = of_cpu_device_node_get(cpu);
+		found = of_property_present(np, "performance-domains");
+		of_node_put(np);
+
+		if (!found) {
+			dev_err(dev, "cpu%u: missing performance-domains\n", cpu);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+static bool tegra_cpufreq_amu_present(void)
+{
+	u64 pfr0 = read_sanitised_ftr_reg(SYS_ID_AA64PFR0_EL1);
+
+	return IS_ENABLED(CONFIG_ARM64_AMU_EXTN) &&
+	       cpuid_feature_extract_unsigned_field(pfr0, ID_AA64PFR0_EL1_AMU_SHIFT);
+}
+
 static int tegra194_cpufreq_probe(struct platform_device *pdev)
 {
 	const struct tegra_cpufreq_soc *soc;
@@ -763,15 +895,38 @@ static int tegra194_cpufreq_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
+	if (soc->ref_clk_from_cntfrq) {
+		if (!tegra_cpufreq_amu_present()) {
+			dev_err(&pdev->dev, "AMU not available\n");
+			return -ENODEV;
+		}
+		data->ref_clk_mhz = arch_timer_get_cntfrq() / HZ_PER_MHZ;
+	} else {
+		data->ref_clk_mhz = REF_CLK_MHZ;
+	}
+
+	if (!data->ref_clk_mhz) {
+		dev_err(&pdev->dev, "invalid reference clock rate\n");
+		return -EINVAL;
+	}
+
+	err = tegra_cpufreq_check_perf_domains(&pdev->dev);
+	if (err)
+		return err;
+
 	data->bpmp_luts = devm_kzalloc_objs(&pdev->dev, *data->bpmp_luts,
 					    data->soc->num_clusters);
 	if (!data->bpmp_luts)
 		return -ENOMEM;
 
 	if (soc->needs_mmio) {
-		data->regs = devm_platform_ioremap_resource(pdev, 0);
+		struct resource *res;
+
+		data->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 		if (IS_ERR(data->regs))
 			return PTR_ERR(data->regs);
+
+		data->regs_size = resource_size(res);
 	}
 
 	if (nr_cpu_ids > data->soc->num_clusters *
@@ -870,6 +1025,7 @@ static const struct of_device_id tegra194_cpufreq_of_match[] = {
 	{ .compatible = "nvidia,tegra194-ccplex", .data = &tegra194_cpufreq_soc },
 	{ .compatible = "nvidia,tegra234-ccplex-cluster", .data = &tegra234_cpufreq_soc },
 	{ .compatible = "nvidia,tegra238-ccplex-cluster", .data = &tegra238_cpufreq_soc },
+	{ .compatible = "nvidia,tegra264-ccplex-cluster", .data = &tegra264_cpufreq_soc },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, tegra194_cpufreq_of_match);
