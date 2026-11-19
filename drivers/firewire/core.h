@@ -207,8 +207,8 @@ struct fw_node {
 	u8 phy_speed:2;	/* As in the self ID packet. */
 	u8 max_speed:2;	/* Minimum of all phy-speeds on the path from the
 			 * local node to this node. */
-	u8 max_depth:4;	/* Maximum depth to any leaf node */
-	u8 max_hops:4;	/* Max hops in this sub tree */
+	u8 max_depth;	/* Maximum depth to any leaf node */
+	u8 max_hops;	/* Max hops in this sub tree */
 
 	struct kref kref;
 
