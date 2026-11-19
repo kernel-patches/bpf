@@ -242,18 +242,9 @@ static bool vlv_check_for_unclaimed_mmio(struct intel_display *display)
 	return true;
 }
 
-static bool mmio_debug_is_enabled(struct intel_display *display)
-{
-	return !!READ_ONCE(display->params.mmio_debug) ||
-		READ_ONCE(display->mmio.mmio_debug_oneshot);
-}
-
 static void check_unclaimed_mmio_pre(struct intel_display *display,
 				     intel_reg_t reg, bool write)
 {
-	if (!mmio_debug_is_enabled(display))
-		return;
-
 	if (!display->mmio.funcs->check_for_unclaimed_mmio(display))
 		return;
 
@@ -266,9 +257,6 @@ static void check_unclaimed_mmio_pre(struct intel_display *display,
 static void check_unclaimed_mmio_post(struct intel_display *display,
 				      intel_reg_t reg, bool write)
 {
-	if (!mmio_debug_is_enabled(display))
-		return;
-
 	if (!display->mmio.funcs->check_for_unclaimed_mmio(display))
 		return;
 
@@ -355,19 +343,29 @@ __mmio_lock_post(struct intel_display *display, unsigned long irqflags,
 		spin_unlock_irqrestore(&display->mmio.lock, irqflags);
 }
 
+static __always_inline bool
+__mmio_debug_is_enabled(struct intel_display *display)
+{
+	/* with || gcc emits two branches for this */
+	return unlikely(!!READ_ONCE(display->params.mmio_debug) |
+			READ_ONCE(display->mmio.mmio_debug_oneshot));
+}
+
 static __always_inline void
 __mmio_unclaimed_pre(struct intel_display *display, intel_reg_t reg,
-		     const bool write, const unsigned int mmio_flags)
+		     const bool write, const bool mmio_debug_is_enabled,
+		     const unsigned int mmio_flags)
 {
-	if (mmio_flags & __MMIO_UNCLAIMED)
+	if (mmio_flags & __MMIO_UNCLAIMED && mmio_debug_is_enabled)
 		check_unclaimed_mmio_pre(display, reg, write);
 }
 
 static __always_inline void
 __mmio_unclaimed_post(struct intel_display *display, intel_reg_t reg,
-		      const bool write, const unsigned int mmio_flags)
+		      const bool write, const bool mmio_debug_is_enabled,
+		      const unsigned int mmio_flags)
 {
-	if (mmio_flags & __MMIO_UNCLAIMED)
+	if (mmio_flags & __MMIO_UNCLAIMED && mmio_debug_is_enabled)
 		check_unclaimed_mmio_post(display, reg, write);
 }
 
@@ -375,6 +373,7 @@ static __always_inline u32
 __intel_de_read(struct intel_display *display, intel_reg_t reg,
 		const unsigned int mmio_flags)
 {
+	const bool mmio_debug_is_enabled = __mmio_debug_is_enabled(display);
 	unsigned long irqflags;
 	u32 val;
 
@@ -382,11 +381,13 @@ __intel_de_read(struct intel_display *display, intel_reg_t reg,
 
 	__mmio_wakelock_pre(display, reg, mmio_flags);
 	__mmio_lock_pre(display, &irqflags, mmio_flags);
-	__mmio_unclaimed_pre(display, reg, false, mmio_flags);
+	__mmio_unclaimed_pre(display, reg, false,
+			     mmio_debug_is_enabled, mmio_flags);
 
 	val = __intel_de_read_fw(display, reg);
 
-	__mmio_unclaimed_post(display, reg, false, mmio_flags);
+	__mmio_unclaimed_post(display, reg, false,
+			      mmio_debug_is_enabled, mmio_flags);
 	__mmio_lock_post(display, irqflags, mmio_flags);
 	__mmio_wakelock_post(display, reg, mmio_flags);
 
@@ -397,17 +398,20 @@ static __always_inline void
 __intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val,
 		 const unsigned int mmio_flags)
 {
+	const bool mmio_debug_is_enabled = __mmio_debug_is_enabled(display);
 	unsigned long irqflags;
 
 	assert_display_rpm_held(display);
 
 	__mmio_wakelock_pre(display, reg, mmio_flags);
 	__mmio_lock_pre(display, &irqflags, mmio_flags);
-	__mmio_unclaimed_pre(display, reg, true, mmio_flags);
+	__mmio_unclaimed_pre(display, reg, true,
+			     mmio_debug_is_enabled, mmio_flags);
 
 	__intel_de_write_fw(display, reg, val);
 
-	__mmio_unclaimed_post(display, reg, true, mmio_flags);
+	__mmio_unclaimed_post(display, reg, true,
+			      mmio_debug_is_enabled, mmio_flags);
 	__mmio_lock_post(display, irqflags, mmio_flags);
 	__mmio_wakelock_post(display, reg, mmio_flags);
 }
