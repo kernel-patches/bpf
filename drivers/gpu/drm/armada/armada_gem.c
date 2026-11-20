@@ -67,8 +67,8 @@ void armada_gem_free_object(struct drm_gem_object *obj)
 	if (dobj->obj.import_attach) {
 		/* We only ever display imported data */
 		if (dobj->sgt)
-			dma_buf_unmap_attachment_unlocked(dobj->obj.import_attach,
-							  dobj->sgt, DMA_TO_DEVICE);
+			dma_buf_unmap_sgt_unlocked(dobj->obj.import_attach,
+						   dobj->sgt, DMA_TO_DEVICE);
 		drm_prime_gem_destroy(&dobj->obj, NULL);
 	}
 
@@ -529,7 +529,7 @@ armada_gem_prime_import(struct drm_device *dev, struct dma_buf *buf)
 	get_dma_buf(buf);
 
 	/*
-	 * Don't call dma_buf_map_attachment() here - it maps the
+	 * Don't call dma_buf_map_sgt() here - it maps the
 	 * scatterlist immediately for DMA, and this is not always
 	 * an appropriate thing to do.
 	 */
@@ -540,20 +540,20 @@ int armada_gem_map_import(struct armada_gem_object *dobj)
 {
 	int ret;
 
-	dobj->sgt = dma_buf_map_attachment_unlocked(dobj->obj.import_attach,
-						    DMA_TO_DEVICE);
+	dobj->sgt = dma_buf_map_sgt_unlocked(dobj->obj.import_attach,
+					     DMA_TO_DEVICE);
 	if (IS_ERR(dobj->sgt)) {
 		ret = PTR_ERR(dobj->sgt);
 		dobj->sgt = NULL;
-		DRM_ERROR("dma_buf_map_attachment() error: %d\n", ret);
+		DRM_ERROR("dma_buf_map_sgt() error: %d\n", ret);
 		return ret;
 	}
 	if (dobj->sgt->nents > 1) {
-		DRM_ERROR("dma_buf_map_attachment() returned an (unsupported) scattered list\n");
+		DRM_ERROR("dma_buf_map_sgt() returned an (unsupported) scattered list\n");
 		return -EINVAL;
 	}
 	if (sg_dma_len(dobj->sgt->sgl) < dobj->obj.size) {
-		DRM_ERROR("dma_buf_map_attachment() returned a small buffer\n");
+		DRM_ERROR("dma_buf_map_sgt() returned a small buffer\n");
 		return -EINVAL;
 	}
 	dobj->dev_addr = sg_dma_address(dobj->sgt->sgl);

@@ -41,7 +41,7 @@ static struct dma_buf_io_map *nvme_dma_buf_io_map(struct dma_buf_io_ctx *ctx)
 		return ERR_PTR(-ENOMEM);
 	map->nr_entries = nr_entries;
 
-	sgt = dma_buf_map_attachment(attach, ctx->dir);
+	sgt = dma_buf_map_sgt(attach, ctx->dir);
 	if (IS_ERR(sgt)) {
 		ret = PTR_ERR(sgt);
 		sgt = NULL;
@@ -71,7 +71,7 @@ static struct dma_buf_io_map *nvme_dma_buf_io_map(struct dma_buf_io_ctx *ctx)
 	return &map->base;
 err:
 	if (sgt)
-		dma_buf_unmap_attachment(attach, sgt, ctx->dir);
+		dma_buf_unmap_sgt(attach, sgt, ctx->dir);
 	kvfree(map);
 	return ERR_PTR(ret);
 }
@@ -84,7 +84,7 @@ static void nvme_dma_buf_io_unmap(struct dma_buf_io_ctx *ctx,
 
 	dma_resv_assert_held(ctx->dmabuf->resv);
 
-	dma_buf_unmap_attachment(nvme_ctx->attach, map->sgt, ctx->dir);
+	dma_buf_unmap_sgt(nvme_ctx->attach, map->sgt, ctx->dir);
 	kvfree(map);
 }
 

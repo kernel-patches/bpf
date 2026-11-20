@@ -1464,7 +1464,7 @@ static int __prepare_dmabuf(struct vb2_buffer *vb)
 			vb->planes[plane].mem_priv = mem_priv;
 
 			/*
-			 * This pins the buffer(s) with dma_buf_map_attachment()). It's done
+			 * This pins the buffer(s) with dma_buf_map_sgt()). It's done
 			 * here instead just before the DMA, while queueing the buffer(s) so
 			 * userspace knows sooner rather than later if the dma-buf map fails.
 			 */

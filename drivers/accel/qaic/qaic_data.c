@@ -869,7 +869,7 @@ struct drm_gem_object *qaic_gem_prime_import(struct drm_device *dev, struct dma_
 
 	drm_gem_private_object_init(dev, obj, attach->dmabuf->size);
 	/*
-	 * skipping dma_buf_map_attachment() as we do not know the direction
+	 * skipping dma_buf_map_sgt() as we do not know the direction
 	 * just yet. Once the direction is known in the subsequent IOCTL to
 	 * attach slicing, we can do it then.
 	 */
@@ -895,7 +895,7 @@ static int qaic_prepare_import_bo(struct qaic_bo *bo, struct qaic_attach_slice_h
 	struct sg_table *sgt;
 	int ret;
 
-	sgt = dma_buf_map_attachment(obj->import_attach, hdr->dir);
+	sgt = dma_buf_map_sgt(obj->import_attach, hdr->dir);
 	if (IS_ERR(sgt)) {
 		ret = PTR_ERR(sgt);
 		return ret;
@@ -936,7 +936,7 @@ static int qaic_prepare_bo(struct qaic_device *qdev, struct qaic_bo *bo,
 
 static void qaic_unprepare_import_bo(struct qaic_bo *bo)
 {
-	dma_buf_unmap_attachment(bo->base.import_attach, bo->sgt, bo->dir);
+	dma_buf_unmap_sgt(bo->base.import_attach, bo->sgt, bo->dir);
 	bo->sgt = NULL;
 }
 

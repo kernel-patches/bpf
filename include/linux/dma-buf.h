@@ -116,7 +116,7 @@ struct dma_buf_ops {
 	/**
 	 * @map_dma_buf:
 	 *
-	 * This is called by dma_buf_map_attachment() and is used to map a
+	 * This is called by dma_buf_map_sgt() and is used to map a
 	 * shared &dma_buf into device address space, and it is mandatory. It
 	 * can only be called if @attach has been called successfully.
 	 *
@@ -173,7 +173,7 @@ struct dma_buf_ops {
 	/**
 	 * @unmap_dma_buf:
 	 *
-	 * This is called by dma_buf_unmap_attachment() and should unmap and
+	 * This is called by dma_buf_unmap_sgt() and should unmap and
 	 * release the &sg_table allocated in @map_dma_buf, and it is mandatory.
 	 * For static dma_buf handling this might also unpin the backing
 	 * storage if this is the last mapping of the DMA buffer.
@@ -470,7 +470,7 @@ struct dma_buf_attach_ops {
  * @peer2peer: true if the importer can handle peer resources without pages.
  * @priv: exporter specific attachment data.
  * @importer_ops: importer operations for this attachment, if provided
- * dma_buf_map/unmap_attachment() must be called with the dma_resv lock held.
+ * dma_buf_map/unmap_sgt() must be called with the dma_resv lock held.
  * @importer_priv: importer specific attachment data.
  *
  * This structure holds the attachment information between the dma_buf buffer
@@ -479,8 +479,8 @@ struct dma_buf_attach_ops {
  *
  * An attachment is created by calling dma_buf_attach(), and released again by
  * calling dma_buf_detach(). The DMA mapping itself needed to initiate a
- * transfer is created by dma_buf_map_attachment() and freed again by calling
- * dma_buf_unmap_attachment().
+ * transfer is created by dma_buf_map_sgt() and freed again by calling
+ * dma_buf_unmap_sgt().
  */
 struct dma_buf_attachment {
 	struct dma_buf *dmabuf;
@@ -571,10 +571,10 @@ void dma_buf_fd_install(struct dma_buf *dmabuf, int fd);
 struct dma_buf *dma_buf_get(int fd);
 void dma_buf_put(struct dma_buf *dmabuf);
 
-struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *,
-					enum dma_data_direction);
-void dma_buf_unmap_attachment(struct dma_buf_attachment *, struct sg_table *,
-				enum dma_data_direction);
+struct sg_table *dma_buf_map_sgt(struct dma_buf_attachment *,
+				 enum dma_data_direction);
+void dma_buf_unmap_sgt(struct dma_buf_attachment *, struct sg_table *,
+		       enum dma_data_direction);
 void dma_buf_invalidate_mappings(struct dma_buf *dma_buf);
 bool dma_buf_attach_revocable(struct dma_buf_attachment *attach);
 int dma_buf_begin_cpu_access(struct dma_buf *dma_buf,
@@ -582,11 +582,11 @@ int dma_buf_begin_cpu_access(struct dma_buf *dma_buf,
 int dma_buf_end_cpu_access(struct dma_buf *dma_buf,
 			   enum dma_data_direction dir);
 struct sg_table *
-dma_buf_map_attachment_unlocked(struct dma_buf_attachment *attach,
+dma_buf_map_sgt_unlocked(struct dma_buf_attachment *attach,
+			 enum dma_data_direction direction);
+void dma_buf_unmap_sgt_unlocked(struct dma_buf_attachment *attach,
+				struct sg_table *sg_table,
 				enum dma_data_direction direction);
-void dma_buf_unmap_attachment_unlocked(struct dma_buf_attachment *attach,
-				       struct sg_table *sg_table,
-				       enum dma_data_direction direction);
 
 int dma_buf_mmap(struct dma_buf *, struct vm_area_struct *,
 		 unsigned long);
