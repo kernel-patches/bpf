@@ -1808,6 +1808,7 @@ int bpf_copy_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_st
 	dst_state->unwound = src->unwound;
 	dst_state->changed_pkt_data = src->changed_pkt_data;
 	dst_state->flow_entry = src->flow_entry;
+	dst_state->infeasible = src->infeasible;
 	dst_state->insn_idx = src->insn_idx;
 	dst_state->curframe = src->curframe;
 	dst_state->last_insn_idx = src->last_insn_idx;
@@ -2437,6 +2438,7 @@ out:
 		reg->base, reg->step);
 	if (env->test_reg_invariants)
 		return -EFAULT;
+	env->cur_state->infeasible = true;
 	__mark_scalar_unbounded(s);
 	scalar_step_reset(s);
 	return 0;
@@ -19015,6 +19017,7 @@ static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *ins
 			      struct bpf_reg_state *reg1, struct bpf_reg_state *reg2)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
+	bool empty;
 	int err;
 
 	/* is_branch_taken() knew the branch before it refined anything */
@@ -19025,7 +19028,9 @@ static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *ins
 	 * The fall-through branch of JSET forgets the ranges. Or this branch is dead too: the path
 	 * is infeasible. The registers are left as they are.
 	 */
-	if (BPF_OP(insn->code) == BPF_JSET || reg_is_empty(reg1) || reg_is_empty(reg2))
+	empty = reg_is_empty(reg1) || reg_is_empty(reg2);
+	env->cur_state->infeasible |= empty;
+	if (BPF_OP(insn->code) == BPF_JSET || empty)
 		return 0;
 	err = reg_bounds_sanity_check(env, reg1, "live_reg1");
 	err = err ?: reg_bounds_sanity_check(env, reg2, "live_reg2");
