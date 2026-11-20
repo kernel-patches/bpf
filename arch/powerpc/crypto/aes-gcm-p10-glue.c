@@ -2,7 +2,7 @@
 /*
  * Glue code for accelerated AES-GCM stitched implementation for ppc64le.
  *
- * Copyright 2022- IBM Inc. All rights reserved
+ * Copyright IBM Corp. 2022, 2023, 2024, 2025, 2026
  */
 
 #include <linux/unaligned.h>
@@ -63,8 +63,10 @@ struct Hash_ctx {
 };
 
 struct p10_aes_gcm_ctx {
+	struct crypto_aead *fallback_tfm;
 	struct p10_aes_key enc_key;
-	u8 nonce[RFC4106_NONCE_SIZE];
+	u8 nonce[RFC4106_NONCE_SIZE] __aligned(16);
+	unsigned int simd_set_key;
 };
 
 static void vsx_begin(void)
@@ -173,8 +175,48 @@ static void finish_tag(struct gcm_ctx *gctx, struct Hash_ctx *hash, int len)
 		hash->Htable[i] ^= gctx->ivtag[i];
 }
 
+static int p10_aead_init(struct crypto_aead *tfm)
+{
+	struct p10_aes_gcm_ctx *ctx = crypto_aead_ctx(tfm);
+
+	ctx->fallback_tfm = crypto_alloc_aead("gcm(aes)", 0,
+					      CRYPTO_ALG_NEED_FALLBACK |
+					      CRYPTO_ALG_ASYNC);
+	if (IS_ERR(ctx->fallback_tfm))
+		return PTR_ERR(ctx->fallback_tfm);
+
+	crypto_aead_set_reqsize(tfm, sizeof(struct aead_request) +
+				crypto_aead_reqsize(ctx->fallback_tfm));
+	return 0;
+}
+
+static int rfc4106_init(struct crypto_aead *tfm)
+{
+	struct p10_aes_gcm_ctx *ctx = crypto_aead_ctx(tfm);
+
+	ctx->fallback_tfm = crypto_alloc_aead("rfc4106(gcm(aes))", 0,
+					      CRYPTO_ALG_NEED_FALLBACK |
+					      CRYPTO_ALG_ASYNC);
+	if (IS_ERR(ctx->fallback_tfm))
+		return PTR_ERR(ctx->fallback_tfm);
+
+	crypto_aead_set_reqsize(tfm, sizeof(struct aead_request) +
+				crypto_aead_reqsize(ctx->fallback_tfm));
+	return 0;
+}
+
+static void p10_aead_exit(struct crypto_aead *tfm)
+{
+	struct p10_aes_gcm_ctx *ctx = crypto_aead_ctx(tfm);
+
+	if (ctx->fallback_tfm)
+		crypto_free_aead(ctx->fallback_tfm);
+}
+
 static int set_authsize(struct crypto_aead *tfm, unsigned int authsize)
 {
+	struct p10_aes_gcm_ctx *ctx = crypto_aead_ctx(tfm);
+
 	switch (authsize) {
 	case 4:
 	case 8:
@@ -188,19 +230,35 @@ static int set_authsize(struct crypto_aead *tfm, unsigned int authsize)
 		return -EINVAL;
 	}
 
-	return 0;
+	return crypto_aead_setauthsize(ctx->fallback_tfm, authsize);
 }
 
 static int p10_aes_gcm_setkey(struct crypto_aead *aead, const u8 *key,
 			      unsigned int keylen)
 {
-	struct crypto_tfm *tfm = crypto_aead_tfm(aead);
-	struct p10_aes_gcm_ctx *ctx = crypto_tfm_ctx(tfm);
+	struct p10_aes_gcm_ctx *ctx = crypto_aead_ctx(aead);
+	int ret = 0;
+
+	ctx->simd_set_key = 0;
+	if (crypto_simd_usable()) {
+		vsx_begin();
+		ret = aes_p10_set_encrypt_key(key, keylen * 8, &ctx->enc_key);
+		vsx_end();
+		ctx->simd_set_key = !ret;
+	}
+
+	return ret ? -EINVAL : 0;
+}
+
+static int gcm_setkey(struct crypto_aead *aead, const u8 *key,
+		      unsigned int keylen)
+{
+	struct p10_aes_gcm_ctx *ctx = crypto_aead_ctx(aead);
 	int ret;
 
-	vsx_begin();
-	ret = aes_p10_set_encrypt_key(key, keylen * 8, &ctx->enc_key);
-	vsx_end();
+	ret = p10_aes_gcm_setkey(aead, key, keylen);
+
+	ret |= crypto_aead_setkey(ctx->fallback_tfm, key, keylen);
 
 	return ret ? -EINVAL : 0;
 }
@@ -208,8 +266,8 @@ static int p10_aes_gcm_setkey(struct crypto_aead *aead, const u8 *key,
 static int p10_aes_gcm_crypt(struct aead_request *req, u8 *riv,
 			     int assoclen, int enc)
 {
-	struct crypto_tfm *tfm = req->base.tfm;
-	struct p10_aes_gcm_ctx *ctx = crypto_tfm_ctx(tfm);
+	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
+	struct p10_aes_gcm_ctx *ctx = crypto_aead_ctx(tfm);
 	u8 databuf[sizeof(struct gcm_ctx) + PPC_ALIGN];
 	struct gcm_ctx *gctx = PTR_ALIGN((void *)databuf, PPC_ALIGN);
 	u8 hashbuf[sizeof(struct Hash_ctx) + PPC_ALIGN];
@@ -220,11 +278,25 @@ static int p10_aes_gcm_crypt(struct aead_request *req, u8 *riv,
 	unsigned int cryptlen = req->cryptlen;
 	unsigned char ivbuf[AES_BLOCK_SIZE+PPC_ALIGN];
 	unsigned char *iv = PTR_ALIGN((void *)ivbuf, PPC_ALIGN);
-	int ret;
-	unsigned long auth_tag_len = crypto_aead_authsize(__crypto_aead_cast(tfm));
+	int ret = 0;
+	unsigned long auth_tag_len = crypto_aead_authsize(tfm);
 	u8 otag[16];
 	int total_processed = 0;
 	int nbytes;
+
+	if (!crypto_simd_usable() || !ctx->simd_set_key || req->cryptlen < 64) {
+		struct aead_request *subreq = aead_request_ctx(req);
+
+		aead_request_set_tfm(subreq, ctx->fallback_tfm);
+		aead_request_set_callback(subreq, req->base.flags,
+					  req->base.complete, req->base.data);
+		aead_request_set_crypt(subreq, req->src, req->dst,
+					req->cryptlen, req->iv);
+		aead_request_set_ad(subreq, req->assoclen);
+
+		return enc ? crypto_aead_encrypt(subreq) :
+			     crypto_aead_decrypt(subreq);
+	}
 
 	memset(databuf, 0, sizeof(databuf));
 	memset(hashbuf, 0, sizeof(hashbuf));
@@ -260,6 +332,7 @@ static int p10_aes_gcm_crypt(struct aead_request *req, u8 *riv,
 	if (ret)
 		return ret;
 
+	vsx_begin();
 	while ((nbytes = walk.nbytes) > 0 && ret == 0) {
 		const u8 *src = walk.src.virt.addr;
 		u8 *dst = walk.dst.virt.addr;
@@ -268,7 +341,6 @@ static int p10_aes_gcm_crypt(struct aead_request *req, u8 *riv,
 		if (unlikely(nbytes > 0 && nbytes < AES_BLOCK_SIZE))
 			src = dst = memcpy(buf, src, nbytes);
 
-		vsx_begin();
 		if (enc)
 			aes_p10_gcm_encrypt(src, dst, nbytes,
 					    &ctx->enc_key, gctx->iv, hash->Htable);
@@ -283,13 +355,13 @@ static int p10_aes_gcm_crypt(struct aead_request *req, u8 *riv,
 
 		total_processed += walk.nbytes;
 		ret = skcipher_walk_done(&walk, 0);
+		if (ret)
+			return ret;
+
+		vsx_begin();
 	}
 
-	if (ret)
-		return ret;
-
 	/* Finalize hash */
-	vsx_begin();
 	gcm_update(gctx->iv, hash->Htable);
 	finish_tag(gctx, hash, total_processed);
 	vsx_end();
@@ -305,11 +377,11 @@ static int p10_aes_gcm_crypt(struct aead_request *req, u8 *riv,
 
 		if (crypto_memneq(otag, hash->Htable, auth_tag_len)) {
 			memzero_explicit(hash->Htable, 16);
-			return -EBADMSG;
+			ret = -EBADMSG;
 		}
 	}
 
-	return 0;
+	return ret;
 }
 
 static int rfc4106_setkey(struct crypto_aead *tfm, const u8 *inkey,
@@ -317,6 +389,10 @@ static int rfc4106_setkey(struct crypto_aead *tfm, const u8 *inkey,
 {
 	struct p10_aes_gcm_ctx *ctx = crypto_aead_ctx(tfm);
 	int err;
+
+	err = crypto_aead_setkey(ctx->fallback_tfm, inkey, keylen);
+	if (err)
+		return err;
 
 	keylen -= RFC4106_NONCE_SIZE;
 	err = p10_aes_gcm_setkey(tfm, inkey, keylen);
@@ -329,7 +405,14 @@ static int rfc4106_setkey(struct crypto_aead *tfm, const u8 *inkey,
 
 static int rfc4106_setauthsize(struct crypto_aead *tfm, unsigned int authsize)
 {
-	return crypto_rfc4106_check_authsize(authsize);
+	struct p10_aes_gcm_ctx *ctx = crypto_aead_ctx(tfm);
+	int err;
+
+	err = crypto_rfc4106_check_authsize(authsize);
+	if (err)
+		return err;
+
+	return crypto_aead_setauthsize(ctx->fallback_tfm, authsize);
 }
 
 static int rfc4106_encrypt(struct aead_request *req)
@@ -373,18 +456,20 @@ static struct aead_alg gcm_aes_algs[] = {{
 	.maxauthsize		= 16,
 
 	.setauthsize		= set_authsize,
-	.setkey			= p10_aes_gcm_setkey,
+	.setkey			= gcm_setkey,
 	.encrypt		= p10_aes_gcm_encrypt,
 	.decrypt		= p10_aes_gcm_decrypt,
+	.init			= p10_aead_init,
+	.exit			= p10_aead_exit,
 
-	.base.cra_name		= "__gcm(aes)",
-	.base.cra_driver_name	= "__aes_gcm_p10",
+	.base.cra_name		= "gcm(aes)",
+	.base.cra_driver_name	= "aes_gcm_p10",
 	.base.cra_priority	= 2100,
 	.base.cra_blocksize	= 1,
 	.base.cra_ctxsize	= sizeof(struct p10_aes_gcm_ctx)+
 				  4 * sizeof(u64[2]),
 	.base.cra_module	= THIS_MODULE,
-	.base.cra_flags		= CRYPTO_ALG_INTERNAL,
+	.base.cra_flags		= CRYPTO_ALG_NEED_FALLBACK,
 }, {
 	.ivsize			= GCM_RFC4106_IV_SIZE,
 	.maxauthsize		= 16,
@@ -392,18 +477,18 @@ static struct aead_alg gcm_aes_algs[] = {{
 	.setauthsize		= rfc4106_setauthsize,
 	.encrypt		= rfc4106_encrypt,
 	.decrypt		= rfc4106_decrypt,
+	.init			= rfc4106_init,
+	.exit			= p10_aead_exit,
 
-	.base.cra_name		= "__rfc4106(gcm(aes))",
-	.base.cra_driver_name	= "__rfc4106_aes_gcm_p10",
+	.base.cra_name		= "rfc4106(gcm(aes))",
+	.base.cra_driver_name	= "rfc4106_aes_gcm_p10",
 	.base.cra_priority	= 2100,
 	.base.cra_blocksize	= 1,
 	.base.cra_ctxsize	= sizeof(struct p10_aes_gcm_ctx) +
 				  4 * sizeof(u64[2]),
 	.base.cra_module	= THIS_MODULE,
-	.base.cra_flags		= CRYPTO_ALG_INTERNAL,
+	.base.cra_flags		= CRYPTO_ALG_NEED_FALLBACK,
 }};
-
-static struct simd_aead_alg *p10_simd_aeads[ARRAY_SIZE(gcm_aes_algs)];
 
 static int __init p10_init(void)
 {
@@ -412,21 +497,15 @@ static int __init p10_init(void)
 	if (!cpu_has_feature(CPU_FTR_ARCH_31))
 		return 0;
 
-	ret = simd_register_aeads_compat(gcm_aes_algs,
-					 ARRAY_SIZE(gcm_aes_algs),
-					 p10_simd_aeads);
-	if (ret) {
-		simd_unregister_aeads(gcm_aes_algs, ARRAY_SIZE(gcm_aes_algs),
-				      p10_simd_aeads);
+	ret = crypto_register_aeads(gcm_aes_algs, ARRAY_SIZE(gcm_aes_algs));
+	if (ret)
 		return ret;
-	}
 	return 0;
 }
 
 static void __exit p10_exit(void)
 {
-	simd_unregister_aeads(gcm_aes_algs, ARRAY_SIZE(gcm_aes_algs),
-			      p10_simd_aeads);
+	crypto_unregister_aeads(gcm_aes_algs, ARRAY_SIZE(gcm_aes_algs));
 }
 
 module_init(p10_init);
