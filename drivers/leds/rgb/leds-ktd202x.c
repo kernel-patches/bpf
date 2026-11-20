@@ -83,6 +83,7 @@
 #define KTD202X_PATTERN_MAX_MS 16384
 
 #define KTD202X_MAX_BRIGHTNESS 192
+#define KTD202X_LED_CURRENT_STEP_uA 125
 
 static const struct reg_default ktd202x_reg_defaults[] = {
 	{ KTD202X_REG_RESET_CONTROL, KTD202X_TIMER_SLOT_CONTROL_TSLOT1 |
@@ -411,7 +412,7 @@ static int ktd202x_blink_single_set(struct led_classdev *cdev,
 	int ret;
 
 	if (!cdev->brightness) {
-		ret = ktd202x_brightness_single_set(cdev, KTD202X_MAX_BRIGHTNESS);
+		ret = ktd202x_brightness_single_set(cdev, cdev->max_brightness);
 		if (ret)
 			return ret;
 	}
@@ -604,6 +605,18 @@ static int ktd202x_pattern_mc_clear(struct led_classdev *cdev)
 	return ktd202x_brightness_mc_set(cdev, LED_OFF);
 }
 
+/* The current limit of a LED in brightness steps, each of which adds 0.125 mA */
+static unsigned int ktd202x_max_brightness(struct fwnode_handle *fwnode)
+{
+	u32 max_microamp;
+
+	if (fwnode_property_read_u32(fwnode, "led-max-microamp", &max_microamp))
+		return KTD202X_MAX_BRIGHTNESS;
+
+	return clamp_t(u32, max_microamp / KTD202X_LED_CURRENT_STEP_uA, 1,
+		       KTD202X_MAX_BRIGHTNESS);
+}
+
 static int ktd202x_setup_led_rgb(struct ktd202x *chip, struct fwnode_handle *fwnode,
 				 struct ktd202x_led *led, struct led_init_data *init_data)
 {
@@ -653,6 +666,7 @@ static int ktd202x_setup_led_rgb(struct ktd202x *chip, struct fwnode_handle *fwn
 	led->mcdev.num_colors = num_channels;
 
 	cdev = &led->mcdev.led_cdev;
+	cdev->max_brightness = KTD202X_MAX_BRIGHTNESS;
 	cdev->brightness_set_blocking = ktd202x_brightness_mc_set;
 	cdev->blink_set = ktd202x_blink_mc_set;
 	cdev->pattern_set = ktd202x_pattern_mc_set;
@@ -676,6 +690,8 @@ static int ktd202x_setup_led_single(struct ktd202x *chip, struct fwnode_handle *
 	led->index = reg;
 
 	cdev = &led->cdev;
+	cdev->max_brightness = ktd202x_max_brightness(fwnode);
+
 	cdev->brightness_set_blocking = ktd202x_brightness_single_set;
 	cdev->blink_set = ktd202x_blink_single_set;
 	cdev->pattern_set = ktd202x_pattern_single_set;
@@ -714,8 +730,6 @@ static int ktd202x_add_led(struct ktd202x *chip, struct fwnode_handle *fwnode, u
 		dev_err(chip->dev, "unable to register %s\n", cdev->name);
 		return ret;
 	}
-
-	cdev->max_brightness = KTD202X_MAX_BRIGHTNESS;
 
 	return 0;
 }
