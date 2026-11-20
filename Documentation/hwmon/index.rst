@@ -22,6 +22,7 @@ Hardware Monitoring Kernel Drivers
    abituguru
    abituguru3
    acbel-fsg032
+   acer-aspire14-ec
    acpi_power_meter
    ad7314
    adc128d818
@@ -71,7 +72,6 @@ Hardware Monitoring Kernel Drivers
    dps920ab
    drivetemp
    ds1621
-   ds620
    e50sn12051
    emc1403
    emc1812
@@ -81,6 +81,8 @@ Hardware Monitoring Kernel Drivers
    f71805f
    f71882fg
    fam15h_power
+   fs1412
+   fs1603
    fsp-3y
    ftsteutates
    g760a
@@ -119,7 +121,9 @@ Hardware Monitoring Kernel Drivers
    kbatt
    kfan
    lan966x
+   lan969x-fan
    lattepanda-sigma-ec
+   lenovo-shm-sensors
    lineage-pem
    lm25066
    lm63
@@ -165,7 +169,6 @@ Hardware Monitoring Kernel Drivers
    max16601
    max1668
    max17616
-   max197
    max20730
    max20751
    max20826
@@ -210,6 +213,7 @@ Hardware Monitoring Kernel Drivers
    mpq82d00
    mpq8646
    mpq8785
+   msi_mystic_light
    nct6683
    nct6775
    nct7363
@@ -263,6 +267,7 @@ Hardware Monitoring Kernel Drivers
    sparx5-temp
    spd5118
    sq24860
+   starfive-pwm-fan
    stpddc60
    surface_fan
    sy7636a-hwmon

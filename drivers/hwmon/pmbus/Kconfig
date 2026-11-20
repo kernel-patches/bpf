@@ -132,6 +132,15 @@ config SENSORS_DELTA_AHE50DC_FAN
 	  This driver can also be built as a module. If so, the module
 	  will be called delta-ahe50dc-fan.
 
+config SENSORS_FS1412
+	tristate "TDK FS1412 and FS1525"
+	help
+	  If you say yes here you get hardware monitoring support for the TDK
+	  FS1412 and FS1525 uPOL regulators.
+
+	  This driver can also be built as a module. If so, the module will
+	  be called fs1412.
+
 config SENSORS_FSP_3Y
 	tristate "FSP/3Y-Power power supplies"
 	help
@@ -306,9 +315,9 @@ config SENSORS_LTC2978_REGULATOR
 	depends on SENSORS_LTC2978 && REGULATOR
 	help
 	  If you say yes here you get regulator support for Linear Technology
-	  LT7170, LT7171, LTC3880, LTC3883, LTC3884, LTC3886, LTC3887, LTC3889,
-	  LTC7841, LTC7880, LTM4644, LTM4673, LTM4675, LTM4676, LTM4677,
-	  LTM4678, LTM4680, LTM4686, and LTM4700.
+	  LT7170, LT7171, LT7175, LT7176P, LTC3880, LTC3883, LTC3884, LTC3886,
+	  LTC3887, LTC3889, LTC7841, LTC7880, LTM4644, LTM4673, LTM4675, LTM4676,
+	  LTM4677, LTM4678, LTM4680, LTM4686, and LTM4700.
 
 config SENSORS_LTC3815
 	tristate "Linear Technologies LTC3815"
@@ -416,7 +425,8 @@ config SENSORS_MAX20830
 	tristate "Analog Devices MAX20830 and compatibles"
 	help
 	  If you say yes here you get hardware monitoring support for Analog
-	  Devices MAX20830, MAX20830C, and MAX20840C.
+	  Devices LTM4739, LTM4740, MAX20810B, MAX20815B, MAX20830, MAX20830C,
+	  and MAX20840C.
 
 	  This driver can also be built as a module. If so, the module will
 	  be called max20830.
@@ -455,7 +465,7 @@ config SENSORS_MAX34440
 	  If you say yes here you get hardware monitoring support for Maxim
 	  MAX34440, MAX34441, MAX34446, MAX34451, MAX34452, MAX34460, and
 	  MAX34461. Other compatible devices are ADPM12160, ADPM12200,
-	  ADPM12250, and ADPM12300.
+	  ADPM12250, ADPM12300, and ADPM12886.
 
 	  This driver can also be built as a module. If so, the module will
 	  be called max34440.
