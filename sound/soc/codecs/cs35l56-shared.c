@@ -49,14 +49,6 @@ int cs35l56_set_asp_defaults(struct cs35l56_base *cs35l56_base)
 EXPORT_SYMBOL_NS_GPL(cs35l56_set_asp_defaults, "SND_SOC_CS35L56_SHARED");
 
 static const struct reg_sequence cs35l56_patch[] = {
-	/*
-	 * Firmware can change these to non-defaults to satisfy SDCA.
-	 * Ensure that they are at known defaults.
-	 */
-	{ CS35L56_SWIRE_DP3_CH1_INPUT,		0x00000018 },
-	{ CS35L56_SWIRE_DP3_CH2_INPUT,		0x00000019 },
-	{ CS35L56_SWIRE_DP3_CH3_INPUT,		0x00000029 },
-	{ CS35L56_SWIRE_DP3_CH4_INPUT,		0x00000028 },
 	{ CS35L56_IRQ1_MASK_18,			0x1f7df0ff },
 };
 
@@ -105,10 +97,6 @@ int cs35l56_set_patch(struct cs35l56_base *cs35l56_base)
 EXPORT_SYMBOL_NS_GPL(cs35l56_set_patch, "SND_SOC_CS35L56_SHARED");
 
 static const struct reg_default cs35l56_reg_defaults[] = {
-	{ CS35L56_SWIRE_DP3_CH1_INPUT,		0x00000018 },
-	{ CS35L56_SWIRE_DP3_CH2_INPUT,		0x00000019 },
-	{ CS35L56_SWIRE_DP3_CH3_INPUT,		0x00000029 },
-	{ CS35L56_SWIRE_DP3_CH4_INPUT,		0x00000028 },
 	{ CS35L56_IRQ1_MASK_1,			0x83ffffff },
 	{ CS35L56_IRQ1_MASK_2,			0xffff7fff },
 	{ CS35L56_IRQ1_MASK_4,			0xe0ffffff },
@@ -121,10 +109,6 @@ static const struct reg_default cs35l56_reg_defaults[] = {
 };
 
 static const struct reg_default cs35l63_reg_defaults[] = {
-	{ CS35L56_SWIRE_DP3_CH1_INPUT,		0x00000018 },
-	{ CS35L56_SWIRE_DP3_CH2_INPUT,		0x00000019 },
-	{ CS35L56_SWIRE_DP3_CH3_INPUT,		0x00000029 },
-	{ CS35L56_SWIRE_DP3_CH4_INPUT,		0x00000028 },
 	{ CS35L56_IRQ1_MASK_1,			0x8003ffff },
 	{ CS35L56_IRQ1_MASK_2,			0xffff7fff },
 	{ CS35L56_IRQ1_MASK_4,			0xe0ffffff },
