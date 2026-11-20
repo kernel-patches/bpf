@@ -755,6 +755,7 @@ static void free_loop(struct bpf_loop *loop)
 		return;
 	kvfree(loop->thresholds);
 	kvfree(loop->iv_thresholds);
+	kvfree(loop->steps);
 	kvfree(loop);
 }
 

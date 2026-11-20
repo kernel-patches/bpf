@@ -84,6 +84,21 @@ bool bpf_call_needs_frames(struct bpf_verifier_env *env, const struct bpf_verifi
 	return false;
 }
 
+/* Did a partition ask for the value or the type of one of @xregs in frame @fr? */
+bool bpf_xregs_are_partitioned(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			       u32 fr, const unsigned long *xregs)
+{
+	unsigned long types[XREG_WORDS], control_deps[XREG_WORDS];
+	u32 bits;
+
+	if (!env->precision->data_deps)
+		return false;
+	bits = bpf_frame_mask(env, env->precision->type_apart, st, fr, types);
+	bpf_frame_mask(env, env->precision->control_deps, st, fr, control_deps);
+	return bitmap_intersects(xregs, types, bits) ||
+	       bitmap_intersects(xregs, control_deps, bits);
+}
+
 /* The value in a slot. NULL if the slot has bytes of several types. */
 static const struct bpf_reg_state *slot_value(struct bpf_verifier_env *env,
 					      const struct bpf_func_state *f, u32 spi,
