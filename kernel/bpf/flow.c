@@ -110,6 +110,7 @@ struct bpf_flow {
 	unsigned long *bb_starts;	/* insn starts a basic block */
 	unsigned long *join_points;	/* more than one edge leads to the insn */
 	struct bpf_loop call_loop;	/* from the exit of a function to its next call */
+	u32 start_cnt;			/* of passes and of path-sensitive runs */
 
 	/* of the pass */
 	u64 *cost;			/* per function */
@@ -416,6 +417,8 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env)
 		loop->rt_bounded = flow_loop_is_bounded(env, h);
 		/* also when it's bounded: the main pass may find that it's not */
 		flow_place_guards(env, h, seen);
+		/* pass 0 does not know the trip count before it ends */
+		loop->guarded = loop->has_guards && !bpf_prog_is_offloaded(env->prog->aux);
 		if (aux[h].guard_at_header)
 			ret = 1;
 	}
@@ -973,6 +976,22 @@ static bool flow_same_entry(struct bpf_loop *loop, const struct flow_state *t,
 	       flow_loop_entry(&t->st, loop)->entry_id == flow_loop_entry(&s->st, loop)->entry_id;
 }
 
+/* @t is from an earlier walk over a leftover. The header state of @s subsumes that of @t. */
+static bool flow_is_stale(const struct flow_state *t, const struct flow_state *s)
+{
+	const struct loop_stack_entry *a, *b;
+	u32 fr, i;
+
+	for (fr = 0; !t->pending && fr <= s->st.curframe; fr++) {
+		a = t->st.frame[fr]->loop_stack;
+		b = s->st.frame[fr]->loop_stack;
+		for (i = 0; i < s->st.frame[fr]->loop_stack_cnt; i++, a++, b++)
+			if (a->entry_id == b->entry_id && a->trip < b->trip)
+				return true;
+	}
+	return false;
+}
+
 /*
  * All states arrive here. @s is
  * - pruned, if a state subsumes it,
@@ -1029,9 +1048,14 @@ again:
 			joined = true;
 			continue;
 		}
+		if (!leftover_loop && s->kind == FLOW_AT && flow_is_stale(t, s)) {
+			flow_free_state(env, t);
+			continue;
+		}
 		joined = true;
 		widened = leftover_loop;
 		s->returned |= widened;
+		/* what enters did not grow in this loop */
 		widen = !t->pending && !enters;
 		flow_unlink(env, t);
 		err = bpf_states_join(env, &t->st, &s->st, leftover_loop, widen);
