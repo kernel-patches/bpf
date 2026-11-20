@@ -2696,8 +2696,10 @@ static int tcp_clone_payload(struct sock *sk, struct sk_buff *to,
 				     probe_size - len);
 			len += todo;
 			skb_shinfo(to)->flags |= skb_shinfo(skb)->flags & SKBFL_SHARED_FRAG;
+			to->unreadable |= skb->unreadable;
 			if (lastfrag &&
-			    skb_frag_page(fragfrom) == skb_frag_page(lastfrag) &&
+			    skb_frag_netmem(fragfrom) ==
+			    skb_frag_netmem(lastfrag) &&
 			    skb_frag_off(fragfrom) == skb_frag_off(lastfrag) +
 						      skb_frag_size(lastfrag)) {
 				skb_frag_size_add(lastfrag, todo);
