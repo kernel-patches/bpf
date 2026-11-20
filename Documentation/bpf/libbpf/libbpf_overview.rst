@@ -198,6 +198,138 @@ about the field that should be relocated on the target kernel. i.e, if the
 ``struct task_struct`` due to some new field added in front of it, libbpf will
 automatically adjust the actual offset to the proper value.
 
+CO-RE for function arguments
+----------------------------
+
+BPF programs attached via BTF to kernel functions, LSM hooks and tracepoints
+(``fentry``, ``fexit``, ``fmod_ret``, ``fsession``, ``tp_btf``, ``lsm`` and
+``lsm_cgroup`` programs) receive the arguments of their attach target in their
+context, as an array of 64-bit slots. ``BPF_PROG()`` and ``BPF_PROG2()`` access
+these by position, so if parameters are added, removed or reordered in another
+kernel version, a program reads the wrong arguments.
+
+libbpf supports CO-RE relocation of these arguments instead. A struct marked
+with ``__bpf_func_args`` (from ``bpf_tracing.h``) describes the arguments a
+program needs, with members named after the target's parameters, in any order.
+The program takes a pointer to such a struct as its context:
+
+.. code-block:: C
+
+    struct unlinkat_args {
+            struct filename *name;
+            int dfd;
+            int ret __bpf_func_ret;
+    } __bpf_func_args;
+
+    SEC("fexit/do_unlinkat")
+    int handle(struct unlinkat_args *args)
+    {
+            if (bpf_core_field_exists(args->dfd))
+                    bpf_printk("dfd %d", args->dfd);
+            bpf_printk("ret %d", args->ret);
+            return 0;
+    }
+
+When the program is loaded, each member is matched by name against the
+parameters of the attach target, and accesses to it are relocated to the context
+slot of that parameter. A member marked ``__bpf_func_ret`` refers to the return
+value, which exists for ``fexit``, ``fmod_ret``, ``fsession``, ``lsm`` and
+``lsm_cgroup`` programs.
+
+GCC doesn't support BTF decl tags on types, so with GCC such a struct also
+needs to contain ``__bpf_func_args_marker``, a zero-sized member that carries
+the tag instead. Structs with both work with either compiler:
+
+.. code-block:: C
+
+    struct unlinkat_args {
+            __bpf_func_args_marker;
+            struct filename *name;
+            int dfd;
+            int ret __bpf_func_ret;
+    } __bpf_func_args;
+
+``BPF_PROG_CORE()`` offers the same with a ``BPF_PROG2()``-like interface,
+declaring the struct from ``(type, name)`` pairs (using
+``__bpf_func_args_marker``, so that it works with both clang and GCC) and
+passing the arguments to the program body as variables:
+
+.. code-block:: C
+
+    SEC("fexit/do_unlinkat")
+    int BPF_PROG_CORE(handle, struct filename *, name, int, dfd,
+                      __bpf_func_ret int, ret)
+    {
+            if (bpf_func_arg_exists(dfd))
+                    bpf_printk("dfd %d", dfd);
+            bpf_printk("ret %d", ret);
+            return 0;
+    }
+
+Arguments that don't exist in the target read as zero, and
+``bpf_func_arg_exists()`` tells whether an argument exists. Within the program
+body, ``ctx`` points to the arguments struct.
+
+Members are matched to parameters as follows:
+
+* Names are compared ignoring any suffix starting with three underscores (a
+  "flavor", as for CO-RE types), so that several members can describe a
+  parameter that is renamed or changes type across kernel versions.
+
+* Members without a matching parameter don't exist: ``bpf_core_field_exists()``
+  returns 0 for them and accesses that aren't guarded by such a check fail to
+  load. Parameters without a matching member are ignored.
+
+* Member and parameter types have to be compatible following the usual CO-RE
+  rules for struct fields. Members of a different kind than their parameter
+  (e.g., an integer for a pointer, or for an enum) don't match. Integers match
+  regardless of size and signedness: when an unsigned integer changes size the
+  load is adjusted accordingly, while size changes involving signed integers
+  make accesses fail to load. Structs passed by value match, with accesses to
+  their members relocated like those of any other struct.
+
+* Unlike struct fields, pointers only match if the types they point to have the
+  same kind and name (forward declarations match structs and unions), while
+  ``void *`` matches any pointer. A parameter changing from, e.g.,
+  ``struct file *`` to ``struct inode *`` thus appears as missing rather than
+  having accesses through it relocated against the wrong type, and flavors can
+  describe both variants:
+
+  .. code-block:: C
+
+      struct my_args {
+              struct vm_area_struct *vma;
+              struct mm_area *vma___new;
+      } __bpf_func_args;
+
+For ``tp_btf`` programs, as the ``btf_trace_<tracepoint>`` type has no parameter
+names, these are taken from the tracepoint's ``__probestub_<tracepoint>()``
+function.
+
+Light skeletons rely on the kernel to apply CO-RE relocations. Kernels that
+don't support function argument relocations find no match for any member, so
+all arguments appear to be missing.
+
+Limitations:
+
+* Structs passed by value that are larger than 8 bytes can't be copied out of
+  the context as a whole, so they can't be ``BPF_PROG_CORE()`` arguments; use a
+  ``__bpf_func_args`` struct and access their members instead.
+
+* Compilers may access members of structs passed by value by adding a
+  (relocated) offset to the context pointer, rather than relocating the load
+  itself. The verifier only accepts such accesses since Linux 7.1.
+
+* When libbpf applies the relocations, accesses have to be made from the
+  program itself (or from inlined functions) rather than from subprograms, which
+  may be shared by programs with different attach targets.
+
+* Multi-attach programs and programs attached to other BPF programs (e.g.
+  ``freplace``) are not supported.
+
+* On big-endian architectures, arguments smaller than 8 bytes can't currently be
+  accessed, as the verifier only allows 8-byte aligned context accesses.
+
 Getting Started with libbpf
 ===========================
 

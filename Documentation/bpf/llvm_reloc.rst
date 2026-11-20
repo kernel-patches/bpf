@@ -544,3 +544,73 @@ Enum-based relocations:
             108:  CO-RE <enumval_value> [16] enum bar::V = 1
     35:     *(u64 *)(r2 + 0x0) = r1
     36:     exit
+
+CO-RE Relocations of Function Arguments
+=======================================
+
+Programs attached via BTF to kernel functions and tracepoints
+(``BPF_PROG_TYPE_TRACING`` and ``BPF_PROG_TYPE_LSM`` programs with expected
+attach types ``BPF_TRACE_FENTRY``, ``BPF_TRACE_FEXIT``, ``BPF_TRACE_FSESSION``,
+``BPF_MODIFY_RETURN``, ``BPF_TRACE_RAW_TP``, ``BPF_LSM_MAC`` and
+``BPF_LSM_CGROUP``) can access their context through a struct describing the
+arguments of their attach target, with members named after its parameters.
+Such a struct is marked with a ``btf_decl_tag("bpf_func_args")`` BTF decl tag,
+either on the struct itself (``component_idx`` -1) or, as compilers such as GCC
+don't support decl tags on types, on one of its members (typically a
+zero-sized ``char ___bpf_func_args[0]`` member, which never matches a
+parameter). It is otherwise an ordinary struct accessed with
+``preserve_access_index``, so the compiler emits the usual field-based CO-RE
+relocations on the context loads:
+
+.. code-block:: c
+
+  struct args {
+    int b;
+    char a;
+    int ret __attribute__((btf_decl_tag("bpf_func_ret")));
+  } __attribute__((preserve_access_index, btf_decl_tag("bpf_func_args")));
+
+  /* int bpf_fentry_test3(char a, int b, u64 c) */
+  __attribute__((section("fexit/bpf_fentry_test3")))
+  int prog(struct args *args) {
+    return args->a + args->b + args->ret;
+  }
+
+Rather than with same-named types, loaders resolve relocations against such a
+struct with the single candidate given by the program's attach target:
+
+* For ``BPF_TRACE_RAW_TP`` programs, whose attach target is the
+  ``btf_trace_<tracepoint>`` typedef, the parameters are those of the
+  ``__probestub_<tracepoint>`` function, ignoring the first (``void *__data``)
+  one. Otherwise, the parameters are those of the attach target function.
+
+* The first accessor of the relocation's access string has to be ``0``, and the
+  second one, a member of the struct, is matched by name against the
+  parameters, ignoring the ``___`` flavor suffix of the member's name. The
+  matching parameter is at the byte offset of its slot in the context, which
+  is an array of 8-byte slots, one per parameter, except for structs and unions
+  larger than 8 bytes passed by value, which take as many slots as their size
+  rounded up to 8 bytes requires. A scalar parameter smaller than 8 bytes is in
+  the low-order bytes of its slot.
+
+* A member tagged with ``btf_decl_tag("bpf_func_ret")`` (``component_idx`` being
+  the member's index) refers to the return value, in the slot following those
+  of the parameters, but only for ``BPF_TRACE_FEXIT``, ``BPF_TRACE_FSESSION``,
+  ``BPF_MODIFY_RETURN``, ``BPF_LSM_MAC`` and ``BPF_LSM_CGROUP`` programs, and
+  for functions that don't return ``void``.
+
+* The member's and parameter's types have to be compatible as for struct
+  fields, except that pointers are only compatible if the types they point to
+  have the same kind and essential name (forward declarations being compatible
+  with structs and unions), with ``void *`` compatible with any pointer.
+
+* Further accessors (members of structs passed by value) are resolved as for
+  any other struct.
+
+Members that have no match don't exist, as for missing struct fields. In the
+example above, the ``byte_off`` relocations for ``a``, ``b`` and ``ret`` are
+resolved to 0, 8 and 24 respectively.
+
+Both libbpf and the kernel (for relocations passed to ``BPF_PROG_LOAD``, as
+used by light skeletons) resolve these relocations, using the attach target
+passed to ``BPF_PROG_LOAD`` in the kernel's case.
