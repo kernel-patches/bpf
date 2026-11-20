@@ -1395,8 +1395,7 @@ static int cqspi_direct_read_execute(struct cqspi_flash_pdata *f_pdata,
 		goto err_unmap;
 	}
 
-	tx->callback = cqspi_rx_dma_callback;
-	tx->callback_param = cqspi;
+	dmaengine_desc_set_callback(tx, cqspi_rx_dma_callback, NULL, cqspi);
 	cookie = dmaengine_submit(tx);
 	reinit_completion(&cqspi->rx_dma_complete);
 
@@ -2001,7 +2000,6 @@ disable_rpm:
 	pm_runtime_disable(dev);
 	pm_runtime_set_suspended(dev);
 	pm_runtime_put_noidle(dev);
-	pm_runtime_dont_use_autosuspend(dev);
 
 	cqspi_controller_enable(cqspi, 0);
 disable_clks:
@@ -2037,7 +2035,6 @@ static void cqspi_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 }
 
 static int cqspi_runtime_suspend(struct device *dev)

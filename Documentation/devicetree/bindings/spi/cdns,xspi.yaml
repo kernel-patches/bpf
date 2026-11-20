@@ -40,6 +40,19 @@ properties:
   interrupts:
     maxItems: 1
 
+  dmas:
+    maxItems: 1
+    description: |
+      Optional DMA memcpy channel for transfers between memory and the Slave
+      DMA data port. The channel is shared by reads and writes.
+
+  dma-names:
+    const: memcpy
+
+dependencies:
+  dmas: [dma-names]
+  dma-names: [dmas]
+
 required:
   - compatible
   - reg

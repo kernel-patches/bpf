@@ -265,8 +265,7 @@ static int stm32_qspi_tx_dma(struct stm32_qspi *qspi,
 	cr = readl_relaxed(qspi->io_base + QSPI_CR);
 
 	reinit_completion(&qspi->dma_completion);
-	desc->callback = stm32_qspi_dma_callback;
-	desc->callback_param = &qspi->dma_completion;
+	dmaengine_desc_set_callback(desc, stm32_qspi_dma_callback, NULL, &qspi->dma_completion);
 	cookie = dmaengine_submit(desc);
 	err = dma_submit_error(cookie);
 	if (err)
@@ -882,7 +881,6 @@ err_pm_runtime_free:
 	pm_runtime_put_noidle(qspi->dev);
 	pm_runtime_disable(qspi->dev);
 	pm_runtime_set_suspended(qspi->dev);
-	pm_runtime_dont_use_autosuspend(qspi->dev);
 err_dma_free:
 	stm32_qspi_dma_free(qspi);
 err_clk_disable:
@@ -904,7 +902,6 @@ static void stm32_qspi_remove(struct platform_device *pdev)
 	pm_runtime_put_noidle(qspi->dev);
 	pm_runtime_disable(qspi->dev);
 	pm_runtime_set_suspended(qspi->dev);
-	pm_runtime_dont_use_autosuspend(qspi->dev);
 	clk_disable_unprepare(qspi->clk);
 }
 
