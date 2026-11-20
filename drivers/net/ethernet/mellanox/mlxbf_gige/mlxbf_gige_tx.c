@@ -130,6 +130,7 @@ bool mlxbf_gige_handle_tx_complete(struct mlxbf_gige *priv)
 	u64 *tx_wqe_addr;
 	u64 tx_status;
 	u16 tx_ci;
+	u16 entry;
 
 	tx_status = readq(priv->base + MLXBF_GIGE_TX_STATUS);
 	if (tx_status & MLXBF_GIGE_TX_STATUS_DATA_FIFO_FULL)
@@ -143,7 +144,8 @@ bool mlxbf_gige_handle_tx_complete(struct mlxbf_gige *priv)
 	 * to be supported, that is TX consumer index wrapped from 0xFFFF
 	 * to 0 while TX completion index is still < 0xFFFF.
 	 */
-	for (; priv->prev_tx_ci != tx_ci; priv->prev_tx_ci++) {
+	for (entry = 0; priv->prev_tx_ci != tx_ci && entry < priv->tx_q_entries;
+	     priv->prev_tx_ci++, entry++) {
 		tx_wqe_index = priv->prev_tx_ci % priv->tx_q_entries;
 		/* Each TX WQE is 16 bytes. The 8 MSB store the 2KB TX
 		 * buffer address and the 8 LSB contain information
@@ -152,17 +154,24 @@ bool mlxbf_gige_handle_tx_complete(struct mlxbf_gige *priv)
 		tx_wqe_addr = priv->tx_wqe_base +
 			       (tx_wqe_index * MLXBF_GIGE_TX_WQE_SZ_QWORDS);
 
-		stats->tx_packets++;
-		stats->tx_bytes += MLXBF_GIGE_TX_WQE_PKT_LEN(tx_wqe_addr);
+		if (priv->tx_skb[tx_wqe_index]) {
+			stats->tx_packets++;
+			stats->tx_bytes += MLXBF_GIGE_TX_WQE_PKT_LEN(tx_wqe_addr);
+			dma_unmap_single(priv->dev, *tx_wqe_addr,
+					 priv->tx_skb[tx_wqe_index]->len, DMA_TO_DEVICE);
+			dev_consume_skb_any(priv->tx_skb[tx_wqe_index]);
+			priv->tx_skb[tx_wqe_index] = NULL;
 
-		dma_unmap_single(priv->dev, *tx_wqe_addr,
-				 priv->tx_skb[tx_wqe_index]->len, DMA_TO_DEVICE);
-		dev_consume_skb_any(priv->tx_skb[tx_wqe_index]);
-		priv->tx_skb[tx_wqe_index] = NULL;
-
-		/* Ensure completion of updates across all cores */
-		mb();
+			/* Ensure completion of updates across all cores */
+			mb();
+		}
 	}
+
+	/* At this point the completion index should be equal to the
+	 * consumer index. If they aren't then the driver is out of sync
+	 * from the HW's state and needs to be adjusted.
+	 */
+	priv->prev_tx_ci = tx_ci;
 
 	/* Since the TX ring was likely just drained, check if TX queue
 	 * had previously been stopped and now that there are TX buffers
