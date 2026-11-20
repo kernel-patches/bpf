@@ -67,6 +67,9 @@ struct bpf_precision {
 	bool failing_path_due;		/* see bpf_failing_path_is_due() */
 	bool budget_grew;		/* see partition_next() */
 	bool new_nospec;
+	/* see bpf_hash_live_types() */
+	u64 live_types_cost, live_types_mem, start_mem;
+	bool live_types_over, join_live_types;	/* in this pass, in all next passes */
 
 	u16 *apart_xregno;	/* per insn, see bpf_range_of_data_dep() */
 
