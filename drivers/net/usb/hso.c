@@ -785,6 +785,18 @@ static netdev_tx_t hso_net_start_xmit(struct sk_buff *skb,
 	struct hso_net *odev = netdev_priv(net);
 	int result;
 
+	/*
+	 * max_mtu only limits the MTU userspace can configure; the core does
+	 * not clamp skb->len to it (AF_PACKET with PACKET_VNET_HDR, tpacket_snd()
+	 * with a vnet header and a route MTU metric above the device MTU can all
+	 * deliver larger frames), so drop anything that does not fit here.
+	 */
+	if (unlikely(skb->len > MUX_BULK_TX_BUF_SIZE)) {
+		net->stats.tx_dropped++;
+		kfree_skb_reason(skb, SKB_DROP_REASON_PKT_TOO_BIG);
+		return NETDEV_TX_OK;
+	}
+
 	/* Tell the kernel, "No more frames 'til we are done with this one." */
 	netif_stop_queue(net);
 	if (hso_get_activity(odev->parent) == -EAGAIN) {
@@ -2409,6 +2421,7 @@ static void hso_net_init(struct net_device *net)
 	net->flags = IFF_POINTOPOINT | IFF_NOARP | IFF_MULTICAST;
 	net->type = ARPHRD_NONE;
 	net->mtu = DEFAULT_MTU - 14;
+	net->max_mtu = MUX_BULK_TX_BUF_SIZE - 14;
 	net->tx_queue_len = 10;
 	net->ethtool_ops = &ops;
 
