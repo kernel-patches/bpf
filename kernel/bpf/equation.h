@@ -54,6 +54,7 @@ struct sym_scratch {
 	u32 first_use;		/* see link_sym_equations() */
 	u32 new_symno;
 	bool determined, by_op;
+	bool forgotten, in_data_deps;	/* bpf_equations_join_forgets() */
 	const struct bpf_sym_equation *op;	/* that makes it */
 	struct expr cur_expr;	/* check_equations(): its value in the other state */
 };
