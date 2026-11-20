@@ -1873,16 +1873,16 @@ static int cadence_nand_slave_dma_transfer(struct cdns_nand_ctrl *cdns_ctrl,
 {
 	DECLARE_COMPLETION_ONSTACK(finished);
 	struct dma_chan *chan;
-	struct dma_device *dma_dev;
+	struct device *dma_dev;
 	dma_addr_t src_dma, dst_dma, buf_dma;
 	struct dma_async_tx_descriptor *tx;
 	dma_cookie_t cookie;
 
 	chan = cdns_ctrl->dmac;
-	dma_dev = chan->device;
+	dma_dev = dmaengine_get_dma_device(chan);
 
-	buf_dma = dma_map_single(dma_dev->dev, buf, len, dir);
-	if (dma_mapping_error(dma_dev->dev, buf_dma)) {
+	buf_dma = dma_map_single(dma_dev, buf, len, dir);
+	if (dma_mapping_error(dma_dev, buf_dma)) {
 		dev_err(cdns_ctrl->dev, "Failed to map DMA buffer\n");
 		goto err;
 	}
@@ -1913,12 +1913,12 @@ static int cadence_nand_slave_dma_transfer(struct cdns_nand_ctrl *cdns_ctrl,
 	dma_async_issue_pending(cdns_ctrl->dmac);
 	wait_for_completion(&finished);
 
-	dma_unmap_single(dma_dev->dev, buf_dma, len, dir);
+	dma_unmap_single(dma_dev, buf_dma, len, dir);
 
 	return 0;
 
 err_unmap:
-	dma_unmap_single(dma_dev->dev, buf_dma, len, dir);
+	dma_unmap_single(dma_dev, buf_dma, len, dir);
 
 err:
 	dev_dbg(cdns_ctrl->dev, "Fall back to CPU I/O\n");
@@ -3125,7 +3125,7 @@ cadence_nand_irq_cleanup(int irqnum, struct cdns_nand_ctrl *cdns_ctrl)
 static int cadence_nand_init(struct cdns_nand_ctrl *cdns_ctrl)
 {
 	dma_cap_mask_t mask;
-	struct dma_device *dma_dev;
+	struct device *dma_dev;
 	int ret;
 
 	cdns_ctrl->cdma_desc = dma_alloc_coherent(cdns_ctrl->dev,
@@ -3169,12 +3169,12 @@ static int cadence_nand_init(struct cdns_nand_ctrl *cdns_ctrl)
 		}
 	}
 
-	dma_dev = cdns_ctrl->dmac->device;
-	cdns_ctrl->io.iova_dma = dma_map_resource(dma_dev->dev, cdns_ctrl->io.dma,
+	dma_dev = dmaengine_get_dma_device(cdns_ctrl->dmac);
+	cdns_ctrl->io.iova_dma = dma_map_resource(dma_dev, cdns_ctrl->io.dma,
 						  cdns_ctrl->io.size,
 						  DMA_BIDIRECTIONAL, 0);
 
-	ret = dma_mapping_error(dma_dev->dev, cdns_ctrl->io.iova_dma);
+	ret = dma_mapping_error(dma_dev, cdns_ctrl->io.iova_dma);
 	if (ret) {
 		dev_err(cdns_ctrl->dev, "Failed to map I/O resource to DMA\n");
 		goto dma_release_chnl;
@@ -3203,7 +3203,7 @@ static int cadence_nand_init(struct cdns_nand_ctrl *cdns_ctrl)
 	return 0;
 
 unmap_dma_resource:
-	dma_unmap_resource(dma_dev->dev, cdns_ctrl->io.iova_dma,
+	dma_unmap_resource(dma_dev, cdns_ctrl->io.iova_dma,
 			   cdns_ctrl->io.size, DMA_BIDIRECTIONAL, 0);
 
 dma_release_chnl:

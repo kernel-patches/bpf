@@ -259,6 +259,10 @@ static int jz4725b_correct(struct ingenic_ecc *bch,
 			bit = (reg & BCH_BHERR_INDEX0_MASK) >> BCH_BHERR_INDEX0_SHIFT;
 		}
 
+		/* Skip indexes outside the data area. */
+		if (bit >= params->size * 8)
+			continue;
+
 		buf[(bit >> 3)] ^= BIT(bit & 0x7);
 	}
 
