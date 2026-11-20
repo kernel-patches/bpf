@@ -36,6 +36,9 @@ module_param(csum, bool, 0444);
 module_param(gso, bool, 0444);
 module_param(napi_tx, bool, 0644);
 
+/* RX queue stall timeout in seconds. */
+#define VIRTNET_RX_WATCHDOG_TIMEO 5
+
 #define VIRTIO_OFFLOAD_MAP_MIN	46
 #define VIRTIO_OFFLOAD_MAP_MAX	47
 #define VIRTIO_FEATURES_MAP_MIN	65
@@ -320,6 +323,13 @@ struct send_queue {
 	dma_addr_t xsk_hdr_dma_addr;
 };
 
+struct virtnet_rq_watchdog {
+	u16 last_used;
+	u16 calls;
+	unsigned long jiffies;
+	bool stalled;
+};
+
 /* Internal representation of a receive virtqueue */
 struct receive_queue {
 	/* Virtqueue associated with this receive_queue */
@@ -333,6 +343,9 @@ struct receive_queue {
 
 	/* The number of rx notifications */
 	u16 calls;
+
+	/* RX watchdog state. */
+	struct virtnet_rq_watchdog watchdog;
 
 	/* Is dynamic interrupt moderation enabled? */
 	bool dim_enabled;
@@ -444,6 +457,9 @@ struct virtnet_info {
 
 	/* Work struct for setting rx mode */
 	struct work_struct rx_mode_work;
+
+	/* RX watchdog timer for stuck detection */
+	struct timer_list rx_watchdog;
 
 	/* Does the affinity hint is set for virtqueues? */
 	bool affinity_hint_set;
@@ -3090,6 +3106,74 @@ static int virtnet_poll(struct napi_struct *napi, int budget)
 	return received;
 }
 
+/*
+ * An RX queue is stalled if it has a backlog but makes no progress and
+ * gets no new interrupt for VIRTNET_RX_WATCHDOG_TIMEO seconds, usually
+ * because an interrupt was lost.  Mark it stalled and reschedule NAPI to
+ * drain the ring and refill the buffers.
+ */
+static void virtnet_rx_watchdog(struct timer_list *t)
+{
+	struct virtnet_info *vi = timer_container_of(vi, t, rx_watchdog);
+	unsigned long timeout = VIRTNET_RX_WATCHDOG_TIMEO * HZ;
+	int i;
+
+	for (i = 0; i < vi->curr_queue_pairs; i++) {
+		struct receive_queue *rq = &vi->rq[i];
+		u16 last_used = virtqueue_get_last_used_idx(rq->vq);
+		u16 calls = rq->calls;
+		bool backlog = virtqueue_poll(rq->vq, last_used);
+		bool progress = last_used != rq->watchdog.last_used;
+
+		if (!backlog || progress || calls != rq->watchdog.calls) {
+			rq->watchdog.last_used = last_used;
+			rq->watchdog.calls = calls;
+			rq->watchdog.jiffies = jiffies;
+			continue;
+		}
+
+		if (time_after(jiffies, rq->watchdog.jiffies + timeout)) {
+			unsigned int stall_ms =
+				jiffies_to_msecs(jiffies - rq->watchdog.jiffies);
+
+			netdev_warn(vi->dev,
+				    "RX queue %u stalled for %u ms, rescheduling NAPI\n",
+				    i, stall_ms);
+
+			rq->watchdog.stalled = true;
+			virtqueue_napi_schedule(&rq->napi, rq->vq);
+
+			/* Rate-limit to one event per timeout. */
+			rq->watchdog.jiffies = jiffies;
+		}
+	}
+
+	mod_timer(&vi->rx_watchdog, jiffies + HZ);
+}
+
+static void virtnet_rx_watchdog_init_queue(struct receive_queue *rq)
+{
+	rq->watchdog.last_used = virtqueue_get_last_used_idx(rq->vq);
+	rq->watchdog.calls = rq->calls;
+	rq->watchdog.jiffies = jiffies;
+	rq->watchdog.stalled = false;
+}
+
+static void virtnet_rx_watchdog_start(struct virtnet_info *vi)
+{
+	int i;
+
+	for (i = 0; i < vi->curr_queue_pairs; i++)
+		virtnet_rx_watchdog_init_queue(&vi->rq[i]);
+
+	mod_timer(&vi->rx_watchdog, jiffies + HZ);
+}
+
+static void virtnet_rx_watchdog_stop(struct virtnet_info *vi)
+{
+	timer_delete_sync(&vi->rx_watchdog);
+}
+
 static void virtnet_disable_queue_pair(struct virtnet_info *vi, int qp_index)
 {
 	virtnet_napi_tx_disable(&vi->sq[qp_index]);
@@ -3252,6 +3336,8 @@ static int virtnet_open(struct net_device *dev)
 		vi->status = VIRTIO_NET_S_LINK_UP;
 		netif_carrier_on(dev);
 	}
+
+	virtnet_rx_watchdog_start(vi);
 
 	return 0;
 
@@ -3782,6 +3868,7 @@ static int virtnet_set_queues(struct virtnet_info *vi, u16 queue_pairs)
 	struct virtio_net_rss_config_trailer old_rss_trailer;
 	struct net_device *dev = vi->dev;
 	struct scatterlist sg;
+	u16 old_queue_pairs = vi->curr_queue_pairs;
 
 	if (!vi->has_cvq || !virtio_has_feature(vi->vdev, VIRTIO_NET_F_MQ))
 		return 0;
@@ -3839,7 +3926,14 @@ static int virtnet_set_queues(struct virtnet_info *vi, u16 queue_pairs)
 	if (vi->has_rss)
 		vi->rss_trailer.max_tx_vq = cpu_to_le16(queue_pairs);
 succ:
+	if (dev->flags & IFF_UP) {
+		/* Init new queues */
+		for (int i = old_queue_pairs; i < queue_pairs; i++)
+			virtnet_rx_watchdog_init_queue(&vi->rq[i]);
+	}
+
 	vi->curr_queue_pairs = queue_pairs;
+
 	if (dev->flags & IFF_UP) {
 		local_bh_disable();
 		for (int i = 0; i < vi->curr_queue_pairs; ++i)
@@ -3854,6 +3948,8 @@ static int virtnet_close(struct net_device *dev)
 {
 	struct virtnet_info *vi = netdev_priv(dev);
 	int i;
+
+	virtnet_rx_watchdog_stop(vi);
 
 	/* Prevent the config change callback from changing carrier
 	 * after close
@@ -6954,6 +7050,7 @@ static int virtnet_probe(struct virtio_device *vdev)
 	INIT_WORK(&vi->config_work, virtnet_config_changed_work);
 	INIT_WORK(&vi->rx_mode_work, virtnet_rx_mode_work);
 	disable_work(&vi->rx_mode_work);
+	timer_setup(&vi->rx_watchdog, virtnet_rx_watchdog, 0);
 
 	if (virtio_has_feature(vdev, VIRTIO_NET_F_MRG_RXBUF)) {
 		vi->mergeable_rx_bufs = true;
