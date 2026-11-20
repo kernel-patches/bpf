@@ -111,7 +111,7 @@ static struct kmem_cache *swap_table_cachep;
 /* Protects si->swap_file for /proc/swaps usage */
 static DEFINE_MUTEX(swapon_mutex);
 
-static DECLARE_WAIT_QUEUE_HEAD(proc_poll_wait);
+static struct proc_dir_entry *proc_swaps;
 /* Activity counter to indicate that a swapon or swapoff has occurred */
 static atomic_t proc_poll_event = ATOMIC_INIT(0);
 
@@ -3315,7 +3315,7 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 
 	err = 0;
 	atomic_inc(&proc_poll_event);
-	wake_up_interruptible(&proc_poll_wait);
+	proc_poll_notify(proc_swaps);
 
 out_dput:
 	filp_close(victim, NULL);
@@ -3323,11 +3323,9 @@ out_dput:
 }
 
 #ifdef CONFIG_PROC_FS
-static __poll_t swaps_poll(struct file *file, poll_table *wait)
+static __poll_t swaps_poll(struct file *file)
 {
 	struct seq_file *seq = file->private_data;
-
-	poll_wait(file, &proc_poll_wait, wait);
 
 	if (seq->poll_event != atomic_read(&proc_poll_event)) {
 		seq->poll_event = atomic_read(&proc_poll_event);
@@ -3418,32 +3416,25 @@ static const struct seq_operations swaps_op = {
 	.show =		swap_show
 };
 
+/* procfs opens the seq_file */
 static int swaps_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
-	int ret;
+	struct seq_file *seq = file->private_data;
 
-	ret = seq_open(file, &swaps_op);
-	if (ret)
-		return ret;
-
-	seq = file->private_data;
 	seq->poll_event = atomic_read(&proc_poll_event);
 	return 0;
 }
 
 static const struct proc_ops swaps_proc_ops = {
 	.proc_flags	= PROC_ENTRY_PERMANENT,
+	.proc_seq_ops	= &swaps_op,
 	.proc_open	= swaps_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release,
 	.proc_poll	= swaps_poll,
 };
 
 static int __init procswaps_init(void)
 {
-	proc_create("swaps", 0, NULL, &swaps_proc_ops);
+	proc_swaps = proc_create("swaps", 0, NULL, &swaps_proc_ops);
 	return 0;
 }
 __initcall(procswaps_init);
@@ -3922,7 +3913,7 @@ SYSCALL_DEFINE2(swapon, const char __user *, specialfile, int, swap_flags)
 
 	mutex_unlock(&swapon_mutex);
 	atomic_inc(&proc_poll_event);
-	wake_up_interruptible(&proc_poll_wait);
+	proc_poll_notify(proc_swaps);
 
 	error = 0;
 	goto out;

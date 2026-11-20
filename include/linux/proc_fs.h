@@ -8,6 +8,7 @@
 #include <linux/compiler.h>
 #include <linux/types.h>
 #include <linux/fs.h>
+#include <linux/ioctl.h>
 
 struct proc_dir_entry;
 struct seq_file;
@@ -16,6 +17,7 @@ struct seq_operations;
 enum {
 	/*
 	 * All /proc entries using this ->proc_ops instance are never removed.
+	 * procfs calls into them without pinning them.
 	 *
 	 * If in doubt, ignore this flag.
 	 */
@@ -25,29 +27,134 @@ enum {
 	PROC_ENTRY_PERMANENT		= 1U << 0,
 #endif
 
-	PROC_ENTRY_proc_read_iter	= 1U << 1,
-	PROC_ENTRY_proc_compat_ioctl	= 1U << 2,
+	PROC_ENTRY_proc_fops		= 1U << 2,
 	PROC_ENTRY_proc_lseek		= 1U << 3,
+	PROC_ENTRY_proc_seq_ops		= 1U << 4,
+	PROC_ENTRY_proc_show		= 1U << 5,
 
+	PROC_ENTRY_CANT_MOUNT		= 1U << 6,
 	PROC_ENTRY_FORCE_LOOKUP		= 1U << 7,
+	PROC_ENTRY_proc_write_buf	= 1U << 8,
+
+	/*
+	 * Writes larger than ->proc_write_size come up short instead of
+	 * failing with -EINVAL.
+	 */
+	PROC_ENTRY_SHORT_WRITES		= 1U << 9,
+	PROC_ENTRY_proc_read_buf	= 1U << 10,
+
+	/*
+	 * Reads larger than ->proc_read_size are filled in pieces instead of
+	 * coming up short.
+	 */
+	PROC_ENTRY_FULL_READS		= 1U << 11,
+	PROC_ENTRY_proc_ioctl_buf	= 1U << 12,
+	PROC_ENTRY_proc_poll		= 1U << 13,
+	PROC_ENTRY_proc_release		= 1U << 14,
+	PROC_ENTRY_proc_mmap		= 1U << 15,
 };
+
+/*
+ * How many bytes of the argument of @cmd procfs copies in before calling
+ * ->proc_ioctl_buf() and copies back out after it. A command that copies
+ * neither gets its argument as is.
+ */
+struct proc_ioctl_arg {
+	unsigned int cmd;
+	unsigned int in;
+	unsigned int out;
+};
+
+#define PROC_IOCTL_ARG(_cmd, _in, _out) \
+	{ .cmd = (_cmd), .in = (_in), .out = (_out) }
+
+/* A command that encodes the size and direction of its argument. */
+#define PROC_IOCTL_IOC(_cmd)						\
+	PROC_IOCTL_ARG(_cmd,						\
+		       (_IOC_DIR(_cmd) & _IOC_WRITE) ? _IOC_SIZE(_cmd) : 0, \
+		       (_IOC_DIR(_cmd) & _IOC_READ) ? _IOC_SIZE(_cmd) : 0)
 
 struct proc_ops {
 	unsigned int proc_flags;
 	int	(*proc_open)(struct inode *, struct file *);
-	ssize_t	(*proc_read)(struct file *, char __user *, size_t, loff_t *);
-	ssize_t (*proc_read_iter)(struct kiocb *, struct iov_iter *);
-	ssize_t	(*proc_write)(struct file *, const char __user *, size_t, loff_t *);
-	/* mandatory unless nonseekable_open() or equivalent is used */
+	/*
+	 * mandatory unless nonseekable_open() or equivalent is used, procfs
+	 * seeks seq_file entries itself
+	 */
 	loff_t	(*proc_lseek)(struct file *, loff_t, int);
 	int	(*proc_release)(struct inode *, struct file *);
-	__poll_t (*proc_poll)(struct file *, struct poll_table_struct *);
-	long	(*proc_ioctl)(struct file *, unsigned int, unsigned long);
-#ifdef CONFIG_COMPAT
-	long	(*proc_compat_ioctl)(struct file *, unsigned int, unsigned long);
-#endif
+	/*
+	 * procfs owns a wait queue for an entry with a ->proc_poll() and
+	 * does the poll_wait() on it before it calls the method, which only
+	 * reports the mask. The owner wakes the pollers with
+	 * proc_poll_notify(). A poll on a removed entry reports
+	 * EPOLLERR | EPOLLPRI.
+	 */
+	__poll_t (*proc_poll)(struct file *);
+	/*
+	 * procfs pins the entry around ->proc_mmap() and wraps the
+	 * vm_operations of the mapping so that ->open(), ->fault(),
+	 * ->page_mkwrite() and ->access() run with the entry pinned as well.
+	 * Nothing else of them is called, like for a kernfs file. Every
+	 * mapping of an entry has to use the same vm_operations. A ->close()
+	 * can't be wrapped, it runs when the mapping goes away and that can
+	 * be after the entry is gone, so a mapping that has one is refused.
+	 * Removing the entry unmaps the mappings in its own address space,
+	 * like kernfs does, and a fault into one of them is SIGBUS from then
+	 * on. A file that maps through another address space, /proc/bus/pci
+	 * through the one of /dev/mem, keeps its mappings like a sysfs
+	 * resource file does. The mappings of a permanent entry are left
+	 * alone.
+	 */
 	int	(*proc_mmap)(struct file *, struct vm_area_struct *);
 	unsigned long (*proc_get_unmapped_area)(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
+	/*
+	 * For seq_file entries procfs opens the seq_file, reads and seeks
+	 * through it and frees it once the file is released. ->proc_open()
+	 * finds the seq_file in ->private_data and ->proc_release() only
+	 * releases what ->proc_open() set up. It can run while a reader still
+	 * copies out of the seq_file, so it must leave that alone. procfs
+	 * allocates ->proc_state_size bytes of ->private state for
+	 * ->proc_seq_ops and points ->private at the entry's data for
+	 * ->proc_show(). Nothing that runs with the entry pinned may wait for
+	 * something a copy to or from userspace can hold, like the seq_file's
+	 * lock.
+	 */
+	const struct seq_operations *proc_seq_ops;
+	int	(*proc_show)(struct seq_file *, void *);
+	unsigned int proc_state_size;
+	/*
+	 * procfs copies what is written into a kernel buffer and calls
+	 * ->proc_write_buf() with it. The buffer is NUL-terminated and holds
+	 * at most ->proc_write_size bytes, PAGE_SIZE - 1 if that's 0. Larger
+	 * writes fail with -EINVAL unless the entry asks for
+	 * PROC_ENTRY_SHORT_WRITES. The position is NULL for a stream, like
+	 * for ->write().
+	 */
+	ssize_t	(*proc_write_buf)(struct file *, char *, size_t, loff_t *);
+	unsigned int proc_write_size;
+	/*
+	 * procfs calls ->proc_read_buf() to fill a kernel buffer of at most
+	 * ->proc_read_size bytes, PAGE_SIZE if that's 0, and copies it to
+	 * userspace afterwards. Larger reads come up short unless the entry
+	 * asks for PROC_ENTRY_FULL_READS. The position the entry moves to only
+	 * sticks if the copy works.
+	 */
+	ssize_t	(*proc_read_buf)(struct file *, char *, size_t, loff_t *);
+	unsigned int proc_read_size;
+	/*
+	 * procfs looks the command up in ->proc_ioctl_args, copies in what it
+	 * passes before pinning the entry, calls ->proc_ioctl_buf() with that
+	 * copy and copies out what it returns after unpinning the entry.
+	 * Commands that aren't in the table fail with -ENOTTY. 32-bit tasks
+	 * go through the same table. The copy is zeroed and as large as the
+	 * larger of the two sizes, it only goes back out if the ioctl
+	 * succeeded, and a command that copies neither gets its argument as
+	 * is.
+	 */
+	long	(*proc_ioctl_buf)(struct file *, unsigned int, void *);
+	const struct proc_ioctl_arg *proc_ioctl_args;
+	unsigned int proc_nr_ioctl_args;
 } __randomize_layout;
 
 /* definitions for hide_pid field */
@@ -87,6 +194,8 @@ extern void proc_flush_pid(struct pid *);
 
 extern struct proc_dir_entry *proc_symlink(const char *,
 		struct proc_dir_entry *, const char *);
+struct proc_dir_entry *proc_self_symlink(const char *, struct proc_dir_entry *,
+					 const char *);
 struct proc_dir_entry *_proc_mkdir(const char *, umode_t, struct proc_dir_entry *, void *, bool);
 extern struct proc_dir_entry *proc_mkdir(const char *, struct proc_dir_entry *);
 extern struct proc_dir_entry *proc_mkdir_data(const char *, umode_t,
@@ -102,9 +211,20 @@ struct proc_dir_entry *proc_create_seq_private(const char *name, umode_t mode,
 	proc_create_seq_private(name, mode, parent, ops, 0, data)
 #define proc_create_seq(name, mode, parent, ops) \
 	proc_create_seq_private(name, mode, parent, ops, 0, NULL)
-struct proc_dir_entry *proc_create_single_data(const char *name, umode_t mode,
+struct proc_dir_entry *__proc_create_single_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent,
-		int (*show)(struct seq_file *, void *), void *data);
+		int (*show)(struct seq_file *, void *), void *data,
+		struct lock_class_key *key);
+/*
+ * The entries a registration site creates share nothing that lockdep takes as
+ * the key of their class but the show function, which isn't a static object,
+ * so each site gets a key of its own, like every sysfs attribute has one.
+ */
+#define proc_create_single_data(name, mode, parent, show, data)		\
+({									\
+	static struct lock_class_key __key;				\
+	__proc_create_single_data(name, mode, parent, show, data, &__key); \
+})
 #define proc_create_single(name, mode, parent, show) \
 	proc_create_single_data(name, mode, parent, show, NULL)
  
@@ -112,6 +232,14 @@ extern struct proc_dir_entry *proc_create_data(const char *, umode_t,
 					       struct proc_dir_entry *,
 					       const struct proc_ops *,
 					       void *);
+struct proc_dir_entry *proc_create_fops(const char *name, umode_t mode,
+		struct proc_dir_entry *parent,
+		const struct file_operations *fops);
+/* @key instead of the proc_ops as the lockdep class of the pin, for a
+ * creator that serves different things behind one proc_ops. */
+struct proc_dir_entry *proc_create_data_key(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, const struct proc_ops *proc_ops,
+		void *data, struct lock_class_key *key);
 
 struct proc_dir_entry *proc_create(const char *name, umode_t mode, struct proc_dir_entry *parent, const struct proc_ops *proc_ops);
 extern void proc_set_size(struct proc_dir_entry *, loff_t);
@@ -130,25 +258,39 @@ extern void *proc_get_parent_data(const struct inode *);
 extern void proc_remove(struct proc_dir_entry *);
 extern void remove_proc_entry(const char *, struct proc_dir_entry *);
 extern int remove_proc_subtree(const char *, struct proc_dir_entry *);
+void proc_poll_notify(struct proc_dir_entry *pde);
 
 struct proc_dir_entry *proc_create_net_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent, const struct seq_operations *ops,
 		unsigned int state_size, void *data);
 #define proc_create_net(name, mode, parent, ops, state_size) \
 	proc_create_net_data(name, mode, parent, ops, state_size, NULL)
-struct proc_dir_entry *proc_create_net_single(const char *name, umode_t mode,
+struct proc_dir_entry *__proc_create_net_single(const char *name, umode_t mode,
 		struct proc_dir_entry *parent,
-		int (*show)(struct seq_file *, void *), void *data);
+		int (*show)(struct seq_file *, void *), void *data,
+		struct lock_class_key *key);
+#define proc_create_net_single(name, mode, parent, show, data)		\
+({									\
+	static struct lock_class_key __key;				\
+	__proc_create_net_single(name, mode, parent, show, data, &__key); \
+})
 struct proc_dir_entry *proc_create_net_data_write(const char *name, umode_t mode,
 						  struct proc_dir_entry *parent,
 						  const struct seq_operations *ops,
 						  proc_write_t write,
 						  unsigned int state_size, void *data);
-struct proc_dir_entry *proc_create_net_single_write(const char *name, umode_t mode,
-						    struct proc_dir_entry *parent,
-						    int (*show)(struct seq_file *, void *),
-						    proc_write_t write,
-						    void *data);
+struct proc_dir_entry *__proc_create_net_single_write(const char *name, umode_t mode,
+						      struct proc_dir_entry *parent,
+						      int (*show)(struct seq_file *, void *),
+						      proc_write_t write,
+						      void *data,
+						      struct lock_class_key *key);
+#define proc_create_net_single_write(name, mode, parent, show, write, data)	\
+({									\
+	static struct lock_class_key __key;				\
+	__proc_create_net_single_write(name, mode, parent, show, write, data, \
+				       &__key);				\
+})
 extern struct pid *tgid_pidfd_to_pid(const struct file *file);
 
 struct bpf_iter_aux_info;
@@ -179,6 +321,8 @@ static inline void proc_flush_pid(struct pid *pid)
 
 static inline struct proc_dir_entry *proc_symlink(const char *name,
 		struct proc_dir_entry *parent,const char *dest) { return NULL;}
+static inline struct proc_dir_entry *proc_self_symlink(const char *name,
+		struct proc_dir_entry *parent, const char *dest) { return NULL; }
 static inline struct proc_dir_entry *proc_mkdir(const char *name,
 	struct proc_dir_entry *parent) {return NULL;}
 static inline struct proc_dir_entry *proc_create_mount_point(const char *name) { return NULL; }
@@ -206,6 +350,16 @@ static inline struct proc_dir_entry *
 proc_create_data(const char *name, umode_t mode, struct proc_dir_entry *parent,
 		 const struct proc_ops *proc_ops, void *data)
 { return NULL; }
+static inline struct proc_dir_entry *
+proc_create_fops(const char *name, umode_t mode, struct proc_dir_entry *parent,
+		 const struct file_operations *fops)
+{ return NULL; }
+
+static inline struct proc_dir_entry *
+proc_create_data_key(const char *name, umode_t mode, struct proc_dir_entry *parent,
+		     const struct proc_ops *proc_ops, void *data,
+		     struct lock_class_key *key)
+{ return NULL; }
 
 static inline void proc_set_size(struct proc_dir_entry *de, loff_t size) {}
 static inline void proc_set_user(struct proc_dir_entry *de, kuid_t uid, kgid_t gid) {}
@@ -215,6 +369,7 @@ static inline void *proc_get_parent_data(const struct inode *inode) { BUG(); ret
 static inline void proc_remove(struct proc_dir_entry *de) {}
 #define remove_proc_entry(name, parent) do {} while (0)
 static inline int remove_proc_subtree(const char *name, struct proc_dir_entry *parent) { return 0; }
+static inline void proc_poll_notify(struct proc_dir_entry *pde) {}
 
 #define proc_create_net_data(name, mode, parent, ops, state_size, data) ({NULL;})
 #define proc_create_net_data_write(name, mode, parent, ops, write, state_size, data) ({NULL;})
@@ -249,16 +404,16 @@ static inline struct pid_namespace *proc_pid_ns(struct super_block *sb)
 
 bool proc_ns_file(const struct file *file);
 
+/*
+ * Entries that are never removed. Built-in code only, modules' /proc files
+ * aren't permanent because modules aren't permanent.
+ */
 #if defined CONFIG_PROC_FS && !defined MODULE
-void impl_proc_make_permanent(struct proc_dir_entry *pde);
+struct proc_dir_entry *proc_create_seq_permanent(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, const struct seq_operations *ops);
+struct proc_dir_entry *proc_create_single_permanent(const char *name,
+		umode_t mode, struct proc_dir_entry *parent,
+		int (*show)(struct seq_file *, void *));
 #endif
-
-static inline void proc_make_permanent(struct proc_dir_entry *pde)
-{
-	/* Don't give matches to modules. */
-#if defined CONFIG_PROC_FS && !defined MODULE
-	impl_proc_make_permanent(pde);
-#endif
-}
 
 #endif /* _LINUX_PROC_FS_H */

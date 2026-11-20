@@ -209,8 +209,9 @@ static long exfat_fallocate(struct file *file, int mode,
 	if (!S_ISREG(inode->i_mode))
 		return -EOPNOTSUPP;
 
-	if (unlikely(exfat_forced_shutdown(inode->i_sb)))
-		return -EIO;
+	err = exfat_emergency_state(inode->i_sb);
+	if (unlikely(err))
+		return err;
 
 	inode_lock(inode);
 
@@ -288,10 +289,19 @@ int __exfat_truncate(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
 	struct exfat_inode_info *ei = EXFAT_I(inode);
+	int err;
 
 	/* check if the given file ID is opened */
 	if (ei->type != TYPE_FILE && ei->type != TYPE_DIR)
 		return -EPERM;
+
+	/*
+	 * This writes the entry itself, past exfat_write_inode(). Leave the
+	 * entry, the FAT and the bitmap alone after an error.
+	 */
+	err = exfat_emergency_state(sb);
+	if (err)
+		return err;
 
 	exfat_set_volume_dirty(sb);
 
@@ -440,8 +450,9 @@ int exfat_setattr(const struct mnt_idmap *idmap, struct dentry *dentry,
 	unsigned int ia_valid;
 	int error;
 
-	if (unlikely(exfat_forced_shutdown(inode->i_sb)))
-		return -EIO;
+	error = exfat_emergency_state(inode->i_sb);
+	if (unlikely(error))
+		return error;
 
 	if ((attr->ia_valid & ATTR_SIZE) &&
 	    attr->ia_size > i_size_read(inode)) {
@@ -609,6 +620,11 @@ static int exfat_ioctl_fitrim(struct inode *inode, unsigned long arg)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
+	/* Don't trust the allocation bitmap after an error. */
+	ret = exfat_emergency_state(inode->i_sb);
+	if (ret)
+		return ret;
+
 	if (!bdev_max_discard_sectors(inode->i_sb->s_bdev))
 		return -EOPNOTSUPP;
 
@@ -687,6 +703,10 @@ static int exfat_ioctl_set_volume_label(struct super_block *sb,
 
 	uniname.name_len = ret;
 
+	ret = exfat_emergency_state(sb);
+	if (unlikely(ret))
+		return ret;
+
 	return exfat_write_volume_label(sb, &uniname);
 }
 
@@ -726,8 +746,9 @@ int exfat_file_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
 	struct inode *inode = filp->f_mapping->host;
 	int err;
 
-	if (unlikely(exfat_forced_shutdown(inode->i_sb)))
-		return -EIO;
+	err = exfat_emergency_state(inode->i_sb);
+	if (unlikely(err))
+		return err;
 
 	err = simple_fsync_noflush(filp, start, end, datasync);
 	if (err)
@@ -1102,8 +1123,9 @@ static ssize_t exfat_file_write_iter(struct kiocb *iocb, struct iov_iter *iter)
 	loff_t pos, valid_size, end;
 	int err;
 
-	if (unlikely(exfat_forced_shutdown(inode->i_sb)))
-		return -EIO;
+	err = exfat_emergency_state(inode->i_sb);
+	if (unlikely(err))
+		return err;
 
 	/* Gap initialization and source faults require blocking operations. */
 	if (iocb->ki_flags & IOCB_NOWAIT)
@@ -1215,8 +1237,9 @@ static vm_fault_t exfat_page_mkwrite(struct vm_fault *vmf)
 	vm_fault_t ret;
 	int error;
 
-	if (unlikely(exfat_forced_shutdown(inode->i_sb)))
-		return VM_FAULT_SIGBUS;
+	error = exfat_emergency_state(inode->i_sb);
+	if (unlikely(error))
+		return vmf_fs_error(error);
 
 	sb_start_pagefault(inode->i_sb);
 	error = file_update_time(vmf->vma->vm_file);
@@ -1264,9 +1287,15 @@ static const struct vm_operations_struct exfat_file_vm_ops = {
 static int exfat_file_mmap_prepare(struct vm_area_desc *desc)
 {
 	struct file *file = desc->file;
+	struct super_block *sb = file_inode(file)->i_sb;
+	int err;
 
-	if (unlikely(exfat_forced_shutdown(file_inode(desc->file)->i_sb)))
-		return -EIO;
+	if (file->f_mode & FMODE_WRITE)
+		err = exfat_emergency_state(sb);
+	else
+		err = exfat_forced_shutdown(sb) ? -EIO : 0;
+	if (unlikely(err))
+		return err;
 
 	file_accessed(file);
 	desc->vm_ops = &exfat_file_vm_ops;
@@ -1286,8 +1315,12 @@ static int exfat_file_open(struct inode *inode, struct file *filp)
 {
 	int err;
 
-	if (unlikely(exfat_forced_shutdown(inode->i_sb)))
-		return -EIO;
+	if (filp->f_mode & FMODE_WRITE)
+		err = exfat_emergency_state(inode->i_sb);
+	else
+		err = exfat_forced_shutdown(inode->i_sb) ? -EIO : 0;
+	if (unlikely(err))
+		return err;
 
 	err = generic_file_open(inode, filp);
 	if (err)

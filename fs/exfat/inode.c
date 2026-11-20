@@ -105,8 +105,9 @@ int exfat_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
 	int ret;
 
-	if (unlikely(exfat_forced_shutdown(inode->i_sb)))
-		return -EIO;
+	ret = exfat_emergency_state(inode->i_sb);
+	if (unlikely(ret))
+		return ret;
 
 	mutex_lock(&EXFAT_SB(inode->i_sb)->s_lock);
 	ret = __exfat_write_inode(inode, wbc->sync_mode == WB_SYNC_ALL);

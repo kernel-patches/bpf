@@ -280,11 +280,13 @@ void ufs_error (struct super_block * sb, const char * function,
 	uspi = UFS_SB(sb)->s_uspi;
 	usb1 = ubh_get_usb_first(uspi);
 	
-	if (!sb_rdonly(sb)) {
+	/*
+	 * SB_RDONLY needs s_umount, see sb_set_emergency_ro(). The superblock
+	 * marked bad goes out with the block device.
+	 */
+	if (!sb_rdonly(sb) && sb_set_emergency_ro(sb)) {
 		usb1->fs_clean = UFS_FSBAD;
 		ubh_mark_buffer_dirty(USPI_UBH(uspi));
-		ufs_mark_sb_dirty(sb);
-		sb->s_flags |= SB_RDONLY;
 	}
 	va_start(args, fmt);
 	vaf.fmt = fmt;
@@ -314,15 +316,14 @@ void ufs_panic (struct super_block * sb, const char * function,
 	uspi = UFS_SB(sb)->s_uspi;
 	usb1 = ubh_get_usb_first(uspi);
 	
-	if (!sb_rdonly(sb)) {
+	/* See ufs_error(). */
+	if (!sb_rdonly(sb) && sb_set_emergency_ro(sb)) {
 		usb1->fs_clean = UFS_FSBAD;
 		ubh_mark_buffer_dirty(USPI_UBH(uspi));
-		ufs_mark_sb_dirty(sb);
 	}
 	va_start(args, fmt);
 	vaf.fmt = fmt;
 	vaf.va = &args;
-	sb->s_flags |= SB_RDONLY;
 	pr_crit("panic (device %s): %s: %pV\n",
 		sb->s_id, function, &vaf);
 	va_end(args);
@@ -449,13 +450,44 @@ static void ufs_setup_cstotal(struct super_block *sb)
 }
 
 /*
+ * Release everything ufs_read_cylinder_structures() allocated and clear
+ * everything released, so that no later error path can see a stale
+ * pointer: a read-only remount frees the structures through
+ * ufs_put_super_internal(), and a read-write remount re-reads them.
+ * Besides those two callers this is needed when a mount fails after the
+ * cylinder groups have been read: s_root is still NULL then, so
+ * generic_shutdown_super() never calls put_super and
+ * ufs_put_super_internal() does not run.
+ */
+static void ufs_free_cylinder_structures(struct super_block *sb)
+{
+	struct ufs_sb_info *sbi = UFS_SB(sb);
+	struct ufs_sb_private_info *uspi = sbi->s_uspi;
+	unsigned int i;
+
+	if (sbi->s_ucg) {
+		for (i = 0; i < uspi->s_ncg; i++)
+			brelse(sbi->s_ucg[i]);
+		kfree(sbi->s_ucg);
+		sbi->s_ucg = NULL;
+		for (i = 0; i < UFS_MAX_GROUP_LOADED; i++) {
+			kfree(sbi->s_ucpi[i]);
+			sbi->s_ucpi[i] = NULL;
+		}
+	}
+	sbi->s_cg_loaded = 0;
+	kfree(sbi->s_csp);
+	sbi->s_csp = NULL;
+}
+
+/*
  * Read on-disk structures associated with cylinder groups
  */
 static int ufs_read_cylinder_structures(struct super_block *sb)
 {
 	struct ufs_sb_info *sbi = UFS_SB(sb);
 	struct ufs_sb_private_info *uspi = sbi->s_uspi;
-	unsigned char * base, * space;
+	unsigned char *space;
 	unsigned size, blks, i;
 
 	UFSD("ENTER\n");
@@ -466,9 +498,9 @@ static int ufs_read_cylinder_structures(struct super_block *sb)
 	 */
 	size = uspi->s_cssize;
 	blks = (size + uspi->s_fsize - 1) >> uspi->s_fshift;
-	base = space = kmalloc(size, GFP_NOFS);
-	if (!base)
-		goto failed; 
+	space = kmalloc(size, GFP_NOFS);
+	if (!space)
+		goto failed;
 	sbi->s_csp = (struct ufs_csum *)space;
 	for (i = 0; i < blks; i++) {
 		struct buffer_head *bh = sb_bread(sb, uspi->s_csaddr + i);
@@ -511,15 +543,7 @@ static int ufs_read_cylinder_structures(struct super_block *sb)
 	return 1;
 
 failed:
-	kfree (base);
-	if (sbi->s_ucg) {
-		for (i = 0; i < uspi->s_ncg; i++)
-			if (sbi->s_ucg[i])
-				brelse (sbi->s_ucg[i]);
-		kfree (sbi->s_ucg);
-		for (i = 0; i < UFS_MAX_GROUP_LOADED; i++)
-			kfree (sbi->s_ucpi[i]);
-	}
+	ufs_free_cylinder_structures(sb);
 	UFSD("EXIT (FAILED)\n");
 	return 0;
 }
@@ -579,22 +603,27 @@ out:
  * ufs_put_super_internal() - put on-disk intrenal structures
  * @sb: pointer to super_block structure
  * Put on-disk structures associated with cylinder groups
- * and write them back to disk, also update cs_total on disk
+ * and write them back to disk, also update cs_total on disk.
+ * Nothing is written back after an error.
  */
 static void ufs_put_super_internal(struct super_block *sb)
 {
 	struct ufs_sb_info *sbi = UFS_SB(sb);
 	struct ufs_sb_private_info *uspi = sbi->s_uspi;
-	unsigned char * base, * space;
+	unsigned char *space;
 	unsigned blks, size, i;
 
 	
 	UFSD("ENTER\n");
 
+	/* Don't write anything back after an error, see ufs_error(). */
+	if (sb_emergency_ro(sb))
+		goto release;
+
 	ufs_put_cstotal(sb);
 	size = uspi->s_cssize;
 	blks = (size + uspi->s_fsize - 1) >> uspi->s_fshift;
-	base = space = (char*) sbi->s_csp;
+	space = (char *)sbi->s_csp;
 	for (i = 0; i < blks; i++, space += uspi->s_fsize) {
 		struct buffer_head *bh = sb_bread(sb, uspi->s_csaddr + i);
 
@@ -607,16 +636,10 @@ static void ufs_put_super_internal(struct super_block *sb)
 		mark_buffer_dirty(bh);
 		brelse(bh);
 	}
-	for (i = 0; i < sbi->s_cg_loaded; i++) {
-		ufs_put_cylinder (sb, i);
-		kfree (sbi->s_ucpi[i]);
-	}
-	for (; i < UFS_MAX_GROUP_LOADED; i++) 
-		kfree (sbi->s_ucpi[i]);
-	for (i = 0; i < uspi->s_ncg; i++) 
-		brelse (sbi->s_ucg[i]);
-	kfree (sbi->s_ucg);
-	kfree (base);
+release:
+	for (i = 0; i < sbi->s_cg_loaded; i++)
+		ufs_put_cylinder(sb, i);
+	ufs_free_cylinder_structures(sb);
 
 	UFSD("EXIT\n");
 }
@@ -627,6 +650,10 @@ static int ufs_sync_fs(struct super_block *sb, int wait)
 	struct ufs_super_block_first * usb1;
 	struct ufs_super_block_third * usb3;
 	unsigned flags;
+
+	/* Leave the superblock alone after an error, see ufs_error(). */
+	if (sb_emergency_ro(sb))
+		return 0;
 
 	mutex_lock(&UFS_SB(sb)->s_lock);
 
@@ -684,7 +711,8 @@ static void ufs_put_super(struct super_block *sb)
 
 	UFSD("ENTER\n");
 
-	if (!sb_rdonly(sb))
+	/* NULL if a remount to read-only freed the cylinder groups */
+	if (sbi->s_ucg)
 		ufs_put_super_internal(sb);
 	cancel_delayed_work_sync(&sbi->sync_work);
 
@@ -1211,17 +1239,19 @@ magic_found:
 	inode = ufs_iget(sb, UFS_ROOTINO);
 	if (IS_ERR(inode)) {
 		ret = PTR_ERR(inode);
-		goto failed;
+		goto failed_cg;
 	}
 	sb->s_root = d_make_root(inode);
 	if (!sb->s_root) {
 		ret = -ENOMEM;
-		goto failed;
+		goto failed_cg;
 	}
 
 	UFSD("EXIT\n");
 	return 0;
 
+failed_cg:
+	ufs_free_cylinder_structures(sb);
 failed:
 	if (ubh)
 		ubh_brelse_uspi (uspi);
@@ -1265,14 +1295,20 @@ static int ufs_reconfigure(struct fs_context *fc)
 	 * fs was mouted as rw, remounting ro
 	 */
 	if (fc->sb_flags & SB_RDONLY) {
-		ufs_put_super_internal(sb);
-		usb1->fs_time = ufs_get_seconds(sb);
-		if ((flags & UFS_ST_MASK) == UFS_ST_SUN
-		  || (flags & UFS_ST_MASK) == UFS_ST_SUNOS
-		  || (flags & UFS_ST_MASK) == UFS_ST_SUNx86) 
-			ufs_set_fs_state(sb, usb1, usb3,
-				UFS_FSOK - fs32_to_cpu(sb, usb1->fs_time));
-		ubh_mark_buffer_dirty (USPI_UBH(uspi));
+		/*
+		 * After an error leave the superblock alone and keep the
+		 * cylinder groups, evict still needs them.
+		 */
+		if (!sb_emergency_ro(sb)) {
+			ufs_put_super_internal(sb);
+			usb1->fs_time = ufs_get_seconds(sb);
+			if ((flags & UFS_ST_MASK) == UFS_ST_SUN
+			  || (flags & UFS_ST_MASK) == UFS_ST_SUNOS
+			  || (flags & UFS_ST_MASK) == UFS_ST_SUNx86)
+				ufs_set_fs_state(sb, usb1, usb3,
+					UFS_FSOK - fs32_to_cpu(sb, usb1->fs_time));
+			ubh_mark_buffer_dirty (USPI_UBH(uspi));
+		}
 		sb->s_flags |= SB_RDONLY;
 	} else {
 	/*

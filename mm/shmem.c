@@ -3843,7 +3843,8 @@ static ssize_t shmem_file_splice_read(struct file *in, loff_t *ppos,
 		len -= n;
 		total_spliced += n;
 		*ppos += n;
-		in->f_ra.prev_pos = *ppos;
+		/* readahead hint, racy updates are benign */
+		data_race(in->f_ra.prev_pos = *ppos);
 		if (pipe_is_full(pipe))
 			break;
 
@@ -4206,13 +4207,6 @@ static int shmem_unlink(struct inode *dir, struct dentry *dentry)
 	dir->i_size -= BOGO_DIRENT_SIZE;
 	inode_inc_iversion(dir);
 	simple_unlink(dir, dentry);
-
-	/*
-	 * For now, VFS can't deal with case-insensitive negative dentries, so
-	 * we invalidate them
-	 */
-	if (IS_ENABLED(CONFIG_UNICODE) && IS_CASEFOLDED(dir))
-		d_invalidate(dentry);
 
 	return 0;
 }

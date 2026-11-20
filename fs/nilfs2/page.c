@@ -259,7 +259,7 @@ repeat:
 
 		folio_lock(folio);
 		if (unlikely(!folio_test_dirty(folio))) {
-			if (WARN_ONCE(!sb_rdonly(smap_inode->i_sb),
+			if (WARN_ONCE(!sb_rdonly_any(smap_inode->i_sb),
 					"inconsistent dirty state\n"))
 				goto unlock_folio;
 

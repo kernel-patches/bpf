@@ -3679,9 +3679,10 @@ For raw data, ``size`` field must be set properly. This specifies
 the maximum size of the proc file access.
 
 The read/write callbacks of raw mode are more direct than the text mode.
-You need to use a low-level I/O functions such as
-:c:func:`copy_from_user()` and :c:func:`copy_to_user()` to transfer the
-data::
+They get a kernel buffer that procfs copies to or from userspace, so they
+just copy the data. The buffer holds at most a page and isn't zeroed, so
+a read callback must return exactly what it copied into it; a larger
+read comes back for the rest::
 
   static ssize_t my_file_io_read(struct snd_info_entry *entry,
                               void *file_private_data,
@@ -3690,8 +3691,7 @@ data::
                               size_t count,
                               loff_t pos)
   {
-          if (copy_to_user(buf, local_data + pos, count))
-                  return -EFAULT;
+          memcpy(buf, local_data + pos, count);
           return count;
   }
 

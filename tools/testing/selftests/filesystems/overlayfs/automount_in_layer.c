@@ -82,7 +82,7 @@ FIXTURE(layer) {
 
 FIXTURE_SETUP(layer)
 {
-	char lower[PATH_LEN], other[PATH_LEN], ovl[PATH_LEN], opts[2 * PATH_LEN + 16];
+	char lower[PATH_LEN], other[PATH_LEN], ovl[PATH_LEN], opts[2 * PATH_LEN + 64];
 	struct fanotify_event_metadata *ev;
 	struct pollfd pfd;
 	char buf[4096];
@@ -111,7 +111,9 @@ FIXTURE_SETUP(layer)
 	ASSERT_EQ(mkdir(other, 0755), 0);
 	ASSERT_EQ(mkdir(ovl, 0755), 0);
 	ASSERT_EQ(mount("debugfs", lower, "debugfs", 0, NULL), 0);
-	snprintf(opts, sizeof(opts), "lowerdir=%s:%s", lower, other);
+	/* Pseudo lower layers are only allowed in legacy setups */
+	snprintf(opts, sizeof(opts),
+		 "lowerdir=%s:%s,redirect_dir=off,metacopy=off", lower, other);
 	ASSERT_EQ(mount("overlay", ovl, "overlay", MS_RDONLY, opts), 0);
 
 	self->fan = fanotify_init(FAN_CLASS_NOTIF | FAN_NONBLOCK | FAN_CLOEXEC,

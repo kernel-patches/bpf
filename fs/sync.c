@@ -39,8 +39,9 @@ int sync_filesystem(struct super_block *sb)
 
 	/*
 	 * No point in syncing out anything if the filesystem is read-only.
+	 * After an error made it read-only nothing is pushed out anymore.
 	 */
-	if (sb_rdonly(sb))
+	if (sb_rdonly_any(sb))
 		return 0;
 
 	/*
@@ -73,13 +74,13 @@ EXPORT_SYMBOL(sync_filesystem);
 
 static void sync_inodes_one_sb(struct super_block *sb, void *arg)
 {
-	if (!sb_rdonly(sb))
+	if (!sb_rdonly_any(sb))
 		sync_inodes_sb(sb);
 }
 
 static void sync_fs_one_sb(struct super_block *sb, void *arg)
 {
-	if (!sb_rdonly(sb) && !(sb->s_iflags & SB_I_SKIP_SYNC) &&
+	if (!sb_rdonly_any(sb) && !(sb->s_iflags & SB_I_SKIP_SYNC) &&
 	    sb->s_op->sync_fs)
 		sb->s_op->sync_fs(sb, *(int *)arg);
 }
@@ -99,9 +100,10 @@ void ksys_sync(void)
 	int nowait = 0, wait = 1;
 
 	wakeup_flusher_threads(WB_REASON_SYNC);
-	iterate_supers(sync_inodes_one_sb, NULL);
-	iterate_supers(sync_fs_one_sb, &nowait);
-	iterate_supers(sync_fs_one_sb, &wait);
+	if (iterate_supers_sync(sync_inodes_one_sb, NULL) ||
+	    iterate_supers_sync(sync_fs_one_sb, &nowait) ||
+	    iterate_supers_sync(sync_fs_one_sb, &wait))
+		return;
 	sync_bdevs(false);
 	sync_bdevs(true);
 }
@@ -121,11 +123,11 @@ static void do_sync_work(struct work_struct *work)
 	 * Sync twice to reduce the possibility we skipped some inodes / pages
 	 * because they were temporarily locked
 	 */
-	iterate_supers(sync_inodes_one_sb, NULL);
-	iterate_supers(sync_fs_one_sb, &nowait);
+	iterate_supers_sync(sync_inodes_one_sb, NULL);
+	iterate_supers_sync(sync_fs_one_sb, &nowait);
 	sync_bdevs(false);
-	iterate_supers(sync_inodes_one_sb, NULL);
-	iterate_supers(sync_fs_one_sb, &wait);
+	iterate_supers_sync(sync_inodes_one_sb, NULL);
+	iterate_supers_sync(sync_fs_one_sb, &wait);
 	sync_bdevs(false);
 	printk("Emergency Sync complete\n");
 	kfree(work);
@@ -155,8 +157,13 @@ SYSCALL_DEFINE1(syncfs, int, fd)
 		return -EBADF;
 	sb = fd_file(f)->f_path.dentry->d_sb;
 
-	down_read(&sb->s_umount);
+	ret = down_read_killable(&sb->s_umount);
+	if (ret)
+		return ret;
 	ret = sync_filesystem(sb);
+	/* An error made the filesystem read-only. */
+	if (!ret && sb_emergency_ro(sb))
+		ret = -EROFS;
 	up_read(&sb->s_umount);
 
 	ret2 = errseq_check_and_advance(&sb->s_wb_err, &fd_file(f)->f_sb_err);
@@ -181,6 +188,10 @@ int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 
 	if (!file->f_op->fsync)
 		return -EINVAL;
+	/* Nothing is written back after an error, don't claim it is. */
+	if (!special_file(file_inode(file)->i_mode) &&
+	    sb_emergency_ro(file_inode(file)->i_sb))
+		return -EROFS;
 	if (!datasync)
 		sync_lazytime(inode);
 	return file->f_op->fsync(file, start, end, datasync);

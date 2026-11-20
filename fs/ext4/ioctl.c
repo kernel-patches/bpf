@@ -821,6 +821,10 @@ int ext4_force_shutdown(struct super_block *sb, u32 flags)
 	ext4_msg(sb, KERN_ALERT, "shut down requested (%d)", flags);
 	trace_ext4_shutdown(sb, flags);
 
+	/* After an error there is nothing to flush and freezing fails. */
+	if (flags == EXT4_GOING_FLAGS_DEFAULT && ext4_emergency_ro(sb))
+		flags = EXT4_GOING_FLAGS_NOLOGFLUSH;
+
 	switch (flags) {
 	case EXT4_GOING_FLAGS_DEFAULT:
 		ret = bdev_freeze(sb->s_bdev);

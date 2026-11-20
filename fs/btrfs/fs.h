@@ -1194,6 +1194,15 @@ static inline int btrfs_need_cleaner_sleep(const struct btrfs_fs_info *fs_info)
 		btrfs_fs_closing(fs_info);
 }
 
+/*
+ * Set and cleared with SB_RDONLY on mount and remount but set alone after an
+ * error. Use this instead of sb_rdonly() at runtime.
+ */
+static inline bool btrfs_fs_rdonly(const struct btrfs_fs_info *fs_info)
+{
+	return test_bit(BTRFS_FS_STATE_RO, &fs_info->fs_state);
+}
+
 static inline void btrfs_wake_unfinished_drop(struct btrfs_fs_info *fs_info)
 {
 	clear_and_wake_up_bit(BTRFS_FS_UNFINISHED_DROPS, &fs_info->flags);
@@ -1223,15 +1232,12 @@ static inline bool btrfs_is_shutdown(const struct btrfs_fs_info *fs_info)
 static inline void btrfs_force_shutdown(struct btrfs_fs_info *fs_info)
 {
 	/*
-	 * Here we do not want to use handle_fs_error(), which will mark the fs
-	 * read-only.
-	 * Some call sites like shutdown ioctl will mark the fs shutdown when
-	 * the fs is frozen. But thaw path will handle RO and RW fs
-	 * differently.
-	 *
-	 * So here we only mark the fs error without flipping it RO.
+	 * A shutdown isn't an error, so don't use btrfs_handle_fs_error().
+	 * BTRFS_FS_STATE_RO doesn't touch SB_RDONLY, so it's fine while the
+	 * filesystem is frozen, e.g. for the shutdown ioctl.
 	 */
 	WRITE_ONCE(fs_info->fs_error, -EIO);
+	set_bit(BTRFS_FS_STATE_RO, &fs_info->fs_state);
 	if (!test_and_set_bit(BTRFS_FS_STATE_EMERGENCY_SHUTDOWN, &fs_info->fs_state)) {
 		btrfs_crit(fs_info, "emergency shutdown");
 		fserror_report_shutdown(fs_info->sb, GFP_KERNEL);

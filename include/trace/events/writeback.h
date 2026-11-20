@@ -745,6 +745,7 @@ TRACE_EVENT(writeback_sb_inodes_requeue,
 		__field(u64, cgroup_ino)
 		__field(unsigned long, state)
 		__field(unsigned long, dirtied_when)
+		__field(unsigned long, jiffies)
 	),
 
 	TP_fast_assign(
@@ -753,6 +754,7 @@ TRACE_EVENT(writeback_sb_inodes_requeue,
 		__entry->ino		= inode->i_ino;
 		__entry->state		= inode_state_read_once(inode);
 		__entry->dirtied_when	= inode->dirtied_when;
+		__entry->jiffies	= jiffies;
 		__entry->cgroup_ino	= __trace_wb_assign_cgroup(inode_to_wb(inode));
 	),
 
@@ -761,7 +763,7 @@ TRACE_EVENT(writeback_sb_inodes_requeue,
 		  __entry->ino,
 		  show_inode_state(__entry->state),
 		  __entry->dirtied_when,
-		  (jiffies - __entry->dirtied_when) / HZ,
+		  (__entry->jiffies - __entry->dirtied_when) / HZ,
 		  __entry->cgroup_ino
 	)
 );
@@ -784,6 +786,7 @@ DECLARE_EVENT_CLASS(writeback_single_inode_template,
 		__field(unsigned long, writeback_index)
 		__field(unsigned long, wrote)
 		__field(long, nr_to_write)
+		__field(unsigned long, jiffies)
 	),
 
 	TP_fast_assign(
@@ -795,6 +798,7 @@ DECLARE_EVENT_CLASS(writeback_single_inode_template,
 		__entry->writeback_index = inode->i_mapping->writeback_index;
 		__entry->nr_to_write	= nr_to_write;
 		__entry->wrote		= nr_to_write - wbc->nr_to_write;
+		__entry->jiffies	= jiffies;
 		__entry->cgroup_ino	= __trace_wbc_assign_cgroup(wbc);
 	),
 
@@ -804,7 +808,7 @@ DECLARE_EVENT_CLASS(writeback_single_inode_template,
 		  __entry->ino,
 		  show_inode_state(__entry->state),
 		  __entry->dirtied_when,
-		  (jiffies - __entry->dirtied_when) / HZ,
+		  (__entry->jiffies - __entry->dirtied_when) / HZ,
 		  __entry->writeback_index,
 		  __entry->nr_to_write,
 		  __entry->wrote,

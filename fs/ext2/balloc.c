@@ -1236,6 +1236,11 @@ ext2_fsblk_t ext2_new_blocks(struct inode *inode, ext2_fsblk_t goal,
 	*errp = -ENOSPC;
 	sb = inode->i_sb;
 
+	if (sb_emergency_ro(sb)) {
+		*errp = -EROFS;
+		return 0;
+	}
+
 	/*
 	 * Check quota for allocation of this block.
 	 */

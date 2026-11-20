@@ -142,7 +142,7 @@ void profile_tick(int type)
 #ifdef CONFIG_PROC_FS
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/uaccess.h>
+#include <linux/uio.h>
 
 /*
  * This function accesses profiling information. The returned data is
@@ -150,10 +150,10 @@ void profile_tick(int type)
  * buffer. Use of the program readprofile is recommended in order to
  * get meaningful info out of these data.
  */
-static ssize_t
-read_profile(struct file *file, char __user *buf, size_t count, loff_t *ppos)
+static ssize_t read_profile(struct kiocb *iocb, struct iov_iter *to)
 {
-	unsigned long p = *ppos;
+	unsigned long p = iocb->ki_pos;
+	size_t count = iov_iter_count(to);
 	ssize_t read;
 	char *pnt;
 	unsigned int sample_step = (unsigned int)(1UL << prof_shift);
@@ -165,15 +165,15 @@ read_profile(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 	read = 0;
 
 	while (p < sizeof(unsigned int) && count > 0) {
-		if (put_user(*((char *)(&sample_step)+p), buf))
+		if (copy_to_iter((char *)(&sample_step)+p, 1, to) != 1)
 			return -EFAULT;
-		buf++; p++; count--; read++;
+		p++; count--; read++;
 	}
 	pnt = (char *)prof_buffer + p - sizeof(atomic_t);
-	if (copy_to_user(buf, (void *)pnt, count))
+	if (copy_to_iter(pnt, count, to) != count)
 		return -EFAULT;
 	read += count;
-	*ppos += read;
+	iocb->ki_pos += read;
 	return read;
 }
 
@@ -189,16 +189,15 @@ int __weak setup_profiling_timer(unsigned mult)
  * Writing a 'profiling multiplier' value into it also re-sets the profiling
  * interrupt frequency, on architectures that support this.
  */
-static ssize_t write_profile(struct file *file, const char __user *buf,
-			     size_t count, loff_t *ppos)
+static ssize_t write_profile(struct kiocb *iocb, struct iov_iter *from)
 {
+	size_t count = iov_iter_count(from);
 #ifdef CONFIG_SMP
 	if (count == sizeof(int)) {
 		unsigned int multiplier;
 
-		if (copy_from_user(&multiplier, buf, sizeof(int)))
+		if (copy_from_iter(&multiplier, sizeof(int), from) != sizeof(int))
 			return -EFAULT;
-
 		if (setup_profiling_timer(multiplier))
 			return -EINVAL;
 	}
@@ -207,10 +206,12 @@ static ssize_t write_profile(struct file *file, const char __user *buf,
 	return count;
 }
 
-static const struct proc_ops profile_proc_ops = {
-	.proc_read	= read_profile,
-	.proc_write	= write_profile,
-	.proc_lseek	= default_llseek,
+static const struct file_operations profile_fops = {
+	.read_iter	= read_profile,
+	.write_iter	= write_profile,
+	.splice_read	= copy_splice_read,
+	.splice_write	= iter_file_splice_write,
+	.llseek		= default_llseek,
 };
 
 int __ref create_proc_profile(void)
@@ -219,8 +220,8 @@ int __ref create_proc_profile(void)
 
 	if (!prof_on)
 		return 0;
-	entry = proc_create("profile", S_IWUSR | S_IRUGO,
-			    NULL, &profile_proc_ops);
+	entry = proc_create_fops("profile", S_IWUSR | S_IRUGO, NULL,
+				 &profile_fops);
 	if (!entry)
 		return -ENOMEM;
 	proc_set_size(entry, (1 + prof_len) * sizeof(atomic_t));

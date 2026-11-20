@@ -419,14 +419,15 @@ unreg:
 }
 
 static bool trace_uprobe_has_same_uprobe(struct trace_uprobe *orig,
-					 struct trace_uprobe *comp)
+					 struct trace_uprobe *comp,
+					 struct inode *comp_inode)
 {
 	struct trace_probe_event *tpe = orig->tp.event;
-	struct inode *comp_inode = d_real_inode(comp->path.dentry);
 	int i;
 
 	list_for_each_entry(orig, &tpe->probes, tp.list) {
-		if (comp_inode != d_real_inode(orig->path.dentry) ||
+		/* If @orig's data can't be resolved it can't be the same. */
+		if (comp_inode != d_real_data_inode(orig->path.dentry) ||
 		    comp->offset != orig->offset)
 			continue;
 
@@ -457,8 +458,12 @@ static bool uprobe_perf_filter(struct uprobe_consumer *uc, struct mm_struct *mm)
 
 static int trace_uprobe_enable(struct trace_uprobe *tu, filter_func_t filter)
 {
-	struct inode *inode = d_real_inode(tu->path.dentry);
+	struct inode *inode;
 	struct uprobe *uprobe;
+
+	inode = d_real_data_inode(tu->path.dentry);
+	if (IS_ERR(inode))
+		return PTR_ERR(inode);
 
 	tu->consumer.filter = filter;
 	uprobe = uprobe_register(inode, tu->offset, tu->ref_ctr_offset, &tu->consumer);
@@ -469,7 +474,8 @@ static int trace_uprobe_enable(struct trace_uprobe *tu, filter_func_t filter)
 	return 0;
 }
 
-static int append_trace_uprobe(struct trace_uprobe *tu, struct trace_uprobe *to)
+static int append_trace_uprobe(struct trace_uprobe *tu, struct trace_uprobe *to,
+			       struct inode *inode)
 {
 	int ret;
 
@@ -480,7 +486,7 @@ static int append_trace_uprobe(struct trace_uprobe *tu, struct trace_uprobe *to)
 		trace_probe_log_err(0, DIFF_ARG_TYPE);
 		return -EEXIST;
 	}
-	if (trace_uprobe_has_same_uprobe(to, tu)) {
+	if (trace_uprobe_has_same_uprobe(to, tu, inode)) {
 		trace_probe_log_set_index(0);
 		trace_probe_log_err(0, SAME_PROBE);
 		return -EEXIST;
@@ -515,14 +521,19 @@ static int append_trace_uprobe(struct trace_uprobe *tu, struct trace_uprobe *to)
  * as the new one does not conflict with any other existing
  * ones.
  */
-static int validate_ref_ctr_offset(struct trace_uprobe *new)
+static int validate_ref_ctr_offset(struct trace_uprobe *new,
+				   struct inode *new_inode)
 {
 	struct dyn_event *pos;
 	struct trace_uprobe *tmp;
-	struct inode *new_inode = d_real_inode(new->path.dentry);
 
 	for_each_trace_uprobe(tmp, pos) {
-		if (new_inode == d_real_inode(tmp->path.dentry) &&
+		/*
+		 * If @tmp's data can't be resolved it isn't on @new_inode.
+		 * uprobe_register() still refuses a mismatching reference
+		 * counter offset for the same uprobe.
+		 */
+		if (new_inode == d_real_data_inode(tmp->path.dentry) &&
 		    new->offset == tmp->offset &&
 		    new->ref_ctr_offset != tmp->ref_ctr_offset) {
 			pr_warn("Reference counter offset mismatch.");
@@ -533,14 +544,14 @@ static int validate_ref_ctr_offset(struct trace_uprobe *new)
 }
 
 /* Register a trace_uprobe and probe_event */
-static int register_trace_uprobe(struct trace_uprobe *tu)
+static int register_trace_uprobe(struct trace_uprobe *tu, struct inode *inode)
 {
 	struct trace_uprobe *old_tu;
 	int ret;
 
 	guard(mutex)(&event_mutex);
 
-	ret = validate_ref_ctr_offset(tu);
+	ret = validate_ref_ctr_offset(tu, inode);
 	if (ret)
 		return ret;
 
@@ -553,7 +564,7 @@ static int register_trace_uprobe(struct trace_uprobe *tu)
 			trace_probe_log_err(0, DIFF_PROBE_TYPE);
 			return -EEXIST;
 		}
-		return append_trace_uprobe(tu, old_tu);
+		return append_trace_uprobe(tu, old_tu, inode);
 	}
 
 	ret = register_uprobe_event(tu);
@@ -591,6 +602,7 @@ static int __trace_uprobe_create(int argc, const char **argv)
 	char *buf __free(kfree) = NULL;
 	enum probe_print_type ptype;
 	bool is_return = false;
+	struct inode *inode;
 	int i, ret;
 
 	ref_ctr_offset = 0;
@@ -642,6 +654,17 @@ static int __trace_uprobe_create(int argc, const char **argv)
 	if (!d_is_reg(path.dentry)) {
 		trace_probe_log_err(0, NO_REGULAR_FILE);
 		return -EINVAL;
+	}
+
+	/*
+	 * Resolve the inode hosting the data now and outside of event_mutex.
+	 * If that fails the probe is useless and the user should know right
+	 * away instead of when the event is enabled.
+	 */
+	inode = d_real_data_inode(path.dentry);
+	if (IS_ERR(inode)) {
+		trace_probe_log_err(0, NO_FILE_DATA);
+		return PTR_ERR(inode);
 	}
 
 	/* Parse reference counter offset if specified. */
@@ -754,7 +777,7 @@ static int __trace_uprobe_create(int argc, const char **argv)
 	if (ret < 0)
 		return ret;
 
-	ret = register_trace_uprobe(tu);
+	ret = register_trace_uprobe(tu, inode);
 	if (!ret)
 		tu = NULL;
 
@@ -1651,6 +1674,7 @@ create_local_trace_uprobe(char *name, unsigned long offs,
 {
 	enum probe_print_type ptype;
 	struct trace_uprobe *tu;
+	struct inode *inode;
 	struct path path;
 	int ret;
 
@@ -1661,6 +1685,13 @@ create_local_trace_uprobe(char *name, unsigned long offs,
 	if (!d_is_reg(path.dentry)) {
 		path_put(&path);
 		return ERR_PTR(-EINVAL);
+	}
+
+	/* Fail early if the data of the file can't be resolved. */
+	inode = d_real_data_inode(path.dentry);
+	if (IS_ERR(inode)) {
+		path_put(&path);
+		return ERR_CAST(inode);
 	}
 
 	/*
