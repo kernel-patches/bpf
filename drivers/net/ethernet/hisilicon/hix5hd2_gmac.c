@@ -792,7 +792,7 @@ static netdev_tx_t hix5hd2_net_xmit(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 }
 
-static void hix5hd2_free_dma_desc_rings(struct hix5hd2_priv *priv)
+static void hix5hd2_free_rx_buffers(struct hix5hd2_priv *priv)
 {
 	struct hix5hd2_desc *desc;
 	dma_addr_t addr;
@@ -810,6 +810,13 @@ static void hix5hd2_free_dma_desc_rings(struct hix5hd2_priv *priv)
 		dev_kfree_skb_any(skb);
 		priv->rx_skb[i] = NULL;
 	}
+}
+
+static void hix5hd2_free_tx_buffers(struct hix5hd2_priv *priv)
+{
+	struct hix5hd2_desc *desc;
+	dma_addr_t addr;
+	int i;
 
 	for (i = 0; i < TX_DESC_NUM; i++) {
 		struct sk_buff *skb = priv->tx_skb[i];
@@ -873,7 +880,10 @@ static int hix5hd2_net_close(struct net_device *dev)
 	hix5hd2_irq_disable(priv);
 	napi_disable(&priv->napi);
 	netif_stop_queue(dev);
-	hix5hd2_free_dma_desc_rings(priv);
+	/* free rx buffers when device goes away, not when interface closed;
+	 * the hardware prefetches rx descriptors and cannot be expelled
+	 */
+	hix5hd2_free_tx_buffers(priv);
 
 	if (dev->phydev) {
 		phy_stop(dev->phydev);
@@ -984,6 +994,8 @@ out:
 static void hix5hd2_destroy_hw_desc_queue(struct hix5hd2_priv *priv)
 {
 	int i;
+
+	hix5hd2_free_rx_buffers(priv);
 
 	for (i = 0; i < QUEUE_NUMS; i++) {
 		if (priv->pool[i].desc) {
