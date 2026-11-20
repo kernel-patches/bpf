@@ -30,7 +30,9 @@ struct dst_entry {
 	};
 	struct  dst_ops	        *ops;
 	unsigned long		_metrics;
-	unsigned long           expires;
+	short			error;
+	short			__pad;
+	__u32			tclassid;
 #ifdef CONFIG_XFRM
 	struct xfrm_state	*xfrm;
 #else
@@ -74,9 +76,7 @@ struct dst_entry {
 	int			__use;
 	unsigned long		lastuse;
 	struct rcu_head		rcu_head;
-	short			error;
-	short			__pad;
-	__u32			tclassid;
+	unsigned long		expires;
 #ifndef CONFIG_64BIT
 	struct lwtunnel_state   *lwtstate;
 	rcuref_t		__rcuref;	/* 32-bit offset 64 */
