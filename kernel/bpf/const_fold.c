@@ -214,6 +214,9 @@ process_call:
 			ci_out[r] = unknown;
 		break;
 	}
+	/* do_check() has only a range for a far offset */
+	if (ci_is_map_value(dst) && abs((s64)dst->val) >= BPF_MAX_VAR_OFF)
+		*dst = unknown;
 }
 
 /* Join function: merge output state into a successor's input state. */

@@ -197,6 +197,7 @@ struct bpf_verifier_stack_elem {
 	int prev_insn_idx;
 	/* it goes there only if may_goto in front of prev_insn_idx does, see check_loop_guard() */
 	enum bpf_guard_edge guard_edge;
+	bool again;	/* see bpf_flow_deliver() */
 	struct bpf_verifier_stack_elem *next;
 };
 
@@ -346,6 +347,11 @@ static void verbose_invalid_scalar(struct bpf_verifier_env *env,
 	verbose(env, " should have been in [%d, %d]\n", range.minval, range.maxval);
 }
 
+static bool offset_is_far(const struct bpf_reg_state *reg)
+{
+	return reg_smin(reg) <= -BPF_MAX_VAR_OFF || reg_smax(reg) >= BPF_MAX_VAR_OFF;
+}
+
 static bool reg_not_null(struct bpf_verifier_env *env, const struct bpf_reg_state *reg)
 {
 	enum bpf_reg_type type;
@@ -358,7 +364,7 @@ static bool reg_not_null(struct bpf_verifier_env *env, const struct bpf_reg_stat
 	 * The types below guarantee a non-NULL base, an unbounded offset can
 	 * still wrap base + offset to zero.
 	 */
-	if (reg_smin(reg) <= -BPF_MAX_VAR_OFF || reg_smax(reg) >= BPF_MAX_VAR_OFF)
+	if (offset_is_far(reg))
 		return false;
 
 	type = base_type(type);
@@ -4131,6 +4137,7 @@ static int check_stack_read(struct bpf_verifier_env *env,
 			    int dst_regno)
 {
 	struct bpf_func_state *state = bpf_func(env, reg);
+	struct bpf_stack_state *ss;
 	int err;
 	/* Some accesses are only permitted with a static offset. */
 	bool var_off = !tnum_is_const(reg->var_off);
@@ -4164,6 +4171,11 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	 * just checking it here would be insufficient as speculative stack
 	 * writes could still lead to unsafe speculative behaviour.
 	 */
+	if (!var_off && dst_regno >= 0 && size != BPF_REG_SIZE && env->allow_ptr_leaks) {
+		ss = bpf_stack_slot(state, (-off - reg->var_off.value - 1) / BPF_REG_SIZE);
+		/* a part of a pointer is a number, as with a variable offset */
+		var_off = bpf_is_spilled_reg(ss) && !bpf_is_spilled_scalar_reg(ss);
+	}
 	if (!var_off) {
 		off += reg->var_off.value;
 		err = check_stack_read_fixed_off(env, state, off, size,
@@ -6940,8 +6952,7 @@ static int check_stack_access_within_bounds(
 		min_off = (s64)reg->var_off.value + off;
 		max_off = min_off + access_size;
 	} else {
-		if (reg_smax(reg) >= BPF_MAX_VAR_OFF ||
-		    reg_smin(reg) <= -BPF_MAX_VAR_OFF) {
+		if (offset_is_far(reg)) {
 			verbose(env, "invalid unbounded variable-offset%s stack %s\n",
 				err_extra, reg_arg_name(env, argno));
 			return -EACCES;
@@ -16026,7 +16037,7 @@ static bool check_reg_sane_offset_scalar(struct bpf_verifier_env *env,
 	s64 val = reg->var_off.value;
 	s64 smin = reg_smin(reg);
 
-	if (known && (val >= BPF_MAX_VAR_OFF || val <= -BPF_MAX_VAR_OFF)) {
+	if (known && val <= -BPF_MAX_VAR_OFF) {
 		verbose(env, "math between %s pointer and %lld is not allowed\n",
 			reg_type_str(env, type), val);
 		return false;
@@ -16038,32 +16049,9 @@ static bool check_reg_sane_offset_scalar(struct bpf_verifier_env *env,
 		return false;
 	}
 
-	if (smin >= BPF_MAX_VAR_OFF || smin <= -BPF_MAX_VAR_OFF) {
+	if (smin <= -BPF_MAX_VAR_OFF) {
 		verbose(env, "value %lld makes %s pointer be out of bounds\n",
 			smin, reg_type_str(env, type));
-		return false;
-	}
-
-	return true;
-}
-
-static bool check_reg_sane_offset_ptr(struct bpf_verifier_env *env,
-				      const struct bpf_reg_state *reg,
-				      enum bpf_reg_type type)
-{
-	bool known = tnum_is_const(reg->var_off);
-	s64 val = reg->var_off.value;
-	s64 smin = reg_smin(reg);
-
-	if (known && (val >= BPF_MAX_VAR_OFF || val <= -BPF_MAX_VAR_OFF)) {
-		verbose(env, "%s pointer offset %lld is not allowed\n",
-			reg_type_str(env, type), val);
-		return false;
-	}
-
-	if (smin >= BPF_MAX_VAR_OFF || smin <= -BPF_MAX_VAR_OFF) {
-		verbose(env, "%s pointer offset %lld is not allowed\n",
-			reg_type_str(env, type), smin);
 		return false;
 	}
 
@@ -16077,6 +16065,27 @@ enum {
 	REASON_LIMIT	= -4,
 	REASON_STACK	= -5,
 };
+
+/*
+ * A far pointer is no error: a state with near offsets gets here, so this one does too.
+ * An access through it is unproven. But a constant offset has to fit in an int.
+ */
+void bpf_blur_far_offset(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	s64 smin = reg_smin(reg), smax = reg_smax(reg);
+
+	/* an id and a range need an offset that does not wrap around */
+	if (reg_is_pkt_pointer(reg) && offset_is_far(reg)) {
+		reg->id = bpf_new_id(env);
+		reg->range = 0;
+	}
+	if (reg->type == SCALAR_VALUE || (smin < BPF_MAX_VAR_OFF && smax > -BPF_MAX_VAR_OFF))
+		return;
+	scalar_set_unknown(scalar_of(reg));
+	reg->r64 = cnum64_from_srange(min(smin, BPF_MAX_VAR_OFF - 1),
+				      max(smax, 1 - BPF_MAX_VAR_OFF));
+	reg_bounds_sync(reg);
+}
 
 static int retrieve_ptr_limit(const struct bpf_verifier_env *env,
 			      const struct bpf_reg_state *ptr_reg,
@@ -16517,6 +16526,8 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 	 */
 	if (dst_reg != ptr_reg)
 		*dst_reg = *ptr_reg;
+	/* a far pointer that comes back leaves its copies */
+	bpf_blur_far_offset(env, dst_reg);
 
 	/*
 	 * Accesses to untrusted PTR_TO_MEM are done through probe
@@ -16527,21 +16538,11 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 
 	if (!check_reg_sane_offset_scalar(env, off_reg, ptr_reg->type)) {
 		reason = bpf_diag_fmt(
-			env, "The scalar offset used with R%d is unbounded or outside the verifier's safe pointer-offset range [-%u, %u].",
-			ptr_regno, BPF_MAX_VAR_OFF, BPF_MAX_VAR_OFF);
+			env, "The scalar offset used with R%d can be -%u or less.",
+			ptr_regno, BPF_MAX_VAR_OFF);
 		bpf_diag_register_type(
 			env, env->insn_idx, ptr_regno, "pointer offset is not safe", reason,
 			"Clamp or bounds-check the scalar offset before applying it to the pointer.");
-		return -EINVAL;
-	}
-	if (!check_reg_sane_offset_ptr(env, ptr_reg, ptr_reg->type)) {
-		reason = bpf_diag_fmt(
-			env, "R%d already has an offset outside the verifier's safe range [-%u, %u] for %s.",
-			ptr_regno, BPF_MAX_VAR_OFF, BPF_MAX_VAR_OFF,
-			bpf_diag_reg_type_plain(env, ptr_reg->type));
-		bpf_diag_register_type(
-			env, env->insn_idx, ptr_regno, "pointer offset is not safe", reason,
-			"Keep the base pointer within the verifier's allowed offset range before applying more arithmetic.");
 		return -EINVAL;
 	}
 
@@ -16666,16 +16667,6 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 		return -EACCES;
 	}
 
-	if (!check_reg_sane_offset_ptr(env, dst_reg, ptr_reg->type)) {
-		reason = bpf_diag_fmt(
-			env, "After this arithmetic, R%d would be outside the verifier's safe offset range [-%u, %u] for %s.",
-			dst, BPF_MAX_VAR_OFF, BPF_MAX_VAR_OFF,
-			bpf_diag_reg_type_plain(env, ptr_reg->type));
-		bpf_diag_register_type(
-			env, env->insn_idx, ptr_regno, "pointer offset is not safe", reason,
-			"Tighten the scalar bounds before the arithmetic so the resulting pointer remains within the allowed range.");
-		return -EINVAL;
-	}
 	/*
 	 * A packet pointer that keeps its id or range is checked against a
 	 * range set from the checked pointer's umax, so var_off must not tighten
@@ -16692,6 +16683,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 		reg_bounds_sync(dst_reg);
 		bpf_trim_pkt_range(dst_reg, smax);
 	}
+	bpf_blur_far_offset(env, dst_reg);
 	bounds_ret = sanitize_check_bounds(env, insn, dst_reg);
 	if (bounds_ret == -EACCES)
 		return bounds_ret;
@@ -18930,9 +18922,70 @@ static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *ins
 	return 0;
 }
 
+/* How many values of @reg are before the end of the order of @insn? 0 if all of them are. */
+static u64 values_to_end(const struct bpf_insn *insn, const struct bpf_reg_state *reg)
+{
+	u8 op = BPF_OP(insn->code);
+	bool sign = op == BPF_JSGT || op == BPF_JSGE || op == BPF_JSLT || op == BPF_JSLE;
+	u64 first = sign ? S64_MIN : 0;
+	u32 cnt32 = (first >> 32) - reg->r32.base;
+	u64 cnt = first - reg->r64.base;
+
+	if (BPF_CLASS(insn->code) == BPF_JMP32)
+		return cnt32 <= reg->r32.size && reg->r32.size != U32_MAX ? cnt32 : 0;
+	return cnt <= reg->r64.size && reg->r64.size != U64_MAX ? cnt : 0;
+}
+
+/*
+ * A jump can cut a range in two: 'x u>= 3' leaves -4..-1 and 3 of -4..3. One range has both and
+ * all values between them. So a state that knows less is proven where this one is not.
+ * Do the jump for the values before the end of the order, then again for the values after it.
+ * Returns 1 if the current state has fewer values now.
+ */
+static int cut_range(struct bpf_verifier_env *env, const struct bpf_insn *insn, u32 regno,
+		     const struct bpf_reg_state *taken, const struct bpf_reg_state *not_taken)
+{
+	struct bpf_verifier_state *st = env->cur_state, *other;
+	struct bpf_reg_state *reg = &cur_regs(env)[regno], front = *reg, back = *reg;
+	u64 cnt = values_to_end(insn, reg);
+	u8 op = BPF_OP(insn->code);
+	const struct bpf_reg_state *equal = op == BPF_JEQ ? taken : not_taken;
+
+	/* 'x != 0' is 'x u> 0' */
+	if ((op == BPF_JEQ || op == BPF_JNE) && !tnum_equals_const(tnum_subreg(equal->var_off), 0))
+		return 0;
+	if (op == BPF_JSET || reg->type != SCALAR_VALUE || !cnt ||
+	    !(values_to_end(insn, taken) || values_to_end(insn, not_taken)))
+		return 0;
+	env->imprecise |= !env->err;
+	if (!env->path_sensitive && !bpf_xreg_in_deps(env, st, st->curframe, regno))
+		return 0;
+	if (BPF_CLASS(insn->code) == BPF_JMP32) {
+		front.r32.size = cnt - 1;
+		back.r32.base += cnt;
+		back.r32.size -= cnt;
+	} else {
+		front.r64.size = cnt - 1;
+		back.r64.base += cnt;
+		back.r64.size -= cnt;
+	}
+	reg_bounds_sync(&front);
+	reg_bounds_sync(&back);
+	if (reg_is_empty(&front) || reg_is_empty(&back))
+		return 0;
+	other = push_stack(env, env->insn_idx, env->insn_idx, false);
+	if (IS_ERR(other))
+		return PTR_ERR(other);
+	env->head->again = true;
+	other->frame[other->curframe]->regs[regno] = back;
+	*reg = front;
+	return 1;
+}
+
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int *insn_idx)
 {
+	struct cnum64 near = cnum64_from_srange(-MAX_PACKET_OFF, 2 * MAX_PACKET_OFF);
 	struct bpf_verifier_state *this_branch = env->cur_state;
 	struct bpf_verifier_state *other_branch;
 	struct bpf_reg_state *regs = this_branch->frame[this_branch->curframe]->regs;
@@ -18992,7 +19045,10 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			return err;
 
 		src_reg = &regs[insn->src_reg];
-		if (!(reg_is_pkt_pointer_any(dst_reg) && reg_is_pkt_pointer_any(src_reg)) &&
+		/* A header and a 16-bit length fit. If a pointer wraps, it leaks the address. */
+		if (!(reg_is_pkt_pointer_any(dst_reg) && reg_is_pkt_pointer_any(src_reg) &&
+		      cnum64_is_subset(near, dst_reg->r64) &&
+		      cnum64_is_subset(near, src_reg->r64)) &&
 		    is_pointer_value(env, insn->src_reg)) {
 			verbose(env, "R%d pointer comparison prohibited\n",
 				insn->src_reg);
@@ -19007,6 +19063,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	}
 
 	is_jmp32 = BPF_CLASS(insn->code) == BPF_JMP32;
+again:
 	env->false_reg1 = *dst_reg;
 	env->false_reg2 = *src_reg;
 	env->true_reg1 = *dst_reg;
@@ -19047,6 +19104,14 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			print_insn_state(env, this_branch, this_branch->curframe);
 		return 0;
 	}
+
+	err = cut_range(env, insn, insn->dst_reg, &env->true_reg1, &env->false_reg1);
+	if (!err && BPF_SRC(insn->code) == BPF_X)
+		err = cut_range(env, insn, insn->src_reg, &env->true_reg2, &env->false_reg2);
+	if (err > 0)
+		goto again;
+	if (err)
+		return err;
 
 	other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx, false);
 	if (IS_ERR(other_branch))
