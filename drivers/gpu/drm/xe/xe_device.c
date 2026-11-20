@@ -1100,22 +1100,24 @@ int xe_device_probe(struct xe_device *xe)
 
 	err = xe_i2c_probe(xe);
 	if (err)
-		goto err_unregister_display;
+		goto err_unregister_hwmon;
 
 	xe_vsec_init(xe);
 
 	err = xe_sriov_init_late(xe);
 	if (err)
-		goto err_unregister_display;
+		goto err_unregister_hwmon;
 
 	detect_preproduction_hw(xe);
 
 	err = devm_add_action_or_reset(xe->drm.dev, xe_device_sanitize, xe);
 	if (err)
-		goto err_unregister_display;
+		goto err_unregister_hwmon;
 
 	return 0;
 
+err_unregister_hwmon:
+	xe_hwmon_unregister(xe);
 err_unregister_display:
 	xe_display_unregister(xe);
 	drm_dev_unregister(&xe->drm);
@@ -1125,6 +1127,7 @@ err_unregister_display:
 
 void xe_device_remove(struct xe_device *xe)
 {
+	xe_hwmon_unregister(xe);
 	xe_display_unregister(xe);
 
 	drm_dev_unplug(&xe->drm);
