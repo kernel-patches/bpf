@@ -167,7 +167,7 @@ int dwmac4_dma_interrupt(struct stmmac_priv *priv, void __iomem *ioaddr,
 		}
 		if (unlikely(intr_status & DMA_CHAN_STATUS_FBE)) {
 			x->fatal_bus_error_irq++;
-			ret = tx_hard_error;
+			ret |= dma_fatal_error;
 		}
 	}
 

@@ -335,7 +335,7 @@ static int dwxgmac2_dma_interrupt(struct stmmac_priv *priv,
 		}
 		if (unlikely(intr_status & XGMAC_FBE)) {
 			x->fatal_bus_error_irq++;
-			ret |= tx_hard_error;
+			ret |= dma_fatal_error;
 		}
 	}
 

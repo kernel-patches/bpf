@@ -204,7 +204,7 @@ int dwmac_dma_interrupt(struct stmmac_priv *priv, void __iomem *ioaddr,
 		}
 		if (unlikely(intr_status & DMA_STATUS_FBI)) {
 			x->fatal_bus_error_irq++;
-			ret = tx_hard_error;
+			ret |= dma_fatal_error;
 		}
 	}
 	/* TX/RX NORMAL interrupts */

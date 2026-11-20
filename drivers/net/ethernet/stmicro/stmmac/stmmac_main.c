@@ -390,6 +390,24 @@ static void stmmac_global_err(struct stmmac_priv *priv)
 	stmmac_service_event_schedule(priv);
 }
 
+/* A fatal bus error stops both the TX and the RX DMA of the channel. Only a
+ * reset of the DMA brings them back, so restarting the TX side alone is not
+ * enough: RX would stay stopped without any further error.
+ */
+static bool stmmac_dma_fatal_error(struct stmmac_priv *priv, int status,
+				   u32 chan)
+{
+	if (likely(!(status & dma_fatal_error)))
+		return false;
+
+	if (net_ratelimit())
+		netdev_err(priv->dev, "DMA fatal bus error on channel %u\n",
+			   chan);
+	stmmac_global_err(priv);
+
+	return true;
+}
+
 static void print_pkt(unsigned char *buf, int len)
 {
 	pr_debug("len = %d byte, buf addr: 0x%p\n", len, buf);
@@ -3277,6 +3295,10 @@ static void stmmac_dma_interrupt(struct stmmac_priv *priv)
 	for (chan = 0; chan < channels_to_check; chan++)
 		status[chan] = stmmac_napi_check(priv, chan,
 						 DMA_DIR_RXTX);
+
+	for (chan = 0; chan < channels_to_check; chan++)
+		if (stmmac_dma_fatal_error(priv, status[chan], chan))
+			return;
 
 	for (chan = 0; chan < tx_channel_count; chan++) {
 		if (unlikely(status[chan] & tx_hard_error_bump_tc)) {
@@ -6647,6 +6669,9 @@ static irqreturn_t stmmac_msi_intr_tx(int irq, void *data)
 
 	status = stmmac_napi_check(priv, chan, DMA_DIR_TX);
 
+	if (stmmac_dma_fatal_error(priv, status, chan))
+		return IRQ_HANDLED;
+
 	if (unlikely(status & tx_hard_error_bump_tc)) {
 		/* Try to bump up the dma threshold on this failure */
 		stmmac_bump_dma_threshold(priv, chan);
@@ -6663,6 +6688,7 @@ static irqreturn_t stmmac_msi_intr_rx(int irq, void *data)
 	struct stmmac_dma_conf *dma_conf;
 	int chan = rx_q->queue_index;
 	struct stmmac_priv *priv;
+	int status;
 
 	dma_conf = container_of(rx_q, struct stmmac_dma_conf, rx_queue[chan]);
 	priv = container_of(dma_conf, struct stmmac_priv, dma_conf);
@@ -6671,7 +6697,8 @@ static irqreturn_t stmmac_msi_intr_rx(int irq, void *data)
 	if (test_bit(STMMAC_DOWN, &priv->state))
 		return IRQ_HANDLED;
 
-	stmmac_napi_check(priv, chan, DMA_DIR_RX);
+	status = stmmac_napi_check(priv, chan, DMA_DIR_RX);
+	stmmac_dma_fatal_error(priv, status, chan);
 
 	return IRQ_HANDLED;
 }

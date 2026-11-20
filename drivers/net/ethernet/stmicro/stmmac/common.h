@@ -376,6 +376,7 @@ enum dma_irq_status {
 	tx_hard_error_bump_tc = 0x2,
 	handle_rx = 0x4,
 	handle_tx = 0x8,
+	dma_fatal_error = 0x10,
 };
 
 enum dma_irq_dir {
