@@ -1,0 +1,1542 @@
+[
+  {
+    "EventName": "pie_general.fclk",
+    "PublicDescription": "Fabric Clock (FCLK) cycles.",
+    "EventCode": "0xc80",
+    "UMask": "0x001",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_0.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 0.",
+    "EventCode": "0x01f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_0.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 0.",
+    "EventCode": "0x01f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_0.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 0.",
+    "EventCode": "0x01f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_0.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 0.",
+    "EventCode": "0x01f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_0.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 0.",
+    "EventCode": "0x01f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_0.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 0.",
+    "EventCode": "0x01f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_1.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 1.",
+    "EventCode": "0x05f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_1.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 1.",
+    "EventCode": "0x05f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_1.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 1.",
+    "EventCode": "0x05f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_1.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 1.",
+    "EventCode": "0x05f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_1.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 1.",
+    "EventCode": "0x05f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_1.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 1.",
+    "EventCode": "0x05f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_2.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 2.",
+    "EventCode": "0x09f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_2.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 2.",
+    "EventCode": "0x09f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_2.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 2.",
+    "EventCode": "0x09f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_2.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 2.",
+    "EventCode": "0x09f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_2.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 2.",
+    "EventCode": "0x09f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_2.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 2.",
+    "EventCode": "0x09f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_3.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 3.",
+    "EventCode": "0x0df",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_3.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 3.",
+    "EventCode": "0x0df",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_3.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 3.",
+    "EventCode": "0x0df",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_3.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 3.",
+    "EventCode": "0x0df",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_3.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 3.",
+    "EventCode": "0x0df",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_3.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 3.",
+    "EventCode": "0x0df",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_4.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 4.",
+    "EventCode": "0x11f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_4.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 4.",
+    "EventCode": "0x11f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_4.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 4.",
+    "EventCode": "0x11f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_4.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 4.",
+    "EventCode": "0x11f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_4.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 4.",
+    "EventCode": "0x11f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_4.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 4.",
+    "EventCode": "0x11f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_5.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 5.",
+    "EventCode": "0x15f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_5.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 5.",
+    "EventCode": "0x15f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_5.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 5.",
+    "EventCode": "0x15f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_5.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 5.",
+    "EventCode": "0x15f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_5.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 5.",
+    "EventCode": "0x15f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_5.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 5.",
+    "EventCode": "0x15f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_6.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 6.",
+    "EventCode": "0x19f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_6.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 6.",
+    "EventCode": "0x19f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_6.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 6.",
+    "EventCode": "0x19f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_6.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 6.",
+    "EventCode": "0x19f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_6.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 6.",
+    "EventCode": "0x19f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_6.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 6.",
+    "EventCode": "0x19f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_7.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 7.",
+    "EventCode": "0x1df",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_7.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 7.",
+    "EventCode": "0x1df",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_7.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 7.",
+    "EventCode": "0x1df",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_7.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 7.",
+    "EventCode": "0x1df",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_7.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 7.",
+    "EventCode": "0x1df",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_7.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 7.",
+    "EventCode": "0x1df",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_8.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 8.",
+    "EventCode": "0x21f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_8.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 8.",
+    "EventCode": "0x21f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_8.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 8.",
+    "EventCode": "0x21f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_8.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 8.",
+    "EventCode": "0x21f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_8.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 8.",
+    "EventCode": "0x21f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_8.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 8.",
+    "EventCode": "0x21f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_9.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 9.",
+    "EventCode": "0x25f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_9.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 9.",
+    "EventCode": "0x25f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_9.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 9.",
+    "EventCode": "0x25f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_9.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 9.",
+    "EventCode": "0x25f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_9.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 9.",
+    "EventCode": "0x25f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_9.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 9.",
+    "EventCode": "0x25f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_10.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 10.",
+    "EventCode": "0x29f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_10.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 10.",
+    "EventCode": "0x29f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_10.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 10.",
+    "EventCode": "0x29f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_10.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 10.",
+    "EventCode": "0x29f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_10.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 10.",
+    "EventCode": "0x29f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_10.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 10.",
+    "EventCode": "0x29f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_11.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 11.",
+    "EventCode": "0x2df",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_11.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 11.",
+    "EventCode": "0x2df",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_11.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 11.",
+    "EventCode": "0x2df",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_11.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 11.",
+    "EventCode": "0x2df",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_11.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 11.",
+    "EventCode": "0x2df",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_11.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 11.",
+    "EventCode": "0x2df",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_12.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 12.",
+    "EventCode": "0x31f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_12.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 12.",
+    "EventCode": "0x31f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_12.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 12.",
+    "EventCode": "0x31f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_12.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 12.",
+    "EventCode": "0x31f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_12.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 12.",
+    "EventCode": "0x31f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_12.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 12.",
+    "EventCode": "0x31f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_13.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 13.",
+    "EventCode": "0x35f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_13.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 13.",
+    "EventCode": "0x35f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_13.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 13.",
+    "EventCode": "0x35f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_13.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 13.",
+    "EventCode": "0x35f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_13.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 13.",
+    "EventCode": "0x35f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_13.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 13.",
+    "EventCode": "0x35f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_14.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 14.",
+    "EventCode": "0x39f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_14.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 14.",
+    "EventCode": "0x39f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_14.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 14.",
+    "EventCode": "0x39f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_14.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 14.",
+    "EventCode": "0x39f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_14.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 14.",
+    "EventCode": "0x39f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_14.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 14.",
+    "EventCode": "0x39f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_15.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for Coherent Station (CS) 15.",
+    "EventCode": "0x3df",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_15.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for Coherent Station (CS) 15.",
+    "EventCode": "0x3df",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_15.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for Coherent Station (CS) 15.",
+    "EventCode": "0x3df",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_15.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for Coherent Station (CS) 15.",
+    "EventCode": "0x3df",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_15.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for Coherent Station (CS) 15.",
+    "EventCode": "0x3df",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_cs_15.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for Coherent Station (CS) 15.",
+    "EventCode": "0x3df",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_0.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 0.",
+    "EventCode": "0x41e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_0.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 0.",
+    "EventCode": "0x41e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_0.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 0.",
+    "EventCode": "0x41e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_0.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 0.",
+    "EventCode": "0x41e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_0.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 0.",
+    "EventCode": "0x41e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_0.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 0.",
+    "EventCode": "0x41e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_1.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 1.",
+    "EventCode": "0x45e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_1.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 1.",
+    "EventCode": "0x45e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_1.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 1.",
+    "EventCode": "0x45e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_1.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 1.",
+    "EventCode": "0x45e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_1.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 1.",
+    "EventCode": "0x45e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_1.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 1.",
+    "EventCode": "0x45e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_2.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 2.",
+    "EventCode": "0x49e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_2.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 2.",
+    "EventCode": "0x49e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_2.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 2.",
+    "EventCode": "0x49e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_2.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 2.",
+    "EventCode": "0x49e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_2.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 2.",
+    "EventCode": "0x49e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_2.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 2.",
+    "EventCode": "0x49e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_3.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 3.",
+    "EventCode": "0x4de",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_3.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 3.",
+    "EventCode": "0x4de",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_3.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 3.",
+    "EventCode": "0x4de",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_3.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 3.",
+    "EventCode": "0x4de",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_3.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 3.",
+    "EventCode": "0x4de",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_3.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 3.",
+    "EventCode": "0x4de",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_4.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 4.",
+    "EventCode": "0x51e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_4.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 4.",
+    "EventCode": "0x51e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_4.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 4.",
+    "EventCode": "0x51e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_4.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 4.",
+    "EventCode": "0x51e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_4.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 4.",
+    "EventCode": "0x51e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_4.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 4.",
+    "EventCode": "0x51e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_5.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 5.",
+    "EventCode": "0x55e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_5.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 5.",
+    "EventCode": "0x55e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_5.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 5.",
+    "EventCode": "0x55e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_5.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 5.",
+    "EventCode": "0x55e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_5.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 5.",
+    "EventCode": "0x55e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_5.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 5.",
+    "EventCode": "0x55e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_6.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 6.",
+    "EventCode": "0x59e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_6.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 6.",
+    "EventCode": "0x59e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_6.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 6.",
+    "EventCode": "0x59e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_6.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 6.",
+    "EventCode": "0x59e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_6.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 6.",
+    "EventCode": "0x59e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_6.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 6.",
+    "EventCode": "0x59e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_7.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 7.",
+    "EventCode": "0x5de",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_7.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 7.",
+    "EventCode": "0x5de",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_7.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 7.",
+    "EventCode": "0x5de",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_7.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 7.",
+    "EventCode": "0x5de",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_7.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 7.",
+    "EventCode": "0x5de",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_7.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 7.",
+    "EventCode": "0x5de",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_8.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 8.",
+    "EventCode": "0x61e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_8.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 8.",
+    "EventCode": "0x61e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_8.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 8.",
+    "EventCode": "0x61e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_8.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 8.",
+    "EventCode": "0x61e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_8.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 8.",
+    "EventCode": "0x61e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_8.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 8.",
+    "EventCode": "0x61e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_9.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 9.",
+    "EventCode": "0x65e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_9.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 9.",
+    "EventCode": "0x65e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_9.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 9.",
+    "EventCode": "0x65e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_9.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 9.",
+    "EventCode": "0x65e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_9.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 9.",
+    "EventCode": "0x65e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_9.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 9.",
+    "EventCode": "0x65e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_10.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 10.",
+    "EventCode": "0x69e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_10.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 10.",
+    "EventCode": "0x69e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_10.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 10.",
+    "EventCode": "0x69e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_10.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 10.",
+    "EventCode": "0x69e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_10.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 10.",
+    "EventCode": "0x69e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_10.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 10.",
+    "EventCode": "0x69e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_11.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 11.",
+    "EventCode": "0x6de",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_11.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 11.",
+    "EventCode": "0x6de",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_11.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 11.",
+    "EventCode": "0x6de",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_11.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 11.",
+    "EventCode": "0x6de",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_11.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 11.",
+    "EventCode": "0x6de",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_11.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 11.",
+    "EventCode": "0x6de",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_12.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 12.",
+    "EventCode": "0x71e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_12.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 12.",
+    "EventCode": "0x71e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_12.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 12.",
+    "EventCode": "0x71e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_12.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 12.",
+    "EventCode": "0x71e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_12.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 12.",
+    "EventCode": "0x71e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_12.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 12.",
+    "EventCode": "0x71e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_13.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 13.",
+    "EventCode": "0x75e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_13.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 13.",
+    "EventCode": "0x75e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_13.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 13.",
+    "EventCode": "0x75e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_13.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 13.",
+    "EventCode": "0x75e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_13.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 13.",
+    "EventCode": "0x75e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_13.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 13.",
+    "EventCode": "0x75e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_14.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 14.",
+    "EventCode": "0x79e",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_14.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 14.",
+    "EventCode": "0x79e",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_14.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 14.",
+    "EventCode": "0x79e",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_14.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 14.",
+    "EventCode": "0x79e",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_14.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 14.",
+    "EventCode": "0x79e",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_14.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 14.",
+    "EventCode": "0x79e",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_15.rd_local",
+    "PublicDescription": "Local inbound data beats (32 bytes each) for CPU Moderator (CCM) 15.",
+    "EventCode": "0x7de",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_15.wr_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for CPU Moderator (CCM) 15.",
+    "EventCode": "0x7de",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_15.rd_remote",
+    "PublicDescription": "Remote inbound data beats (32 bytes each) for CPU Moderator (CCM) 15.",
+    "EventCode": "0x7de",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_15.wr_remote",
+    "PublicDescription": "Remote outbound data beats (64 bytes each) for CPU Moderator (CCM) 15.",
+    "EventCode": "0x7de",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_15.rd_all",
+    "PublicDescription": "All (local and remote) inbound data beats (32 bytes each) for CPU Moderator (CCM) 15.",
+    "EventCode": "0x7de",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_ccm_15.wr_all",
+    "PublicDescription": "All (local and remote) outbound data beats (64 bytes each) for CPU Moderator (CCM) 15.",
+    "EventCode": "0x7de",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_0.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for IO Moderator (IOM) 0.",
+    "EventCode": "0x8df",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_0.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for IO Moderator (IOM) 0.",
+    "EventCode": "0x8df",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_0.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for IO Moderator (IOM) 0.",
+    "EventCode": "0x8df",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_0.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for IO Moderator (IOM) 0.",
+    "EventCode": "0x8df",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_0.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for IO Moderator (IOM) 0.",
+    "EventCode": "0x8df",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_0.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for IO Moderator (IOM) 0.",
+    "EventCode": "0x8df",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_1.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for IO Moderator (IOM) 1.",
+    "EventCode": "0x91f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_1.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for IO Moderator (IOM) 1.",
+    "EventCode": "0x91f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_1.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for IO Moderator (IOM) 1.",
+    "EventCode": "0x91f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_1.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for IO Moderator (IOM) 1.",
+    "EventCode": "0x91f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_1.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for IO Moderator (IOM) 1.",
+    "EventCode": "0x91f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_1.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for IO Moderator (IOM) 1.",
+    "EventCode": "0x91f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_2.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for IO Moderator (IOM) 2.",
+    "EventCode": "0x95f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_2.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for IO Moderator (IOM) 2.",
+    "EventCode": "0x95f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_2.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for IO Moderator (IOM) 2.",
+    "EventCode": "0x95f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_2.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for IO Moderator (IOM) 2.",
+    "EventCode": "0x95f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_2.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for IO Moderator (IOM) 2.",
+    "EventCode": "0x95f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_2.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for IO Moderator (IOM) 2.",
+    "EventCode": "0x95f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_3.rd_local",
+    "PublicDescription": "Local read data beats (64 bytes each) for IO Moderator (IOM) 3.",
+    "EventCode": "0x89f",
+    "UMask": "0x7fe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_3.wr_local",
+    "PublicDescription": "Local write data beats (64 bytes each) for IO Moderator (IOM) 3.",
+    "EventCode": "0x89f",
+    "UMask": "0x7ff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_3.rd_remote",
+    "PublicDescription": "Remote read data beats (64 bytes each) for IO Moderator (IOM) 3.",
+    "EventCode": "0x89f",
+    "UMask": "0xbfe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_3.wr_remote",
+    "PublicDescription": "Remote write data beats (64 bytes each) for IO Moderator (IOM) 3.",
+    "EventCode": "0x89f",
+    "UMask": "0xbff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_3.rd_all",
+    "PublicDescription": "All (local and remote) read data beats (64 bytes each) for IO Moderator (IOM) 3.",
+    "EventCode": "0x89f",
+    "UMask": "0xffe",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_iom_3.wr_all",
+    "PublicDescription": "All (local and remote) write data beats (64 bytes each) for IO Moderator (IOM) 3.",
+    "EventCode": "0x89f",
+    "UMask": "0xfff",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_link_0.out_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for Infinity Fabric Link (LINK) 0.",
+    "EventCode": "0xe1f",
+    "UMask": "0xf3e",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_link_1.out_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for Infinity Fabric Link (LINK) 1.",
+    "EventCode": "0xe5f",
+    "UMask": "0xf3e",
+    "Unit": "DFPMC"
+  },
+  {
+    "EventName": "data_beats_link_2.out_local",
+    "PublicDescription": "Local outbound data beats (64 bytes each) for Infinity Fabric Link (LINK) 2.",
+    "EventCode": "0xe9f",
+    "UMask": "0xf3e",
+    "Unit": "DFPMC"
+  }
+]

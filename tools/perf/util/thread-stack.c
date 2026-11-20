@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include "addr_location.h"
 #include "thread.h"
 #include "event.h"
 #include "machine.h"
@@ -823,7 +824,7 @@ static int thread_stack__pop_cp(struct thread *thread, struct thread_stack *ts,
 	if (ts->cnt == 1) {
 		struct thread_stack_entry *tse = &ts->stack[0];
 
-		if (tse->cp->sym == sym)
+		if (tse->cp->ds.sym == sym)
 			return thread_stack__call_return(thread, ts, --ts->cnt,
 							 timestamp, ref, false);
 	}
@@ -862,21 +863,21 @@ static int thread_stack__bottom(struct thread_stack *ts,
 				struct addr_location *to_al, u64 ref)
 {
 	struct call_path_root *cpr = ts->crp->cpr;
+	struct dso_symbol ds;
 	struct call_path *cp;
-	struct symbol *sym;
 	u64 ip;
 
 	if (sample->ip) {
 		ip = sample->ip;
-		sym = from_al->sym;
+		ds = dso_symbol__from_al(from_al);
 	} else if (sample->addr) {
 		ip = sample->addr;
-		sym = to_al->sym;
+		ds = dso_symbol__from_al(to_al);
 	} else {
 		return 0;
 	}
 
-	cp = call_path__findnew(cpr, &cpr->call_path, sym, ip,
+	cp = call_path__findnew(cpr, &cpr->call_path, &ds, ip,
 				ts->kernel_start);
 
 	return thread_stack__push_cp(ts, ip, sample->time, ref, cp,
@@ -908,8 +909,8 @@ static int thread_stack__no_call_return(struct thread *thread,
 {
 	struct call_path_root *cpr = ts->crp->cpr;
 	struct call_path *root = &cpr->call_path;
-	struct symbol *fsym = from_al->sym;
-	struct symbol *tsym = to_al->sym;
+	struct dso_symbol fds = dso_symbol__from_al(from_al);
+	struct dso_symbol tds = dso_symbol__from_al(to_al);
 	struct call_path *cp, *parent;
 	u64 ks = ts->kernel_start;
 	u64 addr = sample->addr;
@@ -925,7 +926,7 @@ static int thread_stack__no_call_return(struct thread *thread,
 
 		/* If the stack is empty, push the userspace address */
 		if (!ts->cnt) {
-			cp = call_path__findnew(cpr, root, tsym, addr, ks);
+			cp = call_path__findnew(cpr, root, &tds, addr, ks);
 			return thread_stack__push_cp(ts, 0, tm, ref, cp, true,
 						     false);
 		}
@@ -941,7 +942,7 @@ static int thread_stack__no_call_return(struct thread *thread,
 	else
 		parent = root;
 
-	if (parent->sym == from_al->sym) {
+	if (parent->ds.sym == from_al->sym) {
 		/*
 		 * At the bottom of the stack, assume the missing 'call' was
 		 * before the trace started. So, pop the current symbol and push
@@ -955,7 +956,7 @@ static int thread_stack__no_call_return(struct thread *thread,
 		}
 
 		if (!ts->cnt) {
-			cp = call_path__findnew(cpr, root, tsym, addr, ks);
+			cp = call_path__findnew(cpr, root, &tds, addr, ks);
 
 			return thread_stack__push_cp(ts, addr, tm, ref, cp,
 						     true, false);
@@ -965,7 +966,7 @@ static int thread_stack__no_call_return(struct thread *thread,
 		 * Otherwise assume the 'return' is being used as a jump (e.g.
 		 * retpoline) and just push the 'to' symbol.
 		 */
-		cp = call_path__findnew(cpr, parent, tsym, addr, ks);
+		cp = call_path__findnew(cpr, parent, &tds, addr, ks);
 
 		err = thread_stack__push_cp(ts, 0, tm, ref, cp, true, false);
 		if (!err)
@@ -979,13 +980,13 @@ static int thread_stack__no_call_return(struct thread *thread,
 	 * pop 'from'.
 	 */
 
-	cp = call_path__findnew(cpr, parent, tsym, addr, ks);
+	cp = call_path__findnew(cpr, parent, &tds, addr, ks);
 
 	err = thread_stack__push_cp(ts, addr, tm, ref, cp, true, false);
 	if (err)
 		return err;
 
-	cp = call_path__findnew(cpr, cp, fsym, ip, ks);
+	cp = call_path__findnew(cpr, cp, &fds, ip, ks);
 
 	err = thread_stack__push_cp(ts, ip, tm, ref, cp, true, false);
 	if (err)
@@ -1030,7 +1031,7 @@ static int thread_stack__trace_end(struct thread_stack *ts,
 	cp = call_path__findnew(cpr, ts->stack[ts->cnt - 1].cp, NULL, 0,
 				ts->kernel_start);
 
-	ret_addr = sample->ip + sample->insn_len;
+	ret_addr = sample->ret_addr ? sample->ret_addr : sample->ip + sample->insn_len;
 
 	return thread_stack__push_cp(ts, ret_addr, sample->time, ref, cp,
 				     false, true);
@@ -1052,7 +1053,8 @@ static int thread_stack__x86_retpoline(struct thread_stack *ts,
 {
 	struct thread_stack_entry *tse = &ts->stack[ts->cnt - 1];
 	struct call_path_root *cpr = ts->crp->cpr;
-	struct symbol *sym = tse->cp->sym;
+	struct symbol *sym = tse->cp->ds.sym;
+	struct dso_symbol tds = dso_symbol__from_al(to_al);
 	struct symbol *tsym = to_al->sym;
 	struct call_path *cp;
 
@@ -1068,7 +1070,7 @@ static int thread_stack__x86_retpoline(struct thread_stack *ts,
 		 * graph, since all the original branches are left unchanged.
 		 */
 		ts->cnt -= 1;
-		sym = ts->stack[ts->cnt - 2].cp->sym;
+		sym = ts->stack[ts->cnt - 2].cp->ds.sym;
 		if (sym && sym == tsym && to_al->addr != tsym->start) {
 			/*
 			 * Target is back to the middle of the symbol we came
@@ -1087,7 +1089,7 @@ static int thread_stack__x86_retpoline(struct thread_stack *ts,
 		return 0;
 	}
 
-	cp = call_path__findnew(cpr, ts->stack[ts->cnt - 2].cp, tsym,
+	cp = call_path__findnew(cpr, ts->stack[ts->cnt - 2].cp, &tds,
 				sample->addr, ts->kernel_start);
 	if (!cp)
 		return -ENOMEM;
@@ -1147,6 +1149,7 @@ int thread_stack__process(struct thread *thread, struct comm *comm,
 
 	if (sample->flags & PERF_IP_FLAG_CALL) {
 		bool trace_end = sample->flags & PERF_IP_FLAG_TRACE_END;
+		struct dso_symbol tds = dso_symbol__from_al(to_al);
 		struct call_path_root *cpr = ts->crp->cpr;
 		struct call_path *cp;
 		u64 ret_addr;
@@ -1154,12 +1157,13 @@ int thread_stack__process(struct thread *thread, struct comm *comm,
 		if (!sample->ip || !sample->addr)
 			return 0;
 
-		ret_addr = sample->ip + sample->insn_len;
+		/* Opcode fetching must not change a decoder-supplied return address. */
+		ret_addr = sample->ret_addr ? sample->ret_addr : sample->ip + sample->insn_len;
 		if (ret_addr == sample->addr)
 			return 0; /* Zero-length calls are excluded */
 
 		cp = call_path__findnew(cpr, ts->stack[ts->cnt - 1].cp,
-					to_al->sym, sample->addr,
+					&tds, sample->addr,
 					ts->kernel_start);
 		err = thread_stack__push_cp(ts, ret_addr, sample->time, ref,
 					    cp, false, trace_end);
@@ -1208,6 +1212,7 @@ int thread_stack__process(struct thread *thread, struct comm *comm,
 	} else if (sample->flags & PERF_IP_FLAG_BRANCH &&
 		   from_al->sym != to_al->sym && to_al->sym &&
 		   to_al->addr == to_al->sym->start) {
+		struct dso_symbol tds = dso_symbol__from_al(to_al);
 		struct call_path_root *cpr = ts->crp->cpr;
 		struct call_path *cp;
 
@@ -1218,7 +1223,7 @@ int thread_stack__process(struct thread *thread, struct comm *comm,
 		 * when a ret pops the stack, all jmps must be popped off first.
 		 */
 		cp = call_path__findnew(cpr, ts->stack[ts->cnt - 1].cp,
-					to_al->sym, sample->addr,
+					&tds, sample->addr,
 					ts->kernel_start);
 		err = thread_stack__push_cp(ts, 0, sample->time, ref, cp, false,
 					    false);

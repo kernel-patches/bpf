@@ -519,7 +519,8 @@ static int __maps__insert(struct maps *maps, struct map *new)
 		/* Sorted if maps were already sorted and this map starts after the last one. */
 		maps__set_maps_by_address_sorted(maps,
 			maps__maps_by_address_sorted(maps) &&
-			map__end(maps_by_address[nr_maps - 2]) <= map__start(new));
+			map__end(maps_by_address[nr_maps - 2]) <= map__start(new) &&
+			map__start_cmp(&maps_by_address[nr_maps - 2], &new) <= 0);
 		maps__set_maps_by_name_sorted(maps, false);
 	}
 	if (map__end(new) < map__start(new))

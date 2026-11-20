@@ -796,7 +796,10 @@ static void hist_browser__show_callchain_entry(struct hist_browser *browser,
 {
 	int color, width;
 	char folded_sign = callchain_list__folded(chain);
-	bool show_annotated = browser->show_dso && chain->ms.sym && symbol__annotation(chain->ms.sym)->src;
+	struct annotation *notes = (browser->show_dso && chain->ms.sym &&
+				    symbol__annotated(chain->ms.sym)) ?
+				   symbol__annotation(chain->ms.sym) : NULL;
+	bool show_annotated = notes && notes->src;
 
 	color = HE_COLORSET_NORMAL;
 	width = browser->b.width - (offset + 2);
@@ -2486,8 +2489,11 @@ do_annotate(struct hist_browser *browser, struct popup_action *act)
 	    perf_env__lookup_objdump(browser->env, &annotate_opts.objdump_path))
 		return 0;
 
+	if (!symbol__annotated(act->ms.sym))
+		return 0;
+
 	notes = symbol__annotation(act->ms.sym);
-	if (!notes->src)
+	if (!notes || !notes->src)
 		return 0;
 
 	if (browser->block_evsel)
@@ -2537,6 +2543,7 @@ add_annotate_opt(struct popup_action *act, char **optstr,
 		 struct map_symbol *ms,
 		 u64 addr)
 {
+	struct annotation *notes;
 	struct dso *dso;
 
 	if (!ms->map || (dso = map__dso(ms->map)) == NULL || dso__annotate_warned(dso))
@@ -2545,7 +2552,11 @@ add_annotate_opt(struct popup_action *act, char **optstr,
 	if (!ms->sym)
 		ms->sym = symbol__new_unresolved(addr, ms->map);
 
-	if (ms->sym == NULL || symbol__annotation(ms->sym)->src == NULL)
+	if (ms->sym == NULL || !symbol__annotated(ms->sym))
+		return 0;
+
+	notes = symbol__annotation(ms->sym);
+	if (!notes || notes->src == NULL)
 		return 0;
 
 	if (asprintf(optstr, "Annotate %s", ms->sym->name) < 0)
@@ -3204,7 +3215,11 @@ do_hotkey:		 // key came straight from options ui__popup_menu()
 				do_annotate(browser, &hotkey_act);
 				map_symbol__exit(&hotkey_act.ms);
 			} else {
-				if (symbol__annotation(browser->selection->sym)->src == NULL) {
+				struct annotation *notes;
+
+				notes = symbol__annotated(browser->selection->sym) ?
+					symbol__annotation(browser->selection->sym) : NULL;
+				if (!notes || notes->src == NULL) {
 					ui_browser__warning(&browser->b, delay_secs * 2,
 						"No samples for the \"%s\" symbol.\n\n"
 						"Probably appeared just in a callchain",
