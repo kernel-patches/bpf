@@ -1918,6 +1918,11 @@ static int yt8521_led_hw_control_get(struct phy_device *phydev, u8 index,
 	if (val & YT8521_LED_10_ON_EN)
 		__set_bit(TRIGGER_NETDEV_LINK_10, rules);
 
+	if ((val & YT8521_LED_10_ON_EN) &&
+	    (val & YT8521_LED_100_ON_EN) &&
+	    (val & YT8521_LED_1000_ON_EN))
+		__set_bit(TRIGGER_NETDEV_LINK, rules);
+
 	return 0;
 }
 
