@@ -115,6 +115,7 @@
 	dmic: dmic {
 		compatible = "dmic-codec";
 		#sound-dai-cells = <0>;
+		num-channels = <4>;
 	};
 
 	m2_connector: m2-connector {
