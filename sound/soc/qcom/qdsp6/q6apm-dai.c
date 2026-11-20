@@ -345,6 +345,17 @@ static int q6apm_dai_prepare(struct snd_soc_component *component,
 	cfg.bit_width = prtd->bits_per_sample;
 	cfg.fmt = SND_AUDIOCODEC_PCM;
 	audioreach_set_default_channel_mapping(cfg.channel_map, runtime->channels);
+	/*
+	 * A second prepare finds the stream running. Stop .ack from queueing
+	 * while the graph and its buffers are replaced.
+	 */
+	snd_pcm_stream_lock_irq(substream);
+	if (prtd->state == Q6APM_STREAM_RUNNING)
+		prtd->state = Q6APM_STREAM_STOPPED;
+	/* ALSA sets appl_ptr to 0 after a successful prepare */
+	prtd->queue_ptr = 0;
+	snd_pcm_stream_unlock_irq(substream);
+
 	if (prtd->state) {
 		/* clear the previous setup if any  */
 		q6apm_graph_stop(prtd->graph);
@@ -415,7 +426,9 @@ static int q6apm_dai_prepare(struct snd_soc_component *component,
 	}
 
 	/* Now that graph as been prepared and started update the internal state accordingly */
+	snd_pcm_stream_lock_irq(substream);
 	prtd->state = Q6APM_STREAM_RUNNING;
+	snd_pcm_stream_unlock_irq(substream);
 
 	return 0;
 }
@@ -429,8 +442,43 @@ static int q6apm_dai_ack(struct snd_soc_component *component, struct snd_pcm_sub
 	if (q6apm_is_graph_in_push_pull_mode(prtd->graph))
 		return 0;
 
+	/*
+	 * ALSA calls .ack whenever appl_ptr moves, also after a stop and
+	 * before the next prepare. The graph has no queue to fill then, and
+	 * queue_ptr is out of step with appl_ptr until prepare resets both.
+	 */
+	if (prtd->state != Q6APM_STREAM_RUNNING)
+		return 0;
+
+	/* A drop before start does not reach the trigger callback. */
+	switch (runtime->state) {
+	case SNDRV_PCM_STATE_PREPARED:
+	case SNDRV_PCM_STATE_RUNNING:
+	case SNDRV_PCM_STATE_PAUSED:
+	case SNDRV_PCM_STATE_DRAINING:
+		break;
+	default:
+		return 0;
+	}
+
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		avail_periods = (runtime->control->appl_ptr - prtd->queue_ptr)/runtime->period_size;
+		snd_pcm_sframes_t pending = runtime->control->appl_ptr - prtd->queue_ptr;
+
+		/* appl_ptr wraps at the boundary before queue_ptr does. */
+		if (pending < 0)
+			pending += runtime->boundary;
+
+		/*
+		 * What is left to queue is part of what ALSA holds for
+		 * playback. It is more when queue_ptr is ahead of appl_ptr,
+		 * as after SNDRV_PCM_IOCTL_RESET, or when appl_ptr was moved
+		 * more than a ring past hw_ptr.
+		 */
+		if (pending > snd_pcm_playback_hw_avail(runtime))
+			return 0;
+
+		avail_periods = min_t(snd_pcm_sframes_t, pending / runtime->period_size,
+				      runtime->periods);
 		for (i = 0; i < avail_periods; i++) {
 			ret = q6apm_write_async(prtd->graph, prtd->pcm_count, 0, 0, NO_TIMESTAMP);
 			if (ret < 0) {
@@ -438,6 +486,8 @@ static int q6apm_dai_ack(struct snd_soc_component *component, struct snd_pcm_sub
 				return ret;
 			}
 			prtd->queue_ptr += runtime->period_size;
+			if (prtd->queue_ptr >= runtime->boundary)
+				prtd->queue_ptr -= runtime->boundary;
 		}
 	}
 
