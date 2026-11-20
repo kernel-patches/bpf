@@ -47,22 +47,25 @@
 	non-removable;
 	no-sdio;
 	no-sd;
+
 	status = "okay";
 };
 
 &gmac0 {
-	pinctrl-names = "default";
 	pinctrl-0 = <&gmac0_pins>, <&mdio0_pins>;
+	pinctrl-names = "default";
 	phy-handle = <&phy0>;
 	phy-mode = "rgmii-id";
+
 	status = "okay";
 };
 
 &gmac1 {
-	pinctrl-names = "default";
 	pinctrl-0 = <&gmac1_pins>;
+	pinctrl-names = "default";
 	phy-handle = <&phy1>;
 	phy-mode = "rgmii-id";
+
 	status = "okay";
 };
 
@@ -111,21 +114,6 @@
 
 &padctrl0_apsys {
 	gmac0_pins: gmac0-0 {
-		tx-pins {
-			pins = "GMAC0_TX_CLK",
-			       "GMAC0_TXEN",
-			       "GMAC0_TXD0",
-			       "GMAC0_TXD1",
-			       "GMAC0_TXD2",
-			       "GMAC0_TXD3";
-			function = "gmac0";
-			bias-disable;
-			drive-strength = <25>;
-			input-disable;
-			input-schmitt-disable;
-			slew-rate = <0>;
-		};
-
 		rx-pins {
 			pins = "GMAC0_RX_CLK",
 			       "GMAC0_RXDV",
@@ -140,24 +128,24 @@
 			input-schmitt-disable;
 			slew-rate = <0>;
 		};
-	};
 
-	gmac1_pins: gmac1-0 {
 		tx-pins {
-			pins = "GPIO2_18", /* GMAC1_TX_CLK */
-			       "GPIO2_20", /* GMAC1_TXEN */
-			       "GPIO2_21", /* GMAC1_TXD0 */
-			       "GPIO2_22", /* GMAC1_TXD1 */
-			       "GPIO2_23", /* GMAC1_TXD2 */
-			       "GPIO2_24"; /* GMAC1_TXD3 */
-			function = "gmac1";
+			pins = "GMAC0_TX_CLK",
+			       "GMAC0_TXEN",
+			       "GMAC0_TXD0",
+			       "GMAC0_TXD1",
+			       "GMAC0_TXD2",
+			       "GMAC0_TXD3";
+			function = "gmac0";
 			bias-disable;
 			drive-strength = <25>;
 			input-disable;
 			input-schmitt-disable;
 			slew-rate = <0>;
 		};
+	};
 
+	gmac1_pins: gmac1-0 {
 		rx-pins {
 			pins = "GPIO2_19", /* GMAC1_RX_CLK */
 			       "GPIO2_25", /* GMAC1_RXDV */
@@ -169,6 +157,21 @@
 			bias-disable;
 			drive-strength = <1>;
 			input-enable;
+			input-schmitt-disable;
+			slew-rate = <0>;
+		};
+
+		tx-pins {
+			pins = "GPIO2_18", /* GMAC1_TX_CLK */
+			       "GPIO2_20", /* GMAC1_TXEN */
+			       "GPIO2_21", /* GMAC1_TXD0 */
+			       "GPIO2_22", /* GMAC1_TXD1 */
+			       "GPIO2_23", /* GMAC1_TXD2 */
+			       "GPIO2_24"; /* GMAC1_TXD3 */
+			function = "gmac1";
+			bias-disable;
+			drive-strength = <25>;
+			input-disable;
 			input-schmitt-disable;
 			slew-rate = <0>;
 		};
@@ -200,5 +203,6 @@
 &sdio0 {
 	bus-width = <4>;
 	max-frequency = <198000000>;
+
 	status = "okay";
 };
