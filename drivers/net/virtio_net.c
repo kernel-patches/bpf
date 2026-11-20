@@ -134,6 +134,7 @@ struct virtnet_rq_stats {
 	u64_stats_t xdp_redirects;
 	u64_stats_t xdp_drops;
 	u64_stats_t kicks;
+	u64_stats_t stalls;
 };
 
 #define VIRTNET_SQ_STAT(name, m) {name, offsetof(struct virtnet_sq_stats, m), -1}
@@ -167,6 +168,7 @@ static const struct virtnet_stat_desc virtnet_rq_stats_desc[] = {
 	VIRTNET_RQ_STAT("xdp_redirects", xdp_redirects),
 	VIRTNET_RQ_STAT("xdp_drops",     xdp_drops),
 	VIRTNET_RQ_STAT("kicks",         kicks),
+	VIRTNET_RQ_STAT("stalls",   stalls),
 };
 
 static const struct virtnet_stat_desc virtnet_sq_stats_desc_qstat[] = {
@@ -3003,6 +3005,12 @@ static int virtnet_receive(struct receive_queue *rq, int budget,
 		item = (u64_stats_t *)((u8 *)&rq->stats + offset);
 		src = (u64_stats_t *)((u8 *)&stats + offset);
 		u64_stats_add(item, u64_stats_read(src));
+	}
+
+	/* Count a stall recovered by this poll. */
+	if (rq->watchdog.stalled) {
+		u64_stats_inc(&rq->stats.stalls);
+		rq->watchdog.stalled = false;
 	}
 
 	u64_stats_add(&rq->stats.packets, u64_stats_read(&stats.packets));
