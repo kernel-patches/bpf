@@ -270,16 +270,6 @@ static int axi_pwmgen_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(regmap),
 				     "failed to init register map\n");
 
-	ret = axi_pwmgen_setup(regmap, dev);
-	if (ret < 0)
-		return ret;
-
-	chip = devm_pwmchip_alloc(dev, ret, sizeof(*ddata));
-	if (IS_ERR(chip))
-		return PTR_ERR(chip);
-	ddata = pwmchip_get_drvdata(chip);
-	ddata->regmap = regmap;
-
 	/*
 	 * Using NULL here instead of "axi" for backwards compatibility. There
 	 * are some dtbs that don't give clock-names and have the "ext" clock
@@ -304,6 +294,16 @@ static int axi_pwmgen_probe(struct platform_device *pdev)
 	ret = devm_clk_rate_exclusive_get(dev, clk);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to get exclusive rate\n");
+
+	ret = axi_pwmgen_setup(regmap, dev);
+	if (ret < 0)
+		return ret;
+
+	chip = devm_pwmchip_alloc(dev, ret, sizeof(*ddata));
+	if (IS_ERR(chip))
+		return PTR_ERR(chip);
+	ddata = pwmchip_get_drvdata(chip);
+	ddata->regmap = regmap;
 
 	ddata->clk_rate_hz = clk_get_rate(clk);
 	if (!ddata->clk_rate_hz || ddata->clk_rate_hz > NSEC_PER_SEC)
