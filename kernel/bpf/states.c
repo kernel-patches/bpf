@@ -4,6 +4,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/cnum.h>
 #include <linux/filter.h>
+#include <linux/siphash.h>
 
 /* check %cur's range satisfies %old's */
 static bool range_within(const struct scalar *old, const struct scalar *cur)
@@ -37,6 +38,11 @@ static bool range_within(const struct scalar *old, const struct scalar *cur)
 bool scalar_subsumes(const struct scalar *old, const struct scalar *cur)
 {
 	return range_within(old, cur) && tnum_in(old->var_off, cur->var_off);
+}
+
+bool bpf_scalar_subsumes(const struct bpf_reg_state *old, const struct bpf_reg_state *cur)
+{
+	return scalar_subsumes(scalar_of(old), scalar_of(cur));
 }
 
 static void renumber_id(struct bpf_verifier_env *env, u32 *id, u32 new_id)
@@ -114,6 +120,51 @@ int bpf_renumber_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st
 		return 0;
 	bpf_log(&env->log, "too many ids\n");
 	return -E2BIG;
+}
+
+bool bpf_add_pkt_pair(struct bpf_verifier_env *env, const struct bpf_pkt_pair *pair)
+{
+	if (!bpf_grow_array(env, &env->pkt_pairs, &env->pkt_pair_cap, env->pkt_pair_cnt + 1,
+			    sizeof(*pair)))
+		return false;
+	env->pkt_pairs[env->pkt_pair_cnt++] = *pair;
+	return true;
+}
+
+/* Packet pointers that share an id in the old state share one in the new state, as far apart */
+static bool check_pkt_ids(struct bpf_verifier_env *env, const struct bpf_reg_state *rold,
+			  const struct bpf_reg_state *rcur)
+{
+	struct bpf_pkt_pair pair = { rold->id, rcur->id, rcur->r64.base - rold->r64.base };
+	const struct bpf_pkt_pair *p = env->pkt_pairs;
+
+	if (!rold->id)
+		return !rcur->id;
+	bpf_add_cost(env, env->pkt_pair_cnt, BPF_COST_SCAN);
+	for (; p < env->pkt_pairs + env->pkt_pair_cnt; p++)
+		if (p->old == pair.old)
+			return p->cur == pair.cur && p->delta == pair.delta;
+	return bpf_add_pkt_pair(env, &pair);
+}
+
+/*
+ * The bytes that are checked for @rold are checked for @rcur. This matters even if the range
+ * is below the offset: the program can move the pointer back.
+ */
+static bool pkt_range_safe(const struct bpf_reg_state *rold, const struct bpf_reg_state *rcur)
+{
+	if (pkt_min_len(rold) > pkt_min_len(rcur))
+		return false;
+	/* the range tells no more than pkt_min_len() */
+	if (!rold->range || rold->range == pkt_min_len(rold))
+		return true;
+	/* AT_PKT_END or BEYOND_PKT_END */
+	if (rold->range < 0 || rcur->range < 0)
+		return rold->range == rcur->range;
+	if (pkt_has_bytes_left(rold) && pkt_has_bytes_left(rcur))
+		return pkt_bytes_left(rold) <= pkt_bytes_left(rcur);
+	return rold->range <= rcur->range && rold->r64.base == rcur->r64.base &&
+	       rold->r64.size == rcur->r64.size;
 }
 
 static void __clean_func_state(struct bpf_verifier_env *env,
@@ -228,6 +279,50 @@ int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 	return bpf_renumber_ids(env, st);
 }
 
+/*
+ * Values of one type and object differ only in a number: the value of a scalar, the offset
+ * of a pointer.
+ *
+ * Types have to match exactly, including their modifiers (like PTR_MAYBE_NULL, MEM_RDONLY, etc).
+ * A pointer is not a number: numbers are allowed to leak while pointers are not. A pointer is
+ * not its MAYBE_NULL variant: a NULL check changes all xregs with the same id.
+ */
+bool bpf_same_type_and_object(struct bpf_verifier_env *env, const struct bpf_reg_state *a,
+			      const struct bpf_reg_state *b)
+{
+	if (a->type != b->type)
+		return false;
+	if (a->type == SCALAR_VALUE || a->type == NOT_INIT || type_is_pkt_pointer(a->type) ||
+	    base_type(a->type) == PTR_TO_ARENA)
+		return true;
+	if (!reg_object_equal(a, b))
+		return false;
+	/* Only what an insn can make: see check_stack_access_for_ptr_arithmetic() */
+	if (bpf_reg_has_range(a) && (a->type != PTR_TO_STACK || env->bypass_spec_v1))
+		return true;
+	return scalar_equal(scalar_of(a), scalar_of(b));
+}
+
+/* Returns true if (rold safe implies rcur safe) */
+static bool regsafe(struct bpf_verifier_env *env, const struct bpf_reg_state *rold,
+		    const struct bpf_reg_state *rcur)
+{
+	bpf_add_cost(env, 1, BPF_COST_XREG);
+	if (rold->type == NOT_INIT)
+		/* nothing can be done with it */
+		return true;
+	if (!rcur || !bpf_same_type_and_object(env, rold, rcur))
+		return false;
+	/* The offset is not tracked. */
+	if (base_type(rold->type) == PTR_TO_ARENA)
+		return true;
+	if (type_is_pkt_pointer(rold->type) &&
+	    (!pkt_range_safe(rold, rcur) || !check_pkt_ids(env, rold, rcur)))
+		return false;
+	/* new val must satisfy old val knowledge */
+	return bpf_scalar_subsumes(rold, rcur);
+}
+
 static struct bpf_reg_state unbound_reg;
 
 static __init int unbound_reg_init(void)
@@ -272,7 +367,7 @@ static struct bpf_reg_state *scalar_reg_for_stack(struct bpf_verifier_env *env,
 }
 
 static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
-		      struct bpf_func_state *cur, struct bpf_idmap *idmap)
+		      struct bpf_func_state *cur)
 {
 	int i, spi;
 
@@ -287,12 +382,20 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		int im = i % BPF_REG_SIZE;
 		u8 old_type;
 
+		bpf_add_cost(env, 1, BPF_COST_SCAN);
 		spi = i / BPF_REG_SIZE;
 		old_slot = bpf_stack_slot(old, spi);
 		old_type = old_slot->slot_type[im];
 		cur_slot = i < cur->allocated_stack ? bpf_stack_slot(cur, spi) : NULL;
 
 		if (old_type == STACK_INVALID || old_type == STACK_POISON)
+			continue;
+
+		/* it can be filled into a register that is unreadable */
+		if (old_type == STACK_SPILL && old_slot->spilled_ptr.type == NOT_INIT &&
+		    (env->allow_uninit_stack ||
+		     (cur_slot && cur_slot->slot_type[im] != STACK_INVALID &&
+		      cur_slot->slot_type[im] != STACK_POISON)))
 			continue;
 
 		if (env->allow_uninit_stack && old_type == STACK_MISC)
@@ -320,7 +423,7 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			old_reg = scalar_reg_for_stack(env, old_slot, im);
 			cur_reg = scalar_reg_for_stack(env, cur_slot, im);
 			if (old_reg && cur_reg) {
-				if (!regsafe(env, old_reg, cur_reg, idmap))
+				if (!regsafe(env, old_reg, cur_reg))
 					return false;
 				i += (im == 0 ? BPF_REG_SIZE - 1 : 3);
 				continue;
@@ -331,7 +434,12 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		 * it will be safe with zero-initialized stack.
 		 * The opposite is not true
 		 */
-		if (old_type == STACK_MISC && cur_slot->slot_type[im] == STACK_ZERO)
+		if (old_type == STACK_MISC &&
+		    (cur_slot->slot_type[im] == STACK_ZERO ||
+		     is_spilled_scalar_after(cur_slot, im)))
+			continue;
+		if (old_type == STACK_ZERO && is_spilled_scalar_after(cur_slot, im) &&
+		    bpf_register_is_null(&cur_slot->spilled_ptr))
 			continue;
 		if (old_type != cur_slot->slot_type[im])
 			/*
@@ -355,34 +463,13 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			 * (bpf_reg_state) {.type = PTR_TO_STACK, .off = -16}
 			 * such verifier states are not equivalent.
 			 */
-			if (!regsafe(env, &old_slot->spilled_ptr, &cur_slot->spilled_ptr, idmap))
+			if (!regsafe(env, &old_slot->spilled_ptr, &cur_slot->spilled_ptr))
 				return false;
 			break;
 		case STACK_DYNPTR:
-			old_reg = &old_slot->spilled_ptr;
-			cur_reg = &cur_slot->spilled_ptr;
-			if (old_reg->dynptr.type != cur_reg->dynptr.type ||
-			    old_reg->dynptr.first_slot != cur_reg->dynptr.first_slot ||
-			    !check_ids(old_reg->id, cur_reg->id, idmap) ||
-			    !check_ids(old_reg->parent_id, cur_reg->parent_id, idmap))
-				return false;
-			break;
 		case STACK_ITER:
-			old_reg = &old_slot->spilled_ptr;
-			cur_reg = &cur_slot->spilled_ptr;
-			if (old_reg->type != cur_reg->type ||
-			    old_reg->iter.btf != cur_reg->iter.btf ||
-			    old_reg->iter.btf_id != cur_reg->iter.btf_id ||
-			    old_reg->iter.state != cur_reg->iter.state ||
-			    old_reg->iter.loops != cur_reg->iter.loops ||
-			    !check_ids(old_reg->id, cur_reg->id, idmap))
-				return false;
-			break;
 		case STACK_IRQ_FLAG:
-			old_reg = &old_slot->spilled_ptr;
-			cur_reg = &cur_slot->spilled_ptr;
-			if (!check_ids(old_reg->id, cur_reg->id, idmap) ||
-			    old_reg->irq.kfunc_class != cur_reg->irq.kfunc_class)
+			if (!reg_object_equal(&old_slot->spilled_ptr, &cur_slot->spilled_ptr))
 				return false;
 			break;
 		case STACK_MISC:
@@ -395,6 +482,114 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			return false;
 		}
 	}
+	return true;
+}
+
+static const struct bpf_stack_state *held_slot(const struct bpf_func_state *f, u32 i)
+{
+	return i < bpf_stack_nr_slots(f) && bpf_slot_is_held(bpf_stack_slot(f, i)) ?
+	       bpf_stack_slot(f, i) : NULL;
+}
+
+static bool same_refs(const struct bpf_verifier_state *a, const struct bpf_verifier_state *b)
+{
+	u32 i;
+
+	for (i = 0; i < a->acquired_refs; i++)
+		if (a->refs[i].type != b->refs[i].type || a->refs[i].id != b->refs[i].id ||
+		    memcmp(&a->refs[i].ptr, &b->refs[i].ptr, sizeof(u64)))
+			return false;
+	return true;
+}
+
+/*
+ * The join_key of a state is what has no join:
+ * - what is held: references, locks, dynptrs, iterators, irq flags
+ * - the call chain and the instance
+ * - the peeled trip
+ */
+bool bpf_same_join_key(const struct bpf_verifier_state *a, const struct bpf_verifier_state *b)
+{
+	const struct bpf_stack_state *sa, *sb;
+	const struct loop_stack_entry *ea, *eb;
+	const struct bpf_func_state *fa, *fb;
+	u32 fr, i;
+
+	if (memcmp(&a->join_key, &b->join_key, sizeof(a->join_key)) ||
+	    a->instance_id != b->instance_id || !same_refs(a, b))
+		return false;
+	for (fr = 0; fr <= a->curframe; fr++) {
+		fa = a->frame[fr];
+		fb = b->frame[fr];
+		if (memcmp(&fa->join_key, &fb->join_key, sizeof(fa->join_key)) ||
+		    fa->loop_stack_cnt != fb->loop_stack_cnt)
+			return false;
+		for (i = 0; i < fa->loop_stack_cnt; i++) {
+			ea = &fa->loop_stack[i];
+			eb = &fb->loop_stack[i];
+			if (ea->loop != eb->loop || ea->peeled != eb->peeled ||
+			    (ea->peeled && ea->trip != eb->trip))
+				return false;
+		}
+		for (i = 0; i < max(bpf_stack_nr_slots(fa), bpf_stack_nr_slots(fb)); i++) {
+			sa = held_slot(fa, i);
+			sb = held_slot(fb, i);
+			if (!sa != !sb || (sa && (sa->slot_type[0] != sb->slot_type[0] ||
+						  !reg_object_equal(&sa->spilled_ptr,
+								    &sb->spilled_ptr))))
+				return false;
+		}
+	}
+	return true;
+}
+
+u64 bpf_hash64(const void *p, size_t len, u64 hash)
+{
+	siphash_key_t key = {{ hash }};
+
+	return siphash(p, len, &key);
+}
+
+/*
+ * The hash of the join_key and of the insn. The seed is random, so a program cannot select
+ * states that collide. Only a collision can change a result.
+ */
+u64 bpf_hash_join_key(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st)
+{
+	u64 hash = bpf_hash64(&st->join_key, sizeof(st->join_key), env->hash_seed +
+			      ((u64)st->instance_id << 32 | st->insn_idx));
+	u32 fr, i, trip;
+	const struct bpf_stack_state *slot;
+	const struct loop_stack_entry *e;
+	const struct bpf_func_state *f;
+
+	for (i = 0; i < st->acquired_refs; i++)
+		hash = bpf_hash64(&st->refs[i].ptr, sizeof(u64), hash + st->refs[i].type);
+	for (fr = 0; fr <= st->curframe; fr++) {
+		f = st->frame[fr];
+		hash = bpf_hash64(&f->join_key, sizeof(f->join_key), hash);
+		for (i = 0, e = f->loop_stack; i < f->loop_stack_cnt; i++, e++) {
+			trip = e->peeled ? e->trip : -1;
+			hash = bpf_hash64(&trip, sizeof(trip), hash);
+		}
+		for (i = 0; i < bpf_stack_nr_slots(f); i++) {
+			slot = held_slot(f, i);
+			if (!slot)
+				continue;
+			hash = bpf_hash64(&slot->spilled_ptr,
+					  offsetof(struct bpf_reg_state, var_off), hash + i);
+		}
+	}
+	return hash;
+}
+
+static bool loop_stack_safe(struct bpf_func_state *old, struct bpf_func_state *cur)
+{
+	u32 i;
+
+	for (i = 0; i < old->loop_stack_cnt; i++)
+		if (!trip_index_safe(&old->loop_stack[i], &cur->loop_stack[i]))
+			return false;
 	return true;
 }
 
@@ -418,56 +613,30 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before;
 	u16 i;
 
-	if (old->callback_depth > cur->callback_depth)
-		return false;
-
-	if (!old->no_stack_arg_load && cur->no_stack_arg_load)
-		return false;
-
-	if (memcmp(&old->callback_ret_range, &cur->callback_ret_range,
-		   sizeof(old->callback_ret_range)))
-		return false;
-
-	if (old->in_rcu_callback_fn != cur->in_rcu_callback_fn)
-		return false;
-
-	/* what the frame did to what its callers hold is a part of what it tells them */
-	if (old->entry_refs != cur->entry_refs ||
-	    old->entry_rcu_locks != cur->entry_rcu_locks ||
-	    old->entry_preempt_locks != cur->entry_preempt_locks)
-		return false;
-
-	if (!check_ids(old->frame_id, cur->frame_id, &env->idmap_scratch))
+	if (old->callback_depth > cur->callback_depth ||
+	    (!old->no_stack_arg_load && cur->no_stack_arg_load) ||
+	    !loop_stack_safe(old, cur))
 		return false;
 
 	for (i = 0; i < MAX_BPF_REG; i++)
-		if (((1 << i) & live_regs) &&
-		    !regsafe(env, &old->regs[i], &cur->regs[i], &env->idmap_scratch))
+		if ((live_regs & BIT(i)) && !regsafe(env, &old->regs[i], &cur->regs[i]))
 			return false;
 
-	if (!stacksafe(env, old, cur, &env->idmap_scratch))
-		return false;
+	/* outgoing stack args are a part of the state and must agree */
+	for (i = 0; i < old->out_stack_arg_cnt; i++)
+		if (!regsafe(env, &old->stack_arg_regs[i], bpf_stack_arg(cur, old, i)))
+			return false;
 
-	if (!stack_arg_safe(env, old, cur, &env->idmap_scratch))
-		return false;
-
-	if (!loop_stack_safe(env, old, cur))
-		return false;
-
-	return true;
+	return stacksafe(env, old, cur);
 }
 
-/* Everything that @cur describes is described by @old. */
-bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state *old,
-			struct bpf_verifier_state *cur)
+/* @old describes all that @cur describes. They have the same join_key. */
+bool bpf_state_subsumes(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			const struct bpf_verifier_state *cur)
 {
-	u32 insn_idx;
 	int i;
 
-	if (old->curframe != cur->curframe)
-		return false;
-
-	reset_idmap_scratch(env);
+	env->pkt_pair_cnt = 0;
 
 	/* Verification state from speculative execution simulation
 	 * must never stand for a non-speculative execution one.
@@ -475,28 +644,10 @@ bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state 
 	if (old->speculative && !cur->speculative)
 		return false;
 
-	if (old->callers_unknown != cur->callers_unknown)
-		return false;
-
-	if (old->in_sleepable != cur->in_sleepable)
-		return false;
-
-	if (old->unwound != cur->unwound || old->changed_pkt_data != cur->changed_pkt_data)
-		return false;
-
-	if (!refsafe(old, cur, &env->idmap_scratch))
-		return false;
-
-	/* for states to be equal callsites have to be the same
-	 * and all frame states need to be equivalent
-	 */
-	for (i = 0; i <= old->curframe; i++) {
-		insn_idx = bpf_frame_insn_idx(old, i);
-		if (old->frame[i]->callsite != cur->frame[i]->callsite)
+	for (i = 0; i <= old->curframe; i++)
+		if (!func_states_equal(env, old->frame[i], cur->frame[i],
+				       bpf_frame_insn_idx(old, i)))
 			return false;
-		if (!func_states_equal(env, old->frame[i], cur->frame[i], insn_idx))
-			return false;
-	}
 
 	return true;
 }
