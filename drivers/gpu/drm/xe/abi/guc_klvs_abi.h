@@ -169,6 +169,13 @@ enum  {
  *      This flag will enable notification from GuC to KMD via G2H message
  *      GUC_ACTION_GUC2HOST_NOTIFY_UNCORRECTABLE_LOCAL_ERROR upon receiving the
  *      same interrupt from the CS.
+ *
+ * _`GUC_KLV_OPT_IN_FEATURE_SEMAPHORE_INSTRUCTION_FIELDS_CHECK` : 0x400A
+ *      This flag will enable the GuC to check for unsupported values in the
+ *      semaphore instruction token info metadata field when GuC receives it
+ *      from the CSB. If the check fails, the GuC removes the context, marks it
+ *      as not runnable and notifies the driver via G2H message
+ *      GUC_ACTION_GUC2HOST_CONTEXT_INVALID_SEMAPHORE_INSTRUCTION_FIELD.
  */
 
 #define GUC_KLV_OPT_IN_FEATURE_EXT_CAT_ERR_TYPE_KEY 0x4001
@@ -179,6 +186,9 @@ enum  {
 
 #define GUC_KLV_OPT_IN_FEATURE_UNCORRECTABLE_LOCAL_ERROR_NOTIFICATION_KEY 0x4004
 #define GUC_KLV_OPT_IN_FEATURE_UNCORRECTABLE_LOCAL_ERROR_NOTIFICATION_LEN 0u
+
+#define GUC_KLV_OPT_IN_FEATURE_SEMAPHORE_INSTRUCTION_FIELDS_CHECK_KEY 0x400A
+#define GUC_KLV_OPT_IN_FEATURE_SEMAPHORE_INSTRUCTION_FIELDS_CHECK_LEN 0u
 
 /**
  * DOC: GuC Scheduling Policies KLVs

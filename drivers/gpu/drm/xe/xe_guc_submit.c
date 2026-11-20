@@ -3781,6 +3781,52 @@ int xe_guc_exec_queue_cgp_sync_done_handler(struct xe_guc *guc, u32 *msg, u32 le
 	return 0;
 }
 
+/**
+ * xe_guc_context_invalid_semaphore_instruction_field_handler - Invalid semaphore field handler
+ * @guc: guc
+ * @msg: message indicating which context failed the field check
+ * @len: length of message
+ *
+ * The GuC has detected an unsupported SW Token Info value in a 64 bit semaphore
+ * instruction and has already removed the offending context and marked it as
+ * not runnable, so trigger reset-cleanup on the queue to match the state GuC
+ * already applied.
+ *
+ * Return: 0 on success, -EPROTO for malformed messages.
+ */
+int xe_guc_context_invalid_semaphore_instruction_field_handler(struct xe_guc *guc,
+							       u32 *msg, u32 len)
+{
+	struct xe_gt *gt = guc_to_gt(guc);
+	struct xe_exec_queue *q;
+	u32 guc_id, type;
+	u64 token, data;
+
+	if (unlikely(len != 8))
+		return -EPROTO;
+
+	guc_id = msg[0];
+
+	token = (u64)msg[4] << 32 | msg[3];
+	type  = msg[5];
+	data  = (u64)msg[7] << 32 | msg[6];
+
+	q = g2h_exec_queue_lookup(guc, guc_id);
+	if (unlikely(!q))
+		return -EPROTO;
+
+	xe_gt_info(gt,
+		   "GuC: invalid semaphore instruction field! guc_id=%d, type=%u, token=0x%llx, data=0x%llx",
+		   guc_id, type, token, data);
+
+	trace_xe_guc_invalid_semaphore_instruction_field(q);
+
+	/* Treat the same as engine reset */
+	xe_guc_exec_queue_reset_trigger_cleanup(q);
+
+	return 0;
+}
+
 static void
 guc_exec_queue_wq_snapshot_capture(struct xe_exec_queue *q,
 				   struct xe_guc_submit_exec_queue_snapshot *snapshot)
