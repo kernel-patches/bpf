@@ -2165,8 +2165,16 @@ struct migrate_test_params {
  */
 void xe_migrate_wait(struct xe_migrate *m)
 {
-	if (m->fence)
-		dma_fence_wait(m->fence, false);
+	struct dma_fence *fence;
+
+	mutex_lock(&m->job_mutex);
+	fence = dma_fence_get(m->fence);
+	mutex_unlock(&m->job_mutex);
+
+	if (fence) {
+		dma_fence_wait(fence, false);
+		dma_fence_put(fence);
+	}
 }
 
 static u32 pte_update_cmd_size(u64 size)
