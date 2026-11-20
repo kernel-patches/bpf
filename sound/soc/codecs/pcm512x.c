@@ -7,6 +7,7 @@
  */
 
 #include <linux/cleanup.h>
+#include <linux/gpio/consumer.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/clk.h>
@@ -31,6 +32,7 @@ static const char * const pcm512x_supply_names[PCM512x_NUM_SUPPLIES] = {
 
 struct pcm512x_priv {
 	struct regmap *regmap;
+	struct gpio_desc *mute_gpio;
 	struct clk *sclk;
 	struct regulator_bulk_data supplies[PCM512x_NUM_SUPPLIES];
 	struct notifier_block supply_nb[PCM512x_NUM_SUPPLIES];
@@ -1463,6 +1465,7 @@ static int pcm512x_mute(struct snd_soc_dai *dai, int mute, int direction)
 	guard(mutex)(&pcm512x->mutex);
 
 	if (mute) {
+		gpiod_set_value_cansleep(pcm512x->mute_gpio, 1);
 		pcm512x->mute |= 0x1;
 		ret = regmap_update_bits(pcm512x->regmap, PCM512x_MUTE,
 					 PCM512x_RQML | PCM512x_RQMR,
@@ -1485,6 +1488,8 @@ static int pcm512x_mute(struct snd_soc_dai *dai, int mute, int direction)
 				"Failed to update digital mute: %d\n", ret);
 			return ret;
 		}
+
+		gpiod_set_value_cansleep(pcm512x->mute_gpio, 0);
 
 		regmap_read_poll_timeout(pcm512x->regmap,
 					 PCM512x_ANALOG_MUTE_DET,
@@ -1581,6 +1586,10 @@ int pcm512x_probe(struct device *dev, struct regmap *regmap)
 
 	dev_set_drvdata(dev, pcm512x);
 	pcm512x->regmap = regmap;
+	pcm512x->mute_gpio = devm_gpiod_get_optional(dev, "mute", GPIOD_OUT_HIGH);
+	if (IS_ERR(pcm512x->mute_gpio))
+		return dev_err_probe(dev, PTR_ERR(pcm512x->mute_gpio),
+				     "Failed to get mute GPIO\n");
 
 	for (i = 0; i < ARRAY_SIZE(pcm512x->supplies); i++)
 		pcm512x->supplies[i].supply = pcm512x_supply_names[i];
@@ -1771,24 +1780,31 @@ static int pcm512x_resume(struct device *dev)
 				    pcm512x->supplies);
 	if (ret != 0) {
 		dev_err(dev, "Failed to enable supplies: %d\n", ret);
-		return ret;
+		goto err_sclk;
 	}
 
 	regcache_cache_only(pcm512x->regmap, false);
 	ret = regcache_sync(pcm512x->regmap);
 	if (ret != 0) {
 		dev_err(dev, "Failed to sync cache: %d\n", ret);
-		return ret;
+		goto err_supplies;
 	}
 
 	ret = regmap_update_bits(pcm512x->regmap, PCM512x_POWER,
 				 PCM512x_RQPD, 0);
 	if (ret != 0) {
 		dev_err(dev, "Failed to remove power down: %d\n", ret);
-		return ret;
+		goto err_supplies;
 	}
 
 	return 0;
+
+err_supplies:
+	regulator_bulk_disable(ARRAY_SIZE(pcm512x->supplies), pcm512x->supplies);
+err_sclk:
+	if (!IS_ERR(pcm512x->sclk))
+		clk_disable_unprepare(pcm512x->sclk);
+	return ret;
 }
 
 EXPORT_GPL_DEV_PM_OPS(pcm512x_pm_ops) = {

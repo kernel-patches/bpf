@@ -944,7 +944,7 @@ static int mca_set_runtime_hwparams(struct snd_soc_component *component,
 				    struct snd_pcm_substream *substream,
 				    struct dma_chan *chan)
 {
-	struct device *dma_dev = chan->device->dev;
+	struct device *dma_dev = dmaengine_get_dma_device(chan);
 	struct snd_dmaengine_dai_dma_data dma_data = {};
 	int ret;
 
@@ -1127,7 +1127,7 @@ static int mca_pcm_new(struct snd_soc_component *component,
 
 		cl->dma_chans[i] = chan;
 		snd_pcm_set_managed_buffer(substream, SNDRV_DMA_TYPE_DEV_IRAM,
-					   chan->device->dev, 512 * 1024 * 6,
+					   dmaengine_get_dma_device(chan), 512 * 1024 * 6,
 					   SIZE_MAX);
 	}
 

@@ -1466,6 +1466,7 @@ struct rt5682_priv {
 
 	int jack_type;
 	int irq;
+	bool suspend_irq_disabled;
 	int irq_work_delay_time;
 };
 
@@ -1481,7 +1482,6 @@ void rt5682_jack_detect_handler(struct work_struct *work);
 bool rt5682_volatile_register(struct device *dev, unsigned int reg);
 bool rt5682_readable_register(struct device *dev, unsigned int reg);
 
-int rt5682_register_component(struct device *dev);
 void rt5682_calibrate(struct rt5682_priv *rt5682);
 void rt5682_reset(struct rt5682_priv *rt5682);
 int rt5682_parse_dt(struct rt5682_priv *rt5682, struct device *dev);

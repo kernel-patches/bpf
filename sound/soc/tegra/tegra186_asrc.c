@@ -19,6 +19,9 @@
 #include "tegra186_asrc.h"
 #include "tegra_cif.h"
 
+#define TEGRA186_ASRC_RATIO_PERCENT_SCALE		100
+#define TEGRA186_ASRC_RATIO_UNLOCK_THRESHOLD_PERCENT	20
+
 #define ASRC_STREAM_SOURCE_SELECT(id)					       \
 	(TEGRA186_ASRC_CFG + ((id) * TEGRA186_ASRC_STREAM_STRIDE))
 
@@ -65,13 +68,133 @@ static const struct reg_default tegra186_asrc_reg_defaults[] = {
 	{ TEGRA186_ASRC_CYA, 0x0},
 };
 
-static void tegra186_asrc_lock_stream(struct tegra186_asrc *asrc,
-				      unsigned int id)
+static int tegra186_asrc_set_stream_lock(struct tegra186_asrc *asrc,
+					 unsigned int id, bool lock)
 {
-	regmap_write(asrc->regmap,
-		     ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_LOCK_STATUS,
-				     id),
-		     1);
+	return regmap_write(asrc->regmap,
+			    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_LOCK_STATUS,
+					    id),
+			    lock);
+}
+
+static int tegra186_asrc_write_ratio_pair(struct tegra186_asrc *asrc,
+					  unsigned int id,
+					  unsigned int int_part,
+					  unsigned int frac_part)
+{
+	int ret;
+
+	ret = regmap_write(asrc->regmap,
+			   ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, id),
+			   int_part);
+	if (ret)
+		return ret;
+
+	return regmap_write(asrc->regmap,
+			    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, id),
+			    frac_part);
+}
+
+static int tegra186_asrc_read_ratio_pair(struct tegra186_asrc *asrc,
+					 unsigned int id, unsigned int *int_part,
+					 unsigned int *frac_part)
+{
+	int ret;
+
+	ret = regmap_read(asrc->regmap,
+			  ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, id),
+			  int_part);
+	if (ret)
+		return ret;
+
+	return regmap_read(asrc->regmap,
+			   ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, id),
+			   frac_part);
+}
+
+static void tegra186_asrc_cache_ratio(struct tegra186_asrc *asrc,
+				      unsigned int id, unsigned int int_part,
+				      unsigned int frac_part)
+{
+	asrc->lane[id].int_part = int_part;
+	asrc->lane[id].frac_part = frac_part;
+	asrc->lane[id].ratio_valid = true;
+}
+
+static int tegra186_asrc_apply_ratio(struct tegra186_asrc *asrc,
+				     unsigned int id, unsigned int int_part,
+				     unsigned int frac_part, bool unlock)
+{
+	unsigned int old_int_part, old_frac_part, old_lock;
+	int ret, restore_ret;
+
+	ret = tegra186_asrc_read_ratio_pair(asrc, id, &old_int_part,
+					    &old_frac_part);
+	if (ret)
+		return ret;
+
+	ret = regmap_read(asrc->regmap,
+			  ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_LOCK_STATUS, id),
+			  &old_lock);
+	if (ret)
+		return ret;
+
+	if (unlock) {
+		ret = tegra186_asrc_set_stream_lock(asrc, id, false);
+		if (ret)
+			return ret;
+	}
+
+	ret = tegra186_asrc_write_ratio_pair(asrc, id, int_part, frac_part);
+	if (ret)
+		goto restore_ratio;
+
+	ret = tegra186_asrc_set_stream_lock(asrc, id, true);
+	if (!ret)
+		return 0;
+
+restore_ratio:
+	restore_ret = tegra186_asrc_write_ratio_pair(asrc, id,
+						     old_int_part,
+						     old_frac_part);
+	if (!restore_ret) {
+		if (old_lock)
+			restore_ret = tegra186_asrc_set_stream_lock(asrc, id,
+								    true);
+		else
+			restore_ret = tegra186_asrc_set_stream_lock(asrc, id,
+								    false);
+	}
+
+	return ret ?: restore_ret;
+}
+
+static int tegra186_asrc_apply_cached_ratio(struct tegra186_asrc *asrc,
+					    unsigned int id)
+{
+	int ret;
+
+	ret = tegra186_asrc_apply_ratio(asrc, id, asrc->lane[id].int_part,
+					asrc->lane[id].frac_part,
+					!asrc->lane[id].ratio_valid);
+	if (!ret)
+		asrc->lane[id].ratio_valid = true;
+
+	return ret;
+}
+
+static bool tegra186_asrc_need_unlock(u64 old_ratio, u64 new_ratio)
+{
+	u64 ratio_diff;
+
+	if (!old_ratio || !new_ratio)
+		return false;
+
+	ratio_diff = (old_ratio > new_ratio) ?
+		     (old_ratio - new_ratio) : (new_ratio - old_ratio);
+
+	return ((ratio_diff * TEGRA186_ASRC_RATIO_PERCENT_SCALE) >
+		(old_ratio * TEGRA186_ASRC_RATIO_UNLOCK_THRESHOLD_PERCENT));
 }
 
 static int tegra186_asrc_runtime_suspend(struct device *dev)
@@ -87,7 +210,7 @@ static int tegra186_asrc_runtime_suspend(struct device *dev)
 static int tegra186_asrc_runtime_resume(struct device *dev)
 {
 	struct tegra186_asrc *asrc = dev_get_drvdata(dev);
-	int id;
+	int id, ret, first_err = 0;
 
 	regcache_cache_only(asrc->regmap, false);
 
@@ -103,25 +226,23 @@ static int tegra186_asrc_runtime_resume(struct device *dev)
 
 	regcache_sync(asrc->regmap);
 
+	mutex_lock(&asrc->ratio_lock);
 	for (id = 0; id < TEGRA186_ASRC_STREAM_MAX; id++) {
 		if (asrc->lane[id].ratio_source !=
 		    TEGRA186_ASRC_RATIO_SOURCE_SW)
 			continue;
 
-		regmap_write(asrc->regmap,
-			ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART,
-					id),
-			asrc->lane[id].int_part);
-
-		regmap_write(asrc->regmap,
-			ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART,
-					id),
-			asrc->lane[id].frac_part);
-
-		tegra186_asrc_lock_stream(asrc, id);
+		ret = tegra186_asrc_apply_cached_ratio(asrc, id);
+		if (ret) {
+			dev_err(dev, "Failed to restore ratio for lane %d: %d\n",
+				id, ret);
+			if (!first_err)
+				first_err = ret;
+		}
 	}
+	mutex_unlock(&asrc->ratio_lock);
 
-	return 0;
+	return first_err;
 }
 
 static int tegra186_asrc_set_audio_cif(struct tegra186_asrc *asrc,
@@ -186,7 +307,7 @@ static int tegra186_asrc_out_hw_params(struct snd_pcm_substream *substream,
 {
 	struct device *dev = dai->dev;
 	struct tegra186_asrc *asrc = snd_soc_dai_get_drvdata(dai);
-	int ret, id = dai->id - 7;
+	int ret = 0, id = dai->id - 7;
 
 	 /* Set output threshold */
 	regmap_write(asrc->regmap,
@@ -217,20 +338,22 @@ static int tegra186_asrc_out_hw_params(struct snd_pcm_substream *substream,
 			TEGRA186_ASRC_STREAM_DEFAULT_HW_COMP_BIAS_VALUE);
 	}
 
+	mutex_lock(&asrc->ratio_lock);
+
 	/* Set lock */
 	regmap_update_bits(asrc->regmap,
 			   ASRC_STREAM_REG(TEGRA186_ASRC_CFG, id),
 			   1, asrc->lane[id].ratio_source);
 
 	if (asrc->lane[id].ratio_source == TEGRA186_ASRC_RATIO_SOURCE_SW) {
-		regmap_write(asrc->regmap,
-			ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, id),
-			asrc->lane[id].int_part);
-		regmap_write(asrc->regmap,
-			ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, id),
-			asrc->lane[id].frac_part);
-		tegra186_asrc_lock_stream(asrc, id);
+		ret = tegra186_asrc_apply_cached_ratio(asrc, id);
+		if (ret)
+			dev_err(dev, "Can't apply cached ratio for ASRC stream %d: %d\n",
+				id, ret);
 	}
+	mutex_unlock(&asrc->ratio_lock);
+	if (ret)
+		return ret;
 
 	return ret;
 }
@@ -257,112 +380,193 @@ static int tegra186_asrc_put_ratio_source(struct snd_kcontrol *kcontrol,
 	struct snd_soc_component *cmpnt = snd_kcontrol_chip(kcontrol);
 	struct tegra186_asrc *asrc = snd_soc_component_get_drvdata(cmpnt);
 	unsigned int id = asrc_private->reg / TEGRA186_ASRC_STREAM_STRIDE;
+	unsigned int new_source = ucontrol->value.enumerated.item[0];
+	unsigned int old_source, int_part = 0, frac_part = 0;
 	bool change = false;
+	int pm_ret, ret;
 
-	asrc->lane[id].ratio_source = ucontrol->value.enumerated.item[0];
+	mutex_lock(&asrc->ratio_lock);
 
-	regmap_update_bits_check(asrc->regmap, asrc_private->reg,
-				 TEGRA186_ASRC_STREAM_RATIO_TYPE_MASK,
-				 asrc->lane[id].ratio_source,
-				 &change);
+	old_source = asrc->lane[id].ratio_source;
 
-	return change ? 1 : 0;
-}
-
-static int tegra186_asrc_get_ratio_int(struct snd_kcontrol *kcontrol,
-				       struct snd_ctl_elem_value *ucontrol)
-{
-	struct soc_mixer_control *asrc_private =
-		(struct soc_mixer_control *)kcontrol->private_value;
-	struct snd_soc_component *cmpnt = snd_kcontrol_chip(kcontrol);
-	struct tegra186_asrc *asrc = snd_soc_component_get_drvdata(cmpnt);
-	unsigned int id = asrc_private->reg / TEGRA186_ASRC_STREAM_STRIDE;
-
-	regmap_read(asrc->regmap,
-		    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, id),
-		    &asrc->lane[id].int_part);
-
-	ucontrol->value.integer.value[0] = asrc->lane[id].int_part;
-
-	return 0;
-}
-
-static int tegra186_asrc_put_ratio_int(struct snd_kcontrol *kcontrol,
-				       struct snd_ctl_elem_value *ucontrol)
-{
-	struct soc_mixer_control *asrc_private =
-		(struct soc_mixer_control *)kcontrol->private_value;
-	struct snd_soc_component *cmpnt = snd_kcontrol_chip(kcontrol);
-	struct tegra186_asrc *asrc = snd_soc_component_get_drvdata(cmpnt);
-	unsigned int id = asrc_private->reg / TEGRA186_ASRC_STREAM_STRIDE;
-	bool change = false;
-
-	if (asrc->lane[id].ratio_source == TEGRA186_ASRC_RATIO_SOURCE_ARAD) {
-		dev_err(cmpnt->dev,
-			"Lane %d ratio source is ARAD, invalid SW update\n",
-			id);
-		return -EINVAL;
+	pm_ret = pm_runtime_get_if_active(cmpnt->dev);
+	if (pm_ret < 0) {
+		mutex_unlock(&asrc->ratio_lock);
+		return pm_ret;
 	}
 
-	asrc->lane[id].int_part = ucontrol->value.integer.value[0];
+	if (old_source == TEGRA186_ASRC_RATIO_SOURCE_ARAD &&
+	    new_source == TEGRA186_ASRC_RATIO_SOURCE_SW) {
+		if (pm_ret > 0) {
+			ret = tegra186_asrc_read_ratio_pair(asrc, id,
+							    &int_part,
+							    &frac_part);
+			if (ret) {
+				pm_runtime_put(cmpnt->dev);
+				asrc->lane[id].ratio_valid = false;
+				mutex_unlock(&asrc->ratio_lock);
+				return ret;
+			}
+		} else {
+			asrc->lane[id].ratio_valid = false;
+		}
+	}
 
-	regmap_update_bits_check(asrc->regmap,
-				 ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART,
-						 id),
-				 TEGRA186_ASRC_STREAM_RATIO_INT_PART_MASK,
-				 asrc->lane[id].int_part, &change);
+	ret = regmap_update_bits_check(asrc->regmap, asrc_private->reg,
+				       TEGRA186_ASRC_STREAM_RATIO_TYPE_MASK,
+				       new_source, &change);
+	if (ret) {
+		if (pm_ret > 0)
+			pm_runtime_put(cmpnt->dev);
+		mutex_unlock(&asrc->ratio_lock);
+		return ret;
+	}
 
-	tegra186_asrc_lock_stream(asrc, id);
+	asrc->lane[id].ratio_source = new_source;
+	if (old_source == TEGRA186_ASRC_RATIO_SOURCE_ARAD &&
+	    new_source == TEGRA186_ASRC_RATIO_SOURCE_SW && pm_ret > 0)
+		tegra186_asrc_cache_ratio(asrc, id, int_part, frac_part);
+
+	if (pm_ret > 0)
+		pm_runtime_put(cmpnt->dev);
+
+	mutex_unlock(&asrc->ratio_lock);
 
 	return change ? 1 : 0;
 }
 
-static int tegra186_asrc_get_ratio_frac(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
+static int tegra186_asrc_get_ratio(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
 {
 	struct soc_mreg_control *asrc_private =
 		(struct soc_mreg_control *)kcontrol->private_value;
 	struct snd_soc_component *cmpnt = snd_kcontrol_chip(kcontrol);
 	struct tegra186_asrc *asrc = snd_soc_component_get_drvdata(cmpnt);
-	unsigned int id = asrc_private->regbase / TEGRA186_ASRC_STREAM_STRIDE;
+	unsigned int id = asrc_private->regbase;
+	unsigned int int_part, frac_part;
+	int ret;
 
-	regmap_read(asrc->regmap,
-		    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, id),
-		    &asrc->lane[id].frac_part);
+	mutex_lock(&asrc->ratio_lock);
 
-	ucontrol->value.integer.value[0] = asrc->lane[id].frac_part;
+	int_part = asrc->lane[id].int_part;
+	frac_part = asrc->lane[id].frac_part;
+
+	if (asrc->lane[id].ratio_source != TEGRA186_ASRC_RATIO_SOURCE_ARAD)
+		goto done;
+
+	ret = pm_runtime_get_if_active(cmpnt->dev);
+	if (ret < 0) {
+		mutex_unlock(&asrc->ratio_lock);
+		return ret;
+	}
+
+	if (ret > 0) {
+		ret = tegra186_asrc_read_ratio_pair(asrc, id, &int_part,
+						    &frac_part);
+		if (ret) {
+			pm_runtime_put(cmpnt->dev);
+			mutex_unlock(&asrc->ratio_lock);
+			return ret;
+		}
+		pm_runtime_put(cmpnt->dev);
+		asrc->lane[id].int_part = int_part;
+		asrc->lane[id].frac_part = frac_part;
+	}
+
+done:
+	mutex_unlock(&asrc->ratio_lock);
+
+	ucontrol->value.integer.value[0] = int_part;
+	ucontrol->value.integer.value[1] = frac_part;
 
 	return 0;
 }
 
-static int tegra186_asrc_put_ratio_frac(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
+static int tegra186_asrc_put_ratio(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
 {
 	struct soc_mreg_control *asrc_private =
 		(struct soc_mreg_control *)kcontrol->private_value;
 	struct snd_soc_component *cmpnt = snd_kcontrol_chip(kcontrol);
 	struct tegra186_asrc *asrc = snd_soc_component_get_drvdata(cmpnt);
-	unsigned int id = asrc_private->regbase / TEGRA186_ASRC_STREAM_STRIDE;
-	bool change = false;
+	unsigned int id = asrc_private->regbase;
+	unsigned int int_part, frac_part;
+	u64 old_ratio, new_ratio;
+	long int_val = ucontrol->value.integer.value[0];
+	long frac_val = ucontrol->value.integer.value[1];
+	bool change = false, unlock = false;
+	int ret = 0, pm_ret;
+
+	if (int_val < 0 || int_val > TEGRA186_ASRC_STREAM_RATIO_INT_PART_MASK)
+		return -EINVAL;
+
+	if (frac_val < 0 || frac_val > TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK)
+		return -EINVAL;
+
+	int_part = int_val;
+	frac_part = frac_val;
+
+	mutex_lock(&asrc->ratio_lock);
 
 	if (asrc->lane[id].ratio_source == TEGRA186_ASRC_RATIO_SOURCE_ARAD) {
 		dev_err(cmpnt->dev,
 			"Lane %d ratio source is ARAD, invalid SW update\n",
 			id);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_unlock;
 	}
 
-	asrc->lane[id].frac_part = ucontrol->value.integer.value[0];
+	old_ratio = ((u64)asrc->lane[id].int_part << 32) |
+		    asrc->lane[id].frac_part;
+	new_ratio = ((u64)int_part << 32) | frac_part;
 
-	regmap_update_bits_check(asrc->regmap,
-				 ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART,
-						 id),
-				 TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
-				 asrc->lane[id].frac_part, &change);
+	if (!new_ratio) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
 
-	tegra186_asrc_lock_stream(asrc, id);
+	change = old_ratio != new_ratio;
+	if (!change)
+		goto out_unlock;
 
-	return change ? 1 : 0;
+	unlock = !asrc->lane[id].ratio_valid ||
+		 tegra186_asrc_need_unlock(old_ratio, new_ratio);
+
+	pm_ret = pm_runtime_get_if_active(cmpnt->dev);
+	if (pm_ret < 0) {
+		ret = pm_ret;
+		goto out_unlock;
+	}
+
+	if (!pm_ret) {
+		asrc->lane[id].int_part = int_part;
+		asrc->lane[id].frac_part = frac_part;
+		ret = 1;
+		goto out_unlock;
+	}
+
+	ret = regmap_read(asrc->regmap, ASRC_STREAM_REG(TEGRA186_ASRC_STATUS, id),
+			  &pm_ret);
+	if (ret)
+		goto out_pm_put;
+
+	if (!(pm_ret & TEGRA186_ASRC_STREAM_EN)) {
+		asrc->lane[id].int_part = int_part;
+		asrc->lane[id].frac_part = frac_part;
+		ret = 1;
+		goto out_pm_put;
+	}
+
+	ret = tegra186_asrc_apply_ratio(asrc, id, int_part, frac_part, unlock);
+	if (!ret)
+		tegra186_asrc_cache_ratio(asrc, id, int_part, frac_part);
+
+out_pm_put:
+	pm_runtime_put(cmpnt->dev);
+out_unlock:
+	mutex_unlock(&asrc->ratio_lock);
+
+	return ret ?: change;
 }
 
 static int tegra186_asrc_get_hwcomp_disable(struct snd_kcontrol *kcontrol,
@@ -651,99 +855,63 @@ ASRC_SOURCE_DECL(src_select4, 3);
 ASRC_SOURCE_DECL(src_select5, 4);
 ASRC_SOURCE_DECL(src_select6, 5);
 
-#define SOC_SINGLE_EXT_FRAC(xname, xregbase, xmax, xget, xput)		\
+static int tegra186_asrc_ratio_param_info(struct snd_kcontrol *kcontrol,
+					  struct snd_ctl_elem_info *uinfo)
+{
+	struct soc_mreg_control *mc =
+		(struct soc_mreg_control *)kcontrol->private_value;
+
+	/*
+	 * ALSA exposes one range for all values in an integer array. The
+	 * fractional part needs the full 32-bit range; the integer part is
+	 * validated against the hardware field width in the put callback.
+	 */
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 2;
+	uinfo->value.integer.min = mc->min;
+	uinfo->value.integer.max = mc->max;
+
+	return 0;
+}
+
+#define SOC_SINGLE_EXT_ARRAY(xname, xregbase, xmax, xget, xput)		\
 {									\
 	.iface	= SNDRV_CTL_ELEM_IFACE_MIXER,				\
 	.name	= (xname),						\
-	.info	= snd_soc_info_xr_sx,					\
+	.info	= tegra186_asrc_ratio_param_info,			\
 	.get	= xget,							\
 	.put	= xput,							\
 									\
 	.private_value = (unsigned long)&(struct soc_mreg_control)	\
 	{								\
 		.regbase	= xregbase,				\
-		.regcount	= 1,					\
+		.regcount	= 2,					\
 		.nbits		= 32,					\
 		.invert		= 0,					\
 		.min		= 0,					\
-		.max		= xmax					\
+		.max		= (xmax)				\
 	}								\
 }
 
 static const struct snd_kcontrol_new tegra186_asrc_controls[] = {
-	/* Controls for integer part of ratio */
-	SOC_SINGLE_EXT("Ratio1 Integer Part",
-		       ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, 0),
-		       0, TEGRA186_ASRC_STREAM_RATIO_INT_PART_MASK, 0,
-		       tegra186_asrc_get_ratio_int,
-		       tegra186_asrc_put_ratio_int),
+	/* Controls for ASRC */
+	SOC_SINGLE_EXT_ARRAY("Ratio1", 0, TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
+			     tegra186_asrc_get_ratio, tegra186_asrc_put_ratio),
 
-	SOC_SINGLE_EXT("Ratio2 Integer Part",
-		       ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, 1),
-		       0, TEGRA186_ASRC_STREAM_RATIO_INT_PART_MASK, 0,
-		       tegra186_asrc_get_ratio_int,
-		       tegra186_asrc_put_ratio_int),
+	SOC_SINGLE_EXT_ARRAY("Ratio2", 1, TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
+			     tegra186_asrc_get_ratio, tegra186_asrc_put_ratio),
 
-	SOC_SINGLE_EXT("Ratio3 Integer Part",
-		       ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, 2),
-		       0, TEGRA186_ASRC_STREAM_RATIO_INT_PART_MASK, 0,
-		       tegra186_asrc_get_ratio_int,
-		       tegra186_asrc_put_ratio_int),
+	SOC_SINGLE_EXT_ARRAY("Ratio3", 2, TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
+			     tegra186_asrc_get_ratio, tegra186_asrc_put_ratio),
 
-	SOC_SINGLE_EXT("Ratio4 Integer Part",
-		       ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, 3),
-		       0, TEGRA186_ASRC_STREAM_RATIO_INT_PART_MASK, 0,
-		       tegra186_asrc_get_ratio_int,
-		       tegra186_asrc_put_ratio_int),
+	SOC_SINGLE_EXT_ARRAY("Ratio4", 3, TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
+			     tegra186_asrc_get_ratio, tegra186_asrc_put_ratio),
 
-	SOC_SINGLE_EXT("Ratio5 Integer Part",
-		       ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, 4),
-		       0, TEGRA186_ASRC_STREAM_RATIO_INT_PART_MASK, 0,
-		       tegra186_asrc_get_ratio_int,
-		       tegra186_asrc_put_ratio_int),
+	SOC_SINGLE_EXT_ARRAY("Ratio5", 4, TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
+			     tegra186_asrc_get_ratio, tegra186_asrc_put_ratio),
 
-	SOC_SINGLE_EXT("Ratio6 Integer Part",
-		       ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_INT_PART, 5),
-		       0, TEGRA186_ASRC_STREAM_RATIO_INT_PART_MASK, 0,
-		       tegra186_asrc_get_ratio_int,
-		       tegra186_asrc_put_ratio_int),
-
-	/* Controls for fractional part of ratio */
-	SOC_SINGLE_EXT_FRAC("Ratio1 Fractional Part",
-			    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, 0),
-			    TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
-			    tegra186_asrc_get_ratio_frac,
-			    tegra186_asrc_put_ratio_frac),
-
-	SOC_SINGLE_EXT_FRAC("Ratio2 Fractional Part",
-			    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, 1),
-			    TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
-			    tegra186_asrc_get_ratio_frac,
-			    tegra186_asrc_put_ratio_frac),
-
-	SOC_SINGLE_EXT_FRAC("Ratio3 Fractional Part",
-			    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, 2),
-			    TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
-			    tegra186_asrc_get_ratio_frac,
-			    tegra186_asrc_put_ratio_frac),
-
-	SOC_SINGLE_EXT_FRAC("Ratio4 Fractional Part",
-			    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, 3),
-			    TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
-			    tegra186_asrc_get_ratio_frac,
-			    tegra186_asrc_put_ratio_frac),
-
-	SOC_SINGLE_EXT_FRAC("Ratio5 Fractional Part",
-			    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, 4),
-			    TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
-			    tegra186_asrc_get_ratio_frac,
-			    tegra186_asrc_put_ratio_frac),
-
-	SOC_SINGLE_EXT_FRAC("Ratio6 Fractional Part",
-			    ASRC_STREAM_REG(TEGRA186_ASRC_RATIO_FRAC_PART, 5),
-			    TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
-			    tegra186_asrc_get_ratio_frac,
-			    tegra186_asrc_put_ratio_frac),
+	SOC_SINGLE_EXT_ARRAY("Ratio6", 5, TEGRA186_ASRC_STREAM_RATIO_FRAC_PART_MASK,
+			     tegra186_asrc_get_ratio, tegra186_asrc_put_ratio),
 
 	/* Source of ratio provider */
 	SOC_ENUM_EXT("Ratio1 Source", src_select1,
@@ -1004,12 +1172,15 @@ static int tegra186_asrc_platform_probe(struct platform_device *pdev)
 		asrc->lane[i].ratio_source = TEGRA186_ASRC_RATIO_SOURCE_SW;
 		asrc->lane[i].int_part = 1;
 		asrc->lane[i].frac_part = 0;
+		asrc->lane[i].ratio_valid = true;
 		asrc->lane[i].hwcomp_disable = 0;
 		asrc->lane[i].input_thresh =
 			TEGRA186_ASRC_STREAM_DEFAULT_INPUT_HW_COMP_THRESH_CFG;
 		asrc->lane[i].output_thresh =
 			TEGRA186_ASRC_STREAM_DEFAULT_OUTPUT_HW_COMP_THRESH_CFG;
 	}
+
+	mutex_init(&asrc->ratio_lock);
 
 	err = devm_snd_soc_register_component(dev, &tegra186_asrc_cmpnt,
 					      tegra186_asrc_dais,

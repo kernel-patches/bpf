@@ -57,6 +57,9 @@ struct cs35l56_private {
 	u8 sdw_link_num;
 	u8 sdw_unique_id;
 
+	u16 feid;
+	u8 fev;
+
 	u8 ambient_ctl_value;
 };
 

@@ -2245,3 +2245,19 @@ int snd_soc_tplg_component_remove(struct snd_soc_component *comp)
 	return !list_empty(&comp->dobj_list);
 }
 EXPORT_SYMBOL_GPL(snd_soc_tplg_component_remove);
+
+bool snd_soc_tplg_files_exist(struct device *dev, const char *tplg_files)
+{
+	const struct firmware *fw;
+	int ret;
+
+	ret = firmware_request_nowarn(&fw, tplg_files, dev);
+	if (!ret) {
+		release_firmware(fw);
+		return true;
+	}
+
+	dev_warn(dev, "Failed to open topology file: %s\n", tplg_files);
+	return false;
+}
+EXPORT_SYMBOL_GPL(snd_soc_tplg_files_exist);

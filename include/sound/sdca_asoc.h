@@ -12,6 +12,7 @@
 
 struct device;
 struct regmap;
+struct sdw_slave;
 struct sdca_function_data;
 struct sdca_pde_delay;
 struct snd_ctl_elem_value;
@@ -89,12 +90,14 @@ int sdca_asoc_populate_rate_format(struct device *dev,
 				struct sdca_entity *entity,
 				struct snd_soc_pcm_stream *stream);
 
-int sdca_asoc_set_constraints(struct device *dev, struct regmap *regmap,
+int sdca_asoc_alloc_constraints(struct snd_soc_dai *dai);
+int sdca_asoc_free_constraints(struct snd_soc_dai *dai);
+int sdca_asoc_set_constraints(struct device *dev, struct sdw_slave *sdw,
+			      struct regmap *regmap,
 			      struct sdca_function_data *function,
 			      struct snd_pcm_substream *substream,
 			      struct snd_soc_dai *dai);
-void sdca_asoc_free_constraints(struct snd_pcm_substream *substream,
-				struct snd_soc_dai *dai);
+
 int sdca_asoc_get_port(struct device *dev, struct regmap *regmap,
 		       struct sdca_function_data *function,
 		       struct snd_soc_dai *dai);

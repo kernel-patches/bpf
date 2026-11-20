@@ -75,6 +75,7 @@ struct rt5663_priv {
 
 	int jack_type;
 	unsigned int irq;
+	bool suspend_irq_disabled;
 };
 
 static const struct reg_sequence rt5663_patch_list[] = {
@@ -3187,8 +3188,10 @@ static int rt5663_suspend(struct snd_soc_component *component)
 {
 	struct rt5663_priv *rt5663 = snd_soc_component_get_drvdata(component);
 
-	if (rt5663->irq)
+	if (rt5663->irq && !rt5663->suspend_irq_disabled) {
 		disable_irq(rt5663->irq);
+		rt5663->suspend_irq_disabled = true;
+	}
 
 	cancel_delayed_work_sync(&rt5663->jack_detect_work);
 	cancel_delayed_work_sync(&rt5663->jd_unplug_work);
@@ -3202,14 +3205,22 @@ static int rt5663_suspend(struct snd_soc_component *component)
 static int rt5663_resume(struct snd_soc_component *component)
 {
 	struct rt5663_priv *rt5663 = snd_soc_component_get_drvdata(component);
+	int ret;
 
 	regcache_cache_only(rt5663->regmap, false);
-	regcache_sync(rt5663->regmap);
+	ret = regcache_sync(rt5663->regmap);
+	if (ret) {
+		regcache_cache_only(rt5663->regmap, true);
+		regcache_mark_dirty(rt5663->regmap);
+		return ret;
+	}
 
 	rt5663_irq(0, rt5663);
 
-	if (rt5663->irq)
+	if (rt5663->suspend_irq_disabled) {
+		rt5663->suspend_irq_disabled = false;
 		enable_irq(rt5663->irq);
+	}
 
 	return 0;
 }
@@ -3509,6 +3520,16 @@ static int rt5663_parse_dp(struct rt5663_priv *rt5663, struct device *dev)
 	return 0;
 }
 
+static void rt5663_stop_jack_work(struct rt5663_priv *rt5663)
+{
+	if (rt5663->irq)
+		free_irq(rt5663->irq, rt5663);
+
+	/* Jack detection can queue unplug work. */
+	disable_delayed_work_sync(&rt5663->jack_detect_work);
+	disable_delayed_work_sync(&rt5663->jd_unplug_work);
+}
+
 static int rt5663_i2c_probe(struct i2c_client *i2c)
 {
 	struct rt5663_platform_data *pdata = dev_get_platdata(&i2c->dev);
@@ -3713,19 +3734,13 @@ static int rt5663_i2c_probe(struct i2c_client *i2c)
 			rt5663_dai, ARRAY_SIZE(rt5663_dai));
 
 	if (ret)
-		goto err_enable;
+		goto err_jack_work;
 
 	return 0;
 
-
-	/*
-	 * Error after enabling regulators should goto err_enable
-	 * to disable regulators.
-	 */
+err_jack_work:
+	rt5663_stop_jack_work(rt5663);
 err_enable:
-	if (i2c->irq)
-		free_irq(i2c->irq, rt5663);
-
 	regulator_bulk_disable(ARRAY_SIZE(rt5663->supplies), rt5663->supplies);
 	return ret;
 }
@@ -3734,8 +3749,7 @@ static void rt5663_i2c_remove(struct i2c_client *i2c)
 {
 	struct rt5663_priv *rt5663 = i2c_get_clientdata(i2c);
 
-	if (i2c->irq)
-		free_irq(i2c->irq, rt5663);
+	rt5663_stop_jack_work(rt5663);
 
 	regulator_bulk_disable(ARRAY_SIZE(rt5663->supplies), rt5663->supplies);
 }

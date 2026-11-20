@@ -89,22 +89,10 @@ static int tegra_wm8962_init(struct snd_soc_pcm_runtime *rtd)
 			return err;
 		}
 
-		wm8962_mic_detect(component, machine->mic_jack);
+		snd_soc_component_set_jack(component, machine->mic_jack, NULL);
 	}
 
 	snd_soc_dapm_force_enable_pin(dapm, "MICBIAS");
-
-	return 0;
-}
-
-static int tegra_wm8962_remove(struct snd_soc_card *card)
-{
-	struct snd_soc_dai_link *link = &card->dai_link[0];
-	struct snd_soc_pcm_runtime *rtd = snd_soc_get_pcm_runtime(card, link);
-	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
-	struct snd_soc_component *component = codec_dai->component;
-
-	wm8962_mic_detect(component, NULL);
 
 	return 0;
 }
@@ -129,7 +117,6 @@ static struct snd_soc_card snd_soc_tegra_wm8962 = {
 	.owner = THIS_MODULE,
 	.dai_link = &tegra_wm8962_dai,
 	.num_links = 1,
-	.remove = tegra_wm8962_remove,
 	.fully_routed = true,
 };
 

@@ -42,6 +42,10 @@ properties:
   '#sound-dai-cells':
     const: 0
 
+  mute-gpios:
+    description: GPIO connected to the active-low XSMT soft-mute input.
+    maxItems: 1
+
   pll-in:
     description: GPIO pin used to connect the pll using <1> through <6>. The
       device will be configured for clock input on the given pll-in pin.

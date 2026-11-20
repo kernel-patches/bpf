@@ -127,7 +127,7 @@ int snd_dmaengine_pcm_refine_runtime_hwparams(
  *  channel for platforms which do not use devicetree. The filter parameter
  *  will be the DAI's DMA data.
  * @dma_dev: If set, request DMA channel on this device rather than the DAI
- *  device.
+ *  device. Only the channels listed in @chan_names are requested then.
  * @chan_names: If set, these custom DMA channel names will be requested at
  *  registration time.
  * @pcm_hardware: snd_pcm_hardware struct to be used for the PCM.
