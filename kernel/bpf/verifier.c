@@ -12409,6 +12409,36 @@ static int do_refine_retval_range(struct bpf_verifier_env *env,
 	return reg_bounds_sanity_check(env, ret_reg, "retval");
 }
 
+/*
+ * The call is rewritten with @num and @meta. One call has one rewrite:
+ *
+ *   if (...) p = type1; else p = type2;
+ *   bpf_obj_drop(p);                      <- the check fails if the special fields differ
+ */
+static int record_call_fixup(struct bpf_verifier_env *env, u64 num, struct btf_struct_meta *meta)
+{
+	struct bpf_insn_aux_data *aux = cur_aux(env);
+	struct btf_struct_meta *first = aux->kptr_struct_meta;
+
+	if (!aux->call_recorded) {
+		aux->call_recorded = true;
+		aux->call_num = num;
+		aux->kptr_struct_meta = meta;
+		return 0;
+	}
+	if (aux->call_num == num &&
+	    btf_record_equal(first ? first->record : NULL, meta ? meta->record : NULL))
+		return 0;
+	bpf_diag_program_structure(
+		env, env->insn_idx, "one call for two types",
+		"Use one call for each type. "
+		"If the call is in a static function, inline that function. "
+		"If a compiler merged two calls, mark the callee with __attribute__((nomerge)).",
+		"This call gets objects with different sizes, special fields or offsets, "
+		"or two kinds of percpu pointers.");
+	return fixups_differ(env, "same call cannot be used with different types");
+}
+
 static int
 record_func_map(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		int func_id, int insn_idx)
@@ -12981,8 +13011,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 				return -EFAULT;
 			}
 			returns_cpu_specific_alloc_ptr = true;
-			env->insn_aux_data[insn_idx].call_with_percpu_alloc_ptr = true;
 		}
+		err = record_call_fixup(env, returns_cpu_specific_alloc_ptr, NULL);
 		break;
 	}
 	case BPF_FUNC_user_ringbuf_drain:
@@ -15361,9 +15391,10 @@ bpf_global_subprog_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_i
  * < 0 - not fall-through to 'else' branch, return error
  */
 static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
-			       struct bpf_reg_state *regs, struct bpf_insn_aux_data *insn_aux,
-			       const struct btf_type *ptr_type, struct btf *desc_btf)
+			       struct bpf_reg_state *regs, const struct btf_type *ptr_type,
+			       struct btf *desc_btf)
 {
+	struct btf_struct_meta *struct_meta;
 	const struct btf_type *ret_t;
 	int err = 0;
 
@@ -15371,7 +15402,6 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 		return 0;
 
 	if (is_bpf_obj_new_kfunc(meta->func_id) || is_bpf_percpu_obj_new_kfunc(meta->func_id)) {
-		struct btf_struct_meta *struct_meta;
 		struct btf *ret_btf;
 		u32 ret_btf_id;
 
@@ -15447,17 +15477,21 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 		if (is_bpf_percpu_obj_new_kfunc(meta->func_id))
 			regs[BPF_REG_0].type |= MEM_PERCPU;
 
-		insn_aux->obj_new_size = ret_t->size;
-		insn_aux->kptr_struct_meta = struct_meta;
+		err = record_call_fixup(env, ret_t->size, struct_meta);
+		if (err)
+			return err;
 	} else if (is_bpf_refcount_acquire_kfunc(meta->func_id)) {
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].type = PTR_TO_BTF_ID | MEM_ALLOC;
 		regs[BPF_REG_0].btf = meta->arg_btf;
 		regs[BPF_REG_0].btf_id = meta->arg_btf_id;
 
-		insn_aux->kptr_struct_meta =
-			btf_find_struct_meta(meta->arg_btf,
-					     meta->arg_btf_id);
+		/* The call reads only the offset of the refcount. The other fields can differ. */
+		struct_meta = btf_find_struct_meta(meta->arg_btf, meta->arg_btf_id);
+		err = record_call_fixup(env, struct_meta->record->refcount_off,
+					cur_aux(env)->kptr_struct_meta ?: struct_meta);
+		if (err)
+			return err;
 	} else if (is_list_node_type(ptr_type)) {
 		struct btf_field *field = meta->arg_list_head.field;
 
@@ -15544,6 +15578,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	const struct btf_type *t, *ptr_type;
 	struct bpf_call_arg_meta meta;
 	struct bpf_insn_aux_data *insn_aux;
+	struct btf_struct_meta *struct_meta;
 	const char *operation;
 	int err, insn_idx = *insn_idx_p;
 	u32 i, proto_slots, ptr_type_id, ret_nregs = 1;
@@ -15661,8 +15696,6 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	     /* is_tracing_prog_type() for now doesn't cover non-iterator tracing progs. */
 	     (prog_type == BPF_PROG_TYPE_TRACING && env->prog->expected_attach_type != BPF_TRACE_ITER
 	      && !env->prog->sleepable))) {
-		struct btf_struct_meta *struct_meta;
-
 		struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
 		if (struct_meta && btf_record_has_nmi_unsafe_fields(struct_meta->record)) {
 			verbose(env, "%s cannot be used in tracing programs on types with NMI unsafe fields\n",
@@ -15778,10 +15811,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	if (is_bpf_list_push_kfunc(meta.func_id) || is_bpf_rbtree_add_kfunc(meta.func_id)) {
-		id = regs[BPF_REG_2].id;
-		insn_aux->insert_off = regs[BPF_REG_2].var_off.value;
-		insn_aux->kptr_struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
-		ref_convert_owning_non_owning(env, id);
+		ref_convert_owning_non_owning(env, regs[BPF_REG_2].id);
+		struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
+		err = record_call_fixup(env, regs[BPF_REG_2].var_off.value, struct_meta);
+		if (err)
+			return err;
 	}
 
 	if ((is_kfunc_call(&meta, special_kfunc_list[KF_bpf_dynptr_slice]) ||
@@ -15900,7 +15934,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		ret_nregs = mark_kfunc_ret_regs(env, regs, t->size);
 	} else if (btf_type_is_ptr(t)) {
 		ptr_type = btf_type_skip_modifiers(desc_btf, t->type, &ptr_type_id);
-		err = check_special_kfunc(env, &meta, regs, insn_aux, ptr_type, desc_btf);
+		err = check_special_kfunc(env, &meta, regs, ptr_type, desc_btf);
 		if (err) {
 			if (err < 0)
 				return err;
@@ -16005,9 +16039,10 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		if (meta.btf == btf_vmlinux) {
 			if (is_bpf_obj_drop_kfunc(meta.func_id) ||
 			    is_bpf_percpu_obj_drop_kfunc(meta.func_id)) {
-				insn_aux->kptr_struct_meta =
-					btf_find_struct_meta(meta.arg_btf,
-							     meta.arg_btf_id);
+				struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
+				err = record_call_fixup(env, 0, struct_meta);
+				if (err)
+					return err;
 			}
 		}
 	}
