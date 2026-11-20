@@ -749,6 +749,13 @@ int bpf_insert_recursion_checks(struct bpf_verifier_env *env)
 	return 0;
 }
 
+static void free_loop(struct bpf_loop *loop)
+{
+	if (!loop)
+		return;
+	kvfree(loop);
+}
+
 /* Clean up dynamically allocated fields of aux data for instructions [start, ...] */
 void bpf_clear_insn_aux_data(struct bpf_verifier_env *env, int start, int len)
 {
@@ -757,10 +764,10 @@ void bpf_clear_insn_aux_data(struct bpf_verifier_env *env, int start, int len)
 	int i;
 
 	for (i = start; i < end; i++) {
-		if (aux_data[i].loop) {
-			kvfree(aux_data[i].loop);
-			aux_data[i].loop = NULL;
-		}
+		free_loop(aux_data[i].loop);
+		free_loop(aux_data[i].callback_loop);
+		free_loop(aux_data[i].recursion_loop);
+		aux_data[i].loop = aux_data[i].callback_loop = aux_data[i].recursion_loop = NULL;
 	}
 }
 

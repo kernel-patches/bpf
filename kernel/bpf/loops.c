@@ -251,6 +251,7 @@ static int mark_as_header(struct bpf_verifier_env *env, int h)
 		if (!aux[h].loop)
 			return -ENOMEM;
 		env->mem += sizeof(struct bpf_loop);
+		aux[h].loop->header = h;
 	}
 	return 0;
 }

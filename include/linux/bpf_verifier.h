@@ -93,6 +93,8 @@ struct scalar {
 	 */
 	u16 base;
 	u16 step;
+	/* Not a part of the value: it grew once at a loop header, see join_range() */
+	bool grew_once;
 };
 
 /* The struct scalar that is an anonymous member of *@p */
@@ -427,7 +429,16 @@ enum bpf_guard_edge {
 	BPF_GUARD_LEAVES_LOOP,
 };
 
+/*
+ * A state in a loop, see bpf_flow_loop_enter()
+ *
+ * entry -> [0] -> [1] -> ... -> [d-1] -> +----------+ <--+
+ *          peeled trips, kept apart      | LEFTOVER |    |
+ *                                        |  widened |----+
+ *                                        +----------+
+ */
 struct loop_stack_entry {
+	struct bpf_loop *loop;
 	u32 loop_id:23;
 	u32 terminates:1;
 	/* the loop had may_goto when the state entered it, see check_loop_guard() */
@@ -444,12 +455,12 @@ struct loop_stack_entry {
 	 * to the head is made to stand for the rest.
 	 */
 	u32 first:1;
-	/*
-	 * How many times the state came back to the head of the loop. With @apart that is
-	 * the iteration that it is in. A state that stands for many iterations is a join, and has
-	 * the largest number of the states that it is made of.
-	 */
+	/* How many times the state came back to the header. A join has the larger number. */
 	u32 trip;
+	/* The state that entered the loop. What comes back to the header is for that state. */
+	u32 entry_id;
+	u32 held_cnt;		/* when the state entered the loop */
+	bool peeled;		/* in a peeled trip, not in the leftover */
 };
 
 /* The state is in a walk on patience, which may not get to the end of the loop */
@@ -562,6 +573,11 @@ struct bpf_verifier_state {
 	u32 curframe;
 	/* an xreg has no value: unreachable. Only a path-sensitive run drops such a state. */
 	bool infeasible;
+	/* an error only in a leftover, see check_held_in_leftover() */
+	bool holds_too_much;
+	u32 max_held_cnt;	/* when it first held too much */
+	/* the loops that made an xreg of data_deps imprecise, see bpf_loop.suspect_bit */
+	u64 suspect_loops;
 
 	struct_group(held,
 	void *active_lock_ptr;
@@ -792,6 +808,23 @@ struct bpf_backedge {
 	int latch;
 };
 
+/* Calls of a callback and recursive calls go around like the body of a loop does */
+enum bpf_loop_kind {
+	BPF_LOOP_JUMPS,
+	BPF_LOOP_CALLBACK,	/* the header is the call of the helper */
+	/* the header is the first insn of the first function of the cycle */
+	BPF_LOOP_RECURSION,
+};
+
+/* What a pass finds about a loop */
+struct bpf_loop_per_pass {
+	bool has_leftover;	/* the peeled trips were not enough */
+	/* a check failed in a state that the loop kept apart, with no other suspect */
+	bool has_unproven;
+	u32 peeled_cnt;		/* trips that the pass peeled */
+	u64 cost;		/* for the states that the loop keeps apart */
+};
+
 struct bpf_loop_rungs {
 	s64 max[2];
 	s64 min[2];
@@ -800,6 +833,10 @@ struct bpf_loop_rungs {
 };
 
 struct bpf_loop {
+	enum bpf_loop_kind kind;
+	u32 header;
+	/* in bpf_verifier_state.suspect_loops. Loops with the same bit are suspects together. */
+	u64 suspect_bit;
 	struct bpf_backedge backedges[MAX_BACKEDGES];
 	int exit_to;		/* where the first edge that leaves the loop goes, or -1 */
 	int backedges_cnt;
@@ -811,8 +848,29 @@ struct bpf_loop {
 	u32 nr_insns;
 	/* not rt_bounded: there are places for may_goto, see guard_to in bpf_insn_aux_data */
 	bool has_guards;
+
+	/* What one pass gives to the next pass */
+	struct_group_tagged(bpf_loop_precision, precision,
+	u32 peel_cnt;		/* trips before the leftover */
+	/* while bpf_loop_per_pass.cost is not above @budget: */
+	u64 budget;
+	u32 max_peel_cnt;	/* peel up to this trip */
+	);
+	bool partitioned;	/* the last partition was for this loop */
+	struct bpf_loop_per_pass this_pass;
 	bool guarded;
 };
+
+static inline bool bpf_loop_has_budget(const struct bpf_loop *loop)
+{
+	return loop->this_pass.cost <= loop->budget;
+}
+
+/* A partition for a loop ends when a state that it kept apart is unproven */
+static inline bool bpf_loop_partition_is_active(const struct bpf_loop *loop)
+{
+	return bpf_loop_has_budget(loop) && !(loop->partitioned && loop->this_pass.has_unproven);
+}
 
 struct bpf_insn_aux_data {
 	/* What a pass writes for the rewrite of the insn. Each pass starts from the snapshot. */
@@ -947,6 +1005,8 @@ struct bpf_insn_aux_data {
 	s32 guard_to;
 	/* additional information about the loop if this instruction is a loop header */
 	struct bpf_loop *loop;
+	/* the call of a callback, or the first insn of a recursive function */
+	struct bpf_loop *callback_loop, *recursion_loop;
 };
 
 /*
@@ -1043,6 +1103,7 @@ struct bpf_subprog_info {
 	u16 stack_depth; /* max. stack depth used by this function */
 	u16 stack_extra;
 	u16 arena_stack_depth; /* size of the frame in the stack in arena */
+	u32 cycle; /* the first subprog of its cycle of the call graph, 0 if it is on none */
 	u32 insns_total;
 	u32 insns_self;
 	/* offsets in range [stack_depth .. fastcall_stack_off)
@@ -1597,6 +1658,9 @@ void bpf_flow_next_is_no_bound(struct bpf_verifier_env *env, int insn_idx, int h
 bool bpf_flow_loops_lost_bound(struct bpf_verifier_env *env);
 void bpf_flow_new_round(struct bpf_verifier_env *env);
 int bpf_flow_place_guards(struct bpf_verifier_env *env);
+/* verifier.c, for flow.c */
+int bpf_flow_loop_enter(struct bpf_verifier_env *env, struct bpf_loop **backedge_loop,
+			bool *starts_leftover);
 #define BPF_EXIT_NEEDS_CALLER	1	/* verify the call in the frames of the caller */
 int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
 		    const struct bpf_verifier_state *exit, int call_idx);
@@ -2279,6 +2343,12 @@ bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int oute
 static inline int pkt_min_len(const struct bpf_reg_state *reg)
 {
 	return reg->r64.size ? reg->pkt_min_len : max(reg->range, reg->pkt_min_len);
+}
+
+/* The loop that the frame is in, or NULL */
+static inline struct loop_stack_entry *bpf_top_loop(const struct bpf_func_state *frame)
+{
+	return frame->loop_stack_cnt ? &frame->loop_stack[frame->loop_stack_cnt - 1] : NULL;
 }
 
 static inline u32 bpf_xreg_cnt(const struct bpf_verifier_state *st)

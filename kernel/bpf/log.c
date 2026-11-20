@@ -702,7 +702,7 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 {
 	const struct bpf_func_state *state = vstate->frame[frameno];
 	const struct bpf_reg_state *reg;
-	int i;
+	int i, first;
 
 	if (state->frameno)
 		verbose(env, " frame%d:", state->frameno);
@@ -789,15 +789,19 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 		verbose(env, " cb");
 	if (state->in_async_callback_fn)
 		verbose(env, " async_cb");
-	/* the iterations of the loops in which they are kept apart */
-	for (i = 0; i < state->loop_stack_cnt; i++)
-		if (state->loop_stack[i].apart)
-			verbose(env, " iter(%d)=%u", state->loop_stack[i].loop_id,
+	/* The innermost loop. Level 2 has all loops, once for each block. */
+	first = print_all && (env->log.level & BPF_LOG_LEVEL2) ? 0 :
+		max(state->loop_stack_cnt, 1U) - 1;
+	/* the peeled trips */
+	for (i = first; i < state->loop_stack_cnt; i++)
+		if (state->loop_stack[i].peeled)
+			verbose(env, " iter(%d)=%u", state->loop_stack[i].loop->header,
 				state->loop_stack[i].trip);
 	if (state->loop_stack_cnt) {
 		verbose(env, " loop_stack=");
-		for (i = 0; i < state->loop_stack_cnt; i++)
-			verbose(env, "%s%d", i ? "," : "", state->loop_stack[i].loop_id);
+		for (i = first; i < state->loop_stack_cnt; i++)
+			verbose(env, "%s%d", i > first ? "," : "",
+				state->loop_stack[i].loop->header);
 	}
 	verbose(env, "\n");
 	if (!print_all)
