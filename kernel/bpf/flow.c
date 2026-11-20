@@ -58,6 +58,7 @@ struct flow_state {
 	enum flow_kind kind;
 	bool pending;
 	bool late_exit_reaches;		/* a late exit state can get to it */
+	bool from_apart;		/* it comes from a state that was not alone */
 	/* it is kept until the states leave this loop, see flow_loop_is_left() */
 	u8 kept_frameno, kept_depth;
 	/* the order of pending states, see flow_set_pending() */
@@ -118,6 +119,7 @@ struct bpf_flow {
 	/* of the pass */
 	u64 *cost;			/* per function */
 	u64 budget, charged_cost;
+	u64 apart_cost;			/* of states that are not alone, see bpf_flow_next() */
 	u32 budget_func_cnt;
 
 	/* of the check */
@@ -128,6 +130,7 @@ struct bpf_flow {
 	struct flow_instance **instances;	/* bpf_verifier_state.instance_id is the index */
 	u32 instance_cnt, instance_cap;
 	struct flow_instance *last_instance;	/* of the last pending state */
+	bool last_is_apart;			/* it adds to @apart_cost */
 	u64 priority_gen;
 	struct list_head unused;		/* struct flow_kept */
 	u32 seq;
@@ -426,6 +429,7 @@ void bpf_flow_new_pass(struct bpf_verifier_env *env)
 	memset(flow->cost, 0, env->subprog_cnt * sizeof(*flow->cost));
 	flow->budget = bpf_precision_budget(env);
 	flow->budget_func_cnt = 0;
+	flow->apart_cost = 0;
 	flow->start_cnt++;
 	for (i = 0; i < env->prog->len; i++, aux++) {
 		if (aux->callback_loop)
@@ -631,6 +635,7 @@ static struct flow_state *flow_new_state(struct bpf_verifier_env *env, int prev_
 	INIT_LIST_HEAD(&s->node);
 	s->prev_insn_idx = prev_insn_idx;
 	s->seq = ++flow->seq;
+	s->from_apart = flow->last_is_apart;
 	s->log_pos = env->log.end_pos;
 	s->diag_pos = bpf_diag_event_log_save(env);
 	bpf_add_cost(env, 1, BPF_COST_STATE);
@@ -723,6 +728,7 @@ void bpf_flow_reset(struct bpf_verifier_env *env)
 	env->mem -= flow->instance_cnt * INSTANCE_BYTES;
 	flow->instance_cnt = 0;
 	flow->last_instance = NULL;
+	flow->last_is_apart = false;
 }
 
 void bpf_flow_free(struct bpf_verifier_env *env)
@@ -870,6 +876,9 @@ static struct flow_state *flow_find(struct bpf_verifier_env *env, struct flow_st
 
 	hash = bpf_hash_apart_xregs(env, &s->st, bpf_hash_join_key(env, &s->st) + s->kind,
 				    s->kind == FLOW_PEELED);
+	/* the arguments are joined, else calls do not share an instance */
+	if (s->kind != FLOW_FUNC_ENTRY && s->kind != FLOW_JOINED_CALLS)
+		hash = bpf_hash_live_types(env, &s->st, hash, env->flow->apart_cost);
 	if (s->kind == FLOW_FUNC_ENTRY && (!e || e->peeled))
 		hash = bpf_hash_args(env, &s->st, hash);
 	if (s->kind == FLOW_AT ? !aux->loop && !aux->callback_loop :
@@ -1722,6 +1731,8 @@ int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx, u64 *log_pos
 again:
 	if (flow->last_instance && flow->last_instance->cost)
 		*flow->last_instance->cost += env->cost - flow->charged_cost;
+	if (flow->last_is_apart)
+		flow->apart_cost += env->cost - flow->charged_cost;
 	flow->charged_cost = env->cost;
 	if (flow->last_instance)
 		flow_end_instance(env, flow->last_instance);
@@ -1731,6 +1742,13 @@ again:
 	s = rb_entry(n, struct flow_state, rb);
 	flow_clear_pending(flow, s);
 	flow->last_instance = flow_state_instance(flow, s);
+	/*
+	 * Is another state at this insn? In a loop the states go one by one, and only the join
+	 * points of a leftover keep them. So a yes holds up to a join point that is not peeled.
+	 */
+	if (test_bit(s->st.insn_idx, flow->join_points) && !flow_in_peeled_trip(&s->st))
+		s->from_apart = false;
+	flow->last_is_apart = s->from_apart || flow->nr_states[s->st.insn_idx] > 1;
 	instance = s->callee;
 	if (instance) {
 		if (instance->entry_state && !instance->priority) {

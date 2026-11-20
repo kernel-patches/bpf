@@ -1729,6 +1729,8 @@ bool bpf_must_keep_apart(struct bpf_verifier_env *env, const struct bpf_verifier
 			 const struct loop_stack_entry *entry);
 bool bpf_values_grew_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
 			     const struct bpf_verifier_state *new);
+u64 bpf_hash_live_types(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			u64 hash, u64 apart_cost);
 u64 bpf_hash_apart_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			 u64 hash, bool consts);
 u64 bpf_hash_args(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u64 hash);
