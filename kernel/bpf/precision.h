@@ -24,6 +24,7 @@ struct precision_per_pass {
 	bool disjoint_joined;			/* disjoint values in data_deps were joined */
 	bool over_budget, calls_joined;
 	bool arg_lost_equation;			/* see bpf_call_needs_frames() */
+	bool can_fork;				/* see fork_stack_load() */
 };
 
 /* callx calls one of the functions whose address is taken. They count as one function. */
@@ -54,6 +55,8 @@ struct bpf_precision {
 	unsigned long *last_unproven_insns;	/* in the last pass */
 	unsigned long *bad_read_insns_done;
 	unsigned long *earlier_unproven_insns;	/* in an earlier pass */
+	unsigned long *needs_ptr_insns;		/* got a number in place of a pointer */
+	unsigned long *makes_ptr_insns;		/* the result flows into needs_ptr_insns */
 	unsigned long *control_seeds, *controlled_insns, *controlled_insns_done, *def_insns;
 	u32 first_unproven_insn;	/* of the last pass */
 	u32 last_unproven_left;		/* last_unproven_insns whose check did not fail again */
@@ -67,6 +70,7 @@ struct bpf_precision {
 	bool failing_path_due;		/* see bpf_failing_path_is_due() */
 	bool budget_grew;		/* see partition_next() */
 	bool new_nospec;
+	bool ptr_deps_only;		/* see add_makes_ptr_insns() */
 	/* see bpf_hash_live_types() */
 	u64 live_types_cost, live_types_mem, start_mem;
 	bool live_types_over, join_live_types;	/* in this pass, in all next passes */
