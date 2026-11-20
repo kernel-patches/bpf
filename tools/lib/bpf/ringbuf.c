@@ -311,20 +311,14 @@ static const void *ringbuf_iter_next(struct ring_buffer_iter *it, size_t *size,
 	struct ring_buffer_iter_state *state = (void *)it;
 	struct ring *r = state->ring;
 	int *len_ptr, len;
-	unsigned long cons_pos, prod_pos;
-	bool got_new_data;
-	void *sample;
 
 	if (!r)
 		return NULL;
 	if (sync)
 		ringbuf_iter_publish(state);
-	cons_pos = state->cons_pos;
-	prod_pos = state->prod_pos;
 
-	do {
-		got_new_data = false;
-		if (cons_pos == prod_pos) {
+	for (;;) {
+		if (state->cons_pos == state->prod_pos) {
 			ringbuf_iter_publish(state);
 			if (state->needs_wakeup) {
 				/*
@@ -334,46 +328,44 @@ static const void *ringbuf_iter_next(struct ring_buffer_iter *it, size_t *size,
 				__atomic_thread_fence(__ATOMIC_SEQ_CST);
 				state->needs_wakeup = false;
 			}
-			prod_pos = __atomic_load_n(r->producer_pos,
-						   __ATOMIC_ACQUIRE);
-			state->prod_pos = prod_pos;
+			state->prod_pos = __atomic_load_n(r->producer_pos,
+							  __ATOMIC_ACQUIRE);
 		}
 
-		while (cons_pos != prod_pos) {
-			len_ptr = r->data + (cons_pos & r->mask);
-			len = __atomic_load_n(len_ptr, __ATOMIC_ACQUIRE);
+		if (state->cons_pos == state->prod_pos) {
+			state->ring = NULL;
+			return NULL;
+		}
 
-			/* Retry a busy record once after publishing prior records. */
-			if (len & BPF_RINGBUF_BUSY_BIT) {
-				ringbuf_iter_publish(state);
-				got_new_data = state->needs_wakeup;
-				if (got_new_data) {
-					/* Order the consumer update before retrying the header. */
-					__atomic_thread_fence(__ATOMIC_SEQ_CST);
-					state->needs_wakeup = false;
-				}
-				break;
+		len_ptr = r->data + (state->cons_pos & r->mask);
+		len = __atomic_load_n(len_ptr, __ATOMIC_ACQUIRE);
+
+		/* Publish prior records and retry a record that is still busy. */
+		if (len & BPF_RINGBUF_BUSY_BIT) {
+			ringbuf_iter_publish(state);
+			if (!state->needs_wakeup) {
+				state->ring = NULL;
+				return NULL;
 			}
+			/* Order the consumer update before retrying the header. */
+			__atomic_thread_fence(__ATOMIC_SEQ_CST);
+			state->needs_wakeup = false;
+			continue;
+		}
 
-			got_new_data = true;
-			cons_pos += roundup_len(len);
-			state->cons_pos = cons_pos;
-			state->consumer_dirty = true;
+		state->cons_pos += roundup_len(len);
+		state->consumer_dirty = true;
 
-			if ((len & BPF_RINGBUF_DISCARD_BIT) == 0) {
-				sample = (void *)len_ptr + BPF_RINGBUF_HDR_SZ;
-				if (size)
-					*size = len;
-				return sample;
-			}
-
+		if (len & BPF_RINGBUF_DISCARD_BIT) {
 			if (sync)
 				ringbuf_iter_publish(state);
+			continue;
 		}
-	} while (got_new_data);
 
-	state->ring = NULL;
-	return NULL;
+		if (size)
+			*size = len;
+		return (void *)len_ptr + BPF_RINGBUF_HDR_SZ;
+	}
 }
 
 const void *ring_buffer_iter_next(struct ring_buffer_iter *it, size_t *size,
