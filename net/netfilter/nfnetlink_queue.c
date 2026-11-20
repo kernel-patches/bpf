@@ -2206,9 +2206,17 @@ static void __net_exit nfnl_queue_net_exit(struct net *net)
 		WARN_ON_ONCE(!hlist_empty(&q->instance_table[i]));
 }
 
+static void __net_exit nfnl_queue_net_exit_batch(struct list_head *net_exit_list)
+{
+	/* Wait for RCU callbacks to queue instance cleanup work. */
+	rcu_barrier();
+	flush_workqueue(nfq_cleanup_wq);
+}
+
 static struct pernet_operations nfnl_queue_net_ops = {
 	.init		= nfnl_queue_net_init,
 	.exit		= nfnl_queue_net_exit,
+	.exit_batch	= nfnl_queue_net_exit_batch,
 	.id		= &nfnl_queue_net_id,
 	.size		= sizeof(struct nfnl_queue_net),
 };
