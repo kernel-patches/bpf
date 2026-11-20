@@ -840,6 +840,9 @@ struct bpf_insn_aux_data {
 		u64 obj_new_size;
 		/* remember the offset of node field within type to rewrite */
 		u64 insert_off;
+		/* {this,per}_cpu_ptr() with prog percpu alloc */
+		u64 call_with_percpu_alloc_ptr;
+		u64 call_num;	/* any of these, or the offset of a refcount */
 	};
 	struct btf_struct_meta *kptr_struct_meta;
 	u64 map_key_state; /* constant (32 bit) key tracking for maps */
@@ -851,10 +854,10 @@ struct bpf_insn_aux_data {
 	u64 needs_zext:1; /* alu op needs to clear upper bits */
 	u64 prevent_zext:1; /* alu op cannot be zext (already used with 64-bit scalars) */
 	u64 non_sleepable:1; /* helper/kfunc may be called from non-sleepable context */
-	u64 call_with_percpu_alloc_ptr:1; /* {this,per}_cpu_ptr() with prog percpu alloc */
 	u64 cast_arena:1; /* addr_space_cast of an address in arena */
 	u64 cast_mov:1; /* addr_space_cast of a pointer that is not in arena, it's a move */
 	u64 loop_guard:1; /* may_goto is added in front of this instruction */
+	u64 call_recorded:1; /* see record_call_fixup() */
 	u64 guard_edge_dropped:1; /* an edge of may_goto from here was dropped */
 	u64 alu_state:5; /* used in combination with alu_limit */
 	/* true if STX or LDX instruction is a part of a spill/fill
