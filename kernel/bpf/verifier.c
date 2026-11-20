@@ -2443,6 +2443,8 @@ static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 
 	return 0;
 out:
+	if (env->test_reg_invariants)
+		bpf_note_bug(env);
 	verbose(env, "REG INVARIANTS VIOLATION (%s): %s r64={.base=%#llx, .size=%#llx} "
 		"r32={.base=%#x, .size=%#x} var_off=(%#llx, %#llx) step=%u+%u\n",
 		ctx, msg,
@@ -23350,6 +23352,41 @@ static int check_after_pass(struct bpf_verifier_env *env)
 	return 0;
 }
 
+/* Returns the first error */
+static int check_funcs(struct bpf_verifier_env *env, struct bpf_snapshot *initial)
+{
+	u32 level = env->log.level;
+	int ret;
+
+	restore_snapshot(env, initial);
+	kvfree(env->callx_edges);
+	kvfree(env->callx_index.slots);
+	env->callx_edges = NULL;
+	env->callx_index = (struct bpf_index){};
+	bpf_flow_new_pass(env);
+	ret = do_check_main(env) ?: do_check_subprogs(env) ?: bpf_check_limits(env);
+	env->log.level = level;
+	env->pass_max_cost = U64_MAX;
+	return ret == -EINTR ? ret : env->err ?: ret;
+}
+
+static int check_pass(struct bpf_verifier_env *env, struct bpf_snapshot *initial)
+{
+	int ret;
+
+	if (env->pass && (env->log.level & BPF_LOG_LEVEL2))
+		verbose(env, "pass %u\n", env->pass);
+	bpf_precision_new_pass(env);
+	ret = check_funcs(env, initial);
+	if (ret || pass_needs_restart(env))
+		return ret;
+	ret = check_after_pass(env);
+	if (ret)
+		bpf_find_unproven_after_pass(env);
+	env->err = ret;
+	return ret;
+}
+
 /*
  * If the error of a pass is real, do_check_all() limits the next passes and logs a path to it.
  * To see if it is real, reproduce it with no joins. Check one path after another, depth first
@@ -23361,6 +23398,7 @@ static int check_after_pass(struct bpf_verifier_env *env)
  * ranges too, and a check can fail on it where the joined state is proven.
  * run_has_guess: the run made a guess, on any of its paths. Then the failing path can be false,
  * see fast_forward_trips() and check_loop_guard().
+ * @repeat: see log_failing_path()
  * Returns the error on the path, 0 if there is none.
  */
 static int run_path_sensitive(struct bpf_verifier_env *env, struct bpf_snapshot *initial,
@@ -23377,6 +23415,8 @@ static int run_path_sensitive(struct bpf_verifier_env *env, struct bpf_snapshot 
 	/* for the repeat */
 	if (env->err)
 		env->failing_path_budget = budget;
+	if (env->err && env->run_has_guess)
+		verbose(env, "this path has a guess, its values can be wrong\n");
 	return ret == -EINTR ? ret : env->err;
 }
 
@@ -23417,6 +23457,204 @@ static int find_failing_path(struct bpf_verifier_env *env, struct bpf_snapshot *
 		else
 			env->failing_path_max_trips = trips = 2 * trips + 1;
 	}
+}
+
+/* Level 2 has the log of all passes. Else the log has one pass, or the failing path. */
+struct pass_log {
+	u32 level, len_max;
+	u64 pos;
+};
+
+static void restart_log(struct bpf_verifier_env *env, struct pass_log *log)
+{
+	env->log.level = log->level;
+	/* the log is dropped when a function is found to be safe */
+	log->pos = min(log->pos, env->log.end_pos);
+	if (log->level & BPF_LOG_LEVEL2)
+		return;
+	bpf_vlog_reset(&env->log, log->pos);
+	env->log.len_max = log->len_max;
+}
+
+/* Repeat the last run. The verdict does not depend on the log, so it has no cost. */
+static int log_failing_path(struct bpf_verifier_env *env, struct bpf_snapshot *initial,
+			    struct pass_log *log)
+{
+	u32 insns = env->insn_processed, states = env->total_states;
+	u64 cost = env->cost;
+	int i, ret;
+
+	restart_log(env, log);
+	ret = run_path_sensitive(env, initial, true);
+	env->log.level = 0;
+	env->cost = cost;
+	env->insn_processed = insns;
+	env->total_states = states;
+	/* @initial has the sums from before the run, see copy_snapshot() */
+	for (i = 0; i < env->subprog_cnt; i++) {
+		env->subprog_info[i].insns_total = initial->subprogs[i].insns_total;
+		env->subprog_info[i].insns_self = initial->subprogs[i].insns_self;
+	}
+	return ret;
+}
+
+/*
+ *          pass 0: join all numbers
+ *                    |
+ *    +---------> run a pass
+ *    |               |
+ *    |            error ? --- no ---> pessimized ? --- no ---> ACCEPT
+ *    |               | yes                 | yes
+ *    |               v                     v
+ *    |       good pass before ?      save the good pass,
+ *    |          | no      | yes      partition, cut the budget
+ *    |          |         v                |
+ *    |          |   ACCEPT, use that pass  +---> run a pass
+ *    |          v
+ *    |      partition
+ *    |          |
+ *    |  failing path ? --- yes ---> log it; if no guess, cut the budget
+ *    |          | no                       |
+ *    |          +<-------------------------+
+ *    |          v
+ *    +- yes - is more kept apart ? --- no ---> REJECT
+ *
+ * Each pass starts from the snapshot @initial. The good pass is in the snapshot @good_pass.
+ * The path-sensitive run needs the deps, so it comes after the partition.
+ * There is no more precision when the budget is used up, or when no state was imprecise.
+ *
+ * A pass assumes what stops each loop, and checks it, see pass_needs_restart(). If the
+ * assumption is wrong, the pass starts again.
+ *
+ * The log has the failing path. If there is none, or if it has a guess and the error of a pass
+ * is real, the log has the basic block of an error. Below level 2 the later passes and the
+ * path-sensitive runs write no log. The one that gives the log runs once more.
+ */
+static int do_check_all(struct bpf_verifier_env *env)
+{
+	bool offload = bpf_prog_is_offloaded(env->prog->aux), limit = false, last, replay;
+	struct pass_log log = { env->log.level, env->log.len_max, env->log.end_pos };
+	bool quiet = log.level && !(log.level & BPF_LOG_LEVEL2), logged = false, replayed = false;
+	struct bpf_snapshot *initial, *good_pass = NULL;
+	int ret, more, path_err = 0, err = 0;
+	bool guess = false, real;
+	u64 max_cost = 0;
+
+	initial = save_snapshot(env, NULL);
+	if (!initial || bpf_precision_init(env)) {
+		bpf_precision_free(env);
+		kvfree(initial);
+		return -ENOMEM;
+	}
+	env->max_mem = min(env->max_mem, env->mem + BPF_PASS_MEM_BASE +
+			   (u64)BPF_PASS_MEM_PER_INSN * env->prog->len);
+	for (;; env->pass += !env->for_log) {
+		if (!env->pass || !quiet)
+			restart_log(env, &log);
+		ret = check_pass(env, initial);
+		if (quiet)
+			env->log.level = 0;
+		replay = env->replay;
+		env->replay = false;
+		if (ret == -EINTR || env->bug || env->no_mem) {
+			err = ret;
+			break;
+		}
+		if (bpf_undo_precision(env))
+			continue;
+		if (ret && good_pass) {
+			restore_snapshot(env, good_pass);
+			err = 0;
+			if (!offload)
+				break;
+			bpf_restore_precision(env);
+		} else if (!ret) {
+			bpf_flow_drop_guards(env);
+			if (pass_needs_restart(env))
+				continue;
+			if (env->for_log && (!offload || replay))
+				break;
+			max_cost = good_pass ? max_cost : env->max_cost;
+			if (!replayed && !env->for_log && bpf_partition_for_pessimized(env) > 0) {
+				env->max_cost = min(env->max_cost, env->cost + BPF_MIN_BUDGET);
+				good_pass = save_snapshot(env, good_pass);
+				if (good_pass)
+					continue;
+			}
+			if (!offload || replay) {
+				err = 0;
+				break;
+			}
+		}
+		if (!ret || good_pass) {
+			/* The driver sees a pass without errors. It can refuse an insn. */
+			kvfree(good_pass);
+			good_pass = NULL;
+			env->max_cost = max_cost;
+			env->replay = replayed = true;
+			ret = bpf_prog_offload_verifier_prep(env->prog);
+			if (!ret)
+				continue;
+			err = ret;
+			break;
+		}
+		if (env->for_log)
+			break;
+		err = path_err ?: ret;
+		limit = !env->err;
+		if (limit)
+			goto reject;
+		/* a valid program that no precision can prove must not use up the limit */
+		env->max_cost = min(env->max_cost, max(2 * env->cost, BPF_PARTITION_BUDGET));
+		last = real = !env->imprecise;
+		more = bpf_partition_more(env);
+		if (more < 0 && more != -E2BIG)
+			err = more;
+		limit = more < 0;
+		last |= more != 1;
+		if (!limit && !path_err && (last || bpf_failing_path_is_due(env))) {
+			path_err = find_failing_path(env, initial, last);
+			if (path_err) {
+				err = path_err;
+				guess = env->run_has_guess;
+				logged = quiet && log_failing_path(env, initial, &log) == err;
+			}
+			if (path_err && !guess)
+				env->max_cost = min(env->max_cost, env->cost +
+						    2 * bpf_precision_first_budget(env));
+		}
+		if (real && guess && err == path_err && err != -EINTR) {
+			err = ret;
+			logged = false;
+		}
+		if (err == -EINTR || env->bug)
+			break;
+		if (!last)
+			continue;
+reject:
+		if (logged || !quiet || (limit && !env->pass))
+			break;
+		/* Run a pass with an error once more, for the log. It has a limit of its own. */
+		env->for_log = true;
+		quiet = false;
+		env->max_cost = 2 * env->cost;
+	}
+	env->log.level = log.level;
+	/* after an abort the error and the log can be wrong */
+	if (err && env->aborted)
+		err = -EINTR;
+	if (env->bug)
+		err = -EFAULT;
+	if (!err)
+		restart_log(env, &log);
+	if (err && (!path_err || guess) && (limit || (env->for_log && !env->err)))
+		verbose(env, "the limit on cost or memory ended pass %u\n", env->pass);
+	if (!err && env->sleepable_async_cb)
+		mark_sleepable_async_cb(env);
+	bpf_precision_free(env);
+	kvfree(initial);
+	kvfree(good_pass);
+	return err;
 }
 
 /*
@@ -25262,6 +25500,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	 * and supplied buffer to store the verification trace
 	 */
 	ret = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf, attr_log->size);
+	env->log_level = env->log.level;
 	if (ret)
 		goto err_free_env;
 	ret = bpf_diag_init(env);

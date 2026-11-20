@@ -1545,6 +1545,7 @@ void bpf_restore_precision(struct bpf_verifier_env *env)
 void bpf_precision_new_pass(struct bpf_verifier_env *env)
 {
 	struct bpf_precision *prec = env->precision;
+	u32 i;
 
 	bitmap_zero(prec->this_pass.unproven_insns, env->prog->len);
 	bitmap_zero(prec->this_pass.bad_read_insns, env->prog->len);
@@ -1555,6 +1556,9 @@ void bpf_precision_new_pass(struct bpf_verifier_env *env)
 	if (prec->apart_xregno)
 		memset(prec->apart_xregno, 0, env->prog->len * sizeof(u16));
 	if (prec->data_deps && !env->replay && (prec->budget_grew || env->for_log)) {
+		/* the last error came before the last partition */
+		for (i = 0; env->for_log && i < 5 * prec->words; i++)
+			prec->kept[i] &= prec->undo[i];
 		keep_precision(prec, false);
 		prec->partitioned_by = prec->pass_cost = 0;
 	}
