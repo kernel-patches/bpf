@@ -112,6 +112,7 @@
 #include "verifier_netfilter_retcode.skel.h"
 #include "verifier_bpf_fastcall.skel.h"
 #include "verifier_or_jmp32_k.skel.h"
+#include "verifier_passes.skel.h"
 #include "verifier_no_limits.skel.h"
 #include "verifier_patch_list.skel.h"
 #include "verifier_percpu_addr.skel.h"
@@ -120,6 +121,7 @@
 #include "verifier_private_stack.skel.h"
 #include "verifier_ptr_off.skel.h"
 #include "verifier_ptr_to_buf.skel.h"
+#include "verifier_partition.skel.h"
 #include "verifier_raw_stack.skel.h"
 #include "verifier_raw_tp_writable.skel.h"
 #include "verifier_reg_equal.skel.h"
@@ -325,6 +327,7 @@ void test_verifier_netfilter_retcode(void)    { RUN(verifier_netfilter_retcode);
 void test_verifier_bpf_fastcall(void)         { RUN(verifier_bpf_fastcall); }
 void test_verifier_no_limits(void)            { RUN_JITED(verifier_no_limits); }
 void test_verifier_or_jmp32_k(void)           { RUN(verifier_or_jmp32_k); }
+void test_verifier_passes(void)               { RUN(verifier_passes); }
 /*
  * Run serially with bpf_jit_harden at 0: blinding changes the xlated insns that
  * the tests compare, and other tests set the sysctl.
@@ -345,6 +348,7 @@ void test_verifier_prevent_map_lookup(void)   { RUN(verifier_prevent_map_lookup)
 void test_verifier_private_stack(void)        { RUN(verifier_private_stack); }
 void test_verifier_ptr_off(void)              { RUN(verifier_ptr_off); }
 void test_verifier_ptr_to_buf(void)           { RUN(verifier_ptr_to_buf); }
+void test_verifier_partition(void)            { RUN(verifier_partition); }
 void test_verifier_raw_stack(void)            { RUN(verifier_raw_stack); }
 void test_verifier_raw_tp_writable(void)      { RUN(verifier_raw_tp_writable); }
 void test_verifier_reg_equal(void)            { RUN(verifier_reg_equal); }
