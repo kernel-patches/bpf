@@ -375,7 +375,8 @@ int io_register_bpf_filter(struct io_restriction *res,
 	fprog.filter = u64_to_user_ptr(reg.filter.filter_ptr);
 
 	ret = bpf_prog_create_from_user(&prog, &fprog,
-					io_uring_check_cbpf_filter, false);
+					io_uring_check_cbpf_filter, false,
+					NULL);
 	if (ret)
 		return ret;
 

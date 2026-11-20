@@ -794,9 +794,30 @@ struct compat_sock_fprog {
 	compat_uptr_t	filter;	/* struct sock_filter * */
 };
 
+#define CBPF_CACHE_BITS	8
+#define CBPF_CACHE_SIZE	BIT(CBPF_CACHE_BITS)
+
+/* cache of classic bpf filters. Identical filters share same prog */
+struct cbpf_cache {
+	struct hlist_head	hash[CBPF_CACHE_SIZE];
+	spinlock_t		lock[CBPF_CACHE_SIZE]; /* per-bucket */
+};
+
+/* define a classic BPF filter cache */
+#define DEFINE_CBPF_CACHE(name)					\
+	struct cbpf_cache name = {				\
+		.lock = {						\
+			[0 ... (CBPF_CACHE_SIZE - 1)] =		\
+				__SPIN_LOCK_UNLOCKED(name.lock),	\
+		},							\
+	}
+
+struct cbpf_cache_entry;
+
 struct sock_fprog_kern {
 	u16			len;
 	struct sock_filter	*filter;
+	struct cbpf_cache_entry *cache_entry;
 };
 
 /* Some arches need doubleword alignment for their instructions and/or data */
@@ -1360,7 +1381,9 @@ typedef int (*bpf_aux_classic_check_t)(struct sock_filter *filter,
 
 int bpf_prog_create(struct bpf_prog **pfp, struct sock_fprog_kern *fprog);
 int bpf_prog_create_from_user(struct bpf_prog **pfp, struct sock_fprog *fprog,
-			      bpf_aux_classic_check_t trans, bool save_orig);
+			       bpf_aux_classic_check_t trans, bool save_orig,
+			       struct cbpf_cache *cache);
+void cbpf_cache_put_prog(struct bpf_prog *prog);
 void bpf_prog_destroy(struct bpf_prog *fp);
 
 int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk);

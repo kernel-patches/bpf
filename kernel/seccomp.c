@@ -701,7 +701,8 @@ static struct seccomp_filter *seccomp_prepare_filter(struct sock_fprog *fprog)
 
 	mutex_init(&sfilter->notify_lock);
 	ret = bpf_prog_create_from_user(&sfilter->prog, fprog,
-					seccomp_check_filter, save_orig);
+					seccomp_check_filter, save_orig,
+					NULL);
 	if (ret < 0) {
 		kfree(sfilter);
 		return ERR_PTR(ret);
