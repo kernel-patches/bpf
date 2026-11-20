@@ -2353,7 +2353,13 @@ void drop_collected_paths(const struct path *paths, const struct path *prealloc)
 		kfree(paths);
 }
 
-static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *, bool);
+enum mnt_ns_flags_t {
+	MNT_NS_ANON	= (1 << 0),
+	MNT_NS_KERNEL	= (1 << 1),
+};
+
+static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *,
+					  enum mnt_ns_flags_t);
 
 /* Consumes the caller's reference to @mnt. */
 void dissolve_on_fput(struct vfsmount *mnt)
@@ -3149,7 +3155,7 @@ static struct mnt_namespace *get_detached_copy(const struct path *path, unsigned
 	struct user_namespace *user_ns = mnt_ns->user_ns;
 	struct mount *mnt, *p;
 
-	ns = alloc_mnt_ns(user_ns, true);
+	ns = alloc_mnt_ns(user_ns, MNT_NS_ANON);
 	if (IS_ERR(ns))
 		return ns;
 
@@ -3230,7 +3236,7 @@ static struct mnt_namespace *create_new_namespace(struct path *path,
 	if (foreign)
 		copy_flags |= CL_SLAVE | CL_COPY_UNBINDABLE;
 
-	new_ns = alloc_mnt_ns(user_ns, false);
+	new_ns = alloc_mnt_ns(user_ns, 0);
 	if (IS_ERR(new_ns))
 		return ERR_CAST(new_ns);
 
@@ -4369,11 +4375,16 @@ static void free_mnt_ns(struct mnt_namespace *ns)
 	mnt_ns_tree_remove(ns);
 }
 
-static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *user_ns, bool anon)
+static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *user_ns,
+					  enum mnt_ns_flags_t flags)
 {
+	enum ns_common_flags_t ns_flags = 0;
 	struct mnt_namespace *new_ns;
 	struct ucounts *ucounts;
 	int ret;
+
+	if (flags & MNT_NS_KERNEL)
+		ns_flags |= NS_COMMON_KERNEL;
 
 	ucounts = inc_mnt_namespaces(user_ns);
 	if (!ucounts)
@@ -4385,8 +4396,8 @@ static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *user_ns, bool a
 		return ERR_PTR(-ENOMEM);
 	}
 
-	if (anon)
-		ret = ns_common_init_inum(new_ns, MNT_NS_ANON_INO);
+	if (flags & MNT_NS_ANON)
+		ret = ns_common_init_inum(new_ns, MNT_NS_ANON_INO, ns_flags);
 	else
 		ret = ns_common_init(new_ns);
 	if (ret) {
@@ -4394,7 +4405,7 @@ static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *user_ns, bool a
 		dec_mnt_namespaces(ucounts);
 		return ERR_PTR(ret);
 	}
-	new_ns->is_anon = anon;
+	new_ns->is_anon = flags & MNT_NS_ANON;
 	refcount_set(&new_ns->passive, 1);
 	new_ns->mounts = RB_ROOT;
 	init_waitqueue_head(&new_ns->poll);
@@ -4422,7 +4433,7 @@ struct mnt_namespace *copy_mnt_ns(u64 flags, struct mnt_namespace *ns,
 
 	old = ns->root;
 
-	new_ns = alloc_mnt_ns(user_ns, false);
+	new_ns = alloc_mnt_ns(user_ns, 0);
 	if (IS_ERR(new_ns))
 		return new_ns;
 
@@ -4509,7 +4520,7 @@ struct dentry *mount_subtree(struct vfsmount *m, const char *name)
 	struct path path;
 	int err;
 
-	ns = alloc_mnt_ns(&init_user_ns, true);
+	ns = alloc_mnt_ns(&init_user_ns, MNT_NS_ANON | MNT_NS_KERNEL);
 	if (IS_ERR(ns)) {
 		mntput(m);
 		return ERR_CAST(ns);
@@ -4699,7 +4710,7 @@ SYSCALL_DEFINE3(fsmount, int, fs_fd, unsigned int, flags,
 		return FD_ADD((flags & FSMOUNT_CLOEXEC) ? O_CLOEXEC : 0,
 			      open_new_namespace(&new_path, MOUNT_COPY_NEW));
 
-	ns = alloc_mnt_ns(current->nsproxy->mnt_ns->user_ns, true);
+	ns = alloc_mnt_ns(current->nsproxy->mnt_ns->user_ns, MNT_NS_ANON);
 	if (IS_ERR(ns))
 		return PTR_ERR(ns);
 	mnt = real_mount(new_path.mnt);

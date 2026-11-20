@@ -55,7 +55,7 @@ static void ns_debug(struct ns_common *ns, const struct proc_ns_operations *ops)
 #endif
 
 int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_operations *ops,
-		     int inum, u64 ns_id)
+		     int inum, u64 ns_id, enum ns_common_flags_t flags)
 {
 	int ret = 0;
 
@@ -66,6 +66,7 @@ int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_ope
 #endif
 	ns->ops = ops;
 	ns->ns_type = ns_type;
+	ns->ns_flags = flags;
 	ns_tree_node_init(&ns->ns_tree_node);
 	ns_tree_node_init(&ns->ns_unified_node);
 	ns_tree_node_init(&ns->ns_owner_node);
@@ -85,7 +86,8 @@ int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_ope
 	/* Allocate the id before the LSM hook so it can track the namespace by it. */
 	__ns_tree_gen_id(ns, ns_id);
 
-	ret = security_namespace_init(ns);
+	if (!(flags & NS_COMMON_KERNEL))
+		ret = security_namespace_init(ns);
 	if (ret) {
 		if (!inum)
 			proc_free_inum(ns->inum);
@@ -106,7 +108,8 @@ int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_ope
 
 void __ns_common_free(struct ns_common *ns)
 {
-	security_namespace_free(ns);
+	if (!(ns->ns_flags & NS_COMMON_KERNEL))
+		security_namespace_free(ns);
 
 	if (ns->inum > MNT_NS_INO_SPECIAL_MAX)
 		proc_free_inum(ns->inum);

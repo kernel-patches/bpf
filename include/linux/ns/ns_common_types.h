@@ -102,6 +102,7 @@ extern const struct proc_ns_operations utsns_operations;
  *   __ns_ref_active = 1 and remain active forever.
  *
  * @ns_type: type of namespace (e.g., CLONE_NEWNET)
+ * @ns_flags: NS_COMMON_* flags
  * @stashed: cached dentry to be used by the vfs
  * @ops: namespace operations
  * @inum: namespace inode number (quickly recycled for non-initial namespaces)
@@ -113,6 +114,7 @@ struct ns_common {
 		refcount_t __ns_ref; /* do not use directly */
 	} ____cacheline_aligned_in_smp;
 	u32 ns_type;
+	u32 ns_flags;
 	struct dentry *stashed;
 	const struct proc_ns_operations *ops;
 	unsigned int inum;
