@@ -666,6 +666,8 @@ static void print_reg_state(struct bpf_verifier_env *env,
 	if (type_is_pkt_pointer(t)) {
 		verbose_a("r=");
 		verbose_unum(env, reg->range);
+		if (pkt_min_len(reg) && pkt_min_len(reg) != reg->range)
+			verbose_a("min_len=%d", pkt_min_len(reg));
 	}
 	if (base_type(t) == PTR_TO_MEM) {
 		verbose_a("sz=");
