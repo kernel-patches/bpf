@@ -522,6 +522,8 @@ struct bpf_verifier_state {
 	struct bpf_reference_state *refs;
 	u32 insn_idx;
 	u32 curframe;
+	/* an xreg has no value: unreachable. Only a path-sensitive run drops such a state. */
+	bool infeasible;
 
 	struct_group(held,
 	void *active_lock_ptr;
