@@ -25,7 +25,13 @@ properties:
           - const: nvidia,tegra124-emc
 
   reg:
-    maxItems: 1
+    oneOf:
+      - items:
+          - description: EMC registers, writes go to all channels
+      - items:
+          - description: EMC registers, writes go to all channels
+          - description: EMC channel 0 registers
+          - description: EMC channel 1 registers
 
   clocks:
     items:
@@ -218,6 +224,9 @@ allOf:
             enum:
               - nvidia,tegra124-emc
     then:
+      properties:
+        reg:
+          maxItems: 1
       patternProperties:
         "^emc-timings-[0-9]+$":
           patternProperties:
