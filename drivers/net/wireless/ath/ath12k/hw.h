@@ -13,10 +13,6 @@
 #include "wmi.h"
 #include "hal.h"
 
-struct ath12k_dp_peer;
-struct ath12k_skb_rxcb;
-struct ieee80211_rx_status;
-
 /* Target configuration defines */
 
 /* Num VDEVS per radio */
@@ -127,9 +123,11 @@ enum ath12k_bus {
 	ATH12K_BUS_AHB,
 };
 
-#define ATH12K_EXT_IRQ_GRP_NUM_MAX 11
+#define ATH12K_EXT_IRQ_GRP_NUM_MAX 12
 
 struct hal_rx_desc;
+struct hal_reo_dest_ring;
+struct ath12k_dp;
 struct hal_tcl_data_cmd;
 struct htt_rx_ring_tlv_filter;
 enum hal_encrypt_type;
@@ -240,6 +238,14 @@ struct ath12k_hw_params {
 
 	bool host_alloc_ml_id;
 	bool advertise_iface_mac_pool;
+	/*
+	 * True for devices with PCIe hardware registered as AHB platform devices.
+	 * Such devices use AHB APIs for probe/boot but PCIe APIs for operation.
+	 * Example: QCN6432 (PCIe device attached to Q6, registered as AHB).
+	 */
+	bool hybrid_bus_type;
+
+	bool support_hw_link_id;
 };
 
 struct ath12k_hw_ops {
@@ -251,9 +257,6 @@ struct ath12k_hw_ops {
 	bool (*dp_srng_is_tx_comp_ring)(int ring_num);
 	bool (*is_frame_link_agnostic)(struct ath12k_link_vif *arvif,
 				       struct ieee80211_mgmt *mgmt);
-	int (*get_rx_link_id)(struct ath12k_dp_peer *dp_peer,
-			      struct ath12k_skb_rxcb *rxcb,
-			      struct ieee80211_rx_status *status);
 };
 
 static inline
@@ -282,17 +285,6 @@ static inline int ath12k_hw_mac_id_to_srng_id(const struct ath12k_hw_params *hw,
 		return hw->hw_ops->mac_id_to_srng_id(hw, mac_id);
 
 	return 0;
-}
-
-static inline int ath12k_hw_get_rx_link_id(const struct ath12k_hw_params *hw,
-					   struct ath12k_dp_peer *dp_peer,
-					   struct ath12k_skb_rxcb *rxcb,
-					   struct ieee80211_rx_status *status)
-{
-	if (hw->hw_ops->get_rx_link_id)
-		return hw->hw_ops->get_rx_link_id(dp_peer, rxcb, status);
-
-	return -1;
 }
 
 struct ath12k_fw_ie {
