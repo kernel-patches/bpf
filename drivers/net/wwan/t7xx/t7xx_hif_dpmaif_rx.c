@@ -924,8 +924,10 @@ void t7xx_dpmaif_irq_rx_done(struct dpmaif_ctrl *dpmaif_ctrl, const unsigned int
 	 * which can't be done from softirq context the poll function
 	 * is running in.
 	 */
-	ret = pm_runtime_resume_and_get(ctrl->dev);
+	pm_runtime_get_noresume(ctrl->dev);
+	ret = pm_runtime_resume(ctrl->dev);
 	if (ret < 0 && ret != -EACCES) {
+		pm_runtime_put_noidle(ctrl->dev);
 		dev_err(ctrl->dev, "Failed to resume device: %d\n", ret);
 		return;
 	}
@@ -1081,9 +1083,12 @@ static void t7xx_dpmaif_bat_release_work(struct work_struct *work)
 	struct dpmaif_rx_queue *rxq;
 	int ret;
 
-	ret = pm_runtime_resume_and_get(dpmaif_ctrl->dev);
-	if (ret < 0 && ret != -EACCES)
+	pm_runtime_get_noresume(dpmaif_ctrl->dev);
+	ret = pm_runtime_resume(dpmaif_ctrl->dev);
+	if (ret < 0 && ret != -EACCES) {
+		pm_runtime_put_noidle(dpmaif_ctrl->dev);
 		return;
+	}
 
 	t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
 

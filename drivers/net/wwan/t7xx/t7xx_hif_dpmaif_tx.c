@@ -162,9 +162,12 @@ static void t7xx_dpmaif_tx_done(struct work_struct *work)
 	struct dpmaif_hw_info *hw_info;
 	int ret;
 
-	ret = pm_runtime_resume_and_get(dpmaif_ctrl->dev);
-	if (ret < 0 && ret != -EACCES)
+	pm_runtime_get_noresume(dpmaif_ctrl->dev);
+	ret = pm_runtime_resume(dpmaif_ctrl->dev);
+	if (ret < 0 && ret != -EACCES) {
+		pm_runtime_put_noidle(dpmaif_ctrl->dev);
 		return;
+	}
 
 	/* The device may be in low power state. Disable sleep if needed */
 	t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
@@ -461,9 +464,12 @@ static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 				break;
 		}
 
-		ret = pm_runtime_resume_and_get(dpmaif_ctrl->dev);
-		if (ret < 0 && ret != -EACCES)
+		pm_runtime_get_noresume(dpmaif_ctrl->dev);
+		ret = pm_runtime_resume(dpmaif_ctrl->dev);
+		if (ret < 0 && ret != -EACCES) {
+			pm_runtime_put_noidle(dpmaif_ctrl->dev);
 			return ret;
+		}
 
 		/* A runtime suspended device was resumed above and had its queues
 		 * restarted, so a stopped queue here belongs to a system suspend
