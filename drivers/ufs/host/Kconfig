@@ -168,3 +168,16 @@ config SCSI_UFS_AMD_VERSAL2
 
 	  Select this if you have UFS controller on AMD Versal Gen 2 SoC.
 	  If unsure, say N.
+
+config SCSI_UFS_STARFIVE
+	tristate "Starfive UFS controller platform driver"
+	depends on OF && SCSI_UFSHCD_PLATFORM
+	depends on ARCH_STARFIVE || COMPILE_TEST
+	help
+	  This selects the StarFive specific additions to UFSHCD platform driver.
+	  UFS host on StarFive needs some vendor specific configuration before
+	  accessing the hardware which includes PHY configuration and vendor
+	  specific registers.
+
+	  Select this if you have UFS controller on StarFive chipset.
+	  If unsure, say N.
