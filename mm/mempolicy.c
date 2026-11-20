@@ -1713,7 +1713,9 @@ static int get_bitmap(unsigned long *mask, const unsigned long __user *nmask,
 static int get_nodes(nodemask_t *nodes, const unsigned long __user *nmask,
 		     unsigned long maxnode)
 {
-	--maxnode;
+        /* User space passes the number of bits plus 1. Fix that up. */
+	maxnode -= 1;
+
 	nodes_clear(*nodes);
 	if (maxnode == 0 || !nmask)
 		return 0;
@@ -1746,31 +1748,39 @@ static int get_nodes(nodemask_t *nodes, const unsigned long __user *nmask,
 }
 
 /* Copy a kernel node mask to user space */
-static int copy_nodes_to_user(unsigned long __user *mask, unsigned long maxnode,
-			      nodemask_t *nodes)
+static int put_nodes(unsigned long __user *mask, nodemask_t *nodes,
+		     unsigned long maxnode)
 {
-	unsigned long copy = ALIGN(maxnode-1, BITS_PER_LONG) / 8;
-	unsigned int nbytes = BITS_TO_LONGS(nr_node_ids) * sizeof(long);
-	bool compat = in_compat_syscall();
+	const bool compat = in_compat_syscall();
+	const unsigned int word_bits = compat ? BITS_PER_COMPAT_LONG : BITS_PER_LONG;
+	unsigned long bits, node_bits;
 
-	if (compat) {
-		copy = ALIGN(maxnode-1, BITS_PER_COMPAT_LONG) / 8;
-		nbytes = BITS_TO_COMPAT_LONGS(nr_node_ids) * sizeof(compat_long_t);
-	}
+	/* User space passes the number of bits plus 1. Fix that up. */
+	maxnode -= 1;
 
-	if (copy > nbytes) {
-		if (copy > PAGE_SIZE)
-			return -EINVAL;
-		if (clear_user((char __user *)mask + nbytes, copy - nbytes))
+	/* Don't exceed what would fit into a single page. */
+	if (maxnode > PAGE_SIZE * BITS_PER_BYTE)
+		return -EINVAL;
+
+	/* Process full words, which depend on the user space ABI. */
+	bits = ALIGN(maxnode, word_bits);
+	node_bits = ALIGN(nr_node_ids, word_bits);
+
+	/* Clear anything we won't copy below. */
+	if (bits > node_bits) {
+		if (clear_user((char __user *)mask + node_bits / BITS_PER_BYTE,
+			       (bits - node_bits) / BITS_PER_BYTE))
 			return -EFAULT;
-		copy = nbytes;
+		bits = node_bits;
 	}
 
+	/* Finally, copy the bitmap. */
 	if (compat)
 		return compat_put_bitmap((compat_ulong_t __user *)mask,
-					 nodes_addr(*nodes), copy * 8);
-
-	return copy_to_user(mask, nodes_addr(*nodes), copy) ? -EFAULT : 0;
+					 nodes_addr(*nodes), bits);
+	if (copy_to_user(mask, nodes_addr(*nodes), bits / BITS_PER_BYTE))
+		return -EFAULT;
+	return 0;
 }
 
 /* Basic parameter sanity check used by both mbind() and set_mempolicy() */
@@ -2031,7 +2041,7 @@ static int kernel_get_mempolicy(int __user *policy,
 		return -EFAULT;
 
 	if (nmask)
-		err = copy_nodes_to_user(nmask, maxnode, &nodes);
+		err = put_nodes(nmask, &nodes, maxnode);
 
 	return err;
 }
