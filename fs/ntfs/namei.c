@@ -672,8 +672,8 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 	}
 
 	/* Create FILE_NAME attribute. */
-	fn_len = sizeof(struct file_name_attr) + name_len * sizeof(__le16);
-	fn = kzalloc(fn_len, GFP_NOFS);
+	fn_len = struct_size(fn, file_name, name_len);
+	fn = kzalloc_flex(*fn, file_name, name_len, GFP_NOFS);
 	if (!fn) {
 		err = -ENOMEM;
 		goto err_out;
@@ -1387,9 +1387,8 @@ static int __ntfs_link(struct ntfs_inode *ni, struct ntfs_inode *dir_ni,
 	}
 
 	/* Create FILE_NAME attribute. */
-	fn_len = sizeof(struct file_name_attr) + name_len * sizeof(__le16);
-
-	fn = kzalloc(fn_len, GFP_NOFS);
+	fn_len = struct_size(fn, file_name, name_len);
+	fn = kzalloc_flex(*fn, file_name, name_len, GFP_NOFS);
 	if (!fn) {
 		err = -ENOMEM;
 		goto err_out;
