@@ -433,10 +433,10 @@ i915-y += \
 i915-$(CONFIG_DRM_I915_GVT) += \
 	intel_gvt.o \
 	intel_gvt_mmio_table.o
-include $(src)/gvt/Makefile
 
 obj-$(CONFIG_DRM_I915) += i915.o
-obj-$(CONFIG_DRM_I915_GVT_KVMGT) += kvmgt.o
+
+obj-$(CONFIG_DRM_I915_GVT_KVMGT) += gvt/
 
 # kernel-doc test
 #

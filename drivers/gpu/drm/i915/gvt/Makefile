@@ -1,25 +1,27 @@
 # SPDX-License-Identifier: GPL-2.0
 
-kvmgt-$(CONFIG_DRM_I915_GVT) += \
-	gvt/aperture_gm.o \
-	gvt/cfg_space.o \
-	gvt/cmd_parser.o \
-	gvt/debugfs.o \
-	gvt/display.o \
-	gvt/dmabuf.o \
-	gvt/edid.o \
-	gvt/execlist.o \
-	gvt/fb_decoder.o \
-	gvt/firmware.o \
-	gvt/gtt.o \
-	gvt/handlers.o \
-	gvt/interrupt.o \
-	gvt/kvmgt_module.o \
-	gvt/mmio.o \
-	gvt/mmio_context.o \
-	gvt/opregion.o \
-	gvt/page_track.o \
-	gvt/sched_policy.o \
-	gvt/scheduler.o \
-	gvt/trace_points.o \
-	gvt/vgpu.o
+kvmgt-y += \
+	aperture_gm.o \
+	cfg_space.o \
+	cmd_parser.o \
+	debugfs.o \
+	display.o \
+	dmabuf.o \
+	edid.o \
+	execlist.o \
+	fb_decoder.o \
+	firmware.o \
+	gtt.o \
+	handlers.o \
+	interrupt.o \
+	kvmgt_module.o \
+	mmio.o \
+	mmio_context.o \
+	opregion.o \
+	page_track.o \
+	sched_policy.o \
+	scheduler.o \
+	trace_points.o \
+	vgpu.o
+
+obj-$(CONFIG_DRM_I915_GVT_KVMGT) += kvmgt.o
