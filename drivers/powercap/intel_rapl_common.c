@@ -1878,9 +1878,11 @@ static int rapl_pm_callback(struct notifier_block *nb,
 {
 	switch (mode) {
 	case PM_SUSPEND_PREPARE:
+	case PM_HIBERNATION_PREPARE:
 		power_limit_state_save();
 		break;
 	case PM_POST_SUSPEND:
+	case PM_POST_HIBERNATION:
 		power_limit_state_restore();
 		break;
 	}
