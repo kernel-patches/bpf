@@ -12058,18 +12058,17 @@ static void bnxt_irq_affinity_notify(struct irq_affinity_notify *notify,
 	}
 #endif
 
-	if (!bp->tph_mode)
+	/* Only Rx queues can be restarted to follow the IRQ */
+	if (!BNXT_SUPPORTS_QUEUE_API(bp) || irq->ring_nr >= bp->rx_nr_rings)
 		return;
 
-	if (irq->ring_nr >= bp->rx_nr_rings)
-		return;
+	if (bp->tph_mode) {
+		cpu = cpumask_first(mask);
+		if (!pcie_tph_get_cpu_st(bp->pdev, TPH_MEM_TYPE_VM, cpu, &tag))
+			WRITE_ONCE(irq->new_tag, tag);
+	}
 
-	if (pcie_tph_get_cpu_st(bp->pdev, TPH_MEM_TYPE_VM,
-				cpumask_first(mask), &tag))
-		return;
-
-	WRITE_ONCE(irq->new_tag, tag);
-	bnxt_queue_sp_work(bp, BNXT_TPH_UPDATE_SP_EVENT);
+	bnxt_queue_sp_work(bp, BNXT_IRQ_AFFINITY_SP_EVENT);
 }
 
 static void bnxt_irq_affinity_release(struct kref *ref)
@@ -14806,7 +14805,10 @@ static void bnxt_rtnl_unlock_sp(struct bnxt *bp)
 	rtnl_unlock();
 }
 
-static void bnxt_tph_update(struct bnxt *bp)
+/* Restart the Rx queues whose IRQ moved, if the move changed the TPH
+ * Steering Tag or the node the queue memory should be allocated on.
+ */
+static void bnxt_irq_affinity_update(struct bnxt *bp)
 {
 	struct net_device *dev = bp->dev;
 	int i;
@@ -14816,27 +14818,40 @@ static void bnxt_tph_update(struct bnxt *bp)
 		goto unlock;
 
 	for (i = 0; i < bp->rx_nr_rings; i++) {
+		struct bnxt_rx_ring_info *rxr = &bp->rx_ring[i];
+		bool new_tag = false, new_node = false;
+		int map_idx, err, nid;
 		struct bnxt_irq *irq;
-		int map_idx, err;
 		u16 tag;
 
 		map_idx = bnxt_cp_num_to_irq_num(bp, i);
 		irq = &bp->irq_tbl[map_idx];
+
 		tag = READ_ONCE(irq->new_tag);
-		if (irq->tag == tag)
+		if (irq->tag != tag) {
+			if (!pcie_tph_set_st_entry(bp->pdev, irq->msix_nr, tag))
+				new_tag = true;
+		}
+
+		nid = READ_ONCE(bp->ring_nid[i]);
+		if (nid != NUMA_NO_NODE && rxr->page_pool->p.nid != nid)
+			new_node = true;
+
+		if (!new_tag && !new_node)
 			continue;
 
-		if (pcie_tph_set_st_entry(bp->pdev, irq->msix_nr, tag))
-			continue;
-
-		err = netdev_rx_queue_restart(dev, irq->ring_nr);
+		err = netdev_rx_queue_restart(dev, i);
 		if (err) {
 			netdev_err(dev, "RX queue restart failed: err=%d\n",
 				   err);
+			/* Failing to start a new queue may close the device */
+			if (!test_bit(BNXT_STATE_OPEN, &bp->state))
+				break;
 			continue;
 		}
 
-		irq->tag = tag;
+		if (new_tag)
+			irq->tag = tag;
 	}
 
 unlock:
@@ -15280,8 +15295,8 @@ static void bnxt_sp_task(struct work_struct *work)
 			bnxt_devlink_health_fw_report(bp);
 	}
 
-	if (test_and_clear_bit(BNXT_TPH_UPDATE_SP_EVENT, &bp->sp_event))
-		bnxt_tph_update(bp);
+	if (test_and_clear_bit(BNXT_IRQ_AFFINITY_SP_EVENT, &bp->sp_event))
+		bnxt_irq_affinity_update(bp);
 
 	smp_mb__before_atomic();
 	clear_bit(BNXT_STATE_IN_SP_TASK, &bp->state);
