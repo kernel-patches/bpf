@@ -31,6 +31,7 @@ static struct genl_family l2tp_nl_family;
 static const struct genl_multicast_group l2tp_multicast_group[] = {
 	{
 		.name = L2TP_GENL_MCGROUP,
+		.flags = GENL_MCAST_CAP_NET_ADMIN,
 	},
 };
 
