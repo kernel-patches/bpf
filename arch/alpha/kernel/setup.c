@@ -17,7 +17,6 @@
 #include <linux/stddef.h>
 #include <linux/unistd.h>
 #include <linux/ptrace.h>
-#include <linux/slab.h>
 #include <linux/user.h>
 #include <linux/screen_info.h>
 #include <linux/delay.h>
@@ -26,11 +25,13 @@
 #include <linux/cpu.h>
 #include <linux/errno.h>
 #include <linux/init.h>
+#include <linux/jump_label.h>
 #include <linux/string.h>
 #include <linux/ioport.h>
 #include <linux/panic_notifier.h>
 #include <linux/platform_device.h>
 #include <linux/memblock.h>
+#include <linux/dma-map-ops.h>
 #include <linux/pci.h>
 #include <linux/seq_file.h>
 #include <linux/root_dev.h>
@@ -241,26 +242,6 @@ reserve_std_resources(void)
 	for ((_cluster) = (memdesc)->cluster, (i) = 0;		\
 	     (i) < (memdesc)->numclusters; (i)++, (_cluster)++)
 
-static unsigned long __init
-get_mem_size_limit(char *s)
-{
-        unsigned long end = 0;
-        char *from = s;
-
-        end = simple_strtoul(from, &from, 0);
-        if ( *from == 'K' || *from == 'k' ) {
-                end = end << 10;
-                from++;
-        } else if ( *from == 'M' || *from == 'm' ) {
-                end = end << 20;
-                from++;
-        } else if ( *from == 'G' || *from == 'g' ) {
-                end = end << 30;
-                from++;
-        }
-        return end >> PAGE_SHIFT; /* Return the PFN of the limit. */
-}
-
 #ifdef CONFIG_BLK_DEV_INITRD
 void * __init
 move_initrd(unsigned long mem_limit)
@@ -386,22 +367,6 @@ int page_is_ram(unsigned long pfn)
 	return 0;
 }
 
-static int __init
-register_cpus(void)
-{
-	int i;
-
-	for_each_possible_cpu(i) {
-		struct cpu *p = kzalloc_obj(*p);
-		if (!p)
-			return -ENOMEM;
-		register_cpu(p, i);
-	}
-	return 0;
-}
-
-arch_initcall(register_cpus);
-
 #ifdef CONFIG_MAGIC_SYSRQ
 static void sysrq_reboot_handler(u8 unused)
 {
@@ -486,7 +451,7 @@ setup_arch(char **cmdline_p)
 			continue;
 		}
 		if (strncmp(p, "mem=", 4) == 0) {
-			mem_size_limit = get_mem_size_limit(p+4);
+			mem_size_limit = memparse(p + 4, NULL) >> PAGE_SHIFT;
 			continue;
 		}
 		if (strncmp(p, "srmcons", 7) == 0) {
@@ -499,7 +464,7 @@ setup_arch(char **cmdline_p)
 		}
 		if (strncmp(p, "gartsize=", 9) == 0) {
 			alpha_agpgart_size =
-				get_mem_size_limit(p+9) << PAGE_SHIFT;
+				memparse(p + 9, NULL) & PAGE_MASK;
 			continue;
 		}
 #ifdef CONFIG_VERBOSE_MCHECK
@@ -615,6 +580,24 @@ setup_arch(char **cmdline_p)
 	   DMA windows and the like.  */
 	if (alpha_mv.init_arch)
 		alpha_mv.init_arch();
+
+	/* Early options may change static keys and configure DMA CMA. */
+	jump_label_init();
+	parse_early_param();
+
+	/*
+	 * Prefer higher memory within the direct-map window, rather than
+	 * consuming scarce low memory with a bottom-up CMA reservation.
+	 * Explicit cma= ranges retain the generic command-line semantics.
+	 */
+	if (__direct_map_size) {
+		bool bottom_up = memblock_bottom_up();
+
+		memblock_set_bottom_up(false);
+		dma_contiguous_reserve(min_t(phys_addr_t, __direct_map_size,
+					     PFN_PHYS(max_low_pfn)));
+		memblock_set_bottom_up(bottom_up);
+	}
 
 	/* Reserve standard resources.  */
 	reserve_std_resources();

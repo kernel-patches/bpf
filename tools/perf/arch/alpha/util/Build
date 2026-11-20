@@ -1,0 +1,2 @@
+perf-util-y += mem-events.o
+perf-util-y += pmu.o
