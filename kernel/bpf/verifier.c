@@ -9585,7 +9585,8 @@ static int check_arg_const_str(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (!tnum_is_const(reg->var_off)) {
+	/* the cpu can speculate past the test of a variable offset */
+	if (!tnum_is_const(reg->var_off) && !env->bypass_spec_v1) {
 		verbose(env, "%s is not a constant address'\n", reg_arg_name(env, argno));
 		return -EACCES;
 	}
@@ -9595,13 +9596,12 @@ static int check_arg_const_str(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	err = check_map_access(env, reg, argno, 0,
-			       map->value_size - reg->var_off.value, false,
-			       ACCESS_HELPER);
+	err = check_map_access(env, reg, argno, 0, 1, false, ACCESS_HELPER);
 	if (err)
 		return err;
 
-	map_off = reg->var_off.value;
+	/* the zero of the last string ends all strings that start before it */
+	map_off = reg_umax(reg);
 	err = map->ops->map_direct_value_addr(map, &map_addr, map_off);
 	if (err) {
 		verbose(env, "direct value access on string failed\n");
@@ -9614,7 +9614,8 @@ static int check_arg_const_str(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 	/* the bytes of a pointer to a function are not known until the program is jitted */
-	if (bpf_map_range_func_ptrs(env, map, map_off, strlen(str_ptr + map_off) + 1, &cnt)) {
+	map_off += strlen(str_ptr + map_off) + 1;
+	if (bpf_map_range_func_ptrs(env, map, reg_umin(reg), map_off - reg_umin(reg), &cnt)) {
 		verbose(env, "string overlaps with a pointer to a function\n");
 		return -EACCES;
 	}
@@ -12778,9 +12779,12 @@ static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 		return -EINVAL;
 	num_args = data_len_reg->var_off.value / 8;
 
-	/* fmt being ARG_PTR_TO_CONST_STR guarantees that var_off is const
-	 * and map_direct_value_addr is set.
-	 */
+	if (!tnum_is_const(fmt_reg->var_off)) {
+		verbose(env, "R3 is not a constant address\n");
+		return -EACCES;
+	}
+
+	/* fmt being ARG_PTR_TO_CONST_STR guarantees that map_direct_value_addr is set */
 	fmt_map_off = fmt_reg->var_off.value;
 	err = fmt_map->ops->map_direct_value_addr(fmt_map, &fmt_addr,
 						  fmt_map_off);
