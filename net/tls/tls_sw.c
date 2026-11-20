@@ -764,8 +764,10 @@ static int tls_sw_sendmsg_splice(struct sock *sk, struct msghdr *msg,
 		}
 
 		sk_msg_page_add(msg_pl, page, part, off);
-		msg_pl->sg.copybreak = 0;
+		/* keep sg.curr on the last frag so a later copy won't wrap */
 		msg_pl->sg.curr = msg_pl->sg.end;
+		sk_msg_iter_var_prev(msg_pl->sg.curr);
+		msg_pl->sg.copybreak = sk_msg_elem(msg_pl, msg_pl->sg.curr)->length;
 		sk_mem_charge(sk, part);
 		*copied += part;
 		try_to_copy -= part;
