@@ -2074,6 +2074,46 @@ static const struct exynos5_usbdrd_phy_drvdata exynos5433_usbdrd_phy = {
 	.n_regulators		= ARRAY_SIZE(exynos5_regulator_names),
 };
 
+static const struct exynos5_usbdrd_phy_tuning exynos5515_tunes_utmi_postinit[] = {
+	PHY_TUNING_ENTRY_PHY(EXYNOS850_DRD_HSPPARACON,
+			     (HSPPARACON_TXVREF | HSPPARACON_TXRISE |
+			      HSPPARACON_TXRES |
+			      HSPPARACON_TXPREEMPPULSE |
+			      HSPPARACON_TXPREEMPAMP |
+			      HSPPARACON_TXHSXV | HSPPARACON_TXFSLS |
+			      HSPPARACON_SQRX | HSPPARACON_OTG |
+			      HSPPARACON_COMPDIS),
+			     (FIELD_PREP_CONST(HSPPARACON_TXVREF, 15) |
+			      FIELD_PREP_CONST(HSPPARACON_TXRISE, 3) |
+			      FIELD_PREP_CONST(HSPPARACON_TXRES, 3) |
+			      FIELD_PREP_CONST(HSPPARACON_TXPREEMPPULSE, 0) |
+			      FIELD_PREP_CONST(HSPPARACON_TXPREEMPAMP, 3) |
+			      FIELD_PREP_CONST(HSPPARACON_TXHSXV, 3) |
+			      FIELD_PREP_CONST(HSPPARACON_TXFSLS, 3) |
+			      FIELD_PREP_CONST(HSPPARACON_SQRX, 7) |
+			      FIELD_PREP_CONST(HSPPARACON_OTG, 2) |
+			      FIELD_PREP_CONST(HSPPARACON_COMPDIS, 7))),
+	PHY_TUNING_ENTRY_LAST
+};
+
+static const struct exynos5_usbdrd_phy_tuning *exynos5515_tunes[PTS_MAX] = {
+	[PTS_UTMI_POSTINIT] = exynos5515_tunes_utmi_postinit,
+};
+
+static const struct exynos5_usbdrd_phy_drvdata exynos5515_usbdrd_phy = {
+	.phy_cfg		= phy_cfg_exynos850,
+	.n_phy_cfg		= ARRAY_SIZE(phy_cfg_exynos850),
+	.phy_ops		= &exynos850_usbdrd_phy_ops,
+	.phy_tunes		= exynos5515_tunes,
+	.pmu_offset_usbdrd0_phy	= EXYNOS990_PHY_CTRL_USB20,
+	.clk_names		= exynos5_clk_names,
+	.n_clks			= ARRAY_SIZE(exynos5_clk_names),
+	.core_clk_names		= exynos5_core_clk_names,
+	.n_core_clks		= ARRAY_SIZE(exynos5_core_clk_names),
+	.regulator_names	= exynos5_regulator_names,
+	.n_regulators		= ARRAY_SIZE(exynos5_regulator_names),
+};
+
 static const struct exynos5_usbdrd_phy_drvdata exynos7_usbdrd_phy = {
 	.phy_cfg		= phy_cfg_exynos5,
 	.n_phy_cfg		= ARRAY_SIZE(phy_cfg_exynos5),
@@ -2935,6 +2975,9 @@ static const struct of_device_id exynos5_usbdrd_phy_of_match[] = {
 	}, {
 		.compatible = "samsung,exynos5433-usbdrd-phy",
 		.data = &exynos5433_usbdrd_phy
+	}, {
+		.compatible = "samsung,exynos5515-usbdrd-phy",
+		.data = &exynos5515_usbdrd_phy
 	}, {
 		.compatible = "samsung,exynos7-usbdrd-phy",
 		.data = &exynos7_usbdrd_phy

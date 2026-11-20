@@ -72,6 +72,7 @@
 	#define PHY_CTRL_R14_I_C2L_ASSERT_SINGLE_EN_ZERO	BIT(6)
 	#define PHY_CTRL_R14_BYPASS_CTRL_7_0			GENMASK(15, 8)
 	#define PHY_CTRL_R14_BYPASS_CTRL_15_8			GENMASK(23, 16)
+	#define PHY_CTRL_R14_DISCONNECT_THRESHOLD_S4		GENMASK(27, 26)
 
 #define PHY_CTRL_R15						0x3c
 #define PHY_CTRL_R16						0x40
@@ -149,6 +150,7 @@
 enum meson_soc_id {
 	MESON_SOC_G12A  = 0,
 	MESON_SOC_A1,
+	MESON_SOC_S4,
 };
 
 struct phy_meson_g12a_usb2_priv {
@@ -217,7 +219,12 @@ static int phy_meson_g12a_usb2_init(struct phy *phy)
 		FIELD_PREP(PHY_CTRL_R18_MPLL_ADJ_LDO, 1) |
 		PHY_CTRL_R18_MPLL_ACG_RANGE;
 
-	if (priv->soc_id == MESON_SOC_A1)
+	/*
+	 * The S4 shares the A1's MPLL programming: its stock "pll-setting-3"
+	 * (0xac5f69e5) is the G12A R18 value with MPLL_DCO_CLK_SEL (bit 13)
+	 * set, which is exactly what the A1 path adds here.
+	 */
+	if (priv->soc_id == MESON_SOC_A1 || priv->soc_id == MESON_SOC_S4)
 		value |= PHY_CTRL_R18_MPLL_DCO_CLK_SEL;
 
 	regmap_write(priv->regmap, PHY_CTRL_R18, value);
@@ -234,15 +241,19 @@ static int phy_meson_g12a_usb2_init(struct phy *phy)
 		     PHY_CTRL_R16_MPLL_EN);
 
 	/* PHY Tuning */
-	regmap_write(priv->regmap, PHY_CTRL_R20,
-		     FIELD_PREP(PHY_CTRL_R20_USB2_OTG_VBUS_TRIM_2_0, 4) |
-		     PHY_CTRL_R20_USB2_OTG_VBUSDET_EN |
-		     FIELD_PREP(PHY_CTRL_R20_USB2_DMON_SEL_3_0, 15) |
-		     PHY_CTRL_R20_USB2_EDGE_DRV_EN |
-		     FIELD_PREP(PHY_CTRL_R20_USB2_EDGE_DRV_TRIM_1_0, 3) |
-		     FIELD_PREP(PHY_CTRL_R20_USB2_BGR_ADJ_4_0, 0) |
-		     FIELD_PREP(PHY_CTRL_R20_USB2_BGR_VREF_4_0, 0) |
-		     FIELD_PREP(PHY_CTRL_R20_USB2_BGR_DBG_1_0, 0));
+	value = FIELD_PREP(PHY_CTRL_R20_USB2_OTG_VBUS_TRIM_2_0, 4) |
+		PHY_CTRL_R20_USB2_OTG_VBUSDET_EN |
+		FIELD_PREP(PHY_CTRL_R20_USB2_DMON_SEL_3_0, 15) |
+		PHY_CTRL_R20_USB2_EDGE_DRV_EN |
+		FIELD_PREP(PHY_CTRL_R20_USB2_BGR_ADJ_4_0, 0) |
+		FIELD_PREP(PHY_CTRL_R20_USB2_BGR_VREF_4_0, 0) |
+		FIELD_PREP(PHY_CTRL_R20_USB2_BGR_DBG_1_0, 0);
+	/* S4 uses edge-drive trim 2; other SoCs use 3 */
+	if (priv->soc_id == MESON_SOC_S4)
+		value |= FIELD_PREP(PHY_CTRL_R20_USB2_EDGE_DRV_TRIM_1_0, 2);
+	else
+		value |= FIELD_PREP(PHY_CTRL_R20_USB2_EDGE_DRV_TRIM_1_0, 3);
+	regmap_write(priv->regmap, PHY_CTRL_R20, value);
 
 	if (priv->soc_id == MESON_SOC_G12A)
 		regmap_write(priv->regmap, PHY_CTRL_R4,
@@ -252,22 +263,38 @@ static int phy_meson_g12a_usb2_init(struct phy *phy)
 			     PHY_CTRL_R4_TEST_BYPASS_MODE_EN |
 			     FIELD_PREP(PHY_CTRL_R4_I_C2L_BIAS_TRIM_1_0, 0) |
 			     FIELD_PREP(PHY_CTRL_R4_I_C2L_BIAS_TRIM_3_2, 0));
-	else if (priv->soc_id == MESON_SOC_A1) {
+	else if (priv->soc_id == MESON_SOC_A1 ||
+		 priv->soc_id == MESON_SOC_S4) {
 		regmap_write(priv->regmap, PHY_CTRL_R21,
 			     PHY_CTRL_R21_USB2_CAL_ACK_EN |
 			     PHY_CTRL_R21_USB2_TX_STRG_PD |
 			     FIELD_PREP(PHY_CTRL_R21_USB2_OTG_ACA_TRIM_1_0, 2));
 
 		/* Analog Settings */
-		regmap_write(priv->regmap, PHY_CTRL_R13,
-			     FIELD_PREP(PHY_CTRL_R13_MIN_COUNT_FOR_SYNC_DET, 7));
+		value = FIELD_PREP(PHY_CTRL_R13_MIN_COUNT_FOR_SYNC_DET, 7);
+		if (priv->soc_id == MESON_SOC_S4) {
+			/*
+			 * S4: set the disconnect threshold and latch the PMA
+			 * signals so the host controller detects its root ports.
+			 */
+			regmap_update_bits(priv->regmap, PHY_CTRL_R14,
+					   PHY_CTRL_R14_DISCONNECT_THRESHOLD_S4,
+					   FIELD_PREP(PHY_CTRL_R14_DISCONNECT_THRESHOLD_S4,
+						      2));
+			value |= PHY_CTRL_R13_UPDATE_PMA_SIGNALS;
+		}
+		regmap_write(priv->regmap, PHY_CTRL_R13, value);
 	}
 
 	/* Tuning Disconnect Threshold */
-	regmap_write(priv->regmap, PHY_CTRL_R3,
-		     FIELD_PREP(PHY_CTRL_R3_SQUELCH_REF, 0) |
-		     FIELD_PREP(PHY_CTRL_R3_HSDIC_REF, 1) |
-		     FIELD_PREP(PHY_CTRL_R3_DISC_THRESH, 3));
+	value = FIELD_PREP(PHY_CTRL_R3_SQUELCH_REF, 0) |
+		FIELD_PREP(PHY_CTRL_R3_DISC_THRESH, 3);
+	/* S4 wants a higher HS disconnect reference than the other SoCs */
+	if (priv->soc_id == MESON_SOC_S4)
+		value |= FIELD_PREP(PHY_CTRL_R3_HSDIC_REF, 3);
+	else
+		value |= FIELD_PREP(PHY_CTRL_R3_HSDIC_REF, 1);
+	regmap_write(priv->regmap, PHY_CTRL_R3, value);
 
 	if (priv->soc_id == MESON_SOC_G12A) {
 		/* Analog Settings */
@@ -359,6 +386,10 @@ static const struct of_device_id phy_meson_g12a_usb2_of_match[] = {
 	{
 		.compatible = "amlogic,a1-usb2-phy",
 		.data = (void *)MESON_SOC_A1,
+	},
+	{
+		.compatible = "amlogic,s4-usb2-phy",
+		.data = (void *)MESON_SOC_S4,
 	},
 	{ /* Sentinel */ }
 };

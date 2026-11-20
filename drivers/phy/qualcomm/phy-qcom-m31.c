@@ -228,9 +228,14 @@ static int m31usb_phy_init(struct phy *phy)
 	}
 
 	/* Perform phy reset */
-	reset_control_assert(qphy->reset);
+	ret = reset_control_assert(qphy->reset);
+	if (ret)
+		goto disable_clk;
+
 	udelay(5);
-	reset_control_deassert(qphy->reset);
+	ret = reset_control_deassert(qphy->reset);
+	if (ret)
+		goto disable_clk;
 
 	/* configure for ULPI mode if requested */
 	if (qphy->ulpi_mode)
@@ -247,6 +252,12 @@ static int m31usb_phy_init(struct phy *phy)
 	}
 
 	return 0;
+
+disable_clk:
+	clk_disable_unprepare(qphy->clk);
+	regulator_disable(qphy->vreg);
+
+	return ret;
 }
 
 static int m31usb_phy_shutdown(struct phy *phy)
