@@ -6,8 +6,7 @@
 #include <linux/filter.h>
 
 /* check %cur's range satisfies %old's */
-static bool range_within(const struct bpf_reg_state *old,
-			 const struct bpf_reg_state *cur)
+static bool range_within(const struct scalar *old, const struct scalar *cur)
 {
 	if (!cnum64_is_subset(old->r64, cur->r64) ||
 	    !cnum32_is_subset(old->r32, cur->r32))
@@ -33,6 +32,11 @@ static bool range_within(const struct bpf_reg_state *old,
 	 */
 	return cur->step % old->step == 0 &&
 	       (cur->base - old->base) % old->step == 0;
+}
+
+bool scalar_subsumes(const struct scalar *old, const struct scalar *cur)
+{
+	return range_within(old, cur) && tnum_in(old->var_off, cur->var_off);
 }
 
 static void renumber_id(struct bpf_verifier_env *env, u32 *id, u32 new_id)

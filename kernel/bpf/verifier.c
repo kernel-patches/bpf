@@ -2318,7 +2318,7 @@ static void __update_bounds_from_step(struct scalar *s)
 
 static bool range_bounds_violation(const struct scalar *s);
 
-static void scalar_bounds_sync(struct scalar *s)
+void scalar_bounds_sync(struct scalar *s)
 {
 	/* If the input reg_state is invalid, we can exit early */
 	if (range_bounds_violation(s))
