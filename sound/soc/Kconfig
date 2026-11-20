@@ -103,6 +103,7 @@ config SND_SOC_USB
 
 # All the supported SoCs
 source "sound/soc/adi/Kconfig"
+source "sound/soc/airoha/Kconfig"
 source "sound/soc/amd/Kconfig"
 source "sound/soc/apple/Kconfig"
 source "sound/soc/atmel/Kconfig"
