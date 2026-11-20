@@ -147,7 +147,7 @@ static void __sys_info(unsigned long si_mask)
 	if (si_mask & SYS_INFO_TIMERS)
 		sysrq_timer_list_show();
 
-	if (si_mask & SYS_INFO_LOCKS)
+	if ((si_mask & SYS_INFO_LOCKS) && !(si_mask & SYS_INFO_TASKS))
 		debug_show_all_locks();
 
 	if (si_mask & SYS_INFO_FTRACE)

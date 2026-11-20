@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/once_lite.h>
 #include <linux/prandom.h>
 #include <linux/debugfs.h>
 #include <linux/sched.h>
@@ -13,12 +12,25 @@
 #include <linux/interrupt.h>
 #include <linux/stacktrace.h>
 #include <linux/fault-inject.h>
+#include <linux/spinlock.h>
 
 /*
  * The should_fail() functions use prandom instead of the normal Linux RNG
  * since they don't need cryptographically secure random numbers.
  */
 static DEFINE_PER_CPU(struct rnd_state, fault_rnd_state);
+static DEFINE_SPINLOCK(fault_rnd_lock);
+static bool fault_rnd_initialized;
+
+static void fault_random_init(void)
+{
+	spin_lock(&fault_rnd_lock);
+	if (!fault_rnd_initialized) {
+		prandom_seed_full_state(&fault_rnd_state);
+		fault_rnd_initialized = true;
+	}
+	spin_unlock(&fault_rnd_lock);
+}
 
 static u32 fault_prandom_u32_below_100(void)
 {
@@ -51,12 +63,7 @@ int setup_fault_attr(struct fault_attr *attr, char *str)
 		return 0;
 	}
 
-	/*
-	 * __setup handlers run before slab and workqueues are initialized,
-	 * but prandom_init_once() calls kmalloc() and schedule_work(). So use
-	 * DO_ONCE_LITE() instead.
-	 */
-	DO_ONCE_LITE(prandom_seed_full_state, &fault_rnd_state);
+	fault_random_init();
 
 	attr->probability = probability;
 	attr->interval = interval;
@@ -192,6 +199,8 @@ bool should_fail(struct fault_attr *attr, ssize_t size)
 }
 EXPORT_SYMBOL_GPL(should_fail);
 
+#define FAULT_RATELIMIT_INTERVAL_MAX_MS	(INT_MAX / DIV_ROUND_UP(HZ, MSEC_PER_SEC))
+
 #ifdef CONFIG_FAULT_INJECTION_DEBUG_FS
 
 static int debugfs_ul_set(void *data, u64 val)
@@ -212,6 +221,29 @@ static void debugfs_create_ul(const char *name, umode_t mode,
 			      struct dentry *parent, unsigned long *value)
 {
 	debugfs_create_file(name, mode, parent, value, &fops_ul);
+}
+
+static int debugfs_ratelimit_interval_set(void *data, u64 val)
+{
+	val = min_t(u64, val, FAULT_RATELIMIT_INTERVAL_MAX_MS);
+	*(int *)data = msecs_to_jiffies(val);
+
+	return 0;
+}
+
+static int debugfs_ratelimit_interval_get(void *data, u64 *val)
+{
+	*val = jiffies_to_msecs(*(int *)data);
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(fops_ratelimit_interval, debugfs_ratelimit_interval_get,
+			debugfs_ratelimit_interval_set, "%llu\n");
+
+static void debugfs_create_ratelimit_interval(const char *name, umode_t mode,
+					      struct dentry *parent, int *value)
+{
+	debugfs_create_file(name, mode, parent, value, &fops_ratelimit_interval);
 }
 
 #ifdef CONFIG_FAULT_INJECTION_STACKTRACE_FILTER
@@ -246,15 +278,15 @@ struct dentry *fault_create_debugfs_attr(const char *name,
 	if (IS_ERR(dir))
 		return dir;
 
-	prandom_init_once(&fault_rnd_state);
+	fault_random_init();
 
 	debugfs_create_ul("probability", mode, dir, &attr->probability);
 	debugfs_create_ul("interval", mode, dir, &attr->interval);
 	debugfs_create_atomic_t("times", mode, dir, &attr->times);
 	debugfs_create_atomic_t("space", mode, dir, &attr->space);
 	debugfs_create_ul("verbose", mode, dir, &attr->verbose);
-	debugfs_create_u32("verbose_ratelimit_interval_ms", mode, dir,
-			   &attr->ratelimit_state.interval);
+	debugfs_create_ratelimit_interval("verbose_ratelimit_interval_ms", mode,
+					  dir, &attr->ratelimit_state.interval);
 	debugfs_create_u32("verbose_ratelimit_burst", mode, dir,
 			   &attr->ratelimit_state.burst);
 	debugfs_create_bool("task-filter", mode, dir, &attr->task_filter);
@@ -387,11 +419,36 @@ FAULT_CONFIGFS_ATTR(interval, ulong);
 FAULT_CONFIGFS_ATTR(times, atomic_t);
 FAULT_CONFIGFS_ATTR(space, atomic_t);
 FAULT_CONFIGFS_ATTR(verbose, ulong);
-FAULT_CONFIGFS_ATTR_NAMED(ratelimit_interval, "verbose_ratelimit_interval_ms",
-		ratelimit_state.interval, uint);
 FAULT_CONFIGFS_ATTR_NAMED(ratelimit_burst, "verbose_ratelimit_burst",
 		ratelimit_state.burst, uint);
 FAULT_CONFIGFS_ATTR_NAMED(task_filter, "task-filter", task_filter, bool);
+
+static ssize_t fault_ratelimit_interval_show(struct config_item *item, char *page)
+{
+	struct fault_config *config = to_fault_config(item);
+	unsigned int msecs = jiffies_to_msecs(config->attr.ratelimit_state.interval);
+
+	return fault_uint_attr_show(msecs, page);
+}
+
+static ssize_t fault_ratelimit_interval_store(struct config_item *item, const char *page,
+		size_t count)
+{
+	struct fault_config *config = to_fault_config(item);
+	unsigned int msecs;
+	int result;
+
+	result = kstrtouint(page, 0, &msecs);
+	if (result < 0)
+		return result;
+
+	msecs = min_t(unsigned int, msecs, FAULT_RATELIMIT_INTERVAL_MAX_MS);
+	config->attr.ratelimit_state.interval = msecs_to_jiffies(msecs);
+
+	return count;
+}
+
+CONFIGFS_ATTR_NAMED(fault_, ratelimit_interval, "verbose_ratelimit_interval_ms");
 
 #ifdef CONFIG_FAULT_INJECTION_STACKTRACE_FILTER
 
@@ -462,7 +519,7 @@ static const struct config_item_type fault_config_type = {
 
 void fault_config_init(struct fault_config *config, const char *name)
 {
-	prandom_init_once(&fault_rnd_state);
+	fault_random_init();
 
 	config_group_init_type_name(&config->group, name, &fault_config_type);
 }

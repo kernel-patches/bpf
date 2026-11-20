@@ -74,8 +74,8 @@ static int squashfs_symlink_read_folio(struct file *file, struct folio *folio)
 			ERROR("Unable to read symlink [%llx:%x]\n",
 				squashfs_i(inode)->start,
 				squashfs_i(inode)->offset);
-			squashfs_cache_put(entry);
 			error = entry->error;
+			squashfs_cache_put(entry);
 			goto out;
 		}
 

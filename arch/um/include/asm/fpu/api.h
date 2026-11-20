@@ -11,6 +11,7 @@
  * UML code tree. */
 
 #define kernel_fpu_begin() (void)0
+#define kernel_fpu_begin_mask(mask) (void)(mask)
 #define kernel_fpu_end() (void)0
 
 static inline bool irq_fpu_usable(void)

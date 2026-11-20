@@ -44,7 +44,7 @@ static void raid6_2data_recov_ssse3(int disks, size_t bytes, int faila,
 	qmul  = raid6_vgfmul[raid6_gfinv[raid6_gfexp[faila] ^
 		raid6_gfexp[failb]]];
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("movdqa %0,%%xmm7" : : "m" (x0f[0]));
 
@@ -210,7 +210,7 @@ static void raid6_datap_recov_ssse3(int disks, size_t bytes, int faila,
 	/* Now, pick the proper data tables */
 	qmul  = raid6_vgfmul[raid6_gfinv[raid6_gfexp[faila]]];
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("movdqa %0, %%xmm7" : : "m" (x0f[0]));
 

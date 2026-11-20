@@ -180,7 +180,8 @@ void ipc64_perm_to_ipc_perm(struct ipc64_perm *in, struct ipc_perm *out);
 int ipc_update_perm(struct ipc64_perm *in, struct kern_ipc_perm *out);
 struct kern_ipc_perm *ipcctl_obtain_check(struct ipc_namespace *ns,
 					     struct ipc_ids *ids, int id, int cmd,
-					     struct ipc64_perm *perm, int extra_perm);
+					     struct ipc64_perm *perm,
+					     unsigned long extra_perm);
 
 static inline void ipc_update_pid(struct pid **pos, struct pid *pid)
 {
@@ -244,15 +245,6 @@ int ipcget(struct ipc_namespace *ns, struct ipc_ids *ids,
 			const struct ipc_ops *ops, struct ipc_params *params);
 void free_ipcs(struct ipc_namespace *ns, struct ipc_ids *ids,
 		void (*free)(struct ipc_namespace *, struct kern_ipc_perm *));
-
-static inline int sem_check_semmni(struct ipc_namespace *ns) {
-	/*
-	 * Check semmni range [0, ipc_mni]
-	 * semmni is the last element of sem_ctls[4] array
-	 */
-	return ((ns->sem_ctls[3] < 0) || (ns->sem_ctls[3] > ipc_mni))
-		? -ERANGE : 0;
-}
 
 #ifdef CONFIG_COMPAT
 #include <linux/compat.h>

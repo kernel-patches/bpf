@@ -59,14 +59,15 @@ static const struct primes __rcu *primes = RCU_INITIALIZER(&small_primes);
 
 #if IS_ENABLED(CONFIG_PRIME_NUMBERS_KUNIT_TEST)
 /*
- * Calls the callback under RCU lock. The callback must not retain
- * the primes pointer.
+ * Calls the callback with the lock held, so that the primes cannot be
+ * replaced under it and the callback is allowed to sleep. The callback
+ * must not retain the primes pointer.
  */
 void with_primes(void *ctx, primes_fn fn)
 {
-	rcu_read_lock();
-	fn(ctx, rcu_dereference(primes));
-	rcu_read_unlock();
+	mutex_lock(&lock);
+	fn(ctx, rcu_dereference_protected(primes, lockdep_is_held(&lock)));
+	mutex_unlock(&lock);
 }
 EXPORT_SYMBOL(with_primes);
 
