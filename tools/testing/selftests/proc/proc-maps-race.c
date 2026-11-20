@@ -33,6 +33,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <linux/fs.h>
+#include <linux/mman.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
