@@ -2746,6 +2746,9 @@ static struct amdgpu_dm_connector *dm_test_setup_hpd_irq_helper(struct kunit *te
 
 	adev = dm_kunit_alloc_adev(test);
 	mutex_init(&adev->dm.dc_lock);
+	adev->reset_domain = kunit_kzalloc(test, sizeof(*adev->reset_domain),
+					   GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, adev->reset_domain);
 
 	aconn = dm_kunit_alloc_connector(test, adev, NULL);
 	mutex_init(&aconn->hpd_lock);
@@ -3462,6 +3465,9 @@ static void dm_test_dmub_hpd_callback_hpd_type(struct kunit *test)
 
 	adev = dm_kunit_alloc_adev(test);
 	mutex_init(&adev->dm.dc_lock);
+	adev->reset_domain = kunit_kzalloc(test, sizeof(*adev->reset_domain),
+					   GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, adev->reset_domain);
 
 	dc = kunit_kzalloc(test, sizeof(*dc), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, dc);

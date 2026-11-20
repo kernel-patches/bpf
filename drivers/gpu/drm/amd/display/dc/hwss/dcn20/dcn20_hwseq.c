@@ -556,18 +556,19 @@ void dcn20_dsc_pg_control(
 
 void dcn20_dpp_pg_control(
 		struct dce_hwseq *hws,
-		unsigned int dpp_inst,
-		bool power_on)
+		struct dpp *dpp,
+		bool power_on,
+		bool disable_power_gate)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? 0 : 2;
 
-	if (hws->ctx->dc->debug.disable_dpp_power_gate)
+	if (disable_power_gate)
 		return;
 	if (REG(DOMAIN1_PG_CONFIG) == 0)
 		return;
 
-	switch (dpp_inst) {
+	switch (dpp->inst) {
 	case 0: /* DPP0 */
 		REG_UPDATE(DOMAIN1_PG_CONFIG,
 				DOMAIN1_POWER_GATE, power_gate);
@@ -622,11 +623,8 @@ void dcn20_dpp_pg_control(
 		 */
 
 		/* Force disable cursor on plane powerdown on DPP 5 using dpp_force_disable_cursor */
-		if (!power_on) {
-			struct dpp *dpp5 = hws->ctx->dc->res_pool->dpps[dpp_inst];
-			if (dpp5 && dpp5->funcs->dpp_force_disable_cursor)
-				dpp5->funcs->dpp_force_disable_cursor(dpp5);
-		}
+		if (!power_on && dpp->funcs->dpp_force_disable_cursor)
+			dpp->funcs->dpp_force_disable_cursor(dpp);
 
 		break;
 	default:
@@ -639,12 +637,16 @@ void dcn20_dpp_pg_control(
 void dcn20_hubp_pg_control(
 		struct dce_hwseq *hws,
 		unsigned int hubp_inst,
-		bool power_on)
+		bool power_on,
+		bool disable_power_gate,
+		bool ignore_pg)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? 0 : 2;
 
-	if (hws->ctx->dc->debug.disable_hubp_power_gate)
+	(void)ignore_pg;
+
+	if (disable_power_gate)
 		return;
 	if (REG(DOMAIN0_PG_CONFIG) == 0)
 		return;
@@ -1321,10 +1323,13 @@ static void dcn20_power_on_plane_resources(
 					IP_REQUEST_EN, 1);
 
 		if (hws->funcs.dpp_pg_control)
-			hws->funcs.dpp_pg_control(hws, pipe_ctx->plane_res.dpp->inst, true);
+			hws->funcs.dpp_pg_control(hws, pipe_ctx->plane_res.dpp, true,
+					hws->ctx->dc->debug.disable_dpp_power_gate);
 
 		if (hws->funcs.hubp_pg_control)
-			hws->funcs.hubp_pg_control(hws, pipe_ctx->plane_res.hubp->inst, true);
+			hws->funcs.hubp_pg_control(hws, pipe_ctx->plane_res.hubp->inst, true,
+					hws->ctx->dc->debug.disable_hubp_power_gate,
+					hws->ctx->dc->debug.ignore_pg);
 
 		if (org_ip_request_cntl == 0)
 			REG_SET(DC_IP_REQUEST_CNTL, 0,
@@ -2438,6 +2443,7 @@ void dcn20_prepare_bandwidth(
 	struct hubbub *hubbub = dc->res_pool->hubbub;
 	unsigned int compbuf_size_kb = 0;
 	unsigned int cache_wm_a = context->bw_ctx.bw.dcn.watermarks.a.cstate_pstate.pstate_change_ns;
+	struct hubbub_program_watermarks_params wm;
 	unsigned int i;
 
 	dc->clk_mgr->funcs->update_clocks(
@@ -2459,10 +2465,13 @@ void dcn20_prepare_bandwidth(
 	 * For assigning optimized_required, use |= operator since we don't want
 	 * to clear the value if the optimize has not happened yet
 	 */
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub, &context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, false);
+	/* Read after update_clocks(): P-state support is being lost, lower to dummy P-state now */
+	wm.policy.force_safe_to_lower = dc->clk_mgr->clks.prev_p_state_change_support &&
+			!dc->clk_mgr->clks.p_state_change_support;
 	dc->optimized_required |= hubbub->funcs->program_watermarks(hubbub,
-					&context->bw_ctx.bw.dcn.watermarks,
-					dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-					false);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 
 	// Restore the real watermark so we can commit the value to DMCUB
 	// DMCUB uses the "original" watermark value in SubVP MCLK switch
@@ -2487,6 +2496,7 @@ void dcn20_optimize_bandwidth(
 		struct dc_state *context)
 {
 	struct hubbub *hubbub = dc->res_pool->hubbub;
+	struct hubbub_program_watermarks_params wm;
 	unsigned int i;
 
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
@@ -2500,10 +2510,10 @@ void dcn20_optimize_bandwidth(
 	}
 
 	/* program dchubbub watermarks */
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub, &context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, true);
 	hubbub->funcs->program_watermarks(hubbub,
-					&context->bw_ctx.bw.dcn.watermarks,
-					dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-					true);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 
 	if (dc->clk_mgr->dc_mode_softmax_enabled) {
 		int softmax_memclk_khz = dc->clk_mgr->bw_params->dc_mode_softmax_memclk * 1000;

@@ -52,15 +52,15 @@ amdgpu-y := amdgpu_drv.o
 
 # add KMS driver
 amdgpu-y += amdgpu_device.o amdgpu_reg_access.o amdgpu_doorbell_mgr.o amdgpu_kms.o \
-	amdgpu_atombios.o atombios_crtc.o amdgpu_connectors.o \
+	amdgpu_atombios.o \
 	atom.o amdgpu_fence.o amdgpu_ttm.o amdgpu_object.o amdgpu_gart.o \
-	amdgpu_encoders.o amdgpu_display.o amdgpu_i2c.o \
+	amdgpu_display.o amdgpu_i2c.o \
 	amdgpu_gem.o amdgpu_ring.o \
 	amdgpu_cs.o amdgpu_bios.o amdgpu_benchmark.o \
-	atombios_dp.o amdgpu_afmt.o amdgpu_trace_points.o \
-	atombios_encoders.o amdgpu_sa.o atombios_i2c.o \
+	amdgpu_trace_points.o \
+	amdgpu_sa.o \
 	amdgpu_dma_buf.o amdgpu_vm.o amdgpu_vm_pt.o amdgpu_vm_tlb_fence.o \
-	amdgpu_ib.o amdgpu_pll.o \
+	amdgpu_ib.o \
 	amdgpu_ucode.o amdgpu_bo_list.o amdgpu_ctx.o amdgpu_sync.o \
 	amdgpu_gtt_mgr.o amdgpu_preempt_mgr.o amdgpu_vram_mgr.o amdgpu_virt.o \
 	amdgpu_atomfirmware.o amdgpu_vf_error.o amdgpu_sched.o \
@@ -80,9 +80,9 @@ amdgpu-$(CONFIG_PERF_EVENTS) += amdgpu_pmu.o
 
 # add asic specific block
 amdgpu-$(CONFIG_DRM_AMDGPU_CIK)+= cik.o cik_ih.o \
-	dce_v8_0.o gfx_v7_0.o cik_sdma.o uvd_v4_2.o vce_v2_0.o
+	gfx_v7_0.o cik_sdma.o uvd_v4_2.o vce_v2_0.o
 
-amdgpu-$(CONFIG_DRM_AMDGPU_SI)+= si.o gmc_v6_0.o gfx_v6_0.o si_ih.o si_dma.o dce_v6_0.o \
+amdgpu-$(CONFIG_DRM_AMDGPU_SI)+= si.o gmc_v6_0.o gfx_v6_0.o si_ih.o si_dma.o \
 	uvd_v3_1.o vce_v1_0.o
 
 amdgpu-y += \
@@ -149,7 +149,6 @@ amdgpu-y += \
 
 # add DCE block
 amdgpu-y += \
-	dce_v10_0.o \
 	amdgpu_vkms.o
 
 # add GFX block

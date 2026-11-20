@@ -13,6 +13,7 @@
  * - dcn42_get_dpm_table_from_smu (identical, only SMU calls)
  * - dcn42_are_clock_states_equal
  * - dcn42_enable_pme_wa
+ * - dcn42_notify_cstate_disable (same DALSMC DfCstateDisable message)
  * - dcn42_update_clocks_update_dpp_dto
  * - dcn42_update_clocks_update_dtb_dto
  * - dcn42_build_watermark_ranges

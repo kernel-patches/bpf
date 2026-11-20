@@ -2065,6 +2065,12 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 		break;
 	}
 
+	if (amdgpu_is_spm_passthrough(adev)) {
+		r = amdgpu_psp_disable_fb_carveout(adev);
+		if (r)
+			return r;
+	}
+
 	/* Check for IP version 9.4.3 with A0 hardware */
 	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 3) &&
 	    !amdgpu_device_get_rev_id(adev)) {
@@ -2573,6 +2579,11 @@ static int amdgpu_device_ip_init(struct amdgpu_device *adev)
 	 */
 	if (amdgpu_ip_member_of_hwini(adev, AMD_IP_BLOCK_TYPE_SDMA))
 		amdgpu_ttm_enable_buffer_funcs(adev);
+
+	/* KFD init flushes the GART TLB through SDMA on Navi 1x and waits
+	 * for it, so the fence interrupts must already be enabled.
+	 */
+	amdgpu_fence_driver_hw_init(adev);
 
 	/* Don't init kfd if whole hive need to be reset during init */
 	if (adev->init_lvl->level != AMDGPU_INIT_LEVEL_MINIMAL_XGMI) {
@@ -3524,8 +3535,8 @@ static void amdgpu_device_detect_sriov_bios(struct amdgpu_device *adev)
  * Check if there is DC (new modesetting infrastructre) support for an asic.
  * returns true if DC has support, false if not.
  */
-bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
-				       enum amd_asic_type asic_type)
+static bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
+					      enum amd_asic_type asic_type)
 {
 	switch (asic_type) {
 #ifdef CONFIG_DRM_AMDGPU_SI
@@ -3539,15 +3550,36 @@ bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
 	case CHIP_PITCAIRN:
 	case CHIP_VERDE:
 	case CHIP_OLAND:
-		return amdgpu_dc != 0 && IS_ENABLED(CONFIG_DRM_AMD_DC_SI);
+		if (!IS_ENABLED(CONFIG_DRM_AMD_DC_SI))
+			dev_warn_once(&pdev->dev,
+				      "Driver built without SI display support!\n");
+		return IS_ENABLED(CONFIG_DRM_AMD_DC_SI);
+	case CHIP_BONAIRE:
+	case CHIP_KAVERI:
+	case CHIP_KABINI:
+	case CHIP_HAWAII:
+	case CHIP_MULLINS:
+	case CHIP_TONGA:
+	case CHIP_FIJI:
+	case CHIP_CARRIZO:
+	case CHIP_STONEY:
+	case CHIP_POLARIS10:
+	case CHIP_POLARIS11:
+	case CHIP_POLARIS12:
+	case CHIP_VEGAM:
+	case CHIP_VEGA10:
+	case CHIP_VEGA12:
+	case CHIP_VEGA20:
+		if (!IS_ENABLED(CONFIG_DRM_AMD_DC_DCE))
+			dev_warn_once(&pdev->dev,
+				      "Driver built without DCE display support!\n");
+		return IS_ENABLED(CONFIG_DRM_AMD_DC_DCE);
 	default:
-		return amdgpu_dc != 0;
+		return true;
 #else
 	default:
-		if (amdgpu_dc > 0)
-			dev_info_once(
-				&pdev->dev,
-				"Display Core has been requested via kernel parameter but isn't supported by ASIC, ignoring\n");
+		dev_info_once(&pdev->dev,
+			      "Driver built without display support\n");
 		return false;
 #endif
 	}
@@ -4165,8 +4197,6 @@ fence_driver_init:
 		amdgpu_vf_error_put(adev, AMDGIM_ERROR_VF_AMDGPU_INIT_FAIL, 0, 0);
 		goto release_ras_con;
 	}
-
-	amdgpu_fence_driver_hw_init(adev);
 
 	dev_info(adev->dev,
 		"SE %d, SH per SE %d, CU per SH %d, active_cu_number %d\n",

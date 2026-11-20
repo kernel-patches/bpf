@@ -39,7 +39,8 @@ void dcn32_enable_power_gating_plane(
 	struct dce_hwseq *hws,
 	bool enable);
 
-void dcn32_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on);
+void dcn32_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on,
+		bool disable_power_gate, bool ignore_pg);
 
 bool dcn32_apply_idle_power_optimizations(struct dc *dc, bool enable);
 

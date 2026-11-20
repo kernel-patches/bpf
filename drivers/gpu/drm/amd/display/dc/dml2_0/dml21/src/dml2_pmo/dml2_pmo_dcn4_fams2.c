@@ -8,7 +8,7 @@
 #include "dml2_pmo_dcn4_fams2.h"
 
 static const double MIN_VACTIVE_MARGIN_PCT = 0.25; // We need more than non-zero margin because DET buffer granularity can alter vactive latency hiding
-static const double MIN_BLANK_STUTTER_FACTOR = 3.0;
+static const double MIN_BLANK_STUTTER_FACTOR = 3.0f;
 
 static const struct dml2_pmo_pstate_strategy base_strategy_list_1_display[] = {
 	// VActive Preferred
@@ -2357,6 +2357,17 @@ bool pmo_dcn4_fams2_optimize_for_pstate_support(struct dml2_pmo_optimize_for_pst
 	return success;
 }
 
+static bool should_relax_stutter_constraint_for_stream(const struct dml2_pmo_init_for_stutter_in_out *in_out,
+		unsigned int stream_index)
+{
+	// relax the stutter constraint when:
+	// 1. Stream has fixed DRR or Ramless Idle static screen enabled (extended blank)
+	// 2. The option to relax stutter constraint is enabled in PMO options.
+	return (in_out->base_display_config->display_config.stream_descriptors[stream_index].timing.drr_config.drr_active_fixed ||
+			in_out->base_display_config->display_config.stream_descriptors[stream_index].timing.drr_config.drr_active_idle_static_screen) &&
+			in_out->instance->options->relax_stutter_constraint_for_drr;
+}
+
 bool pmo_dcn4_fams2_init_for_stutter(struct dml2_pmo_init_for_stutter_in_out *in_out)
 {
 	bool success = true;
@@ -2365,6 +2376,7 @@ bool pmo_dcn4_fams2_init_for_stutter(struct dml2_pmo_init_for_stutter_in_out *in
 	bool z8_stutter_optimization_too_expensive = false;
 	bool stutter_optimization_too_expensive = false;
 	double line_time_us, vblank_nom_time_us;
+	double stutter_factor;
 
 	unsigned int i;
 
@@ -2382,15 +2394,17 @@ bool pmo_dcn4_fams2_init_for_stutter(struct dml2_pmo_init_for_stutter_in_out *in
 	}
 
 	for (i = 0; i < in_out->base_display_config->display_config.num_streams; i++) {
+		stutter_factor = should_relax_stutter_constraint_for_stream(in_out, i) ? 1.0f : MIN_BLANK_STUTTER_FACTOR;
+
 		line_time_us = (double)in_out->base_display_config->display_config.stream_descriptors[i].timing.h_total / (in_out->base_display_config->display_config.stream_descriptors[i].timing.pixel_clock_khz * 1000) * 1000000;
 		vblank_nom_time_us = line_time_us * in_out->base_display_config->display_config.stream_descriptors[i].timing.vblank_nom;
 
-		if (vblank_nom_time_us < pmo->soc_bb->power_management_parameters.z8_stutter_exit_latency_us * MIN_BLANK_STUTTER_FACTOR) {
+		if (vblank_nom_time_us < pmo->soc_bb->power_management_parameters.z8_stutter_exit_latency_us * stutter_factor) {
 			z8_stutter_optimization_too_expensive = true;
 			break;
 		}
 
-		if (vblank_nom_time_us < pmo->soc_bb->power_management_parameters.stutter_enter_plus_exit_latency_us * MIN_BLANK_STUTTER_FACTOR) {
+		if (vblank_nom_time_us < pmo->soc_bb->power_management_parameters.stutter_enter_plus_exit_latency_us * stutter_factor) {
 			stutter_optimization_too_expensive = true;
 			break;
 		}

@@ -126,6 +126,7 @@ bool hubbub3_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower);
 
 void hubbub3_force_pstate_change_control(struct hubbub *hubbub,

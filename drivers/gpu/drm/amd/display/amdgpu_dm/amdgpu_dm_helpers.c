@@ -1022,10 +1022,15 @@ bool dm_helpers_dp_write_dsc_enable(
 				   "SST_DSC Send DSC %s to SST RX\n",
 				   enable_dsc ? "enable" : "disable");
 		} else if (stream->sink->link->dpcd_caps.dongle_type == DISPLAY_DONGLE_DP_HDMI_CONVERTER) {
+			if (enable && stream->timing.dsc_cfg.is_frl)
+				enable_dsc = DSC_PASSTHROUGH;
+
 			ret = dm_helpers_dp_write_dpcd(ctx, stream->link, DP_DSC_ENABLE, &enable_dsc, 1);
 			drm_dbg_dp(dev,
-				   "SST_DSC Send DSC %s to DP-HDMI PCON\n",
-				   enable_dsc ? "enable" : "disable");
+				   "SST_DSC Send DSC %s to %s\n",
+				   enable_dsc ? "enable" : "disable",
+				   stream->timing.dsc_cfg.is_frl ? "HDMI FRL RX" :
+				   "DP-HDMI PCON");
 		}
 	}
 

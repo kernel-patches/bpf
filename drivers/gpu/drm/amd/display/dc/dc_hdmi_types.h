@@ -276,6 +276,7 @@ struct dc_hdmi_frl_flags {
 	bool force_frl_max;
 	bool apply_vsdb_rcc_wa;
 	bool no_timeout;
+	enum hdmi_frl_link_rate no_timeout_frl_link_rate;
 };
 
 struct dc_hdmi_frl_link_training_overrides {

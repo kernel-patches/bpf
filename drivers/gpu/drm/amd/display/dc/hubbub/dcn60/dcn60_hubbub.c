@@ -606,6 +606,7 @@ static bool hubbub60_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower)
 {
 	bool wm_pending = false;
@@ -619,7 +620,7 @@ static bool hubbub60_program_watermarks(
 	if (hubbub60_program_pstate_watermarks(hubbub, watermarks, refclk_mhz, safe_to_lower))
 		wm_pending = true;
 
-	hubbub1_allow_self_refresh_control(hubbub, !hubbub->ctx->dc->debug.disable_stutter);
+	hubbub1_allow_self_refresh_control(hubbub, !policy.disable_stutter);
 
 	return wm_pending;
 }

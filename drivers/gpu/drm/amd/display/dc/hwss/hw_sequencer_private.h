@@ -150,11 +150,14 @@ struct hwseq_private_funcs {
 			unsigned int phy_inst,
 			bool clock_on);
 	void (*dpp_pg_control)(struct dce_hwseq *hws,
-			unsigned int dpp_inst,
-			bool power_on);
+			struct dpp *dpp,
+			bool power_on,
+			bool disable_power_gate);
 	void (*hubp_pg_control)(struct dce_hwseq *hws,
 			unsigned int hubp_inst,
-			bool power_on);
+			bool power_on,
+			bool disable_power_gate,
+			bool ignore_pg);
 	void (*dsc_pg_control)(struct dce_hwseq *hws,
 			unsigned int dsc_inst,
 			bool power_on);
@@ -237,6 +240,8 @@ struct hwseq_private_funcs {
 	void (*wait_for_pipe_update_if_needed)(struct dc *dc, struct pipe_ctx *pipe_ctx, bool is_surface_update_only);
 	void (*set_wait_for_update_needed_for_pipe)(struct dc *dc, struct pipe_ctx *pipe_ctx);
 	void (*dc_ip_request_cntl)(struct dce_hwseq *hws, bool enable);
+	void (*dc_ip_request_status)(struct dce_hwseq *hws);
+	bool (*pg_needs_ip_request)(const struct dc *dc);
 	void (*program_cm_hist)(struct dc *dc,
 		struct pipe_ctx *pipe_ctx,
 		const struct dc_plane_state *plane_state);
@@ -253,6 +258,9 @@ struct dce_hwseq {
 	struct dce_hwseq_wa wa;
 	struct hwseq_wa_state wa_state;
 	struct hwseq_private_funcs funcs;
+
+	/* Set by dc_ip_request_status(), cleared by the closing dc_ip_request_cntl(). */
+	bool ip_request_already_enabled;
 
 	PHYSICAL_ADDRESS_LOC fb_base;
 	PHYSICAL_ADDRESS_LOC fb_top;

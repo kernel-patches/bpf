@@ -689,6 +689,9 @@ int psp_memory_partition(struct psp_context *psp, int mode);
 
 int is_psp_fw_valid(struct psp_bin_desc bin);
 
+int amdgpu_psp_read_discovery(struct amdgpu_device *adev, uint8_t *binary,
+			      GFX_CTRL_ADDR_TYPE addr_type);
+int amdgpu_psp_disable_fb_carveout(struct amdgpu_device *adev);
 int amdgpu_psp_wait_for_bootloader(struct amdgpu_device *adev);
 bool amdgpu_psp_get_ras_capability(struct psp_context *psp);
 

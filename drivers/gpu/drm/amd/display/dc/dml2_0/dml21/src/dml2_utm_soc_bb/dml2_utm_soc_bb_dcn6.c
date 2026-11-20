@@ -157,8 +157,9 @@ static void dcn6_v3_sop_table_get_sop_constraint_at_index(const struct dml2_sop_
 		unsigned int index, struct dml2_sop_constraint *constraint)
 {
 	const struct utm_qos_model_dchub_v3 *dchub = table->model->dchub_v3;
+	// The mode support check is done based on the idle SOPs, not the active SOPs
 	const struct utm_qos_model_dchub_v3_sop_entry *entry =
-			&dchub->sops[UTM_QOS_MODEL_V3_LOAD_LEVEL_ACTIVE_ALTERNATE_PSTATE][index];
+			&dchub->sops[UTM_QOS_MODEL_V3_LOAD_LEVEL_IDLE][index];
 
 	DML_ASSERT_MSG(index < dchub->sop_count, "unsupported sop index\n");
 	constraint->dcn5.clocks.fclk_khz = 0;
@@ -174,6 +175,8 @@ static void dcn6_v3_sop_table_get_sop_constraint_at_index(const struct dml2_sop_
 	constraint->dcn5.latency.dcn5.avg_req_latency_non_urg = entry->avg_req_latency_non_urg_ps / 1000000.0;
 	constraint->dcn5.latency.dcn5.df_response_time_us = entry->df_response_time_ps / 1000000.0;
 	constraint->dcn5.min_available_urgent_bandwidth_KBps = table->sop_min_available_urgent_bandwidths_KBps[index];
+	// non urgent bandwidth needs to be plumbed for presentation in the spreadsheet
+	constraint->dcn5.min_available_non_urgent_bandwidth_KBps = table->sop_min_available_non_urgent_bandwidths_KBps[index];
 	constraint->dcn5.min_sop_index = index;
 }
 
@@ -267,14 +270,18 @@ static void dml2_utm_soc_bb_dcn6_v3_build_sop_table(struct dml2_sop_table *table
 
 	for (i = 0; i < dchub->sop_count; i++) {
 		const struct utm_qos_model_dchub_v3_sop_entry *idle_entry =
-				&dchub->sops[UTM_QOS_MODEL_V3_LOAD_LEVEL_IDLE][i];
-		const struct utm_qos_model_dchub_v3_sop_entry *active_entry =
-				&dchub->sops[UTM_QOS_MODEL_V3_LOAD_LEVEL_ACTIVE_ALTERNATE_PSTATE][i];
+			&dchub->sops[UTM_QOS_MODEL_V3_LOAD_LEVEL_IDLE][i];
 
 		table->sop_optimal_dcfclks_khz[i] =
-				dcn6_v3_sop_table_calculate_optimal_dcfclk_khz(utm_soc_bb, idle_entry);
+			dcn6_v3_sop_table_calculate_optimal_dcfclk_khz(utm_soc_bb, idle_entry);
+		// The mode support check is done based on the idle SOPs, not the active SOPs
 		table->sop_min_available_urgent_bandwidths_KBps[i] =
-				active_entry->urgent_bandwidth_KBps;
+			idle_entry->urgent_bandwidth_KBps;
+		// non urgent bandwidth needs to be plumbed for presentation in the spreadsheet
+		table->sop_min_available_non_urgent_bandwidths_KBps[i] =
+			idle_entry->nominal_bandwidth_KBps;
+		// TODO - remove min_available_urgent_bandwidth_KBps and move stutter efficiency calculation to populate informative.
+
 	}
 }
 

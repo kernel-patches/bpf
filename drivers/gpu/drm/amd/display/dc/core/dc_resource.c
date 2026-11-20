@@ -1608,7 +1608,7 @@ bool resource_build_scaling_params(struct pipe_ctx *pipe_ctx)
 			pipe_ctx->plane_res.scl_data.lb_params.depth = LB_PIXEL_DEPTH_30BPP;
 
 		pipe_ctx->plane_res.scl_data.lb_params.alpha_en = plane_state->per_pixel_alpha;
-		pipe_ctx->plane_res.scl_data.upsp = resource_is_upsp_required(plane_state->format, plane_state->scaling_linearity);
+		pipe_ctx->plane_res.scl_data.upsp = resource_is_upsp_required((bool)plane_state->ctx->dc->caps.color.dpp.upsp_pre_scaler, plane_state->format, plane_state->scaling_linearity);
 
 		// Convert pipe_ctx to respective input params for SPL
 		translate_SPL_in_params_from_pipe_ctx(pipe_ctx, spl_in);
@@ -1747,11 +1747,19 @@ bool resource_build_scaling_params(struct pipe_ctx *pipe_ctx)
 	 * recout before the viewport was computed.
 	 */
 	if (pipe_ctx->stream->ctx->dc->debug.visual_confirm_full_viewport) {
-		adjust_recout_for_visual_confirm(
-				&pipe_ctx->plane_res.scl_data.recout, pipe_ctx);
+		/* A zero-area recout is the disabled-pipe sentinel (no overlap with this
+		 * ODM slice); only shrink a recout that actually draws, else the height
+		 * offset drives it negative and the pipe no longer reads as disabled.
+		 */
+		if (pipe_ctx->plane_res.scl_data.recout.width > 0 &&
+				pipe_ctx->plane_res.scl_data.recout.height > 0)
+			adjust_recout_for_visual_confirm(
+					&pipe_ctx->plane_res.scl_data.recout, pipe_ctx);
 		/* SPL programs the HW recout from dscl_prog_data, not scl_data.recout */
 		if (pipe_ctx->stream->ctx->dc->config.use_spl &&
-				!pipe_ctx->stream->ctx->dc->debug.disable_spl)
+				!pipe_ctx->stream->ctx->dc->debug.disable_spl &&
+				pipe_ctx->plane_res.scl_data.dscl_prog_data.recout.width > 0 &&
+				pipe_ctx->plane_res.scl_data.dscl_prog_data.recout.height > 0)
 			adjust_recout_for_visual_confirm((struct rect *)
 					&pipe_ctx->plane_res.scl_data.dscl_prog_data.recout,
 					pipe_ctx);
@@ -2164,6 +2172,38 @@ int resource_get_dpp_pipes_for_opp_head(const struct pipe_ctx *opp_head,
 		pipe = pipe->bottom_pipe;
 	}
 	return i;
+}
+
+int resource_get_opp_heads_for_stream(const struct dc_stream_state *stream,
+		struct resource_context *res_ctx,
+		struct pipe_ctx *opp_heads[MAX_PIPES])
+{
+	struct pipe_ctx *otg_master = resource_get_otg_master_for_stream(
+			res_ctx, stream);
+
+	if (!otg_master)
+		return 0;
+	return resource_get_opp_heads_for_otg_master(otg_master, res_ctx,
+			opp_heads);
+}
+
+int resource_get_dpp_pipes_for_stream(const struct dc_stream_state *stream,
+		struct resource_context *res_ctx,
+		struct pipe_ctx *dpp_pipes[MAX_PIPES])
+{
+	struct pipe_ctx *opp_heads[MAX_PIPES];
+	struct pipe_ctx *slice_pipes[MAX_PIPES];
+	int opp_head_count = resource_get_opp_heads_for_stream(stream, res_ctx,
+			opp_heads);
+	int i, j, slice_count, count = 0;
+
+	for (i = 0; i < opp_head_count; i++) {
+		slice_count = resource_get_dpp_pipes_for_opp_head(opp_heads[i],
+				res_ctx, slice_pipes);
+		for (j = 0; j < slice_count && count < MAX_PIPES; j++)
+			dpp_pipes[count++] = slice_pipes[j];
+	}
+	return count;
 }
 
 int resource_get_dpp_pipes_for_plane(const struct dc_plane_state *plane,

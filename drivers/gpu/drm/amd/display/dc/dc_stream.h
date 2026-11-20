@@ -256,6 +256,8 @@ struct dc_stream_state {
 	bool vrr_active_variable;
 	bool freesync_on_desktop;
 	bool vrr_active_fixed;
+	/* Ramless Idle static screen; variable VRR still permits cursor boosting. */
+	bool vrr_active_idle_static_screen;
 
 	bool converter_disable_audio;
 	uint8_t qs_bit;
@@ -367,6 +369,7 @@ struct dc_stream_update {
 	bool *allow_freesync;
 	bool *vrr_active_variable;
 	bool *vrr_active_fixed;
+	bool *vrr_active_idle_static_screen;
 
 	struct colorspace_transform *gamut_remap;
 	enum dc_color_space *output_color_space;

@@ -365,6 +365,7 @@ bool hubbub35_program_watermarks(
 	struct hubbub *hubbub,
 	union dcn_watermark_set *watermarks,
 	unsigned int refclk_mhz,
+	struct hubbub_watermark_policy policy,
 	bool safe_to_lower);
 void hubbub35_init_watermarks(struct hubbub *hubbub);
 void dcn35_program_compbuf_size(struct hubbub *hubbub,

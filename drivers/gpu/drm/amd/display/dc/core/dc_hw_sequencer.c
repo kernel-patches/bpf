@@ -806,6 +806,28 @@ void get_fams2_visual_confirm_color(
 	}
 }
 
+bool should_driver_program_visual_confirm(const struct dc *dc, const struct dc_state *context)
+{
+	switch (dc->debug.visual_confirm) {
+	case VISUAL_CONFIRM_DISABLE:
+		return false;
+	/* DMCUB owns the color for these modes. Programming ours stomps what FW
+	 * wrote, and FW only repaints across a modeset, so the bar stays stale.
+	 */
+	case VISUAL_CONFIRM_PSR:
+	case VISUAL_CONFIRM_FAMS:
+	case VISUAL_CONFIRM_REPLAY:
+		return false;
+	case VISUAL_CONFIRM_FAMS2:
+		/* FW owns the color only while FAMS2 runs. When it is not in use the
+		 * driver paints all pipes grey, and FW does not cover that case.
+		 */
+		return !dc_state_is_fams2_in_use(dc, context);
+	default:
+		return true;
+	}
+}
+
 static bool get_update_dchubp_dpp_flags_status(struct pipe_ctx *pipe)
 {
 	if (!pipe->plane_state) {
@@ -1644,7 +1666,7 @@ void hwss_build_fast_sequence(struct dc *dc,
 				block_sequence[*num_steps].func = DPP_SET_OUTPUT_TRANSFER_FUNC;
 				(*num_steps)++;
 			}
-			if (dc->debug.visual_confirm != VISUAL_CONFIRM_DISABLE &&
+			if (should_driver_program_visual_confirm(dc, context) &&
 				dc->hwss.update_visual_confirm_color) {
 				block_sequence[*num_steps].params.update_visual_confirm_params.mpc = dc->res_pool->mpc;
 				block_sequence[*num_steps].params.update_visual_confirm_params.color = &current_mpc_pipe->visual_confirm_color;
@@ -1913,7 +1935,7 @@ void hwss_execute_sequence(struct dc *dc,
 			hwss_mpc_remove_mpcc(params);
 			break;
 		case DC_SET_OPTIMIZED_REQUIRED:
-			hwss_dc_set_optimized_required(params);
+			dc->optimized_required = hwss_dc_set_optimized_required(params);
 			break;
 		case HUBP_DISCONNECT:
 			hwss_hubp_disconnect(params);
@@ -2072,6 +2094,9 @@ void hwss_execute_sequence(struct dc *dc,
 		case DPP_ROOT_CLOCK_CONTROL:
 			hwss_dpp_root_clock_control(params);
 			break;
+		case DC_IP_REQUEST_STATUS:
+			hwss_dc_ip_request_status(params);
+			break;
 		case DC_IP_REQUEST_CNTL:
 			hwss_dc_ip_request_cntl(params);
 			break;
@@ -2217,10 +2242,10 @@ void hwss_execute_sequence(struct dc *dc,
 			hwss_clk_mgr_update_clocks(params);
 			break;
 		case HUBBUB_PROGRAM_WATERMARKS:
-			hwss_hubbub_program_watermarks(params);
+			dc->optimized_required |= hwss_hubbub_program_watermarks(params);
 			break;
 		case HUBBUB_PROGRAM_ARBITER:
-			hwss_hubbub_program_arbiter(params);
+			dc->optimized_required |= hwss_hubbub_program_arbiter(params);
 			break;
 		case HUBBUB_PROGRAM_COMPBUF_SEGMENTS:
 			hwss_hubbub_program_compbuf_segments(params);
@@ -3593,12 +3618,12 @@ void hwss_mpc_remove_mpcc(union block_sequence_params *params)
 	mpc->funcs->remove_mpcc(mpc, mpc_tree_params, mpcc_to_remove);
 }
 
-void hwss_dc_set_optimized_required(union block_sequence_params *params)
+bool hwss_dc_set_optimized_required(union block_sequence_params *params)
 {
-	struct dc *dc = params->dc_set_optimized_required_params.dc;
-	bool optimized_required = params->dc_set_optimized_required_params.optimized_required;
+	if (!params)
+		return false;
 
-	dc->optimized_required = optimized_required;
+	return params->dc_set_optimized_required_params.optimized_required;
 }
 
 void hwss_hubp_disconnect(union block_sequence_params *params)
@@ -4011,22 +4036,16 @@ void hwss_disable_phantom_crtc(union block_sequence_params *params)
 void hwss_dsc_pg_status(union block_sequence_params *params)
 {
 	struct dce_hwseq *hws = params->dsc_pg_status_params.hws;
-	int dsc_inst = params->dsc_pg_status_params.dsc_inst;
+	struct display_stream_compressor *dsc = params->dsc_pg_status_params.dsc;
 
-	if (hws && hws->funcs.dsc_pg_status)
-		params->dsc_pg_status_params.is_ungated = hws->funcs.dsc_pg_status(hws, dsc_inst);
+	dsc->pg_ungated = hws->funcs.dsc_pg_status(hws, dsc->inst);
 }
 
 void hwss_dsc_wait_disconnect_pending_clear(union block_sequence_params *params)
 {
 	struct display_stream_compressor *dsc = params->dsc_wait_disconnect_pending_clear_params.dsc;
 
-	if (!params->dsc_wait_disconnect_pending_clear_params.is_ungated)
-		return;
-	if (*params->dsc_wait_disconnect_pending_clear_params.is_ungated == false)
-		return;
-
-	if (dsc && dsc->funcs->dsc_wait_disconnect_pending_clear)
+	if (dsc->pg_ungated)
 		dsc->funcs->dsc_wait_disconnect_pending_clear(dsc);
 }
 
@@ -4034,37 +4053,27 @@ void hwss_dsc_disable(union block_sequence_params *params)
 {
 	struct display_stream_compressor *dsc = params->dsc_disable_params.dsc;
 
-	if (!params->dsc_disable_params.is_ungated)
-		return;
-	if (*params->dsc_disable_params.is_ungated == false)
-		return;
-
-	if (dsc && dsc->funcs->dsc_disable)
+	if (dsc->pg_ungated)
 		dsc->funcs->dsc_disable(dsc);
 }
 
 void hwss_dccg_set_ref_dscclk(union block_sequence_params *params)
 {
 	struct dccg *dccg = params->dccg_set_ref_dscclk_params.dccg;
-	int dsc_inst = params->dccg_set_ref_dscclk_params.dsc_inst;
+	const struct display_stream_compressor *dsc = params->dccg_set_ref_dscclk_params.dsc;
 
-	if (!params->dccg_set_ref_dscclk_params.is_ungated)
-		return;
-	if (*params->dccg_set_ref_dscclk_params.is_ungated == false)
-		return;
-
-	if (dccg && dccg->funcs->set_ref_dscclk)
-		dccg->funcs->set_ref_dscclk(dccg, dsc_inst);
+	if (dsc->pg_ungated)
+		dccg->funcs->set_ref_dscclk(dccg, dsc->inst);
 }
 
 void hwss_dpp_pg_control(union block_sequence_params *params)
 {
 	struct dce_hwseq *hws = params->dpp_pg_control_params.hws;
-	unsigned int dpp_inst = params->dpp_pg_control_params.dpp_inst;
+	struct dpp *dpp = params->dpp_pg_control_params.dpp;
 	bool power_on = params->dpp_pg_control_params.power_on;
+	bool disable_power_gate = params->dpp_pg_control_params.disable_power_gate;
 
-	if (hws->funcs.dpp_pg_control)
-		hws->funcs.dpp_pg_control(hws, dpp_inst, power_on);
+	hws->funcs.dpp_pg_control(hws, dpp, power_on, disable_power_gate);
 }
 
 void hwss_hubp_pg_control(union block_sequence_params *params)
@@ -4072,9 +4081,10 @@ void hwss_hubp_pg_control(union block_sequence_params *params)
 	struct dce_hwseq *hws = params->hubp_pg_control_params.hws;
 	unsigned int hubp_inst = params->hubp_pg_control_params.hubp_inst;
 	bool power_on = params->hubp_pg_control_params.power_on;
+	bool disable_power_gate = params->hubp_pg_control_params.disable_power_gate;
+	bool ignore_pg = params->hubp_pg_control_params.ignore_pg;
 
-	if (hws->funcs.hubp_pg_control)
-		hws->funcs.hubp_pg_control(hws, hubp_inst, power_on);
+	hws->funcs.hubp_pg_control(hws, hubp_inst, power_on, disable_power_gate, ignore_pg);
 }
 
 void hwss_hubp_reset(union block_sequence_params *params)
@@ -4101,6 +4111,13 @@ void hwss_dpp_root_clock_control(union block_sequence_params *params)
 	bool root_clock_optimization_dpp = params->dpp_root_clock_control_params.root_clock_optimization_dpp;
 
 	dccg->funcs->dpp_root_clock_control(dccg, dpp_inst, clock_on, root_clock_optimization_dpp);
+}
+
+void hwss_dc_ip_request_status(union block_sequence_params *params)
+{
+	struct dce_hwseq *hws = params->dc_ip_request_status_params.hws;
+
+	hws->funcs.dc_ip_request_status(hws);
 }
 
 void hwss_dc_ip_request_cntl(union block_sequence_params *params)
@@ -4189,16 +4206,6 @@ void hwss_dpp_set_cursor_matrix(union block_sequence_params *params)
 
 	if (dpp && dpp->funcs->set_cursor_matrix)
 		dpp->funcs->set_cursor_matrix(dpp, color_space, *cursor_csc_color_matrix);
-}
-
-void hwss_mpc_update_mpcc(union block_sequence_params *params)
-{
-	struct dc *dc = params->mpc_update_mpcc_params.dc;
-	struct pipe_ctx *pipe_ctx = params->mpc_update_mpcc_params.pipe_ctx;
-	struct dce_hwseq *hws = dc->hwseq;
-
-	if (hws->funcs.update_mpcc)
-		hws->funcs.update_mpcc(dc, pipe_ctx);
 }
 
 void hwss_mpc_update_blending(union block_sequence_params *params)
@@ -4665,35 +4672,41 @@ void hwss_clk_mgr_update_clocks(union block_sequence_params *params)
 /*
  * Hubbub executor functions
  */
-void hwss_hubbub_program_watermarks(union block_sequence_params *params)
+bool hwss_hubbub_program_watermarks(union block_sequence_params *params)
 {
-	struct dc *dc = params->hubbub_program_watermarks_params.dc;
-	struct hubbub *hubbub = params->hubbub_program_watermarks_params.hubbub;
-	union dcn_watermark_set *watermarks = params->hubbub_program_watermarks_params.watermarks;
-	unsigned int refclk_mhz = params->hubbub_program_watermarks_params.refclk_mhz;
-	bool safe_to_lower = params->hubbub_program_watermarks_params.safe_to_lower;
+	struct hubbub_program_watermarks_params *wm;
+	bool pending;
 
-	if (hubbub && hubbub->funcs && hubbub->funcs->program_watermarks) {
-		bool wm_changed = hubbub->funcs->program_watermarks(hubbub, watermarks, refclk_mhz, safe_to_lower);
+	if (!params)
+		return false;
 
-		if (dc && !safe_to_lower)
-			dc->optimized_required |= wm_changed;
-	}
+	wm = &params->hubbub_program_watermarks_params;
+	if (!wm->hubbub || !wm->hubbub->funcs || !wm->hubbub->funcs->program_watermarks ||
+			!wm->watermarks)
+		return false;
+
+	pending = wm->hubbub->funcs->program_watermarks(wm->hubbub, wm->watermarks,
+		wm->refclk_mhz, wm->policy, wm->safe_to_lower);
+
+	return !wm->safe_to_lower && pending;
 }
 
-void hwss_hubbub_program_arbiter(union block_sequence_params *params)
+bool hwss_hubbub_program_arbiter(union block_sequence_params *params)
 {
-	struct dc *dc = params->hubbub_program_arbiter_params.dc;
-	struct hubbub *hubbub = params->hubbub_program_arbiter_params.hubbub;
-	struct dml2_display_arb_regs *arb_regs = params->hubbub_program_arbiter_params.arb_regs;
-	bool safe_to_lower = params->hubbub_program_arbiter_params.safe_to_lower;
+	struct hubbub_program_arbiter_params *arb;
+	bool pending;
 
-	if (hubbub && hubbub->funcs && hubbub->funcs->program_arbiter) {
-		bool arb_changed = hubbub->funcs->program_arbiter(hubbub, arb_regs, safe_to_lower);
+	if (!params)
+		return false;
 
-		if (dc && !safe_to_lower)
-			dc->optimized_required |= arb_changed;
-	}
+	arb = &params->hubbub_program_arbiter_params;
+	if (!arb->hubbub || !arb->hubbub->funcs || !arb->hubbub->funcs->program_arbiter)
+		return false;
+
+	pending = arb->hubbub->funcs->program_arbiter(arb->hubbub, arb->pstate_stall_threshold,
+		arb->allow_sdpif_rate_limit_when_cstate_req, arb->safe_to_lower);
+
+	return !arb->safe_to_lower && pending;
 }
 
 void hwss_hubbub_program_compbuf_segments(union block_sequence_params *params)
@@ -4847,11 +4860,15 @@ void hwss_add_dsc_disconnect(struct block_sequence_state *seq_state,
 }
 
 void hwss_add_dc_set_optimized_required(struct block_sequence_state *seq_state,
-		struct dc *dc, bool optimized_required)
+		bool optimized_required)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps) {
+		ASSERT(false);
+		return;
+	}
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DC_SET_OPTIMIZED_REQUIRED;
-		seq_state->steps[*seq_state->num_steps].params.dc_set_optimized_required_params.dc = dc;
 		seq_state->steps[*seq_state->num_steps].params.dc_set_optimized_required_params.optimized_required = optimized_required;
 		(*seq_state->num_steps)++;
 	}
@@ -5010,6 +5027,23 @@ void hwss_add_dpp_program_cm_hist(struct block_sequence_state *seq_state,
 		seq_state->steps[*seq_state->num_steps].params.control_cm_hist_params.color_space = color_space;
 		(*seq_state->num_steps)++;
 	}
+}
+
+bool hwss_add_dc_ip_request_status(struct block_sequence_state *seq_state,
+		struct dce_hwseq *hws)
+{
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+			!hws || !hws->funcs.dc_ip_request_status)
+		return false;
+
+	if (*seq_state->num_steps >= MAX_HWSS_BLOCK_SEQUENCE_SIZE)
+		return false;
+
+	seq_state->steps[*seq_state->num_steps].func = DC_IP_REQUEST_STATUS;
+	seq_state->steps[*seq_state->num_steps].params.dc_ip_request_status_params.hws = hws;
+	(*seq_state->num_steps)++;
+
+	return true;
 }
 
 void hwss_add_dc_ip_request_cntl(struct block_sequence_state *seq_state,
@@ -5435,54 +5469,65 @@ void hwss_add_disable_phantom_crtc(struct block_sequence_state *seq_state,
 	}
 }
 
-void hwss_add_dsc_pg_status(struct block_sequence_state *seq_state,
+bool hwss_add_dsc_pg_status(struct block_sequence_state *seq_state,
 		struct dce_hwseq *hws,
-		int dsc_inst,
-		bool is_ungated)
+		struct display_stream_compressor *dsc)
 {
-	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
-		seq_state->steps[*seq_state->num_steps].func = DSC_PG_STATUS;
-		seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.hws = hws;
-		seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.dsc_inst = dsc_inst;
-		seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.is_ungated = is_ungated;
-		(*seq_state->num_steps)++;
-	}
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+	    !hws || !hws->funcs.dsc_pg_status || !dsc)
+		return false;
+
+	if (*seq_state->num_steps >= MAX_HWSS_BLOCK_SEQUENCE_SIZE)
+		return false;
+
+	seq_state->steps[*seq_state->num_steps].func = DSC_PG_STATUS;
+	seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.hws = hws;
+	seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.dsc = dsc;
+	(*seq_state->num_steps)++;
+
+	return true;
 }
 
 void hwss_add_dsc_wait_disconnect_pending_clear(struct block_sequence_state *seq_state,
-		struct display_stream_compressor *dsc,
-		bool *is_ungated)
+		struct display_stream_compressor *dsc)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+	    !dsc || !dsc->funcs || !dsc->funcs->dsc_wait_disconnect_pending_clear)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DSC_WAIT_DISCONNECT_PENDING_CLEAR;
 		seq_state->steps[*seq_state->num_steps].params.dsc_wait_disconnect_pending_clear_params.dsc = dsc;
-		seq_state->steps[*seq_state->num_steps].params.dsc_wait_disconnect_pending_clear_params.is_ungated = is_ungated;
 		(*seq_state->num_steps)++;
 	}
 }
 
 void hwss_add_dsc_disable(struct block_sequence_state *seq_state,
-		struct display_stream_compressor *dsc,
-		bool *is_ungated)
+		struct display_stream_compressor *dsc)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+	    !dsc || !dsc->funcs || !dsc->funcs->dsc_disable)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DSC_DISABLE;
 		seq_state->steps[*seq_state->num_steps].params.dsc_disable_params.dsc = dsc;
-		seq_state->steps[*seq_state->num_steps].params.dsc_disable_params.is_ungated = is_ungated;
 		(*seq_state->num_steps)++;
 	}
 }
 
 void hwss_add_dccg_set_ref_dscclk(struct block_sequence_state *seq_state,
 		struct dccg *dccg,
-		int dsc_inst,
-		bool *is_ungated)
+		const struct display_stream_compressor *dsc)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+	    !dccg || !dccg->funcs || !dccg->funcs->set_ref_dscclk || !dsc)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DCCG_SET_REF_DSCCLK;
 		seq_state->steps[*seq_state->num_steps].params.dccg_set_ref_dscclk_params.dccg = dccg;
-		seq_state->steps[*seq_state->num_steps].params.dccg_set_ref_dscclk_params.dsc_inst = dsc_inst;
-		seq_state->steps[*seq_state->num_steps].params.dccg_set_ref_dscclk_params.is_ungated = is_ungated;
+		seq_state->steps[*seq_state->num_steps].params.dccg_set_ref_dscclk_params.dsc = dsc;
 		(*seq_state->num_steps)++;
 	}
 }
@@ -5544,14 +5589,21 @@ void hwss_add_dpp_root_clock_control(struct block_sequence_state *seq_state,
 
 void hwss_add_dpp_pg_control(struct block_sequence_state *seq_state,
 		struct dce_hwseq *hws,
-		unsigned int dpp_inst,
-		bool power_on)
+		struct dpp *dpp,
+		bool power_on,
+		bool disable_power_gate)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps || !hws ||
+			!hws->funcs.dpp_pg_control || !dpp)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DPP_PG_CONTROL;
 		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.hws = hws;
-		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.dpp_inst = dpp_inst;
+		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.dpp = dpp;
 		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.power_on = power_on;
+		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.disable_power_gate =
+				disable_power_gate;
 		(*seq_state->num_steps)++;
 	}
 }
@@ -5559,13 +5611,22 @@ void hwss_add_dpp_pg_control(struct block_sequence_state *seq_state,
 void hwss_add_hubp_pg_control(struct block_sequence_state *seq_state,
 		struct dce_hwseq *hws,
 		unsigned int hubp_inst,
-		bool power_on)
+		bool power_on,
+		bool disable_power_gate,
+		bool ignore_pg)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps || !hws ||
+			!hws->funcs.hubp_pg_control)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = HUBP_PG_CONTROL;
 		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.hws = hws;
 		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.hubp_inst = hubp_inst;
 		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.power_on = power_on;
+		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.disable_power_gate =
+				disable_power_gate;
+		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.ignore_pg = ignore_pg;
 		(*seq_state->num_steps)++;
 	}
 }
@@ -5776,7 +5837,7 @@ void hwss_add_dpp_setup_dpp(struct block_sequence_state *seq_state,
 		p->format = plane_state->format;
 		p->input_csc_color_matrix = plane_state->input_csc_color_matrix;
 		p->color_space = plane_state->color_space;
-		p->upsp_mode = resource_is_upsp_required(plane_state->format, plane_state->scaling_linearity);
+		p->upsp_mode = resource_is_upsp_required((bool)plane_state->ctx->dc->caps.color.dpp.upsp_pre_scaler, plane_state->format, plane_state->scaling_linearity);
 		(*seq_state->num_steps)++;
 	}
 }
@@ -6431,20 +6492,45 @@ void hwss_add_setup_periodic_interrupt(struct block_sequence_state *seq_state,
 /*
  * Hubbub helper functions
  */
-void hwss_add_hubbub_program_watermarks(struct block_sequence_state *seq_state,
-		struct dc *dc,
+struct hubbub_program_watermarks_params hwss_prepare_hubbub_program_watermarks(
+		const struct dc *dc,
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
 		bool safe_to_lower)
 {
+	struct hubbub_program_watermarks_params prepared = {};
+
+	prepared.hubbub = hubbub;
+	prepared.watermarks = watermarks;
+	prepared.refclk_mhz = refclk_mhz;
+	prepared.policy.urgent_watermark_override = dc->debug.urgent_watermark_override;
+	prepared.policy.disable_stutter = dc->debug.disable_stutter;
+	prepared.policy.disable_stutter_for_program = dc->debug.disable_stutter_for_wm_program;
+	prepared.policy.force_usr_allow = dc->debug.force_usr_allow;
+	prepared.safe_to_lower = safe_to_lower;
+
+	return prepared;
+}
+
+void hwss_add_hubbub_program_watermarks(struct block_sequence_state *seq_state,
+		const struct dc *dc,
+		struct hubbub *hubbub,
+		union dcn_watermark_set *watermarks,
+		unsigned int refclk_mhz,
+		bool safe_to_lower)
+{
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps || !dc || !watermarks ||
+			!hubbub || !hubbub->funcs || !hubbub->funcs->program_watermarks) {
+		ASSERT(false);
+		return;
+	}
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = HUBBUB_PROGRAM_WATERMARKS;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.dc = dc;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.hubbub = hubbub;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.watermarks = watermarks;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.refclk_mhz = refclk_mhz;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.safe_to_lower = safe_to_lower;
+		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params =
+			hwss_prepare_hubbub_program_watermarks(dc, hubbub, watermarks,
+					refclk_mhz, safe_to_lower);
 		(*seq_state->num_steps)++;
 	}
 }
@@ -6461,18 +6547,37 @@ void hwss_add_dp_trace_source_sequence(struct block_sequence_state *seq_state,
 	}
 }
 
-void hwss_add_hubbub_program_arbiter(struct block_sequence_state *seq_state,
-		struct dc *dc,
+struct hubbub_program_arbiter_params hwss_prepare_hubbub_program_arbiter(
 		struct hubbub *hubbub,
-		struct dml2_display_arb_regs *arb_regs,
+		const struct dml2_display_arb_regs *arb_regs,
 		bool safe_to_lower)
 {
+	struct hubbub_program_arbiter_params prepared = {};
+
+	prepared.hubbub = hubbub;
+	prepared.pstate_stall_threshold = arb_regs->pstate_stall_threshold;
+	prepared.allow_sdpif_rate_limit_when_cstate_req =
+			arb_regs->allow_sdpif_rate_limit_when_cstate_req != 0;
+	prepared.safe_to_lower = safe_to_lower;
+
+	return prepared;
+}
+
+void hwss_add_hubbub_program_arbiter(struct block_sequence_state *seq_state,
+		struct hubbub *hubbub,
+		const struct dml2_display_arb_regs *arb_regs,
+		bool safe_to_lower)
+{
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps || !arb_regs ||
+			!hubbub || !hubbub->funcs || !hubbub->funcs->program_arbiter) {
+		ASSERT(false);
+		return;
+	}
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = HUBBUB_PROGRAM_ARBITER;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params.dc = dc;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params.hubbub = hubbub;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params.arb_regs = arb_regs;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params.safe_to_lower = safe_to_lower;
+		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params =
+			hwss_prepare_hubbub_program_arbiter(hubbub, arb_regs, safe_to_lower);
 		(*seq_state->num_steps)++;
 	}
 }

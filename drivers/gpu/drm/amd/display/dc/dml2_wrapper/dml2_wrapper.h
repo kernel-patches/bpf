@@ -242,6 +242,7 @@ struct dml2_configuration_options {
 	struct {
 		bool force_mandatory_uclk_pstate_support;
 		bool force_pstate_method_enable;
+		bool relax_stutter_constraint_for_drr;
 		enum dml2_force_pstate_methods force_pstate_method_values[MAX_PIPES];
 	} pmo;
 	bool map_dc_pipes_with_callbacks;

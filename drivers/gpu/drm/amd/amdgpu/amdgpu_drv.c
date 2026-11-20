@@ -27,8 +27,8 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_fbdev_ttm.h>
 #include <drm/drm_gem.h>
+#include <drm/drm_gem_ttm_helper.h>
 #include <drm/drm_managed.h>
-#include <drm/drm_pciids.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 
@@ -160,8 +160,6 @@ int amdgpu_gart_size = -1; /* auto */
 int amdgpu_gtt_size = -1; /* auto */
 int amdgpu_moverate = -1; /* auto */
 int amdgpu_audio = -1;
-int amdgpu_disp_priority;
-int amdgpu_hw_i2c;
 int amdgpu_pcie_gen2 = -1;
 int amdgpu_msi = -1;
 char amdgpu_lockup_timeout[AMDGPU_MAX_TIMEOUT_PARAM_LENGTH];
@@ -178,7 +176,6 @@ int amdgpu_vm_block_size = -1;
 int amdgpu_vm_fault_stop;
 int amdgpu_vm_update_mode = -1;
 int amdgpu_exp_hw_support;
-int amdgpu_dc = -1;
 int amdgpu_sched_jobs = 32;
 int amdgpu_sched_hw_submission = 2;
 uint amdgpu_pcie_gen_cap;
@@ -318,24 +315,10 @@ module_param_named(moverate, amdgpu_moverate, int, 0600);
 
 /**
  * DOC: audio (int)
- * Set HDMI/DPAudio. Only affects non-DC display handling. The default is -1 (Enabled), set 0 to disabled it.
+ * Set HDMI/DPAudio. The default is -1 (Enabled), set 0 to disabled it.
  */
-MODULE_PARM_DESC(audio, "HDMI/DP Audio enable for non DC displays (-1 = auto, 0 = disable, 1 = enable)");
+MODULE_PARM_DESC(audio, "HDMI/DP Audio enable for displays (-1 = auto, 0 = disable, 1 = enable)");
 module_param_named(audio, amdgpu_audio, int, 0444);
-
-/**
- * DOC: disp_priority (int)
- * Set display Priority (1 = normal, 2 = high). Only affects non-DC display handling. The default is 0 (auto).
- */
-MODULE_PARM_DESC(disp_priority, "Display Priority (0 = auto, 1 = normal, 2 = high)");
-module_param_named(disp_priority, amdgpu_disp_priority, int, 0444);
-
-/**
- * DOC: hw_i2c (int)
- * To enable hw i2c engine. Only affects non-DC display handling. The default is 0 (Disabled).
- */
-MODULE_PARM_DESC(hw_i2c, "hw i2c engine enable (0 = disable)");
-module_param_named(hw_i2c, amdgpu_hw_i2c, int, 0444);
 
 /**
  * DOC: pcie_gen2 (int)
@@ -476,13 +459,6 @@ module_param_named(vm_update_mode, amdgpu_vm_update_mode, int, 0444);
  */
 MODULE_PARM_DESC(exp_hw_support, "experimental hw support (1 = enable, 0 = disable (default))");
 module_param_named_unsafe(exp_hw_support, amdgpu_exp_hw_support, int, 0444);
-
-/**
- * DOC: dc (int)
- * Disable/Enable Display Core driver for debugging (1 = enable, 0 = disable). The default is -1 (automatic for each asic).
- */
-MODULE_PARM_DESC(dc, "Display Core driver (1 = enable, 0 = disable, -1 = auto (default))");
-module_param_named(dc, amdgpu_dc, int, 0444);
 
 /**
  * DOC: sched_jobs (int)
@@ -2434,7 +2410,6 @@ static int amdgpu_pci_probe(struct pci_dev *pdev,
 	struct amdgpu_device *adev;
 	unsigned long flags = ent->driver_data;
 	int ret, retry = 0, i;
-	bool supports_atomic = false;
 
 	if ((pdev->class >> 8) == PCI_CLASS_DISPLAY_VGA ||
 	    (pdev->class >> 8) == PCI_CLASS_DISPLAY_OTHER) {
@@ -2447,10 +2422,6 @@ static int amdgpu_pci_probe(struct pci_dev *pdev,
 		if (amdgpu_unsupported_pciidlist[i] == pdev->device)
 			return -ENODEV;
 	}
-
-	if (amdgpu_virtual_display ||
-	    amdgpu_device_asic_has_dc_support(pdev, flags & AMD_ASIC_MASK))
-		supports_atomic = true;
 
 	if ((flags & AMD_EXP_HW_SUPPORT) && !amdgpu_exp_hw_support) {
 		dev_info(&pdev->dev, "This hardware requires experimental hardware support.\n"
@@ -2481,9 +2452,6 @@ static int amdgpu_pci_probe(struct pci_dev *pdev,
 	adev->dev  = &pdev->dev;
 	adev->pdev = pdev;
 	ddev = adev_to_drm(adev);
-
-	if (!supports_atomic)
-		ddev->driver_features &= ~DRIVER_ATOMIC;
 
 	ret = pci_enable_device(pdev);
 	if (ret)
@@ -3138,7 +3106,7 @@ static const struct drm_driver amdgpu_kms_driver = {
 	.ioctls = amdgpu_ioctls_kms,
 	.num_ioctls = ARRAY_SIZE(amdgpu_ioctls_kms),
 	.dumb_create = amdgpu_mode_dumb_create,
-	.dumb_map_offset = amdgpu_mode_dumb_mmap,
+	.dumb_map_offset = drm_gem_ttm_dumb_map_offset,
 	DRM_FBDEV_TTM_DRIVER_OPS,
 	.fops = &amdgpu_driver_kms_fops,
 	.release = &amdgpu_driver_release_kms,
@@ -3164,7 +3132,7 @@ const struct drm_driver amdgpu_partition_driver = {
 	.ioctls = amdgpu_ioctls_kms,
 	.num_ioctls = ARRAY_SIZE(amdgpu_ioctls_kms),
 	.dumb_create = amdgpu_mode_dumb_create,
-	.dumb_map_offset = amdgpu_mode_dumb_mmap,
+	.dumb_map_offset = drm_gem_ttm_dumb_map_offset,
 	DRM_FBDEV_TTM_DRIVER_OPS,
 	.fops = &amdgpu_driver_kms_fops,
 	.release = &amdgpu_driver_release_kms,
@@ -3246,10 +3214,18 @@ error_release_acpi:
 
 static void __exit amdgpu_exit(void)
 {
+	/*
+	 * Undo amdgpu_init() in reverse order, except that KFD goes before
+	 * the PCI driver. A primary KFD context can outlive its /dev/kfd file
+	 * until the mm of its process goes away, and amdgpu_amdkfd_fini()
+	 * releases what is left while the devices still exist. Removing the
+	 * devices first can instead send SIGBUS to those processes and wait
+	 * for their KFD state to be released.
+	 */
 	amdgpu_amdkfd_fini();
 	pci_unregister_driver(&amdgpu_kms_pci_driver);
-	amdgpu_unregister_atpx_handler();
 	amdgpu_acpi_release();
+	amdgpu_unregister_atpx_handler();
 	amdgpu_sync_fini();
 	mmu_notifier_synchronize();
 	amdgpu_xcp_drv_release();

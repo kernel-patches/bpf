@@ -576,8 +576,14 @@ bool dp_handle_hpd_rx_irq(struct dc_link *link,
 
 			if (defer_handling && has_left_work)
 				*has_left_work = true;
-			else
+			else {
+				bool skip_implict_edp_power_control = link->skip_implict_edp_power_control;
+
+				/*skip LCDVDD power off for retraining*/
+				link->skip_implict_edp_power_control = true;
 				dp_handle_link_loss(link);
+				link->skip_implict_edp_power_control = skip_implict_edp_power_control;
+			}
 
 			status = false;
 			if (out_link_loss)

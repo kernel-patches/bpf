@@ -227,43 +227,29 @@ static unsigned int calculate_tile_aligned_size(unsigned int copy_width, unsigne
   * *******************************************************************************************************************************************************
   * calculate_max_mem_size_per_plane_per_dpp: Calculate (loose) upper bound for total number of bytes reserved in memory for the copy given number of swaths
   *
-  * - The copy width / height is the min of the vp_width/height and maximum number of pixels that can fit across an ODM slice
-  *     - This is to account for recout positions that cross the ODM seam but are "mostly" within the same ODM slice
+  * - The copy width / height is the min of the vp_width/height and the per-pipe swath width
+  *     - This is to account for recout positions that cross the ODM / MPC split but are "mostly" within the same pipe
   *
   * *******************************************************************************************************************************************************
   */
 static unsigned int calculate_max_mem_size_per_plane_per_dpp(const struct dml2_core_calcs_calculate_alternate_params *p, unsigned int plane_idx, unsigned int copy_swaths, bool chroma)
 {
 	bool vertical_access = p->display_cfg->plane_descriptors[plane_idx].composition.rotation_angle == dml2_rotation_90 || p->display_cfg->plane_descriptors[plane_idx].composition.rotation_angle == dml2_rotation_270;
-	unsigned int h_active = p->display_cfg->stream_descriptors[p->display_cfg->plane_descriptors[plane_idx].stream_index].timing.h_active;
-	double h_ratio = chroma ? p->display_cfg->plane_descriptors[plane_idx].composition.scaler_info.plane1.h_ratio : p->display_cfg->plane_descriptors[plane_idx].composition.scaler_info.plane0.h_ratio;
 	unsigned int copy_src_lines = copy_swaths * (chroma ? p->SwathHeightC[plane_idx] : p->SwathHeightY[plane_idx]);
 	unsigned int vp_width = chroma ? p->display_cfg->plane_descriptors[plane_idx].composition.viewport.plane1.width : p->display_cfg->plane_descriptors[plane_idx].composition.viewport.plane0.width;
 	unsigned int vp_height = chroma ? p->display_cfg->plane_descriptors[plane_idx].composition.viewport.plane1.height : p->display_cfg->plane_descriptors[plane_idx].composition.viewport.plane0.height;
 	unsigned int tile_width = chroma ? p->MacroTileWidthC[plane_idx] : p->MacroTileWidthY[plane_idx];
 	unsigned int tile_height = chroma ? p->MacroTileHeightC[plane_idx] : p->MacroTileHeightY[plane_idx];
 	unsigned int byte_per_pixel = chroma ? p->BytePerPixelC[plane_idx] : p->BytePerPixelY[plane_idx];
+	unsigned int swath_width = chroma ? p->SwathWidthC[plane_idx] : p->SwathWidthY[plane_idx];
 	unsigned int copy_width;
 	unsigned int copy_height;
-	unsigned int odm_combine_factor;
-	double odm_slice_pixels;
-
-	if (p->ODMMode[plane_idx] == dml2_odm_mode_combine_4to1)
-		odm_combine_factor = 4;
-	else if (p->ODMMode[plane_idx] == dml2_odm_mode_combine_3to1)
-		odm_combine_factor = 3;
-	else if (p->ODMMode[plane_idx] == dml2_odm_mode_combine_2to1)
-		odm_combine_factor = 2;
-	else
-		odm_combine_factor = 1;
-
-	odm_slice_pixels = (double)h_active / odm_combine_factor * h_ratio + (odm_combine_factor == 3 ? 2 : 0);
 
 	/* Unaligned copy region dimensions (in pixels / lines) prior to tile alignment.
-	 * No need to divide vp width/height by NoOfDPP. The entire viewport could be within a single ODM slice if less than the odm slice pixels
+	 * No need to divide vp width/height by NoOfDPP. The entire viewport could be within a single pipe if less than the swath width
 	 * (e.g., multi-plane scenario with ODM combine). */
-	copy_width = vertical_access ? copy_src_lines : (unsigned int)math_ceil(math_min2(odm_slice_pixels, vp_width));
-	copy_height = vertical_access ? (unsigned int)math_ceil(math_min2(odm_slice_pixels, vp_height)) : copy_src_lines;
+	copy_width = vertical_access ? copy_src_lines : (unsigned int)math_min2((double)swath_width, (double)vp_width);
+	copy_height = vertical_access ? (unsigned int)math_min2((double)swath_width, (double)vp_height) : copy_src_lines;
 
 	return calculate_tile_aligned_size(copy_width, copy_height, tile_width, tile_height, byte_per_pixel);
 }
@@ -1041,9 +1027,9 @@ static void dcn6_rq_dlg_get_dlg_reg(
 			if (disp_dlg_regs->refcyc_per_pte_group_nom_c >= (unsigned int)math_pow(2, 23))
 				disp_dlg_regs->refcyc_per_pte_group_nom_c = (unsigned int)(math_pow(2, 23) - 1);
 		}
-		DML_ASSERT(disp_dlg_regs->refcyc_per_pte_group_vblank_l < (unsigned int)math_pow(2, 13));
+		DML_ASSERT(disp_dlg_regs->refcyc_per_pte_group_vblank_l < (unsigned int)math_pow(2, 23));
 		if (l->dual_plane) {
-			DML_ASSERT(disp_dlg_regs->refcyc_per_pte_group_vblank_c < (unsigned int)math_pow(2, 13));
+			DML_ASSERT(disp_dlg_regs->refcyc_per_pte_group_vblank_c < (unsigned int)math_pow(2, 23));
 		}
 
 		DML_ASSERT(disp_dlg_regs->refcyc_per_line_delivery_pre_l < (unsigned int)math_pow(2, 13));

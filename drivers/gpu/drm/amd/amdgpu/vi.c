@@ -67,7 +67,6 @@
 #include "gfx_v8_0.h"
 #include "sdma_v2_4.h"
 #include "sdma_v3_0.h"
-#include "dce_v10_0.h"
 #include "iceland_ih.h"
 #include "tonga_ih.h"
 #include "cz_ih.h"
@@ -2076,11 +2075,9 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &amdgpu_vkms_ip_block);
 #if defined(CONFIG_DRM_AMD_DC)
-		else if (amdgpu_device_has_dc_support(adev))
+		else
 			amdgpu_device_ip_block_add(adev, &dm_ip_block);
 #endif
-		else
-			amdgpu_device_ip_block_add(adev, &dce_v10_1_ip_block);
 		if (!amdgpu_sriov_vf(adev)) {
 			amdgpu_device_ip_block_add(adev, &uvd_v6_0_ip_block);
 			amdgpu_device_ip_block_add(adev, &vce_v3_0_ip_block);
@@ -2096,11 +2093,9 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &amdgpu_vkms_ip_block);
 #if defined(CONFIG_DRM_AMD_DC)
-		else if (amdgpu_device_has_dc_support(adev))
+		else
 			amdgpu_device_ip_block_add(adev, &dm_ip_block);
 #endif
-		else
-			amdgpu_device_ip_block_add(adev, &dce_v10_0_ip_block);
 		if (!amdgpu_sriov_vf(adev)) {
 			amdgpu_device_ip_block_add(adev, &uvd_v5_0_ip_block);
 			amdgpu_device_ip_block_add(adev, &vce_v3_0_ip_block);
@@ -2119,7 +2114,7 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &amdgpu_vkms_ip_block);
 #if defined(CONFIG_DRM_AMD_DC)
-		else if (amdgpu_device_has_dc_support(adev))
+		else
 			amdgpu_device_ip_block_add(adev, &dm_ip_block);
 #endif
 		amdgpu_device_ip_block_add(adev, &uvd_v6_3_ip_block);
@@ -2135,7 +2130,7 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &amdgpu_vkms_ip_block);
 #if defined(CONFIG_DRM_AMD_DC)
-		else if (amdgpu_device_has_dc_support(adev))
+		else
 			amdgpu_device_ip_block_add(adev, &dm_ip_block);
 #endif
 		amdgpu_device_ip_block_add(adev, &uvd_v6_0_ip_block);
@@ -2154,7 +2149,7 @@ int vi_set_ip_blocks(struct amdgpu_device *adev)
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &amdgpu_vkms_ip_block);
 #if defined(CONFIG_DRM_AMD_DC)
-		else if (amdgpu_device_has_dc_support(adev))
+		else
 			amdgpu_device_ip_block_add(adev, &dm_ip_block);
 #endif
 		amdgpu_device_ip_block_add(adev, &uvd_v6_2_ip_block);

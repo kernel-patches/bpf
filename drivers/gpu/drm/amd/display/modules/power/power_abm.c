@@ -409,34 +409,23 @@ static unsigned int backlight_pwm_to_millipercent_legacy(
 			break;
 	}
 
-	/* In this case, exact match is not found. Check if mid/min/max
-	 * value is actually closer.
-	 */
+	/* No exact match, so on a sorted LUT lut[max] < pwm < lut[min] */
 	if (max < min) {
-		unsigned int min_delta;
-		unsigned int mid_delta;
-		unsigned int max_delta;
+		unsigned int lower = core_power->bl_prop[inst].backlight_lut[max];
+		unsigned int upper = core_power->bl_prop[inst].backlight_lut[min];
+		unsigned long long span, den;
 
-		min_delta = (core_power->bl_prop[inst].backlight_lut[min] > pwm) ?
-				core_power->bl_prop[inst].backlight_lut[min] - pwm :
-				pwm - core_power->bl_prop[inst].backlight_lut[min];
+		if (pwm <= lower || pwm >= upper)
+			return BACKLIGHT_MILLIPERCENT_MAX * mid / max_index;
 
-		mid_delta = (core_power->bl_prop[inst].backlight_lut[mid] > pwm) ?
-				core_power->bl_prop[inst].backlight_lut[mid] - pwm :
-				pwm - core_power->bl_prop[inst].backlight_lut[mid];
+		span = upper - lower;
+		den = span * max_index;
 
-		max_delta = (core_power->bl_prop[inst].backlight_lut[max] > pwm) ?
-				core_power->bl_prop[inst].backlight_lut[max] - pwm :
-				pwm - core_power->bl_prop[inst].backlight_lut[max];
-
-		if ((min_delta < mid_delta) && (min_delta < max_delta))
-			mid = min;
-
-		if ((max_delta < mid_delta) && (max_delta < min_delta))
-			mid = max;
+		/* LUT entries fit in 16 bits, so this stays far below 2^64 */
+		return (unsigned int)div64_u64((max * span + pwm - lower) *
+					       BACKLIGHT_MILLIPERCENT_MAX + den / 2, den);
 	}
 
-	/* No interpolation, just take closest index */
 	millipercent = BACKLIGHT_MILLIPERCENT_MAX * mid / max_index;
 
 	return millipercent;
@@ -524,6 +513,9 @@ static unsigned int backlight_millipercent_to_pwm_legacy(
 {
 	unsigned int pwm = (unsigned int)-1;
 	unsigned int index = 0;
+	unsigned int lower, upper;
+	unsigned long long scaled;
+	unsigned int remainder;
 
 	if (core_power == NULL)
 		return 0;
@@ -541,17 +533,33 @@ static unsigned int backlight_millipercent_to_pwm_legacy(
 		return pwm;
 	}
 
-	if (millipercent >= (100 * 1000))
+	if (millipercent >= BACKLIGHT_MILLIPERCENT_MAX)
 		return core_power->bl_prop[inst].backlight_lut[core_power->bl_prop[inst].num_backlight_levels - 1];
 
-	/* This will give the floor index. */
-	index = ((core_power->bl_prop[inst].num_backlight_levels - 1) *
-						millipercent) / 100000;
 	/* Null check otherwise eDP doesn't lightup when connected to DP1 */
 	if (core_power->bl_prop[inst].backlight_lut == NULL)
 		return pwm;
 
-	pwm = core_power->bl_prop[inst].backlight_lut[index];
+	if (core_power->bl_prop[inst].num_backlight_levels < 2)
+		return pwm;
+
+	/*
+	 * Interpolate between the two LUT entries around millipercent.
+	 * backlight_lut has num_backlight_levels entries, and millipercent is
+	 * below BACKLIGHT_MILLIPERCENT_MAX here, so index + 1 stays within it
+	 */
+	scaled = (unsigned long long)(core_power->bl_prop[inst].num_backlight_levels - 1) *
+		 millipercent;
+	index = (unsigned int)div_u64_rem(scaled, BACKLIGHT_MILLIPERCENT_MAX, &remainder);
+	lower = core_power->bl_prop[inst].backlight_lut[index];
+	upper = core_power->bl_prop[inst].backlight_lut[index + 1];
+
+	if (upper <= lower)
+		return lower;
+
+	pwm = lower + (unsigned int)div_u64((unsigned long long)(upper - lower) * remainder +
+					    BACKLIGHT_MILLIPERCENT_MAX / 2,
+					    BACKLIGHT_MILLIPERCENT_MAX);
 
 	return pwm;
 }

@@ -4626,7 +4626,7 @@ static int amdgpu_ualink_npa_vm_map_range(struct amdgpu_device *adev, struct amd
 }
 
 /**
- * amdgpu_npa_vm_unmap_range - Unmap a range from the NPA VM
+ * amdgpu_ualink_npa_vm_unmap_range - Unmap a range from the NPA VM
  * @adev: amdgpu device pointer
  * @bo: buffer object backing the mapping
  * @pte_flags: page table entry flags
@@ -4722,6 +4722,9 @@ static u64 amdgpu_ualink_npa_addr(struct amdgpu_device *adev, u32 type,
 	return npa;
 }
 
+#define AMDGPU_UALINK_GART_NPA_ADDR_GPUID_SHIFT		41
+#define AMDGPU_UALINK_GART_NPA_ADDR_GPUID_MASK		GENMASK_ULL(50, 41)
+
 /**
  * amdgpu_ualink_gart_npa_addr - Get GART-mapped NPA address for ring buffer
  * @adev: amdgpu device pointer
@@ -4729,18 +4732,12 @@ static u64 amdgpu_ualink_npa_addr(struct amdgpu_device *adev, u32 type,
  * @src_accel_id: Source accelerator ID
  * @dst_accel_id: Destination accelerator ID
  *
- * Computes the NPA address suitable for GART mapping by adding dst_accid_id to
- * NPA address to access remote by SDMA.
-
- * clears the source GPU ID bits from the NPA address which is set for
- * address-identification mode.
+ * Computes the NPA address suitable for GART mapping by adding dst_accel_id to
+ * NPA address to access remote by SDMA. It also clears the source GPU ID bits
+ * from the NPA address which is set for address-identification mode.
  *
  * Return: NPA address adjusted for GART mapping
  */
-
-#define AMDGPU_UALINK_GART_NPA_ADDR_GPUID_SHIFT		41
-#define AMDGPU_UALINK_GART_NPA_ADDR_GPUID_MASK		GENMASK_ULL(50, 41)
-
 static u64 amdgpu_ualink_gart_npa_addr(struct amdgpu_device *adev, u32 type,
 					u32 src_accel_id, u32 dst_accel_id)
 {
@@ -5425,7 +5422,7 @@ out:
  */
 static void amdgpu_ualink_remote_error(struct amdgpu_device *adev, u32 status)
 {
-	const char *fw_err_code_msg[] = {
+	static const char * const fw_err_code_msg[] = {
 		"Unknown FW error status",
 		"FIFO overflow",		/* error code 1 */
 		"Invalid RB command",

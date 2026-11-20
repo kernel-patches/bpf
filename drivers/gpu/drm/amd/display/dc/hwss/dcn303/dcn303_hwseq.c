@@ -43,19 +43,24 @@
 	hws->shifts->field_name, hws->masks->field_name
 
 
-void dcn303_dpp_pg_control(struct dce_hwseq *hws, unsigned int dpp_inst, bool power_on)
+void dcn303_dpp_pg_control(struct dce_hwseq *hws, struct dpp *dpp, bool power_on,
+		bool disable_power_gate)
 {
-	(void)dpp_inst;
+	(void)dpp;
 	(void)hws;
 	(void)power_on;
+	(void)disable_power_gate;
 	/*DCN303 removes PG registers*/
 }
 
-void dcn303_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on)
+void dcn303_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on,
+		bool disable_power_gate, bool ignore_pg)
 {
 	(void)hubp_inst;
 	(void)hws;
 	(void)power_on;
+	(void)disable_power_gate;
+	(void)ignore_pg;
 	/*DCN303 removes PG registers*/
 }
 

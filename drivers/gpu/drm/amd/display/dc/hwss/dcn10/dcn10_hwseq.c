@@ -935,25 +935,27 @@ void dcn10_disable_vga(
  * dcn10_dpp_pg_control - DPP power gate control.
  *
  * @hws: dce_hwseq reference.
- * @dpp_inst: DPP instance reference.
+ * @dpp: DPP instance reference.
  * @power_on: true if we want to enable power gate, false otherwise.
+ * @disable_power_gate: true if DPP power gating is disabled by debug policy.
  *
  * Enable or disable power gate in the specific DPP instance.
  */
 void dcn10_dpp_pg_control(
 		struct dce_hwseq *hws,
-		unsigned int dpp_inst,
-		bool power_on)
+		struct dpp *dpp,
+		bool power_on,
+		bool disable_power_gate)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? PGFSM_POWER_ON : PGFSM_POWER_OFF;
 
-	if (hws->ctx->dc->debug.disable_dpp_power_gate)
+	if (disable_power_gate)
 		return;
 	if (REG(DOMAIN1_PG_CONFIG) == 0)
 		return;
 
-	switch (dpp_inst) {
+	switch (dpp->inst) {
 	case 0: /* DPP0 */
 		REG_UPDATE(DOMAIN1_PG_CONFIG,
 				DOMAIN1_POWER_GATE, power_gate);
@@ -998,18 +1000,24 @@ void dcn10_dpp_pg_control(
  * @hws: dce_hwseq reference.
  * @hubp_inst: DPP instance reference.
  * @power_on: true if we want to enable power gate, false otherwise.
+ * @disable_power_gate: true if HUBP power gating is disabled by debug policy.
+ * @ignore_pg: unused on DCN10.
  *
  * Enable or disable power gate in the specific HUBP instance.
  */
 void dcn10_hubp_pg_control(
 		struct dce_hwseq *hws,
 		unsigned int hubp_inst,
-		bool power_on)
+		bool power_on,
+		bool disable_power_gate,
+		bool ignore_pg)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? PGFSM_POWER_ON : PGFSM_POWER_OFF;
 
-	if (hws->ctx->dc->debug.disable_hubp_power_gate)
+	(void)ignore_pg;
+
+	if (disable_power_gate)
 		return;
 	if (REG(DOMAIN0_PG_CONFIG) == 0)
 		return;
@@ -1055,8 +1063,11 @@ void dcn10_hubp_pg_control(
 
 static void power_on_plane_resources(
 	struct dce_hwseq *hws,
+	struct dpp *dpp,
 	int plane_id)
 {
+	struct dc *dc = hws->ctx->dc;
+
 	DC_LOGGER_INIT(hws->ctx);
 
 	if (hws->funcs.dpp_root_clock_control &&
@@ -1068,10 +1079,12 @@ static void power_on_plane_resources(
 				IP_REQUEST_EN, 1);
 
 		if (hws->funcs.dpp_pg_control)
-			hws->funcs.dpp_pg_control(hws, plane_id, true);
+			hws->funcs.dpp_pg_control(hws, dpp, true,
+					dc->debug.disable_dpp_power_gate);
 
 		if (hws->funcs.hubp_pg_control)
-			hws->funcs.hubp_pg_control(hws, plane_id, true);
+			hws->funcs.hubp_pg_control(hws, plane_id, true,
+					dc->debug.disable_hubp_power_gate, dc->debug.ignore_pg);
 
 		REG_SET(DC_IP_REQUEST_CNTL, 0,
 				IP_REQUEST_EN, 0);
@@ -1093,7 +1106,8 @@ static void undo_DEGVIDCN10_253_wa(struct dc *dc)
 	REG_SET(DC_IP_REQUEST_CNTL, 0,
 			IP_REQUEST_EN, 1);
 
-	hws->funcs.hubp_pg_control(hws, 0, false);
+	hws->funcs.hubp_pg_control(hws, 0, false, dc->debug.disable_hubp_power_gate,
+			dc->debug.ignore_pg);
 	REG_SET(DC_IP_REQUEST_CNTL, 0,
 			IP_REQUEST_EN, 0);
 
@@ -1122,7 +1136,8 @@ static void apply_DEGVIDCN10_253_wa(struct dc *dc)
 	REG_SET(DC_IP_REQUEST_CNTL, 0,
 			IP_REQUEST_EN, 1);
 
-	hws->funcs.hubp_pg_control(hws, 0, true);
+	hws->funcs.hubp_pg_control(hws, 0, true, dc->debug.disable_hubp_power_gate,
+			dc->debug.ignore_pg);
 	REG_SET(DC_IP_REQUEST_CNTL, 0,
 			IP_REQUEST_EN, 0);
 
@@ -1546,10 +1561,12 @@ void dcn10_plane_atomic_power_down(struct dc *dc,
 				IP_REQUEST_EN, 1);
 
 		if (hws->funcs.dpp_pg_control)
-			hws->funcs.dpp_pg_control(hws, dpp->inst, false);
+			hws->funcs.dpp_pg_control(hws, dpp, false,
+					dc->debug.disable_dpp_power_gate);
 
 		if (hws->funcs.hubp_pg_control)
-			hws->funcs.hubp_pg_control(hws, hubp->inst, false);
+			hws->funcs.hubp_pg_control(hws, hubp->inst, false,
+					dc->debug.disable_hubp_power_gate, dc->debug.ignore_pg);
 
 		hubp->funcs->hubp_reset(hubp);
 		dpp->funcs->dpp_reset(dpp);
@@ -2806,6 +2823,7 @@ static void dcn10_enable_plane(
 	undo_DEGVIDCN10_253_wa(dc);
 
 	power_on_plane_resources(dc->hwseq,
+		pipe_ctx->plane_res.dpp,
 		pipe_ctx->plane_res.hubp->inst);
 
 	/* enable DCFCLK current DCHUB */
@@ -2950,6 +2968,9 @@ void dcn10_update_visual_confirm_color(struct dc *dc,
 		int mpcc_id)
 {
 	struct mpc *mpc = dc->res_pool->mpc;
+
+	if (!should_driver_program_visual_confirm(dc, dc->current_state))
+		return;
 
 	if (mpc->funcs->set_bg_color) {
 		mpc->funcs->set_bg_color(mpc, &(pipe_ctx->visual_confirm_color), mpcc_id);
@@ -3420,6 +3441,7 @@ void dcn10_prepare_bandwidth(
 {
 	struct dce_hwseq *hws = dc->hwseq;
 	struct hubbub *hubbub = dc->res_pool->hubbub;
+	struct hubbub_program_watermarks_params wm;
 	int min_fclk_khz, min_dcfclk_khz, socclk_khz;
 
 	if (dc->debug.sanity_checks)
@@ -3433,10 +3455,10 @@ void dcn10_prepare_bandwidth(
 			context,
 			false);
 
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub, &context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, true);
 	dc->optimized_required = hubbub->funcs->program_watermarks(hubbub,
-			&context->bw_ctx.bw.dcn.watermarks,
-			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-			true);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 	dcn10_stereo_hw_frame_pack_wa(dc, context);
 
 	if (dc->debug.pplib_wm_report_mode == WM_REPORT_OVERRIDE) {
@@ -3458,6 +3480,7 @@ void dcn10_optimize_bandwidth(
 {
 	struct dce_hwseq *hws = dc->hwseq;
 	struct hubbub *hubbub = dc->res_pool->hubbub;
+	struct hubbub_program_watermarks_params wm;
 	int min_fclk_khz, min_dcfclk_khz, socclk_khz;
 
 	if (dc->debug.sanity_checks)
@@ -3471,10 +3494,10 @@ void dcn10_optimize_bandwidth(
 			context,
 			true);
 
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub, &context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, true);
 	hubbub->funcs->program_watermarks(hubbub,
-			&context->bw_ctx.bw.dcn.watermarks,
-			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-			true);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 
 	dcn10_stereo_hw_frame_pack_wa(dc, context);
 

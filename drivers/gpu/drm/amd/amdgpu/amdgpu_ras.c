@@ -3758,6 +3758,11 @@ static int amdgpu_persistent_edc_harvesting(struct amdgpu_device *adev,
 	if (!amdgpu_persistent_edc_harvesting_supported(adev))
 		return 0;
 
+	/* Skip uniras block ECC query during GPU reset/recovery */
+	if ((amdgpu_in_reset(adev) || amdgpu_ras_in_recovery(adev)) &&
+	     amdgpu_uniras_enabled(adev))
+		return 0;
+
 	if (amdgpu_ras_query_error_status(adev, &info) != 0)
 		drm_warn(adev_to_drm(adev), "RAS init query failure");
 

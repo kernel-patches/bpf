@@ -199,7 +199,7 @@ bool core2_run_legacy_hardware_init(struct dc *dc,
 	info = &dc->current_state->hw_init_info;
 	memset(info, 0, sizeof(*info));
 	info->next_stage = LEGACY_INIT_STAGE_CLOCKS;
-	builder = bls_builder_create(dc, DCN_DECL_INITIALIZATION_LEGACY);
+	builder = TO_DC2(dc)->builders[DCN_DECL_INITIALIZATION_LEGACY];
 	if (!builder || builder->kind != BLS_BUILDER_DECLARATIVE ||
 			!builder->build.declarative)
 		return false;

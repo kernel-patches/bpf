@@ -1332,3 +1332,12 @@ bool dcn60_apply_idle_power_optimizations(struct dc *dc, bool enable)
 
 	return true;
 }
+
+bool dcn60_dsc_pg_status(struct dce_hwseq *hws, unsigned int dsc_inst)
+{
+	(void)hws;
+	(void)dsc_inst;
+
+	/* DCN6.0 has no DSC power-gate domain, so the DSC is always ungated. */
+	return true;
+}

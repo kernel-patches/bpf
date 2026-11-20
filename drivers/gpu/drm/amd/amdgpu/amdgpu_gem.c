@@ -657,12 +657,15 @@ release_object:
 	return r;
 }
 
-int amdgpu_mode_dumb_mmap(struct drm_file *filp,
-			  struct drm_device *dev,
-			  uint32_t handle, uint64_t *offset_p)
+int amdgpu_gem_mmap_ioctl(struct drm_device *dev, void *data,
+			  struct drm_file *filp)
 {
+	union drm_amdgpu_gem_mmap *args = data;
+	uint32_t handle = args->in.handle;
 	struct drm_gem_object *gobj;
 	struct amdgpu_bo *robj;
+
+	memset(args, 0, sizeof(*args));
 
 	gobj = drm_gem_object_lookup(filp, handle);
 	if (!gobj)
@@ -674,19 +677,11 @@ int amdgpu_mode_dumb_mmap(struct drm_file *filp,
 		drm_gem_object_put(gobj);
 		return -EPERM;
 	}
-	*offset_p = amdgpu_bo_mmap_offset(robj);
+
+	args->out.addr_ptr = amdgpu_bo_mmap_offset(robj);
 	drm_gem_object_put(gobj);
+
 	return 0;
-}
-
-int amdgpu_gem_mmap_ioctl(struct drm_device *dev, void *data,
-			  struct drm_file *filp)
-{
-	union drm_amdgpu_gem_mmap *args = data;
-	uint32_t handle = args->in.handle;
-
-	memset(args, 0, sizeof(*args));
-	return amdgpu_mode_dumb_mmap(filp, dev, handle, &args->out.addr_ptr);
 }
 
 /**

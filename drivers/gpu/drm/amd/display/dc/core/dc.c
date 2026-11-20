@@ -2363,30 +2363,16 @@ static void determine_pipe_unlock_order(struct dc *dc, struct dc_state *context)
 	}
 }
 
-/**
- * dc_commit_state_no_check - Apply context to the hardware
- *
- * @dc: DC object with the current status to be updated
- * @context: New state that will become the current status at the end of this function
- *
- * Applies given context to the hardware and copy it into current context.
- * It's up to the user to release the src context afterwards.
- *
- * Return: an enum dc_status result code for the operation
- */
-static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *context)
+/* Hardware span of a commit. The API shim picks Core2 or this body. */
+enum dc_status legacy_commit_state_hw(struct dc *dc, struct dc_state *context)
 {
 	struct dc_bios *dcb = dc->ctx->dc_bios;
 	enum dc_status result = DC_ERROR_UNEXPECTED;
 	struct pipe_ctx *pipe;
 	unsigned int i, k, l;
 	struct dc_stream_state *dc_streams[MAX_STREAMS] = {0};
-	struct dc_state *old_state;
 	bool subvp_prev_use = false;
 	bool dmub_locked = false;
-
-	dc_z10_restore(dc);
-	dc_allow_idle_optimizations(dc, false);
 
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
 		struct pipe_ctx *old_pipe = &dc->current_state->res_ctx.pipe_ctx[i];
@@ -2579,6 +2565,33 @@ static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *c
 	if (dc->hwss.update_dsc_pg)
 		dc->hwss.update_dsc_pg(dc, context, true);
 
+	return result;
+}
+
+/**
+ * dc_commit_state_no_check - Apply context to the hardware
+ *
+ * @dc: DC object with the current status to be updated
+ * @context: New state that will become the current status at the end of this function
+ *
+ * Applies given context to the hardware and copy it into current context.
+ * It's up to the user to release the src context afterwards.
+ *
+ * Return: an enum dc_status result code for the operation
+ */
+static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *context)
+{
+	enum dc_status result;
+	unsigned int i;
+	struct dc_state *old_state;
+
+	dc_z10_restore(dc);
+	dc_allow_idle_optimizations(dc, false);
+
+	result = api_shim_commit_state_hw(dc, context);
+	if (result != DC_OK)
+		return result;
+
 	if (dc->ctx->dce_version >= DCE_VERSION_MAX)
 		TRACE_DCN_CLOCK_STATE(&context->bw_ctx.bw.dcn.clk);
 	else
@@ -2713,11 +2726,16 @@ enum dc_status dc_commit_streams(struct dc *dc, struct dc_commit_streams_params 
 	 */
 	if (dc->hwss.is_pipe_topology_transition_seamless &&
 			!dc->hwss.is_pipe_topology_transition_seamless(dc, dc->current_state, context)) {
-		res = commit_minimal_transition_state(dc, context);
-		if (res != DC_OK) {
-			BREAK_TO_DEBUGGER();
-			goto fail;
-		}
+		/*
+		 * A minimal (no-ODM) intermediate transition could not be built
+		 * for a stream that still passed full validation above, e.g. a
+		 * high pixel clock mode that needs ODM combine to meet DISPCLK.
+		 * In that case commit the validated target context directly
+		 * instead of failing the whole commit and blanking the display.
+		 */
+		if (!commit_minimal_transition_state(dc, context))
+			DC_LOG_WARNING("%s: minimal transition unavailable; committing target\n",
+				       __func__);
 	}
 
 	res = dc_commit_state_no_check(dc, context);
@@ -2846,6 +2864,8 @@ void dc_post_update_surfaces_to_stream(struct dc *dc)
 		TRACE_DCE_CLOCK_STATE(&context->bw_ctx.bw.dce);
 	else {
 		TRACE_DCN_CLOCK_STATE(&context->bw_ctx.bw.dcn.clk);
+
+		dc_exit_ips_for_hw_access(dc);
 
 		if (is_flip_pending_in_pipes(dc, context))
 			return;
@@ -3295,6 +3315,10 @@ static struct dc_update_descriptor check_update_surfaces_for_stream(
 				stream_update->vrr_active_variable || stream_update->vrr_active_fixed))
 			su_flags->bits.fams_changed = 1;
 
+		/* Static-screen transitions change DML stutter constraints even if VRR stays variable. */
+		if (stream_update->vrr_active_idle_static_screen)
+			su_flags->bits.fams_changed = 1;
+
 		if (stream_update->scaler_sharpener_update) {
 			su_flags->bits.scaler_sharpener = 1;
 			elevate_update_type(&overall_type, UPDATE_TYPE_FULL, LOCK_DESCRIPTOR_STREAM);
@@ -3663,6 +3687,9 @@ static void copy_stream_update_to_stream(struct dc *dc,
 
 	if (update->vrr_active_fixed)
 		stream->vrr_active_fixed = *update->vrr_active_fixed;
+
+	if (update->vrr_active_idle_static_screen)
+		stream->vrr_active_idle_static_screen = *update->vrr_active_idle_static_screen;
 
 	if (update->crtc_timing_adjust) {
 		if (stream->adjust.v_total_min != update->crtc_timing_adjust->v_total_min ||
@@ -4414,7 +4441,7 @@ static void commit_planes_do_stream_update_sequence(struct dc *dc,
 					if (dpms_pipe_ctx->stream_res.audio && !dc->debug.az_endpoint_mute_only)
 						hwss_add_disable_audio_stream(&seq_state, dpms_pipe_ctx);
 
-					hwss_add_dc_set_optimized_required(&seq_state, dc, true);
+					hwss_add_dc_set_optimized_required(&seq_state, true);
 
 				} else {
 					if (get_seamless_boot_stream_count(context) == 0 && dc->hwss.prepare_bandwidth_sequence)
@@ -6787,6 +6814,8 @@ void legacy_hardware_release(struct dc *dc)
 static const struct dc2_funcs dc2_legacy_funcs_table = {
 	.hardware_init = legacy_hardware_init,
 	.hardware_release = legacy_hardware_release,
+	.commit_state_hw = legacy_commit_state_hw,
+	.update_state_execute = legacy_update_state_execute,
 };
 
 const struct dc2_funcs *dc2_legacy_funcs(void)
@@ -6836,6 +6865,10 @@ bool dc_is_dmub_outbox_supported(struct dc *dc)
 	default:
 		break;
 	}
+
+	/* Fused IO replies (e.g. HDCP FW locality check) arrive via outbox notifications */
+	if (dc->caps.fused_io_supported)
+		return true;
 
 	/* dmub aux needs dmub notifications to be enabled */
 	return dc->debug.enable_dmub_aux_for_legacy_ddc;
@@ -8088,11 +8121,13 @@ bool dc_get_qos_info(struct dc *dc, struct dc_qos_info *info)
 	if (dc->clk_mgr && dc->clk_mgr->funcs->get_requested_memory_qos) {
 		dc->clk_mgr->funcs->get_requested_memory_qos(dc->clk_mgr, &requested);
 		info->qos_bandwidth_lb_in_mbps    = requested.bandwidth_lb_in_mbps;
-		info->calculated_avg_bw_in_mbps   = requested.calculated_avg_bw_in_mbps;
-		info->qos_max_latency_ub_in_ns    = requested.max_latency_ub_in_ns;
-		info->qos_avg_latency_ub_in_ns    = requested.avg_latency_ub_in_ns;
 		info->qos_max_bw_budget_in_mbps   = requested.max_bw_budget_in_mbps;
 	}
+
+	/* The clk_mgr does not track these, so report the ones of the committed state. */
+	info->calculated_avg_bw_in_mbps = clk->required_avg_active_bandwidth_KBps / 1000;
+	info->qos_max_latency_ub_in_ns = clk->utm_nominal_max_latency_ub_ns;
+	info->qos_avg_latency_ub_in_ns = clk->utm_nominal_avg_latency_ub_ns;
 
 	return true;
 }
@@ -8509,6 +8544,9 @@ bool dc_update_state_prepare(struct dc_update_scratch_space *scratch)
 	if (!dc_update_probes_prepare(scratch))
 		goto release_scratch;
 
+	if (!api_shim_update_state_supported(scratch))
+		goto release_scratch;
+
 	return true;
 
 release_scratch:
@@ -8517,9 +8555,7 @@ release_scratch:
 	return false;
 }
 
-void dc_update_state_execute(
-		const struct dc_update_scratch_space *scratch
-)
+void legacy_update_state_execute(const struct dc_update_scratch_space *scratch)
 {
 	if (scratch->stream)
 		scratch->update_v3
@@ -8528,6 +8564,13 @@ void dc_update_state_execute(
 
 	if (scratch->probe_updates)
 		dc_update_probes_execute(scratch);
+}
+
+void dc_update_state_execute(
+		const struct dc_update_scratch_space *scratch
+)
+{
+	api_shim_update_state_execute(scratch);
 }
 
 bool dc_update_state_cleanup(

@@ -164,15 +164,16 @@ void dcn32_enable_power_gating_plane(
 		REG_SET(DC_IP_REQUEST_CNTL, 0, IP_REQUEST_EN, 0);
 }
 
-void dcn32_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on)
+void dcn32_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on,
+		bool disable_power_gate, bool ignore_pg)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? 0 : 2;
 
-	if (hws->ctx->dc->debug.disable_hubp_power_gate)
+	if (disable_power_gate)
 		return;
 
-	if (hws->ctx->dc->debug.ignore_pg)
+	if (ignore_pg)
 		return;
 
 	if (REG(DOMAIN0_PG_CONFIG) == 0)

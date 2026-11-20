@@ -254,6 +254,7 @@ static inline bool amdgpu_bo_encrypted(struct amdgpu_bo *bo)
 }
 
 bool amdgpu_bo_is_amdgpu_bo(struct ttm_buffer_object *bo);
+bool amdgpu_bo_is_vm_bo(struct amdgpu_bo *bo);
 void amdgpu_bo_placement_from_domain(struct amdgpu_bo *abo, u32 domain);
 
 int amdgpu_bo_create(struct amdgpu_device *adev,
