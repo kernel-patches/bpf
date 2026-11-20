@@ -841,7 +841,7 @@ static void keep_funcs_with_addr_taken(struct bpf_verifier_env *env)
 			continue;
 		memcpy(insn + t, &trap, sizeof(trap));
 		aux_data[t].zext_dst = false;
-		aux_data[t].seen = env->pass_cnt;
+		aux_data[t].seen = env->check_cnt;
 	}
 }
 
@@ -963,17 +963,11 @@ static int insert_arena_stack_get(struct bpf_verifier_env *env, int s)
 	int size = s ? BPF_REG_8 : BPF_REG_4;
 	struct bpf_subprog_info *sub = &env->subprog_info[s];
 	struct bpf_insn *buf = env->insn_buf, *patch;
-	int jfree, jdone, jslow, slow, free, done, i, spill = 0;
+	int jfree, jdone, jslow, slow, free, done, i;
 
-	if (s) {
-		spill = round_up(sub->stack_depth, BPF_REG_SIZE);
-		sub->stack_depth = spill + MAX_BPF_FUNC_REG_ARGS * BPF_REG_SIZE;
-		if (sub->stack_depth > env->stack_limit) {
-			verbose(env, "no room in the stack of %s() for its arguments\n",
-				bpf_subprog_name(env, s));
-			return -EACCES;
-		}
-	}
+	/* the arguments wait in the frame, nothing is there yet */
+	if (s)
+		sub->stack_depth = max(sub->stack_depth, MAX_BPF_FUNC_REG_ARGS * BPF_REG_SIZE);
 
 	patch = emit_arena_stack_percpu(env, buf, ptr);
 	*patch++ = BPF_MOV32_IMM(cnt, 1);
@@ -984,7 +978,7 @@ static int insert_arena_stack_get(struct bpf_verifier_env *env, int s)
 	if (!s)
 		*patch++ = BPF_MOV64_REG(BPF_REG_6, BPF_REG_1);
 	for (i = BPF_REG_1; s && i <= BPF_REG_5; i++)
-		*patch++ = BPF_STX_MEM(BPF_DW, BPF_REG_FP, i, -(spill + i * BPF_REG_SIZE));
+		*patch++ = BPF_STX_MEM(BPF_DW, BPF_REG_FP, i, -i * BPF_REG_SIZE);
 	*patch++ = ld_aux[0];
 	*patch++ = ld_aux[1];
 	*patch++ = BPF_MOV64_REG(BPF_REG_2, cnt);
@@ -993,7 +987,7 @@ static int insert_arena_stack_get(struct bpf_verifier_env *env, int s)
 	if (!s)
 		*patch++ = BPF_MOV64_REG(BPF_REG_1, BPF_REG_6);
 	for (i = BPF_REG_1; s && i <= BPF_REG_5; i++)
-		*patch++ = BPF_LDX_MEM(BPF_DW, i, BPF_REG_FP, -(spill + i * BPF_REG_SIZE));
+		*patch++ = BPF_LDX_MEM(BPF_DW, i, BPF_REG_FP, -i * BPF_REG_SIZE);
 	jdone = patch++ - buf;
 	*patch++ = BPF_MOV64_IMM(BPF_REG_0, 0);
 	*patch++ = BPF_EXIT_INSN();
@@ -1024,15 +1018,6 @@ int bpf_insert_arena_stack(struct bpf_verifier_env *env)
 
 	if (!env->uses_arena_sp)
 		return 0;
-
-	/* the caller would get r12 of the callee back */
-	for (i = 0; i < env->subprog_cnt; i++) {
-		if ((i && !subprogs[i].arena_stack_entry) || !subprogs[i].is_called)
-			continue;
-		verbose(env, "%s() uses R%d and is both called and a callback\n",
-			bpf_subprog_name(env, i), BPF_REG_ARENA_SP);
-		return -EINVAL;
-	}
 
 	/*
 	 * With spare bytes r12 is neither the start nor the end of the stack,
@@ -1217,25 +1202,6 @@ apply_patch_buffer:
 	return bpf_patch_list_commit(env);
 }
 
-/*
- * The prologue takes the context from R1, and it can clobber R2-R5. An
- * extension gets the arguments of the function that it replaces.
- */
-static bool ext_prog_takes_prologue(const struct bpf_verifier_env *env)
-{
-	const struct bpf_subprog_info *sub = &env->subprog_info[0];
-	int i, cnt = min_t(int, sub->arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS);
-
-	if (!cnt || sub->args[0].arg_type != ARG_PTR_TO_CTX)
-		return false;
-
-	for (i = 1; i < cnt; i++)
-		if (sub->args[i].arg_type != ARG_SCALAR)
-			return false;
-
-	return true;
-}
-
 /* convert load instructions that access fields of a context type into a
  * sequence of instructions that access fields of the underlying structure:
  *     struct __sk_buff    -> struct sk_buff
@@ -1248,7 +1214,7 @@ static bool ext_prog_takes_prologue(const struct bpf_verifier_env *env)
  * __arena arguments. A __nullable member keeps NULL as NULL, tested on the
  * full kernel address, and so does a probed load, which reads as 0 when it
  * faults. Returns the number of insns in @buf, 0 when the insn loads no such
- * member, or an error when it does so on some paths only.
+ * member.
  */
 static int arena_member_fixup(struct bpf_verifier_env *env, int idx, struct bpf_insn *insn,
 			      struct bpf_insn *buf)
@@ -1259,10 +1225,6 @@ static int arena_member_fixup(struct bpf_verifier_env *env, int idx, struct bpf_
 
 	if (!aux->arena_member)
 		return 0;
-	if (aux->non_arena_load) {
-		verbose(env, "an insn loads an arena pointer member on one path and something else on another\n");
-		return -EINVAL;
-	}
 
 	base = bpf_arena_get_kern_vm_start(env->prog->aux->arena);
 	buf[cnt++] = *insn;
@@ -1318,17 +1280,6 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			verifier_bug(env, "prologue is too long");
 			return -EFAULT;
 		} else if (cnt) {
-			if (env->prog->type == BPF_PROG_TYPE_EXT &&
-			    !ext_prog_takes_prologue(env)) {
-				verbose(env,
-					"Extension writing packet data must take ctx and scalars only\n");
-				return -EINVAL;
-			}
-			if (env->prog->type == BPF_PROG_TYPE_EXT &&
-			    bpf_check_ext_prologue(&env->log,
-						   env->prog->aux->dst_prog,
-						   env->prog->aux->attach_btf_id))
-				return -EINVAL;
 			env->prog->aux->has_prologue = true;
 			/* the prologue ends with the first insn of the program */
 			if (verifier_bug_if(memcmp(&insn_buf[cnt - 1], env->prog->insnsi,
@@ -1412,8 +1363,6 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			   env->insn_aux_data[i].arena_member) {
 			/* an acquire load of an __arena member is rewritten like a plain load */
 			cnt = arena_member_fixup(env, i, insn, insn_buf);
-			if (cnt < 0)
-				return cnt;
 			insn = bpf_patch_list_add(env, i, insn_buf, cnt);
 			if (IS_ERR(insn))
 				return PTR_ERR(insn);
@@ -1511,8 +1460,6 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			}
 
 			cnt = arena_member_fixup(env, i, insn, insn_buf);
-			if (cnt < 0)
-				return cnt;
 			if (!cnt)
 				continue;
 			insn = bpf_patch_list_add(env, i, insn_buf, cnt);
@@ -1987,21 +1934,9 @@ int bpf_fixup_call_args(struct bpf_verifier_env *env)
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
 	struct bpf_prog *prog = env->prog;
 	struct bpf_insn *insn = prog->insnsi;
-	int depth;
+	int i, depth;
 #endif
-	int i, err = 0;
-
-	for (i = 0; i < env->subprog_cnt; i++) {
-		struct bpf_subprog_info *subprog = &env->subprog_info[i];
-		u16 outgoing = subprog->stack_arg_cnt - bpf_in_stack_arg_cnt(subprog);
-
-		if (subprog->max_out_stack_arg_cnt > outgoing) {
-			verbose(env,
-				"func#%d writes %u stack arg slots, but calls only require %u\n",
-				i, subprog->max_out_stack_arg_cnt, outgoing);
-			return -EINVAL;
-		}
-	}
+	int err = 0;
 
 	if (env->prog->jit_requested &&
 	    !bpf_prog_is_offloaded(env->prog->aux)) {
@@ -2736,11 +2671,6 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			 * index &= array->index_mask;
 			 * to avoid out-of-bounds cpu speculation
 			 */
-			if (bpf_map_ptr_poisoned(aux)) {
-				verbose(env, "tail_call abusing map_ptr\n");
-				return -EINVAL;
-			}
-
 			map_ptr = aux->map_ptr_state.map_ptr;
 			insn_buf[0] = BPF_JMP_IMM(BPF_JGE, BPF_REG_3,
 						  map_ptr->max_entries, 2);
@@ -3355,17 +3285,16 @@ int bpf_optimize_bpf_loop(struct bpf_verifier_env *env)
 	return bpf_patch_list_commit(env);
 }
 
-/* Remove unnecessary spill/fill pairs, members of fastcall pattern,
- * adjust subprograms stack depth when possible.
+/*
+ * Remove unnecessary spill/fill pairs, members of fastcall pattern.
+ * check_max_stack_depth() has adjusted the stack depth of subprograms.
  */
 int bpf_remove_fastcall_spills_fills(struct bpf_verifier_env *env)
 {
-	struct bpf_subprog_info *subprog = env->subprog_info;
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	struct bpf_insn *insn = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
 	u32 spills_num;
-	bool modified = false;
 	int i, j;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
@@ -3376,13 +3305,6 @@ int bpf_remove_fastcall_spills_fills(struct bpf_verifier_env *env)
 				*(insn - j) = NOP;
 				*(insn + j) = NOP;
 			}
-			modified = true;
-		}
-		if ((subprog + 1)->start == i + 1) {
-			if (modified && !subprog->keep_fastcall_stack)
-				subprog->stack_depth = -subprog->fastcall_stack_off;
-			subprog++;
-			modified = false;
 		}
 	}
 
