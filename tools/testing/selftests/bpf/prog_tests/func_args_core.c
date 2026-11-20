@@ -2,6 +2,14 @@
 #include <test_progs.h>
 #include "func_args_core.skel.h"
 #include "func_args_core.lskel.h"
+#include "func_args_core_lsm.skel.h"
+#include "func_args_core_lsm.lskel.h"
+#include "func_args_core_lsm_cgroup.skel.h"
+#include "func_args_core_lsm_cgroup.lskel.h"
+#include "cgroup_helpers.h"
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
 /* runs bpf_fentry_test1..N() (via a fentry prog), bpf_modify_return_test()
  * (via a fmod_ret prog) and bpf_testmod's test read
@@ -107,10 +115,191 @@ cleanup:
 	func_args_core_lskel__destroy(skel);
 }
 
+/* An ioctl command that no file implements: the call fails after the
+ * file_ioctl hook ran, so whatever the programs return has no effect on the
+ * process (unlike, e.g., an mprotect() that they allow). Its top bit is set
+ * to check that the unsigned int argument isn't sign-extended.
+ */
+#define LSM_IOCTL_CMD	0xb1f0c0deU
+#define LSM_IOCTL_ARG	0x0123456789abcdefULL
+
+/* Run file_ioctl(file, cmd, arg) for an ioctl() on a memfd, only monitoring
+ * that call; returns the memfd's inode number, or 0 on failure.
+ */
+static __u64 lsm_ioctl(int *monitored_pid)
+{
+	struct stat st;
+	__u64 ino = 0;
+	int fd, err;
+
+	fd = memfd_create("func_args_core", MFD_CLOEXEC);
+	if (!ASSERT_OK_FD(fd, "memfd_create"))
+		return 0;
+	if (!ASSERT_OK(fstat(fd, &st), "fstat"))
+		goto out;
+
+	*monitored_pid = getpid();
+	err = ioctl(fd, LSM_IOCTL_CMD, LSM_IOCTL_ARG) ? -errno : 0;
+	*monitored_pid = 0;
+
+	if (ASSERT_EQ(err, -ENOTTY, "ioctl"))
+		ino = st.st_ino;
+out:
+	close(fd);
+	return ino;
+}
+
+/* file_ioctl(file, cmd, arg) via lsm_ioctl() */
+#define check_lsm_results(skel, ino) ({					\
+	ASSERT_EQ(skel->bss->s_calls, 1, "s_calls");				\
+	ASSERT_EQ(skel->bss->s_arg, LSM_IOCTL_ARG, "s_arg");			\
+	ASSERT_EQ(skel->bss->s_ino, ino, "s_ino");				\
+	ASSERT_EQ(skel->data->s_ret, 0, "s_ret");				\
+	ASSERT_EQ(skel->data->s_ret_exists, 1, "s_ret_exists");		\
+	ASSERT_EQ(skel->data->s_added_exists, 0, "s_added_exists");		\
+										\
+	/* file___new (struct vfs_file *) doesn't match, file is used instead */ \
+	ASSERT_EQ(skel->data->v_new_exists, 0, "v_new_exists");		\
+	ASSERT_EQ(skel->data->v_old_exists, 1, "v_old_exists");		\
+	ASSERT_EQ(skel->bss->v_ino, ino, "v_ino");				\
+	ASSERT_EQ(skel->data->vm_new_exists, 0, "vm_new_exists");		\
+	ASSERT_EQ(skel->data->vm_old_exists, 1, "vm_old_exists");		\
+	ASSERT_EQ(skel->bss->vm_ino, ino, "vm_ino");				\
+										\
+	/* only the flavored file___old matches */				\
+	ASSERT_EQ(skel->data->o_new_exists, 0, "o_new_exists");		\
+	ASSERT_EQ(skel->data->o_old_exists, 1, "o_old_exists");		\
+	ASSERT_EQ(skel->bss->o_ino, ino, "o_ino");				\
+	ASSERT_EQ(skel->data->om_new_exists, 0, "om_new_exists");		\
+	ASSERT_EQ(skel->data->om_old_exists, 1, "om_old_exists");		\
+	ASSERT_EQ(skel->bss->om_ino, ino, "om_ino");				\
+										\
+	ASSERT_EQ(skel->bss->m_calls, 1, "m_calls");				\
+	ASSERT_EQ(skel->bss->m_arg, LSM_IOCTL_ARG, "m_arg");			\
+	ASSERT_EQ(skel->bss->m_cmd, LSM_IOCTL_CMD, "m_cmd");			\
+	ASSERT_EQ(skel->data->m_added, 0, "m_added");				\
+	ASSERT_EQ(skel->data->m_added_exists, 0, "m_added_exists");		\
+	ASSERT_EQ(skel->data->m_ret, 0, "m_ret");				\
+	ASSERT_EQ(skel->data->m_ret_exists, 1, "m_ret_exists");		\
+})
+
+static void test_lsm_skel(void)
+{
+	struct func_args_core_lsm *skel;
+	__u64 ino;
+
+	skel = func_args_core_lsm__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+		return;
+	if (!ASSERT_OK(func_args_core_lsm__attach(skel), "skel_attach"))
+		goto cleanup;
+
+	ino = lsm_ioctl(&skel->bss->monitored_pid);
+	if (ASSERT_NEQ(ino, 0, "lsm_ioctl"))
+		check_lsm_results(skel, ino);
+cleanup:
+	func_args_core_lsm__destroy(skel);
+}
+
+static void test_lsm_lskel(void)
+{
+	struct func_args_core_lsm_lskel *skel;
+	__u64 ino;
+
+	skel = func_args_core_lsm_lskel__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "lskel_open_and_load"))
+		return;
+	if (!ASSERT_OK(func_args_core_lsm_lskel__attach(skel), "lskel_attach"))
+		goto cleanup;
+
+	ino = lsm_ioctl(&skel->bss->monitored_pid);
+	if (ASSERT_NEQ(ino, 0, "lsm_ioctl"))
+		check_lsm_results(skel, ino);
+cleanup:
+	func_args_core_lsm_lskel__destroy(skel);
+}
+
+/* socket_create(family, type, protocol, kern) via socket(AF_UNIX, ...) */
+#define check_lsm_cgroup_results(skel) ({					\
+	ASSERT_EQ(skel->bss->lc_calls, 1, "lc_calls");				\
+	ASSERT_EQ(skel->data->lc_family, AF_UNIX, "lc_family");		\
+	ASSERT_EQ(skel->data->lc_protocol, 0, "lc_protocol");			\
+	ASSERT_EQ(skel->data->lc_kern, 0, "lc_kern");				\
+	ASSERT_EQ(skel->data->lc_ret_exists, 1, "lc_ret_exists");		\
+	ASSERT_EQ(skel->data->lc_added_exists, 0, "lc_added_exists");		\
+})
+
+static void trigger_lsm_cgroup(void)
+{
+	int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+	if (ASSERT_OK_FD(fd, "socket"))
+		close(fd);
+}
+
+static void test_lsm_cgroup_skel(void)
+{
+	struct func_args_core_lsm_cgroup *skel;
+	struct bpf_link *link = NULL;
+	int cgroup_fd;
+
+	cgroup_fd = test__join_cgroup("/func_args_core");
+	if (!ASSERT_OK_FD(cgroup_fd, "join_cgroup"))
+		return;
+
+	skel = func_args_core_lsm_cgroup__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+		goto out;
+	link = bpf_program__attach_cgroup(skel->progs.socket_create_struct, cgroup_fd);
+	if (!ASSERT_OK_PTR(link, "attach_cgroup"))
+		goto out;
+
+	trigger_lsm_cgroup();
+	check_lsm_cgroup_results(skel);
+out:
+	bpf_link__destroy(link);
+	func_args_core_lsm_cgroup__destroy(skel);
+	close(cgroup_fd);
+}
+
+static void test_lsm_cgroup_lskel(void)
+{
+	struct func_args_core_lsm_cgroup_lskel *skel;
+	int cgroup_fd, link_fd = -1;
+
+	cgroup_fd = test__join_cgroup("/func_args_core");
+	if (!ASSERT_OK_FD(cgroup_fd, "join_cgroup"))
+		return;
+
+	skel = func_args_core_lsm_cgroup_lskel__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "lskel_open_and_load"))
+		goto out;
+	link_fd = bpf_link_create(skel->progs.socket_create_struct.prog_fd, cgroup_fd,
+				  BPF_LSM_CGROUP, NULL);
+	if (!ASSERT_OK_FD(link_fd, "link_create"))
+		goto out;
+
+	trigger_lsm_cgroup();
+	check_lsm_cgroup_results(skel);
+out:
+	if (link_fd >= 0)
+		close(link_fd);
+	func_args_core_lsm_cgroup_lskel__destroy(skel);
+	close(cgroup_fd);
+}
+
 void test_func_args_core(void)
 {
 	if (test__start_subtest("skel"))
 		test_skel();
 	if (test__start_subtest("lskel"))
 		test_lskel();
+	if (test__start_subtest("lsm_skel"))
+		test_lsm_skel();
+	if (test__start_subtest("lsm_lskel"))
+		test_lsm_lskel();
+	if (test__start_subtest("lsm_cgroup_skel"))
+		test_lsm_cgroup_skel();
+	if (test__start_subtest("lsm_cgroup_lskel"))
+		test_lsm_cgroup_lskel();
 }
