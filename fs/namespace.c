@@ -2355,6 +2355,7 @@ void drop_collected_paths(const struct path *paths, const struct path *prealloc)
 
 enum mnt_ns_flags_t {
 	MNT_NS_ANON	= (1 << 0),
+	MNT_NS_KERNEL	= (1 << 1),
 };
 
 static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *,
@@ -4377,9 +4378,13 @@ static void free_mnt_ns(struct mnt_namespace *ns)
 static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *user_ns,
 					  enum mnt_ns_flags_t flags)
 {
+	enum ns_common_flags_t ns_flags = 0;
 	struct mnt_namespace *new_ns;
 	struct ucounts *ucounts;
 	int ret;
+
+	if (flags & MNT_NS_KERNEL)
+		ns_flags |= NS_COMMON_KERNEL;
 
 	ucounts = inc_mnt_namespaces(user_ns);
 	if (!ucounts)
@@ -4392,7 +4397,7 @@ static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *user_ns,
 	}
 
 	if (flags & MNT_NS_ANON)
-		ret = ns_common_init_inum(new_ns, MNT_NS_ANON_INO);
+		ret = ns_common_init_inum(new_ns, MNT_NS_ANON_INO, ns_flags);
 	else
 		ret = ns_common_init(new_ns);
 	if (ret) {
@@ -4515,7 +4520,7 @@ struct dentry *mount_subtree(struct vfsmount *m, const char *name)
 	struct path path;
 	int err;
 
-	ns = alloc_mnt_ns(&init_user_ns, MNT_NS_ANON);
+	ns = alloc_mnt_ns(&init_user_ns, MNT_NS_ANON | MNT_NS_KERNEL);
 	if (IS_ERR(ns)) {
 		mntput(m);
 		return ERR_CAST(ns);
