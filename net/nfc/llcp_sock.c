@@ -691,6 +691,36 @@ out:
 	return err;
 }
 
+/**
+ * llcp_sock_on_local_sockets() - check if a socket was claimed by a CC
+ * @local: the LLCP local the socket connected on
+ * @sk: the socket to look up
+ *
+ * nfc_llcp_recv_cc() moves a connecting socket to local->sockets when the
+ * peer answers with a CC frame.  Only that path links a connecting socket
+ * into local->sockets, so membership doubles as "the peer claimed the
+ * socket".  The caller must hold lock_sock().
+ *
+ * Return: true if @sk is linked in local->sockets.
+ */
+static bool llcp_sock_on_local_sockets(struct nfc_llcp_local *local,
+				       struct sock *sk)
+{
+	struct sock *s;
+	bool found = false;
+
+	read_lock(&local->sockets.lock);
+	sk_for_each(s, &local->sockets.head) {
+		if (s == sk) {
+			found = true;
+			break;
+		}
+	}
+	read_unlock(&local->sockets.lock);
+
+	return found;
+}
+
 static int llcp_sock_connect(struct socket *sock, struct sockaddr_unsized *_addr,
 			     int len, int flags)
 {
@@ -798,9 +828,27 @@ static int llcp_sock_connect(struct socket *sock, struct sockaddr_unsized *_addr
 
 	ret = sock_wait_state(sk, LLCP_CONNECTED,
 			      sock_sndtimeo(sk, flags & O_NONBLOCK));
-	if (ret && ret != -EINPROGRESS)
-		goto sock_unlink;
+	if (ret) {
+		if (ret == -EINPROGRESS)
+			goto out;
 
+		/* If the CC frame was processed while we slept, recv_cc()
+		 * moved the socket to local->sockets and the dev/local
+		 * references now belong to the socket.  They are dropped by
+		 * nfc_llcp_recv_disc() or llcp_sock_destruct(); unwinding
+		 * them on this error path would put the nfc_dev reference
+		 * obtained above a second time.
+		 */
+		if (llcp_sock_on_local_sockets(local, sk)) {
+			if (sk->sk_state == LLCP_CONNECTED)
+				ret = 0;
+			goto out;
+		}
+
+		goto sock_unlink;
+	}
+
+out:
 	release_sock(sk);
 
 	return ret;
