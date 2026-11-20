@@ -6116,7 +6116,7 @@ static int check_buffer_access(struct bpf_verifier_env *env,
 }
 
 /* s = (u32)s. BPF architecture zero extends alu32 ops into 64-bit registers. */
-void scalar_zext32(struct scalar *s)
+static void scalar_zext32(struct scalar *s)
 {
 	scalar_step_check_unsigned(s, 32);
 	s->var_off = tnum_subreg(s->var_off);
@@ -6228,15 +6228,6 @@ static void coerce_scalar_to_size_sx(struct scalar *s, int size)
 
 out:
 	set_sext64_default_val(s, size);
-}
-
-/* @s = (uN)@s or (sN)@s. N is @bits: 8, 16 or 32. */
-void scalar_ext(struct scalar *s, u32 bits, bool sign)
-{
-	if (sign)
-		coerce_scalar_to_size_sx(s, bits / BITS_PER_BYTE);
-	else
-		coerce_scalar_to_size(s, bits / BITS_PER_BYTE);
 }
 
 static void set_sext32_default_val(struct scalar *s, int size)
@@ -14792,55 +14783,6 @@ static bool kfunc_spin_allowed(struct bpf_verifier_env *env, s32 func_id, s16 of
 	return *kfunc.flags & KF_SPINLOCK_SAFE;
 }
 
-/*
- * True if insn calls a helper/kfunc that requires one of its arguments to
- * be a stack pointer with a constant offset.
- */
-bool bpf_needs_fixed_stack_off(struct bpf_verifier_env *env, int insn_idx)
-{
-	const struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
-	const struct bpf_func_proto *fn;
-	struct bpf_kfunc_desc *desc;
-	u32 *flags, btf_id;
-	int i;
-
-	if (bpf_helper_call(insn)) {
-		if (bpf_get_helper_proto(env, insn->imm, &fn) < 0)
-			return false;
-	} else if (bpf_pseudo_kfunc_call(insn)) {
-		desc = find_kfunc_desc(env, insn->imm, insn->off);
-		if (!desc)
-			return false;
-		fn = &desc->proto;
-	} else {
-		return false;
-	}
-
-	/* Both initialized and uninitialized stack dynptrs need a fixed offset. */
-	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++)
-		if (arg_type_is_dynptr(fn->arg_type[i]))
-			return true;
-
-	/* vmlinux kfuncs only */
-	if (!bpf_pseudo_kfunc_call(insn) || insn->off != 0)
-		return false;
-	btf_id = insn->imm;
-
-	flags = btf_kfunc_flags(btf_vmlinux, btf_id, env->prog);
-	if (flags && (*flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY)))
-		return true;
-
-	if (btf_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
-	    btf_id == special_kfunc_list[KF_bpf_res_spin_unlock] ||
-	    btf_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave] ||
-	    btf_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore] ||
-	    btf_id == special_kfunc_list[KF_bpf_local_irq_save] ||
-	    btf_id == special_kfunc_list[KF_bpf_local_irq_restore])
-		return true;
-
-	return false;
-}
-
 static bool is_sync_callback_calling_kfunc(u32 btf_id)
 {
 	return is_bpf_rbtree_add_kfunc(btf_id);
@@ -14857,12 +14799,6 @@ bool bpf_is_throw_kfunc(struct bpf_insn *insn)
 {
 	return bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
 	       insn->imm == special_kfunc_list[KF_bpf_throw];
-}
-
-bool bpf_is_dynptr_slice_rdwr_kfunc(struct bpf_insn *insn)
-{
-	return bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
-	       insn->imm == special_kfunc_list[KF_bpf_dynptr_slice_rdwr];
 }
 
 static bool is_bpf_wq_set_callback_kfunc(u32 btf_id)
@@ -15626,15 +15562,6 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 		regs[BPF_REG_0].buf = meta->slice_buf;
 		if (meta->slice_buf.size)
 			env->seen_stack_slice = true;
-		/* No insn stores through a slice of 0 bytes */
-		if (verifier_bug_if(meta->slice_buf.size && meta->arg_constant.value &&
-				    !type_is_rdonly_mem(regs[BPF_REG_0].type) &&
-				    !bpf_scev_in_slice_slots(env, meta->slice_buf.off,
-							     meta->slice_buf.size,
-							     meta->slice_buf.size ==
-							     meta->arg_constant.value),
-				    env, "slice buffer is not in scev slice_slots"))
-			return -EFAULT;
 	} else {
 		return 0;
 	}
@@ -17943,29 +17870,6 @@ void bpf_trim_pkt_range(struct bpf_reg_state *reg, s64 smax)
 		reg->range = max_t(s64, reg->range - (smax - reg_smax(reg)), 0);
 }
 
-int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-		      const struct scalar *range)
-{
-	*scalar_of(reg) = *range;
-	reg_bounds_sync(reg); /* this should infer the tnum alignment */
-	bpf_trim_pkt_range(reg, cnum64_smax(range->r64));
-	return reg_bounds_sanity_check(env, reg, "bpf_set_reg_range");
-}
-
-/*
- * Checks if pointer and packet metadata matches between two registers.
- * For use with bpf_reg_union().
- */
-bool bpf_reg_union_compatible(const struct bpf_reg_state *a, const struct bpf_reg_state *b)
-{
-	if (a->type != b->type)
-		return false;
-	if (a->type == SCALAR_VALUE)
-		return true;
-	return reg_fixed_part_equal(a, b) &&
-	       a->id == b->id && a->parent_id == b->parent_id && a->map_uid == b->map_uid;
-}
-
 /*
  * @s is what @old became after a trip around a cycle, @old included. The end
  * of the range that moved is going to move again. Put it where it may come
@@ -18077,36 +17981,6 @@ void scalar_union(struct scalar *acc, const struct scalar *src)
 	 * No reg_bounds_sync(): every part of the result has to include that
 	 * part of both inputs, and an input is not always in sync.
 	 */
-}
-
-/*
- * Extends acc's scalar range to include src's scalar range.
- * Caller must ensure that other kinds of metadata is compatible.
- */
-int bpf_reg_union(struct bpf_verifier_env *env, struct bpf_reg_state *acc,
-		  const struct bpf_reg_state *src)
-{
-	u16 base, step;
-
-	if (!bpf_reg_union_compatible(acc, src)) {
-		verifier_bug(env, "union of incompatible registers");
-		return -EFAULT;
-	}
-	acc->r64 = cnum64_union(acc->r64, src->r64);
-	acc->r32 = cnum32_union(acc->r32, src->r32);
-	acc->var_off = tnum_union(acc->var_off, src->var_off);
-
-	/* Retain a common congruence if the bases agree modulo the gcd. */
-	step = gcd(acc->step, src->step);
-	base = acc->base % step;
-	if (base != src->base % step) {
-		scalar_step_reset(scalar_of(acc));
-	} else {
-		acc->base = base;
-		acc->step = step;
-	}
-	reg_bounds_sync(acc);
-	return reg_bounds_sanity_check(env, acc, "bpf_reg_union");
 }
 
 /*
@@ -19101,161 +18975,11 @@ bool scalar_intersect(struct scalar *dst, const struct scalar *src, u32 bits)
 }
 
 /*
- * The state of the SCEV register @r. As in check_stack_read_fixed_off() a fill of @bits bits from
- * byte @fill_off of the slot reads the low bits of the spill.
- */
-static struct bpf_reg_state *scev_reg_for_fill(struct bpf_func_state *frame, u32 r, u32 fill_off,
-					       u32 bits)
-{
-	struct bpf_stack_state *ss;
-
-	if (r < MAX_BPF_REG)
-		return &frame->regs[r];
-	if (r - MAX_BPF_REG >= bpf_stack_nr_slots(frame))
-		return NULL;
-	ss = bpf_stack_slot(frame, r - MAX_BPF_REG);
-	if (!bpf_is_spilled_reg(ss) || bpf_spill_size(ss) * BITS_PER_BYTE < bits ||
-	    !bpf_stack_narrow_access_ok(fill_off, bits / BITS_PER_BYTE, bpf_spill_size(ss)))
-		return NULL;
-	return &ss->spilled_ptr;
-}
-
-/*
- * Scalar evolution promoted memory to the SCEV register *@regno, see struct env there, and names
- * its address at the jump at @idx. This state knows which memory it is: the frame that is returned,
- * its stack slot *@regno, *@fill_off counts from the start of the slot. The stack of a caller only:
- * other memory has no state, and a store through r10 is no def of memory for scalar evolution.
- * What holds the address is live: it was compared all the way from its def. Every place that
- * compares, joins or drops states cleans them of what is dead first, see flow_arrive().
- */
-static struct bpf_func_state *scev_mem_to_slot(struct bpf_verifier_env *env,
-					       struct bpf_verifier_state *vstate, int idx,
-					       u32 *regno, u32 *fill_off)
-{
-	struct bpf_reg_state *ptr;
-	u32 base_regno;
-	s64 addr;
-
-	if (!bpf_scev_mem_addr(env, idx, *regno, &base_regno, &addr))
-		return NULL;
-	ptr = scev_reg_for_fill(vstate->frame[vstate->curframe], base_regno, 0, 64);
-	if (!ptr || ptr->type != PTR_TO_STACK || !tnum_is_const(ptr->var_off) ||
-	    ptr->frameno >= vstate->curframe)
-		return NULL;
-	addr += ptr->var_off.value + *fill_off;
-	if (addr >= 0 || addr < -MAX_BPF_STACK_JIT)
-		return NULL;
-	*regno = MAX_BPF_REG + bpf_get_spi(addr);
-	*fill_off = addr & (BPF_REG_SIZE - 1);
-	return vstate->frame[ptr->frameno];
-}
-
-/*
- *	p = buf + i; if (i > 100) return 0; *p = 0;
- * p is @dst_reg, x is @ptr_reg. Scalar evolution says that p == x + i. So the insns
- * 'p = x; p += i' are a no-op at run time, and a state that is sound before them is sound after
- * them: apply their transfer function. Type and object of p are taken from x as it is now, @off is
- * the offset of x + i; how p was computed does not matter.
- * The old p is replaced, not intersected: a state does not distinguish two values of one hash map,
- * and the intersection of an offset into the one with an offset into the other holds for neither.
- * It is replaced only if the new range is a subset of the old one. An empty range is a subset too:
- * the path is infeasible, p is left as it is.
- */
-static bool recompute_ptr(struct bpf_verifier_env *env, struct bpf_reg_state *dst_reg,
-			  const struct bpf_reg_state *ptr_reg, const struct scalar *off)
-{
-	struct bpf_reg_state sum = *ptr_reg;
-
-	/* the cpu can speculate past the jump with an out-of-bounds index */
-	if (!env->bypass_spec_v1)
-		return false;
-	/* 'p += i' assigns a new id to a packet pointer */
-	if (ptr_reg->type == SCALAR_VALUE || type_is_pkt_pointer(ptr_reg->type) ||
-	    !bpf_is_widenable_reg_type(ptr_reg))
-		return false;
-	*scalar_of(&sum) = *off;
-	__mark_scalar32_unbounded(scalar_of(&sum));
-	reg_bounds_sync(&sum);
-	if (reg_is_empty(&sum) || const_tnum_range_mismatch(scalar_of(&sum)) ||
-	    const_tnum_range_mismatch_32(scalar_of(&sum)))
-		return false;
-	/*
-	 * 'p += i' refuses a constant offset outside of this range, and a constant offset is put in
-	 * an int, see stack_slot_obj_get_spi().
-	 */
-	if (reg_smin(&sum) <= -BPF_MAX_VAR_OFF || reg_smax(&sum) >= BPF_MAX_VAR_OFF)
-		return false;
-	if (!bpf_reg_union_compatible(dst_reg, &sum) || !cnum64_is_subset(dst_reg->r64, sum.r64))
-		return false;
-	*dst_reg = sum;
-	return true;
-}
-
-/*
- * The jump at @idx refined the scalars that it tests. Scalar evolution evaluates the expression of
- * a register that is linked to them in this state. The register holds that value on every path to
- * the jump: intersect the two.
- */
-static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
-			       int idx, int next_idx)
-{
-	struct bpf_func_state *frame = vstate->frame[vstate->curframe], *linked_frame;
-	struct bpf_insn *insn = &env->prog->insnsi[idx];
-	struct bpf_reg_state *reg, *base_reg;
-	u32 pos, linked_regno, fill_off, bits;
-	struct scev_value val;
-	u16 refined_regs = 0;
-
-	if (frame->regs[insn->dst_reg].type == SCALAR_VALUE)
-		refined_regs |= BIT(insn->dst_reg);
-	if (BPF_SRC(insn->code) == BPF_X && frame->regs[insn->src_reg].type == SCALAR_VALUE)
-		refined_regs |= BIT(insn->src_reg);
-	if (!refined_regs)
-		return;
-	for (pos = 0;
-	     bpf_scev_next_linked_reg(env, frame, idx, next_idx, refined_regs, &pos, &linked_regno,
-				      &fill_off, &val);
-	     pos++) {
-		bits = val.bits;
-		linked_frame = frame;
-		if (linked_regno >= BPF_SCEV_REGS_NUM)
-			linked_frame = scev_mem_to_slot(env, vstate, idx, &linked_regno, &fill_off);
-		if (!linked_frame)
-			continue;
-		reg = scev_reg_for_fill(linked_frame, linked_regno, fill_off, bits);
-		/*
-		 * The other half-slot of a 64-bit spill is dead: __clean_func_state() left
-		 * a 32-bit spill, the low 32 bits of the value.
-		 */
-		if (!reg && bits == 64 &&
-		    bpf_stack_narrow_access_ok(fill_off, BPF_REG_SIZE / 2, BPF_REG_SIZE)) {
-			bits = 32;
-			reg = scev_reg_for_fill(linked_frame, linked_regno, fill_off, bits);
-		}
-		if (!reg || (val.ptr_reg < 0 && reg->type != SCALAR_VALUE))
-			continue;
-
-		if (val.ptr_reg >= 0) {
-			base_reg = scev_reg_for_fill(frame, val.ptr_reg, 0, 64);
-			if (!base_reg || bits < 64 ||
-			    !recompute_ptr(env, reg, base_reg, scalar_of(&val)))
-				continue;
-		} else if (!scalar_intersect(scalar_of(reg), scalar_of(&val), bits)) {
-			continue;
-		}
-		if (linked_regno < MAX_BPF_REG)
-			mark_reg_scratched(env, linked_regno);
-		else if (linked_frame == frame)
-			mark_stack_slot_scratched(env, linked_regno - MAX_BPF_REG);
-	}
-}
-
-/*
  * One branch of the jump @insn is dead, the current state takes the other one. @reg1 and @reg2 are
  * the operands as that branch refines them. They hold every value that takes it, whether the other
  * branch is dead or not.
  */
-static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *insn, int next_idx,
+static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			      struct bpf_reg_state *reg1, struct bpf_reg_state *reg2)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
@@ -19279,9 +19003,6 @@ static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *ins
 	regs[insn->dst_reg] = *reg1;
 	if (BPF_SRC(insn->code) == BPF_X)
 		regs[insn->src_reg] = *reg2;
-	if (!env->bpf_capable)
-		return 0;
-	refine_linked_regs(env, env->cur_state, env->insn_idx, next_idx);
 	return 0;
 }
 
@@ -19377,8 +19098,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			if (err < 0)
 				return err;
 		}
-		err = refine_live_branch(env, insn, *insn_idx + insn->off + 1, &env->true_reg1,
-					 &env->true_reg2);
+		err = refine_live_branch(env, insn, &env->true_reg1, &env->true_reg2);
 		if (err)
 			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
@@ -19396,8 +19116,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			if (err < 0)
 				return err;
 		}
-		err = refine_live_branch(env, insn, *insn_idx + 1, &env->false_reg1,
-					 &env->false_reg2);
+		err = refine_live_branch(env, insn, &env->false_reg1, &env->false_reg2);
 		if (err)
 			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
@@ -19419,11 +19138,6 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	other_branch_regs[insn->dst_reg] = env->true_reg1;
 	if (BPF_SRC(insn->code) == BPF_X)
 		other_branch_regs[insn->src_reg] = env->true_reg2;
-
-	if (env->bpf_capable) {
-		refine_linked_regs(env, this_branch, *insn_idx, *insn_idx + 1);
-		refine_linked_regs(env, other_branch, *insn_idx, *insn_idx + insn->off + 1);
-	}
 
 	/* if one pointer register is compared to another pointer
 	 * register check if PTR_MAYBE_NULL could be lifted.
@@ -20834,23 +20548,6 @@ pop:
 			verbose(env, "exiting loop %d\n", frame->loop_stack[i].loop_id);
 	frame->loop_stack_cnt = new_cnt;
 	return 0;
-}
-
-static int maybe_clamp_scev_regs(struct bpf_verifier_env *env)
-{
-	struct bpf_func_state *frame = cur_func(env);
-	struct loop_stack_entry *entry;
-
-	if (frame->loop_stack_cnt == 0) {
-		verifier_bug(env, "%s: loop stack empty at %d", __FUNCTION__, env->insn_idx);
-		return -EFAULT;
-	}
-
-	entry = &frame->loop_stack[frame->loop_stack_cnt - 1];
-	if (!entry->terminates)
-		return 0;
-
-	return bpf_clamp_scev_regs(env, frame, env->insn_idx, entry, false);
 }
 
 /* Can the main program return 0? */
@@ -24673,24 +24370,12 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
-	ret = bpf_find_latches(env, true);
-	if (ret < 0)
-		goto skip_full_check;
-
 	ret = bpf_compute_live_registers(env);
 	if (ret < 0)
 		goto skip_full_check;
 
 	if (env->log.level & BPF_LOG_LEVEL2)
 		log_program(env);
-
-	ret = bpf_init_scev(env);
-	if (ret < 0)
-		goto skip_full_check;
-
-	ret = bpf_compute_scev(env);
-	if (ret < 0)
-		goto skip_full_check;
 
 	ret = bpf_flow_prepare(env);
 	if (ret < 0)
@@ -24839,7 +24524,6 @@ err_free_env:
 	kvfree(env->used_index.slots);
 	kvfree(env->kfunc_index.slots);
 	kvfree(env->insn_array_maps);
-	bpf_free_scev(env);
 	bpf_flow_free(env);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.postorder_nums);

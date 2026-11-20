@@ -527,20 +527,12 @@ static void verbose_unum(struct bpf_verifier_env *env, u64 num)
 		verbose(env, "%#llx", num);
 }
 
-void bpf_verbose_snum(struct bpf_verifier_env *env, s64 num)
+static void verbose_snum(struct bpf_verifier_env *env, s64 num)
 {
 	if (is_snum_decimal(num))
 		verbose(env, "%lld", num);
 	else
 		verbose(env, "%#llx", num);
-}
-
-void bpf_verbose_snum32(struct bpf_verifier_env *env, s32 num)
-{
-	if (is_snum_decimal(num))
-		verbose(env, "%d", num);
-	else
-		verbose(env, "%#x", (u32)num);
 }
 
 int tnum_strn(char *str, size_t size, struct tnum a)
@@ -617,7 +609,7 @@ static void print_scalar_ranges(struct bpf_verifier_env *env,
 		}
 
 		if (m1->name[0] == 's')
-			bpf_verbose_snum(env, m1->val);
+			verbose_snum(env, m1->val);
 		else
 			verbose_unum(env, m1->val);
 	}
@@ -638,7 +630,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 
 	t = reg->type;
 	if (t == SCALAR_VALUE && tnum_is_const(reg->var_off)) {
-		bpf_verbose_snum(env, reg->var_off.value);
+		verbose_snum(env, reg->var_off.value);
 		return;
 	}
 
@@ -649,7 +641,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		if (state->frameno != reg->frameno)
 			verbose(env, "[%d]", reg->frameno);
 		if (tnum_is_const(reg->var_off)) {
-			bpf_verbose_snum(env, reg->var_off.value);
+			verbose_snum(env, reg->var_off.value);
 			return;
 		}
 	}
@@ -687,7 +679,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		/* a pointer register with fixed offset */
 		if (reg->var_off.value) {
 			verbose_a("imm=");
-			bpf_verbose_snum(env, reg->var_off.value);
+			verbose_snum(env, reg->var_off.value);
 		}
 	} else {
 		print_scalar_ranges(env, reg, &sep);
