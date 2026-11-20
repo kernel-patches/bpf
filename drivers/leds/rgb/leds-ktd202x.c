@@ -66,6 +66,7 @@
 #define KTD202X_FLASH_PERIOD_MIN_MS 256
 #define KTD202X_FLASH_PERIOD_STEP_MS 128
 #define KTD202X_FLASH_PERIOD_MAX_STEPS 126
+#define KTD202X_FLASH_ON_MIN 1
 #define KTD202X_FLASH_ON_MAX 256
 
 #define KTD202X_MAX_BRIGHTNESS 192
@@ -304,8 +305,12 @@ static int ktd202x_blink_set(struct ktd202x_led *led, unsigned long *delay_on,
 				  (delay_total_ms - KTD202X_FLASH_PERIOD_MIN_MS) /
 				  KTD202X_FLASH_PERIOD_STEP_MS);
 
-	/* Integer representation of percentage of LED ON time */
+	/*
+	 * Integer representation of percentage of LED ON time. A value of 0
+	 * keeps the LED dark, so use the shortest on time instead.
+	 */
 	on = (*delay_on * KTD202X_FLASH_ON_MAX) / (*delay_on + *delay_off);
+	on = max(on, KTD202X_FLASH_ON_MIN);
 
 	/* Actually used delay_{on,off} values */
 	delay_total_ms = num_steps * KTD202X_FLASH_PERIOD_STEP_MS + KTD202X_FLASH_PERIOD_MIN_MS;
