@@ -816,7 +816,7 @@ static void rpmsg_virtio_del_ctrl_dev(struct rpmsg_device *rpdev_ctrl)
 static int rpmsg_virtio_get_buf_size(struct virtproc_info *vrp)
 {
 	struct virtio_device *vdev;
-	u8 version;
+	u16 version;
 	u16 size;
 
 	vdev = vrp->vdev;
