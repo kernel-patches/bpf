@@ -21,6 +21,7 @@ struct precision_per_pass {
 	unsigned long *bad_read_insns;		/* unproven because of an unreadable xreg */
 	unsigned long *unproven_funcs;		/* of functions */
 	u64 suspect_loops, first_suspect_loops;	/* of the unproven states, of the first one */
+	bool disjoint_joined;			/* disjoint values in data_deps were joined */
 };
 
 /* callx calls one of the functions whose address is taken. They count as one function. */
@@ -55,6 +56,7 @@ struct bpf_precision {
 	bool new_nospec;
 
 	u16 *apart_xregno;	/* per insn, see bpf_range_of_data_dep() */
+
 	/* The path-sensitive run */
 	unsigned long *err_insns;		/* insns at which the failing path can end */
 	u32 *hops_to_err, *hops_to_exit;	/* per insn, see compute_hops() */
@@ -63,8 +65,21 @@ struct bpf_precision {
 	unsigned long loop_carried[XREG_WORDS];
 };
 
+struct state_cmp {
+	struct bpf_reg_state tmp[2];
+	u32 all, data_deps, cnt;
+	u32 disjoint_xregno;		/* an xreg of data_deps in the top frame, plus one */
+	u32 disjoint_apart;		/* what differs in these xregs */
+};
+
 u32 bpf_frame_mask(struct bpf_verifier_env *env, unsigned long *masks,
 		   const struct bpf_verifier_state *st, u32 fr, unsigned long *out);
+const struct bpf_reg_state *bpf_xreg_value(struct bpf_verifier_env *env,
+					   const struct bpf_func_state *f, u32 xregno,
+					   struct bpf_reg_state *tmp);
+void bpf_compare_states(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			const struct bpf_verifier_state *new, unsigned long *only,
+			const struct bpf_loop *iv_loop, struct state_cmp *cmp);
 int bpf_compute_deps(struct bpf_verifier_env *env, unsigned long *masks,
 		     const unsigned long *seed_insns);
 
