@@ -607,11 +607,6 @@ struct bpf_verifier_state {
 	 * and their packet pointers are not in the state, see bpf_flow_return().
 	 */
 	bool changed_pkt_data;
-	/*
-	 * Not zero in a function that is verified on its own: the call that the
-	 * state at its entry came from, see bpf_flow_call().
-	 */
-	u32 flow_entry;
 	);
 	/* Not zero in a function that is verified on its own, see bpf_flow_call() */
 	u32 instance_id;
@@ -1143,6 +1138,7 @@ struct bpf_subprog_info {
 	u32 callx_edge; /* 1 + the first of its env->callx_edges, 0 if none */
 	struct bpf_iarray *jt; /* jump table shared by all gotox of this subprogram */
 	u32 deepest_insn; /* the insn that set stack_depth */
+	u32 first_exit; /* see bpf_flow_exit() */
 	u16 stack_depth; /* max. stack depth used by this function */
 	u16 stack_extra;
 	u16 arena_stack_depth; /* size of the frame in the stack in arena */
@@ -1374,6 +1370,7 @@ struct bpf_verifier_env {
 	bool over_limit;		/* see bpf_check_limits() */
 	bool restart;			/* see bpf_flow_next_is_no_bound() */
 	bool guards_late;		/* see bpf_flow_needs_guard() */
+	bool calls_joined;		/* see flow_may_add_instance() */
 	bool extra_values;		/* a state can have constants that no run has */
 	bool new_linear_xreg;		/* see bpf_same_insns_unproven() */
 	bool seen_direct_write;
