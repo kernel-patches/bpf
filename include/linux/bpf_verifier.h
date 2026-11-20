@@ -810,6 +810,8 @@ struct bpf_loop {
 };
 
 struct bpf_insn_aux_data {
+	/* What a pass writes for the rewrite of the insn. Each pass starts from the snapshot. */
+	struct_group_tagged(bpf_insn_fixups, fixups,
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
 		struct bpf_map_ptr_state map_ptr_state;
@@ -841,13 +843,6 @@ struct bpf_insn_aux_data {
 	};
 	struct btf_struct_meta *kptr_struct_meta;
 	u64 map_key_state; /* constant (32 bit) key tracking for maps */
-	/*
-	 * Per-instruction summary of stack slots in the current frame
-	 * that this instruction may write to.
-	 */
-	DECLARE_BITMAP(may_write_mask, MAX_BPF_STACK_SLOTS);
-	DECLARE_BITMAP(live_stack_before, MAX_BPF_STACK_SLOTS);
-	u16 stack_ptrs; /* bitmask of regs that may hold a frame pointer here (arg_track) */
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
 	u32 seen; /* this insn was processed by the verifier at env->pass_cnt */
 	u64 nospec:1; /* do not execute this instruction speculatively */
@@ -859,12 +854,7 @@ struct bpf_insn_aux_data {
 	u64 call_with_percpu_alloc_ptr:1; /* {this,per}_cpu_ptr() with prog percpu alloc */
 	u64 cast_arena:1; /* addr_space_cast of an address in arena */
 	u64 cast_mov:1; /* addr_space_cast of a pointer that is not in arena, it's a move */
-	u64 bb_end:1; /* last instruction of a basic block */
 	u64 loop_guard:1; /* may_goto is added in front of this instruction */
-	u64 guard_place:1; /* it's the place for may_goto if the loop needs one */
-	u64 guard_at_header:1; /* there is no better place than the head of the loop */
-	u64 guard_no_unwind:1; /* it cannot unwind from here, at least sometimes */
-	u64 guard_unset_reg:1; /* where it goes a register is read that is not set here */
 	u64 guard_edge_dropped:1; /* an edge of may_goto from here was dropped */
 	u64 alu_state:5; /* used in combination with alu_limit */
 	/* true if STX or LDX instruction is a part of a spill/fill
@@ -884,20 +874,35 @@ struct bpf_insn_aux_data {
 	u64 arena_member:1;
 	u64 arena_member_nullable:1;
 	u64 non_arena_load:1;
+	u64 indirect_target:1; /* if it is an indirect jump target */
+	u64 non_stack_access:1; /* instruction can access non-stack memory */
+	);
+
+	/* what one pass gives to the next pass, see bpf_flow_new_pass() */
+	u32 guard_no_unwind:1; /* it cannot unwind from here, at least sometimes */
+	u32 guard_unset_reg:1; /* where it goes a register is read that is not set here */
 
 	/* below flags are initialized once */
+	u32 bb_end:1; /* last instruction of a basic block */
+	u32 guard_place:1; /* it is the place for may_goto if the loop needs one */
+	u32 guard_at_header:1; /* there is no better place than the header of the loop */
 	/* true if instruction is a call to a helper function that
 	 * accepts callback function as a parameter.
 	 */
-	u64 calls_callback:1;
-	u64 indirect_target:1; /* if it is an indirect jump target */
-	u64 non_stack_access:1; /* instruction can access non-stack memory */
+	u32 calls_callback:1;
 	/* true if some jump or call instruction targets this instruction */
-	u64 jump_target:1;
+	u32 jump_target:1;
 	/* it can read or write the frame of a caller, in a call with a known callee */
 	u32 reads_outer:1;
 	u32 writes_outer:1;
+	/*
+	 * Per-instruction summary of stack slots in the current frame
+	 * that this instruction may write, may read, and that are live before it.
+	 */
+	DECLARE_BITMAP(may_write_mask, MAX_BPF_STACK_SLOTS);
 	DECLARE_BITMAP(may_read_mask, MAX_BPF_STACK_SLOTS);
+	DECLARE_BITMAP(live_stack_before, MAX_BPF_STACK_SLOTS);
+	u16 stack_ptrs; /* bitmask of regs that may hold a frame pointer here (arg_track) */
 
 	unsigned int orig_idx; /* original instruction index, initialized once */
 	/* registers alive before this instruction. */
@@ -1232,13 +1237,23 @@ struct bpf_verifier_env {
 	u64 max_cost, max_mem;
 	u64 pass_max_cost;		/* see bpf_undo_precision() */
 	bool aborted;			/* a thaw does not take it back */
+	/* What a pass writes. Each pass starts from the snapshot. */
+	struct_group_tagged(bpf_env_per_pass, per_pass,
 	int err;			/* the first error */
 	bool imprecise;			/* a state before the first error is imprecise */
 	bool over_limit;		/* see bpf_check_limits() */
 	bool restart;			/* see bpf_flow_next_is_no_bound() */
 	bool guards_late;		/* see bpf_flow_loop_gets_guards() */
-	u32 loop_entry_cnt;		/* see loop_stack_entry.entry_id, callback_entry_id */
+	bool seen_direct_write;
+	/* a register may point to the stack and is not PTR_TO_STACK, see bpf_reg_state::buf */
+	bool seen_stack_slice;
+	bool seen_exception;
+	bool sleepable_async_cb;
+	u32 id_gen;			/* used to generate unique reg IDs */
+	u32 max_stack_depth;		/* maximum combined stack depth */
 	u32 max_arena_stack_depth;	/* of all call chains */
+	u32 loop_entry_cnt;		/* see loop_stack_entry.entry_id */
+	);
 	struct bpf_verifier_state *cur_state; /* current verifier state */
 	struct bpf_map **used_maps;	/* array of map's used by eBPF program */
 	struct btf_mod_pair *used_btfs;	/* array of BTF's used by BPF program */
@@ -1250,7 +1265,6 @@ struct bpf_verifier_env {
 	u32 used_map_cnt;		/* number of used maps */
 	u32 used_btf_cnt;		/* number of used BTF objects */
 	u32 insn_array_map_cnt;		/* number of used maps of type BPF_MAP_TYPE_INSN_ARRAY */
-	u32 id_gen;			/* used to generate unique reg IDs */
 	u32 hidden_subprog_cnt;		/* number of hidden subprogs */
 	int exception_callback_subprog;
 	bool explore_alu_limits;
@@ -1263,12 +1277,8 @@ struct bpf_verifier_env {
 	bool bpf_capable;
 	bool bypass_spec_v1;
 	bool bypass_spec_v4;
-	bool seen_direct_write;
-	/* a register may point to the stack and is not PTR_TO_STACK, see bpf_reg_state::buf */
-	bool seen_stack_slice;
 	/* a global function is verified for BPF_FUNC_CTX_NO_RCU_LOCK */
 	bool no_rcu_read_lock;
-	bool seen_exception;
 	bool signature;
 	u32 insn_aux_data_len;
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
@@ -1319,8 +1329,6 @@ struct bpf_verifier_env {
 	u32 subprog_cnt;
 	/* number of instructions analyzed by the verifier */
 	u32 insn_processed;
-	/* maximum combined stack depth */
-	u32 max_stack_depth;
 	/* stack budget of the program, see bpf_prog_stack_limit() */
 	u32 stack_limit;
 	/* total verification time */
