@@ -419,13 +419,18 @@ void ncsi_free_request(struct ncsi_request *nr)
 struct ncsi_dev *ncsi_find_dev(struct net_device *dev)
 {
 	struct ncsi_dev_priv *ndp;
+	struct ncsi_dev *nd = NULL;
 
+	rcu_read_lock();
 	NCSI_FOR_EACH_DEV(ndp) {
-		if (ndp->ndev.dev == dev)
-			return &ndp->ndev;
+		if (ndp->ndev.dev == dev) {
+			nd = &ndp->ndev;
+			break;
+		}
 	}
+	rcu_read_unlock();
 
-	return NULL;
+	return nd;
 }
 
 static void ncsi_request_timeout(struct timer_list *t)
