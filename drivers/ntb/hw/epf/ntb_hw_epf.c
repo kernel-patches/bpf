@@ -273,12 +273,12 @@ static u32 ntb_epf_peer_spad_read(struct ntb_dev *ntb, int pidx, int idx)
 
 	if (pidx != NTB_DEF_PEER_IDX) {
 		dev_err(dev, "Unsupported Peer ID %d\n", pidx);
-		return -EINVAL;
+		return 0;
 	}
 
 	if (idx < 0 || idx >= ndev->spad_count) {
 		dev_err(dev, "WRITE: Invalid Peer ScratchPad Index %d\n", idx);
-		return -EINVAL;
+		return 0;
 	}
 
 	offset = (idx << 2);

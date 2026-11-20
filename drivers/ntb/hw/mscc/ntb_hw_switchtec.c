@@ -762,7 +762,7 @@ static u32 switchtec_ntb_peer_spad_read(struct ntb_dev *ntb, int pidx,
 	struct switchtec_ntb *sndev = ntb_sndev(ntb);
 
 	if (pidx != NTB_DEF_PEER_IDX)
-		return -EINVAL;
+		return 0;
 
 	if (sidx < 0 || sidx >= ARRAY_SIZE(sndev->peer_shared->spad))
 		return 0;
