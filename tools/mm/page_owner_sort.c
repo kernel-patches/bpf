@@ -134,6 +134,9 @@ int read_block(char *buf, char *ext_buf, int buf_size, FILE *fin)
 		curr += strlen(curr);
 	}
 
+	if (feof(fin) && curr != buf)
+		return curr - buf;
+
 	return -1; /* EOF or no space left in buf. */
 }
 
