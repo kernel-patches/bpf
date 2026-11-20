@@ -614,7 +614,7 @@ EXPORT_SYMBOL_NS_GPL(thc_rxdma_reset, "INTEL_THC");
 
 static int read_dma_buffer(struct thc_device *dev,
 			   struct thc_dma_configuration *read_config,
-			   u8 prd_table_index, void *read_buff)
+			   u8 prd_table_index, void *read_buff, size_t read_buff_len)
 {
 	struct thc_prd_table *prd_tbl;
 	struct scatterlist *sg;
@@ -637,6 +637,13 @@ static int read_dma_buffer(struct thc_device *dev,
 		dev_err(dev->dev,
 			"Message length %zu is bigger than buffer length %lu\n",
 			mes_len, read_config->max_packet_size);
+		return -EMSGSIZE;
+	}
+
+	if (mes_len > read_buff_len) {
+		dev_err(dev->dev,
+			"Message length %zu is bigger than destination buffer length %zu\n",
+			mes_len, read_buff_len);
 		return -EMSGSIZE;
 	}
 
@@ -680,21 +687,26 @@ static int is_dma_buf_empty(struct thc_device *dev,
 
 static int thc_dma_read(struct thc_device *dev,
 			struct thc_dma_configuration *read_config,
-			void *read_buff, size_t *read_len, int *read_finished)
+			void *read_buff, size_t read_buff_len,
+			size_t *read_len, int *read_finished)
 {
 	u8 read_ptr, write_ptr, prd_table_index;
-	int status;
+	int status = 0;
+
+	*read_len = 0;
 
 	if (!is_dma_buf_empty(dev, read_config, &read_ptr, &write_ptr)) {
 		prd_table_index = write_ptr & THC_POINTER_MASK;
 
-		status = read_dma_buffer(dev, read_config, prd_table_index, read_buff);
-		if (status <= 0) {
+		status = read_dma_buffer(dev, read_config, prd_table_index,
+					 read_buff, read_buff_len);
+		if (status <= 0 && status != -EMSGSIZE) {
 			dev_err_once(dev->dev, "read DMA buffer failed %d\n", status);
 			return -EIO;
 		}
 
-		*read_len = status;
+		if (status > 0)
+			*read_len = status;
 
 		/* Clear the relevant PRD table */
 		thc_copy_one_sgl_to_prd(dev, read_config, prd_table_index);
@@ -711,22 +723,27 @@ static int thc_dma_read(struct thc_device *dev,
 	if (read_finished)
 		*read_finished = is_dma_buf_empty(dev, read_config, &read_ptr, &write_ptr) ? 1 : 0;
 
-	return 0;
+	return status < 0 ? status : 0;
 }
 
 /**
- * thc_rxdma_read - Read data from RXDMA buffer
+ * thc_rxdma_read_safe - Read data from RXDMA buffer with a destination size limit
  *
  * @dev: The pointer of THC private device context
  * @dma_channel: The RXDMA engine of read data source
  * @read_buff: The pointer of the read data buffer
+ * @read_buff_len: The allocated size of the read data buffer in bytes
  * @read_len: The pointer of the read data length
  * @read_finished: The pointer of the flag indicating if all pending data has been read out
  *
+ * Oversized frames are discarded and their PRD table is recycled without
+ * copying data. In this case, @read_len is zero and @read_finished is updated.
+ *
  * Return: 0 on success, other error codes on failed.
  */
-int thc_rxdma_read(struct thc_device *dev, enum thc_dma_channel dma_channel,
-		   void *read_buff, size_t *read_len, int *read_finished)
+int thc_rxdma_read_safe(struct thc_device *dev, enum thc_dma_channel dma_channel,
+			void *read_buff, size_t read_buff_len,
+			size_t *read_len, int *read_finished)
 {
 	struct thc_dma_configuration *dma_config;
 	int ret;
@@ -749,9 +766,30 @@ int thc_rxdma_read(struct thc_device *dev, enum thc_dma_channel dma_channel,
 		return -EINVAL;
 	}
 
-	ret = thc_dma_read(dev, dma_config, read_buff, read_len, read_finished);
+	ret = thc_dma_read(dev, dma_config, read_buff, read_buff_len, read_len, read_finished);
 
 	return ret;
+}
+EXPORT_SYMBOL_NS_GPL(thc_rxdma_read_safe, "INTEL_THC");
+
+/**
+ * thc_rxdma_read - Read data from RXDMA buffer
+ *
+ * @dev: The pointer of THC private device context
+ * @dma_channel: The RXDMA engine of read data source
+ * @read_buff: The pointer of the read data buffer
+ * @read_len: The pointer of the read data length
+ * @read_finished: The pointer of the flag indicating if all pending data has been read out
+ *
+ * Legacy callers do not provide a destination capacity.
+ *
+ * Return: 0 on success, other error codes on failed.
+ */
+int thc_rxdma_read(struct thc_device *dev, enum thc_dma_channel dma_channel,
+		   void *read_buff, size_t *read_len, int *read_finished)
+{
+	return thc_rxdma_read_safe(dev, dma_channel, read_buff, SIZE_MAX,
+				   read_len, read_finished);
 }
 EXPORT_SYMBOL_NS_GPL(thc_rxdma_read, "INTEL_THC");
 
@@ -862,19 +900,24 @@ static int thc_swdma_read_completion(struct thc_device *dev)
 }
 
 /**
- * thc_swdma_read - Use software DMA to read data from touch device
+ * thc_swdma_read_safe - Read touch device data with a destination size limit
  *
  * @dev: The pointer of THC private device context
  * @write_buff: The pointer of write buffer for SWDMA sequence
  * @write_len: The write data length for SWDMA sequence
  * @prd_tbl_len: The prd table length of SWDMA engine, can be set to NULL
  * @read_buff: The pointer of the read data buffer
+ * @read_buff_len: The allocated size of the read data buffer in bytes
  * @read_len: The pointer of the read data length
+ *
+ * Oversized frames are discarded without copying data and @read_len is zero.
+ * The completed transaction is restored before returning the read error.
  *
  * Return: 0 on success, other error codes on failed.
  */
-int thc_swdma_read(struct thc_device *dev, void *write_buff, size_t write_len,
-		   u32 *prd_tbl_len, void *read_buff, size_t *read_len)
+int thc_swdma_read_safe(struct thc_device *dev, void *write_buff, size_t write_len,
+			u32 *prd_tbl_len, void *read_buff, size_t read_buff_len,
+			size_t *read_len)
 {
 	int ret;
 
@@ -905,15 +948,37 @@ int thc_swdma_read(struct thc_device *dev, void *write_buff, size_t write_len,
 		goto end;
 	}
 
-	ret = thc_dma_read(dev, &dev->dma_ctx->dma_config[THC_SWDMA], read_buff, read_len, NULL);
-	if (ret)
-		goto end;
-
-	ret = thc_swdma_read_completion(dev);
+	ret = thc_dma_read(dev, &dev->dma_ctx->dma_config[THC_SWDMA],
+			   read_buff, read_buff_len, read_len, NULL);
 
 end:
+	if (thc_swdma_read_completion(dev))
+		dev_err(dev->dev, "Failed to restore DMA after SWDMA read\n");
+
 	mutex_unlock(&dev->thc_bus_lock);
 	return ret;
+}
+EXPORT_SYMBOL_NS_GPL(thc_swdma_read_safe, "INTEL_THC");
+
+/**
+ * thc_swdma_read - Use software DMA to read data from touch device
+ *
+ * @dev: The pointer of THC private device context
+ * @write_buff: The pointer of write buffer for SWDMA sequence
+ * @write_len: The write data length for SWDMA sequence
+ * @prd_tbl_len: The prd table length of SWDMA engine, can be set to NULL
+ * @read_buff: The pointer of the read data buffer
+ * @read_len: The pointer of the read data length
+ *
+ * Legacy callers do not provide a destination capacity.
+ *
+ * Return: 0 on success, other error codes on failed.
+ */
+int thc_swdma_read(struct thc_device *dev, void *write_buff, size_t write_len,
+		   u32 *prd_tbl_len, void *read_buff, size_t *read_len)
+{
+	return thc_swdma_read_safe(dev, write_buff, write_len, prd_tbl_len,
+				   read_buff, SIZE_MAX, read_len);
 }
 EXPORT_SYMBOL_NS_GPL(thc_swdma_read, "INTEL_THC");
 

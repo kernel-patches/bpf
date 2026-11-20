@@ -150,6 +150,12 @@ int  thc_rxdma_read(struct thc_device *dev, enum thc_dma_channel dma_channel,
 		    void *read_buff, size_t *read_len, int *read_finished);
 int  thc_swdma_read(struct thc_device *dev, void *write_buff, size_t write_len,
 		    u32 *prd_tbl_len, void *read_buff, size_t *read_len);
+int  thc_rxdma_read_safe(struct thc_device *dev, enum thc_dma_channel dma_channel,
+			 void *read_buff, size_t read_buff_len,
+			 size_t *read_len, int *read_finished);
+int  thc_swdma_read_safe(struct thc_device *dev, void *write_buff, size_t write_len,
+			 u32 *prd_tbl_len, void *read_buff, size_t read_buff_len,
+			 size_t *read_len);
 int  thc_dma_write(struct thc_device *dev, void *buffer, size_t buf_len);
 
 struct thc_dma_context *thc_dma_init(struct thc_device *dev);
