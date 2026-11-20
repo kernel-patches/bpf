@@ -3928,10 +3928,15 @@ static void btrfs_qgroup_rescan_worker(struct btrfs_work *work)
 		ret = qgroup_rescan_leaf(trans, path);
 		did_leaf_rescans = true;
 
-		if (ret > 0)
-			btrfs_commit_transaction(trans);
-		else
+		if (ret > 0) {
+			int commit_ret;
+
+			commit_ret = btrfs_commit_transaction(trans);
+			if (commit_ret < 0)
+				ret = commit_ret;
+		} else {
 			btrfs_end_transaction(trans);
+		}
 	}
 
 out:
