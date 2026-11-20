@@ -21582,6 +21582,47 @@ static bool round_is_dropped(struct bpf_verifier_env *env)
 	return (env->restart && bpf_flow_loops_lost_bound(env)) || env->guards_late;
 }
 
+static int do_check(struct bpf_verifier_env *env)
+{
+	bool level2 = env->log.level & BPF_LOG_LEVEL2;
+	u64 log_pos = env->log.end_pos, diag_pos = 0, cost = env->cost;
+	int prev_insn_idx, err;
+
+	err = bpf_flow_deliver(env, env->cur_state, env->insn_idx, -1, false);
+	while (!err && !(env->path_sensitive && env->cost >= env->failing_path_max_cost)) {
+		err = bpf_flow_next(env, &prev_insn_idx, &log_pos, &diag_pos);
+		/* at the limit the work on equations is not complete, such a pass proves nothing */
+		if (err == -ENOENT)
+			return bpf_check_limits(env);
+		if (err)
+			break;
+		charge_loops(env, env->cost - cost);
+		cost = env->cost;
+		/* A pass logs one basic block at a time. A path-sensitive run logs a full path. */
+		bpf_diag_event_log_restore(env, diag_pos);
+		if (!level2) {
+			bpf_vlog_reset(&env->log, log_pos);
+			env->prev_linfo = NULL;
+		}
+		err = do_check_block(env, prev_insn_idx);
+		if (env->bug)
+			return -EFAULT;
+		/* a pass had no error at this insn, possibly with a state that has more values */
+		if (err && env->path_sensitive && is_error_of_state(env, err) &&
+		    (env->cur_state->infeasible || env->cur_state->equations.infeasible ||
+		     !bpf_failing_path_may_end_at(env, env->insn_idx))) {
+			bpf_free_verifier_state(env, env->cur_state, false);
+			memset(env->cur_state, 0, sizeof(*env->cur_state));
+			free_pushed_states(env);
+			err = 0;
+		}
+	}
+	/* bpf_flow_edge_unproven() noted it with the state that failed */
+	if (err && !bpf_insn_is_unproven(env))
+		note_error(env, err);
+	return err;
+}
+
 static int find_btf_percpu_datasec(struct btf *btf)
 {
 	const struct btf_type *t;
