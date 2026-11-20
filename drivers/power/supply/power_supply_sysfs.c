@@ -114,6 +114,7 @@ static const char * const POWER_SUPPLY_HEALTH_TEXT[] = {
 	[POWER_SUPPLY_HEALTH_NO_BATTERY]	    = "No battery",
 	[POWER_SUPPLY_HEALTH_BLOWN_FUSE]	    = "Blown fuse",
 	[POWER_SUPPLY_HEALTH_CELL_IMBALANCE]	    = "Cell imbalance",
+	[POWER_SUPPLY_HEALTH_LIQUID_DETECTED]	    = "Liquid detected",
 };
 
 static const char * const POWER_SUPPLY_TECHNOLOGY_TEXT[] = {
@@ -158,6 +159,13 @@ static const char *const POWER_SUPPLY_LOAD_SWITCH_TEXT[] = {
 	[POWER_SUPPLY_LOAD_SWITCH_OFF]	   = "Off",
 	[POWER_SUPPLY_LOAD_SWITCH_STANDBY] = "Standby",
 	[POWER_SUPPLY_LOAD_SWITCH_SHIP]	   = "Ship",
+};
+
+static const char *const POWER_SUPPLY_LIQUID_DETECTION_CONTROL_TEXT[] = {
+	[POWER_SUPPLY_LIQUID_DETECTION_CONTROL_UNKNOWN] = "Unknown",
+	[POWER_SUPPLY_LIQUID_DETECTION_CONTROL_OFF]	= "Off",
+	[POWER_SUPPLY_LIQUID_DETECTION_CONTROL_AUTO]	= "Auto",
+	[POWER_SUPPLY_LIQUID_DETECTION_CONTROL_ONCE]	= "Once",
 };
 
 static struct power_supply_attr power_supply_attrs[] __ro_after_init = {
@@ -240,6 +248,7 @@ static struct power_supply_attr power_supply_attrs[] __ro_after_init = {
 	POWER_SUPPLY_ATTR(INTERNAL_RESISTANCE),
 	POWER_SUPPLY_ATTR(STATE_OF_HEALTH),
 	POWER_SUPPLY_ENUM_ATTR(LOAD_SWITCH),
+	POWER_SUPPLY_ENUM_ATTR(LIQUID_DETECTION_CONTROL),
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_ATTR(MODEL_NAME),
 	POWER_SUPPLY_ATTR(MANUFACTURER),
