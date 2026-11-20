@@ -25,8 +25,10 @@
 #define SLAB_ALLOC_NO_OBJ_EXT	0x08 /* prevent obj_exts array allocation */
 #define SLAB_ALLOC_NO_LEAKTRACE	0x10 /* skip kmemleak tracking */
 
-#define SLAB_FREE_DEFAULT	0x00 /* no flags */
-#define SLAB_FREE_NOLOCK	0x01 /* spinning not allowed */
+#define SLAB_FREE_DEFAULT		0x00 /* no flags */
+#define SLAB_FREE_NOLOCK		0x01 /* spinning not allowed */
+#define SLAB_FREE_INIT			0x02 /* zero the object on free */
+#define SLAB_FREE_AFTER_RCU_DELAY	0x04 /* RCU grace period has elapsed */
 
 static inline unsigned int to_alloc_flags(unsigned int free_flags)
 {
@@ -34,6 +36,14 @@ static inline unsigned int to_alloc_flags(unsigned int free_flags)
 		return SLAB_ALLOC_NOLOCK;
 	else
 		return SLAB_ALLOC_DEFAULT;
+}
+
+static inline unsigned int to_free_flags(unsigned int alloc_flags)
+{
+	if (alloc_flags & SLAB_ALLOC_NOLOCK)
+		return SLAB_FREE_NOLOCK;
+	else
+		return SLAB_FREE_DEFAULT;
 }
 
 static inline bool alloc_flags_allow_spinning(const unsigned int alloc_flags)

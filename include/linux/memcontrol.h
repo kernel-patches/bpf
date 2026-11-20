@@ -185,6 +185,8 @@ struct obj_cgroup {
 		struct list_head list; /* protected by objcg_lock */
 		struct rcu_head rcu;
 	};
+	/* Used to defer obj_cgroup_release() to irq_work */
+	struct llist_node release_node;
 	bool is_root;
 };
 
