@@ -647,6 +647,18 @@ static bool ace_is_for_entry(const struct smb_sid *ace_sid,
 	       !ace_sid->sub_auth[dom->num_subauth];
 }
 
+/*
+ * Add the size of an ACE to the size of the ACEs in a DACL. Fail when the
+ * DACL with its header would no longer fit in its 16-bit size.
+ */
+static bool dacl_add_ace_size(u16 *size, u16 ace_sz)
+{
+	if (*size + ace_sz > U16_MAX - sizeof(struct smb_acl))
+		return false;
+	*size += ace_sz;
+	return true;
+}
+
 static void set_posix_acl_entries_dacl(const struct mnt_idmap *idmap,
 				       struct smb_ace *pndace,
 				       struct smb_fattr *fattr, u16 *num_aces,
@@ -706,8 +718,7 @@ static void set_posix_acl_entries_dacl(const struct mnt_idmap *idmap,
 		ntace = (struct smb_ace *)((char *)pndace + *size);
 		ace_sz = fill_ace_for_sid(ntace, sid, ACCESS_ALLOWED, flags,
 				pace->e_perm, 0777);
-		if (check_add_overflow(*size, ace_sz, size)) {
-			*size -= ace_sz;
+		if (!dacl_add_ace_size(size, ace_sz)) {
 			kfree(sid);
 			break;
 		}
@@ -721,8 +732,7 @@ static void set_posix_acl_entries_dacl(const struct mnt_idmap *idmap,
 			ntace = (struct smb_ace *)((char *)pndace + *size);
 			ace_sz = fill_ace_for_sid(ntace, sid, ACCESS_ALLOWED,
 					0x03, pace->e_perm, 0777);
-			if (check_add_overflow(*size, ace_sz, size)) {
-				*size -= ace_sz;
+			if (!dacl_add_ace_size(size, ace_sz)) {
 				kfree(sid);
 				break;
 			}
@@ -767,8 +777,7 @@ posix_default_acl:
 		ntace = (struct smb_ace *)((char *)pndace + *size);
 		ace_sz = fill_ace_for_sid(ntace, sid, ACCESS_ALLOWED, 0x0b,
 				pace->e_perm, 0777);
-		if (check_add_overflow(*size, ace_sz, size)) {
-			*size -= ace_sz;
+		if (!dacl_add_ace_size(size, ace_sz)) {
 			kfree(sid);
 			break;
 		}
@@ -819,10 +828,8 @@ static void set_ntacl_dacl(const struct mnt_idmap *idmap,
 				goto next_ace;
 
 			memcpy((char *)pndace + size, ntace, nt_ace_size);
-			if (check_add_overflow(size, nt_ace_size, &size)) {
-				size -= nt_ace_size;
+			if (!dacl_add_ace_size(&size, nt_ace_size))
 				break;
-			}
 			num_aces++;
 
 next_ace:
