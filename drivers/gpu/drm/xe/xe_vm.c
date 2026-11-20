@@ -513,6 +513,31 @@ void xe_vm_resume_rebind_worker(struct xe_vm *vm)
 	queue_work(vm->xe->ordered_wq, &vm->preempt.rebind_work);
 }
 
+#if IS_ENABLED(CONFIG_DRM_XE_USERPTR_INVAL_INJECT)
+/*
+ * Force one retry per rebind sequence. The sequence spans requeues of the
+ * worker, so the state must live in the vm.
+ */
+static bool xe_vm_rebind_worker_inject_retry(struct xe_vm *vm)
+{
+	return !vm->preempt.inval_inject_tries++;
+}
+
+static void xe_vm_rebind_worker_reset_inject(struct xe_vm *vm)
+{
+	vm->preempt.inval_inject_tries = 0;
+}
+#else
+static bool xe_vm_rebind_worker_inject_retry(struct xe_vm *vm)
+{
+	return false;
+}
+
+static void xe_vm_rebind_worker_reset_inject(struct xe_vm *vm)
+{
+}
+#endif
+
 static void preempt_rebind_work_func(struct work_struct *w)
 {
 	struct xe_vm *vm = container_of(w, struct xe_vm, preempt.rebind_work);
@@ -522,7 +547,6 @@ static void preempt_rebind_work_func(struct work_struct *w)
 	LIST_HEAD(preempt_fences);
 	int err = 0;
 	long wait;
-	int __maybe_unused tries = 0;
 
 	xe_assert(vm->xe, xe_vm_in_preempt_fence_mode(vm));
 	trace_xe_vm_rebind_worker_enter(vm);
@@ -535,7 +559,6 @@ static void preempt_rebind_work_func(struct work_struct *w)
 		return;
 	}
 
-retry:
 	if (!try_wait_for_completion(&vm->xe->pm_block) && vm_suspend_rebind_worker(vm)) {
 		up_write(&vm->lock);
 		/* We don't actually block but don't make progress. */
@@ -585,19 +608,13 @@ retry:
 		goto out_unlock;
 	}
 
-#define retry_required(__tries, __vm) \
-	(IS_ENABLED(CONFIG_DRM_XE_USERPTR_INVAL_INJECT) ? \
-	(!(__tries)++ || __xe_vm_userptr_needs_repin(__vm)) : \
-	__xe_vm_userptr_needs_repin(__vm))
-
 	xe_svm_notifier_lock(vm);
-	if (retry_required(tries, vm)) {
+	if (xe_vm_rebind_worker_inject_retry(vm) ||
+	    __xe_vm_userptr_needs_repin(vm)) {
 		xe_svm_notifier_unlock(vm);
 		err = -EAGAIN;
 		goto out_unlock;
 	}
-
-#undef retry_required
 
 	xe_vm_bump_lru(vm, &exec);
 
@@ -613,21 +630,19 @@ out_unlock_outer:
 		trace_xe_vm_rebind_worker_retry(vm);
 
 		/*
-		 * We can't block in workers on a VF which supports migration
-		 * given this can block the VF post-migration workers from
-		 * getting scheduled.
+		 * Drop all locks and requeue rather than retrying in-line.
+		 * This avoids blocking other work items, such as VF
+		 * post-migration workers, and lets other users of the vm
+		 * lock make progress between attempts.
 		 */
-		if (IS_SRIOV_VF(vm->xe) &&
-		    xe_sriov_vf_migration_supported(vm->xe)) {
-			up_write(&vm->lock);
-			free_preempt_fences(&preempt_fences);
-			xe_vm_queue_rebind_worker(vm);
-			trace_xe_vm_rebind_worker_exit(vm);
-			return;
-		}
-
-		goto retry;
+		up_write(&vm->lock);
+		free_preempt_fences(&preempt_fences);
+		xe_vm_queue_rebind_worker(vm);
+		trace_xe_vm_rebind_worker_exit(vm);
+		return;
 	}
+
+	xe_vm_rebind_worker_reset_inject(vm);
 
 	if (err) {
 		drm_warn(&vm->xe->drm, "VM worker error: %d\n", err);

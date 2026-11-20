@@ -350,6 +350,14 @@ struct xe_vm {
 		 * kicked on resume.
 		 */
 		struct list_head pm_activate_link;
+#if IS_ENABLED(CONFIG_DRM_XE_USERPTR_INVAL_INJECT)
+		/**
+		 * @inval_inject_tries: Number of rebind attempts in the
+		 * current rebind sequence. Used to force a retry for testing.
+		 * Protected by @lock.
+		 */
+		unsigned int inval_inject_tries;
+#endif
 	} preempt;
 
 	/** @exec_queues: Manages list of exec queues attached to this VM, protected by lock. */
