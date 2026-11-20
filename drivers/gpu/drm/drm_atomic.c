@@ -1293,6 +1293,48 @@ drm_atomic_get_new_connector_for_encoder(const struct drm_atomic_commit *state,
 EXPORT_SYMBOL(drm_atomic_get_new_connector_for_encoder);
 
 /**
+ * drm_atomic_get_connector_for_encoder_locked - Get connector currently assigned to an encoder
+ * @encoder: The encoder to find the connector of
+ *
+ * This function finds and returns the connector currently assigned to
+ * an @encoder.
+ *
+ * It is similar to drm_atomic_get_connector_for_encoder(), but expects
+ * the caller to hold &drm_mode_config.connection_mutex. This is useful
+ * for callers that need to keep looking at the connector state once the
+ * connector has been found, since the connection mutex must be held for
+ * the whole sequence.
+ *
+ * Returns:
+ * The connector connected to @encoder, or an error pointer otherwise.
+ */
+struct drm_connector *
+drm_atomic_get_connector_for_encoder_locked(const struct drm_encoder *encoder)
+{
+	struct drm_connector_list_iter conn_iter;
+	struct drm_connector *out_connector = ERR_PTR(-EINVAL);
+	struct drm_connector *connector;
+	struct drm_device *dev = encoder->dev;
+
+	drm_modeset_lock_assert_held(&dev->mode_config.connection_mutex);
+
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_for_each_connector_iter(connector, &conn_iter) {
+		if (!connector->state)
+			continue;
+
+		if (encoder == connector->state->best_encoder) {
+			out_connector = connector;
+			break;
+		}
+	}
+	drm_connector_list_iter_end(&conn_iter);
+
+	return out_connector;
+}
+EXPORT_SYMBOL(drm_atomic_get_connector_for_encoder_locked);
+
+/**
  * drm_atomic_get_connector_for_encoder - Get connector currently assigned to an encoder
  * @encoder: The encoder to find the connector of
  * @ctx: Modeset locking context
@@ -1317,9 +1359,7 @@ struct drm_connector *
 drm_atomic_get_connector_for_encoder(const struct drm_encoder *encoder,
 				     struct drm_modeset_acquire_ctx *ctx)
 {
-	struct drm_connector_list_iter conn_iter;
-	struct drm_connector *out_connector = ERR_PTR(-EINVAL);
-	struct drm_connector *connector;
+	struct drm_connector *out_connector;
 	struct drm_device *dev = encoder->dev;
 	int ret;
 
@@ -1327,17 +1367,8 @@ drm_atomic_get_connector_for_encoder(const struct drm_encoder *encoder,
 	if (ret)
 		return ERR_PTR(ret);
 
-	drm_connector_list_iter_begin(dev, &conn_iter);
-	drm_for_each_connector_iter(connector, &conn_iter) {
-		if (!connector->state)
-			continue;
+	out_connector = drm_atomic_get_connector_for_encoder_locked(encoder);
 
-		if (encoder == connector->state->best_encoder) {
-			out_connector = connector;
-			break;
-		}
-	}
-	drm_connector_list_iter_end(&conn_iter);
 	drm_modeset_unlock(&dev->mode_config.connection_mutex);
 
 	return out_connector;
