@@ -9,6 +9,9 @@
 #define VAR_NONE	U64_MAX
 #define NO_SYM		U32_MAX
 
+/* For each xreg a state keeps twice that many sums and ops in total, see normalize_equations() */
+#define SUMS_PER_XREG	2
+
 /* coef * var + off. A constant has no var and coef == 0. */
 struct expr {
 	s64 coef;

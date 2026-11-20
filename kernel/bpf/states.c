@@ -224,6 +224,7 @@ int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 
 		__clean_func_state(env, st->frame[i], live_regs, i);
 	}
+	bpf_equations_clean(env, st);
 	return bpf_renumber_ids(env, st);
 }
 
