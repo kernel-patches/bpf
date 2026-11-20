@@ -59,7 +59,16 @@ struct bpf_equation_env {
 	struct sym_scratch *scratch;
 	u32 *use_links;
 	u32 scratch_cap, use_link_cap, refined_cnt;
+	/* the insn that is checked and its operands */
+	s32 insn_idx;
+	struct expr operand_expr[2];
+	struct scalar operand_bounds[2];
 	bool has_expr[2], is_ptr[2], equation_added, divided;
+	/* the arguments of a call */
+	struct expr arg_expr[BPF_REG_5 + 1];
+	u8 has_arg_expr;
+	u64 fill_xreg;
+	u32 fill_bits;
 	/* the operand of a jump and its bounds, see refine_from_reg() */
 	struct expr jump_expr;
 	struct scalar jump_bounds;

@@ -2370,6 +2370,15 @@ void bpf_equation_env_free(struct bpf_verifier_env *env);
 int bpf_equations_copy(struct bpf_verifier_env *env, struct bpf_equations *dst,
 		       const struct bpf_equations *src);
 void bpf_equations_free(struct bpf_equations *eqs);
+s64 bpf_equations_max_sum(struct bpf_verifier_env *env, int regno1, int regno2);
+void bpf_equations_before_insn(struct bpf_verifier_env *env);
+int bpf_equations_after_insn(struct bpf_verifier_env *env);
+void bpf_equations_forget_xreg(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			       u64 xreg);
+void bpf_equations_spill(struct bpf_verifier_env *env, struct bpf_func_state *frame, int spi,
+			 int regno);
+void bpf_equations_fill(struct bpf_verifier_env *env, struct bpf_func_state *frame, int spi,
+			int size);
 void bpf_equations_refine_all(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int idx,
 			bool taken);

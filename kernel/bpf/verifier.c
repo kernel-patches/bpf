@@ -3746,7 +3746,9 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 		/* Mark slots affected by this stack write. */
 		for (i = 0; i < size; i++)
 			ss->slot_type[(slot - i) % BPF_REG_SIZE] = type;
+		return 0;
 	}
+	bpf_equations_spill(env, state, spi, value_regno);
 	return 0;
 }
 
@@ -4008,12 +4010,16 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 
 				/* coerce_scalar_to_size will adjust the boundaries. */
 				state->regs[dst_regno] = *reg;
+				bpf_equations_fill(env, reg_state, spi, size);
 			} else {
 				/* the low bytes are from the spill */
 				bool fill_exceeds_spill =
 					size > spill_size && !(off % BPF_REG_SIZE) &&
 					!IS_ENABLED(CONFIG_CPU_BIG_ENDIAN);
 				int spill_cnt = 0, zero_cnt = 0;
+
+				if (fill_exceeds_spill)
+					bpf_equations_fill(env, reg_state, spi, spill_size);
 
 				for (i = 0; i < size; i++) {
 					type = stype[(slot - i) % BPF_REG_SIZE];
@@ -4061,6 +4067,7 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 		} else if (dst_regno >= 0) {
 			/* restore register state from stack */
 			state->regs[dst_regno] = *reg;
+			bpf_equations_fill(env, reg_state, spi, size);
 		} else if (__is_pointer_value(env->allow_ptr_leaks, reg)) {
 			/* If dst_regno==-1, the caller is asking us whether
 			 * it is acceptable to use this value as a SCALAR_VALUE
@@ -7034,9 +7041,9 @@ static int check_stack_access_within_bounds(
 	 * Every stack access passes through here, including buffers passed to
 	 * helpers and kfuncs and accesses into a caller's frame, so check the
 	 * fastcall contract of the frame that owns the slots once for all of
-	 * them. Zero-sized accesses touch no stack and keep the rewrite enabled.
+	 * them. An empty range touches no stack and keeps the rewrite enabled.
 	 */
-	if (access_size)
+	if (min_off < max_off)
 		check_fastcall_stack_contract(env, state, env->insn_idx, min_off);
 
 	/* Note that there is no stack access with offset zero, so the needed stack
@@ -8057,6 +8064,28 @@ enum bpf_mem_size_failure {
 	BPF_MEM_SIZE_FAIL_SIZE,
 };
 
+/*
+ * The check looks at the bytes from the smallest offset to the largest offset plus the size.
+ * The largest offset and the largest size do not have to go together:
+ *	read(buf + off, 64 - off);
+ * So the result is not the size of the access. It is 0 for off = 0..64.
+ * The checked bytes of a packet pointer are relative to the pointer. It needs the largest size.
+ */
+static u32 size_at_max_offset(struct bpf_verifier_env *env, struct bpf_reg_state *mem_reg,
+			      struct bpf_reg_state *size_reg, argno_t mem_argno, argno_t size_argno)
+{
+	u32 type = base_type(mem_reg->type);
+	s64 end;
+
+	if ((type != PTR_TO_MAP_VALUE && type != PTR_TO_MEM && type != PTR_TO_STACK) ||
+	    reg_smin(mem_reg) <= -BPF_MAX_VAR_OFF || reg_smax(mem_reg) >= BPF_MAX_VAR_OFF)
+		return reg_umax(size_reg);
+	end = bpf_equations_max_sum(env, reg_from_argno(mem_argno), reg_from_argno(size_argno));
+	end = clamp(end, reg_smax(mem_reg) + (s64)reg_umin(size_reg),
+		    reg_smax(mem_reg) + (s64)reg_umax(size_reg));
+	return end - reg_smax(mem_reg);
+}
+
 /* verify arguments to helpers or kfuncs consisting of a pointer and an access
  * size.
  *
@@ -8071,6 +8100,7 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 			      enum bpf_mem_size_failure *failure)
 {
 	int err = 0;
+	u32 size;
 
 	if (failure)
 		*failure = BPF_MEM_SIZE_FAIL_NONE;
@@ -8114,11 +8144,12 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 		goto size_error;
 	}
 
+	size = size_at_max_offset(env, mem_reg, size_reg, mem_argno, size_argno);
 	if (access_type & BPF_READ)
-		err = check_helper_mem_access(env, mem_reg, mem_argno, reg_umax(size_reg),
+		err = check_helper_mem_access(env, mem_reg, mem_argno, size,
 					      BPF_READ, zero_size_allowed, meta, NULL);
 	if (!err && access_type & BPF_WRITE)
-		err = check_helper_mem_access(env, mem_reg, mem_argno, reg_umax(size_reg),
+		err = check_helper_mem_access(env, mem_reg, mem_argno, size,
 					      BPF_WRITE, zero_size_allowed, meta, NULL);
 	if (err && failure)
 		*failure = BPF_MEM_SIZE_FAIL_MEMORY;
@@ -21073,6 +21104,8 @@ static int push_unwind_exit(struct bpf_verifier_env *env)
 	__mark_reg_const_zero(&regs[BPF_REG_0]);
 	if (bpf_ret_reg_pair(env, cur_func(env)->subprogno))
 		__mark_reg_const_zero(&regs[BPF_REG_2]);
+	bpf_equations_forget_xreg(env, branch, bpf_xreg(branch->curframe, BPF_REG_0));
+	bpf_equations_forget_xreg(env, branch, bpf_xreg(branch->curframe, BPF_REG_2));
 	return 0;
 }
 
@@ -21334,8 +21367,9 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		if (err)
 			return err;
 
+		bpf_equations_before_insn(env);
 		fixups = insn_aux->fixups;
-		err = do_check_insn(env, &do_print_state);
+		err = do_check_insn(env, &do_print_state) ?: bpf_equations_after_insn(env);
 		if (nospec_ends_path(env, state, err)) {
 			/* Prevent this speculative path from ever reaching the
 			 * insn that would have been unsafe to execute.
