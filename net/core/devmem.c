@@ -211,7 +211,7 @@ void net_devmem_unbind_dmabuf(struct net_devmem_dmabuf_binding *binding)
 	xa_clear_mark(&net_devmem_dmabuf_bindings, binding->id,
 		      NET_DEVMEM_BINDING_LIVE);
 
-	/* Ensure no tx net_devmem_lookup_dmabuf() are in flight after the
+	/* Ensure no tx net_devmem_get_binding() are in flight after the
 	 * mark is cleared.
 	 */
 	synchronize_net();
@@ -521,23 +521,6 @@ err_put_dmabuf:
 	return ERR_PTR(err);
 }
 
-struct net_devmem_dmabuf_binding *net_devmem_lookup_dmabuf(u32 id)
-{
-	struct net_devmem_dmabuf_binding *binding;
-	unsigned long xa_idx = id;
-
-	rcu_read_lock();
-	binding = xa_find(&net_devmem_dmabuf_bindings, &xa_idx, id,
-			  NET_DEVMEM_BINDING_LIVE);
-	if (binding) {
-		if (!net_devmem_dmabuf_binding_get(binding))
-			binding = NULL;
-	}
-	rcu_read_unlock();
-
-	return binding;
-}
-
 void net_devmem_net_iov_inc_ref(struct net_iov *niov)
 {
 	net_devmem_dmabuf_binding_get(net_devmem_iov_binding(niov));
@@ -552,19 +535,21 @@ struct net_devmem_dmabuf_binding *net_devmem_get_binding(struct sock *sk,
 							 unsigned int dmabuf_id)
 {
 	struct net_devmem_dmabuf_binding *binding;
+	unsigned long xa_idx = dmabuf_id;
 	struct net_device *dst_dev;
 	struct dst_entry *dst;
-	int err = 0;
+	int err;
 
-	binding = net_devmem_lookup_dmabuf(dmabuf_id);
+	rcu_read_lock();
+	binding = xa_find(&net_devmem_dmabuf_bindings, &xa_idx, dmabuf_id,
+			  NET_DEVMEM_BINDING_LIVE);
 	if (!binding || !binding->tx_vec ||
 	    !net_eq(sock_net(sk), read_pnet(&binding->net)) ||
 	    !uid_eq(sk_uid(sk), binding->uid)) {
 		err = -EINVAL;
-		goto out_err;
+		goto out_unlock;
 	}
 
-	rcu_read_lock();
 	dst = __sk_dst_get(sk);
 	/* If dst is NULL (route expired), attempt to rebuild it. */
 	if (unlikely(!dst)) {
@@ -590,15 +575,16 @@ struct net_devmem_dmabuf_binding *net_devmem_get_binding(struct sock *sk,
 		goto out_unlock;
 	}
 
+	if (!net_devmem_dmabuf_binding_get(binding)) {
+		err = -EINVAL;
+		goto out_unlock;
+	}
+
 	rcu_read_unlock();
 	return binding;
 
 out_unlock:
 	rcu_read_unlock();
-out_err:
-	if (binding)
-		net_devmem_dmabuf_binding_put(binding);
-
 	return ERR_PTR(err);
 }
 

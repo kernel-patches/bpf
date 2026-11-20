@@ -98,7 +98,6 @@ net_devmem_bind_dmabuf(struct net_device *map_dev,
 		       struct netdev_nl_sock *priv,
 		       const struct sock *nl_sk,
 		       struct netlink_ext_ack *extack);
-struct net_devmem_dmabuf_binding *net_devmem_lookup_dmabuf(u32 id);
 struct net_device *
 net_devmem_lock_dev(struct net_device **dev_ptr,
 		    netdevice_tracker *dev_tracker);
@@ -182,11 +181,6 @@ net_devmem_bind_dmabuf(struct net_device *map_dev,
 		       struct netlink_ext_ack *extack)
 {
 	return ERR_PTR(-EOPNOTSUPP);
-}
-
-static inline struct net_devmem_dmabuf_binding *net_devmem_lookup_dmabuf(u32 id)
-{
-	return NULL;
 }
 
 static inline struct net_device *
