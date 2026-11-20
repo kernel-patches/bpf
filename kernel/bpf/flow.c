@@ -308,6 +308,8 @@ int bpf_check_limits(struct bpf_verifier_env *env)
 	env->aborted |= bpf_must_abort();
 	if (env->aborted)
 		return -EINTR;
+	if (env->no_mem)
+		return -ENOMEM;
 	if (env->cost <= min(env->max_cost, env->pass_max_cost) && env->mem <= env->max_mem &&
 	    !env->over_limit)
 		return 0;

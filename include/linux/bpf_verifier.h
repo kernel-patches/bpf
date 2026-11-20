@@ -115,6 +115,7 @@ struct bpf_reg_state {
 	 * the dynptr to determine proper reference freeing.
 	 * Similarly to dynptrs, we use ID to track "belonging" of a reference
 	 * to a specific instance of bpf_iter.
+	 * A scalar has no id, see struct bpf_equations.
 	 */
 	u32 id;
 	union {
@@ -422,6 +423,13 @@ static inline u32 bpf_xreg_to_spi(u32 xregno)
 	return xregno - MAX_BPF_EXT_REG;
 }
 
+/* The trip index of a loop is an xreg too. The loops of a frame come after its slots. */
+#define BPF_XREG_TRIP MAX_BPF_XREG
+static inline u64 bpf_xreg(u32 frameno, u32 xregno)
+{
+	return (u64)frameno << 32 | xregno;
+}
+
 /* Where may_goto that the verifier adds goes, see check_loop_guard() */
 enum bpf_guard_edge {
 	BPF_NO_GUARD_EDGE,
@@ -461,6 +469,8 @@ struct loop_stack_entry {
 	u32 entry_id;
 	u32 held_cnt;		/* when the state entered the loop */
 	bool peeled;		/* in a peeled trip, not in the leftover */
+	/* an xreg: how many times the program came back to the header */
+	struct scalar trip_index;
 };
 
 /* The state is in a walk on patience, which may not get to the end of the loop */
@@ -577,6 +587,7 @@ struct bpf_equations {
 };
 
 struct bpf_verifier_state {
+	struct bpf_equations equations;
 	/* call stack tracking */
 	struct bpf_func_state *frame[MAX_CALL_FRAMES];
 	/* Acquired reference states */
@@ -1319,6 +1330,7 @@ struct bpf_verifier_env {
 	u64 max_cost, max_mem;
 	u64 pass_max_cost;		/* see bpf_undo_precision() */
 	bool aborted;			/* a thaw does not take it back */
+	bool no_mem;			/* a table cannot grow, see bpf_check_limits() */
 	/* What a pass writes. Each pass starts from the snapshot. */
 	struct_group_tagged(bpf_env_per_pass, per_pass,
 	int err;			/* the first error */
@@ -1462,6 +1474,7 @@ struct bpf_verifier_env {
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
 	int *idoms;
+	struct bpf_equation_env *eq_env;
 	struct bpf_flow *flow;
 };
 
@@ -2169,6 +2182,7 @@ static inline bool bpf_is_kfunc_sleepable(struct bpf_call_arg_meta *meta)
 	return meta->kfunc_flags & KF_SLEEPABLE;
 }
 bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta);
+bool bpf_grow_array(struct bpf_verifier_env *env, void *array, u32 *cap, u32 cnt, size_t size);
 struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem);
 int bpf_copy_insn_array_uniq(struct bpf_map *map, u32 start, u32 end, u32 *off);
 bool bpf_insn_is_cond_jump(u8 code);
@@ -2350,6 +2364,14 @@ int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
 
+/* equation.c */
+int bpf_equation_env_init(struct bpf_verifier_env *env);
+void bpf_equation_env_free(struct bpf_verifier_env *env);
+int bpf_equations_copy(struct bpf_verifier_env *env, struct bpf_equations *dst,
+		       const struct bpf_equations *src);
+void bpf_equations_free(struct bpf_equations *eqs);
+void bpf_equations_print(struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
+u32 bpf_equations_bytes(const struct bpf_equations *eqs);
 void scalar_bounds_sync(struct scalar *s);
 bool scalar_subsumes(const struct scalar *old, const struct scalar *cur);
 

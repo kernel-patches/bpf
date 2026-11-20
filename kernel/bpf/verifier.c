@@ -1748,6 +1748,7 @@ void bpf_charge_state(struct bpf_verifier_env *env, struct bpf_verifier_state *s
 	u32 bytes = 2 * sizeof(*st) + ksize(st->refs), fr;
 	struct bpf_func_state *f;
 
+	bytes += bpf_equations_bytes(&st->equations);
 	for (fr = 0; fr <= st->curframe && (f = st->frame[fr]); fr++)
 		bytes += kmalloc_size_roundup(sizeof(*f)) + ksize(f->stack) +
 			 ksize(f->stack_arg_regs) + ksize(f->loop_stack);
@@ -1767,6 +1768,7 @@ void bpf_free_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 		state->frame[i] = NULL;
 	}
 	kfree(state->refs);
+	bpf_equations_free(&state->equations);
 	if (free_self)
 		kfree(state);
 }
@@ -1800,7 +1802,8 @@ int bpf_copy_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_st
 		free_func_state(dst_state->frame[i]);
 		dst_state->frame[i] = NULL;
 	}
-	err = copy_reference_state(dst_state, src);
+	err = copy_reference_state(dst_state, src) ?:
+	      bpf_equations_copy(env, &dst_state->equations, &src->equations);
 	if (err)
 		return err;
 	bpf_add_cost(env, bpf_xreg_cnt(src) + src->acquired_refs, BPF_COST_COPY);
@@ -24909,6 +24912,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (env->log.level & BPF_LOG_LEVEL2)
 		log_program(env);
 
+	ret = bpf_equation_env_init(env);
+	if (ret < 0)
+		goto skip_full_check;
+
 	ret = bpf_flow_prepare(env);
 	if (ret < 0)
 		goto skip_full_check;
@@ -25050,6 +25057,7 @@ err_free_env:
 	kvfree(env->used_index.slots);
 	kvfree(env->kfunc_index.slots);
 	kvfree(env->insn_array_maps);
+	bpf_equation_env_free(env);
 	bpf_flow_free(env);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.postorder_nums);
