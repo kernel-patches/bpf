@@ -5485,6 +5485,7 @@ static bool bpf_prog_reenters_datapath(const struct bpf_prog *prog);
  */
 static int check_recursion(struct bpf_verifier_env *env, struct bpf_call_graph *cg)
 {
+	bool reenters = bpf_prog_reenters_datapath(env->prog);
 	int j, s;
 
 	for_each_marked_subprog(cg, s, CG_LIVE) {
@@ -5506,7 +5507,7 @@ static int check_recursion(struct bpf_verifier_env *env, struct bpf_call_graph *
 				return -EINVAL;
 			}
 			/* It runs on top of its own frames. The half of the stack is not enough. */
-			if (bpf_prog_reenters_datapath(env->prog)) {
+			if (reenters) {
 				verbose(env, "recursive %s() in a program that calls bpf_clone_redirect()\n",
 					bpf_subprog_name(env, s));
 				return -EINVAL;
