@@ -57,6 +57,13 @@ void gfs2_pin(struct gfs2_sbd *sdp, struct buffer_head *bh)
 	spin_lock(&sdp->sd_ail_lock);
 	if (bd->bd_tr)
 		list_move(&bd->bd_ail_st_list, &bd->bd_tr->tr_ail2_list);
+	else {
+		struct gfs2_glock *gl = bd->bd_gl;
+
+		/* bd is attached to bh, so it cannot be a revoke. */
+		if (atomic_inc_return(&gl->gl_bufdata_count) == 1)
+			gfs2_glock_hold(gl);
+	}
 	spin_unlock(&sdp->sd_ail_lock);
 	get_bh(bh);
 	atomic_inc(&sdp->sd_log_pinned);
@@ -725,15 +732,12 @@ static void buf_lo_before_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 
 static void buf_lo_after_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 {
-	struct list_head *head;
-	struct gfs2_bufdata *bd;
+	struct gfs2_bufdata *bd, *tmp;
 
 	if (tr == NULL)
 		return;
 
-	head = &tr->tr_buf;
-	while (!list_empty(head)) {
-		bd = list_first_entry(head, struct gfs2_bufdata, bd_list);
+	list_for_each_entry_safe(bd, tmp, &tr->tr_buf, bd_list) {
 		list_del_init(&bd->bd_list);
 		gfs2_unpin(sdp, bd->bd_bh, tr);
 	}
@@ -851,7 +855,6 @@ static void revoke_lo_before_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 {
 	struct gfs2_meta_header *mh;
 	unsigned int offset;
-	struct list_head *head = &sdp->sd_log_revokes;
 	struct gfs2_bufdata *bd;
 	struct page *page;
 	unsigned int length;
@@ -864,7 +867,7 @@ static void revoke_lo_before_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 	page = gfs2_get_log_desc(sdp, GFS2_LOG_DESC_REVOKE, length, sdp->sd_log_num_revoke);
 	offset = sizeof(struct gfs2_log_descriptor);
 
-	list_for_each_entry(bd, head, bd_list) {
+	list_for_each_entry(bd, &sdp->sd_log_revokes, bd_list) {
 		sdp->sd_log_num_revoke--;
 
 		if (offset + sizeof(u64) > sdp->sd_sb.sb_bsize) {
@@ -888,17 +891,10 @@ static void revoke_lo_before_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 
 void gfs2_drain_revokes(struct gfs2_sbd *sdp)
 {
-	struct list_head *head = &sdp->sd_log_revokes;
-	struct gfs2_bufdata *bd;
-	struct gfs2_glock *gl;
+	struct gfs2_bufdata *bd, *tmp;
 
-	while (!list_empty(head)) {
-		bd = list_first_entry(head, struct gfs2_bufdata, bd_list);
-		list_del_init(&bd->bd_list);
-		gl = bd->bd_gl;
-		gfs2_glock_remove_revoke(gl);
-		kmem_cache_free(gfs2_bufdata_cachep, bd);
-	}
+	list_for_each_entry_safe(bd, tmp, &sdp->sd_log_revokes, bd_list)
+		gfs2_glock_remove_revoke(bd);
 }
 
 static void revoke_lo_after_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
@@ -1069,15 +1065,12 @@ static void databuf_lo_after_scan(struct gfs2_jdesc *jd, int error, int pass)
 
 static void databuf_lo_after_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 {
-	struct list_head *head;
-	struct gfs2_bufdata *bd;
+	struct gfs2_bufdata *bd, *tmp;
 
 	if (tr == NULL)
 		return;
 
-	head = &tr->tr_databuf;
-	while (!list_empty(head)) {
-		bd = list_first_entry(head, struct gfs2_bufdata, bd_list);
+	list_for_each_entry_safe(bd, tmp, &tr->tr_databuf, bd_list) {
 		list_del_init(&bd->bd_list);
 		gfs2_unpin(sdp, bd->bd_bh, tr);
 	}

@@ -59,14 +59,13 @@ static void __gfs2_ail_flush(struct gfs2_glock *gl, bool fsync,
 			     unsigned int nr_revokes)
 {
 	struct gfs2_sbd *sdp = glock_sbd(gl);
-	struct list_head *head = &gl->gl_ail_list;
 	struct gfs2_bufdata *bd, *tmp;
 	struct buffer_head *bh;
 	const unsigned long b_state = (1UL << BH_Dirty)|(1UL << BH_Pinned)|(1UL << BH_Lock);
 
 	spin_lock(&sdp->sd_log_lock);
 	spin_lock(&sdp->sd_ail_lock);
-	list_for_each_entry_safe_reverse(bd, tmp, head, bd_ail_gl_list) {
+	list_for_each_entry_safe_reverse(bd, tmp, &gl->gl_ail_list, bd_ail_gl_list) {
 		if (nr_revokes == 0)
 			break;
 		bh = bd->bd_bh;
