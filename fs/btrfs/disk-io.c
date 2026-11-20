@@ -4982,6 +4982,20 @@ void btrfs_cleanup_one_transaction(struct btrfs_transaction *cur_trans)
 		btrfs_qgroup_clean_swapped_blocks(root);
 	}
 
+	spin_lock(&cur_trans->dropped_roots_lock);
+	while (!list_empty(&cur_trans->dropped_roots)) {
+		struct btrfs_root *root;
+
+		root = list_first_entry(&cur_trans->dropped_roots,
+					struct btrfs_root, root_list);
+		list_del_init(&root->root_list);
+		spin_unlock(&cur_trans->dropped_roots_lock);
+		btrfs_free_log(NULL, root);
+		btrfs_drop_and_free_fs_root(fs_info, root);
+		spin_lock(&cur_trans->dropped_roots_lock);
+	}
+	spin_unlock(&cur_trans->dropped_roots_lock);
+
 	btrfs_destroy_delayed_refs(cur_trans);
 
 	cur_trans->state = TRANS_STATE_COMMIT_START;

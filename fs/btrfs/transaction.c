@@ -201,6 +201,7 @@ void btrfs_put_transaction(struct btrfs_transaction *transaction)
 			btrfs_put_block_group(cache);
 		}
 		WARN_ON(!list_empty(&transaction->dev_update_list));
+		WARN_ON(!list_empty(&transaction->dropped_roots));
 		kfree(transaction);
 	}
 }
