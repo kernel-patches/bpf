@@ -110,4 +110,45 @@ l0_%=:	r0 = 0;						\
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("and that clears no bit")
+__success __log_level(2)
+__msg("(54) w0 &= 255 {{.*}}R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=16")
+__naked void and_clears_no_bit(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r0 &= 15;					\
+	r0 += 1;					\
+	w0 &= 255;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("and that clears no bit of the low half")
+__success __retval(0)
+__naked void and_clears_no_low_bit(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	if w0 < 1 goto l0_%=;				\
+	if w0 > 16 goto l0_%=;				\
+	w0 &= 255;					\
+	if w0 == 0 goto l1_%=;				\
+	call %[bpf_ktime_get_ns];			\
+	if w0 < 1 goto l0_%=;				\
+	if w0 > 16 goto l0_%=;				\
+	r0 &= 255;					\
+	if r0 != 0 goto l0_%=;				\
+l1_%=:	r0 /= 0;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";

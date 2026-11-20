@@ -545,4 +545,57 @@ l_out_%=:						\
 	: __clobber_all);
 }
 
+/*
+ * Three states join: r6 is a multiple of 3 and has no bounds. r7 = r6 + 1 is not a multiple of 3.
+ * r7 <= 10 leaves r6 = 0, 3, 6, 9.
+ */
+SEC("socket")
+__failure __log_level(2)
+__msg("(bf) r7 = r6 {{.*}}R6=scalar(step=0+3)")
+__msg("if r7 > 0xa {{.*}}R6=scalar(smin=smin32=0,smax=umax=smax32=umax32=9,")
+__msg("div by zero")
+__naked void step_with_no_bounds(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r8 = r0;					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r6 <<= 32;					\
+	r6 s>>= 2;					\
+	r1 = 0x2800000000000000 ll;			\
+	r2 = -0x2800000000000000 ll;			\
+	if r6 s> r1 goto l_out_%=;			\
+	if r6 s< r2 goto l_out_%=;			\
+	r6 |= r8;					\
+	if r6 s> r1 goto l_out_%=;			\
+	if r6 s< r2 goto l_out_%=;			\
+	if r8 < 100 goto l_all_%=;			\
+	r1 s>>= 1;					\
+	r2 s>>= 1;					\
+	if r6 s> r1 goto l_high_%=;			\
+	if r6 s> r2 goto l_out_%=;			\
+	r6 *= 3;					\
+	goto l_ends_%=;					\
+l_high_%=:						\
+	r6 *= 3;					\
+l_ends_%=:						\
+	r0 = 0;						\
+	goto l_join_%=;					\
+l_all_%=:						\
+	r6 *= 3;					\
+l_join_%=:						\
+	r7 = r6;					\
+	r7 += 1;					\
+	if r7 > 10 goto l_out_%=;			\
+	if r6 != 9 goto l_out_%=;			\
+	r0 /= 0;					\
+l_out_%=:						\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";

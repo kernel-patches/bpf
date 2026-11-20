@@ -1486,6 +1486,32 @@ FIRST_HALF(spill_of_64_bits_vs_spill_of_32_bits,
 	   "r6 = r0; r6 <<= 32; if r0 > 5 goto 1f; *(u32 *)(r10 - 8) = r6; goto 2f;"
 	   "1: r6 = 0x7ffffff000000000 ll; *(u64 *)(r10 - 8) = r6; 2:")
 
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+/* The low 16 bits of the fill are from the spill */
+#define FILL_32_SPILL_16(mask)							\
+	asm volatile (								\
+	"call %[bpf_ktime_get_ns];"						\
+	"*(u64 *)(r10 - 8) = r0; r1 = 5; *(u16 *)(r10 - 8) = r1;"		\
+	"r1 = *(u32 *)(r10 - 8); r1 &= " #mask ";"				\
+	"if r1 == 5 goto 1f; r0 /= 0;"						\
+	"1: r0 = 0; exit;"							\
+	:: __imm(bpf_ktime_get_ns) : __clobber_all)
+
+SEC("raw_tp")
+__success
+__naked void fill_32_bits_spill_16_bits(void)
+{
+	FILL_32_SPILL_16(0xffff);
+}
+
+SEC("raw_tp")
+__failure __msg("div by zero")
+__naked void fill_32_bits_spill_16_bits_bad(void)
+{
+	FILL_32_SPILL_16(0x1ffff);
+}
+#endif
+
 /* check valid spill/fill, ptr to tp buffer */
 SEC("raw_tracepoint.w")
 __success

@@ -1092,6 +1092,26 @@ __naked void pkt_add_negative_above(void)
 	PKT_ADD_NEGATIVE(50);
 }
 
+#define NOT_CHECKED __failure __msg("invalid access to packet")
+#define PKT_MOVES(name, verdict, insns)					\
+SEC("tc")								\
+verdict									\
+__naked void name(void)							\
+{									\
+	PKT_54_BYTES("if r4 > 8 goto l0_%=;"				\
+		     "r4 += -4;"					\
+		     insns						\
+		     "r0 = *(u8*)(r2 + 0);");				\
+}
+
+/* r4 is -4..4. The largest offset is 53 in the good programs and 54 in the bad ones. */
+PKT_MOVES(pkt_sub_negative, __success, "r2 += 49; r2 -= r4;")
+PKT_MOVES(pkt_sub_negative_above, NOT_CHECKED, "r2 += 50; r2 -= r4;")
+PKT_MOVES(pkt_comes_back, __success, "r2 += 60; r2 += r4; r2 += -11;")
+PKT_MOVES(pkt_comes_back_above, NOT_CHECKED, "r2 += 60; r2 += r4; r2 += -10;")
+PKT_MOVES(pkt_comes_back_from_far, __success, "r2 += 100000; r2 -= 99947;")
+PKT_MOVES(pkt_comes_back_from_far_above, NOT_CHECKED, "r2 += 100000; r2 -= 99946;")
+
 /* The byte is in the packet, but a range that umax gets to is not kept */
 SEC("tc")
 __description("direct packet access: checked pointer plus unknown that can get to the range")
@@ -1216,6 +1236,84 @@ l0_%=:	r0 = 0;						\
 	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)),
 	  __imm_const(__sk_buff_mark, offsetof(struct __sk_buff, mark))
 	: __clobber_all);
+}
+
+/* r2 is in front of the packet. Its smax goes from S64_MAX to @max. The division is reached. */
+#define PKT_SMAX_DROPS(max, op)					\
+	asm volatile ("							\
+	r6 = r1;							\
+	call %[bpf_ktime_get_ns];					\
+	r2 = *(u32*)(r6 + %[__sk_buff_data]);				\
+	r3 = *(u32*)(r6 + %[__sk_buff_data_end]);			\
+	if r0 s< -20 goto l0_%=;					\
+	r2 += r0;							\
+	if r0 s> " #max " goto l0_%=;					\
+	if r2 " #op " r3 goto l0_%=;					\
+	r0 /= 0;							\
+l0_%=:	r0 = 0;								\
+	exit;								\
+"	:								\
+	: __imm(bpf_ktime_get_ns),					\
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),	\
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)) \
+	: __clobber_all)
+
+SEC("tc")
+__description("direct packet access: a jump refines the pointer, it is not beyond the end")
+__failure __msg("div by zero")
+__naked void pkt_refined_is_not_beyond_end(void)
+{
+	PKT_SMAX_DROPS(-3, >);
+}
+
+SEC("tc")
+__description("direct packet access: a jump refines the pointer, it is not at the end")
+__failure __msg("div by zero")
+__naked void pkt_refined_is_not_at_end(void)
+{
+	PKT_SMAX_DROPS(-2, >=);
+}
+
+/*
+ * r4 is 20, 24, 28 or 48.., its range is 20..40. r2 = pkt + r4 and r5 = r2 - 16 share an id.
+ * The known bits of r5 tell 4..12. The check of r2 gives r=40 to both: 16 bytes from r5.
+ */
+#define PKT_TWO_OF_AN_ID(off)						\
+	asm volatile ("							\
+	r2 = *(u32*)(r1 + %[__sk_buff_data]);				\
+	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);			\
+	r4 = *(u32*)(r1 + %[__sk_buff_mark]);				\
+	r4 &= 0x2c;							\
+	r4 |= 0x10;							\
+	r2 += r4;							\
+	r5 = r2;							\
+	r5 += -16;							\
+	if r4 < 20 goto l0_%=;						\
+	if r4 > 40 goto l0_%=;						\
+	if r2 > r3 goto l0_%=;						\
+	r0 = *(u8*)(r5 + " #off ");					\
+l0_%=:	r0 = 0;								\
+	exit;								\
+"	:								\
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),	\
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)), \
+	  __imm_const(__sk_buff_mark, offsetof(struct __sk_buff, mark))	\
+	: __clobber_all)
+
+SEC("tc")
+__description("direct packet access: a jump refines two pointers of an id, last byte")
+__success __retval(0)
+__naked void pkt_refined_id_last_byte(void)
+{
+	PKT_TWO_OF_AN_ID(15);
+}
+
+SEC("tc")
+__description("direct packet access: a jump refines two pointers of an id, after the end")
+__failure __msg("invalid access to packet, off=40 size=1, R5(id={{[0-9]+}},off=40,r=40)")
+__naked void pkt_refined_id_after_end(void)
+{
+	PKT_TWO_OF_AN_ID(16);
 }
 
 char _license[] SEC("license") = "GPL";
