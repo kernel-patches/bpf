@@ -22,13 +22,15 @@ struct file_ioctl_args {
 } __bpf_func_args;
 
 __u64 s_arg, s_ino;
-int s_ret = -1, s_ret_exists = -1, s_added_exists = -1, s_calls;
+int s_ret = -1, s_ret_exists = -1, s_added_exists = -1, s_calls, s_supported = -1;
 
 SEC("lsm/file_ioctl")
 int ioctl_struct(struct file_ioctl_args *args)
 {
 	if ((bpf_get_current_pid_tgid() >> 32) != monitored_pid)
 		return 0;
+
+	s_supported = bpf_func_args_supported(args);
 
 	s_calls++;
 	s_arg = args->arg;
@@ -88,7 +90,7 @@ int BPF_PROG_CORE(ioctl_macro_variants, struct vfs_file *, file___new,
 }
 
 __u64 m_arg, m_cmd, m_added = -1;
-int m_ret = -1, m_ret_exists = -1, m_added_exists = -1, m_calls;
+int m_ret = -1, m_ret_exists = -1, m_added_exists = -1, m_calls, m_supported = -1;
 
 SEC("lsm/file_ioctl")
 int BPF_PROG_CORE(ioctl_macro, unsigned long, arg, __bpf_func_ret int, ret,
@@ -96,6 +98,8 @@ int BPF_PROG_CORE(ioctl_macro, unsigned long, arg, __bpf_func_ret int, ret,
 {
 	if ((bpf_get_current_pid_tgid() >> 32) != monitored_pid)
 		return 0;
+
+	m_supported = bpf_func_args_supported(ctx);
 
 	m_calls++;
 	m_arg = arg;
