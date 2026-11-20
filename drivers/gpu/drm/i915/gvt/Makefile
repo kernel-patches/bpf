@@ -14,7 +14,7 @@ kvmgt-$(CONFIG_DRM_I915_GVT) += \
 	gvt/gtt.o \
 	gvt/handlers.o \
 	gvt/interrupt.o \
-	gvt/kvmgt.o \
+	gvt/kvmgt_module.o \
 	gvt/mmio.o \
 	gvt/mmio_context.o \
 	gvt/opregion.o \
