@@ -3776,6 +3776,8 @@ static void em28xx_unregister_media_device(struct em28xx *dev)
 	if (dev->media_dev) {
 		media_device_unregister(dev->media_dev);
 		media_device_cleanup(dev->media_dev);
+		if (dev->v4l2)
+			dev->v4l2->v4l2_dev.mdev = NULL;
 		kfree(dev->media_dev);
 		dev->media_dev = NULL;
 	}
@@ -3845,6 +3847,7 @@ static int em28xx_init_dev(struct em28xx *dev, struct usb_device *udev,
 	const char *chip_name = NULL;
 
 	dev->intf = intf;
+	INIT_LIST_HEAD(&dev->devlist);
 	mutex_init(&dev->ctrl_urb_lock);
 	spin_lock_init(&dev->slock);
 

@@ -54,7 +54,7 @@ static struct rc_map_table purpletv[] = {
 static struct rc_map_list purpletv_map = {
 	.map = {
 		.scan     = purpletv,
-		.size     = ARRAY_SIZE(purpletv),
+		.entries  = ARRAY_SIZE(purpletv),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_PURPLETV,
 	}

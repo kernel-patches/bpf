@@ -510,7 +510,7 @@ static int pvr2_query_ext_ctrl(struct file *file, void *priv,
 
 	if (vc->id & V4L2_CTRL_FLAG_NEXT_CTRL) {
 		cptr = pvr2_hdw_get_ctrl_nextv4l(
-				hdw, (vc->id & ~V4L2_CTRL_FLAG_NEXT_CTRL));
+				hdw, vc->id & V4L2_CTRL_ID_MASK);
 		if (cptr)
 			vc->id = pvr2_ctrl_get_v4lid(cptr);
 	} else {

@@ -496,6 +496,7 @@ void altera_ci_release(void *dev, int ci_nr)
 
 			ci_dbg_print("%s: Actually removing\n", __func__);
 
+			cancel_work_sync(&temp_int->internal->work);
 			remove_inode(temp_int->internal);
 			kfree(state->internal);
 		}

@@ -52,7 +52,7 @@ static struct rc_map_table khamsin[] = {
 static struct rc_map_list khamsin_map = {
 	.map = {
 		.scan     = khamsin,
-		.size     = ARRAY_SIZE(khamsin),
+		.entries  = ARRAY_SIZE(khamsin),
 		.rc_proto = RC_PROTO_NECX,
 		.name     = RC_MAP_KHAMSIN,
 	}

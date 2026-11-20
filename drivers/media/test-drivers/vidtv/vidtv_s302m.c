@@ -176,7 +176,7 @@ static void vidtv_s302m_access_unit_destroy(struct vidtv_encoder *e)
 	e->access_units = NULL;
 }
 
-static void vidtv_s302m_alloc_au(struct vidtv_encoder *e)
+static int vidtv_s302m_alloc_au(struct vidtv_encoder *e)
 {
 	struct vidtv_access_unit *sync_au = NULL;
 	struct vidtv_access_unit *temp = NULL;
@@ -186,16 +186,25 @@ static void vidtv_s302m_alloc_au(struct vidtv_encoder *e)
 
 		while (sync_au) {
 			temp = vidtv_s302m_access_unit_init(e->access_units);
+			if (!temp) {
+				vidtv_s302m_access_unit_destroy(e);
+				return -ENOMEM;
+			}
+
 			if (!e->access_units)
 				e->access_units = temp;
 
 			sync_au = sync_au->next;
 		}
 
-		return;
+		return 0;
 	}
 
 	e->access_units = vidtv_s302m_access_unit_init(NULL);
+	if (!e->access_units)
+		return -ENOMEM;
+
+	return 0;
 }
 
 static void
@@ -405,7 +414,8 @@ static void *vidtv_s302m_encode(struct vidtv_encoder *e)
 	 */
 
 	vidtv_s302m_access_unit_destroy(e);
-	vidtv_s302m_alloc_au(e);
+	if (vidtv_s302m_alloc_au(e))
+		return NULL;
 
 	if (e->sync && e->sync->is_video_encoder) {
 		vidtv_s302m_compute_sample_count_from_video(e);

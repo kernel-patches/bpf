@@ -51,6 +51,12 @@ static void end_fw_load(struct i2c_client *client)
 #define CX2388x_FIRMWARE "v4l-cx23885-avcore-01.fw"
 #define CX231xx_FIRMWARE "v4l-cx231xx-avcore-01.fw"
 #define CX25840_FIRMWARE "v4l-cx25840.fw"
+/*
+ * Optional audio firmware for boards whose FM radio arrives as a 5.5 MHz
+ * sound IF (cx25840_platform_data.radio_sif_5_5mhz).  Hauppauge's HVR-1950
+ * image (Hcw73MlC.rom) decodes FM stereo there; the standard image doesn't.
+ */
+#define CX25840_FM_STEREO_FIRMWARE "v4l-cx25840-fmstereo.fw"
 
 static const char *get_fw_name(struct i2c_client *client)
 {
@@ -65,20 +71,19 @@ static const char *get_fw_name(struct i2c_client *client)
 	return CX25840_FIRMWARE;
 }
 
-static int check_fw_load(struct i2c_client *client, int size)
+static int check_fw_load(struct i2c_client *client, const char *fwname,
+			 int size)
 {
 	/* DL_ADDR_HB DL_ADDR_LB */
 	int s = cx25840_read(client, 0x801) << 8;
 	s |= cx25840_read(client, 0x800);
 
 	if (size != s) {
-		v4l_err(client, "firmware %s load failed\n",
-				get_fw_name(client));
+		v4l_err(client, "firmware %s load failed\n", fwname);
 		return -EINVAL;
 	}
 
-	v4l_info(client, "loaded %s firmware (%d bytes)\n",
-			get_fw_name(client), size);
+	v4l_info(client, "loaded %s firmware (%d bytes)\n", fwname, size);
 	return 0;
 }
 
@@ -101,6 +106,7 @@ int cx25840_loadfw(struct i2c_client *client)
 	const char *fwname = get_fw_name(client);
 	int size, retval;
 	int max_buf_size = FWSEND;
+	bool fm_stereo = false;
 	u32 gpio_oe = 0, gpio_da = 0;
 
 	if (is_cx2388x(state)) {
@@ -113,7 +119,13 @@ int cx25840_loadfw(struct i2c_client *client)
 	if (is_cx231xx(state) && max_buf_size > 16)
 		max_buf_size = 16;
 
-	if (request_firmware(&fw, fwname, FWDEV(client)) != 0) {
+	state->fm_stereo = 0;
+	if (state->radio_sif_5_5mhz && !firmware[0] &&
+	    !firmware_request_nowarn(&fw, CX25840_FM_STEREO_FIRMWARE,
+				     FWDEV(client))) {
+		fwname = CX25840_FM_STEREO_FIRMWARE;
+		fm_stereo = true;
+	} else if (request_firmware(&fw, fwname, FWDEV(client)) != 0) {
 		v4l_err(client, "unable to open firmware %s\n", fwname);
 		return -EINVAL;
 	}
@@ -152,10 +164,14 @@ int cx25840_loadfw(struct i2c_client *client)
 		cx25840_write(client, 0x164, gpio_da);
 	}
 
-	return check_fw_load(client, size);
+	retval = check_fw_load(client, fwname, size);
+	if (!retval)
+		state->fm_stereo = fm_stereo;
+	return retval;
 }
 
 MODULE_FIRMWARE(CX2388x_FIRMWARE);
 MODULE_FIRMWARE(CX231xx_FIRMWARE);
 MODULE_FIRMWARE(CX25840_FIRMWARE);
+MODULE_FIRMWARE(CX25840_FM_STEREO_FIRMWARE);
 

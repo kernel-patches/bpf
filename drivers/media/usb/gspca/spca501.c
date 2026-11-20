@@ -187,19 +187,19 @@ static const __u16 spca501_open_data[][3] = {
 };
 
 /*
-   The SPCAxxx docs from Sunplus document these values
-   in tables, one table per register number.  In the data
-   below, dmRequest is the register number, index is the Addr,
-   and value is a combination of Bit values.
-   Bit  Value (hex)
-   0    01
-   1    02
-   2    04
-   3    08
-   4    10
-   5    20
-   6    40
-   7    80
+ * The SPCAxxx docs from Sunplus document these values
+ * in tables, one table per register number.  In the data
+ * below, dmRequest is the register number, index is the Addr,
+ * and value is a combination of Bit values.
+ * Bit  Value (hex)
+ * 0    01
+ * 1    02
+ * 2    04
+ * 3    08
+ * 4    10
+ * 5    20
+ * 6    40
+ * 7    80
  */
 
 /* Data for chip initialization (set default values) */
@@ -1876,7 +1876,8 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	mode = gspca_dev->cam.cam_mode[(int) gspca_dev->curr_mode].priv;
 
 	/* Enable ISO packet machine CTRL reg=2,
-	 * index=1 bitmask=0x2 (bit ordinal 1) */
+	 * index=1 bitmask=0x2 (bit ordinal 1)
+	 */
 	reg_write(gspca_dev, SPCA50X_REG_USB, 0x6, 0x94);
 	switch (mode) {
 	case 0: /* 640x480 */
@@ -1898,7 +1899,8 @@ static int sd_start(struct gspca_dev *gspca_dev)
 static void sd_stopN(struct gspca_dev *gspca_dev)
 {
 	/* Disable ISO packet
-	 * machine CTRL reg=2, index=1 bitmask=0x0 (bit ordinal 1) */
+	 * machine CTRL reg=2, index=1 bitmask=0x0 (bit ordinal 1)
+	 */
 	reg_write(gspca_dev, SPCA501_REG_CTLRL, 0x01, 0x00);
 }
 

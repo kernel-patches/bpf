@@ -61,7 +61,7 @@ static struct rc_map_table xbox_360[] = {
 static struct rc_map_list xbox_360_map = {
 	.map = {
 		.scan     = xbox_360,
-		.size     = ARRAY_SIZE(xbox_360),
+		.entries  = ARRAY_SIZE(xbox_360),
 		.rc_proto = RC_PROTO_RC6_MCE,
 		.name     = RC_MAP_XBOX_360,
 	}

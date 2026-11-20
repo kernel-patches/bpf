@@ -1875,11 +1875,9 @@ static int tegra_vi_probe(struct platform_device *pdev)
 	vi->soc = of_device_get_match_data(&pdev->dev);
 
 	vi->clk = devm_clk_get(&pdev->dev, NULL);
-	if (IS_ERR(vi->clk)) {
-		ret = PTR_ERR(vi->clk);
-		dev_err(&pdev->dev, "failed to get vi clock: %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(vi->clk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(vi->clk),
+				     "failed to get vi clock\n");
 
 	if (!pdev->dev.pm_domain) {
 		ret = -ENOENT;
@@ -1888,11 +1886,9 @@ static int tegra_vi_probe(struct platform_device *pdev)
 	}
 
 	ret = devm_of_platform_populate(&pdev->dev);
-	if (ret < 0) {
-		dev_err(&pdev->dev,
-			"failed to populate vi child device: %d\n", ret);
-		return ret;
-	}
+	if (ret < 0)
+		return dev_err_probe(&pdev->dev, ret,
+				     "failed to populate vi child device\n");
 
 	vi->dev = &pdev->dev;
 	vi->ops = vi->soc->ops;

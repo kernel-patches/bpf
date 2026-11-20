@@ -117,8 +117,10 @@ static const u8 spca505_open_data_ccd[][3] = {
 	/* This could be a reset */
 	{0x03, 0x00, 0x01},
 
-	/* Setup compression and image registers. 0x6 and 0x7 seem to be
-	   related to H&V hold, and are resolution mode specific */
+	/*
+	 * Setup compression and image registers. 0x6 and 0x7 seem to be
+	 * related to H&V hold, and are resolution mode specific
+	 */
 		{0x04, 0x10, 0x01},
 		/* DIFF(0x50), was (0x10) */
 	{0x04, 0x00, 0x04},
@@ -654,7 +656,8 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	reg_write(gspca_dev, 0x05, 0xc2, 0x12);
 
 	/* necessary because without it we can see stream
-	 * only once after loading module */
+	 * only once after loading module
+	 */
 	/* stopping usb registers Tomasz change */
 	reg_write(gspca_dev, 0x02, 0x00, 0x00);
 

@@ -1488,6 +1488,8 @@ static void saa7164_finidev(struct pci_dev *pci_dev)
 	/* unregister stuff */
 	free_irq(pci_dev->irq, dev);
 
+	cancel_work_sync(&dev->workcmd);
+
 	if (dev->msi) {
 		pci_disable_msi(pci_dev);
 		dev->msi = false;

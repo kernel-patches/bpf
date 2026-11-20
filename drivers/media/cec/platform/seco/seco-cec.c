@@ -768,8 +768,8 @@ static SIMPLE_DEV_PM_OPS(secocec_pm_ops, secocec_suspend, secocec_resume);
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id secocec_acpi_match[] = {
-	{"CEC00001", 0},
-	{},
+	{ .id = "CEC00001" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, secocec_acpi_match);

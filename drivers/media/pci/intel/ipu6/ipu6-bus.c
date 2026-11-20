@@ -63,8 +63,16 @@ out_err:
 	return -EBUSY;
 }
 
+/*
+ * The driverless psys device needs system sleep callbacks, or it is put in
+ * direct-complete and its runtime PM is normally still disabled when
+ * ipu6_resume() tries to runtime-resume it. These only forward to the driver,
+ * as the PM core would do without them.
+ */
 static struct dev_pm_domain ipu6_bus_pm_domain = {
 	.ops = {
+		.suspend = pm_generic_suspend,
+		.resume = pm_generic_resume,
 		.runtime_suspend = bus_pm_runtime_suspend,
 		.runtime_resume = bus_pm_runtime_resume,
 	},

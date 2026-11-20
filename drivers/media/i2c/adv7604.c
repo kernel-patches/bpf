@@ -2360,7 +2360,7 @@ static int adv76xx_set_edid(struct v4l2_subdev *sd, struct v4l2_edid *edid)
 	if (err)
 		return err;
 
-	if (!spa_loc) {
+	if (!spa_loc && edid->blocks > 1) {
 		/*
 		 * There is no SPA, so just set spa_loc to 128 and pa to whatever
 		 * data is there.
@@ -2406,8 +2406,10 @@ static int adv76xx_set_edid(struct v4l2_subdev *sd, struct v4l2_edid *edid)
 				  mask, (spa_loc & 0x100) ? mask : 0);
 	}
 
-	edid->edid[spa_loc] = state->spa_port_a[0];
-	edid->edid[spa_loc + 1] = state->spa_port_a[1];
+	if (spa_loc) {
+		edid->edid[spa_loc] = state->spa_port_a[0];
+		edid->edid[spa_loc + 1] = state->spa_port_a[1];
+	}
 
 	memcpy(state->edid.edid, edid->edid, 128 * edid->blocks);
 	state->edid.blocks = edid->blocks;

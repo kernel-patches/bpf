@@ -1280,6 +1280,56 @@ void cx25840_std_setup(struct i2c_client *client)
 
 /* ----------------------------------------------------------------------- */
 
+/* Program the audio decoder's preferred mode (0x809 [3:0]) for audmode */
+static int set_pref_mode(struct i2c_client *client, u32 audmode, bool radio)
+{
+	if (radio) {
+		/* FM radio is mono or stereo; anything but mono means stereo */
+		cx25840_and_or(client, 0x809, ~0xf,
+			       audmode == V4L2_TUNER_MODE_MONO ? 0x00 : 0x04);
+		return 0;
+	}
+
+	switch (audmode) {
+	case V4L2_TUNER_MODE_MONO:
+		/*
+		 * mono      -> mono
+		 * stereo    -> mono
+		 * bilingual -> lang1
+		 */
+		cx25840_and_or(client, 0x809, ~0xf, 0x00);
+		break;
+	case V4L2_TUNER_MODE_STEREO:
+	case V4L2_TUNER_MODE_LANG1:
+		/*
+		 * mono      -> mono
+		 * stereo    -> stereo
+		 * bilingual -> lang1
+		 */
+		cx25840_and_or(client, 0x809, ~0xf, 0x04);
+		break;
+	case V4L2_TUNER_MODE_LANG1_LANG2:
+		/*
+		 * mono      -> mono
+		 * stereo    -> stereo
+		 * bilingual -> lang1/lang2
+		 */
+		cx25840_and_or(client, 0x809, ~0xf, 0x07);
+		break;
+	case V4L2_TUNER_MODE_LANG2:
+		/*
+		 * mono      -> mono
+		 * stereo    -> stereo
+		 * bilingual -> lang2
+		 */
+		cx25840_and_or(client, 0x809, ~0xf, 0x01);
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
 static void input_change(struct i2c_client *client)
 {
 	struct cx25840_state *state = to_state(i2c_get_clientdata(client));
@@ -1302,7 +1352,27 @@ static void input_change(struct i2c_client *client)
 
 	cx25840_and_or(client, 0x810, ~0x01, 1);
 
-	if (state->radio) {
+	if (state->radio && state->radio_sif_5_5mhz && state->fm_stereo) {
+		/*
+		 * The FM stereo firmware's automatic FM radio system (0xA)
+		 * locks onto the 5.5 MHz sound IF and decodes the stereo
+		 * pilot, with fixed 75 us de-emphasis.  0x809 picks mono or
+		 * stereo.  Don't pulse the soft reset again after this: a
+		 * second restart of the audio core often leaves the stereo
+		 * decoder hissy.
+		 */
+		cx25840_write(client, 0x808, 0xfa);
+		cx25840_write(client, 0x80b, 0x00);
+		set_pref_mode(client, state->radio_audmode, true);
+	} else if (state->radio && state->radio_sif_5_5mhz) {
+		/*
+		 * Standard firmware: forced 5.5 MHz FM (A2-BG standard),
+		 * MONO1, which applies 50 us de-emphasis.  The 4.5 MHz A2-M
+		 * path (75 us) clips broadcast FM deviation.
+		 */
+		cx25840_write(client, 0x808, 0x40);
+		cx25840_write(client, 0x80b, 0x00);
+	} else if (state->radio) {
 		cx25840_write(client, 0x808, 0xf9);
 		cx25840_write(client, 0x80b, 0x00);
 	} else if (std & V4L2_STD_525_60) {
@@ -1356,6 +1426,10 @@ static void input_change(struct i2c_client *client)
 			cx25840_write(client, 0x80b, 0x10);
 		}
 	}
+
+	/* Radio mode may have left 0x809 at its FM setting: restore TV's */
+	if (!state->radio && state->radio_sif_5_5mhz)
+		set_pref_mode(client, state->audmode, false);
 
 	cx25840_and_or(client, 0x810, ~0x01, 0);
 }
@@ -2565,8 +2639,28 @@ static int cx25840_g_tuner(struct v4l2_subdev *sd, struct v4l2_tuner *vt)
 	u8 mode;
 	int val = 0;
 
-	if (state->radio)
+	if (state->radio) {
+		if (!state->radio_sif_5_5mhz)
+			return 0;
+		/*
+		 * The bridge calls this after the tuner, so that the audio
+		 * decoder has the last word on FM stereo: only the FM stereo
+		 * firmware decodes it.
+		 */
+		if (!state->fm_stereo) {
+			vt->capability &= ~V4L2_TUNER_CAP_STEREO;
+			vt->rxsubchans = V4L2_TUNER_SUB_MONO;
+			vt->audmode = V4L2_TUNER_MODE_MONO;
+			return 0;
+		}
+		vt->capability |= V4L2_TUNER_CAP_STEREO;
+		mode = cx25840_read(client, 0x804);
+		vt->rxsubchans = (mode & 0xf) == 1 ?
+			V4L2_TUNER_SUB_MONO | V4L2_TUNER_SUB_STEREO :
+			V4L2_TUNER_SUB_MONO;
+		vt->audmode = state->radio_audmode;
 		return 0;
+	}
 
 	vt->signal = vpres ? 0xffff : 0x0;
 	if (is_cx2583x(state))
@@ -2598,47 +2692,23 @@ static int cx25840_s_tuner(struct v4l2_subdev *sd, const struct v4l2_tuner *vt)
 {
 	struct cx25840_state *state = to_state(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
+	int ret;
 
-	if (state->radio || is_cx2583x(state))
+	if (is_cx2583x(state))
 		return 0;
-
-	switch (vt->audmode) {
-	case V4L2_TUNER_MODE_MONO:
-		/*
-		 * mono      -> mono
-		 * stereo    -> mono
-		 * bilingual -> lang1
-		 */
-		cx25840_and_or(client, 0x809, ~0xf, 0x00);
-		break;
-	case V4L2_TUNER_MODE_STEREO:
-	case V4L2_TUNER_MODE_LANG1:
-		/*
-		 * mono      -> mono
-		 * stereo    -> stereo
-		 * bilingual -> lang1
-		 */
-		cx25840_and_or(client, 0x809, ~0xf, 0x04);
-		break;
-	case V4L2_TUNER_MODE_LANG1_LANG2:
-		/*
-		 * mono      -> mono
-		 * stereo    -> stereo
-		 * bilingual -> lang1/lang2
-		 */
-		cx25840_and_or(client, 0x809, ~0xf, 0x07);
-		break;
-	case V4L2_TUNER_MODE_LANG2:
-		/*
-		 * mono      -> mono
-		 * stereo    -> stereo
-		 * bilingual -> lang2
-		 */
-		cx25840_and_or(client, 0x809, ~0xf, 0x01);
-		break;
-	default:
-		return -EINVAL;
+	if (state->radio) {
+		if (!(state->radio_sif_5_5mhz && state->fm_stereo))
+			return 0;
+		/* FM radio is mono or stereo; keep TV's audmode for TV */
+		state->radio_audmode = vt->audmode == V4L2_TUNER_MODE_MONO ?
+			V4L2_TUNER_MODE_MONO : V4L2_TUNER_MODE_STEREO;
+		set_pref_mode(client, state->radio_audmode, true);
+		return 0;
 	}
+
+	ret = set_pref_mode(client, vt->audmode, false);
+	if (ret)
+		return ret;
 	state->audmode = vt->audmode;
 	return 0;
 }
@@ -3905,6 +3975,7 @@ static int cx25840_probe(struct i2c_client *client)
 	state->aud_input = CX25840_AUDIO8;
 	state->audclk_freq = 48000;
 	state->audmode = V4L2_TUNER_MODE_LANG1;
+	state->radio_audmode = V4L2_TUNER_MODE_STEREO;
 	state->vbi_line_offset = 8;
 	state->id = id;
 	state->rev = device_id;
@@ -3972,6 +4043,7 @@ static int cx25840_probe(struct i2c_client *client)
 		struct cx25840_platform_data *pdata = client->dev.platform_data;
 
 		state->pvr150_workaround = pdata->pvr150_workaround;
+		state->radio_sif_5_5mhz = pdata->radio_sif_5_5mhz;
 	}
 
 	cx25840_ir_probe(sd);

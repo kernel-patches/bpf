@@ -123,6 +123,19 @@ static void cx231xx_audio_isocirq(struct urb *urb)
 			if (!length)
 				continue;
 
+			/*
+			 * snd_cx231xx_capture_open() constrains the buffer to
+			 * hold at least two packets, so this cannot happen for
+			 * a conforming device. Drop the packet rather than
+			 * overrun the single wrap below.
+			 */
+			if (unlikely(length > runtime->buffer_size)) {
+				dev_err_ratelimited(dev->dev,
+						    "audio packet of %d frames exceeds %lu-frame buffer, dropping\n",
+						    length, runtime->buffer_size);
+				continue;
+			}
+
 			oldptr = dev->adev.hwptr_done_capture;
 			if (oldptr + length >= runtime->buffer_size) {
 				unsigned int cnt;
@@ -204,7 +217,7 @@ static void cx231xx_audio_bulkirq(struct urb *urb)
 		runtime = substream->runtime;
 		stride = runtime->frame_bits >> 3;
 
-		if (1) {
+		if (urb->actual_length / stride <= runtime->buffer_size) {
 			unsigned long flags;
 			int length = urb->actual_length /
 				     stride;
@@ -423,6 +436,18 @@ static int snd_cx231xx_capture_open(struct snd_pcm_substream *substream)
 	}
 
 	runtime->hw = snd_cx231xx_hw_capture;
+
+	/*
+	 * The URB callbacks wrap the ring buffer once per packet and advance
+	 * the position by the packet, which only works when the buffer holds
+	 * more than one packet. max_pkt_size was set by the alternate setting
+	 * above, so bound the buffer by two packets here.
+	 */
+	ret = snd_pcm_hw_constraint_minmax(runtime,
+					   SNDRV_PCM_HW_PARAM_BUFFER_BYTES,
+					   2 * dev->adev.max_pkt_size, UINT_MAX);
+	if (ret < 0)
+		return ret;
 
 	mutex_lock(&dev->lock);
 	/* inform hardware to start streaming */

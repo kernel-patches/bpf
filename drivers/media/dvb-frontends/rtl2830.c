@@ -612,10 +612,7 @@ static int rtl2830_pid_filter(struct dvb_frontend *fe, u8 index, u16 pid, int on
 	if (pid > 0x1fff || index >= 32)
 		return 0;
 
-	if (onoff)
-		set_bit(index, &dev->filters);
-	else
-		clear_bit(index, &dev->filters);
+	assign_bit(index, &dev->filters, onoff);
 
 	/* enable / disable PIDs */
 	buf[0] = (dev->filters >>  0) & 0xff;

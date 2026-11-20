@@ -384,7 +384,22 @@ static int tda8295_has_signal(struct dvb_frontend *fe, u16 *signal)
 	struct tda8290_priv *priv = fe->analog_demod_priv;
 
 	unsigned char hvpll_stat = 0x26;
+	unsigned char t_if_agc_stat = 0x28;
 	unsigned char ret;
+
+	if (priv->tda8290_easy_mode == 0x80) {
+		/*
+		 * FM radio: the picture carrier PLL is off, so the H-PLL
+		 * lock bit is never set.  Use the tuner IF AGC level
+		 * instead: 0xff is maximum gain (no signal), strong local
+		 * stations read around 0x90.
+		 */
+		if (tuner_i2c_xfer_send_recv(&priv->i2c_props,
+					     &t_if_agc_stat, 1, &ret, 1) != 1)
+			return -EREMOTEIO;
+		*signal = min(0xff - ret, 0x80) * 65535 / 0x80;
+		return 0;
+	}
 
 	tuner_i2c_xfer_send_recv(&priv->i2c_props, &hvpll_stat, 1, &ret, 1);
 	*signal = (ret & 0x01) ? 65535 : 0;

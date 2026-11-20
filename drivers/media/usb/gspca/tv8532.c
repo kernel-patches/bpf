@@ -251,6 +251,16 @@ static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 	struct sd *sd = (struct sd *) gspca_dev;
 	int packet_type0, packet_type1;
 
+	/*
+	 * Both gspca_frame_add() calls below read pixfmt.width bytes from
+	 * the packet without consulting len, the last one starting at
+	 * data + width + 5.  Drop packets that are too short to hold both
+	 * lines, otherwise the device can make us read past the end of the
+	 * received URB data.
+	 */
+	if (len < 2 * gspca_dev->pixfmt.width + 5)
+		return;
+
 	packet_type0 = packet_type1 = INTER_PACKET;
 	if (gspca_dev->empty_packet) {
 		gspca_dev->empty_packet = 0;

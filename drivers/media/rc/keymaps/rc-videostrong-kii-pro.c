@@ -60,7 +60,7 @@ static struct rc_map_table kii_pro[] = {
 static struct rc_map_list kii_pro_map = {
 	.map = {
 		.scan     = kii_pro,
-		.size     = ARRAY_SIZE(kii_pro),
+		.entries  = ARRAY_SIZE(kii_pro),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_KII_PRO,
 	}

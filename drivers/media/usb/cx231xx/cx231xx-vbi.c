@@ -92,7 +92,7 @@ static inline int cx231xx_isoc_vbi_copy(struct cx231xx *dev, struct urb *urb)
 	p_buffer = urb->transfer_buffer;
 	buffer_size = urb->actual_length;
 
-	if (buffer_size > 0) {
+	if (buffer_size >= 4) {
 		bytes_parsed = 0;
 
 		if (dma_q->is_partial_line) {

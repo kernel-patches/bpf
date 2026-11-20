@@ -23,6 +23,12 @@ struct pvr2_dvb_adapter {
 	struct i2c_client	*i2c_client_demod[2];
 	struct i2c_client	*i2c_client_tuner;
 
+	/* fe[0] ops wrapped by pvr2_dvb_fe_*() */
+	int (*fe_sleep)(struct dvb_frontend *fe);
+	int (*fe_i2c_gate_ctrl)(struct dvb_frontend *fe, int enable);
+	int (*fe_tuner_sleep)(struct dvb_frontend *fe);
+	struct task_struct	*fe_lock_owner;
+
 	int			feedcount;
 	int			max_feed_count;
 

@@ -29,6 +29,10 @@
 #define IMX471_REG_FLL				CCI_REG16(0x0340)
 #define IMX471_FLL_MAX				0xffff
 
+/* H-timing internal */
+#define IMX471_REG_LINE_LENGTH_PCK		CCI_REG16(0x0342)
+#define IMX471_LLP_MAX				0xffff
+
 /* Exposure control */
 #define IMX471_REG_EXPOSURE			CCI_REG16(0x0202)
 #define IMX471_EXPOSURE_MIN			1
@@ -61,18 +65,27 @@
 
 /* default link frequency and external clock */
 #define IMX471_LINK_FREQ_DEFAULT		200000000LL
-#define IMX471_EXT_CLK				19200000
+#define IMX471_EXT_CLK				19200000LL
 
 /* PLL */
-#define IMX471_REG_VTPXCK_DIV			CCI_REG8(0x0301)
-#define IMX471_REG_VTSYCK_DIV			CCI_REG8(0x0303)
-#define IMX471_REG_PREPLLCK_VT_DIV		CCI_REG8(0x0305)
+#define IMX471_REG_VTPXCK_DIV			CCI_REG16(0x0300)
+#define IMX471_REG_VTSYCK_DIV			CCI_REG16(0x0302)
+#define IMX471_REG_PREPLLCK_VT_DIV		CCI_REG16(0x0304)
 #define IMX471_REG_PLL_VT_MPY			CCI_REG16(0x0306)
-#define IMX471_REG_OPPXCK_DIV			CCI_REG8(0x0309)
-#define IMX471_REG_OPSYCK_DIV			CCI_REG8(0x030b)
+#define IMX471_REG_OPPXCK_DIV			CCI_REG16(0x0308)
+#define IMX471_REG_OPSYCK_DIV			CCI_REG16(0x030a)
+#define IMX471_REG_OP_PREPLLCK_DIV		CCI_REG16(0x030c)
+#define IMX471_REG_OP_MPY			CCI_REG16(0x030e)
 #define IMX471_REG_PLL_MULT_DRIV		CCI_REG8(0x0310)
 #define IMX471_PLL_SINGLE			0
 #define IMX471_PLL_DUAL				1
+#define IMX471_VTPXCK_DIV			6
+#define IMX471_VTSYCK_DIV			2
+#define IMX471_PREPLLCK_VT_DIV			2
+#define IMX471_PLL_VT_MPY			121
+#define IMX471_OPSYCK_DIV			1
+#define IMX471_PLL_OP_MPY			83
+#define IMX471_PREPLLCK_OP_DIV			2
 
 /* IMX471 native and active pixel array size */
 #define IMX471_NATIVE_WIDTH			4672
@@ -232,14 +245,13 @@ static const struct cci_reg_sequence mode_1928x1088_regs[] = {
 	{ IMX471_REG_DIG_CROP_HEIGHT, 1088 },
 	{ IMX471_REG_X_OUTPUT_SIZE, 1928 },
 	{ IMX471_REG_Y_OUTPUT_SIZE, 1088 },
-	{ IMX471_REG_VTPXCK_DIV, 0x06 },
-	{ IMX471_REG_VTSYCK_DIV, 0x02 },
-	{ IMX471_REG_PREPLLCK_VT_DIV, 0x02 },
-	{ IMX471_REG_PLL_VT_MPY, 0x0079 },
-	{ IMX471_REG_OPSYCK_DIV, 0x01 },
-	{ CCI_REG8(0x030d), 0x02 },
-	{ CCI_REG8(0x030e), 0x00 },
-	{ CCI_REG8(0x030f), 0x53 },
+	{ IMX471_REG_VTPXCK_DIV, IMX471_VTPXCK_DIV },
+	{ IMX471_REG_VTSYCK_DIV, IMX471_VTSYCK_DIV },
+	{ IMX471_REG_PREPLLCK_VT_DIV, IMX471_PREPLLCK_VT_DIV },
+	{ IMX471_REG_PLL_VT_MPY, IMX471_PLL_VT_MPY },
+	{ IMX471_REG_OPSYCK_DIV, IMX471_OPSYCK_DIV },
+	{ IMX471_REG_OP_PREPLLCK_DIV, IMX471_PREPLLCK_OP_DIV },
+	{ IMX471_REG_OP_MPY, IMX471_PLL_OP_MPY },
 	{ IMX471_REG_PLL_MULT_DRIV, IMX471_PLL_DUAL },
 	{ CCI_REG8(0x3f4c), 0x81 },
 	{ CCI_REG8(0x3f4d), 0x81 },
@@ -282,7 +294,7 @@ static const struct imx471_mode imx471_modes[] = {
 		.height = 1088,
 		.fll_def = 1308,
 		.fll_min = 1308,
-		.llp = 2328,
+		.llp = 2560,
 		.default_mode_regs = mode_1928x1088_regs,
 		.default_mode_regs_length = ARRAY_SIZE(mode_1928x1088_regs),
 	},
@@ -335,6 +347,10 @@ static int imx471_set_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_EXPOSURE:
 		ret = cci_write(sensor->regmap, IMX471_REG_EXPOSURE,
 				ctrl->val, NULL);
+		break;
+	case V4L2_CID_HBLANK:
+		ret = cci_write(sensor->regmap, IMX471_REG_LINE_LENGTH_PCK,
+				ctrl->val + format->width, NULL);
 		break;
 	case V4L2_CID_VBLANK:
 		/* Update FLL that meets expected vertical blanking */
@@ -422,6 +438,8 @@ static int imx471_set_pad_format(struct v4l2_subdev *sd,
 {
 	struct imx471 *sensor = to_imx471(sd);
 	const struct imx471_mode *mode;
+	u8 bin_h, bin_v, binning;
+	struct v4l2_rect *crop;
 	int h_blank, ret;
 
 	mode = v4l2_find_nearest_size(imx471_modes, ARRAY_SIZE(imx471_modes),
@@ -431,6 +449,18 @@ static int imx471_set_pad_format(struct v4l2_subdev *sd,
 	imx471_update_pad_format(sensor, mode, fmt);
 
 	*v4l2_subdev_state_get_format(sd_state, fmt->pad) = fmt->format;
+
+	/* Analog crop: 2x bin, centered in native array (imx219). */
+	crop = v4l2_subdev_state_get_crop(sd_state, fmt->pad);
+	bin_h = min_t(u32,
+		      IMX471_PIXEL_ARRAY_WIDTH / fmt->format.width, 2);
+	bin_v = min_t(u32,
+		      IMX471_PIXEL_ARRAY_HEIGHT / fmt->format.height, 2);
+	binning = min(bin_h, bin_v);
+	crop->width = fmt->format.width * binning;
+	crop->height = fmt->format.height * binning;
+	crop->left = (IMX471_NATIVE_WIDTH - crop->width) / 2;
+	crop->top = (IMX471_NATIVE_HEIGHT - crop->height) / 2;
 
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY)
 		return 0;
@@ -447,12 +477,10 @@ static int imx471_set_pad_format(struct v4l2_subdev *sd,
 		return ret;
 
 	h_blank = mode->llp - mode->width;
-	/*
-	 * Currently hblank is not changeable.
-	 * So FPS control is done only by vblank.
-	 */
 	return __v4l2_ctrl_modify_range(sensor->hblank, h_blank,
-					h_blank, 1, h_blank);
+					IMX471_LLP_MAX - mode->width,
+					1,
+					h_blank);
 }
 
 static int imx471_get_selection(struct v4l2_subdev *sd,
@@ -470,7 +498,7 @@ static int imx471_get_selection(struct v4l2_subdev *sd,
 		sel->r.left = 0;
 		sel->r.width = IMX471_NATIVE_WIDTH;
 		sel->r.height = IMX471_NATIVE_HEIGHT;
-		return 0;
+		break;
 
 	case V4L2_SEL_TGT_CROP_DEFAULT:
 	case V4L2_SEL_TGT_CROP_BOUNDS:
@@ -478,10 +506,13 @@ static int imx471_get_selection(struct v4l2_subdev *sd,
 		sel->r.left = IMX471_PIXEL_ARRAY_LEFT;
 		sel->r.width = IMX471_PIXEL_ARRAY_WIDTH;
 		sel->r.height = IMX471_PIXEL_ARRAY_HEIGHT;
-		return 0;
+		break;
+
+	default:
+		return -EINVAL;
 	}
 
-	return -EINVAL;
+	return 0;
 }
 
 static int imx471_init_state(struct v4l2_subdev *sd,
@@ -692,9 +723,15 @@ static int imx471_init_controls(struct imx471 *sensor)
 					   ARRAY_SIZE(link_freq_menu_items) - 1,
 					   0,
 					   link_freq_menu_items);
-
-	/* pixel_rate = link_freq * 2 * nr_of_lanes / bits_per_sample */
-	pixel_rate = div_u64(IMX471_LINK_FREQ_DEFAULT * 2 * 4, 10);
+	/*
+	 * The sensor runs in the dual mode so the pixel rate is defined as
+	 * follows:
+	 * (ext_freq * IVT_PLL_MPY * num_of_vt_lanes) /
+	 * (VT_PREPLLCK_DIV * IVT_SYCK_DIV * IVT_PXCK_DIV)
+	 */
+	pixel_rate = (IMX471_EXT_CLK * IMX471_PLL_VT_MPY * 4) /
+		     (IMX471_PREPLLCK_VT_DIV * IMX471_VTSYCK_DIV *
+		      IMX471_VTPXCK_DIV);
 
 	v4l2_ctrl_new_std(ctrl_hdlr, &imx471_ctrl_ops,
 			  V4L2_CID_PIXEL_RATE, pixel_rate,
@@ -710,7 +747,8 @@ static int imx471_init_controls(struct imx471 *sensor)
 
 	hblank = mode->llp - mode->width;
 	sensor->hblank = v4l2_ctrl_new_std(ctrl_hdlr, &imx471_ctrl_ops,
-					   V4L2_CID_HBLANK, hblank, hblank,
+					   V4L2_CID_HBLANK, hblank,
+					   IMX471_LLP_MAX - mode->width,
 					   1, hblank);
 
 	/* fll >= exposure time + adjust parameter (default value is 18) */
@@ -747,7 +785,6 @@ static int imx471_init_controls(struct imx471 *sensor)
 	}
 
 	link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
-	sensor->hblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 	sensor->hflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
 	sensor->vflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
 

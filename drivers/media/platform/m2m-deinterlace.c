@@ -336,8 +336,7 @@ static void deinterlace_issue_dma(struct deinterlace_ctx *ctx, int op,
 	}
 
 	if (do_callback) {
-		tx->callback = dma_callback;
-		tx->callback_param = ctx;
+		dmaengine_desc_set_callback(tx, dma_callback, NULL, ctx);
 	}
 
 	ctx->cookie = dmaengine_submit(tx);
