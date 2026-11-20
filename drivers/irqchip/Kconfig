@@ -557,7 +557,7 @@ config CSKY_APB_INTC
 	  the controller's register.
 
 config IMX_IRQSTEER
-	bool "i.MX IRQSTEER support"
+	tristate "i.MX IRQSTEER support"
 	depends on ARCH_MXC || ARCH_S32 || COMPILE_TEST
 	default y if ARCH_MXC || ARCH_S32
 	select IRQ_DOMAIN
@@ -792,6 +792,20 @@ config MST_IRQ
 	select IRQ_DOMAIN_HIERARCHY
 	help
 	  Support MStar Interrupt Controller.
+
+config MTK_IRQ
+	bool "MediaTek Interrupt Controller"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	default ARCH_MEDIATEK
+	select IRQ_DOMAIN
+	select IRQ_DOMAIN_HIERARCHY
+	help
+	  Support for the MediaTek System Interrupt Controller (SYSIRQ) and
+	  Core Interrupt Controller (CIRQ) found on various MediaTek SoCs.
+	  SYSIRQ provides interrupt polarity configuration in front of the
+	  GIC, while CIRQ records and flushes external interrupts during
+	  system suspend and resume when the primary interrupt controller
+	  is powered down.
 
 config WPCM450_AIC
 	bool "Nuvoton WPCM450 Advanced Interrupt Controller"
