@@ -2493,9 +2493,11 @@ struct bnxt {
 #define BNXT_STATE_FW_NON_FATAL_COND	13
 #define BNXT_STATE_FW_ACTIVATE_RESET	14
 #define BNXT_STATE_HALF_OPEN		15	/* For offline ethtool tests */
+#define BNXT_STATE_DMA_STOPPED		16
 
 #define BNXT_NO_FW_ACCESS(bp)					\
 	(test_bit(BNXT_STATE_FW_FATAL_COND, &(bp)->state) ||	\
+	 test_bit(BNXT_STATE_DMA_STOPPED, &(bp)->state) ||	\
 	 pci_channel_offline((bp)->pdev))
 
 	struct bnxt_irq	*irq_tbl;
