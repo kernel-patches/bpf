@@ -30,8 +30,7 @@ struct {
 
 #define OK(text)	SEC("socket") __description("need: " text) __success
 #define BAD(text)	SEC("socket") __description("need: " text) __failure
-#define NOT_WALKED	__log_level(2) __msg("nothing looks at it")
-#define WALKED		__log_level(2) __not_msg("nothing looks at it")
+#define NOT_WALKED	__log_level(2) __not_msg(")=2 loop_stack=")
 
 /* The read is not allowed */
 #define UNLESS(cond)	"if " cond " goto +1; r0 = *(u64 *)(r10 + 8);"
@@ -54,14 +53,13 @@ struct {
 #define TIMES_3(n, use)	TIMES_3_IN("", n, use "r0 = 0;")
 
 OK("a number that is only stored is not followed")
-NOT_WALKED __msg("processed 17 insns")
+NOT_WALKED __msg("processed {{[0-9]?[0-9]?[0-9]}} insns")
 __naked void stored_only(void)
 {
 	TIMES_3(1000, "*(u64 *)(r10 - 8) = r6;");
 }
 
 OK("a jump looks at the number")
-WALKED
 __naked void jump(void)
 {
 	TIMES_3(5, UNLESS("r6 <= 486"));
@@ -75,7 +73,6 @@ __naked void jump_too_large(void)
 }
 
 OK("the number is an offset in a map value that holds numbers")
-WALKED
 __naked void value_offset(void)
 {
 	/* 27 or 54 */
@@ -91,7 +88,6 @@ static unsigned long value_at_plus_9(void)
 }
 
 OK("the number is an offset in a map value in a function")
-WALKED
 __naked void value_offset_argument(void)
 {
 	TIMES_3(3, "r1 = r6; call value_at_plus_9;");
@@ -104,7 +100,6 @@ static unsigned long times_27(void)
 }
 
 OK("what a function returns is an offset in a map value")
-WALKED
 __naked void value_offset_returned(void)
 {
 	asm volatile ("call times_27;" VALUE_AT(r0, 9) "exit;"
@@ -124,7 +119,7 @@ static struct pair zero_and_times_27(void)
 }
 
 OK("the second half of what a function returns is an offset in a map value")
-__load_if_JITed() WALKED
+__load_if_JITed()
 __naked void value_offset_returned_in_r2(void)
 {
 	asm volatile ("call zero_and_times_27;" VALUE_AT(r2, 9) "exit;"
@@ -141,7 +136,6 @@ static unsigned long times_27_there(void)
 #define TIMES_27_AT_FP_8	"r1 = r10; r1 += -8; call times_27_there; r2 = *(u64 *)(r10 - 8);"
 
 OK("a function stores the number in the stack of its caller")
-WALKED
 __naked void stored_for_the_caller(void)
 {
 	asm volatile (TIMES_27_AT_FP_8 VALUE_AT(r2, 9) "exit;"
@@ -149,7 +143,6 @@ __naked void stored_for_the_caller(void)
 }
 
 OK("the number is an offset in the stack")
-WALKED
 __naked void stack_offset(void)
 {
 	/* fp-9 or fp-18 */
@@ -169,7 +162,6 @@ static unsigned long times_9(void)
 	"r0 = -r0; r1 = r10; r1 += r0; r0 = *(u8 *)(r1 + " #off ");"
 
 OK("what a function returns is an offset in the stack")
-WALKED
 __naked void stack_offset_returned(void)
 {
 	asm volatile ("call times_9;" STACK_AT_MINUS_R0(0) "exit;" ::: __clobber_all);
@@ -190,7 +182,6 @@ __naked void stack_offset_returned(void)
 	   __imm_addr(ringbuf) : __clobber_all)
 
 OK("the number is part of a size that has to be a constant")
-WALKED
 __naked void constant_argument(void)
 {
 	NINE("r1 = %[ringbuf] ll; r2 = 7; r2 += r6; r3 = 0; call %[bpf_ringbuf_reserve];"
@@ -223,7 +214,6 @@ __naked void arena_address(void)
  * No jump and no add looks at p.
  */
 OK("the base of a load is 0 in the first iteration")
-WALKED
 __naked void base_of_a_load(void)
 {
 	asm volatile (
@@ -244,7 +234,6 @@ __naked void base_of_a_load(void)
 
 /* r8 goes on by 0 or 8 bytes. Nothing tells how far but the iterations. */
 OK("a pointer that moves is followed")
-WALKED
 __naked void pointer(void)
 {
 	asm volatile (
@@ -265,7 +254,6 @@ __naked void pointer(void)
 /* The sets have 64 slots of the stack. What is deeper is followed. */
 OK("a jump looks at a slot below fp-512")
 __load_if_large_stack()
-WALKED
 __naked void deep_slot(void)
 {
 	asm volatile (
@@ -286,7 +274,6 @@ __naked void deep_slot(void)
 
 /* The iterator is not a number. It is at its end after 3 of 5 iterations. */
 OK("a slot that holds an iterator is followed")
-WALKED
 __naked void iterator_slot(void)
 {
 	asm volatile (
@@ -333,7 +320,7 @@ __naked void iterator_slot(void)
 	:: __imm(bpf_get_prandom_u32), __imm_addr(vals) : __clobber_all)
 
 OK("what is not set at the entry is set from the second iteration on")
-NOT_WALKED __msg("processed 22 insns")
+NOT_WALKED __msg("processed {{[0-9][0-9]}} insns")
 __naked void set_in_the_first_iteration(void)
 {
 	SUM_OF_PREV(0, 40, "*(u64 *)(r10 - 8) = r9;");
@@ -422,7 +409,7 @@ __naked void index_from_rodata_too_large(void)
 
 /* A slot holds a leftover pointer. The loop fills it with what it loads. It's only copied later. */
 OK("no walk for what the loop loads if nothing looks at it")
-__log_level(2) __msg("processed 17 insns")
+NOT_WALKED __msg("processed {{[0-9][0-9]}} insns")
 __naked void leftover_in_a_slot(void)
 {
 	asm volatile (

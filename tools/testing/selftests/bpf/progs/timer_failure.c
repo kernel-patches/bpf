@@ -60,11 +60,7 @@ long BPF_PROG2(test_bad_ret, int, a)
 	return 0;
 }
 
-/*
- * A real loop inside an async callback must still be rejected: both entries
- * into the callback have the same async_entry_cnt, so telling entries apart
- * does not apply here.
- */
+/* A loop with no exit is rejected in an async callback too. */
 static int timer_cb_infinite_loop(void *map, int *key, struct elem *val)
 {
 	for (;;) {}

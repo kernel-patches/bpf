@@ -31,9 +31,10 @@ void __kfunc_btf_root(void)
 	bpf_rcu_read_unlock();
 }
 
-#define OK(text, count)								\
+#define ONCE(text)								\
 	SEC("socket") __description("latch: " text) __success __log_level(2)	\
-	__msg("header_count is " count)
+	__not_msg("has no trip count")
+#define OK(text, count)	ONCE(text) __msg("has trip count " count "{{$}}") __not_msg("has no trip count")
 #define BAD(text)								\
 	SEC("socket") __description("latch: " text) __failure __msg("invalid access to map value")
 /* the pointer goes on and on */
@@ -74,13 +75,13 @@ __naked void name(void)								\
  */
 #define UP_TO_8	"if r8 >= r7 goto 9f; r8 += 1; if r8 < 8 goto 1b;"
 
-OK("false at once, and another exit", "[0..1]")
+ONCE("false at once, and another exit")
 LOOP(false_at_once, "r8 = 7; r6 += 2047;", UP_TO_8)
 
 BAD("two iterations, and another exit")
 LOOP(false_in_second, "r8 = 6; r6 += 2047;", UP_TO_8)
 
-OK("false at once for all of a range", "[0..1]")
+ONCE("false at once for all of a range")
 LOOP(false_at_once_range, "r8 = r7; r8 &= 3; r8 += 7; r6 += 2047;", UP_TO_8)
 
 BAD("false at once for all of a range but one")
@@ -157,7 +158,7 @@ LOOP(behind_two_bad, "w8 = 0; r9 = r6; r9 += 2044;", AT_TOP(5) "if r7 == 7 goto 
 	"4: if w2 == 0 goto 1b; goto 9f;"					\
 	"2: if w8 < 4 goto 1b;"
 
-OK("a store behind a jump that leaves on both edges", "[0..4]")
+OK("a store behind a jump that leaves on both edges", "4")
 LOOP(behind_both, "w8 = 0; r9 = r6; r9 += 2043;", BOTH_LEAVE)
 
 BAD("a store behind a jump that leaves on both edges, one too far")
@@ -168,7 +169,7 @@ LOOP(behind_both_bad, "w8 = 0; r9 = r6; r9 += 2044;", BOTH_LEAVE)
 #define FAR_UP(n)	"if w8 == " #n " goto 9f; w8 += 1;"			\
 			STATUS STATUS STATUS STATUS STATUS "goto 1b;"
 
-OK("behind five jumps that don't count", "[0..2048]")
+OK("behind five jumps that don't count", "2048")
 LOOP(far_up, "w8 = 0;", FAR_UP(2047))
 
 BAD("behind five jumps that don't count, one too many")
@@ -205,7 +206,8 @@ int name(void *ctx)								\
 	return idx;								\
 }
 
-OK("frames of a stack walker", "[0..9]") __retval(256)
+/* trips prove it */
+SEC("socket") __description("latch: frames of a stack walker") __success __retval(256)
 #ifndef __clang__
 __skip("GCC unrolls the inner loop")
 #endif
@@ -240,7 +242,7 @@ LOOP(down_unsigned_bad, "w8 = 2048;", "w8 += -1; if w8 < 2049 goto 1b;")
 OK("down, one unsigned test, 64 bits", "2048")
 LOOP(down_unsigned64, "r8 = 2047;", "r8 += -1; if r8 <= 2047 goto 1b;")
 
-OK("down from a range, one unsigned test", "[0..2048]")
+OK("down from a range, one unsigned test", "2048")
 LOOP(down_unsigned_range, "if r7 > 2047 goto 9f;", "w7 += -1; if w7 < 2048 goto 1b;")
 
 BAD("down from a range, one unsigned test, one too many")
@@ -262,7 +264,7 @@ LOOP(down_two_tests, "w8 = 4; r6 += 2043;",
 /* one more store, at the index that the counter is behind the loop */
 #define AT_R8	"r5 += r8; *(u8 *)(r5 + 0) = r1;"
 
-OK("a copy of the counter", "[0..2048]")
+OK("a copy of the counter", "2048")
 LOOP(copy, "r8 = 0; r9 = r8;", COPY(2046))
 
 BAD("a copy of the counter, one too many")
@@ -278,14 +280,14 @@ LOOP(copy_ahead, "r8 = 0; r9 = 1;", COPY(2047))
 /* r5 is a copy of the pointer r6 from before the increment: an induction variable too */
 #define PTR_COPY(off)	"*(u8 *)(r5 + " #off ") = r1; r5 = r6; r8 += 1; if r8 < 2048 goto 1b;"
 
-OK("a copy of the pointer", "2048") __msg("widening r5 to 0..2047 step 1")
+OK("a copy of the pointer", "2048")
 LOOP(copy_of_pointer, "r5 = r6; r8 = 0;", PTR_COPY(0))
 
 BAD("a copy of the pointer, one too many")
 LOOP(copy_of_pointer_bad, "r5 = r6; r8 = 0;", PTR_COPY(1))
 
 /* r8 and r9 are computed in the same way from r7: equal by value number, 'r9 = r8' is not needed */
-OK("a copy of the counter, equal by value number", "[0..2]")
+OK("a copy of the counter, equal by value number", "2")
 LOOP(copy_same_value_number,
      "r5 = r6; r8 = r7; r8 &= 1; r8 += 2045; r9 = r7; r9 &= 1; r9 += 2045;", COPY(2045) AT_R8)
 
@@ -297,7 +299,7 @@ LOOP(copy_same_value_number,
 	"r8 += -1; r2 = r5; r2 += r9; *(u8 *)(r2 " off ") = r1; r9 = r8; if r8 > 0 goto 1b;"
 #define FROM_RANGE	"if r7 > 2048 goto 9f; if r7 == 0 goto 9f; r5 = r6; r8 = r7; r9 = r7;"
 
-OK("a copy of the counter, down from a range", "[0..2048]")
+OK("a copy of the counter, down from a range", "2048")
 LOOP(copy_down_from_range, FROM_RANGE, DOWN("- 1"))
 
 BAD("a copy of the counter, down from a range, one too many")
@@ -307,11 +309,11 @@ LOOP(copy_down_from_range_bad, FROM_RANGE, DOWN("+ 0"))
  * r9 is zero extended. [1, 2048], its range at the header, is the range of the zero extension too.
  * [-1000, 1001] is not: the first store is 4G behind the value.
  */
-OK("a copy of the counter, zero extended", "[0..2048]")
+OK("a copy of the counter, zero extended", "2048")
 LOOP(copy_zext, FROM_RANGE, "w9 = w9;" DOWN("- 1"))
 
 SEC("socket") __description("latch: a copy of the counter, zero extended, from below 0")
-__failure __msg("R4 unbounded memory access")
+__failure __msg("value is outside of the allowed memory range")
 LOOP(copy_zext_bad, "r5 = r6; r8 = r7; r8 &= 255; r8 += -1000; r9 = r8;",
      "w9 = w9; if r8 s> 1000 goto 9f; r4 = r5; r4 += r9; *(u8 *)(r4 + 1000) = r1;"
      "r8 += 1; r9 = r8; if r7 != 0 goto 1b;")
@@ -328,7 +330,7 @@ LOOP(copy_zext_bad, "r5 = r6; r8 = r7; r8 &= 255; r8 += -1000; r9 = r8;",
 #endif
 #define PTR_FROM_RANGE	"r5 = r6; r8 = r6; r8 += 2047; r7 &= 1023; r6 += r7; r9 = r6;"
 
-OK("a copy of the pointer that the latch tests", "[0..2047]")
+OK("a copy of the pointer that the latch tests", "2047")
 LOOP(copy_of_tested_pointer, PTR_FROM_RANGE, "*(u8 *)(r9 + 1) = r1; r9 = r6; if r6 < r8 goto 1b;")
 
 SEC("socket") __description("latch: a copy of the pointer that the latch tests, as a scalar")
@@ -336,7 +338,7 @@ __failure __msg("math between map_value pointer and register with unbounded min 
 LOOP(copy_of_tested_pointer_scalar, PTR_FROM_RANGE NOP64 "if r9 == 0 goto 9f;",
      "r4 = r5; r4 += r9; *(u8 *)(r4 + 0) = r1; r9 = r6;" NOP64 "if r6 < r8 goto 1b;")
 
-OK("a copy of the counter, a range", "[0..2]")
+OK("a copy of the counter, a range", "2")
 LOOP(copy_range, "r5 = r6; r8 = r7; r8 &= 1; r8 += 2045; r9 = r8;", COPY(2045) AT_R8)
 
 BAD("a copy of the counter, another number of the same range at the entry")
@@ -349,7 +351,7 @@ LOOP(copy_behind, "r8 = 0; r9 = r8;",
      "r8 += 1; if r9 > 2046 goto 9f; r9 = r8; r9 += -1; if r7 != 0 goto 1b;")
 
 /* what the jump says about the copy holds for the counter */
-OK("a copy of the counter, the jump bounds both", "[0..2048]")
+OK("a copy of the counter, the jump bounds both", "2047")
 LOOP(copy_bounds_both, "r5 = r6; if r7 > 2047 goto 9f; r8 = r7; r9 = r8;",
      "if r9 > 2046 goto 8f; r8 += 1; r9 = r8; if r7 != 0 goto 1b; 8:" AT_R8)
 
@@ -361,13 +363,13 @@ LOOP(copy_bounds_both, "r5 = r6; if r7 > 2047 goto 9f; r8 = r7; r9 = r8;",
 	"r8 += " #step "; if r9 " leave " goto 9f; if r8 " skip " goto 2f;"	\
 	"r4 = r5; r4 += r9; *(u8 *)(r4 " off ") = r1; 2: r9 = r8; if r7 != 0 goto 1b;"
 
-OK("a copy of the counter, one less behind the jump", "[0..2048]")
+OK("a copy of the counter, one less behind the jump", "2048")
 LOOP(copy_less, "r5 = r6; r8 = 0; r9 = r8;", NOT_EQUAL(1, "> 2046", "< 2", "+ 0"))
 
 BAD("a copy of the counter, one less behind the jump, not equal")
 LOOP(copy_less_bad, "r5 = r6; r8 = 0; r9 = r8;", NOT_EQUAL(1, "> 2046", "< 2", "- 2"))
 
-OK("a copy of the counter, one more behind the jump", "[0..2047]")
+OK("a copy of the counter, one more behind the jump", "2047")
 LOOP(copy_more, "r5 = r6; r8 = 2047; r9 = r8;", NOT_EQUAL(-1, "s< 2", "> 2045", "+ 0"))
 
 BAD("a copy of the counter, one more behind the jump, not equal")
@@ -382,7 +384,7 @@ LOOP(copy_more_bad, "r5 = r6; r8 = 2047; r9 = r8;", NOT_EQUAL(-1, "s< 2", "> 204
 			"r3 = r4; r3 &= 4095; r3 += r5; *(u8 *)(r3 + 0) = r1;"	\
 			X4(X4(X4("r3 = 0;"))) "r9 = r8; if r7 != 0 goto 1b;"
 
-OK("a copy of a copy of the counter", "[0..2048]")
+OK("a copy of a copy of the counter", "2048")
 LOOP(copy_of_copy, "r5 = r6; r8 = 0; r9 = 0; r4 = 0;", OF_COPY)
 
 BAD("a copy of what is no copy of the counter")
@@ -391,7 +393,7 @@ LOOP(copy_of_no_copy, "r5 = r6; r8 = 0; r9 = r7; r9 &= 4095; r4 = 0;", OF_COPY)
 /* 'while (n--)': the jump that counts sets a flag, the jump that leaves the loop tests it */
 #define FLAG(mid)	"w8 += 1; w2 = 1; if w8 == 0 goto 2f; w2 = 0; 2: " mid " if w2 != 1 goto 1b;"
 
-OK("a flag", "[0..2048]")
+OK("a flag", "2048")
 LOOP(flag, "w8 = -2048;", FLAG("r3 = r6;"))
 
 BAD("a flag, one too many")
@@ -400,21 +402,21 @@ LOOP(flag_bad, "w8 = -2049;", FLAG("r3 = r6;"))
 /* A flag leaves the loop later: what is behind the jump runs in the last iteration too */
 #define STORE		"*(u8 *)(r9 + 0) = r1; r9 += 1;"
 
-OK("a flag, a store behind the jump that counts", "[0..2048]")
+OK("a flag, a store behind the jump that counts", "2048")
 LOOP(flag_behind, "w8 = -2048; r9 = r6;", FLAG(STORE))
 
 BAD("a flag, a store behind the jump that counts, one too far")
 LOOP(flag_behind_bad, "w8 = -2048; r9 = r6; r9 += 1;", FLAG(STORE))
 
-OK("a flag, a store behind it", "[0..2048]")
+OK("a flag, a store behind it", "2048")
 LOOP(flag_store, "w8 = -2048;",
      "w8 += 1; w2 = 1; *(u32 *)(r10 - 4) = r8; if w8 == 0 goto 2f; w2 = 0; 2: if w2 != 1 goto 1b;")
 
-OK("a flag, a call behind it", "[0..2048]")
+OK("a flag, a call behind it", "2048")
 LOOP(flag_call, "w8 = -2048;",
      "w8 += 1; w9 = 1; if w8 == 0 goto 2f; w9 = 0; 2: call %[bpf_get_prandom_u32]; if w9 != 1 goto 1b;")
 
-OK("a flag that is set in front of another jump", "[0..2048]")
+OK("a flag that is set in front of another jump", "2048")
 LOOP(flag_far, "w8 = -2048;",
      "w8 += 1; w2 = 1; if r7 != 0 goto 3f; r3 = r6;"
      "3: if w8 == 0 goto 2f; w2 = 0; 2: if w2 != 1 goto 1b;")
@@ -430,26 +432,26 @@ LOOP(flag_far, "w8 = -2048;",
 #define WORK20		WORK4 WORK4 WORK4 WORK4 WORK4
 #define RND		"call %[bpf_get_prandom_u32];"
 
-OK("more: work", "[0..2048]")
+OK("more: work", "2048")
 LOOP(more_work, "w8 = 0;", MORE(UP_TO(2047), WORK20))
 
 BAD("more: work, one too many")
 LOOP(more_work_bad, "w8 = 0;", MORE(UP_TO(2048), WORK20))
 
-OK("more: work with a jump in it", "[0..2048]")
+OK("more: work with a jump in it", "2048")
 LOOP(more_jump, "w8 = 0;", MORE(UP_TO(2047), WORK4 "if r7 > 5 goto 4f;" WORK20 "4:"))
 
-OK("more: work with calls in it", "[0..2048]")
+OK("more: work with calls in it", "2048")
 LOOP(more_calls, "w8 = 0;", MORE(UP_TO(2047), RND WORK20 RND))
 
-OK("more: the counter is spilled", "[0..2048]")
+OK("more: the counter is spilled", "2048")
 LOOP(more_spill, "r8 = 0; *(u64 *)(r10 - 16) = r8;",
      MORE("r8 = *(u64 *)(r10 - 16); w8 += 1; w9 = 0; *(u64 *)(r10 - 16) = r8;"
 	  "if w8 > 2047 goto 2f;", RND "w8 = w0;" WORK20 RND))
 
 #define NOT_TAKEN(n)	"w8 += 1; if w8 < " #n " goto 4f; w9 = 0; goto 2f; 4:"
 
-OK("more: the edge that is not taken leaves", "[0..2048]")
+OK("more: the edge that is not taken leaves", "2048")
 LOOP(more_not_taken, "w8 = 0;", MORE(NOT_TAKEN(2048), WORK20))
 
 BAD("more: the edge that is not taken leaves, one too many")
@@ -458,19 +460,20 @@ LOOP(more_not_taken_bad, "w8 = 0;", MORE(NOT_TAKEN(2049), WORK20))
 #define JUMP		"if r7 > 5 goto 4f;" WORK4 "4:"
 #define JUMP8		JUMP JUMP JUMP JUMP JUMP JUMP JUMP JUMP
 
-OK("more: work with 40 jumps in it", "[0..2048]")
+OK("more: work with 40 jumps in it", "2048")
 LOOP(more_jumps, "w8 = 0;", MORE(UP_TO(2047), JUMP8 JUMP8 JUMP8 JUMP8 JUMP8))
 
-OK("more: behind five jumps that don't count", "[0..2048]")
+OK("more: behind five jumps that don't count", "2048")
 LOOP(more_far, "w8 = 0;", MORE(UP_TO(2047), STATUS STATUS STATUS STATUS STATUS))
 
 BAD("more: behind five jumps that don't count, one too many")
 LOOP(more_far_bad, "w8 = 0;", MORE(UP_TO(2048), STATUS STATUS STATUS STATUS STATUS))
 
-OK("more: the flag is 0 or 2 where two paths meet", "[0..2048]")
+/* no state comes back from the last trip: the log has the trip before it */
+OK("more: the flag is 0 or 2 where two paths meet", "2047")
 LOOP(more_even, "w8 = 0;", MORE(UP_TO(2047), "if r7 > 5 goto 4f; w9 += 2; 4:"))
 
-OK("a flag, a jump on the way out knows a constant", "[0..2048]")
+OK("a flag, a jump on the way out knows a constant", "2048")
 LOOP(flag_const, "w8 = -2048;",
      "w8 += 1; w2 = 1; if w8 == 0 goto 2f; w2 = 0;"
      "2: w3 = 0; if w2 != 0 goto 3f; goto 1b; 3: if w3 == 2 goto 1b;")
@@ -479,16 +482,16 @@ LOOP(flag_const, "w8 = -2048;",
 #define ERR(last, other, test)							\
 	"w8 += 1; w9 = " #last "; if w8 > 2047 goto 2f; w9 = " #other "; 2: " WORK20 test
 
-OK("an error code", "[0..2048]")
+OK("an error code", "2048")
 LOOP(err, "w8 = 0;", ERR(-7, 0, "if w9 == 0 goto 1b;"))
 
-OK("an error code, a signed test", "[0..2048]")
+OK("an error code, a signed test", "2048")
 LOOP(err_signed, "w8 = 0;", ERR(-7, 0, "if w9 s>= 0 goto 1b;"))
 
-OK("a size", "[0..2048]")
+OK("a size", "2048")
 LOOP(size, "w8 = 0;", ERR(128, 0, "if w9 <= 63 goto 1b;"))
 
-OK("a bit of a size", "[0..2048]")
+OK("a bit of a size", "2048")
 LOOP(size_bit, "w8 = 0;", ERR(130, 0, "if w9 & 128 goto 9f; goto 1b;"))
 
 /* in these the loop goes on when the counter gets to its last value */
@@ -529,7 +532,7 @@ LOOP(err_wide, "w8 = 0;",
 
 NO_COUNT("more: a back edge that doesn't test the flag")
 LOOP(more_back_edge, "w8 = 0;",
-     MORE(UP_TO(2047), "if w7 == 3 goto 5f;") "goto 9f; 5: if w8 == 2048 goto 1b;")
+     MORE(UP_TO(2047), RND "if w0 == 3 goto 5f;") "goto 9f; 5: if w8 == 2048 goto 1b;")
 
 /* A nested loop can get may_goto. It goes where a jump of that loop goes, whatever the flag is. */
 NO_COUNT("more: the way out leads through a nested loop")

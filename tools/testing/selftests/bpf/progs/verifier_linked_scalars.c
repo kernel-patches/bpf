@@ -8,7 +8,7 @@
 SEC("socket")
 __description("scalars: find linked scalars")
 __failure
-__msg("math between fp pointer and 2147483647 is not allowed")
+__msg("invalid unbounded variable-offset write to stack R3")
 __naked void scalars(void)
 {
 	asm volatile ("				\

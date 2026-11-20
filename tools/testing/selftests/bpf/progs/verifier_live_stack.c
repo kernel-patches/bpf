@@ -381,7 +381,7 @@ __msg("12: (95) exit")
 /*
  * fp0-8 is dead after goto +0, so one state stands for both.
  */
-__msg("from 11 to 12: within")
+__msg("from 11 to 12: pruned")
 __naked void caller_stack_pruning(void)
 {
 	asm volatile (
@@ -877,7 +877,7 @@ static __used __naked void maybe_clobber_key(void)
 SEC("socket")
 __log_level(2)
 __success
-__msg("from 16 to 6: within")
+__msg("from 16 to 6: pruned")
 __naked void spill_reload_inflates_stack_liveness(void)
 {
 	asm volatile (
@@ -1374,7 +1374,7 @@ __naked void half_spi_clean_preserves_stack_zero(void)
 SEC("socket")
 __success
 __log_level(2)
-__msg("from 3 to 7: within")
+__msg("from 3 to 7: pruned")
 __naked void dead_spill_at_merge_enables_pruning(void)
 {
 	asm volatile (
@@ -1416,7 +1416,7 @@ __naked void dead_spill_at_merge_enables_pruning(void)
 SEC("socket")
 __success
 __log_level(2)
-__msg("from 9 to 10: within")
+__msg("from 9 to 10: pruned")
 __naked void byte_load_in_subprog_keeps_no_spilled_ptr(void)
 {
 	asm volatile (
@@ -1467,7 +1467,7 @@ __naked void byte_of_replaced_ptr_is_unknown(void)
 SEC("socket")
 __success
 __log_level(2)
-__msg("from 9 to 10: within")
+__msg("from 9 to 10: pruned")
 __failure_unpriv
 __msg_unpriv("invalid read from stack R3 off -8+0 size 8")
 __naked void helper_keeps_no_spilled_ptr(void)

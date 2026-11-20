@@ -247,7 +247,7 @@ __msg("7: {{.*}} R6={{[^)]*}}var_off=(0x0; 0x3fc)")
 /* Offset is added to packet pointer R5, resulting in
  * known fixed offset, and variable offset from R6.
  */
-__msg("11: {{.*}} R5=pkt(id=1,{{[^)]*}},var_off=(0x2; 0x7fc)")
+__msg("11: {{.*}} R5=pkt(id={{[0-9]+}},{{[^)]*}},var_off=(0x2; 0x7fc)")
 /* At the time the word size load is performed from R5,
  * it's total offset is NET_IP_ALIGN + reg->off (0) +
  * reg->aux_off (14) which is 16.  Then the variable
@@ -266,7 +266,7 @@ __msg("18: {{.*}} R4={{[^)]*}}var_off=(0x0; 0x3fc){{.*}} R5={{[^)]*}}var_off=(0x
 /* Constant offset is added to R5, resulting in
  * reg->off of 14.
  */
-__msg("19: {{.*}} R5=pkt(id=2,{{[^)]*}}var_off=(0x2; 0x7fc)")
+__msg("19: {{.*}} R5=pkt(id={{[0-9]+}},{{[^)]*}}var_off=(0x2; 0x7fc)")
 /* At the time the word size load is performed from R5,
  * its total fixed offset is NET_IP_ALIGN + reg->off
  * (14) which is 16.  Then the variable offset is 4-byte
@@ -284,7 +284,7 @@ __msg("26: {{.*}} R5=pkt(r=8,imm=14)")
  */
 __msg("28: {{.*}} R4={{[^)]*}}var_off=(0x2; 0x7fc){{.*}} R5={{[^)]*}}var_off=(0x2; 0x7fc)")
 /* Constant is added to R5 again, setting reg->off to 18. */
-__msg("29: {{.*}} R5=pkt(id=3,{{[^)]*}}var_off=(0x2; 0xffc)")
+__msg("29: {{.*}} R5=pkt(id={{[0-9]+}},{{[^)]*}}var_off=(0x2; 0xffc)")
 /* And once more we add a variable; resulting {{[^)]*}}var_off
  * is still (4n), fixed offset is not changed.
  * Also, we create a new reg->id.
@@ -432,8 +432,8 @@ __msg("9: {{.*}} R5={{[^)]*}}var_off=(0x2; 0x7ffffffffffffffc)")
 /* packet pointer + nonnegative (4n+2) */
 __msg("11: {{.*}} R4={{[^)]*}}var_off=(0x2; 0x7ffffffffffffffc){{.*}} R6={{[^)]*}}var_off=(0x2; 0x7ffffffffffffffc)")
 __msg("12: (07) r4 += 4")
-/* packet smax bound overflow */
-__msg("pkt pointer offset -9223372036854775808 is not allowed")
+/* the offset can overflow, so the bounds check gives r6 no range */
+__msg("R6 min value is outside of the allowed memory range")
 __naked void dubious_pointer_arithmetic(void)
 {
 	asm volatile ("					\
@@ -494,7 +494,7 @@ __naked void variable_subtraction(void)
 	asm volatile ("					\
 	/* Create an unknown offset, (4n+2)-aligned */	\
 	" LOAD_UNKNOWN("r6") "				\
-	r7 = r6;					\
+	r7 = *(u8*)(r2 + 1);				\
 	r6 <<= 2;					\
 	r6 += 14;					\
 	/* Create another unknown, (4n)-aligned, and subtract\
