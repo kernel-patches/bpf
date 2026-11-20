@@ -1132,7 +1132,7 @@ static void ufs_mtk_setup_clk_gating(struct ufs_hba *hba)
 					  hba->ahit);
 			ah_timer = FIELD_GET(UFSHCI_AHIBERN8_TIMER_MASK,
 					  hba->ahit);
-			if (ah_scale <= 5)
+			if (ah_scale < ARRAY_SIZE(scale_us))
 				ah_ms = ah_timer * scale_us[ah_scale] / 1000;
 		}
 
@@ -1376,7 +1376,7 @@ static void ufs_mtk_adjust_sync_length(struct ufs_hba *hba)
 {
 	int i;
 	u32 value;
-	u32 cnt, att, min;
+	u32 att, min;
 	struct attr_min {
 		u32 attr;
 		u32 min_value;
@@ -1388,8 +1388,7 @@ static void ufs_mtk_adjust_sync_length(struct ufs_hba *hba)
 		{PA_TXHSG5SYNCLENGTH, 0x48}
 	};
 
-	cnt = sizeof(pa_min_sync_length) / sizeof(struct attr_min);
-	for (i = 0; i < cnt; i++) {
+	for (i = 0; i < ARRAY_SIZE(pa_min_sync_length); i++) {
 		att = pa_min_sync_length[i].attr;
 		min = pa_min_sync_length[i].min_value;
 		ufshcd_dme_get(hba, UIC_ARG_MIB(att), &value);
