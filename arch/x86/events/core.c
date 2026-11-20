@@ -2157,7 +2157,7 @@ void x86_pmu_update_perf_regs(struct perf_event *event,
 
 int x86_pmu_handle_irq(struct pt_regs *regs)
 {
-	struct perf_sample_data data;
+	struct perf_sample_data data __uninitialized; /* optimization */
 	struct cpu_hw_events *cpuc;
 	struct perf_event *event;
 	int idx, handled = 0;
