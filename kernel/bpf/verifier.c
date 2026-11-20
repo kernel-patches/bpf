@@ -21405,6 +21405,7 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 	struct bpf_insn *insns = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
 	bool do_print_state = true, from_unproven;
+	u32 held;
 
 	for (;;) {
 		struct bpf_insn *insn;
@@ -21520,9 +21521,12 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 			return err;
 
 		bpf_equations_before_insn(env);
+		held = held_cnt(state);
 		from_unproven = reads_from_unproven(env);
 		fixups = insn_aux->fixups;
 		err = do_check_insn(env, &do_print_state) ?: bpf_equations_after_insn(env);
+		insn_aux->releases |= held_cnt(state) < held && err != PROCESS_BPF_EXIT;
+		insn_aux->acquires |= held_cnt(state) > held;
 		if (nospec_ends_path(env, state, err)) {
 			/* Prevent this speculative path from ever reaching the
 			 * insn that would have been unsafe to execute.
@@ -25166,13 +25170,12 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
-	bpf_free_subprog_jts(env);
-
 	ret = mark_fastcall_patterns(env);
 	if (ret < 0)
 		goto skip_full_check;
 
 	ret = do_check_all(env);
+	bpf_free_subprog_jts(env);
 	/* while the calls are what they are in the program */
 	if (env->log.level & BPF_LOG_STATS)
 		add_insns_of_callees(env);

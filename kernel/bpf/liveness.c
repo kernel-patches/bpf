@@ -1665,7 +1665,9 @@ static int record_stack_access_off(struct func_instance *instance, const struct 
 			return err;
 	}
 	if (info.may_write) {
-		err = mark_stack_may_write(instance, frame, insn_idx, slot_lo, slot_hi);
+		/* A join of the offsets is a range. A write forgets the slots between them. */
+		err = mark_stack_may_write(instance, frame, insn_idx, slot_lo,
+					   (-arg->off[0] - 1) / STACK_SLOT_SZ);
 		if (err)
 			return err;
 	}
