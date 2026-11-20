@@ -174,8 +174,7 @@ remove_pd:
 	dt_idle_pd_remove_topology(np);
 	psci_pd_remove();
 exit:
-	pr_err("failed to create CPU PM domains ret=%d\n", ret);
-	return ret;
+	return dev_err_probe(&pdev->dev, ret, "failed to create CPU PM domains\n");
 }
 
 static struct platform_driver psci_cpuidle_domain_driver = {
