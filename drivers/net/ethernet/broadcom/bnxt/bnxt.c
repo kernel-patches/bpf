@@ -3875,10 +3875,10 @@ static int bnxt_alloc_ring(struct bnxt *bp, struct bnxt_ring_mem_info *rmem,
 	for (i = 0; i < rmem->nr_pages; i++) {
 		u64 extra_bits = valid_bit;
 
-		rmem->pg_arr[i] = dma_alloc_coherent(&pdev->dev,
-						     rmem->page_size,
-						     &rmem->dma_arr[i],
-						     GFP_KERNEL);
+		rmem->pg_arr[i] = dma_alloc_coherent_node(&pdev->dev,
+							  rmem->page_size,
+							  &rmem->dma_arr[i],
+							  GFP_KERNEL, nid);
 		if (!rmem->pg_arr[i])
 			return -ENOMEM;
 
@@ -3897,7 +3897,6 @@ static int bnxt_alloc_ring(struct bnxt *bp, struct bnxt_ring_mem_info *rmem,
 		}
 	}
 
-	/* Only the SW ring follows @nid, DMA memory is on the device's node */
 	if (rmem->vmem_size) {
 		*rmem->vmem = vzalloc_node(rmem->vmem_size, nid);
 		if (!(*rmem->vmem))
@@ -4292,10 +4291,11 @@ static int bnxt_alloc_tx_rings(struct bnxt *bp)
 			/* One pre-allocated DMA buffer to backup
 			 * TX push operation
 			 */
-			txr->tx_push = dma_alloc_coherent(&pdev->dev,
-						bp->tx_push_size,
-						&txr->tx_push_mapping,
-						GFP_KERNEL);
+			txr->tx_push =
+				dma_alloc_coherent_node(&pdev->dev,
+							bp->tx_push_size,
+							&txr->tx_push_mapping,
+							GFP_KERNEL, nid);
 
 			if (!txr->tx_push)
 				return -ENOMEM;
@@ -4437,7 +4437,7 @@ static int bnxt_alloc_cp_sub_ring(struct bnxt *bp,
 	rmem->pg_arr = (void **)cpr->cp_desc_ring;
 	rmem->dma_arr = cpr->cp_desc_mapping;
 	rmem->flags = BNXT_RMEM_RING_PTE_FLAG;
-	rc = bnxt_alloc_ring(bp, rmem, NUMA_NO_NODE);
+	rc = bnxt_alloc_ring(bp, rmem, nid);
 	if (rc) {
 		bnxt_free_ring(bp, rmem);
 		bnxt_free_cp_arrays(cpr);
@@ -4468,7 +4468,8 @@ static int bnxt_alloc_cp_rings(struct bnxt *bp)
 		cpr->bnapi = bnapi;
 		ring = &cpr->cp_ring_struct;
 
-		rc = bnxt_alloc_ring(bp, &ring->ring_mem, NUMA_NO_NODE);
+		nid = bnxt_cp_num_to_node(bp, i);
+		rc = bnxt_alloc_ring(bp, &ring->ring_mem, nid);
 		if (rc)
 			return rc;
 
@@ -4490,7 +4491,6 @@ static int bnxt_alloc_cp_rings(struct bnxt *bp)
 			tx = 1;
 		}
 
-		nid = bnxt_cp_num_to_node(bp, i);
 		cpr->cp_ring_arr = kcalloc_node(cp_count, sizeof(*cpr),
 						GFP_KERNEL, nid);
 		if (!cpr->cp_ring_arr)
