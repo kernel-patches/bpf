@@ -485,6 +485,28 @@ static void join_bounds_by_selector(struct equation_join *j, u64 var, bool alway
 		join_diff(j, make_expr(1, var, 0), make_expr(max_slope, j->selector, 0), false);
 }
 
+/* Where the trip index of @e in @dst can stop. 0: it is too early to know. */
+u64 bpf_guess_trip_threshold(struct bpf_verifier_env *env, const struct bpf_verifier_state *dst,
+			     const struct loop_stack_entry *e, u64 xreg)
+{
+	const struct bpf_iv_threshold *threshold;
+	u64 value = S64_MAX;
+	int kind;
+
+	/* without an equation nothing limits it */
+	if (!bpf_find_xreg_equation(&dst->equations, xreg))
+		return value;
+	if (!e->trip_index.grew_once)
+		return 0;
+	if (e->exit_threshold < value && e->exit_threshold >= cnum64_umax(e->trip_index.r64))
+		return e->exit_threshold;
+	for (kind = THRESHOLD_EXIT_JUMP; kind <= THRESHOLD_BODY_JUMP && value == S64_MAX; kind++)
+		for_each_iv_threshold(env, e->loop, threshold, kind)
+			if (threshold->value >= cnum64_umax(e->trip_index.r64))
+				value = min_t(u64, value, threshold->value);
+	return value;
+}
+
 /*
  * Guess the equations that hold for @dst and @src, see bpf_equations_pre_join().
  * The first join shows what a trip moves. The next walk finds the thresholds.
@@ -538,4 +560,258 @@ void bpf_guess_equations(struct bpf_verifier_env *env, const struct bpf_verifier
 		join_sum_parts(&j, sym_cnt);
 	for (i = 0, sym_cnt = j.eqs->sym_cnt; j.selector != VAR_NONE && i < sym_cnt; i++)
 		join_bounds_by_selector(&j, VAR_SYM | i, selector_is_trip);
+}
+
+/*
+ * Which xregs move with the trip index in @dst? Some do not in the equations of the @join:
+ *	i = (i + 1) & 63;
+ */
+void bpf_note_linear_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *dst,
+			   const struct bpf_equations *join)
+{
+	const struct bpf_func_state *f = dst->frame[dst->curframe];
+	u64 trip_xreg = bpf_xreg(dst->curframe, BPF_XREG_TRIP + f->loop_stack_cnt - 1);
+	const struct bpf_xreg_equation *old_trip =
+		bpf_find_xreg_equation(&dst->equations, trip_xreg), *xreg_eq, *new;
+	const struct bpf_xreg_equation *new_trip = bpf_find_xreg_equation(join, trip_xreg);
+	struct bpf_loop *loop;
+
+	if (!f->loop_stack_cnt || !old_trip || !new_trip)
+		return;
+	loop = bpf_top_loop(f)->loop;
+	for_each_xreg_equation(env, &dst->equations, xreg_eq) {
+		if (xreg_eq->sym != old_trip->sym || xreg_eq->xreg >> 32 != dst->curframe ||
+		    (u32)xreg_eq->xreg >= BPF_XREG_TRIP)
+			continue;
+		new = bpf_find_xreg_equation(join, xreg_eq->xreg);
+		if (!new || new->sym != new_trip->sym)
+			__set_bit((u32)xreg_eq->xreg, loop->nonlinear_xregs);
+		else if (!__test_and_set_bit((u32)xreg_eq->xreg, loop->linear_xregs))
+			env->new_linear_xreg = true;
+	}
+}
+
+/* Thresholds */
+
+/*
+ * A jump gives thresholds in many states. Keep the last one in the direction of @step.
+ * No @step: @value is for the syms of the current state only.
+ */
+static void add_iv_threshold(struct bpf_verifier_env *env, struct bpf_loop *loop, s64 value,
+			     s64 step, enum iv_threshold_kind kind, u32 idx)
+{
+	struct bpf_iv_threshold *threshold;
+
+	for_each_iv_threshold(env, loop, threshold, kind)
+		if (threshold->insn_idx == env->insn_idx && threshold->idx == idx)
+			break;
+	if (threshold < loop->iv_thresholds + loop->iv_threshold_cnt) {
+		if (value == threshold->value || (step && (step > 0) == (value < threshold->value)))
+			return;
+		threshold->value = value;
+	} else if (bpf_grow_array(env, &loop->iv_thresholds, &loop->iv_threshold_cap,
+				  loop->iv_threshold_cnt + 1, sizeof(*threshold))) {
+		loop->iv_thresholds[loop->iv_threshold_cnt++] =
+			(struct bpf_iv_threshold){ value, kind, env->insn_idx, idx };
+	}
+	if (env->log.level & BPF_LOG_LEVEL2)
+		bpf_log(&env->log, "loop at %d: %s has threshold %lld\n", loop->header,
+			kind <= THRESHOLD_BODY_JUMP ? "the trip index" : "a number", value);
+}
+
+/* Write @expr as a function of @trip_var. It starts from the far end of what is added. */
+static bool match_iv(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+		     struct expr *expr, u64 trip_var, bool *low32, bool *start_is_range)
+{
+	const struct bpf_sym_equation *sym_eq, *ext;
+	struct scalar bounds;
+	struct expr rest;
+	u32 n, i, k;
+
+	for (n = 0;
+	     expr->coef && expr->var != trip_var && n < st->equations.sym_equation_cnt; n++) {
+		if (!var_is_sym(expr->var) || over_limit(env))
+			return false;
+		ext = NULL;
+		for_each_sum(env, &st->equations, sym_eq) {
+			i = find_sym_pos(sym_eq, var_symno(expr->var));
+			if (i == 3)
+				continue;
+			k = find_sym_pos(sym_eq, var_symno(trip_var));
+			if (!i && !(u8)sym_eq->coef[2])
+				ext = sym_eq;
+			if (k == 3 || !is_plus_minus_one(sym_eq->coef[i]))
+				continue;
+			rest = sym_expr(-expr->coef * sym_eq->coef[i] * sym_eq->coef[3 - i - k],
+					sym_eq->sym[3 - i - k],
+					expr->off - expr->coef * sym_eq->coef[i] * sym_eq->off);
+			bpf_eval_expr(env, st, &rest, &bounds);
+			*expr = make_expr(-expr->coef * sym_eq->coef[i] * sym_eq->coef[k],
+					  trip_var, bounds.r64.base);
+			if (bounds.r64.size > U32_MAX && bounds.r32.size == U32_MAX)
+				return false;
+			*start_is_range = bounds.r64.size;
+			*low32 |= bounds.r64.size >= U32_MAX;
+			if (*low32)
+				expr->off = bounds.r32.base +
+					    (expr->coef < 0 ? bounds.r32.size : 0);
+			else if (expr->coef < 0)
+				expr->off += bounds.r64.size;
+			return expr->coef;
+		}
+		if (!ext)
+			return false;
+		*expr = expr_scale(rhs_expr(ext, 0), expr->coef, expr->off);
+	}
+	return expr->coef && expr->var == trip_var;
+}
+
+/*
+ * "*@x @op @bound" holds in the trips that continue. In how many, if each adds @step to it?
+ * *@x becomes the end of the range in which they continue.
+ */
+static u64 compute_trip_count(s64 step, u64 *x, u8 op, bool jmp32, struct scalar bound)
+{
+	struct cnum64 arc;
+	struct scalar body_range;
+	u64 left;
+
+	if (op == BPF_JNE && jmp32)
+		scalar_set_const(&bound, bound.r32.base + (step > 0 ? bound.r32.size : 0));
+	else if (op == BPF_JNE)
+		scalar_set_const(&bound, bound.r64.base + (step > 0 ? bound.r64.size : 0));
+	scalar_set_unknown(&body_range);
+	scalars_refine_cond_op(&body_range, &bound, op, jmp32);
+	arc = jmp32 ? (struct cnum64){ body_range.r32.base, body_range.r32.size } : body_range.r64;
+	left = jmp32 ? (u32)(*x - arc.base) : *x - arc.base;
+	if (left > arc.size)
+		return 0;
+	*x = arc.base + (step > 0 ? arc.size : 0);
+	*x = !jmp32 ? *x : op == bpf_signed_opcode(op) && op != BPF_JNE ? (s32)*x : (u32)*x;
+	return min(div64_u64(step > 0 ? arc.size - left : left, abs64(step)), U64_MAX - 1) + 1;
+}
+
+static bool insn_is_in_loop(struct bpf_verifier_env *env, const struct bpf_loop *loop, int idx)
+{
+	int h = bpf_loop_at_index(env, idx);
+
+	return h == loop->header || bpf_is_nested_loop(env, h, loop->header);
+}
+
+/* The jump stays in the loop if operand 0 or 1, or their difference, is "op" the bound */
+static u8 loop_cond_opcode(const struct bpf_insn *insn, bool taken, int i)
+{
+	u8 op = taken ? BPF_OP(insn->code) : bpf_rev_opcode(BPF_OP(insn->code));
+
+	return !i ? op : i == 1 ? bpf_flip_opcode(op) : bpf_signed_opcode(op);
+}
+
+/* The difference starts from @x, but not further out than @bound[1] - @bound[0] can be */
+static s64 clamp_diff_start(const struct scalar *bound, s64 x, s64 step)
+{
+	s64 a = step < 0 ? cnum64_smax(bound[1].r64) : cnum64_smin(bound[1].r64);
+	s64 b = step < 0 ? cnum64_smin(bound[0].r64) : cnum64_smax(bound[0].r64);
+
+	if (check_sub_overflow(a, b, &a))
+		return x;
+	return step < 0 ? min(x, a) : max(x, a);
+}
+
+/* The jump at env->insn_idx tests a number that moves with the trip index. Find thresholds. */
+void bpf_collect_iv_thresholds(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[env->insn_idx];
+	const struct bpf_insn *insn = &env->prog->insnsi[env->insn_idx];
+	const struct bpf_verifier_state *st = env->cur_state;
+	const struct bpf_func_state *f = st->frame[st->curframe];
+	bool is_ptr, is_iv[3], low32[3], start_is_range[3] = {}, stays_in_loop[2], is_body_jump;
+	struct loop_stack_entry *e = bpf_top_loop(f);
+	struct expr trip, step, expr[3];
+	struct scalar bound[3];
+	struct equation_pos pos = {};
+	bool tests_carry = false;
+	u32 i, n;
+	u64 start, x, cnt;
+	u8 op;
+
+	if (!env->eq_env || !e || e->loop->kind != BPF_LOOP_JUMPS ||
+	    (env->path_sensitive ? !aux->iv_operand : !st->equations.xreg_equation_cnt ||
+				   (e->trip_widened &&
+				    aux->thresholds_epoch == e->loop->leftover_epoch)))
+		return;
+	expr[1] = make_expr(0, 0, insn->imm);
+	if (!bpf_xreg_expr(env, st, bpf_reg_to_xreg(st, insn->dst_reg), &expr[0], &is_ptr) ||
+	    (BPF_SRC(insn->code) == BPF_X &&
+	     !bpf_xreg_expr(env, st, bpf_reg_to_xreg(st, insn->src_reg), &expr[1], &is_ptr)))
+		return;
+	bpf_eval_expr(env, st, &expr[1], &bound[0]);
+	bpf_eval_expr(env, st, &expr[0], &bound[1]);
+	scalar_set_const(&bound[2], 0);
+	stays_in_loop[0] = insn_is_in_loop(env, e->loop, env->insn_idx + 1);
+	stays_in_loop[1] = insn_is_in_loop(env, e->loop, env->insn_idx + insn->off + 1);
+	is_body_jump = stays_in_loop[0] && stays_in_loop[1];
+	low32[0] = low32[1] = low32[2] = BPF_CLASS(insn->code) == BPF_JMP32;
+	x = bpf_xreg(st->curframe, BPF_XREG_TRIP + f->loop_stack_cnt - 1);
+	if (!bpf_xreg_expr(env, st, x, &trip, &is_ptr) || !var_is_sym(trip.var))
+		return;
+	if (expr[0].coef && expr[1].coef &&
+	    bpf_find_next_diff(env, &st->equations, &expr[0], &expr[1], &pos, &expr[2])) {
+		/* it gets to 0 */
+		add_iv_threshold(env, e->loop, expr[0].off - expr[1].off, 0, THRESHOLD_DIFF, 0);
+		add_iv_threshold(env, e->loop, expr[1].off - expr[0].off, 0, THRESHOLD_DIFF, 1);
+		add_iv_threshold(env, e->loop, -expr[2].coef * expr[2].off, 0, THRESHOLD_DIFF, 2);
+	} else {
+		expr[2].coef = 0;
+	}
+	for (i = 0; i < 3; i++) {
+		is_iv[i] = match_iv(env, st, &expr[i], trip.var, &low32[i], &start_is_range[i]);
+		/* the step in one trip */
+		step = make_expr(0, 0, expr[i].coef);
+		is_iv[i] = is_iv[i] && bpf_expr_div_exact(&step, 0, trip.coef);
+		expr[i].coef = step.off;
+	}
+	/* they do not get closer */
+	if (is_iv[0] && is_iv[1] && !start_is_range[0] && !start_is_range[1] &&
+	    expr[0].coef == expr[1].coef) {
+		/* but 'x != (u32)x' is 'x > U32_MAX', see refine_carry(). Operand i is x. */
+		i = cnum64_umax(bound[1].r64) <= U32_MAX;
+		if ((insn->code != (BPF_JMP | BPF_JNE | BPF_X) &&
+		     insn->code != (BPF_JMP | BPF_JEQ | BPF_X)) ||
+		    expr[0].off == expr[1].off || (u32)(expr[0].off - expr[1].off) ||
+		    cnum64_umax(bound[i].r64) > U32_MAX)
+			return;
+		scalar_set_const(&bound[i], U32_MAX);
+		is_iv[!i] = is_iv[2] = low32[i] = false;
+		tests_carry = true;
+	}
+	start = e->trip_index.r64.base;
+	for (n = is_iv[0] && is_iv[1] && is_iv[2] ? 4 : 0; n < 6; n++) {
+		i = n / 2;
+		if (!is_iv[i] || !stays_in_loop[n & 1] || (is_body_jump && start_is_range[i]))
+			continue;
+		aux->thresholds_epoch = e->loop->leftover_epoch;
+		/* note_trips_left() takes the other operand as the bound */
+		if (i < 2 && !tests_carry)
+			aux->iv_operand = i + 1;
+		x = expr[i].coef * (start - trip.off) + expr[i].off;
+		if (i == 2 && start_is_range[i])
+			x = clamp_diff_start(bound, low32[i] ? (s32)x : x, expr[i].coef);
+		op = loop_cond_opcode(insn, n & 1, i);
+		if (tests_carry)
+			op = op == BPF_JNE ? BPF_JGT : BPF_JLE;
+		cnt = compute_trip_count(expr[i].coef, &x, op, low32[i], bound[i]);
+		/* its start is not known, so the trip index does not give its end */
+		if (cnt && start_is_range[i] && i < 2) {
+			add_iv_threshold(env, e->loop, x, expr[i].coef, THRESHOLD_SYM, 2 * n);
+			add_iv_threshold(env, e->loop, x + expr[i].coef, expr[i].coef,
+					 THRESHOLD_SYM, 2 * n + 1);
+		}
+		if (!cnt || cnt > BPF_MAX_TRIPS)
+			continue;
+		add_iv_threshold(env, e->loop, start + cnt, 1, is_body_jump, 2 * n);
+		if (is_body_jump)
+			add_iv_threshold(env, e->loop, start + cnt + 1, 1, is_body_jump, 2 * n + 1);
+		else
+			e->exit_threshold = min(e->exit_threshold, start + cnt);
+	}
 }

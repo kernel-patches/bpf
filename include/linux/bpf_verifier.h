@@ -427,6 +427,9 @@ static inline u32 bpf_xreg_to_spi(u32 xregno)
 
 /* The trip index of a loop is an xreg too. The loops of a frame come after its slots. */
 #define BPF_XREG_TRIP MAX_BPF_XREG
+/* A loop that can make more trips gets may_goto */
+#define BPF_MAX_TRIPS BIT_ULL(32)
+
 static inline u64 bpf_xreg(u32 frameno, u32 xregno)
 {
 	return (u64)frameno << 32 | xregno;
@@ -474,6 +477,7 @@ struct loop_stack_entry {
 	/* an xreg: how many times the program came back to the header */
 	struct scalar trip_index;
 	bool trip_widened;	/* it was moved to a threshold, or it does not grow */
+	u64 exit_threshold;	/* by the jumps that the state passed and that leave the loop */
 };
 
 /* The state is in a walk on patience, which may not get to the end of the loop */
@@ -863,6 +867,7 @@ enum bpf_loop_kind {
 
 /* What a pass finds about a loop */
 struct bpf_loop_per_pass {
+	bool needs_guard;	/* see bpf_flow_needs_guard() */
 	bool has_leftover;	/* the peeled trips were not enough */
 	/* a check failed in a state that the loop kept apart, with no other suspect */
 	bool has_unproven;
@@ -897,16 +902,22 @@ struct bpf_loop {
 	bool peeled_apart;	/* the join rule holds for states that start a peeled trip */
 	bool disjoint_apart;	/* disjoint values in data_deps stay apart, also in the leftover */
 	);
+	struct bpf_loop_per_pass last_pass;	/* the last pass whose partition was kept */
 	bool partitioned;	/* the last partition was for this loop */
 	bool peeled_joined;	/* at the start of a peeled trip, against the join rule */
+	bool guarded;		/* states take the edges of may_goto */
 	struct bpf_iv_threshold *iv_thresholds;	/* where an iv can stop, see equation_join.c */
 	u32 iv_threshold_cnt, iv_threshold_cap;
+	u32 leftover_epoch;	/* how many leftovers started */
+	u64 exit_trip;		/* the trip in which the loop can end, 0 if it is not known */
+	/* they move with the trip index, or only at first, see bpf_note_linear_xregs() */
+	DECLARE_BITMAP(linear_xregs, MAX_BPF_XREG);
+	DECLARE_BITMAP(nonlinear_xregs, MAX_BPF_XREG);
 	struct bpf_loop_per_pass this_pass;
 	/* sorted constants of the loop, the largest and the smallest constant that an insn adds */
 	s64 *thresholds;
 	u32 threshold_cnt, threshold_cap;
 	s32 max_step, min_step;
-	bool guarded;
 };
 
 static inline bool bpf_loop_has_budget(const struct bpf_loop *loop)
@@ -1026,6 +1037,8 @@ struct bpf_insn_aux_data {
 	u16 stack_ptrs; /* bitmask of regs that may hold a frame pointer here (arg_track) */
 
 	unsigned int orig_idx; /* original instruction index, initialized once */
+	u32 thresholds_epoch;	/* see bpf_collect_iv_thresholds() */
+	u8 iv_operand;		/* the operand of the jump that tests the iv, + 1 */
 	/* registers alive before this instruction. */
 	u16 live_regs_before;
 	/*
@@ -1712,6 +1725,8 @@ u64 bpf_hash_apart_xregs(struct bpf_verifier_env *env, const struct bpf_verifier
 u64 bpf_hash_args(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u64 hash);
 void bpf_range_of_data_dep(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			   u32 *first, u32 *last);
+bool bpf_xreg_in_data_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			   u32 fr, u32 xregno);
 bool bpf_xreg_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 		      u32 fr, u32 xregno);
 void bpf_note_reads_from_unproven(struct bpf_verifier_env *env, u32 idx);
@@ -2469,6 +2484,8 @@ void bpf_equations_fill(struct bpf_verifier_env *env, struct bpf_func_state *fra
 void bpf_equations_refine_all(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int idx,
 			bool taken);
+void bpf_equations_next_trip(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			     u32 depth);
 bool bpf_equations_subsume(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
 			   const struct bpf_verifier_state *cur);
 void bpf_equations_print(struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
@@ -2478,6 +2495,7 @@ void bpf_equations_pre_join(struct bpf_verifier_env *env, struct bpf_verifier_st
 void bpf_equations_post_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
 			     const struct bpf_verifier_state *src);
 u32 bpf_equations_bytes(const struct bpf_equations *eqs);
+void bpf_collect_iv_thresholds(struct bpf_verifier_env *env);
 void scalar_bounds_sync(struct scalar *s);
 bool scalar_subsumes(const struct scalar *old, const struct scalar *cur);
 bool scalars_fit_in_bits(const struct scalar *a, const struct scalar *b, u32 bits);

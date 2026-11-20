@@ -583,6 +583,34 @@ u64 bpf_hash_join_key(const struct bpf_verifier_env *env, const struct bpf_verif
 	return hash;
 }
 
+/*
+ * If may_goto or an iterator stops the loop, its trip index can start again from a smaller
+ * number, never from a larger one: see bpf_equations_next_trip().
+ */
+static bool trip_index_safe(const struct loop_stack_entry *old, const struct loop_stack_entry *cur)
+{
+	u64 min = cnum64_umin(old->trip_index.r64);
+	struct scalar first;
+
+	if (old->peeled || scalar_subsumes(&old->trip_index, &cur->trip_index))
+		return true;
+	if (!old->loop->rt_bounded && !old->loop->this_pass.needs_guard)
+		return false;
+	scalar_set_const(&first, min);
+	return min <= cnum64_umin(cur->trip_index.r64) &&
+	       scalar_subsumes(&old->trip_index, &first);
+}
+
+static bool loop_stack_safe(struct bpf_func_state *old, struct bpf_func_state *cur)
+{
+	u32 i;
+
+	for (i = 0; i < old->loop_stack_cnt; i++)
+		if (!trip_index_safe(&old->loop_stack[i], &cur->loop_stack[i]))
+			return false;
+	return true;
+}
+
 /* compare two verifier states
  *
  * The state that gets to an insn doesn't have to be looked at when there is
@@ -603,10 +631,9 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before;
 	u16 i;
 
-	if (old->callback_depth > cur->callback_depth)
-		return false;
-
-	if (!old->no_stack_arg_load && cur->no_stack_arg_load)
+	if (old->callback_depth > cur->callback_depth ||
+	    (!old->no_stack_arg_load && cur->no_stack_arg_load) ||
+	    !loop_stack_safe(old, cur))
 		return false;
 
 	for (i = 0; i < MAX_BPF_REG; i++)

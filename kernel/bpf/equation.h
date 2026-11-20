@@ -190,4 +190,9 @@ void bpf_eval_diff(struct bpf_verifier_env *env, const struct bpf_verifier_state
 void bpf_guess_equations(struct bpf_verifier_env *env, const struct bpf_verifier_state *dst,
 			 const struct bpf_verifier_state *src, struct bpf_loop *leftover_loop,
 			 bool widen);
+void bpf_note_linear_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *dst,
+			   const struct bpf_equations *join);
+u64 bpf_guess_trip_threshold(struct bpf_verifier_env *env, const struct bpf_verifier_state *dst,
+			     const struct loop_stack_entry *e, u64 xreg);
+
 #endif
