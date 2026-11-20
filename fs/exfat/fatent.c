@@ -456,8 +456,10 @@ int exfat_alloc_cluster(struct inode *inode, unsigned int num_alloc,
 	}
 
 	if (num_alloc > total_cnt - sbi->used_clusters) {
-		ret = -ENOSPC;
-		goto unlock;
+		/* A contiguous mapping can use a shorter allocation. */
+		if (!contig || sbi->used_clusters == total_cnt)
+			goto unlock;
+		num_alloc = total_cnt - sbi->used_clusters;
 	}
 
 	hint_clu = p_chain->dir;
