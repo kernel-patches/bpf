@@ -3446,6 +3446,8 @@ int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
 struct bpf_core_ctx {
 	struct bpf_verifier_log *log;
 	const struct btf *btf;
+	/* program being loaded, if any, for function argument relocations */
+	const struct bpf_prog *prog;
 };
 
 bool btf_nested_type_is_trusted(struct bpf_verifier_log *log,
