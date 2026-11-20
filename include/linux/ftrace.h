@@ -1075,6 +1075,10 @@ static inline unsigned long ftrace_location(unsigned long ip)
 {
 	return 0;
 }
+static inline unsigned long ftrace_location_range(unsigned long start, unsigned long end)
+{
+	return 0;
+}
 
 /*
  * Again users of functions that have ftrace_ops may not
