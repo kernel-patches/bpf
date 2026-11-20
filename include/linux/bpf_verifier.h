@@ -382,6 +382,30 @@ struct bpf_retval_range {
 	bool return_32bit;
 };
 
+/*
+ * An xreg is a register or a stack slot of a frame:
+ *
+ *	0 .. 10		11 .. 13		MAX_BPF_EXT_REG ..
+ *	r0 .. r10	hidden registers	fp-8, fp-16, ...
+ *
+ * A state has no value for a hidden register. No mask of xregs has its bit.
+ */
+#define MAX_BPF_XREG (MAX_BPF_EXT_REG + MAX_BPF_STACK_SLOTS)
+
+static inline bool bpf_xreg_is_slot(u32 xregno)
+{
+	return xregno >= MAX_BPF_EXT_REG;
+}
+
+static inline u32 bpf_spi_to_xreg(u32 spi)
+{
+	return MAX_BPF_EXT_REG + spi;
+}
+
+static inline u32 bpf_xreg_to_spi(u32 xregno)
+{
+	return xregno - MAX_BPF_EXT_REG;
+}
 
 /* Where may_goto that the verifier adds goes, see check_loop_guard() */
 enum bpf_guard_edge {
@@ -858,10 +882,19 @@ struct bpf_insn_aux_data {
 	u64 non_stack_access:1; /* instruction can access non-stack memory */
 	/* true if some jump or call instruction targets this instruction */
 	u64 jump_target:1;
+	/* it can read or write the frame of a caller, in a call with a known callee */
+	u32 reads_outer:1;
+	u32 writes_outer:1;
+	DECLARE_BITMAP(may_read_mask, MAX_BPF_STACK_SLOTS);
 
 	unsigned int orig_idx; /* original instruction index, initialized once */
 	/* registers alive before this instruction. */
 	u16 live_regs_before;
+	/*
+	 * Registers that it reads and writes. The arguments of a static function and of callx
+	 * are not in @use_regs. The bits above r10 are not valid.
+	 */
+	u16 use_regs, def_regs;
 	/*
 	 * Bitmask of R0-R9 that hold known values at this instruction.
 	 * const_reg_mask: scalar constants that fit in 32 bits.

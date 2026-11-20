@@ -19838,6 +19838,7 @@ bool bpf_get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call,
 			if (fn->arg_type[i] == ARG_UNUSED)
 				break;
 			cs->arg_slot_cnt++;
+			cs->implicit_slot_cnt += fn->arg_type[i] == ARG_PTR_TO_PROG_AUX;
 		}
 		return true;
 	}
