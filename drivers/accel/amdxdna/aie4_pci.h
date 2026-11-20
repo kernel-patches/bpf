@@ -49,6 +49,10 @@ struct amdxdna_hwctx_priv {
 	struct cert_comp                *cert_comp;
 	u32                             hw_ctx_id;
 	bool                            has_error;
+	/* Attached debug buffers, held until removal or fini. */
+	struct amdxdna_gem_obj          *fw_buf_bo[AMDXDNA_FW_BUF_NUM];
+	/* Their configuration, sent again when the context is created. */
+	struct aie4_msg_context_config_cert_logging fw_buf_cl[AMDXDNA_FW_BUF_NUM];
 
 	/* Direct and indirect packet storage aliasing umq_bo. */
 	u64                             write_index;
@@ -142,6 +146,9 @@ int aie4_msg_set_power_mode(struct amdxdna_dev_hdl *ndev, u8 power_mode);
 int aie4_set_runtime_cfg(struct amdxdna_dev_hdl *ndev, u32 type,
 			 const void *data, size_t size);
 int aie4_set_ctx_hysteresis(struct amdxdna_dev_hdl *ndev, u32 timeout_us);
+int aie4_configure_hw_context_cert_log(struct amdxdna_dev_hdl *ndev,
+				       u32 hw_context_id, u32 property,
+				       const struct aie4_msg_context_config_cert_logging *cl);
 u32 aie4_msg_pasid(struct amdxdna_client *client);
 
 /* aie4_ctx.c */
@@ -161,6 +168,9 @@ int aie4_hwctx_create(struct amdxdna_hwctx *hwctx);
 void aie4_hwctx_destroy(struct amdxdna_hwctx *hwctx, enum aie4_hwctx_flags);
 int aie4_hwctx_wait_for_running(struct amdxdna_hwctx *hwctx);
 void aie4_hwctx_resume_jobs(struct amdxdna_hwctx *hwctx);
+int aie4_hwctx_config(struct amdxdna_hwctx *hwctx, u32 type, u64 value,
+		      void *buf, u32 size);
+int aie4_hwctx_sync_debug_bo(struct amdxdna_hwctx *hwctx, u32 debug_bo_hdl);
 
 /* aie4_pci.c */
 void aie4_hwctx_suspend_all(struct amdxdna_dev_hdl *ndev, int clean_jobs);

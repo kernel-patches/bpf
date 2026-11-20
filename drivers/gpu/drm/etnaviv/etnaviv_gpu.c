@@ -1199,7 +1199,7 @@ static struct dma_fence *etnaviv_gpu_fence_alloc(struct etnaviv_gpu *gpu)
 	f->gpu = gpu;
 
 	dma_fence_init(&f->base, &etnaviv_fence_ops, &gpu->fence_spinlock,
-		       gpu->fence_context, ++gpu->next_fence);
+		       gpu->fence_context, ++gpu->next_fence, 0);
 
 	return &f->base;
 }

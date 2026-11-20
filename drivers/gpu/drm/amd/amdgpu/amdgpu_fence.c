@@ -112,7 +112,7 @@ void amdgpu_fence_emit(struct amdgpu_ring *ring, struct amdgpu_fence *af,
 	seq = ++ring->fence_drv.sync_seq;
 	dma_fence_init(fence, &amdgpu_fence_ops,
 		       &ring->fence_drv.lock,
-		       adev->fence_context + ring->idx, seq);
+		       adev->fence_context + ring->idx, seq, 0);
 
 	amdgpu_ring_emit_fence(ring, ring->fence_drv.gpu_addr,
 			       seq, flags | AMDGPU_FENCE_FLAG_INT);

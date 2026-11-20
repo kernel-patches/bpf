@@ -122,7 +122,7 @@ static int aie2_hwctx_restart(struct amdxdna_dev *xdna, struct amdxdna_hwctx *hw
 				heap->mem.size);
 	if (ret) {
 		XDNA_ERR(xdna, "Map host buf failed, ret %d", ret);
-		goto out;
+		goto destroy;
 	}
 
 	xa_for_each_range(&hwctx->client->dev_heap_xa, heap_id, heap, 1,
@@ -132,16 +132,20 @@ static int aie2_hwctx_restart(struct amdxdna_dev *xdna, struct amdxdna_hwctx *hw
 					heap->mem.size);
 		if (ret) {
 			XDNA_ERR(xdna, "Add heap %ld failed ret %d", heap_id, ret);
-			goto out;
+			goto destroy;
 		}
 	}
 
 	ret = aie2_config_cu(hwctx, NULL);
 	if (ret) {
 		XDNA_ERR(xdna, "Config cu failed, ret %d", ret);
-		goto out;
+		goto destroy;
 	}
 
+	return 0;
+
+destroy:
+	aie2_hwctx_stop(xdna, hwctx, NULL);
 out:
 	XDNA_DBG(xdna, "%s restarted, ret %d", hwctx->name, ret);
 	return ret;
@@ -400,8 +404,18 @@ aie2_sched_job_run(struct drm_sched_job *sched_job)
 	trace_xdna_job(sched_job, hwctx->name, "job run",
 		       job->seq, job->drv_cmd ? job->drv_cmd->opcode : DEFAULT_IO);
 
-	if (!hwctx->priv->mbox_chann)
-		return NULL;
+	/*
+	 * The firmware context is gone, but the scheduler keeps draining the
+	 * entity, for example from drm_sched_entity_destroy(). Returning NULL
+	 * would make the DRM scheduler signal the job fence without an error
+	 * and user space would see the command as successfully completed.
+	 * Abort the job instead. Driver internal commands have no command BO.
+	 */
+	if (!hwctx->priv->mbox_chann) {
+		if (cmd_abo)
+			amdxdna_cmd_set_state(cmd_abo, ERT_CMD_STATE_ABORT);
+		return ERR_PTR(-ECANCELED);
+	}
 
 	if (!mmget_not_zero(job->mm))
 		return ERR_PTR(-ESRCH);
@@ -985,10 +999,16 @@ static void aie2_cmd_wait(struct amdxdna_hwctx *hwctx, u64 seq)
 	struct dma_fence *out_fence = aie2_cmd_get_out_fence(hwctx, seq);
 	struct amdxdna_dev *xdna = hwctx->client->xdna;
 
-	if (!out_fence) {
-		XDNA_ERR(xdna, "Failed to get fence");
+	/*
+	 * No fence to wait for. Either seq has already signaled and a later
+	 * point pruned it out of the timeline chain, or the syncobj was
+	 * reset. Neither means the command failed, so leave the verdict to
+	 * the caller, which inspects cmd->result. Userspace can also force
+	 * this path by resetting the syncobj it owns, in which case it only
+	 * corrupts its own debug BO bookkeeping.
+	 */
+	if (!out_fence)
 		return;
-	}
 
 	mutex_unlock(&xdna->dev_lock);
 	dma_fence_wait_timeout(out_fence, false, MAX_SCHEDULE_TIMEOUT);
@@ -1018,6 +1038,7 @@ static int aie2_hwctx_cfg_debug_bo(struct amdxdna_hwctx *hwctx, u32 bo_hdl,
 		goto put_obj;
 	}
 	kref_init(&cmd->refcnt);
+	cmd->result = U32_MAX;
 
 	if (attach) {
 		if (abo->assigned_hwctx != AMDXDNA_INVALID_CTX_HANDLE) {
@@ -1091,6 +1112,7 @@ int aie2_hwctx_sync_debug_bo(struct amdxdna_hwctx *hwctx, u32 debug_bo_hdl)
 	if (!cmd)
 		return -ENOMEM;
 	kref_init(&cmd->refcnt);
+	cmd->result = U32_MAX;
 
 	cmd->opcode = SYNC_DEBUG_BO;
 	ret = amdxdna_cmd_submit(client, cmd, AMDXDNA_INVALID_BO_HANDLE,

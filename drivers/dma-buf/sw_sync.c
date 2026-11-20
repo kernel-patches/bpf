@@ -258,7 +258,7 @@ static struct sync_pt *sync_pt_create(struct sync_timeline *obj,
 
 	sync_timeline_get(obj);
 	dma_fence_init(&pt->base, &timeline_fence_ops, &obj->lock,
-		       obj->context, value);
+		       obj->context, value, 0);
 	INIT_LIST_HEAD(&pt->link);
 
 	spin_lock_irq(&obj->lock);

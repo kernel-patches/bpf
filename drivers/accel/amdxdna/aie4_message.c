@@ -326,3 +326,23 @@ int aie4_set_ctx_hysteresis(struct amdxdna_dev_hdl *ndev, u32 timeout_us)
 
 	return ret;
 }
+
+int aie4_configure_hw_context_cert_log(struct amdxdna_dev_hdl *ndev,
+				       u32 hw_context_id, u32 property,
+				       const struct aie4_msg_context_config_cert_logging *cl)
+{
+	DECLARE_AIE_MSG(aie4_msg_configure_hw_context, AIE4_MSG_OP_CONFIGURE_HW_CONTEXT);
+	struct amdxdna_dev *xdna = ndev->aie.xdna;
+	int ret;
+
+	req.hw_context_id = hw_context_id;
+	req.property = property;
+	req.cert_logging = *cl;
+
+	ret = aie_send_mgmt_msg_wait(&ndev->aie, &msg);
+	if (ret)
+		XDNA_ERR(xdna, "Configure debug buffer failed, ctx %u property %u ret %d",
+			 hw_context_id, property, ret);
+
+	return ret;
+}

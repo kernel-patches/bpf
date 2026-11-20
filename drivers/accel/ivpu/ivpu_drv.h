@@ -56,8 +56,6 @@
 #define IVPU_PLATFORM_HSLE    4
 #define IVPU_PLATFORM_INVALID 8
 
-#define IVPU_SCHED_MODE_AUTO -1
-
 #define IVPU_DBG_REG	 BIT(0)
 #define IVPU_DBG_IRQ	 BIT(1)
 #define IVPU_DBG_MMU	 BIT(2)
@@ -224,7 +222,6 @@ struct ivpu_file_priv {
 extern int ivpu_dbg_mask;
 extern u8 ivpu_pll_min_ratio;
 extern u8 ivpu_pll_max_ratio;
-extern int ivpu_sched_mode;
 extern bool ivpu_disable_mmu_cont_pages;
 extern bool ivpu_force_snoop;
 
@@ -233,6 +230,7 @@ extern bool ivpu_force_snoop;
 #define IVPU_TEST_MODE_NULL_SUBMISSION    BIT(2)
 #define IVPU_TEST_MODE_FREQ_CHANGE_ENABLE BIT(3)
 #define IVPU_TEST_MODE_MIP_DISABLE        BIT(6)
+#define IVPU_TEST_MODE_HWS_DISABLE        BIT(7)
 #define IVPU_TEST_MODE_DISABLE_TIMEOUTS   BIT(8)
 #define IVPU_TEST_MODE_TURBO_ENABLE       BIT(9)
 #define IVPU_TEST_MODE_TURBO_DISABLE      BIT(10)

@@ -3322,7 +3322,7 @@ queue_run_job(struct drm_sched_job *sched_job)
 		       &panthor_queue_fence_ops,
 		       &queue->fence_ctx.lock,
 		       queue->fence_ctx.id,
-		       atomic64_inc_return(&queue->fence_ctx.seqno));
+		       atomic64_inc_return(&queue->fence_ctx.seqno), 0);
 
 	job->profiling.slot = queue->profiling.seqno++;
 	if (queue->profiling.seqno == queue->profiling.slot_count)

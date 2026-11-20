@@ -544,7 +544,7 @@ void xe_tlb_inval_fence_init(struct xe_tlb_inval *tlb_inval,
 
 	spin_lock_irq(&tlb_inval->lock);
 	dma_fence_init(&fence->base, &inval_fence_ops, &tlb_inval->lock,
-		       dma_fence_context_alloc(1), 1);
+		       dma_fence_context_alloc(1), 1, 0);
 	spin_unlock_irq(&tlb_inval->lock);
 	INIT_LIST_HEAD(&fence->link);
 	if (stack)

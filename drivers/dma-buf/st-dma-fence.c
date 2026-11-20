@@ -31,7 +31,7 @@ static struct dma_fence *mock_fence(void)
 	if (!f)
 		return NULL;
 
-	dma_fence_init(f, &mock_ops, NULL, 0, 0);
+	dma_fence_init(f, &mock_ops, NULL, 0, 0, 0);
 	return f;
 }
 

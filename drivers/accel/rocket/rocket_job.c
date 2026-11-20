@@ -61,7 +61,7 @@ static struct dma_fence *rocket_fence_create(struct rocket_core *core)
 		return ERR_PTR(-ENOMEM);
 
 	dma_fence_init(fence, &rocket_fence_ops, &core->fence_lock,
-		       core->fence_context, ++core->emit_seqno);
+		       core->fence_context, ++core->emit_seqno, 0);
 
 	return fence;
 }
@@ -523,10 +523,8 @@ int rocket_job_init(struct rocket_core *core)
 					rocket_job_irq_handler_thread,
 					IRQF_SHARED, dev_name(core->dev),
 					core);
-	if (ret) {
-		dev_err(core->dev, "failed to request job irq");
+	if (ret)
 		return ret;
-	}
 
 	core->reset.wq = alloc_ordered_workqueue("rocket-reset-%d", 0, core->index);
 	if (!core->reset.wq)

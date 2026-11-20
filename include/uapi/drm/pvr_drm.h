@@ -258,9 +258,22 @@ struct drm_pvr_dev_query_enhancements {
  * enum drm_pvr_heap_id - Array index for heap info data returned by
  * %DRM_PVR_DEV_QUERY_HEAP_INFO_GET.
  *
- * For compatibility reasons all indices will be present in the returned array,
- * however some heaps may not be present. These are indicated where
- * &struct drm_pvr_heap.size is set to zero.
+ * Userspace and the kernel may have different values for @DRM_PVR_HEAP_COUNT.
+ * In this case:
+ *
+ *  - If KMD(@DRM_PVR_HEAP_COUNT) > UMD(@DRM_PVR_HEAP_COUNT), then userspace
+ *    should either:
+ *
+ *    a. explicitly request a number of heaps by specifying a value less than
+ *       or equal to UMD(@DRM_PVR_HEAP_COUNT) heaps, and the kernel must
+ *       ignore heaps whose ID is greater than or equal to this value, or
+ *    b. ignore heap IDs greater than or equal to UMD(@DRM_PVR_HEAP_COUNT) by,
+ *       e.g. capping the value returned by the kernel.
+ *
+ *  - If KMD(@DRM_PVR_HEAP_COUNT) < UMD(@DRM_PVR_HEAP_COUNT), then the maximum
+ *    number of heaps is capped by the kernel at KMD(@DRM_PVR_HEAP_COUNT) and
+ *    userspace must ignore heaps whose ID is greater than or equal to
+ *    KMD(@DRM_PVR_HEAP_COUNT).
  */
 enum drm_pvr_heap_id {
 	/** @DRM_PVR_HEAP_GENERAL: General purpose heap. */
@@ -269,7 +282,7 @@ enum drm_pvr_heap_id {
 	DRM_PVR_HEAP_PDS_CODE_DATA,
 	/** @DRM_PVR_HEAP_USC_CODE: USC code heap. */
 	DRM_PVR_HEAP_USC_CODE,
-	/** @DRM_PVR_HEAP_RGNHDR: Region header heap. Only used if GPU has BRN63142. */
+	/** @DRM_PVR_HEAP_RGNHDR: Region header heap (optional). Only used if GPU has BRN63142. */
 	DRM_PVR_HEAP_RGNHDR,
 	/** @DRM_PVR_HEAP_VIS_TEST: Visibility test heap. */
 	DRM_PVR_HEAP_VIS_TEST,
@@ -310,18 +323,42 @@ struct drm_pvr_heap {
  * struct drm_pvr_dev_query_heap_info - Container used to fetch information
  * about heaps supported by the device driver.
  *
- * Please note all driver-supported heaps will be returned up to &heaps.count.
- * Some heaps will not be present in all devices, which will be indicated by
- * &struct drm_pvr_heap.size being set to zero.
+ * Please note that drivers may not need all the heaps that are returned up to
+ * &heaps.count in &heaps.array. Unlike for required heaps, optional heaps are
+ * used on some GPU cores only. The kernel indicates when optional heaps are not
+ * needed by setting &struct drm_pvr_heap.size to zero.
+ *
+ * The kernel copies all requested heaps into &heaps.array matching the order
+ * of heap indices as they are listed in &enum drm_pvr_heap_id.
  *
  * When fetching this type &struct drm_pvr_ioctl_dev_query_args.type must be set
  * to %DRM_PVR_DEV_QUERY_HEAP_INFO_GET.
  */
 struct drm_pvr_dev_query_heap_info {
 	/**
-	 * @heaps: Array of &struct drm_pvr_heap. If pointer is NULL, the count
-	 * and stride will be updated with those known to the driver version, to
-	 * facilitate allocation by the caller.
+	 * @heaps: Array of &struct drm_pvr_heap. To facilitate allocation by
+	 * the caller:
+	 *
+	 * - if &heaps.array is NULL and &heaps.count is set by the caller, the
+	 *   count will be updated with the value of @DRM_PVR_HEAP_COUNT that
+	 *   is known to the kernel driver.
+	 *
+	 * - if &heaps.array is NULL and &heaps.count is zero, the count will
+	 *   be updated with a value that is the minimum supported by the kernel
+	 *   and this may differ based on the GPU ID.
+	 *
+	 * - If &heaps.array is NULL and &heaps.stride is set by the caller, the
+	 *   stride will be updated to the size of &struct drm_pvr_heap known to
+	 *   the kernel driver.
+	 *
+	 * - If &heaps.array is NULL and &heaps.stride is zero, the stride will
+	 *   be updated with a value that is the minimum supported by the kernel
+	 *   and this may differ based on the GPU ID.
+	 *
+	 * - If &heaps.array, &heaps.stride and &heaps.count are set by the
+	 *   caller, then the kernel will try to honor the value of count and
+	 *   this may be clamped to the value of @DRM_PVR_HEAP_COUNT known by
+	 *   the kernel.
 	 */
 	struct drm_pvr_obj_array heaps;
 };
@@ -427,9 +464,30 @@ struct drm_pvr_static_data_area {
  */
 struct drm_pvr_dev_query_static_data_areas {
 	/**
-	 * @static_data_areas: Array of &struct drm_pvr_static_data_area. If
-	 * pointer is NULL, the count and stride will be updated with those
-	 * known to the driver version, to facilitate allocation by the caller.
+	 * @static_data_areas: Array of &struct drm_pvr_static_data_area. To
+	 * facilitate allocation by the caller:
+	 *
+	 * - if &static_data_areas.array is NULL and &static_data_areas.count is
+	 *   set by the caller, the count will be updated with the maximum count
+	 *   that is known to the kernel driver.
+	 *
+	 * - If &static_data_areas.array is NULL and &static_data_areas.count is
+	 *   zero, the count will be updated with a value that is the minimum
+	 *   supported by the kernel and this may differ based on the GPU ID.
+	 *
+	 * - If &static_data_areas.array is NULL and &static_data_areas.stride
+	 *   is set by the caller, the stride will be updated to the size of
+	 *   &struct drm_pvr_static_data_area known to the kernel driver.
+	 *
+	 * - If &static_data_areas.array is NULL and &static_data_areas.stride
+	 *   is zero, the stride will be updated with a value that is the
+	 *   minimum supported by the kernel and this may differ based on the
+	 *   GPU ID.
+	 *
+	 * - If &static_data_areas.array, &static_data_areas.stride and
+	 *   &static_data_areas.count are set by the caller, then the kernel
+	 *   will try to honor the value of count and this may be clamped to the
+	 *   maximum supported by the kernel.
 	 */
 	struct drm_pvr_obj_array static_data_areas;
 };

@@ -736,7 +736,7 @@ impl<'a, T: Send + Sync + FenceContextOps> DriverFenceAllocation<'a, T> {
         // SAFETY: `fence_ptr` has been created directly above. It will live
         // at least as long as `Self`. The same applies to `&Self::OPS`.
         unsafe {
-            bindings::dma_fence_init(fence_ptr, self.ops, null_ptr, self.data.fctx.nr, seqno)
+            bindings::dma_fence_init(fence_ptr, self.ops, null_ptr, self.data.fctx.nr, seqno, 0)
         };
 
         self.data.fctx.nr_of_unsignaled_fences.fetch_add(1, Relaxed);
