@@ -239,7 +239,9 @@ struct xe_migrate {
 	u64 large_page_copy_pdes;
 	/**
 	 * @fence: dma-fence representing the last migration job batch.
-	 * Protected by @job_mutex.
+	 * Updated under @job_mutex. Readers must take a reference while holding
+	 * the mutex before using the fence outside the critical section. The
+	 * stored reference is released during final teardown.
 	 */
 	struct dma_fence *fence;
 	/** @min_chunk_size: For dgfx, Minimum chunk size */
@@ -283,6 +285,13 @@ static void xe_migrate_ulls_toggle_enable(struct xe_migrate *m, bool enabled)
 {
 	lockdep_assert_held(&m->job_mutex);
 	m->ulls.enabled = enabled;
+}
+
+static void xe_migrate_fence_set(struct xe_migrate *m, struct dma_fence *fence)
+{
+	lockdep_assert_held(&m->job_mutex);
+	dma_fence_put(m->fence);
+	m->fence = dma_fence_get(fence);
 }
 
 static void xe_migrate_ulls_fini(struct xe_migrate *m)
@@ -1448,8 +1457,7 @@ static struct dma_fence *__xe_migrate_copy(struct xe_migrate *m,
 		dma_fence_put(fence);
 		fence = xe_migrate_job_push(m, job);
 
-		dma_fence_put(m->fence);
-		m->fence = dma_fence_get(fence);
+		xe_migrate_fence_set(m, fence);
 
 		mutex_unlock(&m->job_mutex);
 
@@ -1877,8 +1885,7 @@ struct dma_fence *xe_migrate_vram_copy_chunk(struct xe_bo *vram_bo, u64 vram_off
 			dma_fence_put(fence);
 			fence = xe_migrate_job_push(m, job);
 
-			dma_fence_put(m->fence);
-			m->fence = dma_fence_get(fence);
+			xe_migrate_fence_set(m, fence);
 		}
 
 		xe_bb_free(bb, fence);
@@ -2112,8 +2119,7 @@ struct dma_fence *xe_migrate_clear(struct xe_migrate *m,
 		dma_fence_put(fence);
 		fence = xe_migrate_job_push(m, job);
 
-		dma_fence_put(m->fence);
-		m->fence = dma_fence_get(fence);
+		xe_migrate_fence_set(m, fence);
 
 		mutex_unlock(&m->job_mutex);
 
@@ -2167,9 +2173,9 @@ void xe_migrate_wait(struct xe_migrate *m)
 {
 	struct dma_fence *fence;
 
-	mutex_lock(&m->job_mutex);
-	fence = dma_fence_get(m->fence);
-	mutex_unlock(&m->job_mutex);
+	scoped_guard(mutex, &m->job_mutex) {
+		fence = dma_fence_get(m->fence);
+	}
 
 	if (fence) {
 		dma_fence_wait(fence, false);
@@ -2478,12 +2484,10 @@ static struct dma_fence *xe_migrate_vram(struct xe_migrate *m,
 		err = 0;
 	}
 
-	mutex_lock(&m->job_mutex);
-	fence = xe_migrate_job_push(m, job);
-
-	dma_fence_put(m->fence);
-	m->fence = dma_fence_get(fence);
-	mutex_unlock(&m->job_mutex);
+	scoped_guard(mutex, &m->job_mutex) {
+		fence = xe_migrate_job_push(m, job);
+		xe_migrate_fence_set(m, fence);
+	}
 
 	xe_bb_free(bb, fence);
 
