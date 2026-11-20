@@ -11542,7 +11542,7 @@ static bool func_is_on_its_own(struct bpf_verifier_env *env, struct bpf_verifier
 		if (arg_needs_caller(env, state, sub, &caller->stack_arg_regs[i]))
 			return false;
 	}
-	return true;
+	return sub->recursive || !bpf_call_needs_frames(env, state, live);
 }
 
 static int enter_recursion(struct bpf_verifier_env *env, struct bpf_func_state *callee);
@@ -21292,6 +21292,7 @@ static void note_error(struct bpf_verifier_env *env, int err)
 		env->err = err;
 		env->err_insn = env->insn_idx;
 		env->log.level = 0;
+		env->pass_max_cost = min(env->pass_max_cost, bpf_pass_max_cost(env));
 	}
 	if (!env->path_sensitive)
 		bpf_note_unproven_insn(env, env->cur_state, env->insn_idx);
@@ -21617,10 +21618,41 @@ static bool round_is_dropped(struct bpf_verifier_env *env)
 	return (env->restart && bpf_flow_loops_lost_bound(env)) || env->guards_late;
 }
 
+/*
+ * The loops that keep the current state apart pay for the work since the last state, but not
+ * a loop that the state enters. A trip that is peeled on the budget of a loop belongs to that
+ * loop. Such trips can use up the budget of an inner loop.
+ */
+static void charge_loops(struct bpf_verifier_env *env, u64 cost)
+{
+	const struct bpf_verifier_state *st = env->cur_state;
+	const struct loop_stack_entry *e;
+	struct bpf_loop *starved_loop = NULL;
+	int fr, i;
+
+	for (fr = st->curframe; env->pass && fr >= 0; fr--) {
+		for (i = st->frame[fr]->loop_stack_cnt - 1; i >= 0; i--) {
+			e = &st->frame[fr]->loop_stack[i];
+			if ((e->peeled || e->loop->disjoint_apart) &&
+			    (e->trip || e->loop->header != st->insn_idx))
+				e->loop->this_pass.cost += cost;
+			if (e->peeled && e->trip >= e->loop->peel_cnt) {
+				if (starved_loop && e->loop->partitioned)
+					starved_loop->this_pass.starved =
+						e->loop->this_pass.starves = true;
+				return;
+			}
+			if (e->loop->partitioned && !bpf_loop_has_budget(e->loop))
+				starved_loop = e->loop;
+		}
+	}
+}
+
 static int do_check(struct bpf_verifier_env *env)
 {
 	bool level2 = env->log.level & BPF_LOG_LEVEL2;
 	u64 log_pos = env->log.end_pos, diag_pos = 0;
+	u64 cost = env->cost;
 	int prev_insn_idx, err;
 
 	err = bpf_flow_deliver(env, env->cur_state, env->insn_idx, -1, false);
@@ -21631,6 +21663,8 @@ static int do_check(struct bpf_verifier_env *env)
 			return bpf_check_limits(env);
 		if (err)
 			break;
+		charge_loops(env, env->cost - cost);
+		cost = env->cost;
 		/* A pass logs one basic block at a time. A path-sensitive run logs a full path. */
 		bpf_diag_event_log_restore(env, diag_pos);
 		if (!level2) {
