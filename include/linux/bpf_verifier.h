@@ -1744,11 +1744,8 @@ int bpf_flow_prepare(struct bpf_verifier_env *env);
 void bpf_flow_reset(struct bpf_verifier_env *env);
 void bpf_flow_free(struct bpf_verifier_env *env);
 bool bpf_flow_is_bb_start(struct bpf_verifier_env *env, int insn_idx);
-bool bpf_flow_is_point(struct bpf_verifier_env *env, int insn_idx);
 int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
-		     int insn_idx, int prev_insn_idx);
-int bpf_flow_guard_edge(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
-			int insn_idx, int prev_insn_idx, enum bpf_guard_edge edge);
+		     int insn_idx, int prev_insn_idx, bool again);
 int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx);
 int bpf_flow_call(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
 		  struct bpf_verifier_state *entry, int subprog, int call_idx);
@@ -1760,6 +1757,7 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env);
 /* verifier.c, for flow.c */
 int bpf_flow_loop_enter(struct bpf_verifier_env *env, struct bpf_loop **backedge_loop,
 			bool *starts_leftover);
+int bpf_flow_start_leftover(struct bpf_verifier_env *env);
 int bpf_flow_edge_unproven(struct bpf_verifier_env *env, struct bpf_verifier_state *st, u32 idx,
 			   int err);
 #define BPF_EXIT_NEEDS_CALLER	1	/* verify the call in the frames of the caller */
