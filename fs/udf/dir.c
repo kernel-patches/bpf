@@ -115,10 +115,8 @@ static int udf_readdir(struct file *file, struct dir_context *ctx)
 			goto out_iter;
 	}
 
-	if (!ret) {
+	if (pos_valid)
 		ctx->pos = (iter.pos >> 2) + 1;
-		pos_valid = true;
-	}
 out_iter:
 	udf_fiiter_release(&iter);
 out:
