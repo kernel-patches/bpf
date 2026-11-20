@@ -1049,7 +1049,6 @@ static void spear_smi_remove(struct platform_device *pdev)
 	}
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int spear_smi_suspend(struct device *dev)
 {
 	struct spear_smi *sdev = dev_get_drvdata(dev);
@@ -1072,9 +1071,8 @@ static int spear_smi_resume(struct device *dev)
 		spear_smi_hw_init(sdev);
 	return ret;
 }
-#endif
 
-static SIMPLE_DEV_PM_OPS(spear_smi_pm_ops, spear_smi_suspend, spear_smi_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(spear_smi_pm_ops, spear_smi_suspend, spear_smi_resume);
 
 #ifdef CONFIG_OF
 static const struct of_device_id spear_smi_id_table[] = {
@@ -1089,7 +1087,7 @@ static struct platform_driver spear_smi_driver = {
 		.name = "smi",
 		.bus = &platform_bus_type,
 		.of_match_table = of_match_ptr(spear_smi_id_table),
-		.pm = &spear_smi_pm_ops,
+		.pm = pm_sleep_ptr(&spear_smi_pm_ops),
 	},
 	.probe = spear_smi_probe,
 	.remove = spear_smi_remove,

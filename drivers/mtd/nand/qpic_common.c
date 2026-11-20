@@ -584,8 +584,8 @@ int qcom_submit_descs(struct qcom_nand_controller *nandc)
 		cookie = dmaengine_submit(desc->dma_desc);
 
 	if (nandc->props->supports_bam) {
-		bam_txn->last_cmd_desc->callback = qcom_qpic_bam_dma_done;
-		bam_txn->last_cmd_desc->callback_param = bam_txn;
+		dmaengine_desc_set_callback(bam_txn->last_cmd_desc,
+					    qcom_qpic_bam_dma_done, NULL, bam_txn);
 
 		dma_async_issue_pending(nandc->tx_chan);
 		dma_async_issue_pending(nandc->rx_chan);

@@ -551,8 +551,11 @@ int INFTL_mount(struct INFTLrecord *s)
 
 	/* Temporary buffer to store ANAC numbers. */
 	ANACtable = kcalloc(s->nb_blocks, sizeof(u8), GFP_KERNEL);
-	if (!ANACtable)
+	if (!ANACtable) {
+		kfree(s->PUtable);
+		kfree(s->VUtable);
 		return -ENOMEM;
+	}
 
 	/*
 	 * First pass is to explore each physical unit, and construct the

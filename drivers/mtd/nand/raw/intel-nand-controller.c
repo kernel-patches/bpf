@@ -322,8 +322,7 @@ static int ebu_dma_start(struct ebu_nand_controller *ebu_host, u32 dir,
 		goto err_unmap;
 	}
 
-	tx->callback = callback;
-	tx->callback_param = ebu_host;
+	dmaengine_desc_set_callback(tx, callback, NULL, ebu_host);
 	cookie = dmaengine_submit(tx);
 
 	ret = dma_submit_error(cookie);
