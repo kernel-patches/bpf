@@ -4679,6 +4679,7 @@ int skb_shift(struct sk_buff *tgt, struct sk_buff *skb, int shiftlen)
 
 	DEBUG_NET_WARN_ON_ONCE(tgt->pp_recycle != skb->pp_recycle);
 	DEBUG_NET_WARN_ON_ONCE(skb_cmp_decrypted(tgt, skb));
+	DEBUG_NET_WARN_ON_ONCE(!skb_mem_provider_compat(tgt, skb));
 
 	todo = shiftlen;
 	from = 0;
@@ -5326,6 +5327,10 @@ normal:
 				err = -EINVAL;
 				goto err;
 			}
+			if (!skb_mem_provider_compat(head_skb, list_skb)) {
+				err = -EINVAL;
+				goto err;
+			}
 
 			nskb = skb_clone(list_skb, GFP_ATOMIC);
 			if (unlikely(!nskb))
@@ -5447,6 +5452,11 @@ normal:
 					goto err;
 				}
 
+				if (!skb_mem_provider_compat(head_skb,
+							     list_skb)) {
+					err = -EINVAL;
+					goto err;
+				}
 				if (skb_shinfo(nskb)->nr_frags &&
 				    nskb->pp_recycle != list_skb->pp_recycle) {
 					nskb->data_len = pos - offset - hsize;
@@ -6637,6 +6647,43 @@ void kfree_skb_partial(struct sk_buff *skb, bool head_stolen)
 }
 EXPORT_SYMBOL(kfree_skb_partial);
 
+/* Return an opaque pointer identifying the memory provider instance of @skb's
+ * net_iov fragments:
+ * - For devmem (NET_IOV_DMABUF), net_iov_owner(niov) (&binding->area, 1:1 with
+ *   the binding across RX queues and TX).
+ * - For other net_iov providers (e.g., io_uring zcrx), niov->desc.pp (shared
+ *   across all areas of an io_zcrx_ifq).
+ */
+static void *skb_net_iov_provider(const struct sk_buff *skb)
+{
+	struct net_iov *niov;
+
+	if (!skb_shinfo(skb)->nr_frags)
+		return NULL;
+
+	niov = skb_frag_net_iov(&skb_shinfo(skb)->frags[0]);
+	if (!niov)
+		return NULL;
+
+	if (net_is_devmem_iov(niov))
+		return net_iov_owner(niov);
+
+	return niov->desc.pp;
+}
+
+bool __skb_mem_provider_compat(const struct sk_buff *skb1,
+			       const struct sk_buff *skb2)
+{
+	void *p1;
+
+	if (skb_frags_readable(skb1) != skb_frags_readable(skb2))
+		return false;
+
+	p1 = skb_net_iov_provider(skb1);
+	return p1 && p1 == skb_net_iov_provider(skb2);
+}
+EXPORT_SYMBOL(__skb_mem_provider_compat);
+
 /**
  * skb_try_coalesce - try to merge skb to prior one
  * @to: prior buffer
@@ -6669,7 +6716,7 @@ bool skb_try_coalesce(struct sk_buff *to, struct sk_buff *from,
 	 * belong to the same memory provider instance; do not coalesce skbs
 	 * that would mix them.
 	 */
-	if (skb_frags_readable(from) != skb_frags_readable(to))
+	if (!skb_mem_provider_compat(to, from))
 		return false;
 
 	if (len <= skb_tailroom(to) && skb_frags_readable(from)) {

@@ -1892,6 +1892,24 @@ static inline bool skb_frags_readable(const struct sk_buff *skb)
 	return !skb->unreadable;
 }
 
+bool __skb_mem_provider_compat(const struct sk_buff *skb1,
+			       const struct sk_buff *skb2);
+
+/* Return true if the memory providers of @skb1 and @skb2 are compatible
+ * for coalescing. For any struct page-backed provider (the buddy allocator
+ * or a future provider handing out struct pages), coalescing is assumed
+ * feasible. For net_iov-backed providers, the provider instance pointer
+ * must match.
+ */
+static inline bool skb_mem_provider_compat(const struct sk_buff *skb1,
+					   const struct sk_buff *skb2)
+{
+	if (likely(skb_frags_readable(skb1) && skb_frags_readable(skb2)))
+		return true;
+
+	return __skb_mem_provider_compat(skb1, skb2);
+}
+
 static inline void skb_mark_not_on_list(struct sk_buff *skb)
 {
 	skb->next = NULL;
