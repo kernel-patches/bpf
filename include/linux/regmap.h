@@ -1485,7 +1485,7 @@ struct regmap_field *regmap_field_alloc(struct regmap *regmap,
 		struct reg_field reg_field);
 void regmap_field_free(struct regmap_field *field);
 
-DEFINE_FREE(regmap_field, struct regmap_field *, if (_T) regmap_field_free(_T))
+DEFINE_FREE(regmap_field, struct regmap_field *, if (!IS_ERR_OR_NULL(_T)) regmap_field_free(_T))
 
 struct regmap_field *devm_regmap_field_alloc(struct device *dev,
 		struct regmap *regmap, struct reg_field reg_field);
