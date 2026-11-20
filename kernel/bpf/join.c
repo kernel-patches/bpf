@@ -235,9 +235,11 @@ int bpf_states_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst
 	env->pkt_pair_cnt = 0;
 	env->imprecise |= !env->err;
 	dst->suspect_loops |= src->suspect_loops;
+	bpf_equations_pre_join(env, dst, src, leftover_loop, leftover_loop && widen);
 	for (j.fr = 0; j.fr <= dst->curframe; j.fr++)
 		join_func(&j, dst->frame[j.fr], src->frame[j.fr],
 			  env->insn_aux_data[bpf_frame_insn_idx(dst, j.fr)].live_regs_before);
+	bpf_equations_post_join(env, dst, src);
 	dst->max_held_cnt = max(dst->max_held_cnt, src->max_held_cnt);
 	/* no equation is found over a limit */
 	if (env->test_reg_invariants && !bpf_state_subsumes(env, dst, src) &&

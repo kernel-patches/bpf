@@ -640,5 +640,5 @@ bool bpf_state_subsumes(struct bpf_verifier_env *env, const struct bpf_verifier_
 				       bpf_frame_insn_idx(old, i)))
 			return false;
 
-	return true;
+	return bpf_equations_subsume(env, old, cur);
 }
