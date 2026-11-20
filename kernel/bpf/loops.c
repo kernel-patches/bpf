@@ -2,7 +2,6 @@
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 
 #include <linux/slab.h>
-#include <linux/sched/signal.h>
 #include <linux/bpf_verifier.h>
 
 static bool is_cfg_jump(struct bpf_insn *insn)
@@ -29,7 +28,7 @@ static struct bpf_iarray **compute_predecessors(struct bpf_verifier_env *env)
 	size_t sz;
 	void *tmp;
 
-	num_preds = kvzalloc_objs(u32, prog->len, GFP_KERNEL_ACCOUNT);
+	num_preds = kvzalloc_objs(u32, prog->len, BPF_VERIFIER_GFP);
 	if (!num_preds)
 		return NULL;
 
@@ -50,7 +49,7 @@ static struct bpf_iarray **compute_predecessors(struct bpf_verifier_env *env)
 			i++;
 	}
 
-	result = kvzalloc(sz, GFP_KERNEL_ACCOUNT);
+	result = kvzalloc(sz, BPF_VERIFIER_GFP);
 	if (!result) {
 		kvfree(num_preds);
 		return NULL;
@@ -97,82 +96,117 @@ static int idoms_intersect(struct bpf_verifier_env *env, int a, int b)
 	return a;
 }
 
-/* See "A Simple, Fast Dominance Algorithm" by Cooper et al. for details. */
-static int compute_subprog_idoms(struct bpf_verifier_env *env, struct bpf_iarray **preds,
-				int subprog_idx)
+/* An insn. The nodes are in the order of a depth-first walk, node 0 is none. */
+struct idom_node {
+	u32 insn;
+	u32 parent;	/* in the walk */
+	u32 semi;	/* semidominator */
+	u32 idom;
+	u32 up;		/* a parent, or a parent of it, once the node is done */
+	u32 min;	/* the node with the lowest 'semi' on the way to 'up' */
+	u32 bucket;	/* list of the nodes whose 'semi' this node is */
+	u32 next;	/* in that list. Before that the next successor for the walk */
+};
+
+/* The node with the lowest 'semi' on the way up from node 'id'. Makes the way short. */
+static u32 idom_eval(struct idom_node *nodes, u32 *path, u32 id)
 {
-	struct bpf_subprog_info *subprog = &env->subprog_info[subprog_idx];
-	int start = subprog->start;
-	int po_first = subprog->postorder_start;
-	int po_last = (subprog + 1)->postorder_start - 1;
-	int *idoms = env->idoms;
-	int po_num, pred;
-	u32 work = 0;
-	bool changed;
+	struct idom_node *node, *up;
+	u32 cnt = 0, cur;
 
-	idoms[start] = start;
-	changed = true;
-	do {
-		changed = false;
-		/*
-		 * Iterate in reverse postorder, skipping the subprog entry:
-		 * insn_postorder[po_last] is the subprogram entry.
-		 */
-		for (po_num = po_last - 1; po_num >= po_first; po_num--) {
-			int idx = env->cfg.insn_postorder[po_num];
-			int new_idom = -1;
-
-			iarray_for_each(pred, preds[idx]) {
-				if (++work % 1024 == 0) {
-					if (signal_pending(current))
-						return -EAGAIN;
-					cond_resched();
-				}
-
-				if (idoms[pred] == -1)
-					continue;
-				if (new_idom == -1)
-					new_idom = pred;
-				else
-					new_idom = idoms_intersect(env, pred, new_idom);
-			}
-			if (new_idom != -1 && idoms[idx] != new_idom) {
-				idoms[idx] = new_idom;
-				changed = true;
-			}
-		}
-	} while (changed);
-	idoms[start] = -1;
-	return 0;
+	for (cur = id; nodes[nodes[cur].up].up; cur = nodes[cur].up)
+		path[cnt++] = cur;
+	while (cnt--) {
+		node = &nodes[path[cnt]];
+		up = &nodes[node->up];
+		if (nodes[up->min].semi < nodes[node->min].semi)
+			node->min = up->min;
+		node->up = up->up;
+	}
+	return nodes[id].min;
 }
 
+/*
+ * See "A Fast Algorithm for Finding Dominators in a Flowgraph" by Lengauer and Tarjan.
+ *
+ *   1 -> 2 -> 3 -> 4      walk:          parent[4] = 3
+ *   |              ^      from the end:  semi[4] = 1
+ *   +-> 5 ---------+      from the top:  idom[4] = 1
+ */
 int bpf_compute_idoms(struct bpf_verifier_env *env)
 {
-	struct bpf_iarray **preds;
-	u32 len = env->prog->len;
-	int *idoms, i, err = 0;
+	u32 len = env->prog->len, cnt = 0, i, insn, id, cur, best, *num, *path;
+	struct bpf_iarray **preds, *succ;
+	struct idom_node *nodes, *node;
+	int err = -ENOMEM;
 
 	preds = compute_predecessors(env);
-	if (!preds)
-		return -ENOMEM;
+	env->idoms = kvmalloc_objs(*env->idoms, len, BPF_VERIFIER_GFP);
+	nodes = kvzalloc_objs(*nodes, len + 1, BPF_VERIFIER_GFP);
+	/* insn -> node */
+	num = kvzalloc_objs(*num, 2 * (size_t)len, BPF_VERIFIER_GFP);
+	path = num + len;
+	if (!preds || !env->idoms || !nodes || !num)
+		goto out;
+	memset(env->idoms, 0xff, len * sizeof(*env->idoms));
 
-	idoms = kvzalloc_objs(*idoms, len, GFP_KERNEL_ACCOUNT);
-	if (!idoms) {
-		kvfree(preds);
-		return -ENOMEM;
-	}
-
-	env->idoms = idoms;
-	for (i = 0; i < len; i++)
-		idoms[i] = -1;
-
+	err = -EINTR;
 	for (i = 0; i < env->subprog_cnt; i++) {
-		err = compute_subprog_idoms(env, preds, i);
-		if (err)
-			break;
+		insn = env->subprog_info[i].start;
+		for (cur = 0;; insn = succ->items[nodes[cur].next++]) {
+			if (!num[insn]) {
+				num[insn] = ++cnt;
+				nodes[cnt] = (struct idom_node){ insn, cur, cnt, .min = cnt };
+				cur = cnt;
+			}
+			if (bpf_must_abort())
+				goto out;
+			/* go back to a node that has a successor left */
+			for (; cur; cur = nodes[cur].parent) {
+				succ = bpf_insn_successors(env, nodes[cur].insn);
+				if (nodes[cur].next < succ->cnt)
+					break;
+			}
+			if (!cur)
+				break;
+		}
 	}
 
+	for (id = cnt; id; id--) {
+		node = &nodes[id];
+		if (!node->parent)
+			continue;
+		iarray_for_each(insn, preds[node->insn]) {
+			if (bpf_must_abort())
+				goto out;
+			if (!num[insn])
+				continue;
+			best = idom_eval(nodes, path, num[insn]);
+			node->semi = min(node->semi, nodes[best].semi);
+		}
+		node->next = nodes[node->semi].bucket;
+		nodes[node->semi].bucket = id;
+		node->up = node->parent;
+		for (cur = nodes[node->parent].bucket; cur; cur = nodes[cur].next) {
+			best = idom_eval(nodes, path, cur);
+			nodes[cur].idom = nodes[best].semi < nodes[cur].semi ? best : node->parent;
+		}
+		nodes[node->parent].bucket = 0;
+	}
+
+	for (id = 1; id <= cnt; id++) {
+		node = &nodes[id];
+		if (!node->parent)
+			continue;
+		if (node->idom != node->semi)
+			node->idom = nodes[node->idom].idom;
+		env->idoms[node->insn] = nodes[node->idom].insn;
+	}
+	err = 0;
+out:
 	kvfree(preds);
+	kvfree(nodes);
+	kvfree(num);
 	return err;
 }
 
@@ -217,7 +251,7 @@ static int add_exit(struct bpf_loop *loop, int from, int to)
 	}
 	if (!loop->exits) {
 		loop->exits = kvzalloc_objs(*loop->exits, MAX_LOOP_EXITS,
-					    GFP_KERNEL_ACCOUNT);
+					    BPF_VERIFIER_GFP);
 		if (!loop->exits)
 			return -ENOMEM;
 	}
@@ -234,7 +268,7 @@ static int mark_as_header(struct bpf_verifier_env *env, int h)
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 
 	if (!aux[h].loop) {
-		aux[h].loop = kvzalloc_obj(struct bpf_loop, GFP_KERNEL_ACCOUNT);
+		aux[h].loop = kvzalloc_obj(struct bpf_loop, BPF_VERIFIER_GFP);
 		if (!aux[h].loop)
 			return -ENOMEM;
 	}
@@ -306,36 +340,100 @@ int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx)
 }
 
 /*
- * Collect conditional jumps within n's loop that dominate 'n' and have
- * a successor outside the loop, nearest first.
+ * Collect conditional jumps within n's loop that dominate 'n' and leave
+ * the loop on one edge, see bpf_edge_leaves_loop(), nearest first.
+ * A jump that cannot count the iterations takes no place, see bpf_scev_jump_counts().
  */
-static void find_dominating_conditions(struct bpf_verifier_env *env, int n,
-				       struct bpf_backedge *backedge)
+static int find_dominating_conditions(struct bpf_verifier_env *env, int n,
+				      struct bpf_backedge *backedge)
 {
 	struct bpf_insn *insns = env->prog->insnsi;
 	bool t_exits_loop, f_exits_loop;
-	int n_loop, t_loop, f_loop;
 	int *idoms = env->idoms;
+	int n_loop, counts;
 
 	n_loop = bpf_loop_at_index(env, n);
 	if (idoms_intersect(env, n, n_loop) != n_loop)
-		return;
+		return 0;
 	while (n >= 0) {
 		if (is_cond_jmp_insn(&insns[n]) && bpf_loop_at_index(env, n) == n_loop) {
-			t_loop = bpf_loop_at_index(env, n + insns[n].off + 1);
-			f_loop = bpf_loop_at_index(env, n + 1);
-			t_exits_loop = t_loop != n_loop && !bpf_is_nested_loop(env, t_loop, n_loop);
-			f_exits_loop = f_loop != n_loop && !bpf_is_nested_loop(env, f_loop, n_loop);
-			if (t_exits_loop || f_exits_loop) {
+			t_exits_loop = bpf_edge_leaves_loop(env, n_loop, n, n + insns[n].off + 1);
+			f_exits_loop = bpf_edge_leaves_loop(env, n_loop, n, n + 1);
+			/* latches[0] is the latch: it has to leave the loop itself */
+			if ((t_exits_loop || f_exits_loop) &&
+			    (backedge->latches_cnt || bpf_jump_leaves_loop(env, n_loop, n))) {
+				counts = !backedge->latches_cnt ? 1 :
+					 bpf_scev_jump_counts(env, n_loop, n, t_exits_loop);
+				if (counts < 0)
+					return counts;
+				if (!counts)
+					goto next;
 				if (backedge->latches_cnt == MAX_LATCHES)
-					return;
+					return 0;
+				if (t_exits_loop)
+					backedge->taken_leaves |= BIT(backedge->latches_cnt);
 				backedge->latches[backedge->latches_cnt++] = n;
 			}
 		}
+next:
 		if (n == n_loop)
 			break;
 		n = idoms[n];
 	}
+	return 0;
+}
+
+/*
+ * Without @flags: the jumps that leave a loop themselves. That tells where the verifier may add
+ * may_goto. It takes the constants that hold with these edges to follow a flag.
+ * Once more after scalar evolution, which knows the jumps that count. The flags that were found
+ * are remembered.
+ */
+int bpf_find_latches(struct bpf_verifier_env *env, bool flags)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_backedge *backedge;
+	struct bpf_loop *loop;
+	int i, j, k, err;
+
+	if (flags) {
+		err = bpf_compute_leave_conds(env);
+		if (err)
+			return err;
+	}
+	for (i = 0; i < env->prog->len; i++) {
+		loop = aux[i].loop;
+		if (!loop)
+			continue;
+		for (j = 0; j < loop->backedges_cnt; j++) {
+			backedge = &loop->backedges[j];
+			backedge->latches_cnt = 0;
+			backedge->taken_leaves = 0;
+			/*
+			 * In theory, the backedge->from and it's latch can reside in
+			 * an inner loop of `i`, e.g.:
+			 *
+			 *  1:  r7 += 1;
+			 *  2:  r6 += 1;
+			 *      if r7 == 2 goto 1b;
+			 *      if r6 < 2 goto 2b;
+			 *
+			 * For now, let's assume that latches are unknown for such cases.
+			 * (GCC/LLVM handle this by inserting artificial cfg nodes).
+			 */
+			if (bpf_loop_at_index(env, backedge->from) != i)
+				continue;
+			err = find_dominating_conditions(env, backedge->from, backedge);
+			if (err)
+				return err;
+			for (k = 1; flags && k < backedge->latches_cnt; k++)
+				if ((env->log.level & BPF_LOG_LEVEL2) &&
+				    !bpf_jump_leaves_loop(env, i, backedge->latches[k]))
+					bpf_log(&env->log, "loop at %d, exit by way of a flag at %d\n",
+						i, backedge->latches[k]);
+		}
+	}
+	return 0;
 }
 
 /*
@@ -352,24 +450,15 @@ static int compute_loops_in_subprog(struct bpf_verifier_env *env, struct loops_d
 	int *stack = dfs->stack;
 	int s, h, err, cur, stack_sz;
 	struct bpf_iarray *succ;
-	u32 i;
 
 	stack[0] = start;
 	state[start].traversed = true;
 	state[start].next_succ = 0;
 	dfs_pos[start] = 1;
 	stack_sz = 1;
-	i = 0;
 	do {
-		/*
-		 * The algorithm should be very fast in practice,
-		 * guard against pathological inputs, just in case.
-		 */
-		if ((++i % 1024) == 0) {
-			if (signal_pending(current))
-				return -EAGAIN;
-			cond_resched();
-		}
+		if (bpf_must_abort())
+			return -EINTR;
 
 		cur = stack[stack_sz - 1];
 		succ = bpf_insn_successors(env, cur);
@@ -458,6 +547,30 @@ bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int oute
 	return false;
 }
 
+/* Whether the conditional jump at @n, in the loop @h or in a loop nested in it, leaves @h */
+bool bpf_jump_leaves_loop(struct bpf_verifier_env *env, int h, int n)
+{
+	struct bpf_insn *insn = &env->prog->insnsi[n];
+	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
+	int t, f;
+
+	if ((class != BPF_JMP && class != BPF_JMP32) || op == BPF_JA || op == BPF_CALL ||
+	    op == BPF_EXIT || op == BPF_JCOND)
+		return false;
+	t = bpf_loop_at_index(env, n + insn->off + 1);
+	f = bpf_loop_at_index(env, n + 1);
+	return (t != h && !bpf_is_nested_loop(env, t, h)) ||
+	       (f != h && !bpf_is_nested_loop(env, f, h));
+}
+
+/* The same for an insn that is in the loop @h itself */
+bool bpf_insn_leaves_loop(struct bpf_verifier_env *env, int h, int n)
+{
+	if (bpf_loop_at_index(env, n) != h)
+		return false;
+	return bpf_jump_leaves_loop(env, h, n);
+}
+
 int bpf_compute_loops(struct bpf_verifier_env *env)
 {
 	int i, j, k, s, t, iloop, sloop, err = 0, len = env->prog->len;
@@ -468,9 +581,9 @@ int bpf_compute_loops(struct bpf_verifier_env *env)
 	struct bpf_iarray *succ;
 	struct bpf_loop *loop;
 
-	dfs.dfs_pos = kvzalloc_objs(int, len, GFP_KERNEL_ACCOUNT);
-	dfs.state = kvzalloc_objs(struct dfs_state, len, GFP_KERNEL_ACCOUNT);
-	dfs.stack = kvzalloc_objs(int, len, GFP_KERNEL_ACCOUNT);
+	dfs.dfs_pos = kvzalloc_objs(int, len, BPF_VERIFIER_GFP);
+	dfs.state = kvzalloc_objs(struct dfs_state, len, BPF_VERIFIER_GFP);
+	dfs.stack = kvzalloc_objs(int, len, BPF_VERIFIER_GFP);
 	if (!dfs.dfs_pos || !dfs.state || !dfs.stack) {
 		err = -ENOMEM;
 		goto out;
@@ -482,30 +595,9 @@ int bpf_compute_loops(struct bpf_verifier_env *env)
 		if (err)
 			goto out;
 	}
-	/* find latches */
-	for (i = 0; i < len; i++) {
-		loop = aux[i].loop;
-		if (!loop)
-			continue;
-		for (j = 0; j < loop->backedges_cnt; j++) {
-			backedge = &loop->backedges[j];
-			/*
-			 * In theory, the backedge->from and it's latch can reside in
-			 * an inner loop of `i`, e.g.:
-			 *
-			 *  1:  r7 += 1;
-			 *  2:  r6 += 1;
-			 *      if r7 == 2 goto 1b;
-			 *      if r6 < 2 goto 2b;
-			 *
-			 * For now, let's assume that latches are unknown for such cases.
-			 * (GCC/LLVM handle this by inserting artificial cfg nodes).
-			 */
-			if (bpf_loop_at_index(env, backedge->from) != i)
-				continue;
-			find_dominating_conditions(env, backedge->from, backedge);
-		}
-	}
+	err = bpf_find_latches(env, false);
+	if (err)
+		goto out;
 	/* find exits */
 	for (i = 0; i < len; i++) {
 		iloop = aux[i].loop ? i : aux[i].loop_header;
@@ -556,7 +648,7 @@ int bpf_compute_loops(struct bpf_verifier_env *env)
 				 *  s: ...
 				 *   }
 				 */
-				/* Enclosing loops inherit the overflow, see below */
+				/* Enclosing loops get nested_exits_overflow, see below */
 				if (aux[t].loop->exits_overflow)
 					break;
 				err = add_exit(aux[t].loop, i, s);
@@ -573,7 +665,7 @@ int bpf_compute_loops(struct bpf_verifier_env *env)
 		if (!loop || !loop->exits_overflow)
 			continue;
 		for (t = aux[i].loop_header; t >= 0; t = aux[t].loop_header)
-			aux[t].loop->exits_overflow = true;
+			aux[t].loop->nested_exits_overflow = true;
 	}
 
 	if (env->log.level & BPF_LOG_LEVEL2) {
@@ -588,6 +680,8 @@ int bpf_compute_loops(struct bpf_verifier_env *env)
 				bpf_log(log, ", irreducible");
 			if (loop->exits_overflow)
 				bpf_log(log, ", too many exits");
+			if (loop->nested_exits_overflow)
+				bpf_log(log, ", too many exits of a nested loop");
 			bpf_log(log, "\n");
 			for (j = 0; j < loop->backedges_cnt; j++) {
 				backedge = &loop->backedges[j];

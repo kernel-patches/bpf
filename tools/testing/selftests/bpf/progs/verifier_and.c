@@ -38,9 +38,9 @@ __naked void invalid_and_of_negative_number(void)
 	r1 &= -4;					\
 	r1 <<= 2;					\
 	r0 += r1;					\
-l0_%=:	r1 = %[test_val_foo];				\
+	r1 = %[test_val_foo];				\
 	*(u64*)(r0 + 0) = r1;				\
-	exit;						\
+l0_%=:	exit;						\
 "	:
 	: __imm(bpf_map_lookup_elem),
 	  __imm_addr(map_hash_48b),
@@ -90,7 +90,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("if w0 < 0x1 goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R1 !read_ok'` */
-__xlated_unpriv("goto pc-1") /* `r1 = *(u32*)(r1 + 512)`, sanitized dead code */
+__xlated_unpriv("goto pc-2") /* `r1 = *(u32*)(r1 + 512)`, sanitized dead code */
 __xlated_unpriv("r0 = 0")
 #endif
 __naked void known_subreg_with_unknown_reg(void)

@@ -11,6 +11,9 @@
 #include <linux/btf_ids.h>
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
+#include <linux/printk.h>
+#include <linux/ratelimit.h>
+#include <linux/rbtree_latch.h>
 #include <asm/tlbflush.h>
 #include "range_tree.h"
 
@@ -47,10 +50,15 @@
 #define GUARD_SZ round_up(1ull << sizeof_field(struct bpf_insn, off) * 8, PAGE_SIZE << 1)
 #define KERN_VM_SZ (SZ_4G + GUARD_SZ)
 
+static struct latch_tree_root arena_tree;
+static DEFINE_SPINLOCK(arena_tree_lock);
+
 static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt, bool sleepable);
 
 struct bpf_arena {
 	struct bpf_map map;
+	struct latch_tree_node tnode;
+	struct rcu_work destroy_work;
 	u64 user_vm_start;
 	u64 user_vm_end;
 	struct vm_struct *kern_vm;
@@ -68,6 +76,33 @@ struct bpf_arena {
 	struct irq_work     free_irq;
 	struct work_struct  free_work;
 	struct llist_head   free_spans;
+	struct arena_stacks __percpu *stacks;
+};
+
+/*
+ * The stack in arena, see BPF_REG_ARENA_SP. An invocation of a program takes one
+ * when it starts and gives it back when it exits.
+ *
+ * Nothing here is in arena: the program and user space can write there.
+ *
+ * Invocations on a cpu don't nest: a program that is preempted or sleeps can exit
+ * before the one that started later. Hence a bit per stack and not a counter.
+ * Programs don't migrate, so the stack is returned on the cpu it was taken on.
+ *
+ * Most of the time there is one invocation on a cpu. It takes the stack of
+ * the cpu, see struct bpf_arena_cpu_stack, and doesn't need these.
+ */
+#define ARENA_STACK_SLOTS 16
+
+struct arena_stack {
+	u32 base;	/* low 32 bits of r12 when the main program starts */
+	u32 size;	/* 0 until the first use */
+};
+
+struct arena_stacks {
+	struct bpf_arena_cpu_stack cpu;
+	unsigned long busy;
+	struct arena_stack slot[ARENA_STACK_SLOTS];
 };
 
 static void arena_free_worker(struct work_struct *work);
@@ -114,6 +149,33 @@ struct bpf_map *bpf_prog_arena(struct bpf_prog *prog)
 
 	return arena ? &arena->map : NULL;
 }
+
+static __always_inline bool arena_tree_less(struct latch_tree_node *a,
+					   struct latch_tree_node *b)
+{
+	struct bpf_arena *arena_a = container_of(a, struct bpf_arena, tnode);
+	struct bpf_arena *arena_b = container_of(b, struct bpf_arena, tnode);
+
+	return bpf_arena_get_kern_vm_start(arena_a) < bpf_arena_get_kern_vm_start(arena_b);
+}
+
+static __always_inline int arena_tree_comp(void *key, struct latch_tree_node *node)
+{
+	struct bpf_arena *arena = container_of(node, struct bpf_arena, tnode);
+	unsigned long kbase = bpf_arena_get_kern_vm_start(arena);
+	unsigned long addr = (unsigned long)key;
+
+	if (addr < kbase)
+		return -1;
+	if (addr >= kbase + SZ_4G + GUARD_SZ / 2)
+		return 1;
+	return 0;
+}
+
+static const struct latch_tree_ops arena_tree_ops = {
+	.less = arena_tree_less,
+	.comp = arena_tree_comp,
+};
 
 static long arena_map_peek_elem(struct bpf_map *map, void *value)
 {
@@ -333,6 +395,10 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	if (err)
 		goto err_destroy_rt;
 
+	spin_lock(&arena_tree_lock);
+	latch_tree_insert(&arena->tnode, &arena_tree, &arena_tree_ops);
+	spin_unlock(&arena_tree_lock);
+
 	return &arena->map;
 
 err_destroy_rt:
@@ -373,6 +439,26 @@ static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data)
 	return 0;
 }
 
+static void arena_map_destroy(struct work_struct *work)
+{
+	struct bpf_arena *arena = container_of(to_rcu_work(work), struct bpf_arena,
+					     destroy_work);
+
+	/*
+	 * free_vm_area() calls remove_vm_area() that calls free_unmap_vmap_area().
+	 * It unmaps everything from vmalloc area and clears pgtables.
+	 * Call apply_to_existing_page_range() first to find populated ptes and
+	 * free those pages.
+	 */
+	apply_to_existing_page_range(&init_mm, bpf_arena_get_kern_vm_start(arena),
+				     SZ_4G + GUARD_SZ / 2, existing_page_cb, arena);
+	free_vm_area(arena->kern_vm);
+	range_tree_destroy(&arena->rt);
+	__free_page(arena->scratch_page);
+	free_percpu(arena->stacks);
+	bpf_map_area_free(arena);
+}
+
 static void arena_map_free(struct bpf_map *map)
 {
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
@@ -386,22 +472,16 @@ static void arena_map_free(struct bpf_map *map)
 	if (WARN_ON_ONCE(!list_empty(&arena->vma_list)))
 		return;
 
+	spin_lock(&arena_tree_lock);
+	latch_tree_erase(&arena->tnode, &arena_tree, &arena_tree_ops);
+	spin_unlock(&arena_tree_lock);
+
 	/* Ensure no pending deferred frees */
 	irq_work_sync(&arena->free_irq);
 	flush_work(&arena->free_work);
 
-	/*
-	 * free_vm_area() calls remove_vm_area() that calls free_unmap_vmap_area().
-	 * It unmaps everything from vmalloc area and clears pgtables.
-	 * Call apply_to_existing_page_range() first to find populated ptes and
-	 * free those pages.
-	 */
-	apply_to_existing_page_range(&init_mm, bpf_arena_get_kern_vm_start(arena),
-				     SZ_4G + GUARD_SZ / 2, existing_page_cb, arena);
-	free_vm_area(arena->kern_vm);
-	range_tree_destroy(&arena->rt);
-	__free_page(arena->scratch_page);
-	bpf_map_area_free(arena);
+	INIT_RCU_WORK(&arena->destroy_work, arena_map_destroy);
+	queue_rcu_work(system_dfl_wq, &arena->destroy_work);
 }
 
 static void *arena_map_lookup_elem(struct bpf_map *map, void *key)
@@ -1040,6 +1120,120 @@ defer:
 	irq_work_queue(&arena->free_irq);
 }
 
+/* Called when a program that uses BPF_REG_ARENA_SP is loaded */
+int bpf_arena_stack_init(struct bpf_arena *arena)
+{
+	struct arena_stacks __percpu *stacks;
+
+	if (READ_ONCE(arena->stacks))
+		return 0;
+	stacks = bpf_map_alloc_percpu(&arena->map, sizeof(*stacks), __alignof__(*stacks),
+				      GFP_USER | __GFP_NOWARN);
+	if (!stacks)
+		return -ENOMEM;
+	if (cmpxchg(&arena->stacks, NULL, stacks))
+		free_percpu(stacks);
+	return 0;
+}
+
+void __percpu *bpf_arena_stack_percpu(struct bpf_arena *arena)
+{
+	return arena->stacks;
+}
+
+/*
+ * Called at the start of the main program or of a callback, in any context. When
+ * @busy is 0 the program has taken the stack of the cpu and it's too small.
+ * Returns the low 32 bits of r12 with bit 32 set, or 0 when there is no memory.
+ * The program doesn't run then.
+ */
+u64 bpf_arena_stack_get(struct bpf_prog_aux *aux, u64 busy)
+{
+	struct arena_stacks *stacks = this_cpu_ptr(aux->arena->stacks);
+	struct bpf_arena_cpu_stack *cpu = &stacks->cpu;
+	struct bpf_arena *arena = aux->arena;
+	u32 size = aux->arena_stack_size;
+	struct arena_stack *st = NULL, old;
+	struct bpf_stream_stage ss;
+	long addr;
+	int i;
+
+	if (!busy) {
+		/* It's not there yet, or programs that used it needed less */
+		addr = arena_alloc_pages(arena, 0, size >> PAGE_SHIFT, NUMA_NO_NODE, false);
+		if (!addr) {
+			WRITE_ONCE(cpu->busy, 0);
+			goto err;
+		}
+		old = (struct arena_stack){ cpu->base, cpu->size };
+		/* r12 is not 0: neither at the start of the stack nor at the end */
+		cpu->base = addr + 32;
+		cpu->size = size - 64;
+		if (old.size)
+			arena_free_pages(arena, old.base, (old.size + 64) >> PAGE_SHIFT, false);
+		return BIT_ULL(32) | cpu->base;
+	}
+
+	while ((i = ffz(READ_ONCE(stacks->busy))) < ARENA_STACK_SLOTS) {
+		if (test_and_set_bit(i, &stacks->busy))
+			continue;
+		st = &stacks->slot[i];
+		if (st->size >= size)
+			return BIT_ULL(32) | st->base;
+		break;
+	}
+
+	/*
+	 * It's the first use of the slot, or programs that used it needed less,
+	 * or all slots are busy and bpf_arena_stack_put() is going to free the pages.
+	 */
+	addr = arena_alloc_pages(arena, 0, size >> PAGE_SHIFT, NUMA_NO_NODE, false);
+	if (!addr) {
+		if (st)
+			clear_bit(i, &stacks->busy);
+		goto err;
+	}
+	if (!st)
+		return BIT_ULL(32) | (u32)(addr + BPF_ARENA_STACK_SLOW);
+
+	/*
+	 * bpf_arena_stack_put() finds a slot by its base. No slot may name pages that
+	 * another run can get.
+	 */
+	old = *st;
+	st->base = addr + BPF_ARENA_STACK_SLOW;
+	st->size = size;
+	if (old.size)
+		arena_free_pages(arena, old.base, old.size >> PAGE_SHIFT, false);
+	return BIT_ULL(32) | st->base;
+
+err:
+	bpf_prog_inc_misses_counter(aux->prog);
+	bpf_stream_stage(ss, aux->prog, BPF_STDERR, ({
+		bpf_stream_printk(ss, "ERROR: No memory for the stack in arena. The program didn't run\n");
+	}));
+	return 0;
+}
+
+/*
+ * Called before the main program or a callback exits with a stack that is not
+ * the stack of the cpu: BPF_ARENA_STACK_SLOW is set in @base.
+ */
+void bpf_arena_stack_put(struct bpf_prog_aux *aux, u32 base)
+{
+	struct arena_stacks *stacks = this_cpu_ptr(aux->arena->stacks);
+	u32 size = aux->arena_stack_size;
+	int i;
+
+	for (i = 0; i < ARENA_STACK_SLOTS; i++) {
+		if (stacks->slot[i].base != base || !stacks->slot[i].size)
+			continue;
+		clear_bit(i, &stacks->busy);
+		return;
+	}
+	arena_free_pages(aux->arena, base, size >> PAGE_SHIFT, false);
+}
+
 /*
  * Reserve an arena virtual address range without populating it. This call stops
  * bpf_arena_alloc_pages from adding pages to this range.
@@ -1215,35 +1409,46 @@ static void __bpf_prog_report_arena_violation(struct bpf_prog *prog, bool write,
 
 bool bpf_arena_handle_page_fault(unsigned long addr, bool is_write, unsigned long fault_ip)
 {
+	static DEFINE_RATELIMIT_STATE(rs, DEFAULT_RATELIMIT_INTERVAL,
+				     DEFAULT_RATELIMIT_BURST);
+	struct latch_tree_node *node;
 	struct bpf_arena *arena;
 	struct bpf_prog *prog;
 	unsigned long kbase;
 	unsigned long page_addr = addr & PAGE_MASK;
-
-	prog = bpf_prog_find_from_stack();
-	if (!prog)
-		return false;
-
-	arena = prog->aux->arena;
-	/* a prog not using arena may be on stack, so arena can be NULL */
-	if (!arena)
-		return false;
-
-	kbase = bpf_arena_get_kern_vm_start(arena);
+	bool handled = false;
 
 	/*
 	 * Recovery covers the 4 GiB mappable band plus the upper half-guard.
 	 * Lower guard is unreachable from kfuncs; an address there indicates
 	 * a different bug class - leave it to the regular kernel oops path.
 	 */
-	if (page_addr < kbase || page_addr >= kbase + SZ_4G + GUARD_SZ / 2)
-		return false;
+	rcu_read_lock();
+	prog = bpf_prog_find_from_stack();
+	arena = prog ? prog->aux->arena : NULL;
+	if (!arena || arena_tree_comp((void *)page_addr, &arena->tnode)) {
+		node = latch_tree_find((void *)page_addr, &arena_tree, &arena_tree_ops);
+		if (!node)
+			goto out;
+		arena = container_of(node, struct bpf_arena, tnode);
+	}
+	kbase = bpf_arena_get_kern_vm_start(arena);
 
 	apply_to_page_range(&init_mm, page_addr, PAGE_SIZE,
 			    apply_range_set_scratch_cb, arena->scratch_page);
 	flush_vmap_cache(page_addr, PAGE_SIZE);
-	__bpf_prog_report_arena_violation(prog, is_write, page_addr - kbase, fault_ip);
-	return true;
+
+	if (prog && prog->aux->arena == arena)
+		__bpf_prog_report_arena_violation(prog, is_write,
+						  page_addr - kbase, fault_ip);
+	else if (__ratelimit(&rs))
+		printk_deferred(KERN_ERR "BPF arena %u: %s fault at offset 0x%lx, IP %pS\n",
+				arena->map.id, is_write ? "WRITE" : "READ",
+				page_addr - kbase, (void *)fault_ip);
+	handled = true;
+out:
+	rcu_read_unlock();
+	return handled;
 }
 
 void bpf_prog_report_arena_violation(bool write, unsigned long addr, unsigned long fault_ip)

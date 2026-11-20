@@ -77,7 +77,7 @@ struct arena_qnode {
  * 16-17: tail index
  * 18-31: tail cpu (+1)
  */
-#define _Q_MAX_CPUS		1024
+#define _Q_MAX_CPUS		8192
 
 #define	_Q_SET_MASK(type)	(((1U << _Q_ ## type ## _BITS) - 1)\
 				      << _Q_ ## type ## _OFFSET)
@@ -109,7 +109,7 @@ static inline u32 encode_tail(int cpu, int idx)
 {
 	u32 tail;
 
-	tail  = (cpu + 1) << _Q_TAIL_CPU_OFFSET;
+	tail  = (u32)(cpu + 1) << _Q_TAIL_CPU_OFFSET;
 	tail |= idx << _Q_TAIL_IDX_OFFSET; /* assume < 4 */
 
 	return tail;
@@ -224,16 +224,35 @@ out:
 /**
  * arena_spin_trylock - try to acquire the queued spinlock
  * @lock : Pointer to queued spinlock structure
- * Return: 1 if lock acquired, 0 if failed
+ * Return: 0 if lock acquired, -EBUSY if failed
  */
 static __always_inline int arena_spin_trylock(arena_spinlock_t __arena *lock)
 {
 	int val = atomic_read(&lock->val);
 
 	if (unlikely(val))
+		return -EBUSY;
+
+	bpf_preempt_disable();
+	val = atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL);
+	if (unlikely(!val))
+		bpf_preempt_enable();
+
+	return val ? 0 : -EBUSY;
+}
+
+/*
+ * Trylock variant without preemption disable/reenable.
+ * Used within the lock slowpath.
+ */
+static __always_inline int arena_spin_trylock_raw(arena_spinlock_t __arena *lock)
+{
+	int val = atomic_read(&lock->val);
+
+	if (unlikely(val))
 		return 0;
 
-	return likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL));
+	return atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL);
 }
 
 __noinline __weak
@@ -346,7 +365,7 @@ queue:
 	 * attempt the trylock once more in the hope someone let go while we
 	 * weren't watching.
 	 */
-	if (arena_spin_trylock(lock))
+	if (arena_spin_trylock_raw(lock))
 		goto release;
 
 	/*
@@ -490,7 +509,7 @@ static __always_inline int arena_spin_lock(arena_spinlock_t __arena *lock)
 {
 	int val = 0;
 
-	if (CONFIG_NR_CPUS > 1024)
+	if (CONFIG_NR_CPUS > _Q_MAX_CPUS)
 		return -EOPNOTSUPP;
 
 	bpf_preempt_disable();
@@ -526,6 +545,17 @@ static __always_inline void arena_spin_unlock(arena_spinlock_t __arena *lock)
 			bpf_local_irq_restore(&(flags)); \
 		(__ret);                                 \
 	})
+
+#define arena_spin_trylock_irqsave(lock, flags)			\
+	({							\
+		int __ret;					\
+		bpf_local_irq_save(&(flags));			\
+		__ret = arena_spin_trylock((lock));		\
+		if (__ret)					\
+			bpf_local_irq_restore(&(flags)); 	\
+		(__ret);                                 	\
+	})
+
 
 #define arena_spin_unlock_irqrestore(lock, flags) \
 	({                                        \
