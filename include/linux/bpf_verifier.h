@@ -897,6 +897,8 @@ struct bpf_loop {
 	bool was_infinite;	/* at the start of the last path-sensitive run */
 	bool infinite;		/* see failing_path_trip() */
 	bool infinite_is_guess;	/* see fast_forward_trips() */
+	bool no_first_trips_guess;	/* a state had no trip count, @steps can be wrong */
+	struct bpf_loop_steps *steps;	/* see bpf_guess_first_trips() */
 	struct bpf_iv_threshold *iv_thresholds;	/* where an iv can stop, see equation_join.c */
 	u32 iv_threshold_cnt, iv_threshold_cap;
 	u32 leftover_epoch;	/* how many leftovers started */
@@ -1739,6 +1741,8 @@ void bpf_range_of_data_dep(struct bpf_verifier_env *env, const struct bpf_verifi
 			   u32 *first, u32 *last);
 bool bpf_call_needs_frames(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			   u16 args);
+bool bpf_xregs_are_partitioned(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			       u32 fr, const unsigned long *xregs);
 bool bpf_xreg_in_data_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			   u32 fr, u32 xregno);
 bool bpf_xreg_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
@@ -2548,6 +2552,8 @@ bool bpf_equations_join_forgets(struct bpf_verifier_env *env, const struct bpf_v
 u32 bpf_equations_hash(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u32 fr,
 		       const unsigned long *xregs, u32 bits);
 void bpf_collect_iv_thresholds(struct bpf_verifier_env *env);
+int bpf_guess_first_trips(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			  struct bpf_loop *loop);
 bool bpf_steps_are_constant(struct bpf_verifier_env *env, const struct loop_stack_entry *entry,
 			    const unsigned long *iv_xregs, bool infinite);
 void bpf_fast_forward_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,

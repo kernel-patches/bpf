@@ -392,6 +392,7 @@ int bpf_flow_needs_guard(struct bpf_verifier_env *env, struct bpf_loop *loop)
 {
 	if (loop->rt_bounded)
 		return 0;
+	loop->no_first_trips_guess = true;
 	if (!loop->has_guards) {
 		verbose(env, "loop at insn %d never exits\n", loop->header);
 		return -EINVAL;
@@ -1266,6 +1267,11 @@ again:
 		joined = false;
 	if (log && joined)
 		verbose(env, "from %d to %d: %s\n", prev, insn_idx, widened ? "widened" : "joined");
+	err = enters && !widened ? bpf_guess_first_trips(env, &s->st, loop) : 0;
+	if (err < 0)
+		goto free;
+	if (err)
+		flow_find(env, s);
 	flow_link(env, s);
 	return 0;
 free:
