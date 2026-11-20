@@ -11,7 +11,8 @@
 #include <linux/linkage.h>
 #include <asm/assembler.h>
 
-	.cpu		generic+crc+crypto
+	.arch_extension	crc
+	.arch_extension	crypto
 
 	.macro		bitle, reg
 	.endm
