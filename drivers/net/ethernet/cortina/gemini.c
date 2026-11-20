@@ -168,6 +168,7 @@ struct gemini_ethernet {
 
 	spinlock_t	irq_lock; /* Locks IRQ-related registers */
 	unsigned int	freeq_order;
+	unsigned int	freeq_buf_order; /* RX buffer budget, independent of ring size */
 	unsigned int	freeq_frag_order;
 	struct gmac_rxdesc *freeq_ring;
 	dma_addr_t	freeq_dma_base;
@@ -1099,15 +1100,17 @@ static unsigned int geth_fill_freeq(struct gemini_ethernet *geth)
 	unsigned int fragments = 1 << fpp_order;
 	unsigned int len = 1 << geth->freeq_order;
 	unsigned int ring_mask = len - 1;
-	unsigned int remaining = geth->num_freeq_pages + (len >> fpp_order);
+	unsigned int buf_len = 1 << geth->freeq_buf_order;
+	unsigned int capacity = buf_len - fragments;
+	unsigned int remaining = geth->num_freeq_pages + (buf_len >> fpp_order);
 	unsigned int count = 0;
 	unsigned int rptr, wptr;
 	unsigned long flags;
 	union dma_rwptr rw;
 	bool space;
 
-	/* Bound retries and post at most one ring's worth of fragments. */
-	while (remaining-- && count < len - fragments) {
+	/* Bound retries and post at most one buffer budget per refill. */
+	while (remaining-- && count < capacity) {
 		dma_addr_t page_mapping;
 		struct page *page;
 		int ret;
@@ -1116,7 +1119,8 @@ static unsigned int geth_fill_freeq(struct gemini_ethernet *geth)
 		rw.bits32 = readl(geth->base + GLOBAL_SWFQ_RWPTR_REG);
 		rptr = rw.bits.rptr & ring_mask;
 		wptr = rw.bits.wptr & ring_mask;
-		space = CIRC_SPACE(wptr, rptr, len) >= fragments;
+		space = CIRC_SPACE(wptr, rptr, len) >= fragments &&
+			CIRC_CNT(wptr, rptr, len) <= capacity - fragments;
 		ret = -ENOSPC;
 		if (space && geth->freeq_recycle_pending) {
 			ret = geth_freeq_recycle_page(geth, wptr);
@@ -1143,7 +1147,8 @@ static unsigned int geth_fill_freeq(struct gemini_ethernet *geth)
 		rw.bits32 = readl(geth->base + GLOBAL_SWFQ_RWPTR_REG);
 		rptr = rw.bits.rptr & ring_mask;
 		wptr = rw.bits.wptr & ring_mask;
-		if (CIRC_SPACE(wptr, rptr, len) < fragments) {
+		if (CIRC_SPACE(wptr, rptr, len) < fragments ||
+		    CIRC_CNT(wptr, rptr, len) > capacity - fragments) {
 			ret = -ENOSPC;
 		} else if (geth->freeq_recycle_pending) {
 			ret = -EAGAIN;
@@ -1213,10 +1218,10 @@ static void geth_freeq_release_pages(struct gemini_ethernet *geth)
 }
 
 static unsigned int
-geth_freeq_page_slots(struct gemini_ethernet *geth, unsigned int order)
+geth_freeq_page_slots(struct gemini_ethernet *geth, unsigned int buf_order)
 {
 	unsigned int fpp_order = PAGE_SHIFT - geth->freeq_frag_order;
-	unsigned int slots = 1 << (order - fpp_order);
+	unsigned int slots = 1 << (buf_order - fpp_order);
 
 	if (geth->port0 && geth->port0->netdev)
 		slots += 1 << geth->port0->rxq_order;
@@ -1237,7 +1242,7 @@ static int geth_setup_freeq(struct gemini_ethernet *geth)
 	unsigned int filled;
 	u16 rptr;
 
-	page_slots = geth_freeq_page_slots(geth, geth->freeq_order);
+	page_slots = geth_freeq_page_slots(geth, geth->freeq_buf_order);
 
 	geth->freeq_ring = dma_alloc_coherent(geth->dev,
 		sizeof(*geth->freeq_ring) << geth->freeq_order,
@@ -1266,7 +1271,7 @@ static int geth_setup_freeq(struct gemini_ethernet *geth)
 	rptr = GET_RPTR(geth->base + GLOBAL_SWFQ_RWPTR_REG);
 	SET_WPTR(geth->base + GLOBAL_SWFQ_RWPTR_REG, rptr & (len - 1));
 
-	expected = len - (1 << fpp_order);
+	expected = (1 << geth->freeq_buf_order) - (1 << fpp_order);
 	filled = geth_fill_freeq(geth);
 	if (filled != expected)
 		goto err_freeq_bitmap;
@@ -1367,6 +1372,7 @@ static int geth_resize_freeq(struct gemini_ethernet_port *port)
 	unsigned int new_size = 0;
 	unsigned int page_slots;
 	unsigned int new_order;
+	unsigned int buf_order;
 	u16 rptr;
 	int ret;
 
@@ -1396,20 +1402,23 @@ static int geth_resize_freeq(struct gemini_ethernet_port *port)
 			   other_port->rxq_order);
 	}
 
-	new_order = min(15, ilog2(new_size - 1) + 1);
+	buf_order = min(15, ilog2(new_size - 1) + 1);
+	if (buf_order <= PAGE_SHIFT - geth->freeq_frag_order)
+		return -EINVAL;
+
 	rptr = GET_RPTR(geth->base + GLOBAL_SWFQ_RWPTR_REG);
 	if (rptr >= BIT(15))
 		return -EIO;
-	new_order = max_t(unsigned int, new_order, fls(rptr));
+	/* Contain the retained pointer without increasing RX buffer memory. */
+	new_order = max_t(unsigned int, buf_order, fls(rptr));
 	dev_dbg(geth->dev, "set shared queue to size %d order %d\n",
 		new_size, new_order);
-	if (new_order <= PAGE_SHIFT - geth->freeq_frag_order)
-		return -EINVAL;
 
 	/* Rebuild an idle queue to reclaim fragments which were never claimed. */
 	if (geth->freeq_ring && other_running) {
-		page_slots = geth_freeq_page_slots(geth, geth->freeq_order);
+		page_slots = geth_freeq_page_slots(geth, buf_order);
 		if (geth->freeq_order >= new_order &&
+		    geth->freeq_buf_order >= buf_order &&
 		    geth->num_freeq_pages >= page_slots)
 			return 0;
 	}
@@ -1426,6 +1435,7 @@ static int geth_resize_freeq(struct gemini_ethernet_port *port)
 
 	/* Allocate a new queue with the desired order */
 	geth->freeq_order = new_order;
+	geth->freeq_buf_order = buf_order;
 	ret = geth_setup_freeq(geth);
 
 	/* Enable the queue interrupt only after successful setup. */
@@ -1927,7 +1937,7 @@ static int gmac_napi_poll(struct napi_struct *napi, int budget)
 	unsigned int received;
 	bool reschedule;
 
-	freeq_threshold = 1 << (geth->freeq_order - 1);
+	freeq_threshold = 1 << (geth->freeq_buf_order - 1);
 	u64_stats_update_begin(&port->rx_stats_syncp);
 
 	received = gmac_rx(napi->dev, budget, &freeq_consumed, &reschedule);
