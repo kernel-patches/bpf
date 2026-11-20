@@ -1486,6 +1486,10 @@ int bpf_partition_more(struct bpf_verifier_env *env)
 	if (prec->partitioned_by <= BIT(PARTITION_ADD_DEPS))
 		prec->budget = max(prec->budget, bpf_precision_first_budget(env));
 	swap(prec->this_pass, prec->last_pass);
+	/* only the unproven insns of this pass: no check failed at the other ones */
+	bitmap_or(prec->last_unproven_insns, prec->last_pass.unproven_insns,
+		  prec->last_pass.bad_read_insns, env->prog->len);
+	bitmap_and(prec->err_insns, prec->err_insns, prec->last_unproven_insns, env->prog->len);
 	bitmap_copy(prec->last_unproven_insns, prec->last_pass.unproven_insns, env->prog->len);
 	if (helped)
 		keep_precision(prec, true);

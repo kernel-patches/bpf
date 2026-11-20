@@ -1787,6 +1787,8 @@ void bpf_free_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 static int copy_func_state(struct bpf_func_state *dst,
 			   const struct bpf_func_state *src)
 {
+	u32 i;
+
 	leave_loops(dst, 0);
 	memcpy(dst, src, offsetof(struct bpf_func_state, stack));
 	/* Instruction accounting is path-local, not part of verifier state. */
@@ -1797,6 +1799,9 @@ static int copy_func_state(struct bpf_func_state *dst,
 	if (!dst->loop_stack)
 		return -ENOMEM;
 	dst->loop_stack_cnt = src->loop_stack_cnt;
+	for (i = 0; i < src->loop_stack_cnt; i++)
+		if (src->loop_stack[i].header_state)
+			src->loop_stack[i].header_state->refcnt++;
 	return copy_stack_state(dst, src);
 }
 
@@ -10359,8 +10364,10 @@ static int check_func_args(struct bpf_verifier_env *env, struct bpf_call_arg_met
 		err = check_outgoing_stack_args(env, caller, proto_slots, meta->func_name,
 						meta->btf, proto_slots == nargs ? args : NULL);
 		if (err)
-			return err;
+			return meta->subprog_is_static ? -ENODATA : err;
 	}
+	/* the other errors only make BTF unreliable, see btf_check_subprog_call() */
+	env->no_report |= meta->subprog_is_static;
 
 	for (arg = 0; arg < nargs; arg++, prev_slot = slot, slot += nslots) {
 		const struct btf_type *t;
@@ -11293,6 +11300,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog, s
 	memset(&meta, 0, sizeof(meta));
 	meta.btf = btf;
 	meta.subprog_may_change_pkt = sub->changes_pkt_data;
+	meta.subprog_is_static = !bpf_subprog_is_global(env, subprog);
 	meta.func_name = bpf_subprog_name(env, subprog);
 
 	ret = btf_prepare_func_args(env, subprog);
@@ -11331,6 +11339,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog, s
  *
  * Returns:
  * EFAULT - there is a verifier bug. Abort verification.
+ * ENODATA - a static function loads a stack argument that is not there.
  * Other errors - there is a type mismatch or BTF is not available.
  * 0 - BTF matches with what bpf_reg_state expects.
  */
@@ -11338,6 +11347,7 @@ static int btf_check_subprog_call(struct bpf_verifier_env *env, int subprog)
 {
 	struct bpf_prog *prog = env->prog;
 	struct btf *btf = prog->aux->btf;
+	bool no_report = env->no_report;
 	u32 btf_id;
 	int err;
 
@@ -11352,6 +11362,7 @@ static int btf_check_subprog_call(struct bpf_verifier_env *env, int subprog)
 		return -EINVAL;
 
 	err = btf_check_func_arg_match(env, subprog, btf);
+	env->no_report = no_report;
 	/* Compiler optimizations can remove arguments from static functions
 	 * or mismatched type can be passed into a global function.
 	 * Mark a static function as unreliable from BTF point of view. The other call is unproven.
@@ -11796,6 +11807,8 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = btf_check_subprog_call(env, subprog);
 	if (err == -EFAULT)
 		return err;
+	if (err == -ENODATA)
+		return -EINVAL;
 	if (bpf_subprog_is_global(env, subprog)) {
 		struct bpf_func_info_aux *sub_aux = subprog_aux(env, subprog);
 		const char *sub_name = bpf_subprog_name(env, subprog);
@@ -11922,6 +11935,8 @@ static int check_func_callx_one(struct bpf_verifier_env *env, int subprog, int *
 	err = btf_check_subprog_call(env, subprog);
 	if (err == -EFAULT)
 		return err;
+	if (err == -ENODATA)
+		return -EINVAL;
 
 	/* bpf_compute_live_registers() counts on it */
 	if (verifier_bug_if(!env->subprog_info[subprog].addr_taken, env,
@@ -20931,6 +20946,86 @@ static int check_held_in_leftover(struct bpf_verifier_env *env,
 }
 
 /*
+ * A path-sensitive run is in a loop with a trip count. If only the jump on the iv depends on
+ * the xregs that moved, the path can take the same edges again and again:
+ *	for (i = 0; i < 100000; i++) { if (rnd() && n < 8) n++; }
+ * Two trips show a step also for 'sum += i', and more than 2^32 trips also for a ring index.
+ * If the steps are not constant, the skip or "infinite" is a guess.
+ * Returns 1 if it skipped these trips.
+ */
+static int fast_forward_trips(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
+{
+	struct bpf_verifier_state *cur = env->cur_state, *old = &entry->header_state->st;
+	u32 period = entry->trip - bpf_top_loop(old->frame[old->curframe])->trip;
+	bool infinite = entry->trips_left > BPF_MAX_TRIPS, guess;
+	DECLARE_BITMAP(iv_xregs, MAX_BPF_XREG) = {};
+	int err;
+
+	/* the answer needs a walk over the program */
+	if ((infinite ? entry->loop->infinite : entry->trips_left <= period) ||
+	    (u64)entry->trip * entry->loop->nr_insns < env->prog->len)
+		return 0;
+	bpf_fast_forward_xregs(env, old, cur, 0, iv_xregs);
+	err = bpf_jumps_see_same(env, old, cur, entry->iv_jump_idx, infinite ? NULL : iv_xregs);
+	if (err <= 0)
+		return err;
+	guess = !bpf_steps_are_constant(env, entry, iv_xregs, infinite);
+	if (infinite) {
+		entry->loop->infinite = true;
+		entry->loop->infinite_is_guess = guess || env->run_has_guess;
+		return 0;
+	}
+	env->run_has_guess |= guess;
+	bpf_fast_forward_xregs(env, old, cur, div_u64(entry->trips_left - 1, period), iv_xregs);
+	entry->iv_jump_idx = 0;
+	entry->trips_left = 1;
+	return 1;
+}
+
+/*
+ * A path of a path-sensitive run starts a trip. Compare it with the state in which it started
+ * trip 0, 1, 2, 4, ...
+ * If the jumps see the same values, the loop is infinite and needs may_goto.
+ * With a trip count the path makes that many trips. Else it makes up to
+ * env->failing_path_max_trips. Returns 1 if it ends here.
+ */
+static int failing_path_trip(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
+{
+	struct bpf_verifier_state *cur = env->cur_state, *old = &entry->header_state->st;
+	struct bpf_loop *loop = entry->loop;
+	struct loop_stack_entry mine;
+	int err;
+
+	if (entry->trip > env->failing_path_max_trips &&
+	    (!entry->trips_left || entry->trips_left > BPF_MAX_TRIPS)) {
+		env->too_deep = true;
+		return 1;
+	}
+	if (entry->header_state) {
+		mine = *entry;
+		*entry = *bpf_top_loop(old->frame[old->curframe]);
+		err = bpf_same_join_key(old, cur);
+		*entry = mine;
+		if (err)
+			err = entry->trips_left ? fast_forward_trips(env, entry) :
+						  bpf_jumps_see_same(env, old, cur, -1, NULL);
+		if (err < 0)
+			return err;
+		if (err && entry->trips_left)
+			return bpf_flow_save_header_state(env, entry);
+		if (err && !loop->infinite && !loop->rt_bounded) {
+			loop->infinite = true;
+			/* the next runs keep it */
+			loop->infinite_is_guess = env->run_has_guess;
+			return bpf_flow_needs_guard(env, loop);
+		} else if (err && !bpf_values_grew_in_deps(env, old, cur)) {
+			return 1;
+		}
+	}
+	return bpf_trip_is_saved(entry) ? bpf_flow_save_header_state(env, entry) : 0;
+}
+
+/*
  * The cpu can speculate past the jump that the equations decide.
  * The removal of dead code can delete an edge only from a conditional jump.
  */
@@ -21184,6 +21279,7 @@ static int check_loop_guard(struct bpf_verifier_env *env)
 	}
 
 	env->imprecise |= !env->err;
+	env->run_has_guess |= loop->infinite_is_guess;
 	/* the device runs the insns that the driver was given, without may_goto */
 	if (bpf_prog_is_offloaded(env->prog->aux)) {
 		verbose(env, "loop at insn %d has no known bound in an offloaded program\n",
@@ -21223,6 +21319,9 @@ static int check_loop_guard(struct bpf_verifier_env *env)
 		env->guards_late |= aux->loop_guard;
 		aux->guard_no_unwind = true;
 	}
+	/* another state selected the target, possibly a state that only a join makes */
+	env->run_has_guess |= aux->guard_no_unwind &&
+			      state_can_unwind(env, env->cur_state, aux->guard_unset_reg);
 out:
 	aux->loop_guard = true;
 	aux->guard_unwinds = !aux->guard_no_unwind;
@@ -21536,7 +21635,9 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		held = held_cnt(state);
 		from_unproven = reads_from_unproven(env);
 		fixups = insn_aux->fixups;
+		env->no_report = state->speculative;
 		err = do_check_insn(env, &do_print_state) ?: bpf_equations_after_insn(env);
+		env->no_report = false;
 		/* a call or an exit gave the state to the flow, the error is from there */
 		if (err < 0 && !state->frame[0])
 			return err;
@@ -21677,6 +21778,7 @@ static int do_check(struct bpf_verifier_env *env)
 	/* bpf_flow_edge_unproven() noted it with the state that failed */
 	if (err && !bpf_insn_is_unproven(env))
 		note_error(env, err);
+	env->run_over_budget |= !err;
 	return err;
 }
 
@@ -22762,6 +22864,16 @@ static void free_states(struct bpf_verifier_env *env)
 	bpf_flow_reset(env);
 }
 
+/* A multiple of the shortest path. It doubles with each pass. A function gets half. */
+static u64 func_failing_path_budget(struct bpf_verifier_env *env)
+{
+	u64 hops = (bpf_failing_path_hops(env, env->cur_state) + 1ULL) * BPF_COST_STATE;
+
+	env->failing_path_budget = min(hops << env->failing_path_budget_shift,
+				       env->failing_path_budget);
+	return env->failing_path_budget / 2;
+}
+
 static int do_check_common(struct bpf_verifier_env *env, int subprog,
 			   enum bpf_func_context context)
 {
@@ -22918,6 +23030,9 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog,
 		}
 	}
 
+	state->insn_idx = sub->start;
+	if (env->path_sensitive)
+		env->failing_path_max_cost = env->cost + func_failing_path_budget(env);
 	ret = do_check(env);
 out:
 	if (ret && !env->err)
@@ -23152,6 +23267,75 @@ static int check_after_pass(struct bpf_verifier_env *env)
 		}
 	}
 	return 0;
+}
+
+/*
+ * If the error of a pass is real, do_check_all() limits the next passes and logs a path to it.
+ * To see if it is real, reproduce it with no joins. Check one path after another, depth first
+ * from the entry of the function, until the check of an insn in err_insns fails:
+ * - there are no joins, a call stays in the instance of its caller, each trip is peeled
+ * - a state is dropped if a state with the same values in the deps was at the insn
+ * - only a loop that is found to be infinite gets may_goto, see failing_path_trip()
+ * That path is the failing path. The run accepts nothing. It is not the verdict: a path has
+ * ranges too, and a check can fail on it where the joined state is proven.
+ * run_has_guess: the run made a guess, on any of its paths. Then the failing path can be false,
+ * see fast_forward_trips() and check_loop_guard().
+ * Returns the error on the path, 0 if there is none.
+ */
+static int run_path_sensitive(struct bpf_verifier_env *env, struct bpf_snapshot *initial,
+			      bool repeat)
+{
+	u64 budget = env->failing_path_budget;
+	int ret;
+
+	env->path_sensitive = true;
+	env->run_has_guess = false;
+	env->err = 0;
+	ret = bpf_failing_path_prepare(env, repeat) ?: check_funcs(env, initial);
+	env->path_sensitive = false;
+	/* for the repeat */
+	if (env->err)
+		env->failing_path_budget = budget;
+	return ret == -EINTR ? ret : env->err;
+}
+
+/*
+ * The path-sensitive runs, in their order:
+ *
+ *	trips of a loop without a trip count	1, any number, 3, 7, ...
+ *	which edge goes first			the shortest path; if over budget, the fall-through
+ *
+ * A function gets half of the budget that is left. @last: the budget is twice the cost so far.
+ */
+static int find_failing_path(struct bpf_verifier_env *env, struct bpf_snapshot *initial, bool last)
+{
+	u32 trips;
+	u64 start;
+	int ret;
+
+	if (env->log.level & BPF_LOG_LEVEL2)
+		verbose(env, "path-sensitive run after pass %u\n", env->pass);
+	env->failing_path_budget_shift = last ? 20 : min(env->pass + 3, 20);
+	env->failing_path_budget = last ? 2 * env->cost : bpf_precision_budget(env) / 4;
+	env->failing_path_max_trips = trips = 1;
+	env->fallthrough_first = false;
+	for (;;) {
+		start = env->cost;
+		ret = run_path_sensitive(env, initial, false);
+		if (ret || env->over_limit || env->bug ||
+		    env->cost - start >= env->failing_path_budget)
+			return ret;
+		env->failing_path_budget -= env->cost - start;
+		env->fallthrough_first = !env->fallthrough_first && env->run_over_budget;
+		if (env->fallthrough_first)
+			continue;
+		if (env->no_mem || (!env->run_over_budget && !env->too_deep))
+			return 0;
+		if (env->failing_path_max_trips == 1)
+			env->failing_path_max_trips = U32_MAX;
+		else
+			env->failing_path_max_trips = trips = 2 * trips + 1;
+	}
 }
 
 /*

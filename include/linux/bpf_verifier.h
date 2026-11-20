@@ -445,6 +445,7 @@ static inline u64 bpf_xreg(u32 frameno, u32 xregno)
  */
 struct loop_stack_entry {
 	struct bpf_loop *loop;
+	struct bpf_header_state *header_state;	/* see failing_path_trip() */
 	/* How many times the state came back to the header. A join has the larger number. */
 	u32 trip;
 	/* The state that entered the loop. What comes back to the header is for that state. */
@@ -455,6 +456,9 @@ struct loop_stack_entry {
 	struct scalar trip_index;
 	bool trip_widened;	/* it was moved to a threshold, or it does not grow */
 	u64 exit_threshold;	/* by the jumps that the state passed and that leave the loop */
+	/* Path-sensitive run: the jump that tests the iv, the value it saw, the trips left */
+	u32 iv_jump_idx;
+	u64 iv_prev, trips_left;
 };
 
 /* The states of trip 0, 1, 2, 4, 8, ... are saved. A compare with them finds any period. */
@@ -631,6 +635,12 @@ static inline struct bpf_stack_state *bpf_stack_slot(const struct bpf_func_state
 {
 	return &frame->stack[spi];
 }
+
+/* The state in which a path started a trip, see failing_path_trip() */
+struct bpf_header_state {
+	struct bpf_verifier_state st;
+	u32 refcnt;
+};
 
 static inline struct bpf_reg_state *
 bpf_get_spilled_reg(int slot, struct bpf_func_state *frame, u32 mask)
@@ -882,7 +892,9 @@ struct bpf_loop {
 	bool peeled_joined;	/* at the start of a peeled trip, against the join rule */
 	bool changed;		/* see flow_forget_loop() */
 	bool guarded;		/* states take the edges of may_goto */
+	bool was_infinite;	/* at the start of the last path-sensitive run */
 	bool infinite;		/* see failing_path_trip() */
+	bool infinite_is_guess;	/* see fast_forward_trips() */
 	struct bpf_iv_threshold *iv_thresholds;	/* where an iv can stop, see equation_join.c */
 	u32 iv_threshold_cnt, iv_threshold_cap;
 	u32 leftover_epoch;	/* how many leftovers started */
@@ -1360,6 +1372,9 @@ struct bpf_verifier_env {
 	bool path_sensitive;		/* no joins, see run_path_sensitive() */
 	bool for_log;			/* the verdict is known, see do_check_all() */
 	bool fallthrough_first;		/* see find_failing_path() */
+	bool run_has_guess;		/* see run_path_sensitive() */
+	u32 failing_path_budget_shift;	/* see func_failing_path_budget() */
+	u32 failing_path_max_trips;	/* see failing_path_trip() */
 	u32 pass;			/* number of the pass, see do_check_all() */
 	struct bpf_precision *precision;
 	u64 cost, mem;			/* see bpf_check_limits() */
@@ -1375,6 +1390,8 @@ struct bpf_verifier_env {
 	u32 err_insn;
 	bool imprecise;			/* a state before the first error is imprecise */
 	bool over_limit;		/* see bpf_check_limits() */
+	bool too_deep;			/* see failing_path_trip() */
+	bool run_over_budget;		/* in one of its functions, see find_failing_path() */
 	bool restart;			/* see bpf_flow_next_is_no_bound() */
 	bool guards_late;		/* see bpf_flow_needs_guard() */
 	bool calls_joined;		/* see flow_may_add_instance() */
@@ -1520,6 +1537,7 @@ struct bpf_verifier_env {
 	int *idoms;
 	struct bpf_equation_env *eq_env;
 	struct bpf_flow *flow;
+	bool no_report;		/* an error does not end the path, see diag_write() */
 };
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
@@ -1723,6 +1741,14 @@ void bpf_precision_new_pass(struct bpf_verifier_env *env);
 u64 bpf_pass_max_cost(struct bpf_verifier_env *env);
 u64 bpf_precision_budget(struct bpf_verifier_env *env);
 u64 bpf_precision_first_budget(struct bpf_verifier_env *env);
+bool bpf_failing_path_is_due(struct bpf_verifier_env *env);
+int bpf_failing_path_prepare(struct bpf_verifier_env *env, bool repeat);
+bool bpf_failing_path_may_end_at(struct bpf_verifier_env *env, u32 idx);
+u32 bpf_failing_path_hops(struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
+int bpf_failing_path_was_here(struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
+int bpf_jumps_see_same(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+		       const struct bpf_verifier_state *new, int iv_jump_idx,
+		       const unsigned long *iv_xregs);
 int bpf_precision_init(struct bpf_verifier_env *env);
 void bpf_precision_free(struct bpf_verifier_env *env);
 
@@ -1762,6 +1788,8 @@ void bpf_flow_reset(struct bpf_verifier_env *env);
 void bpf_flow_free(struct bpf_verifier_env *env);
 bool bpf_flow_trip_is_new(struct bpf_verifier_env *env, struct loop_stack_entry *entry);
 bool bpf_flow_is_bb_start(struct bpf_verifier_env *env, int insn_idx);
+int bpf_flow_save_header_state(struct bpf_verifier_env *env, struct loop_stack_entry *entry);
+void bpf_flow_put_header_state(struct loop_stack_entry *entry);
 int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 		     int insn_idx, int prev_insn_idx, bool again);
 int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx, u64 *log_pos, u64 *diag_pos);
@@ -2214,6 +2242,7 @@ struct bpf_call_arg_meta {
 
 	/* Only set by subprog */
 	bool subprog_may_change_pkt;
+	bool subprog_is_static;
 
 	/* Only set by kfunc */
 	bool r0_rdonly;
@@ -2454,6 +2483,7 @@ int bpf_compute_idoms(struct bpf_verifier_env *env);
 int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 int bpf_loop_spine_end(struct bpf_verifier_env *env, const struct bpf_loop *loop);
+int bpf_flow_insn_after(struct bpf_verifier_env *env, int idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
 u32 bpf_loop_thresholds_below(const struct bpf_loop *loop, s64 k);
 int bpf_loop_collect_thresholds(struct bpf_verifier_env *env, struct bpf_loop *loop);
@@ -2495,7 +2525,14 @@ bool bpf_equations_join_forgets(struct bpf_verifier_env *env, const struct bpf_v
 				const struct bpf_verifier_state *b, u32 fr,
 				const unsigned long *data_deps, const unsigned long *xregs,
 				u32 bits);
+u32 bpf_equations_hash(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u32 fr,
+		       const unsigned long *xregs, u32 bits);
 void bpf_collect_iv_thresholds(struct bpf_verifier_env *env);
+bool bpf_steps_are_constant(struct bpf_verifier_env *env, const struct loop_stack_entry *entry,
+			    const unsigned long *iv_xregs, bool infinite);
+void bpf_fast_forward_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			    struct bpf_verifier_state *cur, u64 factor, unsigned long *iv_xregs);
+
 void scalar_bounds_sync(struct scalar *s);
 bool scalar_subsumes(const struct scalar *old, const struct scalar *cur);
 bool scalars_fit_in_bits(const struct scalar *a, const struct scalar *b, u32 bits);

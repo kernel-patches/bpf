@@ -101,12 +101,14 @@ struct flow_instance {
 
 struct flow_kept {
 	struct list_head node;
-	struct bpf_verifier_state st;
+	struct bpf_flow *flow;
+	struct bpf_header_state header_state;
 };
 
 struct bpf_flow {
 	/* computed once */
 	u32 *pos;			/* position of the insn in the order */
+	s32 *insn_after;		/* the next insn in the order, or -1 */
 	u32 *rank;			/* callers go first */
 	unsigned long *bb_starts;	/* insn starts a basic block */
 	unsigned long *join_points;	/* more than one edge leads to the insn */
@@ -127,6 +129,7 @@ struct bpf_flow {
 	u32 instance_cnt, instance_cap;
 	struct flow_instance *last_instance;	/* of the last pending state */
 	u64 priority_gen;
+	struct list_head unused;		/* struct flow_kept */
 	u32 seq;
 	u32 live_states;
 };
@@ -145,7 +148,7 @@ struct bpf_flow {
 static int flow_compute_order(struct bpf_verifier_env *env, struct bpf_flow *flow)
 {
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	int len = env->prog->len, i, s, n, h, top, depth;
+	int len = env->prog->len, i, s, n, h, top, depth, prev = -1;
 	int *next, *head, *tail, *stack;
 	unsigned long *linked;
 	u32 pos = 0;
@@ -195,6 +198,10 @@ static int flow_compute_order(struct bpf_verifier_env *env, struct bpf_flow *flo
 				continue;
 			}
 			flow->pos[n] = pos++;
+			flow->insn_after[n] = -1;
+			if (prev >= 0)
+				flow->insn_after[prev] = n;
+			prev = n;
 			if (aux[n].loop && head[n] >= 0) {
 				stack[depth++] = n;
 				n = head[n];
@@ -211,6 +218,11 @@ out:
 	kvfree(stack);
 	kvfree(linked);
 	return err;
+}
+
+int bpf_flow_insn_after(struct bpf_verifier_env *env, int idx)
+{
+	return env->flow->insn_after[idx];
 }
 
 /* Does the insn at @idx stop the loop @h? */
@@ -541,6 +553,7 @@ int bpf_flow_prepare(struct bpf_verifier_env *env)
 	if (!flow)
 		return -ENOMEM;
 	env->flow = flow;
+	INIT_LIST_HEAD(&flow->unused);
 	flow->state_tree = flow->pending = RB_ROOT_CACHED;
 	flow->call_loop.kind = BPF_LOOP_RECURSION;
 
@@ -558,6 +571,7 @@ int bpf_flow_prepare(struct bpf_verifier_env *env)
 		return -ENOMEM;
 	}
 
+	flow->insn_after = flow->pos + len;
 	/* subprog_topo_order[] has callees first */
 	for (i = 0; i < env->subprog_cnt; i++)
 		flow->rank[env->subprog_topo_order[i]] = env->subprog_cnt - i;
@@ -677,6 +691,17 @@ static void flow_free_list(struct bpf_verifier_env *env, struct list_head *list)
 		flow_free_state(env, s);
 }
 
+static void flow_free_unused(struct bpf_verifier_env *env)
+{
+	struct flow_kept *k;
+
+	while ((k = list_first_entry_or_null(&env->flow->unused, struct flow_kept, node))) {
+		list_del(&k->node);
+		bpf_free_verifier_state(env, &k->header_state.st, false);
+		kfree(k);
+	}
+}
+
 /* What a check leaves behind. */
 void bpf_flow_reset(struct bpf_verifier_env *env)
 {
@@ -694,6 +719,7 @@ void bpf_flow_reset(struct bpf_verifier_env *env)
 		flow->instances[i]->group->instances = NULL;
 		kfree(flow->instances[i]);
 	}
+	flow_free_unused(env);
 	env->mem -= flow->instance_cnt * INSTANCE_BYTES;
 	flow->instance_cnt = 0;
 	flow->last_instance = NULL;
@@ -721,6 +747,35 @@ void bpf_flow_free(struct bpf_verifier_env *env)
 bool bpf_flow_is_bb_start(struct bpf_verifier_env *env, int insn_idx)
 {
 	return test_bit(insn_idx, env->flow->bb_starts);
+}
+
+/* The paths that continue from the current state share a copy of it */
+int bpf_flow_save_header_state(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
+{
+	struct flow_kept *k = kzalloc_obj(*k, BPF_VERIFIER_GFP);
+
+	if (!k)
+		return -ENOMEM;
+	bpf_flow_put_header_state(entry);
+	entry->header_state = NULL;
+	k->flow = env->flow;
+	k->header_state.refcnt = 1;
+	if (bpf_copy_verifier_state(env, &k->header_state.st, env->cur_state)) {
+		list_add(&k->node, &k->flow->unused);
+		return -ENOMEM;
+	}
+	entry->header_state = &k->header_state;
+	return 0;
+}
+
+void bpf_flow_put_header_state(struct loop_stack_entry *entry)
+{
+	struct flow_kept *k;
+
+	if (!entry->header_state || --entry->header_state->refcnt)
+		return;
+	k = container_of(entry->header_state, struct flow_kept, header_state);
+	list_add(&k->node, &k->flow->unused);
 }
 
 /* A peeled trip is complete before the next one starts. The leftover is last. */
@@ -1693,6 +1748,7 @@ again:
 		flow_free_state(env, t);
 	}
 
+	flow_free_unused(env);
 
 	env->insn_idx = s->st.insn_idx;
 	if (s->kind == FLOW_FUNC_EXIT) {
