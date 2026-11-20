@@ -95,6 +95,8 @@ struct scalar {
 	u16 step;
 	/* Not a part of the value: it grew once at a loop header, see join_range() */
 	bool grew_once;
+	/* The value comes from an unproven insn (its check failed), see skip_unproven_insn() */
+	bool from_unproven;
 };
 
 /* The struct scalar that is an anonymous member of *@p */
@@ -617,7 +619,7 @@ static inline u32 bpf_stack_nr_slots(const struct bpf_func_state *frame)
 
 /*
  * Stack slot @spi of @frame, covering bytes [fp - (spi + 1) * 8, fp - spi * 8).
- * The caller must ensure spi < bpf_stack_nr_slots(frame), see bpf_grow_stack_state().
+ * The caller must ensure spi < bpf_stack_nr_slots(frame), see grow_stack_state().
  */
 static inline struct bpf_stack_state *bpf_stack_slot(const struct bpf_func_state *frame, u32 spi)
 {
@@ -855,6 +857,7 @@ struct bpf_loop {
 	/* while bpf_loop_per_pass.cost is not above @budget: */
 	u64 budget;
 	u32 max_peel_cnt;	/* peel up to this trip */
+	bool disjoint_apart;	/* disjoint values in data_deps stay apart, also in the leftover */
 	);
 	bool partitioned;	/* the last partition was for this loop */
 	struct bpf_loop_per_pass this_pass;
@@ -907,6 +910,7 @@ struct bpf_insn_aux_data {
 		u64 call_num;	/* any of these, or the offset of a refcount */
 	};
 	struct btf_struct_meta *kptr_struct_meta;
+	u64 suspect_loops; /* of the states that got here */
 	u64 map_key_state; /* constant (32 bit) key tracking for maps */
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
 	u32 seen; /* this insn was processed by the verifier at env->check_cnt */
@@ -919,7 +923,9 @@ struct bpf_insn_aux_data {
 	u64 cast_arena:1; /* addr_space_cast of an address in arena */
 	u64 cast_mov:1; /* addr_space_cast of a pointer that is not in arena, it's a move */
 	u64 loop_guard:1; /* may_goto is added in front of this instruction */
+	u64 speculative_first:1; /* a speculative state came to it first */
 	u64 call_recorded:1; /* see record_call_fixup() */
+	u64 pessimized:1; /* see bpf_partition_for_pessimized() */
 	u64 alu_state:5; /* used in combination with alu_limit */
 	/* true if STX or LDX instruction is a part of a spill/fill
 	 * pattern for a bpf_fastcall call.
@@ -945,6 +951,7 @@ struct bpf_insn_aux_data {
 	/* what one pass gives to the next pass, see bpf_flow_new_pass() */
 	u32 guard_no_unwind:1; /* it cannot unwind from here, at least sometimes */
 	u32 guard_unset_reg:1; /* where it goes a register is read that is not set here */
+	u32 non_speculative_first:1; /* speculative states end here, their fixups did not fit */
 
 	/* below flags are initialized once */
 	u32 bb_end:1; /* last instruction of a basic block */
@@ -1097,6 +1104,7 @@ struct bpf_subprog_info {
 	u32 exit_idx;
 	u32 callx_edge; /* 1 + the first of its env->callx_edges, 0 if none */
 	struct bpf_iarray *jt; /* jump table shared by all gotox of this subprogram */
+	u32 deepest_insn; /* the insn that set stack_depth */
 	u16 stack_depth; /* max. stack depth used by this function */
 	u16 stack_extra;
 	u16 arena_stack_depth; /* size of the frame in the stack in arena */
@@ -1309,6 +1317,8 @@ struct bpf_verifier_env {
 	bool test_reg_invariants;	/* fail verification on register invariants violations */
 	bool uses_arena_sp;		/* the program has insns with BPF_REG_ARENA_SP */
 	bool path_sensitive;		/* no joins, see run_path_sensitive() */
+	bool for_log;			/* the verdict is known, see do_check_all() */
+	struct bpf_precision *precision;
 	u64 cost, mem;			/* see bpf_check_limits() */
 	u64 max_cost, max_mem;
 	u64 hash_seed;			/* see bpf_hash_join_key() */
@@ -1318,10 +1328,12 @@ struct bpf_verifier_env {
 	/* What a pass writes. Each pass starts from the snapshot. */
 	struct_group_tagged(bpf_env_per_pass, per_pass,
 	int err;			/* the first error */
+	u32 err_insn;
 	bool imprecise;			/* a state before the first error is imprecise */
 	bool over_limit;		/* see bpf_check_limits() */
 	bool restart;			/* see bpf_flow_next_is_no_bound() */
 	bool guards_late;		/* see bpf_flow_loop_gets_guards() */
+	bool extra_values;		/* a state can have constants that no run has */
 	bool seen_direct_write;
 	/* a register may point to the stack and is not PTR_TO_STACK, see bpf_reg_state::buf */
 	bool seen_stack_slice;
@@ -1629,6 +1641,13 @@ u64 bpf_hash64(const void *p, size_t len, u64 hash);
 u64 bpf_hash_join_key(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
 int bpf_renumber_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 
+void bpf_note_reads_from_unproven(struct bpf_verifier_env *env, u32 idx);
+void bpf_note_unproven_insn(struct bpf_verifier_env *env,
+			    const struct bpf_verifier_state *st, u32 idx);
+bool bpf_insn_is_unproven(struct bpf_verifier_env *env);
+void bpf_note_fixups_differ(struct bpf_verifier_env *env);
+void bpf_find_unproven_after_pass(struct bpf_verifier_env *env);
+bool bpf_same_insns_unproven(struct bpf_verifier_env *env);
 /*
  * The two limits of the verifier, for the whole load. The unit of cost is one step of a scan,
  * about a dozen insns of the CPU. Memory is the bytes of states and tables at a time.
@@ -1669,6 +1688,8 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env);
 /* verifier.c, for flow.c */
 int bpf_flow_loop_enter(struct bpf_verifier_env *env, struct bpf_loop **backedge_loop,
 			bool *starts_leftover);
+int bpf_flow_edge_unproven(struct bpf_verifier_env *env, struct bpf_verifier_state *st, u32 idx,
+			   int err);
 #define BPF_EXIT_NEEDS_CALLER	1	/* verify the call in the frames of the caller */
 int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
 		    const struct bpf_verifier_state *exit, int call_idx);
@@ -1686,7 +1707,6 @@ void bpf_mark_reg_not_init(const struct bpf_verifier_env *env,
 			   struct bpf_reg_state *reg);
 void bpf_mark_reg_known_scalar(struct bpf_reg_state *reg, u64 imm);
 void bpf_mark_reg_unknown(struct bpf_reg_state *reg);
-int bpf_grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *state, int size);
 
 static inline int bpf_get_spi(s32 off)
 {
