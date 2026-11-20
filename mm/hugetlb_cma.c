@@ -4,10 +4,8 @@
 #include <linux/cma.h>
 #include <linux/compiler.h>
 #include <linux/cpuset.h>
-#include <linux/mm_inline.h>
 
 #include <asm/page.h>
-#include <asm/setup.h>
 
 #include <linux/hugetlb.h>
 #include <linux/memblock.h>
@@ -71,14 +69,14 @@ retry_cpuset:
 	}
 
 	if (hugetlb_cma[nid] && node_isset(nid, *nmask))
-		page = cma_alloc_frozen_compound(hugetlb_cma[nid], order);
+		page = cma_alloc_frozen_compound(hugetlb_cma[nid], order, gfp_mask);
 
 	if (!page && !(gfp_mask & __GFP_THISNODE)) {
 		for_each_node_mask(node, *nmask) {
 			if (node == nid || !hugetlb_cma[node])
 				continue;
 
-			page = cma_alloc_frozen_compound(hugetlb_cma[node], order);
+			page = cma_alloc_frozen_compound(hugetlb_cma[node], order, gfp_mask);
 			if (page)
 				break;
 		}
@@ -166,6 +164,9 @@ static int __init cmdline_parse_hugetlb_cma(char *p)
 				break;
 		} else {
 			char *next;
+
+			if (s != p)
+				return -EINVAL;
 
 			tmp = memparse(p, &next);
 			if (*next == '%') {

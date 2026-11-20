@@ -614,6 +614,7 @@ encoded manner. The codes are the following:
     lf    lock on fault pages
     dp    always lazily freeable mapping
     gu    maybe contains guard regions (if not set, definitely doesn't)
+    up    maybe contains poison markers installed by userfaultfd
     ==    =============================================================
 
 Note that there is no guarantee that every flag and associated mnemonic will
