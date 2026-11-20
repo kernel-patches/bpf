@@ -1802,7 +1802,7 @@ static int snd_timer_user_tselect(struct file *file,
 	struct snd_timer_user *tu;
 	struct snd_timer_select tselect;
 	char str[32];
-	int err = 0;
+	int err;
 
 	tu = file->private_data;
 	if (tu->timeri) {
@@ -1810,18 +1810,15 @@ static int snd_timer_user_tselect(struct file *file,
 		snd_timer_instance_free(tu->timeri);
 		tu->timeri = NULL;
 	}
-	if (copy_from_user(&tselect, _tselect, sizeof(tselect))) {
-		err = -EFAULT;
-		goto __err;
-	}
-	sprintf(str, "application %i", current->pid);
+	if (copy_from_user(&tselect, _tselect, sizeof(tselect)))
+		return -EFAULT;
+
+	scnprintf(str, sizeof(str), "application %i", current->pid);
 	if (tselect.id.dev_class != SNDRV_TIMER_CLASS_SLAVE)
 		tselect.id.dev_sclass = SNDRV_TIMER_SCLASS_APPLICATION;
 	tu->timeri = snd_timer_instance_new(str);
-	if (!tu->timeri) {
-		err = -ENOMEM;
-		goto __err;
-	}
+	if (!tu->timeri)
+		return -ENOMEM;
 
 	tu->timeri->flags |= SNDRV_TIMER_IFLG_FAST;
 	tu->timeri->callback = tu->tread
@@ -1836,7 +1833,6 @@ static int snd_timer_user_tselect(struct file *file,
 		tu->timeri = NULL;
 	}
 
-      __err:
 	return err;
 }
 
