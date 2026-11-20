@@ -824,8 +824,7 @@ static int atmel_aes_dma_transfer_start(struct atmel_aes_dev *dd,
 	if (!desc)
 		return -ENOMEM;
 
-	desc->callback = callback;
-	desc->callback_param = dd;
+	dmaengine_desc_set_callback(desc, callback, NULL, dd);
 	dmaengine_submit(desc);
 	dma_async_issue_pending(dma->chan);
 

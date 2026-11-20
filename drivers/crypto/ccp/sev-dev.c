@@ -43,9 +43,9 @@
 #define SEV_FW_FILE		"amd/sev.fw"
 #define SEV_FW_NAME_SIZE	64
 
-/* Minimum firmware version required for the SEV-SNP support */
+/* Minimum firmware version required for SEV-SNP support */
 #define SNP_MIN_API_MAJOR	1
-#define SNP_MIN_API_MINOR	51
+#define SNP_MIN_API_MINOR	55
 
 /*
  * Maximum number of firmware-writable buffers that might be specified
@@ -1511,8 +1511,8 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 	struct psp_device *psp = psp_master;
 	struct sev_data_snp_init_ex data = {};
 	struct sev_device *sev;
-	void *arg = &data;
-	int cmd, rc = 0;
+	bool tio_supp;
+	int rc = 0;
 
 	if (!cc_platform_has(CC_ATTR_HOST_SEV_SNP))
 		return -ENODEV;
@@ -1523,7 +1523,7 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 		return 0;
 
 	if (!sev_version_greater_or_equal(SNP_MIN_API_MAJOR, SNP_MIN_API_MINOR)) {
-		dev_dbg(sev->dev, "SEV-SNP support requires firmware version >= %d:%d\n",
+		dev_err(sev->dev, "SEV-SNP support requires firmware version >= %d:%d\n",
 			SNP_MIN_API_MAJOR, SNP_MIN_API_MINOR);
 		return -EOPNOTSUPP;
 	}
@@ -1532,73 +1532,56 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 	if (rc)
 		return rc;
 
+	tio_supp = !!(sev->snp_feat_info_0.ebx & SNP_SEV_TIO_SUPPORTED);
+
 	/*
-	 * Starting in SNP firmware v1.52, the SNP_INIT_EX command takes a list
-	 * of system physical address ranges to convert into HV-fixed page
-	 * states during the RMP initialization.  For instance, the memory that
-	 * UEFI reserves should be included in the that list. This allows system
-	 * components that occasionally write to memory (e.g. logging to UEFI
-	 * reserved regions) to not fail due to RMP initialization and SNP
-	 * enablement.
-	 *
+	 * Firmware checks that the pages containing the ranges enumerated
+	 * in the RANGES structure are either in the default page state or in the
+	 * firmware page state.
 	 */
-	if (sev_version_greater_or_equal(SNP_MIN_API_MAJOR, 52)) {
-		bool tio_supp = !!(sev->snp_feat_info_0.ebx & SNP_SEV_TIO_SUPPORTED);
-
-		/*
-		 * Firmware checks that the pages containing the ranges enumerated
-		 * in the RANGES structure are either in the default page state or in the
-		 * firmware page state.
-		 */
-		snp_range_list = kzalloc(PAGE_SIZE, GFP_KERNEL);
-		if (!snp_range_list) {
-			dev_err(sev->dev,
-				"SEV: SNP_INIT_EX range list memory allocation failed\n");
-			return -ENOMEM;
-		}
-
-		/*
-		 * Retrieve all reserved memory regions from the e820 memory map
-		 * to be setup as HV-fixed pages.
-		 */
-		rc = walk_iomem_res_desc(IORES_DESC_NONE, IORESOURCE_MEM, 0, ~0,
-					 snp_range_list, snp_filter_reserved_mem_regions);
-		if (rc) {
-			dev_err(sev->dev,
-				"SEV: SNP_INIT_EX walk_iomem_res_desc failed rc = %d\n", rc);
-			return rc;
-		}
-
-		/*
-		 * Add HV_Fixed pages from other PSP sub-devices, such as SFS to the
-		 * HV_Fixed page list.
-		 */
-		snp_add_hv_fixed_pages(sev, snp_range_list);
-
-		if (max_snp_asid) {
-			data.ciphertext_hiding_en = 1;
-			data.max_snp_asid = max_snp_asid;
-		}
-
-		data.init_rmp = 1;
-		data.list_paddr_en = 1;
-		data.list_paddr = __psp_pa(snp_range_list);
-
-		data.tio_en = tio_supp && sev_tio_enabled && amd_iommu_sev_tio_supported();
-
-		/*
-		 * When psp_init_on_probe is disabled, the userspace calling
-		 * SEV ioctl can inadvertently shut down SNP and SEV-TIO causing
-		 * unexpected state loss.
-		 */
-		if (data.tio_en && !psp_init_on_probe)
-			dev_warn(sev->dev, "SEV-TIO as incompatible with psp_init_on_probe=0\n");
-
-		cmd = SEV_CMD_SNP_INIT_EX;
-	} else {
-		cmd = SEV_CMD_SNP_INIT;
-		arg = NULL;
+	snp_range_list = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!snp_range_list) {
+		dev_err(sev->dev,
+			"SEV: SNP_INIT_EX range list memory allocation failed\n");
+		return -ENOMEM;
 	}
+
+	/*
+	 * Retrieve all reserved memory regions from the e820 memory map
+	 * to be setup as HV-fixed pages.
+	 */
+	rc = walk_iomem_res_desc(IORES_DESC_NONE, IORESOURCE_MEM, 0, ~0,
+				 snp_range_list, snp_filter_reserved_mem_regions);
+	if (rc) {
+		dev_err(sev->dev,
+			"SEV: SNP_INIT_EX walk_iomem_res_desc failed rc = %d\n", rc);
+		return rc;
+	}
+
+	/*
+	 * Add HV_Fixed pages from other PSP sub-devices, such as SFS to the
+	 * HV_Fixed page list.
+	 */
+	snp_add_hv_fixed_pages(sev, snp_range_list);
+
+	if (max_snp_asid) {
+		data.ciphertext_hiding_en = 1;
+		data.max_snp_asid = max_snp_asid;
+	}
+
+	data.init_rmp = 1;
+	data.list_paddr_en = 1;
+	data.list_paddr = __psp_pa(snp_range_list);
+
+	data.tio_en = tio_supp && sev_tio_enabled && amd_iommu_sev_tio_supported();
+
+	/*
+	 * When psp_init_on_probe is disabled, the userspace calling
+	 * SEV ioctl can inadvertently shut down SNP and SEV-TIO causing
+	 * unexpected state loss.
+	 */
+	if (data.tio_en && !psp_init_on_probe)
+		dev_warn(sev->dev, "SEV-TIO as incompatible with psp_init_on_probe=0\n");
 
 	/*
 	 * The following sequence must be issued before launching the first SNP
@@ -1612,10 +1595,9 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 	 */
 	wbinvd_on_all_cpus();
 
-	rc = __sev_do_cmd_locked(cmd, arg, error);
+	rc = __sev_do_cmd_locked(SEV_CMD_SNP_INIT_EX, &data, error);
 	if (rc) {
-		dev_err(sev->dev, "SEV-SNP: %s failed rc %d, error %#x\n",
-			cmd == SEV_CMD_SNP_INIT_EX ? "SNP_INIT_EX" : "SNP_INIT",
+		dev_err(sev->dev, "SEV-SNP: SNP_INIT_EX failed rc %d, error %#x\n",
 			rc, *error);
 		return rc;
 	}

@@ -95,8 +95,7 @@ static int qce_dma_prep_sg(struct dma_chan *chan, struct scatterlist *sg,
 	if (!desc)
 		return -EINVAL;
 
-	desc->callback = cb;
-	desc->callback_param = cb_param;
+	dmaengine_desc_set_callback(desc, cb, NULL, cb_param);
 	cookie = dmaengine_submit(desc);
 
 	return dma_submit_error(cookie);

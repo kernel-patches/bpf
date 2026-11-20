@@ -662,8 +662,7 @@ static int atmel_sha_xmit_dma(struct atmel_sha_dev *dd, dma_addr_t dma_addr1,
 	if (!in_desc)
 		return atmel_sha_complete(dd, -EINVAL);
 
-	in_desc->callback = atmel_sha_dma_callback;
-	in_desc->callback_param = dd;
+	dmaengine_desc_set_callback(in_desc, atmel_sha_dma_callback, NULL, dd);
 
 	atmel_sha_write_ctrl(dd, 1);
 
@@ -1472,8 +1471,7 @@ static int atmel_sha_dma_start(struct atmel_sha_dev *dd,
 		goto unmap_sg;
 	}
 
-	desc->callback = atmel_sha_dma_callback2;
-	desc->callback_param = dd;
+	dmaengine_desc_set_callback(desc, atmel_sha_dma_callback2, NULL, dd);
 	cookie = dmaengine_submit(desc);
 	err = dma_submit_error(cookie);
 	if (err)

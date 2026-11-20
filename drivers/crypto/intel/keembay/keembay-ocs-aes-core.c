@@ -129,7 +129,8 @@ static struct ocs_aes_dev *kmb_ocs_aes_find_dev(struct ocs_aes_tctx *tctx)
 	}
 
 	/* Only a single OCS device available */
-	aes_dev = list_first_entry(&ocs_aes.dev_list, struct ocs_aes_dev, list);
+	aes_dev = list_first_entry_or_null(&ocs_aes.dev_list,
+					   struct ocs_aes_dev, list);
 	tctx->aes_dev = aes_dev;
 
 exit:
