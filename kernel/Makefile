@@ -59,6 +59,7 @@ obj-y += dma/
 obj-y += entry/
 obj-y += unwind/
 obj-y += module/
+obj-$(CONFIG_KAPI_SPEC) += api/
 
 obj-$(CONFIG_KCMP) += kcmp.o
 obj-$(CONFIG_FREEZER) += freezer.o
