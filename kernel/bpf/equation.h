@@ -46,6 +46,9 @@ struct sym_scratch {
 	u32 use_cnt;		/* equations that use it */
 	/* propagate_bounds(): the sweep that has to look at its equations */
 	u32 refined_sweep;
+	/* propagate_bounds(): not of this sym. The queue of refined syms. */
+	u32 queued_sym;
+	u32 first_use;		/* see link_sym_equations() */
 	u32 new_symno;
 	bool determined, by_op;
 	const struct bpf_sym_equation *op;	/* that makes it */
@@ -57,6 +60,9 @@ struct bpf_equation_env {
 	u32 *use_links;
 	u32 scratch_cap, use_link_cap, refined_cnt;
 	bool has_expr[2], is_ptr[2], equation_added, divided;
+	/* the operand of a jump and its bounds, see refine_from_reg() */
+	struct expr jump_expr;
+	struct scalar jump_bounds;
 	/* equation_join.c */
 	struct bpf_verifier_state join_state;	/* it has equations and no frames */
 	struct join_phi *phis;
