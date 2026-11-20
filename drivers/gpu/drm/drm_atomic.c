@@ -1063,7 +1063,16 @@ int drm_atomic_private_obj_init(struct drm_device *dev,
 				const struct drm_private_state_funcs *funcs)
 {
 	struct drm_private_state *state;
+	int ret;
+
 	memset(obj, 0, sizeof(*obj));
+
+	/*
+	 * Keep the list node in a state drm_atomic_private_obj_fini()
+	 * can safely handle if we fail before adding it to the private
+	 * objects list.
+	 */
+	INIT_LIST_HEAD(&obj->head);
 
 	drm_modeset_lock_init(&obj->lock);
 
@@ -1072,12 +1081,19 @@ int drm_atomic_private_obj_init(struct drm_device *dev,
 	list_add_tail(&obj->head, &dev->mode_config.privobj_list);
 
 	state = obj->funcs->atomic_create_state(obj);
-	if (IS_ERR(state))
-		return PTR_ERR(state);
+	if (IS_ERR(state)) {
+		ret = PTR_ERR(state);
+		goto err_list_del;
+	}
 
 	obj->state = state;
 
 	return 0;
+
+err_list_del:
+	list_del_init(&obj->head);
+	drm_modeset_lock_fini(&obj->lock);
+	return ret;
 }
 EXPORT_SYMBOL(drm_atomic_private_obj_init);
 
@@ -1090,7 +1106,18 @@ EXPORT_SYMBOL(drm_atomic_private_obj_init);
 void
 drm_atomic_private_obj_fini(struct drm_private_obj *obj)
 {
-	list_del(&obj->head);
+	/*
+	 * Some callers ignore drm_atomic_private_obj_init() failures
+	 * and unconditionally register a teardown action that calls
+	 * this function. Use list_del_init() rather than list_del() so
+	 * that calling drm_atomic_private_obj_fini() twice, after both
+	 * a failed and a successful drm_atomic_private_obj_init(),
+	 * remains safe.
+	 */
+	if (list_empty(&obj->head))
+		return;
+
+	list_del_init(&obj->head);
 	obj->funcs->atomic_destroy_state(obj, obj->state);
 	drm_modeset_lock_fini(&obj->lock);
 }
