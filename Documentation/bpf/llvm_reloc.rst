@@ -607,7 +607,10 @@ struct with the single candidate given by the program's attach target:
 * Further accessors (members of structs passed by value) are resolved as for
   any other struct.
 
-Members that have no match don't exist, as for missing struct fields. In the
+Members that have no match don't exist, as for missing struct fields. A
+``BPF_CORE_TYPE_EXISTS`` relocation against such a struct resolves to 1, so
+that programs can detect that the struct is relocated against the attach
+target; other type-based relocations against it are not supported. In the
 example above, the ``byte_off`` relocations for ``a``, ``b`` and ``ret`` are
 resolved to 0, 8 and 24 respectively.
 

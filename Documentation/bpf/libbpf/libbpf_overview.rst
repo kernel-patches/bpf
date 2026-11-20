@@ -310,6 +310,31 @@ Light skeletons rely on the kernel to apply CO-RE relocations. Kernels that
 don't support function argument relocations find no match for any member, so
 all arguments appear to be missing.
 
+As libbpf and kernel versions that don't support function argument
+relocations (as well as GCC-built structs lacking ``__bpf_func_args_marker``)
+make all arguments appear to be missing, programs can detect whether the
+arguments struct is relocated against the attach target with
+``bpf_func_args_supported()`` (``bpf_func_args_supported(ctx)`` in
+``BPF_PROG_CORE()`` programs; it uses ``bpf_core_type_exists()`` from
+``bpf_core_read.h``), and report or handle a lack of support:
+
+.. code-block:: C
+
+    SEC("fexit/do_unlinkat")
+    int handle(struct unlinkat_args *args)
+    {
+            if (!bpf_func_args_supported(args)) {
+                    unsupported = true;
+                    return 0;
+            }
+            ...
+    }
+
+This tells whether the struct is relocated against the attach target at all,
+not which of its members exist. Without that support, a kernel type with the
+same name as the struct would be looked up instead, so arguments structs
+shouldn't be named like kernel types.
+
 Limitations:
 
 * Structs passed by value that are larger than 8 bytes can't be copied out of
