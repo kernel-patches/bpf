@@ -2321,10 +2321,22 @@ void bpf_equation_env_free(struct bpf_verifier_env *env);
 int bpf_equations_copy(struct bpf_verifier_env *env, struct bpf_equations *dst,
 		       const struct bpf_equations *src);
 void bpf_equations_free(struct bpf_equations *eqs);
+void bpf_equations_refine_all(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
+void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int idx,
+			bool taken);
 void bpf_equations_print(struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
 u32 bpf_equations_bytes(const struct bpf_equations *eqs);
 void scalar_bounds_sync(struct scalar *s);
 bool scalar_subsumes(const struct scalar *old, const struct scalar *cur);
+bool scalars_fit_in_bits(const struct scalar *a, const struct scalar *b, u32 bits);
+void scalars_refine_cond_op(struct scalar *a, struct scalar *b, u8 opcode, bool is_jmp32);
+
+static inline u8 bpf_signed_opcode(u8 op)
+{
+	if (op == BPF_JLT || op == BPF_JLE)
+		return op + BPF_JSLT - BPF_JLT;
+	return op == BPF_JGT || op == BPF_JGE ? op + BPF_JSGT - BPF_JGT : op;
+}
 
 /* How many bytes are checked from the start of the packet, wherever the pointer is */
 static inline int pkt_min_len(const struct bpf_reg_state *reg)
