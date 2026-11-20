@@ -336,6 +336,13 @@ void bpf_compare_states(struct bpf_verifier_env *env, const struct bpf_verifier_
 		bitmap_or(all, all, deps, bits);
 		bitmap_or(deps, deps, data_deps, bits);
 		bpf_add_cost(env, 4 + bitmap_weight(all, bits), BPF_COST_COPY);
+		/* r1 == r6 in one state only: two xregs differ, count both */
+		flags = (bpf_equations_join_forgets(env, old, new, fr, data_deps, deps, bits) ?
+			 CMP_NEW : 0) |
+			(bpf_equations_join_forgets(env, new, old, fr, data_deps, deps, bits) ?
+			 CMP_OLD : 0);
+		note_cmp(cmp, flags, true, true);
+		note_cmp(cmp, flags, true, true);
 		for_each_set_bit(xregno, all, bits) {
 			if (xregno == XREG_STACK_ARGS) {
 				arg_cnt = max(fa->out_stack_arg_cnt, fb->out_stack_arg_cnt);
@@ -355,6 +362,10 @@ void bpf_compare_states(struct bpf_verifier_env *env, const struct bpf_verifier_
 			} else {
 				flags = compare_slots(env, cmp, fa, fb, bpf_xreg_to_spi(xregno));
 			}
+			if (iv_loop && fr == old->curframe && !(flags & CMP_TYPE) &&
+			    test_bit(xregno, iv_loop->linear_xregs) &&
+			    !test_bit(xregno, iv_loop->nonlinear_xregs))
+				flags &= ~(CMP_DISJOINT | CMP_GAP);
 			note_cmp(cmp, flags, test_bit(xregno, data_deps), test_bit(xregno, deps));
 			if (fr == old->curframe && (flags & CMP_DISJOINT) &&
 			    test_bit(xregno, data_deps))
