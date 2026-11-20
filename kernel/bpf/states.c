@@ -179,6 +179,7 @@ int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 {
 	int i, err;
 
+	bpf_add_cost(env, bpf_xreg_cnt(st), BPF_COST_XREG);
 	err = bpf_live_stack_query_init(env, st);
 	if (err)
 		return err;

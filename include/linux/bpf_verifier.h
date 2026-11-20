@@ -551,6 +551,8 @@ struct bpf_verifier_state {
 
 	/* The insn that the state comes from, -1 if no instructions have been executed yet. */
 	u32 last_insn_idx;
+	/* its part of env->mem */
+	u32 bytes;
 };
 
 /* Number of BPF_REG_SIZE stack slots tracked for the frame so far. */
@@ -1173,6 +1175,10 @@ struct bpf_verifier_env {
 	bool test_reg_invariants;	/* fail verification on register invariants violations */
 	bool uses_arena_sp;		/* the program has insns with BPF_REG_ARENA_SP */
 	u64 cost, mem;			/* see bpf_check_limits() */
+	u64 max_cost, max_mem;
+	u64 pass_max_cost;		/* see bpf_undo_precision() */
+	bool aborted;			/* a thaw does not take it back */
+	bool over_limit;		/* see bpf_check_limits() */
 	bool restart;			/* see bpf_flow_next_is_no_bound() */
 	bool guards_late;		/* see bpf_flow_loop_gets_guards() */
 	u32 loop_entry_cnt;		/* see loop_stack_entry.entry_id, callback_entry_id */
@@ -1470,12 +1476,32 @@ int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state *old,
 			struct bpf_verifier_state *cur);
 
+/*
+ * The two limits of the verifier, for the whole load. The unit of cost is one step of a scan,
+ * about a dozen insns of the CPU. Memory is the bytes of states and tables at a time.
+ */
 #define BPF_COST_SCAN	1	/* one step of a scan */
+#define BPF_COST_COPY	4	/* copy an xreg, or look at its type */
+#define BPF_COST_XREG	16	/* clean, compare or join an xreg */
+#define BPF_COST_INSN	128	/* check an insn */
+#define BPF_COST_STATE	512	/* make, order and free a state */
+#define BPF_MAX_COST	(1ULL << 33)
+#define BPF_MAX_MEM	(1ULL << 31)
+/* Without CAP_BPF programs are small, and their loads wait for each other */
+#define BPF_LIMITS_SHIFT_UNPRIV	5
 
 /* flow.c */
+int bpf_check_limits(struct bpf_verifier_env *env);
+
 static inline void bpf_add_cost(struct bpf_verifier_env *env, u64 cnt, u32 weight)
 {
 	env->cost += cnt * weight;
+}
+
+static inline int bpf_add_cost_and_check(struct bpf_verifier_env *env, u64 cnt, u32 weight)
+{
+	bpf_add_cost(env, cnt, weight);
+	return bpf_check_limits(env);
 }
 
 int bpf_flow_prepare(struct bpf_verifier_env *env);
@@ -1501,9 +1527,11 @@ bool bpf_insn_is_iter_next(struct bpf_verifier_env *env, struct bpf_insn *insn);
 bool bpf_insn_leaves_loop(struct bpf_verifier_env *env, int h, int n);
 int bpf_insert_recursion_checks(struct bpf_verifier_env *env);
 
-int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
+int bpf_copy_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_state *dst_state,
 			    const struct bpf_verifier_state *src);
-void bpf_free_verifier_state(struct bpf_verifier_state *state, bool free_self);
+void bpf_charge_state(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
+void bpf_free_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_state *state,
+			     bool free_self);
 void bpf_mark_reg_not_init(const struct bpf_verifier_env *env,
 			   struct bpf_reg_state *reg);
 void bpf_mark_reg_known_scalar(struct bpf_reg_state *reg, u64 imm);
@@ -2145,5 +2173,14 @@ int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
 
+
+static inline u32 bpf_xreg_cnt(const struct bpf_verifier_state *st)
+{
+	u32 fr, nr = 0;
+
+	for (fr = 0; fr <= st->curframe; fr++)
+		nr += MAX_BPF_REG + bpf_stack_nr_slots(st->frame[fr]);
+	return nr;
+}
 
 #endif /* _LINUX_BPF_VERIFIER_H */
