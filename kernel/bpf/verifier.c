@@ -11643,21 +11643,32 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 	return err ?: PROCESS_BPF_EXIT;
 }
 
+/*
+ * A void function can leave a pointer to the stack in r0. The caller cannot read it. That holds
+ * for the stack of a caller too: for stack liveness a call returns no pointer to the stack.
+ */
+static void hide_returned_stack_ptrs(struct bpf_verifier_env *env, int subprog,
+				     struct bpf_reg_state *regs)
+{
+	u32 i, nregs = bpf_ret_reg_pair(env, subprog) ? 2 : 1;
+
+	for (i = 0; i < nregs; i++) {
+		if (regs[ret_regs[i]].type != PTR_TO_STACK)
+			continue;
+		verbose(env, "the caller cannot read the stack pointer in R%d\n", ret_regs[i]);
+		bpf_diag_record_scrub(env, &regs[ret_regs[i]], BPF_DIAG_MOD_RET_STACK_PTR);
+		bpf_mark_reg_not_init(env, &regs[ret_regs[i]]);
+	}
+}
+
 /* The current state is at exit of a function that is verified on its own. */
 static int exit_func_on_its_own(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_state *state = env->cur_state;
 	struct bpf_func_state *callee = state->frame[0];
-	u32 i, nregs;
 	int err;
 
-	nregs = bpf_ret_reg_pair(env, callee->subprogno) ? 2 : 1;
-	for (i = 0; i < nregs; i++) {
-		if (callee->regs[ret_regs[i]].type != PTR_TO_STACK)
-			continue;
-		verbose(env, "cannot return stack pointer to the caller\n");
-		return -EINVAL;
-	}
+	hide_returned_stack_ptrs(env, callee->subprogno, callee->regs);
 	state->unwound |= bpf_is_unwind_exit(&env->prog->insnsi[env->insn_idx]);
 
 	/* Invalidate callee-local dynptrs and their slices before the frame goes away. */
@@ -12419,18 +12430,6 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	callee = state->frame[state->curframe];
 	r0 = &callee->regs[BPF_REG_0];
 	nregs = bpf_ret_reg_pair(env, callee->subprogno) ? 2 : 1;
-	for (i = 0; i < nregs; i++) {
-		if (callee->regs[ret_regs[i]].type != PTR_TO_STACK)
-			continue;
-		/* technically it's ok to return caller's stack pointer
-		 * (or caller's caller's pointer) back to the caller,
-		 * since these pointers are valid. Only current stack
-		 * pointer will be invalid as soon as function exits,
-		 * but let's be conservative
-		 */
-		verbose(env, "cannot return stack pointer to the caller\n");
-		return -EINVAL;
-	}
 
 	caller = state->frame[state->curframe - 1];
 	if (bpf_is_unwind_exit(&env->prog->insnsi[*insn_idx]) || state->unwound) {
@@ -12489,6 +12488,7 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 			caller->regs[regno] = callee->regs[regno];
 			bpf_diag_mod_end(env);
 		}
+		hide_returned_stack_ptrs(env, callee->subprogno, caller->regs);
 	}
 
 	/* Invalidate callee-local dynptrs and their slices before the frame goes away. */

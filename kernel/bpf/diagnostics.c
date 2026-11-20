@@ -2233,6 +2233,9 @@ static void diag_print_mod(struct bpf_verifier_env *env, const struct bpf_diag_h
 			 "call invalidated this outgoing stack argument" :
 			 "call invalidated this caller-saved register";
 		break;
+	case BPF_DIAG_MOD_RET_STACK_PTR:
+		reason = "the caller cannot read a returned pointer to the stack";
+		break;
 	case BPF_DIAG_MOD_WRITE:
 		if (target->kind == BPF_DIAG_MOD_TARGET_STACK_SLOT)
 			reason = "a later stack write overwrote this spilled value";
