@@ -252,7 +252,15 @@ bool bpf_failing_path_is_due(struct bpf_verifier_env *env)
 int bpf_failing_path_prepare(struct bpf_verifier_env *env, bool repeat)
 {
 	struct bpf_precision *prec = env->precision;
+	struct bpf_loop *loop;
+	u32 i;
 
+	for (i = 0; i < prec->loop_cnt; i++) {
+		loop = prec->loops[i];
+		if (repeat)
+			loop->infinite = loop->was_infinite;
+		loop->was_infinite = loop->infinite;
+	}
 	prec->failing_path_due = false;
 	if (prec->seen)
 		memset(prec->seen, 0, sizeof(*prec->seen) << prec->seen_bits);

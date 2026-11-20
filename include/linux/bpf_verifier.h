@@ -12,6 +12,7 @@
 #include <linux/math64.h> /* for div_s64_rem() */
 #include <linux/freezer.h>
 #include <linux/sched/signal.h>
+#include <linux/sizes.h>
 
 /* No memory fails the load. It does not wake up the OOM killer. */
 #define BPF_GFP_MAYFAIL (__GFP_RETRY_MAYFAIL | __GFP_NOWARN)
@@ -1436,6 +1437,7 @@ struct bpf_verifier_env {
 	bool no_rcu_read_lock;
 	bool signature;
 	u8 bug:1;			/* ends the load, see bpf_note_bug() */
+	u8 log_level:7;			/* of the user */
 	u32 insn_aux_data_len;
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
 	struct bpf_patch_list patch_list;
@@ -1605,6 +1607,13 @@ __printf(3, 4) void verbose_linfo(struct bpf_verifier_env *env,
 				  u32 insn_off,
 				  const char *prefix_fmt, ...);
 
+/* No later pass can hide a bug of the verifier. Its message goes into the log. */
+static inline void bpf_note_bug(struct bpf_verifier_env *env)
+{
+	env->bug = true;
+	env->log.level = env->log_level;
+}
+
 #define verifier_bug_if(cond, env, fmt, args...)						\
 	({											\
 		bool __cond = (cond);								\
@@ -1615,6 +1624,7 @@ __printf(3, 4) void verbose_linfo(struct bpf_verifier_env *env,
 #define verifier_bug(env, fmt, args...)								\
 	({											\
 		BPF_WARN_ONCE(1, "verifier bug: " fmt "\n", ##args);				\
+		bpf_note_bug(env);								\
 		bpf_log(&env->log, "verifier bug: " fmt "\n", ##args);				\
 	})
 
@@ -1768,6 +1778,9 @@ void bpf_precision_free(struct bpf_verifier_env *env);
 #define BPF_COST_STATE	512	/* make, order and free a state */
 #define BPF_MAX_COST	(1ULL << 33)
 #define BPF_MAX_MEM	(1ULL << 31)
+/* What the passes can add to the tables. A loop keeps a state at each join point. */
+#define BPF_PASS_MEM_BASE	SZ_256M
+#define BPF_PASS_MEM_PER_INSN	SZ_32K	/* a state with a full stack */
 /* The floors of the cost after the first error, and of the budget of a partition */
 #define BPF_PARTITION_BUDGET	(BPF_MAX_COST / 3)
 #define BPF_MIN_BUDGET	(BPF_MAX_COST >> 12)
@@ -1806,7 +1819,6 @@ void bpf_flow_next_is_no_bound(struct bpf_verifier_env *env, int insn_idx, int h
 bool bpf_flow_loops_lost_bound(struct bpf_verifier_env *env);
 void bpf_flow_new_pass(struct bpf_verifier_env *env);
 void bpf_flow_drop_guards(struct bpf_verifier_env *env);
-void bpf_flow_new_round(struct bpf_verifier_env *env);
 int bpf_flow_place_guards(struct bpf_verifier_env *env);
 /* verifier.c, for flow.c */
 int bpf_flow_loop_enter(struct bpf_verifier_env *env, struct bpf_loop **backedge_loop,
