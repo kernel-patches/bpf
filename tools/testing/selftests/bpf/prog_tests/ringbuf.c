@@ -635,6 +635,10 @@ static void ringbuf_wakeup_subtest(void)
 					 process_noop_sample, NULL, NULL);
 	if (!ASSERT_OK_PTR(ringbuf, "ring_buffer__new"))
 		return;
+	struct ring *ring = ring_buffer__ring(ringbuf, 0);
+
+	if (!ASSERT_OK_PTR(ring, "ring_buffer__ring"))
+		return;
 
 	struct epoll_event event = {
 		.events = EPOLLIN | EPOLLET,
@@ -672,6 +676,41 @@ static void ringbuf_wakeup_subtest(void)
 			total += err;
 		if (!ASSERT_OK(err, "ring_buffer__consume_n"))
 			return;
+	}
+
+	total = 0;
+	while (total < N_WAKEUP_SAMPLES) {
+		err = epoll_wait(epoll_fd, &event, 1, 1000);
+		if (!ASSERT_EQ(err, 1, "iterator_epoll_wait"))
+			return;
+
+		struct ring_buffer_iter iter
+			__attribute__((cleanup(ring_buffer_iter_destroy))) = {};
+		err = ring_buffer_iter_new(&iter, ring);
+		if (!ASSERT_OK(err, "ring_buffer_iter_new"))
+			return;
+		while (ring_buffer_iter_next(&iter, NULL, false))
+			total++;
+	}
+
+	/* Release each record through destruction before creating a new iterator. */
+	total = 0;
+	while (total < N_WAKEUP_SAMPLES) {
+		err = epoll_wait(epoll_fd, &event, 1, 1000);
+		if (!ASSERT_EQ(err, 1, "iterator_release_epoll_wait"))
+			return;
+
+		for (;;) {
+			struct ring_buffer_iter iter __attribute__((
+				cleanup(ring_buffer_iter_destroy))) = {};
+
+			err = ring_buffer_iter_new(&iter, ring);
+			if (!ASSERT_OK(err, "ring_buffer_iter_new"))
+				return;
+			if (!ring_buffer_iter_next(&iter, NULL, false))
+				break;
+			total++;
+		}
 	}
 }
 
@@ -731,6 +770,127 @@ static void ringbuf_n_subtest(void)
 	}
 	ASSERT_EQ(callback_ctx.callback_count, N_TOT_SAMPLES,
 		  "positive_callback");
+}
+
+static void ringbuf_iterator_subtest(void)
+{
+	struct test_ringbuf_n_lskel *skel_n
+		__attribute__((cleanup(cleanup_test_ringbuf_n_lskel))) =
+			test_ringbuf_n_lskel__open();
+	const struct sample_n *sample;
+	size_t sample_size;
+	int err, i;
+
+	if (!ASSERT_OK_PTR(skel_n, "test_ringbuf_n_lskel__open"))
+		return;
+
+	skel_n->maps.ringbuf.max_entries = getpagesize();
+	skel_n->bss->pid = getpid();
+	skel_n->bss->value = SAMPLE_VALUE;
+
+	err = test_ringbuf_n_lskel__load(skel_n);
+	if (!ASSERT_OK(err, "test_ringbuf_n_lskel__load"))
+		return;
+
+	err = test_ringbuf_n_lskel__attach(skel_n);
+	if (!ASSERT_OK(err, "test_ringbuf_n_lskel__attach"))
+		return;
+
+	struct ring_buffer *ringbuf
+		__attribute__((cleanup(cleanup_ring_buffer))) =
+			ring_buffer__new(skel_n->maps.ringbuf.map_fd, NULL,
+					 NULL, NULL);
+	if (!ASSERT_OK_PTR(ringbuf, "ring_buffer__new"))
+		return;
+
+	struct ring *ring = ring_buffer__ring(ringbuf, 0);
+
+	if (!ASSERT_OK_PTR(ring, "ring_buffer__ring"))
+		return;
+
+	struct ring_buffer_iter iter
+		__attribute__((cleanup(ring_buffer_iter_destroy))) = {};
+
+	for (i = 0; i < 3; i++)
+		syscall(__NR_getpgid);
+
+	unsigned long consumer_pos = ring__consumer_pos(ring);
+
+	err = ring_buffer_iter_new(&iter, ring);
+	if (!ASSERT_OK(err, "ring_buffer_iter_new"))
+		return;
+	sample = ring_buffer_iter_next(&iter, &sample_size, true);
+	if (!ASSERT_OK_PTR(sample, "ring_buffer_iter_next"))
+		return;
+	ASSERT_EQ(sample_size, sizeof(*sample), "sample_size");
+	ASSERT_EQ(sample->value, SAMPLE_VALUE, "sample_value");
+	ASSERT_EQ(ring__consumer_pos(ring), consumer_pos,
+		  "consumer_pos_iter_held");
+
+	ring_buffer_iter_destroy(&iter);
+	ASSERT_GT(ring__consumer_pos(ring), consumer_pos,
+		  "consumer_pos_released");
+
+	err = ring_buffer_iter_new(&iter, ring);
+	if (!ASSERT_OK(err, "ring_buffer_iter_new_remaining"))
+		return;
+	consumer_pos = ring__consumer_pos(ring);
+	for (i = 0; (sample = ring_buffer_iter_next(&iter, &sample_size, true));
+	     i++) {
+		ASSERT_EQ(sample_size, sizeof(*sample),
+			  "remaining_sample_size");
+		ASSERT_EQ(sample->value, SAMPLE_VALUE,
+			  "remaining_sample_value");
+		if (i)
+			ASSERT_GT(ring__consumer_pos(ring), consumer_pos,
+				  "consumer_pos_released_next");
+		consumer_pos = ring__consumer_pos(ring);
+	}
+	ASSERT_EQ(i, 2, "remaining_samples");
+	ASSERT_GT(ring__consumer_pos(ring), consumer_pos,
+		  "consumer_pos_released_null");
+
+	syscall(__NR_getpgid);
+	sample = ring_buffer_iter_next(&iter, &sample_size, true);
+	ASSERT_NULL(sample, "exhausted_iterator");
+	ring_buffer_iter_destroy(&iter);
+
+	err = ring_buffer_iter_new(&iter, ring);
+	if (!ASSERT_OK(err, "ring_buffer_iter_new_again"))
+		return;
+	sample = ring_buffer_iter_next(&iter, &sample_size, true);
+	if (!ASSERT_OK_PTR(sample, "ring_buffer_iter_next_again"))
+		return;
+	ASSERT_EQ(sample->value, SAMPLE_VALUE, "new_sample_value");
+	ring_buffer_iter_destroy(&iter);
+
+	for (i = 0; i < 4; i++) {
+		skel_n->bss->discard = i == 1;
+		syscall(__NR_getpgid);
+	}
+	skel_n->bss->discard = false;
+	consumer_pos = ring__consumer_pos(ring);
+	err = ring_buffer_iter_new(&iter, ring);
+	if (!ASSERT_OK(err, "ring_buffer_iter_new_batch"))
+		return;
+	for (i = 0; i < 2; i++) {
+		sample = ring_buffer_iter_next(&iter, &sample_size, false);
+		if (!ASSERT_OK_PTR(sample, "batch_sample"))
+			return;
+		ASSERT_EQ(ring__consumer_pos(ring), consumer_pos,
+			  "consumer_pos_deferred");
+	}
+	sample = ring_buffer_iter_next(&iter, &sample_size, true);
+	if (!ASSERT_OK_PTR(sample, "batch_sync_sample"))
+		return;
+	ASSERT_EQ(ring__consumer_pos(ring),
+		  ring__producer_pos(ring) - sizeof(*sample) -
+			  BPF_RINGBUF_HDR_SZ,
+		  "consumer_pos_batch_published");
+	sample = ring_buffer_iter_next(&iter, &sample_size, false);
+	ASSERT_NULL(sample, "batch_exhausted");
+	ASSERT_EQ(ring__consumer_pos(ring), ring__producer_pos(ring),
+		  "consumer_pos_batch_exhausted");
 }
 
 static int process_map_key_sample(void *ctx, void *data, size_t len)
@@ -809,6 +969,9 @@ static void ringbuf_overwrite_callback_subtest(void)
 	if (!ASSERT_OK_PTR(ring, "ring_buffer__ring"))
 		return;
 
+	struct ring_buffer_iter iter
+		__attribute__((cleanup(ring_buffer_iter_destroy))) = {};
+
 	err = ring_buffer__consume_n(ringbuf, 0);
 	ASSERT_EQ(err, -EOPNOTSUPP, "ringbuf_consume_zero");
 	err = ring_buffer__consume(ringbuf);
@@ -819,6 +982,8 @@ static void ringbuf_overwrite_callback_subtest(void)
 	ASSERT_EQ(err, -EOPNOTSUPP, "ring_consume_zero");
 	err = ring__consume(ring);
 	ASSERT_EQ(err, -EOPNOTSUPP, "ring_consume");
+	err = ring_buffer_iter_new(&iter, ring);
+	ASSERT_EQ(err, -EOPNOTSUPP, "ring_buffer_iter_new");
 }
 
 static void ringbuf_overwrite_mode_subtest(void)
@@ -886,6 +1051,8 @@ void test_ringbuf(void)
 		ringbuf_subtest();
 	if (test__start_subtest("ringbuf_n"))
 		ringbuf_n_subtest();
+	if (test__start_subtest("ringbuf_iterator"))
+		ringbuf_iterator_subtest();
 	if (test__start_subtest("ringbuf_null_cb"))
 		ringbuf_null_cb_subtest();
 	if (test__start_subtest("ringbuf_wakeup"))
