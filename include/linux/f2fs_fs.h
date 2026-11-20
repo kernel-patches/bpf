@@ -13,8 +13,8 @@
 
 #define F2FS_SUPER_OFFSET		1024	/* byte-size offset */
 #define F2FS_MIN_LOG_SECTOR_SIZE	9	/* 9 bits for 512 bytes */
-#define F2FS_MAX_LOG_SECTOR_SIZE	PAGE_SHIFT	/* Max is Block Size */
 #define F2FS_MIN_LOG_BLOCKSIZE		12
+#define F2FS_MAX_LOG_BLOCKSIZE		PAGE_SHIFT
 #define F2FS_MIN_BLKSIZE		4096UL
 #define F2FS_MAX_BLKSIZE		PAGE_SIZE
 #define F2FS_MAX_EXTENSION		64	/* # of extension entries */
