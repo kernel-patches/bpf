@@ -564,6 +564,18 @@ struct bpf_func_state {
 #define BPF_ID_MAP_SIZE ((MAX_BPF_REG + MAX_BPF_STACK_SLOTS + MAX_STACK_ARG_SLOTS) * \
 			 MAX_CALL_FRAMES)
 
+/* See equation.c */
+struct bpf_equations {
+	struct bpf_xreg_equation *xreg_equations;	/* the three tables are one allocation */
+	struct bpf_sym_equation *sym_equations;
+	struct scalar *syms;
+	u32 xreg_equation_cnt, sym_equation_cnt, sym_cnt;
+	u32 xreg_equation_cap, sym_equation_cap, sym_cap;
+	bool normalized;	/* see normalize_equations() */
+	bool infeasible;	/* the equations cannot hold: the program does not get here */
+	bool needs_refine;	/* widened: the equations are not applied, see bpf_flow_next() */
+};
+
 struct bpf_verifier_state {
 	/* call stack tracking */
 	struct bpf_func_state *frame[MAX_CALL_FRAMES];
@@ -2338,6 +2350,8 @@ int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
 
+void scalar_bounds_sync(struct scalar *s);
+bool scalar_subsumes(const struct scalar *old, const struct scalar *cur);
 
 /* How many bytes are checked from the start of the packet, wherever the pointer is */
 static inline int pkt_min_len(const struct bpf_reg_state *reg)
