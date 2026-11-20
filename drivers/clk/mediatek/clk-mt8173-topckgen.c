@@ -624,6 +624,11 @@ static const struct mtk_composite top_muxes[] = {
 	MUX(CLK_TOP_I2S3_B_SEL, "i2s3_b_ck_sel", i2s3_b_ck_parents, 0x120, 8, 1),
 };
 
+static const struct mtk_gate top_dummy_clks[] = {
+	GATE_DUMMY(2, "topck_reserved_2"),
+	GATE_DUMMY(CLK_TOP_HDMITX_DIG_CTS, "hdmitx_dig_cts_dummy"),
+};
+
 static const struct mtk_clk_desc topck_desc = {
 	.fixed_clks = fixed_clks,
 	.num_fixed_clks = ARRAY_SIZE(fixed_clks),
@@ -631,6 +636,8 @@ static const struct mtk_clk_desc topck_desc = {
 	.num_factor_clks = ARRAY_SIZE(top_divs),
 	.composite_clks = top_muxes,
 	.num_composite_clks = ARRAY_SIZE(top_muxes),
+	.clks = top_dummy_clks,
+	.num_clks = ARRAY_SIZE(top_dummy_clks),
 	.clk_lock = &mt8173_top_clk_lock,
 };
 
