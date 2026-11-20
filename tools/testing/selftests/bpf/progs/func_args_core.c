@@ -32,11 +32,23 @@ struct fentry_test3_args {
 
 __u64 t3_a, t3_b, t3_c, t3_b_alias, t3_ret;
 int t3_missing_exists = -1, t3_bad_type_exists = -1, t3_missing_flavor_exists = -1;
+int t3_supported = -1, t3_untagged_supported = -1;
+
+/* without the bpf_func_args tag, as for libbpf or kernel versions without
+ * support for function argument relocations; no kernel type has this name
+ */
+struct func_args_core_untagged {
+	int a;
+} __attribute__((preserve_access_index));
 int t3_fentry_ret_exists = -1, t3_ret_exists = -1;
 
 SEC("fentry/bpf_fentry_test3")
 int fentry3(struct fentry_test3_args *args)
 {
+	struct func_args_core_untagged *untagged = (void *)args;
+
+	t3_supported = bpf_func_args_supported(args);
+	t3_untagged_supported = bpf_func_args_supported(untagged);
 	t3_a = args->a;
 	t3_b = args->b;
 	t3_c = args->c;
@@ -165,12 +177,13 @@ int tp_read(struct test_read_args *args)
 
 /* BPF_PROG_CORE() versions, with the arguments struct declared implicitly */
 __u64 m3_a, m3_b, m3_c, m3_missing = -1, m3_ret;
-int m3_missing_exists = -1, m3_ret_exists = -1;
+int m3_missing_exists = -1, m3_ret_exists = -1, m3_supported = -1;
 
 SEC("fexit/bpf_fentry_test3")
 int BPF_PROG_CORE(fexit3_macro, __u64, c, int, b, char, a, long, missing,
 		  __bpf_func_ret int, ret)
 {
+	m3_supported = bpf_func_args_supported(ctx);
 	m3_a = a;
 	m3_b = b;
 	m3_c = c;
