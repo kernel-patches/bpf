@@ -191,17 +191,10 @@ static int dfscache_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static ssize_t dfscache_proc_write(struct file *file, const char __user *buffer,
+static ssize_t dfscache_proc_write(struct file *file, char *buffer,
 				   size_t count, loff_t *ppos)
 {
-	char c;
-	int rc;
-
-	rc = get_user(c, buffer);
-	if (rc)
-		return rc;
-
-	if (c != '0')
+	if (buffer[0] != '0')
 		return -EINVAL;
 
 	cifs_dbg(FYI, "clearing dfs cache\n");
@@ -213,17 +206,9 @@ static ssize_t dfscache_proc_write(struct file *file, const char __user *buffer,
 	return count;
 }
 
-static int dfscache_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, dfscache_proc_show, NULL);
-}
-
 const struct proc_ops dfscache_proc_ops = {
-	.proc_open	= dfscache_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
-	.proc_write	= dfscache_proc_write,
+	.proc_show	= dfscache_proc_show,
+	.proc_write_buf	= dfscache_proc_write,
 };
 
 #ifdef CONFIG_CIFS_DEBUG2

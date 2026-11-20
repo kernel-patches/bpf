@@ -429,6 +429,8 @@ ext2_xattr_set(struct inode *inode, int name_index, const char *name,
 	ea_idebug(inode, "name=%d.%s, value=%p, value_len=%ld",
 		  name_index, name, value, (long)value_len);
 
+	if (sb_emergency_ro(sb))
+		return -EROFS;
 	if (value == NULL)
 		value_len = 0;
 	if (name == NULL)

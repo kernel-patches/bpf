@@ -64,16 +64,24 @@ static loff_t zisofs_uncompress_block(struct inode *inode, loff_t block_start,
 	}
 	/* Empty block? */
 	if (block_size == 0) {
-		for ( i = 0 ; i < pcount ; i++ ) {
+		unsigned int bytes = min_t(loff_t, 1U << zisofs_block_shift,
+					  (((loff_t)pcount) << PAGE_SHIFT) - poffset);
+		unsigned int remaining = bytes;
+
+		for (i = 0; i < pcount; i++) {
 			unsigned int off = i ? 0 : poffset;
+			unsigned int len = min_t(unsigned int, remaining,
+						 PAGE_SIZE - off);
 			struct folio *folio = folios[i];
 
+			remaining -= len;
 			if (!folio)
 				continue;
-			folio_zero_range(folio, off, folio_size(folio) - off);
-			folio_mark_uptodate(folio);
+			folio_zero_range(folio, off, len);
+			if (off + len == folio_size(folio))
+				folio_mark_uptodate(folio);
 		}
-		return (((loff_t)pcount) << PAGE_SHIFT) - poffset;
+		return bytes;
 	}
 
 	/* Because zlib is not thread-safe, do all the I/O at the top. */

@@ -1648,10 +1648,6 @@ struct ext4_sb_info {
 	/* Journaling */
 	struct journal_s *s_journal;
 	unsigned long s_ext4_flags;		/* Ext4 superblock flags */
-	struct mutex s_orphan_lock;	/* Protects on disk list changes */
-	struct list_head s_orphan;	/* List of orphaned inodes in on disk
-					   list */
-	struct ext4_orphan_info s_orphan_info;
 	unsigned long s_commit_interval;
 	u32 s_max_batch_time;
 	u32 s_min_batch_time;
@@ -1791,6 +1787,12 @@ struct ext4_sb_info {
 
 	/* Journal triggers for checksum computation */
 	struct ext4_journal_trigger s_journal_triggers[EXT4_JOURNAL_TRIGGER_COUNT];
+
+	/* Orphan inode tracking */
+	struct mutex s_orphan_lock;	/* Protects on disk list changes */
+	struct list_head s_orphan;	/* List of orphaned inodes in on disk
+					   list */
+	struct ext4_orphan_info s_orphan_info;
 
 	/* Ratelimit ext4 messages. */
 	struct ratelimit_state s_err_ratelimit_state;
@@ -2627,6 +2629,13 @@ ext4_rec_len_from_disk(__le16 dlen, unsigned blocksize)
 {
 	unsigned len = le16_to_cpu(dlen);
 
+	/*
+	 * Only blocks of 64k and more need the special encoding of rec_len.
+	 * For smaller blocks 0 and EXT4_MAX_REC_LEN are not valid lengths
+	 * and must not be taken for an entry that spans the whole block.
+	 */
+	if (blocksize < 65536)
+		return len;
 	if (len == EXT4_MAX_REC_LEN || len == 0)
 		return blocksize;
 	return (len & 65532) | ((len & 3) << 16);
@@ -3245,8 +3254,9 @@ extern int ext4_get_projid(struct inode *inode, kprojid_t *projid);
 extern void ext4_da_release_space(struct inode *inode, int to_free);
 extern void ext4_da_update_reserve_space(struct inode *inode,
 					int used, int quota_claim);
-extern int ext4_issue_zeroout(struct inode *inode, ext4_lblk_t lblk,
-			      ext4_fsblk_t pblk, ext4_lblk_t len);
+extern int ext4_issue_zeroout(handle_t *handle, struct inode *inode,
+			      ext4_lblk_t lblk, ext4_fsblk_t pblk,
+			      ext4_lblk_t len);
 
 static inline bool is_special_ino(struct super_block *sb, unsigned long ino)
 {
@@ -3958,6 +3968,7 @@ struct ext4_extent;
  */
 #define EXT_MAX_BLOCKS	0xffffffff
 
+extern void ext4_ext_init_root(struct inode *inode);
 extern void ext4_ext_tree_init(handle_t *handle, struct inode *inode);
 extern int ext4_ext_index_trans_blocks(struct inode *inode, int extents);
 extern int ext4_ext_map_blocks(handle_t *handle, struct inode *inode,
@@ -4129,12 +4140,19 @@ static inline int ext4_buffer_uptodate(struct buffer_head *bh)
 	return buffer_uptodate(bh);
 }
 
+/*
+ * Atomic writes are only supported through direct I/O, so an inode that
+ * can't do direct I/O at all (journaled data, inline data, verity) can't do
+ * atomic writes either. DAX inodes bypass the direct I/O path entirely.
+ */
 static inline bool ext4_inode_can_atomic_write(struct inode *inode)
 {
 
 	return S_ISREG(inode->i_mode) &&
+		!IS_DAX(inode) &&
 		ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS) &&
-		EXT4_SB(inode->i_sb)->s_awu_min > 0;
+		EXT4_SB(inode->i_sb)->s_awu_min > 0 &&
+		ext4_dio_alignment(inode) != 0;
 }
 
 extern int ext4_block_write_begin(handle_t *handle, struct folio *folio,

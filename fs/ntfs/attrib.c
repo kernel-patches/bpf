@@ -16,6 +16,7 @@
  * Copyright (c) 2010 Erik Larsson
  */
 
+#include <linux/bio.h>
 #include <linux/string_choices.h>
 #include <linux/writeback.h>
 #include <linux/iomap.h>
@@ -1961,6 +1962,40 @@ int ntfs_resident_attr_value_resize(struct mft_record *m, struct attr_record *a,
 	return 0;
 }
 
+/* Write the resident value to its new clusters before committing conversion. */
+static int ntfs_attr_write_conversion(struct ntfs_volume *vol, struct folio *folio,
+				      const struct runlist_element *rl, u32 size)
+{
+	unsigned int offset = 0;
+
+	size = round_up(size, vol->sector_size);
+	while (size) {
+		struct bio *bio;
+		unsigned int len;
+		int err;
+
+		if (!rl->length || rl->lcn < 0)
+			return -EIO;
+		len = min_t(s64, size, ntfs_cluster_to_bytes(vol, rl->length));
+		bio = bio_alloc(vol->sb->s_bdev, 1, REQ_OP_WRITE | REQ_SYNC,
+				GFP_NOIO);
+		bio->bi_iter.bi_sector =
+			ntfs_bytes_to_bio_sector(ntfs_cluster_to_bytes(vol, rl->lcn));
+		if (!bio_add_folio(bio, folio, len, offset)) {
+			bio_put(bio);
+			return -EIO;
+		}
+		err = submit_bio_wait(bio);
+		bio_put(bio);
+		if (err)
+			return err;
+		offset += len;
+		size -= len;
+		rl++;
+	}
+	return 0;
+}
+
 /*
  * ntfs_attr_make_non_resident - convert a resident to a non-resident attribute
  * @ni:		ntfs inode describing the attribute to convert
@@ -1975,7 +2010,21 @@ int ntfs_resident_attr_value_resize(struct mft_record *m, struct attr_record *a,
  * inode i_size is that this is not necessarily uptodate.  This happens when
  * ntfs_attr_make_non_resident() is called in the ->truncate call path(s).
  */
+static int __ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_size,
+		bool nowait);
+
 int ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_size)
+{
+	return __ntfs_attr_make_non_resident(ni, data_size, false);
+}
+
+/*
+ * With @nowait the folio lock is only tried: a caller that holds mrec_lock
+ * must not wait for a folio lock, the read path takes them the other way
+ * round. Fails with -EAGAIN if the folio is locked.
+ */
+static int __ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_size,
+		bool nowait)
 {
 	s64 new_size;
 	struct inode *vi = VFS_I(ni);
@@ -1990,6 +2039,7 @@ int ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_size)
 	int mp_size, mp_ofs, name_ofs, arec_size, err, err2;
 	u32 attr_size;
 	u8 old_res_attr_flags;
+	bool sync;
 
 	if (NInoNonResident(ni)) {
 		ntfs_warning(vol->sb,
@@ -2014,6 +2064,8 @@ int ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_size)
 		base_ni = ni;
 	else
 		base_ni = ni->ext.base_ntfs_ino;
+	sync = NInoAttr(ni) && (!vi->i_nlink || !VFS_I(base_ni)->i_nlink) &&
+		!ntfs_inode_is_named_stream(ni);
 	m = map_mft_record(base_ni);
 	if (IS_ERR(m)) {
 		err = PTR_ERR(m);
@@ -2056,10 +2108,23 @@ int ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_size)
 		 * outside all ntfs locks, we need to get the folio now.
 		 */
 		folio = __filemap_get_folio(vi->i_mapping, 0,
-					    FGP_CREAT | FGP_LOCK,
+					    FGP_CREAT | FGP_LOCK |
+					    (nowait ? FGP_NOWAIT : 0),
 					    mapping_gfp_mask(vi->i_mapping));
 		if (IS_ERR(folio)) {
 			err = -ENOMEM;
+			if (nowait) {
+				/*
+				 * FGP_NOWAIT also fails when it can not
+				 * allocate the folio. Only a folio that is
+				 * there and locked means a busy folio.
+				 */
+				folio = filemap_get_folio(vi->i_mapping, 0);
+				if (!IS_ERR(folio)) {
+					folio_put(folio);
+					err = -EAGAIN;
+				}
+			}
 			goto err_out;
 		}
 
@@ -2121,6 +2186,18 @@ int ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_size)
 				le16_to_cpu(a->data.resident.value_offset),
 				attr_size);
 		folio_mark_uptodate(folio);
+	}
+
+	/*
+	 * A zero-link attribute inode can be evicted by the caller's iput().
+	 * Write its data before changing the record so an I/O failure leaves
+	 * the resident value intact. Normal writeback would take mrec_lock,
+	 * which callers may already hold.
+	 */
+	if (folio && sync) {
+		err = ntfs_attr_write_conversion(vol, folio, rl, attr_size);
+		if (err)
+			goto rl_err_out;
 	}
 
 	/* Backup the attribute flag. */
@@ -2211,7 +2288,8 @@ int ntfs_attr_make_non_resident(struct ntfs_inode *ni, const u32 data_size)
 	unmap_mft_record(base_ni);
 	up_write(&ni->runlist.lock);
 	if (folio) {
-		iomap_dirty_folio(vi->i_mapping, folio);
+		if (!sync)
+			iomap_dirty_folio(vi->i_mapping, folio);
 		folio_unlock(folio);
 		folio_put(folio);
 	}
@@ -2323,7 +2401,7 @@ int ntfs_attr_set(struct ntfs_inode *ni, s64 ofs, s64 cnt, const u8 val)
 
 	index = ofs >> PAGE_SHIFT;
 	while (cnt) {
-		folio = read_mapping_folio(mapping, index, NULL);
+		folio = ntfs_read_metadata_folio(mapping, index);
 		if (IS_ERR(folio)) {
 			ret = PTR_ERR(folio);
 			ntfs_error(VFS_I(ni)->i_sb, "Failed to read a page %lu for attr %#x: %ld",
@@ -3012,8 +3090,13 @@ add_non_resident:
 		(val && (ntfs_inode_attr_pwrite(attr_vi, 0, size, val, false) != size))) {
 		err = -EIO;
 		ntfs_error(sb, "Failed to initialize just added attribute");
-		if (ntfs_attr_rm(attr_ni))
+		if (ntfs_attr_rm(attr_ni)) {
 			ntfs_error(sb, "Failed to remove just added attribute");
+		} else {
+			NInoClearDirty(attr_ni);
+			clear_nlink(attr_vi);
+			remove_inode_hash(attr_vi);
+		}
 		iput(attr_vi);
 		goto err_out;
 	}
@@ -4895,8 +4978,23 @@ attr_resize_again:
 	/* There is not enough space in the mft record to perform the resize. */
 
 	/* Make the attribute non-resident if possible. */
-	err = ntfs_attr_make_non_resident(attr_ni,
-			le32_to_cpu(ctx->attr->data.resident.value_length));
+	err = __ntfs_attr_make_non_resident(attr_ni,
+			le32_to_cpu(ctx->attr->data.resident.value_length), true);
+	/*
+	 * A reader holding folio 0 waits for mrec_lock, which we hold. Do not
+	 * wait for it and do not look for room elsewhere either: the reader
+	 * keeps the folio until we drop the lock, so the attribute can neither
+	 * be converted nor written without waiting for it, and the loop below
+	 * would only convert other attributes for nothing.
+	 */
+	if (err == -EAGAIN) {
+		/*
+		 * Not -EAGAIN, it would reach user space and index.c uses it
+		 * for its own retry. Not -ENOSPC, the record is not full.
+		 */
+		err = -EBUSY;
+		goto put_err_out;
+	}
 	if (!err) {
 		mark_mft_record_dirty(ctx->ntfs_ino);
 		ntfs_attr_put_search_ctx(ctx);
@@ -4913,12 +5011,14 @@ attr_resize_again:
 	while (!(err = ntfs_attr_lookup(AT_UNUSED, NULL, 0, 0, 0, NULL, 0, ctx))) {
 		struct inode *tvi;
 		struct attr_record *a;
+		__le16 *name;
 		u32 value_len;
 
 		a = ctx->attr;
 		if (a->non_resident || a->type == AT_ATTRIBUTE_LIST)
 			continue;
 		value_len = le32_to_cpu(a->data.resident.value_length);
+		name = (__le16 *)((u8 *)a + le16_to_cpu(a->name_offset));
 
 		if (ntfs_attr_can_be_non_resident(vol, a->type))
 			continue;
@@ -4933,19 +5033,69 @@ attr_resize_again:
 		if (a->type == AT_DATA && !value_len)
 			continue;
 
-		if (a->type == AT_DATA)
-			tvi = ntfs_iget(sb, base_ni->mft_no);
-		else
-			tvi = ntfs_attr_iget(VFS_I(base_ni), a->type,
-				(__le16 *)((u8 *)a + le16_to_cpu(a->name_offset)),
+		/*
+		 * The attribute inode of an unlinked file is evicted on the
+		 * last iput() together with its dirty folio.
+		 */
+		if (NInoBeingDeleted(base_ni) || !VFS_I(base_ni)->i_nlink)
+			continue;
+
+		/*
+		 * Not the attribute being resized. Its conversion was tried
+		 * above and failed, for instance on a busy folio, and
+		 * converting it here would leave the resize to go on with the
+		 * resident layout of a non-resident record.
+		 */
+		if (a->type == attr_ni->type &&
+		    a->name_length == attr_ni->name_len &&
+		    (!a->name_length ||
+		     !memcmp(name, attr_ni->name,
+			     a->name_length * sizeof(__le16))))
+			continue;
+
+		/*
+		 * Not the unnamed data either. Only the resize of the unnamed
+		 * data itself holds its i_rwsem, a writer of the file can be
+		 * between its residency check and the mft record lock.
+		 */
+		if (a->type == AT_DATA && !a->name_length)
+			continue;
+
+		/*
+		 * A named $DATA stream is converted only if nobody has it open:
+		 * an open one can be unlinked, being removed or in use. A WOF
+		 * file reads its stream from the device, so the stream must
+		 * stay resident.
+		 */
+		if (a->type == AT_DATA) {
+			if (NInoWofCompressed(base_ni))
+				continue;
+			tvi = ntfs_attr_ilookup(VFS_I(base_ni), a->type,
+					name, a->name_length);
+			if (tvi) {
+				iput(tvi);
+				continue;
+			}
+		}
+		tvi = ntfs_attr_iget(VFS_I(base_ni), a->type, name,
 				a->name_length);
+		/* the lookup ignores case for streams, ours does not */
+		if (!IS_ERR(tvi) && a->type == AT_DATA &&
+		    memcmp(NTFS_I(tvi)->name, name,
+			   a->name_length * sizeof(__le16))) {
+			iput(tvi);
+			continue;
+		}
 		if (IS_ERR(tvi)) {
 			ntfs_error(sb, "Couldn't open attribute");
 			continue;
 		}
 
-		if (ntfs_attr_make_non_resident(NTFS_I(tvi), value_len)) {
+		err = __ntfs_attr_make_non_resident(NTFS_I(tvi), value_len, true);
+		if (err) {
 			iput(tvi);
+			if (err != -ENOSPC && err != -EPERM && err != -EAGAIN)
+				goto put_err_out;
 			continue;
 		}
 
@@ -5424,6 +5574,7 @@ int ntfs_attr_rm(struct ntfs_inode *ni)
 	/* Free cluster allocation. */
 	if (NInoNonResident(ni)) {
 		struct ntfs_attr_search_ctx *ctx;
+		s64 freed;
 
 		err = ntfs_attr_map_whole_runlist(ni);
 		if (err)
@@ -5434,10 +5585,12 @@ int ntfs_attr_rm(struct ntfs_inode *ni)
 			return -ENOMEM;
 		}
 
-		ret = ntfs_cluster_free(ni, 0, -1, ctx);
-		if (ret < 0)
+		freed = ntfs_cluster_free(ni, 0, -1, ctx);
+		if (freed < 0) {
+			ret = freed;
 			ntfs_error(sb,
 				"Failed to free cluster allocation. Leaving inconstant metadata.\n");
+		}
 		ntfs_attr_put_search_ctx(ctx);
 	}
 

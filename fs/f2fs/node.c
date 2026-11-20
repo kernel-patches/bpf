@@ -85,7 +85,8 @@ bool f2fs_available_free_memory(struct f2fs_sb_info *sbi, int type)
 	} else if (type == DIRTY_DENTS) {
 		if (bdi_wb_dirty_exceeded(sbi->sb->s_bdi))
 			return false;
-		mem_size = get_nr_caches(sbi, F2FS_DIRTY_DENTS);
+		mem_size = get_nr_caches(sbi, F2FS_DIRTY_DENTS) >>
+					F2FS_LOG_BLKS_PER_PAGE(sbi);
 		res = mem_size < ((avail_ram * nm_i->ram_thresh / 100) >> 1);
 	} else if (type == INO_ENTRIES) {
 		int i;
@@ -115,10 +116,12 @@ bool f2fs_available_free_memory(struct f2fs_sb_info *sbi, int type)
 
 		/*
 		 * free memory is lower than watermark or cached page count
-		 * exceed threshold, deny caching compress page.
+		 * exceed threshold, deny caching compress page. A cache
+		 * entry holds one block, so convert the entry count to pages.
 		 */
 		res = (free_ram > avail_ram * sbi->compress_watermark / 100) &&
-			(COMPRESS_CACHE(sbi)->num_entries <
+			((COMPRESS_CACHE(sbi)->num_entries >>
+			  F2FS_LOG_BLKS_PER_PAGE(sbi)) <
 			 free_ram * sbi->compress_percent / 100);
 #else
 		res = false;
@@ -361,7 +364,7 @@ static unsigned int f2fs_add_fsync_node_entry(struct f2fs_sb_info *sbi,
 
 	spin_lock_irqsave(&sbi->fsync_node_lock, flags);
 	list_add_tail(&fn->list, &sbi->fsync_node_list);
-	fn->seq_id = sbi->fsync_seg_id++;
+	fn->seq_id = ++sbi->fsync_seg_id;
 	seq_id = fn->seq_id;
 	sbi->fsync_node_num++;
 	spin_unlock_irqrestore(&sbi->fsync_node_lock, flags);
@@ -700,7 +703,7 @@ static void f2fs_ra_node_caches(struct f2fs_cached_block *parent, int start, int
 	blk_finish_plug(&plug);
 }
 
-pgoff_t f2fs_get_next_page_offset(struct dnode_of_data *dn, pgoff_t pgofs)
+pgoff_t f2fs_get_next_block_offset(struct dnode_of_data *dn, pgoff_t blkofs)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(dn->inode);
 	const long direct_index = ADDRS_PER_INODE(dn->inode);
@@ -713,7 +716,7 @@ pgoff_t f2fs_get_next_page_offset(struct dnode_of_data *dn, pgoff_t pgofs)
 	pgoff_t base = 0;
 
 	if (!dn->max_level)
-		return pgofs + 1;
+		return blkofs + 1;
 
 	while (max_level-- > cur_level)
 		skipped_unit *= NIDS_PER_BLOCK(sbi);
@@ -732,7 +735,7 @@ pgoff_t f2fs_get_next_page_offset(struct dnode_of_data *dn, pgoff_t pgofs)
 		f2fs_bug_on(F2FS_I_SB(dn->inode), 1);
 	}
 
-	return ((pgofs - base) / skipped_unit + 1) * skipped_unit + base;
+	return ((blkofs - base) / skipped_unit + 1) * skipped_unit + base;
 }
 
 /*
@@ -1699,10 +1702,13 @@ static void flush_inline_data(struct f2fs_sb_info *sbi, nid_t ino)
 		goto folio_out;
 
 	ret = f2fs_write_inline_data(inode, folio);
-	inode_dec_dirty_pages(inode);
-	f2fs_remove_dirty_inode(inode);
-	if (ret)
-		folio_mark_dirty(folio);
+	if (ret) {
+		/* Keep it dirty as it was, with its dirty blocks accounted. */
+		filemap_dirty_folio(folio->mapping, folio);
+	} else {
+		f2fs_folio_clear_dirty_blocks(folio, true);
+		f2fs_remove_dirty_inode(inode);
+	}
 folio_out:
 	f2fs_folio_put(folio, true);
 iput_out:

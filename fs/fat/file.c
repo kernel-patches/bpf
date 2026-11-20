@@ -135,6 +135,10 @@ static int fat_ioctl_fitrim(struct inode *inode, unsigned long arg)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
+	/* Don't trust the FAT after an error. */
+	if (unlikely(sb_emergency_ro(sb)))
+		return -EROFS;
+
 	if (!bdev_max_discard_sectors(sb->s_bdev))
 		return -EOPNOTSUPP;
 
@@ -347,6 +351,10 @@ static int fat_free(struct inode *inode, int skip)
 
 	if (MSDOS_I(inode)->i_start == 0)
 		return 0;
+
+	/* Nothing is freed after an error, keep the chain referenced. */
+	if (unlikely(sb_emergency_ro(sb)))
+		return -EROFS;
 
 	fat_cache_inval_inode(inode);
 

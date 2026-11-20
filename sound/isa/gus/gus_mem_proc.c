@@ -18,7 +18,7 @@ struct gus_proc_private {
 
 static ssize_t snd_gf1_mem_proc_dump(struct snd_info_entry *entry,
 				     void *file_private_data,
-				     struct file *file, char __user *buf,
+				     struct file *file, char *buf,
 				     size_t count, loff_t pos)
 {
 	struct gus_proc_private *priv = entry->private_data;

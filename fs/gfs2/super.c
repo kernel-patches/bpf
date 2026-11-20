@@ -59,7 +59,7 @@ enum evict_behavior {
 void gfs2_jindex_free(struct gfs2_sbd *sdp)
 {
 	struct list_head list;
-	struct gfs2_jdesc *jd;
+	struct gfs2_jdesc *jd, *tmp;
 
 	spin_lock(&sdp->sd_jindex_spin);
 	list_add(&list, &sdp->sd_jindex_list);
@@ -71,8 +71,7 @@ void gfs2_jindex_free(struct gfs2_sbd *sdp)
 	sdp->sd_jdesc = NULL;
 	up_write(&sdp->sd_log_flush_lock);
 
-	while (!list_empty(&list)) {
-		jd = list_first_entry(&list, struct gfs2_jdesc, jd_list);
+	list_for_each_entry_safe(jd, tmp, &list, jd_list) {
 		BUG_ON(jd->jd_log_bio);
 		gfs2_free_journal_extents(jd);
 		list_del(&jd->jd_list);
@@ -146,12 +145,21 @@ int gfs2_make_fs_rw(struct gfs2_sbd *sdp)
 	}
 
 	error = gfs2_quota_init(sdp);
-	if (!error && gfs2_withdrawn(sdp)) {
-		gfs2_quota_cleanup(sdp);
+	if (error)
+		return error;
+
+	/*
+	 * Check for a withdraw under the lock do_withdraw() holds while it
+	 * takes a live journal down, so one of them sees the other.
+	 */
+	down_write(&sdp->sd_log_flush_lock);
+	if (gfs2_withdrawn(sdp))
 		error = -EIO;
-	}
-	if (!error)
+	else
 		set_bit(SDF_JOURNAL_LIVE, &sdp->sd_flags);
+	up_write(&sdp->sd_log_flush_lock);
+	if (error)
+		gfs2_quota_cleanup(sdp);
 	return error;
 }
 
@@ -324,7 +332,7 @@ struct lfcc {
 static int gfs2_lock_fs_check_clean(struct gfs2_sbd *sdp)
 {
 	struct gfs2_jdesc *jd;
-	struct lfcc *lfcc;
+	struct lfcc *lfcc, *tmp;
 	LIST_HEAD(list);
 	struct gfs2_log_header_host lh;
 	int error, error2;
@@ -381,8 +389,7 @@ relock_shared:
 	gfs2_assert_withdraw(sdp, !error2);
 
 out:
-	while (!list_empty(&list)) {
-		lfcc = list_first_entry(&list, struct lfcc, list);
+	list_for_each_entry_safe(lfcc, tmp, &list, list) {
 		list_del(&lfcc->list);
 		gfs2_glock_dq_uninit(&lfcc->gh);
 		kfree(lfcc);
@@ -445,6 +452,9 @@ static int gfs2_write_inode(struct inode *inode, struct writeback_control *wbc)
 	struct backing_dev_info *bdi = inode_to_bdi(metamapping->host);
 	int ret = 0;
 	bool flush_all = (wbc->sync_mode == WB_SYNC_ALL || gfs2_is_jdata(ip));
+
+	if (gfs2_withdrawn(sdp))
+		return -EIO;
 
 	if (flush_all)
 		gfs2_log_flush(GFS2_SB(inode), gl,
@@ -567,6 +577,9 @@ void gfs2_make_fs_ro(struct gfs2_sbd *sdp)
 				   HZ * 5);
 		gfs2_assert_warn(sdp, gfs2_log_is_empty(sdp));
 	}
+	/* A withdraw that do_withdraw() didn't finish yet leaves it live. */
+	if (!test_bit(SDF_NORECOVERY, &sdp->sd_flags))
+		wait_on_bit(&sdp->sd_flags, SDF_JOURNAL_LIVE, TASK_UNINTERRUPTIBLE);
 	gfs2_quota_cleanup(sdp);
 }
 
@@ -674,7 +687,8 @@ static int gfs2_do_thaw(struct gfs2_sbd *sdp, enum freeze_holder who, const void
 	int error;
 
 	error = gfs2_freeze_lock_shared(sdp);
-	if (error)
+	/* A withdrawn filesystem can't get the freeze glock back, thaw anyway. */
+	if (error && !gfs2_withdrawn(sdp))
 		goto fail;
 	error = thaw_super(sb, who, freeze_owner);
 	if (!error)
@@ -727,8 +741,8 @@ out:
  *
  */
 
-static int gfs2_freeze_super(struct super_block *sb, enum freeze_holder who,
-			     const void *freeze_owner)
+int gfs2_freeze_super(struct super_block *sb, enum freeze_holder who,
+		      const void *freeze_owner)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 	int error;
@@ -738,6 +752,11 @@ static int gfs2_freeze_super(struct super_block *sb, enum freeze_holder who,
 	if (test_bit(SDF_FROZEN, &sdp->sd_flags)) {
 		mutex_unlock(&sdp->sd_freeze_mutex);
 		return -EBUSY;
+	}
+	/* A withdrawn filesystem can't take the freeze glock anymore. */
+	if (gfs2_withdrawn(sdp)) {
+		mutex_unlock(&sdp->sd_freeze_mutex);
+		return -EIO;
 	}
 
 	for (;;) {
@@ -753,6 +772,13 @@ static int gfs2_freeze_super(struct super_block *sb, enum freeze_holder who,
 			set_bit(SDF_FREEZE_INITIATOR, &sdp->sd_flags);
 			set_bit(SDF_FROZEN, &sdp->sd_flags);
 			break;
+		}
+
+		/* Withdrawn meanwhile, don't take the freeze glock again. */
+		if (gfs2_withdrawn(sdp)) {
+			(void)thaw_super(sb, who, freeze_owner);
+			error = -EIO;
+			goto out;
 		}
 
 		(void)gfs2_do_thaw(sdp, who, freeze_owner);
@@ -796,8 +822,8 @@ static int gfs2_freeze_fs(struct super_block *sb)
  *
  */
 
-static int gfs2_thaw_super(struct super_block *sb, enum freeze_holder who,
-			   const void *freeze_owner)
+int gfs2_thaw_super(struct super_block *sb, enum freeze_holder who,
+		    const void *freeze_owner)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 	int error;
@@ -806,7 +832,7 @@ static int gfs2_thaw_super(struct super_block *sb, enum freeze_holder who,
 		return -EBUSY;
 	if (!test_bit(SDF_FREEZE_INITIATOR, &sdp->sd_flags)) {
 		mutex_unlock(&sdp->sd_freeze_mutex);
-		return -EINVAL;
+		return -EALREADY;
 	}
 
 	atomic_inc(&sb->s_active);
@@ -1476,7 +1502,7 @@ static void gfs2_evict_inode(struct inode *inode)
 	int ret;
 
 	gfs2_holder_mark_uninitialized(&gh);
-	if (sb_rdonly(sb) || !ip->i_no_addr || !gl)
+	if (sb_rdonly(sb) || gfs2_withdrawn(sdp) || !ip->i_no_addr || !gl)
 		goto out;
 
 	/*

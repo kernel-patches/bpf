@@ -42,7 +42,7 @@ static struct dentry *ovl_d_real(struct dentry *dentry, enum d_real_type type)
 	}
 
 	if (!d_is_reg(dentry)) {
-		/* d_real_inode() is only relevant for regular files */
+		/* d_real() is only relevant for regular files */
 		return dentry;
 	}
 
@@ -57,19 +57,18 @@ static struct dentry *ovl_d_real(struct dentry *dentry, enum d_real_type type)
 	}
 
 	/*
-	 * Best effort lazy lookup of lowerdata for D_REAL_DATA case to return
-	 * the real lowerdata dentry.  The only current caller of d_real() with
-	 * D_REAL_DATA is d_real_inode() from trace_uprobe and this caller is
-	 * likely going to be followed reading from the file, before placing
-	 * uprobes on offset within the file, so lowerdata should be available
-	 * when setting the uprobe.
+	 * Lazy lookup of lowerdata for the D_REAL_DATA case to return the real
+	 * lowerdata dentry. Callers may ask for files that were never opened,
+	 * e.g., for uprobes or O_PATH files, and the lookup or the verity
+	 * validation can fail. Return the error then, just like ovl_open()
+	 * would. Callers of d_real() have to deal with that.
 	 */
 	err = ovl_verify_lowerdata(dentry);
 	if (err)
-		goto bug;
+		return ERR_PTR(err);
 	lower = ovl_dentry_lowerdata(dentry);
-	if (!lower)
-		goto bug;
+	if (WARN_ON_ONCE(!lower))
+		return ERR_PTR(-EIO);
 
 real_lower:
 	/* Handle recursion into stacked lower fs */
@@ -1255,6 +1254,8 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 		return ERR_PTR(-EINVAL);
 	}
 
+	/* Needed by ovl_allow_offline_changes() */
+	ofs->numdatalayer = ctx->nr_data;
 	err = -EINVAL;
 	for (i = 0; i < ctx->nr; i++) {
 		l = &ctx->lower[i];
@@ -1288,7 +1289,6 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 		lowerstack[i].dentry = dget(l->path.dentry);
 		lowerstack[i].layer = &ofs->layers[i + 1];
 	}
-	ofs->numdatalayer = ctx->nr_data;
 
 	return oe;
 }
@@ -1361,6 +1361,28 @@ static int ovl_check_overlapping_layers(struct super_block *sb,
 				      "lowerdir", true);
 		if (err)
 			return err;
+	}
+
+	return 0;
+}
+
+/*
+ * Pseudo filesystems don't mix with new overlayfs features.  Check the layers
+ * only after setting them up, as that may have turned off the index.
+ */
+static int ovl_check_pseudo_layers(struct ovl_fs *ofs)
+{
+	unsigned int i;
+
+	if (ovl_allow_offline_changes(ofs))
+		return 0;
+
+	for (i = 1; i < ofs->numlayer; i++) {
+		if (ofs->layers[i].mnt->mnt_sb->s_iflags & SB_I_PSEUDO) {
+			pr_err("pseudo filesystem on %s not supported with metacopy, index, redirect_dir=on, xino=on or data-only layers\n",
+			       ofs->config.lowerdirs[i]);
+			return -EINVAL;
+		}
 	}
 
 	return 0;
@@ -1529,6 +1551,15 @@ static int ovl_fill_super_creds(struct fs_context *fc, struct super_block *sb)
 	/* If the upper fs is nonexistent, we mark overlayfs r/o too */
 	if (!ovl_upper_mnt(ofs))
 		sb->s_flags |= SB_RDONLY;
+
+	/* A mount without a workdir doesn't use the index */
+	if (!ofs->workdir)
+		ofs->config.index = false;
+
+	/* Before the uuid and the index dir are set up on the upper layer */
+	err = ovl_check_pseudo_layers(ofs);
+	if (err)
+		goto out_free_oe;
 
 	if (ovl_has_fsid(ofs) && ovl_upper_mnt(ofs)) {
 		/* Use per instance persistent uuid/fsid */

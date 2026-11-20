@@ -610,6 +610,7 @@ extern int traceprobe_define_arg_fields(struct trace_event_call *event_call,
 	C(NO_EVENT_FIELD,	"This event field is not found."),		\
 	C(NO_EVENT_INFO,	"This requires both group and event name to attach"),	\
 	C(NO_EVENT_NAME,	"Event name is not specified"),		\
+	C(NO_FILE_DATA,		"Failed to resolve the data of the given file"),	\
 	C(NO_GROUP_NAME,	"Group name is not specified"),		\
 	C(NO_PTR_STRCT,		"This is not a pointer to union/structure."),	\
 	C(NO_REGULAR_FILE,	"Not a regular file"),		\

@@ -699,7 +699,7 @@ bool is_chained_smb2_message(struct ksmbd_work *work)
 		    get_rfc1002_len(work->request_buf)) {
 			pr_err("next command(%u) offset exceeds smb msg size\n",
 			       next_cmd);
-			return false;
+			goto last_rsp;
 		}
 
 		/*
@@ -716,16 +716,21 @@ bool is_chained_smb2_message(struct ksmbd_work *work)
 		if ((u64)ALIGN(get_rfc1002_len(work->response_buf), 8) +
 		    next_rsp_sz > work->response_sz) {
 			pr_err("next response offset exceeds response buffer size\n");
-			return false;
+			goto last_rsp;
 		}
 
 		ksmbd_debug(SMB, "got SMB2 chained command\n");
 		init_chained_smb2_rsp(work);
 		return true;
-	} else if (work->next_smb2_rcv_hdr_off) {
+	}
+
+last_rsp:
+	if (work->next_smb2_rcv_hdr_off) {
 		/*
-		 * This is last request in chained command,
-		 * align response to 8 byte
+		 * This is the last response of a compound, also when the
+		 * compound ends early because the next command does not fit.
+		 * Align it to 8 bytes and make it the current response, which
+		 * is the one the caller signs.
 		 */
 		len = ALIGN(get_rfc1002_len(work->response_buf), 8);
 		len = len - get_rfc1002_len(work->response_buf);
@@ -1014,39 +1019,15 @@ int smb2_allocate_rsp_buf(struct ksmbd_work *work)
 	return 0;
 }
 
-static bool smb2_session_expired_cmd_allowed(struct ksmbd_work *work,
-					      unsigned int cmd)
+/*
+ * MS-SMB2 3.3.5.2.9 lets LOGOFF, CLOSE and LOCK proceed on an expired
+ * session. CANCEL is allowed too. For LOCK, smb2_lock() allows only
+ * unlocks, after the request has been validated.
+ */
+static bool smb2_session_expired_cmd_allowed(unsigned int cmd)
 {
-	struct smb2_lock_req *req;
-	unsigned int len, lock_count, i;
-
-	if (cmd == SMB2_CANCEL_HE || cmd == SMB2_CLOSE_HE ||
-	    cmd == SMB2_LOGOFF_HE)
-		return true;
-	if (cmd != SMB2_LOCK_HE)
-		return false;
-
-	req = ksmbd_req_buf_next(work);
-	if (req->hdr.NextCommand)
-		len = le32_to_cpu(req->hdr.NextCommand);
-	else {
-		len = get_rfc1002_len(work->request_buf);
-		if (len < work->next_smb2_rcv_hdr_off)
-			return false;
-		len -= work->next_smb2_rcv_hdr_off;
-	}
-
-	lock_count = le16_to_cpu(req->LockCount);
-	if (!lock_count || len < offsetof(struct smb2_lock_req, locks) ||
-	    lock_count > (len - offsetof(struct smb2_lock_req, locks)) /
-			 sizeof(struct smb2_lock_element))
-		return false;
-
-	for (i = 0; i < lock_count; i++) {
-		if (le32_to_cpu(req->locks[i].Flags) != SMB2_LOCKFLAG_UNLOCK)
-			return false;
-	}
-	return true;
+	return cmd == SMB2_CANCEL_HE || cmd == SMB2_CLOSE_HE ||
+	       cmd == SMB2_LOGOFF_HE || cmd == SMB2_LOCK_HE;
 }
 
 static bool smb2_session_kerberos_expired(struct ksmbd_session *sess)
@@ -1124,7 +1105,7 @@ int smb2_check_user_session(struct ksmbd_work *work)
 			pr_err("compound request on a non-valid session (state %d)\n",
 					work->sess->state);
 			if (smb2_session_kerberos_expired(work->sess) &&
-			    smb2_session_expired_cmd_allowed(work, cmd))
+			    smb2_session_expired_cmd_allowed(cmd))
 				return 1;
 			return smb2_session_kerberos_expired(work->sess) ?
 				-EKEYEXPIRED : -EINVAL;
@@ -1136,7 +1117,7 @@ int smb2_check_user_session(struct ksmbd_work *work)
 	work->sess = ksmbd_session_lookup_all_states(conn, sess_id);
 	if (work->sess) {
 		if (smb2_session_kerberos_expired(work->sess)) {
-			return smb2_session_expired_cmd_allowed(work, cmd) ?
+			return smb2_session_expired_cmd_allowed(cmd) ?
 				1 : -EKEYEXPIRED;
 		}
 		if (work->sess->state != SMB2_SESSION_VALID) {
@@ -1858,6 +1839,8 @@ static __le32 deassemble_neg_contexts(struct ksmbd_conn *conn,
 	bool posix_ctxt_seen = false;
 
 	ksmbd_debug(SMB, "decoding %d negotiate contexts\n", neg_ctxt_cnt);
+	/* A previous, failed NEGOTIATE must not leave its algorithm behind */
+	conn->signing_negotiated = false;
 	if (len_of_smb <= offset) {
 		ksmbd_debug(SMB, "Invalid response: negotiate context offset\n");
 		return status;
@@ -2415,8 +2398,10 @@ static int ntlm_authenticate(struct ksmbd_work *work,
 
 	if ((rsp->SessionFlags != SMB2_SESSION_FLAG_IS_GUEST_LE &&
 	     (conn->sign || server_conf.enforced_signing)) ||
-	    (req->SecurityMode & SMB2_NEGOTIATE_SIGNING_REQUIRED))
+	    (req->SecurityMode & SMB2_NEGOTIATE_SIGNING_REQUIRED)) {
 		sess->sign = true;
+		sess->sign_required = true;
+	}
 
 	if (smb3_encryption_negotiated(conn) &&
 			!(req->Flags & SMB2_SESSION_REQ_FLAG_BINDING)) {
@@ -2519,8 +2504,10 @@ static int krb5_authenticate(struct ksmbd_work *work,
 
 	if ((rsp->SessionFlags != SMB2_SESSION_FLAG_IS_GUEST_LE &&
 	    (conn->sign || server_conf.enforced_signing)) ||
-	    (req->SecurityMode & SMB2_NEGOTIATE_SIGNING_REQUIRED))
+	    (req->SecurityMode & SMB2_NEGOTIATE_SIGNING_REQUIRED)) {
 		sess->sign = true;
+		sess->sign_required = true;
+	}
 
 	if (smb3_encryption_negotiated(conn) &&
 	    !(req->Flags & SMB2_SESSION_REQ_FLAG_BINDING)) {
@@ -2568,6 +2555,63 @@ static int krb5_authenticate(struct ksmbd_work *work,
 	return -EOPNOTSUPP;
 }
 #endif
+
+/*
+ * SESSION_SETUP is not covered by the signature check in __process_request(),
+ * because work->sess is not set for it. A binding request must be signed
+ * with the signing key of the session it binds to (MS-SMB2 3.3.5.2.4), and a
+ * signed reauthentication with the key of the channel it arrives on. Check
+ * them before the request is processed and before any response is signed
+ * with that key.
+ */
+static bool smb2_check_sess_setup_sign_req(struct ksmbd_work *work,
+					   struct ksmbd_session *sess)
+{
+	struct ksmbd_session *prev_sess = work->sess;
+	int ret;
+
+	work->sess = sess;
+	/* The key, and so the way it signs, belongs to the session */
+	if (sess->dialect >= SMB30_PROT_ID)
+		ret = smb3_check_sign_req(work);
+	else
+		ret = smb2_check_sign_req(work);
+	work->sess = prev_sess;
+	return ret;
+}
+
+/*
+ * Whether a reauthentication of @sess must be signed or encrypted. A session
+ * that negotiated encryption has sess->sign cleared even when signing was
+ * required when it was set up, which sess->sign_required remembers, while
+ * encryption itself is only enforced when configured. Merely having
+ * negotiated encryption does not count: clients such as the Linux one always
+ * offer it, and then legitimately send unsigned, unencrypted requests.
+ */
+static bool smb2_sess_needs_protection(struct ksmbd_session *sess)
+{
+	if (sess->sign)
+		return true;
+	if (!sess->enc)
+		return false;
+	return sess->sign_required ||
+	       (server_conf.flags & KSMBD_GLOBAL_FLAG_SMB2_ENCRYPTION);
+}
+
+/*
+ * Was the request encrypted with this session's key? It was decrypted
+ * with the key of the session in the transform header, which
+ * ksmbd_check_transform_session() matched with the first header. A
+ * related operation later in the compound may name another session.
+ */
+static bool smb2_sess_encrypted_req(struct ksmbd_work *work,
+				    struct ksmbd_session *sess)
+{
+	struct smb2_hdr *hdr = smb_get_msg(work->request_buf);
+
+	return work->encrypted && sess->enc &&
+	       le64_to_cpu(hdr->SessionId) == sess->id;
+}
 
 int smb2_sess_setup(struct ksmbd_work *work)
 {
@@ -2619,6 +2663,7 @@ int smb2_sess_setup(struct ksmbd_work *work)
 		   (server_conf.flags & KSMBD_GLOBAL_FLAG_SMB3_MULTICHANNEL) &&
 		   req->Flags & SMB2_SESSION_REQ_FLAG_BINDING) {
 		u64 sess_id = le64_to_cpu(req->hdr.SessionId);
+		int state;
 
 		sess = ksmbd_session_lookup_slowpath(sess_id);
 		if (!sess) {
@@ -2646,8 +2691,40 @@ int smb2_sess_setup(struct ksmbd_work *work)
 				goto out_err;
 		}
 
+		/*
+		 * Read the state once: a reauthentication on another channel
+		 * can change it while this request is being checked. Pairs
+		 * with smp_store_release() in smb2_sess_setup().
+		 */
+		state = smp_load_acquire(&sess->state);
+
+		/*
+		 * A session that is still being set up has no signing key
+		 * yet, so there is nothing to verify a binding request with.
+		 */
+		if (state == SMB2_SESSION_IN_PROGRESS) {
+			rc = -EACCES;
+			goto out_err;
+		}
+
+		/*
+		 * Nor has a guest or anonymous session: its signing key is
+		 * derived from an all-zero session key. It cannot be bound
+		 * (MS-SMB2 3.3.5.5).
+		 */
+		if (user_guest(sess->user) || ksmbd_anonymous_user(sess->user)) {
+			rc = -EOPNOTSUPP;
+			goto out_err;
+		}
+
 		if (!(req->hdr.Flags & SMB2_FLAGS_SIGNED)) {
 			rc = -EINVAL;
+			goto out_err;
+		}
+
+		/* As part of receiving the request (MS-SMB2 3.3.5.2.4) */
+		if (!smb2_check_sess_setup_sign_req(work, sess)) {
+			rc = -EKEYREJECTED;
 			goto out_err;
 		}
 
@@ -2657,12 +2734,7 @@ int smb2_sess_setup(struct ksmbd_work *work)
 			goto out_err;
 		}
 
-		if (sess->state == SMB2_SESSION_IN_PROGRESS) {
-			rc = -EACCES;
-			goto out_err;
-		}
-
-		if (sess->state == SMB2_SESSION_EXPIRED) {
+		if (state == SMB2_SESSION_EXPIRED) {
 			rc = -EFAULT;
 			goto out_err;
 		}
@@ -2674,33 +2746,37 @@ int smb2_sess_setup(struct ksmbd_work *work)
 			goto out_err;
 		}
 
-		if (is_ksmbd_session_in_connection(conn, sess_id)) {
+		/* This connection must not already be using the session */
+		if (is_ksmbd_session_in_connection(conn, sess_id) ||
+		    lookup_chann_list(sess, conn)) {
 			rc = -EACCES;
-			goto out_err;
-		}
-
-		if (user_guest(sess->user)) {
-			rc = -EOPNOTSUPP;
 			goto out_err;
 		}
 
 		conn->binding = true;
 	} else if ((conn->dialect < SMB30_PROT_ID ||
-		    server_conf.flags & KSMBD_GLOBAL_FLAG_SMB3_MULTICHANNEL) &&
+		    !(server_conf.flags & KSMBD_GLOBAL_FLAG_SMB3_MULTICHANNEL)) &&
 		   (req->Flags & SMB2_SESSION_REQ_FLAG_BINDING)) {
 		sess = ksmbd_session_lookup_slowpath(le64_to_cpu(req->hdr.SessionId));
 		if (sess) {
-			int sign_ret;
+			int sign_ret = 0;
 
 			work->sess = sess;
 			installed = true;
-			if (sess->dialect >= SMB30_PROT_ID)
-				sign_ret = smb3_check_sign_req(work);
-			else
-				sign_ret = smb2_check_sign_req(work);
-			if (sess->state != SMB2_SESSION_VALID ||
-			    !(req->hdr.Flags & SMB2_FLAGS_SIGNED) ||
-			    !sign_ret) {
+			/*
+			 * Only a valid session that is not a guest or anonymous
+			 * one has a signing key to check with
+			 */
+			if (smp_load_acquire(&sess->state) == SMB2_SESSION_VALID &&
+			    !user_guest(sess->user) &&
+			    !ksmbd_anonymous_user(sess->user) &&
+			    (req->hdr.Flags & SMB2_FLAGS_SIGNED)) {
+				if (sess->dialect >= SMB30_PROT_ID)
+					sign_ret = smb3_check_sign_req(work);
+				else
+					sign_ret = smb2_check_sign_req(work);
+			}
+			if (!sign_ret) {
 				ksmbd_user_session_put(sess);
 				work->sess = NULL;
 				sess = NULL;
@@ -2735,6 +2811,33 @@ int smb2_sess_setup(struct ksmbd_work *work)
 
 		if (ksmbd_conn_need_reconnect(conn)) {
 			rc = -EFAULT;
+			ksmbd_user_session_put(sess);
+			sess = NULL;
+			goto out_err;
+		}
+
+		/*
+		 * A reauthentication of a session that has keys must prove it
+		 * comes from the session's owner: a signed request must verify,
+		 * and a session that requires signing or encryption must not
+		 * accept an unsigned request unless it arrived encrypted with
+		 * this session's key, which has already authenticated it. The
+		 * session has keys once it has been authenticated and
+		 * so has a user, including while a reauthentication is in
+		 * progress. A guest or anonymous session is not checked: its
+		 * keys are derived from an all-zero session key, so a signature
+		 * would prove nothing. Do not expire the session if the check
+		 * fails: the request did not come from its owner.
+		 */
+		if ((READ_ONCE(sess->state) != SMB2_SESSION_IN_PROGRESS ||
+		     sess->user) &&
+		    !(sess->user && (user_guest(sess->user) ||
+				     ksmbd_anonymous_user(sess->user))) &&
+		    ((req->hdr.Flags & SMB2_FLAGS_SIGNED) ?
+		     !smb2_check_sess_setup_sign_req(work, sess) :
+		     (!smb2_sess_encrypted_req(work, sess) &&
+		      smb2_sess_needs_protection(sess)))) {
+			rc = -EKEYREJECTED;
 			ksmbd_user_session_put(sess);
 			sess = NULL;
 			goto out_err;
@@ -2822,6 +2925,14 @@ int smb2_sess_setup(struct ksmbd_work *work)
 	}
 
 out_err:
+	/*
+	 * Response processing needs to know whether this request was a
+	 * binding one. conn->binding does not say: it is not set yet if the
+	 * request failed early, it can be left over from an earlier binding
+	 * on this connection, and the error path clears it.
+	 */
+	work->session_setup_binding = req->hdr.SessionId &&
+		(req->Flags & SMB2_SESSION_REQ_FLAG_BINDING);
 	if (rc == -EINVAL)
 		rsp->hdr.Status = STATUS_INVALID_PARAMETER;
 	else if (rc == -ENOENT)
@@ -2928,7 +3039,6 @@ out_err:
 			rsp->hdr.Status = STATUS_INSUFFICIENT_RESOURCES;
 	}
 
-	work->session_setup_binding = conn->binding;
 	if (authenticated) {
 		/*
 		 * Draining the previous session drops srv_mutex. Finish using the
@@ -2939,7 +3049,12 @@ out_err:
 			destroy_previous_session(conn, sess->user, previous_session_id);
 		if (!ksmbd_conn_need_reconnect(conn)) {
 			ksmbd_conn_set_good(conn);
-			sess->state = SMB2_SESSION_VALID;
+			/*
+			 * The session's keys are generated by now. Pairs with
+			 * smp_load_acquire() where a binding request is
+			 * verified with them.
+			 */
+			smp_store_release(&sess->state, SMB2_SESSION_VALID);
 		}
 	}
 
@@ -3465,7 +3580,14 @@ static int smb2_set_ea(struct smb2_ea_info *eabuf, unsigned int buf_len,
 		if (!eabuf->EaNameLength)
 			goto next;
 
-		if (eabuf->name[eabuf->EaNameLength]) {
+		/*
+		 * The name is EaNameLength bytes and a terminating NUL, with no
+		 * NUL inside it: the xattr name ends at the first NUL, so one
+		 * inside would also get past smb2_is_private_ea().
+		 */
+		if (eabuf->name[eabuf->EaNameLength] ||
+		    strnlen(eabuf->name, eabuf->EaNameLength) !=
+		    eabuf->EaNameLength) {
 			rc = -EBADMSG;
 			break;
 		}
@@ -3604,7 +3726,7 @@ static noinline int smb2_set_stream_name_xattr(const struct path *path,
 			};
 			rc = ksmbd_vfs_setxattr(idmap, path, xattr_stream_name,
 						(void *)afpinfo_empty,
-						sizeof(afpinfo_empty), 0, false);
+						sizeof(afpinfo_empty), 0, true);
 			return rc < 0 ? rc : 0;
 		}
 		ksmbd_debug(SMB, "XATTR stream name lookup failed: %d\n", rc);
@@ -3614,7 +3736,7 @@ static noinline int smb2_set_stream_name_xattr(const struct path *path,
 	if (!test_tree_conn_flag(fp->tcon, KSMBD_TREE_CONN_FLAG_WRITABLE))
 		return -EACCES;
 
-	rc = ksmbd_vfs_setxattr(idmap, path, xattr_stream_name, NULL, 0, 0, false);
+	rc = ksmbd_vfs_setxattr(idmap, path, xattr_stream_name, NULL, 0, 0, true);
 	if (rc < 0)
 		pr_err("Failed to store XATTR stream name :%d\n", rc);
 	else
@@ -3752,7 +3874,13 @@ static void smb2_update_xattrs(struct ksmbd_tree_connect *tcon,
 	if (rc > 0) {
 		if (store_dos_attrs) {
 			fp->f_ci->m_fattr = cpu_to_le32(da.attr);
-			fp->create_time = da.create_time;
+			/*
+			 * Older ksmbd writers cleared XATTR_DOSINFO_CREATE_TIME on sparse
+			 * or compression updates. Fall back to using a non-zero stored time
+			 * for backwards compatibility.
+			 */
+			if ((da.flags & XATTR_DOSINFO_CREATE_TIME) || da.create_time > 0)
+				fp->create_time = da.create_time;
 			fp->itime = da.itime;
 		} else {
 			fp->f_ci->m_fattr &=
@@ -3809,7 +3937,7 @@ static int smb2_create_sd_buffer(struct ksmbd_work *work,
 				 const struct path *path)
 {
 	struct create_context *context;
-	struct create_sd_buf_req *sd_buf;
+	struct smb_ntsd *pntsd;
 
 	if (!req->CreateContextsOffset)
 		return -ENOENT;
@@ -3823,14 +3951,10 @@ static int smb2_create_sd_buffer(struct ksmbd_work *work,
 
 	ksmbd_debug(SMB,
 		    "Set ACLs using SMB2_CREATE_SD_BUFFER context\n");
-	sd_buf = (struct create_sd_buf_req *)context;
-	if (le16_to_cpu(context->DataOffset) +
-	    le32_to_cpu(context->DataLength) <
-	    sizeof(struct create_sd_buf_req))
-		return -EINVAL;
-	return set_info_sec(work->conn, work->tcon, path, &sd_buf->ntsd,
-			    le32_to_cpu(sd_buf->ccontext.DataLength), true, false,
-			    true, true);
+	/* parse_sec_desc() refuses a length shorter than the SD header */
+	pntsd = smb2_context_data(context);
+	return set_info_sec(work->conn, work->tcon, path, pntsd,
+			    le32_to_cpu(context->DataLength), true, true, true);
 }
 
 static int ksmbd_acls_fattr(struct smb_fattr *fattr,
@@ -3990,7 +4114,7 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 		switch (dh_idx) {
 		case DURABLE_RECONN_V2:
 		{
-			struct create_durable_handle_reconnect_v2 *recon_v2;
+			struct durable_reconnect_context_v2 *recon_v2;
 			u32 flags;
 
 			if (dh_info->type == DURABLE_RECONN ||
@@ -3999,20 +4123,19 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 				goto out;
 			}
 
-			if (le32_to_cpu(context->DataLength) <
-			    sizeof(recon_v2->dcontext)) {
+			if (le32_to_cpu(context->DataLength) < sizeof(*recon_v2)) {
 				err = -EINVAL;
 				goto out;
 			}
 
-			recon_v2 = (struct create_durable_handle_reconnect_v2 *)context;
-			flags = le32_to_cpu(recon_v2->dcontext.Flags);
+			recon_v2 = smb2_context_data(context);
+			flags = le32_to_cpu(recon_v2->Flags);
 			if (flags & ~SMB2_DHANDLE_FLAG_PERSISTENT) {
 				err = -EINVAL;
 				goto out;
 			}
 			dh_info->persistent = flags & SMB2_DHANDLE_FLAG_PERSISTENT;
-			persistent_id = recon_v2->dcontext.Fid.PersistentFileId;
+			persistent_id = recon_v2->Fid.PersistentFileId;
 			dh_info->fp = ksmbd_lookup_durable_fd(persistent_id);
 			if (!dh_info->fp) {
 				ksmbd_debug(SMB, "Failed to get durable handle state\n");
@@ -4021,15 +4144,15 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 			}
 
 			/* A zero VolatileFileId means that the client did not specify it. */
-			if (recon_v2->dcontext.Fid.VolatileFileId &&
+			if (recon_v2->Fid.VolatileFileId &&
 			    dh_info->fp->durable_volatile_id !=
-			    recon_v2->dcontext.Fid.VolatileFileId) {
+			    recon_v2->Fid.VolatileFileId) {
 				err = -EBADF;
 				ksmbd_put_durable_fd(dh_info->fp);
 				goto out;
 			}
 
-			if (memcmp(dh_info->fp->create_guid, recon_v2->dcontext.CreateGuid,
+			if (memcmp(dh_info->fp->create_guid, recon_v2->CreateGuid,
 				   SMB2_CREATE_GUID_SIZE)) {
 				err = -EBADF;
 				ksmbd_put_durable_fd(dh_info->fp);
@@ -4052,7 +4175,7 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 		}
 		case DURABLE_RECONN:
 		{
-			create_durable_reconn_t *recon;
+			struct durable_reconnect_context *recon;
 
 			if (dh_info->type == DURABLE_RECONN_V2 ||
 			    dh_info->type == DURABLE_REQ_V2) {
@@ -4060,14 +4183,13 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 				goto out;
 			}
 
-			if (le32_to_cpu(context->DataLength) <
-			    sizeof(recon->Data)) {
+			if (le32_to_cpu(context->DataLength) < sizeof(*recon)) {
 				err = -EINVAL;
 				goto out;
 			}
 
-			recon = (create_durable_reconn_t *)context;
-			persistent_id = recon->Data.Fid.PersistentFileId;
+			recon = smb2_context_data(context);
+			persistent_id = recon->PersistentFileId;
 			dh_info->fp = ksmbd_lookup_durable_fd(persistent_id);
 			if (!dh_info->fp) {
 				ksmbd_debug(SMB, "Failed to get durable handle state\n");
@@ -4076,9 +4198,9 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 			}
 
 			/* A zero VolatileFileId means that the client did not specify it. */
-			if (recon->Data.Fid.VolatileFileId &&
+			if (recon->VolatileFileId &&
 			    dh_info->fp->durable_volatile_id !=
-			    recon->Data.Fid.VolatileFileId) {
+			    recon->VolatileFileId) {
 				err = -EBADF;
 				ksmbd_put_durable_fd(dh_info->fp);
 				goto out;
@@ -4092,7 +4214,7 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 		}
 		case DURABLE_REQ_V2:
 		{
-			struct create_durable_req_v2 *durable_v2_blob;
+			struct durable_context_v2_req *durable_v2_blob;
 
 			if (dh_info->type == DURABLE_RECONN ||
 			    dh_info->type == DURABLE_RECONN_V2) {
@@ -4101,24 +4223,23 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 			}
 
 			if (le32_to_cpu(context->DataLength) <
-			    sizeof(durable_v2_blob->dcontext)) {
+			    sizeof(*durable_v2_blob)) {
 				err = -EINVAL;
 				goto out;
 			}
 
-			durable_v2_blob =
-				(struct create_durable_req_v2 *)context;
-			if (le32_to_cpu(durable_v2_blob->dcontext.Flags) &
+			durable_v2_blob = smb2_context_data(context);
+			if (le32_to_cpu(durable_v2_blob->Flags) &
 			    ~SMB2_DHANDLE_FLAG_PERSISTENT) {
 				err = -EINVAL;
 				goto out;
 			}
 			ksmbd_debug(SMB, "Request for durable v2 open\n");
-			dh_info->CreateGuid = durable_v2_blob->dcontext.CreateGuid;
+			dh_info->CreateGuid = durable_v2_blob->CreateGuid;
 			dh_info->persistent =
-				le32_to_cpu(durable_v2_blob->dcontext.Flags) &
+				le32_to_cpu(durable_v2_blob->Flags) &
 				SMB2_DHANDLE_FLAG_PERSISTENT;
-			dh_info->fp = ksmbd_lookup_fd_cguid(durable_v2_blob->dcontext.CreateGuid);
+			dh_info->fp = ksmbd_lookup_fd_cguid(durable_v2_blob->CreateGuid);
 			if (dh_info->fp) {
 				if (!memcmp(conn->ClientGUID, dh_info->fp->client_guid,
 					    SMB2_CLIENT_GUID_SIZE)) {
@@ -4178,7 +4299,7 @@ static int parse_durable_handle_context(struct ksmbd_work *work,
 			if ((lc && (lc->req_state & SMB2_LEASE_HANDLE_CACHING_LE)) ||
 			    req_op_level == SMB2_OPLOCK_LEVEL_BATCH) {
 				dh_info->timeout =
-					le32_to_cpu(durable_v2_blob->dcontext.Timeout);
+					le32_to_cpu(durable_v2_blob->Timeout);
 				dh_info->type = dh_idx;
 			}
 			break;
@@ -4392,7 +4513,7 @@ int smb2_open(struct ksmbd_work *work)
 	struct kstat stat;
 	struct create_context *context;
 	struct lease_ctx_info *lc = NULL;
-	struct create_ea_buf_req *ea_buf = NULL;
+	struct create_context *ea_ctx = NULL;
 	struct oplock_info *opinfo;
 	struct durable_info dh_info = {0};
 	__le32 *next_ptr = NULL;
@@ -4435,8 +4556,6 @@ int smb2_open(struct ksmbd_work *work)
 			rc = PTR_ERR(context);
 			goto err_out2;
 		} else if (context) {
-			struct create_posix *posix = (struct create_posix *)context;
-
 			if (conn->dialect != SMB311_PROT_ID) {
 				rsp->hdr.Status = STATUS_INVALID_INFO_CLASS;
 				rc = -ENOTTY;
@@ -4450,15 +4569,14 @@ int smb2_open(struct ksmbd_work *work)
 				rc = -EOPNOTSUPP;
 				goto err_out2;
 			}
-			if (le16_to_cpu(context->DataOffset) +
-				le32_to_cpu(context->DataLength) <
-			    sizeof(struct create_posix) - 4) {
+			/* The data starts with the 4-byte Mode */
+			if (le32_to_cpu(context->DataLength) < sizeof(__le32)) {
 				rc = -EINVAL;
 				goto err_out2;
 			}
 			ksmbd_debug(SMB, "get posix context\n");
 
-			posix_mode = le32_to_cpu(posix->Mode);
+			posix_mode = get_unaligned_le32(smb2_context_data(context));
 			posix_ctxt = true;
 		}
 	}
@@ -4678,10 +4796,9 @@ int smb2_open(struct ksmbd_work *work)
 			rc = PTR_ERR(context);
 			goto err_out2;
 		} else if (context) {
-			ea_buf = (struct create_ea_buf_req *)context;
-			if (le16_to_cpu(context->DataOffset) +
-			    le32_to_cpu(context->DataLength) <
-			    sizeof(struct create_ea_buf_req)) {
+			ea_ctx = context;
+			if (le32_to_cpu(context->DataLength) <
+			    sizeof(struct smb2_ea_info)) {
 				rc = -EINVAL;
 				goto err_out2;
 			}
@@ -4951,16 +5068,10 @@ resolve_path:
 
 		created = true;
 		idmap = mnt_idmap(path.mnt);
-		if (ea_buf) {
-			if (le32_to_cpu(ea_buf->ccontext.DataLength) <
-			    sizeof(struct smb2_ea_info)) {
-				rc = -EINVAL;
-				goto err_out;
-			}
-
-			rc = smb2_set_ea(&ea_buf->ea,
-					 le32_to_cpu(ea_buf->ccontext.DataLength),
-					 &path, false);
+		if (ea_ctx) {
+			rc = smb2_set_ea(smb2_context_data(ea_ctx),
+					 le32_to_cpu(ea_ctx->DataLength),
+					 &path, true);
 			if (rc == -EOPNOTSUPP)
 				rc = 0;
 			else if (rc)
@@ -5160,16 +5271,9 @@ resolve_path:
 						goto err_out;
 					}
 
-					rc = ksmbd_vfs_set_sd_xattr(conn,
-								    idmap,
-								    &path,
-								    pntsd,
-								    pntsd_size,
-								    false);
+					ksmbd_vfs_set_sd_xattr(conn, idmap, &path,
+							       pntsd, pntsd_size);
 					kvfree(pntsd);
-					if (rc)
-						pr_err("failed to store ntacl in xattr : %d\n",
-						       rc);
 				}
 			}
 		}
@@ -5289,23 +5393,22 @@ resolve_path:
 	}
 
 	if (req->CreateContextsOffset) {
-		struct create_alloc_size_req *az_req;
+		struct create_context *az_req;
 
-		az_req = (struct create_alloc_size_req *)smb2_find_context_vals(req,
-					SMB2_CREATE_ALLOCATION_SIZE, 4);
+		az_req = smb2_find_context_vals(req,
+						SMB2_CREATE_ALLOCATION_SIZE, 4);
 		if (IS_ERR(az_req)) {
 			rc = PTR_ERR(az_req);
 			goto err_out1;
-		} else if (az_req) {
+		} else if (az_req &&
+			   test_tree_conn_flag(tcon, KSMBD_TREE_CONN_FLAG_WRITABLE)) {
 			int err;
 
-			if (le16_to_cpu(az_req->ccontext.DataOffset) +
-			    le32_to_cpu(az_req->ccontext.DataLength) <
-			    sizeof(struct create_alloc_size_req)) {
+			if (le32_to_cpu(az_req->DataLength) < sizeof(__le64)) {
 				rc = -EINVAL;
 				goto err_out1;
 			}
-			alloc_size = le64_to_cpu(az_req->AllocationSize);
+			alloc_size = get_unaligned_le64(smb2_context_data(az_req));
 			fp->allocation_size_set = true;
 			ksmbd_debug(SMB,
 				    "request smb2 create allocate size : %llu\n",
@@ -8380,10 +8483,15 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 	}
 
 	if (test_share_config_flag(work->tcon->share_conf,
-				   KSMBD_SHARE_FLAG_ACL_XATTR))
+				   KSMBD_SHARE_FLAG_ACL_XATTR)) {
 		ppntsd_size = ksmbd_vfs_get_sd_xattr(work->conn, idmap,
 						     fp->filp->f_path.dentry,
 						     &ppntsd);
+		if (ppntsd_size < 0 && !smb_no_stored_sd(ppntsd_size)) {
+			rc = ppntsd_size == -ENOMEM ? -ENOMEM : -EIO;
+			goto release_acl;
+		}
+	}
 
 	/* Check if sd buffer size exceeds response buffer size */
 	max_len = smb2_calc_max_out_buf_len(work,
@@ -8396,11 +8504,13 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 
 	scratch_len = smb_acl_sec_desc_scratch_len(&fattr, ppntsd,
 			ppntsd_size, addition_info);
-	if (!scratch_len || scratch_len == SIZE_MAX) {
+	if (!scratch_len || scratch_len > SIZE_MAX - 7) {
 		rc = -EFBIG;
 		goto release_acl;
 	}
 
+	/* A compound response pads the descriptor to 8 bytes in this buffer */
+	scratch_len = ALIGN(scratch_len, 8);
 	pntsd = kvzalloc(scratch_len, KSMBD_DEFAULT_GFP);
 	if (!pntsd) {
 		rc = -ENOMEM;
@@ -8866,6 +8976,7 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 	const struct mnt_idmap *idmap;
 	__le32 attrs_mask = FILE_ATTRIBUTE_DIRECTORY_LE |
 		FILE_ATTRIBUTE_COMPRESSED_LE;
+	s64 crtime, time;
 	int rc = 0;
 
 	if (!(fp->daccess & FILE_WRITE_ATTRIBUTES_LE))
@@ -8881,21 +8992,29 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 	    (file_info->Attributes & FILE_ATTRIBUTE_TEMPORARY_LE))
 		return -EINVAL;
 
-	if (file_info->CreationTime)
-		fp->create_time = le64_to_cpu(file_info->CreationTime);
+	rc = mnt_want_write_file(filp);
+	if (rc)
+		return rc;
 
-	if (file_info->LastAccessTime) {
+	crtime = (s64)le64_to_cpu(file_info->CreationTime);
+	if (crtime > 0)
+		fp->create_time = crtime;
+
+	time = (s64)le64_to_cpu(file_info->LastAccessTime);
+	if (time > 0) {
 		attrs.ia_atime = ksmbd_NTtimeToUnix(file_info->LastAccessTime);
 		attrs.ia_valid |= (ATTR_ATIME | ATTR_ATIME_SET);
 	}
 
-	if (file_info->ChangeTime) {
-		fp->change_time = le64_to_cpu(file_info->ChangeTime);
+	time = (s64)le64_to_cpu(file_info->ChangeTime);
+	if (time > 0) {
+		fp->change_time = time;
 		inode_set_ctime_to_ts(inode,
 				ksmbd_NTtimeToUnix(file_info->ChangeTime));
 	}
 
-	if (file_info->LastWriteTime) {
+	time = (s64)le64_to_cpu(file_info->LastWriteTime);
+	if (time > 0) {
 		attrs.ia_mtime = ksmbd_NTtimeToUnix(file_info->LastWriteTime);
 		attrs.ia_valid |= (ATTR_MTIME | ATTR_MTIME_SET | ATTR_CTIME);
 	}
@@ -8904,7 +9023,8 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 		if (!S_ISDIR(inode->i_mode) &&
 		    file_info->Attributes & FILE_ATTRIBUTE_DIRECTORY_LE) {
 			pr_err("can't change a file to a directory\n");
-			return -EINVAL;
+			rc = -EINVAL;
+			goto out;
 		}
 
 		if (!(S_ISDIR(inode->i_mode) && file_info->Attributes == FILE_ATTRIBUTE_NORMAL_LE))
@@ -8914,18 +9034,30 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 	}
 
 	if (test_share_config_flag(share, KSMBD_SHARE_FLAG_STORE_DOS_ATTRS) &&
-	    (file_info->CreationTime || file_info->Attributes)) {
+	    (crtime > 0 || file_info->Attributes)) {
 		struct xattr_dos_attrib da = {0};
 
-		da.version = 4;
-		da.itime = fp->itime;
-		da.create_time = fp->create_time;
+		rc = ksmbd_vfs_get_dos_attrib_xattr(idmap, fp->filp->f_path.dentry, &da);
+		if (rc <= 0) {
+			da.version = 4;
+			da.flags = 0;
+		}
+
+		/*
+		 * itime gets preserved when reading the xattr if already present
+		 * otherwise don't write it as it wasn't asked for by the client
+		 */
+		if (crtime > 0) {
+			da.create_time = fp->create_time;
+			da.flags |= XATTR_DOSINFO_CREATE_TIME;
+		} else if (da.create_time > 0) {
+			da.flags |= XATTR_DOSINFO_CREATE_TIME;
+		}
 		da.attr = le32_to_cpu(fp->f_ci->m_fattr);
-		da.flags = XATTR_DOSINFO_ATTRIB | XATTR_DOSINFO_CREATE_TIME |
-			XATTR_DOSINFO_ITIME;
+		da.flags |= XATTR_DOSINFO_ATTRIB;
 
 		rc = ksmbd_vfs_set_dos_attrib_xattr(idmap, &filp->f_path, &da,
-				true);
+				false);
 		if (rc)
 			ksmbd_debug(SMB,
 				    "failed to restore file attribute in EA\n");
@@ -8936,13 +9068,17 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 		struct dentry *dentry = filp->f_path.dentry;
 		struct inode *inode = d_inode(dentry);
 
-		if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
-			return -EACCES;
+		if (IS_IMMUTABLE(inode) || IS_APPEND(inode)) {
+			rc = -EACCES;
+			goto out;
+		}
 
 		inode_lock(inode);
 		rc = notify_change(idmap, dentry, &attrs, NULL);
 		inode_unlock(inode);
 	}
+out:
+	mnt_drop_write_file(filp);
 	return rc;
 }
 
@@ -9277,7 +9413,7 @@ static int smb2_set_info_sec(struct ksmbd_file *fp, int addition_info,
 		return -EACCES;
 
 	return set_info_sec(fp->conn, fp->tcon, &fp->filp->f_path, pntsd,
-			buf_len, false, true,
+			buf_len, false,
 			fp->conn->dialect == SMB311_PROT_ID && fp->is_posix_ctxt,
 			addition_info & DACL_SECINFO);
 }
@@ -9386,8 +9522,10 @@ err_out:
 		rsp->hdr.Status = STATUS_EA_LIST_INCONSISTENT;
 	else if (rc == -EMSGSIZE)
 		rsp->hdr.Status = STATUS_INFO_LENGTH_MISMATCH;
-	else if (rc == -ENOSPC || rc == -EFBIG)
+	else if (rc == -ENOSPC || rc == -EFBIG || rc == -E2BIG)
 		rsp->hdr.Status = STATUS_DISK_FULL;
+	else if (rc == -ENOMEM)
+		rsp->hdr.Status = STATUS_INSUFFICIENT_RESOURCES;
 	else if (rc == -ESHARE)
 		rsp->hdr.Status = STATUS_SHARING_VIOLATION;
 	else if (rc == -ENOENT)
@@ -10568,7 +10706,6 @@ int smb2_cancel(struct ksmbd_work *work)
 {
 	struct ksmbd_conn *conn = work->conn;
 	struct smb2_hdr *hdr = smb_get_msg(work->request_buf);
-	struct smb2_hdr *chdr;
 	struct ksmbd_work *iter;
 	struct list_head *command_list;
 
@@ -10585,8 +10722,6 @@ int smb2_cancel(struct ksmbd_work *work)
 		spin_lock(&conn->request_lock);
 		list_for_each_entry(iter, command_list,
 				    async_request_entry) {
-			chdr = smb_get_msg(iter->request_buf);
-
 			if (iter->async_id !=
 			    le64_to_cpu(hdr->Id.AsyncId))
 				continue;
@@ -10606,7 +10741,7 @@ int smb2_cancel(struct ksmbd_work *work)
 			ksmbd_debug(SMB,
 				    "smb2 with AsyncId %llu cancelled command = 0x%x\n",
 				    le64_to_cpu(hdr->Id.AsyncId),
-				    le16_to_cpu(chdr->Command));
+				    le16_to_cpu(iter->req_cmd));
 			if (iter->cancel_fn)
 				iter->cancel_fn(iter->cancel_argv);
 			break;
@@ -10617,10 +10752,13 @@ int smb2_cancel(struct ksmbd_work *work)
 
 		spin_lock(&conn->request_lock);
 		list_for_each_entry(iter, command_list, request_entry) {
-			chdr = smb_get_msg(iter->request_buf);
-
-			if (chdr->MessageId != hdr->MessageId ||
-			    iter == work)
+			/*
+			 * request_buf of another work may be replaced while
+			 * it is decrypted or decompressed, so match on the
+			 * MessageId recorded under request_lock instead.
+			 */
+			if (iter == work || !iter->req_id_valid ||
+			    iter->req_mid != hdr->MessageId)
 				continue;
 
 			if (cmpxchg(&iter->state, KSMBD_WORK_ACTIVE,
@@ -10630,7 +10768,7 @@ int smb2_cancel(struct ksmbd_work *work)
 			ksmbd_debug(SMB,
 				    "smb2 with mid %llu cancelled command = 0x%x\n",
 				    le64_to_cpu(hdr->MessageId),
-				    le16_to_cpu(chdr->Command));
+				    le16_to_cpu(iter->req_cmd));
 			if (iter->cancel_fn)
 				iter->cancel_fn(iter->cancel_argv);
 			break;
@@ -10879,6 +11017,19 @@ int smb2_lock(struct ksmbd_work *work)
 
 	if (smb2_compound_has_failed(work, &rsp->hdr))
 		return -EACCES;
+
+	/* An expired session may release byte-range locks, not take them. */
+	if (work->sess && smb2_session_kerberos_expired(work->sess)) {
+		lock_count = le16_to_cpu(req->LockCount);
+		for (i = 0; i < lock_count; i++) {
+			if (le32_to_cpu(req->locks[i].Flags) !=
+			    SMB2_LOCKFLAG_UNLOCK) {
+				rsp->hdr.Status = STATUS_NETWORK_SESSION_EXPIRED;
+				err = -EKEYEXPIRED;
+				goto out2;
+			}
+		}
+	}
 
 	if (work->next_smb2_rcv_hdr_off &&
 	    !has_file_id(req->VolatileFileId)) {
@@ -11742,10 +11893,15 @@ static inline int fsctl_set_sparse(struct ksmbd_work *work, u64 id,
 						     fp->filp->f_path.dentry, &da);
 		if (ret <= 0) {
 			da.version = 4;
-			da.itime = fp->itime;
-			da.create_time = fp->create_time;
-			da.flags = XATTR_DOSINFO_CREATE_TIME |
-				XATTR_DOSINFO_ITIME;
+			da.flags = 0;
+		} else {
+			/*
+			 * Heal the xattr damaged by older ksmbd writers which
+			 * wrongly cleared XATTR_DOSINFO_CREATE_TIME on sparse
+			 * updates.
+			 */
+			if (da.create_time > 0)
+				da.flags |= XATTR_DOSINFO_CREATE_TIME;
 		}
 
 		da.attr = le32_to_cpu(fp->f_ci->m_fattr);
@@ -12111,11 +12267,6 @@ int smb2_ioctl(struct ksmbd_work *work)
 	case FSCTL_SET_SPARSE:
 	{
 		struct file_sparse sparse = {0};
-
-		if (in_buf_len && in_buf_len < sizeof(struct file_sparse)) {
-			ret = -EINVAL;
-			goto out;
-		}
 
 		*(u8 *)&sparse = 1;
 		ret = fsctl_set_sparse(work, id, in_buf_len ?
@@ -12864,6 +13015,10 @@ bool smb2_is_sign_req(struct ksmbd_work *work, unsigned int command)
 {
 	struct smb2_hdr *rcv_hdr2 = smb_get_msg(work->request_buf);
 
+	/* In a compound, test the current command, not the first one. */
+	if (work->next_smb2_rcv_hdr_off)
+		rcv_hdr2 = ksmbd_req_buf_next(work);
+
 	if ((rcv_hdr2->Flags & SMB2_FLAGS_SIGNED) &&
 	    command != SMB2_NEGOTIATE_HE)
 		return true;
@@ -12905,6 +13060,8 @@ int smb2_check_sign_req(struct ksmbd_work *work)
 
 	ksmbd_sign_smb2_pdu(work->conn, work->sess->sess_key, iov, 1,
 			    signature);
+	/* Restore the request as received, for the SMB 3.1.1 preauth hash */
+	memcpy(hdr->Signature, signature_req, SMB2_SIGNATURE_SIZE);
 
 	if (crypto_memneq(signature, signature_req, SMB2_SIGNATURE_SIZE)) {
 		pr_err("bad smb2 signature\n");
@@ -12980,6 +13137,7 @@ int smb3_check_sign_req(struct ksmbd_work *work)
 {
 	struct ksmbd_conn *conn = work->conn;
 	char *signing_key;
+	__le16 signing_algorithm;
 	struct smb2_hdr *hdr;
 	struct channel *chann;
 	char signature_req[SMB2_SIGNATURE_SIZE];
@@ -12999,18 +13157,28 @@ int smb3_check_sign_req(struct ksmbd_work *work)
 		len = get_rfc1002_len(work->request_buf) -
 			work->next_smb2_rcv_hdr_off;
 
-	if (le16_to_cpu(hdr->Command) == SMB2_SESSION_SETUP_HE) {
+	/*
+	 * A key must be used with the algorithm it was generated for: the
+	 * session key with the one of the connection that created the
+	 * session, which can differ from this connection's when binding.
+	 *
+	 * A binding request, or a SESSION_SETUP on a connection that is not
+	 * yet a channel of the session, is verified with the session key. A
+	 * request on an existing channel, including a reauthentication, is
+	 * verified with that channel's key, so that the session key is not
+	 * used at the MessageIds of another connection.
+	 */
+	chann = lookup_chann_list(work->sess, conn);
+	if (le16_to_cpu(hdr->Command) == SMB2_SESSION_SETUP_HE &&
+	    (!chann || (((struct smb2_sess_setup_req *)hdr)->Flags &
+			SMB2_SESSION_REQ_FLAG_BINDING))) {
 		signing_key = work->sess->smb3signingkey;
+		signing_algorithm = work->sess->signing_algorithm;
+	} else if (chann) {
+		signing_key = chann->smb3signingkey;
+		signing_algorithm = conn->signing_algorithm;
 	} else {
-		chann = lookup_chann_list(work->sess, conn);
-		if (!chann) {
-			if (le16_to_cpu(hdr->Command) != SMB2_SESSION_SETUP_HE ||
-			    !(hdr->Flags & SMB2_FLAGS_SIGNED))
-				return 0;
-			signing_key = work->sess->smb3signingkey;
-		} else {
-			signing_key = chann->smb3signingkey;
-		}
+		return 0;
 	}
 
 	if (!signing_key) {
@@ -13023,7 +13191,10 @@ int smb3_check_sign_req(struct ksmbd_work *work)
 	iov[0].iov_base = (char *)&hdr->ProtocolId;
 	iov[0].iov_len = len;
 
-	ksmbd_sign_smb3_pdu(conn, signing_key, iov, 1, signature);
+	ksmbd_sign_smb3_pdu(conn, signing_algorithm, signing_key, iov, 1,
+			    signature);
+	/* Restore the request as received, for the SMB 3.1.1 preauth hash */
+	memcpy(hdr->Signature, signature_req, SMB2_SIGNATURE_SIZE);
 
 	if (crypto_memneq(signature, signature_req, SMB2_SIGNATURE_SIZE)) {
 		pr_err("bad smb2 signature\n");
@@ -13048,19 +13219,29 @@ void smb3_set_sign_rsp(struct ksmbd_work *work)
 	u16 command;
 	int n_vec;
 	char *signing_key;
+	__le16 signing_algorithm;
 
 	hdr = ksmbd_resp_buf_curr(work);
 	command = le16_to_cpu(hdr->Command);
 
+	/*
+	 * Responses to binding requests, other than the final one, are signed
+	 * with the session key (MS-SMB2 3.3.5.5.3), as is any SESSION_SETUP
+	 * response on a connection that is not yet a channel. Everything else
+	 * on a channel, including a reauthentication on a secondary channel,
+	 * is signed with that channel's key.
+	 */
+	chann = lookup_chann_list(work->sess, work->conn);
 	if (command == SMB2_SESSION_SETUP_HE &&
-	    (!work->session_setup_binding || hdr->Status != STATUS_SUCCESS)) {
+	    (!chann || (work->session_setup_binding &&
+			hdr->Status != STATUS_SUCCESS))) {
 		signing_key = work->sess->smb3signingkey;
-	} else {
-		chann = lookup_chann_list(work->sess, work->conn);
-		if (!chann) {
-			return;
-		}
+		signing_algorithm = work->sess->signing_algorithm;
+	} else if (chann) {
 		signing_key = chann->smb3signingkey;
+		signing_algorithm = conn->signing_algorithm;
+	} else {
+		return;
 	}
 
 	if (!signing_key)
@@ -13071,7 +13252,8 @@ void smb3_set_sign_rsp(struct ksmbd_work *work)
 
 	iov = smb2_get_sign_rsp_iov(work, hdr, &n_vec);
 
-	ksmbd_sign_smb3_pdu(conn, signing_key, iov, n_vec, signature);
+	ksmbd_sign_smb3_pdu(conn, signing_algorithm, signing_key, iov, n_vec,
+			    signature);
 	memcpy(hdr->Signature, signature, SMB2_SIGNATURE_SIZE);
 }
 

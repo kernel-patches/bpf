@@ -24,7 +24,7 @@ static int orangefs_writepage_locked(struct folio *folio,
 	struct iov_iter iter;
 	struct bio_vec bv;
 	size_t wlen;
-	ssize_t ret;
+	ssize_t ret = 0;
 	loff_t len, off;
 
 	folio_start_writeback(folio);
@@ -33,30 +33,51 @@ static int orangefs_writepage_locked(struct folio *folio,
 	if (folio->private) {
 		wr = folio->private;
 		off = wr->pos;
-		if ((off + wr->len > len) && (off <= len))
+		/*
+		 * The private range can start at or past i_size after a
+		 * truncate. Nothing there is written. Restoring wr->len
+		 * would write past EOF.
+		 */
+		if (off >= len)
+			wlen = 0;
+		else if (off + wr->len > len)
 			wlen = len - off;
 		else
-			wlen = wr->len;
-		if (wlen == 0)
 			wlen = wr->len;
 	} else {
 		WARN_ON(1);
 		off = folio_pos(folio);
 		wlen = folio_size(folio);
-
-		if (wlen > len - off)
+		if (off >= len)
+			wlen = 0;
+		else if (wlen > len - off)
 			wlen = len - off;
 	}
 
 	WARN_ON(wlen == 0);
-	bvec_set_folio(&bv, folio, wlen, offset_in_folio(folio, off));
-	iov_iter_bvec(&iter, ITER_SOURCE, &bv, 1, wlen);
+	/*
+	 * A folio can be larger than one bufmap slot. Write it in slot-sized
+	 * pieces from the same orangefs_write_range.
+	 */
+	while (wlen) {
+		size_t this_len = wlen;
+		int slot = orangefs_bufmap_size_query();
 
-	ret = wait_for_direct_io(ORANGEFS_IO_WRITE, inode, &off, &iter, wlen,
-	    len, wr, NULL, NULL);
-	if (ret < 0) {
-		mapping_set_error(folio->mapping, ret);
-	} else {
+		if (slot > 0 && this_len > slot)
+			this_len = slot;
+
+		bvec_set_folio(&bv, folio, this_len,
+			       offset_in_folio(folio, off));
+		iov_iter_bvec(&iter, ITER_SOURCE, &bv, 1, this_len);
+
+		ret = wait_for_direct_io(ORANGEFS_IO_WRITE, inode, &off, &iter,
+					 this_len, len, wr, NULL, NULL);
+		if (ret < 0) {
+			mapping_set_error(folio->mapping, ret);
+			break;
+		}
+		wlen -= this_len;
+		off += this_len;
 		ret = 0;
 	}
 	kfree(folio_detach_private(folio));
@@ -97,15 +118,26 @@ static int orangefs_writepages_work(struct orangefs_writepages *ow,
 	}
 	iov_iter_bvec(&iter, ITER_SOURCE, ow->bv, ow->nfolios, ow->len);
 
+	/*
+	 * The packed range can start at or past i_size after a truncate.
+	 * Keep the warning. Do not post: ow->len is a size_t, so a start
+	 * past EOF wraps, and a 0-byte post does not complete on an old
+	 * client. The folios are still cleaned below.
+	 */
 	WARN_ON(ow->off >= len);
-	if (ow->off + ow->len > len)
+	if (ow->off >= len)
+		ow->len = 0;
+	else if (ow->off + ow->len > len)
 		ow->len = len - ow->off;
 
 	off = ow->off;
 	wr.uid = ow->uid;
 	wr.gid = ow->gid;
-	ret = wait_for_direct_io(ORANGEFS_IO_WRITE, inode, &off, &iter, ow->len,
-	    0, &wr, NULL, NULL);
+	if (ow->len)
+		ret = wait_for_direct_io(ORANGEFS_IO_WRITE, inode, &off, &iter,
+		    ow->len, 0, &wr, NULL, NULL);
+	else
+		ret = 0;
 	if (ret < 0)
 		mapping_set_error(ow->mapping, ret);
 	else
@@ -137,6 +169,12 @@ static int orangefs_writepages_callback(struct folio *folio,
 
 	ret = -1;
 	if (ow->nfolios == 0) {
+		/*
+		 * One folio may already be larger than a slot. Let
+		 * orangefs_writepage_locked split that write range.
+		 */
+		if (wr->len > orangefs_bufmap_size_query())
+			goto done;
 		ow->off = wr->pos;
 		ow->len = wr->len;
 		ow->uid = wr->uid;
@@ -152,6 +190,8 @@ static int orangefs_writepages_callback(struct folio *folio,
 		goto done;
 	}
 	if (ow->off + ow->len == wr->pos) {
+		if (ow->len + wr->len > orangefs_bufmap_size_query())
+			goto done;
 		ow->len += wr->len;
 		ow->folios[ow->nfolios++] = folio;
 		ret = 0;
@@ -300,20 +340,54 @@ static int orangefs_read_folio(struct file *file, struct folio *folio)
 	struct inode *inode = folio->mapping->host;
 	struct iov_iter iter;
 	struct bio_vec bv;
-	ssize_t ret;
+	ssize_t ret = 0;
 	loff_t off; /* offset of this folio in the file */
+	size_t offset = 0;
+	size_t remaining = folio_size(folio);
 
 	if (folio_test_dirty(folio))
 		orangefs_launder_folio(folio);
 
 	off = folio_pos(folio);
-	bvec_set_folio(&bv, folio, folio_size(folio), 0);
-	iov_iter_bvec(&iter, ITER_DEST, &bv, 1, folio_size(folio));
+	while (remaining) {
+		size_t this_size = remaining;
+		int slot = orangefs_bufmap_size_query();
 
-	ret = wait_for_direct_io(ORANGEFS_IO_READ, inode, &off, &iter,
-			folio_size(folio), inode->i_size, NULL, NULL, file);
-	/* this will only zero remaining unread portions of the folio data */
-	iov_iter_zero(~0U, &iter);
+		if (slot > 0 && this_size > slot)
+			this_size = slot;
+
+		bvec_set_folio(&bv, folio, this_size, offset);
+		iov_iter_bvec(&iter, ITER_DEST, &bv, 1, this_size);
+
+		ret = wait_for_direct_io(ORANGEFS_IO_READ, inode, &off, &iter,
+					 this_size, inode->i_size, NULL, NULL,
+					 file);
+		if (ret < 0)
+			break;
+
+		/*
+		 * Short read. Zero the unread tail of this folio, including
+		 * any bytes past this bufmap-sized piece.
+		 */
+		if (ret < this_size) {
+			iov_iter_zero(~0U, &iter);
+			offset += ret;
+			remaining -= ret;
+			if (remaining) {
+				bvec_set_folio(&bv, folio, remaining, offset);
+				iov_iter_bvec(&iter, ITER_DEST, &bv, 1,
+					      remaining);
+				iov_iter_zero(~0U, &iter);
+			}
+			ret = 0;
+			break;
+		}
+
+		remaining -= this_size;
+		offset += this_size;
+		off += this_size;
+		ret = 0;
+	}
 	/* takes care of potential aliasing */
 	flush_dcache_folio(folio);
 	if (ret > 0)
@@ -331,12 +405,18 @@ static int orangefs_write_begin(const struct kiocb *iocb,
 	struct folio *folio;
 	int ret;
 
-	folio = __filemap_get_folio(mapping, pos / PAGE_SIZE, FGP_WRITEBEGIN,
-			mapping_gfp_mask(mapping));
+	folio = write_begin_get_folio(iocb, mapping, pos / PAGE_SIZE, len);
 	if (IS_ERR(folio))
 		return PTR_ERR(folio);
 
 	*foliop = folio;
+
+	/*
+	 * generic_perform_write() can ask for more bytes than the folio it
+	 * gets back. orangefs_write_range describes only this folio.
+	 */
+	if (len > folio_size(folio) - offset_in_folio(folio, pos))
+		len = folio_size(folio) - offset_in_folio(folio, pos);
 
 	if (folio_test_dirty(folio) && !folio_test_private(folio)) {
 		/*
@@ -357,11 +437,16 @@ static int orangefs_write_begin(const struct kiocb *iocb,
 			wr->len += len;
 			goto okay;
 		} else {
-			wr->pos = pos;
-			wr->len = len;
+			/*
+			 * Launder the range already recorded in wr. Updating
+			 * wr first would write the new offset before its
+			 * bytes are copied in, and drop the old range.
+			 */
 			ret = orangefs_launder_folio(folio);
 			if (ret)
 				return ret;
+			if (folio_test_private(folio))
+				kfree(folio_detach_private(folio));
 		}
 	}
 
@@ -384,25 +469,46 @@ static int orangefs_write_end(const struct kiocb *iocb,
 			      struct folio *folio, void *fsdata)
 {
 	struct inode *inode = folio->mapping->host;
+	struct orangefs_write_range *wr = folio_get_private(folio);
 	loff_t last_pos = pos + copied;
+
+	/*
+	 * write_begin records the whole request before any byte is
+	 * copied. Keep only the copied bytes. A copy that moves
+	 * nothing on a new range leaves wr starting at i_size, and
+	 * the retry launders it and warns.
+	 */
+	if (wr && copied < len &&
+	    wr->pos <= pos && wr->pos + wr->len == pos + len) {
+		wr->len -= len - copied;
+		if (wr->len == 0) {
+			kfree(folio_detach_private(folio));
+			folio_cancel_dirty(folio);
+			folio_unlock(folio);
+			folio_put(folio);
+			return 0;
+		}
+	}
 
 	/*
 	 * No need to use i_size_read() here, the i_size
 	 * cannot change under us because we hold the i_mutex.
+	 * A copy that moved nothing must not move i_size either.
 	 */
-	if (last_pos > inode->i_size)
+	if (copied > 0 && last_pos > inode->i_size)
 		i_size_write(inode, last_pos);
 
 	/* zero the stale part of the folio if we did a short copy */
 	if (!folio_test_uptodate(folio)) {
-		unsigned from = pos & (PAGE_SIZE - 1);
+		size_t fsize = folio_size(folio);
+		unsigned int from = offset_in_folio(folio, pos);
 		if (copied < len) {
 			folio_zero_range(folio, from + copied, len - copied);
 		}
-		/* Set fully written pages uptodate. */
+		/* Set fully written folios uptodate. */
 		if (pos == folio_pos(folio) &&
-		    (len == PAGE_SIZE || pos + len == inode->i_size)) {
-			folio_zero_segment(folio, from + copied, PAGE_SIZE);
+		    (len == fsize || pos + len == inode->i_size)) {
+			folio_zero_segment(folio, from + copied, fsize);
 			folio_mark_uptodate(folio);
 		}
 	}
@@ -420,7 +526,10 @@ static void orangefs_invalidate_folio(struct folio *folio,
 {
 	struct orangefs_write_range *wr = folio_get_private(folio);
 
-	if (offset == 0 && length == PAGE_SIZE) {
+	if (!wr)
+		return;
+
+	if (offset == 0 && length == folio_size(folio)) {
 		kfree(folio_detach_private(folio));
 		return;
 	/* write range entirely within invalidate range (or equal) */
@@ -695,6 +804,11 @@ okay:
 
 	file_update_time(vmf->vma->vm_file);
 	if (folio->mapping != inode->i_mapping) {
+		/*
+		 * Truncate already dropped this folio. Drop the write
+		 * range too, or reclaim will read it as a buffer_head.
+		 */
+		kfree(folio_detach_private(folio));
 		folio_unlock(folio);
 		ret = VM_FAULT_LOCKED|VM_FAULT_NOPAGE;
 		goto out;
@@ -993,6 +1107,25 @@ static const struct inode_operations orangefs_file_inode_operations = {
 	.fileattr_set = orangefs_fileattr_set,
 };
 
+/*
+ * Folios may be as large as one bufmap hugepage chunk (2 MiB), and never
+ * larger than the bufmap slot. A slot is two of those chunks when
+ * hugepages are available.
+ */
+static void orangefs_set_mapping_order(struct inode *inode)
+{
+	size_t max_bytes = SZ_2M;
+	unsigned int order;
+	int slot = orangefs_bufmap_size_query();
+
+	if (slot > 0 && (size_t)slot < max_bytes)
+		max_bytes = slot;
+	order = filemap_get_order(max_bytes);
+	if (order > MAX_PAGECACHE_ORDER)
+		order = MAX_PAGECACHE_ORDER;
+	mapping_set_folio_order_range(inode->i_mapping, 0, order);
+}
+
 static int orangefs_init_iops(struct inode *inode)
 {
 	inode->i_mapping->a_ops = &orangefs_address_operations;
@@ -1001,6 +1134,7 @@ static int orangefs_init_iops(struct inode *inode)
 	case S_IFREG:
 		inode->i_op = &orangefs_file_inode_operations;
 		inode->i_fop = &orangefs_file_operations;
+		orangefs_set_mapping_order(inode);
 		break;
 	case S_IFLNK:
 		inode->i_op = &orangefs_symlink_inode_operations;

@@ -64,16 +64,8 @@ static int rpc_proc_show(struct seq_file *seq, void *v) {
 	return 0;
 }
 
-static int rpc_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, rpc_proc_show, pde_data(inode));
-}
-
 static const struct proc_ops rpc_proc_ops = {
-	.proc_open	= rpc_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show = rpc_proc_show,
 };
 
 /*

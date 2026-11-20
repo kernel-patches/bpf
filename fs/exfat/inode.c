@@ -73,25 +73,16 @@ int __exfat_write_inode(struct inode *inode, int sync)
 			     &ep->dentry.file.access_date,
 			     NULL);
 
-	/*
-	 * During a DIO write, valid_size is updated eagerly in iomap_end (so
-	 * that concurrent buffered reads see IOMAP_MAPPED) while i_size is
-	 * updated asynchronously in end_io.  The FAT chain was already
-	 * extended to cover ceil(valid_size/cluster_size) clusters.  Use the
-	 * maximum so the on-disk size field always covers the FAT chain,
-	 * preventing fsck from reporting "more clusters are allocated".
-	 */
-	on_disk_size = max_t(unsigned long long, i_size_read(inode),
-			valid_size);
+	/* Direct writes publish the completed size in their end_io handler. */
+	on_disk_size = i_size_read(inode);
 
 	if (ei->start_clu == EXFAT_EOF_CLUSTER)
 		on_disk_size = 0;
 	/*
-	 * valid_size on disk must reflect only confirmed data (up to i_size)
-	 * and must not exceed on_disk_size.
+	 * Truncate can publish a smaller i_size before lowering valid_size.
+	 * Never record a valid_size greater than the recorded file size.
 	 */
-	on_disk_valid_size = min_t(unsigned long long, valid_size,
-			i_size_read(inode));
+	on_disk_valid_size = min_t(unsigned long long, valid_size, on_disk_size);
 	if (ei->start_clu == EXFAT_EOF_CLUSTER)
 		on_disk_valid_size = 0;
 
@@ -114,8 +105,9 @@ int exfat_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
 	int ret;
 
-	if (unlikely(exfat_forced_shutdown(inode->i_sb)))
-		return -EIO;
+	ret = exfat_emergency_state(inode->i_sb);
+	if (unlikely(ret))
+		return ret;
 
 	mutex_lock(&EXFAT_SB(inode->i_sb)->s_lock);
 	ret = __exfat_write_inode(inode, wbc->sync_mode == WB_SYNC_ALL);
@@ -134,6 +126,9 @@ void exfat_sync_inode(struct inode *inode)
  * Input: inode, (logical) clu_offset, target allocation area
  * Output: errcode, cluster number
  * *clu = (~0), if it's unable to allocate a new cluster
+ *
+ * For !create, *count is limited to the part of the range backed by the
+ * cluster chain; the caller reports the remainder as a hole.
  */
 int exfat_map_cluster(struct inode *inode, unsigned int clu_offset,
 		unsigned int *clu, unsigned int *count, int create,
@@ -153,9 +148,15 @@ int exfat_map_cluster(struct inode *inode, unsigned int clu_offset,
 	    *count > num_clusters - clu_offset)
 		num_to_be_allocated = clu_offset + *count - num_clusters;
 
-	if (!create && (num_to_be_allocated > 0)) {
-		*clu = EXFAT_EOF_CLUSTER;
-		return 0;
+	if (!create && num_to_be_allocated > 0) {
+		if (clu_offset >= num_clusters) {
+			*clu = EXFAT_EOF_CLUSTER;
+			return 0;
+		}
+
+		/* Range straddles the chain end: map the valid prefix only. */
+		*count = num_clusters - clu_offset;
+		num_to_be_allocated = 0;
 	}
 
 	*clu = last_clu = ei->start_clu;
@@ -282,9 +283,6 @@ static int exfat_writepages(struct address_space *mapping,
 		.wbc		= wbc,
 		.ops		= &exfat_writeback_ops,
 	};
-
-	if (unlikely(exfat_forced_shutdown(mapping->host->i_sb)))
-		return -EIO;
 
 	return iomap_writepages(&wpc);
 }

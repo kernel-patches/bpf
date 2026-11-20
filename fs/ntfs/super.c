@@ -305,6 +305,8 @@ static int ntfs_reconfigure(struct fs_context *fc)
 
 	ntfs_debug("Entering with remount");
 
+	/* Mark the volume dirty first if an error made it read-only. */
+	flush_work(&vol->error_work);
 	err = sync_filesystem(sb);
 	if (err) {
 		ntfs_warning(sb, "Failed to sync the filesystem.");
@@ -434,7 +436,20 @@ void ntfs_handle_error(struct super_block *sb)
 		return;
 
 	if (vol->on_errors == ON_ERRORS_REMOUNT_RO) {
-		sb->s_flags |= SB_RDONLY;
+		if (!(sb->s_flags & SB_BORN)) {
+			/* Before SB_BORN the mounter holds s_umount. */
+			sb->s_flags |= SB_RDONLY;
+		} else {
+			/*
+			 * SB_RDONLY needs s_umount, see sb_set_emergency_ro().
+			 * NV_Errors keeps the volume from being remounted
+			 * read-write and the error work marks it dirty.
+			 */
+			NVolSetErrors(vol);
+			if (!sb_set_emergency_ro(sb))
+				return;
+			queue_work(ntfs_wq, &vol->error_work);
+		}
 		pr_crit("(device %s): Filesystem has been set read-only\n",
 			sb->s_id);
 	} else if (vol->on_errors == ON_ERRORS_PANIC) {
@@ -557,18 +572,18 @@ int ntfs_set_volume_flags(struct ntfs_volume *vol, __le16 flags)
  * last one, ntfs_put_super(), runs after evict_inodes() on a quiesced
  * filesystem, so a volume that is read-write at unmount time cannot
  * unmount clean.  A volume that is already read-only when the error is
- * recorded (errors=remount-ro flips the superblock on the first error,
- * as does an earlier remount-ro) has no persistence point left and
+ * recorded (an earlier remount-ro) has no persistence point left and
  * keeps whatever on-disk bit it had; that behaviour is unchanged.  The
  * residual window is a crash between the error and the next
- * persistence point.
+ * persistence point.  errors=remount-ro keeps the superblock read-write
+ * and ntfs_error_work() persists the error state right away.
  *
  * This is the single point that persists the in-memory error state to disk.
  * The runtime error paths only record NVolErrors() because they run under a
  * variety of ntfs locks the dirty-bit write cannot be taken under (runlist
  * locks, vol->lcnbmp_lock, vol->mftbmp_lock, mrec_locks); a sync of a
- * volume with recorded errors, a remount to read-only, or the unmount,
- * then persists the flag here.
+ * volume with recorded errors, ntfs_error_work(), a remount to read-only,
+ * or the unmount, then persists the flag here.
  *
  * A hibernated volume is not written from these persistence paths:
  * resuming Windows from a modified image corrupts it, so the dirty bit
@@ -581,6 +596,25 @@ static int ntfs_sync_volume_dirty_state(struct ntfs_volume *vol)
 	if (NVolHibernated(vol))
 		return 0;
 	return ntfs_write_volume_flags(vol, 0, VOLUME_IS_DIRTY, true);
+}
+
+/*
+ * ntfs_error_work - mark the volume dirty on disk after an error
+ * @work:	the error_work of the ntfs volume
+ *
+ * VOLUME_IS_DIRTY is set lazily and may not be on disk yet when the error hits.
+ * A work item because ntfs_error() may be called with mft records locked, and
+ * sb_start_intwrite() waits for a frozen volume to be thawed.
+ */
+static void ntfs_error_work(struct work_struct *work)
+{
+	struct ntfs_volume *vol = container_of(work, struct ntfs_volume,
+					       error_work);
+
+	sb_start_intwrite(vol->sb);
+	if (!ntfs_sync_volume_dirty_state(vol))
+		ntfs_commit_inode(vol->vol_ino);
+	sb_end_intwrite(vol->sb);
 }
 
 int ntfs_write_volume_label(struct ntfs_volume *vol, char *label)
@@ -1187,8 +1221,8 @@ static bool check_mft_mirror(struct ntfs_volume *vol)
 				folio_put(mft_folio);
 			}
 			/* Get the $MFT page. */
-			mft_folio = read_mapping_folio(vol->mft_ino->i_mapping,
-					index, NULL);
+			mft_folio = ntfs_read_metadata_folio(vol->mft_ino->i_mapping,
+							     index);
 			if (IS_ERR(mft_folio)) {
 				ntfs_error(sb, "Failed to read $MFT.");
 				return false;
@@ -1196,8 +1230,8 @@ static bool check_mft_mirror(struct ntfs_volume *vol)
 			kmft_base = kmap_local_folio(mft_folio, 0);
 			kmft = kmft_base;
 			/* Get the $MFTMirr page. */
-			mirr_folio = read_mapping_folio(vol->mftmirr_ino->i_mapping,
-					index, NULL);
+			mirr_folio = ntfs_read_metadata_folio(vol->mftmirr_ino->i_mapping,
+							      index);
 			if (IS_ERR(mirr_folio)) {
 				ntfs_error(sb, "Failed to read $MFTMirr.");
 				goto mft_unmap_out;
@@ -1395,7 +1429,7 @@ static int check_windows_hibernation_status(struct ntfs_volume *vol)
 		goto iput_out;
 	}
 
-	folio = read_mapping_folio(vi->i_mapping, 0, NULL);
+	folio = ntfs_read_metadata_folio(vi->i_mapping, 0);
 	if (IS_ERR(folio)) {
 		ntfs_error(vol->sb, "Failed to read from hiberfil.sys.");
 		ret = PTR_ERR(folio);
@@ -1460,7 +1494,7 @@ static bool load_and_init_attrdef(struct ntfs_volume *vol)
 	while (index < max_index) {
 		/* Read the attrdef table and copy it into the linear buffer. */
 read_partial_attrdef_page:
-		folio = read_mapping_folio(ino->i_mapping, index, NULL);
+		folio = ntfs_read_metadata_folio(ino->i_mapping, index);
 		if (IS_ERR(folio))
 			goto free_iput_failed;
 		addr = kmap_local_folio(folio, 0);
@@ -1526,7 +1560,7 @@ static bool load_and_init_upcase(struct ntfs_volume *vol)
 	while (index < max_index) {
 		/* Read the upcase table and copy it into the linear buffer. */
 read_partial_upcase_page:
-		folio = read_mapping_folio(ino->i_mapping, index, NULL);
+		folio = ntfs_read_metadata_folio(ino->i_mapping, index);
 		if (IS_ERR(folio))
 			goto iput_upcase_failed;
 		addr = kmap_local_folio(folio, 0);
@@ -2080,6 +2114,10 @@ static void ntfs_put_super(struct super_block *sb)
 
 	cancel_work_sync(&vol->precalc_work);
 
+	/* Let a pending error work persist the error state first. */
+	flush_work(&vol->error_work);
+	disable_work_sync(&vol->error_work);
+
 	/*
 	 * Commit all inodes while they are still open in case some of them
 	 * cause others to be dirtied.
@@ -2232,6 +2270,11 @@ int ntfs_force_shutdown(struct super_block *sb, u32 flags)
 
 	if (NVolShutdown(vol))
 		return 0;
+
+	/* After an error there is nothing to flush and freezing fails. */
+	if ((flags == FS_SHUTDOWN_FLAGS_DEFAULT ||
+	     flags == FS_SHUTDOWN_FLAGS_LOGFLUSH) && sb_emergency_ro(sb))
+		flags = FS_SHUTDOWN_FLAGS_NOLOGFLUSH;
 
 	switch (flags) {
 	case FS_SHUTDOWN_FLAGS_DEFAULT:
@@ -2998,6 +3041,7 @@ static int ntfs_init_fs_context(struct fs_context *fc)
 	init_rwsem(&vol->mftbmp_lock);
 	init_rwsem(&vol->lcnbmp_lock);
 	mutex_init(&vol->volume_label_lock);
+	INIT_WORK(&vol->error_work, ntfs_error_work);
 
 	fc->s_fs_info = vol;
 	fc->ops = &ntfs_context_ops;

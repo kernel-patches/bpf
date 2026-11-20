@@ -291,7 +291,7 @@ int btrfs_fileattr_set(const struct mnt_idmap *idmap,
 	u32 inode_flags;
 	bool prop_set = false;
 
-	if (btrfs_root_readonly(root))
+	if (btrfs_root_readonly(root) || btrfs_fs_rdonly(fs_info))
 		return -EROFS;
 
 	if (fileattr_has_fsx(fa))
@@ -2477,7 +2477,7 @@ static int btrfs_ioctl_defrag(struct file *file, void __user *argp)
 	if (ret)
 		return ret;
 
-	if (btrfs_root_readonly(root)) {
+	if (btrfs_root_readonly(root) || btrfs_fs_rdonly(root->fs_info)) {
 		ret = -EROFS;
 		goto out;
 	}
@@ -2497,7 +2497,7 @@ static int btrfs_ioctl_defrag(struct file *file, void __user *argp)
 		 * running and allows defrag on files open in read-only mode.
 		 */
 		if (!capable(CAP_SYS_ADMIN) &&
-		    inode_permission(&nop_mnt_idmap, inode, MAY_WRITE)) {
+		    inode_permission(file_mnt_idmap(file), inode, MAY_WRITE)) {
 			ret = -EPERM;
 			goto out;
 		}
@@ -3215,7 +3215,7 @@ static long btrfs_ioctl_dev_replace(struct btrfs_fs_info *fs_info,
 
 	switch (p->cmd) {
 	case BTRFS_IOCTL_DEV_REPLACE_CMD_START:
-		if (sb_rdonly(fs_info->sb))
+		if (btrfs_fs_rdonly(fs_info))
 			return -EROFS;
 		if (!btrfs_exclop_start(fs_info, BTRFS_EXCLOP_DEV_REPLACE)) {
 			ret = BTRFS_ERROR_DEV_EXCL_RUN_IN_PROGRESS;
@@ -3310,6 +3310,7 @@ static long btrfs_ioctl_logical_to_ino(struct btrfs_fs_info *fs_info,
 	struct btrfs_ioctl_logical_ino_args AUTO_KFREE(loi);
 	struct btrfs_data_container AUTO_KVFREE(inodes);
 	bool ignore_offset;
+	bool search_commit_root;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -3320,6 +3321,7 @@ static long btrfs_ioctl_logical_to_ino(struct btrfs_fs_info *fs_info,
 
 	if (version == 1) {
 		ignore_offset = false;
+		search_commit_root = false;
 		size = min_t(u32, loi->size, SZ_64K);
 	} else {
 		/* All reserved bits must be 0 for now */
@@ -3327,10 +3329,12 @@ static long btrfs_ioctl_logical_to_ino(struct btrfs_fs_info *fs_info,
 			return -EINVAL;
 
 		/* Only accept flags we have defined so far */
-		if (loi->flags & ~(BTRFS_LOGICAL_INO_ARGS_IGNORE_OFFSET))
+		if (loi->flags & ~(BTRFS_LOGICAL_INO_ARGS_IGNORE_OFFSET |
+				   BTRFS_LOGICAL_INO_ARGS_COMMIT_ROOT))
 			return -EINVAL;
 
 		ignore_offset = loi->flags & BTRFS_LOGICAL_INO_ARGS_IGNORE_OFFSET;
+		search_commit_root = loi->flags & BTRFS_LOGICAL_INO_ARGS_COMMIT_ROOT;
 		size = min_t(u32, loi->size, SZ_16M);
 	}
 
@@ -3338,7 +3342,8 @@ static long btrfs_ioctl_logical_to_ino(struct btrfs_fs_info *fs_info,
 	if (IS_ERR(inodes))
 		return PTR_ERR(inodes);
 
-	ret = iterate_inodes_from_logical(loi->logical, fs_info, inodes, ignore_offset);
+	ret = iterate_inodes_from_logical(loi->logical, fs_info, inodes,
+					  ignore_offset, search_commit_root);
 	if (ret == -EINVAL)
 		return -ENOENT;
 	if (ret < 0)
@@ -3951,7 +3956,7 @@ static long _btrfs_ioctl_set_received_subvol(struct file *file,
 		goto out;
 	}
 
-	if (btrfs_root_readonly(root)) {
+	if (btrfs_root_readonly(root) || btrfs_fs_rdonly(fs_info)) {
 		ret = -EROFS;
 		goto out;
 	}
@@ -5051,6 +5056,7 @@ static int btrfs_ioctl_subvol_sync(struct btrfs_fs_info *fs_info, void __user *a
 	struct btrfs_ioctl_subvol_wait args = { 0 };
 	signed long sched_ret;
 	int refs;
+	int ret;
 	u64 root_flags;
 	bool wait_for_deletion = false;
 	bool found = false;
@@ -5121,8 +5127,9 @@ static int btrfs_ioctl_subvol_sync(struct btrfs_fs_info *fs_info, void __user *a
 	}
 
 	/* 32bit limitation: fs_roots_radix key is not wide enough. */
-	if (sizeof(unsigned long) != sizeof(u64) && args.subvolid > U32_MAX)
-		return -EOVERFLOW;
+	ret = btrfs_check_subvolid(fs_info, args.subvolid);
+	if (ret < 0)
+		return ret;
 
 	while (1) {
 		/* Wait for the specific one. */
@@ -5192,6 +5199,11 @@ static int btrfs_ioctl_shutdown(struct btrfs_fs_info *fs_info, unsigned long arg
 
 	if (btrfs_is_shutdown(fs_info))
 		return 0;
+
+	/* After an error there is nothing to flush and freezing fails. */
+	if (flags != BTRFS_SHUTDOWN_FLAGS_NOLOGFLUSH &&
+	    sb_emergency_ro(fs_info->sb))
+		flags = BTRFS_SHUTDOWN_FLAGS_NOLOGFLUSH;
 
 	switch (flags) {
 	case BTRFS_SHUTDOWN_FLAGS_LOGFLUSH:

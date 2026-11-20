@@ -124,6 +124,9 @@ static int ksmbd_vfs_path_lookup(struct ksmbd_share_config *share_conf,
 void ksmbd_vfs_query_maximal_access(const struct mnt_idmap *idmap,
 				   struct dentry *dentry, __le32 *daccess)
 {
+	struct dentry *parent;
+	struct inode *parent_inode;
+
 	*daccess = cpu_to_le32(FILE_READ_ATTRIBUTES | READ_CONTROL |
 			       SYNCHRONIZE);
 
@@ -139,8 +142,12 @@ void ksmbd_vfs_query_maximal_access(const struct mnt_idmap *idmap,
 	if (!inode_permission(idmap, d_inode(dentry), MAY_OPEN | MAY_EXEC))
 		*daccess |= FILE_EXECUTE_LE;
 
-	if (!inode_permission(idmap, d_inode(dentry->d_parent), MAY_EXEC | MAY_WRITE))
+	parent = dget_parent(dentry);
+	parent_inode = d_inode(parent);
+	if (parent_inode &&
+	    !inode_permission(idmap, parent_inode, MAY_EXEC | MAY_WRITE))
 		*daccess |= FILE_DELETE_LE;
+	dput(parent);
 }
 
 /**
@@ -731,9 +738,16 @@ int ksmbd_vfs_check_rename_share(struct ksmbd_work *work,
 				 const struct path *old_path)
 {
 	struct ksmbd_file *parent_fp;
+	struct dentry *parent;
 	int err = 0;
 
-	parent_fp = ksmbd_lookup_fd_inode(old_path->dentry->d_parent);
+	parent = dget_parent(old_path->dentry);
+	if (!d_inode(parent)) {
+		dput(parent);
+		return 0;
+	}
+	parent_fp = ksmbd_lookup_fd_inode(parent);
+	dput(parent);
 	if (!parent_fp)
 		return 0;
 
@@ -1630,13 +1644,15 @@ static struct xattr_smb_acl *ksmbd_vfs_make_xattr_posix_acl(const struct mnt_idm
 
 	posix_acls = get_inode_acl(inode, acl_type);
 	if (IS_ERR_OR_NULL(posix_acls))
-		return NULL;
+		return ERR_CAST(posix_acls);
 
 	smb_acl = kzalloc(sizeof(struct xattr_smb_acl) +
 			  sizeof(struct xattr_acl_entry) * posix_acls->a_count,
 			  KSMBD_DEFAULT_GFP);
-	if (!smb_acl)
+	if (!smb_acl) {
+		smb_acl = ERR_PTR(-ENOMEM);
 		goto out;
+	}
 
 	smb_acl->count = posix_acls->a_count;
 	pa_entry = posix_acls->a_entries;
@@ -1683,8 +1699,7 @@ out:
 int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 			   const struct mnt_idmap *idmap,
 			   const struct path *path,
-			   struct smb_ntsd *pntsd, int len,
-			   bool get_write)
+			   const struct smb_ntsd *pntsd, int len)
 {
 	int rc;
 	struct ndr sd_ndr = {0}, acl_ndr = {0};
@@ -1692,6 +1707,15 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 	struct xattr_smb_acl *smb_acl, *def_smb_acl = NULL;
 	struct dentry *dentry = path->dentry;
 	struct inode *inode = d_inode(dentry);
+	struct smb_ntsd *sd;
+
+	if (len < (int)sizeof(struct smb_ntsd))
+		return -EINVAL;
+
+	/* Shift the offsets in a copy and leave the caller's SD as it is */
+	sd = kmemdup(pntsd, len, KSMBD_DEFAULT_GFP);
+	if (!sd)
+		return -ENOMEM;
 
 	acl.version = 4;
 	acl.hash_type = XATTR_SD_HASH_TYPE_SHA256;
@@ -1700,23 +1724,29 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 	memcpy(acl.desc, "posix_acl", 9);
 	acl.desc_len = 10;
 
-	pntsd->osidoffset =
-		cpu_to_le32(le32_to_cpu(pntsd->osidoffset) + NDR_NTSD_OFFSETOF);
-	pntsd->gsidoffset =
-		cpu_to_le32(le32_to_cpu(pntsd->gsidoffset) + NDR_NTSD_OFFSETOF);
-	pntsd->dacloffset =
-		cpu_to_le32(le32_to_cpu(pntsd->dacloffset) + NDR_NTSD_OFFSETOF);
+	sd->osidoffset =
+		cpu_to_le32(le32_to_cpu(sd->osidoffset) + NDR_NTSD_OFFSETOF);
+	sd->gsidoffset =
+		cpu_to_le32(le32_to_cpu(sd->gsidoffset) + NDR_NTSD_OFFSETOF);
+	sd->dacloffset =
+		cpu_to_le32(le32_to_cpu(sd->dacloffset) + NDR_NTSD_OFFSETOF);
 
-	acl.sd_buf = (char *)pntsd;
+	acl.sd_buf = sd;
 	acl.sd_size = len;
 
 	sha256(acl.sd_buf, acl.sd_size, acl.hash);
 
+	/* A POSIX ACL that cannot be read is hashed as none, as before */
 	smb_acl = ksmbd_vfs_make_xattr_posix_acl(idmap, inode,
 						 ACL_TYPE_ACCESS);
-	if (S_ISDIR(inode->i_mode))
+	if (IS_ERR(smb_acl))
+		smb_acl = NULL;
+	if (S_ISDIR(inode->i_mode)) {
 		def_smb_acl = ksmbd_vfs_make_xattr_posix_acl(idmap, inode,
 							     ACL_TYPE_DEFAULT);
+		if (IS_ERR(def_smb_acl))
+			def_smb_acl = NULL;
+	}
 
 	rc = ndr_encode_posix_acl(&acl_ndr, idmap, inode,
 				  smb_acl, def_smb_acl);
@@ -1735,15 +1765,17 @@ int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 
 	rc = ksmbd_vfs_setxattr(idmap, path,
 				XATTR_NAME_SD, sd_ndr.data,
-				sd_ndr.offset, 0, get_write);
+				sd_ndr.offset, 0, true);
 	if (rc < 0)
-		pr_err("Failed to store XATTR ntacl :%d\n", rc);
+		pr_warn_ratelimited("failed to store the security descriptor of %pd: %d\n",
+				    dentry, rc);
 
 out:
 	kfree(sd_ndr.data);
 	kfree(acl_ndr.data);
 	kfree(smb_acl);
 	kfree(def_smb_acl);
+	kfree(sd);
 	return rc;
 }
 EXPORT_SYMBOL_IF_KUNIT(ksmbd_vfs_set_sd_xattr);
@@ -1770,11 +1802,23 @@ int ksmbd_vfs_get_sd_xattr(struct ksmbd_conn *conn,
 	if (rc)
 		goto out_free;
 
+	/* ACL read failures must not masquerade as a stale SD */
 	smb_acl = ksmbd_vfs_make_xattr_posix_acl(idmap, inode,
 						 ACL_TYPE_ACCESS);
-	if (S_ISDIR(inode->i_mode))
+	if (IS_ERR(smb_acl)) {
+		rc = PTR_ERR(smb_acl) == -ENOMEM ? -ENOMEM : -EIO;
+		smb_acl = NULL;
+		goto out_free;
+	}
+	if (S_ISDIR(inode->i_mode)) {
 		def_smb_acl = ksmbd_vfs_make_xattr_posix_acl(idmap, inode,
 							     ACL_TYPE_DEFAULT);
+		if (IS_ERR(def_smb_acl)) {
+			rc = PTR_ERR(def_smb_acl) == -ENOMEM ? -ENOMEM : -EIO;
+			def_smb_acl = NULL;
+			goto out_free;
+		}
+	}
 
 	rc = ndr_encode_posix_acl(&acl_ndr, idmap, inode, smb_acl,
 				  def_smb_acl);
@@ -1786,7 +1830,8 @@ int ksmbd_vfs_get_sd_xattr(struct ksmbd_conn *conn,
 	sha256(acl_ndr.data, acl_ndr.offset, cmp_hash);
 
 	if (memcmp(cmp_hash, acl.posix_acl_hash, XATTR_SD_HASH_SIZE)) {
-		pr_err("hash value diff\n");
+		ksmbd_debug(SMB, "stored SD of %pd is stale, not used\n",
+			    dentry);
 		rc = -EINVAL;
 		goto out_free;
 	}
@@ -1914,7 +1959,10 @@ int ksmbd_vfs_fill_dentry_attrs(struct ksmbd_work *work,
 	if (rc)
 		return rc;
 
-	time = ksmbd_UnixTimeToNT(ksmbd_kstat->kstat->ctime);
+	if (ksmbd_kstat->kstat->result_mask & STATX_BTIME)
+		time = ksmbd_UnixTimeToNT(ksmbd_kstat->kstat->btime);
+	else
+		time = ksmbd_UnixTimeToNT(ksmbd_kstat->kstat->ctime);
 	ksmbd_kstat->create_time = time;
 
 	/*
@@ -1933,7 +1981,13 @@ int ksmbd_vfs_fill_dentry_attrs(struct ksmbd_work *work,
 		rc = ksmbd_vfs_get_dos_attrib_xattr(idmap, dentry, &da);
 		if (rc > 0) {
 			ksmbd_kstat->file_attributes = cpu_to_le32(da.attr);
-			ksmbd_kstat->create_time = da.create_time;
+			/*
+			 * Older ksmbd writers cleared XATTR_DOSINFO_CREATE_TIME on sparse
+			 * or compression updates. Fall back to using a non-zero stored time
+			 * for backwards compatibility.
+			 */
+			if ((da.flags & XATTR_DOSINFO_CREATE_TIME) || da.create_time > 0)
+				ksmbd_kstat->create_time = da.create_time;
 		} else {
 			ksmbd_debug(VFS, "fail to load dos attribute.\n");
 		}
@@ -2331,6 +2385,10 @@ int ksmbd_vfs_set_init_posix_acl(const struct mnt_idmap *idmap,
 	}
 	posix_state_to_acl(&acl_state, acls->a_entries);
 
+	rc = mnt_want_write(path->mnt);
+	if (rc)
+		goto out;
+
 	rc = set_posix_acl(idmap, dentry, ACL_TYPE_ACCESS, acls);
 	if (rc < 0)
 		ksmbd_debug(SMB, "Set posix acl(ACL_TYPE_ACCESS) failed, rc : %d\n",
@@ -2342,7 +2400,9 @@ int ksmbd_vfs_set_init_posix_acl(const struct mnt_idmap *idmap,
 			ksmbd_debug(SMB, "Set posix acl(ACL_TYPE_DEFAULT) failed, rc : %d\n",
 				    rc);
 	}
+	mnt_drop_write(path->mnt);
 
+out:
 	free_acl_state(&acl_state);
 	posix_acl_release(acls);
 	return rc;
@@ -2472,10 +2532,15 @@ update_fattr:
 		rc = ksmbd_vfs_get_dos_attrib_xattr(idmap, dentry, &da);
 		if (rc <= 0) {
 			da.version = 4;
-			da.itime = fp->itime;
-			da.create_time = fp->create_time;
-			da.flags = XATTR_DOSINFO_CREATE_TIME |
-				XATTR_DOSINFO_ITIME;
+			da.flags = 0;
+		} else {
+			/*
+			 * Heal the xattr damaged by older ksmbd writers which
+			 * wrongly cleared XATTR_DOSINFO_CREATE_TIME on compression
+			 * updates.
+			 */
+			if (da.create_time > 0)
+				da.flags |= XATTR_DOSINFO_CREATE_TIME;
 		}
 
 		da.attr = le32_to_cpu(fp->f_ci->m_fattr);

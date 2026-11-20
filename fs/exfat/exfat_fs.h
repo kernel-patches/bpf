@@ -303,7 +303,7 @@ struct exfat_inode_info {
 	 * concurrent update can never regress the value or tear on 32-bit.
 	 */
 	atomic64_t valid_size;
-	/* block-aligned size zeroed in the page cache (>= valid_size) */
+	/* Initialized cache prefix, including block tails; may lag after DIO. */
 	atomic64_t zeroed_size;
 	/* hash by i_location */
 	struct hlist_node i_hash_fat;
@@ -373,6 +373,16 @@ static inline bool exfat_advance_zeroed_size(struct exfat_inode_info *ei,
 static inline int exfat_forced_shutdown(struct super_block *sb)
 {
 	return test_bit(EXFAT_FLAGS_SHUTDOWN, &EXFAT_SB(sb)->s_exfat_flags);
+}
+
+/* -EIO after a forced shutdown, -EROFS after an error with errors=remount-ro */
+static inline int exfat_emergency_state(struct super_block *sb)
+{
+	if (unlikely(exfat_forced_shutdown(sb)))
+		return -EIO;
+	if (unlikely(sb_emergency_ro(sb)))
+		return -EROFS;
+	return 0;
 }
 
 /*

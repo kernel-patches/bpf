@@ -137,10 +137,9 @@ static void gfs2_qd_dispose(struct gfs2_quota_data *qd)
 
 static void gfs2_qd_list_dispose(struct list_head *list)
 {
-	struct gfs2_quota_data *qd;
+	struct gfs2_quota_data *qd, *tmp;
 
-	while (!list_empty(list)) {
-		qd = list_first_entry(list, struct gfs2_quota_data, qd_lru);
+	list_for_each_entry_safe(qd, tmp, list, qd_lru) {
 		list_del(&qd->qd_lru);
 
 		gfs2_qd_dispose(qd);
@@ -1335,7 +1334,7 @@ int gfs2_quota_sync(struct super_block *sb, int type)
 	u64 sync_gen;
 	int error = 0;
 
-	if (sb_rdonly(sdp->sd_vfs))
+	if (sb_rdonly(sdp->sd_vfs) || gfs2_withdrawn(sdp))
 		return 0;
 
 	qda = kzalloc_objs(struct gfs2_quota_data *, max_qd);

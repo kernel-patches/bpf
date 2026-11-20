@@ -312,6 +312,12 @@ static int ubifs_write_inode(struct inode *inode, struct writeback_control *wbc)
 		return 0;
 	}
 
+	/* Nothing gets written after an error, drop the change. */
+	if (unlikely(c->ro_error)) {
+		err = -EROFS;
+		goto out;
+	}
+
 	/*
 	 * As an optimization, do not write orphan inodes to the media just
 	 * because this is not needed.
@@ -327,6 +333,7 @@ static int ubifs_write_inode(struct inode *inode, struct writeback_control *wbc)
 			err = dbg_check_inode_size(c, inode, ui->ui_size);
 	}
 
+out:
 	ui->dirty = 0;
 	mutex_unlock(&ui->ui_mutex);
 	ubifs_release_dirty_inode_budget(c, ui);
@@ -1837,6 +1844,20 @@ static void ubifs_remount_ro(struct ubifs_info *c)
 		c->bgt = NULL;
 	}
 
+	/*
+	 * Nothing is written after an error and nothing was synced for the
+	 * remount, so writeback may still be running. Leave c->ro_mount and
+	 * the buffers alone like every error did so far, ubifs_put_super()
+	 * frees them.
+	 */
+	if (c->ro_error) {
+		/* Syncing the write-buffers would have canceled them. */
+		for (i = 0; i < c->jhead_cnt; i++)
+			hrtimer_cancel(&c->jheads[i].wbuf.timer);
+		mutex_unlock(&c->umount_mutex);
+		return;
+	}
+
 	dbg_save_space_info(c);
 
 	for (i = 0; i < c->jhead_cnt; i++) {
@@ -1977,10 +1998,7 @@ static int ubifs_reconfigure(struct fs_context *fc)
 		if (err)
 			return err;
 	} else if (!c->ro_mount && (fc->sb_flags & SB_RDONLY)) {
-		if (c->ro_error) {
-			ubifs_msg(c, "cannot re-mount R/O due to prior errors");
-			return -EROFS;
-		}
+		/* After an error this only stops the background work. */
 		ubifs_remount_ro(c);
 	}
 
@@ -1994,7 +2012,8 @@ static int ubifs_reconfigure(struct fs_context *fc)
 		mutex_unlock(&c->bu_mutex);
 	}
 
-	if (!c->need_recovery)
+	/* Only valid without a media failure, see ubifs_put_super(). */
+	if (!c->need_recovery && !c->ro_error)
 		ubifs_assert(c, c->lst.taken_empty_lebs > 0);
 
 	return 0;

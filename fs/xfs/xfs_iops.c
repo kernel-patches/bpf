@@ -416,10 +416,10 @@ xfs_vn_unlink(
 	/*
 	 * With unlink, the VFS makes the dentry "negative": no inode,
 	 * but still hashed. This is incompatible with case-insensitive
-	 * mode, so invalidate (unhash) the dentry in CI-mode.
+	 * mode, so unhash the dentry in CI-mode.
 	 */
 	if (xfs_has_asciici(XFS_M(dir->i_sb)))
-		d_invalidate(dentry);
+		d_drop(dentry);
 	return 0;
 }
 
@@ -1371,6 +1371,10 @@ xfs_inode_supports_dax(
 
 	/* Block size must match page size */
 	if (mp->m_sb.sb_blocksize != PAGE_SIZE)
+		return false;
+
+	/* The zoned code does not support DAX. */
+	if (xfs_is_zoned_inode(ip))
 		return false;
 
 	/* Device has to support DAX too. */

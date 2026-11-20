@@ -1712,6 +1712,18 @@ static int ext4_xattr_set_entry(struct ext4_xattr_info *i,
 		}
 	}
 
+	if (!s->not_found && here->e_value_size && !here->e_value_inum) {
+		size_t offs = le16_to_cpu(here->e_value_offs);
+
+		if (offs < min_offs) {
+			EXT4_ERROR_INODE(inode,
+					 "corrupted xattr: value offset %zu < min_offs %zu",
+					 offs, min_offs);
+			ret = -EFSCORRUPTED;
+			goto out;
+		}
+	}
+
 	/*
 	 * Getting access to old and new ea inodes is subject to failures.
 	 * Finish that work before doing any modifications to the xattr data.
@@ -2113,6 +2125,24 @@ inserted:
 			mb_cache_entry_touch(ea_block_cache, ce);
 			mb_cache_entry_put(ea_block_cache, ce);
 			ce = NULL;
+			if (ea_inode && !(bs->bh && s->base == bs->bh->b_data)) {
+				/*
+				 * The cached block already owns its EA inode
+				 * references.  For an in-place update the lookup
+				 * reference belongs to the old block and is
+				 * dropped when that block is released.
+				 */
+				error = ext4_xattr_inode_dec_ref(handle,
+								 ea_inode);
+				if (error) {
+					EXT4_ERROR_INODE(inode,
+							 "dec ref error=%d",
+							 error);
+					ext4_put_ea_inode(ea_inode);
+					ea_inode = NULL;
+					goto cleanup;
+				}
+			}
 		} else if (bs->bh && s->base == bs->bh->b_data) {
 			/* We were modifying this block in-place. */
 			ea_bdebug(bs->bh, "keeping this block");
@@ -2274,6 +2304,14 @@ int ext4_xattr_ibody_set(handle_t *handle, struct inode *inode,
 		if (IS_ERR(ea_inode))
 			return PTR_ERR(ea_inode);
 	}
+
+	/*
+	 * Make sure xattr space is properly initialized so that
+	 * IS_LAST_ENTRY() returns true for its first entry
+	 */
+	if (!ext4_test_inode_state(inode, EXT4_STATE_XATTR))
+		*(__u32 *)s->first = 0;
+
 	error = ext4_xattr_set_entry(i, s, handle, inode, ea_inode,
 				     false /* is_block */);
 	if (error) {

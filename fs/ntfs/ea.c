@@ -912,8 +912,9 @@ static int ntfs_setxattr(const struct xattr_handler *handler,
 
 	if (ntfs_inode_is_named_stream(ni))
 		return -EOPNOTSUPP;
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	err = ntfs_emergency_state(ni->vol);
+	if (err)
+		return err;
 
 	/* Only fileattr_set may change the flags and their cached state. */
 	if (!strcmp(name, "$LINUXFLAGS"))
@@ -1010,20 +1011,17 @@ const struct xattr_handler * const ntfs_xattr_handlers[] = {
 // clang-format on
 
 #ifdef CONFIG_NTFS_FS_POSIX_ACL
-struct posix_acl *ntfs_get_acl(const struct mnt_idmap *idmap, struct dentry *dentry,
-			       int type)
+struct posix_acl *ntfs_get_acl(struct inode *inode, int type, bool rcu)
 {
-	struct inode *inode = d_inode(dentry);
 	struct ntfs_inode *ni = NTFS_I(inode);
 	const char *name;
 	size_t name_len;
 	struct posix_acl *acl;
 	int err;
-	void *buf;
+	void *buf = NULL;
 
-	buf = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (!buf)
-		return ERR_PTR(-ENOMEM);
+	if (rcu)
+		return ERR_PTR(-ECHILD);
 
 	/* Possible values of 'type' was already checked above. */
 	if (type == ACL_TYPE_ACCESS) {
@@ -1035,7 +1033,14 @@ struct posix_acl *ntfs_get_acl(const struct mnt_idmap *idmap, struct dentry *den
 	}
 
 	mutex_lock(&ni->mrec_lock);
-	err = ntfs_get_ea(inode, name, name_len, buf, PATH_MAX);
+	err = ntfs_get_ea(inode, name, name_len, NULL, 0);
+	if (err > 0) {
+		buf = kmalloc(err, GFP_NOFS);
+		if (!buf)
+			err = -ENOMEM;
+		else
+			err = ntfs_get_ea(inode, name, name_len, buf, err);
+	}
 	mutex_unlock(&ni->mrec_lock);
 
 	/* Translate extended attribute to acl. */
@@ -1045,9 +1050,6 @@ struct posix_acl *ntfs_get_acl(const struct mnt_idmap *idmap, struct dentry *den
 		acl = NULL;
 	else
 		acl = ERR_PTR(err);
-
-	if (!IS_ERR(acl))
-		set_cached_acl(inode, type, acl);
 
 	kfree(buf);
 
@@ -1198,6 +1200,11 @@ out:
 int ntfs_set_acl(const struct mnt_idmap *idmap, struct dentry *dentry,
 		 struct posix_acl *acl, int type)
 {
+	int err;
+
+	err = ntfs_emergency_state(NTFS_I(d_inode(dentry))->vol);
+	if (err)
+		return err;
 	return ntfs_set_acl_ex(idmap, d_inode(dentry), acl, type, false);
 }
 

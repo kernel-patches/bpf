@@ -916,7 +916,7 @@ xfs_statfs_data(
 		xfs_sum_freecounter(mp, XC_FREE_BLOCKS);
 
 	/* make sure st->f_bfree does not underflow */
-	st->f_bfree = max(0LL,
+	st->f_bfree = max_t(int64_t, 0,
 		fdblocks - xfs_freecounter_unavailable(mp, XC_FREE_BLOCKS));
 
 	/*
@@ -2041,6 +2041,10 @@ xfs_remount_rw(
 	struct xfs_sb		*sbp = &mp->m_sb;
 	int error;
 
+	/* Nothing can be written anymore after a shutdown. */
+	if (xfs_is_shutdown(mp))
+		return -EIO;
+
 	if (mp->m_logdev_targp && mp->m_logdev_targp != mp->m_ddev_targp &&
 	    xfs_readonly_buftarg(mp->m_logdev_targp)) {
 		xfs_warn(mp,
@@ -2115,9 +2119,12 @@ xfs_remount_ro(
 	};
 	int			error;
 
-	/* Flush all the dirty data to disk. */
+	/*
+	 * Flush all the dirty data to disk. That fails after a shutdown, also
+	 * one the flush itself caused, but going read-only still has to work.
+	 */
 	error = sync_filesystem(mp->m_super);
-	if (error)
+	if (error && !xfs_is_shutdown(mp))
 		return error;
 
 	/*
@@ -2133,7 +2140,7 @@ xfs_remount_ro(
 	 * cached inode, so this requires a synchronous cache scan.
 	 */
 	error = xfs_blockgc_free_space(mp, &icw);
-	if (error) {
+	if (error && !xfs_is_shutdown(mp)) {
 		xfs_force_shutdown(mp, SHUTDOWN_CORRUPT_INCORE);
 		return error;
 	}
@@ -2668,9 +2675,15 @@ init_xfs_fs(void)
 	if (error)
 		goto out_destroy_wq;
 
+	xfsstats.xs_stats = alloc_percpu(struct xfsstats);
+	if (!xfsstats.xs_stats) {
+		error = -ENOMEM;
+		goto out_mru_cache_uninit;
+	}
+
 	error = xfs_init_procfs();
 	if (error)
-		goto out_mru_cache_uninit;
+		goto out_free_stats;
 
 	error = xfs_sysctl_register();
 	if (error)
@@ -2686,16 +2699,10 @@ init_xfs_fs(void)
 
 	xfsstats.xs_kobj.kobject.kset = xfs_kset;
 
-	xfsstats.xs_stats = alloc_percpu(struct xfsstats);
-	if (!xfsstats.xs_stats) {
-		error = -ENOMEM;
-		goto out_kset_unregister;
-	}
-
 	error = xfs_sysfs_init(&xfsstats.xs_kobj, &xfs_stats_ktype, NULL,
 			       "stats");
 	if (error)
-		goto out_free_stats;
+		goto out_kset_unregister;
 
 	error = xchk_global_stats_setup(xfs_debugfs);
 	if (error)
@@ -2727,8 +2734,6 @@ init_xfs_fs(void)
 	xchk_global_stats_teardown();
  out_remove_stats_kobj:
 	xfs_sysfs_del(&xfsstats.xs_kobj);
- out_free_stats:
-	free_percpu(xfsstats.xs_stats);
  out_kset_unregister:
 	kset_unregister(xfs_kset);
  out_debugfs_unregister:
@@ -2736,6 +2741,8 @@ init_xfs_fs(void)
 	xfs_sysctl_unregister();
  out_cleanup_procfs:
 	xfs_cleanup_procfs();
+ out_free_stats:
+	free_percpu(xfsstats.xs_stats);
  out_mru_cache_uninit:
 	xfs_mru_cache_uninit();
  out_destroy_wq:
@@ -2756,11 +2763,11 @@ exit_xfs_fs(void)
 #endif
 	xchk_global_stats_teardown();
 	xfs_sysfs_del(&xfsstats.xs_kobj);
-	free_percpu(xfsstats.xs_stats);
 	kset_unregister(xfs_kset);
 	debugfs_remove(xfs_debugfs);
 	xfs_sysctl_unregister();
 	xfs_cleanup_procfs();
+	free_percpu(xfsstats.xs_stats);
 	xfs_mru_cache_uninit();
 	xfs_destroy_workqueues();
 	xfs_destroy_caches();

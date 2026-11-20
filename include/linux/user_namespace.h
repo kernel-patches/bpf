@@ -86,8 +86,9 @@ struct user_namespace {
 	kgid_t			group;
 	struct ns_common	ns;
 	unsigned long		flags;
-	/* parent_could_setfcap: true if the creator if this ns had CAP_SETFCAP
-	 * in its effective capability set at the child ns creation time. */
+	/* parent_could_setfcap: true if the creator of this ns could use
+	 * CAP_SETFCAP in the parent ns at the child ns creation time.
+	 */
 	bool			parent_could_setfcap;
 
 #ifdef CONFIG_KEYS

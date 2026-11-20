@@ -151,7 +151,7 @@ int ext4_find_inline_data_nolock(struct inode *inode)
 	};
 	int error;
 
-	if (EXT4_I(inode)->i_extra_isize == 0)
+	if (!EXT4_INODE_HAS_XATTR_SPACE(inode))
 		return 0;
 
 	error = ext4_get_inode_loc(inode, &is.iloc);
@@ -187,6 +187,8 @@ static int ext4_read_inline_data(struct inode *inode, void *buffer,
 	struct ext4_xattr_ibody_header *header;
 	int cp_len = 0;
 	struct ext4_inode *raw_inode;
+	void *end, *p;
+	u16 offset;
 
 	if (!len)
 		return 0;
@@ -205,13 +207,21 @@ static int ext4_read_inline_data(struct inode *inode, void *buffer,
 		goto out;
 
 	header = IHDR(inode, raw_inode);
+	end = ITAIL(inode, raw_inode);
 	entry = (struct ext4_xattr_entry *)((void *)raw_inode +
 					    EXT4_I(inode)->i_inline_off);
 	len = min_t(unsigned int, len,
 		    (unsigned int)le32_to_cpu(entry->e_value_size));
 
-	memcpy(buffer,
-	       (void *)IFIRST(header) + le16_to_cpu(entry->e_value_offs), len);
+	offset = le16_to_cpu(entry->e_value_offs);
+	p = (void *)IFIRST(header) + offset;
+
+	if (unlikely(p + len > end)) {
+		EXT4_ERROR_INODE(inode, "corrupt inline xattr entry");
+		return -EFSCORRUPTED;
+	}
+
+	memcpy(buffer, p, len);
 	cp_len += len;
 
 out:
@@ -461,6 +471,12 @@ static int ext4_destroy_inline_data_nolock(handle_t *handle,
 	error = ext4_xattr_ibody_find(inode, &i, &is);
 	if (error)
 		goto out;
+	if (is.s.not_found) {
+		EXT4_ERROR_INODE(inode,
+				 "corrupted inline data without system.data xattr");
+		error = -EFSCORRUPTED;
+		goto out;
+	}
 
 	BUFFER_TRACE(is.iloc.bh, "get_write_access");
 	error = ext4_journal_get_write_access(handle, inode->i_sb, is.iloc.bh,
@@ -1905,8 +1921,12 @@ int ext4_inline_data_truncate(struct inode *inode, int *has_inline)
 		 * the extent status cache must be cleared to avoid leaving
 		 * behind stale delayed allocated extent entries
 		 */
-		if (!ext4_test_inode_state(inode, EXT4_STATE_MAY_INLINE_DATA))
-			ext4_es_remove_extent(inode, 0, EXT_MAX_BLOCKS);
+		if (!ext4_test_inode_state(inode, EXT4_STATE_MAY_INLINE_DATA)) {
+			ext4_lblk_t lblk = EXT4_B_TO_LBLK(inode, i_size);
+
+			ext4_es_remove_extent(inode, lblk,
+					      EXT_MAX_BLOCKS - lblk);
+		}
 
 		/* Clear the content in the xattr space. */
 		if (inline_size > EXT4_MIN_INLINE_DATA_SIZE) {

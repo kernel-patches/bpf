@@ -15,7 +15,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/page_idle.h>
 #include <linux/kernel-page-flags.h>
-#include <linux/uaccess.h>
+#include <linux/uio.h>
 #include "internal.h"
 
 #define KPMSIZE sizeof(u64)
@@ -57,14 +57,13 @@ static u64 get_kpage_count(const struct page *page)
 	return ret;
 }
 
-static ssize_t kpage_read(struct file *file, char __user *buf,
-		size_t count, loff_t *ppos,
+static ssize_t kpage_read(struct kiocb *iocb, struct iov_iter *to,
 		enum kpage_operation op)
 {
 	const unsigned long max_dump_pfn = get_max_dump_pfn();
-	u64 __user *out = (u64 __user *)buf;
+	size_t count = iov_iter_count(to), done = 0;
 	struct page *page;
-	unsigned long src = *ppos;
+	unsigned long src = iocb->ki_pos;
 	unsigned long pfn;
 	ssize_t ret = 0;
 	u64 info;
@@ -101,21 +100,21 @@ static ssize_t kpage_read(struct file *file, char __user *buf,
 		} else
 			info = 0;
 
-		if (put_user(info, out)) {
+		if (copy_to_iter(&info, KPMSIZE, to) != KPMSIZE) {
 			ret = -EFAULT;
 			break;
 		}
 
 		pfn++;
-		out++;
+		done += KPMSIZE;
 		count -= KPMSIZE;
 
 		cond_resched();
 	}
 
-	*ppos += (char __user *)out - buf;
+	iocb->ki_pos += done;
 	if (!ret)
-		ret = (char __user *)out - buf;
+		ret = done;
 	return ret;
 }
 
@@ -124,16 +123,15 @@ static ssize_t kpage_read(struct file *file, char __user *buf,
  * Each entry is a u64 representing the corresponding
  * physical page mapcount.
  */
-static ssize_t kpagecount_read(struct file *file, char __user *buf,
-		size_t count, loff_t *ppos)
+static ssize_t kpagecount_read(struct kiocb *iocb, struct iov_iter *to)
 {
-	return kpage_read(file, buf, count, ppos, KPAGE_COUNT);
+	return kpage_read(iocb, to, KPAGE_COUNT);
 }
 
-static const struct proc_ops kpagecount_proc_ops = {
-	.proc_flags	= PROC_ENTRY_PERMANENT,
-	.proc_lseek	= mem_lseek,
-	.proc_read	= kpagecount_read,
+static const struct file_operations kpagecount_fops = {
+	.llseek		= mem_lseek,
+	.read_iter	= kpagecount_read,
+	.splice_read	= copy_splice_read,
 };
 
 
@@ -250,37 +248,35 @@ EXPORT_SYMBOL_GPL(stable_page_flags);
  * Each entry is a u64 representing the corresponding
  * physical page flags.
  */
-static ssize_t kpageflags_read(struct file *file, char __user *buf,
-		size_t count, loff_t *ppos)
+static ssize_t kpageflags_read(struct kiocb *iocb, struct iov_iter *to)
 {
-	return kpage_read(file, buf, count, ppos, KPAGE_FLAGS);
+	return kpage_read(iocb, to, KPAGE_FLAGS);
 }
 
-static const struct proc_ops kpageflags_proc_ops = {
-	.proc_flags	= PROC_ENTRY_PERMANENT,
-	.proc_lseek	= mem_lseek,
-	.proc_read	= kpageflags_read,
+static const struct file_operations kpageflags_fops = {
+	.llseek		= mem_lseek,
+	.read_iter	= kpageflags_read,
+	.splice_read	= copy_splice_read,
 };
 
 #ifdef CONFIG_MEMCG
-static ssize_t kpagecgroup_read(struct file *file, char __user *buf,
-		size_t count, loff_t *ppos)
+static ssize_t kpagecgroup_read(struct kiocb *iocb, struct iov_iter *to)
 {
-	return kpage_read(file, buf, count, ppos, KPAGE_CGROUP);
+	return kpage_read(iocb, to, KPAGE_CGROUP);
 }
-static const struct proc_ops kpagecgroup_proc_ops = {
-	.proc_flags	= PROC_ENTRY_PERMANENT,
-	.proc_lseek	= mem_lseek,
-	.proc_read	= kpagecgroup_read,
+static const struct file_operations kpagecgroup_fops = {
+	.llseek		= mem_lseek,
+	.read_iter	= kpagecgroup_read,
+	.splice_read	= copy_splice_read,
 };
 #endif /* CONFIG_MEMCG */
 
 static int __init proc_page_init(void)
 {
-	proc_create("kpagecount", S_IRUSR, NULL, &kpagecount_proc_ops);
-	proc_create("kpageflags", S_IRUSR, NULL, &kpageflags_proc_ops);
+	proc_create_fops("kpagecount", S_IRUSR, NULL, &kpagecount_fops);
+	proc_create_fops("kpageflags", S_IRUSR, NULL, &kpageflags_fops);
 #ifdef CONFIG_MEMCG
-	proc_create("kpagecgroup", S_IRUSR, NULL, &kpagecgroup_proc_ops);
+	proc_create_fops("kpagecgroup", S_IRUSR, NULL, &kpagecgroup_fops);
 #endif
 	return 0;
 }
