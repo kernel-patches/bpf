@@ -329,6 +329,15 @@ void sched_core_dequeue(struct rq *rq, struct task_struct *p, int flags)
 	}
 
 	/*
+	 * @p left this rq, so it can no longer be the pick a sibling made.
+	 * This also avoids forced idle accounting charging it once it is gone.
+	 */
+	if (rq->core_pick == p) {
+		rq->core_pick = NULL;
+		rq->core_dl_server = NULL;
+	}
+
+	/*
 	 * Migrating the last task off the cpu, with the cpu in forced idle
 	 * state. Reschedule to create an accounting edge for forced idle,
 	 * and re-examine whether the core is still in forced idle state.
