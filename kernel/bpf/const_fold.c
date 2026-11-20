@@ -250,9 +250,10 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 	struct const_arg_info ci_out[MAX_BPF_REG];
 	struct bpf_iarray *succ;
 	bool changed;
-	int i, r, t;
+	int i, r, t, err;
 
 	/* kvzalloc zeroes memory, so all entries start as CONST_ARG_UNVISITED (0) */
+	env->mem += insn_cnt * sizeof(*ci_in);
 	ci_in = kvzalloc_objs(*ci_in, insn_cnt, BPF_VERIFIER_GFP);
 	if (!ci_in)
 		return -ENOMEM;
@@ -278,10 +279,9 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 	}
 
 redo:
-	if (bpf_must_abort()) {
-		kvfree(ci_in);
-		return -EINTR;
-	}
+	err = bpf_add_cost_and_check(env, env->cfg.cur_postorder * 2ULL, BPF_COST_XREG);
+	if (err)
+		goto out;
 	changed = false;
 	for (i = env->cfg.cur_postorder - 1; i >= 0; i--) {
 		int idx = env->cfg.insn_postorder[i];
@@ -334,9 +334,10 @@ redo:
 		aux->const_reg_map_mask = map_mask;
 		aux->const_reg_subprog_mask = subprog_mask;
 	}
-
+out:
+	env->mem -= insn_cnt * sizeof(*ci_in);
 	kvfree(ci_in);
-	return 0;
+	return err;
 }
 
 static int eval_const_branch(u8 opcode, u64 dst_val, u64 src_val)

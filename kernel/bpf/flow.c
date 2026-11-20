@@ -215,9 +215,11 @@ static bool flow_loop_is_bounded(struct bpf_verifier_env *env, int h)
 	if (loop->backedges_overflow || loop->irreducible)
 		return false;
 	for (i = 0; i < loop->backedges_cnt; i++) {
-		for (n = loop->backedges[i].from; n >= 0 && n != h; n = env->idoms[n])
+		for (n = loop->backedges[i].from; n >= 0 && n != h; n = env->idoms[n]) {
+			bpf_add_cost(env, 1, BPF_COST_SCAN);
 			if (flow_is_bound(env, h, n))
 				break;
+		}
 		if (n < 0 || !flow_is_bound(env, h, n))
 			return false;
 	}
@@ -264,7 +266,7 @@ bool bpf_flow_loops_lost_bound(struct bpf_verifier_env *env)
 int bpf_flow_place_guards(struct bpf_verifier_env *env)
 {
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	int len = env->prog->len, h, i, depth, ret = 0;
+	int len = env->prog->len, h, i, ret = 0, err = 0;
 	struct bpf_loop *loop;
 	u32 *seen;
 
@@ -274,27 +276,18 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env)
 
 	for (i = 0; i < len; i++) {
 		aux[i].not_stopped = -1;
-		depth = 0;
-		for (h = bpf_loop_at_index(env, i); h >= 0; h = aux[h].loop_header) {
-			/* the main pass doesn't get that deep */
-			if (++depth > LOOP_STACK_SIZE) {
-				verbose(env, "Too many nested loops at %d\n", i);
-				kvfree(seen);
-				return -E2BIG;
-			}
+		for (h = bpf_loop_at_index(env, i); h >= 0; h = aux[h].loop_header)
 			aux[h].loop->nr_insns++;
-		}
 	}
 
 	for (h = 0; h < len; h++) {
 		loop = aux[h].loop;
 		if (!loop)
 			continue;
-		/* a deep nest of loops takes long */
-		if (bpf_must_abort()) {
-			ret = -EINTR;
+		err = bpf_add_cost_and_check(env, (u64)loop->nr_insns * loop->backedges_cnt,
+					     BPF_COST_COPY);
+		if (err)
 			break;
-		}
 		loop->rt_bounded = flow_loop_is_bounded(env, h);
 		/* also when it's bounded: the main pass may find that it's not */
 		flow_place_guards(env, h, seen);
@@ -302,5 +295,19 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env)
 			ret = 1;
 	}
 	kvfree(seen);
-	return ret;
+	return err ?: ret;
+}
+
+int bpf_check_limits(struct bpf_verifier_env *env)
+{
+	env->aborted |= bpf_must_abort();
+	if (env->aborted)
+		return -EINTR;
+	if (env->cost <= min(env->max_cost, env->pass_max_cost) && env->mem <= env->max_mem &&
+	    !env->over_limit)
+		return 0;
+	verbose(env, "BPF program is too complex: cost %llu of %llu, memory %llu of %llu\n",
+		env->cost, min(env->max_cost, env->pass_max_cost), env->mem, env->max_mem);
+	env->over_limit = true;
+	return -E2BIG;
 }
