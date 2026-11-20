@@ -465,6 +465,9 @@ static inline void seccomp_assign_mode(struct task_struct *task,
 }
 
 #ifdef CONFIG_SECCOMP_FILTER
+
+static DEFINE_CBPF_CACHE(seccomp_cbpf_cache);
+
 /* Returns 1 if the parent is an ancestor of the child. */
 static int is_ancestor(struct seccomp_filter *parent,
 		       struct seccomp_filter *child)
@@ -526,7 +529,11 @@ static inline pid_t seccomp_can_sync_threads(void)
 static inline void seccomp_filter_free(struct seccomp_filter *filter)
 {
 	if (filter) {
-		bpf_prog_destroy(filter->prog);
+		if (filter->prog->orig_prog &&
+		    filter->prog->orig_prog->cache_entry)
+			cbpf_cache_put_prog(filter->prog);
+		else
+			bpf_prog_destroy(filter->prog);
 		kfree(filter);
 	}
 }
@@ -702,7 +709,7 @@ static struct seccomp_filter *seccomp_prepare_filter(struct sock_fprog *fprog)
 	mutex_init(&sfilter->notify_lock);
 	ret = bpf_prog_create_from_user(&sfilter->prog, fprog,
 					seccomp_check_filter, save_orig,
-					NULL);
+					&seccomp_cbpf_cache);
 	if (ret < 0) {
 		kfree(sfilter);
 		return ERR_PTR(ret);
