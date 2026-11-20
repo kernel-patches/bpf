@@ -147,47 +147,77 @@ error:
 }
 EXPORT_SYMBOL_NS_GPL(sdca_fdl_sync, "SND_SOC_SDCA");
 
-static char *fdl_get_sku_filename(struct device *dev,
-				  struct sdca_fdl_file *fdl_file)
+static int fdl_get_sku_filename(struct sdca_interrupt *interrupt,
+				struct sdca_fdl_file *fdl_file,
+				char **disk_filename,
+				char **fallback_filename)
 {
-	struct device *parent = dev;
+	unsigned int adr = interrupt->function->desc->adr;
+	char extension[sizeof("fe0000v00/")] = "";
+	struct device *parent = interrupt->dev;
 	const char *product_vendor;
 	const char *product_sku;
+	unsigned int id = 0, version = 0;
+
+	regmap_read(interrupt->function_regmap,
+		    SDW_SDCA_CTL(adr, SDCA_ENTITY_TYPE_ENTITY_0,
+				 SDCA_CTL_ENTITY_0_FUNCTION_EXTENSION_ID, 0),
+		    &id);
+	regmap_read(interrupt->function_regmap,
+		    SDW_SDCA_CTL(adr, SDCA_ENTITY_TYPE_ENTITY_0,
+				 SDCA_CTL_ENTITY_0_FUNCTION_EXTENSION_VERSION, 0),
+		    &version);
+
+	if (id || version)
+		snprintf(extension, sizeof(extension), "fe%xv%x/", id, version);
 
 	/*
 	 * Try to find pci_dev manually because the card may not be ready to be
 	 * used for snd_soc_card_get_pci_ssid yet
 	 */
-	while (parent) {
-		if (dev_is_pci(parent)) {
-			struct pci_dev *pci_dev = to_pci_dev(parent);
+	while (parent && !dev_is_pci(parent))
+		parent = parent->parent;
 
-			return kasprintf(GFP_KERNEL, "sdca/%x/%x/%x/%x.bin",
-					 fdl_file->vendor_id,
-					 pci_dev->subsystem_vendor,
-					 pci_dev->subsystem_device,
-					 fdl_file->file_id);
-		} else {
-			parent = parent->parent;
-		}
+	if (parent) {
+		struct pci_dev *pci_dev = to_pci_dev(parent);
+
+		*disk_filename = kasprintf(GFP_KERNEL, "sdca/%x/%x/%x/%s%x.bin",
+					   fdl_file->vendor_id,
+					   pci_dev->subsystem_vendor,
+					   pci_dev->subsystem_device,
+					   extension, fdl_file->file_id);
+	} else {
+		product_vendor = dmi_get_system_info(DMI_SYS_VENDOR);
+		if (!product_vendor || !strcmp(product_vendor, "Default string"))
+			product_vendor = dmi_get_system_info(DMI_BOARD_VENDOR);
+		if (!product_vendor || !strcmp(product_vendor, "Default string"))
+			product_vendor = dmi_get_system_info(DMI_CHASSIS_VENDOR);
+		if (!product_vendor)
+			product_vendor = "unknown";
+
+		product_sku = dmi_get_system_info(DMI_PRODUCT_SKU);
+		if (!product_sku || !strcmp(product_sku, "Default string"))
+			product_sku = dmi_get_system_info(DMI_PRODUCT_NAME);
+		if (!product_sku)
+			product_sku = "unknown";
+
+		*disk_filename = kasprintf(GFP_KERNEL, "sdca/%x/%s/%s/%s%x.bin",
+					   fdl_file->vendor_id, product_vendor,
+					   product_sku, extension,
+					   fdl_file->file_id);
 	}
 
-	product_vendor = dmi_get_system_info(DMI_SYS_VENDOR);
-	if (!product_vendor || !strcmp(product_vendor, "Default string"))
-		product_vendor = dmi_get_system_info(DMI_BOARD_VENDOR);
-	if (!product_vendor || !strcmp(product_vendor, "Default string"))
-		product_vendor = dmi_get_system_info(DMI_CHASSIS_VENDOR);
-	if (!product_vendor)
-		product_vendor = "unknown";
+	*fallback_filename = kasprintf(GFP_KERNEL, "sdca/%x/%s%x.bin",
+				       fdl_file->vendor_id, extension,
+				       fdl_file->file_id);
 
-	product_sku = dmi_get_system_info(DMI_PRODUCT_SKU);
-	if (!product_sku || !strcmp(product_sku, "Default string"))
-		product_sku = dmi_get_system_info(DMI_PRODUCT_NAME);
-	if (!product_sku)
-		product_sku = "unknown";
+	if (!*disk_filename || !*fallback_filename) {
+		kfree(*disk_filename);
+		kfree(*fallback_filename);
+		return -ENOMEM;
+	}
 
-	return kasprintf(GFP_KERNEL, "sdca/%x/%s/%s/%x.bin", fdl_file->vendor_id,
-			 product_vendor, product_sku, fdl_file->file_id);
+	return 0;
 }
 
 static int fdl_load_file(struct sdca_interrupt *interrupt,
@@ -197,7 +227,9 @@ static int fdl_load_file(struct sdca_interrupt *interrupt,
 	struct sdca_fdl_data *fdl_data = &interrupt->function->fdl_data;
 	struct acpi_sw_file *swf = NULL, *tmp;
 	struct sdca_fdl_file *fdl_file;
-	char *disk_filename;
+	const char *source = "ACPI SWFT";
+	const char *disk_source;
+	char *disk_filename, *fallback_filename;
 	int ret;
 
 	if (!set) {
@@ -231,25 +263,17 @@ static int fdl_load_file(struct sdca_interrupt *interrupt,
 		}
 	}
 
-	disk_filename = fdl_get_sku_filename(dev, fdl_file);
-	if (!disk_filename)
-		return -ENOMEM;
-
-	dev_dbg(dev, "FDL disk filename: %s\n", disk_filename);
+	ret = fdl_get_sku_filename(interrupt, fdl_file,
+				   &disk_filename, &fallback_filename);
+	if (ret)
+		return ret;
 
 	const struct firmware *firmware __free(firmware) = NULL;
+	disk_source = disk_filename;
 	ret = firmware_request_nowarn(&firmware, disk_filename, dev);
-	kfree(disk_filename);
 	if (ret) {
-		disk_filename = kasprintf(GFP_KERNEL, "sdca/%x/%x.bin",
-					  fdl_file->vendor_id, fdl_file->file_id);
-		if (!disk_filename)
-			return -ENOMEM;
-
-		dev_dbg(dev, "FDL disk filename: %s\n", disk_filename);
-
-		ret = firmware_request_nowarn(&firmware, disk_filename, dev);
-		kfree(disk_filename);
+		disk_source = fallback_filename;
+		ret = firmware_request_nowarn(&firmware, fallback_filename, dev);
 	}
 
 	if (!ret) {
@@ -259,25 +283,35 @@ static int fdl_load_file(struct sdca_interrupt *interrupt,
 		    tmp->file_length != firmware->size) {
 			dev_err(dev, "bad disk SWF size\n");
 		} else if (!swf || swf->file_version <= tmp->file_version) {
-			dev_dbg(dev, "using SWF from disk\n");
 			swf = tmp;
+			source = disk_source;
 		}
 	}
 
 	if (!swf) {
-		dev_err(dev, "failed to locate SWF\n");
-		return -ENOENT;
+		dev_err(dev, "failed to locate SWF: %x-%x\n"
+			     "Attempted FDL disk filename: %s\n"
+			     "Attempted FDL fallback filename: %s\n",
+			fdl_file->vendor_id, fdl_file->file_id,
+			disk_filename, fallback_filename);
+		ret = -ENOENT;
+	} else {
+		dev_info(dev, "loading SWF: %x-%x-%x from %s\n",
+			 swf->vendor_id, swf->file_id, swf->file_version, source);
+
+		ret = sdca_ump_write_message(dev, interrupt->device_regmap,
+					     interrupt->function_regmap,
+					     interrupt->function, interrupt->entity,
+					     SDCA_CTL_XU_FDL_MESSAGEOFFSET,
+					     fdl_file->fdl_offset,
+					     SDCA_CTL_XU_FDL_MESSAGELENGTH, swf->data,
+					     swf->file_length -
+					     offsetof(struct acpi_sw_file, data));
 	}
 
-	dev_info(dev, "loading SWF: %x-%x-%x\n",
-		 swf->vendor_id, swf->file_id, swf->file_version);
+	kfree(disk_filename);
+	kfree(fallback_filename);
 
-	ret = sdca_ump_write_message(dev, interrupt->device_regmap,
-				     interrupt->function_regmap,
-				     interrupt->function, interrupt->entity,
-				     SDCA_CTL_XU_FDL_MESSAGEOFFSET, fdl_file->fdl_offset,
-				     SDCA_CTL_XU_FDL_MESSAGELENGTH, swf->data,
-				     swf->file_length - offsetof(struct acpi_sw_file, data));
 	return ret;
 }
 
