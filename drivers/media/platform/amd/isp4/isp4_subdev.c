@@ -745,15 +745,15 @@ err_module_disable:
 	return -EINVAL;
 }
 
-static int isp4sd_stop_stream(struct isp4_subdev *isp_subdev,
-			      struct v4l2_subdev_state *state, u32 pad)
+static void __isp4sd_stop_stream(struct isp4_subdev *isp_subdev,
+				 struct v4l2_subdev_state *state, u32 pad)
 {
 	struct isp4sd_sensor_info *sensor_info = &isp_subdev->sensor_info;
 	struct isp4sd_output_info *output_info = &sensor_info->output_info;
 	struct isp4_interface *ispif = &isp_subdev->ispif;
 	struct device *dev = isp_subdev->dev;
 
-	guard(mutex)(&isp_subdev->ops_mutex);
+	lockdep_assert_held(&isp_subdev->ops_mutex);
 	dev_dbg(dev, "status %i\n", output_info->start_status);
 
 	if (output_info->start_status == ISP4SD_START_STATUS_STARTED) {
@@ -786,6 +786,13 @@ static int isp4sd_stop_stream(struct isp4_subdev *isp_subdev,
 	}
 
 	isp4sd_uninit_stream(isp_subdev, state, pad);
+}
+
+static int isp4sd_stop_stream(struct isp4_subdev *isp_subdev,
+			      struct v4l2_subdev_state *state, u32 pad)
+{
+	guard(mutex)(&isp_subdev->ops_mutex);
+	__isp4sd_stop_stream(isp_subdev, state, pad);
 
 	/*
 	 * Return success to ensure the stop process proceeds,
@@ -836,7 +843,7 @@ static int isp4sd_start_stream(struct isp4_subdev *isp_subdev,
 	return 0;
 
 err_stop_stream:
-	isp4sd_stop_stream(isp_subdev, state, pad);
+	__isp4sd_stop_stream(isp_subdev, state, pad);
 	return ret;
 }
 
