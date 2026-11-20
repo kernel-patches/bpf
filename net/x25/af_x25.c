@@ -221,7 +221,7 @@ static int x25_device_event(struct notifier_block *this, unsigned long event,
 		case NETDEV_DOWN:
 			nb = x25_get_neigh(dev);
 			if (nb) {
-				x25_link_terminated(nb);
+				x25_link_terminated(nb, false);
 				x25_neigh_put(nb);
 			}
 			x25_route_device_down(dev);
@@ -234,7 +234,7 @@ static int x25_device_event(struct notifier_block *this, unsigned long event,
 			if (!netif_carrier_ok(dev)) {
 				nb = x25_get_neigh(dev);
 				if (nb) {
-					x25_link_terminated(nb);
+					x25_link_terminated(nb, false);
 					x25_neigh_put(nb);
 				}
 			}
@@ -492,10 +492,24 @@ static int x25_listen(struct socket *sock, int backlog)
 	return rc;
 }
 
+/*
+ * release_sock() calls this with the socket spinlock held while the task
+ * still owns the socket, so x25->neighbour cannot change during the check.
+ */
+static void x25_release_cb(struct sock *sk)
+{
+	struct x25_sock *x25 = x25_sk(sk);
+
+	if (test_and_clear_bit(X25_KILL_BY_NEIGH_FLAG, &x25->flags) &&
+	    x25->neighbour)
+		x25_disconnect(sk, ENETUNREACH, 0, 0);
+}
+
 static struct proto x25_proto = {
 	.name	  = "X25",
 	.owner	  = THIS_MODULE,
 	.obj_size = sizeof(struct x25_sock),
+	.release_cb = x25_release_cb,
 };
 
 static struct sock *x25_alloc_socket(struct net *net, int kern)
@@ -610,6 +624,7 @@ static struct sock *x25_make_new(struct sock *osk)
 	x25->cudmatchlength = ox25->cudmatchlength;
 
 	clear_bit(X25_INTERRUPT_FLAG, &x25->flags);
+	clear_bit(X25_KILL_BY_NEIGH_FLAG, &x25->flags);
 	x25_init_timers(sk);
 out:
 	return sk;
@@ -1761,7 +1776,13 @@ static struct notifier_block x25_dev_notifier = {
 	.notifier_call = x25_device_event,
 };
 
-void x25_kill_by_neigh(struct x25_neigh *nb)
+/*
+ * The receive path (bh == true) runs in softirq and must not wait for a task
+ * that owns the socket. The netdevice notifier (bh == false) must wait for
+ * every owner because x25_link_device_down() drops the device reference of the
+ * neighbour on NETDEV_UNREGISTER.
+ */
+void x25_kill_by_neigh(struct x25_neigh *nb, bool bh)
 {
 	struct sock *s;
 
@@ -1769,13 +1790,28 @@ again:
 	write_lock_bh(&x25_list_lock);
 
 	sk_for_each(s, &x25_list) {
-		if (x25_sk(s)->neighbour == nb) {
+		if (x25_sk(s)->neighbour == nb &&
+		    (!bh ||
+		     !test_bit(X25_KILL_BY_NEIGH_FLAG, &x25_sk(s)->flags))) {
 			sock_hold(s);
 			write_unlock_bh(&x25_list_lock);
-			lock_sock(s);
-			if (x25_sk(s)->neighbour == nb)
-				x25_disconnect(s, ENETUNREACH, 0, 0);
-			release_sock(s);
+			if (bh) {
+				bh_lock_sock(s);
+				if (x25_sk(s)->neighbour == nb) {
+					if (sock_owned_by_user(s))
+						set_bit(X25_KILL_BY_NEIGH_FLAG,
+							&x25_sk(s)->flags);
+					else
+						x25_disconnect(s, ENETUNREACH,
+							       0, 0);
+				}
+				bh_unlock_sock(s);
+			} else {
+				lock_sock(s);
+				if (x25_sk(s)->neighbour == nb)
+					x25_disconnect(s, ENETUNREACH, 0, 0);
+				release_sock(s);
+			}
 			sock_put(s);
 			goto again;
 		}
