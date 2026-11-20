@@ -1040,6 +1040,24 @@ void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state 
 		refine_diff(env, st, &untruncated[0], &untruncated[1], op, true);
 }
 
+/*
+ * The insn is checked in parts. In @st the operand that it overwrites is in @part.
+ * Without bypass_spec_v1 a join does not relate the constants again, see join_expr().
+ */
+void bpf_equations_fork(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			const struct scalar *part)
+{
+	struct bpf_equation_env *eq_env = env->eq_env;
+	struct scalar bounds = *part;
+
+	if (!eq_env || !env->bypass_spec_v1 || !eq_env->has_expr[0] ||
+	    !eq_env->operand_expr[0].coef)
+		return;
+	scalar_bounds_sync(&bounds);
+	refine_sym(env, &st->equations, eq_env->operand_expr[0], bounds, 1);
+	propagate_bounds(env, st, false);
+}
+
 /* The largest sum of two arguments of a call: numbers, or offsets of pointers. Modulo 2^64. */
 s64 bpf_equations_max_sum(struct bpf_verifier_env *env, int regno1, int regno2)
 {

@@ -2533,6 +2533,8 @@ void bpf_equations_refine_all(struct bpf_verifier_env *env, struct bpf_verifier_
 void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int idx,
 			bool taken);
 u16 bpf_args_with_equation(const struct bpf_verifier_state *st);
+void bpf_equations_fork(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			const struct scalar *part);
 void bpf_equations_next_trip(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			     u32 depth);
 bool bpf_equations_subsume(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
