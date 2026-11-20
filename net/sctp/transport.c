@@ -404,6 +404,10 @@ bool sctp_transport_update_pmtu(struct sctp_transport *t, u32 pmtu)
 	}
 	pmtu = SCTP_TRUNC4(pmtu);
 
+	if (t->pathmtu <= pmtu &&
+	    t->pl.probe_size + sctp_transport_pl_hlen(t) <= pmtu)
+		return false;
+
 	if (sctp_transport_pl_enabled(t))
 		return sctp_transport_pl_toobig(t, pmtu - sctp_transport_pl_hlen(t));
 
