@@ -3602,9 +3602,21 @@ static bool is_bpf_st_mem(struct bpf_insn *insn)
 	return BPF_CLASS(insn->code) == BPF_ST && BPF_MODE(insn->code) == BPF_MEM;
 }
 
+/* See bpf_partition_for_pessimized() */
+static void note_pessimized_insn(struct bpf_verifier_env *env, u32 idx)
+{
+	if (!env->imprecise)
+		return;
+	env->insn_aux_data[idx].pessimized = true;
+	env->pessimized = true;
+	if (!env->err)
+		env->err_insn = idx;
+}
+
 /* See comment for mark_fastcall_pattern_for_call() */
 static void check_fastcall_stack_contract(struct bpf_verifier_env *env,
-					  struct bpf_func_state *state, int insn_idx, int off)
+					  struct bpf_func_state *state, int insn_idx, int off,
+					  bool var_off)
 {
 	struct bpf_subprog_info *subprog = &env->subprog_info[state->subprogno];
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
@@ -3622,6 +3634,10 @@ static void check_fastcall_stack_contract(struct bpf_verifier_env *env,
 	 * happens at most once per subprogram
 	 */
 	for (i = subprog->start; i < (subprog + 1)->start; ++i) {
+		/* the spills can be too much for the stack, see bpf_find_unproven_after_pass() */
+		aux[insn_idx].pessimized |= aux[i].fastcall_spills_num && env->imprecise;
+		if (aux[i].fastcall_spills_num && var_off)
+			note_pessimized_insn(env, insn_idx);
 		aux[i].fastcall_spills_num = 0;
 		aux[i].fastcall_pattern = 0;
 	}
@@ -7058,7 +7074,9 @@ static int check_stack_access_within_bounds(
 	 * them. An empty range touches no stack and keeps the rewrite enabled.
 	 */
 	if (min_off < max_off)
-		check_fastcall_stack_contract(env, state, env->insn_idx, min_off);
+		check_fastcall_stack_contract(env, state, env->insn_idx, min_off,
+					      !tnum_is_const(reg->var_off) ||
+					      env->prev_insn_idx == env->insn_idx);
 
 	/* Note that there is no stack access with offset zero, so the needed stack
 	 * size is -min_off, not -min_off+1.
@@ -13385,6 +13403,19 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (check_get_func_ip(env))
 			return -ENOTSUPP;
 		env->prog->call_get_func_ip = true;
+	}
+
+	/* a call that only a speculative state reaches is dead code */
+	if (func_id == BPF_FUNC_override_return && !env->cur_state->speculative)
+		env->prog->kprobe_override = 1;
+
+	if (func_id == BPF_FUNC_tail_call && !env->cur_state->speculative) {
+		/* the other program can access all of it */
+		if (env->prog->expected_attach_type == BPF_TRACE_ITER)
+			env->prog->aux->max_rdonly_access =
+				env->prog->aux->max_rdwr_access = U32_MAX;
+		if (env->prog->type == BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE)
+			env->prog->aux->max_tp_access = U32_MAX;
 	}
 
 	if (func_id == BPF_FUNC_tail_call) {
@@ -20723,6 +20754,21 @@ static bool reads_from_unproven(struct bpf_verifier_env *env)
 	return false;
 }
 
+/* The operands of @insn that have more than one value, without the number that is stored */
+static unsigned long operands_with_range(struct bpf_verifier_env *env, const struct bpf_insn *insn)
+{
+	unsigned long use = cur_aux(env)->use_regs & GENMASK(BPF_REG_9, BPF_REG_0), ranges = 0;
+	struct bpf_reg_state *regs = cur_regs(env);
+	int i;
+
+	if (BPF_CLASS(insn->code) == BPF_STX && !bpf_atomic_is_load_acq(insn))
+		use &= BIT(insn->dst_reg);
+	for_each_set_bit(i, &use, BPF_REG_FP)
+		if (regs[i].r64.size)
+			ranges |= BIT(i);
+	return ranges;
+}
+
 static void mark_from_unproven(struct bpf_verifier_env *env, int idx, bool from_unproven)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
@@ -21492,6 +21538,26 @@ static int skip_unproven_insn(struct bpf_verifier_env *env, const struct bpf_ins
 	return 0;
 }
 
+/* These decide where the program can be attached, or what it reads */
+struct prog_requirements {
+	u32 val[12];
+};
+
+static struct prog_requirements get_prog_requirements(struct bpf_verifier_env *env)
+{
+	const struct bpf_prog *prog = env->prog;
+	const struct bpf_prog_aux *aux = prog->aux;
+
+	return (struct prog_requirements){{
+		env->ops->convert_ctx_access ? 0 : aux->max_ctx_offset,
+		aux->max_tp_access, aux->max_rdonly_access, aux->max_rdwr_access,
+		aux->min_rdwr_write, aux->max_rdwr_write, aux->kprobe_write_ctx,
+		prog->type == BPF_PROG_TYPE_EXT && env->seen_direct_write,
+		prog->type == BPF_PROG_TYPE_PERF_EVENT && prog->call_get_stack,
+		prog->tstamp_type_access, prog->kprobe_override, prog->enforce_expected_attach_type,
+	}};
+}
+
 static void free_pushed_states(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_stack_elem *elem;
@@ -21511,7 +21577,10 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 	struct bpf_insn *insns = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
 	bool do_print_state = true, from_unproven;
+	struct prog_requirements prog_requirements, new_requirements;
 	bool again = prev_insn_idx == env->insn_idx;
+	unsigned long ranges;
+	bool stack_args;
 	u32 held;
 
 	mark_verifier_state_scratched(env);
@@ -21582,11 +21651,14 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 			env->prev_log_pos = env->log.end_pos;
 		}
 
-		if (bpf_prog_is_offloaded(env->prog->aux)) {
+		if (env->replay) {
 			err = bpf_prog_offload_verify_insn(env, env->insn_idx,
 							   env->prev_insn_idx);
 			if (err)
 				return err;
+		} else if (bpf_prog_is_offloaded(env->prog->aux)) {
+			/* the driver cannot forget what an imprecise state shows */
+			note_pessimized_insn(env, env->insn_idx);
 		}
 
 		sanitize_mark_insn_seen(env);
@@ -21624,6 +21696,9 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 			goto process_bpf_exit;
 		insn_aux->speculative_first |= !insn_aux->seen;
 
+		ranges = operands_with_range(env, insn);
+		stack_args = cur_func(env)->out_stack_arg_cnt;
+
 		if (err)
 			return err;
 
@@ -21635,9 +21710,15 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		held = held_cnt(state);
 		from_unproven = reads_from_unproven(env);
 		fixups = insn_aux->fixups;
+		prog_requirements = get_prog_requirements(env);
 		env->no_report = state->speculative;
 		err = do_check_insn(env, &do_print_state) ?: bpf_equations_after_insn(env);
 		env->no_report = false;
+		new_requirements = get_prog_requirements(env);
+		/* a join adds values only to a range */
+		if ((ranges || stack_args || again) &&
+		    memcmp(&prog_requirements, &new_requirements, sizeof(new_requirements)))
+			note_pessimized_insn(env, prev_insn_idx);
 		/* a call or an exit gave the state to the flow, the error is from there */
 		if (err < 0 && !state->frame[0])
 			return err;
@@ -25294,12 +25375,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
-	if (bpf_prog_is_offloaded(env->prog->aux)) {
-		ret = bpf_prog_offload_verifier_prep(env->prog);
-		if (ret)
-			goto skip_full_check;
-	}
-
 	ret = bpf_check_cfg(env);
 	if (ret < 0)
 		goto skip_full_check;
@@ -25378,7 +25453,8 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
-	ret = mark_fastcall_patterns(env);
+	/* the device runs the insns that the driver was given */
+	ret = bpf_prog_is_offloaded(env->prog->aux) ? 0 : mark_fastcall_patterns(env);
 	if (ret < 0)
 		goto skip_full_check;
 

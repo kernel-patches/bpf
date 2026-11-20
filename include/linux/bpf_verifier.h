@@ -884,6 +884,7 @@ struct bpf_loop {
 	);
 	struct bpf_loop_precision undo;	/* before the last partition */
 	struct bpf_loop_precision kept;	/* see keep_precision() */
+	struct bpf_loop_precision good;	/* see bpf_restore_precision() */
 	struct bpf_loop_per_pass last_pass;	/* the last pass whose partition was kept */
 	/* to peel all trips, estimated from a partition that was over its budget */
 	u64 full_peel_cost;
@@ -1388,6 +1389,7 @@ struct bpf_verifier_env {
 	struct_group_tagged(bpf_env_per_pass, per_pass,
 	int err;			/* the first error */
 	u32 err_insn;
+	bool pessimized;		/* see bpf_partition_for_pessimized() */
 	bool imprecise;			/* a state before the first error is imprecise */
 	bool over_limit;		/* see bpf_check_limits() */
 	bool too_deep;			/* see failing_path_trip() */
@@ -1734,6 +1736,8 @@ void bpf_note_unproven_insn(struct bpf_verifier_env *env,
 bool bpf_insn_is_unproven(struct bpf_verifier_env *env);
 void bpf_note_fixups_differ(struct bpf_verifier_env *env);
 void bpf_find_unproven_after_pass(struct bpf_verifier_env *env);
+int bpf_partition_for_pessimized(struct bpf_verifier_env *env);
+void bpf_restore_precision(struct bpf_verifier_env *env);
 bool bpf_same_insns_unproven(struct bpf_verifier_env *env);
 int bpf_partition_more(struct bpf_verifier_env *env);
 bool bpf_undo_precision(struct bpf_verifier_env *env);

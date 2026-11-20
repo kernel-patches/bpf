@@ -1498,6 +1498,50 @@ int bpf_partition_more(struct bpf_verifier_env *env)
 	return find_calls_to_unproven(env) ?: partition_next(env);
 }
 
+/*
+ * The pass has no error. But an imprecise state can raise a bound that is checked at attach
+ * time or at run time. It can also ask for a barrier. Partition as if such an insn is
+ * unproven. Returns 1 if more is kept apart.
+ */
+int bpf_partition_for_pessimized(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	int ret;
+	u32 i;
+
+	if (!env->pessimized)
+		return 0;
+	prec->good_budget = prec->budget;
+	for (i = 0; i < prec->loop_cnt; i++)
+		prec->loops[i]->good = prec->loops[i]->precision;
+	for (i = 0; i < env->prog->len; i++)
+		if (env->insn_aux_data[i].pessimized)
+			note_unproven_after_pass(env, i);
+	ret = bpf_partition_more(env);
+	if (ret <= 0 && prec->data_deps)
+		bpf_restore_precision(env);
+	return ret;
+}
+
+/* Go back to the precision of the last pass without errors */
+void bpf_restore_precision(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	struct bpf_loop *loop;
+	u32 i;
+
+	memcpy(prec->data_deps, prec->undo, 5 * prec->words * sizeof(long));
+	for (i = 0; i < 5 * prec->words; i++)
+		prec->kept[i] &= prec->data_deps[i];
+	prec->budget = prec->good_budget;
+	for (i = 0; i < prec->loop_cnt; i++) {
+		loop = prec->loops[i];
+		loop->precision = loop->good;
+		loop->partitioned = false;
+		loop->changed = true;
+	}
+}
+
 void bpf_precision_new_pass(struct bpf_verifier_env *env)
 {
 	struct bpf_precision *prec = env->precision;
