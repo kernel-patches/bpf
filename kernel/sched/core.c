@@ -11354,7 +11354,8 @@ static int sched_non_preferred_cpu_push_stop(void *arg)
 		rq->npc_push_work_pending = false;
 		update_rq_clock(rq);
 
-		if (task_rq(p) == rq && task_on_rq_queued(p)) {
+		if (task_rq(p) == rq && task_on_rq_queued(p) &&
+		    !is_migration_disabled(p)) {
 			struct rq *dest_rq = __migrate_task(rq, &rf, p, cpu);
 
 			if (rq != dest_rq)
@@ -11395,6 +11396,11 @@ void sched_push_current_non_preferred_cpu(struct rq *rq)
 		if (rq->npc_push_work_pending)
 			return;
 
+		/*
+		 * Racy: is_migration_disabled() isn't stable in IRQ
+		 * context and can race with migrate_disable(). The stopper
+		 * should recheck it.
+		 */
 		if (is_migration_disabled(push_task))
 			return;
 
