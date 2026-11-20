@@ -1359,6 +1359,8 @@ new_segment:
 			if (err < 0)
 				goto do_error;
 			copy = err;
+			if (!skb_zcopy_pure(skb))
+				sk_forced_mem_schedule(sk, 0);
 		} else if (zc == MSG_SPLICE_PAGES) {
 			/* Splice in data if we can; copy if we can't. */
 			if (tcp_downgrade_zcopy_pure(sk, skb))
