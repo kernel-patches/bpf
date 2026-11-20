@@ -8,6 +8,7 @@
 #include <linux/aperture.h>
 #include <linux/delay.h>
 #include <linux/error-injection.h>
+#include <linux/nodemask.h>
 #include <linux/units.h>
 
 #include <drm/drm_client.h>
@@ -438,6 +439,10 @@ struct xe_device *xe_device_create(struct pci_dev *pdev)
 	err = xe_device_init_early(xe);
 	if (err)
 		return ERR_PTR(err);
+
+	xe->userptr_repin_timeout_ms = num_online_nodes() > 1 ?
+		XE_USERPTR_REPIN_TIMEOUT_MS_NUMA_DEFAULT :
+		XE_USERPTR_REPIN_TIMEOUT_MS_DEFAULT;
 
 	return xe;
 }

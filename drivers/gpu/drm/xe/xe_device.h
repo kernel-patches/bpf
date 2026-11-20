@@ -43,6 +43,9 @@ static inline struct xe_device *ttm_to_xe_device(struct ttm_device *ttm)
 	return container_of(ttm, struct xe_device, ttm);
 }
 
+#define XE_USERPTR_REPIN_TIMEOUT_MS_DEFAULT		10000
+#define XE_USERPTR_REPIN_TIMEOUT_MS_NUMA_DEFAULT	30000
+
 struct xe_device *xe_device_create(struct pci_dev *pdev);
 int xe_device_init_early(struct xe_device *xe);
 int xe_device_probe_early(struct xe_device *xe);

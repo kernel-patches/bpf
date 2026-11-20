@@ -438,6 +438,14 @@ struct xe_device {
 		u16 idx[__XE_CACHE_LEVEL_COUNT];
 	} pat;
 
+	/**
+	 * @userptr_repin_timeout_ms: Overall time in milliseconds a userptr
+	 * repin is retried before failing with -EBUSY. Zero means retry
+	 * indefinitely. Accessed with READ_ONCE() / WRITE_ONCE() and tunable
+	 * through sysfs.
+	 */
+	u32 userptr_repin_timeout_ms;
+
 	/** @d3cold: Encapsulate d3cold related stuff */
 	struct {
 		/** @d3cold.capable: Indicates if root port is d3cold capable */
