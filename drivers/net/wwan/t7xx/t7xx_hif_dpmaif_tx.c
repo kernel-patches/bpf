@@ -445,6 +445,7 @@ static void t7xx_do_tx_hw_push(struct dpmaif_ctrl *dpmaif_ctrl)
 static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 {
 	struct dpmaif_ctrl *dpmaif_ctrl = arg;
+	bool txq_stopped;
 	int ret;
 
 	while (!kthread_should_stop()) {
@@ -464,10 +465,23 @@ static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 		if (ret < 0 && ret != -EACCES)
 			return ret;
 
-		t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
-		t7xx_do_tx_hw_push(dpmaif_ctrl);
-		t7xx_pci_enable_sleep(dpmaif_ctrl->t7xx_dev);
+		/* A runtime suspended device was resumed above and had its queues
+		 * restarted, so a stopped queue here belongs to a system suspend
+		 * or an exception: wait for t7xx_dpmaif_resume() or
+		 * t7xx_dpmaif_start() to restart it instead of spinning.
+		 */
+		txq_stopped = !t7xx_select_tx_queue(dpmaif_ctrl);
+		if (!txq_stopped) {
+			t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
+			t7xx_do_tx_hw_push(dpmaif_ctrl);
+			t7xx_pci_enable_sleep(dpmaif_ctrl->t7xx_dev);
+		}
 		pm_runtime_put_autosuspend(dpmaif_ctrl->dev);
+
+		if (txq_stopped)
+			wait_event_interruptible(dpmaif_ctrl->tx_wq,
+						 t7xx_select_tx_queue(dpmaif_ctrl) ||
+						 kthread_should_stop());
 	}
 
 	return 0;
