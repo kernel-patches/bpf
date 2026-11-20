@@ -2000,6 +2000,186 @@ void bpf_equations_clean(struct bpf_verifier_env *env, struct bpf_verifier_state
 	eqs->clean_sym_cnt = eqs->sym_cnt;
 }
 
+/* Subsume */
+
+/* Translate @expr to the other state */
+static bool match_expr(const struct sym_scratch *scratch, struct expr *expr)
+{
+	if (!expr->coef)
+		return true;
+	scratch += var_symno(expr->var);
+	*expr = expr_scale(scratch->cur_expr, expr->coef, expr->off);
+	return scratch->determined;
+}
+
+/* @sym of @old is @expr in @cur */
+static bool match_sym(struct bpf_verifier_env *env, const struct bpf_equations *old,
+		      const struct bpf_verifier_state *cur, u32 sym, const struct expr *expr)
+{
+	struct sym_scratch *scratch = &env->eq_env->scratch[sym];
+	struct scalar bounds;
+	struct expr diff;
+	struct equation_pos pos = {};
+
+	while (scratch->determined &&
+	       bpf_find_next_diff(env, &cur->equations, &scratch->cur_expr, expr, &pos, &diff))
+		if (!diff.coef && !diff.off)
+			return true;
+	if (scratch->determined)
+		return false;
+	bpf_eval_expr(env, cur, expr, &bounds);
+	scratch->determined = scalar_subsumes(&old->syms[sym], &bounds);
+	scratch->cur_expr = *expr;
+	return scratch->determined;
+}
+
+/* @hint: after the equation of @cur that was found last. Most are in the same order. */
+static bool check_sym_equation(struct bpf_verifier_env *env, const struct bpf_equations *old,
+			       const struct bpf_verifier_state *cur,
+			       const struct bpf_sym_equation *sym_eq, u32 *hint)
+{
+	const struct sym_scratch *scratch = env->eq_env->scratch;
+	struct equation_pos pos = { .next = *hint };
+	struct expr expr[2], diff;
+	struct scalar bounds;
+	int i, unmatched;
+
+	if (is_op(sym_eq)) {
+		expr[0] = rhs_expr(sym_eq, 0);
+		expr[1] = rhs_expr(sym_eq, 1);
+		return match_expr(scratch, &expr[0]) && match_expr(scratch, &expr[1]) &&
+		       bpf_find_op(env, &cur->equations, sym_eq->insn_idx, expr, &diff) &&
+		       match_sym(env, old, cur, sym_eq->sym[0], &diff);
+	}
+	/* -coef[unmatched] * sym[unmatched] = expr[0] - expr[1] */
+	for (unmatched = 0; unmatched < 2 && scratch[sym_eq->sym[unmatched]].determined;
+	     unmatched++)
+		;
+	for (i = 0; i < 2; i++) {
+		expr[i] = sym_expr(sym_eq->coef[i + (i >= unmatched)] * (i ? -1 : 1),
+				   sym_eq->sym[i + (i >= unmatched)], i ? 0 : sym_eq->off);
+		if (!match_expr(scratch, &expr[i]))
+			return false;
+	}
+	while (bpf_find_next_diff(env, &cur->equations, &expr[0], &expr[1], &pos, &diff)) {
+		if (!sym_eq->coef[unmatched] ? !diff.coef && !diff.off :
+		    bpf_expr_div_exact(&diff, 0, -sym_eq->coef[unmatched]) &&
+		    match_sym(env, old, cur, sym_eq->sym[unmatched], &diff)) {
+			*hint = pos.next;
+			return true;
+		}
+	}
+	/* no other equation uses it */
+	if (!sym_has_one_use(scratch, sym_eq->sym[unmatched]) ||
+	    !is_plus_minus_one(sym_eq->coef[unmatched]))
+		return false;
+	bpf_eval_diff(env, cur, &expr[sym_eq->coef[unmatched] > 0],
+		      &expr[sym_eq->coef[unmatched] < 0], &bounds);
+	return scalar_subsumes(&old->syms[sym_eq->sym[unmatched]], &bounds);
+}
+
+/*
+ * Are there values for the syms of @old for which its equations hold in @cur?
+ * @forget: it is @old. Mark the equations that do not hold, normalize_equations() deletes them.
+ */
+static bool check_equations(struct bpf_verifier_env *env, const struct bpf_equations *old,
+			    const struct bpf_verifier_state *cur, struct bpf_equations *forget)
+{
+	struct bpf_xreg_equation *xreg_eq;
+	struct bpf_sym_equation *sym_eq;
+	bool is_ptr, ok = true;
+	struct expr expr;
+	u32 hint = 0;
+
+	count_sym_uses(env, old);
+	for_each_xreg_equation(env, old, xreg_eq) {
+		if (bpf_xreg_expr(env, cur, xreg_eq->xreg, &expr, &is_ptr) &&
+		    is_ptr == xreg_eq->is_ptr &&
+		    bpf_expr_div_exact(&expr, xreg_eq->off, xreg_eq->coef) &&
+		    match_sym(env, old, cur, xreg_eq->sym, &expr))
+			continue;
+		if (!forget)
+			return false;
+		xreg_eq->coef = 0;
+		forget->normalized = ok = false;
+	}
+	for_each_sym_equation(env, old, sym_eq) {
+		/* it depends on an equation that does not hold */
+		if (!ok && find_undetermined_sym(env->eq_env->scratch, sym_eq) < 0)
+			continue;
+		if (check_sym_equation(env, old, cur, sym_eq, &hint))
+			continue;
+		if (!forget)
+			return false;
+		sym_eq->sym[0] = NO_SYM;
+		forget->normalized = ok = false;
+	}
+	return ok;
+}
+
+bool bpf_equations_subsume(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			   const struct bpf_verifier_state *cur)
+{
+	const struct bpf_xreg_equation *xreg_eq;
+	const struct scalar *s;
+
+	/* @old ends after the next jump. The equations that showed it can be gone. */
+	if (old->equations.infeasible && !cur->equations.infeasible && env->bypass_spec_v1)
+		return false;
+	/* see loop_stack_safe() */
+	for_each_xreg_equation(env, &old->equations, xreg_eq) {
+		if ((u32)xreg_eq->xreg < BPF_XREG_TRIP)
+			continue;
+		s = equation_xreg_bounds(env, cur, xreg_eq);
+		if (!s || !scalar_subsumes(equation_xreg_bounds(env, old, xreg_eq), s))
+			return false;
+	}
+	return !old->equations.xreg_equation_cnt ||
+	       check_equations(env, &old->equations, cur, NULL);
+}
+
+/* Join */
+
+/*
+ * Make the equations of @dst hold for @src too. Call it before the xregs are joined.
+ * @leftover_loop: the states are at its header. @widen: @src came around it.
+ */
+void bpf_equations_pre_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
+			    const struct bpf_verifier_state *src, struct bpf_loop *leftover_loop,
+			    bool widen)
+{
+	const struct loop_stack_entry *top = bpf_top_loop(src->frame[src->curframe]);
+	bool enters = leftover_loop && top &&
+		      top->trip < bpf_top_loop(dst->frame[dst->curframe])->trip;
+	struct bpf_equations *eqs;
+
+	if (env->eq_env) {
+		eqs = &env->eq_env->join_state.equations;
+		/* what enters the loop can break the equations that keep the xregs small */
+		if (enters && dst->equations.needs_refine)
+			bpf_equations_refine_all(env, dst);
+		normalize_equations(env, &env->eq_env->join_state);
+		while (!check_equations(env, eqs, dst, eqs) || !check_equations(env, eqs, src, eqs))
+			normalize_equations(env, &env->eq_env->join_state);
+		eqs->needs_refine = widen || dst->equations.needs_refine ||
+				    src->equations.needs_refine;
+		swap(dst->equations, *eqs);
+	}
+}
+
+/* The xregs of @dst are joined. Some of them are gone. */
+void bpf_equations_post_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
+			     const struct bpf_verifier_state *src)
+{
+	u32 cnt = dst->equations.xreg_equation_cnt;
+
+	bpf_equations_clean(env, dst);
+	while (cnt != dst->equations.xreg_equation_cnt &&
+	       !check_equations(env, &dst->equations, src, &dst->equations))
+		normalize_equations(env, dst);
+	dst->equations.infeasible = false;
+}
+
 static void print_operand(struct bpf_verifier_log *log, const char *prefix, struct expr expr)
 {
 	if (expr.coef)

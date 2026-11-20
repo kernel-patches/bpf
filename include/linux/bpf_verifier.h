@@ -2459,7 +2459,14 @@ void bpf_equations_fill(struct bpf_verifier_env *env, struct bpf_func_state *fra
 void bpf_equations_refine_all(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int idx,
 			bool taken);
+bool bpf_equations_subsume(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			   const struct bpf_verifier_state *cur);
 void bpf_equations_print(struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
+void bpf_equations_pre_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
+			    const struct bpf_verifier_state *src, struct bpf_loop *leftover_loop,
+			    bool widen);
+void bpf_equations_post_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
+			     const struct bpf_verifier_state *src);
 u32 bpf_equations_bytes(const struct bpf_equations *eqs);
 void scalar_bounds_sync(struct scalar *s);
 bool scalar_subsumes(const struct scalar *old, const struct scalar *cur);
