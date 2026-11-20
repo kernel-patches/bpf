@@ -196,7 +196,6 @@ struct bpf_verifier_stack_elem {
 	struct bpf_verifier_state st;
 	int insn_idx;
 	int prev_insn_idx;
-	/* it goes there only if may_goto in front of prev_insn_idx does, see check_loop_guard() */
 	enum bpf_guard_edge guard_edge;
 	bool again;	/* see bpf_flow_deliver() */
 	struct bpf_verifier_stack_elem *next;
@@ -11949,6 +11948,7 @@ static int split_func_set(struct bpf_verifier_env *env, int regno)
 		branch = push_stack(env, env->insn_idx, env->insn_idx, false);
 		if (IS_ERR(branch))
 			return PTR_ERR(branch);
+		env->head->again = true;
 	}
 	return 0;
 }
@@ -11974,6 +11974,7 @@ static int check_func_callx_set(struct bpf_verifier_env *env, int regno, int *in
 			branch = push_stack(env, *insn_idx, *insn_idx, false);
 			if (IS_ERR(branch))
 				return PTR_ERR(branch);
+			env->head->again = true;
 			continue;
 		}
 		copy = kzalloc_obj(*copy, BPF_VERIFIER_GFP);
@@ -21219,12 +21220,9 @@ static int flow_drain(struct bpf_verifier_env *env)
 
 	while ((elem = env->head)) {
 		env->head = elem->next;
-		if (!err && elem->guard_edge)
-			err = bpf_flow_guard_edge(env, &elem->st, elem->insn_idx,
-						  elem->prev_insn_idx, elem->guard_edge);
-		else if (!err)
+		if (!err)
 			err = bpf_flow_deliver(env, &elem->st, elem->insn_idx,
-					       elem->prev_insn_idx);
+					       elem->prev_insn_idx, elem->again);
 		bpf_free_verifier_state(env, &elem->st, false);
 		kfree(elem);
 	}
@@ -21386,11 +21384,14 @@ static void free_pushed_states(struct bpf_verifier_env *env)
 static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 {
 	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_verifier_stack_elem *elem;
 	struct bpf_insn *insns = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
 	bool do_print_state = true, from_unproven;
+	bool again = prev_insn_idx == env->insn_idx;
 	u32 held;
 
+	mark_verifier_state_scratched(env);
 	for (;;) {
 		struct bpf_insn *insn;
 		struct bpf_insn_aux_data *insn_aux;
@@ -21554,20 +21555,23 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		    bpf_is_mem_insn(insn) && BPF_MODE(insn->code) == BPF_MEM) {
 process_bpf_exit:
 			account_current_path(env);
-			mark_verifier_state_scratched(env);
 			bpf_free_verifier_state(env, state, false);
 			memset(state, 0, sizeof(*state));
 			return flow_drain(env);
 		}
 
+		/* if the insn pushed a part, the current state is a part too */
+		for (elem = env->head; elem; elem = elem->next)
+			again |= elem->again;
 		err = flow_drain(env);
 		if (err)
 			return err;
 
-		if (env->insn_idx < insn_cnt && bpf_flow_is_point(env, env->insn_idx)) {
+		/* the parts of a state meet at the next insn */
+		if (env->insn_idx < insn_cnt &&
+		    (again || bpf_flow_is_bb_start(env, env->insn_idx))) {
 			account_current_path(env);
-			mark_verifier_state_scratched(env);
-			return bpf_flow_deliver(env, state, env->insn_idx, prev_insn_idx);
+			return bpf_flow_deliver(env, state, env->insn_idx, prev_insn_idx, false);
 		}
 	}
 }

@@ -392,6 +392,11 @@ static u32 log_pos(const struct bpf_diag_log *log, u32 idx)
 	return pos < log->cap ? pos : pos - log->cap;
 }
 
+u64 bpf_diag_event_log_save(struct bpf_verifier_env *env)
+{
+	return env->diag ? log_end(&env->diag->log) : 0;
+}
+
 void bpf_diag_event_log_restore(struct bpf_verifier_env *env, u64 log_pos)
 {
 	struct bpf_diag *diag = env->diag;
