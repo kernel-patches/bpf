@@ -498,6 +498,9 @@ void security_file_set_fowner(struct file *file);
 int security_file_send_sigiotask(struct task_struct *tsk,
 				 struct fown_struct *fown, int sig);
 int security_file_receive(struct file *file);
+int security_file_open_name(const struct filename *name,
+			    const struct path *base, int flags, umode_t mode,
+			    unsigned int lookup_flags);
 int security_file_open(struct file *file);
 int security_file_post_open(struct file *file, int mask);
 int security_file_truncate(struct file *file);
@@ -1234,6 +1237,13 @@ static inline int security_file_send_sigiotask(struct task_struct *tsk,
 }
 
 static inline int security_file_receive(struct file *file)
+{
+	return 0;
+}
+
+static inline int security_file_open_name(const struct filename *name,
+					  const struct path *base, int flags, umode_t mode,
+					  unsigned int lookup_flags)
 {
 	return 0;
 }
