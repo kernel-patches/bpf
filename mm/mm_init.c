@@ -1082,6 +1082,7 @@ static void zone_device_page_init_from_template(struct page *page,
 		set_page_address(template, __va(pfn << PAGE_SHIFT));
 #endif
 	memcpy_nontemporal(page, template, sizeof(*page));
+	vmemmap_optimization_verify_zone(page);
 }
 
 /*
