@@ -97,6 +97,7 @@
 	EM(rxgk_abort_resp_short_yfs_key,	"rxgk-resp-short-yfs-key") \
 	EM(rxgk_abort_resp_short_yfs_tkt,	"rxgk-resp-short-yfs-tkt") \
 	EM(rxgk_abort_resp_tok_dec,		"rxgk-resp-tok-dec")	\
+	EM(rxgk_abort_resp_tok_expired,		"rxgk-resp-tok-expired") \
 	EM(rxgk_abort_resp_tok_internal_error,	"rxgk-resp-tok-int-err") \
 	EM(rxgk_abort_resp_tok_keyerr,		"rxgk-resp-tok-keyerr")	\
 	EM(rxgk_abort_resp_tok_nokey,		"rxgk-resp-tok-nokey")	\
