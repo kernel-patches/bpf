@@ -2,7 +2,7 @@
 #ifndef __ASM_ARM_SYSTEM_MISC_H
 #define __ASM_ARM_SYSTEM_MISC_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/compiler.h>
 #include <linux/linkage.h>
@@ -37,6 +37,6 @@ static inline void harden_branch_predictor(void)
 
 extern unsigned int user_debug;
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 #endif /* __ASM_ARM_SYSTEM_MISC_H */

@@ -13,7 +13,7 @@
 #ifndef __TOOLS_LINUX_ASM_GENERIC_BARRIER_H
 #define __TOOLS_LINUX_ASM_GENERIC_BARRIER_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/compiler.h>
 
@@ -36,5 +36,5 @@
 #define wmb()	mb()
 #endif
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 #endif /* __TOOLS_LINUX_ASM_GENERIC_BARRIER_H */

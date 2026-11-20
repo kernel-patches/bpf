@@ -66,7 +66,7 @@
  * end up needing stack temporaries for).
  */
 /* Assembly files may be compiled with -traditional .. */
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #ifndef asmlinkage_protect
 # define asmlinkage_protect(n, ret, args...)	do { } while (0)
 #endif
@@ -77,7 +77,7 @@
 #define __ALIGN_STR		__stringify(__ALIGN)
 #endif
 
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 
 /* SYM_T_FUNC -- type used by assembler to mark functions */
 #ifndef SYM_T_FUNC
@@ -355,6 +355,6 @@
 	SYM_DATA_END(name)
 #endif
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif /* _LINUX_LINKAGE_H */

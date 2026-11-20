@@ -4,7 +4,7 @@
 
 #include <uapi/asm/hwcap.h>
 
-#if !defined(__ASSEMBLY__)
+#if !defined(__ASSEMBLER__)
 /*
  * This yields a mask that user programs can use to figure out what
  * instruction set this cpu supports.

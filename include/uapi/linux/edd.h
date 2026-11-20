@@ -53,7 +53,7 @@
 #define EDD_MBR_SIG_NR_BUF 0x1ea  /* addr of number of MBR signtaures at EDD_MBR_SIG_BUF
 				     in boot_params - treat this as 1 byte  */
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #define EDD_EXT_FIXED_DISK_ACCESS           (1 << 0)
 #define EDD_EXT_DEVICE_LOCKING_AND_EJECTING (1 << 1)
@@ -187,6 +187,6 @@ struct edd {
 	unsigned char edd_info_nr;
 };
 
-#endif				/*!__ASSEMBLY__ */
+#endif				/*!__ASSEMBLER__ */
 
 #endif /* _UAPI_LINUX_EDD_H */

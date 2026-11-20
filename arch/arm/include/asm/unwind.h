@@ -8,7 +8,7 @@
 #ifndef __ASM_UNWIND_H
 #define __ASM_UNWIND_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /* Unwind reason code according the the ARM EABI documents */
 enum unwind_reason_code {
@@ -44,7 +44,7 @@ void __aeabi_unwind_cpp_pr0(void);
 void __aeabi_unwind_cpp_pr1(void);
 void __aeabi_unwind_cpp_pr2(void);
 
-#endif	/* !__ASSEMBLY__ */
+#endif	/* !__ASSEMBLER__ */
 
 #ifdef CONFIG_ARM_UNWIND
 #define UNWIND(code...)		code

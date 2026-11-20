@@ -91,7 +91,7 @@
 #define PMSAv7_DATA_SIDE	0
 #define PMSAv7_INSTR_SIDE	1
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 struct mpu_rgn {
 	/* Assume same attributes for d/i-side  */
@@ -128,6 +128,6 @@ static inline void pmsav7_setup(void) {};
 static inline void pmsav8_setup(void) {};
 #endif
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif

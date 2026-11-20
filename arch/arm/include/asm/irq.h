@@ -22,7 +22,7 @@
 #define NO_IRQ	((unsigned int)(-1))
 #endif
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 struct irqaction;
 struct pt_regs;
 

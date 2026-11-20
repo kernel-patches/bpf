@@ -10,7 +10,7 @@
 #ifndef __MEM_ENCRYPT_H__
 #define __MEM_ENCRYPT_H__
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #ifdef CONFIG_ARCH_HAS_MEM_ENCRYPT
 
@@ -54,6 +54,6 @@
 #define dma_addr_canonical(x)		(x)
 #endif
 
-#endif	/* __ASSEMBLY__ */
+#endif	/* __ASSEMBLER__ */
 
 #endif	/* __MEM_ENCRYPT_H__ */

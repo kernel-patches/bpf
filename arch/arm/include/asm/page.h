@@ -9,7 +9,7 @@
 
 #include <vdso/page.h>
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #ifndef CONFIG_MMU
 
@@ -180,7 +180,7 @@ extern int pfn_valid(unsigned long);
 #define pfn_valid pfn_valid
 #endif
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 #include <asm/memory.h>
 

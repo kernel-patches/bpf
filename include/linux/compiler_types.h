@@ -15,7 +15,7 @@
 #define ___PASTE(a, b) a##b
 #define __PASTE(a, b) ___PASTE(a, b)
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /*
  * C23 introduces "auto" as a standard way to define type-inferred
@@ -454,7 +454,7 @@ struct ftrace_likely_data {
 
 #endif /* __KERNEL__ */
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 /*
  * The below symbols may be defined for one or more, but not ALL, of the above
@@ -598,7 +598,7 @@ struct ftrace_likely_data {
 #define asm_inline asm
 #endif
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 /*
  * Use __typeof_unqual__() when available.
  */
@@ -637,7 +637,7 @@ struct ftrace_likely_data {
 
 #include <asm/percpu_types.h>
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 /*
  * __signed_scalar_typeof(x) - Declare a signed scalar type, leaving

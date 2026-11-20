@@ -43,7 +43,7 @@
 
 #define LIBRARY_TEXT_START	0x0c000000
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /*
  * This is the lowest virtual address we can permit any user space
@@ -119,7 +119,7 @@ extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
 	__pgprot_modify(prot, L_PTE_MT_MASK, L_PTE_MT_UNCACHED | L_PTE_XN)
 #endif
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 /*
  * The table below defines the page protection levels that we insert into our
@@ -130,7 +130,7 @@ extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
  *  3) write implies read permissions
  */
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
 
@@ -313,7 +313,7 @@ static inline pte_t pte_swp_clear_exclusive(pte_t pte)
 #define HAVE_ARCH_UNMAPPED_AREA
 #define HAVE_ARCH_UNMAPPED_AREA_TOPDOWN
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 #endif /* CONFIG_MMU */
 

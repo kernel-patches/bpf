@@ -39,7 +39,7 @@
 #define EMIF_CUSTOM_CONFIG_TEMP_ALERT_POLL_INTERVAL	0x00000002
 #define EMIF_CUSTOM_CONFIG_EXTENDED_TEMP_PART		0x00000004
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 /**
  * struct ddr_device_info - All information about the DDR device except AC
  *		timing parameters
@@ -121,6 +121,6 @@ struct emif_platform_data {
 	u32 ip_rev;
 	u32 phy_type;
 };
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif /* __LINUX_EMIF_H */
