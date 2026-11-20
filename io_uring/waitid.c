@@ -294,7 +294,7 @@ int io_waitid_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	if (sqe->addr || sqe->buf_index || sqe->addr3 || sqe->waitid_flags)
 		return -EINVAL;
 
-	iwa = io_uring_alloc_async_data(NULL, req);
+	iwa = io_uring_alloc_async_data(req);
 	if (unlikely(!iwa))
 		return -ENOMEM;
 	iwa->req = req;
@@ -376,8 +376,6 @@ int io_waitid(struct io_kiocb *req, unsigned int issue_flags)
 
 	io_ring_submit_unlock(ctx, issue_flags);
 done:
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

@@ -37,7 +37,7 @@ static int __io_splice_prep(struct io_kiocb *req,
 		return -EINVAL;
 	sp->splice_fd_in = READ_ONCE(sqe->splice_fd_in);
 	sp->rsrc_node = NULL;
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_FORCE_ASYNC);
 	return 0;
 }
 
@@ -73,7 +73,7 @@ static struct file *io_splice_get_file(struct io_kiocb *req,
 		node->refs++;
 		sp->rsrc_node = node;
 		file = io_slot_file(node);
-		req->flags |= REQ_F_NEED_CLEANUP;
+		io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 	}
 	io_ring_submit_unlock(ctx, issue_flags);
 	return file;

@@ -115,7 +115,8 @@ static void io_timeout_complete(struct io_tw_req tw_req, io_tw_token_t tw)
 	struct io_ring_ctx *ctx = req->ctx;
 
 	if (!io_timeout_finish(timeout, data)) {
-		if (io_req_post_cqe(req, -ETIME, IORING_CQE_F_MORE)) {
+		if (!tw.cancel &&
+		    io_req_post_cqe(req, -ETIME, IORING_CQE_F_MORE)) {
 			/* re-arm timer */
 			raw_spin_lock_irq(&ctx->timeout_lock);
 			list_add(&timeout->list, ctx->timeout_list.prev);
@@ -234,9 +235,9 @@ static void io_fail_links(struct io_kiocb *req)
 
 	while (link) {
 		if (ignore_cqes)
-			link->flags |= REQ_F_CQE_SKIP;
+			io_req_set_flags(link, REQ_F_CQE_SKIP);
 		else
-			link->flags &= ~REQ_F_CQE_SKIP;
+			io_req_clear_flags(link, REQ_F_CQE_SKIP);
 		trace_io_uring_fail_link(req, link);
 		link = link->link;
 	}
@@ -262,7 +263,7 @@ void io_disarm_next(struct io_kiocb *req)
 
 	if (req->flags & REQ_F_ARM_LTIMEOUT) {
 		link = req->link;
-		req->flags &= ~REQ_F_ARM_LTIMEOUT;
+		io_req_clear_flags(req, REQ_F_ARM_LTIMEOUT);
 		if (link && link->opcode == IORING_OP_LINK_TIMEOUT) {
 			io_remove_next_linked(req);
 			io_req_queue_tw_complete(link, -ECANCELED);
@@ -591,8 +592,6 @@ int io_timeout_remove(struct io_kiocb *req, unsigned int issue_flags)
 		raw_spin_unlock_irq(&ctx->timeout_lock);
 	}
 
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -640,7 +639,7 @@ static int __io_timeout_prep(struct io_kiocb *req,
 
 	if (WARN_ON_ONCE(req_has_async_data(req)))
 		return -EFAULT;
-	data = io_uring_alloc_async_data(NULL, req);
+	data = io_uring_alloc_async_data(req);
 	if (!data)
 		return -ENOMEM;
 	data->req = req;
@@ -660,7 +659,7 @@ static int __io_timeout_prep(struct io_kiocb *req,
 		if (link->last->opcode == IORING_OP_LINK_TIMEOUT)
 			return -EINVAL;
 		timeout->head = link->last;
-		link->last->flags |= REQ_F_ARM_LTIMEOUT;
+		io_req_set_flags(link->last, REQ_F_ARM_LTIMEOUT);
 		hrtimer_setup(&data->timer, io_link_timeout_fn, io_timeout_get_clock(data),
 			      data->mode);
 	} else {

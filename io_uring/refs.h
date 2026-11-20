@@ -3,7 +3,7 @@
 #define IOU_REQ_REF_H
 
 #include <linux/atomic.h>
-#include <linux/io_uring_types.h>
+#include <linux/io_uring.h>
 
 /*
  * Shamelessly stolen from the mm implementation of page reference checking,
@@ -51,7 +51,7 @@ static inline void req_ref_put(struct io_kiocb *req)
 static inline void __io_req_set_refcount(struct io_kiocb *req, int nr)
 {
 	if (!(req->flags & REQ_F_REFCOUNT)) {
-		req->flags |= REQ_F_REFCOUNT;
+		io_req_set_flags(req, REQ_F_REFCOUNT);
 		atomic_set(&req->refs, nr);
 	}
 }
