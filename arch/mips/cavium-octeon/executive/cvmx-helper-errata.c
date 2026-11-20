@@ -37,6 +37,7 @@
 
 #include <asm/octeon/octeon.h>
 
+#include <asm/octeon/cvmx-helper-errata.h>
 #include <asm/octeon/cvmx-helper-jtag.h>
 
 /**

@@ -340,7 +340,7 @@ OCTEON_MSI_INT_HANDLER_X(3);
 /*
  * Initializes the MSI interrupt handling code
  */
-int __init octeon_msi_initialize(void)
+static int __init octeon_msi_initialize(void)
 {
 	int irq;
 	struct irq_chip *msi;

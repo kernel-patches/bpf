@@ -42,6 +42,7 @@
 #include <asm/octeon/cvmx-spi.h>
 #include <asm/octeon/cvmx-helper.h>
 #include <asm/octeon/cvmx-helper-board.h>
+#include <asm/octeon/cvmx-helper-errata.h>
 
 #include <asm/octeon/cvmx-pip-defs.h>
 #include <asm/octeon/cvmx-asxx-defs.h>

@@ -46,7 +46,7 @@ static void *mailbox_0_regs[] = {
 /*
  * SMP init and finish on secondary CPUs
  */
-void bcm1480_smp_init(void)
+static void bcm1480_smp_init(void)
 {
 	unsigned int imask = STATUSF_IP4 | STATUSF_IP3 | STATUSF_IP2 |
 		STATUSF_IP1 | STATUSF_IP0;
@@ -83,8 +83,6 @@ static void bcm1480_send_ipi_mask(const struct cpumask *mask,
  */
 static void bcm1480_init_secondary(void)
 {
-	extern void bcm1480_smp_init(void);
-
 	bcm1480_smp_init();
 }
 
@@ -94,8 +92,6 @@ static void bcm1480_init_secondary(void)
  */
 static void bcm1480_smp_finish(void)
 {
-	extern void sb1480_clockevent_init(void);
-
 	sb1480_clockevent_init();
 	local_irq_enable();
 }

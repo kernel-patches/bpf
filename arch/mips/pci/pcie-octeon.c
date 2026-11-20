@@ -1468,7 +1468,7 @@ static int cvmx_pcie_rc_initialize(int pcie_port)
  *		 as it goes through each bridge.
  * Returns Interrupt number for the device
  */
-int octeon_pcie_pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
+static int octeon_pcie_pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	/*
 	 * The EBH5600 board with the PCI to PCIe bridge mistakenly
