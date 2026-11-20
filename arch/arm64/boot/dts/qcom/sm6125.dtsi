@@ -282,7 +282,7 @@
 		};
 
 		reserved_mem1: memory@46200000 {
-			reg = <0x0 0x46200000 0x0 0x2d00000>;
+			reg = <0x0 0x46200000 0x0 0x4900000>;
 			no-map;
 		};
 
@@ -682,7 +682,8 @@
 		};
 
 		hsusb_phy1: phy@1613000 {
-			compatible = "qcom,msm8996-qusb2-phy";
+			compatible = "qcom,sm6125-qusb2-phy",
+				     "qcom,sm6115-qusb2-phy";
 			reg = <0x0 0x01613000 0x0 0x180>;
 			#phy-cells = <0>;
 
