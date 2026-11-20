@@ -363,7 +363,9 @@ static struct efidrm_device *efidrm_device_create(struct drm_driver *drv,
 	if (ret)
 		return ERR_PTR(ret);
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ERR_PTR(ret);
 
 	return efi;
 }

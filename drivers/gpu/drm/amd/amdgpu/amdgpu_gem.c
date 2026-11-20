@@ -569,6 +569,16 @@ int amdgpu_gem_userptr_ioctl(struct drm_device *dev, void *data,
 	if (!access_ok((void __user *)(uintptr_t)args->addr, args->size))
 		return -EFAULT;
 
+	/* Userptrs are for temporary uploads, not a general memory allocator */
+	if (args->size == 0)
+		return -EINVAL;
+	if (args->size > SZ_1G && !adev->debug_disable_userptr_size_limit) {
+		dev_warn_once(adev->dev,
+			      "userptr size %llu exceeds 1GiB, set amdgpu.debug_mask=0x4000 to lift the limit\n",
+			      args->size);
+		return -EINVAL;
+	}
+
 	/* reject unknown flag values */
 	if (args->flags & ~(AMDGPU_GEM_USERPTR_READONLY |
 	    AMDGPU_GEM_USERPTR_ANONONLY | AMDGPU_GEM_USERPTR_VALIDATE |
@@ -755,22 +765,28 @@ int amdgpu_gem_metadata_ioctl(struct drm_device *dev, void *data,
 		goto unreserve;
 	}
 
-	if (args->op == AMDGPU_GEM_METADATA_OP_GET_METADATA) {
+	switch (args->op) {
+	case AMDGPU_GEM_METADATA_OP_GET_METADATA:
 		amdgpu_bo_get_tiling_flags(robj, &args->data.tiling_info);
 		r = amdgpu_bo_get_metadata(robj, args->data.data,
 					   sizeof(args->data.data),
 					   &args->data.data_size_bytes,
 					   &args->data.flags);
-	} else if (args->op == AMDGPU_GEM_METADATA_OP_SET_METADATA) {
+		break;
+	case AMDGPU_GEM_METADATA_OP_SET_METADATA:
 		if (args->data.data_size_bytes > sizeof(args->data.data)) {
 			r = -EINVAL;
-			goto unreserve;
+			break;
 		}
 		r = amdgpu_bo_set_tiling_flags(robj, args->data.tiling_info);
 		if (!r)
 			r = amdgpu_bo_set_metadata(robj, args->data.data,
 						   args->data.data_size_bytes,
 						   args->data.flags);
+		break;
+	default:
+		r = -EINVAL;
+		break;
 	}
 
 unreserve:

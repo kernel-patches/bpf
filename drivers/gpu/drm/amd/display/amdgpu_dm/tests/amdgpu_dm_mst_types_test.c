@@ -203,7 +203,7 @@ static void dm_mst_test_needs_dsc_aux_workaround_match(struct kunit *test)
 {
 	struct dc_link *link = kunit_kzalloc(test, sizeof(*link), GFP_KERNEL);
 
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, link);
+	KUNIT_ASSERT_NOT_NULL(test, link);
 
 	link->dpcd_caps.branch_dev_id = DP_BRANCH_DEVICE_ID_90CC24;
 	link->dpcd_caps.dpcd_rev.raw = DPCD_REV_14;
@@ -223,7 +223,7 @@ static void dm_mst_test_needs_dsc_aux_workaround_rev12(struct kunit *test)
 {
 	struct dc_link *link = kunit_kzalloc(test, sizeof(*link), GFP_KERNEL);
 
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, link);
+	KUNIT_ASSERT_NOT_NULL(test, link);
 
 	link->dpcd_caps.branch_dev_id = DP_BRANCH_DEVICE_ID_90CC24;
 	link->dpcd_caps.dpcd_rev.raw = DPCD_REV_12;
@@ -243,7 +243,7 @@ static void dm_mst_test_needs_dsc_aux_workaround_wrong_dev_id(struct kunit *test
 {
 	struct dc_link *link = kunit_kzalloc(test, sizeof(*link), GFP_KERNEL);
 
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, link);
+	KUNIT_ASSERT_NOT_NULL(test, link);
 
 	link->dpcd_caps.branch_dev_id = 0x123456;
 	link->dpcd_caps.dpcd_rev.raw = DPCD_REV_14;
@@ -263,7 +263,7 @@ static void dm_mst_test_needs_dsc_aux_workaround_wrong_rev(struct kunit *test)
 {
 	struct dc_link *link = kunit_kzalloc(test, sizeof(*link), GFP_KERNEL);
 
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, link);
+	KUNIT_ASSERT_NOT_NULL(test, link);
 
 	link->dpcd_caps.branch_dev_id = DP_BRANCH_DEVICE_ID_90CC24;
 	link->dpcd_caps.dpcd_rev.raw = 0x11; /* DPCD 1.1 */
@@ -283,7 +283,7 @@ static void dm_mst_test_needs_dsc_aux_workaround_low_sink_count(struct kunit *te
 {
 	struct dc_link *link = kunit_kzalloc(test, sizeof(*link), GFP_KERNEL);
 
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, link);
+	KUNIT_ASSERT_NOT_NULL(test, link);
 
 	link->dpcd_caps.branch_dev_id = DP_BRANCH_DEVICE_ID_90CC24;
 	link->dpcd_caps.dpcd_rev.raw = DPCD_REV_14;
@@ -303,7 +303,7 @@ static void dm_mst_test_needs_dsc_aux_workaround_zero_sink_count(struct kunit *t
 {
 	struct dc_link *link = kunit_kzalloc(test, sizeof(*link), GFP_KERNEL);
 
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, link);
+	KUNIT_ASSERT_NOT_NULL(test, link);
 
 	link->dpcd_caps.branch_dev_id = DP_BRANCH_DEVICE_ID_90CC24;
 	link->dpcd_caps.dpcd_rev.raw = DPCD_REV_14;
@@ -1162,7 +1162,7 @@ static void dm_mst_test_connector_destroy(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs dm_mst_test_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.destroy = dm_mst_test_connector_destroy,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
@@ -3709,7 +3709,7 @@ static void dm_mst_test_pre_compute_configs_no_recompute(struct kunit *test)
 /* Tests for compute_mst_dsc_configs_for_link */
 
 static const struct drm_connector_funcs dm_mst_test_dsc_link_conn_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -3808,6 +3808,12 @@ dm_mst_test_alloc_dsc_link_ctx(struct kunit *test, int total_avail_slots)
 	KUNIT_ASSERT_EQ(test,
 			kunit_add_action_or_reset(test, dm_mst_test_dsc_link_drop_locks, ctx), 0);
 
+	/* Must be allocated prior to drm_kunit_helper_atomic_state_alloc to prevent
+	 * use-after-free on cleanup
+	 */
+	port = kunit_kzalloc(test, sizeof(*port), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, port);
+
 	ctx->state = drm_kunit_helper_atomic_state_alloc(test, ctx->drm, &ctx->acquire_ctx);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ctx->state);
 
@@ -3833,11 +3839,9 @@ dm_mst_test_alloc_dsc_link_ctx(struct kunit *test, int total_avail_slots)
 	link_srv = kunit_kzalloc(test, sizeof(*link_srv), GFP_KERNEL);
 	res_pool = kunit_kzalloc(test, sizeof(*res_pool), GFP_KERNEL);
 	sink = kunit_kzalloc(test, sizeof(*sink), GFP_KERNEL);
-	port = kunit_kzalloc(test, sizeof(*port), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, link_srv);
 	KUNIT_ASSERT_NOT_NULL(test, res_pool);
 	KUNIT_ASSERT_NOT_NULL(test, sink);
-	KUNIT_ASSERT_NOT_NULL(test, port);
 
 	link_srv->mst_decide_link_encoding_format = dm_mst_test_mst_encoding_format;
 

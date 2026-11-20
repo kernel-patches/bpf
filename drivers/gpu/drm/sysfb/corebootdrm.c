@@ -421,7 +421,9 @@ static int corebootdrm_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ret;
 
 	ret = drm_dev_register(dev, 0);
 	if (ret)

@@ -118,7 +118,9 @@ static int tve200_modeset_init(struct drm_device *dev)
 		goto out_bridge;
 	}
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		goto out_bridge;
 	drm_kms_helper_poll_init(dev);
 
 	goto finish;

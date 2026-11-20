@@ -195,7 +195,9 @@ static int lcdif_load(struct drm_device *drm)
 	drm->mode_config.funcs		= &lcdif_mode_config_funcs;
 	drm->mode_config.helper_private	= &lcdif_mode_config_helpers;
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		return ret;
 
 	ret = platform_get_irq(pdev, 0);
 	if (ret < 0)

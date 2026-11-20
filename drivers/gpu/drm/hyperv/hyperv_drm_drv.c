@@ -15,7 +15,6 @@
 #include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_print.h>
-#include <drm/drm_simple_kms_helper.h>
 
 #include "hyperv_drm.h"
 
@@ -27,7 +26,8 @@
 DEFINE_DRM_GEM_FOPS(hv_drm_fops);
 
 static struct drm_driver hv_drm_driver = {
-	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
+	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC |
+			   DRIVER_CURSOR_HOTSPOT,
 
 	.name		 = DRIVER_NAME,
 	.desc		 = DRIVER_DESC,
@@ -120,6 +120,10 @@ static int hv_drm_vmbus_probe(struct hv_device *hdev,
 	hv_set_drvdata(hdev, hv);
 	hv->hdev = hdev;
 
+	ret = hv_drm_cursor_init(hv);
+	if (ret)
+		goto err_hv_set_drv_data;
+
 	ret = hv_drm_connect_vsp(hdev);
 	if (ret) {
 		drm_err(dev, "Failed to connect to vmbus.\n");
@@ -163,7 +167,7 @@ err_free_mmio:
 	iounmap(hv->vram);
 	vmbus_free_mmio(hv->mem->start, hv->fb_size);
 err_vmbus_close:
-	vmbus_close(hdev->channel);
+	hv_drm_disconnect_vsp(hdev);
 err_hv_set_drv_data:
 	hv_set_drvdata(hdev, NULL);
 	return ret;
@@ -177,7 +181,7 @@ static void hv_drm_vmbus_remove(struct hv_device *hdev)
 	vmbus_set_skip_unload(false);
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
-	vmbus_close(hdev->channel);
+	hv_drm_disconnect_vsp(hdev);
 	hv_set_drvdata(hdev, NULL);
 
 	iounmap(hv->vram);
@@ -198,7 +202,7 @@ static int hv_drm_vmbus_suspend(struct hv_device *hdev)
 	if (ret)
 		return ret;
 
-	vmbus_close(hdev->channel);
+	hv_drm_disconnect_vsp(hdev);
 
 	return 0;
 }

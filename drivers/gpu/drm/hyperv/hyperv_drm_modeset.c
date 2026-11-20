@@ -6,6 +6,7 @@
 #include <linux/hyperv.h>
 
 #include <drm/drm_atomic.h>
+#include <drm/drm_blend.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
@@ -110,7 +111,7 @@ static void hv_drm_crtc_helper_atomic_enable(struct drm_crtc *crtc,
 	struct drm_plane_state *plane_state = plane->state;
 	struct drm_crtc_state *crtc_state = crtc->state;
 
-	hv_drm_hide_hw_ptr(hv->hdev);
+	hv_drm_restore_cursor(hv);
 	hv_drm_update_situation(hv->hdev, 1,  hv->screen_depth,
 				crtc_state->mode.hdisplay,
 				crtc_state->mode.vdisplay,
@@ -241,6 +242,152 @@ static const struct drm_plane_funcs hv_drm_plane_funcs = {
 	DRM_PANIC_PLANE_FUNCS,
 };
 
+static const u32 hv_drm_cursor_formats[] = {
+	DRM_FORMAT_ARGB8888,
+};
+
+static int hv_drm_cursor_atomic_check(struct drm_plane *plane,
+				      struct drm_atomic_commit *state)
+{
+	struct drm_plane_state *plane_state = drm_atomic_get_new_plane_state(state, plane);
+	struct drm_crtc *crtc = plane_state->crtc;
+	struct drm_crtc_state *crtc_state = NULL;
+	int ret;
+
+	if (crtc)
+		crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+
+	ret = drm_atomic_helper_check_plane_state(plane_state, crtc_state,
+						  DRM_PLANE_NO_SCALING,
+						  DRM_PLANE_NO_SCALING,
+						  true, true);
+	if (ret)
+		return ret;
+
+	if (!plane_state->visible)
+		return 0;
+
+	if (plane_state->crtc_w > SYNTHVID_CURSOR_MAX_X ||
+	    plane_state->crtc_h > SYNTHVID_CURSOR_MAX_Y) {
+		drm_dbg(plane->dev, "Invalid cursor size %ux%u\n",
+			plane_state->crtc_w, plane_state->crtc_h);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+/*
+ * Copy the cursor image to the cache, bottom-up as the host wants it. Fully
+ * transparent columns and rows at the right and bottom, like the padding of
+ * a cursor buffer of the maximum size, are left out.
+ */
+static void hv_drm_cursor_load(struct hv_drm_cursor *cursor,
+			       const struct drm_plane_state *state,
+			       const struct iosys_map *map)
+{
+	size_t pitch = state->fb->pitches[0];
+	size_t offset = (state->src_y >> 16) * pitch + (state->src_x >> 16) *
+		SYNTHVID_CURSOR_ARGB_PIXEL_SIZE;
+	u32 hot_x = clamp_t(s32, state->hotspot_x, 0, state->crtc_w - 1);
+	u32 hot_y = clamp_t(s32, state->hotspot_y, 0, state->crtc_h - 1);
+	u32 width = 0, height = 0;
+	u32 x, y;
+
+	for (y = 0; y < state->crtc_h; y++) {
+		for (x = state->crtc_w; x; x--) {
+			if (iosys_map_rd(map,
+					 (offset + y * pitch + x *
+					  SYNTHVID_CURSOR_ARGB_PIXEL_SIZE - 1),
+					 u8))
+				break;
+		}
+
+		if (x) {
+			width = max(width, x);
+			height = y + 1;
+		}
+	}
+
+	if (!width) {
+		hv_drm_cursor_set_hidden(cursor);
+		return;
+	}
+
+	/* Keep the hotspot within the image */
+	width = max(width, hot_x + 1);
+	height = max(height, hot_y + 1);
+
+	for (y = 0; y < height; y++)
+		iosys_map_memcpy_from((cursor->image + (height - 1 - y) *
+				       width * SYNTHVID_CURSOR_ARGB_PIXEL_SIZE),
+				      map, offset + y * pitch,
+				      width * SYNTHVID_CURSOR_ARGB_PIXEL_SIZE);
+
+	cursor->width = width;
+	cursor->height = height;
+	cursor->hot_x = hot_x;
+	cursor->hot_y = hot_y;
+}
+
+static void hv_drm_cursor_hide(struct hv_drm_device *hv)
+{
+	struct hv_drm_cursor *cursor = hv->cursor;
+
+	scoped_guard(mutex, &cursor->lock) {
+		hv_drm_cursor_set_hidden(cursor);
+		hv_drm_update_cursor(hv, true);
+	}
+}
+
+static void hv_drm_cursor_atomic_update(struct drm_plane *plane,
+					struct drm_atomic_commit *state)
+{
+	struct hv_drm_device *hv = to_hv_drm(plane->dev);
+	struct drm_plane_state *old_state = drm_atomic_get_old_plane_state(state, plane);
+	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
+	struct drm_shadow_plane_state *shadow_plane_state = to_drm_shadow_plane_state(new_state);
+	struct hv_drm_cursor *cursor = hv->cursor;
+	bool shape;
+
+	if (!new_state->visible) {
+		if (old_state->visible)
+			hv_drm_cursor_hide(hv);
+		return;
+	}
+
+	shape = !old_state->visible || old_state->fb != new_state->fb ||
+		old_state->src_x != new_state->src_x ||
+		old_state->src_y != new_state->src_y ||
+		old_state->src_w != new_state->src_w ||
+		old_state->src_h != new_state->src_h ||
+		old_state->hotspot_x != new_state->hotspot_x ||
+		old_state->hotspot_y != new_state->hotspot_y;
+
+	scoped_guard(mutex, &cursor->lock) {
+		if (shape)
+			hv_drm_cursor_load(cursor, new_state,
+					   &shadow_plane_state->data[0]);
+
+		cursor->x = new_state->crtc_x;
+		cursor->y = new_state->crtc_y;
+		hv_drm_update_cursor(hv, shape);
+	}
+}
+
+static void hv_drm_cursor_atomic_disable(struct drm_plane *plane,
+					 struct drm_atomic_commit *state)
+{
+	hv_drm_cursor_hide(to_hv_drm(plane->dev));
+}
+
+static const struct drm_plane_helper_funcs hv_drm_cursor_helper_funcs = {
+	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
+	.atomic_check = hv_drm_cursor_atomic_check,
+	.atomic_update = hv_drm_cursor_atomic_update,
+	.atomic_disable = hv_drm_cursor_atomic_disable,
+};
+
 static const struct drm_encoder_funcs hv_drm_simple_encoder_funcs_cleanup = {
 	.destroy = drm_encoder_cleanup,
 };
@@ -250,6 +397,7 @@ static inline int hv_drm_pipe_init(struct hv_drm_device *hv)
 	struct drm_device *dev = &hv->dev;
 	struct drm_encoder *encoder = &hv->encoder;
 	struct drm_plane *plane = &hv->plane;
+	struct drm_plane *cursor = &hv->cursor_plane;
 	struct drm_crtc *crtc = &hv->crtc;
 	struct drm_connector *connector = &hv->connector;
 	int ret;
@@ -264,7 +412,23 @@ static inline int hv_drm_pipe_init(struct hv_drm_device *hv)
 	drm_plane_helper_add(plane, &hv_drm_plane_helper_funcs);
 	drm_plane_enable_fb_damage_clips(plane);
 
-	ret = drm_crtc_init_with_planes(dev, crtc, plane, NULL,
+	ret = drm_universal_plane_init(dev, cursor, 0,
+				       &hv_drm_plane_funcs,
+				       hv_drm_cursor_formats,
+				       ARRAY_SIZE(hv_drm_cursor_formats),
+				       hv_drm_modifiers,
+				       DRM_PLANE_TYPE_CURSOR, NULL);
+	if (ret)
+		return ret;
+	drm_plane_helper_add(cursor, &hv_drm_cursor_helper_funcs);
+
+	/* The cursor image reaches the host's clients with straight alpha */
+	ret = drm_plane_create_blend_mode_property(cursor,
+						   BIT(DRM_MODE_BLEND_COVERAGE));
+	if (ret)
+		return ret;
+
+	ret = drm_crtc_init_with_planes(dev, crtc, plane, cursor,
 					&hv_drm_crtc_funcs, NULL);
 	if (ret)
 		return ret;
@@ -320,6 +484,8 @@ int hv_drm_mode_config_init(struct hv_drm_device *hv)
 	dev->mode_config.min_height = 0;
 	dev->mode_config.max_width = hv->screen_width_max;
 	dev->mode_config.max_height = hv->screen_height_max;
+	dev->mode_config.cursor_width = SYNTHVID_CURSOR_MAX_X;
+	dev->mode_config.cursor_height = SYNTHVID_CURSOR_MAX_Y;
 
 	dev->mode_config.preferred_depth = hv->screen_depth;
 	dev->mode_config.prefer_shadow = 0;

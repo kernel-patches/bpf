@@ -13,6 +13,7 @@
 #include "dcn401/dcn401_dccg.h"
 
 struct dc;
+struct dc_dmub_fams2_config_data;
 
 enum ips_ono_state {
 	ONO_ON = 0,
@@ -50,6 +51,9 @@ enum dc_status dcn401_enable_stream_timing(
 				struct dc *dc);
 void dcn401_enable_stream(struct pipe_ctx *pipe_ctx);
 void dcn401_setup_hpo_hw_control(const struct dce_hwseq *hws, bool enable);
+void dcn401_init_odm_mem_power(struct dce_hwseq *hws);
+void dcn401_power_down_vga_mem(struct dce_hwseq *hws);
+void dcn401_dcfclk_gating_control(struct dce_hwseq *hws, bool enable);
 
 void dcn401_disable_link_output(struct dc_link *link,
 		const struct link_resource *link_res,
@@ -86,7 +90,8 @@ void dcn401_optimize_bandwidth_sequence(struct dc *dc,
 bool dcn401_dmub_hw_control_lock(struct dc *dc,
 		struct dc_state *context,
 		bool lock);
-void dcn401_fams2_update_config(struct dc *dc, struct dc_state *context, bool enable);
+bool dcn401_fams2_build_update_config(struct dc *dc, struct dc_state *context, bool enable,
+		struct dc_dmub_fams2_config_data *data);
 bool dcn401_is_dmub_hw_lock_supported(const struct dc *dc);
 void dcn401_unblank_stream(struct pipe_ctx *pipe_ctx, struct dc_link_settings *link_settings);
 void dcn401_hardware_release(struct dc *dc);
@@ -185,7 +190,7 @@ void dcn401_post_unlock_reset_opp_sequence(
 		struct pipe_ctx *opp_head,
 		struct block_sequence_state *seq_state);
 
-void dcn401_dc_ip_request_cntl(struct dc *dc, bool enable);
+void dcn401_dc_ip_request_cntl(struct dce_hwseq *hws, bool enable);
 
 void dcn401_enable_plane_sequence(struct dc *dc, struct pipe_ctx *pipe_ctx,
 				 struct dc_state *context,

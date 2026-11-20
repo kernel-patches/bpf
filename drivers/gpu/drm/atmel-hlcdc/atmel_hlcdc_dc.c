@@ -879,7 +879,9 @@ static int atmel_hlcdc_dc_load(struct drm_device *dev)
 		goto err_periph_clk_disable;
 	}
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		goto err_periph_clk_disable;
 
 	pm_runtime_get_sync(dev->dev);
 	ret = atmel_hlcdc_dc_irq_install(dev, dc->hlcdc->irq);

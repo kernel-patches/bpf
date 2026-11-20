@@ -559,7 +559,9 @@ static int amdgpu_vce_get_destroy_msg(struct amdgpu_ring *ring, uint32_t handle,
 	const unsigned int ib_size_dw = 1024;
 	struct amdgpu_job *job;
 	struct amdgpu_ib *ib;
+	struct amdgpu_ib ib_msg;
 	struct dma_fence *f = NULL;
+	uint64_t addr;
 	int i, r;
 
 	r = amdgpu_job_alloc_with_ib(ring->adev,
@@ -573,7 +575,17 @@ static int amdgpu_vce_get_destroy_msg(struct amdgpu_ring *ring, uint32_t handle,
 	if (r)
 		return r;
 
+	memset(&ib_msg, 0, sizeof(ib_msg));
+	/* only one gpu page is needed, alloc +1 page to make addr aligned. */
+	r = amdgpu_ib_get(ring->adev, NULL, AMDGPU_GPU_PAGE_SIZE * 2,
+			  direct ? AMDGPU_IB_POOL_DIRECT : AMDGPU_IB_POOL_DELAYED,
+			  &ib_msg);
+	if (r)
+		goto err;
+
 	ib = &job->ibs[0];
+	/* let addr point to page boundary */
+	addr = AMDGPU_GPU_PAGE_ALIGN(ib_msg.gpu_addr);
 
 	/* stitch together an VCE destroy msg */
 	ib->length_dw = 0;
@@ -587,8 +599,14 @@ static int amdgpu_vce_get_destroy_msg(struct amdgpu_ring *ring, uint32_t handle,
 	ib->ptr[ib->length_dw++] = 0x00000001; /* destroy session */
 	ib->ptr[ib->length_dw++] = 0x00000000;
 	ib->ptr[ib->length_dw++] = 0x00000000;
-	ib->ptr[ib->length_dw++] = 0xffffffff; /* feedback is not needed, set to 0xffffffff and firmware will not output feedback */
+	ib->ptr[ib->length_dw++] = 0xffffffff;
 	ib->ptr[ib->length_dw++] = 0x00000000;
+
+	ib->ptr[ib->length_dw++] = 0x00000014; /* len */
+	ib->ptr[ib->length_dw++] = 0x05000005; /* feedback buffer */
+	ib->ptr[ib->length_dw++] = upper_32_bits(addr);
+	ib->ptr[ib->length_dw++] = addr;
+	ib->ptr[ib->length_dw++] = 0x00000001;
 
 	ib->ptr[ib->length_dw++] = 0x00000008; /* len */
 	ib->ptr[ib->length_dw++] = 0x02000001; /* destroy cmd */
@@ -600,6 +618,7 @@ static int amdgpu_vce_get_destroy_msg(struct amdgpu_ring *ring, uint32_t handle,
 		r = amdgpu_job_submit_direct(job, ring, &f);
 	else
 		f = amdgpu_job_submit(job);
+	amdgpu_ib_free(&ib_msg, f);
 	if (r)
 		goto err;
 
@@ -771,6 +790,7 @@ int amdgpu_vce_ring_parse_cs(struct amdgpu_cs_parser *p,
 {
 	unsigned int fb_idx = 0, bs_idx = 0;
 	int session_idx = -1;
+	uint32_t img_size[AMDGPU_MAX_VCE_HANDLES];
 	uint32_t destroyed = 0;
 	uint32_t created = 0;
 	uint32_t allocated = 0;
@@ -862,7 +882,15 @@ int amdgpu_vce_ring_parse_cs(struct amdgpu_cs_parser *p,
 				r = session_idx;
 				goto out;
 			}
-			size = &p->adev->vce.img_size[session_idx];
+			/*
+			 * Stage the image size locally and only commit it once
+			 * the whole IB is valid, otherwise a failed create
+			 * could change the size of a live session.
+			 */
+			if (!(created & (1 << session_idx)))
+				img_size[session_idx] =
+					p->adev->vce.img_size[session_idx];
+			size = &img_size[session_idx];
 			break;
 
 		case 0x00000002: /* task info */
@@ -875,11 +903,6 @@ int amdgpu_vce_ring_parse_cs(struct amdgpu_cs_parser *p,
 			if (destroyed & (1 << session_idx)) {
 				destroyed &= ~(1 << session_idx);
 				allocated |= 1 << session_idx;
-
-			} else if (!(allocated & (1 << session_idx))) {
-				DRM_ERROR("Handle already in use!\n");
-				r = -EINVAL;
-				goto out;
 			}
 
 			luma_pitch = amdgpu_ib_get_value(ib, idx + 8);
@@ -904,6 +927,7 @@ int amdgpu_vce_ring_parse_cs(struct amdgpu_cs_parser *p,
 		case 0x04000007: /* motion estimation */
 		case 0x04000008: /* rdo */
 		case 0x04000009: /* vui */
+		case 0x0400000d: /* sei */
 		case 0x05000002: /* auxiliary buffer */
 		case 0x05000009: /* clock table */
 			break;
@@ -1006,7 +1030,12 @@ int amdgpu_vce_ring_parse_cs(struct amdgpu_cs_parser *p,
 
 out:
 	if (!r) {
-		/* No error, free all destroyed handle slots */
+		/* No error, commit the image size of created sessions */
+		for (i = 0; i < AMDGPU_MAX_VCE_HANDLES; ++i)
+			if (created & (1 << i))
+				p->adev->vce.img_size[i] = img_size[i];
+
+		/* and free all destroyed handle slots */
 		tmp = destroyed;
 	} else {
 		/* Error during parsing, free all allocated handle slots */
@@ -1064,11 +1093,6 @@ int amdgpu_vce_ring_parse_cs_vm(struct amdgpu_cs_parser *p,
 			if (destroyed & (1 << session_idx)) {
 				destroyed &= ~(1 << session_idx);
 				allocated |= 1 << session_idx;
-
-			} else if (!(allocated & (1 << session_idx))) {
-				DRM_ERROR("Handle already in use!\n");
-				r = -EINVAL;
-				goto out;
 			}
 
 			break;
