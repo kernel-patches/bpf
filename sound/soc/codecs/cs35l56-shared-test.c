@@ -31,6 +31,8 @@ struct cs35l56_shared_test_priv {
 	struct regmap *registers;
 	const struct regmap_config *regmap_config;
 	unsigned int reg_offset;
+	bool hw_written;
+	bool asp_written;
 	struct cs35l56_base *cs35l56_base;
 	u8 applied_pad_pull_state[CS35L56_MAX_GPIO];
 };
@@ -664,6 +666,145 @@ static void cs35l56_shared_test_regmap_defaults_readable(struct kunit *test)
 	}
 }
 
+static int cs35l56_shared_test_regmap_read_illegal(void *context, unsigned int reg,
+						   unsigned int *val)
+{
+	kunit_fail_current_test("Unexpected regmap reg_read\n");
+
+	return -EPERM;
+}
+
+static int cs35l56_shared_test_regmap_write_detect_asp_writes(void *context, unsigned int reg,
+							      unsigned int val)
+{
+	struct cs35l56_shared_test_priv *priv = context;
+
+	priv->hw_written = true;
+	reg -= priv->reg_offset;
+
+	/*
+	 * Check for writes to ASP config registers. Check the entire ASP address
+	 * space, not only registers defined in cs35l56.h.
+	 */
+	if (reg >= 0x4800 && reg <= 0x48ff)
+		priv->asp_written = true;
+
+	return 0;
+}
+
+static const struct regmap_bus cs35l56_shared_test_asp_write_regmap_bus = {
+	.reg_read = cs35l56_shared_test_regmap_read_illegal,
+	.reg_write = cs35l56_shared_test_regmap_write_detect_asp_writes,
+};
+
+/*
+ * If cs35l56_set_asp_defaults() was not called the ASP config address space must
+ * not be written by a regcache_sync().
+ */
+static void cs35l56_shared_test_regcache_sync_omits_asp_config(struct kunit *test)
+{
+	struct cs35l56_shared_test_priv *priv = test->priv;
+	struct regmap *regmap;
+
+	/* Use the driver defaults and detect hardware writes to the ASP registers. */
+	regmap = regmap_init(&priv->amp_dev->dev, &cs35l56_shared_test_asp_write_regmap_bus,
+			     priv, priv->regmap_config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, regmap);
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, regmap_exit_wrapper, regmap));
+
+	/* Dirty the cache without modifying the ASP registers. */
+	regcache_cache_only(regmap, true);
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(regmap, CS35L56_IRQ1_MASK_1, 0));
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(regmap, CS35L56_IRQ1_MASK_2, 0));
+	regcache_cache_only(regmap, false);
+
+	KUNIT_ASSERT_EQ(test, false, priv->asp_written);
+	KUNIT_ASSERT_EQ(test, false, priv->hw_written);
+	KUNIT_ASSERT_EQ(test, 0, regcache_sync(regmap));
+	KUNIT_EXPECT_EQ(test, false, priv->asp_written);
+	KUNIT_EXPECT_EQ(test, true, priv->hw_written);
+
+	priv->asp_written = false;
+	priv->hw_written = false;
+	regcache_cache_only(regmap, true);
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(regmap, CS35L56_IRQ1_MASK_1, 0xffffffff));
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(regmap, CS35L56_IRQ1_MASK_2, 0xffffffff));
+	regcache_cache_only(regmap, false);
+
+	regcache_mark_dirty(regmap);
+	KUNIT_ASSERT_EQ(test, false, priv->asp_written);
+	KUNIT_ASSERT_EQ(test, false, priv->hw_written);
+	KUNIT_ASSERT_EQ(test, 0, regcache_sync(regmap));
+	KUNIT_EXPECT_EQ(test, false, priv->asp_written);
+	KUNIT_EXPECT_EQ(test, true, priv->hw_written);
+}
+
+/*
+ * If cs35l56_set_asp_defaults() was called the ASP config registers must be
+ * written by a regcache_sync().
+ */
+static void cs35l56_shared_test_regcache_sync_includes_asp_config(struct kunit *test)
+{
+	struct cs35l56_shared_test_priv *priv = test->priv;
+	struct regmap *regmap;
+
+	/* Use the driver defaults and detect hardware writes to the ASP registers. */
+	regmap = regmap_init(&priv->amp_dev->dev, &cs35l56_shared_test_asp_write_regmap_bus,
+			     priv, priv->regmap_config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, regmap);
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, regmap_exit_wrapper, regmap));
+
+	priv->cs35l56_base->regmap = regmap;
+	KUNIT_ASSERT_EQ(test, 0, cs35l56_set_asp_defaults(priv->cs35l56_base));
+	/* Ignore writes from applying defaults so only sync writes are detected. */
+	priv->asp_written = false;
+
+	/* Dirty the cache without modifying the ASP registers. */
+	regcache_cache_only(regmap, true);
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(regmap, CS35L56_IRQ1_MASK_1, 0));
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(regmap, CS35L56_IRQ1_MASK_2, 0));
+	regcache_cache_only(regmap, false);
+
+	KUNIT_ASSERT_EQ(test, false, priv->asp_written);
+	KUNIT_ASSERT_EQ(test, 0, regcache_sync(regmap));
+	KUNIT_ASSERT_EQ(test, true, priv->asp_written);
+
+	priv->asp_written = false;
+	regcache_cache_only(regmap, true);
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(regmap, CS35L56_IRQ1_MASK_1, 0xffffffff));
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(regmap, CS35L56_IRQ1_MASK_2, 0xffffffff));
+	regcache_cache_only(regmap, false);
+
+	regcache_mark_dirty(regmap);
+	KUNIT_ASSERT_EQ(test, false, priv->asp_written);
+	KUNIT_ASSERT_EQ(test, 0, regcache_sync(regmap));
+	KUNIT_ASSERT_EQ(test, true, priv->asp_written);
+}
+
+/*
+ * cs35l56_set_asp_defaults() can be called while in cache-only and in that
+ * state does not write to hardware.
+ */
+static void cs35l56_shared_test_set_asp_defaults_cache_only(struct kunit *test)
+{
+	struct cs35l56_shared_test_priv *priv = test->priv;
+	struct regmap *regmap;
+
+	regmap = regmap_init(&priv->amp_dev->dev, &cs35l56_shared_test_asp_write_regmap_bus,
+			     priv, priv->regmap_config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, regmap);
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, regmap_exit_wrapper, regmap));
+
+	priv->cs35l56_base->regmap = regmap;
+	regcache_cache_only(regmap, true);
+	KUNIT_ASSERT_EQ(test, false, priv->hw_written);
+	KUNIT_ASSERT_EQ(test, 0, cs35l56_set_asp_defaults(priv->cs35l56_base));
+	KUNIT_ASSERT_EQ(test, false, priv->hw_written);
+}
+
 static int cs35l56_shared_test_case_regmap_init(struct kunit *test,
 						const struct regmap_config *regmap_config)
 {
@@ -917,6 +1058,9 @@ static struct kunit_case cs35l56_shared_test_cases[] = {
 	KUNIT_CASE(cs35l56_shared_test_sorted_regmap_defaults),
 	KUNIT_CASE(cs35l56_shared_test_regmap_defaults_not_volatile),
 	KUNIT_CASE(cs35l56_shared_test_regmap_defaults_readable),
+	KUNIT_CASE(cs35l56_shared_test_regcache_sync_omits_asp_config),
+	KUNIT_CASE(cs35l56_shared_test_regcache_sync_includes_asp_config),
+	KUNIT_CASE(cs35l56_shared_test_set_asp_defaults_cache_only),
 
 	{ }
 };

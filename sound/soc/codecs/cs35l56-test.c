@@ -17,8 +17,13 @@
 #include <linux/overflow.h>
 #include <linux/pci_ids.h>
 #include <linux/property.h>
+#include <linux/range.h>
+#include <linux/regmap.h>
+#include <linux/regulator/driver.h>
+#include <linux/regulator/machine.h>
 #include <linux/seq_buf.h>
 #include <linux/soundwire/sdw.h>
+#include <linux/unaligned.h>
 #include <sound/cs35l56.h>
 #include <sound/cs-amp-lib.h>
 #include <sound/sdca_function.h>
@@ -39,14 +44,25 @@ KUNIT_DEFINE_ACTION_WRAPPER(device_remove_software_node_wrapper,
 			    device_remove_software_node,
 			    struct device *)
 
+KUNIT_DEFINE_ACTION_WRAPPER(cs35l56_remove_wrapper, cs35l56_remove,
+			    struct cs35l56_private *)
+
+KUNIT_DEFINE_ACTION_WRAPPER(snd_soc_unregister_card_wrapper, snd_soc_unregister_card,
+			    struct snd_soc_card *)
+
 struct cs35l56_test_priv {
 	struct faux_device *amp_dev;
 	struct cs35l56_private *cs35l56_priv;
+	const struct regmap_config *regmap_config;
+	struct regmap *registers;
 
 	const char *ssidexv2;
 
 	bool read_onchip_spkid_called;
 	bool configure_onchip_spkid_pads_called;
+
+	bool asp_config_regs_written;
+	bool asp_mixer_regs_written;
 };
 
 struct cs35l56_test_param {
@@ -78,6 +94,231 @@ static const struct software_node *cs35l56_test_dev_and_af01_node_group[] = {
 	&cs35l56_test_af01_sw_node,
 	NULL
 };
+
+/* Some mocked registers need default values for driver init to work */
+static const struct reg_default cs35l56_test_mock_reg_defaults[] = {
+	{ CS35L56_OTPID,		0x00000003 },
+	{ CS35L56_IRQ1_STATUS,		0x00000000 },
+	{ CS35L56_IRQ1_MASK_1,		0x83ffffff },
+	{ CS35L56_IRQ1_MASK_8,		0xfc000fff },
+	{ CS35L56_DSP_VIRTUAL1_MBOX_1,	0x00000000 },
+	{ CS35L56_DIE_STS1,		0x00000000 },
+	{ CS35L56_DIE_STS2,		0x00000000 },
+	{ CS35L56_DSP_RESTRICT_STS1,	0x00000000 },
+	{ CS35L56_OTP_MEM_53,		0x00000000 },
+	{ CS35L56_OTP_MEM_54,		0x00000000 },
+	{ CS35L56_OTP_MEM_55,		0x00000000 },
+	{ CS35L56_DSP1_FW_VER,		0x00040710 },
+	{ CS35L63_PROTECTION_STATUS,	0x00000000 },
+	{ CS35L56_PROTECTION_STATUS,	0x00000000 },
+};
+
+/* Trap the entire ASP address space, not only particular registers */
+static const struct range cs35l56_test_asp_config_registers_range = {
+	.start = 0x4800,
+	.end = 0x48ff,
+};
+
+static const struct range cs35l56_test_asp_mixer_registers_range = {
+	.start = CS35L56_ASP1TX1_INPUT,
+	.end = CS35L56_ASP1TX4_INPUT,
+};
+
+static int cs35l56_test_mock_registers_read(void *context,
+					    const void *reg_buf, size_t reg_size,
+					    void *val_buf, size_t val_size)
+{
+	struct kunit *test = context;
+	struct cs35l56_test_priv *priv = test->priv;
+	u8 *buf = val_buf;
+	unsigned int reg = get_unaligned_be32(reg_buf);
+	unsigned int val;
+	size_t i;
+	int ret;
+
+	/* Don't use KUNIT_ASSERT, it would abort without releasing the regmap lock */
+	if ((reg_size != sizeof(u32)) || (val_size % sizeof(u32))) {
+		kunit_fail_current_test("Illegal reg read args\n");
+		return -EINVAL;
+	}
+
+	if (priv->regmap_config)
+		reg -= priv->regmap_config->reg_base;
+
+	switch (reg) {
+	case CS35L56_DSP_VIRTUAL1_MBOX_1:
+		/* MBOX must return 0 to indicate that the value was written */
+		put_unaligned_be32(0, val_buf);
+		return 0;
+	case CS35L56_DSP1_HALO_STATE:
+	case CS35L63_DSP1_HALO_STATE:
+	case CS35L56_B2_DSP1_HALO_STATE:
+		/* Driver zeros this and we must simulate the firmware rewriting it */
+		put_unaligned_be32(CS35L56_HALO_STATE_BOOT_DONE, buf);
+		return 0;
+	default:
+		break;
+	}
+
+	for (i = 0; i < val_size; i += sizeof(u32), reg += sizeof(u32)) {
+		ret = regmap_read(priv->registers, reg, &val);
+		if (ret)
+			return ret;
+
+		put_unaligned_be32(val, buf + i);
+	}
+
+	return 0;
+}
+
+static int cs35l56_test_mock_registers_write(void *context, const void *data, size_t count)
+{
+	struct kunit *test = context;
+	struct cs35l56_test_priv *priv = test->priv;
+	struct range addr_range;
+	unsigned int reg, val;
+	const u8 *buf = data;
+	size_t i;
+	int ret;
+
+	/* Don't use KUNIT_ASSERT, it would abort without releasing the regmap lock */
+	if ((count < 2 * sizeof(u32)) || (count % sizeof(u32))) {
+		kunit_fail_current_test("Illegal reg write args\n");
+		return -EINVAL;
+	}
+
+	reg = get_unaligned_be32(buf);
+	buf += sizeof(u32);
+	count -= sizeof(u32);
+	if (priv->regmap_config)
+		reg -= priv->regmap_config->reg_base;
+
+	addr_range = DEFINE_RANGE(reg, reg + count - 1);
+	if (range_overlaps(&addr_range, &cs35l56_test_asp_config_registers_range))
+		priv->asp_config_regs_written = true;
+
+	if (range_overlaps(&addr_range, &cs35l56_test_asp_mixer_registers_range))
+		priv->asp_mixer_regs_written = true;
+
+	for (i = 0; i < count; i += sizeof(u32)) {
+		val = get_unaligned_be32(buf + i);
+		ret = regmap_write(priv->registers, reg + i, val);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static const struct regmap_bus cs35l56_test_mock_registers_regmap_bus = {
+	/* Always in cache-only so no handlers needed */
+};
+
+static const struct regmap_config cs35l56_test_mock_registers_regmap_config = {
+	.name = "cs35l56_mock_registers",
+	.reg_bits = 32,
+	.val_bits = 32,
+	.reg_stride = 4,
+	.max_register = CS35L56_DSP1_PMEM_5114,
+	.cache_type = REGCACHE_MAPLE,
+	.reg_defaults = cs35l56_test_mock_reg_defaults,
+	.num_reg_defaults = ARRAY_SIZE(cs35l56_test_mock_reg_defaults),
+	.reg_format_endian = REGMAP_ENDIAN_BIG,
+	.val_format_endian = REGMAP_ENDIAN_BIG,
+};
+
+static const struct regmap_bus cs35l56_test_mock_registers_client_regmap_bus = {
+	.read = cs35l56_test_mock_registers_read,
+	.write = cs35l56_test_mock_registers_write,
+};
+
+/* Populate simulated register ranges with dummy values */
+static void cs35l56_test_fill_register_range(struct kunit *test,
+					     const struct range *reg_range,
+					     unsigned int fill_value)
+{
+	struct cs35l56_test_priv *priv = test->priv;
+	unsigned int addr;
+
+	for (addr = reg_range->start; addr <= reg_range->end; addr += 4)
+		KUNIT_ASSERT_EQ(test, 0, regmap_write(priv->registers, addr, fill_value));
+}
+
+/* Simulated device registers using a mock bus backed by a cache-only regmap */
+static void cs35l56_test_create_mock_device_registers(struct kunit *test)
+{
+	struct cs35l56_test_priv *priv = test->priv;
+	struct cs35l56_private *cs35l56 = priv->cs35l56_priv;
+	unsigned int devid = 0x35a00 | cs35l56->base.type;
+
+	priv->registers = devm_regmap_init(cs35l56->base.dev,
+					   &cs35l56_test_mock_registers_regmap_bus,
+					   test, &cs35l56_test_mock_registers_regmap_config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, priv->registers);
+	regcache_cache_only(priv->registers, true);
+
+	switch (cs35l56->base.type) {
+	case 0x54:
+	case 0x56:
+	case 0x57:
+		break;
+	default:
+		devid <<= 4;
+		break;
+	}
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(priv->registers, CS35L56_DEVID, devid));
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(priv->registers, CS35L56_REVID, cs35l56->base.rev));
+
+	cs35l56_test_fill_register_range(test, &cs35l56_test_asp_config_registers_range, 0);
+	cs35l56_test_fill_register_range(test, &cs35l56_test_asp_mixer_registers_range, 0);
+}
+
+/*
+ * Not all systems supply dummy regulators for missing regulators, and
+ * this behaviour is a system-level decision, not a KConfig symbol we can
+ * depend on. So we have to provide our own dummy regulators.
+ */
+static const struct regulator_ops cs35l56_test_mock_regulator_ops;
+static const struct regulator_desc cs35l56_test_mock_regulator_desc = {
+	.name = "cs35l56_test_regulators",
+	.type = REGULATOR_VOLTAGE,
+	.owner = THIS_MODULE,
+	.ops = &cs35l56_test_mock_regulator_ops,
+};
+
+static struct regulator_consumer_supply cs35l56_test_mock_supplies[] = {
+	REGULATOR_SUPPLY("VDD_P", NULL),
+	REGULATOR_SUPPLY("VDD_IO", NULL),
+	REGULATOR_SUPPLY("VDD_A", NULL),
+	REGULATOR_SUPPLY("VDD_B", NULL),
+	REGULATOR_SUPPLY("VDD_AMP", NULL),
+};
+
+static const struct regulator_init_data cs35l56_test_mock_init_data = {
+	.constraints.always_on = 1,
+	.num_consumer_supplies = ARRAY_SIZE(cs35l56_test_mock_supplies),
+	.consumer_supplies = cs35l56_test_mock_supplies,
+};
+
+static void cs35l56_test_create_mock_supplies(struct kunit *test)
+{
+	struct cs35l56_test_priv *priv = test->priv;
+	struct regulator_config config = { };
+	int i;
+
+	if (!IS_ENABLED(CONFIG_REGULATOR))
+		return;
+
+	config.dev = &priv->amp_dev->dev;
+	config.init_data = &cs35l56_test_mock_init_data;
+	for (i = 0; i < ARRAY_SIZE(cs35l56_test_mock_supplies); i++)
+		cs35l56_test_mock_supplies[i].dev_name = dev_name(config.dev);
+
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
+				     devm_regulator_register(config.dev,
+							     &cs35l56_test_mock_regulator_desc,
+							     &config));
+}
 
 static const char *cs35l56_test_devm_get_vendor_specific_variant_id_none(struct device *dev,
 									 int ssid_vendor,
@@ -611,6 +852,83 @@ static void cs35l56_test_set_fw_name_preserves_spkid_without_onchip_gpios(struct
 	KUNIT_EXPECT_EQ(test, cs35l56->speaker_id, 15);
 }
 
+static void cs35l56_test_dummy_dsp_work(struct work_struct *work)
+{
+}
+
+/*
+ * Probing the component must not access the ASP1 registers. The driver does
+ * not necessarily own them.
+ */
+static void cs35l56_test_component_probe_omits_asp(struct kunit *test)
+{
+	struct cs35l56_test_priv *priv = test->priv;
+	struct cs35l56_private *cs35l56 = priv->cs35l56_priv;
+	struct snd_soc_card *card = cs35l56->component->card;
+	struct snd_soc_aux_dev *aux;
+	struct faux_device *card_dev;
+
+	cs35l56_test_create_mock_supplies(test);
+	cs35l56_test_create_mock_device_registers(test);
+
+	KUNIT_ASSERT_NOT_NULL(test, priv->regmap_config);
+	cs35l56->base.regmap = devm_regmap_init(cs35l56->base.dev,
+						&cs35l56_test_mock_registers_client_regmap_bus,
+						test, priv->regmap_config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cs35l56->base.regmap);
+
+	KUNIT_ASSERT_EQ(test, 0, cs35l56_common_probe(cs35l56, 0));
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, cs35l56_remove_wrapper, cs35l56));
+
+	/* Prevent real dsp_work */
+	INIT_WORK(&cs35l56->dsp_work, cs35l56_test_dummy_dsp_work);
+
+	/* Simulate first attachment and re-attachment after the soft reset. */
+	regcache_cache_only(cs35l56->base.regmap, false);
+	KUNIT_ASSERT_EQ(test, 0, cs35l56_init(cs35l56));
+	KUNIT_ASSERT_EQ(test, 0, cs35l56_init(cs35l56));
+	KUNIT_ASSERT_TRUE(test, cs35l56->base.init_done);
+	flush_work(&cs35l56->component_register_work);
+	KUNIT_ASSERT_TRUE(test, cs35l56->component_registered);
+
+	card_dev = faux_device_create("cs35l56_test_card", NULL, NULL);
+	KUNIT_ASSERT_NOT_NULL(test, card_dev);
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, faux_device_destroy_wrapper, card_dev));
+
+	/* Bind as an auxiliary component so the ASP DAI is never probed. */
+	aux = kunit_kzalloc(test, sizeof(*aux), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, aux);
+	aux->dlc.name = dev_name(cs35l56->base.dev);
+	card->name = "cs35l56-test";
+	card->dev = &card_dev->dev;
+	card->owner = THIS_MODULE;
+	card->aux_dev = aux;
+	card->num_aux_devs = 1;
+	KUNIT_ASSERT_EQ(test, 0, snd_soc_register_card(card));
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, snd_soc_unregister_card_wrapper, card));
+	KUNIT_ASSERT_TRUE(test, card->instantiated);
+
+	/*
+	 * Flush cache to ensure there aren't cached values for the ASP registers.
+	 * The first case without regcache_mark_dirty() tests flushing when
+	 * hardware registers have not reset, and requires a dummy write to
+	 * the cache to make it dirty.
+	 */
+	regcache_cache_only(cs35l56->base.regmap, true);
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(cs35l56->base.regmap,
+					      CS35L56_DSP_VIRTUAL1_MBOX_1, 0));
+	regcache_cache_only(cs35l56->base.regmap, false);
+	KUNIT_ASSERT_EQ(test, 0, regcache_sync(cs35l56->base.regmap));
+	regcache_mark_dirty(cs35l56->base.regmap);
+	KUNIT_ASSERT_EQ(test, 0, regcache_sync(cs35l56->base.regmap));
+
+	KUNIT_EXPECT_FALSE(test, priv->asp_config_regs_written);
+	KUNIT_EXPECT_FALSE(test, priv->asp_mixer_regs_written);
+}
+
 static int cs35l56_test_case_init_common(struct kunit *test)
 {
 	struct cs35l56_test_priv *priv;
@@ -625,6 +943,11 @@ static int cs35l56_test_case_init_common(struct kunit *test)
 
 	test->priv = priv;
 
+	/* Construct minimal set of driver structs */
+	priv->cs35l56_priv = kunit_kzalloc(test, sizeof(*priv->cs35l56_priv), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, priv->cs35l56_priv);
+	cs35l56 = priv->cs35l56_priv;
+
 	/* Create dummy amp driver dev */
 	priv->amp_dev = faux_device_create("cs35l56_test_drv", NULL, NULL);
 	KUNIT_ASSERT_NOT_NULL(test, priv->amp_dev);
@@ -632,11 +955,6 @@ static int cs35l56_test_case_init_common(struct kunit *test)
 			kunit_add_action_or_reset(test,
 						  faux_device_destroy_wrapper,
 						  priv->amp_dev));
-
-	/* Construct minimal set of driver structs */
-	priv->cs35l56_priv = kunit_kzalloc(test, sizeof(*priv->cs35l56_priv), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_NULL(test, priv->cs35l56_priv);
-	cs35l56 = priv->cs35l56_priv;
 	cs35l56->base.dev = &priv->amp_dev->dev;
 
 	cs35l56->component = kunit_kzalloc(test, sizeof(*cs35l56->component), GFP_KERNEL);
@@ -653,6 +971,17 @@ static int cs35l56_test_case_init_common(struct kunit *test)
 		cs35l56->base.rev = param->rev;
 		cs35l56->feid = param->feid;
 		cs35l56->fev = param->fev;
+
+		switch (param->type) {
+		case 0x54:
+		case 0x56:
+		case 0x57:
+			priv->regmap_config = &cs35l56_regmap_i2c;
+			break;
+		default:
+			priv->regmap_config = &cs35l63_regmap_i2c;
+			break;
+		}
 	}
 
 	return 0;
@@ -902,6 +1231,8 @@ static struct kunit_case cs35l56_test_cases_soundwire[] = {
 	KUNIT_CASE(cs35l56_test_set_fw_name_reads_onchip_spkid),
 	KUNIT_CASE(cs35l56_test_set_fw_name_preserves_spkid_with_onchip_gpios),
 	KUNIT_CASE(cs35l56_test_set_fw_name_preserves_spkid_without_onchip_gpios),
+	KUNIT_CASE_PARAM(cs35l56_test_component_probe_omits_asp,
+			 cs35l56_test_type_rev_all_gen_params),
 
 	{ } /* terminator */
 };
@@ -942,6 +1273,7 @@ kunit_test_suites(
 );
 
 MODULE_IMPORT_NS("SND_SOC_CS_AMP_LIB");
+MODULE_IMPORT_NS("SND_SOC_CS35L56_CORE");
 MODULE_IMPORT_NS("SND_SOC_CS35L56_SHARED");
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 MODULE_DESCRIPTION("KUnit test for Cirrus Logic cs35l56 codec driver");
