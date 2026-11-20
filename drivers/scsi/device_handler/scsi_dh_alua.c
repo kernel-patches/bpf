@@ -1233,13 +1233,20 @@ static int alua_bus_attach(struct scsi_device *sdev)
 	INIT_LIST_HEAD(&h->node);
 
 	mutex_init(&h->init_mutex);
+	/*
+	 * alua_rtpg_queue() only queues an RTPG when sdev->handler_data
+	 * points at this alua_dh_data, so set it before alua_initialize()
+	 * otherwise the initial RTPG issued from alua_check_vpd() is
+	 * silently dropped and sdev->access_state is never populated.
+	 */
+	sdev->handler_data = h;
 	err = alua_initialize(sdev, h);
 	if (err != SCSI_DH_OK && err != SCSI_DH_DEV_OFFLINED)
 		goto failed;
 
-	sdev->handler_data = h;
 	return SCSI_DH_OK;
 failed:
+	sdev->handler_data = NULL;
 	kfree(h);
 	return err;
 }

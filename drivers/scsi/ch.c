@@ -952,11 +952,15 @@ static void ch_remove(struct scsi_device *sd)
 	scsi_changer *ch = dev_get_drvdata(dev);
 
 	spin_lock(&ch_index_lock);
-	idr_remove(&ch_index_idr, ch->minor);
+	idr_replace(&ch_index_idr, NULL, ch->minor);
 	dev_set_drvdata(dev, NULL);
 	spin_unlock(&ch_index_lock);
 
 	device_destroy(&ch_sysfs_class, MKDEV(SCSI_CHANGER_MAJOR, ch->minor));
+
+	spin_lock(&ch_index_lock);
+	idr_remove(&ch_index_idr, ch->minor);
+	spin_unlock(&ch_index_lock);
 	scsi_device_put(ch->device);
 	kref_put(&ch->ref, ch_destroy);
 }
