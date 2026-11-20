@@ -33,6 +33,12 @@ enum named_uint_enum {
 	UINT_ENUM_VAL2 = 0xfffffff0,
 };
 
+/* signed 4-byte enum, with a non-negative value too */
+enum named_int_enum {
+	INT_ENUM_VAL1 = -1,
+	INT_ENUM_VAL2 = 1,
+};
+
 struct core_reloc_enumval_output {
 	bool named_val1_exists;
 	bool named_val2_exists;
@@ -47,6 +53,8 @@ struct core_reloc_enumval_output {
 	int anon_val2;
 	long uint_val1;
 	long uint_val2;
+	long int_val1;
+	long int_val2;
 };
 
 #ifdef __clang__
@@ -85,6 +93,12 @@ int test_core_enumval(void *ctx)
 		out->uint_val1 = UINT_ENUM_VALUE(UINT_ENUM_VAL1);
 	if (bpf_core_enum_value_exists(enum named_uint_enum, UINT_ENUM_VAL2))
 		out->uint_val2 = UINT_ENUM_VALUE(UINT_ENUM_VAL2);
+
+	/* enum named_int_enum is optional */
+	if (bpf_core_enum_value_exists(enum named_int_enum, INT_ENUM_VAL1))
+		out->int_val1 = bpf_core_enum_value(enum named_int_enum, INT_ENUM_VAL1);
+	if (bpf_core_enum_value_exists(enum named_int_enum, INT_ENUM_VAL2))
+		out->int_val2 = bpf_core_enum_value(enum named_int_enum, INT_ENUM_VAL2);
 #else
 	data.skip = true;
 #endif
