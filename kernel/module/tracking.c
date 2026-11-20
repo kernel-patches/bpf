@@ -14,8 +14,20 @@
 #include <linux/rculist.h>
 #include "internal.h"
 
+struct mod_unload_taint {
+	struct list_head list;
+	char name[MODULE_NAME_LEN];
+	unsigned long taints;
+
+	/*
+	 * Number of times a module with this name and taint combination has
+	 * been unloaded. Updates are serialized by module_mutex and use
+	 * WRITE_ONCE(). Readers that may run concurrently use READ_ONCE().
+	 */
+	unsigned int count;
+};
+
 static LIST_HEAD(unloaded_tainted_modules);
-extern struct dentry *mod_debugfs_root;
 
 int try_add_tainted_module(struct module *mod)
 {
@@ -27,8 +39,11 @@ int try_add_tainted_module(struct module *mod)
 	list_for_each_entry_rcu(mod_taint, &unloaded_tainted_modules, list,
 				lockdep_is_held(&module_mutex)) {
 		if (!strcmp(mod_taint->name, mod->name) &&
-		    mod_taint->taints & mod->taints) {
-			mod_taint->count++;
+		    mod_taint->taints == mod->taints) {
+			unsigned int count = mod_taint->count;
+
+			if (count != UINT_MAX)
+				WRITE_ONCE(mod_taint->count, count + 1);
 			goto out;
 		}
 	}
@@ -57,8 +72,8 @@ void print_unloaded_tainted_modules(void)
 
 			l = module_flags_taint(mod_taint->taints, buf);
 			buf[l++] = '\0';
-			pr_cont(" %s(%s):%llu", mod_taint->name, buf,
-				mod_taint->count);
+			pr_cont(" %s(%s):%u", mod_taint->name, buf,
+				READ_ONCE(mod_taint->count));
 		}
 	}
 }
@@ -92,7 +107,8 @@ static int unloaded_tainted_modules_seq_show(struct seq_file *m, void *p)
 	l = module_flags_taint(mod_taint->taints, buf);
 	buf[l++] = '\0';
 
-	seq_printf(m, "%s (%s) %llu", mod_taint->name, buf, mod_taint->count);
+	seq_printf(m, "%s (%s) %u", mod_taint->name, buf,
+		   READ_ONCE(mod_taint->count));
 	seq_puts(m, "\n");
 
 	return 0;
