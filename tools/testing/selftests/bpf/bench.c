@@ -289,6 +289,7 @@ extern struct argp bench_sockmap_argp;
 extern struct argp bench_lpm_trie_map_argp;
 extern struct argp bench_xdp_lb_argp;
 extern struct argp bench_libarena_argp;
+extern struct argp bench_seccomp_install_argp;
 
 static const struct argp_child bench_parsers[] = {
 	{ &bench_ringbufs_argp, 0, "Ring buffers benchmark", 0 },
@@ -308,6 +309,7 @@ static const struct argp_child bench_parsers[] = {
 	{ &bench_lpm_trie_map_argp, 0, "LPM trie map benchmark", 0 },
 	{ &bench_xdp_lb_argp, 0, "XDP load-balancer benchmark", 0 },
 	{ &bench_libarena_argp, 0, "libarena allocator benchmark", 0 },
+	{ &bench_seccomp_install_argp, 0, "seccomp install benchmark", 0 },
 	{},
 };
 
@@ -578,6 +580,7 @@ extern const struct bench bench_rhtab_mem;
 extern const struct bench bench_crypto_encrypt;
 extern const struct bench bench_crypto_decrypt;
 extern const struct bench bench_sockmap;
+extern const struct bench bench_seccomp_install;
 extern const struct bench bench_lpm_trie_noop;
 extern const struct bench bench_lpm_trie_baseline;
 extern const struct bench bench_lpm_trie_lookup;
@@ -666,6 +669,7 @@ static const struct bench *benchs[] = {
 	&bench_crypto_encrypt,
 	&bench_crypto_decrypt,
 	&bench_sockmap,
+	&bench_seccomp_install,
 	&bench_lpm_trie_noop,
 	&bench_lpm_trie_baseline,
 	&bench_lpm_trie_lookup,
