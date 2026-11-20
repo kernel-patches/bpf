@@ -6464,7 +6464,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x1e, 0x411111f0 },
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC269_FIXUP_CZC_TMI] = {
 		.type = HDA_FIXUP_PINS,
@@ -6482,7 +6481,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x20, 0x8000ffff },
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC269_FIXUP_CZC_L101] = {
 		.type = HDA_FIXUP_PINS,
@@ -6500,7 +6498,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x1e, 0x411111f0 },
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC269_FIXUP_LEMOTE_A1802] = {
 		.type = HDA_FIXUP_PINS,
@@ -6518,7 +6515,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x21, 0x03214020 },
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC269_FIXUP_LEMOTE_A190X] = {
 		.type = HDA_FIXUP_PINS,
@@ -6530,7 +6526,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x1b, 0x0201401f }, /* front lineout */
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC256_FIXUP_INTEL_NUC8_RUGGED] = {
 		.type = HDA_FIXUP_PINS,

@@ -34,6 +34,7 @@
 #include <linux/init.h>
 #include <sound/pcm.h>
 #include <sound/core.h>
+#include <sound/control.h>
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 #include <linux/string.h>
@@ -57,6 +58,8 @@
 
 #define MAX_PATTERN_LEN 4096
 
+#define MAX_VOLUME	100
+
 static int index = -1;
 static char *id = "pcmtest";
 static bool enable = true;
@@ -65,6 +68,8 @@ static bool inject_hwpars_err;
 static bool inject_prepare_err;
 static bool inject_trigger_err;
 static bool inject_open_err;
+static bool inject_ctl_no_event;
+static bool inject_ctl_spurious_event;
 
 static short fill_mode = FILL_MODE_PAT;
 
@@ -109,11 +114,17 @@ module_param(inject_trigger_err, bool, 0600);
 MODULE_PARM_DESC(inject_trigger_err, "Inject EINVAL error in the 'trigger' callback");
 module_param(inject_open_err, bool, 0600);
 MODULE_PARM_DESC(inject_open_err, "Inject EBUSY error in the 'open' callback");
+module_param(inject_ctl_no_event, bool, 0600);
+MODULE_PARM_DESC(inject_ctl_no_event, "Report no change from the control 'put' callback");
+module_param(inject_ctl_spurious_event, bool, 0600);
+MODULE_PARM_DESC(inject_ctl_spurious_event, "Always report a change from the control 'put' callback");
 
 struct pcmtst {
 	struct snd_pcm *pcm;
 	struct snd_card *card;
 	struct platform_device *pdev;
+	spinlock_t mixer_lock;	/* protects volume[] */
+	long volume[2];
 };
 
 struct pcmtst_buf_iter {
@@ -544,6 +555,58 @@ static const struct snd_pcm_ops snd_pcmtst_capture_ops = {
 	.pointer =	snd_pcmtst_pcm_pointer,
 };
 
+static int snd_pcmtst_volume_info(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 2;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = MAX_VOLUME;
+	return 0;
+}
+
+static int snd_pcmtst_volume_get(struct snd_kcontrol *kcontrol,
+				 struct snd_ctl_elem_value *ucontrol)
+{
+	struct pcmtst *pcmtst = snd_kcontrol_chip(kcontrol);
+
+	guard(spinlock_irq)(&pcmtst->mixer_lock);
+	ucontrol->value.integer.value[0] = pcmtst->volume[0];
+	ucontrol->value.integer.value[1] = pcmtst->volume[1];
+	return 0;
+}
+
+static int snd_pcmtst_volume_put(struct snd_kcontrol *kcontrol,
+				 struct snd_ctl_elem_value *ucontrol)
+{
+	struct pcmtst *pcmtst = snd_kcontrol_chip(kcontrol);
+	long left = ucontrol->value.integer.value[0];
+	long right = ucontrol->value.integer.value[1];
+	bool changed;
+
+	if (left < 0 || left > MAX_VOLUME || right < 0 || right > MAX_VOLUME)
+		return -EINVAL;
+
+	guard(spinlock_irq)(&pcmtst->mixer_lock);
+	changed = pcmtst->volume[0] != left || pcmtst->volume[1] != right;
+	pcmtst->volume[0] = left;
+	pcmtst->volume[1] = right;
+
+	if (inject_ctl_no_event)
+		return 0;
+	if (inject_ctl_spurious_event)
+		return 1;
+	return changed;
+}
+
+static const struct snd_kcontrol_new snd_pcmtst_volume = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "Test Playback Volume",
+	.info = snd_pcmtst_volume_info,
+	.get = snd_pcmtst_volume_get,
+	.put = snd_pcmtst_volume_put,
+};
+
 static int snd_pcmtst_new_pcm(struct pcmtst *pcmtst)
 {
 	struct snd_pcm *pcm;
@@ -582,8 +645,13 @@ static int pcmtst_probe(struct platform_device *pdev)
 	pcmtst = card->private_data;
 	pcmtst->card = card;
 	pcmtst->pdev = pdev;
+	spin_lock_init(&pcmtst->mixer_lock);
 
 	err = snd_pcmtst_new_pcm(pcmtst);
+	if (err < 0)
+		return err;
+
+	err = snd_ctl_add(card, snd_ctl_new1(&snd_pcmtst_volume, pcmtst));
 	if (err < 0)
 		return err;
 
