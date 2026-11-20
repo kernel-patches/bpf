@@ -10,6 +10,7 @@
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
  */
 
+#include <linux/bitfield.h>
 #include <linux/bits.h>
 #include <linux/bug.h>
 #include <linux/cleanup.h>
@@ -1464,19 +1465,19 @@ struct reg_field {
 	unsigned int id_offset;
 };
 
-#define REG_FIELD(_reg, _lsb, _msb) {		\
-				.reg = _reg,	\
-				.lsb = _lsb,	\
-				.msb = _msb,	\
-				}
+#define REG_FIELD(_reg, _lsb, _msb) ((struct reg_field){ \
+				.reg = _reg,		 \
+				.lsb = _lsb,		 \
+				.msb = _msb,		 \
+				})
 
-#define REG_FIELD_ID(_reg, _lsb, _msb, _size, _offset) {	\
-				.reg = _reg,			\
-				.lsb = _lsb,			\
-				.msb = _msb,			\
-				.id_size = _size,		\
-				.id_offset = _offset,		\
-				}
+#define REG_FIELD_ID(_reg, _lsb, _msb, _size, _offset) ((struct reg_field){ \
+				.reg = _reg,				    \
+				.lsb = _lsb,				    \
+				.msb = _msb,				    \
+				.id_size = _size,			    \
+				.id_offset = _offset,			    \
+				})
 
 #define REG_FIELD_GENMASK(_reg_field)	GENMASK(_reg_field.msb, _reg_field.lsb)
 
@@ -1584,6 +1585,29 @@ regmap_fields_force_update_bits(struct regmap_field *field, unsigned int id,
 {
 	return regmap_fields_update_bits_base(field, id, mask, val,
 					      NULL, false, true);
+}
+
+static inline int
+regmap_reg_field_read(struct regmap *regmap, struct reg_field field,
+		      unsigned int *val)
+{
+	int ret;
+
+	ret = regmap_read(regmap, field.reg, val);
+	if (ret)
+		return ret;
+
+	*val = field_get(REG_FIELD_GENMASK(field), *val);
+
+	return ret;
+}
+
+static inline int
+regmap_reg_field_write(struct regmap *regmap, struct reg_field field,
+		       unsigned int val)
+{
+	return regmap_update_bits(regmap, field.reg,
+				  REG_FIELD_GENMASK(field), val << field.lsb);
 }
 
 /**
@@ -2069,6 +2093,22 @@ regmap_fields_update_bits(struct regmap_field *field, unsigned int id,
 static inline int
 regmap_fields_force_update_bits(struct regmap_field *field, unsigned int id,
 				unsigned int mask, unsigned int val)
+{
+	WARN_ONCE(1, "regmap API is disabled");
+	return -EINVAL;
+}
+
+static inline int
+regmap_reg_field_read(struct regmap *regmap, struct reg_field field,
+		      unsigned int *val)
+{
+	WARN_ONCE(1, "regmap API is disabled");
+	return -EINVAL;
+}
+
+static inline int
+regmap_reg_field_write(struct regmap *regmap, struct reg_field field,
+		       unsigned int val)
 {
 	WARN_ONCE(1, "regmap API is disabled");
 	return -EINVAL;
