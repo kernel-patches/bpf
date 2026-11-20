@@ -1254,7 +1254,9 @@ restart:
 		trace_tcp_sendmsg_locked(sk, msg, skb, size_goal);
 
 		if (copy <= 0 || !tcp_skb_can_collapse_to(skb) ||
-		    unlikely(skb_frags_readable(skb) != !binding)) {
+		    (unlikely(binding) ?
+		     net_devmem_skb_binding(skb) != binding :
+		     unlikely(!skb_frags_readable(skb)))) {
 			bool first_skb;
 
 new_segment:
