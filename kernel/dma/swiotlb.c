@@ -2013,7 +2013,7 @@ static int rmem_swiotlb_device_init(struct reserved_mem *rmem,
 			return -ENOMEM;
 		pool = &mem->defpool;
 
-		pool->slots = kzalloc_objs(*pool->slots, nslabs);
+		pool->slots = kvzalloc_objs(*pool->slots, nslabs);
 		if (!pool->slots) {
 			kfree(mem);
 			return -ENOMEM;
@@ -2021,7 +2021,7 @@ static int rmem_swiotlb_device_init(struct reserved_mem *rmem,
 
 		pool->areas = kzalloc_objs(*pool->areas, nareas);
 		if (!pool->areas) {
-			kfree(pool->slots);
+			kvfree(pool->slots);
 			kfree(mem);
 			return -ENOMEM;
 		}
@@ -2038,7 +2038,7 @@ static int rmem_swiotlb_device_init(struct reserved_mem *rmem,
 			if (ret) {
 				dev_err(dev, "Failed to decrypt restricted DMA pool\n");
 				kfree(pool->areas);
-				kfree(pool->slots);
+				kvfree(pool->slots);
 				kfree(mem);
 				return ret;
 			}
