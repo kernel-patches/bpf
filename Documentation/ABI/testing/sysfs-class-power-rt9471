@@ -1,4 +1,4 @@
-What:		/sys/class/power_supply/rt9471-*/sysoff_enable
+What:		/sys/class/power_supply/rt9471-\*/sysoff_enable
 Date:		Feb 2023
 KernelVersion:	6.3
 Contact:	ChiYuan Huang <cy_huang@richtek.com>
@@ -7,18 +7,20 @@ Description:
 		If enabled and the input is removed, the internal battery FET is turned
 		off to reduce the leakage from the BAT pin. See device datasheet for details.
 		It's commonly used when the product enter shipping stage. After entering
-		shipping mode, only 'VBUS' or 'Power key" pressed can make it leave this
+		shipping mode, only 'VBUS' or 'Power key' pressed can make it leave this
 		mode. 'Disable' also can help to leave it, but it's more like to abort
 		the action before the device really enter shipping mode.
 
-		Note: use /sys/class/power_supply/rt9471-*/load_switch instead.
+		Note: use /sys/class/power_supply/rt9471-\*/load_switch instead.
 
 		Access: Read, Write
+
 		Valid values:
+
 		- 1: enabled
 		- 0: disabled
 
-What:		/sys/class/power_supply/rt9471-*/port_detect_enable
+What:		/sys/class/power_supply/rt9471-\*/port_detect_enable
 Date:		Feb 2023
 KernelVersion:	6.3
 Contact:	ChiYuan Huang <cy_huang@richtek.com>
@@ -29,6 +31,8 @@ Description:
 		datasheet for details. Normally controlled when TypeC/USBPD port integrated.
 
 		Access: Read, Write
+
 		Valid values:
+
 		- 1: enabled
 		- 0: disabled
