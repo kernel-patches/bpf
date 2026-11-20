@@ -1038,6 +1038,7 @@ struct bpf_insn_aux_data {
 	 * are not in @use_regs. The bits above r10 are not valid.
 	 */
 	u16 use_regs, def_regs;
+	u16 needs_ptr_regs;	/* see bpf_note_needs_ptr() */
 	/*
 	 * Bitmask of R0-R9 that hold known values at this instruction.
 	 * const_reg_mask: scalar constants that fit in 32 bits.
@@ -1762,6 +1763,8 @@ void bpf_precision_new_pass(struct bpf_verifier_env *env);
 u64 bpf_pass_max_cost(struct bpf_verifier_env *env);
 u64 bpf_precision_budget(struct bpf_verifier_env *env);
 u64 bpf_precision_first_budget(struct bpf_verifier_env *env);
+void bpf_note_needs_ptr(struct bpf_verifier_env *env, const struct bpf_reg_state *reg);
+bool bpf_insn_makes_ptr(struct bpf_verifier_env *env);
 bool bpf_failing_path_is_due(struct bpf_verifier_env *env);
 int bpf_failing_path_prepare(struct bpf_verifier_env *env, bool repeat);
 bool bpf_failing_path_may_end_at(struct bpf_verifier_env *env, u32 idx);
@@ -2530,6 +2533,8 @@ void bpf_equations_spill(struct bpf_verifier_env *env, struct bpf_func_state *fr
 void bpf_equations_fill(struct bpf_verifier_env *env, struct bpf_func_state *frame, int spi,
 			int size);
 void bpf_equations_refine_all(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
+void bpf_equations_refine_by_reg(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+				 u32 regno);
 void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int idx,
 			bool taken);
 u16 bpf_args_with_equation(const struct bpf_verifier_state *st);
