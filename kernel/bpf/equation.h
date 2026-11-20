@@ -79,6 +79,7 @@ struct bpf_equation_env {
 	struct bpf_verifier_state join_state;	/* it has equations and no frames */
 	struct join_phi *phis;
 	u32 *phi_index;
+	u32 phi_cap, phi_index_cap;
 };
 
 #define for_each_sym_equation(env, eqs, pos)						\
@@ -185,4 +186,8 @@ bool bpf_find_next_diff(struct bpf_verifier_env *env, const struct bpf_equations
 void bpf_eval_diff(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 		   const struct expr *a, const struct expr *b, struct scalar *bounds);
 
+/* equation_join.c */
+void bpf_guess_equations(struct bpf_verifier_env *env, const struct bpf_verifier_state *dst,
+			 const struct bpf_verifier_state *src, struct bpf_loop *leftover_loop,
+			 bool widen);
 #endif

@@ -473,6 +473,7 @@ struct loop_stack_entry {
 	bool peeled;		/* in a peeled trip, not in the leftover */
 	/* an xreg: how many times the program came back to the header */
 	struct scalar trip_index;
+	bool trip_widened;	/* it was moved to a threshold, or it does not grow */
 };
 
 /* The state is in a walk on patience, which may not get to the end of the loop */
@@ -891,6 +892,8 @@ struct bpf_loop {
 	);
 	bool partitioned;	/* the last partition was for this loop */
 	bool peeled_joined;	/* at the start of a peeled trip, against the join rule */
+	struct bpf_iv_threshold *iv_thresholds;	/* where an iv can stop, see equation_join.c */
+	u32 iv_threshold_cnt, iv_threshold_cap;
 	struct bpf_loop_per_pass this_pass;
 	/* sorted constants of the loop, the largest and the smallest constant that an insn adds */
 	s64 *thresholds;
