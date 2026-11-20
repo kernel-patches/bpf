@@ -242,6 +242,7 @@ int ksmbd_conn_rdma_write(struct ksmbd_conn *conn,
 			  void *buf, unsigned int buflen,
 			  struct smbdirect_buffer_descriptor_v1 *desc,
 			  unsigned int desc_len);
+void ksmbd_conn_set_request_id(struct ksmbd_work *work);
 void ksmbd_conn_enqueue_request(struct ksmbd_work *work);
 void ksmbd_conn_try_dequeue_request(struct ksmbd_work *work);
 void ksmbd_conn_init_server_callbacks(struct ksmbd_conn_ops *ops);
