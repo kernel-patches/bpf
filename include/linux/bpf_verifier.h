@@ -893,9 +893,11 @@ struct bpf_loop {
 	/* while bpf_loop_per_pass.cost is not above @budget: */
 	u64 budget;
 	u32 max_peel_cnt;	/* peel up to this trip */
+	bool peeled_apart;	/* the join rule holds for states that start a peeled trip */
 	bool disjoint_apart;	/* disjoint values in data_deps stay apart, also in the leftover */
 	);
 	bool partitioned;	/* the last partition was for this loop */
+	bool peeled_joined;	/* at the start of a peeled trip, against the join rule */
 	struct bpf_loop_per_pass this_pass;
 	bool guarded;
 };
@@ -1684,6 +1686,18 @@ u64 bpf_hash64(const void *p, size_t len, u64 hash);
 u64 bpf_hash_join_key(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
 int bpf_renumber_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 
+/* precision.c, failing_path.c */
+enum bpf_join_point { BPF_JOIN_POINT, BPF_JOIN_POINT_HEADER, BPF_JOIN_POINT_CALLS };
+bool bpf_must_keep_apart(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			 struct bpf_verifier_state *new, enum bpf_join_point kind,
+			 const struct loop_stack_entry *entry);
+bool bpf_values_grew_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			     const struct bpf_verifier_state *new);
+u64 bpf_hash_apart_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			 u64 hash, bool consts);
+u64 bpf_hash_args(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u64 hash);
+void bpf_range_of_data_dep(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			   u32 *first, u32 *last);
 bool bpf_xreg_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 		      u32 fr, u32 xregno);
 void bpf_note_reads_from_unproven(struct bpf_verifier_env *env, u32 idx);
