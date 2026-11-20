@@ -984,12 +984,17 @@ static u8 smp_random(struct smp_chan *smp)
 
 		smp_s1(smp->tk, smp->rrnd, smp->prnd, stk);
 
-		if (test_and_set_bit(HCI_CONN_ENCRYPT_PEND, &hcon->flags))
+		if (test_and_set_bit(HCI_CONN_ENCRYPT_PEND, hcon->flags))
 			return SMP_UNSPECIFIED;
 
-		hci_le_start_enc(hcon, ediv, rand, stk, smp->enc_key_size);
+		if (hci_le_enable_encrypt(hcon, ediv, rand, stk,
+					  smp->enc_key_size)) {
+			clear_bit(HCI_CONN_ENCRYPT_PEND, hcon->flags);
+			return SMP_UNSPECIFIED;
+		}
+
 		hcon->enc_key_size = smp->enc_key_size;
-		set_bit(HCI_CONN_STK_ENCRYPT, &hcon->flags);
+		set_bit(HCI_CONN_STK_ENCRYPT, hcon->flags);
 	} else {
 		u8 stk[16], auth;
 		__le64 rand = 0;
@@ -1028,7 +1033,7 @@ static void smp_notify_keys(struct l2cap_conn *conn)
 			persistent = false;
 		else
 			persistent = !test_bit(HCI_CONN_FLUSH_KEY,
-					       &hcon->flags);
+					       hcon->flags);
 	} else {
 		/* The LTKs, IRKs and CSRKs should be persistent only if
 		 * both sides had the bonding bit set in their
@@ -1092,8 +1097,13 @@ static void smp_notify_keys(struct l2cap_conn *conn)
 		else
 			type = HCI_LK_UNAUTH_COMBINATION_P256;
 
-		key = hci_add_link_key(hdev, smp->conn->hcon, &hcon->dst,
-				       smp->link_key, type, 0, &persistent);
+		/* hdev->lock can't be taken here since it is ordered before
+		 * the l2cap channel lock held by the caller.
+		 */
+		mutex_lock(&hdev->link_keys_lock);
+
+		key = __hci_add_link_key(hdev, smp->conn->hcon, &hcon->dst,
+					 smp->link_key, type, 0, &persistent);
 		if (key) {
 			mgmt_new_link_key(hdev, key, persistent);
 
@@ -1106,6 +1116,8 @@ static void smp_notify_keys(struct l2cap_conn *conn)
 				kfree_rcu(key, rcu);
 			}
 		}
+
+		mutex_unlock(&hdev->link_keys_lock);
 	}
 }
 
@@ -1186,9 +1198,13 @@ static void sc_generate_ltk(struct smp_chan *smp)
 	struct hci_conn *hcon = smp->conn->hcon;
 	struct hci_dev *hdev = hcon->hdev;
 	struct link_key *key;
+	int err;
+
+	rcu_read_lock();
 
 	key = hci_find_link_key(hdev, &hcon->dst);
 	if (!key) {
+		rcu_read_unlock();
 		bt_dev_err(hdev, "no Link Key found to generate LTK");
 		return;
 	}
@@ -1200,15 +1216,18 @@ static void sc_generate_ltk(struct smp_chan *smp)
 		/* SALT = 0x000000000000000000000000746D7032 */
 		const u8 salt[16] = { 0x32, 0x70, 0x6d, 0x74 };
 
-		if (smp_h7(key->val, salt, smp->tk))
-			return;
+		err = smp_h7(key->val, salt, smp->tk);
 	} else {
 		/* From core spec. Spells out in ASCII as 'tmp2'. */
 		const u8 tmp2[4] = { 0x32, 0x70, 0x6d, 0x74 };
 
-		if (smp_h6(key->val, tmp2, smp->tk))
-			return;
+		err = smp_h6(key->val, tmp2, smp->tk);
 	}
+
+	rcu_read_unlock();
+
+	if (err)
+		return;
 
 	if (smp_h6(smp->tk, brle, smp->tk))
 		return;
@@ -1747,13 +1766,14 @@ static u8 smp_cmd_pairing_req(struct l2cap_conn *conn, struct sk_buff *skb)
 	 * successfully received our local OOB data - therefore set the
 	 * flag to indicate that local OOB is in use.
 	 */
-	if (req->oob_flag == SMP_OOB_PRESENT && SMP_DEV(hdev)->local_oob)
+	if (req->oob_flag == SMP_OOB_PRESENT && hdev->smp_data &&
+	    SMP_DEV(hdev)->local_oob)
 		set_bit(SMP_FLAG_LOCAL_OOB, &smp->flags);
 
 	/* SMP over BR/EDR requires special treatment */
 	if (conn->hcon->type == ACL_LINK) {
 		/* We must have a BR/EDR SC link */
-		if (!test_bit(HCI_CONN_AES_CCM, &conn->hcon->flags) &&
+		if (!test_bit(HCI_CONN_AES_CCM, conn->hcon->flags) &&
 		    !hci_dev_test_flag(hdev, HCI_FORCE_BREDR_SMP))
 			return SMP_CROSS_TRANSP_NOT_ALLOWED;
 
@@ -1891,6 +1911,16 @@ static u8 sc_send_public_key(struct smp_chan *smp)
 	}
 
 done:
+	/* Check if remote and local public keys are the same and debug key is
+	 * not in use.
+	 */
+	if (!test_bit(SMP_FLAG_DEBUG_KEY, &smp->flags) &&
+	    !test_bit(SMP_FLAG_INITIATOR, &smp->flags) &&
+	    !crypto_memneq(smp->remote_pk, smp->local_pk, 32)) {
+		bt_dev_err(hdev, "Remote and local public keys are identical");
+		return SMP_DHKEY_CHECK_FAILED;
+	}
+
 	SMP_DBG("Local Public Key X: %32phN", smp->local_pk);
 	SMP_DBG("Local Public Key Y: %32phN", smp->local_pk + 32);
 
@@ -1933,7 +1963,8 @@ static u8 smp_cmd_pairing_rsp(struct l2cap_conn *conn, struct sk_buff *skb)
 	 * successfully received our local OOB data - therefore set the
 	 * flag to indicate that local OOB is in use.
 	 */
-	if (rsp->oob_flag == SMP_OOB_PRESENT && SMP_DEV(hdev)->local_oob)
+	if (rsp->oob_flag == SMP_OOB_PRESENT && hdev->smp_data &&
+	    SMP_DEV(hdev)->local_oob)
 		set_bit(SMP_FLAG_LOCAL_OOB, &smp->flags);
 
 	smp->prsp[0] = SMP_CMD_PAIRING_RSP;
@@ -2202,22 +2233,44 @@ static bool smp_ltk_encrypt(struct l2cap_conn *conn, u8 sec_level)
 {
 	struct smp_ltk *key;
 	struct hci_conn *hcon = conn->hcon;
+	u8 val[16], enc_size;
+	__le64 rand;
+	__le16 ediv;
+
+	rcu_read_lock();
 
 	key = hci_find_ltk(hcon->hdev, &hcon->dst, hcon->dst_type, hcon->role);
-	if (!key)
+	if (!key || smp_ltk_sec_level(key) < sec_level) {
+		rcu_read_unlock();
 		return false;
+	}
 
-	if (smp_ltk_sec_level(key) < sec_level)
-		return false;
-
-	if (test_and_set_bit(HCI_CONN_ENCRYPT_PEND, &hcon->flags))
+	if (test_and_set_bit(HCI_CONN_ENCRYPT_PEND, hcon->flags)) {
+		rcu_read_unlock();
 		return true;
+	}
 
-	hci_le_start_enc(hcon, key->ediv, key->rand, key->val, key->enc_size);
-	hcon->enc_key_size = key->enc_size;
+	/* Starting the encryption may sleep, so take a copy of the key and
+	 * leave the RCU read-side section first.
+	 */
+	memcpy(val, key->val, sizeof(val));
+	enc_size = key->enc_size;
+	rand = key->rand;
+	ediv = key->ediv;
+
+	rcu_read_unlock();
+
+	if (hci_le_enable_encrypt(hcon, ediv, rand, val, enc_size)) {
+		memzero_explicit(val, sizeof(val));
+		clear_bit(HCI_CONN_ENCRYPT_PEND, hcon->flags);
+		return false;
+	}
+
+	hcon->enc_key_size = enc_size;
+	memzero_explicit(val, sizeof(val));
 
 	/* We never store STKs for initiator role, so clear this flag */
-	clear_bit(HCI_CONN_STK_ENCRYPT, &hcon->flags);
+	clear_bit(HCI_CONN_STK_ENCRYPT, hcon->flags);
 
 	return true;
 }
@@ -2235,7 +2288,7 @@ bool smp_sufficient_security(struct hci_conn *hcon, u8 sec_level,
 	 * don't have an LTK (e.g. because of key distribution bits).
 	 */
 	if (key_pref == SMP_USE_LTK &&
-	    test_bit(HCI_CONN_STK_ENCRYPT, &hcon->flags) &&
+	    test_bit(HCI_CONN_STK_ENCRYPT, hcon->flags) &&
 	    hci_find_ltk(hcon->hdev, &hcon->dst, hcon->dst_type, hcon->role))
 		return false;
 
@@ -2428,6 +2481,29 @@ int smp_conn_security(struct hci_conn *hcon, __u8 sec_level)
 unlock:
 	l2cap_chan_unlock(chan);
 	return ret;
+}
+
+bool smp_pairing_in_progress(struct hci_conn *hcon)
+{
+	struct l2cap_conn *conn;
+	struct l2cap_chan *chan;
+	bool pending;
+
+	lockdep_assert_held(&hcon->hdev->lock);
+
+	conn = hcon->l2cap_data;
+	if (!conn)
+		return false;
+
+	chan = conn->smp;
+	if (!chan)
+		return false;
+
+	l2cap_chan_lock(chan);
+	pending = !!chan->data;
+	l2cap_chan_unlock(chan);
+
+	return pending;
 }
 
 int smp_cancel_and_remove_pairing(struct hci_dev *hdev, bdaddr_t *bdaddr,
@@ -2736,7 +2812,8 @@ static int smp_cmd_public_key(struct l2cap_conn *conn, struct sk_buff *skb)
 	 * not in use.
 	 */
 	if (!test_bit(SMP_FLAG_DEBUG_KEY, &smp->flags) &&
-	    !crypto_memneq(key, smp->local_pk, 64)) {
+	    test_bit(SMP_FLAG_INITIATOR, &smp->flags) &&
+	    !crypto_memneq(key, smp->local_pk, 32)) {
 		bt_dev_err(hdev, "Remote and local public keys are identical");
 		return SMP_DHKEY_CHECK_FAILED;
 	}
@@ -2911,12 +2988,24 @@ static int smp_cmd_dhkey_check(struct l2cap_conn *conn, struct sk_buff *skb)
 		sc_dhkey_check(smp);
 	}
 
-	sc_add_ltk(smp);
-
 	if (test_bit(SMP_FLAG_INITIATOR, &smp->flags)) {
-		hci_le_start_enc(hcon, 0, 0, smp->tk, smp->enc_key_size);
+		/* Mark the encryption pending, as smp_random() does, before
+		 * adding the LTK so it doesn't get started a second time with
+		 * it, and so a failure doesn't remove a previously stored key.
+		 */
+		if (test_and_set_bit(HCI_CONN_ENCRYPT_PEND, hcon->flags))
+			return SMP_UNSPECIFIED;
+
+		if (hci_le_enable_encrypt(hcon, 0, 0, smp->tk,
+					  smp->enc_key_size)) {
+			clear_bit(HCI_CONN_ENCRYPT_PEND, hcon->flags);
+			return SMP_UNSPECIFIED;
+		}
+
 		hcon->enc_key_size = smp->enc_key_size;
 	}
+
+	sc_add_ltk(smp);
 
 	return 0;
 }
@@ -3084,11 +3173,11 @@ static void bredr_pairing(struct l2cap_chan *chan)
 	bt_dev_dbg(hdev, "chan %p", chan);
 
 	/* Only new pairings are interesting */
-	if (!test_bit(HCI_CONN_NEW_LINK_KEY, &hcon->flags))
+	if (!test_bit(HCI_CONN_NEW_LINK_KEY, hcon->flags))
 		return;
 
 	/* Don't bother if we're not encrypted */
-	if (!test_bit(HCI_CONN_ENCRYPT, &hcon->flags))
+	if (!test_bit(HCI_CONN_ENCRYPT, hcon->flags))
 		return;
 
 	/* Only initiator may initiate SMP over BR/EDR */
@@ -3100,7 +3189,7 @@ static void bredr_pairing(struct l2cap_chan *chan)
 		return;
 
 	/* BR/EDR must use Secure Connections for SMP */
-	if (!test_bit(HCI_CONN_AES_CCM, &hcon->flags) &&
+	if (!test_bit(HCI_CONN_AES_CCM, hcon->flags) &&
 	    !hci_dev_test_flag(hdev, HCI_FORCE_BREDR_SMP))
 		return;
 
@@ -3149,7 +3238,11 @@ static void smp_resume_cb(struct l2cap_chan *chan)
 	if (!smp)
 		return;
 
-	if (!test_bit(HCI_CONN_ENCRYPT, &hcon->flags))
+	/* Opportunistic encryption doesn't use a key from pairing, so keys
+	 * are only distributed once the pairing encrypts the link.
+	 */
+	if (!test_bit(HCI_CONN_ENCRYPT, hcon->flags) ||
+	    test_bit(HCI_CONN_OPP_ENCRYPT, hcon->flags))
 		return;
 
 	cancel_delayed_work(&smp->security_timer);
@@ -3172,7 +3265,7 @@ static void smp_ready_cb(struct l2cap_chan *chan)
 	 */
 	conn->smp = chan;
 
-	if (hcon->type == ACL_LINK && test_bit(HCI_CONN_ENCRYPT, &hcon->flags))
+	if (hcon->type == ACL_LINK && test_bit(HCI_CONN_ENCRYPT, hcon->flags))
 		bredr_pairing(chan);
 }
 
@@ -3345,28 +3438,49 @@ static void smp_del_chan(struct l2cap_chan *chan)
 
 int smp_force_bredr(struct hci_dev *hdev, bool enable)
 {
-	if (enable == hci_dev_test_flag(hdev, HCI_FORCE_BREDR_SMP))
-		return -EALREADY;
+	int err = 0;
 
+	hci_dev_lock(hdev);
+
+	if (enable == hci_dev_test_flag(hdev, HCI_FORCE_BREDR_SMP)) {
+		err = -EALREADY;
+		goto unlock;
+	}
+
+	/* The channels are only registered while the controller is powered
+	 * and LE capable. Otherwise just record the flag, smp_register() will
+	 * create the BR/EDR channel on the next power on.
+	 */
 	if (enable) {
 		struct l2cap_chan *chan;
 
-		chan = smp_add_cid(hdev, L2CAP_CID_SMP_BREDR);
-		if (IS_ERR(chan))
-			return PTR_ERR(chan);
+		if (hdev->smp_data && !hdev->smp_bredr_data) {
+			chan = smp_add_cid(hdev, L2CAP_CID_SMP_BREDR);
+			if (IS_ERR(chan)) {
+				err = PTR_ERR(chan);
+				goto unlock;
+			}
 
-		hdev->smp_bredr_data = chan;
+			hdev->smp_bredr_data = chan;
+		}
 	} else {
 		struct l2cap_chan *chan;
 
 		chan = hdev->smp_bredr_data;
-		hdev->smp_bredr_data = NULL;
-		smp_del_chan(chan);
+		if (chan) {
+			hdev->smp_bredr_data = NULL;
+			smp_del_chan(chan);
+		}
 	}
 
-	hci_dev_change_flag(hdev, HCI_FORCE_BREDR_SMP);
+	if (enable)
+		hci_dev_set_flag(hdev, HCI_FORCE_BREDR_SMP);
+	else
+		hci_dev_clear_flag(hdev, HCI_FORCE_BREDR_SMP);
 
-	return 0;
+unlock:
+	hci_dev_unlock(hdev);
+	return err;
 }
 
 int smp_register(struct hci_dev *hdev)

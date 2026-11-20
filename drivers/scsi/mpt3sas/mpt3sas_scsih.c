@@ -57,6 +57,14 @@
 
 #include "mpt3sas_base.h"
 
+/*
+ * Largest NVMe transfer whose PRP list fits in one NVME_PRP_PAGE_SIZE
+ * buffer (last entry reserved for the chain pointer) for any buffer
+ * offset: (4096 / 8 - 1) * 4096 = 2 MiB - 4 KiB.
+ */
+#define MPT3SAS_NVME_MAX_XFER \
+	((NVME_PRP_PAGE_SIZE / NVME_PRP_SIZE - 1) * NVME_PRP_PAGE_SIZE)
+
 #define RAID_CHANNEL 1
 
 #define PCIE_CHANNEL 2
@@ -2741,14 +2749,22 @@ scsih_sdev_configure(struct scsi_device *sdev, struct queue_limits *lim)
 		/*
 		 * The HBA firmware passes the NVMe drive's MDTS
 		 * (Maximum Data Transfer Size) up to the driver. However,
-		 * the driver hardcodes a 4K buffer size for the PRP list,
-		 * accommodating at most 512 entries. This strictly limits
-		 * the maximum supported NVMe I/O transfer to 2 MiB.
+		 * the driver hardcodes a 4K buffer size for the PRP list.
+		 * base_make_prp_nvme() reserves the last slot of that page
+		 * for a chain pointer, leaving 511 data PRP entries, and
+		 * PRP1 in the main message frame covers the first, possibly
+		 * partial, page.
+		 *
+		 * A transfer that is not page aligned spans one more page
+		 * than its length implies, so a 2 MiB I/O starting at a
+		 * non-zero page offset needs 512 list entries and overruns
+		 * the PRP buffer by one. Limit transfers to 511 pages, which
+		 * fits the PRP list for any starting offset.
 		 *
 		 * Cap max_hw_sectors to the smaller of the drive's reported
-		 * MDTS or the 2 MiB driver limit to prevent kernel oopses.
+		 * MDTS or the driver limit to prevent kernel oopses.
 		 */
-		lim->max_hw_sectors = SZ_2M >> SECTOR_SHIFT;
+		lim->max_hw_sectors = MPT3SAS_NVME_MAX_XFER >> SECTOR_SHIFT;
 		if (pcie_device->nvme_mdts)
 			lim->max_hw_sectors = min(lim->max_hw_sectors,
 					pcie_device->nvme_mdts >> SECTOR_SHIFT);
@@ -7700,7 +7716,9 @@ _scsih_determine_disposition(struct MPT3SAS_ADAPTER *ioc,
 				u16 scode = scsi_sense_code(sense_info.asc,
 							    sense_info.ascq);
 
-				if (scode ==
+				if (scode == LU_NOT_READY_SANITIZE_IN_PROGRESS)
+					rc = DEVICE_READY;
+				else if (scode ==
 				    LU_NOT_READY_MANUAL_INTERVENTION_REQUIRED ||
 				    scode ==
 				    LU_NOT_ACCESSIBLE_TARGET_PORT_IN_STANDBY_STATE ||

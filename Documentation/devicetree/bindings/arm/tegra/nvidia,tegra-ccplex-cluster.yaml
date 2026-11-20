@@ -25,6 +25,7 @@ properties:
       - nvidia,tegra186-ccplex-cluster
       - nvidia,tegra234-ccplex-cluster
       - nvidia,tegra238-ccplex-cluster
+      - nvidia,tegra264-ccplex-cluster
 
   reg:
     maxItems: 1
@@ -35,17 +36,41 @@ properties:
       Specifies the BPMP node that needs to be queried to get
       operating point data for all CPUs.
 
-additionalProperties: false
+  '#performance-domain-cells':
+    const: 1
+    description:
+      The cell is the index of the performance domain that clocks a CPU.
+      When present, every CPU names its domain with "performance-domains".
 
 required:
   - compatible
   - reg
   - nvidia,bpmp
 
+allOf:
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: nvidia,tegra264-ccplex-cluster
+    then:
+      required:
+        - '#performance-domain-cells'
+
+additionalProperties: false
+
 examples:
   - |
     ccplex@e000000 {
       compatible = "nvidia,tegra234-ccplex-cluster";
       reg = <0x0e000000 0x5ffff>;
+      nvidia,bpmp = <&bpmp>;
+    };
+
+  - |
+    ccplex@30000000 {
+      compatible = "nvidia,tegra264-ccplex-cluster";
+      reg = <0x30000000 0xcf0000>;
+      #performance-domain-cells = <1>;
       nvidia,bpmp = <&bpmp>;
     };

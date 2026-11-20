@@ -160,15 +160,24 @@ static int tfa989x_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_soc_dai *dai)
 {
 	struct snd_soc_component *component = dai->component;
-	int sr;
+	int sr, ret;
 
 	sr = tfa989x_find_sample_rate(params_rate(params));
 	if (sr < 0)
 		return sr;
 
-	return snd_soc_component_update_bits(component, TFA989X_I2SREG,
-					     TFA989X_I2SREG_I2SSR_MSK,
-					     sr << TFA989X_I2SREG_I2SSR);
+	ret = snd_soc_component_update_bits(component, TFA989X_I2SREG,
+					    TFA989X_I2SREG_I2SSR_MSK,
+					    sr << TFA989X_I2SREG_I2SSR);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * ASoC only marks the DAI hw_params as done when .hw_params() returns 0.
+	 * Since snd_soc_component_update_bits() may return 1, explicitly
+	 * return 0 to ensure the DAI is correctly marked.
+	 */
+	return 0;
 }
 
 static const struct snd_soc_dai_ops tfa989x_dai_ops = {
@@ -329,7 +338,7 @@ static int tfa989x_i2c_probe(struct i2c_client *i2c)
 		return -ENODEV;
 	}
 
-	tfa989x = devm_kzalloc(dev, sizeof(*tfa989x), GFP_KERNEL);
+	tfa989x = devm_kzalloc_obj(dev, *tfa989x);
 	if (!tfa989x)
 		return -ENOMEM;
 

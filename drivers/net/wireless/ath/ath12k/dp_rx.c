@@ -1366,17 +1366,13 @@ void ath12k_dp_rx_deliver_msdu(struct ath12k_pdev_dp *dp_pdev, struct napi_struc
 
 	peer = ath12k_dp_peer_find_by_peerid(dp_pdev, rxcb->peer_id);
 
-	pubsta = peer ? peer->sta : NULL;
+	pubsta = ath12k_dp_peer_get_sta(peer);
 
 	if (pubsta) {
 		if (pubsta->valid_links) {
-			int link_id =
-				ath12k_hw_get_rx_link_id(dp->hw_params, peer,
-							 rxcb, status);
+			int link_id = peer->link_id_map[rxcb->drv_link_id];
 
-			if (link_id >= 0)
-				link_pubsta =
-					rcu_dereference(pubsta->link[link_id]);
+			link_pubsta = rcu_dereference(pubsta->link[link_id]);
 		} else {
 			link_pubsta = &pubsta->deflink;
 		}

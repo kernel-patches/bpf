@@ -29,6 +29,7 @@
  * @master_cbl: master cable type
  * @slave_cbl: slave cable type
  * @sg: Gemini SATA bridge pointer, if running on the Gemini
+ * @sata_bridge_mask: bitmap of Gemini SATA bridges successfully started
  * @master_to_sata0: Gemini SATA bridge: the ATA master is connected
  * to the SATA0 bridge
  * @slave_to_sata0: Gemini SATA bridge: the ATA slave is connected
@@ -47,6 +48,7 @@ struct ftide010 {
 	unsigned int slave_cbl;
 	/* Gemini-specific properties */
 	struct sata_gemini *sg;
+	unsigned int sata_bridge_mask;
 	bool master_to_sata0;
 	bool slave_to_sata0;
 	bool master_to_sata1;
@@ -281,28 +283,36 @@ static int pata_ftide010_gemini_port_start(struct ata_port *ap)
 	if (ftide->master_to_sata0) {
 		dev_info(dev, "SATA0 (master) start\n");
 		ret = gemini_sata_start_bridge(sg, 0);
-		if (!ret)
+		if (!ret) {
+			ftide->sata_bridge_mask |= BIT(0);
 			bridges++;
+		}
 	}
 	if (ftide->master_to_sata1) {
 		dev_info(dev, "SATA1 (master) start\n");
 		ret = gemini_sata_start_bridge(sg, 1);
-		if (!ret)
+		if (!ret) {
+			ftide->sata_bridge_mask |= BIT(1);
 			bridges++;
+		}
 	}
 	/* Avoid double-starting */
 	if (ftide->slave_to_sata0 && !ftide->master_to_sata0) {
 		dev_info(dev, "SATA0 (slave) start\n");
 		ret = gemini_sata_start_bridge(sg, 0);
-		if (!ret)
+		if (!ret) {
+			ftide->sata_bridge_mask |= BIT(0);
 			bridges++;
+		}
 	}
 	/* Avoid double-starting */
 	if (ftide->slave_to_sata1 && !ftide->master_to_sata1) {
 		dev_info(dev, "SATA1 (slave) start\n");
 		ret = gemini_sata_start_bridge(sg, 1);
-		if (!ret)
+		if (!ret) {
+			ftide->sata_bridge_mask |= BIT(1);
 			bridges++;
+		}
 	}
 
 	dev_info(dev, "brought %d bridges online\n", bridges);
@@ -315,24 +325,15 @@ static void pata_ftide010_gemini_port_stop(struct ata_port *ap)
 	struct device *dev = ftide->dev;
 	struct sata_gemini *sg = ftide->sg;
 
-	if (ftide->master_to_sata0) {
-		dev_info(dev, "SATA0 (master) stop\n");
+	if (ftide->sata_bridge_mask & BIT(0)) {
+		dev_info(dev, "SATA0 stop\n");
 		gemini_sata_stop_bridge(sg, 0);
 	}
-	if (ftide->master_to_sata1) {
-		dev_info(dev, "SATA1 (master) stop\n");
+	if (ftide->sata_bridge_mask & BIT(1)) {
+		dev_info(dev, "SATA1 stop\n");
 		gemini_sata_stop_bridge(sg, 1);
 	}
-	/* Avoid double-stopping */
-	if (ftide->slave_to_sata0 && !ftide->master_to_sata0) {
-		dev_info(dev, "SATA0 (slave) stop\n");
-		gemini_sata_stop_bridge(sg, 0);
-	}
-	/* Avoid double-stopping */
-	if (ftide->slave_to_sata1 && !ftide->master_to_sata1) {
-		dev_info(dev, "SATA1 (slave) stop\n");
-		gemini_sata_stop_bridge(sg, 1);
-	}
+	ftide->sata_bridge_mask = 0;
 }
 
 static int pata_ftide010_gemini_cable_detect(struct ata_port *ap)
@@ -460,7 +461,7 @@ static int pata_ftide010_probe(struct platform_device *pdev)
 	int ret;
 	int i;
 
-	ftide = devm_kzalloc(dev, sizeof(*ftide), GFP_KERNEL);
+	ftide = devm_kzalloc_obj(dev, *ftide);
 	if (!ftide)
 		return -ENOMEM;
 	ftide->dev = dev;

@@ -337,8 +337,7 @@ static inline int omap2_onenand_dma_transfer(struct omap2_onenand *c,
 
 	reinit_completion(&c->dma_done);
 
-	tx->callback = omap2_onenand_dma_complete_func;
-	tx->callback_param = &c->dma_done;
+	dmaengine_desc_set_callback(tx, omap2_onenand_dma_complete_func, NULL, &c->dma_done);
 
 	cookie = dmaengine_submit(tx);
 	if (dma_submit_error(cookie)) {
@@ -473,7 +472,7 @@ static int omap2_onenand_probe(struct platform_device *pdev)
 		return r;
 	}
 
-	c = devm_kzalloc(dev, sizeof(struct omap2_onenand), GFP_KERNEL);
+	c = devm_kzalloc_obj(dev, struct omap2_onenand);
 	if (!c)
 		return -ENOMEM;
 

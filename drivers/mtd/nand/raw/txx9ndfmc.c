@@ -284,7 +284,7 @@ static int txx9ndfmc_probe(struct platform_device *dev)
 	struct txx9ndfmc_drvdata *drvdata;
 	unsigned long gbusclk = plat->gbus_clock;
 
-	drvdata = devm_kzalloc(&dev->dev, sizeof(*drvdata), GFP_KERNEL);
+	drvdata = devm_kzalloc_obj(&dev->dev, *drvdata);
 	if (!drvdata)
 		return -ENOMEM;
 	drvdata->base = devm_platform_ioremap_resource(dev, 0);
@@ -391,21 +391,17 @@ static void txx9ndfmc_remove(struct platform_device *dev)
 	}
 }
 
-#ifdef CONFIG_PM
 static int txx9ndfmc_resume(struct platform_device *dev)
 {
 	if (platform_get_drvdata(dev))
 		txx9ndfmc_initialize(dev);
 	return 0;
 }
-#else
-#define txx9ndfmc_resume NULL
-#endif
 
 static struct platform_driver txx9ndfmc_driver = {
 	.probe		= txx9ndfmc_probe,
 	.remove		= txx9ndfmc_remove,
-	.resume		= txx9ndfmc_resume,
+	.resume		= pm_ptr(txx9ndfmc_resume),
 	.driver		= {
 		.name	= "txx9ndfmc",
 	},

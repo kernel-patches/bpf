@@ -642,8 +642,7 @@ static int bd96801_i2c_probe(struct i2c_client *i2c)
 	struct irq_domain *intb_domain, *errb_domain;
 	const struct bd968xx *ddata;
 	const struct fwnode_handle *fwnode;
-	struct resource *regulator_res;
-	struct resource wdg_irq;
+	struct resource *regulator_res, *wdg_irq;
 	struct regmap *regmap;
 	int intb_irq, errb_irq, num_errb = 0;
 	int num_regu_irqs, wdg_irq_no;
@@ -687,9 +686,13 @@ static int bd96801_i2c_probe(struct i2c_client *i2c)
 
 	num_regu_irqs = ddata->num_intb_irqs + num_errb;
 
-	regulator_res = devm_kcalloc(&i2c->dev, num_regu_irqs,
-				     sizeof(*regulator_res), GFP_KERNEL);
+	regulator_res = devm_kzalloc_objs(&i2c->dev, *regulator_res,
+					  num_regu_irqs);
 	if (!regulator_res)
+		return -ENOMEM;
+
+	wdg_irq = devm_kzalloc(&i2c->dev, sizeof(*wdg_irq), GFP_KERNEL);
+	if (!wdg_irq)
 		return -ENOMEM;
 
 	regmap = devm_regmap_init_i2c(i2c, ddata->regmap_config);
@@ -723,9 +726,9 @@ static int bd96801_i2c_probe(struct i2c_client *i2c)
 	}
 
 	wdg_irq_no = irq_create_mapping(intb_domain, BD96801_WDT_ERR_STAT);
-	wdg_irq = DEFINE_RES_IRQ_NAMED(wdg_irq_no, "bd96801-wdg");
+	*wdg_irq = DEFINE_RES_IRQ_NAMED(wdg_irq_no, "bd96801-wdg");
 
-	ddata->cells[WDG_CELL].resources = &wdg_irq;
+	ddata->cells[WDG_CELL].resources = wdg_irq;
 	ddata->cells[WDG_CELL].num_resources = 1;
 
 	if (!num_errb)

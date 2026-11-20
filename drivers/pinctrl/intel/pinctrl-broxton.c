@@ -1009,18 +1009,7 @@ static struct platform_driver bxt_pinctrl_driver = {
 	},
 	.id_table = bxt_pinctrl_platform_ids,
 };
-
-static int __init bxt_pinctrl_init(void)
-{
-	return platform_driver_register(&bxt_pinctrl_driver);
-}
-subsys_initcall(bxt_pinctrl_init);
-
-static void __exit bxt_pinctrl_exit(void)
-{
-	platform_driver_unregister(&bxt_pinctrl_driver);
-}
-module_exit(bxt_pinctrl_exit);
+subsys_platform_driver(bxt_pinctrl_driver);
 
 MODULE_AUTHOR("Mika Westerberg <mika.westerberg@linux.intel.com>");
 MODULE_DESCRIPTION("Intel Broxton SoC pinctrl/GPIO driver");

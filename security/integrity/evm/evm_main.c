@@ -369,6 +369,10 @@ int evm_protected_xattr_if_enabled(const char *req_xattr_name)
  * given dentry and return the total size of copied data. If buffer is NULL,
  * just return the total size.
  *
+ * The set of protected xattrs and their values may change between a call with
+ * a NULL buffer and a subsequent call with a buffer of the returned size. If
+ * the data no longer fits in @buffer_size, -ERANGE is returned.
+ *
  * Returns the total size on success, a negative value on error.
  */
 int evm_read_protected_xattrs(struct dentry *dentry, u8 *buffer,
@@ -389,6 +393,9 @@ int evm_read_protected_xattrs(struct dentry *dentry, u8 *buffer,
 		case 'n':
 			size = strlen(xattr->name) + 1;
 			if (buffer) {
+				if (size > buffer_size - total_size)
+					return -ERANGE;
+
 				if (total_size)
 					*(buffer + total_size - 1) = '|';
 
@@ -398,6 +405,9 @@ int evm_read_protected_xattrs(struct dentry *dentry, u8 *buffer,
 		case 'l':
 			size = sizeof(u32);
 			if (buffer) {
+				if (size > buffer_size - total_size)
+					return -ERANGE;
+
 				if (canonical_fmt)
 					rc = (__force int)cpu_to_le32(rc);
 
@@ -407,12 +417,22 @@ int evm_read_protected_xattrs(struct dentry *dentry, u8 *buffer,
 		case 'v':
 			size = rc;
 			if (buffer) {
+				/* Nothing to copy. */
+				if (!size)
+					break;
+
+				/* A zero size would query the length. */
+				if (buffer_size - total_size == 0)
+					return -ERANGE;
+
 				rc = __vfs_getxattr(dentry,
 					d_backing_inode(dentry), xattr->name,
 					buffer + total_size,
 					buffer_size - total_size);
 				if (rc < 0)
 					return rc;
+
+				size = rc;
 			}
 			break;
 		default:
@@ -763,11 +783,11 @@ static void evm_reset_status(struct inode *inode)
 /**
  * evm_metadata_changed: Detect changes to the metadata
  * @inode: a file's inode
- * @metadata_inode: metadata inode
+ * @metadata_inode: metadata inode, or an ERR_PTR() if it can't be resolved
  *
  * On a stacked filesystem detect whether the metadata has changed. If this is
- * the case reset the evm_status associated with the inode that represents the
- * file.
+ * the case, or if the metadata inode can't be resolved, reset the evm_status
+ * associated with the inode that represents the file.
  */
 bool evm_metadata_changed(struct inode *inode, struct inode *metadata_inode)
 {
@@ -775,7 +795,8 @@ bool evm_metadata_changed(struct inode *inode, struct inode *metadata_inode)
 	bool ret = false;
 
 	if (iint) {
-		ret = (!IS_I_VERSION(metadata_inode) ||
+		ret = (IS_ERR(metadata_inode) ||
+		       !IS_I_VERSION(metadata_inode) ||
 		       integrity_inode_attrs_changed(&iint->metadata_inode,
 						     metadata_inode));
 		if (ret)

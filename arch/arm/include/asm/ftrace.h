@@ -12,7 +12,7 @@
 #define MCOUNT_ADDR		((unsigned long)(__gnu_mcount_nc))
 #define MCOUNT_INSN_SIZE	4 /* sizeof mcount call */
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 extern void __gnu_mcount_nc(void);
 
 #ifdef CONFIG_DYNAMIC_FTRACE
@@ -33,7 +33,7 @@ static inline unsigned long ftrace_call_adjust(unsigned long addr)
 
 #endif
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #if defined(CONFIG_FRAME_POINTER) && !defined(CONFIG_ARM_UNWIND)
 /*
@@ -79,6 +79,6 @@ void prepare_ftrace_return(unsigned long *parent, unsigned long self,
 			   unsigned long frame_pointer,
 			   unsigned long stack_pointer);
 
-#endif /* ifndef __ASSEMBLY__ */
+#endif /* ifndef __ASSEMBLER__ */
 
 #endif /* _ASM_ARM_FTRACE */

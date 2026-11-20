@@ -840,7 +840,7 @@ static int nand_setup_interface(struct nand_chip *chip, int chipnr)
 {
 	const struct nand_controller_ops *ops = chip->controller->ops;
 	u8 tmode_param[ONFI_SUBFEATURE_PARAM_LEN] = { }, request;
-	int ret;
+	int ret, reset_ret;
 
 	if (!nand_controller_can_setup_interface(chip))
 		return 0;
@@ -909,12 +909,15 @@ err_reset_chip:
 	 * Fallback to mode 0 if the chip explicitly did not ack the chosen
 	 * timing mode.
 	 */
-	nand_reset_interface(chip, chipnr);
+	reset_ret = nand_reset_interface(chip, chipnr);
+	if (reset_ret)
+		return ret ?: reset_ret;
+
 	nand_select_target(chip, chipnr);
-	nand_reset_op(chip);
+	reset_ret = nand_reset_op(chip);
 	nand_deselect_target(chip);
 
-	return ret;
+	return ret ?: reset_ret;
 }
 
 /**
@@ -3537,16 +3540,6 @@ read_retry:
 				memcpy(buf, bufpoi + col, bytes);
 			}
 
-			if (unlikely(oob)) {
-				int toread = min(oobreadlen, max_oobsize);
-
-				if (toread) {
-					oob = nand_transfer_oob(chip, oob, ops,
-								toread);
-					oobreadlen -= toread;
-				}
-			}
-
 			nand_wait_readrdy(chip);
 
 			if (mtd->ecc_stats.failed - ecc_stats.failed) {
@@ -3563,6 +3556,16 @@ read_retry:
 				} else {
 					/* No more retry modes; real failure */
 					ecc_fail = true;
+				}
+			}
+
+			if (unlikely(oob)) {
+				int toread = min(oobreadlen, max_oobsize);
+
+				if (toread) {
+					oob = nand_transfer_oob(chip, oob, ops,
+								toread);
+					oobreadlen -= toread;
 				}
 			}
 
@@ -5474,13 +5477,13 @@ int rawnand_dt_parse_gpio_cs(struct device *dev, struct gpio_desc ***cs_array,
 		return 0;
 	}
 
-	descs = devm_kcalloc(dev, ndescs, sizeof(*descs), GFP_KERNEL);
+	descs = devm_kzalloc_objs(dev, *descs, ndescs);
 	if (!descs)
 		return -ENOMEM;
 
 	for (i = 0; i < ndescs; i++) {
-		descs[i] = gpiod_get_index_optional(dev, "cs", i,
-						    GPIOD_OUT_HIGH);
+		descs[i] = devm_gpiod_get_index_optional(dev, "cs", i,
+							 GPIOD_OUT_HIGH);
 		if (IS_ERR(descs[i]))
 			return PTR_ERR(descs[i]);
 	}

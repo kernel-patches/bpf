@@ -408,6 +408,42 @@ struct dmub_soc_bb_params {
 	uint32_t vmin_limit_dispclk_khz;
 	uint32_t vmin_limit_dcfclk_khz;
 	uint32_t g7_temperature_read_blackout_ns;
+	uint32_t fraction_of_urgent_bandwidth_nominal_target;
+	uint32_t fraction_of_urgent_bandwidth_flip_target;
+	uint32_t max_outstanding_reqs;
+	uint32_t return_bus_width_bytes;
+	uint32_t alternate_dram_carveout_size_mb;
+	uint32_t pipe_count;
+	uint32_t otg_count;
+	uint32_t num_dsc;
+	uint32_t TDLUT_33cube_count;
+	uint32_t max_num_dp2p0_streams;
+	uint32_t max_num_hdmi_frl_outputs;
+	uint32_t max_num_dp2p0_outputs;
+	uint32_t rob_buffer_size_kbytes;
+	uint32_t config_return_buffer_size_in_kbytes;
+	uint32_t config_return_buffer_segment_size_in_kbytes;
+	uint32_t meta_fifo_size_in_kentries;
+	uint32_t compressed_buffer_segment_size_in_kbytes;
+	uint32_t cursor_buffer_size;
+	uint32_t max_flip_time_us;
+	uint32_t max_flip_time_lines;
+	uint32_t hostvm_mode;
+	uint32_t max_vactive_det_fill_delay_us;
+	uint32_t ppt_max_allow_delay_us;
+	uint32_t temp_read_max_allow_delay_us;
+	uint32_t vblank_nom_default_us;
+	uint32_t fams2_max_allow_delay_us;
+	uint32_t fams2_scheduling_delay_us;
+	uint32_t fams2_vertical_interrupt_ack_delay_us;
+	uint32_t fams2_allow_programming_delay_us;
+	uint32_t fams2_min_allow_width_us;
+	uint32_t fams2_subvp_df_throttle_delay_us;
+	uint32_t fams2_subvp_programming_delay_us;
+	uint32_t fams2_drr_programming_delay_us;
+	uint32_t fams2_lock_timeout_us;
+	uint32_t fams2_recovery_timeout_us;
+	uint32_t fams2_flip_programming_delay_us;
 };
 #pragma pack(pop)
 
@@ -1192,6 +1228,10 @@ enum dmub_dc_bls_command_type {
 	 * Placeholder for block-level initialization of the DCHVM
 	 */
 	DMUB_CMD__DC_BLS_DCHVM_INIT = 0,
+	/**
+	 * Initializes the DCN hardware.
+	 */
+	DMUB_CMD__DC_BLS_DCN_INIT = 1,
 };
 
 /**
@@ -2064,6 +2104,11 @@ enum dmub_cmd_type {
 	DMUB_CMD__NBIF_AZ_PME_RESTORE = 99,
 
 	/**
+	 * Command type use for all RAMLESS_LOBF commands.
+	 */
+	DMUB_CMD__RAMLESS_LOBF = 100,
+
+	/**
 	 * Command type use for VBIOS shared commands.
 	 */
 	DMUB_CMD__VBIOS = 128,
@@ -2617,7 +2662,10 @@ struct dmub_fams2_alternate_stream_dynamic_state {
 	uint16_t vstartup_line;
 	uint16_t vready_line;
 	uint8_t cursor_size[3]; //  Cursor array per plane for now - if we assume a single cursor, then we don't need an array
-	uint8_t pad; // to maintain alignment for below fields - re-arrange structure once all fields are finalized
+	uint8_t disabled_pipe_mask; // bitmask of pipes with RECOUT_HEIGHT == 0 (disabled)
+	struct plane_pipe_rect pipe_viewports[4];
+	uint8_t tmz_id[3]; // TMZ ID per plane
+	uint8_t pad; // to maintain alignment
 	/* outputs: */
 	uint16_t subvp_start_line_a[3];
 	uint16_t subvp_height_a[3];
@@ -2688,7 +2736,6 @@ struct dmub_fams2_cmd_alternate_stream_static_state {
 			uint8_t vertical_access : 1; // vertical_access = 1 means 90 or 270 rotation
 			uint8_t access_direction : 1; // access_direction = 1 means bigger to smaller coordinations (e.g., scan from 2160 to 0 as opposed to regular 0 to 2160)
 			uint8_t dcc : 1;
-			uint8_t tmz : 1; // TODO: Need to assign outside of DML (DML not aware of TMZ)
 		} bits;
 		uint8_t all;
 	} config[3];
@@ -2798,8 +2845,11 @@ union dmub_fams2_stream_static_sub_state_v2 {
 
 struct dmub_fams2_stream_static_state {
 	enum fams2_stream_type type;
-	uint32_t otg_vline_time_ns;
-	uint32_t otg_vline_time_ticks;
+	union {
+		uint32_t otg_vline_time_ns; // used by DCN4
+		uint32_t otg_vline_time_ps; // used by DCN6+
+	};
+	uint32_t otg_vline_time_ticks; // U22.10 fixed point, see FAMS2_OTG_VLINE_TIME_TICKS_U22_10_FRAC_BITS
 	uint16_t htotal;
 	uint16_t vtotal; // nominal vtotal
 	uint16_t vblank_start;
@@ -2831,8 +2881,11 @@ struct dmub_fams2_stream_static_state {
 
 struct dmub_fams2_cmd_stream_static_base_state {
 	enum fams2_stream_type type;
-	uint32_t otg_vline_time_ns;
-	uint32_t otg_vline_time_ticks;
+	union {
+		uint32_t otg_vline_time_ns; // used by DCN4
+		uint32_t otg_vline_time_ps; // used by DCN6+
+	};
+	uint32_t otg_vline_time_ticks; // U22.10 fixed point, see FAMS2_OTG_VLINE_TIME_TICKS_U22_10_FRAC_BITS
 	uint16_t htotal;
 	uint16_t vtotal; // nominal vtotal
 	uint16_t vblank_start;
@@ -2971,6 +3024,11 @@ enum dmub_cmd_idle_opt_type {
 	 * DCN notify to release HW.
 	 */
 	 DMUB_CMD__IDLE_OPT_RELEASE_HW = 4,
+
+	/**
+	 * DCN allow or disallow Z8.
+	 */
+	DMUB_CMD__IDLE_OPT_SET_Z8_ALLOW = 5,
 };
 
 /**
@@ -3022,6 +3080,25 @@ struct dmub_idle_opt_set_dc_power_state_data {
 struct dmub_rb_cmd_idle_opt_set_dc_power_state {
 	struct dmub_cmd_header header; /**< header */
 	struct dmub_idle_opt_set_dc_power_state_data data;
+};
+
+/**
+ * union dmub_idle_opt_set_z8_allow_data - Data passed to FW in a DMUB_CMD__IDLE_OPT_SET_Z8_ALLOW command.
+ */
+union dmub_idle_opt_set_z8_allow_data {
+	struct {
+		uint32_t allow: 1; /**< 0: disallow Z8, 1: allow Z8 */
+		uint32_t reserved: 31; /**< Reserved for expansion; sender zeroes */
+	} bits; /**< bitfields */
+	uint32_t all; /**< union of all bitfields */
+};
+
+/**
+ * struct dmub_rb_cmd_idle_opt_set_z8_allow - Data passed to FW in a DMUB_CMD__IDLE_OPT_SET_Z8_ALLOW command.
+ */
+struct dmub_rb_cmd_idle_opt_set_z8_allow {
+	struct dmub_cmd_header header; /**< header */
+	union dmub_idle_opt_set_z8_allow_data data; /**< Z8 allow policy */
 };
 
 /**
@@ -4790,6 +4867,14 @@ struct dmub_cmd_replay_copy_settings_data {
 	 * @pad: Align structure to 4 byte boundary.
 	 */
 	uint8_t pad[1];
+	/**
+	 * @frame_update_interval: Frame update interval; 0 disabled.
+	 */
+	uint16_t frame_update_interval;
+	/**
+	 * @pad2: Align structure to 4 byte boundary.
+	 */
+	uint8_t pad2[2];
 };
 
 
@@ -7621,6 +7706,169 @@ struct dmub_rb_cmd_boot_time_crc_init {
 	struct dmub_cmd_boot_time_crc_init_data data;
 };
 
+enum ramless_lobf_enable_cmd {
+	LOBF_DISABLE            = 0, /**< Disable Ramless LOBF */
+	LOBF_ENABLE             = 1, /**< Enable Ramless LOBF */
+	LOBF_IMMEDIATE_WAKE     = 2, /**< Immediate wake (program_manual_trigger) */
+	LOBF_ENTER_IDLE_SCREEN  = 3, /**< Enter idle screen */
+	LOBF_EXIT_IDLE_SCREEN   = 4, /**< Exit idle screen */
+};
+
+/**
+ * enum ramless_lobf_state - Ramless LOBF FSM states visible in firmware state.
+ */
+enum ramless_lobf_state {
+	LOBF_STATE_DISABLED                   = 0x00, /**< Feature completely disabled */
+	LOBF_STATE_LINK_ON                    = 0x10, /**< Link is ON; Vline interrupt registered for Vblank start */
+	LOBF_STATE_ALPM_SLEEP_ENGAGED         = 0x20, /**< ALPM Sleep pattern sent; transitioning to PHY Off */
+	LOBF_STATE_INVALID                    = 0xFF, /**< Invalid / uninitialized */
+};
+
+/**
+ * enum ramless_lobf_phy_mode - PHY power-state mode for Ramless LOBF.
+ */
+enum ramless_lobf_phy_mode {
+	LOBF_PHY_MODE_P0_ON     = 0, /**< PHY P0: lanes and PLL fully powered (normal operation) */
+	LOBF_PHY_MODE_P2_PLL_ON = 1, /**< PHY P2: lanes off, PLL still running (shallow sleep) */
+	LOBF_PHY_MODE_P3_PG     = 2, /**< PHY P3: lanes and PLL power-gated (deep sleep) */
+};
+
+/**
+ * enum dmub_cmd_ramless_lobf_type - Sub-command types for DMUB_CMD__RAMLESS_LOBF.
+ */
+enum dmub_cmd_ramless_lobf_type {
+	DMUB_CMD__RAMLESS_LOBF_COPY_SETTINGS = 0, /**< Copy static settings from driver to FW */
+	DMUB_CMD__RAMLESS_LOBF_ENABLE        = 1, /**< Enable or disable Ramless LOBF */
+};
+
+/**
+ * Data passed from driver to FW in a DMUB_CMD__RAMLESS_LOBF_ENABLE command.
+ */
+struct dmub_cmd_ramless_lobf_enable_data {
+	/**
+	 * @enable: 1 to enable LOBF, 0 to disable, 2 to force immediate wake (program_manual_trigger).
+	 */
+	uint8_t enable_command;
+	/**
+	 * @panel_inst: Panel instance index.
+	 */
+	uint8_t panel_inst;
+	/**
+	 * @pad: Align structure to 4-byte boundary.
+	 */
+	uint8_t pad[2];
+
+	uint32_t wake_source;
+};
+
+/**
+ * Definition of a DMUB_CMD__RAMLESS_LOBF_ENABLE command.
+ */
+struct dmub_rb_cmd_ramless_lobf_enable {
+	/**
+	 * Command header.
+	 */
+	struct dmub_cmd_header header;
+	/**
+	 * Data for enable/disable.
+	 */
+	struct dmub_cmd_ramless_lobf_enable_data data;
+};
+
+/**
+ * Data passed from driver to FW in a DMUB_CMD__RAMLESS_LOBF_COPY_SETTINGS command.
+ */
+struct dmub_cmd_ramless_lobf_copy_settings_data {
+	/**
+	 * @panel_inst: Panel instance index.
+	 */
+	uint8_t panel_inst;
+	/**
+	 * @otg_inst: OTG hardware instance.
+	 */
+	uint8_t otg_inst;
+	/**
+	 * @digfe_inst: DIG front-end hardware instance.
+	 */
+	uint8_t digfe_inst;
+	/**
+	 * @digbe_inst: DIG back-end hardware instance.
+	 */
+	uint8_t digbe_inst;
+	/**
+	 * @dpphy_inst: DP PHY hardware instance.
+	 */
+	uint8_t dpphy_inst;
+	/**
+	 * @aux_inst: AUX hardware instance.
+	 */
+	uint8_t aux_inst;
+	/**
+	 * @phy_mode: PHY power-state mode. Use values from enum ramless_lobf_phy_mode.
+	 */
+	uint8_t phy_mode;
+	/**
+	 * @enable_scenarios: Bitmask of enabled scenarios for Ramless LOBF.
+	 */
+	uint8_t enable_scenarios;
+	/**
+	 * @line_time_in_ns: Total length of one horizontal line (active + blanking) in
+	 * nanoseconds.  Used to calculate wake up timer IRQ.
+	 */
+	uint32_t line_time_in_ns;
+	/**
+	 * @vactive: Number of active video lines in the display mode.
+	 */
+	uint32_t vactive;
+
+	uint16_t reserved_0;
+	uint16_t lobf_min_sleep_time_us; /* if < min, then we don't want LOBF to sleep */
+	uint8_t debug_options;
+	uint8_t vmin_force_default_frames;
+	uint8_t visual_confirm;
+	uint8_t reserved[1];
+	/**
+	 * Use for AUX-less ALPM LFPS wake operation
+	 */
+	struct dmub_alpm_auxless_data auxless_alpm_data;
+};
+
+/**
+ * Definition of a DMUB_CMD__RAMLESS_LOBF_COPY_SETTINGS command.
+ */
+struct dmub_rb_cmd_ramless_lobf_copy_settings {
+	/**
+	 * Command header.
+	 */
+	struct dmub_cmd_header header;
+	/**
+	 * Data passed from driver to FW.
+	 */
+	struct dmub_cmd_ramless_lobf_copy_settings_data data;
+};
+
+/**
+ * Data passed from driver to FW in a DMUB_CMD__DC_BLS_DCN_INIT command.
+ */
+struct dmub_cmd_dc_bls_dcn_init_data {
+	/** 1 to keep the boot eDP stream for seamless boot. */
+	uint8_t seamless_boot_edp_requested : 1;
+	/** Reserved. Must be zero. */
+	uint8_t reserved_bits : 7;
+	/** Reserved. Must be zero. */
+	uint8_t reserved[3];
+};
+
+/**
+ * Definition of a DMUB_CMD__DC_BLS_DCN_INIT command.
+ */
+struct dmub_rb_cmd_dc_bls_dcn_init {
+	/** Command header. */
+	struct dmub_cmd_header header;
+	/** Data passed from driver to FW in a DMUB_CMD__DC_BLS_DCN_INIT command. */
+	struct dmub_cmd_dc_bls_dcn_init_data data;
+};
+
 /**
  * union dmub_rb_cmd - DMUB inbox command.
  */
@@ -7916,6 +8164,10 @@ union dmub_rb_cmd {
 	 * Definition of a DMUB_CMD__IDLE_OPT_SET_DC_POWER_STATE command.
 	 */
 	struct dmub_rb_cmd_idle_opt_set_dc_power_state idle_opt_set_dc_power_state;
+	/**
+	 * Definition of a DMUB_CMD__IDLE_OPT_SET_Z8_ALLOW command.
+	 */
+	struct dmub_rb_cmd_idle_opt_set_z8_allow idle_opt_set_z8_allow;
 	/*
 	 * Definition of a DMUB_CMD__REPLAY_COPY_SETTINGS command.
 	 */
@@ -8022,6 +8274,11 @@ union dmub_rb_cmd {
 	struct dmub_rb_cmd_boot_time_crc_init boot_time_crc_init;
 
 	/**
+	 * Definition of a DMUB_CMD__DC_BLS_DCN_INIT command.
+	 */
+	struct dmub_rb_cmd_dc_bls_dcn_init dc_bls_dcn_init;
+
+	/**
 	 * Definition of a DMUB_CMD__PANEL_POLARITY_ENABLE command.
 	 */
 	struct dmub_rb_cmd_panel_polarity_enable panel_polarity_enable;
@@ -8029,6 +8286,14 @@ union dmub_rb_cmd {
 	struct dmub_rb_cmd_panel_polarity_reset panel_polarity_reset;
 
 	struct dmub_rb_cmd_dc_bls_dchvm_init dc_bls_dchvm_init;
+	/**
+	 * Definition of a DMUB_CMD__RAMLESS_LOBF_COPY_SETTINGS command.
+	 */
+	struct dmub_rb_cmd_ramless_lobf_copy_settings ramless_lobf_copy_settings;
+	/**
+	 * Definition of a DMUB_CMD__RAMLESS_LOBF_ENABLE command.
+	 */
+	struct dmub_rb_cmd_ramless_lobf_enable ramless_lobf_enable;
 };
 
 /**

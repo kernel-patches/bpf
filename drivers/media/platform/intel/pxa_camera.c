@@ -1161,6 +1161,11 @@ static void pxa_camera_eof_bh_work(struct work_struct *t)
 	cifr = __raw_readl(pcdev->base + CIFR) | CIFR_RESET_F;
 	__raw_writel(cifr, pcdev->base + CIFR);
 
+	if (list_empty(&pcdev->capture)) {
+		pxa_camera_stop_capture(pcdev);
+		return;
+	}
+
 	pcdev->active = list_first_entry(&pcdev->capture,
 					 struct pxa_buffer, queue);
 	buf = pcdev->active;
@@ -2277,7 +2282,7 @@ static int pxa_camera_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return -ENODEV;
 
-	pcdev = devm_kzalloc(&pdev->dev, sizeof(*pcdev), GFP_KERNEL);
+	pcdev = devm_kzalloc_obj(&pdev->dev, *pcdev);
 	if (!pcdev) {
 		dev_err(&pdev->dev, "Could not allocate pcdev\n");
 		return -ENOMEM;

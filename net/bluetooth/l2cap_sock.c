@@ -623,8 +623,10 @@ static int l2cap_sock_getsockopt(struct socket *sock, int level, int optname,
 		if (conn) {
 			sec.level = conn->hcon->sec_level;
 
-			if (sk->sk_state == BT_CONNECTED)
+			if (sk->sk_state == BT_CONNECTED) {
 				sec.key_size = conn->hcon->enc_key_size;
+				sec.mic_len = hci_conn_mic_len(conn->hcon);
+			}
 		} else {
 			sec.level = chan->sec_level;
 		}
@@ -960,9 +962,16 @@ static int l2cap_sock_setsockopt(struct socket *sock, int level, int optname,
 			break;
 		}
 
-		sec.level = BT_SECURITY_LOW;
+		/* mic_len was added at the end of struct bt_security, so
+		 * accept the shorter struct as well, leaving mic_len unset.
+		 */
+		if (optlen < offsetofend(struct bt_security, key_size)) {
+			err = -EINVAL;
+			break;
+		}
 
-		err = copy_safe_from_sockptr(&sec, sizeof(sec), optval, optlen);
+		err = copy_struct_from_sockptr(&sec, sizeof(sec), optval,
+					       optlen);
 		if (err)
 			break;
 
@@ -972,7 +981,18 @@ static int l2cap_sock_setsockopt(struct socket *sock, int level, int optname,
 			break;
 		}
 
+		/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4,
+		 * Part E, Section 7.7.8: MIC_Length 0x00 is 32 bits,
+		 * 0x01 is 64 bits and 0x02 is 128 bits; all other
+		 * values are reserved for future use.
+		 */
+		if (sec.mic_len > 0x02) {
+			err = -EINVAL;
+			break;
+		}
+
 		chan->sec_level = sec.level;
+		chan->mic_len = sec.mic_len;
 
 		conn = l2cap_chan_conn(chan);
 		if (!conn)
@@ -980,6 +1000,7 @@ static int l2cap_sock_setsockopt(struct socket *sock, int level, int optname,
 
 		/* change security for LE channels */
 		if (chan->scid == L2CAP_CID_ATT) {
+			l2cap_chan_req_mic_len(chan, conn->hcon);
 			if (smp_conn_security(conn->hcon, sec.level)) {
 				err = -EINVAL;
 				break;
@@ -1229,11 +1250,11 @@ static void l2cap_publish_rx_avail(struct l2cap_chan *chan)
 
 	/* Correct available memory by estimated sk_buff overhead.
 	 * This is significant due to small transfer sizes. However, accept
-	 * at least one full packet if receive space is non-zero.
+	 * at least one full SDU if receive space is non-zero.
 	 */
 	expected_skbs = DIV_ROUND_UP(avail, chan->mps);
 	skb_overhead = expected_skbs * sizeof(struct sk_buff);
-	if (skb_overhead < avail)
+	if (avail - skb_overhead >= chan->imtu + L2CAP_SDULEN_SIZE)
 		l2cap_chan_rx_avail(chan, avail - skb_overhead);
 	else
 		l2cap_chan_rx_avail(chan, -1);
@@ -1292,6 +1313,7 @@ static int l2cap_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 {
 	struct sock *sk = sock->sk;
 	struct l2cap_pinfo *pi = l2cap_pi(sk);
+	bool have_conn;
 	int err;
 
 	if (unlikely(flags & MSG_ERRQUEUE))
@@ -1312,9 +1334,12 @@ static int l2cap_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 	    pi->chan->mode != L2CAP_MODE_EXT_FLOWCTL)
 		return err;
 
-	lock_sock(sk);
-
+	/* Returning credits must be serialized with the RX path */
+	have_conn = l2cap_chan_lock_conn(pi->chan);
 	l2cap_publish_rx_avail(pi->chan);
+	l2cap_chan_unlock_conn(pi->chan, have_conn);
+
+	lock_sock(sk);
 
 	/* Attempt to put pending rx data in the socket buffer */
 	while (!list_empty(&pi->rx_busy)) {
@@ -1332,7 +1357,8 @@ static int l2cap_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 	 * available.  This avoids resending large numbers of
 	 * frames.
 	 */
-	if (test_bit(CONN_LOCAL_BUSY, &pi->chan->conn_state) &&
+	if (sk->sk_state == BT_CONNECTED &&
+	    test_bit(CONN_LOCAL_BUSY, &pi->chan->conn_state) &&
 	    atomic_read(&sk->sk_rmem_alloc) <= sk->sk_rcvbuf >> 1)
 		l2cap_chan_busy(pi->chan, 0);
 

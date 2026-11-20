@@ -69,6 +69,38 @@ static unsigned long may_unwind(void)
 	);
 }
 
+/* The patches of the divisions push the pad out of the 16-bit range */
+#define FAR_PAD(name, sub)					\
+__naked void name(void)						\
+{								\
+	asm volatile (						\
+		"r6 = *(u32 *)(r1 + 0);"			\
+		"r1 = r6;"					\
+		"r1 -= " #sub ";"				\
+		"call may_unwind;"				\
+		unwind_goto(8202)				\
+		"r7 = 1;"					\
+		".rept 8200; r7 /= r6; .endr;"			\
+		"exit;"						\
+		"r0 += 100;"					\
+		"exit;"						\
+		:						\
+		: __imm_unwind_goto(8202)			\
+		: __clobber_all);				\
+}
+
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__success __retval(7)
+__load_if_JITed()
+FAR_PAD(far_pad_returns, 64)
+
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__success __retval(105)
+__load_if_JITed()
+FAR_PAD(far_pad_unwinds, 0)
+
 /* owns nothing: its pad only carries on */
 __naked __noinline __used
 static unsigned long passes_on(void)

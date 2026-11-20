@@ -201,6 +201,7 @@ static void usb_int_callback(struct urb *urb)
 		break;
 	case -ECONNRESET:
 	case -ENOENT:
+	case -EPIPE:
 	case -ESHUTDOWN:
 		return;
 	default:
@@ -280,21 +281,25 @@ static int nct6694_usb_probe(struct usb_interface *iface,
 	struct nct6694 *nct6694;
 	int ret;
 
-	nct6694 = devm_kzalloc(dev, sizeof(*nct6694), GFP_KERNEL);
+	nct6694 = devm_kzalloc_obj(dev, *nct6694);
 	if (!nct6694)
 		return -ENOMEM;
 
-	nct6694->usb_msg = devm_kzalloc(dev, sizeof(union nct6694_usb_msg), GFP_KERNEL);
+	nct6694->usb_msg = kzalloc_obj(*nct6694->usb_msg);
 	if (!nct6694->usb_msg)
 		return -ENOMEM;
 
-	nct6694->int_buffer = devm_kzalloc(dev, sizeof(*nct6694->int_buffer), GFP_KERNEL);
-	if (!nct6694->int_buffer)
-		return -ENOMEM;
+	nct6694->int_buffer = kzalloc_obj(*nct6694->int_buffer);
+	if (!nct6694->int_buffer) {
+		ret = -ENOMEM;
+		goto err_usb_msg;
+	}
 
 	nct6694->int_in_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!nct6694->int_in_urb)
-		return -ENOMEM;
+	if (!nct6694->int_in_urb) {
+		ret = -ENOMEM;
+		goto err_int_buffer;
+	}
 
 	nct6694->domain = irq_domain_create_simple(NULL, NCT6694_NR_IRQS, 0,
 						   &nct6694_irq_domain_ops,
@@ -352,6 +357,10 @@ err_ida:
 	irq_domain_remove(nct6694->domain);
 err_urb:
 	usb_free_urb(nct6694->int_in_urb);
+err_int_buffer:
+	kfree(nct6694->int_buffer);
+err_usb_msg:
+	kfree(nct6694->usb_msg);
 	return ret;
 }
 
@@ -367,6 +376,8 @@ static void nct6694_usb_disconnect(struct usb_interface *iface)
 	ida_destroy(&nct6694->gpio_ida);
 	irq_domain_remove(nct6694->domain);
 	usb_free_urb(nct6694->int_in_urb);
+	kfree(nct6694->int_buffer);
+	kfree(nct6694->usb_msg);
 }
 
 static const struct usb_device_id nct6694_ids[] = {

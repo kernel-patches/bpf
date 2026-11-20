@@ -181,7 +181,7 @@ int bpf_prog_alloc_jited_linfo(struct bpf_prog *prog)
 
 	prog->aux->jited_linfo = kvzalloc_objs(*prog->aux->jited_linfo,
 					       prog->aux->nr_linfo,
-					       bpf_memcg_flags(GFP_KERNEL | __GFP_NOWARN));
+					       bpf_memcg_flags(GFP_KERNEL | BPF_GFP_MAYFAIL));
 	if (!prog->aux->jited_linfo)
 		return -ENOMEM;
 
@@ -196,7 +196,7 @@ void bpf_prog_jit_attempt_done(struct bpf_prog *prog)
 		prog->aux->jited_linfo = NULL;
 	}
 
-	kfree(prog->aux->kfunc_tab);
+	bpf_free_kfunc_tab(prog->aux->kfunc_tab);
 	prog->aux->kfunc_tab = NULL;
 }
 
@@ -310,7 +310,7 @@ int bpf_prog_calc_tag(struct bpf_prog *fp)
 	bool was_ld_map;
 	u32 i;
 
-	dst = __vmalloc(size, GFP_KERNEL_ACCOUNT);
+	dst = __vmalloc(size, BPF_VERIFIER_GFP);
 	if (!dst)
 		return -ENOMEM;
 
@@ -341,197 +341,474 @@ int bpf_prog_calc_tag(struct bpf_prog *fp)
 	return 0;
 }
 
-static int bpf_adj_delta_to_imm(struct bpf_insn *insn, u32 pos, s32 end_old,
-				s32 end_new, s32 curr, const bool probe_pass)
+static int patch_list_reserve_patch(struct bpf_patch_list *pl)
 {
-	const s64 imm_min = S32_MIN, imm_max = S32_MAX;
-	s32 delta = end_new - end_old;
-	s64 imm = insn->imm;
+	struct bpf_insn_patch *p;
+	u32 cap;
 
-	if (curr < pos && curr + imm + 1 >= end_old)
-		imm += delta;
-	else if (curr >= end_new && curr + imm + 1 < end_new)
-		imm -= delta;
-	if (imm < imm_min || imm > imm_max)
-		return -ERANGE;
-	if (!probe_pass)
-		insn->imm = imm;
+	if (pl->cnt < pl->cap)
+		return 0;
+
+	cap = max(pl->cap * 2, 16U);
+	p = kvrealloc(pl->patches, array_size(cap, sizeof(*p)), BPF_VERIFIER_GFP);
+	if (!p)
+		return -ENOMEM;
+	pl->patches = p;
+	pl->cap = cap;
 	return 0;
 }
 
-static int bpf_adj_delta_to_off(struct bpf_insn *insn, u32 pos, s32 end_old,
-				s32 end_new, s32 curr, const bool probe_pass)
+static int patch_list_reserve_insns(struct bpf_patch_list *pl, u32 cnt)
 {
-	s64 off_min, off_max, off;
-	s32 delta = end_new - end_old;
+	struct bpf_insn *insns;
+	u32 cap;
 
-	if (insn->code == (BPF_JMP32 | BPF_JA)) {
-		off = insn->imm;
-		off_min = S32_MIN;
-		off_max = S32_MAX;
+	if (pl->insn_cnt + cnt <= pl->insn_cap)
+		return 0;
+
+	cap = max3(pl->insn_cap * 2, pl->insn_cnt + cnt, 64U);
+	insns = kvrealloc(pl->insns, array_size(cap, sizeof(*insns)), BPF_VERIFIER_GFP);
+	if (!insns)
+		return -ENOMEM;
+	pl->insns = insns;
+	pl->insn_cap = cap;
+	return 0;
+}
+
+/* Extract the pc-relative operand of a jump, a subprog call or a ld_imm64 of a subprog. */
+static bool insn_get_rel(const struct bpf_insn *insn, s64 *rel, bool *is_imm)
+{
+	u8 code = insn->code;
+
+	if (bpf_pseudo_func(insn) || bpf_pseudo_call(insn)) {
+		*rel = insn->imm;
+		*is_imm = true;
+		return true;
+	}
+	if ((BPF_CLASS(code) != BPF_JMP && BPF_CLASS(code) != BPF_JMP32) ||
+	    BPF_OP(code) == BPF_CALL || BPF_OP(code) == BPF_EXIT ||
+	    code == (BPF_JMP | BPF_TAIL_CALL) || code == (BPF_JMP | BPF_JA | BPF_X))
+		return false;
+
+	*is_imm = code == (BPF_JMP32 | BPF_JA);
+	*rel = *is_imm ? insn->imm : insn->off;
+	return true;
+}
+
+/* Whether one of the 'len' insns of a patch in front of the last one jumps past it. */
+static bool patch_list_jumps_past(const struct bpf_insn *insns, u32 len)
+{
+	bool is_imm;
+	s64 rel;
+	u32 k;
+
+	for (k = 0; k + 1 < len; k++)
+		if (insn_get_rel(&insns[k], &rel, &is_imm) && (s64)k + rel + 1 >= len)
+			return true;
+	return false;
+}
+
+#define NO_JUMP U32_MAX
+
+/*
+ * Where insn 'idx' of patch 'p' goes in the new image. Calls go to the start
+ * of a patch, img->new_off[], jumps to img->new_tgt[].
+ */
+static int patch_insn_target(const struct bpf_patch_image *img, const struct bpf_insn_patch *p,
+			     const struct bpf_insn *insn, u32 idx, u32 *pos)
+{
+	bool is_imm, call = bpf_pseudo_func(insn) || bpf_pseudo_call(insn);
+	s64 rel, tgt;
+
+	*pos = NO_JUMP;
+	if (!insn_get_rel(insn, &rel, &is_imm))
+		return 0;
+
+	if (idx + 1 == p->jmp) {
+		tgt = p->jmp_to;
+	} else if (idx == p->self) {
+		tgt = p->off + rel + 1;
 	} else {
-		off = insn->off;
-		off_min = S16_MIN;
-		off_max = S16_MAX;
+		tgt = idx + rel + 1;
+		if (tgt < 0)
+			return -EFAULT;
+		*pos = img->new_off[p->off] + tgt;
+		if (tgt < p->len)
+			return 0;
+		/* the patch pushed what follows 'off' down by len - 1 */
+		tgt += (s64)p->off - p->len + 1;
 	}
+	if (tgt < 0 || tgt > img->cnt)
+		return -EFAULT;
 
-	if (curr < pos && curr + off + 1 >= end_old)
-		off += delta;
-	else if (curr >= end_new && curr + off + 1 < end_new)
-		off -= delta;
-	if (off < off_min || off > off_max)
-		return -ERANGE;
-	if (!probe_pass) {
-		if (insn->code == (BPF_JMP32 | BPF_JA))
-			insn->imm = off;
-		else
-			insn->off = off;
-	}
+	*pos = (call ? img->new_off : img->new_tgt)[tgt];
+	if (idx + 1 == p->jmp && p->jmp_back)
+		*pos = img->new_off[tgt] - p->jmp_back;
 	return 0;
 }
 
-static int bpf_adj_branches(struct bpf_prog *prog, u32 pos, s32 end_old,
-			    s32 end_new, const bool probe_pass)
+/*
+ * Queue the replacement of insn 'off' of 'prog' by 'patch[0..len)'. Patches
+ * are queued in increasing order of 'off' and applied together, so a pass
+ * keeps addressing insns by their index in 'prog'. The last insn of the patch
+ * stands for insn 'off': a copy of a jump or a call goes where it went. The
+ * others jump inside of the patch, ahead, or see bpf_patch_list_jump().
+ * Patching 'off' again replaces the last insn of its patch, and the insns in
+ * front of it must not jump past it.
+ *
+ * Return the copy of the last insn of the patch, which stays valid until the
+ * next call.
+ *
+ * The caller sees to the order, to off < prog->len and to len > 0.
+ */
+struct bpf_insn *__bpf_patch_list_add(struct bpf_patch_list *pl,
+				      const struct bpf_prog *prog, u32 off,
+				      const struct bpf_insn *patch, u32 len)
 {
-	u32 i, insn_cnt = prog->len + (probe_pass ? end_new - end_old : 0);
-	struct bpf_insn *insn = prog->insnsi;
-	int ret = 0;
-
-	for (i = 0; i < insn_cnt; i++, insn++) {
-		u8 code;
-
-		/* In the probing pass we still operate on the original,
-		 * unpatched image in order to check overflows before we
-		 * do any other adjustments. Therefore skip the patchlet.
-		 */
-		if (probe_pass && i == pos) {
-			i = end_new;
-			insn = prog->insnsi + end_old;
-		}
-		if (bpf_pseudo_func(insn)) {
-			ret = bpf_adj_delta_to_imm(insn, pos, end_old,
-						   end_new, i, probe_pass);
-			if (ret)
-				return ret;
-			continue;
-		}
-		code = insn->code;
-		if ((BPF_CLASS(code) != BPF_JMP &&
-		     BPF_CLASS(code) != BPF_JMP32) ||
-		    BPF_OP(code) == BPF_EXIT)
-			continue;
-		/* Adjust offset of jmps if we cross patch boundaries. */
-		if (BPF_OP(code) == BPF_CALL) {
-			if (insn->src_reg != BPF_PSEUDO_CALL)
-				continue;
-			ret = bpf_adj_delta_to_imm(insn, pos, end_old,
-						   end_new, i, probe_pass);
-		} else {
-			ret = bpf_adj_delta_to_off(insn, pos, end_old,
-						   end_new, i, probe_pass);
-		}
-		if (ret)
-			break;
-	}
-
-	return ret;
-}
-
-static void bpf_adj_linfo(struct bpf_prog *prog, u32 off, u32 delta)
-{
-	struct bpf_line_info *linfo;
-	u32 i, nr_linfo;
-
-	nr_linfo = prog->aux->nr_linfo;
-	if (!nr_linfo || !delta)
-		return;
-
-	linfo = prog->aux->linfo;
-
-	for (i = 0; i < nr_linfo; i++)
-		if (off < linfo[i].insn_off)
-			break;
-
-	/* Push all off < linfo[i].insn_off by delta */
-	for (; i < nr_linfo; i++)
-		linfo[i].insn_off += delta;
-}
-
-struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
-				       const struct bpf_insn *patch, u32 len)
-{
-	u32 insn_adj_cnt, insn_rest, insn_delta = len - 1;
-	const u32 cnt_max = S16_MAX;
-	struct bpf_prog *prog_adj;
+	struct bpf_insn_patch *p = pl->cnt ? &pl->patches[pl->cnt - 1] : NULL;
 	int err;
 
-	/* Since our patchlet doesn't expand the image, we're done. */
-	if (insn_delta == 0) {
-		memcpy(prog->insnsi + off, patch, sizeof(*patch));
-		return prog;
+	if (p && off == p->off) {
+		if (WARN_ON_ONCE(p->self != p->len - 1 ||
+				 patch_list_jumps_past(pl->insns + p->start, p->len)))
+			return ERR_PTR(-EFAULT);
+		err = patch_list_reserve_insns(pl, len - 1);
+		if (err)
+			return ERR_PTR(err);
+		/* the last patch is at the end of pl->insns */
+		memcpy(pl->insns + p->start + p->len - 1, patch, len * sizeof(*patch));
+		p->len += len - 1;
+		p->self = p->len - 1;
+		pl->insn_cnt += len - 1;
+		return &pl->insns[p->start + p->len - 1];
 	}
 
-	insn_adj_cnt = prog->len + insn_delta;
-
-	/* Reject anything that would potentially let the insn->off
-	 * target overflow when we have excessive program expansions.
-	 * We need to probe here before we do any reallocation where
-	 * we afterwards may not fail anymore.
-	 */
-	if (insn_adj_cnt > cnt_max &&
-	    (err = bpf_adj_branches(prog, off, off + 1, off + len, true)))
+	err = patch_list_reserve_patch(pl) ?: patch_list_reserve_insns(pl, len);
+	if (err)
 		return ERR_PTR(err);
 
-	/* Several new instructions need to be inserted. Make room
-	 * for them. Likely, there's no need for a new allocation as
-	 * last page could have large enough tailroom.
-	 */
-	prog_adj = bpf_prog_realloc(prog, bpf_prog_size(insn_adj_cnt),
-				    GFP_USER);
-	if (!prog_adj)
-		return ERR_PTR(-ENOMEM);
+	p = &pl->patches[pl->cnt++];
+	*p = (struct bpf_insn_patch){
+		.off = off,
+		.len = len,
+		.self = len - 1,
+		.start = pl->insn_cnt,
+		.orig = prog->insnsi[off],
+	};
+	memcpy(pl->insns + p->start, patch, len * sizeof(*patch));
+	pl->insn_cnt += len;
 
-	prog_adj->len = insn_adj_cnt;
-
-	/* Patching happens in 3 steps:
-	 *
-	 * 1) Move over tail of insnsi from next instruction onwards,
-	 *    so we can patch the single target insn with one or more
-	 *    new ones (patching is always from 1 to n insns, n > 0).
-	 * 2) Inject new instructions at the target location.
-	 * 3) Adjust branch offsets if necessary.
-	 */
-	insn_rest = insn_adj_cnt - off - len;
-
-	memmove(prog_adj->insnsi + off + len, prog_adj->insnsi + off + 1,
-		sizeof(*patch) * insn_rest);
-	memcpy(prog_adj->insnsi + off, patch, sizeof(*patch) * len);
-
-	/* We are guaranteed to not fail at this point, otherwise
-	 * the ship has sailed to reverse to the original state. An
-	 * overflow cannot happen at this point.
-	 */
-	BUG_ON(bpf_adj_branches(prog_adj, off, off + 1, off + len, false));
-
-	bpf_adj_linfo(prog_adj, off, insn_delta);
-
-	return prog_adj;
+	return &pl->insns[p->start + len - 1];
 }
 
-int bpf_remove_insns(struct bpf_prog *prog, u32 off, u32 cnt)
+/* Queue the removal of insn 'off'. Jumps to it land on the next insn that stays. */
+int __bpf_patch_list_del(struct bpf_patch_list *pl, const struct bpf_prog *prog,
+			 u32 off)
 {
+	int err = patch_list_reserve_patch(pl);
+
+	if (err)
+		return err;
+	pl->patches[pl->cnt++] = (struct bpf_insn_patch){ .off = off };
+	return 0;
+}
+
+/*
+ * Queue 'insns[0..cnt)' to go in front of insn 'off'. Jumps to 'off',
+ * instruction arrays and poke descriptors still name the insn at 'off', while
+ * subprogs, line info, function pointers and calls that start at 'off' start
+ * at the first inserted insn. Inserting in front of a queued patch puts the
+ * insns in front of it. 'off' is the start of a subprog, so nothing falls
+ * through to the inserted insns.
+ * Or queue them to go 'behind' insn 'off'. That is the last patch of 'off'.
+ */
+int __bpf_patch_list_insert(struct bpf_patch_list *pl, const struct bpf_prog *prog,
+			    u32 off, const struct bpf_insn *insns, u32 cnt, bool behind)
+{
+	struct bpf_insn_patch *p = pl->cnt ? &pl->patches[pl->cnt - 1] : NULL;
+	struct bpf_insn *insn;
 	int err;
 
-	/* Branch offsets can't overflow when program is shrinking, no need
-	 * to call bpf_adj_branches(..., true) here
-	 */
-	memmove(prog->insnsi + off, prog->insnsi + off + cnt,
-		sizeof(struct bpf_insn) * (prog->len - off - cnt));
-	prog->len -= cnt;
+	if (!p || off != p->off) {
+		insn = __bpf_patch_list_add(pl, prog, off, &prog->insnsi[off], 1);
+		if (IS_ERR(insn))
+			return PTR_ERR(insn);
+		p = &pl->patches[pl->cnt - 1];
+	}
 
-	err = bpf_adj_branches(prog, off, off + cnt, off, false);
-	WARN_ON_ONCE(err);
-	return err;
+	err = patch_list_reserve_insns(pl, cnt);
+	if (err)
+		return err;
+
+	/* the last patch is at the end of pl->insns */
+	insn = pl->insns + p->start;
+	if (behind) {
+		insn += p->len;
+	} else {
+		memmove(insn + cnt, insn, p->len * sizeof(*insns));
+		p->target += cnt;
+		p->self += cnt;
+		p->jmp += p->jmp ? cnt : 0;
+	}
+	memcpy(insn, insns, cnt * sizeof(*insns));
+	p->len += cnt;
+	pl->insn_cnt += cnt;
+	return 0;
+}
+
+/*
+ * 'insn' of the last patch goes to insn 'to' of the old image, however far that is.
+ * With 'back' it goes to the last insns of the patch of insn 'to - 1'.
+ * A patch has one such jump.
+ */
+void bpf_patch_list_jump(struct bpf_patch_list *pl, const struct bpf_insn *insn, u32 to, u32 back)
+{
+	struct bpf_insn_patch *p = &pl->patches[pl->cnt - 1];
+
+	WARN_ON_ONCE(p->jmp);
+	p->jmp = insn - &pl->insns[p->start] + 1;
+	p->jmp_to = to;
+	p->jmp_back = back;
+}
+
+void bpf_patch_list_release(struct bpf_patch_list *pl)
+{
+	kvfree(pl->patches);
+	kvfree(pl->insns);
+	memset(pl, 0, sizeof(*pl));
+}
+
+/*
+ * Map the index of each line info record to its new one in img->new_linfo[].
+ * The record of a removed insn goes away: it gets the index of the next
+ * record. The last one before the next insn that stays moves to that insn
+ * instead, unless the insn has its own line info.
+ */
+static int patch_image_map_linfo(struct bpf_patch_image *img, const struct bpf_prog *prog)
+{
+	const struct bpf_line_info *linfo = prog->aux->linfo;
+	u32 i, j, pos, next, nr = prog->aux->nr_linfo;
+
+	img->new_linfo = kvmalloc_array(nr + 1, sizeof(u32), BPF_VERIFIER_GFP);
+	if (!img->new_linfo)
+		return -ENOMEM;
+	img->nr_linfo = nr;
+
+	for (i = 0, j = 0; i < nr; i++) {
+		img->new_linfo[i] = j;
+		if (bpf_patch_image_deleted(img, linfo[i].insn_off)) {
+			pos = bpf_patch_image_remap(img, img->new_off, linfo[i].insn_off);
+			next = i + 1 < nr ?
+			       bpf_patch_image_remap(img, img->new_off, linfo[i + 1].insn_off) :
+			       U32_MAX;
+			if (pos >= img->new_cnt || next == pos)
+				continue;
+		}
+		j++;
+	}
+	img->new_linfo[nr] = j;
+	return 0;
+}
+
+static bool is_short_jump(const struct bpf_insn *insn)
+{
+	bool is_imm;
+	s64 rel;
+
+	return insn_get_rel(insn, &rel, &is_imm) && !is_imm;
+}
+
+/*
+ * Some jump is out of its 16-bit range. 'tgt' has the targets of all jumps.
+ *
+ *   goto far          ->  gotol far
+ *
+ *   if r1 > r2        ->  if r1 > r2 goto +1     also may_goto, unwind_goto
+ *      goto far           goto +1
+ *                         gotol far
+ *
+ * That moves the targets of other jumps away. One pass is enough: take each
+ * jump for far that would be far with all jumps that it goes over relaxed.
+ */
+static int patch_image_relax(struct bpf_patch_image *img, u32 *tgt)
+{
+	u32 cnt = img->new_cnt, pos, to, lo, hi, n, *map;
+	unsigned long *far __free(kvfree) = NULL;
+	struct bpf_insn *insns = img->insns;
+
+	far = kvcalloc(BITS_TO_LONGS(cnt), sizeof(long), BPF_VERIFIER_GFP);
+	map = img->relaxed = kvmalloc_array(cnt + 1, sizeof(u32), BPF_VERIFIER_GFP);
+	if (!far || !map)
+		return -ENOMEM;
+
+	for (pos = 0, n = 0; pos <= cnt; pos++) {
+		map[pos] = pos + n;
+		n += pos < cnt && is_short_jump(&insns[pos]) ? 2 : 0;
+	}
+	for (pos = 0; pos < cnt; pos++) {
+		if (!is_short_jump(&insns[pos]))
+			continue;
+		lo = min(pos, tgt[pos]);
+		hi = max(pos + 1, tgt[pos]);
+		if (map[hi] - map[lo] <= S16_MAX)
+			continue;
+		if (insns[pos].code == (BPF_JMP | BPF_JA))
+			insns[pos] = BPF_JMP32_A(0);
+		else
+			__set_bit(pos, far);
+	}
+	for (pos = 0, n = 0; pos <= cnt; pos++) {
+		map[pos] = pos + n;
+		n += pos < cnt && test_bit(pos, far) ? 2 : 0;
+	}
+
+	/* like kvmalloc(): the size of a prog fits into 32 bits */
+	if (map[cnt] > INT_MAX / sizeof(*insns))
+		return -ENOMEM;
+	insns = kvrealloc(insns, array_size(map[cnt], sizeof(*insns)), BPF_VERIFIER_GFP);
+	if (!insns)
+		return -ENOMEM;
+	img->insns = insns;
+	for (pos = cnt; pos--;) {
+		to = map[pos];
+		insns[to] = insns[pos];
+		if (!test_bit(pos, far))
+			continue;
+		insns[to].off = 1;
+		insns[to + 1] = BPF_JMP_A(1);
+		insns[to + 2] = BPF_JMP32_A(map[tgt[pos]] - to - 3);
+		tgt[pos] = NO_JUMP;
+	}
+	for (pos = 0; pos <= img->cnt; pos++) {
+		img->new_off[pos] = map[img->new_off[pos]];
+		img->new_tgt[pos] = map[img->new_tgt[pos]];
+	}
+	img->grow += map[cnt] - cnt;
+	img->new_cnt = map[cnt];
+	return 0;
+}
+
+/*
+ * Build the image of 'prog' with the queued patches applied in img->insns,
+ * without touching 'prog'. img->new_off[] maps each old insn to the start of
+ * its patch, img->new_tgt[] to where jumps to it land, both map a removed insn
+ * to the next one that stays. img->new_linfo[] is there when insns are
+ * removed, see patch_image_map_linfo(). On -EFAULT, img->bad is the old insn
+ * whose jump is wrong. No list has both removed and inserted insns.
+ */
+int bpf_patch_list_build(const struct bpf_patch_list *pl, const struct bpf_prog *prog,
+			 struct bpf_patch_image *img)
+{
+	u32 cnt = prog->len, i, k, n, pos, *map;
+	u32 *tgt __free(kvfree) = NULL;
+	bool far = false;
+	int err;
+	s64 rel;
+
+	memset(img, 0, sizeof(*img));
+	img->cnt = cnt;
+	img->new_off = kvmalloc_array(cnt + 1, sizeof(u32), BPF_VERIFIER_GFP);
+	img->new_tgt = kvmalloc_array(cnt + 1, sizeof(u32), BPF_VERIFIER_GFP);
+	if (!img->new_off || !img->new_tgt)
+		return -ENOMEM;
+
+	for (i = 0, k = 0; i <= cnt; i++) {
+		img->new_off[i] = i + img->grow;
+		img->new_tgt[i] = img->new_off[i];
+		if (k < pl->cnt && pl->patches[k].off == i) {
+			img->new_tgt[i] += pl->patches[k].target;
+			img->del |= !pl->patches[k].len;
+			img->grow += pl->patches[k++].len - 1;
+		}
+	}
+	img->short_cnt = img->new_cnt = cnt + img->grow;
+
+	if (img->del && prog->aux->nr_linfo) {
+		err = patch_image_map_linfo(img, prog);
+		if (err)
+			return err;
+	}
+
+	img->insns = kvmalloc_array(img->new_cnt, sizeof(*img->insns), BPF_VERIFIER_GFP);
+	tgt = kvmalloc_array(img->new_cnt, sizeof(*tgt), BPF_VERIFIER_GFP);
+	if (!img->insns || !tgt)
+		return -ENOMEM;
+
+	for (i = 0, k = 0, pos = 0; i < cnt; i++) {
+		struct bpf_insn_patch none = { .off = i, .len = 1 };
+		const struct bpf_insn *src = &prog->insnsi[i];
+		const struct bpf_insn_patch *p = &none;
+
+		if (k < pl->cnt && pl->patches[k].off == i) {
+			p = &pl->patches[k++];
+			src = &pl->insns[p->start];
+		}
+
+		for (n = 0; n < p->len; n++, pos++) {
+			img->insns[pos] = src[n];
+			err = patch_insn_target(img, p, &src[n], n, &tgt[pos]);
+			if (err) {
+				img->bad = i;
+				return err;
+			}
+			rel = (s64)tgt[pos] - pos - 1;
+			far |= is_short_jump(&src[n]) && rel != (s16)rel;
+		}
+	}
+
+	err = far ? patch_image_relax(img, tgt) : 0;
+	if (err)
+		return err;
+
+	for (i = 0, map = img->relaxed; i < img->short_cnt; i++) {
+		if (tgt[i] == NO_JUMP)
+			continue;
+		pos = map ? map[i] : i;
+		rel = (s64)(map ? map[tgt[i]] : tgt[i]) - pos - 1;
+		if (is_short_jump(&img->insns[pos]))
+			img->insns[pos].off = rel;
+		else
+			img->insns[pos].imm = rel;
+	}
+	return 0;
+}
+
+void bpf_patch_image_free(struct bpf_patch_image *img)
+{
+	kvfree(img->insns);
+	kvfree(img->relaxed);
+	kvfree(img->new_linfo);
+	kvfree(img->new_tgt);
+	kvfree(img->new_off);
+	memset(img, 0, sizeof(*img));
+}
+
+/*
+ * Move the poke descriptors and the line info of 'prog' along, then put the
+ * new image in 'prog', which has room for it. The new value of an entry
+ * depends on its old value and on the maps of 'img' only.
+ */
+void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image *img)
+{
+	struct bpf_line_info *linfo = prog->aux->linfo;
+	u32 i, j;
+
+	for (i = 0; i < prog->aux->size_poke_tab; i++)
+		prog->aux->poke_tab[i].insn_idx =
+			bpf_patch_image_remap(img, img->new_tgt,
+					      prog->aux->poke_tab[i].insn_idx);
+
+	for (i = 0, j = 0; i < prog->aux->nr_linfo; i++) {
+		if (img->new_linfo && img->new_linfo[i] == img->new_linfo[i + 1])
+			continue;
+		linfo[j] = linfo[i];
+		linfo[j++].insn_off = bpf_patch_image_remap(img, img->new_off,
+							    linfo[i].insn_off);
+	}
+	prog->aux->nr_linfo = j;
+
+	memcpy(prog->insnsi, img->insns, sizeof(*img->insns) * img->new_cnt);
+	prog->len = img->new_cnt;
 }
 
 static void bpf_prog_kallsyms_del_subprogs(struct bpf_prog *fp)
@@ -1319,7 +1596,6 @@ int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 			  const struct bpf_insn *insn, bool extra_pass,
 			  u64 *func_addr, bool *func_addr_fixed)
 {
-	s16 off = insn->off;
 	s32 imm = insn->imm;
 	u8 *addr;
 	int err;
@@ -1333,8 +1609,8 @@ int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 		if (!extra_pass)
 			addr = NULL;
 		else if (prog->aux->func &&
-			 off >= 0 && off < prog->aux->real_func_cnt)
-			addr = (u8 *)prog->aux->func[off]->bpf_func;
+			 imm >= 0 && imm < prog->aux->real_func_cnt)
+			addr = (u8 *)prog->aux->func[imm]->bpf_func;
 		else
 			return -EINVAL;
 	} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
@@ -1369,9 +1645,9 @@ static int bpf_jit_blind_insn(const struct bpf_insn *from,
 {
 	struct bpf_insn *to = to_buff;
 	u32 imm_rnd = get_random_u32();
-	int off;
 
-	BUILD_BUG_ON(BPF_REG_PARAMS + 2 != MAX_BPF_JIT_REG);
+	BUILD_BUG_ON(BPF_REG_PARAMS + 3 != MAX_BPF_JIT_REG);
+	BUILD_BUG_ON(BPF_REG_ARENA_SP + 2 != MAX_BPF_JIT_REG);
 	BUILD_BUG_ON(BPF_REG_AX + 1 != MAX_BPF_JIT_REG);
 
 	/* Constraints on AX register:
@@ -1441,15 +1717,9 @@ static int bpf_jit_blind_insn(const struct bpf_insn *from,
 	case BPF_JMP | BPF_JSGE | BPF_K:
 	case BPF_JMP | BPF_JSLE | BPF_K:
 	case BPF_JMP | BPF_JSET | BPF_K:
-		/* Accommodate for extra offset in case of a backjump. */
-		off = from->off;
-		if (off < 0)
-			off -= 2;
-		if (off < S16_MIN)
-			return -ERANGE;
 		*to++ = BPF_ALU64_IMM(BPF_MOV, BPF_REG_AX, imm_rnd ^ from->imm);
 		*to++ = BPF_ALU64_IMM(BPF_XOR, BPF_REG_AX, imm_rnd);
-		*to++ = BPF_JMP_REG(from->code, from->dst_reg, BPF_REG_AX, off);
+		*to++ = BPF_JMP_REG(from->code, from->dst_reg, BPF_REG_AX, from->off);
 		break;
 
 	case BPF_JMP32 | BPF_JEQ  | BPF_K:
@@ -1463,16 +1733,9 @@ static int bpf_jit_blind_insn(const struct bpf_insn *from,
 	case BPF_JMP32 | BPF_JSGE | BPF_K:
 	case BPF_JMP32 | BPF_JSLE | BPF_K:
 	case BPF_JMP32 | BPF_JSET | BPF_K:
-		/* Accommodate for extra offset in case of a backjump. */
-		off = from->off;
-		if (off < 0)
-			off -= 2;
-		if (off < S16_MIN)
-			return -ERANGE;
 		*to++ = BPF_ALU32_IMM(BPF_MOV, BPF_REG_AX, imm_rnd ^ from->imm);
 		*to++ = BPF_ALU32_IMM(BPF_XOR, BPF_REG_AX, imm_rnd);
-		*to++ = BPF_JMP32_REG(from->code, from->dst_reg, BPF_REG_AX,
-				      off);
+		*to++ = BPF_JMP32_REG(from->code, from->dst_reg, BPF_REG_AX, from->off);
 		break;
 
 	case BPF_LD | BPF_IMM | BPF_DW:
@@ -1558,6 +1821,17 @@ static void bpf_prog_clone_free(struct bpf_prog *fp)
 
 void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other)
 {
+	struct bpf_prog_aux *aux = fp->aux;
+	u32 i;
+
+	/* The line info moved with the blinded insns, move it back. */
+	if (aux->linfo_unblinded && !fp->blinded) {
+		for (i = 0; i < aux->nr_linfo; i++)
+			aux->linfo[i].insn_off = aux->linfo_unblinded[i];
+	}
+	kvfree(aux->linfo_unblinded);
+	aux->linfo_unblinded = NULL;
+
 	/* We have to repoint aux->prog to self, as we don't
 	 * know whether fp here is the clone or the original.
 	 */
@@ -1567,25 +1841,70 @@ void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other)
 }
 
 /*
+ * Apply the patches queued for 'prog' without a verifier env, which can't
+ * remove insns. Return the patched program, which may have moved.
+ */
+static struct bpf_prog *bpf_patch_list_apply(struct bpf_prog *prog, struct bpf_patch_list *pl)
+{
+	struct bpf_patch_image img;
+	struct bpf_prog *new;
+	int err;
+
+	if (!pl->cnt)
+		return prog;
+
+	err = bpf_patch_list_build(pl, prog, &img);
+	if (!err && WARN_ON_ONCE(img.del))
+		err = -EINVAL;
+	if (!err) {
+		new = bpf_prog_realloc(prog, bpf_prog_size(img.new_cnt), GFP_USER);
+		if (new) {
+			prog = new;
+			bpf_patch_image_install(prog, &img);
+		} else {
+			err = -ENOMEM;
+		}
+	}
+
+	bpf_patch_image_free(&img);
+	bpf_patch_list_release(pl);
+	return err ? ERR_PTR(err) : prog;
+}
+
+/*
  * Now this function is used only to blind the main prog and must be invoked only when
  * bpf_prog_need_blind() returns true.
  */
 struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
-	struct bpf_insn insn_buff[16], aux[2];
+	struct bpf_insn insn_buff[16], aux[2], *last;
+	u32 *linfo_unblinded = NULL, nr_linfo;
+	struct bpf_patch_list pl = {};
 	struct bpf_prog *clone, *tmp;
-	int insn_delta, insn_cnt;
 	struct bpf_insn *insn;
-	int i, rewritten;
+	int i, insn_cnt, rewritten, err = 0;
 
 	if (WARN_ON_ONCE(env && env->prog != prog))
 		return ERR_PTR(-EINVAL);
 
-	clone = bpf_prog_clone_create(prog, GFP_USER);
-	if (!clone)
-		return ERR_PTR(-ENOMEM);
+	/* keep where the line info is, for a fallback to 'prog' */
+	nr_linfo = prog->aux->nr_linfo;
+	if (nr_linfo) {
+		linfo_unblinded = kvmalloc_array(nr_linfo, sizeof(*linfo_unblinded),
+						 GFP_USER);
+		if (!linfo_unblinded)
+			return ERR_PTR(-ENOMEM);
+		for (i = 0; i < nr_linfo; i++)
+			linfo_unblinded[i] = prog->aux->linfo[i].insn_off;
+	}
 
-	/* make sure bpf_patch_insn_data() patches the correct prog */
+	clone = bpf_prog_clone_create(prog, GFP_USER);
+	if (!clone) {
+		kvfree(linfo_unblinded);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	/* make sure the patches go to the clone */
 	if (env)
 		env->prog = clone;
 
@@ -1616,41 +1935,43 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bp
 		if (!rewritten)
 			continue;
 
-		if (rewritten < 0)
-			tmp = ERR_PTR(rewritten);
-		else if (env)
-			tmp = bpf_patch_insn_data(env, i, insn_buff, rewritten);
-		else
-			tmp = bpf_patch_insn_single(clone, i, insn_buff, rewritten);
-
-		if (IS_ERR_OR_NULL(tmp)) {
-			if (env)
-				/* restore the original prog */
-				env->prog = prog;
-			/* Patching may have repointed aux->prog during
-			 * realloc from the original one, so we need to
-			 * fix it up here on error.
-			 */
-			bpf_jit_prog_release_other(prog, clone);
-			if (env && fatal_signal_pending(current))
-				return ERR_PTR(-EINTR);
-			return IS_ERR(tmp) ? tmp : ERR_PTR(-ENOMEM);
+		last = env ? bpf_patch_list_add(env, i, insn_buff, rewritten) :
+			     __bpf_patch_list_add(&pl, clone, i, insn_buff, rewritten);
+		if (IS_ERR(last)) {
+			err = PTR_ERR(last);
+			break;
 		}
-
-		clone = tmp;
-		insn_delta = rewritten - 1;
-
-		if (env)
-			env->prog = clone;
-
-		/* Walk new program and skip insns we just inserted. */
-		insn = clone->insnsi + i + insn_delta;
-		insn_cnt += insn_delta;
-		i        += insn_delta;
 	}
 
-	clone->blinded = 1;
-	return clone;
+	if (!err && env) {
+		err = bpf_patch_list_commit(env);
+		tmp = env->prog;
+	} else if (!err) {
+		tmp = bpf_patch_list_apply(clone, &pl);
+		err = PTR_ERR_OR_ZERO(tmp);
+	}
+
+	if (err) {
+		if (env) {
+			bpf_patch_list_free(env);
+			/* restore the original prog */
+			env->prog = prog;
+		}
+		bpf_patch_list_release(&pl);
+		/*
+		 * The clone is reallocated when nothing else can fail, so
+		 * 'clone' is still valid.
+		 */
+		bpf_jit_prog_release_other(prog, clone);
+		kvfree(linfo_unblinded);
+		if (env && fatal_signal_pending(current))
+			return ERR_PTR(-EINTR);
+		return ERR_PTR(err);
+	}
+
+	tmp->aux->linfo_unblinded = linfo_unblinded;
+	tmp->blinded = 1;
+	return tmp;
 }
 
 bool bpf_insn_is_indirect_target(const struct bpf_verifier_env *env, const struct bpf_prog *prog,
@@ -1946,7 +2267,46 @@ select_insn:
 	ALU(AND,  &)
 	ALU(OR,   |)
 	ALU(XOR,  ^)
-	ALU(MUL,  *)
+	/*
+	 * MUL needs explicit handlers because ALU64 insn->off selects
+	 * low-half, unsigned high-half, or signed high-half multiplication.
+	 */
+	ALU64_MUL_X:
+		switch (OFF) {
+		case 0:
+			DST = DST * SRC;
+			break;
+		case BPF_UHMUL:
+			DST = bpf_uhmul64(DST, SRC);
+			break;
+		case BPF_SHMUL:
+			DST = bpf_shmul64((s64)DST, (s64)SRC);
+			break;
+		default:
+			goto default_label;
+		}
+		CONT;
+	ALU_MUL_X:
+		DST = (u32) DST * (u32) SRC;
+		CONT;
+	ALU64_MUL_K:
+		switch (OFF) {
+		case 0:
+			DST = DST * IMM;
+			break;
+		case BPF_UHMUL:
+			DST = bpf_uhmul64(DST, (u64)IMM);
+			break;
+		case BPF_SHMUL:
+			DST = bpf_shmul64((s64)DST, (s32)IMM);
+			break;
+		default:
+			goto default_label;
+		}
+		CONT;
+	ALU_MUL_K:
+		DST = (u32) DST * (u32) IMM;
+		CONT;
 	SHT(LSH, <<)
 	SHT(RSH, >>)
 #undef SHT
@@ -2708,10 +3068,10 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 	prog = bpf_jit_blind_constants(env, prog);
 	/*
 	 * Fall back to the interpreter after blinding failures, except when
-	 * the loader was killed.
+	 * the load has to stop or has no memory.
 	 */
 	if (IS_ERR(prog)) {
-		if (PTR_ERR(prog) == -EINTR)
+		if (PTR_ERR(prog) == -EINTR || (env && PTR_ERR(prog) == -ENOMEM))
 			return prog;
 		goto out_restore;
 	}
@@ -2923,7 +3283,7 @@ int bpf_prog_array_copy_to_user(struct bpf_prog_array *array,
 	 *     bpf_prog_array_copy_to_user(..., cnt);
 	 * so below kcalloc doesn't need extra cnt > 0 check.
 	 */
-	ids = kcalloc(cnt, sizeof(u32), GFP_USER | __GFP_NOWARN);
+	ids = kzalloc_objs(u32, cnt, GFP_USER | __GFP_NOWARN);
 	if (!ids)
 		return -ENOMEM;
 	nospc = bpf_prog_array_copy_core(array, ids, cnt);
@@ -3120,7 +3480,7 @@ void __bpf_free_used_maps(struct bpf_prog_aux *aux,
 static void bpf_free_used_maps(struct bpf_prog_aux *aux)
 {
 	__bpf_free_used_maps(aux, aux->used_maps, aux->used_map_cnt);
-	kfree(aux->used_maps);
+	kvfree(aux->used_maps);
 }
 
 void __bpf_free_used_btfs(struct btf_mod_pair *used_btfs, u32 len)
@@ -3141,7 +3501,7 @@ void __bpf_free_used_btfs(struct btf_mod_pair *used_btfs, u32 len)
 static void bpf_free_used_btfs(struct bpf_prog_aux *aux)
 {
 	__bpf_free_used_btfs(aux->used_btfs, aux->used_btf_cnt);
-	kfree(aux->used_btfs);
+	kvfree(aux->used_btfs);
 }
 
 struct workqueue_struct *bpf_prog_free_wq __ro_after_init;
@@ -3170,7 +3530,7 @@ static void bpf_prog_free_images(struct work_struct *work)
 		bpf_jit_free(aux->func[i]);
 	}
 	if (aux->real_func_cnt) {
-		kfree(aux->func);
+		kvfree(aux->func);
 		bpf_prog_unlock_free(aux->prog);
 	} else {
 		bpf_jit_free(aux->prog);
@@ -3422,6 +3782,12 @@ bool __weak bpf_jit_supports_unwind(void)
 	return false;
 }
 
+/* uhmul and shmul */
+bool __weak bpf_jit_supports_hmul(void)
+{
+	return false;
+}
+
 /*
  * How this arch places a by-value kfunc argument, or NULL for one that has
  * not opted in and so only takes an argument of a single eightbyte, which
@@ -3601,6 +3967,18 @@ bool __weak bpf_jit_supports_private_stack(void)
 	return false;
 }
 
+/* Whether JIT supports BPF_ATOMIC_LOCAL */
+bool __weak bpf_jit_supports_local_atomics(void)
+{
+	return false;
+}
+
+/* Whether JIT supports BPF_REG_ARENA_SP */
+bool __weak bpf_jit_supports_arena_stack(void)
+{
+	return false;
+}
+
 /*
  * Return TRUE if the JIT lays out frames of up to MAX_BPF_STACK_JIT bytes.
  * Its prologue, epilogue and tail call sequences must encode such frame
@@ -3642,6 +4020,25 @@ static noinline void bpf_prog_report_may_goto_violation(void)
 		bpf_stream_dump_stack(ss);
 	}));
 #endif
+}
+
+/* Called by a recursive subprog that finds no room, see bpf_insert_recursion_checks() */
+u64 bpf_prog_report_recursion(void)
+{
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_stream_stage ss;
+	struct bpf_prog *prog;
+
+	prog = bpf_prog_find_from_stack();
+	/* The calls that follow get here too. One report is enough until user space reads it. */
+	if (!prog || atomic_read(&prog->aux->stream[BPF_STDERR - 1]->capacity))
+		return 0;
+	bpf_stream_stage(ss, prog, BPF_STDERR, ({
+		bpf_stream_printk(ss, "ERROR: No room in the stack for a call of a recursive function\n");
+		bpf_stream_dump_stack(ss);
+	}));
+#endif
+	return 0;
 }
 
 u64 bpf_check_timed_may_goto(struct bpf_timed_may_goto *p)
@@ -3703,6 +4100,25 @@ __weak u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena)
 __weak u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena)
 {
 	return 0;
+}
+
+__weak int bpf_arena_stack_init(struct bpf_arena *arena)
+{
+	return -EOPNOTSUPP;
+}
+
+__weak void __percpu *bpf_arena_stack_percpu(struct bpf_arena *arena)
+{
+	return NULL;
+}
+
+__weak u64 bpf_arena_stack_get(struct bpf_prog_aux *aux, u64 busy)
+{
+	return 0;
+}
+
+__weak void bpf_arena_stack_put(struct bpf_prog_aux *aux, u32 base)
+{
 }
 
 #ifdef CONFIG_BPF_SYSCALL

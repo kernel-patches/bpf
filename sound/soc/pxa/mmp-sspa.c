@@ -421,14 +421,20 @@ static int mmp_sspa_open(struct snd_soc_component *component,
 			 struct snd_pcm_substream *substream)
 {
 	struct sspa_priv *sspa = snd_soc_component_get_drvdata(component);
+	int ret;
 
-	pm_runtime_get_sync(component->dev);
+	ret = pm_runtime_get_sync(component->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(component->dev);
+		return ret;
+	}
 
 	/* we can only change the settings if the port is not in use */
 	if ((__raw_readl(sspa->tx_base + SSPA_SP) & SSPA_SP_S_EN) ||
 	    (__raw_readl(sspa->rx_base + SSPA_SP) & SSPA_SP_S_EN)) {
 		dev_err(component->dev,
 			"can't change hardware dai format: stream is in use\n");
+		pm_runtime_put_sync(component->dev);
 		return -EBUSY;
 	}
 
@@ -474,8 +480,7 @@ static int asoc_mmp_sspa_probe(struct platform_device *pdev)
 	struct sspa_priv *sspa;
 	int ret;
 
-	sspa = devm_kzalloc(&pdev->dev,
-				sizeof(struct sspa_priv), GFP_KERNEL);
+	sspa = devm_kzalloc_obj(&pdev->dev, struct sspa_priv);
 	if (!sspa)
 		return -ENOMEM;
 

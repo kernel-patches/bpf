@@ -16,6 +16,8 @@ source cpu.sh
 source cpufreq.sh
 source governor.sh
 
+HOTPLUG_PID=""
+
 # Test 1
 # $1: policy
 __simple_lockdep()
@@ -92,6 +94,16 @@ governor_race()
 	restore_all_governors
 }
 
+hotplug_cleanup()
+{
+	if [[ -n "$HOTPLUG_PID" ]]; then
+		kill -s SIGTERM "$HOTPLUG_PID"
+		wait "$HOTPLUG_PID"
+
+		HOTPLUG_PID=""
+	fi
+}
+
 # Test 4
 # $1: cpu
 hotplug_with_updates_cpu()
@@ -101,13 +113,17 @@ hotplug_with_updates_cpu()
 	# switch to ondemand
 	__switch_governor_for_cpu $1 "ondemand"
 
-	for i in `seq 1 5000`
-	do
-		reboot_cpu $1
-	done &
-
 	local freqs=$(cat $filepath/scaling_available_frequencies)
 	local oldfreq=$(cat $filepath/scaling_min_freq)
+
+	(
+		local quit=0
+		trap 'quit=1' SIGTERM
+		while [ "$quit" -eq 0 ]; do
+			reboot_cpu "$1"
+		done
+	) &
+	HOTPLUG_PID=$!
 
 	for j in `seq 1 5000`
 	do
@@ -117,14 +133,16 @@ hotplug_with_updates_cpu()
 		done
 	done
 
+	hotplug_cleanup
+
 	# restore old freq
 	echo $oldfreq > $filepath/scaling_min_freq
 }
 
 hotplug_with_updates()
 {
+	trap 'hotplug_cleanup' EXIT
 	save_all_governors
 	for_each_non_boot_cpu hotplug_with_updates_cpu
-	wait
 	restore_all_governors
 }

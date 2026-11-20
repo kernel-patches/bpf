@@ -1216,7 +1216,7 @@ static int push_deleteing_req(struct mcast_group *group, int slave)
 		return -ENOMEM;
 
 	if (!list_empty(&group->func[slave].pending)) {
-		pend_req = list_entry(group->func[slave].pending.prev, struct mcast_req, group_list);
+		pend_req = list_entry(group->func[slave].pending.prev, struct mcast_req, func_list);
 		if (pend_req->clean) {
 			kfree(req);
 			return 0;

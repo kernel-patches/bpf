@@ -108,6 +108,7 @@ static int gmc_v11_0_process_interrupt(struct amdgpu_device *adev,
 			      AMDGPU_GMC9_FAULT_SOURCE_DATA_RETRY);
 	bool write_fault = !!(entry->src_data[1] &
 			      AMDGPU_GMC9_FAULT_SOURCE_DATA_WRITE);
+	bool read_status = !amdgpu_sriov_vf(adev);
 	uint32_t status = 0;
 	uint32_t cam_index;
 	u64 addr;
@@ -125,7 +126,15 @@ static int gmc_v11_0_process_interrupt(struct amdgpu_device *adev,
 			return 1;
 	}
 
-	if (!amdgpu_sriov_vf(adev)) {
+	/*
+	 * IH1/IH2 are processed from a work item, don't touch the registers
+	 * while a GPU reset is running there.
+	 */
+	if (read_status && in_task() &&
+	    !down_read_trylock(&adev->reset_domain->sem))
+		read_status = false;
+
+	if (read_status) {
 		/*
 		 * Issue a dummy read to wait for the status register to
 		 * be updated to avoid reading an incorrect value due to
@@ -136,6 +145,9 @@ static int gmc_v11_0_process_interrupt(struct amdgpu_device *adev,
 
 		status = RREG32(hub->vm_l2_pro_fault_status);
 		WREG32_P(hub->vm_l2_pro_fault_cntl, 1, ~1);
+
+		if (in_task())
+			up_read(&adev->reset_domain->sem);
 
 		amdgpu_vm_update_fault_cache(adev, entry->pasid, addr, status,
 					     entry->vmid_src ? AMDGPU_MMHUB0(0) : AMDGPU_GFXHUB(0));
@@ -745,6 +757,7 @@ static int gmc_v11_0_sw_init(struct amdgpu_ip_block *ip_block)
 {
 	int r, vram_width = 0, vram_type = 0, vram_vendor = 0;
 	struct amdgpu_device *adev = ip_block->adev;
+	unsigned int last_kq_vmid;
 
 	adev->mmhub.funcs->init(adev);
 
@@ -851,15 +864,16 @@ static int gmc_v11_0_sw_init(struct amdgpu_ip_block *ip_block)
 	/*
 	 * number of VMs
 	 * VMID 0 is reserved for System
-	 * amdgpu graphics/compute will use VMIDs 1-7
-	 * amdkfd will use VMIDs 8-15
+	 * amdgpu graphics/compute kernel queues will use VMIDs 1-7
+	 * amdkfd/MES user queues will use VMIDs 8-15
 	 */
-	adev->vm_manager.first_kfd_vmid = adev->gfx.disable_kq ? 1 : 8;
+	last_kq_vmid = adev->gfx.disable_kq ? 0 : 7;
 
-	amdgpu_vmid_mgr_set_vmid_mask(adev,
-				      GENMASK(adev->vm_manager.first_kfd_vmid - 1, 1),
-				      false);
-	amdgpu_vmid_mgr_set_vmid_mask(adev, GENMASK(AMDGPU_NUM_VMID - 1, 1), true);
+	/* Reserve the last VMID for SPM */
+	adev->vm_manager.spm_vmid = AMDGPU_NUM_VMID - 1;
+
+	amdgpu_vmid_mgr_set_vmid_mask(adev, GENMASK(last_kq_vmid, 1),
+				      GENMASK(AMDGPU_NUM_VMID - 1, 1));
 
 	amdgpu_vm_manager_init(adev);
 

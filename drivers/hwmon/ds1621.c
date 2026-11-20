@@ -24,7 +24,7 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
-#include <linux/jiffies.h>
+#include <linux/ktime.h>
 #include <linux/i2c.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
@@ -110,7 +110,7 @@ struct ds1621_data {
 	struct i2c_client *client;
 	struct mutex update_lock;
 	bool valid;			/* true if following fields are valid */
-	unsigned long last_updated;	/* In jiffies */
+	ktime_t last_updated;
 	enum chips kind;		/* device type */
 
 	u16 temp[3];			/* Register values, word */
@@ -190,7 +190,9 @@ static struct ds1621_data *ds1621_update_client(struct device *dev)
 
 	mutex_lock(&data->update_lock);
 
-	if (time_after(jiffies, data->last_updated + data->update_interval) ||
+	if (ktime_after(ktime_get(),
+			ktime_add_ms(data->last_updated,
+				     data->update_interval)) ||
 	    !data->valid) {
 		int i;
 
@@ -212,7 +214,7 @@ static struct ds1621_data *ds1621_update_client(struct device *dev)
 			i2c_smbus_write_byte_data(client, DS1621_REG_CONF,
 						  new_conf);
 
-		data->last_updated = jiffies;
+		data->last_updated = ktime_get();
 		data->valid = true;
 	}
 
@@ -347,8 +349,7 @@ static int ds1621_probe(struct i2c_client *client)
 	struct ds1621_data *data;
 	struct device *hwmon_dev;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct ds1621_data),
-			    GFP_KERNEL);
+	data = devm_kzalloc_obj(&client->dev, struct ds1621_data);
 	if (!data)
 		return -ENOMEM;
 

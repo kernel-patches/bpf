@@ -594,11 +594,11 @@ static const struct aspeed_sgpio_pdata ast2700_sgpiom_pdata = {
 };
 
 static const struct of_device_id aspeed_sgpio_of_table[] = {
-	{ .compatible = "aspeed,ast2400-sgpio", .data = &ast2400_sgpio_pdata, },
-	{ .compatible = "aspeed,ast2500-sgpio", .data = &ast2400_sgpio_pdata, },
-	{ .compatible = "aspeed,ast2600-sgpiom", .data = &ast2600_sgpiom_pdata, },
-	{ .compatible = "aspeed,ast2700-sgpiom", .data = &ast2700_sgpiom_pdata, },
-	{}
+	{ .compatible = "aspeed,ast2400-sgpio", .data = &ast2400_sgpio_pdata },
+	{ .compatible = "aspeed,ast2500-sgpio", .data = &ast2400_sgpio_pdata },
+	{ .compatible = "aspeed,ast2600-sgpiom", .data = &ast2600_sgpiom_pdata },
+	{ .compatible = "aspeed,ast2700-sgpiom", .data = &ast2700_sgpiom_pdata },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(of, aspeed_sgpio_of_table);
@@ -610,7 +610,7 @@ static int aspeed_sgpio_probe(struct platform_device *pdev)
 	unsigned long apb_freq;
 	int rc;
 
-	gpio = devm_kzalloc(&pdev->dev, sizeof(*gpio), GFP_KERNEL);
+	gpio = devm_kzalloc_obj(&pdev->dev, *gpio);
 	if (!gpio)
 		return -ENOMEM;
 

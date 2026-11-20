@@ -189,7 +189,7 @@ static irqreturn_t sibyte_bw_int(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-int __init sibyte_bus_watcher(void)
+static int __init sibyte_bus_watcher(void)
 {
 	memset(&bw_stats, 0, sizeof(struct bw_stats_struct));
 	bw_stats.status_printed = 1;

@@ -191,7 +191,7 @@ struct pc87360_data {
 	struct mutex lock;
 	struct mutex update_lock;
 	bool valid;		/* true if following fields are valid */
-	unsigned long last_updated;	/* In jiffies */
+	u64 last_updated;	/* In jiffies */
 
 	int address[3];
 
@@ -296,7 +296,8 @@ static struct pc87360_data *pc87360_update_device(struct device *dev)
 
 	mutex_lock(&data->update_lock);
 
-	if (time_after(jiffies, data->last_updated + HZ * 2) || !data->valid) {
+	if (time_after64(get_jiffies_64(), data->last_updated + HZ * 2) ||
+	    !data->valid) {
 		dev_dbg(dev, "Data update\n");
 
 		/* Fans */
@@ -394,7 +395,7 @@ static struct pc87360_data *pc87360_update_device(struct device *dev)
 					    & 0x3F;
 		}
 
-		data->last_updated = jiffies;
+		data->last_updated = get_jiffies_64();
 		data->valid = true;
 	}
 
@@ -1445,7 +1446,7 @@ static int pc87360_probe(struct platform_device *pdev)
 	int use_thermistors = 0;
 	struct device *dev = &pdev->dev;
 
-	data = devm_kzalloc(dev, sizeof(struct pc87360_data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, struct pc87360_data);
 	if (!data)
 		return -ENOMEM;
 

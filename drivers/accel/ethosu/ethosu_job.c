@@ -219,7 +219,7 @@ static struct dma_fence *ethosu_job_run(struct drm_sched_job *sched_job)
 		return NULL;
 
 	dma_fence_init(fence, &ethosu_fence_ops, &dev->fence_lock,
-		       dev->fence_context, ++dev->emit_seqno);
+		       dev->fence_context, ++dev->emit_seqno, 0);
 	dma_fence_get(fence);
 
 	ethosu_switch_perfmon(dev, job);

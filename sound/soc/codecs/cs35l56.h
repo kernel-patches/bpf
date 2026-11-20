@@ -49,12 +49,16 @@ struct cs35l56_private {
 	int speaker_id;
 	u32 rx_mask;
 	u32 tx_mask;
+	u8 asp_tx_input[4];
 	u8 asp_slot_width;
 	u8 asp_slot_count;
 	bool tdm_mode;
 	bool sysclk_set;
 	u8 sdw_link_num;
 	u8 sdw_unique_id;
+
+	u16 feid;
+	u8 fev;
 
 	u8 ambient_ctl_value;
 };

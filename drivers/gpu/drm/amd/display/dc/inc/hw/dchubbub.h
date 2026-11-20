@@ -35,6 +35,24 @@
 
 #include "dc/dc_hw_types.h"
 
+/*
+ * Watermark programming policy resolved by the caller from dc state, clock manager
+ * state and debug options. Backends must not read mutable dc state (debug options,
+ * clock manager state); static ASIC identification from ctx is allowed.
+ */
+ struct hubbub_watermark_policy {
+	uint32_t urgent_watermark_override;
+	bool disable_stutter;
+	bool disable_stutter_for_program;
+	bool force_usr_allow;
+	/*
+	 * P-state support is being lost, lower watermarks to dummy P-state in prepare.
+	 * Not set by hwss_prepare_hubbub_program_watermarks(); set by the immediate prepare
+	 * path after clk_mgr->funcs->update_clocks(). Consumed by hubbub2 only.
+	 */
+	bool force_safe_to_lower;
+};
+
 enum dcc_control {
 	dcc_control__256_256_xxx,
 	dcc_control__128_128_xxx,
@@ -207,6 +225,7 @@ struct hubbub_funcs {
 			struct hubbub *hubbub,
 			union dcn_watermark_set *watermarks,
 			unsigned int refclk_mhz,
+			struct hubbub_watermark_policy policy,
 			bool safe_to_lower);
 
 	bool (*is_allow_self_refresh_enabled)(struct hubbub *hubbub);
@@ -255,7 +274,8 @@ struct hubbub_funcs {
 	void (*program_det_segments)(struct hubbub *hubbub, int hubp_inst, unsigned det_buffer_size_seg);
 	void (*program_compbuf_segments)(struct hubbub *hubbub, unsigned compbuf_size_seg, bool safe_to_increase);
 	void (*wait_for_det_update)(struct hubbub *hubbub, int hubp_inst);
-	bool (*program_arbiter)(struct hubbub *hubbub, struct dml2_display_arb_regs *arb_regs, bool safe_to_lower);
+	bool (*program_arbiter)(struct hubbub *hubbub, uint32_t pstate_stall_threshold,
+			bool allow_sdpif_rate_limit_when_cstate_req, bool safe_to_lower);
 	void (*dchvm_init)(struct hubbub *hubbub);
 	void (*override_utm_client_qc_profile)(struct hubbub *hubbub, uint8_t qc_profile, int index);
 

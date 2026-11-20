@@ -446,6 +446,48 @@ static bool set_long_vtotal(struct dc *dc, struct dc_stream_state *stream, struc
 	return false;
 }
 
+/* A hardware re-init resets the OTG DRR registers while stream->adjust keeps the
+ * pre-reset values, so those values represent has to be marked stale.
+ */
+static void invalidate_drr_adjust(struct dc *dc)
+{
+	int i;
+
+	if (!dc->current_state)
+		return;
+
+	for (i = 0; i < dc->current_state->stream_count; i++)
+		if (dc->current_state->streams[i])
+			dc->current_state->streams[i]->timing_adjust_pending = true;
+}
+
+/* apply_ctx_to_hw() skips controller programming for a pipe it considers unchanged, so a
+ * commit on its own does not guarantee the OTG matches stream->adjust. Settle anything
+ * still outstanding here - dc_stream_adjust_vmin_vmax() cannot, because it short circuits
+ * when the requested v_totals are unchanged, which is permanent for a stream that is not
+ * driving DRR.
+ */
+static void program_pending_drr_adjust(struct dc *dc, struct dc_state *context)
+{
+	int i;
+
+	if (!dc->hwss.set_drr)
+		return;
+
+	for (i = 0; i < MAX_PIPES; i++) {
+		struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
+
+		if (!resource_is_pipe_type(pipe, OTG_MASTER) || !pipe->stream_res.tg)
+			continue;
+
+		if (!pipe->stream->timing_adjust_pending)
+			continue;
+
+		dc_exit_ips_for_hw_access(dc);
+		dc->hwss.set_drr(&pipe, 1, pipe->stream->adjust);
+	}
+}
+
 /**
  * dc_stream_get_last_used_drr_vtotal - Looks up the pipe context of
  * dc_stream_state and gets the last VTOTAL used by DRR (Dynamic Refresh Rate)
@@ -902,31 +944,23 @@ void dc_stream_set_static_screen_params(struct dc *dc,
 
 static void dc_destruct_update_scratch_pool(struct dc *dc)
 {
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(dc->update_scratch_pool); i++) {
-		kfree(dc->update_scratch_pool[i]);
-		dc->update_scratch_pool[i] = NULL;
-		dc->update_scratch_in_use[i] = false;
-	}
+	dc_memory_pool_destroy(dc->update_scratch_pool);
 }
 
 static bool dc_construct_update_scratch_pool(struct dc *dc)
 {
-	unsigned int i;
+	// +1 to allow updates not tied to any specific stream
+	const size_t size = sizeof(struct dc_update_scratch_space);
+	const size_t capacity = MAX_STREAMS + 1;
 
-	for (i = 0; i < ARRAY_SIZE(dc->update_scratch_pool); i++) {
-		dc->update_scratch_pool[i] = kzalloc_obj(struct dc_update_scratch_space);
-		if (!dc->update_scratch_pool[i])
-			return false;
-		dc->update_scratch_in_use[i] = false;
-	}
-
-	return true;
+	dc->update_scratch_pool = dc_memory_pool_create(size, capacity);
+	return dc->update_scratch_pool != NULL;
 }
 
 static void dc_destruct(struct dc *dc)
 {
+	unsigned int i;
+
 	// reset link encoder assignment table on destruct
 	if (dc->res_pool && dc->res_pool->funcs->link_encs_assign &&
 			!dc->config.unify_link_enc_assignment)
@@ -937,6 +971,13 @@ static void dc_destruct(struct dc *dc)
 	if (dc->current_state) {
 		dc_state_release(dc->current_state);
 		dc->current_state = NULL;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(dc->scratch_dc_context); i++) {
+		if (dc->scratch_dc_context[i]) {
+			dc_state_release(dc->scratch_dc_context[i]);
+			dc->scratch_dc_context[i] = NULL;
+		}
 	}
 
 	destroy_links(dc);
@@ -1022,6 +1063,8 @@ static bool dc_construct_ctx(struct dc *dc,
 
 	dc_ctx->perf_trace = dc_perf_trace_create();
 	if (!dc_ctx->perf_trace) {
+		kfree(dc_ctx->logger);
+		dc->dml.logger = NULL;
 		kfree(dc_ctx);
 		ASSERT_CRITICAL(false);
 		return false;
@@ -1175,6 +1218,22 @@ static bool dc_construct(struct dc *dc,
 	if (!dc->current_state) {
 		dm_error("%s: failed to create validate ctx\n", __func__);
 		goto fail;
+	}
+
+	/* Pre-allocate the states used by the no-allocation update path, only
+	 * for DMs that ask for it.
+	 */
+	if (dc->config.preallocate_scratch_state) {
+		unsigned int scratch_idx;
+
+		for (scratch_idx = 0; scratch_idx < ARRAY_SIZE(dc->scratch_dc_context); scratch_idx++) {
+			dc->scratch_dc_context[scratch_idx] = dc_state_create(dc, NULL);
+
+			if (!dc->scratch_dc_context[scratch_idx]) {
+				dm_error("%s: failed to create scratch ctx\n", __func__);
+				goto fail;
+			}
+		}
 	}
 
 	if (!dc_construct_update_scratch_pool(dc)) {
@@ -1342,6 +1401,9 @@ bool dc_stream_adjust_vmin_vmax(struct dc *dc,
 {
 	int i;
 	bool drr_unchanged;
+	bool exceeds_max_v_total = dc->caps.max_v_total != 0 &&
+			(adjust->v_total_max > dc->caps.max_v_total ||
+			 adjust->v_total_min > dc->caps.max_v_total);
 
 	/*
 	 * Don't adjust DRR while there's bandwidth optimizations pending to
@@ -1351,7 +1413,7 @@ bool dc_stream_adjust_vmin_vmax(struct dc *dc,
 		if (dc->optimized_required &&
 			(stream->adjust.v_total_max != adjust->v_total_max ||
 			stream->adjust.v_total_min != adjust->v_total_min)) {
-			stream->adjust.timing_adjust_pending = true;
+			stream->timing_adjust_pending = true;
 			return false;
 		}
 	}
@@ -1359,7 +1421,7 @@ bool dc_stream_adjust_vmin_vmax(struct dc *dc,
 	/* timing_adjust_pending tracks whether stream->adjust still describes the
 	 * OTG, so a cleared flag plus matching values means hw is already current.
 	 */
-	drr_unchanged = !stream->adjust.timing_adjust_pending &&
+	drr_unchanged = !stream->timing_adjust_pending &&
 			stream->adjust.v_total_min == adjust->v_total_min &&
 			stream->adjust.v_total_max == adjust->v_total_max &&
 			stream->adjust.v_total_mid == adjust->v_total_mid &&
@@ -1369,6 +1431,12 @@ bool dc_stream_adjust_vmin_vmax(struct dc *dc,
 	if (drr_unchanged)
 		return true;
 
+	/* leave stream->adjust describing the OTG rather than latching
+	 * a pending adjustment that no later call can ever clear.
+	 */
+	if (exceeds_max_v_total && !adjust->allow_otg_v_count_halt)
+		return false;
+
 	dc_exit_ips_for_hw_access(dc);
 
 	stream->adjust.v_total_max = adjust->v_total_max;
@@ -1376,16 +1444,15 @@ bool dc_stream_adjust_vmin_vmax(struct dc *dc,
 	stream->adjust.v_total_mid_frame_num = adjust->v_total_mid_frame_num;
 	stream->adjust.v_total_min = adjust->v_total_min;
 	stream->adjust.allow_otg_v_count_halt = adjust->allow_otg_v_count_halt;
+	/* Only cleared once the new values have actually reached an OTG. */
+	stream->timing_adjust_pending = true;
 
-	if (dc->caps.max_v_total != 0 &&
-		(adjust->v_total_max > dc->caps.max_v_total || adjust->v_total_min > dc->caps.max_v_total)) {
-		if (adjust->allow_otg_v_count_halt) {
-			stream->adjust.timing_adjust_pending = false;
-			return set_long_vtotal(dc, stream, adjust);
-		}
-		/* Nothing reached hw, so stream->adjust no longer describes the OTG. */
-		stream->adjust.timing_adjust_pending = true;
-		return false;
+	if (exceeds_max_v_total) {
+		if (!set_long_vtotal(dc, stream, adjust))
+			return false;
+
+		stream->timing_adjust_pending = false;
+		return true;
 	}
 
 	for (i = 0; i < MAX_PIPES; i++) {
@@ -1395,7 +1462,7 @@ bool dc_stream_adjust_vmin_vmax(struct dc *dc,
 			dc->hwss.set_drr(&pipe,
 					1,
 					*adjust);
-			stream->adjust.timing_adjust_pending = false;
+			stream->timing_adjust_pending = false;
 
 			if (dc->debug.visual_confirm == VISUAL_CONFIRM_BOOSTED_REFRESH_RATE) {
 				if (pipe->stream && pipe->plane_state) {
@@ -1663,12 +1730,25 @@ static void detect_edp_presence(struct dc *dc)
 	}
 }
 
+static void sync_current_state_clocks_from_clk_mgr(struct dc *dc)
+{
+	if (!dc->current_state || !dc->clk_mgr)
+		return;
+
+	if (!(dc->ctx->dce_version == DCN_VERSION_4_2 || dc->ctx->dce_version == DCN_VERSION_4_2B))
+		return;
+
+	dc->current_state->bw_ctx.bw.dcn.clk = dc->clk_mgr->clks;
+}
+
 void legacy_hardware_init(struct dc *dc)
 {
 
 	detect_edp_presence(dc);
-	if (dc->ctx->dce_environment != DCE_ENV_VIRTUAL_HW)
+	if (dc->ctx->dce_environment != DCE_ENV_VIRTUAL_HW) {
 		dc->hwss.init_hw(dc);
+		sync_current_state_clocks_from_clk_mgr(dc);
+	}
 	dc_dmub_srv_notify_fw_dc_power_state(dc->ctx->dmub_srv, DC_ACPI_CM_POWER_STATE_D0);
 }
 
@@ -2283,30 +2363,16 @@ static void determine_pipe_unlock_order(struct dc *dc, struct dc_state *context)
 	}
 }
 
-/**
- * dc_commit_state_no_check - Apply context to the hardware
- *
- * @dc: DC object with the current status to be updated
- * @context: New state that will become the current status at the end of this function
- *
- * Applies given context to the hardware and copy it into current context.
- * It's up to the user to release the src context afterwards.
- *
- * Return: an enum dc_status result code for the operation
- */
-static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *context)
+/* Hardware span of a commit. The API shim picks Core2 or this body. */
+enum dc_status legacy_commit_state_hw(struct dc *dc, struct dc_state *context)
 {
 	struct dc_bios *dcb = dc->ctx->dc_bios;
 	enum dc_status result = DC_ERROR_UNEXPECTED;
 	struct pipe_ctx *pipe;
 	unsigned int i, k, l;
 	struct dc_stream_state *dc_streams[MAX_STREAMS] = {0};
-	struct dc_state *old_state;
 	bool subvp_prev_use = false;
 	bool dmub_locked = false;
-
-	dc_z10_restore(dc);
-	dc_allow_idle_optimizations(dc, false);
 
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
 		struct pipe_ctx *old_pipe = &dc->current_state->res_ctx.pipe_ctx[i];
@@ -2398,6 +2464,8 @@ static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *c
 		return result;
 	}
 
+	program_pending_drr_adjust(dc, context);
+
 	dc_trigger_sync(dc, context);
 
 	/* Full update should unconditionally be triggered when dc_commit_state_no_check is called */
@@ -2484,6 +2552,8 @@ static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *c
 		 * update pending complete before optimizing bandwidth.
 		 */
 		hwss_wait_for_odm_update_pending_complete(dc, context);
+		/* No DET may stay allocated to a HUBP without a plane (e.g. left over from VBIOS) */
+		hwss_reset_unused_det(dc, context);
 		/* pplib is notified if disp_num changed */
 		dc->hwss.optimize_bandwidth(dc, context);
 		/* Need to do otg sync again as otg could be out of sync due to otg
@@ -2494,6 +2564,33 @@ static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *c
 
 	if (dc->hwss.update_dsc_pg)
 		dc->hwss.update_dsc_pg(dc, context, true);
+
+	return result;
+}
+
+/**
+ * dc_commit_state_no_check - Apply context to the hardware
+ *
+ * @dc: DC object with the current status to be updated
+ * @context: New state that will become the current status at the end of this function
+ *
+ * Applies given context to the hardware and copy it into current context.
+ * It's up to the user to release the src context afterwards.
+ *
+ * Return: an enum dc_status result code for the operation
+ */
+static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *context)
+{
+	enum dc_status result;
+	unsigned int i;
+	struct dc_state *old_state;
+
+	dc_z10_restore(dc);
+	dc_allow_idle_optimizations(dc, false);
+
+	result = api_shim_commit_state_hw(dc, context);
+	if (result != DC_OK)
+		return result;
 
 	if (dc->ctx->dce_version >= DCE_VERSION_MAX)
 		TRACE_DCN_CLOCK_STATE(&context->bw_ctx.bw.dcn.clk);
@@ -2554,8 +2651,10 @@ enum dc_status dc_commit_streams(struct dc *dc, struct dc_commit_streams_params 
 		return res;
 
 	if (!streams_changed(dc, params->streams, params->stream_count) &&
-			dc->current_state->power_source == params->power_source)
+			dc->current_state->power_source == params->power_source) {
+		program_pending_drr_adjust(dc, dc->current_state);
 		return res;
+	}
 
 	dc_exit_ips_for_hw_access(dc);
 
@@ -2627,11 +2726,16 @@ enum dc_status dc_commit_streams(struct dc *dc, struct dc_commit_streams_params 
 	 */
 	if (dc->hwss.is_pipe_topology_transition_seamless &&
 			!dc->hwss.is_pipe_topology_transition_seamless(dc, dc->current_state, context)) {
-		res = commit_minimal_transition_state(dc, context);
-		if (res != DC_OK) {
-			BREAK_TO_DEBUGGER();
-			goto fail;
-		}
+		/*
+		 * A minimal (no-ODM) intermediate transition could not be built
+		 * for a stream that still passed full validation above, e.g. a
+		 * high pixel clock mode that needs ODM combine to meet DISPCLK.
+		 * In that case commit the validated target context directly
+		 * instead of failing the whole commit and blanking the display.
+		 */
+		if (!commit_minimal_transition_state(dc, context))
+			DC_LOG_WARNING("%s: minimal transition unavailable; committing target\n",
+				       __func__);
 	}
 
 	res = dc_commit_state_no_check(dc, context);
@@ -2760,6 +2864,8 @@ void dc_post_update_surfaces_to_stream(struct dc *dc)
 		TRACE_DCE_CLOCK_STATE(&context->bw_ctx.bw.dce);
 	else {
 		TRACE_DCN_CLOCK_STATE(&context->bw_ctx.bw.dcn.clk);
+
+		dc_exit_ips_for_hw_access(dc);
 
 		if (is_flip_pending_in_pipes(dc, context))
 			return;
@@ -3209,6 +3315,10 @@ static struct dc_update_descriptor check_update_surfaces_for_stream(
 				stream_update->vrr_active_variable || stream_update->vrr_active_fixed))
 			su_flags->bits.fams_changed = 1;
 
+		/* Static-screen transitions change DML stutter constraints even if VRR stays variable. */
+		if (stream_update->vrr_active_idle_static_screen)
+			su_flags->bits.fams_changed = 1;
+
 		if (stream_update->scaler_sharpener_update) {
 			su_flags->bits.scaler_sharpener = 1;
 			elevate_update_type(&overall_type, UPDATE_TYPE_FULL, LOCK_DESCRIPTOR_STREAM);
@@ -3578,13 +3688,14 @@ static void copy_stream_update_to_stream(struct dc *dc,
 	if (update->vrr_active_fixed)
 		stream->vrr_active_fixed = *update->vrr_active_fixed;
 
+	if (update->vrr_active_idle_static_screen)
+		stream->vrr_active_idle_static_screen = *update->vrr_active_idle_static_screen;
+
 	if (update->crtc_timing_adjust) {
 		if (stream->adjust.v_total_min != update->crtc_timing_adjust->v_total_min ||
-			stream->adjust.v_total_max != update->crtc_timing_adjust->v_total_max ||
-			stream->adjust.timing_adjust_pending)
-			update->crtc_timing_adjust->timing_adjust_pending = true;
+			stream->adjust.v_total_max != update->crtc_timing_adjust->v_total_max)
+			stream->timing_adjust_pending = true;
 		stream->adjust = *update->crtc_timing_adjust;
-		update->crtc_timing_adjust->timing_adjust_pending = false;
 	}
 
 	if (update->dpms_off)
@@ -3776,6 +3887,29 @@ static void restore_minimal_pipe_split_policy(struct dc *dc,
 }
 
 /**
+ * dc_state_acquire_scratch: Pick a pre-allocated state safe to build into.
+ * @dc: DC context
+ *
+ * Skips the buffer installed as @dc->current_state, since building into it
+ * would mean copying a state onto itself.
+ *
+ * Return: a usable scratch state, or NULL if none were pre-allocated.
+ */
+static struct dc_state *dc_state_acquire_scratch(struct dc *dc)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(dc->scratch_dc_context); i++) {
+		struct dc_state *scratch = dc->scratch_dc_context[i];
+
+		if (scratch && scratch != dc->current_state)
+			return scratch;
+	}
+
+	return NULL;
+}
+
+/**
  * update_planes_and_stream_state() - The function takes planes and stream
  * updates as inputs and determines the appropriate update type. If update type
  * is FULL, the function allocates a new context, populates and validates it.
@@ -3881,7 +4015,24 @@ static bool update_planes_and_stream_state(struct dc *dc,
 			new_planes[i] = srf_updates[i].surface;
 
 		/* initialize scratch memory for building context */
-		context = dc_state_create_copy(dc->current_state);
+		if (!dc->config.use_preallocated_state) {
+			context = dc_state_create_copy(dc->current_state);
+		} else {
+			context = dc_state_acquire_scratch(dc);
+
+			if (context) {
+				// Drop the references this buffer still holds from its
+				// previous use; dc_state_copy() overwrites the pointers
+				// without releasing them.
+				dc_state_destruct(context);
+				dc_state_copy(context, dc->current_state);
+
+				// Balance the reference that the commit path consumes
+				// when it installs this as current_state, so the buffer
+				// stays owned by dc->scratch_dc_context[] as well.
+				dc_state_retain(context);
+			}
+		}
 		if (context == NULL) {
 			DC_ERROR("Failed to allocate new validate context!\n");
 			return false;
@@ -3962,6 +4113,8 @@ static bool update_planes_and_stream_state(struct dc *dc,
 	return true;
 
 fail:
+	// For a scratch buffer this drops the reference taken above, leaving it
+	// owned by dc->scratch_dc_context[] rather than freeing it.
 	dc_state_release(context);
 
 	return false;
@@ -4192,7 +4345,9 @@ static void commit_planes_do_stream_update_sequence(struct dc *dc,
 				resource_build_info_frame(pipe_ctx);
 				add_update_info_frame_sequence(&seq_state, pipe_ctx);
 
-				if (dc_is_dp_signal(pipe_ctx->stream->signal))
+				/* The step only writes DPCD when the debug flag is set, so gate emission on it here. */
+				if (dc_is_dp_signal(pipe_ctx->stream->signal) &&
+						dc->debug.enable_driver_sequence_debug)
 					hwss_add_dp_trace_source_sequence(&seq_state,
 							pipe_ctx->stream->link,
 							DPCD_SOURCE_SEQ_AFTER_UPDATE_INFO_FRAME);
@@ -4286,7 +4441,7 @@ static void commit_planes_do_stream_update_sequence(struct dc *dc,
 					if (dpms_pipe_ctx->stream_res.audio && !dc->debug.az_endpoint_mute_only)
 						hwss_add_disable_audio_stream(&seq_state, dpms_pipe_ctx);
 
-					hwss_add_dc_set_optimized_required(&seq_state, dc, true);
+					hwss_add_dc_set_optimized_required(&seq_state, true);
 
 				} else {
 					if (get_seamless_boot_stream_count(context) == 0 && dc->hwss.prepare_bandwidth_sequence)
@@ -4870,8 +5025,10 @@ static void commit_planes_for_stream(struct dc *dc,
 	dc_exit_ips_for_hw_access(dc);
 
 	dc_z10_restore(dc);
-	if (update_type == UPDATE_TYPE_FULL && dc->optimized_required)
+	if (update_type == UPDATE_TYPE_FULL && dc->optimized_required) {
+		hwss_reset_unused_det(dc, dc->current_state);
 		hwss_process_outstanding_hw_updates(dc, dc->current_state);
+	}
 
 	if (update_type != UPDATE_TYPE_FAST && dc->res_pool->funcs->prepare_mcache_programming)
 		dc->res_pool->funcs->prepare_mcache_programming(dc, context);
@@ -5972,32 +6129,17 @@ static void clear_update_bits(struct dc_surface_update *srf_updates,
 
 static struct dc_update_scratch_space *dc_update_scratch_acquire(struct dc *dc)
 {
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(dc->update_scratch_pool); i++) {
-		if (dc->update_scratch_in_use[i])
-			continue;
-
-		dc->update_scratch_in_use[i] = true;
-		return dc->update_scratch_pool[i];
-	}
+	void *p = dc_memory_pool_acquire(dc->update_scratch_pool);
 
 	/* TODO: add recoverable scratch acquisition failure handling. */
-	ASSERT(false);
-	return NULL;
+	ASSERT(p);
+	return p;
 }
 
 static void dc_update_scratch_release(struct dc *dc,
 		struct dc_update_scratch_space *scratch)
 {
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(dc->update_scratch_pool); i++) {
-		if (dc->update_scratch_pool[i] == scratch) {
-			dc->update_scratch_in_use[i] = false;
-			return;
-		}
-	}
+	dc_memory_pool_release(dc->update_scratch_pool, scratch);
 }
 
 /**
@@ -6308,6 +6450,9 @@ void dc_set_power_state(struct dc *dc, enum dc_acpi_cm_power_state power_state)
 		dc_dmub_srv_notify_fw_dc_power_state(dc->ctx->dmub_srv, power_state);
 
 		dc->hwss.init_hw(dc);
+		sync_current_state_clocks_from_clk_mgr(dc);
+
+		invalidate_drr_adjust(dc);
 
 		if (dc->hwss.init_sys_ctx != NULL &&
 			dc->vm_pa_config.valid) {
@@ -6530,6 +6675,27 @@ void dc_lock_memory_clock_frequency(struct dc *dc)
 		dc->clk_mgr->funcs->set_hard_max_memclk(dc->clk_mgr);
 }
 
+/*
+ * Re-read the memclk DPM levels from PMFW (e.g. after an overdrive change),
+ * refresh the bounding box and WM ranges, and re-apply the UCLK hard min/max
+ * for the current mode. Returns the new max memclk in MHz, 0 if unsupported.
+ */
+unsigned int dc_refresh_memclk_states(struct dc *dc)
+{
+	if (!dc->clk_mgr || !dc->clk_mgr->bw_params ||
+	    !dc->clk_mgr->funcs->get_memclk_states_from_smu)
+		return 0;
+
+	dc_exit_ips_for_hw_access(dc);
+
+	dc_lock_memory_clock_frequency(dc);
+
+	if (dc->clk_mgr->funcs->notify_wm_ranges)
+		dc->clk_mgr->funcs->notify_wm_ranges(dc->clk_mgr);
+
+	return dc->clk_mgr->bw_params->max_memclk_mhz;
+}
+
 static void blank_and_force_memclk(struct dc *dc, bool apply, unsigned int memclk_mhz)
 {
 	(void)apply;
@@ -6648,6 +6814,8 @@ void legacy_hardware_release(struct dc *dc)
 static const struct dc2_funcs dc2_legacy_funcs_table = {
 	.hardware_init = legacy_hardware_init,
 	.hardware_release = legacy_hardware_release,
+	.commit_state_hw = legacy_commit_state_hw,
+	.update_state_execute = legacy_update_state_execute,
 };
 
 const struct dc2_funcs *dc2_legacy_funcs(void)
@@ -6697,6 +6865,10 @@ bool dc_is_dmub_outbox_supported(struct dc *dc)
 	default:
 		break;
 	}
+
+	/* Fused IO replies (e.g. HDCP FW locality check) arrive via outbox notifications */
+	if (dc->caps.fused_io_supported)
+		return true;
 
 	/* dmub aux needs dmub notifications to be enabled */
 	return dc->debug.enable_dmub_aux_for_legacy_ddc;
@@ -7949,11 +8121,13 @@ bool dc_get_qos_info(struct dc *dc, struct dc_qos_info *info)
 	if (dc->clk_mgr && dc->clk_mgr->funcs->get_requested_memory_qos) {
 		dc->clk_mgr->funcs->get_requested_memory_qos(dc->clk_mgr, &requested);
 		info->qos_bandwidth_lb_in_mbps    = requested.bandwidth_lb_in_mbps;
-		info->calculated_avg_bw_in_mbps   = requested.calculated_avg_bw_in_mbps;
-		info->qos_max_latency_ub_in_ns    = requested.max_latency_ub_in_ns;
-		info->qos_avg_latency_ub_in_ns    = requested.avg_latency_ub_in_ns;
 		info->qos_max_bw_budget_in_mbps   = requested.max_bw_budget_in_mbps;
 	}
+
+	/* The clk_mgr does not track these, so report the ones of the committed state. */
+	info->calculated_avg_bw_in_mbps = clk->required_avg_active_bandwidth_KBps / 1000;
+	info->qos_max_latency_ub_in_ns = clk->utm_nominal_max_latency_ub_ns;
+	info->qos_avg_latency_ub_in_ns = clk->utm_nominal_avg_latency_ub_ns;
 
 	return true;
 }
@@ -8060,6 +8234,16 @@ static bool update_planes_and_stream_prepare_v3(
 	}
 
 	ASSERT(scratch->update_type >= UPDATE_TYPE_FULL);
+
+	/* The minimal-transition fallbacks below allocate, so the scratch path
+	 * commits the new context directly - possibly a non-seamless pipe-topology
+	 * transition. Placed after the suspend above to keep the cleanup resume
+	 * balanced.
+	 */
+	if (scratch->dc->config.use_preallocated_state) {
+		scratch->flow = UPDATE_V3_FLOW_NEW_CONTEXT_SEAMLESS;
+		return true;
+	}
 
 	const bool seamless = scratch->dc->hwss.is_pipe_topology_transition_seamless(
 			scratch->dc,
@@ -8360,6 +8544,9 @@ bool dc_update_state_prepare(struct dc_update_scratch_space *scratch)
 	if (!dc_update_probes_prepare(scratch))
 		goto release_scratch;
 
+	if (!api_shim_update_state_supported(scratch))
+		goto release_scratch;
+
 	return true;
 
 release_scratch:
@@ -8368,9 +8555,7 @@ release_scratch:
 	return false;
 }
 
-void dc_update_state_execute(
-		const struct dc_update_scratch_space *scratch
-)
+void legacy_update_state_execute(const struct dc_update_scratch_space *scratch)
 {
 	if (scratch->stream)
 		scratch->update_v3
@@ -8379,6 +8564,13 @@ void dc_update_state_execute(
 
 	if (scratch->probe_updates)
 		dc_update_probes_execute(scratch);
+}
+
+void dc_update_state_execute(
+		const struct dc_update_scratch_space *scratch
+)
+{
+	api_shim_update_state_execute(scratch);
 }
 
 bool dc_update_state_cleanup(

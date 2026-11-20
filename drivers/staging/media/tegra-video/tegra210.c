@@ -346,7 +346,8 @@ static void tegra_channel_capture_error_recover(struct tegra_vi_channel *chan,
 
 	/* recover CSI block */
 	subdev = tegra_channel_get_remote_csi_subdev(chan);
-	tegra_csi_error_recover(subdev);
+	if (subdev)
+		tegra_csi_error_recover(subdev);
 }
 
 static struct tegra_channel_buffer *

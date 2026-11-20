@@ -40,14 +40,10 @@
 #define IONIC_MAX_SRQ_LIMIT	0xffff
 #define IONIC_MAX_SRQ_DEPTH	0xffff
 
-#define IONIC_META_LAST		((void *)1ul)
-#define IONIC_META_POSTED	((void *)2ul)
-
 #define IONIC_CQ_GRACE 100
 
 #define IONIC_ROCE_UDP_SPORT	28272
 #define IONIC_DMA_LKEY		0
-#define IONIC_DMA_RKEY		IONIC_DMA_LKEY
 
 #define IONIC_CMB_SUPPORTED \
 	(IONIC_CMB_ENABLE | IONIC_CMB_REQUIRE | IONIC_CMB_EXPDB | \
@@ -242,8 +238,8 @@ struct ionic_sq_meta {
 };
 
 struct ionic_rq_meta {
-	struct ionic_rq_meta	*next;
 	u64			wrid;
+	bool			posted;
 };
 
 struct ionic_rq {
@@ -257,7 +253,6 @@ struct ionic_rq {
 	struct rdma_user_mmap_entry	*mmap_cmb;
 
 	struct ionic_rq_meta		*meta;
-	struct ionic_rq_meta		*meta_head;
 	struct ib_umem			*umem;
 
 	int				spec;
@@ -306,6 +301,7 @@ struct ionic_qp {
 	u8			sq_cmb;
 	bool			sq_flush;
 	bool			sq_flush_rcvd;
+	bool			sq_color;
 
 	struct ionic_rq		rq;
 

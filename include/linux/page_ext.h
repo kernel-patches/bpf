@@ -168,17 +168,6 @@ static inline struct page_ext *page_ext_iter_next(struct page_ext_iter *iter,
 }
 
 /**
- * page_ext_iter_get() - Get current page extension
- * @iter: page extension iterator.
- *
- * Return: NULL if no page_ext exists for this iterator.
- */
-static inline struct page_ext *page_ext_iter_get(const struct page_ext_iter *iter)
-{
-	return iter->page_ext;
-}
-
-/**
  * for_each_page_ext(): iterate through page_ext objects.
  * @__page: the page we're interested in
  * @__pgcount: how many pages to iterate through

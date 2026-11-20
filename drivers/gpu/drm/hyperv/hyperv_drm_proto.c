@@ -5,8 +5,8 @@
 
 #include <linux/hyperv.h>
 
+#include <drm/drm_managed.h>
 #include <drm/drm_print.h>
-#include <drm/drm_simple_kms_helper.h>
 
 #include "hyperv_drm.h"
 
@@ -112,12 +112,9 @@ struct synthvid_pointer_position {
 	s32 image_y;
 } __packed;
 
-#define SYNTHVID_CURSOR_MAX_X 96
-#define SYNTHVID_CURSOR_MAX_Y 96
-#define SYNTHVID_CURSOR_ARGB_PIXEL_SIZE 4
-#define SYNTHVID_CURSOR_MAX_SIZE (SYNTHVID_CURSOR_MAX_X * \
-	SYNTHVID_CURSOR_MAX_Y * SYNTHVID_CURSOR_ARGB_PIXEL_SIZE)
 #define SYNTHVID_CURSOR_COMPLETE (-1)
+/* Most pixel data the host accepts in one pointer shape message */
+#define SYNTHVID_CURSOR_MAX_PAYLOAD 8192
 
 struct synthvid_pointer_shape {
 	u8 part_idx;
@@ -287,47 +284,166 @@ int hv_drm_update_situation(struct hv_device *hdev, u8 active, u32 bpp,
 }
 
 /*
- * Hyper-V supports a hardware cursor feature. It's not used by Linux VM,
- * but the Hyper-V host still draws a point as an extra mouse pointer,
- * which is unwanted, especially when Xorg is running.
+ * The host always shows a mouse pointer: the one set with the pointer shape
+ * and position messages, or else a small dot, which is also what it shows
+ * for a pointer marked invisible. A hidden cursor is therefore a single,
+ * almost transparent pixel.
  *
- * Hide the unwanted pointer, by setting msg.ptr_pos.is_visible = 1 and setting
- * the msg.ptr_shape.data. Note: setting msg.ptr_pos.is_visible to 0 doesn't
- * work in tests.
- *
- * The hv_drm_hide_hw_ptr() is also called in the handler of the
- * SYNTHVID_FEATURE_CHANGE event, otherwise the host still draws an extra
- * unwanted mouse pointer after the VM Connection window is closed and reopened.
+ * NOTE: Its alpha, the last byte, is 1 rather than 0, as clients may draw an
+ *       image whose alpha values are all 0 as an opaque one.
  */
-int hv_drm_hide_hw_ptr(struct hv_device *hdev)
+static const u8 hv_drm_cursor_hidden_pixel[SYNTHVID_CURSOR_ARGB_PIXEL_SIZE] = {
+	0x00, 0x01, 0x01, 0x01
+};
+
+void hv_drm_cursor_set_hidden(struct hv_drm_cursor *cursor)
 {
-	struct synthvid_msg msg;
+	memcpy(cursor->image, hv_drm_cursor_hidden_pixel,
+	       sizeof(hv_drm_cursor_hidden_pixel));
+	cursor->width = 1;
+	cursor->height = 1;
+	cursor->hot_x = 0;
+	cursor->hot_y = 0;
+	cursor->x = 0;
+	cursor->y = 0;
+}
 
-	memset(&msg, 0, sizeof(struct synthvid_msg));
-	msg.vid_hdr.type = SYNTHVID_POINTER_POSITION;
-	msg.vid_hdr.size = sizeof(struct synthvid_msg_hdr) +
+/*
+ * Pointer shapes too large for one message are sent in parts numbered from
+ * 0, with SYNTHVID_CURSOR_COMPLETE marking the last part. A shape that fits
+ * in one message is sent as a lone SYNTHVID_CURSOR_COMPLETE part.
+ */
+static int hv_drm_send_ptr_shape(struct hv_drm_device *hv, u32 width,
+				 u32 height, u32 hot_x, u32 hot_y,
+				 const u8 *image)
+{
+	const size_t data_offset = offsetof(struct synthvid_msg,
+					    ptr_shape.data);
+	size_t size = width * height * SYNTHVID_CURSOR_ARGB_PIXEL_SIZE;
+	u8 *buf = hv->cursor->msg_buf;
+	struct synthvid_msg *msg;
+	size_t offset = 0;
+	u8 part = 0;
+	size_t len;
+	int ret;
+
+	BUILD_BUG_ON((offsetof(struct synthvid_msg, ptr_shape.data) +
+		     SYNTHVID_CURSOR_MAX_PAYLOAD) >
+		     sizeof_field(struct hv_drm_cursor, msg_buf));
+
+	msg = (struct synthvid_msg *)buf;
+
+	do {
+		len = min(size - offset, SYNTHVID_CURSOR_MAX_PAYLOAD);
+
+		memset(buf, 0, data_offset);
+		msg->vid_hdr.type = SYNTHVID_POINTER_SHAPE;
+		msg->vid_hdr.size = sizeof(struct synthvid_msg_hdr) +
+			offsetof(struct synthvid_pointer_shape, data) + len;
+		if (offset + len < size)
+			msg->ptr_shape.part_idx = part++;
+		else
+			msg->ptr_shape.part_idx = SYNTHVID_CURSOR_COMPLETE;
+		msg->ptr_shape.is_argb = 1;
+		msg->ptr_shape.width = width;
+		msg->ptr_shape.height = height;
+		msg->ptr_shape.hot_x = hot_x;
+		msg->ptr_shape.hot_y = hot_y;
+		memcpy(buf + data_offset, image + offset, len);
+
+		ret = hv_drm_sendpacket(hv->hdev, msg);
+		if (ret)
+			return ret;
+
+		offset += len;
+	} while (offset < size);
+
+	return 0;
+}
+
+static int hv_drm_send_ptr_position(struct hv_drm_device *hv, s32 x, s32 y)
+{
+	struct synthvid_msg *msg = (struct synthvid_msg *)hv->cursor->msg_buf;
+
+	memset(msg, 0, sizeof(struct synthvid_msg));
+	msg->vid_hdr.type = SYNTHVID_POINTER_POSITION;
+	msg->vid_hdr.size = sizeof(struct synthvid_msg_hdr) +
 		sizeof(struct synthvid_pointer_position);
-	msg.ptr_pos.is_visible = 1;
-	msg.ptr_pos.video_output = 0;
-	msg.ptr_pos.image_x = 0;
-	msg.ptr_pos.image_y = 0;
-	hv_drm_sendpacket(hdev, &msg);
+	msg->ptr_pos.is_visible = 1;
+	msg->ptr_pos.video_output = 0;
+	msg->ptr_pos.image_x = x;
+	msg->ptr_pos.image_y = y;
 
-	memset(&msg, 0, sizeof(struct synthvid_msg));
-	msg.vid_hdr.type = SYNTHVID_POINTER_SHAPE;
-	msg.vid_hdr.size = sizeof(struct synthvid_msg_hdr) +
-		sizeof(struct synthvid_pointer_shape);
-	msg.ptr_shape.part_idx = SYNTHVID_CURSOR_COMPLETE;
-	msg.ptr_shape.is_argb = 1;
-	msg.ptr_shape.width = 1;
-	msg.ptr_shape.height = 1;
-	msg.ptr_shape.hot_x = 0;
-	msg.ptr_shape.hot_y = 0;
-	msg.ptr_shape.data[0] = 0;
-	msg.ptr_shape.data[1] = 1;
-	msg.ptr_shape.data[2] = 1;
-	msg.ptr_shape.data[3] = 1;
-	hv_drm_sendpacket(hdev, &msg);
+	return hv_drm_sendpacket(hv->hdev, msg);
+}
+
+/*
+ * Send the cached cursor to the host: the shape if @shape is set or the host
+ * may lack it, then the position. The position goes last as the host applies
+ * the hotspot of its current shape to it.
+ */
+void hv_drm_update_cursor(struct hv_drm_device *hv, bool shape)
+{
+	struct hv_drm_cursor *cursor = hv->cursor;
+	int ret = 0;
+
+	lockdep_assert_held(&cursor->lock);
+
+	if (shape || cursor->shape_stale) {
+		/*
+		 * The host may still be waiting for the rest of a multi-part
+		 * shape, and rejects new shapes until it gets a final part.
+		 * A one pixel shape completes any such shape, and is a valid
+		 * shape of its own otherwise.
+		 */
+		if (cursor->shape_stale)
+			ret = hv_drm_send_ptr_shape(hv, 1, 1, 0, 0,
+						    hv_drm_cursor_hidden_pixel);
+		if (!ret)
+			ret = hv_drm_send_ptr_shape(hv, cursor->width,
+						    cursor->height,
+						    cursor->hot_x,
+						    cursor->hot_y,
+						    cursor->image);
+		cursor->shape_stale = ret;
+	}
+
+	hv_drm_send_ptr_position(hv, cursor->x, cursor->y);
+}
+
+void hv_drm_restore_cursor(struct hv_drm_device *hv)
+{
+	scoped_guard(mutex, &hv->cursor->lock)
+		hv_drm_update_cursor(hv, true);
+}
+
+static void hv_drm_restore_cursor_work(struct work_struct *work)
+{
+	struct hv_drm_device *hv = container_of(work, struct hv_drm_device,
+						cursor_work);
+
+	hv_drm_restore_cursor(hv);
+}
+
+int hv_drm_cursor_init(struct hv_drm_device *hv)
+{
+	struct hv_drm_cursor *cursor;
+	int ret;
+
+	cursor = drmm_kzalloc(&hv->dev, sizeof(*cursor), GFP_KERNEL);
+	if (!cursor)
+		return -ENOMEM;
+
+	ret = drmm_mutex_init(&hv->dev, &cursor->lock);
+	if (ret)
+		return ret;
+
+	hv_drm_cursor_set_hidden(cursor);
+	cursor->shape_stale = true;
+	hv->cursor = cursor;
+
+	INIT_WORK(&hv->cursor_work, hv_drm_restore_cursor_work);
+	disable_work(&hv->cursor_work);
 
 	return 0;
 }
@@ -474,8 +590,13 @@ static void hv_drm_receive_sub(struct hv_device *hdev, u32 bytes_recvd)
 			return;
 		}
 		hv->dirt_needed = msg->feature_chg.is_dirt_needed;
+		/*
+		 * Send the cursor to clients that may have just connected, from
+		 * a work item, as that takes the cursor's mutex and the channel
+		 * callback runs in atomic context.
+		 */
 		if (hv->dirt_needed)
-			hv_drm_hide_hw_ptr(hv->hdev);
+			schedule_work(&hv->cursor_work);
 		return;
 	default:
 		return;
@@ -539,9 +660,11 @@ int hv_drm_connect_vsp(struct hv_device *hdev)
 	struct drm_device *dev = &hv->dev;
 	int ret;
 
+	enable_work(&hv->cursor_work);
 	ret = vmbus_open(hdev->channel, VMBUS_RING_BUFSIZE, VMBUS_RING_BUFSIZE,
 			 NULL, 0, hv_drm_receive, hdev);
 	if (ret) {
+		disable_work_sync(&hv->cursor_work);
 		drm_err(dev, "Unable to open vmbus channel\n");
 		return ret;
 	}
@@ -575,6 +698,15 @@ int hv_drm_connect_vsp(struct hv_device *hdev)
 	return 0;
 
 error:
-	vmbus_close(hdev->channel);
+	hv_drm_disconnect_vsp(hdev);
 	return ret;
+}
+
+void hv_drm_disconnect_vsp(struct hv_device *hdev)
+{
+	struct hv_drm_device *hv = hv_get_drvdata(hdev);
+
+	/* Stop the work before vmbus_close() frees the ring buffers */
+	disable_work_sync(&hv->cursor_work);
+	vmbus_close(hdev->channel);
 }

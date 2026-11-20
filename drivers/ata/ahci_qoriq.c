@@ -147,7 +147,7 @@ static int ahci_qoriq_hardreset(struct ata_link *link, unsigned int *class,
 }
 
 static struct ata_port_operations ahci_qoriq_ops = {
-	.inherits		= &ahci_ops,
+	.inherits		= &ahci_platform_ops,
 	.reset.hardreset	= ahci_qoriq_hardreset,
 };
 
@@ -274,7 +274,7 @@ static int ahci_qoriq_probe(struct platform_device *pdev)
 	if (!(of_id || acpi_id))
 		return -ENODEV;
 
-	qoriq_priv = devm_kzalloc(dev, sizeof(*qoriq_priv), GFP_KERNEL);
+	qoriq_priv = devm_kzalloc_obj(dev, *qoriq_priv);
 	if (!qoriq_priv)
 		return -ENOMEM;
 

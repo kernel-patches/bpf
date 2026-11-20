@@ -253,13 +253,6 @@ static inline void kmod_dup_request_announce(char *module_name, int ret)
 #endif
 
 #ifdef CONFIG_MODULE_UNLOAD_TAINT_TRACKING
-struct mod_unload_taint {
-	struct list_head list;
-	char name[MODULE_NAME_LEN];
-	unsigned long taints;
-	u64 count;
-};
-
 int try_add_tainted_module(struct module *mod);
 void print_unloaded_tainted_modules(void);
 #else /* !CONFIG_MODULE_UNLOAD_TAINT_TRACKING */

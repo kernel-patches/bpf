@@ -153,18 +153,12 @@ static int pinctrl_scmi_imx_dt_node_to_map(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
-static void pinctrl_scmi_imx_dt_free_map(struct pinctrl_dev *pctldev,
-					 struct pinctrl_map *map, unsigned int num_maps)
-{
-	kfree(map);
-}
-
 static const struct pinctrl_ops pinctrl_scmi_imx_pinctrl_ops = {
 	.get_groups_count = pinctrl_generic_get_group_count,
 	.get_group_name = pinctrl_generic_get_group_name,
 	.get_group_pins = pinctrl_generic_get_group_pins,
 	.dt_node_to_map = pinctrl_scmi_imx_dt_node_to_map,
-	.dt_free_map = pinctrl_scmi_imx_dt_free_map,
+	.dt_free_map = pinctrl_utils_free_map,
 };
 
 static int pinctrl_scmi_imx_func_set_mux(struct pinctrl_dev *pctldev,
@@ -279,7 +273,7 @@ scmi_pinctrl_imx_get_pins(struct scmi_pinctrl_imx *pmx, struct pinctrl_desc *des
 	int ret, i;
 
 	npins = pmx->ops->count_get(pmx->ph, PIN_TYPE);
-	pins = devm_kmalloc_array(pmx->dev, npins, sizeof(*pins), GFP_KERNEL);
+	pins = devm_kmalloc_objs(pmx->dev, *pins, npins);
 	if (!pins)
 		return -ENOMEM;
 
@@ -325,7 +319,7 @@ static int scmi_pinctrl_imx_probe(struct scmi_device *sdev)
 	if (IS_ERR(pinctrl_ops))
 		return PTR_ERR(pinctrl_ops);
 
-	pmx = devm_kzalloc(dev, sizeof(*pmx), GFP_KERNEL);
+	pmx = devm_kzalloc_obj(dev, *pmx);
 	if (!pmx)
 		return -ENOMEM;
 
@@ -354,7 +348,7 @@ static int scmi_pinctrl_imx_probe(struct scmi_device *sdev)
 }
 
 static const struct scmi_device_id scmi_id_table[] = {
-	{ SCMI_PROTOCOL_PINCTRL, "pinctrl-imx" },
+	{ SCMI_PROTOCOL_PINCTRL, "pinctrl" },
 	{ }
 };
 MODULE_DEVICE_TABLE(scmi, scmi_id_table);

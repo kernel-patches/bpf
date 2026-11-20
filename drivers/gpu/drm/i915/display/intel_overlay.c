@@ -37,7 +37,7 @@
 #include "intel_frontbuffer.h"
 #include "intel_overlay.h"
 #include "intel_parent.h"
-#include "intel_pfit_regs.h"
+#include "intel_pfit.h"
 
 /* Limits for overlay size. According to intel doc, the real limits are:
  * Y width: 4095, UV width (planar): 2047, Y height: 2047,
@@ -614,28 +614,8 @@ static int check_overlay_possible_on_crtc(struct intel_overlay *overlay,
 static void update_pfit_vscale_ratio(struct intel_overlay *overlay)
 {
 	struct intel_display *display = overlay->display;
-	u32 ratio;
 
-	/* XXX: This is not the same logic as in the xorg driver, but more in
-	 * line with the intel documentation for the i965
-	 */
-	if (DISPLAY_VER(display) >= 4) {
-		u32 tmp = intel_de_read(display, PFIT_PGM_RATIOS(display));
-
-		/* on i965 use the PGM reg to read out the autoscaler values */
-		ratio = REG_FIELD_GET(PFIT_VERT_SCALE_MASK_965, tmp);
-	} else {
-		u32 tmp;
-
-		if (intel_de_read(display, PFIT_CONTROL(display)) & PFIT_VERT_AUTO_SCALE)
-			tmp = intel_de_read(display, PFIT_AUTO_RATIOS(display));
-		else
-			tmp = intel_de_read(display, PFIT_PGM_RATIOS(display));
-
-		ratio = REG_FIELD_GET(PFIT_VERT_SCALE_MASK, tmp);
-	}
-
-	overlay->pfit_vscale_ratio = ratio;
+	overlay->pfit_vscale_ratio = i9xx_pfit_vscale_ratio(display);
 }
 
 static int check_overlay_dst(struct intel_overlay *overlay,
@@ -838,13 +818,12 @@ int intel_overlay_put_image_ioctl(struct drm_device *dev, void *data,
 		overlay->crtc = crtc;
 		crtc->overlay = overlay;
 
-		/* line too wide, i.e. one-line-mode */
-		if (drm_rect_width(&crtc->config->pipe_src) > 1024 &&
-		    crtc->config->gmch_pfit.control & PFIT_ENABLE) {
+		if (i9xx_pfit_is_one_line_mode(crtc->config)) {
 			overlay->pfit_active = true;
 			update_pfit_vscale_ratio(overlay);
-		} else
+		} else {
 			overlay->pfit_active = false;
+		}
 	}
 
 	ret = check_overlay_dst(overlay, params);

@@ -145,7 +145,7 @@ DO_XOR_BLOCKS(avx_inner, xor_avx_2, xor_avx_3, xor_avx_4, xor_avx_5);
 static void xor_gen_avx(void *dest, void **srcs, unsigned int src_cnt,
 			unsigned int bytes)
 {
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 	xor_gen_avx_inner(dest, srcs, src_cnt, bytes);
 	asm volatile("vzeroupper");
 	kernel_fpu_end();

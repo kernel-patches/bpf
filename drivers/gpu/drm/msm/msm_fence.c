@@ -197,5 +197,5 @@ msm_fence_init(struct dma_fence *fence, struct msm_fence_context *fctx)
 	WARN_ON(kref_read(&fence->refcount));
 
 	dma_fence_init(&f->base, &msm_fence_ops, &fctx->spinlock,
-		       fctx->context, ++fctx->last_fence);
+		       fctx->context, ++fctx->last_fence, 0);
 }

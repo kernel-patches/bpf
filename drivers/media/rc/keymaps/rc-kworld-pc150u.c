@@ -75,7 +75,7 @@ static struct rc_map_table kworld_pc150u[] = {
 static struct rc_map_list kworld_pc150u_map = {
 	.map = {
 		.scan     = kworld_pc150u,
-		.size     = ARRAY_SIZE(kworld_pc150u),
+		.entries  = ARRAY_SIZE(kworld_pc150u),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_KWORLD_PC150U,
 	}

@@ -6,6 +6,7 @@
 // Copyright (C) 2024 Texas Instruments Incorporated - https://www.ti.com/
 
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/reboot.h>
 #include <linux/regmap.h>
 
@@ -481,7 +482,7 @@ static int tps65219_probe(struct i2c_client *client)
 	bool pwr_button;
 	int ret;
 
-	tps = devm_kzalloc(&client->dev, sizeof(*tps), GFP_KERNEL);
+	tps = devm_kzalloc_obj(&client->dev, *tps);
 	if (!tps)
 		return -ENOMEM;
 

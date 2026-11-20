@@ -542,6 +542,7 @@ struct tcpm_port {
 	struct kthread_work enable_frs;
 	struct hrtimer vdm_discovery_timer;
 	struct kthread_work vdm_discovery_work;
+	bool vdm_discovery_armed;
 	bool state_machine_running;
 	/* Set to true when VDM State Machine has following actions. */
 	bool vdm_sm_running;
@@ -1768,15 +1769,20 @@ static void mod_enable_frs_delayed_work(struct tcpm_port *port, unsigned int del
 	}
 }
 
+/*
+ * Called with port->lock held, which the work takes, and not only from the
+ * worker: the work cannot be waited for.  It does nothing unless it is armed.
+ */
 static void mod_vdm_discovery_cancel_delayed_work(struct tcpm_port *port)
 {
 	hrtimer_cancel(&port->vdm_discovery_timer);
-	if (port->wq)
-		kthread_cancel_work_sync(&port->vdm_discovery_work);
+	port->vdm_discovery_armed = false;
 }
 
 static void mod_vdm_discovery_delayed_work(struct tcpm_port *port, unsigned int delay_ms)
 {
+	port->vdm_discovery_armed = true;
+
 	if (delay_ms) {
 		hrtimer_start(&port->vdm_discovery_timer, ms_to_ktime(delay_ms), HRTIMER_MODE_REL);
 	} else {
@@ -7295,6 +7301,10 @@ static void tcpm_vdm_discovery_work(struct kthread_work *work)
 
 	mutex_lock(&port->lock);
 
+	if (!port->vdm_discovery_armed)
+		goto unlock;
+	port->vdm_discovery_armed = false;
+
 	tcpm_log_force(port, "%s state [%s]", __func__,
 		       vdm_discovery_state_strings[port->vdm_discovery_state]);
 
@@ -8376,22 +8386,22 @@ static int tcpm_fw_get_caps(struct tcpm_port *port, struct fwnode_handle *fwnode
 		}
 	}
 
-	port->pds = devm_kcalloc(port->dev, port->pd_count, sizeof(struct usb_power_delivery *),
-				 GFP_KERNEL);
+	port->pds = devm_kzalloc_objs(port->dev, struct usb_power_delivery *,
+				      port->pd_count);
 	if (!port->pds) {
 		ret = -ENOMEM;
 		goto put_capabilities;
 	}
 
-	port->pd_list = devm_kcalloc(port->dev, port->pd_count, sizeof(struct pd_data *),
-				     GFP_KERNEL);
+	port->pd_list = devm_kzalloc_objs(port->dev, struct pd_data *,
+					  port->pd_count);
 	if (!port->pd_list) {
 		ret = -ENOMEM;
 		goto put_capabilities;
 	}
 
 	for (i = 0; i < port->pd_count; i++) {
-		port->pd_list[i] = devm_kzalloc(port->dev, sizeof(struct pd_data), GFP_KERNEL);
+		port->pd_list[i] = devm_kzalloc_obj(port->dev, struct pd_data);
 		if (!port->pd_list[i]) {
 			ret = -ENOMEM;
 			goto put_capabilities;
@@ -8873,7 +8883,7 @@ struct tcpm_port *tcpm_register_port(struct device *dev, struct tcpc_dev *tcpc)
 	    !tcpc->set_pd_rx || !tcpc->set_roles || !tcpc->pd_transmit)
 		return ERR_PTR(-EINVAL);
 
-	port = devm_kzalloc(dev, sizeof(*port), GFP_KERNEL);
+	port = devm_kzalloc_obj(dev, *port);
 	if (!port)
 		return ERR_PTR(-ENOMEM);
 

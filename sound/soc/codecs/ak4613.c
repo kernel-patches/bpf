@@ -807,7 +807,15 @@ static int ak4613_resume(struct snd_soc_component *component)
 	return regcache_sync(regmap);
 }
 
+static void ak4613_remove(struct snd_soc_component *component)
+{
+	struct ak4613_priv *priv = snd_soc_component_get_drvdata(component);
+
+	cancel_work_sync(&priv->dummy_write_work);
+}
+
 static const struct snd_soc_component_driver soc_component_dev_ak4613 = {
+	.remove			= ak4613_remove,
 	.suspend		= ak4613_suspend,
 	.resume			= ak4613_resume,
 	.set_bias_level		= ak4613_set_bias_level,
@@ -880,7 +888,7 @@ static int ak4613_i2c_probe(struct i2c_client *i2c)
 	if (!regmap_cfg)
 		return -EINVAL;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

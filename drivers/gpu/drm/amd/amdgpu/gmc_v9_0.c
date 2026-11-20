@@ -1617,6 +1617,7 @@ static int gmc_v9_0_early_init(struct amdgpu_ip_block *ip_block)
 static int gmc_v9_0_late_init(struct amdgpu_ip_block *ip_block)
 {
 	struct amdgpu_device *adev = ip_block->adev;
+	bool nps_switch_support;
 	int r;
 
 	r = amdgpu_gmc_allocate_vm_inv_eng(adev);
@@ -1639,6 +1640,18 @@ static int gmc_v9_0_late_init(struct amdgpu_ip_block *ip_block)
 	if (!amdgpu_persistent_edc_harvesting_supported(adev)) {
 		amdgpu_ras_reset_error_count(adev, AMDGPU_RAS_BLOCK__MMHUB);
 		amdgpu_ras_reset_error_count(adev, AMDGPU_RAS_BLOCK__HDP);
+	}
+
+	nps_switch_support = !adev->gmc.xgmi.connected_to_cpu &&
+			     (hweight32(adev->gmc.supported_nps_modes &
+					AMDGPU_ALL_NPS_MASK) > 1);
+	/* Initialize requested NPS mode to be the same as current mode */
+	if (nps_switch_support) {
+		enum amdgpu_memory_partition mode =
+			amdgpu_gmc_get_requested_nps_mode(adev);
+		if (mode == UNKNOWN_MEMORY_PARTITION_MODE)
+			amdgpu_gmc_set_requested_nps_mode(
+				adev, amdgpu_gmc_query_memory_partition(adev));
 	}
 
 	return amdgpu_irq_get(adev, &adev->gmc.vm_fault, 0);
@@ -1849,6 +1862,8 @@ static int gmc_v9_0_sw_init(struct amdgpu_ip_block *ip_block)
 	int r, vram_width = 0, vram_type = 0, vram_vendor = 0, dma_addr_bits;
 	struct amdgpu_device *adev = ip_block->adev;
 	unsigned long inst_mask = adev->aid_mask;
+	unsigned int last_kq_vmid;
+	unsigned long vmid_mask;
 
 	adev->gfxhub.funcs->init(adev);
 
@@ -2017,8 +2032,8 @@ static int gmc_v9_0_sw_init(struct amdgpu_ip_block *ip_block)
 	/*
 	 * number of VMs
 	 * VMID 0 is reserved for System
-	 * amdgpu graphics/compute will use VMIDs 1..n-1
-	 * amdkfd will use VMIDs n..15
+	 * amdgpu graphics/compute kernel queues will use VMIDs 1..n-1
+	 * amdkfd/MES user queues will use VMIDs n..15
 	 *
 	 * The first KFD VMID is 8 for GPUs with graphics, 3 for
 	 * compute-only GPUs. On compute-only GPUs that leaves 2 VMIDs
@@ -2030,21 +2045,21 @@ static int gmc_v9_0_sw_init(struct amdgpu_ip_block *ip_block)
 	    adev->jpeg.disable_kq &&
 	    adev->vcn.disable_kq &&
 	    adev->sdma.no_user_submission)
-		adev->vm_manager.first_kfd_vmid = 1;
+		last_kq_vmid = 0;
 	else
-		adev->vm_manager.first_kfd_vmid =
+		last_kq_vmid =
 			(amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 1) ||
 			 amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 2) ||
 			 amdgpu_is_multi_aid(adev)) ?
-			3 :
-			8;
+			2 :
+			7;
 
-	amdgpu_vmid_mgr_set_vmid_mask(adev,
-				      GENMASK(adev->vm_manager.first_kfd_vmid - 1, 1),
-				      false);
-	amdgpu_vmid_mgr_set_vmid_mask(adev,
-				      GENMASK(adev->vm_manager.first_kfd_vmid - 1, 1),
-				      true);
+	vmid_mask = GENMASK(last_kq_vmid, 1);
+
+	/* Reserve the last VMID for SPM */
+	adev->vm_manager.spm_vmid = AMDGPU_NUM_VMID - 1;
+
+	amdgpu_vmid_mgr_set_vmid_mask(adev, vmid_mask, vmid_mask);
 	amdgpu_vm_manager_init(adev);
 
 	gmc_v9_0_save_registers(adev);

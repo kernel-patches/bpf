@@ -77,7 +77,7 @@ static struct dma_fence *vgem_fence_create(struct vgem_file *vfile,
 
 	spin_lock_init(&fence->lock);
 	dma_fence_init(&fence->base, &vgem_fence_ops, &fence->lock,
-		       dma_fence_context_alloc(1), 1);
+		       dma_fence_context_alloc(1), 1, 0);
 
 	timer_setup(&fence->timer, vgem_fence_timeout, TIMER_IRQSAFE);
 

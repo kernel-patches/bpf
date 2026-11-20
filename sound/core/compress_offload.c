@@ -796,8 +796,8 @@ snd_compr_set_metadata(struct snd_compr_stream *stream, unsigned long arg)
 		return -EFAULT;
 
 	retval = stream->ops->set_metadata(stream, &metadata);
-	stream->metadata_set = true;
-
+	if (!retval)
+		stream->metadata_set = true;
 	return retval;
 }
 
@@ -1124,6 +1124,9 @@ static void snd_compr_task_free(struct snd_compr_task_runtime *task)
 	kfree(task);
 }
 
+static void snd_compr_task_free_one(struct snd_compr_stream *stream,
+				    struct snd_compr_task_runtime *task);
+
 static u64 snd_compr_seqno_next(struct snd_compr_stream *stream)
 {
 	u64 seqno = ++stream->runtime->task_seqno;
@@ -1132,7 +1135,9 @@ static u64 snd_compr_seqno_next(struct snd_compr_stream *stream)
 	return seqno;
 }
 
-static int snd_compr_task_new(struct snd_compr_stream *stream, struct snd_compr_task *utask)
+static int snd_compr_task_new(struct snd_compr_stream *stream,
+			      struct snd_compr_task *utask,
+			      struct snd_compr_task_runtime **runtime_task)
 {
 	struct snd_compr_task_runtime *task;
 	int retval, fd_i, fd_o;
@@ -1169,12 +1174,11 @@ static int snd_compr_task_new(struct snd_compr_stream *stream, struct snd_compr_
 	/* keep dmabuf reference until freed with task free ioctl */
 	get_dma_buf(task->input);
 	get_dma_buf(task->output);
-	fd_install(fd_i, task->input->file);
-	fd_install(fd_o, task->output->file);
 	utask->input_fd = fd_i;
 	utask->output_fd = fd_o;
 	list_add_tail(&task->list, &stream->runtime->tasks);
 	stream->runtime->total_tasks++;
+	*runtime_task = task;
 	return 0;
 free_driver_task:
 	stream->ops->task_free(stream, task);
@@ -1185,6 +1189,7 @@ cleanup:
 
 static int snd_compr_task_create(struct snd_compr_stream *stream, unsigned long arg)
 {
+	struct snd_compr_task_runtime *runtime_task;
 	int retval;
 
 	if (stream->runtime->state != SNDRV_PCM_STATE_SETUP)
@@ -1194,11 +1199,24 @@ static int snd_compr_task_create(struct snd_compr_stream *stream, unsigned long 
 		memdup_user((void __user *)arg, sizeof(*task));
 	if (IS_ERR(task))
 		return PTR_ERR(task);
-	retval = snd_compr_task_new(stream, task);
-	if (retval >= 0)
-		if (copy_to_user((void __user *)arg, task, sizeof(*task)))
-			retval = -EFAULT;
-	return retval;
+	retval = snd_compr_task_new(stream, task, &runtime_task);
+	if (retval < 0)
+		return retval;
+
+	if (copy_to_user((void __user *)arg, task, sizeof(*task))) {
+		put_unused_fd(task->input_fd);
+		put_unused_fd(task->output_fd);
+
+		dma_buf_put(runtime_task->input);
+		dma_buf_put(runtime_task->output);
+		snd_compr_task_free_one(stream, runtime_task);
+		return -EFAULT;
+	}
+
+	fd_install(task->input_fd, runtime_task->input->file);
+	fd_install(task->output_fd, runtime_task->output->file);
+
+	return 0;
 }
 
 static int snd_compr_task_start_prepare(struct snd_compr_task_runtime *task,

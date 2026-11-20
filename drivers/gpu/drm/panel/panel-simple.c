@@ -318,12 +318,7 @@ static int panel_simple_suspend(struct device *dev)
 
 static int panel_simple_unprepare(struct drm_panel *panel)
 {
-	int ret;
-
-	pm_runtime_mark_last_busy(panel->dev);
-	ret = pm_runtime_put_autosuspend(panel->dev);
-	if (ret < 0)
-		return ret;
+	pm_runtime_put_autosuspend(panel->dev);
 
 	return 0;
 }
@@ -389,7 +384,6 @@ static int panel_simple_get_modes(struct drm_panel *panel,
 
 		num += drm_edid_connector_add_modes(connector);
 
-		pm_runtime_mark_last_busy(panel->dev);
 		pm_runtime_put_autosuspend(panel->dev);
 	}
 
@@ -449,11 +443,11 @@ static struct panel_desc *panel_dpi_probe(struct device *dev)
 	int ret;
 
 	np = dev->of_node;
-	desc = devm_kzalloc(dev, sizeof(*desc), GFP_KERNEL);
+	desc = devm_kzalloc_obj(dev, *desc);
 	if (!desc)
 		return ERR_PTR(-ENOMEM);
 
-	timing = devm_kzalloc(dev, sizeof(*timing), GFP_KERNEL);
+	timing = devm_kzalloc_obj(dev, *timing);
 	if (!timing)
 		return ERR_PTR(-ENOMEM);
 
@@ -701,7 +695,7 @@ static struct panel_simple *panel_simple_probe(struct device *dev)
 
 	ddc = of_parse_phandle(dev->of_node, "ddc-i2c-bus", 0);
 	if (ddc) {
-		panel->ddc = of_find_i2c_adapter_by_node(ddc);
+		panel->ddc = of_get_i2c_adapter_by_node(ddc);
 		of_node_put(ddc);
 
 		if (!panel->ddc)
@@ -746,7 +740,7 @@ disable_pm_runtime:
 	pm_runtime_disable(dev);
 free_ddc:
 	if (panel->ddc)
-		put_device(&panel->ddc->dev);
+		i2c_put_adapter(panel->ddc);
 
 	return ERR_PTR(err);
 }
@@ -791,7 +785,7 @@ static void panel_simple_remove(struct device *dev)
 	pm_runtime_dont_use_autosuspend(dev);
 	pm_runtime_disable(dev);
 	if (panel->ddc)
-		put_device(&panel->ddc->dev);
+		i2c_put_adapter(panel->ddc);
 }
 
 static const struct drm_display_mode ampire_am_1280800n3tzqw_t00h_mode = {
@@ -6389,6 +6383,35 @@ static const struct panel_desc_dsi auo_b080uan01 = {
 	.lanes = 4,
 };
 
+static const struct drm_display_mode auo_b101uan01_mode = {
+	.clock = 148350,
+	.hdisplay = 1920,
+	.hsync_start = 1920 + 40,
+	.hsync_end = 1920 + 40 + 40,
+	.htotal = 1920 + 40 + 40 + 40,
+	.vdisplay = 1200,
+	.vsync_start = 1200 + 4,
+	.vsync_end = 1200 + 4 + 4,
+	.vtotal = 1200 + 4 + 4 + 4,
+	.flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC,
+};
+
+static const struct panel_desc_dsi auo_b101uan01 = {
+	.desc = {
+		.modes = &auo_b101uan01_mode,
+		.num_modes = 1,
+		.bpc = 8,
+		.size = {
+			.width = 217,
+			.height = 136,
+		},
+		.connector_type = DRM_MODE_CONNECTOR_DSI,
+	},
+	.flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_SYNC_PULSE,
+	.format = MIPI_DSI_FMT_RGB888,
+	.lanes = 4,
+};
+
 static const struct drm_display_mode boe_tv080wum_nl0_mode = {
 	.clock = 160000,
 	.hdisplay = 1200,
@@ -6572,6 +6595,9 @@ static const struct of_device_id dsi_of_match[] = {
 	{
 		.compatible = "auo,b080uan01",
 		.data = &auo_b080uan01
+	}, {
+		.compatible = "auo,b101uan01",
+		.data = &auo_b101uan01
 	}, {
 		.compatible = "boe,tv080wum-nl0",
 		.data = &boe_tv080wum_nl0

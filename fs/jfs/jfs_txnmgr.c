@@ -2582,6 +2582,74 @@ void txFreelock(struct inode *ip)
 }
 
 /*
+ *	txAbortAnon()
+ *
+ * function:	free the anonymous tlocks of an inode that is evicted
+ *		before writeback committed them, e.g. because an error made
+ *		the filesystem read-only.
+ *
+ * A page that carries nothing but uncommitted changes isn't written home.
+ * A page that is also waiting to go home with committed changes (mp->lsn)
+ * goes home with both, after an error the superblock is marked dirty.
+ */
+void txAbortAnon(struct inode *ip)
+{
+	struct jfs_inode_info *jfs_ip = JFS_IP(ip);
+	struct linelock *linelock;
+	struct metapage *mp;
+	struct tlock *tlck;
+	lid_t lid, next, llid, k;
+
+	/* txQuiesce() and jfs_sync() commit under the commit_mutex */
+	mutex_lock(&jfs_ip->commit_mutex);
+
+	TXN_LOCK();
+	lid = jfs_ip->atlhead;
+	jfs_ip->atlhead = jfs_ip->atltail = 0;
+	list_del_init(&jfs_ip->anon_inode_list);
+	TXN_UNLOCK();
+
+	for (; lid; lid = next) {
+		tlck = lid_to_tlock(lid);
+		next = tlck->next;
+		mp = tlck->mp;
+
+		if (mp && (tlck->flag & tlckPAGELOCK)) {
+			/* undo txLock()'s metapage_nohomeok() */
+			hold_metapage(mp);
+			if (!mp->lsn)
+				clear_bit(META_dirty, &mp->flag);
+			TXN_LOCK();
+			mp->lid = 0;
+			TXN_UNLOCK();
+			_metapage_homeok(mp);
+			put_metapage(mp);
+		} else if (mp) {
+			/* the xtree root in the inode, it isn't written anymore */
+			TXN_LOCK();
+			if (jfs_ip->xtlid == lid)
+				jfs_ip->xtlid = 0;
+			else
+				mp->lid = 0;
+			TXN_UNLOCK();
+		}
+
+		TXN_LOCK();
+		llid = ((struct linelock *) &tlck->lock)->next;
+		while (llid) {
+			linelock = (struct linelock *) lid_to_tlock(llid);
+			k = linelock->next;
+			txLockFree(llid);
+			llid = k;
+		}
+		txLockFree(lid);
+		TXN_UNLOCK();
+	}
+
+	mutex_unlock(&jfs_ip->commit_mutex);
+}
+
+/*
  *	txAbort()
  *
  * function: abort tx before commit;

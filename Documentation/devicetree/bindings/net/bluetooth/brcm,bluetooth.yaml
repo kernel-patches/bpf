@@ -127,6 +127,7 @@ dependencies:
   brcm,requires-autobaud-mode: [ shutdown-gpios ]
 
 allOf:
+  - $ref: bluetooth-controller.yaml#
   - $ref: /schemas/serial/serial-peripheral-props.yaml#
   - if:
       not:
@@ -153,6 +154,7 @@ examples:
 
         bluetooth {
             compatible = "brcm,bcm4330-bt";
+            local-bd-address = [55 44 33 22 11 00];
             max-speed = <921600>;
             brcm,bt-pcm-int-params = [01 02 00 01 01];
             shutdown-gpios = <&gpio 30 GPIO_ACTIVE_HIGH>;

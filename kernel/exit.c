@@ -494,7 +494,7 @@ void mm_update_next_owner(struct mm_struct *mm)
 	 * If the exiting or execing task is not the owner, it's
 	 * someone else's problem.
 	 */
-	if (mm->owner != p)
+	if (READ_ONCE(mm->owner) != p)
 		return;
 	/*
 	 * The current owner is exiting/execing and there are no other

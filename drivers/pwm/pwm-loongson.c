@@ -76,7 +76,7 @@ static inline void pwm_loongson_writel(struct pwm_loongson_ddata *ddata,
 static int pwm_loongson_set_polarity(struct pwm_chip *chip, struct pwm_device *pwm,
 				     enum pwm_polarity polarity)
 {
-	u16 val;
+	u32 val;
 	struct pwm_loongson_ddata *ddata = to_pwm_loongson_ddata(chip);
 
 	val = pwm_loongson_readl(ddata, LOONGSON_PWM_REG_CTRL);

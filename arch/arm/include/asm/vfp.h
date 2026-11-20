@@ -90,7 +90,7 @@
 #define VFPOPDESC_UNUSED_MASK	(0xFF << VFPOPDESC_UNUSED_BIT)
 #define VFPOPDESC_OPDESC_MASK	(~(VFPOPDESC_LENGTH_MASK | VFPOPDESC_UNUSED_MASK))
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 void vfp_disable(void);
 #endif
 

@@ -22,37 +22,6 @@ enum {
 	PTP_PIN_ACTION_TOD
 };
 
-static u64 sparx5_ptp_get_1ppm(struct sparx5 *sparx5)
-{
-	/* Represents 1ppm adjustment in 2^59 format with 1.59687500000(625)
-	 * 1.99609375000(500), 3.99218750000(250) as reference
-	 * The value is calculated as following:
-	 * (1/1000000)/((2^-59)/X)
-	 */
-
-	u64 res = 0;
-
-	switch (sparx5->coreclock) {
-	case SPX5_CORE_CLOCK_250MHZ:
-		res = 2301339409586;
-		break;
-	case SPX5_CORE_CLOCK_328MHZ:
-		res = 1756832768924;
-		break;
-	case SPX5_CORE_CLOCK_500MHZ:
-		res = 1150669704793;
-		break;
-	case SPX5_CORE_CLOCK_625MHZ:
-		res =  920535763834;
-		break;
-	default:
-		WARN(1, "Invalid core clock");
-		break;
-	}
-
-	return res;
-}
-
 static u64 sparx5_ptp_get_nominal_value(struct sparx5 *sparx5)
 {
 	u64 res = 0;
@@ -62,7 +31,10 @@ static u64 sparx5_ptp_get_nominal_value(struct sparx5 *sparx5)
 		res = 0x1FF0000000000000;
 		break;
 	case SPX5_CORE_CLOCK_328MHZ:
-		res = 0x18604697DD0F9B5B;
+		if (sparx5->coreclockref == SPX5_CORE_CLOCK_REF_25MHZ)
+			res = 0x186044FEF1EA9C10;
+		else
+			res = 0x18604697DD0F9B5B;
 		break;
 	case SPX5_CORE_CLOCK_500MHZ:
 		res = 0x0FF8000000000000;
@@ -204,9 +176,10 @@ static void sparx5_ptp_classify(struct sparx5_port *port, struct sk_buff *skb,
 	*rew_op = IFH_REW_OP_TWO_STEP_PTP;
 }
 
-static void sparx5_ptp_txtstamp_old_release(struct sparx5_port *port)
+static unsigned int sparx5_ptp_txtstamp_old_release(struct sparx5_port *port)
 {
 	struct sk_buff *skb, *skb_tmp;
+	unsigned int purged = 0;
 	unsigned long flags;
 
 	spin_lock_irqsave(&port->tx_skbs.lock, flags);
@@ -217,8 +190,11 @@ static void sparx5_ptp_txtstamp_old_release(struct sparx5_port *port)
 
 		__skb_unlink(skb, &port->tx_skbs);
 		dev_kfree_skb_any(skb);
+		purged++;
 	}
 	spin_unlock_irqrestore(&port->tx_skbs.lock, flags);
+
+	return purged;
 }
 
 int sparx5_ptp_txtstamp_request(struct sparx5_port *port,
@@ -226,6 +202,7 @@ int sparx5_ptp_txtstamp_request(struct sparx5_port *port,
 {
 	struct sparx5 *sparx5 = port->sparx5;
 	u8 rew_op, pdu_type, pdu_w16_offset;
+	unsigned int purged;
 	unsigned long flags;
 
 	sparx5_ptp_classify(port, skb, &rew_op, &pdu_type, &pdu_w16_offset);
@@ -236,9 +213,10 @@ int sparx5_ptp_txtstamp_request(struct sparx5_port *port,
 	if (rew_op != IFH_REW_OP_TWO_STEP_PTP)
 		return 0;
 
-	sparx5_ptp_txtstamp_old_release(port);
+	purged = sparx5_ptp_txtstamp_old_release(port);
 
 	spin_lock_irqsave(&sparx5->ptp_ts_id_lock, flags);
+	sparx5->ptp_skbs -= purged;
 	if (sparx5->ptp_skbs == SPARX5_MAX_PTP_ID) {
 		spin_unlock_irqrestore(&sparx5->ptp_ts_id_lock, flags);
 		return -EBUSY;
@@ -398,27 +376,13 @@ static int sparx5_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 	struct sparx5_phc *phc = container_of(ptp, struct sparx5_phc, info);
 	struct sparx5 *sparx5 = phc->sparx5;
 	unsigned long flags;
-	bool neg_adj = 0;
 	u64 tod_inc;
-	u64 ref;
 
 	if (!scaled_ppm)
 		return 0;
 
-	if (scaled_ppm < 0) {
-		neg_adj = 1;
-		scaled_ppm = -scaled_ppm;
-	}
-
-	tod_inc = sparx5_ptp_get_nominal_value(sparx5);
-
-	/* The multiplication is split in 2 separate additions because of
-	 * overflow issues. If scaled_ppm with 16bit fractional part was bigger
-	 * than 20ppm then we got overflow.
-	 */
-	ref = sparx5_ptp_get_1ppm(sparx5) * (scaled_ppm >> 16);
-	ref += (sparx5_ptp_get_1ppm(sparx5) * (0xffff & scaled_ppm)) >> 16;
-	tod_inc = neg_adj ? tod_inc - ref : tod_inc + ref;
+	tod_inc = adjust_by_scaled_ppm(sparx5_ptp_get_nominal_value(sparx5),
+				       scaled_ppm);
 
 	spin_lock_irqsave(&sparx5->ptp_clock_lock, flags);
 

@@ -242,7 +242,8 @@ int record_opts__parse_callchain(struct record_opts *record,
 				 const char *arg, bool unset);
 
 int sample__resolve_callchain(struct perf_sample *sample,
-			      struct callchain_cursor *cursor, struct symbol **parent,
+			      struct callchain_cursor *cursor,
+			      struct dso_symbol *parent,
 			      struct addr_location *al,
 			      int max_stack);
 int hist_entry__append_callchain(struct hist_entry *he, struct perf_sample *sample);

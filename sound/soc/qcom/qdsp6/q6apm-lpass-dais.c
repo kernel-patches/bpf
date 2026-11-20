@@ -173,11 +173,16 @@ static int q6dma_hw_params(struct snd_pcm_substream *substream,
 	struct q6apm_lpass_dai_data *dai_data = dev_get_drvdata(dai->dev);
 	struct audioreach_module_config *cfg = &dai_data->module_config[dai->id];
 	int channels = hw_param_interval_c(params, SNDRV_PCM_HW_PARAM_CHANNELS)->max;
+	int i;
 
 	cfg->bit_width = params_width(params);
 	cfg->sample_rate = params_rate(params);
 	cfg->num_channels = channels;
+	memset(cfg->channel_map, 0, sizeof(cfg->channel_map));
 	audioreach_set_default_channel_mapping(cfg->channel_map, channels);
+	for (i = 0; i < channels && i < AR_PCM_MAX_NUM_CHANNEL; i++)
+		if (!cfg->channel_map[i])
+			cfg->channel_map[i] = i + 1;
 
 	return 0;
 }
@@ -523,7 +528,7 @@ static int q6apm_lpass_dai_dev_probe(struct platform_device *pdev)
 	int num_dais;
 	int ret;
 
-	dai_data = devm_kzalloc(dev, sizeof(*dai_data), GFP_KERNEL);
+	dai_data = devm_kzalloc_obj(dev, *dai_data);
 	if (!dai_data)
 		return -ENOMEM;
 

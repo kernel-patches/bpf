@@ -126,4 +126,15 @@ config VERIFY_PEFILE_KUNIT_TEST
 
 	  If unsure, say N.
 
+config X509_PARSER_KUNIT_TEST
+	tristate "KUnit tests for X.509 certificate parsing" if !KUNIT_ALL_TESTS
+	depends on KUNIT && X509_CERTIFICATE_PARSER
+	default KUNIT_ALL_TESTS
+	help
+	  Enable KUnit tests for the X.509 certificate parser.  The tests build
+	  small certificates in memory and check which Subject and Issuer
+	  names x509_cert_parse() accepts.
+
+	  If unsure, say N.
+
 endif # ASYMMETRIC_KEY_TYPE

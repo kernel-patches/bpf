@@ -170,13 +170,13 @@ static const struct irq_chip cdns_gpio_irqchip = {
 static const struct of_device_id cdns_of_ids[] = {
 	{
 		.compatible = "axiado,ax3000-gpio",
-		.data = &ax3000_gpio_quirks
+		.data = &ax3000_gpio_quirks,
 	},
 	{
 		.compatible = "cdns,gpio-r1p02",
-		.data = &cdns_default_quirks
+		.data = &cdns_default_quirks,
 	},
-	{ /* sentinel */ },
+	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, cdns_of_ids);
 
@@ -189,7 +189,7 @@ static int cdns_gpio_probe(struct platform_device *pdev)
 	u32 num_gpios = 32;
 	struct clk *clk;
 
-	cgpio = devm_kzalloc(&pdev->dev, sizeof(*cgpio), GFP_KERNEL);
+	cgpio = devm_kzalloc_obj(&pdev->dev, *cgpio);
 	if (!cgpio)
 		return -ENOMEM;
 
@@ -267,9 +267,7 @@ static int cdns_gpio_probe(struct platform_device *pdev)
 		gpio_irq_chip_set_chip(girq, &cdns_gpio_irqchip);
 		girq->parent_handler = cdns_gpio_irq_handler;
 		girq->num_parents = 1;
-		girq->parents = devm_kcalloc(&pdev->dev, 1,
-					     sizeof(*girq->parents),
-					     GFP_KERNEL);
+		girq->parents = devm_kzalloc_objs(&pdev->dev, *girq->parents, 1);
 		if (!girq->parents) {
 			ret = -ENOMEM;
 			goto err_revert_dir;

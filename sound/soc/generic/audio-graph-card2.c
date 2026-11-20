@@ -559,9 +559,10 @@ static int graph_parse_node_multi_nm(struct simple_util_priv *priv,
 
 		struct device_node *mcodec_ep_n __free(device_node) = of_graph_get_remote_endpoint(mcpu_ep_n);
 		struct device_node *mcodec_port __free(device_node) = ep_to_port(mcodec_ep_n);
+		struct device_node *ports __free(device_node) = port_to_ports(mcodec_port);
 
 		ret = -EINVAL;
-		if (mcodec_ports != port_to_ports(mcodec_port))
+		if (mcodec_ports != ports)
 			break;
 
 		for_each_of_graph_port(mcodec_ports, mcodec_port_i) {
@@ -609,8 +610,9 @@ static int graph_parse_node_multi(struct simple_util_priv *priv,
 	    dai_link->num_cpus > 1 && dai_link->num_codecs > 1 &&
 	    dai_link->num_cpus != dai_link->num_codecs) {
 
-		dai_link->ch_maps = devm_kcalloc(dev, nm_max,
-					sizeof(struct snd_soc_dai_link_ch_map), GFP_KERNEL);
+		dai_link->ch_maps = devm_kzalloc_objs(dev,
+						      struct snd_soc_dai_link_ch_map,
+						      nm_max);
 		if (!dai_link->ch_maps)
 			goto multi_err;
 	}
@@ -1004,7 +1006,7 @@ int audio_graph2_link_c2c(struct simple_util_priv *priv,
 		struct device *dev = simple_priv_to_dev(priv);
 		struct snd_soc_pcm_stream *c2c_conf;
 
-		c2c_conf = devm_kzalloc(dev, sizeof(*c2c_conf), GFP_KERNEL);
+		c2c_conf = devm_kzalloc_obj(dev, *c2c_conf);
 		if (!c2c_conf) {
 			/*
 			 * Clang doesn't allow to use "goto end" before calling __free(),
@@ -1116,7 +1118,7 @@ static int graph_counter(struct device_node *lnk)
 	 * ignore first lnk part
 	 */
 	if (graph_lnk_is_multi(lnk)) {
-		struct device_node *ports = port_to_ports(lnk);
+		struct device_node *ports __free(device_node) = port_to_ports(lnk);
 
 		/*
 		 * CPU/Codec = N:M case has many endpoints.
@@ -1199,8 +1201,9 @@ static int graph_count_c2c(struct simple_util_priv *priv,
 			   struct link_info *li)
 {
 	struct device_node *ports	__free(device_node) = port_to_ports(lnk);
-	struct device_node *port0	= of_node_get(lnk);
-	struct device_node *port1	= of_node_get(of_graph_get_next_port(ports, of_node_get(port0)));
+	struct device_node *port0	__free(device_node) = of_node_get(lnk);
+	struct device_node *port1	__free(device_node) =
+		of_graph_get_next_port(ports, of_node_get(port0));
 	struct device_node *ep0		__free(device_node) = of_graph_get_next_port_endpoint(port0, NULL);
 	struct device_node *ep1		__free(device_node) = of_graph_get_next_port_endpoint(port1, NULL);
 	struct device_node *codec0	__free(device_node) = of_graph_get_remote_port(ep0);
@@ -1387,7 +1390,7 @@ static int graph_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 
 	/* Allocate the private data and the DAI link array */
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

@@ -75,8 +75,8 @@
 #define CFGR1_PCSPOL_MASK	GENMASK(11, 8)
 #define CFGR1_NOSTALL	BIT(3)
 #define CFGR1_HOST	BIT(0)
-#define FCR_RXWATER	GENMASK(18, 16)
-#define FCR_TXWATER	GENMASK(2, 0)
+#define FCR_RXWATER	GENMASK(19, 16)
+#define FCR_TXWATER	GENMASK(3, 0)
 #define FSR_TXCOUNT	(0xFF)
 #define RSR_RXEMPTY	BIT(1)
 #define TCR_CPOL	BIT(31)
@@ -634,8 +634,7 @@ static int fsl_lpspi_dma_transfer(struct spi_controller *controller,
 	if (!desc_rx)
 		return -EINVAL;
 
-	desc_rx->callback = fsl_lpspi_dma_rx_callback;
-	desc_rx->callback_param = (void *)fsl_lpspi;
+	dmaengine_desc_set_callback(desc_rx, fsl_lpspi_dma_rx_callback, NULL, fsl_lpspi);
 	dmaengine_submit(desc_rx);
 	reinit_completion(&fsl_lpspi->dma_rx_completion);
 	dma_async_issue_pending(controller->dma_rx);
@@ -648,8 +647,7 @@ static int fsl_lpspi_dma_transfer(struct spi_controller *controller,
 		return -EINVAL;
 	}
 
-	desc_tx->callback = fsl_lpspi_dma_tx_callback;
-	desc_tx->callback_param = (void *)fsl_lpspi;
+	dmaengine_desc_set_callback(desc_tx, fsl_lpspi_dma_tx_callback, NULL, fsl_lpspi);
 	dmaengine_submit(desc_tx);
 	reinit_completion(&fsl_lpspi->dma_tx_completion);
 	dma_async_issue_pending(controller->dma_tx);

@@ -24,6 +24,7 @@ enum adf_composed_services {
 	SVC_SYM_ASYM = SVC_COUNT,
 	SVC_SYM_DC,
 	SVC_ASYM_DC,
+	SVC_SYM_ASYM_DC,
 };
 
 enum {

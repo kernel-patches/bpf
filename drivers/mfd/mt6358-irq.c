@@ -224,6 +224,17 @@ static const struct irq_domain_ops mt6358_irq_domain_ops = {
 	.xlate = irq_domain_xlate_twocell,
 };
 
+static void mt6358_irq_domain_remove(void *data)
+{
+	struct mt6397_chip *chip = data;
+	struct pmic_irq_data *irqd = chip->irq_data;
+
+	for (unsigned int hwirq = 0; hwirq < irqd->num_pmic_irqs; hwirq++)
+		irq_dispose_mapping(irq_find_mapping(chip->irq_domain, hwirq));
+
+	irq_domain_remove(chip->irq_domain);
+}
+
 int mt6358_irq_init(struct mt6397_chip *chip)
 {
 	int i, j, ret;
@@ -250,17 +261,13 @@ int mt6358_irq_init(struct mt6397_chip *chip)
 
 	mutex_init(&chip->irqlock);
 	irqd = chip->irq_data;
-	irqd->enable_hwirq = devm_kcalloc(chip->dev,
-					  irqd->num_pmic_irqs,
-					  sizeof(*irqd->enable_hwirq),
-					  GFP_KERNEL);
+	irqd->enable_hwirq = devm_kzalloc_objs(chip->dev, *irqd->enable_hwirq,
+					       irqd->num_pmic_irqs);
 	if (!irqd->enable_hwirq)
 		return -ENOMEM;
 
-	irqd->cache_hwirq = devm_kcalloc(chip->dev,
-					 irqd->num_pmic_irqs,
-					 sizeof(*irqd->cache_hwirq),
-					 GFP_KERNEL);
+	irqd->cache_hwirq = devm_kzalloc_objs(chip->dev, *irqd->cache_hwirq,
+					      irqd->num_pmic_irqs);
 	if (!irqd->cache_hwirq)
 		return -ENOMEM;
 
@@ -279,13 +286,17 @@ int mt6358_irq_init(struct mt6397_chip *chip)
 		return -ENODEV;
 	}
 
+	ret = devm_add_action_or_reset(chip->dev, mt6358_irq_domain_remove,
+				       chip);
+	if (ret)
+		return ret;
+
 	ret = devm_request_threaded_irq(chip->dev, chip->irq, NULL,
 					mt6358_irq_handler, IRQF_ONESHOT,
 					mt6358_irq_chip.name, chip);
 	if (ret) {
 		dev_err(chip->dev, "Failed to register IRQ=%d, ret=%d\n",
 			chip->irq, ret);
-		irq_domain_remove(chip->irq_domain);
 		return ret;
 	}
 

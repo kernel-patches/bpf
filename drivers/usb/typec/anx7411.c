@@ -552,7 +552,7 @@ static int anx7411_typec_register_altmode(struct anx7411_data *ctx,
 					  int svid, int vdo)
 {
 	struct device *dev = &ctx->spi_client->dev;
-	struct typec_altmode_desc desc;
+	struct typec_altmode_desc desc = {};
 	int err;
 	int i;
 
@@ -1468,7 +1468,7 @@ static int anx7411_i2c_probe(struct i2c_client *client)
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_I2C_BLOCK))
 		return -ENODEV;
 
-	plat = devm_kzalloc(dev, sizeof(*plat), GFP_KERNEL);
+	plat = devm_kzalloc_obj(dev, *plat);
 	if (!plat)
 		return -ENOMEM;
 

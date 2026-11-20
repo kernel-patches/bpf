@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * vpif - Video Port Interface driver
  * VPIF is a receiver and transmitter for video data. It has two channels(0, 1)
@@ -6,15 +7,6 @@
  * Currently, the driver supports NTSC and PAL standards.
  *
  * Copyright (C) 2009 Texas Instruments Incorporated - https://www.ti.com/
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation version 2.
- *
- * This program is distributed .as is. WITHOUT ANY WARRANTY of any
- * kind, whether express or implied; without even the implied warranty
- * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/err.h>
@@ -595,15 +587,5 @@ static struct platform_driver vpif_driver = {
 	.probe = vpif_probe,
 };
 
-static void vpif_exit(void)
-{
-	platform_driver_unregister(&vpif_driver);
-}
-
-static int __init vpif_init(void)
-{
-	return platform_driver_register(&vpif_driver);
-}
-subsys_initcall(vpif_init);
-module_exit(vpif_exit);
+subsys_platform_driver(vpif_driver);
 

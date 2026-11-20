@@ -1,0 +1,873 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Copyright (c) 2024, Alexandru Marc Serdeliuc <serdeliuk@yahoo.com>
+ * Copyright (c) 2024, David Wronek <david@mainlining.org>
+ * Copyright (c) 2022, Linaro Limited
+ * Copyright (c) 2026, Nizat Mikayilli <nacht@dxdmail.cc>
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include "sm8550.dtsi"
+#include "pm8550.dtsi"
+#include "pm8550vs.dtsi"
+#include "pmk8550.dtsi"
+
+/delete-node/ &rmtfs_mem;
+
+/ {
+	model = "Samsung Galaxy Tab S9 Wi-Fi";
+	compatible = "samsung,gts9wifi", "qcom,sm8550";
+	chassis-type = "tablet";
+
+	aliases {
+		serial0 = &uart7;
+		serial1 = &uart14;
+	};
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		framebuffer@b8000000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0xb8000000 0x0 0xfa0000>;
+			width = <2560>;
+			height = <1600>;
+			stride = <(2560 * 4)>;
+			format = "a8r8g8b8";
+			clocks = <&gcc GCC_DISP_HF_AXI_CLK>;
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-0 = <&volume_up_n>, <&hall_cover_n>;
+		pinctrl-names = "default";
+
+		key-volume-up {
+			label = "Volume Up";
+			linux,code = <KEY_VOLUMEUP>;
+			gpios = <&pm8550_gpios 6 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
+			linux,can-disable;
+			wakeup-source;
+		};
+
+		switch-lid {
+			label = "Book Cover";
+			linux,input-type = <EV_SW>;
+			linux,code = <SW_LID>;
+			gpios = <&tlmm 107 GPIO_ACTIVE_LOW>;
+			debounce-interval = <50>;
+			wakeup-source;
+		};
+	};
+
+	speaker_vdd: regulator-speaker-vdd {
+		compatible = "regulator-fixed";
+		regulator-name = "speaker_vdd";
+		gpio = <&tlmm 19 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+	};
+
+	vph_pwr: regulator-vph-pwr {
+		compatible = "regulator-fixed";
+		regulator-name = "vph_pwr";
+		regulator-min-microvolt = <3700000>;
+		regulator-max-microvolt = <3700000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	reserved-memory {
+		chipinfo_mem: chipinfo@81cf4000 {
+			reg = <0x0 0x81cf4000 0x0 0x1000>;
+			no-map;
+		};
+
+		kaslr_mem: kaslr@b01ff000 {
+			reg = <0x0 0xb01ff000 0x0 0x1000>;
+			no-map;
+		};
+
+		uh_heap_mem: uh-heap@b0200000 {
+			reg = <0x0 0xb0200000 0x0 0x40000>;
+			no-map;
+		};
+
+		uh_guest_mem: uh-guest@b1000000 {
+			reg = <0x0 0xb1000000 0x0 0x3000000>;
+			no-map;
+		};
+
+		splash-region@b8000000 {
+			reg = <0x0 0xb8000000 0x0 0x2b00000>;
+			no-map;
+		};
+
+		llcc_lpi_mem: llcc-lpi@ff800000 {
+			reg = <0x0 0xff800000 0x0 0x600000>;
+			no-map;
+		};
+	};
+
+	sound {
+		compatible = "qcom,sm8550-sndcard", "qcom,sm8450-sndcard";
+		model = "Samsung-Galaxy-Tab-S9";
+
+		pinctrl-0 = <&tdm0_clk_active>, <&tdm0_ws_active>,
+			    <&tdm0_din_active>, <&tdm0_dout_active>;
+		pinctrl-names = "default";
+
+		speaker-playback-dai-link {
+			link-name = "CS35L45 Speaker Playback";
+
+			cpu {
+				sound-dai = <&q6apmbedai PRIMARY_MI2S_RX>;
+			};
+
+			codec {
+				sound-dai = <&cs35l45_fl 0>, <&cs35l45_fr 0>,
+					    <&cs35l45_rl 0>, <&cs35l45_rr 0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+
+		va-capture-dai-link {
+			link-name = "Internal DMIC Capture";
+
+			cpu {
+				sound-dai = <&q6apmbedai VA_CODEC_DMA_TX_0>;
+			};
+
+			codec {
+				sound-dai = <&lpass_vamacro 0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+	};
+
+	wcn6855-pmu {
+		compatible = "qcom,wcn6855-pmu";
+
+		pinctrl-0 = <&wlan_en>, <&bt_default>, <&pmk8550_sleep_clk>;
+		pinctrl-names = "default";
+
+		wlan-enable-gpios = <&tlmm 80 GPIO_ACTIVE_HIGH>;
+		bt-enable-gpios = <&tlmm 81 GPIO_ACTIVE_HIGH>;
+		swctrl-gpios = <&tlmm 82 GPIO_ACTIVE_HIGH>;
+		xo-clk-gpios = <&tlmm 204 GPIO_ACTIVE_HIGH>;
+
+		vddio-supply = <&vreg_l15b_1p8>;
+		vddaon-supply = <&vreg_s2g_1p016>;
+		vddpmu-supply = <&vreg_s5g_0p968>;
+		vddpmumx-supply = <&vreg_s5g_0p968>;
+		vddpmucx-supply = <&vreg_s5g_0p968>;
+		vddrfa0p95-supply = <&vreg_s4e_0p952>;
+		vddrfa1p3-supply = <&vreg_s4g_1p352>;
+		vddrfa1p9-supply = <&vreg_s6g_1p904>;
+		vddpcie1p3-supply = <&vreg_s4g_1p352>;
+		vddpcie1p9-supply = <&vreg_s6g_1p904>;
+
+		regulators {
+			vreg_pmu_rfa_cmn_0p8: ldo0 {
+				regulator-name = "vreg_pmu_rfa_cmn_0p8";
+			};
+
+			vreg_pmu_aon_0p8: ldo1 {
+				regulator-name = "vreg_pmu_aon_0p8";
+			};
+
+			vreg_pmu_wlcx_0p8: ldo2 {
+				regulator-name = "vreg_pmu_wlcx_0p8";
+			};
+
+			vreg_pmu_wlmx_0p8: ldo3 {
+				regulator-name = "vreg_pmu_wlmx_0p8";
+			};
+
+			vreg_pmu_btcmx_0p8: ldo4 {
+				regulator-name = "vreg_pmu_btcmx_0p8";
+			};
+
+			vreg_pmu_pcie_1p8: ldo5 {
+				regulator-name = "vreg_pmu_pcie_1p8";
+			};
+
+			vreg_pmu_pcie_0p9: ldo6 {
+				regulator-name = "vreg_pmu_pcie_0p9";
+			};
+
+			vreg_pmu_rfa_0p8: ldo7 {
+				regulator-name = "vreg_pmu_rfa_0p8";
+			};
+
+			vreg_pmu_rfa_1p2: ldo8 {
+				regulator-name = "vreg_pmu_rfa_1p2";
+			};
+
+			vreg_pmu_rfa_1p7: ldo9 {
+				regulator-name = "vreg_pmu_rfa_1p7";
+			};
+		};
+	};
+};
+
+/* Samsung's ADSP/SLPI firmware needs a larger carveout than the reference. */
+&adspslpi_mem {
+	reg = <0x0 0x9ea00000 0x0 0x59b4000>;
+};
+
+&apps_rsc {
+	regulators-0 {
+		compatible = "qcom,pm8550-rpmh-regulators";
+		qcom,pmic-id = "b";
+
+		/* Sensor VDD; the ADSP firmware expects it to be on. */
+		vreg_l1b_1p8: ldo1 {
+			regulator-name = "vreg_l1b_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+
+		vreg_l5b_3p104: ldo5 {
+			regulator-name = "vreg_l5b_3p104";
+			regulator-min-microvolt = <3104000>;
+			regulator-max-microvolt = <3104000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-allow-set-load;
+			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
+						   RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l8b_1p8: ldo8 {
+			regulator-name = "vreg_l8b_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l9b_2p9: ldo9 {
+			regulator-name = "vreg_l9b_2p9";
+			regulator-min-microvolt = <2960000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* DMIC bias, not switched by the VA macro driver. */
+		vreg_l10b_1p8: ldo10 {
+			regulator-name = "vreg_l10b_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+
+		vreg_l15b_1p8: ldo15 {
+			regulator-name = "vreg_l15b_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-allow-set-load;
+			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
+						   RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		/* Sensor VDDIO; the ADSP firmware expects it to be on. */
+		vreg_l16b_3p0: ldo16 {
+			regulator-name = "vreg_l16b_3p0";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+
+		vreg_l17b_2p5: ldo17 {
+			regulator-name = "vreg_l17b_2p5";
+			regulator-min-microvolt = <2504000>;
+			regulator-max-microvolt = <2504000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-allow-set-load;
+			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
+						   RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+
+	regulators-1 {
+		compatible = "qcom,pm8550vs-rpmh-regulators";
+		qcom,pmic-id = "e";
+
+		vdd-s4-supply = <&vph_pwr>;
+
+		vreg_s4e_0p952: smps4 {
+			regulator-name = "vreg_s4e_0p952";
+			regulator-min-microvolt = <952000>;
+			regulator-max-microvolt = <952000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l1e_0p88: ldo1 {
+			regulator-name = "vreg_l1e_0p88";
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <880000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l3e_1p2: ldo3 {
+			regulator-name = "vreg_l3e_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+
+	regulators-2 {
+		compatible = "qcom,pm8550ve-rpmh-regulators";
+		qcom,pmic-id = "f";
+
+		vreg_l3f_0p88: ldo3 {
+			regulator-name = "vreg_l3f_0p88";
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <912000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+
+	regulators-3 {
+		compatible = "qcom,pm8550vs-rpmh-regulators";
+		qcom,pmic-id = "g";
+
+		vdd-s1-supply = <&vph_pwr>;
+		vdd-s2-supply = <&vph_pwr>;
+		vdd-s3-supply = <&vph_pwr>;
+		vdd-s4-supply = <&vph_pwr>;
+		vdd-s5-supply = <&vph_pwr>;
+		vdd-s6-supply = <&vph_pwr>;
+
+		vreg_s2g_1p016: smps2 {
+			regulator-name = "vreg_s2g_1p016";
+			regulator-min-microvolt = <1016000>;
+			regulator-max-microvolt = <1016000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_s4g_1p352: smps4 {
+			regulator-name = "vreg_s4g_1p352";
+			regulator-min-microvolt = <1352000>;
+			regulator-max-microvolt = <1352000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_s5g_0p968: smps5 {
+			regulator-name = "vreg_s5g_0p968";
+			regulator-min-microvolt = <968000>;
+			regulator-max-microvolt = <968000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_s6g_1p904: smps6 {
+			regulator-name = "vreg_s6g_1p904";
+			regulator-min-microvolt = <1904000>;
+			regulator-max-microvolt = <1904000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l1g_1p2: ldo1 {
+			regulator-name = "vreg_l1g_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-allow-set-load;
+			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
+						   RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l3g_1p2: ldo3 {
+			regulator-name = "vreg_l3g_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+};
+
+/* Keep the bootloader-initialised display clocks for simple-framebuffer. */
+&dispcc {
+	status = "disabled";
+};
+
+&gpi_dma1 {
+	status = "okay";
+};
+
+&gpu {
+	status = "okay";
+
+	zap-shader {
+		firmware-name = "qcom/sm8550/Samsung/gts9wifi/a740_zap.mbn";
+	};
+};
+
+&hub_i2c6_data_clk {
+	drive-strength = <8>;
+};
+
+/* The SM-X710 firmware reserves a slightly larger HW-fence window than MTP. */
+&hwfence_shbuf {
+	reg = <0x0 0xe6440000 0x0 0x2dd000>;
+};
+
+&i2c6 {
+	clock-frequency = <400000>;
+
+	status = "okay";
+
+	eusb2_repeater: redriver@4f {
+		compatible = "nxp,ptn3222";
+		reg = <0x4f>;
+		#phy-cells = <0>;
+
+		vdd3v3-supply = <&vreg_l5b_3p104>;
+		vdd1v8-supply = <&vreg_l15b_1p8>;
+		reset-gpios = <&pm8550vs_d_gpios 4 GPIO_ACTIVE_LOW>;
+
+		pinctrl-0 = <&eusb2_reset_default>;
+		pinctrl-names = "default";
+	};
+};
+
+&i2c_hub_6 {
+	clock-frequency = <400000>;
+
+	status = "okay";
+
+	cs35l45_rl: amplifier@30 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x30>;
+		#sound-dai-cells = <1>;
+		interrupts-extended = <&tlmm 14 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&tlmm 42 GPIO_ACTIVE_HIGH>;
+		vdd-a-supply = <&speaker_vdd>;
+		vdd-batt-supply = <&speaker_vdd>;
+		pinctrl-0 = <&cs35l45_gpio_default>;
+		pinctrl-names = "default";
+		sound-name-prefix = "Rear Left";
+		cirrus,asp-sdout-hiz-ctrl = <3>;
+
+		cirrus,gpio-ctrl1 {
+			gpio-ctrl = <2>;
+		};
+
+		cirrus,gpio-ctrl2 {
+			gpio-ctrl = <2>;
+		};
+	};
+
+	cs35l45_fl: amplifier@31 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x31>;
+		#sound-dai-cells = <1>;
+		interrupts-extended = <&tlmm 14 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&tlmm 42 GPIO_ACTIVE_HIGH>;
+		vdd-a-supply = <&speaker_vdd>;
+		vdd-batt-supply = <&speaker_vdd>;
+		pinctrl-0 = <&cs35l45_gpio_default>;
+		pinctrl-names = "default";
+		sound-name-prefix = "Front Left";
+		cirrus,asp-sdout-hiz-ctrl = <3>;
+
+		cirrus,gpio-ctrl1 {
+			gpio-ctrl = <2>;
+		};
+
+		cirrus,gpio-ctrl2 {
+			gpio-ctrl = <2>;
+		};
+	};
+
+	cs35l45_rr: amplifier@32 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x32>;
+		#sound-dai-cells = <1>;
+		interrupts-extended = <&tlmm 14 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&tlmm 42 GPIO_ACTIVE_HIGH>;
+		vdd-a-supply = <&speaker_vdd>;
+		vdd-batt-supply = <&speaker_vdd>;
+		pinctrl-0 = <&cs35l45_gpio_default>;
+		pinctrl-names = "default";
+		sound-name-prefix = "Rear Right";
+		cirrus,asp-sdout-hiz-ctrl = <3>;
+
+		cirrus,gpio-ctrl1 {
+			gpio-ctrl = <2>;
+		};
+
+		cirrus,gpio-ctrl2 {
+			gpio-ctrl = <2>;
+		};
+	};
+
+	cs35l45_fr: amplifier@33 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x33>;
+		#sound-dai-cells = <1>;
+		interrupts-extended = <&tlmm 14 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&tlmm 42 GPIO_ACTIVE_HIGH>;
+		vdd-a-supply = <&speaker_vdd>;
+		vdd-batt-supply = <&speaker_vdd>;
+		pinctrl-0 = <&cs35l45_gpio_default>;
+		pinctrl-names = "default";
+		sound-name-prefix = "Front Right";
+		cirrus,asp-sdout-hiz-ctrl = <3>;
+
+		cirrus,gpio-ctrl1 {
+			gpio-ctrl = <2>;
+		};
+
+		cirrus,gpio-ctrl2 {
+			gpio-ctrl = <2>;
+		};
+	};
+};
+
+&i2c_master_hub_0 {
+	status = "okay";
+};
+
+&iris {
+	firmware-name = "qcom/sm8550/Samsung/gts9wifi/vpu30_4v.mbn";
+
+	status = "okay";
+};
+
+&lpass_tlmm {
+	dmic45_default: dmic45-default-state {
+		clk-pins {
+			pins = "gpio12";
+			function = "dmic3_clk";
+			drive-strength = <8>;
+			output-high;
+		};
+
+		data-pins {
+			pins = "gpio13";
+			function = "dmic3_data";
+			drive-strength = <8>;
+			input-enable;
+		};
+	};
+
+	dmic67_default: dmic67-default-state {
+		clk-pins {
+			pins = "gpio17";
+			function = "dmic4_clk";
+			drive-strength = <8>;
+			output-high;
+		};
+
+		data-pins {
+			pins = "gpio18";
+			function = "dmic4_data";
+			drive-strength = <8>;
+			input-enable;
+		};
+	};
+};
+
+&lpass_vamacro {
+	pinctrl-0 = <&dmic01_default>, <&dmic23_default>,
+		    <&dmic45_default>, <&dmic67_default>;
+	pinctrl-names = "default";
+	qcom,dmic-sample-rate = <4800000>;
+	vdd-micb-supply = <&vreg_l10b_1p8>;
+
+	status = "okay";
+};
+
+&pcie0 {
+	pinctrl-0 = <&pcie0_default_state>;
+	pinctrl-names = "default";
+
+	status = "okay";
+};
+
+&pcie0_phy {
+	vdda-phy-supply = <&vreg_l1e_0p88>;
+	vdda-pll-supply = <&vreg_l3e_1p2>;
+
+	status = "okay";
+};
+
+&pcie0_port0 {
+	reset-gpios = <&tlmm 94 GPIO_ACTIVE_LOW>;
+	wake-gpios = <&tlmm 96 GPIO_ACTIVE_LOW>;
+
+	wifi@0 {
+		compatible = "pci17cb,1103";
+		reg = <0x10000 0x0 0x0 0x0 0x0>;
+
+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn_0p8>;
+		vddaon-supply = <&vreg_pmu_aon_0p8>;
+		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+		vddwlmx-supply = <&vreg_pmu_wlmx_0p8>;
+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p7>;
+		vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
+		vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
+	};
+};
+
+&pm8550_gpios {
+	sdc2_card_det_n: sdc2-card-det-state {
+		pins = "gpio12";
+		function = "normal";
+		input-enable;
+		output-disable;
+		bias-pull-up;
+		power-source = <1>;
+	};
+
+	volume_up_n: volume-up-n-state {
+		pins = "gpio6";
+		function = "normal";
+		power-source = <1>;
+		bias-pull-up;
+		input-enable;
+	};
+};
+
+&pm8550vs_d {
+	status = "okay";
+};
+
+&pm8550vs_d_gpios {
+	eusb2_reset_default: eusb2-reset-state {
+		pins = "gpio4";
+		function = "normal";
+		power-source = <1>;
+		input-enable;
+		output-enable;
+		drive-push-pull;
+		qcom,drive-strength = <PMIC_GPIO_STRENGTH_MED>;
+		bias-disable;
+	};
+};
+
+&pm8550vs_e {
+	status = "okay";
+};
+
+&pm8550vs_g {
+	status = "okay";
+};
+
+&pmk8550_gpios {
+	pmk8550_sleep_clk: sleep-clk-state {
+		pins = "gpio3";
+		function = "func1";
+		input-disable;
+		output-enable;
+		bias-disable;
+		power-source = <0>;
+	};
+};
+
+&pon_pwrkey {
+	status = "okay";
+};
+
+&pon_resin {
+	linux,code = <KEY_VOLUMEDOWN>;
+
+	status = "okay";
+};
+
+&qupv3_id_0 {
+	status = "okay";
+};
+
+&qupv3_id_1 {
+	status = "okay";
+};
+
+&remoteproc_adsp {
+	firmware-name = "qcom/sm8550/Samsung/gts9wifi/adsp.mbn",
+			"qcom/sm8550/Samsung/gts9wifi/adsp_dtb.mbn";
+
+	status = "okay";
+};
+
+&sdhc_2 {
+	cd-gpios = <&pm8550_gpios 12 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&sdc2_default>, <&sdc2_card_det_n>;
+	pinctrl-1 = <&sdc2_sleep>, <&sdc2_card_det_n>;
+	pinctrl-names = "default", "sleep";
+	vmmc-supply = <&vreg_l9b_2p9>;
+	vqmmc-supply = <&vreg_l8b_1p8>;
+	bus-width = <4>;
+	no-sdio;
+	no-mmc;
+
+	status = "okay";
+};
+
+&sleep_clk {
+	clock-frequency = <32764>;
+};
+
+&tlmm {
+	/* GPIO36..39 (QUP1 SE2) are owned by TrustZone, likely for the fingerprint sensor. */
+	gpio-reserved-ranges = <36 4>;
+
+	bt_default: bt-default-state {
+		bt-en-pins {
+			pins = "gpio81";
+			function = "gpio";
+			drive-strength = <16>;
+			bias-disable;
+		};
+
+		sw-ctrl-pins {
+			pins = "gpio82";
+			function = "gpio";
+			bias-pull-down;
+		};
+	};
+
+	cs35l45_gpio_default: cs35l45-gpio-default-state {
+		pins = "gpio14", "gpio42";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	hall_cover_n: hall-cover-n-state {
+		pins = "gpio107";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	tdm0_clk_active: tdm0-clk-active-state {
+		pins = "gpio126";
+		function = "i2s0_sck";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	tdm0_din_active: tdm0-din-active-state {
+		pins = "gpio127";
+		function = "i2s0_data0";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	tdm0_dout_active: tdm0-dout-active-state {
+		pins = "gpio128";
+		function = "i2s0_data1";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	tdm0_ws_active: tdm0-ws-active-state {
+		pins = "gpio129";
+		function = "i2s0_ws";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	wlan_en: wlan-en-state {
+		pins = "gpio80";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-pull-down;
+	};
+};
+
+&uart7 {
+	status = "okay";
+};
+
+&uart14 {
+	status = "okay";
+
+	bluetooth {
+		compatible = "qcom,wcn6855-bt";
+
+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn_0p8>;
+		vddaon-supply = <&vreg_pmu_aon_0p8>;
+		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+		vddwlmx-supply = <&vreg_pmu_wlmx_0p8>;
+		vddbtcmx-supply = <&vreg_pmu_btcmx_0p8>;
+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+		vddrfa1p7-supply = <&vreg_pmu_rfa_1p7>;
+
+		max-speed = <3200000>;
+	};
+};
+
+&ufs_mem_hc {
+	reset-gpios = <&tlmm 210 GPIO_ACTIVE_LOW>;
+	vcc-supply = <&vreg_l17b_2p5>;
+	vcc-max-microamp = <1300000>;
+	vccq-supply = <&vreg_l1g_1p2>;
+	vccq-max-microamp = <1200000>;
+	vdd-hba-supply = <&vreg_l3g_1p2>;
+
+	status = "okay";
+};
+
+&ufs_mem_phy {
+	vdda-phy-supply = <&vreg_l1e_0p88>;
+	vdda-pll-supply = <&vreg_l3e_1p2>;
+
+	status = "okay";
+};
+
+/*
+ * Type-C is handled by an SM5714 over I2C, which has no upstream driver
+ * yet, so keep the DWC3 in peripheral mode.
+ */
+&usb_1 {
+	dr_mode = "peripheral";
+
+	status = "okay";
+};
+
+&usb_1_hsphy {
+	vdd-supply = <&vreg_l1e_0p88>;
+	vdda12-supply = <&vreg_l3e_1p2>;
+	phys = <&eusb2_repeater>;
+
+	status = "okay";
+};
+
+/* Referenced by usb_1 as its USB3 PHY. */
+&usb_dp_qmpphy {
+	vdda-phy-supply = <&vreg_l3f_0p88>;
+	vdda-pll-supply = <&vreg_l3e_1p2>;
+
+	status = "okay";
+};
+
+&xo_board {
+	clock-frequency = <76800000>;
+};

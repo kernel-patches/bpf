@@ -10,6 +10,7 @@
 #include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/bitops.h>
+#include <linux/devm-helpers.h>
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -255,7 +256,10 @@ static int arizona_micsupp_common_init(struct platform_device *pdev,
 	struct regulator_config config = { };
 	int ret;
 
-	INIT_WORK(&micsupp->check_cp_work, arizona_micsupp_check_cp);
+	ret = devm_work_autocancel(&pdev->dev, &micsupp->check_cp_work,
+				   arizona_micsupp_check_cp);
+	if (ret)
+		return ret;
 
 	micsupp->init_data.consumer_supplies = &micsupp->supply;
 	micsupp->supply.dev_name = dev_name(micsupp->dev);
@@ -306,7 +310,7 @@ static int arizona_micsupp_probe(struct platform_device *pdev)
 	const struct regulator_desc *desc;
 	struct arizona_micsupp *micsupp;
 
-	micsupp = devm_kzalloc(&pdev->dev, sizeof(*micsupp), GFP_KERNEL);
+	micsupp = devm_kzalloc_obj(&pdev->dev, *micsupp);
 	if (!micsupp)
 		return -ENOMEM;
 
@@ -342,7 +346,7 @@ static int madera_micsupp_probe(struct platform_device *pdev)
 	struct madera *madera = dev_get_drvdata(pdev->dev.parent);
 	struct arizona_micsupp *micsupp;
 
-	micsupp = devm_kzalloc(&pdev->dev, sizeof(*micsupp), GFP_KERNEL);
+	micsupp = devm_kzalloc_obj(&pdev->dev, *micsupp);
 	if (!micsupp)
 		return -ENOMEM;
 

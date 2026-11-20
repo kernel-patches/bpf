@@ -62,7 +62,7 @@ enum WATCHDOG_RESOLUTION {
 struct fts_data {
 	struct i2c_client *client;
 	struct device *hwmon_dev;
-	unsigned long last_updated; /* in jiffies */
+	u64 last_updated; /* in jiffies */
 	struct watchdog_device wdd;
 	enum WATCHDOG_RESOLUTION resolution;
 	bool valid; /* false until following fields are valid */
@@ -131,7 +131,8 @@ static int fts_update_device(struct fts_data *data)
 {
 	int i, err;
 
-	if (!time_after(jiffies, data->last_updated + 2 * HZ) && data->valid)
+	if (!time_after64(get_jiffies_64(), data->last_updated + 2 * HZ) &&
+	    data->valid)
 		return 0;
 
 	err = fts_read_byte(data->client, FTS_DEVICE_STATUS_REG);
@@ -188,7 +189,7 @@ static int fts_update_device(struct fts_data *data)
 			return err;
 		data->volt[i] = err;
 	}
-	data->last_updated = jiffies;
+	data->last_updated = get_jiffies_64();
 	return 0;
 }
 
@@ -632,8 +633,7 @@ static int fts_probe(struct i2c_client *client)
 		return -ENODEV;
 	}
 
-	data = devm_kzalloc(&client->dev, sizeof(struct fts_data),
-			    GFP_KERNEL);
+	data = devm_kzalloc_obj(&client->dev, struct fts_data);
 	if (!data)
 		return -ENOMEM;
 

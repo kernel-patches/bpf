@@ -98,7 +98,7 @@
 
 #else /* CONFIG_MMU */
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 extern unsigned long setup_vectors_base(void);
 extern unsigned long vectors_base;
 #define VECTORS_BASE		vectors_base
@@ -155,7 +155,7 @@ extern unsigned long vectors_base;
  */
 #define PLAT_PHYS_OFFSET	UL(CONFIG_PHYS_OFFSET)
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /*
  * Physical start and end address of the kernel sections. These addresses are

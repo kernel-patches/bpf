@@ -338,8 +338,7 @@ static int s3c64xx_prepare_dma(struct s3c64xx_spi_dma_data *dma,
 		return -ENOMEM;
 	}
 
-	desc->callback = s3c64xx_spi_dmacb;
-	desc->callback_param = dma;
+	dmaengine_desc_set_callback(desc, s3c64xx_spi_dmacb, NULL, dma);
 
 	dma->cookie = dmaengine_submit(desc);
 	ret = dma_submit_error(dma->cookie);
@@ -1161,7 +1160,7 @@ static struct s3c64xx_spi_info *s3c64xx_spi_parse_dt(struct device *dev)
 	struct s3c64xx_spi_info *sci;
 	u32 temp;
 
-	sci = devm_kzalloc(dev, sizeof(*sci), GFP_KERNEL);
+	sci = devm_kzalloc_obj(dev, *sci);
 	if (!sci)
 		return ERR_PTR(-ENOMEM);
 

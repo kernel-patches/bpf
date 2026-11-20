@@ -32,6 +32,13 @@
 
 static bool memfd_folio_has_extra_refs(struct folio *folio)
 {
+	/*
+	 * Use the precise pincount where available to avoid racy refcount
+	 * comparisons.
+	 */
+	if (folio_has_pincount(folio) && folio_maybe_dma_pinned(folio))
+		return true;
+
 	return folio_ref_count(folio) != folio_expected_ref_count(folio);
 }
 
@@ -72,12 +79,6 @@ struct folio *memfd_alloc_folio(struct file *memfd, pgoff_t idx)
 	gfp_t gfp_mask;
 
 	if (is_file_hugepages(memfd)) {
-		/*
-		 * The folio would most likely be accessed by a DMA driver,
-		 * therefore, we have zone memory constraints where we can
-		 * alloc from. Also, the folio will be pinned for an indefinite
-		 * amount of time, so it is not expected to be migrated away.
-		 */
 		struct inode *inode = file_inode(memfd);
 		struct hstate *h = hstate_file(memfd);
 		int err = -ENOMEM;
@@ -85,7 +86,6 @@ struct folio *memfd_alloc_folio(struct file *memfd, pgoff_t idx)
 		u32 hash;
 
 		gfp_mask = htlb_alloc_mask(h);
-		gfp_mask &= ~(__GFP_HIGHMEM | __GFP_MOVABLE);
 		idx >>= huge_page_order(h);
 
 		/*
@@ -482,6 +482,8 @@ struct file *memfd_alloc_file(const char *name, unsigned int flags)
 	}
 
 	file->f_mode |= FMODE_LSEEK | FMODE_PREAD | FMODE_PWRITE;
+	/* a regular file like any other: POSIX.1-2008/SUSv4 Section XSI 2.9.7 */
+	file->f_mode |= FMODE_ATOMIC_POS;
 	file->f_flags |= O_LARGEFILE;
 
 	if (flags & MFD_NOEXEC_SEAL) {

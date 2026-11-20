@@ -2,7 +2,7 @@
 #ifndef _TOOLS_LINUX_COMPILER_H_
 #define _TOOLS_LINUX_COMPILER_H_
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/compiler_types.h>
 
@@ -66,6 +66,10 @@
 
 #ifndef __naked
 #define __naked __attribute__((__naked__))
+#endif
+
+#ifndef __nonnull_args
+#define __nonnull_args(x...) __attribute__((__nonnull__(x)))
 #endif
 
 /* Are two types/vars the same type (ignoring qualifiers)? */
@@ -261,6 +265,6 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 #endif
 #endif
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif /* _TOOLS_LINUX_COMPILER_H */

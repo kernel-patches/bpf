@@ -438,8 +438,7 @@ static int loongson_nand_dma_transfer(struct loongson_nand_host *host, struct lo
 		ret = -ENOMEM;
 		goto err;
 	}
-	desc->callback = loongson_nand_dma_callback;
-	desc->callback_param = host;
+	dmaengine_desc_set_callback(desc, loongson_nand_dma_callback, NULL, host);
 
 	host->dma_cookie = dmaengine_submit(desc);
 	ret = dma_submit_error(host->dma_cookie);
@@ -890,7 +889,7 @@ static int loongson_nand_probe(struct platform_device *pdev)
 	if (!data)
 		return -ENODEV;
 
-	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
+	host = devm_kzalloc_obj(dev, *host);
 	if (!host)
 		return -ENOMEM;
 

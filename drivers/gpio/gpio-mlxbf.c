@@ -56,7 +56,7 @@ static int mlxbf_gpio_probe(struct platform_device *pdev)
 	struct gpio_chip *gc;
 	int ret;
 
-	gs = devm_kzalloc(&pdev->dev, sizeof(*gs), GFP_KERNEL);
+	gs = devm_kzalloc_obj(&pdev->dev, *gs);
 	if (!gs)
 		return -ENOMEM;
 
@@ -132,9 +132,9 @@ static int mlxbf_gpio_resume(struct platform_device *pdev)
 }
 #endif
 
-static const struct acpi_device_id __maybe_unused mlxbf_gpio_acpi_match[] = {
-	{ "MLNXBF02", 0 },
-	{}
+static const struct acpi_device_id mlxbf_gpio_acpi_match[] = {
+	{ .id = "MLNXBF02" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, mlxbf_gpio_acpi_match);
 

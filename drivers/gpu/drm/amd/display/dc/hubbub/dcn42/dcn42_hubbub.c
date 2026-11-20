@@ -27,10 +27,10 @@
 static bool hubbub42_program_urgent_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
+		uint32_t urgent_floor,
 		bool safe_to_lower)
 {
 	struct dcn20_hubbub *hubbub2 = TO_DCN20_HUBBUB(hubbub);
-	const unsigned int urgent_floor = hubbub->ctx->dc->debug.urgent_watermark_override;
 	const unsigned int urgent_a = max(urgent_floor,
 		watermarks->dcn4x.a.urgent);
 	const unsigned int urgent_b = max(urgent_floor,
@@ -445,17 +445,19 @@ static bool hubbub42_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower)
 {
 	bool wm_pending = false;
 	struct dcn20_hubbub *hubbub2 = TO_DCN20_HUBBUB(hubbub);
 
-	if (!safe_to_lower && hubbub->ctx->dc->debug.disable_stutter_for_wm_program) {
+	if (!safe_to_lower && policy.disable_stutter_for_program) {
 		/* before raising watermarks, stutter must be disabled */
 		wm_pending = true;
 		hubbub42_allow_self_refresh_control(hubbub, false);
 	}
-	if (hubbub42_program_urgent_watermarks(hubbub, watermarks, safe_to_lower))
+	if (hubbub42_program_urgent_watermarks(hubbub, watermarks,
+			policy.urgent_watermark_override, safe_to_lower))
 		wm_pending = true;
 
 	if (hubbub42_program_stutter_watermarks(hubbub, watermarks, safe_to_lower))
@@ -477,9 +479,9 @@ static bool hubbub42_program_watermarks(
 			DCHUBBUB_ARB_MIN_REQ_OUTSTAND_COMMIT_THRESHOLD, 0xA);/*hw delta*/
 	REG_UPDATE(DCHUBBUB_ARB_HOSTVM_CNTL, DCHUBBUB_ARB_MAX_QOS_COMMIT_THRESHOLD, 0xF);
 
-	if (safe_to_lower || hubbub->ctx->dc->debug.disable_stutter)
-		hubbub42_allow_self_refresh_control(hubbub, !hubbub->ctx->dc->debug.disable_stutter);
-	hubbub32_force_usr_retraining_allow(hubbub, hubbub->ctx->dc->debug.force_usr_allow);
+	if (safe_to_lower || policy.disable_stutter)
+		hubbub42_allow_self_refresh_control(hubbub, !policy.disable_stutter);
+	hubbub32_force_usr_retraining_allow(hubbub, policy.force_usr_allow);
 
 	return wm_pending;
 }
@@ -494,14 +496,14 @@ static void hubbub42_set_request_limit(struct hubbub *hubbub, int memory_channel
 	REG_UPDATE(SDPIF_REQUEST_RATE_LIMIT, SDPIF_REQUEST_RATE_LIMIT, request_limit);
 }
 
-static bool dcn42_program_arbiter(struct hubbub *hubbub, struct dml2_display_arb_regs *arb_regs,
-				  bool safe_to_lower)
+static bool dcn42_program_arbiter(struct hubbub *hubbub, uint32_t pstate_stall_threshold,
+		bool allow_sdpif_rate_limit_when_cstate_req, bool safe_to_lower)
 {
 	struct dcn20_hubbub *hubbub2 = TO_DCN20_HUBBUB(hubbub);
 
 	bool wm_pending = false;
 	uint32_t temp;
-	bool allow_sdpif_rate_limit_when_cstate_req = arb_regs->allow_sdpif_rate_limit_when_cstate_req != 0;
+	(void)pstate_stall_threshold;
 
 	/* request backpressure and outstanding return threshold (unused)*/
 	//REG_UPDATE(DCHUBBUB_TIMEOUT_DETECTION_CTRL1, DCHUBBUB_TIMEOUT_REQ_STALL_THRESHOLD, arb_regs->req_stall_threshold);

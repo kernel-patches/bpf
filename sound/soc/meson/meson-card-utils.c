@@ -144,7 +144,7 @@ int meson_card_set_be_link(struct snd_soc_card *card,
 		return -EINVAL;
 	}
 
-	codec = devm_kcalloc(dev, num_codecs, sizeof(*codec), GFP_KERNEL);
+	codec = devm_kzalloc_objs(dev, *codec, num_codecs);
 	if (!codec)
 		return -ENOMEM;
 
@@ -272,11 +272,10 @@ int meson_card_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
-	platform_set_drvdata(pdev, priv);
 	snd_soc_card_set_drvdata(&priv->card, priv);
 
 	priv->card.owner = THIS_MODULE;
@@ -310,7 +309,7 @@ int meson_card_probe(struct platform_device *pdev)
 	if (ret)
 		goto out_err;
 
-	ret = devm_snd_soc_register_card(dev, &priv->card);
+	ret = snd_soc_register_card(&priv->card);
 	if (ret)
 		goto out_err;
 
@@ -324,8 +323,10 @@ EXPORT_SYMBOL_GPL(meson_card_probe);
 
 void meson_card_remove(struct platform_device *pdev)
 {
-	struct meson_card *priv = platform_get_drvdata(pdev);
+	struct snd_soc_card *card = platform_get_drvdata(pdev);
+	struct meson_card *priv = snd_soc_card_get_drvdata(card);
 
+	snd_soc_unregister_card(card);
 	meson_card_clean_references(priv);
 }
 EXPORT_SYMBOL_GPL(meson_card_remove);

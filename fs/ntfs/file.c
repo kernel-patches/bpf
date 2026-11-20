@@ -55,9 +55,14 @@
 int ntfs_file_open(struct inode *vi, struct file *filp)
 {
 	struct ntfs_inode *ni = NTFS_I(vi);
+	int err;
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	if (filp->f_mode & FMODE_WRITE)
+		err = ntfs_emergency_state(ni->vol);
+	else
+		err = NVolShutdown(ni->vol) ? -EIO : 0;
+	if (err)
+		return err;
 
 	if (sizeof(unsigned long) < 8) {
 		if (i_size_read(vi) > MAX_LFS_FILESIZE)
@@ -210,8 +215,9 @@ int ntfs_fileattr_set(const struct mnt_idmap *idmap, struct dentry *dentry,
 	bool forced_immutable;
 	int err;
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	err = ntfs_emergency_state(ni->vol);
+	if (err)
+		return err;
 
 	if (fileattr_has_fsx(fa))
 		return -EOPNOTSUPP;
@@ -305,8 +311,9 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 
 	ntfs_debug("Entering for inode 0x%llx.", ni->mft_no);
 
-	if (NVolShutdown(vol))
-		return -EIO;
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
 
 	err = file_write_and_wait_range(filp, start, end);
 	if (err)
@@ -323,13 +330,6 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 		ret = __ntfs_write_inode(vi, 1);
 	write_inode_now(vi, !datasync);
 
-	/*
-	 * file_write_and_wait_range() already flushed this stream mapping.
-	 * A stream fsync does not need to flush sibling attribute mappings.
-	 */
-	if (stream)
-		goto sync_volume;
-
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
 	if (!ctx)
 		return -ENOMEM;
@@ -339,6 +339,9 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 		if (ctx->attr->type == AT_FILE_NAME) {
 			struct file_name_attr *fn = (struct file_name_attr *)((u8 *)ctx->attr +
 					le16_to_cpu(ctx->attr->data.resident.value_offset));
+
+			if (MREF_LE(fn->parent_directory) == ni->mft_no)
+				continue;
 
 			parent_vi = ntfs_iget(vi->i_sb, MREF_LE(fn->parent_directory));
 			if (IS_ERR(parent_vi))
@@ -409,7 +412,6 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 	if (err && !ret)
 		ret = err;
 
-sync_volume:
 	write_inode_now(vol->mftbmp_ino, 1);
 	down_write(&vol->lcnbmp_lock);
 	write_inode_now(vol->lcnbmp_ino, 1);
@@ -459,8 +461,11 @@ int ntfs_setattr_size(struct inode *vi, struct iattr *attr)
 	int err;
 	loff_t old_size = vi->i_size;
 
-	if (stream && NVolShutdown(ni->vol))
-		return -EIO;
+	if (stream) {
+		err = ntfs_emergency_state(ni->vol);
+		if (err)
+			return err;
+	}
 
 	if (NInoCompressed(ni) || NInoEncrypted(ni) || NInoWofCompressed(ni)) {
 		ntfs_warning(
@@ -544,8 +549,9 @@ int ntfs_setattr(const struct mnt_idmap *idmap, struct dentry *dentry,
 	struct ntfs_inode *ni = NTFS_I(vi);
 	struct ntfs_volume *vol = ni->vol;
 
-	if (NVolShutdown(vol))
-		return -EIO;
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
 
 	err = setattr_prepare(idmap, dentry, attr);
 	if (err)
@@ -686,12 +692,12 @@ loff_t ntfs_file_llseek(struct file *file, loff_t offset, int whence)
 	switch (whence) {
 	case SEEK_HOLE:
 		inode_lock_shared(inode);
-		offset = iomap_seek_hole(inode, offset, &ntfs_seek_iomap_ops);
+		offset = iomap_seek_hole(inode, offset, ntfs_seek_iomap_next);
 		inode_unlock_shared(inode);
 		break;
 	case SEEK_DATA:
 		inode_lock_shared(inode);
-		offset = iomap_seek_data(inode, offset, &ntfs_seek_iomap_ops);
+		offset = iomap_seek_data(inode, offset, ntfs_seek_iomap_next);
 		inode_unlock_shared(inode);
 		break;
 	default:
@@ -728,7 +734,7 @@ ssize_t ntfs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		}
 
 		file_accessed(iocb->ki_filp);
-		ret = iomap_dio_rw(iocb, to, &ntfs_read_iomap_ops, NULL, 0,
+		ret = iomap_dio_rw(iocb, to, ntfs_read_iomap_next, NULL, 0,
 				NULL, 0);
 	} else {
 		ret = generic_file_read_iter(iocb, to);
@@ -770,7 +776,7 @@ static ssize_t ntfs_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	ssize_t ret;
 
-	ret = iomap_dio_rw(iocb, from, &ntfs_dio_iomap_ops,
+	ret = iomap_dio_rw(iocb, from, ntfs_dio_iomap_next,
 			&ntfs_write_dio_ops, 0, NULL, 0);
 	if (ret == -ENOTBLK)
 		ret = 0;
@@ -798,7 +804,7 @@ static ssize_t ntfs_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		inode_dio_wait(file_inode(iocb->ki_filp));
 
 		written = iomap_file_buffered_write(iocb, from,
-				&ntfs_write_iomap_ops, &ntfs_iomap_folio_ops,
+				ntfs_write_iomap_next, &ntfs_iomap_folio_ops,
 				NULL);
 		if (written < 0) {
 			ret = written;
@@ -860,15 +866,16 @@ ssize_t ntfs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	int err;
 	loff_t old_data_size, old_init_size;
 
-	if (NVolShutdown(vol))
-		return -EIO;
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
 
 	if (NInoWofCompressed(ni))
 		return -EOPNOTSUPP;
 
 	if (NInoEncrypted(ni)) {
-		ntfs_error(vi->i_sb, "Writing for %s files is not supported yet",
-			   NInoCompressed(ni) ? "Compressed" : "Encrypted");
+		ntfs_warning(vi->i_sb, "Writing for %s files is not supported yet",
+			     NInoCompressed(ni) ? "Compressed" : "Encrypted");
 		return -EOPNOTSUPP;
 	}
 
@@ -930,7 +937,7 @@ ssize_t ntfs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (NInoNonResident(ni) && iocb->ki_flags & IOCB_DIRECT)
 		ret = ntfs_dio_write_iter(iocb, from);
 	else
-		ret = iomap_file_buffered_write(iocb, from, &ntfs_write_iomap_ops,
+		ret = iomap_file_buffered_write(iocb, from, ntfs_write_iomap_next,
 				&ntfs_iomap_folio_ops, NULL);
 out:
 	if (ret < 0 && ret != -EIOCBQUEUED) {
@@ -1017,7 +1024,7 @@ static vm_fault_t ntfs_filemap_page_mkwrite(struct vm_fault *vmf)
 	 * exclusively while invalidating pagecache and changing extents.
 	 */
 	filemap_invalidate_lock_shared(mapping);
-	ret = iomap_page_mkwrite(vmf, &ntfs_page_mkwrite_iomap_ops, NULL);
+	ret = iomap_page_mkwrite(vmf, ntfs_page_mkwrite_iomap_next, NULL);
 	filemap_invalidate_unlock_shared(mapping);
 	sb_end_pagefault(inode->i_sb);
 	return ret;
@@ -1037,9 +1044,15 @@ int ntfs_file_mmap_prepare(struct vm_area_desc *desc)
 {
 	struct file *file = desc->file;
 	struct inode *inode = file_inode(file);
+	struct ntfs_volume *vol = NTFS_SB(file->f_mapping->host->i_sb);
+	int ret;
 
-	if (NVolShutdown(NTFS_SB(file->f_mapping->host->i_sb)))
-		return -EIO;
+	if (file->f_mode & FMODE_WRITE)
+		ret = ntfs_emergency_state(vol);
+	else
+		ret = NVolShutdown(vol) ? -EIO : 0;
+	if (ret)
+		return ret;
 
 	if (NInoCompressed(NTFS_I(inode)) || NInoWofCompressed(NTFS_I(inode)))
 		return -EOPNOTSUPP;
@@ -1072,7 +1085,7 @@ int ntfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	if (NInoWofCompressed(NTFS_I(inode)))
 		return -EOPNOTSUPP;
 
-	return iomap_fiemap(inode, fieinfo, start, len, &ntfs_read_iomap_ops);
+	return iomap_fiemap(inode, fieinfo, start, len, ntfs_read_iomap_next);
 }
 
 static const char *ntfs_get_link(struct dentry *dentry, struct inode *inode,
@@ -1165,7 +1178,9 @@ static int ntfs_ioctl_set_volume_label(struct file *filp, unsigned long arg)
 	if (ret)
 		goto out;
 
-	ret = ntfs_write_volume_label(vol, label);
+	ret = ntfs_emergency_state(vol);
+	if (!ret)
+		ret = ntfs_write_volume_label(vol, label);
 	mnt_drop_write_file(filp);
 out:
 	kfree(label);
@@ -1181,6 +1196,11 @@ static int ntfs_ioctl_fitrim(struct ntfs_volume *vol, unsigned long arg)
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
+
+	/* Don't trust $Bitmap after an error. */
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
 
 	dev = vol->sb->s_bdev;
 	if (!bdev_max_discard_sectors(dev))
@@ -1322,7 +1342,7 @@ static int ntfs_punch_hole(struct ntfs_inode *ni, int mode, loff_t offset,
 				   ntfs_cluster_to_bytes(vol, start_vcn + 1),
 				   end_offset);
 			err = iomap_zero_range(vi, offset, to - offset,
-					       NULL, &ntfs_seek_iomap_ops,
+					       NULL, ntfs_seek_iomap_next,
 					       &ntfs_iomap_folio_ops, NULL);
 			if (err < 0)
 				goto out;
@@ -1338,7 +1358,7 @@ static int ntfs_punch_hole(struct ntfs_inode *ni, int mode, loff_t offset,
 		from = ntfs_cluster_to_bytes(vol, end_vcn - 1);
 		if (from < ni->initialized_size) {
 			err = iomap_zero_range(vi, from, end_offset - from,
-					       NULL, &ntfs_seek_iomap_ops,
+					       NULL, ntfs_seek_iomap_next,
 					       &ntfs_iomap_folio_ops, NULL);
 			if (err < 0)
 				goto out;
@@ -1478,6 +1498,10 @@ long ntfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	if (mode & ~(NTFS_FALLOC_FL_SUPPORTED))
 		return -EOPNOTSUPP;
 
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
+
 	if (NInoCompressed(ni) || NInoEncrypted(ni) || NInoWofCompressed(ni))
 		return -EOPNOTSUPP;
 
@@ -1585,7 +1609,7 @@ const struct inode_operations ntfs_file_inode_ops = {
 	.fileattr_get	= ntfs_fileattr_get,
 	.fileattr_set	= ntfs_fileattr_set,
 	.listxattr	= ntfs_listxattr,
-	.get_acl	= ntfs_get_acl,
+	.get_inode_acl	= ntfs_get_acl,
 	.set_acl	= ntfs_set_acl,
 	.fiemap		= ntfs_fiemap,
 };
@@ -1605,7 +1629,7 @@ const struct inode_operations ntfs_special_inode_operations = {
 	.listxattr	= ntfs_listxattr,
 	.fileattr_get	= ntfs_fileattr_get,
 	.fileattr_set	= ntfs_fileattr_set,
-	.get_acl	= ntfs_get_acl,
+	.get_inode_acl	= ntfs_get_acl,
 	.set_acl	= ntfs_set_acl,
 };
 

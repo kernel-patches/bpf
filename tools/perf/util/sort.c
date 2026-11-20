@@ -793,14 +793,19 @@ static int hist_entry__sym_ipc_snprintf(struct hist_entry *he, char *bf,
 {
 
 	struct symbol *sym = he->ms.sym;
-	struct annotated_branch *branch;
+	struct annotated_branch *branch = NULL;
 	double ipc = 0.0, coverage = 0.0;
 	char tmp[64];
 
 	if (!sym)
 		return repsep_snprintf(bf, size, "%-*s", width, "-");
 
-	branch = symbol__annotation(sym)->branch;
+	if (symbol__annotated(sym)) {
+		struct annotation *notes = symbol__annotation(sym);
+
+		if (notes)
+			branch = notes->branch;
+	}
 
 	if (branch && branch->hit_cycles)
 		ipc = branch->hit_insn / ((double)branch->hit_cycles);
@@ -1010,8 +1015,8 @@ static struct sort_entry sort_srcfile = {
 static int64_t
 sort__parent_cmp(struct hist_entry *left, struct hist_entry *right)
 {
-	struct symbol *sym_l = left->parent;
-	struct symbol *sym_r = right->parent;
+	struct symbol *sym_l = left->parent.sym;
+	struct symbol *sym_r = right->parent.sym;
 
 	if (!sym_l || !sym_r)
 		return cmp_null(sym_l, sym_r);
@@ -1023,7 +1028,7 @@ static int hist_entry__parent_snprintf(struct hist_entry *he, char *bf,
 				       size_t size, unsigned int width)
 {
 	return repsep_snprintf(bf, size, "%-*.*s", width, width,
-			      he->parent ? he->parent->name : "[other]");
+			      he->parent.sym ? he->parent.sym->name : "[other]");
 }
 
 struct sort_entry sort_parent = {

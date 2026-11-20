@@ -545,7 +545,7 @@ struct nmk_gpio_chip *nmk_gpio_populate_chip(struct fwnode_handle *fwnode,
 	}
 #endif
 
-	nmk_chip = devm_kzalloc(dev, sizeof(*nmk_chip), GFP_KERNEL);
+	nmk_chip = devm_kzalloc_obj(dev, *nmk_chip);
 	if (!nmk_chip) {
 		ret = -ENOMEM;
 		goto err_put_pdev;
@@ -715,10 +715,11 @@ static int nmk_gpio_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id nmk_gpio_match[] = {
-	{ .compatible = "st,nomadik-gpio", },
-	{ .compatible = "mobileye,eyeq5-gpio", },
-	{}
+	{ .compatible = "st,nomadik-gpio" },
+	{ .compatible = "mobileye,eyeq5-gpio" },
+	{ }
 };
+MODULE_DEVICE_TABLE(of, nmk_gpio_match);
 
 static struct platform_driver nmk_gpio_driver = {
 	.driver = {

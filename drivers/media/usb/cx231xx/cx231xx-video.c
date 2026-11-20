@@ -303,6 +303,9 @@ static inline int cx231xx_isoc_copy(struct cx231xx *dev, struct urb *urb)
 		buffer_size = urb->iso_frame_desc[i].actual_length;
 		bytes_parsed = 0;
 
+		if (buffer_size < 4)
+			continue;
+
 		if (dma_q->is_partial_line) {
 			/* Handle the case of a partial line */
 			sav_eav = dma_q->last_sav;
@@ -381,6 +384,9 @@ static inline int cx231xx_bulk_copy(struct cx231xx *dev, struct urb *urb)
 		p_buffer = urb->transfer_buffer;
 		buffer_size = urb->actual_length;
 		bytes_parsed = 0;
+
+		if (buffer_size < 4)
+			return 0;
 
 		if (dma_q->is_partial_line) {
 			/* Handle the case of a partial line */

@@ -187,7 +187,7 @@ static int tps6287x_i2c_probe(struct i2c_client *i2c)
 	struct tps6287x_reg_data *reg_data;
 	struct regulator_dev *rdev;
 
-	reg_data = devm_kzalloc(dev, sizeof(struct tps6287x_reg_data), GFP_KERNEL);
+	reg_data = devm_kzalloc_obj(dev, struct tps6287x_reg_data);
 
 	if (!reg_data)
 		return -ENOMEM;
@@ -204,6 +204,7 @@ static int tps6287x_i2c_probe(struct i2c_client *i2c)
 						      &tps6287x_reg);
 
 	reg_data->range = tps6287x_best_range(&config, &tps6287x_reg);
+	config.driver_data = reg_data;
 
 	rdev = devm_regulator_register(dev, &tps6287x_reg, &config);
 	if (IS_ERR(rdev)) {
@@ -211,7 +212,6 @@ static int tps6287x_i2c_probe(struct i2c_client *i2c)
 		return PTR_ERR(rdev);
 	}
 
-	rdev->reg_data = (void *)reg_data;
 	dev_dbg(dev, "Probed regulator\n");
 
 	return 0;

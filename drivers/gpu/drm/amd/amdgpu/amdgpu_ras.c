@@ -244,7 +244,7 @@ static int amdgpu_check_address_validity(struct amdgpu_device *adev,
 	    (address >= RAS_UMC_INJECT_ADDR_LIMIT))
 		return -EFAULT;
 
-	page_pfns = kcalloc(nr_page_pfns, sizeof(*page_pfns), GFP_KERNEL);
+	page_pfns = kzalloc_objs(*page_pfns, nr_page_pfns);
 	if (!page_pfns)
 		return -ENOMEM;
 
@@ -1506,7 +1506,8 @@ int amdgpu_ras_reset_error_count(struct amdgpu_device *adev,
 		return -EOPNOTSUPP;
 	}
 
-	if (!amdgpu_ras_is_supported(adev, block))
+	if (!amdgpu_ras_is_supported(adev, block) ||
+	    !amdgpu_ras_mgr_get_debug_mode(adev))
 		return -EOPNOTSUPP;
 
 	if (amdgpu_sriov_vf(adev))
@@ -3616,6 +3617,9 @@ int amdgpu_ras_init(struct amdgpu_device *adev)
 
 	amdgpu_ras_check_supported(adev);
 
+	/* The RAS core derives the bad page threshold from this value. */
+	amdgpu_ras_init_reserved_vram_size(adev);
+
 	param.ras_feature_enable = amdgpu_ras_enable;
 	param.ras_feature_mask = amdgpu_ras_mask;
 	param.ras_bad_page_threshold = amdgpu_bad_page_threshold;
@@ -3713,8 +3717,6 @@ int amdgpu_ras_init(struct amdgpu_device *adev)
 	/* Get RAS schema for particular SOC */
 	con->schema = amdgpu_get_ras_schema(adev);
 
-	amdgpu_ras_init_reserved_vram_size(adev);
-
 	if (amdgpu_ras_fs_init(adev)) {
 		r = -EINVAL;
 		goto release_con;
@@ -3754,6 +3756,11 @@ static int amdgpu_persistent_edc_harvesting(struct amdgpu_device *adev,
 	};
 
 	if (!amdgpu_persistent_edc_harvesting_supported(adev))
+		return 0;
+
+	/* Skip uniras block ECC query during GPU reset/recovery */
+	if ((amdgpu_in_reset(adev) || amdgpu_ras_in_recovery(adev)) &&
+	     amdgpu_uniras_enabled(adev))
 		return 0;
 
 	if (amdgpu_ras_query_error_status(adev, &info) != 0)
@@ -4923,6 +4930,9 @@ void amdgpu_ras_event_log_print(struct amdgpu_device *adev, u64 event_id,
 bool amdgpu_ras_is_rma(struct amdgpu_device *adev)
 {
 	struct amdgpu_ras *con = amdgpu_ras_get_context(adev);
+
+	if (amdgpu_sriov_vf(adev))
+		return adev->virt.unrecov_err;
 
 	if (amdgpu_uniras_enabled(adev))
 		return amdgpu_ras_mgr_is_rma(adev);

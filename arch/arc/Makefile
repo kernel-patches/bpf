@@ -71,8 +71,6 @@ cflags-$(disable_small_data)		+= -mno-sdata
 cflags-$(CONFIG_CPU_BIG_ENDIAN)		+= -mbig-endian
 ldflags-$(CONFIG_CPU_BIG_ENDIAN)	+= -EB
 
-LIBGCC	= $(shell $(CC) $(cflags-y) --print-libgcc-file-name)
-
 # Modules with short calls might break for calls into builtin-kernel
 KBUILD_CFLAGS_MODULE	+= -mlong-calls -mno-millicode
 
@@ -87,13 +85,6 @@ core-$(CONFIG_ARC_PLAT_AXS10X)	+= arch/arc/plat-axs10x/
 core-$(CONFIG_ARC_SOC_HSDK)	+= arch/arc/plat-hsdk/
 
 libs-y		+= arch/arc/lib/
-
-ifdef CONFIG_DEBUG_INFO_BTF
-export LIBGCC := $(LIBGCC)
-libs-y		+= arch/arc/lib/libgcc.a
-else
-libs-y		+= $(LIBGCC)
-endif
 
 boot		:= arch/arc/boot
 

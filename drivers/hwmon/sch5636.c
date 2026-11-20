@@ -57,7 +57,7 @@ struct sch5636_data {
 
 	struct mutex update_lock;
 	bool valid;			/* true if following fields are valid */
-	unsigned long last_updated;	/* In jiffies */
+	u64 last_updated;		/* In jiffies */
 	u8 in[SCH5636_NO_INS];
 	u8 temp_val[SCH5636_NO_TEMPS];
 	u8 temp_ctrl[SCH5636_NO_TEMPS];
@@ -74,7 +74,8 @@ static struct sch5636_data *sch5636_update_device(struct device *dev)
 	mutex_lock(&data->update_lock);
 
 	/* Cache the values for 1 second */
-	if (data->valid && !time_after(jiffies, data->last_updated + HZ))
+	if (data->valid &&
+	    !time_after64(get_jiffies_64(), data->last_updated + HZ))
 		goto abort;
 
 	for (i = 0; i < SCH5636_NO_INS; i++) {
@@ -139,7 +140,7 @@ static struct sch5636_data *sch5636_update_device(struct device *dev)
 		}
 	}
 
-	data->last_updated = jiffies;
+	data->last_updated = get_jiffies_64();
 	data->valid = true;
 abort:
 	mutex_unlock(&data->update_lock);
@@ -392,8 +393,7 @@ static int sch5636_probe(struct platform_device *pdev)
 	int i, err, val, revision[2];
 	char id[4];
 
-	data = devm_kzalloc(&pdev->dev, sizeof(struct sch5636_data),
-			    GFP_KERNEL);
+	data = devm_kzalloc_obj(&pdev->dev, struct sch5636_data);
 	if (!data)
 		return -ENOMEM;
 

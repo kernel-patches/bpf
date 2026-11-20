@@ -6,7 +6,7 @@
  * Copyright (C) 2016-2019 Corentin LABBE <clabbe.montjoie@gmail.com>
  *
  * This file add support for AES cipher with 128,192,256 bits keysize in
- * CBC and ECB mode.
+ * CBC and ECB mode, and for AES-XTS with 256 and 512 bits keysize.
  *
  * You could find a link for the datasheet in Documentation/arch/arm/sunxi.rst
  */
@@ -19,17 +19,33 @@
 #include <crypto/scatterwalk.h>
 #include <crypto/internal/des.h>
 #include <crypto/internal/skcipher.h>
+#include <crypto/xts.h>
 #include "sun8i-ce.h"
+
+/*
+ * XTS uses the request IV as the tweak of its first block and returns no IV,
+ * CBC returns the last ciphertext block as the IV of the next request.
+ */
+static bool sun8i_ce_cipher_iv_out(struct sun8i_ce_alg_template *algt)
+{
+	return algt->ce_blockmode != CE_ID_OP_XTS;
+}
 
 static int sun8i_ce_cipher_need_fallback(struct skcipher_request *areq)
 {
 	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(areq);
 	struct scatterlist *sg;
+	struct sun8i_cipher_tfm_ctx *op = crypto_skcipher_ctx(tfm);
 	struct skcipher_alg *alg = crypto_skcipher_alg(tfm);
 	struct sun8i_ce_alg_template *algt;
 	unsigned int todo, len;
 
 	algt = container_of(alg, struct sun8i_ce_alg_template, alg.skcipher.base);
+
+	/* The XTS unit takes two 128-bit or two 256-bit keys only */
+	if (algt->ce_blockmode == CE_ID_OP_XTS &&
+	    op->keylen == 2 * AES_KEYSIZE_192)
+		return true;
 
 	if (sg_nents_for_len(areq->src, areq->cryptlen) > MAX_SG ||
 	    sg_nents_for_len(areq->dst, areq->cryptlen) > MAX_SG) {
@@ -164,7 +180,10 @@ static int sun8i_ce_cipher_prepare(struct skcipher_request *areq,
 	memset(cet, 0, sizeof(struct ce_task));
 
 	cet->t_id = cpu_to_le32(rctx->flow);
-	common = ce->variant->alg_cipher[algt->ce_algo_id];
+	if (algt->ce_blockmode == CE_ID_OP_XTS)
+		common = CE_ALG_RAES;
+	else
+		common = ce->variant->alg_cipher[algt->ce_algo_id];
 	common |= rctx->op_dir | CE_COMM_INT;
 	cet->t_common_ctl = cpu_to_le32(common);
 	/* CTS and recent CE (H6) need length in bytes, in word otherwise */
@@ -175,6 +194,15 @@ static int sun8i_ce_cipher_prepare(struct skcipher_request *areq,
 
 	sym = ce->variant->op_mode[algt->ce_blockmode];
 	len = op->keylen;
+	if (algt->ce_blockmode == CE_ID_OP_XTS) {
+		/*
+		 * One request is one data unit: its first block uses the
+		 * tweak from the IV, its last block ends the data unit. The
+		 * key size field gives the size of each of the two keys.
+		 */
+		sym |= CE_SYM_XTS_FIRST | CE_SYM_XTS_LAST;
+		len /= 2;
+	}
 	switch (len) {
 	case 128 / 8:
 		sym |= CE_AES_128BITS;
@@ -200,7 +228,8 @@ static int sun8i_ce_cipher_prepare(struct skcipher_request *areq,
 
 	ivsize = crypto_skcipher_ivsize(tfm);
 	if (areq->iv && ivsize > 0) {
-		if (rctx->op_dir & CE_DECRYPTION) {
+		if (sun8i_ce_cipher_iv_out(algt) &&
+		    (rctx->op_dir & CE_DECRYPTION)) {
 			offset = areq->cryptlen - ivsize;
 			scatterwalk_map_and_copy(rctx->backup_iv, areq->src,
 						 offset, ivsize, 0);
@@ -290,13 +319,15 @@ theend_iv:
 			dma_unmap_single(ce->dev, rctx->addr_iv, ivsize,
 					 DMA_TO_DEVICE);
 
-		offset = areq->cryptlen - ivsize;
-		if (rctx->op_dir & CE_DECRYPTION) {
-			memcpy(areq->iv, rctx->backup_iv, ivsize);
-			memzero_explicit(rctx->backup_iv, ivsize);
-		} else {
-			scatterwalk_map_and_copy(areq->iv, areq->dst, offset,
-						 ivsize, 0);
+		if (sun8i_ce_cipher_iv_out(algt)) {
+			offset = areq->cryptlen - ivsize;
+			if (rctx->op_dir & CE_DECRYPTION) {
+				memcpy(areq->iv, rctx->backup_iv, ivsize);
+				memzero_explicit(rctx->backup_iv, ivsize);
+			} else {
+				scatterwalk_map_and_copy(areq->iv, areq->dst,
+							 offset, ivsize, 0);
+			}
 		}
 		memzero_explicit(rctx->bounce_iv, ivsize);
 	}
@@ -314,10 +345,13 @@ static void sun8i_ce_cipher_unprepare(struct skcipher_request *areq,
 	struct sun8i_cipher_tfm_ctx *op = crypto_skcipher_ctx(tfm);
 	struct sun8i_ce_dev *ce = op->ce;
 	struct sun8i_cipher_req_ctx *rctx = skcipher_request_ctx(areq);
+	struct skcipher_alg *alg = crypto_skcipher_alg(tfm);
+	struct sun8i_ce_alg_template *algt;
 	unsigned int ivsize, offset;
 	int nr_sgs = rctx->nr_sgs;
 	int nr_sgd = rctx->nr_sgd;
 
+	algt = container_of(alg, struct sun8i_ce_alg_template, alg.skcipher.base);
 	ivsize = crypto_skcipher_ivsize(tfm);
 
 	if (areq->src == areq->dst) {
@@ -332,13 +366,15 @@ static void sun8i_ce_cipher_unprepare(struct skcipher_request *areq,
 		if (cet->t_iv)
 			dma_unmap_single(ce->dev, rctx->addr_iv, ivsize,
 					 DMA_TO_DEVICE);
-		offset = areq->cryptlen - ivsize;
-		if (rctx->op_dir & CE_DECRYPTION) {
-			memcpy(areq->iv, rctx->backup_iv, ivsize);
-			memzero_explicit(rctx->backup_iv, ivsize);
-		} else {
-			scatterwalk_map_and_copy(areq->iv, areq->dst, offset,
-						 ivsize, 0);
+		if (sun8i_ce_cipher_iv_out(algt)) {
+			offset = areq->cryptlen - ivsize;
+			if (rctx->op_dir & CE_DECRYPTION) {
+				memcpy(areq->iv, rctx->backup_iv, ivsize);
+				memzero_explicit(rctx->backup_iv, ivsize);
+			} else {
+				scatterwalk_map_and_copy(areq->iv, areq->dst,
+							 offset, ivsize, 0);
+			}
 		}
 		memzero_explicit(rctx->bounce_iv, ivsize);
 	}
@@ -472,6 +508,38 @@ int sun8i_ce_aes_setkey(struct crypto_skcipher *tfm, const u8 *key,
 	case 192 / 8:
 		break;
 	case 256 / 8:
+		break;
+	default:
+		dev_dbg(ce->dev, "ERROR: Invalid keylen %u\n", keylen);
+		return -EINVAL;
+	}
+	kfree_sensitive(op->key);
+	op->keylen = keylen;
+	op->key = kmemdup(key, keylen, GFP_KERNEL | GFP_DMA);
+	if (!op->key)
+		return -ENOMEM;
+
+	crypto_skcipher_clear_flags(op->fallback_tfm, CRYPTO_TFM_REQ_MASK);
+	crypto_skcipher_set_flags(op->fallback_tfm, tfm->base.crt_flags & CRYPTO_TFM_REQ_MASK);
+
+	return crypto_skcipher_setkey(op->fallback_tfm, key, keylen);
+}
+
+int sun8i_ce_xts_setkey(struct crypto_skcipher *tfm, const u8 *key,
+			unsigned int keylen)
+{
+	struct sun8i_cipher_tfm_ctx *op = crypto_skcipher_ctx(tfm);
+	struct sun8i_ce_dev *ce = op->ce;
+	int err;
+
+	err = xts_verify_key(tfm, key, keylen);
+	if (err)
+		return err;
+
+	switch (keylen) {
+	case 2 * AES_KEYSIZE_128:
+	case 2 * AES_KEYSIZE_192:
+	case 2 * AES_KEYSIZE_256:
 		break;
 	default:
 		dev_dbg(ce->dev, "ERROR: Invalid keylen %u\n", keylen);

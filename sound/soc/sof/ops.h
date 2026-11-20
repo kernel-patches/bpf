@@ -725,9 +725,5 @@ bool snd_sof_dsp_update_bits64(struct snd_sof_dev *sdev, u32 bar,
 void snd_sof_dsp_update_bits_forced(struct snd_sof_dev *sdev, u32 bar,
 				    u32 offset, u32 mask, u32 value);
 
-int snd_sof_dsp_register_poll(struct snd_sof_dev *sdev, u32 bar, u32 offset,
-			      u32 mask, u32 target, u32 timeout_ms,
-			      u32 interval_us);
-
 void snd_sof_dsp_panic(struct snd_sof_dev *sdev, u32 offset, bool non_recoverable);
 #endif

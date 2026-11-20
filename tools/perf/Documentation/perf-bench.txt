@@ -351,6 +351,12 @@ SUITES FOR 'internals'
 *synthesize*::
 Suite for evaluating perf's event synthesis performance.
 
+*symbols*::
+Suite for evaluating ELF symbol loading, sorting, and lookup performance.
+
+*maps*::
+Suite for evaluating maps insertion, sorting, and lookup performance.
+
 SEE ALSO
 --------
 linkperf:perf[1]

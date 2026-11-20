@@ -413,9 +413,7 @@ enum dc_status dcn60_apply_single_controller_ctx_to_hw(
 			dc_is_virtual_signal(pipe_ctx->stream->signal)))
 			dc->link_srv->set_dsc_enable(pipe_ctx, true);
 	}
-	if (!stream->dpms_off &&
-	    !(link->connector_signal == SIGNAL_TYPE_EDP &&
-	      link->forced_psr_active))
+	if (!stream->dpms_off)
 		dc->link_srv->set_dpms_on(context, pipe_ctx);
 
 	/* DCN3.1 FPGA Workaround
@@ -1332,5 +1330,14 @@ bool dcn60_apply_idle_power_optimizations(struct dc *dc, bool enable)
 		clk_mgr->funcs->set_idle_power_optimizations(clk_mgr, allow_idle);
 	}
 
+	return true;
+}
+
+bool dcn60_dsc_pg_status(struct dce_hwseq *hws, unsigned int dsc_inst)
+{
+	(void)hws;
+	(void)dsc_inst;
+
+	/* DCN6.0 has no DSC power-gate domain, so the DSC is always ungated. */
 	return true;
 }

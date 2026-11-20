@@ -273,7 +273,7 @@ static int em_gio_probe(struct platform_device *pdev)
 	unsigned int ngpios;
 	int irq[2], ret;
 
-	p = devm_kzalloc(dev, sizeof(*p), GFP_KERNEL);
+	p = devm_kzalloc_obj(dev, *p);
 	if (!p)
 		return -ENOMEM;
 
@@ -357,8 +357,8 @@ static int em_gio_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id em_gio_dt_ids[] = {
-	{ .compatible = "renesas,em-gio", },
-	{},
+	{ .compatible = "renesas,em-gio" },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, em_gio_dt_ids);
 

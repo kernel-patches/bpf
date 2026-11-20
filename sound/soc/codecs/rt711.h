@@ -8,8 +8,6 @@
 #ifndef __RT711_H__
 #define __RT711_H__
 
-extern const struct dev_pm_ops rt711_runtime_pm;
-
 struct  rt711_priv {
 	struct regmap *regmap;
 	struct regmap *sdw_regmap;
@@ -246,6 +244,5 @@ int rt711_io_init(struct device *dev, struct sdw_slave *slave);
 int rt711_init(struct device *dev, struct regmap *sdw_regmap,
 	       struct regmap *regmap, struct sdw_slave *slave);
 
-int rt711_jack_detect(struct rt711_priv *rt711, bool *hp, bool *mic);
 int rt711_clock_config(struct device *dev);
 #endif /* __RT711_H__ */

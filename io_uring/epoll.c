@@ -69,8 +69,6 @@ int io_epoll_ctl(struct io_kiocb *req, unsigned int issue_flags)
 	if (force_nonblock && ret == -EAGAIN)
 		return -EAGAIN;
 
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -95,8 +93,6 @@ int io_epoll_wait(struct io_kiocb *req, unsigned int issue_flags)
 	ret = epoll_sendevents(req->file, iew->events, iew->maxevents);
 	if (ret == 0)
 		return -EAGAIN;
-	if (ret < 0)
-		req_set_fail(req);
 
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;

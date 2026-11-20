@@ -175,7 +175,7 @@ static int zevio_gpio_probe(struct platform_device *pdev)
 	struct zevio_gpio *controller;
 	int status, i;
 
-	controller = devm_kzalloc(&pdev->dev, sizeof(*controller), GFP_KERNEL);
+	controller = devm_kzalloc_obj(&pdev->dev, *controller);
 	if (!controller)
 		return -ENOMEM;
 
@@ -210,9 +210,10 @@ static int zevio_gpio_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id zevio_gpio_of_match[] = {
-	{ .compatible = "lsi,zevio-gpio", },
-	{ },
+	{ .compatible = "lsi,zevio-gpio" },
+	{ }
 };
+MODULE_DEVICE_TABLE(of, zevio_gpio_of_match);
 
 static struct platform_driver zevio_gpio_driver = {
 	.driver		= {

@@ -59,10 +59,6 @@ static int zonefs_read_iomap_begin(struct inode *inode, loff_t offset,
 
 static DEFINE_IOMAP_ITER_NEXT(zonefs_read_iomap_next, zonefs_read_iomap_begin);
 
-static const struct iomap_ops zonefs_read_iomap_ops = {
-	.iomap_next	= zonefs_read_iomap_next,
-};
-
 static int zonefs_write_iomap_begin(struct inode *inode, loff_t offset,
 				    loff_t length, unsigned int flags,
 				    struct iomap *iomap, struct iomap *srcmap)
@@ -111,19 +107,15 @@ static int zonefs_write_iomap_begin(struct inode *inode, loff_t offset,
 static DEFINE_IOMAP_ITER_NEXT(zonefs_write_iomap_next,
 			      zonefs_write_iomap_begin);
 
-static const struct iomap_ops zonefs_write_iomap_ops = {
-	.iomap_next	= zonefs_write_iomap_next,
-};
-
 static int zonefs_read_folio(struct file *unused, struct folio *folio)
 {
-	iomap_bio_read_folio(folio, &zonefs_read_iomap_ops);
+	iomap_bio_read_folio(folio, zonefs_read_iomap_next);
 	return 0;
 }
 
 static void zonefs_readahead(struct readahead_control *rac)
 {
-	iomap_bio_readahead(rac, &zonefs_read_iomap_ops);
+	iomap_bio_readahead(rac, zonefs_read_iomap_next);
 }
 
 /*
@@ -184,7 +176,7 @@ static int zonefs_swap_activate(struct swap_info_struct *sis,
 	}
 
 	return iomap_swapfile_activate(sis, swap_file, span,
-				       &zonefs_read_iomap_ops);
+				       zonefs_read_iomap_next);
 }
 
 const struct address_space_operations zonefs_file_aops = {
@@ -314,7 +306,7 @@ static vm_fault_t zonefs_filemap_page_mkwrite(struct vm_fault *vmf)
 
 	/* Serialize against truncates */
 	filemap_invalidate_lock_shared(inode->i_mapping);
-	ret = iomap_page_mkwrite(vmf, &zonefs_write_iomap_ops, NULL);
+	ret = iomap_page_mkwrite(vmf, zonefs_write_iomap_next, NULL);
 	filemap_invalidate_unlock_shared(inode->i_mapping);
 
 	sb_end_pagefault(inode->i_sb);
@@ -530,7 +522,7 @@ static ssize_t zonefs_file_dio_write(struct kiocb *iocb, struct iov_iter *from)
 	 * page invalidation. Overwrite that error code with EBUSY so that
 	 * the user can make sense of the error.
 	 */
-	ret = iomap_dio_rw(iocb, from, &zonefs_write_iomap_ops,
+	ret = iomap_dio_rw(iocb, from, zonefs_write_iomap_next,
 			   &zonefs_write_dio_ops, 0, NULL, 0);
 	if (ret == -ENOTBLK)
 		ret = -EBUSY;
@@ -580,7 +572,7 @@ static ssize_t zonefs_file_buffered_write(struct kiocb *iocb,
 	if (ret <= 0)
 		goto inode_unlock;
 
-	ret = iomap_file_buffered_write(iocb, from, &zonefs_write_iomap_ops,
+	ret = iomap_file_buffered_write(iocb, from, zonefs_write_iomap_next,
 			NULL, NULL);
 	if (ret == -EIO)
 		zonefs_io_error(inode, true);
@@ -601,7 +593,8 @@ static ssize_t zonefs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (unlikely(IS_IMMUTABLE(inode)))
 		return -EPERM;
 
-	if (sb_rdonly(inode->i_sb))
+	/* loop and others call ->write_iter() without rw_verify_area() */
+	if (sb_rdonly_any(inode->i_sb))
 		return -EROFS;
 
 	/* Write operations beyond the zone capacity are not allowed */
@@ -675,7 +668,7 @@ static ssize_t zonefs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 			goto inode_unlock;
 		}
 		file_accessed(iocb->ki_filp);
-		ret = iomap_dio_rw(iocb, to, &zonefs_read_iomap_ops,
+		ret = iomap_dio_rw(iocb, to, zonefs_read_iomap_next,
 				   &zonefs_read_dio_ops, 0, NULL, 0);
 	} else {
 		ret = generic_file_read_iter(iocb, to);
@@ -825,17 +818,15 @@ static void zonefs_seq_file_write_close(struct inode *inode)
 			/*
 			 * Leaving zones explicitly open may lead to a state
 			 * where most zones cannot be written (zone resources
-			 * exhausted). So take preventive action by remounting
-			 * read-only.
+			 * exhausted). So take preventive action by making the
+			 * file system read-only.
 			 */
 			if (z->z_flags & ZONEFS_ZONE_OPEN &&
-			    !(sb->s_flags & SB_RDONLY)) {
+			    !sb_rdonly_any(sb)) {
 				zonefs_warn(sb,
 					"closing zone at %llu failed %d\n",
 					z->z_sector, ret);
-				zonefs_warn(sb,
-					"remounting filesystem read-only\n");
-				sb->s_flags |= SB_RDONLY;
+				zonefs_set_emergency_ro(sb);
 			}
 			goto unlock;
 		}

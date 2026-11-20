@@ -401,8 +401,7 @@ static int atmel_tdes_crypt_dma(struct atmel_tdes_dev *dd,
 	if (!out_desc)
 		return -EINVAL;
 
-	out_desc->callback = atmel_tdes_dma_callback;
-	out_desc->callback_param = dd;
+	dmaengine_desc_set_callback(out_desc, atmel_tdes_dma_callback, NULL, dd);
 
 	dmaengine_submit(out_desc);
 	dma_async_issue_pending(dd->dma_lch_out.chan);
@@ -905,7 +904,7 @@ static int atmel_tdes_probe(struct platform_device *pdev)
 	struct resource *tdes_res;
 	int err;
 
-	tdes_dd = devm_kzalloc(&pdev->dev, sizeof(*tdes_dd), GFP_KERNEL);
+	tdes_dd = devm_kzalloc_obj(&pdev->dev, *tdes_dd);
 	if (!tdes_dd)
 		return -ENOMEM;
 

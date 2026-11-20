@@ -754,6 +754,28 @@ intel_spi_match_mem_op(struct intel_spi *ispi, const struct spi_mem_op *op)
 	return NULL;
 }
 
+static bool intel_spi_op_uses_opmenu(const struct intel_spi *ispi,
+				     const struct intel_spi_mem_op *iop,
+				     const struct spi_mem_op *op)
+{
+	if (iop->exec_op == intel_spi_read_reg)
+		return ispi->swseq_reg;
+	if (iop->exec_op == intel_spi_write_reg) {
+		/*
+		 * WREN is issued through PREOP_OPTYPE as an atomic
+		 * preopcode and WRDI is a no-op, so neither uses the opmenu.
+		 */
+		if (op->cmd.opcode == SPINOR_OP_WREN ||
+		    op->cmd.opcode == SPINOR_OP_WRDI)
+			return false;
+		return ispi->swseq_reg;
+	}
+	if (iop->exec_op == intel_spi_erase)
+		return ispi->swseq_erase;
+	/* Data reads and writes always use the HW sequencer */
+	return false;
+}
+
 static bool intel_spi_supports_mem_op(struct spi_mem *mem,
 				      const struct spi_mem_op *op)
 {
@@ -768,9 +790,11 @@ static bool intel_spi_supports_mem_op(struct spi_mem *mem,
 
 	/*
 	 * For software sequencer check that the opcode is actually
-	 * present in the opmenu if it is locked.
+	 * present in the opmenu if it is locked. Operations executed by
+	 * the hardware sequencer, as well as WREN and WRDI, do not use the
+	 * opmenu so skip the check for them.
 	 */
-	if (ispi->swseq_reg && ispi->locked) {
+	if (ispi->locked && intel_spi_op_uses_opmenu(ispi, iop, op)) {
 		int i;
 
 		/* Check if it is in the locked opcodes list */
@@ -1383,13 +1407,13 @@ static int intel_spi_populate_chip(struct intel_spi *ispi)
 	if (ret)
 		return ret;
 
-	pdata = devm_kzalloc(ispi->dev, sizeof(*pdata), GFP_KERNEL);
+	pdata = devm_kzalloc_obj(ispi->dev, *pdata);
 	if (!pdata)
 		return -ENOMEM;
 
 	pdata->nr_parts = 1;
-	pdata->parts = devm_kcalloc(ispi->dev, pdata->nr_parts,
-				    sizeof(*pdata->parts), GFP_KERNEL);
+	pdata->parts = devm_kzalloc_objs(ispi->dev, *pdata->parts,
+					 pdata->nr_parts);
 	if (!pdata->parts)
 		return -ENOMEM;
 
@@ -1406,7 +1430,7 @@ static int intel_spi_populate_chip(struct intel_spi *ispi)
 	if (ispi->host->num_chipselect < 2)
 		return 0;
 
-	pdata = devm_kzalloc(ispi->dev, sizeof(*pdata), GFP_KERNEL);
+	pdata = devm_kzalloc_obj(ispi->dev, *pdata);
 	if (!pdata)
 		return -ENOMEM;
 
@@ -1416,8 +1440,7 @@ static int intel_spi_populate_chip(struct intel_spi *ispi)
 		return -ENOMEM;
 
 	pdata->nr_parts = 1;
-	parts = devm_kcalloc(ispi->dev, pdata->nr_parts, sizeof(*parts),
-			     GFP_KERNEL);
+	parts = devm_kzalloc_objs(ispi->dev, *parts, pdata->nr_parts);
 	if (!parts)
 		return -ENOMEM;
 

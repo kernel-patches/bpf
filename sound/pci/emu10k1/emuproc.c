@@ -382,7 +382,7 @@ static void snd_emu10k1_proc_acode_read(struct snd_info_entry *entry,
 
 static ssize_t snd_emu10k1_fx8010_read(struct snd_info_entry *entry,
 				       void *file_private_data,
-				       struct file *file, char __user *buf,
+				       struct file *file, char *buf,
 				       size_t count, loff_t pos)
 {
 	struct snd_emu10k1 *emu = entry->private_data;
@@ -415,10 +415,8 @@ static ssize_t snd_emu10k1_fx8010_read(struct snd_info_entry *entry,
 		}
 		tmp[idx] = val;
 	}
-	if (copy_to_user(buf, ((char *)tmp) + (pos & 3), count))
-		res = -EFAULT;
-	else
-		res = count;
+	memcpy(buf, ((char *)tmp) + (pos & 3), count);
+	res = count;
 	kfree(tmp);
 	return res;
 }

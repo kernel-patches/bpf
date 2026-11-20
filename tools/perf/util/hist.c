@@ -119,8 +119,8 @@ void hists__calc_col_len(struct hists *hists, struct hist_entry *h)
 		hists__new_col_len(hists, HISTC_DSO, len);
 	}
 
-	if (h->parent)
-		hists__new_col_len(hists, HISTC_PARENT, h->parent->namelen);
+	if (h->parent.sym)
+		hists__new_col_len(hists, HISTC_PARENT, h->parent.sym->namelen);
 
 	if (h->branch_info) {
 		if (h->branch_info->from.ms.sym) {
@@ -543,6 +543,7 @@ static int hist_entry__init(struct hist_entry *he,
 
 	he->ms.thread = thread__get(he->ms.thread);
 	he->ms.map = map__get(he->ms.map);
+	dso_symbol__copy(&he->parent, &template->parent);
 
 	if (he->branch_info) {
 		/*
@@ -616,6 +617,7 @@ err_infos:
 	if (he->mem_info)
 		mem_info__zput(he->mem_info);
 err:
+	dso_symbol__exit(&he->parent);
 	map_symbol__exit(&he->ms);
 	zfree(&he->stat_acc);
 	return -ENOMEM;
@@ -723,9 +725,12 @@ static struct hist_entry *hists__findnew_entry(struct hists *hists,
 			 * become out-of-date due to an exec() or
 			 * similar, update it.  Otherwise we will
 			 * mis-adjust symbol addresses when computing
-			 * the history counter to increment.
+			 * the history counter to increment.  Skip it when the
+			 * new sample has no map (an unresolved address):
+			 * there is nothing to update to.
 			 */
-			if (hists__has(hists, sym) && he->ms.map != entry->ms.map) {
+			if (hists__has(hists, sym) && entry->ms.map &&
+			    he->ms.map != entry->ms.map) {
 				if (he->ms.sym) {
 					u64 addr = he->ms.sym->start;
 					he->ms.sym = map__find_symbol(entry->ms.map, addr);
@@ -796,7 +801,7 @@ static void hists__res_sample(struct hist_entry *he, struct perf_sample *sample)
 static struct hist_entry*
 __hists__add_entry(struct hists *hists,
 		   struct addr_location *al,
-		   struct symbol *sym_parent,
+		   const struct dso_symbol *sym_parent,
 		   struct branch_info *bi,
 		   struct mem_info *mi,
 		   struct kvm_info *ki,
@@ -835,8 +840,9 @@ __hists__add_entry(struct hists *hists,
 			.weight3 = sample->weight3,
 			.latency = al->latency,
 		},
-		.parent = sym_parent,
-		.filtered = symbol__parent_filter(sym_parent) | al->filtered,
+		.parent = sym_parent ? *sym_parent : (struct dso_symbol){},
+		.filtered = symbol__parent_filter(sym_parent ? sym_parent->sym : NULL) |
+			    al->filtered,
 		.hists	= hists,
 		.branch_info = bi,
 		.mem_info = mi,
@@ -862,7 +868,7 @@ __hists__add_entry(struct hists *hists,
 
 struct hist_entry *hists__add_entry(struct hists *hists,
 				    struct addr_location *al,
-				    struct symbol *sym_parent,
+				    const struct dso_symbol *sym_parent,
 				    struct branch_info *bi,
 				    struct mem_info *mi,
 				    struct kvm_info *ki,
@@ -876,7 +882,7 @@ struct hist_entry *hists__add_entry(struct hists *hists,
 struct hist_entry *hists__add_entry_ops(struct hists *hists,
 					struct hist_entry_ops *ops,
 					struct addr_location *al,
-					struct symbol *sym_parent,
+					const struct dso_symbol *sym_parent,
 					struct branch_info *bi,
 					struct mem_info *mi,
 					struct kvm_info *ki,
@@ -957,7 +963,7 @@ iter_add_single_mem_entry(struct hist_entry_iter *iter, struct addr_location *al
 	 */
 	sample->period = cost;
 
-	he = hists__add_entry(hists, al, iter->parent, NULL, mi, NULL,
+	he = hists__add_entry(hists, al, &iter->parent, NULL, mi, NULL,
 			      sample, true);
 	if (!he)
 		return -ENOMEM;
@@ -1055,9 +1061,9 @@ iter_add_next_branch_entry(struct hist_entry_iter *iter, struct addr_location *a
 	 * and not events sampled. Thus we use a pseudo period of 1.
 	 */
 	sample->period = 1;
-	sample->weight = bi->flags.cycles ? bi->flags.cycles : 1;
+	sample->weight = bi[i].flags.cycles ? bi[i].flags.cycles : 1;
 
-	he = hists__add_entry(hists, al, iter->parent, &bi[i], NULL, NULL,
+	he = hists__add_entry(hists, al, &iter->parent, &bi[i], NULL, NULL,
 			      sample, true);
 	if (he == NULL)
 		return -ENOMEM;
@@ -1109,7 +1115,7 @@ iter_add_single_normal_entry(struct hist_entry_iter *iter, struct addr_location 
 	struct evsel *evsel = sample->evsel;
 	struct hist_entry *he;
 
-	he = hists__add_entry(evsel__hists(evsel), al, iter->parent, NULL, NULL,
+	he = hists__add_entry(evsel__hists(evsel), al, &iter->parent, NULL, NULL,
 			      NULL, sample, true);
 	if (he == NULL)
 		return -ENOMEM;
@@ -1174,7 +1180,7 @@ iter_add_single_cumulative_entry(struct hist_entry_iter *iter,
 	struct hist_entry *he;
 	int err = 0;
 
-	he = hists__add_entry(hists, al, iter->parent, NULL, NULL, NULL,
+	he = hists__add_entry(hists, al, &iter->parent, NULL, NULL, NULL,
 			      sample, true);
 	if (he == NULL)
 		return -ENOMEM;
@@ -1277,7 +1283,7 @@ iter_add_next_cumulative_entry(struct hist_entry_iter *iter,
 		}
 	}
 
-	he = hists__add_entry(evsel__hists(evsel), al, iter->parent, NULL, NULL,
+	he = hists__add_entry(evsel__hists(evsel), al, &iter->parent, NULL, NULL,
 			      NULL, sample, false);
 	if (he == NULL)
 		return -ENOMEM;
@@ -1340,12 +1346,14 @@ int hist_entry_iter__add(struct hist_entry_iter *iter, struct addr_location *al,
 	int err, err2;
 	struct map *alm = NULL;
 
+	dso_symbol__exit(&iter->parent);
 	if (al)
 		alm = map__get(al->map);
 
 	err = sample__resolve_callchain(iter->sample, get_tls_callchain_cursor(), &iter->parent,
 					al, max_stack_depth);
 	if (err) {
+		dso_symbol__exit(&iter->parent);
 		map__put(alm);
 		return err;
 	}
@@ -1381,6 +1389,7 @@ out:
 	if (!err)
 		err = err2;
 
+	dso_symbol__exit(&iter->parent);
 	map__put(alm);
 
 	return err;
@@ -1468,6 +1477,7 @@ void hist_entry__delete(struct hist_entry *he)
 
 	thread__zput(he->thread);
 	map_symbol__exit(&he->ms);
+	dso_symbol__exit(&he->parent);
 
 	if (he->branch_info) {
 		branch_info__exit(he->branch_info);

@@ -3501,10 +3501,9 @@ static struct its_device *its_create_device(struct its_node *its, u32 dev_id,
 	if (alloc_lpis) {
 		lpi_map = its_lpi_alloc(nvecs, &lpi_base, &nr_lpis);
 		if (lpi_map)
-			col_map = kcalloc(nr_lpis, sizeof(*col_map),
-					  GFP_KERNEL);
+			col_map = kzalloc_objs(*col_map, nr_lpis);
 	} else {
-		col_map = kcalloc(nr_ites, sizeof(*col_map), GFP_KERNEL);
+		col_map = kzalloc_objs(*col_map, nr_ites);
 		nr_lpis = 0;
 		lpi_base = 0;
 	}
@@ -5572,7 +5571,6 @@ static void its_node_destroy(struct its_node *its)
 
 static int __init its_of_probe(struct device_node *node)
 {
-	struct device_node *np;
 	struct resource res;
 	int err;
 
@@ -5582,8 +5580,8 @@ static int __init its_of_probe(struct device_node *node)
 	 * reset, don't even try to go any further, as this could
 	 * result in something even worse.
 	 */
-	for (np = of_find_matching_node(node, its_device_id); np;
-	     np = of_find_matching_node(np, its_device_id)) {
+	for (struct device_node *np __free(device_node) = of_find_matching_node(node, its_device_id);
+	     np; np = of_find_matching_node(np, its_device_id)) {
 		if (!of_device_is_available(np) ||
 		    !of_property_read_bool(np, "msi-controller") ||
 		    of_address_to_resource(np, 0, &res))
@@ -5594,8 +5592,8 @@ static int __init its_of_probe(struct device_node *node)
 			return err;
 	}
 
-	for (np = of_find_matching_node(node, its_device_id); np;
-	     np = of_find_matching_node(np, its_device_id)) {
+	for (struct device_node *np __free(device_node) = of_find_matching_node(node, its_device_id);
+	     np; np = of_find_matching_node(np, its_device_id)) {
 		struct its_node *its;
 
 		if (!of_device_is_available(np))

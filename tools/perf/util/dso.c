@@ -1949,7 +1949,8 @@ bool dso__build_id_equal(const struct dso *dso, const struct build_id *bid)
 {
 	const struct build_id *dso_bid = dso__bid(dso);
 
-	if (dso_bid->size > bid->size && dso_bid->size == BUILD_ID_SIZE) {
+	if (dso_bid->size > bid->size && bid->size > 0 &&
+	    dso_bid->size == BUILD_ID_SIZE) {
 		/*
 		 * For the backward compatibility, it allows a build-id has
 		 * trailing zeros.
@@ -1957,6 +1958,13 @@ bool dso__build_id_equal(const struct dso *dso, const struct build_id *bid)
 		return !memcmp(dso_bid->data, bid->data, bid->size) &&
 			!memchr_inv(&dso_bid->data[bid->size], 0,
 				    dso_bid->size - bid->size);
+	}
+
+	if (bid->size > dso_bid->size && dso_bid->size > 0 &&
+	    bid->size == BUILD_ID_SIZE) {
+		return !memcmp(dso_bid->data, bid->data, dso_bid->size) &&
+			!memchr_inv(&bid->data[dso_bid->size], 0,
+				    bid->size - dso_bid->size);
 	}
 
 	return dso_bid->size == bid->size &&

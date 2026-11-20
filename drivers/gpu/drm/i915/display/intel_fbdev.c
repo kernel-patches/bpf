@@ -75,9 +75,10 @@ static struct intel_frontbuffer *to_frontbuffer(struct intel_fbdev *ifbdev)
 	return ifbdev->fb->frontbuffer;
 }
 
-static void intel_fbdev_invalidate(struct intel_fbdev *ifbdev)
+/* The console operation has already completed, hence flush not invalidate. */
+static void intel_fbdev_flush(struct intel_fbdev *ifbdev)
 {
-	intel_frontbuffer_invalidate(to_frontbuffer(ifbdev), ORIGIN_CPU);
+	intel_frontbuffer_flush(to_frontbuffer(ifbdev), ORIGIN_CPU);
 }
 
 FB_GEN_DEFAULT_DEFERRED_IOMEM_OPS(intel_fbdev,
@@ -91,7 +92,7 @@ static int intel_fbdev_set_par(struct fb_info *info)
 
 	ret = drm_fb_helper_set_par(info);
 	if (ret == 0)
-		intel_fbdev_invalidate(ifbdev);
+		intel_fbdev_flush(ifbdev);
 
 	return ret;
 }
@@ -103,7 +104,7 @@ static int intel_fbdev_blank(int blank, struct fb_info *info)
 
 	ret = drm_fb_helper_blank(blank, info);
 	if (ret == 0)
-		intel_fbdev_invalidate(ifbdev);
+		intel_fbdev_flush(ifbdev);
 
 	return ret;
 }
@@ -116,7 +117,7 @@ static int intel_fbdev_pan_display(struct fb_var_screeninfo *var,
 
 	ret = drm_fb_helper_pan_display(var, info);
 	if (ret == 0)
-		intel_fbdev_invalidate(ifbdev);
+		intel_fbdev_flush(ifbdev);
 
 	return ret;
 }
@@ -180,7 +181,7 @@ static void intelfb_restore(struct drm_fb_helper *fb_helper)
 {
 	struct intel_fbdev *ifbdev = to_intel_fbdev(fb_helper);
 
-	intel_fbdev_invalidate(ifbdev);
+	intel_fbdev_flush(ifbdev);
 }
 
 static void intelfb_set_suspend(struct drm_fb_helper *fb_helper, bool suspend)
@@ -262,6 +263,50 @@ err:
 
 }
 
+static struct intel_framebuffer *
+__intel_fbdev_fb_realloc(struct intel_display *display,
+			 const struct drm_framebuffer *orig_fb,
+			 struct drm_gem_object *obj)
+{
+	struct drm_framebuffer *new_fb;
+	struct drm_mode_fb_cmd2 mode_cmd = {
+		.flags = DRM_MODE_FB_MODIFIERS,
+		.width = orig_fb->width,
+		.height = orig_fb->height,
+		.pitches[0] = orig_fb->pitches[0],
+		.offsets[0] = orig_fb->offsets[0],
+		.pixel_format = orig_fb->format->format,
+		.modifier[0] = orig_fb->modifier,
+	};
+
+	new_fb = intel_framebuffer_create(obj, orig_fb->format, &mode_cmd);
+
+	if (IS_ERR(new_fb)) {
+		intel_bo_fbdev_destroy(obj);
+		return ERR_CAST(new_fb);
+	}
+
+	drm_gem_object_put(obj);
+	return to_intel_framebuffer(new_fb);
+}
+
+static struct intel_framebuffer *
+intel_fbdev_fb_takeover(struct intel_display *display,
+			struct intel_framebuffer *orig_fb)
+{
+	struct drm_gem_object *new_fb_obj;
+
+	new_fb_obj = intel_bo_fbdev_bios_fb_takeover(orig_fb->base.obj[0]);
+	if (IS_ERR(new_fb_obj))
+		return ERR_CAST(new_fb_obj);
+
+	if (orig_fb->base.obj[0] == new_fb_obj)
+		return orig_fb;
+
+	/* Different object, re-create an intel_framebuffer around it */
+	return __intel_fbdev_fb_realloc(display, &orig_fb->base, new_fb_obj);
+}
+
 static bool bios_fb_ok(const struct intel_framebuffer *fb,
 		       const struct drm_fb_helper_surface_size *sizes)
 {
@@ -305,12 +350,25 @@ int intel_fbdev_driver_fbdev_probe(struct drm_fb_helper *helper,
 
 	ifbdev->fb = NULL;
 
-	if (fb && !bios_fb_ok(fb, sizes)) {
+	wakeref = intel_display_rpm_get(display);
+
+	if (fb && bios_fb_ok(fb, sizes)) {
+		struct intel_framebuffer *bios_fb =
+			intel_fbdev_fb_takeover(display, fb);
+
+		if (IS_ERR(bios_fb)) {
+			drm_dbg_kms(display->drm, "Re-using BIOS fb failed (%pe).", bios_fb);
+			bios_fb = NULL;
+		}
+
+		if (fb != bios_fb) {
+			drm_framebuffer_put(&fb->base);
+			fb = bios_fb;
+		}
+	} else if (fb) {
 		drm_framebuffer_put(&fb->base);
 		fb = NULL;
 	}
-
-	wakeref = intel_display_rpm_get(display);
 
 	if (!fb || drm_WARN_ON(display->drm, !intel_fb_bo(&fb->base))) {
 		drm_dbg_kms(display->drm,

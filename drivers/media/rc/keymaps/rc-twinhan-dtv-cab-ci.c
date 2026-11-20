@@ -72,7 +72,7 @@ static struct rc_map_table twinhan_dtv_cab_ci[] = {
 static struct rc_map_list twinhan_dtv_cab_ci_map = {
 	.map = {
 		.scan     = twinhan_dtv_cab_ci,
-		.size     = ARRAY_SIZE(twinhan_dtv_cab_ci),
+		.entries  = ARRAY_SIZE(twinhan_dtv_cab_ci),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_TWINHAN_DTV_CAB_CI,
 	}

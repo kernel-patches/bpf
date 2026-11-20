@@ -50,7 +50,8 @@ struct io_ctx_config {
 			IORING_FEAT_RECVSEND_BUNDLE |\
 			IORING_FEAT_MIN_TIMEOUT |\
 			IORING_FEAT_RW_ATTR |\
-			IORING_FEAT_NO_IOWAIT)
+			IORING_FEAT_NO_IOWAIT |\
+			IORING_FEAT_REGBUF_TYPES)
 
 #define IORING_SETUP_FLAGS (IORING_SETUP_IOPOLL |\
 			IORING_SETUP_SQPOLL |\
@@ -139,6 +140,7 @@ struct io_wait_queue {
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	ktime_t napi_busy_poll_dt;
+	ktime_t napi_busy_poll_end;
 	bool napi_prefer_busy_poll;
 #endif
 };
@@ -337,19 +339,25 @@ static inline ssize_t io_fixup_restart_res(ssize_t ret)
 	}
 }
 
-static inline void *io_uring_alloc_async_data(struct io_alloc_cache *cache,
-					      struct io_kiocb *req)
+static inline bool
+io_uring_alloc_cached_async_data(struct io_alloc_cache *cache,
+				 struct io_kiocb *req)
 {
-	if (cache) {
-		req->async_data = io_cache_alloc(cache, GFP_KERNEL);
-	} else {
-		const struct io_issue_def *def = &io_issue_defs[req->opcode];
+	if (!io_cache_alloc(cache, GFP_KERNEL, &req->async_data))
+		return false;
 
-		WARN_ON_ONCE(!def->async_size);
-		req->async_data = kmalloc(def->async_size, GFP_KERNEL);
-	}
+	io_req_set_flags(req, REQ_F_ASYNC_DATA);
+	return true;
+}
+
+static inline void *io_uring_alloc_async_data(struct io_kiocb *req)
+{
+	const struct io_issue_def *def = &io_issue_defs[req->opcode];
+
+	WARN_ON_ONCE(!def->async_size);
+	req->async_data = kmalloc(def->async_size, GFP_KERNEL);
 	if (req->async_data)
-		req->flags |= REQ_F_ASYNC_DATA;
+		io_req_set_flags(req, REQ_F_ASYNC_DATA);
 	return req->async_data;
 }
 
@@ -361,7 +369,7 @@ static inline bool req_has_async_data(struct io_kiocb *req)
 static inline void io_req_async_data_clear(struct io_kiocb *req,
 					   io_req_flags_t extra_flags)
 {
-	req->flags &= ~(REQ_F_ASYNC_DATA|extra_flags);
+	io_req_clear_flags(req, REQ_F_ASYNC_DATA | extra_flags);
 	req->async_data = NULL;
 }
 
@@ -564,7 +572,7 @@ static inline bool io_file_can_poll(struct io_kiocb *req)
 	if (req->flags & REQ_F_CAN_POLL)
 		return true;
 	if (req->file && file_can_poll(req->file)) {
-		req->flags |= REQ_F_CAN_POLL;
+		io_req_set_flags(req, REQ_F_CAN_POLL);
 		return true;
 	}
 	return false;

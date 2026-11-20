@@ -131,16 +131,12 @@ static int jpeg_v2_0_sw_init(struct amdgpu_ip_block *ip_block)
  *
  * @ip_block: Pointer to the amdgpu_ip_block for this hw instance.
  *
- * JPEG suspend and free up sw allocation
+ * Free up JPEG sw allocation
  */
 static int jpeg_v2_0_sw_fini(struct amdgpu_ip_block *ip_block)
 {
 	int r;
 	struct amdgpu_device *adev = ip_block->adev;
-
-	r = amdgpu_jpeg_suspend(adev);
-	if (r)
-		return r;
 
 	amdgpu_jpeg_sysfs_reset_mask_fini(adev);
 
@@ -159,11 +155,15 @@ static int jpeg_v2_0_hw_init(struct amdgpu_ip_block *ip_block)
 {
 	struct amdgpu_device *adev = ip_block->adev;
 	struct amdgpu_ring *ring = adev->jpeg.inst->ring_dec;
+	int r;
 
 	adev->nbio.funcs->vcn_doorbell_range(adev, ring->use_doorbell,
 		(adev->doorbell_index.vcn.vcn_ring0_1 << 1), 0);
 
-	return amdgpu_ring_test_helper(ring);
+	r = amdgpu_ring_test_helper(ring);
+	if (r)
+		amdgpu_jpeg_cancel_idle_work(adev);
+	return r;
 }
 
 /**
@@ -177,7 +177,9 @@ static int jpeg_v2_0_hw_fini(struct amdgpu_ip_block *ip_block)
 {
 	struct amdgpu_device *adev = ip_block->adev;
 
-	cancel_delayed_work_sync(&adev->jpeg.idle_work);
+	/* Teardown cancelled it synchronously in early_fini */
+	if (!adev->shutdown)
+		amdgpu_jpeg_cancel_idle_work(adev);
 
 	if (adev->jpeg.cur_state != AMD_PG_STATE_GATE &&
 	      RREG32_SOC15(JPEG, 0, mmUVD_JRBC_STATUS))
@@ -195,15 +197,7 @@ static int jpeg_v2_0_hw_fini(struct amdgpu_ip_block *ip_block)
  */
 static int jpeg_v2_0_suspend(struct amdgpu_ip_block *ip_block)
 {
-	int r;
-
-	r = jpeg_v2_0_hw_fini(ip_block);
-	if (r)
-		return r;
-
-	r = amdgpu_jpeg_suspend(ip_block->adev);
-
-	return r;
+	return jpeg_v2_0_hw_fini(ip_block);
 }
 
 /**
@@ -557,18 +551,19 @@ void jpeg_v2_0_dec_ring_emit_ib(struct amdgpu_ring *ring,
 				uint32_t flags)
 {
 	unsigned vmid = AMDGPU_JOB_GET_VMID(job);
+	uint32_t reg;
 
 	amdgpu_ring_write(ring,	PACKETJ(mmUVD_JPEG_IH_CTRL_INTERNAL_OFFSET,
 		0, 0, PACKETJ_TYPE0));
 	amdgpu_ring_write(ring, (vmid << JPEG_IH_CTRL__IH_VMID__SHIFT));
 
+	reg = (vmid << UVD_LMI_JRBC_IB_VMID__IB_WR_VMID__SHIFT) |
+	      (vmid << UVD_LMI_JRBC_IB_VMID__MEM_RD_VMID__SHIFT);
+	if (!ring->funcs->parse_cs)
+		reg |= (vmid << UVD_LMI_JRBC_IB_VMID__IB_RD_VMID__SHIFT);
 	amdgpu_ring_write(ring, PACKETJ(mmUVD_LMI_JRBC_IB_VMID_INTERNAL_OFFSET,
 		0, 0, PACKETJ_TYPE0));
-
-	if (ring->funcs->parse_cs)
-		amdgpu_ring_write(ring, 0);
-	else
-		amdgpu_ring_write(ring, (vmid | (vmid << 4) | (vmid << 8)));
+	amdgpu_ring_write(ring, reg);
 
 	amdgpu_ring_write(ring, PACKETJ(mmUVD_LMI_JPEG_VMID_INTERNAL_OFFSET,
 		0, 0, PACKETJ_TYPE0));
@@ -787,6 +782,7 @@ static const struct amd_ip_funcs jpeg_v2_0_ip_funcs = {
 	.early_init = jpeg_v2_0_early_init,
 	.sw_init = jpeg_v2_0_sw_init,
 	.sw_fini = jpeg_v2_0_sw_fini,
+	.early_fini = amdgpu_jpeg_early_fini,
 	.hw_init = jpeg_v2_0_hw_init,
 	.hw_fini = jpeg_v2_0_hw_fini,
 	.suspend = jpeg_v2_0_suspend,

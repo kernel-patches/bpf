@@ -123,8 +123,7 @@ static int rt5682_i2c_probe(struct i2c_client *i2c)
 	int i, ret;
 	unsigned int val;
 
-	rt5682 = devm_kzalloc(&i2c->dev, sizeof(struct rt5682_priv),
-		GFP_KERNEL);
+	rt5682 = devm_kzalloc_obj(&i2c->dev, struct rt5682_priv);
 	if (!rt5682)
 		return -ENOMEM;
 
@@ -300,8 +299,8 @@ static void rt5682_i2c_shutdown(struct i2c_client *client)
 	struct rt5682_priv *rt5682 = i2c_get_clientdata(client);
 
 	disable_irq(client->irq);
-	cancel_delayed_work_sync(&rt5682->jack_detect_work);
-	cancel_delayed_work_sync(&rt5682->jd_check_work);
+	disable_delayed_work_sync(&rt5682->jack_detect_work);
+	disable_delayed_work_sync(&rt5682->jd_check_work);
 
 	rt5682_reset(rt5682);
 }

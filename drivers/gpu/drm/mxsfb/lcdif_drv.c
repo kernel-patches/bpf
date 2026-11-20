@@ -74,7 +74,7 @@ static int lcdif_attach_bridge(struct lcdif_drm_private *lcdif)
 					     "Failed to get bridge for endpoint%u\n",
 					     of_ep.id);
 
-		encoder = devm_kzalloc(dev, sizeof(*encoder), GFP_KERNEL);
+		encoder = devm_kzalloc_obj(dev, *encoder);
 		if (!encoder)
 			return dev_err_probe(dev, -ENOMEM,
 					     "Failed to allocate encoder for endpoint%u\n",
@@ -131,7 +131,7 @@ static int lcdif_load(struct drm_device *drm)
 	struct lcdif_drm_private *lcdif;
 	int ret;
 
-	lcdif = devm_kzalloc(&pdev->dev, sizeof(*lcdif), GFP_KERNEL);
+	lcdif = devm_kzalloc_obj(&pdev->dev, *lcdif);
 	if (!lcdif)
 		return -ENOMEM;
 
@@ -195,7 +195,9 @@ static int lcdif_load(struct drm_device *drm)
 	drm->mode_config.funcs		= &lcdif_mode_config_funcs;
 	drm->mode_config.helper_private	= &lcdif_mode_config_helpers;
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		return ret;
 
 	ret = platform_get_irq(pdev, 0);
 	if (ret < 0)

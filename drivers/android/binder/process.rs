@@ -35,6 +35,7 @@ use kernel::{
         Arc, ArcBorrow, CondVar, CondVarTimeoutResult, SetOnce, SpinLock, UniqueArc,
     },
     task::{Pid, Task},
+    time::Delta,
     uaccess::{UserSlice, UserSliceReader},
     uapi,
     workqueue::{self, Work},
@@ -596,7 +597,13 @@ impl Process {
     }
 
     #[inline(never)]
-    pub(crate) fn debug_print(&self, m: &SeqFile, ctx: &Context, print_all: bool) -> Result {
+    pub(crate) fn debug_print(
+        &self,
+        m: &SeqFile,
+        ctx: &Context,
+        print_all: bool,
+        hashed: bool,
+    ) -> Result {
         seq_print!(m, "proc {}\n", self.pid_in_current_ns());
         seq_print!(m, "context {}\n", &*ctx.name);
 
@@ -628,13 +635,13 @@ impl Process {
         }
 
         for thread in all_threads {
-            thread.debug_print(m, print_all)?;
+            thread.debug_print(m, print_all, hashed)?;
         }
 
         let mut inner = self.inner.lock();
         for node in all_nodes {
             if print_all || node.has_oneway_transaction(&mut inner) {
-                node.full_debug_print(m, &mut inner)?;
+                node.full_debug_print(m, &mut inner, hashed)?;
             }
         }
         drop(inner);
@@ -659,7 +666,7 @@ impl Process {
 
         let inner = self.inner.lock();
         for work in &inner.work {
-            work.debug_print(m, "  ", "  pending transaction ")?;
+            work.debug_print(m, "  ", "  pending transaction ", hashed)?;
         }
         for _death in &inner.delivered_deaths {
             seq_print!(m, "  has delivered dead binder\n");
@@ -1552,25 +1559,25 @@ impl Process {
         inner.is_frozen = IsFrozen::InProgress;
 
         if info.timeout_ms > 0 {
-            let mut jiffies = kernel::time::msecs_to_jiffies(info.timeout_ms);
-            while jiffies > 0 {
+            let mut timeout = Delta::from_millis(info.timeout_ms.into()).to_jiffies_timeout();
+            while timeout.as_jiffies() > 0 {
                 if inner.outstanding_txns == 0 {
                     break;
                 }
 
                 match self
                     .freeze_wait
-                    .wait_interruptible_timeout(&mut inner, jiffies)
+                    .wait_interruptible_timeout(&mut inner, timeout)
                 {
                     CondVarTimeoutResult::Signal { .. } => {
                         inner.is_frozen = IsFrozen::No;
                         return Err(ERESTARTSYS);
                     }
-                    CondVarTimeoutResult::Woken { jiffies: remaining } => {
-                        jiffies = remaining;
+                    CondVarTimeoutResult::Woken { remainder } => {
+                        timeout = remainder;
                     }
                     CondVarTimeoutResult::Timeout => {
-                        jiffies = 0;
+                        timeout = Delta::ZERO;
                     }
                 }
             }

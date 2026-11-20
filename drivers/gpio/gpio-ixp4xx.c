@@ -216,7 +216,7 @@ static int ixp4xx_gpio_probe(struct platform_device *pdev)
 	u32 val;
 	int ret;
 
-	g = devm_kzalloc(dev, sizeof(*g), GFP_KERNEL);
+	g = devm_kzalloc_obj(dev, *g);
 	if (!g)
 		return -ENOMEM;
 	g->dev = dev;
@@ -339,9 +339,9 @@ static const struct of_device_id ixp4xx_gpio_of_match[] = {
 	{
 		.compatible = "intel,ixp4xx-gpio",
 	},
-	{},
+	{ }
 };
-
+MODULE_DEVICE_TABLE(of, ixp4xx_gpio_of_match);
 
 static struct platform_driver ixp4xx_gpio_driver = {
 	.driver = {

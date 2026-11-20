@@ -222,13 +222,13 @@ static void hisi_gpio_init_irq(struct hisi_gpio *hisi_gpio)
 }
 
 static const struct acpi_device_id hisi_gpio_acpi_match[] = {
-	{"HISI0184", 0},
-	{}
+	{ .id = "HISI0184" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, hisi_gpio_acpi_match);
 
 static const struct of_device_id hisi_gpio_dts_match[] = {
-	{ .compatible = "hisilicon,ascend910-gpio", },
+	{ .compatible = "hisilicon,ascend910-gpio" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, hisi_gpio_dts_match);
@@ -279,7 +279,7 @@ static int hisi_gpio_probe(struct platform_device *pdev)
 	if (WARN_ON(port_num != 1))
 		return -ENODEV;
 
-	hisi_gpio = devm_kzalloc(dev, sizeof(*hisi_gpio), GFP_KERNEL);
+	hisi_gpio = devm_kzalloc_obj(dev, *hisi_gpio);
 	if (!hisi_gpio)
 		return -ENOMEM;
 

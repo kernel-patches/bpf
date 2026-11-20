@@ -1213,8 +1213,13 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	/* function call */
 	case BPF_JMP | BPF_CALL:
 	{
-		u8 *func = ((u8 *)__bpf_call_base) + imm;
+		bool fixed;
+		u64 func;
+		int err;
 
+		err = bpf_jit_get_func_addr(ctx->prog, insn, ctx->prog->aux->func, &func, &fixed);
+		if (err)
+			return err;
 		ctx->saw_call = true;
 
 		emit_call((u32 *)func, ctx);
@@ -1511,7 +1516,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.prog = prog;
 
-	ctx.offset = kmalloc_array(prog->len, sizeof(unsigned int), GFP_KERNEL);
+	ctx.offset = kmalloc_objs(unsigned int, prog->len);
 	if (ctx.offset == NULL)
 		goto out_err;
 

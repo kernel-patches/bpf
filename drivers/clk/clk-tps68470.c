@@ -206,8 +206,7 @@ static int tps68470_clk_probe(struct platform_device *pdev)
 	int ret;
 	int i;
 
-	tps68470_clkdata = devm_kzalloc(&pdev->dev, sizeof(*tps68470_clkdata),
-					GFP_KERNEL);
+	tps68470_clkdata = devm_kzalloc_obj(&pdev->dev, *tps68470_clkdata);
 	if (!tps68470_clkdata)
 		return -ENOMEM;
 
@@ -251,17 +250,7 @@ static struct platform_driver tps68470_clk_driver = {
  * registering before the drivers for the camera-sensors which use them bind.
  * subsys_initcall() ensures this when the drivers are builtin.
  */
-static int __init tps68470_clk_init(void)
-{
-	return platform_driver_register(&tps68470_clk_driver);
-}
-subsys_initcall(tps68470_clk_init);
-
-static void __exit tps68470_clk_exit(void)
-{
-	platform_driver_unregister(&tps68470_clk_driver);
-}
-module_exit(tps68470_clk_exit);
+subsys_platform_driver(tps68470_clk_driver);
 
 MODULE_ALIAS("platform:tps68470-clk");
 MODULE_DESCRIPTION("clock driver for TPS68470 pmic");

@@ -221,7 +221,7 @@ static int iproc_gpio_probe(struct platform_device *pdev)
 	u32 num_gpios;
 	int irq, ret;
 
-	chip = devm_kzalloc(dev, sizeof(*chip), GFP_KERNEL);
+	chip = devm_kzalloc_obj(dev, *chip);
 	if (!chip)
 		return -ENOMEM;
 
@@ -310,7 +310,7 @@ static void iproc_gpio_remove(struct platform_device *pdev)
 
 static const struct of_device_id bcm_iproc_gpio_of_match[] = {
 	{ .compatible = "brcm,iproc-gpio-cca" },
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(of, bcm_iproc_gpio_of_match);
 

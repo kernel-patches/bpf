@@ -24,28 +24,26 @@
 
 static int spin_sleep(void)
 {
-	struct timeval start, now, diff, maxtime;
-	struct timespec ts;
+	struct timespec start, now, ts;
+	u64 elapsed_ns;
 	int err, i;
 
-	maxtime.tv_sec = 0;
-	maxtime.tv_usec = 50000;
-
-	err = gettimeofday(&start, NULL);
+	err = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start);
 	if (err)
 		return err;
 
-	/* Spin for 50ms */
+	/* Spin for 50ms of thread CPU time */
 	while (1) {
 		for (i = 0; i < 1000; i++)
 			barrier();
 
-		err = gettimeofday(&now, NULL);
+		err = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
 		if (err)
 			return err;
 
-		timersub(&now, &start, &diff);
-		if (timercmp(&diff, &maxtime, > /* For checkpatch */))
+		elapsed_ns = (now.tv_sec - start.tv_sec) * 1000000000ULL +
+			     now.tv_nsec - start.tv_nsec;
+		if (elapsed_ns > 50000000ULL)
 			break;
 	}
 
@@ -62,7 +60,6 @@ static int spin_sleep(void)
 
 struct switch_tracking {
 	struct evsel *switch_evsel;
-	struct evsel *cycles_evsel;
 	pid_t *tids;
 	int nr_tids;
 	int comm_seen[4];
@@ -164,7 +161,7 @@ static int process_sample_event(struct evlist *evlist,
 		switch_tracking->tids[cpu] = next_tid;
 	}
 
-	if (evsel == switch_tracking->cycles_evsel) {
+	if (evsel && evsel__match(evsel, HARDWARE, HW_CPU_CYCLES)) {
 		pr_debug3("cycles event\n");
 		if (!switch_tracking->comm_seen[0])
 			switch_tracking->cycles_before_comm_1 = 1;
@@ -241,7 +238,7 @@ static int add_event(struct evlist *evlist, struct list_head *events,
 		return -1;
 	}
 
-	if (!sample.time) {
+	if (!sample.time || sample.time == -1ULL) {
 		pr_debug("event with no time\n");
 		perf_sample__exit(&sample);
 		return -1;
@@ -394,6 +391,12 @@ static int test__switch_tracking(struct test_suite *test __maybe_unused, int sub
 	}
 
 	cycles_evsel = evlist__last(evlist);
+	evlist__for_each_entry(evlist, evsel) {
+		if (evsel__match(evsel, HARDWARE, HW_CPU_CYCLES)) {
+			evsel__set_sample_bit(evsel, CPU);
+			evsel__set_sample_bit(evsel, TIME);
+		}
+	}
 
 	/* Third event */
 	if (!evlist__can_select_event(evlist, sched_switch)) {
@@ -421,9 +424,6 @@ static int test__switch_tracking(struct test_suite *test __maybe_unused, int sub
 		pr_debug("Failed to move cycles event to front");
 		goto out_err;
 	}
-
-	evsel__set_sample_bit(cycles_evsel, CPU);
-	evsel__set_sample_bit(cycles_evsel, TIME);
 
 	/* Fourth event */
 	err = parse_event(evlist, "dummy:u");
@@ -499,10 +499,14 @@ static int test__switch_tracking(struct test_suite *test __maybe_unused, int sub
 		goto out_err;
 	}
 
-	err = evsel__disable(cycles_evsel);
-	if (err) {
-		pr_debug("perf_evlist__disable_event failed!\n");
-		goto out_err;
+	evlist__for_each_entry(evlist, evsel) {
+		if (!evsel__match(evsel, HARDWARE, HW_CPU_CYCLES))
+			continue;
+		err = evsel__disable(evsel);
+		if (err) {
+			pr_debug("perf_evlist__disable_event failed!\n");
+			goto out_err;
+		}
 	}
 
 	comm = "Test COMM 2";
@@ -525,10 +529,14 @@ static int test__switch_tracking(struct test_suite *test __maybe_unused, int sub
 		goto out_err;
 	}
 
-	err = evsel__enable(cycles_evsel);
-	if (err) {
-		pr_debug("perf_evlist__disable_event failed!\n");
-		goto out_err;
+	evlist__for_each_entry(evlist, evsel) {
+		if (!evsel__match(evsel, HARDWARE, HW_CPU_CYCLES))
+			continue;
+		err = evsel__enable(evsel);
+		if (err) {
+			pr_debug("perf_evlist__enable_event failed!\n");
+			goto out_err;
+		}
 	}
 
 	comm = "Test COMM 4";
@@ -547,7 +555,6 @@ static int test__switch_tracking(struct test_suite *test __maybe_unused, int sub
 	evlist__disable(evlist);
 
 	switch_tracking.switch_evsel = switch_evsel;
-	switch_tracking.cycles_evsel = cycles_evsel;
 
 	err = process_events(evlist, &switch_tracking);
 

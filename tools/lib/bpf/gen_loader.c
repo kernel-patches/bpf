@@ -15,11 +15,6 @@
 #include "bpf_gen_internal.h"
 #include "skel_internal.h"
 
-#define MAX_USED_MAPS	64
-#define MAX_USED_PROGS	32
-#define MAX_KFUNC_DESCS 256
-#define MAX_FD_ARRAY_SZ (MAX_USED_MAPS + MAX_KFUNC_DESCS)
-
 /* The following structure describes the stack layout of the loader program.
  * In addition R6 contains the pointer to context.
  * R7 contains the result of the last sys_bpf command (typically error or FD).
@@ -34,7 +29,6 @@
 struct loader_stack {
 	__u32 btf_fd;
 	__u32 inner_map_fd;
-	__u32 prog_fd[MAX_USED_PROGS];
 };
 
 #define stack_off(field) \
@@ -45,6 +39,16 @@ struct loader_stack {
 static int blob_fd_array_off(struct bpf_gen *gen, int index)
 {
 	return gen->fd_array + index * sizeof(int);
+}
+
+static int blob_prog_fd_off(struct bpf_gen *gen, int index)
+{
+	return gen->prog_fds + index * sizeof(int);
+}
+
+static bool is_simm16(__s64 value)
+{
+	return value == (__s64)(__s16)value;
 }
 
 static int realloc_insn_buf(struct bpf_gen *gen, __u32 size)
@@ -113,20 +117,18 @@ static int add_data(struct bpf_gen *gen, const void *data, __u32 size);
 static void emit_sys_close_blob(struct bpf_gen *gen, int blob_off);
 
 void bpf_gen__init(struct bpf_gen *gen, int log_level, int nr_progs, int nr_maps,
-		   int max_func_ptr_maps)
+		   int max_func_ptr_maps, int nr_kfuncs)
 {
-	size_t stack_sz = sizeof(struct loader_stack), nr_progs_sz;
-	int i;
+	size_t stack_sz = sizeof(struct loader_stack);
+	int i, cleanup_sz;
 
-	gen->fd_array = add_data(gen, NULL, MAX_FD_ARRAY_SZ * sizeof(int));
+	/* maps | maps with pointers to functions | unused | BTFs of kfuncs, never at index 0 */
+	gen->fd_array = add_data(gen, NULL,
+				 (nr_maps + max_func_ptr_maps + 1 + nr_kfuncs) * sizeof(int));
+	gen->prog_fds = add_data(gen, NULL, nr_progs * sizeof(int));
 	gen->log_level = log_level;
 	gen->nr_obj_maps = nr_maps;
 	gen->max_func_ptr_maps = max_func_ptr_maps;
-	if (nr_maps + max_func_ptr_maps > MAX_USED_MAPS) {
-		pr_warn("Total maps exceeds %d\n", MAX_USED_MAPS);
-		gen->error = -E2BIG;
-		return;
-	}
 	/* their fds are closed like the fds of the maps of the object when loading fails */
 	nr_maps += max_func_ptr_maps;
 	/* save ctx pointer into R6 */
@@ -139,25 +141,24 @@ void bpf_gen__init(struct bpf_gen *gen, int log_level, int nr_progs, int nr_maps
 	emit(gen, BPF_MOV64_IMM(BPF_REG_3, 0));
 	emit(gen, BPF_EMIT_CALL(BPF_FUNC_probe_read_kernel));
 
-	/* amount of stack actually used, only used to calculate iterations, not stack offset */
-	nr_progs_sz = offsetof(struct loader_stack, prog_fd[nr_progs]);
-	/* jump over cleanup code */
-	emit(gen, BPF_JMP_IMM(BPF_JA, 0, 0,
-			      /* size of cleanup code below (including map fd cleanup) */
-			      (nr_progs_sz / 4) * 3 + 2 +
-			      /* 6 insns for emit_sys_close_blob,
-			       * 6 insns for debug_regs in emit_sys_close_blob
-			       */
-			      nr_maps * (6 + (gen->log_level ? 6 : 0))));
+	/*
+	 * jump over cleanup code below:
+	 * 6 insns for emit_sys_close_blob,
+	 * 6 insns for debug_regs in emit_sys_close_blob
+	 */
+	cleanup_sz = (stack_sz / 4) * 3 + 2 + (nr_progs + nr_maps) * (6 + (gen->log_level ? 6 : 0));
+	emit(gen, is_simm16(cleanup_sz) ? BPF_JMP_A(cleanup_sz) : BPF_JMP32_A(cleanup_sz));
 
 	/* remember the label where all error branches will jump to */
 	gen->cleanup_label = gen->insn_cur - gen->insn_start;
 	/* emit cleanup code: close all temp FDs */
-	for (i = 0; i < nr_progs_sz; i += 4) {
+	for (i = 0; i < stack_sz; i += 4) {
 		emit(gen, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_10, -stack_sz + i));
 		emit(gen, BPF_JMP_IMM(BPF_JSLE, BPF_REG_1, 0, 1));
 		emit(gen, BPF_EMIT_CALL(BPF_FUNC_sys_close));
 	}
+	for (i = 0; i < nr_progs; i++)
+		emit_sys_close_blob(gen, blob_prog_fd_off(gen, i));
 	for (i = 0; i < nr_maps; i++)
 		emit_sys_close_blob(gen, blob_fd_array_off(gen, i));
 	/* R7 contains the error code from sys_bpf. Copy it into R0 and exit. */
@@ -190,28 +191,9 @@ static int add_data(struct bpf_gen *gen, const void *data, __u32 size)
 	return prev - gen->data_start;
 }
 
-/* Get index for map_fd/btf_fd slot in reserved fd_array, or in data relative
- * to start of fd_array. Caller can decide if it is usable or not.
- */
-static int add_map_fd(struct bpf_gen *gen)
-{
-	if (gen->nr_maps == MAX_USED_MAPS) {
-		pr_warn("Total maps exceeds %d\n", MAX_USED_MAPS);
-		gen->error = -E2BIG;
-		return 0;
-	}
-	return gen->nr_maps++;
-}
-
 static int add_kfunc_btf_fd(struct bpf_gen *gen)
 {
-	int cur;
-
-	if (gen->nr_fd_array == MAX_KFUNC_DESCS) {
-		cur = add_data(gen, NULL, sizeof(int));
-		return (cur - gen->fd_array) / sizeof(int);
-	}
-	return MAX_USED_MAPS + gen->nr_fd_array++;
+	return gen->nr_obj_maps + gen->max_func_ptr_maps + 1 + gen->nr_fd_array++;
 }
 
 static int insn_bytes_to_bpf_size(__u32 sz)
@@ -245,18 +227,33 @@ static void move_blob2blob(struct bpf_gen *gen, int off, int size, int blob_off)
 	emit(gen, BPF_STX_MEM(insn_bytes_to_bpf_size(size), BPF_REG_1, BPF_REG_0, 0));
 }
 
+/* Returns the register for an access to ctx + *off: R6, or tmp if *off needs more than 16 bits */
+static int emit_ctx_reg(struct bpf_gen *gen, int tmp, int *off)
+{
+	if (is_simm16(*off))
+		return BPF_REG_6;
+	emit(gen, BPF_MOV64_REG(tmp, BPF_REG_6));
+	emit(gen, BPF_ALU64_IMM(BPF_ADD, tmp, *off));
+	*off = 0;
+	return tmp;
+}
+
 static void move_blob2ctx(struct bpf_gen *gen, int ctx_off, int size, int blob_off)
 {
+	int ctx = emit_ctx_reg(gen, BPF_REG_2, &ctx_off);
+
 	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
 					 0, 0, 0, blob_off));
 	emit(gen, BPF_LDX_MEM(insn_bytes_to_bpf_size(size), BPF_REG_0, BPF_REG_1, 0));
-	emit(gen, BPF_STX_MEM(insn_bytes_to_bpf_size(size), BPF_REG_6, BPF_REG_0, ctx_off));
+	emit(gen, BPF_STX_MEM(insn_bytes_to_bpf_size(size), ctx, BPF_REG_0, ctx_off));
 }
 
 static void move_ctx2blob(struct bpf_gen *gen, int off, int size, int ctx_off,
 				   bool check_non_zero)
 {
-	emit(gen, BPF_LDX_MEM(insn_bytes_to_bpf_size(size), BPF_REG_0, BPF_REG_6, ctx_off));
+	int ctx = emit_ctx_reg(gen, BPF_REG_0, &ctx_off);
+
+	emit(gen, BPF_LDX_MEM(insn_bytes_to_bpf_size(size), BPF_REG_0, ctx, ctx_off));
 	if (check_non_zero)
 		/* If value in ctx is zero don't update the blob.
 		 * For example: when ctx->map.max_entries == 0, keep default max_entries from bpf.c
@@ -275,12 +272,6 @@ static void move_stack2blob(struct bpf_gen *gen, int off, int size, int stack_of
 	emit(gen, BPF_STX_MEM(insn_bytes_to_bpf_size(size), BPF_REG_1, BPF_REG_0, 0));
 }
 
-static void move_stack2ctx(struct bpf_gen *gen, int ctx_off, int size, int stack_off)
-{
-	emit(gen, BPF_LDX_MEM(insn_bytes_to_bpf_size(size), BPF_REG_0, BPF_REG_10, stack_off));
-	emit(gen, BPF_STX_MEM(insn_bytes_to_bpf_size(size), BPF_REG_6, BPF_REG_0, ctx_off));
-}
-
 static void emit_sys_bpf(struct bpf_gen *gen, int cmd, int attr, int attr_size)
 {
 	emit(gen, BPF_MOV64_IMM(BPF_REG_1, cmd));
@@ -290,11 +281,6 @@ static void emit_sys_bpf(struct bpf_gen *gen, int cmd, int attr, int attr_size)
 	emit(gen, BPF_EMIT_CALL(BPF_FUNC_sys_bpf));
 	/* remember the result in R7 */
 	emit(gen, BPF_MOV64_REG(BPF_REG_7, BPF_REG_0));
-}
-
-static bool is_simm16(__s64 value)
-{
-	return value == (__s64)(__s16)value;
 }
 
 static void emit_check_err(struct bpf_gen *gen)
@@ -307,7 +293,8 @@ static void emit_check_err(struct bpf_gen *gen)
 	if (is_simm16(off)) {
 		emit(gen, BPF_JMP_IMM(BPF_JSLT, BPF_REG_7, 0, off));
 	} else {
-		gen->error = -ERANGE;
+		emit(gen, BPF_JMP_IMM(BPF_JSGE, BPF_REG_7, 0, 1));
+		emit(gen, BPF_JMP32_A(off - 1));
 	}
 }
 
@@ -399,12 +386,12 @@ int bpf_gen__finish(struct bpf_gen *gen, int nr_progs, int nr_maps)
 	for (i = 0; i < gen->nr_func_ptr_maps; i++)
 		emit_sys_close_blob(gen, blob_fd_array_off(gen, gen->nr_obj_maps + i));
 	for (i = 0; i < gen->nr_progs; i++)
-		move_stack2ctx(gen,
-			       sizeof(struct bpf_loader_ctx) +
-			       sizeof(struct bpf_map_desc) * gen->nr_maps +
-			       sizeof(struct bpf_prog_desc) * i +
-			       offsetof(struct bpf_prog_desc, prog_fd), 4,
-			       stack_off(prog_fd[i]));
+		move_blob2ctx(gen,
+			      sizeof(struct bpf_loader_ctx) +
+			      sizeof(struct bpf_map_desc) * gen->nr_maps +
+			      sizeof(struct bpf_prog_desc) * i +
+			      offsetof(struct bpf_prog_desc, prog_fd), 4,
+			      blob_prog_fd_off(gen, i));
 	for (i = 0; i < gen->nr_maps; i++)
 		move_blob2ctx(gen,
 			      sizeof(struct bpf_loader_ctx) +
@@ -576,8 +563,7 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 		gen->error = -EDOM; /* internal bug */
 		return;
 	} else {
-		/* add_map_fd does gen->nr_maps++ */
-		idx = add_map_fd(gen);
+		idx = gen->nr_maps++;
 		emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
 						 0, 0, 0, blob_fd_array_off(gen, idx)));
 		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_7, 0));
@@ -718,11 +704,7 @@ static void emit_bpf_kallsyms_lookup_name(struct bpf_gen *gen, struct ksym_relo_
  * BPF_REG_8 - pointer to instruction
  *
  * We need to reuse BTF fd for same symbol otherwise each relocation takes a new
- * index, while kernel limits total kfunc BTFs to 256. For duplicate symbols,
- * this would mean a new BTF fd index for each entry. By pairing symbol name
- * with index, we get the insn->imm, insn->off pairing that kernel uses for
- * kfunc_tab, which becomes the effective limit even though all of them may
- * share same index in fd_array (such that kfunc_btf_tab has 1 element).
+ * index in fd_array, which has one slot for each symbol.
  */
 static void emit_relo_kfunc_btf(struct bpf_gen *gen, struct ksym_relo_desc *relo, int insn)
 {
@@ -835,7 +817,8 @@ static void emit_relo_ksym_typeless(struct bpf_gen *gen,
 	/* skip typeless ksym_desc in fd closing loop in cleanup_relos */
 	kdesc->typeless = true;
 	emit_bpf_kallsyms_lookup_name(gen, relo);
-	emit(gen, BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, -ENOENT, 1));
+	emit(gen, BPF_JMP_IMM(BPF_JNE, BPF_REG_7, -ENOENT, 1));
+	emit(gen, BPF_MOV64_IMM(BPF_REG_7, 0));
 	emit_check_err(gen);
 	/* store lower half of addr into insn[insn_idx].imm */
 	emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_8, BPF_REG_9, offsetof(struct bpf_insn, imm)));
@@ -977,8 +960,7 @@ static void cleanup_relos(struct bpf_gen *gen, int insns)
 			emit_sys_close_blob(gen, insn);
 		} else if (!kdesc->is_ld64) {
 			emit_sys_close_blob(gen, blob_fd_array_off(gen, kdesc->off));
-			if (kdesc->off < MAX_FD_ARRAY_SZ)
-				gen->nr_fd_array--;
+			gen->nr_fd_array--;
 		}
 	}
 	if (gen->nr_ksyms) {
@@ -1134,9 +1116,10 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 		gen->attach_kind = 0;
 	}
 	emit_check_err(gen);
-	/* remember prog_fd in the stack, if successful */
-	emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_7,
-			      stack_off(prog_fd[gen->nr_progs])));
+	/* remember prog_fd in the blob, if successful */
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, blob_prog_fd_off(gen, gen->nr_progs)));
+	emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_7, 0));
 	gen->nr_progs++;
 }
 
@@ -1152,10 +1135,11 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 static void emit_copy_initial_value(struct bpf_gen *gen, int map_idx, int value,
 				    __u32 value_size, int nr_more_insns)
 {
-	emit(gen, BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_6,
-			      sizeof(struct bpf_loader_ctx) +
-			      sizeof(struct bpf_map_desc) * map_idx +
-			      offsetof(struct bpf_map_desc, initial_value)));
+	int off = sizeof(struct bpf_loader_ctx) + sizeof(struct bpf_map_desc) * map_idx +
+		  offsetof(struct bpf_map_desc, initial_value);
+	int ctx = emit_ctx_reg(gen, BPF_REG_3, &off);
+
+	emit(gen, BPF_LDX_MEM(BPF_DW, BPF_REG_3, ctx, off));
 	emit(gen, BPF_JMP_IMM(BPF_JEQ, BPF_REG_3, 0, 8 + nr_more_insns));
 	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
 					 0, 0, 0, value));

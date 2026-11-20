@@ -154,8 +154,6 @@ struct mt8192_afe_private {
 
 int mt8192_dai_adda_register(struct mtk_base_afe *afe);
 int mt8192_dai_i2s_register(struct mtk_base_afe *afe);
-int mt8192_dai_hw_gain_register(struct mtk_base_afe *afe);
-int mt8192_dai_src_register(struct mtk_base_afe *afe);
 int mt8192_dai_pcm_register(struct mtk_base_afe *afe);
 int mt8192_dai_tdm_register(struct mtk_base_afe *afe);
 

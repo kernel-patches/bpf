@@ -73,8 +73,8 @@ static int es9356_sdw_component_probe(struct snd_soc_component *component)
 }
 
 static const DECLARE_TLV_DB_SCALE(out_vol_tlv, -9600, 12, 0);
-static const DECLARE_TLV_DB_SCALE(amic_gain_tlv, 0, 3, 0);
-static const DECLARE_TLV_DB_SCALE(dmic_gain_tlv, 0, 6, 0);
+static const DECLARE_TLV_DB_SCALE(amic_gain_tlv, 0, 300, 0);
+static const DECLARE_TLV_DB_SCALE(dmic_gain_tlv, 0, 600, 0);
 
 static const struct snd_kcontrol_new es9356_sdca_controls[] = {
 	SDCA_SINGLE_Q78_TLV("FU41 Left Playback Volume",
@@ -293,13 +293,15 @@ static int es9356_sdca_button(unsigned int *buffer)
 
 static int es9356_sdca_button_detect(struct es9356_sdw_priv *es9356)
 {
-	unsigned int btn_type = 0, offset, idx, val, owner;
+	unsigned int offset, idx, val, owner;
 	unsigned int button[3];
-	int ret;
+	int btn_type = 0, ret;
 
 	ret = regmap_read(es9356->regmap,
 		SDW_SDCA_CTL(FUNC_NUM_HID, ES9356_SDCA_ENT_HID01, ES9356_SDCA_CTL_HIDTX_CURRENT_OWNER, 0), &owner);
-	if (ret < 0 || owner == 0x01)
+	if (ret < 0)
+		return ret;
+	if (owner == 0x01)
 		return 0;
 
 	ret = regmap_read(es9356->regmap, ES9356_BUF_ADDR_HID, &offset);
@@ -319,6 +321,9 @@ button_det_end:
 	if (owner == 0x00)
 		regmap_write(es9356->regmap,
 			SDW_SDCA_CTL(FUNC_NUM_HID, ES9356_SDCA_ENT_HID01, ES9356_SDCA_CTL_HIDTX_CURRENT_OWNER, 0), 0x01);
+
+	if (ret < 0)
+		return ret;
 
 	return btn_type;
 }
@@ -966,9 +971,8 @@ static int es9356_sdw_read_prop(struct sdw_slave *slave)
 	prop->sink_ports = BIT(3) | BIT(4);
 
 	nval = hweight32(prop->source_ports);
-	prop->src_dpn_prop = devm_kcalloc(&slave->dev, nval,
-					  sizeof(*prop->src_dpn_prop),
-					  GFP_KERNEL);
+	prop->src_dpn_prop = devm_kzalloc_objs(&slave->dev, *prop->src_dpn_prop,
+					       nval);
 	if (!prop->src_dpn_prop)
 		return -ENOMEM;
 
@@ -984,9 +988,8 @@ static int es9356_sdw_read_prop(struct sdw_slave *slave)
 
 	/* do this again for sink now */
 	nval = hweight32(prop->sink_ports);
-	prop->sink_dpn_prop = devm_kcalloc(&slave->dev, nval,
-					   sizeof(*prop->sink_dpn_prop),
-					   GFP_KERNEL);
+	prop->sink_dpn_prop = devm_kzalloc_objs(&slave->dev,
+						*prop->sink_dpn_prop, nval);
 	if (!prop->sink_dpn_prop)
 		return -ENOMEM;
 
@@ -1087,7 +1090,7 @@ static int es9356_sdca_init(struct device *dev, struct regmap *regmap, struct sd
 	struct es9356_sdw_priv *es9356;
 	int ret;
 
-	es9356 = devm_kzalloc(dev, sizeof(*es9356), GFP_KERNEL);
+	es9356 = devm_kzalloc_obj(dev, *es9356);
 	if (!es9356)
 		return -ENOMEM;
 

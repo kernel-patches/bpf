@@ -13,7 +13,6 @@
 #include <linux/err.h>
 #include <linux/idr.h>
 #include <linux/of.h>
-#include <linux/pagemap.h>
 #include <linux/export.h>
 #include <linux/leds.h>
 #include <linux/slab.h>
@@ -461,7 +460,7 @@ int mmc_of_parse_voltage(struct mmc_host *host, u32 *mask)
 		return -EINVAL;
 	}
 
-	voltage_ranges = kcalloc(2 * num_ranges, sizeof(*voltage_ranges), GFP_KERNEL);
+	voltage_ranges = kzalloc_objs(*voltage_ranges, 2 * num_ranges);
 	if (!voltage_ranges)
 		return -ENOMEM;
 

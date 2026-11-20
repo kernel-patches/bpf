@@ -15,7 +15,7 @@
 #include <linux/regmap.h>
 #include <linux/of.h>
 
-static struct mfd_cell max77705_devs[] = {
+static const struct mfd_cell max77705_devs[] = {
 	MFD_CELL_OF("max77705-rgb", NULL, NULL, 0, 0, "maxim,max77705-rgb"),
 	MFD_CELL_OF("max77705-charger", NULL, NULL, 0, 0, "maxim,max77705-charger"),
 	MFD_CELL_OF("max77705-haptic", NULL, NULL, 0, 0, "maxim,max77705-haptic"),
@@ -88,7 +88,7 @@ static int max77705_i2c_probe(struct i2c_client *i2c)
 	unsigned int pmic_rev_value;
 	int ret;
 
-	max77705 = devm_kzalloc(dev, sizeof(*max77705), GFP_KERNEL);
+	max77705 = devm_kzalloc_obj(dev, *max77705);
 	if (!max77705)
 		return -ENOMEM;
 

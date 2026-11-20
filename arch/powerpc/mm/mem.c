@@ -158,13 +158,12 @@ int __ref arch_add_memory(int nid, u64 start, u64 size,
 	return rc;
 }
 
-void __ref arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap,
-			      struct dev_pagemap *pgmap)
+void __ref arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap)
 {
 	unsigned long start_pfn = start >> PAGE_SHIFT;
 	unsigned long nr_pages = size >> PAGE_SHIFT;
 
-	__remove_pages(start_pfn, nr_pages, altmap, pgmap);
+	__remove_pages(start_pfn, nr_pages, altmap);
 	arch_remove_linear_mapping(start, size);
 }
 #endif
@@ -272,12 +271,10 @@ void __init arch_mm_preinit(void)
 {
 
 	/*
-	 * Reserve large chunks of memory for use by CMA for kdump, fadump, KVM
-	 * and hugetlb. These must be called after pageblock_order is
-	 * initialised.
+	 * Reserve large chunks of memory for use by CMA for fadump and KVM.
+	 * These must be called after pageblock_order is initialised.
 	 */
 	fadump_cma_init();
-	kdump_cma_reserve();
 	kvm_cma_reserve();
 
 	/*

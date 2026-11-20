@@ -535,8 +535,6 @@ fw_mem_context_init(void *cpu_ptr, void *priv)
  *
  * Return:
  *  * A handle to the newly-minted VM context on success,
- *  * -%EINVAL if the feature "virtual address space bits" on @pvr_dev is
- *    missing or has an unsupported value,
  *  * -%ENOMEM if allocation of the structure behind the opaque handle fails,
  *    or
  *  * Any error encountered while setting up internal structures.
@@ -544,26 +542,8 @@ fw_mem_context_init(void *cpu_ptr, void *priv)
 struct pvr_vm_context *
 pvr_vm_create_context(struct pvr_device *pvr_dev, bool is_userspace_context)
 {
-	struct drm_device *drm_dev = from_pvr_device(pvr_dev);
-
 	struct pvr_vm_context *vm_ctx;
-	u16 device_addr_bits;
-
 	int err;
-
-	err = PVR_FEATURE_VALUE(pvr_dev, virtual_address_space_bits,
-				&device_addr_bits);
-	if (err) {
-		drm_err(drm_dev,
-			"Failed to get device virtual address space bits\n");
-		return ERR_PTR(err);
-	}
-
-	if (device_addr_bits != PVR_PAGE_TABLE_ADDR_BITS) {
-		drm_err(drm_dev,
-			"Device has unsupported virtual address space size\n");
-		return ERR_PTR(-EINVAL);
-	}
 
 	vm_ctx = kzalloc_obj(*vm_ctx);
 	if (!vm_ctx)
@@ -589,7 +569,7 @@ pvr_vm_create_context(struct pvr_device *pvr_dev, bool is_userspace_context)
 	drm_gpuvm_init(&vm_ctx->gpuvm_mgr,
 		       is_userspace_context ? "PowerVR-user-VM" : "PowerVR-FW-VM",
 		       0, &pvr_dev->base, &vm_ctx->dummy_gem,
-		       0, 1ULL << device_addr_bits, 0, 0, &pvr_vm_gpuva_ops);
+		       0, PVR_PAGE_TABLE_ADDR_SPACE_SIZE, 0, 0, &pvr_vm_gpuva_ops);
 
 	mutex_init(&vm_ctx->lock);
 	kref_init(&vm_ctx->ref_count);
@@ -947,6 +927,9 @@ static const struct drm_pvr_static_data_area static_data_areas[] = {
 /*
  * The values given to GET_RESERVED_SIZE() are taken from the last entry in the corresponding
  * static data area for each heap.
+ *
+ * The pvr_heaps array **must** initialize **all** heaps that are enumerated in the UAPI with
+ * enum drm_pvr_heap_id.
  */
 static const struct drm_pvr_heap pvr_heaps[] = {
 	[DRM_PVR_HEAP_GENERAL] = {
@@ -987,6 +970,8 @@ static const struct drm_pvr_heap pvr_heaps[] = {
 	},
 };
 
+static_assert(ARRAY_SIZE(pvr_heaps) == DRM_PVR_HEAP_COUNT, "Invalid number of PVR heaps");
+
 int
 pvr_static_data_areas_get(const struct pvr_device *pvr_dev,
 			  struct drm_pvr_ioctl_dev_query_args *args)
@@ -1004,8 +989,19 @@ pvr_static_data_areas_get(const struct pvr_device *pvr_dev,
 		return err;
 
 	if (!query.static_data_areas.array) {
-		query.static_data_areas.count = ARRAY_SIZE(static_data_areas);
-		query.static_data_areas.stride = sizeof(struct drm_pvr_static_data_area);
+		u32 *stride = &query.static_data_areas.stride;
+		u32 *count = &query.static_data_areas.count;
+
+		if (!query.static_data_areas.stride)
+			*stride = DRM_PVR_STATIC_DATA_AREA_STRIDE_MIN_SUPPORTED;
+		else
+			*stride = sizeof(struct drm_pvr_static_data_area);
+
+		if (!query.static_data_areas.count)
+			*count = DRM_PVR_STATIC_DATA_AREA_COUNT_MIN_SUPPORTED;
+		else
+			*count = ARRAY_SIZE(static_data_areas);
+
 		goto copy_out;
 	}
 
@@ -1044,8 +1040,16 @@ pvr_heap_info_get(const struct pvr_device *pvr_dev,
 		return err;
 
 	if (!query.heaps.array) {
-		query.heaps.count = ARRAY_SIZE(pvr_heaps);
-		query.heaps.stride = sizeof(struct drm_pvr_heap);
+		if (!query.heaps.stride)
+			query.heaps.stride = DRM_PVR_HEAP_STRIDE_MIN_SUPPORTED;
+		else
+			query.heaps.stride = sizeof(struct drm_pvr_heap);
+
+		if (!query.heaps.count)
+			query.heaps.count = DRM_PVR_HEAP_COUNT_MIN_SUPPORTED;
+		else
+			query.heaps.count = ARRAY_SIZE(pvr_heaps);
+
 		goto copy_out;
 	}
 

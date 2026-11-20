@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/usb/stericsson,db8500-musb.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: ST-Ericsson DB8500 MUSB controller
+
+maintainers:
+  - Linus Walleij <linusw@kernel.org>
+
+allOf:
+  - $ref: usb-drd.yaml#
+
+properties:
+  compatible:
+    const: stericsson,db8500-musb
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  interrupt-names:
+    items:
+      - const: mc
+
+  clocks:
+    maxItems: 1
+
+  phys:
+    maxItems: 1
+
+  phy-names:
+    items:
+      - const: usb
+
+  dmas:
+    minItems: 16
+    maxItems: 16
+
+  dma-names:
+    items:
+      - const: iep_1_9
+      - const: oep_1_9
+      - const: iep_2_10
+      - const: oep_2_10
+      - const: iep_3_11
+      - const: oep_3_11
+      - const: iep_4_12
+      - const: oep_4_12
+      - const: iep_5_13
+      - const: oep_5_13
+      - const: iep_6_14
+      - const: oep_6_14
+      - const: iep_7_15
+      - const: oep_7_15
+      - const: iep_8
+      - const: oep_8
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - dr_mode
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    usb@a03e0000 {
+        compatible = "stericsson,db8500-musb";
+        reg = <0xa03e0000 0x10000>;
+        interrupts = <0 23 4>;
+        interrupt-names = "mc";
+        clocks = <&prcc_pclk 5 0>;
+        dr_mode = "otg";
+    };

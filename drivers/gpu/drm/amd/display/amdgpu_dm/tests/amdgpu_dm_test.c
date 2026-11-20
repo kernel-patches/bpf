@@ -34,6 +34,7 @@
 #include "atom.h"
 #include "amdgpu_dm.h"
 #include "amdgpu_dm_audio.h"
+#include "amdgpu_dm_freesync.h"
 #include "amdgpu_dm_hdcp.h"
 #include "amdgpu_dm_mst_types.h"
 #include "amdgpu_dm_kunit_test_helpers.h"
@@ -258,9 +259,9 @@ static void dm_test_plane_layer_index_cmp_equal(struct kunit *test)
 	struct dc_surface_update sa, sb;
 
 	plane_a = kunit_kzalloc(test, sizeof(*plane_a), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_a);
+	KUNIT_ASSERT_NOT_NULL(test, plane_a);
 	plane_b = kunit_kzalloc(test, sizeof(*plane_b), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_b);
+	KUNIT_ASSERT_NOT_NULL(test, plane_b);
 
 	plane_a->layer_index = 5;
 	plane_b->layer_index = 5;
@@ -281,9 +282,9 @@ static void dm_test_plane_layer_index_cmp_descending(struct kunit *test)
 	struct dc_surface_update sa, sb;
 
 	plane_a = kunit_kzalloc(test, sizeof(*plane_a), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_a);
+	KUNIT_ASSERT_NOT_NULL(test, plane_a);
 	plane_b = kunit_kzalloc(test, sizeof(*plane_b), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_b);
+	KUNIT_ASSERT_NOT_NULL(test, plane_b);
 
 	plane_a->layer_index = 3;
 	plane_b->layer_index = 7;
@@ -305,9 +306,9 @@ static void dm_test_plane_layer_index_cmp_ascending(struct kunit *test)
 	struct dc_surface_update sa, sb;
 
 	plane_a = kunit_kzalloc(test, sizeof(*plane_a), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_a);
+	KUNIT_ASSERT_NOT_NULL(test, plane_a);
 	plane_b = kunit_kzalloc(test, sizeof(*plane_b), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_b);
+	KUNIT_ASSERT_NOT_NULL(test, plane_b);
 
 	plane_a->layer_index = 9;
 	plane_b->layer_index = 2;
@@ -763,7 +764,7 @@ static void dm_test_multisync_trigger_disabled(struct kunit *test)
 	struct dc_stream_state *stream;
 
 	stream = kunit_kzalloc(test, sizeof(*stream), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, stream);
+	KUNIT_ASSERT_NOT_NULL(test, stream);
 
 	stream->triggered_crtc_reset.enabled = false;
 	stream->triggered_crtc_reset.event = CRTC_EVENT_VSYNC_FALLING;
@@ -788,9 +789,9 @@ static void dm_test_multisync_trigger_rising(struct kunit *test)
 	struct dc_stream_state *master;
 
 	stream = kunit_kzalloc(test, sizeof(*stream), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, stream);
+	KUNIT_ASSERT_NOT_NULL(test, stream);
 	master = kunit_kzalloc(test, sizeof(*master), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, master);
+	KUNIT_ASSERT_NOT_NULL(test, master);
 
 	master->timing.flags.VSYNC_POSITIVE_POLARITY = 1;
 	stream->triggered_crtc_reset.enabled = true;
@@ -814,9 +815,9 @@ static void dm_test_multisync_trigger_falling(struct kunit *test)
 	struct dc_stream_state *master;
 
 	stream = kunit_kzalloc(test, sizeof(*stream), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, stream);
+	KUNIT_ASSERT_NOT_NULL(test, stream);
 	master = kunit_kzalloc(test, sizeof(*master), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, master);
+	KUNIT_ASSERT_NOT_NULL(test, master);
 
 	master->timing.flags.VSYNC_POSITIVE_POLARITY = 0;
 	stream->triggered_crtc_reset.enabled = true;
@@ -842,9 +843,9 @@ static void dm_test_master_stream_highest_refresh(struct kunit *test)
 	struct dc_stream_state *stream_set[2];
 
 	stream0 = kunit_kzalloc(test, sizeof(*stream0), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, stream0);
+	KUNIT_ASSERT_NOT_NULL(test, stream0);
 	stream1 = kunit_kzalloc(test, sizeof(*stream1), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, stream1);
+	KUNIT_ASSERT_NOT_NULL(test, stream1);
 	stream_set[0] = stream0;
 	stream_set[1] = stream1;
 
@@ -880,9 +881,9 @@ static void dm_test_master_stream_defaults_to_first(struct kunit *test)
 	struct dc_stream_state *stream_set[2];
 
 	stream0 = kunit_kzalloc(test, sizeof(*stream0), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, stream0);
+	KUNIT_ASSERT_NOT_NULL(test, stream0);
 	stream1 = kunit_kzalloc(test, sizeof(*stream1), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, stream1);
+	KUNIT_ASSERT_NOT_NULL(test, stream1);
 	stream_set[0] = stream0;
 	stream_set[1] = stream1;
 
@@ -3271,6 +3272,188 @@ static void dm_test_update_plane_state_detached(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, new_plane_state->dc_state);
 }
 
+/* Tests for dm_plane_inherit_flip_time() */
+
+struct dm_test_flip_time_ctx {
+	struct dm_plane_state *old_plane_state;
+	struct dm_plane_state *new_plane_state;
+	struct dc_plane_state *dc_plane_state;
+};
+
+/*
+ * A plane reset on one CRTC: the old DC plane has FreeSync flip history and
+ * the new one is freshly created.
+ */
+static struct dm_test_flip_time_ctx *
+dm_test_flip_time_ctx_alloc(struct kunit *test)
+{
+	struct dm_test_flip_time_ctx *ctx;
+	struct dc_plane_state *old_dc;
+	struct drm_crtc *crtc;
+
+	ctx = kunit_kzalloc(test, sizeof(*ctx), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, ctx);
+	ctx->old_plane_state = kunit_kzalloc(test, sizeof(*ctx->old_plane_state),
+					     GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, ctx->old_plane_state);
+	ctx->new_plane_state = kunit_kzalloc(test, sizeof(*ctx->new_plane_state),
+					     GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, ctx->new_plane_state);
+	ctx->dc_plane_state = kunit_kzalloc(test, sizeof(*ctx->dc_plane_state),
+					    GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, ctx->dc_plane_state);
+	old_dc = kunit_kzalloc(test, sizeof(*old_dc), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, old_dc);
+	crtc = kunit_kzalloc(test, sizeof(*crtc), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, crtc);
+
+	old_dc->time.time_elapsed_in_us[0] = 16667;
+	old_dc->time.index = 1;
+	old_dc->time.prev_update_time_in_us = 1234567;
+	ctx->old_plane_state->dc_state = old_dc;
+	ctx->old_plane_state->base.crtc = crtc;
+	ctx->new_plane_state->base.crtc = crtc;
+
+	return ctx;
+}
+
+static void dm_test_flip_time_inherit(struct dm_test_flip_time_ctx *ctx)
+{
+	dm_plane_inherit_flip_time(ctx->dc_plane_state,
+				   &ctx->old_plane_state->base,
+				   &ctx->new_plane_state->base);
+}
+
+/**
+ * dm_test_flip_time_same_crtc - Test a reset plane keeps its flip history
+ * @test: The KUnit test context
+ */
+static void dm_test_flip_time_same_crtc(struct kunit *test)
+{
+	struct dm_test_flip_time_ctx *ctx = dm_test_flip_time_ctx_alloc(test);
+
+	dm_test_flip_time_inherit(ctx);
+
+	KUNIT_EXPECT_MEMEQ(test, &ctx->dc_plane_state->time,
+			   &ctx->old_plane_state->dc_state->time,
+			   sizeof(ctx->dc_plane_state->time));
+}
+
+/**
+ * dm_test_flip_time_crtc_changed - Test a plane moved between CRTCs starts over
+ * @test: The KUnit test context
+ */
+static void dm_test_flip_time_crtc_changed(struct kunit *test)
+{
+	struct dm_test_flip_time_ctx *ctx = dm_test_flip_time_ctx_alloc(test);
+	struct dc_plane_flip_time *time = &ctx->dc_plane_state->time;
+	struct drm_crtc *other_crtc;
+
+	other_crtc = kunit_kzalloc(test, sizeof(*other_crtc), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, other_crtc);
+	ctx->new_plane_state->base.crtc = other_crtc;
+
+	dm_test_flip_time_inherit(ctx);
+
+	KUNIT_EXPECT_NULL(test, memchr_inv(time, 0, sizeof(*time)));
+}
+
+/**
+ * dm_test_flip_time_no_old_dc_state - Test a newly enabled plane starts over
+ * @test: The KUnit test context
+ */
+static void dm_test_flip_time_no_old_dc_state(struct kunit *test)
+{
+	struct dm_test_flip_time_ctx *ctx = dm_test_flip_time_ctx_alloc(test);
+	struct dc_plane_flip_time *time = &ctx->dc_plane_state->time;
+
+	ctx->old_plane_state->dc_state = NULL;
+
+	dm_test_flip_time_inherit(ctx);
+
+	KUNIT_EXPECT_NULL(test, memchr_inv(time, 0, sizeof(*time)));
+}
+
+/*
+ * Flip the reset plane one 60 Hz frame after the old plane's last flip on a
+ * 48-165 Hz panel with below-the-range compensation, and report whether
+ * FreeSync engaged BTR.
+ */
+static bool dm_test_flip_time_btr_active(struct kunit *test,
+					 struct dm_test_flip_time_ctx *ctx)
+{
+	struct amdgpu_device *adev = dm_kunit_alloc_adev(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
+	struct dm_crtc_state *crtc_state;
+	struct mod_vrr_params *vrr;
+	struct amdgpu_crtc *acrtc;
+	u32 flip_time_in_us;
+
+	acrtc = kunit_kzalloc(test, sizeof(*acrtc), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, acrtc);
+	crtc_state = kunit_kzalloc(test, sizeof(*crtc_state), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, crtc_state);
+	adev->dm.adev = adev;
+	/* Only pre-AI flips dereference the module, so a stub will do. */
+	adev->family = AMDGPU_FAMILY_NV;
+	adev->dm.freesync_module = kunit_kzalloc(test, sizeof(struct mod_freesync),
+						 GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, adev->dm.freesync_module);
+
+	/* 165 Hz nominal */
+	stream->ctx = dm_kunit_alloc_dc_with_ctx(test)->ctx;
+	stream->timing.pix_clk_100hz = 4083750;
+	stream->timing.h_total = 2200;
+	stream->timing.v_total = 1125;
+
+	crtc_state->base.crtc = &acrtc->base;
+	crtc_state->base.vrr_enabled = true;
+	crtc_state->stream = stream;
+	crtc_state->vrr_supported = true;
+	crtc_state->freesync_config.min_refresh_in_uhz = 48000000;
+	crtc_state->freesync_config.max_refresh_in_uhz = 165000000;
+	crtc_state->freesync_config.btr = true;
+
+	amdgpu_dm_update_stream_irq_parameters(&adev->dm, crtc_state);
+
+	vrr = &acrtc->dm_irq_params.vrr_params;
+	KUNIT_ASSERT_EQ(test, (int)vrr->state, (int)VRR_STATE_ACTIVE_VARIABLE);
+	KUNIT_ASSERT_TRUE(test, vrr->btr.btr_enabled);
+	KUNIT_ASSERT_FALSE(test, vrr->btr.btr_active);
+
+	flip_time_in_us =
+		ctx->old_plane_state->dc_state->time.prev_update_time_in_us + 16667;
+	amdgpu_dm_update_freesync_state_on_stream(&adev->dm, crtc_state, stream,
+						  ctx->dc_plane_state,
+						  flip_time_in_us);
+
+	return vrr->btr.btr_active;
+}
+
+/**
+ * dm_test_flip_time_btr_inherited - Test a reset plane's next flip stays out of BTR
+ * @test: The KUnit test context
+ */
+static void dm_test_flip_time_btr_inherited(struct kunit *test)
+{
+	struct dm_test_flip_time_ctx *ctx = dm_test_flip_time_ctx_alloc(test);
+
+	dm_test_flip_time_inherit(ctx);
+
+	KUNIT_EXPECT_FALSE(test, dm_test_flip_time_btr_active(test, ctx));
+}
+
+/**
+ * dm_test_flip_time_btr_no_history - Test a plane without flip history enters BTR
+ * @test: The KUnit test context
+ */
+static void dm_test_flip_time_btr_no_history(struct kunit *test)
+{
+	struct dm_test_flip_time_ctx *ctx = dm_test_flip_time_ctx_alloc(test);
+
+	KUNIT_EXPECT_TRUE(test, dm_test_flip_time_btr_active(test, ctx));
+}
+
 /**
  * dm_test_mod_power_update_streams_empty - Test an empty commit updates no streams
  * @test: The KUnit test context
@@ -5362,6 +5545,11 @@ static struct kunit_case amdgpu_dm_tests[] = {
 	KUNIT_CASE(dm_test_aquire_global_lock_waits_commit),
 	KUNIT_CASE(dm_test_update_crtc_state_unchanged),
 	KUNIT_CASE(dm_test_update_plane_state_detached),
+	KUNIT_CASE(dm_test_flip_time_same_crtc),
+	KUNIT_CASE(dm_test_flip_time_crtc_changed),
+	KUNIT_CASE(dm_test_flip_time_no_old_dc_state),
+	KUNIT_CASE(dm_test_flip_time_btr_inherited),
+	KUNIT_CASE(dm_test_flip_time_btr_no_history),
 	KUNIT_CASE(dm_test_mod_power_update_streams_empty),
 	KUNIT_CASE(dm_test_mod_power_update_streams_no_modeset),
 	KUNIT_CASE(dm_test_mod_power_update_streams_enable),

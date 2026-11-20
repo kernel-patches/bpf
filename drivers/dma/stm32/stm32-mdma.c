@@ -1615,9 +1615,7 @@ static int stm32_mdma_probe(struct platform_device *pdev)
 	if (count < 0)
 		count = 0;
 
-	dmadev = devm_kzalloc(&pdev->dev,
-			      struct_size(dmadev, ahb_addr_masks, count),
-			      GFP_KERNEL);
+	dmadev = devm_kzalloc_flex(&pdev->dev, *dmadev, ahb_addr_masks, count);
 	if (!dmadev)
 		return -ENOMEM;
 	dmadev->nr_ahb_addr_masks = count;
@@ -1779,6 +1777,7 @@ static int stm32_mdma_pm_suspend(struct device *dev)
 		ccr = stm32_mdma_read(dmadev, STM32_MDMA_CCR(id));
 		if (ccr & STM32_MDMA_CCR_EN) {
 			dev_warn(dev, "Suspend is prevented by Chan %i\n", id);
+			pm_runtime_put_sync(dev);
 			return -EBUSY;
 		}
 	}

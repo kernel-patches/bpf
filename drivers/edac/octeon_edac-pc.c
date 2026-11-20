@@ -19,9 +19,7 @@
 
 #include <asm/octeon/cvmx.h>
 #include <asm/mipsregs.h>
-
-extern int register_co_cache_error_notifier(struct notifier_block *nb);
-extern int unregister_co_cache_error_notifier(struct notifier_block *nb);
+#include <asm/r4kcache.h>
 
 extern unsigned long long cache_err_dcache[NR_CPUS];
 
@@ -83,8 +81,7 @@ static int  co_cache_error_event(struct notifier_block *this,
 
 static int co_cache_error_probe(struct platform_device *pdev)
 {
-	struct co_cache_error *p = devm_kzalloc(&pdev->dev, sizeof(*p),
-						GFP_KERNEL);
+	struct co_cache_error *p = devm_kzalloc_obj(&pdev->dev, *p);
 	if (!p)
 		return -ENOMEM;
 

@@ -10,15 +10,39 @@ use crate::{
     pid_namespace::PidNamespace,
     prelude::*,
     sync::aref::ARef,
+    time::{
+        Delta,
+        Jiffy, //
+    },
     types::{NotThreadSafe, Opaque},
 };
 use core::{
+    cmp,
     ops::Deref,
     ptr, //
 };
 
 /// A sentinel value used for infinite timeouts.
 pub const MAX_SCHEDULE_TIMEOUT: c_long = c_long::MAX;
+
+/// Sleeps for the given timeout, or until woken.
+///
+/// Returns the remaining time, or zero if the timeout expired. The task state should be set before
+/// calling this.
+///
+/// A negative timeout is treated as zero.
+///
+/// A timeout of [`MAX_SCHEDULE_TIMEOUT`] jiffies means an indefinite wait. In that case, the
+/// returned duration is also [`MAX_SCHEDULE_TIMEOUT`] jiffies.
+#[inline]
+pub fn schedule_timeout(timeout: Delta<Jiffy>) -> Delta<Jiffy> {
+    let timeout = cmp::max(timeout.as_jiffies(), 0);
+
+    // SAFETY: `schedule_timeout()` is always safe to call.
+    let remaining = unsafe { bindings::schedule_timeout(timeout) };
+
+    Delta::from_jiffies(remaining)
+}
 
 /// Bitmask for tasks that are sleeping in an interruptible state.
 pub const TASK_INTERRUPTIBLE: c_int = bindings::TASK_INTERRUPTIBLE as c_int;

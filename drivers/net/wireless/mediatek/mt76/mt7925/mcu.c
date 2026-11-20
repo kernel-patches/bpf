@@ -767,7 +767,7 @@ int mt7925_mcu_uni_tx_ba(struct mt792x_dev *dev,
 	struct ieee80211_link_sta *link_sta;
 	unsigned int link_id;
 
-	for_each_sta_active_link(vif, sta, link_sta, link_id) {
+	for_each_sta_active_link(sta, link_sta, link_id) {
 		struct mt792x_link_sta *mlink;
 		struct mt792x_bss_conf *mconf;
 		int ret;
@@ -801,7 +801,7 @@ int mt7925_mcu_uni_rx_ba(struct mt792x_dev *dev,
 	struct ieee80211_link_sta *link_sta;
 	unsigned int link_id;
 
-	for_each_sta_active_link(vif, sta, link_sta, link_id) {
+	for_each_sta_active_link(sta, link_sta, link_id) {
 		struct mt792x_link_sta *mlink;
 		struct mt792x_bss_conf *mconf;
 		int ret;
@@ -4004,7 +4004,7 @@ mt7925_mcu_rate_txpower_band(struct mt76_phy *phy,
 	}
 	batch_size = DIV_ROUND_UP(n_chan, batch_len);
 
-	limits = devm_kmalloc(dev->dev, sizeof(*limits), GFP_KERNEL);
+	limits = devm_kmalloc_obj(dev->dev, *limits);
 	if (!limits)
 		return -ENOMEM;
 

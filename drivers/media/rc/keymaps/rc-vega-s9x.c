@@ -31,7 +31,7 @@ static struct rc_map_table vega_s9x[] = {
 static struct rc_map_list vega_s9x_map = {
 	.map = {
 		.scan     = vega_s9x,
-		.size     = ARRAY_SIZE(vega_s9x),
+		.entries  = ARRAY_SIZE(vega_s9x),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_VEGA_S9X,
 	}

@@ -116,6 +116,7 @@ bool hibernation_available(void)
 	return nohibernate == 0 &&
 		!security_locked_down(LOCKDOWN_HIBERNATION) &&
 		!secretmem_active() && !cxl_mem_active() &&
+		!debug_pagealloc_enabled() &&
 		arch_hibernation_available();
 }
 
@@ -426,6 +427,11 @@ int hibernation_snapshot(int platform_mode)
 	error = freeze_kernel_threads();
 	if (error)
 		goto Cleanup;
+
+	if (!hibernation_available()) {
+		error = -EBUSY;
+		goto Thaw;
+	}
 
 	if (hibernation_test(TEST_FREEZER)) {
 
@@ -1316,7 +1322,8 @@ static ssize_t resume_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return n;
 }
 
-power_attr(resume);
+static struct kobj_attribute resume_attr =
+	__ATTR_NO_SPLICE(resume, 0644, resume_show, resume_store);
 
 static ssize_t resume_offset_show(struct kobject *kobj,
 				  struct kobj_attribute *attr, char *buf)

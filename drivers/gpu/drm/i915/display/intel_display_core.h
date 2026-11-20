@@ -49,8 +49,10 @@ struct intel_fbdev;
 struct intel_fdi_funcs;
 struct intel_hotplug_irq_funcs;
 struct intel_initial_plane_config;
+struct intel_mmio_funcs;
 struct intel_opregion;
 struct intel_overlay;
+struct intel_uncore;
 struct task_struct;
 
 /* Amount of SAGV/QGV points, BSpec precisely defines this */
@@ -529,6 +531,26 @@ struct intel_display {
 		/* Top level crtc-ish functions */
 		const struct intel_modeset_funcs *funcs;
 	} modeset;
+
+	struct {
+		/*
+		 * Simultaneous accesses to the same cacheline of
+		 * registers may hang IVB/HSW systems. This lock
+		 * serializes all display register accesses done
+		 * using intel_de_{read,write}(), but not those
+		 * done using intel_de_{read,write}_fw().
+		 *
+		 * The lock also protects mmio.unclaimed_mmio_check
+		 * and read-modify-write of display->params.mmio_debug.
+		 */
+		spinlock_t lock;
+
+		struct intel_uncore *uncore;
+		const struct intel_mmio_funcs *funcs;
+
+		/* protected by mmio.lock */
+		int unclaimed_mmio_check;
+	} mmio;
 
 	struct {
 		/* protected by wm.wm_mutex */

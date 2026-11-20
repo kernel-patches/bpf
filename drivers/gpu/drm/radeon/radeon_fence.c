@@ -148,7 +148,7 @@ int radeon_fence_emit(struct radeon_device *rdev,
 	dma_fence_init(&(*fence)->base, &radeon_fence_ops,
 		       &rdev->fence_queue.lock,
 		       rdev->fence_context + ring,
-		       seq);
+		       seq, 0);
 	radeon_fence_ring_emit(rdev, ring, *fence);
 	trace_radeon_fence_emit(rdev_to_drm(rdev), ring, (*fence)->seq);
 	radeon_fence_schedule_check(rdev, ring);

@@ -510,6 +510,8 @@ static ssize_t orangefs_debug_write(struct file *file,
 				     rc);
 
 		op_release(new_op);
+		if (rc)
+			goto out;
 	}
 
 	mutex_lock(&orangefs_debug_lock);

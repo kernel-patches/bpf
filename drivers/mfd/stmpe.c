@@ -1372,7 +1372,7 @@ int stmpe_probe(struct stmpe_client_info *ci, enum stmpe_partnum partnum)
 	int ret;
 	u32 val;
 
-	pdata = devm_kzalloc(ci->dev, sizeof(*pdata), GFP_KERNEL);
+	pdata = devm_kzalloc_obj(ci->dev, *pdata);
 	if (!pdata)
 		return -ENOMEM;
 
@@ -1381,7 +1381,7 @@ int stmpe_probe(struct stmpe_client_info *ci, enum stmpe_partnum partnum)
 	if (!of_property_present(np, "interrupts"))
 		ci->irq = -1;
 
-	stmpe = devm_kzalloc(ci->dev, sizeof(struct stmpe), GFP_KERNEL);
+	stmpe = devm_kzalloc_obj(ci->dev, struct stmpe);
 	if (!stmpe)
 		return -ENOMEM;
 
@@ -1486,6 +1486,8 @@ EXPORT_SYMBOL_GPL(stmpe_probe);
 
 void stmpe_remove(struct stmpe *stmpe)
 {
+	mfd_remove_devices(stmpe->dev);
+
 	if (stmpe->domain)
 		irq_domain_remove(stmpe->domain);
 
@@ -1495,8 +1497,6 @@ void stmpe_remove(struct stmpe *stmpe)
 		regulator_disable(stmpe->vcc);
 
 	__stmpe_disable(stmpe, STMPE_BLOCK_ADC);
-
-	mfd_remove_devices(stmpe->dev);
 }
 EXPORT_SYMBOL_GPL(stmpe_remove);
 

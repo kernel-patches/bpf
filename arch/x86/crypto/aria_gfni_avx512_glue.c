@@ -87,7 +87,7 @@ static int aria_avx512_ctr_encrypt(struct skcipher_request *req)
 		u8 *dst = walk.dst.virt.addr;
 
 		while (nbytes >= ARIA_GFNI_AVX512_PARALLEL_BLOCK_SIZE) {
-			kernel_fpu_begin();
+			kernel_fpu_begin_mask(0);
 			aria_ops.aria_ctr_crypt_64way(ctx, dst, src,
 						      &req_ctx->keystream[0],
 						      walk.iv);
@@ -98,7 +98,7 @@ static int aria_avx512_ctr_encrypt(struct skcipher_request *req)
 		}
 
 		while (nbytes >= ARIA_AESNI_AVX2_PARALLEL_BLOCK_SIZE) {
-			kernel_fpu_begin();
+			kernel_fpu_begin_mask(0);
 			aria_ops.aria_ctr_crypt_32way(ctx, dst, src,
 						      &req_ctx->keystream[0],
 						      walk.iv);
@@ -109,7 +109,7 @@ static int aria_avx512_ctr_encrypt(struct skcipher_request *req)
 		}
 
 		while (nbytes >= ARIA_AESNI_PARALLEL_BLOCK_SIZE) {
-			kernel_fpu_begin();
+			kernel_fpu_begin_mask(0);
 			aria_ops.aria_ctr_crypt_16way(ctx, dst, src,
 						      &req_ctx->keystream[0],
 						      walk.iv);
@@ -205,12 +205,8 @@ static int __init aria_avx512_init(void)
 		return -ENODEV;
 	}
 
-	aria_ops.aria_encrypt_16way = aria_aesni_avx_gfni_encrypt_16way;
-	aria_ops.aria_decrypt_16way = aria_aesni_avx_gfni_decrypt_16way;
-	aria_ops.aria_ctr_crypt_16way = aria_aesni_avx_gfni_ctr_crypt_16way;
-	aria_ops.aria_encrypt_32way = aria_aesni_avx2_gfni_encrypt_32way;
-	aria_ops.aria_decrypt_32way = aria_aesni_avx2_gfni_decrypt_32way;
-	aria_ops.aria_ctr_crypt_32way = aria_aesni_avx2_gfni_ctr_crypt_32way;
+	aria_avx_setup_16way_ops(&aria_ops, true);
+	aria_avx2_setup_32way_ops(&aria_ops, true);
 	aria_ops.aria_encrypt_64way = aria_gfni_avx512_encrypt_64way;
 	aria_ops.aria_decrypt_64way = aria_gfni_avx512_decrypt_64way;
 	aria_ops.aria_ctr_crypt_64way = aria_gfni_avx512_ctr_crypt_64way;

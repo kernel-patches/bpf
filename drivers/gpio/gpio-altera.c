@@ -174,7 +174,7 @@ static int altera_gpio_probe(struct platform_device *pdev)
 	struct gpio_irq_chip *girq;
 	int mapped_irq;
 
-	altera_gc = devm_kzalloc(&pdev->dev, sizeof(*altera_gc), GFP_KERNEL);
+	altera_gc = devm_kzalloc_obj(&pdev->dev, *altera_gc);
 	if (!altera_gc)
 		return -ENOMEM;
 
@@ -241,8 +241,7 @@ static int altera_gpio_probe(struct platform_device *pdev)
 	else
 		girq->parent_handler = altera_gpio_irq_edge_handler;
 	girq->num_parents = 1;
-	girq->parents = devm_kcalloc(&pdev->dev, 1, sizeof(*girq->parents),
-				     GFP_KERNEL);
+	girq->parents = devm_kzalloc_objs(&pdev->dev, *girq->parents, 1);
 	if (!girq->parents)
 		return -ENOMEM;
 	girq->default_type = IRQ_TYPE_NONE;
@@ -260,8 +259,8 @@ skip_irq:
 }
 
 static const struct of_device_id altera_gpio_of_match[] = {
-	{ .compatible = "altr,pio-1.0", },
-	{},
+	{ .compatible = "altr,pio-1.0" },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, altera_gpio_of_match);
 
@@ -272,18 +271,7 @@ static struct platform_driver altera_gpio_driver = {
 	},
 	.probe		= altera_gpio_probe,
 };
-
-static int __init altera_gpio_init(void)
-{
-	return platform_driver_register(&altera_gpio_driver);
-}
-subsys_initcall(altera_gpio_init);
-
-static void __exit altera_gpio_exit(void)
-{
-	platform_driver_unregister(&altera_gpio_driver);
-}
-module_exit(altera_gpio_exit);
+subsys_platform_driver(altera_gpio_driver);
 
 MODULE_AUTHOR("Tien Hock Loh <thloh@altera.com>");
 MODULE_DESCRIPTION("Altera GPIO driver");

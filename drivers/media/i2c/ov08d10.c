@@ -65,6 +65,14 @@
 #define OV08D10_REG_FLIP_OPT			0x32
 #define OV08D10_REG_FLIP_MASK			0x3
 
+/* OV08D10 native and active pixel array size */
+#define OV08D10_NATIVE_WIDTH			3288
+#define OV08D10_NATIVE_HEIGHT			2476
+#define OV08D10_PIXEL_ARRAY_LEFT		4
+#define OV08D10_PIXEL_ARRAY_TOP			8
+#define OV08D10_PIXEL_ARRAY_WIDTH		3280
+#define OV08D10_PIXEL_ARRAY_HEIGHT		2464
+
 #define to_ov08d10(_sd)		container_of(_sd, struct ov08d10, sd)
 
 struct ov08d10_reg {
@@ -110,6 +118,9 @@ struct ov08d10_mode {
 
 	/* Number of data lanes */
 	u8 data_lanes;
+
+	/* Analogue crop rectangle, in native sensor coordinates */
+	struct v4l2_rect crop;
 };
 
 /* 3280x2460, 3264x2448 need 720Mbps/lane, 2 lanes - 19.2 MHz */
@@ -568,12 +579,6 @@ struct ov08d10 {
 	struct v4l2_ctrl *hflip;
 	struct v4l2_ctrl *exposure;
 
-	/* Current mode */
-	const struct ov08d10_mode *cur_mode;
-
-	/* To serialize asynchronous callbacks */
-	struct mutex mutex;
-
 	/* lanes index */
 	u8 nlanes;
 
@@ -630,6 +635,7 @@ static const struct ov08d10_lane_cfg lane_cfg_2 = {
 		},
 		.link_freq_index = 0,
 		.data_lanes = 2,
+		.crop = { .left =  4, .top =  8, .width = 3280, .height = 2460 },
 	},
 	{
 		.width = 3264,
@@ -643,6 +649,7 @@ static const struct ov08d10_lane_cfg lane_cfg_2 = {
 		},
 		.link_freq_index = 0,
 		.data_lanes = 2,
+		.crop = { .left = 12, .top = 16, .width = 3264, .height = 2448 },
 	},
 	{
 		.width = 1632,
@@ -656,6 +663,7 @@ static const struct ov08d10_lane_cfg lane_cfg_2 = {
 		},
 		.link_freq_index = 1,
 		.data_lanes = 2,
+		.crop = { .left = 12, .top = 16, .width = 3264, .height = 2448 },
 	}}
 };
 
@@ -680,6 +688,19 @@ static unsigned int ov08d10_modes_num(const struct ov08d10 *ov08d10)
 	}
 
 	return count;
+}
+
+/* Must be called with the subdev state lock held */
+static const struct ov08d10_mode *ov08d10_get_mode(struct ov08d10 *ov08d10)
+{
+	struct v4l2_subdev_state *state =
+		v4l2_subdev_get_locked_active_state(&ov08d10->sd);
+	const struct v4l2_mbus_framefmt *fmt =
+		v4l2_subdev_state_get_format(state, 0);
+
+	return v4l2_find_nearest_size(ov08d10->priv_lane->sp_modes,
+				      ov08d10->modes_size, width, height,
+				      fmt->width, fmt->height);
 }
 
 static u64 to_rate(const s64 *link_freq_menu,
@@ -779,7 +800,7 @@ static int ov08d10_set_exposure(struct ov08d10 *ov08d10, u32 exposure)
 	u32 hts, cur_vts, exp_cal;
 	int ret;
 
-	cur_vts = ov08d10->cur_mode->vts_def;
+	cur_vts = ov08d10_get_mode(ov08d10)->vts_def;
 	ret = i2c_smbus_write_byte_data(client, OV08D10_REG_PAGE, 0x01);
 	if (ret < 0)
 		return ret;
@@ -899,19 +920,27 @@ static int ov08d10_set_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct ov08d10 *ov08d10 = container_of(ctrl->handler,
 					     struct ov08d10, ctrl_handler);
+	struct v4l2_subdev_state *state =
+		v4l2_subdev_get_locked_active_state(&ov08d10->sd);
+	struct v4l2_mbus_framefmt *fmt =
+		v4l2_subdev_state_get_format(state, 0);
 	s64 exposure_max;
 	int ret;
 
 	/* Propagate change of current control to all related controls */
 	if (ctrl->id == V4L2_CID_VBLANK) {
 		/* Update max exposure while meeting expected vblanking */
-		exposure_max = ov08d10->cur_mode->height + ctrl->val -
+		exposure_max = fmt->height + ctrl->val -
 			       OV08D10_EXPOSURE_MAX_MARGIN;
 		__v4l2_ctrl_modify_range(ov08d10->exposure,
 					 ov08d10->exposure->minimum,
 					 exposure_max, ov08d10->exposure->step,
 					 exposure_max);
 	}
+
+	/* The flips change the Bayer order, refresh it even while powered off */
+	if (ctrl->id == V4L2_CID_HFLIP || ctrl->id == V4L2_CID_VFLIP)
+		fmt->code = ov08d10_get_format_code(ov08d10);
 
 	/* V4L2 control values will be applied only when power is already up */
 	if (!pm_runtime_get_if_in_use(ov08d10->dev))
@@ -968,7 +997,7 @@ static int ov08d10_init_controls(struct ov08d10 *ov08d10)
 	s64 vblank_min;
 	s64 h_blank;
 	s64 pixel_rate_max;
-	const struct ov08d10_mode *mode;
+	const struct ov08d10_mode *mode = &ov08d10->priv_lane->sp_modes[0];
 	int ret;
 
 	ctrl_hdlr = &ov08d10->ctrl_handler;
@@ -976,7 +1005,6 @@ static int ov08d10_init_controls(struct ov08d10 *ov08d10)
 	if (ret)
 		return ret;
 
-	ctrl_hdlr->lock = &ov08d10->mutex;
 	link_freq_size = ARRAY_SIZE(ov08d10->priv_lane->link_freq_menu);
 	ov08d10->link_freq =
 		v4l2_ctrl_new_int_menu(ctrl_hdlr, &ov08d10_ctrl_ops,
@@ -988,13 +1016,12 @@ static int ov08d10_init_controls(struct ov08d10 *ov08d10)
 		ov08d10->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 
 	pixel_rate_max = to_rate(ov08d10->priv_lane->link_freq_menu, 0,
-				 ov08d10->cur_mode->data_lanes);
+				 mode->data_lanes);
 	ov08d10->pixel_rate =
 		v4l2_ctrl_new_std(ctrl_hdlr, &ov08d10_ctrl_ops,
 				  V4L2_CID_PIXEL_RATE, 0, pixel_rate_max, 1,
 				  pixel_rate_max);
 
-	mode = ov08d10->cur_mode;
 	vblank_def = mode->vts_def - mode->height;
 	vblank_min = mode->vts_min - mode->height;
 	ov08d10->vblank =
@@ -1064,10 +1091,11 @@ static void ov08d10_update_pad_format(struct ov08d10 *ov08d10,
 static int ov08d10_start_streaming(struct ov08d10 *ov08d10)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&ov08d10->sd);
+	const struct ov08d10_mode *mode = ov08d10_get_mode(ov08d10);
 	const struct ov08d10_reg_list *reg_list;
 	int link_freq_index, ret;
 
-	link_freq_index = ov08d10->cur_mode->link_freq_index;
+	link_freq_index = mode->link_freq_index;
 	reg_list =
 		&ov08d10->priv_lane->link_freq_configs[link_freq_index]
 			 .reg_list[ov08d10->xvclk_index];
@@ -1097,7 +1125,7 @@ static int ov08d10_start_streaming(struct ov08d10 *ov08d10)
 		return ret;
 	}
 
-	reg_list = &ov08d10->cur_mode->reg_list;
+	reg_list = &mode->reg_list;
 	ret = ov08d10_write_reg_list(ov08d10, reg_list);
 	if (ret) {
 		dev_err(ov08d10->dev, "failed to set mode\n");
@@ -1147,13 +1175,14 @@ static void ov08d10_stop_streaming(struct ov08d10 *ov08d10)
 static int ov08d10_set_stream(struct v4l2_subdev *sd, int enable)
 {
 	struct ov08d10 *ov08d10 = to_ov08d10(sd);
+	struct v4l2_subdev_state *state;
 	int ret = 0;
 
-	mutex_lock(&ov08d10->mutex);
+	state = v4l2_subdev_lock_and_get_active_state(sd);
 	if (enable) {
 		ret = pm_runtime_resume_and_get(ov08d10->dev);
 		if (ret < 0) {
-			mutex_unlock(&ov08d10->mutex);
+			v4l2_subdev_unlock_state(state);
 			return ret;
 		}
 
@@ -1172,7 +1201,7 @@ static int ov08d10_set_stream(struct v4l2_subdev *sd, int enable)
 	__v4l2_ctrl_grab(ov08d10->vflip, enable);
 	__v4l2_ctrl_grab(ov08d10->hflip, enable);
 
-	mutex_unlock(&ov08d10->mutex);
+	v4l2_subdev_unlock_state(state);
 
 	return ret;
 }
@@ -1192,17 +1221,15 @@ static int ov08d10_set_format(struct v4l2_subdev *sd,
 				      width, height, fmt->format.width,
 				      fmt->format.height);
 
-	mutex_lock(&ov08d10->mutex);
 	ov08d10_update_pad_format(ov08d10, mode, &fmt->format);
-	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
-		*v4l2_subdev_state_get_format(sd_state, fmt->pad) =
-								fmt->format;
-	} else {
-		ov08d10->cur_mode = mode;
+	*v4l2_subdev_state_get_format(sd_state, fmt->pad) = fmt->format;
+	*v4l2_subdev_state_get_crop(sd_state, fmt->pad) = mode->crop;
+
+	if (fmt->which == V4L2_SUBDEV_FORMAT_ACTIVE) {
 		__v4l2_ctrl_s_ctrl(ov08d10->link_freq, mode->link_freq_index);
 		pixel_rate = to_rate(ov08d10->priv_lane->link_freq_menu,
 				     mode->link_freq_index,
-				     ov08d10->cur_mode->data_lanes);
+				     mode->data_lanes);
 		__v4l2_ctrl_s_ctrl_int64(ov08d10->pixel_rate, pixel_rate);
 
 		/* Update limits and set FPS to default */
@@ -1215,32 +1242,11 @@ static int ov08d10_set_format(struct v4l2_subdev *sd,
 		h_blank = to_pixels_per_line(ov08d10->priv_lane->link_freq_menu,
 					     mode->hts,
 					     mode->link_freq_index,
-					     ov08d10->cur_mode->data_lanes)
+					     mode->data_lanes)
 					     - mode->width;
 		__v4l2_ctrl_modify_range(ov08d10->hblank, h_blank, h_blank, 1,
 					 h_blank);
 	}
-
-	mutex_unlock(&ov08d10->mutex);
-
-	return 0;
-}
-
-static int ov08d10_get_format(struct v4l2_subdev *sd,
-			      struct v4l2_subdev_state *sd_state,
-			      struct v4l2_subdev_format *fmt)
-{
-	struct ov08d10 *ov08d10 = to_ov08d10(sd);
-
-	mutex_lock(&ov08d10->mutex);
-	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY)
-		fmt->format = *v4l2_subdev_state_get_format(sd_state,
-							    fmt->pad);
-	else
-		ov08d10_update_pad_format(ov08d10, ov08d10->cur_mode,
-					  &fmt->format);
-
-	mutex_unlock(&ov08d10->mutex);
 
 	return 0;
 }
@@ -1254,9 +1260,7 @@ static int ov08d10_enum_mbus_code(struct v4l2_subdev *sd,
 	if (code->index > 0)
 		return -EINVAL;
 
-	mutex_lock(&ov08d10->mutex);
 	code->code = ov08d10_get_format_code(ov08d10);
-	mutex_unlock(&ov08d10->mutex);
 
 	return 0;
 }
@@ -1270,12 +1274,8 @@ static int ov08d10_enum_frame_size(struct v4l2_subdev *sd,
 	if (fse->index >= ov08d10->modes_size)
 		return -EINVAL;
 
-	mutex_lock(&ov08d10->mutex);
-	if (fse->code != ov08d10_get_format_code(ov08d10)) {
-		mutex_unlock(&ov08d10->mutex);
+	if (fse->code != ov08d10_get_format_code(ov08d10))
 		return -EINVAL;
-	}
-	mutex_unlock(&ov08d10->mutex);
 
 	fse->min_width = ov08d10->priv_lane->sp_modes[fse->index].width;
 	fse->max_width = fse->min_width;
@@ -1285,14 +1285,45 @@ static int ov08d10_enum_frame_size(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int ov08d10_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
+static int ov08d10_get_selection(struct v4l2_subdev *sd,
+				 const struct v4l2_subdev_client_info *ci,
+				 struct v4l2_subdev_state *sd_state,
+				 struct v4l2_subdev_selection *sel)
+{
+	switch (sel->target) {
+	case V4L2_SEL_TGT_CROP:
+		sel->r = *v4l2_subdev_state_get_crop(sd_state, sel->pad);
+		return 0;
+
+	case V4L2_SEL_TGT_NATIVE_SIZE:
+		sel->r.left = 0;
+		sel->r.top = 0;
+		sel->r.width = OV08D10_NATIVE_WIDTH;
+		sel->r.height = OV08D10_NATIVE_HEIGHT;
+		return 0;
+
+	case V4L2_SEL_TGT_CROP_DEFAULT:
+	case V4L2_SEL_TGT_CROP_BOUNDS:
+		sel->r.left = OV08D10_PIXEL_ARRAY_LEFT;
+		sel->r.top = OV08D10_PIXEL_ARRAY_TOP;
+		sel->r.width = OV08D10_PIXEL_ARRAY_WIDTH;
+		sel->r.height = OV08D10_PIXEL_ARRAY_HEIGHT;
+		return 0;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+static int ov08d10_init_state(struct v4l2_subdev *sd,
+			      struct v4l2_subdev_state *sd_state)
 {
 	struct ov08d10 *ov08d10 = to_ov08d10(sd);
+	const struct ov08d10_mode *mode = &ov08d10->priv_lane->sp_modes[0];
 
-	mutex_lock(&ov08d10->mutex);
-	ov08d10_update_pad_format(ov08d10, &ov08d10->priv_lane->sp_modes[0],
-				  v4l2_subdev_state_get_format(fh->state, 0));
-	mutex_unlock(&ov08d10->mutex);
+	ov08d10_update_pad_format(ov08d10, mode,
+				  v4l2_subdev_state_get_format(sd_state, 0));
+	*v4l2_subdev_state_get_crop(sd_state, 0) = mode->crop;
 
 	return 0;
 }
@@ -1303,9 +1334,10 @@ static const struct v4l2_subdev_video_ops ov08d10_video_ops = {
 
 static const struct v4l2_subdev_pad_ops ov08d10_pad_ops = {
 	.set_fmt = ov08d10_set_format,
-	.get_fmt = ov08d10_get_format,
+	.get_fmt = v4l2_subdev_get_fmt,
 	.enum_mbus_code = ov08d10_enum_mbus_code,
 	.enum_frame_size = ov08d10_enum_frame_size,
+	.get_selection = ov08d10_get_selection,
 };
 
 static const struct v4l2_subdev_ops ov08d10_subdev_ops = {
@@ -1314,7 +1346,7 @@ static const struct v4l2_subdev_ops ov08d10_subdev_ops = {
 };
 
 static const struct v4l2_subdev_internal_ops ov08d10_internal_ops = {
-	.open = ov08d10_open,
+	.init_state = ov08d10_init_state,
 };
 
 static int ov08d10_power_off(struct device *dev)
@@ -1359,10 +1391,10 @@ static int ov08d10_power_on(struct device *dev)
 		fsleep(5 * USEC_PER_MSEC);
 
 		reset_control_deassert(ov08d10->reset);
-
-		/* Delay from XSHUTDN pull up to SCCB start: 8ms */
-		fsleep(8 * USEC_PER_MSEC);
 	}
+
+	/* Delay from XSHUTDN pull up to SCCB start: 8ms */
+	fsleep(8 * USEC_PER_MSEC);
 
 	return 0;
 }
@@ -1432,7 +1464,8 @@ static int ov08d10_get_hwcfg(struct ov08d10 *ov08d10)
 		goto check_hwcfg_error;
 	}
 
-	dev_dbg(dev, "Using %u data lanes\n", ov08d10->cur_mode->data_lanes);
+	dev_dbg(dev, "Using %u data lanes\n",
+		bus_cfg.bus.mipi_csi2.num_data_lanes);
 
 	ov08d10->priv_lane = &lane_cfg_2;
 	ov08d10->modes_size = ov08d10_modes_num(ov08d10);
@@ -1470,6 +1503,7 @@ static void ov08d10_remove(struct i2c_client *client)
 	struct ov08d10 *ov08d10 = to_ov08d10(sd);
 
 	v4l2_async_unregister_subdev(sd);
+	v4l2_subdev_cleanup(sd);
 	media_entity_cleanup(&sd->entity);
 	v4l2_ctrl_handler_free(sd->ctrl_handler);
 	pm_runtime_disable(ov08d10->dev);
@@ -1477,7 +1511,6 @@ static void ov08d10_remove(struct i2c_client *client)
 		ov08d10_power_off(ov08d10->dev);
 		pm_runtime_set_suspended(ov08d10->dev);
 	}
-	mutex_destroy(&ov08d10->mutex);
 }
 
 static int ov08d10_probe(struct i2c_client *client)
@@ -1487,7 +1520,7 @@ static int ov08d10_probe(struct i2c_client *client)
 	unsigned int i;
 	int ret;
 
-	ov08d10 = devm_kzalloc(&client->dev, sizeof(*ov08d10), GFP_KERNEL);
+	ov08d10 = devm_kzalloc_obj(&client->dev, *ov08d10);
 	if (!ov08d10)
 		return -ENOMEM;
 
@@ -1516,7 +1549,8 @@ static int ov08d10_probe(struct i2c_client *client)
 		return ret;
 	}
 
-	ov08d10->reset = devm_reset_control_get_optional_exclusive(ov08d10->dev, NULL);
+	ov08d10->reset = devm_reset_control_get_optional_exclusive(ov08d10->dev,
+								   NULL);
 	if (IS_ERR(ov08d10->reset))
 		return dev_err_probe(ov08d10->dev, PTR_ERR(ov08d10->reset),
 				     "failed to get reset\n");
@@ -1544,8 +1578,6 @@ static int ov08d10_probe(struct i2c_client *client)
 		goto probe_error_power_off;
 	}
 
-	mutex_init(&ov08d10->mutex);
-	ov08d10->cur_mode = &ov08d10->priv_lane->sp_modes[0];
 	ret = ov08d10_init_controls(ov08d10);
 	if (ret) {
 		dev_err(ov08d10->dev, "failed to init controls: %d\n", ret);
@@ -1565,16 +1597,26 @@ static int ov08d10_probe(struct i2c_client *client)
 	pm_runtime_set_active(ov08d10->dev);
 	pm_runtime_enable(ov08d10->dev);
 
+	ov08d10->sd.state_lock = ov08d10->ctrl_handler.lock;
+	ret = v4l2_subdev_init_finalize(&ov08d10->sd);
+	if (ret) {
+		dev_err(ov08d10->dev, "failed to init subdev state: %d\n", ret);
+		goto probe_error_media_entity_cleanup;
+	}
+
 	ret = v4l2_async_register_subdev_sensor(&ov08d10->sd);
 	if (ret < 0) {
 		dev_err(ov08d10->dev, "failed to register V4L2 subdev: %d\n",
 			ret);
-		goto probe_error_media_entity_cleanup;
+		goto probe_error_subdev_cleanup;
 	}
 
 	pm_runtime_idle(ov08d10->dev);
 
 	return 0;
+
+probe_error_subdev_cleanup:
+	v4l2_subdev_cleanup(&ov08d10->sd);
 
 probe_error_media_entity_cleanup:
 	pm_runtime_disable(ov08d10->dev);
@@ -1583,7 +1625,6 @@ probe_error_media_entity_cleanup:
 
 probe_error_v4l2_ctrl_handler_free:
 	v4l2_ctrl_handler_free(ov08d10->sd.ctrl_handler);
-	mutex_destroy(&ov08d10->mutex);
 
 probe_error_power_off:
 	ov08d10_power_off(ov08d10->dev);

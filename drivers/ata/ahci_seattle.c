@@ -48,7 +48,7 @@ struct seattle_plat_data {
 };
 
 static struct ata_port_operations ahci_port_ops = {
-	.inherits		= &ahci_ops,
+	.inherits		= &ahci_platform_ops,
 };
 
 static const struct ata_port_info ahci_port_info = {
@@ -59,7 +59,7 @@ static const struct ata_port_info ahci_port_info = {
 };
 
 static struct ata_port_operations ahci_seattle_ops = {
-	.inherits		= &ahci_ops,
+	.inherits		= &ahci_platform_ops,
 	.transmit_led_message   = seattle_transmit_led_message,
 };
 
@@ -92,6 +92,8 @@ static ssize_t seattle_transmit_led_message(struct ata_port *ap, u32 state,
 		return -EINVAL;
 	emp = &pp->em_priv[pmp];
 
+	spin_lock_irqsave(ap->lock, flags);
+
 	val = ioread32(plat_data->sgpio_ctrl);
 	if (state & ACTIVITY_MASK)
 		val |= 1 << ACTIVITY_BIT_POS((ap->port_no));
@@ -110,8 +112,6 @@ static ssize_t seattle_transmit_led_message(struct ata_port *ap, u32 state,
 
 	iowrite32(val, plat_data->sgpio_ctrl);
 
-	spin_lock_irqsave(ap->lock, flags);
-
 	/* save off new led state for port/slot */
 	emp->led_state = state;
 
@@ -127,7 +127,7 @@ static const struct ata_port_info *ahci_seattle_get_port_info(
 	struct seattle_plat_data *plat_data;
 	u32 val;
 
-	plat_data = devm_kzalloc(dev, sizeof(*plat_data), GFP_KERNEL);
+	plat_data = devm_kzalloc_obj(dev, *plat_data);
 	if (!plat_data)
 		return &ahci_port_info;
 

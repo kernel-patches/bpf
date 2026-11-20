@@ -1166,13 +1166,12 @@ static int i2s_alloc_dais(struct samsung_i2s_priv *priv,
 	struct snd_soc_dai_driver *dai_drv;
 	int i;
 
-	priv->dai = devm_kcalloc(&priv->pdev->dev, num_dais,
-				     sizeof(struct i2s_dai), GFP_KERNEL);
+	priv->dai = devm_kzalloc_objs(&priv->pdev->dev, struct i2s_dai,
+				      num_dais);
 	if (!priv->dai)
 		return -ENOMEM;
 
-	priv->dai_drv = devm_kcalloc(&priv->pdev->dev, num_dais,
-				     sizeof(*dai_drv), GFP_KERNEL);
+	priv->dai_drv = devm_kzalloc_objs(&priv->pdev->dev, *dai_drv, num_dais);
 	if (!priv->dai_drv)
 		return -ENOMEM;
 
@@ -1365,8 +1364,8 @@ static int i2s_create_secondary_device(struct samsung_i2s_priv *priv)
 
 	ret = device_attach(&pdev_sec->dev);
 	if (ret <= 0) {
-		platform_device_unregister(priv->pdev_sec);
 		dev_info(&pdev_sec->dev, "device_attach() failed\n");
+		platform_device_unregister(pdev_sec);
 		return ret;
 	}
 
@@ -1405,7 +1404,7 @@ static int samsung_i2s_probe(struct platform_device *pdev)
 		i2s_dai_data = (struct samsung_i2s_dai_data *)id->driver_data;
 	}
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(&pdev->dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

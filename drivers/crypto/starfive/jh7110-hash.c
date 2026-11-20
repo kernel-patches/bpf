@@ -144,8 +144,7 @@ static int starfive_hash_dma_xfer(struct starfive_cryp_dev *cryp,
 	}
 
 	reinit_completion(&cryp->dma_done);
-	in_desc->callback = starfive_hash_dma_callback;
-	in_desc->callback_param = cryp;
+	dmaengine_desc_set_callback(in_desc, starfive_hash_dma_callback, NULL, cryp);
 
 	dmaengine_submit(in_desc);
 	dma_async_issue_pending(cryp->tx);

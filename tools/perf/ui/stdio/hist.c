@@ -424,7 +424,7 @@ int __hist_entry__snprintf(struct hist_entry *he, struct perf_hpp *hpp,
 	int ret;
 	bool first = true;
 
-	if (symbol_conf.exclude_other && !he->parent)
+	if (symbol_conf.exclude_other && !he->parent.sym)
 		return 0;
 
 	perf_hpp_list__for_each_format(hpp_list, fmt) {
@@ -471,7 +471,7 @@ static int hist_entry__hierarchy_fprintf(struct hist_entry *he,
 	int ret, printed = 0;
 	bool first = true;
 
-	if (symbol_conf.exclude_other && !he->parent)
+	if (symbol_conf.exclude_other && !he->parent.sym)
 		return 0;
 
 	ret = scnprintf(hpp->buf, hpp->size, "%*s", he->depth * HIERARCHY_INDENT, "");

@@ -258,21 +258,21 @@ void dcn42_update_clocks(struct clk_mgr *clk_mgr_base,
 			dcn42_smu_set_zstate_support(clk_mgr, DCN_ZSTATE_SUPPORT_DISALLOW);
 			clk_mgr_base->clks.zstate_support = new_clocks->zstate_support;
 		}
-		/* Only attempt to enable dtbclk if currently disabled AND new state requests it.
-		 * For dcn42b (no dtbclk hardware), init_clk_states sets dtbclk_en=false and
-		 * new_clocks->dtbclk_en should always be false, so this block never executes.
+		/* PMFW may stop dtbclk on idle, so re-read the actual frequency even when
+		 * clks.dtbclk_en is already set, and re-enable it if it has dropped.
 		 */
-		actual_dtbclk = dcn42_get_clock_freq_from_clkip(clk_mgr_base, clock_type_dtbclk);
-
-		if (new_clocks->dtbclk_en && actual_dtbclk < 590000) {
-
-			dcn42_update_clocks_update_dtb_dto(clk_mgr, context, new_clocks->ref_dtbclk_khz);
-			dcn42_smu_set_dtbclk(clk_mgr, true);
+		if (new_clocks->dtbclk_en) {
 			actual_dtbclk = dcn42_get_clock_freq_from_clkip(clk_mgr_base, clock_type_dtbclk);
 
-			if (actual_dtbclk > 590000) {
-				clk_mgr_base->clks.ref_dtbclk_khz = new_clocks->ref_dtbclk_khz;
-				clk_mgr_base->clks.dtbclk_en = new_clocks->dtbclk_en;
+			if (actual_dtbclk < 590000) {
+				dcn42_update_clocks_update_dtb_dto(clk_mgr, context, new_clocks->ref_dtbclk_khz);
+				dcn42_smu_set_dtbclk(clk_mgr, true);
+				actual_dtbclk = dcn42_get_clock_freq_from_clkip(clk_mgr_base, clock_type_dtbclk);
+
+				if (actual_dtbclk > 590000) {
+					clk_mgr_base->clks.ref_dtbclk_khz = new_clocks->ref_dtbclk_khz;
+					clk_mgr_base->clks.dtbclk_en = new_clocks->dtbclk_en;
+				}
 			}
 		}
 
@@ -628,8 +628,8 @@ DC_LOGGER_INIT(clk_mgr_base->ctx->logger);
 	 * DF C-state policy
 	 * D0 entry must NOT send a PMFW message, but must unconditionally clear
 	 * the cached vote so the next allow-side transition (prepare_bandwidth
-	 * or dc_power_down_on_boot) is guaranteed to issue a fresh
-	 * DfCstateDisable(Allow) and resync DAL with PMFW.
+	 * or dc_power_down_on_boot) always issues a fresh DfCstateDisable(Allow)
+	 * and resyncs DAL with PMFW.
 	 */
 	clk_mgr_base->clks.cstate_allow = false;
 
@@ -643,6 +643,9 @@ DC_LOGGER_INIT(clk_mgr_base->ctx->logger);
 	DC_LOG_SMU("dp_dto_source_clock %d, dprefclk %d\n", clk_mgr_base->dp_dto_source_clock_in_khz, clk_mgr_base->dprefclk_khz);
 	dcn42_dump_clk_registers(&clk_mgr_base->boot_snapshot, clk_mgr);
 
+	/* Snapshot is in 10kHz units; seed clks so update_clocks() does not lower the pre-OS clocks */
+	clk_mgr_base->clks.dispclk_khz = clk_mgr_base->boot_snapshot.dispclk * 10;
+	clk_mgr_base->clks.dppclk_khz = clk_mgr_base->boot_snapshot.dppclk * 10;
 	clk_mgr_base->clks.ref_dtbclk_khz =  clk_mgr_base->boot_snapshot.dtbclk * 10;
 	clk_mgr_base->clks.dtbclk_en = clk_mgr_base->boot_snapshot.dtbclk > 59000;
 }

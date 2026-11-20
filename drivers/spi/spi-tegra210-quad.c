@@ -237,6 +237,17 @@ struct tegra_qspi {
 	bool					is_packed;
 	bool					use_dma;
 
+	/*
+	 * Set while a streaming mapping created by
+	 * tegra_qspi_dma_map_xfer() is outstanding, together with the
+	 * length that was handed to dma_map_single(). is_curr_dma_xfer
+	 * only records that the last armed chunk took the DMA path,
+	 * which is not the same thing: a chunk whose mapping failed
+	 * leaves the DMA path flagged with nothing mapped.
+	 */
+	bool					is_dma_mapped;
+	unsigned int				dma_map_len;
+
 	u32					command1_reg;
 	u32					dma_control_reg;
 	u32					def_command1_reg;
@@ -522,8 +533,7 @@ static int tegra_qspi_start_tx_dma(struct tegra_qspi *tqspi, struct spi_transfer
 		return -EIO;
 	}
 
-	tqspi->tx_dma_desc->callback = tegra_qspi_dma_complete;
-	tqspi->tx_dma_desc->callback_param = &tqspi->tx_dma_complete;
+	dmaengine_desc_set_callback(tqspi->tx_dma_desc, tegra_qspi_dma_complete, NULL, &tqspi->tx_dma_complete);
 	dmaengine_submit(tqspi->tx_dma_desc);
 	dma_async_issue_pending(tqspi->tx_dma_chan);
 
@@ -550,8 +560,7 @@ static int tegra_qspi_start_rx_dma(struct tegra_qspi *tqspi, struct spi_transfer
 		return -EIO;
 	}
 
-	tqspi->rx_dma_desc->callback = tegra_qspi_dma_complete;
-	tqspi->rx_dma_desc->callback_param = &tqspi->rx_dma_complete;
+	dmaengine_desc_set_callback(tqspi->rx_dma_desc, tegra_qspi_dma_complete, NULL, &tqspi->rx_dma_complete);
 	dmaengine_submit(tqspi->rx_dma_desc);
 	dma_async_issue_pending(tqspi->rx_dma_chan);
 
@@ -606,24 +615,32 @@ static int tegra_qspi_dma_map_xfer(struct tegra_qspi *tqspi, struct spi_transfer
 	if (t->rx_buf) {
 		t->rx_dma = dma_map_single(tqspi->rx_dma_dev, (void *)rx_buf, len, DMA_FROM_DEVICE);
 		if (dma_mapping_error(tqspi->rx_dma_dev, t->rx_dma)) {
-			dma_unmap_single(tqspi->tx_dma_dev, t->tx_dma, len, DMA_TO_DEVICE);
+			if (t->tx_buf)
+				dma_unmap_single(tqspi->tx_dma_dev, t->tx_dma,
+						 len, DMA_TO_DEVICE);
 			return -ENOMEM;
 		}
 	}
+
+	tqspi->dma_map_len = len;
+	tqspi->is_dma_mapped = true;
 
 	return 0;
 }
 
 static void tegra_qspi_dma_unmap_xfer(struct tegra_qspi *tqspi, struct spi_transfer *t)
 {
-	unsigned int len;
-
-	len = DIV_ROUND_UP(tqspi->curr_dma_words * tqspi->bytes_per_word, 4) * 4;
+	if (!tqspi->is_dma_mapped)
+		return;
 
 	if (t->tx_buf)
-		dma_unmap_single(tqspi->tx_dma_dev, t->tx_dma, len, DMA_TO_DEVICE);
+		dma_unmap_single(tqspi->tx_dma_dev, t->tx_dma,
+				 tqspi->dma_map_len, DMA_TO_DEVICE);
 	if (t->rx_buf)
-		dma_unmap_single(tqspi->rx_dma_dev, t->rx_dma, len, DMA_FROM_DEVICE);
+		dma_unmap_single(tqspi->rx_dma_dev, t->rx_dma,
+				 tqspi->dma_map_len, DMA_FROM_DEVICE);
+
+	tqspi->is_dma_mapped = false;
 }
 
 static int tegra_qspi_start_dma_based_transfer(struct tegra_qspi *tqspi, struct spi_transfer *t)
@@ -1032,7 +1049,7 @@ static struct tegra_qspi_client_data *tegra_qspi_parse_cdata_dt(struct spi_devic
 	struct tegra_qspi_client_data *cdata;
 	struct tegra_qspi *tqspi = spi_controller_get_devdata(spi->controller);
 
-	cdata = devm_kzalloc(tqspi->dev, sizeof(*cdata), GFP_KERNEL);
+	cdata = devm_kzalloc_obj(tqspi->dev, *cdata);
 	if (!cdata)
 		return NULL;
 
@@ -1260,8 +1277,17 @@ static int tegra_qspi_handle_timeout(struct tegra_qspi *tqspi)
 	 * loaded the cache but before we masked).
 	 */
 	refreshed = smp_load_acquire(&tqspi->trans_status);
-	if (refreshed)
+	if (refreshed) {
 		status = refreshed;
+		/*
+		 * The drain observed a real ISR completion. Prefer the
+		 * ISR-published status_reg / tx_status / rx_status over
+		 * the pre-drain lost-IRQ snapshot, which may have been
+		 * taken after the ISR W1C-ed the hardware error bits and
+		 * therefore holds cleared values.
+		 */
+		lost_irq_snapshot = false;
+	}
 
 	if (!(status & QSPI_RDY)) {
 		retval = -ETIMEDOUT;
@@ -1479,10 +1505,12 @@ static int tegra_qspi_combined_seq_xfer(struct tegra_qspi *tqspi,
 					dev_err(tqspi->dev, "transfer timeout\n");
 
 					/* Abort transfer by resetting pio/dma bit */
-					if (tqspi->is_curr_dma_xfer)
+					if (tqspi->is_curr_dma_xfer) {
 						tegra_qspi_dma_stop(tqspi);
-					else
+						tegra_qspi_dma_unmap_xfer(tqspi, xfer);
+					} else {
 						tegra_qspi_pio_stop(tqspi);
+					}
 
 					/* Reset controller if timeout happens */
 					tegra_qspi_reset(tqspi);
@@ -1596,8 +1624,10 @@ static int tegra_qspi_non_combined_seq_xfer(struct tegra_qspi *tqspi,
 				WARN_ON(1);
 				dev_err(tqspi->dev, "transfer timeout\n");
 
-				if (tqspi->is_curr_dma_xfer)
+				if (tqspi->is_curr_dma_xfer) {
 					tegra_qspi_dma_stop(tqspi);
+					tegra_qspi_dma_unmap_xfer(tqspi, xfer);
+				}
 
 				tegra_qspi_handle_error(tqspi);
 				ret = -EIO;
@@ -2185,7 +2215,6 @@ exit_free_irq:
 exit_destroy_wq:
 	destroy_workqueue(tqspi->wq);
 exit_pm_disable:
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_force_suspend(&pdev->dev);
 	tegra_qspi_deinit_dma(tqspi);
 	return ret;
@@ -2205,7 +2234,6 @@ static void tegra_qspi_remove(struct platform_device *pdev)
 	spi_unregister_controller(host);
 	free_irq(tqspi->irq, tqspi);
 	destroy_workqueue(tqspi->wq);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_force_suspend(&pdev->dev);
 	tegra_qspi_deinit_dma(tqspi);
 }

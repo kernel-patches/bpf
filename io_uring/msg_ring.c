@@ -186,7 +186,7 @@ static int io_msg_grab_file(struct io_kiocb *req, unsigned int issue_flags)
 		msg->src_file = io_slot_file(node);
 		if (msg->src_file)
 			get_file(msg->src_file);
-		req->flags |= REQ_F_NEED_CLEANUP;
+		io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 		ret = 0;
 	}
 	io_ring_submit_unlock(ctx, issue_flags);
@@ -208,7 +208,7 @@ static int io_msg_install_complete(struct io_kiocb *req, unsigned int issue_flag
 		goto out_unlock;
 
 	msg->src_file = NULL;
-	req->flags &= ~REQ_F_NEED_CLEANUP;
+	io_req_clear_flags(req, REQ_F_NEED_CLEANUP);
 
 	if (msg->flags & IORING_MSG_RING_CQE_SKIP)
 		goto out_unlock;
@@ -323,11 +323,8 @@ int io_msg_ring(struct io_kiocb *req, unsigned int issue_flags)
 	}
 
 done:
-	if (ret < 0) {
-		if (ret == -EAGAIN || ret == IOU_ISSUE_SKIP_COMPLETE)
-			return ret;
-		req_set_fail(req);
-	}
+	if (ret == -EAGAIN || ret == IOU_ISSUE_SKIP_COMPLETE)
+		return ret;
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

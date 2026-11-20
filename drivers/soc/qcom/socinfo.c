@@ -560,6 +560,8 @@ static const struct soc_id soc_id[] = {
 	{ qcom_board_id(IPQ9630) },
 	{ qcom_board_id(IPQ9640) },
 	{ qcom_board_id(IPQ9670) },
+	{ qcom_board_id(QCF3211) },
+	{ qcom_board_id(IPQ5211) },
 };
 
 static const char *socinfo_machine(struct device *dev, unsigned int id)
@@ -908,7 +910,7 @@ static int qcom_socinfo_probe(struct platform_device *pdev)
 		return PTR_ERR(info);
 	}
 
-	qs = devm_kzalloc(&pdev->dev, sizeof(*qs), GFP_KERNEL);
+	qs = devm_kzalloc_obj(&pdev->dev, *qs);
 	if (!qs)
 		return -ENOMEM;
 

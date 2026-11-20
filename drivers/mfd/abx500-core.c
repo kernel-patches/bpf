@@ -5,6 +5,7 @@
  * Author: Mattias Wallin <mattias.wallin@stericsson.com>
  */
 
+#include <linux/device.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/err.h>
@@ -33,22 +34,6 @@ static void lookup_ops(struct device *dev, struct abx500_ops **ops)
 	}
 }
 
-int abx500_register_ops(struct device *dev, struct abx500_ops *ops)
-{
-	struct abx500_device_entry *dev_entry;
-
-	dev_entry = devm_kzalloc(dev, sizeof(*dev_entry), GFP_KERNEL);
-	if (!dev_entry)
-		return -ENOMEM;
-
-	dev_entry->dev = dev;
-	memcpy(&dev_entry->ops, ops, sizeof(*ops));
-
-	list_add_tail(&dev_entry->list, &abx500_list);
-	return 0;
-}
-EXPORT_SYMBOL(abx500_register_ops);
-
 void abx500_remove_ops(struct device *dev)
 {
 	struct abx500_device_entry *dev_entry, *tmp;
@@ -58,6 +43,28 @@ void abx500_remove_ops(struct device *dev)
 			list_del(&dev_entry->list);
 }
 EXPORT_SYMBOL(abx500_remove_ops);
+
+static void abx500_unregister_ops(void *data)
+{
+	abx500_remove_ops(data);
+}
+
+int abx500_register_ops(struct device *dev, struct abx500_ops *ops)
+{
+	struct abx500_device_entry *dev_entry;
+
+	dev_entry = devm_kzalloc_obj(dev, *dev_entry);
+	if (!dev_entry)
+		return -ENOMEM;
+
+	dev_entry->dev = dev;
+	memcpy(&dev_entry->ops, ops, sizeof(*ops));
+
+	list_add_tail(&dev_entry->list, &abx500_list);
+
+	return devm_add_action_or_reset(dev, abx500_unregister_ops, dev);
+}
+EXPORT_SYMBOL(abx500_register_ops);
 
 int abx500_set_register_interruptible(struct device *dev, u8 bank, u8 reg,
 	u8 value)

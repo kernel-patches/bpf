@@ -1052,6 +1052,7 @@ static void nfs_fill_super(struct super_block *sb, struct nfs_fs_context *ctx)
 	sb->s_blocksize = 0;
 	sb->s_xattr = server->nfs_client->cl_nfs_mod->xattr;
 	sb->s_op = server->nfs_client->cl_nfs_mod->sops;
+	sb->s_iflags |= SB_I_NO_ATOMIC_MKDIR;
 	if (server->bsize)
 		sb->s_blocksize =
 			nfs_block_size(server->bsize, &sb->s_blocksize_bits);
@@ -1315,6 +1316,8 @@ int nfs_get_tree_common(struct fs_context *fc)
 		error = nfs_get_cache_cookie(s, ctx);
 		if (error < 0)
 			goto error_splat_super;
+		if (!(server->flags & NFS_MOUNT_UNSHARED))
+			s->s_iflags |= SB_I_MULTIROOT;
 	}
 
 	error = nfs_get_root(s, fc);

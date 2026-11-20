@@ -27,7 +27,7 @@
 #define CGBC_BL_MAX_BRIGHTNESS     100
 
 /**
- * CGBC backlight driver data
+ * struct cgbc_bl_data - CGBC backlight driver data
  * @dev: Pointer to the platform device
  * @cgbc: Pointer to the parent CGBC device data
  * @current_brightness: Current brightness level (0-100)
@@ -136,7 +136,7 @@ static int cgbc_bl_probe(struct platform_device *pdev)
 	struct cgbc_bl_data *bl_data;
 	int ret;
 
-	bl_data = devm_kzalloc(&pdev->dev, sizeof(*bl_data), GFP_KERNEL);
+	bl_data = devm_kzalloc_obj(&pdev->dev, *bl_data);
 	if (!bl_data)
 		return -ENOMEM;
 

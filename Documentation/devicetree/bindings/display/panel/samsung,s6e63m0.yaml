@@ -21,6 +21,14 @@ properties:
   reg:
     maxItems: 1
 
+  interrupts:
+    description: Electrostatic discharge (ESD) detection interrupt.
+    maxItems: 1
+
+  interrupt-names:
+    items:
+      - const: esd
+
   default-brightness: true
   max-brightness: true
 

@@ -822,7 +822,7 @@ static int cxusb_medion_v_start_streaming(struct vb2_queue *q,
 		if (!streambuf) {
 			if (i < 2) {
 				ret = -ENOMEM;
-				goto ret_freeab;
+				goto ret_freeu;
 			}
 			break;
 		}
@@ -879,8 +879,6 @@ static int cxusb_medion_v_start_streaming(struct vb2_queue *q,
 
 ret_freeu:
 	cxusb_medion_urbs_free(cxdev);
-
-ret_freeab:
 	vfree(cxdev->auxbuf.buf);
 
 ret_unstream_md:

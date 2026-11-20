@@ -121,7 +121,7 @@ static int pmbus_identify(struct i2c_client *client,
 
 		vout_mode = pmbus_read_byte_data(client, 0, PMBUS_VOUT_MODE);
 		if (vout_mode >= 0 && vout_mode != 0xff) {
-			switch (vout_mode >> 5) {
+			switch ((vout_mode & 0x60) >> 5) {
 			case 0:
 				break;
 			case 1:
@@ -168,14 +168,13 @@ static int pmbus_probe(struct i2c_client *client)
 	struct device *dev = &client->dev;
 	struct pmbus_device_info *device_info;
 
-	info = devm_kzalloc(dev, sizeof(struct pmbus_driver_info), GFP_KERNEL);
+	info = devm_kzalloc_obj(dev, struct pmbus_driver_info);
 	if (!info)
 		return -ENOMEM;
 
 	device_info = (struct pmbus_device_info *)i2c_get_match_data(client);
 	if (device_info->flags) {
-		pdata = devm_kzalloc(dev, sizeof(struct pmbus_platform_data),
-				     GFP_KERNEL);
+		pdata = devm_kzalloc_obj(dev, struct pmbus_platform_data);
 		if (!pdata)
 			return -ENOMEM;
 

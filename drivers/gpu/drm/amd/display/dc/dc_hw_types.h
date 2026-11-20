@@ -390,14 +390,14 @@ enum swizzle_mode_addr3_values {
 	DC_ADDR3_SW_UNKNOWN = DC_ADDR3_SW_MAX
 };
 
-enum dc_gfxversion {
-	DcGfxVersion7 = 0,
-	DcGfxVersion8,
-	DcGfxVersion9,
-	DcGfxVersion10,
-	DcGfxVersion11,
-	DcGfxAddr3,
-	DcGfxVersionUnknown
+enum dc_gfx_addr_version {
+	DcGfxVersion7 = 0x0700,
+	DcGfxVersion8 = 0x0800,
+	DcGfxVersion9 = 0x0900,
+	DcGfxVersion10 = 0x0A00,
+	DcGfxVersion11 = 0x0B00,
+	DcGfxAddr3 = 0x0C00,
+	DcGfxVersionUnknown = 0xFFFF
 };
 
  struct dc_tiling_info {
@@ -1083,7 +1083,6 @@ struct dc_crtc_timing_adjust {
 	uint32_t v_total_mid;
 	uint32_t v_total_mid_frame_num;
 	uint32_t allow_otg_v_count_halt;
-	uint8_t timing_adjust_pending;
 };
 
 struct dtbclk_dto_params {

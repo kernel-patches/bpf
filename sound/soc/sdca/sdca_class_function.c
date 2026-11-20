@@ -121,8 +121,9 @@ static int class_function_startup(struct snd_pcm_substream *substream,
 				  struct snd_soc_dai *dai)
 {
 	struct class_function_drv *drv = snd_soc_component_get_drvdata(dai->component);
+	struct sdw_slave *sdw = dev_to_sdw_dev(drv->dev->parent);
 
-	return sdca_asoc_set_constraints(drv->dev, drv->regmap, drv->function,
+	return sdca_asoc_set_constraints(drv->dev, sdw, drv->regmap, drv->function,
 					 substream, dai);
 }
 
@@ -184,8 +185,9 @@ static int class_function_sdw_set_stream(struct snd_soc_dai *dai, void *sdw_stre
 }
 
 static const struct snd_soc_dai_ops class_function_sdw_ops = {
+	.probe		= sdca_asoc_alloc_constraints,
+	.remove		= sdca_asoc_free_constraints,
 	.startup	= class_function_startup,
-	.shutdown	= sdca_asoc_free_constraints,
 	.set_stream	= class_function_sdw_set_stream,
 	.hw_params	= class_function_sdw_add_peripheral,
 	.hw_free	= class_function_sdw_remove_peripheral,
@@ -340,7 +342,7 @@ static int class_function_probe(struct auxiliary_device *auxdev,
 	int num_dais;
 	int ret;
 
-	drv = devm_kzalloc(dev, sizeof(*drv), GFP_KERNEL);
+	drv = devm_kzalloc_obj(dev, *drv);
 	if (!drv)
 		return -ENOMEM;
 
@@ -378,7 +380,7 @@ static int class_function_probe(struct auxiliary_device *auxdev,
 	if (ndefaults < 0)
 		return ndefaults;
 
-	defaults = devm_kcalloc(dev, ndefaults, sizeof(*defaults), GFP_KERNEL);
+	defaults = devm_kzalloc_objs(dev, *defaults, ndefaults);
 	if (!defaults)
 		return -ENOMEM;
 

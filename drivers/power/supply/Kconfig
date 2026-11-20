@@ -122,6 +122,17 @@ config BATTERY_CHAGALL
 	  This driver can also be built as a module. If so, the module will be
 	  called chagall-battery.
 
+config BATTERY_ASUS_TRANSFORMER_EC
+	tristate "Asus Transformer's battery driver"
+	depends on MFD_ASUS_TRANSFORMER_EC
+	help
+	  Say Y to enable support for battery status access on Tegra based
+	  ASUS Transformer devices.
+
+	  This sub-driver supports battery cells found in Asus Transformer
+	  tablets and mobile docks and controlled by a special embedded
+	  controller.
+
 config BATTERY_CPCAP
 	tristate "Motorola CPCAP PMIC battery driver"
 	depends on MFD_CPCAP && IIO
@@ -235,10 +246,20 @@ config BATTERY_S2MU005
 	select REGMAP_I2C
 	help
 	  Say Y to enable support for the Samsung S2MU005 PMIC integrated
-	  fuel gauge, which works indepenently of the PMIC battery charger
+	  fuel gauge, which works independently of the PMIC battery charger
 	  counterpart, and reports battery metrics.
 
 	  This driver, if built as a module, will be called s2mu005-fuel-gauge.
+
+config BATTERY_SM5714
+	tristate "Silicon Mitus SM5714 fuel gauge driver"
+	depends on I2C
+	help
+	  Say Y to enable support for the fuel gauge of the Silicon Mitus
+	  SM5714, which reports the battery state of charge, voltage and
+	  current.
+
+	  This driver, if built as a module, will be called sm5714-battery.
 
 config BATTERY_COLLIE
 	tristate "Sharp SL-5500 (collie) battery"
@@ -452,7 +473,7 @@ config BATTERY_MAX17042
 	  MAX17042 is fuel-gauge systems for lithium-ion (Li+) batteries
 	  in handheld and portable equipment. The MAX17042 is configured
 	  to operate with a single lithium cell. MAX8997 and MAX8966 are
-	  multi-function devices that include fuel gauages that are compatible
+	  multi-function devices that include fuel gauges that are compatible
 	  with MAX17042.
 	  Supported devices: max8966, max8997, max17042, max17047, max17050,
 	  max17055, max77693, max77849.
@@ -496,6 +517,17 @@ config CHARGER_88PM860X
 	depends on MFD_88PM860X && BATTERY_88PM860X
 	help
 	  Say Y here to enable charger for Marvell 88PM860x chip.
+
+config CHARGER_ASUS_TRANSFORMER_EC
+	tristate "Asus Transformer's charger driver"
+	depends on MFD_ASUS_TRANSFORMER_EC
+	help
+	  Say Y here to enable support AC plug detection on Asus Transformer
+	  Dock.
+
+	  This sub-driver supports charger detection mechanism found in Asus
+	  Transformer tablets and mobile docks and controlled by special
+	  embedded controller.
 
 config CHARGER_PF1550
 	tristate "NXP PF1550 battery charger driver"

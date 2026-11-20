@@ -72,7 +72,7 @@ void isp4vid_handle_frame_done(struct isp4vid_dev *isp_vdev,
 	/* Fill the buffer */
 	isp4vid_buf->vb2.vb2_buf.timestamp = ktime_get_ns();
 	isp4vid_buf->vb2.sequence = isp_vdev->sequence++;
-	isp4vid_buf->vb2.field = V4L2_FIELD_ANY;
+	isp4vid_buf->vb2.field = V4L2_FIELD_NONE;
 
 	vb2_set_plane_payload(&isp4vid_buf->vb2.vb2_buf,
 			      0, isp_vdev->format.sizeimage);
@@ -567,9 +567,11 @@ static int isp4vid_qops_start_streaming(struct vb2_queue *vq,
 		}
 	}
 
-	list_for_each_entry(isp4vid_buf, &isp_vdev->buf_list, list)
-		isp4sd_ioc_send_img_buf(isp_vdev->isp_sdev,
-					&isp4vid_buf->img_buf);
+	scoped_guard(mutex, &isp_vdev->buf_list_lock) {
+		list_for_each_entry(isp4vid_buf, &isp_vdev->buf_list, list)
+			isp4sd_ioc_send_img_buf(isp_vdev->isp_sdev,
+						&isp4vid_buf->img_buf);
+	}
 
 	isp_vdev->stream_started = true;
 

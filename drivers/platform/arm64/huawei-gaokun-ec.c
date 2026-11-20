@@ -12,6 +12,7 @@
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/input.h>
 #include <linux/notifier.h>
 #include <linux/module.h>
@@ -746,7 +747,7 @@ static int gaokun_ec_probe(struct i2c_client *client)
 	struct gaokun_ec *ec;
 	int ret;
 
-	ec = devm_kzalloc(dev, sizeof(*ec), GFP_KERNEL);
+	ec = devm_kzalloc_obj(dev, *ec);
 	if (!ec)
 		return -ENOMEM;
 

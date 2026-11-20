@@ -78,7 +78,7 @@ static int bmi323_i2c_probe(struct i2c_client *i2c)
 	struct bmi323_i2c_priv *priv;
 	struct regmap *regmap;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -107,7 +107,7 @@ static const struct acpi_device_id bmi323_acpi_match[] = {
 	 * driver initialization. This device reset does occur in both the
 	 * bmi323 and bmc150 init sequences.
 	 */
-	{ "BOSC0200" },
+	{ .id = "BOSC0200" },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, bmi323_acpi_match);

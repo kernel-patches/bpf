@@ -3420,9 +3420,9 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 
-		ranges = <0x00 0x00000000 0x81 0x00000000 0x00 0x20000000>, /* MMIO (512 MiB) */
-			 <0x00 0x20000000 0x00 0x20000000 0x00 0x20000000>, /* non-prefetchable memory (32-bit, 512 MiB) */
-			 <0x00 0x40000000 0x81 0x40000000 0x00 0x20000000>, /* MMIO (512 MiB) */
+		ranges = <0x00 0x00000000 0x81 0x00000000 0x00 0x18000000>, /* MMIO (384 MiB) */
+			 <0x00 0x18000000 0x00 0x20000000 0x00 0x08000000>, /* non-prefetchable memory (32-bit, 128 MiB) */
+			 <0x00 0x20000000 0x81 0x20000000 0x00 0x30000000>, /* MMIO (768 MiB) */
 			 <0xa8 0x80000000 0xa8 0x80000000 0x57 0x80000000>; /* I/O, ECAM, prefetchable memory (64-bit) */
 
 		smmu1: iommu@5000000 {
@@ -3582,7 +3582,7 @@
 			dma-coherent;
 
 			ranges = <0x81000000 0x00 0x84000000 0xd0 0x84000000 0x00 0x00200000>, /* I/O */
-				 <0x82000000 0x00 0x20000000 0x00 0x20000000 0x00 0x08000000>, /* non-prefetchable memory (128 MiB) */
+				 <0x82000000 0x00 0x20000000 0x00 0x18000000 0x00 0x08000000>, /* non-prefetchable memory (128 MiB) */
 				 <0xc3000000 0xd0 0xc0000000 0xd0 0xc0000000 0x07 0xc0000000>; /* prefetchable memory */
 			bus-range = <0x0 0xff>;
 
@@ -3964,6 +3964,13 @@
 			status = "disabled";
 		};
 
+		ccplex: ccplex@30000000 {
+			compatible = "nvidia,tegra264-ccplex-cluster";
+			reg = <0x00 0x30000000 0x0 0x00cf0000>;
+			#performance-domain-cells = <1>;
+			nvidia,bpmp = <&bpmp>;
+		};
+
 		gic: interrupt-controller@46000000 {
 			compatible = "arm,gic-v3";
 			reg = <0x00 0x46000000 0x0 0x010000>, /* GICD */
@@ -3996,9 +4003,7 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 
-		ranges = <0x000 0x00000000 0x81 0x80000000 0x00 0x10000000>, /* MMIO (256 MiB) */
-			 <0x100 0x00000000 0x00 0x20000000 0x00 0x40000000>, /* non-prefetchable memory (32-bit) */
-			 <0x200 0x00000000 0xa8 0x80000000 0x57 0x80000000>; /* I/O, ECAM, prefetchable memory (64-bit) */
+		ranges = <0x000 0x00000000 0x81 0x80000000 0x00 0x10000000>; /* MMIO (256 MiB) */
 
 		host1x@1200000 {
 			compatible = "nvidia,tegra264-host1x";
@@ -4105,7 +4110,7 @@
 		#size-cells = <2>;
 
 		ranges = <0x00 0x00000000 0xa8 0x00000000 0x00 0x20000000>, /* MMIO (512 MiB) */
-			 <0x00 0x20000000 0x00 0x20000000 0x00 0x60000000>, /* non-prefetchable memory (32-bit, 1536 GiB) */
+			 <0x00 0x20000000 0x00 0x20000000 0x00 0x60000000>, /* non-prefetchable memory (32-bit, 1536 MiB) */
 			 <0xa8 0x80000000 0xa8 0x80000000 0x57 0x80000000>; /* I/O, ECAM, prefetchable memory (64-bit) */
 
 		pinmux_uphy: pinmux@82e0000 {
@@ -4384,6 +4389,7 @@
 			reg = <0x00000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 0>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4400,6 +4406,7 @@
 			reg = <0x10000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 0>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4416,6 +4423,7 @@
 			reg = <0x20000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 1>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4432,6 +4440,7 @@
 			reg = <0x30000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 1>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4448,6 +4457,7 @@
 			reg = <0x40000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 2>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4464,6 +4474,7 @@
 			reg = <0x50000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 2>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4480,6 +4491,7 @@
 			reg = <0x60000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 3>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4496,6 +4508,7 @@
 			reg = <0x70000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 3>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4512,6 +4525,7 @@
 			reg = <0x80000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 4>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4528,6 +4542,7 @@
 			reg = <0x90000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 4>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4544,6 +4559,7 @@
 			reg = <0xa0000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 5>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4560,6 +4576,7 @@
 			reg = <0xb0000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 5>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4576,6 +4593,7 @@
 			reg = <0xc0000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 6>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;
@@ -4592,6 +4610,7 @@
 			reg = <0xd0000>;
 
 			enable-method = "psci";
+			performance-domains = <&ccplex 6>;
 
 			i-cache-size = <65536>;
 			i-cache-line-size = <64>;

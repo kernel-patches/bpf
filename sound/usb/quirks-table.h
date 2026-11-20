@@ -188,6 +188,40 @@
 },
 
 /*
+ * Creative Technology, Ltd Live! Cam Chat HD [VF0790]
+ * Same audio interface layout as the VF0770 above. The 24-bit altsettings
+ * advertise the same wMaxPacketSize as their 16-bit counterparts, so only
+ * 3/4 of the frames fit into each packet and the audio is chopped. Only
+ * report the 16-bit 48kHz altsetting.
+ */
+{
+	USB_AUDIO_DEVICE(0x041e, 0x4097),
+	QUIRK_DRIVER_INFO {
+		QUIRK_DATA_COMPOSITE {
+			{ QUIRK_DATA_STANDARD_MIXER(2) },
+			{
+				QUIRK_DATA_AUDIOFORMAT(3) {
+					.formats = SNDRV_PCM_FMTBIT_S16_LE,
+					.channels = 2,
+					.fmt_bits = 16,
+					.iface = 3,
+					.altsetting = 4,
+					.altset_idx = 4,
+					.endpoint = 0x82,
+					.ep_attr = 0x05,
+					.rates = SNDRV_PCM_RATE_48000,
+					.rate_min = 48000,
+					.rate_max = 48000,
+					.nr_rates = 1,
+					.rate_table = (unsigned int[]) { 48000 },
+				},
+			},
+			QUIRK_COMPOSITE_END
+		},
+	},
+},
+
+/*
  * HP Wireless Audio
  * When not ignored, causes instability issues for some users, forcing them to
  * skip the entire module.
@@ -405,6 +439,20 @@ YAMAHA_DEVICE(0x105d, NULL),
 	}
 },
 {
+	USB_DEVICE(0x0499, 0x1516),
+	QUIRK_DRIVER_INFO {
+		/* .vendor_name = "Yamaha", */
+		/* .product_name = "ZG02", */
+		QUIRK_DATA_COMPOSITE {
+			{ QUIRK_DATA_STANDARD_AUDIO(1) },
+			{ QUIRK_DATA_STANDARD_AUDIO(2) },
+			{ QUIRK_DATA_MIDI_YAMAHA(3) },
+			{ QUIRK_DATA_IGNORE(4) },
+			QUIRK_COMPOSITE_END
+		}
+	}
+},
+{
 	USB_DEVICE(0x0499, 0x1718),
 	QUIRK_DRIVER_INFO {
 		/* .vendor_name = "Yamaha", */
@@ -441,6 +489,20 @@ YAMAHA_DEVICE(0x7000, "DTX"),
 YAMAHA_DEVICE(0x7010, "UB99"),
 #undef YAMAHA_DEVICE
 #undef YAMAHA_INTERFACE
+/* Steinberg UR22C (configuration 2) */
+{
+	USB_DEVICE_VENDOR_SPEC(0x0499, 0x172f),
+	QUIRK_DRIVER_INFO {
+		QUIRK_DATA_COMPOSITE {
+			{ QUIRK_DATA_STANDARD_MIXER(0) },
+			{ QUIRK_DATA_STANDARD_AUDIO(1) },
+			{ QUIRK_DATA_STANDARD_AUDIO(2) },
+			{ QUIRK_DATA_MIDI_YAMAHA(3) },
+			{ QUIRK_DATA_MIDI_YAMAHA(4) },
+			QUIRK_COMPOSITE_END
+		}
+	}
+},
 /* this catches most recent vendor-specific Yamaha devices */
 {
 	.match_flags = USB_DEVICE_ID_MATCH_VENDOR |
@@ -4434,6 +4496,48 @@ QUIRK_RME_DIGIFACE(0x3fa0),
 			{ QUIRK_DATA_IGNORE(3) }, /* Firmware update */
 			QUIRK_COMPOSITE_END
 		}
+	}
+},
+
+/*
+ * CVT Touch Device (1ff7:0f33) is a USB composite device with HID + UAC
+ * audio interfaces. The device iProduct is "Touch Device" but Windows
+ * displays the audio function as "MAXHUB Speaker" (from iTerminal).
+ * Override the card shortname to match the Windows display name, while
+ * keeping normal stream/mixer creation (ifnum = QUIRK_NO_INTERFACE).
+ */
+{
+	.match_flags = USB_DEVICE_ID_MATCH_DEVICE |
+		       USB_DEVICE_ID_MATCH_INT_CLASS |
+		       USB_DEVICE_ID_MATCH_INT_SUBCLASS,
+	.idVendor = 0x1ff7,
+	.idProduct = 0x0f33,
+	.bInterfaceClass = USB_CLASS_AUDIO,
+	.bInterfaceSubClass = USB_SUBCLASS_AUDIOCONTROL,
+	.driver_info = (unsigned long) &(const struct snd_usb_audio_quirk) {
+		.product_name = "MAXHUB Speaker",
+		.ifnum = QUIRK_NO_INTERFACE,
+	}
+},
+
+/*
+ * CVT Touch Device (1ff7:0f33) is a USB composite device with HID + UAC
+ * audio interfaces. The device iProduct is "Touch Device" but Windows
+ * displays the audio function as "MAXHUB Speaker" (from iTerminal).
+ * Override the card shortname to match the Windows display name, while
+ * keeping normal stream/mixer creation (ifnum = QUIRK_NO_INTERFACE).
+ */
+{
+	.match_flags = USB_DEVICE_ID_MATCH_DEVICE |
+		       USB_DEVICE_ID_MATCH_INT_CLASS |
+		       USB_DEVICE_ID_MATCH_INT_SUBCLASS,
+	.idVendor = 0x1ff7,
+	.idProduct = 0x0f33,
+	.bInterfaceClass = USB_CLASS_AUDIO,
+	.bInterfaceSubClass = USB_SUBCLASS_AUDIOCONTROL,
+	.driver_info = (unsigned long) &(const struct snd_usb_audio_quirk) {
+		.product_name = "MAXHUB Speaker",
+		.ifnum = QUIRK_NO_INTERFACE,
 	}
 },
 

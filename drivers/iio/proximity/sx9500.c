@@ -548,6 +548,12 @@ static int sx9500_write_event_config(struct iio_dev *indio_dev,
 
 	mutex_lock(&data->mutex);
 
+	/* The user counts must only change when the state does. */
+	if (data->event_enabled[chan->channel] == state) {
+		ret = 0;
+		goto out_unlock;
+	}
+
 	if (state) {
 		ret = sx9500_inc_chan_users(data, chan->channel);
 		if (ret < 0)
@@ -647,8 +653,8 @@ static irqreturn_t sx9500_trigger_handler(int irq, void *private)
 		scan.chan[i++] = val;
 	}
 
-	iio_push_to_buffers_with_timestamp(indio_dev, &scan,
-					   iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_ts(indio_dev, &scan, sizeof(scan),
+				    iio_get_time_ns(indio_dev));
 
 out:
 	mutex_unlock(&data->mutex);
@@ -1012,8 +1018,8 @@ static int sx9500_resume(struct device *dev)
 static DEFINE_SIMPLE_DEV_PM_OPS(sx9500_pm_ops, sx9500_suspend, sx9500_resume);
 
 static const struct acpi_device_id sx9500_acpi_match[] = {
-	{"SSX9500", 0},
-	{"SASX9500", 0},
+	{ .id = "SSX9500" },
+	{ .id = "SASX9500" },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, sx9500_acpi_match);

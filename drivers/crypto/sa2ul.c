@@ -41,10 +41,7 @@
 #define SA_CMDL_UPD_ENC         0x0001
 #define SA_CMDL_UPD_AUTH        0x0002
 #define SA_CMDL_UPD_ENC_IV      0x0004
-#define SA_CMDL_UPD_AUTH_IV     0x0008
-#define SA_CMDL_UPD_AUX_KEY     0x0010
 
-#define SA_AUTH_SUBKEY_LEN	16
 #define SA_CMDL_PAYLOAD_LENGTH_MASK	0xFFFF
 #define SA_CMDL_SOP_BYPASS_LEN_MASK	0xFF000000
 
@@ -98,8 +95,6 @@ static struct device *sa_k3_dev;
  * @enc_eng_id: Encryption Engine ID supported by the SA hardware
  * @auth_eng_id: Authentication Engine ID
  * @iv_size: Initialization Vector size
- * @akey: Authentication key
- * @akey_len: Authentication key length
  * @enc: True, if this is an encode request
  */
 struct sa_cmdl_cfg {
@@ -107,8 +102,6 @@ struct sa_cmdl_cfg {
 	u8 enc_eng_id;
 	u8 auth_eng_id;
 	u8 iv_size;
-	const u8 *akey;
-	u16 akey_len;
 	bool enc;
 };
 
@@ -496,17 +489,6 @@ static void sa_set_sc_auth(struct algo_data *ad, const u8 *key, u16 key_sz,
 	}
 }
 
-static inline void sa_copy_iv(__be32 *out, const u8 *iv, bool size16)
-{
-	int j;
-
-	for (j = 0; j < ((size16) ? 4 : 2); j++) {
-		*out = cpu_to_be32(*((u32 *)iv));
-		iv += 4;
-		out++;
-	}
-}
-
 /* Format general command label */
 static int sa_format_cmdl_gen(struct sa_cmdl_cfg *cfg, u8 *cmdl,
 			      struct sa_cmdl_upd_info *upd_info)
@@ -615,17 +597,6 @@ static inline void sa_update_cmdl(struct sa_req *req, u32 *cmdl,
 		cmdl[upd_info->auth_offset.index] |=
 			FIELD_PREP(SA_CMDL_SOP_BYPASS_LEN_MASK,
 				   req->auth_offset);
-		if (upd_info->flags & SA_CMDL_UPD_AUTH_IV) {
-			sa_copy_iv((void *)&cmdl[upd_info->auth_iv.index],
-				   req->auth_iv,
-				   (upd_info->auth_iv.size > 8));
-		}
-		if (upd_info->flags & SA_CMDL_UPD_AUX_KEY) {
-			int offset = (req->auth_size & 0xF) ? 4 : 0;
-
-			memcpy(&cmdl[upd_info->aux_key_info.index],
-			       &upd_info->aux_key[offset], 16);
-		}
 	}
 }
 
@@ -652,7 +623,7 @@ void sa_set_swinfo(u8 eng_id, u16 sc_id, dma_addr_t sc_phys,
 static void sa_dump_sc(u8 *buf, dma_addr_t dma_addr)
 {
 #ifdef DEBUG
-	dev_info(sa_k3_dev, "Security context dump:: 0x%pad\n", &dma_addr);
+	dev_info(sa_k3_dev, "Security context dump: %pad\n", &dma_addr);
 	print_hex_dump(KERN_CONT, "", DUMP_PREFIX_OFFSET,
 		       16, 1, buf, SA_CTX_MAX_SZ, false);
 #endif
@@ -781,7 +752,7 @@ static void sa_cipher_cra_exit(struct crypto_skcipher *tfm)
 	struct sa_tfm_ctx *ctx = crypto_skcipher_ctx(tfm);
 	struct sa_crypto_data *data = dev_get_drvdata(sa_k3_dev);
 
-	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(0x%pad), 0x%x(0x%pad))\n",
+	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(%pad), 0x%x(%pad))\n",
 		__func__, tfm, ctx->enc.sc_id, &ctx->enc.sc_phys,
 		ctx->dec.sc_id, &ctx->dec.sc_phys);
 
@@ -822,7 +793,7 @@ static int sa_cipher_cra_init(struct crypto_skcipher *tfm)
 	crypto_skcipher_set_reqsize(tfm, crypto_skcipher_reqsize(child) +
 					 sizeof(struct skcipher_request));
 
-	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(0x%pad), 0x%x(0x%pad))\n",
+	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(%pad), 0x%x(%pad))\n",
 		__func__, tfm, ctx->enc.sc_id, &ctx->enc.sc_phys,
 		ctx->dec.sc_id, &ctx->dec.sc_phys);
 	return 0;
@@ -1200,8 +1171,7 @@ static int sa_run(struct sa_req *req)
 	rxd->enc = req->enc;
 	rxd->iv_idx = req->ctx->iv_idx;
 	rxd->enc_iv_size = sa_ctx->cmdl_upd_info.enc_iv.size;
-	rxd->tx_in->callback = req->callback;
-	rxd->tx_in->callback_param = rxd;
+	dmaengine_desc_set_callback(rxd->tx_in, req->callback, NULL, rxd);
 
 	tx_out = dmaengine_prep_slave_sg(pdata->dma_tx, src,
 					 src_nents, DMA_MEM_TO_DEV,
@@ -1400,8 +1370,6 @@ static int sa_sha_setup(struct sa_tfm_ctx *ctx, struct  algo_data *ad)
 	cfg.enc_eng_id = ad->enc_eng.eng_id;
 	cfg.auth_eng_id = ad->auth_eng.eng_id;
 	cfg.iv_size = 0;
-	cfg.akey = NULL;
-	cfg.akey_len = 0;
 
 	ctx->dev_data = dev_get_drvdata(sa_k3_dev);
 	/* Setup Encryption Security Context & Command label template */
@@ -1447,7 +1415,7 @@ static int sa_sha_cra_init_alg(struct crypto_tfm *tfm, const char *alg_base)
 		}
 	}
 
-	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(0x%pad), 0x%x(0x%pad))\n",
+	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(%pad), 0x%x(%pad))\n",
 		__func__, tfm, ctx->enc.sc_id, &ctx->enc.sc_phys,
 		ctx->dec.sc_id, &ctx->dec.sc_phys);
 
@@ -1584,7 +1552,7 @@ static void sa_sha_cra_exit(struct crypto_tfm *tfm)
 	struct sa_tfm_ctx *ctx = crypto_tfm_ctx(tfm);
 	struct sa_crypto_data *data = dev_get_drvdata(sa_k3_dev);
 
-	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(0x%pad), 0x%x(0x%pad))\n",
+	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(%pad), 0x%x(%pad))\n",
 		__func__, tfm, ctx->enc.sc_id, &ctx->enc.sc_phys,
 		ctx->dec.sc_id, &ctx->dec.sc_phys);
 
@@ -1664,7 +1632,7 @@ static int sa_cra_init_aead(struct crypto_aead *tfm, const char *fallback)
 		return ret;
 	}
 
-	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(0x%pad), 0x%x(0x%pad))\n",
+	dev_dbg(sa_k3_dev, "%s(0x%p) sc-ids(0x%x(%pad), 0x%x(%pad))\n",
 		__func__, tfm, ctx->enc.sc_id, &ctx->enc.sc_phys,
 		ctx->dec.sc_id, &ctx->dec.sc_phys);
 
@@ -1727,8 +1695,6 @@ static int sa_aead_setkey(struct crypto_aead *authenc,
 	cfg.enc_eng_id = ad->enc_eng.eng_id;
 	cfg.auth_eng_id = ad->auth_eng.eng_id;
 	cfg.iv_size = crypto_aead_ivsize(authenc);
-	cfg.akey = keys.authkey;
-	cfg.akey_len = keys.authkeylen;
 
 	/* Setup Encryption Security Context & Command label template */
 	if (sa_init_sc(&ctx->enc, ctx->dev_data->match_data, keys.enckey,
@@ -2293,7 +2259,7 @@ static int sa_ul_probe(struct platform_device *pdev)
 	u32 status, val;
 	int ret;
 
-	dev_data = devm_kzalloc(dev, sizeof(*dev_data), GFP_KERNEL);
+	dev_data = devm_kzalloc_obj(dev, *dev_data);
 	if (!dev_data)
 		return -ENOMEM;
 
@@ -2308,7 +2274,6 @@ static int sa_ul_probe(struct platform_device *pdev)
 	sa_k3_dev = dev;
 	dev_data->dev = dev;
 	dev_data->pdev = pdev;
-	dev_data->base = saul_base;
 	platform_set_drvdata(pdev, dev_data);
 	dev_set_drvdata(sa_k3_dev, dev_data);
 

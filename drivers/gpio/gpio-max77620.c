@@ -316,7 +316,7 @@ static int max77620_gpio_probe(struct platform_device *pdev)
 
 	gpio_irq = ret;
 
-	mgpio = devm_kzalloc(&pdev->dev, sizeof(*mgpio), GFP_KERNEL);
+	mgpio = devm_kzalloc_obj(&pdev->dev, *mgpio);
 	if (!mgpio)
 		return -ENOMEM;
 
@@ -365,8 +365,8 @@ static int max77620_gpio_probe(struct platform_device *pdev)
 }
 
 static const struct platform_device_id max77620_gpio_devtype[] = {
-	{ .name = "max77620-gpio", },
-	{ .name = "max20024-gpio", },
+	{ .name = "max77620-gpio" },
+	{ .name = "max20024-gpio" },
 	{ }
 };
 MODULE_DEVICE_TABLE(platform, max77620_gpio_devtype);

@@ -146,8 +146,8 @@ struct rc_map_table {
  * struct rc_map - represents a keycode map table
  *
  * @scan: pointer to struct &rc_map_table
- * @size: Max number of entries
- * @len: Number of entries that are in use
+ * @capacity: Number of entries @scan has room for
+ * @entries: Number of entries in @scan that are in use
  * @rc_proto: type of the remote controller protocol, as defined at
  *	     enum &rc_proto
  * @name: name of the key map table
@@ -155,8 +155,8 @@ struct rc_map_table {
  */
 struct rc_map {
 	struct rc_map_table	*scan;
-	unsigned int		size;
-	unsigned int		len;
+	unsigned int		capacity;
+	unsigned int		entries;
 	enum rc_proto		rc_proto;
 	const char		*name;
 	spinlock_t		lock;

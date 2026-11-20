@@ -794,7 +794,7 @@ static int dsps_create_musb_pdev(struct dsps_glue *glue,
 		goto err;
 	}
 
-	config = devm_kzalloc(&parent->dev, sizeof(*config), GFP_KERNEL);
+	config = devm_kzalloc_obj(&parent->dev, *config);
 	if (!config) {
 		ret = -ENOMEM;
 		goto err;
@@ -906,7 +906,7 @@ static int dsps_probe(struct platform_device *pdev)
 		dsps_ops.read_fifo = dsps_read_fifo32;
 
 	/* allocate glue */
-	glue = devm_kzalloc(&pdev->dev, sizeof(*glue), GFP_KERNEL);
+	glue = devm_kzalloc_obj(&pdev->dev, *glue);
 	if (!glue)
 		return -ENOMEM;
 
@@ -941,6 +941,17 @@ err:
 static void dsps_remove(struct platform_device *pdev)
 {
 	struct dsps_glue *glue = platform_get_drvdata(pdev);
+
+	/*
+	 * The VBUS interrupt handler re-arms musb->dev_timer via
+	 * dsps_mod_timer(); the IRQ is devm-managed and would only be
+	 * freed after this function returns, while the child teardown
+	 * below deletes the timer and frees the musb structure.  Free
+	 * the interrupt first so no VBUS event can re-arm the timer
+	 * past that point.
+	 */
+	if (glue->vbus_irq)
+		devm_free_irq(glue->dev, glue->vbus_irq, glue);
 
 	platform_device_unregister(glue->musb);
 

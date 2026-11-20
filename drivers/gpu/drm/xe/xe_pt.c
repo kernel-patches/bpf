@@ -1625,7 +1625,6 @@ static int op_check_svm_userptr(struct xe_vm *vm, struct xe_vma_op *op)
 			err = vma_check_userptr(vm, gpuva_to_vma(op->base.prefetch.va));
 		}
 		break;
-#if IS_ENABLED(CONFIG_DRM_XE_GPUSVM)
 	case DRM_GPUVA_OP_DRIVER:
 		if (op->subop == XE_VMA_SUBOP_MAP_RANGE) {
 			struct xe_svm_range *range = op->map_range.range;
@@ -1640,7 +1639,6 @@ static int op_check_svm_userptr(struct xe_vm *vm, struct xe_vma_op *op)
 			}
 		}
 		break;
-#endif
 	default:
 		drm_warn(&vm->xe->drm, "NOT POSSIBLE");
 	}
@@ -3016,8 +3014,7 @@ struct xe_pt_job_ops *xe_pt_job_ops_alloc(u32 num_ops)
 	if (!pt_job_ops)
 		return NULL;
 
-	pt_job_ops->ops = kvmalloc_array(num_ops, sizeof(*pt_job_ops->ops),
-					 GFP_KERNEL);
+	pt_job_ops->ops = kvmalloc_objs(*pt_job_ops->ops, num_ops);
 	if (!pt_job_ops->ops) {
 		kfree(pt_job_ops);
 		return NULL;

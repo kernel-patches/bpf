@@ -1754,12 +1754,9 @@ static int ssd133x_crtc_atomic_check(struct drm_crtc *crtc,
 	return 0;
 }
 
-/* Called during init to allocate the CRTC's atomic state. */
 static struct drm_crtc_state *ssd130x_crtc_create_state(struct drm_crtc *crtc)
 {
 	struct ssd130x_crtc_state *ssd130x_state;
-
-	drm_WARN_ON_ONCE(crtc->dev, crtc->state);
 
 	ssd130x_state = kzalloc_obj(*ssd130x_state);
 	if (!ssd130x_state)
@@ -2220,9 +2217,7 @@ static int ssd130x_init_modeset(struct ssd130x_device *ssd130x)
 		return ret;
 	}
 
-	drm_mode_config_reset(drm);
-
-	return 0;
+	return drm_mode_config_create_initial_state(drm);
 }
 
 static int ssd130x_get_resources(struct ssd130x_device *ssd130x)

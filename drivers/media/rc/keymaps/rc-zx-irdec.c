@@ -53,7 +53,7 @@ static struct rc_map_table zx_irdec_table[] = {
 static struct rc_map_list zx_irdec_map = {
 	.map = {
 		.scan = zx_irdec_table,
-		.size = ARRAY_SIZE(zx_irdec_table),
+		.entries = ARRAY_SIZE(zx_irdec_table),
 		.rc_proto = RC_PROTO_NEC,
 		.name = RC_MAP_ZX_IRDEC,
 	}

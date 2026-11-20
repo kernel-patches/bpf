@@ -757,6 +757,7 @@ static void ext4_handle_error(struct super_block *sb, bool force_ro, int error,
 	 * and other problems.
 	 */
 	set_bit(EXT4_FLAGS_EMERGENCY_RO, &EXT4_SB(sb)->s_ext4_flags);
+	sb_set_emergency_ro(sb);
 }
 
 static void update_super_work(struct work_struct *work)
@@ -3835,7 +3836,8 @@ static int ext4_run_li_request(struct ext4_li_request *elr)
 	if (!ret) {
 		start_time = ktime_get_ns();
 		ret = ext4_init_inode_table(sb, group,
-					    elr->lr_timeout ? 0 : 1);
+					    !elr->lr_timeout &&
+					    test_opt(sb, BARRIER));
 		trace_ext4_lazy_itable_init(sb, group);
 		if (elr->lr_timeout == 0) {
 			elr->lr_timeout = nsecs_to_jiffies((ktime_get_ns() - start_time) *
@@ -5819,6 +5821,12 @@ failed_mount8: __maybe_unused
 failed_mount7:
 	ext4_unregister_li_request(sb);
 failed_mount6:
+	/*
+	 * We can have a running transaction from orphan replay or quota
+	 * setup. Commit it so that discard work after commit runs before
+	 * we shutdown mballoc.
+	 */
+	ext4_force_commit(sb);
 	ext4_mb_release(sb);
 	ext4_flex_groups_free(sbi);
 failed_mount5:
@@ -5847,6 +5855,7 @@ failed_mount_wq:
 failed_mount3a:
 	/* Drain deferred EA inode iputs from journal replay */
 	flush_delayed_work(&sbi->s_ea_inode_work);
+	ext4_fc_replay_cleanup(sb);
 	ext4_es_unregister_shrinker(sbi);
 	ext4_es_destroy_stats(sbi);
 failed_mount3:
@@ -6010,7 +6019,9 @@ static int ext4_journal_bmap(journal_t *journal, sector_t *block)
 		ext4_msg(journal->j_inode->i_sb, KERN_CRIT,
 			 "journal bmap failed: block %llu ret %d\n",
 			 *block, ret);
-		jbd2_journal_abort(journal, ret ? ret : -EFSCORRUPTED);
+		if (!ret)
+			ret = -EFSCORRUPTED;
+		jbd2_journal_abort(journal, ret);
 		return ret;
 	}
 	*block = map.m_pblk;
@@ -6761,11 +6772,16 @@ static int __ext4_remount(struct fs_context *fc, struct super_block *sb)
 
 	if ((bool)(fc->sb_flags & SB_RDONLY) != sb_rdonly(sb)) {
 		if (ext4_emergency_state(sb)) {
-			err = -EROFS;
-			goto restore_opts;
-		}
-
-		if (fc->sb_flags & SB_RDONLY) {
+			/*
+			 * Going read-only must work for emergency remount
+			 * (sysrq u) but nothing may be written, just flip it.
+			 */
+			if (!(fc->sb_flags & SB_RDONLY)) {
+				err = -EROFS;
+				goto restore_opts;
+			}
+			sb->s_flags |= SB_RDONLY;
+		} else if (fc->sb_flags & SB_RDONLY) {
 			err = sync_filesystem(sb);
 			if (err < 0)
 				goto restore_opts;
@@ -6876,7 +6892,8 @@ static int __ext4_remount(struct fs_context *fc, struct super_block *sb)
 			goto restore_opts;
 	}
 
-	if (sbi->s_journal == NULL && !(old_sb_flags & SB_RDONLY)) {
+	if (sbi->s_journal == NULL && !(old_sb_flags & SB_RDONLY) &&
+	    !ext4_emergency_state(sb)) {
 		err = ext4_commit_super(sb);
 		if (err)
 			goto restore_opts;

@@ -223,7 +223,7 @@ static int sprd_gpio_probe(struct platform_device *pdev)
 	struct gpio_irq_chip *irq;
 	struct sprd_gpio *sprd_gpio;
 
-	sprd_gpio = devm_kzalloc(&pdev->dev, sizeof(*sprd_gpio), GFP_KERNEL);
+	sprd_gpio = devm_kzalloc_obj(&pdev->dev, *sprd_gpio);
 	if (!sprd_gpio)
 		return -ENOMEM;
 
@@ -261,7 +261,7 @@ static int sprd_gpio_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id sprd_gpio_of_match[] = {
-	{ .compatible = "sprd,sc9860-gpio", },
+	{ .compatible = "sprd,sc9860-gpio" },
 	{ /* end of list */ }
 };
 MODULE_DEVICE_TABLE(of, sprd_gpio_of_match);

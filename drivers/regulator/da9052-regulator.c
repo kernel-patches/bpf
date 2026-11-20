@@ -398,8 +398,7 @@ static int da9052_regulator_probe(struct platform_device *pdev)
 	struct da9052 *da9052;
 	struct da9052_pdata *pdata;
 
-	regulator = devm_kzalloc(&pdev->dev, sizeof(struct da9052_regulator),
-				 GFP_KERNEL);
+	regulator = devm_kzalloc_obj(&pdev->dev, struct da9052_regulator);
 	if (!regulator)
 		return -ENOMEM;
 
@@ -441,18 +440,7 @@ static struct platform_driver da9052_regulator_driver = {
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 };
-
-static int __init da9052_regulator_init(void)
-{
-	return platform_driver_register(&da9052_regulator_driver);
-}
-subsys_initcall(da9052_regulator_init);
-
-static void __exit da9052_regulator_exit(void)
-{
-	platform_driver_unregister(&da9052_regulator_driver);
-}
-module_exit(da9052_regulator_exit);
+subsys_platform_driver(da9052_regulator_driver);
 
 MODULE_AUTHOR("David Dajun Chen <dchen@diasemi.com>");
 MODULE_DESCRIPTION("Power Regulator driver for Dialog DA9052 PMIC");

@@ -1352,7 +1352,7 @@ static irqreturn_t cs48l32_irq(int irq, void *data)
 	ret = regmap_read(regmap, CS48L32_IRQ1_STATUS, &eint_pending);
 	if (ret) {
 		dev_warn(cs48l32_codec->core.dev, "Read IRQ1_STATUS failed: %d\n", ret);
-		return IRQ_NONE;
+		goto out;
 	}
 	if ((eint_pending & CS48L32_IRQ1_STS_MASK) == 0)
 		goto out;
@@ -1360,7 +1360,7 @@ static irqreturn_t cs48l32_irq(int irq, void *data)
 	ret = regmap_multi_reg_read(regmap, eint1_regs, reg_vals, ARRAY_SIZE(reg_vals));
 	if (ret) {
 		dev_warn(cs48l32_codec->core.dev, "Read IRQ regs failed: %d\n", ret);
-		return IRQ_NONE;
+		goto out;
 	}
 
 	for (i = 0; i < ARRAY_SIZE(reg_vals); i += 2) {
@@ -3910,7 +3910,7 @@ static int cs48l32_spi_probe(struct spi_device *spi)
 	unsigned int hwid, rev, otp_rev;
 	int i, ret;
 
-	cs48l32_codec = devm_kzalloc(&spi->dev, sizeof(*cs48l32_codec), GFP_KERNEL);
+	cs48l32_codec = devm_kzalloc_obj(&spi->dev, *cs48l32_codec);
 	if (!cs48l32_codec)
 		return -ENOMEM;
 

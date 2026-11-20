@@ -16,7 +16,7 @@ clear_trace
 # get self PID, can not use $$, because it is PPID
 read PID _ < /proc/self/stat
 
-[ -f set_ftrace_filter ] && echo proc_reg_write > set_ftrace_filter
+[ -f set_ftrace_filter ] && echo 'proc_reg_write*' > set_ftrace_filter
 [ -f set_ftrace_pid ] && echo ${PID} > set_ftrace_pid
 echo function_graph > current_tracer
 echo 1 > options/funcgraph-retval

@@ -105,7 +105,7 @@ static struct dma_fence *panfrost_fence_create(struct panfrost_device *pfdev, in
 	fence->queue = js_num;
 	fence->seqno = ++js->queue[js_num].emit_seqno;
 	dma_fence_init(&fence->base, &panfrost_fence_ops, &js->job_lock,
-		       js->queue[js_num].fence_context, fence->seqno);
+		       js->queue[js_num].fence_context, fence->seqno, 0);
 
 	return &fence->base;
 }
@@ -869,7 +869,7 @@ int panfrost_jm_init(struct panfrost_device *pfdev)
 	if (!panfrost_has_hw_feature(pfdev, HW_FEATURE_JOBCHAIN_DISAMBIGUATION))
 		args.credit_limit = 1;
 
-	js = devm_kzalloc(pfdev->base.dev, sizeof(*js), GFP_KERNEL);
+	js = devm_kzalloc_obj(pfdev->base.dev, *js);
 	if (!js)
 		return -ENOMEM;
 	pfdev->js = js;

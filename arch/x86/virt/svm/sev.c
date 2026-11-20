@@ -361,7 +361,7 @@ static void __init free_rmp_segment_table(void)
 		kfree(desc);
 	}
 
-	free_page((unsigned long)rmp_segment_table);
+	kfree(rmp_segment_table);
 
 	rmp_segment_table = NULL;
 }
@@ -369,13 +369,9 @@ static void __init free_rmp_segment_table(void)
 /* Allocate the table used to index into the RMP segments */
 static bool __init alloc_rmp_segment_table(void)
 {
-	struct page *page;
-
-	page = alloc_page(__GFP_ZERO);
-	if (!page)
+	rmp_segment_table = kzalloc(RST_SIZE, GFP_KERNEL);
+	if (!rmp_segment_table)
 		return false;
-
-	rmp_segment_table = page_address(page);
 
 	return true;
 }
@@ -662,17 +658,16 @@ static int __init rmpopt_init(void)
 
 	return 0;
 }
-device_initcall(rmpopt_init);
 
 void snp_enable_rmpopt(void)
 {
 	u64 base;
 	int cpu;
 
-	if (!cpu_feature_enabled(X86_FEATURE_RMPOPT))
+	if (!cc_platform_has(CC_ATTR_HOST_SEV_SNP))
 		return;
 
-	if (!cc_platform_has(CC_ATTR_HOST_SEV_SNP))
+	if (!cpu_feature_enabled(X86_FEATURE_RMPOPT))
 		return;
 
 	if (!rmpopt_soft_init)
@@ -725,6 +720,8 @@ int __init snp_rmptable_init(void)
 	 * notifier is invoked to do SNP IOMMU shutdown before kdump.
 	 */
 	crash_kexec_post_notifiers = true;
+
+	rmpopt_init();
 
 	return 0;
 }
@@ -819,18 +816,11 @@ bool snp_probe_rmptable_info(void)
 {
 	if (cpu_feature_enabled(X86_FEATURE_SEGMENTED_RMP)) {
 		rdmsrq(MSR_AMD64_RMP_CFG, rmp_cfg);
-
-		if (rmp_cfg & MSR_AMD64_SEG_RMP_ENABLED) {
-			if (probe_segmented_rmptable_info())
-				return true;
-
-			setup_clear_cpu_cap(X86_FEATURE_RMPOPT);
-			return false;
-		}
-	} else {
-		setup_clear_cpu_cap(X86_FEATURE_RMPOPT);
+		if (rmp_cfg & MSR_AMD64_SEG_RMP_ENABLED)
+			return probe_segmented_rmptable_info();
 	}
 
+	setup_clear_cpu_cap(X86_FEATURE_RMPOPT);
 	return probe_contiguous_rmptable_info();
 }
 

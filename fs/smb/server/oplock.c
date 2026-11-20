@@ -1760,13 +1760,16 @@ void smb_send_parent_lease_break_noti(struct ksmbd_file *fp,
 				      struct lease_ctx_info *lctx)
 {
 	struct oplock_info *opinfo;
+	struct dentry *parent;
 	struct ksmbd_inode *p_ci = NULL;
 	LIST_HEAD(brk_list);
 
 	if (lctx && lctx->version != 2)
 		return;
 
-	p_ci = ksmbd_inode_lookup_lock(fp->filp->f_path.dentry->d_parent);
+	parent = dget_parent(fp->filp->f_path.dentry);
+	p_ci = ksmbd_inode_lookup_lock(parent);
+	dput(parent);
 	if (!p_ci)
 		return;
 
@@ -1797,6 +1800,7 @@ void smb_send_parent_lease_break_noti(struct ksmbd_file *fp,
 void smb_lazy_parent_lease_break_close(struct ksmbd_file *fp)
 {
 	struct oplock_info *opinfo;
+	struct dentry *parent;
 	struct ksmbd_inode *p_ci = NULL;
 	LIST_HEAD(brk_list);
 
@@ -1809,7 +1813,9 @@ void smb_lazy_parent_lease_break_close(struct ksmbd_file *fp)
 	}
 	rcu_read_unlock();
 
-	p_ci = ksmbd_inode_lookup_lock(fp->filp->f_path.dentry->d_parent);
+	parent = dget_parent(fp->filp->f_path.dentry);
+	p_ci = ksmbd_inode_lookup_lock(parent);
+	dput(parent);
 	if (!p_ci)
 		return;
 
@@ -2315,36 +2321,28 @@ struct lease_ctx_info *parse_lease_state(void *open_req)
 		return ERR_PTR(-ENOMEM);
 
 	if (sizeof(struct lease_context_v2) == le32_to_cpu(cc->DataLength)) {
-		struct create_lease_v2 *lc = (struct create_lease_v2 *)cc;
+		struct lease_context_v2 *lc = smb2_context_data(cc);
 
-		if (le16_to_cpu(cc->DataOffset) + le32_to_cpu(cc->DataLength) <
-		    sizeof(struct create_lease_v2) - 4)
-			goto err_out;
-
-		memcpy(lreq->lease_key, lc->lcontext.LeaseKey, SMB2_LEASE_KEY_SIZE);
-		lreq->req_state = lc->lcontext.LeaseState;
-		lreq->flags = lc->lcontext.LeaseFlags;
-		lreq->epoch = lc->lcontext.Epoch;
-		lreq->duration = lc->lcontext.LeaseDuration;
+		memcpy(lreq->lease_key, lc->LeaseKey, SMB2_LEASE_KEY_SIZE);
+		lreq->req_state = lc->LeaseState;
+		lreq->flags = lc->LeaseFlags;
+		lreq->epoch = lc->Epoch;
+		lreq->duration = lc->LeaseDuration;
 		if (!lease_state_valid(lreq->req_state) ||
 		    !lease_v2_flags_valid(lreq->flags))
 			goto err_out;
 		lreq->req_state = lease_state_grantable(lreq->req_state);
 		if (lreq->flags == SMB2_LEASE_FLAG_PARENT_LEASE_KEY_SET_LE)
-			memcpy(lreq->parent_lease_key, lc->lcontext.ParentLeaseKey,
+			memcpy(lreq->parent_lease_key, lc->ParentLeaseKey,
 			       SMB2_LEASE_KEY_SIZE);
 		lreq->version = 2;
 	} else if (sizeof(struct lease_context) == le32_to_cpu(cc->DataLength)) {
-		struct create_lease *lc = (struct create_lease *)cc;
+		struct lease_context *lc = smb2_context_data(cc);
 
-		if (le16_to_cpu(cc->DataOffset) + le32_to_cpu(cc->DataLength) <
-		    sizeof(struct create_lease))
-			goto err_out;
-
-		memcpy(lreq->lease_key, lc->lcontext.LeaseKey, SMB2_LEASE_KEY_SIZE);
-		lreq->req_state = lc->lcontext.LeaseState;
+		memcpy(lreq->lease_key, lc->LeaseKey, SMB2_LEASE_KEY_SIZE);
+		lreq->req_state = lc->LeaseState;
 		lreq->flags = 0;
-		lreq->duration = lc->lcontext.LeaseDuration;
+		lreq->duration = lc->LeaseDuration;
 		if (!lease_state_valid(lreq->req_state))
 			goto err_out;
 		lreq->req_state = lease_state_grantable(lreq->req_state);

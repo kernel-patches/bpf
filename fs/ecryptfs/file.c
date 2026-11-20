@@ -170,8 +170,10 @@ static int read_or_initialize_metadata(struct dentry *dentry)
 		goto out;
 	}
 
+	/* The header can only be written through a writable lower file. */
 	if (!(mount_crypt_stat->flags & ECRYPTFS_XATTR_METADATA_ENABLED) &&
-	    !i_size_read(ecryptfs_inode_to_lower(inode))) {
+	    !i_size_read(ecryptfs_inode_to_lower(inode)) &&
+	    (ecryptfs_inode_to_private(inode)->lower_file->f_mode & FMODE_WRITE)) {
 		rc = ecryptfs_initialize_file(dentry, inode);
 		if (!rc)
 			goto out;

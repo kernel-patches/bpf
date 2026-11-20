@@ -2217,8 +2217,8 @@ static int ideapad_check_features(struct ideapad_private *priv)
 			priv->battery_hook.remove_battery = ideapad_battery_remove;
 			priv->battery_hook.name = "Ideapad Battery Extension";
 
-			err = devm_battery_hook_register(&priv->platform_device->dev,
-							 &priv->battery_hook);
+			err = devm_acpi_battery_hook_register(&priv->platform_device->dev,
+							      &priv->battery_hook);
 			if (err)
 				return err;
 		}
@@ -2278,7 +2278,7 @@ static int ideapad_wmi_probe(struct wmi_device *wdev, const void *context)
 {
 	struct ideapad_wmi_private *wpriv;
 
-	wpriv = devm_kzalloc(&wdev->dev, sizeof(*wpriv), GFP_KERNEL);
+	wpriv = devm_kzalloc_obj(&wdev->dev, *wpriv);
 	if (!wpriv)
 		return -ENOMEM;
 
@@ -2394,7 +2394,7 @@ static int ideapad_acpi_add(struct platform_device *pdev)
 	if (!adev || eval_int(adev->handle, "_CFG", &cfg))
 		return -ENODEV;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(&pdev->dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

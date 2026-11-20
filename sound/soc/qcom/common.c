@@ -226,7 +226,7 @@ int qcom_snd_parse_of(struct snd_soc_card *card)
 	num_links = of_get_available_child_count(dev->of_node);
 
 	/* Allocate the DAI link array */
-	card->dai_link = devm_kcalloc(dev, num_links, sizeof(*link), GFP_KERNEL);
+	card->dai_link = devm_kzalloc_objs(dev, *link, num_links);
 	if (!card->dai_link)
 		return -ENOMEM;
 
@@ -234,7 +234,7 @@ int qcom_snd_parse_of(struct snd_soc_card *card)
 	link = card->dai_link;
 
 	for_each_available_child_of_node_scoped(dev->of_node, np) {
-		dlc = devm_kcalloc(dev, 2, sizeof(*dlc), GFP_KERNEL);
+		dlc = devm_kzalloc_objs(dev, *dlc, 2);
 		if (!dlc)
 			return -ENOMEM;
 
@@ -335,7 +335,11 @@ static struct snd_soc_jack_pin qcom_headset_jack_pins[] = {
 	},
 	{
 		.pin = "Headphone Jack",
-		.mask = SND_JACK_HEADPHONE,
+		/*
+		 * WCD MBHC reports loads above linein_th (5 kOhm) as LINEOUT,
+		 * e.g. active speakers; treat them like headphones for routing.
+		 */
+		.mask = SND_JACK_HEADPHONE | SND_JACK_LINEOUT,
 	},
 };
 

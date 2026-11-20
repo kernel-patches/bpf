@@ -35,6 +35,7 @@
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_vblank.h>
+#include <drm/drm_vblank_helper.h>
 
 #define vmw_crtc_to_sou(x) \
 	container_of(x, struct vmw_screen_object_unit, base.crtc)
@@ -312,6 +313,7 @@ static const struct drm_crtc_funcs vmw_screen_object_crtc_funcs = {
 	.page_flip = drm_atomic_helper_page_flip,
 	.enable_vblank          = vmw_vkms_enable_vblank,
 	.disable_vblank         = vmw_vkms_disable_vblank,
+	.sync_vblank            = drm_crtc_vblank_helper_sync_vblank_timer,
 	.get_vblank_timestamp   = vmw_vkms_get_vblank_timestamp,
 };
 
@@ -342,7 +344,7 @@ static const struct drm_connector_funcs vmw_sou_connector_funcs = {
 	.detect = vmw_du_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = vmw_sou_connector_destroy,
-	.reset = vmw_du_connector_reset,
+	.atomic_create_state = vmw_du_connector_create_state,
 	.atomic_duplicate_state = vmw_du_connector_duplicate_state,
 	.atomic_destroy_state = vmw_du_connector_destroy_state,
 };

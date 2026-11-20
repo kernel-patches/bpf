@@ -2157,7 +2157,7 @@ static void mana_rx_skb(void *buf_va, bool from_pool,
 		return;
 	}
 
-	act = mana_run_xdp(ndev, rxq, &xdp, buf_va, pkt_len);
+	act = mana_run_xdp(ndev, rxq, &xdp, buf_va, from_pool, pkt_len);
 
 	if (act == XDP_REDIRECT && !rxq->xdp_rc)
 		return;
@@ -2179,10 +2179,9 @@ static void mana_rx_skb(void *buf_va, bool from_pool,
 	skb_checksum_none_assert(skb);
 	skb_record_rx_queue(skb, rxq_idx);
 
-	if ((ndev->features & NETIF_F_RXCSUM) && cqe->rx_iphdr_csum_succeed) {
-		if (cqe->rx_tcp_csum_succeed || cqe->rx_udp_csum_succeed)
-			skb->ip_summed = CHECKSUM_UNNECESSARY;
-	}
+	if ((ndev->features & NETIF_F_RXCSUM) &&
+	    (cqe->rx_tcp_csum_succeed || cqe->rx_udp_csum_succeed))
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 	if (cqe->rx_hashtype != 0 && (ndev->features & NETIF_F_RXHASH)) {
 		if (cqe->rx_hashtype & MANA_HASH_L4)
@@ -2516,9 +2515,6 @@ static void mana_rx_dim_work(struct work_struct *work)
 	cur_moder = net_dim_get_rx_moderation(dim->mode, dim->profile_ix);
 	cq = container_of(dim, struct mana_cq, dim);
 
-	cur_moder.usec = min_t(u16, cur_moder.usec, MANA_INTR_MODR_USEC_MAX);
-	cur_moder.pkts = min_t(u16, cur_moder.pkts, MANA_INTR_MODR_COMP_MAX);
-
 	mana_gd_ring_dim(cq->gdma_cq, cur_moder.usec, true,
 			 cur_moder.pkts, true);
 
@@ -2533,9 +2529,6 @@ static void mana_tx_dim_work(struct work_struct *work)
 
 	cur_moder = net_dim_get_tx_moderation(dim->mode, dim->profile_ix);
 	cq = container_of(dim, struct mana_cq, dim);
-
-	cur_moder.usec = min_t(u16, cur_moder.usec, MANA_INTR_MODR_USEC_MAX);
-	cur_moder.pkts = min_t(u16, cur_moder.pkts, MANA_INTR_MODR_COMP_MAX);
 
 	mana_gd_ring_dim(cq->gdma_cq, cur_moder.usec, true,
 			 cur_moder.pkts, true);
@@ -2703,6 +2696,7 @@ static void mana_deinit_txq(struct mana_port_context *apc, struct mana_txq *txq)
 
 static void mana_destroy_txq(struct mana_port_context *apc)
 {
+	struct gdma_context *gc = apc->ac->gdma_dev->gdma_context;
 	struct napi_struct *napi;
 	int i;
 
@@ -2721,8 +2715,6 @@ static void mana_destroy_txq(struct mana_port_context *apc)
 			napi_synchronize(napi);
 			napi_disable_locked(napi);
 			cancel_work_sync(&apc->tx_qp[i]->tx_cq.dim.work);
-			netif_napi_del_locked(napi);
-			apc->tx_qp[i]->txq.napi_initialized = false;
 		}
 
 		/* Forget the SKBs freed without being completed after a drain
@@ -2734,6 +2726,18 @@ static void mana_destroy_txq(struct mana_port_context *apc)
 
 		if (apc->tx_qp[i]->tx_object != INVALID_MANA_HANDLE)
 			mana_destroy_wq_obj(apc, GDMA_SQ, apc->tx_qp[i]->tx_object);
+
+		if (apc->tx_qp[i]->txq.napi_initialized) {
+			/* Detach the CQ only after the WQ object is destroyed,
+			 * so a completion EQE that arrives before then still
+			 * finds the CQ in cq_table[] rather than hitting the
+			 * WARN in mana_gd_process_eqe(). One grace period then
+			 * covers both mana_gd_intr() and NAPI users.
+			 */
+			mana_gd_detach_cq(gc, apc->tx_qp[i]->tx_cq.gdma_cq);
+			netif_napi_del_locked(napi);
+			apc->tx_qp[i]->txq.napi_initialized = false;
+		}
 
 		mana_deinit_cq(apc, &apc->tx_qp[i]->tx_cq);
 
@@ -2861,10 +2865,15 @@ static int mana_create_txq(struct mana_port_context *apc,
 		cq_spec.modr_ctx_id = 0;
 		cq_spec.attached_eq = cq->gdma_cq->cq.parent->id;
 
-		/* DIM setting can be changed at runtime */
-		cq_spec.req_cq_moderation = true;
-		cq_spec.cq_moderation_usec = apc->intr_modr_tx_usec;
-		cq_spec.cq_moderation_comp = apc->intr_modr_tx_comp;
+		/* Request CQ moderation only if HW supports it.
+		 * DIM setting can be changed at runtime.
+		 */
+		if (gc->pf_cap_flags1 &
+		    GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION) {
+			cq_spec.req_cq_moderation = true;
+			cq_spec.cq_moderation_usec = apc->intr_modr_tx_usec;
+			cq_spec.cq_moderation_comp = apc->intr_modr_tx_comp;
+		}
 
 		err = mana_create_wq_obj(apc, apc->port_handle, GDMA_SQ,
 					 &wq_spec, &cq_spec,
@@ -2941,14 +2950,22 @@ static void mana_destroy_rxq(struct mana_port_context *apc,
 
 		napi_disable_locked(napi);
 		cancel_work_sync(&rxq->rx_cq.dim.work);
-		netif_napi_del_locked(napi);
 	}
 
 	if (xdp_rxq_info_is_reg(&rxq->xdp_rxq))
 		xdp_rxq_info_unreg(&rxq->xdp_rxq);
 
+	if (xdp_rxq_info_is_reg(&rxq->xdp_rxq_shared))
+		xdp_rxq_info_unreg(&rxq->xdp_rxq_shared);
+
 	if (rxq->rxobj != INVALID_MANA_HANDLE)
 		mana_destroy_wq_obj(apc, GDMA_RQ, rxq->rxobj);
+
+	if (napi_initialized) {
+		/* See the comment in mana_destroy_txq() */
+		mana_gd_detach_cq(gc, rxq->rx_cq.gdma_cq);
+		netif_napi_del_locked(napi);
+	}
 
 	mana_deinit_cq(apc, &rxq->rx_cq);
 
@@ -3188,10 +3205,14 @@ static struct mana_rxq *mana_create_rxq(struct mana_port_context *apc,
 	cq_spec.modr_ctx_id = 0;
 	cq_spec.attached_eq = cq->gdma_cq->cq.parent->id;
 
-	/* DIM setting can be changed at runtime */
-	cq_spec.req_cq_moderation = true;
-	cq_spec.cq_moderation_usec = apc->intr_modr_rx_usec;
-	cq_spec.cq_moderation_comp = apc->intr_modr_rx_comp;
+	/* Request CQ moderation only if HW supports it.
+	 * DIM setting can be changed at runtime.
+	 */
+	if (gc->pf_cap_flags1 & GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION) {
+		cq_spec.req_cq_moderation = true;
+		cq_spec.cq_moderation_usec = apc->intr_modr_rx_usec;
+		cq_spec.cq_moderation_comp = apc->intr_modr_rx_comp;
+	}
 
 	err = mana_create_wq_obj(apc, apc->port_handle, GDMA_RQ,
 				 &wq_spec, &cq_spec, &rxq->rxobj);
@@ -3224,6 +3245,12 @@ static struct mana_rxq *mana_create_rxq(struct mana_port_context *apc,
 				 cq->napi.napi_id));
 	WARN_ON(xdp_rxq_info_reg_mem_model(&rxq->xdp_rxq, MEM_TYPE_PAGE_POOL,
 					   rxq->page_pool));
+
+	/* The pre-allocated buffers (mana_pre_alloc_rxbufs) are plain pages */
+	WARN_ON(xdp_rxq_info_reg(&rxq->xdp_rxq_shared, ndev, rxq_idx,
+				 cq->napi.napi_id));
+	WARN_ON(xdp_rxq_info_reg_mem_model(&rxq->xdp_rxq_shared,
+					   MEM_TYPE_PAGE_SHARED, NULL));
 
 	/* Initialize the DIM work before enabling NAPI, so that a poll
 	 * cannot reach net_dim() with an uninitialized cq->dim.work.
@@ -3355,7 +3382,7 @@ static int mana_rss_table_alloc(struct mana_port_context *apc)
 		return -EINVAL;
 	}
 
-	apc->indir_table = kcalloc(apc->indir_table_sz, sizeof(u32), GFP_KERNEL);
+	apc->indir_table = kzalloc_objs(u32, apc->indir_table_sz);
 	if (!apc->indir_table)
 		return -ENOMEM;
 
@@ -3870,6 +3897,40 @@ int mana_detach(struct net_device *ndev, bool from_close)
 	return 0;
 }
 
+/* Match the interrupt moderation settings to the PF capability, which is
+ * queried again when the device resumes from a reset or suspend. Must be
+ * called before the queues are created.
+ */
+static void mana_init_intr_modr(struct mana_port_context *apc)
+{
+	struct gdma_context *gc = apc->ac->gdma_dev->gdma_context;
+
+	if (!(gc->pf_cap_flags1 &
+	      GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION)) {
+		apc->intr_modr_rx_usec = 0;
+		apc->intr_modr_rx_comp = 0;
+		apc->intr_modr_tx_usec = 0;
+		apc->intr_modr_tx_comp = 0;
+		apc->rx_dim_enabled = false;
+		apc->tx_dim_enabled = false;
+		return;
+	}
+
+	/* Keep the current settings, unless they were never initialized
+	 * because the port was probed without the capability.
+	 */
+	if (apc->intr_modr_rx_usec && apc->intr_modr_rx_comp &&
+	    apc->intr_modr_tx_usec && apc->intr_modr_tx_comp)
+		return;
+
+	apc->intr_modr_rx_usec = MANA_INTR_MODR_USEC_DEF;
+	apc->intr_modr_rx_comp = MANA_INTR_MODR_COMP_DEF;
+	apc->intr_modr_tx_usec = MANA_INTR_MODR_USEC_DEF;
+	apc->intr_modr_tx_comp = MANA_INTR_MODR_COMP_DEF;
+	apc->rx_dim_enabled = MANA_ADAPTIVE_RX_DEF;
+	apc->tx_dim_enabled = MANA_ADAPTIVE_TX_DEF;
+}
+
 static int mana_probe_port(struct mana_context *ac, int port_idx,
 			   struct net_device **ndev_storage)
 {
@@ -3900,15 +3961,7 @@ static int mana_probe_port(struct mana_context *ac, int port_idx,
 	apc->cqe_coalescing_enable = 0;
 	apc->cqe8_coalescing_enable = 0;
 
-	/* Initialize interrupt moderation settings if supported by HW */
-	if (gc->pf_cap_flags1 & GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION) {
-		apc->intr_modr_rx_usec = MANA_INTR_MODR_USEC_DEF;
-		apc->intr_modr_rx_comp = MANA_INTR_MODR_COMP_DEF;
-		apc->intr_modr_tx_usec = MANA_INTR_MODR_USEC_DEF;
-		apc->intr_modr_tx_comp = MANA_INTR_MODR_COMP_DEF;
-		apc->rx_dim_enabled = MANA_ADAPTIVE_RX_DEF;
-		apc->tx_dim_enabled = MANA_ADAPTIVE_TX_DEF;
-	}
+	mana_init_intr_modr(apc);
 
 	mutex_init(&apc->vport_mutex);
 	apc->vport_use_count = 0;
@@ -4232,6 +4285,7 @@ int mana_probe(struct gdma_dev *gd, bool resuming)
 			enable_work(&apc->queue_reset_work);
 			netdev_lock(ac->ports[i]);
 			apc->link_cfg_error = 1;
+			mana_init_intr_modr(apc);
 			netdev_unlock(ac->ports[i]);
 			err = mana_attach(ac->ports[i]);
 			rtnl_unlock();

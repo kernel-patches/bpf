@@ -386,7 +386,7 @@ static int tps6507x_pmic_probe(struct platform_device *pdev)
 	if (tps_board)
 		init_data = tps_board->tps6507x_pmic_init_data;
 
-	tps = devm_kzalloc(&pdev->dev, sizeof(*tps), GFP_KERNEL);
+	tps = devm_kzalloc_obj(&pdev->dev, *tps);
 	if (!tps)
 		return -ENOMEM;
 
@@ -442,18 +442,7 @@ static struct platform_driver tps6507x_pmic_driver = {
 	},
 	.probe = tps6507x_pmic_probe,
 };
-
-static int __init tps6507x_pmic_init(void)
-{
-	return platform_driver_register(&tps6507x_pmic_driver);
-}
-subsys_initcall(tps6507x_pmic_init);
-
-static void __exit tps6507x_pmic_cleanup(void)
-{
-	platform_driver_unregister(&tps6507x_pmic_driver);
-}
-module_exit(tps6507x_pmic_cleanup);
+subsys_platform_driver(tps6507x_pmic_driver);
 
 MODULE_AUTHOR("Texas Instruments");
 MODULE_DESCRIPTION("TPS6507x voltage regulator driver");

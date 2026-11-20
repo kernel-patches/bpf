@@ -72,7 +72,7 @@ static int slot_pwrctrl_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	int ret;
 
-	slot = devm_kzalloc(dev, sizeof(*slot), GFP_KERNEL);
+	slot = devm_kzalloc_obj(dev, *slot);
 	if (!slot)
 		return -ENOMEM;
 
@@ -92,6 +92,10 @@ static int slot_pwrctrl_probe(struct platform_device *pdev)
 
 	slot->num_supplies = ret;
 
+	ret = devm_add_action_or_reset(dev, devm_slot_pwrctrl_release, slot);
+	if (ret)
+		return ret;
+
 	slot->clk = devm_clk_get_optional(dev, NULL);
 	if (IS_ERR(slot->clk))
 		return dev_err_probe(dev, PTR_ERR(slot->clk),
@@ -100,10 +104,6 @@ static int slot_pwrctrl_probe(struct platform_device *pdev)
 skip_resources:
 	slot->pwrctrl.power_on = slot_pwrctrl_power_on;
 	slot->pwrctrl.power_off = slot_pwrctrl_power_off;
-
-	ret = devm_add_action_or_reset(dev, devm_slot_pwrctrl_release, slot);
-	if (ret)
-		return ret;
 
 	pci_pwrctrl_init(&slot->pwrctrl, dev);
 

@@ -136,9 +136,7 @@ of_get_gpio_regulator_config(struct device *dev, struct device_node *np,
 	int ngpios;
 	int ret;
 
-	config = devm_kzalloc(dev,
-			sizeof(struct gpio_regulator_config),
-			GFP_KERNEL);
+	config = devm_kzalloc_obj(dev, struct gpio_regulator_config);
 	if (!config)
 		return ERR_PTR(-ENOMEM);
 
@@ -193,10 +191,8 @@ of_get_gpio_regulator_config(struct device *dev, struct device_node *np,
 		return ERR_PTR(-EINVAL);
 	}
 
-	config->states = devm_kcalloc(dev,
-				proplen / 2,
-				sizeof(struct gpio_regulator_state),
-				GFP_KERNEL);
+	config->states = devm_kzalloc_objs(dev, struct gpio_regulator_state,
+					   proplen / 2);
 	if (!config->states)
 		return ERR_PTR(-ENOMEM);
 
@@ -242,8 +238,7 @@ static int gpio_regulator_probe(struct platform_device *pdev)
 	enum gpiod_flags gflags;
 	int ptr, state, i;
 
-	drvdata = devm_kzalloc(dev, sizeof(struct gpio_regulator_data),
-			       GFP_KERNEL);
+	drvdata = devm_kzalloc_obj(dev, struct gpio_regulator_data);
 	if (drvdata == NULL)
 		return -ENOMEM;
 
@@ -260,8 +255,8 @@ static int gpio_regulator_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	drvdata->gpiods = devm_kcalloc(dev, config->ngpios,
-				       sizeof(struct gpio_desc *), GFP_KERNEL);
+	drvdata->gpiods = devm_kzalloc_objs(dev, struct gpio_desc *,
+					    config->ngpios);
 	if (!drvdata->gpiods)
 		return -ENOMEM;
 
@@ -370,18 +365,7 @@ static struct platform_driver gpio_regulator_driver = {
 		.of_match_table = of_match_ptr(regulator_gpio_of_match),
 	},
 };
-
-static int __init gpio_regulator_init(void)
-{
-	return platform_driver_register(&gpio_regulator_driver);
-}
-subsys_initcall(gpio_regulator_init);
-
-static void __exit gpio_regulator_exit(void)
-{
-	platform_driver_unregister(&gpio_regulator_driver);
-}
-module_exit(gpio_regulator_exit);
+subsys_platform_driver(gpio_regulator_driver);
 
 MODULE_AUTHOR("Heiko Stuebner <heiko@sntech.de>");
 MODULE_DESCRIPTION("gpio voltage regulator");

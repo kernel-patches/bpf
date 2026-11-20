@@ -9,6 +9,7 @@
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/math64.h>
 #include <linux/device-mapper.h>
 
 #include "dm-core.h"
@@ -831,23 +832,15 @@ static int dm_stats_clear(struct dm_stats *stats, int id)
  */
 static unsigned long long dm_jiffies_to_msec64(struct dm_stat *s, unsigned long long j)
 {
-	unsigned long long result;
-	unsigned int mult;
+	u64 result;
+	u32 remainder;
 
 	if (s->stat_flags & STAT_PRECISE_TIMESTAMPS)
 		return j;
 
-	result = 0;
-	if (j)
-		result = jiffies_to_msecs(j & 0x3fffff);
-	if (j >= 1 << 22) {
-		mult = jiffies_to_msecs(1 << 22);
-		result += (unsigned long long)mult * ((j >> 22) & 0x3fffff);
-	}
-	if (j >= 1ULL << 44)
-		result += (unsigned long long)mult * (unsigned long long)(1 << 22) * (j >> 44);
-
-	return result;
+	result = div_u64_rem(j, HZ, &remainder);
+	return result * MSEC_PER_SEC +
+		DIV_ROUND_UP_ULL((u64)remainder * MSEC_PER_SEC, HZ);
 }
 
 static int dm_stats_print(struct dm_stats *stats, int id,

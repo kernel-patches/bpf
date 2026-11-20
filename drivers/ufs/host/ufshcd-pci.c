@@ -365,7 +365,7 @@ static int ufs_intel_common_init(struct ufs_hba *hba)
 
 	hba->caps |= UFSHCD_CAP_RPM_AUTOSUSPEND;
 
-	host = devm_kzalloc(hba->dev, sizeof(*host), GFP_KERNEL);
+	host = devm_kzalloc_obj(hba->dev, *host);
 	if (!host)
 		return -ENOMEM;
 	host->saved_spm_lvl = -1;
@@ -644,7 +644,7 @@ static int ufshcd_pci_suspend_prepare(struct device *dev)
 {
 	struct ufs_hba *hba = dev_get_drvdata(dev);
 
-	if (!strcmp(hba->vops->name, "intel-pci"))
+	if (hba->vops && !strcmp(hba->vops->name, "intel-pci"))
 		return ufs_intel_suspend_prepare(dev);
 
 	return ufshcd_suspend_prepare(dev);
@@ -654,7 +654,7 @@ static void ufshcd_pci_resume_complete(struct device *dev)
 {
 	struct ufs_hba *hba = dev_get_drvdata(dev);
 
-	if (!strcmp(hba->vops->name, "intel-pci")) {
+	if (hba->vops && !strcmp(hba->vops->name, "intel-pci")) {
 		ufs_intel_resume_complete(dev);
 		return;
 	}

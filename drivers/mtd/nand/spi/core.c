@@ -993,9 +993,16 @@ static void spinand_cont_read_init(struct spinand_device *spinand)
 		 */
 		spinand_cont_read_enable(spinand, false);
 
+		/*
+		 * Chips needing dedicated continuous read operations can only
+		 * use continuous reads if such an operation was selected for
+		 * the bus interface in use.
+		 */
 		if ((engine_type == NAND_ECC_ENGINE_TYPE_ON_DIE ||
 		     engine_type == NAND_ECC_ENGINE_TYPE_NONE) &&
-		    !spi_mem_controller_is_capable(ctlr, no_cs_assertion))
+		    !spi_mem_controller_is_capable(ctlr, no_cs_assertion) &&
+		    (!spinand->needs_cont_read_op ||
+		     spinand->op_templates->cont_read_cache))
 			spinand->cont_read_possible = true;
 	}
 }
@@ -1098,6 +1105,7 @@ static bool spinand_isbad(struct nand_device *nand, const struct nand_pos *pos)
 	struct spinand_device *spinand = nand_to_spinand(nand);
 	u8 marker[2] = { };
 	struct nand_page_io_req req = {
+		.type = NAND_PAGE_READ,
 		.pos = *pos,
 		.ooblen = sizeof(marker),
 		.ooboffs = 0,
@@ -1141,6 +1149,7 @@ static int spinand_markbad(struct nand_device *nand, const struct nand_pos *pos)
 	struct spinand_device *spinand = nand_to_spinand(nand);
 	u8 marker[2] = { };
 	struct nand_page_io_req req = {
+		.type = NAND_PAGE_WRITE,
 		.pos = *pos,
 		.ooboffs = 0,
 		.ooblen = sizeof(marker),
@@ -1654,6 +1663,7 @@ int spinand_match_and_init(struct spinand_device *spinand,
 		spinand->read_retries = table[i].read_retries;
 		spinand->set_read_retry = table[i].set_read_retry;
 		spinand->set_randomizer = table[i].set_randomizer;
+		spinand->needs_cont_read_op = !!info->op_variants.cont_read_cache;
 
 		/* I/O variants selection with single-spi SDR commands */
 
@@ -1701,12 +1711,10 @@ int spinand_match_and_init(struct spinand_device *spinand,
 				    (read_op->addr.dtr && !op->addr.dtr) ||
 				    read_op->data.buswidth > op->data.buswidth ||
 				    (read_op->data.dtr && !op->data.dtr))
-					spinand->cont_read_possible = false;
-				else
-					spinand->ssdr_op_templates.cont_read_cache = op;
-			} else {
-				spinand->cont_read_possible = false;
+					op = NULL;
 			}
+
+			spinand->ssdr_op_templates.cont_read_cache = op;
 		}
 
 		/* I/O variants selection with octo-spi DDR commands (optional) */
@@ -1734,10 +1742,7 @@ int spinand_match_and_init(struct spinand_device *spinand,
 		if (info->op_variants.cont_read_cache) {
 			op = spinand_select_op_variant(spinand, ODTR,
 						       info->op_variants.cont_read_cache);
-			if (op)
-				spinand->odtr_op_templates.cont_read_cache = op;
-			else
-				spinand->cont_read_possible = false;
+			spinand->odtr_op_templates.cont_read_cache = op;
 		}
 
 		return 0;
@@ -1979,7 +1984,7 @@ static int spinand_init(struct spinand_device *spinand)
 	spinand_cont_read_init(spinand);
 	ret = spinand_randomizer_init(spinand);
 	if (ret)
-		goto err_cleanup_nanddev;
+		goto err_cleanup_ecc_engine;
 
 	mtd->_read_oob = spinand_mtd_read;
 	mtd->_write_oob = spinand_mtd_write;
@@ -2057,8 +2062,7 @@ static int spinand_probe(struct spi_mem *mem)
 	struct mtd_info *mtd;
 	int ret;
 
-	spinand = devm_kzalloc(&mem->spi->dev, sizeof(*spinand),
-			       GFP_KERNEL);
+	spinand = devm_kzalloc_obj(&mem->spi->dev, *spinand);
 	if (!spinand)
 		return -ENOMEM;
 

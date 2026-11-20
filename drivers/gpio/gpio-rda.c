@@ -216,7 +216,7 @@ static int rda_gpio_probe(struct platform_device *pdev)
 	u32 ngpios;
 	int ret;
 
-	rda_gpio = devm_kzalloc(dev, sizeof(*rda_gpio), GFP_KERNEL);
+	rda_gpio = devm_kzalloc_obj(dev, *rda_gpio);
 	if (!rda_gpio)
 		return -ENOMEM;
 
@@ -266,9 +266,7 @@ static int rda_gpio_probe(struct platform_device *pdev)
 		girq->parent_handler = rda_gpio_irq_handler;
 		girq->parent_handler_data = rda_gpio;
 		girq->num_parents = 1;
-		girq->parents = devm_kcalloc(dev, 1,
-					     sizeof(*girq->parents),
-					     GFP_KERNEL);
+		girq->parents = devm_kzalloc_objs(dev, *girq->parents, 1);
 		if (!girq->parents)
 			return -ENOMEM;
 		girq->parents[0] = rda_gpio->irq;
@@ -280,7 +278,7 @@ static int rda_gpio_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id rda_gpio_of_match[] = {
-	{ .compatible = "rda,8810pl-gpio", },
+	{ .compatible = "rda,8810pl-gpio" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, rda_gpio_of_match);

@@ -308,7 +308,7 @@ static int sprd_pmic_eic_probe(struct platform_device *pdev)
 	struct sprd_pmic_eic *pmic_eic;
 	int ret;
 
-	pmic_eic = devm_kzalloc(&pdev->dev, sizeof(*pmic_eic), GFP_KERNEL);
+	pmic_eic = devm_kzalloc_obj(&pdev->dev, *pmic_eic);
 	if (!pmic_eic)
 		return -ENOMEM;
 
@@ -362,7 +362,7 @@ static int sprd_pmic_eic_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id sprd_pmic_eic_of_match[] = {
-	{ .compatible = "sprd,sc2731-eic", },
+	{ .compatible = "sprd,sc2731-eic" },
 	{ /* end of list */ }
 };
 MODULE_DEVICE_TABLE(of, sprd_pmic_eic_of_match);

@@ -392,7 +392,7 @@ int intel_lpss_probe(struct device *dev,
 	if (info->irq < 0)
 		return info->irq;
 
-	lpss = devm_kzalloc(dev, sizeof(*lpss), GFP_KERNEL);
+	lpss = devm_kzalloc_obj(dev, *lpss);
 	if (!lpss)
 		return -ENOMEM;
 
@@ -445,6 +445,7 @@ int intel_lpss_probe(struct device *dev,
 	return 0;
 
 err_remove_ltr:
+	mfd_remove_devices(dev);
 	intel_lpss_debugfs_remove(lpss);
 	intel_lpss_ltr_hide(lpss);
 	intel_lpss_unregister_clock(lpss);

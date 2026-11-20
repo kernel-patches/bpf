@@ -90,11 +90,14 @@ void dcn10_post_unlock_program_front_end(
 void dcn10_hubp_pg_control(
 		struct dce_hwseq *hws,
 		unsigned int hubp_inst,
-		bool power_on);
+		bool power_on,
+		bool disable_power_gate,
+		bool ignore_pg);
 void dcn10_dpp_pg_control(
 		struct dce_hwseq *hws,
-		unsigned int dpp_inst,
-		bool power_on);
+		struct dpp *dpp,
+		bool power_on,
+		bool disable_power_gate);
 void dcn10_enable_power_gating_plane(
 	struct dce_hwseq *hws,
 	bool enable);

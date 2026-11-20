@@ -219,7 +219,7 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		       bool *stop_tick)
 {
 	struct menu_device *data = this_cpu_ptr(&menu_devices);
-	s64 latency_req = cpuidle_governor_latency_req(dev->cpu);
+	s64 latency_req = dev->latency_req;
 	u64 predicted_ns;
 	ktime_t delta, delta_tick;
 	int i, idx;

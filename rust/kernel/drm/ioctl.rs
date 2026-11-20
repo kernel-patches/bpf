@@ -71,14 +71,14 @@ pub mod internal {
     pub use bindings::drm_file;
     pub use bindings::drm_ioctl_desc;
 
-    /// Cast an [`Ioctl`] DRM device pointer to [`Registered`], preserving the driver type
+    /// Cast a [`Userspace`] DRM device pointer to [`Registered`], preserving the driver type
     /// parameter `T`.
     ///
     /// Used by [`declare_drm_ioctls!`] to anchor type inference.
     #[doc(hidden)]
     #[inline]
     pub const fn __dev_ctx_cast<T: crate::drm::Driver>(
-        ptr: *const crate::drm::Device<T, crate::drm::Ioctl>,
+        ptr: *const crate::drm::Device<T, crate::drm::Userspace>,
     ) -> *const crate::drm::Device<T, crate::drm::Registered> {
         ptr.cast()
     }
@@ -97,7 +97,7 @@ pub mod internal {
 /// fn foo(device: &kernel::drm::Device<Self, kernel::drm::Registered>,
 ///        reg_data: &Self::RegistrationData<'_>,
 ///        data: &mut uapi::argument_type,
-///        file: &kernel::drm::File<Self::File>,
+///        file: &kernel::drm::File<Self>,
 /// ) -> Result<u32>
 /// ```
 /// where `Self` is the drm::drv::Driver implementation these ioctls are being declared within.
@@ -144,14 +144,14 @@ macro_rules! declare_drm_ioctls {
                             // - The DRM device must have been registered when we're called through
                             //   an IOCTL.
                             //
-                            // INVARIANT: The `Ioctl` context requires that the device has been
-                            // registered via `drm_dev_register()` at some point; the DRM core
-                            // guarantees this for ioctl dispatch callbacks.
+                            // INVARIANT: The `Userspace` context requires that the device has
+                            // been registered via `drm_dev_register()` at some point; the DRM
+                            // core guarantees this for ioctl dispatch callbacks.
                             //
                             // FIXME: Currently there is nothing enforcing that the types of the
                             // dev/file match the current driver these ioctls are being declared
                             // for, and it's not clear how to enforce this within the type system.
-                            let dev: &$crate::drm::device::Device<_, $crate::drm::Ioctl> =
+                            let dev: &$crate::drm::device::Device<_, $crate::drm::Userspace> =
                                 $crate::drm::device::Device::from_raw(raw_dev);
 
                             // Type-inference anchor: the closure is never called but ties `dev`'s
@@ -192,7 +192,9 @@ macro_rules! declare_drm_ioctls {
                             // There is no concurrent access or aliasing; no other references
                             // to this object exist during this call.
                             let data = unsafe { &mut *(raw_data.cast::<$crate::uapi::$struct>()) };
-                            // SAFETY: This is just the DRM file structure
+                            // SAFETY:
+                            // - The DRM core provides a valid file for this device.
+                            // - `guard` is held for the entire use of the file reference.
                             let file = unsafe { $crate::drm::File::from_raw(raw_file) };
 
                             match guard.registration_data_with(|reg_data| {

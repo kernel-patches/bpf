@@ -163,7 +163,11 @@ static int mtd_virt_concat_create_item(struct device_node *parts,
 	int i;
 
 	for (i = 0; i < (count - 1); i++) {
-		if (mtd_is_part_concat(of_parse_phandle(parts, CONCAT_PROP, i)))
+		struct device_node *next = of_parse_phandle(parts, CONCAT_PROP, i);
+		bool is_concat = mtd_is_part_concat(next);
+
+		of_node_put(next);
+		if (is_concat)
 			return 0;
 	}
 
@@ -178,13 +182,15 @@ static int mtd_virt_concat_create_item(struct device_node *parts,
 	 * is defined is the first device in the list of concat
 	 * devices.
 	 */
-	item->nodes[0] = parts;
+	item->nodes[0] = of_node_get(parts);
 
 	for (i = 1; i < count; i++)
 		item->nodes[i] = of_parse_phandle(parts, CONCAT_PROP, (i - 1));
 
 	concat = kzalloc_flex(*concat, subdev, count);
 	if (!concat) {
+		for (i = 0; i < count; i++)
+			of_node_put(item->nodes[i]);
 		kfree(item);
 		return -ENOMEM;
 	}

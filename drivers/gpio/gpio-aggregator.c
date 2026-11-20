@@ -472,9 +472,8 @@ static int gpiochip_fwd_setup_delay_line(struct gpiochip_fwd *fwd)
 {
 	struct gpio_chip *chip = &fwd->chip;
 
-	fwd->delay_timings = devm_kcalloc(chip->parent, chip->ngpio,
-					  sizeof(*fwd->delay_timings),
-					  GFP_KERNEL);
+	fwd->delay_timings = devm_kzalloc_objs(chip->parent,
+					       *fwd->delay_timings, chip->ngpio);
 	if (!fwd->delay_timings)
 		return -ENOMEM;
 
@@ -695,11 +694,11 @@ struct gpiochip_fwd *devm_gpiochip_fwd_alloc(struct device *dev,
 	struct gpiochip_fwd *fwd;
 	struct gpio_chip *chip;
 
-	fwd = devm_kzalloc(dev, struct_size(fwd, tmp, fwd_tmp_size(ngpios)), GFP_KERNEL);
+	fwd = devm_kzalloc_flex(dev, *fwd, tmp, fwd_tmp_size(ngpios));
 	if (!fwd)
 		return ERR_PTR(-ENOMEM);
 
-	fwd->descs = devm_kcalloc(dev, ngpios, sizeof(*fwd->descs), GFP_KERNEL);
+	fwd->descs = devm_kzalloc_objs(dev, *fwd->descs, ngpios);
 	if (!fwd->descs)
 		return ERR_PTR(-ENOMEM);
 
@@ -1147,7 +1146,7 @@ gpio_aggregator_line_offset_store(struct config_item *item, const char *page,
 }
 CONFIGFS_ATTR(gpio_aggregator_line_, offset);
 
-static struct configfs_attribute *gpio_aggregator_line_attrs[] = {
+static const struct configfs_attribute *const gpio_aggregator_line_attrs[] = {
 	&gpio_aggregator_line_attr_key,
 	&gpio_aggregator_line_attr_name,
 	&gpio_aggregator_line_attr_offset,
@@ -1222,7 +1221,7 @@ gpio_aggregator_device_live_store(struct config_item *item, const char *page,
 }
 CONFIGFS_ATTR(gpio_aggregator_device_, live);
 
-static struct configfs_attribute *gpio_aggregator_device_attrs[] = {
+static const struct configfs_attribute *const gpio_aggregator_device_attrs[] = {
 	&gpio_aggregator_device_attr_dev_name,
 	&gpio_aggregator_device_attr_live,
 	NULL
@@ -1248,7 +1247,7 @@ static const struct configfs_item_operations gpio_aggregator_line_item_ops = {
 
 static const struct config_item_type gpio_aggregator_line_type = {
 	.ct_item_ops	= &gpio_aggregator_line_item_ops,
-	.ct_attrs	= gpio_aggregator_line_attrs,
+	.ct_attrs_const	= gpio_aggregator_line_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -1315,7 +1314,7 @@ static const struct configfs_group_operations gpio_aggregator_device_group_ops =
 static const struct config_item_type gpio_aggregator_device_type = {
 	.ct_group_ops	= &gpio_aggregator_device_group_ops,
 	.ct_item_ops	= &gpio_aggregator_device_item_ops,
-	.ct_attrs	= gpio_aggregator_device_attrs,
+	.ct_attrs_const	= gpio_aggregator_device_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -1604,7 +1603,7 @@ static int gpio_aggregator_probe(struct platform_device *pdev)
 	if (n < 0)
 		return n;
 
-	descs = devm_kmalloc_array(dev, n, sizeof(*descs), GFP_KERNEL);
+	descs = devm_kmalloc_objs(dev, *descs, n);
 	if (!descs)
 		return -ENOMEM;
 
@@ -1651,7 +1650,7 @@ static const struct of_device_id gpio_aggregator_dt_ids[] = {
 	 * Add GPIO-operated devices controlled from userspace below,
 	 * or use "driver_override" in sysfs.
 	 */
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(of, gpio_aggregator_dt_ids);
 

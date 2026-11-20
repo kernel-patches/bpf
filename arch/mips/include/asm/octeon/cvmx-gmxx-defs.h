@@ -339,6 +339,7 @@ static inline uint64_t CVMX_GMXX_TX_XAUI_CTL(unsigned long block_id)
 }
 
 void __cvmx_interrupt_gmxx_enable(int interface);
+void __cvmx_interrupt_gmxx_rxx_int_en_enable(int index, int block);
 
 union cvmx_gmxx_hg2_control {
 	uint64_t u64;

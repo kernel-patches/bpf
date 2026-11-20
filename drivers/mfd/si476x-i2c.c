@@ -689,7 +689,7 @@ static int si476x_core_probe(struct i2c_client *client)
 	struct mfd_cell *cell;
 	int              cell_num;
 
-	core = devm_kzalloc(&client->dev, sizeof(*core), GFP_KERNEL);
+	core = devm_kzalloc_obj(&client->dev, *core);
 	if (!core)
 		return -ENOMEM;
 
@@ -832,6 +832,8 @@ static void si476x_core_remove(struct i2c_client *client)
 		disable_irq(client->irq);
 	else
 		cancel_delayed_work_sync(&core->status_monitor);
+
+	cancel_work_sync(&core->rds_fifo_drainer);
 
 	kfifo_free(&core->rds_fifo);
 }

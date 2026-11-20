@@ -27,15 +27,15 @@
 #define PSP_GFX_CMD_BUF_VERSION     0x00000001
 
 #define GFX_CMD_STATUS_MASK         0x0000FFFF
-#define GFX_CMD_ID_MASK             0x000F0000
-#define GFX_CMD_RESERVED_MASK       0x7FF00000
+#define GFX_CMD_ID_MASK             0x003F0000
+#define GFX_CMD_RESERVED_MASK       0x7FC00000
 #define GFX_CMD_RESPONSE_MASK       0x80000000
 
 /* USBC PD FW version retrieval command */
 #define C2PMSG_CMD_GFX_USB_PD_FW_VER 0x2000000
 
 /* TEE Gfx Command IDs for the register interface.
-*  Command ID must be between 0x00010000 and 0x000F0000.
+*  Command ID must be between 0x00010000 and 0x003F0000.
 */
 enum psp_gfx_crtl_cmd_id
 {
@@ -49,8 +49,11 @@ enum psp_gfx_crtl_cmd_id
     GFX_CTRL_CMD_ID_GBR_IH_SET      = 0x00080000,   /* set Gbr IH_RB_CNTL registers */
     GFX_CTRL_CMD_ID_CONSUME_CMD     = 0x00090000,   /* send interrupt to psp for updating write pointer of vf */
     GFX_CTRL_CMD_ID_DESTROY_GPCOM_RING = 0x000C0000, /* destroy GPCOM ring */
+    GFX_CTRL_CMD_ID_GET_IP_DISCOVERY   = 0x000D0000, /* Copy IP_DISCOVERY_DATA to host-specified address */
+    GFX_CTRL_CMD_ID_DISABLE_FB_CARVEOUT = 0x00100000, /* Message runtime VBL to disable FB carveout */
+    GFX_CTRL_CMD_ID_ENABLE_FB_CARVEOUT  = 0x00110000, /* Message runtime VBL to enable FB carveout */
 
-    GFX_CTRL_CMD_ID_MAX             = 0x000F0000,   /* max command ID */
+    GFX_CTRL_CMD_ID_MAX             = 0x003F0000,   /* max command ID */
 };
 
 typedef enum
@@ -58,7 +61,8 @@ typedef enum
     GFX_CTRL_ADDR_TYPE_AUTO_DETECT = 0,
     GFX_CTRL_ADDR_TYPE_SYS_PHY_ADDR,
     GFX_CTRL_ADDR_TYPE_GPU_PHY_ADDR,
-    GFX_CTRL_ADDR_TYPE_GPU_VIRT_ADDR
+    GFX_CTRL_ADDR_TYPE_GPU_VIRT_ADDR,
+    GFX_CTRL_ADDR_TYPE_GUEST_PHY_ADDR
 }  GFX_CTRL_ADDR_TYPE;
 
 /*-----------------------------------------------------------------------------

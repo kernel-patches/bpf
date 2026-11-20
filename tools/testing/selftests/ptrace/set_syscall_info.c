@@ -15,6 +15,8 @@
 #include <linux/types.h>
 #include <linux/ptrace.h>
 
+#define MAX_ERRNO 4095
+
 #if defined(_MIPS_SIM) && _MIPS_SIM == _MIPS_SIM_NABI32
 /*
  * MIPS N32 is the only architecture where __kernel_ulong_t
@@ -123,6 +125,54 @@ check_psi_exit(struct __test_metadata *_metadata,
 	}
 	ASSERT_EQ(exp_exit->rval, info->exit.rval) {
 		LOG_KILL_TRACEE("%s: exit stop mismatch", text);
+	}
+}
+
+/* Error values that PTRACE_SET_SYSCALL_INFO must reject with ERANGE. */
+static const long long bad_error_rval[] = {
+	0,
+	1,
+	ESRCH,
+	-MAX_ERRNO - 1,
+	-2147483647LL - 1,
+#if __SIZEOF_LONG__ > 4
+	0x100000000LL,
+	-0x100000000LL - ESRCH,
+#endif
+};
+
+static void
+check_psi_exit_bad_rval(struct __test_metadata *_metadata,
+			const struct ptrace_syscall_info *orig,
+			const struct si_exit *exp_exit)
+{
+	struct ptrace_syscall_info info;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(bad_error_rval); ++i) {
+		info = *orig;
+		info.exit.is_error = 1;
+		info.exit.rval = bad_error_rval[i];
+		ASSERT_EQ(-1, sys_ptrace(PTRACE_SET_SYSCALL_INFO,
+					 tracee_pid, sizeof(info),
+					 (uintptr_t) &info)) {
+			LOG_KILL_TRACEE("PTRACE_SET_SYSCALL_INFO: error rval %lld accepted",
+					bad_error_rval[i]);
+		}
+		ASSERT_EQ(ERANGE, errno) {
+			LOG_KILL_TRACEE("PTRACE_SET_SYSCALL_INFO: error rval %lld: %m",
+					bad_error_rval[i]);
+		}
+
+		/* the return value must be left untouched */
+		memset(&info, 0, sizeof(info));
+		info.op = 0xff;
+		ASSERT_LT(0, sys_ptrace(PTRACE_GET_SYSCALL_INFO, tracee_pid,
+					sizeof(info), (uintptr_t) &info)) {
+			LOG_KILL_TRACEE("PTRACE_GET_SYSCALL_INFO: %m");
+		}
+		check_psi_exit(_metadata, &info, exp_exit,
+			       "PTRACE_SET_SYSCALL_INFO with bad error rval");
 	}
 }
 
@@ -274,6 +324,27 @@ TEST(set_syscall_info)
 				}
 			}, {
 				{ 0, tracer_pid }, { 1, -EISDIR }
+			}
+		},
+
+		/* change scno, change non-error rval to -MAX_ERRNO */
+		{
+			{
+				{
+					__NR_chdir,
+					{
+						dummy[0], dummy[1], dummy[2],
+						dummy[3], dummy[4], dummy[5]
+					}
+				}, {
+					__NR_getppid,
+					{
+						dummy[0], dummy[1], dummy[2],
+						dummy[3], dummy[4], dummy[5]
+					}
+				}
+			}, {
+				{ 0, tracer_pid }, { 1, -MAX_ERRNO }
 			}
 		},
 
@@ -475,6 +546,9 @@ TEST(set_syscall_info)
 				}
 				check_psi_exit(_metadata, &info, exp_exit,
 						"PTRACE_GET_SYSCALL_INFO #1");
+
+				/* invalid error values must be rejected */
+				check_psi_exit_bad_rval(_metadata, &info, exp_exit);
 
 				/* apply the changes */
 				info.exit.is_error = set_exit->is_error;

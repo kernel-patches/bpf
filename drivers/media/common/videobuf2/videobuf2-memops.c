@@ -59,7 +59,7 @@ struct frame_vector *vb2_create_framevec(unsigned long start,
 	}
 	return vec;
 out_release:
-	put_vaddr_frames(vec);
+	put_vaddr_frames(vec, false);
 out_destroy:
 	frame_vector_destroy(vec);
 	return ERR_PTR(ret);
@@ -69,13 +69,15 @@ EXPORT_SYMBOL(vb2_create_framevec);
 /**
  * vb2_destroy_framevec() - release vector of mapped pfns
  * @vec:	vector of pfns / pages to release
+ * @dirty:	whether to mark the pages dirty first
  *
  * This releases references to all pages in the vector @vec (if corresponding
- * pfns are backed by pages) and frees the passed vector.
+ * pfns are backed by pages), marking them dirty first if @dirty is set, and
+ * frees the passed vector.
  */
-void vb2_destroy_framevec(struct frame_vector *vec)
+void vb2_destroy_framevec(struct frame_vector *vec, bool dirty)
 {
-	put_vaddr_frames(vec);
+	put_vaddr_frames(vec, dirty);
 	frame_vector_destroy(vec);
 }
 EXPORT_SYMBOL(vb2_destroy_framevec);

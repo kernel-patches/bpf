@@ -198,7 +198,7 @@ static int _test_cmd_hwpt_alloc(int fd, __u32 device_id, __u32 pt_id, __u32 ft_i
 		.pt_id = pt_id,
 		.data_type = data_type,
 		.data_len = data_len,
-		.data_uptr = (uint64_t)data,
+		.data_uptr = (uint64_t)(uintptr_t)data,
 		.fault_id = ft_id,
 	};
 	int ret;
@@ -310,7 +310,7 @@ static int _test_cmd_hwpt_invalidate(int fd, __u32 hwpt_id, void *reqs,
 		.size = sizeof(cmd),
 		.hwpt_id = hwpt_id,
 		.data_type = data_type,
-		.data_uptr = (uint64_t)reqs,
+		.data_uptr = (uint64_t)(uintptr_t)reqs,
 		.entry_len = lreq,
 		.entry_num = *nreqs,
 	};
@@ -341,7 +341,7 @@ static int _test_cmd_viommu_invalidate(int fd, __u32 viommu_id, void *reqs,
 		.size = sizeof(cmd),
 		.hwpt_id = viommu_id,
 		.data_type = data_type,
-		.data_uptr = (uint64_t)reqs,
+		.data_uptr = (uint64_t)(uintptr_t)reqs,
 		.entry_len = lreq,
 		.entry_num = *nreqs,
 	};
@@ -695,7 +695,7 @@ static int _test_ioctl_ioas_map(int fd, unsigned int ioas_id, void *buffer,
 	})
 
 static int _test_ioctl_ioas_unmap(int fd, unsigned int ioas_id, uint64_t iova,
-				  size_t length, uint64_t *out_len)
+				  uint64_t length, uint64_t *out_len)
 {
 	struct iommu_ioas_unmap cmd = {
 		.size = sizeof(cmd),
@@ -832,7 +832,7 @@ static int _test_cmd_get_hw_info(int fd, __u32 device_id, __u32 data_type,
 		.dev_id = device_id,
 		.data_len = data_len,
 		.in_data_type = data_type,
-		.data_uptr = (uint64_t)data,
+		.data_uptr = (uint64_t)(uintptr_t)data,
 		.out_capabilities = 0,
 	};
 	int ret;
@@ -978,7 +978,7 @@ static int _test_cmd_viommu_alloc(int fd, __u32 device_id, __u32 hwpt_id,
 		.type = type,
 		.dev_id = device_id,
 		.hwpt_id = hwpt_id,
-		.data_uptr = (uint64_t)data,
+		.data_uptr = (uint64_t)(uintptr_t)data,
 		.data_len = data_len,
 	};
 	int ret;

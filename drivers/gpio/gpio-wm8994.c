@@ -267,8 +267,7 @@ static int wm8994_gpio_probe(struct platform_device *pdev)
 	struct wm8994_pdata *pdata = dev_get_platdata(wm8994->dev);
 	struct wm8994_gpio *wm8994_gpio;
 
-	wm8994_gpio = devm_kzalloc(&pdev->dev, sizeof(*wm8994_gpio),
-				   GFP_KERNEL);
+	wm8994_gpio = devm_kzalloc_obj(&pdev->dev, *wm8994_gpio);
 	if (wm8994_gpio == NULL)
 		return -ENOMEM;
 
@@ -288,18 +287,7 @@ static struct platform_driver wm8994_gpio_driver = {
 	.driver.name	= "wm8994-gpio",
 	.probe		= wm8994_gpio_probe,
 };
-
-static int __init wm8994_gpio_init(void)
-{
-	return platform_driver_register(&wm8994_gpio_driver);
-}
-subsys_initcall(wm8994_gpio_init);
-
-static void __exit wm8994_gpio_exit(void)
-{
-	platform_driver_unregister(&wm8994_gpio_driver);
-}
-module_exit(wm8994_gpio_exit);
+subsys_platform_driver(wm8994_gpio_driver);
 
 MODULE_AUTHOR("Mark Brown <broonie@opensource.wolfsonmicro.com>");
 MODULE_DESCRIPTION("GPIO interface for WM8994");

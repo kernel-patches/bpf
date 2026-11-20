@@ -197,11 +197,11 @@ static int vctrl_set_voltage_sel(struct regulator_dev *rdev,
 				vctrl->vtable[next_sel].ctrl);
 			goto err;
 		}
-		vctrl->sel = next_sel;
 
 		delay = DIV_ROUND_UP(vctrl->vtable[vctrl->sel].out -
 				     vctrl->vtable[next_sel].out,
 				     vctrl->min_slew_down_rate);
+		vctrl->sel = next_sel;
 		usleep_range(delay, delay + DIV_ROUND_UP(delay, 10));
 	}
 
@@ -347,9 +347,9 @@ static int vctrl_init_vtable(struct platform_device *pdev,
 		return -EINVAL;
 	}
 
-	vctrl->vtable = devm_kcalloc(&pdev->dev, rdesc->n_voltages,
-				     sizeof(struct vctrl_voltage_table),
-				     GFP_KERNEL);
+	vctrl->vtable = devm_kzalloc_objs(&pdev->dev,
+					  struct vctrl_voltage_table,
+					  rdesc->n_voltages);
 	if (!vctrl->vtable)
 		return -ENOMEM;
 
@@ -451,8 +451,7 @@ static int vctrl_probe(struct platform_device *pdev)
 	int ctrl_uV;
 	int ret;
 
-	vctrl = devm_kzalloc(&pdev->dev, sizeof(struct vctrl_data),
-			     GFP_KERNEL);
+	vctrl = devm_kzalloc_obj(&pdev->dev, struct vctrl_data);
 	if (!vctrl)
 		return -ENOMEM;
 

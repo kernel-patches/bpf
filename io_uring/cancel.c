@@ -198,7 +198,8 @@ static int __io_async_cancel(struct io_cancel_data *cd,
 			break;
 		if (!all)
 			return ret;
-		nr++;
+		/* poll, futex and waitid return how many they cancelled */
+		nr += max(ret, 1);
 	} while (1);
 
 	/* slow path, try all io-wq's */
@@ -246,7 +247,7 @@ int io_async_cancel(struct io_kiocb *req, unsigned int issue_flags)
 	if (cd.flags & IORING_ASYNC_CANCEL_FD) {
 		if (req->flags & REQ_F_FIXED_FILE ||
 		    cd.flags & IORING_ASYNC_CANCEL_FD_FIXED) {
-			req->flags |= REQ_F_FIXED_FILE;
+			io_req_set_flags(req, REQ_F_FIXED_FILE);
 			req->file = io_file_get_fixed(req, cancel->fd,
 							issue_flags);
 		} else {
@@ -261,8 +262,6 @@ int io_async_cancel(struct io_kiocb *req, unsigned int issue_flags)
 
 	ret = __io_async_cancel(&cd, tctx, issue_flags);
 done:
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

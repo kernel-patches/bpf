@@ -95,12 +95,12 @@ static void pinconf_generic_dump_one(struct pinctrl_dev *pctldev,
 		seq_puts(s, item->display);
 		/* Print unit if available */
 		if (item->has_arg) {
-			u32 val = pinconf_to_config_argument(config);
+			unsigned long val = pinconf_to_config_argument(config);
 
 			if (item->format)
-				seq_printf(s, " (%u %s)", val, item->format);
+				seq_printf(s, " (%lu %s)", val, item->format);
 			else
-				seq_printf(s, " (0x%x)", val);
+				seq_printf(s, " (0x%lx)", val);
 
 			if (item->values && item->num_values) {
 				if (val < item->num_values)
@@ -152,7 +152,7 @@ void pinconf_generic_dump_config(struct pinctrl_dev *pctldev,
 	for (i = 0; i < ARRAY_SIZE(conf_items); i++) {
 		if (pinconf_to_config_param(config) != conf_items[i].param)
 			continue;
-		seq_printf(s, "%s: 0x%x", conf_items[i].display,
+		seq_printf(s, "%s: 0x%lx", conf_items[i].display,
 			   pinconf_to_config_argument(config));
 	}
 
@@ -164,7 +164,7 @@ void pinconf_generic_dump_config(struct pinctrl_dev *pctldev,
 		if (pinconf_to_config_param(config) !=
 		    pctldev->desc->custom_conf_items[i].param)
 			continue;
-		seq_printf(s, "%s: 0x%x",
+		seq_printf(s, "%s: 0x%lx",
 				pctldev->desc->custom_conf_items[i].display,
 				pinconf_to_config_argument(config));
 	}
@@ -268,6 +268,12 @@ static int parse_fw_cfg(struct fwnode_handle *fwnode,
 			}
 		}
 
+		if (val & ~PIN_CONF_ARG_MASK) {
+			pr_err("%pfw: value %#x for %s does not fit in the pinconf argument\n",
+			       fwnode, val, par->property);
+			return -EINVAL;
+		}
+
 		pr_debug("found %s with value %u\n", par->property, val);
 		cfg[*ncfg] = pinconf_to_config_packed(par->param, val);
 		(*ncfg)++;
@@ -336,8 +342,8 @@ int pinconf_generic_parse_dt_pinmux(struct device_node *np, struct device *dev,
 		return -EINVAL;
 	}
 
-	pid_t = devm_kcalloc(dev, npins_t, sizeof(*pid_t), GFP_KERNEL);
-	pmux_t = devm_kcalloc(dev, npins_t, sizeof(*pmux_t), GFP_KERNEL);
+	pid_t = devm_kzalloc_objs(dev, *pid_t, npins_t);
+	pmux_t = devm_kzalloc_objs(dev, *pmux_t, npins_t);
 	if (!pid_t || !pmux_t) {
 		dev_err(dev, "kalloc memory fail\n");
 		return -ENOMEM;
@@ -392,7 +398,7 @@ int pinconf_generic_parse_dt_config(struct device_node *np,
 	max_cfg = ARRAY_SIZE(dt_params);
 	if (pctldev)
 		max_cfg += pctldev->desc->num_custom_params;
-	cfg = kcalloc(max_cfg, sizeof(*cfg), GFP_KERNEL);
+	cfg = kzalloc_objs(*cfg, max_cfg);
 	if (!cfg)
 		return -ENOMEM;
 

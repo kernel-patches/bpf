@@ -421,7 +421,7 @@ static void __init add_early_ima_buffer(u64 phys_addr)
 #endif
 }
 
-#if defined(CONFIG_HAVE_IMA_KEXEC) && !defined(CONFIG_OF_FLATTREE)
+#ifdef CONFIG_HAVE_IMA_KEXEC
 int __init ima_free_kexec_buffer(void)
 {
 	if (!ima_kexec_buffer_size)
@@ -627,7 +627,7 @@ static void __init arch_reserve_crashkernel(void)
 	}
 
 	reserve_crashkernel_generic(crash_size, crash_base, low_size, high);
-	reserve_crashkernel_cma(cma_size);
+	crashkernel_cma_set_size(cma_size);
 }
 
 static struct resource standard_io_resources[] = {
@@ -993,14 +993,7 @@ void __init setup_arch(char **cmdline_p)
 
 	x86_report_nx();
 
-	apic_setup_apic_calls();
-
-	if (acpi_mps_check()) {
-#ifdef CONFIG_X86_LOCAL_APIC
-		apic_is_disabled = true;
-#endif
-		setup_clear_cpu_cap(X86_FEATURE_APIC);
-	}
+	apic_early_init();
 
 	e820__finish_early_params();
 
@@ -1062,7 +1055,6 @@ void __init setup_arch(char **cmdline_p)
 	/* max_low_pfn get updated here */
 	find_low_pfn_range();
 #else
-	check_x2apic();
 
 	/* How many end-of-memory variables you have, grandma! */
 	/* need this before calling reserve_initrd */
@@ -1107,10 +1099,6 @@ void __init setup_arch(char **cmdline_p)
 
 	/* preallocate 4k for mptable mpc */
 	e820__memblock_alloc_reserved_mpc_new();
-
-#ifdef CONFIG_X86_CHECK_BIOS_CORRUPTION
-	setup_bios_corruption_check();
-#endif
 
 #ifdef CONFIG_X86_32
 	printk(KERN_DEBUG "initial memory mapped: [mem 0x00000000-%#010lx]\n",
@@ -1242,7 +1230,7 @@ void __init setup_arch(char **cmdline_p)
 	x86_init.mpparse.parse_smp_cfg();
 
 	/* Last opportunity to detect and map the local APIC */
-	init_apic_mappings();
+	apic_finalize_early_init();
 
 	topology_init_possible_cpus();
 

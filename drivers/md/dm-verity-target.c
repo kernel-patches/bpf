@@ -171,6 +171,15 @@ static void verity_hash_at_level(struct dm_verity *v, sector_t block, int level,
 }
 
 /*
+ * Skip verity work in response to I/O error when system is shutting down.
+ */
+static inline bool verity_is_system_shutting_down(void)
+{
+	return system_state == SYSTEM_HALT || system_state == SYSTEM_POWER_OFF
+		|| system_state == SYSTEM_RESTART;
+}
+
+/*
  * Handle verification errors.
  */
 static int verity_handle_err(struct dm_verity *v, enum verity_block_type type,
@@ -218,6 +227,15 @@ static int verity_handle_err(struct dm_verity *v, enum verity_block_type type,
 out:
 	if (v->mode == DM_VERITY_MODE_LOGGING)
 		return 0;
+
+	/*
+	 * Devices may already be quiesced (e.g. UFS set offline by its
+	 * shutdown hook), so a failure here does not imply corruption.  Fail
+	 * the I/O but do not restart or panic, which would also override the
+	 * reboot reason of the shutdown already in progress.
+	 */
+	if (verity_is_system_shutting_down())
+		return 1;
 
 	if (v->mode == DM_VERITY_MODE_RESTART)
 		kernel_restart("dm-verity device corrupted");
@@ -379,21 +397,13 @@ static noinline int verity_recheck(struct dm_verity *v, struct dm_verity_io *io,
 	struct page *page;
 	void *buffer;
 	int r;
-	struct dm_io_request io_req;
-	struct dm_io_region io_loc;
 
 	page = mempool_alloc(&v->recheck_pool, GFP_NOIO);
 	buffer = page_to_virt(page);
 
-	io_req.bi_opf = REQ_OP_READ;
-	io_req.mem.type = DM_IO_KMEM;
-	io_req.mem.ptr.addr = buffer;
-	io_req.notify.fn = NULL;
-	io_req.client = v->io;
-	io_loc.bdev = v->data_dev->bdev;
-	io_loc.sector = cur_block << (v->data_dev_block_bits - SECTOR_SHIFT);
-	io_loc.count = 1 << (v->data_dev_block_bits - SECTOR_SHIFT);
-	r = dm_io(&io_req, 1, &io_loc, NULL, NULL, IOPRIO_DEFAULT);
+	r = bdev_rw_virt(v->data_dev->bdev,
+			 cur_block << (v->data_dev_block_bits - SECTOR_SHIFT),
+			 buffer, 1 << v->data_dev_block_bits, REQ_OP_READ);
 	if (unlikely(r))
 		goto free_ret;
 
@@ -591,15 +601,6 @@ static int verity_verify_io(struct dm_verity_io *io)
 error:
 	verity_clear_pending_blocks(io);
 	return r;
-}
-
-/*
- * Skip verity work in response to I/O error when system is shutting down.
- */
-static inline bool verity_is_system_shutting_down(void)
-{
-	return system_state == SYSTEM_HALT || system_state == SYSTEM_POWER_OFF
-		|| system_state == SYSTEM_RESTART;
 }
 
 static void restart_io_error(struct work_struct *w)
@@ -1058,8 +1059,6 @@ static void verity_dtr(struct dm_target *ti)
 		destroy_workqueue(v->verify_wq);
 
 	mempool_exit(&v->recheck_pool);
-	if (v->io)
-		dm_io_client_destroy(v->io);
 
 	if (v->bufio)
 		dm_bufio_client_destroy(v->bufio);
@@ -1106,9 +1105,8 @@ static int verity_alloc_most_once(struct dm_verity *v)
 		return -E2BIG;
 	}
 
-	v->validated_blocks = kvcalloc(BITS_TO_LONGS(v->data_blocks),
-				       sizeof(unsigned long),
-				       GFP_KERNEL);
+	v->validated_blocks = kvzalloc_objs(unsigned long,
+					    BITS_TO_LONGS(v->data_blocks));
 	if (!v->validated_blocks) {
 		ti->error = "failed to allocate bitset for check_at_most_once";
 		return -ENOMEM;
@@ -1601,14 +1599,6 @@ static int verity_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	r = mempool_init_page_pool(&v->recheck_pool, 1, 0);
 	if (unlikely(r)) {
 		ti->error = "Cannot allocate mempool";
-		goto bad;
-	}
-
-	v->io = dm_io_client_create();
-	if (IS_ERR(v->io)) {
-		r = PTR_ERR(v->io);
-		v->io = NULL;
-		ti->error = "Cannot allocate dm io";
 		goto bad;
 	}
 

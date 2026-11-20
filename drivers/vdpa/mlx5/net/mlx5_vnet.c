@@ -479,12 +479,18 @@ err_db:
 static void qp_destroy(struct mlx5_vdpa_net *ndev, struct mlx5_vdpa_qp *vqp)
 {
 	u32 in[MLX5_ST_SZ_DW(destroy_qp_in)] = {};
+	int err;
 
 	MLX5_SET(destroy_qp_in, in, opcode, MLX5_CMD_OP_DESTROY_QP);
 	MLX5_SET(destroy_qp_in, in, qpn, vqp->mqp.qpn);
 	MLX5_SET(destroy_qp_in, in, uid, ndev->mvdev.res.uid);
-	if (mlx5_cmd_exec_in(ndev->mvdev.mdev, destroy_qp, in))
-		mlx5_vdpa_warn(&ndev->mvdev, "destroy qp 0x%x\n", vqp->mqp.qpn);
+	err = mlx5_cmd_exec_in(ndev->mvdev.mdev, destroy_qp, in);
+	if (err) {
+		/* The QP still owns its buffers */
+		mlx5_vdpa_warn(&ndev->mvdev, "destroy %s qp 0x%x failed: %d\n",
+			       vqp->fw ? "fw" : "sw", vqp->mqp.qpn, err);
+		return;
+	}
 	if (!vqp->fw) {
 		mlx5_db_free(ndev->mvdev.mdev, &vqp->db);
 		rq_buf_free(ndev, vqp);
@@ -3059,7 +3065,15 @@ static int mlx5_vdpa_change_map(struct mlx5_vdpa_dev *mvdev,
 	bool teardown = !is_resumable(ndev);
 	int err;
 
-	suspend_vqs(ndev, 0, ndev->cur_num_vqs);
+	if ((mvdev->status & VIRTIO_CONFIG_S_DRIVER_OK) && !mvdev->suspended) {
+		err = suspend_vqs(ndev, 0, ndev->cur_num_vqs);
+		if (err && !teardown) {
+			for (int i = 0; i < ndev->cur_num_vqs; i++)
+				resume_vqs(ndev, i, 1);
+			mlx5_vdpa_put_mr(mvdev, new_mr);
+			return err;
+		}
+	}
 	if (teardown) {
 		err = save_channels_info(ndev);
 		if (err) {

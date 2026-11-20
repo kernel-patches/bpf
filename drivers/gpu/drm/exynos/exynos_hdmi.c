@@ -875,7 +875,7 @@ static const struct drm_connector_funcs hdmi_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.detect = hdmi_detect,
 	.destroy = hdmi_connector_destroy,
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -1738,7 +1738,7 @@ static int hdmi_clk_init(struct hdmi_context *hdata)
 	if (!count)
 		return 0;
 
-	clks = devm_kcalloc(dev, count, sizeof(*clks), GFP_KERNEL);
+	clks = devm_kzalloc_objs(dev, *clks, count);
 	if (!clks)
 		return -ENOMEM;
 
@@ -1975,7 +1975,7 @@ static int hdmi_probe(struct platform_device *pdev)
 	struct hdmi_context *hdata;
 	int ret;
 
-	hdata = devm_kzalloc(dev, sizeof(struct hdmi_context), GFP_KERNEL);
+	hdata = devm_kzalloc_obj(dev, struct hdmi_context);
 	if (!hdata)
 		return -ENOMEM;
 

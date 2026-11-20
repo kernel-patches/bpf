@@ -1054,7 +1054,7 @@ static int __init hp_wmi_charge_control_setup(struct device *dev)
 	scoped_guard(mutex, &hp_wmi_charge_lock)
 		hp_wmi_charge_behaviour = behaviour;
 
-	return devm_battery_hook_register(dev, &hp_wmi_charge_battery_hook);
+	return devm_acpi_battery_hook_register(dev, &hp_wmi_charge_battery_hook);
 }
 #else
 static int __init hp_wmi_charge_control_setup(struct device *dev)
@@ -3186,7 +3186,7 @@ static int hp_wmi_hwmon_init(void)
 	struct device *hwmon;
 	int ret;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

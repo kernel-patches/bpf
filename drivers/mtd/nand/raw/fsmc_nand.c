@@ -486,7 +486,7 @@ static int dma_xfer(struct fsmc_nand_data *host, void *buffer, int len,
 		    enum dma_data_direction direction)
 {
 	struct dma_chan *chan;
-	struct dma_device *dma_dev;
+	struct device *dma_dev;
 	struct dma_async_tx_descriptor *tx;
 	dma_addr_t dma_dst, dma_src, dma_addr;
 	dma_cookie_t cookie;
@@ -501,9 +501,9 @@ static int dma_xfer(struct fsmc_nand_data *host, void *buffer, int len,
 	else
 		return -EINVAL;
 
-	dma_dev = chan->device;
-	dma_addr = dma_map_single(dma_dev->dev, buffer, len, direction);
-	if (dma_mapping_error(dma_dev->dev, dma_addr))
+	dma_dev = dmaengine_get_dma_device(chan);
+	dma_addr = dma_map_single(dma_dev, buffer, len, direction);
+	if (dma_mapping_error(dma_dev, dma_addr))
 		return -EINVAL;
 
 	if (direction == DMA_TO_DEVICE) {
@@ -514,16 +514,14 @@ static int dma_xfer(struct fsmc_nand_data *host, void *buffer, int len,
 		dma_dst = dma_addr;
 	}
 
-	tx = dma_dev->device_prep_dma_memcpy(chan, dma_dst, dma_src,
-			len, flags);
+	tx = dmaengine_prep_dma_memcpy(chan, dma_dst, dma_src, len, flags);
 	if (!tx) {
 		dev_err(host->dev, "device_prep_dma_memcpy error\n");
 		ret = -EIO;
 		goto unmap_dma;
 	}
 
-	tx->callback = dma_complete;
-	tx->callback_param = host;
+	dmaengine_desc_set_callback(tx, dma_complete, NULL, host);
 	cookie = dmaengine_submit(tx);
 
 	ret = dma_submit_error(cookie);
@@ -547,7 +545,7 @@ static int dma_xfer(struct fsmc_nand_data *host, void *buffer, int len,
 	ret = 0;
 
 unmap_dma:
-	dma_unmap_single(dma_dev->dev, dma_addr, len, direction);
+	dma_unmap_single(dma_dev, dma_addr, len, direction);
 
 	return ret;
 }
@@ -889,9 +887,7 @@ static int fsmc_nand_probe_config_dt(struct platform_device *pdev,
 	if (of_property_read_bool(np, "nand-skip-bbtscan"))
 		nand->options |= NAND_SKIP_BBTSCAN;
 
-	host->dev_timings = devm_kzalloc(&pdev->dev,
-					 sizeof(*host->dev_timings),
-					 GFP_KERNEL);
+	host->dev_timings = devm_kzalloc_obj(&pdev->dev, *host->dev_timings);
 	if (!host->dev_timings)
 		return -ENOMEM;
 
@@ -1037,7 +1033,7 @@ static int __init fsmc_nand_probe(struct platform_device *pdev)
 	int i;
 
 	/* Allocate memory for the device structure (and zero it) */
-	host = devm_kzalloc(&pdev->dev, sizeof(*host), GFP_KERNEL);
+	host = devm_kzalloc_obj(&pdev->dev, *host);
 	if (!host)
 		return -ENOMEM;
 
@@ -1186,7 +1182,6 @@ static void fsmc_nand_remove(struct platform_device *pdev)
 	}
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int fsmc_nand_suspend(struct device *dev)
 {
 	struct fsmc_nand_data *host = dev_get_drvdata(dev);
@@ -1215,9 +1210,8 @@ static int fsmc_nand_resume(struct device *dev)
 
 	return 0;
 }
-#endif
 
-static SIMPLE_DEV_PM_OPS(fsmc_nand_pm_ops, fsmc_nand_suspend, fsmc_nand_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(fsmc_nand_pm_ops, fsmc_nand_suspend, fsmc_nand_resume);
 
 static const struct of_device_id fsmc_nand_id_table[] = {
 	{ .compatible = "st,spear600-fsmc-nand" },
@@ -1231,7 +1225,7 @@ static struct platform_driver fsmc_nand_driver = {
 	.driver = {
 		.name = "fsmc-nand",
 		.of_match_table = fsmc_nand_id_table,
-		.pm = &fsmc_nand_pm_ops,
+		.pm = pm_sleep_ptr(&fsmc_nand_pm_ops),
 	},
 };
 

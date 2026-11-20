@@ -81,14 +81,15 @@ HOST_OVERRIDES := CC="$(HOSTCC)" LD="$(HOSTLD)" AR="$(HOSTAR)"
 #
 # When using shared libraries, -lopcodes is sufficient as dependencies are
 # resolved automatically. With static libraries, we must explicitly link
-# against libopcodes' dependencies: libbfd, libiberty, and sometimes libz.
-# Try each combination and use the first one that succeeds.
+# against libopcodes' dependencies: libbfd, libiberty, and sometimes libz
+# and libzstd. Try each combination and use the first one that succeeds.
 #
 LIBOPCODES_LIBS := $(shell \
 	for libs in "-lopcodes" \
 		    "-lopcodes -lbfd" \
 		    "-lopcodes -lbfd -liberty" \
-		    "-lopcodes -lbfd -liberty -lz"; do \
+		    "-lopcodes -lbfd -liberty -lz" \
+		    "-lopcodes -lbfd -liberty -lz -lzstd"; do \
 		printf '%s\n' \
 		       '$(pound)include <bfd.h>' \
 		       '$(pound)include <dis-asm.h>' \

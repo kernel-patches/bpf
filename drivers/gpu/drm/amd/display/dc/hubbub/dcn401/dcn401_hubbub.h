@@ -198,7 +198,8 @@ bool hubbub401_get_dcc_compression_cap(
 
 bool dcn401_program_arbiter(
 	struct hubbub *hubbub,
-	struct dml2_display_arb_regs *arb_regs,
+	uint32_t pstate_stall_threshold,
+	bool allow_sdpif_rate_limit_when_cstate_req,
 	bool safe_to_lower);
 
 void hubbub401_construct(struct dcn20_hubbub *hubbub2,

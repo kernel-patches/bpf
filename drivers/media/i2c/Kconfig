@@ -332,8 +332,43 @@ config VIDEO_IMX678
 	  To compile this driver as a module, choose M here: the
 	  module will be called imx678.
 
+config VIDEO_IMX908
+	tristate "Sony IMX908 sensor support"
+	depends on GPIOLIB
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the Sony
+	  IMX908 CMOS image sensor.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called imx908.
+
+config VIDEO_MIRA016
+	tristate "ams OSRAM MIRA016 sensor support"
+	depends on I2C && VIDEO_DEV
+	depends on GPIOLIB
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the ams OSRAM
+	  MIRA016 camera.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called mira016.
+
 config VIDEO_MAX9271_LIB
 	tristate
+
+config VIDEO_MIRA220
+	tristate "ams OSRAM MIRA220 sensor support"
+	depends on I2C && VIDEO_DEV
+	depends on GPIOLIB
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the ams OSRAM
+	  MIRA220 camera.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called mira220.
 
 config VIDEO_MT9M001
 	tristate "mt9m001 support"

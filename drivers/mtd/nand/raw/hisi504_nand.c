@@ -740,7 +740,7 @@ static int hisi_nfc_probe(struct platform_device *pdev)
 	struct mtd_info   *mtd;
 	struct device_node *np = dev->of_node;
 
-	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
+	host = devm_kzalloc_obj(dev, *host);
 	if (!host)
 		return -ENOMEM;
 	host->dev = dev;
@@ -809,7 +809,6 @@ static void hisi_nfc_remove(struct platform_device *pdev)
 	nand_cleanup(chip);
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int hisi_nfc_suspend(struct device *dev)
 {
 	struct hinfc_host *host = dev_get_drvdata(dev);
@@ -842,8 +841,8 @@ static int hisi_nfc_resume(struct device *dev)
 
 	return 0;
 }
-#endif
-static SIMPLE_DEV_PM_OPS(hisi_nfc_pm_ops, hisi_nfc_suspend, hisi_nfc_resume);
+
+static DEFINE_SIMPLE_DEV_PM_OPS(hisi_nfc_pm_ops, hisi_nfc_suspend, hisi_nfc_resume);
 
 static const struct of_device_id nfc_id_table[] = {
 	{ .compatible = "hisilicon,504-nfc" },
@@ -855,7 +854,7 @@ static struct platform_driver hisi_nfc_driver = {
 	.driver = {
 		.name  = "hisi_nand",
 		.of_match_table = nfc_id_table,
-		.pm = &hisi_nfc_pm_ops,
+		.pm = pm_sleep_ptr(&hisi_nfc_pm_ops),
 	},
 	.probe		= hisi_nfc_probe,
 	.remove		= hisi_nfc_remove,

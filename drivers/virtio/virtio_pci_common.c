@@ -47,7 +47,7 @@ void vp_synchronize_vectors(struct virtio_device *vdev)
 		synchronize_irq(pci_irq_vector(vp_dev->pci_dev, i));
 }
 
-/* the notify function used when creating a virt queue */
+/* the notify function used when creating a virtqueue */
 bool vp_notify(struct virtqueue *vq)
 {
 	/* we write the queue's selector into the notification register to
@@ -224,6 +224,12 @@ static struct virtqueue *vp_setup_vq(struct virtio_device *vdev, unsigned int in
 		goto out_info;
 
 	info->vq = vq;
+
+	if (msix_vec != VIRTIO_MSI_NO_VECTOR)
+		info->virq = pci_irq_vector(vp_dev->pci_dev, msix_vec);
+	else
+		info->virq = 0;
+
 	if (callback) {
 		spin_lock_irqsave(&vp_dev->lock, flags);
 		if (!vp_is_slow_path_vector(msix_vec))
@@ -571,7 +577,7 @@ int vp_set_vq_affinity(struct virtqueue *vq, const struct cpumask *cpu_mask)
 
 	if (vp_dev->msix_enabled) {
 		mask = vp_dev->msix_affinity_masks[info->msix_vector];
-		irq = pci_irq_vector(vp_dev->pci_dev, info->msix_vector);
+		irq = info->virq;
 		if (!cpu_mask)
 			irq_update_affinity_hint(irq, NULL);
 		else {
@@ -633,7 +639,7 @@ static bool vp_supports_pm_no_reset(struct device *dev)
 
 	pci_read_config_word(pci_dev, pci_dev->pm_cap + PCI_PM_CTRL, &pmcsr);
 	if (PCI_POSSIBLE_ERROR(pmcsr)) {
-		dev_err(dev, "Unable to query pmcsr");
+		dev_err(dev, "Unable to query pmcsr\n");
 		return false;
 	}
 
@@ -661,8 +667,18 @@ static const struct dev_pm_ops virtio_pci_pm_ops = {
 #endif
 
 
+/*
+ * The virtio-net function of the AMD Pensando DSC2-200 (Elba) DPU, as
+ * shipped by Oracle (subsystem 108e:1200), cannot DMA to arbitrary 64-bit
+ * bus addresses. Oracle advises limiting it to 48 bits.
+ */
+#define VIRTIO_PCI_QUIRK_DMA_48BIT	BIT(0)
+
 /* Qumranet donated their vendor ID for devices 0x1000 thru 0x10FF. */
 static const struct pci_device_id virtio_pci_id_table[] = {
+	{ PCI_DEVICE_SUB(PCI_VENDOR_ID_REDHAT_QUMRANET, 0x1041,
+			 PCI_VENDOR_ID_SUN, 0x1200),
+	  .driver_data = VIRTIO_PCI_QUIRK_DMA_48BIT },
 	{ PCI_DEVICE(PCI_VENDOR_ID_REDHAT_QUMRANET, PCI_ANY_ID) },
 	{ 0 }
 };
@@ -703,6 +719,9 @@ static int virtio_pci_probe(struct pci_dev *pci_dev,
 	rc = pci_enable_device(pci_dev);
 	if (rc)
 		goto err_enable_device;
+
+	if (id->driver_data & VIRTIO_PCI_QUIRK_DMA_48BIT)
+		vp_dev->mdev.dma_mask = DMA_BIT_MASK(48);
 
 	if (force_legacy) {
 		rc = virtio_pci_legacy_probe(vp_dev);

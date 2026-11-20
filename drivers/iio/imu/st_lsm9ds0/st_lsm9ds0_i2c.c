@@ -39,7 +39,7 @@ static const struct i2c_device_id st_lsm9ds0_id_table[] = {
 MODULE_DEVICE_TABLE(i2c, st_lsm9ds0_id_table);
 
 static const struct acpi_device_id st_lsm9ds0_acpi_match[] = {
-	{"ACCL0001", (kernel_ulong_t)LSM303D_IMU_DEV_NAME},
+	{ .id = "ACCL0001", .driver_data = (kernel_ulong_t)LSM303D_IMU_DEV_NAME },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, st_lsm9ds0_acpi_match);
@@ -59,7 +59,7 @@ static int st_lsm9ds0_i2c_probe(struct i2c_client *client)
 
 	st_sensors_dev_name_probe(dev, client->name, sizeof(client->name));
 
-	lsm9ds0 = devm_kzalloc(dev, sizeof(*lsm9ds0), GFP_KERNEL);
+	lsm9ds0 = devm_kzalloc_obj(dev, *lsm9ds0);
 	if (!lsm9ds0)
 		return -ENOMEM;
 

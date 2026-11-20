@@ -515,16 +515,15 @@ static int rockchip_sound_of_parse_dais(struct device *dev,
 	int i, index;
 	int num_routes;
 
-	card->dai_link = devm_kcalloc(dev, ARRAY_SIZE(rockchip_dais),
-				      sizeof(*card->dai_link), GFP_KERNEL);
+	card->dai_link = devm_kzalloc_objs(dev, *card->dai_link,
+					   ARRAY_SIZE(rockchip_dais));
 	if (!card->dai_link)
 		return -ENOMEM;
 
 	num_routes = 0;
 	for (i = 0; i < ARRAY_SIZE(rockchip_routes); i++)
 		num_routes += rockchip_routes[i].num_routes;
-	routes = devm_kcalloc(dev, num_routes, sizeof(*routes),
-			      GFP_KERNEL);
+	routes = devm_kzalloc_objs(dev, *routes, num_routes);
 	if (!routes)
 		return -ENOMEM;
 	card->dapm_routes = routes;
@@ -540,12 +539,16 @@ static int rockchip_sound_of_parse_dais(struct device *dev,
 		if (!np_codec)
 			break;
 
-		if (!of_device_is_available(np_codec))
+		if (!of_device_is_available(np_codec)) {
+			of_node_put(np_codec);
 			continue;
+		}
 
 		index = rockchip_sound_codec_node_match(np_codec);
-		if (index < 0)
+		if (index < 0) {
+			of_node_put(np_codec);
 			continue;
+		}
 
 		switch (index) {
 		case DAILINK_CDNDP:

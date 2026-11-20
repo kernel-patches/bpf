@@ -23,6 +23,7 @@
 #define TIMEOUT_US	2000	/* CVP STATUS timeout for USERMODE polling */
 
 /* Vendor Specific Extended Capability Registers */
+#define AGILEX5_VSEC_LENGTH		0x60	/* VSEC length, Agilex5 only */
 #define VSE_CVP_STATUS			0x1c	/* 32bit */
 #define VSE_CVP_STATUS_CFG_RDY		BIT(18)	/* CVP_CONFIG_READY */
 #define VSE_CVP_STATUS_CFG_ERR		BIT(19)	/* CVP_CONFIG_ERROR */
@@ -49,6 +50,9 @@
 #define V1_VSEC_OFFSET			0x200	/* Vendor Specific Offset V1 */
 /* V2 Defines */
 #define VSE_CVP_TX_CREDITS		0x49	/* 8bit */
+#define VSE_CVP_TX_CREDITS_MASK		GENMASK(7, 0)
+#define VSE_CVP_AG5_TX_CREDITS		0x5c	/* 12bit credits for Agilex5 */
+#define VSE_CVP_AG5_TX_CREDITS_MASK	GENMASK(11, 0)
 
 #define V2_CREDIT_TIMEOUT_US		40000
 #define V2_CHECK_CREDIT_US		10
@@ -84,7 +88,7 @@ struct altera_cvp_conf {
 struct cvp_priv {
 	void	(*switch_clk)(struct altera_cvp_conf *conf);
 	int	(*clear_state)(struct altera_cvp_conf *conf);
-	int	(*wait_credit)(struct fpga_manager *mgr, u32 blocks);
+	int	(*avail_credit)(struct altera_cvp_conf *conf, u32 *credits);
 	size_t	block_size;
 	int	poll_time_us;
 	int	user_time_us;
@@ -223,16 +227,47 @@ static int altera_cvp_v2_clear_state(struct altera_cvp_conf *conf)
 				      conf->priv->poll_time_us);
 }
 
+/*
+ * The HW credit counter wraps at its register width, so compute the
+ * available credits against sent_packets modulo that width.
+ */
+static int altera_cvp_v2_avail_credit(struct altera_cvp_conf *conf,
+				      u32 *credits)
+{
+	u8 val;
+	int ret;
+
+	ret = altera_read_config_byte(conf, VSE_CVP_TX_CREDITS, &val);
+	if (!ret)
+		*credits = (val - conf->sent_packets) & VSE_CVP_TX_CREDITS_MASK;
+
+	return ret;
+}
+
+static int altera_cvp_ag5_avail_credit(struct altera_cvp_conf *conf,
+				       u32 *credits)
+{
+	u32 val;
+	int ret;
+
+	ret = altera_read_config_dword(conf, VSE_CVP_AG5_TX_CREDITS, &val);
+	if (!ret)
+		*credits = (val - conf->sent_packets) &
+			   VSE_CVP_AG5_TX_CREDITS_MASK;
+
+	return ret;
+}
+
 static int altera_cvp_v2_wait_for_credit(struct fpga_manager *mgr,
 					 u32 blocks)
 {
 	u32 timeout = V2_CREDIT_TIMEOUT_US / V2_CHECK_CREDIT_US;
 	struct altera_cvp_conf *conf = mgr->priv;
 	int ret;
-	u8 val;
+	u32 credits;
 
 	do {
-		ret = altera_read_config_byte(conf, VSE_CVP_TX_CREDITS, &val);
+		ret = conf->priv->avail_credit(conf, &credits);
 		if (ret) {
 			dev_err(&conf->pci_dev->dev,
 				"Error reading CVP Credit Register\n");
@@ -240,14 +275,14 @@ static int altera_cvp_v2_wait_for_credit(struct fpga_manager *mgr,
 		}
 
 		/* Return if there is space in FIFO */
-		if (val - (u8)conf->sent_packets)
+		if (credits)
 			return 0;
 
 		ret = altera_cvp_chk_error(mgr, blocks * ALTERA_CVP_V2_SIZE);
 		if (ret) {
 			dev_err(&conf->pci_dev->dev,
-				"CE Bit error credit reg[0x%x]:sent[0x%x]\n",
-				val, conf->sent_packets);
+				"CE Bit error with no credit:sent[0x%x]\n",
+				conf->sent_packets);
 			return -EAGAIN;
 		}
 
@@ -473,8 +508,8 @@ static int altera_cvp_write(struct fpga_manager *mgr, const char *buf,
 
 	while (remaining) {
 		/* Use credit throttling if available */
-		if (conf->priv->wait_credit) {
-			status = conf->priv->wait_credit(mgr, done);
+		if (conf->priv->avail_credit) {
+			status = altera_cvp_v2_wait_for_credit(mgr, done);
 			if (status) {
 				dev_err(&conf->pci_dev->dev,
 					"Wait Credit ERR: 0x%x\n", status);
@@ -558,7 +593,15 @@ static const struct cvp_priv cvp_priv_v1 = {
 
 static const struct cvp_priv cvp_priv_v2 = {
 	.clear_state	= altera_cvp_v2_clear_state,
-	.wait_credit	= altera_cvp_v2_wait_for_credit,
+	.avail_credit	= altera_cvp_v2_avail_credit,
+	.block_size	= ALTERA_CVP_V2_SIZE,
+	.poll_time_us	= V2_POLL_TIMEOUT_US,
+	.user_time_us	= V2_USER_TIMEOUT_US,
+};
+
+static const struct cvp_priv cvp_priv_agilex5 = {
+	.clear_state	= altera_cvp_v2_clear_state,
+	.avail_credit	= altera_cvp_ag5_avail_credit,
 	.block_size	= ALTERA_CVP_V2_SIZE,
 	.poll_time_us	= V2_POLL_TIMEOUT_US,
 	.user_time_us	= V2_USER_TIMEOUT_US,
@@ -628,7 +671,7 @@ static int altera_cvp_probe(struct pci_dev *pdev,
 		return -ENODEV;
 	}
 
-	conf = devm_kzalloc(&pdev->dev, sizeof(*conf), GFP_KERNEL);
+	conf = devm_kzalloc_obj(&pdev->dev, *conf);
 	if (!conf)
 		return -ENOMEM;
 
@@ -658,10 +701,15 @@ static int altera_cvp_probe(struct pci_dev *pdev,
 	conf->pci_dev = pdev;
 	conf->write_data = altera_cvp_write_data_iomem;
 
-	if (conf->vsec_offset == V1_VSEC_OFFSET)
+	if (conf->vsec_offset == V1_VSEC_OFFSET) {
 		conf->priv = &cvp_priv_v1;
-	else
-		conf->priv = &cvp_priv_v2;
+	} else {
+		pci_read_config_dword(pdev, offset + PCI_VNDR_HEADER, &regval);
+		if (PCI_VNDR_HEADER_LEN(regval) == AGILEX5_VSEC_LENGTH)
+			conf->priv = &cvp_priv_agilex5;
+		else
+			conf->priv = &cvp_priv_v2;
+	}
 
 	conf->map = pci_iomap(pdev, CVP_BAR, 0);
 	if (!conf->map) {

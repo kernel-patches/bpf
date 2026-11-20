@@ -2,7 +2,7 @@
 VERSION = 7
 PATCHLEVEL = 4
 SUBLEVEL = 0
-EXTRAVERSION = -rc1
+EXTRAVERSION = -rc3
 NAME = Baby Opossum Posse
 
 # *DOCUMENTATION*
@@ -302,7 +302,7 @@ no-dot-config-targets := $(clean-targets) \
 			 run-command
 no-sync-config-targets := $(no-dot-config-targets) %install modules_sign kernelrelease \
 			  image_name
-single-targets := %.a %.i %.ko %.lds %.ll %.lst %.mod %.o %.rsi %.s %.header-check %/
+single-targets := %.a %.i %.ko %.lds %.ll %.lst %.mod %.o %.rsi %.s %.header-check %.dtb %.dtbo %/
 
 config-build	:=
 mixed-build	:=
@@ -606,7 +606,7 @@ LINUXINCLUDE    := \
 		-I$(objtree)/include \
 		$(USERINCLUDE)
 
-KBUILD_AFLAGS   := -D__ASSEMBLY__ -fno-PIE
+KBUILD_AFLAGS   := -fno-PIE
 
 KBUILD_CFLAGS :=
 KBUILD_CFLAGS += -fshort-wchar
@@ -622,6 +622,7 @@ KBUILD_RUSTFLAGS := $(rust_common_flags) \
 		    -Csymbol-mangling-version=v0 \
 		    -Crelocation-model=static \
 		    -Zfunction-sections=n \
+		    -Zmerge-functions=disabled \
 		    -Wclippy::float_arithmetic
 KBUILD_RUSTFLAGS_OPTION_CHKS :=
 
@@ -1136,8 +1137,7 @@ endif
 ifdef CONFIG_RUST
 	# Always pass -Zsanitizer-cfi-normalize-integers as CONFIG_RUST selects
 	# CONFIG_CFI_ICALL_NORMALIZE_INTEGERS.
-	# Disable function merging as LLVM incorrectly merges functions with different KCFI types.
-	RUSTC_FLAGS_CFI   := -Zsanitizer=kcfi -Zsanitizer-cfi-normalize-integers -Zmerge-functions=disabled
+	RUSTC_FLAGS_CFI   := -Zsanitizer=kcfi -Zsanitizer-cfi-normalize-integers
 	KBUILD_RUSTFLAGS += $(RUSTC_FLAGS_CFI)
 	export RUSTC_FLAGS_CFI
 endif
@@ -1635,10 +1635,6 @@ ifneq ($(wildcard $(bootconfig_O)),)
 	$(Q)$(MAKE) -sC $(srctree)/tools/bootconfig O=$(bootconfig_O) clean
 endif
 
-tools/: FORCE
-	$(Q)mkdir -p $(objtree)/tools
-	$(Q)$(MAKE) O=$(abspath $(objtree)) subdir=tools -C $(srctree)/tools/
-
 tools/%: FORCE
 	$(Q)mkdir -p $(objtree)/tools
 	$(Q)$(MAKE) O=$(abspath $(objtree)) subdir=tools -C $(srctree)/tools/ $*
@@ -1675,15 +1671,9 @@ dtbindingtree := Documentation/devicetree/bindings
 
 ifneq ($(dtstree),)
 
-%.dtb: dtbs_prepare
-	$(Q)$(MAKE) $(build)=$(dtstree) $(dtstree)/$@
-
-%.dtbo: dtbs_prepare
-	$(Q)$(MAKE) $(build)=$(dtstree) $(dtstree)/$@
-
 PHONY += dtbs dtbs_prepare dtbs_install dtbs_check
 dtbs: dtbs_prepare
-	$(Q)$(MAKE) $(build)=$(dtstree) need-dtbslist=1
+	$(Q)$(MAKE) $(dtstree)/
 
 # include/config/kernel.release is actually needed when installing DTBs because
 # INSTALL_DTBS_PATH contains $(KERNELRELEASE). However, we do not want to make
@@ -1695,7 +1685,7 @@ export CHECK_DTBS=y
 endif
 
 ifneq ($(CHECK_DTBS),)
-dtbs_prepare: dt_binding_schemas
+scripts_dtc: dt_binding_schemas
 endif
 
 dtbs_check: dtbs
@@ -2205,6 +2195,9 @@ modpost: $(if $(single-build),, $(if $(KBUILD_BUILTIN), vmlinux.o)) \
 #
 #   make foo/bar/baz/
 
+single-build-prep := prepare
+single-dtbslist-arg :=
+
 ifdef single-build
 
 # .ko is special because modpost is needed
@@ -2227,7 +2220,27 @@ ifneq ($(KBUILD_MODPOST_NOFINAL),1)
 endif
 	$(Q)rm -f modules.order
 
+# Resolve legacy DTB paths only in directories of the architecture's DTS tree.
+# Composite DTBs may not have a matching DTS file.
+ifneq ($(dtstree),)
+single-dtb := $(filter-out $(dtstree)/%, $(filter %.dtb %.dtbo, $(single-no-ko)))
+single-dtb := $(foreach f,$(single-dtb), $(if $(wildcard $(srctree)/$(dtstree)/$(dir $(f))),$(f)))
+single-no-ko := $(filter-out $(single-dtb), $(single-no-ko)) $(addprefix $(dtstree)/, $(single-dtb))
+endif
+
 single-goals := $(addprefix $(build-dir)/, $(single-no-ko))
+
+# DT-only targets need host tools, but no architecture-specific preparation.
+ifneq ($(dtstree),)
+single-dt-patterns := $(dtstree)/ $(addprefix $(dtstree)/,%.dtb %.dtbo %/)
+ifneq ($(filter $(single-dt-patterns),$(single-no-ko)),)
+single-dtbslist-arg := need-dtbslist=y
+endif
+ifeq ($(filter-out $(single-dt-patterns),$(single-no-ko)),)
+single-build-prep := dtbs_prepare
+single-dtbslist-arg := need-dtbslist=y
+endif
+endif
 
 KBUILD_MODULES := y
 
@@ -2240,8 +2253,9 @@ prepare: outputmakefile
 # make menuconfig etc.
 # Error messages still appears in the original language
 PHONY += $(build-dir)
-$(build-dir): prepare
-	$(Q)$(MAKE) $(build)=$@ need-builtin=1 need-modorder=1 $(single-goals)
+$(build-dir): $(single-build-prep)
+	$(Q)$(MAKE) $(build)=$@ need-builtin=1 need-modorder=1 \
+		$(single-dtbslist-arg) $(single-goals)
 
 clean-dirs := $(addprefix _clean_, $(clean-dirs))
 PHONY += $(clean-dirs) clean
@@ -2267,6 +2281,7 @@ clean: $(clean-dirs)
 		-o -name '*.gcno' \
 		-o -name '*.long-type-*.txt' \
 		-o -name '*.header-check' \
+		-o -name '*.apispec.h' \
 		\) -type f -print \
 		-o -name '.tmp_*' -print \
 		| xargs rm -rf

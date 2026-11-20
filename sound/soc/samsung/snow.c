@@ -130,7 +130,7 @@ static int snow_probe(struct platform_device *pdev)
 	struct snow_priv *priv;
 	int ret;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -211,9 +211,11 @@ static int snow_probe(struct platform_device *pdev)
 	snd_soc_card_set_drvdata(card, priv);
 
 	ret = devm_snd_soc_register_card(dev, card);
-	if (ret)
+	if (ret) {
+		clk_put(priv->clk_i2s_bus);
 		return dev_err_probe(&pdev->dev, ret,
 				     "snd_soc_register_card failed\n");
+	}
 
 	return 0;
 }

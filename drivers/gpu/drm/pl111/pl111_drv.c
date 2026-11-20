@@ -181,7 +181,9 @@ static int pl111_modeset_init(struct drm_device *dev)
 		}
 	}
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		goto out_bridge;
 
 	drm_kms_helper_poll_init(dev);
 
@@ -242,7 +244,7 @@ static int pl111_amba_probe(struct amba_device *amba_dev,
 	struct drm_device *drm;
 	int ret;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

@@ -41,7 +41,6 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/module.h>
-#include <linux/pagemap.h>
 #include <linux/user_namespace.h>
 
 #include <linux/sunrpc/auth_gss.h>
@@ -944,7 +943,6 @@ svcauth_gss_unwrap_priv(struct svc_rqst *rqstp, u32 seq, struct gss_ctx *ctx)
 	struct xdr_stream *xdr = &rqstp->rq_arg_stream;
 	u32 len, maj_stat, seq_num, offset;
 	struct xdr_buf *buf = xdr->buf;
-	unsigned int saved_len;
 
 	if (xdr_stream_decode_u32(xdr, &len) < 0)
 		goto unwrap_failed;
@@ -959,11 +957,15 @@ svcauth_gss_unwrap_priv(struct svc_rqst *rqstp, u32 seq, struct gss_ctx *ctx)
 		goto unwrap_failed;
 	offset = xdr_stream_pos(xdr);
 
-	saved_len = buf->len;
 	maj_stat = gss_unwrap(ctx, offset, offset + len, buf);
 	if (maj_stat != GSS_S_COMPLETE)
 		goto bad_unwrap;
-	xdr->nwords -= XDR_QUADLEN(saved_len - buf->len);
+	/* gss_unwrap redacts the opaque blob from the head iovec.
+	 * buf has changed, thus the stream needs to be reset.
+	 */
+	xdr_init_decode(xdr, buf, buf->head[0].iov_base + offset, NULL);
+	xdr_set_scratch_folio(xdr, rqstp->rq_scratch_folio);
+	xdr->xdrgen_ctx = rqstp;
 
 out_seq:
 	/* gss_unwrap() decrypted the sequence number. */
@@ -1408,8 +1410,8 @@ svcauth_gss_proc_init(struct svc_rqst *rqstp, struct rpc_gss_wire_cred *gc)
 
 #ifdef CONFIG_PROC_FS
 
-static ssize_t write_gssp(struct file *file, const char __user *buf,
-			 size_t count, loff_t *ppos)
+static ssize_t write_gssp(struct file *file, char *buf, size_t count,
+			  loff_t *ppos)
 {
 	struct net *net = pde_data(file_inode(file));
 	char tbuf[20];
@@ -1418,9 +1420,7 @@ static ssize_t write_gssp(struct file *file, const char __user *buf,
 
 	if (*ppos || count > sizeof(tbuf)-1)
 		return -EINVAL;
-	if (copy_from_user(tbuf, buf, count))
-		return -EFAULT;
-
+	memcpy(tbuf, buf, count);
 	tbuf[count] = 0;
 	res = kstrtoul(tbuf, 0, &i);
 	if (res)
@@ -1444,32 +1444,22 @@ static ssize_t write_gssp(struct file *file, const char __user *buf,
 	return count;
 }
 
-static ssize_t read_gssp(struct file *file, char __user *buf,
+static ssize_t read_gssp(struct file *file, char *buf,
 			 size_t count, loff_t *ppos)
 {
 	struct net *net = pde_data(file_inode(file));
 	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
-	unsigned long p = *ppos;
 	char tbuf[10];
 	size_t len;
 
-	snprintf(tbuf, sizeof(tbuf), "%d\n", sn->use_gss_proxy);
-	len = strlen(tbuf);
-	if (p >= len)
-		return 0;
-	len -= p;
-	if (len > count)
-		len = count;
-	if (copy_to_user(buf, (void *)(tbuf+p), len))
-		return -EFAULT;
-	*ppos += len;
-	return len;
+	len = snprintf(tbuf, sizeof(tbuf), "%d\n", sn->use_gss_proxy);
+	return memory_read_from_buffer(buf, count, ppos, tbuf, len);
 }
 
 static const struct proc_ops use_gss_proxy_proc_ops = {
 	.proc_open	= nonseekable_open,
-	.proc_write	= write_gssp,
-	.proc_read	= read_gssp,
+	.proc_write_buf	= write_gssp,
+	.proc_read_buf	= read_gssp,
 };
 
 static int create_use_gss_proxy_proc_entry(struct net *net)
@@ -1496,7 +1486,7 @@ static void destroy_use_gss_proxy_proc_entry(struct net *net)
 	}
 }
 
-static ssize_t read_gss_krb5_enctypes(struct file *file, char __user *buf,
+static ssize_t read_gss_krb5_enctypes(struct file *file, char *buf,
 				      size_t count, loff_t *ppos)
 {
 	struct rpcsec_gss_oid oid = {
@@ -1514,7 +1504,7 @@ static ssize_t read_gss_krb5_enctypes(struct file *file, char __user *buf,
 		return 0;
 	}
 
-	ret = simple_read_from_buffer(buf, count, ppos,
+	ret = memory_read_from_buffer(buf, count, ppos,
 				      mech->gm_upcall_enctypes,
 				      strlen(mech->gm_upcall_enctypes));
 	gss_mech_put(mech);
@@ -1523,7 +1513,7 @@ static ssize_t read_gss_krb5_enctypes(struct file *file, char __user *buf,
 
 static const struct proc_ops gss_krb5_enctypes_proc_ops = {
 	.proc_open	= nonseekable_open,
-	.proc_read	= read_gss_krb5_enctypes,
+	.proc_read_buf	= read_gss_krb5_enctypes,
 };
 
 static int create_krb5_enctypes_proc_entry(struct net *net)
@@ -1834,6 +1824,9 @@ static int svcauth_gss_wrap_integ(struct svc_rqst *rqstp)
 	if (xdr_stream_encode_opaque(xdr, checksum.data, checksum.len) < 0)
 		goto wrap_failed;
 	xdr_commit_encode(xdr);
+
+	if (xdr->page_ptr + 1 > rqstp->rq_next_page)
+		rqstp->rq_next_page = xdr->page_ptr + 1;
 
 out:
 	return 0;

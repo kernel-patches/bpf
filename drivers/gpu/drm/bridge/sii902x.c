@@ -281,7 +281,7 @@ static const struct drm_connector_funcs sii902x_connector_funcs = {
 	.detect = sii902x_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = drm_connector_cleanup,
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -482,7 +482,7 @@ static u32 *sii902x_bridge_atomic_get_input_bus_fmts(struct drm_bridge *bridge,
 
 	*num_input_fmts = 0;
 
-	input_fmts = kcalloc(1, sizeof(*input_fmts), GFP_KERNEL);
+	input_fmts = kzalloc_objs(*input_fmts, 1);
 	if (!input_fmts)
 		return NULL;
 
@@ -862,7 +862,7 @@ static int sii902x_audio_codec_init(struct sii902x *sii902x,
 		.max_i2s_channels = 0,
 		.no_capture_mute = 1,
 	};
-	u8 lanes[4];
+	u32 lanes[4];
 	int num_lanes, i;
 
 	if (!of_property_present(dev->of_node, "#sound-dai-cells")) {
@@ -871,10 +871,10 @@ static int sii902x_audio_codec_init(struct sii902x *sii902x,
 		return 0;
 	}
 
-	num_lanes = of_property_read_variable_u8_array(dev->of_node,
-						       "sil,i2s-data-lanes",
-						       lanes, 1,
-						       ARRAY_SIZE(lanes));
+	num_lanes = of_property_read_variable_u32_array(dev->of_node,
+							"sil,i2s-data-lanes",
+							lanes, 1,
+							ARRAY_SIZE(lanes));
 
 	if (num_lanes == -EINVAL) {
 		dev_dbg(dev,
@@ -882,7 +882,15 @@ static int sii902x_audio_codec_init(struct sii902x *sii902x,
 			__func__);
 		num_lanes = 1;
 		lanes[0] = 0;
-	} else if (num_lanes < 0) {
+	} else {
+		for (i = 0; i < num_lanes; i++) {
+			if (lanes[i] >= ARRAY_SIZE(i2s_lane_id)) {
+				num_lanes = -EINVAL;
+				break;
+			}
+		}
+	}
+	if (num_lanes < 0) {
 		dev_err(dev,
 			"%s: Error getting \"sil,i2s-data-lanes\": %d\n",
 			__func__, num_lanes);
@@ -890,9 +898,15 @@ static int sii902x_audio_codec_init(struct sii902x *sii902x,
 	}
 	codec_data.max_i2s_channels = 2 * num_lanes;
 
-	for (i = 0; i < num_lanes; i++)
+	for (i = 0; i < num_lanes; i++) {
+		if (lanes[i] >= ARRAY_SIZE(i2s_lane_id))
+			return dev_err_probe(dev, -EINVAL,
+					     "invalid sil,i2s-data-lanes value %u\n",
+					     lanes[i]);
+
 		sii902x->audio.i2s_fifo_sequence[i] |= audio_fifo_id[i] |
 			i2s_lane_id[lanes[i]] |	SII902X_TPI_I2S_FIFO_ENABLE;
+	}
 
 	sii902x->audio.mclk = devm_clk_get_optional(dev, "mclk");
 	if (IS_ERR(sii902x->audio.mclk)) {

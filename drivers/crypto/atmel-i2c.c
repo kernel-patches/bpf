@@ -347,11 +347,28 @@ free_cmd:
 	return ret;
 }
 
+/*
+ * A device behind an I2C mux sits on a channel adapter. Try the adapter of
+ * the client first, as before, then its parents. Without the property,
+ * assume 100 kHz, the default of most I2C controller drivers.
+ */
+static u32 atmel_i2c_bus_speed(struct i2c_adapter *adap)
+{
+	u32 bus_clk_rate;
+
+	for (; adap; adap = i2c_parent_is_i2c_adapter(adap)) {
+		if (!device_property_read_u32(&adap->dev, "clock-frequency",
+					      &bus_clk_rate) && bus_clk_rate)
+			return bus_clk_rate;
+	}
+
+	return I2C_MAX_STANDARD_MODE_FREQ;
+}
+
 int atmel_i2c_probe(struct i2c_client *client)
 {
 	struct atmel_i2c_client_priv *i2c_priv;
 	struct device *dev = &client->dev;
-	int ret;
 	u32 bus_clk_rate;
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
@@ -360,14 +377,8 @@ int atmel_i2c_probe(struct i2c_client *client)
 	}
 
 	bus_clk_rate = i2c_acpi_find_bus_speed(&client->adapter->dev);
-	if (!bus_clk_rate) {
-		ret = device_property_read_u32(&client->adapter->dev,
-					       "clock-frequency", &bus_clk_rate);
-		if (ret) {
-			dev_err(dev, "failed to read clock-frequency property\n");
-			return ret;
-		}
-	}
+	if (!bus_clk_rate)
+		bus_clk_rate = atmel_i2c_bus_speed(client->adapter);
 
 	if (bus_clk_rate > I2C_MAX_FAST_MODE_PLUS_FREQ) {
 		dev_err(dev, "%u exceeds maximum supported clock frequency (1MHz)\n",
@@ -375,7 +386,7 @@ int atmel_i2c_probe(struct i2c_client *client)
 		return -EINVAL;
 	}
 
-	i2c_priv = devm_kmalloc(dev, sizeof(*i2c_priv), GFP_KERNEL);
+	i2c_priv = devm_kmalloc_obj(dev, *i2c_priv);
 	if (!i2c_priv)
 		return -ENOMEM;
 

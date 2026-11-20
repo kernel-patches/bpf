@@ -482,8 +482,9 @@ static int __ltc2983_chan_custom_sensor_assign(struct ltc2983_data *st,
 
 static struct ltc2983_custom_sensor *
 __ltc2983_custom_sensor_new(struct ltc2983_data *st, const struct fwnode_handle *fn,
-			    const char *propname, const bool is_steinhart,
-			    const u32 resolution, const bool has_signed)
+			    const char *propname, bool is_steinhart,
+			    const u32 resolution, bool has_signed,
+			    bool is_leak_detector)
 {
 	struct ltc2983_custom_sensor *new_custom;
 	struct device *dev = &st->spi->dev;
@@ -504,7 +505,7 @@ __ltc2983_custom_sensor_new(struct ltc2983_data *st, const struct fwnode_handle 
 		return dev_err_ptr_probe(dev, -EINVAL,
 					 "Number of entries either 0 or not even\n");
 
-	new_custom = devm_kzalloc(dev, sizeof(*new_custom), GFP_KERNEL);
+	new_custom = devm_kzalloc_obj(dev, *new_custom);
 	if (!new_custom)
 		return ERR_PTR(-ENOMEM);
 
@@ -556,7 +557,7 @@ __ltc2983_custom_sensor_new(struct ltc2983_data *st, const struct fwnode_handle 
 			 * to µK so __convert_to_raw() produces the correct hardware
 			 * encoding: P + 273.15 K.
 			 */
-			if ((index % 2) != 0 && !strcmp(propname, "adi,custom-leak-detector"))
+			if ((index % 2) != 0 && is_leak_detector)
 				temp = temp * 1000000 + 273150000;
 
 			if ((index % 2) != 0)
@@ -779,7 +780,7 @@ ltc2983_thermocouple_new(const struct fwnode_handle *child, struct ltc2983_data 
 	u32 oc_current;
 	int ret;
 
-	thermo = devm_kzalloc(dev, sizeof(*thermo), GFP_KERNEL);
+	thermo = devm_kzalloc_obj(dev, *thermo);
 	if (!thermo)
 		return ERR_PTR(-ENOMEM);
 
@@ -847,7 +848,7 @@ ltc2983_thermocouple_new(const struct fwnode_handle *child, struct ltc2983_data 
 
 		thermo->custom = __ltc2983_custom_sensor_new(st, child,
 							     propname, false,
-							     16384, true);
+							     16384, true, false);
 		if (IS_ERR(thermo->custom))
 			return ERR_CAST(thermo->custom);
 	}
@@ -868,7 +869,7 @@ ltc2983_rtd_new(const struct fwnode_handle *child, struct ltc2983_data *st,
 	struct device *dev = &st->spi->dev;
 	u32 excitation_current = 0, n_wires = 2;
 
-	rtd = devm_kzalloc(dev, sizeof(*rtd), GFP_KERNEL);
+	rtd = devm_kzalloc_obj(dev, *rtd);
 	if (!rtd)
 		return ERR_PTR(-ENOMEM);
 
@@ -961,7 +962,8 @@ ltc2983_rtd_new(const struct fwnode_handle *child, struct ltc2983_data *st,
 	if (sensor->type == LTC2983_SENSOR_RTD_CUSTOM) {
 		rtd->custom = __ltc2983_custom_sensor_new(st, child,
 							  "adi,custom-rtd",
-							  false, 2048, false);
+							  false, 2048, false,
+							  false);
 		if (IS_ERR(rtd->custom))
 			return ERR_CAST(rtd->custom);
 	}
@@ -1031,7 +1033,7 @@ ltc2983_thermistor_new(const struct fwnode_handle *child, struct ltc2983_data *s
 	u32 excitation_current = 0;
 	int ret = 0;
 
-	thermistor = devm_kzalloc(dev, sizeof(*thermistor), GFP_KERNEL);
+	thermistor = devm_kzalloc_obj(dev, *thermistor);
 	if (!thermistor)
 		return ERR_PTR(-ENOMEM);
 
@@ -1079,7 +1081,7 @@ ltc2983_thermistor_new(const struct fwnode_handle *child, struct ltc2983_data *s
 		thermistor->custom = __ltc2983_custom_sensor_new(st, child,
 								 propname,
 								 steinhart,
-								 64, false);
+								 64, false, false);
 		if (IS_ERR(thermistor->custom))
 			return ERR_CAST(thermistor->custom);
 	}
@@ -1167,7 +1169,7 @@ ltc2983_copper_trace_new(const struct fwnode_handle *child, struct ltc2983_data 
 					 "Invalid channel %d for copper trace\n",
 					 sensor->chan);
 
-	ct = devm_kzalloc(dev, sizeof(*ct), GFP_KERNEL);
+	ct = devm_kzalloc_obj(dev, *ct);
 	if (!ct)
 		return ERR_PTR(-ENOMEM);
 
@@ -1195,7 +1197,7 @@ ltc2983_copper_trace_new(const struct fwnode_handle *child, struct ltc2983_data 
 						 "adi,custom-copper-trace is required for >1 ohm copper trace\n");
 
 		ct->custom = __ltc2983_custom_sensor_new(st, child, "adi,custom-copper-trace",
-							 false, 2048, false);
+							 false, 2048, false, false);
 		if (IS_ERR(ct->custom))
 			return ERR_CAST(ct->custom);
 
@@ -1266,7 +1268,7 @@ ltc2983_leak_detector_new(const struct fwnode_handle *child, struct ltc2983_data
 					 "Invalid channel %d for leak detector\n",
 					 sensor->chan);
 
-	ld = devm_kzalloc(dev, sizeof(*ld), GFP_KERNEL);
+	ld = devm_kzalloc_obj(dev, *ld);
 	if (!ld)
 		return ERR_PTR(-ENOMEM);
 
@@ -1286,7 +1288,7 @@ ltc2983_leak_detector_new(const struct fwnode_handle *child, struct ltc2983_data
 					 "adi,custom-leak-detector is required for leak detectors\n");
 
 	ld->custom = __ltc2983_custom_sensor_new(st, child, "adi,custom-leak-detector",
-						 false, 16, false);
+						 false, 16, false, true);
 	if (IS_ERR(ld->custom))
 		return ERR_CAST(ld->custom);
 
@@ -1352,7 +1354,7 @@ ltc2983_diode_new(const struct fwnode_handle *child, const struct ltc2983_data *
 	u32 temp = 0, excitation_current = 0;
 	int ret;
 
-	diode = devm_kzalloc(dev, sizeof(*diode), GFP_KERNEL);
+	diode = devm_kzalloc_obj(dev, *diode);
 	if (!diode)
 		return ERR_PTR(-ENOMEM);
 
@@ -1425,7 +1427,7 @@ static struct ltc2983_sensor *ltc2983_r_sense_new(struct fwnode_handle *child,
 	int ret;
 	u32 temp;
 
-	rsense = devm_kzalloc(dev, sizeof(*rsense), GFP_KERNEL);
+	rsense = devm_kzalloc_obj(dev, *rsense);
 	if (!rsense)
 		return ERR_PTR(-ENOMEM);
 
@@ -1460,7 +1462,7 @@ static struct ltc2983_sensor *ltc2983_adc_new(struct fwnode_handle *child,
 	struct device *dev = &st->spi->dev;
 	struct ltc2983_adc *adc;
 
-	adc = devm_kzalloc(dev, sizeof(*adc), GFP_KERNEL);
+	adc = devm_kzalloc_obj(dev, *adc);
 	if (!adc)
 		return ERR_PTR(-ENOMEM);
 
@@ -1486,7 +1488,7 @@ static struct ltc2983_sensor *ltc2983_temp_new(struct fwnode_handle *child,
 	struct device *dev = &st->spi->dev;
 	struct ltc2983_temp *temp;
 
-	temp = devm_kzalloc(dev, sizeof(*temp), GFP_KERNEL);
+	temp = devm_kzalloc_obj(dev, *temp);
 	if (!temp)
 		return ERR_PTR(-ENOMEM);
 
@@ -1499,7 +1501,7 @@ static struct ltc2983_sensor *ltc2983_temp_new(struct fwnode_handle *child,
 					 sensor->chan);
 
 	temp->custom = __ltc2983_custom_sensor_new(st, child, "adi,custom-temp",
-						   false, 4096, true);
+						   false, 4096, true, false);
 	if (IS_ERR(temp->custom))
 		return ERR_CAST(temp->custom);
 
@@ -1677,8 +1679,7 @@ static int ltc2983_parse_fw(struct ltc2983_data *st)
 		return dev_err_probe(dev, -EINVAL,
 				     "At least one channel must be given!\n");
 
-	st->sensors = devm_kcalloc(dev, st->num_channels, sizeof(*st->sensors),
-				   GFP_KERNEL);
+	st->sensors = devm_kzalloc_objs(dev, *st->sensors, st->num_channels);
 	if (!st->sensors)
 		return -ENOMEM;
 

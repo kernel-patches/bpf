@@ -955,14 +955,12 @@ static void amd_gpio_irq_init(struct amd_gpio *gpio_dev)
 
 	mask = BIT(WAKE_CNTRL_OFF_S0I3) | BIT(WAKE_CNTRL_OFF_S3);
 
-#ifdef CONFIG_ACPI
 	/*
 	 * Platforms without _AEI leave GPIO wake sources to firmware, so
 	 * preserve their S4 wake bits.
 	 */
 	if (acpi_has_method(ACPI_HANDLE(&gpio_dev->pdev->dev), "_AEI"))
 		mask |= BIT(WAKE_CNTRL_OFF_S4);
-#endif
 
 	for (i = 0; i < desc->npins; i++) {
 		int pin = desc->pins[i].number;
@@ -1279,8 +1277,7 @@ static int amd_gpio_probe(struct platform_device *pdev)
 	struct amd_gpio *gpio_dev;
 	struct gpio_irq_chip *girq;
 
-	gpio_dev = devm_kzalloc(&pdev->dev,
-				sizeof(struct amd_gpio), GFP_KERNEL);
+	gpio_dev = devm_kzalloc_obj(&pdev->dev, struct amd_gpio);
 	if (!gpio_dev)
 		return -ENOMEM;
 
@@ -1310,9 +1307,9 @@ static int amd_gpio_probe(struct platform_device *pdev)
 		return gpio_dev->irq;
 
 #ifdef CONFIG_SUSPEND
-	gpio_dev->saved_regs = devm_kcalloc(&pdev->dev, amd_pinctrl_desc.npins,
-					    sizeof(*gpio_dev->saved_regs),
-					    GFP_KERNEL);
+	gpio_dev->saved_regs = devm_kzalloc_objs(&pdev->dev,
+						 *gpio_dev->saved_regs,
+						 amd_pinctrl_desc.npins);
 	if (!gpio_dev->saved_regs)
 		return -ENOMEM;
 #endif

@@ -69,8 +69,10 @@ static const struct v4l2_pix_format sif_mode[] = {
 		.priv = 1},
 	{352, 288, V4L2_PIX_FMT_PAC207, V4L2_FIELD_NONE,
 		.bytesperline = 352,
-			/* compressed, but only when needed (not compressed
-			   when the framerate is low) */
+			/*
+			 * compressed, but only when needed (not compressed
+			 * when the framerate is low)
+			 */
 		.sizeimage = (352 + 2) * 288,
 		.colorspace = V4L2_COLORSPACE_SRGB,
 		.priv = 0},
@@ -207,10 +209,12 @@ static int sd_s_ctrl(struct v4l2_ctrl *ctrl)
 	gspca_dev->usb_err = 0;
 
 	if (ctrl->id == V4L2_CID_AUTOGAIN && ctrl->is_new && ctrl->val) {
-		/* when switching to autogain set defaults to make sure
-		   we are on a valid point of the autogain gain /
-		   exposure knee graph, and give this change time to
-		   take effect before doing autogain. */
+		/*
+		 * when switching to autogain set defaults to make sure
+		 * we are on a valid point of the autogain gain /
+		 * exposure knee graph, and give this change time to
+		 * take effect before doing autogain.
+		 */
 		gspca_dev->exposure->val    = PAC207_EXPOSURE_DEFAULT;
 		gspca_dev->gain->val        = PAC207_GAIN_DEFAULT;
 		sd->autogain_ignore_frames  = PAC_AUTOGAIN_IGNORE_FRAMES;

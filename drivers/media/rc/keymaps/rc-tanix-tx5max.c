@@ -45,7 +45,7 @@ static struct rc_map_table tanix_tx5max[] = {
 static struct rc_map_list tanix_tx5max_map = {
 	.map = {
 		.scan     = tanix_tx5max,
-		.size     = ARRAY_SIZE(tanix_tx5max),
+		.entries  = ARRAY_SIZE(tanix_tx5max),
 		.rc_proto = RC_PROTO_NECX,
 		.name     = RC_MAP_TANIX_TX5MAX,
 	}

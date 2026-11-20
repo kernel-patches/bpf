@@ -821,6 +821,10 @@ int ext4_force_shutdown(struct super_block *sb, u32 flags)
 	ext4_msg(sb, KERN_ALERT, "shut down requested (%d)", flags);
 	trace_ext4_shutdown(sb, flags);
 
+	/* After an error there is nothing to flush and freezing fails. */
+	if (flags == EXT4_GOING_FLAGS_DEFAULT && ext4_emergency_ro(sb))
+		flags = EXT4_GOING_FLAGS_NOLOGFLUSH;
+
 	switch (flags) {
 	case EXT4_GOING_FLAGS_DEFAULT:
 		ret = bdev_freeze(sb->s_bdev);
@@ -1384,8 +1388,10 @@ static void ext4_sb_setparams(struct ext4_sb_info *sbi,
 		    EXT4_FEATURE_INCOMPAT_CSUM_SEED)
 			es->s_checksum_seed = cpu_to_le32(sbi->s_csum_seed);
 	}
-	if (params->set_flags & EXT4_TUNE_FL_FORCE_FSCK)
+	if (params->set_flags & EXT4_TUNE_FL_FORCE_FSCK) {
+		sbi->s_mount_state |= EXT4_ERROR_FS;
 		es->s_state |= cpu_to_le16(EXT4_ERROR_FS);
+	}
 }
 
 static int ext4_ioctl_set_tune_sb(struct file *filp,
@@ -1675,10 +1681,10 @@ group_extend_out:
 	}
 
 	case EXT4_IOC_GROUP_ADD: {
-		struct ext4_new_group_data input;
+		struct ext4_new_group_input __user *uinput = (void __user *)arg;
+		struct ext4_new_group_data input = {};
 
-		if (copy_from_user(&input, (struct ext4_new_group_input __user *)arg,
-				sizeof(input)))
+		if (copy_from_user(&input, uinput, sizeof(*uinput)))
 			return -EFAULT;
 
 		return ext4_ioctl_group_add(filp, &input);

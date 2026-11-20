@@ -729,9 +729,7 @@ static int appletbdrm_setup_mode_config(struct appletbdrm_device *adev)
 		return ret;
 	}
 
-	drm_mode_config_reset(drm);
-
-	return 0;
+	return drm_mode_config_create_initial_state(drm);
 }
 
 static int appletbdrm_probe(struct usb_interface *intf,

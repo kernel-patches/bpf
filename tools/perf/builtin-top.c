@@ -140,6 +140,12 @@ static int perf_top__parse_source(struct perf_top *top, struct hist_entry *he)
 	}
 
 	notes = symbol__annotation(sym);
+	if (!notes) {
+		pr_err("Not enough memory for annotating '%s' symbol!\n",
+		       sym->name);
+		sleep(1);
+		return err;
+	}
 	annotation__lock(notes);
 
 	if (!symbol__hists(sym, evlist__nr_entries(top->evlist))) {
@@ -213,13 +219,16 @@ static void perf_top__record_precise_ip(struct perf_top *top,
 		return;
 
 	notes = symbol__annotation(sym);
+	if (!notes) {
+		err = -ENOMEM;
+	} else {
+		if (!annotation__trylock(notes))
+			return;
 
-	if (!annotation__trylock(notes))
-		return;
+		err = hist_entry__inc_addr_samples(he, sample, ip);
 
-	err = hist_entry__inc_addr_samples(he, sample, ip);
-
-	annotation__unlock(notes);
+		annotation__unlock(notes);
+	}
 
 	if (unlikely(err)) {
 		/*
@@ -255,6 +264,8 @@ static void perf_top__show_details(struct perf_top *top)
 
 	symbol = he->ms.sym;
 	notes = symbol__annotation(symbol);
+	if (!notes)
+		return;
 
 	annotation__lock(notes);
 

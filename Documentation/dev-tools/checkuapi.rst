@@ -273,7 +273,7 @@ Consider this change::
     -typedef unsigned __bitwise __poll_t;
     +typedef unsigned short __bitwise __poll_t;
 
-     #endif /*  __ASSEMBLY__ */
+     #endif /*  __ASSEMBLER__ */
      #endif /* _UAPI_LINUX_TYPES_H */
     EOF
 

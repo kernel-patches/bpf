@@ -46,7 +46,7 @@ MODULE_PARM_DESC(min_trip_distance, "Minimum distance between fan speed trip poi
 
 static const struct acpi_device_id fan_device_ids[] = {
 	ACPI_FAN_DEVICE_IDS,
-	{"", 0},
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, fan_device_ids);
 
@@ -287,7 +287,7 @@ static int acpi_fan_get_fps(struct device *dev, struct acpi_device *device)
 	}
 
 	fan->fps_count = obj->package.count - 1; /* minus revision field */
-	fan->fps = devm_kcalloc(dev, fan->fps_count, sizeof(*fan->fps), GFP_KERNEL);
+	fan->fps = devm_kzalloc_objs(dev, *fan->fps, fan->fps_count);
 	if (!fan->fps)
 		return -ENOMEM;
 
@@ -475,7 +475,7 @@ static int acpi_fan_probe(struct platform_device *pdev)
 	if (!device)
 		return -ENODEV;
 
-	fan = devm_kzalloc(&pdev->dev, sizeof(*fan), GFP_KERNEL);
+	fan = devm_kzalloc_obj(&pdev->dev, *fan);
 	if (!fan) {
 		dev_err(&device->dev, "No memory for fan\n");
 		return -ENOMEM;

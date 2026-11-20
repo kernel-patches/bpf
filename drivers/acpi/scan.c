@@ -115,11 +115,7 @@ bool acpi_scan_is_offline(struct acpi_device *adev, bool uevent)
 	bool offline = true;
 	char *envp[] = { "EVENT=offline", NULL };
 
-	/*
-	 * acpi_container_offline() calls this for all of the container's
-	 * children under the container's physical_node_lock lock.
-	 */
-	mutex_lock_nested(&adev->physical_node_lock, SINGLE_DEPTH_NESTING);
+	mutex_lock(&adev->physical_node_lock);
 
 	list_for_each_entry(pn, &adev->physical_node_list, node)
 		if (device_supports_offline(pn->dev) && !dev_offline(pn->dev)) {
@@ -134,6 +130,59 @@ bool acpi_scan_is_offline(struct acpi_device *adev, bool uevent)
 	return offline;
 }
 
+static struct acpi_device_physical_node *
+acpi_find_physical_node(struct acpi_device *adev, struct device *dev)
+{
+	struct acpi_device_physical_node *pn;
+
+	lockdep_assert_held(&adev->physical_node_lock);
+
+	list_for_each_entry(pn, &adev->physical_node_list, node)
+		if (pn->dev == dev)
+			return pn;
+
+	return NULL;
+}
+
+static struct device *acpi_next_offline_pending(struct acpi_device *adev)
+{
+	struct acpi_device_physical_node *pn;
+
+	lockdep_assert_held(&adev->physical_node_lock);
+
+	/*
+	 * Find the first physical node that is still to be offlined, clear its
+	 * offline_pending flag and return its device with a reference held.
+	 */
+	list_for_each_entry(pn, &adev->physical_node_list, node)
+		if (pn->offline_pending) {
+			pn->offline_pending = false;
+			return get_device(pn->dev);
+		}
+
+	return NULL;
+}
+
+static struct device *acpi_next_put_online(struct acpi_device *adev)
+{
+	struct acpi_device_physical_node *pn;
+
+	lockdep_assert_held(&adev->physical_node_lock);
+
+	/*
+	 * Find the first physical node that has been offlined by
+	 * acpi_bus_offline(), clear its put_online flag and return its device
+	 * with a reference held.
+	 */
+	list_for_each_entry(pn, &adev->physical_node_list, node)
+		if (pn->put_online) {
+			pn->put_online = false;
+			return get_device(pn->dev);
+		}
+
+	return NULL;
+}
+
 static acpi_status acpi_bus_offline(acpi_handle handle, u32 lvl, void *data,
 				    void **ret_p)
 {
@@ -141,6 +190,7 @@ static acpi_status acpi_bus_offline(acpi_handle handle, u32 lvl, void *data,
 	struct acpi_device_physical_node *pn;
 	bool second_pass = (bool)data;
 	acpi_status status = AE_OK;
+	struct device *dev;
 
 	if (!device)
 		return AE_OK;
@@ -153,25 +203,43 @@ static acpi_status acpi_bus_offline(acpi_handle handle, u32 lvl, void *data,
 	mutex_lock(&device->physical_node_lock);
 
 	list_for_each_entry(pn, &device->physical_node_list, node) {
-		int ret;
-
 		if (second_pass) {
 			/* Skip devices offlined by the first pass. */
-			if (pn->put_online)
-				continue;
+			pn->offline_pending = !pn->put_online;
 		} else {
+			pn->offline_pending = true;
 			pn->put_online = false;
 		}
-		ret = device_offline(pn->dev);
+	}
+
+	/*
+	 * Drop physical_node_lock around device_offline(), because the latter
+	 * acquires locks, like the CPU hotplug ones, that must not nest under
+	 * it.
+	 */
+	while ((dev = acpi_next_offline_pending(device))) {
+		int ret;
+
+		mutex_unlock(&device->physical_node_lock);
+		ret = device_offline(dev);
+		mutex_lock(&device->physical_node_lock);
+
 		if (ret >= 0) {
-			pn->put_online = !ret;
+			/* The device may have been unbound in the meantime. */
+			pn = acpi_find_physical_node(device, dev);
+			if (pn)
+				pn->put_online = !ret;
 		} else {
-			*ret_p = pn->dev;
+			*ret_p = &device->dev;
 			if (second_pass) {
+				dev_warn(dev, "Offline failed.\n");
 				status = AE_ERROR;
-				break;
 			}
 		}
+
+		put_device(dev);
+		if (ACPI_FAILURE(status))
+			break;
 	}
 
 	mutex_unlock(&device->physical_node_lock);
@@ -183,18 +251,19 @@ static acpi_status acpi_bus_online(acpi_handle handle, u32 lvl, void *data,
 				   void **ret_p)
 {
 	struct acpi_device *device = acpi_fetch_acpi_dev(handle);
-	struct acpi_device_physical_node *pn;
+	struct device *dev;
 
 	if (!device)
 		return AE_OK;
 
 	mutex_lock(&device->physical_node_lock);
 
-	list_for_each_entry(pn, &device->physical_node_list, node)
-		if (pn->put_online) {
-			device_online(pn->dev);
-			pn->put_online = false;
-		}
+	while ((dev = acpi_next_put_online(device))) {
+		mutex_unlock(&device->physical_node_lock);
+		device_online(dev);
+		mutex_lock(&device->physical_node_lock);
+		put_device(dev);
+	}
 
 	mutex_unlock(&device->physical_node_lock);
 
@@ -236,7 +305,6 @@ static int acpi_scan_try_to_offline(struct acpi_device *device)
 					 (void **)&errdev);
 
 		if (errdev) {
-			dev_warn(errdev, "Offline failed.\n");
 			acpi_bus_online(handle, 0, NULL, NULL);
 			acpi_walk_namespace(ACPI_TYPE_ANY, handle,
 					    ACPI_UINT32_MAX, acpi_bus_online,
@@ -1007,9 +1075,9 @@ static int acpi_bus_extract_wakeup_device_power_package(struct acpi_device *dev)
 static bool acpi_wakeup_gpe_init(struct acpi_device *device)
 {
 	static const struct acpi_device_id button_device_ids[] = {
-		{"PNP0C0D", 0},	/* Lid */
-		{"PNP0C0E", 0},	/* Sleep button */
-		{"", 0},
+		{ .id = "PNP0C0D" },	/* Lid */
+		{ .id = "PNP0C0E" },	/* Sleep button */
+		{ }
 	};
 	struct acpi_device_wakeup *wakeup = &device->wakeup;
 	const struct acpi_device_id *match;
@@ -1732,8 +1800,8 @@ static bool acpi_is_indirect_io_slave(struct acpi_device *device)
 {
 	struct acpi_device *parent = acpi_dev_parent(device);
 	static const struct acpi_device_id indirect_io_hosts[] = {
-		{"HISI0191", 0},
-		{}
+		{ .id = "HISI0191" },
+		{ }
 	};
 
 	return parent && !acpi_match_device_ids(parent, indirect_io_hosts);
@@ -1753,34 +1821,34 @@ static bool acpi_device_enumeration_by_parent(struct acpi_device *device)
 	 * by the drivers/platform/x86/serial-multi-instantiate.c driver, which
 	 * knows which client device id to use for each resource.
 	 */
-		{"AWDZ8399", },
-		{"BSG1160", },
-		{"BSG2150", },
-		{"CSC3551", },
-		{"CSC3554", },
-		{"CSC3556", },
-		{"CSC3557", },
-		{"INT33FE", },
-		{"INT3515", },
-		{"TXNW2781", },
+		{ .id = "AWDZ8399" },
+		{ .id = "BSG1160" },
+		{ .id = "BSG2150" },
+		{ .id = "CSC3551" },
+		{ .id = "CSC3554" },
+		{ .id = "CSC3556" },
+		{ .id = "CSC3557" },
+		{ .id = "INT33FE" },
+		{ .id = "INT3515" },
+		{ .id = "TXNW2781" },
 		/* Non-conforming _HID for Cirrus Logic already released */
-		{"CLSA0100", },
-		{"CLSA0101", },
-		{"CLSA0102", },
+		{ .id = "CLSA0100" },
+		{ .id = "CLSA0101" },
+		{ .id = "CLSA0102" },
 	/*
 	 * Some ACPI devs contain SerialBus resources even though they are not
 	 * attached to a serial bus at all.
 	 */
-		{"MSHW0028", },
+		{ .id = "MSHW0028" },
 	/*
 	 * HIDs of device with an UartSerialBusV2 resource for which userspace
 	 * expects a regular tty cdev to be created (instead of the in kernel
 	 * serdev) and which have a kernel driver which expects a platform_dev
 	 * such as the rfkill-gpio driver.
 	 */
-		{"BCM4752", },
-		{"LNV4752", },
-		{}
+		{ .id = "BCM4752" },
+		{ .id = "LNV4752" },
+		{ }
 	};
 
 	if (acpi_is_indirect_io_slave(device))
@@ -2287,8 +2355,8 @@ static void acpi_default_enumeration(struct acpi_device *device)
 }
 
 static const struct acpi_device_id generic_device_ids[] = {
-	{ACPI_DT_NAMESPACE_HID, },
-	{"", },
+	{ .id = ACPI_DT_NAMESPACE_HID },
+	{ }
 };
 
 static int acpi_generic_device_attach(struct acpi_device *adev,

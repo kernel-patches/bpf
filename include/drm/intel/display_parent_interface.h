@@ -58,6 +58,7 @@ struct intel_display_bo_interface {
 						     struct drm_file *filp,
 						     const struct drm_mode_fb_cmd2 *user_mode_cmd);
 #if IS_ENABLED(CONFIG_DRM_FBDEV_EMULATION)
+	struct drm_gem_object *(*fbdev_bios_fb_takeover)(struct drm_gem_object *obj);
 	struct drm_gem_object *(*fbdev_create)(struct drm_device *drm, int size);
 	void (*fbdev_destroy)(struct drm_gem_object *obj);
 	int (*fbdev_fill_info)(struct drm_gem_object *obj, struct fb_info *info, struct i915_vma *vma);

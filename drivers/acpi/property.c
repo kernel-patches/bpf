@@ -194,7 +194,8 @@ static bool acpi_add_nondev_subnodes(acpi_handle scope,
 
 		link = &links->package.elements[i];
 		/* Only two elements allowed. */
-		if (link->package.count != 2)
+		if (link->type != ACPI_TYPE_PACKAGE ||
+		    link->package.count != 2)
 			continue;
 
 		/* The first one (the key) must be a string. */
@@ -262,6 +263,9 @@ static bool acpi_enumerate_nondev_subnodes(acpi_handle scope,
 	int i;
 
 	/* Look for the ACPI data subnodes GUID. */
+	if (desc->package.count % 2)
+		return false;
+
 	for (i = 0; i < desc->package.count; i += 2) {
 		const union acpi_object *guid;
 		union acpi_object *links;
@@ -331,9 +335,10 @@ static bool acpi_properties_format_valid(const union acpi_object *properties)
 		 * Only two elements allowed, the first one must be a string and
 		 * the second one has to satisfy certain conditions.
 		 */
-		if (property->package.count != 2
-		    || property->package.elements[0].type != ACPI_TYPE_STRING
-		    || !acpi_property_value_ok(&property->package.elements[1]))
+		if (property->type != ACPI_TYPE_PACKAGE ||
+		    property->package.count != 2 ||
+		    property->package.elements[0].type != ACPI_TYPE_STRING ||
+		    !acpi_property_value_ok(&property->package.elements[1]))
 			return false;
 	}
 	return true;
@@ -523,7 +528,7 @@ static void acpi_data_add_buffer_props(acpi_handle handle,
 		obj->buffer.length = buf_obj->buffer.length;
 		obj->buffer.pointer = buf_obj->buffer.pointer;
 
-		props->bufs[i] = buf.pointer;
+		props->bufs[*count] = buf.pointer;
 		package++;
 		(*count)++;
 	}
@@ -664,7 +669,8 @@ static void acpi_destroy_nondev_subnodes(struct list_head *list)
 		acpi_destroy_nondev_subnodes(&dn->data.subnodes);
 		wait_for_completion(&dn->kobj_done);
 		list_del(&dn->sibling);
-		ACPI_FREE((void *)dn->data.pointer);
+		if (dn->handle)
+			ACPI_FREE((void *)dn->data.pointer);
 		acpi_free_device_properties(&dn->data.properties);
 		kfree(dn);
 	}

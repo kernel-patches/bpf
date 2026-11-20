@@ -120,7 +120,7 @@ static int rpcif_hb_probe(struct platform_device *pdev)
 	struct rpcif_hyperbus *hyperbus;
 	int error;
 
-	hyperbus = devm_kzalloc(dev, sizeof(*hyperbus), GFP_KERNEL);
+	hyperbus = devm_kzalloc_obj(dev, *hyperbus);
 	if (!hyperbus)
 		return -ENOMEM;
 
@@ -145,10 +145,12 @@ static int rpcif_hb_probe(struct platform_device *pdev)
 	hyperbus->hbdev.np = of_get_next_child(pdev->dev.parent->of_node, NULL);
 	error = hyperbus_register_device(&hyperbus->hbdev);
 	if (error)
-		goto out_disable_rpm;
+		goto out_put_node;
 
 	return 0;
 
+out_put_node:
+	of_node_put(hyperbus->hbdev.np);
 out_disable_rpm:
 	pm_runtime_disable(hyperbus->rpc.dev);
 	return error;
@@ -159,6 +161,7 @@ static void rpcif_hb_remove(struct platform_device *pdev)
 	struct rpcif_hyperbus *hyperbus = platform_get_drvdata(pdev);
 
 	hyperbus_unregister_device(&hyperbus->hbdev);
+	of_node_put(hyperbus->hbdev.np);
 
 	pm_runtime_disable(hyperbus->rpc.dev);
 }

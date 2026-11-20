@@ -57,7 +57,25 @@
 #define TEGRA264_AXBAR_ADMAIF_RX21			0x1d0
 #define TEGRA264_AXBAR_ADX6_RX1				0x224
 
+/* Tegra268 specific */
+#define TEGRA268_XBAR_REG_MASK_0			0x1f001f
+#define TEGRA268_XBAR_REG_MASK_1			0x11f
+#define TEGRA268_XBAR_REG_MASK_2			0xf000300
+#define TEGRA268_XBAR_REG_MASK_3			0x3f000000
+#define TEGRA268_XBAR_UPDATE_MAX_REG			4
+
+#define TEGRA268_AXBAR_ADMAIF_RX5			0x10
+#define TEGRA268_AXBAR_I2S1_RX1				0x40
+#define TEGRA268_AXBAR_I2S5_RX1				0x50
+#define TEGRA268_AXBAR_AMX1_RX4				0x12c
+#define TEGRA268_AXBAR_ASRC1_RX1			0x190
+#define TEGRA268_AXBAR_ASRC1_RX7			0x1a8
+#define TEGRA268_XBAR_AUDIO_RX_COUNT			((TEGRA268_AXBAR_ASRC1_RX7 / 4) + 1)
+
 #define TEGRA_XBAR_UPDATE_MAX_REG (TEGRA264_XBAR_UPDATE_MAX_REG)
+
+#define TEGRA268_MAX_REGISTER_ADDR (TEGRA264_XBAR_PART3_RX +		\
+	(TEGRA210_XBAR_RX_STRIDE * (TEGRA268_XBAR_AUDIO_RX_COUNT - 1)))
 
 #define TEGRA264_MAX_REGISTER_ADDR (TEGRA264_XBAR_PART4_RX +		\
 	(TEGRA210_XBAR_RX_STRIDE * (TEGRA264_XBAR_AUDIO_RX_COUNT - 1)))
@@ -142,6 +160,15 @@
 	SOC_VALUE_ENUM_WIDE_DECL(ename##_enum, MUX_REG(id), 0,		\
 				 tegra264_ahub_mux_texts,		\
 				 tegra264_ahub_mux_values);		\
+	static const struct snd_kcontrol_new ename##_control =		\
+		SOC_DAPM_ENUM_EXT("Route", ename##_enum,		\
+				  tegra_ahub_get_value_enum,		\
+				  tegra_ahub_put_value_enum)
+
+#define MUX_ENUM_CTRL_DECL_268(ename, id)				\
+	SOC_VALUE_ENUM_WIDE_DECL(ename##_enum, MUX_REG(id), 0,		\
+				 tegra268_ahub_mux_texts,		\
+				 tegra268_ahub_mux_values);		\
 	static const struct snd_kcontrol_new ename##_control =		\
 		SOC_DAPM_ENUM_EXT("Route", ename##_enum,		\
 				  tegra_ahub_get_value_enum,		\

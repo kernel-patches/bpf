@@ -291,7 +291,7 @@ static const struct dcn31_vpg_mask vpg_mask = {
 #define apg_regs_init(id)\
 	APG_DCN31_REG_LIST_RI(id)
 
-static struct dcn31_apg_registers apg_regs[5];
+static struct dcn31_apg_registers apg_regs[9];
 
 static const struct dcn31_apg_shift apg_shift = {
 	DCN31_APG_MASK_SH_LIST(__SHIFT)
@@ -675,6 +675,7 @@ static const struct dc_debug_options debug_defaults_drv = {
 		}
 	},
 	.force_cositing = CHROMA_COSITING_NONE + 1,
+	.visual_confirm_full_viewport = true,
 };
 
 static const struct dc_check_config config_defaults = {
@@ -1391,7 +1392,11 @@ static struct apg *dcn60_apg_create(
 	apg_regs_init(1),
 	apg_regs_init(2),
 	apg_regs_init(3),
-	apg_regs_init(4);
+	apg_regs_init(4),
+	apg_regs_init(5),
+	apg_regs_init(6),
+	apg_regs_init(7),
+	apg_regs_init(8);
 
 	apg31_construct(apg60, ctx, inst,
 			&apg_regs[inst],
@@ -1522,20 +1527,20 @@ static struct hpo_dp_stream_encoder *dcn60_hpo_dp_stream_encoder_create(
 	hpo_dp_inst = eng_id - ENGINE_ID_HPO_DP_0;
 
 	/* Mapping of VPG register blocks to HPO DP block instance:
-	 * VPG[6] -> HPO_DP[0]
-	 * VPG[7] -> HPO_DP[1]
-	 * VPG[8] -> HPO_DP[2]
-	 * VPG[9] -> HPO_DP[3]
+	 * VPG[5] -> HPO_DP[0]
+	 * VPG[6] -> HPO_DP[1]
+	 * VPG[7] -> HPO_DP[2]
+	 * VPG[8] -> HPO_DP[3]
 	 */
 	vpg_inst = hpo_dp_inst + 5;
 
 	/* Mapping of APG register blocks to HPO DP block instance:
-	 * APG[0] -> HPO_DP[0]
-	 * APG[1] -> HPO_DP[1]
-	 * APG[2] -> HPO_DP[2]
-	 * APG[3] -> HPO_DP[3]
+	 * APG[5] -> HPO_DP[0]
+	 * APG[6] -> HPO_DP[1]
+	 * APG[7] -> HPO_DP[2]
+	 * APG[8] -> HPO_DP[3]
 	 */
-	apg_inst = hpo_dp_inst;
+	apg_inst = hpo_dp_inst + 5;
 
 	/* allocate HPO stream encoder and create VPG sub-block */
 	hpo_dp_enc60 = kzalloc_obj(struct dcn31_hpo_dp_stream_encoder);
@@ -1951,7 +1956,8 @@ static struct resource_funcs dcn60_res_pool_funcs = {
 	.build_pipe_pix_clk_params = dcn60_build_pipe_pix_clk_params,
 	.get_power_profile = dcn60_get_power_profile,
 	.program_mcache_pipe_config = dcn60_program_mcache_pipe_config,
-	.get_default_tiling_info = dcn401_get_default_tiling_info
+	.get_default_tiling_info = dcn401_get_default_tiling_info,
+	.get_vstartup_for_pipe = dcn401_get_vstartup_for_pipe
 };
 
 static uint32_t read_pipe_fuses(struct dc_context *ctx)
@@ -2050,6 +2056,7 @@ static bool dcn60_resource_construct(
 	dc->caps.dmcub_support = true;
 	dc->caps.utm_support = true;
 	dc->caps.max_v_total = (1 << 15) - 1;
+	dc->caps.vtotal_limited_by_fp2 = true;
 
 	pool->base.ctx = ctx;
 

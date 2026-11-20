@@ -134,7 +134,7 @@ int block_info__process_sym(struct hist_entry *he, struct block_hist *bh,
 	static struct addr_location al;
 	u64 cycles = 0;
 
-	if (!he->ms.map || !he->ms.sym)
+	if (!he->ms.map || !he->ms.sym || !symbol__annotated(he->ms.sym))
 		return 0;
 
 	memset(&al, 0, sizeof(al));

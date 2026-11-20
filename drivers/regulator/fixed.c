@@ -15,6 +15,7 @@
  */
 
 #include <linux/err.h>
+#include <linux/interrupt.h>
 #include <linux/mutex.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -168,8 +169,7 @@ of_get_fixed_voltage_config(struct device *dev,
 	struct device_node *np = dev->of_node;
 	struct regulator_init_data *init_data;
 
-	config = devm_kzalloc(dev, sizeof(struct fixed_voltage_config),
-								 GFP_KERNEL);
+	config = devm_kzalloc_obj(dev, struct fixed_voltage_config);
 	if (!config)
 		return ERR_PTR(-ENOMEM);
 
@@ -229,8 +229,7 @@ static int reg_fixed_voltage_probe(struct platform_device *pdev)
 	if (!pdev->dev.of_node && strcmp(pdev->name, "reg-fixed-voltage"))
 		return -ENODEV;
 
-	drvdata = devm_kzalloc(&pdev->dev, sizeof(struct fixed_voltage_data),
-			       GFP_KERNEL);
+	drvdata = devm_kzalloc_obj(&pdev->dev, struct fixed_voltage_data);
 	if (!drvdata)
 		return -ENOMEM;
 
@@ -387,18 +386,7 @@ static struct platform_driver regulator_fixed_voltage_driver = {
 		.of_match_table = of_match_ptr(fixed_of_match),
 	},
 };
-
-static int __init regulator_fixed_voltage_init(void)
-{
-	return platform_driver_register(&regulator_fixed_voltage_driver);
-}
-subsys_initcall(regulator_fixed_voltage_init);
-
-static void __exit regulator_fixed_voltage_exit(void)
-{
-	platform_driver_unregister(&regulator_fixed_voltage_driver);
-}
-module_exit(regulator_fixed_voltage_exit);
+subsys_platform_driver(regulator_fixed_voltage_driver);
 
 MODULE_AUTHOR("Mark Brown <broonie@opensource.wolfsonmicro.com>");
 MODULE_DESCRIPTION("Fixed voltage regulator");

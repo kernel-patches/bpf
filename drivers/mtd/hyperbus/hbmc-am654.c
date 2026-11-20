@@ -100,8 +100,7 @@ static int am654_hbmc_dma_read(struct am654_hbmc_device_priv *priv, void *to,
 	}
 
 	reinit_completion(&priv->rx_dma_complete);
-	tx->callback = am654_hbmc_dma_callback;
-	tx->callback_param = priv;
+	dmaengine_desc_set_callback(tx, am654_hbmc_dma_callback, NULL, priv);
 	cookie = dmaengine_submit(tx);
 
 	ret = dma_submit_error(cookie);
@@ -166,7 +165,7 @@ static int am654_hbmc_probe(struct platform_device *pdev)
 	struct resource res;
 	int ret;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -204,7 +203,7 @@ static int am654_hbmc_probe(struct platform_device *pdev)
 	priv->ctlr.ops = &am654_hbmc_ops;
 	priv->hbdev.ctlr = &priv->ctlr;
 
-	dev_priv = devm_kzalloc(dev, sizeof(*dev_priv), GFP_KERNEL);
+	dev_priv = devm_kzalloc_obj(dev, *dev_priv);
 	if (!dev_priv) {
 		ret = -ENOMEM;
 		goto disable_mux;

@@ -267,7 +267,7 @@ static int fujitsu_battery_charge_control_add(struct device *dev)
 		return -ENODEV;
 
 	priv->charge_control_supported = true;
-	battery_hook_register(&battery_hook);
+	acpi_battery_hook_register(&battery_hook);
 
 	return 0;
 }
@@ -277,7 +277,7 @@ static void fujitsu_battery_charge_control_remove(struct device *dev)
 	struct fujitsu_laptop *priv = dev_get_drvdata(dev);
 
 	if (priv->charge_control_supported)
-		battery_hook_unregister(&battery_hook);
+		acpi_battery_hook_unregister(&battery_hook);
 }
 
 /* Hardware access for LCD brightness control */
@@ -540,7 +540,7 @@ static int acpi_fujitsu_bl_probe(struct platform_device *pdev)
 	if (acpi_video_get_backlight_type() != acpi_backlight_vendor)
 		return -ENODEV;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(&pdev->dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -846,7 +846,7 @@ static int acpi_fujitsu_laptop_leds_register(struct device *dev)
 	int ret;
 
 	if (call_fext_func(dev, FUNC_LEDS, 0x0, 0x0, 0x0) & LOGOLAMP_POWERON) {
-		led = devm_kzalloc(dev, sizeof(*led), GFP_KERNEL);
+		led = devm_kzalloc_obj(dev, *led);
 		if (!led)
 			return -ENOMEM;
 
@@ -860,7 +860,7 @@ static int acpi_fujitsu_laptop_leds_register(struct device *dev)
 
 	if ((call_fext_func(dev, FUNC_LEDS, 0x0, 0x0, 0x0) & KEYBOARD_LAMPS) &&
 	    (call_fext_func(dev, FUNC_BUTTONS, 0x0, 0x0, 0x0) == 0x0)) {
-		led = devm_kzalloc(dev, sizeof(*led), GFP_KERNEL);
+		led = devm_kzalloc_obj(dev, *led);
 		if (!led)
 			return -ENOMEM;
 
@@ -882,7 +882,7 @@ static int acpi_fujitsu_laptop_leds_register(struct device *dev)
 	 * whether given model has a radio toggle button.
 	 */
 	if (priv->flags_supported & BIT(17)) {
-		led = devm_kzalloc(dev, sizeof(*led), GFP_KERNEL);
+		led = devm_kzalloc_obj(dev, *led);
 		if (!led)
 			return -ENOMEM;
 
@@ -902,7 +902,7 @@ static int acpi_fujitsu_laptop_leds_register(struct device *dev)
 	 */
 	if ((call_fext_func(dev, FUNC_LEDS, 0x0, 0x0, 0x0) & BIT(14)) &&
 	    (call_fext_func(dev, FUNC_LEDS, 0x2, ECO_LED, 0x0) != UNSUPPORTED_CMD)) {
-		led = devm_kzalloc(dev, sizeof(*led), GFP_KERNEL);
+		led = devm_kzalloc_obj(dev, *led);
 		if (!led)
 			return -ENOMEM;
 
@@ -1002,7 +1002,7 @@ static int acpi_fujitsu_laptop_probe(struct platform_device *pdev)
 	if (!device)
 		return -ENODEV;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(&pdev->dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

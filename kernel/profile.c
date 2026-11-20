@@ -142,7 +142,7 @@ void profile_tick(int type)
 #ifdef CONFIG_PROC_FS
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/uaccess.h>
+#include <linux/uio.h>
 
 /*
  * This function accesses profiling information. The returned data is
@@ -150,31 +150,50 @@ void profile_tick(int type)
  * buffer. Use of the program readprofile is recommended in order to
  * get meaningful info out of these data.
  */
-static ssize_t
-read_profile(struct file *file, char __user *buf, size_t count, loff_t *ppos)
+static ssize_t read_profile(struct kiocb *iocb, struct iov_iter *to)
 {
-	unsigned long p = *ppos;
-	ssize_t read;
-	char *pnt;
+	const size_t header_size = sizeof(unsigned int);
+	const size_t file_size = (prof_len + 1) * sizeof(unsigned int);
 	unsigned int sample_step = (unsigned int)(1UL << prof_shift);
+	loff_t offset = iocb->ki_pos;
+	size_t count = iov_iter_count(to);
+	size_t pos;
+	size_t done = 0;
+	size_t n, copied;
 
-	if (p >= (prof_len+1)*sizeof(unsigned int))
+	if (offset < 0)
+		return -EINVAL;
+	if (offset >= file_size)
 		return 0;
-	if (count > (prof_len+1)*sizeof(unsigned int) - p)
-		count = (prof_len+1)*sizeof(unsigned int) - p;
-	read = 0;
+	pos = offset;
+	count = min(count, file_size - pos);
 
-	while (p < sizeof(unsigned int) && count > 0) {
-		if (put_user(*((char *)(&sample_step)+p), buf))
-			return -EFAULT;
-		buf++; p++; count--; read++;
+	/* Copy the four-byte sampling resolution. */
+	if (pos < header_size) {
+		n = min(count, header_size - pos);
+		copied = copy_to_iter((u8 *)&sample_step + pos, n, to);
+		done += copied;
+		if (copied != n)
+			goto fault;
+		pos += n;
+		count -= n;
 	}
-	pnt = (char *)prof_buffer + p - sizeof(atomic_t);
-	if (copy_to_user(buf, (void *)pnt, count))
+
+	/* Copy raw counters using offsets relative to the counter array. */
+	if (count) {
+		copied = copy_to_iter((u8 *)prof_buffer + pos - header_size,
+				      count, to);
+		done += copied;
+		if (copied != count)
+			goto fault;
+	}
+	iocb->ki_pos += done;
+	return done;
+fault:
+	iocb->ki_pos += done;
+	if (!done)
 		return -EFAULT;
-	read += count;
-	*ppos += read;
-	return read;
+	return done;
 }
 
 /* default is to not implement this call */
@@ -189,16 +208,15 @@ int __weak setup_profiling_timer(unsigned mult)
  * Writing a 'profiling multiplier' value into it also re-sets the profiling
  * interrupt frequency, on architectures that support this.
  */
-static ssize_t write_profile(struct file *file, const char __user *buf,
-			     size_t count, loff_t *ppos)
+static ssize_t write_profile(struct kiocb *iocb, struct iov_iter *from)
 {
+	size_t count = iov_iter_count(from);
 #ifdef CONFIG_SMP
 	if (count == sizeof(int)) {
 		unsigned int multiplier;
 
-		if (copy_from_user(&multiplier, buf, sizeof(int)))
+		if (copy_from_iter(&multiplier, sizeof(int), from) != sizeof(int))
 			return -EFAULT;
-
 		if (setup_profiling_timer(multiplier))
 			return -EINVAL;
 	}
@@ -207,24 +225,26 @@ static ssize_t write_profile(struct file *file, const char __user *buf,
 	return count;
 }
 
-static const struct proc_ops profile_proc_ops = {
-	.proc_read	= read_profile,
-	.proc_write	= write_profile,
-	.proc_lseek	= default_llseek,
+static const struct file_operations profile_fops = {
+	.read_iter	= read_profile,
+	.write_iter	= write_profile,
+	.splice_read	= copy_splice_read,
+	.splice_write	= iter_file_splice_write,
+	.llseek		= default_llseek,
 };
 
 int __ref create_proc_profile(void)
 {
 	struct proc_dir_entry *entry;
-	int err = 0;
 
 	if (!prof_on)
 		return 0;
-	entry = proc_create("profile", S_IWUSR | S_IRUGO,
-			    NULL, &profile_proc_ops);
-	if (entry)
-		proc_set_size(entry, (1 + prof_len) * sizeof(atomic_t));
-	return err;
+	entry = proc_create_fops("profile", S_IWUSR | S_IRUGO, NULL,
+				 &profile_fops);
+	if (!entry)
+		return -ENOMEM;
+	proc_set_size(entry, (1 + prof_len) * sizeof(atomic_t));
+	return 0;
 }
 subsys_initcall(create_proc_profile);
 #endif /* CONFIG_PROC_FS */

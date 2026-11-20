@@ -31,17 +31,6 @@
 
 #define ERR_INJ_ENABLE_REG		0x30
 
-#define RAS_DES_EVENT_COUNTER_DATA_REG	0xc
-
-#define RAS_DES_EVENT_COUNTER_CTRL_REG	0x8
-#define EVENT_COUNTER_GROUP_SELECT	GENMASK(27, 24)
-#define EVENT_COUNTER_EVENT_SELECT	GENMASK(23, 16)
-#define EVENT_COUNTER_LANE_SELECT	GENMASK(11, 8)
-#define EVENT_COUNTER_STATUS		BIT(7)
-#define EVENT_COUNTER_ENABLE		GENMASK(4, 2)
-#define PER_EVENT_ON			0x3
-#define PER_EVENT_OFF			0x1
-
 #define DWC_DEBUGFS_BUF_MAX		128
 
 /**
@@ -356,11 +345,11 @@ static void set_event_number(struct dwc_pcie_rasdes_priv *pdata,
 {
 	u32 val;
 
-	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CTRL_REG);
-	val &= ~EVENT_COUNTER_ENABLE;
-	FIELD_MODIFY(EVENT_COUNTER_GROUP_SELECT, &val, event_list[pdata->idx].group_no);
-	FIELD_MODIFY(EVENT_COUNTER_EVENT_SELECT, &val, event_list[pdata->idx].event_no);
-	dw_pcie_writel_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CTRL_REG, val);
+	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CONTROL);
+	val &= ~EVENT_COUNTER_ENABLE_MASK;
+	FIELD_MODIFY(EVENT_COUNTER_GROUP_SEL_MASK, &val, event_list[pdata->idx].group_no);
+	FIELD_MODIFY(EVENT_COUNTER_EVENT_SEL_MASK, &val, event_list[pdata->idx].event_no);
+	dw_pcie_writel_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CONTROL, val);
 }
 
 static ssize_t counter_enable_read(struct file *file, char __user *buf,
@@ -375,7 +364,7 @@ static ssize_t counter_enable_read(struct file *file, char __user *buf,
 
 	mutex_lock(&rinfo->reg_event_lock);
 	set_event_number(pdata, pci, rinfo);
-	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CTRL_REG);
+	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CONTROL);
 	mutex_unlock(&rinfo->reg_event_lock);
 	val = FIELD_GET(EVENT_COUNTER_STATUS, val);
 	if (val)
@@ -401,13 +390,13 @@ static ssize_t counter_enable_write(struct file *file, const char __user *buf,
 
 	mutex_lock(&rinfo->reg_event_lock);
 	set_event_number(pdata, pci, rinfo);
-	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CTRL_REG);
+	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CONTROL);
 	if (enable)
-		val |= FIELD_PREP(EVENT_COUNTER_ENABLE, PER_EVENT_ON);
+		val |= FIELD_PREP(EVENT_COUNTER_ENABLE_MASK, EVENT_COUNTER_ENABLE_PER_EVENT);
 	else
-		val |= FIELD_PREP(EVENT_COUNTER_ENABLE, PER_EVENT_OFF);
+		val |= FIELD_PREP(EVENT_COUNTER_ENABLE_MASK, EVENT_COUNTER_DISABLE_PER_EVENT);
 
-	dw_pcie_writel_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CTRL_REG, val);
+	dw_pcie_writel_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CONTROL, val);
 
 	/*
 	 * While enabling the counter, always read the status back to check if
@@ -416,7 +405,7 @@ static ssize_t counter_enable_write(struct file *file, const char __user *buf,
 	 */
 	if (enable) {
 		val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset +
-					RAS_DES_EVENT_COUNTER_CTRL_REG);
+					RAS_DES_EVENT_COUNTER_CONTROL);
 		if (!FIELD_GET(EVENT_COUNTER_STATUS, val)) {
 			mutex_unlock(&rinfo->reg_event_lock);
 			return -EOPNOTSUPP;
@@ -440,7 +429,7 @@ static ssize_t counter_lane_read(struct file *file, char __user *buf,
 
 	mutex_lock(&rinfo->reg_event_lock);
 	set_event_number(pdata, pci, rinfo);
-	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CTRL_REG);
+	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CONTROL);
 	mutex_unlock(&rinfo->reg_event_lock);
 	val = FIELD_GET(EVENT_COUNTER_LANE_SELECT, val);
 	pos = scnprintf(debugfs_buf, DWC_DEBUGFS_BUF_MAX, "Lane: %d\n", val);
@@ -463,9 +452,9 @@ static ssize_t counter_lane_write(struct file *file, const char __user *buf,
 
 	mutex_lock(&rinfo->reg_event_lock);
 	set_event_number(pdata, pci, rinfo);
-	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CTRL_REG);
+	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CONTROL);
 	FIELD_MODIFY(EVENT_COUNTER_LANE_SELECT, &val, lane);
-	dw_pcie_writel_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CTRL_REG, val);
+	dw_pcie_writel_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_CONTROL, val);
 	mutex_unlock(&rinfo->reg_event_lock);
 
 	return count;
@@ -483,7 +472,7 @@ static ssize_t counter_value_read(struct file *file, char __user *buf,
 
 	mutex_lock(&rinfo->reg_event_lock);
 	set_event_number(pdata, pci, rinfo);
-	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_DATA_REG);
+	val = dw_pcie_readl_dbi(pci, rinfo->ras_cap_offset + RAS_DES_EVENT_COUNTER_DATA);
 	mutex_unlock(&rinfo->reg_event_lock);
 	pos = scnprintf(debugfs_buf, DWC_DEBUGFS_BUF_MAX, "Counter value: %d\n", val);
 
@@ -569,7 +558,7 @@ static int dwc_pcie_rasdes_debugfs_init(struct dw_pcie *pci, struct dentry *dir)
 		return 0;
 	}
 
-	rasdes_info = devm_kzalloc(dev, sizeof(*rasdes_info), GFP_KERNEL);
+	rasdes_info = devm_kzalloc_obj(dev, *rasdes_info);
 	if (!rasdes_info)
 		return -ENOMEM;
 
@@ -588,7 +577,7 @@ static int dwc_pcie_rasdes_debugfs_init(struct dw_pcie *pci, struct dentry *dir)
 
 	/* Create debugfs files for Error Injection subdirectory. */
 	for (i = 0; i < ARRAY_SIZE(err_inj_list); i++) {
-		priv_tmp = devm_kzalloc(dev, sizeof(*priv_tmp), GFP_KERNEL);
+		priv_tmp = devm_kzalloc_obj(dev, *priv_tmp);
 		if (!priv_tmp) {
 			ret = -ENOMEM;
 			goto err_deinit;
@@ -602,7 +591,7 @@ static int dwc_pcie_rasdes_debugfs_init(struct dw_pcie *pci, struct dentry *dir)
 
 	/* Create debugfs files for Statistical Counter subdirectory. */
 	for (i = 0; i < ARRAY_SIZE(event_list); i++) {
-		priv_tmp = devm_kzalloc(dev, sizeof(*priv_tmp), GFP_KERNEL);
+		priv_tmp = devm_kzalloc_obj(dev, *priv_tmp);
 		if (!priv_tmp) {
 			ret = -ENOMEM;
 			goto err_deinit;
@@ -900,7 +889,7 @@ void dwc_pcie_debugfs_init(struct dw_pcie *pci, enum dw_pcie_device_mode mode)
 	/* Create main directory for each platform driver. */
 	snprintf(dirname, DWC_DEBUGFS_BUF_MAX, "dwc_pcie_%s", dev_name(dev));
 	dir = debugfs_create_dir(dirname, NULL);
-	debugfs = devm_kzalloc(dev, sizeof(*debugfs), GFP_KERNEL);
+	debugfs = devm_kzalloc_obj(dev, *debugfs);
 	if (!debugfs)
 		return;
 

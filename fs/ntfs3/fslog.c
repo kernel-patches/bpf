@@ -7,6 +7,7 @@
 
 #include <linux/blkdev.h>
 #include <linux/fs.h>
+#include <linux/limits.h>
 #include <linux/overflow.h>
 #include <linux/random.h>
 #include <linux/slab.h>
@@ -751,8 +752,10 @@ static bool check_rstbl(const struct RESTART_TABLE *rt, size_t bytes)
 	    rsize + sizeof(struct RESTART_TABLE) > bytes || bytes < ts ||
 	    le16_to_cpu(rt->total) > ne || ff > ts - sizeof(__le32) ||
 	    lf > ts - sizeof(__le32) ||
-	    (ff && ff < sizeof(struct RESTART_TABLE)) ||
-	    (lf && lf < sizeof(struct RESTART_TABLE))) {
+	    (ff && (ff < sizeof(struct RESTART_TABLE) ||
+		     (ff - sizeof(struct RESTART_TABLE)) % rsize)) ||
+	    (lf && (lf < sizeof(struct RESTART_TABLE) ||
+		     (lf - sizeof(struct RESTART_TABLE)) % rsize))) {
 		return false;
 	}
 
@@ -2997,6 +3000,35 @@ static inline bool check_if_alloc_index(const struct INDEX_HDR *hdr,
 	return o == attr_off;
 }
 
+static inline bool calc_log_buffer_size(u32 min_bytes, u64 data_bytes,
+					u16 roff, bool align, u32 *bytes)
+{
+	u64 bytes64 = min_bytes ? min_bytes : data_bytes;
+
+	if (check_add_overflow(bytes64, (u64)roff, &bytes64))
+		return false;
+
+	if (align) {
+		if (check_add_overflow(bytes64, 511ULL, &bytes64))
+			return false;
+		bytes64 &= ~511ULL;
+	}
+
+	if (bytes64 > U32_MAX)
+		return false;
+
+	*bytes = bytes64;
+	return true;
+}
+
+static inline bool check_if_bitmap_range(u64 bytes, u32 off, u32 bits)
+{
+	u64 start = ((u64)off + 7) / 8;
+	u64 end = ((u64)off + bits + 7) / 8;
+
+	return bits <= S32_MAX && start <= bytes && end <= bytes;
+}
+
 static inline void change_attr_size(struct MFT_REC *rec, struct ATTRIB *attr,
 				    u32 nsize)
 {
@@ -3144,6 +3176,7 @@ static int do_action(struct ntfs_log *log, struct OPEN_ATTR_ENRTY *oe,
 	u16 roff = le16_to_cpu(lrh->record_off);
 	u16 aoff = le16_to_cpu(lrh->attr_off);
 	u64 lco = 0;
+	u64 data_bytes = 0;
 	u64 cbo = (u64)le16_to_cpu(lrh->cluster_off) << SECTOR_SHIFT;
 	u64 tvo = le64_to_cpu(lrh->target_vcn) << sbi->cluster_bits;
 	u64 vbo = cbo + tvo;
@@ -3255,6 +3288,10 @@ skip_load_parent:
 		attr = oa->attr;
 		bytes = UpdateNonresidentValue == op ? dlen : 0;
 		lco = (u64)le16_to_cpu(lrh->lcns_follow) << sbi->cluster_bits;
+		if (lco < cbo)
+			goto dirty_vol;
+
+		data_bytes = lco - cbo;
 
 		if (attr->type == ATTR_ALLOC) {
 			t32 = le32_to_cpu(oe->bytes_per_index);
@@ -3262,12 +3299,9 @@ skip_load_parent:
 				bytes = t32;
 		}
 
-		if (!bytes)
-			bytes = lco - cbo;
-
-		bytes += roff;
-		if (attr->type == ATTR_ALLOC)
-			bytes = (bytes + 511) & ~511; // align
+		if (!calc_log_buffer_size(bytes, data_bytes, roff,
+					  attr->type == ATTR_ALLOC, &bytes))
+			goto dirty_vol;
 
 		buffer_le = kmalloc(bytes, GFP_NOFS);
 		if (!buffer_le)
@@ -3323,10 +3357,10 @@ skip_load_parent:
 		 * by the log record length, not by the MFT record.  Refuse an
 		 * attribute that does not fit, as mi_insert_attr() does.
 		 */
-		if (!check_if_attr(rec, lrh) || dlen < SIZEOF_RESIDENT ||
+		if (!check_if_attr(rec, lrh) || asize < SIZEOF_RESIDENT ||
 		    !IS_ALIGNED(asize, 8) ||
 		    Add2Ptr(attr2, asize) > Add2Ptr(lrh, rec_len) ||
-		    dlen > record_size - used || asize > record_size - used) {
+		    asize > record_size - used) {
 			goto dirty_vol;
 		}
 
@@ -3567,7 +3601,9 @@ move_data:
 		}
 
 		e = Add2Ptr(attr, le16_to_cpu(lrh->attr_off));
-		fname = (struct ATTR_FILE_NAME *)(e + 1);
+		fname = de_get_fname(e);
+		if (!fname)
+			goto dirty_vol;
 		memmove(&fname->dup, data, sizeof(fname->dup)); //
 		mi->dirty = true;
 		break;
@@ -3752,7 +3788,9 @@ move_data:
 			goto dirty_vol;
 		}
 
-		fname = (struct ATTR_FILE_NAME *)(e + 1);
+		fname = de_get_fname(e);
+		if (!fname)
+			goto dirty_vol;
 		memmove(&fname->dup, data, sizeof(fname->dup));
 
 		a_dirty = true;
@@ -3763,10 +3801,8 @@ move_data:
 		off = le32_to_cpu(((struct BITMAP_RANGE *)data)->bitmap_off);
 		bits = le32_to_cpu(((struct BITMAP_RANGE *)data)->bits);
 
-		if (cbo + (off + 7) / 8 > lco ||
-		    cbo + ((off + bits + 7) / 8) > lco) {
+		if (!check_if_bitmap_range(data_bytes, off, bits))
 			goto dirty_vol;
-		}
 
 		ntfs_bitmap_set_le(Add2Ptr(buffer_le, roff), off, bits);
 		a_dirty = true;
@@ -3776,10 +3812,8 @@ move_data:
 		off = le32_to_cpu(((struct BITMAP_RANGE *)data)->bitmap_off);
 		bits = le32_to_cpu(((struct BITMAP_RANGE *)data)->bits);
 
-		if (cbo + (off + 7) / 8 > lco ||
-		    cbo + ((off + bits + 7) / 8) > lco) {
+		if (!check_if_bitmap_range(data_bytes, off, bits))
 			goto dirty_vol;
-		}
 
 		ntfs_bitmap_clear_le(Add2Ptr(buffer_le, roff), off, bits);
 		a_dirty = true;
@@ -4461,7 +4495,8 @@ check_attr_table:
 	rt = Add2Ptr(lrh, t16);
 	oatbl_bytes = rec_len - t16;
 
-	if (!check_rstbl(rt, oatbl_bytes)) {
+	if (le16_to_cpu(rt->size) < bytes_per_attr_entry ||
+	    !check_rstbl(rt, oatbl_bytes)) {
 		err = -EINVAL;
 		goto out;
 	}

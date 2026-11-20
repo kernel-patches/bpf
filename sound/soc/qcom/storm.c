@@ -79,6 +79,7 @@ static int storm_parse_of(struct device *dev)
 	dai_link->codecs->of_node = of_parse_phandle(np, "codec", 0);
 	if (!dai_link->codecs->of_node) {
 		dev_err(dev, "error getting codec phandle\n");
+		of_node_put(dai_link->cpus->of_node);
 		return -EINVAL;
 	}
 
@@ -90,7 +91,7 @@ static int storm_platform_probe(struct platform_device *pdev)
 	struct snd_soc_card *card;
 	int ret;
 
-	card = devm_kzalloc(&pdev->dev, sizeof(*card), GFP_KERNEL);
+	card = devm_kzalloc_obj(&pdev->dev, *card);
 	if (!card)
 		return -ENOMEM;
 

@@ -172,7 +172,7 @@ static int intel_oc_wdt_probe(struct platform_device *pdev)
 	struct watchdog_device *wdd;
 	int ret;
 
-	oc_wdt = devm_kzalloc(&pdev->dev, sizeof(*oc_wdt), GFP_KERNEL);
+	oc_wdt = devm_kzalloc_obj(&pdev->dev, *oc_wdt);
 	if (!oc_wdt)
 		return -ENOMEM;
 
@@ -215,6 +215,7 @@ static int intel_oc_wdt_probe(struct platform_device *pdev)
 static const struct acpi_device_id intel_oc_wdt_match[] = {
 	{ "INT3F0D" },
 	{ "INTC1099" },
+	{ "INTC109C" },
 	{ },
 };
 MODULE_DEVICE_TABLE(acpi, intel_oc_wdt_match);

@@ -1082,13 +1082,13 @@ static int input_attach_handler(struct input_dev *dev, struct input_handler *han
 #ifdef CONFIG_PROC_FS
 
 static struct proc_dir_entry *proc_bus_input_dir;
-static DECLARE_WAIT_QUEUE_HEAD(input_devices_poll_wait);
+static struct proc_dir_entry *proc_bus_input_devices;
 static int input_devices_state;
 
 static inline void input_wakeup_procfs_readers(void)
 {
 	input_devices_state++;
-	wake_up(&input_devices_poll_wait);
+	proc_poll_notify(proc_bus_input_devices);
 }
 
 struct input_seq_state {
@@ -1097,12 +1097,11 @@ struct input_seq_state {
 	int input_devices_state;
 };
 
-static __poll_t input_proc_devices_poll(struct file *file, poll_table *wait)
+static __poll_t input_proc_devices_poll(struct file *file)
 {
 	struct seq_file *seq = file->private_data;
 	struct input_seq_state *state = seq->private;
 
-	poll_wait(file, &input_devices_poll_wait, wait);
 	if (state->input_devices_state != input_devices_state) {
 		state->input_devices_state = input_devices_state;
 		return EPOLLIN | EPOLLRDNORM;
@@ -1218,18 +1217,10 @@ static const struct seq_operations input_devices_seq_ops = {
 	.show	= input_devices_seq_show,
 };
 
-static int input_proc_devices_open(struct inode *inode, struct file *file)
-{
-	return seq_open_private(file, &input_devices_seq_ops,
-				sizeof(struct input_seq_state));
-}
-
 static const struct proc_ops input_devices_proc_ops = {
-	.proc_open	= input_proc_devices_open,
+	.proc_seq_ops	= &input_devices_seq_ops,
+	.proc_state_size = sizeof(struct input_seq_state),
 	.proc_poll	= input_proc_devices_poll,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release_private,
 };
 
 static void *input_handlers_seq_start(struct seq_file *seq, loff_t *pos)
@@ -1279,17 +1270,9 @@ static const struct seq_operations input_handlers_seq_ops = {
 	.show	= input_handlers_seq_show,
 };
 
-static int input_proc_handlers_open(struct inode *inode, struct file *file)
-{
-	return seq_open_private(file, &input_handlers_seq_ops,
-				sizeof(struct input_seq_state));
-}
-
 static const struct proc_ops input_handlers_proc_ops = {
-	.proc_open	= input_proc_handlers_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release_private,
+	.proc_seq_ops = &input_handlers_seq_ops,
+	.proc_state_size = sizeof(struct input_seq_state),
 };
 
 static int __init input_proc_init(void)
@@ -1300,9 +1283,9 @@ static int __init input_proc_init(void)
 	if (!proc_bus_input_dir)
 		return -ENOMEM;
 
-	entry = proc_create("devices", 0, proc_bus_input_dir,
-			    &input_devices_proc_ops);
-	if (!entry)
+	proc_bus_input_devices = proc_create("devices", 0, proc_bus_input_dir,
+					     &input_devices_proc_ops);
+	if (!proc_bus_input_devices)
 		goto fail1;
 
 	entry = proc_create("handlers", 0, proc_bus_input_dir,
@@ -1313,6 +1296,7 @@ static int __init input_proc_init(void)
 	return 0;
 
  fail2:	remove_proc_entry("devices", proc_bus_input_dir);
+	proc_bus_input_devices = NULL;
  fail1: remove_proc_entry("bus/input", NULL);
 	return -ENOMEM;
 }
@@ -1320,6 +1304,7 @@ static int __init input_proc_init(void)
 static void input_proc_exit(void)
 {
 	remove_proc_entry("devices", proc_bus_input_dir);
+	proc_bus_input_devices = NULL;
 	remove_proc_entry("handlers", proc_bus_input_dir);
 	remove_proc_entry("bus/input", NULL);
 }
@@ -2265,10 +2250,9 @@ static void __input_unregister_device(struct input_dev *dev)
 		input_wakeup_procfs_readers();
 	}
 
-	if (dev->ff && dev->ff->stop)
-		dev->ff->stop(dev->ff);
-
 	device_del(&dev->dev);
+
+	input_ff_destroy(dev);
 }
 
 static void devm_input_device_unregister(struct device *dev, void *res)

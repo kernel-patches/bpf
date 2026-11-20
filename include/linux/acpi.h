@@ -828,10 +828,10 @@ int acpi_mrrm_max_mem_region(void);
 #endif
 
 #define ACPI_CMOS_RTC_IDS	\
-	{ "PNP0B00", },		\
-	{ "PNP0B01", },		\
-	{ "PNP0B02", },		\
-	{ "", }
+	{ .id = "PNP0B00" },	\
+	{ .id = "PNP0B01" },	\
+	{ .id = "PNP0B02" },	\
+	{ }
 
 extern bool cmos_rtc_platform_device_present;
 
@@ -1546,6 +1546,12 @@ static inline void acpi_table_upgrade(void) { }
 extern bool acpi_has_watchdog(void);
 #else
 static inline bool acpi_has_watchdog(void) { return false; }
+#endif
+
+#if IS_REACHABLE(CONFIG_ACPI_TAD) && IS_ENABLED(CONFIG_RTC_CLASS)
+bool acpi_has_rtc(void);
+#else
+static inline bool acpi_has_rtc(void) { return false; }
 #endif
 
 #ifdef CONFIG_ACPI_SPCR_TABLE

@@ -39,7 +39,7 @@
 
 #define __MREG(x)	IOMEM(io_p2v(x))
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 # define __REG(x)	(*((volatile unsigned long __iomem *)io_p2v(x)))
 # define __PREG(x)	(io_v2p((unsigned long)&(x)))

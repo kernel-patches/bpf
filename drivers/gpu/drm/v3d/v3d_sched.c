@@ -307,15 +307,31 @@ v3d_tfu_job_run(struct drm_sched_job *sched_job)
 	V3D_WRITE(V3D_TFU_ICA(v3d->ver), job->args.ica);
 	V3D_WRITE(V3D_TFU_IUA(v3d->ver), job->args.iua);
 	V3D_WRITE(V3D_TFU_IOA(v3d->ver), job->args.ioa);
-	if (v3d->ver >= V3D_GEN_71)
-		V3D_WRITE(V3D_V7_TFU_IOC, job->args.v71.ioc);
 	V3D_WRITE(V3D_TFU_IOS(v3d->ver), job->args.ios);
-	V3D_WRITE(V3D_TFU_COEF0(v3d->ver), job->args.coef[0]);
-	if (v3d->ver >= V3D_GEN_71 || (job->args.coef[0] & V3D_TFU_COEF0_USECOEF)) {
-		V3D_WRITE(V3D_TFU_COEF1(v3d->ver), job->args.coef[1]);
-		V3D_WRITE(V3D_TFU_COEF2(v3d->ver), job->args.coef[2]);
-		V3D_WRITE(V3D_TFU_COEF3(v3d->ver), job->args.coef[3]);
+
+	if (v3d->ver >= V3D_GEN_71) {
+		V3D_WRITE(V3D_V7_TFU_IOC, job->args.v71.ioc);
+
+		if (V3D_GET_FIELD(job->args.icfg, V3D_V7_TFU_ICFG_IFORMAT) ==
+		    V3D_V7_TFU_ICFG_IFORMAT_CONSTANT_COLOUR) {
+			for (int i = 0; i < 4; i++)
+				V3D_WRITE(V3D_TFU_CCOLX(i), job->args.v71.ccol[i]);
+		}
+
+		if (V3D_GET_FIELD(job->args.icfg, V3D_V7_TFU_ICFG_YVCS_RGBP) ==
+		    V3D_V7_TFU_ICFG_YVCS_RGBP_USER_INPUT) {
+			for (int i = 0; i < 4; i++)
+				V3D_WRITE(V3D_TFU_COEFX(v3d->ver, i), job->args.coef[i]);
+		}
+	} else {
+		V3D_WRITE(V3D_TFU_COEF0(v3d->ver), job->args.coef[0]);
+
+		if (job->args.coef[0] & V3D_TFU_COEF0_USECOEF) {
+			for (int i = 1; i < 4; i++)
+				V3D_WRITE(V3D_TFU_COEFX(v3d->ver, i), job->args.coef[i]);
+		}
 	}
+
 	/* ICFG kicks off the job. */
 	V3D_WRITE(V3D_TFU_ICFG(v3d->ver), job->args.icfg | V3D_TFU_ICFG_IOC);
 
@@ -359,6 +375,9 @@ v3d_csd_job_run(struct drm_sched_job *sched_job)
 	if (job->base.irq_fence)
 		dma_fence_put(job->base.irq_fence);
 	job->base.irq_fence = dma_fence_get(fence);
+
+	job->timedout_batches = job->args.cfg[4];
+	job->timedout_sg_ids = 0;
 
 	trace_v3d_submit_csd(dev, to_v3d_fence(fence)->seqno);
 
@@ -770,12 +789,23 @@ v3d_csd_job_timedout(struct drm_sched_job *sched_job)
 	struct v3d_csd_job *job = to_csd_job(sched_job);
 	struct v3d_dev *v3d = job->base.v3d;
 	u32 batches = V3D_CORE_READ(0, V3D_CSD_CURRENT_CFG4(v3d->ver));
+	u32 sg_ids = 0;
+
+	/* Once the last batch has started, CFG4 no longer changes until the
+	 * dispatch completes. On V3D 7.x, supergroups that complete in that
+	 * window release their ID, so count that as progress too.
+	 */
+	if (v3d->ver >= V3D_GEN_71) {
+		sg_ids = V3D_GET_FIELD(V3D_CORE_READ(0, V3D_V7_CSD_EXT_STATUS),
+				       V3D_V7_CSD_EXT_STATUS_NUM_ALLOCED_SG_IDS);
+	}
 
 	/* If we've made progress, skip reset, add the job to the pending
 	 * list, and let the timer get rearmed.
 	 */
-	if (job->timedout_batches != batches) {
+	if (job->timedout_batches != batches || job->timedout_sg_ids != sg_ids) {
 		job->timedout_batches = batches;
+		job->timedout_sg_ids = sg_ids;
 
 		return DRM_GPU_SCHED_STAT_NO_HANG;
 	}

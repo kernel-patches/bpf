@@ -520,7 +520,7 @@ static void test_pidfd_poll_exec(int use_waitpid)
 
 	time_t prog_time = time(NULL) - prog_start;
 
-	ksft_print_msg("Time waited for child: %lu\n", prog_time);
+	ksft_print_msg("Time waited for child: %lld\n", (long long)prog_time);
 
 	close(pidfd);
 
@@ -599,7 +599,8 @@ static void test_pidfd_poll_leader_exit(int use_waitpid)
 
 	time_t since_child_exit = time(NULL) - *child_exit_secs;
 
-	ksft_print_msg("Time since child exit: %lu\n", since_child_exit);
+	ksft_print_msg("Time since child exit: %lld\n",
+		       (long long)since_child_exit);
 
 	close(pidfd);
 

@@ -45,7 +45,7 @@ static struct rc_map_table mygica_utv3[] = {
 static struct rc_map_list mygica_utv3_map = {
 	.map = {
 		.scan     = mygica_utv3,
-		.size     = ARRAY_SIZE(mygica_utv3),
+		.entries  = ARRAY_SIZE(mygica_utv3),
 		.rc_proto = RC_PROTO_RC5,
 		.name     = RC_MAP_MYGICA_UTV3,
 	}

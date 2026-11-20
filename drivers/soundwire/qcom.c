@@ -1463,12 +1463,12 @@ static int qcom_swrm_register_dais(struct qcom_swrm_ctrl *ctrl)
 	struct device *dev = ctrl->dev;
 	int i;
 
-	ctrl->sruntime = devm_kcalloc(dev, num_dais, sizeof(*ctrl->sruntime), GFP_KERNEL);
+	ctrl->sruntime = devm_kzalloc_objs(dev, *ctrl->sruntime, num_dais);
 	if (!ctrl->sruntime)
 		return -ENOMEM;
 
 	/* PDM dais are only tested for now */
-	dais = devm_kcalloc(dev, num_dais, sizeof(*dais), GFP_KERNEL);
+	dais = devm_kzalloc_objs(dev, *dais, num_dais);
 	if (!dais)
 		return -ENOMEM;
 
@@ -1529,8 +1529,8 @@ static int qcom_swrm_get_port_config(struct qcom_swrm_ctrl *ctrl)
 
 	ctrl->nports = ctrl->num_dout_ports + ctrl->num_din_ports;
 
-	ctrl->pconfig = devm_kcalloc(ctrl->dev, ctrl->nports + 1,
-					sizeof(*ctrl->pconfig), GFP_KERNEL);
+	ctrl->pconfig = devm_kzalloc_objs(ctrl->dev, *ctrl->pconfig,
+					  ctrl->nports + 1);
 	if (!ctrl->pconfig)
 		return -ENOMEM;
 
@@ -1623,7 +1623,7 @@ static int qcom_swrm_probe(struct platform_device *pdev)
 	int ret;
 	u32 val;
 
-	ctrl = devm_kzalloc(dev, sizeof(*ctrl), GFP_KERNEL);
+	ctrl = devm_kzalloc_obj(dev, *ctrl);
 	if (!ctrl)
 		return -ENOMEM;
 
@@ -1801,6 +1801,7 @@ static int __maybe_unused swrm_runtime_resume(struct device *dev)
 	}
 
 	clk_prepare_enable(ctrl->hclk);
+	enable_irq(ctrl->irq);
 
 	if (ctrl->clock_stop_not_supported) {
 		reinit_completion(&ctrl->enumeration);
@@ -1887,6 +1888,7 @@ static int __maybe_unused swrm_runtime_suspend(struct device *dev)
 		}
 	}
 
+	disable_irq(ctrl->irq);
 	clk_disable_unprepare(ctrl->hclk);
 
 	usleep_range(300, 305);

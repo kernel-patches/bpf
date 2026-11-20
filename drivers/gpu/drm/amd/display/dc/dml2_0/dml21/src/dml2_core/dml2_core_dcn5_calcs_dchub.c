@@ -242,6 +242,51 @@ void dcn5_calculate_byte_per_pixel_and_block_sizes(
 	DML_LOG_VERBOSE("DML::%s: MacroTileHeightC = %u\n", __func__, *MacroTileHeightC);
 }
 
+/*
+ * calculate_per_pipe_swath_width: Swath width of one pipe, accounting for the plane being split across pipes
+ * (ODM or MPC combine)
+ *
+ * Each pipe's viewport extends past its even share of the split:
+ * - max_recout_pixels: the widest recout (screen / dst pixels) any pipe of the split can get
+ * - h_taps: the scaler taps sampling past the split, already counted in surface (src) pixels
+ * h_ratio converts the recout into src pixels, since the swath is fetched from the surface.
+ */
+static unsigned int calculate_per_pipe_swath_width(const struct dml2_plane_parameters *plane,
+		const struct dml2_stream_parameters *stream, enum dml2_odm_mode odm_mode, unsigned int dpp_per_surface,
+		unsigned int single_dpp_swath_width, bool chroma)
+{
+	double h_ratio = chroma ? plane->composition.scaler_info.plane1.h_ratio : plane->composition.scaler_info.plane0.h_ratio;
+	unsigned int h_taps = chroma ? plane->composition.scaler_info.plane1.h_taps : plane->composition.scaler_info.plane0.h_taps;
+	unsigned int odm_factor;
+	double max_recout_pixels;
+	unsigned int swath_width;
+
+	if (odm_mode == dml2_odm_mode_combine_4to1)
+		odm_factor = 4;
+	else if (odm_mode == dml2_odm_mode_combine_3to1)
+		odm_factor = 3;
+	else if (odm_mode == dml2_odm_mode_combine_2to1)
+		odm_factor = 2;
+	else
+		odm_factor = 1;
+
+	if (odm_factor > 1) {
+		// h_active may not split evenly across ODM pipes. The last pipe takes the leftover, which is at most odm - 1 pixels
+		max_recout_pixels = (double)stream->timing.h_active / odm_factor + (odm_factor - 1);
+		// 4:2:0 / 4:2:2 outputs add a left edge pixel for the chroma subsampling filter
+		if (stream->output.output_format == dml2_420 || stream->output.output_format == dml2_s422 || stream->output.output_format == dml2_n422)
+			max_recout_pixels += 1;
+		swath_width = (unsigned int)math_ceil(max_recout_pixels * h_ratio) + h_taps;
+	} else if (dpp_per_surface == 2) {
+		// MPC splits the plane in half, with the leftover pixel of an odd width going to one pipe
+		swath_width = (single_dpp_swath_width + 1) / 2 + h_taps;
+	} else {
+		swath_width = single_dpp_swath_width;
+	}
+
+	return (unsigned int)math_min2((double)single_dpp_swath_width, (double)swath_width);
+}
+
 void dcn5_calculate_swath_width(
 		const struct dml2_display_cfg *display_cfg,
 		bool ForceSingleDPP,
@@ -273,7 +318,6 @@ void dcn5_calculate_swath_width(
 {
 	(void)BytePerPixY;
 	enum dml2_odm_mode MainSurfaceODMMode;
-	double odm_hactive_factor = 1.0;
 	unsigned int req_width_horz_y;
 	unsigned int req_width_horz_c;
 	unsigned int surface_width_ub_l;
@@ -285,6 +329,9 @@ void dcn5_calculate_swath_width(
 	DML_LOG_VERBOSE("DML::%s: NumberOfActiveSurfaces = %u\n", __func__, NumberOfActiveSurfaces);
 
 	for (unsigned int k = 0; k < NumberOfActiveSurfaces; ++k) {
+		const struct dml2_plane_parameters *plane = &display_cfg->plane_descriptors[k];
+		const struct dml2_stream_parameters *stream = &display_cfg->stream_descriptors[plane->stream_index];
+
 		if (!dml2_core_utils_is_vertical_rotation(display_cfg->plane_descriptors[k].composition.rotation_angle)) {
 			SwathWidthSingleDPPY[k] = (unsigned int)display_cfg->plane_descriptors[k].composition.viewport.plane0.width;
 		} else {
@@ -300,20 +347,7 @@ void dcn5_calculate_swath_width(
 		if (ForceSingleDPP) {
 			SwathWidthY[k] = SwathWidthSingleDPPY[k];
 		} else {
-			if (MainSurfaceODMMode == dml2_odm_mode_combine_4to1)
-				odm_hactive_factor = 4.0;
-			else if (MainSurfaceODMMode == dml2_odm_mode_combine_3to1)
-				odm_hactive_factor = 3.0;
-			else if (MainSurfaceODMMode == dml2_odm_mode_combine_2to1)
-				odm_hactive_factor = 2.0;
-
-			if (MainSurfaceODMMode == dml2_odm_mode_combine_4to1 || MainSurfaceODMMode == dml2_odm_mode_combine_3to1 || MainSurfaceODMMode == dml2_odm_mode_combine_2to1) {
-				SwathWidthY[k] = (unsigned int)(math_min2((double)SwathWidthSingleDPPY[k], math_round((double)display_cfg->stream_descriptors[display_cfg->plane_descriptors[k].stream_index].timing.h_active / odm_hactive_factor * display_cfg->plane_descriptors[k].composition.scaler_info.plane0.h_ratio)));
-			} else if (DPPPerSurface[k] == 2) {
-				SwathWidthY[k] = SwathWidthSingleDPPY[k] / 2;
-			} else {
-				SwathWidthY[k] = SwathWidthSingleDPPY[k];
-			}
+			SwathWidthY[k] = calculate_per_pipe_swath_width(plane, stream, MainSurfaceODMMode, DPPPerSurface[k], SwathWidthSingleDPPY[k], false);
 		}
 
 		DML_LOG_VERBOSE("DML::%s: k=%u HActive=%lu\n", __func__, k, display_cfg->stream_descriptors[display_cfg->plane_descriptors[k].stream_index].timing.h_active);
@@ -323,8 +357,9 @@ void dcn5_calculate_swath_width(
 		DML_LOG_VERBOSE("DML::%s: k=%u SwathWidthY=%u\n", __func__, k, SwathWidthY[k]);
 
 		if (dml2_core_utils_is_420(display_cfg->plane_descriptors[k].pixel_format) || dml2_core_utils_is_422_planar(display_cfg->plane_descriptors[k].pixel_format)) {
-			SwathWidthC[k] = SwathWidthY[k] / 2;
 			SwathWidthSingleDPPC[k] = SwathWidthSingleDPPY[k] / 2;
+			// Chroma taps apply at the chroma ratio, so the padded luma width can't simply be halved
+			SwathWidthC[k] = calculate_per_pipe_swath_width(plane, stream, MainSurfaceODMMode, DPPPerSurface[k], SwathWidthSingleDPPC[k], true);
 		} else {
 			SwathWidthC[k] = SwathWidthY[k];
 			SwathWidthSingleDPPC[k] = SwathWidthSingleDPPY[k];
@@ -836,7 +871,7 @@ void dcn5_calculate_swath_and_det_configuration(struct dml2_core_internal_scratc
 			p->SwathHeightC[k] = MaximumSwathHeightC[k];
 			RoundedUpSwathSizeBytesY[k] = p->full_swath_bytes_l[k] / 2;
 			RoundedUpSwathSizeBytesC[k] = p->full_swath_bytes_c[k];
-			p->request_size_bytes_luma[k] = dml2_core_utils_get_segment_horizontal_contiguous(p->BytePerPixY[k], p->display_cfg->plane_descriptors[k].surface.tiling)
+			p->request_size_bytes_luma[k] = dml2_core_utils_get_segment_horizontal_contiguous(p->display_cfg->plane_descriptors[k].surface.tiling, p->BytePerPixY[k])
 				== dml2_core_utils_is_vertical_rotation(p->display_cfg->plane_descriptors[k].composition.rotation_angle) ? 64 : 128;
 			p->request_size_bytes_chroma[k] = 256;
 
@@ -846,7 +881,7 @@ void dcn5_calculate_swath_and_det_configuration(struct dml2_core_internal_scratc
 			RoundedUpSwathSizeBytesY[k] = p->full_swath_bytes_l[k];
 			RoundedUpSwathSizeBytesC[k] = p->full_swath_bytes_c[k] / 2;
 			p->request_size_bytes_luma[k] = 256;
-			p->request_size_bytes_chroma[k] = dml2_core_utils_get_segment_horizontal_contiguous(p->BytePerPixC[k], p->display_cfg->plane_descriptors[k].surface.tiling)
+			p->request_size_bytes_chroma[k] = dml2_core_utils_get_segment_horizontal_contiguous(p->display_cfg->plane_descriptors[k].surface.tiling, p->BytePerPixC[k])
 				== dml2_core_utils_is_vertical_rotation(p->display_cfg->plane_descriptors[k].composition.rotation_angle) ? 64 : 128;
 
 		} else {
@@ -854,9 +889,9 @@ void dcn5_calculate_swath_and_det_configuration(struct dml2_core_internal_scratc
 			p->SwathHeightC[k] = MaximumSwathHeightC[k] / 2;
 			RoundedUpSwathSizeBytesY[k] = p->full_swath_bytes_l[k] / 2;
 			RoundedUpSwathSizeBytesC[k] = p->full_swath_bytes_c[k] / 2;
-			p->request_size_bytes_luma[k] = dml2_core_utils_get_segment_horizontal_contiguous(p->BytePerPixY[k], p->display_cfg->plane_descriptors[k].surface.tiling)
+			p->request_size_bytes_luma[k] = dml2_core_utils_get_segment_horizontal_contiguous(p->display_cfg->plane_descriptors[k].surface.tiling, p->BytePerPixY[k])
 				== dml2_core_utils_is_vertical_rotation(p->display_cfg->plane_descriptors[k].composition.rotation_angle) ? 64 : 128;
-			p->request_size_bytes_chroma[k] = dml2_core_utils_get_segment_horizontal_contiguous(p->BytePerPixC[k], p->display_cfg->plane_descriptors[k].surface.tiling)
+			p->request_size_bytes_chroma[k] = dml2_core_utils_get_segment_horizontal_contiguous(p->display_cfg->plane_descriptors[k].surface.tiling, p->BytePerPixC[k])
 				== dml2_core_utils_is_vertical_rotation(p->display_cfg->plane_descriptors[k].composition.rotation_angle) ? 64 : 128;
 		}
 
@@ -4893,7 +4928,7 @@ void dcn5_calculate_vm_group_and_request_times(
 			num_group_per_lower_vm_stage_pref = num_group_per_lower_vm_stage;
 
 			if (display_cfg->plane_descriptors[k].tdlut.setup_for_tdlut && display_cfg->gpuvm_enable) {
-				num_group_per_lower_vm_stage_pref += (unsigned int) math_ceil2(tdlut_pte_bytes_per_frame[k] / vm_group_bytes[k], 1);
+				num_group_per_lower_vm_stage_pref += (unsigned int) math_ceil2((double) tdlut_pte_bytes_per_frame[k] / (double) vm_group_bytes[k], 1);
 				if (display_cfg->gpuvm_max_page_table_levels >= 2)
 					num_group_per_lower_vm_stage_pref += 1; // tdpe0 group
 			}
@@ -5344,6 +5379,7 @@ void dcn5_adjust_pixel_clock_for_progressive_to_interlace_unit(const struct dml2
 static void dcn5_rq_dlg_get_wm_regs(const struct dml2_display_cfg *display_cfg, const struct dml2_core_internal_display_mode_lib *mode_lib, const struct dml2_utm_soc_bb *utm_soc_bb, struct dml2_dchub_watermark_regs *wm_regs)
 {
 	double refclk_freq_in_mhz = (display_cfg->overrides.hw.dlg_ref_clk_mhz > 0) ? (double)display_cfg->overrides.hw.dlg_ref_clk_mhz : utm_soc_bb->dchub_refclk_mhz;
+	unsigned int u0_10_fixed_point_scale = 1U << 10;
 
 	wm_regs->fclk_pstate = (int unsigned)(mode_lib->mp.Watermark.FCLKChangeWatermark * refclk_freq_in_mhz);
 	wm_regs->sr_enter = (int unsigned)(mode_lib->mp.Watermark.StutterEnterPlusExitWatermark * refclk_freq_in_mhz);
@@ -5356,8 +5392,8 @@ static void dcn5_rq_dlg_get_wm_regs(const struct dml2_display_cfg *display_cfg, 
 	wm_regs->usr = (int unsigned)(mode_lib->mp.Watermark.USRRetrainingWatermark * refclk_freq_in_mhz);
 	wm_regs->refcyc_per_trip_to_mem = (unsigned int)(mode_lib->mp.UrgentLatency * refclk_freq_in_mhz);
 	wm_regs->refcyc_per_meta_trip_to_mem = (unsigned int)(mode_lib->mp.MetaTripToMemory * refclk_freq_in_mhz);
-	wm_regs->frac_urg_bw_flip = (unsigned int)(mode_lib->mp.FractionOfUrgentBandwidthImmediateFlip * 1000);
-	wm_regs->frac_urg_bw_nom = (unsigned int)(mode_lib->mp.FractionOfUrgentBandwidth * 1000);
+	wm_regs->frac_urg_bw_flip = (unsigned int)math_min2(math_ceil(mode_lib->mp.FractionOfUrgentBandwidthImmediateFlip * u0_10_fixed_point_scale), u0_10_fixed_point_scale - 1);
+	wm_regs->frac_urg_bw_nom = (unsigned int)math_min2(math_ceil(mode_lib->mp.FractionOfUrgentBandwidth * u0_10_fixed_point_scale), u0_10_fixed_point_scale - 1);
 }
 
 void dcn5_get_mcif_arb_params(const struct dml2_core_internal_display_mode_lib *mode_lib, struct dml2_mcif_global_register_set *out)

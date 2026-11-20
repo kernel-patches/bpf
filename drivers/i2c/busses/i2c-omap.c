@@ -1355,7 +1355,7 @@ omap_i2c_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	omap = devm_kzalloc(&pdev->dev, sizeof(struct omap_i2c_dev), GFP_KERNEL);
+	omap = devm_kzalloc_obj(&pdev->dev, struct omap_i2c_dev);
 	if (!omap)
 		return -ENOMEM;
 
@@ -1407,7 +1407,7 @@ omap_i2c_probe(struct platform_device *pdev)
 	case OMAP_I2C_SCHEME_0:
 		omap->regs = (u8 *)reg_map_ip_v1;
 		omap->rev = omap_i2c_read_reg(omap, OMAP_I2C_REV_REG);
-		minor = OMAP_I2C_REV_SCHEME_0_MAJOR(omap->rev);
+		minor = OMAP_I2C_REV_SCHEME_0_MINOR(omap->rev);
 		major = OMAP_I2C_REV_SCHEME_0_MAJOR(omap->rev);
 		break;
 	case OMAP_I2C_SCHEME_1:

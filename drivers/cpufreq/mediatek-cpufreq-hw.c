@@ -190,8 +190,7 @@ static int mtk_cpu_create_freq_table(struct platform_device *pdev,
 	u32 temp, i, freq, prev_freq = 0;
 	void __iomem *base_table;
 
-	data->table = devm_kcalloc(dev, LUT_MAX_ENTRIES + 1,
-				   sizeof(*data->table), GFP_KERNEL);
+	data->table = devm_kzalloc_objs(dev, *data->table, LUT_MAX_ENTRIES + 1);
 	if (!data->table)
 		return -ENOMEM;
 
@@ -229,7 +228,7 @@ static int mtk_cpu_resources_init(struct platform_device *pdev,
 	int ret, i;
 	int index;
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, *data);
 	if (!data)
 		return -ENOMEM;
 
@@ -278,16 +277,32 @@ static int mtk_cpu_resources_init(struct platform_device *pdev,
 	ret = mtk_cpu_create_freq_table(pdev, data);
 	if (ret) {
 		dev_info(dev, "Domain-%d failed to create freq table\n", index);
-		return ret;
+		goto unmap;
 	}
 
 	policy->freq_table = data->table;
 	policy->driver_data = data;
 
 	return 0;
+
+unmap:
+	iounmap(base);
+
 release_region:
 	release_mem_region(res->start, resource_size(res));
 	return ret;
+}
+
+static void mtk_cpufreq_hw_cpu_exit(struct cpufreq_policy *policy)
+{
+	struct mtk_cpufreq_domain *data = policy->driver_data;
+	struct resource *res = data->res;
+	void __iomem *base = data->base;
+
+	/* HW should be in paused state now */
+	writel_relaxed(0x0, data->reg_bases[REG_FREQ_ENABLE]);
+	iounmap(base);
+	release_mem_region(res->start, resource_size(res));
 }
 
 static int mtk_cpufreq_hw_cpu_init(struct cpufreq_policy *policy)
@@ -322,6 +337,7 @@ static int mtk_cpufreq_hw_cpu_init(struct cpufreq_policy *policy)
 		if (!(sig & CPUFREQ_HW_STATUS)) {
 			pr_info("cpufreq hardware of CPU%d is not enabled\n",
 				policy->cpu);
+			mtk_cpufreq_hw_cpu_exit(policy);
 			return -ENODEV;
 		}
 
@@ -329,18 +345,6 @@ static int mtk_cpufreq_hw_cpu_init(struct cpufreq_policy *policy)
 	}
 
 	return 0;
-}
-
-static void mtk_cpufreq_hw_cpu_exit(struct cpufreq_policy *policy)
-{
-	struct mtk_cpufreq_domain *data = policy->driver_data;
-	struct resource *res = data->res;
-	void __iomem *base = data->base;
-
-	/* HW should be in paused state now */
-	writel_relaxed(0x0, data->reg_bases[REG_FREQ_ENABLE]);
-	iounmap(base);
-	release_mem_region(res->start, resource_size(res));
 }
 
 static void mtk_cpufreq_register_em(struct cpufreq_policy *policy)
@@ -392,7 +396,7 @@ static int mtk_cpufreq_hw_driver_probe(struct platform_device *pdev)
 	if (!data)
 		return -EINVAL;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(&pdev->dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

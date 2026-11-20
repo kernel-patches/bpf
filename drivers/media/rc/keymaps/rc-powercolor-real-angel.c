@@ -54,7 +54,7 @@ static struct rc_map_table powercolor_real_angel[] = {
 static struct rc_map_list powercolor_real_angel_map = {
 	.map = {
 		.scan     = powercolor_real_angel,
-		.size     = ARRAY_SIZE(powercolor_real_angel),
+		.entries  = ARRAY_SIZE(powercolor_real_angel),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_POWERCOLOR_REAL_ANGEL,
 	}

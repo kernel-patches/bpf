@@ -549,7 +549,8 @@ static int galaxybook_battery_threshold_init(struct samsung_galaxybook *galaxybo
 	galaxybook->battery_hook.remove_battery = galaxybook_battery_remove;
 	galaxybook->battery_hook.name = "Samsung Galaxy Book Battery Extension";
 
-	return devm_battery_hook_register(&galaxybook->platform->dev, &galaxybook->battery_hook);
+	return devm_acpi_battery_hook_register(&galaxybook->platform->dev,
+					       &galaxybook->battery_hook);
 }
 
 /*
@@ -1003,12 +1004,12 @@ static int galaxybook_fw_attr_init(struct samsung_galaxybook *galaxybook,
 	struct galaxybook_fw_attr *fw_attr;
 	struct attribute **attrs;
 
-	fw_attr = devm_kzalloc(&galaxybook->platform->dev, sizeof(*fw_attr), GFP_KERNEL);
+	fw_attr = devm_kzalloc_obj(&galaxybook->platform->dev, *fw_attr);
 	if (!fw_attr)
 		return -ENOMEM;
 
-	attrs = devm_kcalloc(&galaxybook->platform->dev, NUM_FW_ATTR_ENUM_ATTRS + 1,
-			     sizeof(*attrs), GFP_KERNEL);
+	attrs = devm_kzalloc_objs(&galaxybook->platform->dev, *attrs,
+				  NUM_FW_ATTR_ENUM_ATTRS + 1);
 	if (!attrs)
 		return -ENOMEM;
 
@@ -1375,7 +1376,7 @@ static int galaxybook_probe(struct platform_device *pdev)
 	if (!adev)
 		return -ENODEV;
 
-	galaxybook = devm_kzalloc(&pdev->dev, sizeof(*galaxybook), GFP_KERNEL);
+	galaxybook = devm_kzalloc_obj(&pdev->dev, *galaxybook);
 	if (!galaxybook)
 		return -ENOMEM;
 

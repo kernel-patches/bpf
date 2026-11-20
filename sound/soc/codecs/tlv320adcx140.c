@@ -1018,7 +1018,7 @@ static int adcx140_codec_probe(struct snd_soc_component *component)
 	u32 pdm_edges[ADCX140_NUM_PDM_EDGES];
 	u32 pdm_edge_val = 0;
 	int gpi_count;
-	u32 gpi_inputs[ADCX140_NUM_GPI_PINS];
+	u32 gpi_inputs[ADCX140_NUM_GPI_PINS] = {};
 	u32 gpi_input_val = 0;
 	int i;
 	int ret;
@@ -1276,7 +1276,7 @@ static int adcx140_i2c_probe(struct i2c_client *i2c)
 	struct adcx140_priv *adcx140;
 	int ret;
 
-	adcx140 = devm_kzalloc(&i2c->dev, sizeof(*adcx140), GFP_KERNEL);
+	adcx140 = devm_kzalloc_obj(&i2c->dev, *adcx140);
 	if (!adcx140)
 		return -ENOMEM;
 

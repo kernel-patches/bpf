@@ -10,6 +10,7 @@
 
 #include <linux/delay.h>
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
@@ -178,7 +179,7 @@ static int it5205_probe(struct i2c_client *client)
 	u32 val, chipid = 0;
 	int i, ret;
 
-	it = devm_kzalloc(dev, sizeof(*it), GFP_KERNEL);
+	it = devm_kzalloc_obj(dev, *it);
 	if (!it)
 		return -ENOMEM;
 

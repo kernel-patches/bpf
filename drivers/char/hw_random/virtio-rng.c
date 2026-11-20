@@ -70,7 +70,7 @@ static void request_entropy(struct virtrng_info *vi)
 static unsigned int copy_data(struct virtrng_info *vi, void *buf,
 			      unsigned int size)
 {
-	unsigned int idx, avail;
+	unsigned int idx;
 
 	/*
 	 * vi->data_avail was set from the device-reported used.len and
@@ -81,13 +81,13 @@ static unsigned int copy_data(struct virtrng_info *vi, void *buf,
 	 * steered into adjacent slab memory, including under
 	 * speculation.
 	 */
-	avail = min(vi->data_avail, sizeof(vi->data));
-	if (vi->data_idx >= avail) {
+	if (vi->data_idx >= sizeof(vi->data)) {
 		vi->data_avail = 0;
 		request_entropy(vi);
 		return 0;
 	}
-	size = min(size, avail - vi->data_idx);
+	vi->data_avail = min(vi->data_avail, sizeof(vi->data) - vi->data_idx);
+	size = min(size, vi->data_avail);
 	idx = array_index_nospec(vi->data_idx, sizeof(vi->data));
 	memcpy(buf, vi->data + idx, size);
 	vi->data_idx += size;
@@ -150,17 +150,17 @@ static void virtio_cleanup(struct hwrng *rng)
 
 static int probe_common(struct virtio_device *vdev)
 {
-	int err, index;
-	struct virtrng_info *vi = NULL;
+	int err;
+	struct virtrng_info *vi;
 
 	vi = kzalloc_obj(struct virtrng_info);
 	if (!vi)
 		return -ENOMEM;
 
-	vi->index = index = ida_alloc(&rng_index_ida, GFP_KERNEL);
-	if (index < 0) {
-		err = index;
-		goto err_ida;
+	vi->index = ida_alloc(&rng_index_ida, GFP_KERNEL);
+	if (vi->index < 0) {
+		err = vi->index;
+		goto err;
 	}
 	snprintf(vi->name, sizeof(vi->name), "virtio_rng.%d", vi->index);
 	init_completion(&vi->have_data);
@@ -177,7 +177,8 @@ static int probe_common(struct virtio_device *vdev)
 	vi->vq = virtio_find_single_vq(vdev, random_recv_done, "input");
 	if (IS_ERR(vi->vq)) {
 		err = PTR_ERR(vi->vq);
-		goto err_find;
+		ida_free(&rng_index_ida, vi->index);
+		goto err;
 	}
 
 	virtio_device_ready(vdev);
@@ -187,9 +188,8 @@ static int probe_common(struct virtio_device *vdev)
 
 	return 0;
 
-err_find:
-	ida_free(&rng_index_ida, index);
-err_ida:
+err:
+	vdev->priv = NULL;
 	kfree(vi);
 	return err;
 }
@@ -197,6 +197,11 @@ err_ida:
 static void remove_common(struct virtio_device *vdev)
 {
 	struct virtrng_info *vi = vdev->priv;
+
+	if (!vi) {
+		virtio_reset_device(vdev);
+		return;
+	}
 
 	vi->hwrng_removed = true;
 	vi->data_avail = 0;
@@ -207,6 +212,7 @@ static void remove_common(struct virtio_device *vdev)
 	virtio_reset_device(vdev);
 	vdev->config->del_vqs(vdev);
 	ida_free(&rng_index_ida, vi->index);
+	vdev->priv = NULL;
 	kfree(vi);
 }
 
@@ -238,26 +244,27 @@ static int virtrng_freeze(struct virtio_device *vdev)
 
 static int virtrng_restore(struct virtio_device *vdev)
 {
+	struct virtrng_info *vi;
 	int err;
 
 	err = probe_common(vdev);
-	if (!err) {
-		struct virtrng_info *vi = vdev->priv;
+	if (err)
+		return err;
+	vi = vdev->priv;
 
-		/*
-		 * Set hwrng_removed to ensure that virtio_read()
-		 * does not block waiting for data before the
-		 * registration is complete.
-		 */
-		vi->hwrng_removed = true;
-		err = hwrng_register(&vi->hwrng);
-		if (!err) {
-			vi->hwrng_register_done = true;
-			vi->hwrng_removed = false;
-		}
-	}
+	/*
+	 * Set hwrng_removed to ensure that virtio_read()
+	 * does not block waiting for data before the
+	 * registration is complete.
+	 */
+	vi->hwrng_removed = true;
+	err = hwrng_register(&vi->hwrng);
+	if (err)
+		return err;
 
-	return err;
+	vi->hwrng_register_done = true;
+	vi->hwrng_removed = false;
+	return 0;
 }
 
 static const struct virtio_device_id id_table[] = {

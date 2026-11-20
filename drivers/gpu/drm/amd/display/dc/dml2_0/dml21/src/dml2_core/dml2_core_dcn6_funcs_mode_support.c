@@ -126,7 +126,8 @@ bool dcn6_ms_check_scaler_support(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		plane = &display_cfg->plane_descriptors[k];
 		if (plane->composition.scaler_info.enabled == false
-				&& (dml2_core_utils_is_420(plane->pixel_format) || dml2_core_utils_is_422_planar(plane->pixel_format) || dml2_core_utils_is_422_packed(plane->pixel_format)
+			&& (((dml2_core_utils_is_420(plane->pixel_format) || dml2_core_utils_is_422_planar(plane->pixel_format)
+					|| dml2_core_utils_is_422_packed(plane->pixel_format)) && plane->composition.scaler_info.upsp_enabled == false)
 						|| plane->composition.scaler_info.plane0.h_ratio != 1.0
 						|| plane->composition.scaler_info.plane0.h_taps != 1.0
 						|| plane->composition.scaler_info.plane0.v_ratio != 1.0
@@ -328,7 +329,7 @@ void dcn6_ms_calculate_writeback_bandwidth(
 		}
 	}
 
-	DML_LOG_DEBUG_2D_ARRAY_DOUBLE(outputs->WriteBandwidth, display_cfg->num_planes, DML2_MAX_WRITEBACK);;
+	DML_LOG_DEBUG_2D_ARRAY_DOUBLE(outputs->WriteBandwidth, display_cfg->num_planes, DML2_MAX_WRITEBACK);
 	DML_LOG_FUNC_EXIT();
 }
 
@@ -1017,6 +1018,7 @@ static void dcn6_ms_calculate_num_of_dpp_required(
 				outputs->NoOfDPP[k] = 2;
 			}
 		}
+		outputs->effective_number_of_dpp[k] = outputs->NoOfDPP[k];
 		DML_LOG_VERBOSE("DML::%s: k=%d, NoOfDPP = %d\n", __func__, k,
 			outputs->NoOfDPP[k]);
 	}
@@ -1515,13 +1517,30 @@ bool dcn6_ms_check_dscclk_support(
 	const struct dml2_utm_soc_bb *soc_bb = ctx->soc_bb;
 
 	DML_LOG_FUNC_ENTER();
-	for (k = 0; k < display_cfg->num_planes; k++)
+	for (k = 0; k < display_cfg->num_planes; k++) {
 		if (inputs->required_dscclk_freq_mhz[k] > (double) soc_bb->max_dscclk_khz / 1000) {
 			outputs->support.DSCCLKRequiredMoreThanSupported = true;
 			DML_LOG_VERBOSE("DML::%s: k=%u, DSCCLKRequiredMoreThanSupported = %u\n",
 					__func__, k, outputs->support.DSCCLKRequiredMoreThanSupported);
 			break;
 		}
+
+		unsigned int num_dsc_units;
+
+		if (inputs->ODMMode[k] == dml2_odm_mode_combine_4to1)
+			num_dsc_units = 4;
+		else if (inputs->ODMMode[k] == dml2_odm_mode_combine_3to1)
+			num_dsc_units = 3;
+		else if (inputs->ODMMode[k] == dml2_odm_mode_combine_2to1)
+			num_dsc_units = 2;
+		else
+			num_dsc_units = 1;
+
+		if (inputs->required_dscclk_freq_mhz[k] > ((double)soc_bb->dprefclk_mhz / 5.0) &&
+				(inputs->support.NumberOfDSCSlices[k] / num_dsc_units) == 1) {
+			outputs->support.DSCCLKRequiredMoreThanSupported = true;
+		}
+	}
 
 	DML_LOG_DEBUG_BOOL(outputs->support.DSCCLKRequiredMoreThanSupported);
 	DML_LOG_FUNC_EXIT();
@@ -2187,7 +2206,7 @@ void dcn6_ms_calculate_min_dcfclk_deepsleep_clock(
 			inputs->BytePerPixelC,
 			inputs->SwathWidthY,
 			inputs->SwathWidthC,
-			inputs->NoOfDPP,
+			inputs->effective_number_of_dpp,
 			inputs->PSCL_FACTOR,
 			inputs->PSCL_FACTOR_CHROMA,
 			inputs->RequiredDPPCLK,
@@ -2646,7 +2665,7 @@ void dcn6_ms_calculate_hostvm_inefficiency_factor(
 			ip->remote_iommu_outstanding_translations,
 			soc_bb->max_outstanding_reqs,
 			1.0,
-			0.5);
+			soc_bb->hostvm_inefficiency_fraction);
 
 	DML_LOG_DEBUG_DOUBLE(outputs->HostVMInefficiencyFactorPrefetch);
 	DML_LOG_DEBUG_DOUBLE(outputs->HostVMInefficiencyFactor);
@@ -2724,7 +2743,7 @@ void dcn6_ms_calculate_urgent_latency(
 			ip->pixel_chunk_size_kbytes,
 			inputs->min_available_urgent_bandwidth_MBps,
 			display_cfg->num_planes,
-			inputs->NoOfDPP,
+			inputs->effective_number_of_dpp,
 			inputs->dpte_group_bytes,
 			inputs->tdlut_bytes_per_group,
 			inputs->HostVMInefficiencyFactor,
@@ -3416,6 +3435,9 @@ bool dcn6_ms_check_mode_support(
 		goto fail;
 	if (inputs->support.dcfclk_support == false)
 		goto fail;
+	// it is better to increase the state than to clamp dcfclk deep sleep to dcfclk, so we check if the dcfclk deep sleep is less than or equal to dcfclk
+	if (inputs->support.dcfclk_deep_sleep_support == false)
+		goto fail;
 	if (inputs->support.qos_bandwidth_support == false)
 		goto fail;
 	if (inputs->support.global_dram_clock_change_supported == false)
@@ -3661,12 +3683,17 @@ bool dcn6_ms_check_dcfclk_support(
 			&& inputs->DCFCLK <= soc_bb->max_dcfclk_khz / 1000.0
 			&& inputs->DCFCLK >= soc_bb->min_dcfclk_khz / 1000.0;
 
+	// it is better to increase the state than to clamp dcfclk deep sleep to dcfclk, so we check if the dcfclk deep sleep is less than or equal to dcfclk
+	outputs->support.dcfclk_deep_sleep_support = inputs->dcfclk_deepsleep <= inputs->DCFCLK;
+
 	DML_LOG_VERBOSE("outputs->support.dcfclk_support = %s\n", outputs->support.dcfclk_support ? "true" : "false");
+	DML_LOG_VERBOSE("outputs->support.dcfclk_deepsleep_support = %s\n", outputs->support.dcfclk_deep_sleep_support ? "true" : "false");
 
 	DML_LOG_DEBUG_BOOL(outputs->support.dcfclk_support);
+	DML_LOG_DEBUG_BOOL(outputs->support.dcfclk_deep_sleep_support);
 	DML_LOG_FUNC_EXIT();
 
-	return outputs->support.dcfclk_support;
+	return outputs->support.dcfclk_support && outputs->support.dcfclk_deep_sleep_support;
 }
 
 void dcn6_ms_check_alternate_channel_size_support(
@@ -3755,7 +3782,7 @@ void dcn6_ms_calculate_watermarks(
 	//CalculateWatermarks_params->LBBitPerPixel = 57; // FIXME_STAGE2, need a new ip param?
 	p->SwathWidthY = inputs->SwathWidthY;
 	p->SwathWidthC = inputs->SwathWidthC;
-	p->DPPPerSurface = inputs->NoOfDPP;
+	p->DPPPerSurface = inputs->effective_number_of_dpp;
 	p->BytePerPixelDETY = inputs->BytePerPixelInDETY;
 	p->BytePerPixelDETC = inputs->BytePerPixelInDETC;
 	p->DSTXAfterScaler = inputs->DSTXAfterScaler;
@@ -4255,7 +4282,7 @@ enum dml2_status dml2_core_dcn6_funcs_validate_solution(struct dml2_core_instanc
 	enum dml2_status status = DML2_STATUS_OK;
 	struct dml2_core_calculate_ms_context *calc_ms_ctx = &core->scratch.mode_support_locals.calc_ms_ctx;
 	struct dml2_calculate_mcache_allocation_in_out *calc_mcache_allocation_params =
-			&core->scratch.mode_support_locals.calc_mcache_allocation_params;;
+			&core->scratch.mode_support_locals.calc_mcache_allocation_params;
 	struct dml2_core_internal_display_mode_lib *mode_lib = &core->clean_me_up.mode_lib;
 	unsigned int i;
 

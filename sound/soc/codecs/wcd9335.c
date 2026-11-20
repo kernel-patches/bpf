@@ -1733,7 +1733,7 @@ static int wcd9335_slim_set_hw_params(struct wcd9335_codec *wcd,
 		cfg->port_mask |= BIT(ch->port);
 	}
 
-	cfg->chs = kcalloc(cfg->ch_count, sizeof(unsigned int), GFP_KERNEL);
+	cfg->chs = kzalloc_objs(unsigned int, cfg->ch_count);
 	if (!cfg->chs)
 		return -ENOMEM;
 
@@ -5078,7 +5078,7 @@ static int wcd9335_slim_probe(struct slim_device *slim)
 	struct wcd9335_codec *wcd;
 	int ret;
 
-	wcd = devm_kzalloc(dev, sizeof(*wcd), GFP_KERNEL);
+	wcd = devm_kzalloc_obj(dev, *wcd);
 	if (!wcd)
 		return	-ENOMEM;
 
@@ -5136,7 +5136,6 @@ static int wcd9335_slim_status(struct slim_device *sdev,
 
 	wcd->regmap = regmap_init_slimbus(sdev, &wcd9335_regmap_config);
 	if (IS_ERR(wcd->regmap)) {
-		put_device(&wcd->slim_ifc_dev->dev);
 		return dev_err_probe(dev, PTR_ERR(wcd->regmap),
 				     "Failed to allocate slim register map\n");
 	}
@@ -5144,7 +5143,6 @@ static int wcd9335_slim_status(struct slim_device *sdev,
 	wcd->if_regmap = regmap_init_slimbus(wcd->slim_ifc_dev,
 						  &wcd9335_ifc_regmap_config);
 	if (IS_ERR(wcd->if_regmap)) {
-		put_device(&wcd->slim_ifc_dev->dev);
 		return dev_err_probe(dev, PTR_ERR(wcd->if_regmap),
 				     "Failed to allocate ifc register map\n");
 	}
@@ -5152,13 +5150,11 @@ static int wcd9335_slim_status(struct slim_device *sdev,
 	ret = wcd9335_bring_up(wcd);
 	if (ret) {
 		dev_err(dev, "Failed to bringup WCD9335\n");
-		put_device(&wcd->slim_ifc_dev->dev);
 		return ret;
 	}
 
 	ret = wcd9335_irq_init(wcd);
 	if (ret) {
-		put_device(&wcd->slim_ifc_dev->dev);
 		return ret;
 	}
 

@@ -150,7 +150,7 @@ int dell_smbios_register_device(struct device *d, int priority, smbios_callback_
 {
 	struct smbios_device *priv;
 
-	priv = devm_kzalloc(d, sizeof(struct smbios_device), GFP_KERNEL);
+	priv = devm_kzalloc_obj(d, struct smbios_device);
 	if (!priv)
 		return -ENOMEM;
 	get_device(d);
@@ -406,7 +406,12 @@ static void __init parse_da_table(const struct dmi_header *dm)
 	if (dm->length < 17)
 		return;
 
-	da_supported_commands = table->supportedCmds;
+	/*
+	 * Systems may expose several 0xDA structures, and not all of them
+	 * fill in supportedCmds, so accumulate rather than letting the last
+	 * one win.
+	 */
+	da_supported_commands |= table->supportedCmds;
 
 	new_da_tokens = krealloc(da_tokens, (da_num_tokens + tokens) *
 				 sizeof(struct calling_interface_token),

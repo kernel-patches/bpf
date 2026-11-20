@@ -1053,7 +1053,7 @@ static int acpi_probe(struct platform_device *pdev)
 	if (ret)
 		goto out_platform_device;
 
-	battery_hook_register(&battery_hook);
+	acpi_battery_hook_register(&battery_hook);
 
 	return 0;
 
@@ -1068,7 +1068,7 @@ static void acpi_remove(struct platform_device *pdev)
 {
 	sysfs_remove_group(&pf_device->dev.kobj, &dev_attribute_group);
 
-	battery_hook_unregister(&battery_hook);
+	acpi_battery_hook_unregister(&battery_hook);
 	platform_device_unregister(pf_device);
 	pf_device = NULL;
 	platform_driver_unregister(&pf_driver);

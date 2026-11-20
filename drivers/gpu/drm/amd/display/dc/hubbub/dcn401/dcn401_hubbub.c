@@ -455,6 +455,7 @@ static bool hubbub401_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower)
 {
 	bool wm_pending = false;
@@ -490,9 +491,9 @@ static bool hubbub401_program_watermarks(
 			DCHUBBUB_ARB_MIN_REQ_OUTSTAND, 0x1FF);
 	*/
 
-	hubbub1_allow_self_refresh_control(hubbub, !hubbub->ctx->dc->debug.disable_stutter);
+	hubbub1_allow_self_refresh_control(hubbub, !policy.disable_stutter);
 
-	hubbub32_force_usr_retraining_allow(hubbub, hubbub->ctx->dc->debug.force_usr_allow);
+	hubbub32_force_usr_retraining_allow(hubbub, policy.force_usr_allow);
 
 	return wm_pending;
 }
@@ -1194,19 +1195,20 @@ void dcn401_wait_for_det_update(struct hubbub *hubbub, int hubp_inst)
 	}
 }
 
-bool dcn401_program_arbiter(struct hubbub *hubbub, struct dml2_display_arb_regs *arb_regs, bool safe_to_lower)
+bool dcn401_program_arbiter(struct hubbub *hubbub, uint32_t pstate_stall_threshold,
+		bool allow_sdpif_rate_limit_when_cstate_req, bool safe_to_lower)
 {
 	struct dcn20_hubbub *hubbub2 = TO_DCN20_HUBBUB(hubbub);
 
 	bool wm_pending = false;
 	uint32_t temp;
-	bool allow_sdpif_rate_limit_when_cstate_req = arb_regs->allow_sdpif_rate_limit_when_cstate_req != 0;
 
 	/* request backpressure and outstanding return threshold (unused)*/
 	//REG_UPDATE(DCHUBBUB_TIMEOUT_DETECTION_CTRL1, DCHUBBUB_TIMEOUT_REQ_STALL_THRESHOLD, arb_regs->req_stall_threshold);
 
 	/* P-State stall threshold */
-	REG_UPDATE(DCHUBBUB_TIMEOUT_DETECTION_CTRL2, DCHUBBUB_TIMEOUT_PSTATE_STALL_THRESHOLD, arb_regs->pstate_stall_threshold);
+	REG_UPDATE(DCHUBBUB_TIMEOUT_DETECTION_CTRL2,
+			DCHUBBUB_TIMEOUT_PSTATE_STALL_THRESHOLD, pstate_stall_threshold);
 
 	if (safe_to_lower || allow_sdpif_rate_limit_when_cstate_req > hubbub2->allow_sdpif_rate_limit_when_cstate_req) {
 		hubbub2->allow_sdpif_rate_limit_when_cstate_req = allow_sdpif_rate_limit_when_cstate_req;

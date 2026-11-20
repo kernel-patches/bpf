@@ -118,7 +118,7 @@ static int modepin_gpio_probe(struct platform_device *pdev)
 	struct gpio_chip *chip;
 	int status;
 
-	chip = devm_kzalloc(&pdev->dev, sizeof(*chip), GFP_KERNEL);
+	chip = devm_kzalloc_obj(&pdev->dev, *chip);
 	if (!chip)
 		return -ENOMEM;
 
@@ -145,7 +145,7 @@ static int modepin_gpio_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id modepin_platform_id[] = {
-	{ .compatible = "xlnx,zynqmp-gpio-modepin", },
+	{ .compatible = "xlnx,zynqmp-gpio-modepin" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, modepin_platform_id);

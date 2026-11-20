@@ -228,8 +228,7 @@ int atc260x_match_device(struct atc260x *atc260x, struct regmap_config *regmap_c
 		return -EINVAL;
 	}
 
-	atc260x->regmap_mutex = devm_kzalloc(dev, sizeof(*atc260x->regmap_mutex),
-					     GFP_KERNEL);
+	atc260x->regmap_mutex = devm_kzalloc_obj(dev, *atc260x->regmap_mutex);
 	if (!atc260x->regmap_mutex)
 		return -ENOMEM;
 
@@ -292,10 +291,8 @@ int atc260x_device_probe(struct atc260x *atc260x)
 	ret = devm_mfd_add_devices(dev, PLATFORM_DEVID_NONE,
 				   atc260x->cells, atc260x->nr_cells, NULL, 0,
 				   regmap_irq_get_domain(atc260x->irq_data));
-	if (ret) {
+	if (ret)
 		dev_err(dev, "Failed to add child devices: %d\n", ret);
-		regmap_del_irq_chip(atc260x->irq, atc260x->irq_data);
-	}
 
 	return ret;
 }

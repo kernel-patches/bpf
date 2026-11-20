@@ -402,22 +402,20 @@ static struct page *cma_alloc_aligned(struct cma *cma, size_t size, gfp_t gfp)
  * @dev:   Pointer to device for which the allocation is performed.
  * @size:  Requested allocation size.
  * @gfp:   Allocation flags.
+ * @nid:   NUMA node to allocate the memory on.
  *
  * tries to use device specific contiguous memory area if available, or it
- * tries to use per-numa cma, if the allocation fails, it will fallback to
- * try default global one.
+ * tries to use per-numa cma of @nid, if the allocation fails, it will fallback
+ * to try default global one.
  *
  * Note that it bypass one-page size of allocations from the per-numa and
  * global area as the addresses within one page are always contiguous, so
  * there is no need to waste CMA pages for that kind; it also helps reduce
  * fragmentations.
  */
-struct page *dma_alloc_contiguous(struct device *dev, size_t size, gfp_t gfp)
+struct page *dma_alloc_contiguous(struct device *dev, size_t size, gfp_t gfp,
+				  int nid)
 {
-#ifdef CONFIG_DMA_NUMA_CMA
-	int nid = dev_to_node(dev);
-#endif
-
 	/* CMA can be used only in the context which permits sleeping */
 	if (!gfpflags_allow_blocking(gfp))
 		return NULL;
@@ -529,19 +527,6 @@ static int __init rmem_cma_validate(unsigned long node, phys_addr_t *align)
 	return 0;
 }
 
-static int __init rmem_cma_fixup(unsigned long node, phys_addr_t base,
-				    phys_addr_t size)
-{
-	int ret = __rmem_cma_verify_node(node);
-
-	if (ret)
-		return ret;
-
-	/* Architecture specific contiguous memory fixup. */
-	dma_contiguous_early_fixup(base, size);
-	return 0;
-}
-
 static int __init rmem_cma_setup(unsigned long node, struct reserved_mem *rmem)
 {
 	bool default_cma = of_get_flat_dt_prop(node, "linux,cma-default", NULL);
@@ -563,6 +548,9 @@ static int __init rmem_cma_setup(unsigned long node, struct reserved_mem *rmem)
 		return ret;
 	}
 
+	/* Architecture specific contiguous memory fixup. */
+	dma_contiguous_early_fixup(rmem->base, rmem->size);
+
 	if (default_cma)
 		dma_contiguous_default_area = cma;
 
@@ -580,7 +568,6 @@ static int __init rmem_cma_setup(unsigned long node, struct reserved_mem *rmem)
 
 static const struct reserved_mem_ops rmem_cma_ops = {
 	.node_validate  = rmem_cma_validate,
-	.node_fixup	= rmem_cma_fixup,
 	.node_init	= rmem_cma_setup,
 	.device_init	= rmem_cma_device_init,
 	.device_release = rmem_cma_device_release,

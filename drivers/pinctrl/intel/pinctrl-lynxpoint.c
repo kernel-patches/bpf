@@ -715,7 +715,7 @@ static int lp_gpio_probe(struct platform_device *pdev)
 	if (!soc)
 		return -ENODEV;
 
-	lg = devm_kzalloc(dev, sizeof(*lg), GFP_KERNEL);
+	lg = devm_kzalloc_obj(dev, *lg);
 	if (!lg)
 		return -ENOMEM;
 
@@ -723,8 +723,8 @@ static int lp_gpio_probe(struct platform_device *pdev)
 	lg->soc = soc;
 
 	lg->ncommunities = lg->soc->ncommunities;
-	lg->communities = devm_kcalloc(dev, lg->ncommunities,
-				       sizeof(*lg->communities), GFP_KERNEL);
+	lg->communities = devm_kzalloc_objs(dev, *lg->communities,
+					    lg->ncommunities);
 	if (!lg->communities)
 		return -ENOMEM;
 
@@ -785,9 +785,8 @@ static int lp_gpio_probe(struct platform_device *pdev)
 		girq->init_hw = lp_gpio_irq_init_hw;
 		girq->parent_handler = lp_gpio_irq_handler;
 		girq->num_parents = 1;
-		girq->parents = devm_kcalloc(dev, girq->num_parents,
-					     sizeof(*girq->parents),
-					     GFP_KERNEL);
+		girq->parents = devm_kzalloc_objs(dev, *girq->parents,
+						  girq->num_parents);
 		if (!girq->parents)
 			return -ENOMEM;
 		girq->parents[0] = irq;
@@ -833,18 +832,7 @@ static struct platform_driver lp_gpio_driver = {
 		.acpi_match_table = lynxpoint_gpio_acpi_match,
 	},
 };
-
-static int __init lp_gpio_init(void)
-{
-	return platform_driver_register(&lp_gpio_driver);
-}
-subsys_initcall(lp_gpio_init);
-
-static void __exit lp_gpio_exit(void)
-{
-	platform_driver_unregister(&lp_gpio_driver);
-}
-module_exit(lp_gpio_exit);
+subsys_platform_driver(lp_gpio_driver);
 
 MODULE_AUTHOR("Mathias Nyman (Intel)");
 MODULE_AUTHOR("Andy Shevchenko (Intel)");

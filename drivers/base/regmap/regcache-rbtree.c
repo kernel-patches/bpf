@@ -346,9 +346,9 @@ regcache_rbtree_node_alloc(struct regmap *map, unsigned int reg)
 	if (!rbnode->block)
 		goto err_free;
 
-	rbnode->cache_present = kcalloc(BITS_TO_LONGS(rbnode->blklen),
-					sizeof(*rbnode->cache_present),
-					map->alloc_flags);
+	rbnode->cache_present = kzalloc_objs(*rbnode->cache_present,
+					     BITS_TO_LONGS(rbnode->blklen),
+					     map->alloc_flags);
 	if (!rbnode->cache_present)
 		goto err_free_block;
 
@@ -494,8 +494,10 @@ static int regcache_rbtree_sync(struct regmap *map, unsigned int min,
 		ret = regcache_sync_block(map, rbnode->block,
 					  rbnode->cache_present,
 					  rbnode->base_reg, start, end);
-		if (ret != 0)
+		if (ret != 0) {
+			map->async = false;
 			return ret;
+		}
 	}
 
 	map->async = false;

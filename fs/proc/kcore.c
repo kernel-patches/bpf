@@ -69,6 +69,7 @@ static size_t kcore_notes_len;
 static size_t kcore_data_offset;
 DEFINE_STATIC_PERCPU_RWSEM(kclist_lock);
 static int kcore_need_update = 1;
+static bool kcore_enabled __ro_after_init = true;
 
 /*
  * Returns > 0 for RAM pages, 0 for non-RAM pages, < 0 on error
@@ -664,12 +665,12 @@ static int release_kcore(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static const struct proc_ops kcore_proc_ops = {
-	.proc_flags	= PROC_ENTRY_PERMANENT,
-	.proc_read_iter	= read_kcore_iter,
-	.proc_open	= open_kcore,
-	.proc_release	= release_kcore,
-	.proc_lseek	= default_llseek,
+static const struct file_operations kcore_fops = {
+	.read_iter	= read_kcore_iter,
+	.splice_read	= copy_splice_read,
+	.open		= open_kcore,
+	.release	= release_kcore,
+	.llseek		= default_llseek,
 };
 
 /* just remember that we have to update kcore */
@@ -722,9 +723,20 @@ static void __init add_modules_range(void)
 }
 #endif
 
+static int __init parse_kcore(char *str)
+{
+	return kstrtobool(str, &kcore_enabled);
+}
+early_param("kcore", parse_kcore);
+
 static int __init proc_kcore_init(void)
 {
-	proc_root_kcore = proc_create("kcore", S_IRUSR, NULL, &kcore_proc_ops);
+	if (!kcore_enabled) {
+		pr_info("/proc/kcore disabled on command line\n");
+		return 0;
+	}
+
+	proc_root_kcore = proc_create_fops("kcore", S_IRUSR, NULL, &kcore_fops);
 	if (!proc_root_kcore) {
 		pr_err("couldn't create /proc/kcore\n");
 		return 0; /* Always returns 0. */

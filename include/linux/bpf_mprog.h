@@ -30,8 +30,8 @@
  *   if (!ret) {
  *       if (entry != entry_new) {
  *           // swap @entry to @entry_new at attach location
- *           // ensure there are no inflight users of @entry:
- *           synchronize_rcu();
+ *           // nothing is released, no need to wait for users of @entry:
+ *           bpf_mprog_defer_sync(entry);
  *       }
  *       bpf_mprog_commit(entry);
  *   } else {
@@ -104,9 +104,13 @@
  *
  * Fast path accesses the active bpf_mprog_entry within RCU critical section
  * (in case of tcx it runs in NAPI which provides RCU protection there,
- * other users might need explicit rcu_read_lock()). The bpf_mprog_commit()
- * assumes that for the old bpf_mprog_entry there are no inflight users
- * anymore.
+ * other users might need explicit rcu_read_lock()). In the detach case the
+ * bpf_mprog_commit() assumes that for the old bpf_mprog_entry there are no
+ * inflight users anymore. In the attach case nothing is released, and the
+ * old bpf_mprog_entry only has to stay intact until its users are gone:
+ * bpf_mprog_defer_sync() records the RCU state after the swap, and
+ * bpf_mprog_peer() waits for it before the old bpf_mprog_entry is written
+ * again.
  *
  * The READ_ONCE()/WRITE_ONCE() pairing for bpf_mprog_fp's prog access is for
  * the replacement case where we don't swap the bpf_mprog_entry.
@@ -147,6 +151,7 @@ struct bpf_mprog_bundle {
 	struct bpf_mprog_cp cp_items[BPF_MPROG_MAX];
 	struct bpf_prog *ref;
 	atomic64_t revision;
+	unsigned long rcu_state;
 	u32 count;
 };
 
@@ -158,10 +163,21 @@ struct bpf_tuple {
 static inline struct bpf_mprog_entry *
 bpf_mprog_peer(const struct bpf_mprog_entry *entry)
 {
+	/*
+	 * The peer was active until the last swap and the caller is going
+	 * to overwrite it, therefore ensure that there are no inflight
+	 * users on it anymore. Paired with bpf_mprog_defer_sync().
+	 */
+	cond_synchronize_rcu(entry->parent->rcu_state);
 	if (entry == &entry->parent->a)
 		return &entry->parent->b;
 	else
 		return &entry->parent->a;
+}
+
+static inline void bpf_mprog_defer_sync(struct bpf_mprog_entry *entry)
+{
+	entry->parent->rcu_state = start_poll_synchronize_rcu();
 }
 
 static inline void bpf_mprog_bundle_init(struct bpf_mprog_bundle *bundle)
@@ -172,6 +188,7 @@ static inline void bpf_mprog_bundle_init(struct bpf_mprog_bundle *bundle)
 
 	memset(bundle, 0, sizeof(*bundle));
 	atomic64_set(&bundle->revision, 1);
+	bundle->rcu_state = get_completed_synchronize_rcu();
 	bundle->a.parent = bundle;
 	bundle->b.parent = bundle;
 }

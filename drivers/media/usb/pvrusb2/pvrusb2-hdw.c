@@ -2015,7 +2015,22 @@ static int pvr2_hdw_load_subdev(struct pvr2_hdw *hdw,
 		return -EINVAL;
 	}
 
-	if (i2ccnt == 1) {
+	if (i2ccnt == 1 && mid == PVR2_CLIENT_ID_CX25840) {
+		/* in hdw: the I2C core keeps the platform_data pointer */
+		struct i2c_board_info info = {
+			.addr = i2caddr[0],
+			.platform_data = &hdw->cx25840_pdata,
+		};
+
+		hdw->cx25840_pdata.radio_sif_5_5mhz =
+			hdw->hdw_desc->flag_radio_sif_5_5mhz;
+		pvr2_trace(PVR2_TRACE_INIT,
+			   "Module ID %u: Setting up with specified i2c address 0x%x",
+			   mid, i2caddr[0]);
+		strscpy(info.type, fname, sizeof(info.type));
+		sd = v4l2_i2c_new_subdev_board(&hdw->v4l2_dev, &hdw->i2c_adap,
+					       &info, NULL);
+	} else if (i2ccnt == 1) {
 		pvr2_trace(PVR2_TRACE_INIT,
 			   "Module ID %u: Setting up with specified i2c address 0x%x",
 			   mid, i2caddr[0]);
@@ -2398,6 +2413,7 @@ struct pvr2_hdw *pvr2_hdw_create(struct usb_interface *intf,
 	hdw->master_state = PVR2_STATE_DEAD;
 
 	init_waitqueue_head(&hdw->state_wait_data);
+	INIT_WORK(&hdw->workpoll, pvr2_hdw_worker_poll);
 
 	hdw->tuner_signal_stale = !0;
 	cx2341x_fill_defaults(&hdw->enc_ctl_state);
@@ -2566,8 +2582,6 @@ struct pvr2_hdw *pvr2_hdw_create(struct usb_interface *intf,
 		}
 	} while (0);
 	mutex_unlock(&pvr2_unit_mtx);
-
-	INIT_WORK(&hdw->workpoll, pvr2_hdw_worker_poll);
 
 	if (hdw->unit_number == -1)
 		goto fail;
@@ -4037,14 +4051,26 @@ int pvr2_hdw_cmd_decoder_reset(struct pvr2_hdw *hdw)
 }
 
 
+static int pvr2_hdw_is_hcw_160xxx(struct pvr2_hdw *hdw)
+{
+	return le16_to_cpu(hdw->usb_dev->descriptor.idVendor) == 0x2040 &&
+	       (le16_to_cpu(hdw->usb_dev->descriptor.idProduct) == 0x7502 ||
+		le16_to_cpu(hdw->usb_dev->descriptor.idProduct) == 0x7510);
+}
+
+/* Nonzero if the demod is held in reset while in analog mode */
+int pvr2_hdw_demod_reset_in_analog(struct pvr2_hdw *hdw)
+{
+	return hdw->hdw_desc->digital_control_scheme ==
+		PVR2_DIGITAL_SCHEME_HAUPPAUGE && !pvr2_hdw_is_hcw_160xxx(hdw);
+}
+
 static int pvr2_hdw_cmd_hcw_demod_reset(struct pvr2_hdw *hdw, int onoff)
 {
 	hdw->flag_ok = !0;
 
 	/* Use this for Hauppauge 160xxx only */
-	if (le16_to_cpu(hdw->usb_dev->descriptor.idVendor) == 0x2040 &&
-	    (le16_to_cpu(hdw->usb_dev->descriptor.idProduct) == 0x7502 ||
-	     le16_to_cpu(hdw->usb_dev->descriptor.idProduct) == 0x7510)) {
+	if (pvr2_hdw_is_hcw_160xxx(hdw)) {
 		pr_debug("%s(): resetting demod on Hauppauge 160xxx platform skipped\n",
 			 __func__);
 		/* Can't reset 160xxx or it will trash Demod tristate */
@@ -5057,6 +5083,16 @@ void pvr2_hdw_status_poll(struct pvr2_hdw *hdw)
 	   now.  (Of course, no sub-drivers seem to implement it either.
 	   But now it's a chicken and egg problem...) */
 	v4l2_device_call_all(&hdw->v4l2_dev, 0, tuner, g_tuner, vtp);
+	if (vtp->type == V4L2_TUNER_RADIO &&
+	    hdw->hdw_desc->flag_radio_sif_5_5mhz) {
+		/*
+		 * Whether this FM path is stereo depends on the cx2584x
+		 * audio firmware: ask it again last, so tuner-core's
+		 * default doesn't decide.
+		 */
+		v4l2_device_call_all(&hdw->v4l2_dev, PVR2_CLIENT_ID_CX25840,
+				     tuner, g_tuner, vtp);
+	}
 	pvr2_trace(PVR2_TRACE_CHIPS, "subdev status poll type=%u strength=%u audio=0x%x cap=0x%x low=%u hi=%u",
 		   vtp->type,
 		   vtp->signal, vtp->rxsubchans, vtp->capability,

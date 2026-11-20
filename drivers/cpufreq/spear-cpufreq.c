@@ -136,7 +136,8 @@ static int spear_cpufreq_target(struct cpufreq_policy *policy,
 	newfreq = clk_round_rate(srcclk, newfreq * mult);
 	if (newfreq <= 0) {
 		pr_err("clk_round_rate failed for cpu src clock\n");
-		return newfreq;
+		ret = newfreq;
+		goto out_put_clk;
 	}
 
 	if (mult == 2)
@@ -147,6 +148,9 @@ static int spear_cpufreq_target(struct cpufreq_policy *policy,
 	if (ret)
 		pr_err("CPU Freq: cpu clk_set_rate failed: %d\n", ret);
 
+out_put_clk:
+	if (mult == 2)
+		clk_put(srcclk);
 	return ret;
 }
 

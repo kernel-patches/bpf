@@ -271,6 +271,10 @@ static const struct ata_port_info ahci_port_info[] = {
 static const struct pci_device_id ahci_pci_tbl[] = {
 	/* Intel */
 	{
+		/* Nova Lake PCH-S RAID */
+		PCI_VDEVICE(INTEL, 0x6e66),
+		.driver_data = board_ahci,
+	}, {
 		/* Comet Lake PCH-H RAID */
 		PCI_VDEVICE(INTEL, 0x06d6),
 		.driver_data = board_ahci_pcs_quirk,
@@ -2931,7 +2935,7 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (rc)
 		return rc;
 
-	hpriv = devm_kzalloc(dev, sizeof(*hpriv), GFP_KERNEL);
+	hpriv = devm_kzalloc_obj(dev, *hpriv);
 	if (!hpriv)
 		return -ENOMEM;
 	hpriv->flags |= (unsigned long)pi.private_data;

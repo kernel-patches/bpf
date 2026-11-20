@@ -1248,6 +1248,32 @@ static void dm_test_hdcp_create_workqueue_sets_dtm_v3_for_dcn31(struct kunit *te
 }
 
 /**
+ * dm_test_hdcp_create_workqueue_sets_dtm_v3_for_dcn60 - DCN 6.0 enables DTM v3
+ * @test: KUnit test context
+ *
+ * On a DCN 6.0 device, hdcp_create_workqueue() must set the per-link
+ * dtm_v3_supported cap.
+ */
+static void dm_test_hdcp_create_workqueue_sets_dtm_v3_for_dcn60(struct kunit *test)
+{
+	struct amdgpu_device *adev = dm_kunit_alloc_adev(test);
+	struct cp_psp cp_psp = {0};
+	struct dc *dc = dm_kunit_alloc_dc_with_ctx(test);
+	struct hdcp_workqueue *work;
+
+	adev->dev = adev->ddev.dev;
+	dc->caps.max_links = 1;
+	dc->ctx->dce_version = DCN_VERSION_6_0;
+
+	work = hdcp_create_workqueue(adev, &cp_psp, dc);
+
+	KUNIT_ASSERT_NOT_NULL(test, work);
+	KUNIT_EXPECT_EQ(test, work[0].hdcp.config.psp.caps.dtm_v3_supported, 1);
+
+	hdcp_destroy(&adev->dev->kobj, work);
+}
+
+/**
  * dm_test_hdcp_create_workqueue_initializes_all_links - loop covers every link
  * @test: KUnit test context
  *
@@ -1352,9 +1378,9 @@ static void dm_test_hdcp_destroy_frees_and_removes_sysfs(struct kunit *test)
 	INIT_DELAYED_WORK(&work->watchdog_timer_dwork, dummy_work_fn);
 	INIT_DELAYED_WORK(&work->property_validate_dwork, dummy_work_fn);
 
-	work->srm = kzalloc(16, GFP_KERNEL);
+	work->srm = kzalloc_objs(*work->srm, 16);
 	KUNIT_ASSERT_NOT_NULL(test, work->srm);
-	work->srm_temp = kzalloc(16, GFP_KERNEL);
+	work->srm_temp = kzalloc_objs(*work->srm_temp, 16);
 	KUNIT_ASSERT_NOT_NULL(test, work->srm_temp);
 
 	kobj = setup_destroy_sysfs(test, work);
@@ -2564,6 +2590,7 @@ static struct kunit_case dm_hdcp_test_cases[] = {
 	KUNIT_CASE(dm_test_hdcp_create_workqueue_zero_max_links_returns_null),
 	KUNIT_CASE(dm_test_hdcp_create_workqueue_initializes_work),
 	KUNIT_CASE(dm_test_hdcp_create_workqueue_sets_dtm_v3_for_dcn31),
+	KUNIT_CASE(dm_test_hdcp_create_workqueue_sets_dtm_v3_for_dcn60),
 	KUNIT_CASE(dm_test_hdcp_create_workqueue_initializes_all_links),
 	/* hdcp_destroy() */
 	KUNIT_CASE(dm_test_hdcp_destroy_frees_and_removes_sysfs),

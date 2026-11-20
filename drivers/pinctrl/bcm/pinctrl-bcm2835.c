@@ -760,18 +760,6 @@ static void bcm2835_pctl_pin_dbg_show(struct pinctrl_dev *pctldev,
 		irq, irq_type_names[pc->irq_type[offset]]);
 }
 
-static void bcm2835_pctl_dt_free_map(struct pinctrl_dev *pctldev,
-		struct pinctrl_map *maps, unsigned num_maps)
-{
-	int i;
-
-	for (i = 0; i < num_maps; i++)
-		if (maps[i].type == PIN_MAP_TYPE_CONFIGS_PIN)
-			kfree(maps[i].data.configs.configs);
-
-	kfree(maps);
-}
-
 static int bcm2835_pctl_dt_node_to_map_func(struct bcm2835_pinctrl *pc,
 		struct device_node *np, u32 pin, u32 fnum,
 		struct pinctrl_map **maps)
@@ -916,7 +904,7 @@ static int bcm2835_pctl_dt_node_to_map(struct pinctrl_dev *pctldev,
 	return 0;
 
 out:
-	bcm2835_pctl_dt_free_map(pctldev, maps, num_pins * maps_per_pin);
+	pinconf_generic_dt_free_map(pctldev, maps, num_pins * maps_per_pin);
 	return err;
 }
 
@@ -926,7 +914,7 @@ static const struct pinctrl_ops bcm2835_pctl_ops = {
 	.get_group_pins = bcm2835_pctl_get_group_pins,
 	.pin_dbg_show = bcm2835_pctl_pin_dbg_show,
 	.dt_node_to_map = bcm2835_pctl_dt_node_to_map,
-	.dt_free_map = bcm2835_pctl_dt_free_map,
+	.dt_free_map = pinconf_generic_dt_free_map,
 };
 
 static int bcm2835_pmx_free(struct pinctrl_dev *pctldev,
@@ -1299,7 +1287,7 @@ static int bcm2835_pinctrl_probe(struct platform_device *pdev)
 	BUILD_BUG_ON(ARRAY_SIZE(bcm2835_gpio_pins) != BCM2711_NUM_GPIOS);
 	BUILD_BUG_ON(ARRAY_SIZE(bcm2835_gpio_groups) != BCM2711_NUM_GPIOS);
 
-	pc = devm_kzalloc(dev, sizeof(*pc), GFP_KERNEL);
+	pc = devm_kzalloc_obj(dev, *pc);
 	if (!pc)
 		return -ENOMEM;
 
@@ -1362,18 +1350,15 @@ static int bcm2835_pinctrl_probe(struct platform_device *pdev)
 	gpio_irq_chip_set_chip(girq, &bcm2835_gpio_irq_chip);
 	girq->parent_handler = bcm2835_gpio_irq_handler;
 	girq->num_parents = BCM2835_NUM_IRQS;
-	girq->parents = devm_kcalloc(dev, BCM2835_NUM_IRQS,
-				     sizeof(*girq->parents),
-				     GFP_KERNEL);
+	girq->parents = devm_kzalloc_objs(dev, *girq->parents, BCM2835_NUM_IRQS);
 	if (!girq->parents) {
 		err = -ENOMEM;
 		goto out_remove;
 	}
 
 	if (is_7211) {
-		pc->wake_irq = devm_kcalloc(dev, BCM2835_NUM_IRQS,
-					    sizeof(*pc->wake_irq),
-					    GFP_KERNEL);
+		pc->wake_irq = devm_kzalloc_objs(dev, *pc->wake_irq,
+						 BCM2835_NUM_IRQS);
 		if (!pc->wake_irq) {
 			err = -ENOMEM;
 			goto out_remove;

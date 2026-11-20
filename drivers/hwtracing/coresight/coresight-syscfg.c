@@ -126,7 +126,7 @@ cscfg_alloc_csdev_feat(struct coresight_device *csdev, struct cscfg_feature_desc
 	struct device *dev = csdev->dev.parent;
 	int i;
 
-	feat_csdev = devm_kzalloc(dev, sizeof(struct cscfg_feature_csdev), GFP_KERNEL);
+	feat_csdev = devm_kzalloc_obj(dev, struct cscfg_feature_csdev);
 	if (!feat_csdev)
 		return NULL;
 
@@ -139,9 +139,9 @@ cscfg_alloc_csdev_feat(struct coresight_device *csdev, struct cscfg_feature_desc
 	 * feature descriptor.
 	 */
 	if (feat_csdev->nr_params) {
-		feat_csdev->params_csdev = devm_kcalloc(dev, feat_csdev->nr_params,
-							sizeof(struct cscfg_parameter_csdev),
-							GFP_KERNEL);
+		feat_csdev->params_csdev = devm_kzalloc_objs(dev,
+							     struct cscfg_parameter_csdev,
+							     feat_csdev->nr_params);
 		if (!feat_csdev->params_csdev)
 			return NULL;
 
@@ -158,9 +158,9 @@ cscfg_alloc_csdev_feat(struct coresight_device *csdev, struct cscfg_feature_desc
 	 * will fill out according to feature descriptor and device requirements.
 	 */
 	feat_csdev->nr_regs = feat_desc->nr_regs;
-	feat_csdev->regs_csdev = devm_kcalloc(dev, feat_csdev->nr_regs,
-					      sizeof(struct cscfg_regval_csdev),
-					      GFP_KERNEL);
+	feat_csdev->regs_csdev = devm_kzalloc_objs(dev,
+						   struct cscfg_regval_csdev,
+						   feat_csdev->nr_regs);
 	if (!feat_csdev->regs_csdev)
 		return NULL;
 
@@ -409,6 +409,8 @@ static void cscfg_remove_owned_csdev_features(struct coresight_device *csdev, vo
 
 	if (list_empty(&csdev->feature_csdev_list))
 		return;
+
+	guard(raw_spinlock_irqsave)(&csdev->cscfg_csdev_lock);
 
 	list_for_each_entry_safe(feat_csdev, tmp, &csdev->feature_csdev_list, node) {
 		if (feat_csdev->feat_desc->load_owner == load_owner)
@@ -1210,8 +1212,12 @@ static int cscfg_create_device(void)
 	dev->init_name = "cs_system_cfg";
 
 	err = device_register(dev);
-	if (err)
+	if (err) {
+		/* cscfg_dev_release() takes cscfg_mutex */
+		mutex_unlock(&cscfg_mutex);
 		put_device(dev);
+		return err;
+	}
 
 create_dev_exit_unlock:
 	mutex_unlock(&cscfg_mutex);

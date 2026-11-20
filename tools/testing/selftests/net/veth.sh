@@ -41,13 +41,16 @@ create_ns() {
 		ip -n $ns link set dev lo up
 	done
 
-	ip link add name veth$SRC type veth peer name veth$DST
+	ip link add name "veth$SRC" "$@" type veth \
+		peer name "veth$DST" "$@" || return 1
 
 	for ns in $SRC $DST; do
 		ip link set dev veth$ns netns $BASE$ns up
 		ip -n $BASE$ns addr add dev veth$ns $BM_NET_V4$ns/24
 		ip -n $BASE$ns addr add dev veth$ns $BM_NET_V6$ns/64 nodad
 	done
+
+	return 0
 }
 
 __chk_flag() {
@@ -107,6 +110,68 @@ chk_xdp_feature() {
 	fi
 }
 
+chk_queue_napi() {
+	local msg="$1"
+	local target=$2
+	local expected=$3
+	local ns=$BASE$target
+	local ifindex
+	local queues
+	local napis
+	local st
+	local linked
+
+	ifindex=`ip netns exec $ns cat /sys/class/net/veth$target/ifindex`
+	queues=`ip netns exec $ns "$YNL" --family netdev --dump queue-get \
+		--output-json --json "{\"ifindex\": $ifindex}" 2>&1`
+	st=$?
+	napis=`ip netns exec $ns "$YNL" --family netdev --dump napi-get \
+		--output-json --json "{\"ifindex\": $ifindex}" 2>&1` || st=$?
+
+	printf "%-60s" "$msg"
+	if [ $st -ne 0 ]; then
+		echo " fail - ynl cli error: $queues $napis"
+		ret=1
+		return
+	fi
+
+	queues=`echo "$queues" | \
+		jq -c 'map(select(.type == "rx") | ."napi-id" // empty) | sort'`
+	napis=`echo "$napis" | jq -c 'map(.id) | sort'`
+	linked=`echo "$queues" | jq length`
+
+	if [ "$queues" = "$napis" ] && [ "$linked" = "$expected" ]; then
+		echo " ok "
+	else
+		echo " fail - expected $expected found $queues napis $napis"
+		ret=1
+	fi
+}
+
+get_napi_ids() {
+	local ns=$BASE$1
+	local ifindex
+
+	ifindex=`ip netns exec $ns cat /sys/class/net/veth$1/ifindex`
+	ip netns exec $ns "$YNL" --family netdev --dump queue-get \
+		--output-json --json "{\"ifindex\": $ifindex}" |
+		jq -c 'sort_by(.id) | map(select(.type == "rx") | ."napi-id")'
+}
+
+chk_napi_ids() {
+	local msg="$1"
+	local ids
+
+	ids=`get_napi_ids $2`
+	printf "%-60s" "$msg"
+	if [ -n "$ids" ] && [ "$ids" = "$NAPI_IDS" ]; then
+		echo " ok "
+	else
+		echo " fail - expected $NAPI_IDS found $ids"
+		ret=1
+	fi
+}
+
 chk_channels() {
 	local msg="$1"
 	local target=$2
@@ -129,6 +194,78 @@ chk_channels() {
 		echo " fail rx:$rx:$cur_rx tx:$tx:$cur_tx combined:n/a:$cur_combined"
 	fi
 }
+
+chk_carrier() (
+	target=$1
+	state=$2
+	expected=$3
+	carrier=0
+
+	# IFF_LOWER_UP is reported only for running interfaces.
+	[ "$state" = up ] || return 0
+
+	if ! link=$(ip -n "$BASE$target" -o link show dev "veth$target"); then
+		echo " fail - cannot read veth$target link state"
+		return 1
+	fi
+	case "$link" in
+		*LOWER_UP*) carrier=1 ;;
+	esac
+	if [ "$carrier" -ne "$expected" ]; then
+		printf ' fail - veth%s carrier is %s, expected %s\n' \
+			"$target" "$carrier" "$expected"
+		return 1
+	fi
+)
+
+# Keep per-case variables separate from the other tests.
+chk_channels_carrier() (
+	src_state=$1
+	dst_state=$2
+	expected=0
+	err=0
+	msg="carrier after channel change ($src_state/$dst_state)"
+
+	if ! create_ns numtxqueues 2 numrxqueues 2; then
+		printf "%-60s" "$msg"
+		echo " skip - cannot create veth pair"
+		cleanup
+		return 0
+	fi
+
+	ip -n "$NS_SRC" link set dev "veth$SRC" "$src_state" || err=1
+	ip -n "$NS_DST" link set dev "veth$DST" "$dst_state" || err=1
+	[ "$src_state" = up ] && [ "$dst_state" = up ] && expected=1
+	chk_carrier "$SRC" "$src_state" "$expected" || err=1
+	chk_carrier "$DST" "$dst_state" "$expected" || err=1
+
+	for target in "$SRC" "$DST"; do
+		for count in 1 2; do
+			ip netns exec "$BASE$target" ethtool -L "veth$target" \
+				rx "$count" tx "$count" || err=1
+			chk_carrier "$SRC" "$src_state" "$expected" || err=1
+			chk_carrier "$DST" "$dst_state" "$expected" || err=1
+		done
+
+		if ip netns exec "$BASE$target" ethtool -L "veth$target" \
+			rx 3 tx 3 \
+			>/dev/null 2>&1; then
+			echo " fail - out-of-range channel counts were accepted"
+			err=1
+		fi
+		chk_carrier "$SRC" "$src_state" "$expected" || err=1
+		chk_carrier "$DST" "$dst_state" "$expected" || err=1
+	done
+
+	cleanup
+	printf "%-60s" "$msg"
+	if [ "$err" -eq 0 ]; then
+		echo " ok "
+	else
+		echo " fail "
+	fi
+	return "$err"
+)
 
 chk_gro() {
 	local msg="$1"
@@ -255,7 +392,12 @@ fi
 
 [ $CPUS -lt 2 ] && echo "Only one CPU available, some tests will be skipped"
 [ $STRESS -gt 0 -a $CPUS -lt 3 ] && echo " stress test will be skipped, too"
-[ ! -f "$YNL" ] && echo "ynl cli not found, ndo-xmit tests will be skipped"
+[ ! -f "$YNL" ] && echo "ynl cli not found, ndo-xmit/napi tests will be skipped"
+[ ! -x "$(command -v jq)" ] && echo "jq not found, napi tests will be skipped"
+
+chk_channels_carrier up up || ret=1
+chk_channels_carrier up down || ret=1
+chk_channels_carrier down up || ret=1
 
 create_ns
 chk_gro_flag "default - gro flag" $SRC off
@@ -363,6 +505,49 @@ else
 	echo " ok "
 fi
 cleanup
+
+if [ -f "$YNL" ] && [ -x "$(command -v jq)" ]; then
+	create_ns
+	RXQ=1
+	if [ $CPUS -gt 1 ]; then
+		ip netns exec $NS_DST ethtool -L veth$DST rx 2
+		RXQ=2
+	fi
+	chk_queue_napi "queue napi - default" $DST 0
+	ip netns exec $NS_DST ethtool -K veth$DST gro on
+	chk_queue_napi "           - with gro on" $DST $RXQ
+	NAPI_IDS=`get_napi_ids $DST`
+	if [ $CPUS -gt 1 ]; then
+		ip netns exec $NS_DST ethtool -L veth$DST rx 1
+		chk_queue_napi "           - fewer rx channels with gro" $DST 1
+		ip netns exec $NS_DST ethtool -L veth$DST rx 2
+		chk_queue_napi "           - more rx channels with gro" $DST 2
+		chk_napi_ids "           - same napi ids" $DST
+	fi
+	ip -n $NS_DST link set dev veth$DST xdp object ${BPF_FILE} section xdp
+	chk_queue_napi "           - with gro and xdp on" $DST $RXQ
+	ip -n $NS_DST link set dev veth$DST xdp off
+	chk_queue_napi "           - after xdp off with gro on" $DST $RXQ
+	ip netns exec $NS_DST ethtool -K veth$DST gro off
+	chk_queue_napi "           - after gro off" $DST 0
+	ip -n $NS_DST link set dev veth$DST xdp object ${BPF_FILE} section xdp
+	chk_queue_napi "           - with xdp on" $DST $RXQ
+	chk_napi_ids "           - same napi ids" $DST
+	if [ $CPUS -gt 1 ]; then
+		ip netns exec $NS_DST ethtool -L veth$DST rx 1
+		chk_queue_napi "           - fewer rx channels with xdp" $DST 1
+		ip netns exec $NS_DST ethtool -L veth$DST rx 2
+		chk_queue_napi "           - more rx channels with xdp" $DST 2
+		chk_napi_ids "           - same napi ids" $DST
+	fi
+	ip -n $NS_DST link set dev veth$DST down
+	ip -n $NS_DST link set dev veth$DST up
+	chk_queue_napi "           - after down and up" $DST $RXQ
+	chk_napi_ids "           - same napi ids" $DST
+	ip -n $NS_DST link set dev veth$DST xdp off
+	chk_queue_napi "           - after xdp off" $DST 0
+	cleanup
+fi
 
 create_ns
 

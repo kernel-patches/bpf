@@ -25,7 +25,7 @@
 #define RNG_AUTOSUSPEND_TIMEOUT		100
 
 #define USEC_POLL			2
-#define TIMEOUT_POLL			60
+#define TIMEOUT_POLL			1000
 
 #define RNG_CTRL			0x00
 #define RNG_EN				BIT(0)
@@ -95,7 +95,9 @@ static int mtk_rng_read(struct hwrng *rng, void *buf, size_t max, bool wait)
 	struct mtk_rng *priv = to_mtk_rng(rng);
 	int retval = 0;
 
-	pm_runtime_get_sync(priv->dev);
+	retval = pm_runtime_resume_and_get(priv->dev);
+	if (retval < 0)
+		return retval;
 
 	while (max >= sizeof(u32)) {
 		if (!mtk_rng_wait_ready(rng, wait))
@@ -167,7 +169,7 @@ static int mtk_rng_probe(struct platform_device *pdev)
 	int ret;
 	struct mtk_rng *priv;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(&pdev->dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -210,13 +212,6 @@ static int mtk_rng_probe(struct platform_device *pdev)
 		priv->rng.read = mtk_rng_read;
 	}
 
-	ret = devm_hwrng_register(&pdev->dev, &priv->rng);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to register rng device: %d\n",
-			ret);
-		return ret;
-	}
-
 	if (!(priv->flags & MTK_RNG_SMC)) {
 		dev_set_drvdata(&pdev->dev, priv);
 		pm_runtime_set_autosuspend_delay(&pdev->dev,
@@ -225,6 +220,13 @@ static int mtk_rng_probe(struct platform_device *pdev)
 		ret = devm_pm_runtime_enable(&pdev->dev);
 		if (ret)
 			return ret;
+	}
+
+	ret = devm_hwrng_register(&pdev->dev, &priv->rng);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to register rng device: %d\n",
+			ret);
+		return ret;
 	}
 
 	dev_info(&pdev->dev, "registered RNG driver\n");

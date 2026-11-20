@@ -222,7 +222,7 @@ static int blzp1600_gpio_probe(struct platform_device *pdev)
 	struct gpio_chip *gc;
 	int ret;
 
-	chip = devm_kzalloc(&pdev->dev, sizeof(*chip), GFP_KERNEL);
+	chip = devm_kzalloc_obj(&pdev->dev, *chip);
 	if (!chip)
 		return -ENOMEM;
 
@@ -258,7 +258,7 @@ static int blzp1600_gpio_probe(struct platform_device *pdev)
 		gpio_irq_chip_set_chip(girq, &blzp1600_gpio_irqchip);
 		girq->parent_handler = blzp1600_gpio_irqhandler;
 		girq->num_parents = 1;
-		girq->parents = devm_kcalloc(&pdev->dev, 1, sizeof(*girq->parents), GFP_KERNEL);
+		girq->parents = devm_kzalloc_objs(&pdev->dev, *girq->parents, 1);
 		if (!girq->parents)
 			return -ENOMEM;
 
@@ -270,8 +270,8 @@ static int blzp1600_gpio_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id blzp1600_gpio_of_match[] = {
-	{ .compatible = "blaize,blzp1600-gpio", },
-	{ /* Sentinel */ },
+	{ .compatible = "blaize,blzp1600-gpio" },
+	{ /* Sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, blzp1600_gpio_of_match);
 

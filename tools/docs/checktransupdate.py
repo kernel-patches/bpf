@@ -7,6 +7,9 @@ in different locales, e.g., zh_CN. More specially, it uses `git log`
 commit to find the latest english commit from the translation commit
 (order by author date) and the latest english commits from HEAD. If
 differences occur, report the file and commits that need to be updated.
+The English kernel documentation and corresponding translation are
+matched by their relative paths under
+Documentation/ and Documentation/translations/<locale>/, respectively.
 
 The usage is as follows:
 - tools/docs/checktransupdate.py -l zh_CN
@@ -29,26 +32,30 @@ import os
 import re
 import time
 import logging
+import subprocess
+import sys
 from argparse import ArgumentParser, ArgumentTypeError, BooleanOptionalAction
 from datetime import datetime
 
 
 def get_origin_path(file_path):
-    """Get the origin path from the translation path"""
-    paths = file_path.split("/")
-    tidx = paths.index("translations")
-    opaths = paths[:tidx]
-    opaths += paths[tidx + 2 :]
-    return "/".join(opaths)
+    """Map a translated path to the same path under Documentation/."""
+    parts = file_path.split("/")
+    return "/".join([parts[0], *parts[3:]])
 
 
 def get_latest_commit_from(file_path, commit):
     """Get the latest commit from the specified commit for the specified file"""
-    command = f"git log --pretty=format:%H%n%aD%n%cD%n%n%B {commit} -1 -- {file_path}"
-    logging.debug(command)
-    pipe = os.popen(command)
-    result = pipe.read()
-    result = result.split("\n")
+    command = [
+        "git", "log", "--pretty=format:%H%n%aD%n%cD%n%n%B",
+        commit, "-1", "--", file_path,
+    ]
+    logging.debug("%s", command)
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode:
+        logging.warning("Cannot read Git revision %s: %s", commit, completed.stderr.strip())
+        return None
+    result = completed.stdout.split("\n")
     if len(result) <= 1:
         return None
 
@@ -65,6 +72,11 @@ def get_latest_commit_from(file_path, commit):
 def get_origin_from_trans(origin_path, t_from_head):
     """Get the latest origin commit from the translation commit"""
     o_from_t = get_latest_commit_from(origin_path, t_from_head["hash"])
+    if o_from_t is None:
+        # The translation can enter the history on a different branch before
+        # the English source is merged. Search the current source history by
+        # author date in that case, using the same heuristic as below.
+        o_from_t = get_latest_commit_from(origin_path, "HEAD")
     while o_from_t is not None and o_from_t["author_date"] > t_from_head["author_date"]:
         o_from_t = get_latest_commit_from(origin_path, o_from_t["hash"] + "^")
     if o_from_t is not None:
@@ -128,20 +140,20 @@ def valid_commit(commit):
     msg = pretty_output(commit)
     return "Merge tag" not in msg
 
+
 def check_per_file(file_path):
     """Check the translation status for the specified file"""
     opath = get_origin_path(file_path)
-
     if not os.path.isfile(opath):
         logging.error("Cannot find the origin path for %s", file_path)
-        return
+        return False
 
     o_from_head = get_latest_commit_from(opath, "HEAD")
     t_from_head = get_latest_commit_from(file_path, "HEAD")
 
     if o_from_head is None or t_from_head is None:
         logging.error("Cannot find the latest commit for %s", file_path)
-        return
+        return False
 
     o_from_t = get_origin_from_trans_smartly(opath, t_from_head)
     # notice, o_from_t from get_*_smartly() is always more accurate than from get_*()
@@ -150,7 +162,7 @@ def check_per_file(file_path):
 
     if o_from_t is None:
         logging.error("Error: Cannot find the latest origin commit for %s", file_path)
-        return
+        return False
 
     if o_from_head["hash"] == o_from_t["hash"]:
         logging.debug("No update needed for %s", file_path)
@@ -165,14 +177,17 @@ def check_per_file(file_path):
                 logging.info("commit %s", pretty_output(commit))
                 count += 1
         logging.info("%d commits needs resolving in total\n", count)
+    return True
 
 
 def valid_locales(locale):
     """Check if the locale is valid or not"""
     script_path = os.path.dirname(os.path.abspath(__file__))
     linux_path = os.path.join(script_path, "../..")
-    if not os.path.isdir(f"{linux_path}/Documentation/translations/{locale}"):
-        raise ArgumentTypeError("Invalid locale: {locale}")
+    if locale not in os.listdir(f"{linux_path}/Documentation/translations") or not os.path.isdir(
+        f"{linux_path}/Documentation/translations/{locale}"
+    ):
+        raise ArgumentTypeError(f"Invalid locale: {locale}")
     return locale
 
 
@@ -270,31 +285,24 @@ def main():
 
     # Configure logging based on the --log argument
     log_level = getattr(logging, args.log.upper(), logging.INFO)
-    config_logging(log_level)
+    config_logging(log_level, args.logfile)
 
     # Get files related to linux path
     files = args.files
     if len(files) == 0:
-        offical_files = list_files_with_excluding_folders(
+        official_files = list_files_with_excluding_folders(
             os.path.join(linux_path, "Documentation"), ["translations", "output"], "rst"
         )
-
-        for file in offical_files:
-            # split the path into parts
-            path_parts = file.split(os.sep)
-            # find the index of the "Documentation" directory
-            kindex = path_parts.index("Documentation")
-            # insert the translations and locale after the Documentation directory
-            new_path_parts = path_parts[:kindex + 1] + ["translations", args.locale] \
-                           + path_parts[kindex + 1 :]
-            # join the path parts back together
-            new_file = os.sep.join(new_path_parts)
-            if os.path.isfile(new_file):
-                files.append(new_file)
-            else:
-                if args.print_missing_translations:
-                    logging.info(os.path.relpath(os.path.abspath(file), linux_path))
-                    logging.info("No translation in the locale of %s\n", args.locale)
+        for file in official_files:
+            relative = os.path.relpath(file, os.path.join(linux_path, "Documentation"))
+            translated = os.path.join(
+                linux_path, "Documentation", "translations", args.locale, relative
+            )
+            if os.path.isfile(translated):
+                files.append(translated)
+            elif args.print_missing_translations:
+                logging.info(os.path.relpath(file, linux_path))
+                logging.info("No translation in the locale of %s\n", args.locale)
     else:
         # check if the files are directories or files
         new_files = []
@@ -312,7 +320,8 @@ def main():
     os.chdir(linux_path)
 
     for file in files:
-        check_per_file(file)
+        if not check_per_file(file):
+            sys.exit(1)
 
 
 if __name__ == "__main__":

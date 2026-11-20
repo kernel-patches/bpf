@@ -593,7 +593,8 @@ void ipu6_mmu_unmap(struct ipu6_mmu_info *mmu_info, unsigned long iova,
 	 * by the hardware
 	 */
 	if (!IS_ALIGNED(iova | size, min_pagesz)) {
-		dev_err(NULL, "unaligned: iova 0x%lx size 0x%zx min_pagesz 0x%x\n",
+		dev_err(mmu_info->dev,
+			"unaligned: iova 0x%lx size 0x%zx min_pagesz 0x%x\n",
 			iova, size, min_pagesz);
 		return;
 	}
@@ -668,7 +669,7 @@ static void ipu6_mmu_destroy(struct ipu6_mmu *mmu)
 	free_dummy_page(mmu_info);
 	dma_unmap_single(mmu_info->dev, TBL_PHYS_ADDR(mmu_info->l1_pt_dma),
 			 PAGE_SIZE, DMA_BIDIRECTIONAL);
-	free_page((unsigned long)mmu_info->dummy_l2_pt);
+	free_dummy_l2_pt(mmu_info);
 	free_page((unsigned long)mmu_info->l1_pt);
 	kfree(mmu_info);
 }
@@ -680,7 +681,7 @@ struct ipu6_mmu *ipu6_mmu_init(struct device *dev,
 	struct ipu6_mmu *mmu;
 	int ret;
 
-	mmu = devm_kzalloc(dev, sizeof(*mmu), GFP_KERNEL);
+	mmu = devm_kzalloc_obj(dev, *mmu);
 	if (!mmu)
 		return ERR_PTR(-ENOMEM);
 

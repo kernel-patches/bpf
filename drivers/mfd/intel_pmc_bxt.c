@@ -414,7 +414,7 @@ static int intel_pmc_create_devices(struct intel_pmc_dev *pmc)
 }
 
 static const struct acpi_device_id intel_pmc_acpi_ids[] = {
-	{ "INT34D2" },
+	{ .id = "INT34D2" },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, intel_pmc_acpi_ids);
@@ -425,7 +425,7 @@ static int intel_pmc_probe(struct platform_device *pdev)
 	struct intel_pmc_dev *pmc;
 	int ret;
 
-	pmc = devm_kzalloc(&pdev->dev, sizeof(*pmc), GFP_KERNEL);
+	pmc = devm_kzalloc_obj(&pdev->dev, *pmc);
 	if (!pmc)
 		return -ENOMEM;
 

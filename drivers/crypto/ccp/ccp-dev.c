@@ -21,9 +21,6 @@
 #include <linux/hw_random.h>
 #include <linux/cpu.h>
 #include <linux/atomic.h>
-#ifdef CONFIG_X86
-#include <asm/cpu_device_id.h>
-#endif
 #include <linux/ccp.h>
 
 #include "ccp-dev.h"
@@ -477,7 +474,7 @@ struct ccp_device *ccp_alloc_struct(struct sp_device *sp)
 	struct device *dev = sp->dev;
 	struct ccp_device *ccp;
 
-	ccp = devm_kzalloc(dev, sizeof(*ccp), GFP_KERNEL);
+	ccp = devm_kzalloc_obj(dev, *ccp);
 	if (!ccp)
 		return NULL;
 	ccp->dev = dev;

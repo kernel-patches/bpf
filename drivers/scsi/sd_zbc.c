@@ -20,9 +20,6 @@
 
 #include "sd.h"
 
-#define CREATE_TRACE_POINTS
-#include "sd_trace.h"
-
 /* Whether or not a SCSI zone descriptor describes a gap zone. */
 static bool sd_zbc_is_gap_zone(const u8 buf[64])
 {
@@ -222,7 +219,7 @@ int sd_zbc_report_zones(struct gendisk *disk, sector_t sector,
 {
 	struct scsi_disk *sdkp = scsi_disk(disk);
 	sector_t lba = sectors_to_logical(sdkp->device, sector);
-	unsigned int nr, i;
+	unsigned int nr, i, max_in_buf;
 	unsigned char *buf;
 	u64 zone_length, start_lba;
 	size_t offset, buflen = 0;
@@ -241,13 +238,18 @@ int sd_zbc_report_zones(struct gendisk *disk, sector_t sector,
 	if (!buf)
 		return -ENOMEM;
 
+	max_in_buf = (buflen - ZBC_REPORT_ZONES_HEADER_SIZE) /
+		ZBC_ZONE_DESCRIPTOR_SIZE;
+
 	while (zone_idx < nr_zones && lba < sdkp->capacity) {
 		ret = sd_zbc_do_report_zones(sdkp, buf, buflen, lba, true);
 		if (ret)
 			goto out;
 
 		offset = 0;
-		nr = min(nr_zones, get_unaligned_be32(&buf[0]) / 64);
+		nr = min3(nr_zones - zone_idx,
+			  get_unaligned_be32(&buf[0]) / ZBC_ZONE_DESCRIPTOR_SIZE,
+			  max_in_buf);
 		if (!nr)
 			break;
 

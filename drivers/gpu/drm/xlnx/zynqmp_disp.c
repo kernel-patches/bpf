@@ -987,8 +987,7 @@ u32 *zynqmp_disp_layer_drm_formats(struct zynqmp_disp_layer *layer,
 		return NULL;
 	}
 
-	formats = kcalloc(layer->info->num_formats, sizeof(*formats),
-			  GFP_KERNEL);
+	formats = kzalloc_objs(*formats, layer->info->num_formats);
 	if (!formats) {
 		*num_formats = 0;
 		return NULL;
@@ -1024,8 +1023,7 @@ u32 *zynqmp_disp_live_layer_formats(struct zynqmp_disp_layer *layer,
 		return NULL;
 	}
 
-	formats = kcalloc(layer->info->num_formats, sizeof(*formats),
-			  GFP_KERNEL);
+	formats = kzalloc_objs(*formats, layer->info->num_formats);
 	if (!formats) {
 		*num_formats = 0;
 		return NULL;
@@ -1435,7 +1433,7 @@ int zynqmp_disp_probe(struct zynqmp_dpsub *dpsub)
 		struct zynqmp_disp_layer *layer;
 
 		layer = &disp->layers[ZYNQMP_DPSUB_LAYER_VID];
-		dpsub->dma_align = 1 << layer->dmas[0].chan->device->copy_align;
+		dpsub->dma_align = 1 << dmaengine_get_copy_align(layer->dmas[0].chan);
 	}
 
 	dpsub->disp = disp;

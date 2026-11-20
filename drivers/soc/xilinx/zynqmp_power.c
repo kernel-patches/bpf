@@ -9,6 +9,7 @@
  *  Rajan Vaja <rajan.vaja@xilinx.com>
  */
 
+#include <linux/interrupt.h>
 #include <linux/mailbox_client.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -303,9 +304,8 @@ static int zynqmp_pm_probe(struct platform_device *pdev)
 	 * is not available to use) or -ENODEV(Xilinx Event Manager not compiled),
 	 * then use ipi-mailbox or interrupt method.
 	 */
-	zynqmp_pm_init_suspend_work = devm_kzalloc(&pdev->dev,
-						   sizeof(struct zynqmp_pm_work_struct),
-						   GFP_KERNEL);
+	zynqmp_pm_init_suspend_work = devm_kzalloc_obj(&pdev->dev,
+						       struct zynqmp_pm_work_struct);
 	if (!zynqmp_pm_init_suspend_work)
 		return -ENOMEM;
 
@@ -326,9 +326,8 @@ static int zynqmp_pm_probe(struct platform_device *pdev)
 		else
 			return -ENODEV;
 
-		zynqmp_pm_init_restart_work = devm_kzalloc(&pdev->dev,
-							   sizeof(struct zynqmp_pm_work_struct),
-							   GFP_KERNEL);
+		zynqmp_pm_init_restart_work = devm_kzalloc_obj(&pdev->dev,
+							       struct zynqmp_pm_work_struct);
 		if (!zynqmp_pm_init_restart_work)
 			return -ENOMEM;
 
@@ -346,7 +345,7 @@ static int zynqmp_pm_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Failed to Register with Xilinx Event manager %d\n", ret);
 		return ret;
 	} else if (of_property_present(pdev->dev.of_node, "mboxes")) {
-		client = devm_kzalloc(&pdev->dev, sizeof(*client), GFP_KERNEL);
+		client = devm_kzalloc_obj(&pdev->dev, *client);
 		if (!client)
 			return -ENOMEM;
 

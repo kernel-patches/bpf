@@ -94,7 +94,7 @@
 
 #define PXA_NR_IRQS		(IRQ_BOARD_START)
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 struct irq_data;
 struct pt_regs;
 

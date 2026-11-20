@@ -285,8 +285,9 @@ static void irdma_process_aeq(struct irdma_pci_f *rf)
 	struct irdma_sc_qp *qp = NULL;
 	struct irdma_qp_host_ctx_info *ctx_info = NULL;
 	struct irdma_device *iwdev = rf->iwdev;
-	struct irdma_sc_srq *srq;
+	struct irdma_srq *iwsrq;
 	unsigned long flags;
+	u32 srq_id;
 
 	u32 aeqcnt = 0;
 
@@ -437,8 +438,19 @@ static void irdma_process_aeq(struct irdma_pci_f *rf)
 			irdma_cq_rem_ref(&iwcq->ibcq);
 			break;
 		case IRDMA_AE_SRQ_LIMIT:
-			srq = (struct irdma_sc_srq *)(uintptr_t)info->compl_ctx;
-			irdma_srq_event(srq);
+			srq_id = FIELD_GET(IRDMA_CQPSQ_SRQ_SRQCTX,
+					   info->compl_ctx);
+			xa_lock_irqsave(&rf->srq_xa, flags);
+			iwsrq = xa_load(&rf->srq_xa, srq_id);
+			if (!iwsrq) {
+				xa_unlock_irqrestore(&rf->srq_xa, flags);
+				continue;
+			}
+			refcount_inc(&iwsrq->refcnt);
+			xa_unlock_irqrestore(&rf->srq_xa, flags);
+
+			irdma_srq_event(&iwsrq->sc_srq);
+			irdma_srq_rem_ref(iwsrq);
 			break;
 		case IRDMA_AE_SRQ_CATASTROPHIC_ERROR:
 			break;
@@ -700,7 +712,7 @@ static void irdma_destroy_cqp(struct irdma_pci_f *rf)
 static void irdma_destroy_virt_aeq(struct irdma_pci_f *rf)
 {
 	struct irdma_aeq *aeq = &rf->aeq;
-	u32 pg_cnt = DIV_ROUND_UP(aeq->mem.size, PAGE_SIZE);
+	u32 pg_cnt = DIV_ROUND_UP(aeq->mem.size, IRDMA_HW_PAGE_SIZE);
 	dma_addr_t *pg_arr = (dma_addr_t *)aeq->palloc.level1.addr;
 
 	irdma_unmap_vm_page_list(&rf->hw, pg_arr, pg_cnt);
@@ -1479,7 +1491,7 @@ static int irdma_create_virt_aeq(struct irdma_pci_f *rf, u32 size)
 	if (!aeq->mem.va)
 		return -ENOMEM;
 
-	pg_cnt = DIV_ROUND_UP(aeq->mem.size, PAGE_SIZE);
+	pg_cnt = DIV_ROUND_UP(aeq->mem.size, IRDMA_HW_PAGE_SIZE);
 	status = irdma_get_pble(rf->pble_rsrc, &aeq->palloc, pg_cnt, true);
 	if (status) {
 		vfree(aeq->mem.va);
@@ -2119,6 +2131,7 @@ static void irdma_set_hw_rsrc(struct irdma_pci_f *rf)
 	spin_lock_init(&rf->arp_lock);
 	spin_lock_init(&rf->qptable_lock);
 	spin_lock_init(&rf->cqtable_lock);
+	xa_init_flags(&rf->srq_xa, XA_FLAGS_LOCK_IRQ);
 	spin_lock_init(&rf->qh_list_lock);
 }
 
@@ -2141,7 +2154,6 @@ static u32 irdma_calc_mem_rsrc_size(struct irdma_pci_f *rf)
 	rsrc_size += sizeof(unsigned long) * BITS_TO_LONGS(rf->max_mcg);
 	rsrc_size += sizeof(struct irdma_qp **) * rf->max_qp;
 	rsrc_size += sizeof(struct irdma_cq **) * rf->max_cq;
-	rsrc_size += sizeof(struct irdma_srq **) * rf->max_srq;
 
 	return rsrc_size;
 }
@@ -2484,28 +2496,32 @@ struct irdma_apbvt_entry *irdma_add_apbvt(struct irdma_device *iwdev, u16 port)
 	struct irdma_apbvt_entry *entry;
 	unsigned long flags;
 
+	mutex_lock(&cm_core->apbvt_add_mutex);
 	spin_lock_irqsave(&cm_core->apbvt_lock, flags);
 	entry = irdma_lookup_apbvt_entry(cm_core, port);
-	if (entry) {
-		spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
-		return entry;
-	}
+	spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
+	if (entry)
+		goto out;
 
-	entry = kzalloc_obj(*entry, GFP_ATOMIC);
-	if (!entry) {
-		spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
-		return NULL;
-	}
+	entry = kzalloc_obj(*entry);
+	if (!entry)
+		goto out;
 
 	entry->port = port;
 	entry->use_cnt = 1;
-	hash_add(cm_core->apbvt_hash_tbl, &entry->hlist, entry->port);
-	spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
 
 	if (irdma_cqp_manage_apbvt_cmd(iwdev, port, true)) {
 		kfree(entry);
-		return NULL;
+		entry = NULL;
+		goto out;
 	}
+
+	spin_lock_irqsave(&cm_core->apbvt_lock, flags);
+	hash_add(cm_core->apbvt_hash_tbl, &entry->hlist, entry->port);
+	spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
+
+out:
+	mutex_unlock(&cm_core->apbvt_add_mutex);
 
 	return entry;
 }

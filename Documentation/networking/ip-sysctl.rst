@@ -1587,7 +1587,7 @@ cipso_rbm_strictvalid - BOOLEAN
 	- 0 (disabled)
 	- 1 (enabled)
 
-	Default: 0 (disabled)
+	Default: 1 (enabled)
 
 IP Variables
 ============
@@ -1907,6 +1907,8 @@ igmp_qrv - INTEGER
 	Default: 2 (as specified by RFC2236 8.1)
 
 	Minimum: 1 (as specified by RFC6636 4.5)
+
+	Maximum: 255
 
 force_igmp_version - INTEGER
 	- 0 - (default) No enforcement of a IGMP version, IGMPv1/v2 fallback
@@ -2416,7 +2418,7 @@ flowlabel_state_ranges - BOOLEAN
 	- 0 (disabled)
 	- 1 (enabled)
 
-	Default: 1 (enabled)
+	Default: 0 (disabled)
 
 
 flowlabel_reflect - INTEGER
@@ -2516,6 +2518,8 @@ mld_qrv - INTEGER
 	Default: 2 (as specified by RFC3810 9.1)
 
 	Minimum: 1 (as specified by RFC6636 4.5)
+
+	Maximum: 255
 
 max_dst_opts_number - INTEGER
 	Maximum number of non-padding TLVs allowed in a Destination
@@ -2679,6 +2683,8 @@ force_forwarding - BOOLEAN
 	Enable forwarding on this interface only -- regardless of the setting on
 	``conf/all/forwarding``. When setting ``conf.all.forwarding`` to 0,
 	the ``force_forwarding`` flag will be reset on all interfaces.
+	Writing to ``conf/all/force_forwarding`` applies the value to all
+	interfaces, even if the value did not change.
 
 fwmark_reflect - BOOLEAN
 	Controls the fwmark of kernel-generated IPv6 reply packets that are not
@@ -2952,9 +2958,9 @@ router_solicitation_interval - INTEGER
 
 router_solicitations - INTEGER
 	Number of Router Solicitations to send until assuming no
-	routers are present.
+	routers are present. A value of -1 means no limit.
 
-	Default: 3
+	Default: -1
 
 use_oif_addrs_only - BOOLEAN
 	When enabled, the candidate source addresses for destinations
@@ -3030,7 +3036,7 @@ regen_max_retry - INTEGER
 	Number of attempts before give up attempting to generate
 	valid temporary addresses.
 
-	Default: 5
+	Default: 3
 
 max_addresses - INTEGER
 	Maximum number of autoconfigured addresses per interface.  Setting

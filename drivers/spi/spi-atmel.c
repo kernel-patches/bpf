@@ -867,8 +867,7 @@ static int atmel_spi_next_xfer_dma_submit(struct spi_controller *host,
 	spi_writel(as, IER, SPI_BIT(OVRES));
 
 	/* Put the callback on the RX transfer only, that should finish last */
-	rxdesc->callback = dma_callback;
-	rxdesc->callback_param = host;
+	dmaengine_desc_set_callback(rxdesc, dma_callback, NULL, host);
 
 	/* Submit and fire RX and TX with TX last so we're ready to read! */
 	cookie = dmaengine_submit(rxdesc);
@@ -923,7 +922,10 @@ static int atmel_spi_set_xfer_speed(struct atmel_spi *as,
 	 * Calculate the lowest divider that satisfies the
 	 * constraint, assuming div32/fdiv/mbz == 0.
 	 */
-	scbr = DIV_ROUND_UP(bus_hz, xfer->speed_hz);
+	if (xfer->speed_hz)
+		scbr = DIV_ROUND_UP(bus_hz, xfer->speed_hz);
+	else
+		scbr = (1 << SPI_SCBR_SIZE) - 1;
 
 	/*
 	 * If the resulting divider doesn't fit into the

@@ -666,8 +666,7 @@ tca6507_led_dt_init(struct device *dev)
 	if (!count || count > NUM_LEDS)
 		return ERR_PTR(-ENODEV);
 
-	tca_leds = devm_kcalloc(dev, NUM_LEDS, sizeof(struct led_info),
-				GFP_KERNEL);
+	tca_leds = devm_kzalloc_objs(dev, struct led_info, NUM_LEDS);
 	if (!tca_leds)
 		return ERR_PTR(-ENOMEM);
 
@@ -694,8 +693,7 @@ tca6507_led_dt_init(struct device *dev)
 		tca_leds[reg] = led;
 	}
 
-	pdata = devm_kzalloc(dev, sizeof(struct tca6507_platform_data),
-			     GFP_KERNEL);
+	pdata = devm_kzalloc_obj(dev, struct tca6507_platform_data);
 	if (!pdata)
 		return ERR_PTR(-ENOMEM);
 
@@ -710,6 +708,11 @@ static const struct of_device_id __maybe_unused of_tca6507_leds_match[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, of_tca6507_leds_match);
+
+static void tca6507_flush_work(void *work)
+{
+	flush_work(work);
+}
 
 static int tca6507_probe(struct i2c_client *client)
 {
@@ -730,14 +733,17 @@ static int tca6507_probe(struct i2c_client *client)
 		dev_err(dev, "Need %d entries in platform-data list\n", NUM_LEDS);
 		return PTR_ERR(pdata);
 	}
-	tca = devm_kzalloc(dev, sizeof(*tca), GFP_KERNEL);
+	tca = devm_kzalloc_obj(dev, *tca);
 	if (!tca)
 		return -ENOMEM;
 
 	tca->client = client;
-	INIT_WORK(&tca->work, tca6507_work);
 	spin_lock_init(&tca->lock);
-	i2c_set_clientdata(client, tca);
+
+	INIT_WORK(&tca->work, tca6507_work);
+	err = devm_add_action_or_reset(dev, tca6507_flush_work, &tca->work);
+	if (err)
+		return err;
 
 	for (i = 0; i < NUM_LEDS; i++) {
 		struct tca6507_led *l = tca->leds + i;
@@ -766,20 +772,12 @@ static int tca6507_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void tca6507_remove(struct i2c_client *client)
-{
-	struct tca6507_chip *tca = i2c_get_clientdata(client);
-
-	cancel_work_sync(&tca->work);
-}
-
 static struct i2c_driver tca6507_driver = {
 	.driver   = {
 		.name    = "leds-tca6507",
 		.of_match_table = of_match_ptr(of_tca6507_leds_match),
 	},
 	.probe    = tca6507_probe,
-	.remove   = tca6507_remove,
 	.id_table = tca6507_id,
 };
 

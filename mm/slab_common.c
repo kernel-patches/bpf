@@ -47,12 +47,17 @@ struct kmem_cache *kmem_cache;
  * Any flag that adds per-object metadata should be included,
  * since slab merging can update s->inuse that affects the metadata layout.
  */
-#define SLAB_NEVER_MERGE (SLAB_DEBUG_FLAGS | SLAB_TYPESAFE_BY_RCU | \
-		SLAB_NOLEAKTRACE | SLAB_FAILSLAB | SLAB_NO_MERGE | \
-		SLAB_OBJ_EXT_IN_OBJ)
+#define SLAB_NEVER_MERGE ((SLAB_DEBUG_FLAGS & ~SLAB_DEBUG_NOOP) | \
+		SLAB_TYPESAFE_BY_RCU | SLAB_NOLEAKTRACE | SLAB_FAILSLAB | \
+		SLAB_NO_MERGE | SLAB_OBJ_EXT_IN_OBJ)
 
+/*
+ * Set of flags that caches need to both have or both not have in order to
+ * be mergeable. These need to be also reflected in create_unique_id().
+ */
 #define SLAB_MERGE_SAME (SLAB_RECLAIM_ACCOUNT | SLAB_CACHE_DMA | \
-			 SLAB_CACHE_DMA32 | SLAB_ACCOUNT | SLAB_MAY_ACCOUNT)
+			 SLAB_CACHE_DMA32 | SLAB_ACCOUNT | SLAB_MAY_ACCOUNT | \
+			 SLAB_DEBUG_NOOP)
 
 /*
  * Merge control. If this is set then no merging of slab caches will occur.
@@ -346,6 +351,9 @@ struct kmem_cache *__kmem_cache_create_args(const char *name,
 	 */
 	if (args->sheaf_capacity)
 		flags |= SLAB_NO_MERGE;
+
+	if (slab_tiny_enabled)
+		flags &= ~SLAB_RECLAIM_ACCOUNT;
 
 	mutex_lock(&slab_mutex);
 
@@ -835,11 +843,7 @@ EXPORT_SYMBOL(kmalloc_size_roundup);
 #define KMALLOC_CGROUP_NAME(sz)
 #endif
 
-#ifndef CONFIG_SLUB_TINY
 #define KMALLOC_RCL_NAME(sz)	.name[KMALLOC_RECLAIM] = "kmalloc-rcl-" #sz,
-#else
-#define KMALLOC_RCL_NAME(sz)
-#endif
 
 #ifdef CONFIG_KMALLOC_PARTITION_CACHES
 #define __KMALLOC_PARTITION_CONCAT(a, b) a ## b
@@ -976,7 +980,11 @@ new_kmalloc_cache(int idx, enum kmalloc_cache_type type)
 	unsigned int aligned_size = kmalloc_info[idx].size;
 	int aligned_idx = idx;
 
-	if ((KMALLOC_RECLAIM != KMALLOC_NORMAL) && (type == KMALLOC_RECLAIM)) {
+	if (type == KMALLOC_RECLAIM) {
+		if (slab_tiny_enabled) {
+			kmalloc_caches[type][idx] = kmalloc_caches[KMALLOC_NORMAL][idx];
+			return;
+		}
 		flags |= SLAB_RECLAIM_ACCOUNT;
 	} else if (IS_ENABLED(CONFIG_MEMCG) && (type == KMALLOC_CGROUP)) {
 		if (mem_cgroup_kmem_disabled()) {
@@ -1000,16 +1008,18 @@ new_kmalloc_cache(int idx, enum kmalloc_cache_type type)
 #endif
 
 	/*
-	 * If memcg_kmem is enabled and this is a KMALLOC_NORMAL cache and not
-	 * aliased with any other type, make sure it's never merged with any other
-	 * cache.
+	 * If memcg_kmem is enabled and this is a KMALLOC_NORMAL or
+	 * KMALLOC_PARTITION_CACHES cache and not aliased with any other type,
+	 * make sure it's never merged with any other cache.
 	 *
 	 * In other cases the kmalloc cache may end up being used for a
 	 * __GFP_ACCOUNT allocation so mark it as such. The exception is a
 	 * KMALLOC_NO_OBJ_EXT cache.
 	 */
 	if (!mem_cgroup_kmem_disabled()) {
-		if (type == KMALLOC_NORMAL && KMALLOC_RECLAIM != KMALLOC_NORMAL)
+		if (type >= KMALLOC_PARTITION_START &&
+		    type <= KMALLOC_PARTITION_END &&
+		    !slab_tiny_enabled)
 			flags |= SLAB_NO_MERGE;
 		else if (!(flags & SLAB_NO_OBJ_EXT))
 			flags |= SLAB_MAY_ACCOUNT;
@@ -1028,11 +1038,6 @@ new_kmalloc_cache(int idx, enum kmalloc_cache_type type)
 		kmalloc_caches[type][idx] = kmalloc_caches[type][aligned_idx];
 }
 
-/*
- * Create the kmalloc array. Some of the regular kmalloc arrays
- * may already have been created because they were needed to
- * enable allocations for slab creation.
- */
 void __init create_kmalloc_caches(void)
 {
 	int i;
@@ -1103,7 +1108,7 @@ int cache_random_seq_create(struct kmem_cache *cachep, unsigned int count,
 	if (count < 2 || cachep->random_seq)
 		return 0;
 
-	cachep->random_seq = kcalloc(count, sizeof(unsigned int), gfp);
+	cachep->random_seq = kzalloc_objs(unsigned int, count, gfp);
 	if (!cachep->random_seq)
 		return -ENOMEM;
 
@@ -1233,17 +1238,9 @@ static const struct seq_operations slabinfo_op = {
 	.show = slab_show,
 };
 
-static int slabinfo_open(struct inode *inode, struct file *file)
-{
-	return seq_open(file, &slabinfo_op);
-}
-
 static const struct proc_ops slabinfo_proc_ops = {
 	.proc_flags	= PROC_ENTRY_PERMANENT,
-	.proc_open	= slabinfo_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release,
+	.proc_seq_ops	= &slabinfo_op,
 };
 
 static int __init slab_proc_init(void)
@@ -1366,6 +1363,10 @@ void __init kvfree_rcu_init(void)
 }
 
 #else /* CONFIG_KVFREE_RCU_BATCHED */
+
+/* Keep the prefix inherited from RCU */
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX "rcutree."
 
 /*
  * This rcu parameter is runtime-read-only. It reflects
@@ -1983,7 +1984,15 @@ run_page_cache_worker(struct kfree_rcu_cpu *krcp)
 
 	if (rcu_scheduler_active == RCU_SCHEDULER_RUNNING &&
 			!atomic_xchg(&krcp->work_in_progress, 1)) {
-		if (atomic_read(&krcp->backoff_page_cache_fill)) {
+		/*
+		 * Use the hrtimer to avoid a deadlock with the scheduler
+		 * by waking up the worker directly. queue_delayed_work()
+		 * uses a timer to queue the work, so it's fine.
+		 * But with delay = 0 it queues the work immediately.
+		 * Fall back to the hrtimer in that case.
+		 */
+		if (atomic_read(&krcp->backoff_page_cache_fill) &&
+		    rcu_delay_page_cache_fill_msec) {
 			queue_delayed_work(rcu_reclaim_wq,
 				&krcp->page_cache_work,
 					msecs_to_jiffies(rcu_delay_page_cache_fill_msec));

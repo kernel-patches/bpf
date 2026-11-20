@@ -315,10 +315,19 @@ EXPORT_SYMBOL_GPL(l2tp_v2_session_get);
 struct l2tp_session *l2tp_session_get(const struct net *net, struct sock *sk, int pver,
 				      u32 tunnel_id, u32 session_id)
 {
+	struct l2tp_session *session;
+
 	if (pver == L2TP_HDR_VER_2)
 		return l2tp_v2_session_get(net, tunnel_id, session_id);
-	else
-		return l2tp_v3_session_get(net, sk, session_id);
+
+	/* l2tp_v3_session_get() doesn't check sk if the ID hasn't collided */
+	session = l2tp_v3_session_get(net, sk, session_id);
+	if (session && session->tunnel->sock != sk) {
+		l2tp_session_put(session);
+		return NULL;
+	}
+
+	return session;
 }
 EXPORT_SYMBOL_GPL(l2tp_session_get);
 
@@ -1009,7 +1018,7 @@ static void l2tp_session_queue_purge(struct l2tp_session *session)
 }
 
 /* UDP encapsulation receive handler. See net/ipv4/udp.c for details. */
-int l2tp_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
+static int l2tp_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 {
 	struct l2tp_session *session = NULL;
 	struct l2tp_tunnel *tunnel = NULL;
@@ -1083,16 +1092,12 @@ int l2tp_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	tunnel = session->tunnel;
 
 	/* Check protocol version */
-	if (version != tunnel->version) {
-		l2tp_session_put(session);
+	if (version != tunnel->version)
 		goto invalid;
-	}
 
 	if (version == L2TP_HDR_VER_3 &&
-	    l2tp_v3_ensure_opt_in_linear(session, skb, &ptr, &optr)) {
-		l2tp_session_put(session);
+	    l2tp_v3_ensure_opt_in_linear(session, skb, &ptr, &optr))
 		goto invalid;
-	}
 
 	l2tp_recv_common(session, skb, ptr, optr, hdrflags, length);
 	l2tp_session_put(session);
@@ -1100,7 +1105,11 @@ int l2tp_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	return 0;
 
 invalid:
+	/* The session reference is the only thing keeping the tunnel alive
+	 * here, so account the invalid packet before dropping it.
+	 */
 	atomic_long_inc(&tunnel->stats.rx_invalid);
+	l2tp_session_put(session);
 
 pass:
 	/* Put UDP header back */
@@ -1108,7 +1117,6 @@ pass:
 
 	return 1;
 }
-EXPORT_SYMBOL_GPL(l2tp_udp_encap_recv);
 
 /* UDP encapsulation receive error handler. See net/ipv4/udp.c for details. */
 static void l2tp_udp_encap_err_recv(struct sock *sk, struct sk_buff *skb, int err,

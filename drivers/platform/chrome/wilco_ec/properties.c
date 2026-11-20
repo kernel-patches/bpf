@@ -70,6 +70,8 @@ int wilco_ec_get_property(struct wilco_ec_device *ec,
 	ret = send_property_msg(ec, &rq, &rs);
 	if (ret < 0)
 		return ret;
+	if (rs.length > WILCO_EC_PROPERTY_MAX_SIZE)
+		return -EBADMSG;
 
 	prop_msg->length = rs.length;
 	memcpy(prop_msg->data, rs.data, rs.length);

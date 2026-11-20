@@ -1375,8 +1375,7 @@ static int fsi_dma_transfer(struct fsi_priv *fsi, struct fsi_stream *io)
 		goto fsi_dma_transfer_err;
 	}
 
-	desc->callback		= fsi_dma_complete;
-	desc->callback_param	= io;
+	dmaengine_desc_set_callback(desc, fsi_dma_complete, NULL, io);
 
 	if (dmaengine_submit(desc) < 0) {
 		dev_err(dai->dev, "tx_submit() fail\n");
@@ -2023,7 +2022,7 @@ static int fsi_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	master = devm_kzalloc(&pdev->dev, sizeof(*master), GFP_KERNEL);
+	master = devm_kzalloc_obj(&pdev->dev, *master);
 	if (!master)
 		return -ENOMEM;
 

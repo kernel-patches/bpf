@@ -54,6 +54,7 @@ MODULE_AUTHOR("Paul Diefenbaugh");
 MODULE_AUTHOR("Alexey Starikovskiy <astarikovskiy@suse.de>");
 MODULE_DESCRIPTION("ACPI Battery Driver");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS("ACPI_BATTERY_HOOKS");
 
 static int battery_bix_broken_package;
 static int battery_notification_delay_ms;
@@ -63,12 +64,12 @@ module_param(cache_time, uint, 0644);
 MODULE_PARM_DESC(cache_time, "cache time in milliseconds");
 
 static const struct acpi_device_id battery_device_ids[] = {
-	{"PNP0C0A", 0},
+	{ .id = "PNP0C0A" },
 
 	/* Microsoft Surface Go 3 */
-	{"MSHW0146", 0},
+	{ .id = "MSHW0146" },
 
-	{"", 0},
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, battery_device_ids);
@@ -105,7 +106,7 @@ struct acpi_battery {
 	struct kfifo acpi_notif_fifo;
 	struct delayed_work acpi_notif_dwork;
 	struct notifier_block pm_nb;
-	struct list_head list;
+	struct acpi_battery_hooks_list_entry hooks_list_entry;
 	unsigned long flags;
 
 	struct mutex property_lock; /* Protects properties below. */
@@ -806,164 +807,6 @@ static struct attribute *acpi_battery_attrs[] = {
 };
 ATTRIBUTE_GROUPS(acpi_battery);
 
-/*
- * The Battery Hooking API
- *
- * This API is used inside other drivers that need to expose
- * platform-specific behaviour within the generic driver in a
- * generic way.
- *
- */
-
-static LIST_HEAD(acpi_battery_list);
-static LIST_HEAD(battery_hook_list);
-static DEFINE_MUTEX(hook_mutex);
-
-static void battery_hook_unregister_unlocked(struct acpi_battery_hook *hook)
-{
-	struct acpi_battery *battery;
-
-	/*
-	 * In order to remove a hook, we first need to
-	 * de-register all the batteries that are registered.
-	 */
-	list_for_each_entry(battery, &acpi_battery_list, list) {
-		if (!hook->remove_battery(battery->bat, hook))
-			power_supply_changed(battery->bat);
-	}
-	list_del_init(&hook->list);
-
-	pr_info("hook unregistered: %s\n", hook->name);
-}
-
-void battery_hook_unregister(struct acpi_battery_hook *hook)
-{
-	mutex_lock(&hook_mutex);
-	/*
-	 * Ignore already unregistered battery hooks. This might happen
-	 * if a battery hook was previously unloaded due to an error when
-	 * adding a new battery.
-	 */
-	if (!list_empty(&hook->list))
-		battery_hook_unregister_unlocked(hook);
-
-	mutex_unlock(&hook_mutex);
-}
-EXPORT_SYMBOL_GPL(battery_hook_unregister);
-
-void battery_hook_register(struct acpi_battery_hook *hook)
-{
-	struct acpi_battery *battery;
-
-	mutex_lock(&hook_mutex);
-	list_add(&hook->list, &battery_hook_list);
-	/*
-	 * Now that the driver is registered, we need
-	 * to notify the hook that a battery is available
-	 * for each battery, so that the driver may add
-	 * its attributes.
-	 */
-	list_for_each_entry(battery, &acpi_battery_list, list) {
-		if (hook->add_battery(battery->bat, hook)) {
-			/*
-			 * If a add-battery returns non-zero,
-			 * the registration of the hook has failed,
-			 * and we will not add it to the list of loaded
-			 * hooks.
-			 */
-			pr_err("hook failed to load: %s", hook->name);
-			battery_hook_unregister_unlocked(hook);
-			goto end;
-		}
-
-		power_supply_changed(battery->bat);
-	}
-	pr_info("new hook: %s\n", hook->name);
-end:
-	mutex_unlock(&hook_mutex);
-}
-EXPORT_SYMBOL_GPL(battery_hook_register);
-
-static void devm_battery_hook_unregister(void *data)
-{
-	struct acpi_battery_hook *hook = data;
-
-	battery_hook_unregister(hook);
-}
-
-int devm_battery_hook_register(struct device *dev, struct acpi_battery_hook *hook)
-{
-	battery_hook_register(hook);
-
-	return devm_add_action_or_reset(dev, devm_battery_hook_unregister, hook);
-}
-EXPORT_SYMBOL_GPL(devm_battery_hook_register);
-
-/*
- * This function gets called right after the battery sysfs
- * attributes have been added, so that the drivers that
- * define custom sysfs attributes can add their own.
- */
-static void battery_hook_add_battery(struct acpi_battery *battery)
-{
-	struct acpi_battery_hook *hook_node, *tmp;
-
-	mutex_lock(&hook_mutex);
-	INIT_LIST_HEAD(&battery->list);
-	list_add(&battery->list, &acpi_battery_list);
-	/*
-	 * Since we added a new battery to the list, we need to
-	 * iterate over the hooks and call add_battery for each
-	 * hook that was registered. This usually happens
-	 * when a battery gets hotplugged or initialized
-	 * during the battery module initialization.
-	 */
-	list_for_each_entry_safe(hook_node, tmp, &battery_hook_list, list) {
-		if (hook_node->add_battery(battery->bat, hook_node)) {
-			/*
-			 * The notification of the hook has failed, to
-			 * prevent further errors we will unload the hook.
-			 */
-			pr_err("error in hook, unloading: %s",
-					hook_node->name);
-			battery_hook_unregister_unlocked(hook_node);
-		}
-	}
-	mutex_unlock(&hook_mutex);
-}
-
-static void battery_hook_remove_battery(struct acpi_battery *battery)
-{
-	struct acpi_battery_hook *hook;
-
-	mutex_lock(&hook_mutex);
-	/*
-	 * Before removing the hook, we need to remove all
-	 * custom attributes from the battery.
-	 */
-	list_for_each_entry(hook, &battery_hook_list, list) {
-		hook->remove_battery(battery->bat, hook);
-	}
-	/* Then, just remove the battery from the list */
-	list_del(&battery->list);
-	mutex_unlock(&hook_mutex);
-}
-
-static void __exit battery_hook_exit(void)
-{
-	struct acpi_battery_hook *hook;
-	struct acpi_battery_hook *ptr;
-	/*
-	 * At this point, the acpi_bus_unregister_driver()
-	 * has called remove for all batteries. We just
-	 * need to remove the hooks.
-	 */
-	list_for_each_entry_safe(hook, ptr, &battery_hook_list, list) {
-		battery_hook_unregister(hook);
-	}
-	mutex_destroy(&hook_mutex);
-}
-
 static int sysfs_add_battery(struct acpi_battery *battery)
 {
 	bool extended_info_available = test_bit(ACPI_BATTERY_XINFO_PRESENT, &battery->flags);
@@ -1050,7 +893,7 @@ static int sysfs_add_battery(struct acpi_battery *battery)
 		battery->bat = NULL;
 		return result;
 	}
-	battery_hook_add_battery(battery);
+	acpi_battery_add_hooks(&battery->hooks_list_entry, battery->bat);
 	return 0;
 }
 
@@ -1059,7 +902,7 @@ static void sysfs_remove_battery(struct acpi_battery *battery)
 	if (!battery->bat)
 		return;
 
-	battery_hook_remove_battery(battery);
+	acpi_battery_remove_hooks(&battery->hooks_list_entry);
 	power_supply_unregister(battery->bat);
 	battery->bat = NULL;
 }
@@ -1387,7 +1230,7 @@ static const struct dmi_system_id bat_dmi_table[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Surface Go 3"),
 		},
 	},
-	{},
+	{ }
 };
 
 static void acpi_battery_wakeup_cleanup(void *data)
@@ -1476,7 +1319,7 @@ static int acpi_battery_probe(struct platform_device *pdev)
 	if (device->dep_unmet)
 		return -EPROBE_DEFER;
 
-	battery = devm_kzalloc(dev, sizeof(*battery), GFP_KERNEL);
+	battery = devm_kzalloc_obj(dev, *battery);
 	if (!battery)
 		return -ENOMEM;
 
@@ -1569,7 +1412,6 @@ static int __init acpi_battery_init(void)
 static void __exit acpi_battery_exit(void)
 {
 	platform_driver_unregister(&acpi_battery_driver);
-	battery_hook_exit();
 }
 
 module_init(acpi_battery_init);

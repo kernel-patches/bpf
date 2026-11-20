@@ -1302,7 +1302,7 @@ static void callchain__lbr_callstack_printf(struct perf_sample *sample)
 			break;
 	}
 
-	if ((i != kernel_callchain_nr) && lbr_stack->nr) {
+	if ((i != kernel_callchain_nr) && lbr_stack && lbr_stack->nr) {
 		u64 total_nr;
 		/*
 		 * LBR callstack can only get user call chain,
@@ -2773,7 +2773,7 @@ static const u32 perf_event__min_size[PERF_RECORD_HEADER_MAX] = {
 	[PERF_RECORD_HEADER_FEATURE]	  = sizeof(struct perf_record_header_feature),
 	[PERF_RECORD_COMPRESSED2]	  = sizeof(struct perf_record_compressed2),
 	[PERF_RECORD_BPF_METADATA]	  = sizeof(struct perf_record_bpf_metadata),
-	[PERF_RECORD_CALLCHAIN_DEFERRED]  = sizeof(struct perf_event_header) + sizeof(__u64),
+	[PERF_RECORD_CALLCHAIN_DEFERRED]  = sizeof(struct perf_record_callchain_deferred),
 	/*
 	 * SCHEDSTAT events have a version-dependent union after the
 	 * fixed header fields; the minimum is the base (pre-union)

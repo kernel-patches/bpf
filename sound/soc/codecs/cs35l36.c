@@ -910,6 +910,9 @@ static int cs35l36_dai_set_sysclk(struct snd_soc_dai *dai, int clk_id,
 			snd_soc_component_get_drvdata(component);
 	int fs1, fs2;
 
+	if (!freq)
+		return 0;
+
 	if (freq > CS35L36_FS_NOM_6MHZ) {
 		fs1 = CS35L36_FS1_DEFAULT_VAL;
 		fs2 = CS35L36_FS2_DEFAULT_VAL;
@@ -1751,7 +1754,7 @@ static int cs35l36_i2c_probe(struct i2c_client *i2c_client)
 	int ret, irq_pol, chip_irq_pol, i;
 	u32 reg_id, reg_revid, l37_id_reg;
 
-	cs35l36 = devm_kzalloc(dev, sizeof(struct cs35l36_private), GFP_KERNEL);
+	cs35l36 = devm_kzalloc_obj(dev, struct cs35l36_private);
 	if (!cs35l36)
 		return -ENOMEM;
 
@@ -1779,8 +1782,7 @@ static int cs35l36_i2c_probe(struct i2c_client *i2c_client)
 	if (pdata) {
 		cs35l36->pdata = *pdata;
 	} else {
-		pdata = devm_kzalloc(dev, sizeof(struct cs35l36_platform_data),
-				     GFP_KERNEL);
+		pdata = devm_kzalloc_obj(dev, struct cs35l36_platform_data);
 		if (!pdata)
 			return -ENOMEM;
 

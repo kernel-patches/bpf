@@ -7,6 +7,7 @@
 #include <linux/dev_printk.h>
 #include <linux/dma-mapping.h>
 #include <linux/gfp.h>
+#include <linux/iopoll.h>
 #include <linux/types.h>
 
 #include "fbnic.h"
@@ -176,9 +177,24 @@ static void fbnic_mbx_unmap_and_free_msg(struct fbnic_dev *fbd, int mbx_idx,
 
 static void fbnic_mbx_clean_desc_ring(struct fbnic_dev *fbd, int mbx_idx)
 {
+	u32 flush_done, val;
 	int i;
 
 	fbnic_mbx_reset_desc_ring(fbd, mbx_idx);
+
+	/* Arming the flush only starts it. Wait for the outbound path to
+	 * retire the requests it still holds before the buffers they may
+	 * target are unmapped and freed. A lost link reads back as all ones,
+	 * which ends the poll on the first pass.
+	 */
+	flush_done = mbx_idx == FBNIC_IPC_MBX_RX_IDX ?
+		     FBNIC_PUL_USER_IP_LINK_RST_STATUS_AW_FLUSH_DONE :
+		     FBNIC_PUL_USER_IP_LINK_RST_STATUS_AR_FLUSH_DONE;
+	if (read_poll_timeout_atomic(fbnic_rd32, val, val & flush_done, 2,
+				     1000, false, fbd,
+				     FBNIC_PUL_USER_IP_LINK_RST_STATUS))
+		dev_warn(fbd->dev, "Outbound flush did not complete: %08x\n",
+			 val);
 
 	for (i = FBNIC_IPC_MBX_DESC_LEN; i--;)
 		fbnic_mbx_unmap_and_free_msg(fbd, mbx_idx, i);
@@ -366,7 +382,7 @@ static void fbnic_fw_release_cmpl_data(struct kref *kref)
 
 	cmpl_data = container_of(kref, struct fbnic_fw_completion,
 				 ref_count);
-	kfree(cmpl_data);
+	kvfree(cmpl_data);
 }
 
 static struct fbnic_fw_completion *
@@ -522,8 +538,8 @@ static bool fbnic_mbx_event(struct fbnic_dev *fbd)
  */
 int fbnic_fw_xmit_ownership_msg(struct fbnic_dev *fbd, bool take_ownership)
 {
-	unsigned long req_time = jiffies;
 	struct fbnic_tlv_msg *msg;
+	unsigned long req_time;
 	int err = 0;
 
 	if (!fbnic_fw_present(fbd))
@@ -540,8 +556,10 @@ int fbnic_fw_xmit_ownership_msg(struct fbnic_dev *fbd, bool take_ownership)
 	}
 
 	/* Initialize heartbeat, set last response to 1 second in the past
-	 * so that we will trigger a timeout if the firmware doesn't respond
+	 * so that we will trigger a timeout if the firmware doesn't respond.
+	 * Take the time after the allocation, as for the heartbeat request.
 	 */
+	req_time = jiffies;
 	fbd->last_heartbeat_response = req_time - HZ;
 	fbd->last_heartbeat_request = req_time;
 
@@ -777,8 +795,8 @@ static int fbnic_fw_parse_heartbeat_resp(void *opaque,
 
 static int fbnic_fw_xmit_heartbeat_message(struct fbnic_dev *fbd)
 {
-	unsigned long req_time = jiffies;
 	struct fbnic_tlv_msg *msg;
+	unsigned long req_time;
 	int err = 0;
 
 	if (!fbnic_fw_present(fbd))
@@ -787,6 +805,12 @@ static int fbnic_fw_xmit_heartbeat_message(struct fbnic_dev *fbd)
 	msg = fbnic_tlv_msg_alloc(FBNIC_TLV_MSG_ID_HEARTBEAT_REQ);
 	if (!msg)
 		return -ENOMEM;
+
+	/* Stamp the request after the allocation, which can stall in
+	 * reclaim, but before posting it, so the response can never be
+	 * recorded as older than the request.
+	 */
+	req_time = jiffies;
 
 	err = fbnic_mbx_map_tlv_msg(fbd, msg);
 	if (err)
@@ -2084,7 +2108,8 @@ struct fbnic_fw_completion *__fbnic_fw_alloc_cmpl(u32 msg_type,
 {
 	struct fbnic_fw_completion *cmpl;
 
-	cmpl = kzalloc(sizeof(*cmpl) + priv_size, GFP_KERNEL);
+	/* Can be large, and the device never accesses it, so allow vmalloc */
+	cmpl = kvzalloc(sizeof(*cmpl) + priv_size, GFP_KERNEL);
 	if (!cmpl)
 		return NULL;
 

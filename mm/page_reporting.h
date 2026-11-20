@@ -23,6 +23,7 @@ static inline bool page_reported(struct page *page)
 
 /**
  * page_reporting_notify_free - Free page notification to start page processing
+ * @order: allocation order of the freed pages
  *
  * This function is meant to act as a screener for __page_reporting_notify
  * which will determine if a give zone has crossed over the high-water mark

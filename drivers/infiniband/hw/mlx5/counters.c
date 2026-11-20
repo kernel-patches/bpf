@@ -174,8 +174,7 @@ static int mlx5_ib_read_counters(struct ib_counters *counters,
 		goto err_bound;
 	}
 
-	mread_attr.out = kcalloc(mcounters->counters_num, sizeof(u64),
-				 GFP_KERNEL);
+	mread_attr.out = kzalloc_objs(u64, mcounters->counters_num);
 	if (!mread_attr.out) {
 		ret = -ENOMEM;
 		goto err_bound;
@@ -1039,7 +1038,8 @@ static int counters_set_description(
 	mcounters->ncounters = ncounters;
 	/* each counter entry have both description and index pair */
 	for (i = 0; i < ncounters; i++) {
-		if (desc_data[i].description > IB_COUNTER_BYTES)
+		if (desc_data[i].description > IB_COUNTER_BYTES ||
+		    desc_data[i].index == U32_MAX)
 			return -EINVAL;
 
 		if (cntrs_max_index <= desc_data[i].index)

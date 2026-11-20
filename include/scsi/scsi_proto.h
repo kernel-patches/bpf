@@ -145,6 +145,9 @@
 #define MI_MANAGEMENT_PROTOCOL_IN 0x10
 /* value for MI_REPORT_TARGET_PGS ext header */
 #define MI_EXT_HDR_PARAM_FMT  0x20
+/* format field in byte 4 of the REPORT TARGET PORT GROUPS parameter data */
+#define RTPG_FMT_MASK         0x70
+#define RTPG_FMT_EXT_HDR      0x10
 /* values for maintenance out */
 #define MO_SET_IDENTIFYING_INFORMATION 0x06
 #define MO_SET_TARGET_PGS     0x0a
@@ -370,6 +373,9 @@ enum zbc_zone_reporting_options {
 };
 
 #define ZBC_REPORT_ZONE_PARTIAL 0x80
+
+#define ZBC_REPORT_ZONES_HEADER_SIZE	64
+#define ZBC_ZONE_DESCRIPTOR_SIZE	64
 
 /* Zone types of REPORT ZONES zone descriptors */
 enum zbc_zone_type {

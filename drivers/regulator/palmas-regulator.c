@@ -1496,7 +1496,7 @@ static int palmas_dt_to_pdata(struct device *dev,
 		if (!match->init_data || !np)
 			continue;
 
-		rinit = devm_kzalloc(dev, sizeof(*rinit), GFP_KERNEL);
+		rinit = devm_kzalloc_obj(dev, *rinit);
 		if (!rinit)
 			return -ENOMEM;
 
@@ -1608,11 +1608,11 @@ static int palmas_regulators_probe(struct platform_device *pdev)
 	if (!driver_data)
 		return -ENODATA;
 
-	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
+	pdata = devm_kzalloc_obj(&pdev->dev, *pdata);
 	if (!pdata)
 		return -ENOMEM;
 
-	pmic = devm_kzalloc(&pdev->dev, sizeof(*pmic), GFP_KERNEL);
+	pmic = devm_kzalloc_obj(&pdev->dev, *pmic);
 	if (!pmic)
 		return -ENOMEM;
 
@@ -1668,18 +1668,7 @@ static struct platform_driver palmas_driver = {
 	},
 	.probe = palmas_regulators_probe,
 };
-
-static int __init palmas_init(void)
-{
-	return platform_driver_register(&palmas_driver);
-}
-subsys_initcall(palmas_init);
-
-static void __exit palmas_exit(void)
-{
-	platform_driver_unregister(&palmas_driver);
-}
-module_exit(palmas_exit);
+subsys_platform_driver(palmas_driver);
 
 MODULE_AUTHOR("Graeme Gregory <gg@slimlogic.co.uk>");
 MODULE_DESCRIPTION("Palmas voltage regulator driver");

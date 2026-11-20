@@ -787,6 +787,30 @@ error_alloc:
 	dev_err(adev->dev, "Error flushing GPU TLB using the SDMA (%d)!\n", r);
 }
 
+/**
+ * amdgpu_gmc_bind_vmid - bind a VMID's page table base and flush its TLB
+ *
+ * @adev: amdgpu device pointer
+ * @vmhub: vmhub the VMID belongs to
+ * @vmid: VMID to bind
+ * @pd_addr: new page directory address, 0 to unbind to a faulting address
+ *
+ * For VMIDs that are bound directly to a VM's page table outside the
+ * normal per-job VM flush path, e.g. a dedicated out-of-pool VMID.
+ */
+void amdgpu_gmc_bind_vmid(struct amdgpu_device *adev, unsigned int vmhub,
+			  unsigned int vmid, uint64_t pd_addr)
+{
+	bool is_mmhub = AMDGPU_IS_MMHUB0(vmhub) || AMDGPU_IS_MMHUB1(vmhub);
+
+	if (is_mmhub)
+		adev->mmhub.funcs->setup_vm_pt_regs(adev, vmid, pd_addr);
+	else
+		adev->gfxhub.funcs->setup_vm_pt_regs(adev, vmid, pd_addr);
+
+	amdgpu_gmc_flush_gpu_tlb(adev, vmid, vmhub, TLB_FLUSH_LEGACY);
+}
+
 static void amdgpu_gmc_flush_pasid_regs(struct amdgpu_device *adev, u16 pasid,
 					u32 flush_type, bool all_hub,
 					u32 inst)
@@ -1395,6 +1419,40 @@ static ssize_t available_memory_partition_show(struct device *dev,
 	return size;
 }
 
+void amdgpu_gmc_set_requested_nps_mode(struct amdgpu_device *adev,
+				       enum amdgpu_memory_partition mode)
+{
+	struct amdgpu_hive_info *hive;
+
+	/* If device is part of hive, all devices in the hive should request the
+	 * same mode. Hence store the requested mode in hive.
+	 */
+	hive = amdgpu_get_xgmi_hive(adev);
+	if (hive) {
+		atomic_set(&hive->requested_nps_mode, mode);
+		amdgpu_put_xgmi_hive(hive);
+	} else {
+		adev->gmc.requested_nps_mode = mode;
+	}
+}
+
+enum amdgpu_memory_partition
+amdgpu_gmc_get_requested_nps_mode(struct amdgpu_device *adev)
+{
+	struct amdgpu_hive_info *hive;
+	enum amdgpu_memory_partition mode;
+
+	hive = amdgpu_get_xgmi_hive(adev);
+	if (hive) {
+		mode = atomic_read(&hive->requested_nps_mode);
+		amdgpu_put_xgmi_hive(hive);
+	} else {
+		mode = adev->gmc.requested_nps_mode;
+	}
+
+	return mode;
+}
+
 static ssize_t current_memory_partition_store(struct device *dev,
 					      struct device_attribute *attr,
 					      const char *buf, size_t count)
@@ -1402,7 +1460,6 @@ static ssize_t current_memory_partition_store(struct device *dev,
 	struct drm_device *ddev = dev_get_drvdata(dev);
 	struct amdgpu_device *adev = drm_to_adev(ddev);
 	enum amdgpu_memory_partition mode;
-	struct amdgpu_hive_info *hive;
 	int i;
 
 	mode = UNKNOWN_MEMORY_PARTITION_MODE;
@@ -1416,23 +1473,16 @@ static ssize_t current_memory_partition_store(struct device *dev,
 	if (mode == UNKNOWN_MEMORY_PARTITION_MODE)
 		return -EINVAL;
 
-	if (mode == adev->gmc.gmc_funcs->query_mem_partition_mode(adev)) {
+	if (mode == amdgpu_gmc_get_requested_nps_mode(adev)) {
 		dev_info(
 			adev->dev,
-			"requested NPS mode is same as current NPS mode, skipping\n");
+			"requested NPS mode is same as current/already requested NPS mode, skipping\n");
 		return count;
 	}
 
-	/* If device is part of hive, all devices in the hive should request the
-	 * same mode. Hence store the requested mode in hive.
-	 */
-	hive = amdgpu_get_xgmi_hive(adev);
-	if (hive) {
-		atomic_set(&hive->requested_nps_mode, mode);
-		amdgpu_put_xgmi_hive(hive);
-	} else {
-		adev->gmc.requested_nps_mode = mode;
-	}
+	amdgpu_gmc_set_requested_nps_mode(adev, mode);
+	if (mode == amdgpu_gmc_query_memory_partition(adev))
+		return count;
 
 	dev_info(
 		adev->dev,

@@ -111,7 +111,7 @@ static struct ahci_host_priv *ahci_dwc_get_resources(struct platform_device *pde
 	struct ahci_dwc_host_priv *dpriv;
 	struct ahci_host_priv *hpriv;
 
-	dpriv = devm_kzalloc(&pdev->dev, sizeof(*dpriv), GFP_KERNEL);
+	dpriv = devm_kzalloc_obj(&pdev->dev, *dpriv);
 	if (!dpriv)
 		return ERR_PTR(-ENOMEM);
 
@@ -224,6 +224,10 @@ static int ahci_dwc_init_dmacr(struct ahci_host_priv *hpriv)
 	for_each_available_child_of_node_scoped(dpriv->pdev->dev.of_node, child) {
 		if (of_property_read_u32(child, "reg", &port))
 			return -EINVAL;
+
+		/* Already reported by ahci_platform_get_resources() */
+		if (port >= hpriv->nports)
+			continue;
 
 		port_mmio = __ahci_port_base(hpriv, port);
 		dmacr = readl(port_mmio + AHCI_DWC_PORT_DMACR);

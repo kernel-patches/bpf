@@ -16,6 +16,7 @@
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/input/touchscreen.h>
@@ -421,7 +422,7 @@ static int hyn_probe(struct i2c_client *client)
 	struct hynitron_ts_data *ts_data;
 	int err;
 
-	ts_data = devm_kzalloc(&client->dev, sizeof(*ts_data), GFP_KERNEL);
+	ts_data = devm_kzalloc_obj(&client->dev, *ts_data);
 	if (!ts_data)
 		return -ENOMEM;
 

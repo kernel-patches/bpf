@@ -884,6 +884,7 @@ config MEMCG
 	select EVENTFD
 	select SLAB_OBJ_EXT
 	select VM_EVENT_COUNTERS
+	select BLK_CGROUP if BLOCK
 	help
 	  Provides control over the memory footprint of tasks in a cgroup.
 
@@ -2107,6 +2108,8 @@ config TRACEPOINTS
 source "kernel/Kconfig.kexec"
 
 source "kernel/liveupdate/Kconfig"
+
+source "kernel/api/Kconfig"
 
 endmenu		# General setup
 

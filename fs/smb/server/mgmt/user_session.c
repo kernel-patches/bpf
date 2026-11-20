@@ -85,6 +85,8 @@ static const char *session_state_string(struct ksmbd_session *session)
 
 static const char *session_user_name(struct ksmbd_session *session)
 {
+	if (!session->user)
+		return "(Unauthenticated)";
 	if (user_guest(session->user))
 		return "(Guest)";
 	else if (ksmbd_anonymous_user(session->user))
@@ -94,6 +96,8 @@ static const char *session_user_name(struct ksmbd_session *session)
 
 static const char *session_account_type(struct ksmbd_session *session)
 {
+	if (!session->user)
+		return "unauthenticated";
 	if (user_guest(session->user))
 		return "guest";
 	if (ksmbd_anonymous_user(session->user))
@@ -553,6 +557,7 @@ int ksmbd_session_register(struct ksmbd_conn *conn,
 	int ret;
 
 	sess->dialect = conn->dialect;
+	sess->signing_algorithm = conn->signing_algorithm;
 	memcpy(sess->ClientGUID, conn->ClientGUID, SMB2_CLIENT_GUID_SIZE);
 	ret = xa_err(xa_store(&conn->sessions, sess->id, sess,
 			      KSMBD_DEFAULT_GFP));

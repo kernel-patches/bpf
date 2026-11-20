@@ -112,7 +112,7 @@ static int kirin_drm_private_init(struct drm_device *dev,
 	int ret;
 	u32 ch;
 
-	kirin_priv = devm_kzalloc(dev->dev, sizeof(*kirin_priv), GFP_KERNEL);
+	kirin_priv = devm_kzalloc_obj(dev->dev, *kirin_priv);
 	if (!kirin_priv) {
 		DRM_ERROR("failed to alloc kirin_drm_private\n");
 		return -ENOMEM;
@@ -187,8 +187,10 @@ static int kirin_drm_kms_init(struct drm_device *dev,
 		goto err_unbind_all;
 	}
 
-	/* reset all the states of crtc/plane/encoder/connector */
-	drm_mode_config_reset(dev);
+	/* Create all the states of crtc/plane/encoder/connector */
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		goto err_unbind_all;
 
 	/* init kms poll for handling hpd */
 	drm_kms_helper_poll_init(dev);

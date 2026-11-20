@@ -89,15 +89,18 @@ static int userspace_init(struct devfreq *devfreq)
 	int err = 0;
 	struct userspace_data *data = kzalloc_obj(struct userspace_data);
 
-	if (!data) {
-		err = -ENOMEM;
-		goto out;
-	}
+	if (!data)
+		return -ENOMEM;
+
 	data->valid = false;
 	devfreq->governor_data = data;
 
 	err = sysfs_create_group(&devfreq->dev.kobj, &dev_attr_group);
-out:
+	if (err) {
+		kfree(data);
+		devfreq->governor_data = NULL;
+	}
+
 	return err;
 }
 

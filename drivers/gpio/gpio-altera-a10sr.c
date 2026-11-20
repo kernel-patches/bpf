@@ -81,7 +81,7 @@ static int altr_a10sr_gpio_probe(struct platform_device *pdev)
 	struct altr_a10sr_gpio *gpio;
 	struct altr_a10sr *a10sr = dev_get_drvdata(pdev->dev.parent);
 
-	gpio = devm_kzalloc(&pdev->dev, sizeof(*gpio), GFP_KERNEL);
+	gpio = devm_kzalloc_obj(&pdev->dev, *gpio);
 	if (!gpio)
 		return -ENOMEM;
 
@@ -96,7 +96,7 @@ static int altr_a10sr_gpio_probe(struct platform_device *pdev)
 
 static const struct of_device_id altr_a10sr_gpio_of_match[] = {
 	{ .compatible = "altr,a10sr-gpio" },
-	{ },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, altr_a10sr_gpio_of_match);
 

@@ -79,7 +79,7 @@ static void bdev_write_inode(struct block_device *bdev)
 }
 
 /* Kill _all_ buffers and pagecache , dirty or not.. */
-static void kill_bdev(struct block_device *bdev)
+void kill_bdev(struct block_device *bdev)
 {
 	struct address_space *mapping = bdev->bd_mapping;
 
@@ -1430,7 +1430,11 @@ void bdev_statx(const struct path *path, struct kstat *stat, u32 request_mask)
 			0);
 	}
 
-	stat->blksize = bdev_io_min(bdev);
+	/*
+	 * A buffered write that covers only part of a block has to read the
+	 * block first, so do not report less than the block size.
+	 */
+	stat->blksize = max(bdev_io_min(bdev), block_size(bdev));
 
 	blkdev_put_no_open(bdev);
 }

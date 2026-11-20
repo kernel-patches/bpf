@@ -41,7 +41,7 @@ int io_nop_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	else
 		nop->fd = -1;
 	if (nop->flags & IORING_NOP_FIXED_FILE)
-		req->flags |= REQ_F_FIXED_FILE;
+		io_req_set_flags(req, REQ_F_FIXED_FILE);
 	if (nop->flags & IORING_NOP_FIXED_BUFFER)
 		req->buf_index = READ_ONCE(sqe->buf_index);
 	if (nop->flags & IORING_NOP_CQE32) {

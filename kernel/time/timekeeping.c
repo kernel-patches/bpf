@@ -34,6 +34,8 @@
 
 #define TK_UPDATE_ALL		(TK_CLEAR_NTP | TK_CLOCK_WAS_SET)
 
+#define TK_INITIAL_TAI_OFFSET	37
+
 enum timekeeping_adv_mode {
 	/* Update timekeeper when a tick has passed */
 	TK_ADV_TICK,
@@ -1600,6 +1602,9 @@ int get_device_system_crosststamp(int (*get_time_fn)
 
 	do {
 		seq = read_seqcount_begin(&tkd->seq);
+		if (!tk->clock_valid)
+			return -ENODEV;
+
 		/*
 		 * Try to synchronously capture device time and a system
 		 * counter value calling back into the device driver
@@ -1775,6 +1780,7 @@ static int __timekeeping_inject_offset(struct tk_data *tkd, const struct timespe
 		struct tk_read_base *tkr_mono = &tks->tkr_mono;
 		ktime_t now, offs;
 
+		tk_update_ktime_data(tks);
 		/* Get the current time */
 		now = ktime_add_ns(tkr_mono->base, timekeeping_get_ns(tkr_mono));
 		/* Add the relative offset change */
@@ -2090,6 +2096,8 @@ void __init timekeeping_init(void)
 	tks->raw_sec = 0;
 
 	tk_set_wall_to_mono(tks, wall_to_mono);
+
+	__timekeeping_set_tai_offset(tks, TK_INITIAL_TAI_OFFSET);
 
 	/*
 	 * Use TK_UPDATE_ALL so the NTP layer picks up the clocksource's
@@ -2700,7 +2708,13 @@ void update_wall_time(void)
 void getboottime64(struct timespec64 *ts)
 {
 	struct timekeeper *tk = &tk_core.timekeeper;
-	ktime_t t = ktime_sub(tk->offs_real, tk->offs_boot);
+	unsigned int seq;
+	ktime_t t;
+
+	do {
+		seq = read_seqcount_begin(&tk_core.seq);
+		t = ktime_sub(tk->offs_real, tk->offs_boot);
+	} while (read_seqcount_retry(&tk_core.seq, seq));
 
 	*ts = ktime_to_timespec64(t);
 }

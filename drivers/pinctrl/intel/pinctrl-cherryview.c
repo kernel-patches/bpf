@@ -1595,7 +1595,7 @@ static int chv_pinctrl_probe(struct platform_device *pdev)
 	if (IS_ERR(soc_data))
 		return PTR_ERR(soc_data);
 
-	pctrl = devm_kzalloc(dev, sizeof(*pctrl), GFP_KERNEL);
+	pctrl = devm_kzalloc_obj(dev, *pctrl);
 	if (!pctrl)
 		return -ENOMEM;
 
@@ -1616,16 +1616,15 @@ static int chv_pinctrl_probe(struct platform_device *pdev)
 	community->pad_regs = community->regs + FAMILY_PAD_REGS_OFF;
 
 #ifdef CONFIG_PM_SLEEP
-	pctrl->context.pads = devm_kcalloc(dev, pctrl->soc->npins,
-					   sizeof(*pctrl->context.pads),
-					   GFP_KERNEL);
+	pctrl->context.pads = devm_kzalloc_objs(dev, *pctrl->context.pads,
+						pctrl->soc->npins);
 	if (!pctrl->context.pads)
 		return -ENOMEM;
 #endif
 
-	pctrl->context.communities = devm_kcalloc(dev, pctrl->soc->ncommunities,
-						  sizeof(*pctrl->context.communities),
-						  GFP_KERNEL);
+	pctrl->context.communities = devm_kzalloc_objs(dev,
+						       *pctrl->context.communities,
+						       pctrl->soc->ncommunities);
 	if (!pctrl->context.communities)
 		return -ENOMEM;
 
@@ -1768,18 +1767,7 @@ static struct platform_driver chv_pinctrl_driver = {
 		.acpi_match_table = chv_pinctrl_acpi_match,
 	},
 };
-
-static int __init chv_pinctrl_init(void)
-{
-	return platform_driver_register(&chv_pinctrl_driver);
-}
-subsys_initcall(chv_pinctrl_init);
-
-static void __exit chv_pinctrl_exit(void)
-{
-	platform_driver_unregister(&chv_pinctrl_driver);
-}
-module_exit(chv_pinctrl_exit);
+subsys_platform_driver(chv_pinctrl_driver);
 
 MODULE_AUTHOR("Mika Westerberg <mika.westerberg@linux.intel.com>");
 MODULE_DESCRIPTION("Intel Cherryview/Braswell pinctrl driver");

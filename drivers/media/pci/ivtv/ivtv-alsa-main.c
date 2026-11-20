@@ -173,7 +173,6 @@ static int snd_ivtv_init(struct v4l2_device *v4l2_dev)
 err_exit_free:
 	if (sc != NULL)
 		snd_card_free(sc);
-	kfree(itvsc);
 err_exit:
 	return ret;
 }

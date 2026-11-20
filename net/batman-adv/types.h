@@ -27,6 +27,7 @@
 #include <linux/spinlock.h>
 #include <linux/timer.h>
 #include <linux/types.h>
+#include <linux/u64_stats_sync.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 #include <uapi/linux/batadv_packet.h>
@@ -987,6 +988,19 @@ enum batadv_counters {
 };
 
 /**
+ * struct batadv_pcpu_counters - per cpu traffic counters
+ */
+struct batadv_pcpu_counters {
+	/** @cnt: traffic counters (see batadv_counters) */
+	u64_stats_t cnt[BATADV_CNT_NUM];
+
+	/**
+	 * @syncp: synchronization for 64 bit counter access on 32 bit systems
+	 */
+	struct u64_stats_sync syncp;
+};
+
+/**
  * struct batadv_priv_tt - per mesh interface translation table data
  */
 struct batadv_priv_tt {
@@ -1564,11 +1578,8 @@ struct batadv_priv {
 	 */
 	int mtu_set_by_user;
 
-	/**
-	 * @bat_counters: mesh internal traffic statistic counters (see
-	 *  batadv_counters)
-	 */
-	u64 __percpu *bat_counters; /* Per cpu counters */
+	/** @bat_counters: mesh internal traffic statistic counters */
+	struct batadv_pcpu_counters __percpu *bat_counters;
 
 	/**
 	 * @aggregated_ogms: bool indicating whether OGM aggregation is enabled
@@ -1777,9 +1788,10 @@ enum batadv_bla_backbone_gw_state {
 };
 
 /**
- * struct batadv_bla_backbone_gw - batman-adv gateway bridged into the LAN
+ * struct batadv_bla_backbone_gw_key - key of a backbone gateway in
+ *  &batadv_priv_bla.backbone_hash
  */
-struct batadv_bla_backbone_gw {
+struct batadv_bla_backbone_gw_key {
 	/**
 	 * @orig: originator address of backbone node (mac address of primary
 	 *  iface)
@@ -1788,6 +1800,14 @@ struct batadv_bla_backbone_gw {
 
 	/** @vid: vlan id this gateway was detected on */
 	unsigned short vid;
+};
+
+/**
+ * struct batadv_bla_backbone_gw - batman-adv gateway bridged into the LAN
+ */
+struct batadv_bla_backbone_gw {
+	/** @key: hash key identifying the backbone gateway */
+	struct batadv_bla_backbone_gw_key key;
 
 	/** @hash_entry: hlist node for &batadv_priv_bla.backbone_hash */
 	struct hlist_node hash_entry;
@@ -1825,14 +1845,22 @@ struct batadv_bla_backbone_gw {
 };
 
 /**
- * struct batadv_bla_claim - claimed non-mesh client structure
+ * struct batadv_bla_claim_key - key of a claim in &batadv_priv_bla.claim_hash
  */
-struct batadv_bla_claim {
+struct batadv_bla_claim_key {
 	/** @addr: mac address of claimed non-mesh client */
 	u8 addr[ETH_ALEN] __aligned(2);
 
 	/** @vid: vlan id this client was detected on */
 	unsigned short vid;
+};
+
+/**
+ * struct batadv_bla_claim - claimed non-mesh client structure
+ */
+struct batadv_bla_claim {
+	/** @key: hash key identifying the claim */
+	struct batadv_bla_claim_key key;
 
 	/** @backbone_gw: pointer to backbone gw claiming this client */
 	struct batadv_bla_backbone_gw *backbone_gw;
@@ -1855,14 +1883,23 @@ struct batadv_bla_claim {
 #endif
 
 /**
- * struct batadv_tt_common_entry - tt local & tt global common data
+ * struct batadv_tt_common_entry_key - key of a TT entry in
+ *  &batadv_priv_tt.local_hash or &batadv_priv_tt.global_hash
  */
-struct batadv_tt_common_entry {
+struct batadv_tt_common_entry_key {
 	/** @addr: mac address of non-mesh client */
 	u8 addr[ETH_ALEN] __aligned(2);
 
 	/** @vid: VLAN identifier */
 	unsigned short vid;
+};
+
+/**
+ * struct batadv_tt_common_entry - tt local & tt global common data
+ */
+struct batadv_tt_common_entry {
+	/** @key: hash key identifying the TT client */
+	struct batadv_tt_common_entry_key key;
 
 	/**
 	 * @hash_entry: hlist node for &batadv_priv_tt.local_hash or for
@@ -2036,7 +2073,7 @@ struct batadv_forw_packet {
 	 * @own: bool for locally generated packets (local OGMs are re-scheduled
 	 * after sending)
 	 */
-	u8 own;
+	bool own:1;
 
 	/** @skb: bcast packet's skb buffer */
 	struct sk_buff *skb;
@@ -2047,7 +2084,13 @@ struct batadv_forw_packet {
 	/** @direct_link_flags: direct link flags for aggregated OGM packets */
 	DECLARE_BITMAP(direct_link_flags, BATADV_MAX_AGGREGATION_PACKETS);
 
-	/** @num_packets: counter for aggregated OGMv1 packets */
+	/**
+	 * @num_packets: counter for aggregated OGMv1 packets. Set to
+	 *  BATADV_MAX_AGGREGATION_PACKETS (independent of the real number of
+	 *  aggregated packets) by the send worker to prevent further
+	 *  aggregation while the packet is emitted. It must therefore not be
+	 *  used to iterate over the aggregated packets
+	 */
 	u8 num_packets;
 
 	/** @delayed_work: work queue callback item for packet sending */
@@ -2196,18 +2239,27 @@ struct batadv_algo_ops {
 };
 
 /**
+ * struct batadv_dat_entry_key - key of a DAT entry in &batadv_priv_dat.hash
+ *  and in the DHT
+ */
+struct batadv_dat_entry_key {
+	/** @ip: the IPv4 corresponding to this DAT/ARP entry */
+	__be32 ip;
+
+	/** @vid: the vlan ID associated to this entry */
+	unsigned short vid;
+};
+
+/**
  * struct batadv_dat_entry - it is a single entry of batman-adv ARP backend. It
  * is used to stored ARP entries needed for the global DAT cache
  */
 struct batadv_dat_entry {
-	/** @ip: the IPv4 corresponding to this DAT/ARP entry */
-	__be32 ip;
+	/** @key: hash key identifying the DAT entry */
+	struct batadv_dat_entry_key key;
 
 	/** @mac_addr: the MAC address associated to the stored IPv4 */
 	atomic64_t mac_addr;
-
-	/** @vid: the vlan ID associated to this entry */
-	unsigned short vid;
 
 	/**
 	 * @last_update: time in jiffies when this entry was refreshed last time

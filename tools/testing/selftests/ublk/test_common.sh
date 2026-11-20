@@ -353,13 +353,12 @@ run_io_and_remove()
 	local dev_id
 	shift 1
 
-	dev_id=$(_add_ublk_dev "$@")
-	_check_add_dev "$TID" $?
+	dev_id=$(_add_ublk_dev "$@") || return $?
 
 	[ "$UBLK_TEST_QUIET" -eq 0 ] && echo "run ublk IO vs. remove device(ublk add $*)"
 	if ! __run_io_and_remove "$dev_id" "${size}" "no"; then
 		echo "/dev/ublkc$dev_id isn't removed"
-		exit 255
+		return 255
 	fi
 }
 
@@ -369,14 +368,30 @@ run_io_and_kill_daemon()
 	local dev_id
 	shift 1
 
-	dev_id=$(_add_ublk_dev "$@")
-	_check_add_dev "$TID" $?
+	dev_id=$(_add_ublk_dev "$@") || return $?
 
 	[ "$UBLK_TEST_QUIET" -eq 0 ] && echo "run ublk IO vs kill ublk server(ublk add $*)"
 	if ! __run_io_and_remove "$dev_id" "${size}" "yes"; then
 		echo "/dev/ublkc$dev_id isn't removed res ${res}"
-		exit 255
+		return 255
 	fi
+}
+
+# Collect test workers in the parent before removing shared backing files.
+_wait_test_pids()
+{
+	local pid
+	local ret
+
+	for pid in "$@"; do
+		wait "$pid" && continue
+		ret=$?
+
+		# A failure takes precedence over a skipped worker.
+		if [ "$ERR_CODE" -eq 0 ] || [ "$ERR_CODE" -eq "$UBLK_SKIP_CODE" ]; then
+			ERR_CODE=$ret
+		fi
+	done
 }
 
 run_io_and_recover()
@@ -387,8 +402,7 @@ run_io_and_recover()
 	local dev_id
 
 	shift 2
-	dev_id=$(_add_ublk_dev "$@")
-	_check_add_dev "$TID" $?
+	dev_id=$(_add_ublk_dev "$@") || return $?
 
 	fio --name=job1 --filename=/dev/ublkb"${dev_id}" --ioengine=libaio \
 		--rw=randread --iodepth=256 --size="${size}" --numjobs=4 \

@@ -600,8 +600,7 @@ static int omap_sham_xmit_dma(struct omap_sham_dev *dd, size_t length,
 		return -EINVAL;
 	}
 
-	tx->callback = omap_sham_dma_callback;
-	tx->callback_param = dd;
+	dmaengine_desc_set_callback(tx, omap_sham_dma_callback, NULL, dd);
 
 	dd->pdata->write_ctrl(dd, length, final, 1);
 
@@ -2001,7 +2000,7 @@ static int omap_sham_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	dd = devm_kzalloc(dev, sizeof(struct omap_sham_dev), GFP_KERNEL);
+	dd = devm_kzalloc_obj(dev, struct omap_sham_dev);
 	if (dd == NULL) {
 		dev_err(dev, "unable to alloc data struct.\n");
 		err = -ENOMEM;

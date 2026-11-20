@@ -23,7 +23,7 @@ static int ts4800_gpio_probe(struct platform_device *pdev)
 	void __iomem *base_addr;
 	int retval;
 
-	chip = devm_kzalloc(dev, sizeof(*chip), GFP_KERNEL);
+	chip = devm_kzalloc_obj(dev, *chip);
 	if (!chip)
 		return -ENOMEM;
 
@@ -48,8 +48,8 @@ static int ts4800_gpio_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id ts4800_gpio_of_match[] = {
-	{ .compatible = "technologic,ts4800-gpio", },
-	{},
+	{ .compatible = "technologic,ts4800-gpio" },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, ts4800_gpio_of_match);
 

@@ -58,6 +58,7 @@ struct block_device {
 	struct address_space	*bd_mapping;	/* page cache */
 
 	atomic_t		bd_openers;
+	unsigned int		bd_fs_users; /* Protected by bd_mapping->host->i_rwsem. */
 	spinlock_t		bd_size_lock; /* for bd_inode->i_size updates */
 	void *			bd_claiming;
 	void *			bd_holder;
@@ -328,6 +329,7 @@ enum {
 	BIO_ZONE_WRITE_PLUGGING, /* bio handled through zone write plugging */
 	BIO_EMULATES_ZONE_APPEND, /* bio emulates a zone append operation */
 	BIO_COMPLETE_IN_TASK, /* complete bi_end_io() in task context */
+	BIO_ERROR_INJECTED, /* error injection rules already applied */
 	BIO_FLAG_LAST
 };
 

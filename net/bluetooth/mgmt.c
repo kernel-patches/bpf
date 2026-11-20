@@ -304,6 +304,8 @@ static u8 mgmt_errno_status(int err)
 		return MGMT_STATUS_DISCONNECTED;
 	case -ECANCELED:
 		return MGMT_STATUS_CANCELLED;
+	case -ERFKILL:
+		return MGMT_STATUS_RFKILLED;
 	}
 
 	return MGMT_STATUS_FAILED;
@@ -442,10 +444,8 @@ static int read_index_list(struct sock *sk, struct hci_dev *hdev, void *data,
 	read_lock(&hci_dev_list_lock);
 
 	count = 0;
-	list_for_each_entry(d, &hci_dev_list, list) {
-		if (!hci_dev_test_flag(d, HCI_UNCONFIGURED))
-			count++;
-	}
+	list_for_each_entry(d, &hci_dev_list, list)
+		count++;
 
 	rp_len = sizeof(*rp) + (2 * count);
 	rp = kmalloc(rp_len, GFP_ATOMIC);
@@ -863,6 +863,9 @@ static u32 get_supported_settings(struct hci_dev *hdev)
 	if (le_sci_capable(hdev))
 		settings |= MGMT_SETTING_SCI;
 
+	if (hdt_capable(hdev))
+		settings |= MGMT_SETTING_HDT;
+
 	settings |= MGMT_SETTING_PHY_CONFIGURATION;
 
 	return settings;
@@ -956,6 +959,9 @@ static u32 get_current_settings(struct hci_dev *hdev)
 
 	if (le_sci_enabled(hdev))
 		settings |= MGMT_SETTING_SCI;
+
+	if (hdt_enabled(hdev))
+		settings |= MGMT_SETTING_HDT;
 
 	return settings;
 }
@@ -1081,6 +1087,7 @@ static void discov_off(struct work_struct *work)
 
 static int send_settings_rsp(struct sock *sk, u16 opcode, struct hci_dev *hdev);
 
+/* This function requires the caller holds hdev->lock */
 static void mesh_send_complete(struct hci_dev *hdev,
 			       struct mgmt_mesh_tx *mesh_tx, bool silent)
 {
@@ -1093,37 +1100,95 @@ static void mesh_send_complete(struct hci_dev *hdev,
 	mgmt_mesh_remove(mesh_tx);
 }
 
-static int mesh_send_done_sync(struct hci_dev *hdev, void *data)
-{
-	struct mgmt_mesh_tx *mesh_tx;
-
-	hci_dev_clear_flag(hdev, HCI_MESH_SENDING);
-	if (list_empty(&hdev->adv_instances))
-		hci_disable_advertising_sync(hdev);
-	mesh_tx = mgmt_mesh_next(hdev, NULL);
-
-	if (mesh_tx)
-		mesh_send_complete(hdev, mesh_tx, false);
-
-	return 0;
-}
+/* The cmd_sync entries identify the transmission by handle rather than by
+ * pointer since the mesh_tx can be removed while the entry is queued or
+ * running.
+ */
+#define MESH_TX_DATA(_handle)	((void *)(unsigned long)(_handle))
+#define MESH_TX_HANDLE(_data)	((u8)(unsigned long)(_data))
 
 static int mesh_send_sync(struct hci_dev *hdev, void *data);
 static void mesh_send_start_complete(struct hci_dev *hdev, void *data, int err);
+
+/* Start sending the first transmission unless one is already in progress,
+ * HCI_MESH_SENDING is set while the first transmission is being sent.
+ * Completion is not reported for @new, the handle of a transmission userspace
+ * wasn't told about yet.
+ *
+ * This function requires the caller holds hdev->lock.
+ */
+static void __mesh_next(struct hci_dev *hdev, u8 new)
+{
+	struct mgmt_mesh_tx *mesh_tx;
+	int err;
+
+	while (!hci_dev_test_flag(hdev, HCI_MESH_SENDING)) {
+		mesh_tx = mgmt_mesh_next(hdev, NULL);
+		if (!mesh_tx)
+			return;
+
+		err = hci_cmd_sync_queue(hdev, mesh_send_sync,
+					 MESH_TX_DATA(mesh_tx->handle),
+					 mesh_send_start_complete);
+		if (err < 0)
+			mesh_send_complete(hdev, mesh_tx,
+					   mesh_tx->handle == new);
+		else
+			hci_dev_set_flag(hdev, HCI_MESH_SENDING);
+	}
+}
+
 static void mesh_next(struct hci_dev *hdev, void *data, int err)
 {
-	struct mgmt_mesh_tx *mesh_tx = mgmt_mesh_next(hdev, NULL);
-
-	if (!mesh_tx)
+	/* The entry is being cancelled with the cmd_sync lock held, which
+	 * can't be taken before hdev->lock.
+	 */
+	if (err == -ECANCELED)
 		return;
 
-	err = hci_cmd_sync_queue(hdev, mesh_send_sync, mesh_tx,
-				 mesh_send_start_complete);
+	hci_dev_lock(hdev);
+	__mesh_next(hdev, 0);
+	hci_dev_unlock(hdev);
+}
 
-	if (err < 0)
+static int mesh_send_done_sync(struct hci_dev *hdev, void *data)
+{
+	struct mgmt_mesh_tx *mesh_tx;
+	u8 handle;
+	bool disable;
+
+	hci_dev_lock(hdev);
+
+	mesh_tx = mgmt_mesh_next(hdev, NULL);
+	if (!mesh_tx || !hci_dev_test_flag(hdev, HCI_MESH_SENDING)) {
+		hci_dev_unlock(hdev);
+		return 0;
+	}
+
+	handle = mesh_tx->handle;
+	disable = list_empty(&hdev->adv_instances);
+
+	hci_dev_unlock(hdev);
+
+	if (disable)
+		hci_disable_advertising_sync(hdev);
+
+	hci_dev_lock(hdev);
+
+	/* The transmission can be cancelled meanwhile, in which case whoever
+	 * did so already moved on to the next one. HCI_MESH_SENDING is only
+	 * cleared with the transmission removed so Mesh Send doesn't start
+	 * another one in between.
+	 */
+	mesh_tx = mgmt_mesh_find(hdev, handle);
+	if (mesh_tx) {
 		mesh_send_complete(hdev, mesh_tx, false);
-	else
-		hci_dev_set_flag(hdev, HCI_MESH_SENDING);
+		hci_dev_clear_flag(hdev, HCI_MESH_SENDING);
+	}
+
+	hci_dev_unlock(hdev);
+
+	return 0;
 }
 
 static void mesh_send_done(struct work_struct *work)
@@ -1135,6 +1200,33 @@ static void mesh_send_done(struct work_struct *work)
 		return;
 
 	hci_cmd_sync_queue(hdev, mesh_send_done_sync, NULL, mesh_next);
+}
+
+/* Nothing is going to send the transmissions left, e.g. when the controller
+ * is powered off.
+ *
+ * This function requires the caller holds hdev->lock.
+ */
+static void mesh_flush(struct hci_dev *hdev, bool silent)
+{
+	struct mgmt_mesh_tx *mesh_tx;
+
+	/* Stop the timer first, it checks HCI_MESH_SENDING without hdev->lock
+	 * so once it is clear and the work is not running anymore nothing can
+	 * queue mesh_send_done_sync behind the dequeue below.
+	 */
+	hci_dev_clear_flag(hdev, HCI_MESH_SENDING);
+	cancel_delayed_work_sync(&hdev->mesh_send_done);
+
+	/* Entries still queued would otherwise run after the controller is
+	 * powered on again and act on the transmissions started by then. The
+	 * destroy callbacks don't take hdev->lock when cancelled.
+	 */
+	hci_cmd_sync_dequeue(hdev, mesh_send_sync, NULL, NULL);
+	hci_cmd_sync_dequeue(hdev, mesh_send_done_sync, NULL, NULL);
+
+	while ((mesh_tx = mgmt_mesh_next(hdev, NULL)))
+		mesh_send_complete(hdev, mesh_tx, silent);
 }
 
 static void mgmt_init_hdev(struct sock *sk, struct hci_dev *hdev)
@@ -2304,38 +2396,71 @@ static int set_mesh(struct sock *sk, struct hci_dev *hdev, void *data, u16 len)
 
 static void mesh_send_start_complete(struct hci_dev *hdev, void *data, int err)
 {
-	struct mgmt_mesh_tx *mesh_tx = data;
-	struct mgmt_cp_mesh_send *send = (void *)mesh_tx->param;
-	unsigned long mesh_send_interval;
+	struct mgmt_mesh_tx *mesh_tx;
+	struct mgmt_cp_mesh_send *send;
 	u8 mgmt_err = mgmt_status(err);
+
+	/* The entry is being cancelled with the cmd_sync lock held, which
+	 * can't be taken before hdev->lock, so leave the removal of the
+	 * transmission, and HCI_MESH_SENDING, to whoever cancelled it or to
+	 * mgmt_power_off() if the controller is going down.
+	 */
+	if (err == -ECANCELED)
+		return;
+
+	hci_dev_lock(hdev);
+
+	/* Cancelled while the entry was running, whoever did so already moved
+	 * on to the next transmission.
+	 */
+	mesh_tx = mgmt_mesh_find(hdev, MESH_TX_HANDLE(data));
+	if (!mesh_tx) {
+		hci_dev_unlock(hdev);
+		return;
+	}
 
 	/* Report any errors here, but don't report completion */
 
 	if (mgmt_err) {
-		hci_dev_clear_flag(hdev, HCI_MESH_SENDING);
 		/* Send Complete Error Code for handle */
 		mesh_send_complete(hdev, mesh_tx, false);
-		if (err != -ECANCELED)
-			mesh_next(hdev, NULL, 0);
+		hci_dev_clear_flag(hdev, HCI_MESH_SENDING);
+		__mesh_next(hdev, 0);
+		hci_dev_unlock(hdev);
 		return;
 	}
 
-	mesh_send_interval = msecs_to_jiffies((send->cnt) * 25);
+	/* Queued with hdev->lock held so a cancel can't miss it */
+	send = (void *)mesh_tx->param;
 	queue_delayed_work(hdev->req_workqueue, &hdev->mesh_send_done,
-			   mesh_send_interval);
+			   msecs_to_jiffies((send->cnt) * 25));
+
+	hci_dev_unlock(hdev);
 }
 
 static int mesh_send_sync(struct hci_dev *hdev, void *data)
 {
-	struct mgmt_mesh_tx *mesh_tx = data;
-	struct mgmt_cp_mesh_send *send = (void *)mesh_tx->param;
+	struct mgmt_mesh_tx *mesh_tx;
+	struct mgmt_cp_mesh_send *send;
 	struct adv_info *adv, *next_instance;
 	u8 instance = hdev->le_num_of_adv_sets + 1;
 	u16 timeout, duration;
 	int err = 0;
 
-	if (hdev->le_num_of_adv_sets <= hdev->adv_instance_cnt)
+	hci_dev_lock(hdev);
+
+	mesh_tx = mgmt_mesh_find(hdev, MESH_TX_HANDLE(data));
+	if (!mesh_tx) {
+		hci_dev_unlock(hdev);
+		return -ENOENT;
+	}
+
+	send = (void *)mesh_tx->param;
+
+	if (hdev->le_num_of_adv_sets <= hdev->adv_instance_cnt) {
+		hci_dev_unlock(hdev);
 		return MGMT_STATUS_BUSY;
+	}
 
 	timeout = 1000;
 	duration = send->cnt * INTERVAL_TO_MS(hdev->le_adv_max_interval);
@@ -2372,6 +2497,8 @@ static int mesh_send_sync(struct hci_dev *hdev, void *data)
 		 */
 		instance = 0;
 	}
+
+	hci_dev_unlock(hdev);
 
 	if (instance)
 		return hci_schedule_adv_instance_sync(hdev, instance, true);
@@ -2416,37 +2543,80 @@ static int mesh_features(struct sock *sk, struct hci_dev *hdev,
 	return 0;
 }
 
+/* Cancel a single transmission, the handle is looked up again after the
+ * entry has been dequeued since it may be gone or have completed meanwhile.
+ */
+static void mesh_cancel_tx(struct hci_dev *hdev, u8 handle)
+{
+	struct mgmt_mesh_tx *mesh_tx;
+	bool in_progress;
+
+	hci_cmd_sync_dequeue(hdev, mesh_send_sync, MESH_TX_DATA(handle), NULL);
+
+	hci_dev_lock(hdev);
+	mesh_tx = mgmt_mesh_find(hdev, handle);
+	in_progress = mesh_tx && hci_dev_test_flag(hdev, HCI_MESH_SENDING) &&
+		      mesh_tx == mgmt_mesh_next(hdev, NULL);
+	hci_dev_unlock(hdev);
+
+	/* The done timer may have fired already and be waiting to complete
+	 * the transmission in progress, which is being cancelled.
+	 */
+	if (in_progress)
+		hci_cmd_sync_dequeue(hdev, mesh_send_done_sync, NULL, NULL);
+
+	hci_dev_lock(hdev);
+
+	mesh_tx = mgmt_mesh_find(hdev, handle);
+	if (mesh_tx) {
+		/* If it is the transmission in progress make sure the timer
+		 * doesn't complete the next one in its place.
+		 */
+		if (hci_dev_test_flag(hdev, HCI_MESH_SENDING) &&
+		    mesh_tx == mgmt_mesh_next(hdev, NULL)) {
+			cancel_delayed_work(&hdev->mesh_send_done);
+			hci_dev_clear_flag(hdev, HCI_MESH_SENDING);
+		}
+
+		mesh_send_complete(hdev, mesh_tx, false);
+	}
+
+	hci_dev_unlock(hdev);
+}
+
 static int send_cancel(struct hci_dev *hdev, void *data)
 {
 	struct mgmt_pending_cmd *cmd = data;
 	struct mgmt_cp_mesh_send_cancel *cancel = (void *)cmd->param;
 	struct mgmt_mesh_tx *mesh_tx;
+	u8 handle;
 
 	if (!cancel->handle) {
-		do {
+		for (;;) {
+			hci_dev_lock(hdev);
 			mesh_tx = mgmt_mesh_next(hdev, cmd->sk);
+			handle = mesh_tx ? mesh_tx->handle : 0;
+			hci_dev_unlock(hdev);
 
-			if (mesh_tx) {
-				if (!hci_cmd_sync_dequeue(hdev, mesh_send_sync,
-							  mesh_tx, NULL))
-					mesh_send_complete(hdev, mesh_tx, false);
-			}
-		} while (mesh_tx);
-	} else {
-		mesh_tx = mgmt_mesh_find(hdev, cancel->handle);
+			if (!mesh_tx)
+				break;
 
-		if (mesh_tx && mesh_tx->sk == cmd->sk) {
-			if (!hci_cmd_sync_dequeue(hdev, mesh_send_sync,
-						  mesh_tx, NULL))
-				mesh_send_complete(hdev, mesh_tx, false);
+			mesh_cancel_tx(hdev, handle);
 		}
+	} else {
+		hci_dev_lock(hdev);
+		mesh_tx = mgmt_mesh_find(hdev, cancel->handle);
+		handle = mesh_tx && mesh_tx->sk == cmd->sk ? mesh_tx->handle : 0;
+		hci_dev_unlock(hdev);
+
+		if (handle)
+			mesh_cancel_tx(hdev, handle);
 	}
 
 	mgmt_cmd_complete(cmd->sk, hdev->id, MGMT_OP_MESH_SEND_CANCEL,
 			  0, NULL, 0);
 
-	if (!hci_dev_test_flag(hdev, HCI_MESH_SENDING))
-		mesh_next(hdev, NULL, 0);
+	mesh_next(hdev, NULL, 0);
 
 	return 0;
 }
@@ -2497,7 +2667,6 @@ static int mesh_send(struct sock *sk, struct hci_dev *hdev, void *data, u16 len)
 	struct mgmt_cp_mesh_send *send = data;
 	struct mgmt_rp_mesh_read_features rp;
 	u16 expected_len;
-	bool sending;
 	int err = 0;
 
 	if (!lmp_le_capable(hdev) ||
@@ -2519,6 +2688,15 @@ static int mesh_send(struct sock *sk, struct hci_dev *hdev, void *data, u16 len)
 
 	hci_dev_lock(hdev);
 
+	/* Transmissions are flushed when the controller is closed, which is
+	 * serialized with this by hdev->lock, so none can be left behind.
+	 */
+	if (!hdev_is_powered(hdev)) {
+		err = mgmt_cmd_status(sk, hdev->id, MGMT_OP_MESH_SEND,
+				      MGMT_STATUS_NOT_POWERED);
+		goto done;
+	}
+
 	memset(&rp, 0, sizeof(rp));
 	rp.max_handles = MESH_HANDLES_MAX;
 
@@ -2530,27 +2708,27 @@ static int mesh_send(struct sock *sk, struct hci_dev *hdev, void *data, u16 len)
 		goto done;
 	}
 
-	sending = hci_dev_test_flag(hdev, HCI_MESH_SENDING);
 	mesh_tx = mgmt_mesh_add(sk, hdev, send, len);
-
-	if (!mesh_tx)
+	if (!mesh_tx) {
 		err = -ENOMEM;
-	else if (!sending)
-		err = hci_cmd_sync_queue(hdev, mesh_send_sync, mesh_tx,
-					 mesh_send_start_complete);
+	} else {
+		u8 handle = mesh_tx->handle;
+
+		/* The first transmission is the one queued, which may not be
+		 * the one just added.
+		 */
+		__mesh_next(hdev, handle);
+
+		/* Queueing failed, the transmission was removed */
+		if (!mgmt_mesh_find(hdev, handle))
+			err = -EIO;
+	}
 
 	if (err < 0) {
 		bt_dev_err(hdev, "Send Mesh Failed %d", err);
 		err = mgmt_cmd_status(sk, hdev->id, MGMT_OP_MESH_SEND,
 				      MGMT_STATUS_FAILED);
-
-		if (mesh_tx) {
-			if (sending)
-				mgmt_mesh_remove(mesh_tx);
-		}
 	} else {
-		hci_dev_set_flag(hdev, HCI_MESH_SENDING);
-
 		mgmt_cmd_complete(sk, hdev->id, MGMT_OP_MESH_SEND, 0,
 				  &mesh_tx->handle, 1);
 	}
@@ -3241,7 +3419,7 @@ static int unpair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 	/* Defer clearing up the connection parameters until closing to
 	 * give a chance of keeping them if a repairing happens.
 	 */
-	set_bit(HCI_CONN_PARAM_REMOVAL_PEND, &conn->flags);
+	set_bit(HCI_CONN_PARAM_REMOVAL_PEND, conn->flags);
 
 	/* Disable auto-connection parameters if present */
 	params = hci_conn_params_lookup(hdev, &cp->addr.bdaddr, addr_type);
@@ -3416,7 +3594,7 @@ static int get_connections(struct sock *sk, struct hci_dev *hdev, void *data,
 
 	i = 0;
 	list_for_each_entry(c, &hdev->conn_hash.list, list) {
-		if (test_bit(HCI_CONN_MGMT_CONNECTED, &c->flags))
+		if (test_bit(HCI_CONN_MGMT_CONNECTED, c->flags))
 			i++;
 	}
 
@@ -3428,7 +3606,7 @@ static int get_connections(struct sock *sk, struct hci_dev *hdev, void *data,
 
 	i = 0;
 	list_for_each_entry(c, &hdev->conn_hash.list, list) {
-		if (!test_bit(HCI_CONN_MGMT_CONNECTED, &c->flags))
+		if (!test_bit(HCI_CONN_MGMT_CONNECTED, c->flags))
 			continue;
 		bacpy(&rp->addr[i].bdaddr, &c->dst);
 		rp->addr[i].type = link_to_bdaddr(c->type, c->dst_type);
@@ -3628,7 +3806,7 @@ static int pairing_complete(struct mgmt_pending_cmd *cmd, u8 status)
 	/* The device is paired so there is no need to remove
 	 * its connection parameters anymore.
 	 */
-	clear_bit(HCI_CONN_PARAM_REMOVAL_PEND, &conn->flags);
+	clear_bit(HCI_CONN_PARAM_REMOVAL_PEND, conn->flags);
 
 	hci_conn_put(conn);
 
@@ -4011,22 +4189,34 @@ static int user_passkey_neg_reply(struct sock *sk, struct hci_dev *hdev,
 static int adv_expire_sync(struct hci_dev *hdev, u32 flags)
 {
 	struct adv_info *adv_instance;
+	u8 instance;
+
+	hci_dev_lock(hdev);
 
 	adv_instance = hci_find_adv_instance(hdev, hdev->cur_adv_instance);
 	if (!adv_instance)
-		return 0;
+		goto unlock;
 
 	/* stop if current instance doesn't need to be changed */
 	if (!(adv_instance->flags & flags))
-		return 0;
+		goto unlock;
 
 	cancel_adv_timeout(hdev);
 
 	adv_instance = hci_get_next_instance(hdev, adv_instance->instance);
 	if (!adv_instance)
-		return 0;
+		goto unlock;
 
-	hci_schedule_adv_instance_sync(hdev, adv_instance->instance, true);
+	instance = adv_instance->instance;
+
+	hci_dev_unlock(hdev);
+
+	hci_schedule_adv_instance_sync(hdev, instance, true);
+
+	return 0;
+
+unlock:
+	hci_dev_unlock(hdev);
 
 	return 0;
 }
@@ -6316,12 +6506,29 @@ static void stop_discovery_complete(struct hci_dev *hdev, void *data, int err)
 
 	bt_dev_dbg(hdev, "err %d", err);
 
+	hci_dev_lock(hdev);
+
+	/* Change the state before replying, so that a client acting on the
+	 * reply sees it, and only while the discovery is still stopping, as
+	 * Inquiry Cancel may already have stopped it and a new Start Discovery
+	 * may have followed. Go back to DISCOVERY_FINDING when stopping failed
+	 * while the inquiry or the active LE scan of the discovery is still
+	 * running, so that it can be stopped again.
+	 */
+	if (hdev->discovery.state == DISCOVERY_STOPPING) {
+		if (err && (test_bit(HCI_INQUIRY, &hdev->flags) ||
+			    (hci_dev_test_flag(hdev, HCI_LE_SCAN) &&
+			     hdev->le_scan_type == LE_SCAN_ACTIVE)))
+			hci_discovery_set_state(hdev, DISCOVERY_FINDING);
+		else
+			hci_discovery_set_state(hdev, DISCOVERY_STOPPED);
+	}
+
+	hci_dev_unlock(hdev);
+
 	mgmt_cmd_complete(cmd->sk, cmd->hdev->id, cmd->opcode, mgmt_status(err),
 			  cmd->param, 1);
 	mgmt_pending_free(cmd);
-
-	if (!err)
-		hci_discovery_set_state(hdev, DISCOVERY_STOPPED);
 }
 
 static int stop_discovery_sync(struct hci_dev *hdev, void *data)
@@ -6608,12 +6815,15 @@ static void set_advertising_complete(struct hci_dev *hdev, void *data, int err)
 
 	instance = hdev->cur_adv_instance;
 	if (!instance) {
+		hci_dev_lock(hdev);
 		adv_instance = list_first_entry_or_null(&hdev->adv_instances,
 							struct adv_info, list);
-		if (!adv_instance)
-			return;
+		if (adv_instance)
+			instance = adv_instance->instance;
+		hci_dev_unlock(hdev);
 
-		instance = adv_instance->instance;
+		if (!instance)
+			return;
 	}
 
 	err = hci_schedule_adv_instance_sync(hdev, instance, true);
@@ -8173,7 +8383,11 @@ static int load_conn_param(struct sock *sk, struct hci_dev *hdev, void *data,
 
 	hci_dev_lock(hdev);
 
-	if (param_count > 1)
+	/* A single entry may be an update for one device, so keep the other
+	 * disabled parameters then, but clear them otherwise, including when
+	 * no entries are loaded.
+	 */
+	if (param_count != 1)
 		hci_conn_params_clear_disabled(hdev);
 
 	for (i = 0; i < param_count; i++) {
@@ -9070,9 +9284,9 @@ static void add_advertising_complete(struct hci_dev *hdev, void *data, int err)
 static int add_advertising_sync(struct hci_dev *hdev, void *data)
 {
 	struct mgmt_pending_cmd *cmd = data;
-	struct mgmt_cp_add_advertising *cp = cmd->param;
+	u8 instance = PTR_UINT(cmd->user_data);
 
-	return hci_schedule_adv_instance_sync(hdev, cp->instance, true);
+	return hci_schedule_adv_instance_sync(hdev, instance, true);
 }
 
 static int add_advertising(struct sock *sk, struct hci_dev *hdev,
@@ -9156,7 +9370,9 @@ static int add_advertising(struct sock *sk, struct hci_dev *hdev,
 	if (hdev->adv_instance_cnt > prev_instance_cnt)
 		mgmt_advertising_added(sk, hdev, cp->instance);
 
-	if (hdev->cur_adv_instance == cp->instance) {
+	if (ext_adv_capable(hdev)) {
+		schedule_instance = cp->instance;
+	} else if (hdev->cur_adv_instance == cp->instance) {
 		/* If the currently advertised instance is being changed then
 		 * cancel the current advertising and schedule the next
 		 * instance. If there is only one instance then the overridden
@@ -9203,7 +9419,7 @@ static int add_advertising(struct sock *sk, struct hci_dev *hdev,
 		goto unlock;
 	}
 
-	cp->instance = schedule_instance;
+	cmd->user_data = UINT_PTR(schedule_instance);
 
 	err = hci_cmd_sync_queue(hdev, add_advertising_sync, cmd,
 				 add_advertising_complete);
@@ -9432,6 +9648,7 @@ static int add_ext_adv_data_sync(struct hci_dev *hdev, void *data)
 {
 	struct mgmt_pending_cmd *cmd = data;
 	struct mgmt_cp_add_ext_adv_data *cp = cmd->param;
+	u8 instance = PTR_UINT(cmd->user_data);
 	int err;
 
 	if (ext_adv_capable(hdev)) {
@@ -9446,7 +9663,7 @@ static int add_ext_adv_data_sync(struct hci_dev *hdev, void *data)
 		return hci_enable_ext_advertising_sync(hdev, cp->instance);
 	}
 
-	return hci_schedule_adv_instance_sync(hdev, cp->instance, true);
+	return hci_schedule_adv_instance_sync(hdev, instance, true);
 }
 
 static int add_ext_adv_data(struct sock *sk, struct hci_dev *hdev, void *data,
@@ -9508,7 +9725,9 @@ static int add_ext_adv_data(struct sock *sk, struct hci_dev *hdev, void *data,
 				  cp->data + cp->adv_data_len);
 
 	/* If using software rotation, determine next instance to use */
-	if (hdev->cur_adv_instance == cp->instance) {
+	if (ext_adv_capable(hdev)) {
+		schedule_instance = cp->instance;
+	} else if (hdev->cur_adv_instance == cp->instance) {
 		/* If the currently advertised instance is being changed
 		 * then cancel the current advertising and schedule the
 		 * next instance. If there is only one instance then the
@@ -9549,6 +9768,8 @@ static int add_ext_adv_data(struct sock *sk, struct hci_dev *hdev, void *data,
 		err = -ENOMEM;
 		goto clear_new_instance;
 	}
+
+	cmd->user_data = UINT_PTR(schedule_instance);
 
 	err = hci_cmd_sync_queue(hdev, add_ext_adv_data_sync, cmd,
 				 add_ext_adv_data_complete);
@@ -9893,7 +10114,8 @@ void mgmt_index_removed(struct hci_dev *hdev)
 	cancel_delayed_work_sync(&hdev->discov_off);
 	cancel_delayed_work_sync(&hdev->service_cache);
 	cancel_delayed_work_sync(&hdev->rpa_expired);
-	cancel_delayed_work_sync(&hdev->mesh_send_done);
+
+	mesh_flush(hdev, true);
 }
 
 void mgmt_power_on(struct hci_dev *hdev, int err)
@@ -9918,6 +10140,16 @@ void mgmt_power_on(struct hci_dev *hdev, int err)
 		sock_put(match.sk);
 
 	hci_dev_unlock(hdev);
+}
+
+/* This function requires the caller holds hdev->lock */
+void mgmt_mesh_flush(struct hci_dev *hdev)
+{
+	/* The mesh work is only initialized once mgmt is used */
+	if (!hci_dev_test_flag(hdev, HCI_MGMT))
+		return;
+
+	mesh_flush(hdev, false);
 }
 
 void __mgmt_power_off(struct hci_dev *hdev)
@@ -10128,7 +10360,7 @@ void mgmt_device_connected(struct hci_dev *hdev, struct hci_conn *conn,
 	u16 eir_len = 0;
 	u32 flags = 0;
 
-	if (test_and_set_bit(HCI_CONN_MGMT_CONNECTED, &conn->flags))
+	if (test_and_set_bit(HCI_CONN_MGMT_CONNECTED, conn->flags))
 		return;
 
 	/* allocate buff for LE or BR/EDR adv */
@@ -10177,7 +10409,7 @@ void mgmt_device_connected(struct hci_dev *hdev, struct hci_conn *conn,
 	 * since userspace did not know about them yet, so report it now.
 	 * Unencrypted connections have no change to report.
 	 */
-	if (test_bit(HCI_CONN_ENCRYPT, &conn->flags))
+	if (test_bit(HCI_CONN_ENCRYPT, conn->flags))
 		mgmt_security_level_changed(conn);
 }
 
@@ -10195,19 +10427,27 @@ bool mgmt_powering_down(struct hci_dev *hdev)
 {
 	struct mgmt_pending_cmd *cmd;
 	struct mgmt_mode *cp;
+	bool powering_down = false;
 
 	if (hci_dev_test_flag(hdev, HCI_POWERING_DOWN))
 		return true;
 
-	cmd = pending_find(MGMT_OP_SET_POWERED, hdev);
-	if (!cmd)
-		return false;
+	mutex_lock(&hdev->mgmt_pending_lock);
 
-	cp = cmd->param;
-	if (!cp->val)
-		return true;
+	list_for_each_entry(cmd, &hdev->mgmt_pending, list) {
+		if (hci_sock_get_channel(cmd->sk) != HCI_CHANNEL_CONTROL ||
+		    cmd->opcode != MGMT_OP_SET_POWERED)
+			continue;
 
-	return false;
+		/* cmd can only be freed after it is unlinked under the lock */
+		cp = cmd->param;
+		powering_down = !cp->val;
+		break;
+	}
+
+	mutex_unlock(&hdev->mgmt_pending_lock);
+
+	return powering_down;
 }
 
 u8 hci_to_mgmt_reason(u8 err)
@@ -10289,7 +10529,7 @@ void mgmt_connect_failed(struct hci_dev *hdev, struct hci_conn *conn, u8 status)
 	 * still needs it set to know whether to report the security level
 	 * reset, so it is consumed there instead of here.
 	 */
-	if (test_bit(HCI_CONN_MGMT_CONNECTED, &conn->flags)) {
+	if (test_bit(HCI_CONN_MGMT_CONNECTED, conn->flags)) {
 		mgmt_device_disconnected(hdev, &conn->dst, conn->type,
 					 conn->dst_type,
 					 hci_to_mgmt_reason(status), true);
@@ -10930,7 +11170,7 @@ void mgmt_security_level_changed(struct hci_conn *conn)
 	u8 *tlv_data;
 	u8 tlv_len;
 
-	if (!test_bit(HCI_CONN_MGMT_CONNECTED, &conn->flags))
+	if (!test_bit(HCI_CONN_MGMT_CONNECTED, conn->flags))
 		return;
 
 	/* Only ACL, LE and BIS links are tracked as mgmt connections, so
@@ -10943,7 +11183,7 @@ void mgmt_security_level_changed(struct hci_conn *conn)
 		return;
 
 	tlv_len = 2 * (sizeof(*tlv) + sizeof(__u8));
-	ev = kzalloc_flex(*ev, tlv_data, tlv_len, GFP_KERNEL);
+	ev = kzalloc_flex(*ev, tlv_data, tlv_len);
 	if (!ev)
 		return;
 
@@ -10961,9 +11201,9 @@ void mgmt_security_level_changed(struct hci_conn *conn)
 	tlv = (void *)tlv_data;
 	tlv->type = cpu_to_le16(MGMT_SEC_LEVEL_CHANGED_PARAM_ENC_TYPE);
 	tlv->length = sizeof(__u8);
-	if (!test_bit(HCI_CONN_ENCRYPT, &conn->flags))
+	if (!test_bit(HCI_CONN_ENCRYPT, conn->flags))
 		tlv->value[0] = MGMT_CONN_SEC_ENCRYPT_NONE;
-	else if (test_bit(HCI_CONN_AES_CCM, &conn->flags))
+	else if (test_bit(HCI_CONN_AES_CCM, conn->flags))
 		tlv->value[0] = MGMT_CONN_SEC_ENCRYPT_AES_CCM;
 	else
 		tlv->value[0] = MGMT_CONN_SEC_ENCRYPT_E0;

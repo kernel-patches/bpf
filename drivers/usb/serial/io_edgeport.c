@@ -52,6 +52,7 @@
 #define MAX_NAME_LEN		64
 
 #define OPEN_TIMEOUT		(5*HZ)		/* 5 seconds */
+#define EDGE_CMD_TIMEOUT	5000		/* milliseconds */
 
 static const struct usb_device_id edgeport_2port_id_table[] = {
 	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_EDGEPORT_2) },
@@ -168,6 +169,7 @@ struct edgeport_port {
 	struct urb		*write_urb;		/* write URB for this port */
 	bool			write_in_progress;	/* 'true' while a write URB is outstanding */
 	spinlock_t		ep_lock;
+	struct mutex		mutex;
 
 	__u8			shadowLCR;		/* last LCR value received */
 	__u8			shadowMCR;		/* last MCR value received */
@@ -180,13 +182,11 @@ struct edgeport_port {
 
 	bool			open;
 	bool			openPending;
-	bool			commandPending;
 	bool			closePending;
 	bool			chaseResponsePending;
 
 	wait_queue_head_t	wait_chase;		/* for handling sleeping while waiting for chase to finish */
 	wait_queue_head_t	wait_open;		/* for handling sleeping while waiting for open to finish */
-	wait_queue_head_t	wait_command;		/* for handling sleeping while waiting for command to finish */
 
 	struct usb_serial_port	*port;			/* loop back to the owner of this object */
 };
@@ -261,9 +261,6 @@ static const struct divisor_table_entry divisor_table[] = {
 	{   230400,	1},
 };
 
-/* Number of outstanding Command Write Urbs */
-static atomic_t CmdUrbs = ATOMIC_INIT(0);
-
 
 /* function prototypes */
 
@@ -281,8 +278,7 @@ static void handle_new_lsr(struct edgeport_port *edge_port, __u8 lsrData,
 static int  send_iosp_ext_cmd(struct edgeport_port *edge_port, __u8 command,
 				__u8 param);
 static int  calc_baud_rate_divisor(struct device *dev, int baud_rate, int *divisor);
-static void change_port_settings(struct tty_struct *tty,
-				struct edgeport_port *edge_port,
+static void edge_set_termios(struct tty_struct *tty, struct usb_serial_port *port,
 				const struct ktermios *old_termios);
 static int  send_cmd_write_uart_register(struct edgeport_port *edge_port,
 				__u8 regNum, __u8 regValue);
@@ -767,44 +763,6 @@ static void edge_bulk_out_data_callback(struct urb *urb)
 
 
 /*****************************************************************************
- * BulkOutCmdCallback
- *	this is the callback function for when we have finished sending a
- *	command	on the bulk out endpoint.
- *****************************************************************************/
-static void edge_bulk_out_cmd_callback(struct urb *urb)
-{
-	struct edgeport_port *edge_port = urb->context;
-	struct device *dev = &urb->dev->dev;
-	int status = urb->status;
-
-	atomic_dec(&CmdUrbs);
-	dev_dbg(dev, "%s - FREE URB %p (outstanding %d)\n", __func__, urb,
-		atomic_read(&CmdUrbs));
-
-
-	/* clean up the transfer buffer */
-	kfree(urb->transfer_buffer);
-
-	/* Free the command urb */
-	usb_free_urb(urb);
-
-	if (status) {
-		dev_dbg(dev, "%s - nonzero write bulk status received: %d\n",
-			__func__, status);
-		return;
-	}
-
-	/* tell the tty driver that something has changed */
-	if (edge_port->open)
-		tty_port_tty_wakeup(&edge_port->port->port);
-
-	/* we have completed the command */
-	edge_port->commandPending = false;
-	wake_up(&edge_port->wait_command);
-}
-
-
-/*****************************************************************************
  * Driver tty interface functions
  *****************************************************************************/
 
@@ -817,20 +775,13 @@ static void edge_bulk_out_cmd_callback(struct urb *urb)
 static int edge_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
+	struct usb_serial *serial = port->serial;
+	struct edgeport_serial *edge_serial = usb_get_serial_data(serial);
 	struct device *dev = &port->dev;
-	struct usb_serial *serial;
-	struct edgeport_serial *edge_serial;
 	int response;
-
-	if (edge_port == NULL)
-		return -ENODEV;
 
 	/* see if we've set up our endpoint info yet (can't set it up
 	   in edge_startup as the structures were not set up at that time.) */
-	serial = port->serial;
-	edge_serial = usb_get_serial_data(serial);
-	if (edge_serial == NULL)
-		return -ENODEV;
 	if (edge_serial->interrupt_in_buffer == NULL) {
 		struct usb_serial_port *port0 = serial->port[0];
 
@@ -877,22 +828,17 @@ static int edge_open(struct tty_struct *tty, struct usb_serial_port *port)
 		}
 	}
 
-	/* initialize our wait queues */
-	init_waitqueue_head(&edge_port->wait_open);
-	init_waitqueue_head(&edge_port->wait_chase);
-	init_waitqueue_head(&edge_port->wait_command);
-
 	/* initialize our port settings */
+	spin_lock_irq(&edge_port->ep_lock);
 	edge_port->txCredits = 0;	/* Can't send any data yet */
-	/* Must always set this bit to enable ints! */
-	edge_port->shadowMCR = MCR_MASTER_IE;
+	edge_port->maxTxCredits = 0;
+	edge_port->openPending = true;
+	spin_unlock_irq(&edge_port->ep_lock);
+
 	edge_port->chaseResponsePending = false;
 
 	/* send a open port command */
-	edge_port->openPending = true;
-	edge_port->open        = false;
 	response = send_iosp_ext_cmd(edge_port, IOSP_CMD_OPEN_PORT, 0);
-
 	if (response < 0) {
 		dev_err(dev, "%s - error sending open port command\n", __func__);
 		edge_port->openPending = false;
@@ -902,8 +848,7 @@ static int edge_open(struct tty_struct *tty, struct usb_serial_port *port)
 	/* now wait for the port to be completely opened */
 	wait_event_timeout(edge_port->wait_open, !edge_port->openPending,
 								OPEN_TIMEOUT);
-
-	if (!edge_port->open) {
+	if (edge_port->openPending) {
 		/* open timed out */
 		dev_dbg(dev, "%s - open timeout\n", __func__);
 		edge_port->openPending = false;
@@ -930,6 +875,13 @@ static int edge_open(struct tty_struct *tty, struct usb_serial_port *port)
 		edge_close(port);
 		return -ENOMEM;
 	}
+
+	if (tty)
+		edge_set_termios(tty, port, NULL);
+
+	spin_lock_irq(&edge_port->ep_lock);
+	edge_port->open = true;
+	spin_unlock_irq(&edge_port->ep_lock);
 
 	dev_dbg(dev, "%s - Initialize TX fifo to %d bytes\n",
 		__func__, edge_port->maxTxCredits);
@@ -1053,14 +1005,9 @@ static void block_until_tx_empty(struct edgeport_port *edge_port)
  *****************************************************************************/
 static void edge_close(struct usb_serial_port *port)
 {
-	struct edgeport_serial *edge_serial;
-	struct edgeport_port *edge_port;
+	struct edgeport_serial *edge_serial = usb_get_serial_data(port->serial);
+	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	int status;
-
-	edge_serial = usb_get_serial_data(port->serial);
-	edge_port = usb_get_serial_port_data(port);
-	if (edge_serial == NULL || edge_port == NULL)
-		return;
 
 	/* block until tx is empty */
 	block_until_tx_empty(edge_port);
@@ -1090,7 +1037,9 @@ static void edge_close(struct usb_serial_port *port)
 
 	/* port->close = true; */
 	edge_port->closePending = false;
+	spin_lock_irq(&edge_port->ep_lock);
 	edge_port->open = false;
+	spin_unlock_irq(&edge_port->ep_lock);
 	edge_port->openPending = false;
 
 	usb_kill_urb(edge_port->write_urb);
@@ -1124,13 +1073,16 @@ static int edge_write(struct tty_struct *tty, struct usb_serial_port *port,
 	int secondhalf;
 	unsigned long flags;
 
-	if (edge_port == NULL)
-		return -ENODEV;
-
 	/* get a pointer to the Tx fifo */
 	fifo = &edge_port->txfifo;
 
 	spin_lock_irqsave(&edge_port->ep_lock, flags);
+
+	/* avoid accessing freed fifo if tty_wakeup() races with close() */
+	if (!edge_port->open) {
+		spin_unlock_irqrestore(&edge_port->ep_lock, flags);
+		return 0;
+	}
 
 	/* calculate number of bytes to put in fifo */
 	copySize = min_t(unsigned int, count,
@@ -1377,14 +1329,6 @@ static void edge_throttle(struct tty_struct *tty)
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	int status;
 
-	if (edge_port == NULL)
-		return;
-
-	if (!edge_port->open) {
-		dev_dbg(&port->dev, "%s - port not opened\n", __func__);
-		return;
-	}
-
 	/* if we are implementing XON/XOFF, send the stop character */
 	if (I_IXOFF(tty)) {
 		unsigned char stop_char = STOP_CHAR(tty);
@@ -1395,9 +1339,11 @@ static void edge_throttle(struct tty_struct *tty)
 
 	/* if we are implementing RTS/CTS, toggle that line */
 	if (C_CRTSCTS(tty)) {
+		mutex_lock(&edge_port->mutex);
 		edge_port->shadowMCR &= ~MCR_RTS;
 		status = send_cmd_write_uart_register(edge_port, MCR,
 							edge_port->shadowMCR);
+		mutex_unlock(&edge_port->mutex);
 		if (status != 0)
 			return;
 	}
@@ -1415,14 +1361,6 @@ static void edge_unthrottle(struct tty_struct *tty)
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	int status;
 
-	if (edge_port == NULL)
-		return;
-
-	if (!edge_port->open) {
-		dev_dbg(&port->dev, "%s - port not opened\n", __func__);
-		return;
-	}
-
 	/* if we are implementing XON/XOFF, send the start character */
 	if (I_IXOFF(tty)) {
 		unsigned char start_char = START_CHAR(tty);
@@ -1432,34 +1370,12 @@ static void edge_unthrottle(struct tty_struct *tty)
 	}
 	/* if we are implementing RTS/CTS, toggle that line */
 	if (C_CRTSCTS(tty)) {
+		mutex_lock(&edge_port->mutex);
 		edge_port->shadowMCR |= MCR_RTS;
 		send_cmd_write_uart_register(edge_port, MCR,
 						edge_port->shadowMCR);
+		mutex_unlock(&edge_port->mutex);
 	}
-}
-
-
-/*****************************************************************************
- * SerialSetTermios
- *	this function is called by the tty driver when it wants to change
- * the termios structure
- *****************************************************************************/
-static void edge_set_termios(struct tty_struct *tty,
-			     struct usb_serial_port *port,
-			     const struct ktermios *old_termios)
-{
-	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
-
-	if (edge_port == NULL)
-		return;
-
-	if (!edge_port->open) {
-		dev_dbg(&port->dev, "%s - port not opened\n", __func__);
-		return;
-	}
-
-	/* change the port settings to the new ones specified */
-	change_port_settings(tty, edge_port, old_termios);
 }
 
 
@@ -1499,6 +1415,7 @@ static int edge_tiocmset(struct tty_struct *tty,
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	unsigned int mcr;
 
+	mutex_lock(&edge_port->mutex);
 	mcr = edge_port->shadowMCR;
 	if (set & TIOCM_RTS)
 		mcr |= MCR_RTS;
@@ -1517,6 +1434,7 @@ static int edge_tiocmset(struct tty_struct *tty,
 	edge_port->shadowMCR = mcr;
 
 	send_cmd_write_uart_register(edge_port, MCR, edge_port->shadowMCR);
+	mutex_unlock(&edge_port->mutex);
 
 	return 0;
 }
@@ -1530,6 +1448,7 @@ static int edge_tiocmget(struct tty_struct *tty)
 	unsigned int mcr;
 
 	msr = edge_port->shadowMSR;
+	mutex_lock(&edge_port->mutex);
 	mcr = edge_port->shadowMCR;
 	result = ((mcr & MCR_DTR)	? TIOCM_DTR: 0)	  /* 0x002 */
 		  | ((mcr & MCR_RTS)	? TIOCM_RTS: 0)   /* 0x004 */
@@ -1537,6 +1456,7 @@ static int edge_tiocmget(struct tty_struct *tty)
 		  | ((msr & EDGEPORT_MSR_CD)	? TIOCM_CAR: 0)   /* 0x040 */
 		  | ((msr & EDGEPORT_MSR_RI)	? TIOCM_RI:  0)   /* 0x080 */
 		  | ((msr & EDGEPORT_MSR_DSR)	? TIOCM_DSR: 0);  /* 0x100 */
+	mutex_unlock(&edge_port->mutex);
 
 	return result;
 }
@@ -1603,6 +1523,23 @@ static int edge_break(struct tty_struct *tty, int break_state)
 	}
 
 	return status;
+}
+
+
+static void edge_dtr_rts(struct usb_serial_port *port, int on)
+{
+	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
+
+	mutex_lock(&edge_port->mutex);
+
+	if (on)
+		edge_port->shadowMCR |= MCR_DTR | MCR_RTS;
+	else
+		edge_port->shadowMCR &= ~(MCR_DTR | MCR_RTS);
+
+	send_cmd_write_uart_register(edge_port, MCR, edge_port->shadowMCR);
+
+	mutex_unlock(&edge_port->mutex);
 }
 
 
@@ -1752,9 +1689,9 @@ static void process_rcvd_status(struct edgeport_serial *edge_serial,
 {
 	struct usb_serial_port *port;
 	struct edgeport_port *edge_port;
-	struct tty_struct *tty;
 	struct device *dev;
 	__u8 code = edge_serial->rxStatusCode;
+	unsigned long flags;
 
 	/* switch the port pointer to the one being currently talked about */
 	if (edge_serial->rxPort >= edge_serial->serial->num_ports)
@@ -1798,24 +1735,22 @@ static void process_rcvd_status(struct edgeport_serial *edge_serial,
 	}
 
 	if (code == IOSP_STATUS_OPEN_RSP) {
+		spin_lock_irqsave(&edge_port->ep_lock, flags);
+		/* reject stray open responses to avoid FIFO corruption */
+		if (!edge_port->openPending) {
+			spin_unlock_irqrestore(&edge_port->ep_lock, flags);
+			return;
+		}
 		edge_port->txCredits = GET_TX_BUFFER_SIZE(byte3);
 		edge_port->maxTxCredits = edge_port->txCredits;
 		dev_dbg(dev, "%s - Port %u Open Response Initial MSR = %02x TxBufferSize = %d\n",
 			__func__, edge_serial->rxPort, byte2, edge_port->txCredits);
 		handle_new_msr(edge_port, byte2);
 
-		/* send the current line settings to the port so we are
-		   in sync with any further termios calls */
-		tty = tty_port_tty_get(&edge_port->port->port);
-		if (tty) {
-			change_port_settings(tty,
-				edge_port, &tty->termios);
-			tty_kref_put(tty);
-		}
-
 		/* we have completed the open */
 		edge_port->openPending = false;
-		edge_port->open = true;
+		spin_unlock_irqrestore(&edge_port->ep_lock, flags);
+
 		wake_up(&edge_port->wait_open);
 		return;
 	}
@@ -2104,7 +2039,7 @@ static int send_iosp_ext_cmd(struct edgeport_port *edge_port,
 	int             length = 0;
 	int             status = 0;
 
-	buffer = kmalloc(10, GFP_ATOMIC);
+	buffer = kmalloc(10, GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
 
@@ -2114,10 +2049,8 @@ static int send_iosp_ext_cmd(struct edgeport_port *edge_port,
 			 command, param);
 
 	status = write_cmd_usb(edge_port, buffer, length);
-	if (status) {
-		/* something bad happened, let's free up the memory */
-		kfree(buffer);
-	}
+
+	kfree(buffer);
 
 	return status;
 }
@@ -2130,50 +2063,22 @@ static int send_iosp_ext_cmd(struct edgeport_port *edge_port,
 static int write_cmd_usb(struct edgeport_port *edge_port,
 					unsigned char *buffer, int length)
 {
-	struct edgeport_serial *edge_serial =
-				usb_get_serial_data(edge_port->port->serial);
+	struct usb_serial *serial = edge_port->port->serial;
+	struct edgeport_serial *edge_serial = usb_get_serial_data(serial);
 	struct device *dev = &edge_port->port->dev;
-	int status = 0;
-	struct urb *urb;
+	int status;
 
 	usb_serial_debug_data(dev, __func__, length, buffer);
 
-	/* Allocate our next urb */
-	urb = usb_alloc_urb(0, GFP_ATOMIC);
-	if (!urb)
-		return -ENOMEM;
-
-	atomic_inc(&CmdUrbs);
-	dev_dbg(dev, "%s - ALLOCATE URB %p (outstanding %d)\n",
-		__func__, urb, atomic_read(&CmdUrbs));
-
-	usb_fill_bulk_urb(urb, edge_serial->serial->dev,
-			usb_sndbulkpipe(edge_serial->serial->dev,
-					edge_serial->bulk_out_endpoint),
-			buffer, length, edge_bulk_out_cmd_callback, edge_port);
-
-	edge_port->commandPending = true;
-	status = usb_submit_urb(urb, GFP_ATOMIC);
-
+	status = usb_bulk_msg(serial->dev,
+			usb_sndbulkpipe(serial->dev, edge_serial->bulk_out_endpoint),
+			buffer, length, NULL, EDGE_CMD_TIMEOUT);
 	if (status) {
-		/* something went wrong */
-		dev_err(dev, "%s - usb_submit_urb(write command) failed, status = %d\n",
-			__func__, status);
-		usb_free_urb(urb);
-		atomic_dec(&CmdUrbs);
+		dev_err(dev, "failed to send command: %d\n", status);
 		return status;
 	}
 
-#if 0
-	wait_event(&edge_port->wait_command, !edge_port->commandPending);
-
-	if (edge_port->commandPending) {
-		/* command timed out */
-		dev_dbg(dev, "%s - command timed out\n", __func__);
-		status = -EINVAL;
-	}
-#endif
-	return status;
+	return 0;
 }
 
 
@@ -2211,7 +2116,7 @@ static int send_cmd_write_baud_rate(struct edgeport_port *edge_port,
 	}
 
 	/* Alloc memory for the string of commands. */
-	cmdBuffer =  kmalloc(0x100, GFP_ATOMIC);
+	cmdBuffer = kmalloc(0x100, GFP_KERNEL);
 	if (!cmdBuffer)
 		return -ENOMEM;
 
@@ -2229,10 +2134,8 @@ static int send_cmd_write_baud_rate(struct edgeport_port *edge_port,
 						edge_port->shadowLCR);
 
 	status = write_cmd_usb(edge_port, cmdBuffer, cmdLen);
-	if (status) {
-		/* something bad happened, let's free up the memory */
-		kfree(cmdBuffer);
-	}
+
+	kfree(cmdBuffer);
 
 	return status;
 }
@@ -2305,7 +2208,7 @@ static int send_cmd_write_uart_register(struct edgeport_port *edge_port,
 	}
 
 	/* Alloc memory for the string of commands. */
-	cmdBuffer = kmalloc(0x10, GFP_ATOMIC);
+	cmdBuffer = kmalloc(0x10, GFP_KERNEL);
 	if (cmdBuffer == NULL)
 		return -ENOMEM;
 
@@ -2316,27 +2219,19 @@ static int send_cmd_write_uart_register(struct edgeport_port *edge_port,
 			   regNum, regValue);
 
 	status = write_cmd_usb(edge_port, cmdBuffer, cmdLen);
-	if (status) {
-		/* something bad happened, let's free up the memory */
-		kfree(cmdBuffer);
-	}
+
+	kfree(cmdBuffer);
 
 	return status;
 }
 
 
-/*****************************************************************************
- * change_port_settings
- *	This routine is called to set the UART on the device to match the
- *	specified new settings.
- *****************************************************************************/
-
-static void change_port_settings(struct tty_struct *tty,
-	struct edgeport_port *edge_port, const struct ktermios *old_termios)
+static void edge_set_termios(struct tty_struct *tty, struct usb_serial_port *port,
+		const struct ktermios *old_termios)
 {
-	struct device *dev = &edge_port->port->dev;
-	struct edgeport_serial *edge_serial =
-			usb_get_serial_data(edge_port->port->serial);
+	struct edgeport_serial *edge_serial = usb_get_serial_data(port->serial);
+	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
+	struct device *dev = &port->dev;
 	int baud;
 	unsigned cflag;
 	__u8 mask = 0xff;
@@ -2346,12 +2241,6 @@ static void change_port_settings(struct tty_struct *tty,
 	__u8 rxFlow;
 	__u8 txFlow;
 	int status;
-
-	if (!edge_port->open &&
-	    !edge_port->openPending) {
-		dev_dbg(dev, "%s - port not opened\n", __func__);
-		return;
-	}
 
 	cflag = tty->termios.c_cflag;
 
@@ -2468,12 +2357,17 @@ static void change_port_settings(struct tty_struct *tty,
 		return;
 
 	/* set up the MCR register and send it to the EdgePort */
-	edge_port->shadowMCR = MCR_MASTER_IE;
-	if (cflag & CBAUD)
-		edge_port->shadowMCR |= (MCR_DTR | MCR_RTS);
+	mutex_lock(&edge_port->mutex);
+	if (cflag & CBAUD) {
+		if (old_termios && (old_termios->c_cflag & CBAUD) == B0)
+			edge_port->shadowMCR |= MCR_DTR | MCR_RTS;
+	} else {
+		edge_port->shadowMCR &= ~(MCR_DTR | MCR_RTS);
+	}
 
 	status = send_cmd_write_uart_register(edge_port, MCR,
 						edge_port->shadowMCR);
+	mutex_unlock(&edge_port->mutex);
 	if (status != 0)
 		return;
 
@@ -2486,7 +2380,7 @@ static void change_port_settings(struct tty_struct *tty,
 
 	dev_dbg(dev, "%s - baud rate = %d\n", __func__, baud);
 	status = send_cmd_write_baud_rate(edge_port, baud);
-	if (status == -1) {
+	if (status == -1 && old_termios) {
 		/* Speed change was not possible - put back the old speed */
 		baud = tty_termios_baud_rate(old_termios);
 		tty_encode_baud_rate(tty, baud, baud);
@@ -2965,6 +2859,14 @@ static int edge_port_probe(struct usb_serial_port *port)
 		return -ENOMEM;
 
 	spin_lock_init(&edge_port->ep_lock);
+	mutex_init(&edge_port->mutex);
+
+	init_waitqueue_head(&edge_port->wait_open);
+	init_waitqueue_head(&edge_port->wait_chase);
+
+	/* must set this bit to enable interrupts */
+	edge_port->shadowMCR = MCR_MASTER_IE;
+
 	edge_port->port = port;
 
 	usb_set_serial_port_data(port, edge_port);
@@ -3005,6 +2907,7 @@ static struct usb_serial_driver edgeport_2port_device = {
 	.tiocmset		= edge_tiocmset,
 	.tiocmiwait		= usb_serial_generic_tiocmiwait,
 	.get_icount		= usb_serial_generic_get_icount,
+	.dtr_rts		= edge_dtr_rts,
 	.write			= edge_write,
 	.write_room		= edge_write_room,
 	.chars_in_buffer	= edge_chars_in_buffer,
@@ -3039,6 +2942,7 @@ static struct usb_serial_driver edgeport_4port_device = {
 	.tiocmset		= edge_tiocmset,
 	.tiocmiwait		= usb_serial_generic_tiocmiwait,
 	.get_icount		= usb_serial_generic_get_icount,
+	.dtr_rts		= edge_dtr_rts,
 	.write			= edge_write,
 	.write_room		= edge_write_room,
 	.chars_in_buffer	= edge_chars_in_buffer,
@@ -3073,6 +2977,7 @@ static struct usb_serial_driver edgeport_8port_device = {
 	.tiocmset		= edge_tiocmset,
 	.tiocmiwait		= usb_serial_generic_tiocmiwait,
 	.get_icount		= usb_serial_generic_get_icount,
+	.dtr_rts		= edge_dtr_rts,
 	.write			= edge_write,
 	.write_room		= edge_write_room,
 	.chars_in_buffer	= edge_chars_in_buffer,
@@ -3107,6 +3012,7 @@ static struct usb_serial_driver epic_device = {
 	.tiocmset		= edge_tiocmset,
 	.tiocmiwait		= usb_serial_generic_tiocmiwait,
 	.get_icount		= usb_serial_generic_get_icount,
+	.dtr_rts		= edge_dtr_rts,
 	.write			= edge_write,
 	.write_room		= edge_write_room,
 	.chars_in_buffer	= edge_chars_in_buffer,

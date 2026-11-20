@@ -497,7 +497,7 @@ static irqreturn_t ads1119_irq_handler(int irq, void *dev_id)
 	struct ads1119_state *st = iio_priv(indio_dev);
 
 	if (iio_buffer_enabled(indio_dev) && iio_trigger_using_own(indio_dev))
-		iio_trigger_poll(indio_dev->trig);
+		iio_trigger_poll(st->trig);
 	else
 		complete(&st->completion);
 
@@ -615,15 +615,14 @@ static int ads1119_alloc_and_config_channels(struct iio_dev *indio_dev)
 				     st->num_channels_cfg,
 				     ADS1119_MAX_CHANNELS);
 
-	st->channels_cfg = devm_kcalloc(dev, st->num_channels_cfg,
-					sizeof(*st->channels_cfg), GFP_KERNEL);
+	st->channels_cfg = devm_kzalloc_objs(dev, *st->channels_cfg,
+					     st->num_channels_cfg);
 	if (!st->channels_cfg)
 		return -ENOMEM;
 
 	/* Allocate one more iio channel for the timestamp */
 	num_channels = st->num_channels_cfg + 1;
-	iio_channels = devm_kcalloc(dev, num_channels, sizeof(*iio_channels),
-				    GFP_KERNEL);
+	iio_channels = devm_kzalloc_objs(dev, *iio_channels, num_channels);
 	if (!iio_channels)
 		return -ENOMEM;
 

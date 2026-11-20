@@ -10,7 +10,7 @@
 #ifndef __ASMARM_HARDWARE_IOC_H
 #define __ASMARM_HARDWARE_IOC_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /*
  * We use __raw_base variants here so that we give the compiler the

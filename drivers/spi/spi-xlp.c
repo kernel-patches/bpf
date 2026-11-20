@@ -279,6 +279,8 @@ static int xlp_spi_xfer_block(struct  xlp_spi_priv *xs,
 	xs->rx_len = (xs->rx_buf == NULL) ? 0 : xfer_len;
 	xs->txerrors = xs->rxerrors = 0;
 
+	reinit_completion(&xs->done);
+
 	/* fill TXDATA_FIFO, then send the CMD */
 	if (xs->tx_len)
 		xlp_spi_fill_txfifo(xs);
@@ -372,7 +374,7 @@ static int xlp_spi_probe(struct platform_device *pdev)
 	struct clk *clk;
 	int irq, err;
 
-	xspi = devm_kzalloc(&pdev->dev, sizeof(*xspi), GFP_KERNEL);
+	xspi = devm_kzalloc_obj(&pdev->dev, *xspi);
 	if (!xspi)
 		return -ENOMEM;
 

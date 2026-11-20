@@ -343,8 +343,7 @@ int usb_wwan_open(struct tty_struct *tty, struct usb_serial_port *port)
 	/* Start reading from the IN endpoint */
 	for (i = 0; i < N_IN_URB; i++) {
 		urb = portdata->in_urbs[i];
-		if (!urb)
-			continue;
+
 		err = usb_submit_urb(urb, GFP_KERNEL);
 		if (err) {
 			dev_err(&port->dev,
@@ -465,6 +464,9 @@ int usb_wwan_port_probe(struct usb_serial_port *port)
 						USB_DIR_IN, port,
 						buffer, IN_BUFLEN,
 						usb_wwan_indat_callback);
+		if (!urb)
+			goto bail_out_error;
+
 		portdata->in_urbs[i] = urb;
 	}
 
@@ -478,6 +480,9 @@ int usb_wwan_port_probe(struct usb_serial_port *port)
 						USB_DIR_OUT, port,
 						buffer, OUT_BUFLEN,
 						usb_wwan_outdat_callback);
+		if (!urb)
+			goto bail_out_error2;
+
 		portdata->out_urbs[i] = urb;
 	}
 

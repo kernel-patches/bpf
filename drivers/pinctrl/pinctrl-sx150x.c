@@ -17,6 +17,7 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/mutex.h>
+#include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/gpio/driver.h>
@@ -1132,7 +1133,7 @@ static int sx150x_probe(struct i2c_client *client)
 	if (!i2c_check_functionality(client->adapter, i2c_funcs))
 		return -ENOSYS;
 
-	pctl = devm_kzalloc(dev, sizeof(*pctl), GFP_KERNEL);
+	pctl = devm_kzalloc_obj(dev, *pctl);
 	if (!pctl)
 		return -ENOMEM;
 

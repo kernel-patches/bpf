@@ -1543,12 +1543,18 @@ static void uniwill_lightbar_trigger_deactivate(struct led_classdev *led_cdev)
 		dev_err(led_cdev->dev, "Failed to stop rainbow animation: %d\n", ret);
 }
 
+static bool uniwill_lightbar_trigger_hw_offloaded(struct led_classdev *led_cdev)
+{
+	return true;
+}
+
 static struct led_hw_trigger_type uniwill_lightbar_trigger_type;
 
 static struct led_trigger uniwill_lightbar_trigger = {
 	.name = "uniwill-rainbow",
 	.activate = uniwill_lightbar_trigger_activate,
 	.deactivate = uniwill_lightbar_trigger_deactivate,
+	.hw_offloaded = uniwill_lightbar_trigger_hw_offloaded,
 	.trigger_type = &uniwill_lightbar_trigger_type,
 };
 
@@ -2218,7 +2224,7 @@ static int uniwill_battery_init(struct uniwill_data *data)
 	data->hook.add_battery = uniwill_add_battery;
 	data->hook.remove_battery = uniwill_remove_battery;
 
-	return devm_battery_hook_register(data->dev, &data->hook);
+	return devm_acpi_battery_hook_register(data->dev, &data->hook);
 }
 
 static int uniwill_notifier_call(struct notifier_block *nb, unsigned long action, void *dummy)
@@ -2366,7 +2372,7 @@ static int uniwill_probe(struct platform_device *pdev)
 	if (!handle)
 		return -ENODEV;
 
-	data = devm_kzalloc(&pdev->dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(&pdev->dev, *data);
 	if (!data)
 		return -ENOMEM;
 
@@ -3519,6 +3525,22 @@ static const struct dmi_system_id uniwill_dmi_table[] __initconst = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "TUXEDO"),
 			DMI_EXACT_MATCH(DMI_BOARD_NAME, "X6AR5xxY_mLED"),
+		},
+		.driver_data = &gmxixxx_xxxx45xx_xxxx55xx_xxxx57xx_descriptor,
+	},
+	{
+		.ident = "TUXEDO Stellaris 16 - Gen8 - Intel",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "TUXEDO"),
+			DMI_EXACT_MATCH(DMI_BOARD_NAME, "XxAF5xxx"),
+		},
+		.driver_data = &gmxixxx_xxxx45xx_xxxx55xx_xxxx57xx_descriptor,
+	},
+	{
+		.ident = "TUXEDO Stellaris 16 - Gen8 - Intel",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "TUXEDO"),
+			DMI_EXACT_MATCH(DMI_BOARD_NAME, "XxAF5xxx_mLED"),
 		},
 		.driver_data = &gmxixxx_xxxx45xx_xxxx55xx_xxxx57xx_descriptor,
 	},

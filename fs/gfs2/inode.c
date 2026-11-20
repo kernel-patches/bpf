@@ -2229,7 +2229,7 @@ retry:
 		goto out;
 
 	pagefault_disable();
-	ret = iomap_fiemap(inode, fieinfo, start, len, &gfs2_iomap_ops);
+	ret = iomap_fiemap(inode, fieinfo, start, len, gfs2_iomap_next);
 	pagefault_enable();
 
 	gfs2_glock_dq_uninit(&gh);
@@ -2253,9 +2253,11 @@ loff_t gfs2_seek_data(struct file *file, loff_t offset)
 
 	inode_lock_shared(inode);
 	ret = gfs2_glock_nq_init(gl, LM_ST_SHARED, 0, &gh);
-	if (!ret)
-		ret = iomap_seek_data(inode, offset, &gfs2_iomap_ops);
+	if (ret)
+		goto out;
+	ret = iomap_seek_data(inode, offset, gfs2_iomap_next);
 	gfs2_glock_dq_uninit(&gh);
+out:
 	inode_unlock_shared(inode);
 
 	if (ret < 0)
@@ -2272,9 +2274,11 @@ loff_t gfs2_seek_hole(struct file *file, loff_t offset)
 
 	inode_lock_shared(inode);
 	ret = gfs2_glock_nq_init(gl, LM_ST_SHARED, 0, &gh);
-	if (!ret)
-		ret = iomap_seek_hole(inode, offset, &gfs2_iomap_ops);
+	if (ret)
+		goto out;
+	ret = iomap_seek_hole(inode, offset, gfs2_iomap_next);
 	gfs2_glock_dq_uninit(&gh);
+out:
 	inode_unlock_shared(inode);
 
 	if (ret < 0)

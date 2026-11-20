@@ -145,6 +145,16 @@ static bool kvm_pgtable_walk_continue(const struct kvm_pgtable_walker *walker,
 	return !r;
 }
 
+static bool kvm_pgtable_skip_level(s8 level, enum kvm_pgtable_walk_flags flags)
+{
+	u8 offset = FIELD_GET(KVM_PGTABLE_WALK_SKIP_OFFSET, flags);
+
+	BUILD_BUG_ON(!FIELD_FIT(KVM_PGTABLE_WALK_SKIP_OFFSET,
+				KVM_PGTABLE_LAST_LEVEL - KVM_PGTABLE_FIRST_LEVEL));
+
+	return unlikely(level > KVM_PGTABLE_LAST_LEVEL - offset);
+}
+
 static int __kvm_pgtable_walk(struct kvm_pgtable_walk_data *data,
 			      struct kvm_pgtable_mm_ops *mm_ops, kvm_pteref_t pgtable, s8 level);
 
@@ -191,9 +201,9 @@ static inline int __kvm_pgtable_visit(struct kvm_pgtable_walk_data *data,
 	}
 
 	if (!kvm_pgtable_walk_continue(data->walker, ret))
-		goto out;
+		return ret;
 
-	if (!table) {
+	if (!table || kvm_pgtable_skip_level(level + 1, ctx.flags)) {
 		data->addr = ALIGN_DOWN(data->addr, kvm_granule_size(level));
 		data->addr += kvm_granule_size(level);
 		goto out;
@@ -202,12 +212,12 @@ static inline int __kvm_pgtable_visit(struct kvm_pgtable_walk_data *data,
 	childp = (kvm_pteref_t)kvm_pte_follow(ctx.old, mm_ops);
 	ret = __kvm_pgtable_walk(data, mm_ops, childp, level + 1);
 	if (!kvm_pgtable_walk_continue(data->walker, ret))
-		goto out;
-
-	if (ctx.flags & KVM_PGTABLE_WALK_TABLE_POST)
-		ret = kvm_pgtable_visitor_cb(data, &ctx, KVM_PGTABLE_WALK_TABLE_POST);
+		return ret;
 
 out:
+	if (table && ctx.flags & KVM_PGTABLE_WALK_TABLE_POST)
+		ret = kvm_pgtable_visitor_cb(data, &ctx, KVM_PGTABLE_WALK_TABLE_POST);
+
 	if (kvm_pgtable_walk_continue(data->walker, ret))
 		return 0;
 
@@ -249,6 +259,9 @@ static int _kvm_pgtable_walk(struct kvm_pgtable *pgt, struct kvm_pgtable_walk_da
 
 	if (!pgt->pgd)
 		return -EINVAL;
+
+	if (kvm_pgtable_skip_level(pgt->start_level, data->walker->flags))
+		return 0;
 
 	for (idx = kvm_pgd_page_idx(pgt, data->addr); data->addr < data->end; ++idx) {
 		kvm_pteref_t pteref = &pgt->pgd[idx * PTRS_PER_PTE];
@@ -414,7 +427,7 @@ static bool hyp_map_walker_try_leaf(const struct kvm_pgtable_visit_ctx *ctx,
 		return true;
 	if (!kvm_pte_valid(ctx->old))
 		ctx->mm_ops->get_page(ctx->ptep);
-	else if (WARN_ON((ctx->old ^ new) & ~KVM_PTE_LEAF_ATTR_HI_SW))
+	else if ((ctx->old ^ new) & ~KVM_PTE_LEAF_ATTR_HI_SW)
 		return false;
 
 	smp_store_release(ctx->ptep, new);
@@ -430,6 +443,14 @@ static int hyp_map_walker(const struct kvm_pgtable_visit_ctx *ctx,
 
 	if (hyp_map_walker_try_leaf(ctx, data))
 		return 0;
+
+	/*
+	 * A valid entry here is a leaf that conflicts with the request.
+	 * Replacing a block with a table would need break-before-make, and
+	 * would leave the rest of the block unmapped.
+	 */
+	if (kvm_pte_valid(ctx->old))
+		return -EEXIST;
 
 	if (WARN_ON(ctx->level == KVM_PGTABLE_LAST_LEVEL))
 		return -EINVAL;
@@ -1564,7 +1585,12 @@ int kvm_pgtable_stage2_split(struct kvm_pgtable *pgt, u64 addr, u64 size,
 {
 	struct kvm_pgtable_walker walker = {
 		.cb	= stage2_split_walker,
-		.flags	= KVM_PGTABLE_WALK_LEAF,
+			  /*
+			   * Skip level 3 mappings as we're only interested in
+			   * splitting hugepages.
+			   */
+		.flags	= KVM_PGTABLE_WALK_LEAF |
+			  FIELD_PREP(KVM_PGTABLE_WALK_SKIP_OFFSET, 1),
 		.arg	= mc,
 	};
 	int ret;
@@ -1653,16 +1679,27 @@ static int stage2_free_walker(const struct kvm_pgtable_visit_ctx *ctx,
 	}
 }
 
-void kvm_pgtable_stage2_destroy_range(struct kvm_pgtable *pgt,
-				       u64 addr, u64 size)
+s64 kvm_pgtable_stage2_destroy_range(struct kvm_pgtable *pgt,
+				     u64 addr, u64 size)
 {
 	struct kvm_pgtable_walker walker = {
 		.cb	= stage2_free_walker,
 		.flags	= KVM_PGTABLE_WALK_LEAF |
 			  KVM_PGTABLE_WALK_TABLE_POST,
 	};
+	struct kvm_pgtable_walk_data data = {
+		.walker	= &walker,
+		.start	= addr,
+		.addr	= addr,
+		.end	= addr + size,
+	};
+	int ret;
 
-	WARN_ON(kvm_pgtable_walk(pgt, addr, size, &walker));
+	ret = _kvm_pgtable_walk(pgt, &data);
+	if (ret)
+		return ret;
+
+	return data.addr;
 }
 
 void kvm_pgtable_stage2_destroy_pgd(struct kvm_pgtable *pgt)
@@ -1681,7 +1718,7 @@ void kvm_pgtable_stage2_destroy_pgd(struct kvm_pgtable *pgt)
 
 void kvm_pgtable_stage2_destroy(struct kvm_pgtable *pgt)
 {
-	kvm_pgtable_stage2_destroy_range(pgt, 0, BIT(pgt->ia_bits));
+	WARN_ON(kvm_pgtable_stage2_destroy_range(pgt, 0, BIT(pgt->ia_bits)) < 0);
 	kvm_pgtable_stage2_destroy_pgd(pgt);
 }
 

@@ -205,7 +205,8 @@ static int fsp3y_detect(struct i2c_client *client)
 	int rv;
 	u8 buf[I2C_SMBUS_BLOCK_MAX + 1];
 
-	rv = i2c_smbus_read_block_data(client, PMBUS_MFR_MODEL, buf);
+	rv = i2c_smbus_read_block_data(client, PMBUS_MFR_MODEL,
+					sizeof(buf) - 1, buf);
 	if (rv < 0)
 		return rv;
 
@@ -228,7 +229,7 @@ static int fsp3y_probe(struct i2c_client *client)
 	const struct i2c_device_id *id;
 	int rv;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct fsp3y_data), GFP_KERNEL);
+	data = devm_kzalloc_obj(&client->dev, struct fsp3y_data);
 	if (!data)
 		return -ENOMEM;
 

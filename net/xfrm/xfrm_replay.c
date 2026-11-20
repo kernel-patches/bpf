@@ -40,7 +40,7 @@ static void xfrm_replay_notify_esn(struct xfrm_state *x, int event);
 
 void xfrm_replay_notify(struct xfrm_state *x, int event)
 {
-	struct km_event c;
+	struct km_event c = {};
 	/* we send notify messages in case
 	 *  1. we updated on of the sequence numbers, and the seqno difference
 	 *     is at least x->replay_maxdiff, in this case we also update the
@@ -304,7 +304,7 @@ static void xfrm_replay_advance_bmp(struct xfrm_state *x, __be32 net_seq)
 
 static void xfrm_replay_notify_bmp(struct xfrm_state *x, int event)
 {
-	struct km_event c;
+	struct km_event c = {};
 	struct xfrm_replay_state_esn *replay_esn = x->replay_esn;
 	struct xfrm_replay_state_esn *preplay_esn = x->preplay_esn;
 
@@ -356,7 +356,7 @@ static void xfrm_replay_notify_bmp(struct xfrm_state *x, int event)
 static void xfrm_replay_notify_esn(struct xfrm_state *x, int event)
 {
 	u32 seq_diff, oseq_diff;
-	struct km_event c;
+	struct km_event c = {};
 	struct xfrm_replay_state_esn *replay_esn = x->replay_esn;
 	struct xfrm_replay_state_esn *preplay_esn = x->preplay_esn;
 
@@ -451,6 +451,7 @@ static int xfrm_replay_overflow_esn(struct xfrm_state *x, struct sk_buff *skb)
 static int xfrm_replay_check_esn(struct xfrm_state *x,
 				 struct sk_buff *skb, __be32 net_seq)
 {
+	struct xfrm_offload *xo = xfrm_offload(skb);
 	unsigned int bitnr, nr;
 	u32 diff;
 	struct xfrm_replay_state_esn *replay_esn = x->replay_esn;
@@ -469,7 +470,18 @@ static int xfrm_replay_check_esn(struct xfrm_state *x,
 
 	diff = top - seq;
 
-	if (likely(top >= wsize - 1)) {
+	if (xo && (xo->flags & CRYPTO_DONE)) {
+		/* The ICV was already verified by HW with its own seq_hi,
+		 * so the seq_hi guessed by xfrm_replay_seqhi() can't
+		 * be validated in SW.
+		 *
+		 * Treat seq up to 2^31 ahead of top as new, everything else as
+		 * behind: in-window ones go through the bitmap, the rest get
+		 * dropped.
+		 */
+		if (likely(diff >= BIT(31)))
+			return 0;
+	} else if (likely(top >= wsize - 1)) {
 		/* A. same subspace */
 		if (likely(seq > top) || seq < bottom)
 			return 0;

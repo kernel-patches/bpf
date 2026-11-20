@@ -1025,7 +1025,7 @@ static int ab8500_probe(struct platform_device *pdev)
 	int irq;
 	u8 value;
 
-	ab8500 = devm_kzalloc(&pdev->dev, sizeof(*ab8500), GFP_KERNEL);
+	ab8500 = devm_kzalloc_obj(&pdev->dev, *ab8500);
 	if (!ab8500)
 		return -ENOMEM;
 
@@ -1234,16 +1234,13 @@ static int ab8500_probe(struct platform_device *pdev)
 
 	if (((is_ab8505(ab8500) || is_ab9540(ab8500)) &&
 			ab8500->chip_id >= AB8500_CUT2P0) || is_ab8540(ab8500))
-		ret = sysfs_create_group(&ab8500->dev->kobj,
-					&ab9540_attr_group);
+		ret = devm_device_add_group(ab8500->dev, &ab9540_attr_group);
 	else
-		ret = sysfs_create_group(&ab8500->dev->kobj,
-					&ab8500_attr_group);
+		ret = devm_device_add_group(ab8500->dev, &ab8500_attr_group);
 
 	if ((is_ab8505(ab8500) || is_ab9540(ab8500)) &&
-			ab8500->chip_id >= AB8500_CUT2P0)
-		ret = sysfs_create_group(&ab8500->dev->kobj,
-					 &ab8505_attr_group);
+			ab8500->chip_id >= AB8500_CUT2P0 && !ret)
+		ret = devm_device_add_group(ab8500->dev, &ab8505_attr_group);
 
 	if (ret)
 		dev_err(ab8500->dev, "error creating sysfs entries\n");

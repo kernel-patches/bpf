@@ -72,7 +72,7 @@ static int fch_misc_setup(struct apd_private_data *pdata)
 	struct list_head resource_list;
 	int ret;
 
-	clk_data = devm_kzalloc(&adev->dev, sizeof(*clk_data), GFP_KERNEL);
+	clk_data = devm_kzalloc_obj(&adev->dev, *clk_data);
 	if (!clk_data)
 		return -ENOMEM;
 
@@ -248,31 +248,31 @@ static int acpi_apd_create_device(struct acpi_device *adev,
 static const struct acpi_device_id acpi_apd_device_ids[] = {
 	/* Generic apd devices */
 #ifdef CONFIG_X86_AMD_PLATFORM_DEVICE
-	{ "AMD0010", APD_ADDR(cz_i2c_desc) },
-	{ "AMD0020", APD_ADDR(cz_uart_desc) },
-	{ "AMD0030", },
-	{ "AMD0040", APD_ADDR(fch_misc_desc)},
-	{ "AMDI0010", APD_ADDR(wt_i2c_desc) },
-	{ "AMDI0015", APD_ADDR(wt_i3c_desc) },
-	{ "AMDI0019", APD_ADDR(wt_i2c_desc) },
-	{ "AMDI0020", APD_ADDR(cz_uart_desc) },
-	{ "AMDI0021", APD_ADDR(cz_uart_desc) },
-	{ "AMDI0022", APD_ADDR(cz_uart_desc) },
-	{ "HYGO0010", APD_ADDR(wt_i2c_desc) },
+	{ .id = "AMD0010",  .driver_data = APD_ADDR(cz_i2c_desc) },
+	{ .id = "AMD0020",  .driver_data = APD_ADDR(cz_uart_desc) },
+	{ .id = "AMD0030",  .driver_data = (unsigned long)NULL },
+	{ .id = "AMD0040",  .driver_data = APD_ADDR(fch_misc_desc)},
+	{ .id = "AMDI0010", .driver_data = APD_ADDR(wt_i2c_desc) },
+	{ .id = "AMDI0015", .driver_data = APD_ADDR(wt_i3c_desc) },
+	{ .id = "AMDI0019", .driver_data = APD_ADDR(wt_i2c_desc) },
+	{ .id = "AMDI0020", .driver_data = APD_ADDR(cz_uart_desc) },
+	{ .id = "AMDI0021", .driver_data = APD_ADDR(cz_uart_desc) },
+	{ .id = "AMDI0022", .driver_data = APD_ADDR(cz_uart_desc) },
+	{ .id = "HYGO0010", .driver_data = APD_ADDR(wt_i2c_desc) },
 #endif
 #ifdef CONFIG_ARM64
-	{ "APMC0D0F", APD_ADDR(xgene_i2c_desc) },
-	{ "BRCM900D", APD_ADDR(vulcan_spi_desc) },
-	{ "CAV900D",  APD_ADDR(vulcan_spi_desc) },
-	{ "CAV9007",  APD_ADDR(thunderx2_i2c_desc) },
-	{ "HISI02A1", APD_ADDR(hip07_i2c_desc) },
-	{ "HISI02A2", APD_ADDR(hip08_i2c_desc) },
-	{ "HISI02A3", APD_ADDR(hip08_lite_i2c_desc) },
-	{ "HISI0173", APD_ADDR(hip08_spi_desc) },
-	{ "HJMC3001", APD_ADDR(hjmc_i2c_desc) },
-	{ "LECA0002", APD_ADDR(leca_spi_desc) },
-	{ "LECA0003", APD_ADDR(leca_i2c_desc) },
-	{ "NXP0001", APD_ADDR(nxp_i2c_desc) },
+	{ .id = "APMC0D0F", .driver_data = APD_ADDR(xgene_i2c_desc) },
+	{ .id = "BRCM900D", .driver_data = APD_ADDR(vulcan_spi_desc) },
+	{ .id = "CAV900D",  .driver_data = APD_ADDR(vulcan_spi_desc) },
+	{ .id = "CAV9007",  .driver_data = APD_ADDR(thunderx2_i2c_desc) },
+	{ .id = "HISI02A1", .driver_data = APD_ADDR(hip07_i2c_desc) },
+	{ .id = "HISI02A2", .driver_data = APD_ADDR(hip08_i2c_desc) },
+	{ .id = "HISI02A3", .driver_data = APD_ADDR(hip08_lite_i2c_desc) },
+	{ .id = "HISI0173", .driver_data = APD_ADDR(hip08_spi_desc) },
+	{ .id = "HJMC3001", .driver_data = APD_ADDR(hjmc_i2c_desc) },
+	{ .id = "LECA0002", .driver_data = APD_ADDR(leca_spi_desc) },
+	{ .id = "LECA0003", .driver_data = APD_ADDR(leca_i2c_desc) },
+	{ .id = "NXP0001",  .driver_data = APD_ADDR(nxp_i2c_desc) },
 #endif
 	{ }
 };

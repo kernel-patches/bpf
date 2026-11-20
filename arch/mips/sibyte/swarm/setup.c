@@ -35,28 +35,14 @@
 #include <asm/sibyte/sb1250_genbus.h>
 #include <asm/sibyte/board.h>
 
-#ifdef CONFIG_SIBYTE_BCM1x80
-extern void bcm1480_setup(void);
-#elif defined(CONFIG_SIBYTE_SB1250) || defined(CONFIG_SIBYTE_BCM112X)
-extern void sb1250_setup(void);
-#else
-#error invalid SiByte board configuration
-#endif
-
-extern int xicor_probe(void);
-extern int xicor_set_time(time64_t);
-extern time64_t xicor_get_time(void);
-
-extern int m41t81_probe(void);
-extern int m41t81_set_time(time64_t);
-extern time64_t m41t81_get_time(void);
+#include "rtc.h"
 
 const char *get_system_type(void)
 {
 	return "SiByte " SIBYTE_BOARD_NAME;
 }
 
-int swarm_be_handler(struct pt_regs *regs, int is_fixup)
+static int swarm_be_handler(struct pt_regs *regs, int is_fixup)
 {
 	if (!is_fixup && (regs->cp0_cause & 4)) {
 		/* Data bus error - print PA */

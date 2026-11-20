@@ -651,9 +651,16 @@ static int cs43130_set_sp_fmt(int dai_id, unsigned int bitwidth_sclk,
 		return -EINVAL;
 	}
 
-	frm_size = bitwidth_sclk * params_channels(params);
-	loc_ch1 = 0;
-	loc_ch2 = bitwidth_sclk * (params_channels(params) - 1);
+	if (cs43130->dais[dai_id].slots) {
+		/* The layout set with set_tdm_slot() */
+		frm_size = bitwidth_sclk * cs43130->dais[dai_id].slots;
+		loc_ch1 = cs43130->dais[dai_id].slot_loc[0];
+		loc_ch2 = cs43130->dais[dai_id].slot_loc[1];
+	} else {
+		frm_size = bitwidth_sclk * params_channels(params);
+		loc_ch1 = 0;
+		loc_ch2 = bitwidth_sclk * (params_channels(params) - 1);
+	}
 
 	frm_data = frm_delay & CS43130_SP_FSD_MASK;
 	frm_data |= (frm_phase << CS43130_SP_STP_SHIFT) & CS43130_SP_STP_MASK;
@@ -820,6 +827,9 @@ static int cs43130_dsd_hw_params(struct snd_pcm_substream *substream,
 	u8 dsd_speed;
 
 	scoped_guard(mutex, &cs43130->clk_mutex) {
+		if (test_and_set_bit(dai->id, &cs43130->clk_dais))
+			goto clk_held;
+
 		if (!cs43130->clk_req) {
 			/* no DAI is currently using clk */
 			if (!(CS43130_MCLK_22M % params_rate(params)))
@@ -838,6 +848,7 @@ static int cs43130_dsd_hw_params(struct snd_pcm_substream *substream,
 		if (cs43130->clk_req == 2)
 			cs43130_pcm_dsd_mix(true, cs43130->regmap);
 	}
+clk_held:
 
 	switch (params_rate(params)) {
 	case 176400:
@@ -883,6 +894,9 @@ static int cs43130_hw_params(struct snd_pcm_substream *substream,
 	u8 dsd_speed;
 
 	scoped_guard(mutex, &cs43130->clk_mutex) {
+		if (test_and_set_bit(dai->id, &cs43130->clk_dais))
+			goto clk_held;
+
 		if (!cs43130->clk_req) {
 			/* no DAI is currently using clk */
 			if (!(CS43130_MCLK_22M % params_rate(params)))
@@ -901,6 +915,7 @@ static int cs43130_hw_params(struct snd_pcm_substream *substream,
 		if (cs43130->clk_req == 2)
 			cs43130_pcm_dsd_mix(true, cs43130->regmap);
 	}
+clk_held:
 
 	switch (dai->id) {
 	case CS43130_ASP_DOP_DAI:
@@ -952,18 +967,24 @@ static int cs43130_hw_params(struct snd_pcm_substream *substream,
 		break;
 	}
 
-	if (!sclk && cs43130->dais[dai->id].dai_mode == SND_SOC_DAIFMT_CBP_CFP)
-		/* Calculate SCLK in master mode if unassigned */
-		sclk = params_rate(params) * bitwidth_dai *
-		       params_channels(params);
+	if (cs43130->dais[dai->id].slot_width) {
+		/* The slot width set with set_tdm_slot() */
+		bitwidth_sclk = cs43130->dais[dai->id].slot_width;
+	} else {
+		if (!sclk && cs43130->dais[dai->id].dai_mode == SND_SOC_DAIFMT_CBP_CFP)
+			/* Calculate SCLK in master mode if unassigned */
+			sclk = params_rate(params) * bitwidth_dai *
+			       params_channels(params);
 
-	if (!sclk) {
-		/* at this point, SCLK must be set */
-		dev_err(cs43130->dev, "SCLK freq is not set\n");
-		return -EINVAL;
+		if (!sclk) {
+			/* at this point, SCLK must be set */
+			dev_err(cs43130->dev, "SCLK freq is not set\n");
+			return -EINVAL;
+		}
+
+		bitwidth_sclk = (sclk / params_rate(params)) /
+				params_channels(params);
 	}
-
-	bitwidth_sclk = (sclk / params_rate(params)) / params_channels(params);
 	if (bitwidth_sclk < bitwidth_dai) {
 		dev_err(cs43130->dev, "Format not supported: SCLK freq is too low\n");
 		return -EINVAL;
@@ -990,6 +1011,13 @@ static int cs43130_hw_free(struct snd_pcm_substream *substream,
 	struct cs43130_private *cs43130 = snd_soc_component_get_drvdata(component);
 
 	guard(mutex)(&cs43130->clk_mutex);
+	/*
+	 * ALSA calls hw_free() after a failed hw_params(), also when this DAI's
+	 * hw_params() never ran: drop only a reference it took.
+	 */
+	if (!test_and_clear_bit(dai->id, &cs43130->clk_dais))
+		return 0;
+
 	cs43130->clk_req--;
 	if (!cs43130->clk_req) {
 		/* no DAI is currently using clk */
@@ -1609,6 +1637,42 @@ static int cs43130_set_sysclk(struct snd_soc_dai *codec_dai,
 	return 0;
 }
 
+/*
+ * Sets the frame layout directly, which then takes precedence over the one
+ * derived from the set_sysclk() frequency: generic sound cards pass MCLK to
+ * set_sysclk(), not SCLK. The PCM DAI only plays, so it receives: the two
+ * channels go to the first and second slots set in rx_mask (both to the same
+ * slot for one), and tx_mask is not used. Frames are 16 to 64 bits, the sizes
+ * the serial port clock tables cover. Zero slots go back to the derived layout.
+ */
+static int cs43130_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
+				unsigned int rx_mask, int slots, int slot_width)
+{
+	struct snd_soc_component *component = dai->component;
+	struct cs43130_private *cs43130 = snd_soc_component_get_drvdata(component);
+	struct cs43130_dai *cs_dai = &cs43130->dais[dai->id];
+	unsigned int frm_size = slots * slot_width;
+
+	if (!slots) {
+		cs_dai->slots = 0;
+		cs_dai->slot_width = 0;
+		return 0;
+	}
+	if (slots < 0 || slot_width < 16 || slot_width > 32 ||
+	    frm_size > 64 || frm_size % 16)
+		return -EINVAL;
+	if (!rx_mask || hweight32(rx_mask) > 2 || rx_mask >= BIT(slots))
+		return -EINVAL;
+
+	cs_dai->slot_loc[0] = __ffs(rx_mask) * slot_width;
+	rx_mask &= rx_mask - 1;
+	cs_dai->slot_loc[1] = rx_mask ? __ffs(rx_mask) * slot_width :
+					cs_dai->slot_loc[0];
+	cs_dai->slots = slots;
+	cs_dai->slot_width = slot_width;
+	return 0;
+}
+
 static const u64 cs43130_selectable_formats =
 	SND_SOC_POSSIBLE_DAIFMT_I2S	|
 	SND_SOC_POSSIBLE_DAIFMT_LEFT_J	|
@@ -1625,6 +1689,7 @@ static const struct snd_soc_dai_ops cs43130_pcm_ops = {
 	.hw_free	= cs43130_hw_free,
 	.set_sysclk	= cs43130_set_sysclk,
 	.set_fmt	= cs43130_pcm_set_fmt,
+	.set_tdm_slot	= cs43130_set_tdm_slot,
 	.auto_selectable_formats	= &cs43130_selectable_formats,
 	.num_auto_selectable_formats	= 1,
 };
@@ -2413,7 +2478,6 @@ static const struct snd_soc_component_driver soc_component_dev_cs43130_digital =
 	.set_sysclk		= cs43130_component_set_sysclk,
 	.set_pll		= cs43130_set_pll,
 	.idle_bias_on		= 1,
-	.use_pmdown_time	= 1,
 	.endianness		= 1,
 	/* Don't take into account the ending analog widgets and routes */
 	.dapm_widgets		= hp_widgets,
@@ -2429,7 +2493,6 @@ static const struct snd_soc_component_driver soc_component_dev_cs43130_analog = 
 	.set_sysclk		= cs43130_component_set_sysclk,
 	.set_pll		= cs43130_set_pll,
 	.idle_bias_on		= 1,
-	.use_pmdown_time	= 1,
 	.endianness		= 1,
 	.dapm_widgets		= hp_widgets,
 	.num_dapm_widgets	= ARRAY_SIZE(hp_widgets),
@@ -2513,7 +2576,7 @@ static int cs43130_i2c_probe(struct i2c_client *client)
 	unsigned int reg;
 	int i, devid;
 
-	cs43130 = devm_kzalloc(&client->dev, sizeof(*cs43130), GFP_KERNEL);
+	cs43130 = devm_kzalloc_obj(&client->dev, *cs43130);
 	if (!cs43130)
 		return -ENOMEM;
 

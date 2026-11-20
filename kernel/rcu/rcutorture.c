@@ -1055,7 +1055,7 @@ static struct rcu_torture_ops srcud_ops = {
 /* As above, but broken due to inappropriate reader extension. */
 static struct rcu_torture_ops busted_srcud_ops = {
 	.ttype		= SRCU_FLAVOR,
-	.init		= srcu_torture_init,
+	.init		= srcud_torture_init,
 	.cleanup	= srcu_torture_cleanup,
 	.readlock	= srcu_torture_read_lock,
 	.read_delay	= rcu_read_delay,
@@ -1164,7 +1164,6 @@ static struct rcu_torture_ops trivial_preempt_ops = {
 	.readlock	= rcu_torture_read_lock_trivial_preempt,
 	.read_delay	= rcu_read_delay,  // just reuse rcu's version.
 	.readunlock	= rcu_torture_read_unlock_trivial_preempt,
-	.readlock_held	= torture_readlock_not_held,
 	.get_gp_seq	= rcu_no_completed,
 	.sync		= synchronize_rcu_trivial_preempt,
 	.exp_sync	= synchronize_rcu_trivial_preempt,
@@ -1314,6 +1313,7 @@ static struct rcu_torture_ops tasks_tracing_ops = {
 	.irq_capable	= 1,
 	.slow_gps	= 1,
 	.nmi_capable	= 1,
+	.debug_objects	= 1,
 	.name		= "tasks-tracing"
 };
 
@@ -1763,7 +1763,7 @@ rcu_torture_writer(void *arg)
 		return 0;
 	}
 	if (cur_ops->poll_active > 0) {
-		ulo = kcalloc(cur_ops->poll_active, sizeof(*ulo), GFP_KERNEL);
+		ulo = kzalloc_objs(*ulo, cur_ops->poll_active);
 		if (!WARN_ON(!ulo))
 			ulo_size = cur_ops->poll_active;
 	}
@@ -2791,8 +2791,8 @@ static void rcu_torture_nmi_init(void)
 
 	if (!nmi_calls || !cur_ops->nmi_capable || !cur_ops->call)
 		return;
-	rcu_torture_nmi_events = kcalloc(nr_cpu_ids, sizeof(*rcu_torture_nmi_events),
-					 GFP_KERNEL);
+	rcu_torture_nmi_events = kzalloc_objs(*rcu_torture_nmi_events,
+					      nr_cpu_ids);
 	if (!rcu_torture_nmi_events)
 		return;
 	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "rcutorture/nmi:online",
@@ -4007,9 +4007,8 @@ static int __init rcu_torture_fwd_prog_init(void)
 	} else if (fwd_progress < 0) {
 		fwd_progress = nr_cpu_ids;
 	}
-	if ((!cur_ops->sync && !cur_ops->call) ||
-	    (!cur_ops->cbflood_max && (!cur_ops->stall_dur || cur_ops->stall_dur() <= 0)) ||
-	    cur_ops == &rcu_busted_ops) {
+	if (!cur_ops->sync || ((!cur_ops->call || !cur_ops->cb_barrier || !cur_ops->cbflood_max) &&
+	    (!cur_ops->stall_dur || cur_ops->stall_dur() <= 0))) {
 		VERBOSE_TOROUT_STRING("rcu_torture_fwd_prog_init: Disabled, unsupported by RCU flavor under test");
 		fwd_progress = 0;
 		return 0;

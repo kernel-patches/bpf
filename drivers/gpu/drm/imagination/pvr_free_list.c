@@ -193,7 +193,6 @@ free_list_fw_init(void *cpu_ptr, void *priv)
 
 static int
 free_list_create_fw_structure(struct pvr_file *pvr_file,
-			      struct drm_pvr_ioctl_create_free_list_args *args,
 			      struct pvr_free_list *free_list)
 {
 	struct pvr_device *pvr_dev = pvr_file->pvr_dev;
@@ -368,8 +367,12 @@ void pvr_free_list_process_grow_req(struct pvr_device *pvr_dev,
 	u32 grow_pages = 0;
 
 	/* If we don't have a freelist registered for this ID, we can't do much. */
-	if (WARN_ON(!free_list))
+	if (!free_list) {
+		drm_warn_ratelimited(from_pvr_device(pvr_dev),
+				     "Received freelist grow request for unknown ID 0x%x\n",
+				     req->freelist_id);
 		return;
+	}
 
 	/* Since the FW made the request, it has already consumed the ready pages,
 	 * update the host struct.
@@ -439,7 +442,7 @@ pvr_free_list_create(struct pvr_file *pvr_file,
 	if (err)
 		goto err_destroy_kernel_structure;
 
-	err = free_list_create_fw_structure(pvr_file, args, free_list);
+	err = free_list_create_fw_structure(pvr_file, free_list);
 	if (err < 0)
 		goto err_free_fw_id;
 
@@ -565,8 +568,12 @@ pvr_free_list_reconstruct(struct pvr_device *pvr_dev, u32 freelist_id)
 	struct rogue_fwif_freelist *fw_data;
 	struct pvr_hwrt_data *hwrt_data;
 
-	if (!free_list)
+	if (!free_list) {
+		drm_warn_ratelimited(from_pvr_device(pvr_dev),
+				     "Received freelist reconstruction request for unknown ID 0x%x\n",
+				     freelist_id);
 		return;
+	}
 
 	mutex_lock(&free_list->lock);
 

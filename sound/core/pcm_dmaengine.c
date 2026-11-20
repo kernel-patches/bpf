@@ -154,6 +154,7 @@ static int dmaengine_pcm_prepare_and_submit(struct snd_pcm_substream *substream)
 	struct dma_async_tx_descriptor *desc;
 	enum dma_transfer_direction direction;
 	unsigned long flags = DMA_CTRL_ACK;
+	int ret;
 
 	direction = snd_pcm_substream_to_dma_direction(substream);
 
@@ -169,9 +170,11 @@ static int dmaengine_pcm_prepare_and_submit(struct snd_pcm_substream *substream)
 	if (!desc)
 		return -ENOMEM;
 
-	desc->callback = dmaengine_pcm_dma_complete;
-	desc->callback_param = substream;
+	dmaengine_desc_set_callback(desc, dmaengine_pcm_dma_complete, NULL, substream);
 	prtd->cookie = dmaengine_submit(desc);
+	ret = dma_submit_error(prtd->cookie);
+	if (ret)
+		return ret;
 
 	return 0;
 }

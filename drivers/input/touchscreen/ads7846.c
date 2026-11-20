@@ -758,52 +758,54 @@ static bool ads7846_cmd_need_settle(enum ads7846_cmds cmd_idx)
 	return false;
 }
 
-static int ads7846_filter(struct ads7846 *ts)
-{
-	struct ads7846_packet *packet = ts->packet;
-	int action;
-	int val;
-	unsigned int cmd_idx, b;
-
-	packet->ignore = false;
-	for (cmd_idx = packet->last_cmd_idx; cmd_idx < packet->cmds - 1; cmd_idx++) {
-		struct ads7846_buf_layout *l = &packet->l[cmd_idx];
-
-		packet->last_cmd_idx = cmd_idx;
-
-		for (b = l->skip; b < l->count; b++) {
-			val = ads7846_get_value(&packet->rx[l->offset + b]);
-
-			action = ts->filter(ts->filter_data, cmd_idx, &val);
-			if (action == ADS7846_FILTER_REPEAT) {
-				if (b == l->count - 1)
-					return -EAGAIN;
-			} else if (action == ADS7846_FILTER_OK) {
-				ads7846_set_cmd_val(ts, cmd_idx, val);
-				break;
-			} else {
-				packet->ignore = true;
-				return 0;
-			}
-		}
-	}
-
-	return 0;
-}
-
-static int ads7846_filter_one(struct ads7846 *ts, unsigned int cmd_idx)
+static int ads7846_filter_cmd(struct ads7846 *ts, unsigned int cmd_idx)
 {
 	struct ads7846_packet *packet = ts->packet;
 	struct ads7846_buf_layout *l = &packet->l[cmd_idx];
-	int action, val;
+	unsigned int b;
 
-	val = ads7846_get_value(&packet->rx[l->offset + l->count - 1]);
-	action = ts->filter(ts->filter_data, cmd_idx, &val);
-	if (action == ADS7846_FILTER_REPEAT)
-		return -EAGAIN;
-	else if (action != ADS7846_FILTER_OK)
-		return -EIO;
-	ads7846_set_cmd_val(ts, cmd_idx, val);
+	for (b = l->skip; b < l->count; b++) {
+		int val = ads7846_get_value(&packet->rx[l->offset + b]);
+
+		switch (ts->filter(ts->filter_data, cmd_idx, &val)) {
+		case ADS7846_FILTER_REPEAT:
+			if (b == l->count - 1)
+				return -EAGAIN;
+			break;
+
+		case ADS7846_FILTER_OK:
+			ads7846_set_cmd_val(ts, cmd_idx, val);
+			return 0;
+
+		case ADS7846_FILTER_IGNORE:
+		default:
+			return -EIO;
+		}
+	}
+
+	return -EIO;
+}
+
+static int ads7846_filter(struct ads7846 *ts)
+{
+	struct ads7846_packet *packet = ts->packet;
+	unsigned int cmd_idx;
+	int error;
+
+	packet->ignore = false;
+	for (cmd_idx = packet->last_cmd_idx; cmd_idx < packet->cmds - 1; cmd_idx++) {
+		packet->last_cmd_idx = cmd_idx;
+
+		error = ads7846_filter_cmd(ts, cmd_idx);
+		if (error) {
+			if (error == -EAGAIN)
+				return -EAGAIN;
+
+			packet->ignore = true;
+			return 0;
+		}
+	}
+
 	return 0;
 }
 
@@ -856,7 +858,7 @@ static void ads7846_halfd_read_state(struct ads7846 *ts)
 		if (msg_idx == ts->msg_count - 1)
 			break;
 
-		error = ads7846_filter_one(ts, msg_idx);
+		error = ads7846_filter_cmd(ts, msg_idx);
 		if (error == -EAGAIN) {
 			continue;
 		} else if (error) {
@@ -1118,7 +1120,7 @@ static int ads7846_halfd_spi_msg(struct ads7846 *ts,
 		l->offset = offset;
 		offset += max_count;
 		l->count = max_count;
-		l->skip = 0;
+		l->skip = max_count - 1;
 		size += sizeof(*packet->rx) * max_count;
 	}
 
@@ -1296,7 +1298,7 @@ static const struct ads7846_platform_data *ads7846_get_props(struct device *dev)
 	struct ads7846_platform_data *pdata;
 	u32 value;
 
-	pdata = devm_kzalloc(dev, sizeof(*pdata), GFP_KERNEL);
+	pdata = devm_kzalloc_obj(dev, *pdata);
 	if (!pdata)
 		return ERR_PTR(-ENOMEM);
 
@@ -1385,7 +1387,7 @@ static int ads7846_probe(struct spi_device *spi)
 	if (err < 0)
 		return err;
 
-	ts = devm_kzalloc(dev, sizeof(struct ads7846), GFP_KERNEL);
+	ts = devm_kzalloc_obj(dev, struct ads7846);
 	if (!ts)
 		return -ENOMEM;
 
@@ -1397,7 +1399,7 @@ static int ads7846_probe(struct spi_device *spi)
 		ts->read_state    = ads7846_read_state;
 	}
 
-	packet = devm_kzalloc(dev, sizeof(struct ads7846_packet), GFP_KERNEL);
+	packet = devm_kzalloc_obj(dev, struct ads7846_packet);
 	if (!packet)
 		return -ENOMEM;
 

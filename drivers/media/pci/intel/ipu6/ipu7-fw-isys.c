@@ -214,6 +214,7 @@ static int ipu7_isys_fw_pin_cfg(struct ipu6_isys_video *av,
 	output_pin->link.pbk_slot_id = IPU7_MSG_LINK_PBK_SLOT_ID_DONT_CARE;
 	output_pin->link.dest = 0; /* IPU_INSYS_OUTPUT_LINK_DEST_MEM */
 	output_pin->link.use_sw_managed = 1;
+	output_pin->link.is_snoop = 1;
 	output_pin->crop.line_top = 0;
 	output_pin->crop.line_bottom = 0;
 	output_pin->dpcm.enable = 0;

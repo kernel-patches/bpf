@@ -52,7 +52,7 @@ static int max7301_probe(struct spi_device *spi)
 	if (ret < 0)
 		return ret;
 
-	ts = devm_kzalloc(&spi->dev, sizeof(struct max7301), GFP_KERNEL);
+	ts = devm_kzalloc_obj(&spi->dev, struct max7301);
 	if (!ts)
 		return -ENOMEM;
 
@@ -70,7 +70,7 @@ static void max7301_remove(struct spi_device *spi)
 }
 
 static const struct spi_device_id max7301_id[] = {
-	{ "max7301", 0 },
+	{ .name = "max7301" },
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, max7301_id);

@@ -4,8 +4,8 @@
  */
 #include <linux/init.h>
 
-extern void sb1480_clockevent_init(void);
-extern void sb1480_clocksource_init(void);
+#include <asm/time.h>
+#include <asm/sibyte/sb1250.h>
 
 void __init plat_time_init(void)
 {

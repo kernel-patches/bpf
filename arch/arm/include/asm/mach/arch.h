@@ -7,7 +7,7 @@
 
 #include <linux/types.h>
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #include <linux/reboot.h>
 
 struct tag;

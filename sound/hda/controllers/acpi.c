@@ -166,7 +166,7 @@ static void hda_acpi_probe_work(struct work_struct *work)
 	if (err < 0)
 		return;
 
-	err = snd_card_register(chip->card);
+	err = snd_hda_card_register(&chip->bus);
 	if (err < 0)
 		return;
 
@@ -210,7 +210,7 @@ static int hda_acpi_probe(struct platform_device *pdev)
 	struct hda_acpi *hda;
 	int err;
 
-	hda = devm_kzalloc(&pdev->dev, sizeof(*hda), GFP_KERNEL);
+	hda = devm_kzalloc_obj(&pdev->dev, *hda);
 	if (!hda)
 		return -ENOMEM;
 
@@ -219,8 +219,7 @@ static int hda_acpi_probe(struct platform_device *pdev)
 
 	/* Fall back to defaults if the table didn't have a *struct hda_data */
 	if (!hda->data)
-		hda->data = devm_kzalloc(&pdev->dev, sizeof(*hda->data),
-					 GFP_KERNEL);
+		hda->data = devm_kzalloc_obj(&pdev->dev, *hda->data);
 	if (!hda->data)
 		return -ENOMEM;
 

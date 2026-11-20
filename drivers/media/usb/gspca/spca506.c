@@ -154,8 +154,10 @@ static void spca506_GetNormeInput(struct gspca_dev *gspca_dev,
 {
 	struct sd *sd = (struct sd *) gspca_dev;
 
-	/* Read the register is not so good value change so
-	   we use your own copy in spca50x struct */
+	/*
+	 * Read the register is not so good value change so
+	 * we use your own copy in spca50x struct
+	 */
 	*norme = sd->norme;
 	*channel = sd->channel;
 	gspca_dbg(gspca_dev, D_STREAM, "Get Norme: %d Channel %d\n",

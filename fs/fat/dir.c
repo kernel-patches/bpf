@@ -963,6 +963,16 @@ int fat_dir_empty(struct inode *dir)
 }
 EXPORT_SYMBOL_GPL(fat_dir_empty);
 
+void fat_dir_drop_nlink(struct inode *dir)
+{
+	if (dir->i_nlink >= 3)
+		drop_nlink(dir);
+	else
+		fat_fs_error(dir->i_sb, "parent dir link count too low (%u)",
+			     dir->i_nlink);
+}
+EXPORT_SYMBOL_GPL(fat_dir_drop_nlink);
+
 /*
  * fat_subdirs counts the number of sub-directories of dir. It can be run
  * on directories being created.
@@ -1328,6 +1338,9 @@ int fat_add_entries(struct inode *dir, void *slots, int nr_slots,
 	int err, free_slots, i, nr_bhs;
 	loff_t pos;
 	bool saw_eod;
+
+	if (unlikely(sb_emergency_ro(sb)))
+		return -EROFS;
 
 	sinfo->nr_slots = nr_slots;
 

@@ -271,7 +271,7 @@ static int __init egpio_probe(struct platform_device *pdev)
 	int               ret;
 
 	/* Initialize ei data structure. */
-	ei = devm_kzalloc(&pdev->dev, struct_size(ei, chip, pdata->num_chips), GFP_KERNEL);
+	ei = devm_kzalloc_flex(&pdev->dev, *ei, chip, pdata->num_chips);
 	if (!ei)
 		return -ENOMEM;
 
@@ -395,9 +395,5 @@ static struct platform_driver egpio_driver = {
 	},
 };
 
-static int __init egpio_init(void)
-{
-	return platform_driver_probe(&egpio_driver, egpio_probe);
-}
 /* start early for dependencies */
-subsys_initcall(egpio_init);
+subsys_platform_driver_probe(egpio_driver, egpio_probe);

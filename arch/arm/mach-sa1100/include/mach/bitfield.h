@@ -15,7 +15,7 @@
 #ifndef __BITFIELD_H
 #define __BITFIELD_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #define UData(Data)	((unsigned long) (Data))
 #else
 #define UData(Data)	(Data)

@@ -81,6 +81,7 @@ struct xe_cpu_bind_pt_update {
 };
 
 int xe_cpu_bind_init(struct xe_device *xe);
+int xe_cpu_bind_reinit(struct xe_device *xe);
 
 struct xe_exec_queue *xe_cpu_bind_queue(struct xe_cpu_bind *cpu_bind);
 

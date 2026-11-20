@@ -233,6 +233,15 @@ DC_LOGGER_INIT(clk_mgr_base->ctx->logger);
 
 	init_clk_states(clk_mgr_base);
 
+	/*
+	 * DF C-state policy
+	 * D0 entry must NOT send a PMFW message, but must unconditionally clear
+	 * the cached vote so the next allow-side transition (prepare_bandwidth
+	 * or dc_power_down_on_boot) always issues a fresh DfCstateDisable(Allow)
+	 * and resyncs DAL with PMFW.
+	 */
+	clk_mgr_base->clks.cstate_allow = false;
+
 	// to adjust dp_dto reference clock if ssc is enable otherwise to apply dprefclk
 	if (dcn42_is_spll_ssc_enabled(clk_mgr_base))
 		clk_mgr_base->dp_dto_source_clock_in_khz =
@@ -242,6 +251,10 @@ DC_LOGGER_INIT(clk_mgr_base->ctx->logger);
 
 	DC_LOG_SMU("dp_dto_source_clock %d, dprefclk %d\n", clk_mgr_base->dp_dto_source_clock_in_khz, clk_mgr_base->dprefclk_khz);
 	dcn42b_dump_clk_registers(&clk_mgr_base->boot_snapshot, clk_mgr);
+
+	/* Snapshot is in 10kHz units; seed clks so update_clocks() does not lower the pre-OS clocks */
+	clk_mgr_base->clks.dispclk_khz = clk_mgr_base->boot_snapshot.dispclk * 10;
+	clk_mgr_base->clks.dppclk_khz = clk_mgr_base->boot_snapshot.dppclk * 10;
 }
 
 static struct clk_bw_params dcn42b_bw_params = {
@@ -393,18 +406,13 @@ uint32_t dcn42b_get_clock_freq_from_clkip(struct clk_mgr *clk_mgr_base, enum clo
 
 #define DCN42B_MIN_DCFCLK_MHZ 200
 #define DCN42B_MAX_DCFCLK_MHZ 600
-#define DCN42B_AC_MIN_DCFCLK_MHZ 300
 
 /*
  * dcn42b_update_clocks - DCN42B wrapper around dcn42_update_clocks.
  *
- * Establishes the DCN42B force-min-DCFCLK floor consumed by the shared
- * dcn42_update_clocks(), which applies it to new_clocks->dcfclk_khz:
- *   - a user override (dc->debug.force_min_dcfclk_mhz)
- *     wins, sanitized to the [200, 600] MHz supported range;
- *   - otherwise DCFCLK is floored at 300 MHz on wall power, and left
- *     unconstrained on battery.
- * dc->debug is restored afterwards so the override survives AC/DC transitions.
+ * Sanitizes the user force-min-DCFCLK override (dc->debug.force_min_dcfclk_mhz)
+ * to the [200, 600] MHz range supported by DCN42B before the shared
+ * dcn42_update_clocks() applies it to new_clocks->dcfclk_khz.
  */
 static void dcn42b_update_clocks(struct clk_mgr *clk_mgr_base,
 			struct dc_state *context,
@@ -418,8 +426,6 @@ static void dcn42b_update_clocks(struct clk_mgr *clk_mgr_base,
 			dc->debug.force_min_dcfclk_mhz = DCN42B_MIN_DCFCLK_MHZ;
 		else if (dc->debug.force_min_dcfclk_mhz > DCN42B_MAX_DCFCLK_MHZ)
 			dc->debug.force_min_dcfclk_mhz = DCN42B_MAX_DCFCLK_MHZ;
-	} else if (power_supply_is_system_supplied()) {
-		dc->debug.force_min_dcfclk_mhz = DCN42B_AC_MIN_DCFCLK_MHZ;
 	}
 
 	dcn42_update_clocks(clk_mgr_base, context, safe_to_lower);
@@ -440,6 +446,7 @@ static struct clk_mgr_funcs dcn42b_funcs = {
 	.get_max_clock_khz = dcn42_get_max_clock_khz,
 	.get_dispclk_from_dentist = dcn42_get_dispclk_from_dentist,
 	.is_smu_present = dcn42_is_smu_present,
+	.notify_cstate_disable = dcn42_notify_cstate_disable,
 };
 
 typedef struct {

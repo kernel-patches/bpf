@@ -78,7 +78,6 @@ static const struct icvs_device_quirk cvs_quirk_table[] = {
 		 */
 	{ 0x06CB, 0x0701, ICVS_SKIP_FW_RESET |
 			  ICVS_HOST_SENSOR_PWR_CTRL |
-			  ICVS_HOST_PRIV_CTRL |
 			  ICVS_FW_BUF_SIZE_256 |
 			  ICVS_FW_HEADER_SIZE_256
 	},	/* Synaptics SVP7xxx */
@@ -683,7 +682,7 @@ static int cvs_core_probe(struct device *dev, struct i2c_client *i2c)
 		goto err_put_ipu;
 	}
 
-	ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
+	ctx = devm_kzalloc_obj(dev, *ctx);
 	if (!ctx) {
 		ret = -ENOMEM;
 		goto err_put_ipu;

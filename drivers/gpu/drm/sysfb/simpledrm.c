@@ -523,15 +523,13 @@ static int simpledrm_device_attach_genpd(struct simpledrm_device *sdev)
 	if (sdev->pwr_dom_count <= 1)
 		return 0;
 
-	sdev->pwr_dom_devs = devm_kcalloc(dev, sdev->pwr_dom_count,
-					       sizeof(*sdev->pwr_dom_devs),
-					       GFP_KERNEL);
+	sdev->pwr_dom_devs = devm_kzalloc_objs(dev, *sdev->pwr_dom_devs,
+					       sdev->pwr_dom_count);
 	if (!sdev->pwr_dom_devs)
 		return -ENOMEM;
 
-	sdev->pwr_dom_links = devm_kcalloc(dev, sdev->pwr_dom_count,
-						sizeof(*sdev->pwr_dom_links),
-						GFP_KERNEL);
+	sdev->pwr_dom_links = devm_kzalloc_objs(dev, *sdev->pwr_dom_links,
+						sdev->pwr_dom_count);
 	if (!sdev->pwr_dom_links)
 		return -ENOMEM;
 
@@ -876,7 +874,9 @@ static struct simpledrm_device *simpledrm_device_create(struct drm_driver *drv,
 	if (ret)
 		return ERR_PTR(ret);
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ERR_PTR(ret);
 
 	return sdev;
 }

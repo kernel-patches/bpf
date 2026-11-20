@@ -231,7 +231,7 @@ out:
 }
 EXPORT_SYMBOL_GPL(cgbc_command);
 
-static struct mfd_cell cgbc_devs[] = {
+static const struct mfd_cell cgbc_devs[] = {
 	{ .name = "cgbc-wdt"	},
 	{ .name = "cgbc-gpio"	},
 	{ .name = "cgbc-i2c", .id = 1 },
@@ -343,7 +343,7 @@ static int cgbc_probe(struct platform_device *pdev)
 	struct cgbc_device_data *cgbc;
 	int ret;
 
-	cgbc = devm_kzalloc(dev, sizeof(*cgbc), GFP_KERNEL);
+	cgbc = devm_kzalloc_obj(dev, *cgbc);
 	if (!cgbc)
 		return -ENOMEM;
 

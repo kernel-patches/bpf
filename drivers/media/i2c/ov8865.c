@@ -2203,8 +2203,9 @@ static int ov8865_flip_horz_configure(struct ov8865_sensor *sensor, bool enable)
 	u8 bits = OV8865_FORMAT2_FLIP_HORZ_ISP_EN |
 		  OV8865_FORMAT2_FLIP_HORZ_SENSOR_EN;
 
+	/* HFLIP is inverted on this sensor: the FLIP_HORZ bits un-mirror the readout. */
 	return ov8865_update_bits(sensor, OV8865_FORMAT2_REG, bits,
-				  enable ? bits : 0);
+				  enable ? 0 : bits);
 }
 
 /* Test Pattern */
@@ -2966,7 +2967,7 @@ static int ov8865_probe(struct i2c_client *client)
 	unsigned int i;
 	int ret;
 
-	sensor = devm_kzalloc(dev, sizeof(*sensor), GFP_KERNEL);
+	sensor = devm_kzalloc_obj(dev, *sensor);
 	if (!sensor)
 		return -ENOMEM;
 

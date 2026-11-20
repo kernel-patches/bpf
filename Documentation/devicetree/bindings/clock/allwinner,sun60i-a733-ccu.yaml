@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/clock/allwinner,sun60i-a733-ccu.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Allwinner A733 Clock Control Unit
+
+maintainers:
+  - Junhui Liu <junhui.liu@pigmoral.tech>
+
+properties:
+  compatible:
+    enum:
+      - allwinner,sun60i-a733-ccu
+      - allwinner,sun60i-a733-r-ccu
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    minItems: 4
+    maxItems: 7
+
+  clock-names:
+    minItems: 4
+    maxItems: 7
+
+  "#clock-cells":
+    const: 1
+
+  "#reset-cells":
+    const: 1
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - clock-names
+  - "#clock-cells"
+  - "#reset-cells"
+
+allOf:
+  - if:
+      properties:
+        compatible:
+          enum:
+            - allwinner,sun60i-a733-ccu
+
+    then:
+      properties:
+        clocks:
+          items:
+            - description: High Frequency Oscillator (19.2MHz, 24MHz, or 26MHz)
+            - description: Low Frequency Oscillator (usually at 32kHz)
+            - description: Internal Oscillator
+            - description: Low Frequency Oscillator fanout
+
+        clock-names:
+          items:
+            - const: hosc
+            - const: losc
+            - const: iosc
+            - const: losc-fanout
+
+  - if:
+      properties:
+        compatible:
+          enum:
+            - allwinner,sun60i-a733-r-ccu
+
+    then:
+      properties:
+        clocks:
+          items:
+            - description: High Frequency Oscillator (19.2MHz, 24MHz, or 26MHz)
+            - description: Low Frequency Oscillator (usually at 32kHz)
+            - description: Internal Oscillator
+            - description: System 24MHz Clock
+            - description: Peripherals PLL 0 (200 MHz output)
+            - description: Peripherals PLL 0 (300 MHz output)
+            - description: Peripherals PLL 1 (300 MHz output)
+
+        clock-names:
+          items:
+            - const: hosc
+            - const: losc
+            - const: iosc
+            - const: sys-24m
+            - const: pll-periph0-200m
+            - const: pll-periph0-300m
+            - const: pll-periph1-300m
+
+additionalProperties: false
+
+examples:
+  - |
+    clock-controller@2002000 {
+      compatible = "allwinner,sun60i-a733-ccu";
+      reg = <0x02002000 0x2000>;
+      clocks = <&osc>, <&rtc 0>, <&rtc 2>, <&rtc 1>;
+      clock-names = "hosc", "losc", "iosc", "losc-fanout";
+      #clock-cells = <1>;
+      #reset-cells = <1>;
+    };
+
+...

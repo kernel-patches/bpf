@@ -99,7 +99,9 @@ static int rt6190_out_enable(struct regulator_dev *rdev)
 	u8 out_cfg[4];
 	int ret;
 
-	pm_runtime_get_sync(data->dev);
+	ret = pm_runtime_resume_and_get(data->dev);
+	if (ret)
+		return ret;
 
 	/*
 	 * From off to on, vout config will restore to IC default.
@@ -389,7 +391,7 @@ static int rt6190_probe(struct i2c_client *i2c)
 	unsigned int vid;
 	int ret;
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, *data);
 	if (!data)
 		return -ENOMEM;
 

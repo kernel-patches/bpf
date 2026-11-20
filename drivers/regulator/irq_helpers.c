@@ -338,7 +338,7 @@ void *regulator_irq_helper(struct device *dev,
 	if (!rdev_amount || !d || !d->map_event || !d->name)
 		return ERR_PTR(-EINVAL);
 
-	h = devm_kzalloc(dev, sizeof(*h), GFP_KERNEL);
+	h = devm_kzalloc_obj(dev, *h);
 	if (!h)
 		return ERR_PTR(-ENOMEM);
 
@@ -403,7 +403,7 @@ void regulator_irq_helper_cancel(void **handle)
 				destroy_workqueue(h->wq);
 		}
 
-		h = NULL;
+		*handle = NULL;
 	}
 }
 EXPORT_SYMBOL_GPL(regulator_irq_helper_cancel);

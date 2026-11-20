@@ -1418,8 +1418,7 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 	 * Keep at least one housekeeping cpu onlined to avoid generating
 	 * an empty sched_domain span.
 	 */
-	if (cpumask_any_and(cpu_online_mask,
-			    housekeeping_cpumask(HK_TYPE_DOMAIN)) >= nr_cpu_ids) {
+	if (!cpumask_intersects(cpu_online_mask, housekeeping_cpumask(HK_TYPE_DOMAIN))) {
 		ret = -EBUSY;
 		goto out;
 	}
@@ -2658,6 +2657,7 @@ int cpuhp_smt_disable(enum cpuhp_smt_control ctrlval)
 	int cpu, ret = 0;
 
 	cpu_maps_update_begin();
+	rcu_expedite_gp();
 	for_each_online_cpu(cpu) {
 		if (topology_is_primary_thread(cpu))
 			continue;
@@ -2687,6 +2687,7 @@ int cpuhp_smt_disable(enum cpuhp_smt_control ctrlval)
 	}
 	if (!ret)
 		cpu_smt_control = ctrlval;
+	rcu_unexpedite_gp();
 	cpu_maps_update_done();
 	return ret;
 }
@@ -2704,6 +2705,7 @@ int cpuhp_smt_enable(void)
 	int cpu, ret = 0;
 
 	cpu_maps_update_begin();
+	rcu_expedite_gp();
 	cpu_smt_control = CPU_SMT_ENABLED;
 	for_each_present_cpu(cpu) {
 		/* Skip online CPUs and CPUs on offline nodes */
@@ -2717,6 +2719,7 @@ int cpuhp_smt_enable(void)
 		/* See comment in cpuhp_smt_disable() */
 		cpuhp_online_cpu_device(cpu);
 	}
+	rcu_unexpedite_gp();
 	cpu_maps_update_done();
 	return ret;
 }

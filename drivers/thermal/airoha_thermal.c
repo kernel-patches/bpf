@@ -572,8 +572,10 @@ static int en7581_thermal_probe(struct platform_device *pdev,
 		return -EINVAL;
 
 	priv->chip_scu = syscon_node_to_regmap(chip_scu_np);
-	if (IS_ERR(priv->chip_scu))
+	if (IS_ERR(priv->chip_scu)) {
+		of_node_put(chip_scu_np);
 		return PTR_ERR(priv->chip_scu);
+	}
 
 	for (i = 0; i < AIROHA_THERMAL_FIELD_MAX; i++) {
 		struct regmap_field *field;
@@ -729,7 +731,7 @@ static int airoha_thermal_probe(struct platform_device *pdev)
 
 	soc_data = device_get_match_data(dev);
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -751,7 +753,7 @@ static int airoha_thermal_probe(struct platform_device *pdev)
 		struct airoha_thermal_zone *zone;
 		struct thermal_zone_device *tz;
 
-		zone = devm_kzalloc(dev, sizeof(*zone), GFP_KERNEL);
+		zone = devm_kzalloc_obj(dev, *zone);
 		if (!zone)
 			return -ENOMEM;
 

@@ -956,8 +956,7 @@ static int configure_dma(struct pl022 *pl022)
 		goto err_txdesc;
 
 	/* Put the callback on the RX transfer only, that should finish last */
-	rxdesc->callback = dma_callback;
-	rxdesc->callback_param = pl022;
+	dmaengine_desc_set_callback(rxdesc, dma_callback, NULL, pl022);
 
 	/* Submit and fire RX and TX with TX last so we're ready to read! */
 	dmaengine_submit(rxdesc);
@@ -1839,7 +1838,7 @@ pl022_platform_data_dt_get(struct device *dev)
 		return NULL;
 	}
 
-	pd = devm_kzalloc(dev, sizeof(struct pl022_ssp_controller), GFP_KERNEL);
+	pd = devm_kzalloc_obj(dev, struct pl022_ssp_controller);
 	if (!pd)
 		return NULL;
 

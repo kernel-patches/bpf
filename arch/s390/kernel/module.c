@@ -10,6 +10,7 @@
  *  based on i386 version
  *    Copyright (C) 2001 Rusty Russell.
  */
+#include <linux/text-patching.h>
 #include <linux/module.h>
 #include <linux/elf.h>
 #include <linux/vmalloc.h>
@@ -462,6 +463,7 @@ int apply_relocate_add(Elf_Shdr *sechdrs, const char *strtab,
 	if (!early)
 		write = s390_kernel_write;
 
+	guard(mutex)(&text_mutex);
 	return __apply_relocate_add(sechdrs, strtab, symindex, relsec, me,
 				    write);
 }

@@ -141,7 +141,7 @@ static int nic78bx_probe(struct platform_device *pdev)
 	struct resource *io_rc;
 	int ret, i;
 
-	led_data = devm_kzalloc(dev, sizeof(*led_data), GFP_KERNEL);
+	led_data = devm_kzalloc_obj(dev, *led_data);
 	if (!led_data)
 		return -ENOMEM;
 
@@ -188,7 +188,7 @@ static int nic78bx_probe(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id led_device_ids[] = {
-	{ "NIC78B3" },
+	{ .id = "NIC78B3" },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, led_device_ids);

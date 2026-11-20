@@ -55,11 +55,6 @@ static inline void free_pgd_range(struct mmu_gather *tlb,
 {
 }
 
-static inline int ksm_execve(struct mm_struct *mm)
-{
-	return 0;
-}
-
 static inline void ksm_exit(struct mm_struct *mm)
 {
 }
@@ -146,6 +141,10 @@ static inline int userfaultfd_unmap_prep(struct vm_area_struct *vma,
 					 struct list_head *unmaps)
 {
 	return 0;
+}
+
+static inline void userfaultfd_unmap_abort(struct list_head *uf)
+{
 }
 
 static inline void mmap_write_downgrade(struct mm_struct *mm)
@@ -320,7 +319,7 @@ static inline void anon_vma_lock_write(struct anon_vma *anon_vma)
 {
 }
 
-static inline void vma_assert_write_locked(struct vm_area_struct *vma)
+static inline void vma_assert_write_locked(const struct vm_area_struct *vma)
 {
 }
 

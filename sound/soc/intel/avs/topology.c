@@ -268,8 +268,11 @@ static int avs_parse_word_tokens(struct snd_soc_component *comp, void *object,
 				continue;
 
 			ret = parsers[j].parse(comp, tuple, object, parsers[j].offset);
-			if (ret)
+			if (ret) {
+				dev_err(comp->dev, "parsing token %d failed: %d\n",
+					parsers[j].token, ret);
 				return ret;
+			}
 		}
 	}
 
@@ -353,8 +356,8 @@ AVS_DEFINE_PTR_PARSER(binding, struct avs_tplg_binding, bindings);
 AVS_DEFINE_PTR_PARSER(init_config, struct avs_tplg_init_config, init_configs);
 AVS_DEFINE_PTR_PARSER(nhlt_config, struct avs_tplg_nhlt_config, nhlt_configs);
 
-static int
-parse_audio_format_bitfield(struct snd_soc_component *comp, void *elem, void *object, u32 offset)
+static int avs_parse_audio_format_bitfield(struct snd_soc_component *comp,
+					   void *elem, void *object, u32 offset)
 {
 	struct snd_soc_tplg_vendor_value_elem *velem = elem;
 	struct avs_audio_format *audio_format = object;
@@ -396,8 +399,8 @@ static int avs_ssp_sprint(char *buf, size_t size, const char *fmt, int port, int
 	return snprintf(buf, size, "%s", fmt);
 }
 
-static int parse_link_formatted_string(struct snd_soc_component *comp, void *elem,
-				       void *object, u32 offset)
+static int avs_parse_link_formatted_string(struct snd_soc_component *comp,
+					   void *elem, void *object, u32 offset)
 {
 	struct snd_soc_tplg_vendor_string_elem *tuple = elem;
 	struct snd_soc_acpi_mach *mach = dev_get_platdata(comp->card->dev);
@@ -430,7 +433,7 @@ static int avs_parse_nhlt_config_size(struct snd_soc_component *comp, void *elem
 	u32 size;
 
 	size = le32_to_cpu(tuple->value);
-	*blob = devm_kzalloc(comp->card->dev, struct_size(*blob, capabilities, size), GFP_KERNEL);
+	*blob = devm_kzalloc_flex(comp->card->dev, **blob, capabilities, size);
 	if (!*blob)
 		return -ENOMEM;
 
@@ -575,19 +578,19 @@ static const struct avs_tplg_token_parser audio_format_parsers[] = {
 		.token = AVS_TKN_AFMT_NUM_CHANNELS_U32,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_WORD,
 		.offset = AVS_TKN_AFMT_NUM_CHANNELS_U32,
-		.parse = parse_audio_format_bitfield,
+		.parse = avs_parse_audio_format_bitfield,
 	},
 	{
 		.token = AVS_TKN_AFMT_VALID_BIT_DEPTH_U32,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_WORD,
 		.offset = AVS_TKN_AFMT_VALID_BIT_DEPTH_U32,
-		.parse = parse_audio_format_bitfield,
+		.parse = avs_parse_audio_format_bitfield,
 	},
 	{
 		.token = AVS_TKN_AFMT_SAMPLE_TYPE_U32,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_WORD,
 		.offset = AVS_TKN_AFMT_SAMPLE_TYPE_U32,
-		.parse = parse_audio_format_bitfield,
+		.parse = avs_parse_audio_format_bitfield,
 	},
 };
 
@@ -984,7 +987,7 @@ static int avs_tplg_parse_modcfg_ext(struct snd_soc_component *comp,
 		if (!num_pins)
 			return -EINVAL;
 
-		pins = devm_kcalloc(comp->card->dev, num_pins, sizeof(*pins), GFP_KERNEL);
+		pins = devm_kzalloc_objs(comp->card->dev, *pins, num_pins);
 		if (!pins)
 			return -ENOMEM;
 
@@ -1093,7 +1096,7 @@ static const struct avs_tplg_token_parser binding_parsers[] = {
 		.token = AVS_TKN_BINDING_TARGET_TPLG_NAME_STRING,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_STRING,
 		.offset = offsetof(struct avs_tplg_binding, target_tplg_name),
-		.parse = parse_link_formatted_string,
+		.parse = avs_parse_link_formatted_string,
 	},
 	{
 		.token = AVS_TKN_BINDING_TARGET_PATH_TMPL_ID_U32,
@@ -1229,7 +1232,8 @@ static int avs_tplg_module_init_configs(struct snd_soc_component *comp,
 	if (!module->num_init_configs)
 		return -EINVAL;
 
-	cfgs = devm_kcalloc(comp->card->dev, module->num_init_configs, sizeof(*cfgs), GFP_KERNEL);
+	cfgs = devm_kzalloc_objs(comp->card->dev, *cfgs,
+				 module->num_init_configs);
 	if (!cfgs)
 		return -ENOMEM;
 
@@ -1255,7 +1259,7 @@ avs_tplg_module_create(struct snd_soc_component *comp, struct avs_tplg_pipeline 
 	if (ret)
 		return ERR_PTR(ret);
 
-	module = devm_kzalloc(comp->card->dev, sizeof(*module), GFP_KERNEL);
+	module = devm_kzalloc_obj(comp->card->dev, *module);
 	if (!module)
 		return ERR_PTR(-ENOMEM);
 
@@ -1318,7 +1322,7 @@ avs_tplg_pipeline_create(struct snd_soc_component *comp, struct avs_tplg_path *o
 	u32 modblk_size, offset;
 	int ret;
 
-	pipeline = devm_kzalloc(comp->card->dev, sizeof(*pipeline), GFP_KERNEL);
+	pipeline = devm_kzalloc_obj(comp->card->dev, *pipeline);
 	if (!pipeline)
 		return ERR_PTR(-ENOMEM);
 
@@ -1355,8 +1359,9 @@ avs_tplg_pipeline_create(struct snd_soc_component *comp, struct avs_tplg_path *o
 
 		modblk_size = block_size;
 	} else {
-		pipeline->bindings = devm_kcalloc(comp->card->dev, pipeline->num_bindings,
-						  sizeof(*pipeline->bindings), GFP_KERNEL);
+		pipeline->bindings = devm_kzalloc_objs(comp->card->dev,
+						       *pipeline->bindings,
+						       pipeline->num_bindings);
 		if (!pipeline->bindings)
 			return ERR_PTR(-ENOMEM);
 
@@ -1448,7 +1453,7 @@ avs_tplg_path_create(struct snd_soc_component *comp, struct avs_tplg_path_templa
 	u32 offset;
 	int ret;
 
-	path = devm_kzalloc(comp->card->dev, sizeof(*path), GFP_KERNEL);
+	path = devm_kzalloc_obj(comp->card->dev, *path);
 	if (!path)
 		return ERR_PTR(-ENOMEM);
 
@@ -1591,7 +1596,7 @@ avs_tplg_path_template_create(struct snd_soc_component *comp, struct avs_tplg *o
 	struct avs_tplg_path_template *template;
 	int ret;
 
-	template = devm_kzalloc(comp->card->dev, sizeof(*template), GFP_KERNEL);
+	template = devm_kzalloc_obj(comp->card->dev, *template);
 	if (!template)
 		return ERR_PTR(-ENOMEM);
 
@@ -1817,7 +1822,7 @@ static int avs_route_load(struct snd_soc_component *comp, int index,
 	int ssp_port, tdm_slot;
 	char *buf;
 
-	/* See parse_link_formatted_string() for dynamic naming when(s). */
+	/* See avs_parse_link_formatted_string() for dynamic naming when(s). */
 	if (!avs_mach_singular_ssp(mach))
 		return 0;
 	ssp_port = avs_mach_ssp_port(mach);
@@ -1875,7 +1880,7 @@ static int avs_widget_load(struct snd_soc_component *comp, int index,
 		goto static_name;
 	ssp_port = avs_mach_ssp_port(mach);
 
-	/* See parse_link_formatted_string() for dynamic naming when(s). */
+	/* See avs_parse_link_formatted_string() for dynamic naming when(s). */
 	if (avs_mach_singular_tdm(mach, ssp_port)) {
 		/* size is based on possible %d -> SSP:TDM, where SSP and TDM < 16 + '\0' */
 		size_t size = strlen(dw->name) + 3;
@@ -1961,7 +1966,7 @@ static const struct avs_tplg_token_parser manifest_parsers[] = {
 		.token = AVS_TKN_MANIFEST_NAME_STRING,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_STRING,
 		.offset = offsetof(struct avs_tplg, name),
-		.parse = parse_link_formatted_string,
+		.parse = avs_parse_link_formatted_string,
 	},
 	{
 		.token = AVS_TKN_MANIFEST_VERSION_U32,
@@ -2187,7 +2192,7 @@ avs_control_load(struct snd_soc_component *comp, int index, struct snd_kcontrol_
 	tuples = tmc->priv.array;
 	block_size = le32_to_cpu(tmc->priv.size);
 
-	ctl_data = devm_kzalloc(comp->card->dev, sizeof(*ctl_data), GFP_KERNEL);
+	ctl_data = devm_kzalloc_obj(comp->card->dev, *ctl_data);
 	if (!ctl_data)
 		return -ENOMEM;
 
@@ -2223,7 +2228,7 @@ struct avs_tplg *avs_tplg_new(struct snd_soc_component *comp)
 {
 	struct avs_tplg *tplg;
 
-	tplg = devm_kzalloc(comp->card->dev, sizeof(*tplg), GFP_KERNEL);
+	tplg = devm_kzalloc_obj(comp->card->dev, *tplg);
 	if (!tplg)
 		return NULL;
 

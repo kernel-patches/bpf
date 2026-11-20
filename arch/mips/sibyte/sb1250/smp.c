@@ -35,7 +35,7 @@ static void *mailbox_regs[] = {
 /*
  * SMP init and finish on secondary CPUs
  */
-void sb1250_smp_init(void)
+static void sb1250_smp_init(void)
 {
 	unsigned int imask = STATUSF_IP4 | STATUSF_IP3 | STATUSF_IP2 |
 		STATUSF_IP1 | STATUSF_IP0;
@@ -72,8 +72,6 @@ static inline void sb1250_send_ipi_mask(const struct cpumask *mask,
  */
 static void sb1250_init_secondary(void)
 {
-	extern void sb1250_smp_init(void);
-
 	sb1250_smp_init();
 }
 
@@ -83,8 +81,6 @@ static void sb1250_init_secondary(void)
  */
 static void sb1250_smp_finish(void)
 {
-	extern void sb1250_clockevent_init(void);
-
 	sb1250_clockevent_init();
 	local_irq_enable();
 }

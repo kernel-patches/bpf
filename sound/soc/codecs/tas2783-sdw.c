@@ -46,6 +46,8 @@
 #define TAS2783_PROBE_TIMEOUT 5000
 #define TAS2783_CALI_GUID EFI_GUID(0x1f52d2a1, 0xbb3a, 0x457d, 0xbc, \
 				   0x09, 0x43, 0xa3, 0xf4, 0x31, 0x0a, 0x92)
+#define TAS2783_SPKID_GUID EFI_GUID(0xaa61eaaf, 0x6e83, 0x7523, 0xb0, \
+				    0xd0, 0x7d, 0xf7, 0x4b, 0xb2, 0x4a, 0x81)
 
 static const u32 tas2783_cali_reg[] = {
 	TAS2783_CAL_R0,
@@ -102,8 +104,13 @@ struct tas2783_prv {
 	wait_queue_head_t fw_wait;
 	bool fw_dl_task_done;
 	bool fw_dl_success;
-	/* use fallback fw name */
-	bool fw_use_fallback;
+	/* the file for the firmware name being tried is missing */
+	bool fw_missing;
+#if IS_ENABLED(CONFIG_PCI)
+	/* UEFI speaker ID */
+	u32 spk_id;
+	bool spk_id_valid;
+#endif
 };
 
 static const struct reg_default tas2783_reg_default[] = {
@@ -757,19 +764,11 @@ static void tas2783_fw_ready(const struct firmware *fmw, void *context)
 		goto out;
 	}
 
-	/* firmware binary not found*/
+	/* firmware binary not found, tas_io_init() tries the next name */
 	if (!fmw || !fmw->data) {
-		if (!tas_dev->fw_use_fallback) {
-			tas_dev->fw_use_fallback = true;
-			dev_info(tas_dev->dev,
-				"Failed to read preferred fw binary: %s, attempting fallback binary load\n",
-				tas_dev->rca_binaryname);
-		} else {
-			dev_err(tas_dev->dev,
-				"Failed to read fallback fw binary %s\n",
-				tas_dev->rca_binaryname);
-		}
-
+		tas_dev->fw_missing = true;
+		dev_info(tas_dev->dev, "Failed to read fw binary %s\n",
+			 tas_dev->rca_binaryname);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1092,10 +1091,10 @@ static s32 tas_init(struct tas2783_prv *tas_dev)
 	s32 ret;
 
 	dev_set_drvdata(tas_dev->dev, tas_dev);
-	ret = devm_snd_soc_register_component(tas_dev->dev,
-					      &soc_codec_driver_tasdevice,
-					      tas_dai_driver,
-					      ARRAY_SIZE(tas_dai_driver));
+	ret = snd_soc_register_component(tas_dev->dev,
+					 &soc_codec_driver_tasdevice,
+					 tas_dai_driver,
+					 ARRAY_SIZE(tas_dai_driver));
 	if (ret) {
 		dev_err(tas_dev->dev, "%s: codec register error:%d.\n",
 			__func__, ret);
@@ -1156,41 +1155,78 @@ static const struct dev_pm_ops tas2783_sdca_pm = {
 	RUNTIME_PM_OPS(tas2783_sdca_dev_suspend, tas2783_sdca_dev_resume, NULL)
 };
 
-static void tas_generate_fw_name(struct sdw_slave *slave, char *name, size_t size)
+#if IS_ENABLED(CONFIG_PCI)
+/* BIOS speaker ID that selects the SSID-SPKID-LINK-UID firmware name */
+static int tas2783_get_spk_id(u32 *spk_id)
+{
+	efi_guid_t guid = TAS2783_SPKID_GUID;
+	unsigned long size = sizeof(*spk_id);
+	efi_status_t status;
+
+	if (!efi_rt_services_supported(EFI_RT_SUPPORTED_GET_VARIABLE))
+		return -ENOENT;
+
+	status = efi.get_variable(L"SPEAKER_ID", &guid, NULL, &size, spk_id);
+	if (status != EFI_SUCCESS || size != sizeof(*spk_id))
+		return -ENOENT;
+
+	return 0;
+}
+#endif
+
+/*
+ * Firmware names in the order they are tried: SSID-SPKID-LINK-0xUID when the
+ * BIOS has a speaker ID, then SSID-LINK-0xUID and SSID-LINK-UID.
+ */
+static bool tas_generate_fw_name(struct sdw_slave *slave, unsigned int idx,
+				 char *name, size_t size)
 {
 	struct sdw_bus *bus = slave->bus;
 	u8 unique_id = slave->id.unique_id;
-	bool pci_found = false;
 #if IS_ENABLED(CONFIG_PCI)
-	struct device *dev = &slave->dev;
 	struct tas2783_prv *tas_dev = dev_get_drvdata(&slave->dev);
-	struct pci_dev *pci = NULL;
-	const char *fw_uid_prefix = tas_dev->fw_use_fallback ? "" : "0x";
+	struct device *dev;
 
-	for (; dev; dev = dev->parent) {
-		if (dev->bus == &pci_bus_type) {
-			pci = to_pci_dev(dev);
-			scnprintf(name, size, "%04X-%1X-%s%1X.bin",
-				  pci->subsystem_device, bus->link_id,
-				  fw_uid_prefix, unique_id);
-			pci_found = true;
-			break;
+	for (dev = &slave->dev; dev; dev = dev->parent) {
+		u16 ssid;
+
+		if (dev->bus != &pci_bus_type)
+			continue;
+
+		ssid = to_pci_dev(dev)->subsystem_device;
+		if (!tas_dev->spk_id_valid)
+			idx++;
+
+		switch (idx) {
+		case 0:
+			scnprintf(name, size, "%04X-%X-%1X-0x%1X.bin", ssid,
+				  tas_dev->spk_id, bus->link_id, unique_id);
+			return true;
+		case 1:
+			scnprintf(name, size, "%04X-%1X-0x%1X.bin", ssid,
+				  bus->link_id, unique_id);
+			return true;
+		case 2:
+			scnprintf(name, size, "%04X-%1X-%1X.bin", ssid,
+				  bus->link_id, unique_id);
+			return true;
+		default:
+			return false;
 		}
 	}
 #endif
 
-	if (!pci_found)
-		scnprintf(name, size, "tas2783-%1X-%1X.bin",
-			  bus->link_id, unique_id);
+	if (idx)
+		return false;
+
+	scnprintf(name, size, "tas2783-%1X-%1X.bin", bus->link_id, unique_id);
+	return true;
 }
 
-static s32 tas_fw_load(struct tas2783_prv *tas_dev, struct sdw_slave *slave)
+static s32 tas_fw_load(struct tas2783_prv *tas_dev)
 {
 	s32 ret;
 	u8 unique_id = tas_dev->sdw_peripheral->id.unique_id;
-
-	tas_generate_fw_name(slave, tas_dev->rca_binaryname,
-			     sizeof(tas_dev->rca_binaryname));
 
 	tas_dev->fw_dl_task_done = false;
 	ret = request_firmware_nowait(THIS_MODULE, FW_ACTION_UEVENT,
@@ -1216,6 +1252,7 @@ static s32 tas_fw_load(struct tas2783_prv *tas_dev, struct sdw_slave *slave)
 static s32 tas_io_init(struct device *dev, struct sdw_slave *slave)
 {
 	struct tas2783_prv *tas_dev = dev_get_drvdata(dev);
+	unsigned int i;
 	s32 ret;
 
 	if (tas_dev->hw_init)
@@ -1230,10 +1267,15 @@ static s32 tas_io_init(struct device *dev, struct sdw_slave *slave)
 	}
 	usleep_range(2000, 2200);
 
-	tas_dev->fw_use_fallback = false;
-	ret = tas_fw_load(tas_dev, slave);
-	if (!ret && tas_dev->fw_use_fallback)
-		ret = tas_fw_load(tas_dev, slave);
+	for (i = 0; tas_generate_fw_name(slave, i, tas_dev->rca_binaryname,
+					 sizeof(tas_dev->rca_binaryname)); i++) {
+		tas_dev->fw_missing = false;
+		ret = tas_fw_load(tas_dev);
+		if (ret || !tas_dev->fw_missing)
+			break;
+	}
+	if (tas_dev->fw_missing)
+		dev_err(dev, "no firmware binary found\n");
 
 	if (!ret) {
 		if (tas_dev->sa_func_data)
@@ -1383,7 +1425,7 @@ static s32 tas_sdw_probe(struct sdw_slave *peripheral,
 		return dev_err_probe(dev, ret,
 				     "slave property read failed");
 
-	tas_dev = devm_kzalloc(dev, sizeof(*tas_dev), GFP_KERNEL);
+	tas_dev = devm_kzalloc_obj(dev, *tas_dev);
 	if (!tas_dev)
 		return dev_err_probe(dev, -ENOMEM,
 				     "Failed devm_kzalloc");
@@ -1405,8 +1447,7 @@ static s32 tas_sdw_probe(struct sdw_slave *peripheral,
 
 	if (i >= 0 && i < peripheral->sdca_data.num_functions) {
 		/* Allocate memory for function data */
-		function_data = devm_kzalloc(dev, sizeof(*function_data),
-					     GFP_KERNEL);
+		function_data = devm_kzalloc_obj(dev, *function_data);
 		if (!function_data)
 			return dev_err_probe(dev, -ENOMEM,
 					     "failed to parse sdca functions");
@@ -1427,6 +1468,9 @@ static s32 tas_sdw_probe(struct sdw_slave *peripheral,
 	tas_dev->fw_version = 0;
 	mutex_init(&tas_dev->calib_lock);
 	mutex_init(&tas_dev->pde_lock);
+#if IS_ENABLED(CONFIG_PCI)
+	tas_dev->spk_id_valid = !tas2783_get_spk_id(&tas_dev->spk_id);
+#endif
 
 	init_waitqueue_head(&tas_dev->fw_wait);
 	dev_set_drvdata(dev, tas_dev);
@@ -1448,8 +1492,8 @@ static void tas_sdw_remove(struct sdw_slave *peripheral)
 {
 	struct tas2783_prv *tas_dev = dev_get_drvdata(&peripheral->dev);
 
-	pm_runtime_disable(tas_dev->dev);
 	tas_remove(tas_dev);
+	pm_runtime_disable(tas_dev->dev);
 	mutex_destroy(&tas_dev->calib_lock);
 	mutex_destroy(&tas_dev->pde_lock);
 	dev_set_drvdata(&peripheral->dev, NULL);

@@ -3776,6 +3776,8 @@ static void em28xx_unregister_media_device(struct em28xx *dev)
 	if (dev->media_dev) {
 		media_device_unregister(dev->media_dev);
 		media_device_cleanup(dev->media_dev);
+		if (dev->v4l2)
+			dev->v4l2->v4l2_dev.mdev = NULL;
 		kfree(dev->media_dev);
 		dev->media_dev = NULL;
 	}
@@ -3845,6 +3847,7 @@ static int em28xx_init_dev(struct em28xx *dev, struct usb_device *udev,
 	const char *chip_name = NULL;
 
 	dev->intf = intf;
+	INIT_LIST_HEAD(&dev->devlist);
 	mutex_init(&dev->ctrl_urb_lock);
 	spin_lock_init(&dev->slock);
 
@@ -4202,9 +4205,8 @@ static int em28xx_usb_probe(struct usb_interface *intf,
 	}
 
 	/* compute alternate max packet sizes */
-	dev->alt_max_pkt_size_isoc = kcalloc(intf->num_altsetting,
-					     sizeof(dev->alt_max_pkt_size_isoc[0]),
-					     GFP_KERNEL);
+	dev->alt_max_pkt_size_isoc = kzalloc_objs(dev->alt_max_pkt_size_isoc[0],
+						  intf->num_altsetting);
 	if (!dev->alt_max_pkt_size_isoc) {
 		kfree(dev);
 		retval = -ENOMEM;

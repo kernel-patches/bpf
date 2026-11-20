@@ -320,7 +320,7 @@ static int gnr_gpio_probe(struct platform_device *pdev)
 	int irq, ret;
 	u32 offset;
 
-	priv = devm_kzalloc(dev, struct_size(priv, pad_backup, num_backup_pins), GFP_KERNEL);
+	priv = devm_kzalloc_flex(dev, *priv, pad_backup, num_backup_pins);
 	if (!priv)
 		return -ENOMEM;
 
@@ -394,8 +394,8 @@ static int gnr_gpio_resume(struct device *dev)
 static DEFINE_SIMPLE_DEV_PM_OPS(gnr_gpio_pm_ops, gnr_gpio_suspend, gnr_gpio_resume);
 
 static const struct acpi_device_id gnr_gpio_acpi_match[] = {
-	{ "INTC1109" },
-	{}
+	{ .id = "INTC1109" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, gnr_gpio_acpi_match);
 

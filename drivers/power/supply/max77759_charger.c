@@ -683,14 +683,14 @@ static void max_tcpci_unregister_psy_notifier(void *nb)
 
 static int max77759_charger_probe(struct platform_device *pdev)
 {
-	struct regulator_config chgin_otg_reg_cfg;
-	struct power_supply_config psy_cfg;
+	struct regulator_config chgin_otg_reg_cfg = {};
+	struct power_supply_config psy_cfg = {};
 	struct device *dev = &pdev->dev;
 	struct max77759_charger *chg;
 	int ret;
 
 	device_set_of_node_from_dev(dev, dev->parent);
-	chg = devm_kzalloc(dev, sizeof(*chg), GFP_KERNEL);
+	chg = devm_kzalloc_obj(dev, *chg);
 	if (!chg)
 		return -ENOMEM;
 

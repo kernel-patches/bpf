@@ -259,6 +259,7 @@ static int sun8i_codec_runtime_resume(struct device *dev)
 	ret = regcache_sync(scodec->regmap);
 	if (ret) {
 		dev_err(dev, "Failed to sync regmap cache\n");
+		clk_disable_unprepare(scodec->clk_bus);
 		return ret;
 	}
 
@@ -1621,7 +1622,7 @@ static int sun8i_codec_probe(struct platform_device *pdev)
 	void __iomem *base;
 	int ret;
 
-	scodec = devm_kzalloc(&pdev->dev, sizeof(*scodec), GFP_KERNEL);
+	scodec = devm_kzalloc_obj(&pdev->dev, *scodec);
 	if (!scodec)
 		return -ENOMEM;
 

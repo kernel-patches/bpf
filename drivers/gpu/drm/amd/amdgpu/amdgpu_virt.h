@@ -106,7 +106,7 @@ struct amdgpu_virt_ops {
 	int (*reset_gpu)(struct amdgpu_device *adev);
 	void (*ready_to_reset)(struct amdgpu_device *adev);
 	int (*wait_reset)(struct amdgpu_device *adev);
-	void (*trans_msg)(struct amdgpu_device *adev, enum idh_request req,
+	int (*trans_msg)(struct amdgpu_device *adev, enum idh_request req,
 			  u32 data1, u32 data2, u32 data3);
 	void (*ras_poison_handler)(struct amdgpu_device *adev,
 					enum amdgpu_ras_block block);
@@ -358,6 +358,9 @@ struct amdgpu_virt {
 
 	/* hibernate and resume with different VF feature for xgmi enabled system */
 	bool is_xgmi_node_migrate_enabled;
+
+	/* RMA status maintained by the VF itself, set on IDH_UNRECOV_ERR_NOTIFICATION. */
+	bool unrecov_err;
 };
 
 struct amdgpu_video_codec_info;
@@ -468,6 +471,7 @@ bool amdgpu_virt_mmio_blocked(struct amdgpu_device *adev);
 void amdgpu_virt_init_setting(struct amdgpu_device *adev);
 int amdgpu_virt_request_full_gpu(struct amdgpu_device *adev, bool init);
 int amdgpu_virt_release_full_gpu(struct amdgpu_device *adev, bool init);
+void amdgpu_virt_deactivate(struct amdgpu_device *adev);
 int amdgpu_virt_reset_gpu(struct amdgpu_device *adev);
 void amdgpu_virt_request_init_data(struct amdgpu_device *adev);
 int amdgpu_virt_ptl_request(struct amdgpu_device *adev, u32 req_code,

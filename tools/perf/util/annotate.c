@@ -8,6 +8,10 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include "util.h" // hex_width()
 #include "ui/ui.h"
@@ -35,6 +39,7 @@
 #include "string2.h"
 #include "dwarf-regs.h"
 #include "util/event.h"
+#include "util/rwsem.h"
 #include "util/sharded_mutex.h"
 #include "arch/common.h"
 #include "namespaces.h"
@@ -118,6 +123,7 @@ static __maybe_unused void annotated_source__delete(struct annotated_source *src
 	if (src == NULL)
 		return;
 
+	annotated_source__purge(src);
 	if (src->samples) {
 		hashmap__for_each_entry(src->samples, cur, bkt)
 			zfree(&cur->pvalue);
@@ -156,9 +162,141 @@ annotated_source__hist_entry(struct annotated_source *src, const struct evsel *e
 	return entry;
 }
 
+/*
+ * Map from struct symbol pointer to struct annotation. Allocated on demand so
+ * unannotated symbols do not pay the memory cost of struct annotation.
+ */
+static struct rw_semaphore _annotations_lock;
+static struct hashmap *annotations GUARDED_BY(_annotations_lock);
+static atomic_size_t nr_annotations;
+
+static void annotations_lock_init(void)
+{
+	init_rwsem(&_annotations_lock);
+}
+
+static struct rw_semaphore *annotations_lock(void) LOCK_RETURNED(_annotations_lock)
+{
+	static pthread_once_t annotations_lock_once = PTHREAD_ONCE_INIT;
+
+	pthread_once(&annotations_lock_once, annotations_lock_init);
+	return &_annotations_lock;
+}
+
+static size_t sym_ptr_hash(long key, void *ctx __maybe_unused)
+{
+	return (size_t)key;
+}
+
+static bool sym_ptr_equal(long key1, long key2, void *ctx __maybe_unused)
+{
+	return key1 == key2;
+}
+
+bool symbol__annotated(const struct symbol *sym)
+{
+	bool found;
+
+	if (!sym || atomic_load_explicit(&nr_annotations, memory_order_acquire) == 0)
+		return false;
+
+	down_read(annotations_lock());
+	found = annotations && hashmap__find(annotations, (long)sym, NULL);
+	up_read(annotations_lock());
+	return found;
+}
+
+struct annotation *symbol__annotation(struct symbol *sym)
+{
+	struct annotation *notes = NULL;
+	long val = 0;
+
+	if (!sym)
+		return NULL;
+
+	/* Fast path: look up existing annotation under read lock. */
+	if (atomic_load_explicit(&nr_annotations, memory_order_acquire) > 0) {
+		down_read(annotations_lock());
+		if (annotations && hashmap__find(annotations, (long)sym, &val))
+			notes = (struct annotation *)val;
+		up_read(annotations_lock());
+		if (notes)
+			return notes;
+	}
+
+	down_write(annotations_lock());
+	if (!annotations) {
+		annotations = hashmap__new(sym_ptr_hash, sym_ptr_equal, NULL);
+		if (IS_ERR(annotations)) {
+			annotations = NULL;
+			up_write(annotations_lock());
+			return NULL;
+		}
+	} else if (hashmap__find(annotations, (long)sym, &val)) {
+		notes = (struct annotation *)val;
+		up_write(annotations_lock());
+		return notes;
+	}
+
+	notes = zalloc(sizeof(*notes));
+	if (!notes)
+		goto err_free_hashmap;
+
+	annotation__init(notes);
+	if (hashmap__add(annotations, (long)sym, notes) < 0) {
+		annotation__exit(notes);
+		free(notes);
+		goto err_free_hashmap;
+	}
+	atomic_fetch_add_explicit(&nr_annotations, 1, memory_order_release);
+	up_write(annotations_lock());
+	return notes;
+
+err_free_hashmap:
+	if (hashmap__size(annotations) == 0) {
+		hashmap__free(annotations);
+		annotations = NULL;
+	}
+	up_write(annotations_lock());
+	return NULL;
+}
+
+void symbol__annotation_delete(struct symbol *sym)
+{
+	struct annotation *notes = NULL;
+	long val = 0;
+
+	/* Unannotated symbols avoid taking annotations_lock for write on teardown. */
+	if (!symbol__annotated(sym))
+		return;
+
+	down_write(annotations_lock());
+	if (annotations && hashmap__delete(annotations, (long)sym, NULL, &val)) {
+		notes = (struct annotation *)val;
+		atomic_fetch_sub_explicit(&nr_annotations, 1, memory_order_release);
+		if (hashmap__size(annotations) == 0) {
+			hashmap__free(annotations);
+			annotations = NULL;
+		}
+	}
+	up_write(annotations_lock());
+
+	if (notes) {
+		annotation__exit(notes);
+		free(notes);
+	}
+}
+
 void symbol__annotate_zero_histograms(struct symbol *sym)
 {
-	struct annotation *notes = symbol__annotation(sym);
+	struct annotation *notes;
+
+	if (!symbol__annotated(sym))
+		return;
+
+	notes = symbol__annotation(sym);
+	if (!notes)
+		return;
 
 	annotation__lock(notes);
 	if (notes->src != NULL) {
@@ -333,6 +471,9 @@ static struct annotated_branch *symbol__find_branch_hist(struct symbol *sym,
 struct annotated_source *symbol__hists(struct symbol *sym, int nr_hists)
 {
 	struct annotation *notes = symbol__annotation(sym);
+
+	if (!notes)
+		return NULL;
 
 	if (notes->src == NULL) {
 		notes->src = annotated_source__new();
@@ -1074,6 +1215,9 @@ void symbol__calc_percent(struct symbol *sym, struct evsel *evsel)
 {
 	struct annotation *notes = symbol__annotation(sym);
 
+	if (!notes || !notes->src)
+		return;
+
 	annotation__calc_percent(notes, evsel, symbol__size(sym));
 }
 
@@ -1138,6 +1282,9 @@ int symbol__annotate(struct map_symbol *ms, struct evsel *evsel,
 
 	if (parch)
 		*parch = arch;
+
+	if (!notes)
+		return ENOMEM;
 
 	if (notes->src && !list_empty(&notes->src->source))
 		return 0;
@@ -2340,6 +2487,9 @@ int symbol__annotate2(struct map_symbol *ms, struct evsel *evsel,
 	size_t size = symbol__size(sym);
 	int err;
 
+	if (!notes)
+		return ENOMEM;
+
 	err = symbol__annotate(ms, evsel, parch);
 	if (err)
 		return err;
@@ -2677,6 +2827,8 @@ static struct disasm_line *find_disasm_line(struct symbol *sym, u64 ip,
 	struct annotation *notes;
 
 	notes = symbol__annotation(sym);
+	if (!notes || !notes->src)
+		return NULL;
 
 	list_for_each_entry(dl, &notes->src->source, al.node) {
 		if (dl->al.offset == -1)
@@ -2984,7 +3136,7 @@ struct annotated_data_type *hist_entry__get_data_type(struct hist_entry *he)
 	}
 
 	/* Make sure it has the disasm of the function */
-	if (symbol__annotate(ms, evsel, &arch) < 0) {
+	if (symbol__annotate(ms, evsel, &arch) != 0) {
 		ann_data_stat.no_insn++;
 		return NULL;
 	}

@@ -1952,7 +1952,7 @@ static int rpmh_regulator_probe(struct platform_device *pdev)
 	}
 
 	for_each_available_child_of_node_scoped(dev->of_node, node) {
-		vreg = devm_kzalloc(dev, sizeof(*vreg), GFP_KERNEL);
+		vreg = devm_kzalloc_obj(dev, *vreg);
 		if (!vreg)
 			return -ENOMEM;
 
@@ -1960,6 +1960,10 @@ static int rpmh_regulator_probe(struct platform_device *pdev)
 						vreg_data);
 		if (ret < 0)
 			return ret;
+
+		/* Keep a mode already applied by set_machine_constraints() */
+		if (vreg->mode != REGULATOR_MODE_INVALID)
+			continue;
 
 		ret = rpmh_regulator_determine_initial_mode(vreg);
 		if (ret < 0)

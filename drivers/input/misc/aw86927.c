@@ -12,6 +12,7 @@
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
@@ -766,7 +767,7 @@ static int aw86927_probe(struct i2c_client *client)
 	struct aw86927_data *haptics;
 	int err;
 
-	haptics = devm_kzalloc(&client->dev, sizeof(struct aw86927_data), GFP_KERNEL);
+	haptics = devm_kzalloc_obj(&client->dev, struct aw86927_data);
 	if (!haptics)
 		return -ENOMEM;
 

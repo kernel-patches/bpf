@@ -11,6 +11,7 @@
 #define __CS35L41_H
 
 #include <linux/regmap.h>
+#include <linux/interrupt.h>
 #include <linux/firmware/cirrus/cs_dsp.h>
 
 #define CS35L41_FIRSTREG		0x00000000
@@ -924,5 +925,7 @@ bool cs35l41_safe_reset(struct regmap *regmap, enum cs35l41_boost_type b_type);
 int cs35l41_mdsync_up(struct regmap *regmap);
 int cs35l41_global_enable(struct device *dev, struct regmap *regmap, enum cs35l41_boost_type b_type,
 			  int enable, struct cs_dsp *dsp);
+int cs35l41_wait_boot_done(struct device *dev, struct regmap *regmap);
+int cs35l41_reset_and_boot(struct device *dev, struct regmap *regmap);
 
 #endif /* __CS35L41_H */

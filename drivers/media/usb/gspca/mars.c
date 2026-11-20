@@ -204,14 +204,14 @@ static int sd_init_controls(struct gspca_dev *gspca_dev)
 			V4L2_CID_SHARPNESS, 0, 2, 1, 1);
 	sd->illum_top = v4l2_ctrl_new_std(hdl, &mars_ctrl_ops,
 			V4L2_CID_ILLUMINATORS_1, 0, 1, 1, 0);
-	sd->illum_top->flags |= V4L2_CTRL_FLAG_UPDATE;
 	sd->illum_bottom = v4l2_ctrl_new_std(hdl, &mars_ctrl_ops,
 			V4L2_CID_ILLUMINATORS_2, 0, 1, 1, 0);
-	sd->illum_bottom->flags |= V4L2_CTRL_FLAG_UPDATE;
 	if (hdl->error) {
 		pr_err("Could not initialize controls\n");
 		return hdl->error;
 	}
+	sd->illum_top->flags |= V4L2_CTRL_FLAG_UPDATE;
+	sd->illum_bottom->flags |= V4L2_CTRL_FLAG_UPDATE;
 	v4l2_ctrl_cluster(2, &sd->illum_top);
 	return 0;
 }
@@ -253,7 +253,7 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	reg_w(gspca_dev, 2);
 
 	/*
-	   Initialize the MR97113 chip register
+	 * Initialize the MR97113 chip register
 	 */
 	data[0] = 0x00;		/* address */
 	data[1] = 0x0c | 0x01;	/* reg 0 */
@@ -261,7 +261,8 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	data[3] = gspca_dev->pixfmt.width / 8;	/* h_size , reg 2 */
 	data[4] = gspca_dev->pixfmt.height / 8;	/* v_size , reg 3 */
 	data[5] = 0x30;		/* reg 4, MI, PAS5101 :
-				 *	0x30 for 24mhz , 0x28 for 12mhz */
+				 *	0x30 for 24mhz , 0x28 for 12mhz
+				 */
 	data[6] = 0x02;		/* reg 5, H start - was 0x04 */
 	data[7] = v4l2_ctrl_g_ctrl(sd->gamma) * 0x40;	/* reg 0x06: gamma */
 	data[8] = 0x01;		/* reg 7, V start - was 0x03 */
@@ -280,12 +281,9 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	reg_w(gspca_dev, 2);
 
 	data[0] = 0x3c;		/* address */
-/*	if (gspca_dev->width == 1280) */
-/*		data[1] = 200;	 * reg 60, pc-cam frame size
-				 *	(unit: 4KB) 800KB */
-/*	else */
 	data[1] = 50;		/* 50 reg 60, pc-cam frame size
-				 *	(unit: 4KB) 200KB */
+				 *	(unit: 4KB) 200KB
+				 */
 	reg_w(gspca_dev, 2);
 
 	/* auto dark-gain */
@@ -294,7 +292,8 @@ static int sd_start(struct gspca_dev *gspca_dev)
 /*jfm: from win trace*/
 				/* reg 0x5f/0x60 (LE) = saturation */
 				/* h (60): xxxx x100
-				 * l (5f): xxxx x000 */
+				 * l (5f): xxxx x000
+				 */
 	data[2] = v4l2_ctrl_g_ctrl(sd->saturation) << 3;
 	data[3] = ((v4l2_ctrl_g_ctrl(sd->saturation) >> 2) & 0xf8) | 0x04;
 	data[4] = v4l2_ctrl_g_ctrl(sd->brightness); /* reg 0x61 = brightness */
@@ -320,7 +319,7 @@ static int sd_start(struct gspca_dev *gspca_dev)
 /*jfm: win trace - many writes here to reg 0x64*/
 
 	/* initialize the MI sensor */
-	for (i = 0; i < sizeof mi_data; i++)
+	for (i = 0; i < sizeof(mi_data); i++)
 		mi_w(gspca_dev, i + 1, mi_data[i]);
 
 	data[0] = 0x00;

@@ -1006,8 +1006,7 @@ static int stm32_dfsdm_adc_dma_start(struct iio_dev *indio_dev)
 	if (!desc)
 		return -EBUSY;
 
-	desc->callback = stm32_dfsdm_dma_buffer_done;
-	desc->callback_param = indio_dev;
+	dmaengine_desc_set_callback(desc, stm32_dfsdm_dma_buffer_done, NULL, indio_dev);
 
 	cookie = dmaengine_submit(desc);
 	ret = dma_submit_error(cookie);
@@ -1613,7 +1612,7 @@ static int stm32_dfsdm_audio_init(struct device *dev, struct iio_dev *indio_dev)
 	if (num_ch == 1)
 		legacy = true;
 
-	ch = devm_kzalloc(&indio_dev->dev, sizeof(*ch), GFP_KERNEL);
+	ch = devm_kzalloc_obj(&indio_dev->dev, *ch);
 	if (!ch)
 		return -ENOMEM;
 
@@ -1679,13 +1678,13 @@ static int stm32_dfsdm_adc_init(struct device *dev, struct iio_dev *indio_dev)
 		/* Generic binding. SD modulator IIO device not used. Use SD modulator backend. */
 		adc->hwc = NULL;
 
-		adc->backend = devm_kcalloc(&indio_dev->dev, num_ch, sizeof(*adc->backend),
-					    GFP_KERNEL);
+		adc->backend = devm_kzalloc_objs(&indio_dev->dev, *adc->backend,
+						 num_ch);
 		if (!adc->backend)
 			return -ENOMEM;
 	}
 
-	ch = devm_kcalloc(&indio_dev->dev, num_ch, sizeof(*ch), GFP_KERNEL);
+	ch = devm_kzalloc_objs(&indio_dev->dev, *ch, num_ch);
 	if (!ch)
 		return -ENOMEM;
 	indio_dev->channels = ch;

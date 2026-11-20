@@ -167,12 +167,15 @@ static int
 sifive_spi_prep_transfer(struct sifive_spi *spi, struct spi_device *device,
 			 struct spi_transfer *t)
 {
+	unsigned long div = SIFIVE_SPI_SCKDIV_DIV_MASK;
 	u32 cr;
 	unsigned int mode;
 
-	/* Calculate and program the clock rate */
-	cr = DIV_ROUND_UP(clk_get_rate(spi->clk) >> 1, t->speed_hz) - 1;
-	cr &= SIFIVE_SPI_SCKDIV_DIV_MASK;
+	/* Use the slowest clock if no speed is specified. */
+	if (t->speed_hz)
+		div = DIV_ROUND_UP(clk_get_rate(spi->clk) >> 1,
+				   t->speed_hz) - 1;
+	cr = min_t(unsigned long, div, SIFIVE_SPI_SCKDIV_DIV_MASK);
 	sifive_spi_write(spi, SIFIVE_SPI_REG_SCKDIV, cr);
 
 	mode = max_t(unsigned int, t->rx_nbits, t->tx_nbits);

@@ -1186,7 +1186,9 @@ int vc4_kms_load(struct drm_device *dev)
 	if (ret)
 		return ret;
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ret;
 
 	drmm_kms_helper_poll_init(dev);
 

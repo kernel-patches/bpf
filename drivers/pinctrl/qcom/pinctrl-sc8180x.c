@@ -1597,6 +1597,7 @@ static struct msm_pinctrl_soc_data sc8180x_pinctrl = {
 	.ngpios = 191,
 	.wakeirq_map = sc8180x_pdc_map,
 	.nwakeirq_map = ARRAY_SIZE(sc8180x_pdc_map),
+	.wakeirq_dual_edge_errata = true,
 };
 
 static const struct msm_pinctrl_soc_data sc8180x_acpi_pinctrl = {
@@ -1631,7 +1632,7 @@ static int sc8180x_pinctrl_add_tile_resources(struct platform_device *pdev)
 		return 0;
 
 	/* Allocate for new resources */
-	nres = devm_kcalloc(&pdev->dev, nres_num, sizeof(*nres), GFP_KERNEL);
+	nres = devm_kzalloc_objs(&pdev->dev, *nres, nres_num);
 	if (!nres)
 		return -ENOMEM;
 

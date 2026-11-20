@@ -419,10 +419,16 @@ static int __init brcmstb_gisb_arb_probe(struct platform_device *pdev)
 	int i, first, last;
 
 	timeout_irq = platform_get_irq(pdev, 0);
+	if (timeout_irq < 0)
+		return timeout_irq;
+
 	tea_irq = platform_get_irq(pdev, 1);
+	if (tea_irq < 0)
+		return tea_irq;
+
 	bp_irq = platform_get_irq(pdev, 2);
 
-	gdev = devm_kzalloc(&pdev->dev, sizeof(*gdev), GFP_KERNEL);
+	gdev = devm_kzalloc_obj(&pdev->dev, *gdev);
 	if (!gdev)
 		return -ENOMEM;
 

@@ -20,4 +20,8 @@
 			status = "okay";
 		};
 	};
+
+	regulator-vdd-1v8-ao {
+		vin-supply = <&vdd_5v0_sys>;
+	};
 };

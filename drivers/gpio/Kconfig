@@ -645,14 +645,15 @@ config GPIO_RDA
 
 config GPIO_REALTEK_OTTO
 	tristate "Realtek Otto GPIO support"
-	depends on MACH_REALTEK_RTL || COMPILE_TEST
+	depends on MACH_REALTEK_RTL || ARCH_REALTEK || COMPILE_TEST
 	default MACH_REALTEK_RTL
 	select GPIO_GENERIC
 	select GPIOLIB_IRQCHIP
 	help
 	  The GPIO controller on the Otto MIPS platform supports up to two
 	  banks of 32 GPIOs, with edge triggered interrupts. The 32 GPIOs
-	  are grouped in four 8-bit wide ports.
+	  are grouped in four 8-bit wide ports. The Arm-based RTL9311B has
+	  the same controller.
 
 	  When built as a module, the module will be called realtek_otto_gpio.
 
@@ -1060,7 +1061,7 @@ config GPIO_F7188X
 	help
 	  This option enables support for GPIOs found on Fintek Super-I/O
 	  chips F71869, F71869A, F71882FG, F71889F and F81866.
-	  As well as Nuvoton Super-I/O chip NCT6126D.
+	  As well as Nuvoton Super-I/O chips NCT6126D and NCT5104D.
 
 	  To compile this driver as a module, choose M here: the module will
 	  be called f7188x-gpio.
@@ -1864,11 +1865,11 @@ config GPIO_AD7768
 	  called gpio-ad7768.
 
 config GPIO_LTC4283
-	tristate "Analog Devices LTC4283 GPIO support"
+	tristate "Analog Devices LTC4283 and similar devices GPIO support"
 	depends on SENSORS_LTC4283
 	help
 	  If you say yes here you want the GPIO function available in Analog
-	  Devices LTC4283 Negative Voltage Hot Swap Controller.
+	  Devices LTC4283 and similar devices Negative Voltage Hot Swap Controller.
 
 	  This driver can also be built as a module. If so, the module will
 	  be called gpio-ltc4283.

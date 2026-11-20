@@ -2463,6 +2463,9 @@ free:
 
 static void genpd_free_data(struct generic_pm_domain *genpd)
 {
+	/* Pending device link removals still reference genpd->dev. */
+	device_link_wait_removal();
+
 	put_device(&genpd->dev);
 	if (genpd->device_id != -ENXIO)
 		ida_free(&genpd_ida, genpd->device_id);

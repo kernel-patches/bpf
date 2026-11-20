@@ -52,6 +52,12 @@
 
 #define PSP_IRQ_DEFAULT_HANDLER_ID 0xFFFFFFFF
 
+/* Note: These are pre-IP-discovery fixed MMIO indexes */
+#define mmMP0_SMN_C2PMSG_64_MMIO	0x16080
+#define mmMP0_SMN_C2PMSG_69_MMIO	0x16085
+#define mmMP0_SMN_C2PMSG_70_MMIO	0x16086
+#define mmMP0_SMN_C2PMSG_71_MMIO	0x16087
+
 static int psp_load_smu_fw(struct psp_context *psp);
 static int psp_rap_terminate(struct psp_context *psp);
 static int psp_securedisplay_terminate(struct psp_context *psp);
@@ -191,6 +197,7 @@ static int psp_early_init(struct amdgpu_ip_block *ip_block)
 
 	psp->autoload_supported = true;
 	psp->boot_time_tmr = true;
+	psp->adev = adev;
 
 	switch (amdgpu_ip_version(adev, MP0_HWIP, 0)) {
 	case IP_VERSION(9, 0, 0):
@@ -298,8 +305,6 @@ static int psp_early_init(struct amdgpu_ip_block *ip_block)
 		return -EINVAL;
 	}
 
-	psp->adev = adev;
-
 	adev->psp_timeout = 20000;
 
 	psp_check_pmfw_centralized_cstate_management(psp);
@@ -401,6 +406,26 @@ static uint64_t psp_get_runtime_db_header_pos(struct amdgpu_device *adev)
 	}
 
 	return pos;
+}
+
+/*
+ * Which firmware the platform needs, as reported by the PSP in C2PMSG_63: the
+ * signing scheme and whether this is a preproduction part. The defaults are kept if
+ * the ASIC doesn't report it or it can't be read.
+ */
+void amdgpu_psp_init_fw_variant(struct amdgpu_device *adev)
+{
+	if (amdgpu_sriov_vf(adev))
+		return;
+
+	switch (amdgpu_ip_version(adev, MP0_HWIP, 0)) {
+	case IP_VERSION(15, 0, 0):
+	case IP_VERSION(15, 0, 9):
+		psp_v15_0_0_get_fw_variant(adev);
+		break;
+	default:
+		break;
+	}
 }
 
 /*
@@ -761,17 +786,13 @@ static int psp_sw_fini(struct amdgpu_ip_block *ip_block)
 	return 0;
 }
 
-int psp_wait_for(struct psp_context *psp, uint32_t reg_index, uint32_t reg_val,
-		 uint32_t mask, uint32_t flags)
+static int __psp_wait_for(struct amdgpu_device *adev, uint32_t reg_index, uint32_t reg_val,
+			  uint32_t mask, uint32_t flags)
 {
 	bool check_changed = flags & PSP_WAITREG_CHANGED;
 	bool verbose = !(flags & PSP_WAITREG_NOVERBOSE);
 	uint32_t val;
 	int i;
-	struct amdgpu_device *adev = psp->adev;
-
-	if (psp->adev->no_hw_access)
-		return 0;
 
 	for (i = 0; i < adev->usec_timeout; i++) {
 		val = RREG32(reg_index);
@@ -791,6 +812,17 @@ int psp_wait_for(struct psp_context *psp, uint32_t reg_index, uint32_t reg_val,
 			reg_index, mask, val, reg_val);
 
 	return -ETIME;
+}
+
+int psp_wait_for(struct psp_context *psp, uint32_t reg_index, uint32_t reg_val,
+		 uint32_t mask, uint32_t flags)
+{
+	struct amdgpu_device *adev = psp->adev;
+
+	if (psp->adev->no_hw_access)
+		return 0;
+
+	return __psp_wait_for(adev, reg_index, reg_val, mask, flags);
 }
 
 int psp_wait_for_spirom_update(struct psp_context *psp, uint32_t reg_index,
@@ -958,9 +990,13 @@ psp_cmd_submit_buf(struct psp_context *psp,
 				psp->cmd_resp_buf_mem->resp.status);
 		/* If any firmware (including CAP) load fails under SRIOV, it should
 		 * return failure to stop the VF from initializing.
+		 * A VCN firmware load failure must also stop initialization.
 		 * Also return failure in case of timeout
 		 */
-		if ((ucode && amdgpu_sriov_vf(psp->adev)) || !timeout) {
+		if ((ucode &&
+		    (amdgpu_sriov_vf(psp->adev) ||
+		    ucode->ucode_id == AMDGPU_UCODE_ID_VCN)) ||
+		    !timeout) {
 			ret = -EINVAL;
 			goto exit;
 		}
@@ -3343,6 +3379,58 @@ int psp_securedisplay_invoke(struct psp_context *psp, uint32_t ta_cmd_id)
 }
 /* SECUREDISPLAY end */
 
+int amdgpu_psp_read_discovery(struct amdgpu_device *adev, uint8_t *binary,
+			      GFX_CTRL_ADDR_TYPE addr_type)
+{
+	void *cpu_addr;
+	dma_addr_t dma_addr;
+	u32 length;
+	int ret;
+
+	cpu_addr = dma_alloc_coherent(adev->dev, adev->discovery.size,
+				      &dma_addr, GFP_KERNEL);
+	if (!cpu_addr)
+		return -ENOMEM;
+
+	length = adev->discovery.size;
+	length = (length & 0x0fffffffU) | ((u32)addr_type << 28);
+
+	WREG32(mmMP0_SMN_C2PMSG_69_MMIO, lower_32_bits((u64)dma_addr));
+	WREG32(mmMP0_SMN_C2PMSG_70_MMIO, upper_32_bits((u64)dma_addr));
+	WREG32(mmMP0_SMN_C2PMSG_71_MMIO, length);
+
+	WREG32(mmMP0_SMN_C2PMSG_64_MMIO, GFX_CTRL_CMD_ID_GET_IP_DISCOVERY);
+
+	ret = __psp_wait_for(adev, mmMP0_SMN_C2PMSG_64_MMIO,
+			     MBOX_TOS_RESP_FLAG, MBOX_TOS_RESP_MASK,
+			     PSP_WAITREG_NOVERBOSE);
+	if (ret) {
+		dev_err(adev->dev, "ip_discovery: PSP cmd failed\n");
+	} else {
+		memcpy(binary, cpu_addr, adev->discovery.size);
+	}
+
+	dma_free_coherent(adev->dev, adev->discovery.size, cpu_addr, dma_addr);
+
+	return ret;
+}
+
+int amdgpu_psp_disable_fb_carveout(struct amdgpu_device *adev)
+{
+	int ret;
+
+	WREG32(mmMP0_SMN_C2PMSG_64_MMIO, GFX_CTRL_CMD_ID_DISABLE_FB_CARVEOUT);
+
+	ret = __psp_wait_for(adev, mmMP0_SMN_C2PMSG_64_MMIO,
+			     MBOX_TOS_RESP_FLAG, MBOX_TOS_RESP_MASK,
+			     PSP_WAITREG_NOVERBOSE);
+	if (ret) {
+		dev_err(adev->dev, "disable_fb_carveout: PSP cmd failed\n");
+	}
+
+	return ret;
+}
+
 int amdgpu_psp_wait_for_bootloader(struct amdgpu_device *adev)
 {
 	struct psp_context *psp = &adev->psp;
@@ -4153,8 +4241,6 @@ static int psp_hw_init(struct amdgpu_ip_block *ip_block)
 	int ret;
 	struct amdgpu_device *adev = ip_block->adev;
 
-	mutex_lock(&adev->firmware.mutex);
-
 	ret = amdgpu_ucode_init_bo(adev);
 	if (ret)
 		goto failed;
@@ -4165,12 +4251,10 @@ static int psp_hw_init(struct amdgpu_ip_block *ip_block)
 		goto failed;
 	}
 
-	mutex_unlock(&adev->firmware.mutex);
 	return 0;
 
 failed:
 	adev->firmware.load_type = AMDGPU_FW_LOAD_DIRECT;
-	mutex_unlock(&adev->firmware.mutex);
 	return -EINVAL;
 }
 
@@ -4278,8 +4362,6 @@ static int psp_resume(struct amdgpu_ip_block *ip_block)
 		}
 	}
 
-	mutex_lock(&adev->firmware.mutex);
-
 	ret = amdgpu_ucode_init_bo(adev);
 	if (ret)
 		goto failed;
@@ -4341,13 +4423,10 @@ static int psp_resume(struct amdgpu_ip_block *ip_block)
 				"SECUREDISPLAY: Failed to initialize SECUREDISPLAY\n");
 	}
 
-	mutex_unlock(&adev->firmware.mutex);
-
 	return 0;
 
 failed:
 	dev_err(adev->dev, "PSP resume failed\n");
-	mutex_unlock(&adev->firmware.mutex);
 	return ret;
 }
 
@@ -5381,6 +5460,9 @@ static int psp_read_spirom_debugfs_open(struct inode *inode, struct file *filp)
 	struct spirom_bo *bo_triplet;
 	int ret;
 
+	if (!adev->psp.funcs || !adev->psp.funcs->dump_spirom)
+		return -EOPNOTSUPP;
+
 	/* serialize the open() file calling */
 	if (!mutex_trylock(&adev->psp.mutex))
 		return -EBUSY;
@@ -5472,6 +5554,9 @@ void amdgpu_psp_debugfs_init(struct amdgpu_device *adev)
 {
 #if defined(CONFIG_DEBUG_FS)
 	struct drm_minor *minor = adev_to_drm(adev)->primary;
+
+	if (!adev->psp.funcs || !adev->psp.funcs->dump_spirom)
+		return;
 
 	debugfs_create_file_size("psp_spirom_dump", 0444, minor->debugfs_root,
 				 adev, &psp_dump_spirom_debugfs_ops, AMD_VBIOS_FILE_MAX_SIZE_B * 2);

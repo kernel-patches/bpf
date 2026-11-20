@@ -115,7 +115,7 @@ static acpi_status acpi_ged_request_interrupt(struct acpi_resource *ares,
 		return AE_ERROR;
 	}
 
-	event = devm_kzalloc(dev, sizeof(*event), GFP_KERNEL);
+	event = devm_kzalloc_obj(dev, *event);
 	if (!event)
 		return AE_ERROR;
 
@@ -143,7 +143,7 @@ static int ged_probe(struct platform_device *pdev)
 	struct acpi_ged_device *geddev;
 	acpi_status acpi_ret;
 
-	geddev = devm_kzalloc(&pdev->dev, sizeof(*geddev), GFP_KERNEL);
+	geddev = devm_kzalloc_obj(&pdev->dev, *geddev);
 	if (!geddev)
 		return -ENOMEM;
 
@@ -179,8 +179,8 @@ static void ged_remove(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id ged_acpi_ids[] = {
-	{"ACPI0013"},
-	{},
+	{ .id = "ACPI0013" },
+	{ }
 };
 
 static struct platform_driver ged_driver = {

@@ -23,18 +23,10 @@ static int jfs_loglevel_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int jfs_loglevel_proc_open(struct inode *inode, struct file *file)
+static ssize_t jfs_loglevel_proc_write(struct file *file, char *buffer,
+		size_t count, loff_t *ppos)
 {
-	return single_open(file, jfs_loglevel_proc_show, NULL);
-}
-
-static ssize_t jfs_loglevel_proc_write(struct file *file,
-		const char __user *buffer, size_t count, loff_t *ppos)
-{
-	char c;
-
-	if (get_user(c, buffer))
-		return -EFAULT;
+	char c = buffer[0];
 
 	/* yes, I know this is an ASCIIism.  --hch */
 	if (c < '0' || c > '9')
@@ -44,11 +36,8 @@ static ssize_t jfs_loglevel_proc_write(struct file *file,
 }
 
 static const struct proc_ops jfs_loglevel_proc_ops = {
-	.proc_open	= jfs_loglevel_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
-	.proc_write	= jfs_loglevel_proc_write,
+	.proc_show	= jfs_loglevel_proc_show,
+	.proc_write_buf	= jfs_loglevel_proc_write,
 };
 #endif
 

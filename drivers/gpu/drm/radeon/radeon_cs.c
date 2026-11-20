@@ -125,11 +125,16 @@ static int radeon_cs_parser_relocs(struct radeon_cs_parser *p)
 
 		/* The first reloc of an UVD job is the msg and that must be in
 		 * VRAM, the second reloc is the DPB and for WMV that must be in
-		 * VRAM as well. Also put everything into VRAM on AGP cards and older
-		 * IGP chips to avoid image corruptions
+		 * VRAM as well. Also put everything into VRAM on RV6xx, AGP cards
+		 * and older IGP chips to avoid image corruptions
 		 */
 		if (p->ring == R600_RING_TYPE_UVD_INDEX &&
 		    (i <= 0 || pci_find_capability(p->rdev->pdev, PCI_CAP_ID_AGP) ||
+		     p->rdev->family == CHIP_RV610 ||
+		     p->rdev->family == CHIP_RV620 ||
+		     p->rdev->family == CHIP_RV630 ||
+		     p->rdev->family == CHIP_RV635 ||
+		     p->rdev->family == CHIP_RV670 ||
 		     p->rdev->family == CHIP_RS780 ||
 		     p->rdev->family == CHIP_RS880)) {
 
@@ -285,7 +290,7 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 	p->chunk_relocs = NULL;
 	p->chunk_flags = NULL;
 	p->chunk_const_ib = NULL;
-	p->chunks_array = kvmalloc_array(cs->num_chunks, sizeof(uint64_t), GFP_KERNEL);
+	p->chunks_array = kvmalloc_objs(uint64_t, cs->num_chunks);
 	if (p->chunks_array == NULL) {
 		return -ENOMEM;
 	}
@@ -344,7 +349,7 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 				continue;
 		}
 
-		p->chunks[i].kdata = kvmalloc_array(size, sizeof(uint32_t), GFP_KERNEL);
+		p->chunks[i].kdata = kvmalloc_objs(uint32_t, size);
 		size *= sizeof(uint32_t);
 		if (p->chunks[i].kdata == NULL) {
 			return -ENOMEM;

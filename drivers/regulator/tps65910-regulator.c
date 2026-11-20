@@ -1005,8 +1005,7 @@ static struct tps65910_board *tps65910_parse_dt_reg_data(
 	unsigned int prop;
 	int idx = 0, ret, count;
 
-	pmic_plat_data = devm_kzalloc(&pdev->dev, sizeof(*pmic_plat_data),
-					GFP_KERNEL);
+	pmic_plat_data = devm_kzalloc_obj(&pdev->dev, *pmic_plat_data);
 	if (!pmic_plat_data)
 		return NULL;
 
@@ -1089,7 +1088,7 @@ static int tps65910_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	pmic = devm_kzalloc(&pdev->dev, sizeof(*pmic), GFP_KERNEL);
+	pmic = devm_kzalloc_obj(&pdev->dev, *pmic);
 	if (!pmic)
 		return -ENOMEM;
 
@@ -1128,24 +1127,18 @@ static int tps65910_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	pmic->desc = devm_kcalloc(&pdev->dev,
-				  pmic->num_regulators,
-				  sizeof(struct regulator_desc),
-				  GFP_KERNEL);
+	pmic->desc = devm_kzalloc_objs(&pdev->dev, struct regulator_desc,
+				       pmic->num_regulators);
 	if (!pmic->desc)
 		return -ENOMEM;
 
-	pmic->info = devm_kcalloc(&pdev->dev,
-				  pmic->num_regulators,
-				  sizeof(struct tps_info *),
-				  GFP_KERNEL);
+	pmic->info = devm_kzalloc_objs(&pdev->dev, struct tps_info *,
+				       pmic->num_regulators);
 	if (!pmic->info)
 		return -ENOMEM;
 
-	pmic->rdev = devm_kcalloc(&pdev->dev,
-				  pmic->num_regulators,
-				  sizeof(struct regulator_dev *),
-				  GFP_KERNEL);
+	pmic->rdev = devm_kzalloc_objs(&pdev->dev, struct regulator_dev *,
+				       pmic->num_regulators);
 	if (!pmic->rdev)
 		return -ENOMEM;
 
@@ -1259,18 +1252,7 @@ static struct platform_driver tps65910_driver = {
 	.probe = tps65910_probe,
 	.shutdown = tps65910_shutdown,
 };
-
-static int __init tps65910_init(void)
-{
-	return platform_driver_register(&tps65910_driver);
-}
-subsys_initcall(tps65910_init);
-
-static void __exit tps65910_cleanup(void)
-{
-	platform_driver_unregister(&tps65910_driver);
-}
-module_exit(tps65910_cleanup);
+subsys_platform_driver(tps65910_driver);
 
 MODULE_AUTHOR("Graeme Gregory <gg@slimlogic.co.uk>");
 MODULE_DESCRIPTION("TPS65910/TPS65911 voltage regulator driver");

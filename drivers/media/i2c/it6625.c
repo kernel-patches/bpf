@@ -212,6 +212,11 @@ MODULE_PARM_DESC(debug, "debug level (0-3)");
 #define B_CEC_SEND_DATA BIT(5)
 #define B_CONFIG_UPDATE BIT(6)
 #define B_IF_BANK BIT(7)
+/*
+ * The MCU can take up to 150 ms to clear REG_HOST_CTRL_INT while it is
+ * busy handling the HDMI input; allow 250 ms to leave some margin.
+ */
+#define IT6625_HOST_CTRL_TIMEOUT_MS 250
 
 #define REG_MCU_INTERRUPT 0xFF
 #define B_SYS_INT_ACTIVE BIT(0)
@@ -342,7 +347,7 @@ static const struct v4l2_dv_timings_cap it6625_timings_cap = {
 	/* keep this initialization for compatibility with GCC < 4.4.6 */
 	.reserved = { 0 },
 
-	V4L2_INIT_BT_TIMINGS(640, 3840, 480, 2160, 27000000, 300000000,
+	V4L2_INIT_BT_TIMINGS(640, 3840, 480, 2160, 25000000, 300000000,
 			     V4L2_DV_BT_STD_CEA861 | V4L2_DV_BT_STD_DMT |
 			     V4L2_DV_BT_STD_GTF | V4L2_DV_BT_STD_CVT,
 			     V4L2_DV_BT_CAP_PROGRESSIVE | V4L2_DV_BT_CAP_INTERLACED |
@@ -357,7 +362,7 @@ static const struct v4l2_dv_timings_cap it6626_cphy_3trio_timings_cap = {
 	.type = V4L2_DV_BT_656_1120,
 	.reserved = { 0 },
 
-	V4L2_INIT_BT_TIMINGS(640, 3840, 480, 2160, 27000000, 594000000,
+	V4L2_INIT_BT_TIMINGS(640, 3840, 480, 2160, 25000000, 594000000,
 			     V4L2_DV_BT_STD_CEA861 | V4L2_DV_BT_STD_DMT |
 			     V4L2_DV_BT_STD_GTF | V4L2_DV_BT_STD_CVT,
 			     V4L2_DV_BT_CAP_PROGRESSIVE | V4L2_DV_BT_CAP_INTERLACED |
@@ -530,7 +535,8 @@ static void it6625_write_command(struct it6625 *it6625, u8 *cmds, int cmd_len)
 {
 	it6625_write_bytes(it6625, REG_CMD_SET, cmds, cmd_len);
 	it6625_write_byte(it6625, REG_HOST_CTRL_INT, B_CMD_SET);
-	it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+			       IT6625_HOST_CTRL_TIMEOUT_MS);
 }
 
 static int it6625_update_config(struct it6625 *it6625)
@@ -542,7 +548,8 @@ static int it6625_update_config(struct it6625 *it6625)
 	if (err < 0)
 		return err;
 
-	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+				      IT6625_HOST_CTRL_TIMEOUT_MS);
 }
 
 static int it6625_set_bank(struct it6625 *it6625, u8 bank)
@@ -557,7 +564,8 @@ static int it6625_set_bank(struct it6625 *it6625, u8 bank)
 	if (err < 0)
 		return err;
 
-	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+				      IT6625_HOST_CTRL_TIMEOUT_MS);
 }
 
 static inline bool is_hdmi(struct it6625 *it6625)
@@ -818,6 +826,8 @@ static int it6625_get_detected_timings(struct it6625 *it6625,
 
 	bt->interlaced = val & B_INTERLACE ?
 			 V4L2_DV_INTERLACED : V4L2_DV_PROGRESSIVE;
+	bt->polarities = (val & B_VSWPOL ? V4L2_DV_VSYNC_POS_POL : 0) |
+			 (val & B_HSWPOL ? V4L2_DV_HSYNC_POS_POL : 0);
 
 	if (it6625_read_bytes(it6625, REG_H_ACTIVE_1, (u8 *)&active, sizeof(active)) < 0)
 		return -EIO;
@@ -837,8 +847,15 @@ static int it6625_get_detected_timings(struct it6625 *it6625,
 
 	bt->pixelclock = it6625_get_pclk(it6625);
 	if (bt->interlaced == V4L2_DV_INTERLACED) {
+		/*
+		 * The vertical registers hold the first field. As in the
+		 * CEA-861 interlaced formats, the second field has the same
+		 * front porch and sync, and one more back-porch line.
+		 */
 		bt->height *= 2;
-		bt->il_vsync = bt->vsync + 1;
+		bt->il_vfrontporch = bt->vfrontporch;
+		bt->il_vsync = bt->vsync;
+		bt->il_vbackporch = bt->vbackporch + 1;
 	}
 
 	return 0;
@@ -1027,7 +1044,8 @@ static int it6625_initial_setup(struct it6625 *it6625)
 	if (err)
 		return err;
 
-	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+				      IT6625_HOST_CTRL_TIMEOUT_MS);
 }
 
 static int it6625_cec_adap_enable(struct cec_adapter *adap, bool enable)
@@ -1084,7 +1102,8 @@ static int it6625_cec_adap_transmit(struct cec_adapter *adap, u8 attempts,
 	it6625_write_bytes(it6625, REG_CEC_TX_DATA, msg->msg, msg->len);
 	it6625_write_byte(it6625, REG_CEC_TX_DATA_LEN, msg->len);
 	it6625_set_bits(it6625, REG_HOST_CTRL_INT, B_CEC_SEND_DATA, B_CEC_SEND_DATA);
-	it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+			       IT6625_HOST_CTRL_TIMEOUT_MS);
 
 	return 0;
 }
@@ -1192,26 +1211,11 @@ static void it6625_fill_timings_format(const struct v4l2_dv_timings *timings,
 		     V4L2_FIELD_INTERLACED : V4L2_FIELD_NONE;
 }
 
-static void it6625_clear_timings(struct it6625 *it6625)
-{
-	struct v4l2_subdev *sd = &it6625->sd;
-	struct v4l2_subdev_state *state = v4l2_subdev_lock_and_get_active_state(sd);
-	struct v4l2_mbus_framefmt *fmt = v4l2_subdev_state_get_format(state, 0);
-
-	scoped_guard(mutex, &it6625->it6625_lock) {
-		memset(&it6625->timings, 0, sizeof(it6625->timings));
-		it6625_fill_timings_format(&it6625->timings, fmt);
-	}
-
-	v4l2_subdev_unlock_state(state);
-}
-
 static void it6625_irq_hdmi_5v_change(struct it6625 *it6625)
 {
 	struct v4l2_subdev *sd = &it6625->sd;
 	int ret;
 
-	it6625_clear_timings(it6625);
 	ret = it6625_v4l2_sd_ctrl_update(sd);
 	if (ret)
 		dev_err(it6625->dev, "%s: failed to update controls: %d", __func__, ret);
@@ -1498,6 +1502,8 @@ it6625_update_timings_if_changed(struct it6625 *it6625,
 						  it6625_get_timings_cap(it6625),
 						  NULL, NULL)) {
 			ret = -ERANGE;
+		} else if (v4l2_subdev_is_streaming(sd)) {
+			ret = -EBUSY;
 		} else {
 			it6625->timings = *timings;
 			it6625_fill_timings_format(&it6625->timings, fmt);
@@ -1603,8 +1609,9 @@ static int it6625_pad_s_dv_timings(struct v4l2_subdev *sd, unsigned int pad,
 		v4l2_print_dv_timings(sd->name, __func__, timings, false);
 
 	ret = it6625_update_timings_if_changed(it6625, timings);
-	if (ret == -ERANGE) {
-		v4l2_dbg(1, debug, sd, "%s: timings out of range", __func__);
+	if (ret < 0) {
+		v4l2_dbg(1, debug, sd, "%s: failed to set timings: %d",
+			 __func__, ret);
 		return ret;
 	}
 
@@ -2246,7 +2253,7 @@ static int it6625_probe(struct i2c_client *client)
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return -EIO;
 
-	it6625 = devm_kzalloc(&client->dev, sizeof(struct it6625), GFP_KERNEL);
+	it6625 = devm_kzalloc_obj(&client->dev, struct it6625);
 	if (!it6625)
 		return -ENOMEM;
 
@@ -2260,7 +2267,8 @@ static int it6625_probe(struct i2c_client *client)
 	if (it6625->reset_gpio) {
 		usleep_range(1000, 2000);
 		gpiod_set_value_cansleep(it6625->reset_gpio, 0);
-		usleep_range(10000, 11000);
+		/* the MCU needs up to 1s to boot after reset release */
+		msleep(1000);
 	}
 
 	err = it6625_regmap_i2c_init(client, it6625);

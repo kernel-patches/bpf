@@ -177,7 +177,11 @@ int aix_partition(struct parsed_partitions *state)
 		if (lvm_version == 1) {
 			int pp_size_log2 = be16_to_cpu(p->pp_size);
 
-			pp_bytes_size = 1 << pp_size_log2;
+			if (pp_size_log2 < SECTOR_SHIFT || pp_size_log2 >= 32) {
+				put_dev_sector(sect);
+				return 0;
+			}
+			pp_bytes_size = 1U << pp_size_log2;
 			pp_blocks_size = pp_bytes_size / 512;
 			seq_buf_printf(&state->pp_buf,
 				       " AIX LVM header version %u found\n",

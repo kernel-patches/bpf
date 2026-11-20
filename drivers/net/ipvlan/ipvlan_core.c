@@ -276,7 +276,7 @@ void ipvlan_process_multicast(struct work_struct *work)
 			if (!(ipvlan->dev->flags & IFF_UP))
 				continue;
 			ret = NET_RX_DROP;
-			len = skb->len + ETH_HLEN;
+			len = skb->len + (tx_pkt ? 0 : ETH_HLEN);
 			nskb = skb_clone(skb, GFP_ATOMIC);
 			local_bh_disable();
 			if (nskb) {
@@ -331,7 +331,7 @@ static int ipvlan_rcv_frame(struct ipvl_addr *addr, struct sk_buff **pskb,
 	bool success = false;
 	struct sk_buff *skb = *pskb;
 
-	len = skb->len + ETH_HLEN;
+	len = skb->len + (local ? 0 : ETH_HLEN);
 	/* Only packets exchanged between two local slaves need to have
 	 * device-up check as well as skb-share check.
 	 */
@@ -438,7 +438,8 @@ static noinline_for_stack int ipvlan_process_v4_outbound(struct sk_buff *skb)
 		.flowi4_mark = skb->mark,
 	};
 
-	if (!pskb_network_may_pull(skb, sizeof(struct iphdr)))
+	if (!pskb_network_may_pull(skb, sizeof(struct iphdr)) ||
+	    skb_cow_head(skb, 0))
 		goto err;
 
 	ip4h = ip_hdr(skb);
@@ -504,7 +505,8 @@ static int ipvlan_process_v6_outbound(struct sk_buff *skb)
 	struct net_device *dev = skb->dev;
 	int err, ret = NET_XMIT_DROP;
 
-	if (!pskb_network_may_pull(skb, sizeof(struct ipv6hdr))) {
+	if (!pskb_network_may_pull(skb, sizeof(struct ipv6hdr)) ||
+	    skb_cow_head(skb, 0)) {
 		DEV_STATS_INC(dev, tx_errors);
 		kfree_skb(skb);
 		return ret;

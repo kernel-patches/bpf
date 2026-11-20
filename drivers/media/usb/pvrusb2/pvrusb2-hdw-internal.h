@@ -26,6 +26,7 @@
 #include "pvrusb2-io.h"
 #include <media/v4l2-device.h>
 #include <media/drv-intf/cx2341x.h>
+#include <media/drv-intf/cx25840.h>
 #include <media/i2c/ir-kbd-i2c.h>
 #include "pvrusb2-devattr.h"
 
@@ -189,6 +190,7 @@ struct pvr2_hdw {
 	/* IR related */
 	unsigned int ir_scheme_active; /* IR scheme as seen from the outside */
 	struct IR_i2c_init_data ir_init_data; /* params passed to IR modules */
+	struct cx25840_platform_data cx25840_pdata; /* passed to cx25840 */
 
 	/* Frequency table */
 	unsigned int freqTable[FREQTABLE_SIZE];

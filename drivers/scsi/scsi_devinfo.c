@@ -670,11 +670,6 @@ static const struct seq_operations scsi_devinfo_seq_ops = {
 	.show	= devinfo_seq_show,
 };
 
-static int proc_scsi_devinfo_open(struct inode *inode, struct file *file)
-{
-	return seq_open(file, &scsi_devinfo_seq_ops);
-}
-
 /*
  * proc_scsi_dev_info_write - allow additions to scsi_dev_info_list via /proc.
  *
@@ -683,42 +678,25 @@ static int proc_scsi_devinfo_open(struct inode *inode, struct file *file)
  * To use, echo "vendor:model:flag" > /proc/scsi/device_info
  */
 static ssize_t proc_scsi_devinfo_write(struct file *file,
-				       const char __user *buf,
+				       char *buffer,
 				       size_t length, loff_t *ppos)
 {
-	char *buffer;
-	ssize_t err = length;
+	int ret;
 
-	if (!buf || length>PAGE_SIZE)
+	if (length == PAGE_SIZE && buffer[PAGE_SIZE-1])
 		return -EINVAL;
-	buffer = kmalloc(PAGE_SIZE, GFP_KERNEL);
-	if (!buffer)
-		return -ENOMEM;
-	if (copy_from_user(buffer, buf, length)) {
-		err =-EFAULT;
-		goto out;
-	}
 
-	if (length < PAGE_SIZE)
-		buffer[length] = '\0';
-	else if (buffer[PAGE_SIZE-1]) {
-		err = -EINVAL;
-		goto out;
-	}
+	ret = scsi_dev_info_list_add_str(buffer);
+	if (ret)
+		return ret;
 
-	scsi_dev_info_list_add_str(buffer);
-
-out:
-	kfree(buffer);
-	return err;
+	return length;
 }
 
 static const struct proc_ops scsi_devinfo_proc_ops = {
-	.proc_open	= proc_scsi_devinfo_open,
-	.proc_read	= seq_read,
-	.proc_write	= proc_scsi_devinfo_write,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release,
+	.proc_seq_ops	= &scsi_devinfo_seq_ops,
+	.proc_write_buf	= proc_scsi_devinfo_write,
+	.proc_write_size = PAGE_SIZE,
 };
 #endif /* CONFIG_SCSI_PROC_FS */
 

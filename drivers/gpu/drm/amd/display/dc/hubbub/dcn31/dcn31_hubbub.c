@@ -719,6 +719,7 @@ static bool hubbub31_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower)
 {
 	bool wm_pending = false;
@@ -750,8 +751,8 @@ static bool hubbub31_program_watermarks(
 	REG_UPDATE(DCHUBBUB_ARB_DF_REQ_OUTSTAND,
 			DCHUBBUB_ARB_MIN_REQ_OUTSTAND, 0x1FF);*/
 
-	if (safe_to_lower || hubbub->ctx->dc->debug.disable_stutter)
-		hubbub1_allow_self_refresh_control(hubbub, !hubbub->ctx->dc->debug.disable_stutter);
+	if (safe_to_lower || policy.disable_stutter)
+		hubbub1_allow_self_refresh_control(hubbub, !policy.disable_stutter);
 	return wm_pending;
 }
 
@@ -838,9 +839,12 @@ static bool hubbub31_get_dcc_compression_cap(struct hubbub *hubbub,
 		else
 			dcc_control = dcc_control__256_64_64;
 	} else if (input->scan == SCAN_DIRECTION_VERTICAL) {
-		if (!req128_vert_wc)
-			dcc_control = dcc_control__256_256_xxx;
-		else if (segment_order_vert == segment_order__contiguous)
+		if (!req128_vert_wc) {
+			if (segment_order_vert == segment_order__non_contiguous)
+				dcc_control = dcc_control__256_64_64;
+			else
+				dcc_control = dcc_control__256_256_xxx;
+		} else if (segment_order_vert == segment_order__contiguous)
 			dcc_control = dcc_control__128_128_xxx;
 		else
 			dcc_control = dcc_control__256_64_64;

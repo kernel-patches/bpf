@@ -36,6 +36,7 @@
 
 static const struct af_alg_allowlist_entry aead_allowlist[] = {
 	{ "ccm(aes)" }, /* bluez */
+	{ "gcm(aes)" }, /* iwd */
 	{},
 };
 

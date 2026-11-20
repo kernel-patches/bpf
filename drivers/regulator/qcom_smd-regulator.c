@@ -1511,7 +1511,7 @@ static int rpm_reg_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	for_each_available_child_of_node_scoped(dev->of_node, node) {
-		vreg = devm_kzalloc(&pdev->dev, sizeof(*vreg), GFP_KERNEL);
+		vreg = devm_kzalloc_obj(&pdev->dev, *vreg);
 		if (!vreg)
 			return -ENOMEM;
 
@@ -1532,17 +1532,7 @@ static struct platform_driver rpm_reg_driver = {
 	},
 };
 
-static int __init rpm_reg_init(void)
-{
-	return platform_driver_register(&rpm_reg_driver);
-}
-subsys_initcall(rpm_reg_init);
-
-static void __exit rpm_reg_exit(void)
-{
-	platform_driver_unregister(&rpm_reg_driver);
-}
-module_exit(rpm_reg_exit)
+subsys_platform_driver(rpm_reg_driver);
 
 MODULE_DESCRIPTION("Qualcomm RPM regulator driver");
 MODULE_LICENSE("GPL v2");

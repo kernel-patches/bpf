@@ -347,15 +347,26 @@ to '0'.
 5.3. Replacing
 --------------
 
-All enabled patches might get replaced by a cumulative patch that
-has the .replace flag set.
+There can be only one active livepatch for a given ``provides`` id.
+A new livepatch atomically replaces any existing livepatch whose
+``provides`` id matches either the new patch's ``provides`` id or
+any id in the new patch's ``obsoletes`` list.
 
-Once the new patch is enabled and the 'transition' finishes then
-all the functions (struct klp_func) associated with the replaced
-patches are removed from the corresponding struct klp_ops. Also
-the ftrace handler is unregistered and the struct klp_ops is
-freed when the related function is not modified by the new patch
-and func_stack list becomes empty.
+A new livepatch that does not replace an existing one can coexist with it.
+In this case, the two livepatches must not modify the same function, or use
+the state with the same id. Any attempt to load an incompatible livepatch
+will be rejected by the kernel.
+
+Installing more livepatches in parallel is dangerous, especially
+when they are provided by different teams or vendors. The built-in
+checks for possible conflicts do not prevent potential
+incompatibilities and breakages.
+
+Once the transition is complete, all functions (``struct klp_func``)
+associated with the matching replaced patches are removed from the
+corresponding ``struct klp_ops``. If a function is no longer modified by
+the new patch and its ``func_stack`` list becomes empty, the ftrace
+handler is unregistered and the ``struct klp_ops`` is freed.
 
 See Documentation/livepatch/cumulative-patches.rst for more details.
 

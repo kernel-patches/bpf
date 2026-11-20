@@ -1059,11 +1059,11 @@ static int mt8173_afe_pcm_dev_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	afe = devm_kzalloc(dev, sizeof(*afe), GFP_KERNEL);
+	afe = devm_kzalloc_obj(dev, *afe);
 	if (!afe)
 		return -ENOMEM;
 
-	afe->platform_priv = devm_kzalloc(dev, sizeof(*afe_priv), GFP_KERNEL);
+	afe->platform_priv = devm_kzalloc_obj(dev, *afe_priv);
 	afe_priv = afe->platform_priv;
 	if (!afe_priv)
 		return -ENOMEM;
@@ -1096,14 +1096,12 @@ static int mt8173_afe_pcm_dev_probe(struct platform_device *pdev)
 
 	/* memif % irq initialize*/
 	afe->memif_size = MT8173_AFE_MEMIF_NUM;
-	afe->memif = devm_kcalloc(dev, afe->memif_size,
-				  sizeof(*afe->memif), GFP_KERNEL);
+	afe->memif = devm_kzalloc_objs(dev, *afe->memif, afe->memif_size);
 	if (!afe->memif)
 		return -ENOMEM;
 
 	afe->irqs_size = MT8173_AFE_IRQ_NUM;
-	afe->irqs = devm_kcalloc(dev, afe->irqs_size,
-				 sizeof(*afe->irqs), GFP_KERNEL);
+	afe->irqs = devm_kzalloc_objs(dev, *afe->irqs, afe->irqs_size);
 	if (!afe->irqs)
 		return -ENOMEM;
 
@@ -1133,8 +1131,7 @@ static int mt8173_afe_pcm_dev_probe(struct platform_device *pdev)
 	afe->runtime_resume = mt8173_afe_runtime_resume;
 	afe->runtime_suspend = mt8173_afe_runtime_suspend;
 
-	ret = devm_snd_soc_register_component(dev, &mtk_afe_pcm_platform,
-					      NULL, 0);
+	ret = snd_soc_register_component(dev, &mtk_afe_pcm_platform, NULL, 0);
 	if (ret)
 		goto err_pm_disable;
 
@@ -1142,7 +1139,7 @@ static int mt8173_afe_pcm_dev_probe(struct platform_device *pdev)
 				    mt8173_afe_pcm_dais,
 				    ARRAY_SIZE(mt8173_afe_pcm_dais));
 	if (ret)
-		goto err_pm_disable;
+		goto err_cleanup_components;
 
 	ret = snd_soc_register_component(dev, &mt8173_afe_hdmi_dai_component,
 				    mt8173_afe_hdmi_dais,

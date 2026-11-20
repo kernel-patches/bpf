@@ -147,7 +147,8 @@ static int mana_get_sset_count(struct net_device *ndev, int stringset)
 		return ARRAY_SIZE(mana_eth_stats) +
 		       ARRAY_SIZE(mana_phy_stats) +
 		       ARRAY_SIZE(mana_hc_stats)  +
-		       num_queues * (MANA_STATS_RX_COUNT + MANA_STATS_TX_COUNT);
+		       num_queues * (MANA_STATS_RX_COUNT + MANA_STATS_TX_COUNT +
+				       MANA_STATS_EQ_COUNT);
 
 	case ETH_SS_PRIV_FLAGS:
 		return MANA_PRIV_FLAG_MAX;
@@ -198,6 +199,9 @@ static void mana_get_strings_stats(struct mana_port_context *apc, u8 **data)
 		ethtool_sprintf(data, "tx_%d_csum_partial", i);
 		ethtool_sprintf(data, "tx_%d_mana_map_err", i);
 	}
+
+	for (i = 0; i < num_queues; i++)
+		ethtool_sprintf(data, "eq_%d_throttle_events", i);
 }
 
 static void mana_get_strings_priv_flags(u8 **data)
@@ -234,6 +238,7 @@ static void mana_get_ethtool_stats(struct net_device *ndev,
 	void *phy_stats = &apc->phy_stats;
 	struct mana_stats_rx *rx_stats;
 	struct mana_stats_tx *tx_stats;
+	struct gdma_eq_stats *eq_stats;
 	unsigned int start;
 	u64 packets, bytes;
 	u64 xdp_redirect;
@@ -251,6 +256,7 @@ static void mana_get_ethtool_stats(struct net_device *ndev,
 	u64 csum_partial;
 	u64 mana_map_err;
 	int q, i = 0, j;
+	u64 throttled;
 
 	if (!apc->port_is_up)
 		return;
@@ -325,6 +331,17 @@ static void mana_get_ethtool_stats(struct net_device *ndev,
 		data[i++] = csum_partial;
 		data[i++] = mana_map_err;
 	}
+
+	for (q = 0; q < num_queues; q++) {
+		eq_stats = &apc->eqs[q].eq->eq.stats;
+
+		do {
+			start = u64_stats_fetch_begin(&eq_stats->syncp);
+			throttled = u64_stats_read(&eq_stats->throttle_count);
+		} while (u64_stats_fetch_retry(&eq_stats->syncp, start));
+
+		data[i++] = throttled;
+	}
 }
 
 static u32 mana_get_rx_ring_count(struct net_device *ndev)
@@ -382,7 +399,7 @@ static int mana_set_rxfh(struct net_device *ndev,
 	    rxfh->hfunc != ETH_RSS_HASH_TOP)
 		return -EOPNOTSUPP;
 
-	save_table = kcalloc(apc->indir_table_sz, sizeof(u32), GFP_KERNEL);
+	save_table = kzalloc_objs(u32, apc->indir_table_sz);
 	if (!save_table)
 		return -ENOMEM;
 
@@ -488,9 +505,12 @@ static int mana_set_coalesce(struct net_device *ndev,
 	bool dim_changed = false;
 	struct gdma_context *gc;
 	u32 max_cqe_frames;
+	bool modr_sup;
 	int err;
 
 	gc = apc->ac->gdma_dev->gdma_context;
+	modr_sup = gc->pf_cap_flags1 &
+		   GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION;
 	max_cqe_frames = gc->cqe8_coalescing_sup ? MANA_CQE_COAL_PKTS_8 :
 						   MANA_RXCOMP_OOB_NUM_PPI;
 
@@ -500,7 +520,7 @@ static int mana_set_coalesce(struct net_device *ndev,
 	if ((ec->use_adaptive_rx_coalesce || ec->use_adaptive_tx_coalesce ||
 	     ec->rx_coalesce_usecs || ec->tx_coalesce_usecs ||
 	     ec->rx_max_coalesced_frames || ec->tx_max_coalesced_frames) &&
-	    !(gc->pf_cap_flags1 & GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION)) {
+	    !modr_sup) {
 		NL_SET_ERR_MSG(extack,
 			       "Interrupt Moderation is not supported by HW");
 		return -EOPNOTSUPP;
@@ -517,18 +537,27 @@ static int mana_set_coalesce(struct net_device *ndev,
 		return -EINVAL;
 	}
 
-	if (ec->rx_coalesce_usecs > MANA_INTR_MODR_USEC_MAX ||
-	    ec->tx_coalesce_usecs > MANA_INTR_MODR_USEC_MAX) {
+	/* Without the HW capability, only zero values pass the check above */
+	if (modr_sup &&
+	    (ec->rx_coalesce_usecs < MANA_INTR_MODR_USEC_MIN ||
+	     ec->tx_coalesce_usecs < MANA_INTR_MODR_USEC_MIN ||
+	     ec->rx_coalesce_usecs > MANA_INTR_MODR_USEC_MAX ||
+	     ec->tx_coalesce_usecs > MANA_INTR_MODR_USEC_MAX)) {
 		NL_SET_ERR_MSG_FMT(extack,
-				   "coalesce usecs must be <= %lu",
+				   "coalesce usecs must be between %d and %lu",
+				   MANA_INTR_MODR_USEC_MIN,
 				   MANA_INTR_MODR_USEC_MAX);
 		return -EINVAL;
 	}
 
-	if (ec->rx_max_coalesced_frames > MANA_INTR_MODR_COMP_MAX ||
-	    ec->tx_max_coalesced_frames > MANA_INTR_MODR_COMP_MAX) {
+	if (modr_sup &&
+	    (ec->rx_max_coalesced_frames < MANA_INTR_MODR_COMP_MIN ||
+	     ec->tx_max_coalesced_frames < MANA_INTR_MODR_COMP_MIN ||
+	     ec->rx_max_coalesced_frames > MANA_INTR_MODR_COMP_MAX ||
+	     ec->tx_max_coalesced_frames > MANA_INTR_MODR_COMP_MAX)) {
 		NL_SET_ERR_MSG_FMT(extack,
-				   "coalesce frames must be <= %lu",
+				   "coalesce frames must be between %d and %lu",
+				   MANA_INTR_MODR_COMP_MIN,
 				   MANA_INTR_MODR_COMP_MAX);
 		return -EINVAL;
 	}

@@ -341,6 +341,9 @@ static int software_key_eds_op(struct kernel_pkey_params *params,
 			break;
 		ret = crypto_akcipher_sync_encrypt(tfm, in, params->in_len,
 						   out, params->out_len);
+		/* Returns 0 on success and always fills the whole output. */
+		if (ret == 0)
+			ret = crypto_akcipher_maxsize(tfm);
 		break;
 	case kernel_pkey_decrypt:
 		if (issig)
@@ -357,9 +360,6 @@ static int software_key_eds_op(struct kernel_pkey_params *params,
 	default:
 		BUG();
 	}
-
-	if (!issig && ret == 0)
-		ret = crypto_akcipher_maxsize(tfm);
 
 error_free_tfm:
 	if (issig)

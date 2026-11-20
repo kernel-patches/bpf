@@ -126,7 +126,9 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_ES9039Q2M
 	imply SND_SOC_ES9356
 	imply SND_SOC_ES7134
+	imply SND_SOC_ES7202
 	imply SND_SOC_ES7241
+	imply SND_SOC_FM34NE_DSP
 	imply SND_SOC_FRAMER
 	imply SND_SOC_FS210X
 	imply SND_SOC_GTM601
@@ -284,6 +286,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_TAS6424
 	imply SND_SOC_TAS675X
 	imply SND_SOC_TDA7419
+	imply SND_SOC_TFA9865
 	imply SND_SOC_TFA9879
 	imply SND_SOC_TFA989X
 	imply SND_SOC_TLV320ADC3XXX
@@ -1274,6 +1277,16 @@ config SND_SOC_HDMI_CODEC
 config SND_SOC_ES7134
 	tristate "Everest Semi ES7134 CODEC"
 
+config SND_SOC_ES7202
+	tristate "Everest Semi ES7202 CODEC"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Enable support for the Everest Semiconductor ES7202, a 2-channel
+	  PDM analog-to-digital converter controlled over I2C. The device
+	  outputs PDM data to a SoC PDM controller and is configured through
+	  registers for supply voltage, analog front-end and PGA gain.
+
 config SND_SOC_ES7241
 	tristate "Everest Semi ES7241 CODEC"
 
@@ -1337,6 +1350,17 @@ config SND_SOC_ES9356
 	depends on SOUNDWIRE
 	select REGMAP_SOUNDWIRE
 	select REGMAP_SOUNDWIRE_MBQ
+
+config SND_SOC_FM34NE_DSP
+	tristate "DSP FM34NE driver"
+	depends on I2C && GPIOLIB
+	help
+	  Say Y here if you want to add support for Fortemedia FM34NE DSP
+	  mainly used in ASUS T20/T30 Transformers for input noise
+	  processing.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called snd-soc-fm34ne-dsp.
 
 config SND_SOC_FRAMER
 	tristate "Framer codec"
@@ -1978,6 +2002,7 @@ config SND_SOC_RT712_SDCA_DMIC_SDW
 config SND_SOC_RT721_SDCA_SDW
 	tristate "Realtek RT721 SDCA Codec - SDW"
 	depends on SOUNDWIRE
+	depends on SND_SOC_SDCA
 	select REGMAP_SOUNDWIRE
 	select REGMAP_SOUNDWIRE_MBQ
 
@@ -2321,6 +2346,19 @@ config SND_SOC_TDA7419
 	depends on I2C
 	select REGMAP_I2C
 
+config SND_SOC_TFA9865
+	tristate "NXP/Goodix TFA9865 amplifier"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Enable support for the NXP (now Goodix) TFA9865 mono class-D
+	  speaker amplifier with boost converter. The amplifier has no DSP,
+	  speaker protection is left to the host. The driver supports the
+	  B0 revision of the chip with 32-bit I2S slots.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called snd-soc-tfa9865.
+
 config SND_SOC_TFA9879
 	tristate "NXP Semiconductors TFA9879 amplifier"
 	depends on I2C
@@ -2497,11 +2535,13 @@ config SND_SOC_WCD937X
 	depends on SND_SOC_WCD937X_SDW
 	tristate
 	depends on SOUNDWIRE || !SOUNDWIRE
+	depends on TYPEC || !TYPEC
 	select SND_SOC_WCD_CLASSH
 	select SND_SOC_WCD_COMMON
 
 config SND_SOC_WCD937X_SDW
 	tristate "WCD9370/WCD9375 Codec - SDW"
+	depends on TYPEC || !TYPEC
 	select SND_SOC_WCD937X
 	select SND_SOC_WCD_MBHC
 	select REGMAP_IRQ
@@ -2972,28 +3012,24 @@ config SND_SOC_LPASS_MACRO_COMMON
 
 config SND_SOC_LPASS_WSA_MACRO
 	depends on COMMON_CLK
-	depends on PM_CLK
 	select REGMAP_MMIO
 	select SND_SOC_LPASS_MACRO_COMMON
 	tristate "Qualcomm WSA Macro in LPASS(Low Power Audio SubSystem)"
 
 config SND_SOC_LPASS_VA_MACRO
 	depends on COMMON_CLK
-	depends on PM_CLK
 	select REGMAP_MMIO
 	select SND_SOC_LPASS_MACRO_COMMON
 	tristate "Qualcomm VA Macro in LPASS(Low Power Audio SubSystem)"
 
 config SND_SOC_LPASS_RX_MACRO
 	depends on COMMON_CLK
-	depends on PM_CLK
 	select REGMAP_MMIO
 	select SND_SOC_LPASS_MACRO_COMMON
 	tristate "Qualcomm RX Macro in LPASS(Low Power Audio SubSystem)"
 
 config SND_SOC_LPASS_TX_MACRO
 	depends on COMMON_CLK
-	depends on PM_CLK
 	select REGMAP_MMIO
 	select SND_SOC_LPASS_MACRO_COMMON
 	tristate "Qualcomm TX Macro in LPASS(Low Power Audio SubSystem)"

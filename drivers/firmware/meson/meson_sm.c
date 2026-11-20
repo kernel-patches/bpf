@@ -48,6 +48,7 @@ static const struct meson_sm_chip gxbb_chip = {
 		CMD(SM_THERMAL_CALIB_READ,	0x82000047),
 		CMD(SM_A1_PWRC_SET,		0x82000093),
 		CMD(SM_A1_PWRC_GET,		0x82000095),
+		CMD(SM_LOAD_VIDEO_FW,		0xb200000f),
 		{ /* sentinel */ },
 	},
 };
@@ -314,7 +315,7 @@ static int __init meson_sm_probe(struct platform_device *pdev)
 	const struct meson_sm_chip *chip;
 	struct meson_sm_firmware *fw;
 
-	fw = devm_kzalloc(dev, sizeof(*fw), GFP_KERNEL);
+	fw = devm_kzalloc_obj(dev, *fw);
 	if (!fw)
 		return -ENOMEM;
 

@@ -99,6 +99,7 @@ struct gce_plat {
 	bool control_by_sw;
 	bool sw_ddr_en;
 	bool gce_vm;
+	bool legacy_isa;
 	u32 gce_num;
 };
 
@@ -119,6 +120,7 @@ void cmdq_get_mbox_priv(struct mbox_chan *chan, struct cmdq_mbox_priv *priv)
 	struct cmdq *cmdq = container_of(chan->mbox, struct cmdq, mbox);
 
 	priv->shift_pa = cmdq->pdata->shift;
+	priv->legacy_isa = cmdq->pdata->legacy_isa;
 	priv->mminfra_offset = cmdq->pdata->mminfra_offset;
 }
 EXPORT_SYMBOL(cmdq_get_mbox_priv);
@@ -140,7 +142,7 @@ static void cmdq_vm_init(struct cmdq *cmdq)
 	if (!cmdq->pdata->gce_vm)
 		return;
 
-	vm_map = kcalloc(cmdq->pdata->thread_nr, sizeof(*vm_map), GFP_KERNEL);
+	vm_map = kzalloc_objs(*vm_map, cmdq->pdata->thread_nr);
 	if (!vm_map)
 		return;
 
@@ -644,8 +646,8 @@ static int cmdq_get_clocks(struct device *dev, struct cmdq *cmdq)
 	struct device_node *parent = dev->of_node->parent;
 	struct clk_bulk_data *clks;
 
-	cmdq->clocks = devm_kcalloc(dev, cmdq->pdata->gce_num,
-				    sizeof(*cmdq->clocks), GFP_KERNEL);
+	cmdq->clocks = devm_kzalloc_objs(dev, *cmdq->clocks,
+					 cmdq->pdata->gce_num);
 	if (!cmdq->clocks)
 		return -ENOMEM;
 
@@ -693,7 +695,7 @@ static int cmdq_probe(struct platform_device *pdev)
 	struct cmdq *cmdq;
 	int err, i;
 
-	cmdq = devm_kzalloc(dev, sizeof(*cmdq), GFP_KERNEL);
+	cmdq = devm_kzalloc_obj(dev, *cmdq);
 	if (!cmdq)
 		return -ENOMEM;
 
@@ -724,8 +726,8 @@ static int cmdq_probe(struct platform_device *pdev)
 			      DMA_BIT_MASK(sizeof(u32) * BITS_PER_BYTE + cmdq->pdata->shift));
 
 	cmdq->mbox.dev = dev;
-	cmdq->mbox.chans = devm_kcalloc(dev, cmdq->pdata->thread_nr,
-					sizeof(*cmdq->mbox.chans), GFP_KERNEL);
+	cmdq->mbox.chans = devm_kzalloc_objs(dev, *cmdq->mbox.chans,
+					     cmdq->pdata->thread_nr);
 	if (!cmdq->mbox.chans)
 		return -ENOMEM;
 
@@ -737,8 +739,8 @@ static int cmdq_probe(struct platform_device *pdev)
 	cmdq->mbox.txdone_irq = false;
 	cmdq->mbox.txdone_poll = false;
 
-	cmdq->thread = devm_kcalloc(dev, cmdq->pdata->thread_nr,
-					sizeof(*cmdq->thread), GFP_KERNEL);
+	cmdq->thread = devm_kzalloc_objs(dev, *cmdq->thread,
+					 cmdq->pdata->thread_nr);
 	if (!cmdq->thread)
 		return -ENOMEM;
 
@@ -790,6 +792,14 @@ static const struct dev_pm_ops cmdq_pm_ops = {
 	.resume = cmdq_resume,
 	SET_RUNTIME_PM_OPS(cmdq_runtime_suspend,
 			   cmdq_runtime_resume, NULL)
+};
+
+static const struct gce_plat gce_plat_mt6572 = {
+	.thread_nr = 14,
+	.shift = 0,
+	.control_by_sw = false,
+	.legacy_isa = true,
+	.gce_num = 1
 };
 
 static const struct gce_plat gce_plat_mt6779 = {
@@ -853,6 +863,7 @@ static const struct gce_plat gce_plat_mt8196 = {
 };
 
 static const struct of_device_id cmdq_of_ids[] = {
+	{.compatible = "mediatek,mt6572-gce", .data = (void *)&gce_plat_mt6572},
 	{.compatible = "mediatek,mt6779-gce", .data = (void *)&gce_plat_mt6779},
 	{.compatible = "mediatek,mt8173-gce", .data = (void *)&gce_plat_mt8173},
 	{.compatible = "mediatek,mt8183-gce", .data = (void *)&gce_plat_mt8183},

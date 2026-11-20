@@ -266,7 +266,7 @@ static int tps_65023_probe(struct i2c_client *client)
 	int i;
 	int error;
 
-	tps = devm_kzalloc(&client->dev, sizeof(*tps), GFP_KERNEL);
+	tps = devm_kzalloc_obj(&client->dev, *tps);
 	if (!tps)
 		return -ENOMEM;
 
@@ -302,10 +302,8 @@ static int tps_65023_probe(struct i2c_client *client)
 	i2c_set_clientdata(client, tps);
 
 	/* Enable setting output voltage by I2C */
-	regmap_update_bits(tps->regmap, TPS65023_REG_CON_CTRL2,
-			   TPS65023_REG_CTRL2_CORE_ADJ, 0);
-
-	return 0;
+	return regmap_update_bits(tps->regmap, TPS65023_REG_CON_CTRL2,
+				  TPS65023_REG_CTRL2_CORE_ADJ, 0);
 }
 
 static const struct of_device_id __maybe_unused tps65023_of_match[] = {

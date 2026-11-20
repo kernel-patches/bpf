@@ -89,6 +89,10 @@
 #define BQ27XXX_SET_CFGUPDATE		0x13
 #define BQ27XXX_SOFT_RESET		0x42
 #define BQ27XXX_RESET			0x41
+#define BQ27XXX_DEVICE_TYPE		0x0001
+
+#define BQ27411_DEVICE_TYPE		0x0421
+#define BQ27541_DEVICE_TYPE		0x0541
 
 #define BQ27XXX_RS			(20) /* Resistor sense mOhm */
 #define BQ27XXX_POWER_CONSTANT		(29200) /* 29.2 µV^2 * 1000 */
@@ -922,19 +926,10 @@ enum bq27xxx_dm_reg_id {
 
 #define bq27000_dm_regs NULL
 #define bq27010_dm_regs NULL
+#define bq27500_dm_regs NULL
 #define bq2750x_dm_regs NULL
 #define bq2751x_dm_regs NULL
 #define bq2752x_dm_regs NULL
-
-#if 0 /* not yet tested */
-static struct bq27xxx_dm_reg bq27500_dm_regs[] = {
-	[BQ27XXX_DM_DESIGN_CAPACITY]   = { 48, 10, 2,    0, 65535 },
-	[BQ27XXX_DM_DESIGN_ENERGY]     = { }, /* missing on chip */
-	[BQ27XXX_DM_TERMINATE_VOLTAGE] = { 80, 48, 2, 1000, 32767 },
-};
-#else
-#define bq27500_dm_regs NULL
-#endif
 
 /* todo create data memory definitions from datasheets and test on chips */
 #define bq27510g1_dm_regs NULL
@@ -949,18 +944,9 @@ static struct bq27xxx_dm_reg bq27500_dm_regs[] = {
 #define bq27531_dm_regs NULL
 #define bq27541_dm_regs NULL
 #define bq27542_dm_regs NULL
+#define bq27545_dm_regs NULL
 #define bq27546_dm_regs NULL
 #define bq27742_dm_regs NULL
-
-#if 0 /* not yet tested */
-static struct bq27xxx_dm_reg bq27545_dm_regs[] = {
-	[BQ27XXX_DM_DESIGN_CAPACITY]   = { 48, 23, 2,    0, 32767 },
-	[BQ27XXX_DM_DESIGN_ENERGY]     = { 48, 25, 2,    0, 32767 },
-	[BQ27XXX_DM_TERMINATE_VOLTAGE] = { 80, 67, 2, 2800,  3700 },
-};
-#else
-#define bq27545_dm_regs NULL
-#endif
 
 static struct bq27xxx_dm_reg bq27411_dm_regs[] = {
 	[BQ27XXX_DM_DESIGN_CAPACITY]   = { 82, 10, 2,    0, 32767 },
@@ -986,22 +972,8 @@ static struct bq27xxx_dm_reg bq27426_dm_regs[] = {
 	[BQ27XXX_DM_TERMINATE_VOLTAGE] = { 82, 10, 2, 2500,  3700 },
 };
 
-#if 0 /* not yet tested */
-#define bq27441_dm_regs bq27421_dm_regs
-#else
 #define bq27441_dm_regs NULL
-#endif
-
-#if 0 /* not yet tested */
-static struct bq27xxx_dm_reg bq27621_dm_regs[] = {
-	[BQ27XXX_DM_DESIGN_CAPACITY]   = { 82, 3, 2,    0,  8000 },
-	[BQ27XXX_DM_DESIGN_ENERGY]     = { 82, 5, 2,    0, 32767 },
-	[BQ27XXX_DM_TERMINATE_VOLTAGE] = { 82, 9, 2, 2500,  3700 },
-};
-#else
 #define bq27621_dm_regs NULL
-#endif
-
 #define bq27z561_dm_regs NULL
 #define bq27z746_dm_regs NULL
 #define bq28z610_dm_regs NULL
@@ -1193,6 +1165,56 @@ static inline int bq27xxx_write(struct bq27xxx_device_info *di, int reg_index,
 			di->regs[reg_index], reg_index);
 
 	return ret;
+}
+
+static int bq27xxx_battery_check_device_type(struct bq27xxx_device_info *di)
+{
+	enum bq27xxx_chip detected_chip;
+	int expected_type;
+	int ret;
+
+	/* Add fuel gauges with supported DeviceType reporting to this list. */
+	switch (di->chip) {
+	case BQ27411:
+		expected_type = BQ27411_DEVICE_TYPE;
+		break;
+	case BQ27541:
+		expected_type = BQ27541_DEVICE_TYPE;
+		break;
+	default:
+		return 0;
+	}
+
+	ret = bq27xxx_write(di, BQ27XXX_REG_CTRL, BQ27XXX_DEVICE_TYPE,
+			    false);
+	if (ret < 0)
+		return ret;
+
+	ret = bq27xxx_read(di, BQ27XXX_REG_CTRL, false);
+	if (ret < 0)
+		return ret;
+
+	switch (ret) {
+	case BQ27411_DEVICE_TYPE:
+		detected_chip = BQ27411;
+		break;
+	case BQ27541_DEVICE_TYPE:
+		detected_chip = BQ27541;
+		break;
+	default:
+		dev_err(di->dev, "unrecognized DeviceType 0x%04x\n", ret);
+		return -ENODEV;
+	}
+
+	if (detected_chip == di->chip)
+		return 0;
+
+	dev_warn(di->dev,
+		 "detected DeviceType 0x%04x instead of expected 0x%04x\n",
+		 ret, expected_type);
+	di->chip = detected_chip;
+
+	return 0;
 }
 
 static inline int bq27xxx_read_block(struct bq27xxx_device_info *di, int reg_index,
@@ -1548,7 +1570,8 @@ static void bq27xxx_battery_settings(struct bq27xxx_device_info *di)
 
 	/* assume min == 0 */
 	max = di->dm_regs[BQ27XXX_DM_DESIGN_ENERGY].max;
-	if (info->energy_full_design_uwh > max * 1000) {
+	if (info->energy_full_design_uwh != -EINVAL &&
+	    info->energy_full_design_uwh > max * 1000) {
 		dev_err(di->dev, "invalid battery:energy-full-design-microwatt-hours %d\n",
 			info->energy_full_design_uwh);
 		info->energy_full_design_uwh = -EINVAL;
@@ -1556,7 +1579,8 @@ static void bq27xxx_battery_settings(struct bq27xxx_device_info *di)
 
 	/* assume min == 0 */
 	max = di->dm_regs[BQ27XXX_DM_DESIGN_CAPACITY].max;
-	if (info->charge_full_design_uah > max * 1000) {
+	if (info->charge_full_design_uah != -EINVAL &&
+	    info->charge_full_design_uah > max * 1000) {
 		dev_err(di->dev, "invalid battery:charge-full-design-microamp-hours %d\n",
 			info->charge_full_design_uah);
 		info->charge_full_design_uah = -EINVAL;
@@ -2252,11 +2276,17 @@ int bq27xxx_battery_setup(struct bq27xxx_device_info *di)
 		return ret;
 
 	di->regs       = bq27xxx_chip_data[di->chip].regs;
+
+	ret = bq27xxx_battery_check_device_type(di);
+	if (ret)
+		return ret;
+
+	di->regs       = bq27xxx_chip_data[di->chip].regs;
 	di->unseal_key = bq27xxx_chip_data[di->chip].unseal_key;
 	di->dm_regs    = bq27xxx_chip_data[di->chip].dm_regs;
 	di->opts       = bq27xxx_chip_data[di->chip].opts;
 
-	psy_desc = devm_kzalloc(di->dev, sizeof(*psy_desc), GFP_KERNEL);
+	psy_desc = devm_kzalloc_obj(di->dev, *psy_desc);
 	if (!psy_desc)
 		return -ENOMEM;
 

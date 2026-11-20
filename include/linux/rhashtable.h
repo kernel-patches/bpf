@@ -65,12 +65,11 @@ struct rhash_lock_head {};
  * struct bucket_table - Table of hash buckets
  * @size: Number of hash buckets
  * @nest: Number of bits of first-level nested table.
- * @rehash: Current bucket being rehashed
  * @hash_rnd: Random seed to fold into hash
  * @walkers: List of active walkers
  * @rcu: RCU structure for freeing the table
  * @future_tbl: Table under construction during rehashing
- * @ntbl: Nested table used when out of memory.
+ * @dep_map: Lockdep tracking map
  * @buckets: size * hash buckets
  */
 struct bucket_table {

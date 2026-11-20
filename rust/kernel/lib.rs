@@ -96,6 +96,8 @@ pub mod iommu;
 pub mod iov;
 pub mod irq;
 pub mod jump_label;
+#[cfg(CONFIG_RUST_KCSAN_KUNIT_TEST)]
+mod kcsan_test;
 #[cfg(CONFIG_KUNIT)]
 pub mod kunit;
 pub mod list;
@@ -126,6 +128,8 @@ pub mod ratelimit;
 pub mod rbtree;
 pub mod regulator;
 pub mod revocable;
+#[cfg(CONFIG_XARRAY_RUST)]
+pub mod rxarray;
 pub mod safety;
 pub mod scatterlist;
 pub mod security;

@@ -77,36 +77,34 @@ cifs_prime_dcache(struct dentry *parent, struct qstr *name,
 
 	cifs_dbg(FYI, "%s: for %s\n", __func__, name->name);
 
-	dentry = try_lookup_noperm(name, parent);
-	if (!dentry) {
-		/*
-		 * If we know that the inode will need to be revalidated
-		 * immediately, then don't create a new dentry for it.
-		 * We'll end up doing an on the wire call either way and
-		 * this spares us an invalidation.
-		 */
-retry:
-		if (posix) {
-			switch (fattr->cf_mode & S_IFMT) {
-			case S_IFLNK:
-			case S_IFBLK:
-			case S_IFCHR:
-				reparse_need_reval = true;
-				break;
-			default:
-				break;
-			}
-		} else if (fattr->cf_cifsattrs & ATTR_REPARSE_POINT) {
+	/*
+	 * If we know that the inode will need to be revalidated
+	 * immediately, then don't create a new dentry for it.
+	 * We'll end up doing an on the wire call either way and
+	 * this spares us an invalidation.
+	 */
+	if (posix) {
+		switch (fattr->cf_mode & S_IFMT) {
+		case S_IFLNK:
+		case S_IFBLK:
+		case S_IFCHR:
 			reparse_need_reval = true;
+			break;
+		default:
+			break;
 		}
-
-		if (reparse_need_reval ||
-		    (fattr->cf_flags & CIFS_FATTR_NEED_REVAL))
-			return;
-
-		dentry = d_alloc_parallel(parent, name);
+	} else if (fattr->cf_cifsattrs & ATTR_REPARSE_POINT) {
+		reparse_need_reval = true;
 	}
-	if (IS_ERR(dentry))
+
+retry:
+	if (reparse_need_reval ||
+	    (fattr->cf_flags & CIFS_FATTR_NEED_REVAL))
+		dentry = try_lookup_noperm(name, parent);
+	else
+		dentry = d_alloc_trylock(parent, name);
+
+	if (IS_ERR_OR_NULL(dentry))
 		return;
 	if (!d_in_lookup(dentry)) {
 		inode = d_inode(dentry);
@@ -253,9 +251,10 @@ cifs_posix_to_fattr(struct cifs_fattr *fattr, struct smb2_posix_info *info,
 	fattr->cf_bytes = le64_to_cpu(info->AllocationSize);
 	fattr->cf_eof = le64_to_cpu(info->EndOfFile);
 
+	fattr->cf_createtime = le64_to_cpu(info->CreationTime);
 	fattr->cf_atime = cifs_NTtimeToUnix(info->LastAccessTime);
 	fattr->cf_mtime = cifs_NTtimeToUnix(info->LastWriteTime);
-	fattr->cf_ctime = cifs_NTtimeToUnix(info->CreationTime);
+	fattr->cf_ctime = cifs_NTtimeToUnix(info->ChangeTime);
 
 	fattr->cf_nlink = le32_to_cpu(info->HardLinks);
 	fattr->cf_cifsattrs = le32_to_cpu(info->DosAttributes);

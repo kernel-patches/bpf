@@ -9,7 +9,7 @@
 
 #ifdef __KERNEL__
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/notifier.h>
 #include <asm/thread_info.h>

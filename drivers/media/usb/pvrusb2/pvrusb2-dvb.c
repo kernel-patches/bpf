@@ -238,6 +238,98 @@ static int pvr2_dvb_bus_ctrl(struct dvb_frontend *fe, int acquire)
 	    (acquire ? (1 << PVR2_CVAL_INPUT_DTV) : 0));
 }
 
+/*
+ * On some hybrid devices (e.g. the HVR-1950) the demodulator is held in
+ * reset while the analog pathway is selected.  When the frontend is
+ * closed, dvb-core releases the bus at once but puts the tuner and demod
+ * to sleep later from the frontend thread; if an analog open switches the
+ * pathway in between, those I2C writes fail (e.g. "s5h1411_writereg:
+ * writereg error ... ret == -5").  The demod needs nothing in that state
+ * and the tuner now belongs to the analog side, so skip them.
+ *
+ * The check and the call are made under big_lock, which
+ * pvr2_hdw_cmd_modeswitch() runs under, so the pathway can't change in
+ * between.  A tuner sleep calls back into i2c_gate_ctrl with the lock
+ * already held; fe_lock_owner lets that nested call through.
+ */
+static int pvr2_dvb_fe_call(struct dvb_frontend *fe,
+			    int (*op)(struct dvb_frontend *fe))
+{
+	struct pvr2_dvb_adapter *adap = fe->dvb->priv;
+	struct pvr2_hdw *hdw = adap->channel.hdw;
+	int ret = 0;
+
+	LOCK_TAKE(hdw->big_lock);
+	if (hdw->pathway_state == PVR2_PATHWAY_DIGITAL) {
+		WRITE_ONCE(adap->fe_lock_owner, current);
+		ret = op(fe);
+		WRITE_ONCE(adap->fe_lock_owner, NULL);
+	}
+	LOCK_GIVE(hdw->big_lock);
+	return ret;
+}
+
+static int pvr2_dvb_fe_sleep(struct dvb_frontend *fe)
+{
+	struct pvr2_dvb_adapter *adap = fe->dvb->priv;
+
+	return pvr2_dvb_fe_call(fe, adap->fe_sleep);
+}
+
+static int pvr2_dvb_fe_tuner_sleep(struct dvb_frontend *fe)
+{
+	struct pvr2_dvb_adapter *adap = fe->dvb->priv;
+
+	return pvr2_dvb_fe_call(fe, adap->fe_tuner_sleep);
+}
+
+static int pvr2_dvb_fe_i2c_gate_ctrl(struct dvb_frontend *fe, int enable)
+{
+	struct pvr2_dvb_adapter *adap = fe->dvb->priv;
+	struct pvr2_hdw *hdw = adap->channel.hdw;
+	int ret = 0;
+
+	/* Nested in pvr2_dvb_fe_call(): already checked, lock held */
+	if (READ_ONCE(adap->fe_lock_owner) == current)
+		return adap->fe_i2c_gate_ctrl(fe, enable);
+
+	LOCK_TAKE(hdw->big_lock);
+	if (hdw->pathway_state == PVR2_PATHWAY_DIGITAL)
+		ret = adap->fe_i2c_gate_ctrl(fe, enable);
+	LOCK_GIVE(hdw->big_lock);
+	return ret;
+}
+
+/* Called before fe[0] is registered */
+static void pvr2_dvb_fe_wrap_ops(struct pvr2_dvb_adapter *adap)
+{
+	struct dvb_frontend *fe = adap->fe[0];
+
+	if (!pvr2_hdw_demod_reset_in_analog(adap->channel.hdw))
+		return;
+	if (fe->ops.sleep) {
+		adap->fe_sleep = fe->ops.sleep;
+		fe->ops.sleep = pvr2_dvb_fe_sleep;
+	}
+	if (fe->ops.i2c_gate_ctrl) {
+		adap->fe_i2c_gate_ctrl = fe->ops.i2c_gate_ctrl;
+		fe->ops.i2c_gate_ctrl = pvr2_dvb_fe_i2c_gate_ctrl;
+	}
+}
+
+/* Called once the tuner is attached to fe[0] */
+static void pvr2_dvb_fe_wrap_tuner_ops(struct pvr2_dvb_adapter *adap)
+{
+	struct dvb_frontend *fe = adap->fe[0];
+
+	if (!pvr2_hdw_demod_reset_in_analog(adap->channel.hdw))
+		return;
+	if (fe->ops.tuner_ops.sleep) {
+		adap->fe_tuner_sleep = fe->ops.tuner_ops.sleep;
+		fe->ops.tuner_ops.sleep = pvr2_dvb_fe_tuner_sleep;
+	}
+}
+
 static int pvr2_dvb_adapter_init(struct pvr2_dvb_adapter *adap)
 {
 	int ret;
@@ -333,6 +425,7 @@ static int pvr2_dvb_frontend_init(struct pvr2_dvb_adapter *adap)
 	}
 
 	if (dvb_props->frontend_attach(adap) == 0 && adap->fe[0]) {
+		pvr2_dvb_fe_wrap_ops(adap);
 		if (dvb_register_frontend(&adap->dvb_adap, adap->fe[0])) {
 			pvr2_trace(PVR2_TRACE_ERROR_LEGS,
 				   "frontend registration failed!");
@@ -357,6 +450,7 @@ static int pvr2_dvb_frontend_init(struct pvr2_dvb_adapter *adap)
 		ret = -ENODEV;
 		goto fail_tuner;
 	}
+	pvr2_dvb_fe_wrap_tuner_ops(adap);
 
 	if (adap->fe[1]) {
 		adap->fe[1]->id = 1;

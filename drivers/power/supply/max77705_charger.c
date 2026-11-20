@@ -278,8 +278,11 @@ static int max77705_get_battery_health(struct max77705_charger_data *chg,
 {
 	struct regmap *regmap = chg->regmap;
 	unsigned int bat_dtls;
+	int ret;
 
-	regmap_read(regmap, MAX77705_CHG_REG_DETAILS_01, &bat_dtls);
+	ret = regmap_read(regmap, MAX77705_CHG_REG_DETAILS_01, &bat_dtls);
+	if (ret)
+		return ret;
 	bat_dtls = ((bat_dtls & MAX77705_BAT_DTLS) >> MAX77705_BAT_DTLS_SHIFT);
 
 	switch (bat_dtls) {
@@ -607,7 +610,7 @@ static int max77705_charger_probe(struct i2c_client *i2c)
 
 	dev = &i2c->dev;
 
-	chg = devm_kzalloc(dev, sizeof(*chg), GFP_KERNEL);
+	chg = devm_kzalloc_obj(dev, *chg);
 	if (!chg)
 		return -ENOMEM;
 

@@ -700,7 +700,8 @@ int jbd2_log_wait_commit(journal_t *journal, tid_t tid)
  * it to complete. Returns 0 if a new fast commit was started. Returns -EALREADY
  * if a fast commit is not needed, either because there's an already a commit
  * going on or this tid has already been committed. Returns -EINVAL if no jbd2
- * commit has yet been performed.
+ * commit has yet been performed, or none since the journal was last marked
+ * empty.
  */
 int jbd2_fc_begin_commit(journal_t *journal, tid_t tid)
 {
@@ -717,6 +718,16 @@ int jbd2_fc_begin_commit(journal_t *journal, tid_t tid)
 	if (tid_geq(journal->j_commit_sequence, tid)) {
 		write_unlock(&journal->j_state_lock);
 		return -EALREADY;
+	}
+
+	/*
+	 * The log was emptied and the superblock on disk says so, which makes
+	 * recovery skip the fast commit area as well. Only a full commit
+	 * records the log tail again.
+	 */
+	if (journal->j_flags & JBD2_FLUSHED) {
+		write_unlock(&journal->j_state_lock);
+		return -EINVAL;
 	}
 
 	if (journal->j_flags & JBD2_FULL_COMMIT_ONGOING ||
@@ -1173,51 +1184,36 @@ static const struct seq_operations jbd2_seq_info_ops = {
 	.show   = jbd2_seq_info_show,
 };
 
+/* procfs opened the seq_file and allocated @s */
 static int jbd2_seq_info_open(struct inode *inode, struct file *file)
 {
 	journal_t *journal = pde_data(inode);
-	struct jbd2_stats_proc_session *s;
-	int rc, size;
+	struct jbd2_stats_proc_session *s = ((struct seq_file *)file->private_data)->private;
+	int size = sizeof(struct transaction_stats_s);
 
-	s = kmalloc_obj(*s);
-	if (s == NULL)
-		return -ENOMEM;
-	size = sizeof(struct transaction_stats_s);
 	s->stats = kmalloc(size, GFP_KERNEL);
-	if (s->stats == NULL) {
-		kfree(s);
+	if (s->stats == NULL)
 		return -ENOMEM;
-	}
 	spin_lock(&journal->j_history_lock);
 	memcpy(s->stats, &journal->j_stats, size);
 	s->journal = journal;
 	spin_unlock(&journal->j_history_lock);
-
-	rc = seq_open(file, &jbd2_seq_info_ops);
-	if (rc == 0) {
-		struct seq_file *m = file->private_data;
-		m->private = s;
-	} else {
-		kfree(s->stats);
-		kfree(s);
-	}
-	return rc;
-
+	return 0;
 }
 
 static int jbd2_seq_info_release(struct inode *inode, struct file *file)
 {
 	struct seq_file *seq = file->private_data;
 	struct jbd2_stats_proc_session *s = seq->private;
+
 	kfree(s->stats);
-	kfree(s);
-	return seq_release(inode, file);
+	return 0;
 }
 
 static const struct proc_ops jbd2_info_proc_ops = {
+	.proc_seq_ops	= &jbd2_seq_info_ops,
+	.proc_state_size = sizeof(struct jbd2_stats_proc_session),
 	.proc_open	= jbd2_seq_info_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
 	.proc_release	= jbd2_seq_info_release,
 };
 
@@ -1268,9 +1264,21 @@ static unsigned long jbd2_journal_shrink_scan(struct shrinker *shrink,
 	trace_jbd2_shrink_scan_enter(journal, sc->nr_to_scan, count);
 
 	nr_shrunk = jbd2_journal_shrink_checkpoint_list(journal, &nr_to_scan);
+	sc->nr_scanned = sc->nr_to_scan - nr_to_scan;
 
 	count = percpu_counter_read_positive(&journal->j_checkpoint_jh_count);
 	trace_jbd2_shrink_scan_exit(journal, nr_to_scan, nr_shrunk, count);
+
+	/*
+	 * Key SHRINK_STOP off sc->nr_scanned (buffers actually examined),
+	 * not nr_shrunk (buffers actually freed): a batch can find every
+	 * buffer in its transactions busy and free none, while later
+	 * transactions may still hold buffers whose writeback has
+	 * completed. sc->nr_scanned only comes back 0 when the checkpoint
+	 * list had nothing left to walk.
+	 */
+	if (sc->nr_scanned == 0)
+		return SHRINK_STOP;
 
 	return nr_shrunk;
 }
@@ -2096,7 +2104,10 @@ int jbd2_journal_load(journal_t *journal)
 		return err;
 	}
 
+	/* kjournald2 is already running, see journal_reset(). */
+	write_lock(&journal->j_state_lock);
 	journal->j_flags |= JBD2_LOADED;
+	write_unlock(&journal->j_state_lock);
 	return 0;
 }
 

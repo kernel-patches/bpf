@@ -574,7 +574,7 @@ struct amdgpu_psp_funcs {
 	(psp)->funcs->update_spirom((psp), fw_pri_mc_addr) : -EINVAL)
 
 #define psp_dump_spirom(psp, fw_pri_mc_addr) \
-	((psp)->funcs->dump_spirom ? \
+	(((psp)->funcs && (psp)->funcs->dump_spirom) ? \
 	(psp)->funcs->dump_spirom((psp), fw_pri_mc_addr) : -EINVAL)
 
 #define psp_vbflash_status(psp) \
@@ -631,6 +631,7 @@ int psp_ta_invoke(struct psp_context *psp,
 
 int psp_xgmi_initialize(struct psp_context *psp, bool set_extended_data, bool load_ta);
 bool psp_is_xgmi_ta_supported(struct psp_context *psp);
+void amdgpu_psp_init_fw_variant(struct amdgpu_device *adev);
 int psp_xgmi_terminate(struct psp_context *psp);
 int psp_xgmi_invoke(struct psp_context *psp, uint32_t ta_cmd_id);
 int psp_xgmi_get_hive_id(struct psp_context *psp, uint64_t *hive_id);
@@ -688,6 +689,9 @@ int psp_memory_partition(struct psp_context *psp, int mode);
 
 int is_psp_fw_valid(struct psp_bin_desc bin);
 
+int amdgpu_psp_read_discovery(struct amdgpu_device *adev, uint8_t *binary,
+			      GFX_CTRL_ADDR_TYPE addr_type);
+int amdgpu_psp_disable_fb_carveout(struct amdgpu_device *adev);
 int amdgpu_psp_wait_for_bootloader(struct amdgpu_device *adev);
 bool amdgpu_psp_get_ras_capability(struct psp_context *psp);
 

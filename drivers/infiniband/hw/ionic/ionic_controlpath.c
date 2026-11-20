@@ -910,20 +910,50 @@ static int ionic_destroy_mr_cmd(struct ionic_ibdev *dev, u32 mrid)
 
 struct ib_mr *ionic_get_dma_mr(struct ib_pd *ibpd, int access)
 {
+	struct ionic_ibdev *dev = to_ionic_ibdev(ibpd->device);
 	struct ionic_pd *pd = to_ionic_pd(ibpd);
 	struct ionic_mr *mr;
+	int rc;
 
 	mr = kzalloc_obj(*mr);
 	if (!mr)
 		return ERR_PTR(-ENOMEM);
 
-	mr->ibmr.lkey = IONIC_DMA_LKEY;
-	mr->ibmr.rkey = IONIC_DMA_RKEY;
-
-	if (pd)
+	if (!(dev->lif_cfg.cap & IONIC_GEN_CAP_DMA_MR)) {
+		mr->ibmr.lkey = IONIC_DMA_LKEY;
 		pd->flags |= IONIC_QPF_PRIVILEGED;
 
+		return &mr->ibmr;
+	}
+
+	rc = ionic_get_mrid(dev, &mr->mrid);
+	if (rc)
+		goto err_mrid;
+
+	mr->ibmr.lkey = mr->mrid;
+	mr->ibmr.rkey = mr->mrid;
+
+	/*
+	 * Identity map of the whole address space, bound to this pd.
+	 * Firmware owns that extent, so the VA, length, and map_count
+	 * stay zero.
+	 */
+	mr->flags = IONIC_MRF_DMA_MR | to_ionic_mr_flags(access);
+
+	rc = ionic_create_mr_cmd(dev, pd, mr, 0, 0);
+	if (rc)
+		goto err_cmd;
+
+	pd->flags |= IONIC_QPF_PRIVILEGED;
+
 	return &mr->ibmr;
+
+err_cmd:
+	ionic_put_mrid(dev, mr->mrid);
+err_mrid:
+	kfree(mr);
+
+	return ERR_PTR(rc);
 }
 
 struct ib_mr *ionic_reg_user_mr(struct ib_pd *ibpd, u64 start, u64 length,
@@ -1121,21 +1151,25 @@ struct ib_mr *ionic_alloc_mr(struct ib_pd *ibpd, enum ib_mr_type type,
 
 	mr->flags = IONIC_MRF_PHYS_MR;
 
-	rc = ionic_pgtbl_init(dev, &mr->buf, mr->umem, 0, max_sg, PAGE_SIZE);
-	if (rc)
-		goto err_pgtbl;
-
-	mr->buf.tbl_pages = 0;
-
+	mr->buf.tbl_pages = max_sg;
 	rc = ionic_create_mr_cmd(dev, pd, mr, 0, 0);
 	if (rc)
 		goto err_cmd;
 
+	rc = ionic_pgtbl_init(dev, &mr->buf, NULL, 0, max_sg, 0);
+	if (rc)
+		goto err_pgtbl;
+
+	/* NIC reservation was already posted. tbl_pages means "mapped". */
+	mr->buf.tbl_pages = 0;
+
 	return &mr->ibmr;
 
-err_cmd:
-	ionic_pgtbl_unbuf(dev, &mr->buf);
 err_pgtbl:
+	/* Keep the id if the NIC still holds the MR. */
+	if (ionic_destroy_mr_cmd(dev, mr->mrid))
+		goto err_mrid;
+err_cmd:
 	ionic_put_mrid(dev, mr->mrid);
 err_mrid:
 	kfree(mr);
@@ -1945,6 +1979,8 @@ static int ionic_qp_sq_init(struct ionic_ibdev *dev, struct ionic_ctx *ctx,
 		return rc;
 	}
 
+	qp->sq_color = true;
+
 	rc = -EINVAL;
 
 	if (max_wr < 0 || max_wr > 0xffff)
@@ -2021,9 +2057,8 @@ static int ionic_qp_sq_init(struct ionic_ibdev *dev, struct ionic_ctx *ctx,
 			goto err_sq_meta;
 		}
 
-		qp->sq_msn_idx = kmalloc_array((u32)qp->sq.mask + 1,
-					       sizeof(*qp->sq_msn_idx),
-					       GFP_KERNEL);
+		qp->sq_msn_idx = kmalloc_objs(*qp->sq_msn_idx,
+					      (u32)qp->sq.mask + 1);
 		if (!qp->sq_msn_idx) {
 			rc = -ENOMEM;
 			goto err_sq_msn;
@@ -2189,8 +2224,8 @@ static int ionic_rq_init(struct ionic_ibdev *dev, struct ionic_ctx *ctx,
 			 struct ionic_tbl_buf *buf, int max_wr, int max_sge,
 			 int rq_spec, struct ib_udata *udata)
 {
-	int rc = 0, i;
 	u32 wqe_size;
+	int rc = 0;
 
 	rc = -EINVAL;
 
@@ -2252,16 +2287,11 @@ static int ionic_rq_init(struct ionic_ibdev *dev, struct ionic_ctx *ctx,
 
 		ionic_queue_dbell_init(&rq->q, rq->qid);
 
-		rq->meta = kmalloc_objs(*rq->meta, (u32)rq->q.mask + 1);
+		rq->meta = kzalloc_objs(*rq->meta, (u32)rq->q.mask + 1);
 		if (!rq->meta) {
 			rc = -ENOMEM;
 			goto err_rq_meta;
 		}
-
-		for (i = 0; i < rq->q.mask; ++i)
-			rq->meta[i].next = &rq->meta[i + 1];
-		rq->meta[i].next = IONIC_META_LAST;
-		rq->meta_head = &rq->meta[0];
 	}
 
 	ionic_rq_init_cmb(dev, rq, udata);
@@ -2632,7 +2662,6 @@ static void ionic_reset_qp(struct ionic_ibdev *dev, struct ionic_qp *qp)
 {
 	unsigned long irqflags;
 	struct ionic_cq *cq;
-	int i;
 
 	local_irq_save(irqflags);
 
@@ -2658,6 +2687,7 @@ static void ionic_reset_qp(struct ionic_ibdev *dev, struct ionic_qp *qp)
 		qp->sq_msn_cons = 0;
 		qp->sq.prod = 0;
 		qp->sq.cons = 0;
+		qp->sq_color = true;
 		spin_unlock(&qp->sq_lock);
 	}
 
@@ -2666,12 +2696,9 @@ static void ionic_reset_qp(struct ionic_ibdev *dev, struct ionic_qp *qp)
 		qp->rq.flush = false;
 		qp->rq.q.prod = 0;
 		qp->rq.q.cons = 0;
-		if (qp->rq.meta) {
-			for (i = 0; i < qp->rq.q.mask; ++i)
-				qp->rq.meta[i].next = &qp->rq.meta[i + 1];
-			qp->rq.meta[i].next = IONIC_META_LAST;
-		}
-		qp->rq.meta_head = &qp->rq.meta[0];
+		if (qp->rq.meta)
+			memset(qp->rq.meta, 0,
+			       (qp->rq.q.mask + 1) * sizeof(*qp->rq.meta));
 		spin_unlock(&qp->rq.lock);
 	}
 

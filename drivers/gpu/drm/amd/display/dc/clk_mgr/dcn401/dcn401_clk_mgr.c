@@ -523,74 +523,6 @@ static void dcn401_auto_dpm_test_log(
 	}
 }
 
-static void dcn401_update_clocks_update_dtb_dto(struct clk_mgr_internal *clk_mgr,
-			struct dc_state *context,
-			int ref_dtbclk_khz)
-{
-	(void)ref_dtbclk_khz;
-	int i;
-	struct dccg *dccg = clk_mgr->dccg;
-	struct pipe_ctx *otg_master;
-	bool use_hpo_encoder;
-
-
-	for (i = 0; i < context->stream_count; i++) {
-		otg_master = resource_get_otg_master_for_stream(
-				&context->res_ctx, context->streams[i]);
-		ASSERT(otg_master);
-		ASSERT(otg_master->clock_source);
-		ASSERT(otg_master->clock_source->funcs->program_pix_clk);
-		ASSERT(otg_master->stream_res.pix_clk_params.controller_id >= CONTROLLER_ID_D0);
-
-		use_hpo_encoder = dccg->ctx->dc->link_srv->dp_is_128b_132b_signal(otg_master);
-		use_hpo_encoder |= dc_is_hdmi_frl_signal(otg_master->stream->signal);
-		if (!use_hpo_encoder)
-			continue;
-
-		if (otg_master->stream_res.pix_clk_params.controller_id > CONTROLLER_ID_UNDEFINED)
-			otg_master->clock_source->funcs->program_pix_clk(
-				otg_master->clock_source,
-				&otg_master->stream_res.pix_clk_params,
-				dccg->ctx->dc->link_srv->dp_get_encoding_format(
-					&otg_master->link_config.dp_link_settings),
-				&otg_master->pll_settings);
-	}
-}
-
-static void dcn401_update_clocks_update_dpp_dto(struct clk_mgr_internal *clk_mgr,
-		struct dc_state *context, bool safe_to_lower, int ref_dppclk_khz)
-{
-	uint32_t i;
-
-	clk_mgr->dccg->ref_dppclk = ref_dppclk_khz;
-	for (i = 0; i < clk_mgr->base.ctx->dc->res_pool->pipe_count; i++) {
-		int dpp_inst = 0, dppclk_khz, prev_dppclk_khz;
-
-		dppclk_khz = context->res_ctx.pipe_ctx[i].plane_res.bw.dppclk_khz;
-
-		if (context->res_ctx.pipe_ctx[i].plane_res.dpp)
-			dpp_inst = context->res_ctx.pipe_ctx[i].plane_res.dpp->inst;
-		else if (!context->res_ctx.pipe_ctx[i].plane_res.dpp && dppclk_khz == 0) {
-			/* dpp == NULL && dppclk_khz == 0 is valid because of pipe harvesting.
-			 * In this case just continue in loop
-			 */
-			continue;
-		} else if (!context->res_ctx.pipe_ctx[i].plane_res.dpp && dppclk_khz > 0) {
-			/* The software state is not valid if dpp resource is NULL and
-			 * dppclk_khz > 0.
-			 */
-			ASSERT(false);
-			continue;
-		}
-
-		prev_dppclk_khz = clk_mgr->dccg->pipe_dppclk_khz[i];
-
-		if (safe_to_lower || prev_dppclk_khz < dppclk_khz)
-			clk_mgr->dccg->funcs->update_dpp_dto(
-							clk_mgr->dccg, dpp_inst, dppclk_khz);
-	}
-}
-
 static int dcn401_set_hard_min_by_freq_optimized(struct clk_mgr_internal *clk_mgr, PPCLK_e clk, int requested_clk_khz)
 {
 	if (!clk_mgr->smu_present || !dcn401_is_ppclk_dpm_enabled(clk_mgr, clk))
@@ -616,33 +548,18 @@ static int dcn401_set_hard_min_by_freq_optimized(struct clk_mgr_internal *clk_mg
 
 static void dcn401_update_clocks_update_dentist(
 		struct clk_mgr_internal *clk_mgr,
-		struct dc_state *context)
+		uint32_t new_dispclk_wdivider)
 {
-	(void)context;
-	uint32_t new_disp_divider = 0;
-	uint32_t new_dispclk_wdivider = 0;
 	uint32_t dentist_dispclk_wdivider_readback = 0;
-	struct dc *dc = clk_mgr->base.ctx->dc;
 
-	if (clk_mgr->base.clks.dispclk_khz == 0)
-		return;
+	REG_GET(DENTIST_DISPCLK_CNTL,
+			DENTIST_DISPCLK_WDIVIDER, &dentist_dispclk_wdivider_readback);
 
-	new_disp_divider = DENTIST_DIVIDER_RANGE_SCALE_FACTOR
-			* clk_mgr->base.dentist_vco_freq_khz / clk_mgr->base.clks.dispclk_khz;
-
-	new_dispclk_wdivider = dentist_get_did_from_divider(new_disp_divider);
-
-	if (dc->debug.override_dispclk_programming) {
-		REG_GET(DENTIST_DISPCLK_CNTL,
-				DENTIST_DISPCLK_WDIVIDER, &dentist_dispclk_wdivider_readback);
-
-		if (dentist_dispclk_wdivider_readback > new_dispclk_wdivider) {
-			REG_UPDATE(DENTIST_DISPCLK_CNTL,
-					DENTIST_DISPCLK_WDIVIDER, new_dispclk_wdivider);
-			REG_WAIT(DENTIST_DISPCLK_CNTL, DENTIST_DISPCLK_CHG_DONE, 1, 50, 2000);
-		}
+	if (dentist_dispclk_wdivider_readback > new_dispclk_wdivider) {
+		REG_UPDATE(DENTIST_DISPCLK_CNTL,
+				DENTIST_DISPCLK_WDIVIDER, new_dispclk_wdivider);
+		REG_WAIT(DENTIST_DISPCLK_CNTL, DENTIST_DISPCLK_CHG_DONE, 1, 50, 2000);
 	}
-
 }
 
 static void dcn401_execute_block_sequence(struct clk_mgr *clk_mgr_base, unsigned int num_steps)
@@ -736,22 +653,17 @@ static void dcn401_execute_block_sequence(struct clk_mgr *clk_mgr_base, unsigned
 					params->indicate_drr_status_params.mod_drr_for_pstate);
 			break;
 		case CLK_MGR401_UPDATE_DPPCLK_DTO:
-			dcn401_update_clocks_update_dpp_dto(
-					clk_mgr_internal,
-					params->update_dppclk_dto_params.context,
-					params->update_dppclk_dto_params.safe_to_lower,
-					*params->update_dppclk_dto_params.ref_dppclk_khz);
+			clk_mgr_program_dpp_dto(clk_mgr_internal->dccg,
+					*params->update_dppclk_dto_params.ref_dppclk_khz,
+					&params->update_dppclk_dto_params.targets);
 			break;
 		case CLK_MGR401_UPDATE_DTBCLK_DTO:
-			dcn401_update_clocks_update_dtb_dto(
-					clk_mgr_internal,
-					params->update_dtbclk_dto_params.context,
-					*params->update_dtbclk_dto_params.ref_dtbclk_khz);
+			clk_mgr_program_dtbclk_dto(&params->update_dtbclk_dto_params);
 			break;
 		case CLK_MGR401_UPDATE_DENTIST:
 			dcn401_update_clocks_update_dentist(
 					clk_mgr_internal,
-					params->update_dentist_params.context);
+					params->update_dentist_params.dispclk_wdivider);
 			break;
 		case CLK_MGR401_UPDATE_PSR_WAIT_LOOP:
 			params->update_psr_wait_loop_params.dmcu->funcs->set_psr_wait_loop(
@@ -1082,6 +994,27 @@ static unsigned int dcn401_build_update_bandwidth_clocks_sequence(
 	return num_steps;
 }
 
+/* Outside the dispclk programming debug override, DENTIST is not reprogrammed here. */
+static unsigned int dcn401_add_update_dentist_step(
+		struct clk_mgr *clk_mgr_base,
+		struct dcn401_clk_mgr_block_sequence *block_sequence,
+		unsigned int num_steps)
+{
+	uint32_t new_disp_divider;
+
+	if (!clk_mgr_base->ctx->dc->debug.override_dispclk_programming ||
+			clk_mgr_base->clks.dispclk_khz == 0)
+		return num_steps;
+
+	new_disp_divider = DENTIST_DIVIDER_RANGE_SCALE_FACTOR
+			* clk_mgr_base->dentist_vco_freq_khz / clk_mgr_base->clks.dispclk_khz;
+
+	block_sequence[num_steps].params.update_dentist_params.dispclk_wdivider =
+			dentist_get_did_from_divider(new_disp_divider);
+	block_sequence[num_steps].func = CLK_MGR401_UPDATE_DENTIST;
+	return num_steps + 1;
+}
+
 static unsigned int dcn401_build_update_display_clocks_sequence(
 		struct clk_mgr *clk_mgr_base,
 		struct dc_state *context,
@@ -1152,10 +1085,13 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 		num_steps++;
 
 		/* Update DTO in DCCG */
-		block_sequence[num_steps].params.update_dtbclk_dto_params.context = context;
-		block_sequence[num_steps].params.update_dtbclk_dto_params.ref_dtbclk_khz = &clk_mgr_base->clks.ref_dtbclk_khz;
-		block_sequence[num_steps].func = CLK_MGR401_UPDATE_DTBCLK_DTO;
-		num_steps++;
+		for (i = 0; i < context->stream_count; i++) {
+			if (!clk_mgr_build_dtbclk_dto_target(dc, context, context->streams[i],
+					&block_sequence[num_steps].params.update_dtbclk_dto_params))
+				continue;
+			block_sequence[num_steps].func = CLK_MGR401_UPDATE_DTBCLK_DTO;
+			num_steps++;
+		}
 	}
 
 	if (should_set_clock(safe_to_lower, new_clocks->dppclk_khz, clk_mgr_base->clks.dppclk_khz)) {
@@ -1183,15 +1119,13 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 	if (dc->config.forced_clocks == false || (force_reset && safe_to_lower)) {
 		if (dppclk_lowered) {
 			/* if clock is being lowered, increase DTO before lowering refclk */
-			block_sequence[num_steps].params.update_dppclk_dto_params.context = context;
 			block_sequence[num_steps].params.update_dppclk_dto_params.ref_dppclk_khz = &clk_mgr_base->clks.dppclk_khz;
-			block_sequence[num_steps].params.update_dppclk_dto_params.safe_to_lower = safe_to_lower;
+			clk_mgr_build_dpp_dto_targets(dc, context, safe_to_lower,
+					&block_sequence[num_steps].params.update_dppclk_dto_params.targets);
 			block_sequence[num_steps].func = CLK_MGR401_UPDATE_DPPCLK_DTO;
 			num_steps++;
 
-			block_sequence[num_steps].params.update_dentist_params.context = context;
-			block_sequence[num_steps].func = CLK_MGR401_UPDATE_DENTIST;
-			num_steps++;
+			num_steps = dcn401_add_update_dentist_step(clk_mgr_base, block_sequence, num_steps);
 
 			if (dcn401_is_ppclk_dpm_enabled(clk_mgr_internal, PPCLK_DPPCLK)) {
 				block_sequence[num_steps].params.update_hardmin_optimized_params.ppclk = PPCLK_DPPCLK;
@@ -1200,9 +1134,9 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 				block_sequence[num_steps].func = CLK_MGR401_UPDATE_HARDMIN_PPCLK_OPTIMIZED;
 				num_steps++;
 
-				block_sequence[num_steps].params.update_dppclk_dto_params.context = context;
 				block_sequence[num_steps].params.update_dppclk_dto_params.ref_dppclk_khz = &clk_mgr_base->clks.actual_dppclk_khz;
-				block_sequence[num_steps].params.update_dppclk_dto_params.safe_to_lower = safe_to_lower;
+				clk_mgr_build_dpp_dto_targets(dc, context, safe_to_lower,
+						&block_sequence[num_steps].params.update_dppclk_dto_params.targets);
 				block_sequence[num_steps].func = CLK_MGR401_UPDATE_DPPCLK_DTO;
 				num_steps++;
 			}
@@ -1216,15 +1150,12 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 				num_steps++;
 			}
 
-			if (update_dppclk || update_dispclk) {
-				block_sequence[num_steps].params.update_dentist_params.context = context;
-				block_sequence[num_steps].func = CLK_MGR401_UPDATE_DENTIST;
-				num_steps++;
-			}
+			if (update_dppclk || update_dispclk)
+				num_steps = dcn401_add_update_dentist_step(clk_mgr_base, block_sequence, num_steps);
 
-			block_sequence[num_steps].params.update_dppclk_dto_params.context = context;
 			block_sequence[num_steps].params.update_dppclk_dto_params.ref_dppclk_khz = &clk_mgr_base->clks.actual_dppclk_khz;
-			block_sequence[num_steps].params.update_dppclk_dto_params.safe_to_lower = safe_to_lower;
+			clk_mgr_build_dpp_dto_targets(dc, context, safe_to_lower,
+					&block_sequence[num_steps].params.update_dppclk_dto_params.targets);
 			block_sequence[num_steps].func = CLK_MGR401_UPDATE_DPPCLK_DTO;
 			num_steps++;
 		}

@@ -73,7 +73,7 @@ static const struct resource stmfx_ts_resources[] = {
 	DEFINE_RES_IRQ(STMFX_REG_IRQ_SRC_EN_TS_OVF),
 };
 
-static struct mfd_cell stmfx_cells[] = {
+static const struct mfd_cell stmfx_cells[] = {
 	{
 		.of_compatible = "st,stmfx-0300-pinctrl",
 		.name = "stmfx-pinctrl",
@@ -414,7 +414,7 @@ static int stmfx_probe(struct i2c_client *client)
 	struct stmfx *stmfx;
 	int ret;
 
-	stmfx = devm_kzalloc(dev, sizeof(*stmfx), GFP_KERNEL);
+	stmfx = devm_kzalloc_obj(dev, *stmfx);
 	if (!stmfx)
 		return -ENOMEM;
 
@@ -448,9 +448,9 @@ static int stmfx_probe(struct i2c_client *client)
 	if (ret)
 		goto err_chip_exit;
 
-	ret = devm_mfd_add_devices(dev, PLATFORM_DEVID_NONE,
-				   stmfx_cells, ARRAY_SIZE(stmfx_cells), NULL,
-				   0, stmfx->irq_domain);
+	ret = mfd_add_devices(dev, PLATFORM_DEVID_NONE,
+			      stmfx_cells, ARRAY_SIZE(stmfx_cells), NULL,
+			      0, stmfx->irq_domain);
 	if (ret)
 		goto err_irq_exit;
 
@@ -466,6 +466,8 @@ err_chip_exit:
 
 static void stmfx_remove(struct i2c_client *client)
 {
+	mfd_remove_devices(&client->dev);
+
 	stmfx_irq_exit(client);
 
 	stmfx_chip_exit(client);

@@ -422,7 +422,8 @@ enum {
 #define FBNIC_TCE_TXB_NTWRK_DWRR_CTRL_EXT \
 					0x0404E		/* 0x10138 */
 #define FBNIC_TCE_TXB_BMC_DWRR_CTRL_EXT	0x0404F		/* 0x1013c */
-#define FBNIC_CSR_END_TCE		0x04050	/* CSR section delimiter */
+#define FBNIC_TCE_PTP_INFLIGHT		0x040A7		/* 0x1029c */
+#define FBNIC_CSR_END_TCE		0x040B4	/* CSR section delimiter */
 
 /* TCE RAM registers */
 #define FBNIC_CSR_START_TCE_RAM		0x04200	/* CSR section delimiter */
@@ -441,6 +442,7 @@ enum {
 #define FBNIC_TMI_SOP_PROT_CTRL		0x04400		/* 0x11000 */
 #define FBNIC_TMI_DROP_CTRL		0x04401		/* 0x11004 */
 #define FBNIC_TMI_DROP_CTRL_EN			CSR_BIT(0)
+#define FBNIC_TMI_DROP_CTRL_CMPL_DIS		CSR_BIT(1)
 #define FBNIC_TMI_DROP_PKTS		0x04402		/* 0x11008 */
 #define FBNIC_TMI_DROP_BYTE_L		0x04403		/* 0x1100c */
 #define FBNIC_TMI_ILLEGAL_PTP_REQS	0x04409		/* 0x11024 */
@@ -955,6 +957,10 @@ enum {
 
 /* PUL User Registers */
 #define FBNIC_CSR_START_PUL_USER	0x31000	/* CSR section delimiter */
+#define FBNIC_PUL_USER_IP_LINK_RST_STATUS \
+					0x31030		/* 0xc40c0 */
+#define FBNIC_PUL_USER_IP_LINK_RST_STATUS_AW_FLUSH_DONE	CSR_BIT(7)
+#define FBNIC_PUL_USER_IP_LINK_RST_STATUS_AR_FLUSH_DONE	CSR_BIT(8)
 #define FBNIC_PUL_OB_TLP_HDR_AW_CFG	0x3103d		/* 0xc40f4 */
 #define FBNIC_PUL_OB_TLP_HDR_AW_CFG_FLUSH_MODE	CSR_BIT(20)
 #define FBNIC_PUL_OB_TLP_HDR_AW_CFG_FLUSH	CSR_BIT(19)

@@ -107,7 +107,8 @@ int sysctl_tcp_max_orphans __read_mostly = NR_FILE;
 #define FLAG_TS_PROGRESS	0x40000 /* Positive timestamp delta */
 
 #define FLAG_ACKED		(FLAG_DATA_ACKED|FLAG_SYN_ACKED)
-#define FLAG_NOT_DUP		(FLAG_DATA|FLAG_WIN_UPDATE|FLAG_ACKED)
+#define FLAG_NOT_DUP		(FLAG_DATA|FLAG_WIN_UPDATE|FLAG_ACKED|	\
+				 FLAG_SND_UNA_ADVANCED)
 #define FLAG_CA_ALERT		(FLAG_DATA_SACKED|FLAG_ECE|FLAG_DSACKING_ACK)
 #define FLAG_FORWARD_PROGRESS	(FLAG_ACKED|FLAG_DATA_SACKED)
 
@@ -856,7 +857,11 @@ void tcp_initialize_rcv_mss(struct sock *sk)
 static void tcp_rcv_rtt_update(struct tcp_sock *tp, u32 sample, int win_dep)
 {
 	u32 new_sample, old_sample = tp->rcv_rtt_est.rtt_us;
-	long m = sample << 3;
+	long m;
+
+	/* Keep sample << 3 and the smoothed estimate within u32. */
+	sample = min(sample, TCP_RTT_MAX_US);
+	m = sample << 3;
 
 	if (old_sample == 0 || m < old_sample) {
 		new_sample = m;
@@ -900,15 +905,16 @@ new_measure:
 	tp->rcv_rtt_est.time = tp->tcp_mstamp;
 }
 
+/* A sample from TSecr above TCP_RTT_MAX_US is bogus, not large. */
 static s32 tcp_rtt_tsopt_us(const struct tcp_sock *tp, u32 min_delta)
 {
 	u32 delta, delta_us;
 
 	delta = tcp_time_stamp_ts(tp) - tp->rx_opt.rcv_tsecr;
 	if (tp->tcp_usec_ts)
-		return delta;
+		return delta <= TCP_RTT_MAX_US ? delta : -1;
 
-	if (likely(delta < INT_MAX / (USEC_PER_SEC / TCP_TS_HZ))) {
+	if (likely(delta <= TCP_RTT_MAX_US / (USEC_PER_SEC / TCP_TS_HZ))) {
 		if (!delta)
 			delta = min_delta;
 		delta_us = delta * (USEC_PER_SEC / TCP_TS_HZ);
@@ -1097,8 +1103,11 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 static void tcp_rtt_estimator(struct sock *sk, long mrtt_us)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-	long m = mrtt_us; /* RTT */
 	u32 srtt = tp->srtt_us;
+	long m; /* RTT */
+
+	mrtt_us = min(mrtt_us, TCP_RTT_MAX_US);
+	m = mrtt_us;
 
 	/*	The following amusing code comes from Jacobson's
 	 *	article in SIGCOMM '88.  Note that rtt and mdev
@@ -1220,8 +1229,9 @@ void tcp_set_rto(struct sock *sk)
 	 *    with correct one. It is exactly, which we pretend to do.
 	 */
 
-	/* NOTE: clamping at TCP_RTO_MIN is not required, current algo
-	 * guarantees that rto is higher.
+	/* NOTE: clamping at tcp_rto_min() is not required, tcp_rtt_estimator()
+	 * applies it to rttvar_us. But rto must never be 0, which exponential
+	 * backoff could not leave: __tcp_set_rto() takes care of that.
 	 */
 	tcp_bound_rto(sk);
 }
@@ -3986,11 +3996,11 @@ static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32
 		nwin <<= tp->rx_opt.snd_wscale;
 
 	if (tcp_may_update_window(tp, ack, ack_seq, nwin)) {
-		flag |= FLAG_WIN_UPDATE;
 		tcp_update_wl(tp, ack_seq);
 
 		if (tp->snd_wnd != nwin) {
 			tp->snd_wnd = nwin;
+			flag |= FLAG_WIN_UPDATE;
 
 			/* Note, it is the only place, where
 			 * fast path is recovered for sending TCP.
@@ -4381,7 +4391,6 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		 */
 		tcp_update_wl(tp, ack_seq);
 		tcp_snd_una_update(tp, ack);
-		flag |= FLAG_WIN_UPDATE;
 
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPHPACKS);
 	} else {
@@ -5290,6 +5299,10 @@ static bool tcp_try_coalesce(struct sock *sk,
 	if (!tcp_skb_can_collapse_rx(to, from))
 		return false;
 
+	/* Nothing follows a FIN. */
+	if (unlikely(TCP_SKB_CB(to)->tcp_flags & TCPHDR_FIN))
+		return false;
+
 	if (!skb_try_coalesce(to, from, fragstolen, &delta))
 		return false;
 
@@ -5396,40 +5409,67 @@ static bool tcp_can_ingest(const struct sock *sk, const struct sk_buff *skb)
 	return rmem <= sk->sk_rcvbuf;
 }
 
-static int tcp_try_rmem_schedule(struct sock *sk, const struct sk_buff *skb,
-				 unsigned int size)
+/* Return SKB_NOT_DROPPED_YET if @skb can be queued, or the drop reason. */
+static enum skb_drop_reason
+tcp_try_rmem_schedule(struct sock *sk, const struct sk_buff *skb,
+		      unsigned int size)
 {
-	if (!tcp_can_ingest(sk, skb) ||
-	    !sk_rmem_schedule(sk, skb, size)) {
+	enum skb_drop_reason reason;
 
-		if (tcp_prune_queue(sk, skb) < 0)
-			return -1;
-
-		while (!sk_rmem_schedule(sk, skb, size)) {
-			if (!tcp_prune_ofo_queue(sk, skb))
-				return -1;
-		}
+	if (!tcp_can_ingest(sk, skb)) {
+		reason = SKB_DROP_REASON_SOCKET_RCVBUFF;
+	} else {
+		reason = sk_rmem_schedule_reason(sk, skb, size);
+		if (!reason)
+			return SKB_NOT_DROPPED_YET;
 	}
-	return 0;
+
+	if (tcp_prune_queue(sk, skb) < 0)
+		return reason;
+
+	while ((reason = sk_rmem_schedule_reason(sk, skb, size))) {
+		if (!tcp_prune_ofo_queue(sk, skb))
+			return reason;
+	}
+	return SKB_NOT_DROPPED_YET;
+}
+
+/* Credit the memory added to the receive queues since @rmem was sampled
+ * toward the next allowed collapse. Saturate at sk_rcvbuf, not at the goal
+ * checked in tcp_prune_queue(): sk_rcvbuf (and the goal) can grow later,
+ * for instance in tcp_clamp_window().
+ */
+static void tcp_collapse_credit_add(struct sock *sk, int rmem)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	int delta = atomic_read(&sk->sk_rmem_alloc) - rmem;
+
+	if (delta > 0 && tp->rcv_collapse_credit < (u32)sk->sk_rcvbuf)
+		tp->rcv_collapse_credit += delta;
 }
 
 static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
+	enum skb_drop_reason reason;
 	struct rb_node **p, *parent;
 	struct sk_buff *skb1;
 	u32 seq, end_seq;
 	bool fragstolen;
+	int rmem;
 
 	tcp_save_lrcv_flowlabel(sk, skb);
 	tcp_data_ecn_check(sk, skb);
 
-	if (unlikely(tcp_try_rmem_schedule(sk, skb, skb->truesize))) {
+	reason = tcp_try_rmem_schedule(sk, skb, skb->truesize);
+	if (unlikely(reason)) {
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPOFODROP);
 		READ_ONCE(sk->sk_data_ready)(sk);
-		tcp_drop_reason(sk, skb, SKB_DROP_REASON_PROTO_MEM);
+		tcp_drop_reason(sk, skb, reason);
 		return;
 	}
+	/* Sampled after tcp_try_rmem_schedule(), which can prune. */
+	rmem = atomic_read(&sk->sk_rmem_alloc);
 
 	tcp_measure_rcv_mss(sk, skb);
 	/* Disable header prediction. */
@@ -5559,6 +5599,10 @@ end:
 		skb_condense(skb);
 		skb_set_owner_r(skb, sk);
 	}
+	/* Net growth: coalescing can charge nothing, and covered skbs
+	 * were freed.
+	 */
+	tcp_collapse_credit_add(sk, rmem);
 	/* do not grow rcvbuf for not-yet-accepted or orphaned sockets. */
 	if (sk->sk_socket)
 		tcp_rcvbuf_grow(sk, tp->rcvq_space.space);
@@ -5567,8 +5611,9 @@ end:
 static int __must_check tcp_queue_rcv(struct sock *sk, struct sk_buff *skb,
 				      bool *fragstolen)
 {
-	int eaten;
+	int rmem = atomic_read(&sk->sk_rmem_alloc);
 	struct sk_buff *tail = skb_peek_tail(&sk->sk_receive_queue);
+	int eaten;
 
 	bpf_tcp_ops_call_flag(enqueue_rcvq, RCVQ, sk, skb);
 
@@ -5580,6 +5625,7 @@ static int __must_check tcp_queue_rcv(struct sock *sk, struct sk_buff *skb,
 		tcp_add_receive_queue(sk, skb);
 		skb_set_owner_r(skb, sk);
 	}
+	tcp_collapse_credit_add(sk, rmem);
 	return eaten;
 }
 
@@ -5689,7 +5735,8 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 
 		/* Ok. In sequence. In window. */
 queue_and_out:
-		if (tcp_try_rmem_schedule(sk, skb, skb->truesize)) {
+		reason = tcp_try_rmem_schedule(sk, skb, skb->truesize);
+		if (reason) {
 			/* TODO: maybe ratelimit these WIN 0 ACK ? */
 			inet_csk(sk)->icsk_ack.pending |=
 					(ICSK_ACK_NOMEM | ICSK_ACK_NOW);
@@ -5697,7 +5744,6 @@ queue_and_out:
 			READ_ONCE(sk->sk_data_ready)(sk);
 
 			if (skb_queue_len(&sk->sk_receive_queue) && skb->len) {
-				reason = SKB_DROP_REASON_PROTO_MEM;
 				NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPRCVQDROP);
 				goto drop;
 			}
@@ -5878,6 +5924,10 @@ skip_this:
 			__skb_queue_before(list, skb, nskb);
 		else
 			__skb_queue_tail(&tmp, nskb); /* defer rbtree insertion */
+		/* nskb is charged before the skbs it replaces are freed.
+		 * Make sure sk->sk_forward_alloc can not become negative.
+		 */
+		sk_forced_mem_schedule(sk, nskb->truesize);
 		skb_set_owner_r(nskb, sk);
 		mptcp_skb_ext_move(nskb, skb);
 
@@ -6052,18 +6102,30 @@ static int tcp_prune_queue(struct sock *sk, const struct sk_buff *in_skb)
 	if (tcp_can_ingest(sk, in_skb))
 		return 0;
 
-	tcp_collapse_ofo_queue(sk);
-	if (!skb_queue_empty(&sk->sk_receive_queue))
-		tcp_collapse(sk, &sk->sk_receive_queue, NULL,
-			     skb_peek(&sk->sk_receive_queue),
-			     NULL,
-			     tp->copied_seq, tp->rcv_nxt);
+	/* Collapsing walks both queues and is expensive, and can free
+	 * almost nothing. Require at least 1/8 of sk_rcvbuf of new memory
+	 * in the receive queues since the previous collapse, otherwise
+	 * a stream of segments could trigger one collapse per packet.
+	 */
+	if (tp->rcv_collapse_credit >= (u32)sk->sk_rcvbuf >> 3) {
+		tp->rcv_collapse_credit = 0;
 
-	if (tcp_can_ingest(sk, in_skb))
-		return 0;
+		tcp_collapse_ofo_queue(sk);
+		if (!skb_queue_empty(&sk->sk_receive_queue))
+			tcp_collapse(sk, &sk->sk_receive_queue, NULL,
+				     skb_peek(&sk->sk_receive_queue),
+				     NULL,
+				     tp->copied_seq, tp->rcv_nxt);
 
-	/* Collapsing did not help, destructive actions follow.
-	 * This must not ever occur. */
+		if (tcp_can_ingest(sk, in_skb))
+			return 0;
+	} else {
+		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPRCVCOLLAPSESKIPPED);
+	}
+
+	/* Collapsing did not help (or was not allowed),
+	 * destructive actions follow.
+	 */
 
 	tcp_prune_ofo_queue(sk, in_skb);
 
@@ -6759,7 +6821,6 @@ void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
-	tcp_mtup_init(sk);
 	icsk->icsk_af_ops->rebuild_header(sk);
 	tcp_init_metrics(sk);
 
@@ -7016,6 +7077,7 @@ consume:
 			tp->tcp_header_len = sizeof(struct tcphdr);
 		}
 
+		tcp_mtup_init(sk);
 		tcp_sync_mss(sk, icsk->icsk_pmtu_cookie);
 		tcp_initialize_rcv_mss(sk);
 
@@ -7248,6 +7310,15 @@ tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		goto discard;
 
 	case TCP_SYN_SENT:
+		/* We sent nothing yet, so no segment belongs to this connection.
+		 * Send no RST: it would be built from this socket, whose TCP-AO
+		 * keys are not set up either.
+		 */
+		if (unlikely(inet_test_bit(DEFER_CONNECT, sk))) {
+			SKB_DR_SET(reason, NOT_SPECIFIED);
+			goto discard;
+		}
+
 		tp->rx_opt.saw_tstamp = 0;
 		tcp_mstamp_refresh(tp);
 		queued = tcp_rcv_synsent_state_process(sk, skb, th);
@@ -7634,7 +7705,7 @@ static void tcp_reqsk_record_syn(const struct sock *sk,
 			saved_syn->network_hdrlen = skb_network_header_len(skb);
 			saved_syn->tcp_hdrlen = tcp_hdrlen(skb);
 			memcpy(saved_syn->data, base, len);
-			req->saved_syn = saved_syn;
+			RCU_INIT_POINTER(req->saved_syn, saved_syn);
 		}
 	}
 }
@@ -7821,7 +7892,9 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		if (!inet_csk_reqsk_queue_add(sk, req, fastopen_sk)) {
 			bh_unlock_sock(fastopen_sk);
 			sock_put(fastopen_sk);
-			goto drop_and_free;
+			/* tcp_disconnect() already dropped one reqsk ref. */
+			reqsk_put(req);
+			goto drop;
 		}
 		READ_ONCE(sk->sk_data_ready)(sk);
 		bh_unlock_sock(fastopen_sk);

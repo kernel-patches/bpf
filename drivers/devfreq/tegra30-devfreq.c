@@ -842,7 +842,7 @@ static int tegra_devfreq_probe(struct platform_device *pdev)
 		.config_clks = tegra_devfreq_config_clks_nop,
 	};
 
-	tegra = devm_kzalloc(&pdev->dev, sizeof(*tegra), GFP_KERNEL);
+	tegra = devm_kzalloc_obj(&pdev->dev, *tegra);
 	if (!tegra)
 		return -ENOMEM;
 
@@ -880,10 +880,8 @@ static int tegra_devfreq_probe(struct platform_device *pdev)
 	err = devm_request_threaded_irq(&pdev->dev, tegra->irq, NULL,
 					actmon_thread_isr, IRQF_ONESHOT,
 					"tegra-devfreq", tegra);
-	if (err) {
-		dev_err(&pdev->dev, "Interrupt request failed: %d\n", err);
+	if (err)
 		return err;
-	}
 
 	err = devm_pm_opp_set_config(&pdev->dev, &config);
 	if (err) {

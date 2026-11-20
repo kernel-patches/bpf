@@ -99,6 +99,8 @@ struct vc4_dev {
 	struct vc4_hvs *hvs;
 	struct vc4_v3d *v3d;
 
+	/* Protects @hang_state. */
+	spinlock_t hang_state_lock;
 	struct vc4_hang_state *hang_state;
 
 	/* The kernel-space BO cache.  Tracks buffers that have been
@@ -181,10 +183,17 @@ struct vc4_dev {
 	wait_queue_head_t job_wait_queue;
 	struct work_struct job_done_work;
 
-	/* Used to track the active perfmon if any. Access to this field is
-	 * protected by job_lock.
+	/* Tracks the performance monitor state. The V3D block exposes a single
+	 * set of performance counters, so at most one perfmon can be active at
+	 * any moment.
 	 */
-	struct vc4_perfmon *active_perfmon;
+	struct {
+		/* Protects @active. */
+		spinlock_t lock;
+
+		/* Perfmon currently programmed in HW (or NULL if none). */
+		struct vc4_perfmon *active;
+	} perfmon_state;
 
 	/* The memory used for storing binner tile alloc, tile state,
 	 * and overflow memory allocations.  This is freed when V3D
@@ -194,6 +203,9 @@ struct vc4_dev {
 
 	/* Size of blocks allocated within bin_bo. */
 	uint32_t bin_alloc_size;
+
+	/* Protects @bin_alloc_used and @bin_alloc_overflow. */
+	spinlock_t bin_alloc_lock;
 
 	/* Bitmask of the bin_alloc_size chunks in bin_bo that are
 	 * used.
@@ -218,6 +230,11 @@ struct vc4_dev {
 	struct {
 		struct timer_list timer;
 		struct work_struct reset_work;
+
+		/* The instruction and uniforms caches were cleared at the
+		 * last check that found no progress.
+		 */
+		bool caches_cleared;
 	} hangcheck;
 
 	struct drm_modeset_lock ctm_state_lock;
@@ -254,6 +271,9 @@ struct vc4_bo {
 	 * DRM_IOCTL_VC4_CREATE_SHADER_BO.
 	 */
 	struct vc4_validated_shader_info *validated_shader;
+
+	/* Byte offset of the shader code in the BO. */
+	u32 shader_offset;
 
 	/* One of enum vc4_kernel_bo_type, or VC4_BO_TYPE_COUNT + i
 	 * for user-allocated labels.
@@ -596,6 +616,12 @@ struct vc4_crtc {
 	 * access to that value.
 	 */
 	unsigned int current_hvs_channel;
+
+	/**
+	 * @async_flip_wq: Ordered workqueue completing the CRTC's async
+	 * page flips.
+	 */
+	struct workqueue_struct *async_flip_wq;
 };
 
 #define to_vc4_crtc(_crtc)					\
@@ -672,6 +698,8 @@ struct vc4_crtc_state {
 
 struct vc4_exec_info {
 	struct vc4_dev *dev;
+
+	struct kref refcount;
 
 	/* Sequence number for this bin/render job. */
 	uint64_t seqno;
@@ -796,6 +824,11 @@ struct vc4_file {
 	struct xarray perfmons;
 
 	bool bin_bo_used;
+
+	/* Counter picking the start offset of the next shader BO's code,
+	 * see vc4_create_shader_bo_ioctl().
+	 */
+	atomic_t shader_offset_idx;
 };
 
 static inline struct vc4_exec_info *
@@ -1015,7 +1048,7 @@ extern struct platform_driver vc4_txp_driver;
 /* vc4_irq.c */
 void vc4_irq_enable(struct drm_device *dev);
 void vc4_irq_disable(struct drm_device *dev);
-int vc4_irq_install(struct drm_device *dev, int irq);
+int vc4_irq_install(struct drm_device *dev);
 void vc4_irq_uninstall(struct drm_device *dev);
 void vc4_irq_reset(struct drm_device *dev);
 
@@ -1083,7 +1116,7 @@ bool vc4_check_tex_size(struct vc4_exec_info *exec,
 
 /* vc4_validate_shader.c */
 struct vc4_validated_shader_info *
-vc4_validate_shader(struct drm_gem_dma_object *shader_obj);
+vc4_validate_shader(struct drm_gem_dma_object *shader_obj, u32 offset);
 
 /* vc4_perfmon.c */
 void vc4_perfmon_get(struct vc4_perfmon *perfmon);

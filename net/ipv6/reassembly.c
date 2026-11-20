@@ -82,7 +82,8 @@ static void ip6_frag_expire(struct timer_list *t)
 }
 
 static struct frag_queue *
-fq_find(struct net *net, __be32 id, const struct ipv6hdr *hdr, int iif)
+fq_find(struct net *net, __be32 id, const struct ipv6hdr *hdr, int iif,
+	enum skb_drop_reason *reason)
 {
 	struct frag_v6_compare_key key = {
 		.id = id,
@@ -97,7 +98,7 @@ fq_find(struct net *net, __be32 id, const struct ipv6hdr *hdr, int iif)
 					    IPV6_ADDR_LINKLOCAL)))
 		key.iif = 0;
 
-	q = inet_frag_find(net->ipv6.fqdir, &key);
+	q = inet_frag_find(net->ipv6.fqdir, &key, reason);
 	if (!q)
 		return NULL;
 
@@ -275,15 +276,18 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *skb,
 	if (unlikely(ecn == 0xff))
 		goto out_fail;
 
-	reasm_data = inet_frag_reasm_prepare(&fq->q, skb, prev_tail);
-	if (!reasm_data)
-		goto out_oom;
-
-	payload_len = -skb_network_offset(skb) -
+	/* Check the size on the first fragment, which will become the head:
+	 * inet_frag_reasm_finish() must follow inet_frag_reasm_prepare().
+	 */
+	payload_len = -skb_network_offset(skb_rb_first(&fq->q.rb_fragments)) -
 		       sizeof(struct ipv6hdr) + fq->q.len -
 		       sizeof(struct frag_hdr);
 	if (payload_len > IPV6_MAXPLEN)
 		goto out_oversize;
+
+	reasm_data = inet_frag_reasm_prepare(&fq->q, skb, prev_tail);
+	if (!reasm_data)
+		goto out_oom;
 
 	/* We have to remove fragment header from datagram and to relocate
 	 * header in order to calculate ICV correctly. */
@@ -334,6 +338,7 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 	struct inet6_dev *idev;
 	struct frag_hdr *fhdr;
 	struct frag_queue *fq;
+	SKB_DR(reason);
 	u8 nexthdr;
 	int iif;
 
@@ -382,7 +387,7 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 
 	iif = skb->dev ? skb->dev->ifindex : 0;
 	rcu_read_lock();
-	fq = fq_find(net, fhdr->identification, hdr, iif);
+	fq = fq_find(net, fhdr->identification, hdr, iif, &reason);
 	if (fq) {
 		u32 prob_offset = 0;
 		int ret, refs = 0;
@@ -406,7 +411,7 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 	rcu_read_unlock();
 
 	__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMFAILS);
-	kfree_skb(skb);
+	kfree_skb_reason(skb, reason);
 	return -1;
 
 fail_hdr:

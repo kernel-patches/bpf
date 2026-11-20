@@ -247,8 +247,9 @@ static int sprd_platform_compr_dma_config(struct snd_soc_component *component,
 
 	/* Only channel 1 transfer can wake up the AP system. */
 	if (!params->no_wake_mode && channel == 1) {
-		dma->desc->callback = sprd_platform_compr_dma_complete;
-		dma->desc->callback_param = cstream;
+		dmaengine_desc_set_callback(dma->desc,
+					    sprd_platform_compr_dma_complete,
+					    NULL, cstream);
 	}
 
 	kfree(sg);
@@ -341,7 +342,7 @@ static int sprd_platform_compr_open(struct snd_soc_component *component,
 	if (ret)
 		return ret;
 
-	stream = devm_kzalloc(dev, sizeof(*stream), GFP_KERNEL);
+	stream = devm_kzalloc_obj(dev, *stream);
 	if (!stream)
 		return -ENOMEM;
 

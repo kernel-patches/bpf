@@ -3660,12 +3660,34 @@ static int rt5659_set_bias_level(struct snd_soc_component *component,
 	return 0;
 }
 
+static void rt5659_disable_irq_and_cancel_work(struct rt5659_priv *rt5659)
+{
+	if (rt5659->irq_acquired && !rt5659->irq_disabled) {
+		disable_irq(rt5659->i2c->irq);
+		rt5659->irq_disabled = true;
+	}
+	if (rt5659->jack_detect_work_inited)
+		cancel_delayed_work_sync(&rt5659->jack_detect_work);
+}
+
+static void rt5659_i2c_disable_irq_and_cancel_work(void *data)
+{
+	rt5659_disable_irq_and_cancel_work(data);
+}
+
 static int rt5659_probe(struct snd_soc_component *component)
 {
 	struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(component);
 	struct rt5659_priv *rt5659 = snd_soc_component_get_drvdata(component);
 
 	rt5659->component = component;
+
+	regcache_sync(rt5659->regmap);
+
+	if (rt5659->irq_disabled) {
+		enable_irq(rt5659->i2c->irq);
+		rt5659->irq_disabled = false;
+	}
 
 	switch (rt5659->pdata.jd_src) {
 	case RT5659_JD_HDA_HEADER:
@@ -3685,7 +3707,27 @@ static void rt5659_remove(struct snd_soc_component *component)
 {
 	struct rt5659_priv *rt5659 = snd_soc_component_get_drvdata(component);
 
+	rt5659_disable_irq_and_cancel_work(rt5659);
+
+	if (rt5659->jack_type && rt5659->pdata.jd_src == RT5659_JD3)
+		rt5659_headset_detect(component, 0);
+
+	rt5659->hs_jack = NULL;
+	rt5659->jack_type = 0;
+	rt5659->hda_hp_plugged = false;
+	rt5659->hda_mic_plugged = false;
+
+	if (rt5659->pdata.jd_src == RT5659_JD_HDA_HEADER) {
+		regmap_update_bits(rt5659->regmap, RT5659_IRQ_CTRL_1,
+				   0x10, 0x10);
+		regmap_update_bits(rt5659->regmap, RT5659_IRQ_CTRL_2,
+				   0x2, 0x0);
+	}
+
+	rt5659->component = NULL;
+
 	regmap_write(rt5659->regmap, RT5659_RESET, 0);
+	regcache_mark_dirty(rt5659->regmap);
 }
 
 #ifdef CONFIG_PM
@@ -4105,8 +4147,7 @@ static int rt5659_i2c_probe(struct i2c_client *i2c)
 	int ret;
 	unsigned int val;
 
-	rt5659 = devm_kzalloc(&i2c->dev, sizeof(struct rt5659_priv),
-		GFP_KERNEL);
+	rt5659 = devm_kzalloc_obj(&i2c->dev, struct rt5659_priv);
 
 	if (rt5659 == NULL)
 		return -ENOMEM;
@@ -4283,6 +4324,7 @@ static int rt5659_i2c_probe(struct i2c_client *i2c)
 		regmap_write(rt5659->regmap, RT5659_IRQ_CTRL_2, 0x0040);
 		INIT_DELAYED_WORK(&rt5659->jack_detect_work,
 			rt5659_jack_detect_work);
+		rt5659->jack_detect_work_inited = true;
 		break;
 	case RT5659_JD_HDA_HEADER:
 		regmap_write(rt5659->regmap, RT5659_GPIO_CTRL_3, 0x8000);
@@ -4292,6 +4334,7 @@ static int rt5659_i2c_probe(struct i2c_client *i2c)
 		regmap_write(rt5659->regmap, RT5659_IRQ_CTRL_1,  0x0040);
 		INIT_DELAYED_WORK(&rt5659->jack_detect_work,
 			rt5659_jack_detect_intel_hd_header);
+		rt5659->jack_detect_work_inited = true;
 		rt5659_intel_hd_header_probe_setup(rt5659);
 		break;
 	default:
@@ -4302,13 +4345,22 @@ static int rt5659_i2c_probe(struct i2c_client *i2c)
 		ret = devm_request_threaded_irq(&i2c->dev, i2c->irq, NULL,
 			rt5659_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING
 			| IRQF_ONESHOT, "rt5659", rt5659);
-		if (ret)
+		if (!ret)
+			rt5659->irq_acquired = true;
+		else
 			dev_err(&i2c->dev, "Failed to request IRQ: %d\n", ret);
 
 		/* Enable IRQ output for GPIO1 pin any way */
 		regmap_update_bits(rt5659->regmap, RT5659_GPIO_CTRL_1,
 				   RT5659_GP1_PIN_MASK, RT5659_GP1_PIN_IRQ);
 	}
+
+	rt5659->i2c = i2c;
+	ret = devm_add_action_or_reset(&i2c->dev,
+				      rt5659_i2c_disable_irq_and_cancel_work,
+				      rt5659);
+	if (ret)
+		return ret;
 
 	return devm_snd_soc_register_component(&i2c->dev,
 			&soc_component_dev_rt5659,
@@ -4319,6 +4371,7 @@ static void rt5659_i2c_shutdown(struct i2c_client *client)
 {
 	struct rt5659_priv *rt5659 = i2c_get_clientdata(client);
 
+	rt5659_disable_irq_and_cancel_work(rt5659);
 	regmap_write(rt5659->regmap, RT5659_RESET, 0);
 }
 

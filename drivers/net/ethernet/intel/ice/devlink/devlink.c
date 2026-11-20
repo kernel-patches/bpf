@@ -984,7 +984,7 @@ static int ice_devlink_rate_node_new(struct devlink_rate *rate_node, void **priv
 		return -EBUSY;
 
 	/* preallocate memory for ice_sched_node */
-	node = devm_kzalloc(ice_hw_to_dev(pi->hw), sizeof(*node), GFP_KERNEL);
+	node = devm_kzalloc_obj(ice_hw_to_dev(pi->hw), *node);
 	if (!node)
 		return -ENOMEM;
 
@@ -1747,11 +1747,20 @@ struct ice_sf_priv *ice_allocate_sf(struct device *dev, struct ice_pf *pf)
  *
  * Return: zero on success or an error code on failure.
  */
-void ice_devlink_register(struct ice_pf *pf)
+int ice_devlink_register(struct ice_pf *pf)
 {
 	struct devlink *devlink = priv_to_devlink(pf);
+	struct ice_adapter *adapter = pf->adapter;
+	int err;
 
+	if (adapter) {
+		err = devl_nested_devlink_set(adapter->devlink, devlink);
+		if (err)
+			return err;
+	}
 	devl_register(devlink);
+
+	return 0;
 }
 
 /**

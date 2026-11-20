@@ -7,11 +7,13 @@
  * Copyright (C) 2000 - 2001 by Silicon Graphics, Inc.
  */
 #include <linux/init.h>
+#include <linux/string.h>
 #include <linux/sched.h>
 #include <linux/sched/task_stack.h>
 #include <linux/topology.h>
 #include <linux/nodemask.h>
 
+#include <asm/addrspace.h>
 #include <asm/page.h>
 #include <asm/processor.h>
 #include <asm/ptrace.h>
@@ -133,6 +135,20 @@ static void ip27_init_cpu(void)
 	per_cpu_init();
 }
 
+static void ip27_init_secondary(void)
+{
+	/*
+	 * The R10000 drives an uncached attribute on the bus and the hub
+	 * decodes it.  The cache error vector is fetched through CKSEG1,
+	 * attribute 0, whose low 128K the hub flips per CPU slice.
+	 * trap_init() wrote it through TO_UNCAC(), attribute 3, which is
+	 * not flipped, so that copy only serves slice 0.
+	 */
+	memcpy((void *)CKSEG1ADDR(0x100), (void *)TO_UNCAC(0x100), 0x80);
+
+	ip27_init_cpu();
+}
+
 static void ip27_smp_finish(void)
 {
 	hub_rt_clock_event_init();
@@ -182,7 +198,7 @@ static void __init ip27_prepare_cpus(unsigned int max_cpus)
 const struct plat_smp_ops ip27_smp_ops = {
 	.send_ipi_single	= ip27_send_ipi_single,
 	.send_ipi_mask		= ip27_send_ipi_mask,
-	.init_secondary		= ip27_init_cpu,
+	.init_secondary		= ip27_init_secondary,
 	.smp_finish		= ip27_smp_finish,
 	.boot_secondary		= ip27_boot_secondary,
 	.smp_setup		= ip27_smp_setup,

@@ -320,7 +320,7 @@ enum chip_types {w83795g, w83795adg};
 struct w83795_data {
 	struct device *hwmon_dev;
 	struct mutex update_lock;
-	unsigned long last_updated;	/* In jiffies */
+	u64 last_updated;		/* In jiffies */
 	enum chip_types chip_type;
 
 	u8 bank;
@@ -598,8 +598,8 @@ static struct w83795_data *w83795_update_device(struct device *dev)
 	if (!data->valid_limits)
 		w83795_update_limits(client);
 
-	if (!(time_after(jiffies, data->last_updated + HZ * 2)
-	      || !data->valid))
+	if (!(time_after64(get_jiffies_64(), data->last_updated + HZ * 2) ||
+	      !data->valid))
 		goto END;
 
 	/* Update the voltages value */
@@ -683,7 +683,7 @@ static struct w83795_data *w83795_update_device(struct device *dev)
 		w83795_write(client, W83795_REG_ALARM_CTRL,
 			     tmp & ~ALARM_CTRL_RTSACS);
 
-	data->last_updated = jiffies;
+	data->last_updated = get_jiffies_64();
 	data->valid = true;
 
 END:
@@ -2142,7 +2142,7 @@ static int w83795_probe(struct i2c_client *client)
 	struct w83795_data *data;
 	int err;
 
-	data = devm_kzalloc(dev, sizeof(struct w83795_data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, struct w83795_data);
 	if (!data)
 		return -ENOMEM;
 

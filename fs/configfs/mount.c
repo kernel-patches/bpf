@@ -13,12 +13,21 @@
 #include <linux/module.h>
 #include <linux/mount.h>
 #include <linux/fs_context.h>
+#include <linux/pseudo_fs.h>
 #include <linux/pagemap.h>
 #include <linux/init.h>
+#include <linux/lockdep.h>
 #include <linux/slab.h>
 
 #include <linux/configfs.h>
 #include "configfs_internal.h"
+
+/*
+ * configfs_depend_item_unlocked() locks the root inode while the caller holds
+ * su_mutex and other locks from a configfs callback; nothing taken under the
+ * root inode lock depends on those, so keep it out of the directory class.
+ */
+static struct lock_class_key configfs_root_inode_class;
 
 static struct vfsmount *configfs_mount = NULL;
 struct kmem_cache *configfs_dir_cachep;
@@ -74,6 +83,7 @@ static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	if (inode) {
 		inode->i_op = &configfs_root_inode_operations;
 		inode->i_fop = &configfs_dir_operations;
+		lockdep_set_class(&inode->i_rwsem, &configfs_root_inode_class);
 		/* directory inodes start off with i_nlink == 2 (for "." entry) */
 		inc_nlink(inode);
 	} else {
@@ -106,6 +116,7 @@ static const struct fs_context_operations configfs_context_ops = {
 
 static int configfs_init_fs_context(struct fs_context *fc)
 {
+	fc_init_pseudo(fc);
 	fc->ops = &configfs_context_ops;
 	return 0;
 }

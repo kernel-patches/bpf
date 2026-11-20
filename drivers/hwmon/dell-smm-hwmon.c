@@ -549,15 +549,12 @@ static int i8k_get_power_status(const struct dell_smm_data *data)
  * Procfs interface
  */
 
-static long i8k_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
+static long i8k_ioctl(struct file *fp, unsigned int cmd, void *arg)
 {
 	struct dell_smm_data *data = pde_data(file_inode(fp));
-	int __user *argp = (int __user *)arg;
+	int *argp = arg;
 	int speed, err;
 	int val = 0;
-
-	if (!argp)
-		return -EINVAL;
 
 	switch (cmd) {
 	case I8K_BIOS_VERSION:
@@ -568,17 +565,13 @@ static long i8k_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 		val = (data->bios_version[0] << 16) |
 				(data->bios_version[1] << 8) | data->bios_version[2];
 
-		if (copy_to_user(argp, &val, sizeof(val)))
-			return -EFAULT;
-
+		*argp = val;
 		return 0;
 	case I8K_MACHINE_ID:
 		if (restricted && !capable(CAP_SYS_ADMIN))
 			return -EPERM;
 
-		if (copy_to_user(argp, data->bios_machineid, sizeof(data->bios_machineid)))
-			return -EFAULT;
-
+		memcpy(argp, data->bios_machineid, sizeof(data->bios_machineid));
 		return 0;
 	case I8K_FN_STATUS:
 		val = i8k_get_fn_status(data);
@@ -593,8 +586,7 @@ static long i8k_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 		break;
 
 	case I8K_GET_SPEED:
-		if (copy_from_user(&val, argp, sizeof(int)))
-			return -EFAULT;
+		val = *argp;
 
 		if (val > U8_MAX || val < 0)
 			return -EINVAL;
@@ -603,8 +595,7 @@ static long i8k_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 		break;
 
 	case I8K_GET_FAN:
-		if (copy_from_user(&val, argp, sizeof(int)))
-			return -EFAULT;
+		val = *argp;
 
 		if (val > U8_MAX || val < 0)
 			return -EINVAL;
@@ -616,14 +607,11 @@ static long i8k_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 		if (restricted && !capable(CAP_SYS_ADMIN))
 			return -EPERM;
 
-		if (copy_from_user(&val, argp, sizeof(int)))
-			return -EFAULT;
-
+		val = argp[0];
 		if (val > U8_MAX || val < 0)
 			return -EINVAL;
 
-		if (copy_from_user(&speed, argp + 1, sizeof(int)))
-			return -EFAULT;
+		speed = argp[1];
 
 		speed = clamp_val(speed, 0, data->i8k_fan_max);
 
@@ -643,11 +631,21 @@ static long i8k_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 	if (val < 0)
 		return val;
 
-	if (copy_to_user(argp, &val, sizeof(int)))
-		return -EFAULT;
-
+	*argp = val;
 	return 0;
 }
+
+/* The command numbers don't encode what is copied, see <uapi/linux/i8k.h>. */
+static const struct proc_ioctl_arg i8k_ioctl_args[] = {
+	PROC_IOCTL_ARG(I8K_BIOS_VERSION, 0, sizeof(int)),
+	PROC_IOCTL_ARG(I8K_MACHINE_ID, 0, sizeof_field(struct dell_smm_data, bios_machineid)),
+	PROC_IOCTL_ARG(I8K_FN_STATUS, 0, sizeof(int)),
+	PROC_IOCTL_ARG(I8K_POWER_STATUS, 0, sizeof(int)),
+	PROC_IOCTL_ARG(I8K_GET_TEMP, 0, sizeof(int)),
+	PROC_IOCTL_ARG(I8K_GET_SPEED, sizeof(int), sizeof(int)),
+	PROC_IOCTL_ARG(I8K_GET_FAN, sizeof(int), sizeof(int)),
+	PROC_IOCTL_ARG(I8K_SET_FAN, 2 * sizeof(int), sizeof(int)),
+};
 
 /*
  * Print the information for /proc/i8k.
@@ -694,17 +692,11 @@ static int i8k_proc_show(struct seq_file *seq, void *offset)
 	return 0;
 }
 
-static int i8k_open_fs(struct inode *inode, struct file *file)
-{
-	return single_open(file, i8k_proc_show, pde_data(inode));
-}
-
 static const struct proc_ops i8k_proc_ops = {
-	.proc_open	= i8k_open_fs,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
-	.proc_ioctl	= i8k_ioctl,
+	.proc_show	= i8k_proc_show,
+	.proc_ioctl_buf	= i8k_ioctl,
+	.proc_ioctl_args = i8k_ioctl_args,
+	.proc_nr_ioctl_args = ARRAY_SIZE(i8k_ioctl_args),
 };
 
 static void i8k_exit_procfs(void *param)
@@ -1030,6 +1022,9 @@ static int dell_smm_write(struct device *dev, enum hwmon_sensor_types type, u32 
 	case hwmon_pwm:
 		switch (attr) {
 		case hwmon_pwm_input:
+			if (val < 0 || val > 255)
+				return -EINVAL;
+
 			pwm = clamp_val(DIV_ROUND_CLOSEST(val, data->i8k_pwm_mult), 0,
 					data->i8k_fan_max);
 
@@ -1142,7 +1137,7 @@ static int dell_smm_init_cdev(struct device *dev, u8 fan_num)
 	if (!name)
 		return -ENOMEM;
 
-	cdata = devm_kmalloc(dev, sizeof(*cdata), GFP_KERNEL);
+	cdata = devm_kmalloc_obj(dev, *cdata);
 	if (cdata) {
 		cdata->fan_num = fan_num;
 		cdata->data = data;
@@ -1196,9 +1191,9 @@ static int dell_smm_init_hwmon(struct device *dev)
 					 i + 1);
 		}
 
-		data->fan_nominal_speed[i] = devm_kmalloc_array(dev, data->i8k_fan_max + 1,
-								sizeof(*data->fan_nominal_speed[i]),
-								GFP_KERNEL);
+		data->fan_nominal_speed[i] = devm_kmalloc_objs(dev,
+							       *data->fan_nominal_speed[i],
+							       data->i8k_fan_max + 1);
 		if (!data->fan_nominal_speed[i])
 			continue;
 
@@ -1231,7 +1226,7 @@ static int dell_smm_init_data(struct device *dev, const struct dell_smm_ops *ops
 {
 	struct dell_smm_data *data;
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, *data);
 	if (!data)
 		return -ENOMEM;
 
@@ -1248,6 +1243,12 @@ static int dell_smm_init_data(struct device *dev, const struct dell_smm_ops *ops
 		return -EINVAL;
 	}
 	data->i8k_fan_max = fan_max ? : I8K_FAN_HIGH;
+	/* The BIOS takes the fan state in a single byte */
+	if (data->i8k_fan_max > U8_MAX) {
+		dev_err(dev, "maximum fan state %u is too large (max %u)\n",
+			data->i8k_fan_max, U8_MAX);
+		return -EINVAL;
+	}
 	data->i8k_pwm_mult = DIV_ROUND_UP(255, data->i8k_fan_max);
 
 	return 0;
@@ -1616,6 +1617,14 @@ static const struct dmi_system_id i8k_whitelist_fan_control[] __initconst = {
 		.driver_data = (void *)&i8k_fan_control_data[I8K_FAN_34A3_35A3],
 	},
 	{
+		.ident = "Dell Pro Micro Plus QBM1250",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "Dell Pro Micro Plus QBM1250"),
+		},
+		.driver_data = (void *)&i8k_fan_control_data[I8K_FAN_30A3_31A3],
+	},
+	{
 		.ident = "Dell XPS 13 7390",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
@@ -1687,6 +1696,14 @@ static const struct dmi_system_id i8k_whitelist_fan_control[] __initconst = {
 		},
 		.driver_data = (void *)&i8k_fan_control_data[I8K_FAN_30A3_31A3],
 	},
+	{
+		.ident = "Dell Pro Precision 7 16 PW716260",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "Dell Pro Precision 7 16 PW716260"),
+		},
+		.driver_data = (void *)&i8k_fan_control_data[I8K_FAN_30A3_31A3],
+	},
 	{ }
 };
 
@@ -1726,7 +1743,7 @@ static int dell_smm_wmi_probe(struct wmi_device *wdev, const void *context)
 	struct dell_smm_ops *ops;
 	int ret;
 
-	ops = devm_kzalloc(&wdev->dev, sizeof(*ops), GFP_KERNEL);
+	ops = devm_kzalloc_obj(&wdev->dev, *ops);
 	if (!ops)
 		return -ENOMEM;
 

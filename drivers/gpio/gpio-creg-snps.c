@@ -125,12 +125,13 @@ static const struct creg_layout axs10x_flsh_cs_ctl = {
 static const struct of_device_id creg_gpio_ids[] = {
 	{
 		.compatible = "snps,creg-gpio-axs10x",
-		.data = &axs10x_flsh_cs_ctl
+		.data = &axs10x_flsh_cs_ctl,
 	}, {
 		.compatible = "snps,creg-gpio-hsdk",
-		.data = &hsdk_cs_ctl
+		.data = &hsdk_cs_ctl,
 	}, { /* sentinel */ }
 };
+MODULE_DEVICE_TABLE(of, creg_gpio_ids);
 
 static int creg_gpio_probe(struct platform_device *pdev)
 {
@@ -139,7 +140,7 @@ static int creg_gpio_probe(struct platform_device *pdev)
 	u32 ngpios;
 	int ret;
 
-	hcg = devm_kzalloc(dev, sizeof(struct creg_gpio), GFP_KERNEL);
+	hcg = devm_kzalloc_obj(dev, struct creg_gpio);
 	if (!hcg)
 		return -ENOMEM;
 

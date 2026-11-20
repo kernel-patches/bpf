@@ -552,10 +552,12 @@ void page_cache_ra_order(struct readahead_control *ractl,
 fallback:
 	/*
 	 * ->readahead() may have updated readahead window size so we have to
-	 * check there's still something to read.
+	 * check there's still something to read. Compare with the end of the
+	 * window, as index may have been rounded down below start to the
+	 * minimum folio size.
 	 */
-	if (ra->size > index - start)
-		do_page_cache_ra(ractl, ra->size - (index - start),
+	if (index < start + ra->size)
+		do_page_cache_ra(ractl, start + ra->size - index,
 				 ra->async_size);
 }
 

@@ -483,7 +483,7 @@ static int __sprint_symbol(char *buffer, unsigned long address,
 	len = kallsyms_lookup_buildid(address, &size, &offset, &modname, &buildid,
 				       buffer);
 	if (!len)
-		return sprintf(buffer, "0x%lx", address - symbol_offset);
+		return sprintf(buffer, "0x%p", (void *)(address - symbol_offset));
 
 	offset -= symbol_offset;
 
@@ -922,16 +922,17 @@ const char *kdb_walk_kallsyms(loff_t *pos)
 }
 #endif	/* CONFIG_KGDB_KDB */
 
-static const struct proc_ops kallsyms_proc_ops = {
-	.proc_open	= kallsyms_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release_private,
+static const struct file_operations kallsyms_fops = {
+	.open		= kallsyms_open,
+	.read_iter	= seq_read_iter,
+	.splice_read	= copy_splice_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release_private,
 };
 
 static int __init kallsyms_init(void)
 {
-	proc_create("kallsyms", 0444, NULL, &kallsyms_proc_ops);
+	proc_create_fops("kallsyms", 0444, NULL, &kallsyms_fops);
 	return 0;
 }
 device_initcall(kallsyms_init);

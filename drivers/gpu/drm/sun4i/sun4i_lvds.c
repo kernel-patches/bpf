@@ -65,7 +65,7 @@ sun4i_lvds_connector_destroy(struct drm_connector *connector)
 static const struct drm_connector_funcs sun4i_lvds_con_funcs = {
 	.fill_modes		= drm_helper_probe_single_connector_modes,
 	.destroy		= sun4i_lvds_connector_destroy,
-	.reset			= drm_atomic_helper_connector_reset,
+	.atomic_create_state	= drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state	= drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
 };
@@ -110,7 +110,7 @@ int sun4i_lvds_init(struct drm_device *drm, struct sun4i_tcon *tcon)
 	struct sun4i_lvds *lvds;
 	int ret;
 
-	lvds = devm_kzalloc(drm->dev, sizeof(*lvds), GFP_KERNEL);
+	lvds = devm_kzalloc_obj(drm->dev, *lvds);
 	if (!lvds)
 		return -ENOMEM;
 	encoder = &lvds->encoder;

@@ -61,6 +61,7 @@
 #include <linux/debugfs.h>
 #include <linux/execmem.h>
 #include <linux/error-injection.h>
+#include <linux/kthread.h>
 #include <uapi/linux/module.h>
 #include "internal.h"
 

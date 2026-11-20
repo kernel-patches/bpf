@@ -3127,7 +3127,7 @@ static void wm8962_mic_work(struct work_struct *work)
 		/* Don't report a microphone if it's shorted right after
 		 * plugging in, as this may be a TRS plug in a TRRS socket.
 		 */
-		if (!(wm8962->mic_status & WM8962_MICDET_STS))
+		if (!(wm8962->mic_status & SND_JACK_MICROPHONE))
 			status = 0;
 	}
 
@@ -3244,25 +3244,31 @@ static irqreturn_t wm8962_irq(int irq, void *data)
  *
  * If no jack is supplied detection will be disabled.
  */
-int wm8962_mic_detect(struct snd_soc_component *component, struct snd_soc_jack *jack)
+static int wm8962_mic_detect(struct snd_soc_component *component, struct snd_soc_jack *jack)
 {
 	struct wm8962_priv *wm8962 = snd_soc_component_get_drvdata(component);
 	struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(component);
-	int irq_mask, enable;
+	int mic_irq_mask = WM8962_MICD_EINT | WM8962_MICSCD_EINT;
+
+	snd_soc_component_update_bits(component, WM8962_INTERRUPT_STATUS_2_MASK,
+				      mic_irq_mask, mic_irq_mask);
+	if (pm_runtime_get_if_active(component->dev) > 0) {
+		snd_soc_component_update_bits(component, WM8962_ADDITIONAL_CONTROL_4,
+					      WM8962_MICDET_ENA, 0);
+		pm_runtime_put(component->dev);
+	}
+	if (wm8962->irq)
+		synchronize_irq(wm8962->irq);
+	cancel_delayed_work_sync(&wm8962->mic_work);
 
 	wm8962->jack = jack;
 	if (jack) {
-		irq_mask = 0;
-		enable = WM8962_MICDET_ENA;
-	} else {
-		irq_mask = WM8962_MICD_EINT | WM8962_MICSCD_EINT;
-		enable = 0;
+		snd_soc_component_update_bits(component,
+					      WM8962_INTERRUPT_STATUS_2_MASK,
+					      mic_irq_mask, 0);
+		snd_soc_component_update_bits(component, WM8962_ADDITIONAL_CONTROL_4,
+					      WM8962_MICDET_ENA, WM8962_MICDET_ENA);
 	}
-
-	snd_soc_component_update_bits(component, WM8962_INTERRUPT_STATUS_2_MASK,
-			    WM8962_MICD_EINT | WM8962_MICSCD_EINT, irq_mask);
-	snd_soc_component_update_bits(component, WM8962_ADDITIONAL_CONTROL_4,
-			    WM8962_MICDET_ENA, enable);
 
 	/* Send an initial empty report */
 	snd_soc_jack_report(wm8962->jack, 0,
@@ -3282,7 +3288,6 @@ int wm8962_mic_detect(struct snd_soc_component *component, struct snd_soc_jack *
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(wm8962_mic_detect);
 
 static int beep_rates[] = {
 	500, 1000, 2000, 4000,
@@ -3593,17 +3598,22 @@ static int wm8962_probe(struct snd_soc_component *component)
 
 static void wm8962_remove(struct snd_soc_component *component)
 {
-	struct wm8962_priv *wm8962 = snd_soc_component_get_drvdata(component);
-
-	cancel_delayed_work_sync(&wm8962->mic_work);
+	wm8962_mic_detect(component, NULL);
 
 	wm8962_free_gpio(component);
 	wm8962_free_beep(component);
 }
 
+static int wm8962_set_jack(struct snd_soc_component *component,
+			   struct snd_soc_jack *jack, void *data)
+{
+	return wm8962_mic_detect(component, jack);
+}
+
 static const struct snd_soc_component_driver soc_component_dev_wm8962 = {
 	.probe			= wm8962_probe,
 	.remove			= wm8962_remove,
+	.set_jack		= wm8962_set_jack,
 	.set_bias_level		= wm8962_set_bias_level,
 	.set_pll		= wm8962_set_fll,
 	.use_pmdown_time	= 1,
@@ -3665,7 +3675,7 @@ static int wm8962_i2c_probe(struct i2c_client *i2c)
 	unsigned int reg;
 	int ret, i, irq_pol, trigger;
 
-	wm8962 = devm_kzalloc(&i2c->dev, sizeof(*wm8962), GFP_KERNEL);
+	wm8962 = devm_kzalloc_obj(&i2c->dev, *wm8962);
 	if (wm8962 == NULL)
 		return -ENOMEM;
 

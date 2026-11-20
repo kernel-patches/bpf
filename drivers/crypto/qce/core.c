@@ -10,6 +10,7 @@
 #include <linux/interconnect.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/pm_runtime.h>
@@ -21,6 +22,10 @@
 #include "cipher.h"
 #include "sha.h"
 #include "aead.h"
+
+static bool do_register_algos;
+module_param(do_register_algos, bool, 0444);
+MODULE_PARM_DESC(do_register_algos, "Enable registering the crypto algorithms.");
 
 #define QCE_QUEUE_LENGTH	1
 
@@ -196,7 +201,7 @@ static int qce_crypto_probe(struct platform_device *pdev)
 	struct qce_device *qce;
 	int ret;
 
-	qce = devm_kzalloc(dev, sizeof(*qce), GFP_KERNEL);
+	qce = devm_kzalloc_obj(dev, *qce);
 	if (!qce)
 		return -ENOMEM;
 
@@ -259,9 +264,11 @@ static int qce_crypto_probe(struct platform_device *pdev)
 	qce->async_req_enqueue = qce_async_request_enqueue;
 	qce->async_req_done = qce_async_request_done;
 
-	ret = devm_qce_register_algs(qce);
-	if (ret)
-		return ret;
+	if (do_register_algos) {
+		ret = devm_qce_register_algs(qce);
+		if (ret)
+			return ret;
+	}
 
 	/* Configure autosuspend after successful init */
 	pm_runtime_set_autosuspend_delay(dev, 100);

@@ -7,6 +7,7 @@
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -457,7 +458,7 @@ static const struct regulator_desc tps6594_ldo_regs[] = {
 			  TPS6594_BIT_LDO_EN, 0, 0, ldos_1_2_3_ranges,
 			  1, 0, 0, NULL, 0, TPS6594_BIT_LDO_BYPASS),
 	TPS6594_REGULATOR("LDO4", "ldo4", TPS6594_LDO_4,
-			  REGULATOR_VOLTAGE, tps6594_ldos_4_ops, TPS6594_MASK_LDO4_VSET >> 1,
+			  REGULATOR_VOLTAGE, tps6594_ldos_4_ops, TPS6594_MASK_LDO4_VSET,
 			  TPS6594_REG_LDOX_VOUT(3),
 			  TPS6594_MASK_LDO4_VSET,
 			  TPS6594_REG_LDOX_CTRL(3),
@@ -721,8 +722,9 @@ static int tps6594_regulator_probe(struct platform_device *pdev)
 
 	reg_irq_nb = desc->num_irq_types * (desc->num_buck_regs + desc->num_ldo_regs);
 
-	irq_data = devm_kmalloc_array(tps->dev, reg_irq_nb,
-				      sizeof(struct tps6594_regulator_irq_data), GFP_KERNEL);
+	irq_data = devm_kmalloc_objs(tps->dev,
+				     struct tps6594_regulator_irq_data,
+				     reg_irq_nb);
 	if (!irq_data)
 		return -ENOMEM;
 
@@ -810,10 +812,9 @@ static int tps6594_regulator_probe(struct platform_device *pdev)
 			return error;
 	}
 
-	irq_ext_reg_data = devm_kmalloc_array(tps->dev,
-					      desc->num_ext_irqs,
-					      sizeof(struct tps6594_ext_regulator_irq_data),
-					      GFP_KERNEL);
+	irq_ext_reg_data = devm_kmalloc_objs(tps->dev,
+					     struct tps6594_ext_regulator_irq_data,
+					     desc->num_ext_irqs);
 	if (!irq_ext_reg_data)
 		return -ENOMEM;
 

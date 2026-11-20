@@ -288,6 +288,25 @@ struct inode *ntfs_attr_iget(struct inode *base_vi, __le32 type,
 }
 
 /*
+ * ntfs_attr_ilookup - find an attribute inode that is already in the cache
+ *
+ * Like ntfs_attr_iget() but never reads anything. Returns the inode with an
+ * increased reference count, or NULL if it is not cached.
+ */
+struct inode *ntfs_attr_ilookup(struct inode *base_vi, __le32 type,
+		__le16 *name, u32 name_len)
+{
+	struct ntfs_attr na = {
+		.mft_no = base_vi->i_ino,
+		.type = type,
+		.name = name,
+		.name_len = name_len,
+	};
+
+	return ilookup5(base_vi->i_sb, na.mft_no, ntfs_test_inode, &na);
+}
+
+/*
  * ntfs_index_iget - obtain a struct inode corresponding to an index
  * @base_vi:	vfs base inode containing the index related attributes
  * @name:	Unicode name of the index
@@ -425,7 +444,8 @@ int ntfs_drop_big_inode(struct inode *inode)
 			if (!inode->i_nlink) {
 				struct ntfs_inode *ni = NTFS_I(inode);
 
-				if (ni->data_size == 0)
+				/* Like ntfs_evict_big_inode(), leave it to chkdsk. */
+				if (ni->data_size == 0 || ntfs_emergency_state(ni->vol))
 					return 0;
 
 				/* To avoid evict_inode call simultaneously */
@@ -1034,6 +1054,7 @@ view_index_meta:
 				le16_to_cpu(a->data.resident.value_offset));
 		if (ntfs_index_root_inconsistent(ni->vol, a, ir, ni->mft_no) ||
 		    ntfs_index_entries_inconsistent(ni->vol, &ir->index,
+						    le32_to_cpu(ir->index_block_size),
 						    ir->collation_rule, ni->mft_no)) {
 			ntfs_error(vi->i_sb, "Directory index is corrupt.");
 			goto unm_err_out;
@@ -1684,6 +1705,7 @@ static int ntfs_read_locked_index_inode(struct inode *base_vi, struct inode *vi)
 	ir = (struct index_root *)((u8 *)a + le16_to_cpu(a->data.resident.value_offset));
 	if (ntfs_index_root_inconsistent(vol, a, ir, ni->mft_no) ||
 	    ntfs_index_entries_inconsistent(vol, &ir->index,
+					    le32_to_cpu(ir->index_block_size),
 					    ir->collation_rule, ni->mft_no)) {
 		ntfs_error(vi->i_sb, "Index is corrupt.");
 		goto unm_err_out;
@@ -2434,7 +2456,11 @@ void ntfs_evict_big_inode(struct inode *vi)
 
 	truncate_inode_pages_final(&vi->i_data);
 
-	if (!vi->i_nlink) {
+	/*
+	 * After an error the freed mft record would go out right away while
+	 * the rest of the deletion can't, leave the inode to chkdsk.
+	 */
+	if (!vi->i_nlink && !ntfs_emergency_state(ni->vol)) {
 		if (!NInoAttr(ni)) {
 			/* Never called with extent inodes */
 			WARN_ON(ni->nr_extents == -1);
@@ -2554,8 +2580,12 @@ int ntfs_show_options(struct seq_file *sf, struct dentry *root)
 	return 0;
 }
 
-int ntfs_extend_initialized_size(struct inode *vi, const loff_t offset,
-				 const loff_t new_size)
+/*
+ * The caller must hold @vi's mapping invalidate lock.
+ */
+static int __ntfs_extend_initialized_size(struct inode *vi,
+					  const loff_t offset,
+					  const loff_t new_size)
 {
 	struct ntfs_inode *ni = NTFS_I(vi);
 	struct ntfs_inode *mrec_ni = ntfs_base_inode(ni);
@@ -2563,10 +2593,11 @@ int ntfs_extend_initialized_size(struct inode *vi, const loff_t offset,
 	unsigned long flags;
 	int err = 0;
 
+	lockdep_assert_held_write(&vi->i_mapping->invalidate_lock);
+
 	if (!NInoNonResident(ni))
 		return -EINVAL;
 
-	filemap_invalidate_lock(vi->i_mapping);
 	read_lock_irqsave(&ni->size_lock, flags);
 	old_init_size = ni->initialized_size;
 	read_unlock_irqrestore(&ni->size_lock, flags);
@@ -2589,7 +2620,7 @@ int ntfs_extend_initialized_size(struct inode *vi, const loff_t offset,
 		if (old_init_size < offset) {
 			err = iomap_zero_range(vi, old_init_size,
 					       offset - old_init_size,
-					       NULL, &ntfs_seek_iomap_ops,
+					       NULL, ntfs_seek_iomap_next,
 					       &ntfs_iomap_folio_ops, NULL);
 			if (err)
 				goto out;
@@ -2599,9 +2630,17 @@ int ntfs_extend_initialized_size(struct inode *vi, const loff_t offset,
 	mutex_lock(&mrec_ni->mrec_lock);
 	err = ntfs_attr_set_initialized_size(ni, new_size);
 	mutex_unlock(&mrec_ni->mrec_lock);
-	if (err)
-		truncate_setsize(vi, old_init_size);
 out:
+	return err;
+}
+
+int ntfs_extend_initialized_size(struct inode *vi, const loff_t offset,
+				 const loff_t new_size)
+{
+	int err;
+
+	filemap_invalidate_lock(vi->i_mapping);
+	err = __ntfs_extend_initialized_size(vi, offset, new_size);
 	filemap_invalidate_unlock(vi->i_mapping);
 	return err;
 }
@@ -2907,8 +2946,13 @@ int __ntfs_write_inode(struct inode *vi, int sync)
 	ntfs_debug("Entering for %sinode 0x%llx.", NInoAttr(ni) ? "attr " : "",
 			ni->mft_no);
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	/* After an error only $Volume is still written, see ntfs_error_work(). */
+	err = ntfs_emergency_state(ni->vol);
+	if (err) {
+		if (err != -EROFS || vi != ni->vol->vol_ino)
+			return err;
+		err = 0;
+	}
 
 	/*
 	 * Dirty attribute inodes are written via their real inodes so just
@@ -2920,6 +2964,10 @@ int __ntfs_write_inode(struct inode *vi, int sync)
 		ntfs_debug("Done.");
 		return 0;
 	}
+
+	/* Failed creations retain I_CREATING after discard_new_inode(). */
+	if (inode_state_read_once(vi) & I_CREATING)
+		return 0;
 
 	/* igrab prevents vi from being evicted while mrec_lock is hold. */
 	if (igrab(vi) != NULL)
@@ -3715,11 +3763,11 @@ s64 ntfs_inode_attr_pread(struct inode *vi, s64 pos, s64 count, u8 *buf)
 		}
 	}
 	isize = i_size_read(vi);
-	if (pos > isize) {
+	if (pos < 0 || pos > isize) {
 		mutex_unlock(&mrec_ni->mrec_lock);
 		return -EINVAL;
 	}
-	if (pos + count > isize)
+	if (count > isize - pos)
 		count = isize - pos;
 
 	if (!NInoNonResident(ni)) {
@@ -3758,8 +3806,14 @@ s64 ntfs_inode_attr_pread(struct inode *vi, s64 pos, s64 count, u8 *buf)
 
 	index = pos >> PAGE_SHIFT;
 	do {
-		/* Update @index and get the next folio. */
-		folio = read_mapping_folio(mapping, index, NULL);
+		/*
+		 * Update @index and get the next folio.  The contents of a named
+		 * stream are user data, so a fatal signal may still stop that read.
+		 */
+		if (ntfs_inode_is_named_stream(ni))
+			folio = read_mapping_folio(mapping, index, NULL);
+		else
+			folio = ntfs_read_metadata_folio(mapping, index);
 		if (IS_ERR(folio)) {
 			err = PTR_ERR(folio);
 			break;
@@ -3911,9 +3965,18 @@ static s64 __ntfs_inode_non_resident_attr_pwrite(struct inode *vi,
 				break;
 			}
 		} else {
-			folio = read_mapping_folio(mapping, index, NULL);
+			/*
+			 * Named stream contents are user data; keep that read
+			 * killable, as in ntfs_inode_attr_pread().
+			 */
+			if (ntfs_inode_is_named_stream(ni))
+				folio = read_mapping_folio(mapping, index, NULL);
+			else
+				folio = ntfs_read_metadata_folio(mapping, index);
 			if (IS_ERR(folio)) {
 				ret = PTR_ERR(folio);
+				if (ret == -EINTR)
+					break;
 				ntfs_error(vi->i_sb, "Failed to read a page %lu for attr %#x: %ld",
 						index, ni->type, PTR_ERR(folio));
 				break;
@@ -4037,6 +4100,16 @@ s64 ntfs_inode_attr_pwrite(struct inode *vi, s64 pos, s64 count, u8 *buf, bool s
 
 	WARN_ON(!NInoAttr(ni));
 
+	/*
+	 * A zero-link attribute inode is evicted at the final iput(), even
+	 * if its base file has since been linked. Write its data before
+	 * eviction can discard the dirty pages. Also cover the interval after
+	 * unlink clears the base inode's link count but before attribute cleanup.
+	 */
+	if ((!vi->i_nlink || !VFS_I(base_ni)->i_nlink) &&
+	    !ntfs_inode_is_named_stream(ni))
+		sync = true;
+
 	if (ntfs_inode_is_named_stream(ni)) {
 		if (NInoEncrypted(ni))
 			return -EACCES;
@@ -4087,8 +4160,13 @@ s64 ntfs_inode_attr_pwrite(struct inode *vi, s64 pos, s64 count, u8 *buf, bool s
 	mutex_unlock(&mrec_ni->mrec_lock);
 	/* Attribute writes bypass iomap's delayed-allocation preparation. */
 	if (ntfs_inode_is_named_stream(ni)) {
-		/* A failed write must not expose any newly initialized data. */
-		ret = ntfs_extend_initialized_size(vi, pos + count, pos + count);
+		/*
+		 * A failed write must not expose any newly initialized
+		 * data.  The stream ioctl caller holds the mapping
+		 * invalidate lock.
+		 */
+		ret = __ntfs_extend_initialized_size(vi, pos + count,
+				pos + count);
 		modified |= ni->initialized_size != old_init_size;
 		if (!ret)
 			ret = ntfs_attr_fallocate(ni, pos, count, true);

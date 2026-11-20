@@ -964,11 +964,8 @@ ctrl_fail:
 void usbtv_video_free(struct usbtv *usbtv)
 {
 	vb2_video_unregister_device(&usbtv->vdev);
-	v4l2_device_disconnect(&usbtv->v4l2_dev);
 
 	mutex_lock(&usbtv->v4l2_lock);
 	usbtv->udev = NULL;
 	mutex_unlock(&usbtv->v4l2_lock);
-
-	v4l2_device_put(&usbtv->v4l2_dev);
 }

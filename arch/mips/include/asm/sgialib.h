@@ -36,6 +36,9 @@ extern struct linux_mdesc *prom_getmdesc(struct linux_mdesc *curr);
  */
 extern void prom_meminit(void);
 
+/* Reserve the firmware's memory; add_ram also registers all ranges as RAM. */
+void prom_mdesc_init(bool add_ram);
+
 /* PROM device tree library routines. */
 #define PROM_NULL_COMPONENT ((pcomponent *) 0)
 

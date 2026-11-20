@@ -86,7 +86,7 @@ static bool btrfs_run_discard_work(const struct btrfs_discard_ctl *discard_ctl)
 						     struct btrfs_fs_info,
 						     discard_ctl);
 
-	return (!(fs_info->sb->s_flags & SB_RDONLY) &&
+	return (!btrfs_fs_rdonly(fs_info) &&
 		test_bit(BTRFS_FS_DISCARD_RUNNING, &fs_info->flags));
 }
 

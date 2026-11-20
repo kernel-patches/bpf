@@ -2,9 +2,11 @@
 /*
  * Copyright (C) 2023 Axis Communications AB
  *
- * Datasheet: https://www.ti.com/lit/gpn/opt4001
+ * Datasheets:
+ *  https://www.ti.com/lit/gpn/opt4001
+ *  https://www.ti.com/lit/gpn/opt4041
  *
- * Device driver for the Texas Instruments OPT4001.
+ * Texas Instruments OPT4001 and compatible Light Sensors
  */
 
 #include <linux/bitfield.h>
@@ -19,6 +21,8 @@
 /* OPT4001 register set */
 #define OPT4001_LIGHT1_MSB    0x00
 #define OPT4001_LIGHT1_LSB    0x01
+#define OPT4041_LIGHT2_MSB    0x02
+#define OPT4041_LIGHT2_LSB    0x03
 #define OPT4001_CTRL          0x0A
 #define OPT4001_DEVICE_ID     0x11
 
@@ -43,6 +47,7 @@
 
 /* OPT4001 constants */
 #define OPT4001_DEVICE_ID_VAL            0x121
+#define OPT4041_DEVICE_ID_VAL            0x221
 
 /* OPT4001 operating modes */
 #define OPT4001_CTRL_OPER_MODE_OFF        0x0
@@ -72,12 +77,14 @@
 
 /*
  * The different packaging of OPT4001 has different constants used when calculating
- * lux values.
+ * lux values and OPT4041 has one additional wide band channel.
  */
 struct opt4001_chip_info {
-	int mul;
-	int div;
+	struct s32_fract ratio;
 	const char *name;
+	const struct iio_chan_spec *channels;
+	int num_channels;
+	u16 device_id;
 };
 
 struct opt4001_chip {
@@ -87,16 +94,57 @@ struct opt4001_chip {
 	const struct opt4001_chip_info *chip_info;
 };
 
+static const struct iio_chan_spec opt4001_channels[] = {
+	{
+		.type = IIO_LIGHT,
+		.address = OPT4001_LIGHT1_MSB,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED),
+		.info_mask_shared_by_all_available = BIT(IIO_CHAN_INFO_INT_TIME),
+		.info_mask_shared_by_all = BIT(IIO_CHAN_INFO_INT_TIME),
+	},
+};
+
+static const struct iio_chan_spec opt4041_channels[] = {
+	{
+		.type = IIO_LIGHT,
+		.address = OPT4001_LIGHT1_MSB,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED),
+		.info_mask_shared_by_all_available = BIT(IIO_CHAN_INFO_INT_TIME),
+		.info_mask_shared_by_all = BIT(IIO_CHAN_INFO_INT_TIME),
+	},
+	{
+		.type = IIO_INTENSITY,
+		.modified = 1,
+		.channel2 = IIO_MOD_LIGHT_BOTH,
+		.address = OPT4041_LIGHT2_MSB,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) | BIT(IIO_CHAN_INFO_SCALE),
+		.info_mask_shared_by_all_available = BIT(IIO_CHAN_INFO_INT_TIME),
+		.info_mask_shared_by_all = BIT(IIO_CHAN_INFO_INT_TIME),
+	},
+};
+
 static const struct opt4001_chip_info opt4001_sot_5x3_info = {
-	.mul = 4375,
-	.div = 10000000,
-	.name = "opt4001-sot-5x3"
+	.ratio = { .numerator = 4375, .denominator = 10000000 },
+	.name = "opt4001-sot-5x3",
+	.channels = opt4001_channels,
+	.num_channels = ARRAY_SIZE(opt4001_channels),
+	.device_id = OPT4001_DEVICE_ID_VAL,
 };
 
 static const struct opt4001_chip_info opt4001_picostar_info = {
-	.mul = 3125,
-	.div = 10000000,
-	.name = "opt4001-picostar"
+	.ratio = { .numerator = 3125, .denominator = 10000000 },
+	.name = "opt4001-picostar",
+	.channels = opt4001_channels,
+	.num_channels = ARRAY_SIZE(opt4001_channels),
+	.device_id = OPT4001_DEVICE_ID_VAL,
+};
+
+static const struct opt4001_chip_info opt4041_sot_5x3_info = {
+	.ratio = {.numerator = 5850, .denominator = 10000000 },
+	.name = "opt4041-sot-5x3",
+	.channels = opt4041_channels,
+	.num_channels = ARRAY_SIZE(opt4041_channels),
+	.device_id = OPT4041_DEVICE_ID_VAL,
 };
 
 static const int opt4001_int_time_available[][2] = {
@@ -159,30 +207,28 @@ static u8 opt4001_calculate_crc(u8 exp, u32 mantissa, u8 count)
 	return crc;
 }
 
-static int opt4001_read_lux_value(struct iio_dev *indio_dev,
-				  int *val, int *val2)
+static int opt4001_read_raw_value(struct opt4001_chip *chip, unsigned int reg,
+				  u64 *raw_value)
 {
-	struct opt4001_chip *chip = iio_priv(indio_dev);
 	struct device *dev = &chip->client->dev;
 	unsigned int light1;
 	unsigned int light2;
+	u32 mantissa;
+	u8 calc_crc;
+	u8 count;
 	u16 msb;
 	u16 lsb;
-	u8 exp;
-	u8 count;
-	u8 crc;
-	u8 calc_crc;
-	u64 lux_raw;
-	u32 rem;
 	int ret;
+	u8 exp;
+	u8 crc;
 
-	ret = regmap_read(chip->regmap, OPT4001_LIGHT1_MSB, &light1);
+	ret = regmap_read(chip->regmap, reg, &light1);
 	if (ret < 0) {
 		dev_err(dev, "Failed to read data bytes");
 		return ret;
 	}
 
-	ret = regmap_read(chip->regmap, OPT4001_LIGHT1_LSB, &light2);
+	ret = regmap_read(chip->regmap, reg + 1, &light2);
 	if (ret < 0) {
 		dev_err(dev, "Failed to read data bytes");
 		return ret;
@@ -193,14 +239,29 @@ static int opt4001_read_lux_value(struct iio_dev *indio_dev,
 	crc = FIELD_GET(OPT4001_CRC_MASK, light2);
 	msb = FIELD_GET(OPT4001_MSB_MASK, light1);
 	lsb = FIELD_GET(OPT4001_LSB_MASK, light2);
-	lux_raw = (msb << 8) + lsb;
-	calc_crc = opt4001_calculate_crc(exp, lux_raw, count);
+	mantissa = (msb << 8) + lsb;
+	calc_crc = opt4001_calculate_crc(exp, mantissa, count);
 	if (calc_crc != crc)
 		return -EIO;
 
-	lux_raw = lux_raw << exp;
-	lux_raw = lux_raw * chip->chip_info->mul;
-	*val = div_u64_rem(lux_raw, chip->chip_info->div, &rem);
+	*raw_value = (u64)mantissa << exp;
+
+	return 0;
+}
+
+static int opt4001_read_lux_value(struct opt4001_chip *chip, unsigned int reg,
+				  int *val, int *val2)
+{
+	u64 lux_raw;
+	u32 rem;
+	int ret;
+
+	ret = opt4001_read_raw_value(chip, reg, &lux_raw);
+	if (ret)
+		return ret;
+
+	lux_raw = lux_raw * chip->chip_info->ratio.numerator;
+	*val = div_u64_rem(lux_raw, chip->chip_info->ratio.denominator, &rem);
 	*val2 = rem * 100;
 
 	return IIO_VAL_INT_PLUS_NANO;
@@ -233,24 +294,35 @@ static void opt4001_chip_off_action(void *data)
 		dev_err(&chip->client->dev, "Failed to power down\n");
 }
 
-static const struct iio_chan_spec opt4001_channels[] = {
-	{
-		.type = IIO_LIGHT,
-		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED),
-		.info_mask_shared_by_all_available = BIT(IIO_CHAN_INFO_INT_TIME),
-		.info_mask_shared_by_all = BIT(IIO_CHAN_INFO_INT_TIME)
-	},
-};
-
 static int opt4001_read_raw(struct iio_dev *indio_dev,
 			    struct iio_chan_spec const *chan,
 			    int *val, int *val2, long mask)
 {
 	struct opt4001_chip *chip = iio_priv(indio_dev);
+	u64 raw_value;
+	u32 rem;
+	int ret;
 
 	switch (mask) {
 	case IIO_CHAN_INFO_PROCESSED:
-		return opt4001_read_lux_value(indio_dev, val, val2);
+		return opt4001_read_lux_value(chip, chan->address, val, val2);
+	case IIO_CHAN_INFO_RAW:
+		ret = opt4001_read_raw_value(chip, chan->address, &raw_value);
+		if (ret)
+			return ret;
+
+		*val = div_u64_rem(raw_value, 100, &rem);
+		*val2 = rem * 10000;
+		return IIO_VAL_INT_PLUS_MICRO;
+	case IIO_CHAN_INFO_SCALE:
+		/*
+		 * OPT4041 CH1: datasheet specifies 0.1923 nW/cm^2 per ADC code
+		 * with a 520 nm stimulus. Convert to nW/m^2 (x10000) and
+		 * compensate for dividing the reported raw value by 100 (x100).
+		 * The resulting scale is 192300 nW/m^2 per reported unit.
+		 */
+		*val = 192300;
+		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_INT_TIME:
 		*val = 0;
 		*val2 = opt4001_int_time_reg[chip->int_time][0];
@@ -317,6 +389,8 @@ static bool opt4001_readable_reg(struct device *dev, unsigned int reg)
 	switch (reg) {
 	case OPT4001_LIGHT1_MSB:
 	case OPT4001_LIGHT1_LSB:
+	case OPT4041_LIGHT2_MSB:
+	case OPT4041_LIGHT2_LSB:
 	case OPT4001_CTRL:
 	case OPT4001_DEVICE_ID:
 		return true;
@@ -340,6 +414,8 @@ static bool opt4001_volatile_reg(struct device *dev, unsigned int reg)
 	switch (reg) {
 	case OPT4001_LIGHT1_MSB:
 	case OPT4001_LIGHT1_LSB:
+	case OPT4041_LIGHT2_MSB:
+	case OPT4041_LIGHT2_LSB:
 		return true;
 	default:
 		return false;
@@ -388,19 +464,21 @@ static int opt4001_probe(struct i2c_client *client)
 		return dev_err_probe(&client->dev, ret,
 				     "failed to reinit regmap cache\n");
 
+	chip->chip_info = i2c_get_match_data(client);
+	if (!chip->chip_info)
+		return -ENODATA;
+
 	ret = regmap_read(chip->regmap, OPT4001_DEVICE_ID, &dev_id);
 	if (ret < 0)
 		return dev_err_probe(&client->dev, ret,
 			"Failed to read the device ID register\n");
 
 	dev_id = FIELD_GET(OPT4001_DEVICE_ID_MASK, dev_id);
-	if (dev_id != OPT4001_DEVICE_ID_VAL)
+	if (dev_id != chip->chip_info->device_id)
 		dev_warn(&client->dev, "Device ID: %#04x unknown\n", dev_id);
 
-	chip->chip_info = i2c_get_match_data(client);
-
-	indio_dev->channels = opt4001_channels;
-	indio_dev->num_channels = ARRAY_SIZE(opt4001_channels);
+	indio_dev->channels = chip->chip_info->channels;
+	indio_dev->num_channels = chip->chip_info->num_channels;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->name = chip->chip_info->name;
 
@@ -425,6 +503,7 @@ static int opt4001_probe(struct i2c_client *client)
 static const struct i2c_device_id opt4001_id[] = {
 	{ .name = "opt4001-sot-5x3", .driver_data = (kernel_ulong_t)&opt4001_sot_5x3_info },
 	{ .name = "opt4001-picostar", .driver_data = (kernel_ulong_t)&opt4001_picostar_info },
+	{ .name = "opt4041-sot-5x3", .driver_data = (kernel_ulong_t)&opt4041_sot_5x3_info },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, opt4001_id);
@@ -432,6 +511,7 @@ MODULE_DEVICE_TABLE(i2c, opt4001_id);
 static const struct of_device_id opt4001_of_match[] = {
 	{ .compatible = "ti,opt4001-sot-5x3", .data = &opt4001_sot_5x3_info},
 	{ .compatible = "ti,opt4001-picostar", .data = &opt4001_picostar_info},
+	{ .compatible = "ti,opt4041-sot-5x3", .data = &opt4041_sot_5x3_info},
 	{ }
 };
 MODULE_DEVICE_TABLE(of, opt4001_of_match);
@@ -447,5 +527,5 @@ static struct i2c_driver opt4001_driver = {
 module_i2c_driver(opt4001_driver);
 
 MODULE_AUTHOR("Stefan Windfeldt-Prytz <stefan.windfeldt-prytz@axis.com>");
-MODULE_DESCRIPTION("Texas Instruments opt4001 ambient light sensor driver");
+MODULE_DESCRIPTION("Texas Instruments OPT4001 and compatible Light Sensors");
 MODULE_LICENSE("GPL");

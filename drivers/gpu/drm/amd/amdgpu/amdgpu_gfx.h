@@ -181,7 +181,7 @@ struct amdgpu_kiq {
 #define AMDGPU_GFX_MAX_SH_PER_SE 2
 
 /**
- * amdgpu_rb_config - Configure a single Render Backend (RB)
+ * struct amdgpu_rb_config - Configure a single Render Backend (RB)
  *
  * Bad RBs are fused off and there is a harvest register the driver reads to
  * determine which RB(s) are fused off so that the driver can configure the
@@ -191,34 +191,28 @@ struct amdgpu_kiq {
  */
 struct amdgpu_rb_config {
 	/**
-	 * @rb_backend_disable:
-	 *
-	 * The value captured from register RB_BACKEND_DISABLE indicates if the
-	 * RB backend is disabled or not.
+	 * @rb_backend_disable: The value captured from register
+	 * RB_BACKEND_DISABLE indicates if the RB backend is disabled or not.
 	 */
 	uint32_t rb_backend_disable;
 
 	/**
-	 * @user_rb_backend_disable:
-	 *
-	 * The value captured from register USER_RB_BACKEND_DISABLE indicates
-	 * if the User RB backend is disabled or not.
+	 * @user_rb_backend_disable: The value captured from register
+	 * USER_RB_BACKEND_DISABLE indicates if the User RB backend is disabled
+	 * or not.
 	 */
 	uint32_t user_rb_backend_disable;
 
 	/**
-	 * @raster_config:
-	 *
-	 * To set up all of the states, it is necessary to have two registers
-	 * to keep all of the states. This field holds the first register.
+	 * @raster_config: To set up all of the states, it is necessary to have
+	 * two registers to keep all of the states. This field holds the first
+	 * register.
 	 */
 	uint32_t raster_config;
 
 	/**
-	 * @raster_config_1:
-	 *
-	 * To set up all of the states, it is necessary to have two registers
-	 * to keep all of the states. This field holds the second register.
+	 * @raster_config_1: This field holds the second register for setting
+	 * up the raster states.
 	 */
 	uint32_t raster_config_1;
 };
@@ -362,6 +356,9 @@ struct amdgpu_gfx_funcs {
 				 u32 queue, u32 vmid, u32 xcc_id);
 	void (*init_spm_golden)(struct amdgpu_device *adev);
 	void (*update_perfmon_mgcg)(struct amdgpu_device *adev, bool enable);
+	/* set the perfmon clock, returns its previous state */
+	bool (*set_perfmon_clk_override)(struct amdgpu_device *adev, int xcc_id,
+					 bool on);
 	int (*get_gfx_shadow_info)(struct amdgpu_device *adev,
 				   struct amdgpu_gfx_shadow_info *shadow_info,
 				   bool skip_check);
@@ -503,6 +500,11 @@ struct amdgpu_gfx {
 	uint32_t                        gfx_off_residency;  /* last logged residency */
 	uint64_t                        gfx_off_entrycount; /* count of times GPU has get into GFXOFF state */
 
+	/* perfmon clock override for profilers */
+	struct mutex			perfmon_clk_mutex;
+	uint32_t			perfmon_clk_override_count;
+	unsigned long			perfmon_clk_restore_mask; /* per XCC */
+
 	/* pipe reservation */
 	struct mutex			pipe_reserve_mutex;
 	DECLARE_BITMAP			(pipe_reserve_bitmap, AMDGPU_MAX_COMPUTE_QUEUES);
@@ -587,7 +589,8 @@ struct amdgpu_gfx_ras_mem_id_entry {
  * @bit_width: length of the mask
  *
  * create a variable length bit mask.
- * Returns the bitmask.
+ *
+ * Return: The generated bitmask.
  */
 static inline u32 amdgpu_gfx_create_bitmask(u32 bit_width)
 {
@@ -635,6 +638,9 @@ void amdgpu_gfx_handle_priv_fault(struct amdgpu_device *adev,
 					u8 me_id, u8 pipe_id, u8 queue_id);
 void amdgpu_gfx_off_ctrl(struct amdgpu_device *adev, bool enable);
 void amdgpu_gfx_off_ctrl_immediate(struct amdgpu_device *adev, bool enable);
+int amdgpu_gfx_perfmon_clk_override(struct amdgpu_device *adev, bool enable);
+void amdgpu_gfx_perfmon_clk_update(struct amdgpu_device *adev, int xcc_id, bool on);
+void amdgpu_gfx_perfmon_clk_restore(struct amdgpu_device *adev);
 int amdgpu_get_gfx_off_status(struct amdgpu_device *adev, uint32_t *value);
 int amdgpu_gfx_ras_late_init(struct amdgpu_device *adev, struct ras_common_if *ras_block);
 void amdgpu_gfx_ras_suspend(struct amdgpu_device *adev, struct ras_common_if *ras_block);
@@ -664,6 +670,7 @@ bool amdgpu_gfx_is_master_xcc(struct amdgpu_device *adev, int xcc_id);
 int amdgpu_gfx_sysfs_init(struct amdgpu_device *adev);
 void amdgpu_gfx_sysfs_fini(struct amdgpu_device *adev);
 int amdgpu_gfx_reset_mes_compute(struct amdgpu_device *adev,
+				 struct amdgpu_xcp *xcp,
 				 struct amdgpu_ring *ring,
 				 struct amdgpu_fence *guilty_fence,
 				 struct amdgpu_usermode_queue *uq,

@@ -665,8 +665,7 @@ static int sh_msiof_dma_once(struct sh_msiof_spi_priv *p, const void *tx,
 		if (!desc_rx)
 			return -EAGAIN;
 
-		desc_rx->callback = sh_msiof_dma_complete;
-		desc_rx->callback_param = &p->done;
+		dmaengine_desc_set_callback(desc_rx, sh_msiof_dma_complete, NULL, &p->done);
 		cookie = dmaengine_submit(desc_rx);
 		if (dma_submit_error(cookie))
 			return cookie;
@@ -684,8 +683,7 @@ static int sh_msiof_dma_once(struct sh_msiof_spi_priv *p, const void *tx,
 			goto no_dma_tx;
 		}
 
-		desc_tx->callback = sh_msiof_dma_complete;
-		desc_tx->callback_param = &p->done_txdma;
+		dmaengine_desc_set_callback(desc_tx, sh_msiof_dma_complete, NULL, &p->done_txdma);
 		cookie = dmaengine_submit(desc_tx);
 		if (dma_submit_error(cookie)) {
 			ret = cookie;
@@ -1029,7 +1027,7 @@ static struct sh_msiof_spi_info *sh_msiof_spi_parse_dt(struct device *dev)
 	struct device_node *np = dev->of_node;
 	u32 num_cs = 1;
 
-	info = devm_kzalloc(dev, sizeof(struct sh_msiof_spi_info), GFP_KERNEL);
+	info = devm_kzalloc_obj(dev, struct sh_msiof_spi_info);
 	if (!info)
 		return NULL;
 

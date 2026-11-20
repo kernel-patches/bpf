@@ -329,7 +329,7 @@ static int atmel_i2s_hw_params(struct snd_pcm_substream *substream,
 	int ret;
 
 	mr_mask = ATMEL_I2SC_MR_FORMAT_MASK | ATMEL_I2SC_MR_MODE_MASK |
-		ATMEL_I2SC_MR_DATALENGTH_MASK;
+		  ATMEL_I2SC_MR_DATALENGTH_MASK | ATMEL_I2SC_MR_IWS;
 	if (is_playback)
 		mr_mask |= ATMEL_I2SC_MR_TXMONO;
 	else
@@ -631,7 +631,7 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 	unsigned int version;
 
 	/* Get memory for driver data. */
-	dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);
+	dev = devm_kzalloc_obj(&pdev->dev, *dev);
 	if (!dev)
 		return -ENOMEM;
 
@@ -650,21 +650,16 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
 
-	/* Request IRQ. */
+	/* Get the IRQ. */
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
 
-	err = devm_request_irq(&pdev->dev, irq, atmel_i2s_interrupt, 0,
-			       dev_name(&pdev->dev), dev);
-	if (err)
-		return err;
-
-	/* Get the peripheral clock. */
-	dev->pclk = devm_clk_get(&pdev->dev, "pclk");
+	/* Get and enable the peripheral clock. */
+	dev->pclk = devm_clk_get_enabled(&pdev->dev, "pclk");
 	if (IS_ERR(dev->pclk))
 		return dev_err_probe(&pdev->dev, PTR_ERR(dev->pclk),
-				     "failed to get the peripheral clock\n");
+				     "failed to get/enable the peripheral clock\n");
 
 	/* Get audio clock to generate the I2S Master Clock (I2S_MCK) */
 	dev->gclk = devm_clk_get_optional(&pdev->dev, "gclk");
@@ -675,17 +670,21 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 	dev->regmap = regmap;
 	platform_set_drvdata(pdev, dev);
 
+	/*
+	 * Request IRQ after initializing dev->regmap and enabling pclk,
+	 * so devres frees the IRQ before disabling pclk.
+	 */
+	err = devm_request_irq(&pdev->dev, irq, atmel_i2s_interrupt, 0,
+			       dev_name(&pdev->dev), dev);
+	if (err)
+		return err;
+
 	/* Do hardware specific settings to initialize I2S_MCK generator */
 	if (dev->caps && dev->caps->mck_init) {
 		err = dev->caps->mck_init(dev, np);
 		if (err)
 			return err;
 	}
-
-	/* Enable the peripheral clock. */
-	err = clk_prepare_enable(dev->pclk);
-	if (err)
-		return err;
 
 	/* Get IP version. */
 	regmap_read(dev->regmap, ATMEL_I2SC_VERSION, &version);
@@ -698,10 +697,8 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 	err = devm_snd_soc_register_component(&pdev->dev,
 					      &atmel_i2s_component,
 					      &atmel_i2s_dai, 1);
-	if (err) {
-		clk_disable_unprepare(dev->pclk);
+	if (err)
 		return err;
-	}
 
 	/* Prepare DMA config. */
 	dev->playback.addr	= (dma_addr_t)mem->start + ATMEL_I2SC_THR;
@@ -712,19 +709,10 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 	if (of_property_match_string(np, "dma-names", "rx-tx") == 0)
 		pcm_flags |= SND_DMAENGINE_PCM_FLAG_HALF_DUPLEX;
 	err = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, pcm_flags);
-	if (err) {
-		clk_disable_unprepare(dev->pclk);
+	if (err)
 		return err;
-	}
 
 	return 0;
-}
-
-static void atmel_i2s_remove(struct platform_device *pdev)
-{
-	struct atmel_i2s_dev *dev = platform_get_drvdata(pdev);
-
-	clk_disable_unprepare(dev->pclk);
 }
 
 static struct platform_driver atmel_i2s_driver = {
@@ -733,7 +721,6 @@ static struct platform_driver atmel_i2s_driver = {
 		.of_match_table	= atmel_i2s_dt_ids,
 	},
 	.probe		= atmel_i2s_probe,
-	.remove		= atmel_i2s_remove,
 };
 module_platform_driver(atmel_i2s_driver);
 

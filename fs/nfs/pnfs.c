@@ -30,6 +30,7 @@
 #include <linux/nfs_fs.h>
 #include <linux/nfs_page.h>
 #include <linux/module.h>
+#include <linux/pagemap.h>
 #include <linux/sort.h>
 #include "internal.h"
 #include "pnfs.h"
@@ -2086,7 +2087,7 @@ static bool pnfs_within_mdsthreshold(struct nfs_open_context *ctx,
 		break;
 	}
 	if (size_set && io_set) {
-		if (size && io)
+		if (size || io)
 			ret = true;
 	} else if (size || io)
 		ret = true;
@@ -3169,7 +3170,7 @@ void pnfs_deviceid_delete_mark(struct nfs_client *clp,
 {
 	struct nfs4_deviceid_delete *dd, *new;
 
-	new = kzalloc_obj(*new, GFP_KERNEL);
+	new = kzalloc_obj(*new);
 	if (!new)
 		return;	/* lost notification; recovery waits for the next */
 	new->ld = pnfs_find_layoutdriver(ld->id);

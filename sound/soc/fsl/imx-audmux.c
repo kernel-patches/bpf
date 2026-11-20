@@ -305,7 +305,7 @@ static int imx_audmux_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	regcache = devm_kcalloc(&pdev->dev, reg_max, sizeof(u32), GFP_KERNEL);
+	regcache = devm_kzalloc_objs(&pdev->dev, u32, reg_max);
 	if (!regcache)
 		return -ENOMEM;
 
@@ -361,18 +361,7 @@ static struct platform_driver imx_audmux_driver = {
 		.of_match_table = imx_audmux_dt_ids,
 	}
 };
-
-static int __init imx_audmux_init(void)
-{
-	return platform_driver_register(&imx_audmux_driver);
-}
-subsys_initcall(imx_audmux_init);
-
-static void __exit imx_audmux_exit(void)
-{
-	platform_driver_unregister(&imx_audmux_driver);
-}
-module_exit(imx_audmux_exit);
+subsys_platform_driver(imx_audmux_driver);
 
 MODULE_DESCRIPTION("Freescale i.MX AUDMUX driver");
 MODULE_AUTHOR("Sascha Hauer <s.hauer@pengutronix.de>");

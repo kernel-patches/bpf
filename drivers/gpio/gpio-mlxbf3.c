@@ -188,7 +188,7 @@ static int mlxbf3_gpio_probe(struct platform_device *pdev)
 	struct gpio_chip *gc;
 	int ret, irq;
 
-	gs = devm_kzalloc(dev, sizeof(*gs), GFP_KERNEL);
+	gs = devm_kzalloc_obj(dev, *gs);
 	if (!gs)
 		return -ENOMEM;
 
@@ -273,8 +273,8 @@ static void mlxbf3_gpio_shutdown(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id mlxbf3_gpio_acpi_match[] = {
-	{ "MLNXBF33", 0 },
-	{}
+	{ .id = "MLNXBF33" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, mlxbf3_gpio_acpi_match);
 

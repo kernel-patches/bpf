@@ -2224,9 +2224,8 @@ static int etm4_add_coresight_dev(struct etm4_init_arg *init_arg)
 		pm_save = pm_save_enable != PARAM_PM_SAVE_NEVER;
 
 	if (pm_save) {
-		drvdata->save_state = devm_kmalloc(dev,
-						   sizeof(struct etmv4_save_state),
-						   GFP_KERNEL);
+		drvdata->save_state = devm_kmalloc_obj(dev,
+						       struct etmv4_save_state);
 		if (!drvdata->save_state)
 			return -ENOMEM;
 	}
@@ -2258,6 +2257,7 @@ static int etm4_add_coresight_dev(struct etm4_init_arg *init_arg)
 	/* register with config infrastructure & load any current features */
 	ret = etm4_cscfg_register(drvdata->csdev);
 	if (ret) {
+		etm_perf_symlink(drvdata->csdev, false);
 		coresight_unregister(drvdata->csdev);
 		return ret;
 	}
@@ -2307,7 +2307,7 @@ static int etm4_probe(struct device *dev)
 	if (smp_call_function_single(drvdata->cpu,
 				etm4_init_arch_data,  &init_arg, 1)) {
 		/* The CPU was offline, try again once it comes online. */
-		delayed = devm_kmalloc(dev, sizeof(*delayed), GFP_KERNEL);
+		delayed = devm_kmalloc_obj(dev, *delayed);
 		if (!delayed) {
 			cpus_read_unlock();
 			return -ENOMEM;
@@ -2338,7 +2338,7 @@ static int etm4_probe_amba(struct amba_device *adev, const struct amba_id *id)
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
-	drvdata = devm_kzalloc(dev, sizeof(*drvdata), GFP_KERNEL);
+	drvdata = devm_kzalloc_obj(dev, *drvdata);
 	if (!drvdata)
 		return -ENOMEM;
 
@@ -2357,7 +2357,7 @@ static int etm4_probe_platform_dev(struct platform_device *pdev)
 	struct etmv4_drvdata *drvdata;
 	int ret;
 
-	drvdata = devm_kzalloc(&pdev->dev, sizeof(*drvdata), GFP_KERNEL);
+	drvdata = devm_kzalloc_obj(&pdev->dev, *drvdata);
 	if (!drvdata)
 		return -ENOMEM;
 
@@ -2468,9 +2468,18 @@ static void etm4_remove_platform_dev(struct platform_device *pdev)
 {
 	struct etmv4_drvdata *drvdata = dev_get_drvdata(&pdev->dev);
 
-	if (drvdata)
-		etm4_remove_dev(drvdata);
+	if (WARN_ON(!drvdata))
+		return;
+	/*
+	 * Resume the device so its clocks are enabled again, balancing the
+	 * clk_disable_unprepare() that devm runs when the driver detaches.
+	 * Then mark it suspended and drop the usage count taken here.
+	 */
+	pm_runtime_get_sync(&pdev->dev);
+	etm4_remove_dev(drvdata);
 	pm_runtime_disable(&pdev->dev);
+	pm_runtime_set_suspended(&pdev->dev);
+	pm_runtime_put_noidle(&pdev->dev);
 }
 
 static const struct amba_id etm4_ids[] = {

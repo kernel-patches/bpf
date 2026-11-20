@@ -621,7 +621,7 @@ static int max9860_probe(struct i2c_client *i2c)
 	int i;
 	int intr;
 
-	max9860 = devm_kzalloc(dev, sizeof(struct max9860_priv), GFP_KERNEL);
+	max9860 = devm_kzalloc_obj(dev, struct max9860_priv);
 	if (!max9860)
 		return -ENOMEM;
 
@@ -629,13 +629,6 @@ static int max9860_probe(struct i2c_client *i2c)
 	if (IS_ERR(max9860->dvddio))
 		return dev_err_probe(dev, PTR_ERR(max9860->dvddio),
 				     "Failed to get DVDDIO supply\n");
-
-	max9860->dvddio_nb.notifier_call = max9860_dvddio_event;
-
-	ret = devm_regulator_register_notifier(max9860->dvddio,
-					       &max9860->dvddio_nb);
-	if (ret)
-		dev_err(dev, "Failed to register DVDDIO notifier: %d\n", ret);
 
 	ret = regulator_enable(max9860->dvddio);
 	if (ret != 0) {
@@ -648,6 +641,13 @@ static int max9860_probe(struct i2c_client *i2c)
 		ret = PTR_ERR(max9860->regmap);
 		goto err_regulator;
 	}
+
+	max9860->dvddio_nb.notifier_call = max9860_dvddio_event;
+
+	ret = devm_regulator_register_notifier(max9860->dvddio,
+					       &max9860->dvddio_nb);
+	if (ret)
+		dev_err(dev, "Failed to register DVDDIO notifier: %d\n", ret);
 
 	dev_set_drvdata(dev, max9860);
 

@@ -336,8 +336,7 @@ static void deinterlace_issue_dma(struct deinterlace_ctx *ctx, int op,
 	}
 
 	if (do_callback) {
-		tx->callback = dma_callback;
-		tx->callback_param = ctx;
+		dmaengine_desc_set_callback(tx, dma_callback, NULL, ctx);
 	}
 
 	ctx->cookie = dmaengine_submit(tx);
@@ -913,7 +912,7 @@ static int deinterlace_probe(struct platform_device *pdev)
 	dma_cap_mask_t mask;
 	int ret = 0;
 
-	pcdev = devm_kzalloc(&pdev->dev, sizeof(*pcdev), GFP_KERNEL);
+	pcdev = devm_kzalloc_obj(&pdev->dev, *pcdev);
 	if (!pcdev)
 		return -ENOMEM;
 

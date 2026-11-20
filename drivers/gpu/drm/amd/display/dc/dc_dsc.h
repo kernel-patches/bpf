@@ -43,6 +43,7 @@ struct display_stream_compressor {
 	const struct dsc_funcs *funcs;
 	struct dc_context *ctx;
 	int inst;
+	bool pg_ungated;
 };
 
 struct dc_dsc_policy {

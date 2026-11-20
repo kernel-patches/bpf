@@ -205,6 +205,9 @@
 #define   PCIE_GLI_9767_COMBO_MUX_CTL_RST_EN		  BIT(6)
 #define   PCIE_GLI_9767_COMBO_MUX_CTL_WAIT_PERST_EN	  BIT(10)
 
+#define PCIE_GLI_9767_UHS2_STS				0x8CC
+#define   PCIE_GLI_9767_UHS2_STS_WAKEUP_ACTIVATE	  BIT(13)
+
 #define PCIE_GLI_9767_PWR_MACRO_CTL					0x8D0
 #define   PCIE_GLI_9767_PWR_MACRO_CTL_LOW_VOLTAGE			  GENMASK(3, 0)
 #define   PCIE_GLI_9767_PWR_MACRO_CTL_LD0_LOW_OUTPUT_VOLTAGE		  GENMASK(15, 12)
@@ -245,6 +248,8 @@
 #define PCIE_GLI_9767_SD_EXPRESS_CTL			0x940
 #define   PCIE_GLI_9767_SD_EXPRESS_CTL_SDEI_EXE		  BIT(0)
 #define   PCIE_GLI_9767_SD_EXPRESS_CTL_SD_EXPRESS_MODE	  BIT(1)
+#define   PCIE_GLI_9767_SD_EXPRESS_CTL_DETECT_1		  BIT(2)
+#define   PCIE_GLI_9767_SD_EXPRESS_CTL_DETECT_2		  BIT(3)
 
 #define PCIE_GLI_9767_SD_DATA_MULTI_CTL				0x944
 #define   PCIE_GLI_9767_SD_DATA_MULTI_CTL_SELECT_UHS2		  BIT(5)
@@ -1190,6 +1195,27 @@ static void gl9767_set_low_power_negotiation(struct pci_dev *pdev, bool enable)
 	gl9767_vhs_read(pdev);
 }
 
+static u32 gl9767_read_uhs2_sts(struct pci_dev *pdev)
+{
+	u32 value;
+
+	pci_read_config_dword(pdev, PCIE_GLI_9767_UHS2_STS, &value);
+
+	return value;
+}
+
+static void sdhci_gl9767_uhs2_wait_wakeup(struct sdhci_host *host)
+{
+	struct sdhci_pci_slot *slot = sdhci_priv(host);
+	struct pci_dev *pdev = slot->chip->pdev;
+	u32 value;
+
+	if (read_poll_timeout(gl9767_read_uhs2_sts, value,
+			      !(value & PCIE_GLI_9767_UHS2_STS_WAKEUP_ACTIVATE),
+			      20, 10000, false, pdev))
+		pr_warn("%s: UHS-II wakeup did not complete.\n", mmc_hostname(host->mmc));
+}
+
 static void sdhci_gl9767_uhs2_phy_reset(struct sdhci_host *host, bool assert)
 {
 	struct sdhci_pci_slot *slot = sdhci_priv(host);
@@ -1276,9 +1302,12 @@ static void sdhci_gl9767_set_clock(struct sdhci_host *host, unsigned int clock)
 
 	sdhci_enable_clk(host, clk);
 
-	if (mmc_card_uhs2(host->mmc))
+	if (mmc_card_uhs2(host->mmc)) {
 		/* De-assert reset */
 		sdhci_gl9767_uhs2_phy_reset(host, false);
+		/* Low power negotiation during UHS-II wakeup makes MMIO read all-ones */
+		sdhci_gl9767_uhs2_wait_wakeup(host);
+	}
 
 	gl9767_set_low_power_negotiation(pdev, true);
 }
@@ -1353,6 +1382,11 @@ static void gl9767_hw_setting(struct sdhci_pci_slot *slot)
 		 PCIE_GLI_9767_SCR_CARD_DET_PWR_SAVING_EN |
 		 PCIE_GLI_9767_SCR_CORE_PWR_D3_OFF;
 	pci_write_config_dword(pdev, PCIE_GLI_9767_SCR, value);
+
+	pci_read_config_dword(pdev, PCIE_GLI_9767_SD_EXPRESS_CTL, &value);
+	value &= ~(PCIE_GLI_9767_SD_EXPRESS_CTL_DETECT_1 |
+		   PCIE_GLI_9767_SD_EXPRESS_CTL_DETECT_2);
+	pci_write_config_dword(pdev, PCIE_GLI_9767_SD_EXPRESS_CTL, value);
 
 	gl9767_vhs_read(pdev);
 }
@@ -1797,7 +1831,7 @@ static int gl9763e_add_host(struct sdhci_pci_slot *slot)
 	if (ret)
 		return ret;
 
-	cq_host = devm_kzalloc(dev, sizeof(*cq_host), GFP_KERNEL);
+	cq_host = devm_kzalloc_obj(dev, *cq_host);
 	if (!cq_host) {
 		ret = -ENOMEM;
 		goto cleanup;

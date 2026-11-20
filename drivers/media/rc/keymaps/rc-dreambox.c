@@ -128,7 +128,7 @@ static struct rc_map_table dreambox[] = {
 static struct rc_map_list dreambox_map = {
 	.map = {
 		.scan     = dreambox,
-		.size     = ARRAY_SIZE(dreambox),
+		.entries  = ARRAY_SIZE(dreambox),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_DREAMBOX,
 	}

@@ -340,14 +340,6 @@ static const unsigned int riscv_a_exts[] = {
 	RISCV_ISA_EXT_ZALRSC,
 };
 
-#define RISCV_ISA_EXT_ZKN	\
-	RISCV_ISA_EXT_ZBKB,	\
-	RISCV_ISA_EXT_ZBKC,	\
-	RISCV_ISA_EXT_ZBKX,	\
-	RISCV_ISA_EXT_ZKND,	\
-	RISCV_ISA_EXT_ZKNE,	\
-	RISCV_ISA_EXT_ZKNH
-
 static int riscv_ext_smcdeleg_validate(const struct riscv_isa_ext_data *data,
 				       const unsigned long *isa_bitmap)
 {
@@ -369,60 +361,77 @@ static int riscv_ext_ssccfg_validate(const struct riscv_isa_ext_data *data,
 	return -EPROBE_DEFER;
 }
 
-static const unsigned int riscv_zk_bundled_exts[] = {
-	RISCV_ISA_EXT_ZKN,
+static const unsigned int riscv_zk_sub_exts[] = {
+	RISCV_ISA_EXT_ZBKB,
+	RISCV_ISA_EXT_ZBKC,
+	RISCV_ISA_EXT_ZBKX,
+	RISCV_ISA_EXT_ZKND,
+	RISCV_ISA_EXT_ZKNE,
+	RISCV_ISA_EXT_ZKNH,
 	RISCV_ISA_EXT_ZKR,
 	RISCV_ISA_EXT_ZKT
 };
 
-static const unsigned int riscv_zkn_bundled_exts[] = {
-	RISCV_ISA_EXT_ZKN
+static const unsigned int riscv_zkn_sub_exts[] = {
+	RISCV_ISA_EXT_ZBKB,
+	RISCV_ISA_EXT_ZBKC,
+	RISCV_ISA_EXT_ZBKX,
+	RISCV_ISA_EXT_ZKND,
+	RISCV_ISA_EXT_ZKNE,
+	RISCV_ISA_EXT_ZKNH
 };
 
-static const unsigned int riscv_zks_bundled_exts[] = {
+static const unsigned int riscv_zks_sub_exts[] = {
 	RISCV_ISA_EXT_ZBKB,
 	RISCV_ISA_EXT_ZBKC,
 	RISCV_ISA_EXT_ZKSED,
 	RISCV_ISA_EXT_ZKSH
 };
 
-#define RISCV_ISA_EXT_ZVKN	\
-	RISCV_ISA_EXT_ZVKNED,	\
-	RISCV_ISA_EXT_ZVKNHB,	\
-	RISCV_ISA_EXT_ZVKB,	\
-	RISCV_ISA_EXT_ZVKT
 
-static const unsigned int riscv_zvkn_bundled_exts[] = {
-	RISCV_ISA_EXT_ZVKN
+static const unsigned int riscv_zvkn_sub_exts[] = {
+	RISCV_ISA_EXT_ZVKNED,
+	RISCV_ISA_EXT_ZVKNHB,
+	RISCV_ISA_EXT_ZVKB,
+	RISCV_ISA_EXT_ZVKT
 };
 
-static const unsigned int riscv_zvknc_bundled_exts[] = {
-	RISCV_ISA_EXT_ZVKN,
+static const unsigned int riscv_zvknc_sub_exts[] = {
+	RISCV_ISA_EXT_ZVKNED,
+	RISCV_ISA_EXT_ZVKNHB,
+	RISCV_ISA_EXT_ZVKB,
+	RISCV_ISA_EXT_ZVKT,
 	RISCV_ISA_EXT_ZVBC
 };
 
-static const unsigned int riscv_zvkng_bundled_exts[] = {
-	RISCV_ISA_EXT_ZVKN,
+static const unsigned int riscv_zvkng_sub_exts[] = {
+	RISCV_ISA_EXT_ZVKNED,
+	RISCV_ISA_EXT_ZVKNHB,
+	RISCV_ISA_EXT_ZVKB,
+	RISCV_ISA_EXT_ZVKT,
 	RISCV_ISA_EXT_ZVKG
 };
 
-#define RISCV_ISA_EXT_ZVKS	\
-	RISCV_ISA_EXT_ZVKSED,	\
-	RISCV_ISA_EXT_ZVKSH,	\
-	RISCV_ISA_EXT_ZVKB,	\
+static const unsigned int riscv_zvks_sub_exts[] = {
+	RISCV_ISA_EXT_ZVKSED,
+	RISCV_ISA_EXT_ZVKSH,
+	RISCV_ISA_EXT_ZVKB,
 	RISCV_ISA_EXT_ZVKT
-
-static const unsigned int riscv_zvks_bundled_exts[] = {
-	RISCV_ISA_EXT_ZVKS
 };
 
-static const unsigned int riscv_zvksc_bundled_exts[] = {
-	RISCV_ISA_EXT_ZVKS,
+static const unsigned int riscv_zvksc_sub_exts[] = {
+	RISCV_ISA_EXT_ZVKSED,
+	RISCV_ISA_EXT_ZVKSH,
+	RISCV_ISA_EXT_ZVKB,
+	RISCV_ISA_EXT_ZVKT,
 	RISCV_ISA_EXT_ZVBC
 };
 
-static const unsigned int riscv_zvksg_bundled_exts[] = {
-	RISCV_ISA_EXT_ZVKS,
+static const unsigned int riscv_zvksg_sub_exts[] = {
+	RISCV_ISA_EXT_ZVKSED,
+	RISCV_ISA_EXT_ZVKSH,
+	RISCV_ISA_EXT_ZVKB,
+	RISCV_ISA_EXT_ZVKT,
 	RISCV_ISA_EXT_ZVKG
 };
 
@@ -606,13 +615,13 @@ const struct riscv_isa_ext_data riscv_isa_ext[] = {
 	__RISCV_ISA_EXT_DATA(zbkc, RISCV_ISA_EXT_ZBKC),
 	__RISCV_ISA_EXT_DATA(zbkx, RISCV_ISA_EXT_ZBKX),
 	__RISCV_ISA_EXT_DATA(zbs, RISCV_ISA_EXT_ZBS),
-	__RISCV_ISA_EXT_BUNDLE(zk, riscv_zk_bundled_exts),
-	__RISCV_ISA_EXT_BUNDLE(zkn, riscv_zkn_bundled_exts),
+	__RISCV_ISA_EXT_SUPERSET(zk, RISCV_ISA_EXT_ZK, riscv_zk_sub_exts),
+	__RISCV_ISA_EXT_SUPERSET(zkn, RISCV_ISA_EXT_ZKN, riscv_zkn_sub_exts),
 	__RISCV_ISA_EXT_DATA(zknd, RISCV_ISA_EXT_ZKND),
 	__RISCV_ISA_EXT_DATA(zkne, RISCV_ISA_EXT_ZKNE),
 	__RISCV_ISA_EXT_DATA(zknh, RISCV_ISA_EXT_ZKNH),
 	__RISCV_ISA_EXT_DATA(zkr, RISCV_ISA_EXT_ZKR),
-	__RISCV_ISA_EXT_BUNDLE(zks, riscv_zks_bundled_exts),
+	__RISCV_ISA_EXT_SUPERSET(zks, RISCV_ISA_EXT_ZKS, riscv_zks_sub_exts),
 	__RISCV_ISA_EXT_DATA(zkt, RISCV_ISA_EXT_ZKT),
 	__RISCV_ISA_EXT_DATA(zksed, RISCV_ISA_EXT_ZKSED),
 	__RISCV_ISA_EXT_DATA(zksh, RISCV_ISA_EXT_ZKSH),
@@ -632,17 +641,17 @@ const struct riscv_isa_ext_data riscv_isa_ext[] = {
 	__RISCV_ISA_EXT_DATA(zvfhmin, RISCV_ISA_EXT_ZVFHMIN),
 	__RISCV_ISA_EXT_DATA_VALIDATE(zvkb, RISCV_ISA_EXT_ZVKB, riscv_ext_vector_crypto_validate),
 	__RISCV_ISA_EXT_DATA_VALIDATE(zvkg, RISCV_ISA_EXT_ZVKG, riscv_ext_vector_crypto_validate),
-	__RISCV_ISA_EXT_BUNDLE_VALIDATE(zvkn, riscv_zvkn_bundled_exts, riscv_ext_vector_crypto_validate),
-	__RISCV_ISA_EXT_BUNDLE_VALIDATE(zvknc, riscv_zvknc_bundled_exts, riscv_ext_vector_crypto_validate),
+	__RISCV_ISA_EXT_SUPERSET_VALIDATE(zvkn, RISCV_ISA_EXT_ZVKN, riscv_zvkn_sub_exts, riscv_ext_vector_crypto_validate),
+	__RISCV_ISA_EXT_SUPERSET_VALIDATE(zvknc, RISCV_ISA_EXT_ZVKNC, riscv_zvknc_sub_exts, riscv_ext_vector_crypto_validate),
 	__RISCV_ISA_EXT_DATA_VALIDATE(zvkned, RISCV_ISA_EXT_ZVKNED, riscv_ext_vector_crypto_validate),
-	__RISCV_ISA_EXT_BUNDLE_VALIDATE(zvkng, riscv_zvkng_bundled_exts, riscv_ext_vector_crypto_validate),
+	__RISCV_ISA_EXT_SUPERSET_VALIDATE(zvkng, RISCV_ISA_EXT_ZVKNG, riscv_zvkng_sub_exts, riscv_ext_vector_crypto_validate),
 	__RISCV_ISA_EXT_DATA_VALIDATE(zvknha, RISCV_ISA_EXT_ZVKNHA, riscv_ext_vector_crypto_validate),
 	__RISCV_ISA_EXT_DATA_VALIDATE(zvknhb, RISCV_ISA_EXT_ZVKNHB, riscv_ext_vector_crypto_validate),
-	__RISCV_ISA_EXT_BUNDLE_VALIDATE(zvks, riscv_zvks_bundled_exts, riscv_ext_vector_crypto_validate),
-	__RISCV_ISA_EXT_BUNDLE_VALIDATE(zvksc, riscv_zvksc_bundled_exts, riscv_ext_vector_crypto_validate),
+	__RISCV_ISA_EXT_SUPERSET_VALIDATE(zvks, RISCV_ISA_EXT_ZVKS, riscv_zvks_sub_exts, riscv_ext_vector_crypto_validate),
+	__RISCV_ISA_EXT_SUPERSET_VALIDATE(zvksc, RISCV_ISA_EXT_ZVKSC, riscv_zvksc_sub_exts, riscv_ext_vector_crypto_validate),
 	__RISCV_ISA_EXT_DATA_VALIDATE(zvksed, RISCV_ISA_EXT_ZVKSED, riscv_ext_vector_crypto_validate),
 	__RISCV_ISA_EXT_DATA_VALIDATE(zvksh, RISCV_ISA_EXT_ZVKSH, riscv_ext_vector_crypto_validate),
-	__RISCV_ISA_EXT_BUNDLE_VALIDATE(zvksg, riscv_zvksg_bundled_exts, riscv_ext_vector_crypto_validate),
+	__RISCV_ISA_EXT_SUPERSET_VALIDATE(zvksg, RISCV_ISA_EXT_ZVKSG, riscv_zvksg_sub_exts, riscv_ext_vector_crypto_validate),
 	__RISCV_ISA_EXT_DATA_VALIDATE(zvkt, RISCV_ISA_EXT_ZVKT, riscv_ext_vector_crypto_validate),
 	__RISCV_ISA_EXT_DATA(smaia, RISCV_ISA_EXT_SMAIA),
 	__RISCV_ISA_EXT_DATA_VALIDATE(smcdeleg, RISCV_ISA_EXT_SMCDELEG,

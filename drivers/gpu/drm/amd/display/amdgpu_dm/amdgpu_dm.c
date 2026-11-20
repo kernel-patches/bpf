@@ -716,9 +716,6 @@ static int amdgpu_dm_init(struct amdgpu_device *adev)
 
 	dc_hardware_init(adev->dm.dc);
 
-	/* Enable cursor offload if the ASIC supports it. */
-	dc_dmub_srv_cursor_offload_init(adev->dm.dc);
-
 	/* GOP/vBIOS may leave an OPTC enabled for a display present at power-on
 	 * but no longer driven (e.g. an external DP unplugged at boot). Such a
 	 * dangling pipe keeps DCN out of idle and blocks s0i3. Power it down
@@ -884,6 +881,13 @@ static void amdgpu_dm_fini(struct amdgpu_device *adev)
 	if (adev->dm.vblank_control_workqueue) {
 		destroy_workqueue(adev->dm.vblank_control_workqueue);
 		adev->dm.vblank_control_workqueue = NULL;
+	}
+
+	/* The poll re-queues itself, so stop it before the wq and dc go away. */
+	if (adev->dm.hdmi_frl_status_polling_wq) {
+		cancel_delayed_work_sync(&adev->dm.hdmi_frl_status_polling_work);
+		destroy_workqueue(adev->dm.hdmi_frl_status_polling_wq);
+		adev->dm.hdmi_frl_status_polling_wq = NULL;
 	}
 
 	if (adev->dm.idle_workqueue) {
@@ -1775,7 +1779,7 @@ STATIC_IFN_KUNIT void dm_gpureset_commit_state(struct dc_state *dc_state,
 		struct dc_scaling_info scaling_infos[MAX_SURFACES];
 		struct dc_flip_addrs flip_addrs[MAX_SURFACES];
 		struct dc_stream_update stream_update;
-	} *bundle __free(kfree);
+	} *bundle __free(kfree) = NULL;
 	int k, m;
 
 	bundle = kzalloc_obj(*bundle);
@@ -2610,13 +2614,6 @@ static int amdgpu_dm_initialize_drm_device(struct amdgpu_device *adev)
 
 				if (psr_feature_enabled) {
 					amdgpu_dm_set_psr_caps(link, aconnector);
-					drm_info(adev_to_drm(adev), "%s: PSR support %d, DC PSR ver %d, sink PSR ver %d DPCD caps 0x%x su_y_granularity %d\n",
-						 aconnector->base.name,
-						 link->psr_settings.psr_feature_enabled,
-						 link->psr_settings.psr_version,
-						 link->dpcd_caps.psr_info.psr_version,
-						 link->dpcd_caps.psr_info.psr_dpcd_caps.raw,
-						 link->dpcd_caps.psr_info.psr2_su_y_granularity_cap);
 				}
 			}
 		}
@@ -2731,15 +2728,8 @@ EXPORT_IF_KUNIT(dm_bandwidth_update);
 static const struct amdgpu_display_funcs dm_display_funcs = {
 	.bandwidth_update = dm_bandwidth_update, /* called unconditionally */
 	.vblank_get_counter = dm_vblank_get_counter,/* called unconditionally */
-	.backlight_set_level = NULL, /* never called for DC */
-	.backlight_get_level = NULL, /* never called for DC */
-	.hpd_sense = NULL,/* called unconditionally */
-	.hpd_set_polarity = NULL, /* called unconditionally */
-	.hpd_get_gpio_reg = NULL, /* VBIOS parsing. DAL does it. */
 	.page_flip_get_scanoutpos =
 		dm_crtc_get_scanoutpos,/* called unconditionally */
-	.add_encoder = NULL, /* VBIOS parsing. DAL does it. */
-	.add_connector = NULL, /* VBIOS parsing. DAL does it. */
 };
 
 #if defined(CONFIG_DEBUG_KERNEL_DC)
@@ -3851,6 +3841,26 @@ STATIC_IFN_KUNIT void dm_arm_vblank_event_pre_programming(struct amdgpu_crtc *ac
 }
 EXPORT_IF_KUNIT(dm_arm_vblank_event_pre_programming);
 
+/*
+ * FreeSync times each frame from the plane's previous flip, and a plane
+ * reset gives the new DC plane zeroed flip timing, so copy it over. Do
+ * this at commit time, not in atomic check: by then the previous commit
+ * has finished writing it.
+ */
+STATIC_IFN_KUNIT void
+dm_plane_inherit_flip_time(struct dc_plane_state *dc_plane_state,
+			   struct drm_plane_state *old_plane_state,
+			   struct drm_plane_state *new_plane_state)
+{
+	struct dc_plane_state *old_dc_plane_state =
+		to_dm_plane_state(old_plane_state)->dc_state;
+
+	if (old_dc_plane_state && old_dc_plane_state != dc_plane_state &&
+	    old_plane_state->crtc == new_plane_state->crtc)
+		dc_plane_state->time = old_dc_plane_state->time;
+}
+EXPORT_IF_KUNIT(dm_plane_inherit_flip_time);
+
 static void amdgpu_dm_commit_planes(struct drm_atomic_commit *state,
 				    struct drm_device *dev,
 				    struct amdgpu_display_manager *dm,
@@ -3954,6 +3964,9 @@ static void amdgpu_dm_commit_planes(struct drm_atomic_commit *state,
 		dc_plane = dm_new_plane_state->dc_state;
 		if (!dc_plane)
 			continue;
+
+		dm_plane_inherit_flip_time(dc_plane, old_plane_state,
+					   new_plane_state);
 
 		bundle->surface_updates[planes_count].surface = dc_plane;
 		if (new_pcrtc_state->color_mgmt_changed || new_plane_state->color_mgmt_changed) {
@@ -4455,13 +4468,112 @@ STATIC_IFN_KUNIT void dm_clear_writeback(struct amdgpu_display_manager *dm,
 }
 EXPORT_IF_KUNIT(dm_clear_writeback);
 
+static bool amdgpu_dm_self_refresh_pause_needed(struct drm_atomic_commit *state)
+{
+	struct drm_crtc_state *old_crtc_state, *new_crtc_state;
+	struct drm_crtc *crtc;
+	int i;
+
+	for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state, new_crtc_state, i)
+		if (drm_atomic_crtc_needs_modeset(new_crtc_state) &&
+		    (old_crtc_state->active || new_crtc_state->active))
+			return true;
+
+	return false;
+}
+
+static bool amdgpu_dm_is_new_modeset_stream(struct drm_atomic_commit *state,
+					    const struct dc_stream_state *stream)
+{
+	struct drm_crtc_state *new_crtc_state;
+	struct drm_crtc *crtc;
+	int i;
+
+	for_each_new_crtc_in_state(state, crtc, new_crtc_state, i)
+		if (drm_atomic_crtc_needs_modeset(new_crtc_state) &&
+		    to_dm_crtc_state(new_crtc_state)->stream == stream)
+			return true;
+
+	return false;
+}
+
+/*
+ * A modeset CRTC may have no PSR or Replay, such as an HDMI output being
+ * turned off, while an eDP on another CRTC is still in self-refresh. Pause
+ * self-refresh on every stream mod_power tracks before
+ * amdgpu_dm_mod_power_update_streams() changes the set: the old streams of
+ * the CRTCs in the commit and the unchanged streams of the new state.
+ * Unlike hw_programming, which a fast update on another CRTC clears, the
+ * pause holds until amdgpu_dm_resume_self_refresh()
+ */
+static void amdgpu_dm_pause_self_refresh(struct drm_atomic_commit *state,
+					 struct amdgpu_display_manager *dm,
+					 struct dc_state *dc_state)
+{
+	struct drm_crtc_state *old_crtc_state;
+	struct dc_stream_state *stream;
+	struct drm_crtc *crtc;
+	int i;
+
+	if (!amdgpu_dm_self_refresh_pause_needed(state))
+		return;
+
+	guard(mutex)(&dm->dc_lock);
+	dc_exit_ips_for_hw_access(dm->dc);
+
+	for_each_old_crtc_in_state(state, crtc, old_crtc_state, i) {
+		stream = to_dm_crtc_state(old_crtc_state)->stream;
+		if (!old_crtc_state->active || !stream)
+			continue;
+
+		amdgpu_dm_psr_set_event(dm, stream, true, psr_event_pause, true);
+		amdgpu_dm_replay_set_event(dm, stream, true, replay_event_pause, true);
+	}
+
+	for (i = 0; i < dc_state->stream_count; i++) {
+		stream = dc_state->streams[i];
+		if (amdgpu_dm_is_new_modeset_stream(state, stream))
+			continue;
+
+		amdgpu_dm_psr_set_event(dm, stream, true, psr_event_pause, true);
+		amdgpu_dm_replay_set_event(dm, stream, true, replay_event_pause, true);
+	}
+}
+
+/*
+ * Ends amdgpu_dm_pause_self_refresh() on the streams of the commit, which
+ * mod_power tracks from amdgpu_dm_mod_power_update_streams() on, even if
+ * dc_commit_streams() failed. mod_power keeps events across
+ * mod_power_replace_stream(), so the replaced streams carry the pause too.
+ * Runs after amdgpu_dm_mod_power_setup_streams(), since enabling a stream
+ * clears psr_feature_enabled and replay_feature_enabled on its link until
+ * then, and the set_event helpers skip a link without them
+ */
+static void amdgpu_dm_resume_self_refresh(struct drm_atomic_commit *state,
+					  struct amdgpu_display_manager *dm,
+					  struct dc_state *dc_state)
+{
+	int i;
+
+	if (!dc_state || !amdgpu_dm_self_refresh_pause_needed(state))
+		return;
+
+	guard(mutex)(&dm->dc_lock);
+	for (i = 0; i < dc_state->stream_count; i++) {
+		amdgpu_dm_psr_set_event(dm, dc_state->streams[i], false,
+					psr_event_pause, false);
+		amdgpu_dm_replay_set_event(dm, dc_state->streams[i], false,
+					   replay_event_pause, false);
+	}
+}
+
 /**
- * amdgpu_dm_mod_power_update_streams - update mod_power stream state on modeset
+ * amdgpu_dm_mod_power_update_streams - update mod_power stream state
  * @state: the drm atomic state
  * @dm: the display manager to update mod_power on
  *
- * Notify mod_power of stream changes on modeset events, and disable PSR/Replay
- * in preparation for hardware programming. See also
+ * Disable PSR/Replay before hardware programming for active streams, and
+ * update mod_power stream state when a modeset changes the stream. See also
  * amdgpu_dm_mod_power_setup_streams() for post-modeset mod_power setup.
  */
 STATIC_IFN_KUNIT void amdgpu_dm_mod_power_update_streams(struct drm_atomic_commit *state,
@@ -4477,15 +4589,15 @@ STATIC_IFN_KUNIT void amdgpu_dm_mod_power_update_streams(struct drm_atomic_commi
 		dm_old_crtc_state = to_dm_crtc_state(old_crtc_state);
 		dm_new_crtc_state = to_dm_crtc_state(new_crtc_state);
 
-		if (!drm_atomic_crtc_needs_modeset(new_crtc_state))
-			continue;
-
 		/*
-		 * Update mod_power on modeset event in preparation for hw
-		 * programming. Always use the old stream, since it would have
-		 * been previously added to mod_power. If old stream is null (on
-		 * crtc enable, for example), mod_power will no-op, which is the
-		 * desried behavior.
+		 * Notify mod_power that hardware programming is about to occur.
+		 * This must be done before the modeset check because a non-modeset
+		 * commit can still update an active framebuffer or plane while
+		 * PSR/Replay is enabled.
+		 *
+		 * Always use the old stream since it is the stream currently
+		 * registered with mod_power. If old stream is NULL, the event
+		 * helpers will no-op.
 		 */
 		if (old_crtc_state->active) {
 			scoped_guard(mutex, &dm->dc_lock) {
@@ -4494,10 +4606,14 @@ STATIC_IFN_KUNIT void amdgpu_dm_mod_power_update_streams(struct drm_atomic_commi
 					psr_event_hw_programming, true);
 				amdgpu_dm_replay_set_event(dm, dm_old_crtc_state->stream, true,
 					replay_event_hw_programming, true);
-				amdgpu_dm_replay_set_event(dm, dm_old_crtc_state->stream, false,
-					replay_event_general_ui, false);
 			}
 		}
+
+		if (!drm_atomic_crtc_needs_modeset(new_crtc_state))
+			continue;
+
+		if (dm_old_crtc_state->stream == dm_new_crtc_state->stream)
+			continue;
 
 		if (new_crtc_state->active) {
 			aconnector = (struct amdgpu_dm_connector *)
@@ -4545,11 +4661,35 @@ STATIC_IFN_KUNIT void amdgpu_dm_mod_power_setup_streams(struct drm_atomic_commit
 			continue;
 
 		if (new_crtc_state->active) {
+			struct amdgpu_dm_connector *aconnector =
+				(struct amdgpu_dm_connector *)
+				dm_new_crtc_state->stream->dm_stream_context;
+			struct dc_link *link = dm_new_crtc_state->stream->link;
+
 			amdgpu_dm_link_setup_replay(dm_new_crtc_state->stream,
 					&acrtc->dm_irq_params.vrr_params);
 			mod_power_notify_mode_change(dm->power_module,
 						dm_new_crtc_state->stream,
 						false);
+
+			if (link->replay_settings.config.replay_cap_support) {
+				drm_info(state->dev,
+					"%s: Replay enabled %d, Allow active %d, Config ver %d\n",
+					aconnector->base.name,
+					link->replay_settings.replay_feature_enabled,
+					link->replay_settings.replay_allow_active,
+					link->replay_settings.config.replay_version);
+			}
+			if (link->psr_settings.psr_version != DC_PSR_VERSION_UNSUPPORTED) {
+				drm_info(state->dev,
+					"%s: PSR support %d, DC PSR ver %d, Sink PSR ver %d, DPCD caps 0x%x, su_y_granularity %d\n",
+					aconnector->base.name,
+					link->psr_settings.psr_feature_enabled,
+					link->psr_settings.psr_version,
+					link->dpcd_caps.psr_info.psr_version,
+					link->dpcd_caps.psr_info.psr_dpcd_caps.raw,
+					link->dpcd_caps.psr_info.psr2_su_y_granularity_cap);
+			}
 
 			/*
 			 * Block PSR / Replay on the new stream until display settles post-modeset.
@@ -4611,6 +4751,7 @@ static void amdgpu_dm_commit_streams(struct drm_atomic_commit *state,
 		acrtc->wb_enabled = false;
 	}
 
+	amdgpu_dm_pause_self_refresh(state, dm, dc_state);
 	amdgpu_dm_mod_power_update_streams(state, dm);
 
 	for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state,
@@ -4733,6 +4874,11 @@ static void amdgpu_dm_commit_streams(struct drm_atomic_commit *state,
 	dc_exit_ips_for_hw_access(dm->dc);
 	WARN_ON(!dc_commit_streams(dm->dc, &params));
 
+	/* Allow idle optimization when vblank count is 0 for display off */
+	if (dm->active_vblank_irq_count == 0 && amdgpu_dm_is_headless(dm->adev))
+		dc_allow_idle_optimizations(dm->dc, true);
+	mutex_unlock(&dm->dc_lock);
+
 	bool frl_stream_found = false;
 
 	for (i = 0; i < params.stream_count; i++) {
@@ -4743,6 +4889,7 @@ static void amdgpu_dm_commit_streams(struct drm_atomic_commit *state,
 			break;
 		}
 	}
+
 	if (frl_stream_found) {
 		if (queue_delayed_work(dm->hdmi_frl_status_polling_wq,
 				       &dm->hdmi_frl_status_polling_work,
@@ -4752,10 +4899,6 @@ static void amdgpu_dm_commit_streams(struct drm_atomic_commit *state,
 		if (cancel_delayed_work_sync(&dm->hdmi_frl_status_polling_work))
 			drm_dbg_kms(dev, "200ms frl status polling stops ...\n");
 	}
-	/* Allow idle optimization when vblank count is 0 for display off */
-	if ((dm->active_vblank_irq_count == 0) && amdgpu_dm_is_headless(dm->adev))
-		dc_allow_idle_optimizations(dm->dc, true);
-	mutex_unlock(&dm->dc_lock);
 
 	for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
 		struct amdgpu_crtc *acrtc = to_amdgpu_crtc(crtc);
@@ -5200,9 +5343,11 @@ static void amdgpu_dm_atomic_commit_tail(struct drm_atomic_commit *state)
 		scaling_changed = is_scaling_state_different(dm_new_con_state,
 							     dm_old_con_state);
 
-		if ((new_con_state->hdmi.broadcast_rgb != old_con_state->hdmi.broadcast_rgb) &&
-			(dm_old_crtc_state->stream->output_color_space !=
-				amdgpu_dm_get_output_color_space(&dm_new_crtc_state->stream->timing, new_con_state)))
+		if (new_con_state->hdmi.broadcast_rgb != old_con_state->hdmi.broadcast_rgb &&
+		    dm_old_crtc_state->stream->output_color_space !=
+		    amdgpu_dm_get_output_color_space(&dm_new_crtc_state->stream->timing,
+						     new_con_state,
+						     dm_new_crtc_state->stream->signal))
 			output_color_space_changed = true;
 
 		abm_changed = dm_new_crtc_state->abm_level !=
@@ -5224,8 +5369,10 @@ static void amdgpu_dm_atomic_commit_tail(struct drm_atomic_commit *state)
 		}
 
 		if (output_color_space_changed) {
-			dm_new_crtc_state->stream->output_color_space
-				= amdgpu_dm_get_output_color_space(&dm_new_crtc_state->stream->timing, new_con_state);
+			dm_new_crtc_state->stream->output_color_space =
+				amdgpu_dm_get_output_color_space(&dm_new_crtc_state->stream->timing,
+								 new_con_state,
+								 dm_new_crtc_state->stream->signal);
 
 			stream_update.output_color_space = &dm_new_crtc_state->stream->output_color_space;
 		}
@@ -5254,10 +5401,8 @@ static void amdgpu_dm_atomic_commit_tail(struct drm_atomic_commit *state)
 		 * To fix this, DC should permit updating only stream properties.
 		 */
 		dummy_updates = kzalloc(sizeof(struct dc_surface_update) * MAX_SURFACES, GFP_KERNEL);
-		if (!dummy_updates) {
-			drm_err(adev_to_drm(adev), "Failed to allocate memory for dummy_updates.\n");
+		if (!dummy_updates)
 			continue;
-		}
 		for (j = 0; j < status->plane_count; j++)
 			dummy_updates[j].surface = status->plane_states[j];
 
@@ -5320,42 +5465,43 @@ static void amdgpu_dm_atomic_commit_tail(struct drm_atomic_commit *state)
 		amdgpu_dm_handle_vrr_transition(dm, dm_old_crtc_state, dm_new_crtc_state);
 
 #ifdef CONFIG_DEBUG_FS
-		if (new_crtc_state->active &&
-		    (!old_crtc_state->active ||
-		     drm_atomic_crtc_needs_modeset(new_crtc_state))) {
-			/**
-			 * Frontend may have changed so reapply the CRC capture
-			 * settings for the stream.
-			 */
-			if (amdgpu_dm_is_valid_crc_source(cur_crc_src)) {
+		if (!new_crtc_state->active ||
+		    (old_crtc_state->active && !drm_atomic_crtc_needs_modeset(new_crtc_state)))
+			continue;
+
+		/**
+		 * Frontend may have changed so reapply the CRC capture
+		 * settings for the stream.
+		 */
+		if (!amdgpu_dm_is_valid_crc_source(cur_crc_src))
+			continue;
+
 #if defined(CONFIG_DRM_AMD_SECURE_DISPLAY)
-				if (amdgpu_dm_crc_window_is_activated(crtc)) {
-					uint8_t cnt;
+		if (amdgpu_dm_crc_window_is_activated(crtc)) {
+			uint8_t cnt;
 
-					spin_lock_irqsave(&adev_to_drm(adev)->event_lock, flags);
-					for (cnt = 0; cnt < MAX_CRC_WINDOW_NUM; cnt++) {
-						if (acrtc->dm_irq_params.window_param[cnt].enable) {
-							acrtc->dm_irq_params.window_param[cnt].update_win = true;
+			spin_lock_irqsave(&adev_to_drm(adev)->event_lock, flags);
+			for (cnt = 0; cnt < MAX_CRC_WINDOW_NUM; cnt++) {
+				if (acrtc->dm_irq_params.window_param[cnt].enable) {
+					acrtc->dm_irq_params.window_param[cnt].update_win = true;
 
-							/**
-							 * It takes 2 frames for HW to stably generate CRC when
-							 * resuming from suspend, so we set skip_frame_cnt 2.
-							 */
-							acrtc->dm_irq_params.window_param[cnt].skip_frame_cnt = 2;
-						}
-					}
-					spin_unlock_irqrestore(&adev_to_drm(adev)->event_lock, flags);
+					/**
+					 * It takes 2 frames for HW to stably generate CRC when
+					 * resuming from suspend, so we set skip_frame_cnt 2.
+					 */
+					acrtc->dm_irq_params.window_param[cnt].skip_frame_cnt = 2;
 				}
-#endif
-				if (amdgpu_dm_crtc_configure_crc_source(
-					crtc, dm_new_crtc_state, cur_crc_src))
-					drm_dbg_atomic(dev, "Failed to configure crc source");
 			}
+			spin_unlock_irqrestore(&adev_to_drm(adev)->event_lock, flags);
 		}
+#endif
+		if (amdgpu_dm_crtc_configure_crc_source(crtc, dm_new_crtc_state, cur_crc_src))
+			drm_dbg_atomic(dev, "Failed to configure crc source");
 #endif
 	}
 
 	amdgpu_dm_mod_power_setup_streams(state, dm);
+	amdgpu_dm_resume_self_refresh(state, dm, dc_state);
 
 	for_each_new_crtc_in_state(state, crtc, new_crtc_state, j)
 		if (new_crtc_state->async_flip)
@@ -6836,3 +6982,36 @@ void dm_acpi_process_phy_transition_interlock(
 	// Not yet implemented
 }
 EXPORT_IF_KUNIT(dm_acpi_process_phy_transition_interlock);
+
+/**
+ * amdgpu_dm_update_memclk_states() - re-read the UCLK DPM levels from PMFW
+ * @adev: amdgpu device
+ *
+ * DC reads the UCLK DPM table from PMFW only in init_hw. An overdrive commit
+ * (or restoring the user OD table on resume) can change the UCLK levels, which
+ * leaves DC with a stale max_memclk_mhz and bounding box. On DCN3.2 the stale
+ * max is then used as the UCLK hard min when P-state switching is not
+ * supported by the current mode, so PMFW is free to switch UCLK outside of
+ * vblank and the display underflows or hangs.
+ */
+void amdgpu_dm_update_memclk_states(struct amdgpu_device *adev)
+{
+	struct dc *dc = adev->dm.dc;
+	unsigned int max_memclk_mhz;
+
+	if (!dc)
+		return;
+
+	if (dc->ctx->dce_version != DCN_VERSION_3_2 &&
+	    dc->ctx->dce_version != DCN_VERSION_3_21)
+		return;
+
+	mutex_lock(&adev->dm.dc_lock);
+	max_memclk_mhz = dc_refresh_memclk_states(dc);
+	mutex_unlock(&adev->dm.dc_lock);
+
+	if (max_memclk_mhz)
+		drm_info(adev_to_drm(adev),
+			 "DC memclk states refreshed, max UCLK %u MHz\n",
+			 max_memclk_mhz);
+}

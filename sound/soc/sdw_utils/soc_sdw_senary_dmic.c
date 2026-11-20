@@ -15,6 +15,10 @@ static const struct snd_soc_dapm_route senary_dmic_map[] = {
 	{ "sn624x DMIC", NULL, "Dmic" },
 };
 
+static const struct snd_soc_dapm_route senary_dmic_map_bare[] = {
+	{ "DMIC", NULL, "Dmic" },
+};
+
 int asoc_sdw_senary_dmic_rtd_init(struct snd_soc_pcm_runtime *rtd, struct snd_soc_dai *dai)
 {
 	struct snd_soc_card *card = rtd->card;
@@ -25,14 +29,21 @@ int asoc_sdw_senary_dmic_rtd_init(struct snd_soc_pcm_runtime *rtd, struct snd_so
 
 	component = dai->component;
 
-	ret = snd_soc_dapm_add_routes(dapm, senary_dmic_map,
-				      ARRAY_SIZE(senary_dmic_map));
+	if (component->name_prefix) {
+		ret = snd_soc_dapm_add_routes(dapm, senary_dmic_map,
+					      ARRAY_SIZE(senary_dmic_map));
+		mic_name = devm_kstrdup(card->dev, component->name_prefix, GFP_KERNEL);
+	} else {
+		dev_warn(card->dev, "sn624x dmic: component %s has no name_prefix\n",
+			 component->name);
+		ret = snd_soc_dapm_add_routes(dapm, senary_dmic_map_bare,
+					      ARRAY_SIZE(senary_dmic_map_bare));
+		mic_name = devm_kstrdup(card->dev, "sn624x", GFP_KERNEL);
+	}
 	if (ret) {
 		dev_err(card->dev, "senary dmic map addition failed: %d\n", ret);
 		return ret;
 	}
-
-	mic_name = devm_kasprintf(card->dev, GFP_KERNEL, "%s", component->name_prefix);
 	if (!mic_name)
 		return -ENOMEM;
 

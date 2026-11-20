@@ -2697,8 +2697,8 @@ int ice_prepare_xdp_rings(struct ice_vsi *vsi, struct bpf_prog *prog,
 	int status, i;
 
 	dev = ice_pf_to_dev(pf);
-	vsi->xdp_rings = devm_kcalloc(dev, vsi->num_xdp_txq,
-				      sizeof(*vsi->xdp_rings), GFP_KERNEL);
+	vsi->xdp_rings = devm_kzalloc_objs(dev, *vsi->xdp_rings,
+					   vsi->num_xdp_txq);
 	if (!vsi->xdp_rings)
 		return -ENOMEM;
 
@@ -4912,13 +4912,12 @@ static int ice_alloc_vsis(struct ice_pf *pf)
 		pf->num_alloc_vsi = UDP_TUNNEL_NIC_MAX_SHARING_DEVICES;
 	}
 
-	pf->vsi = devm_kcalloc(dev, pf->num_alloc_vsi, sizeof(*pf->vsi),
-			       GFP_KERNEL);
+	pf->vsi = devm_kzalloc_objs(dev, *pf->vsi, pf->num_alloc_vsi);
 	if (!pf->vsi)
 		return -ENOMEM;
 
-	pf->vsi_stats = devm_kcalloc(dev, pf->num_alloc_vsi,
-				     sizeof(*pf->vsi_stats), GFP_KERNEL);
+	pf->vsi_stats = devm_kzalloc_objs(dev, *pf->vsi_stats,
+					  pf->num_alloc_vsi);
 	if (!pf->vsi_stats) {
 		devm_kfree(dev, pf->vsi);
 		return -ENOMEM;
@@ -4946,7 +4945,12 @@ static int ice_init_devlink(struct ice_pf *pf)
 		return err;
 
 	ice_devlink_init_regions(pf);
-	ice_devlink_register(pf);
+	err = ice_devlink_register(pf);
+	if (err) {
+		ice_devlink_destroy_regions(pf);
+		ice_devlink_unregister_params(pf);
+		return err;
+	}
 	ice_health_init(pf);
 
 	return 0;
@@ -5291,7 +5295,7 @@ unroll_init:
 unroll_dev_init:
 	need_dev_deinit = true;
 unroll_adapter:
-	ice_adapter_put(pdev);
+	ice_adapter_put(adapter);
 unroll_hw_init:
 	ice_deinit_hw(hw);
 	if (need_dev_deinit)
@@ -5404,7 +5408,7 @@ static void ice_remove(struct pci_dev *pdev)
 	ice_setup_mc_magic_wake(pf);
 	ice_set_wake(pf);
 
-	ice_adapter_put(pdev);
+	ice_adapter_put(pf->adapter);
 	ice_deinit_hw(&pf->hw);
 
 	ice_deinit_dev(pf);

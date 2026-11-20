@@ -1264,7 +1264,7 @@ static int tegra_powergate_of_get_clks(struct tegra_powergate *pg,
 	if (!pg->clks)
 		return -ENOMEM;
 
-	pg->clk_rates = kcalloc(count, sizeof(*pg->clk_rates), GFP_KERNEL);
+	pg->clk_rates = kzalloc_objs(*pg->clk_rates, count);
 	if (!pg->clk_rates) {
 		kfree(pg->clks);
 		return -ENOMEM;
@@ -1465,7 +1465,7 @@ static int tegra_pmc_core_pd_add(struct tegra_pmc *pmc, struct device_node *np)
 	struct tegra_pmc_core_pd *pd;
 	int err;
 
-	pd = devm_kzalloc(pmc->dev, sizeof(*pd), GFP_KERNEL);
+	pd = devm_kzalloc_obj(pmc->dev, *pd);
 	if (!pd)
 		return -ENOMEM;
 
@@ -1525,8 +1525,11 @@ static int tegra_powergate_init(struct tegra_pmc *pmc,
 	for_each_child_of_node_scoped(np, child) {
 		err = tegra_powergate_add(pmc, child);
 		if (err < 0)
-			break;
+			goto put;
+	}
 
+	/* A parent powergate may come after its subdomains in DT order. */
+	for_each_child_of_node_scoped(np, child) {
 		if (of_parse_phandle_with_args(child, "power-domains",
 					       "#power-domain-cells",
 					       0, &parent_args))
@@ -1541,6 +1544,7 @@ static int tegra_powergate_init(struct tegra_pmc *pmc,
 			break;
 	}
 
+put:
 	of_node_put(np);
 
 	return err;
@@ -1564,12 +1568,27 @@ static void tegra_powergate_remove(struct generic_pm_domain *genpd)
 
 static void tegra_powergate_remove_all(struct device_node *parent)
 {
+	struct of_phandle_args child_args, parent_args;
 	struct generic_pm_domain *genpd;
 	struct device_node *np, *child;
 
 	np = of_get_child_by_name(parent, "powergates");
 	if (!np)
 		return;
+
+	/* A parent powergate cannot be removed while it has subdomains. */
+	for_each_child_of_node(np, child) {
+		if (of_parse_phandle_with_args(child, "power-domains",
+					       "#power-domain-cells",
+					       0, &parent_args))
+			continue;
+
+		child_args.np = child;
+		child_args.args_count = 0;
+
+		of_genpd_remove_subdomain(&parent_args, &child_args);
+		of_node_put(parent_args.np);
+	}
 
 	for_each_child_of_node(np, child) {
 		of_genpd_del_provider(child);
@@ -1979,7 +1998,7 @@ static int tegra_pmc_init(struct tegra_pmc *pmc)
 		if (!pmc->wake_cntrl_level_map)
 			return -ENOMEM;
 
-		pmc->wake_status = kcalloc(pmc->soc->max_wake_vectors, sizeof(u32), GFP_KERNEL);
+		pmc->wake_status = kzalloc_objs(u32, pmc->soc->max_wake_vectors);
 		if (!pmc->wake_status)
 			return -ENOMEM;
 
@@ -2698,7 +2717,7 @@ tegra_pmc_clk_out_register(struct tegra_pmc *pmc,
 	struct clk_init_data init = {};
 	struct pmc_clk *pmc_clk;
 
-	pmc_clk = devm_kzalloc(pmc->dev, sizeof(*pmc_clk), GFP_KERNEL);
+	pmc_clk = devm_kzalloc_obj(pmc->dev, *pmc_clk);
 	if (!pmc_clk)
 		return ERR_PTR(-ENOMEM);
 
@@ -2756,7 +2775,7 @@ tegra_pmc_clk_gate_register(struct tegra_pmc *pmc, const char *name,
 	struct clk_init_data init = {};
 	struct pmc_clk_gate *gate;
 
-	gate = devm_kzalloc(pmc->dev, sizeof(*gate), GFP_KERNEL);
+	gate = devm_kzalloc_obj(pmc->dev, *gate);
 	if (!gate)
 		return ERR_PTR(-ENOMEM);
 
@@ -2789,12 +2808,12 @@ static void tegra_pmc_clock_register(struct tegra_pmc *pmc,
 	if (!num_clks)
 		return;
 
-	clk_data = devm_kmalloc(pmc->dev, sizeof(*clk_data), GFP_KERNEL);
+	clk_data = devm_kmalloc_obj(pmc->dev, *clk_data);
 	if (!clk_data)
 		return;
 
-	clk_data->clks = devm_kcalloc(pmc->dev, TEGRA_PMC_CLK_MAX,
-				      sizeof(*clk_data->clks), GFP_KERNEL);
+	clk_data->clks = devm_kzalloc_objs(pmc->dev, *clk_data->clks,
+					   TEGRA_PMC_CLK_MAX);
 	if (!clk_data->clks)
 		return;
 
@@ -3009,7 +3028,7 @@ static int tegra_pmc_probe(struct platform_device *pdev)
 		return -ENODEV;
 #endif
 
-	pmc = devm_kzalloc(&pdev->dev, sizeof(*pmc), GFP_KERNEL);
+	pmc = devm_kzalloc_obj(&pdev->dev, *pmc);
 	if (!pmc)
 		return -ENOMEM;
 

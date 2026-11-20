@@ -77,8 +77,7 @@ static int sgi_w1_probe(struct platform_device *pdev)
 	struct sgi_w1_device *sdev;
 	struct sgi_w1_platform_data *pdata;
 
-	sdev = devm_kzalloc(&pdev->dev, sizeof(struct sgi_w1_device),
-			    GFP_KERNEL);
+	sdev = devm_kzalloc_obj(&pdev->dev, struct sgi_w1_device);
 	if (!sdev)
 		return -ENOMEM;
 
@@ -89,6 +88,9 @@ static int sgi_w1_probe(struct platform_device *pdev)
 	sdev->bus_master.data = sdev;
 	sdev->bus_master.reset_bus = sgi_w1_reset_bus;
 	sdev->bus_master.touch_bit = sgi_w1_touch_bit;
+
+	/* The slaves are soldered on; one search finds them all. */
+	sdev->bus_master.search_count = 1;
 
 	pdata = dev_get_platdata(&pdev->dev);
 	if (pdata) {

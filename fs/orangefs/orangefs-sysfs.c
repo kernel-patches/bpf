@@ -270,6 +270,21 @@ out:
 	return rc;
 }
 
+/* The timeouts are multiplied by HZ as int. */
+static int sysfs_timeout_secs_store(const char *buf, int *timeout_secs)
+{
+	int val;
+	int rc;
+
+	rc = kstrtoint(buf, 0, &val);
+	if (rc)
+		return rc;
+	if (val < 0 || val > INT_MAX / HZ)
+		return -EINVAL;
+	*timeout_secs = val;
+	return 0;
+}
+
 static ssize_t sysfs_int_store(struct kobject *kobj,
     struct orangefs_attribute *attr, const char *buf, size_t count)
 {
@@ -280,10 +295,10 @@ static ssize_t sysfs_int_store(struct kobject *kobj,
 		     attr->attr.name, buf);
 
 	if (!strcmp(attr->attr.name, "op_timeout_secs")) {
-		rc = kstrtoint(buf, 0, &op_timeout_secs);
+		rc = sysfs_timeout_secs_store(buf, &op_timeout_secs);
 		goto out;
 	} else if (!strcmp(attr->attr.name, "slot_timeout_secs")) {
-		rc = kstrtoint(buf, 0, &slot_timeout_secs);
+		rc = sysfs_timeout_secs_store(buf, &slot_timeout_secs);
 		goto out;
 	} else if (!strcmp(attr->attr.name, "cache_timeout_msecs")) {
 		rc = kstrtoint(buf, 0, &orangefs_cache_timeout_msecs);

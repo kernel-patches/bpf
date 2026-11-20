@@ -122,7 +122,7 @@ static int pca9570_probe(struct i2c_client *client)
 	struct pca9570 *gpio;
 	int ret;
 
-	gpio = devm_kzalloc(&client->dev, sizeof(*gpio), GFP_KERNEL);
+	gpio = devm_kzalloc_obj(&client->dev, *gpio);
 	if (!gpio)
 		return -ENOMEM;
 
@@ -171,7 +171,7 @@ static const struct i2c_device_id pca9570_id_table[] = {
 MODULE_DEVICE_TABLE(i2c, pca9570_id_table);
 
 static const struct of_device_id pca9570_of_match_table[] = {
-	{ .compatible = "dlg,slg7xl45106", .data = &slg7xl45106_gpio},
+	{ .compatible = "dlg,slg7xl45106", .data = &slg7xl45106_gpio },
 	{ .compatible = "nxp,pca9570", .data = &pca9570_gpio },
 	{ .compatible = "nxp,pca9571", .data = &pca9571_gpio },
 	{ /* sentinel */ }

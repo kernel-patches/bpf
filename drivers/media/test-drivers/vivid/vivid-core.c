@@ -1820,6 +1820,8 @@ static int vivid_create_instance(struct platform_device *pdev, int inst)
 		return -ENOMEM;
 
 	dev->inst = inst;
+	INIT_WORK(&dev->update_hdmi_ctrl_work, update_hdmi_ctrls_work_handler);
+	INIT_WORK(&dev->update_svid_ctrl_work, update_svid_ctrls_work_handler);
 
 #ifdef CONFIG_MEDIA_CONTROLLER
 	dev->v4l2_dev.mdev = &dev->mdev;
@@ -1913,8 +1915,6 @@ static int vivid_create_instance(struct platform_device *pdev, int inst)
 	dev->edid_max_blocks = dev->edid_blocks = 2;
 	memcpy(dev->edid, vivid_hdmi_edid, sizeof(vivid_hdmi_edid));
 	dev->radio_rds_init_time = ktime_get();
-	INIT_WORK(&dev->update_hdmi_ctrl_work, update_hdmi_ctrls_work_handler);
-	INIT_WORK(&dev->update_svid_ctrl_work, update_svid_ctrls_work_handler);
 	for (int j = 0, k = 0; j < dev->num_inputs; ++j)
 		if (dev->input_type[j] == HDMI)
 			dev->hdmi_index_to_input_index[k++] = j;

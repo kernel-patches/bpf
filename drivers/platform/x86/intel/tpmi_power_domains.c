@@ -220,6 +220,24 @@ static int tpmi_cpu_online(unsigned int cpu)
 	return 0;
 }
 
+static int tpmi_cpu_offline(unsigned int cpu)
+{
+	struct tpmi_cpu_info *info = &per_cpu(tpmi_cpu_info, cpu);
+	int index;
+
+	if (hlist_unhashed(&info->hnode) || !tpmi_domain_is_valid(info))
+		return 0;
+
+	index = info->pkg_id * MAX_POWER_DOMAINS + info->punit_domain_id;
+
+	guard(mutex)(&tpmi_lock);
+
+	cpumask_clear_cpu(cpu, &tpmi_power_domain_mask[index]);
+	hash_del(&info->hnode);
+
+	return 0;
+}
+
 static int __init tpmi_init(void)
 {
 	const struct x86_cpu_id *id;
@@ -240,8 +258,8 @@ static int __init tpmi_init(void)
 	if (!tpmi_power_domain_mask)
 		return -ENOMEM;
 
-	domain_die_map = kcalloc(size_mul(topology_max_packages(), MAX_POWER_DOMAINS),
-				 sizeof(*domain_die_map), GFP_KERNEL);
+	domain_die_map = kzalloc_objs(*domain_die_map,
+				      size_mul(topology_max_packages(), MAX_POWER_DOMAINS));
 	if (!domain_die_map) {
 		ret = -ENOMEM;
 		goto free_domain_mask;
@@ -249,7 +267,7 @@ static int __init tpmi_init(void)
 
 	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN,
 				"platform/x86/tpmi_power_domains:online",
-				tpmi_cpu_online, NULL);
+				tpmi_cpu_online, tpmi_cpu_offline);
 	if (ret < 0)
 		goto free_domain_map;
 

@@ -4477,18 +4477,35 @@ try_rdf:
 void
 lpfc_cancel_retry_delay_tmo(struct lpfc_vport *vport, struct lpfc_nodelist *nlp)
 {
-	struct lpfc_work_evt *evtp;
+	struct lpfc_hba *phba = vport->phba;
+	struct lpfc_work_evt *evtp = &nlp->els_retry_evt;
+	struct lpfc_nodelist *arg_ndlp = NULL;
+	unsigned long flags;
 
 	if (!test_and_clear_bit(NLP_DELAY_TMO, &nlp->nlp_flag))
 		return;
 	timer_delete_sync(&nlp->nlp_delayfunc);
 	nlp->nlp_last_elscmd = 0;
-	if (!list_empty(&nlp->els_retry_evt.evt_listp)) {
-		list_del_init(&nlp->els_retry_evt.evt_listp);
-		/* Decrement nlp reference count held for the delayed retry */
-		evtp = &nlp->els_retry_evt;
-		lpfc_nlp_put((struct lpfc_nodelist *)evtp->evt_arg1);
+
+	/*
+	 * If retry event is queued, remove it under lock and consume
+	 * its payload to prevent double-put. The event holds a reference
+	 * to the nodelist that must be released exactly once.
+	 */
+	spin_lock_irqsave(&phba->hbalock, flags);
+	if (!list_empty(&evtp->evt_listp)) {
+		list_del_init(&evtp->evt_listp);
+		/* Take local copy and clear to prevent reuse */
+		arg_ndlp = (struct lpfc_nodelist *)evtp->evt_arg1;
+		evtp->evt_arg1 = NULL;
+		smp_wmb(); /* Ensure NULL visible before unlock */
 	}
+	spin_unlock_irqrestore(&phba->hbalock, flags);
+
+	/* Drop the event-held reference outside the lock */
+	if (arg_ndlp)
+		lpfc_nlp_put(arg_ndlp);
+
 	if (test_and_clear_bit(NLP_NPR_2B_DISC, &nlp->nlp_flag)) {
 		if (vport->num_disc_nodes) {
 			if (vport->port_state < LPFC_VPORT_READY) {

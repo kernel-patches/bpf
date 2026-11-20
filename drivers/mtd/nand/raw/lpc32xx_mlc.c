@@ -414,8 +414,7 @@ static int lpc32xx_xmit_dma(struct mtd_info *mtd, void *mem, int len,
 	}
 
 	init_completion(&host->comp_dma);
-	desc->callback = lpc32xx_dma_complete_func;
-	desc->callback_param = &host->comp_dma;
+	dmaengine_desc_set_callback(desc, lpc32xx_dma_complete_func, NULL, &host->comp_dma);
 
 	dmaengine_submit(desc);
 	dma_async_issue_pending(host->dma_chan);
@@ -613,7 +612,7 @@ static struct lpc32xx_nand_cfg_mlc *lpc32xx_parse_dt(struct device *dev)
 	struct lpc32xx_nand_cfg_mlc *ncfg;
 	struct device_node *np = dev->of_node;
 
-	ncfg = devm_kzalloc(dev, sizeof(*ncfg), GFP_KERNEL);
+	ncfg = devm_kzalloc_obj(dev, *ncfg);
 	if (!ncfg)
 		return NULL;
 
@@ -685,7 +684,7 @@ static int lpc32xx_nand_probe(struct platform_device *pdev)
 	int res;
 
 	/* Allocate memory for the device structure (and zero it) */
-	host = devm_kzalloc(&pdev->dev, sizeof(*host), GFP_KERNEL);
+	host = devm_kzalloc_obj(&pdev->dev, *host);
 	if (!host)
 		return -ENOMEM;
 

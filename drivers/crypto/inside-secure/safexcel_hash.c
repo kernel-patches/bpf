@@ -2649,17 +2649,24 @@ static int safexcel_hmac_sha3_cra_init(struct crypto_tfm *tfm, const char *alg)
 
 	/* Allocate precalc basic digest implementation */
 	ctx->shpre = crypto_alloc_shash(alg, 0, CRYPTO_ALG_NEED_FALLBACK);
-	if (IS_ERR(ctx->shpre))
-		return PTR_ERR(ctx->shpre);
+	if (IS_ERR(ctx->shpre)) {
+		ret = PTR_ERR(ctx->shpre);
+		goto err_sha3;
+	}
 
 	ctx->shdesc = kmalloc(sizeof(*ctx->shdesc) +
 			      crypto_shash_descsize(ctx->shpre), GFP_KERNEL);
 	if (!ctx->shdesc) {
 		crypto_free_shash(ctx->shpre);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_sha3;
 	}
 	ctx->shdesc->tfm = ctx->shpre;
 	return 0;
+
+err_sha3:
+	safexcel_sha3_cra_exit(tfm);
+	return ret;
 }
 
 static void safexcel_hmac_sha3_cra_exit(struct crypto_tfm *tfm)

@@ -616,7 +616,7 @@ static void es8316_enable_micbias_for_mic_gnd_short_detect(
 	snd_soc_dapm_sync_unlocked(dapm);
 	snd_soc_dapm_mutex_unlock(dapm);
 
-	msleep(20);
+	msleep(100);
 }
 
 static void es8316_disable_micbias_for_mic_gnd_short_detect(
@@ -866,8 +866,7 @@ static int es8316_i2c_probe(struct i2c_client *i2c_client)
 	struct es8316_priv *es8316;
 	int ret;
 
-	es8316 = devm_kzalloc(&i2c_client->dev, sizeof(struct es8316_priv),
-			      GFP_KERNEL);
+	es8316 = devm_kzalloc_obj(&i2c_client->dev, struct es8316_priv);
 	if (es8316 == NULL)
 		return -ENOMEM;
 

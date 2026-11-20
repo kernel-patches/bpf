@@ -512,7 +512,7 @@ static struct i2c_adapter *dw_hdmi_i2c_adapter(struct dw_hdmi *hdmi)
 	struct dw_hdmi_i2c *i2c;
 	int ret;
 
-	i2c = devm_kzalloc(hdmi->dev, sizeof(*i2c), GFP_KERNEL);
+	i2c = devm_kzalloc_obj(hdmi->dev, *i2c);
 	if (!i2c)
 		return ERR_PTR(-ENOMEM);
 
@@ -2569,7 +2569,7 @@ static const struct drm_connector_funcs dw_hdmi_connector_funcs = {
 	.detect = dw_hdmi_connector_detect,
 	.destroy = drm_connector_cleanup,
 	.force = dw_hdmi_connector_force,
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -2605,7 +2605,17 @@ static int dw_hdmi_connector_create(struct dw_hdmi *hdmi)
 	 * drm_connector_attach_max_bpc_property() requires the
 	 * connector to have a state.
 	 */
-	drm_atomic_helper_connector_reset(connector);
+	if (!connector->state) {
+		struct drm_connector_state *conn_state;
+
+		conn_state = drm_atomic_helper_connector_create_state(connector);
+		if (IS_ERR(conn_state)) {
+			drm_connector_cleanup(connector);
+			return PTR_ERR(conn_state);
+		}
+
+		connector->state = conn_state;
+	}
 
 	drm_connector_attach_max_bpc_property(connector, 8, 16);
 
@@ -2670,8 +2680,7 @@ static u32 *dw_hdmi_bridge_atomic_get_output_bus_fmts(struct drm_bridge *bridge,
 
 	*num_output_fmts = 0;
 
-	output_fmts = kcalloc(MAX_OUTPUT_SEL_FORMATS, sizeof(*output_fmts),
-			      GFP_KERNEL);
+	output_fmts = kzalloc_objs(*output_fmts, MAX_OUTPUT_SEL_FORMATS);
 	if (!output_fmts)
 		return NULL;
 
@@ -2794,8 +2803,7 @@ static u32 *dw_hdmi_bridge_atomic_get_input_bus_fmts(struct drm_bridge *bridge,
 
 	*num_input_fmts = 0;
 
-	input_fmts = kcalloc(MAX_INPUT_SEL_FORMATS, sizeof(*input_fmts),
-			     GFP_KERNEL);
+	input_fmts = kzalloc_objs(*input_fmts, MAX_INPUT_SEL_FORMATS);
 	if (!input_fmts)
 		return NULL;
 

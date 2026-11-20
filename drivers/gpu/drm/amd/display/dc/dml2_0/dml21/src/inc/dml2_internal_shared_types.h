@@ -122,6 +122,7 @@ struct dml2_utm_soc_bb {
 	double hostvm_inefficiency_fraction;
 	unsigned int max_lsdma_bandwidth_kbps;
 	unsigned int dchub_refclk_mhz;
+	unsigned int dprefclk_mhz;
 	unsigned int max_outstanding_reqs;
 	unsigned long return_bus_width_bytes;
 	double phy_downspread_percent;
@@ -643,7 +644,10 @@ struct dml2_optimization_worksheet {
 	} dcfclk_vmin;
 
 	struct {
-		bool is_attempted;
+		unsigned int index;
+
+		enum dml2_pstate_type pstate_type_list[dml2_pstate_type_count];
+		unsigned int num_pstate_types;
 	} fclk_ppt_temp_read_pstate;
 
 	/*
@@ -1216,7 +1220,7 @@ struct dml2_pmo_instance {
 	 * return - stage optimizer count
 	 */
 	int (*get_ordered_mandatory_stage_optimizers)(struct dml2_pmo_instance *pmo,
-			struct dml2_pmo_stage_optimizer **optimers);
+			struct dml2_pmo_stage_optimizer **stages);
 	/*
 	 * obtain a list of option stage optimizers ordered by priority, Caller must perform stage optimization in the
 	 * same order. Caller must complete stage optimization for all mandatory stage optimizers before performing
@@ -1224,7 +1228,7 @@ struct dml2_pmo_instance {
 	 * return - stage optimizer count
 	 */
 	int (*get_ordered_optional_stage_optimizers)(struct dml2_pmo_instance *pmo,
-			struct dml2_pmo_stage_optimizer **optimers);
+			struct dml2_pmo_stage_optimizer **stages);
 	/*
 	 * initialize an optimization worksheet based on the display config passed in.
 	 */

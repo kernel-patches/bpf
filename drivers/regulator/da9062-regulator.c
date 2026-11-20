@@ -942,8 +942,8 @@ static int da9062_regulator_probe(struct platform_device *pdev)
 	}
 
 	/* Allocate memory required by usable regulators */
-	regulators = devm_kzalloc(&pdev->dev, struct_size(regulators, regulator,
-				  max_regulators), GFP_KERNEL);
+	regulators = devm_kzalloc_flex(&pdev->dev, *regulators, regulator,
+				       max_regulators);
 	if (!regulators)
 		return -ENOMEM;
 
@@ -1036,18 +1036,7 @@ static struct platform_driver da9062_regulator_driver = {
 	},
 	.probe = da9062_regulator_probe,
 };
-
-static int __init da9062_regulator_init(void)
-{
-	return platform_driver_register(&da9062_regulator_driver);
-}
-subsys_initcall(da9062_regulator_init);
-
-static void __exit da9062_regulator_cleanup(void)
-{
-	platform_driver_unregister(&da9062_regulator_driver);
-}
-module_exit(da9062_regulator_cleanup);
+subsys_platform_driver(da9062_regulator_driver);
 
 /* Module information */
 MODULE_AUTHOR("S Twiss <stwiss.opensource@diasemi.com>");

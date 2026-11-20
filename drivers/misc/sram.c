@@ -13,6 +13,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/mfd/syscon.h>
@@ -267,9 +268,8 @@ static int sram_reserve_regions(struct sram_dev *sram, struct resource *res)
 	list_sort(NULL, &reserve_list, sram_reserve_cmp);
 
 	if (exports) {
-		sram->partition = devm_kcalloc(sram->dev,
-				       exports, sizeof(*sram->partition),
-				       GFP_KERNEL);
+		sram->partition = devm_kzalloc_objs(sram->dev, *sram->partition,
+						    exports);
 		if (!sram->partition) {
 			ret = -ENOMEM;
 			goto err_chunks;
@@ -380,10 +380,12 @@ static int sram_probe(struct platform_device *pdev)
 	int ret;
 	struct resource *res;
 	struct clk *clk;
+	bool keep_active;
+	unsigned int i;
 
 	config = of_device_get_match_data(&pdev->dev);
 
-	sram = devm_kzalloc(&pdev->dev, sizeof(*sram), GFP_KERNEL);
+	sram = devm_kzalloc_obj(&pdev->dev, *sram);
 	if (!sram)
 		return -ENOMEM;
 
@@ -424,6 +426,24 @@ static int sram_probe(struct platform_device *pdev)
 		if (ret)
 			goto err_free_partitions;
 	}
+
+	/*
+	 * Sysfs users need retained contents; init-only platforms have no
+	 * runtime resume support. Keep both powered while the driver is bound.
+	 */
+	keep_active = config && config->init;
+	for (i = 0; i < sram->partitions; i++)
+		keep_active |= sram->partition[i].battr.size != 0;
+
+	if (keep_active) {
+		ret = devm_pm_runtime_get_noresume(sram->dev);
+		if (ret)
+			goto err_free_partitions;
+	}
+
+	ret = devm_pm_runtime_set_active_enabled(&pdev->dev);
+	if (ret)
+		goto err_free_partitions;
 
 	if (sram->pool)
 		dev_dbg(sram->dev, "SRAM pool: %zu KiB @ 0x%p\n",

@@ -486,7 +486,7 @@ static int lp8788_buck_probe(struct platform_device *pdev)
 	if (id >= LP8788_NUM_BUCKS)
 		return -EINVAL;
 
-	buck = devm_kzalloc(&pdev->dev, sizeof(struct lp8788_buck), GFP_KERNEL);
+	buck = devm_kzalloc_obj(&pdev->dev, struct lp8788_buck);
 	if (!buck)
 		return -ENOMEM;
 
@@ -522,18 +522,7 @@ static struct platform_driver lp8788_buck_driver = {
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 };
-
-static int __init lp8788_buck_init(void)
-{
-	return platform_driver_register(&lp8788_buck_driver);
-}
-subsys_initcall(lp8788_buck_init);
-
-static void __exit lp8788_buck_exit(void)
-{
-	platform_driver_unregister(&lp8788_buck_driver);
-}
-module_exit(lp8788_buck_exit);
+subsys_platform_driver(lp8788_buck_driver);
 
 MODULE_DESCRIPTION("TI LP8788 BUCK Driver");
 MODULE_AUTHOR("Milo Kim");

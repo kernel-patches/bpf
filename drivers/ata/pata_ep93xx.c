@@ -727,8 +727,7 @@ static void ep93xx_pata_dma_start(struct ata_queued_cmd *qc)
 		dev_err(qc->ap->dev, "failed to prepare slave for sg dma\n");
 		return;
 	}
-	txd->callback = NULL;
-	txd->callback_param = NULL;
+	dmaengine_desc_set_callback(txd, NULL, NULL, NULL);
 
 	if (dmaengine_submit(txd) < 0) {
 		dev_err(qc->ap->dev, "failed to submit dma transfer\n");
@@ -945,7 +944,7 @@ static int ep93xx_pata_probe(struct platform_device *pdev)
 	if (IS_ERR(ide_base))
 		return PTR_ERR(ide_base);
 
-	drv_data = devm_kzalloc(&pdev->dev, sizeof(*drv_data), GFP_KERNEL);
+	drv_data = devm_kzalloc_obj(&pdev->dev, *drv_data);
 	if (!drv_data)
 		return -ENOMEM;
 

@@ -47,6 +47,7 @@ properties:
               - apm,xgene-mcb
               - apm,xgene-rb
               - apm,xgene-scu
+              - aspeed,ast2600-i3c-global
               - atmel,sama5d2-sfrbu
               - atmel,sama5d3-nfc-io
               - atmel,sama5d3-sfrbu
@@ -120,6 +121,7 @@ properties:
               - rockchip,rk3528-qos
               - rockchip,rk3562-qos
               - rockchip,rk3568-qos
+              - rockchip,rk3572-qos
               - rockchip,rk3576-qos
               - rockchip,rk3588-qos
               - rockchip,rv1126-qos
@@ -131,6 +133,7 @@ properties:
               - ti,am625-dss-oldi-io-ctrl
               - ti,am62p-cpsw-mac-efuse
               - ti,am654-dss-oldi-io-ctrl
+              - ti,am654-gtc
               - ti,j784s4-acspcie-proxy-ctrl
               - ti,j784s4-pcie-ctrl
               - ti,keystone-pllctrl

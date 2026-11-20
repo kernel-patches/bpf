@@ -193,7 +193,7 @@ static void dapm_pop_dbg(struct device *dev, const char *fmt, ...)
 
 struct snd_soc_dapm_context *snd_soc_dapm_alloc(struct device *dev)
 {
-	return devm_kzalloc(dev, sizeof(struct snd_soc_dapm_context), GFP_KERNEL);
+	return devm_kzalloc_obj(dev, struct snd_soc_dapm_context);
 }
 
 struct device *snd_soc_dapm_to_dev(struct snd_soc_dapm_context *dapm)
@@ -2890,20 +2890,18 @@ void snd_soc_dapm_free_widget(struct snd_soc_dapm_widget *w)
 
 	dapm_debugfs_free_widget(w);
 
-	if (w->dapm) {
-		if (w->dapm->card) {
-			for_each_card_dapms(w->dapm->card, d) {
-				if (d->wcache_sink == w)
-					d->wcache_sink = NULL;
-				if (d->wcache_source == w)
-					d->wcache_source = NULL;
-			}
-		} else {
-			if (w->dapm->wcache_sink == w)
-				w->dapm->wcache_sink = NULL;
-			if (w->dapm->wcache_source == w)
-				w->dapm->wcache_source = NULL;
+	if (w->dapm->card) {
+		for_each_card_dapms(w->dapm->card, d) {
+			if (d->wcache_sink == w)
+				d->wcache_sink = NULL;
+			if (d->wcache_source == w)
+				d->wcache_source = NULL;
 		}
+	} else {
+		if (w->dapm->wcache_sink == w)
+			w->dapm->wcache_sink = NULL;
+		if (w->dapm->wcache_source == w)
+			w->dapm->wcache_source = NULL;
 	}
 
 	kfree(w->kcontrols);

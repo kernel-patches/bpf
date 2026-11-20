@@ -243,12 +243,12 @@ static int tc_rfs_init(struct stmmac_priv *priv)
 	for (i = 0; i < STMMAC_RFS_T_MAX; i++)
 		priv->rfs_entries_total += priv->rfs_entries_max[i];
 
-	priv->rfs_entries = devm_kcalloc(priv->device,
-					 priv->rfs_entries_total,
-					 sizeof(*priv->rfs_entries),
-					 GFP_KERNEL);
+	priv->rfs_entries = devm_kzalloc_objs(priv->device, *priv->rfs_entries,
+					      priv->rfs_entries_total);
 	if (!priv->rfs_entries)
 		return -ENOMEM;
+
+	INIT_LIST_HEAD(&priv->vlan_prio);
 
 	dev_info(priv->device, "Enabled RFS Flow TC (entries=%d)\n",
 		 priv->rfs_entries_total);
@@ -264,10 +264,9 @@ static int tc_init(struct stmmac_priv *priv)
 
 	priv->flow_entries_max = dma_cap->l3l4fnum;
 	if (priv->flow_entries_max) {
-		priv->flow_entries = devm_kcalloc(priv->device,
-						  priv->flow_entries_max,
-						  sizeof(*priv->flow_entries),
-						  GFP_KERNEL);
+		priv->flow_entries = devm_kzalloc_objs(priv->device,
+						       *priv->flow_entries,
+						       priv->flow_entries_max);
 		if (!priv->flow_entries)
 			return -ENOMEM;
 
@@ -316,8 +315,8 @@ static int tc_init(struct stmmac_priv *priv)
 
 	/* Reserve one last filter which lets all pass */
 	priv->tc_entries_max = count;
-	priv->tc_entries = devm_kcalloc(priv->device,
-			count, sizeof(*priv->tc_entries), GFP_KERNEL);
+	priv->tc_entries = devm_kzalloc_objs(priv->device, *priv->tc_entries,
+					     count);
 	if (!priv->tc_entries)
 		return -ENOMEM;
 
@@ -685,6 +684,45 @@ static struct stmmac_rfs_entry *tc_find_rfs(struct stmmac_priv *priv,
 
 #define VLAN_PRIO_FULL_MASK (0x07)
 
+static void tc_update_vlan_prio(struct stmmac_priv *priv, u8 prio)
+{
+	u8 prios[MTL_MAX_RX_QUEUES] = {};
+	struct stmmac_rfs_entry *entry;
+	unsigned int queue, i;
+
+	/* Restore platform assignments with the same precedence as setup. */
+	for (queue = 0; queue < priv->plat->rx_queues_to_use; queue++) {
+		if (!priv->plat->rx_queues_cfg[queue].use_prio)
+			continue;
+
+		prios[queue] = priv->plat->rx_queues_cfg[queue].prio;
+		for (i = 0; i < queue; i++)
+			prios[i] &= ~prios[queue];
+	}
+
+	/*
+	 * Flower installs a replacement before destroying the old cookie.
+	 * Preserve the latest assignment while both rules are present.
+	 */
+	list_for_each_entry(entry, &priv->vlan_prio, vlan_node) {
+		/* The RX queue count may have been reduced with ethtool. */
+		if (entry->tc >= priv->plat->rx_queues_to_use)
+			continue;
+
+		for (queue = 0; queue < priv->plat->rx_queues_to_use; queue++)
+			prios[queue] &= ~entry->vlan_prio;
+		prios[entry->tc] |= entry->vlan_prio;
+	}
+
+	/* Install the new assignment before clearing the previous queue. */
+	for (queue = 0; queue < priv->plat->rx_queues_to_use; queue++)
+		if (prios[queue] & prio)
+			stmmac_rx_queue_prio(priv, priv->hw, prios[queue], queue);
+	for (queue = 0; queue < priv->plat->rx_queues_to_use; queue++)
+		if (!(prios[queue] & prio))
+			stmmac_rx_queue_prio(priv, priv->hw, prios[queue], queue);
+}
+
 static int tc_add_vlan_flow(struct stmmac_priv *priv,
 			    struct flow_cls_offload *cls)
 {
@@ -694,13 +732,16 @@ static int tc_add_vlan_flow(struct stmmac_priv *priv,
 	int tc = tc_classid_to_hwtc(priv->dev, cls->classid);
 	struct flow_match_vlan match;
 
+	if (entry && entry->in_use && entry->type != STMMAC_RFS_T_VLAN)
+		return -EINVAL;
+
 	if (!entry) {
 		entry = tc_find_rfs(priv, cls, true);
 		if (!entry)
 			return -ENOENT;
 	}
 
-	if (priv->rfs_entries_cnt[STMMAC_RFS_T_VLAN] >=
+	if (!entry->in_use && priv->rfs_entries_cnt[STMMAC_RFS_T_VLAN] >=
 	    priv->rfs_entries_max[STMMAC_RFS_T_VLAN])
 		return -ENOENT;
 
@@ -708,7 +749,7 @@ static int tc_add_vlan_flow(struct stmmac_priv *priv,
 	if (!dissector_uses_key(dissector, FLOW_DISSECTOR_KEY_VLAN))
 		return -EINVAL;
 
-	if (tc < 0) {
+	if (tc < 0 || tc >= priv->plat->rx_queues_to_use) {
 		netdev_err(priv->dev, "Invalid traffic class\n");
 		return -EINVAL;
 	}
@@ -724,13 +765,18 @@ static int tc_add_vlan_flow(struct stmmac_priv *priv,
 		}
 
 		prio = BIT(match.key->vlan_priority);
-		stmmac_rx_queue_prio(priv, priv->hw, prio, tc);
+		if (entry->in_use)
+			list_del(&entry->vlan_node);
+		else
+			priv->rfs_entries_cnt[STMMAC_RFS_T_VLAN]++;
 
 		entry->in_use = true;
 		entry->cookie = cls->cookie;
 		entry->tc = tc;
 		entry->type = STMMAC_RFS_T_VLAN;
-		priv->rfs_entries_cnt[STMMAC_RFS_T_VLAN]++;
+		entry->vlan_prio = prio;
+		list_add_tail(&entry->vlan_node, &priv->vlan_prio);
+		tc_update_vlan_prio(priv, entry->vlan_prio);
 	}
 
 	return 0;
@@ -744,14 +790,14 @@ static int tc_del_vlan_flow(struct stmmac_priv *priv,
 	if (!entry || !entry->in_use || entry->type != STMMAC_RFS_T_VLAN)
 		return -ENOENT;
 
-	stmmac_rx_queue_prio(priv, priv->hw, 0, entry->tc);
-
+	list_del(&entry->vlan_node);
 	entry->in_use = false;
 	entry->cookie = 0;
 	entry->tc = 0;
 	entry->type = 0;
 
 	priv->rfs_entries_cnt[STMMAC_RFS_T_VLAN]--;
+	tc_update_vlan_prio(priv, entry->vlan_prio);
 
 	return 0;
 }
@@ -784,6 +830,8 @@ static int tc_add_ethtype_flow(struct stmmac_priv *priv,
 
 	if (match.mask->n_proto) {
 		u16 etype = ntohs(match.key->n_proto);
+		enum stmmac_rfs_type type;
+		u8 packet;
 
 		if (match.mask->n_proto != ETHER_TYPE_FULL_MASK) {
 			netdev_err(priv->dev, "Only full mask is supported for EthType filter");
@@ -791,32 +839,30 @@ static int tc_add_ethtype_flow(struct stmmac_priv *priv,
 		}
 		switch (etype) {
 		case ETH_P_LLDP:
-			if (priv->rfs_entries_cnt[STMMAC_RFS_T_LLDP] >=
-			    priv->rfs_entries_max[STMMAC_RFS_T_LLDP])
-				return -ENOENT;
-
-			entry->type = STMMAC_RFS_T_LLDP;
-			priv->rfs_entries_cnt[STMMAC_RFS_T_LLDP]++;
-
-			stmmac_rx_queue_routing(priv, priv->hw,
-						PACKET_DCBCPQ, tc);
+			type = STMMAC_RFS_T_LLDP;
+			packet = PACKET_DCBCPQ;
 			break;
 		case ETH_P_1588:
-			if (priv->rfs_entries_cnt[STMMAC_RFS_T_1588] >=
-			    priv->rfs_entries_max[STMMAC_RFS_T_1588])
-				return -ENOENT;
-
-			entry->type = STMMAC_RFS_T_1588;
-			priv->rfs_entries_cnt[STMMAC_RFS_T_1588]++;
-
-			stmmac_rx_queue_routing(priv, priv->hw,
-						PACKET_PTPQ, tc);
+			type = STMMAC_RFS_T_1588;
+			packet = PACKET_PTPQ;
 			break;
 		default:
 			netdev_err(priv->dev, "EthType(0x%x) is not supported", etype);
 			return -EINVAL;
 		}
 
+		/* Replaying a cookie must preserve its steering type. */
+		if (entry->in_use) {
+			if (entry->type != type)
+				return -EINVAL;
+		} else {
+			if (priv->rfs_entries_cnt[type] >= priv->rfs_entries_max[type])
+				return -ENOENT;
+			priv->rfs_entries_cnt[type]++;
+		}
+
+		stmmac_rx_queue_routing(priv, priv->hw, packet, tc);
+		entry->type = type;
 		entry->in_use = true;
 		entry->cookie = cls->cookie;
 		entry->tc = tc;
@@ -966,11 +1012,12 @@ static void tc_taprio_map_maxsdu_txq(struct stmmac_priv *priv,
 static int tc_taprio_configure(struct stmmac_priv *priv,
 			       struct tc_taprio_qopt_offload *qopt)
 {
-	u32 size, wid = priv->dma_cap.estwid, dep = priv->dma_cap.estdep;
+	u32 wid = priv->dma_cap.estwid, dep = priv->dma_cap.estdep;
 	struct netlink_ext_ack *extack = qopt->mqprio.extack;
 	struct timespec64 time, current_time, qopt_time;
 	ktime_t current_time_ns;
 	int err, i, ret = 0;
+	u32 *gcl = NULL;
 	u64 ctr;
 
 	if (qopt->base_time < 0)
@@ -1013,44 +1060,46 @@ static int tc_taprio_configure(struct stmmac_priv *priv,
 		return -EOPNOTSUPP;
 	}
 
+	mutex_lock(&priv->est_lock);
+
 	if (qopt->cmd == TAPRIO_CMD_DESTROY)
 		goto disable;
 
-	if (qopt->num_entries > dep)
-		return -EINVAL;
-	if (!qopt->cycle_time)
-		return -ERANGE;
-	if (qopt->cycle_time_extension >= BIT(wid + 7))
-		return -ERANGE;
-
-	if (!priv->est) {
-		priv->est = devm_kzalloc(priv->device, sizeof(*priv->est),
-					 GFP_KERNEL);
-		if (!priv->est)
-			return -ENOMEM;
-
-		mutex_init(&priv->est_lock);
-	} else {
-		mutex_lock(&priv->est_lock);
-		memset(priv->est, 0, sizeof(*priv->est));
-		mutex_unlock(&priv->est_lock);
+	if (qopt->num_entries > dep) {
+		ret = -EINVAL;
+		goto error_unlock;
 	}
 
-	size = qopt->num_entries;
+	if (!qopt->cycle_time ||
+	    qopt->cycle_time > (u64)U32_MAX * NSEC_PER_SEC) {
+		ret = -ERANGE;
+		goto error_unlock;
+	}
 
-	mutex_lock(&priv->est_lock);
-	priv->est->gcl_size = size;
-	priv->est->enable = qopt->cmd == TAPRIO_CMD_REPLACE;
-	mutex_unlock(&priv->est_lock);
+	if (qopt->cycle_time_extension >= BIT(wid + 7)) {
+		ret = -ERANGE;
+		goto error_unlock;
+	}
 
-	for (i = 0; i < size; i++) {
+	gcl = kzalloc_objs(*gcl, qopt->num_entries);
+	if (!gcl) {
+		ret = -ENOMEM;
+		goto error_unlock;
+	}
+
+	for (i = 0; i < qopt->num_entries; i++) {
 		s64 delta_ns = qopt->entries[i].interval;
 		u32 gates = qopt->entries[i].gate_mask;
 
-		if (delta_ns > GENMASK(wid - 1, 0))
-			return -ERANGE;
-		if (gates > GENMASK(31 - wid, 0))
-			return -ERANGE;
+		if (delta_ns > GENMASK(wid - 1, 0)) {
+			ret = -ERANGE;
+			goto error_unlock;
+		}
+
+		if (gates > GENMASK(31 - wid, 0)) {
+			ret = -ERANGE;
+			goto error_unlock;
+		}
 
 		switch (qopt->entries[i].command) {
 		case TC_TAPRIO_CMD_SET_GATES:
@@ -1062,13 +1111,25 @@ static int tc_taprio_configure(struct stmmac_priv *priv,
 			gates &= ~BIT(0);
 			break;
 		default:
-			return -EOPNOTSUPP;
+			ret = -EOPNOTSUPP;
+			goto error_unlock;
 		}
 
-		priv->est->gcl[i] = delta_ns | (gates << wid);
+		gcl[i] = delta_ns | (gates << wid);
 	}
 
-	mutex_lock(&priv->est_lock);
+	if (!priv->est) {
+		priv->est = devm_kzalloc_obj(priv->device, *priv->est);
+		if (!priv->est) {
+			ret = -ENOMEM;
+			goto error_unlock;
+		}
+	} else {
+		memset(priv->est, 0, sizeof(*priv->est));
+	}
+	memcpy(priv->est->gcl, gcl, sizeof(*gcl) * qopt->num_entries);
+	priv->est->gcl_size = qopt->num_entries;
+
 	/* Adjust for real system time */
 	priv->ptp_clock_ops.gettimex64(&priv->ptp_clock_ops, &current_time,
 				       NULL);
@@ -1092,8 +1153,7 @@ static int tc_taprio_configure(struct stmmac_priv *priv,
 	tc_taprio_map_maxsdu_txq(priv, qopt);
 
 	ret = stmmac_est_configure(priv, priv, priv->est,
-				   priv->plat->clk_ptp_rate);
-	mutex_unlock(&priv->est_lock);
+				   priv->plat->clk_ptp_rate, true);
 	if (ret) {
 		netdev_err(priv->dev, "failed to configure EST\n");
 		goto disable;
@@ -1104,24 +1164,31 @@ static int tc_taprio_configure(struct stmmac_priv *priv,
 	if (ret)
 		goto disable;
 
+	priv->est->pclass = qopt->mqprio.preemptible_tcs;
+	priv->est->enable = true;
+
+	mutex_unlock(&priv->est_lock);
+	kfree(gcl);
+
 	return 0;
 
 disable:
 	if (priv->est) {
-		mutex_lock(&priv->est_lock);
 		priv->est->enable = false;
 		stmmac_est_configure(priv, priv, priv->est,
-				     priv->plat->clk_ptp_rate);
+				     priv->plat->clk_ptp_rate, false);
 		/* Reset taprio status */
 		for (i = 0; i < priv->plat->tx_queues_to_use; i++) {
 			priv->xstats.max_sdu_txq_drop[i] = 0;
 			priv->xstats.mtl_est_txq_hlbf[i] = 0;
 			priv->xstats.mtl_est_txq_hlbs[i] = 0;
 		}
-		mutex_unlock(&priv->est_lock);
 	}
 
 	err = stmmac_fpe_map_preemption_class(priv, priv->dev, extack, 0);
+error_unlock:
+	mutex_unlock(&priv->est_lock);
+	kfree(gcl);
 
 	return qopt->cmd == TAPRIO_CMD_DESTROY ? err : ret;
 }

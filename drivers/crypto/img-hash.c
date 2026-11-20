@@ -242,8 +242,7 @@ static int img_hash_xmit_dma(struct img_hash_dev *hdev, struct scatterlist *sg)
 		dma_unmap_sg(hdev->dev, sg, 1, DMA_TO_DEVICE);
 		return -EINVAL;
 	}
-	desc->callback = img_hash_dma_callback;
-	desc->callback_param = hdev;
+	dmaengine_desc_set_callback(desc, img_hash_dma_callback, NULL, hdev);
 	dmaengine_submit(desc);
 	dma_async_issue_pending(hdev->dma_lch);
 
@@ -926,7 +925,7 @@ static int img_hash_probe(struct platform_device *pdev)
 	int	irq;
 	int err;
 
-	hdev = devm_kzalloc(dev, sizeof(*hdev), GFP_KERNEL);
+	hdev = devm_kzalloc_obj(dev, *hdev);
 	if (hdev == NULL)
 		return -ENOMEM;
 

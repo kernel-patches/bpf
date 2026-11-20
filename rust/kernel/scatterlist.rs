@@ -318,6 +318,7 @@ pub struct Owned<P> {
     // `struct sg_table` and finally free the backing pages.
     #[pin]
     dma: Devres<DmaMappedSgt>,
+    #[pin]
     sgt: RawSGTable,
     _pages: P,
 }
@@ -383,6 +384,7 @@ where
                 // - It is guaranteed that the object returned by `DmaMappedSgt::new` won't out-live
                 //   `sgt`.
                 // - `sgt` is never DMA unmapped manually.
+                // - `sgt` is structurally pinned and therefore cannot move.
                 Devres::new(dev, unsafe { DmaMappedSgt::new(sgt, dev, dir) })
             },
             _pages: pages,

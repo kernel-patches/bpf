@@ -69,7 +69,7 @@
 #include <asm/assembler.h>
 
 	.text
-	.arch		armv8-a+crypto
+	.arch_extension	crypto
 
 	init_crc	.req	w0
 	buf		.req	x1

@@ -33,7 +33,7 @@
 
 #define OVERFLOW_STACK_SIZE	SZ_4K
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 struct task_struct;
 

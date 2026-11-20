@@ -120,7 +120,7 @@ static const char * const ref3_parents[] = {
 };
 
 static const char * const ref4_parents[] = {
-	"ck_hsi", "ck_hse", "ck_csi"
+	"ck_hsi", "ck_hse", "ck_csi", "i2s_ckin"
 };
 
 static const char * const cpu_src[] = {
@@ -490,7 +490,7 @@ static struct clk_hw *_get_stm32_mux(struct device *dev, void __iomem *base,
 	struct clk_hw *mux_hw;
 
 	if (cfg->mmux) {
-		mmux = devm_kzalloc(dev, sizeof(*mmux), GFP_KERNEL);
+		mmux = devm_kzalloc_obj(dev, *mmux);
 		if (!mmux)
 			return ERR_PTR(-ENOMEM);
 
@@ -505,7 +505,7 @@ static struct clk_hw *_get_stm32_mux(struct device *dev, void __iomem *base,
 		cfg->mmux->hws[cfg->mmux->nbr_clk++] = mux_hw;
 
 	} else {
-		mux = devm_kzalloc(dev, sizeof(*mux), GFP_KERNEL);
+		mux = devm_kzalloc_obj(dev, *mux);
 		if (!mux)
 			return ERR_PTR(-ENOMEM);
 
@@ -527,7 +527,7 @@ static struct clk_hw *_get_stm32_div(struct device *dev, void __iomem *base,
 {
 	struct clk_divider *div;
 
-	div = devm_kzalloc(dev, sizeof(*div), GFP_KERNEL);
+	div = devm_kzalloc_obj(dev, *div);
 
 	if (!div)
 		return ERR_PTR(-ENOMEM);
@@ -551,7 +551,7 @@ static struct clk_hw *_get_stm32_gate(struct device *dev, void __iomem *base,
 	struct clk_hw *gate_hw;
 
 	if (cfg->mgate) {
-		mgate = devm_kzalloc(dev, sizeof(*mgate), GFP_KERNEL);
+		mgate = devm_kzalloc_obj(dev, *mgate);
 		if (!mgate)
 			return ERR_PTR(-ENOMEM);
 
@@ -566,7 +566,7 @@ static struct clk_hw *_get_stm32_gate(struct device *dev, void __iomem *base,
 		gate_hw = &mgate->gate.hw;
 
 	} else {
-		gate = devm_kzalloc(dev, sizeof(*gate), GFP_KERNEL);
+		gate = devm_kzalloc_obj(dev, *gate);
 		if (!gate)
 			return ERR_PTR(-ENOMEM);
 
@@ -755,6 +755,7 @@ struct stm32_pll_obj {
 
 #define PLL_ON		BIT(0)
 #define PLL_RDY		BIT(1)
+#define PLL_DIV_PQR_EN	GENMASK(6, 4)
 #define DIVN_MASK	0x1FF
 #define DIVM_MASK	0x3F
 #define DIVM_SHIFT	16
@@ -820,8 +821,12 @@ static void pll_disable(struct clk_hw *hw)
 	spin_lock_irqsave(clk_elem->lock, flags);
 
 	reg = readl_relaxed(clk_elem->reg);
-	reg &= ~PLL_ON;
-	writel_relaxed(reg, clk_elem->reg);
+
+	/* Keep the PLL on as long as one of its P/Q/R outputs is enabled */
+	if (!(reg & PLL_DIV_PQR_EN)) {
+		reg &= ~PLL_ON;
+		writel_relaxed(reg, clk_elem->reg);
+	}
 
 	spin_unlock_irqrestore(clk_elem->lock, flags);
 }
@@ -907,7 +912,7 @@ static struct clk_hw *clk_register_pll(struct device *dev, const char *name,
 	struct clk_hw *hw;
 	int err;
 
-	element = devm_kzalloc(dev, sizeof(*element), GFP_KERNEL);
+	element = devm_kzalloc_obj(dev, *element);
 	if (!element)
 		return ERR_PTR(-ENOMEM);
 
@@ -1046,7 +1051,7 @@ static struct clk_hw *clk_register_cktim(struct device *dev, const char *name,
 	struct clk_hw *hw;
 	int err;
 
-	tim_ker = devm_kzalloc(dev, sizeof(*tim_ker), GFP_KERNEL);
+	tim_ker = devm_kzalloc_obj(dev, *tim_ker);
 	if (!tim_ker)
 		return ERR_PTR(-ENOMEM);
 
@@ -2085,7 +2090,8 @@ static const struct clock_config stm32mp1_clock_cfg[] = {
 	GATE(CK_DBG, "ck_sys_dbg", "ck_axi", CLK_IGNORE_UNUSED,
 	     RCC_DBGCFGR, 8, 0),
 
-	COMPOSITE(CK_TRACE, "ck_trace", ck_trace_src, CLK_OPS_PARENT_ENABLE,
+	COMPOSITE(CK_TRACE, "ck_trace", ck_trace_src,
+		  CLK_OPS_PARENT_ENABLE | CLK_IGNORE_UNUSED,
 		  _GATE(RCC_DBGCFGR, 9, 0),
 		  _NO_MUX,
 		  _DIV(RCC_DBGCFGR, 0, 3, 0, ck_trace_div_table)),
@@ -2215,8 +2221,7 @@ static int stm32_rcc_clock_init(struct device *dev, void __iomem *base,
 
 	max_binding =  data->maxbinding;
 
-	clk_data = devm_kzalloc(dev, struct_size(clk_data, hws, max_binding),
-				GFP_KERNEL);
+	clk_data = devm_kzalloc_flex(dev, *clk_data, hws, max_binding);
 	if (!clk_data)
 		return -ENOMEM;
 

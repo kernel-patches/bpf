@@ -420,10 +420,10 @@ static int dcp_chan_thread_aes(void *data)
 	while (!kthread_should_stop()) {
 		set_current_state(TASK_INTERRUPTIBLE);
 
-		spin_lock(&sdcp->lock[chan]);
+		spin_lock_bh(&sdcp->lock[chan]);
 		backlog = crypto_get_backlog(&sdcp->queue[chan]);
 		arq = crypto_dequeue_request(&sdcp->queue[chan]);
-		spin_unlock(&sdcp->lock[chan]);
+		spin_unlock_bh(&sdcp->lock[chan]);
 
 		if (!backlog && !arq) {
 			schedule();
@@ -432,12 +432,17 @@ static int dcp_chan_thread_aes(void *data)
 
 		set_current_state(TASK_RUNNING);
 
-		if (backlog)
+		if (backlog) {
+			local_bh_disable();
 			crypto_request_complete(backlog, -EINPROGRESS);
+			local_bh_enable();
+		}
 
 		if (arq) {
 			ret = mxs_dcp_aes_block_crypt(arq);
+			local_bh_disable();
 			crypto_request_complete(arq, ret);
+			local_bh_enable();
 		}
 	}
 
@@ -483,9 +488,9 @@ static int mxs_dcp_aes_enqueue(struct skcipher_request *req, int enc, int ecb)
 	rctx->ecb = ecb;
 	actx->chan = DCP_CHAN_CRYPTO;
 
-	spin_lock(&sdcp->lock[actx->chan]);
+	spin_lock_bh(&sdcp->lock[actx->chan]);
 	ret = crypto_enqueue_request(&sdcp->queue[actx->chan], &req->base);
-	spin_unlock(&sdcp->lock[actx->chan]);
+	spin_unlock_bh(&sdcp->lock[actx->chan]);
 
 	wake_up_process(sdcp->thread[actx->chan]);
 
@@ -753,10 +758,10 @@ static int dcp_chan_thread_sha(void *data)
 	while (!kthread_should_stop()) {
 		set_current_state(TASK_INTERRUPTIBLE);
 
-		spin_lock(&sdcp->lock[chan]);
+		spin_lock_bh(&sdcp->lock[chan]);
 		backlog = crypto_get_backlog(&sdcp->queue[chan]);
 		arq = crypto_dequeue_request(&sdcp->queue[chan]);
-		spin_unlock(&sdcp->lock[chan]);
+		spin_unlock_bh(&sdcp->lock[chan]);
 
 		if (!backlog && !arq) {
 			schedule();
@@ -765,12 +770,17 @@ static int dcp_chan_thread_sha(void *data)
 
 		set_current_state(TASK_RUNNING);
 
-		if (backlog)
+		if (backlog) {
+			local_bh_disable();
 			crypto_request_complete(backlog, -EINPROGRESS);
+			local_bh_enable();
+		}
 
 		if (arq) {
 			ret = dcp_sha_req_to_buf(arq);
+			local_bh_disable();
 			crypto_request_complete(arq, ret);
+			local_bh_enable();
 		}
 	}
 
@@ -830,9 +840,9 @@ static int dcp_sha_update_fx(struct ahash_request *req, int fini)
 		rctx->init = 1;
 	}
 
-	spin_lock(&sdcp->lock[actx->chan]);
+	spin_lock_bh(&sdcp->lock[actx->chan]);
 	ret = crypto_enqueue_request(&sdcp->queue[actx->chan], &req->base);
-	spin_unlock(&sdcp->lock[actx->chan]);
+	spin_unlock_bh(&sdcp->lock[actx->chan]);
 
 	wake_up_process(sdcp->thread[actx->chan]);
 	mutex_unlock(&actx->mutex);
@@ -1076,7 +1086,7 @@ static int mxs_dcp_probe(struct platform_device *pdev)
 	if (dcp_irq < 0)
 		return dcp_irq;
 
-	sdcp = devm_kzalloc(dev, sizeof(*sdcp), GFP_KERNEL);
+	sdcp = devm_kzalloc_obj(dev, *sdcp);
 	if (!sdcp)
 		return -ENOMEM;
 

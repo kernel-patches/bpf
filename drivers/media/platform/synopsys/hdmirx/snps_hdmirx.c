@@ -678,13 +678,9 @@ static void hdmirx_plugout(struct snps_hdmirx_dev *hdmirx_dev)
 	hdmirx_writel(hdmirx_dev, PHYCREG_CONFIG0, 0x0);
 	cancel_delayed_work(&hdmirx_dev->delayed_work_res_change);
 
-	/* will be NULL on driver removal */
-	if (hdmirx_dev->rgb_range)
-		v4l2_ctrl_s_ctrl(hdmirx_dev->rgb_range, V4L2_DV_RGB_RANGE_AUTO);
-
-	if (hdmirx_dev->content_type)
-		v4l2_ctrl_s_ctrl(hdmirx_dev->content_type,
-				 V4L2_DV_IT_CONTENT_TYPE_NO_ITC);
+	v4l2_ctrl_s_ctrl(hdmirx_dev->rgb_range, V4L2_DV_RGB_RANGE_AUTO);
+	v4l2_ctrl_s_ctrl(hdmirx_dev->content_type,
+			 V4L2_DV_IT_CONTENT_TYPE_NO_ITC);
 
 	hdmirx_dev->plugged = false;
 }
@@ -2941,6 +2937,16 @@ static int hdmirx_register_audio_device(struct snps_hdmirx_dev *hdmirx_dev)
 	return 0;
 }
 
+/* Runs when the last user of a device node is gone, possibly after remove() */
+static void hdmirx_v4l2_release(struct v4l2_device *v4l2_dev)
+{
+	struct snps_hdmirx_dev *hdmirx_dev =
+		container_of(v4l2_dev, struct snps_hdmirx_dev, v4l2_dev);
+
+	v4l2_ctrl_handler_free(&hdmirx_dev->hdl);
+	kfree(hdmirx_dev);
+}
+
 static int hdmirx_probe(struct platform_device *pdev)
 {
 	struct snps_hdmirx_dev *hdmirx_dev;
@@ -2950,7 +2956,7 @@ static int hdmirx_probe(struct platform_device *pdev)
 	struct v4l2_device *v4l2_dev;
 	int ret;
 
-	hdmirx_dev = devm_kzalloc(dev, sizeof(*hdmirx_dev), GFP_KERNEL);
+	hdmirx_dev = kzalloc_obj(*hdmirx_dev);
 	if (!hdmirx_dev)
 		return -ENOMEM;
 
@@ -2960,23 +2966,25 @@ static int hdmirx_probe(struct platform_device *pdev)
 	 */
 	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
 	if (ret)
-		return ret;
+		goto err_free;
 
 	hdmirx_dev->dev = dev;
 	dev_set_drvdata(dev, hdmirx_dev);
 
 	ret = hdmirx_parse_dt(hdmirx_dev);
 	if (ret)
-		return ret;
+		goto err_free;
 
 	ret = hdmirx_setup_irq(hdmirx_dev, pdev);
 	if (ret)
-		return ret;
+		goto err_free;
 
 	hdmirx_dev->regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(hdmirx_dev->regs))
-		return dev_err_probe(dev, PTR_ERR(hdmirx_dev->regs),
-				     "failed to remap regs resource\n");
+	if (IS_ERR(hdmirx_dev->regs)) {
+		ret = dev_err_probe(dev, PTR_ERR(hdmirx_dev->regs),
+				    "failed to remap regs resource\n");
+		goto err_free;
+	}
 
 	mutex_init(&hdmirx_dev->phy_rw_lock);
 	mutex_init(&hdmirx_dev->stream_lock);
@@ -3031,11 +3039,12 @@ static int hdmirx_probe(struct platform_device *pdev)
 		goto err_pm;
 	}
 	hdmirx_dev->v4l2_dev.ctrl_handler = hdl;
+	hdmirx_dev->v4l2_dev.release = hdmirx_v4l2_release;
 
 	ret = v4l2_device_register(dev, &hdmirx_dev->v4l2_dev);
 	if (ret < 0) {
 		dev_err_probe(dev, ret, "v4l2 device registration failed\n");
-		goto err_hdl;
+		goto err_pm;
 	}
 
 	stream = &hdmirx_dev->stream;
@@ -3071,10 +3080,16 @@ err_unreg_video_dev:
 	vb2_video_unregister_device(&hdmirx_dev->stream.vdev);
 err_unreg_v4l2_dev:
 	v4l2_device_unregister(&hdmirx_dev->v4l2_dev);
-err_hdl:
-	v4l2_ctrl_handler_free(&hdmirx_dev->hdl);
+	hdmirx_disable(dev);
+	v4l2_device_put(&hdmirx_dev->v4l2_dev);
+
+	return ret;
+
 err_pm:
 	hdmirx_disable(dev);
+	v4l2_ctrl_handler_free(&hdmirx_dev->hdl);
+err_free:
+	kfree(hdmirx_dev);
 
 	return ret;
 }
@@ -3095,16 +3110,13 @@ static void hdmirx_remove(struct platform_device *pdev)
 	hdmirx_disable_irq(dev);
 
 	vb2_video_unregister_device(&hdmirx_dev->stream.vdev);
-	v4l2_ctrl_handler_free(&hdmirx_dev->hdl);
 	v4l2_device_unregister(&hdmirx_dev->v4l2_dev);
-
-	/* touched by hdmirx_disable()->hdmirx_plugout() */
-	hdmirx_dev->rgb_range = NULL;
-	hdmirx_dev->content_type = NULL;
 
 	hdmirx_disable(dev);
 
 	reset_control_bulk_assert(HDMIRX_NUM_RST, hdmirx_dev->resets);
+
+	v4l2_device_put(&hdmirx_dev->v4l2_dev);
 }
 
 static const struct of_device_id hdmirx_id[] = {

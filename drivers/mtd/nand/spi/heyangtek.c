@@ -73,6 +73,48 @@ static const struct mtd_ooblayout_ops hyf1gq4_ooblayout = {
 	.free = hyf1gq4_ooblayout_free,
 };
 
+/*
+ * HYF4GQ4UAACBE: 4 KB page, 256-byte spare area.  The die uses eight
+ * 512-byte ECC steps, each owning one 32-byte group of the spare area:
+ * bytes 0..7 are exposed as free and bytes 8..31 hold the on-die parity
+ * (24 bytes, i.e. 14 bit / 512 B).  8 x 32 = 256 bytes, of which 192 are
+ * parity.
+ */
+static int hyf4gq4_ooblayout_ecc(struct mtd_info *mtd, int section,
+				 struct mtd_oob_region *region)
+{
+	if (section > 7)
+		return -ERANGE;
+
+	region->offset = (32 * section) + 8;
+	region->length = 24;
+
+	return 0;
+}
+
+static int hyf4gq4_ooblayout_free(struct mtd_info *mtd, int section,
+				  struct mtd_oob_region *region)
+{
+	if (section > 7)
+		return -ERANGE;
+
+	if (section) {
+		region->offset = 32 * section;
+		region->length = 8;
+	} else {
+		/* section 0 has two bytes reserved for the bad block marker */
+		region->offset = 2;
+		region->length = 6;
+	}
+
+	return 0;
+}
+
+static const struct mtd_ooblayout_ops hyf4gq4_ooblayout = {
+	.ecc = hyf4gq4_ooblayout_ecc,
+	.free = hyf4gq4_ooblayout_free,
+};
+
 static int hyf1gq4_ecc_get_status(struct spinand_device *spinand, u8 status)
 {
 	struct nand_device *nand = spinand_to_nand(spinand);
@@ -117,6 +159,16 @@ static const struct spinand_info heyangtek_spinand_table[] = {
 					      &update_cache_variants),
 		     SPINAND_HAS_QE_BIT,
 		     SPINAND_ECCINFO(&hyf1gq4_ooblayout,
+				     hyf1gq4_ecc_get_status)),
+	SPINAND_INFO("HYF4GQ4UAACBE",
+		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_ADDR, 0xd4),
+		     NAND_MEMORG(1, 4096, 256, 64, 2048, 40, 1, 1, 1),
+		     NAND_ECCREQ(14, 512),
+		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
+					      &write_cache_variants,
+					      &update_cache_variants),
+		     SPINAND_HAS_QE_BIT,
+		     SPINAND_ECCINFO(&hyf4gq4_ooblayout,
 				     hyf1gq4_ecc_get_status)),
 };
 

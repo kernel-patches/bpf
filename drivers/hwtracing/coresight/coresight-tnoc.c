@@ -51,8 +51,8 @@ static void trace_noc_enable_hw(struct trace_noc_drvdata *drvdata)
 {
 	u32 val;
 
-	/* No valid ATID, simply enable the unit */
-	if (drvdata->atid == -EOPNOTSUPP) {
+	/* 0 means no ID assignment, simply enable the unit */
+	if (drvdata->atid == 0) {
 		writel(TRACE_NOC_CTRL_PORTEN, drvdata->base + TRACE_NOC_CTRL);
 		return;
 	}
@@ -130,10 +130,8 @@ static int trace_noc_init_default_data(struct trace_noc_drvdata *drvdata)
 {
 	int atid;
 
-	if (!dev_is_amba(drvdata->dev)) {
-		drvdata->atid = -EOPNOTSUPP;
+	if (!dev_is_amba(drvdata->dev))
 		return 0;
-	}
 
 	atid = coresight_trace_id_get_system_id();
 	if (atid < 0)
@@ -166,7 +164,7 @@ static umode_t trace_id_is_visible(struct kobject *kobj,
 	struct device *dev = kobj_to_dev(kobj);
 	struct trace_noc_drvdata *drvdata = dev_get_drvdata(dev->parent);
 
-	if (attr == &dev_attr_traceid.attr && drvdata->atid < 0)
+	if (attr == &dev_attr_traceid.attr && drvdata->atid == 0)
 		return 0;
 
 	return attr->mode;
@@ -198,7 +196,7 @@ static int _tnoc_probe(struct device *dev, struct resource *res)
 		return PTR_ERR(pdata);
 	dev->platform_data = pdata;
 
-	drvdata = devm_kzalloc(dev, sizeof(*drvdata), GFP_KERNEL);
+	drvdata = devm_kzalloc_obj(dev, *drvdata);
 	if (!drvdata)
 		return -ENOMEM;
 
@@ -299,8 +297,16 @@ static void itnoc_remove(struct platform_device *pdev)
 {
 	struct trace_noc_drvdata *drvdata = platform_get_drvdata(pdev);
 
+	/*
+	 * Resume the device so its clocks are enabled again, balancing the
+	 * clk_disable_unprepare() that devm runs when the driver detaches.
+	 * Then mark it suspended and drop the usage count taken here.
+	 */
+	pm_runtime_get_sync(&pdev->dev);
 	coresight_unregister(drvdata->csdev);
 	pm_runtime_disable(&pdev->dev);
+	pm_runtime_set_suspended(&pdev->dev);
+	pm_runtime_put_noidle(&pdev->dev);
 }
 
 #ifdef CONFIG_PM

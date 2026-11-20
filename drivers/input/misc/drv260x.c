@@ -222,7 +222,7 @@ static void drv260x_worker(struct work_struct *work)
 
 	gpiod_set_value(haptics->enable_gpio, 1);
 	/* Data sheet says to wait 250us before trying to communicate */
-	udelay(250);
+	fsleep(250);
 
 	error = regmap_write(haptics->regmap,
 			     DRV260X_MODE, DRV260X_RT_PLAYBACK);
@@ -448,7 +448,7 @@ static int drv260x_probe(struct i2c_client *client)
 	u32 voltage;
 	int error;
 
-	haptics = devm_kzalloc(dev, sizeof(*haptics), GFP_KERNEL);
+	haptics = devm_kzalloc_obj(dev, *haptics);
 	if (!haptics)
 		return -ENOMEM;
 

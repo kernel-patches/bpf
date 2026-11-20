@@ -414,7 +414,7 @@ static int omap_des_crypt_dma(struct crypto_tfm *tfm,
 	}
 
 	/* No callback necessary */
-	tx_in->callback_param = dd;
+	dmaengine_desc_set_callback(tx_in, NULL, NULL, dd);
 
 	/* OUT */
 	ret = dmaengine_slave_config(dd->dma_lch_out, &cfg);
@@ -432,8 +432,7 @@ static int omap_des_crypt_dma(struct crypto_tfm *tfm,
 		return -EINVAL;
 	}
 
-	tx_out->callback = omap_des_dma_out_callback;
-	tx_out->callback_param = dd;
+	dmaengine_desc_set_callback(tx_out, omap_des_dma_out_callback, NULL, dd);
 
 	dmaengine_submit(tx_in);
 	dmaengine_submit(tx_out);
@@ -961,7 +960,7 @@ static int omap_des_probe(struct platform_device *pdev)
 	int err = -ENOMEM, i, j, irq = -1;
 	u32 reg;
 
-	dd = devm_kzalloc(dev, sizeof(struct omap_des_dev), GFP_KERNEL);
+	dd = devm_kzalloc_obj(dev, struct omap_des_dev);
 	if (dd == NULL) {
 		dev_err(dev, "unable to alloc data struct.\n");
 		goto err_data;

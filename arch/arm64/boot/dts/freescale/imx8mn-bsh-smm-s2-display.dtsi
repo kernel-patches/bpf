@@ -34,7 +34,7 @@
 
 	backlight: backlight {
 		compatible = "pwm-backlight";
-		pwms = <&pwm1 0 700000 0>;	/* 700000 ns = 1337Hz */
+		pwms = <&pwm1 0 500000 0>;	/* 500000 ns = 2000Hz */
 		brightness-levels = <0 100>;
 		num-interpolated-steps = <100>;
 		default-brightness-level = <50>;

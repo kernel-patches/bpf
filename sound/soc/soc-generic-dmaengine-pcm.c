@@ -389,6 +389,9 @@ static int dmaengine_pcm_request_chan_of(struct dmaengine_pcm *pcm,
 			name = dmaengine_pcm_dma_channel_names[i];
 		if (config->chan_names[i])
 			name = config->chan_names[i];
+		else if (config->dma_dev)
+			/* Default names refer to the dma_dev's own channels */
+			continue;
 		chan = dma_request_chan(dev, name);
 		if (IS_ERR(chan)) {
 			/*

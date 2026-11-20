@@ -2695,18 +2695,19 @@ static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 	i = sd->short_mark;
 	if (i != 0) {
 		sd->short_mark = 0;
-		if (i < 0	/* if 'ff' at end of previous packet */
-		 && data[0] == 0xff
-		 && data[1] == 0x00)
-			goto marker_found;
 		if (data[0] == 0xff && data[1] == 0xff) {
 			i = 0;
 			goto marker_found;
 		}
-		len -= i;
-		if (len <= 0)
-			return;
-		data += i;
+		if (i < 0) {	/* if 'ff' at end of previous packet */
+			if (data[0] == 0xff && data[1] == 0x00)
+				goto marker_found;
+		} else {
+			len -= i;
+			if (len <= 0)
+				return;
+			data += i;
+		}
 	}
 
 	/* search backwards if there is a marker in the packet */

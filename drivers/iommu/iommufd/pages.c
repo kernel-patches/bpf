@@ -721,19 +721,15 @@ static void batch_unpin(struct pfn_batch *batch, struct iopt_pages *pages,
 	}
 }
 
-static void copy_data_page(struct page *page, void *data, unsigned long offset,
-			   size_t length, unsigned int flags)
+static void copy_data_folio(struct folio *folio, size_t offset, void *data,
+			    size_t length, unsigned int flags)
 {
-	void *mem;
-
-	mem = kmap_local_page(page);
 	if (flags & IOMMUFD_ACCESS_RW_WRITE) {
-		memcpy(mem + offset, data, length);
-		set_page_dirty_lock(page);
+		memcpy_to_folio(folio, offset, data, length);
+		folio_mark_dirty_lock(folio);
 	} else {
-		memcpy(data, mem + offset, length);
+		memcpy_from_folio(data, folio, offset, length);
 	}
-	kunmap_local(mem);
 }
 
 static unsigned long batch_rw(struct pfn_batch *batch, void *data,
@@ -745,15 +741,21 @@ static unsigned long batch_rw(struct pfn_batch *batch, void *data,
 	unsigned int cur = 0;
 
 	while (cur < batch->end) {
-		unsigned long bytes = min(length, PAGE_SIZE - offset);
+		unsigned long pfn = batch->pfns[cur] + npage;
+		struct folio *folio = pfn_folio(pfn);
+		unsigned long idx = pfn - folio_pfn(folio);
+		unsigned long nr = min_t(unsigned long,
+					 folio_nr_pages(folio) - idx,
+					 batch->npfns[cur] - npage);
+		unsigned long bytes = min(length, nr * PAGE_SIZE - offset);
 
-		copy_data_page(pfn_to_page(batch->pfns[cur] + npage), data,
-			       offset, bytes, flags);
+		copy_data_folio(folio, idx * PAGE_SIZE + offset, data, bytes,
+				flags);
 		offset = 0;
 		length -= bytes;
 		data += bytes;
 		copied += bytes;
-		npage++;
+		npage += nr;
 		if (npage == batch->npfns[cur]) {
 			npage = 0;
 			cur++;
@@ -781,6 +783,7 @@ struct pfn_reader_user {
 	struct file *file;
 	struct folio **ufolios;
 	size_t ufolios_len;
+	unsigned long ufolios_count;
 	unsigned long ufolios_offset;
 	struct folio **ufolios_next;
 };
@@ -800,6 +803,7 @@ static void pfn_reader_user_init(struct pfn_reader_user *user,
 	user->file = (pages->type == IOPT_ADDRESS_FILE) ? pages->file : NULL;
 	user->ufolios = NULL;
 	user->ufolios_len = 0;
+	user->ufolios_count = 0;
 	user->ufolios_next = NULL;
 	user->ufolios_offset = 0;
 }
@@ -843,6 +847,7 @@ static long pin_memfd_pages(struct pfn_reader_user *user, unsigned long start,
 
 	offset >>= PAGE_SHIFT;
 	user->ufolios_next = user->ufolios;
+	user->ufolios_count = nfolios;
 	user->ufolios_offset = offset;
 
 	for (i = 0; i < nfolios; i++) {
@@ -859,8 +864,12 @@ static long pin_memfd_pages(struct pfn_reader_user *user, unsigned long start,
 			} else {
 				int rc = folio_add_pins(folio, npin - 1);
 
-				if (rc)
+				if (rc) {
+					unpin_user_pages(user->upages,
+							 upages - user->upages);
+					unpin_folios(user->ufolios + i, nfolios - i);
 					return rc;
+				}
 
 				while (npin--)
 					*upages++ = folio_page(folio, offset++);
@@ -1251,14 +1260,14 @@ static int pfn_reader_next(struct pfn_reader *pfns)
 			return -EINVAL;
 
 		rc = pfn_reader_fill_span(pfns);
+		pfns->batch_end_index = pfns->batch_start_index +
+					pfns->batch.total_pfns;
 		if (rc)
 			return rc;
 
 		if (WARN_ON(!pfns->batch.total_pfns))
 			return -EINVAL;
 
-		pfns->batch_end_index =
-			pfns->batch_start_index + pfns->batch.total_pfns;
 		if (pfns->batch_end_index == pfns->span.last_used + 1)
 			interval_tree_double_span_iter_next(&pfns->span);
 
@@ -1320,7 +1329,7 @@ static void pfn_reader_release_pins(struct pfn_reader *pfns)
 		if (!user->file) {
 			unpin_user_pages(user->upages + start_index, npages);
 		} else {
-			long n = user->ufolios_len / sizeof(*user->ufolios);
+			const unsigned long n = user->ufolios_count;
 
 			unpin_folios(user->ufolios_next,
 				     user->ufolios + n - user->ufolios_next);
@@ -1962,7 +1971,6 @@ int iopt_area_fill_domains(struct iopt_area *area, struct iopt_pages *pages)
 	return 0;
 
 out_unmap:
-	pfn_reader_release_pins(&pfns);
 	xa_for_each(&area->iopt->domains, unmap_index, domain) {
 		unsigned long end_index;
 
@@ -1982,6 +1990,18 @@ out_unmap:
 					area, domain, iopt_area_index(area),
 					end_index - 1);
 		} else {
+			/*
+			 * The last domain is the only one that unpins, so the
+			 * reader's pins must be released before the unpin and
+			 * its update_unpinned(): npinned still counts them
+			 * while last_npinned predates the fill. No domain maps
+			 * the failing batch any more: the earlier domains
+			 * were just unmapped by this loop, the failing domain
+			 * rolled back its partial mapping in
+			 * batch_to_domain(), and the later domains never
+			 * installed it.
+			 */
+			pfn_reader_release_pins(&pfns);
 			iopt_area_unfill_partial_domain(area, pages, domain,
 							end_index);
 		}
@@ -2306,6 +2326,7 @@ static int iopt_pages_rw_page(struct iopt_pages *pages, unsigned long index,
 			      unsigned long length, unsigned int flags)
 {
 	struct page *page = NULL;
+	struct folio *folio;
 	int rc;
 
 	if (IS_ENABLED(CONFIG_IOMMUFD_TEST) &&
@@ -2332,7 +2353,9 @@ static int iopt_pages_rw_page(struct iopt_pages *pages, unsigned long index,
 			rc = -EINVAL;
 		goto out_mmput;
 	}
-	copy_data_page(page, data, offset, length, flags);
+	folio = page_folio(page);
+	copy_data_folio(folio, folio_page_idx(folio, page) * PAGE_SIZE + offset,
+			data, length, flags);
 	unpin_user_page(page);
 	rc = 0;
 

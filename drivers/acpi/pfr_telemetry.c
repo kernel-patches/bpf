@@ -15,10 +15,13 @@
 #include <linux/errno.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/kref.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/mm.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
@@ -62,6 +65,14 @@ struct pfrt_log_device {
 	struct pfrt_log_info info;
 	struct device *parent_dev;
 	struct miscdevice miscdev;
+	struct kref kref;
+	/*
+	 * Serializes the firmware calls and info of the file operations, and
+	 * remove(), which sets removed under it and so waits for calls
+	 * already running.
+	 */
+	struct mutex lock;
+	bool removed;
 };
 
 /* pfrt_guid is the parameter for _DSM method */
@@ -254,33 +265,49 @@ static long pfrt_log_ioctl(struct file *file, unsigned int cmd, unsigned long ar
 		if (copy_from_user(&info, p, sizeof(info)))
 			return -EFAULT;
 
-		if (valid_log_revid(info.log_revid))
-			pfrt_log_dev->info.log_revid = info.log_revid;
+		scoped_guard(mutex, &pfrt_log_dev->lock) {
+			if (pfrt_log_dev->removed)
+				return -ENODEV;
 
-		if (valid_log_level(info.log_level)) {
-			ret = set_pfrt_log_level(info.log_level, pfrt_log_dev);
-			if (ret < 0)
-				return ret;
+			if (valid_log_revid(info.log_revid))
+				pfrt_log_dev->info.log_revid = info.log_revid;
 
-			pfrt_log_dev->info.log_level = info.log_level;
+			if (valid_log_level(info.log_level)) {
+				ret = set_pfrt_log_level(info.log_level, pfrt_log_dev);
+				if (ret < 0)
+					return ret;
+
+				pfrt_log_dev->info.log_level = info.log_level;
+			}
+
+			if (valid_log_type(info.log_type))
+				pfrt_log_dev->info.log_type = info.log_type;
 		}
-
-		if (valid_log_type(info.log_type))
-			pfrt_log_dev->info.log_type = info.log_type;
 
 		return 0;
 
 	case PFRT_LOG_IOC_GET_INFO:
-		info.log_level = get_pfrt_log_level(pfrt_log_dev);
-		info.log_type = pfrt_log_dev->info.log_type;
-		info.log_revid = pfrt_log_dev->info.log_revid;
+		scoped_guard(mutex, &pfrt_log_dev->lock) {
+			if (pfrt_log_dev->removed)
+				return -ENODEV;
+
+			info.log_level = get_pfrt_log_level(pfrt_log_dev);
+			info.log_type = pfrt_log_dev->info.log_type;
+			info.log_revid = pfrt_log_dev->info.log_revid;
+		}
+
 		if (copy_to_user(p, &info, sizeof(info)))
 			return -EFAULT;
 
 		return 0;
 
 	case PFRT_LOG_IOC_GET_DATA_INFO:
-		ret = get_pfrt_log_data_info(&data_info, pfrt_log_dev);
+		scoped_guard(mutex, &pfrt_log_dev->lock) {
+			if (pfrt_log_dev->removed)
+				return -ENODEV;
+
+			ret = get_pfrt_log_data_info(&data_info, pfrt_log_dev);
+		}
 		if (ret)
 			return ret;
 
@@ -311,6 +338,10 @@ pfrt_log_mmap(struct file *file, struct vm_area_struct *vma)
 
 	pfrt_log_dev = to_pfrt_log_dev(file);
 
+	guard(mutex)(&pfrt_log_dev->lock);
+	if (pfrt_log_dev->removed)
+		return -ENODEV;
+
 	ret = get_pfrt_log_data_info(&info, pfrt_log_dev);
 	if (ret)
 		return ret;
@@ -337,8 +368,39 @@ pfrt_log_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
+static void pfrt_log_free(struct kref *kref)
+{
+	struct pfrt_log_device *pfrt_log_dev =
+		container_of(kref, struct pfrt_log_device, kref);
+
+	put_device(pfrt_log_dev->parent_dev);
+	kfree(pfrt_log_dev);
+}
+
+static void pfrt_log_put(void *data)
+{
+	struct pfrt_log_device *pfrt_log_dev = data;
+
+	kref_put(&pfrt_log_dev->kref, pfrt_log_free);
+}
+
+/* misc_open() holds misc_mtx here, and misc_deregister() takes it. */
+static int pfrt_log_open(struct inode *inode, struct file *file)
+{
+	kref_get(&to_pfrt_log_dev(file)->kref);
+	return 0;
+}
+
+static int pfrt_log_release(struct inode *inode, struct file *file)
+{
+	pfrt_log_put(to_pfrt_log_dev(file));
+	return 0;
+}
+
 static const struct file_operations acpi_pfrt_log_fops = {
 	.owner		= THIS_MODULE,
+	.open		= pfrt_log_open,
+	.release	= pfrt_log_release,
 	.mmap		= pfrt_log_mmap,
 	.unlocked_ioctl = pfrt_log_ioctl,
 	.llseek		= noop_llseek,
@@ -349,6 +411,8 @@ static void acpi_pfrt_log_remove(struct platform_device *pdev)
 	struct pfrt_log_device *pfrt_log_dev = platform_get_drvdata(pdev);
 
 	misc_deregister(&pfrt_log_dev->miscdev);
+	scoped_guard(mutex, &pfrt_log_dev->lock)
+		pfrt_log_dev->removed = true;
 }
 
 static void pfrt_log_put_idx(void *data)
@@ -373,9 +437,16 @@ static int acpi_pfrt_log_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	pfrt_log_dev = devm_kzalloc(&pdev->dev, sizeof(*pfrt_log_dev), GFP_KERNEL);
+	pfrt_log_dev = kzalloc_obj(*pfrt_log_dev);
 	if (!pfrt_log_dev)
 		return -ENOMEM;
+
+	kref_init(&pfrt_log_dev->kref);
+	mutex_init(&pfrt_log_dev->lock);
+	pfrt_log_dev->parent_dev = get_device(&pdev->dev);
+	ret = devm_add_action_or_reset(&pdev->dev, pfrt_log_put, pfrt_log_dev);
+	if (ret)
+		return ret;
 
 	ret = ida_alloc(&pfrt_log_ida, GFP_KERNEL);
 	if (ret < 0)
@@ -387,7 +458,6 @@ static int acpi_pfrt_log_probe(struct platform_device *pdev)
 		return ret;
 
 	pfrt_log_dev->info.log_revid = PFRT_DEFAULT_REV_ID;
-	pfrt_log_dev->parent_dev = &pdev->dev;
 
 	pfrt_log_dev->miscdev.minor = MISC_DYNAMIC_MINOR;
 	pfrt_log_dev->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
@@ -415,8 +485,8 @@ static int acpi_pfrt_log_probe(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id acpi_pfrt_log_ids[] = {
-	{"INTC1081"},
-	{}
+	{ .id = "INTC1081" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, acpi_pfrt_log_ids);
 

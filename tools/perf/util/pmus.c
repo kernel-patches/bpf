@@ -67,6 +67,15 @@ size_t pmu_name_len_no_suffix(const char *str)
 {
 	int orig_len, len;
 	bool has_hex_digits = false;
+	const char *rc = strstr(str, "_rc_");
+
+	if (strstarts(str, "nvidia_") && rc && isdigit(rc[-1])) {
+		/* NVIDIA PMU with a non-ABI suffix of nvidia_..._[0-9]+_rc_[0-9]+. */
+		while (isdigit(rc[-1]))
+			rc--;
+		if (rc[-1] == '_')
+			return rc - str - 1;
+	}
 
 	orig_len = len = strlen(str);
 
@@ -105,6 +114,20 @@ int pmu_name_cmp(const char *lhs_pmu_name, const char *rhs_pmu_name)
 		lhs_num = strtoull(&lhs_pmu_name[lhs_pmu_name_len + 1], NULL, 16);
 	if (rhs_pmu_name_len + 1 < strlen(rhs_pmu_name))
 		rhs_num = strtoull(&rhs_pmu_name[rhs_pmu_name_len + 1], NULL, 16);
+
+	if (lhs_num == rhs_num && strstarts(lhs_pmu_name, "nvidia_")) {
+		/*
+		 * NVIDIA PMU with a non-ABI suffix of nvidia_..._[0-9]+_rc_[0-9]+:
+		 * compare the RC too.
+		 */
+		const char *lhs_rc = strstr(lhs_pmu_name, "_rc_");
+		const char *rhs_rc = strstr(rhs_pmu_name, "_rc_");
+
+		if (lhs_rc && rhs_rc && isdigit(lhs_rc[-1]) && isdigit(rhs_rc[-1])) {
+			lhs_num = strtoull(lhs_rc + 4, NULL, 10);
+			rhs_num = strtoull(rhs_rc + 4, NULL, 10);
+		}
+	}
 
 	return lhs_num < rhs_num ? -1 : (lhs_num > rhs_num ? 1 : 0);
 }

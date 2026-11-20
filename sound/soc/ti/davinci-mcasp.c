@@ -2452,9 +2452,8 @@ out:
 
 	mcasp->num_serializer = pdata->num_serializer;
 #ifdef CONFIG_PM
-	mcasp->context.xrsr_regs = devm_kcalloc(&pdev->dev,
-						mcasp->num_serializer, sizeof(u32),
-						GFP_KERNEL);
+	mcasp->context.xrsr_regs = devm_kzalloc_objs(&pdev->dev, u32,
+						     mcasp->num_serializer);
 	if (!mcasp->context.xrsr_regs)
 		return -ENOMEM;
 #endif
@@ -2477,6 +2476,7 @@ static const char *sdma_prefix = "ti,omap";
 static int davinci_mcasp_get_dma_type(struct davinci_mcasp *mcasp)
 {
 	struct dma_chan *chan;
+	struct device *dma_dev;
 	const char *tmp;
 	int ret = PCM_EDMA;
 
@@ -2488,13 +2488,10 @@ static int davinci_mcasp_get_dma_type(struct davinci_mcasp *mcasp)
 	if (IS_ERR(chan))
 		return dev_err_probe(mcasp->dev, PTR_ERR(chan),
 				     "Can't verify DMA configuration\n");
-	if (WARN_ON(!chan->device || !chan->device->dev)) {
-		dma_release_channel(chan);
-		return -EINVAL;
-	}
 
-	if (chan->device->dev->of_node)
-		ret = of_property_read_string(chan->device->dev->of_node,
+	dma_dev = dmaengine_get_provider_device(chan);
+	if (dma_dev->of_node)
+		ret = of_property_read_string(dma_dev->of_node,
 					      "compatible", &tmp);
 	else
 		dev_dbg(mcasp->dev, "DMA controller has no of-node\n");
@@ -2710,8 +2707,7 @@ static int davinci_mcasp_register_component(struct davinci_mcasp *mcasp,
 						       &davinci_mcasp_component,
 						       &davinci_mcasp_dai[mcasp->op_mode], 1);
 
-	dais = devm_kcalloc(&pdev->dev, mcasp->num_dais, sizeof(*dais),
-			    GFP_KERNEL);
+	dais = devm_kzalloc_objs(&pdev->dev, *dais, mcasp->num_dais);
 	if (!dais)
 		return -ENOMEM;
 
@@ -2760,8 +2756,7 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	mcasp = devm_kzalloc(&pdev->dev, sizeof(struct davinci_mcasp),
-			   GFP_KERNEL);
+	mcasp = devm_kzalloc_obj(&pdev->dev, struct davinci_mcasp);
 	if (!mcasp)
 		return	-ENOMEM;
 
@@ -2902,16 +2897,12 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 	 * bytes.
 	 */
 	mcasp->chconstr[SNDRV_PCM_STREAM_PLAYBACK].list =
-		devm_kcalloc(mcasp->dev,
-			     32 + mcasp->num_serializer - 1,
-			     sizeof(unsigned int),
-			     GFP_KERNEL);
+		devm_kzalloc_objs(mcasp->dev, unsigned int,
+				  32 + mcasp->num_serializer - 1);
 
 	mcasp->chconstr[SNDRV_PCM_STREAM_CAPTURE].list =
-		devm_kcalloc(mcasp->dev,
-			     32 + mcasp->num_serializer - 1,
-			     sizeof(unsigned int),
-			     GFP_KERNEL);
+		devm_kzalloc_objs(mcasp->dev, unsigned int,
+				  32 + mcasp->num_serializer - 1);
 
 	if (!mcasp->chconstr[SNDRV_PCM_STREAM_PLAYBACK].list ||
 	    !mcasp->chconstr[SNDRV_PCM_STREAM_CAPTURE].list) {

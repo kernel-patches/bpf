@@ -8,6 +8,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/clk.h>
+#include <linux/interrupt.h>
 #include <linux/mfd/syscon.h>
 #include <linux/platform_device.h>
 #include <linux/phy/phy.h>
@@ -522,7 +523,7 @@ static int stm32_combophy_probe(struct platform_device *pdev)
 	struct phy_provider *phy_provider;
 	int ret, irq;
 
-	combophy = devm_kzalloc(dev, sizeof(*combophy), GFP_KERNEL);
+	combophy = devm_kzalloc_obj(dev, *combophy);
 	if (!combophy)
 		return -ENOMEM;
 

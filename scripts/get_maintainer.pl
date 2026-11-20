@@ -768,6 +768,10 @@ sub self_test {
 	    if ((-d $value)) {
 		$value =~ s@([^/])$@$1/@;
 	    }
+	    if (substr($value, -1) ne "/") {
+		$value .= '$';
+	    }
+
 	    if (!grep(m@^$value@, @lsfiles)) {
 		print("$x->{file}:$x->{linenr}: warning: no file matches\t$x->{line}\n");
 	    }
@@ -959,6 +963,15 @@ sub get_maintainers {
 	    $tvi = $end + 1;
 	}
 
+	# THE REST matches every file, so only fall back to it when no
+	# other matching section provides a mailing list for this file
+	# that we would actually output with the current options.
+	my ($the_rest) = grep { get_section_name($_) eq "THE REST" } keys %hash;
+	if (defined($the_rest) &&
+	    grep { $_ != $the_rest && section_has_list($_) } keys %hash) {
+	    delete $hash{$the_rest};
+	}
+
 	foreach my $line (sort {$hash{$b} <=> $hash{$a}} keys %hash) {
 	    add_categories($line, "");
 	    if ($sections) {
@@ -1062,7 +1075,7 @@ sub file_match_pattern {
 	    return 1;
 	}
     } else {
-	if ($file =~ m@^$pattern@) {
+	if ($file =~ m@^$pattern$@) {
 	    my $s1 = ($file =~ tr@/@@);
 	    my $s2 = ($pattern =~ tr@/@@);
 	    if ($s1 == $s2 || $pattern =~ /\(\?:/) {
@@ -1293,6 +1306,40 @@ sub find_ending_index {
     }
 
     return $index;
+}
+
+sub get_section_name {
+    my ($index) = @_;
+
+    return $typevalue[find_starting_index($index)];
+}
+
+sub section_has_list {
+    my ($index) = @_;
+
+    my $start = find_starting_index($index);
+    my $end = find_ending_index($index);
+    for (my $i = $start; $i < $end; $i++) {
+	next if ($typevalue[$i] !~ m/^L:\s*(.*)/);
+	my $list_additional = "";
+	if ($1 =~ m/[^\s]+\s+(.*)$/) {
+	    $list_additional = $1;
+	}
+	return 1 if (list_is_selected($list_additional));
+    }
+    return 0;
+}
+
+# Must match the list selection in add_categories()
+sub list_is_selected {
+    my ($list_additional) = @_;
+
+    if ($list_additional =~ m/subscribers-only/) {
+	return $email_subscriber_list;
+    } elsif ($list_additional =~ m/moderated/) {
+	return $email_list && $email_moderated_list;
+    }
+    return $email_list;
 }
 
 sub get_subsystem_name {

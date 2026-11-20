@@ -41,10 +41,6 @@ struct vdso_arch_data {
 #define VDSO_RAW	(BIT(CLOCK_MONOTONIC_RAW))
 #define VDSO_AUX	__GENMASK(CLOCK_AUX_LAST, CLOCK_AUX)
 
-#define CS_HRES_COARSE	0
-#define CS_RAW		1
-#define CS_BASES	(CS_RAW + 1)
-
 /**
  * struct vdso_timestamp - basetime per clock_id
  * @sec:	seconds
@@ -52,11 +48,11 @@ struct vdso_arch_data {
  *
  * There is one vdso_timestamp object in vvar for each vDSO-accelerated
  * clock_id. For high-resolution clocks, this encodes the time
- * corresponding to vdso_time_data.cycle_last. For coarse clocks this encodes
+ * corresponding to vdso_clock.cycle_last. For coarse clocks this encodes
  * the actual time.
  *
  * To be noticed that for highres clocks nsec is left-shifted by
- * vdso_time_data[x].shift.
+ * vdso_clock.shift.
  */
 struct vdso_timestamp {
 	u64	sec;
@@ -111,7 +107,8 @@ struct vdso_clock {
  * struct vdso_time_data - vdso datapage representation
  * @arch_data:		architecture specific data (optional, defaults
  *			to an empty struct)
- * @clock_data:		clocksource related data (array)
+ * @hres_coarse:	high and coarse resolution clocksource related data
+ * @raw:		raw clocksource related data
  * @aux_clock_data:	auxiliary clocksource related data (array)
  * @tz_minuteswest:	minutes west of Greenwich
  * @tz_dsttime:		type of DST correction
@@ -128,7 +125,8 @@ struct vdso_clock {
 struct vdso_time_data {
 	struct arch_vdso_time_data	arch_data;
 
-	struct vdso_clock		clock_data[CS_BASES];
+	struct vdso_clock		hres_coarse;
+	struct vdso_clock		raw;
 	struct vdso_clock		aux_clock_data[MAX_AUX_CLOCKS];
 
 	s32				tz_minuteswest;

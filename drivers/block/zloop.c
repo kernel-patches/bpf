@@ -514,6 +514,7 @@ static void zloop_rw_complete(struct kiocb *iocb, long ret)
 {
 	struct zloop_cmd *cmd = container_of(iocb, struct zloop_cmd, iocb);
 
+	kiocb_end_write_iter(iocb);
 	cmd->ret = ret;
 	zloop_put_cmd(cmd);
 }
@@ -567,7 +568,7 @@ static int zloop_do_rw(struct zloop_cmd *cmd)
 	cmd->iocb.ki_ioprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_NONE, 0);
 
 	if (rw == ITER_SOURCE)
-		return zone->file->f_op->write_iter(&cmd->iocb, &iter);
+		return kiocb_write_iter(&cmd->iocb, &iter);
 	return zone->file->f_op->read_iter(&cmd->iocb, &iter);
 }
 
@@ -718,8 +719,13 @@ static int zloop_record_safe_wps(struct zloop_device *zlo)
 
 		if (!zloop_zone_is_active(zone))
 			continue;
-		ret = vfs_setxattr(file_mnt_idmap(file), file_dentry(file),
-				"user.zloop.wp", &zone->wp, sizeof(zone->wp), 0);
+		ret = mnt_want_write_file(file);
+		if (!ret) {
+			ret = vfs_setxattr(file_mnt_idmap(file),
+					file_dentry(file), "user.zloop.wp",
+					&zone->wp, sizeof(zone->wp), 0);
+			mnt_drop_write_file(file);
+		}
 		if (ret) {
 			pr_err("%pg: failed to record write pointer (%d)\n",
 				zlo->disk->part0, ret);
@@ -1132,12 +1138,11 @@ static int zloop_init_zone(struct zloop_device *zlo, struct zloop_options *opts,
 		return PTR_ERR(zone->file);
 	}
 
-	if (!zone->file->f_op->read_iter || !zone->file->f_op->write_iter) {
-		ret = -EINVAL;
+	ret = file_check_backing(zone->file, FMODE_READ | FMODE_WRITE, 0);
+	if (ret)
 		goto out_fput;
-	}
 
-	if (zlo->block_size) {
+	if (!zlo->block_size) {
 		ret = zloop_get_block_size(zlo, zone);
 		if (ret)
 			goto out_fput;
@@ -1161,7 +1166,8 @@ static int zloop_init_zone(struct zloop_device *zlo, struct zloop_options *opts,
 
 		if (restore && file_sectors != zlo->zone_size) {
 			pr_err("Invalid conventional zone %u file size (%llu sectors != %llu)\n",
-			       zone_no, file_sectors, zlo->zone_capacity);
+			       zone_no, file_sectors, zlo->zone_size);
+			ret = -EINVAL;
 			goto out_fput;
 		}
 
@@ -1339,8 +1345,8 @@ static int zloop_ctl_add(struct zloop_options *opts)
 
 	zlo->disk = blk_mq_alloc_disk(&zlo->tag_set, &lim, zlo);
 	if (IS_ERR(zlo->disk)) {
-		pr_err("blk_mq_alloc_disk failed (err=%d)\n", ret);
 		ret = PTR_ERR(zlo->disk);
+		pr_err("blk_mq_alloc_disk failed (err=%d)\n", ret);
 		goto out_cleanup_tags;
 	}
 	zlo->disk->flags = GENHD_FL_NO_PART;

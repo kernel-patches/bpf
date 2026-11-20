@@ -234,7 +234,7 @@ int bpf_diag_init(struct bpf_verifier_env *env)
 	if (!bpf_diag_enabled(env))
 		return 0;
 
-	env->diag = kzalloc_obj(struct bpf_diag, GFP_KERNEL_ACCOUNT);
+	env->diag = kzalloc_obj(struct bpf_diag, BPF_VERIFIER_GFP);
 	if (!env->diag)
 		return -ENOMEM;
 
@@ -266,7 +266,7 @@ static char *diag_fmt_alloc(struct bpf_verifier_env *env, size_t size)
 	}
 
 	capacity = max_t(size_t, BPF_DIAG_FMT_CHUNK_SIZE, size);
-	chunk = kmalloc_flex(*chunk, data, capacity, GFP_KERNEL_ACCOUNT);
+	chunk = kmalloc_flex(*chunk, data, capacity, BPF_VERIFIER_GFP);
 	if (!chunk)
 		return NULL;
 
@@ -392,13 +392,6 @@ static u32 log_pos(const struct bpf_diag_log *log, u32 idx)
 	return pos < log->cap ? pos : pos - log->cap;
 }
 
-u64 bpf_diag_event_log_save(struct bpf_verifier_env *env)
-{
-	struct bpf_diag *diag = env->diag;
-
-	return diag ? log_end(&diag->log) : 0;
-}
-
 void bpf_diag_event_log_restore(struct bpf_verifier_env *env, u64 log_pos)
 {
 	struct bpf_diag *diag = env->diag;
@@ -463,7 +456,7 @@ static void diag_append_history(struct bpf_verifier_env *env,
 		goto rotate;
 
 	cap = min(log->cap ? log->cap * 2 : 64, max_events);
-	events = kvrealloc(log->events, array_size(cap, sizeof(*events)), GFP_KERNEL_ACCOUNT);
+	events = kvrealloc(log->events, array_size(cap, sizeof(*events)), BPF_VERIFIER_GFP);
 	if (!events) {
 		log->growth_failed = true;
 		goto rotate;
@@ -549,7 +542,7 @@ static void diag_vprint_indented(struct bpf_verifier_env *env, const char *fmt, 
 	if (!bpf_diag_enabled(env))
 		return;
 
-	buf = kvasprintf(GFP_KERNEL_ACCOUNT, fmt, args);
+	buf = kvasprintf(BPF_VERIFIER_GFP, fmt, args);
 	if (!buf) {
 		diag_write(env, "%s<failed to allocate diagnostic text>\n", BPF_DIAG_TEXT_INDENT);
 		return;
@@ -1357,10 +1350,6 @@ void bpf_diag_unreadable_reg(struct bpf_verifier_env *env, u32 insn_idx, int reg
 		diag_reason(
 			env, "R%d is not readable here. A previous operation invalidated this register, so the verifier cannot use it as an input.",
 			regno);
-	else if (log && !log->first_seq)
-		diag_reason(env,
-			    "R%d has never been initialized on this path, so the verifier cannot use it as an input.",
-			    regno);
 	else
 		diag_reason(
 			env, "R%d is not readable here. It may never have been initialized, or an earlier operation may have invalidated it.",
@@ -1375,8 +1364,6 @@ void bpf_diag_unreadable_reg(struct bpf_verifier_env *env, u32 insn_idx, int reg
 	if (invalidated)
 		diag_suggestion(
 			env, "Avoid using the register after it is invalidated, or initialize it again before this instruction.");
-	else if (log && !log->first_seq)
-		diag_suggestion(env, "Initialize R%d on every path before this instruction.", regno);
 	else
 		diag_suggestion(
 			env, "Initialize the register on every path, or initialize it again after any operation that invalidates it.");

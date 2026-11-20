@@ -596,6 +596,7 @@ static int hmm_vma_walk_test(unsigned long start, unsigned long end,
 	struct vm_area_struct *vma = walk->vma;
 
 	if (!(vma->vm_flags & (VM_IO | VM_PFNMAP)) &&
+	    !vma_test_single_mask(vma, VMA_SHADOW_STACK) &&
 	    vma->vm_flags & VM_READ)
 		return 0;
 
@@ -606,6 +607,8 @@ static int hmm_vma_walk_test(unsigned long start, unsigned long end,
 	 * If the vma does not allow read access, then assume that it does not
 	 * allow write access either. HMM does not support architectures that
 	 * allow write without read.
+	 *
+	 * Devices must not gain ordinary write access to shadow stacks.
 	 *
 	 * If a fault is requested for an unsupported range then it is a hard
 	 * failure.
@@ -860,8 +863,8 @@ int hmm_dma_map_alloc(struct device *dev, struct hmm_dma_map *map,
 		return -EOPNOTSUPP;
 
 	map->dma_entry_size = dma_entry_size;
-	map->pfn_list = kvcalloc(nr_entries, sizeof(*map->pfn_list),
-				 GFP_KERNEL | __GFP_NOWARN);
+	map->pfn_list = kvzalloc_objs(*map->pfn_list, nr_entries,
+				      GFP_KERNEL | __GFP_NOWARN);
 	if (!map->pfn_list)
 		return -ENOMEM;
 

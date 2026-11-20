@@ -394,8 +394,7 @@ static int atmel_nand_dma_transfer(struct atmel_nand_controller *nc,
 		goto err_unmap;
 	}
 
-	tx->callback = atmel_nand_dma_transfer_finished;
-	tx->callback_param = &finished;
+	dmaengine_desc_set_callback(tx, atmel_nand_dma_transfer_finished, NULL, &finished);
 
 	cookie = dmaengine_submit(tx);
 	if (dma_submit_error(cookie)) {
@@ -1649,7 +1648,7 @@ static struct atmel_nand *atmel_nand_create(struct atmel_nand_controller *nc,
 		return ERR_PTR(-EINVAL);
 	}
 
-	nand = devm_kzalloc(nc->dev, struct_size(nand, cs, numcs), GFP_KERNEL);
+	nand = devm_kzalloc_flex(nc->dev, *nand, cs, numcs);
 	if (!nand)
 		return ERR_PTR(-ENOMEM);
 
@@ -1799,7 +1798,7 @@ atmel_nand_controller_legacy_add_nands(struct atmel_nand_controller *nc)
 	 * Legacy bindings only allow connecting a single NAND with a unique CS
 	 * line to the controller.
 	 */
-	nand = devm_kzalloc(nc->dev, struct_size(nand, cs, 1), GFP_KERNEL);
+	nand = devm_kzalloc_flex(nc->dev, *nand, cs, 1);
 	if (!nand)
 		return -ENOMEM;
 
@@ -2185,7 +2184,7 @@ atmel_hsmc_nand_controller_legacy_init(struct atmel_hsmc_nand_controller *nc)
 	if (ret) {
 		dev_err(dev, "Failed to enable the HSMC clock (err = %d)\n",
 			ret);
-		goto out;
+		goto out_put_clk;
 	}
 
 	nc->irq = of_irq_get(nand_np, 0);
@@ -2194,20 +2193,20 @@ atmel_hsmc_nand_controller_legacy_init(struct atmel_hsmc_nand_controller *nc)
 		if (ret != -EPROBE_DEFER)
 			dev_err(dev, "Failed to get IRQ number (err = %d)\n",
 				ret);
-		goto out;
+		goto out_disable_clk;
 	}
 
 	ret = of_address_to_resource(nfc_np, 0, &res);
 	if (ret) {
 		dev_err(dev, "Invalid or missing NFC IO resource (err = %d)\n",
 			ret);
-		goto out;
+		goto out_disable_clk;
 	}
 
 	iomem = devm_ioremap_resource(dev, &res);
 	if (IS_ERR(iomem)) {
 		ret = PTR_ERR(iomem);
-		goto out;
+		goto out_disable_clk;
 	}
 
 	regmap_conf.name = "nfc-io";
@@ -2217,20 +2216,20 @@ atmel_hsmc_nand_controller_legacy_init(struct atmel_hsmc_nand_controller *nc)
 		ret = PTR_ERR(nc->io);
 		dev_err(dev, "Could not create NFC IO regmap (err = %d)\n",
 			ret);
-		goto out;
+		goto out_disable_clk;
 	}
 
 	ret = of_address_to_resource(nfc_np, 1, &res);
 	if (ret) {
 		dev_err(dev, "Invalid or missing HSMC resource (err = %d)\n",
 			ret);
-		goto out;
+		goto out_disable_clk;
 	}
 
 	iomem = devm_ioremap_resource(dev, &res);
 	if (IS_ERR(iomem)) {
 		ret = PTR_ERR(iomem);
-		goto out;
+		goto out_disable_clk;
 	}
 
 	regmap_conf.name = "smc";
@@ -2240,24 +2239,30 @@ atmel_hsmc_nand_controller_legacy_init(struct atmel_hsmc_nand_controller *nc)
 		ret = PTR_ERR(nc->base.smc);
 		dev_err(dev, "Could not create NFC IO regmap (err = %d)\n",
 			ret);
-		goto out;
+		goto out_disable_clk;
 	}
 
 	ret = of_address_to_resource(nfc_np, 2, &res);
 	if (ret) {
 		dev_err(dev, "Invalid or missing SRAM resource (err = %d)\n",
 			ret);
-		goto out;
+		goto out_disable_clk;
 	}
 
 	nc->sram.virt = devm_ioremap_resource(dev, &res);
 	if (IS_ERR(nc->sram.virt)) {
 		ret = PTR_ERR(nc->sram.virt);
-		goto out;
+		goto out_disable_clk;
 	}
 
 	nc->sram.dma = res.start;
 
+	goto out;
+
+out_disable_clk:
+	clk_disable_unprepare(nc->clk);
+out_put_clk:
+	clk_put(nc->clk);
 out:
 	of_node_put(nfc_np);
 
@@ -2356,7 +2361,7 @@ static int atmel_hsmc_nand_controller_probe(struct platform_device *pdev,
 	struct atmel_hsmc_nand_controller *nc;
 	int ret;
 
-	nc = devm_kzalloc(dev, sizeof(*nc), GFP_KERNEL);
+	nc = devm_kzalloc_obj(dev, *nc);
 	if (!nc)
 		return -ENOMEM;
 
@@ -2433,7 +2438,7 @@ static int atmel_smc_nand_controller_probe(struct platform_device *pdev,
 	struct atmel_smc_nand_controller *nc;
 	int ret;
 
-	nc = devm_kzalloc(dev, sizeof(*nc), GFP_KERNEL);
+	nc = devm_kzalloc_obj(dev, *nc);
 	if (!nc)
 		return -ENOMEM;
 

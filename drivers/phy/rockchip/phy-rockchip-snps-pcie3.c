@@ -7,6 +7,7 @@
 
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/firmware.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
@@ -18,15 +19,25 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
+#include <linux/units.h>
+#include <linux/unaligned.h>
+
+#define RK_PCIE_SRAM_INIT_TIMEOUT_US		(20 * USEC_PER_MSEC)
 
 /* Register for RK3568 */
 #define GRF_PCIE30PHY_CON1			0x4
+#define GRF_PCIE30PHY_CON4			0x10
 #define GRF_PCIE30PHY_CON6			0x18
 #define GRF_PCIE30PHY_CON9			0x24
 #define GRF_PCIE30PHY_DA_OCM			(BIT(15) | BIT(31))
 #define GRF_PCIE30PHY_STATUS0			0x80
 #define GRF_PCIE30PHY_WR_EN			(0xf << 16)
 #define SRAM_INIT_DONE(reg)			(reg & BIT(14))
+
+#define GRF_PCIE30PHY_CON4_SDRAM_LD_DONE	BIT(14)
+#define GRF_PCIE30PHY_CON4_SDRAM_BYPASS		BIT(13)
+#define GRF_PCIE30PHY_CON9_SRAM_MAP		(0x3 << 8)
+#define GRF_PCIE30PHY_CON9_SRAM_MAP_WE		(0x3 << 24)
 
 #define RK3568_BIFURCATION_LANE_0_1		BIT(0)
 
@@ -53,6 +64,7 @@ struct rockchip_p3phy_ops;
 
 struct rockchip_p3phy_priv {
 	const struct rockchip_p3phy_ops *ops;
+	struct device *dev;
 	void __iomem *mmio;
 	/* mode: RC, EP */
 	int mode;
@@ -67,6 +79,7 @@ struct rockchip_p3phy_priv {
 	int num_lanes;
 	u32 lanes[4];
 	u32 rx_cmn_refclk_mode[4];
+	const struct firmware *fw;
 };
 
 struct rockchip_p3phy_ops {
@@ -91,6 +104,32 @@ static int rockchip_p3phy_set_mode(struct phy *phy, enum phy_mode mode, int subm
 	}
 
 	return 0;
+}
+
+static void rockchip_p3phy_release_fw(void *data)
+{
+	struct rockchip_p3phy_priv *priv = data;
+
+	release_firmware(priv->fw);
+	priv->fw = NULL;
+}
+
+static void rockchip_p3phy_rk3568_load_fw(struct rockchip_p3phy_priv *priv)
+{
+	const struct firmware *fw = priv->fw;
+	int i;
+
+	/* Map the PHY SRAM into the register window to write the firmware. */
+	regmap_write(priv->phy_grf, GRF_PCIE30PHY_CON9,
+		     GRF_PCIE30PHY_CON9_SRAM_MAP | GRF_PCIE30PHY_CON9_SRAM_MAP_WE);
+
+	for (i = 0; i < fw->size / sizeof(u16); i++)
+		writel(get_unaligned_le16(fw->data + i * sizeof(u16)),
+		       priv->mmio + (i << 2));
+
+	/* Unmap: field back to 0 with the write-enable for bits[9:8] */
+	regmap_write(priv->phy_grf, GRF_PCIE30PHY_CON9,
+		     GRF_PCIE30PHY_CON9_SRAM_MAP_WE);
 }
 
 static int rockchip_p3phy_rk3568_init(struct rockchip_p3phy_priv *priv)
@@ -122,16 +161,40 @@ static int rockchip_p3phy_rk3568_init(struct rockchip_p3phy_priv *priv)
 			     GRF_PCIE30PHY_WR_EN & ~RK3568_BIFURCATION_LANE_0_1);
 	}
 
+	/* Clear SDRAM load done and bypass before loading the new firmware. */
+	if (priv->fw) {
+		regmap_write(priv->phy_grf, GRF_PCIE30PHY_CON4,
+			     GRF_PCIE30PHY_CON4_SDRAM_LD_DONE << 16);
+		regmap_write(priv->phy_grf, GRF_PCIE30PHY_CON4,
+			     GRF_PCIE30PHY_CON4_SDRAM_BYPASS << 16);
+	}
+
 	reset_control_deassert(priv->p30phy);
 
 	ret = regmap_read_poll_timeout(priv->phy_grf,
 				       GRF_PCIE30PHY_STATUS0,
 				       reg, SRAM_INIT_DONE(reg),
-				       0, 500);
-	if (ret)
+				       1000, RK_PCIE_SRAM_INIT_TIMEOUT_US);
+	if (ret) {
 		dev_err(&priv->phy->dev, "%s: lock failed 0x%x, check input refclk and power supply\n",
 		       __func__, reg);
-	return ret;
+		return ret;
+	}
+
+	/*
+	 * Load the updated PHY firmware into the internal SRAM and signal SDRAM
+	 * load done once it has been written. The update is optional: without
+	 * firmware-name in DT the microcode already present in the PHY is used.
+	 */
+	if (priv->fw) {
+		rockchip_p3phy_rk3568_load_fw(priv);
+
+		regmap_write(priv->phy_grf, GRF_PCIE30PHY_CON4,
+			     (GRF_PCIE30PHY_CON4_SDRAM_LD_DONE << 16) |
+			     GRF_PCIE30PHY_CON4_SDRAM_LD_DONE);
+	}
+
+	return 0;
 }
 
 static const struct rockchip_p3phy_ops rk3568_ops = {
@@ -187,11 +250,11 @@ static int rockchip_p3phy_rk3588_init(struct rockchip_p3phy_priv *priv)
 	ret = regmap_read_poll_timeout(priv->phy_grf,
 				       RK3588_PCIE3PHY_GRF_PHY0_STATUS1,
 				       reg, RK3588_SRAM_INIT_DONE(reg),
-				       0, 500);
+				       1000, RK_PCIE_SRAM_INIT_TIMEOUT_US);
 	ret |= regmap_read_poll_timeout(priv->phy_grf,
 					RK3588_PCIE3PHY_GRF_PHY1_STATUS1,
 					reg, RK3588_SRAM_INIT_DONE(reg),
-					0, 500);
+					1000, RK_PCIE_SRAM_INIT_TIMEOUT_US);
 	if (ret)
 		dev_err(&priv->phy->dev, "lock failed 0x%x, check input refclk and power supply\n",
 			reg);
@@ -247,12 +310,14 @@ static int rockchip_p3phy_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct rockchip_p3phy_priv *priv;
 	struct device_node *np = dev->of_node;
+	const char *fw_name;
 	int ret;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
+	priv->dev = dev;
 	priv->mmio = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
 	if (IS_ERR(priv->mmio)) {
 		ret = PTR_ERR(priv->mmio);
@@ -263,6 +328,30 @@ static int rockchip_p3phy_probe(struct platform_device *pdev)
 	if (!priv->ops) {
 		dev_err(dev, "no of match data provided\n");
 		return -EINVAL;
+	}
+
+	/*
+	 * RK3568 can load an updated PHY firmware into its internal SRAM. The file
+	 * is named by the optional firmware-name property; when it is not described
+	 * (older DTBs) or cannot be loaded, keep the microcode already in the PHY.
+	 */
+	if (priv->ops == &rk3568_ops && !of_property_read_string(np, "firmware-name",
+								 &fw_name)) {
+		ret = request_firmware(&priv->fw, fw_name, dev);
+		if (ret) {
+			priv->fw = NULL;
+		} else if (priv->fw->size % sizeof(u16)) {
+			release_firmware(priv->fw);
+			priv->fw = NULL;
+		}
+
+		if (priv->fw) {
+			ret = devm_add_action_or_reset(dev,
+						       rockchip_p3phy_release_fw,
+						       priv);
+			if (ret)
+				return ret;
+		}
 	}
 
 	priv->phy_grf = syscon_regmap_lookup_by_phandle(np, "rockchip,phy-grf");

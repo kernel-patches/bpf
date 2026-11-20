@@ -4,9 +4,10 @@
 #define pr_fmt(fmt)	"stackprot: " fmt
 #endif
 
+#include <linux/text-patching.h>
 #include <linux/export.h>
 #include <linux/hex.h>
-#include <linux/uaccess.h>
+#include <linux/memory.h>
 #include <linux/printk.h>
 #include <asm/abs_lowcore.h>
 #include <asm/sections.h>
@@ -120,6 +121,9 @@ int __stack_protector_apply(unsigned long *start, unsigned long *end, unsigned l
 	struct insn_ril *insn, new;
 	int rc;
 
+#ifndef __DECOMPRESSOR
+	guard(mutex)(&text_mutex);
+#endif
 	/*
 	 * Convert LARL/LGRL instructions to LLILF so register R1 contains the
 	 * address of the per-cpu / per-process stack canary:

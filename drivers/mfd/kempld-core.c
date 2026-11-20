@@ -436,7 +436,7 @@ static int kempld_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	pld = devm_kzalloc(dev, sizeof(*pld), GFP_KERNEL);
+	pld = devm_kzalloc_obj(dev, *pld);
 	if (!pld)
 		return -ENOMEM;
 
@@ -470,9 +470,9 @@ static void kempld_remove(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id kempld_acpi_table[] = {
-	{ "KEM0000", (kernel_ulong_t)&kempld_platform_data_generic },
-	{ "KEM0001", (kernel_ulong_t)&kempld_platform_data_generic },
-	{}
+	{ .id = "KEM0000", .driver_data = (kernel_ulong_t)&kempld_platform_data_generic },
+	{ .id = "KEM0001", .driver_data = (kernel_ulong_t)&kempld_platform_data_generic },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, kempld_acpi_table);
 
