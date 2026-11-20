@@ -755,7 +755,6 @@ void bpf_clear_insn_aux_data(struct bpf_verifier_env *env, int start, int len)
 	for (i = start; i < end; i++) {
 		if (aux_data[i].loop) {
 			kvfree(aux_data[i].loop->exits);
-			kvfree(aux_data[i].loop->rungs);
 			kvfree(aux_data[i].loop);
 			aux_data[i].loop = NULL;
 		}
