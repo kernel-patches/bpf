@@ -10697,11 +10697,39 @@ check_modules:
 	return populate_cand_cache(cands, module_cand_cache, MODULE_CAND_CACHE_SIZE);
 }
 
+/* Function argument structs (see __bpf_func_args in libbpf's bpf_tracing.h)
+ * are matched against the parameters of the program's attach target.
+ */
+static int bpf_core_func_args_cand_prog(struct bpf_core_ctx *ctx, int relo_idx,
+					struct bpf_core_cand *cand)
+{
+	const struct bpf_prog *prog = ctx->prog;
+	int err;
+
+	if ((prog->type != BPF_PROG_TYPE_TRACING && prog->type != BPF_PROG_TYPE_LSM) ||
+	    !prog->aux->attach_btf || prog->aux->attach_btf_id == 0 ||
+	    prog->aux->dst_prog) {
+		bpf_log(ctx->log,
+			"relo #%u: function argument relocations need a kernel attach target\n",
+			relo_idx);
+		return -EOPNOTSUPP;
+	}
+
+	err = bpf_core_func_args_cand(prog->aux->attach_btf, prog->aux->attach_btf_id,
+				      prog->expected_attach_type, cand);
+	if (err)
+		bpf_log(ctx->log,
+			"relo #%u: can't relocate function arguments against attach target [%u]: %d\n",
+			relo_idx, prog->aux->attach_btf_id, err);
+	return err;
+}
+
 int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 		   int relo_idx, void *insn)
 {
 	bool need_cands = relo->kind != BPF_CORE_TYPE_ID_LOCAL;
 	struct bpf_core_cand_list cands = {};
+	struct bpf_core_cand func_args_cand;
 	struct bpf_core_relo_res targ_res;
 	struct bpf_core_spec *specs;
 	const struct btf_type *type;
@@ -10720,6 +10748,16 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 			relo_idx, relo->type_id);
 		kfree(specs);
 		return -EINVAL;
+	}
+
+	if (need_cands && ctx->prog && bpf_core_is_func_args_type(ctx->btf, relo->type_id)) {
+		/* no locking needed, prog holds a reference to attach_btf */
+		need_cands = false;
+		err = bpf_core_func_args_cand_prog(ctx, relo_idx, &func_args_cand);
+		if (err)
+			goto out;
+		cands.cands = &func_args_cand;
+		cands.len = 1;
 	}
 
 	if (need_cands) {
