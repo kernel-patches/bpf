@@ -906,7 +906,11 @@
 	MACRO__(0x674F, ## __VA_ARGS__), \
 	MACRO__(0x6750, ## __VA_ARGS__), \
 	MACRO__(0x6751, ## __VA_ARGS__), \
-	MACRO__(0x6752, ## __VA_ARGS__)
+	MACRO__(0x6752, ## __VA_ARGS__), \
+	MACRO__(0x6753, ## __VA_ARGS__), \
+	MACRO__(0x6754, ## __VA_ARGS__), \
+	MACRO__(0x6755, ## __VA_ARGS__), \
+	MACRO__(0x6756, ## __VA_ARGS__)
 
 /* NVL-P */
 #define INTEL_NVLP_IDS(MACRO__, ...) \

@@ -121,19 +121,8 @@ static int send_tlb_inval_ggtt_full(struct xe_tlb_inval *tlb_inval, u32 seqno)
 		seqno,
 		MAKE_INVAL_OP(XE_GUC_TLB_INVAL_FULL),
 	};
-	int ret;
 
-	ret = send_tlb_inval(guc, action, ARRAY_SIZE(action));
-
-	/*
-	 * send_tlb_inval() may return -ENODEV (CT disabled at cold boot) or
-	 * -ENOTRECOVERABLE (device wedged); nothing runs on the engines in
-	 * either case, so treat as cancelled.
-	 */
-	if (ret == -ENODEV || ret == -ENOTRECOVERABLE)
-		return -ECANCELED;
-
-	return ret;
+	return send_tlb_inval(guc, action, ARRAY_SIZE(action));
 }
 
 static int send_page_reclaim(struct xe_guc *guc, u32 seqno,

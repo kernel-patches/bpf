@@ -29,8 +29,17 @@ enum xe_wedged_mode {
  * struct xe_wedge - Struct to control Wedged States and mode
  */
 struct xe_wedge {
-	/** @flag: Xe device faced a critical error and is now blocked. */
-	atomic_t flag;
+	/**
+	 * @ref: Refcount for wedged device, blocks critical path execution. Used for
+	 * driver internal usecases which require temporarily blocking userspace access
+	 * to the device during autonomous recovery, like PCIe FLR and bus reset.
+	 */
+	atomic_t ref;
+	/**
+	 * @perm: Permanently wedged device, not recoverable. Only to be set when
+	 * notifying userspace of wedged device through drm wedged uevent.
+	 */
+	atomic_t perm;
 	/** @mode: Mode controlled by kernel parameter and debugfs */
 	enum xe_wedged_mode mode;
 	/** @method: Recovery method to be sent in the drm device wedged uevent */

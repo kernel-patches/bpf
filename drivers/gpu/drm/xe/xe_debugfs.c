@@ -11,6 +11,8 @@
 #include <linux/string_helpers.h>
 
 #include <drm/drm_debugfs.h>
+#include <drm/drm_file.h>
+#include <drm/drm_print.h>
 
 #include "regs/xe_pmt.h"
 #include "xe_bo.h"
@@ -784,4 +786,159 @@ void xe_debugfs_register(struct xe_device *xe)
 		xe_sriov_pf_debugfs_register(xe, root);
 	else if (IS_SRIOV_VF(xe))
 		xe_sriov_vf_debugfs_register(xe, root);
+}
+
+/*
+ * Per-client "bo_numa" file: Report the NUMA node distribution of the
+ * system pages backing a single bo.
+ *
+ * The file implements a request-response protocol: write() takes a GEM
+ * handle, valid for the client, and takes a snapshot of the bo's page
+ * distribution under the bo's dma_resv lock. Subsequent read()s return
+ * that snapshot. Once the snapshot has been completely read, it is
+ * discarded and a new handle may be written. Until then, writes return
+ * -EBUSY, so that a pending snapshot is never replaced before it is
+ * consumed.
+ *
+ * See xe_bo_print_numa_info() for the snapshot contents.
+ */
+struct bo_numa_snapshot {
+	/* Serializes reads and writes on the open file. */
+	struct mutex lock;
+	/* The pending formatted snapshot, or NULL if none. */
+	char *buf;
+	/* Length of the formatted snapshot. */
+	size_t len;
+};
+
+static int bo_numa_open(struct inode *inode, struct file *f)
+{
+	struct bo_numa_snapshot *snap;
+
+	snap = kzalloc_obj(*snap, GFP_KERNEL_ACCOUNT);
+	if (!snap)
+		return -ENOMEM;
+
+	mutex_init(&snap->lock);
+	f->private_data = snap;
+
+	return nonseekable_open(inode, f);
+}
+
+static int bo_numa_release(struct inode *inode, struct file *f)
+{
+	struct bo_numa_snapshot *snap = f->private_data;
+
+	kvfree(snap->buf);
+	mutex_destroy(&snap->lock);
+	kfree(snap);
+
+	return 0;
+}
+
+static ssize_t bo_numa_read(struct file *f, char __user *ubuf, size_t size,
+			    loff_t *pos)
+{
+	struct bo_numa_snapshot *snap = f->private_data;
+	ssize_t ret = 0;
+
+	mutex_lock(&snap->lock);
+	if (snap->buf) {
+		ret = simple_read_from_buffer(ubuf, size, pos, snap->buf,
+					      snap->len);
+		if (*pos >= snap->len) {
+			kvfree(snap->buf);
+			snap->buf = NULL;
+		}
+	}
+	mutex_unlock(&snap->lock);
+
+	return ret;
+}
+
+static ssize_t bo_numa_write(struct file *f, const char __user *ubuf,
+			     size_t size, loff_t *pos)
+{
+	struct drm_file *file = file_inode(f)->i_private;
+	struct bo_numa_snapshot *snap = f->private_data;
+	struct drm_print_iterator iter;
+	struct drm_printer p;
+	size_t bufsize = PAGE_SIZE / 2;
+	char *buf = NULL;
+	u32 handle;
+	int ret;
+
+	ret = kstrtou32_from_user(ubuf, size, 0, &handle);
+	if (ret)
+		return ret;
+
+	ret = mutex_lock_interruptible(&snap->lock);
+	if (ret)
+		return ret;
+
+	if (snap->buf) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	/*
+	 * Retry with a larger buffer until the snapshot fits. The coredump
+	 * printer is used as a generic bounded buffer printer, and reports
+	 * when its buffer is full.
+	 */
+	do {
+		kvfree(buf);
+		bufsize *= 2;
+		buf = kvzalloc(bufsize, GFP_KERNEL_ACCOUNT);
+		if (!buf) {
+			ret = -ENOMEM;
+			goto out_unlock;
+		}
+
+		iter = (struct drm_print_iterator) {
+			.data = buf,
+			.remain = bufsize,
+		};
+		p = drm_coredump_printer(&iter);
+		ret = xe_bo_print_numa_info(file, handle, &p);
+		if (ret)
+			goto out_free;
+	} while (drm_coredump_printer_is_full(&p));
+
+	snap->buf = buf;
+	snap->len = bufsize - iter.remain;
+	*pos = 0;
+	buf = NULL;
+
+out_free:
+	kvfree(buf);
+out_unlock:
+	mutex_unlock(&snap->lock);
+
+	return ret ?: size;
+}
+
+static const struct file_operations bo_numa_fops = {
+	.owner = THIS_MODULE,
+	.open = bo_numa_open,
+	.release = bo_numa_release,
+	.read = bo_numa_read,
+	.write = bo_numa_write,
+};
+
+/**
+ * xe_debugfs_client_add() - Add xe-specific per-client debugfs files
+ * @file: The drm_file of the client.
+ *
+ * Populate the drm core per-client debugfs directory with xe-specific
+ * files. The files are removed by the drm core together with the
+ * directory when @file is released.
+ */
+void xe_debugfs_client_add(struct drm_file *file)
+{
+	if (IS_ERR_OR_NULL(file->debugfs_client))
+		return;
+
+	debugfs_create_file("bo_numa", 0600, file->debugfs_client, file,
+			    &bo_numa_fops);
 }

@@ -10,6 +10,8 @@
 #include <linux/pci.h>
 #include <linux/sysfs.h>
 
+#include <drm/drm_drv.h>
+
 #include "xe_configfs.h"
 #include "xe_device.h"
 #include "xe_heci_gsc.h"
@@ -435,11 +437,17 @@ void xe_survivability_mode_runtime_enable(struct xe_device *xe)
 {
 	struct xe_survivability *survivability = &xe->survivability;
 	struct pci_dev *pdev = to_pci_dev(xe->drm.dev);
+	int idx;
+
 
 	if (!IS_DGFX(xe) || IS_SRIOV_VF(xe) || xe->info.platform < XE_BATTLEMAGE) {
 		xe_log_err(xe, SURVIVABILITY, -EOPNOTSUPP, "Runtime Mode not supported!\n");
 		return;
 	}
+
+	/* Synchronize with unbind, do not enter runtime survivability mode during unbind */
+	if (!drm_dev_enter(&xe->drm, &idx))
+		return;
 
 	populate_survivability_info(xe);
 	create_survivability_sysfs(pdev);
@@ -452,6 +460,8 @@ void xe_survivability_mode_runtime_enable(struct xe_device *xe)
 	xe_log_err(xe, SURVIVABILITY, 0, "Firmware flash required!\n");
 	xe_info(xe, "Please refer to the userspace documentation for more details how to flash the firmware on %s!\n",
 		xe->info.platform_name);
+
+	drm_dev_exit(idx);
 }
 
 /**

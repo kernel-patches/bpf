@@ -112,6 +112,7 @@ enum xe_madv_purgeable_state {
 	XE_MADV_PURGEABLE_PURGED,
 };
 
+struct drm_printer;
 struct sg_table;
 
 struct xe_bo *xe_bo_alloc(void);
@@ -457,6 +458,11 @@ void xe_bo_runtime_pm_release_mmap_offset(struct xe_bo *bo);
 int xe_bo_dumb_create(struct drm_file *file_priv,
 		      struct drm_device *dev,
 		      struct drm_mode_create_dumb *args);
+
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+int xe_bo_print_numa_info(struct drm_file *file, u32 handle,
+			  struct drm_printer *p);
+#endif
 
 bool xe_bo_needs_ccs_pages(struct xe_bo *bo);
 

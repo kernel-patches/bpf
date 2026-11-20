@@ -414,6 +414,8 @@ struct xe_ras_set_health_response {
  * struct xe_ras_state - RAS device and firmware state
  */
 struct xe_ras_state {
+	/** @aer_internal_error: true if an uncorrectable internal error was reported via AER */
+	bool aer_internal_error;
 	/** @disable_vram_page_offline: cached configfs policy, immutable after init */
 	bool disable_vram_page_offline;
 	/** @max_pages: Total number of pages that can be stored by firmware */

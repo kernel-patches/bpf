@@ -531,7 +531,7 @@ static int pf_provision_vf_ggtt(struct xe_gt *gt, unsigned int vfid, u64 size)
 	if (!size)
 		return 0;
 
-	node = xe_ggtt_insert_node(ggtt, size, alignment);
+	node = xe_ggtt_insert_node_shareable(ggtt, size, alignment);
 	if (IS_ERR(node))
 		return PTR_ERR(node);
 
