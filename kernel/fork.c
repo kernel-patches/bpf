@@ -1533,12 +1533,19 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 	if (!mm)
 		goto fail_nomem;
 
+	uprobe_start_dup_mmap();
+	if (mmap_write_lock_killable(oldmm)) {
+		free_mm(mm);
+		goto fail_uprobe;
+	}
+
 	memcpy(mm, oldmm, sizeof(*mm));
 
-	if (!mm_init(mm, tsk))
-		goto fail_nomem;
+	if (!mm_init(mm, tsk)) {
+		mmap_write_unlock(oldmm);
+		goto fail_uprobe;
+	}
 
-	uprobe_start_dup_mmap();
 	err = dup_mmap(mm, oldmm);
 	if (err)
 		goto free_pt;
@@ -1557,9 +1564,10 @@ free_pt:
 	mm->binfmt = NULL;
 	mm_init_owner(mm, NULL);
 	mmput(mm);
-	if (err)
-		uprobe_end_dup_mmap();
-
+	if (!err)
+		return NULL;
+fail_uprobe:
+	uprobe_end_dup_mmap();
 fail_nomem:
 	return NULL;
 }
@@ -2620,8 +2628,14 @@ bad_fork_cleanup_namespaces:
 bad_fork_cleanup_mm:
 	sched_cache_fork_cleanup(p);
 	if (p->mm) {
-		mm_clear_owner(p->mm, p);
-		mmput(p->mm);
+		struct mm_struct *mm = p->mm;
+
+		/* Perf events and BPF programs can still reach p. */
+		task_lock(p);
+		p->mm = NULL;
+		task_unlock(p);
+		mm_clear_owner(mm, p);
+		mmput(mm);
 	}
 bad_fork_cleanup_signal:
 	if (!(clone_flags & CLONE_THREAD))
@@ -2655,6 +2669,11 @@ bad_fork_cleanup_count:
 	exit_cred_namespaces(p);
 	exit_creds(p);
 bad_fork_free:
+	/*
+	 * If set, p->mm points at the parent's mm without a reference. Nobody
+	 * can access it concurrently anymore, but prevent later access.
+	 */
+	p->mm = NULL;
 	WRITE_ONCE(p->__state, TASK_DEAD);
 	exit_task_stack_account(p);
 	put_task_stack(p);
