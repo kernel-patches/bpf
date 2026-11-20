@@ -310,7 +310,7 @@ static bool try_to_map_unused_to_zeropage(struct page_vma_mapped_walk *pvmw,
 	VM_BUG_ON_PAGE(pte_present(old_pte), page);
 	VM_WARN_ON_ONCE_FOLIO(folio_is_device_private(folio), folio);
 
-	if (folio_test_mlocked(folio) || (pvmw->vma->vm_flags & VM_LOCKED) ||
+	if (folio_test_mlocked(folio) || vma_test(pvmw->vma, VMA_LOCKED_BIT) ||
 	    mm_forbids_zeropage(pvmw->vma->vm_mm))
 		return false;
 
@@ -353,6 +353,7 @@ static bool remove_migration_pte(struct folio *folio,
 {
 	struct rmap_walk_arg *rmap_walk_arg = arg;
 	DEFINE_FOLIO_VMA_WALK(pvmw, rmap_walk_arg->folio, vma, addr, PVMW_SYNC | PVMW_MIGRATION);
+	unsigned long ptes = 0;
 
 	while (page_vma_mapped_walk(&pvmw)) {
 		rmap_t rmap_flags = RMAP_NONE;
@@ -408,10 +409,13 @@ static bool remove_migration_pte(struct folio *folio,
 		else
 			pte = pte_clear_soft_dirty(pte);
 
-		if (softleaf_is_migration_write(entry))
+		if (softleaf_is_migration_write(entry)) {
+			/* Setting the uffd bit must make the entry read-only. */
+			VM_WARN_ON_ONCE(pte_swp_uffd(old_pte));
 			pte = pte_mkwrite(pte, vma);
-		else if (pte_swp_uffd(old_pte))
+		} else if (pte_swp_uffd(old_pte)) {
 			pte = pte_mkuffd(pte);
+		}
 
 		/* See do_swap_page(): restore PAGE_NONE for RWP */
 		if (pte_swp_uffd(old_pte) && userfaultfd_rwp(vma))
@@ -457,9 +461,16 @@ static bool remove_migration_pte(struct folio *folio,
 			else
 				folio_add_file_rmap_pte(folio, new, vma);
 			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte);
+
+			ptes++;
 		}
-		if (READ_ONCE(vma->vm_flags) & VM_LOCKED)
+		if (READ_ONCE(vma->vm_flags) & VM_LOCKED) {
+			if (folio_test_large(folio) &&
+			    ptes == folio_nr_pages(folio) &&
+			    !(pvmw.flags & PVMW_PGTABLE_CROSSED))
+				mlock_vma_folio(folio, vma);
 			mlock_drain_local();
+		}
 
 		trace_remove_migration_pte(pvmw.address, pte_val(pte),
 					   compound_order(new));
@@ -701,8 +712,20 @@ static int __folio_migrate_mapping(struct address_space *mapping,
 		old_lruvec = mem_cgroup_lruvec(memcg, oldzone->zone_pgdat);
 		new_lruvec = mem_cgroup_lruvec(memcg, newzone->zone_pgdat);
 
-		mod_lruvec_state(old_lruvec, NR_FILE_PAGES, -nr);
-		mod_lruvec_state(new_lruvec, NR_FILE_PAGES, nr);
+		/*
+		 * Swapcache folios carry NR_FILE_PAGES on the node plane
+		 * only (their memcg footprint is NR_SWAPCACHE, see
+		 * swap_state.c), so move only the node plane for them.
+		 */
+		if (folio_test_swapcache(folio)) {
+			mod_node_page_state(oldzone->zone_pgdat, NR_FILE_PAGES,
+					    -nr);
+			mod_node_page_state(newzone->zone_pgdat, NR_FILE_PAGES,
+					    nr);
+		} else {
+			mod_lruvec_state(old_lruvec, NR_FILE_PAGES, -nr);
+			mod_lruvec_state(new_lruvec, NR_FILE_PAGES, nr);
+		}
 		if (folio_test_swapbacked(folio) && !folio_test_swapcache(folio)) {
 			mod_lruvec_state(old_lruvec, NR_SHMEM, -nr);
 			mod_lruvec_state(new_lruvec, NR_SHMEM, nr);
@@ -2556,6 +2579,7 @@ static int do_pages_stat(struct mm_struct *mm, unsigned long nr_pages,
 
 		chunk_offset += chunk_nr;
 		nr_pages -= chunk_nr;
+		cond_resched();
 	}
 	return nr_pages ? -EFAULT : 0;
 }
@@ -2712,7 +2736,8 @@ int migrate_misplaced_folio_prepare(struct folio *folio,
 		 * See folio_maybe_mapped_shared() on possible imprecision
 		 * when we cannot easily detect if a folio is shared.
 		 */
-		if ((vma->vm_flags & VM_EXEC) && folio_maybe_mapped_shared(folio))
+		if (vma_test(vma, VMA_EXEC_BIT) &&
+		    folio_maybe_mapped_shared(folio))
 			return -EACCES;
 
 		/*
