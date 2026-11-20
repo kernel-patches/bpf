@@ -2124,7 +2124,7 @@ static const struct cqspi_driver_platdata socfpga_qspi = {
 static const struct cqspi_driver_platdata versal_ospi = {
 	.hwcaps_mask = CQSPI_SUPPORTS_OCTAL,
 	.quirks = CQSPI_DISABLE_DAC_MODE | CQSPI_SUPPORT_EXTERNAL_DMA |
-		  CQSPI_DMA_SET_MASK,
+		  CQSPI_DMA_SET_MASK | CQSPI_DISABLE_STIG_MODE,
 	.indirect_read_dma = cqspi_versal_indirect_read_dma,
 	.get_dma_status = cqspi_get_versal_dma_status,
 };
@@ -2132,7 +2132,8 @@ static const struct cqspi_driver_platdata versal_ospi = {
 static const struct cqspi_driver_platdata versal2_ospi = {
 	.hwcaps_mask = CQSPI_SUPPORTS_OCTAL,
 	.quirks = CQSPI_DISABLE_DAC_MODE | CQSPI_SUPPORT_EXTERNAL_DMA |
-		  CQSPI_DMA_SET_MASK | CQSPI_SUPPORT_DEVICE_RESET,
+		  CQSPI_DMA_SET_MASK | CQSPI_DISABLE_STIG_MODE |
+		  CQSPI_SUPPORT_DEVICE_RESET,
 	.indirect_read_dma = cqspi_versal_indirect_read_dma,
 	.get_dma_status = cqspi_get_versal_dma_status,
 };
