@@ -1336,7 +1336,7 @@ static struct miscdevice vchiq_miscdev = {
  *				device files in userspace.
  *	@parent:	The parent of the char device.
  *
- *	Returns 0 on success else returns the error code.
+ *	Return: 0 on success, or a negative error code on failure.
  */
 int vchiq_register_chrdev(struct device *parent)
 {

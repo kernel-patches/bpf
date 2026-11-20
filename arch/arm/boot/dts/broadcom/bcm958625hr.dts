@@ -182,6 +182,11 @@
 	};
 };
 
+&sata {
+	/delete-property/ dma-coherent;
+	status = "okay";
+};
+
 &sata_phy0 {
 	status = "okay";
 };

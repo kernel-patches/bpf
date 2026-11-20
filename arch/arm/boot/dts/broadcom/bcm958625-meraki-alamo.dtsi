@@ -85,26 +85,6 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			phy_port6: phy@0 {
-				reg = <0>;
-			};
-
-			phy_port7: phy@1 {
-				reg = <1>;
-			};
-
-			phy_port8: phy@2 {
-				reg = <2>;
-			};
-
-			phy_port9: phy@3 {
-				reg = <3>;
-			};
-
-			phy_port10: phy@4 {
-				reg = <4>;
-			};
-
 			switch@10 {
 				compatible = "qca,qca8337";
 				reg = <0x10>;
@@ -128,31 +108,61 @@
 					port@1 {
 						reg = <1>;
 						label = "lan8";
+						phy-mode = "internal";
 						phy-handle = <&phy_port6>;
 					};
 
 					port@2 {
 						reg = <2>;
 						label = "lan9";
+						phy-mode = "internal";
 						phy-handle = <&phy_port7>;
 					};
 
 					port@3 {
 						reg = <3>;
 						label = "lan10";
+						phy-mode = "internal";
 						phy-handle = <&phy_port8>;
 					};
 
 					port@4 {
 						reg = <4>;
 						label = "lan11";
+						phy-mode = "internal";
 						phy-handle = <&phy_port9>;
 					};
 
 					port@5 {
 						reg = <5>;
 						label = "lan12";
+						phy-mode = "internal";
 						phy-handle = <&phy_port10>;
+					};
+				};
+
+				mdio {
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					phy_port6: ethernet-phy@0 {
+						reg = <0>;
+					};
+
+					phy_port7: ethernet-phy@1 {
+						reg = <1>;
+					};
+
+					phy_port8: ethernet-phy@2 {
+						reg = <2>;
+					};
+
+					phy_port9: ethernet-phy@3 {
+						reg = <3>;
+					};
+
+					phy_port10: ethernet-phy@4 {
+						reg = <4>;
 					};
 				};
 			};
@@ -162,26 +172,6 @@
 			reg = <0x2000>;
 			#address-cells = <1>;
 			#size-cells = <0>;
-
-			phy_port1: phy@0 {
-				reg = <0>;
-			};
-
-			phy_port2: phy@1 {
-				reg = <1>;
-			};
-
-			phy_port3: phy@2 {
-				reg = <2>;
-			};
-
-			phy_port4: phy@3 {
-				reg = <3>;
-			};
-
-			phy_port5: phy@4 {
-				reg = <4>;
-			};
 
 			switch@10 {
 				compatible = "qca,qca8337";
@@ -206,31 +196,61 @@
 					port@1 {
 						reg = <1>;
 						label = "lan3";
+						phy-mode = "internal";
 						phy-handle = <&phy_port1>;
 					};
 
 					port@2 {
 						reg = <2>;
 						label = "lan4";
+						phy-mode = "internal";
 						phy-handle = <&phy_port2>;
 					};
 
 					port@3 {
 						reg = <3>;
 						label = "lan5";
+						phy-mode = "internal";
 						phy-handle = <&phy_port3>;
 					};
 
 					port@4 {
 						reg = <4>;
 						label = "lan6";
+						phy-mode = "internal";
 						phy-handle = <&phy_port4>;
 					};
 
 					port@5 {
 						reg = <5>;
 						label = "lan7";
+						phy-mode = "internal";
 						phy-handle = <&phy_port5>;
+					};
+				};
+
+				mdio {
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					phy_port1: ethernet-phy@0 {
+						reg = <0>;
+					};
+
+					phy_port2: ethernet-phy@1 {
+						reg = <1>;
+					};
+
+					phy_port3: ethernet-phy@2 {
+						reg = <2>;
+					};
+
+					phy_port4: ethernet-phy@3 {
+						reg = <3>;
+					};
+
+					phy_port5: ethernet-phy@4 {
+						reg = <4>;
 					};
 				};
 			};
