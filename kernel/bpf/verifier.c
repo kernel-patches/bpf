@@ -4717,6 +4717,7 @@ bad_type:
 	verbose(env, "invalid kptr access, R%d type=%s%s ", regno,
 		reg_type_str(env, reg->type), reg_name);
 	verbose(env, "expected=%s%s", reg_type_str(env, PTR_TO_BTF_ID), targ_name);
+	bpf_note_needs_ptr(env, reg);
 	if (kptr_field->type == BPF_KPTR_UNREF)
 		verbose(env, " or %s%s\n", reg_type_str(env, PTR_TO_BTF_ID | PTR_UNTRUSTED),
 			targ_name);
@@ -7343,8 +7344,10 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 		return size;
 
 	err = check_ptr_alignment(env, reg, off, size, strict_alignment_once);
-	if (err)
+	if (err) {
+		bpf_note_needs_ptr(env, reg);
 		return err;
+	}
 
 	if (reg->type == PTR_TO_MAP_KEY) {
 		if (t == BPF_WRITE) {
@@ -7557,6 +7560,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 
 		verbose(env, "%s invalid mem access '%s'\n", reg_arg_name(env, argno),
 			reg_type_str(env, reg->type));
+		bpf_note_needs_ptr(env, reg);
 		if (reg->type == SCALAR_VALUE)
 			kind = BPF_DIAG_DEREF_SCALAR;
 		else if (type_may_be_null(reg->type))
@@ -7876,8 +7880,9 @@ static int check_stack_range_initialized(
 	u32 arg_slot = arg_slot_from_argno(argno);
 	bool uninit = clobber && meta && arg_slot < MAX_BPF_FUNC_ARGS &&
 		      (meta->arg_raw_mem.mask & BIT(arg_slot));
-	bool raw_mode = uninit && env->allow_uninit_stack &&
-			!(meta->arg_raw_mem.var_size_mask & BIT(arg_slot));
+	bool var_size = meta && arg_slot < MAX_BPF_FUNC_ARGS &&
+			(meta->arg_raw_mem.var_size_mask & BIT(arg_slot));
+	bool raw_mode = uninit && env->allow_uninit_stack && !var_size;
 
 	access_size = abs(access_size);
 
@@ -7926,6 +7931,10 @@ static int check_stack_range_initialized(
 		struct bpf_stack_state *ss;
 		u8 *stype;
 
+		/* The byte is between two accesses. See size_at_max_offset() for @var_size. */
+		if (reg->step > 1 && !var_size &&
+		    imod(i - off - reg->base, reg->step) >= access_size)
+			continue;
 		slot = -i - 1;
 		spi = slot / BPF_REG_SIZE;
 		if (state->allocated_stack <= slot) {
@@ -8077,6 +8086,7 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, struct bpf_reg_
 		verbose(env, "%s type=%s ", reg_arg_name(env, argno),
 			reg_type_str(env, reg->type));
 		verbose(env, "expected=%s\n", reg_type_str(env, PTR_TO_STACK));
+		bpf_note_needs_ptr(env, reg);
 		return -EACCES;
 	}
 }
@@ -9432,6 +9442,7 @@ static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *re
 	for (j = 0; j + 1 < i; j++)
 		verbose(env, "%s, ", reg_type_str(env, compatible->types[j]));
 	verbose(env, "%s\n", reg_type_str(env, compatible->types[j]));
+	bpf_note_needs_ptr(env, reg);
 	actual = bpf_diag_fmt(env, "%s", reg_type_str(env, reg->type));
 	accepted = bpf_diag_expected_reg_types(env, compatible->types, i);
 	bpf_diag_call_arg_fmt(env, env->insn_idx, argno, meta->func_name,
@@ -12064,6 +12075,7 @@ static int check_func_callx(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	reg = reg_state(env, insn->dst_reg);
 	if (reg->type != PTR_TO_FUNC) {
+		bpf_note_needs_ptr(env, reg);
 		verbose(env, "R%d has type %s, expected func\n", insn->dst_reg,
 			reg_type_str(env, reg->type));
 		reason = bpf_diag_fmt(
@@ -21577,6 +21589,74 @@ static void free_pushed_states(struct bpf_verifier_env *env)
 	}
 }
 
+/*
+ * A load with a range of offsets makes a number of the pointers that are spilled there. If an
+ * insn needed a pointer and got that number, load each slot in its own state:
+ *	char *p[2] = { a, b };
+ *	return p[i & 1][63];
+ * Other loads keep the number: 'sum += word[i]' fails for a pointer.
+ */
+static int fork_stack_load(struct bpf_verifier_env *env, const struct bpf_insn *insn,
+			   unsigned long ranges)
+{
+	struct bpf_verifier_state *st = env->cur_state, *part;
+	DECLARE_BITMAP(slots, MAX_BPF_XREG) = {};
+	u32 regno = insn->src_reg, xregno, last;
+	struct bpf_stack_state *slot;
+	struct bpf_func_state *frame;
+	struct bpf_reg_state *reg;
+	struct scalar value = {};
+	bool has_ptr = false, needs_ptr;
+	s64 min_off, max_off;
+	int spi;
+
+	/* the cpu can speculate with the address of another state */
+	if (insn->code != (BPF_LDX | BPF_MEM | BPF_DW) || !(ranges & BIT(regno)) ||
+	    cur_regs(env)[regno].type != PTR_TO_STACK || !env->bypass_spec_v1)
+		return 0;
+	/* without allow_ptr_leaks the load fails */
+	needs_ptr = !env->allow_ptr_leaks || bpf_insn_makes_ptr(env);
+	reg = &cur_regs(env)[regno];
+	frame = bpf_func(env, reg);
+	min_off = reg_smin(reg) + insn->off;
+	max_off = reg_smax(reg) + insn->off;
+	if (offset_is_far(reg) || min_off < -frame->allocated_stack || max_off >= 0 ||
+	    !tnum_is_aligned(tnum_add(reg->var_off, tnum_const(insn->off)), BPF_REG_SIZE))
+		return 0;
+	bpf_add_cost(env, (max_off - min_off) / BPF_REG_SIZE, BPF_COST_XREG);
+	for (spi = bpf_get_spi(max_off); spi <= bpf_get_spi(min_off); spi++) {
+		scalar_set_const(&value, -(spi + 1) * BPF_REG_SIZE - insn->off);
+		if (!scalar_subsumes(scalar_of(reg), &value))
+			continue;
+		slot = bpf_stack_slot(frame, spi);
+		__set_bit(bpf_spi_to_xreg(spi), slots);
+		has_ptr |= bpf_is_spilled_reg(slot) && !bpf_is_spilled_scalar_reg(slot);
+	}
+	if (!has_ptr)
+		return 0;
+	env->imprecise |= !env->err;
+	if (!needs_ptr)
+		return 0;
+	/* no run has to load from all slots */
+	env->extra_values = true;
+	if (env->log.level & BPF_LOG_LEVEL)
+		verbose(env, "fork R%d\n", regno);
+	mark_reg_scratched(env, regno);
+	last = find_last_bit(slots, MAX_BPF_XREG);
+	for_each_set_bit(xregno, slots, MAX_BPF_XREG) {
+		part = xregno == last ? st : push_stack(env, env->insn_idx, env->insn_idx, false);
+		if (IS_ERR(part))
+			return PTR_ERR(part);
+		spi = bpf_xreg_to_spi(xregno);
+		scalar_set_const(scalar_of(&part->frame[part->curframe]->regs[regno]),
+				 -(spi + 1) * BPF_REG_SIZE - insn->off);
+		bpf_equations_refine_by_reg(env, part, regno);
+		if (part != st)
+			env->head->again = true;
+	}
+	return 0;
+}
+
 /* Process the current state until it gets to the start of a basic block. */
 static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 {
@@ -21707,10 +21787,8 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		ranges = operands_with_range(env, insn);
 		stack_args = cur_func(env)->out_stack_arg_cnt;
 
-		if (err)
-			return err;
-
 		err = check_loop_guard(env) ?: check_recursion_guard(env);
+		err = err ?: fork_stack_load(env, insn, ranges);
 		if (err)
 			return err;
 

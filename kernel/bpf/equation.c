@@ -875,6 +875,16 @@ static void refine_from_reg(struct bpf_verifier_env *env, struct bpf_verifier_st
 	eq_env->jump_expr.coef = 0;
 }
 
+/* @regno has fewer values now */
+void bpf_equations_refine_by_reg(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+				 u32 regno)
+{
+	if (!env->eq_env)
+		return;
+	refine_from_reg(env, st, regno);
+	propagate_bounds(env, st, false);
+}
+
 /* Apply all equations */
 void bpf_equations_refine_all(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
 {

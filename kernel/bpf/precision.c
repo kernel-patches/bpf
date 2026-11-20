@@ -749,6 +749,14 @@ static u16 compute_call_deps(struct bpf_verifier_env *env, unsigned long *masks,
 	       (GENMASK(BPF_REG_5, BPF_REG_1) | BIT(XREG_STACK_ARGS));
 }
 
+static bool may_keep_ptr(const struct bpf_insn *insn)
+{
+	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
+
+	return class != BPF_ALU &&
+	       (class != BPF_ALU64 || op == BPF_MOV || op == BPF_ADD || op == BPF_SUB);
+}
+
 /* What the insn at @idx of function @s needs before it. @in has what is needed after it. */
 static bool compute_insn_deps(struct bpf_verifier_env *env, unsigned long *masks, u8 *ret, int s,
 			      int idx, bool is_seed, unsigned long *in, bool held)
@@ -760,6 +768,7 @@ static bool compute_insn_deps(struct bpf_verifier_env *env, unsigned long *masks
 	bool changed = false, stores, reads, loads, call, held_after;
 	struct taken_funcs *taken = &env->precision->taken;
 	u8 class = BPF_CLASS(insn->code), needs;
+	u16 ptrs = 0;
 	int t, callee;
 
 	call = class == BPF_JMP && BPF_OP(insn->code) == BPF_CALL;
@@ -785,6 +794,11 @@ static bool compute_insn_deps(struct bpf_verifier_env *env, unsigned long *masks
 		  test_bit(idx, env->precision->last_pass.bad_read_insns));
 	if (!loads && class == BPF_STX)
 		use = BIT(insn->dst_reg);
+	if (env->precision->ptr_deps_only) {
+		reads &= may_keep_ptr(insn);
+		ptrs = is_seed ? aux->needs_ptr_regs : 0;
+		is_seed = false;
+	}
 	reads |= is_seed;
 	in[0] &= ~(unsigned long)(def & XREG_REGS);
 	for (t = 0; t < BITS_TO_LONGS(bits); t++)
@@ -829,6 +843,7 @@ static bool compute_insn_deps(struct bpf_verifier_env *env, unsigned long *masks
 	if (held)
 		changed |= !__test_and_set_bit(idx, env->precision->held_insns);
 	in[0] |= args | (reads ? use & XREG_REGS : 0);
+	in[0] |= ptrs;
 	if (reads && (call || is_stack_arg_ldx(insn)))
 		__set_bit(XREG_STACK_ARGS, in);
 	if ((reads && loads) || (needs & RET_LOADS)) {
@@ -1125,6 +1140,43 @@ static int compute_deps_of_unproven(struct bpf_verifier_env *env)
 	return add_control_deps(env);
 }
 
+/* The current insn needs a pointer in @reg */
+void bpf_note_needs_ptr(struct bpf_verifier_env *env, const struct bpf_reg_state *reg)
+{
+	const struct bpf_reg_state *regs = cur_regs(env);
+
+	if (reg->type != SCALAR_VALUE || reg->from_unproven || env->path_sensitive ||
+	    reg < regs || reg >= regs + BPF_REG_FP)
+		return;
+	__set_bit(env->insn_idx, env->precision->needs_ptr_insns);
+	env->insn_aux_data[env->insn_idx].needs_ptr_regs |= BIT(reg - regs);
+}
+
+/* The current insn can load a pointer. Does a later insn need it? */
+bool bpf_insn_makes_ptr(struct bpf_verifier_env *env)
+{
+	env->precision->this_pass.can_fork = true;
+	return test_bit(env->insn_idx, env->precision->makes_ptr_insns);
+}
+
+/* See fork_stack_load(). Returns 1 if there are more such insns. */
+static int add_makes_ptr_insns(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	u32 len = env->prog->len;
+	int err;
+
+	if (!prec->last_pass.can_fork || bitmap_empty(prec->needs_ptr_insns, len))
+		return 0;
+	prec->ptr_deps_only = true;
+	err = bpf_compute_deps(env, prec->new_data_deps, prec->needs_ptr_insns);
+	prec->ptr_deps_only = false;
+	if (err || bitmap_subset(prec->controlled_insns, prec->makes_ptr_insns, len))
+		return err;
+	bitmap_or(prec->makes_ptr_insns, prec->makes_ptr_insns, prec->controlled_insns, len);
+	return 1;
+}
+
 /* An unreadable xreg needs one type and object, whatever the numbers are. Try that first. */
 static int add_deps(struct bpf_verifier_env *env)
 {
@@ -1143,6 +1195,10 @@ static int add_deps(struct bpf_verifier_env *env)
 			      prec->last_pass.bad_read_insns, len);
 	bitmap_or(prec->bad_read_insns_done, prec->bad_read_insns_done,
 		  prec->last_pass.bad_read_insns, len);
+	ret = add_makes_ptr_insns(env);
+	if (ret < 0)
+		return ret;
+	more |= ret;
 	ret = compute_deps_of_unproven(env);
 	for (i = 0; i < 5 * prec->words; i++)
 		prec->kept[i] |= prec->data_deps[i] & ~prec->undo[i];
@@ -1620,6 +1676,8 @@ void bpf_precision_new_pass(struct bpf_verifier_env *env)
 	bitmap_zero(prec->this_pass.unproven_funcs, env->subprog_cnt);
 	prec->this_pass.suspect_loops = prec->this_pass.first_suspect_loops =
 		prec->this_pass.disjoint_joined = prec->this_pass.arg_lost_equation = 0;
+	prec->this_pass.can_fork = false;
+	bitmap_zero(prec->needs_ptr_insns, env->prog->len);
 	if (prec->apart_xregno)
 		memset(prec->apart_xregno, 0, env->prog->len * sizeof(u16));
 	if (prec->data_deps && !env->replay && (prec->budget_grew || env->for_log)) {
@@ -1690,6 +1748,8 @@ int bpf_precision_init(struct bpf_verifier_env *env)
 	prec->bad_value_insns = bits + 15 * words;
 	prec->this_pass.unproven_funcs = bits + 16 * words;
 	prec->last_pass.unproven_funcs = bits + 17 * words;
+	prec->needs_ptr_insns = bits + 18 * words;
+	prec->makes_ptr_insns = bits + 19 * words;
 	prec->pass_cost = env->cost;
 	prec->live_types_cost = env->max_cost / LIVE_TYPES_PART;
 	prec->live_types_mem = env->max_mem / LIVE_TYPES_PART;
