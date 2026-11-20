@@ -129,7 +129,7 @@ union swap_header {
 		unsigned char	sws_uuid[16];
 		unsigned char	sws_volume[16];
 		__u32		padding[117];
-		__u32		badpages[1];
+		__u32		badpages[];
 	} info;
 };
 
