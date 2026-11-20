@@ -271,16 +271,16 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 		return 0;
 
 	cons_pos = __atomic_load_n(r->consumer_pos, __ATOMIC_ACQUIRE);
-	do {
+	for (;;) {
 		got_new_data = false;
 		prod_pos = __atomic_load_n(r->producer_pos, __ATOMIC_ACQUIRE);
 		while (prod_pos - cons_pos > 0) {
 			len_ptr = r->data + (cons_pos & r->mask);
 			len = __atomic_load_n(len_ptr, __ATOMIC_ACQUIRE);
 
-			/* sample not committed yet, bail out for now */
+			/* Retry a busy record once after publishing prior records. */
 			if (len & BPF_RINGBUF_BUSY_BIT)
-				goto done;
+				break;
 
 			got_new_data = true;
 			cons_pos += roundup_len(len);
@@ -291,6 +291,7 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 				if (err < 0) {
 					/* update consumer pos and bail out */
 					__atomic_store_n(r->consumer_pos, cons_pos, __ATOMIC_RELEASE);
+					__atomic_thread_fence(__ATOMIC_SEQ_CST);
 					return err;
 				}
 				cnt++;
@@ -301,8 +302,17 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 			if (cnt >= n)
 				goto done;
 		}
-	} while (got_new_data);
+		if (!got_new_data)
+			return cnt;
+
+		/*
+		 * Order the published consumer position before the next
+		 * producer-position load, whether below or in a later invocation.
+		 */
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	}
 done:
+	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	return cnt;
 }
 
