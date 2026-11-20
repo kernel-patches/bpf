@@ -395,7 +395,7 @@ struct bpf_reference_state {
 struct bpf_retval_range {
 	s32 minval;
 	s32 maxval;
-	bool return_32bit;
+	u32 return_32bit;	/* no padding, see bpf_same_join_key() */
 };
 
 /*
@@ -486,6 +486,8 @@ static inline bool bpf_loop_walk_may_give_up(const struct loop_stack_entry *entr
  */
 struct bpf_func_state {
 	struct bpf_reg_state regs[MAX_BPF_REG];
+	/* equal in states that have a join, see bpf_same_join_key() */
+	struct_group(join_key,
 	/* index of call instruction that called into this func */
 	int callsite;
 	/* stack frame number of this function state from pov of
@@ -493,32 +495,36 @@ struct bpf_func_state {
 	 * 0 = main function, 1 = first callee.
 	 */
 	u32 frameno;
-	/*
-	 * Unique diagnostic identity for this function invocation. Frame depth is
-	 * reused after returns, while this ID is preserved across state clones.
-	 */
-	u32 diag_frame_id;
-	/* parent_id of the args that are gone when this frame returns */
-	u32 frame_id;
 	/* subprog number == index within subprog_info
 	 * zero == main subprog
 	 */
 	u32 subprogno;
 	/*
-	 * The frame of an async callback has the count of frame 0 of the state
-	 * that sets the callback plus one. Frames that differ in it are not joined.
+	 * What was held at the entry of the frame and is still held. For references these are
+	 * the first entry_refs of refs[]. What is released and acquired again does not count.
+	 * This frame must release all the rest.
 	 */
-	u32 async_entry_cnt;
+	u32 entry_refs;
+	u32 entry_rcu_locks;
+	u32 entry_preempt_locks;
 	struct bpf_retval_range callback_ret_range;
 	bool in_callback_fn;
 	bool in_async_callback_fn;
 	bool in_exception_callback_fn;
-	bool no_stack_arg_load;
 	/*
 	 * The helper invokes this callback under rcu_read_lock(), so the
 	 * callback and its callees run in an RCU read-side critical section.
 	 */
 	bool in_rcu_callback_fn;
+	/* parent_id of the args that are gone when this frame returns */
+	u32 frame_id;
+	);
+	bool no_stack_arg_load;
+	/*
+	 * Unique diagnostic identity for this function invocation. Frame depth is
+	 * reused after returns, while this ID is preserved across state clones.
+	 */
+	u32 diag_frame_id;
 	/* For callback calling functions that limit number of possible
 	 * callback executions (e.g. bpf_loop) keeps track of current
 	 * simulated iteration number.
@@ -537,14 +543,6 @@ struct bpf_func_state {
 	 * subprogram (loops never cross subprogram boundaries).
 	 */
 	u32 loop_stack_cnt;
-	/*
-	 * How much of what was held when the frame was entered is held ever since. For
-	 * references that is the first entry_refs of refs[]. What is released and taken again
-	 * doesn't count. More than that is for this frame to release.
-	 */
-	u32 entry_refs;
-	u32 entry_rcu_locks;
-	u32 entry_preempt_locks;
 
 	/* The following fields should be last. See copy_func_state() */
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
@@ -594,7 +592,7 @@ struct bpf_verifier_state {
 	/* Acquired reference states */
 	struct bpf_reference_state *refs;
 	u32 insn_idx;
-	u32 curframe;
+	bool speculative;
 	/* an xreg has no value: unreachable. Only a path-sensitive run drops such a state. */
 	bool infeasible;
 	/* an error only in a leftover, see check_held_in_leftover() */
@@ -603,6 +601,8 @@ struct bpf_verifier_state {
 	/* the loops that made an xreg of data_deps imprecise, see bpf_loop.suspect_bit */
 	u64 suspect_loops;
 
+	/* equal in states that have a join, see bpf_same_join_key(). No holes. */
+	struct_group(join_key,
 	struct_group(held,
 	void *active_lock_ptr;
 	u32 acquired_refs;
@@ -611,9 +611,8 @@ struct bpf_verifier_state {
 	u32 active_rcu_locks;
 	u32 active_irq_id;
 	u32 active_lock_id;
-
-	bool speculative;
 	);
+	u32 curframe;
 	bool in_sleepable;
 	/* a global function or an extension, and what it calls: exit of frame 0 is not the end */
 	bool callers_unknown;
@@ -629,6 +628,9 @@ struct bpf_verifier_state {
 	 * state at its entry came from, see bpf_flow_call().
 	 */
 	u32 flow_entry;
+	);
+	/* Not zero in a function that is verified on its own, see bpf_flow_call() */
+	u32 instance_id;
 
 	/* The insn that the state comes from, -1 if no instructions have been executed yet. */
 	u32 last_insn_idx;
@@ -681,6 +683,16 @@ bpf_get_spilled_stack_arg(int slot, struct bpf_func_state *frame)
 static inline bool bpf_stack_args_are_incoming(const struct bpf_func_state *frame)
 {
 	return !frame->frameno && !frame->no_stack_arg_load;
+}
+
+/* Stack argument @i of @frame to compare with @other or NULL: incoming ones are not outgoing */
+static inline const struct bpf_reg_state *
+bpf_stack_arg(const struct bpf_func_state *frame, const struct bpf_func_state *other, u32 i)
+{
+	if (i >= frame->out_stack_arg_cnt ||
+	    (bpf_stack_args_are_incoming(frame) && !bpf_stack_args_are_incoming(other)))
+		return NULL;
+	return &frame->stack_arg_regs[i];
 }
 
 /* Iterate over 'frame', setting 'reg' to either NULL or a spilled register. */
@@ -1230,6 +1242,16 @@ static inline bool bpf_id_is_xreg(u32 id)
 	return id & 2;
 }
 
+/* pointers to the packet with id @old are those with id @cur moved by @delta */
+struct bpf_pkt_pair {
+	u32 old;
+	u32 cur;
+	u64 delta;
+	/* for a join */
+	u32 type;
+	u32 id;
+};
+
 struct bpf_idmap {
 	u32 cnt;
 	struct bpf_id_pair map[BPF_ID_MAP_SIZE];
@@ -1329,6 +1351,7 @@ struct bpf_verifier_env {
 	bool path_sensitive;		/* no joins, see run_path_sensitive() */
 	u64 cost, mem;			/* see bpf_check_limits() */
 	u64 max_cost, max_mem;
+	u64 hash_seed;			/* see bpf_hash_join_key() */
 	u64 pass_max_cost;		/* see bpf_undo_precision() */
 	bool aborted;			/* a thaw does not take it back */
 	bool no_mem;			/* a table cannot grow, see bpf_check_limits() */
@@ -1403,6 +1426,8 @@ struct bpf_verifier_env {
 	} *callx_edges;
 	struct bpf_index callx_index;
 	struct bpf_idmap idmap_scratch;
+	struct bpf_pkt_pair *pkt_pairs;	/* of the two states that are compared or joined */
+	u32 pkt_pair_cnt, pkt_pair_cap;
 	struct {
 		int *insn_state;
 		int *insn_stack;
@@ -1633,9 +1658,15 @@ void bpf_free_kfunc_btf_tab(struct bpf_kfunc_btf_tab *tab);
 
 
 int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
-bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state *old,
-			struct bpf_verifier_state *cur);
-
+bool bpf_add_pkt_pair(struct bpf_verifier_env *env, const struct bpf_pkt_pair *pair);
+bool bpf_state_subsumes(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			const struct bpf_verifier_state *cur);
+bool bpf_scalar_subsumes(const struct bpf_reg_state *old, const struct bpf_reg_state *cur);
+bool bpf_same_type_and_object(struct bpf_verifier_env *env, const struct bpf_reg_state *a,
+			      const struct bpf_reg_state *b);
+bool bpf_same_join_key(const struct bpf_verifier_state *a, const struct bpf_verifier_state *b);
+u64 bpf_hash64(const void *p, size_t len, u64 hash);
+u64 bpf_hash_join_key(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
 int bpf_renumber_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 
 bool bpf_xreg_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
@@ -1745,7 +1776,7 @@ static inline struct bpf_func_state *bpf_func(struct bpf_verifier_env *env,
 }
 
 /* Return IP for a given frame in a call stack */
-static inline u32 bpf_frame_insn_idx(struct bpf_verifier_state *st, u32 frame)
+static inline u32 bpf_frame_insn_idx(const struct bpf_verifier_state *st, u32 frame)
 {
 	return frame == st->curframe
 	       ? st->insn_idx
@@ -2398,10 +2429,23 @@ static inline u8 bpf_signed_opcode(u8 op)
 	return op == BPF_JGT || op == BPF_JGE ? op + BPF_JSGT - BPF_JGT : op;
 }
 
+/* True if pkt_bytes_left() is valid */
+static inline bool pkt_has_bytes_left(const struct bpf_reg_state *reg)
+{
+	return reg->range >= 0 && reg_smin(reg) >= -MAX_PACKET_OFF &&
+	       reg_smax(reg) <= MAX_PACKET_OFF;
+}
+
 /* How many bytes are checked from the start of the packet, wherever the pointer is */
 static inline int pkt_min_len(const struct bpf_reg_state *reg)
 {
 	return reg->r64.size ? reg->pkt_min_len : max(reg->range, reg->pkt_min_len);
+}
+
+/* How many bytes are checked after a pointer to the packet */
+static inline s64 pkt_bytes_left(const struct bpf_reg_state *reg)
+{
+	return reg->range - reg_smax(reg);
 }
 
 /* The loop that the frame is in, or NULL */
@@ -2417,6 +2461,13 @@ static inline u32 bpf_xreg_cnt(const struct bpf_verifier_state *st)
 	for (fr = 0; fr <= st->curframe; fr++)
 		nr += MAX_BPF_REG + bpf_stack_nr_slots(st->frame[fr]);
 	return nr;
+}
+
+static inline bool bpf_slot_is_held(const struct bpf_stack_state *slot)
+{
+	u8 t = slot->slot_type[BPF_REG_SIZE - 1];
+
+	return t == STACK_DYNPTR || t == STACK_ITER || t == STACK_IRQ_FLAG;
 }
 
 #endif /* _LINUX_BPF_VERIFIER_H */

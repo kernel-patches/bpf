@@ -29,6 +29,7 @@
 #include <linux/keyctl.h>
 #include <linux/btf_ids.h>
 #include <linux/poison.h>
+#include <linux/random.h>
 #include <linux/module.h>
 #include <linux/cpumask.h>
 #include <linux/cnum.h>
@@ -1808,16 +1809,12 @@ int bpf_copy_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_st
 		return err;
 	bpf_add_cost(env, bpf_xreg_cnt(src) + src->acquired_refs, BPF_COST_COPY);
 	dst_state->speculative = src->speculative;
-	dst_state->in_sleepable = src->in_sleepable;
-	dst_state->callers_unknown = src->callers_unknown;
-	dst_state->unwound = src->unwound;
-	dst_state->changed_pkt_data = src->changed_pkt_data;
 	dst_state->flow_entry = src->flow_entry;
 	dst_state->infeasible = src->infeasible;
 	dst_state->max_held_cnt = src->max_held_cnt;
 	dst_state->suspect_loops = src->suspect_loops;
+	dst_state->join_key = src->join_key;
 	dst_state->insn_idx = src->insn_idx;
-	dst_state->curframe = src->curframe;
 	dst_state->last_insn_idx = src->last_insn_idx;
 	for (i = 0; i <= src->curframe; i++) {
 		dst = dst_state->frame[i];
@@ -3788,6 +3785,11 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 	max_off = reg_smax(ptr_reg) + off + size;
 	if (value_regno >= 0)
 		value_reg = &cur->regs[value_regno];
+	/* no slot remembers the pointer, a load gets it as a number */
+	if (value_reg && __is_pointer_value(env->allow_ptr_leaks, value_reg)) {
+		verbose(env, "R%d leaks addr into stack\n", value_regno);
+		return -EACCES;
+	}
 	if ((value_reg && bpf_register_is_null(value_reg)) ||
 	    (!value_reg && is_bpf_st_mem(insn) && insn->imm == 0))
 		writing_zero = true;
@@ -11420,7 +11422,6 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 		if (is_async_cb_sleepable(env, insn))
 			env->sleepable_async_cb = true;
 		callee = async_cb->frame[0];
-		callee->async_entry_cnt = state->frame[0]->async_entry_cnt + 1;
 
 		/* Convert bpf_timer_set_callback() args into timer callback args */
 		err = set_callee_state_cb(env, caller, callee, insn_idx);
@@ -24792,6 +24793,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	env->max_cost = BPF_MAX_COST >> (is_priv ? 0 : BPF_LIMITS_SHIFT_UNPRIV);
 	env->pass_max_cost = U64_MAX;
 	env->max_mem = BPF_MAX_MEM >> (is_priv ? 0 : BPF_LIMITS_SHIFT_UNPRIV);
+	env->hash_seed = get_random_u64();
 	env->signature = attr->signature;
 
 	/* user could have requested verbose verifier output
@@ -25139,6 +25141,7 @@ err_free_env:
 	kvfree(env->cfg.insn_postorder);
 	kvfree(env->succ);
 	kvfree(env->gotox_tmp_buf);
+	kvfree(env->pkt_pairs);
 	kvfree(env->callx_edges);
 	kvfree(env->callx_index.slots);
 	kvfree(env->func_ptrs);
