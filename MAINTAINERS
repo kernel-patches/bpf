@@ -4372,7 +4372,7 @@ S:	Maintained
 F:	crypto/rsa*
 
 ASYNCHRONOUS TRANSFERS/TRANSFORMS (IOAT) API
-R:	Dan Williams <djbw@kernel.org>
+R:	Frank Li <Frank.li@oss.nxp.com>
 S:	Odd fixes
 W:	http://sourceforge.net/projects/xscaleiop
 F:	Documentation/crypto/async-tx-api.rst
@@ -6836,10 +6836,10 @@ M:	Jonathan Cameron <jic23@kernel.org>
 M:	Dave Jiang <dave.jiang@intel.com>
 M:	Alison Schofield <alison.schofield@intel.com>
 M:	Vishal Verma <vishal.l.verma@intel.com>
-M:	Dan Williams <djbw@kernel.org>
 R:	Ira Weiny <iweiny@kernel.org>
 R:	Li Ming <ming.li@zohomail.com>
 R:	Richard Cheng <icheng@nvidia.com>
+R:	Ben Cheatham <benjamin.cheatham@amd.com>
 L:	linux-cxl@vger.kernel.org
 S:	Maintained
 F:	Documentation/driver-api/cxl
@@ -7733,7 +7733,6 @@ S:	Maintained
 F:	scripts/dev-needs.sh
 
 DEVICE DIRECT ACCESS (DAX)
-M:	Dan Williams <djbw@kernel.org>
 M:	Vishal Verma <vishal.l.verma@intel.com>
 M:	Dave Jiang <dave.jiang@intel.com>
 M:	Alison Schofield <alison.schofield@intel.com>
@@ -10420,12 +10419,12 @@ F:	include/linux/fcntl.h
 F:	include/uapi/linux/fcntl.h
 
 FILESYSTEM DIRECT ACCESS (DAX)
-M:	Dan Williams <djbw@kernel.org>
+M:	Alistair Popple <apopple@nvidia.com>
 R:	Matthew Wilcox <willy@infradead.org>
 R:	Jan Kara <jack@suse.cz>
 L:	linux-fsdevel@vger.kernel.org
 L:	nvdimm@lists.linux.dev
-S:	Supported
+S:	Maintained
 F:	fs/dax.c
 F:	include/linux/dax.h
 F:	include/trace/events/fs_dax.h
@@ -13576,7 +13575,6 @@ F:	drivers/platform/x86/intel/hid.c
 
 INTEL I/OAT DMA DRIVER
 M:	Dave Jiang <dave.jiang@intel.com>
-R:	Dan Williams <djbw@kernel.org>
 L:	dmaengine@vger.kernel.org
 S:	Supported
 Q:	https://patchwork.kernel.org/project/linux-dmaengine/list/
@@ -15406,7 +15404,6 @@ K:	libie
 
 LIBNVDIMM BTT: BLOCK TRANSLATION TABLE
 M:	Vishal Verma <vishal.l.verma@intel.com>
-M:	Dan Williams <djbw@kernel.org>
 M:	Dave Jiang <dave.jiang@intel.com>
 M:	Alison Schofield <alison.schofield@intel.com>
 L:	nvdimm@lists.linux.dev
@@ -15416,7 +15413,6 @@ P:	Documentation/nvdimm/maintainer-entry-profile.rst
 F:	drivers/nvdimm/btt*
 
 LIBNVDIMM PMEM: PERSISTENT MEMORY DRIVER
-M:	Dan Williams <djbw@kernel.org>
 M:	Vishal Verma <vishal.l.verma@intel.com>
 M:	Dave Jiang <dave.jiang@intel.com>
 M:	Alison Schofield <alison.schofield@intel.com>
@@ -15435,7 +15431,6 @@ F:	Documentation/devicetree/bindings/pmem/pmem-region.yaml
 F:	drivers/nvdimm/of_pmem.c
 
 LIBNVDIMM: NON-VOLATILE MEMORY DEVICE SUBSYSTEM
-M:	Dan Williams <djbw@kernel.org>
 M:	Vishal Verma <vishal.l.verma@intel.com>
 M:	Dave Jiang <dave.jiang@intel.com>
 M:	Alison Schofield <alison.schofield@intel.com>

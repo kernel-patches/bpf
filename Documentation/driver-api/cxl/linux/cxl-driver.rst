@@ -637,6 +637,11 @@ derived from their upstream port connections. In `Cross-Link First` interleave
 configurations, the :code:`interleave_granularity` of a decoder is equal to
 :code:`parent_interleave_granularity * parent_interleave_ways`.
 
+When the region granularity is finer than the granularity of an interleaving
+root decoder, the relation inverts: the :code:`interleave_granularity` of a
+decoder is equal to :code:`parent_interleave_granularity / interleave_ways`.
+See `Finer-Than-Root Region Granularity`_.
+
 At Endpoint
 ~~~~~~~~~~~
 `Endpoint Decoders` are programmed similar to Host Bridge and Switch decoders,
@@ -653,6 +658,120 @@ from HPA to DPA.  This is why they must be aware of the entire interleave set.
 
 Linux does not support unbalanced interleave configurations.  As a result, all
 endpoints in an interleave set must have the same ways and granularity.
+
+Finer-Than-Root Region Granularity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The CXL Specification permits each decoder in a region's hierarchy to interleave
+at its own granularity, see CXL 4.0 Section 9.13.1.  Linux supports a subset of
+those configurations, defined by how the region's :code:`interleave_granularity`
+compares with the granularity of its interleaving root decoder:
+
+- Equal: granularity stays the same or coarsens at each level toward the
+  endpoints, as in `Cross-Link First`.
+- Finer: granularity stays the same or refines at each level toward the
+  endpoints.  This requires an interleaving root decoder.
+- Coarser: not supported.
+
+In both supported cases granularity changes monotonically across the decoders
+that route a request: the interleaving root, the host bridge, and any switches.
+Configurations whose granularity refines and then coarsens along that path are
+legal per the CXL Specification but are not supported by Linux.  The endpoint
+decoder is not part of that path.  It carries the region ways and granularity so
+that it can translate, as `At Endpoint`_ describes above.
+
+When the region granularity is finer than the root granularity, Linux programs
+each level below the root at its parent's granularity divided by its own ways,
+so granularity refines monotonically and the ordering follows from the region
+and root settings.  Reaching a fine granularity as early as possible remains
+available through `Cross-Link First`.  For an 8-way region at 1024 below a 2-way
+interleaving root decoder at 4096, where each host bridge interleaves across two
+root ports and each root port hosts a 2-way switch, Linux programs::
+
+  Level             Ways    Granularity
+  -----             ----    -----------
+  Root                 2         4096
+  Host bridge          2         2048
+  Switch               2         1024
+  Endpoint             8         1024
+
+An endpoint's *region position* is the interleave position that address
+translation applies at the region granularity: it is combined with a DPA to form
+the HPA, and removed from an HPA to recover the DPA.  It is also the index of
+the endpoint's region-granularity chunk within one full pass of the region
+interleave.  Each decoder level contributes the index of the target it routes
+the endpoint through, weighted by its granularity in region-granularity units::
+
+  position += target_position *
+              (decoder_granularity / region_granularity)
+
+That multiplier is the *weight* of a level: how many region positions pass
+between successive advances of its target index.  In the example above the root
+selects a host bridge every 4096 bytes, so it advances one target every four
+region positions, weight 4, while the switch advances one target every position,
+weight 1.  When granularity refines toward the endpoints, a level's weight is
+the product of the ways of the interleaving levels below it.  When it coarsens,
+as in `Cross-Link First`, the weight is the product of the ways of the levels
+above it, so the root has weight 1.
+
+The *region granularity* is the region's :code:`interleave_granularity`, the
+granularity at which its endpoints translate.  A region finer than the root
+must describe the same interleave *span* as the root decoder, the address range
+in which the interleave pattern completes one full pass::
+
+  root_ways * root_granularity == region_ways * region_granularity
+
+Linux rejects a region that does not describe that span.  A same-granularity
+region below a power-of-two root decoder is exempt: it may be wider than the
+root and repeat the root targets, so its span is a multiple of the root's.
+
+Mod3 Interleave Configurations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A 3-way, 6-way, or 12-way interleave, known as a Mod3 interleave, selects its
+target modulo 3 rather than from binary interleave selector bits alone, see CXL
+4.0 Section 9.13.1.1.  The cross-host bridge selection carries the factor of
+three, and any remaining x2 or x4 is binary interleave selection below it.  A
+6-way region at IGB across three host bridges is therefore a 3-way root
+interleave at 2*IGB with a 2-way interleave at IGB below it, both describing the
+same span::
+
+  3 * (2 * IGB) == 6 * IGB
+
+CXL 4.0 Section 9.13.1.1, Tables 9-6, 9-7, and 9-8, list the legal compositions
+for a 12-way, 6-way, and 3-way device-level interleave at IGB.  The
+specification is normative.  The tables are summarized below, annotated with the
+subset Linux supports.
+
+CXL 4.0 Table 9-8, 3-way device-level interleave at IGB::
+
+  Row  Cross-host bridge  Host bridge    Switch         Linux
+  ---  -----------------  -----------    ------         -----
+   1   3-way @ IGB        none           none           supported
+
+CXL 4.0 Table 9-7, 6-way device-level interleave at IGB::
+
+  Row  Cross-host bridge  Host bridge    Switch         Linux
+  ---  -----------------  -----------    ------         -----
+   1   6-way @ IGB        none           none           supported
+   2   3-way @ 2*IGB      2-way @ IGB    none           supported
+   3   3-way @ 2*IGB      none           2-way @ IGB    supported
+
+CXL 4.0 Table 9-6, 12-way device-level interleave at IGB::
+
+  Row  Cross-host bridge  Host bridge    Switch         Linux
+  ---  -----------------  -----------    ------         -----
+   1   12-way @ IGB       none           none           supported
+   2   6-way @ 2*IGB      2-way @ IGB    none           supported
+   3   6-way @ 2*IGB      none           2-way @ IGB    supported
+   4   3-way @ 4*IGB      4-way @ IGB    none           supported
+   5   3-way @ 4*IGB      none           4-way @ IGB    supported
+   6   3-way @ 4*IGB      2-way @ IGB    2-way @ 2*IGB  unsupported
+   7   3-way @ 4*IGB      2-way @ 2*IGB  2-way @ IGB    supported
+
+Table 9-6 row 6 is legal per the CXL Specification but is unsupported by Linux:
+from the root toward the endpoints its granularity goes 4*IGB -> IGB -> 2*IGB,
+which refines and then coarsens.  Row 7 interleaves the same 12 endpoints at the
+same granularity with those two levels exchanged, 4*IGB -> 2*IGB -> IGB, so a
+12-way device-level interleave across three host bridges remains available.
 
 Example Configurations
 ======================
