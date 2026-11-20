@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Copyright (c) Toradex
+ *
+ * Generic overlay enabling the HDMI transmitter of i.MX6QDL SoCs,
+ * for boards where no other change is needed to enable HDMI output.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&hdmi {
+	status = "okay";
+};

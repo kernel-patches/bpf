@@ -425,3 +425,12 @@
 		>;
 	};
 };
+
+&cpu_alert0 {
+	temperature = <101000>;
+	hysteresis = <9000>;
+};
+
+&cpu_crit0 {
+	temperature = <107000>;
+};
