@@ -985,6 +985,8 @@ static int sierra_submit_delayed_urbs(struct usb_serial_port *port)
 			usb_unanchor_urb(urb);
 			kfree(urb->transfer_buffer);
 
+			usb_autopm_put_interface_async(port->serial->interface);
+
 			spin_lock(&portdata->lock);
 			portdata->outstanding_urbs--;
 			spin_unlock(&portdata->lock);
