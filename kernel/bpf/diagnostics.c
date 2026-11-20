@@ -372,7 +372,7 @@ static void diag_write(struct bpf_verifier_env *env, const char *fmt, ...)
 {
 	va_list args;
 
-	if (!bpf_diag_enabled(env))
+	if (!bpf_diag_enabled(env) || env->no_report)
 		return;
 
 	va_start(args, fmt);

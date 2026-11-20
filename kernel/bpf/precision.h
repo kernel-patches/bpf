@@ -73,7 +73,9 @@ struct bpf_precision {
 	unsigned long *err_insns;		/* insns at which the failing path can end */
 	u32 *hops_to_err, *hops_to_exit;	/* per insn, see compute_hops() */
 	u64 *seen;				/* hash set, see bpf_failing_path_was_here() */
+	u32 seen_cnt, seen_bits;
 	unsigned long *loop_control_deps;	/* see bpf_jumps_see_same() */
+	u32 loop_control_deps_for, new_data_deps_for;
 	u32 loop_carried_at;
 	unsigned long loop_carried[XREG_WORDS];
 };

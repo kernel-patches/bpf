@@ -102,7 +102,8 @@ struct flow_instance {
 
 struct flow_kept {
 	struct list_head node;
-	struct bpf_verifier_state st;
+	struct bpf_flow *flow;
+	struct bpf_header_state header_state;
 };
 
 struct bpf_flow {
@@ -129,6 +130,7 @@ struct bpf_flow {
 	u32 instance_cnt, instance_cap;
 	struct flow_instance *last_instance;	/* of the last pending state */
 	u64 priority_gen;
+	struct list_head unused;		/* struct flow_kept */
 	u32 seq;
 	u32 live_states;
 };
@@ -552,6 +554,7 @@ int bpf_flow_prepare(struct bpf_verifier_env *env)
 	if (!flow)
 		return -ENOMEM;
 	env->flow = flow;
+	INIT_LIST_HEAD(&flow->unused);
 	flow->state_tree = flow->pending = RB_ROOT_CACHED;
 	flow->call_loop.kind = BPF_LOOP_RECURSION;
 
@@ -689,6 +692,17 @@ static void flow_free_list(struct bpf_verifier_env *env, struct list_head *list)
 		flow_free_state(env, s);
 }
 
+static void flow_free_unused(struct bpf_verifier_env *env)
+{
+	struct flow_kept *k;
+
+	while ((k = list_first_entry_or_null(&env->flow->unused, struct flow_kept, node))) {
+		list_del(&k->node);
+		bpf_free_verifier_state(env, &k->header_state.st, false);
+		kfree(k);
+	}
+}
+
 /* What a check leaves behind. */
 void bpf_flow_reset(struct bpf_verifier_env *env)
 {
@@ -706,6 +720,7 @@ void bpf_flow_reset(struct bpf_verifier_env *env)
 		flow->instances[i]->group->instances = NULL;
 		kfree(flow->instances[i]);
 	}
+	flow_free_unused(env);
 	env->mem -= flow->instance_cnt * INSTANCE_BYTES;
 	flow->instance_cnt = 0;
 	flow->last_instance = NULL;
@@ -733,6 +748,35 @@ void bpf_flow_free(struct bpf_verifier_env *env)
 bool bpf_flow_is_bb_start(struct bpf_verifier_env *env, int insn_idx)
 {
 	return test_bit(insn_idx, env->flow->bb_starts);
+}
+
+/* The paths that continue from the current state share a copy of it */
+int bpf_flow_save_header_state(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
+{
+	struct flow_kept *k = kzalloc_obj(*k, BPF_VERIFIER_GFP);
+
+	if (!k)
+		return -ENOMEM;
+	bpf_flow_put_header_state(entry);
+	entry->header_state = NULL;
+	k->flow = env->flow;
+	k->header_state.refcnt = 1;
+	if (bpf_copy_verifier_state(env, &k->header_state.st, env->cur_state)) {
+		list_add(&k->node, &k->flow->unused);
+		return -ENOMEM;
+	}
+	entry->header_state = &k->header_state;
+	return 0;
+}
+
+void bpf_flow_put_header_state(struct loop_stack_entry *entry)
+{
+	struct flow_kept *k;
+
+	if (!entry->header_state || --entry->header_state->refcnt)
+		return;
+	k = container_of(entry->header_state, struct flow_kept, header_state);
+	list_add(&k->node, &k->flow->unused);
 }
 
 /* A peeled trip is complete before the next one starts. The leftover is last. */
@@ -784,6 +828,8 @@ static bool flow_less(struct rb_node *na, const struct rb_node *nb)
  * 3. The trip, then the position, in each frame. A callee in the frames of its callers is
  *    complete before the code after the call.
  * 4. Exit states. They go to the calls when the instance is complete.
+ *
+ * A path-sensitive run goes depth first, to the state that is nearer to an unproven insn.
  */
 static void flow_set_pending(struct bpf_verifier_env *env, struct flow_state *s)
 {
@@ -798,6 +844,12 @@ static void flow_set_pending(struct bpf_verifier_env *env, struct flow_state *s)
 		s->order[i] = flow->pos[st->frame[i + 1]->callsite];
 	s->order[i] = s->kind == FLOW_FUNC_EXIT ? U32_MAX : flow->pos[st->insn_idx];
 	s->order_len = i + 1;
+	if (env->path_sensitive) {
+		s->priority = (u64)~env->insn_processed << 32 | (env->fallthrough_first ?
+			      st->insn_idx != s->prev_insn_idx + 1 :
+			      bpf_failing_path_hops(env, st));
+		s->order_len = 0;
+	}
 	s->pending = true;
 	instance->pending_cnt++;
 	instance->group->busy_cnt++;
@@ -1301,6 +1353,8 @@ static int flow_add(struct bpf_verifier_env *env, struct flow_state *s, bool sta
 	if (!err && env->id_gen != id_gen)
 		err = bpf_renumber_ids(env, &s->st);
 	if (!err && env->path_sensitive) {
+		if (test_bit(s->st.insn_idx, env->flow->join_points))
+			err = bpf_failing_path_was_here(env, &s->st);
 	} else if (!err && loop && flow_loop_entry(&s->st, loop)->peeled) {
 		err = flow_prune_peeled(env, s, loop);
 	}
@@ -1345,6 +1399,11 @@ int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st
 	s->st.insn_idx = insn_idx;
 	s->st.last_insn_idx = prev_insn_idx;
 
+	if (env->path_sensitive && (s->st.infeasible || s->st.speculative ||
+				    bpf_failing_path_hops(env, &s->st) == U32_MAX)) {
+		flow_free_state(env, s);
+		return 0;
+	}
 	err = bpf_clean_verifier_state(env, &s->st);
 	if (err) {
 		flow_free_state(env, s);
@@ -1696,6 +1755,7 @@ again:
 		flow_free_state(env, t);
 	}
 
+	flow_free_unused(env);
 
 	env->insn_idx = s->st.insn_idx;
 	if (s->kind == FLOW_FUNC_EXIT) {
