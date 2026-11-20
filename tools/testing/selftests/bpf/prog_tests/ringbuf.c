@@ -469,13 +469,35 @@ static void ringbuf_subtest(void)
 /* Sample value to verify the callback validity */
 #define SAMPLE_VALUE	42L
 
+/* Match the BPF target's 64-bit long and padding. */
+struct sample_n {
+	int pid;
+	int pad;
+	__s64 value;
+	char comm[16];
+};
+
+struct process_n_ctx {
+	struct ring *ring;
+	unsigned long consumer_pos;
+	int callback_count;
+};
+
 static int process_n_sample(void *ctx, void *data, size_t len)
 {
-	struct sample *s = data;
+	struct process_n_ctx *callback_ctx = ctx;
+	struct sample_n *s = data;
+	unsigned long consumer_pos;
 
 	ASSERT_EQ(s->value, SAMPLE_VALUE, "sample_value");
+	consumer_pos = ring__consumer_pos(callback_ctx->ring);
+	if (callback_ctx->callback_count)
+		ASSERT_GT(consumer_pos, callback_ctx->consumer_pos,
+			  "callback_consumer_pos");
+	callback_ctx->consumer_pos = consumer_pos;
+	callback_ctx->callback_count++;
 
-	return 0;
+	return 1;
 }
 
 static int process_noop_sample(void *ctx, void *data, size_t len)
@@ -672,8 +694,9 @@ static void ringbuf_n_subtest(void)
 	if (!ASSERT_OK(err, "test_ringbuf_n_lskel__load"))
 		return;
 
+	struct process_n_ctx callback_ctx = {};
 	ringbuf = ring_buffer__new(skel_n->maps.ringbuf.map_fd,
-				   process_n_sample, NULL, NULL);
+				   process_n_sample, &callback_ctx, NULL);
 	if (!ASSERT_OK_PTR(ringbuf, "ring_buffer__new"))
 		return;
 
@@ -690,6 +713,7 @@ static void ringbuf_n_subtest(void)
 
 	if (!ASSERT_OK_PTR(ring, "ring_buffer__ring"))
 		return;
+	callback_ctx.ring = ring;
 
 	err = ring_buffer__consume_n(ringbuf, 0);
 	if (!ASSERT_EQ(err, 0, "ringbuf_consume_zero"))
@@ -705,6 +729,8 @@ static void ringbuf_n_subtest(void)
 		if (!ASSERT_EQ(err, N_SAMPLES, "rb_consume"))
 			return;
 	}
+	ASSERT_EQ(callback_ctx.callback_count, N_TOT_SAMPLES,
+		  "positive_callback");
 }
 
 static int process_map_key_sample(void *ctx, void *data, size_t len)

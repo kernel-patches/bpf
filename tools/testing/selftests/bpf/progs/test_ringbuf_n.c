@@ -22,7 +22,7 @@ struct {
 } ringbuf SEC(".maps");
 
 int pid = 0;
-long value = 0;
+__s64 value = 0;
 
 SEC("fentry/" SYS_PREFIX "sys_getpgid")
 int test_ringbuf_n(void *ctx)
