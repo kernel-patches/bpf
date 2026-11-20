@@ -10,6 +10,7 @@
 #include <drm/drm_file.h>
 #include <uapi/drm/xe_drm.h>
 #include <linux/delay.h>
+#include <linux/sched/signal.h>
 
 #include "xe_device.h"
 #include "xe_exec_queue.h"
@@ -363,8 +364,12 @@ err_exec:
 		xe_validation_ctx_fini(&ctx);
 err_unlock_list:
 	up_read(&vm->lock);
-	if (err == -EAGAIN)
-		goto retry;
+	if (err == -EAGAIN) {
+		cond_resched();
+		if (!signal_pending(current))
+			goto retry;
+		err = -ERESTARTSYS;
+	}
 err_hw_exec_mode:
 	if (mode == EXEC_MODE_DMA_FENCE)
 		xe_hw_engine_group_put(group);

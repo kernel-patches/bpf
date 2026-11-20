@@ -6,6 +6,8 @@
 #ifndef _XE_USERPTR_H_
 #define _XE_USERPTR_H_
 
+#include <linux/hmm.h>
+#include <linux/jiffies.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
@@ -19,6 +21,51 @@
 struct xe_vm;
 struct xe_vma;
 struct xe_userptr_vma;
+
+/**
+ * struct xe_userptr_repin - Timeout tracking state for userptr repin retries
+ * @start: Timestamp in jiffies of the first repin attempt, adjusted for idle
+ *	   gaps, or zero if no repin is in progress.
+ * @last: Timestamp in jiffies when the previous attempt failed with -EBUSY,
+ *	  or zero if no retry is pending.
+ */
+struct xe_userptr_repin {
+	unsigned long start;
+	unsigned long last;
+};
+
+/*
+ * If more than XE_USERPTR_REPIN_IDLE_MS elapses between attempts (for example
+ * when the task was stopped via SIGTSTP/Ctrl-Z), discount the idle gap so
+ * waking up does not immediately expire the overall repin timeout.
+ */
+#define XE_USERPTR_REPIN_IDLE_MS (5 * HMM_RANGE_DEFAULT_TIMEOUT)
+
+static inline void xe_userptr_repin_begin(struct xe_userptr_repin *repin)
+{
+	unsigned long now = jiffies;
+
+	if (!repin->start) {
+		repin->start = now ?: 1;
+		return;
+	}
+
+	if (repin->last &&
+	    time_after(now, repin->last +
+		       msecs_to_jiffies(XE_USERPTR_REPIN_IDLE_MS)))
+		repin->start = (repin->start + (now - repin->last)) ?: 1;
+	repin->last = 0;
+}
+
+static inline bool xe_userptr_repin_should_retry(struct xe_userptr_repin *repin,
+						 u32 timeout_ms)
+{
+	unsigned long now = jiffies;
+
+	repin->last = now ?: 1;
+	return !timeout_ms ||
+	       time_before(now, repin->start + msecs_to_jiffies(timeout_ms));
+}
 
 /** struct xe_userptr_vm - User pointer VM level state */
 struct xe_userptr_vm {
@@ -92,6 +139,12 @@ struct xe_userptr {
 	 * read: vm->svm.gpusvm.notifier_lock in write mode or vm->resv held.
 	 */
 	bool initial_bind;
+	/**
+	 * @repin: Timeout state for an in-progress repin retry sequence.
+	 * Protected by vm->lock in write mode, or in read mode together with
+	 * the vma's fault_lock.
+	 */
+	struct xe_userptr_repin repin;
 #if IS_ENABLED(CONFIG_DRM_XE_USERPTR_INVAL_INJECT)
 	u32 divisor;
 #endif

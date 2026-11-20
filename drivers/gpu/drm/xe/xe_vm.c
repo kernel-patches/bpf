@@ -18,6 +18,7 @@
 #include <linux/delay.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
+#include <linux/sched/signal.h>
 #include <linux/swap.h>
 
 #include <generated/xe_wa_oob.h>
@@ -2753,14 +2754,6 @@ static struct xe_vma *new_vma(struct xe_vm *vm, struct drm_gpuva_op_map *op,
 
 		if (xe_vma_is_userptr(vma)) {
 			err = xe_vma_userptr_pin_pages(to_userptr_vma(vma));
-			/*
-			 * -EBUSY has dedicated meaning that a user fence
-			 * attached to the VMA is busy, in practice
-			 * xe_vma_userptr_pin_pages can only fail with -EBUSY if
-			 * we are low on memory so convert this to -ENOMEM.
-			 */
-			if (err == -EBUSY)
-				err = -ENOMEM;
 		}
 	}
 	if (err) {
@@ -4056,11 +4049,13 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	struct drm_gpuva_ops **ops = NULL;
 	struct xe_vm *vm;
 	struct xe_exec_queue *q = NULL;
-	u32 num_syncs, num_ufence = 0;
+	u32 num_syncs, num_ufence;
 	struct xe_sync_entry *syncs = NULL;
 	struct drm_xe_vm_bind_op *bind_ops = NULL;
 	struct xe_vma_ops vops = { .flags = 0, };
+	struct xe_userptr_repin repin = {};
 	struct dma_fence *fence;
+	bool repin_again;
 	int err;
 	int i;
 
@@ -4093,6 +4088,9 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	/* Ensure all UNMAPs visible */
 	xe_svm_flush(vm);
 
+retry:
+	repin_again = false;
+	num_ufence = 0;
 	err = down_write_killable(&vm->lock);
 	if (err)
 		goto put_exec_queue;
@@ -4196,6 +4194,7 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	xe_vma_ops_init(&vops, vm, q, syncs, num_syncs);
 	if (args->num_binds > 1)
 		vops.flags |= XE_VMA_OPS_ARRAY_OF_BINDS;
+	xe_userptr_repin_begin(&repin);
 	for (i = 0; i < args->num_binds; ++i) {
 		u64 range = bind_ops[i].range;
 		u64 addr = bind_ops[i].addr;
@@ -4211,12 +4210,15 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 		if (IS_ERR(ops[i])) {
 			err = PTR_ERR(ops[i]);
 			ops[i] = NULL;
+			repin_again = err == -EAGAIN;
 			goto unwind_ops;
 		}
 
 		err = vm_bind_ioctl_ops_parse(vm, ops[i], &vops);
-		if (err)
+		if (err) {
+			repin_again = err == -EAGAIN;
 			goto unwind_ops;
+		}
 
 #ifdef TEST_VM_OPS_ERROR
 		if (flags & FORCE_OP_ERROR) {
@@ -4279,6 +4281,27 @@ release_vm_lock:
 		up_read(&vm->lock);
 	else
 		up_write(&vm->lock);
+	if (repin_again) {
+		/*
+		 * A userptr repin keeps failing due to concurrent CPU mapping
+		 * changes. New vmas are created on every attempt so the overall
+		 * timeout is tracked here. Retry with all locks dropped.
+		 */
+		u32 timeout_ms = READ_ONCE(vm->xe->userptr_repin_timeout_ms);
+
+		if (xe_userptr_repin_should_retry(&repin, timeout_ms)) {
+			bos = NULL;
+			ops = NULL;
+			syncs = NULL;
+			vops.flags = 0;
+			cond_resched();
+			if (!signal_pending(current))
+				goto retry;
+			err = -ERESTARTSYS;
+		} else {
+			err = -EBUSY;
+		}
+	}
 put_exec_queue:
 	if (q)
 		xe_exec_queue_put(q);
