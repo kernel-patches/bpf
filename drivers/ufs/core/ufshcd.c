@@ -614,18 +614,11 @@ static void ufshcd_print_tr(struct ufs_hba *hba, struct scsi_cmnd *cmd,
 		dev_err(hba->dev, "UPIU[%d] - complete time %lld us\n", tag,
 			div_u64(lrbp->compl_time_stamp_local_clock, 1000));
 	}
-	dev_err(hba->dev,
-		"UPIU[%d] - Transfer Request Descriptor phys@0x%llx\n",
-		tag, (u64)lrbp->utrd_dma_addr);
 
 	ufshcd_hex_dump("UPIU TRD: ", lrbp->utr_descriptor_ptr,
 			sizeof(struct utp_transfer_req_desc));
-	dev_err(hba->dev, "UPIU[%d] - Request UPIU phys@0x%llx\n", tag,
-		(u64)lrbp->ucd_req_dma_addr);
 	ufshcd_hex_dump("UPIU REQ: ", lrbp->ucd_req_ptr,
 			sizeof(struct utp_upiu_req));
-	dev_err(hba->dev, "UPIU[%d] - Response UPIU phys@0x%llx\n", tag,
-		(u64)lrbp->ucd_rsp_dma_addr);
 	ufshcd_hex_dump("UPIU RSP: ", lrbp->ucd_rsp_ptr,
 			sizeof(struct utp_upiu_rsp));
 
@@ -634,10 +627,7 @@ static void ufshcd_print_tr(struct ufs_hba *hba, struct scsi_cmnd *cmd,
 	if (hba->quirks & UFSHCD_QUIRK_PRDT_BYTE_GRAN)
 		prdt_length /= ufshcd_sg_entry_size(hba);
 
-	dev_err(hba->dev,
-		"UPIU[%d] - PRDT - %d entries  phys@0x%llx\n",
-		tag, prdt_length,
-		(u64)lrbp->ucd_prdt_dma_addr);
+	dev_err(hba->dev, "UPIU[%d] - PRDT - %d entries\n", tag, prdt_length);
 
 	if (pr_prdt)
 		ufshcd_hex_dump("UPIU PRDT: ", lrbp->ucd_prdt_ptr,
@@ -2983,17 +2973,13 @@ static void ufshcd_init_lrb(struct ufs_hba *hba, struct scsi_cmnd *cmd)
 {
 	const int i = scsi_cmd_to_rq(cmd)->tag;
 	struct utp_transfer_req_desc *utrdlp = hba->utrdl_base_addr;
-	u16 response_offset = le16_to_cpu(utrdlp[i].response_upiu_offset);
-	u16 prdt_offset = le16_to_cpu(utrdlp[i].prd_table_offset);
 	struct ufshcd_lrb *lrb = scsi_cmd_priv(cmd);
 	u8 *command_upiu, *response_upiu, *prd_table;
-	dma_addr_t cmd_desc_element_addr;
 
 	/* The reserved tag uses a dedicated UCD outside the pool. */
 	if (unlikely(blk_mq_is_reserved_rq(scsi_cmd_to_rq(cmd)))) {
 		struct utp_devman_cmd_desc *cmd_descp = hba->devman_ucd_base_addr;
 
-		cmd_desc_element_addr = hba->devman_ucd_dma_addr;
 		command_upiu = cmd_descp->command_upiu;
 		response_upiu = cmd_descp->response_upiu;
 		prd_table = cmd_descp->prd_table;
@@ -3005,22 +2991,15 @@ static void ufshcd_init_lrb(struct ufs_hba *hba, struct scsi_cmnd *cmd)
 		WARN_ON_ONCE(slot < 0);
 		cmd_descp = (void *)hba->ucdl_base_addr + slot * ufshcd_get_ucd_size(hba);
 
-		cmd_desc_element_addr =
-			hba->ucdl_dma_addr + slot * ufshcd_get_ucd_size(hba);
 		command_upiu = cmd_descp->command_upiu;
 		response_upiu = cmd_descp->response_upiu;
 		prd_table = cmd_descp->prd_table;
 	}
 
 	lrb->utr_descriptor_ptr = utrdlp + i;
-	lrb->utrd_dma_addr =
-		hba->utrdl_dma_addr + i * sizeof(struct utp_transfer_req_desc);
 	lrb->ucd_req_ptr = (struct utp_upiu_req *)command_upiu;
-	lrb->ucd_req_dma_addr = cmd_desc_element_addr;
 	lrb->ucd_rsp_ptr = (struct utp_upiu_rsp *)response_upiu;
-	lrb->ucd_rsp_dma_addr = cmd_desc_element_addr + response_offset;
 	lrb->ucd_prdt_ptr = (struct ufshcd_sg_entry *)prd_table;
-	lrb->ucd_prdt_dma_addr = cmd_desc_element_addr + prdt_offset;
 }
 
 static void __ufshcd_setup_cmd(struct ufs_hba *hba, struct scsi_cmnd *cmd,
