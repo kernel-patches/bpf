@@ -7,6 +7,7 @@
  *
  */
 #include <linux/kernel.h>
+#include <linux/math.h>
 #include <linux/init.h>
 #include <linux/kobject.h>
 #include <linux/export.h>
@@ -448,11 +449,9 @@ static void __init find_zone_movable_pfns_for_nodes(void)
 	 * amount of necessary memory.
 	 */
 	if (required_kernelcore_percent)
-		required_kernelcore = (totalpages * 100 * required_kernelcore_percent) /
-				       10000UL;
+		required_kernelcore = mult_frac(totalpages, required_kernelcore_percent, 100);
 	if (required_movablecore_percent)
-		required_movablecore = (totalpages * 100 * required_movablecore_percent) /
-					10000UL;
+		required_movablecore = mult_frac(totalpages, required_movablecore_percent, 100);
 
 	/*
 	 * If movablecore= was specified, calculate what size of
@@ -2607,6 +2606,12 @@ static void __init mem_init_print_info(void)
 {
 	unsigned long physpages, codesize, datasize, rosize, bss_size;
 	unsigned long init_code_size, init_data_size;
+	unsigned long unmanaged_cma = totalcma_pages;
+	struct zone *zone;
+
+	/* Some CMA pages might already be managed. */
+	for_each_populated_zone(zone)
+		unmanaged_cma -= zone_cma_pages(zone);
 
 	physpages = get_num_physpages();
 	codesize = _etext - _stext;
@@ -2646,7 +2651,7 @@ static void __init mem_init_print_info(void)
 		K(nr_free_pages()), K(physpages),
 		codesize / SZ_1K, datasize / SZ_1K, rosize / SZ_1K,
 		(init_data_size + init_code_size) / SZ_1K, bss_size / SZ_1K,
-		K(physpages - totalram_pages() - totalcma_pages),
+		K(physpages - totalram_pages() - unmanaged_cma),
 		K(totalcma_pages)
 #ifdef	CONFIG_HIGHMEM
 		, K(totalhigh_pages())
