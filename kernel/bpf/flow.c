@@ -423,6 +423,7 @@ void bpf_flow_new_pass(struct bpf_verifier_env *env)
 	int i;
 
 	memset(flow->cost, 0, env->subprog_cnt * sizeof(*flow->cost));
+	flow->budget = bpf_precision_budget(env);
 	flow->budget_func_cnt = 0;
 	flow->start_cnt++;
 	for (i = 0; i < env->prog->len; i++, aux++) {

@@ -62,6 +62,28 @@ bool bpf_xreg_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_st
 	return test_bit(xregno, data_deps) || test_bit(xregno, control_deps);
 }
 
+/*
+ * On its own a function does not get the equations of its arguments @args:
+ *	if (!ok(x)) return 0;  buf[x];		the test in ok() has to bound x
+ */
+bool bpf_call_needs_frames(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			   u16 args)
+{
+	struct bpf_precision *prec = env->precision;
+	u32 func = st->frame[st->curframe]->subprogno, idx = st->insn_idx;
+
+	args &= bpf_args_with_equation(st);
+	if (prec->data_deps) {
+		if (args & *mask_at(env, prec->in_frames, func, idx))
+			return true;
+		prec->this_pass.arg_lost_equation |=
+			args & (*mask_at(env, prec->data_deps, func, idx) |
+				*mask_at(env, prec->control_deps, func, idx));
+	}
+	env->imprecise |= args && !env->err;
+	return false;
+}
+
 /* The value in a slot. NULL if the slot has bytes of several types. */
 static const struct bpf_reg_state *slot_value(struct bpf_verifier_env *env,
 					      const struct bpf_func_state *f, u32 spi,
@@ -1039,6 +1061,160 @@ static int compute_deps_of_unproven(struct bpf_verifier_env *env)
 	return add_control_deps(env);
 }
 
+/* An unreadable xreg needs one type and object, whatever the numbers are. Try that first. */
+static int add_deps(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	u32 len = env->prog->len, i;
+	int ret, more = 0;
+
+	if (!bitmap_empty(prec->last_pass.bad_read_insns, len)) {
+		ret = bpf_compute_deps(env, prec->new_data_deps, prec->last_pass.bad_read_insns);
+		if (ret)
+			return ret;
+		more = add_masks(prec, prec->type_apart, prec->new_data_deps);
+	}
+	if (more)
+		bitmap_andnot(prec->last_pass.unproven_insns, prec->last_pass.unproven_insns,
+			      prec->last_pass.bad_read_insns, len);
+	bitmap_or(prec->bad_read_insns_done, prec->bad_read_insns_done,
+		  prec->last_pass.bad_read_insns, len);
+	ret = compute_deps_of_unproven(env);
+	for (i = 0; i < 5 * prec->words; i++)
+		prec->kept[i] |= prec->data_deps[i] & ~prec->undo[i];
+	bitmap_or(prec->earlier_unproven_insns, prec->earlier_unproven_insns,
+		  prec->last_pass.unproven_insns, len);
+	return ret < 0 ? ret : ret | more;
+}
+
+/* Add the jumps that decide which value an xreg of data_deps has */
+static int add_transitive_deps(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	u32 cnt, len = env->prog->len;
+	int ret = compute_deps_of_unproven(env);
+
+	while (!ret) {
+		cnt = bitmap_weight(prec->control_seeds, len);
+		add_masks(prec, prec->new_data_deps, prec->new_control_deps);
+		bitmap_or(prec->controlled_insns, prec->controlled_insns, prec->def_insns, len);
+		bitmap_or(prec->controlled_insns, prec->controlled_insns,
+			  prec->last_pass.call_insns, len);
+		bitmap_or(prec->controlled_insns, prec->controlled_insns, prec->control_seeds, len);
+		ret = add_control_deps(env);
+		if (bitmap_weight(prec->control_seeds, len) == cnt)
+			break;
+	}
+	return ret;
+}
+
+/* A copy of the deps. ADD_DEPS has no budget, so it must not add calls. */
+static int check_calls_in_frames(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	bool more;
+
+	if (!prec->last_pass.arg_lost_equation)
+		return 0;
+	more = add_masks(prec, prec->in_frames, prec->new_data_deps);
+	more |= add_masks(prec, prec->in_frames, prec->new_control_deps);
+	return more;
+}
+
+static int keep_disjoint_apart(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+
+	return prec->last_pass.disjoint_joined &&
+	       add_masks(prec, prec->disjoint_apart, prec->new_data_deps);
+}
+
+/* @loop is a suspect. Returns false if @kind adds nothing. */
+static bool partition_loop(struct bpf_loop *loop, u32 kind)
+{
+	bool open = loop->last_pass.has_leftover || loop->last_pass.peel_pruned ||
+		    (loop->budget && loop->last_pass.cost > loop->budget);
+
+	switch (kind) {
+	case PARTITION_PEEL:
+		/* the first trip is often different from the other trips */
+		loop->max_peel_cnt = loop->peel_cnt || loop->exit_trip ? U32_MAX : 1;
+		break;
+	case PARTITION_PEEL_MORE:
+		loop->max_peel_cnt = min(4ULL * loop->peel_cnt ?: 1, U32_MAX);
+		loop->no_peel_prune |= loop->last_pass.peel_pruned;
+		break;
+	case PARTITION_PEELED_APART:
+		open = !loop->peeled_apart && loop->peeled_joined;
+		loop->peeled_apart = true;
+		loop->max_peel_cnt = U32_MAX;
+		break;
+	case PARTITION_LOOP_DISJOINT_APART:
+		open = !loop->disjoint_apart &&
+		       (loop->last_pass.has_leftover || loop->peel_cnt > 1);
+		loop->peel_cnt = min(loop->peel_cnt, 1);
+		loop->disjoint_apart = true;
+		loop->max_peel_cnt = 0;
+		break;
+	}
+	return open;
+}
+
+/*
+ * The suspect loops divide half of the budget. If the cost to peel all trips is known, the
+ * loop gets that, or it waits.
+ */
+static int partition_suspect_loops(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	struct bpf_loop *loop;
+	u32 i, cnt = 0;
+	int more = 0;
+	u64 budget, bits = 0;
+
+	for (i = 0; i < prec->loop_cnt; i++) {
+		loop = prec->loops[i];
+		loop->partitioned = (prec->last_pass.suspect_loops & loop->suspect_bit) &&
+				    !(loop->tried & prec->partitioned_by) &&
+				    partition_loop(loop, __ffs(prec->partitioned_by));
+		if (!loop->partitioned)
+			loop->precision = loop->undo;
+		cnt += loop->partitioned;
+		bits |= loop->partitioned ? loop->suspect_bit : 0;
+	}
+	budget = div_u64(prec->budget / 2, cnt ?: 1);
+	for (i = 0; i < prec->loop_cnt; i++) {
+		loop = prec->loops[i];
+		if (!loop->partitioned)
+			continue;
+		loop->budget = max(loop->budget, budget);
+		if (prec->partitioned_by == BIT(PARTITION_PEEL) && loop->max_peel_cnt > 1)
+			loop->budget = max(loop->budget, loop->full_peel_cost);
+		if (!memcmp(&loop->precision, &loop->undo, sizeof(loop->undo)) ||
+		    loop->budget > 2 * prec->budget)
+			loop->tried |= prec->partitioned_by | BIT(PARTITION_TOO_COSTLY);
+		loop->partitioned = (bits & prec->last_pass.first_suspect_loops) &&
+				    !(loop->tried & prec->partitioned_by);
+		if (!loop->partitioned)
+			loop->precision = loop->undo;
+		prec->budget_left += loop->partitioned ? loop->budget - budget : 0;
+		loop->changed |= loop->partitioned;
+		more |= loop->partitioned;
+	}
+	return more;
+}
+
+static int (* const partition_by[])(struct bpf_verifier_env *env) = {
+	[PARTITION_ADD_DEPS]		= add_deps,
+	[PARTITION_PEEL]		= partition_suspect_loops,
+	[PARTITION_TRANSITIVE_DEPS]	= add_transitive_deps,
+	[PARTITION_PEELED_APART]	= partition_suspect_loops,
+	[PARTITION_DISJOINT_APART]	= keep_disjoint_apart,
+	[PARTITION_LOOP_DISJOINT_APART]	= partition_suspect_loops,
+	[PARTITION_PEEL_MORE]		= partition_suspect_loops,
+	[PARTITION_IN_FRAMES]		= check_calls_in_frames,
+};
+
 static int alloc_masks(struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *sub = env->subprog_info;
@@ -1091,4 +1267,331 @@ static int alloc_masks(struct bpf_verifier_env *env)
 	prec->new_control_deps = masks + 16 * prec->words;
 	prec->loop_control_deps = masks + 17 * prec->words;
 	return 0;
+}
+
+u64 bpf_precision_budget(struct bpf_verifier_env *env)
+{
+	return env->precision->budget;
+}
+
+u64 bpf_precision_first_budget(struct bpf_verifier_env *env)
+{
+	return max(2 * env->precision->pass_cost, BPF_MIN_BUDGET);
+}
+
+/* The limit on cost of a pass */
+u64 bpf_pass_max_cost(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+
+	return env->cost + prec->pass_cost + prec->budget_left;
+}
+
+/*
+ * @keep: the partition helped, keep the precision. Else undo all since the last keep.
+ * If a partition was too costly for a loop, a later one is a second choice. It stays only
+ * until the budget grows.
+ */
+static void keep_precision(struct bpf_precision *prec, bool keep)
+{
+	struct bpf_loop *loop;
+	u16 second_choice = 0;
+	u32 i;
+
+	for (i = 0; keep && i < prec->loop_cnt; i++)
+		second_choice |= prec->loops[i]->tried & BIT(PARTITION_TOO_COSTLY);
+	prec->too_costly = 0;
+	for (i = 0; i < prec->loop_cnt; i++)
+		prec->loops[i]->tried &= second_choice;
+	if (second_choice)
+		return;
+	memcpy(keep ? prec->kept : prec->data_deps, keep ? prec->data_deps : prec->kept,
+	       5 * prec->words * sizeof(long));
+	for (i = 0; i < prec->loop_cnt; i++) {
+		loop = prec->loops[i];
+		if (keep) {
+			loop->kept = loop->precision;
+			loop->full_peel_cost = 0;
+		}
+		loop->changed |= !!memcmp(&loop->precision, &loop->kept, sizeof(loop->kept));
+		loop->precision = loop->kept;
+	}
+}
+
+/* The first partition that adds something. If all others are too costly, start again. */
+static int partition_next(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	int i, ret;
+	u16 wait;
+
+	prec->budget_left = prec->budget;
+	memcpy(prec->undo, prec->data_deps, 5 * prec->words * sizeof(long));
+	for (i = 0; i < prec->loop_cnt; i++) {
+		prec->loops[i]->undo = prec->loops[i]->precision;
+		prec->loops[i]->partitioned = false;
+	}
+	for (i = 0; i < ARRAY_SIZE(partition_by); i++) {
+		prec->partitioned_by = BIT(i);
+		ret = prec->too_costly & prec->partitioned_by ? 0 : partition_by[i](env);
+		ret = ret ?: prec->new_nospec;
+		if (ret)
+			return ret;
+	}
+	wait = prec->too_costly | prec->last_pass.calls_joined;
+	for (i = 0; i < prec->loop_cnt; i++)
+		if (prec->last_pass.first_suspect_loops & prec->loops[i]->suspect_bit)
+			wait |= prec->loops[i]->tried & BIT(PARTITION_TOO_COSTLY);
+	prec->partitioned_by = 0;
+	wait = wait && prec->budget < env->max_cost - env->cost;
+	prec->budget_left = prec->budget = min(4 * prec->budget, env->max_cost - env->cost);
+	prec->failing_path_due = prec->budget_grew = true;
+	return wait;
+}
+
+static void undo_loop(struct bpf_precision *prec, struct bpf_loop *loop)
+{
+	loop->precision = loop->undo;
+	loop->tried |= BIT(PARTITION_TOO_COSTLY);
+	if (!loop->this_pass.starved)
+		loop->tried |= prec->partitioned_by;
+	if (prec->partitioned_by == BIT(PARTITION_PEEL) && loop->this_pass.peeled_cnt > 1 &&
+	    loop->disjoint_apart == loop->kept.disjoint_apart)
+		loop->full_peel_cost = div_u64(loop->this_pass.cost * 9 / 8,
+					       loop->this_pass.peeled_cnt - 1) *
+				       min(loop->exit_trip, U32_MAX);
+	loop->changed = true;
+}
+
+/*
+ * The first unproven insn of the last pass has no error now, and no old error came back.
+ * A pass that is over its budget possibly did not get to that insn.
+ */
+static bool partition_helped(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+
+	return prec->first_unproven_insn < env->prog->len &&
+	       !test_bit(prec->first_unproven_insn, prec->this_pass.unproven_insns) &&
+	       (!test_bit(env->err_insn, prec->earlier_unproven_insns) ||
+		(test_bit(env->err_insn, prec->last_unproven_insns) &&
+		 !prec->this_pass.over_budget));
+}
+
+/* The pass is over its budget. Returns true if another partition replaces the last one. */
+bool bpf_undo_precision(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	bool over_budget = false, again = false;
+	struct bpf_loop *loop;
+	u32 i;
+
+	prec->this_pass.over_budget = env->over_limit;
+	prec->this_pass.calls_joined = env->calls_joined;
+	if (!env->over_limit || env->cost > env->max_cost)
+		return false;
+	if (prec->partitioned_by <= BIT(PARTITION_ADD_DEPS) ||
+	    (env->err && (prec->last_pass.over_budget || partition_helped(env)))) {
+		env->over_limit = !env->err;
+		return false;
+	}
+	env->over_limit = false;
+	memcpy(prec->data_deps, prec->undo, 5 * prec->words * sizeof(long));
+	for (i = 0; i < prec->loop_cnt; i++)
+		over_budget |= prec->loops[i]->partitioned &&
+			       !bpf_loop_has_budget(prec->loops[i]);
+	for (i = 0; i < prec->loop_cnt; i++) {
+		loop = prec->loops[i];
+		if (loop->partitioned)
+			undo_loop(prec, loop);
+		/* if the old budget was enough, the pass possibly did not get to the loop */
+		if (loop->partitioned && over_budget && bpf_loop_has_budget(loop))
+			loop->tried &= ~prec->partitioned_by;
+		/* peeled_apart did not help. The partition can fit without it. */
+		if (loop->peeled_apart && !loop->kept.peeled_apart) {
+			loop->peeled_apart = false;
+			loop->tried |= BIT(PARTITION_PEELED_APART) |
+				       BIT(PARTITION_TOO_COSTLY);
+			loop->changed = again = true;
+		}
+	}
+	if (partition_by[__ffs(prec->partitioned_by)] != partition_suspect_loops && !again)
+		prec->too_costly |= prec->partitioned_by;
+	return partition_next(env) > 0;
+}
+
+/*
+ * Keep more apart in the next pass. Take the first line that adds something:
+ *
+ *  ADD_DEPS             the deps of the unproven insns; for an unreadable xreg
+ *                       type_apart first
+ *  PEEL                 suspect loops: one trip, then as many as the budget pays for
+ *  PEELED_APART         suspect loops: the join rule holds at the start of a peeled trip
+ *  TRANSITIVE_DEPS      data_deps |= control_deps; add the jumps that can skip their writes
+ *  DISJOINT_APART       disjoint values in data_deps stay apart
+ *  LOOP_DISJOINT_APART  suspect loops: the same, also at the header of the leftover;
+ *                       it replaces peeling
+ *  PEEL_MORE            suspect loops: 4, 16, 64, ... trips for each state that enters
+ *  IN_FRAMES            calls with an argument that is in the deps and has an equation
+ *
+ * All but ADD_DEPS can be undone:
+ *
+ *            +-----------------+   in the budget, or it helped
+ *       +--->| partition, pass |------------------------------------> keep
+ *       |    +--------+--------+
+ *       |             | over its part of the budget
+ *       |             v
+ *       +--- undo, take the next line
+ *       |             | no line left, one was too costly
+ *       |             v
+ *       +--- budget *= 4, undo all since one helped, see keep_precision()
+ *
+ * Returns 1 if more is kept apart.
+ */
+int bpf_partition_more(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+	bool helped, undone = false;
+	struct bpf_loop *loop;
+	int ret;
+	u32 i;
+
+	ret = prec->data_deps ? 0 : alloc_masks(env);
+	if (ret)
+		return ret;
+	if (!test_bit(env->err_insn, prec->this_pass.unproven_insns))
+		env->err_insn = find_first_bit(prec->this_pass.unproven_insns, env->prog->len);
+	helped = partition_helped(env);
+	for (i = 0; i < prec->loop_cnt; i++) {
+		loop = prec->loops[i];
+		if (loop->partitioned && !helped &&
+		    (!bpf_loop_has_budget(loop) || loop->this_pass.starves)) {
+			undo_loop(prec, loop);
+			undone = true;
+			continue;
+		}
+		/* the next PARTITION_PEEL_MORE sets no_peel_prune */
+		if (loop->partitioned && loop->this_pass.peeled_cnt < loop->max_peel_cnt &&
+		    !(prec->partitioned_by == BIT(PARTITION_PEEL_MORE) &&
+		      loop->this_pass.peel_pruned))
+			loop->tried |= prec->partitioned_by;
+		if (loop->max_peel_cnt && bpf_loop_has_budget(loop)) {
+			loop->peel_cnt = max(loop->peel_cnt, loop->this_pass.peeled_cnt);
+			loop->max_peel_cnt = 0;
+			if (!loop->peeled_apart && !loop->disjoint_apart)
+				loop->budget = 0;
+		}
+		loop->last_pass = loop->this_pass;
+	}
+	/* what this pass found is not valid after the undo */
+	if (undone)
+		return partition_next(env);
+	if (!prec->this_pass.over_budget)
+		prec->pass_cost = max(prec->pass_cost, env->cost - prec->start_cost);
+	if (prec->partitioned_by <= BIT(PARTITION_ADD_DEPS))
+		prec->budget = max(prec->budget, bpf_precision_first_budget(env));
+	swap(prec->this_pass, prec->last_pass);
+	bitmap_copy(prec->last_unproven_insns, prec->last_pass.unproven_insns, env->prog->len);
+	if (helped)
+		keep_precision(prec, true);
+	prec->failing_path_due |= helped;
+	prec->first_unproven_insn = env->err_insn;
+	return find_calls_to_unproven(env) ?: partition_next(env);
+}
+
+void bpf_precision_new_pass(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+
+	bitmap_zero(prec->this_pass.unproven_insns, env->prog->len);
+	bitmap_zero(prec->this_pass.bad_read_insns, env->prog->len);
+	bitmap_zero(prec->this_pass.call_insns, env->prog->len);
+	bitmap_zero(prec->this_pass.unproven_funcs, env->subprog_cnt);
+	prec->this_pass.suspect_loops = prec->this_pass.first_suspect_loops =
+		prec->this_pass.disjoint_joined = prec->this_pass.arg_lost_equation = 0;
+	if (prec->apart_xregno)
+		memset(prec->apart_xregno, 0, env->prog->len * sizeof(u16));
+	if (prec->data_deps && !env->replay && (prec->budget_grew || env->for_log)) {
+		keep_precision(prec, false);
+		prec->partitioned_by = prec->pass_cost = 0;
+	}
+	prec->budget_grew = prec->new_nospec = false;
+	prec->start_cost = env->cost;
+	prec->last_unproven_left = bitmap_weight(prec->last_unproven_insns, env->prog->len);
+	/* ADD_DEPS has no alternative, so it has no limit of its own */
+	if (prec->partitioned_by > BIT(PARTITION_ADD_DEPS) && !env->replay)
+		env->pass_max_cost = bpf_pass_max_cost(env);
+}
+
+static int add_loop(struct bpf_precision *prec, struct bpf_loop *loop)
+{
+	struct bpf_loop **loops = prec->loops;
+
+	if (!loop || loop->suspect_bit)
+		return 0;
+	if (is_power_of_2(prec->loop_cnt + 1)) {
+		loops = kvrealloc(loops, 2 * (prec->loop_cnt + 1) * sizeof(*loops),
+				  BPF_VERIFIER_GFP);
+		if (!loops)
+			return -ENOMEM;
+		prec->loops = loops;
+	}
+	loop->suspect_bit = BIT_ULL(prec->loop_cnt % 64);
+	loops[prec->loop_cnt++] = loop;
+	return 0;
+}
+
+int bpf_precision_init(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	u32 words = BITS_TO_LONGS(env->prog->len), i;
+	struct bpf_precision *prec;
+	unsigned long *bits;
+	int err = 0;
+
+	prec = env->precision = kvzalloc(sizeof(*prec) + 20 * words * sizeof(long),
+					 BPF_VERIFIER_GFP);
+	if (!prec)
+		return -ENOMEM;
+	bits = (void *)(prec + 1);
+	prec->this_pass.unproven_insns = bits;
+	prec->this_pass.call_insns = bits + words;
+	prec->this_pass.bad_read_insns = bits + 2 * words;
+	prec->last_pass.unproven_insns = bits + 3 * words;
+	prec->last_pass.call_insns = bits + 4 * words;
+	prec->last_pass.bad_read_insns = bits + 5 * words;
+	prec->held_insns = bits + 6 * words;
+	prec->err_insns = bits + 7 * words;
+	prec->earlier_unproven_insns = bits + 8 * words;
+	prec->control_seeds = bits + 9 * words;
+	prec->controlled_insns = bits + 10 * words;
+	prec->bad_read_insns_done = bits + 11 * words;
+	prec->controlled_insns_done = bits + 12 * words;
+	prec->def_insns = bits + 13 * words;
+	prec->last_unproven_insns = bits + 14 * words;
+	prec->bad_value_insns = bits + 15 * words;
+	prec->this_pass.unproven_funcs = bits + 16 * words;
+	prec->last_pass.unproven_funcs = bits + 17 * words;
+	prec->pass_cost = env->cost;
+	prec->budget_left = prec->budget = bpf_precision_first_budget(env);
+	prec->first_unproven_insn = prec->loop_carried_at = U32_MAX;
+	for (i = 0; i < env->prog->len && !err; i++, aux++)
+		err = add_loop(prec, aux->loop) ?: add_loop(prec, aux->callback_loop) ?:
+		      add_loop(prec, aux->recursion_loop);
+	return err;
+}
+
+void bpf_precision_free(struct bpf_verifier_env *env)
+{
+	struct bpf_precision *prec = env->precision;
+
+	if (!prec)
+		return;
+	kvfree(prec->func);
+	kvfree(prec->loops);
+	kvfree(prec->hops_to_err);
+	kvfree(prec->seen);
+	kvfree(prec->data_deps);
+	kvfree(prec);
+	env->precision = NULL;
 }

@@ -1217,6 +1217,18 @@ static void add_distance_equation(struct bpf_verifier_env *env, const struct bpf
 			env->insn_idx, a.off - b.off });
 }
 
+/* At a call bpf_equations_before_insn() moves the equations of r1-r5 to the next frame */
+u16 bpf_args_with_equation(const struct bpf_verifier_state *st)
+{
+	u16 args = 0;
+	u32 r;
+
+	for (r = BPF_REG_1; r <= BPF_REG_5; r++)
+		if (bpf_find_xreg_equation(&st->equations, bpf_xreg(st->curframe + 1, r)))
+			args |= BIT(r);
+	return args;
+}
+
 /* Note the operands. Delete the equations of the registers that the insn writes. */
 void bpf_equations_before_insn(struct bpf_verifier_env *env)
 {

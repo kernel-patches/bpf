@@ -839,6 +839,7 @@ struct bpf_loop_per_pass {
 	bool peel_pruned;	/* see flow_prune_peeled() */
 	/* a check failed in a state that the loop kept apart, with no other suspect */
 	bool has_unproven;
+	bool starves, starved;	/* see charge_loops() */
 	u32 last_peeled_trip;	/* see flow_keep_peeled() */
 	u32 peeled_cnt;		/* trips that the pass peeled */
 	u64 cost;		/* for the states that the loop keeps apart */
@@ -871,7 +872,12 @@ struct bpf_loop {
 	bool disjoint_apart;	/* disjoint values in data_deps stay apart, also in the leftover */
 	bool no_peel_prune;	/* a larger earlier trip does not prune, see flow_prune_peeled() */
 	);
+	struct bpf_loop_precision undo;	/* before the last partition */
+	struct bpf_loop_precision kept;	/* see keep_precision() */
 	struct bpf_loop_per_pass last_pass;	/* the last pass whose partition was kept */
+	/* to peel all trips, estimated from a partition that was over its budget */
+	u64 full_peel_cost;
+	u16 tried;		/* bits of PARTITION_*, with this budget */
 	bool partitioned;	/* the last partition was for this loop */
 	bool peeled_joined;	/* at the start of a peeled trip, against the join rule */
 	bool changed;		/* see flow_forget_loop() */
@@ -1351,9 +1357,11 @@ struct bpf_verifier_env {
 	bool strict_alignment;		/* perform strict pointer alignment checks */
 	bool test_reg_invariants;	/* fail verification on register invariants violations */
 	bool uses_arena_sp;		/* the program has insns with BPF_REG_ARENA_SP */
+	bool replay;			/* the good pass, once more for the driver */
 	bool path_sensitive;		/* no joins, see run_path_sensitive() */
 	bool for_log;			/* the verdict is known, see do_check_all() */
 	bool fallthrough_first;		/* see find_failing_path() */
+	u32 pass;			/* number of the pass, see do_check_all() */
 	struct bpf_precision *precision;
 	u64 cost, mem;			/* see bpf_check_limits() */
 	u64 max_cost, max_mem;
@@ -1697,6 +1705,8 @@ u64 bpf_hash_apart_xregs(struct bpf_verifier_env *env, const struct bpf_verifier
 u64 bpf_hash_args(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u64 hash);
 void bpf_range_of_data_dep(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			   u32 *first, u32 *last);
+bool bpf_call_needs_frames(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			   u16 args);
 bool bpf_xreg_in_data_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			   u32 fr, u32 xregno);
 bool bpf_xreg_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
@@ -1708,6 +1718,15 @@ bool bpf_insn_is_unproven(struct bpf_verifier_env *env);
 void bpf_note_fixups_differ(struct bpf_verifier_env *env);
 void bpf_find_unproven_after_pass(struct bpf_verifier_env *env);
 bool bpf_same_insns_unproven(struct bpf_verifier_env *env);
+int bpf_partition_more(struct bpf_verifier_env *env);
+bool bpf_undo_precision(struct bpf_verifier_env *env);
+void bpf_precision_new_pass(struct bpf_verifier_env *env);
+u64 bpf_pass_max_cost(struct bpf_verifier_env *env);
+u64 bpf_precision_budget(struct bpf_verifier_env *env);
+u64 bpf_precision_first_budget(struct bpf_verifier_env *env);
+int bpf_precision_init(struct bpf_verifier_env *env);
+void bpf_precision_free(struct bpf_verifier_env *env);
+
 /*
  * The two limits of the verifier, for the whole load. The unit of cost is one step of a scan,
  * about a dozen insns of the CPU. Memory is the bytes of states and tables at a time.
@@ -1719,6 +1738,9 @@ bool bpf_same_insns_unproven(struct bpf_verifier_env *env);
 #define BPF_COST_STATE	512	/* make, order and free a state */
 #define BPF_MAX_COST	(1ULL << 33)
 #define BPF_MAX_MEM	(1ULL << 31)
+/* The floors of the cost after the first error, and of the budget of a partition */
+#define BPF_PARTITION_BUDGET	(BPF_MAX_COST / 3)
+#define BPF_MIN_BUDGET	(BPF_MAX_COST >> 12)
 /* Without CAP_BPF programs are small, and their loads wait for each other */
 #define BPF_LIMITS_SHIFT_UNPRIV	5
 
@@ -2459,6 +2481,7 @@ void bpf_equations_fill(struct bpf_verifier_env *env, struct bpf_func_state *fra
 void bpf_equations_refine_all(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int idx,
 			bool taken);
+u16 bpf_args_with_equation(const struct bpf_verifier_state *st);
 void bpf_equations_next_trip(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			     u32 depth);
 bool bpf_equations_subsume(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,

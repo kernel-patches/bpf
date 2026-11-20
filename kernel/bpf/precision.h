@@ -22,6 +22,8 @@ struct precision_per_pass {
 	unsigned long *unproven_funcs;		/* of functions */
 	u64 suspect_loops, first_suspect_loops;	/* of the unproven states, of the first one */
 	bool disjoint_joined;			/* disjoint values in data_deps were joined */
+	bool over_budget, calls_joined;
+	bool arg_lost_equation;			/* see bpf_call_needs_frames() */
 };
 
 /* callx calls one of the functions whose address is taken. They count as one function. */
@@ -51,8 +53,18 @@ struct bpf_precision {
 	unsigned long *bad_value_insns;		/* unproven, its value is possibly the cause */
 	unsigned long *last_unproven_insns;	/* in the last pass */
 	unsigned long *bad_read_insns_done;
+	unsigned long *earlier_unproven_insns;	/* in an earlier pass */
 	unsigned long *control_seeds, *controlled_insns, *controlled_insns_done, *def_insns;
+	u32 first_unproven_insn;	/* of the last pass */
 	u32 last_unproven_left;		/* last_unproven_insns whose check did not fail again */
+	struct bpf_loop **loops;
+	u32 loop_cnt;
+	u64 start_cost, pass_cost;	/* env->cost before the pass, the cost of a pass */
+	/* the cost that a partition can add to it, and that this one can add */
+	u64 budget, budget_left;
+	u8 partitioned_by, too_costly;	/* bits of PARTITION_* */
+	bool failing_path_due;		/* see bpf_failing_path_is_due() */
+	bool budget_grew;		/* see partition_next() */
 	bool new_nospec;
 
 	u16 *apart_xregno;	/* per insn, see bpf_range_of_data_dep() */
@@ -60,6 +72,7 @@ struct bpf_precision {
 	/* The path-sensitive run */
 	unsigned long *err_insns;		/* insns at which the failing path can end */
 	u32 *hops_to_err, *hops_to_exit;	/* per insn, see compute_hops() */
+	u64 *seen;				/* hash set, see bpf_failing_path_was_here() */
 	unsigned long *loop_control_deps;	/* see bpf_jumps_see_same() */
 	u32 loop_carried_at;
 	unsigned long loop_carried[XREG_WORDS];
@@ -70,6 +83,13 @@ struct state_cmp {
 	u32 all, data_deps, cnt;
 	u32 disjoint_xregno;		/* an xreg of data_deps in the top frame, plus one */
 	u32 disjoint_apart;		/* what differs in these xregs */
+};
+
+enum {
+	PARTITION_ADD_DEPS, PARTITION_PEEL, PARTITION_PEELED_APART, PARTITION_TRANSITIVE_DEPS,
+	PARTITION_DISJOINT_APART, PARTITION_LOOP_DISJOINT_APART, PARTITION_PEEL_MORE,
+	PARTITION_IN_FRAMES,
+	PARTITION_TOO_COSTLY,	/* in bpf_loop.tried */
 };
 
 u32 bpf_frame_mask(struct bpf_verifier_env *env, unsigned long *masks,
