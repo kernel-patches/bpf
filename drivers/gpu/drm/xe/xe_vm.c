@@ -620,7 +620,9 @@ out_unlock_outer:
 		if (IS_SRIOV_VF(vm->xe) &&
 		    xe_sriov_vf_migration_supported(vm->xe)) {
 			up_write(&vm->lock);
+			free_preempt_fences(&preempt_fences);
 			xe_vm_queue_rebind_worker(vm);
+			trace_xe_vm_rebind_worker_exit(vm);
 			return;
 		}
 
