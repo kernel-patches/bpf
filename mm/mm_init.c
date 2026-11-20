@@ -722,16 +722,18 @@ static void __meminit memmap_init_page_from_template(struct page *page,
 		unsigned long pfn, const struct zone *zone, struct page *template)
 {
 	/*
-	 * Refresh PFN-dependent fields in the template before the non-temporal
-	 * copy, so the destination page does not need cached stores after
-	 * memcpy_nontemporal().
+	 * Refresh PFN-dependent fields in the template before copying it, so
+	 * the destination page does not need follow-up stores.
 	 */
 	set_page_section_from_pfn(template, pfn);
 #ifdef WANT_PAGE_VIRTUAL
 	if (!is_highmem_idx(zone_idx(zone)))
 		set_page_address(template, __va(pfn << PAGE_SHIFT));
 #endif
-	memcpy_nontemporal(page, template, sizeof(*page));
+	if (zone_is_zone_device(zone))
+		memcpy_nontemporal(page, template, sizeof(*page));
+	else
+		memcpy(page, template, sizeof(*page));
 	vmemmap_optimization_verify_zone(page);
 }
 
