@@ -400,7 +400,7 @@ void intel_dmc_wl_disable(struct intel_display *display)
 	if (!__intel_dmc_wl_supported(display))
 		return;
 
-	intel_dmc_wl_flush_release_work(display);
+	cancel_delayed_work_sync(&wl->work);
 
 	spin_lock_irqsave(&wl->lock, flags);
 
@@ -504,10 +504,10 @@ out_unlock:
 
 void intel_dmc_wl_get_noreg(struct intel_display *display)
 {
-	intel_dmc_wl_get(display, INVALID_MMIO_REG);
+	intel_dmc_wl_get(display, INTEL_REG_INVALID);
 }
 
 void intel_dmc_wl_put_noreg(struct intel_display *display)
 {
-	intel_dmc_wl_put(display, INVALID_MMIO_REG);
+	intel_dmc_wl_put(display, INTEL_REG_INVALID);
 }
