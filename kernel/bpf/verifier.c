@@ -1901,44 +1901,39 @@ static void scalar_step_reset(struct scalar *s)
 
 static void scalar_step_add(struct scalar *dst, const struct scalar *a, const struct scalar *b)
 {
-	const struct scalar *reg;
 	s64 amount, tmp;
+	u16 step;
 
-	if (tnum_is_const(b->var_off)) {
-		reg = a;
-		amount = (s64)b->var_off.value;
-	} else if (tnum_is_const(a->var_off)) {
-		reg = b;
-		amount = (s64)a->var_off.value;
-	} else {
-		scalar_step_reset(dst);
-		return;
-	}
+	if (tnum_is_const(a->var_off) && !tnum_is_const(b->var_off))
+		swap(a, b);
+	/* b is d + k * step. A constant has no step. */
+	amount = tnum_is_const(b->var_off) ? b->var_off.value : b->base;
+	step = tnum_is_const(b->var_off) ? a->step : gcd(a->step, b->step);
 
 	/*
 	 * Let x be a possible signed value of the register,
-	 * d = amount, s = reg->step, and b = reg->base.
+	 * d = amount, s = step, and b = a->base mod s.
 	 * Then x mod s = b, with s > 0 and 0 <= b < s.
 	 * If the addition causes signed underflow, the resulting value
 	 * is x + d + 2**64.
 	 *
 	 * Taking the result modulo s and substituting x mod s = b gives:
 	 *   (x + d + 2**64) mod s = (b + d + (2**64 mod s)) mod s      (1)
-	 * Keeping reg->step = s and updating reg->base to (b + d) mod s
+	 * Keeping the step s and updating the base to (b + d) mod s
 	 * requires (1) to equal (b + d) mod s, which holds if and only
 	 * if 2**64 mod s = 0.
 	 * Signed overflow subtracts 2**64 and has the same requirement.
 	 *
 	 * Conservatively reset the stride if either wrap is possible.
 	 */
-	if (check_add_overflow(cnum64_smin(reg->r64), amount, &tmp) ||
-	    check_add_overflow(cnum64_smax(reg->r64), amount, &tmp)) {
+	if (step == 1 || check_add_overflow(cnum64_smin(a->r64), cnum64_smin(b->r64), &tmp) ||
+	    check_add_overflow(cnum64_smax(a->r64), cnum64_smax(b->r64), &tmp)) {
 		scalar_step_reset(dst);
 		return;
 	}
 
-	dst->base = (reg->base + imod(amount, reg->step)) % reg->step;
-	dst->step = reg->step;
+	dst->base = (a->base + imod(amount, step)) % step;
+	dst->step = step;
 }
 
 /*
@@ -1953,8 +1948,10 @@ void scalar_add(struct scalar *dst, const struct scalar *a, const struct scalar 
 	dst->var_off = tnum_add(a->var_off, b->var_off);
 }
 
-static void scalar_step_scale(struct scalar *dst, u64 amount)
+/* The step of @dst * @amount. The ranges are those before the product. */
+void scalar_step_scale(struct scalar *dst, s64 amount)
 {
+	u64 factor = amount < 0 ? -(u64)amount : amount;
 	u16 step;
 	s64 tmp;
 
@@ -1973,18 +1970,17 @@ static void scalar_step_scale(struct scalar *dst, u64 amount)
 	 *
 	 * Conservatively reset the stride if a wrap is possible.
 	 */
-	if (amount == 0 || check_mul_overflow(dst->step, amount, &step) ||
-	    check_mul_overflow(cnum64_smin(dst->r64), (s64)amount, &tmp) ||
-	    check_mul_overflow(cnum64_smax(dst->r64), (s64)amount, &tmp)) {
+	if (amount == 0 || check_mul_overflow(dst->step, factor, &step) ||
+	    check_mul_overflow(cnum64_smin(dst->r64), amount, &tmp) ||
+	    check_mul_overflow(cnum64_smax(dst->r64), amount, &tmp)) {
 		scalar_step_reset(dst);
 		return;
 	}
 	/*
-	 * The above established that `step = dst->step * amount`
-	 * does not overflow, therefore the base < step invariant holds
-	 * after assignments below.
+	 * The above established that `step = dst->step * |amount|`
+	 * does not overflow. For d < 0 the same holds modulo s * -d.
 	 */
-	dst->base = dst->base * amount;
+	dst->base = imod(dst->base * amount, step);
 	dst->step = step;
 }
 
@@ -3716,11 +3712,21 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 		save_register_state(env, state, spi, reg, size);
 	} else {
 		u8 type = STACK_MISC;
+		int keep = 0;
 
-		if (bpf_is_spilled_reg(ss))
-			bpf_diag_record_scrub(env, &ss->spilled_ptr,
-					      BPF_DIAG_MOD_WRITE);
-		scrub_special_slot(state, spi);
+		/* the bytes before the write still have the low bytes of a number */
+		if (bpf_is_spilled_scalar_reg(ss) && off % BPF_REG_SIZE)
+			keep = min_t(int, rounddown_pow_of_two(off & (BPF_REG_SIZE - 1)),
+				     bpf_spill_size(ss));
+		if (keep && bpf_stack_narrow_access_ok(0, keep, bpf_spill_size(ss))) {
+			for (i = 0; i < BPF_REG_SIZE - keep; i++)
+				if (ss->slot_type[i] == STACK_SPILL)
+					ss->slot_type[i] = STACK_MISC;
+		} else {
+			if (bpf_is_spilled_reg(ss))
+				bpf_diag_record_scrub(env, &ss->spilled_ptr, BPF_DIAG_MOD_WRITE);
+			scrub_special_slot(state, spi);
+		}
 
 		/* when we zero initialize stack slots mark them as such */
 		if ((reg && bpf_register_is_null(reg)) ||
@@ -3731,7 +3737,6 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 		for (i = 0; i < size; i++)
 			ss->slot_type[(slot - i) % BPF_REG_SIZE] = type;
 	}
-
 	return 0;
 }
 
@@ -3994,6 +3999,10 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				/* coerce_scalar_to_size will adjust the boundaries. */
 				state->regs[dst_regno] = *reg;
 			} else {
+				/* the low bytes are from the spill */
+				bool fill_exceeds_spill =
+					size > spill_size && !(off % BPF_REG_SIZE) &&
+					!IS_ENABLED(CONFIG_CPU_BIG_ENDIAN);
 				int spill_cnt = 0, zero_cnt = 0;
 
 				for (i = 0; i < size; i++) {
@@ -4033,6 +4042,10 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				} else {
 					mark_reg_stack_read(env, reg_state, off, off + size,
 							    dst_regno);
+					if (fill_exceeds_spill)
+						scalar_intersect(scalar_of(&state->regs[dst_regno]),
+								 scalar_of(reg),
+								 spill_size * BITS_PER_BYTE);
 				}
 			}
 		} else if (dst_regno >= 0) {
@@ -6203,7 +6216,12 @@ static void set_sext64_default_val(struct scalar *s, int size)
 		s->r64 = cnum64_from_srange(S32_MIN, S32_MAX);
 		s->r32 = cnum32_from_srange(S32_MIN, S32_MAX);
 	}
-	s->var_off = tnum_unknown;
+}
+
+/* The low @num_bits bits do not change. The other bits are copies of the sign. */
+static struct tnum tnum_sext(struct tnum t, u32 num_bits)
+{
+	return tnum_arshift(tnum_lshift(t, 64 - num_bits), 64 - num_bits, 64);
 }
 
 static void coerce_scalar_to_size_sx(struct scalar *s, int size)
@@ -6212,6 +6230,7 @@ static void coerce_scalar_to_size_sx(struct scalar *s, int size)
 	u64 top_smax_value, top_smin_value;
 	u64 num_bits = size * 8;
 	s64 limit = 1LL << (num_bits - 1);
+	struct cnum32 r32;
 
 	/* If every value fits the signed N-bit range sign extension is a noop. */
 	if (cnum64_smin(s->r64) >= -limit && cnum64_smax(s->r64) < limit)
@@ -6236,6 +6255,7 @@ static void coerce_scalar_to_size_sx(struct scalar *s, int size)
 		return;
 	}
 
+	s->var_off = tnum_sext(s->var_off, num_bits);
 	top_smax_value = ((u64)cnum64_smax(s->r64) >> num_bits) << num_bits;
 	top_smin_value = ((u64)cnum64_smin(s->r64) >> num_bits) << num_bits;
 
@@ -6261,12 +6281,19 @@ static void coerce_scalar_to_size_sx(struct scalar *s, int size)
 	if ((s64_max >= 0) == (s64_min >= 0)) {
 		s->r64 = cnum64_from_srange(s64_min, s64_max);
 		s->r32 = cnum32_from_srange(s64_min, s64_max);
-		s->var_off = tnum_range(s64_min, s64_max);
+		scalar_bounds_sync(s);
 		return;
 	}
 
 out:
+	r32 = s->r32;
 	set_sext64_default_val(s, size);
+	/* the low 32 bits fit, they do not change */
+	if (cnum32_smin(r32) >= -limit && cnum32_smax(r32) < limit) {
+		s->r32 = r32;
+		s->r64 = cnum64_from_srange(cnum32_smin(r32), cnum32_smax(r32));
+	}
+	scalar_bounds_sync(s);
 }
 
 static void set_sext32_default_val(struct scalar *s, int size)
@@ -6276,7 +6303,6 @@ static void set_sext32_default_val(struct scalar *s, int size)
 	else
 		/* size == 2 */
 		s->r32 = cnum32_from_srange(S16_MIN, S16_MAX);
-	s->var_off = tnum_subreg(tnum_unknown);
 }
 
 static void coerce_subreg_to_size_sx(struct scalar *s, int size)
@@ -6321,6 +6347,7 @@ static void coerce_subreg_to_size_sx(struct scalar *s, int size)
 		return;
 	}
 
+	s->var_off = tnum_sext(s->var_off, num_bits);
 	top_smax_value = ((u32)cnum32_smax(s->r32) >> num_bits) << num_bits;
 	top_smin_value = ((u32)cnum32_smin(s->r32) >> num_bits) << num_bits;
 
@@ -6341,7 +6368,6 @@ static void coerce_subreg_to_size_sx(struct scalar *s, int size)
 
 	if ((s32_min >= 0) == (s32_max >= 0)) {
 		s->r32 = cnum32_from_srange(s32_min, s32_max);
-		s->var_off = tnum_subreg(tnum_range(s32_min, s32_max));
 		return;
 	}
 
@@ -17297,7 +17323,9 @@ static void scalar_min_max_rsh(struct scalar *dst, const struct scalar *src)
 static void scalar32_min_max_arsh(struct scalar *dst, const struct scalar *src)
 {
 	u32 umin_val = cnum32_umin(src->r32), umax_val = cnum32_umax(src->r32);
-	s32 smin = cnum32_smin(dst->r32), smax = cnum32_smax(dst->r32);
+	struct cnum32 known = cnum32_from_tnum(dst->var_off);
+	s32 smin = max(cnum32_smin(dst->r32), cnum32_smin(known));
+	s32 smax = min(cnum32_smax(dst->r32), cnum32_smax(known));
 
 	/*
 	 * A larger count brings the result closer to 0, or to -1.
@@ -17316,7 +17344,10 @@ static void scalar32_min_max_arsh(struct scalar *dst, const struct scalar *src)
 static void scalar_min_max_arsh(struct scalar *dst, const struct scalar *src)
 {
 	u64 umin_val = cnum64_umin(src->r64), umax_val = cnum64_umax(src->r64);
-	s64 smin = cnum64_smin(dst->r64), smax = cnum64_smax(dst->r64);
+	struct cnum64 known = cnum64_from_tnum(dst->var_off);
+	/* a range that crosses S64_MAX has no signed bounds, the known bits have: 0..0xf0 << 56 */
+	s64 smin = max(cnum64_smin(dst->r64), cnum64_smin(known));
+	s64 smax = min(cnum64_smax(dst->r64), cnum64_smax(known));
 
 	/* A larger count brings the result closer to 0, or to -1 */
 	dst->r64 = cnum64_from_srange(smin >> (smin < 0 ? umin_val : umax_val),
@@ -17473,6 +17504,7 @@ void scalar_alu(struct scalar *dst, const struct scalar *src, const struct bpf_i
 	s16 off = insn->off;
 	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
 	struct scalar tmp;
+	u64 cleared;
 
 	if (!is_safe_to_compute_dst_reg_range(insn, src)) {
 		scalar_set_unknown(dst);
@@ -17578,8 +17610,12 @@ void scalar_alu(struct scalar *dst, const struct scalar *src, const struct bpf_i
 		scalar_step_reset(dst);
 		break;
 	case BPF_AND:
+		cleared = (dst->var_off.value | dst->var_off.mask) & ~src->var_off.value;
+		if (!cleared)
+			break;
 		dst->var_off = tnum_and(dst->var_off, src->var_off);
-		scalar32_min_max_and(dst, src);
+		if ((u32)cleared)
+			scalar32_min_max_and(dst, src);
 		scalar_min_max_and(dst, src);
 		scalar_step_reset(dst);
 		break;
@@ -18921,16 +18957,22 @@ bool scalar_intersect(struct scalar *dst, const struct scalar *src, u32 bits)
 	/* tnum_intersect() of two tnums that don't overlap is not empty */
 	if (!tnum_overlap(a, b))
 		return false;
+	s.var_off = tnum_intersect(a, b);
 	/*
 	 * Equal in 64 bits is equal in the low 32 bits too. 'if w1 s> 200' on a zero extended int
 	 * refines nothing but the 32-bit range.
 	 */
-	s.r32 = cnum32_intersect(dst->r32, src->r32);
+	if (bits >= 32)
+		s.r32 = cnum32_intersect(dst->r32, src->r32);
 	if (bits == 64) {
 		s.r64 = cnum64_intersect(dst->r64, src->r64);
-		s.var_off = tnum_intersect(a, b);
-	} else {
-		s.var_off = tnum_with_subreg(dst->var_off, tnum_intersect(a, b));
+		if (src->step % dst->step == 0) {
+			if (src->base % dst->step != dst->base)
+				return false;
+			s.step = src->step;
+			s.base = src->base;
+		}
+		s.r64 = cnum64_intersect_linear(s.r64, s.base, s.step);
 	}
 	scalar_bounds_sync(&s);
 	if (scalar_is_empty(&s) || const_tnum_range_mismatch(&s) ||
