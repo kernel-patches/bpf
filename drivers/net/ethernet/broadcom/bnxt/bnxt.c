@@ -14924,10 +14924,14 @@ unlock:
 /* Only called from bnxt_sp_task() */
 static void bnxt_reset(struct bnxt *bp, bool silent)
 {
+	if (!silent)
+		bnxt_ulp_stop(bp);
 	bnxt_rtnl_lock_sp(bp);
 	if (test_bit(BNXT_STATE_OPEN, &bp->state))
 		bnxt_reset_task(bp, silent);
 	bnxt_rtnl_unlock_sp(bp);
+	if (!silent && !test_bit(BNXT_STATE_DMA_STOPPED, &bp->state))
+		bnxt_ulp_start(bp);
 }
 
 /* Only called from bnxt_sp_task() */
