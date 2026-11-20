@@ -949,7 +949,8 @@ set_posix_acl(const struct mnt_idmap *idmap, struct dentry *dentry,
 
 	if (type == ACL_TYPE_DEFAULT && !S_ISDIR(inode->i_mode))
 		return acl ? -EACCES : 0;
-	if (!inode_owner_or_capable(idmap, inode))
+	if (!(inode->i_opflags & IOP_SET_ACL_OWNER_CHECK) &&
+	    !inode_owner_or_capable(idmap, inode))
 		return -EPERM;
 
 	if (acl) {
