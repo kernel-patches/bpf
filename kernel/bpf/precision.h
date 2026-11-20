@@ -62,6 +62,7 @@ struct bpf_precision {
 	u64 start_cost, pass_cost;	/* env->cost before the pass, the cost of a pass */
 	/* the cost that a partition can add to it, and that this one can add */
 	u64 budget, budget_left;
+	u64 good_budget;		/* see bpf_restore_precision() */
 	u8 partitioned_by, too_costly;	/* bits of PARTITION_* */
 	bool failing_path_due;		/* see bpf_failing_path_is_due() */
 	bool budget_grew;		/* see partition_next() */
