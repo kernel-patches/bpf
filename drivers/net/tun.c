@@ -471,13 +471,15 @@ static u16 tun_automq_select_queue(struct tun_struct *tun, struct sk_buff *skb)
 	txq = __skb_get_hash_symmetric(skb);
 	e = tun_flow_find(&tun->flows[tun_hashfn(txq)], txq);
 	if (e) {
+		u32 queue_index = READ_ONCE(e->queue_index);
+
 		tun_flow_save_rps_rxhash(e, txq);
-		txq = e->queue_index;
-	} else {
-		txq = reciprocal_scale(txq, numqueues);
+		/* A racing update can leave the old index of a moved queue */
+		if (likely(queue_index < numqueues))
+			return queue_index;
 	}
 
-	return txq;
+	return reciprocal_scale(txq, numqueues);
 }
 
 static u16 tun_ebpf_select_queue(struct tun_struct *tun, struct sk_buff *skb)
@@ -1961,12 +1963,10 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		skb->protocol = eth_type_trans(skb, tun->dev);
 
 	/* copy skb_ubuf_info for callback when skb has no error */
-	if (zerocopy) {
+	if (zerocopy)
 		skb_zcopy_init(skb, msg_control);
-	} else if (msg_control) {
-		struct ubuf_info *uarg = msg_control;
-		uarg->ops->complete(NULL, uarg, false);
-	}
+	else if (msg_control)
+		net_zcopy_complete(NULL, msg_control, false);
 
 	skb_reset_network_header(skb);
 	skb_probe_transport_header(skb);

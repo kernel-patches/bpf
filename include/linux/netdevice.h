@@ -257,11 +257,11 @@ struct netdev_hw_addr_list {
 	 */
 	int			_count;
 
+	/* Set for dev->mc only */
+	bool			is_dev_mc;
+
 	/* Auxiliary tree for faster lookup on addition and deletion */
 	struct rb_root		tree;
-
-	/* Set for dev->mc only, the device the list belongs to */
-	struct net_device	*mc_dev;
 };
 
 #define netdev_hw_addr_list_count(l) ((l)->_count)
@@ -2531,6 +2531,12 @@ struct net_device {
 	unsigned long		change_proto_down:1;
 	unsigned long		netns_immutable:1;
 	unsigned long		fcoe_mtu:1;
+	/**
+	 * @xdp_from_upper: the program in @xdp_state was installed by an
+	 *	upper device with netif_xdp_propagate(); it belongs to the
+	 *	upper and can't be replaced or removed through this device.
+	 */
+	unsigned long		xdp_from_upper:1;
 
 	struct list_head	net_notifier_list;
 
@@ -4357,7 +4363,8 @@ static inline void dev_consume_skb_any(struct sk_buff *skb)
 
 u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 			     const struct bpf_prog *xdp_prog);
-void generic_xdp_tx(struct sk_buff *skb, const struct bpf_prog *xdp_prog);
+void generic_xdp_tx(struct sk_buff *skb, const struct bpf_prog *xdp_prog,
+		    u32 act);
 int do_xdp_generic(const struct bpf_prog *xdp_prog, struct sk_buff **pskb);
 int netif_rx(struct sk_buff *skb);
 int __netif_rx(struct sk_buff *skb);
@@ -4444,6 +4451,7 @@ struct sk_buff *dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 
 int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
 u8 dev_xdp_prog_count(struct net_device *dev);
+bool dev_xdp_has_own_prog(struct net_device *dev);
 int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf);
 int dev_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf);
 u8 dev_xdp_sb_prog_count(struct net_device *dev);
