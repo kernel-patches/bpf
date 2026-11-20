@@ -350,6 +350,37 @@ Description:	Performance Limited
 
 		This file is only present if the cppc-cpufreq driver is in use.
 
+What:		/sys/devices/system/cpu/cpuX/cpufreq/ospm_nominal_freq
+Date:		October 2026
+Contact:	linux-pm@vger.kernel.org
+Description:	OSPM Nominal Performance (kHz)
+
+		OSPM uses this attribute to request a nominal performance level
+		lower than the platform-reported nominal. The platform treats
+		performance above this level as boost and below as throttle.
+
+		Write a value in kHz, between the frequencies corresponding to
+		Lowest Performance and Nominal Performance.
+
+		While boost is disabled, cpuinfo_max_freq is set to this value
+		and scaling_max_freq cannot go above it. While boost is
+		enabled, cpuinfo_max_freq is the Highest Performance frequency.
+
+		The register cannot be read back, so a read returns the last
+		value written, rounded to a performance level. It returns
+		"<unset>" before the first write. Reads and writes fail with
+		-EOPNOTSUPP if the platform does not implement the register.
+
+		Note that tasks may be migrated from one CPU to another by the
+		scheduler's load-balancing algorithm, and if different OSPM
+		Nominal Performance values are set for those CPUs (through
+		different cpufreq policies), that may lead to undesirable
+		outcomes. To avoid such issues it is better to set the same
+		value across all policies, or to pin every task potentially
+		sensitive to it to a specific CPU.
+
+		This file is only present if the cppc-cpufreq driver is in use.
+
 What:		/sys/devices/system/cpu/cpu*/cache/index3/cache_disable_{0,1}
 Date:		August 2008
 KernelVersion:	2.6.27
