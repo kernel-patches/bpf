@@ -1895,8 +1895,10 @@ static bool copy_data(struct prb_data_ring *data_ring,
 		return false;
 
 	/* Caller interested in the line count? */
-	if (line_count)
-		*line_count = count_lines(data, len);
+	if (line_count) {
+		/* Racing text is rejected by the caller's descriptor recheck. */
+		*line_count = data_race(count_lines(data, len));
+	}
 
 	/* Caller interested in the data content? */
 	if (!buf || !buf_size)
@@ -1904,7 +1906,7 @@ static bool copy_data(struct prb_data_ring *data_ring,
 
 	data_size = min_t(unsigned int, buf_size, len);
 
-	memcpy(&buf[0], data, data_size); /* LMM(copy_data:A) */
+	data_race(memcpy(&buf[0], data, data_size)); /* LMM(copy_data:A) */
 	return true;
 }
 
@@ -1969,6 +1971,7 @@ static int prb_read(struct printk_ringbuffer *rb, u64 seq,
 	atomic_long_t *state_var = &rdesc->state_var;
 	struct prb_desc desc;
 	unsigned long id;
+	u16 text_len;
 	int err;
 
 	/* Extract the ID, used to specify the descriptor to read. */
@@ -1985,11 +1988,16 @@ static int prb_read(struct printk_ringbuffer *rb, u64 seq,
 		return err;
 
 	/* If requested, copy meta data. */
-	if (r->info)
-		memcpy(r->info, info, sizeof(*(r->info)));
+	if (r->info) {
+		/* The record may be recycled; the descriptor is rechecked below. */
+		data_race(memcpy(r->info, info, sizeof(*r->info)));
+	}
+
+	/* The descriptor recheck below also rejects a raced length. */
+	text_len = data_race(info->text_len);
 
 	/* Copy text data. If it fails, this is a data-less record. */
-	if (!copy_data(&rb->text_data_ring, &desc.text_blk_lpos, info->text_len,
+	if (!copy_data(&rb->text_data_ring, &desc.text_blk_lpos, text_len,
 		       r->text_buf, r->text_buf_size, line_count)) {
 		return -ENOENT;
 	}
