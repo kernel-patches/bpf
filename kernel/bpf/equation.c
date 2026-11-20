@@ -1039,6 +1039,541 @@ void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state 
 		refine_diff(env, st, &untruncated[0], &untruncated[1], op, true);
 }
 
+/* The largest sum of two arguments of a call: numbers, or offsets of pointers. Modulo 2^64. */
+s64 bpf_equations_max_sum(struct bpf_verifier_env *env, int regno1, int regno2)
+{
+	struct bpf_equation_env *eq_env = env->eq_env;
+	struct bpf_verifier_state *st = env->cur_state;
+	struct equation_pos pos = {};
+	struct expr neg, sum;
+	struct scalar bounds;
+	s64 max = S64_MAX;
+
+	if (!eq_env || regno1 < 0 || regno2 < 0 ||
+	    (~eq_env->has_arg_expr & (BIT(regno1) | BIT(regno2))))
+		return max;
+	neg = expr_scale(eq_env->arg_expr[regno2], -1, 0);
+	while (bpf_find_next_diff(env, &st->equations, &eq_env->arg_expr[regno1], &neg, &pos,
+				  &sum)) {
+		bpf_eval_expr(env, st, &sum, &bounds);
+		max = min(max, cnum64_smax(bounds.r64));
+	}
+	return max;
+}
+
+/* Insns write */
+
+void bpf_equations_forget_xreg(struct bpf_verifier_env *env,
+			       struct bpf_verifier_state *st, u64 xreg)
+{
+	bpf_set_xreg_equation(env, &st->equations, xreg, NULL, false);
+}
+
+/* @to gets the number of @from */
+static void copy_xreg_equation(struct bpf_verifier_env *env, struct bpf_equations *eqs,
+			       u64 to, u64 from)
+{
+	const struct bpf_xreg_equation *xreg_eq = bpf_find_xreg_equation(eqs, from);
+	struct expr expr;
+
+	if (!xreg_eq)
+		return bpf_set_xreg_equation(env, eqs, to, NULL, false);
+	expr = sym_expr(xreg_eq->coef, xreg_eq->sym, xreg_eq->off);
+	bpf_set_xreg_equation(env, eqs, to, &expr, xreg_eq->is_ptr);
+}
+
+/* The number in @xreg is copied to another xreg. It needs a sym if it is @live_after. */
+static bool assign_sym(struct bpf_verifier_env *env, u64 xreg, bool live_after, struct expr *expr,
+		       bool *is_ptr)
+{
+	struct bpf_verifier_state *st = env->cur_state;
+
+	if (!bpf_xreg_expr(env, st, xreg, expr, is_ptr))
+		return false;
+	if (expr->var != xreg)
+		return true;
+	if (!live_after)
+		return false;
+	expr->var = bpf_new_sym(env, &st->equations, bpf_find_var_bounds(env, st, xreg, is_ptr));
+	bpf_set_xreg_equation(env, &st->equations, xreg, expr, *is_ptr);
+	return var_is_sym(expr->var);
+}
+
+static bool reg_is_live_after(struct bpf_verifier_env *env, u32 regno)
+{
+	return env->insn_aux_data[env->insn_idx + 1].live_regs_before & BIT(regno);
+}
+
+/* Register @regno is spilled */
+void bpf_equations_spill(struct bpf_verifier_env *env, struct bpf_func_state *frame, int spi,
+			 int regno)
+{
+	struct bpf_verifier_state *st = env->cur_state;
+	u64 slot = bpf_xreg(frame->frameno, bpf_spi_to_xreg(spi));
+	struct expr expr;
+	bool is_ptr;
+
+	if (env->eq_env && regno >= 0 && !st->speculative &&
+	    assign_sym(env, bpf_reg_to_xreg(st, regno), reg_is_live_after(env, regno),
+		       &expr, &is_ptr))
+		bpf_set_xreg_equation(env, &st->equations, slot, &expr, is_ptr);
+	else
+		bpf_equations_forget_xreg(env, st, slot);
+}
+
+/* The low @size bytes of what is loaded are from the spilled register */
+void bpf_equations_fill(struct bpf_verifier_env *env, struct bpf_func_state *frame,
+			int spi, int size)
+{
+	if (!env->eq_env)
+		return;
+	env->eq_env->fill_xreg = bpf_xreg(frame->frameno, bpf_spi_to_xreg(spi));
+	env->eq_env->fill_bits = size * BITS_PER_BYTE;
+}
+
+/* Note the operands. Delete the equations of the registers that the insn writes. */
+void bpf_equations_before_insn(struct bpf_verifier_env *env)
+{
+	const struct bpf_insn *insn = &env->prog->insnsi[env->insn_idx];
+	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
+	bool src_is_reg = BPF_SRC(insn->code) == BPF_X && op != BPF_END;
+	bool alu = class == BPF_ALU || class == BPF_ALU64;
+	struct bpf_verifier_state *st = env->cur_state;
+	struct bpf_equation_env *eq_env = env->eq_env;
+	u32 def = env->insn_aux_data[env->insn_idx].def_regs, fr = st->curframe, i, r;
+	struct bpf_equations *eqs = &st->equations;
+	bool is_ptr;
+
+	if (!eq_env)
+		return;
+	if (st->speculative || eqs->sym_cnt > 2 * eqs->clean_sym_cnt + MAX_BPF_REG)
+		bpf_equations_clean(env, st);
+	eq_env->insn_idx = env->insn_idx;
+	eq_env->fill_xreg = VAR_NONE;
+	eq_env->has_arg_expr = 0;
+	eq_env->equation_added = eq_env->divided = false;
+	for (i = 0; i < 2; i++) {
+		r = i ? insn->src_reg : insn->dst_reg;
+		eq_env->has_expr[i] = eq_env->is_ptr[i] = false;
+		if (!alu || st->speculative)
+			continue;
+		if (i && !src_is_reg) {
+			eq_env->operand_expr[1] = make_expr(0, 0, insn->imm);
+			scalar_set_const(&eq_env->operand_bounds[1], insn->imm);
+			eq_env->has_expr[1] = true;
+		} else if (r <= BPF_REG_FP && cur_regs(env)[r].type != NOT_INIT) {
+			eq_env->operand_bounds[i] = *scalar_of(&cur_regs(env)[r]);
+			eq_env->has_expr[i] =
+				assign_sym(env, bpf_reg_to_xreg(st, r), false,
+					   &eq_env->operand_expr[i], &eq_env->is_ptr[i]);
+		}
+	}
+	if (class == BPF_JMP && op == BPF_EXIT && fr && !st->frame[fr]->in_callback_fn)
+		copy_xreg_equation(env, eqs, bpf_xreg(fr - 1, BPF_REG_0), bpf_xreg(fr, BPF_REG_0));
+	if (class == BPF_JMP && op == BPF_CALL) {
+		i = xreg_equation_pos(eqs, bpf_xreg(fr + 1, 0)) - eqs->xreg_equations;
+		eqs->normalized &= i == eqs->xreg_equation_cnt;
+		eqs->xreg_equation_cnt = i;
+		for (r = BPF_REG_1; r <= BPF_REG_5 && i; r++)
+			if (bpf_xreg_expr(env, st, bpf_xreg(fr, r), &eq_env->arg_expr[r], &is_ptr))
+				eq_env->has_arg_expr |= BIT(r);
+	}
+	for (r = 0; r < BPF_REG_FP && def >> r && eqs->xreg_equation_cnt; r++) {
+		if (!(def & BIT(r)))
+			continue;
+		/* the arguments are in the frame of the callee, if it gets one */
+		if (r && (bpf_pseudo_call(insn) || bpf_is_callx(insn)))
+			copy_xreg_equation(env, eqs, bpf_xreg(fr + 1, r), bpf_xreg(fr, r));
+		bpf_equations_forget_xreg(env, st, bpf_xreg(fr, r));
+	}
+}
+
+/* @expr = @divisor * quot + rem. Returns the expr of a new sym: @quot or @rem. */
+static bool add_divmod_equation(struct bpf_verifier_env *env, struct expr *expr, u64 divisor,
+				const struct scalar *quot, const struct scalar *rem, bool want_quot)
+{
+	struct bpf_equations *eqs = &env->cur_state->equations;
+	struct bpf_sym_equation sym_eq = { { -1, expr->coef, -divisor }, { 0, expr->var },
+					     env->eq_env->insn_idx, expr->off };
+
+	sym_eq.sym[0] = bpf_new_sym(env, eqs, rem);
+	sym_eq.sym[2] = bpf_new_sym(env, eqs, quot);
+	*expr = sym_expr(1, sym_eq.sym[want_quot ? 2 : 0], 0);
+	env->eq_env->divided = true;
+	if (!bpf_add_sym_equation(env, eqs, sym_eq))
+		return false;
+	refine_syms_by_equation(env, env->cur_state,
+				&eqs->sym_equations[eqs->sym_equation_cnt - 1], 0);
+	for (i = 0; i < 3; i++)
+		if (sym_eq.coef[i])
+			env->eq_env->scratch[sym_eq.sym[i]].refined_sweep = 0;
+	return true;
+}
+
+/* Make @expr an expr of the left side of @sym_eq that has the same low @bits bits */
+static bool rewrite_expr_by_truncation(const struct bpf_sym_equation *sym_eq,
+				       struct expr *expr, u32 bits)
+{
+	struct expr factor = make_expr(0, 0, expr->coef);
+
+	if (sym_eq->sym[1] != var_symno(expr->var) ||
+	    !bpf_expr_div_exact(&factor, 0, sym_eq->coef[1]) ||
+	    ((factor.off * sym_eq->coef[2]) & low_bits(bits)))
+		return false;
+	*expr = sym_expr(factor.off, sym_eq->sym[0], expr->off - factor.off * sym_eq->off);
+	return true;
+}
+
+static void set_operand(struct bpf_sym_equation *op, int i, const struct expr *expr)
+{
+	op->coef[i + 1] = expr->coef;
+	op->sym[i + 1] = expr->var;
+	*(i ? &op->off_src : &op->off) = expr->off;
+}
+
+/* How many low bits of its operands does the insn of @op read? */
+static u32 bits_read(struct bpf_verifier_env *env, const struct bpf_sym_equation *op)
+{
+	const struct bpf_insn *insn = &env->prog->insnsi[op->insn_idx];
+	u32 bits = BPF_CLASS(insn->code) == BPF_ALU64 ? 64 : 32;
+
+	if (BPF_OP(insn->code) == BPF_END)
+		return insn->imm;
+	if (BPF_OP(insn->code) == BPF_MOV)
+		return insn->off ?: bits;
+	if (BPF_OP(insn->code) == BPF_AND && !op->coef[2])
+		return min_t(u32, fls64(op->off_src), bits);
+	return bits;
+}
+
+static void op_skips_truncations(struct bpf_verifier_env *env, struct bpf_equations *eqs,
+				 struct bpf_sym_equation *op)
+{
+	u32 i, bits = bits_read(env, op);
+	struct expr expr;
+
+	for (i = 0; i < 2 && bits < 64; i++) {
+		expr = rhs_expr(op, i);
+		if (!expr.coef)
+			continue;
+		skip_truncation(env, eqs, &expr, bits, false);
+		set_operand(op, i, &expr);
+	}
+}
+
+/*
+ * A test of @truncation tells more, if @op reads no other bits:
+ *	r2 = r1; r2 &= 0xf8; r1 &= 0xff; if r1 > 8 goto out;
+ */
+static void read_from_truncation(struct bpf_verifier_env *env, struct bpf_sym_equation *op,
+				 const struct bpf_sym_equation *truncation)
+{
+	struct expr expr;
+	int i;
+
+	for (i = 0; i < 2 && is_op(op) && truncation->sym[0] != op->sym[0]; i++) {
+		expr = rhs_expr(op, i);
+		if (expr.coef && rewrite_expr_by_truncation(truncation, &expr, bits_read(env, op)))
+			set_operand(op, i, &expr);
+	}
+}
+
+/* @res and @candidate have the same low @bits bits. If they are equal @expr gets @candidate. */
+static bool take_expr_if_fits(struct bpf_verifier_env *env, const struct scalar *res,
+			      struct expr *expr, struct expr candidate, u32 bits)
+{
+	struct scalar bounds;
+
+	bpf_eval_expr(env, env->cur_state, &candidate, &bounds);
+	if (!scalars_fit_in_bits(&bounds, res, bits))
+		return false;
+	*expr = candidate;
+	return true;
+}
+
+/* @res is an extension of the low @bits bits of @expr. Make @expr the value of @res. */
+static bool expr_low_bits(struct bpf_verifier_env *env, struct scalar *res,
+			  struct expr *expr, u32 bits)
+{
+	struct bpf_verifier_state *st = env->cur_state;
+	struct bpf_sym_equation *sym_eq;
+	struct scalar bounds;
+	struct expr operand;
+
+	if (bits == 64)
+		return true;
+	if (!(expr->coef & low_bits(bits)))
+		return false;
+	if (take_expr_if_fits(env, res, expr, *expr, bits))
+		return true;
+	operand = *expr;
+	skip_truncation(env, &st->equations, &operand, bits, true);
+	if (take_expr_if_fits(env, res, expr, operand, bits))
+		return true;
+	skip_truncation(env, &st->equations, expr, bits, false);
+	for_each_sum(env, &st->equations, sym_eq) {
+		operand = *expr;
+		if (rewrite_expr_by_truncation(sym_eq, &operand, bits) &&
+		    take_expr_if_fits(env, res, expr, operand, bits))
+			return true;
+	}
+	scalar_set_unknown(&bounds);
+	if (!add_divmod_equation(env, expr, BIT_ULL(bits), &bounds, res, false))
+		return false;
+	/* a number has a range for 32 bits */
+	if (bits < 32)
+		for_each_sym_equation(env, &st->equations, sym_eq)
+			read_from_truncation(env, sym_eq, st->equations.sym_equations +
+					     st->equations.sym_equation_cnt - 1);
+	return true;
+}
+
+/* The source goes into the equation of the result */
+static bool assign_sym_to_src(struct bpf_verifier_env *env)
+{
+	struct bpf_equation_env *eq_env = env->eq_env;
+	const struct bpf_insn *insn = &env->prog->insnsi[eq_env->insn_idx];
+
+	if (!eq_env->has_expr[1] && insn->src_reg != insn->dst_reg &&
+	    reg_is_live_after(env, insn->src_reg))
+		eq_env->has_expr[1] =
+			assign_sym(env, bpf_reg_to_xreg(env->cur_state, insn->src_reg), true,
+				   &eq_env->operand_expr[1], &eq_env->is_ptr[1]);
+	return eq_env->has_expr[1];
+}
+
+static bool alu_add(struct bpf_verifier_env *env, struct expr *expr, s64 sign, u32 bits)
+{
+	struct bpf_equations *eqs = &env->cur_state->equations;
+	struct bpf_equation_env *eq_env = env->eq_env;
+	struct expr *a = &eq_env->operand_expr[0], *b = &eq_env->operand_expr[1], neg;
+	struct scalar bounds;
+	struct equation_pos pos = {};
+	int i;
+
+	for (i = 0; i < 2; i++) {
+		if (i ? assign_sym_to_src(env) : eq_env->has_expr[0])
+			continue;
+		/* it is dead after the insn. Its range is the sum minus the other operand. */
+		if ((bits == 64 ? !~eq_env->operand_bounds[i].r64.size :
+		     eq_env->operand_bounds[i].r32.size == U32_MAX) ||
+		    !(i || assign_sym_to_src(env)) || !eq_env->operand_expr[!i].coef)
+			return false;
+		eq_env->operand_expr[i] =
+			make_expr(1,
+				  bpf_new_sym(env, eqs, &eq_env->operand_bounds[i]), 0);
+		if (env->no_mem)
+			return false;
+	}
+	neg = expr_scale(*b, -sign, 0);
+	if (bpf_find_next_diff(env, eqs, a, &neg, &pos, expr))
+		return true;
+	scalar_add_scaled(&bounds, &eq_env->operand_bounds[0], &eq_env->operand_bounds[1], sign);
+	scalar_bounds_sync(&bounds);
+	*expr = make_expr(1, bpf_new_sym(env, eqs, &bounds), 0);
+	return bpf_add_sym_equation(env, eqs, (struct bpf_sym_equation){
+		{ -1, a->coef, -neg.coef },
+		{ expr->var, a->var, b->var }, eq_env->insn_idx, a->off - neg.off });
+}
+
+/* An insn that is a sum, a product with a constant, or the reverse of that */
+static bool alu_linear(struct bpf_verifier_env *env, const struct bpf_insn *insn,
+		       struct scalar *res, struct expr *expr)
+{
+	u32 bits = BPF_CLASS(insn->code) == BPF_ALU64 ? 64 : 32;
+	struct bpf_equation_env *eq_env = env->eq_env;
+	struct tnum a = eq_env->operand_bounds[0].var_off;
+	struct tnum b = eq_env->operand_bounds[1].var_off;
+	u8 op = BPF_OP(insn->code);
+	struct scalar bounds;
+	struct expr untruncated;
+	u64 c;
+
+	if (op == BPF_MOV) {
+		if (insn->imm || !assign_sym_to_src(env))
+			return false;
+		*expr = eq_env->operand_expr[1];
+		return expr_low_bits(env, res, expr, insn->off ?: bits);
+	}
+	if (insn->off)
+		return false;
+	if ((op == BPF_OR || op == BPF_XOR) && !((a.value | a.mask) & (b.value | b.mask)))
+		op = BPF_ADD;
+	if (op == BPF_ADD || op == BPF_SUB)
+		return alu_add(env, expr, op == BPF_ADD ? 1 : -1, bits) &&
+		       expr_low_bits(env, res, expr, bits);
+	if (!eq_env->has_expr[0])
+		return false;
+	if (op == BPF_MUL && !eq_env->operand_expr[0].coef && assign_sym_to_src(env))
+		swap(eq_env->operand_expr[0], eq_env->operand_expr[1]);
+	if (!eq_env->has_expr[1] || eq_env->operand_expr[1].coef)
+		return false;
+	*expr = eq_env->operand_expr[0];
+	c = eq_env->operand_expr[1].off & low_bits(bits);
+	switch (op) {
+	case BPF_NEG:
+		*expr = expr_scale(*expr, -1, 0);
+		return expr_low_bits(env, res, expr, bits);
+	case BPF_LSH:
+		if (c >= bits)
+			return false;
+		c = BIT_ULL(c);
+		fallthrough;
+	case BPF_MUL:
+		*expr = expr_scale(*expr, bits == 32 ? (s32)c : c, 0);
+		return expr_low_bits(env, res, expr, bits);
+	case BPF_AND:
+		if (c && !(c & (c + 1)))
+			return expr_low_bits(env, res, expr, min_t(u32, fls64(c), bits));
+		/* x & -8 == x - (x & 7) */
+		scalar_set_unknown(&bounds);
+		bounds.var_off = tnum_and(a, tnum_const(~c));
+		scalar_bounds_sync(&bounds);
+		return add_divmod_equation(env, expr, 1, res, &bounds, true);
+	case BPF_RSH:
+	case BPF_ARSH:
+		if (!c || c >= bits)
+			return false;
+		/* w1 <<= 24; w1 s>>= 24; */
+		untruncated = *expr;
+		if (expr->coef & low_bits(c))
+			skip_truncation(env, &env->cur_state->equations, &untruncated, bits, true);
+		if (!((untruncated.coef | untruncated.off) & low_bits(c))) {
+			*expr = make_expr(untruncated.coef >> c, untruncated.var,
+					  (s64)untruncated.off >> c);
+			return expr_low_bits(env, res, expr, bits - c);
+		}
+		c = BIT_ULL(c);
+		fallthrough;
+	case BPF_DIV:
+		if (c < 2 || (bits == 32 && cnum64_umax(eq_env->operand_bounds[0].r64) >
+					    (op == BPF_ARSH ? S32_MAX : U32_MAX)))
+			return false;
+		scalar_set_below(&bounds, c);
+		return add_divmod_equation(env, expr, c, res, &bounds, true);
+	}
+	return false;
+}
+
+/* The operands of an op possibly skipped their truncations, see op_skips_truncations() */
+static bool find_same_op(struct bpf_verifier_env *env, struct expr *expr)
+{
+	struct bpf_equations *eqs = &env->cur_state->equations;
+	struct bpf_equation_env *eq_env = env->eq_env;
+	struct bpf_sym_equation sym_eq = { .insn_idx = eq_env->insn_idx };
+	struct expr op[2];
+	int i;
+
+	if (bpf_find_op(env, eqs, eq_env->insn_idx, eq_env->operand_expr, expr))
+		return true;
+	for (i = 0; i < 2; i++)
+		set_operand(&sym_eq, i, &eq_env->operand_expr[i]);
+	op_skips_truncations(env, eqs, &sym_eq);
+	for (i = 0; i < 2; i++)
+		op[i] = rhs_expr(&sym_eq, i);
+	return bpf_find_op(env, eqs, eq_env->insn_idx, op, expr);
+}
+
+/*
+ * The same as read_from_truncation(), the test is before @op:
+ *	r2 = r1; r2 &= 0xff; if r2 > 0xdf goto out; r1 &= 0xf0;
+ */
+static void refine_op_by_truncations(struct bpf_verifier_env *env,
+				     const struct bpf_sym_equation *op)
+{
+	struct bpf_equations *eqs = &env->cur_state->equations;
+	struct bpf_sym_equation *sym_eq, copy;
+	struct scalar bounds;
+
+	if (bits_read(env, op) >= 32)
+		return;
+	for_each_sum(env, eqs, sym_eq) {
+		copy = *op;
+		read_from_truncation(env, &copy, sym_eq);
+		if (memcmp(&copy, op, sizeof(copy)) && run_op(env, env->cur_state, &copy, &bounds))
+			refine_bounds(eqs, &eqs->syms[op->sym[0]], &bounds);
+	}
+}
+
+/*
+ * A sum does not tell all about the result. A jump that refines the operands runs the op again:
+ *	r2 = r1; r2 ^= 5; if r1 > 20 goto out;
+ */
+static bool alu_scalar(struct bpf_verifier_env *env, const struct bpf_insn *insn,
+		       struct scalar *res, struct expr *expr)
+{
+	struct bpf_equations *eqs = &env->cur_state->equations;
+	struct bpf_equation_env *eq_env = env->eq_env;
+	bool ok;
+
+	if (BPF_OP(insn->code) == BPF_MOV) {
+		eq_env->operand_expr[0] = make_expr(0, 0, 0);
+		eq_env->has_expr[0] = !insn->imm;
+	}
+	if (eq_env->has_expr[0] && eq_env->has_expr[1] && find_same_op(env, expr))
+		return true;
+	ok = alu_linear(env, insn, res, expr);
+	if ((ok && !eq_env->divided) || !eq_env->has_expr[0] || !assign_sym_to_src(env))
+		return ok;
+	if (!ok)
+		*expr = make_expr(1, bpf_new_sym(env, eqs, res), 0);
+	if (!bpf_add_op(env, eqs, eq_env->insn_idx, eq_env->operand_expr, expr))
+		return true;
+	op_skips_truncations(env, eqs, &eqs->sym_equations[eqs->sym_equation_cnt - 1]);
+	refine_op_by_truncations(env, &eqs->sym_equations[eqs->sym_equation_cnt - 1]);
+	return true;
+}
+
+/* The insn is proven */
+int bpf_equations_after_insn(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *st = env->cur_state;
+	struct bpf_equation_env *eq_env = env->eq_env;
+	const struct bpf_insn *insn;
+	struct scalar *res, bounds;
+	bool is_ptr, ok, was_ptr;
+	struct expr expr;
+	u8 class, op;
+	u64 dst;
+
+	if (!eq_env)
+		return 0;
+	insn = &env->prog->insnsi[eq_env->insn_idx];
+	dst = bpf_reg_to_xreg(st, insn->dst_reg);
+	class = bpf_atomic_is_load_acq(insn) ? BPF_LDX : BPF_CLASS(insn->code);
+	op = BPF_OP(insn->code);
+	if ((class != BPF_ALU && class != BPF_ALU64 && class != BPF_LDX) || st->speculative)
+		goto out;
+	res = bpf_find_var_bounds(env, st, dst, &is_ptr);
+	if (!res || tnum_is_const(res->var_off))
+		goto out;
+	bounds = *res;
+	if (!is_ptr && scalar_align_bounds(&bounds))
+		*res = bounds;
+	else if (!is_ptr)
+		st->equations.infeasible = true;
+	if (class == BPF_LDX)
+		ok = eq_env->fill_xreg != VAR_NONE &&
+		     assign_sym(env, eq_env->fill_xreg, true, &expr, &was_ptr) &&
+		     was_ptr == is_ptr && expr_low_bits(env, res, &expr, eq_env->fill_bits);
+	else if (op == BPF_MOV ? is_ptr != eq_env->is_ptr[1] :
+		 is_ptr != eq_env->is_ptr[0] + eq_env->is_ptr[1])
+		ok = false;
+	else if (is_ptr)
+		ok = class == BPF_ALU64 && alu_linear(env, insn, res, &expr);
+	else
+		ok = alu_scalar(env, insn, res, &expr);
+	if (!ok || (expr.coef && !var_is_sym(expr.var)))
+		goto out;
+	/* it was computed before */
+	eval_expr_nosync(env, st, &expr, &bounds);
+	if (!is_ptr)
+		refine_bounds(&st->equations, res, &bounds);
+	bpf_set_xreg_equation(env, &st->equations, dst, &expr, is_ptr);
+out:
+	return env->no_mem ? -ENOMEM : 0;
+}
+
 static void print_operand(struct bpf_verifier_log *log, const char *prefix, struct expr expr)
 {
 	if (expr.coef)
