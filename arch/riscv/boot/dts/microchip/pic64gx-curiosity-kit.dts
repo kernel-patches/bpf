@@ -63,14 +63,14 @@
 };
 
 &gpio0 {
-	status ="okay";
+	status = "okay";
 	gpio-line-names =
 		"", "", "", "", "", "", "", "",
 		"", "", "", "", "MIPI_CAM_RESET", "MIPI_CAM_STANDBY";
 };
 
 &gpio1 {
-	status ="okay";
+	status = "okay";
 	gpio-line-names =
 		"", "", "LED1", "LED2", "LED3", "LED4", "LED5", "LED6",
 		"LED7", "LED8", "", "", "", "", "", "",
@@ -81,7 +81,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&mdio1_gpio>, <&spi0_gpio>, <&can0_gpio>, <&pcie_gpio>,
 		    <&qspi_gpio>, <&uart3_gpio>, <&uart4_gpio>, <&can1_gpio>;
-	status ="okay";
+	status = "okay";
 	gpio-line-names =
 		"", "", "", "", "", "", "SWITCH2", "USR_IO12",
 		"DIP1", "DIP2", "", "DIP3", "USR_IO1", "USR_IO2", "USR_IO7", "USR_IO8",
