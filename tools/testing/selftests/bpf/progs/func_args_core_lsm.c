@@ -24,13 +24,15 @@ struct file_mprotect_args {
 } __bpf_func_args;
 
 __u64 s_prot, s_vm_start, s_vm_end;
-int s_ret = -1, s_ret_exists = -1, s_added_exists = -1, s_calls;
+int s_ret = -1, s_ret_exists = -1, s_added_exists = -1, s_calls, s_supported = -1;
 
 SEC("lsm/file_mprotect")
 int mprotect_struct(struct file_mprotect_args *args)
 {
 	if ((bpf_get_current_pid_tgid() >> 32) != monitored_pid)
 		return 0;
+
+	s_supported = bpf_func_args_supported(args);
 
 	s_calls++;
 	s_prot = args->prot;
@@ -98,7 +100,7 @@ int BPF_PROG_CORE(mprotect_macro_variants, struct mm_area *, vma___new,
 }
 
 __u64 m_prot, m_reqprot, m_added = -1;
-int m_ret = -1, m_ret_exists = -1, m_added_exists = -1, m_calls;
+int m_ret = -1, m_ret_exists = -1, m_added_exists = -1, m_calls, m_supported = -1;
 
 SEC("lsm/file_mprotect")
 int BPF_PROG_CORE(mprotect_macro, unsigned long, prot, __bpf_func_ret int, ret,
@@ -106,6 +108,8 @@ int BPF_PROG_CORE(mprotect_macro, unsigned long, prot, __bpf_func_ret int, ret,
 {
 	if ((bpf_get_current_pid_tgid() >> 32) != monitored_pid)
 		return 0;
+
+	m_supported = bpf_func_args_supported(ctx);
 
 	m_calls++;
 	m_prot = prot;

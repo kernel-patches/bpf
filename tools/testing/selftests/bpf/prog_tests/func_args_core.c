@@ -32,6 +32,9 @@ static void trigger(int fentry_prog_fd, int fmod_ret_prog_fd)
 	ASSERT_EQ(skel->data->t3_fentry_ret_exists, 0, "t3_fentry_ret_exists"); \
 	ASSERT_EQ(skel->data->t3_ret_exists, 1, "t3_ret_exists");		\
 	ASSERT_EQ(skel->bss->t3_ret, 15, "t3_ret");				\
+	ASSERT_EQ(skel->data->t3_supported, 1, "t3_supported");		\
+	ASSERT_EQ(skel->data->t3_untagged_supported, 0, "t3_untagged_supported"); \
+	ASSERT_EQ(skel->data->m3_supported, 1, "m3_supported");		\
 										\
 	ASSERT_EQ(skel->bss->fm_calls, 1, "fm_calls");				\
 	ASSERT_EQ(skel->bss->fm_a, 1, "fm_a");					\
@@ -119,6 +122,8 @@ cleanup:
 	ASSERT_EQ(skel->data->s_ret, 0, "s_ret");				\
 	ASSERT_EQ(skel->data->s_ret_exists, 1, "s_ret_exists");		\
 	ASSERT_EQ(skel->data->s_added_exists, 0, "s_added_exists");		\
+	ASSERT_EQ(skel->data->s_supported, 1, "s_supported");			\
+	ASSERT_EQ(skel->data->m_supported, 1, "m_supported");			\
 										\
 	/* vma___new (struct mm_area *) doesn't match, vma is used instead */	\
 	ASSERT_EQ(skel->data->v_new_exists, 0, "v_new_exists");		\
@@ -181,6 +186,7 @@ cleanup:
 	ASSERT_EQ(skel->data->lc_kern, 0, "lc_kern");				\
 	ASSERT_EQ(skel->data->lc_ret_exists, 1, "lc_ret_exists");		\
 	ASSERT_EQ(skel->data->lc_added_exists, 0, "lc_added_exists");		\
+	ASSERT_EQ(skel->data->lc_supported, 1, "lc_supported");		\
 })
 
 static void trigger_lsm_cgroup(void)
