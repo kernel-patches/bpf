@@ -8816,13 +8816,6 @@ static bool arg_type_is_mem_size(enum bpf_arg_type type)
 	return type == ARG_MEM_SIZE || type == ARG_MEM_SIZE_OR_ZERO;
 }
 
-/* A number that check_func_arg() takes only when it is a known constant */
-static bool arg_type_is_const(enum bpf_arg_type type)
-{
-	return type == ARG_CONST_SCALAR || type == ARG_CONST_MEM_SIZE ||
-	       type == ARG_CONST_ALLOC_SIZE_OR_ZERO;
-}
-
 static bool arg_type_is_raw_mem(enum bpf_arg_type type)
 {
 	/*
@@ -12243,15 +12236,7 @@ static bool is_rbtree_lock_required_kfunc(u32 btf_id);
 
 static void account_processed_insn(struct bpf_verifier_env *env)
 {
-	struct bpf_verifier_state *st = env->cur_state;
 	struct bpf_func_state *frame = cur_func(env);
-	u32 fr, i;
-
-	/* every walk on patience that the state is in pays for the insn */
-	for (fr = 0; fr <= st->curframe; fr++)
-		for (i = 0; i < st->frame[fr]->loop_stack_cnt; i++)
-			if (bpf_loop_walk_may_give_up(&st->frame[fr]->loop_stack[i]))
-				env->walk_insns[st->frame[fr]->loop_stack[i].walk_id]++;
 
 	env->insn_processed++;
 	frame->insns_subtotal++;
@@ -14011,13 +13996,6 @@ static bool is_bpf_cast_to_kern_ctx_kfunc(const struct bpf_call_arg_meta *meta)
 	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_cast_to_kern_ctx]);
 }
 
-/* void * in the prototype. What it returns points to an object of the kernel. */
-bool bpf_is_cast_kfunc(const struct bpf_call_arg_meta *meta)
-{
-	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_cast_to_kern_ctx]) ||
-	       is_kfunc_call(meta, special_kfunc_list[KF_bpf_rdonly_cast]);
-}
-
 static bool is_bpf_dynptr_clone_kfunc(const struct bpf_call_arg_meta *meta)
 {
 	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_clone]);
@@ -15292,54 +15270,6 @@ bool bpf_insn_is_iter_next(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	return bpf_pseudo_kfunc_call(insn) &&
 	       !bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta) &&
 	       bpf_is_iter_next_kfunc(&meta);
-}
-
-/*
- * check_func_arg() goes by the types of the arguments in the proto of a helper or a kfunc.
- * So does what has to be known ahead of the call: the registers with arguments of a kind.
- */
-static u16 call_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn,
-			 bool (*is)(enum bpf_arg_type type))
-{
-	const struct btf_func_model *fm = NULL;
-	const struct bpf_func_proto *fn;
-	struct bpf_kfunc_desc *desc;
-	u32 i, slot = 0;
-	u16 mask = 0;
-
-	if (bpf_pseudo_kfunc_call(insn)) {
-		desc = find_kfunc_desc(env, insn->imm, insn->off);
-		if (!desc)
-			return 0;
-		fn = &desc->proto;
-		fm = &desc->func_model;
-	} else if (bpf_get_helper_proto(env, insn->imm, &fn) < 0) {
-		return 0;
-	}
-	for (i = 0; i < ARRAY_SIZE(fn->arg_type) && fn->arg_type[i] != ARG_UNUSED &&
-		    slot < MAX_BPF_FUNC_REG_ARGS; i++) {
-		if (is(fn->arg_type[i]))
-			mask |= BIT(BPF_REG_1 + slot);
-		slot += fm ? btf_func_model_arg_slots(fm, i) : 1;
-	}
-	return mask;
-}
-
-/* The registers in which the helper or the kfunc takes nothing but a known constant */
-u16 bpf_call_const_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn)
-{
-	return call_arg_regs(env, insn, arg_type_is_const);
-}
-
-/* The registers in which it takes a number that has to be in a range */
-u16 bpf_call_checked_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn)
-{
-	if (bpf_helper_call(insn) && insn->imm == BPF_FUNC_set_retval)
-		return BIT(BPF_REG_1);
-	/* without an exception callback the prog returns what bpf_throw() takes */
-	if (bpf_is_throw_kfunc(insn) && !env->exception_callback_subprog)
-		return BIT(BPF_REG_1);
-	return call_arg_regs(env, insn, arg_type_is_mem_size);
 }
 
 /*
@@ -19320,25 +19250,6 @@ static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier
 	}
 }
 
-/* It's known which way the jump at env->insn_idx goes */
-static void mark_loop_exit_decided(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
-{
-	struct bpf_func_state *frame = st->frame[st->curframe];
-	bool flag = bpf_flow_flag_regs(env, env->insn_idx);
-	struct loop_stack_entry *entry;
-	u32 i;
-
-	for (i = 0; i < frame->loop_stack_cnt; i++) {
-		entry = &frame->loop_stack[i];
-		/* only because the states are kept apart. That holds for the first such jump. */
-		if (entry->flag_apart && flag)
-			entry->flag_apart = false;
-		else if (entry->apart && entry->probe &&
-			 bpf_jump_leaves_loop(env, entry->loop_id, env->insn_idx))
-			entry->decided = true;
-	}
-}
-
 /*
  * One branch of the jump @insn is dead, the current state takes the other one. @reg1 and @reg2 are
  * the operands as that branch refines them. They hold every value that takes it, whether the other
@@ -19456,8 +19367,6 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	env->true_reg1 = *dst_reg;
 	env->true_reg2 = *src_reg;
 	pred = is_branch_taken(env, dst_reg, src_reg, opcode, is_jmp32);
-	if (pred >= 0)
-		mark_loop_exit_decided(env, this_branch);
 	if (pred == 1) {
 		/* Only follow the goto, ignore fall-through. If needed, push
 		 * the fall-through branch for simulation under speculative
@@ -20888,92 +20797,6 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	return -EFAULT;
 }
 
-static int flow_try_walk(struct bpf_verifier_env *env, struct loop_stack_entry *entry);
-
-/*
- * Push the loop entered at insn_idx onto the stack. Usually this adds a single
- * entry on top of its enclosing loop. However, an edge may enter an inner loop
- * directly, bypassing the header(s) of its enclosing loop(s), e.g.:
- *
- *   1: for (...):       // enclosing loop, header at 1
- *   2:   for (...):     // inner loop, header at 2
- *        ...
- *   3: if ...:
- *        goto 2b;       // enters loop 2 without going through header 1
- *
- * Such a bypass makes the enclosing loop irreducible, so its header is missing
- * from the stack and both headers (1) and (2) need to be pushed onto stack.
- * Only the innermost loop (the one actually entered at insn_idx) carries SCEV bounds;
- * the bypassed ancestors are irreducible: walked, see flow_try_walk(), or pushed as
- * non-terminating.
- *
- * Assumes loop_stack_pop() has already truncated the stack to the common ancestor
- * of the bpf_loop_at_index(env->insn_idx) and whatever was at the top of the loop stack.
- */
-static int loop_stack_push(struct bpf_verifier_env *env, bool *pushed)
-{
-	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	struct bpf_func_state *frame = cur_func(env);
-	struct loop_stack_entry *loop_stack = frame->loop_stack;
-	u32 missing_headers[LOOP_STACK_SIZE];
-	u32 cnt = frame->loop_stack_cnt;
-	u32 num_missing = 0;
-	int h, err;
-
-	*pushed = false;
-
-	for (h = bpf_loop_at_index(env, env->insn_idx); h >= 0; h = aux[h].loop_header, num_missing++) {
-		if (cnt && loop_stack[cnt - 1].loop_id == h)
-			break;
-		if (num_missing == LOOP_STACK_SIZE)
-			goto e2big;
-		missing_headers[num_missing] = h;
-	}
-
-	if (num_missing == 0)
-		return 0;
-	if (cnt + num_missing > LOOP_STACK_SIZE)
-		goto e2big;
-	frame->loop_stack = realloc_array(frame->loop_stack, cnt, cnt + num_missing,
-					 sizeof(*frame->loop_stack));
-	if (!frame->loop_stack)
-		return -ENOMEM;
-	loop_stack = frame->loop_stack;
-
-	for (; num_missing; num_missing--, cnt++) {
-		h = missing_headers[num_missing - 1];
-		/* wherever it is entered: a loop can have more than one entry */
-		if (!aux[h].loop->exits_cnt) {
-			verbose(env, "loop at insn %d never exits\n", h);
-			return -EINVAL;
-		}
-		loop_stack[cnt] = (struct loop_stack_entry){
-			.loop_id = h,
-			.refs = env->cur_state->acquired_refs,
-			.entry_id = ++env->loop_entry_cnt,
-		};
-		/* there is no count for a loop that is not entered at its head */
-		if (h != env->insn_idx && !aux[h].loop->rt_bounded) {
-			frame->loop_stack_cnt = cnt;
-			err = flow_try_walk(env, &loop_stack[cnt]);
-			if (err < 0)
-				return err;
-			if (!err)
-				bpf_flow_loop_gets_guards(env, h);
-		}
-		loop_stack[cnt].guarded = aux[h].loop->guarded;
-		if (env->log.level & BPF_LOG_LEVEL2)
-			verbose(env, "entering loop %d\n", h);
-		*pushed = true;
-	}
-	frame->loop_stack_cnt = cnt;
-	return 0;
-
-e2big:
-	verbose(env, "Too many nested loops (%d/%d) at %d\n", cnt, num_missing, env->insn_idx);
-	return -E2BIG;
-}
-
 /*
  * An exit from a loop can cross several nested loops, e.g.:
  *
@@ -21028,319 +20851,6 @@ static int maybe_clamp_scev_regs(struct bpf_verifier_env *env)
 		return 0;
 
 	return bpf_clamp_scev_regs(env, frame, env->insn_idx, entry, false);
-}
-
-/*
- * The current state came back to the head of a loop. If it has a reference more than the states
- * that are there it is neither within one of them nor joined with one. It goes around again:
- *	bpf_for(i, 0, n) { if (!p) p = bpf_ringbuf_reserve(...); ... }
- * That ends when the loop stops taking references, or when there is no place left to keep them.
- * A reference that no live register and no live stack slot holds cannot be released any more.
- * There is nothing to wait for.
- *
- * Only what was taken in the loop is looked at. New references are added at the end. What callers
- * hold is not in the state of a function that is verified on its own.
- */
-static int check_refs_taken_in_loop(struct bpf_verifier_env *env,
-				    const struct loop_stack_entry *entry)
-{
-	u32 mask = (1 << STACK_SPILL) | (1 << STACK_DYNPTR) | (1 << STACK_ITER);
-	struct bpf_verifier_state *st = env->cur_state;
-	struct bpf_stack_state *stack;
-	struct bpf_func_state *frame;
-	struct bpf_reg_state *reg;
-	bool held;
-	int i, j, id;
-
-	for (i = entry->refs; i < st->acquired_refs; i++) {
-		if (st->refs[i].type != REF_TYPE_PTR)
-			continue;
-		id = st->refs[i].id;
-		held = false;
-		for (j = 0; j < st->acquired_refs; j++)
-			if (st->refs[j].type == REF_TYPE_PTR && st->refs[j].parent_id == id)
-				held = true;
-		bpf_for_each_reg_in_vstate_mask(st, frame, reg, stack, mask, ({
-			if (reg->id == id || reg->parent_id == id)
-				held = true;
-		}));
-		if (held)
-			continue;
-		verbose(env, "Unreleased reference id=%d alloc_insn=%d\n", id, st->refs[i].insn_idx);
-		verbose(env, "nothing holds it in the next iteration of the loop at insn %d\n",
-			entry->loop_id);
-		return -EINVAL;
-	}
-	return 0;
-}
-
-/* How many insns it may take to go through the iterations of a loop one by one. */
-#define BPF_FLOW_MAX_WALK	100000
-/* The same when it is not known that the walk gets to the end of the loop. */
-#define BPF_FLOW_MAX_TRY	4096
-
-/* How many times the current insn is looked at because of the loops around it that are walked. */
-static u64 flow_walk_factor(const struct bpf_verifier_state *st)
-{
-	const struct loop_stack_entry *e;
-	u64 factor = 1;
-	u32 fr, i;
-
-	for (fr = 0; fr <= st->curframe; fr++) {
-		for (i = 0; i < st->frame[fr]->loop_stack_cnt; i++) {
-			e = &st->frame[fr]->loop_stack[i];
-			/* the walk of a loop with two entries pays as it goes, see env->walk_insns */
-			if (e->counted || e->probe)
-				factor = min_t(u64, factor * max(e->max_header_count, 1U), U32_MAX);
-		}
-	}
-	return factor;
-}
-
-/*
- * The current state enters the loop of @entry, for which there is no count. It's found out on the
- * way whether the loop has an end: the walk goes on for as long as the jumps that leave the loop
- * are decided. Returns 1 if the iterations are kept apart from now on, 0 if that takes too long.
- */
-static int flow_try_walk(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
-{
-	struct bpf_loop *loop = env->insn_aux_data[entry->loop_id].loop;
-	u64 factor = flow_walk_factor(env->cur_state);
-	u32 patience, *walk_insns;
-
-	patience = env->allow_uninit_stack && !loop->rt_bounded &&
-		   (!loop->has_calls || loop->has_guards) ? BPF_FLOW_MAX_TRY : 0;
-	if (loop->walk_failed)
-		patience = 0;
-	/* Two trips for a loop of any length. Many a loop is left in the second one. */
-	if (patience && factor == 1)
-		patience = max_t(u64, patience, 2ULL * loop->nr_insns);
-	if (factor * loop->nr_insns > patience)
-		return 0;
-	entry->max_header_count = max(patience / (u32)(factor * loop->nr_insns), 1U);
-	/*
-	 * A compiler makes a flag of the counter of
-	 *	for (i = 0; i < 2; i++) off += f(i);
-	 * and there is nothing to count. In the second trip the flag decides the jump.
-	 * A loop with calls gets these two trips, whatever they take, and no more: its size says
-	 * nothing about the functions that it calls. It gets may_goto at once, so that nothing is
-	 * done again when the second trip comes back to the head.
-	 */
-	if (loop->has_calls) {
-		entry->max_header_count = min(entry->max_header_count, 2U);
-		patience = U32_MAX;
-		bpf_flow_loop_gets_guards(env, entry->loop_id);
-		entry->guarded = true;
-	}
-	entry->terminates = true;
-	/* scalar evolution has nothing to say about a loop with two entries */
-	entry->probe = !loop->irreducible;
-	entry->walk_id = env->walk_cnt + 1;
-	if (is_power_of_2(entry->walk_id)) {
-		walk_insns = kvrealloc(env->walk_insns, 2 * entry->walk_id * sizeof(u32),
-				       BPF_VERIFIER_GFP);
-		if (!walk_insns)
-			return -ENOMEM;
-		env->walk_insns = walk_insns;
-	}
-	env->walk_cnt++;
-	env->walk_insns[entry->walk_id] = 0;
-	entry->walk_patience = patience;
-	entry->apart = true;
-	return 1;
-}
-
-/*
- * The current state gets to env->insn_idx. Leave the loops that the insn is not in.
- * @enters: the insn is the head of a loop that the state is not in yet.
- */
-int bpf_flow_loop_leave(struct bpf_verifier_env *env, bool *enters)
-{
-	struct bpf_func_state *frame = cur_func(env);
-	int err;
-
-	err = loop_stack_pop(env);
-	if (err)
-		return err;
-	*enters = env->insn_aux_data[env->insn_idx].loop &&
-		  (!frame->loop_stack_cnt ||
-		   frame->loop_stack[frame->loop_stack_cnt - 1].loop_id != env->insn_idx);
-	return 0;
-}
-
-/*
- * Enter the loops that env->insn_idx is in.
- *
- * When the number of iterations follows from the state that enters a loop at its head
- * induction variables get the ranges that they have in that many iterations, and the loop
- * needs no may_goto.
- * The rest of the state is left as it is. What comes back to the head is joined with it.
- * @ends_walk: the state came back to the head and is the last one that is kept apart from
- * the states of other iterations.
- */
-int bpf_flow_loop_enter(struct bpf_verifier_env *env, bool *backedge, bool *drop, bool *ends_walk)
-{
-	struct bpf_verifier_state *cur = env->cur_state, *entry_state;
-	const struct bpf_insn *insn = &env->prog->insnsi[env->insn_idx];
-	struct bpf_func_state *frame = cur_func(env);
-	struct loop_stack_entry *entry;
-	struct bpf_loop_iters iters;
-	struct bpf_loop *loop;
-	bool pushed, decided;
-	u32 trip;
-	u64 per_trip;
-	int err;
-
-	err = loop_stack_push(env, &pushed);
-	if (err)
-		return err;
-
-	if (frame->loop_stack_cnt == 0)
-		return 0;
-
-	entry = &frame->loop_stack[frame->loop_stack_cnt - 1];
-	if (env->insn_idx != entry->loop_id) {
-		/* the jump that counts didn't leave the loop */
-		if (entry->entry_state && !entry->apart && cur->last_insn_idx == entry->count_insn)
-			return bpf_clamp_scev_regs(env, frame, entry->loop_id, entry, true);
-		return 0;
-	}
-
-	/*
-	 * No edge goes from a call to itself: the call goes on with one function of a set, see
-	 * split_func_set(), in the same iteration.
-	 */
-	if (!pushed && cur->last_insn_idx == env->insn_idx &&
-	    BPF_CLASS(insn->code) == BPF_JMP && BPF_OP(insn->code) == BPF_CALL)
-		return 0;
-
-	/* The callback came back to the helper that calls it, in the same iteration. */
-	if (frame->callback_depth)
-		return 0;
-
-	/* If nothing was pushed and env->insn_idx is a loop header, we've taken a backedge. */
-	if (!pushed) {
-		if (!entry->apart) {
-			entry->trip++;
-			*backedge = true;
-			return check_refs_taken_in_loop(env, entry) ?: maybe_clamp_scev_regs(env);
-		}
-		/*
-		 * The first iteration is over. What the loop makes anew in every iteration is
-		 * in this state. The rest is what the count says, like at the entry.
-		 */
-		if (entry->first) {
-			entry->first = false;
-			entry->apart = false;
-			entry->trip++;
-			err = bpf_compute_loop_iters(env, entry->entry_state, &iters);
-			if (err < 0)
-				return err;
-			if (verifier_bug_if(!err, env, "loop at %d is not counted any more",
-					    env->insn_idx))
-				return -EFAULT;
-			err = maybe_clamp_scev_regs(env);
-			if (err)
-				return err;
-			err = bpf_widen_scev_regs(env, cur, entry->entry_state, &iters, true);
-			return err < 0 ? err : 0;
-		}
-		loop = env->insn_aux_data[env->insn_idx].loop;
-		/* the next iteration is another kind of state, there is no cycle */
-		trip = entry->trip;
-		decided = !entry->probe || entry->decided || !trip;
-		entry->decided = false;
-		entry->flag_apart = false;
-		if (decided && ++entry->trip < entry->max_header_count &&
-		    (entry->counted ||
-		     env->walk_insns[entry->walk_id] <= entry->walk_patience))
-			return 0;
-		/* there is no such iteration at run time */
-		if (entry->counted) {
-			*drop = true;
-			return 0;
-		}
-		/*
-		 * The walk doesn't get to the end of the loop. From now on what comes back to
-		 * the head is joined with what is there. The loop gets may_goto.
-		 */
-		if (!loop->rt_bounded && !loop->has_guards) {
-			verbose(env, "loop at insn %d never exits\n", env->insn_idx);
-			return -EINVAL;
-		}
-		if (!loop->rt_bounded)
-			bpf_flow_loop_gets_guards(env, env->insn_idx);
-		/* the jumps were decided, it's the loop that is too long. Or it had its two trips */
-		if (decided || loop->has_calls)
-			loop->walk_failed = true;
-		/* the iteration that it went through: its state is at the head */
-		entry->trip = trip;
-		*ends_walk = true;
-		return 0;
-	}
-
-	loop = env->insn_aux_data[env->insn_idx].loop;
-	err = bpf_compute_loop_iters(env, cur, &iters);
-	if (err < 0)
-		return err;
-
-	/*
-	 * There is no summary of what the loop does to something that is live.
-	 * Go through the iterations one by one if that is not too long.
-	 * @per_trip: the insns of one iteration, times the walks around the loop.
-	 */
-	per_trip = flow_walk_factor(cur) * loop->nr_insns;
-	if (err == 2 && per_trip <= BPF_FLOW_MAX_WALK &&
-	    iters.max_header_count <= BPF_FLOW_MAX_WALK / (u32)per_trip) {
-		entry->max_header_count = iters.max_header_count;
-		entry->terminates = true;
-		entry->counted = true;
-		entry->apart = true;
-		return 0;
-	}
-	if (err == 2 && iters.spill_base)
-		err = 0;
-	/* The walk has to get to the end of the loop, so it is known to have one. Or not: */
-	if (!err) {
-		err = flow_try_walk(env, entry);
-		if (err)
-			return err < 0 ? err : 0;
-		if (!loop->rt_bounded && !loop->has_guards) {
-			verbose(env, "loop at insn %d never exits\n", env->insn_idx);
-			return -EINVAL;
-		}
-		if (!loop->rt_bounded) {
-			bpf_flow_loop_gets_guards(env, env->insn_idx);
-			entry->guarded = true;
-		}
-		return 0;
-	}
-
-	/* What the ranges are derived from for as long as the loop is looked at. */
-	entry_state = bpf_flow_keep_state(env, cur);
-	if (!entry_state)
-		return -ENOMEM;
-
-	entry->min_header_count = iters.min_header_count;
-	entry->max_header_count = iters.max_header_count;
-	entry->iv_reg = iters.iv_reg;
-	entry->iv_range = iters.iv_range;
-	entry->count_insn = iters.count_insn;
-	entry->entry_state = entry_state;
-	entry->terminates = true;
-	/*
-	 *	idx = 0; for (i = 0; i < 100000; i++) idx = table[idx];
-	 * What the loop makes of idx is not known before its body is looked at, and what idx is
-	 * at the entry goes with i == 0 only. So the state goes through the first iteration as
-	 * it is. The state that comes back to the head has idx in 0..255.
-	 */
-	if (!bitmap_empty(iters.fresh_regs, BPF_SCEV_REGS_NUM)) {
-		entry->first = true;
-		entry->apart = true;
-		return 0;
-	}
-	err = bpf_widen_scev_regs(env, cur, entry_state, &iters, false);
-	return err < 0 ? err : 0;
 }
 
 /* Can the main program return 0? */
@@ -21732,8 +21242,7 @@ static int do_check(struct bpf_verifier_env *env)
 {
 	bool level1 = (env->log.level & BPF_LOG_LEVEL) == BPF_LOG_LEVEL1;
 	u64 log_pos = env->log.end_pos;
-	int prev_insn_idx = -1, insn_idx;
-	int err;
+	int prev_insn_idx, err;
 
 	err = bpf_flow_deliver(env, env->cur_state, env->insn_idx, -1);
 	while (!err) {
@@ -21749,10 +21258,7 @@ static int do_check(struct bpf_verifier_env *env)
 			bpf_vlog_reset(&env->log, log_pos);
 			env->prev_linfo = NULL;
 		}
-		insn_idx = env->insn_idx;
 		err = do_check_block(env, prev_insn_idx);
-		if (err && level1 && !round_is_dropped(env))
-			bpf_flow_print_way(env, log_pos, insn_idx, prev_insn_idx);
 	}
 	return err;
 }
@@ -23110,8 +22616,6 @@ static int do_check_main(struct bpf_verifier_env *env)
  * What stops a loop is assumed before the main pass and checked in it, see flow_is_bound(). The
  * main prog and global functions may get to the same loop. It has may_goto for all of them or
  * for none, so all are done again when the assumption doesn't hold, whatever came out.
- * The same when a loop gets may_goto, or its may_goto gets another way out, and what went through
- * the loop before is not there any more, see bpf_flow_loop_gets_guards().
  *
  * A round that is dropped counts as paths that never run. What it found out about the insns, the
  * subprogs and the prog stays. Each of these is made for more than one state that gets to an insn:
@@ -24963,6 +24467,8 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	/* no program is valid */
 	if (ARRAY_SIZE(bpf_verifier_ops) == 0)
 		return -EINVAL;
+	/* the main pass is being rewritten */
+	return -EOPNOTSUPP;
 
 	/* 'struct bpf_verifier_env' can be global, but since it's not small,
 	 * allocate/free it every time bpf_check() is called
@@ -25175,10 +24681,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
-	ret = bpf_flow_compute_kinds(env);
-	if (ret < 0)
-		goto skip_full_check;
-
 	if (env->log.level & BPF_LOG_LEVEL2)
 		log_program(env);
 
@@ -25338,9 +24840,7 @@ err_free_env:
 	kvfree(env->kfunc_index.slots);
 	kvfree(env->insn_array_maps);
 	bpf_free_scev(env);
-	kvfree(env->walk_insns);
 	bpf_flow_free(env);
-	bpf_join_free(env);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.postorder_nums);
 	kvfree(env->cfg.insn_postorder);
