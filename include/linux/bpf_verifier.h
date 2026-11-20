@@ -117,7 +117,10 @@ struct bpf_reg_state {
 	u32 id;
 	union {
 		/* valid when type == PTR_TO_PACKET */
-		int range;
+		struct {
+			int range;
+			int pkt_min_len;	/* see pkt_min_len() */
+		};
 		/*
 		 * Valid when type == PTR_TO_STACK. Inside the callee two registers
 		 * can be both PTR_TO_STACK like R1=fp-8 and R2=fp-8, but one of them
@@ -2211,6 +2214,12 @@ int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
 
+
+/* How many bytes are checked from the start of the packet, wherever the pointer is */
+static inline int pkt_min_len(const struct bpf_reg_state *reg)
+{
+	return reg->r64.size ? reg->pkt_min_len : max(reg->range, reg->pkt_min_len);
+}
 
 static inline u32 bpf_xreg_cnt(const struct bpf_verifier_state *st)
 {

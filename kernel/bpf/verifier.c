@@ -16513,7 +16513,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 	u8 opcode = BPF_OP(insn->code);
 	u32 dst = insn->dst_reg;
 	const char *reason;
-	int ret, bounds_ret;
+	int ret, bounds_ret, min_len;
 	bool to_scalar;
 	s64 smax;
 
@@ -16644,6 +16644,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 	 * constraints violations.
 	 */
 	__mark_scalar32_unbounded(scalar_of(dst_reg));
+	min_len = pkt_min_len(ptr_reg);
 
 	switch (opcode) {
 	case BPF_ADD:
@@ -16673,7 +16674,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 			 */
 			if (dst_reg->range < 0 ||
 			    (!known && (smin_val < 0 || reg_umax(dst_reg) >= dst_reg->range)))
-				memset(&dst_reg->raw, 0, sizeof(dst_reg->raw));
+				dst_reg->range = 0;
 		}
 		break;
 	case BPF_SUB:
@@ -16719,7 +16720,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 			 * prior comparison as arithmetic invalidates them.
 			 */
 			if ((!known && smin_val < 0) || dst_reg->range < 0)
-				memset(&dst_reg->raw, 0, sizeof(dst_reg->raw));
+				dst_reg->range = 0;
 		}
 		scalar_step_reset(scalar_of(dst_reg));
 		break;
@@ -16759,14 +16760,15 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 	 * step tell about it (alignment, umin). No other pointer has its id, so
 	 * it is enough that its range loses what its umax loses.
 	 */
+	smax = reg_smax(dst_reg);
 	if (reg_is_pkt_pointer(dst_reg) &&
-	    (known || (opcode == BPF_SUB && dst_reg->range > 0))) {
+	    (known || (opcode == BPF_SUB && dst_reg->range > 0)))
 		__update_scalar32_bounds(scalar_of(dst_reg));
-	} else {
-		smax = reg_smax(dst_reg);
+	else
 		reg_bounds_sync(dst_reg);
-		bpf_trim_pkt_range(dst_reg, smax);
-	}
+	if (reg_is_pkt_pointer(dst_reg))
+		dst_reg->pkt_min_len = min_len;
+	bpf_trim_pkt_range(dst_reg, smax);
 	bpf_blur_far_offset(env, dst_reg);
 	bounds_ret = sanitize_check_bounds(env, insn, dst_reg);
 	if (bounds_ret == -EACCES)
@@ -17866,12 +17868,19 @@ bool bpf_same_memory_origin(const struct bpf_reg_state *reg_a,
  * 'range - smax' bytes from a packet pointer are in the packet. reg_bounds_sync() can make smax
  * smaller than @smax: with a step of 8, or with 3 zero bits in var_off, 58 becomes 56. Make the
  * range smaller by the same number, so that the number of bytes does not grow. umax is not
- * sufficient: it is U64_MAX when the offset can be negative.
+ * sufficient: it is U64_MAX when the offset can be negative. A jump can take smax from S64_MAX
+ * to -3: the difference does not fit in s64. If smax is larger than @smax the range is lost.
+ * If smax is below pkt_min_len, the range is at least pkt_min_len.
  */
 void bpf_trim_pkt_range(struct bpf_reg_state *reg, s64 smax)
 {
-	if (type_is_pkt_pointer(reg->type) && reg->range > 0)
-		reg->range = max_t(s64, reg->range - (smax - reg_smax(reg)), 0);
+	u64 lost = (u64)smax - reg_smax(reg);
+
+	if (!type_is_pkt_pointer(reg->type) || reg->range < 0)
+		return;
+	reg->range = lost < reg->range ? reg->range - lost : 0;
+	if (reg->pkt_min_len > reg_smax(reg))
+		reg->range = max(reg->range, reg->pkt_min_len);
 }
 
 /*
