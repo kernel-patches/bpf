@@ -90,7 +90,7 @@ impl auxiliary::Driver for NovaDriver {
 impl drm::Driver for NovaDriver {
     type Data = ();
     type RegistrationData<'a> = DrmRegData<'a>;
-    type File = File;
+    type File<'a> = File;
     type Object = gem::Object<NovaObject>;
     type ParentDevice<Ctx: DeviceContext> = auxiliary::Device<Ctx>;
 

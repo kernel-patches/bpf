@@ -209,7 +209,7 @@ const INFO: drm::DriverInfo = drm::DriverInfo {
 impl drm::Driver for TyrDrmDriver {
     type Data = ();
     type RegistrationData<'drm> = TyrDrmRegistrationData<'drm>;
-    type File = TyrDrmFileData;
+    type File<'a> = TyrDrmFileData;
     type Object = Bo;
     type ParentDevice<Ctx: DeviceContext> = platform::Device<Ctx>;
 

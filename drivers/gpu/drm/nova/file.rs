@@ -7,7 +7,6 @@ use crate::driver::{
 };
 use crate::gem::NovaObject;
 use kernel::{
-    alloc::flags::*,
     drm::{
         self,
         gem::BaseObject,
@@ -100,11 +99,14 @@ fn write_info<T: AsBytes>(info: &mut uapi::drm_nova_info, value: T) -> Result {
     Ok(())
 }
 
-impl drm::file::DriverFile for File {
+impl drm::file::DriverFile<'_> for File {
     type Driver = NovaDriver;
 
-    fn open(_dev: &NovaDevice) -> Result<Pin<KBox<Self>>> {
-        Ok(KBox::new(Self, GFP_KERNEL)?.into())
+    fn open(
+        _device: &NovaDevice<Registered>,
+        _reg_data: &DrmRegData<'_>,
+    ) -> impl PinInit<Self, Error> {
+        Ok(Self)
     }
 }
 
@@ -114,7 +116,7 @@ impl File {
         dev: &NovaDevice<Registered>,
         _reg_data: &DrmRegData<'_>,
         req: &mut uapi::drm_nova_gem_create,
-        file: &drm::File<File>,
+        file: &drm::File<NovaDriver>,
     ) -> Result<u32> {
         let obj = NovaObject::new(dev, req.size.try_into()?)?;
 
@@ -128,7 +130,7 @@ impl File {
         _dev: &NovaDevice<Registered>,
         _reg_data: &DrmRegData<'_>,
         req: &mut uapi::drm_nova_gem_info,
-        file: &drm::File<File>,
+        file: &drm::File<NovaDriver>,
     ) -> Result<u32> {
         let bo = NovaObject::lookup_handle(file, req.handle)?;
 
@@ -142,7 +144,7 @@ impl File {
         _dev: &NovaDevice<Registered>,
         reg_data: &DrmRegData<'_>,
         info: &mut uapi::drm_nova_info,
-        _file: &drm::File<File>,
+        _file: &drm::File<NovaDriver>,
     ) -> Result<u32> {
         match info.id {
             uapi::DRM_NOVA_INFO_GPU => write_info(info, GpuInfo::new(reg_data)?)?,

@@ -35,6 +35,7 @@ use kernel::{
         Arc, ArcBorrow, CondVar, CondVarTimeoutResult, SetOnce, SpinLock, UniqueArc,
     },
     task::{Pid, Task},
+    time::Delta,
     uaccess::{UserSlice, UserSliceReader},
     uapi,
     workqueue::{self, Work},
@@ -1552,25 +1553,25 @@ impl Process {
         inner.is_frozen = IsFrozen::InProgress;
 
         if info.timeout_ms > 0 {
-            let mut jiffies = kernel::time::msecs_to_jiffies(info.timeout_ms);
-            while jiffies > 0 {
+            let mut timeout = Delta::from_millis(info.timeout_ms.into()).to_jiffies_timeout();
+            while timeout.as_jiffies() > 0 {
                 if inner.outstanding_txns == 0 {
                     break;
                 }
 
                 match self
                     .freeze_wait
-                    .wait_interruptible_timeout(&mut inner, jiffies)
+                    .wait_interruptible_timeout(&mut inner, timeout)
                 {
                     CondVarTimeoutResult::Signal { .. } => {
                         inner.is_frozen = IsFrozen::No;
                         return Err(ERESTARTSYS);
                     }
-                    CondVarTimeoutResult::Woken { jiffies: remaining } => {
-                        jiffies = remaining;
+                    CondVarTimeoutResult::Woken { remainder } => {
+                        timeout = remainder;
                     }
                     CondVarTimeoutResult::Timeout => {
-                        jiffies = 0;
+                        timeout = Delta::ZERO;
                     }
                 }
             }

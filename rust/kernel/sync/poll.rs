@@ -64,11 +64,11 @@ impl<'a> PollTable<'a> {
         // * `file.as_ptr()` references a valid file for the duration of this call.
         // * `self.table` is null or references a valid poll_table for the duration of this call.
         // * Since `PollCondVar` is pinned, its destructor is guaranteed to run before the memory
-        //   containing `cv.wait_queue_head` is invalidated. Since the destructor clears all
-        //   waiters and then waits for an rcu grace period, it's guaranteed that
-        //   `cv.wait_queue_head` remains valid for at least an rcu grace period after the removal
-        //   of the last waiter.
-        unsafe { bindings::poll_wait(file.as_ptr(), cv.wait_queue_head.get(), self.table) }
+        //   containing the wait queue head is invalidated. Since the destructor clears all
+        //   waiters and then waits for an rcu grace period, it's guaranteed that the wait queue
+        //   head remains valid for at least an rcu grace period after the removal of the last
+        //   waiter.
+        unsafe { bindings::poll_wait(file.as_ptr(), cv.wq.as_raw(), self.table) }
     }
 }
 
@@ -105,9 +105,7 @@ impl PinnedDrop for PollCondVar {
     #[inline]
     fn drop(self: Pin<&mut Self>) {
         // Clear anything registered using `register_wait`.
-        //
-        // SAFETY: The pointer points at a valid `wait_queue_head`.
-        unsafe { bindings::__wake_up_pollfree(self.inner.wait_queue_head.get()) };
+        self.inner.wq.wake_up_pollfree();
 
         // Wait for epoll items to be properly removed.
         synchronize_rcu();
@@ -165,13 +163,12 @@ impl Drop for PollCondVarBox {
         // SAFETY: ManuallyDrop::take ok because not already taken.
         let boxed = unsafe { ManuallyDrop::take(&mut self.inner) };
 
+        boxed.inner.inner.wq.wake_up_pollfree();
+
         // SAFETY: The code below frees the box without calling the actual destructor of the type,
         // but it's okay because it re-implements the destructor using `kfree_rcu()` in place of
         // `synchronize_rcu()`.
         let ptr = KBox::into_raw(unsafe { Pin::into_inner_unchecked(boxed) });
-
-        // SAFETY: The pointer points at a valid `wait_queue_head`.
-        unsafe { bindings::__wake_up_pollfree((*ptr).inner.inner.wait_queue_head.get()) };
 
         // SAFETY: This was allocated using `KBox::pin_init`, so it can be freed with `kvfree`.
         unsafe { bindings::kvfree_call_rcu((*ptr).rcu.get(), ptr.cast::<ffi::c_void>()) };

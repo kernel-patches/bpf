@@ -9,6 +9,7 @@ use kernel::{
 use crate::{
     driver::Bar0,
     fsp::hal::FspHal,
+    fsp::regs::*,
     regs, //
 };
 
@@ -32,6 +33,10 @@ impl FspHal for Gh100 {
 
     fn fb_end_reserved_size(&self) -> u64 {
         u64::SZ_2M
+    }
+
+    fn is_bug_3957833_affected(&self, bar: Bar0<'_>) -> bool {
+        bar.read(NV_GFW_FSP_UCODE_VERSION).is_bug_3957833_affected()
     }
 }
 

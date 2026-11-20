@@ -552,15 +552,18 @@ impl<T: DriverObject> Drop for SGTableMap<T> {
 }
 
 impl<T: DriverObject> SGTableMap<T> {
-    fn new(obj: &Object<T>) -> impl Init<Self, Error> {
-        // INVARIANT:
-        // - We call drm_gem_shmem_get_pages_sgt below and check whether or not it succeeds,
-        //   fulfilling the invariant of SGTableMap that the object's `sgt` field is initialized.
-        // SAFETY:
-        // - `obj` is fully initialized, making this function safe to call.
-        from_err_ptr(unsafe { bindings::drm_gem_shmem_get_pages_sgt(obj.as_raw_shmem()) })?;
+    fn new(obj: &Object<T>) -> impl Init<Self, Error> + '_ {
+        pin_init::init_scope(move || {
+            // SAFETY:
+            // - `obj` is fully initialized, making this function safe to call.
+            from_err_ptr(unsafe { bindings::drm_gem_shmem_get_pages_sgt(obj.as_raw_shmem()) })?;
 
-        Ok(Self { obj: obj.into() })
+            // INVARIANT:
+            // - We call drm_gem_shmem_get_pages_sgt above and check whether or not it succeeds,
+            //   fulfilling the invariant of SGTableMap that the object's `sgt` field is
+            //   initialized.
+            Ok(try_init!(Self { obj: obj.into() }))
+        })
     }
 }
 
@@ -601,11 +604,14 @@ mod tests {
         desc: c"Kunit",
     };
 
-    impl drm::file::DriverFile for KunitFile {
+    impl drm::file::DriverFile<'_> for KunitFile {
         type Driver = KunitDriver;
 
-        fn open(_dev: &drm::Device<KunitDriver>) -> Result<Pin<KBox<Self>>> {
-            Ok(KBox::new(Self, GFP_KERNEL)?.into())
+        fn open(
+            _device: &drm::Device<KunitDriver, drm::Registered>,
+            _reg_data: &(),
+        ) -> impl PinInit<Self, Error> {
+            Ok(Self)
         }
     }
 
@@ -626,7 +632,7 @@ mod tests {
     impl drm::Driver for KunitDriver {
         type Data = KunitData;
         type RegistrationData<'a> = ();
-        type File = KunitFile;
+        type File<'a> = KunitFile;
         type Object = Object<KunitObject>;
         type ParentDevice<Ctx: device::DeviceContext> = faux::Device<Ctx>;
 

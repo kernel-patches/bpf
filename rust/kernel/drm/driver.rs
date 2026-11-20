@@ -7,10 +7,22 @@
 use crate::{
     bindings,
     device,
-    drm,
+    drm::{
+        self,
+        file::FileData, //
+    },
     error::to_result,
+    interop::list::clist_create,
     prelude::*,
-    sync::aref::ARef, //
+    sync::{
+        aref::ARef,
+        atomic::{
+            Acquire,
+            Release, //
+        },
+        Mutex, //
+    },
+    types::Opaque, //
 };
 use core::{
     marker::PhantomPinned,
@@ -120,8 +132,14 @@ pub trait Driver {
     /// The type used to manage memory for this driver.
     type Object: AllocImpl;
 
-    /// The type used to represent a DRM File (client)
-    type File: drm::file::DriverFile;
+    /// The type used to represent a DRM File (client).
+    ///
+    /// File data may borrow from [`RegistrationData`](Driver::RegistrationData). File data is
+    /// guaranteed to be dropped before registration data, either when the file is closed or
+    /// when the device is unregistered, whichever comes first.
+    ///
+    /// Drivers implement [`DriverFile`](drm::file::DriverFile) for their file data type.
+    type File<'a>: drm::file::DriverFile<'a, Driver = Self> + 'a;
 
     /// The bus device type of the parent device that the DRM device is associated with.
     type ParentDevice<Ctx: device::DeviceContext>: device::AsBusDevice<Ctx>;
@@ -197,6 +215,13 @@ impl<'a, T: Driver> Registration<'a, T> {
                 // SAFETY: `drm` is a valid, initialized but not yet registered DRM device.
                 let ret = unsafe { bindings::drm_dev_register(drm.as_raw(), 0) };
                 to_result(ret).inspect_err(|_| {
+                    // SAFETY:
+                    // - Failed registration unplugs the device and drains registration guards.
+                    // - `data` remains initialized until this closure returns.
+                    // - Failed initialization does not run `Registration::drop()`, so this is
+                    //   the only file-data cleanup for this device.
+                    unsafe { Self::drop_file_data(drm) };
+
                     // SAFETY: `drm_dev_register()` synchronizes SRCU on failure, so no
                     // concurrent access to `registration_data` is possible at this point.
                     unsafe { *drm.registration_data.get() = NonNull::dangling() };
@@ -208,6 +233,75 @@ impl<'a, T: Driver> Registration<'a, T> {
     /// Returns a reference to the `Device` instance for this registration.
     pub fn device(&self) -> &drm::Device<T> {
         &self.drm
+    }
+
+    /// Detaches and drops file data, then waits for concurrent postclose destruction.
+    ///
+    /// # Safety
+    ///
+    /// - `drm` must be unplugged with all `RegistrationGuard` sections drained.
+    /// - Its registration data must remain alive until this function returns.
+    /// - This must be the only call for this device.
+    unsafe fn drop_file_data(drm: &drm::Device<T>) {
+        let raw = drm.as_raw();
+        let mut files = None;
+
+        // SAFETY: `filelist_mutex` is initialized by `drm_dev_init()` and remains valid for
+        // the lifetime of the `struct drm_device`.
+        let filelist_mutex = unsafe { Mutex::from_raw(&raw mut (*raw).filelist_mutex) };
+        {
+            let _guard = filelist_mutex.lock();
+
+            // SAFETY:
+            // - `filelist` is initialized and protected by the held mutex.
+            // - Its entries are `drm_file`s linked through `lhead`; `Opaque` has the same layout.
+            let filelist = unsafe {
+                clist_create!(
+                    &raw mut (*raw).filelist,
+                    Opaque<bindings::drm_file>,
+                    bindings::drm_file,
+                    lhead
+                )
+            };
+
+            // Detach the allocations so `postclose()` sees NULL and leaves their destruction to us.
+            // After `postclose()` returns, the DRM core can free the C file, so the detached list
+            // must not depend on it. All `RegistrationGuard` sections have already been drained.
+            for file in filelist.iter() {
+                // SAFETY: `file` is a valid `drm_file` on this device's filelist.
+                let priv_ptr = unsafe { (*file.get()).driver_priv };
+
+                // SAFETY: Setting `driver_priv` to NULL is visible to `postclose_callback()`
+                // through the `filelist_mutex` acquire/release chain in `drm_close_helper()`.
+                unsafe { (*file.get()).driver_priv = core::ptr::null_mut() };
+
+                // SAFETY:
+                // - `priv_ptr` comes from `KBox::into_raw()` in `open_callback()`.
+                // - The file is still in the list, so `postclose_callback()` has not run. Clearing
+                //   `driver_priv` transfers ownership here and makes a later postclose skip it.
+                // - Only the owning pointer is moved; the pinned allocation is dropped in place.
+                let mut data = unsafe {
+                    Pin::new_unchecked(KBox::from_raw(
+                        priv_ptr.cast::<FileData<T::File<'static>>>(),
+                    ))
+                };
+                *data.as_mut().project().next = files.take();
+                files = Some(data);
+            }
+        }
+
+        // Run driver destructors without `filelist_mutex`. Take each link before dropping its
+        // allocation to avoid recursively dropping the entire chain.
+        while let Some(mut data) = files {
+            files = data.as_mut().project().next.take();
+            drop(data);
+            drm.open_count.fetch_sub(1, Release);
+        }
+
+        // Wait for file-data destruction in concurrent `postclose_callback()` calls. No new opens
+        // can succeed after unplug, so `open_count` is monotonically decreasing.
+        drm.open_count_wq
+            .wait_event(|| drm.open_count.load(Acquire) == 0);
     }
 }
 
@@ -230,8 +324,13 @@ impl<T: Driver> PinnedDrop for Registration<'_, T> {
         // SAFETY: Safe by the invariant of `ARef<drm::Device<T>>`. The existence of this
         // `Registration` also guarantees that this `drm::Device` is actually registered.
         unsafe { bindings::drm_dev_unplug(self.drm.as_raw()) };
-        // After drm_dev_unplug(), the SRCU barrier guarantees that all RegistrationGuard critical
-        // sections have completed, so no one holds a reference to reg_data anymore.
-        // reg_data is dropped here automatically.
+
+        // SAFETY:
+        // - `drm_dev_unplug()` has unplugged the device and drained registration guards.
+        // - Registration data remains alive until this destructor returns.
+        // - Registration succeeded, so this destructor performs the only file-data cleanup.
+        unsafe { Self::drop_file_data(&self.drm) };
+
+        // Registration data is dropped here automatically, after all file data has been dropped.
     }
 }

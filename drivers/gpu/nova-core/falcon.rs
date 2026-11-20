@@ -18,6 +18,10 @@ use kernel::{
         Io,
         Mmio, //
     },
+    num::{
+        Bounded,
+        TryIntoBounded, //
+    },
     prelude::*,
     sizes::SZ_4K,
     time::Delta,
@@ -28,11 +32,8 @@ use crate::{
     driver::Bar0,
     falcon::hal::LoadMethod,
     gpu::Chipset,
-    num::{
-        self,
-        FromSafeCast, //
-    },
-    regs,
+    num::FromSafeCast,
+    regs, //
 };
 
 pub(crate) mod fsp;
@@ -134,8 +135,18 @@ pub(crate) enum FalconMem {
     /// Non-Secure Instruction Memory.
     #[expect(unused)]
     ImemNonSecure,
-    /// Data Memory.
-    Dmem,
+    /// Data Memory. If `tag` is set, a transfer into DMEM also tags each block with its source
+    /// offset, which is then the DMEM virtual address of the image.
+    Dmem { tag: bool },
+}
+
+/// Where a falcon DMA transfer reads from.
+pub(crate) enum FalconDmaSource<'a> {
+    /// A DMA object in system memory.
+    Sysmem(&'a Coherent<'a, [u8]>),
+    /// GPU framebuffer memory at physical address `base`.
+    #[expect(dead_code)]
+    Framebuffer { base: u64 },
 }
 
 bounded_enum! {
@@ -233,13 +244,13 @@ pub(crate) trait FalconDmaLoadable {
             let end = start + usize::from_safe_cast(params.len);
             let data = self.as_slice().get(start..end).ok_or(EINVAL)?;
 
-            let dst_start = u16::try_from(params.dst_start).map_err(|_| EINVAL)?;
+            let dst_start = params.dst_start.try_into_bounded().ok_or(EINVAL)?;
 
             Ok::<_, Error>(FalconPioImemLoadTarget {
                 data,
                 dst_start,
                 secure,
-                start_tag: dst_start >> 8,
+                start_tag: dst_start.shr::<8, 16>().into(),
             })
         };
 
@@ -275,7 +286,7 @@ pub(crate) trait FalconDmaLoadable {
 #[derive(Clone)]
 pub(crate) struct FalconPioImemLoadTarget<'a> {
     pub(crate) data: &'a [u8],
-    pub(crate) dst_start: u16,
+    pub(crate) dst_start: Bounded<u32, 24>,
     pub(crate) secure: bool,
     pub(crate) start_tag: u16,
 }
@@ -383,6 +394,13 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
             pfalcon: E::pfalcon(bar),
             pfalcon2: E::pfalcon2(bar),
         })
+    }
+
+    /// Returns the size of this falcon's IMEM in bytes.
+    pub(crate) fn imem_size(&self) -> usize {
+        let blocks = usize::from(self.pfalcon.read(regs::NV_PFALCON_FALCON_HWCFG).imem_size());
+
+        blocks * MEM_BLOCK_ALIGNMENT
     }
 
     /// Resets DMA-related registers.
@@ -505,43 +523,67 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         Ok(())
     }
 
-    /// Perform a DMA write according to `load_offsets` from `dma_obj` into the falcon's
-    /// `target_mem`.
+    /// Programs FBIF context DMA slot `ctx_dma` with the value that `configure` returns, runs `f`,
+    /// and restores the slot once `f` has returned `Ok`.
     ///
-    /// `sec` is set if the loaded firmware is expected to run in secure mode.
+    /// The slot keeps the programmed value if `f` fails, since a falcon that `f` started and that
+    /// has not halted may still be reading through the aperture.
+    ///
+    /// # Errors
+    ///
+    /// - `EINVAL` if `ctx_dma` is not a context DMA slot that the falcon has.
+    ///
+    /// Errors from `f` are propagated as-is.
+    pub(crate) fn with_fbif_transcfg<R>(
+        &self,
+        ctx_dma: u32,
+        configure: impl FnOnce(regs::NV_PFALCON_FBIF_TRANSCFG) -> regs::NV_PFALCON_FBIF_TRANSCFG,
+        f: impl FnOnce() -> Result<R>,
+    ) -> Result<R> {
+        let transcfg =
+            regs::NV_PFALCON_FBIF_TRANSCFG::try_at(usize::from_safe_cast(ctx_dma)).ok_or(EINVAL)?;
+
+        let saved = self.pfalcon.read(transcfg);
+        self.pfalcon.write(transcfg, configure(saved));
+
+        let result = f()?;
+
+        self.pfalcon.write(transcfg, saved);
+
+        Ok(result)
+    }
+
+    /// Perform a DMA write according to `load_offsets` from `src` into the falcon's `target_mem`.
     fn dma_wr(
         &self,
-        dma_obj: &Coherent<'_, [u8]>,
+        src: FalconDmaSource<'_>,
         target_mem: FalconMem,
         load_offsets: FalconDmaLoadTarget,
     ) -> Result {
-        const DMA_LEN: u32 = num::usize_into_u32::<{ MEM_BLOCK_ALIGNMENT }>();
+        const DMA_LEN: u32 = cv!(MEM_BLOCK_ALIGNMENT);
 
         // DMA transfers can only be done in units of 256 bytes. Compute how many such transfers we
         // need to perform.
         let num_transfers = load_offsets.len.div_ceil(DMA_LEN);
 
-        // For IMEM, we want to use the start offset as a virtual address tag for each page, since
-        // code addresses in the firmware (and the boot vector) are virtual.
-        //
-        // For DMEM, the start offset is folded into the DMA address.
-        let (src_start, dma_start) = match target_mem {
-            FalconMem::ImemSecure | FalconMem::ImemNonSecure => (load_offsets.src_start, 0),
-            FalconMem::Dmem => (0, usize::from_safe_cast(load_offsets.src_start)),
+        let (dma_base, fbif_target) = match src {
+            FalconDmaSource::Sysmem(dma_obj) => {
+                // Upper limit of transfer is `(num_transfers * DMA_LEN) + load_offsets.src_start`.
+                let end_offset = num_transfers
+                    .checked_mul(DMA_LEN)
+                    .and_then(|size| size.checked_add(load_offsets.src_start))
+                    .map(usize::from_safe_cast)
+                    .ok_or(EOVERFLOW)?;
+
+                (
+                    io_project!(dma_obj, [try: 0..end_offset]).dma_address(),
+                    FalconFbifTarget::CoherentSysmem,
+                )
+            }
+            FalconDmaSource::Framebuffer { base } => (base, FalconFbifTarget::LocalFb),
         };
 
-        let dma_address = {
-            // Upper limit of transfer is `(num_transfers * DMA_LEN) + load_offsets.src_start`.
-            let dma_end = num_transfers
-                .checked_mul(DMA_LEN)
-                .and_then(|size| size.checked_add(load_offsets.src_start))
-                .map(usize::from_safe_cast)
-                .ok_or(EOVERFLOW)?;
-
-            io_project!(dma_obj, [try: dma_start..dma_end]).dma_address()
-        };
-
-        if dma_address % DmaAddress::from(DMA_LEN) > 0 {
+        if dma_base % DmaAddress::from(DMA_LEN) > 0 {
             dev_err!(
                 self.dev,
                 "DMA transfer start addresses must be a multiple of {}\n",
@@ -556,24 +598,32 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
             .write_reg(regs::NV_PFALCON_FALCON_DMATRFBASE::zeroed().with_base(
                 // CAST: `as u32` is used on purpose since we do want to strip the upper bits,
                 // which will be written to `NV_PFALCON_FALCON_DMATRFBASE1`.
-                (dma_address >> 8) as u32,
+                (dma_base >> 8) as u32,
             ));
         self.pfalcon.write_reg(
-            regs::NV_PFALCON_FALCON_DMATRFBASE1::zeroed().try_with_base(dma_address >> 40)?,
+            regs::NV_PFALCON_FALCON_DMATRFBASE1::zeroed().try_with_base(dma_base >> 40)?,
         );
 
         let cmd = regs::NV_PFALCON_FALCON_DMATRFCMD::zeroed()
             .with_size(DmaTrfCmdSize::Size256B)
             .with_falcon_mem(target_mem);
 
+        self.pfalcon
+            .update(regs::NV_PFALCON_FBIF_TRANSCFG::at(0), |v| {
+                v.with_target(fbif_target)
+                    .with_mem_type(FalconFbifMemType::Physical)
+            });
+
         for pos in (0..num_transfers).map(|i| i * DMA_LEN) {
             // Perform a transfer of size `DMA_LEN`.
             self.pfalcon.write_reg(
                 regs::NV_PFALCON_FALCON_DMATRFMOFFS::zeroed()
-                    .try_with_offs(load_offsets.dst_start + pos)?,
+                    .try_with_offs(load_offsets.dst_start.checked_add(pos).ok_or(EOVERFLOW)?)?,
             );
+            // The source offset doubles as the virtual address tag for IMEM and tagged DMEM.
             self.pfalcon.write_reg(
-                regs::NV_PFALCON_FALCON_DMATRFFBOFFS::zeroed().with_offs(src_start + pos),
+                regs::NV_PFALCON_FALCON_DMATRFFBOFFS::zeroed()
+                    .with_offs(load_offsets.src_start.checked_add(pos).ok_or(EOVERFLOW)?),
             );
 
             self.pfalcon.write_reg(cmd);
@@ -614,14 +664,17 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         };
 
         self.dma_reset();
-        self.pfalcon
-            .update(regs::NV_PFALCON_FBIF_TRANSCFG::at(0), |v| {
-                v.with_target(FalconFbifTarget::CoherentSysmem)
-                    .with_mem_type(FalconFbifMemType::Physical)
-            });
 
-        self.dma_wr(&dma_obj, FalconMem::ImemSecure, fw.imem_sec_load_params())?;
-        self.dma_wr(&dma_obj, FalconMem::Dmem, fw.dmem_load_params())?;
+        self.dma_wr(
+            FalconDmaSource::Sysmem(&dma_obj),
+            FalconMem::ImemSecure,
+            fw.imem_sec_load_params(),
+        )?;
+        self.dma_wr(
+            FalconDmaSource::Sysmem(&dma_obj),
+            FalconMem::Dmem { tag: false },
+            fw.dmem_load_params(),
+        )?;
 
         self.hal.program_brom(self, &fw.brom_params());
 
