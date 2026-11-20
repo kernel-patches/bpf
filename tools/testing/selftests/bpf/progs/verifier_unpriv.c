@@ -435,8 +435,7 @@ l1_%=:	r1 = *(u64*)(r6 + 0);				\
 
 SEC("tc")
 __description("unpriv: spill/fill of different pointers stx - ctx and sock")
-/* bpf_sk_release(skb) is an error too: "type=ctx expected=sock". This one is found first. */
-__failure __msg("R1 invalid mem access 'sock_or_null'")
+__failure __msg("type=ctx expected=sock")
 __naked void pointers_stx_ctx_and_sock(void)
 {
 	asm volatile ("					\

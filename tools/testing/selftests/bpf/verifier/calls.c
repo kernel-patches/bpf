@@ -1572,7 +1572,7 @@
 	BPF_EXIT_INSN(),
 	},
 	.prog_type = BPF_PROG_TYPE_XDP,
-	.errstr = "cannot return stack pointer",
+	.errstr = "R0 !read_ok",
 	.result = REJECT,
 },
 {

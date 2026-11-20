@@ -738,7 +738,7 @@ unsigned int a_pcpu_array_with_a_key_in_range_no_nullness(void)
 	return val->index;
 }
 
-/* Scalar evolution gives r6 the range [0, 1] for all iterations */
+/* The trip count gives r6 the range [0, 1] for all iterations */
 SEC("socket")
 __description("valid map access into an array using the counter of a loop without nullness")
 __success __retval(0)

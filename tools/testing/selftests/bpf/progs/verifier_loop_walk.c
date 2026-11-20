@@ -285,7 +285,7 @@ static __naked __noinline __used int long_loop(void)
  */
 SEC("socket")
 __description("walk: no other try for a loop that is too long")
-__success __log_level(4) __msg("processed {{....}} insns")
+__success __log_level(4) __msg("processed {{[0-9][0-9]}} insns")
 __naked void walk_fails_once(void)
 {
 	asm volatile ("								\

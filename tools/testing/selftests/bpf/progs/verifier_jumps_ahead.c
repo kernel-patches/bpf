@@ -715,7 +715,7 @@ struct {
 SEC("socket")
 __description("shape: nothing in a register stands for a pointer")
 __success __log_level(2)
-__msg("processed 135 insns")
+__msg("processed 76 insns")
 __naked void shape_unset(void)
 {
 	SHAPE_MANY("",

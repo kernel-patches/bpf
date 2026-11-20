@@ -47,7 +47,7 @@ int iter_err_unsafe_c_loop(const void *ctx)
 }
 
 SEC("?raw_tp")
-__failure __msg("math between map_value pointer and register with unbounded min value is not allowed")
+__failure __msg("R1 unbounded memory access")
 int iter_err_unsafe_asm_loop(const void *ctx)
 {
 	struct bpf_iter_num it;
@@ -1989,7 +1989,7 @@ static int loop1_wrapper(void)
  */
 SEC("raw_tp")
 /* -32 or -31 */
-__failure __msg("misaligned stack access off (0xffffffffffffffe0; 0x1)+0 size 8")
+__failure __msg("misaligned stack access off -31+0 size 8")
 __naked void absent_mark_in_the_middle_state4(void)
 {
 	/*
