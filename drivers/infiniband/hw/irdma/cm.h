@@ -357,7 +357,8 @@ struct irdma_cm_core {
 	struct workqueue_struct *event_wq;
 	spinlock_t ht_lock; /* protect CM node (active side) list */
 	spinlock_t listen_list_lock; /* protect listener list */
-	spinlock_t apbvt_lock; /*serialize apbvt add/del entries*/
+	spinlock_t apbvt_lock; /* serialize APBVT entry access */
+	struct mutex apbvt_add_mutex; /* serialize APBVT hardware adds */
 	u64 stats_nodes_created;
 	u64 stats_nodes_destroyed;
 	u64 stats_listen_created;

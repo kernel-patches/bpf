@@ -26,6 +26,7 @@ struct ionic_lif_cfg {
 	void *phc_state;
 
 	u64 page_size_supported;
+	u64 cap;
 	u32 npts_per_lif;
 	u32 nmrs_per_lif;
 	u32 nahs_per_lif;

@@ -834,6 +834,16 @@ void irdma_cq_rem_ref(struct ib_cq *ibcq)
 	complete(&iwcq->free_cq);
 }
 
+/**
+ * irdma_srq_rem_ref() - drop a reference to an SRQ
+ * @iwsrq: SRQ
+ */
+void irdma_srq_rem_ref(struct irdma_srq *iwsrq)
+{
+	if (refcount_dec_and_test(&iwsrq->refcnt))
+		complete(&iwsrq->free_srq);
+}
+
 struct ib_device *to_ibdev(struct irdma_sc_dev *dev)
 {
 	return &(container_of(dev, struct irdma_pci_f, sc_dev))->iwdev->ibdev;
@@ -1170,9 +1180,15 @@ void irdma_free_qp_rsrc(struct irdma_qp *iwqp)
 	kfree(iwqp->kqp.rq_wrid_mem);
 
 	if (iwqp->user_mode && iwqp->iwpbl) {
-		struct irdma_mr *iwmr = iwqp->iwpbl->iwmr;
+		struct irdma_pbl *iwpbl = iwqp->iwpbl;
+		struct irdma_mr *iwmr = iwpbl->iwmr;
 
-		refcount_dec(&iwmr->user_ring_refs);
+		if (iwmr && refcount_dec_and_test(&iwmr->user_ring_refs)) {
+			ib_umem_release(iwmr->region);
+			if (iwpbl->pbl_allocated)
+				irdma_free_pble(rf->pble_rsrc, &iwpbl->pble_alloc);
+			kfree(iwmr);
+		}
 	}
 }
 

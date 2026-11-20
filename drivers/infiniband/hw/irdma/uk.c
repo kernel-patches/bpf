@@ -1131,6 +1131,19 @@ bool irdma_uk_cq_empty(struct irdma_cq_uk *cq)
 }
 
 /**
+ * irdma_srq_release_wqe() - Release an SRQ WQE.
+ * @srq: SRQ
+ */
+static void irdma_srq_release_wqe(struct irdma_srq_uk *srq)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(srq->lock, flags);
+	IRDMA_RING_MOVE_TAIL(srq->srq_ring);
+	spin_unlock_irqrestore(srq->lock, flags);
+}
+
+/**
  * irdma_uk_cq_poll_cmpl - get cq completion info
  * @cq: hw cq
  * @info: cq poll information returned
@@ -1220,11 +1233,21 @@ int irdma_uk_cq_poll_cmpl(struct irdma_cq_uk *cq,
 	is_srq = (u8)FIELD_GET(IRDMA_CQ_SRQ, qword3);
 	info->error = (bool)FIELD_GET(IRDMA_CQ_ERROR, qword3);
 	info->ipv4 = (bool)FIELD_GET(IRDMACQ_IPV4, qword3);
-	get_64bit_val(cqe, 8, &comp_ctx);
 	if (is_srq)
-		get_64bit_val(cqe, 40, (u64 *)&qp);
+		get_64bit_val(cqe, 40, &comp_ctx);
 	else
-		qp = (struct irdma_qp_uk *)(unsigned long)comp_ctx;
+		get_64bit_val(cqe, 8, &comp_ctx);
+	qp = (struct irdma_qp_uk *)(unsigned long)comp_ctx;
+	if (!qp || qp->destroy_pending) {
+		/* destroy_pending is set prior to locking and scrubbing the CQ
+		 * so this can potentially be reached.
+		 */
+		if (qp && is_srq && info->q_type == IRDMA_CQE_QTYPE_RQ &&
+		    qp->srq_uk)
+			irdma_srq_release_wqe(qp->srq_uk);
+		ret_code = -EFAULT;
+		goto exit;
+	}
 	if (info->error) {
 		info->major_err = FIELD_GET(IRDMA_CQ_MAJERR, qword3);
 		info->minor_err = FIELD_GET(IRDMA_CQ_MINERR, qword3);
@@ -1268,21 +1291,12 @@ int irdma_uk_cq_poll_cmpl(struct irdma_cq_uk *cq,
 	info->qp_id = (u32)FIELD_GET(IRDMACQ_QPID, qword2);
 	info->ud_src_qpn = (u32)FIELD_GET(IRDMACQ_UDSRCQPN, qword2);
 
-	get_64bit_val(cqe, 8, &comp_ctx);
-
 	info->solicited_event = (bool)FIELD_GET(IRDMACQ_SOEVENT, qword3);
-	qp = (struct irdma_qp_uk *)(unsigned long)comp_ctx;
-	if (!qp || qp->destroy_pending) {
-		ret_code = -EFAULT;
-		goto exit;
-	}
 	wqe_idx = (u32)FIELD_GET(IRDMA_CQ_WQEIDX, qword3);
 	info->qp_handle = (irdma_qp_handle)(unsigned long)qp;
 	info->op_type = (u8)FIELD_GET(IRDMACQ_OP, qword3);
 
 	if (info->q_type == IRDMA_CQE_QTYPE_RQ && is_srq) {
-		unsigned long flags;
-
 		srq = qp->srq_uk;
 
 		get_64bit_val(cqe, 8, &info->wr_id);
@@ -1295,11 +1309,9 @@ int irdma_uk_cq_poll_cmpl(struct irdma_cq_uk *cq,
 		} else {
 			info->stag_invalid_set = false;
 		}
-		spin_lock_irqsave(srq->lock, flags);
-		IRDMA_RING_MOVE_TAIL(srq->srq_ring);
-		spin_unlock_irqrestore(srq->lock, flags);
-		pring = &srq->srq_ring;
 
+		irdma_srq_release_wqe(srq);
+		pring = &srq->srq_ring;
 	} else if (info->q_type == IRDMA_CQE_QTYPE_RQ && !is_srq) {
 		u32 array_idx;
 
@@ -1767,10 +1779,10 @@ void irdma_uk_cq_init(struct irdma_cq_uk *cq,
 
 /**
  * irdma_uk_clean_cq - clean cq entries
- * @q: completion context
+ * @qp: QP
  * @cq: cq to clean
  */
-void irdma_uk_clean_cq(void *q, struct irdma_cq_uk *cq)
+void irdma_uk_clean_cq(struct irdma_qp_uk *qp, struct irdma_cq_uk *cq)
 {
 	__le64 *cqe;
 	u64 qword3, comp_ctx;
@@ -1793,9 +1805,19 @@ void irdma_uk_clean_cq(void *q, struct irdma_cq_uk *cq)
 		/* Ensure CQE contents are read after valid bit is checked */
 		dma_rmb();
 
-		get_64bit_val(cqe, 8, &comp_ctx);
-		if ((void *)(unsigned long)comp_ctx == q)
-			set_64bit_val(cqe, 8, 0);
+		if (cq->avoid_mem_cflct && FIELD_GET(IRDMA_CQ_SRQ, qword3)) {
+			get_64bit_val(cqe, 40, &comp_ctx);
+			if ((struct irdma_qp_uk *)(unsigned long)comp_ctx == qp) {
+				if (qp->srq_uk &&
+				    FIELD_GET(IRDMA_CQ_SQ, qword3) == IRDMA_CQE_QTYPE_RQ)
+					irdma_srq_release_wqe(qp->srq_uk);
+				set_64bit_val(cqe, 40, 0);
+			}
+		} else {
+			get_64bit_val(cqe, 8, &comp_ctx);
+			if ((struct irdma_qp_uk *)(unsigned long)comp_ctx == qp)
+				set_64bit_val(cqe, 8, 0);
+		}
 
 		cq_head = (cq_head + 1) % cq->cq_ring.size;
 		if (!cq_head)

@@ -31,6 +31,8 @@ static inline void mlx5_ib_fs_cleanup(struct mlx5_ib_dev *dev)
 		kfree(dev->flow_db->rdma_transport_tx[i]);
 	for (i = 0; i < MLX5_RDMA_TRANSPORT_BYPASS_PRIO; i++)
 		kfree(dev->flow_db->rdma_transport_rx[i]);
+	for (i = 0; i < MLX5_RDMA_TRANSPORT_BYPASS_PRIO; i++)
+		kfree(dev->flow_db->nic_rx_class[i]);
 	kfree(dev->flow_db);
 }
 #endif /* _MLX5_IB_FS_H */

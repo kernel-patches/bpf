@@ -70,20 +70,22 @@ static void set_mkc_access_pd_addr_fields(void *mkc, int acc, u64 start_addr,
 	MLX5_SET(mkc, mkc, lw, !!(acc & IB_ACCESS_LOCAL_WRITE));
 	MLX5_SET(mkc, mkc, lr, 1);
 
-	if (acc & IB_ACCESS_RELAXED_ORDERING) {
-		if (MLX5_CAP_GEN(dev->mdev, relaxed_ordering_write))
-			MLX5_SET(mkc, mkc, relaxed_ordering_write, 1);
-
-		if (MLX5_CAP_GEN(dev->mdev, relaxed_ordering_read) ||
-		    (MLX5_CAP_GEN(dev->mdev,
-				  relaxed_ordering_read_pci_enabled) &&
-		     pcie_relaxed_ordering_enabled(dev->mdev->pdev)))
-			MLX5_SET(mkc, mkc, relaxed_ordering_read, 1);
-	}
+	mlx5_core_mkey_set_ordering(dev->mdev, mkc,
+				    mlx5r_access_to_mkey_order(acc));
 
 	MLX5_SET(mkc, mkc, pd, to_mpd(pd)->pdn);
 	MLX5_SET(mkc, mkc, qpn, 0xffffff);
 	MLX5_SET64(mkc, mkc, start_addr, start_addr);
+}
+
+static int validate_ordering_access(struct mlx5_ib_dev *dev, int acc)
+{
+	/* If HW disallows Strong Ordered writes, RO/UNORDERED must be set */
+	if (MLX5_CAP_GEN(dev->mdev, mkc_order_write_after_write_ro_only)) {
+		if (!(acc & (IB_ACCESS_RELAXED_ORDERING | IB_ACCESS_UNORDERED)))
+			return -EOPNOTSUPP;
+	}
+	return 0;
 }
 
 static void assign_mkey_variant(struct mlx5_ib_dev *dev, u32 *mkey, u32 *in)
@@ -135,30 +137,6 @@ static int get_mkc_octo_size(unsigned int access_mode, unsigned int ndescs)
 	return ret;
 }
 
-static int get_unchangeable_access_flags(struct mlx5_ib_dev *dev,
-					 int access_flags)
-{
-	int ret = 0;
-
-	if ((access_flags & IB_ACCESS_REMOTE_ATOMIC) &&
-	    MLX5_CAP_GEN(dev->mdev, atomic) &&
-	    MLX5_CAP_GEN(dev->mdev, umr_modify_atomic_disabled))
-		ret |= IB_ACCESS_REMOTE_ATOMIC;
-
-	if ((access_flags & IB_ACCESS_RELAXED_ORDERING) &&
-	    MLX5_CAP_GEN(dev->mdev, relaxed_ordering_write) &&
-	    !MLX5_CAP_GEN(dev->mdev, relaxed_ordering_write_umr))
-		ret |= IB_ACCESS_RELAXED_ORDERING;
-
-	if ((access_flags & IB_ACCESS_RELAXED_ORDERING) &&
-	    (MLX5_CAP_GEN(dev->mdev, relaxed_ordering_read) ||
-	     MLX5_CAP_GEN(dev->mdev, relaxed_ordering_read_pci_enabled)) &&
-	    !MLX5_CAP_GEN(dev->mdev, relaxed_ordering_read_umr))
-		ret |= IB_ACCESS_RELAXED_ORDERING;
-
-	return ret;
-}
-
 #define MLX5_FRMR_POOLS_KEY_ACCESS_MODE_KSM_MASK 1ULL
 #define MLX5_FRMR_POOLS_KEY_VENDOR_KEY_SUPPORTED \
 	MLX5_FRMR_POOLS_KEY_ACCESS_MODE_KSM_MASK
@@ -180,7 +158,7 @@ _mlx5_frmr_pool_alloc(struct mlx5_ib_dev *dev, struct ib_umem *umem,
 
 	mr->ibmr.frmr.key.ats = mlx5_umem_needs_ats(dev, umem, access_flags);
 	mr->ibmr.frmr.key.access_flags =
-		get_unchangeable_access_flags(dev, access_flags);
+		mlx5r_umr_get_unchangeable_access_flags(dev, access_flags);
 	mr->ibmr.frmr.key.num_dma_blocks =
 		ib_umem_num_dma_blocks(umem, page_size);
 	mr->ibmr.frmr.key.vendor_key =
@@ -212,7 +190,7 @@ struct mlx5_ib_mr *mlx5_mr_cache_alloc(struct mlx5_ib_dev *dev,
 {
 	struct ib_frmr_key key = {
 		.access_flags =
-			get_unchangeable_access_flags(dev, access_flags),
+			mlx5r_umr_get_unchangeable_access_flags(dev, access_flags),
 		.vendor_key = access_mode == MLX5_MKC_ACCESS_MODE_MTT ?
 				      0 :
 				      MLX5_FRMR_POOLS_KEY_ACCESS_MODE_KSM_MASK,
@@ -320,6 +298,7 @@ static int mlx5r_build_frmr_key(struct ib_device *device,
 				struct ib_frmr_key *out)
 {
 	struct mlx5_ib_dev *dev = to_mdev(device);
+	int err;
 
 	/* check HW capabilities of users requested frmr key */
 	if ((in->ats && !MLX5_CAP_GEN(dev->mdev, ats)) ||
@@ -329,9 +308,13 @@ static int mlx5r_build_frmr_key(struct ib_device *device,
 	if (in->vendor_key & ~MLX5_FRMR_POOLS_KEY_VENDOR_KEY_SUPPORTED)
 		return -EOPNOTSUPP;
 
+	err = validate_ordering_access(dev, in->access_flags);
+	if (err)
+		return err;
+
 	out->ats = in->ats;
 	out->access_flags =
-		get_unchangeable_access_flags(dev, in->access_flags);
+		mlx5r_umr_get_unchangeable_access_flags(dev, in->access_flags);
 	out->vendor_key = in->vendor_key;
 	out->num_dma_blocks = in->num_dma_blocks;
 
@@ -705,8 +688,13 @@ struct ib_mr *mlx5_ib_reg_dm_mr(struct ib_pd *pd, struct ib_dm *dm,
 {
 	struct mlx5_ib_dm *mdm = to_mdm(dm);
 	struct mlx5_core_dev *dev = to_mdev(dm->device)->mdev;
+	struct mlx5_ib_dev *ib_dev = to_mdev(dm->device);
 	u64 start_addr = mdm->dev_addr + attr->offset;
-	int mode;
+	int mode, err;
+
+	err = validate_ordering_access(ib_dev, attr->access_flags);
+	if (err)
+		return ERR_PTR(err);
 
 	switch (mdm->type) {
 	case MLX5_IB_UAPI_DM_TYPE_MEMIC:
@@ -868,6 +856,10 @@ struct ib_mr *mlx5_ib_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 
 	mlx5_ib_dbg(dev, "start 0x%llx, iova 0x%llx, length 0x%llx, access_flags 0x%x\n",
 		    start, iova, length, access_flags);
+
+	err = validate_ordering_access(dev, access_flags);
+	if (err)
+		return ERR_PTR(err);
 
 	err = mlx5r_umr_resource_init(dev);
 	if (err)
@@ -1060,6 +1052,10 @@ struct ib_mr *mlx5_ib_reg_user_mr_dmabuf(struct ib_pd *pd, u64 offset,
 		    "offset 0x%llx, virt_addr 0x%llx, length 0x%llx, fd %d, access_flags 0x%x, mlx5_access_flags 0x%x\n",
 		    offset, virt_addr, length, fd, access_flags, mlx5_access_flags);
 
+	err = validate_ordering_access(dev, access_flags);
+	if (err)
+		return ERR_PTR(err);
+
 	/* dmabuf requires xlt update via umr to work. */
 	if (!mlx5r_umr_can_load_pas(dev, length))
 		return ERR_PTR(-EINVAL);
@@ -1192,6 +1188,10 @@ struct ib_mr *mlx5_ib_rereg_user_mr(struct ib_mr *ib_mr, int flags, u64 start,
 		new_access_flags = mr->access_flags;
 	if (!(flags & IB_MR_REREG_PD))
 		new_pd = ib_mr->pd;
+
+	err = validate_ordering_access(dev, new_access_flags);
+	if (err)
+		return ERR_PTR(err);
 
 	if (mr->is_odp_implicit && !(flags & IB_MR_REREG_TRANS)) {
 		if (!(new_access_flags & IB_ACCESS_ON_DEMAND))

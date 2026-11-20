@@ -579,6 +579,7 @@ enum ionic_lif_rdma_alloc_qid {
  *	@rdma.rsvd2:           Reserved byte(s)
  *	@rdma.alloc_qid_cap:   RDMA queue type QID allocation capability
  *	                       (bitmask of enum ionic_lif_rdma_alloc_qid)
+ *	@rdma.cap:             Generic capability bits
  *	@rdma.rsvd1:           Reserved byte(s)
  * @words:               word access to struct contents
  */
@@ -629,7 +630,8 @@ union ionic_lif_identity {
 			struct ionic_lif_logical_qtype srq_qtype;
 			u8 rsvd2[5];
 			u8 alloc_qid_cap;
-			u8 rsvd1[142];
+			__le64 cap;
+			u8 rsvd1[134];
 		} __packed rdma;
 	} __packed;
 	__le32 words[478];

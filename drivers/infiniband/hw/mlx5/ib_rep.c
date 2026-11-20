@@ -71,8 +71,12 @@ static int mlx5_ib_set_owner_transport(struct mlx5_core_dev *cur_owner,
 {
 	int ret;
 
-	if (!MLX5_CAP_FLOWTABLE_RDMA_TRANSPORT_TX(cur_owner, ft_support) ||
-	    !MLX5_CAP_FLOWTABLE_RDMA_TRANSPORT_RX(cur_owner, ft_support))
+	/* Each of these three domains is independently capable; only bail
+	 * out early if cur_owner supports none of them.
+	 */
+	if (!MLX5_CAP_FLOWTABLE_RDMA_TRANSPORT_TX(cur_owner, ft_support) &&
+	    !MLX5_CAP_FLOWTABLE_RDMA_TRANSPORT_RX(cur_owner, ft_support) &&
+	    !MLX5_CAP_FLOWTABLE_NIC_RX_CLASS(cur_owner, ft_support))
 		return 0;
 
 	if (!MLX5_CAP_ADV_RDMA(new_owner, rdma_transport_manager) ||
@@ -86,13 +90,20 @@ static int mlx5_ib_set_owner_transport(struct mlx5_core_dev *cur_owner,
 
 	ret = mlx5_fs_set_root_dev(cur_owner, new_owner,
 				   FS_FT_RDMA_TRANSPORT_RX);
-	if (ret) {
-		mlx5_fs_set_root_dev(cur_owner, cur_owner,
-				     FS_FT_RDMA_TRANSPORT_TX);
-		return ret;
-	}
+	if (ret)
+		goto err_rx;
+
+	ret = mlx5_fs_set_root_dev(cur_owner, new_owner, FS_FT_NIC_RX_CLASS);
+	if (ret)
+		goto err_nic_rx_class;
 
 	return 0;
+
+err_nic_rx_class:
+	mlx5_fs_set_root_dev(cur_owner, cur_owner, FS_FT_RDMA_TRANSPORT_RX);
+err_rx:
+	mlx5_fs_set_root_dev(cur_owner, cur_owner, FS_FT_RDMA_TRANSPORT_TX);
+	return ret;
 }
 
 static void mlx5_ib_release_transport(struct mlx5_core_dev *dev)
