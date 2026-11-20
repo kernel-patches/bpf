@@ -17639,6 +17639,8 @@ static int maybe_fork_scalars(struct bpf_verifier_env *env, struct bpf_insn *ins
 		__mark_reg_known(reg, 0);
 		__mark_reg_known(dst_reg, -1ull);
 	}
+	bpf_equations_fork(env, branch, scalar_of(reg));
+	bpf_equations_fork(env, env->cur_state, scalar_of(dst_reg));
 	/*
 	 * The insn is done with in the branch too, and what gets to the next insn is a state
 	 * like any other. At this insn the branch is a part of the state that is looked at:
