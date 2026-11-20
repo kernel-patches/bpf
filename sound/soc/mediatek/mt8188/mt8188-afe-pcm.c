@@ -3302,11 +3302,6 @@ static int mt8188_afe_pcm_dev_probe(struct platform_device *pdev)
 	if (irq_id < 0)
 		return irq_id;
 
-	ret = devm_request_irq(dev, irq_id, mt8188_afe_irq_handler,
-			       IRQF_TRIGGER_NONE, "asys-isr", (void *)afe);
-	if (ret)
-		return ret;
-
 	/* init sub_dais */
 	INIT_LIST_HEAD(&afe->sub_dais);
 
@@ -3357,6 +3352,11 @@ static int mt8188_afe_pcm_dev_probe(struct platform_device *pdev)
 		dev_info(dev, "Failed to apply cg patch\n");
 		goto err_pm_put;
 	}
+
+	ret = devm_request_irq(dev, irq_id, mt8188_afe_irq_handler,
+			       IRQF_TRIGGER_NONE, "asys-isr", afe);
+	if (ret)
+		goto err_pm_put;
 
 	/* register component */
 	ret = devm_snd_soc_register_component(dev, &mtk_afe_pcm_platform,
