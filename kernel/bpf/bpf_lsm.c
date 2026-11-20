@@ -480,13 +480,10 @@ bool bpf_lsm_hook_returns_errno(u32 btf_id)
 	return true;
 }
 
-int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
-			     struct bpf_retval_range *retval_range)
+/* Callers must skip void hooks, which have no return value range. */
+void bpf_lsm_get_retval_range(const struct bpf_prog *prog,
+			      struct bpf_retval_range *retval_range)
 {
-	/* no return value range for void hooks */
-	if (!prog->aux->attach_func_proto->type)
-		return -EINVAL;
-
 	if (btf_id_set_contains(&bool_lsm_hooks, prog->aux->attach_btf_id)) {
 		retval_range->minval = 0;
 		retval_range->maxval = 1;
@@ -499,5 +496,4 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 		retval_range->minval = -MAX_ERRNO;
 		retval_range->maxval = 0;
 	}
-	return 0;
 }
