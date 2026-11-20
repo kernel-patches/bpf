@@ -752,11 +752,19 @@ static int cmp_instances(const void *pa, const void *pb)
 /* OR the 8-byte slots touched by a half-slot (4-byte) mask into @slots. */
 static void half_spis_to_slots(unsigned long *slots, const unsigned long *mask, u32 nbits)
 {
-	u32 slot;
+	unsigned long x;
+	u32 i;
 
-	for (slot = 0; slot < MAX_BPF_STACK_SLOTS && slot * 2 + 1 < nbits; slot++)
-		if (test_bit(slot * 2, mask) || test_bit(slot * 2 + 1, mask))
-			__set_bit(slot, slots);
+	nbits = min(nbits, FRAME_HALF_SPIS);
+	for (i = 0; i < nbits; i += 32) {
+		x = bitmap_read(mask, i, min(nbits - i, 32));
+		x = (x | x >> 1) & 0x55555555;
+		x = (x | x >> 1) & 0x33333333;
+		x = (x | x >> 2) & 0x0f0f0f0f;
+		x = (x | x >> 4) & 0x00ff00ff;
+		x = (x | x >> 8) & 0x0000ffff;
+		slots[BIT_WORD(i / 2)] |= x << (i / 2 % BITS_PER_LONG);
+	}
 }
 
 /*
@@ -858,7 +866,7 @@ static int print_instances(struct bpf_verifier_env *env)
 struct arg_track {
 	union {
 		s16 off[MAX_ARG_OFFSETS]; /* byte offsets; off_cnt says how many */
-		u32 mask;	/* arg bitmask when arg == ARG_IMPRECISE */
+		u64 mask;	/* arg bitmask if ARG_IMPRECISE. As wide as off[] for memcmp() */
 	};
 	s8 frame;	/* absolute frame index, or enum arg_track_state */
 	s8 off_cnt;	/* 0 = offset-imprecise, 1-4 = # of precise offsets */
@@ -912,7 +920,7 @@ static void verbose_arg_track(struct bpf_verifier_env *env, struct arg_track *at
 	switch (at->frame) {
 	case ARG_NONE:      verbose(env, "_");                          break;
 	case ARG_UNVISITED: verbose(env, "?");                          break;
-	case ARG_IMPRECISE: verbose(env, "IMP%x", at->mask);            break;
+	case ARG_IMPRECISE: verbose(env, "IMP%llx", at->mask);          break;
 	default:
 		/* frame >= 0: absolute frame index */
 		if (at->off_cnt == 0) {
@@ -1103,9 +1111,18 @@ static bool arg_track_join_all(struct bpf_verifier_env *env, int idx, int target
 	bool changed = false;
 	int r;
 
+	if (!arg_is_visited(&in[BPF_REG_FP])) {
+		memcpy(in, out, MAX_AT_TRACK_REGS * sizeof(*in));
+		memcpy(stack_in, stack_out, nslots * sizeof(*stack_in));
+		return true;
+	}
 	for (r = 0; r < MAX_AT_TRACK_REGS; r++)
 		changed |= arg_track_join(env, idx, target, r, &in[r], out[r]);
-	for (r = 0; r < nslots; r++)
+	same = !memcmp(stack_in, stack_out, nslots * sizeof(*stack_in));
+	/* a change pays for the next visit of @target too */
+	bpf_add_cost(env, MAX_AT_TRACK_REGS + nslots,
+		     same && !changed ? BPF_COST_COPY : BPF_COST_XREG);
+	for (r = 0; r < nslots && !same; r++)
 		changed |= arg_track_join(env, idx, target, -r - 1, &stack_in[r], stack_out[r]);
 	return changed;
 }
@@ -2078,8 +2095,8 @@ static noinline_for_stack int compute_subprog_args(struct bpf_verifier_env *env,
 	struct arg_track at_stack_arg_entry[MAX_STACK_ARG_SLOTS];
 	struct arg_track unvisited = { .frame = ARG_UNVISITED };
 	struct arg_track none = { .frame = ARG_NONE };
-	bool changed;
 	int i, p, r, err = -ENOMEM;
+	unsigned long *changed = NULL;
 
 	at_in = kvmalloc_objs(*at_in, len, BPF_VERIFIER_GFP);
 	if (!at_in)
@@ -2090,7 +2107,8 @@ static noinline_for_stack int compute_subprog_args(struct bpf_verifier_env *env,
 		goto err_free;
 
 	at_stack_out = kvmalloc_objs(*at_stack_out, nslots, BPF_VERIFIER_GFP);
-	if (!at_stack_out)
+	changed = kvcalloc(BITS_TO_LONGS(len), sizeof(long), BPF_VERIFIER_GFP);
+	if (!at_stack_out || !changed)
 		goto err_free;
 
 	for (i = 0; i < len; i++) {
@@ -2123,9 +2141,9 @@ static noinline_for_stack int compute_subprog_args(struct bpf_verifier_env *env,
 	if (env->log.level & BPF_LOG_LEVEL2)
 		verbose(env, "subprog#%d: analyzing (depth %d)...\n", subprog, depth);
 
-	/* Forward fixed-point iteration in reverse post order */
+	/* Forward fixed-point iteration in reverse post order, over insns whose input changed */
+	__set_bit(0, changed);
 redo:
-	changed = false;
 	for (p = po_end - 1; p >= po_start; p--) {
 		int idx = env->cfg.insn_postorder[p];
 		int i = idx - start;
@@ -2136,17 +2154,17 @@ redo:
 		err = -EINTR;
 		if (bpf_must_abort())
 			goto err_free;
-		if (!arg_is_visited(&at_in[i][0]) && !arg_is_visited(&at_in[i][1]))
+		if (!__test_and_clear_bit(i, changed))
 			continue;
 
 		memcpy(at_out, at_in[i], sizeof(at_out));
 		memcpy(at_stack_out, &at_stack_in[(size_t)i * nslots], nslots * sizeof(*at_stack_out));
 
 		ti = bpf_head_guard_target(env, idx) - start;
-		if (ti >= 0)
-			changed |= arg_track_join_all(env, idx, start + ti, at_in[ti],
-						      &at_stack_in[(size_t)ti * nslots],
-						      at_out, at_stack_out, nslots);
+		if (ti >= 0 && arg_track_join_all(env, idx, start + ti, at_in[ti],
+						  &at_stack_in[(size_t)ti * nslots],
+						  at_out, at_stack_out, nslots))
+			__set_bit(ti, changed);
 
 		arg_track_xfer(env, insn, idx, at_out, at_stack_out, nslots,
 			       at_stack_arg_entry, instance, callsites);
@@ -2162,12 +2180,13 @@ redo:
 			if (target < start || target >= end)
 				continue;
 			ti = target - start;
-			changed |= arg_track_join_all(env, idx, target, at_in[ti],
-						      &at_stack_in[(size_t)ti * nslots],
-						      at_out, at_stack_out, nslots);
+			if (arg_track_join_all(env, idx, target, at_in[ti],
+					       &at_stack_in[(size_t)ti * nslots],
+					       at_out, at_stack_out, nslots))
+				__set_bit(ti, changed);
 		}
 	}
-	if (changed)
+	if (!bitmap_empty(changed, len))
 		goto redo;
 
 	/* Record memory accesses using converged at_in (RPO skips dead code) */
@@ -2210,6 +2229,7 @@ redo:
 	err = 0;
 
 err_free:
+	kvfree(changed);
 	kvfree(at_stack_out);
 	kvfree(at_stack_in);
 	kvfree(at_in);
