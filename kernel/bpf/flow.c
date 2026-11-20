@@ -16,6 +16,7 @@ struct flow_kept {
 struct bpf_flow {
 	/* computed once */
 	u32 *pos;			/* place of the insn in the order */
+	s32 *insn_after;		/* the next insn in the order, or -1 */
 };
 
 /*
@@ -32,7 +33,7 @@ struct bpf_flow {
 static int flow_compute_order(struct bpf_verifier_env *env, struct bpf_flow *flow)
 {
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	int len = env->prog->len, i, s, n, h, top, depth;
+	int len = env->prog->len, i, s, n, h, top, depth, prev = -1;
 	int *next, *head, *tail, *stack;
 	unsigned long *linked;
 	u32 pos = 0;
@@ -82,6 +83,10 @@ static int flow_compute_order(struct bpf_verifier_env *env, struct bpf_flow *flo
 				continue;
 			}
 			flow->pos[n] = pos++;
+			flow->insn_after[n] = -1;
+			if (prev >= 0)
+				flow->insn_after[prev] = n;
+			prev = n;
 			if (aux[n].loop && head[n] >= 0) {
 				stack[depth++] = n;
 				n = head[n];
@@ -98,6 +103,11 @@ out:
 	kvfree(stack);
 	kvfree(linked);
 	return err;
+}
+
+int bpf_flow_insn_after(struct bpf_verifier_env *env, int idx)
+{
+	return env->flow->insn_after[idx];
 }
 
 /* Does the insn at @idx stop the loop @h? */
