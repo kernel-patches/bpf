@@ -481,25 +481,25 @@ static int pca963x_register_leds(struct i2c_client *client,
 static int pca963x_suspend(struct device *dev)
 {
 	struct pca963x *chip = dev_get_drvdata(dev);
-	u8 reg;
+	int reg;
 
 	reg = i2c_smbus_read_byte_data(chip->client, PCA963X_MODE1);
+	if (reg < 0)
+		return reg;
 	reg = reg | BIT(PCA963X_MODE1_SLEEP);
-	i2c_smbus_write_byte_data(chip->client, PCA963X_MODE1, reg);
-
-	return 0;
+	return i2c_smbus_write_byte_data(chip->client, PCA963X_MODE1, reg);
 }
 
 static int pca963x_resume(struct device *dev)
 {
 	struct pca963x *chip = dev_get_drvdata(dev);
-	u8 reg;
+	int reg;
 
 	reg = i2c_smbus_read_byte_data(chip->client, PCA963X_MODE1);
+	if (reg < 0)
+		return reg;
 	reg = reg & ~BIT(PCA963X_MODE1_SLEEP);
-	i2c_smbus_write_byte_data(chip->client, PCA963X_MODE1, reg);
-
-	return 0;
+	return i2c_smbus_write_byte_data(chip->client, PCA963X_MODE1, reg);
 }
 
 static DEFINE_SIMPLE_DEV_PM_OPS(pca963x_pm, pca963x_suspend, pca963x_resume);
