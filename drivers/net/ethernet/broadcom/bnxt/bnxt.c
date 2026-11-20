@@ -392,9 +392,18 @@ static void __bnxt_queue_sp_work(struct bnxt *bp)
 		schedule_work(&bp->sp_task);
 }
 
+static void bnxt_set_sp_event(struct bnxt *bp, unsigned int event)
+{
+	/* Make the data the event carries visible before the event bit,
+	 * pairs with test_and_clear_bit() in bnxt_sp_task().
+	 */
+	smp_mb__before_atomic();
+	set_bit(event, &bp->sp_event);
+}
+
 static void bnxt_queue_sp_work(struct bnxt *bp, unsigned int event)
 {
-	set_bit(event, &bp->sp_event);
+	bnxt_set_sp_event(bp, event);
 	__bnxt_queue_sp_work(bp);
 }
 
@@ -403,9 +412,9 @@ static void bnxt_sched_reset_rxr(struct bnxt *bp, struct bnxt_rx_ring_info *rxr)
 	if (!rxr->bnapi->in_reset) {
 		rxr->bnapi->in_reset = true;
 		if (bp->flags & BNXT_FLAG_CHIP_P5_PLUS)
-			set_bit(BNXT_RESET_TASK_SP_EVENT, &bp->sp_event);
+			bnxt_set_sp_event(bp, BNXT_RESET_TASK_SP_EVENT);
 		else
-			set_bit(BNXT_RST_RING_SP_EVENT, &bp->sp_event);
+			bnxt_set_sp_event(bp, BNXT_RST_RING_SP_EVENT);
 		__bnxt_queue_sp_work(bp);
 	}
 	rxr->rx_next_cons = 0xffff;
@@ -2831,7 +2840,7 @@ static bool bnxt_event_error_report(struct bnxt *bp, u32 data1, u32 data2)
 			    BNXT_EVENT_THERMAL_THRESHOLD_TEMP(data2));
 		if (notify) {
 			bp->thermal_threshold_type = type;
-			set_bit(BNXT_THERMAL_THRESHOLD_SP_EVENT, &bp->sp_event);
+			bnxt_set_sp_event(bp, BNXT_THERMAL_THRESHOLD_SP_EVENT);
 			return true;
 		}
 		return false;
@@ -2897,18 +2906,18 @@ static int bnxt_async_event_process(struct bnxt *bp,
 				netdev_warn(bp->dev, "Link speed %d no longer supported\n",
 					    speed);
 		}
-		set_bit(BNXT_LINK_SPEED_CHNG_SP_EVENT, &bp->sp_event);
+		bnxt_set_sp_event(bp, BNXT_LINK_SPEED_CHNG_SP_EVENT);
 	}
 		fallthrough;
 	case ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CHANGE:
 	case ASYNC_EVENT_CMPL_EVENT_ID_PORT_PHY_CFG_CHANGE:
-		set_bit(BNXT_LINK_CFG_CHANGE_SP_EVENT, &bp->sp_event);
+		bnxt_set_sp_event(bp, BNXT_LINK_CFG_CHANGE_SP_EVENT);
 		fallthrough;
 	case ASYNC_EVENT_CMPL_EVENT_ID_LINK_STATUS_CHANGE:
-		set_bit(BNXT_LINK_CHNG_SP_EVENT, &bp->sp_event);
+		bnxt_set_sp_event(bp, BNXT_LINK_CHNG_SP_EVENT);
 		break;
 	case ASYNC_EVENT_CMPL_EVENT_ID_PF_DRVR_UNLOAD:
-		set_bit(BNXT_HWRM_PF_UNLOAD_SP_EVENT, &bp->sp_event);
+		bnxt_set_sp_event(bp, BNXT_HWRM_PF_UNLOAD_SP_EVENT);
 		break;
 	case ASYNC_EVENT_CMPL_EVENT_ID_PORT_CONN_NOT_ALLOWED: {
 		u16 port_id = BNXT_GET_EVENT_PORT(data1);
@@ -2919,13 +2928,13 @@ static int bnxt_async_event_process(struct bnxt *bp,
 		if (bp->pf.port_id != port_id)
 			break;
 
-		set_bit(BNXT_HWRM_PORT_MODULE_SP_EVENT, &bp->sp_event);
+		bnxt_set_sp_event(bp, BNXT_HWRM_PORT_MODULE_SP_EVENT);
 		break;
 	}
 	case ASYNC_EVENT_CMPL_EVENT_ID_VF_CFG_CHANGE:
 		if (BNXT_PF(bp))
 			goto async_event_process_exit;
-		set_bit(BNXT_RESET_TASK_SILENT_SP_EVENT, &bp->sp_event);
+		bnxt_set_sp_event(bp, BNXT_RESET_TASK_SILENT_SP_EVENT);
 		break;
 	case ASYNC_EVENT_CMPL_EVENT_ID_RESET_NOTIFY: {
 		char *type_str = "Solicited";
@@ -2957,7 +2966,7 @@ static int bnxt_async_event_process(struct bnxt *bp,
 			   type_str, data1, data2,
 			   bp->fw_reset_min_dsecs * 100,
 			   bp->fw_reset_max_dsecs * 100);
-		set_bit(BNXT_FW_RESET_NOTIFY_SP_EVENT, &bp->sp_event);
+		bnxt_set_sp_event(bp, BNXT_FW_RESET_NOTIFY_SP_EVENT);
 		break;
 	}
 	case ASYNC_EVENT_CMPL_EVENT_ID_ERROR_RECOVERY: {
@@ -3035,7 +3044,7 @@ static int bnxt_async_event_process(struct bnxt *bp,
 		if (fw_health) {
 			fw_health->echo_req_data1 = data1;
 			fw_health->echo_req_data2 = data2;
-			set_bit(BNXT_FW_ECHO_REQUEST_SP_EVENT, &bp->sp_event);
+			bnxt_set_sp_event(bp, BNXT_FW_ECHO_REQUEST_SP_EVENT);
 			break;
 		}
 		goto async_event_process_exit;
