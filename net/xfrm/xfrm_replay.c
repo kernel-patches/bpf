@@ -451,6 +451,7 @@ static int xfrm_replay_overflow_esn(struct xfrm_state *x, struct sk_buff *skb)
 static int xfrm_replay_check_esn(struct xfrm_state *x,
 				 struct sk_buff *skb, __be32 net_seq)
 {
+	struct xfrm_offload *xo = xfrm_offload(skb);
 	unsigned int bitnr, nr;
 	u32 diff;
 	struct xfrm_replay_state_esn *replay_esn = x->replay_esn;
@@ -469,7 +470,18 @@ static int xfrm_replay_check_esn(struct xfrm_state *x,
 
 	diff = top - seq;
 
-	if (likely(top >= wsize - 1)) {
+	if (xo && (xo->flags & CRYPTO_DONE)) {
+		/* The ICV was already verified by HW with its own seq_hi,
+		 * so the seq_hi guessed by xfrm_replay_seqhi() can't
+		 * be validated in SW.
+		 *
+		 * Treat seq up to 2^31 ahead of top as new, everything else as
+		 * behind: in-window ones go through the bitmap, the rest get
+		 * dropped.
+		 */
+		if (likely(diff >= BIT(31)))
+			return 0;
+	} else if (likely(top >= wsize - 1)) {
 		/* A. same subspace */
 		if (likely(seq > top) || seq < bottom)
 			return 0;

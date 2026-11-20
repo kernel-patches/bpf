@@ -1110,6 +1110,7 @@ enum {
 	IP6_FH_F_FRAG		= (1 << 0),
 	IP6_FH_F_AUTH		= (1 << 1),
 	IP6_FH_F_SKIP_RH	= (1 << 2),
+	IP6_FH_F_NON_ATOMIC	= (1 << 3),
 };
 
 /* find specified header and get offset to it */
