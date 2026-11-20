@@ -285,6 +285,11 @@ static int ktd202x_blink_set(struct ktd202x_led *led, unsigned long *delay_on,
 		int channel = subleds[i].channel;
 
 		ctrl_mask |= KTD202X_CHANNEL_CTRL_MASK(channel);
+
+		/* A color with no brightness stays off */
+		if (!subleds[i].brightness)
+			continue;
+
 		ctrl_on |= KTD202X_CHANNEL_CTRL_ON(channel);
 		ctrl_pwm1 |= KTD202X_CHANNEL_CTRL_PWM1(channel);
 	}
@@ -360,6 +365,7 @@ static int ktd202x_blink_single_set(struct led_classdev *cdev,
 	if (!*delay_on)
 		return ktd202x_brightness_single_set(cdev, LED_OFF);
 
+	info.brightness = cdev->brightness;
 	info.channel = led->index;
 
 	return ktd202x_blink_set(led, delay_on, delay_off, &info, 1);
