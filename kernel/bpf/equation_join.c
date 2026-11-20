@@ -574,9 +574,11 @@ void bpf_note_linear_xregs(struct bpf_verifier_env *env, const struct bpf_verifi
 	const struct bpf_xreg_equation *old_trip =
 		bpf_find_xreg_equation(&dst->equations, trip_xreg), *xreg_eq, *new;
 	const struct bpf_xreg_equation *new_trip = bpf_find_xreg_equation(join, trip_xreg);
+	struct bpf_loop *loop;
 
 	if (!f->loop_stack_cnt || !old_trip || !new_trip)
 		return;
+	loop = bpf_top_loop(f)->loop;
 	for_each_xreg_equation(env, &dst->equations, xreg_eq) {
 		if (xreg_eq->sym != old_trip->sym || xreg_eq->xreg >> 32 != dst->curframe ||
 		    (u32)xreg_eq->xreg >= BPF_XREG_TRIP)
@@ -587,6 +589,36 @@ void bpf_note_linear_xregs(struct bpf_verifier_env *env, const struct bpf_verifi
 		else if (!__test_and_set_bit((u32)xreg_eq->xreg, loop->linear_xregs))
 			env->new_linear_xreg = true;
 	}
+}
+
+/* An xreg of @data_deps and an xreg of @xregs in frame @fr have one sym in @a and not in @b */
+bool bpf_equations_join_forgets(struct bpf_verifier_env *env, const struct bpf_verifier_state *a,
+				const struct bpf_verifier_state *b, u32 fr,
+				const unsigned long *data_deps, const unsigned long *xregs,
+				u32 bits)
+{
+	const struct bpf_xreg_equation *xreg_eq;
+	struct sym_scratch *sym;
+	struct expr expr;
+	bool is_ptr;
+
+	for_each_xreg_equation(env, &a->equations, xreg_eq)
+		env->eq_env->scratch[xreg_eq->sym] = (struct sym_scratch){};
+	for_each_xreg_equation(env, &a->equations, xreg_eq) {
+		if (xreg_eq->xreg >> 32 != fr || (u32)xreg_eq->xreg >= bits ||
+		    !test_bit((u32)xreg_eq->xreg, xregs))
+			continue;
+		sym = &env->eq_env->scratch[xreg_eq->sym];
+		if (bpf_xreg_expr(env, b, xreg_eq->xreg, &expr, &is_ptr)) {
+			sym->forgotten |= sym->determined && expr.var != sym->cur_expr.var;
+			sym->determined = true;
+			sym->cur_expr = expr;
+		}
+		sym->in_data_deps |= test_bit((u32)xreg_eq->xreg, data_deps);
+		if (sym->forgotten && sym->in_data_deps)
+			return true;
+	}
+	return false;
 }
 
 /* Thresholds */
