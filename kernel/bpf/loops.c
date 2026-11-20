@@ -88,9 +88,11 @@ static int idoms_intersect(struct bpf_verifier_env *env, int a, int b)
 	while (a != b) {
 		while (postorder_nums[a] < postorder_nums[b]) {
 			a = idoms[a];
+			bpf_add_cost(env, 1, BPF_COST_SCAN);
 		}
 		while (postorder_nums[b] < postorder_nums[a]) {
 			b = idoms[b];
+			bpf_add_cost(env, 1, BPF_COST_SCAN);
 		}
 	}
 	return a;
@@ -248,6 +250,7 @@ static int mark_as_header(struct bpf_verifier_env *env, int h)
 		aux[h].loop = kvzalloc_obj(struct bpf_loop, BPF_VERIFIER_GFP);
 		if (!aux[h].loop)
 			return -ENOMEM;
+		env->mem += sizeof(struct bpf_loop);
 	}
 	return 0;
 }
@@ -268,6 +271,7 @@ static int assign_header(struct bpf_verifier_env *env, struct loops_dfs *dfs, in
 
 	/* Make sure that loop headers up the chain are sorted by dfs_pos. */
 	while (aux[n].loop_header != -1) {
+		bpf_add_cost(env, 1, BPF_COST_SCAN);
 		nh = aux[n].loop_header;
 		if (nh == h)
 			return 0;
@@ -288,6 +292,20 @@ int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx)
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 
 	return aux[idx].loop ? idx : aux[idx].loop_header;
+}
+
+static int check_loop_depth(struct bpf_verifier_env *env, int idx)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	int h, depth = 0;
+
+	for (h = bpf_loop_at_index(env, idx); h >= 0; h = aux[h].loop_header) {
+		if (++depth <= LOOP_STACK_SIZE)
+			continue;
+		bpf_log(&env->log, "Too many nested loops at %d\n", idx);
+		return -E2BIG;
+	}
+	return 0;
 }
 
 /*
@@ -331,8 +349,9 @@ static int compute_loops_in_subprog(struct bpf_verifier_env *env, struct loops_d
 	dfs_pos[start] = 1;
 	stack_sz = 1;
 	do {
-		if (bpf_must_abort())
-			return -EINTR;
+		err = bpf_add_cost_and_check(env, 1, BPF_COST_XREG);
+		if (err)
+			return err;
 
 		cur = stack[stack_sz - 1];
 		succ = bpf_insn_successors(env, cur);
@@ -351,6 +370,10 @@ static int compute_loops_in_subprog(struct bpf_verifier_env *env, struct loops_d
 			stack_sz++;
 			continue;
 		}
+		/* A nest only grows. The cases below walk up the nests of both insns. */
+		err = check_loop_depth(env, cur) ?: check_loop_depth(env, s);
+		if (err)
+			return err;
 		/* 's' is fully explored at this point */
 		if (dfs_pos[s]) {
 			/*
@@ -414,9 +437,11 @@ bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int oute
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	int idx;
 
-	for (idx = inner_header; idx >= 0; idx = aux[idx].loop_header)
+	for (idx = inner_header; idx >= 0; idx = aux[idx].loop_header) {
+		bpf_add_cost(env, 1, BPF_COST_SCAN);
 		if (aux[idx].loop_header == outer_header)
 			return true;
+	}
 
 	return false;
 }
@@ -464,11 +489,19 @@ int bpf_compute_loops(struct bpf_verifier_env *env)
 			goto out;
 	}
 	for (i = 0; i < len; i++) {
+		err = check_loop_depth(env, i);
+		if (err)
+			goto out;
+	}
+	for (i = 0; i < len; i++) {
 		loop = aux[i].loop;
 		if (!loop)
 			continue;
 		loop->exit_to = -1;
 		for (j = 0; j < loop->backedges_cnt; j++) {
+			err = bpf_check_limits(env);
+			if (err)
+				goto out;
 			loop->backedges[j].latch = find_latch(env, i, loop->backedges[j].from);
 		}
 	}
@@ -477,6 +510,9 @@ int bpf_compute_loops(struct bpf_verifier_env *env)
 		iloop = aux[i].loop ? i : aux[i].loop_header;
 		if (iloop < 0)
 			continue;
+		err = bpf_check_limits(env);
+		if (err)
+			goto out;
 		succ = bpf_insn_successors(env, i);
 		iarray_for_each(s, succ) {
 			sloop = bpf_loop_at_index(env, s);
