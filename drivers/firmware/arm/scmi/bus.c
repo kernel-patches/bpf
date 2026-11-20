@@ -218,6 +218,9 @@ static int scmi_protocol_table_register(const struct scmi_device_id *id_table)
 	const struct scmi_device_id *entry;
 	int ret;
 
+	if (!id_table)
+		return -ENOENT;
+
 	for (entry = id_table; entry->name[0]; entry++) {
 		/* Skip standard devices as they are created unconditionally */
 		if (scmi_device_id_in_std_id_table(entry))
@@ -244,6 +247,9 @@ static void
 scmi_protocol_table_unregister(const struct scmi_device_id *id_table)
 {
 	const struct scmi_device_id *entry;
+
+	if (!id_table)
+		return;
 
 	for (entry = id_table; entry->name[0]; entry++) {
 		if (!scmi_device_id_in_std_id_table(entry))
