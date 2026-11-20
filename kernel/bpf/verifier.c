@@ -4299,7 +4299,7 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 		return err;
 
 	/* Track the max outgoing stack arg slot count. */
-	if (spi + 1 > subprog->max_out_stack_arg_cnt)
+	if (spi + 1 > subprog->max_out_stack_arg_cnt && !env->cur_state->speculative)
 		subprog->max_out_stack_arg_cnt = spi + 1;
 
 	arg = &state->stack_arg_regs[spi];
@@ -11111,6 +11111,9 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 			state->curframe + 2);
 		return -E2BIG;
 	}
+	/* in the frames of the callers it has no end */
+	if (state->speculative && env->subprog_info[subprog].recursive)
+		return -EACCES;
 
 	if (state->frame[state->curframe + 1]) {
 		verifier_bug(env, "Frame %d already allocated", state->curframe + 1);
@@ -11317,6 +11320,8 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	if (bpf_is_async_callback_calling_insn(insn)) {
 		struct bpf_verifier_state *async_cb;
 
+		if (state->speculative)
+			return 0;
 		/* there is no real recursion here. timer and workqueue callbacks are async */
 		env->subprog_info[subprog].is_async_cb = true;
 		async_cb = push_async_cb(env, env->subprog_info[subprog].start,
@@ -12278,6 +12283,9 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 		state->unwound = true;
 	}
 	if (callee->in_callback_fn) {
+		/* the helper continues after the barrier of its call */
+		if (state->speculative)
+			return -EACCES;
 		if (r0->type != SCALAR_VALUE) {
 			verbose(env, "R0 not a scalar value\n");
 			return -EACCES;
@@ -16122,14 +16130,6 @@ static bool check_reg_sane_offset_scalar(struct bpf_verifier_env *env,
 	return true;
 }
 
-enum {
-	REASON_BOUNDS	= -1,
-	REASON_TYPE	= -2,
-	REASON_PATHS	= -3,
-	REASON_LIMIT	= -4,
-	REASON_STACK	= -5,
-};
-
 /*
  * A far pointer is no error: a state with near offsets gets here, so this one does too.
  * An access through it is unproven. But a constant offset has to fit in an int.
@@ -16150,6 +16150,8 @@ void bpf_blur_far_offset(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 				      max(smax, 1 - BPF_MAX_VAR_OFF));
 	reg_bounds_sync(reg);
 }
+
+#define NO_MASK_FITS	1
 
 static int retrieve_ptr_limit(const struct bpf_verifier_env *env,
 			      const struct bpf_reg_state *ptr_reg,
@@ -16172,11 +16174,11 @@ static int retrieve_ptr_limit(const struct bpf_verifier_env *env,
 		ptr_limit = mask_to_left ? reg_smin(ptr_reg) : reg_umax(ptr_reg);
 		break;
 	default:
-		return REASON_TYPE;
+		return NO_MASK_FITS;
 	}
 
 	if (ptr_limit >= max)
-		return REASON_LIMIT;
+		return NO_MASK_FITS;
 	*alu_limit = ptr_limit;
 	return 0;
 }
@@ -16184,7 +16186,7 @@ static int retrieve_ptr_limit(const struct bpf_verifier_env *env,
 static bool can_skip_alu_sanitation(const struct bpf_verifier_env *env,
 				    const struct bpf_insn *insn)
 {
-	return env->bypass_spec_v1 ||
+	return env->bypass_spec_v1 || env->path_sensitive ||
 		BPF_SRC(insn->code) == BPF_K ||
 		cur_aux(env)->nospec;
 }
@@ -16198,7 +16200,7 @@ static int update_alu_sanitation_state(struct bpf_insn_aux_data *aux,
 	if (aux->alu_state &&
 	    (aux->alu_state != alu_state ||
 	     aux->alu_limit != alu_limit))
-		return REASON_PATHS;
+		return NO_MASK_FITS;
 
 	/* Corresponding fixup done in do_misc_fixups(). */
 	aux->alu_state = alu_state;
@@ -16225,6 +16227,7 @@ static bool sanitize_needed(u8 opcode)
 struct bpf_sanitize_info {
 	struct bpf_insn_aux_data aux;
 	bool mask_to_left;
+	u64 max_off;
 };
 
 static int sanitize_speculative_path(struct bpf_verifier_env *env,
@@ -16256,8 +16259,7 @@ static int sanitize_ptr_alu(struct bpf_verifier_env *env,
 			    const bool commit_window)
 {
 	struct bpf_insn_aux_data *aux = commit_window ? cur_aux(env) : &info->aux;
-	struct bpf_verifier_state *vstate = env->cur_state;
-	bool off_is_imm = tnum_is_const(off_reg->var_off);
+	bool off_is_imm = cnum64_is_const(off_reg->r64);
 	bool off_is_neg = reg_smin(off_reg) < 0;
 	bool ptr_is_dst_reg = ptr_reg == dst_reg;
 	u8 opcode = BPF_OP(insn->code);
@@ -16268,24 +16270,18 @@ static int sanitize_ptr_alu(struct bpf_verifier_env *env,
 	if (can_skip_alu_sanitation(env, insn))
 		return 0;
 
-	/* We already marked aux for masking from non-speculative
-	 * paths, thus we got here in the first place. We only care
-	 * to explore bad access from here.
-	 */
-	if (vstate->speculative)
-		goto do_sim;
-
 	if (!commit_window) {
-		if (!tnum_is_const(off_reg->var_off) &&
+		if (!off_is_imm &&
 		    (reg_smin(off_reg) < 0) != (reg_smax(off_reg) < 0))
-			return REASON_BOUNDS;
+			return NO_MASK_FITS;
 
+		info->max_off = off_is_neg ? -(u64)reg_smin(off_reg) : reg_umax(off_reg);
 		info->mask_to_left = (opcode == BPF_ADD &&  off_is_neg) ||
 				     (opcode == BPF_SUB && !off_is_neg);
 	}
 
 	err = retrieve_ptr_limit(env, ptr_reg, &alu_limit, info->mask_to_left);
-	if (err < 0)
+	if (err)
 		return err;
 
 	if (commit_window) {
@@ -16294,24 +16290,24 @@ static int sanitize_ptr_alu(struct bpf_verifier_env *env,
 		 */
 		alu_state = info->aux.alu_state;
 		alu_limit = abs(info->aux.alu_limit - alu_limit);
+		/*
+		 * The mask passes what was checked: it cuts no real offset and adds no other one.
+		 * It passes all smaller offsets too. The slots of the stack are not alike.
+		 * A stack pointer plus a range gets here if the step makes the sum a constant.
+		 */
+		if (alu_limit != info->max_off ||
+		    (ptr_reg->type == PTR_TO_STACK && !(alu_state & BPF_ALU_IMMEDIATE)))
+			return NO_MASK_FITS;
 	} else {
 		alu_state  = off_is_neg ? BPF_ALU_NEG_VALUE : 0;
 		alu_state |= off_is_imm ? BPF_ALU_IMMEDIATE : 0;
 		alu_state |= ptr_is_dst_reg ?
 			     BPF_ALU_SANITIZE_SRC : BPF_ALU_SANITIZE_DST;
-
-		/*
-		 * Keep states that differ in unknown scalars apart to find
-		 * potential masking differences from other program paths.
-		 */
-		if (!off_is_imm)
-			env->explore_alu_limits = true;
 	}
 
 	err = update_alu_sanitation_state(aux, alu_state, alu_limit);
-	if (err < 0)
+	if (err)
 		return err;
-do_sim:
 	/* If we're in commit phase, we're done here given we already
 	 * pushed the truncated dst_reg into the speculative verification
 	 * stack.
@@ -16338,7 +16334,7 @@ do_sim:
 	}
 	err = sanitize_speculative_path(env, NULL, env->insn_idx + 1, env->insn_idx);
 	if (err < 0)
-		return REASON_STACK;
+		return err;
 	if (!ptr_is_dst_reg)
 		*dst_reg = tmp;
 	return 0;
@@ -16357,40 +16353,38 @@ static void sanitize_mark_insn_seen(struct bpf_verifier_env *env)
 		env->insn_aux_data[env->insn_idx].seen = env->check_cnt;
 }
 
-static int sanitize_err(struct bpf_verifier_env *env, const struct bpf_insn *insn, int reason)
+/*
+ * The insn at @idx gets a barrier, and no mask. A fall-through, a jump, a call or a return to
+ * @idx runs the barrier first. So it ends a speculative state that comes that way. The other
+ * edges have their own barrier, and a speculative state does not take them:
+ *
+ *	exit of a callback --> call of the helper	barrier at the exit
+ *	may_goto --> r0 = 0; exit			see emit_unwind_exit()
+ *	return --> dead code				see bpf_opt_hard_wire_dead_code_branches()
+ */
+static void need_nospec(struct bpf_verifier_env *env, u32 idx)
 {
-	static const char *err = "pointer arithmetic with it prohibited for !root";
-	const char *op = BPF_OP(insn->code) == BPF_ADD ? "add" : "sub";
-	u32 dst = insn->dst_reg, src = insn->src_reg;
-	struct bpf_reg_state *regs = cur_regs(env);
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[idx];
+	struct bpf_insn *insn = &env->prog->insnsi[idx];
 
-	switch (reason) {
-	case REASON_BOUNDS:
-		verbose(env, "R%d has unknown scalar with mixed signed bounds, %s\n",
-			regs[src].type == SCALAR_VALUE ? src : dst, err);
-		break;
-	case REASON_TYPE:
-		verbose(env, "R%d has pointer with unsupported alu operation, %s\n",
-			regs[src].type == SCALAR_VALUE ? dst : src, err);
-		break;
-	case REASON_PATHS:
-		verbose(env, "R%d tried to %s from different maps, paths or scalars, %s\n",
-			dst, op, err);
-		break;
-	case REASON_LIMIT:
-		verbose(env, "R%d tried to %s beyond pointer bounds, %s\n",
-			dst, op, err);
-		break;
-	case REASON_STACK:
-		verbose(env, "R%d could not be pushed for speculative verification, %s\n",
-			dst, err);
-		return -ENOMEM;
-	default:
-		verifier_bug(env, "unknown reason (%d)", reason);
-		break;
+	/* nothing fits between it and the call */
+	if (bpf_is_unwind_goto(insn)) {
+		need_nospec(env, idx + 1);
+		return need_nospec(env, idx + insn->off + 1);
 	}
+	note_pessimized_insn(env, idx);
+	aux->nospec = true;
+	aux->alu_state = 0;
+}
 
-	return -EACCES;
+static int sanitize_err(struct bpf_verifier_env *env, int err)
+{
+	if (err != NO_MASK_FITS)
+		return err;
+	if (env->cur_state->speculative)
+		return -EACCES;
+	need_nospec(env, env->insn_idx);
+	return 0;
 }
 
 /* check that stack access falls within stack limits and that 'reg' doesn't
@@ -16611,10 +16605,10 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 	}
 
 	if (sanitize_needed(opcode)) {
-		ret = sanitize_ptr_alu(env, insn, ptr_reg, off_reg, dst_reg,
-				       &info, false);
-		if (ret < 0)
-			return sanitize_err(env, insn, ret);
+		ret = sanitize_err(env, sanitize_ptr_alu(env, insn, ptr_reg, off_reg, dst_reg,
+							 &info, false));
+		if (ret)
+			return ret;
 	}
 
 	/*
@@ -16755,14 +16749,12 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 		ret = sanitize_ptr_alu(env, insn, dst_reg, off_reg, dst_reg,
 				       &info, true);
 		if (verifier_bug_if(!can_skip_alu_sanitation(env, insn)
-				    && !env->cur_state->speculative
 				    && bounds_ret
 				    && !ret,
 				    env, "Pointer type unsupported by sanitize_check_bounds() not rejected by retrieve_ptr_limit() as required")) {
 			return -EFAULT;
 		}
-		if (ret < 0)
-			return sanitize_err(env, insn, ret);
+		return sanitize_err(env, ret);
 	}
 
 	return 0;
@@ -17653,9 +17645,9 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env, struct bpf_i
 	int ret;
 
 	if (sanitize_needed(opcode)) {
-		ret = sanitize_val_alu(env, insn);
-		if (ret < 0)
-			return sanitize_err(env, insn, ret);
+		ret = sanitize_err(env, sanitize_val_alu(env, insn));
+		if (ret)
+			return ret;
 	}
 
 	if ((opcode == BPF_AND || opcode == BPF_OR) && tnum_is_const(src_val.var_off)) {
@@ -20628,8 +20620,8 @@ static bool zero_is_valid_retval(struct bpf_verifier_env *env)
  * @or_exit: there is no such path. 'r0 = 0; exit' has to do where the subprog
  * cannot unwind, and the caller goes on with 0 in place of the result.
  */
-static bool budget_can_unwind(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
-			      bool or_exit)
+static bool state_can_unwind(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			     bool or_exit)
 {
 	const struct bpf_func_state *frame = st->frame[st->curframe];
 	const struct bpf_subprog_info *sub = &env->subprog_info[frame->subprogno];
@@ -20669,12 +20661,14 @@ static bool guard_reads_unset_reg(struct bpf_verifier_env *env,
  * can do that, with exit otherwise. The insns are added when the main pass is over. Until
  * then an exit that the subprog has stands for them.
  */
-static int push_budget_exit(struct bpf_verifier_env *env)
+static int push_unwind_exit(struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *sub = &env->subprog_info[cur_func(env)->subprogno];
 	struct bpf_verifier_state *branch;
 	struct bpf_reg_state *regs;
 
+	if (env->cur_state->speculative)
+		return 0;
 	branch = push_stack(env, sub->bail_insn, env->insn_idx, false);
 	if (IS_ERR(branch))
 		return PTR_ERR(branch);
@@ -20750,14 +20744,14 @@ static int check_loop_guard(struct bpf_verifier_env *env)
 		aux->guard_no_unwind = false;
 	}
 	if (!aux->guard_no_unwind &&
-	    !budget_can_unwind(env, env->cur_state, aux->guard_unset_reg)) {
+	    !state_can_unwind(env, env->cur_state, aux->guard_unset_reg)) {
 		aux->guard_no_unwind = true;
 		/* What would leave the loop from the states that were here is gone. All again. */
 		if (aux->guard_edge_dropped && loop->guarded)
 			env->guards_late = true;
 	}
 	if (!aux->guard_no_unwind) {
-		err = push_budget_exit(env);
+		err = push_unwind_exit(env);
 		if (err)
 			return err;
 		env->head->guard_edge = BPF_GUARD_LEAVES_SUBPROG;
@@ -20802,7 +20796,30 @@ static int check_recursion_guard(struct bpf_verifier_env *env)
 
 	if (!sub->recursive || env->insn_idx != sub->start)
 		return 0;
-	return push_budget_exit(env);
+	return push_unwind_exit(env);
+}
+
+static bool is_error_of_state(struct bpf_verifier_env *env, int err)
+{
+	return err != -ENOMEM && err != -EINTR && !env->over_limit && !env->bug;
+}
+
+/* An error in a speculative state is no error */
+static bool nospec_ends_path(struct bpf_verifier_env *env,
+			     const struct bpf_verifier_state *st, int err)
+{
+	return st->speculative && err < 0 && is_error_of_state(env, err);
+}
+
+static void free_pushed_states(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_stack_elem *elem;
+
+	while ((elem = env->head)) {
+		env->head = elem->next;
+		bpf_free_verifier_state(env, &elem->st, false);
+		kfree(elem);
+	}
 }
 
 /* Process the current state until it gets to the start of a basic block. */
@@ -20816,6 +20833,7 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 	for (;;) {
 		struct bpf_insn *insn;
 		struct bpf_insn_aux_data *insn_aux;
+		struct bpf_insn_fixups fixups;
 		int err;
 
 		err = bpf_check_limits(env);
@@ -20916,24 +20934,23 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		if (state->speculative && insn_aux->nospec)
 			goto process_bpf_exit;
 
-		err = check_loop_guard(env);
 		if (err)
 			return err;
 
-		err = check_recursion_guard(env);
+		err = check_loop_guard(env) ?: check_recursion_guard(env);
 		if (err)
 			return err;
 
 		err = do_check_insn(env, &do_print_state);
-		if (error_recoverable_with_nospec(err) && state->speculative) {
+		fixups = insn_aux->fixups;
+		if (nospec_ends_path(env, state, err)) {
 			/* Prevent this speculative path from ever reaching the
 			 * insn that would have been unsafe to execute.
+			 * What it noted does not apply to the other paths.
 			 */
-			insn_aux->nospec = true;
-			/* If it was an ADD/SUB insn, potentially remove any
-			 * markings for alu sanitization.
-			 */
-			insn_aux->alu_state = 0;
+			insn_aux->fixups = fixups;
+			need_nospec(env, prev_insn_idx);
+			free_pushed_states(env);
 			goto process_bpf_exit;
 		} else if (err < 0) {
 			return err;
@@ -20944,16 +20961,9 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 			env->insn_idx++;
 		}
 
-		if (state->speculative && insn_aux->nospec_result) {
-			/*
-			 * All non-branch instructions have a single fall-through
-			 * edge. For these, nospec_result should already work.
-			 */
-			if (verifier_bug_if((BPF_CLASS(insn->code) == BPF_JMP ||
-					     BPF_CLASS(insn->code) == BPF_JMP32) &&
-					    BPF_OP(insn->code) != BPF_CALL, env,
-					    "speculation barrier after jump instruction may not have the desired effect"))
-				return -EFAULT;
+		/* only a store that stays gets it, see bpf_convert_ctx_accesses() */
+		if (state->speculative && insn_aux->nospec_result && !insn_aux->fastcall_pattern &&
+		    bpf_is_mem_insn(insn) && BPF_MODE(insn->code) == BPF_MEM) {
 process_bpf_exit:
 			account_current_path(env);
 			mark_verifier_state_scratched(env);
@@ -22056,15 +22066,9 @@ static void sanitize_dead_code(struct bpf_verifier_env *env)
 
 static void free_states(struct bpf_verifier_env *env)
 {
-	struct bpf_verifier_stack_elem *elem;
-
 	bpf_free_verifier_state(env, env->cur_state, true);
 	env->cur_state = NULL;
-	while ((elem = env->head)) {
-		env->head = elem->next;
-		bpf_free_verifier_state(&elem->st, false);
-		kfree(elem);
-	}
+	free_pushed_states(env);
 	bpf_flow_reset(env);
 }
 

@@ -1222,7 +1222,6 @@ struct bpf_verifier_env {
 	u32 insn_array_map_cnt;		/* number of used maps of type BPF_MAP_TYPE_INSN_ARRAY */
 	u32 hidden_subprog_cnt;		/* number of hidden subprogs */
 	int exception_callback_subprog;
-	bool explore_alu_limits;
 	bool allow_ptr_leaks;
 	/* Allow access to uninitialized stack memory. Writes with fixed offset are
 	 * always allowed, so this refers to reads (with fixed or variable offset),
@@ -1235,6 +1234,7 @@ struct bpf_verifier_env {
 	/* a global function is verified for BPF_FUNC_CTX_NO_RCU_LOCK */
 	bool no_rcu_read_lock;
 	bool signature;
+	u8 bug:1;			/* ends the load, see bpf_note_bug() */
 	u32 insn_aux_data_len;
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
 	struct bpf_patch_list patch_list;
