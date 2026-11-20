@@ -240,9 +240,6 @@ static int t7xx_dpmaifq_release_pit_entry(struct dpmaif_rx_queue *rxq,
 	unsigned int old_rel_idx, new_rel_idx, hw_wr_idx;
 	int ret;
 
-	if (!rxq->que_started)
-		return 0;
-
 	if (rel_entry_num >= rxq->pit_size_cnt) {
 		dev_err(rxq->dpmaif_ctrl->dev, "Invalid PIT release index\n");
 		return -EINVAL;
@@ -565,6 +562,14 @@ static int t7xx_dpmaif_pit_release_and_add(struct dpmaif_rx_queue *rxq)
 	if (rxq->pit_remain_release_cnt < DPMAIF_PIT_CNT_THRESHOLD)
 		return 0;
 
+	/* The queue is stopped: keep the count, the entries are released by
+	 * the first poll after the queue has been restarted.
+	 * t7xx_dpmaif_rx_stop() waits for this poll before the hardware is
+	 * stopped.
+	 */
+	if (!READ_ONCE(rxq->que_started))
+		return 0;
+
 	ret = t7xx_dpmaifq_release_pit_entry(rxq, rxq->pit_remain_release_cnt);
 	if (ret)
 		return ret;
@@ -857,7 +862,7 @@ int t7xx_dpmaif_napi_rx_poll(struct napi_struct *napi, const int budget)
 	/* Ensure rx_processing is changed to 1 before actually begin RX flow */
 	smp_mb();
 
-	if (!rxq->que_started) {
+	if (!READ_ONCE(rxq->que_started)) {
 		atomic_set(&rxq->rx_processing, 0);
 		pm_runtime_put_autosuspend(rxq->dpmaif_ctrl->dev);
 		dev_err(rxq->dpmaif_ctrl->dev, "Work RXQ: %d has not been started\n", rxq->index);
@@ -1140,14 +1145,16 @@ void t7xx_dpmaif_rx_stop(struct dpmaif_ctrl *dpmaif_ctrl)
 		struct dpmaif_rx_queue *rxq = &dpmaif_ctrl->rxq[i];
 		int timeout, value;
 
+		WRITE_ONCE(rxq->que_started, false);
+		/* Order the que_started store before the rx_processing load.
+		 * Pairs with the smp_mb() in t7xx_dpmaif_napi_rx_poll().
+		 */
+		smp_mb();
+
 		timeout = readx_poll_timeout_atomic(atomic_read, &rxq->rx_processing, value,
 						    !value, 0, DPMAIF_CHECK_INIT_TIMEOUT_US);
 		if (timeout)
 			dev_err(dpmaif_ctrl->dev, "Stop RX SW failed\n");
-
-		/* Ensure RX processing has stopped before we set rxq->que_started to false */
-		smp_mb();
-		rxq->que_started = false;
 	}
 }
 
