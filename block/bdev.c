@@ -1430,7 +1430,11 @@ void bdev_statx(const struct path *path, struct kstat *stat, u32 request_mask)
 			0);
 	}
 
-	stat->blksize = bdev_io_min(bdev);
+	/*
+	 * A buffered write that covers only part of a block has to read the
+	 * block first, so do not report less than the block size.
+	 */
+	stat->blksize = max(bdev_io_min(bdev), block_size(bdev));
 
 	blkdev_put_no_open(bdev);
 }
