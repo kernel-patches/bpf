@@ -12,7 +12,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/errno.h>
+#include <linux/err.h>
 #include <linux/fb.h>
 #include <linux/mm.h>
 #include <linux/platform_device.h>
@@ -118,13 +118,17 @@ static struct platform_device *cfag12864bfb_device;
 
 static int __init cfag12864bfb_init(void)
 {
-	int ret = -EINVAL;
+	const struct platform_device_info pdevinfo = {
+		.name = CFAG12864BFB_NAME,
+		.id = 0,
+	};
+	int ret;
 
 	/* cfag12864b_init() must be called first */
 	if (!cfag12864b_isinited()) {
 		printk(KERN_ERR CFAG12864BFB_NAME ": ERROR: "
 			"cfag12864b is not initialized\n");
-		goto none;
+		return -EINVAL;
 	}
 
 	if (cfag12864b_enable()) {
@@ -134,23 +138,21 @@ static int __init cfag12864bfb_init(void)
 	}
 
 	ret = platform_driver_register(&cfag12864bfb_driver);
+	if (ret)
+		goto err_disable;
 
-	if (!ret) {
-		cfag12864bfb_device =
-			platform_device_alloc(CFAG12864BFB_NAME, 0);
+	cfag12864bfb_device = platform_device_register_full(&pdevinfo);
+	ret = PTR_ERR_OR_ZERO(cfag12864bfb_device);
+	if (ret)
+		goto err_unregister_driver;
 
-		if (cfag12864bfb_device)
-			ret = platform_device_add(cfag12864bfb_device);
-		else
-			ret = -ENOMEM;
+	return 0;
 
-		if (ret) {
-			platform_device_put(cfag12864bfb_device);
-			platform_driver_unregister(&cfag12864bfb_driver);
-		}
-	}
+err_unregister_driver:
+	platform_driver_unregister(&cfag12864bfb_driver);
 
-none:
+err_disable:
+	cfag12864b_disable();
 	return ret;
 }
 
