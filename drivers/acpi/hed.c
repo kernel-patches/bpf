@@ -17,8 +17,8 @@
 #include <acpi/hed.h>
 
 static const struct acpi_device_id acpi_hed_ids[] = {
-	{"PNP0C33", 0},
-	{"", 0},
+	{ .id = "PNP0C33" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, acpi_hed_ids);
 

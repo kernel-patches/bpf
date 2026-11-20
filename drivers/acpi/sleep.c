@@ -407,7 +407,7 @@ static const struct dmi_system_id acpisleep_dmi_table[] __initconst = {
 		DMI_MATCH(DMI_PRODUCT_NAME, "20GGA00L00"),
 		},
 	},
-	{},
+	{ }
 };
 
 static bool ignore_blacklist;

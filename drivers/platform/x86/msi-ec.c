@@ -1440,13 +1440,13 @@ static int __init msi_ec_init(void)
 	if (result < 0)
 		return result;
 
-	battery_hook_register(&battery_hook);
+	acpi_battery_hook_register(&battery_hook);
 	return 0;
 }
 
 static void __exit msi_ec_exit(void)
 {
-	battery_hook_unregister(&battery_hook);
+	acpi_battery_hook_unregister(&battery_hook);
 }
 
 MODULE_LICENSE("GPL");

@@ -288,12 +288,12 @@ static struct acpi_battery_hook system76_battery_hook = {
 
 static void system76_battery_init(void)
 {
-	battery_hook_register(&system76_battery_hook);
+	acpi_battery_hook_register(&system76_battery_hook);
 }
 
 static void system76_battery_exit(void)
 {
-	battery_hook_unregister(&system76_battery_hook);
+	acpi_battery_hook_unregister(&system76_battery_hook);
 }
 
 // Get the airplane mode LED brightness

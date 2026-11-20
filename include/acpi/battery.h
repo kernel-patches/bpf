@@ -18,8 +18,18 @@ struct acpi_battery_hook {
 	struct list_head list;
 };
 
-void battery_hook_register(struct acpi_battery_hook *hook);
-void battery_hook_unregister(struct acpi_battery_hook *hook);
-int devm_battery_hook_register(struct device *dev, struct acpi_battery_hook *hook);
+struct acpi_battery_hooks_list_entry {
+	struct list_head list_entry;
+	struct power_supply *battery;
+};
+
+void acpi_battery_hook_register(struct acpi_battery_hook *hook);
+void acpi_battery_hook_unregister(struct acpi_battery_hook *hook);
+int devm_acpi_battery_hook_register(struct device *dev,
+				    struct acpi_battery_hook *hook);
+
+void acpi_battery_add_hooks(struct acpi_battery_hooks_list_entry *entry,
+			    struct power_supply *battery);
+void acpi_battery_remove_hooks(struct acpi_battery_hooks_list_entry *entry);
 
 #endif

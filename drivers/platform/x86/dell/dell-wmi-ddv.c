@@ -972,7 +972,7 @@ static int dell_wmi_ddv_battery_add(struct dell_wmi_ddv_data *data)
 	data->eppid_attr.attr.mode = 0444;
 	data->eppid_attr.show = eppid_show;
 
-	return devm_battery_hook_register(&data->wdev->dev, &data->hook);
+	return devm_acpi_battery_hook_register(&data->wdev->dev, &data->hook);
 }
 
 static int dell_wmi_ddv_buffer_read(struct seq_file *seq, enum dell_ddv_method method)

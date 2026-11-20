@@ -1001,7 +1001,7 @@ static int oxp_platform_probe(struct platform_device *pdev)
 		return PTR_ERR(hwdev);
 
 	if (oxp_psy_ext_supported()) {
-		ret = devm_battery_hook_register(dev, &battery_hook);
+		ret = devm_acpi_battery_hook_register(dev, &battery_hook);
 		if (ret)
 			return ret;
 	}

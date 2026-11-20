@@ -18,7 +18,7 @@
 #include "../internal.h"
 
 static const struct acpi_device_id acpi_cmos_rtc_ids[] = {
-	{ "ACPI000E", 1 }, /* ACPI Time and Alarm Device (TAD) */
+	{ .id = "ACPI000E", .driver_data = 1 }, /* ACPI Time and Alarm Device (TAD) */
 	ACPI_CMOS_RTC_IDS
 };
 

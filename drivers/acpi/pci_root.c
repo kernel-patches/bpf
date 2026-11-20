@@ -41,8 +41,8 @@ static int acpi_pci_root_scan_dependent(struct acpi_device *adev)
 				| OSC_PCI_MSI_SUPPORT)
 
 static const struct acpi_device_id root_device_ids[] = {
-	{"PNP0A03", 0},
-	{"", 0},
+	{ .id = "PNP0A03" },
+	{ }
 };
 
 static struct acpi_scan_handler pci_root_handler = {
@@ -563,9 +563,14 @@ static void negotiate_os_control(struct acpi_pci_root *root, int *no_aspm)
 	 * Apple always return failure on _OSC calls when _OSI("Darwin") has
 	 * been called successfully. We know the feature set supported by the
 	 * platform, so avoid calling _OSC at all
+	 *
+	 * Assume control of the same features that would have been requested,
+	 * PCIe PME included.  Leaving PME out disables the PME service for
+	 * every root port, and nothing takes over: a device that runtime
+	 * suspends asserts PME# and is never resumed.
 	 */
 	if (x86_apple_machine) {
-		root->osc_control_set = ~OSC_PCI_EXPRESS_PME_CONTROL;
+		root->osc_control_set = calculate_control();
 		decode_osc_control(root, "OS assumes control of",
 				   root->osc_control_set);
 		return;
