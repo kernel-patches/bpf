@@ -244,7 +244,7 @@
 		#gpio-cells = <2>;
 	};
 
-	i2c-mux@70  {
+	i2c-mux@70 {
 		compatible = "nxp,pca9546";
 		status = "okay";
 		reg = <0x70 >;

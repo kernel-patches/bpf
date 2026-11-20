@@ -878,7 +878,7 @@
 			status = "disabled";
 		};
 
-		afe: audio-controller@11220000  {
+		afe: audio-controller@11220000 {
 			compatible = "mediatek,mt8173-afe-pcm";
 			reg = <0 0x11220000 0 0x1000>;
 			interrupts = <GIC_SPI 134 IRQ_TYPE_EDGE_FALLING>;
