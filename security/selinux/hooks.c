@@ -36,7 +36,6 @@
 #include <linux/mm.h>
 #include <linux/mman.h>
 #include <linux/slab.h>
-#include <linux/pagemap.h>
 #include <linux/proc_fs.h>
 #include <linux/swap.h>
 #include <linux/spinlock.h>

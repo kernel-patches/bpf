@@ -16,7 +16,6 @@
 #include <linux/fs_context.h>
 #include <linux/pseudo_fs.h>
 #include <linux/mount.h>
-#include <linux/pagemap.h>
 #include <linux/init.h>
 #include <linux/namei.h>
 #include <linux/security.h>

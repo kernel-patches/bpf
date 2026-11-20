@@ -6,6 +6,7 @@
 #include <linux/iopoll.h>
 #include <linux/string_choices.h>
 #include <linux/string_helpers.h>
+#include <linux/seq_file.h>
 
 #include <drm/drm_print.h>
 #include <drm/intel/intel_pcode_regs.h>
