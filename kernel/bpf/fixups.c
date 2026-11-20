@@ -303,10 +303,11 @@ static void patch_list_adj_aux(struct bpf_prog *prog, struct bpf_insn_patch *p,
 	    memcmp(&patch[p->self], orig, sizeof(*orig)))
 		last->non_stack_access = true;
 
-	/* indirect jumps to the replaced insn land on p->target */
-	if (last->indirect_target && p->target != p->self) {
-		slot[p->target].indirect_target = 1;
-		last->indirect_target = 0;
+	/* jumps to the replaced insn land on p->target, so the barrier goes before it */
+	if (p->target != p->self) {
+		slot[p->target].indirect_target = last->indirect_target;
+		slot[p->target].nospec = last->nospec;
+		last->indirect_target = last->nospec = 0;
 	}
 }
 
@@ -565,21 +566,31 @@ out:
 	return err;
 }
 
-/* How a subprog leaves when it is out of budget, see push_budget_exit() */
-static struct bpf_insn budget_exit_insn(struct bpf_verifier_env *env, struct bpf_subprog_info *sub)
+/* How subprog @s leaves when it has to stop, see push_unwind_exit(). Returns the length. */
+static int emit_unwind_exit(struct bpf_verifier_env *env, int s, struct bpf_insn *buf)
 {
-	if (!sub->bail_unwinds)
-		return BPF_EXIT_INSN();
-	sub->can_unwind = true;
-	env->prog->jit_required = 1;
-	return BPF_RAW_INSN(BPF_JMP | BPF_EXIT, 0, BPF_UNWIND_EXIT, 0, 0);
+	struct bpf_subprog_info *sub = &env->subprog_info[s];
+	int n = 0;
+
+	if (!env->bypass_spec_v1)
+		buf[n++] = BPF_ST_NOSPEC();
+	buf[n++] = BPF_MOV64_IMM(BPF_REG_0, 0);
+	if (bpf_ret_reg_pair(env, s))
+		buf[n++] = BPF_MOV64_IMM(BPF_REG_2, 0);
+	buf[n] = BPF_EXIT_INSN();
+	if (sub->bail_unwinds) {
+		buf[n].src_reg = BPF_UNWIND_EXIT;
+		sub->can_unwind = true;
+		env->prog->jit_required = 1;
+	}
+	return n + 1;
 }
 
 /*
  * Add may_goto in front of the insns that the main pass marked, see
  * check_loop_guard(). It verified the edge from the insn to where may_goto goes.
  *
- *	may_goto to		or	may_goto leave		see push_budget_exit()
+ *	may_goto to		or	may_goto leave		see push_unwind_exit()
  *	insn				insn
  *					...
  *					last insn of the subprog
@@ -597,18 +608,14 @@ static struct bpf_insn budget_exit_insn(struct bpf_verifier_env *env, struct bpf
 int bpf_insert_loop_guards(struct bpf_verifier_env *env)
 {
 	struct bpf_insn patch[2] = { BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 0, 0) };
-	struct bpf_insn leave[3] = { BPF_MOV64_IMM(BPF_REG_0, 0) };
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_insn leave[4], *insn;
 	struct bpf_subprog_info *sub;
-	struct bpf_insn *insn;
 	int i, s, n, err;
-	bool leaves;
 
 	for (s = 0; s < env->subprog_cnt; s++) {
 		sub = &env->subprog_info[s];
-		n = bpf_ret_reg_pair(env, s) ? 3 : 2;
-		leaves = false;
-		for (i = sub->start; i < sub[1].start; i++) {
+		for (i = sub->start, n = 0; i < sub[1].start; i++) {
 			if (!aux[i].loop_guard)
 				continue;
 			/* A jump to itself is a back edge. It goes through may_goto too. */
@@ -616,16 +623,15 @@ int bpf_insert_loop_guards(struct bpf_verifier_env *env)
 			insn = bpf_patch_list_add(env, i, patch, 2);
 			if (IS_ERR(insn))
 				return PTR_ERR(insn);
-			if (aux[i].guard_no_unwind)
+			if (!aux[i].guard_unwinds) {
 				bpf_patch_list_jump(&env->patch_list, insn - 1, aux[i].guard_to, 0);
-			else
-				bpf_patch_list_jump(&env->patch_list, insn - 1, sub[1].start, n);
-			leaves |= !aux[i].guard_no_unwind;
+				continue;
+			}
+			n = emit_unwind_exit(env, s, leave);
+			bpf_patch_list_jump(&env->patch_list, insn - 1, sub[1].start, n);
 		}
-		if (!leaves)
+		if (!n)
 			continue;
-		leave[1] = BPF_MOV64_IMM(BPF_REG_2, 0);
-		leave[n - 1] = budget_exit_insn(env, sub);
 		err = bpf_patch_list_append(env, i - 1, leave, n);
 		if (err)
 			return err;
@@ -697,8 +703,8 @@ int bpf_insert_recursion_checks(struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *si = env->subprog_info;
 	struct bpf_insn buf[24], nop = BPF_JMP_A(0), *insn;
+	int s, n, jmp, bail, err;
 	bool found = false;
-	int s, n, jmp, err;
 
 	for (s = 1; s < env->subprog_cnt; s++)
 		found |= si[s].recursive;
@@ -719,14 +725,12 @@ int bpf_insert_recursion_checks(struct bpf_verifier_env *env)
 				return PTR_ERR(insn);
 		}
 		jmp = n++;
-		n += emit_stack_check(buf + n, bpf_ret_reg_pair(env, s) ? 4 : 3);
+		bail = emit_unwind_exit(env, s, buf + n);
+		n += emit_stack_check(buf + n, 1 + bail);
 		/* The arguments are not needed any more */
 		buf[n++] = BPF_EMIT_KERNEL_CALL(bpf_prog_report_recursion);
 		buf[jmp] = BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, n - jmp - 1, 0);
-		buf[n++] = BPF_MOV64_IMM(BPF_REG_0, 0);
-		if (bpf_ret_reg_pair(env, s))
-			buf[n++] = BPF_MOV64_IMM(BPF_REG_2, 0);
-		buf[n++] = budget_exit_insn(env, &si[s]);
+		n += emit_unwind_exit(env, s, buf + n);
 		/* calls get to the check, jumps to the first insn do not */
 		err = bpf_patch_list_insert(env, si[s].start, buf, n);
 		if (err)
@@ -784,25 +788,24 @@ void bpf_opt_hard_wire_dead_code_branches(struct bpf_verifier_env *env)
 	struct bpf_insn trap = BPF_JMP_IMM(BPF_JA, 0, 0, -1);
 	struct bpf_insn *insn = env->prog->insnsi;
 	const int insn_cnt = env->prog->len;
+	bool unwinds, calls;
 	int i;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
-		if (!bpf_insn_is_cond_jump(insn->code))
-			continue;
-
-		if (bpf_is_unwind_goto(insn) && aux_data[i + 1 + insn->off].seen) {
-			/*
-			 * The callee never exits. Its unwind_exit needs
-			 * unwind_goto all the same, and the cpu predicts that it
-			 * returns to what follows. Don't let the removal of dead
-			 * code put something else there.
-			 */
-			if (!aux_data[i + 1].seen) {
-				memcpy(insn + 1, &trap, sizeof(trap));
-				aux_data[i + 1].seen = env->pass_cnt;
-			}
-			continue;
+		unwinds = bpf_is_unwind_goto(insn) && aux_data[i + 1 + insn->off].seen;
+		calls = (bpf_pseudo_call(insn) || bpf_is_callx(insn)) && aux_data[i].seen;
+		/*
+		 * The callee never exits. Its unwind_exit needs unwind_goto all the same.
+		 * The cpu predicts that it returns to what follows, or speculates to an exit.
+		 * Don't let the removal of dead code put something else there.
+		 */
+		if ((unwinds || (calls && !env->bypass_spec_v1)) && !aux_data[i + 1].seen) {
+			memcpy(insn + 1, &trap, sizeof(trap));
+			aux_data[i + 1].zext_dst = false;
+			aux_data[i + 1].seen = env->check_cnt;
 		}
+		if (unwinds || !aux_data[i].seen || !bpf_insn_is_cond_jump(insn->code))
+			continue;
 
 		if (!aux_data[i + 1].seen)
 			ja.off = insn->off;
@@ -841,7 +844,7 @@ static void keep_funcs_with_addr_taken(struct bpf_verifier_env *env)
 			continue;
 		memcpy(insn + t, &trap, sizeof(trap));
 		aux_data[t].zext_dst = false;
-		aux_data[t].seen = env->pass_cnt;
+		aux_data[t].seen = env->check_cnt;
 	}
 }
 

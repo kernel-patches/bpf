@@ -269,7 +269,7 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 			ci_in[start][r] = unknown;
 		/*
 		 * The subprog gets there from where it is out of budget too, see
-		 * push_budget_exit(). That is not an edge of the graph.
+		 * push_unwind_exit(). That is not an edge of the graph.
 		 */
 		for (r = 0; r < MAX_BPF_REG && env->subprog_info[i].bail_insn >= 0; r++)
 			ci_in[env->subprog_info[i].bail_insn][r] = unknown;
