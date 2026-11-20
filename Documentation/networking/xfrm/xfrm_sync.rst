@@ -120,12 +120,12 @@ in case they are not specified.
 
 the two sysctls/proc entries are:
 
-a) /proc/sys/net/core/sysctl_xfrm_aevent_etime
+a) /proc/sys/net/core/xfrm_aevent_etime
 
    Used to provide default values for the XFRMA_ETIMER_THRESH in incremental
    units of time of 100ms. The default is 10 (1 second)
 
-b) /proc/sys/net/core/sysctl_xfrm_aevent_rseqth
+b) /proc/sys/net/core/xfrm_aevent_rseqth
 
    Used to provide default values for XFRMA_REPLAY_THRESH parameter
    in incremental packet count. The default is two packets.
