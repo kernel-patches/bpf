@@ -51,9 +51,15 @@ static void test_next_pointer(struct kunit *test)
 {
 	struct kmem_cache *s = test_kmem_cache_create("TestSlub_next_ptr_free",
 							64, SLAB_POISON);
-	u8 *p = kmem_cache_alloc(s, GFP_KERNEL);
+	void *pin;
+	u8 *p;
 	unsigned long tmp;
 	unsigned long *ptr_addr;
+
+	migrate_disable();
+	pin = kmem_cache_alloc(s, GFP_KERNEL);
+	p = kmem_cache_alloc(s, GFP_KERNEL);
+	migrate_enable();
 
 	kmem_cache_free(s, p);
 
@@ -89,6 +95,7 @@ static void test_next_pointer(struct kunit *test)
 	validate_slab_cache(s);
 	KUNIT_EXPECT_EQ(test, 0, slab_errors);
 
+	kmem_cache_free(s, pin);
 	kmem_cache_destroy(s);
 }
 
@@ -96,7 +103,13 @@ static void test_first_word(struct kunit *test)
 {
 	struct kmem_cache *s = test_kmem_cache_create("TestSlub_1th_word_free",
 							64, SLAB_POISON);
-	u8 *p = kmem_cache_alloc(s, GFP_KERNEL);
+	void *pin;
+	u8 *p;
+
+	migrate_disable();
+	pin = kmem_cache_alloc(s, GFP_KERNEL);
+	p = kmem_cache_alloc(s, GFP_KERNEL);
+	migrate_enable();
 
 	kmem_cache_free(s, p);
 	*p = 0x78;
@@ -104,6 +117,7 @@ static void test_first_word(struct kunit *test)
 	validate_slab_cache(s);
 	KUNIT_EXPECT_EQ(test, 2, slab_errors);
 
+	kmem_cache_free(s, pin);
 	kmem_cache_destroy(s);
 }
 
@@ -111,7 +125,13 @@ static void test_clobber_50th_byte(struct kunit *test)
 {
 	struct kmem_cache *s = test_kmem_cache_create("TestSlub_50th_word_free",
 							64, SLAB_POISON);
-	u8 *p = kmem_cache_alloc(s, GFP_KERNEL);
+	void *pin;
+	u8 *p;
+
+	migrate_disable();
+	pin = kmem_cache_alloc(s, GFP_KERNEL);
+	p = kmem_cache_alloc(s, GFP_KERNEL);
+	migrate_enable();
 
 	kmem_cache_free(s, p);
 	p[50] = 0x9a;
@@ -119,6 +139,7 @@ static void test_clobber_50th_byte(struct kunit *test)
 	validate_slab_cache(s);
 	KUNIT_EXPECT_EQ(test, 2, slab_errors);
 
+	kmem_cache_free(s, pin);
 	kmem_cache_destroy(s);
 }
 #endif
@@ -127,7 +148,13 @@ static void test_clobber_redzone_free(struct kunit *test)
 {
 	struct kmem_cache *s = test_kmem_cache_create("TestSlub_RZ_free", 64,
 							SLAB_RED_ZONE);
-	u8 *p = kmem_cache_alloc(s, GFP_KERNEL);
+	void *pin;
+	u8 *p;
+
+	migrate_disable();
+	pin = kmem_cache_alloc(s, GFP_KERNEL);
+	p = kmem_cache_alloc(s, GFP_KERNEL);
+	migrate_enable();
 
 	kasan_disable_current();
 	kmem_cache_free(s, p);
@@ -137,6 +164,7 @@ static void test_clobber_redzone_free(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, 2, slab_errors);
 
 	kasan_enable_current();
+	kmem_cache_free(s, pin);
 	kmem_cache_destroy(s);
 }
 

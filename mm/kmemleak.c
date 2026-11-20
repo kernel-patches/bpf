@@ -112,6 +112,7 @@
 #define SECS_FIRST_SCAN		60	/* delay before the first scan */
 #define SECS_SCAN_WAIT		600	/* subsequent auto scanning delay */
 #define MAX_SCAN_SIZE		4096	/* maximum size of a scanned block */
+#define SCAN_LOCK_BATCH		64	/* words between lock waiter checks */
 
 #define BYTES_PER_POINTER	sizeof(void *)
 
@@ -1540,6 +1541,18 @@ static int scan_should_stop(void)
 }
 
 /*
+ * Release kmemleak_lock and take it again if anybody is waiting for it, so
+ * that allocations and frees do not have to wait for a whole block.
+ */
+static void scan_breathe(unsigned long *flags)
+{
+	if (raw_spin_is_contended(&kmemleak_lock)) {
+		raw_spin_unlock_irqrestore(&kmemleak_lock, *flags);
+		raw_spin_lock_irqsave(&kmemleak_lock, *flags);
+	}
+}
+
+/*
  * Scan a memory block (exclusive range) for valid pointers and add those
  * found to the gray list. Return non-zero if the scan was interrupted.
  */
@@ -1560,6 +1573,14 @@ static int scan_block(void *_start, void *_end,
 			stop = 1;
 			break;
 		}
+
+		/*
+		 * Only the background scan thread breathes, scans requested
+		 * through debugfs keep the lock and finish sooner.
+		 */
+		if (current == scan_thread && ptr != start &&
+		    !((ptr - start) % SCAN_LOCK_BATCH))
+			scan_breathe(&flags);
 
 		kasan_disable_current();
 		pointer = *(unsigned long *)kasan_reset_tag((void *)ptr);
@@ -1696,8 +1717,10 @@ static void scan_gray_list(void)
  * Conditionally call resched() in an object iteration loop while making sure
  * that the given object won't go away without RCU read lock by performing a
  * get_object() if necessaary.
+ * If @scan_gray is set, also scan the gray list while the RCU lock is dropped.
  */
-static void kmemleak_cond_resched(struct kmemleak_object *object)
+static void __kmemleak_cond_resched(struct kmemleak_object *object,
+				    bool scan_gray)
 {
 	if (!get_object(object))
 		return;	/* Try next object */
@@ -1709,6 +1732,8 @@ static void kmemleak_cond_resched(struct kmemleak_object *object)
 	raw_spin_unlock_irq(&kmemleak_lock);
 
 	rcu_read_unlock();
+	if (scan_gray)
+		scan_gray_list();
 	cond_resched_tasks_rcu_qs();
 	rcu_read_lock();
 
@@ -1719,6 +1744,26 @@ static void kmemleak_cond_resched(struct kmemleak_object *object)
 unlock_put:
 	raw_spin_unlock_irq(&kmemleak_lock);
 	put_object(object);
+}
+
+static void kmemleak_cond_resched(struct kmemleak_object *object)
+{
+	__kmemleak_cond_resched(object, false);
+}
+
+/*
+ * Scan newly grayed objects within a jiffy, not after the object_list walk:
+ * one may hold the only reference to another and be freed by then, like a
+ * maple tree node being replaced.
+ */
+static void kmemleak_resched_drain(struct kmemleak_object *object,
+				   unsigned long *last_drain)
+{
+	if (need_resched() ||
+	    (!list_empty(&gray_list) && time_after(jiffies, *last_drain))) {
+		__kmemleak_cond_resched(object, true);
+		*last_drain = jiffies;
+	}
 }
 
 /*
@@ -1909,6 +1954,7 @@ static int scan_zone_pages(struct zone *zone)
 static int __kmemleak_scan(bool full)
 {
 	struct kmemleak_object *object;
+	unsigned long last_drain;
 	struct zone *zone;
 	int __maybe_unused i;
 	int stop = 0;
@@ -2003,10 +2049,10 @@ scan_gray:
 	 * Check for new or unreferenced objects modified since the previous
 	 * scan and color them gray until the next scan.
 	 */
+	last_drain = jiffies;
 	rcu_read_lock();
 	list_for_each_entry_rcu(object, &object_list, object_list) {
-		if (need_resched())
-			kmemleak_cond_resched(object);
+		kmemleak_resched_drain(object, &last_drain);
 
 		/*
 		 * This is racy but we can save the overhead of lock/unlock
@@ -2507,12 +2553,13 @@ static void kmemleak_do_cleanup(struct work_struct *work)
 	 * function.
 	 */
 	kmemleak_free_enabled = 0;
-	mutex_unlock(&scan_mutex);
 
+	/* Serialize the lockless cleanup with report readers. */
 	if (!kmemleak_found_leaks)
 		__kmemleak_do_cleanup();
 	else
 		pr_info("Kmemleak disabled without freeing internal data. Reclaim the memory with \"echo clear > /sys/kernel/debug/kmemleak\".\n");
+	mutex_unlock(&scan_mutex);
 }
 
 static DECLARE_WORK(cleanup_work, kmemleak_do_cleanup);

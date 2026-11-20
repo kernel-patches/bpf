@@ -20,21 +20,25 @@ For simplicity, zsmalloc can only allocate objects of size up to PAGE_SIZE
 since this satisfies the requirements of all its current users (in the
 worst case, page is incompressible and is thus stored "as-is" i.e. in
 uncompressed form). For allocation requests larger than this size, failure
-is returned (see zs_malloc).
+is returned (see zs_store).
 
-Additionally, zs_malloc() does not return a dereferenceable pointer.
-Instead, it returns an opaque handle (unsigned long) which encodes actual
-location of the allocated object. The reason for this indirection is that
-zsmalloc does not keep zspages permanently mapped since that would cause
-issues on 32-bit systems where the VA region for kernel space mappings
-is very small. So, using the allocated memory should be done through the
-proper handle-based APIs.
+Additionally, zs_store() does not return a pointer; instead, it returns 0
+(or a negative error code) and stores the encoded location of the allocated
+object in the caller-provided ``struct zs_handle``. The reason for this
+indirection is that zsmalloc does not keep zspages permanently mapped since
+that would cause issues on 32-bit systems where the VA region for kernel
+space mappings is very small. zsmalloc also keeps a back-pointer to the
+provided ``struct zs_handle`` and updates it asynchronously during
+compaction and page migration, so the owner must not modify or copy the
+handle and must keep it allocated until ``zs_free()`` or
+``zs_rebind_handle()``. Using the allocated memory should be done through
+the proper handle-based APIs.
 
 stat
 ====
 
-With CONFIG_ZSMALLOC_STAT, we could see zsmalloc internal information via
-``/sys/kernel/debug/zsmalloc/<user name>``. Here is a sample of stat output::
+With CONFIG_DEBUG_FS, we could see zsmalloc internal information via
+``/sys/kernel/debug/zsmalloc/<pool-name>``. Here is a sample of stat output::
 
  # cat /sys/kernel/debug/zsmalloc/zram0/classes
 
