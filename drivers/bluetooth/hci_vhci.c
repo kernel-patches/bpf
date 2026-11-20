@@ -636,13 +636,14 @@ static ssize_t vhci_write(struct kiocb *iocb, struct iov_iter *from)
 static __poll_t vhci_poll(struct file *file, poll_table *wait)
 {
 	struct vhci_data *data = file->private_data;
+	__poll_t mask = EPOLLOUT | EPOLLWRNORM;
 
 	poll_wait(file, &data->read_wait, wait);
 
 	if (!skb_queue_empty(&data->readq))
-		return EPOLLIN | EPOLLRDNORM;
+		mask |= EPOLLIN | EPOLLRDNORM;
 
-	return EPOLLOUT | EPOLLWRNORM;
+	return mask;
 }
 
 static void vhci_open_timeout(struct work_struct *work)
