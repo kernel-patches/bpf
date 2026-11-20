@@ -77,10 +77,23 @@
 	};
 };
 
+&gpio1 {
+	bootph-pre-ram;
+};
+
+&gpio2 {
+	bootph-pre-ram;
+};
+
+&gpio4 {
+	bootph-pre-ram;
+};
+
 &i2c1 {
 	clock-frequency = <400000>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_i2c1>;
+	bootph-pre-ram;
 	status = "okay";
 
 	bd71847: pmic@4b {
@@ -95,8 +108,11 @@
 		#clock-cells = <0>;
 		clocks = <&osc_32k>;
 		clock-output-names = "clk-32k-out";
+		bootph-pre-ram;
 
 		regulators {
+			bootph-pre-ram;
+
 			buck1_reg: BUCK1 {
 				/* PMIC_BUCK1 - VDD_SOC */
 				regulator-name = "buck1";
@@ -244,6 +260,7 @@
 &uart4 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_uart4>;
+	bootph-pre-ram;
 	status = "okay";
 };
 
@@ -280,6 +297,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_wdog>;
 	fsl,ext-reset-output;
+	bootph-pre-ram;
 	status = "okay";
 };
 
@@ -326,6 +344,7 @@
 			MX8MN_IOMUXC_I2C1_SCL_I2C1_SCL			0x400000c2
 			MX8MN_IOMUXC_I2C1_SDA_I2C1_SDA			0x400000c2
 		>;
+		bootph-pre-ram;
 	};
 
 	pinctrl_i2c3: i2c3grp {
@@ -346,6 +365,7 @@
 		fsl,pins = <
 			MX8MN_IOMUXC_GPIO1_IO03_GPIO1_IO3		0x040
 		>;
+		bootph-pre-ram;
 	};
 
 	pinctrl_uart2: uart2grp {
@@ -369,6 +389,7 @@
 			MX8MN_IOMUXC_UART4_RXD_UART4_DCE_RX		0x040
 			MX8MN_IOMUXC_UART4_TXD_UART4_DCE_TX		0x040
 		>;
+		bootph-pre-ram;
 	};
 
 	pinctrl_usdhc2: usdhc2grp {
@@ -414,6 +435,7 @@
 		fsl,pins = <
 			MX8MN_IOMUXC_GPIO1_IO02_WDOG1_WDOG_B		0x046
 		>;
+		bootph-pre-ram;
 	};
 
 	pinctrl_wlan: wlangrp {
