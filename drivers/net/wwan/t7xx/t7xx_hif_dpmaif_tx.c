@@ -448,6 +448,7 @@ static void t7xx_do_tx_hw_push(struct dpmaif_ctrl *dpmaif_ctrl)
 static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 {
 	struct dpmaif_ctrl *dpmaif_ctrl = arg;
+	bool resume_failed = false;
 	bool txq_stopped;
 	int ret;
 
@@ -468,8 +469,19 @@ static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 		ret = pm_runtime_resume(dpmaif_ctrl->dev);
 		if (ret < 0 && ret != -EACCES) {
 			pm_runtime_put_noidle(dpmaif_ctrl->dev);
-			return ret;
+			/* Do not exit: t7xx_dpmaif_tx_thread_rel() kthread_stop()s
+			 * this task. Retry until the resume works or we are stopped.
+			 */
+			if (!resume_failed)
+				dev_err(dpmaif_ctrl->dev,
+					"Failed to resume for TX push: %d\n", ret);
+			resume_failed = true;
+			wait_event_interruptible_timeout(dpmaif_ctrl->tx_wq,
+							 kthread_should_stop(),
+							 HZ);
+			continue;
 		}
+		resume_failed = false;
 
 		/* A runtime suspended device was resumed above and had its queues
 		 * restarted, so a stopped queue here belongs to a system suspend
