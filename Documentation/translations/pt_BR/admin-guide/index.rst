@@ -72,6 +72,11 @@ Rastreando e identificando problemas
 Aqui está um conjunto de documentos voltados a usuários que estão tentando
 rastrear problemas e bugs em particular.
 
+.. toctree::
+   :maxdepth: 1
+
+   init
+
 Todolist:
 
 *   reporting-issues
@@ -83,7 +88,6 @@ Todolist:
 *   tainted-kernels
 *   ramoops
 *   dynamic-debug-howto
-*   init
 *   kdump/index
 *   perf/index
 *   pstore-blk

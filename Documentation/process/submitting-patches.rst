@@ -588,6 +588,11 @@ serves to give credit to reviewers and to inform maintainers of the degree of
 review which has been done on the patch.  Reviewed-by: tags, when supplied by
 reviewers known to understand the subject area and to perform thorough reviews,
 will normally increase the likelihood of your patch getting into the kernel.
+If the reviewer checks only a piece of the patch, leaving the rest unreviewed,
+especially skipping the main concept of the patch, then more appropriate is
+an Acked-by tag or adding a "# subpart-name" marker after the Reviewed-by tag:
+
+	Reviewed-by: Driver X Reviewer <foo@example.org> # for Driver
 
 Both Tested-by and Reviewed-by tags, once received on mailing list from tester
 or reviewer, should be added by author to the applicable patches when sending
@@ -610,6 +615,14 @@ review a bug fix. This tag also assists the stable kernel team in determining
 which stable kernel versions should receive your fix. This is the preferred
 method for indicating a bug fixed by the patch. See :ref:`describe_changes`
 for more details.
+
+Name the commit that introduced the bug. When using ``git blame`` to find it,
+do not settle on a commit that only moved the code. If a later commit exposed
+an older bug, add a Fixes: tag for that commit too. If the same bug was
+introduced separately by more than one commit, add a Fixes: tag for each. Do
+not add tags for commits that are only suspected. The Fixes: tags tell the
+stable team which trees need the fix: those that contain one of the tagged
+commits. Trees that contain none of them do not need it.
 
 Note: Attaching a Fixes: tag does not subvert the stable kernel rules
 process nor the requirement to Cc: stable@vger.kernel.org on all stable

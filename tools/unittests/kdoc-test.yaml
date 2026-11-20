@@ -1696,3 +1696,75 @@ tests:
 
         ``spinlock_t *lock``
           the spinlock
+- name: struct_cacheline_group_aligned
+  description: "Strip __cacheline_group_{begin,end}_aligned() markers from a struct"
+  fname: drivers/net/ethernet/intel/idpf/idpf_txrx.h
+  source: |
+    /**
+     * struct idpf_q_vector
+     * @vport: Vport back pointer
+     * @num_rxq: Number of RX queues
+     * @napi: napi handler
+     * @v_idx: Vector index
+     */
+    struct idpf_q_vector {
+            __cacheline_group_begin_aligned(read_mostly);
+            struct idpf_vport *vport;
+
+            u16 num_rxq;
+            __cacheline_group_end_aligned(read_mostly);
+
+            __cacheline_group_begin_aligned(read_write);
+            struct napi_struct napi;
+            __cacheline_group_end_aligned(read_write);
+
+            __cacheline_group_begin_aligned(cold);
+            u16 v_idx;
+
+            __cacheline_group_end_aligned(cold);
+    };
+  expected:
+  - kdoc_item:
+      name: idpf_q_vector
+      type: struct
+      declaration_start_line: 1
+      sections: {}
+      sections_start_lines: {}
+      parameterlist:
+      - vport
+      - num_rxq
+      - napi
+      - v_idx
+      parameterdesc_start_lines:
+        vport: 2
+        num_rxq: 3
+        napi: 4
+        v_idx: 5
+      parameterdescs:
+        vport: |
+          Vport back pointer
+        num_rxq: |
+          Number of RX queues
+        napi: |
+          napi handler
+        v_idx: |
+          Vector index
+      parametertypes:
+        vport: struct idpf_vport *vport
+        num_rxq: u16 num_rxq
+        napi: struct napi_struct napi
+        v_idx: u16 v_idx
+      warnings: []
+      other_stuff:
+        definition: |
+          ;
+          struct idpf_vport *vport;
+          u16 num_rxq;
+          ;
+          ;
+          struct napi_struct napi;
+          ;
+          ;
+          u16 v_idx;
+          ;
+        purpose: ''
