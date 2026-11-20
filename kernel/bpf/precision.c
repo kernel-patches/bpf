@@ -40,6 +40,16 @@ u32 bpf_frame_mask(struct bpf_verifier_env *env, unsigned long *masks,
 	return words * BITS_PER_LONG;
 }
 
+bool bpf_xreg_in_data_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			   u32 fr, u32 xregno)
+{
+	unsigned long data_deps[XREG_WORDS];
+
+	return env->precision->data_deps &&
+	       xregno < bpf_frame_mask(env, env->precision->data_deps, st, fr, data_deps) &&
+	       test_bit(xregno, data_deps);
+}
+
 bool bpf_xreg_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 		      u32 fr, u32 xregno)
 {

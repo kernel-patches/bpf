@@ -19247,6 +19247,7 @@ again:
 	env->false_reg2 = *src_reg;
 	env->true_reg1 = *dst_reg;
 	env->true_reg2 = *src_reg;
+	bpf_collect_iv_thresholds(env);
 	pred = is_branch_taken(env, dst_reg, src_reg, opcode, is_jmp32);
 	if (pred == 1) {
 		/* Only follow the goto, ignore fall-through. If needed, push
@@ -20736,7 +20737,9 @@ static struct loop_stack_entry *push_loop(struct bpf_verifier_env *env,
 		.held_cnt = held_cnt(env->cur_state),
 		.entry_id = ++env->loop_entry_cnt,
 		.peeled = true,
+		.exit_threshold = U64_MAX,
 	};
+	scalar_set_const(&frame->loop_stack[cnt].trip_index, 0);
 	frame->loop_stack_cnt++;
 	return &frame->loop_stack[cnt];
 }
@@ -20757,10 +20760,17 @@ static void leave_peeled_trips(struct bpf_verifier_env *env, struct loop_stack_e
 {
 	struct bpf_func_state *frame;
 	struct bpf_reg_state *reg;
+	u32 i;
 
 	entry->peeled = false;
 	entry->loop->this_pass.has_leftover = true;
+	entry->loop->leftover_epoch++;
+	/* the leftover of the last pass had no trip count */
+	entry->loop->guarded |= entry->loop->last_pass.needs_guard && !env->cur_state->speculative;
+	entry->trip_index.grew_once = entry->trip_widened = false;
 	bpf_for_each_reg_in_vstate(env->cur_state, frame, reg, reg->grew_once = false);
+	for (i = 0; i < env->cur_state->equations.sym_cnt; i++)
+		env->cur_state->equations.syms[i].grew_once = false;
 }
 
 /*
@@ -20853,6 +20863,8 @@ pop:
 				verbose(env, "exiting loop %d\n",
 					frame->loop_stack[i].loop->header);
 	leave_loops(frame, new_cnt);
+	if (new_cnt != cnt)
+		bpf_equations_clean(env, env->cur_state);
 }
 
 static bool xreg_has_id(struct bpf_verifier_state *st, u32 id)
@@ -20927,6 +20939,11 @@ static int next_trip(struct bpf_verifier_env *env, struct loop_stack_entry *entr
 		     bool *starts_leftover)
 {
 	entry->trip++;
+	if (entry->loop->kind != BPF_LOOP_RECURSION) {
+		bpf_equations_next_trip(env, env->cur_state, entry - cur_func(env)->loop_stack);
+		if (infeasible_state_ends(env))
+			return 1;
+	}
 	if (env->path_sensitive)
 		return failing_path_trip(env, entry);
 	if (!entry->peeled)
@@ -20988,6 +21005,13 @@ static int enter_callback(struct bpf_verifier_env *env, bool back, struct bpf_lo
 	if (starts_leftover)
 		leave_peeled_trips(env, entry);
 	return err;
+}
+
+/* The current state is at the header of a loop and starts its leftover */
+int bpf_flow_start_leftover(struct bpf_verifier_env *env)
+{
+	leave_peeled_trips(env, bpf_top_loop(cur_func(env)));
+	return enter_callback(env, false, NULL);
 }
 
 /*

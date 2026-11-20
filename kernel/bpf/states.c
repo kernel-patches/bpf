@@ -583,6 +583,24 @@ u64 bpf_hash_join_key(const struct bpf_verifier_env *env, const struct bpf_verif
 	return hash;
 }
 
+/*
+ * If may_goto or an iterator stops the loop, its trip index can start again from a smaller
+ * number, never from a larger one: see bpf_equations_next_trip().
+ */
+static bool trip_index_safe(const struct loop_stack_entry *old, const struct loop_stack_entry *cur)
+{
+	u64 min = cnum64_umin(old->trip_index.r64);
+	struct scalar first;
+
+	if (old->peeled || scalar_subsumes(&old->trip_index, &cur->trip_index))
+		return true;
+	if (!old->loop->rt_bounded && !old->loop->this_pass.needs_guard)
+		return false;
+	scalar_set_const(&first, min);
+	return min <= cnum64_umin(cur->trip_index.r64) &&
+	       scalar_subsumes(&old->trip_index, &first);
+}
+
 static bool loop_stack_safe(struct bpf_func_state *old, struct bpf_func_state *cur)
 {
 	u32 i;

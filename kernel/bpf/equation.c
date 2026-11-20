@@ -1132,6 +1132,91 @@ void bpf_equations_fill(struct bpf_verifier_env *env, struct bpf_func_state *fra
 	env->eq_env->fill_bits = size * BITS_PER_BYTE;
 }
 
+/*
+ * The state came back to the header of the loop at @depth.
+ * A trip count or may_goto ends the loop long before the trip index gets to 2^63.
+ */
+void bpf_equations_next_trip(struct bpf_verifier_env *env, struct bpf_verifier_state *st, u32 depth)
+{
+	struct scalar *trip_index = &st->frame[st->curframe]->loop_stack[depth].trip_index;
+	struct bpf_xreg_equation *xreg_eq;
+
+	scalar_add_const(trip_index, 1);
+	trip_index->r64 = cnum64_intersect(trip_index->r64, cnum64_from_urange(0, S64_MAX));
+	scalar_bounds_sync(trip_index);
+	xreg_eq = bpf_find_xreg_equation(&st->equations,
+					 bpf_xreg(st->curframe, BPF_XREG_TRIP + depth));
+	if (!xreg_eq)
+		return;
+	xreg_eq->off++;
+	refine_sym_from_xreg(env, st, xreg_eq);
+	propagate_bounds(env, st, false);
+	bpf_equations_clean(env, st);
+}
+
+/*
+ * @rest is a constant minus a number, and not an iv that counts down. An equation has a cost,
+ * so wait until an unproven insn needs @len.
+ */
+static bool tests_rest(struct bpf_verifier_env *env, u32 len, u32 rest)
+{
+	const struct bpf_verifier_state *st = env->cur_state;
+	const struct bpf_xreg_equation *xreg_eq, *trip;
+	u32 i;
+
+	xreg_eq = bpf_find_xreg_equation(&st->equations, bpf_reg_to_xreg(st, rest));
+	if (!xreg_eq || xreg_eq->is_ptr || xreg_eq->coef > 0)
+		return false;
+	for (i = 0; i < st->frame[st->curframe]->loop_stack_cnt; i++) {
+		trip = bpf_find_xreg_equation(&st->equations,
+					      bpf_xreg(st->curframe, BPF_XREG_TRIP + i));
+		if (trip && trip->sym == xreg_eq->sym)
+			return false;
+	}
+	if (env->path_sensitive || bpf_xreg_in_data_deps(env, st, st->curframe, len))
+		return true;
+	env->imprecise |= !env->err;
+	return false;
+}
+
+/*
+ * The ranges of two numbers do not show how far they are from each other:
+ *	for (i = 0..3; i != n; i++)		for (p = t + 0..3; p != t + n; p++)
+ *	if (len > 64 - off) return; read(buf + off, len);
+ * Give the difference a sym. bpf_equations_jump() refines it if it does not wrap.
+ * For an iv and its bound the first trip makes the equation. The other trips find it.
+ */
+static void add_distance_equation(struct bpf_verifier_env *env, const struct bpf_insn *insn)
+{
+	struct bpf_verifier_state *st = env->cur_state;
+	const struct loop_stack_entry *e = bpf_top_loop(st->frame[st->curframe]);
+	struct expr a, b, diff;
+	struct scalar bounds;
+	struct equation_pos pos = {};
+	u8 op = BPF_OP(insn->code);
+	bool is_ptr, is_eq = op == BPF_JEQ || op == BPF_JNE;
+
+	if (op == BPF_JSET || !compares_numbers(st, insn))
+		return;
+	if (is_eq && (!e || (e->peeled && e->trip)))
+		return;
+	if (!is_eq && !tests_rest(env, insn->dst_reg, insn->src_reg) &&
+	    !tests_rest(env, insn->src_reg, insn->dst_reg))
+		return;
+	bpf_equations_clean(env, st);
+	if (!assign_sym(env, bpf_reg_to_xreg(st, insn->dst_reg), true, &a, &is_ptr) ||
+	    !assign_sym(env, bpf_reg_to_xreg(st, insn->src_reg), true, &b, &is_ptr) ||
+	    bpf_find_next_diff(env, &st->equations, &a, &b, &pos, &diff))
+		return;
+	bpf_eval_diff(env, st, &a, &b, &bounds);
+	/* len can get its bound from this jump */
+	if (!is_eq || !scalar_is_unknown(&bounds))
+		bpf_add_sym_equation(env, &st->equations, (struct bpf_sym_equation){
+			{ -1, a.coef, -b.coef },
+			{ bpf_new_sym(env, &st->equations, &bounds), a.var, b.var },
+			env->insn_idx, a.off - b.off });
+}
+
 /* Note the operands. Delete the equations of the registers that the insn writes. */
 void bpf_equations_before_insn(struct bpf_verifier_env *env)
 {
@@ -1169,6 +1254,9 @@ void bpf_equations_before_insn(struct bpf_verifier_env *env)
 					   &eq_env->operand_expr[i], &eq_env->is_ptr[i]);
 		}
 	}
+	if (bpf_insn_is_cond_jump(insn->code) && BPF_SRC(insn->code) == BPF_X && !st->speculative &&
+	    insn->dst_reg < BPF_REG_FP && insn->src_reg < BPF_REG_FP)
+		add_distance_equation(env, insn);
 	if (class == BPF_JMP && op == BPF_EXIT && fr && !st->frame[fr]->in_callback_fn)
 		copy_xreg_equation(env, eqs, bpf_xreg(fr - 1, BPF_REG_0), bpf_xreg(fr, BPF_REG_0));
 	if (class == BPF_JMP && op == BPF_CALL) {
@@ -2140,6 +2228,45 @@ bool bpf_equations_subsume(struct bpf_verifier_env *env, const struct bpf_verifi
 
 /* Join */
 
+static void join_trip_index(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
+			    const struct bpf_verifier_state *src, struct bpf_loop *leftover_loop,
+			    bool widen)
+{
+	const struct loop_stack_entry *s;
+	struct loop_stack_entry *e;
+	u64 xreg, threshold;
+	struct scalar old;
+	u32 fr, i;
+
+	for (fr = 0; fr <= dst->curframe; fr++) {
+		e = dst->frame[fr]->loop_stack;
+		s = src->frame[fr]->loop_stack;
+		for (i = 0; i < dst->frame[fr]->loop_stack_cnt; i++, e++, s++) {
+			xreg = bpf_xreg(fr, BPF_XREG_TRIP + i);
+			old = e->trip_index;
+			scalar_union(&e->trip_index, &s->trip_index);
+			/* an outer loop still has to find its thresholds */
+			e->trip_widened |= s->trip_widened || (widen && old.grew_once &&
+							       e->loop->header == dst->insn_idx);
+			e->exit_threshold = e->loop == leftover_loop ? s->exit_threshold :
+					    max(e->exit_threshold, s->exit_threshold);
+			if (!leftover_loop || scalar_equal(&e->trip_index, &old))
+				continue;
+			threshold = widen ? bpf_guess_trip_threshold(env, dst, e, xreg) : 0;
+			e->trip_index.grew_once = true;
+			if (!threshold || threshold < cnum64_umax(e->trip_index.r64))
+				continue;
+			e->trip_widened = true;
+			if (threshold != S64_MAX)
+				e->loop->exit_trip = max(e->loop->exit_trip, threshold + 1);
+			scalar_set_unknown(&old);
+			old.r64 = cnum64_from_urange(cnum64_umin(e->trip_index.r64), threshold);
+			scalar_bounds_sync(&old);
+			scalar_union(&e->trip_index, &old);
+		}
+	}
+}
+
 /*
  * Make the equations of @dst hold for @src too. Call it before the xregs are joined.
  * @leftover_loop: the states are at its header. @widen: @src came around it.
@@ -2168,6 +2295,7 @@ void bpf_equations_pre_join(struct bpf_verifier_env *env, struct bpf_verifier_st
 				    src->equations.needs_refine;
 		swap(dst->equations, *eqs);
 	}
+	join_trip_index(env, dst, src, leftover_loop, widen);
 }
 
 /* The xregs of @dst are joined. Some of them are gone. */
