@@ -584,6 +584,7 @@ struct bpf_equations {
 	bool normalized;	/* see normalize_equations() */
 	bool infeasible;	/* the equations cannot hold: the program does not get here */
 	bool needs_refine;	/* widened: the equations are not applied, see bpf_flow_next() */
+	u32 clean_sym_cnt;	/* after the last bpf_equations_clean() */
 };
 
 struct bpf_verifier_state {
@@ -2370,6 +2371,7 @@ void bpf_equation_env_free(struct bpf_verifier_env *env);
 int bpf_equations_copy(struct bpf_verifier_env *env, struct bpf_equations *dst,
 		       const struct bpf_equations *src);
 void bpf_equations_free(struct bpf_equations *eqs);
+void bpf_equations_clean(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 s64 bpf_equations_max_sum(struct bpf_verifier_env *env, int regno1, int regno2);
 void bpf_equations_before_insn(struct bpf_verifier_env *env);
 int bpf_equations_after_insn(struct bpf_verifier_env *env);
