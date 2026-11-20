@@ -1120,8 +1120,8 @@ static void reqsk_timer_handler(struct timer_list *t)
 			return;
 
 		if (!inet_ehash_insert(req_to_sk(nreq), req_to_sk(oreq), NULL)) {
-			/* delete timer */
-			__inet_csk_reqsk_queue_drop(sk_listener, nreq, false);
+			if (timer_delete(&nreq->rsk_timer))
+				reqsk_put(nreq);
 			goto no_ownership;
 		}
 
