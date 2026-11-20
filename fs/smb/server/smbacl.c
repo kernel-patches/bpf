@@ -401,6 +401,7 @@ static int parse_dacl(const struct mnt_idmap *idmap,
 	struct posix_acl_state acl_state, default_acl_state;
 	umode_t mode = 0, acl_mode;
 	bool owner_found = false, group_found = false, others_found = false;
+	bool nfs_mode_found = false;
 
 	if (!pdacl)
 		return 0;
@@ -479,13 +480,17 @@ static int parse_dacl(const struct mnt_idmap *idmap,
 		ppace[i]->access_req =
 			smb_map_generic_desired_access(ppace[i]->access_req);
 
+		/* ACEs after an NFS mode ACE do not change the POSIX mapping */
+		if (nfs_mode_found)
+			continue;
+
 		if (ppace[i]->type == ACCESS_ALLOWED &&
 		    ppace[i]->sid.num_subauth >= 3 &&
 		    !(compare_sids(&ppace[i]->sid, &sid_unix_NFS_mode))) {
 			fattr->cf_mode =
 				le32_to_cpu(ppace[i]->sid.sub_auth[2]);
 			fattr->cf_posix_mode = true;
-			break;
+			nfs_mode_found = true;
 		} else if (!compare_sids(&ppace[i]->sid, pownersid)) {
 			acl_mode = access_flags_to_mode(fattr,
 							ppace[i]->access_req,
