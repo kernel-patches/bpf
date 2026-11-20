@@ -16,6 +16,7 @@ obj-$(CONFIG_BPF_SYSCALL) += fixups.o cfg.o states.o check_btf.o flow.o join.o
 obj-$(CONFIG_BPF_SYSCALL) += equation.o
 obj-$(CONFIG_BPF_SYSCALL) += equation_join.o
 obj-$(CONFIG_BPF_SYSCALL) += precision.o
+obj-$(CONFIG_BPF_SYSCALL) += failing_path.o
 obj-${CONFIG_BPF_LSM}	  += bpf_inode_storage.o
 obj-$(CONFIG_BPF_SYSCALL) += disasm.o mprog.o
 obj-$(CONFIG_BPF_JIT) += trampoline.o
