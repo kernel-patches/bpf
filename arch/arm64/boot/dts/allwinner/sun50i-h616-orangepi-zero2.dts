@@ -148,8 +148,6 @@
 	vcc-pi-supply = <&reg_aldo1>;
 };
 
-&spi0 {
-	flash@0 {
-		vcc-supply = <&reg_aldo1>;
-	};
+&spi_flash {
+	vcc-supply = <&reg_aldo1>;
 };
