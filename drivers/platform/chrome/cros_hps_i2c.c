@@ -14,9 +14,12 @@
 #include <linux/fs.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/kref.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/pm_runtime.h>
+#include <linux/slab.h>
 
 #define HPS_ACPI_ID		"GOOG0020"
 
@@ -24,7 +27,25 @@ struct hps_drvdata {
 	struct i2c_client *client;
 	struct miscdevice misc_device;
 	struct gpio_desc *enable_gpio;
+
+	/* hps outlives the driver binding while files are open. */
+	struct kref kref;
+	/*
+	 * Protects open_count, and client against remove(). remove() sets
+	 * client to NULL after dropping the files' runtime PM references;
+	 * release() then leaves the device alone.
+	 */
+	struct mutex lock;
+	unsigned int open_count;
 };
+
+static void hps_free(struct kref *kref)
+{
+	struct hps_drvdata *hps = container_of(kref, struct hps_drvdata, kref);
+
+	mutex_destroy(&hps->lock);
+	kfree(hps);
+}
 
 static void hps_set_power(struct hps_drvdata *hps, bool state)
 {
@@ -36,18 +57,33 @@ static int hps_open(struct inode *inode, struct file *file)
 	struct hps_drvdata *hps = container_of(file->private_data,
 					       struct hps_drvdata, misc_device);
 	struct device *dev = &hps->client->dev;
+	int ret;
 
-	return pm_runtime_resume_and_get(dev);
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret)
+		return ret;
+
+	mutex_lock(&hps->lock);
+	hps->open_count++;
+	mutex_unlock(&hps->lock);
+
+	kref_get(&hps->kref);
+	file->private_data = hps;
+	return 0;
 }
 
 static int hps_release(struct inode *inode, struct file *file)
 {
-	struct hps_drvdata *hps = container_of(file->private_data,
-					       struct hps_drvdata, misc_device);
-	struct device *dev = &hps->client->dev;
+	struct hps_drvdata *hps = file->private_data;
 
-	pm_runtime_put(dev);
+	mutex_lock(&hps->lock);
+	if (hps->client) {
+		hps->open_count--;
+		pm_runtime_put(&hps->client->dev);
+	}
+	mutex_unlock(&hps->lock);
 
+	kref_put(&hps->kref, hps_free);
 	return 0;
 }
 
@@ -62,9 +98,12 @@ static int hps_i2c_probe(struct i2c_client *client)
 	struct hps_drvdata *hps;
 	int ret;
 
-	hps = devm_kzalloc_obj(&client->dev, *hps);
+	hps = kzalloc_obj(*hps);
 	if (!hps)
 		return -ENOMEM;
+
+	kref_init(&hps->kref);
+	mutex_init(&hps->lock);
 
 	hps->misc_device.parent = &client->dev;
 	hps->misc_device.minor = MISC_DYNAMIC_MINOR;
@@ -83,32 +122,49 @@ static int hps_i2c_probe(struct i2c_client *client)
 	if (IS_ERR(hps->enable_gpio)) {
 		ret = PTR_ERR(hps->enable_gpio);
 		dev_err(&client->dev, "failed to get enable gpio: %d\n", ret);
-		return ret;
+		goto err_put;
 	}
 
 	ret = misc_register(&hps->misc_device);
 	if (ret) {
 		dev_err(&client->dev, "failed to initialize misc device: %d\n", ret);
-		return ret;
+		goto err_put;
 	}
 
 	hps_set_power(hps, false);
 	pm_runtime_enable(&client->dev);
 	return 0;
+
+err_put:
+	kref_put(&hps->kref, hps_free);
+	return ret;
 }
 
 static void hps_i2c_remove(struct i2c_client *client)
 {
 	struct hps_drvdata *hps = i2c_get_clientdata(client);
 
-	pm_runtime_disable(&client->dev);
+	/* After misc_deregister(), no open() is running or can start. */
 	misc_deregister(&hps->misc_device);
+
+	/* Drop the runtime PM references of files that are still open. */
+	mutex_lock(&hps->lock);
+	while (hps->open_count) {
+		hps->open_count--;
+		pm_runtime_put_noidle(&client->dev);
+	}
+	hps->client = NULL;
+	mutex_unlock(&hps->lock);
+
+	pm_runtime_disable(&client->dev);
 
 	/*
 	 * Re-enable HPS, in order to return it to its default state
 	 * (i.e. powered on).
 	 */
 	hps_set_power(hps, true);
+
+	kref_put(&hps->kref, hps_free);
 }
 
 static int hps_suspend(struct device *dev)
