@@ -751,7 +751,8 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 			break;
 		case STACK_DYNPTR:
 			/* skip to main dynptr slot */
-			i += BPF_DYNPTR_NR_SLOTS - 1;
+			if (!reg->dynptr.first_slot)
+				i += BPF_DYNPTR_NR_SLOTS - 1;
 			reg = &bpf_stack_slot(state, i)->spilled_ptr;
 
 			verbose(env, " fp%d", (-i - 1) * BPF_REG_SIZE);

@@ -1488,7 +1488,7 @@ static int resize_reference_state(struct bpf_verifier_state *state, size_t n)
 /* Possibly update state->allocated_stack to be at least size bytes. Also
  * possibly update the function's high-water mark in its bpf_subprog_info.
  */
-int bpf_grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *state, int size)
+static int grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *state, int size)
 {
 	size_t old_n = bpf_stack_nr_slots(state), n;
 
@@ -1506,8 +1506,10 @@ int bpf_grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *st
 	state->allocated_stack = size;
 
 	/* update known max for given subprogram */
-	if (env->subprog_info[state->subprogno].stack_depth < size)
+	if (env->subprog_info[state->subprogno].stack_depth < size) {
 		env->subprog_info[state->subprogno].stack_depth = size;
+		env->subprog_info[state->subprogno].deepest_insn = env->insn_idx;
+	}
 
 	return 0;
 }
@@ -1832,15 +1834,12 @@ int bpf_copy_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_st
 	return 0;
 }
 
-static bool error_recoverable_with_nospec(int err)
+/*
+ * A check failed, so the insn is unproven in this state. The program is not rejected: a later
+ * pass can prove the insn. This pass continues, to find the other unproven insns.
+ */
+static bool error_is_recoverable(int err)
 {
-	/* Should only return true for non-fatal errors that are allowed to
-	 * occur during speculative verification. For these we can insert a
-	 * nospec and the program might still be accepted. Do not include
-	 * something like ENOMEM because it is likely to re-occur for the next
-	 * architectural path once it has been recovered-from in all speculative
-	 * paths.
-	 */
 	return err == -EPERM || err == -EACCES || err == -EINVAL;
 }
 
@@ -4403,7 +4402,7 @@ static int check_outgoing_stack_args(struct bpf_verifier_env *env, struct bpf_fu
 				nargs, spi + 1);
 			bpf_diag_stack_arg_uninit(env, env->insn_idx, nargs, spi,
 						  callee_name, arg_name);
-			return -EFAULT;
+			return -EINVAL;
 		}
 	}
 
@@ -7051,7 +7050,7 @@ static int check_stack_access_within_bounds(
 	/* Note that there is no stack access with offset zero, so the needed stack
 	 * size is -min_off, not -min_off+1.
 	 */
-	return bpf_grow_stack_state(env, state, -min_off /* size */);
+	return grow_stack_state(env, state, -min_off /* size */);
 }
 
 static bool get_func_retval_range(struct bpf_prog *prog,
@@ -7598,6 +7597,8 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 		src_reg_type |= PTR_UNTRUSTED;
 	}
+	/* a fill copies it from the slot, see mark_from_unproven(); dst can be src */
+	regs[insn->dst_reg].from_unproven = regs[insn->src_reg].from_unproven;
 
 	/*
 	 * check_stack_read_fixed_off() may refine the modification's origin to
@@ -11360,9 +11361,9 @@ static int btf_check_subprog_call(struct bpf_verifier_env *env, int subprog)
 	err = btf_check_func_arg_match(env, subprog, btf);
 	/* Compiler optimizations can remove arguments from static functions
 	 * or mismatched type can be passed into a global function.
-	 * In such cases mark the function as unreliable from BTF point of view.
+	 * Mark a static function as unreliable from BTF point of view. The other call is unproven.
 	 */
-	if (err)
+	if (err && !bpf_subprog_is_global(env, subprog))
 		prog->aux->func_info_aux[subprog].unreliable = true;
 	return err;
 }
@@ -12767,6 +12768,7 @@ static struct bpf_insn_aux_data *cur_aux(const struct bpf_verifier_env *env)
 static int fixups_differ(struct bpf_verifier_env *env, const char *msg)
 {
 	verbose(env, "%s\n", msg);
+	bpf_note_fixups_differ(env);
 	return -EINVAL;
 }
 
@@ -20712,6 +20714,33 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	return -EFAULT;
 }
 
+/* Does the insn read what an unproven insn made up? Then what it writes is made up too. */
+static bool reads_from_unproven(struct bpf_verifier_env *env)
+{
+	struct bpf_reg_state *regs = cur_regs(env);
+	int i;
+
+	for (i = BPF_REG_0; env->err && i < BPF_REG_FP; i++)
+		if ((cur_aux(env)->use_regs & BIT(i)) && regs[i].from_unproven)
+			return true;
+	return false;
+}
+
+static void mark_from_unproven(struct bpf_verifier_env *env, int idx, bool from_unproven)
+{
+	struct bpf_reg_state *regs = cur_regs(env);
+	int i;
+
+	/* a fill has what was spilled */
+	if (!from_unproven && BPF_CLASS(env->prog->insnsi[idx].code) == BPF_LDX)
+		return;
+	for (i = BPF_REG_0; env->err && i < BPF_REG_FP; i++)
+		if (env->insn_aux_data[idx].def_regs & BIT(i))
+			regs[i].from_unproven = from_unproven;
+}
+
+static void note_error(struct bpf_verifier_env *env, int err);
+
 static u32 held_cnt(const struct bpf_verifier_state *st)
 {
 	return st->acquired_refs + st->active_rcu_locks + st->active_preempt_locks;
@@ -20899,6 +20928,11 @@ static int check_held_in_leftover(struct bpf_verifier_env *env,
 	verbose(env, "loop at insn %d acquires more than it releases\n", entry->loop->header);
 	env->imprecise |= !env->err;
 	st->suspect_loops |= entry->loop->suspect_bit;
+	st->holds_too_much = true;
+	if (bpf_same_insns_unproven(env))
+		return -EINVAL;
+	note_error(env, -EINVAL);
+	st->holds_too_much = false;
 	st->max_held_cnt = st->max_held_cnt ?: held_cnt(st);
 	return held_cnt(st) > st->max_held_cnt;
 }
@@ -21234,11 +21268,123 @@ static bool is_error_of_state(struct bpf_verifier_env *env, int err)
 	return err != -ENOMEM && err != -EINTR && !env->over_limit && !env->bug;
 }
 
+/* The pass has an error. The log ends with the first error. */
+static void note_error(struct bpf_verifier_env *env, int err)
+{
+	if (!is_error_of_state(env, err))
+		return;
+	if (!env->err) {
+		env->err = err;
+		env->err_insn = env->insn_idx;
+		env->log.level = 0;
+	}
+	if (!env->path_sensitive)
+		bpf_note_unproven_insn(env, env->cur_state, env->insn_idx);
+}
+
 /* An error in a speculative state is no error */
 static bool nospec_ends_path(struct bpf_verifier_env *env,
 			     const struct bpf_verifier_state *st, int err)
 {
 	return st->speculative && err < 0 && is_error_of_state(env, err);
+}
+
+/* @st cannot take the edge to or from @idx. Returns 1 if only its path ends. */
+int bpf_flow_edge_unproven(struct bpf_verifier_env *env, struct bpf_verifier_state *st, u32 idx,
+			   int err)
+{
+	bool last;
+
+	if (nospec_ends_path(env, st, err)) {
+		need_nospec(env, idx);
+		return 1;
+	}
+	swap(env->insn_idx, idx);
+	last = !error_is_recoverable(err) || env->path_sensitive || bpf_same_insns_unproven(env);
+	swap(env->cur_state, st);
+	if (!env->path_sensitive)
+		note_error(env, err);
+	env->cur_state = st;
+	if (last)
+		return err;
+	env->insn_idx = idx;
+	return 1;
+}
+
+/* The call releases, locks, or makes a dynptr, an iterator or an irq flag */
+static bool call_writes_held(struct bpf_verifier_env *env, const struct bpf_insn *insn)
+{
+	const struct bpf_func_proto *fn = NULL;
+	struct bpf_kfunc_desc *desc;
+	enum bpf_arg_type type;
+	int i;
+
+	if (bpf_helper_call(insn)) {
+		bpf_get_helper_proto(env, insn->imm, &fn);
+	} else {
+		desc = find_kfunc_desc(env, insn->imm, insn->off);
+		fn = desc ? &desc->proto : NULL;
+	}
+	for (i = 0; fn && i < MAX_BPF_FUNC_REG_ARGS; i++) {
+		/* nothing is held for a pointer that an unproven insn made up */
+		if (cur_regs(env)[BPF_REG_1 + i].type == SCALAR_VALUE)
+			continue;
+		type = fn->arg_type[i];
+		if (arg_type_is_release(type) || (arg_type_is_dynptr(type) && (type & MEM_UNINIT)))
+			return true;
+		switch (base_type(type)) {
+		case ARG_PTR_TO_SPIN_LOCK:
+		case ARG_PTR_TO_RES_SPIN_LOCK:
+		case ARG_PTR_TO_IRQ_FLAG:
+		case ARG_PTR_TO_ITER:
+		case ARG_PTR_TO_LIST_NODE:
+		case ARG_PTR_TO_RB_NODE:
+			return true;
+		default:
+			break;
+		}
+	}
+	return false;
+}
+
+/*
+ * Continue as if @insn is proven, to find the other unproven insns of the pass.
+ * If it changes what is held, the next errors follow from this one, so the path ends.
+ * Returns 0 if the path continues.
+ */
+static int skip_unproven_insn(struct bpf_verifier_env *env, const struct bpf_insn *insn)
+{
+	struct bpf_func_state *frame = cur_func(env);
+	struct bpf_reg_state *regs = cur_regs(env);
+	u16 def = cur_aux(env)->def_regs;
+	u8 class = BPF_CLASS(insn->code), *type;
+	int i, spi;
+
+	if (bpf_insn_is_cond_jump(insn->code))
+		return PTR_ERR_OR_ZERO(push_stack(env, env->insn_idx + insn->off + 1,
+						  env->insn_idx, false));
+	if (class == BPF_LD || ((class == BPF_JMP || class == BPF_JMP32) &&
+				!bpf_helper_call(insn) && !bpf_pseudo_kfunc_call(insn)))
+		return PROCESS_BPF_EXIT;
+	if (class == BPF_JMP && call_writes_held(env, insn))
+		return PROCESS_BPF_EXIT;
+	/* what it stores can be read */
+	for_each_set_bit(spi, cur_aux(env)->may_write_mask, bpf_stack_nr_slots(frame)) {
+		type = bpf_stack_slot(frame, spi)->slot_type;
+		for (i = 0; i < BPF_REG_SIZE; i++)
+			if (type[i] == STACK_INVALID || type[i] == STACK_POISON)
+				type[i] = STACK_MISC;
+	}
+	for (i = BPF_REG_0; i < BPF_REG_FP; i++) {
+		if (!(def & BIT(i)))
+			continue;
+		if (class == BPF_JMP && i)
+			bpf_mark_reg_not_init(env, &regs[i]);
+		else
+			mark_reg_unknown(env, regs, i);
+	}
+	leave_callback(frame);
+	return 0;
 }
 
 static void free_pushed_states(struct bpf_verifier_env *env)
@@ -21258,7 +21404,7 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 	struct bpf_verifier_state *state = env->cur_state;
 	struct bpf_insn *insns = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
-	bool do_print_state = true;
+	bool do_print_state = true, from_unproven;
 
 	for (;;) {
 		struct bpf_insn *insn;
@@ -21335,10 +21481,12 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		}
 
 		sanitize_mark_insn_seen(env);
+		insn_aux->suspect_loops |= state->suspect_loops;
 		prev_insn_idx = env->insn_idx;
 
 		/* Sanity check: precomputed constants must match verifier state */
-		if (!state->speculative && insn_aux->const_reg_mask) {
+		if (!state->speculative && !env->err && !env->extra_values &&
+		    insn_aux->const_reg_mask) {
 			struct bpf_reg_state *regs = cur_regs(env);
 			u16 mask = insn_aux->const_reg_mask;
 
@@ -21361,14 +21509,18 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		/* Reduce verification complexity by stopping speculative path
 		 * verification when a nospec is encountered.
 		 */
+		if (state->speculative && insn_aux->non_speculative_first)
+			need_nospec(env, env->insn_idx);
 		if (state->speculative && insn_aux->nospec)
 			goto process_bpf_exit;
+		insn_aux->speculative_first |= !insn_aux->seen;
 
 		err = check_loop_guard(env) ?: check_recursion_guard(env);
 		if (err)
 			return err;
 
 		bpf_equations_before_insn(env);
+		from_unproven = reads_from_unproven(env);
 		fixups = insn_aux->fixups;
 		err = do_check_insn(env, &do_print_state) ?: bpf_equations_after_insn(env);
 		if (nospec_ends_path(env, state, err)) {
@@ -21382,12 +21534,29 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 			need_nospec(env, prev_insn_idx);
 			free_pushed_states(env);
 			goto process_bpf_exit;
+		} else if (error_is_recoverable(err) && !env->path_sensitive) {
+			env->insn_idx = prev_insn_idx;
+			if (bpf_same_insns_unproven(env))
+				return err;
+			if (from_unproven)
+				bpf_note_reads_from_unproven(env, prev_insn_idx);
+			else
+				note_error(env, err);
+			err = skip_unproven_insn(env, insn);
+			if (err < 0)
+				return err;
+			if (err)
+				goto process_bpf_exit;
+			mark_from_unproven(env, prev_insn_idx, true);
+			env->insn_idx++;
 		} else if (err < 0) {
 			return err;
 		} else if (err == PROCESS_BPF_EXIT) {
 			goto process_bpf_exit;
 		} else if (err == INSN_IDX_UPDATED) {
 		} else if (err == 0) {
+			if (!bpf_pseudo_call(insn) && !bpf_is_callx(insn))
+				mark_from_unproven(env, prev_insn_idx, from_unproven);
 			env->insn_idx++;
 		}
 
@@ -22685,12 +22854,12 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog,
 
 	ret = do_check(env);
 out:
+	if (ret && !env->err)
+		note_error(env, ret);
 	account_current_path(env);
-	if (!ret) {
-		if (pop_log)
-			bpf_vlog_reset(&env->log, 0);
-		bpf_diag_event_log_restore(env, 0);
-	}
+	if (!ret && pop_log)
+		bpf_vlog_reset(&env->log, 0);
+	bpf_diag_event_log_restore(env, 0);
 	free_states(env);
 
 	/*
