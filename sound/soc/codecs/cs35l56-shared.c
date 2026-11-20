@@ -50,16 +50,14 @@ EXPORT_SYMBOL_NS_GPL(cs35l56_set_asp_defaults, "SND_SOC_CS35L56_SHARED");
 
 static const struct reg_sequence cs35l56_patch[] = {
 	{ CS35L56_IRQ1_MASK_18,			0x1f7df0ff },
-};
-
-static const struct reg_sequence cs35l56_patch_fw[] = {
 	/* These are not reset by a soft-reset, so patch to defaults. */
 	{ CS35L56_MAIN_RENDER_USER_MUTE,	0x00000000 },
 	{ CS35L56_MAIN_RENDER_USER_VOLUME,	0x00000000 },
 	{ CS35L56_MAIN_POSTURE_NUMBER,		0x00000000 },
 };
 
-static const struct reg_sequence cs35l63_patch_fw[] = {
+static const struct reg_sequence cs35l63_patch[] = {
+	{ CS35L56_IRQ1_MASK_18,			0x1f7df0ff },
 	/* These are not reset by a soft-reset, so patch to defaults. */
 	{ CS35L63_MAIN_RENDER_USER_MUTE,	0x00000000 },
 	{ CS35L63_MAIN_RENDER_USER_VOLUME,	0x00000000 },
@@ -68,31 +66,19 @@ static const struct reg_sequence cs35l63_patch_fw[] = {
 
 int cs35l56_set_patch(struct cs35l56_base *cs35l56_base)
 {
-	int ret;
-
-	ret = regmap_register_patch(cs35l56_base->regmap, cs35l56_patch,
-				     ARRAY_SIZE(cs35l56_patch));
-	if (ret)
-		return ret;
-
-
 	switch (cs35l56_base->type) {
 	case 0x54:
 	case 0x56:
 	case 0x57:
-		ret = regmap_register_patch(cs35l56_base->regmap, cs35l56_patch_fw,
-					    ARRAY_SIZE(cs35l56_patch_fw));
-		break;
+		return regmap_register_patch(cs35l56_base->regmap, cs35l56_patch,
+					     ARRAY_SIZE(cs35l56_patch));
 	case 0x63:
 	case 0x62:
-		ret = regmap_register_patch(cs35l56_base->regmap, cs35l63_patch_fw,
-					    ARRAY_SIZE(cs35l63_patch_fw));
-		break;
+		return regmap_register_patch(cs35l56_base->regmap, cs35l63_patch,
+					     ARRAY_SIZE(cs35l63_patch));
 	default:
-		break;
+		return 0;
 	}
-
-	return ret;
 }
 EXPORT_SYMBOL_NS_GPL(cs35l56_set_patch, "SND_SOC_CS35L56_SHARED");
 
