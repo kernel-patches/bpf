@@ -526,6 +526,26 @@ label_%=: 	                                        \
 	: __clobber_all);
 }
 
+/* The source is even, so the result is even */
+#define KEEPS_LOW_BIT(name, insns)				\
+SEC("socket")							\
+__success __retval(0)						\
+__naked void name(void)						\
+{								\
+	asm volatile (						\
+	"call %[bpf_get_prandom_u32];"				\
+	insns							\
+	"r0 &= 1;"						\
+	"if r0 == 0 goto 1f;"					\
+	"r0 /= 0;"						\
+	"1: exit;"						\
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);		\
+}
+
+KEEPS_LOW_BIT(mov64sx_s8_one_sign_keeps_low_bit, "r0 &= 0x7e; r0 |= 0x100; r0 = (s8)r0;")
+KEEPS_LOW_BIT(mov32sx_s8_one_sign_keeps_low_bit, "w0 &= 0x7e; w0 |= 0x100; w0 = (s8)w0;")
+KEEPS_LOW_BIT(mov32sx_s8_keeps_low_bit, "w0 &= -2; w0 = (s8)w0;")
+
 #else
 
 SEC("socket")
