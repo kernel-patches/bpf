@@ -991,6 +991,8 @@ struct bpf_insn_aux_data {
 	u32 guard_no_unwind:1; /* it cannot unwind from here, at least sometimes */
 	u32 guard_unset_reg:1; /* where it goes a register is read that is not set here */
 	u32 non_speculative_first:1; /* speculative states end here, their fixups did not fit */
+	u32 acquires:1; /* a reference or a lock */
+	u32 releases:1;
 
 	/* below flags are initialized once */
 	u32 bb_end:1; /* last instruction of a basic block */
@@ -1722,6 +1724,7 @@ static inline int bpf_add_cost_and_check(struct bpf_verifier_env *env, u64 cnt, 
 int bpf_flow_prepare(struct bpf_verifier_env *env);
 void bpf_flow_reset(struct bpf_verifier_env *env);
 void bpf_flow_free(struct bpf_verifier_env *env);
+bool bpf_flow_is_bb_start(struct bpf_verifier_env *env, int insn_idx);
 bool bpf_flow_is_point(struct bpf_verifier_env *env, int insn_idx);
 int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 		     int insn_idx, int prev_insn_idx);
@@ -2416,6 +2419,8 @@ int bpf_compute_idoms(struct bpf_verifier_env *env);
 int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
+
+int bpf_insn_callee(struct bpf_verifier_env *env, int idx);
 
 /* equation.c */
 int bpf_equation_env_init(struct bpf_verifier_env *env);
