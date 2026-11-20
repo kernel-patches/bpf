@@ -17469,6 +17469,7 @@ static bool is_safe_to_compute_dst_reg_range(const struct bpf_insn *insn,
 	}
 
 	switch (BPF_OP(insn->code)) {
+	case BPF_MOV:
 	case BPF_ADD:
 	case BPF_SUB:
 	case BPF_NEG:
@@ -17537,7 +17538,7 @@ static int maybe_fork_scalars(struct bpf_verifier_env *env, struct bpf_insn *ins
 }
 
 /*
- * dst = dst <op> src: the transfer function of the ALU insn @insn, all but BPF_MOV.
+ * dst = dst <op> src: the transfer function of the ALU insn @insn.
  * @src can't be @dst. BPF_NEG and BPF_END ignore its value: any valid scalar will do.
  *
  * WARNING: This function does calculations on 64-bit values, but the actual
@@ -17577,6 +17578,13 @@ void scalar_alu(struct scalar *dst, const struct scalar *src, const struct bpf_i
 	 * tnum to calculate an approximation of the sign/unsigned bounds.
 	 */
 	switch (opcode) {
+	case BPF_MOV:
+		*dst = *src;
+		if (off && alu32)
+			coerce_subreg_to_size_sx(dst, off >> 3);
+		else if (off)
+			coerce_scalar_to_size_sx(dst, off >> 3);
+		break;
 	case BPF_ADD:
 		scalar_add(dst, dst, src);
 		break;
@@ -18329,7 +18337,6 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
 	}));
 }
 
-static void scalars_refine_cond_op(struct scalar *a, struct scalar *b, u8 opcode, bool is_jmp32);
 /*
  * Learn more information about live branches by simulating refinement on both branches.
  * scalars_refine_cond_op() is sound, so producing ill-formed register bounds for the branch means
@@ -18600,6 +18607,18 @@ static int is_branch_taken(struct bpf_verifier_env *env, struct bpf_reg_state *r
 	if (reg_is_pkt_pointer_any(reg1) && reg_is_pkt_pointer_any(reg2) && !is_jmp32)
 		return is_pkt_ptr_branch_taken(reg1, reg2, opcode);
 
+	/* Two pointers to one object have the order of their offsets */
+	if (reg1->type != SCALAR_VALUE && !is_jmp32 && opcode != BPF_JSET && env->bypass_spec_v1 &&
+	    !(reg1->type & PTR_UNTRUSTED) && bpf_same_memory_origin(reg1, reg2)) {
+		/* an object can be at a low address, but not in the first page */
+		struct cnum64 lim = cnum64_from_srange(opcode == BPF_JEQ || opcode == BPF_JNE ?
+						       -BPF_MAX_VAR_OFF : -SZ_4K, BPF_MAX_VAR_OFF);
+
+		if (!cnum64_is_subset(lim, reg1->r64) || !cnum64_is_subset(lim, reg2->r64))
+			return -1;
+		return is_scalar_branch_taken(env, reg1, reg2, bpf_signed_opcode(opcode), false);
+	}
+
 	if (__is_pointer_value(false, reg1) || __is_pointer_value(false, reg2)) {
 		u64 val;
 
@@ -18669,7 +18688,7 @@ u8 bpf_rev_opcode(u8 opcode)
 }
 
 /* Refine range knowledge for <a> <op> <b> conditional operation. */
-static void scalars_refine_cond_op(struct scalar *a, struct scalar *b, u8 opcode, bool is_jmp32)
+void scalars_refine_cond_op(struct scalar *a, struct scalar *b, u8 opcode, bool is_jmp32)
 {
 	struct tnum t;
 	u64 val;
@@ -18983,7 +19002,7 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 }
 
 /* a == b (mod 2^N) implies a == b if both fit in uN or both fit in sN. N is @bits. */
-static bool scalars_fit_in_bits(const struct scalar *a, const struct scalar *b, u32 bits)
+bool scalars_fit_in_bits(const struct scalar *a, const struct scalar *b, u32 bits)
 {
 	u64 umax = GENMASK_ULL(bits - 1, 0);
 	s64 smax = umax >> 1;
@@ -19230,6 +19249,7 @@ again:
 		err = refine_live_branch(env, insn, &env->true_reg1, &env->true_reg2);
 		if (err)
 			return err;
+		bpf_equations_jump(env, this_branch, *insn_idx, true);
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
 		*insn_idx += insn->off;
@@ -19248,6 +19268,7 @@ again:
 		err = refine_live_branch(env, insn, &env->false_reg1, &env->false_reg2);
 		if (err)
 			return err;
+		bpf_equations_jump(env, this_branch, *insn_idx, false);
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
 		return 0;
@@ -19338,6 +19359,9 @@ again:
 			insn->dst_reg);
 		return -EACCES;
 	}
+	/* last: the code above takes the operands of one branch for both */
+	bpf_equations_jump(env, this_branch, *insn_idx, false);
+	bpf_equations_jump(env, other_branch, *insn_idx, true);
 	if (env->log.level & BPF_LOG_LEVEL)
 		print_insn_state(env, this_branch, this_branch->curframe);
 	return 0;
@@ -20847,6 +20871,18 @@ static int check_held_in_leftover(struct bpf_verifier_env *env,
 	return held_cnt(st) > st->max_held_cnt;
 }
 
+/*
+ * The cpu can speculate past the jump that the equations decide.
+ * The removal of dead code can delete an edge only from a conditional jump.
+ */
+static bool infeasible_state_ends(struct bpf_verifier_env *env)
+{
+	int from = env->cur_state->last_insn_idx;
+
+	return env->cur_state->equations.infeasible && env->bypass_spec_v1 && from >= 0 &&
+	       bpf_insn_is_cond_jump(env->prog->insnsi[from].code);
+}
+
 /* The current state came back to the header of the loop of @entry. Returns 1 if it ends here. */
 static int next_trip(struct bpf_verifier_env *env, struct loop_stack_entry *entry,
 		     bool *starts_leftover)
@@ -20922,11 +20958,16 @@ int bpf_flow_loop_enter(struct bpf_verifier_env *env, struct bpf_loop **backedge
 	bool pushed;
 	int err;
 
+	if (infeasible_state_ends(env))
+		return 1;
+
 	/* The callback came back to the helper that calls it, in the same trip. */
 	if (frame->callback_depth)
 		return enter_callback(env, true, backedge_loop);
 
 	loop_stack_pop(env);
+	if (infeasible_state_ends(env))
+		return 1;
 
 	err = loop_stack_push(env, &pushed);
 	if (err)
