@@ -2016,9 +2016,6 @@ static int update_parent_effective_cpumask(struct cpuset *cs, int cmd,
 			goto write_error;
 		}
 
-		/* Check newmask whether cpus are available for parent/cs */
-		nocpu = tasks_nocpu_error(parent, cs, newmask);
-
 		/*
 		 * partcmd_update with newmask:
 		 *
@@ -2033,6 +2030,11 @@ static int update_parent_effective_cpumask(struct cpuset *cs, int cmd,
 		 * For invalid partition:
 		 *   delmask = newmask & parent->effective_xcpus
 		 *   The partition may become valid soon.
+		 *
+		 * Note that the no-cpu check is not repeated here:
+		 * validate_partition() has already evaluated
+		 * tasks_nocpu_error() with this very mask, and a failing
+		 * write is routed to partcmd_invalidate instead.
 		 */
 		if (is_partition_invalid(cs)) {
 			adding = false;
@@ -2055,18 +2057,6 @@ static int update_parent_effective_cpumask(struct cpuset *cs, int cmd,
 		if (deleting) {
 			cpumask_and(tmp->new_cpus, tmp->delmask, cpu_active_mask);
 			WARN_ON_ONCE(!cpumask_subset(tmp->new_cpus, parent->effective_cpus));
-		}
-
-		/*
-		 * Make partition invalid if parent's effective_cpus could
-		 * become empty and there are tasks in the parent.
-		 */
-		if (nocpu && (!adding ||
-		    !cpumask_intersects(tmp->addmask, cpu_active_mask))) {
-			part_error = PERR_NOCPUS;
-			deleting = false;
-			adding = cpumask_and(tmp->addmask,
-					     cs->effective_xcpus, parent->effective_xcpus);
 		}
 	} else {
 		/*
