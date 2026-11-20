@@ -68,6 +68,8 @@
 #define KTD202X_FLASH_PERIOD_MIN_MS 256
 #define KTD202X_FLASH_PERIOD_STEP_MS 128
 #define KTD202X_FLASH_PERIOD_MAX_STEPS 126
+#define ET6326_FLASH_PERIOD_MIN_MS 128
+#define ET6326_FLASH_PERIOD_MAX_STEPS 127
 #define KTD202X_FLASH_ON_MIN 1
 #define KTD202X_FLASH_ON_MAX 256
 
@@ -87,6 +89,30 @@ static const struct reg_default ktd202x_reg_defaults[] = {
 	{ KTD202X_REG_LED_IOUT(3), KTD202X_LED_CURRENT_10_mA },
 };
 
+struct ktd202x_caps {
+	unsigned long num_leds;
+	unsigned int flash_period_min_ms;
+	unsigned int flash_period_max_steps;
+};
+
+static const struct ktd202x_caps ktd2026_caps = {
+	.num_leds = KTD2026_NUM_LEDS,
+	.flash_period_min_ms = KTD202X_FLASH_PERIOD_MIN_MS,
+	.flash_period_max_steps = KTD202X_FLASH_PERIOD_MAX_STEPS,
+};
+
+static const struct ktd202x_caps ktd2027_caps = {
+	.num_leds = KTD2027_NUM_LEDS,
+	.flash_period_min_ms = KTD202X_FLASH_PERIOD_MIN_MS,
+	.flash_period_max_steps = KTD202X_FLASH_PERIOD_MAX_STEPS,
+};
+
+static const struct ktd202x_caps et6326_caps = {
+	.num_leds = KTD2026_NUM_LEDS,
+	.flash_period_min_ms = ET6326_FLASH_PERIOD_MIN_MS,
+	.flash_period_max_steps = ET6326_FLASH_PERIOD_MAX_STEPS,
+};
+
 struct ktd202x_led {
 	struct ktd202x *chip;
 	union {
@@ -101,6 +127,7 @@ struct ktd202x {
 	struct regulator_bulk_data regulators[2];
 	struct device *dev;
 	struct regmap *regmap;
+	const struct ktd202x_caps *caps;
 	bool enabled;
 	unsigned long num_leds;
 	struct ktd202x_led leds[] __counted_by(num_leds);
@@ -272,6 +299,7 @@ static int ktd202x_blink_set(struct ktd202x_led *led, unsigned long *delay_on,
 			     unsigned long *delay_off, struct mc_subled *subleds,
 			     unsigned int num_channels)
 {
+	const struct ktd202x_caps *caps = led->chip->caps;
 	unsigned long delay_total_ms;
 	int ret, num_steps, on;
 	u8 ctrl_mask = 0;
@@ -306,11 +334,11 @@ static int ktd202x_blink_set(struct ktd202x_led *led, unsigned long *delay_on,
 	/* Integer representation of time of flash period */
 	if (check_add_overflow(*delay_on, *delay_off, &delay_total_ms))
 		delay_total_ms = ULONG_MAX;
-	if (delay_total_ms < KTD202X_FLASH_PERIOD_MIN_MS)
+	if (delay_total_ms < caps->flash_period_min_ms)
 		num_steps = 0;
 	else
-		num_steps = min_t(unsigned long, KTD202X_FLASH_PERIOD_MAX_STEPS,
-				  (delay_total_ms - KTD202X_FLASH_PERIOD_MIN_MS) /
+		num_steps = min_t(unsigned long, caps->flash_period_max_steps,
+				  (delay_total_ms - caps->flash_period_min_ms) /
 				  KTD202X_FLASH_PERIOD_STEP_MS);
 
 	/*
@@ -321,8 +349,14 @@ static int ktd202x_blink_set(struct ktd202x_led *led, unsigned long *delay_on,
 	on = clamp(on, KTD202X_FLASH_ON_MIN, KTD202X_FLASH_ON_MAX - 1);
 
 	/* Actually used delay_{on,off} values */
-	delay_total_ms = num_steps * KTD202X_FLASH_PERIOD_STEP_MS + KTD202X_FLASH_PERIOD_MIN_MS;
-	*delay_on = (delay_total_ms * on) / KTD202X_FLASH_ON_MAX;
+	delay_total_ms = num_steps * KTD202X_FLASH_PERIOD_STEP_MS + caps->flash_period_min_ms;
+	/*
+	 * Rounded to the nearest ms, so that the delays give the same on time
+	 * when written back. Rounded down, 1/256 of the 128 ms ET6326 period
+	 * would be 0 ms, which means never on.
+	 */
+	*delay_on = clamp(DIV_ROUND_CLOSEST(delay_total_ms * on, KTD202X_FLASH_ON_MAX),
+			  1UL, delay_total_ms - 1);
 	*delay_off = delay_total_ms - *delay_on;
 
 	/* Set timings */
@@ -550,8 +584,8 @@ static const struct regmap_config ktd202x_regmap_config = {
 static int ktd202x_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
+	const struct ktd202x_caps *caps;
 	struct ktd202x *chip;
-	unsigned long num_leds;
 	int count;
 	int ret;
 
@@ -559,14 +593,17 @@ static int ktd202x_probe(struct i2c_client *client)
 	if (!count || count > KTD202X_MAX_LEDS)
 		return dev_err_probe(dev, -EINVAL, "Incorrect number of leds (%d)", count);
 
-	num_leds = (unsigned long)i2c_get_match_data(client);
+	caps = i2c_get_match_data(client);
+	if (!caps)
+		return -ENODEV;
 
 	/* Loops over the LEDs go up to the number of channels, not of child nodes */
-	chip = devm_kzalloc(dev, struct_size(chip, leds, num_leds), GFP_KERNEL);
+	chip = devm_kzalloc(dev, struct_size(chip, leds, caps->num_leds), GFP_KERNEL);
 	if (!chip)
 		return -ENOMEM;
 
-	chip->num_leds = num_leds;
+	chip->caps = caps;
+	chip->num_leds = caps->num_leds;
 	chip->dev = dev;
 	i2c_set_clientdata(client, chip);
 
@@ -626,15 +663,17 @@ static void ktd202x_shutdown(struct i2c_client *client)
 }
 
 static const struct i2c_device_id ktd202x_id[] = {
-	{ .name = "ktd2026", .driver_data = KTD2026_NUM_LEDS },
-	{ .name = "ktd2027", .driver_data = KTD2027_NUM_LEDS },
+	{ .name = "et6326", .driver_data = (kernel_ulong_t)&et6326_caps },
+	{ .name = "ktd2026", .driver_data = (kernel_ulong_t)&ktd2026_caps },
+	{ .name = "ktd2027", .driver_data = (kernel_ulong_t)&ktd2027_caps },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ktd202x_id);
 
 static const struct of_device_id ktd202x_match_table[] = {
-	{ .compatible = "kinetic,ktd2026", .data = (void *)KTD2026_NUM_LEDS },
-	{ .compatible = "kinetic,ktd2027", .data = (void *)KTD2027_NUM_LEDS },
+	{ .compatible = "etekmicro,et6326", .data = &et6326_caps },
+	{ .compatible = "kinetic,ktd2026", .data = &ktd2026_caps },
+	{ .compatible = "kinetic,ktd2027", .data = &ktd2027_caps },
 	{}
 };
 MODULE_DEVICE_TABLE(of, ktd202x_match_table);
@@ -652,5 +691,5 @@ static struct i2c_driver ktd202x_driver = {
 module_i2c_driver(ktd202x_driver);
 
 MODULE_AUTHOR("André Apitzsch <git@apitzsch.eu>");
-MODULE_DESCRIPTION("Kinetic KTD2026/7 LED driver");
+MODULE_DESCRIPTION("Kinetic KTD2026/7 and Etek ET6326 LED driver");
 MODULE_LICENSE("GPL");
