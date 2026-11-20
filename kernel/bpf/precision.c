@@ -121,11 +121,62 @@ const struct bpf_reg_state *bpf_xreg_value(struct bpf_verifier_env *env,
 	       slot_value(env, f, bpf_xreg_to_spi(xregno), tmp);
 }
 
+/* The budget of bpf_hash_live_types() in one pass */
+#define LIVE_TYPES_PART	64	/* of the limits */
+
 static u64 hash_type(const struct bpf_reg_state *reg, u64 hash)
 {
 	if (type_is_pkt_pointer(reg->type) || base_type(reg->type) == PTR_TO_ARENA)
 		return bpf_hash64(&reg->type, sizeof(reg->type), hash);
 	return bpf_hash64(reg, offsetof(typeof(*reg), var_off), hash);
+}
+
+/*
+ * A join of two types or objects is unreadable. A join of a packet pointer that has checked
+ * bytes with one that has none gives no access. If the xreg is live, an error is probable, and
+ * the price is one more pass. So such states stay apart from the start:
+ *
+ *	r6 = 0;				r6 = map value;
+ *		\			/
+ *		 if (r6 == 0) goto out;		two states
+ *
+ * N such xregs can give 1 << N states. If a pass is over the budget, it joins from there on,
+ * and so do the next passes. Then an error selects the xregs, see add_deps().
+ * @apart_cost: the cost of this pass without the states that were alone.
+ */
+u64 bpf_hash_live_types(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			u64 hash, u64 apart_cost)
+{
+	struct bpf_precision *prec = env->precision;
+	const struct bpf_insn_aux_data *aux;
+	const struct bpf_reg_state *reg;
+	unsigned long live[XREG_WORDS];
+	struct bpf_reg_state tmp;
+	u32 fr, xregno, bits;
+
+	if (env->path_sensitive)
+		return hash;
+	prec->live_types_over |= apart_cost > prec->live_types_cost ||
+				 env->mem > prec->start_mem + prec->live_types_mem;
+	for (fr = 0; !prec->live_types_over && fr <= st->curframe; fr++) {
+		aux = &env->insn_aux_data[bpf_frame_insn_idx(st, fr)];
+		bits = bpf_spi_to_xreg(bpf_stack_nr_slots(st->frame[fr]));
+		bitmap_zero(live, bits);
+		live[0] = aux->live_regs_before & XREG_REGS;
+		bpf_add_slots(live, aux->live_stack_before, bits);
+		bpf_add_cost(env, bitmap_weight(live, bits), BPF_COST_COPY);
+		for_each_set_bit(xregno, live, bits) {
+			reg = bpf_xreg_value(env, st->frame[fr], xregno, &tmp);
+			/* a slot with no spill hashes like a slot that is not allocated */
+			if (!reg || reg == &tmp || reg->type == SCALAR_VALUE)
+				continue;
+			hash = hash_type(reg, hash + fr * MAX_BPF_XREG + xregno);
+			if (type_is_pkt_pointer(reg->type) && pkt_has_bytes_left(reg) &&
+			    pkt_bytes_left(reg) > 0)
+				hash = ~hash;
+		}
+	}
+	return hash;
 }
 
 /*
@@ -1396,6 +1447,7 @@ bool bpf_undo_precision(struct bpf_verifier_env *env)
 		return false;
 	}
 	env->over_limit = false;
+	prec->live_types_over = false;
 	memcpy(prec->data_deps, prec->undo, 5 * prec->words * sizeof(long));
 	for (i = 0; i < prec->loop_cnt; i++)
 		over_budget |= prec->loops[i]->partitioned &&
@@ -1568,7 +1620,11 @@ void bpf_precision_new_pass(struct bpf_verifier_env *env)
 		prec->partitioned_by = prec->pass_cost = 0;
 	}
 	prec->budget_grew = prec->new_nospec = false;
+	/* the pass for the log has to join where the last pass did */
+	prec->join_live_types |= prec->live_types_over && !env->for_log;
+	prec->live_types_over = prec->join_live_types;
 	prec->start_cost = env->cost;
+	prec->start_mem = env->mem;
 	prec->last_unproven_left = bitmap_weight(prec->last_unproven_insns, env->prog->len);
 	/* ADD_DEPS has no alternative, so it has no limit of its own */
 	if (prec->partitioned_by > BIT(PARTITION_ADD_DEPS) && !env->replay)
@@ -1625,6 +1681,10 @@ int bpf_precision_init(struct bpf_verifier_env *env)
 	prec->this_pass.unproven_funcs = bits + 16 * words;
 	prec->last_pass.unproven_funcs = bits + 17 * words;
 	prec->pass_cost = env->cost;
+	prec->live_types_cost = env->max_cost / LIVE_TYPES_PART;
+	prec->live_types_mem = env->max_mem / LIVE_TYPES_PART;
+	/* the replay for the driver has to join where the good pass did */
+	prec->join_live_types = bpf_prog_is_offloaded(env->prog->aux);
 	prec->budget_left = prec->budget = bpf_precision_first_budget(env);
 	prec->first_unproven_insn = prec->loop_carried_at = U32_MAX;
 	for (i = 0; i < env->prog->len && !err; i++, aux++)
