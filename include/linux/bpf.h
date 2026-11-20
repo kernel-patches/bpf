@@ -1189,7 +1189,7 @@ struct bpf_insn_access_aux {
 		struct {
 			struct btf *btf;
 			u32 btf_id;
-			u32 ref_id;
+			u32 ref_arg;	/* see struct bpf_ctx_arg_aux */
 		};
 	};
 	u32 mem_size;
@@ -1827,7 +1827,7 @@ struct bpf_ctx_arg_aux {
 	enum bpf_reg_type reg_type;
 	struct btf *btf;
 	u32 btf_id;
-	u32 ref_id;
+	u32 ref_arg;	/* a number for a __ref argument, else 0 */
 	u32 mem_size;
 	bool refcounted;
 };

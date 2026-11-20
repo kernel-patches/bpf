@@ -77,7 +77,8 @@ void bpf_diag_lock(struct bpf_verifier_env *env, u32 insn_idx, const char *probl
 		   const struct bpf_reference_state *active_lock);
 void bpf_diag_irq(struct bpf_verifier_env *env, u32 insn_idx, const char *problem,
 		  const char *reason, const char *suggestion, u32 depth);
-void bpf_diag_leak(struct bpf_verifier_env *env, u32 ref_id, u32 alloc_insn, u32 fail_insn);
+void bpf_diag_leak(struct bpf_verifier_env *env, const struct bpf_reference_state *ref,
+		   u32 fail_insn);
 void bpf_diag_call_type(struct bpf_verifier_env *env, u32 insn_idx, int argno, int regno,
 			int stack_arg_slot, const char *call_name, const char *arg_name,
 			const char *reason, const char *suggestion);
@@ -104,8 +105,7 @@ void bpf_diag_record_scrub(struct bpf_verifier_env *env, const struct bpf_reg_st
 void bpf_diag_record_scrub_stack(struct bpf_verifier_env *env,
 				 const struct bpf_func_state *state, s16 min_off, s16 max_off,
 				 enum bpf_diag_mod_reason reason);
-void bpf_diag_record_ref_acquire(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id);
-void bpf_diag_record_ref_release(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id);
+void bpf_diag_record_ref_acquire(struct bpf_verifier_env *env, struct bpf_reference_state *ref);
 void bpf_diag_record_context(struct bpf_verifier_env *env, u32 insn_idx,
 			     enum bpf_diag_context_kind ctx_kind, bool enter, u32 depth);
 
