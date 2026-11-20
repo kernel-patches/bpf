@@ -2158,6 +2158,7 @@ void bpf_equations_pre_join(struct bpf_verifier_env *env, struct bpf_verifier_st
 		/* what enters the loop can break the equations that keep the xregs small */
 		if (enters && dst->equations.needs_refine)
 			bpf_equations_refine_all(env, dst);
+		bpf_guess_equations(env, dst, src, leftover_loop, widen);
 		normalize_equations(env, &env->eq_env->join_state);
 		while (!check_equations(env, eqs, dst, eqs) || !check_equations(env, eqs, src, eqs))
 			normalize_equations(env, &env->eq_env->join_state);
