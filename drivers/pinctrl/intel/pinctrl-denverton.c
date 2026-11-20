@@ -263,18 +263,7 @@ static struct platform_driver dnv_pinctrl_driver = {
 	},
 	.id_table = dnv_pinctrl_platform_ids,
 };
-
-static int __init dnv_pinctrl_init(void)
-{
-	return platform_driver_register(&dnv_pinctrl_driver);
-}
-subsys_initcall(dnv_pinctrl_init);
-
-static void __exit dnv_pinctrl_exit(void)
-{
-	platform_driver_unregister(&dnv_pinctrl_driver);
-}
-module_exit(dnv_pinctrl_exit);
+subsys_platform_driver(dnv_pinctrl_driver);
 
 MODULE_AUTHOR("Mika Westerberg <mika.westerberg@linux.intel.com>");
 MODULE_DESCRIPTION("Intel Denverton SoC pinctrl/GPIO driver");
