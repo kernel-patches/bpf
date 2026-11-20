@@ -2274,7 +2274,7 @@ static struct index_entry *ntfs_index_walk_up(struct index_entry *ie,
 		ictx->pindex--;
 		if (!ictx->pindex) {
 			/* we have reached the root */
-			kfree(ictx->ib);
+			kvfree(ictx->ib);
 			ictx->ib = NULL;
 			ictx->is_in_root = true;
 			/* a new search context is to be allocated */
