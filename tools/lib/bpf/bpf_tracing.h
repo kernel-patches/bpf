@@ -721,6 +721,24 @@ struct pt_regs;
 #else
 #define __bpf_func_args __attribute__((preserve_access_index))
 #endif
+/*
+ * bpf_func_args_supported() tells whether the __bpf_func_args struct that
+ * args points to is relocated against the parameters of the program's attach
+ * target. That is done by whatever applies the program's CO-RE relocations,
+ * which needn't match this header: it is always 1 with the libbpf version
+ * providing this header, but returns 0 for light skeletons on kernels without
+ * that support, with older libbpf versions (e.g., a distribution's shared
+ * libbpf) and with other loaders lacking it, as well as if the struct lost its
+ * BTF decl tag (e.g., when built with GCC without __bpf_func_args_marker), or
+ * for tp_btf programs on kernels before Linux 5.10, whose BTF has no parameter
+ * names for tracepoints. In these cases, all members appear to be missing (BPF_PROG_CORE() arguments
+ * read as zero). It doesn't tell which members exist. Note that loaders
+ * without that support look for a same-named kernel type instead, so the
+ * struct's name shouldn't be that of a kernel type. Within BPF_PROG_CORE()
+ * programs, use bpf_func_args_supported(ctx). Requires bpf_core_read.h.
+ */
+#define bpf_func_args_supported(args)	bpf_core_type_exists(typeof(*(args)))
+
 #define __bpf_func_args_marker \
 	char ___bpf_func_args[0] __attribute__((btf_decl_tag("bpf_func_args")))
 #define __bpf_func_ret __attribute__((btf_decl_tag("bpf_func_ret")))
