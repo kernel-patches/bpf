@@ -224,8 +224,8 @@ static void __clean_func_state(struct bpf_verifier_env *env,
 			/*
 			 * Only scalar spills can be degraded to raw stack bytes
 			 * when their high half is dead. Pointer spills need the
-			 * saved spilled_ptr metadata so partial fills keep
-			 * rejecting as non-scalar register fills.
+			 * saved spilled_ptr metadata: without allow_ptr_leaks
+			 * a partial fill is rejected.
 			 * The code above replaces only pointers that no insn ahead can fill.
 			 */
 			if (!hi_live) {

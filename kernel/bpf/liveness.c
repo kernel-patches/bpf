@@ -596,9 +596,9 @@ bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 half_sp
  * fill a pointer, and a helper, a kfunc or a global subprog that gets a pointer to the stack reads
  * memory. Such a read keeps the bytes of the slot alive, not what the verifier knows about them.
  *
- * A short load at an offset that is known here counts as a fill: the main pass rejects it when it
- * finds a pointer. If only the main pass knows the offset, the load doesn't count. It is rejected
- * too, or it reads unknown bytes if the state was cleaned between the spill and the load.
+ * A short load at an offset that is known here counts as a fill. A NULL check can make the
+ * pointer the number 0, and the load gets a part of it. If only the main pass knows the offset,
+ * the load doesn't count.
  */
 bool bpf_stack_slot_filled(struct bpf_verifier_env *env, u32 frameno, u32 half_spi)
 {
