@@ -436,7 +436,7 @@ static const struct snd_soc_dapm_route cs35l56_audio_map[] = {
 	{ "ASP1 Capture", NULL, "ASP1TX3" },
 	{ "ASP1 Capture", NULL, "ASP1TX4" },
 
-	{ "SDW1 Capture", NULL, "OT127 Source" },
+	{ "OT127", NULL, "OT127 Source" },
 
 	{ "OT25", NULL, "OT25 Reference" },
 };
@@ -855,10 +855,10 @@ static struct snd_soc_dai_driver cs35l56_dai[] = {
 		.ops = &cs35l56_sdw_dai_ops,
 	},
 	{
-		.name = "cs35l56-sdw1c",
+		.name = "cs35l56-ot127",
 		.id = 2,
 		.capture = {
-			.stream_name = "SDW1 Capture",
+			.stream_name = "OT127",
 			.channels_min = 1,
 			.channels_max = 4,
 			.rates = CS35L56_RATES,
