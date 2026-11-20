@@ -3864,6 +3864,7 @@ static int bnxt_alloc_ring(struct bnxt *bp, struct bnxt_ring_mem_info *rmem,
 
 		if (rmem->flags & BNXT_RMEM_USE_FULL_PAGE_FLAG)
 			pg_tbl_size = rmem->page_size;
+		/* Only read by the device, keep it on the device's node */
 		rmem->pg_tbl = dma_alloc_coherent(&pdev->dev, pg_tbl_size,
 						  &rmem->pg_tbl_map,
 						  GFP_KERNEL);
@@ -9339,7 +9340,8 @@ static int bnxt_alloc_ctx_mem_blk(struct bnxt *bp,
 	rmem->flags = BNXT_RMEM_VALID_PTE_FLAG;
 	if (rmem->depth >= 1)
 		rmem->flags |= BNXT_RMEM_USE_FULL_PAGE_FLAG;
-	return bnxt_alloc_ring(bp, rmem, NUMA_NO_NODE);
+	/* Host only uses it on the slow path, keep it on the device's node */
+	return bnxt_alloc_ring(bp, rmem, dev_to_node(&bp->pdev->dev));
 }
 
 static int bnxt_alloc_ctx_pg_tbls(struct bnxt *bp,
