@@ -242,6 +242,31 @@ __naked void callx_rodata_callback_one_of_two(void)
 		: __clobber_all);
 }
 
+/* each call is checked for each function in r2, and the states meet at the next insn */
+SEC("socket")
+__success __retval(0)
+__naked void callx_rodata_one_of_two_at_many_calls(void)
+{
+	asm volatile (
+		FUNC_TABLE2(cbs, loop_cb_stop, loop_cb_go_on)
+		"call %[bpf_get_prandom_u32];"
+		"r0 &= 1;"
+		"r0 <<= 3;"
+		"r6 = cbs_%= ll;"
+		"r6 += r0;"
+		"r6 = *(u64 *)(r6 + 0);"
+		".rept 1024;"
+		"r2 = r6;"
+		"call %[bpf_get_prandom_u32];"
+		".endr;"
+		"callx r6;"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm(bpf_get_prandom_u32)
+		: __clobber_all);
+}
+
 __naked __noinline __used
 static unsigned long not_three(void)
 {
