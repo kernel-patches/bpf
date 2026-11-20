@@ -6,6 +6,9 @@
 #ifndef _XE_VM_H_
 #define _XE_VM_H_
 
+#include <linux/device.h>
+#include <linux/workqueue.h>
+
 #include "xe_assert.h"
 #include "xe_bo_types.h"
 #include "xe_macros.h"
@@ -259,7 +262,8 @@ int xe_vm_validate_protected(struct xe_vm *vm);
 static inline void xe_vm_queue_rebind_worker(struct xe_vm *vm)
 {
 	xe_assert(vm->xe, xe_vm_in_preempt_fence_mode(vm));
-	queue_work(vm->xe->ordered_wq, &vm->preempt.rebind_work);
+	queue_work_node(dev_to_node(vm->xe->drm.dev), vm->xe->rebind_wq,
+			&vm->preempt.rebind_work);
 }
 
 /**

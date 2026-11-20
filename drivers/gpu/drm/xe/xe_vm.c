@@ -511,7 +511,7 @@ static bool vm_suspend_rebind_worker(struct xe_vm *vm)
  */
 void xe_vm_resume_rebind_worker(struct xe_vm *vm)
 {
-	queue_work(vm->xe->ordered_wq, &vm->preempt.rebind_work);
+	xe_vm_queue_rebind_worker(vm);
 }
 
 #if IS_ENABLED(CONFIG_DRM_XE_USERPTR_INVAL_INJECT)

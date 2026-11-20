@@ -10,6 +10,7 @@
 #include <linux/error-injection.h>
 #include <linux/nodemask.h>
 #include <linux/units.h>
+#include <linux/workqueue.h>
 
 #include <drm/drm_client.h>
 #include <drm/drm_gem_ttm_helper.h>
@@ -390,6 +391,9 @@ static void xe_device_destroy(struct drm_device *dev, void *dummy)
 	if (xe->preempt_fence_wq)
 		destroy_workqueue(xe->preempt_fence_wq);
 
+	if (xe->rebind_wq)
+		destroy_workqueue(xe->rebind_wq);
+
 	if (xe->ordered_wq)
 		destroy_workqueue(xe->ordered_wq);
 
@@ -523,10 +527,11 @@ int xe_device_init_early(struct xe_device *xe)
 
 	xe->preempt_fence_wq = alloc_ordered_workqueue("xe-preempt-fence-wq",
 						       WQ_MEM_RECLAIM);
+	xe->rebind_wq = alloc_workqueue("xe-rebind-wq", WQ_UNBOUND, 0);
 	xe->ordered_wq = alloc_ordered_workqueue("xe-ordered-wq", 0);
 	xe->unordered_wq = alloc_workqueue("xe-unordered-wq", WQ_PERCPU, 0);
 	xe->destroy_wq = alloc_workqueue("xe-destroy-wq", WQ_PERCPU | WQ_MEM_RECLAIM, 0);
-	if (!xe->ordered_wq || !xe->unordered_wq ||
+	if (!xe->ordered_wq || !xe->unordered_wq || !xe->rebind_wq ||
 	    !xe->preempt_fence_wq || !xe->destroy_wq) {
 		/*
 		 * Cleanup done in xe_device_destroy via
