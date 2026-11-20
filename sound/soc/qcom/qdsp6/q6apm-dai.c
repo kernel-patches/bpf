@@ -91,6 +91,8 @@ struct q6apm_dai_rtd {
 	uint64_t copied_total;
 	uint16_t bits_per_sample;
 	snd_pcm_uframes_t queue_ptr;
+	unsigned int in_flight;
+	struct device *dev;
 	bool next_track;
 	enum stream_state state;
 	struct q6apm_graph *graph;
@@ -236,6 +238,8 @@ static const struct snd_pcm_hardware q6apm_dai_hardware_playback = {
 	.fifo_size =            0,
 };
 
+static int q6apm_dai_queue_playback(struct snd_pcm_substream *substream);
+
 static void event_handler(uint32_t opcode, uint32_t token, void *payload, void *priv)
 {
 	struct q6apm_dai_rtd *prtd = priv;
@@ -249,7 +253,13 @@ static void event_handler(uint32_t opcode, uint32_t token, void *payload, void *
 		prtd->state = Q6APM_STREAM_STOPPED;
 		break;
 	case APM_CLIENT_EVENT_DATA_WRITE_DONE:
-		snd_pcm_period_elapsed(substream);
+		scoped_guard(pcm_stream_lock_irqsave, substream) {
+			if (prtd->in_flight)
+				prtd->in_flight--;
+			snd_pcm_period_elapsed_under_stream_lock(substream);
+			/* The returned buffer may be needed for data already written. */
+			q6apm_dai_queue_playback(substream);
+		}
 
 		break;
 	case APM_CLIENT_EVENT_DATA_READ_DONE:
@@ -363,6 +373,10 @@ static int q6apm_dai_prepare(struct snd_soc_component *component,
 	}
 
 	prtd->last_pos_index = 0;
+	/* The graph gets a new set of buffers and starts with none queued. */
+	snd_pcm_stream_lock_irq(substream);
+	prtd->in_flight = 0;
+	snd_pcm_stream_unlock_irq(substream);
 	prtd->pcm_count = snd_pcm_lib_period_bytes(substream);
 	if (q6apm_is_graph_in_push_pull_mode(prtd->graph)) {
 		if (prtd->pcm_size != prtd->push_pull_size) {
@@ -433,14 +447,39 @@ static int q6apm_dai_prepare(struct snd_soc_component *component,
 	return 0;
 }
 
-static int q6apm_dai_ack(struct snd_soc_component *component, struct snd_pcm_substream *substream)
+/*
+ * Give queue_ptr its ring offset back relative to hw_ptr. Called with the
+ * stream lock held after hw_ptr moved without it.
+ */
+static void q6apm_dai_align_queue(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct q6apm_dai_rtd *prtd = runtime->private_data;
-	int i, ret = 0, avail_periods;
+	snd_pcm_uframes_t hw_ptr = runtime->status->hw_ptr;
+	snd_pcm_uframes_t ahead;
 
-	if (q6apm_is_graph_in_push_pull_mode(prtd->graph))
-		return 0;
+	ahead = (prtd->queue_ptr % runtime->buffer_size + runtime->buffer_size -
+		 hw_ptr % runtime->buffer_size) % runtime->buffer_size;
+	/*
+	 * The offset is 0 both for an empty and for a full queue. A running
+	 * stream with every buffer queued continues with the buffers the DSP
+	 * holds. A paused stream can have them played before its hw_ptr moves
+	 * again, so a stream that is not running queues what is written from
+	 * here on.
+	 */
+	if (!ahead && snd_pcm_running(substream) && prtd->in_flight == runtime->periods)
+		ahead = runtime->buffer_size;
+
+	prtd->queue_ptr = (hw_ptr + ahead) % runtime->boundary;
+}
+
+/* Queue the periods written and not yet queued. Called with the stream lock held. */
+static int q6apm_dai_queue_playback(struct snd_pcm_substream *substream)
+{
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct q6apm_dai_rtd *prtd = runtime->private_data;
+	snd_pcm_sframes_t ahead, pending;
+	int i, ret, avail_periods;
 
 	/*
 	 * ALSA calls .ack whenever appl_ptr moves, also after a stop and
@@ -461,37 +500,84 @@ static int q6apm_dai_ack(struct snd_soc_component *component, struct snd_pcm_sub
 		return 0;
 	}
 
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		snd_pcm_sframes_t pending = runtime->control->appl_ptr - prtd->queue_ptr;
-
-		/* appl_ptr wraps at the boundary before queue_ptr does. */
-		if (pending < 0)
-			pending += runtime->boundary;
-
-		/*
-		 * What is left to queue is part of what ALSA holds for
-		 * playback. It is more when queue_ptr is ahead of appl_ptr,
-		 * as after SNDRV_PCM_IOCTL_RESET, or when appl_ptr was moved
-		 * more than a ring past hw_ptr.
-		 */
-		if (pending > snd_pcm_playback_hw_avail(runtime))
-			return 0;
-
-		avail_periods = min_t(snd_pcm_sframes_t, pending / runtime->period_size,
-				      runtime->periods);
-		for (i = 0; i < avail_periods; i++) {
-			ret = q6apm_write_async(prtd->graph, prtd->pcm_count, 0, 0, NO_TIMESTAMP);
-			if (ret < 0) {
-				dev_err(component->dev, "Error queuing playback buffer %d\n", ret);
-				return ret;
-			}
-			prtd->queue_ptr += runtime->period_size;
-			if (prtd->queue_ptr >= runtime->boundary)
-				prtd->queue_ptr -= runtime->boundary;
-		}
+	/* Frames queued that hw_ptr has not passed yet, at most one ring. */
+	ahead = prtd->queue_ptr - runtime->status->hw_ptr;
+	if (ahead < 0)
+		ahead += runtime->boundary;
+	if (ahead > runtime->buffer_size) {
+		q6apm_dai_align_queue(substream);
+		ahead = prtd->queue_ptr - runtime->status->hw_ptr;
+		if (ahead < 0)
+			ahead += runtime->boundary;
 	}
 
-	return ret;
+	/* Nothing to queue until appl_ptr has passed queue_ptr. */
+	pending = snd_pcm_playback_hw_avail(runtime) - ahead;
+	if (pending <= 0)
+		return 0;
+
+	/* Leave the buffers the DSP still holds alone. */
+	avail_periods = min_t(snd_pcm_sframes_t, pending / runtime->period_size,
+			      (snd_pcm_sframes_t)runtime->periods -
+			      (snd_pcm_sframes_t)prtd->in_flight);
+	for (i = 0; i < avail_periods; i++) {
+		ret = q6apm_write_async(prtd->graph, prtd->pcm_count, 0, 0, NO_TIMESTAMP);
+		if (ret < 0) {
+			dev_err(prtd->dev, "Error queuing playback buffer %d\n", ret);
+			/*
+			 * The core has moved on to its next buffer. Only a
+			 * prepare brings queue_ptr back in step with it.
+			 */
+			snd_pcm_stop(substream, SNDRV_PCM_STATE_XRUN);
+			return ret;
+		}
+		prtd->in_flight++;
+		prtd->queue_ptr += runtime->period_size;
+		if (prtd->queue_ptr >= runtime->boundary)
+			prtd->queue_ptr -= runtime->boundary;
+	}
+
+	return 0;
+}
+
+static int q6apm_dai_ack(struct snd_soc_component *component, struct snd_pcm_substream *substream)
+{
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct q6apm_dai_rtd *prtd = runtime->private_data;
+
+	if (q6apm_is_graph_in_push_pull_mode(prtd->graph))
+		return 0;
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		return q6apm_dai_queue_playback(substream);
+
+	return 0;
+}
+
+/*
+ * A PCM reset, which ALSA also runs at the end of every prepare, moves
+ * hw_ptr: modulo the buffer size on a running stream, to 0 otherwise.
+ * appl_ptr follows it without a call to .ack. The buffers the DSP holds
+ * stay with it, so keep queue_ptr in step with the ring.
+ */
+static int q6apm_dai_ioctl(struct snd_soc_component *component,
+			   struct snd_pcm_substream *substream,
+			   unsigned int cmd, void *arg)
+{
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct q6apm_dai_rtd *prtd = runtime->private_data;
+	int ret;
+
+	ret = snd_pcm_lib_ioctl(substream, cmd, arg);
+	if (ret < 0 || cmd != SNDRV_PCM_IOCTL1_RESET ||
+	    substream->stream != SNDRV_PCM_STREAM_PLAYBACK ||
+	    q6apm_is_graph_in_push_pull_mode(prtd->graph))
+		return ret;
+
+	guard(pcm_stream_lock_irq)(substream);
+	q6apm_dai_align_queue(substream);
+
+	return 0;
 }
 
 static int q6apm_dai_trigger(struct snd_soc_component *component,
@@ -547,6 +633,7 @@ static int q6apm_dai_open(struct snd_soc_component *component,
 		return -ENOMEM;
 
 	spin_lock_init(&prtd->lock);
+	prtd->dev = dev;
 	prtd->substream = substream;
 	prtd->graph = q6apm_graph_open(dev, event_handler, prtd, graph_id, substream->stream);
 	if (IS_ERR(prtd->graph)) {
@@ -1232,6 +1319,7 @@ static const struct snd_soc_component_driver q6apm_fe_dai_component = {
 	.pointer	= q6apm_dai_pointer,
 	.trigger	= q6apm_dai_trigger,
 	.ack		= q6apm_dai_ack,
+	.ioctl		= q6apm_dai_ioctl,
 	.compress_ops	= &q6apm_dai_compress_ops,
 	.use_dai_pcm_id = true,
 	.remove_order   = SND_SOC_COMP_ORDER_EARLY,
