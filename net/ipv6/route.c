@@ -5940,7 +5940,10 @@ static int rt6_fill_node(struct net *net, struct sk_buff *skb,
 #endif
 	if (iif) {
 #ifdef CONFIG_IPV6_MROUTE
-		if (ipv6_addr_is_multicast(&rt6_dst->addr)) {
+		if (dest && ipv6_addr_is_multicast(&rt6_dst->addr) &&
+		    !(ipv6_addr_type(dest) &
+		      (IPV6_ADDR_LOOPBACK | IPV6_ADDR_LINKLOCAL)) &&
+		    atomic_read(&net->ipv6.devconf_all->mc_forwarding)) {
 			int err = ip6mr_get_route(net, skb, rtm, portid);
 
 			if (err == 0)
