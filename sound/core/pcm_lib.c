@@ -966,7 +966,7 @@ static int snd_interval_ratden(struct snd_interval *i,
 		if (num > rats[k].num_max)
 			continue;
 		if (num < rats[k].num_min)
-			num = rats[k].num_max;
+			num = rats[k].num_min;
 		else {
 			unsigned int r;
 			r = (num - rats[k].num_min) % rats[k].num_step;
