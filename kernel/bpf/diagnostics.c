@@ -255,7 +255,7 @@ static char *diag_fmt_alloc(struct bpf_verifier_env *env, size_t size)
 	size_t capacity, available;
 	char *buf;
 
-	if (!diag || !size || size > INT_MAX)
+	if (!diag || !bpf_diag_enabled(env) || !size || size > INT_MAX)
 		return NULL;
 
 	if (!list_empty(&diag->fmt_chunks)) {
@@ -406,6 +406,8 @@ void bpf_diag_event_log_restore(struct bpf_verifier_env *env, u64 log_pos)
 	if (!diag)
 		return;
 
+	/* no text is in use between two blocks */
+	diag_fmt_restore(env, (struct diag_fmt_mark){});
 	log = &diag->log;
 	end_seq = log_end(log);
 	if (WARN_ON_ONCE(log_pos > end_seq))
