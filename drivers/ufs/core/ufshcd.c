@@ -4697,10 +4697,20 @@ EXPORT_SYMBOL_GPL(ufshcd_uic_change_pwr_mode);
 
 int ufshcd_link_recovery(struct ufs_hba *hba)
 {
+	u32 saved_err, saved_uic_err;
 	int ret;
 	unsigned long flags;
 
 	spin_lock_irqsave(&hba->host->host_lock, flags);
+	/*
+	 * The errors saved so far are handled by this full reset, so cache and
+	 * clear them first, in case new errors are generated during recovery.
+	 */
+	saved_err = hba->saved_err;
+	saved_uic_err = hba->saved_uic_err;
+	hba->saved_err = 0;
+	hba->saved_uic_err = 0;
+	hba->force_reset = false;
 	hba->ufshcd_state = UFSHCD_STATE_RESET;
 	ufshcd_set_eh_in_progress(hba);
 	spin_unlock_irqrestore(&hba->host->host_lock, flags);
@@ -4711,8 +4721,11 @@ int ufshcd_link_recovery(struct ufs_hba *hba)
 	ret = ufshcd_host_reset_and_restore(hba);
 
 	spin_lock_irqsave(&hba->host->host_lock, flags);
-	if (ret)
+	if (ret) {
 		hba->ufshcd_state = UFSHCD_STATE_ERROR;
+		hba->saved_err |= saved_err;
+		hba->saved_uic_err |= saved_uic_err;
+	}
 	ufshcd_clear_eh_in_progress(hba);
 	spin_unlock_irqrestore(&hba->host->host_lock, flags);
 
@@ -7052,6 +7065,23 @@ out:
 	return ret != 0;
 }
 
+/*
+ * Whether a runtime PM callback of the WLUN runs __ufshcd_wl_suspend() or
+ * __ufshcd_wl_resume().
+ */
+static bool ufshcd_in_wl_rpm_callback(struct ufs_hba *hba)
+{
+#ifdef CONFIG_PM
+	enum rpm_status status =
+		READ_ONCE(hba->ufs_device_wlun->sdev_gendev.power.runtime_status);
+
+	return READ_ONCE(hba->pm_op_in_progress) &&
+	       (status == RPM_SUSPENDING || status == RPM_RESUMING);
+#else
+	return false;
+#endif
+}
+
 /**
  * ufshcd_err_handler - handle UFS errors that require s/w attention
  * @work: pointer to work structure
@@ -7081,9 +7111,14 @@ static void ufshcd_err_handler(struct work_struct *work)
 		 * runtime resume. This avoids potential deadlocks that could
 		 * happen if we tried to resume the device while a PM operation
 		 * is already in progress.
+		 *
+		 * Do this only while the PM callbacks run for a runtime PM
+		 * operation. The system PM and poweroff callbacks hold
+		 * host_sem, and shutting_down makes the regular path below
+		 * stop, so it does not reset the link concurrently with them.
 		 */
 		ufshcd_rpm_get_noresume(hba);
-		if (hba->pm_op_in_progress) {
+		if (ufshcd_in_wl_rpm_callback(hba)) {
 			ufshcd_link_recovery(hba);
 			ufshcd_rpm_put(hba);
 			return;
@@ -10387,7 +10422,7 @@ static int __ufshcd_wl_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	enum ufs_dev_pwr_mode req_dev_pwr_mode;
 	enum uic_link_state req_link_state;
 
-	hba->pm_op_in_progress = true;
+	WRITE_ONCE(hba->pm_op_in_progress, true);
 	if (pm_op != UFS_SHUTDOWN_PM) {
 		pm_lvl = pm_op == UFS_RUNTIME_PM ?
 			 hba->rpm_lvl : hba->spm_lvl;
@@ -10560,7 +10595,7 @@ out:
 		hba->clk_gating.is_suspended = false;
 		ufshcd_release(hba);
 	}
-	hba->pm_op_in_progress = false;
+	WRITE_ONCE(hba->pm_op_in_progress, false);
 	return ret;
 }
 
@@ -10570,7 +10605,7 @@ static int __ufshcd_wl_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	int ret;
 	enum uic_link_state old_link_state = hba->uic_link_state;
 
-	hba->pm_op_in_progress = true;
+	WRITE_ONCE(hba->pm_op_in_progress, true);
 
 	/*
 	 * Call vendor specific resume callback. As these callbacks may access
@@ -10667,7 +10702,7 @@ out:
 		hba->clk_gating.is_suspended = false;
 		ufshcd_release(hba);
 	}
-	hba->pm_op_in_progress = false;
+	WRITE_ONCE(hba->pm_op_in_progress, false);
 	return ret;
 }
 
@@ -10713,7 +10748,7 @@ static int ufshcd_wl_runtime_resume(struct device *dev)
 #endif
 
 #ifdef CONFIG_PM_SLEEP
-static int ufshcd_wl_suspend(struct device *dev)
+static int ufshcd_wl_system_suspend(struct device *dev, enum ufs_pm_op pm_op)
 {
 	struct scsi_device *sdev = to_scsi_device(dev);
 	struct ufs_hba *hba;
@@ -10726,10 +10761,13 @@ static int ufshcd_wl_suspend(struct device *dev)
 	if (pm_runtime_suspended(dev))
 		goto out;
 
-	ret = __ufshcd_wl_suspend(hba, UFS_SYSTEM_PM);
+	ret = __ufshcd_wl_suspend(hba, pm_op);
 	if (ret) {
 		dev_err(&sdev->sdev_gendev, "%s failed: %d\n", __func__,  ret);
 		up(&hba->host_sem);
+		/* __ufshcd_wl_suspend() can return a positive status for UFS_SHUTDOWN_PM. */
+		if (ret > 0)
+			ret = -EBUSY;
 	}
 
 out:
@@ -10740,6 +10778,11 @@ out:
 		hba->curr_dev_pwr_mode, hba->uic_link_state);
 
 	return ret;
+}
+
+static int ufshcd_wl_suspend(struct device *dev)
+{
+	return ufshcd_wl_system_suspend(dev, UFS_SYSTEM_PM);
 }
 
 static int ufshcd_wl_resume(struct device *dev)
@@ -11571,11 +11614,7 @@ EXPORT_SYMBOL_GPL(ufshcd_suspend_prepare);
 #ifdef CONFIG_PM_SLEEP
 static int ufshcd_wl_poweroff(struct device *dev)
 {
-	struct scsi_device *sdev = to_scsi_device(dev);
-	struct ufs_hba *hba = shost_priv(sdev->host);
-
-	__ufshcd_wl_suspend(hba, UFS_SHUTDOWN_PM);
-	return 0;
+	return ufshcd_wl_system_suspend(dev, UFS_SHUTDOWN_PM);
 }
 #endif
 

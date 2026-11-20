@@ -1460,7 +1460,7 @@ static int __init fnic_init_module(void)
 						  FNIC_FRAME_HT_ROOM,
 						  0, SLAB_HWCACHE_ALIGN, NULL);
 	if (!fdls_frame_recv_cache) {
-		pr_err("fnic fdls frame recv cach create failed\n");
+		pr_err("fnic fdls frame recv cache create failed\n");
 		err = -ENOMEM;
 		goto err_create_fdls_frame_recv_cache;
 	}
