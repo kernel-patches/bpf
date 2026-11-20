@@ -12,6 +12,7 @@
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/rtnetlink.h>
 #include <linux/slab.h>
 #include <linux/stmmac.h>
 
@@ -27,6 +28,9 @@
 #define EPHY_CTRL				0x1004
 /* Clearing this bit asserts resets for internal MDIO bus and PHY */
 #define  EPHY_MDIO_PHY_RESET			BIT(0)
+#define WOL_CTRL				0x100c
+/* Magic and remote wake-up packet enable */
+#define  WOL_CTRL_PKT_EN			BIT(1)
 #define OOB_WOL_CTRL				0x1010
 #define  OOB_WOL_CTRL_DIS			BIT(0)
 #define MGMT_INT_CTRL0				0x1100
@@ -363,6 +367,38 @@ static void motorcomm_remove(struct pci_dev *pdev)
 	stmmac_dvr_remove(&pdev->dev);
 }
 
+static void motorcomm_shutdown(struct pci_dev *pdev)
+{
+	struct net_device *ndev = dev_get_drvdata(&pdev->dev);
+	struct stmmac_priv *spriv = netdev_priv(ndev);
+	struct dwmac_motorcomm_priv *priv = spriv->plat->bsp_priv;
+	bool wake;
+	u32 reg;
+
+	/* Userspace is still running and may close the interface */
+	rtnl_lock();
+	wake = system_state == SYSTEM_POWER_OFF && netif_running(ndev) &&
+	       (spriv->wolopts & WAKE_MAGIC) && device_may_wakeup(&pdev->dev);
+	rtnl_unlock();
+
+	/* The netdev is unregistered after this. priv and its mapping stay. */
+	stmmac_dvr_remove(&pdev->dev);
+
+	if (!wake)
+		return;
+
+	/* Reset re-enables OOB WoL; left alone, chip arms itself (eFuse MAC) */
+	motorcomm_reset(priv);
+
+	/* The reset has cleared it. Without it the chip does not wake. */
+	reg = readl(priv->base + WOL_CTRL);
+	reg |= WOL_CTRL_PKT_EN;
+	writel(reg, priv->base + WOL_CTRL);
+
+	pci_wake_from_d3(pdev, true);
+	pci_set_power_state(pdev, PCI_D3hot);
+}
+
 static const struct pci_device_id dwmac_motorcomm_pci_id_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_MOTORCOMM, 0x6801) },
 	{ },
@@ -374,7 +410,7 @@ static struct pci_driver dwmac_motorcomm_pci_driver = {
 	.id_table = dwmac_motorcomm_pci_id_table,
 	.probe = motorcomm_probe,
 	.remove = motorcomm_remove,
-	.shutdown = motorcomm_remove,
+	.shutdown = motorcomm_shutdown,
 	.driver = {
 		.pm = &stmmac_simple_pm_ops,
 	},
