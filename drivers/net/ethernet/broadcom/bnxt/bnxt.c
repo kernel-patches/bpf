@@ -12029,13 +12029,15 @@ static void bnxt_irq_affinity_notify(struct irq_affinity_notify *notify,
 {
 	struct bnxt_irq *irq;
 	unsigned int cpu;
+	struct bnxt *bp;
 	int nid;
 	u16 tag;
 
 	irq = container_of(notify, struct bnxt_irq, affinity_notify);
+	bp = irq->bp;
 
-	cpumask_copy(irq->bp->ring_cpu_mask[irq->ring_nr], mask);
-	set_bit(irq->ring_nr, irq->bp->ring_affinity_set);
+	cpumask_copy(bp->ring_cpu_mask[irq->ring_nr], mask);
+	set_bit(irq->ring_nr, bp->ring_affinity_set);
 
 	/* Readers can't access ring_cpu_mask atomically, so pre-compute
 	 * the info they care about (NUMA node, TPH tag) and store it
@@ -12043,32 +12045,31 @@ static void bnxt_irq_affinity_notify(struct irq_affinity_notify *notify,
 	 */
 	cpu = cpumask_first_and(mask, cpu_online_mask);
 	nid = cpu < nr_cpu_ids ? cpu_to_node(cpu) : NUMA_NO_NODE;
-	WRITE_ONCE(irq->bp->ring_nid[irq->ring_nr], nid);
+	WRITE_ONCE(bp->ring_nid[irq->ring_nr], nid);
 
 #ifdef CONFIG_RFS_ACCEL
-	if (irq->bp->dev->rx_cpu_rmap && irq->ring_nr < irq->bp->rx_nr_rings) {
+	if (bp->dev->rx_cpu_rmap && irq->ring_nr < bp->rx_nr_rings) {
 		int err;
 
-		err = cpu_rmap_update(irq->bp->dev->rx_cpu_rmap, irq->ring_nr,
-				      mask);
+		err = cpu_rmap_update(bp->dev->rx_cpu_rmap, irq->ring_nr, mask);
 		if (err)
-			netdev_warn(irq->bp->dev,
+			netdev_warn(bp->dev,
 				    "aRFS rmap update failed: %d\n", err);
 	}
 #endif
 
-	if (!irq->bp->tph_mode)
+	if (!bp->tph_mode)
 		return;
 
-	if (irq->ring_nr >= irq->bp->rx_nr_rings)
+	if (irq->ring_nr >= bp->rx_nr_rings)
 		return;
 
-	if (pcie_tph_get_cpu_st(irq->bp->pdev, TPH_MEM_TYPE_VM,
+	if (pcie_tph_get_cpu_st(bp->pdev, TPH_MEM_TYPE_VM,
 				cpumask_first(mask), &tag))
 		return;
 
 	WRITE_ONCE(irq->new_tag, tag);
-	bnxt_queue_sp_work(irq->bp, BNXT_TPH_UPDATE_SP_EVENT);
+	bnxt_queue_sp_work(bp, BNXT_TPH_UPDATE_SP_EVENT);
 }
 
 static void bnxt_irq_affinity_release(struct kref *ref)
