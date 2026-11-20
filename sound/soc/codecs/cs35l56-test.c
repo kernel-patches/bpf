@@ -63,6 +63,7 @@ struct cs35l56_test_priv {
 
 	bool asp_config_regs_written;
 	bool asp_mixer_regs_written;
+	bool sdw_mux_regs_written;
 };
 
 struct cs35l56_test_param {
@@ -122,6 +123,11 @@ static const struct range cs35l56_test_asp_config_registers_range = {
 static const struct range cs35l56_test_asp_mixer_registers_range = {
 	.start = CS35L56_ASP1TX1_INPUT,
 	.end = CS35L56_ASP1TX4_INPUT,
+};
+
+static const struct range cs35l56_test_sdw_mux_registers_range = {
+	.start = CS35L56_SWIRE_DP3_CH1_INPUT,
+	.end = CS35L56_SWIRE_DP3_CH4_INPUT,
 };
 
 static int cs35l56_test_mock_registers_read(void *context,
@@ -199,6 +205,9 @@ static int cs35l56_test_mock_registers_write(void *context, const void *data, si
 
 	if (range_overlaps(&addr_range, &cs35l56_test_asp_mixer_registers_range))
 		priv->asp_mixer_regs_written = true;
+
+	if (range_overlaps(&addr_range, &cs35l56_test_sdw_mux_registers_range))
+		priv->sdw_mux_regs_written = true;
 
 	for (i = 0; i < count; i += sizeof(u32)) {
 		val = get_unaligned_be32(buf + i);
@@ -929,6 +938,79 @@ static void cs35l56_test_component_probe_omits_asp(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, priv->asp_mixer_regs_written);
 }
 
+/*
+ * Probing the component must not write the SoundWire TX mux registers,
+ * either directly or through a subsequent regcache_sync().
+ */
+static void cs35l56_test_component_probe_omits_sdw_mux(struct kunit *test)
+{
+	struct cs35l56_test_priv *priv = test->priv;
+	struct cs35l56_private *cs35l56 = priv->cs35l56_priv;
+	struct snd_soc_card *card = cs35l56->component->card;
+	struct snd_soc_aux_dev *aux;
+	struct faux_device *card_dev;
+
+	cs35l56_test_create_mock_supplies(test);
+	cs35l56_test_create_mock_device_registers(test);
+
+	KUNIT_ASSERT_NOT_NULL(test, priv->regmap_config);
+	cs35l56->base.regmap = devm_regmap_init(cs35l56->base.dev,
+						&cs35l56_test_mock_registers_client_regmap_bus,
+						test, priv->regmap_config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cs35l56->base.regmap);
+
+	KUNIT_ASSERT_EQ(test, 0, cs35l56_common_probe(cs35l56, 0));
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, cs35l56_remove_wrapper, cs35l56));
+
+	/* Prevent real dsp_work */
+	INIT_WORK(&cs35l56->dsp_work, cs35l56_test_dummy_dsp_work);
+
+	/* Simulate first attachment and re-attachment after the soft reset. */
+	regcache_cache_only(cs35l56->base.regmap, false);
+	KUNIT_ASSERT_EQ(test, 0, cs35l56_init(cs35l56));
+	KUNIT_ASSERT_EQ(test, 0, cs35l56_init(cs35l56));
+	KUNIT_ASSERT_TRUE(test, cs35l56->base.init_done);
+	flush_work(&cs35l56->component_register_work);
+	KUNIT_ASSERT_TRUE(test, cs35l56->component_registered);
+
+	card_dev = faux_device_create("cs35l56_test_card", NULL, NULL);
+	KUNIT_ASSERT_NOT_NULL(test, card_dev);
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, faux_device_destroy_wrapper, card_dev));
+
+	/* Bind as an auxiliary component so the ASP DAI is never probed. */
+	aux = kunit_kzalloc(test, sizeof(*aux), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, aux);
+	aux->dlc.name = dev_name(cs35l56->base.dev);
+	card->name = "cs35l56-test";
+	card->dev = &card_dev->dev;
+	card->owner = THIS_MODULE;
+	card->aux_dev = aux;
+	card->num_aux_devs = 1;
+	KUNIT_ASSERT_EQ(test, 0, snd_soc_register_card(card));
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, snd_soc_unregister_card_wrapper, card));
+	KUNIT_ASSERT_TRUE(test, card->instantiated);
+	KUNIT_EXPECT_FALSE(test, priv->sdw_mux_regs_written);
+
+	/*
+	 * Flush cache to ensure there aren't cached values for the SoundWire muxes.
+	 * The first case without regcache_mark_dirty() tests flushing when
+	 * hardware registers have not reset, and requires a dummy write to
+	 * the cache to make it dirty.
+	 */
+	regcache_cache_only(cs35l56->base.regmap, true);
+	KUNIT_ASSERT_EQ(test, 0, regmap_write(cs35l56->base.regmap,
+					      CS35L56_DSP_VIRTUAL1_MBOX_1, 0));
+	regcache_cache_only(cs35l56->base.regmap, false);
+	KUNIT_ASSERT_EQ(test, 0, regcache_sync(cs35l56->base.regmap));
+	regcache_mark_dirty(cs35l56->base.regmap);
+	KUNIT_ASSERT_EQ(test, 0, regcache_sync(cs35l56->base.regmap));
+
+	KUNIT_EXPECT_FALSE(test, priv->sdw_mux_regs_written);
+}
+
 static int cs35l56_test_case_init_common(struct kunit *test)
 {
 	struct cs35l56_test_priv *priv;
@@ -1232,6 +1314,8 @@ static struct kunit_case cs35l56_test_cases_soundwire[] = {
 	KUNIT_CASE(cs35l56_test_set_fw_name_preserves_spkid_with_onchip_gpios),
 	KUNIT_CASE(cs35l56_test_set_fw_name_preserves_spkid_without_onchip_gpios),
 	KUNIT_CASE_PARAM(cs35l56_test_component_probe_omits_asp,
+			 cs35l56_test_type_rev_all_gen_params),
+	KUNIT_CASE_PARAM(cs35l56_test_component_probe_omits_sdw_mux,
 			 cs35l56_test_type_rev_all_gen_params),
 
 	{ } /* terminator */
