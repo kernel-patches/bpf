@@ -335,7 +335,11 @@ static struct snd_soc_jack_pin qcom_headset_jack_pins[] = {
 	},
 	{
 		.pin = "Headphone Jack",
-		.mask = SND_JACK_HEADPHONE,
+		/*
+		 * WCD MBHC reports loads above linein_th (5 kOhm) as LINEOUT,
+		 * e.g. active speakers; treat them like headphones for routing.
+		 */
+		.mask = SND_JACK_HEADPHONE | SND_JACK_LINEOUT,
 	},
 };
 

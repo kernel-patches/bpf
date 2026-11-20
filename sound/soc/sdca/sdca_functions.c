@@ -851,7 +851,7 @@ static int find_sdca_control_range(struct device *dev,
 {
 	u8 *range_list;
 	int num_range;
-	u16 *limits;
+	__le16 *limits;
 	int i;
 
 	num_range = fwnode_property_count_u8(control_node, "mipi-sdca-control-range");
@@ -869,7 +869,7 @@ static int find_sdca_control_range(struct device *dev,
 	fwnode_property_read_u8_array(control_node, "mipi-sdca-control-range",
 				      range_list, num_range);
 
-	limits = (u16 *)range_list;
+	limits = (__le16 *)range_list;
 
 	range->cols = le16_to_cpu(limits[0]);
 	range->rows = le16_to_cpu(limits[1]);
@@ -880,7 +880,7 @@ static int find_sdca_control_range(struct device *dev,
 		return -EINVAL;
 
 	for (i = 0; i < num_range; i++)
-		range->data[i] = le32_to_cpu(range->data[i]);
+		le32_to_cpus(&range->data[i]);
 
 	return 0;
 }

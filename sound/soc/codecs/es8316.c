@@ -616,7 +616,7 @@ static void es8316_enable_micbias_for_mic_gnd_short_detect(
 	snd_soc_dapm_sync_unlocked(dapm);
 	snd_soc_dapm_mutex_unlock(dapm);
 
-	msleep(20);
+	msleep(100);
 }
 
 static void es8316_disable_micbias_for_mic_gnd_short_detect(

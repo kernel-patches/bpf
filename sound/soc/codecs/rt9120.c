@@ -588,9 +588,13 @@ static int rt9120_probe(struct i2c_client *i2c)
 	pm_runtime_mark_last_busy(&i2c->dev);
 	pm_runtime_enable(&i2c->dev);
 
-	return devm_snd_soc_register_component(&i2c->dev,
-					       &rt9120_component_driver,
-					       &rt9120_dai, 1);
+	ret = devm_snd_soc_register_component(&i2c->dev,
+					      &rt9120_component_driver,
+					      &rt9120_dai, 1);
+	if (ret)
+		pm_runtime_disable(&i2c->dev);
+
+	return ret;
 }
 
 static void rt9120_remove(struct i2c_client *i2c)

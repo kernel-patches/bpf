@@ -1364,8 +1364,8 @@ static int i2s_create_secondary_device(struct samsung_i2s_priv *priv)
 
 	ret = device_attach(&pdev_sec->dev);
 	if (ret <= 0) {
-		platform_device_unregister(priv->pdev_sec);
 		dev_info(&pdev_sec->dev, "device_attach() failed\n");
+		platform_device_unregister(pdev_sec);
 		return ret;
 	}
 

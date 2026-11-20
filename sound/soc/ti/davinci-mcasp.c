@@ -2476,6 +2476,7 @@ static const char *sdma_prefix = "ti,omap";
 static int davinci_mcasp_get_dma_type(struct davinci_mcasp *mcasp)
 {
 	struct dma_chan *chan;
+	struct device *dma_dev;
 	const char *tmp;
 	int ret = PCM_EDMA;
 
@@ -2487,13 +2488,10 @@ static int davinci_mcasp_get_dma_type(struct davinci_mcasp *mcasp)
 	if (IS_ERR(chan))
 		return dev_err_probe(mcasp->dev, PTR_ERR(chan),
 				     "Can't verify DMA configuration\n");
-	if (WARN_ON(!chan->device || !chan->device->dev)) {
-		dma_release_channel(chan);
-		return -EINVAL;
-	}
 
-	if (chan->device->dev->of_node)
-		ret = of_property_read_string(chan->device->dev->of_node,
+	dma_dev = dmaengine_get_provider_device(chan);
+	if (dma_dev->of_node)
+		ret = of_property_read_string(dma_dev->of_node,
 					      "compatible", &tmp);
 	else
 		dev_dbg(mcasp->dev, "DMA controller has no of-node\n");

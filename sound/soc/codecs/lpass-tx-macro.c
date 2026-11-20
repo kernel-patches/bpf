@@ -6,7 +6,6 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/platform_device.h>
-#include <linux/pm_clock.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <sound/soc.h>
@@ -288,6 +287,53 @@ struct tx_macro {
 	bool bcs_clk_en;
 };
 #define to_tx_macro(_hw) container_of(_hw, struct tx_macro, hw)
+
+static void tx_macro_disable_clocks(struct tx_macro *tx)
+{
+	clk_disable_unprepare(tx->fsgen);
+	clk_disable_unprepare(tx->npl);
+	clk_disable_unprepare(tx->mclk);
+	clk_disable_unprepare(tx->dcodec);
+	clk_disable_unprepare(tx->macro);
+}
+
+static int tx_macro_enable_clocks(struct tx_macro *tx)
+{
+	int ret;
+
+	ret = clk_prepare_enable(tx->macro);
+	if (ret)
+		return ret;
+
+	ret = clk_prepare_enable(tx->dcodec);
+	if (ret)
+		goto err_dcodec;
+
+	ret = clk_prepare_enable(tx->mclk);
+	if (ret)
+		goto err_mclk;
+
+	ret = clk_prepare_enable(tx->npl);
+	if (ret)
+		goto err_npl;
+
+	ret = clk_prepare_enable(tx->fsgen);
+	if (ret)
+		goto err_fsgen;
+
+	return 0;
+
+err_fsgen:
+	clk_disable_unprepare(tx->npl);
+err_npl:
+	clk_disable_unprepare(tx->mclk);
+err_mclk:
+	clk_disable_unprepare(tx->dcodec);
+err_dcodec:
+	clk_disable_unprepare(tx->macro);
+
+	return ret;
+}
 
 static const DECLARE_TLV_DB_SCALE(digital_gain, -8400, 100, -8400);
 
@@ -2328,14 +2374,6 @@ static int tx_macro_probe(struct platform_device *pdev)
 	if (ret)
 		goto err;
 
-	ret = devm_pm_clk_create(dev);
-	if (ret)
-		goto err;
-
-	ret = of_pm_clk_add_clks(dev);
-	if (ret < 0)
-		goto err;
-
 	pm_runtime_set_autosuspend_delay(dev, 100);
 	pm_runtime_use_autosuspend(dev);
 	ret = devm_pm_runtime_enable(dev);
@@ -2345,7 +2383,6 @@ static int tx_macro_probe(struct platform_device *pdev)
 	ret = pm_runtime_resume_and_get(dev);
 	if (ret < 0)
 		goto err;
-
 
 	/* reset soundwire block */
 	if (tx->data->flags & LPASS_MACRO_FLAG_RESET_SWR)
@@ -2395,16 +2432,9 @@ static void tx_macro_remove(struct platform_device *pdev)
 static int tx_macro_runtime_suspend(struct device *dev)
 {
 	struct tx_macro *tx = dev_get_drvdata(dev);
-	int ret;
 
 	regcache_cache_only(tx->regmap, true);
-
-	ret = pm_clk_suspend(dev);
-	if (ret) {
-		regcache_cache_only(tx->regmap, false);
-		return ret;
-	}
-
+	tx_macro_disable_clocks(tx);
 	regcache_mark_dirty(tx->regmap);
 
 	return 0;
@@ -2415,7 +2445,7 @@ static int tx_macro_runtime_resume(struct device *dev)
 	struct tx_macro *tx = dev_get_drvdata(dev);
 	int ret;
 
-	ret = pm_clk_resume(dev);
+	ret = tx_macro_enable_clocks(tx);
 	if (ret) {
 		regcache_cache_only(tx->regmap, true);
 		regcache_mark_dirty(tx->regmap);
@@ -2427,16 +2457,15 @@ static int tx_macro_runtime_resume(struct device *dev)
 	if (ret) {
 		regcache_cache_only(tx->regmap, true);
 		regcache_mark_dirty(tx->regmap);
-		pm_clk_suspend(dev);
+		tx_macro_disable_clocks(tx);
 		return ret;
 	}
 
 	return 0;
 }
 
-static const struct dev_pm_ops tx_macro_pm_ops = {
-	RUNTIME_PM_OPS(tx_macro_runtime_suspend, tx_macro_runtime_resume, NULL)
-};
+static DEFINE_RUNTIME_DEV_PM_OPS(tx_macro_pm_ops, tx_macro_runtime_suspend,
+				 tx_macro_runtime_resume, NULL);
 
 static const struct tx_macro_data lpass_ver_9 = {
 	.flags			= LPASS_MACRO_FLAG_HAS_NPL_CLOCK |

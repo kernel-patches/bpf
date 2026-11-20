@@ -13,7 +13,6 @@
 #include <sound/hdaudio_ext.h>
 #include <sound/pcm_params.h>
 #include <sound/soc-acpi.h>
-#include <sound/soc-acpi-intel-match.h>
 #include <sound/soc-component.h>
 #include "avs.h"
 #include "path.h"
@@ -166,9 +165,9 @@ static void avs_dai_shutdown(struct snd_pcm_substream *substream, struct snd_soc
 }
 
 static int avs_dai_hw_params(struct snd_pcm_substream *substream,
-			     struct snd_pcm_hw_params *fe_hw_params,
-			     struct snd_pcm_hw_params *be_hw_params, struct snd_soc_dai *dai,
-			     int dma_id)
+			     struct snd_pcm_hw_params *fe_params,
+			     struct snd_pcm_hw_params *be_params,
+			     struct snd_soc_dai *dai, int dma_id)
 {
 	struct avs_dma_data *data;
 	struct avs_path *path;
@@ -179,16 +178,16 @@ static int avs_dai_hw_params(struct snd_pcm_substream *substream,
 	dev_dbg(dai->dev, "%s FE hw_params str %p rtd %p",
 		__func__, substream, substream->runtime);
 	dev_dbg(dai->dev, "rate %d chn %d vbd %d bd %d\n",
-		params_rate(fe_hw_params), params_channels(fe_hw_params),
-		params_width(fe_hw_params), params_physical_width(fe_hw_params));
+		params_rate(fe_params), params_channels(fe_params),
+		params_width(fe_params), params_physical_width(fe_params));
 
 	dev_dbg(dai->dev, "%s BE hw_params str %p rtd %p",
 		__func__, substream, substream->runtime);
 	dev_dbg(dai->dev, "rate %d chn %d vbd %d bd %d\n",
-		params_rate(be_hw_params), params_channels(be_hw_params),
-		params_width(be_hw_params), params_physical_width(be_hw_params));
+		params_rate(be_params), params_channels(be_params),
+		params_width(be_params), params_physical_width(be_params));
 
-	path = avs_path_create(data->adev, dma_id, data->template, fe_hw_params, be_hw_params);
+	path = avs_path_create(data->adev, dma_id, data->template, fe_params, be_params);
 	if (IS_ERR(path)) {
 		ret = PTR_ERR(path);
 		dev_err(dai->dev, "create path failed: %d\n", ret);
@@ -200,10 +199,10 @@ static int avs_dai_hw_params(struct snd_pcm_substream *substream,
 }
 
 static int avs_dai_be_hw_params(struct snd_pcm_substream *substream,
-				struct snd_pcm_hw_params *be_hw_params, struct snd_soc_dai *dai,
-				int dma_id)
+				struct snd_pcm_hw_params *be_params,
+				struct snd_soc_dai *dai, int dma_id)
 {
-	struct snd_pcm_hw_params *fe_hw_params = NULL;
+	struct snd_pcm_hw_params *fe_params = NULL;
 	struct snd_soc_pcm_runtime *fe, *be;
 	struct snd_soc_dpcm *dpcm;
 
@@ -211,10 +210,10 @@ static int avs_dai_be_hw_params(struct snd_pcm_substream *substream,
 	/* dpcm_fe_dai_open() guarantees the list is not empty at this point. */
 	for_each_dpcm_fe(be, substream->stream, dpcm) {
 		fe = dpcm->fe;
-		fe_hw_params = &fe->dpcm[substream->stream].hw_params;
+		fe_params = &fe->dpcm[substream->stream].hw_params;
 	}
 
-	return avs_dai_hw_params(substream, fe_hw_params, be_hw_params, dai, dma_id);
+	return avs_dai_hw_params(substream, fe_params, be_params, dai, dma_id);
 }
 
 static int avs_dai_prepare(struct snd_pcm_substream *substream, struct snd_soc_dai *dai)
@@ -227,19 +226,14 @@ static int avs_dai_prepare(struct snd_pcm_substream *substream, struct snd_soc_d
 		return 0;
 
 	ret = avs_path_reset(data->path);
-	if (ret < 0) {
-		dev_err(dai->dev, "reset path failed: %d\n", ret);
-		return ret;
-	}
-
-	ret = avs_path_pause(data->path);
 	if (ret < 0)
-		dev_err(dai->dev, "pause path failed: %d\n", ret);
-	return ret;
+		return ret;
+
+	return avs_path_pause(data->path);
 }
 
 static int avs_dai_nonhda_be_hw_params(struct snd_pcm_substream *substream,
-				       struct snd_pcm_hw_params *hw_params, struct snd_soc_dai *dai)
+				       struct snd_pcm_hw_params *be_params, struct snd_soc_dai *dai)
 {
 	struct avs_dma_data *data;
 
@@ -248,7 +242,7 @@ static int avs_dai_nonhda_be_hw_params(struct snd_pcm_substream *substream,
 		return 0;
 
 	/* Actual port-id comes from topology. */
-	return avs_dai_be_hw_params(substream, hw_params, dai, 0);
+	return avs_dai_be_hw_params(substream, be_params, dai, 0);
 }
 
 static int avs_dai_nonhda_be_hw_free(struct snd_pcm_substream *substream, struct snd_soc_dai *dai)
@@ -271,7 +265,7 @@ static int avs_dai_nonhda_be_trigger(struct snd_pcm_substream *substream, int cm
 {
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct avs_dma_data *data;
-	int ret = 0;
+	int ret2, ret = 0;
 
 	data = snd_soc_dai_get_dma_data(dai, substream);
 
@@ -283,14 +277,10 @@ static int avs_dai_nonhda_be_trigger(struct snd_pcm_substream *substream, int cm
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		ret = avs_path_pause(data->path);
-		if (ret < 0) {
-			dev_err(dai->dev, "pause BE path failed: %d\n", ret);
+		if (ret < 0)
 			break;
-		}
 
 		ret = avs_path_run(data->path, AVS_TPLG_TRIGGER_AUTO);
-		if (ret < 0)
-			dev_err(dai->dev, "run BE path failed: %d\n", ret);
 		break;
 
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -300,12 +290,10 @@ static int avs_dai_nonhda_be_trigger(struct snd_pcm_substream *substream, int cm
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_STOP:
 		ret = avs_path_pause(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "pause BE path failed: %d\n", ret);
 
-		ret = avs_path_reset(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "reset BE path failed: %d\n", ret);
+		ret2 = avs_path_reset(data->path);
+		if (ret2 && !ret)
+			ret = ret2;
 		break;
 
 	default:
@@ -412,7 +400,7 @@ static void avs_dai_althda_be_shutdown(struct snd_pcm_substream *substream, stru
 }
 
 static int avs_dai_hda_be_hw_params(struct snd_pcm_substream *substream,
-				    struct snd_pcm_hw_params *hw_params, struct snd_soc_dai *dai)
+				    struct snd_pcm_hw_params *be_params, struct snd_soc_dai *dai)
 {
 	struct avs_dma_data *data;
 
@@ -420,7 +408,7 @@ static int avs_dai_hda_be_hw_params(struct snd_pcm_substream *substream,
 	if (data->path)
 		return 0;
 
-	return avs_dai_be_hw_params(substream, hw_params, dai,
+	return avs_dai_be_hw_params(substream, be_params, dai,
 				    hdac_stream(data->link_stream)->stream_tag - 1);
 }
 
@@ -492,7 +480,7 @@ static int avs_dai_hda_be_trigger(struct snd_pcm_substream *substream, int cmd,
 {
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct avs_dma_data *data;
-	int ret = 0;
+	int ret2, ret = 0;
 
 	dev_dbg(dai->dev, "entry %s cmd=%d\n", __func__, cmd);
 
@@ -508,14 +496,10 @@ static int avs_dai_hda_be_trigger(struct snd_pcm_substream *substream, int cmd,
 		snd_hdac_ext_stream_start(data->link_stream);
 
 		ret = avs_path_pause(data->path);
-		if (ret < 0) {
-			dev_err(dai->dev, "pause BE path failed: %d\n", ret);
+		if (ret < 0)
 			break;
-		}
 
 		ret = avs_path_run(data->path, AVS_TPLG_TRIGGER_AUTO);
-		if (ret < 0)
-			dev_err(dai->dev, "run BE path failed: %d\n", ret);
 		break;
 
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -525,14 +509,12 @@ static int avs_dai_hda_be_trigger(struct snd_pcm_substream *substream, int cmd,
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_STOP:
 		ret = avs_path_pause(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "pause BE path failed: %d\n", ret);
 
 		snd_hdac_ext_stream_clear(data->link_stream);
 
-		ret = avs_path_reset(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "reset BE path failed: %d\n", ret);
+		ret2 = avs_path_reset(data->path);
+		if (ret2 && !ret)
+			ret = ret2;
 		break;
 
 	default:
@@ -660,9 +642,9 @@ static void avs_dai_fe_shutdown(struct snd_pcm_substream *substream, struct snd_
 }
 
 static int avs_dai_fe_hw_params(struct snd_pcm_substream *substream,
-				struct snd_pcm_hw_params *hw_params, struct snd_soc_dai *dai)
+				struct snd_pcm_hw_params *fe_params, struct snd_soc_dai *dai)
 {
-	struct snd_pcm_hw_params *be_hw_params = NULL;
+	struct snd_pcm_hw_params *be_params = NULL;
 	struct snd_soc_pcm_runtime *fe, *be;
 	struct snd_soc_dpcm *dpcm;
 	struct avs_dma_data *data;
@@ -683,19 +665,17 @@ static int avs_dai_fe_hw_params(struct snd_pcm_substream *substream,
 	/* dpcm_fe_dai_open() guarantees the list is not empty at this point. */
 	for_each_dpcm_be(fe, substream->stream, dpcm) {
 		be = dpcm->be;
-		be_hw_params = &be->dpcm[substream->stream].hw_params;
+		be_params = &be->dpcm[substream->stream].hw_params;
 	}
 
-	ret = avs_dai_hw_params(substream, hw_params, be_hw_params, dai,
+	ret = avs_dai_hw_params(substream, fe_params, be_params, dai,
 				hdac_stream(host_stream)->stream_tag - 1);
 	if (ret)
 		goto create_err;
 
 	ret = avs_path_bind(data->path);
-	if (ret < 0) {
-		dev_err(dai->dev, "bind FE <-> BE failed: %d\n", ret);
+	if (ret < 0)
 		goto bind_err;
-	}
 
 	return 0;
 
@@ -723,11 +703,9 @@ static int __avs_dai_fe_hw_free(struct snd_pcm_substream *substream, struct snd_
 	host_stream = data->host_stream;
 
 	ret = avs_path_unbind(data->path);
-	if (ret < 0)
-		dev_err(dai->dev, "unbind FE <-> BE failed: %d\n", ret);
-
 	avs_path_free(data->path);
 	data->path = NULL;
+
 	snd_hdac_stream_cleanup(hdac_stream(host_stream));
 	hdac_stream(host_stream)->prepared = false;
 
@@ -868,7 +846,7 @@ static int avs_dai_fe_trigger(struct snd_pcm_substream *substream, int cmd, stru
 	struct hdac_ext_stream *host_stream;
 	struct hdac_bus *bus;
 	unsigned long flags;
-	int ret = 0;
+	int ret2, ret = 0;
 
 	data = snd_soc_dai_get_dma_data(dai, substream);
 	host_stream = data->host_stream;
@@ -890,15 +868,10 @@ static int avs_dai_fe_trigger(struct snd_pcm_substream *substream, int cmd, stru
 			snd_hdac_stream_wait_drsm(hdac_stream(host_stream));
 
 		ret = avs_path_pause(data->path);
-		if (ret < 0) {
-			dev_err(dai->dev, "pause FE path failed: %d\n", ret);
+		if (ret < 0)
 			break;
-		}
 
 		ret = avs_path_run(data->path, AVS_TPLG_TRIGGER_AUTO);
-		if (ret < 0)
-			dev_err(dai->dev, "run FE path failed: %d\n", ret);
-
 		break;
 
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -908,16 +881,14 @@ static int avs_dai_fe_trigger(struct snd_pcm_substream *substream, int cmd, stru
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_STOP:
 		ret = avs_path_pause(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "pause FE path failed: %d\n", ret);
 
 		spin_lock_irqsave(&bus->reg_lock, flags);
 		avs_hda_stream_stop(bus, host_stream);
 		spin_unlock_irqrestore(&bus->reg_lock, flags);
 
-		ret = avs_path_reset(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "reset FE path failed: %d\n", ret);
+		ret2 = avs_path_reset(data->path);
+		if (ret2 && !ret)
+			ret = ret2;
 		break;
 
 	default:

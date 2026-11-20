@@ -913,14 +913,14 @@ static const struct avs_spec fcl_desc = {
 };
 
 static const struct pci_device_id avs_ids[] = {
-	{ PCI_DEVICE_DATA(INTEL, HDA_SKL_LP, &skl_desc) },
-	{ PCI_DEVICE_DATA(INTEL, HDA_SKL, &skl_desc) },
-	{ PCI_DEVICE_DATA(INTEL, HDA_KBL_LP, &skl_desc) },
-	{ PCI_DEVICE_DATA(INTEL, HDA_KBL, &skl_desc) },
-	{ PCI_DEVICE_DATA(INTEL, HDA_KBL_H, &skl_desc) },
-	{ PCI_DEVICE_DATA(INTEL, HDA_CML_S, &skl_desc) },
-	{ PCI_DEVICE_DATA(INTEL, HDA_APL, &apl_desc) },
-	{ PCI_DEVICE_DATA(INTEL, HDA_GLK, &apl_desc) },
+	{ PCI_DEVICE_DATA(INTEL, HDA_SKL_LP,	&skl_desc) },
+	{ PCI_DEVICE_DATA(INTEL, HDA_SKL,	&skl_desc) },
+	{ PCI_DEVICE_DATA(INTEL, HDA_KBL_LP,	&skl_desc) },
+	{ PCI_DEVICE_DATA(INTEL, HDA_KBL,	&skl_desc) },
+	{ PCI_DEVICE_DATA(INTEL, HDA_KBL_H,	&skl_desc) },
+	{ PCI_DEVICE_DATA(INTEL, HDA_CML_S,	&skl_desc) },
+	{ PCI_DEVICE_DATA(INTEL, HDA_APL,	&apl_desc) },
+	{ PCI_DEVICE_DATA(INTEL, HDA_GLK,	&apl_desc) },
 	{ PCI_DEVICE_DATA(INTEL, HDA_CNL_LP,	&cnl_desc) },
 	{ PCI_DEVICE_DATA(INTEL, HDA_CNL_H,	&cnl_desc) },
 	{ PCI_DEVICE_DATA(INTEL, HDA_CML_LP,	&cnl_desc) },

@@ -302,8 +302,7 @@ static int stm32_spdifrx_dma_ctrl_start(struct stm32_spdifrx_data *spdifrx)
 	if (!spdifrx->desc)
 		return -EINVAL;
 
-	spdifrx->desc->callback = stm32_spdifrx_dma_complete;
-	spdifrx->desc->callback_param = spdifrx;
+	dmaengine_desc_set_callback(spdifrx->desc, stm32_spdifrx_dma_complete, NULL, spdifrx);
 	cookie = dmaengine_submit(spdifrx->desc);
 	err = dma_submit_error(cookie);
 	if (err)
@@ -424,10 +423,8 @@ static int stm32_spdifrx_dma_ctrl_register(struct device *dev,
 
 	ret = dmaengine_slave_config(spdifrx->ctrl_chan,
 				     &spdifrx->slave_config);
-	if (ret < 0) {
+	if (ret < 0)
 		dev_err(dev, "dmaengine_slave_config returned error %d\n", ret);
-		spdifrx->ctrl_chan = NULL;
-	}
 
 	return ret;
 };
