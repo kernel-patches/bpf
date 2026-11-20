@@ -803,6 +803,9 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 			verbose(env, "%s%d", i > first ? "," : "",
 				state->loop_stack[i].loop->header);
 	}
+	/* one table for all frames */
+	if (print_all && frameno == vstate->curframe)
+		bpf_equations_print(env, vstate);
 	verbose(env, "\n");
 	if (!print_all)
 		mark_verifier_state_clean(env);
