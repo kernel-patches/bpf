@@ -2328,11 +2328,9 @@ extern void sched_core_free(struct task_struct *tsk);
 extern void sched_core_fork(struct task_struct *p);
 extern int sched_core_share_pid(unsigned int cmd, pid_t pid, enum pid_type type,
 				unsigned long uaddr);
-extern int sched_core_idle_cpu(int cpu);
 #else
 static inline void sched_core_free(struct task_struct *tsk) { }
 static inline void sched_core_fork(struct task_struct *p) { }
-static inline int sched_core_idle_cpu(int cpu) { return idle_cpu(cpu); }
 #endif
 
 extern void sched_set_stop_task(int cpu, struct task_struct *stop);
@@ -2385,6 +2383,7 @@ static __always_inline int task_mm_cid(struct task_struct *t)
 struct sched_cache_time {
 	u64 runtime;
 	unsigned long epoch;
+	unsigned long epoch_last_visit;
 };
 
 struct sched_cache_group {
@@ -2397,6 +2396,7 @@ struct sched_cache_group {
 	int cpu;
 	refcount_t refcnt;
 	struct rcu_head rcu;
+	cpumask_var_t visited_cpus;
 } ____cacheline_aligned_in_smp;
 
 struct sched_cache_group *sched_cache_group_get(struct sched_cache_group *grp);
