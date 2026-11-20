@@ -268,6 +268,52 @@ __naked void meet_disagrees(void)
 	: __clobber_all);
 }
 
+/* A loop with no 32-bit insns can count down and store the carry */
+#define CARRY_TEST(name, initial, minus_step, msg)				\
+	COND_TEST(name, initial, 0, minus_step, msg,				\
+		"1: r6 <<= 32; r6 >>= 32; r6 += r7;"				\
+		"r2 = r6; r2 <<= 32; r2 >>= 32;"				\
+		"r3 = 1; if r2 != r6 goto 3f; r3 = 0;"				\
+		"3: if r3 != 0 goto 1b;")
+
+CARRY_TEST(carry_step_1, 33, 0xffffffffULL, COUNT(34))
+CARRY_TEST(carry_step_3, 100, 0xfffffffdULL, COUNT(34))
+CARRY_TEST(carry_step_0, 33, 0x100000000ULL, NO_COUNT)
+
+/* Or it counts up until there is a carry */
+COND_TEST(carry_ends_loop, 0xffffffdeULL, 0, 1, COUNT(34),
+	  "1: r6 <<= 32; r6 >>= 32; r6 += r7;"
+	  "r2 = r6; r2 <<= 32; r2 >>= 32;"
+	  "if r2 == r6 goto 1b;")
+
+/* Two entries have two bounds. The @test of r6 and its low 32 bits is not true. */
+#define OTHER_JUMP_TEST(name, initial, test)					\
+SEC("xdp")									\
+__success									\
+__log_level(2)									\
+ANY_COUNT									\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"call %[bpf_get_prandom_u32];"						\
+	"r9 = 20; r5 = r10;"							\
+	"if r0 > 5 goto 1f;"							\
+	"r9 = 40; r5 = 0;"							\
+"1:	r8 = 0; r4 = 0; r6 = " #initial " ll;"					\
+"2:	r6 += -1; r7 = r6; r7 <<= 32; r7 >>= 32;"				\
+	"if " test " goto 3f;"							\
+	"r4 += r8; r8 += 1;"							\
+	"if r8 != r9 goto 2b;"							\
+"3:	if r5 == 0 goto 4f;"							\
+	"*(u64 *)(r5 - 8) = r4;"						\
+"4:	r0 = 0;"								\
+	"exit;"									\
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);				\
+}
+
+OTHER_JUMP_TEST(low_half_wraps_with_carry, 0x20000000a, "r7 == r6")
+OTHER_JUMP_TEST(low_half_is_not_above, 0x10000000a, "r7 > r6")
+
 /* 'if (c) sum += a; else sum += b;': two loads, one way to compute the sum */
 SEC("socket")
 __success
@@ -5174,6 +5220,461 @@ __naked void widen_pkt_pointer_beyond_pkt_end(void)
 	"r0 = 0;"
 	"exit;"
 	:: PKT_IMMS : __clobber_all);
+}
+
+/* r7 += r6 & 1: r7 is not above the number of trips */
+#define SUM_OF_LOW_BITS(size)			\
+	"r6 = 0;"				\
+	"r7 = 0;"				\
+"1:"						\
+	"r1 = r6;"				\
+	"r1 &= 1;"				\
+	"r1 += r7;"				\
+	"r7 = r1;"				\
+	"r6 += 1;"				\
+	"if r6 != 100000 goto 1b;"		\
+	"if r7 > " #size " goto 2f;"		\
+	"r0 = 0;"				\
+	"exit;"					\
+"2:"						\
+	"r0 = *(u64 *)(r10 + 0);"		\
+	"exit;"
+
+SEC("socket")
+__success __log_level(2)
+__msg("has trip count 100000")
+__naked void sum_of_low_bits(void)
+{
+	asm volatile (SUM_OF_LOW_BITS(100000) ::: __clobber_all);
+}
+
+SEC("socket")
+__failure __msg("invalid read from stack R10 off=0 size=8")
+__naked void sum_of_low_bits_bad(void)
+{
+	asm volatile (SUM_OF_LOW_BITS(49999) ::: __clobber_all);
+}
+
+/* for (i = 0..1; i <= n; i++) */
+SEC("socket")
+__success __log_level(2)
+__not_msg("pass 1")
+__naked void start_and_bound_are_ranges(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r7 = r0;"
+	"if r7 > 510 goto 9f;"
+	"call %[bpf_get_prandom_u32];"
+	"r6 = r0;"
+	"r6 &= 1;"
+	"if w6 > w7 goto 9f;"
+	"r7 &= 0x7fffffff;"
+"1:"
+	"r0 = r6;"
+	"r2 = r10;"
+	"r2 += -512;"
+	"r2 += r0;"
+	"*(u8 *)(r2 + 0) = 1;"
+	"r6 = r0;"
+	"r6 += 1;"
+	"if r0 < r7 goto 1b;"
+"9:"
+	"r0 = 0;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);
+}
+
+/* h wraps around in 0..3. It moves with the trip index only in the first trips. */
+SEC("socket")
+__success
+__naked void index_wraps_around(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = 0;"
+"1:"
+	"r2 = r7;"
+	"r2 <<= 3;"
+	"r1 = r10;"
+	"r1 += -32;"
+	"r1 += r2;"
+	"*(u64 *)(r1 + 0) = r6;"
+	"r3 = 0;"
+	"if r7 s> 2 goto 2f;"
+	"r7 += 1;"
+	"r3 = r7;"
+"2:"
+	"r7 = r3;"
+	"r6 += 1;"
+	"if r6 != 100000 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * r8 - k >= 300, r8 - 2 * k <= 40, r8 < 560: no run gets through the three tests.
+ * The equations show it when the trip index is gone, at the exit of the loop.
+ * That state has r8 = 530. It must not subsume the state that skips the loop.
+ */
+SEC("socket")
+__failure __msg("invalid read from stack R10 off=0 size=8")
+__naked void infeasible_state_subsumes_nothing(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r8 = 530;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 != 1 goto 3f;"
+"1:"
+	"call %[bpf_get_prandom_u32];"
+	"r8 = r0;"
+	"r8 &= 0xfff;"
+	"r2 = r8;"
+	"r2 -= r6;"
+	"r3 = r6;"
+	"r3 <<= 1;"
+	"r4 = r8;"
+	"r4 -= r3;"
+	"if r2 s< 300 goto 2f;"
+	"if r4 s> 40 goto 2f;"
+	"if r8 s< 560 goto 3f;"
+"2:"
+	"r6 += 1;"
+	"if r6 < 700 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+"3:"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 2 goto 4f;"
+	"r0 = *(u64 *)(r10 + 0);"
+"4:"
+	"r0 = r8;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);
+}
+
+/*
+ * r6 = S64_MAX - k. No run gets to r6 == 0 or r6 == 1 by counting.
+ *
+ *              k            r7
+ *  r6 == 0     S64_MAX      1
+ *  r6 == 1     S64_MAX - 1  0     join: r7 = k - (S64_MAX - 1)
+ *  bit 6       small        1     the run
+ *
+ * The run must not get the trip index of the first state: the next trip cuts it off.
+ */
+SEC("socket")
+__failure __msg("invalid read from stack R10 off=0 size=8")
+__naked void trip_index_does_not_jump_ahead(void)
+{
+	asm volatile (
+	"r6 = 0x7fffffffffffffff ll;"
+	"r7 = 0;"
+"1:"
+	"may_goto 9f;"
+	"if r7 == 0 goto 2f;"
+	"r0 = *(u64 *)(r10 + 0);"
+"2:"
+	"call %[bpf_get_prandom_u32];"
+	"if r6 == 0 goto 4f;"
+	"if r6 == 1 goto 6f;"
+	"if r6 & 0x40 goto 3f;"
+	"r0 = 1;"
+	"r6 = 0;"
+	"r7 = 1;"
+	"goto 5f;"
+"3:"
+	"r6 += -1;"
+	"goto 1b;"
+"4:"
+	"r6 = 0;"
+	"r7 = 1;"
+"5:"
+	"*(u64 *)(r10 - 8) = r0;"
+	"goto 7f;"
+"6:"
+	"r6 = 0;"
+	"r7 = 0;"
+"7:"
+	"goto 1b;"
+"9:"
+	"r0 = r7;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);
+}
+
+/*
+ * r6 moves with the trip index. The state with r6 == S64_MAX has a pointer in r8, so it meets
+ * no other state at the header. No run makes that many trips: the state ends there.
+ */
+SEC("socket")
+__success
+__naked void trip_index_stops_at_s64_max(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = 0x7fffffffffffffff ll;"
+	"r8 = 0;"
+"1:"
+	"may_goto 9f;"
+	"if r8 != 0 goto 1b;"
+	"if r6 == r7 goto 2f;"
+	"r6 += 1;"
+	"goto 1b;"
+"2:"
+	"r8 = %[small_map] ll;"
+	"goto 1b;"
+"9:"
+	"r0 = 0;"
+	"exit;"
+	:: __imm_addr(small_map) : __clobber_all);
+}
+
+#define RING(name, mask)					\
+__naked void name(void)						\
+{								\
+	asm volatile (						\
+	"r6 = 0;"						\
+	"r7 = 0;"						\
+"1:"								\
+	"r1 = r10;"						\
+	"r1 += -32;"						\
+	"r1 += r7;"						\
+	"*(u8 *)(r1 + 0) = 0;"					\
+	"r7 += 1;"						\
+	"r7 &= " #mask ";"					\
+	"r6 += 1;"						\
+	"if r6 < 50000 goto 1b;"				\
+	"r0 = 0;"						\
+	"exit;"							\
+	::: __clobber_all);					\
+}
+
+/* pos = (pos + 1) & 31. The threshold of the trip index is not the threshold of pos. */
+SEC("socket")
+__success __log_level(2)
+__msg(RANGE("2", "R7", 0, 31))
+__not_msg("pass 2")
+RING(ring_index_is_bounded_by_mask, 31)
+
+SEC("socket")
+__failure __msg("write to stack R1")
+RING(ring_index_is_too_large, 63)
+
+/* Each add makes an equation that depends on the equation of the add before it */
+SEC("socket")
+__success
+__naked void long_chain_of_sums(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r6 = r0;"
+	"r6 &= 7;"
+	"call %[bpf_get_prandom_u32];"
+	"r7 = r0;"
+	"r7 &= 7;"
+	"call %[bpf_get_prandom_u32];"
+	"r0 &= 7;"
+	"r1 = 7;"
+	".rept 2000;"
+	"r0 += r6;"
+	"r1 += 6;"
+	"if r0 > r1 goto 9f;"
+	"r0 += r7;"
+	"r1 += 6;"
+	"if r0 > r1 goto 9f;"
+	".endr;"
+"9:"
+	"r0 += r6;"
+	"r0 += r7;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);
+}
+
+/* The start of a block has all loops, an insn has the inner one */
+SEC("socket")
+__success __log_level(2)
+__msg("to 2: {{.*}} loop_stack=1,2")
+__msg("2: (07) r7 += 1 {{.*}} loop_stack=2{{$}}")
+__naked void log_of_nested_loops(void)
+{
+	asm volatile (
+	"r6 = 0;"
+"1:"
+	"r7 = 0;"
+"2:"
+	"r7 += 1;"
+	"if r7 < 3 goto 2b;"
+	"r6 += 1;"
+	"if r6 < 3 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * r6 is 3 * trip and it can wrap. After the loop r6 == r7, so the sum is (17..25) + (20..28).
+ */
+#define SUM_WITH_PRODUCT_THAT_WRAPS(off)	\
+	asm volatile (				\
+	"call %[bpf_get_prandom_u32];"		\
+	"r7 = r0;"				\
+	"if r7 < 20 goto 9f;"			\
+	"if r7 > 28 goto 9f;"			\
+	"r6 = 0;"				\
+"1:"						\
+	"r8 = r6;"				\
+	"r8 += r7;"				\
+	"r6 += 3;"				\
+	"if r6 != r7 goto 1b;"			\
+	"r1 = r10;"				\
+	"r1 += " #off ";"			\
+	"r1 += r8;"				\
+	"*(u8 *)(r1 + 0) = 1;"			\
+"9:"						\
+	"r0 = 0;"				\
+	"exit;"					\
+	:: __imm(bpf_get_prandom_u32) : __clobber_all)
+
+SEC("socket")
+__success
+__naked void sum_with_product_that_wraps(void)
+{
+	SUM_WITH_PRODUCT_THAT_WRAPS(-54);
+}
+
+/* r7 = 27 gives 51 */
+SEC("socket")
+__failure __msg("write to stack R1")
+__naked void sum_with_product_that_wraps_above(void)
+{
+	SUM_WITH_PRODUCT_THAT_WRAPS(-51);
+}
+
+/*
+ * r7 stays in 0..31. No range shows it, so all trips are peeled.
+ * A path-sensitive run must not skip any.
+ */
+SEC("socket")
+__success
+__naked void path_sensitive_does_not_skip_a_ring(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = 0;"
+"1:"
+	"r1 = r10;"
+	"r1 += -32;"
+	"r1 += r7;"
+	"*(u8 *)(r1 + 0) = 0;"
+	"r7 += 1;"
+	"r2 = r7;"
+	"r2 >>= 5;"
+	"r2 <<= 5;"
+	"r7 ^= r2;"
+	"r6 += 1;"
+	"if r6 < 6000 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The sum of 4000, 3999, ..., -4000 is 0 */
+SEC("socket")
+__success
+__naked void path_sensitive_does_not_skip_a_sum(void)
+{
+	asm volatile (
+	"r6 = 4000;"
+	"r7 = 0;"
+"1:"
+	"r7 += r6;"
+	"r6 += -1;"
+	"if r6 s>= -4000 goto 1b;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"r1 += r7;"
+	"*(u8 *)(r1 + 0) = 0;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+char a1m[1 << 20] SEC(".data.a1m");
+
+/* (n, size) is (1 << 18, 4) or (@n, 8). for (i = 0; i < n; i++) { a1m[i * size]; @inner } */
+#define TWO_ENTRIES(n, inner)						\
+	asm volatile (							\
+	"call %[bpf_get_prandom_u32];"					\
+	"r6 = 0x40000;"							\
+	"r7 = 4;"							\
+	"if w0 & 1 goto 1f;"						\
+	"r6 = " #n ";"							\
+	"r7 = 8;"							\
+"1:	r8 = 0;"							\
+"2:	r2 = r8;"							\
+	"r2 *= r7;"							\
+	"r1 = %[a1m] ll;"						\
+	"r1 += r2;"							\
+	"r0 = *(u8 *)(r1 + 0);"						\
+	inner								\
+	"r8 += 1;"							\
+	"if r8 != r6 goto 2b;"						\
+	"exit;"								\
+	:: __imm(bpf_get_prandom_u32), __imm_addr(a1m) : __clobber_all)
+
+SEC("socket")
+__success __log_level(2) __not_msg("pass 2") __retval(0)
+__naked void each_entry_has_its_threshold(void)
+{
+	TWO_ENTRIES(0x20000, "");
+}
+
+SEC("socket")
+__failure __msg("invalid access to map value")
+__naked void each_entry_has_its_threshold_bad(void)
+{
+	TWO_ENTRIES(0x20001, "");
+}
+
+/* for (j = 0; j != i + 1; j++); */
+SEC("socket")
+__success __log_level(2) __not_msg("pass 2")
+__naked void threshold_after_inner_loop(void)
+{
+	TWO_ENTRIES(0x20000, "r3 = r8; r3 += 1; r9 = 0; 3: r9 += 1; if r9 != r3 goto 3b;");
+}
+
+/* sum = @start; for (i = 0; i < 64; i++) sum += a1m[i]; */
+#define SUM_FROM(start)							\
+	asm volatile (							\
+	"call %[bpf_ktime_get_ns];"					\
+	"r6 = " start ";"						\
+	"r7 = 0;"							\
+"1:	r1 = %[a1m] ll;"						\
+	"r1 += r7;"							\
+	"r1 = *(u8 *)(r1 + 0);"						\
+	"r6 += r1;"							\
+	"r7 += 1;"							\
+	"if r7 < 64 goto 1b;"						\
+	"r0 = r6;"							\
+	"exit;"								\
+	:: __imm(bpf_ktime_get_ns), __imm_addr(a1m) : __clobber_all)
+
+SEC("socket")
+__success __log_level(4) __msg("processed 12 insns")
+__naked void unknown_sum_body_once(void)
+{
+	SUM_FROM("r0");
+}
+
+SEC("socket")
+__success __log_level(4) __msg("processed 24 insns")
+__naked void known_sum_three_trips(void)
+{
+	SUM_FROM("0");
 }
 
 char _license[] SEC("license") = "GPL";
