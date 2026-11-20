@@ -1024,6 +1024,11 @@ int main(int argc, char **argv)
 		}
 	}
 
+	if (ferror(fout) || fclose(fout)) {
+		perror("write output");
+		exit(1);
+	}
+
 out_free:
 	if (ext_buf)
 		free(ext_buf);
