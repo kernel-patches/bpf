@@ -174,6 +174,10 @@ static void __init cma_activate_area(struct cma *cma)
 			count = early_pfn[r] - cmr->base_pfn;
 			bitmap_count = cma_bitmap_pages_to_bits(cma, count);
 			bitmap_set(cmr->bitmap, 0, bitmap_count);
+
+			for (pfn = cmr->base_pfn; pfn < early_pfn[r];
+			     pfn += pageblock_nr_pages)
+				init_cma_pageblock(pfn_to_page(pfn));
 		}
 
 		WARN_ON_ONCE(!pfn_valid(cmr->base_pfn));
@@ -199,17 +203,20 @@ cleanup:
 	for (r = 0; r < allocrange; r++)
 		bitmap_free(cma->ranges[r].bitmap);
 
-	/* Expose all pages to the buddy, they are useless for CMA. */
-	if (!test_bit(CMA_RESERVE_PAGES_ON_ERROR, &cma->flags)) {
-		for (r = 0; r < cma->nranges; r++) {
-			unsigned long start_pfn;
+	for (r = 0; r < cma->nranges; r++) {
+		cmr = &cma->ranges[r];
+		end_pfn = r <= allocrange ? early_pfn[r] : cmr->early_pfn;
+		/* Restore managed page accounting for early-reserved pages. */
+		for (pfn = cmr->base_pfn; pfn < end_pfn; pfn++)
+			adjust_managed_page_count(pfn_to_page(pfn), 1);
 
-			cmr = &cma->ranges[r];
-			start_pfn = r <= allocrange ? early_pfn[r] : cmr->early_pfn;
-			end_pfn = cmr->base_pfn + cmr->count;
-			for (pfn = start_pfn; pfn < end_pfn; pfn++)
-				free_reserved_page(pfn_to_page(pfn));
-		}
+		if (test_bit(CMA_RESERVE_PAGES_ON_ERROR, &cma->flags))
+			continue;
+
+		/* Expose the remaining pages to the buddy. */
+		end_pfn = cmr->base_pfn + cmr->count;
+		for (; pfn < end_pfn; pfn++)
+			free_reserved_page(pfn_to_page(pfn));
 	}
 	totalcma_pages -= cma->count;
 	cma->available_count = cma->count = 0;
@@ -1020,8 +1027,7 @@ bool cma_intersects(struct cma *cma, unsigned long start, unsigned long end)
  *
  * The caller is responsible for initializing the page structures
  * in the area properly, since this just points to memblock-allocated
- * memory. The caller should subsequently use init_cma_pageblock to
- * set the migrate type and CMA stats  the pageblocks that were reserved.
+ * memory.
  *
  * If the CMA area fails to activate later, memory obtained through
  * this interface is not handed to the page allocator, this is
