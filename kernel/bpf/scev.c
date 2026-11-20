@@ -5173,8 +5173,6 @@ cant_widen:
 		 */
 		if (expr_is_fresh(env, header_env->reg2expr[r], &call)) {
 			__set_bit(r, iters->fresh_regs);
-			if (!call && !bpf_flow_is_needed(env, insn_idx, r))
-				continue;
 		} else {
 			__set_bit(r, iters->forget_regs);
 		}
@@ -5185,19 +5183,6 @@ cant_widen:
 		 */
 		if (reg && reg->type == NOT_INIT)
 			__set_bit(r, iters->fresh_regs);
-		/*
-		 * Only a walk through the iterations tells what it is in each of them. That is not
-		 * worth it for a number that nothing looks at: a sum, a hash, what a call leaves in
-		 * r1 - r5. What comes back to the head is joined with what entered then. A pointer,
-		 * or a slot that holds something else than a register, has no such join.
-		 */
-		if (!reg || (reg->type != SCALAR_VALUE && reg->type != NOT_INIT) ||
-		    bpf_flow_is_needed(env, insn_idx, r)) {
-			walk = true;
-			continue;
-		}
-		if (log->level & BPF_LOG_LEVEL2)
-			bpf_log(log, "loop header at %d, nothing looks at it\n", insn_idx);
 	}
 
 	/* 2: the count is known, what some of the live registers are is not and it matters */

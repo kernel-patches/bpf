@@ -57,10 +57,6 @@ static bool check_ids(u32 old_id, u32 cur_id, struct bpf_idmap *idmap)
 	if (old_id == 0) /* cur_id == 0 as well */
 		return true;
 
-	/* a name of what the caller has, see BPF_INHERITED_ID */
-	if ((old_id | cur_id) >= BPF_INHERITED_ID)
-		return old_id == cur_id;
-
 	for (i = 0; i < idmap->cnt; i++) {
 		if (map[i].old == old_id)
 			return map[i].cur == cur_id;
@@ -238,59 +234,8 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		return false;
 
 	switch (base_type(rold->type)) {
-	case SCALAR_VALUE:
-		if (env->explore_alu_limits) {
-			/* explore_alu_limits disables tnum_in() and range_within()
-			 * logic and requires everything to be strict
-			 */
-			return reg_value_equal(rold, rcur);
-		}
-		return range_within(rold, rcur) && tnum_in(rold->var_off, rcur->var_off);
-	case PTR_TO_MAP_KEY:
-	case PTR_TO_MAP_VALUE:
-	case PTR_TO_MEM:
-	case PTR_TO_BUF:
-	case PTR_TO_TP_BUFFER:
-	case PTR_TO_STACK:
-	case PTR_TO_BTF_ID:
-		/* If the new min/max/var_off satisfy the old ones and
-		 * everything else matches, we are OK.
-		 */
-		return reg_fixed_part_equal(rold, rcur) &&
-		       range_within(rold, rcur) &&
-		       tnum_in(rold->var_off, rcur->var_off) &&
-		       check_ids(rold->id, rcur->id, idmap) &&
-		       check_ids(rold->parent_id, rcur->parent_id, idmap) &&
-		       check_ids(rold->map_uid, rcur->map_uid, idmap);
-	case PTR_TO_PACKET_META:
-	case PTR_TO_PACKET:
-		/* We must have at least as much range as the old ptr
-		 * did, so that any accesses which were safe before are
-		 * still safe.  This is true even if old range < old off,
-		 * since someone could have accessed through (ptr - k), or
-		 * even done ptr -= k in a register, to get a safe access.
-		 */
-		if (rold->range < 0 || rcur->range < 0) {
-			/* special case for [BEYOND|AT]_PKT_END */
-			if (rold->range != rcur->range)
-				return false;
-		} else if (rold->range > rcur->range) {
-			return false;
-		}
-		/* id relations must be preserved */
-		if (!check_ids(rold->id, rcur->id, idmap))
-			return false;
-		/* Preserve displacements between pointers sharing an ID. */
-		if (rold->id && rold->r64.base != rcur->r64.base)
-			return false;
-		/* new val must satisfy old val knowledge */
-		return range_within(rold, rcur) &&
-		       tnum_in(rold->var_off, rcur->var_off);
 	case PTR_TO_ARENA:
 		return true;
-	case PTR_TO_INSN:
-		return reg_fixed_part_equal(rold, rcur) &&
-		       range_within(rold, rcur) && tnum_in(rold->var_off, rcur->var_off);
 	default:
 		return regs_exact(rold, rcur, idmap);
 	}
@@ -466,129 +411,6 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 	return true;
 }
 
-/*
- * Compare stack arg slots between old and current states.
- * Outgoing stack args are a part of the state and must agree.
- */
-static bool stack_arg_safe(struct bpf_verifier_env *env, struct bpf_func_state *old,
-			   struct bpf_func_state *cur, struct bpf_idmap *idmap)
-{
-	int i, nslots, cur_cnt = cur->out_stack_arg_cnt;
-
-	/* incoming arguments are not compared with outgoing ones, the other way is ruled out */
-	if (bpf_stack_args_are_incoming(cur) && !bpf_stack_args_are_incoming(old))
-		cur_cnt = 0;
-	nslots = max(old->out_stack_arg_cnt, cur_cnt);
-	for (i = 0; i < nslots; i++) {
-		struct bpf_reg_state *old_arg, *cur_arg;
-		struct bpf_reg_state not_init = { .type = NOT_INIT };
-
-		old_arg = i < old->out_stack_arg_cnt ?
-			  &old->stack_arg_regs[i] : &not_init;
-		cur_arg = i < cur_cnt ?
-			  &cur->stack_arg_regs[i] : &not_init;
-		if (!regsafe(env, old_arg, cur_arg, idmap))
-			return false;
-	}
-
-	return true;
-}
-
-static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *cur,
-		    struct bpf_idmap *idmap)
-{
-	int i;
-
-	if (old->acquired_refs != cur->acquired_refs)
-		return false;
-
-	if (old->active_locks != cur->active_locks)
-		return false;
-
-	if (old->active_preempt_locks != cur->active_preempt_locks)
-		return false;
-
-	if (old->active_rcu_locks != cur->active_rcu_locks)
-		return false;
-
-	if (!check_ids(old->active_irq_id, cur->active_irq_id, idmap))
-		return false;
-
-	if (!check_ids(old->active_lock_id, cur->active_lock_id, idmap) ||
-	    old->active_lock_ptr != cur->active_lock_ptr)
-		return false;
-
-	for (i = 0; i < old->acquired_refs; i++) {
-		if (!check_ids(old->refs[i].id, cur->refs[i].id, idmap) ||
-		    old->refs[i].type != cur->refs[i].type)
-			return false;
-		switch (old->refs[i].type) {
-		case REF_TYPE_PTR:
-			if (!check_ids(old->refs[i].parent_id, cur->refs[i].parent_id, idmap))
-				return false;
-			break;
-		case REF_TYPE_IRQ:
-			break;
-		case REF_TYPE_LOCK:
-		case REF_TYPE_RES_LOCK:
-		case REF_TYPE_RES_LOCK_IRQ:
-			if (old->refs[i].ptr != cur->refs[i].ptr)
-				return false;
-			break;
-		default:
-			WARN_ONCE(1, "Unhandled enum type for reference state: %d\n", old->refs[i].type);
-			return false;
-		}
-	}
-
-	return true;
-}
-
-/*
- * In a loop that is walked without a count a state of an earlier iteration stands for a state of
- * a later one, see flow_cycle_closed(). Never the other way round.
- *
- * In a loop that is counted and walked the state that gets to iteration max_header_count is
- * dropped: there is no such iteration at run time. The number in a state is the number of
- * iterations that the program has done, and only states with the same number are compared. They
- * differ in what is counted anyway.
- *
- * The walk of a loop with two entries is meant to get to the end of the loop, like today's walk of
- * all paths. A state that is within the state of the iteration before it is on its way there:
- *	for (i = 7; i >= 0; i--) { if (i >= n) continue; ... }
- * i is in 0..6, then in 0..5. So here too only states with the same number are compared.
- *
- * Where the iterations are not kept apart a state stands for many of them, and the number says
- * nothing about what it describes.
- */
-static bool loop_stack_safe(struct bpf_verifier_env *env, struct bpf_func_state *old,
-			    struct bpf_func_state *cur)
-{
-	struct loop_stack_entry *old_stack = old->loop_stack;
-	struct loop_stack_entry *cur_stack = cur->loop_stack;
-	u32 i;
-
-	if (old->loop_stack_cnt != cur->loop_stack_cnt)
-		return false;
-
-	for (i = 0; i < old->loop_stack_cnt; i++) {
-		if (old_stack[i].loop_id == cur_stack[i].loop_id &&
-		    old_stack[i].max_header_count == cur_stack[i].max_header_count &&
-		    old_stack[i].terminates == cur_stack[i].terminates &&
-		    old_stack[i].guarded == cur_stack[i].guarded &&
-		    old_stack[i].counted == cur_stack[i].counted &&
-		    old_stack[i].apart == cur_stack[i].apart &&
-		    old_stack[i].first == cur_stack[i].first &&
-		    (!old_stack[i].apart ||
-		     (old_stack[i].probe ? old_stack[i].trip <= cur_stack[i].trip :
-					   old_stack[i].trip == cur_stack[i].trip)))
-			continue;
-		return false;
-	}
-
-	return true;
-}
-
 /* compare two verifier states
  *
  * The state that gets to an insn doesn't have to be looked at when there is
@@ -639,12 +461,6 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	if (!stacksafe(env, old, cur, &env->idmap_scratch))
 		return false;
 
-	if (!stack_arg_safe(env, old, cur, &env->idmap_scratch))
-		return false;
-
-	if (!loop_stack_safe(env, old, cur))
-		return false;
-
 	return true;
 }
 
@@ -680,9 +496,6 @@ bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state 
 		return false;
 
 	if (old->unwound != cur->unwound || old->changed_pkt_data != cur->changed_pkt_data)
-		return false;
-
-	if (!refsafe(old, cur, &env->idmap_scratch))
 		return false;
 
 	/* for states to be equal callsites have to be the same
