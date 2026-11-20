@@ -608,18 +608,14 @@ static int emit_unwind_exit(struct bpf_verifier_env *env, int s, struct bpf_insn
 int bpf_insert_loop_guards(struct bpf_verifier_env *env)
 {
 	struct bpf_insn patch[2] = { BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 0, 0) };
-	struct bpf_insn leave[3] = { BPF_MOV64_IMM(BPF_REG_0, 0) };
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_insn leave[4], *insn;
 	struct bpf_subprog_info *sub;
-	struct bpf_insn *insn;
 	int i, s, n, err;
-	bool leaves;
 
 	for (s = 0; s < env->subprog_cnt; s++) {
 		sub = &env->subprog_info[s];
-		n = bpf_ret_reg_pair(env, s) ? 3 : 2;
-		leaves = false;
-		for (i = sub->start; i < sub[1].start; i++) {
+		for (i = sub->start, n = 0; i < sub[1].start; i++) {
 			if (!aux[i].loop_guard)
 				continue;
 			/* A jump to itself is a back edge. It goes through may_goto too. */
@@ -627,16 +623,15 @@ int bpf_insert_loop_guards(struct bpf_verifier_env *env)
 			insn = bpf_patch_list_add(env, i, patch, 2);
 			if (IS_ERR(insn))
 				return PTR_ERR(insn);
-			if (aux[i].guard_no_unwind)
+			if (!aux[i].guard_unwinds) {
 				bpf_patch_list_jump(&env->patch_list, insn - 1, aux[i].guard_to, 0);
-			else
-				bpf_patch_list_jump(&env->patch_list, insn - 1, sub[1].start, n);
-			leaves |= !aux[i].guard_no_unwind;
+				continue;
+			}
+			n = emit_unwind_exit(env, s, leave);
+			bpf_patch_list_jump(&env->patch_list, insn - 1, sub[1].start, n);
 		}
-		if (!leaves)
+		if (!n)
 			continue;
-		leave[1] = BPF_MOV64_IMM(BPF_REG_2, 0);
-		leave[n - 1] = budget_exit_insn(env, sub);
 		err = bpf_patch_list_append(env, i - 1, leave, n);
 		if (err)
 			return err;
@@ -831,6 +826,9 @@ void bpf_opt_hard_wire_dead_code_branches(struct bpf_verifier_env *env)
 		if (bpf_prog_is_offloaded(env->prog->aux))
 			bpf_prog_offload_replace_insn(env, i, &ja);
 
+		/* If both edges are dead, no run gets here. The driver keeps the old target. */
+		if (!aux_data[i + 1 + ja.off].seen)
+			ja.off = -1;
 		memcpy(insn, &ja, sizeof(ja));
 	}
 }

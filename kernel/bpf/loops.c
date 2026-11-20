@@ -310,6 +310,16 @@ static int check_loop_depth(struct bpf_verifier_env *env, int idx)
 	return 0;
 }
 
+/* The last insn that dominates all back edges of @loop */
+int bpf_loop_spine_end(struct bpf_verifier_env *env, const struct bpf_loop *loop)
+{
+	int i, n = loop->backedges[0].from;
+
+	for (i = 1; i < loop->backedges_cnt; i++)
+		n = idoms_intersect(env, n, loop->backedges[i].from);
+	return n;
+}
+
 /*
  * The backedge->from and its latch can reside in an inner loop of @h, e.g.:
  *
@@ -627,6 +637,9 @@ int bpf_loop_collect_thresholds(struct bpf_verifier_env *env, struct bpf_loop *l
 	if (!todo)
 		return -ENOMEM;
 	done = todo + words;
+	/* the insns of a loop follow its header, see flow_compute_order() */
+	i = loop->header;
+	n = loop->kind == BPF_LOOP_CALLBACK ? 1 : loop->nr_insns;
 	for (;;) {
 		err = err ?: bpf_add_cost_and_check(env, n, BPF_COST_XREG);
 		for (; n-- && i >= 0 && i < sub[1].start && !err; i = bpf_flow_insn_after(env, i)) {

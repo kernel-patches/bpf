@@ -839,7 +839,9 @@ enum bpf_loop_kind {
 /* What a pass finds about a loop */
 struct bpf_loop_per_pass {
 	bool needs_guard;	/* see bpf_flow_needs_guard() */
+	bool no_guard_edges;	/* a state did not take the edges of may_goto */
 	bool has_leftover;	/* the peeled trips were not enough */
+	bool peel_pruned;	/* see flow_prune_peeled() */
 	/* a check failed in a state that the loop kept apart, with no other suspect */
 	bool has_unproven;
 	u32 last_peeled_trip;	/* see flow_keep_peeled() */
@@ -872,11 +874,14 @@ struct bpf_loop {
 	u32 max_peel_cnt;	/* peel up to this trip */
 	bool peeled_apart;	/* the join rule holds for states that start a peeled trip */
 	bool disjoint_apart;	/* disjoint values in data_deps stay apart, also in the leftover */
+	bool no_peel_prune;	/* a larger earlier trip does not prune, see flow_prune_peeled() */
 	);
 	struct bpf_loop_per_pass last_pass;	/* the last pass whose partition was kept */
 	bool partitioned;	/* the last partition was for this loop */
 	bool peeled_joined;	/* at the start of a peeled trip, against the join rule */
+	bool changed;		/* see flow_forget_loop() */
 	bool guarded;		/* states take the edges of may_goto */
+	bool infinite;		/* see failing_path_trip() */
 	struct bpf_iv_threshold *iv_thresholds;	/* where an iv can stop, see equation_join.c */
 	u32 iv_threshold_cnt, iv_threshold_cap;
 	u32 leftover_epoch;	/* how many leftovers started */
@@ -951,6 +956,7 @@ struct bpf_insn_aux_data {
 	u64 cast_arena:1; /* addr_space_cast of an address in arena */
 	u64 cast_mov:1; /* addr_space_cast of a pointer that is not in arena, it's a move */
 	u64 loop_guard:1; /* may_goto is added in front of this instruction */
+	u64 guard_unwinds:1; /* it leaves the subprog */
 	u64 speculative_first:1; /* a speculative state came to it first */
 	u64 call_recorded:1; /* see record_call_fixup() */
 	u64 pessimized:1; /* see bpf_partition_for_pessimized() */
@@ -1366,7 +1372,7 @@ struct bpf_verifier_env {
 	bool imprecise;			/* a state before the first error is imprecise */
 	bool over_limit;		/* see bpf_check_limits() */
 	bool restart;			/* see bpf_flow_next_is_no_bound() */
-	bool guards_late;		/* see bpf_flow_loop_gets_guards() */
+	bool guards_late;		/* see bpf_flow_needs_guard() */
 	bool extra_values;		/* a state can have constants that no run has */
 	bool seen_direct_write;
 	/* a register may point to the stack and is not PTR_TO_STACK, see bpf_reg_state::buf */
@@ -1734,15 +1740,19 @@ static inline int bpf_add_cost_and_check(struct bpf_verifier_env *env, u64 cnt, 
 int bpf_flow_prepare(struct bpf_verifier_env *env);
 void bpf_flow_reset(struct bpf_verifier_env *env);
 void bpf_flow_free(struct bpf_verifier_env *env);
+bool bpf_flow_trip_is_new(struct bpf_verifier_env *env, struct loop_stack_entry *entry);
 bool bpf_flow_is_bb_start(struct bpf_verifier_env *env, int insn_idx);
 int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 		     int insn_idx, int prev_insn_idx, bool again);
 int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx, u64 *log_pos, u64 *diag_pos);
+int bpf_flow_needs_guard(struct bpf_verifier_env *env, struct bpf_loop *loop);
 int bpf_flow_call(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
 		  struct bpf_verifier_state *entry, int subprog, int call_idx);
 int bpf_flow_exit(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int exit_idx);
 void bpf_flow_next_is_no_bound(struct bpf_verifier_env *env, int insn_idx, int h);
 bool bpf_flow_loops_lost_bound(struct bpf_verifier_env *env);
+void bpf_flow_new_pass(struct bpf_verifier_env *env);
+void bpf_flow_drop_guards(struct bpf_verifier_env *env);
 int bpf_flow_place_guards(struct bpf_verifier_env *env);
 /* verifier.c, for flow.c */
 int bpf_flow_loop_enter(struct bpf_verifier_env *env, struct bpf_loop **backedge_loop,
@@ -2065,18 +2075,16 @@ struct bpf_iarray *bpf_insn_successors(struct bpf_verifier_env *env, u32 idx);
 
 /*
  * Where the program goes from may_goto and from the checks that the verifier adds:
- * - May_goto in front of a jump goes where the jump goes, with the registers and the stack
- *   as they are in front of the jump. bpf_insn_successors() has that edge.
+ * - May_goto before a jump goes where the jump goes, with the registers and the stack
+ *   as they are before the jump. bpf_insn_successors() has that edge.
  * - A subprog that is out of budget goes to bail_insn, an exit. No such edge.
- * - May_goto in front of the head of a loop goes to where the loops around it are left: from
+ * - May_goto before the header of a loop goes to where the loops around it are left: from
  *   @idx to what is returned here, -1 if there is none. No such edge either. The registers
- *   and the stack are what they are in front of @idx.
+ *   and the stack are what they are before @idx.
  *
  * The main pass looks at the states that go there. What is computed from the graph before
- * the main pass has to take these edges into account where the main pass believes it:
- * - Against the direction of the edges, liveness: a register that is live at the target is
- *   live at @idx. Stack that is dead at @idx stays dead: a read of it at the target is
- *   rejected.
+ * the main pass has to take these edges into account where the main pass relies on it:
+ * - Against the direction of the edges, liveness: what is live at the target is live at @idx.
  * - In the direction of the edges, bpf_compute_const_regs() and compute_subprog_args(): what
  *   holds on all edges of the graph to the target doesn't hold on this one.
  */
@@ -2425,6 +2433,7 @@ u8 bpf_rev_opcode(u8 opcode);
 int bpf_compute_idoms(struct bpf_verifier_env *env);
 int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
+int bpf_loop_spine_end(struct bpf_verifier_env *env, const struct bpf_loop *loop);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
 u32 bpf_loop_thresholds_below(const struct bpf_loop *loop, s64 k);
 int bpf_loop_collect_thresholds(struct bpf_verifier_env *env, struct bpf_loop *loop);
