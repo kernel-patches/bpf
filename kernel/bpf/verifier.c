@@ -3569,7 +3569,8 @@ static bool __is_pointer_value(bool allow_ptr_leaks,
 	if (allow_ptr_leaks)
 		return false;
 
-	return is_pointer_regtype(reg->type);
+	/* an unreadable xreg can have a pointer */
+	return reg->type != SCALAR_VALUE;
 }
 
 static void save_register_state(struct bpf_verifier_env *env,
@@ -11552,8 +11553,9 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 {
 	u16 live = env->insn_aux_data[env->subprog_info[subprog].start].live_regs_before;
 	struct bpf_verifier_state *state = env->cur_state;
-	struct bpf_func_state *caller = state->frame[state->curframe], *callee;
+	struct bpf_func_state *caller = state->frame[state->curframe], *callee, *frame;
 	struct bpf_verifier_state entry = {};
+	struct bpf_reg_state *reg;
 	int i, err;
 
 	callee = kzalloc_obj(*callee, BPF_VERIFIER_GFP);
@@ -11583,6 +11585,7 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 		bpf_free_verifier_state(env, &entry, false);
 		return err;
 	}
+	bpf_for_each_reg_in_vstate(&entry, frame, reg, reg->grew_once = false);
 	entry.max_held_cnt = state->max_held_cnt;
 	callee->entry_refs = entry.acquired_refs;
 	callee->entry_rcu_locks = entry.active_rcu_locks;
@@ -17967,61 +17970,43 @@ void bpf_trim_pkt_range(struct bpf_reg_state *reg, s64 smax)
 
 /*
  * @s is what @old became after a trip around a cycle, @old included. The end
- * of the range that moved is going to move again. Put it where it may come
- * to rest. There are few such places, so this is done a few times at most.
- * @rungs: where the jumps of the loop stop it, if they do.
- * It's put at the nearest of all these places: every value between the range and the place is
- * made up, and the program is checked with it. Wherever it's put, the range only gets larger.
- * @linear: every iteration adds a constant to it, in that many bits. Then nothing but a jump
- * stops it. If there is none ahead it goes on until it wraps, and is any number of that many bits.
+ * of the range that moved will move again. Move it to a threshold where it
+ * can stop. @min_threshold, @max_threshold: the caller guesses that it stops there.
+ * Take the nearest threshold. Each value between the range and the threshold is made up,
+ * and the program is checked with it. With each threshold the range only gets larger.
  */
-void scalar_widen(struct scalar *s, const struct scalar *old,
-		  const struct bpf_loop_rungs *rungs, int linear)
+void scalar_widen(struct scalar *s, const struct scalar *old, s64 min_threshold, s64 max_threshold)
 {
 	bool moved = s->r64.base != old->r64.base || s->r64.size != old->r64.size ||
 		     s->r32.base != old->r32.base || s->r32.size != old->r32.size;
-	s64 min = cnum64_smin(s->r64), max = cnum64_smax(s->r64), stop;
+	s64 min = cnum64_smin(s->r64), max = cnum64_smax(s->r64), threshold;
 
 	/* Only the step got weaker. It comes to rest without help, see below. */
 	if (!moved && s->var_off.value == old->var_off.value &&
 	    s->var_off.mask == old->var_off.mask)
 		return;
 
-	if (linear &&
-	    ((max > cnum64_smax(old->r64) && !(rungs && rungs->has_max && max <= rungs->max[1])) ||
-	     (min < cnum64_smin(old->r64) && !(rungs && rungs->has_min && min >= rungs->min[1])))) {
-		if (linear == 64 || min < 0 || max > U32_MAX) {
-			scalar_set_unknown(s);
-			return;
-		}
-		min = 0;
-		max = U32_MAX;
-	}
 	if (max > cnum64_smax(old->r64)) {
-		stop = max <= 0 ? 0 :
-		       max <= S32_MAX ? S32_MAX :
-		       max <= U32_MAX ? U32_MAX : S64_MAX;
-		if (rungs && rungs->has_max && max <= rungs->max[1])
-			stop = min(stop, max <= rungs->max[0] ? rungs->max[0] : rungs->max[1]);
-		max = stop;
+		threshold = max <= 0 ? 0 :
+			    max <= S32_MAX ? S32_MAX :
+			    max <= U32_MAX ? U32_MAX : S64_MAX;
+		max = min(threshold, max_threshold);
 	}
 	if (min < cnum64_smin(old->r64)) {
-		stop = min >= 0 ? 0 :
-		       min >= S32_MIN ? S32_MIN : S64_MIN;
-		if (rungs && rungs->has_min && min >= rungs->min[1])
-			stop = max(stop, min >= rungs->min[0] ? rungs->min[0] : rungs->min[1]);
-		min = stop;
+		threshold = min >= 0 ? 0 :
+			    min >= S32_MIN ? S32_MIN : S64_MIN;
+		min = max(threshold, min_threshold);
 	}
 	if (min == S64_MIN && max == S64_MAX) {
 		scalar_set_unknown(s);
 		return;
 	}
 	/*
-	 * A fixed stop is a guess. A number of 32 bits that gets past S32_MAX comes to rest at
-	 * U32_MAX. What gets past S32_MAX, U32_MAX or S32_MIN and out of 32 bits is stopped by
-	 * nothing:
+	 * A fixed threshold is a guess. A number of 32 bits that gets past S32_MAX stops at
+	 * U32_MAX. No threshold stops what gets past S32_MAX, U32_MAX or S32_MIN and out of
+	 * 32 bits:
 	 *	sum += a[i]; if (sum == 77) ...
-	 * It wraps in the next pass, and the other bound is gone as well.
+	 * It wraps in the next trip, and the other bound is gone as well.
 	 */
 	if ((max == S64_MAX &&
 	     (cnum64_smax(old->r64) == S32_MAX || cnum64_smax(old->r64) == U32_MAX)) ||

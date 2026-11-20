@@ -863,6 +863,10 @@ struct bpf_loop {
 	bool partitioned;	/* the last partition was for this loop */
 	bool peeled_joined;	/* at the start of a peeled trip, against the join rule */
 	struct bpf_loop_per_pass this_pass;
+	/* sorted constants of the loop, the largest and the smallest constant that an insn adds */
+	s64 *thresholds;
+	u32 threshold_cnt, threshold_cap;
+	s32 max_step, min_step;
 };
 
 static inline bool bpf_loop_has_budget(const struct bpf_loop *loop)
@@ -1645,6 +1649,11 @@ u64 bpf_hash64(const void *p, size_t len, u64 hash);
 u64 bpf_hash_join_key(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
 int bpf_renumber_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 
+/* join.c */
+int bpf_states_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
+		    const struct bpf_verifier_state *src, struct bpf_loop *leftover_loop,
+		    bool widen);
+
 /* precision.c, failing_path.c */
 enum bpf_join_point { BPF_JOIN_POINT, BPF_JOIN_POINT_HEADER, BPF_JOIN_POINT_CALLS };
 bool bpf_must_keep_apart(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
@@ -2242,8 +2251,8 @@ void scalar_add(struct scalar *dst, const struct scalar *a, const struct scalar 
 void scalar_alu(struct scalar *dst, const struct scalar *src, const struct bpf_insn *insn);
 bool scalar_intersect(struct scalar *dst, const struct scalar *src, u32 bits);
 void scalar_union(struct scalar *acc, const struct scalar *src);
-void scalar_widen(struct scalar *s, const struct scalar *old,
-		  const struct bpf_loop_rungs *rungs, int linear);
+void scalar_widen(struct scalar *s, const struct scalar *old, s64 min_threshold, s64 max_threshold);
+
 int bpf_stack_liveness_init(struct bpf_verifier_env *env);
 void bpf_stack_liveness_free(struct bpf_verifier_env *env);
 int bpf_live_stack_query_init(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
@@ -2384,7 +2393,8 @@ int bpf_compute_idoms(struct bpf_verifier_env *env);
 int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
-
+u32 bpf_loop_thresholds_below(const struct bpf_loop *loop, s64 k);
+int bpf_loop_collect_thresholds(struct bpf_verifier_env *env, struct bpf_loop *loop);
 int bpf_insn_callee(struct bpf_verifier_env *env, int idx);
 
 /* equation.c */

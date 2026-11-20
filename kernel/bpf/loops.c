@@ -2,6 +2,7 @@
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 
 #include <linux/slab.h>
+#include <linux/sort.h>
 #include <linux/bpf_verifier.h>
 
 static bool is_cfg_jump(struct bpf_insn *insn)
@@ -554,4 +555,110 @@ out:
 	kvfree(dfs.stack);
 	kvfree(dfs.state);
 	return err;
+}
+
+static int cmp_thresholds(const void *a, const void *b)
+{
+	return *(s64 *)a < *(s64 *)b ? -1 : *(s64 *)a > *(s64 *)b;
+}
+
+static int add_threshold(struct bpf_verifier_env *env, struct bpf_loop *loop, s64 k)
+{
+	if (!bpf_grow_array(env, &loop->thresholds, &loop->threshold_cap, loop->threshold_cnt + 1,
+			    sizeof(k)))
+		return -ENOMEM;
+	loop->thresholds[loop->threshold_cnt++] = k;
+	return 0;
+}
+
+static int add_insn_thresholds(struct bpf_verifier_env *env, struct bpf_loop *loop, int idx)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[idx];
+	struct bpf_insn *insn = &env->prog->insnsi[idx];
+	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
+	bool alu = class == BPF_ALU || class == BPF_ALU64;
+	bool cmp = bpf_insn_is_cond_jump(insn->code);
+	u8 reg;
+
+	if (bpf_is_ldimm64(insn) && !insn->src_reg)
+		return add_threshold(env, loop, (u32)insn->imm | (u64)insn[1].imm << 32);
+	if (class != BPF_ST && !cmp && !alu)
+		return 0;
+	if (class != BPF_ST && BPF_SRC(insn->code) == BPF_X) {
+		reg = aux->const_reg_mask & BIT(insn->src_reg) ? insn->src_reg : insn->dst_reg;
+		return cmp && (aux->const_reg_mask & BIT(reg)) ?
+		       add_threshold(env, loop, aux->const_reg_vals[reg]) : 0;
+	}
+	if (!alu || (op != BPF_ADD && op != BPF_SUB))
+		return add_threshold(env, loop, insn->imm);
+	if (insn->imm != S32_MIN && !(aux->stack_ptrs & BIT(insn->dst_reg))) {
+		loop->max_step = max(loop->max_step, op == BPF_ADD ? insn->imm : -insn->imm);
+		loop->min_step = min(loop->min_step, op == BPF_ADD ? insn->imm : -insn->imm);
+	}
+	return 0;
+}
+
+/* The number of constants of @loop that are below @k */
+u32 bpf_loop_thresholds_below(const struct bpf_loop *loop, s64 k)
+{
+	u32 lo = 0, hi = loop->threshold_cnt, mid;
+
+	while (lo < hi) {
+		mid = lo + (hi - lo) / 2;
+		if (loop->thresholds[mid] < k)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	return lo;
+}
+
+/* The constants in the body of @loop and in the functions that it calls */
+int bpf_loop_collect_thresholds(struct bpf_verifier_env *env, struct bpf_loop *loop)
+{
+	struct bpf_subprog_info *sub = bpf_find_containing_subprog(env, loop->header);
+	u32 words = BITS_TO_LONGS(env->subprog_cnt);
+	unsigned long *todo, *done;
+	int i, s, n, err = 0;
+
+	if (loop->thresholds || !loop->nr_insns)
+		return 0;
+	todo = kvcalloc(2 * words, sizeof(long), BPF_VERIFIER_GFP);
+	if (!todo)
+		return -ENOMEM;
+	done = todo + words;
+	for (;;) {
+		err = err ?: bpf_add_cost_and_check(env, n, BPF_COST_XREG);
+		for (; n-- && i >= 0 && i < sub[1].start && !err; i = bpf_flow_insn_after(env, i)) {
+			err = add_insn_thresholds(env, loop, i);
+			s = bpf_insn_callee(env, i);
+			if (s > 0 && !bpf_subprog_is_global(env, s) && !__test_and_set_bit(s, done))
+				__set_bit(s, todo);
+		}
+		bpf_add_cost(env, words, BPF_COST_SCAN);
+		s = find_first_bit(todo, env->subprog_cnt);
+		if (s == env->subprog_cnt)
+			break;
+		__clear_bit(s, todo);
+		sub = &env->subprog_info[s];
+		i = sub->start;
+		n = sub[1].start - i;
+	}
+	kvfree(todo);
+	err = err ?: add_threshold(env, loop, 0) ?:
+	      bpf_add_cost_and_check(env, loop->threshold_cnt * ilog2(loop->threshold_cnt),
+				     BPF_COST_COPY);
+	if (err) {
+		/* only the pass ends, the next pass starts again */
+		kvfree(loop->thresholds);
+		loop->thresholds = NULL;
+		loop->threshold_cnt = loop->threshold_cap = 0;
+		return err;
+	}
+	sort(loop->thresholds, loop->threshold_cnt, sizeof(s64), cmp_thresholds, NULL);
+	for (i = 1, n = 1; i < loop->threshold_cnt; i++)
+		if (loop->thresholds[i] != loop->thresholds[n - 1])
+			loop->thresholds[n++] = loop->thresholds[i];
+	loop->threshold_cnt = n;
+	return 0;
 }
