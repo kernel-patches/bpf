@@ -2664,7 +2664,9 @@ static bool tcp_can_coalesce_send_queue_head(struct sock *sk, int len)
 		if (len <= skb->len)
 			break;
 
-		if (tcp_has_tx_tstamp(skb) || !tcp_skb_can_collapse(skb, next))
+		if (tcp_has_tx_tstamp(skb) ||
+		    !tcp_skb_can_collapse(skb, next) ||
+		    skb_zcopy(skb) != skb_zcopy(next))
 			return false;
 
 		len -= skb->len;
@@ -2718,6 +2720,7 @@ commit:
 	WARN_ON_ONCE(len != probe_size);
 	for (i = 0; i < nr_frags; i++)
 		skb_frag_ref(to, i);
+	skb_zcopy_set(to, skb_zcopy(tcp_send_head(sk)), NULL);
 
 	skb_shinfo(to)->nr_frags = nr_frags;
 	to->truesize += probe_size;
