@@ -21591,26 +21591,31 @@ static bool round_is_dropped(struct bpf_verifier_env *env)
 
 static int do_check(struct bpf_verifier_env *env)
 {
-	bool level1 = (env->log.level & BPF_LOG_LEVEL) == BPF_LOG_LEVEL1;
-	u64 log_pos = env->log.end_pos;
+	bool level2 = env->log.level & BPF_LOG_LEVEL2;
+	u64 log_pos = env->log.end_pos, diag_pos = 0;
 	int prev_insn_idx, err;
 
 	err = bpf_flow_deliver(env, env->cur_state, env->insn_idx, -1, false);
-	while (!err) {
-		err = bpf_flow_next(env, &prev_insn_idx);
+	while (!err && !(env->path_sensitive && env->cost >= env->failing_path_max_cost)) {
+		err = bpf_flow_next(env, &prev_insn_idx, &log_pos, &diag_pos);
+		/* at the limit the work on equations is not complete, such a pass proves nothing */
 		if (err == -ENOENT)
-			return 0;
+			return bpf_check_limits(env);
 		if (err)
 			break;
-		/* What is known about how the state came to be is not kept with it. */
-		bpf_diag_event_log_restore(env, 0);
-		/* Neither is the text: the level 1 log has one basic block at a time. */
-		if (level1) {
+		/* A pass logs one basic block at a time. A path-sensitive run logs a full path. */
+		bpf_diag_event_log_restore(env, diag_pos);
+		if (!level2) {
 			bpf_vlog_reset(&env->log, log_pos);
 			env->prev_linfo = NULL;
 		}
 		err = do_check_block(env, prev_insn_idx);
+		if (env->bug)
+			return -EFAULT;
 	}
+	/* bpf_flow_edge_unproven() noted it with the state that failed */
+	if (err && !bpf_insn_is_unproven(env))
+		note_error(env, err);
 	return err;
 }
 
