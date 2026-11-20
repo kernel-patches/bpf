@@ -770,29 +770,40 @@ static void half_spis_to_slots(unsigned long *slots, const unsigned long *mask, 
 }
 
 /*
- * Precompute, for each instruction, the OR of may_write and live_before masks
+ * Precompute, for each instruction, the OR of may_read, may_write and live_before masks
  * over its top frame across all func_instances reaching it, stash them in the
- * insn_aux_data.
+ * insn_aux_data. The other frames set reads_outer and writes_outer.
  */
 static void compute_may_write_masks(struct bpf_verifier_env *env)
 {
-	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_insn_aux_data *aux = env->insn_aux_data, *a;
 	struct bpf_liveness *liveness = env->liveness;
 	struct func_instance *instance;
+	unsigned long *read, *write;
 	struct frame_masks *fm;
-	u32 nbits;
+	u32 nbits, f;
 	int i;
 
 	list_for_each_entry(instance, &liveness->func_instances, node) {
-		fm = instance->frames[instance->depth];
-		if (!fm)
-			continue;
-		nbits = frame_mask_bits(fm);
-		for (i = 0; i < instance->insn_cnt; i++) {
-			half_spis_to_slots(aux[instance->subprog_start + i].may_write_mask,
-					   rel_mask(fm, i, FM_MAY_WRITE), nbits);
-			half_spis_to_slots(aux[instance->subprog_start + i].live_stack_before,
-					   rel_mask(fm, i, FM_LIVE_BEFORE), nbits);
+		for (f = 0; f <= instance->depth; f++) {
+			fm = instance->frames[f];
+			if (!fm)
+				continue;
+			nbits = frame_mask_bits(fm);
+			for (i = 0; i < instance->insn_cnt; i++) {
+				a = &aux[instance->subprog_start + i];
+				read = rel_mask(fm, i, FM_MAY_READ);
+				write = rel_mask(fm, i, FM_MAY_WRITE);
+				if (f < instance->depth) {
+					a->reads_outer |= !bitmap_empty(read, nbits);
+					a->writes_outer |= !bitmap_empty(write, nbits);
+					continue;
+				}
+				half_spis_to_slots(a->may_read_mask, read, nbits);
+				half_spis_to_slots(a->may_write_mask, write, nbits);
+				half_spis_to_slots(a->live_stack_before,
+						   rel_mask(fm, i, FM_LIVE_BEFORE), nbits);
+			}
 		}
 	}
 }
@@ -2680,7 +2691,8 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 			break;
 		case BPF_ABS:
 		case BPF_IND:
-			/* stick with defaults */
+			def = mask_widen(ALL_CALLER_SAVED_REGS);
+			use = reg64_mask(BPF_REG_6) | (mode == BPF_IND ? src : 0);
 			break;
 		}
 		break;
@@ -2953,6 +2965,8 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 		u32 in = state[i].in;
 
 		insn_aux[i].live_regs_before = mask_lo(in) | mask_hi(in);
+		insn_aux[i].use_regs = mask_lo(state[i].use) | mask_hi(state[i].use);
+		insn_aux[i].def_regs = mask_lo(state[i].def);
 		/*
 		 * On architectures where 32-bit operations do not reset upper halves
 		 * of the registers, the verifier needs to zero extend a destination
