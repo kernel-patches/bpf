@@ -70,18 +70,18 @@ static __naked __noinline u128 static_agg_bad_ptr(void)
 }
 
 /*
- * R2 is a return register once the subprogram returns a pair, so a stack
- * pointer left in it is rejected at the callee's exit exactly as one in R0
- * is: the callee frame is gone by the time the caller could use it.
+ * R2 is a return register once the subprogram returns a pair, so the caller
+ * cannot read a stack pointer left in it, exactly as one in R0: the callee
+ * frame is gone by the time the caller could use it.
  */
 SEC("tc")
 __load_if_JITed()
-__failure __msg("cannot return stack pointer to the caller")
+__failure __msg("R2 !read_ok")
 __naked int aggregate_ret_static_ptr_fail(void)
 {
 	asm volatile (
 	"call %[static_agg_bad_ptr];"
-	"r0 = 0;"
+	"r0 = *(u8 *)(r2 - 1);"
 	"exit;"
 	:
 	: __imm(static_agg_bad_ptr)

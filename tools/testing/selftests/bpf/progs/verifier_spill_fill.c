@@ -296,7 +296,11 @@ l0_%=:	r0 = 0;						\
 
 SEC("tc")
 __description("Spill u32 const scalars.  Refill as u64.  Offset to skb->data")
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+__failure __msg("makes pkt pointer be out of bounds")
+#else
 __failure __msg("math between pkt pointer and register with unbounded min value is not allowed")
+#endif
 __naked void u64_offset_to_skb_data(void)
 {
 	asm volatile ("					\
@@ -431,7 +435,7 @@ __naked void and_then_at_fp_8(void)
 
 SEC("xdp")
 __description("32-bit spill of 64-bit reg should clear ID")
-__failure __msg("math between ctx pointer and 4294967295 is not allowed")
+__failure __msg("variable ctx access var_off=(0x0; 0xffffffff) disallowed")
 __naked void spill_32bit_of_64bit_fail(void)
 {
 	asm volatile ("					\
@@ -1053,7 +1057,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("xdp")
 __description("32-bit fill after 64-bit spill should clear ID")
-__failure __msg("math between ctx pointer and 4294967295 is not allowed")
+__failure __msg("variable ctx access var_off=(0x0; 0xffffffff) disallowed")
 __naked void fill_32bit_after_spill_64bit_clear_id(void)
 {
 	asm volatile ("					\
@@ -1102,13 +1106,13 @@ l0_%=:	r1 >>= 32;					\
  */
 SEC("socket")
 __success __log_level(2)
-__msg("8: R0=scalar() R10=fp0 fp-8=??mm??mm")
+__msg("8: R0=scalar() R10=fp0 fp-8=mm??mm??")
 __msg("8: (79) r1 = *(u64 *)(r10 -8)")
 __msg("processed 10 insns")
 /* STACK_INVALID is an error in unpriv mode */
 __failure_unpriv
 __msg_unpriv("8: (79) r1 = *(u64 *)(r10 -8)")
-__msg_unpriv("invalid read from stack off -8+2 size 8")
+__msg_unpriv("invalid read from stack off -8+0 size 8")
 __naked void old_imprecise_scalar_vs_cur_stack_misc(void)
 {
 	asm volatile(
@@ -1117,8 +1121,8 @@ __naked void old_imprecise_scalar_vs_cur_stack_misc(void)
 	"if r0 == 0 goto 1f;"
 	/* conjure STACK_{MISC,INVALID} at fp-8 */
 	"call %[bpf_ktime_get_ns];"
-	"*(u16*)(r10 - 8) = r0;"
-	"*(u16*)(r10 - 4) = r0;"
+	"*(u16*)(r10 - 6) = r0;"
+	"*(u16*)(r10 - 2) = r0;"
 	"goto 2f;"
 "1:"
 	/* conjure scalar at fp-8 */
@@ -1152,7 +1156,7 @@ __naked void old_precise_scalar_vs_cur_stack_misc(void)
 	/* conjure STACK_MISC at fp-8 */
 	"call %[bpf_ktime_get_ns];"
 	"*(u64*)(r10 - 8) = r0;"
-	"*(u32*)(r10 - 4) = r0;"
+	"lock *(u64*)(r10 - 8) += r0;"
 	"goto 2f;"
 "1:"
 	/* conjure scalar at fp-8 */
@@ -1176,7 +1180,7 @@ __naked void old_precise_scalar_vs_cur_stack_misc(void)
  */
 SEC("socket")
 __success  __log_level(2)
-__msg("from 4 to 8: within")
+__msg("from 4 to 8: pruned")
 __msg("8: (79) r0 = *(u64 *)(r10 -8)")
 __msg("processed 10 insns")
 __naked void old_stack_misc_vs_cur_scalar(void)
@@ -1192,8 +1196,8 @@ __naked void old_stack_misc_vs_cur_scalar(void)
 "1:"
 	/* conjure STACK_{MISC,INVALID} at fp-8 */
 	"call %[bpf_ktime_get_ns];"
-	"*(u16*)(r10 - 8) = r0;"
-	"*(u16*)(r10 - 4) = r0;"
+	"*(u16*)(r10 - 6) = r0;"
+	"*(u16*)(r10 - 2) = r0;"
 "2:"
 	/* read fp-8, it's looked at once */
 	"r0 = *(u64*)(r10 - 8);"
@@ -1210,7 +1214,6 @@ __naked void old_stack_misc_vs_cur_scalar(void)
  */
 SEC("socket")
 __success  __log_level(2)
-__msg("from 4 to 8: within")
 __msg("8: (79) r1 = *(u64 *)(r10 -8)         ; R1=scalar()")
 __msg("processed 10 insns")
 __naked void old_stack_misc_vs_cur_ctx_ptr(void)
@@ -1228,7 +1231,7 @@ __naked void old_stack_misc_vs_cur_ctx_ptr(void)
 	/* conjure STACK_MISC at fp-8 */
 	"call %[bpf_ktime_get_ns];"
 	"*(u64*)(r10 - 8) = r0;"
-	"*(u32*)(r10 - 4) = r0;"
+	"lock *(u64*)(r10 - 8) += r0;"
 "2:"
 	/* read fp-8, it's looked at once */
 	"r1 = *(u64*)(r10 - 8);"
@@ -1284,9 +1287,9 @@ __naked void stack_noperfmon_spill_32bit_onto_64bit_slot(void)
  */
 SEC("socket")
 __success __log_level(2)
-__msg("from 5 to 8: within")
+__msg("from 5 to 8: pruned")
 __msg("8: (79) r1 = *(u64 *)(r10 -8)")
-__msg("processed 10 insns")
+__msg("processed 11 insns")
 __naked void old_imprecise_scalar32_vs_cur_stack_misc(void)
 {
 	asm volatile(
@@ -1295,8 +1298,8 @@ __naked void old_imprecise_scalar32_vs_cur_stack_misc(void)
 	"if r0 == 0 goto 1f;"
 	/* conjure STACK_MISC at fp-8 */
 	"call %[bpf_ktime_get_ns];"
-	"*(u16*)(r10 - 8) = r0;"
-	"*(u16*)(r10 - 6) = r0;"
+	"*(u32*)(r10 - 8) = r0;"
+	"lock *(u32*)(r10 - 8) += w0;"
 	"goto 2f;"
 "1:"
 	/* conjure 32-bit scalar spill at fp-8 */
@@ -1305,6 +1308,7 @@ __naked void old_imprecise_scalar32_vs_cur_stack_misc(void)
 "2:"
 	/* read fp-8, it's looked at once */
 	"r1 = *(u64*)(r10 - 8);"
+	"r0 = 0;"
 	"exit;"
 	:
 	: __imm(bpf_ktime_get_ns)

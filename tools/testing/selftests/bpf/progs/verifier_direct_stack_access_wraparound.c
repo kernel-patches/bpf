@@ -7,8 +7,8 @@
 
 SEC("socket")
 __description("direct stack access with 32-bit wraparound. test1")
-__failure __msg("fp pointer and 2147483647")
-__failure_unpriv
+__failure __msg("invalid unbounded variable-offset write to stack R1")
+__failure_unpriv __msg_unpriv("R1 variable stack access prohibited for !root")
 __naked void with_32_bit_wraparound_test1(void)
 {
 	asm volatile ("					\
@@ -23,8 +23,8 @@ __naked void with_32_bit_wraparound_test1(void)
 
 SEC("socket")
 __description("direct stack access with 32-bit wraparound. test2")
-__failure __msg("fp pointer and 1073741823")
-__failure_unpriv
+__failure __msg("invalid unbounded variable-offset write to stack R1")
+__failure_unpriv __msg_unpriv("R1 variable stack access prohibited for !root")
 __naked void with_32_bit_wraparound_test2(void)
 {
 	asm volatile ("					\
@@ -39,7 +39,7 @@ __naked void with_32_bit_wraparound_test2(void)
 
 SEC("socket")
 __description("direct stack access with 32-bit wraparound. test3")
-__failure __msg("fp pointer offset 1073741822")
+__failure __msg("invalid unbounded variable-offset write to stack R1")
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
 __naked void with_32_bit_wraparound_test3(void)
 {

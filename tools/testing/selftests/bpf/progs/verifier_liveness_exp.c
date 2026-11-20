@@ -132,8 +132,8 @@ static unsigned long exp_sub1(void)
  * defeating any memoization keyed on entry args.
  */
 SEC("?raw_tp")
-__failure __log_level(2)
-__msg("liveness analysis exceeded complexity limit")
+__failure
+__msg("BPF program is too complex")
 __naked int liveness_exponential_complexity(void)
 {
 	asm volatile (

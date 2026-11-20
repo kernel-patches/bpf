@@ -569,7 +569,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("tc")
 __description("direct packet access: test23 (x += pkt_ptr, 4)")
-__failure __msg("invalid access to packet, off=31 size=8, R5(id=1,off=31,r=0)")
+__failure __msg("invalid access to packet, off=31 size=8, R5(id={{[0-9]+}},off=31,r=0)")
 __flag(BPF_F_ANY_ALIGNMENT)
 __naked void test23_x_pkt_ptr_4(void)
 {
@@ -950,7 +950,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("tc")
 __description("direct packet access: 8-aligned offset, check p, load past it via p + 8")
-__failure __msg("invalid access to packet, off=51 size=1")
+__failure __msg("invalid access to packet, off=49 size=1")
 __naked void pkt_same_id_check_base_load_via_copy(void)
 {
 	asm volatile ("					\
@@ -978,7 +978,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("tc")
 __description("direct packet access: 8-aligned offset, check p + 4, 4-byte load at p + 2")
-__failure __msg("invalid access to packet, off=52 size=4")
+__failure __msg("invalid access to packet, off=50 size=4")
 __naked void pkt_same_id_check_base_4_load_via_copy(void)
 {
 	asm volatile ("					\

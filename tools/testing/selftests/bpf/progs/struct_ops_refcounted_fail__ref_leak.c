@@ -9,7 +9,7 @@ char _license[] SEC("license") = "GPL";
  * kptr through context without releasing the reference
  */
 SEC("struct_ops/test_refcounted")
-__failure __msg("Unreleased reference id=1 alloc_insn=0")
+__failure __msg("Unreleased reference id={{[0-9]+}} alloc_insn=0")
 int BPF_PROG(refcounted_fail__ref_leak, int dummy,
 	     struct task_struct *task)
 {

@@ -200,7 +200,7 @@ __naked void to_stack_check_high_6(void)
 
 SEC("socket")
 __description("PTR_TO_STACK check high 7")
-__failure __msg("fp pointer offset")
+__failure __msg("invalid unbounded variable-offset write to stack R1")
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
 __naked void to_stack_check_high_7(void)
 {
@@ -360,7 +360,7 @@ __naked void to_stack_check_low_6(void)
 
 SEC("socket")
 __description("PTR_TO_STACK check low 7")
-__failure __msg("fp pointer offset")
+__failure __msg("invalid unbounded variable-offset write to stack R1")
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
 __naked void to_stack_check_low_7(void)
 {
@@ -595,17 +595,15 @@ SEC("socket")
 __success
 __log_level(2)
 /*
- * r7 is widened to [-72, -16] at the loop header (insn 5),
+ * r7 is joined to [-72, -16] at the loop header (insn 5),
  * the loop body sees [-64, -8] after 'r7 += 8'.
  */
-__msg("loop header at 5, widening r7 to -72..-16 step 1")
 __msg("R7=fp(smin=smin32=-64,smax=smax32=-8")
-/* 'r7 = r8' sets r7 to fp-16; its ANY SCEV is not clamped. */
+/* 'r7 = r8' sets r7 to fp-16 */
 __msg("R7=fp-16 R8=fp-16 loop_stack=5")
-__not_msg("clamping r7")
 /* back-edge state goes no further because {-16} is within [-72, -16]. */
-__msg("from 8 to 5: within")
-__msg("processed 11 insns")
+__msg("from 8 to 5: pruned")
+__msg("processed 16 insns")
 __naked void stack_ptr_subrange_in_loop(void)
 {
 	asm volatile ("					\

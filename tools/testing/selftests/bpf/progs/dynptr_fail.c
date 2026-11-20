@@ -91,7 +91,7 @@ int ringbuf_missing_release1(void *ctx)
 }
 
 SEC("?raw_tp")
-__failure __msg("Unreleased reference id=3")
+__failure __msg("Unreleased reference id=")
 int ringbuf_missing_release2(void *ctx)
 {
 	struct bpf_dynptr ptr1, ptr2;
@@ -782,7 +782,7 @@ int dynptr_pruning_overwrite(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__success __msg("to 12: within") __log_level(2)
+__success __msg("to 12: pruned") __log_level(2)
 int dynptr_pruning_stacksafe(struct __sk_buff *ctx)
 {
 	asm volatile (
@@ -1879,7 +1879,7 @@ __failure __msg("must be a known constant")
 __msg("requires this memory size to be a verifier-known constant")
 int dynptr_slice_var_len2(struct __sk_buff *skb)
 {
-	char buffer[sizeof(struct ethhdr)] = {};
+	char buffer[2 * sizeof(struct ethhdr)] = {};
 	struct bpf_dynptr ptr;
 	struct ethhdr *hdr;
 

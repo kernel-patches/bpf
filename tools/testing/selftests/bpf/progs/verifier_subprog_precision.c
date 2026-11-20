@@ -214,7 +214,7 @@ __msg("18: (95) exit")
 __msg("returning from callee:")
 __msg("to caller at 9:")
 /* the callback changes nothing for the caller */
-__msg("from 18 to 9: within")
+__msg("from 18 to 9: pruned")
 __msg("14: (0f) r1 += r6                     ; R1=map_value(map=.data.vals,ks=4,vs=16,smin=smin32=0,smax=umax=smax32=umax32=12,var_off=(0x0; 0xc),step=0+4) R6=scalar(smin=smin32=0,smax=umax=smax32=umax32=12,var_off=(0x0; 0xc),step=0+4)")
 __naked int callback_result_precise(void)
 {
@@ -308,7 +308,7 @@ __msg("16: (95) exit")
 __msg("returning from callee:")
 __msg("to caller at 9:")
 /* r6 is what it was before the callback */
-__msg("from 16 to 9: within")
+__msg("from 16 to 9: pruned")
 __naked int parent_callee_saved_reg_precise_with_callback(void)
 {
 	asm volatile (
@@ -414,7 +414,7 @@ __msg("18: (95) exit")
 __msg("returning from callee:")
 __msg("to caller at 10:")
 /* fp-8 is what it was before the callback */
-__msg("from 18 to 10: within")
+__msg("from 18 to 10: pruned")
 __naked int parent_stack_slot_precise_with_callback(void)
 {
 	asm volatile (
@@ -648,7 +648,7 @@ SEC("socket")
 __success
 __log_level(2)
 /* the early exit and the exit of the subprogram give the same state */
-__msg("from 10 to 2: within")
+__msg("from 10 to 2: pruned")
 __msg("3: (0f) r1 += r7                      ; R1=fp-8 R7=-8")
 __naked int ld_abs_backtrack_both_paths(void)
 {

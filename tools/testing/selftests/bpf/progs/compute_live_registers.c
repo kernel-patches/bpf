@@ -356,13 +356,13 @@ __naked void ldimm64(void)
 		:: __clobber_all);
 }
 
-/* No rules specific for LD_ABS/LD_IND, default behaviour kicks in */
+/* LD_ABS/LD_IND read r6 and clobber r0-r5 */
 SEC("socket")
 __log_level(2)
-__msg("2: 0123456789 (30) r0 = *(u8 *)skb[42]")
-__msg("3: 012.456789 (0f) r7 += r0")
-__msg("4: 012.456789 (b7) r3 = 42")
-__msg("5: 0123456789 (50) r0 = *(u8 *)skb[r3 + 0]")
+__msg("2: ......67.. (30) r0 = *(u8 *)skb[42]")
+__msg("3: 0.....67.. (0f) r7 += r0")
+__msg("4: ......67.. (b7) r3 = 42")
+__msg("5: ...3..67.. (50) r0 = *(u8 *)skb[r3 + 0]")
 __msg("6: 0......7.. (0f) r7 += r0")
 __naked void ldabs(void)
 {
