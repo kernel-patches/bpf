@@ -496,7 +496,7 @@ static ssize_t dbg_read(struct file *filp, char __user *buf, size_t count,
 {
 	struct mlx5_field_desc *desc;
 	struct mlx5_rsc_debug *d;
-	char tbuf[18];
+	char tbuf[24];
 	int is_str = 0;
 	u64 field;
 	int ret;
@@ -522,9 +522,10 @@ static ssize_t dbg_read(struct file *filp, char __user *buf, size_t count,
 	}
 
 	if (is_str)
-		ret = snprintf(tbuf, sizeof(tbuf), "%s\n", (const char *)(unsigned long)field);
+		ret = scnprintf(tbuf, sizeof(tbuf), "%s\n",
+				(const char *)(unsigned long)field);
 	else
-		ret = snprintf(tbuf, sizeof(tbuf), "0x%llx\n", field);
+		ret = scnprintf(tbuf, sizeof(tbuf), "0x%llx\n", field);
 
 	return simple_read_from_buffer(buf, count, pos, tbuf, ret);
 }
