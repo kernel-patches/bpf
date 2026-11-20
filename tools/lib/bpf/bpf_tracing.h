@@ -655,6 +655,67 @@ struct pt_regs;
 #define ___bpf_ctx_cast(args...)      ___bpf_apply(___bpf_ctx_cast, ___bpf_narg(args))(args)
 
 /*
+ * __bpf_func_args marks a struct describing (a subset of) the arguments of
+ * the attach target of a tp_btf/fentry/fexit/fmod_ret/LSM program, giving a
+ * CO-RE-relocatable alternative to BPF_PROG()'s fixed argument positions.
+ * Members are matched to the target's parameters by name (ignoring any
+ * ___flavor suffix) when the program is loaded, regardless of their order or
+ * position in the struct, so an argument being added, removed or reordered
+ * in the target function doesn't break the program. A member marked with
+ * __bpf_func_ret refers to the return value (for fexit-like programs).
+ *
+ * The program takes a pointer to such a struct as its context and uses
+ * plain member accesses; members that have no match in the target can be
+ * checked for with bpf_core_field_exists(). The usual CO-RE field
+ * compatibility rules apply between member and parameter types, except that
+ * pointers only match if the types they point to (ignoring typedefs and
+ * qualifiers) are compatible: structs, unions and enums need the same kind
+ * and name (forward declarations match structs and unions), integers the
+ * same size and other types the same kind, recursing through pointers to
+ * pointers, while void pointers match any pointer. A parameter changing to
+ * point to a different type thus appears as missing; ___flavor members can
+ * describe the different variants. For example:
+ *
+ *	struct my_args {
+ *		struct filename *name;
+ *		int dfd;
+ *		int ret __bpf_func_ret;
+ *	} __bpf_func_args;
+ *
+ *	SEC("fexit/filename_unlinkat")
+ *	int handle(struct my_args *args)
+ *	{
+ *		if (bpf_core_field_exists(args->dfd))
+ *			bpf_printk("dfd %d", args->dfd);
+ *		bpf_printk("%s: %d", BPF_CORE_READ(args->name, name), args->ret);
+ *		return 0;
+ *	}
+ *
+ * Accesses have to be made from the program itself (or __always_inline
+ * functions), not from subprograms. Compilers may access members of struct
+ * arguments passed by value by adding a (relocated) offset to the context
+ * pointer, which the verifier only accepts since Linux 7.1.
+ *
+ * GCC doesn't support BTF decl tags on types, so with GCC the struct also
+ * needs to contain __bpf_func_args_marker, a zero-sized member carrying the
+ * tag instead; structs having both work with either compiler:
+ *
+ *	struct my_args {
+ *		__bpf_func_args_marker;
+ *		struct filename *name;
+ *		...
+ *	} __bpf_func_args;
+ */
+#if defined(__clang__)
+#define __bpf_func_args __attribute__((preserve_access_index, btf_decl_tag("bpf_func_args")))
+#else
+#define __bpf_func_args __attribute__((preserve_access_index))
+#endif
+#define __bpf_func_args_marker \
+	char ___bpf_func_args[0] __attribute__((btf_decl_tag("bpf_func_args")))
+#define __bpf_func_ret __attribute__((btf_decl_tag("bpf_func_ret")))
+
+/*
  * BPF_PROG is a convenience wrapper for generic tp_btf/fentry/fexit and
  * similar kinds of BPF programs, that accept input arguments as a single
  * pointer to untyped u64 array, where each u64 can actually be a typed
@@ -789,6 +850,106 @@ typeof(name(0)) name(unsigned long long *ctx)					\
 }										\
 static __always_inline typeof(name(0))						\
 ____##name(unsigned long long *ctx ___bpf_ctx_decl(args))
+
+#define ___bpf_core_mem0()
+#define ___bpf_core_mem1(t, x)			t x;
+#define ___bpf_core_mem2(t, x, args...)	t x; ___bpf_core_mem1(args)
+#define ___bpf_core_mem3(t, x, args...)	t x; ___bpf_core_mem2(args)
+#define ___bpf_core_mem4(t, x, args...)	t x; ___bpf_core_mem3(args)
+#define ___bpf_core_mem5(t, x, args...)	t x; ___bpf_core_mem4(args)
+#define ___bpf_core_mem6(t, x, args...)	t x; ___bpf_core_mem5(args)
+#define ___bpf_core_mem7(t, x, args...)	t x; ___bpf_core_mem6(args)
+#define ___bpf_core_mem8(t, x, args...)	t x; ___bpf_core_mem7(args)
+#define ___bpf_core_mem9(t, x, args...)	t x; ___bpf_core_mem8(args)
+#define ___bpf_core_mem10(t, x, args...)	t x; ___bpf_core_mem9(args)
+#define ___bpf_core_mem11(t, x, args...)	t x; ___bpf_core_mem10(args)
+#define ___bpf_core_mem12(t, x, args...)	t x; ___bpf_core_mem11(args)
+#define ___bpf_core_mem(args...)	___bpf_apply(___bpf_core_mem, ___bpf_narg2(args))(args)
+
+#define ___bpf_core_ld0()
+#define ___bpf_core_ld1(t, x)			, ___bpf_core_arg(x)
+#define ___bpf_core_ld2(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld1(args)
+#define ___bpf_core_ld3(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld2(args)
+#define ___bpf_core_ld4(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld3(args)
+#define ___bpf_core_ld5(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld4(args)
+#define ___bpf_core_ld6(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld5(args)
+#define ___bpf_core_ld7(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld6(args)
+#define ___bpf_core_ld8(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld7(args)
+#define ___bpf_core_ld9(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld8(args)
+#define ___bpf_core_ld10(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld9(args)
+#define ___bpf_core_ld11(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld10(args)
+#define ___bpf_core_ld12(t, x, args...)	, ___bpf_core_arg(x) ___bpf_core_ld11(args)
+#define ___bpf_core_ld(args...)		___bpf_apply(___bpf_core_ld, ___bpf_narg2(args))(args)
+
+/* 2 == BPF_FIELD_EXISTS from bpf_core_read.h */
+#define ___bpf_core_arg_exists(p, x)	__builtin_preserve_field_info((p)->x, 2)
+
+/*
+ * Missing arguments read as zero. The zero is hidden from the compiler, as
+ * otherwise it could prove that, e.g., dereferencing a missing pointer
+ * argument is a NULL dereference and replace that (dead) code path with a
+ * trap, which GCC turns into a call to abort() that can't be linked.
+ */
+#define ___bpf_core_arg(x) ({						    \
+	typeof(___args->x) ___v;					    \
+	_Static_assert(sizeof(___v) <= sizeof(unsigned long),		    \
+		       "BPF_PROG_CORE() arguments can't be larger than 8 bytes"); \
+	if (___bpf_core_arg_exists(___args, x)) {			    \
+		___v = ___args->x;					    \
+	} else {							    \
+		unsigned long ___zero = 0;				    \
+									    \
+		asm volatile("" : "+r"(___zero));			    \
+		__builtin_memcpy(&___v, &___zero, sizeof(___v));	    \
+	}								    \
+	___v;								    \
+})
+
+/*
+ * BPF_PROG_CORE is a CO-RE-relocatable variant of BPF_PROG2: arguments are
+ * specified as (type, name) pairs naming (a subset of) the parameters of the
+ * attach target, in any order, and are matched to the target's parameters by
+ * name when the program is loaded (see __bpf_func_args; BPF_PROG_CORE
+ * declares such a struct internally, using __bpf_func_args_marker so that it
+ * works with both clang and GCC). Specifying __bpf_func_ret as part of the
+ * type of an argument makes it refer to the return value instead.
+ *
+ * Arguments that don't exist in the target (or whose type isn't compatible)
+ * read as zero; bpf_func_arg_exists() tells whether an argument exists.
+ * Within the program, 'ctx' points to the arguments struct.
+ *
+ *	SEC("fexit/filename_unlinkat")
+ *	int BPF_PROG_CORE(handle, struct filename *, name, int, dfd,
+ *			  __bpf_func_ret int, ret)
+ *	{
+ *		if (bpf_func_arg_exists(dfd))
+ *			bpf_printk("dfd %d", dfd);
+ *		...
+ *	}
+ *
+ * Structs passed by value that are larger than 8 bytes can't be copied out
+ * of the program context as a whole, so they can't be used as arguments of
+ * BPF_PROG_CORE; use an explicit __bpf_func_args struct and access their
+ * members individually instead.
+ */
+#define BPF_PROG_CORE(name, args...)					    \
+name(void *ctx);							    \
+struct ___##name##_args {						    \
+	__bpf_func_args_marker;						    \
+	___bpf_core_mem(args)						    \
+} __attribute__((preserve_access_index));				    \
+static __always_inline typeof(name(0))					    \
+____##name(struct ___##name##_args *ctx ___bpf_ctx_decl(args));		    \
+typeof(name(0)) name(void *ctx)						    \
+{									    \
+	struct ___##name##_args *___args = ctx;				    \
+									    \
+	return ____##name(___args ___bpf_core_ld(args));			    \
+}									    \
+static __always_inline typeof(name(0))					    \
+____##name(struct ___##name##_args *ctx ___bpf_ctx_decl(args))
+
+#define bpf_func_arg_exists(x)		___bpf_core_arg_exists(ctx, x)
 
 struct pt_regs;
 

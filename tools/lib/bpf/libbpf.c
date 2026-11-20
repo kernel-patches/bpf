@@ -5990,6 +5990,7 @@ int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 		cand = &new_cands[cands->len];
 		cand->btf = targ_btf;
 		cand->id = i;
+		cand->flags = 0;
 
 		cands->cands = new_cands;
 		cands->len++;
@@ -6256,11 +6257,134 @@ static const struct bpf_core_relo *find_relo_core(struct bpf_program *prog, int 
 	return NULL;
 }
 
+static int find_kernel_btf_id(struct bpf_object *obj, const char *attach_name,
+			      enum bpf_attach_type attach_type,
+			      int *btf_obj_fd, int *btf_type_id);
+
+/* Single-entry cache of the CO-RE candidate for function argument structs
+ * (see __bpf_func_args) of a given program, i.e., of its attach target.
+ */
+struct bpf_core_args_cache {
+	const struct bpf_program *prog;
+	struct bpf_core_cand cand;
+	/* 0 if the attach target has no named parameters */
+	int nr_cands;
+	struct bpf_core_cand_list cands;
+};
+
+/* Find the BTF type of the attach target of a BTF-attached tracing program */
+static int bpf_prog_attach_target(const struct bpf_program *prog,
+				  const struct btf **btf, __u32 *btf_id)
+{
+	struct bpf_object *obj = prog->obj;
+	int btf_obj_fd = 0, btf_type_id = 0, i, err;
+
+	if (prog->attach_prog_fd) {
+		pr_warn("prog '%s': function argument relocations are not supported for BPF program targets\n",
+			prog->name);
+		return -EOPNOTSUPP;
+	}
+
+	if (prog->attach_btf_id) {
+		/* set via bpf_program__set_attach_target() */
+		btf_obj_fd = prog->attach_btf_obj_fd;
+		btf_type_id = prog->attach_btf_id;
+	} else {
+		const char *attach_name = strchr(prog->sec_name, '/');
+
+		if (!prog->sec_def || !(prog->sec_def->cookie & SEC_ATTACH_BTF) || !attach_name) {
+			pr_warn("prog '%s': function argument relocations require a BTF attach target\n",
+				prog->name);
+			return -EINVAL;
+		}
+		err = find_kernel_btf_id(obj, attach_name + 1, prog->expected_attach_type,
+					 &btf_obj_fd, &btf_type_id);
+		if (err) {
+			pr_warn("prog '%s': failed to find kernel BTF type ID of '%s': %s\n",
+				prog->name, attach_name + 1, errstr(err));
+			return err;
+		}
+	}
+
+	*btf = NULL;
+	if (!btf_obj_fd) {
+		*btf = obj->btf_vmlinux;
+	} else {
+		for (i = 0; i < obj->btf_module_cnt; i++) {
+			if (obj->btf_modules[i].fd == btf_obj_fd) {
+				*btf = obj->btf_modules[i].btf;
+				break;
+			}
+		}
+	}
+	if (!*btf)
+		return -ESRCH;
+	*btf_id = btf_type_id;
+	return 0;
+}
+
+static struct bpf_core_cand_list *
+bpf_core_args_find_cands(const struct bpf_program *prog, struct bpf_core_args_cache *cache)
+{
+	const struct btf *btf;
+	__u32 btf_id;
+	int err;
+
+	if (cache->prog == prog)
+		goto out;
+	cache->prog = NULL;
+
+	/* there is no single attach target to relocate against in (shared)
+	 * subprograms; accesses need to be in the entry prog itself (or in
+	 * __always_inline functions)
+	 */
+	if (prog_is_subprog(prog->obj, prog)) {
+		pr_warn("prog '%s': function argument relocations are only supported in entry programs\n",
+			prog->name);
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+	if (prog->type != BPF_PROG_TYPE_TRACING && prog->type != BPF_PROG_TYPE_LSM) {
+		pr_warn("prog '%s': function argument relocations are not supported for this program type\n",
+			prog->name);
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+
+	err = bpf_prog_attach_target(prog, &btf, &btf_id);
+	if (err)
+		return ERR_PTR(err);
+
+	err = bpf_core_func_args_cand(btf, btf_id, prog->expected_attach_type, &cache->cand);
+	if (err == -ENOENT) {
+		/* tracepoints on old kernels have no function with named
+		 * parameters to match against; rather than failing to load,
+		 * leave all arguments without a match, so that they appear
+		 * to be missing (and the struct, to bpf_core_type_exists(),
+		 * to be unsupported)
+		 */
+		pr_warn("prog '%s': attach target [%u] has no parameter names, function arguments will appear to be missing\n",
+			prog->name, btf_id);
+		cache->nr_cands = 0;
+	} else if (err) {
+		pr_warn("prog '%s': can't relocate function arguments against attach target [%u]: %s\n",
+			prog->name, btf_id, errstr(err));
+		return ERR_PTR(err);
+	} else {
+		cache->nr_cands = 1;
+	}
+	cache->prog = prog;
+out:
+	/* bpf_core_calc_relo_insn() may shrink the list, so (re)set it */
+	cache->cands.cands = &cache->cand;
+	cache->cands.len = cache->nr_cands;
+	return &cache->cands;
+}
+
 static int bpf_core_resolve_relo(struct bpf_program *prog,
 				 const struct bpf_core_relo *relo,
 				 int relo_idx,
 				 const struct btf *local_btf,
 				 struct hashmap *cand_cache,
+				 struct bpf_core_args_cache *args_cache,
 				 struct bpf_core_relo_res *targ_res)
 {
 	struct bpf_core_spec specs_scratch[3] = {};
@@ -6280,7 +6404,19 @@ static int bpf_core_resolve_relo(struct bpf_program *prog,
 		return -EINVAL;
 
 	if (relo->kind != BPF_CORE_TYPE_ID_LOCAL &&
-	    !hashmap__find(cand_cache, local_id, &cands)) {
+	    !hashmap__find(cand_cache, local_id, &cands) &&
+	    bpf_core_is_func_args_type(local_btf, local_id)) {
+		/* candidate depends on the program's attach target, so it
+		 * can't go into the object-wide candidate cache
+		 */
+		cands = bpf_core_args_find_cands(prog, args_cache);
+		if (IS_ERR(cands)) {
+			pr_warn("prog '%s': relo #%d: failed to resolve function arguments for [%u] %s %s: %ld\n",
+				prog_name, relo_idx, local_id, btf_kind_str(local_type),
+				local_name, PTR_ERR(cands));
+			return PTR_ERR(cands);
+		}
+	} else if (relo->kind != BPF_CORE_TYPE_ID_LOCAL && !cands) {
 		cands = bpf_core_find_cands(prog->obj, local_btf, local_id);
 		if (IS_ERR(cands)) {
 			pr_warn("prog '%s': relo #%d: target candidate search failed for [%u] %s %s: %ld\n",
@@ -6307,6 +6443,7 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 	const struct bpf_core_relo *rec;
 	const struct btf_ext_info *seg;
 	struct hashmap_entry *entry;
+	struct bpf_core_args_cache args_cache = {};
 	struct hashmap *cand_cache = NULL;
 	struct bpf_program *prog;
 	struct bpf_insn *insn;
@@ -6400,7 +6537,8 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 			if (prog->obj->gen_loader)
 				continue;
 
-			err = bpf_core_resolve_relo(prog, rec, i, obj->btf, cand_cache, &targ_res);
+			err = bpf_core_resolve_relo(prog, rec, i, obj->btf, cand_cache,
+						    &args_cache, &targ_res);
 			if (err) {
 				pr_warn("prog '%s': relo #%d: failed to relocate: %s\n",
 					prog->name, i, errstr(err));

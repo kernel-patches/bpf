@@ -6,9 +6,26 @@
 
 #include <linux/bpf.h>
 
+/* names of BTF decl tags marking function argument structs (and members
+ * referring to the return value) whose fields are relocated against the
+ * parameters of a tracing program's attach target, see __bpf_func_args
+ */
+#define BPF_CORE_FUNC_ARGS_TAG	"bpf_func_args"
+#define BPF_CORE_FUNC_RET_TAG	"bpf_func_ret"
+
+enum bpf_core_cand_flags {
+	/* id is a FUNC whose parameters are matched by name */
+	BPF_CORE_CAND_FUNC_ARGS		= 1 << 0,
+	/* first parameter isn't in the program context (raw tracepoints) */
+	BPF_CORE_CAND_SKIP_FIRST	= 1 << 1,
+	/* return value follows the arguments in the program context */
+	BPF_CORE_CAND_RETVAL		= 1 << 2,
+};
+
 struct bpf_core_cand {
 	const struct btf *btf;
 	__u32 id;
+	__u32 flags;
 };
 
 /* dynamically sized list of type IDs and its associated struct btf */
@@ -66,6 +83,13 @@ struct bpf_core_relo_res {
 	__u32 orig_type_id;
 	__u32 new_sz;
 	__u32 new_type_id;
+	/* loads of integer or enum function arguments smaller than 8 bytes on
+	 * big-endian targets, which are in the low-order bytes of their
+	 * context slot, are widened to the whole slot at func_arg_slot_off
+	 */
+	bool widen_func_arg;
+	bool func_arg_signed;
+	__u32 func_arg_slot_off;
 };
 
 int __bpf_core_types_are_compat(const struct btf *local_btf, __u32 local_id,
@@ -78,6 +102,11 @@ int bpf_core_types_match(const struct btf *local_btf, __u32 local_id, const stru
 			 __u32 targ_id);
 
 size_t bpf_core_essential_name_len(const char *name);
+
+bool bpf_core_is_func_args_type(const struct btf *btf, __u32 type_id);
+int bpf_core_func_args_cand(const struct btf *btf, __u32 attach_btf_id,
+			    enum bpf_attach_type attach_type,
+			    struct bpf_core_cand *cand);
 
 int bpf_core_calc_relo_insn(const char *prog_name,
 			    const struct bpf_core_relo *relo, int relo_idx,
