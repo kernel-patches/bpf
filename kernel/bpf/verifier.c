@@ -196,7 +196,6 @@ struct bpf_verifier_stack_elem {
 	struct bpf_verifier_state st;
 	int insn_idx;
 	int prev_insn_idx;
-	enum bpf_guard_edge guard_edge;
 	bool again;	/* see bpf_flow_deliver() */
 	struct bpf_verifier_stack_elem *next;
 };
@@ -20961,6 +20960,9 @@ static int next_trip(struct bpf_verifier_env *env, struct loop_stack_entry *entr
 	}
 	if (!entry->peeled)
 		return check_held_in_leftover(env, entry);
+	*starts_leftover = !bpf_flow_trip_is_new(env, entry) || !try_peel_trip(entry);
+	if (*starts_leftover)
+		entry->entry_id = ++env->loop_entry_cnt;
 	return 0;
 }
 
@@ -21157,87 +21159,79 @@ static int push_unwind_exit(struct bpf_verifier_env *env)
 }
 
 /*
- * The loop that is not counted and has nothing that stops it at run time gets
- * may_goto in front of this insn. When it is out of budget the program goes
- * where may_goto goes with the registers and the stack as they are here.
- * Every state that goes through the loop does, see bpf_flow_loop_gets_guards().
+ * A loop has no trip count, and nothing stops it at run time. It gets may_goto
+ * before this insn. When may_goto is out of budget, the program goes to its
+ * target with the registers and the stack that it has here.
+ * Every state that goes through the loop does that, see bpf_flow_needs_guard().
  */
 static int check_loop_guard(struct bpf_verifier_env *env)
 {
 	struct bpf_insn_aux_data *aux = &env->insn_aux_data[env->insn_idx];
-	struct bpf_verifier_state *branch;
-	struct bpf_func_state *frame = cur_func(env);
-	struct loop_stack_entry *entry;
 	struct bpf_loop *loop;
-	int h, err;
+	int err;
 
-	h = bpf_loop_at_index(env, env->insn_idx);
 	/* The callback came back to the helper that calls it: the program is not in front of it. */
-	if (h < 0 || !frame->loop_stack_cnt || frame->callback_depth)
+	if (!aux->guard_place || cur_func(env)->callback_depth)
 		return 0;
-	loop = env->insn_aux_data[h].loop;
-	entry = &frame->loop_stack[frame->loop_stack_cnt - 1];
-	if (loop->rt_bounded || !env->insn_aux_data[env->insn_idx].guard_place ||
-	    entry->loop_id != h)
+	loop = env->insn_aux_data[bpf_loop_at_index(env, env->insn_idx)].loop;
+	if (loop->rt_bounded)
 		return 0;
-	if (verifier_bug_if(!entry->terminates && !entry->guarded, env,
-			    "nothing stops the loop at %d", h))
-		return -EFAULT;
-	if (!entry->guarded && !bpf_loop_walk_may_give_up(entry))
+	if (!(env->path_sensitive ? loop->infinite : loop->guarded)) {
+		loop->this_pass.no_guard_edges = true;
 		return 0;
+	}
 
+	env->imprecise |= !env->err;
 	/* the device runs the insns that the driver was given, without may_goto */
 	if (bpf_prog_is_offloaded(env->prog->aux)) {
-		verbose(env, "loop at insn %d has no known bound in an offloaded program\n", h);
+		verbose(env, "loop at insn %d has no known bound in an offloaded program\n",
+			loop->header);
+		env->cur_state->suspect_loops |= loop->suspect_bit;
 		return -EINVAL;
 	}
 
 	/*
-	 * A guard has one way out, and only that one is looked at.
+	 * A guard has one way out, and only that one is verified.
 	 *
 	 * Leave the subprog, if that is possible every time the program gets here:
 	 *	do { p = lookup(); } while (!p); *p
-	 * The code that follows the loop counts on what the jump that leaves it has found out.
+	 * The code after the loop relies on the result of the jump that leaves it.
 	 *
 	 * Otherwise leave the loop:
 	 *	lock(); do { ... } while (...); unlock();
-	 * The code that follows the loop releases what is held.
+	 * The code after the loop releases what is held.
 	 *
-	 * From the head of a loop to where the loop is left is not an edge of the program:
+	 * The program has no edge from the header of a loop to the exit of the loop:
 	 *	for (;;) { c = *s++; if (!c) return 0; if (c == '*') return 1; }
-	 * The loop is left to 'exit', and only its body sets r0. Leave the subprog then, with
+	 * The loop is left to 'exit', and only its body sets r0. Then leave the subprog. Use
 	 * a plain exit if it cannot unwind, like check_recursion_guard().
 	 *
-	 * It's the same way for all states that get here. As long as they leave the subprog
-	 * what would leave the loop is dropped. Both are dropped as long as the loop has
-	 * no may_goto: the state is in a walk that may get to the end of the loop.
+	 * All states that get here take the same way, or the pass starts again.
+	 * A speculative state does not select the way.
 	 */
+	if (env->cur_state->speculative)
+		goto out;
 	if (aux->guard_at_header && !aux->guard_unset_reg && guard_reads_unset_reg(env, aux)) {
 		aux->guard_unset_reg = true;
-		/* The states that were here left the loop. All again. */
-		if (aux->guard_no_unwind)
-			env->guards_late = true;
+		env->guards_late |= aux->guard_no_unwind && aux->loop_guard;
 		aux->guard_no_unwind = false;
 	}
 	if (!aux->guard_no_unwind &&
 	    !state_can_unwind(env, env->cur_state, aux->guard_unset_reg)) {
+		env->guards_late |= aux->loop_guard;
 		aux->guard_no_unwind = true;
-		/* What would leave the loop from the states that were here is gone. All again. */
-		if (aux->guard_edge_dropped && loop->guarded)
-			env->guards_late = true;
 	}
-	if (!aux->guard_no_unwind) {
+out:
+	aux->loop_guard = true;
+	aux->guard_unwinds = !aux->guard_no_unwind;
+	if (aux->guard_no_unwind)
+		err = PTR_ERR_OR_ZERO(push_stack(env, aux->guard_to, env->insn_idx, false));
+	else
 		err = push_unwind_exit(env);
-		if (err)
-			return err;
-		env->head->guard_edge = BPF_GUARD_LEAVES_SUBPROG;
-	}
-
-	branch = push_stack(env, env->insn_aux_data[env->insn_idx].guard_to, env->insn_idx, false);
-	if (IS_ERR(branch))
-		return PTR_ERR(branch);
-	env->head->guard_edge = BPF_GUARD_LEAVES_LOOP;
-	return 0;
+	/* more peeled trips can show that the edge is dead */
+	if (!err && env->head)
+		env->head->st.suspect_loops |= loop->suspect_bit;
+	return err;
 }
 
 /* The states that the insn pushed go where they were pushed to. */

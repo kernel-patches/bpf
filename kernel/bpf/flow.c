@@ -262,11 +262,11 @@ static void flow_set_guard(struct bpf_verifier_env *env, int h, int n)
 	aux[h].loop->has_guards = true;
 }
 
-static void flow_place_guards(struct bpf_verifier_env *env, int h, u32 *seen)
+static void flow_place_guards(struct bpf_verifier_env *env, int h)
 {
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	struct bpf_loop *loop = aux[h].loop;
-	int i, n, o, t, found = -1;
+	int i, n, o, t;
 
 	if (loop->backedges_overflow)
 		goto header;
@@ -286,20 +286,9 @@ static void flow_place_guards(struct bpf_verifier_env *env, int h, u32 *seen)
 		return;
 	}
 
-	/* seen[n]: the number of back edges that n dominates */
-	for (i = 0; i < loop->backedges_cnt; i++)
-		for (n = loop->backedges[i].from; n >= 0; n = n == h ? -1 : env->idoms[n])
-			seen[n]++;
-	for (n = loop->backedges[0].from; n >= 0 && found < 0; n = n == h ? -1 : env->idoms[n])
-		if (seen[n] == loop->backedges_cnt && bpf_insn_leaves_loop(env, h, n))
-			found = n;
-	for (i = 0; i < loop->backedges_cnt; i++)
-		for (n = loop->backedges[i].from; n >= 0; n = n == h ? -1 : env->idoms[n])
-			seen[n] = 0;
-	if (found >= 0) {
-		flow_set_guard(env, h, found);
-		return;
-	}
+	for (n = bpf_loop_spine_end(env, loop); n >= 0; n = n == h ? -1 : env->idoms[n])
+		if (bpf_insn_leaves_loop(env, h, n))
+			return flow_set_guard(env, h, n);
 
 	for (i = 0; i < loop->backedges_cnt; i++)
 		if (loop->backedges[i].latch < 0)
@@ -386,6 +375,85 @@ bool bpf_flow_loops_lost_bound(struct bpf_verifier_env *env)
 }
 
 /*
+ * A state goes around @loop without a trip count, so the loop gets may_goto. At run time
+ * may_goto is there for all states. This includes states with a trip count, and states that
+ * got to the end of the loop in a peeled trip. A loop before this one can use up the budget
+ * of may_goto. So if a state did not take the edges of may_goto, the pass restarts.
+ */
+int bpf_flow_needs_guard(struct bpf_verifier_env *env, struct bpf_loop *loop)
+{
+	if (loop->rt_bounded)
+		return 0;
+	if (!loop->has_guards) {
+		verbose(env, "loop at insn %d never exits\n", loop->header);
+		return -EINVAL;
+	}
+	if (!loop->this_pass.needs_guard && (env->log.level & BPF_LOG_LEVEL2))
+		verbose(env, "loop at %d has no trip count\n", loop->header);
+	loop->this_pass.needs_guard = loop->guarded = true;
+	env->guards_late |= loop->this_pass.no_guard_edges;
+	return 0;
+}
+
+/* This pass peels more trips. What the last pass found about @loop can be wrong. */
+static void flow_forget_loop(struct bpf_verifier_env *env, struct bpf_loop *loop)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	int i, n = loop->nr_insns;
+
+	loop->changed = loop->guarded = false;
+	bpf_add_cost(env, n, BPF_COST_SCAN);
+	for (i = loop->header; n--; i = bpf_flow_insn_after(env, i)) {
+		if (bpf_loop_at_index(env, i) != loop->header)
+			continue;
+		aux[i].guard_no_unwind = aux[i].guard_unset_reg = false;
+		aux[i].not_stopped = -1;
+	}
+	loop->rt_bounded = flow_loop_is_bounded(env, loop->header);
+}
+
+/* A pass starts. It verifies the main prog and the global functions. */
+void bpf_flow_new_pass(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_flow *flow = env->flow;
+	int i;
+
+	memset(flow->cost, 0, env->subprog_cnt * sizeof(*flow->cost));
+	flow->budget_func_cnt = 0;
+	flow->start_cnt++;
+	for (i = 0; i < env->prog->len; i++, aux++) {
+		if (aux->callback_loop)
+			aux->callback_loop->this_pass = (struct bpf_loop_per_pass){};
+		if (aux->recursion_loop)
+			aux->recursion_loop->this_pass = (struct bpf_loop_per_pass){};
+		if (!aux->loop)
+			continue;
+		/* pass 0 is over */
+		if (flow->start_cnt == 2)
+			aux->loop->guarded = aux->loop->this_pass.needs_guard;
+		aux->loop->this_pass = (struct bpf_loop_per_pass){};
+		if (aux->loop->changed && !env->path_sensitive)
+			flow_forget_loop(env, aux->loop);
+		if (aux->loop->rt_bounded)
+			aux->loop->rt_bounded = flow_loop_is_bounded(env, i);
+	}
+}
+
+/* The pass has no error. A loop needs may_goto only if a state had no trip count. */
+void bpf_flow_drop_guards(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	int i, h;
+
+	for (i = 0; i < env->prog->len; i++) {
+		h = bpf_loop_at_index(env, i);
+		if (h >= 0)
+			aux[i].loop_guard &= aux[h].loop->this_pass.needs_guard;
+	}
+}
+
+/*
  * Which loops have something that stops them at run time, and where may_goto goes in the others.
  * Returns 1 if a place is at the head of a loop.
  */
@@ -394,11 +462,6 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env)
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	int len = env->prog->len, h, i, ret = 0, err = 0;
 	struct bpf_loop *loop;
-	u32 *seen;
-
-	seen = kvcalloc(len, sizeof(*seen), BPF_VERIFIER_GFP);
-	if (!seen)
-		return -ENOMEM;
 
 	for (i = 0; i < len; i++) {
 		aux[i].not_stopped = -1;
@@ -416,13 +479,12 @@ int bpf_flow_place_guards(struct bpf_verifier_env *env)
 			break;
 		loop->rt_bounded = flow_loop_is_bounded(env, h);
 		/* also when it's bounded: the main pass may find that it's not */
-		flow_place_guards(env, h, seen);
+		flow_place_guards(env, h);
 		/* pass 0 does not know the trip count before it ends */
 		loop->guarded = loop->has_guards && !bpf_prog_is_offloaded(env->prog->aux);
 		if (aux[h].guard_at_header)
 			ret = 1;
 	}
-	kvfree(seen);
 	return err ?: ret;
 }
 
@@ -976,6 +1038,56 @@ static bool flow_same_entry(struct bpf_loop *loop, const struct flow_state *t,
 	       flow_loop_entry(&t->st, loop)->entry_id == flow_loop_entry(&s->st, loop)->entry_id;
 }
 
+/*
+ * @t subsumes @s. The caller prunes @s, @t continues for it. If @s made more trips it can
+ * come from @t:
+ *
+ *	t --> ... --> header --> ... --> s
+ *	^                                |
+ *	`----------- subsumes -----------'
+ *
+ * A back edge adds a trip and a join has the larger number. So each cycle of states has such
+ * an edge for the outermost loop that it goes around. All pruned states come here.
+ * Speculation ends by itself.
+ *
+ * The loop ends if the trip index k of @s is small each time. That is the trip count:
+ *
+ *  trip count:  guess -> state holds k -> jumps refine k -> k is small ?
+ *                                                           yes: no guard   no: add may_goto
+ *
+ * A loop that can run longer than that gets may_goto.
+ * There is no trip count without CAP_PERFMON (allow_uninit_stack).
+ */
+static int flow_check_trip_counts(struct bpf_verifier_env *env, const struct flow_state *t,
+				  const struct flow_state *s)
+{
+	const struct loop_stack_entry *e;
+	u32 fr, i;
+	u64 max_trip;
+	int err;
+
+	for (fr = 0; fr <= s->st.curframe && !s->st.speculative; fr++) {
+		e = s->st.frame[fr]->loop_stack;
+		for (i = 0; i < s->st.frame[fr]->loop_stack_cnt; i++, e++) {
+			if (e->loop->rt_bounded || e->trip <= t->st.frame[fr]->loop_stack[i].trip)
+				continue;
+			max_trip = cnum64_umax(e->trip_index.r64);
+			if (!e->peeled && max_trip <= BPF_MAX_TRIPS && env->allow_uninit_stack) {
+				/* with may_goto k can start again, see trip_index_safe() */
+				if ((env->log.level & BPF_LOG_LEVEL2) &&
+				    !e->loop->this_pass.needs_guard)
+					verbose(env, "loop at %d has trip count %llu\n",
+						e->loop->header, max_trip + 1);
+				continue;
+			}
+			err = bpf_flow_needs_guard(env, e->loop);
+			if (err)
+				return err;
+		}
+	}
+	return 0;
+}
+
 /* @t is from an earlier walk over a leftover. The header state of @s subsumes that of @t. */
 static bool flow_is_stale(const struct flow_state *t, const struct flow_state *s)
 {
@@ -1036,10 +1148,14 @@ again:
 		if (subsumed) {
 			if (env->log.level & BPF_LOG_LEVEL2)
 				verbose(env, "from %d to %d: pruned\n", prev, insn_idx);
+			err = flow_check_trip_counts(env, t, s);
 			goto free;
 		}
 		/* what grows in a loop is widened, it is not replaced */
 		if (!leftover_loop && bpf_state_subsumes(env, &s->st, &t->st)) {
+			err = flow_check_trip_counts(env, s, t);
+			if (err)
+				goto free;
 			/* it goes on with the leftover that @t started */
 			if (s->kind == FLOW_LEFTOVER)
 				bpf_top_loop(s->st.frame[s->st.curframe])->entry_id =
@@ -1082,6 +1198,73 @@ free:
 	return err;
 }
 
+/*
+ * @s starts a peeled trip of @loop. Does it repeat the state of an earlier trip? It is compared
+ * with trip 0, 1, 2, 4, 8, ... That finds any period. If @s comes from that state, the verifier
+ * sees no end of the loop. So the loop needs may_goto.
+ * A state that has less than the earlier one can be on its way to the end of the loop:
+ *	for (i = 7; i >= 0; i--) { if (i >= n) continue; ... }
+ * It is pruned for the price of may_goto. So is a state of another entry. If that causes
+ * an error, the next pass sets no_peel_prune.
+ */
+static int flow_prune_peeled(struct bpf_verifier_env *env, struct flow_state *s,
+			     struct bpf_loop *loop)
+{
+	struct loop_stack_entry *entry = flow_loop_entry(&s->st, loop);
+	struct flow_state *t, *tn;
+	u32 trip = entry->trip;
+	int ret = 0;
+
+	entry->trip = 0;
+	s->kind = FLOW_PEELED;
+	flow_for_each_near(env, s, t, tn) {
+		if (!flow_same_join_key(env, t, s) || !bpf_state_subsumes(env, &t->st, &s->st))
+			continue;
+		if (!loop->rt_bounded && !loop->this_pass.needs_guard && !s->st.speculative &&
+		    (!flow_same_entry(loop, t, s) || !bpf_state_subsumes(env, &s->st, &t->st))) {
+			if (loop->no_peel_prune)
+				continue;
+			loop->this_pass.peel_pruned = true;
+		}
+		if (env->log.level & BPF_LOG_LEVEL2)
+			verbose(env, "from %d to %d: pruned\n", s->prev_insn_idx, s->st.insn_idx);
+		entry->trip = trip;
+		ret = flow_check_trip_counts(env, t, s) ?: 1;
+		break;
+	}
+	s->kind = FLOW_AT;
+	entry->trip = trip;
+	return ret;
+}
+
+/*
+ * The current state starts a peeled trip. An earlier trip can have all that it has in the
+ * deps. Then more peeled trips cannot help, and the leftover starts. If the earlier trip
+ * subsumes the full state, the trip counts as new: flow_prune_peeled() prunes it.
+ */
+bool bpf_flow_trip_is_new(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
+{
+	struct flow_state *s = container_of(env->cur_state, struct flow_state, st), *t, *tn;
+	u32 trip = entry->trip;
+	bool is_new = true;
+
+	if (entry->loop->kind == BPF_LOOP_RECURSION || entry->loop->no_peel_prune)
+		return true;
+	entry->trip = 0;
+	s->kind = FLOW_PEELED;
+	flow_for_each_near(env, s, t, tn) {
+		if (!flow_same_join_key(env, t, s) || bpf_values_grew_in_deps(env, &t->st, &s->st))
+			continue;
+		is_new = bpf_state_subsumes(env, &t->st, &s->st);
+		if (is_new)
+			break;
+	}
+	s->kind = FLOW_AT;
+	entry->trip = trip;
+	entry->loop->this_pass.peel_pruned |= !is_new;
+	return is_new;
+}
+
 /* @s is taken. @starts_leftover: the states of FLOW_LEFTOVER are joined, start the leftover */
 static int flow_add(struct bpf_verifier_env *env, struct flow_state *s, bool starts_leftover)
 {
@@ -1103,6 +1286,10 @@ static int flow_add(struct bpf_verifier_env *env, struct flow_state *s, bool sta
 	/* a pointer to the packet that moves in the loop got an id */
 	if (!err && env->id_gen != id_gen)
 		err = bpf_renumber_ids(env, &s->st);
+	if (!err && env->path_sensitive) {
+	} else if (!err && loop && flow_loop_entry(&s->st, loop)->peeled) {
+		err = flow_prune_peeled(env, s, loop);
+	}
 	if (err) {
 		flow_free_state(env, s);
 		return min(err, 0);
