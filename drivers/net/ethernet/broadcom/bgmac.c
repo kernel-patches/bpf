@@ -15,6 +15,7 @@
 #include <linux/bcm47xx_nvram.h>
 #include <linux/phy.h>
 #include <linux/phy_fixed.h>
+#include <linux/of_mdio.h>
 #include <net/dsa.h>
 #include "bgmac.h"
 
@@ -1472,12 +1473,29 @@ int bgmac_phy_connect_direct(struct bgmac *bgmac)
 				 PHY_INTERFACE_MODE_MII);
 	if (err) {
 		dev_err(bgmac->dev, "Connecting PHY failed\n");
+		fixed_phy_unregister(phy_dev);
 		return err;
 	}
 
 	return err;
 }
 EXPORT_SYMBOL_GPL(bgmac_phy_connect_direct);
+
+/* Disconnect the PHY and release a fixed PHY registered for the connection. */
+static void bgmac_phy_disconnect(struct bgmac *bgmac)
+{
+	struct device_node *np = bgmac->dev->of_node;
+	struct phy_device *phydev = bgmac->net_dev->phydev;
+
+	if (!phydev)
+		return;
+
+	phy_disconnect(phydev);
+	if (np && of_phy_is_fixed_link(np))
+		of_phy_deregister_fixed_link(np);
+	else if (phy_is_pseudo_fixed_link(phydev))
+		fixed_phy_unregister(phydev);
+}
 
 struct bgmac *bgmac_alloc(struct device *dev)
 {
@@ -1572,7 +1590,7 @@ int bgmac_enet_probe(struct bgmac *bgmac)
 	return 0;
 
 err_phy_disconnect:
-	phy_disconnect(net_dev->phydev);
+	bgmac_phy_disconnect(bgmac);
 err_dma_free:
 	bgmac_dma_free(bgmac);
 err_out:
@@ -1584,7 +1602,7 @@ EXPORT_SYMBOL_GPL(bgmac_enet_probe);
 void bgmac_enet_remove(struct bgmac *bgmac)
 {
 	unregister_netdev(bgmac->net_dev);
-	phy_disconnect(bgmac->net_dev->phydev);
+	bgmac_phy_disconnect(bgmac);
 	netif_napi_del(&bgmac->napi);
 	bgmac_dma_free(bgmac);
 }
