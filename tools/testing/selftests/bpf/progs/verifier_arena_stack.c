@@ -737,6 +737,61 @@ __naked void callback(void)
 	: __clobber_all);
 }
 
+static __naked __noinline __used long add_index_cb(void)
+{
+	asm volatile (
+	"r3 = *(u64 *)(r2 + 0);"
+	"r3 += r1;"
+	"*(u64 *)(r2 + 0) = r3;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* takes a stack in arena, has all of its own frame in use, and bpf_loop() is inlined */
+static __naked __noinline __used long full_frame_cb(void)
+{
+	asm volatile (
+	".8byte %[adj];"
+	".8byte %[stx16];"	/* *(u64 *)(r12 - 16) = r1 */
+	"*(u64 *)(r10 - %[depth]) = r1;"
+	"r3 = r2;"
+	"r1 = 3;"
+	"r2 = add_index_cb ll;"
+	"r4 = 0;"
+	"call %[bpf_loop];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_loop), __imm_const(depth, 2008),
+	  __imm_insn(adj, ADJ(16)),
+	  __imm_insn(stx16, STX(BPF_DW, -16, BPF_REG_1))
+	: __clobber_all);
+}
+
+SEC("syscall")
+__description("arena stack: the arguments of a callback need no room of their own")
+__success __retval(6)
+__xlated("*(u64 *)(r10 -16) = r2")
+__xlated("*(u64 *)(r10 -24) = r3")
+__naked void callback_full_frame(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r1 = 2;"
+	"r2 = full_frame_cb ll;"
+	"r3 = r10;"
+	"r3 += -8;"
+	"r4 = 0;"
+	"call %[bpf_loop];"
+	"r0 = *(u64 *)(r10 - 8);"
+	"exit;"
+	:
+	: __imm(bpf_loop)
+	: __clobber_all);
+}
+
 /* has no frame: its first insn is the call, not r12 += N */
 static __naked __noinline __used long calls_loop_cb(void)
 {

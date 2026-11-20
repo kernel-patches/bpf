@@ -29,29 +29,11 @@ struct {
 	__type(value, struct stack_trace_t);
 } stackdata_map SEC(".maps");
 
-/* Allocate per-cpu space twice the needed. For the code below
- *   usize = bpf_get_stack(ctx, raw_data, max_len, BPF_F_USER_STACK);
- *   if (usize < 0)
- *     return 0;
- *   ksize = bpf_get_stack(ctx, raw_data + usize, max_len - usize, 0);
- *
- * If we have value_size = MAX_STACK_RAWTP * sizeof(__u64),
- * verifier will complain that access "raw_data + usize"
- * with size "max_len - usize" may be out of bound.
- * The maximum "raw_data + usize" is "raw_data + max_len"
- * and the maximum "max_len - usize" is "max_len", verifier
- * concludes that the maximum buffer access range is
- * "raw_data[0...max_len * 2 - 1]" and hence reject the program.
- *
- * Doubling the to-be-used max buffer size can fix this verifier
- * issue and avoid complicated C programming massaging.
- * This is an acceptable workaround since there is one entry here.
- */
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
-	__type(value, __u64[2 * MAX_STACK_RAWTP]);
+	__type(value, __u64[MAX_STACK_RAWTP]);
 } rawdata_map SEC(".maps");
 
 SEC("raw_tracepoint/sys_enter")

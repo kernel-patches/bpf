@@ -1208,14 +1208,14 @@ __naked void old_stack_misc_vs_cur_scalar(void)
 }
 
 /*
- * stacksafe(): the state with STACK_MISC is there, the state with a stack spill
- * of a non-scalar arrives. A program that may read uninitialized stack may
- * take a pointer for a number: the second state is within the first one.
+ * One state has STACK_MISC, the other one has a stack spill of a non-scalar.
+ * The slot is live, so the states stay apart.
  */
 SEC("socket")
 __success  __log_level(2)
 __msg("8: (79) r1 = *(u64 *)(r10 -8)         ; R1=scalar()")
-__msg("processed 10 insns")
+__msg("8: (79) r1 = *(u64 *)(r10 -8)         ; R1=ctx()")
+__msg("processed 12 insns")
 __naked void old_stack_misc_vs_cur_ctx_ptr(void)
 {
 	asm volatile(
@@ -1233,7 +1233,7 @@ __naked void old_stack_misc_vs_cur_ctx_ptr(void)
 	"*(u64*)(r10 - 8) = r0;"
 	"lock *(u64*)(r10 - 8) += r0;"
 "2:"
-	/* read fp-8, it's looked at once */
+	/* read fp-8 */
 	"r1 = *(u64*)(r10 - 8);"
 	"exit;"
 	:
@@ -1399,11 +1399,11 @@ __naked void var_off_write_over_scalar_spill(void)
 
 SEC("socket")
 __description("partial fill from cleaned pointer spill")
-__failure
+__success __caps_unpriv(CAP_BPF) __failure_unpriv
 __log_level(2)
-__msg("1: (05) goto pc+0")
-__msg("2: (61) r0 = *(u32 *)(r10 -4)")
-__msg("invalid size of register fill")
+__msg_unpriv("1: (05) goto pc+0")
+__msg_unpriv("2: (61) r0 = *(u32 *)(r10 -4)")
+__msg_unpriv("invalid size of register fill")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked void partial_fill_from_cleaned_pointer_spill(void)
 {

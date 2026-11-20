@@ -2751,13 +2751,13 @@ __naked void uninit_slot_counter(void)
  *
  * R7 is always 10 at the real exit. Widening loses the correlation between
  * R6 and R7, leaving R7 in [5, 10] both at the loop header and after the loop.
- * The verifier therefore rejects the possible invalid stack read.
+ * Pass 0 does not prove the read. A later pass peels the trips and does not get to it.
  */
 SEC("xdp")
-__failure
+__success __retval(0)
 __log_level(2)
-__msg("2: {{.*}}R7=scalar(smin=umin=smin32=umin32=5,smax=umax=smax32=umax32=10,var_off=(0x0; 0xf))")
-__msg("7: R7=scalar(smin=umin=smin32=umin32=5,smax=umax=smax32=umax32=10,var_off=(0x0; 0xf))")
+__msg("2: {{.*}}R7=scalar(smin=umin=smin32=umin32=5,smax=umax=smax32=umax32=10,var_off=(0x0; 0xf)")
+__msg("7: R7=scalar(smin=umin=smin32=umin32=5,smax=umax=smax32=umax32=10,var_off=(0x0; 0xf)")
 __msg("invalid read from stack R10 off=0 size=8")
 __naked void conditional_assignment_on_second_iteration(void)
 {
@@ -3387,9 +3387,11 @@ LINKED(dividend_tested, VALID,
 LINKED(operand_is_overwritten, MAP_OOB,
 	"r9 = r7; r9 *= 8; call %[bpf_get_prandom_u32]; r7 = r0; r7 &= 255;"
 	"if r7 > 7 goto out_%=; r1 = r6; r1 += r9;")
-/* a pointer is evaluated below an add only */
-LINKED(pointer_minus_index, __failure,
+/* r7 is 0..63, so 63 - r7 is 0..63 */
+LINKED(pointer_minus_index, VALID,
 	"r1 = r6; r1 += 63; r1 -= r7; if r7 > 63 goto out_%=;" USE_R6)
+LINKED(pointer_minus_index_oob, __failure __msg("R1 min value is"),
+	"r1 = r6; r1 += 63; r1 -= r7; if r7 > 64 goto out_%=;" USE_R6)
 /* r3 is an address as a scalar. r6 + r7 * 2 has the offset [0, 14]: that is not the range of r3 */
 LINKED(offset_of_pointer_is_not_scalar, UNBOUND,
 	"r2 = r7; r2 *= 2; r5 = r6; r5 += r2; r3 = r5; r3 = le64 r3; if r7 > 7 goto out_%=;"
@@ -3418,14 +3420,17 @@ static __naked __noinline __used void name(void)				\
 	"if r3 <= 63 goto +2; r3 = 0; *(u64 *)(r1 + 0) = r3; r0 = 0; exit;"	\
 	::: __clobber_all);							\
 }
-#define CALL(callee)								\
-	"*(u64 *)(r10 - 16) = r8; r1 = r10; r1 += -16; r4 = r1; r2 = r8; r2 >>= 1;"	\
+#define CALL_R2(set_r2, callee)							\
+	"*(u64 *)(r10 - 16) = r8; r1 = r10; r1 += -16; r4 = r1;" set_r2		\
 	"call " #callee "; r2 = *(u64 *)(r10 - 16); r1 = r6; r1 += r2;"
+#define CALL(callee)	CALL_R2("r2 = r8; r2 >>= 1;", callee)
 
 CLAMP(clamp, "")
 LINKED(callee_tests_memory_of_caller, VALID, CALL(clamp))
 CLAMP(store_and_clamp, "*(u64 *)(r1 + 0) = r2;")
-LINKED(callee_writes_memory_of_caller, __failure, CALL(store_and_clamp))
+/* It tests r8 and stores r8 / 2. If r8 is 0..63 then r8 / 2 is 0..31. Else it stores 0. */
+LINKED(callee_writes_memory_of_caller, VALID, CALL(store_and_clamp))
+LINKED(callee_writes_memory_of_caller_oob, MAP_OOB, CALL_R2("r2 = r7;", store_and_clamp))
 /* a store defines the memory */
 CLAMP(store_and_test, "r3 = r2; *(u64 *)(r1 + 0) = r3;")
 LINKED(callee_tests_what_it_stored, VALID, CALL(store_and_test))
@@ -3434,7 +3439,8 @@ CLAMP(store_next_and_clamp, "*(u64 *)(r1 + 8) = r2;")
 LINKED(callee_writes_next_field, VALID, CALL(store_next_and_clamp))
 /* another address base can be another name of the memory */
 CLAMP(store_alias_and_clamp, "*(u64 *)(r4 + 0) = r2;")
-LINKED(callee_writes_through_alias, __failure, CALL(store_alias_and_clamp))
+LINKED(callee_writes_through_alias, VALID, CALL(store_alias_and_clamp))
+LINKED(callee_writes_through_alias_oob, MAP_OOB, CALL_R2("r2 = r7;", store_alias_and_clamp))
 static __naked __noinline __used void clamp_through_r0(void)
 {
 	asm volatile (

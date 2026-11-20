@@ -286,8 +286,7 @@ __naked void mangle_pointer_on_stack_2(void)
 
 SEC("socket")
 __description("unpriv: read pointer from stack in small chunks")
-__failure __msg("invalid size")
-__failure_unpriv
+__success __failure_unpriv __msg_unpriv("invalid size")
 __naked void from_stack_in_small_chunks(void)
 {
 	asm volatile ("					\
