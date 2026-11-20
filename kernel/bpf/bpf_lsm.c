@@ -413,6 +413,8 @@ BTF_ID(func, bpf_lsm_file_alloc_security)
 BTF_ID(func, bpf_lsm_file_free_security)
 BTF_ID(func, bpf_lsm_namespace_init)
 BTF_ID(func, bpf_lsm_namespace_free)
+BTF_ID(func, bpf_lsm_backing_file_alloc)
+BTF_ID(func, bpf_lsm_backing_file_free)
 #ifdef CONFIG_SECURITY_NETWORK
 BTF_ID(func, bpf_lsm_sk_alloc_security)
 BTF_ID(func, bpf_lsm_sk_free_security)
