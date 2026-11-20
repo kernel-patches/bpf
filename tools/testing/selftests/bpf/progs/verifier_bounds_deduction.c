@@ -21,8 +21,11 @@ l0_%=:	r0 -= r1;					\
 
 SEC("socket")
 __description("check deducing bounds from const, 2")
-__success __failure_unpriv
-__msg_unpriv("R1 has pointer with unsupported alu operation")
+__success __success_unpriv
+#ifdef SPEC_V1
+__xlated_unpriv("nospec")
+__xlated_unpriv("r1 -= r0")
+#endif
 __retval(1)
 __naked void deducing_bounds_from_const_2(void)
 {
@@ -53,8 +56,11 @@ l0_%=:	r0 -= r1;					\
 
 SEC("socket")
 __description("check deducing bounds from const, 4")
-__success __failure_unpriv
-__msg_unpriv("R6 has pointer with unsupported alu operation")
+__success __success_unpriv
+#ifdef SPEC_V1
+__xlated_unpriv("nospec")
+__xlated_unpriv("r6 -= r0")
+#endif
 __retval(0)
 __naked void deducing_bounds_from_const_4(void)
 {

@@ -1874,14 +1874,17 @@ __naked void may_goto_stays_in_the_loop(void)
 	);
 }
 
-/* No state is within another one: the walk gets to the end of the loop, no may_goto */
+/* The loop has no trip count and no error asks for peeling: may_goto is added */
 SEC("socket")
 __description("budget: ten trips that differ")
 __success __retval(10) __log_level(2)
-__msg("processed 34 insns")
+__msg("processed {{[0-9][0-9]}} insns")
 __xlated("r8 += 1")
 __xlated("r7 <<= 1")
-__xlated("if r7 != 0x400 goto pc-3")
+__xlated("...")
+__xlated("if r13 == 0x0 goto")
+__xlated("...")
+__xlated("if r7 != 0x400 goto pc-{{[0-9]+}}")
 __naked void ten_trips_that_differ(void)
 {
 	asm volatile (

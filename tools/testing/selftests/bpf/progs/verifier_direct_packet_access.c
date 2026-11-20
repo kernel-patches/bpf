@@ -1060,16 +1060,36 @@ __naked void pkt_add_unknown_keeps_range(void)
 		     "r0 = *(u64*)(r2 + 8);");
 }
 
+#define PKT_ADD_NEGATIVE(off)						\
+	PKT_54_BYTES("if r4 > 8 goto l0_%=;"				\
+		     "r4 += -4;"					\
+		     "r2 += " #off ";"					\
+		     "r2 += r4;"					\
+		     "r0 = *(u8*)(r2 + 0);")
+
+/* The offset is 20 + (-4..4) = 16..24. 54 bytes are checked from the start of the packet. */
 SEC("tc")
 __description("direct packet access: checked pointer plus unknown that may be negative")
-__failure __msg("invalid access to packet, off=16 size=1, R2(id={{[0-9]+}},off=16,r=0)")
-__naked void pkt_add_negative_clears_range(void)
+__success __retval(0)
+__naked void pkt_add_negative(void)
 {
-	PKT_54_BYTES("if r4 > 8 goto l0_%=;"
-		     "r4 += -4;"
-		     "r2 += 20;"
-		     "r2 += r4;"
-		     "r0 = *(u8*)(r2 + 0);");
+	PKT_ADD_NEGATIVE(20);
+}
+
+SEC("tc")
+__description("direct packet access: the same before the packet")
+__failure __msg("R2 min value is negative")
+__naked void pkt_add_negative_below(void)
+{
+	PKT_ADD_NEGATIVE(3);
+}
+
+SEC("tc")
+__description("direct packet access: the same after what is checked")
+__failure __msg("invalid access to packet")
+__naked void pkt_add_negative_above(void)
+{
+	PKT_ADD_NEGATIVE(50);
 }
 
 /* The byte is in the packet, but a range that umax gets to is not kept */
