@@ -627,7 +627,7 @@ static void __init arch_reserve_crashkernel(void)
 	}
 
 	reserve_crashkernel_generic(crash_size, crash_base, low_size, high);
-	reserve_crashkernel_cma(cma_size);
+	crashkernel_cma_set_size(cma_size);
 }
 
 static struct resource standard_io_resources[] = {
