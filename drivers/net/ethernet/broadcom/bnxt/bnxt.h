@@ -2507,6 +2507,11 @@ struct bnxt {
 	 * rather than being our own default placement.
 	 */
 	unsigned long		*ring_affinity_set;
+	/* NUMA node of the first online CPU in the affinity mask if it was
+	 * configured explicitly by the user, otherwise NUMA_NO_NODE.
+	 * Written by the IRQ affinity notifier, readers must use READ_ONCE().
+	 */
+	int			*ring_nid;
 	int			max_irqs;
 	int			total_irqs;
 	int			ulp_num_msix_want;

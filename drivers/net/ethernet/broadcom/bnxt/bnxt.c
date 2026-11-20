@@ -3903,6 +3903,20 @@ static int bnxt_alloc_ring(struct bnxt *bp, struct bnxt_ring_mem_info *rmem)
 	return 0;
 }
 
+/* Node of the CPU expected to service cp ring @n. If user did not configure
+ * the affinity explicitly, use the default spread (historic behavior).
+ */
+static int bnxt_cp_num_to_node(struct bnxt *bp, int n)
+{
+	int nid = READ_ONCE(bp->ring_nid[n]);
+	unsigned int cpu;
+
+	if (nid != NUMA_NO_NODE)
+		return nid;
+	cpu = cpumask_local_spread(n, dev_to_node(&bp->pdev->dev));
+	return cpu_to_node(cpu);
+}
+
 static void bnxt_free_one_tpa_info(struct bnxt *bp,
 				   struct bnxt_rx_ring_info *rxr)
 {
@@ -4105,8 +4119,7 @@ static int bnxt_alloc_rx_agg_bmap(struct bnxt *bp, struct bnxt_rx_ring_info *rxr
 
 static int bnxt_alloc_rx_rings(struct bnxt *bp)
 {
-	int numa_node = dev_to_node(&bp->pdev->dev);
-	int i, rc = 0, agg_rings = 0, cpu;
+	int i, rc = 0, agg_rings = 0;
 
 	if (!bp->rx_ring)
 		return -ENOMEM;
@@ -4121,8 +4134,7 @@ static int bnxt_alloc_rx_rings(struct bnxt *bp)
 
 		ring = &rxr->rx_ring_struct;
 
-		cpu = cpumask_local_spread(i, numa_node);
-		cpu_node = cpu_to_node(cpu);
+		cpu_node = bnxt_cp_num_to_node(bp, i);
 		netdev_dbg(bp->dev, "Allocating page pool for rx_ring[%d] on numa_node: %d\n",
 			   i, cpu_node);
 		rc = bnxt_alloc_rx_page_pool(bp, rxr, cpu_node);
@@ -11997,12 +12009,22 @@ static void bnxt_irq_affinity_notify(struct irq_affinity_notify *notify,
 				     const cpumask_t *mask)
 {
 	struct bnxt_irq *irq;
+	unsigned int cpu;
+	int nid;
 	u16 tag;
 
 	irq = container_of(notify, struct bnxt_irq, affinity_notify);
 
 	cpumask_copy(irq->bp->ring_cpu_mask[irq->ring_nr], mask);
 	set_bit(irq->ring_nr, irq->bp->ring_affinity_set);
+
+	/* Readers can't access ring_cpu_mask atomically, so pre-compute
+	 * the info they care about (NUMA node, TPH tag) and store it
+	 * with WRITE_ONCE().
+	 */
+	cpu = cpumask_first_and(mask, cpu_online_mask);
+	nid = cpu < nr_cpu_ids ? cpu_to_node(cpu) : NUMA_NO_NODE;
+	WRITE_ONCE(irq->bp->ring_nid[irq->ring_nr], nid);
 
 #ifdef CONFIG_RFS_ACCEL
 	if (irq->bp->dev->rx_cpu_rmap && irq->ring_nr < irq->bp->rx_nr_rings) {
@@ -12081,9 +12103,15 @@ static int bnxt_alloc_ring_cpu_masks(struct bnxt *bp)
 	if (!bp->ring_affinity_set)
 		return -ENOMEM;
 
-	for (i = 0; i < bp->max_irqs; i++)
+	bp->ring_nid = kmalloc_objs(*bp->ring_nid, bp->max_irqs);
+	if (!bp->ring_nid)
+		return -ENOMEM;
+
+	for (i = 0; i < bp->max_irqs; i++) {
 		if (!zalloc_cpumask_var(&bp->ring_cpu_mask[i], GFP_KERNEL))
 			return -ENOMEM;
+		bp->ring_nid[i] = NUMA_NO_NODE;
+	}
 
 	return 0;
 }
@@ -12098,6 +12126,8 @@ static void bnxt_free_ring_cpu_masks(struct bnxt *bp)
 	for (i = 0; i < bp->max_irqs; i++)
 		free_cpumask_var(bp->ring_cpu_mask[i]);
 
+	kfree(bp->ring_nid);
+	bp->ring_nid = NULL;
 	bitmap_free(bp->ring_affinity_set);
 	bp->ring_affinity_set = NULL;
 	kfree(bp->ring_cpu_mask);
@@ -12193,6 +12223,7 @@ static int bnxt_request_irq(struct bnxt *bp)
 		if (!test_bit(i, bp->ring_affinity_set) ||
 		    !cpumask_intersects(cpu_mask, cpu_online_mask)) {
 			clear_bit(i, bp->ring_affinity_set);
+			WRITE_ONCE(bp->ring_nid[i], NUMA_NO_NODE);
 			cpumask_clear(cpu_mask);
 			cpumask_set_cpu(cpumask_local_spread(i, numa_node),
 					cpu_mask);
@@ -16581,7 +16612,7 @@ static int bnxt_queue_mem_alloc(struct net_device *dev,
 	struct bnxt_rx_ring_info *rxr, *clone;
 	struct bnxt *bp = netdev_priv(dev);
 	struct bnxt_ring_struct *ring;
-	int rc;
+	int nid, rc;
 
 	if (!bp->rx_ring)
 		return -ENETDOWN;
@@ -16602,7 +16633,8 @@ static int bnxt_queue_mem_alloc(struct net_device *dev,
 	clone->rx_tpa = NULL;
 	clone->rx_tpa_idx_map = NULL;
 
-	rc = bnxt_alloc_rx_page_pool(bp, clone, rxr->page_pool->p.nid);
+	nid = bnxt_cp_num_to_node(bp, idx);
+	rc = bnxt_alloc_rx_page_pool(bp, clone, nid);
 	if (rc)
 		return rc;
 
