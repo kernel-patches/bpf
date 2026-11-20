@@ -479,4 +479,7 @@ LIBBPF_1.9.0 {
 		bpf_program__load;
 		bpf_program__load_strategy;
 		bpf_program__set_load_strategy;
+		ring_buffer_iter_destroy;
+		ring_buffer_iter_new;
+		ring_buffer_iter_next;
 } LIBBPF_1.8.0;
