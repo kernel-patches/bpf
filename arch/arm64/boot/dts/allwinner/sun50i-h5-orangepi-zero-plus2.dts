@@ -66,10 +66,6 @@
 	status = "okay";
 };
 
-&ehci0 {
-	status = "okay";
-};
-
 &hdmi {
 	status = "okay";
 };
@@ -112,10 +108,6 @@
 	bus-width = <8>;
 	non-removable;
 	cap-mmc-hw-reset;
-	status = "okay";
-};
-
-&ohci0 {
 	status = "okay";
 };
 
