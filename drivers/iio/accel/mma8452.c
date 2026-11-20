@@ -83,6 +83,8 @@
 #define  MMA8452_CTRL_REG2_RST			BIT(6)
 #define  MMA8452_CTRL_REG2_MODS_SHIFT		3
 #define  MMA8452_CTRL_REG2_MODS_MASK		0x1b
+#define MMA8452_CTRL_REG3			0x2c
+#define  MMA8452_CTRL_REG3_PP_OD		BIT(0)
 #define MMA8452_CTRL_REG4			0x2d
 #define MMA8452_CTRL_REG5			0x2e
 #define MMA8452_OFF_X				0x2f
@@ -104,38 +106,57 @@
 
 #define MMA8452_AUTO_SUSPEND_DELAY_MS		2000
 
+/**
+ * struct mma8452_data - IIO device private data structure
+ * @client:			the I2C client object
+ * @lock:			mutex for synchronization of register
+ *				read-modify-write sequences and holding chip in
+ *				STANDBY mode while writing to registers
+ * @orientation:		mounting matrix, flipped axis etc.
+ * @chip_info:			chip specific data
+ * @regs:			reference to voltage regulators
+ * @trig:			data ready trigger, if an interrupt is available
+ * @buffer:			triggered buffer
+ * @sleep_val:			time in ms to sleep while waiting for drdy
+ * @ctrl_reg1:			CTRL_REG1 register shadow value
+ * @data_cfg:			DATA_CFG register shadow value
+ * @open_drain:			true for irq pin in open-drain mode
+ */
 struct mma8452_data {
 	struct i2c_client *client;
 	struct mutex lock;
 	struct iio_mount_matrix orientation;
-	u8 ctrl_reg1;
-	u8 data_cfg;
 	const struct mma_chip_info *chip_info;
-	int sleep_val;
 	struct regulator_bulk_data regs[2];
+	struct iio_trigger *trig;
 
 	/* Ensure correct alignment of time stamp when present */
 	struct {
 		__be16 channels[3];
 		aligned_s64 ts;
 	} buffer;
+
+	int sleep_val;
+	u8 ctrl_reg1;
+	u8 data_cfg;
+	bool open_drain;
 };
 
- /**
-  * struct mma8452_event_regs - chip specific data related to events
-  * @ev_cfg:			event config register address
-  * @ev_cfg_ele:			latch bit in event config register
-  * @ev_cfg_chan_shift:		number of the bit to enable events in X
-  *				direction; in event config register
-  * @ev_src:			event source register address
-  * @ev_ths:			event threshold register address
-  * @ev_ths_mask:		mask for the threshold value
-  * @ev_count:			event count (period) register address
-  *
-  * Since not all chips supported by the driver support comparing high pass
-  * filtered data for events (interrupts), different interrupt sources are
-  * used for different chips and the relevant registers are included here.
-  */
+/**
+ * struct mma8452_event_regs - chip specific data related to events
+ * @ev_cfg:			event config register address
+ * @ev_cfg_ele:			latch bit in event config register
+ * @ev_cfg_chan_shift:		number of the bit to enable events in X
+ *				direction; in event config register
+ * @ev_src:			event source register address
+ * @ev_ths:			event threshold register address
+ * @ev_ths_mask:		mask for the threshold value
+ * @ev_count:			event count (period) register address
+ *
+ * Since not all chips supported by the driver support comparing high pass
+ * filtered data for events (interrupts), different interrupt sources are
+ * used for different chips and the relevant registers are included here.
+ */
 struct mma8452_event_regs {
 	u8 ev_cfg;
 	u8 ev_cfg_ele;
@@ -242,21 +263,25 @@ static int mma8452_set_runtime_pm_state(struct i2c_client *client, bool on)
 
 static int mma8452_read(struct mma8452_data *data, __be16 buf[3])
 {
-	int ret = mma8452_drdy(data);
-
-	if (ret < 0)
-		return ret;
+	int ret;
 
 	ret = mma8452_set_runtime_pm_state(data->client, true);
 	if (ret)
 		return ret;
 
+	ret = mma8452_drdy(data);
+	if (ret < 0)
+		goto out_runtime_put;
+
 	ret = i2c_smbus_read_i2c_block_data(data->client, MMA8452_OUT_X,
 					    3 * sizeof(__be16), (u8 *)buf);
 	if (ret < 0)
-		return ret;
+		goto out_runtime_put;
 
-	ret = mma8452_set_runtime_pm_state(data->client, false);
+	return mma8452_set_runtime_pm_state(data->client, false);
+
+out_runtime_put:
+	mma8452_set_runtime_pm_state(data->client, false);
 
 	return ret;
 }
@@ -640,6 +665,22 @@ static int mma8452_set_power_mode(struct mma8452_data *data, u8 mode)
 	reg |= mode << MMA8452_CTRL_REG2_MODS_SHIFT;
 
 	return mma8452_change_config(data, MMA8452_CTRL_REG2, reg);
+}
+
+static int mma8452_set_interrupt_pin_mode(struct mma8452_data *data)
+{
+	int reg;
+
+	reg = i2c_smbus_read_byte_data(data->client, MMA8452_CTRL_REG3);
+	if (reg < 0)
+		return reg;
+
+	if (data->open_drain)
+		reg |= MMA8452_CTRL_REG3_PP_OD;
+	else
+		reg &= ~MMA8452_CTRL_REG3_PP_OD;
+
+	return i2c_smbus_write_byte_data(data->client, MMA8452_CTRL_REG3, reg);
 }
 
 /* returns >0 if in freefall mode, 0 if not or <0 if an error occurred */
@@ -1058,7 +1099,7 @@ static irqreturn_t mma8452_interrupt(int irq, void *p)
 		return IRQ_NONE;
 
 	if (src & MMA8452_INT_DRDY) {
-		iio_trigger_poll_nested(indio_dev->trig);
+		iio_trigger_poll_nested(data->trig);
 		ret = IRQ_HANDLED;
 	}
 
@@ -1487,6 +1528,7 @@ static int mma8452_trigger_setup(struct iio_dev *indio_dev)
 	if (ret)
 		return ret;
 
+	data->trig = trig;
 	indio_dev->trig = iio_trigger_get(trig);
 
 	return 0;
@@ -1494,8 +1536,10 @@ static int mma8452_trigger_setup(struct iio_dev *indio_dev)
 
 static void mma8452_trigger_cleanup(struct iio_dev *indio_dev)
 {
-	if (indio_dev->trig)
-		iio_trigger_unregister(indio_dev->trig);
+	struct mma8452_data *data = iio_priv(indio_dev);
+
+	if (data->trig)
+		iio_trigger_unregister(data->trig);
 }
 
 static int mma8452_reset(struct i2c_client *client)
@@ -1555,7 +1599,7 @@ static int mma8452_probe(struct i2c_client *client)
 
 	data->chip_info = i2c_get_match_data(client);
 	if (!data->chip_info)
-		return dev_err_probe(dev, -ENODEV, "unknown device model\n");
+		return dev_err_probe(dev, -ENODATA, "unknown device model\n");
 
 	ret = iio_read_mount_matrix(dev, &data->orientation);
 	if (ret)
@@ -1648,6 +1692,11 @@ static int mma8452_probe(struct i2c_client *client)
 			goto disable_regulators;
 	}
 
+	data->open_drain = device_property_read_bool(dev, "drive-open-drain");
+	ret = mma8452_set_interrupt_pin_mode(data);
+	if (ret)
+		goto trigger_cleanup;
+
 	data->ctrl_reg1 = MMA8452_CTRL_ACTIVE |
 			  (MMA8452_CTRL_DR_DEFAULT << MMA8452_CTRL_DR_SHIFT);
 
@@ -1664,9 +1713,16 @@ static int mma8452_probe(struct i2c_client *client)
 		goto trigger_cleanup;
 
 	if (client->irq) {
+		unsigned long irq_flags;
+
+		irq_flags = irq_get_trigger_type(client->irq);
+		if (irq_flags == IRQ_TYPE_NONE) {
+			dev_info(dev, "invalid irq type, setting default active low\n");
+			irq_flags = IRQF_TRIGGER_LOW;
+		}
+		irq_flags |= IRQF_ONESHOT;
 		ret = request_threaded_irq(client->irq, NULL, mma8452_interrupt,
-					   IRQF_TRIGGER_LOW | IRQF_ONESHOT,
-					   client->name, indio_dev);
+					   irq_flags, client->name, indio_dev);
 		if (ret)
 			goto buffer_cleanup;
 	}
@@ -1681,7 +1737,7 @@ static int mma8452_probe(struct i2c_client *client)
 
 	ret = iio_device_register(indio_dev);
 	if (ret < 0)
-		goto free_irq;
+		goto runtime_suspend;
 
 	ret = mma8452_set_freefall_mode(data, false);
 	if (ret < 0)
@@ -1691,6 +1747,10 @@ static int mma8452_probe(struct i2c_client *client)
 
 unregister_device:
 	iio_device_unregister(indio_dev);
+
+runtime_suspend:
+	pm_runtime_disable(dev);
+	pm_runtime_set_suspended(dev);
 
 free_irq:
 	if (client->irq)
@@ -1763,6 +1823,10 @@ static int mma8452_runtime_resume(struct device *dev)
 		dev_err(dev, "failed to enable regulators\n");
 		return ret;
 	}
+
+	ret = mma8452_set_interrupt_pin_mode(data);
+	if (ret)
+		goto runtime_resume_failed;
 
 	ret = mma8452_active(data);
 	if (ret < 0)

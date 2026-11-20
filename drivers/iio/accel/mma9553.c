@@ -1122,7 +1122,6 @@ static int mma9553_probe(struct i2c_client *client)
 	return 0;
 
 err_pm_cleanup:
-	pm_runtime_dont_use_autosuspend(&client->dev);
 	pm_runtime_disable(&client->dev);
 out_poweroff:
 	mma9551_set_device_state(client, false);
@@ -1136,7 +1135,6 @@ static void mma9553_remove(struct i2c_client *client)
 
 	iio_device_unregister(indio_dev);
 
-	pm_runtime_dont_use_autosuspend(&client->dev);
 	pm_runtime_disable(&client->dev);
 	pm_runtime_set_suspended(&client->dev);
 
@@ -1209,7 +1207,7 @@ static const struct dev_pm_ops mma9553_pm_ops = {
 };
 
 static const struct acpi_device_id mma9553_acpi_match[] = {
-	{"MMA9553", 0},
+	{ .id = "MMA9553" },
 	{ }
 };
 

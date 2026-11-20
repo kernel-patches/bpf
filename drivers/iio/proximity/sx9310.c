@@ -446,11 +446,10 @@ static int sx9310_read_hysteresis(struct sx_common_data *data,
 		return ret;
 
 	regval = FIELD_GET(SX9310_REG_PROX_CTRL10_HYST_MASK, regval);
-	if (!regval)
-		regval = 5;
-
-	/* regval is at most 5 */
-	*val = pthresh >> (5 - regval);
+	if (regval)
+		*val = pthresh >> (5 - regval);
+	else
+		*val = 0;
 
 	return IIO_VAL_INT;
 }
@@ -665,16 +664,23 @@ static int sx9310_write_gain(struct sx_common_data *data,
 {
 	unsigned int gain, mask;
 
+	if (val <= 0)
+		return -ERANGE;
+
 	gain = ilog2(val);
 
 	switch (chan->channel) {
 	case 0:
 	case 3:
+		if (!FIELD_FIT(SX9310_REG_PROX_CTRL3_GAIN0_MASK, gain))
+			return -ERANGE;
 		mask = SX9310_REG_PROX_CTRL3_GAIN0_MASK;
 		gain = FIELD_PREP(SX9310_REG_PROX_CTRL3_GAIN0_MASK, gain);
 		break;
 	case 1:
 	case 2:
+		if (!FIELD_FIT(SX9310_REG_PROX_CTRL3_GAIN12_MASK, gain))
+			return -ERANGE;
 		mask = SX9310_REG_PROX_CTRL3_GAIN12_MASK;
 		gain = FIELD_PREP(SX9310_REG_PROX_CTRL3_GAIN12_MASK, gain);
 		break;
@@ -855,7 +861,8 @@ sx9310_get_default_reg(struct device *dev, int idx,
 		if (ret) {
 			raw = FIELD_GET(SX9310_REG_PROX_CTRL5_RAWFILT_MASK,
 					reg_def->def);
-		} else {
+		} else if (raw) {
+			/* 0 means off; 2, 4 and 8 are codes 1 to 3. */
 			raw = ilog2(raw);
 		}
 
@@ -992,8 +999,8 @@ static const struct sx931x_info sx9311_info = {
 };
 
 static const struct acpi_device_id sx9310_acpi_match[] = {
-	{ "STH9310", (kernel_ulong_t)&sx9310_info },
-	{ "STH9311", (kernel_ulong_t)&sx9311_info },
+	{ .id = "STH9310", .driver_data = (kernel_ulong_t)&sx9310_info },
+	{ .id = "STH9311", .driver_data = (kernel_ulong_t)&sx9311_info },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, sx9310_acpi_match);

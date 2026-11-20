@@ -331,7 +331,7 @@ static int adux1020_measure(struct adux1020_data *data,
 		if (ret < 0)
 			return ret;
 
-		status &= ADUX1020_FIFO_STATUS_MASK;
+		status = FIELD_GET(ADUX1020_FIFO_STATUS_MASK, status);
 		if (status >= adux1020_modes[mode].bytes)
 			break;
 		msleep(20);
@@ -414,6 +414,10 @@ static int adux1020_read_raw(struct iio_dev *indio_dev,
 				goto fail;
 
 			regval = FIELD_GET(ADUX1020_PROX_FREQ_MASK, regval);
+			if (regval >= ARRAY_SIZE(adux1020_rates)) {
+				ret = -EINVAL;
+				goto fail;
+			}
 
 			*val = adux1020_rates[regval][0];
 			*val2 = adux1020_rates[regval][1];

@@ -637,7 +637,7 @@ static irqreturn_t mpu3050_trigger_handler(int irq, void *p)
 		goto out_trigger_unlock;
 	}
 
-	iio_push_to_buffers_with_timestamp(indio_dev, &scan, timestamp);
+	iio_push_to_buffers_with_ts(indio_dev, &scan, sizeof(scan), timestamp);
 
 out_trigger_unlock:
 	mutex_unlock(&mpu3050->lock);
@@ -701,6 +701,8 @@ static const struct iio_chan_spec_ext_info mpu3050_ext_info[] = {
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |		\
 			BIT(IIO_CHAN_INFO_CALIBBIAS),			\
 		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE),	\
+		.info_mask_shared_by_type_available =			\
+			BIT(IIO_CHAN_INFO_SCALE),			\
 		.info_mask_shared_by_all = BIT(IIO_CHAN_INFO_SAMP_FREQ),\
 		.ext_info = mpu3050_ext_info,				\
 		.scan_index = index,					\
@@ -736,29 +738,33 @@ static const struct iio_chan_spec mpu3050_channels[] = {
 /* Four channels apart from timestamp, scan mask = 0x0f */
 static const unsigned long mpu3050_scan_masks[] = { 0xf, 0 };
 
-/*
- * These are just the hardcoded factors resulting from the more elaborate
- * calculations done with fractions in the scale raw get/set functions.
- */
-static IIO_CONST_ATTR(anglevel_scale_available,
-		      "0.000122070 "
-		      "0.000274658 "
-		      "0.000518798 "
-		      "0.001068115");
-
-static struct attribute *mpu3050_attributes[] = {
-	&iio_const_attr_anglevel_scale_available.dev_attr.attr,
-	NULL,
+static const int mpu3050_scale_avail[] = {
+	IIO_DEGREE_TO_RAD(250) * 2, U16_MAX,
+	IIO_DEGREE_TO_RAD(500) * 2, U16_MAX,
+	IIO_DEGREE_TO_RAD(1000) * 2, U16_MAX,
+	IIO_DEGREE_TO_RAD(2000) * 2, U16_MAX,
 };
 
-static const struct attribute_group mpu3050_attribute_group = {
-	.attrs = mpu3050_attributes,
-};
+static int mpu3050_read_avail(struct iio_dev *indio_dev,
+			      struct iio_chan_spec const *chan,
+			      const int **vals, int *type, int *length,
+			      long mask)
+{
+	switch (mask) {
+	case IIO_CHAN_INFO_SCALE:
+		*vals = mpu3050_scale_avail;
+		*type = IIO_VAL_FRACTIONAL;
+		*length = ARRAY_SIZE(mpu3050_scale_avail);
+		return IIO_AVAIL_LIST;
+	default:
+		return -EINVAL;
+	}
+}
 
 static const struct iio_info mpu3050_info = {
 	.read_raw = mpu3050_read_raw,
 	.write_raw = mpu3050_write_raw,
-	.attrs = &mpu3050_attribute_group,
+	.read_avail = mpu3050_read_avail,
 };
 
 /**
@@ -946,6 +952,121 @@ static irqreturn_t mpu3050_irq_thread(int irq, void *p)
 }
 
 /**
+ * mpu3050_drdy_trigger_enable() - enable the data ready trigger
+ * @mpu3050: device to configure
+ *
+ * Power up the device, enable the FIFO and configure the data ready
+ * interrupt.
+ */
+static int mpu3050_drdy_trigger_enable(struct mpu3050 *mpu3050)
+{
+	unsigned int val;
+	int ret;
+
+	ret = pm_runtime_resume_and_get(mpu3050->dev);
+	if (ret)
+		return ret;
+
+	mpu3050->hw_irq_trigger = true;
+
+	/* Disable all things in the FIFO */
+	ret = regmap_write(mpu3050->map, MPU3050_FIFO_EN, 0);
+	if (ret)
+		goto err_put_pm;
+
+	/* Reset and enable the FIFO */
+	ret = regmap_set_bits(mpu3050->map, MPU3050_USR_CTRL,
+			      MPU3050_USR_CTRL_FIFO_EN |
+			      MPU3050_USR_CTRL_FIFO_RST);
+	if (ret)
+		goto err_put_pm;
+
+	mpu3050->pending_fifo_footer = false;
+
+	/* Turn on the FIFO for temp+X+Y+Z */
+	ret = regmap_write(mpu3050->map, MPU3050_FIFO_EN,
+			   MPU3050_FIFO_EN_TEMP_OUT |
+			   MPU3050_FIFO_EN_GYRO_XOUT |
+			   MPU3050_FIFO_EN_GYRO_YOUT |
+			   MPU3050_FIFO_EN_GYRO_ZOUT |
+			   MPU3050_FIFO_EN_FOOTER);
+	if (ret)
+		goto err_put_pm;
+
+	/* Configure the sample engine */
+	ret = mpu3050_start_sampling(mpu3050);
+	if (ret)
+		goto err_put_pm;
+
+	/* Clear IRQ flag */
+	ret = regmap_read(mpu3050->map, MPU3050_INT_STATUS, &val);
+	if (ret)
+		goto err_put_pm;
+
+	/* Give us interrupts whenever there is new data ready */
+	val = MPU3050_INT_RAW_RDY_EN;
+
+	if (mpu3050->irq_actl)
+		val |= MPU3050_INT_ACTL;
+	if (mpu3050->irq_latch)
+		val |= MPU3050_INT_LATCH_EN;
+	if (mpu3050->irq_opendrain)
+		val |= MPU3050_INT_OPEN;
+
+	ret = regmap_write(mpu3050->map, MPU3050_INT_CFG, val);
+	if (ret)
+		goto err_put_pm;
+
+	return 0;
+
+err_put_pm:
+	pm_runtime_put_autosuspend(mpu3050->dev);
+	mpu3050->hw_irq_trigger = false;
+
+	return ret;
+}
+
+/**
+ * mpu3050_drdy_trigger_disable() - disable the data ready trigger
+ * @mpu3050: device to configure
+ *
+ * Disable the data ready interrupt, flush the FIFO and drop the
+ * runtime PM reference taken in mpu3050_drdy_trigger_enable().
+ */
+static int mpu3050_drdy_trigger_disable(struct mpu3050 *mpu3050)
+{
+	unsigned int val;
+	int ret;
+
+	/* Disable all interrupts */
+	ret = regmap_write(mpu3050->map,
+			   MPU3050_INT_CFG,
+			   0);
+	if (ret)
+		dev_err(mpu3050->dev, "error disabling IRQ\n");
+
+	/* Clear IRQ flag */
+	ret = regmap_read(mpu3050->map, MPU3050_INT_STATUS, &val);
+	if (ret)
+		dev_err(mpu3050->dev, "error clearing IRQ status\n");
+
+	/* Disable all things in the FIFO and reset it */
+	ret = regmap_write(mpu3050->map, MPU3050_FIFO_EN, 0);
+	if (ret)
+		dev_err(mpu3050->dev, "error disabling FIFO\n");
+
+	ret = regmap_write(mpu3050->map, MPU3050_USR_CTRL,
+			   MPU3050_USR_CTRL_FIFO_RST);
+	if (ret)
+		dev_err(mpu3050->dev, "error resetting FIFO\n");
+
+	pm_runtime_put_autosuspend(mpu3050->dev);
+	mpu3050->hw_irq_trigger = false;
+
+	return 0;
+}
+
+/**
  * mpu3050_drdy_trigger_set_state() - set data ready interrupt state
  * @trig: trigger instance
  * @enable: true if trigger should be enabled, false to disable
@@ -955,92 +1076,11 @@ static int mpu3050_drdy_trigger_set_state(struct iio_trigger *trig,
 {
 	struct iio_dev *indio_dev = iio_trigger_get_drvdata(trig);
 	struct mpu3050 *mpu3050 = iio_priv(indio_dev);
-	unsigned int val;
-	int ret;
 
-	/* Disabling trigger: disable interrupt and return */
-	if (!enable) {
-		/* Disable all interrupts */
-		ret = regmap_write(mpu3050->map,
-				   MPU3050_INT_CFG,
-				   0);
-		if (ret)
-			dev_err(mpu3050->dev, "error disabling IRQ\n");
-
-		/* Clear IRQ flag */
-		ret = regmap_read(mpu3050->map, MPU3050_INT_STATUS, &val);
-		if (ret)
-			dev_err(mpu3050->dev, "error clearing IRQ status\n");
-
-		/* Disable all things in the FIFO and reset it */
-		ret = regmap_write(mpu3050->map, MPU3050_FIFO_EN, 0);
-		if (ret)
-			dev_err(mpu3050->dev, "error disabling FIFO\n");
-
-		ret = regmap_write(mpu3050->map, MPU3050_USR_CTRL,
-				   MPU3050_USR_CTRL_FIFO_RST);
-		if (ret)
-			dev_err(mpu3050->dev, "error resetting FIFO\n");
-
-		pm_runtime_put_autosuspend(mpu3050->dev);
-		mpu3050->hw_irq_trigger = false;
-
-		return 0;
-	} else {
-		/* Else we're enabling the trigger from this point */
-		pm_runtime_get_sync(mpu3050->dev);
-		mpu3050->hw_irq_trigger = true;
-
-		/* Disable all things in the FIFO */
-		ret = regmap_write(mpu3050->map, MPU3050_FIFO_EN, 0);
-		if (ret)
-			return ret;
-
-		/* Reset and enable the FIFO */
-		ret = regmap_set_bits(mpu3050->map, MPU3050_USR_CTRL,
-				      MPU3050_USR_CTRL_FIFO_EN |
-				      MPU3050_USR_CTRL_FIFO_RST);
-		if (ret)
-			return ret;
-
-		mpu3050->pending_fifo_footer = false;
-
-		/* Turn on the FIFO for temp+X+Y+Z */
-		ret = regmap_write(mpu3050->map, MPU3050_FIFO_EN,
-				   MPU3050_FIFO_EN_TEMP_OUT |
-				   MPU3050_FIFO_EN_GYRO_XOUT |
-				   MPU3050_FIFO_EN_GYRO_YOUT |
-				   MPU3050_FIFO_EN_GYRO_ZOUT |
-				   MPU3050_FIFO_EN_FOOTER);
-		if (ret)
-			return ret;
-
-		/* Configure the sample engine */
-		ret = mpu3050_start_sampling(mpu3050);
-		if (ret)
-			return ret;
-
-		/* Clear IRQ flag */
-		ret = regmap_read(mpu3050->map, MPU3050_INT_STATUS, &val);
-		if (ret)
-			dev_err(mpu3050->dev, "error clearing IRQ status\n");
-
-		/* Give us interrupts whenever there is new data ready */
-		val = MPU3050_INT_RAW_RDY_EN;
-
-		if (mpu3050->irq_actl)
-			val |= MPU3050_INT_ACTL;
-		if (mpu3050->irq_latch)
-			val |= MPU3050_INT_LATCH_EN;
-		if (mpu3050->irq_opendrain)
-			val |= MPU3050_INT_OPEN;
-
-		ret = regmap_write(mpu3050->map, MPU3050_INT_CFG, val);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
+	if (enable)
+		return mpu3050_drdy_trigger_enable(mpu3050);
+	else
+		return mpu3050_drdy_trigger_disable(mpu3050);
 }
 
 static const struct iio_trigger_ops mpu3050_trigger_ops = {
