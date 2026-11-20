@@ -1207,6 +1207,14 @@ static bool check_mft_mirror(struct ntfs_volume *vol)
 			++index;
 		}
 
+		/*
+		 * Windows 10 may leave mirror records beyond the system files
+		 * stale.  Read the full mirror to map its runlist, but only
+		 * compare the system records, as ntfs-3g does.
+		 */
+		if (i >= FILE_first_user)
+			goto next_record;
+
 		/* Do not check the record if it is not in use. */
 		if (((struct mft_record *)kmft)->flags & MFT_RECORD_IN_USE) {
 			/* Make sure the record is ok. */
@@ -1250,6 +1258,7 @@ mft_unmap_out:
 				   i);
 			goto mm_unmap_out;
 		}
+next_record:
 		kmft += vol->mft_record_size;
 		kmirr += vol->mft_record_size;
 	} while (++i < vol->mftmirr_size);
