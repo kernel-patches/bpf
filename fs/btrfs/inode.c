@@ -1440,6 +1440,8 @@ static noinline int cow_file_range(struct btrfs_inode *inode,
 	return ret;
 
 out_unlock:
+	mapping_set_error(inode->vfs_inode.i_mapping, ret);
+
 	/*
 	 * Now, we have three regions to clean up:
 	 *
@@ -1461,9 +1463,6 @@ out_unlock:
 	if (orig_start < start) {
 		clear_bits = EXTENT_LOCKED | EXTENT_DELALLOC;
 		page_ops = PAGE_UNLOCK | PAGE_START_WRITEBACK | PAGE_END_WRITEBACK;
-
-		if (!locked_folio)
-			mapping_set_error(inode->vfs_inode.i_mapping, ret);
 
 		btrfs_cleanup_ordered_extents(inode, orig_start, start - orig_start);
 		extent_clear_unlock_delalloc(inode, orig_start, start - 1,
