@@ -18,7 +18,7 @@ static struct kprobe kp = {
 	.symbol_name = "cmdline_proc_show",
 };
 
-static int __init kprobe_init(void)
+static int __init cmdline_kp_init(void)
 {
 	if (has_post_handler)
 		kp.post_handler = post_handler;
@@ -26,13 +26,13 @@ static int __init kprobe_init(void)
 	return register_kprobe(&kp);
 }
 
-static void __exit kprobe_exit(void)
+static void __exit cmdline_kp_exit(void)
 {
 	unregister_kprobe(&kp);
 }
 
-module_init(kprobe_init)
-module_exit(kprobe_exit)
+module_init(cmdline_kp_init)
+module_exit(cmdline_kp_exit)
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Michael Vetter <mvetter@suse.com>");
-MODULE_DESCRIPTION("Livepatch test: kprobe function");
+MODULE_DESCRIPTION("Livepatch test: cmdline kprobe");
