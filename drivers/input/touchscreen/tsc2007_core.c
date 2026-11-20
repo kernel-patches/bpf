@@ -25,7 +25,6 @@
 #include <linux/i2c.h>
 #include <linux/math64.h>
 #include <linux/property.h>
-#include <linux/platform_data/tsc2007.h>
 #include "tsc2007.h"
 
 int tsc2007_xfer(struct tsc2007 *tsc, u8 cmd)
@@ -83,7 +82,7 @@ u32 tsc2007_calculate_resistance(struct tsc2007 *tsc, struct ts_event *tc)
 
 	if (rt > U32_MAX)
 		return U32_MAX;
-	return (u32) rt;
+	return rt;
 }
 
 bool tsc2007_is_pen_down(struct tsc2007 *ts)
@@ -97,15 +96,15 @@ bool tsc2007_is_pen_down(struct tsc2007 *ts)
 	 *
 	 * The only safe way to check for the pen up condition is in the
 	 * work function by reading the pen signal state (it's a GPIO
-	 * and IRQ). Unfortunately such callback is not always available,
-	 * in that case we assume that the pen is down and expect caller
-	 * to fall back on the pressure reading.
+	 * and IRQ). When the GPIO is not available, we assume that the
+	 * pen is down and expect caller to fall back on the pressure
+	 * reading.
 	 */
 
-	if (!ts->get_pendown_state)
+	if (!ts->gpiod)
 		return true;
 
-	return ts->get_pendown_state(&ts->client->dev);
+	return gpiod_get_value_cansleep(ts->gpiod);
 }
 
 static irqreturn_t tsc2007_soft_irq(int irq, void *handle)
@@ -116,7 +115,6 @@ static irqreturn_t tsc2007_soft_irq(int irq, void *handle)
 	u32 rt;
 
 	while (!ts->stopped && tsc2007_is_pen_down(ts)) {
-
 		/* pen is down, continue with the measurement */
 
 		/* Serialize access between the ISR and IIO reads. */
@@ -126,11 +124,11 @@ static irqreturn_t tsc2007_soft_irq(int irq, void *handle)
 
 		rt = tsc2007_calculate_resistance(ts, &tc);
 
-		if (!rt && !ts->get_pendown_state) {
+		if (!rt && !ts->gpiod) {
 			/*
 			 * If pressure reported is 0 and we don't have
-			 * callback to check pendown state, we have to
-			 * assume that pen was lifted up.
+			 * GPIO to check pendown state, we have to assume
+			 * that pen was lifted up.
 			 */
 			break;
 		}
@@ -166,20 +164,15 @@ static irqreturn_t tsc2007_soft_irq(int irq, void *handle)
 	input_report_abs(input, ABS_PRESSURE, 0);
 	input_sync(input);
 
-	if (ts->clear_penirq)
-		ts->clear_penirq();
-
 	return IRQ_HANDLED;
 }
 
 static void tsc2007_stop(struct tsc2007 *ts)
 {
 	ts->stopped = true;
-	mb();
 	wake_up(&ts->wait);
 
-	if (ts->irq)
-		disable_irq(ts->irq);
+	disable_irq(ts->irq);
 }
 
 static int tsc2007_open(struct input_dev *input_dev)
@@ -188,10 +181,7 @@ static int tsc2007_open(struct input_dev *input_dev)
 	int err;
 
 	ts->stopped = false;
-	mb();
-
-	if (ts->irq)
-		enable_irq(ts->irq);
+	enable_irq(ts->irq);
 
 	/* Prepare for touch readings - power down ADC and enable PENIRQ */
 	err = tsc2007_xfer(ts, PWRDOWN);
@@ -208,14 +198,6 @@ static void tsc2007_close(struct input_dev *input_dev)
 	struct tsc2007 *ts = input_get_drvdata(input_dev);
 
 	tsc2007_stop(ts);
-}
-
-static int tsc2007_get_pendown_state_gpio(struct device *dev)
-{
-	struct i2c_client *client = to_i2c_client(dev);
-	struct tsc2007 *ts = i2c_get_clientdata(client);
-
-	return gpiod_get_value_cansleep(ts->gpiod);
 }
 
 static int tsc2007_probe_properties(struct device *dev, struct tsc2007 *ts)
@@ -252,83 +234,25 @@ static int tsc2007_probe_properties(struct device *dev, struct tsc2007 *ts)
 	if (IS_ERR(ts->gpiod))
 		return PTR_ERR(ts->gpiod);
 
-	if (ts->gpiod)
-		ts->get_pendown_state = tsc2007_get_pendown_state_gpio;
-	else
+	if (!ts->gpiod)
 		dev_dbg(dev, "Pen down GPIO is not specified in properties\n");
 
 	return 0;
 }
 
-static int tsc2007_probe_pdev(struct device *dev, struct tsc2007 *ts,
-			      const struct tsc2007_platform_data *pdata,
-			      const struct i2c_device_id *id)
+static int tsc2007_input_configure(struct tsc2007 *ts)
 {
-	ts->model             = pdata->model;
-	ts->x_plate_ohms      = pdata->x_plate_ohms;
-	ts->max_rt            = pdata->max_rt ? : MAX_12BIT;
-	ts->poll_period       = msecs_to_jiffies(pdata->poll_period ? : 1);
-	ts->get_pendown_state = pdata->get_pendown_state;
-	ts->clear_penirq      = pdata->clear_penirq;
-	ts->fuzzx             = pdata->fuzzx;
-	ts->fuzzy             = pdata->fuzzy;
-	ts->fuzzz             = pdata->fuzzz;
-
-	if (pdata->x_plate_ohms == 0) {
-		dev_err(dev, "x_plate_ohms is not set up in platform data\n");
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-static void tsc2007_call_exit_platform_hw(void *data)
-{
-	struct device *dev = data;
-	const struct tsc2007_platform_data *pdata = dev_get_platdata(dev);
-
-	pdata->exit_platform_hw();
-}
-
-static int tsc2007_probe(struct i2c_client *client)
-{
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
-	const struct tsc2007_platform_data *pdata =
-		dev_get_platdata(&client->dev);
-	struct tsc2007 *ts;
+	struct device *dev = &ts->client->dev;
 	struct input_dev *input_dev;
 	int err;
 
-	if (!i2c_check_functionality(client->adapter,
-				     I2C_FUNC_SMBUS_READ_WORD_DATA))
-		return -EIO;
-
-	ts = devm_kzalloc_obj(&client->dev, struct tsc2007);
-	if (!ts)
-		return -ENOMEM;
-
-	if (pdata)
-		err = tsc2007_probe_pdev(&client->dev, ts, pdata, id);
-	else
-		err = tsc2007_probe_properties(&client->dev, ts);
-	if (err)
-		return err;
-
-	input_dev = devm_input_allocate_device(&client->dev);
+	input_dev = devm_input_allocate_device(dev);
 	if (!input_dev)
 		return -ENOMEM;
 
-	i2c_set_clientdata(client, ts);
-
-	ts->client = client;
-	ts->irq = client->irq;
 	ts->input = input_dev;
 
-	init_waitqueue_head(&ts->wait);
-	mutex_init(&ts->mlock);
-
-	snprintf(ts->phys, sizeof(ts->phys),
-		 "%s/input0", dev_name(&client->dev));
+	scnprintf(ts->phys, sizeof(ts->phys), "%s/input0", dev_name(dev));
 
 	input_dev->name = "TSC2007 Touchscreen";
 	input_dev->phys = ts->phys;
@@ -346,36 +270,46 @@ static int tsc2007_probe(struct i2c_client *client)
 	input_set_abs_params(input_dev, ABS_PRESSURE, 0, MAX_12BIT,
 			     ts->fuzzz, 0);
 
-	if (pdata) {
-		if (pdata->exit_platform_hw) {
-			err = devm_add_action(&client->dev,
-					      tsc2007_call_exit_platform_hw,
-					      &client->dev);
-			if (err) {
-				dev_err(&client->dev,
-					"Failed to register exit_platform_hw action, %d\n",
-					err);
-				return err;
-			}
-		}
+	ts->stopped = true;
 
-		if (pdata->init_platform_hw)
-			pdata->init_platform_hw();
+	err = devm_request_threaded_irq(dev, ts->irq,
+					NULL, tsc2007_soft_irq,
+					IRQF_ONESHOT | IRQF_NO_AUTOEN,
+					dev->driver->name, ts);
+	if (err)
+		return err;
+
+	err = input_register_device(input_dev);
+	if (err) {
+		dev_err(dev, "Failed to register input device: %d\n", err);
+		return err;
 	}
 
-	if (ts->irq) {
-		err = devm_request_threaded_irq(&client->dev, ts->irq,
-						NULL, tsc2007_soft_irq,
-						IRQF_ONESHOT,
-						client->dev.driver->name, ts);
-		if (err) {
-			dev_err(&client->dev, "Failed to request irq %d: %d\n",
-				ts->irq, err);
-			return err;
-		}
+	return 0;
+}
 
-		tsc2007_stop(ts);
-	}
+static int tsc2007_probe(struct i2c_client *client)
+{
+	struct tsc2007 *ts;
+	int err;
+
+	if (!i2c_check_functionality(client->adapter,
+				     I2C_FUNC_SMBUS_READ_WORD_DATA))
+		return -EIO;
+
+	ts = devm_kzalloc_obj(&client->dev, struct tsc2007);
+	if (!ts)
+		return -ENOMEM;
+
+	ts->client = client;
+	ts->irq = client->irq;
+
+	init_waitqueue_head(&ts->wait);
+	mutex_init(&ts->mlock);
+
+	err = tsc2007_probe_properties(&client->dev, ts);
+	if (err)
+		return err;
 
 	/* power down the chip (TSC2007_SETUP does not ACK on I2C) */
 	err = tsc2007_xfer(ts, PWRDOWN);
@@ -385,14 +319,13 @@ static int tsc2007_probe(struct i2c_client *client)
 		return err;	/* chip does not respond */
 	}
 
-	err = input_register_device(input_dev);
-	if (err) {
-		dev_err(&client->dev,
-			"Failed to register input device: %d\n", err);
-		return err;
+	if (ts->irq) {
+		err = tsc2007_input_configure(ts);
+		if (err)
+			return err;
 	}
 
-	err =  tsc2007_iio_configure(ts);
+	err = tsc2007_iio_configure(ts);
 	if (err) {
 		dev_err(&client->dev,
 			"Failed to register with IIO: %d\n", err);
