@@ -482,6 +482,12 @@ static inline bool bpf_loop_walk_may_give_up(const struct loop_stack_entry *entr
 	return entry->apart && entry->terminates && !entry->counted && !entry->first;
 }
 
+/* The states of trip 0, 1, 2, 4, 8, ... are saved. A compare with them finds any period. */
+static inline bool bpf_trip_is_saved(const struct loop_stack_entry *entry)
+{
+	return !(entry->trip & (entry->trip - 1));
+}
+
 #define LOOP_STACK_SIZE 16
 
 /* state of the program:
@@ -860,6 +866,7 @@ struct bpf_loop_per_pass {
 	bool has_leftover;	/* the peeled trips were not enough */
 	/* a check failed in a state that the loop kept apart, with no other suspect */
 	bool has_unproven;
+	u32 last_peeled_trip;	/* see flow_keep_peeled() */
 	u32 peeled_cnt;		/* trips that the pass peeled */
 	u64 cost;		/* for the states that the loop keeps apart */
 };
@@ -1362,10 +1369,12 @@ struct bpf_verifier_env {
 	bool uses_arena_sp;		/* the program has insns with BPF_REG_ARENA_SP */
 	bool path_sensitive;		/* no joins, see run_path_sensitive() */
 	bool for_log;			/* the verdict is known, see do_check_all() */
+	bool fallthrough_first;		/* see find_failing_path() */
 	struct bpf_precision *precision;
 	u64 cost, mem;			/* see bpf_check_limits() */
 	u64 max_cost, max_mem;
 	u64 hash_seed;			/* see bpf_hash_join_key() */
+	u64 failing_path_budget, failing_path_max_cost;	/* see find_failing_path() */
 	u64 pass_max_cost;		/* see bpf_undo_precision() */
 	bool aborted;			/* a thaw does not take it back */
 	bool no_mem;			/* a table cannot grow, see bpf_check_limits() */
@@ -1746,7 +1755,7 @@ void bpf_flow_free(struct bpf_verifier_env *env);
 bool bpf_flow_is_bb_start(struct bpf_verifier_env *env, int insn_idx);
 int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 		     int insn_idx, int prev_insn_idx, bool again);
-int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx);
+int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx, u64 *log_pos, u64 *diag_pos);
 int bpf_flow_call(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
 		  struct bpf_verifier_state *entry, int subprog, int call_idx);
 int bpf_flow_exit(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int exit_idx);

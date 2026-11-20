@@ -663,6 +663,74 @@ bool bpf_flow_is_bb_start(struct bpf_verifier_env *env, int insn_idx)
 	return test_bit(insn_idx, env->flow->bb_starts);
 }
 
+/* A peeled trip is complete before the next one starts. The leftover is last. */
+static int flow_cmp_trips(const struct bpf_func_state *fa, const struct bpf_func_state *fb)
+{
+	const struct loop_stack_entry *ea = fa->loop_stack, *eb = fb->loop_stack;
+	u32 i, ta, tb;
+
+	for (i = 0; i < fa->loop_stack_cnt && i < fb->loop_stack_cnt; i++, ea++, eb++) {
+		if (ea->loop != eb->loop)
+			break;
+		ta = ea->peeled ? ea->trip : U32_MAX;
+		tb = eb->peeled ? eb->trip : U32_MAX;
+		if (ta != tb)
+			return ta < tb ? -1 : 1;
+	}
+	return 0;
+}
+
+static bool flow_less(struct rb_node *na, const struct rb_node *nb)
+{
+	const struct flow_state *a = rb_entry(na, struct flow_state, rb);
+	const struct flow_state *b = rb_entry(nb, struct flow_state, rb);
+	int cmp;
+	u32 i;
+
+	if (a->priority != b->priority)
+		return a->priority < b->priority;
+	for (i = 0; i < a->order_len && i < b->order_len; i++) {
+		cmp = flow_cmp_trips(a->st.frame[i], b->st.frame[i]);
+		if (cmp)
+			return cmp < 0;
+		if (a->order[i] != b->order[i])
+			return a->order[i] < b->order[i];
+	}
+	if (a->order_len != b->order_len)
+		return a->order_len < b->order_len;
+	/* a speculative state gets a barrier if the fixups of the others do not fit */
+	if (a->st.speculative != b->st.speculative)
+		return b->st.speculative;
+	return a->seq < b->seq;
+}
+
+/*
+ * The order of pending states:
+ * 1. An instance that a call waits for. The call has no exit state to continue. It waits at
+ *    its position in the order. The code after the call waits too.
+ * 2. Callers. So the calls of a function get to it before it is checked.
+ * 3. The trip, then the position, in each frame. A callee in the frames of its callers is
+ *    complete before the code after the call.
+ * 4. Exit states. They go to the calls when the instance is complete.
+ */
+static void flow_set_pending(struct bpf_verifier_env *env, struct flow_state *s)
+{
+	const struct bpf_verifier_state *st = &s->st;
+	struct bpf_flow *flow = env->flow;
+	struct flow_instance *instance = flow_state_instance(flow, s);
+	u32 i;
+
+	s->priority = instance->priority ?:
+		      BIT_ULL(63) | (u64)flow->rank[st->frame[0]->subprogno] << 32 | ~instance->id;
+	for (i = 0; i < st->curframe; i++)
+		s->order[i] = flow->pos[st->frame[i + 1]->callsite];
+	s->order[i] = s->kind == FLOW_FUNC_EXIT ? U32_MAX : flow->pos[st->insn_idx];
+	s->order_len = i + 1;
+	s->pending = true;
+	instance->pending_cnt++;
+	rb_add_cached(&s->rb, &flow->pending, flow_less);
+}
+
 /*
  * States meet only if they have the same hash. The tree sorts them by a half of the hash,
  * then by the range of one xreg of data_deps. Two ranges with a gap stay apart, but not where
@@ -694,6 +762,125 @@ static struct flow_state *flow_find(struct bpf_verifier_env *env, struct flow_st
 #define flow_for_each_near(env, s, t, tn)						\
 	for (t = flow_find(env, s);							\
 	     t && (tn = flow_tree_iter_next(t, (s)->first, (s)->last), true); t = tn)
+
+/*
+ * The loop that @st came around or entered, if @st is at a header. One insn can be the header
+ * of a jump loop and of the calls of a callback.
+ */
+static struct loop_stack_entry *flow_header_entry(const struct bpf_verifier_state *st)
+{
+	const struct bpf_func_state *frame = st->frame[st->curframe];
+	struct loop_stack_entry *e = NULL;
+	u32 i = frame->loop_stack_cnt;
+
+	while (i-- && frame->loop_stack[i].loop->header == st->insn_idx && !(e && e->trip) &&
+	       frame->loop_stack[i].loop->kind != BPF_LOOP_RECURSION)
+		e = &frame->loop_stack[i];
+	return e;
+}
+
+/* If more than one state starts a peeled trip, paths of other lengths can come to one state */
+static bool flow_keep_peeled(struct bpf_verifier_env *env, struct loop_stack_entry *e)
+{
+	bool more = e->loop->this_pass.last_peeled_trip == e->trip;
+
+	e->loop->this_pass.last_peeled_trip = e->trip;
+	if (!more && !bpf_trip_is_saved(e))
+		return false;
+	e->entry_id = ++env->loop_entry_cnt;
+	return true;
+}
+
+/*
+ * @s is the next pending state. Can a state with the same join_key arrive later?
+ * - In the leftover of a loop: until the states leave the loop.
+ * - At the start of a peeled trip: later trips are compared with it.
+ * - A call can get more exit states: until all calls have them and the late states went by.
+ *   In a peeled trip the call waits.
+ * - An async callback can start again: until the check ends.
+ */
+static bool flow_keep(struct bpf_verifier_env *env, struct flow_state *s)
+{
+	const struct bpf_verifier_state *st = &s->st;
+	struct loop_stack_entry *e, *header_entry = flow_header_entry(st);
+	struct flow_instance *instance = env->flow->instances[st->instance_id];
+	bool in_loop = false, keep;
+	u32 fr, i;
+
+	if (!test_bit(st->insn_idx, env->flow->join_points) || env->path_sensitive ||
+	    s->kind == FLOW_AGAIN)
+		return false;
+	if (s->started_instance)
+		return true;
+	s->late_exit_reaches = true;
+	s->kept_frameno = U8_MAX;
+	for (fr = 0; fr <= st->curframe; fr++) {
+		e = st->frame[fr]->loop_stack;
+		for (i = 0; i < st->frame[fr]->loop_stack_cnt; i++, e++) {
+			if (s->kind == FLOW_LEFTOVER && e == bpf_top_loop(st->frame[st->curframe]))
+				break;
+			if (e == header_entry && e->peeled && s->kind == FLOW_AT &&
+			    flow_keep_peeled(env, e))
+				s->kind = FLOW_PEELED;
+			keep = !e->peeled || (e == header_entry && s->kind == FLOW_PEELED);
+			if (e->loop->kind != BPF_LOOP_RECURSION && (e->peeled || !in_loop)) {
+				s->late_exit_reaches &= !e->peeled;
+				s->kept_frameno = fr;
+				s->kept_depth = i;
+				in_loop = keep;
+			}
+			if (e == header_entry && keep)
+				break;
+		}
+	}
+	if (s->late_exit_reaches && st->frame[0]->in_async_callback_fn)
+		return true;
+	keep = in_loop || (s->late_exit_reaches && instance->open_call_cnt);
+	if (keep)
+		list_add_tail(&s->node, &instance->done);
+	return keep;
+}
+
+/* Later trips find @s without the number of its trip */
+static void flow_insert_peeled(struct bpf_verifier_env *env, struct flow_state *s)
+{
+	flow_header_entry(&s->st)->trip = 0;
+	flow_tree_remove(s, &env->flow->state_tree);
+	flow_find(env, s);
+	flow_tree_insert(s, &env->flow->state_tree);
+}
+
+/* @next is the next pending state. Did the states leave the loop that @s is kept for? */
+static bool flow_loop_is_left(struct flow_state *s, const struct flow_state *next)
+{
+	const struct loop_stack_entry *es, *en;
+	const struct bpf_func_state *fs, *fn;
+	u32 fr, i;
+
+	/* a call returned late */
+	if (!flow_less(&s->rb, &next->rb))
+		return false;
+	if (next->st.curframe < s->kept_frameno)
+		return true;
+	for (fr = 0; fr <= s->kept_frameno; fr++) {
+		fs = s->st.frame[fr];
+		fn = next->st.frame[fr];
+		if (fs->subprogno != fn->subprogno || fs->callsite != fn->callsite)
+			return true;
+		for (i = 0;
+		     i < (fr < s->kept_frameno ? fs->loop_stack_cnt : s->kept_depth + 1); i++) {
+			es = &fs->loop_stack[i];
+			en = &fn->loop_stack[i];
+			if (i >= fn->loop_stack_cnt || es->loop != en->loop)
+				return true;
+			if (es->peeled && (!en->peeled || es->trip != en->trip) &&
+			    !(s->kind != FLOW_AT && en->peeled && fr == s->kept_frameno &&
+			      i == s->kept_depth))
+				return true;
+		}
+	}
+	return false;
+}
 
 static struct flow_instance *flow_new_instance(struct bpf_verifier_env *env,
 					       struct flow_state *entry)
@@ -757,6 +944,7 @@ static void flow_insert(struct bpf_verifier_env *env, struct flow_state *s)
 static void flow_link(struct bpf_verifier_env *env, struct flow_state *s)
 {
 	flow_insert(env, s);
+	flow_set_pending(env, s);
 }
 
 /* The entry of @loop in the top frame of @st */
@@ -944,4 +1132,97 @@ int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st
 		return 0;
 	}
 	return flow_add(env, s, false);
+}
+
+/*
+ * Make the next pending state the current one. env->cur_state has to be empty.
+ * Returns -ENOENT when nothing is pending.
+ */
+int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx, u64 *log_pos, u64 *diag_pos)
+{
+	struct bpf_flow *flow = env->flow;
+	struct flow_state *s, *t, *tn;
+	struct flow_instance *instance;
+	struct rb_node *n;
+	bool leftover, starts;
+	int err = 0;
+
+again:
+	if (flow->last_instance && flow->last_instance->cost)
+		*flow->last_instance->cost += env->cost - flow->charged_cost;
+	flow->charged_cost = env->cost;
+	n = rb_first_cached(&flow->pending);
+	if (!n)
+		return -ENOENT;
+	s = rb_entry(n, struct flow_state, rb);
+	flow_clear_pending(flow, s);
+	flow->last_instance = flow_state_instance(flow, s);
+	instance = s->callee;
+	if (instance) {
+		if (instance->entry_state && !instance->priority) {
+			instance->priority = BIT_ULL(63) - ++flow->priority_gen;
+			flow_clear_pending(flow, instance->entry_state);
+			flow_set_pending(env, instance->entry_state);
+		}
+		goto again;
+	}
+	instance = flow->instances[s->st.instance_id];
+	while (!s->started_instance && !list_empty(&instance->done)) {
+		t = list_last_entry(&instance->done, struct flow_state, node);
+		if ((t->late_exit_reaches && instance->open_call_cnt) || !flow_loop_is_left(t, s))
+			break;
+		flow_free_state(env, t);
+	}
+
+
+	env->insn_idx = s->st.insn_idx;
+	if (s->kind == FLOW_FUNC_EXIT) {
+		list_for_each_entry_safe(t, tn, &instance->waiting_calls, node) {
+		}
+		goto again;
+	}
+	*prev_insn_idx = s->prev_insn_idx;
+	if (env->path_sensitive) {
+		*log_pos = s->log_pos;
+		*diag_pos = s->diag_pos;
+	}
+	leftover = s->kind == FLOW_LEFTOVER;
+	starts = leftover || s->started_instance;
+	if (!flow_keep(env, s)) {
+		flow_unlink(env, s);
+	} else if (!starts) {
+		err = bpf_copy_verifier_state(env, env->cur_state, &s->st);
+		if (s->kind != FLOW_AT)
+			flow_insert_peeled(env, s);
+		goto out;
+	} else {
+		t = s;
+		s = flow_new_state(env, t->prev_insn_idx);
+		if (!s)
+			return -ENOMEM;
+		err = bpf_copy_verifier_state(env, &s->st, &t->st);
+		if (err) {
+			flow_free_state(env, s);
+			return err;
+		}
+		if (t->started_instance) {
+			s->st.instance_id = t->started_instance->id;
+			t->started_instance->entry_state = NULL;
+		}
+	}
+	if (starts) {
+		err = flow_add(env, s, leftover);
+		if (err)
+			return err;
+		goto again;
+	}
+	swap(*env->cur_state, s->st);
+	flow_free_state(env, s);
+out:
+	/* all ids have names, see bpf_renumber_ids() */
+	env->id_gen = 0;
+	/* the state at the header stays as it was widened, else the sequence possibly never ends */
+	if (!err && env->cur_state->equations.needs_refine)
+		bpf_equations_refine_all(env, env->cur_state);
+	return err;
 }
