@@ -255,6 +255,8 @@ errout:
 	list_for_each_entry_continue_reverse(wpan_dev,
 					     &rdev->wpan_dev_list,
 					     list) {
+		int err;
+
 		if (!wpan_dev->netdev)
 			continue;
 		wpan_dev->netdev->netns_immutable = false;
