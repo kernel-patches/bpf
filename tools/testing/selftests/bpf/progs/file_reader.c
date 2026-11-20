@@ -28,6 +28,7 @@ char tmp_buf[256000];
 int pid = 0;
 int err, run_success = 0;
 __u64 beyond_eof_offset;
+bool done;
 
 static int validate_file_read(struct file *file);
 static int task_work_callback(struct bpf_map *map, void *key, void *value);
@@ -101,8 +102,13 @@ int on_open_non_sleepable_first(void *c)
 	int key = 0;
 	int ret;
 
-	if (bpf_get_current_pid_tgid() >> 32 != pid)
+	/*
+	 * On overlayfs, file_open runs again for the backing file, while the
+	 * work scheduled by the first call is still pending.
+	 */
+	if (bpf_get_current_pid_tgid() >> 32 != pid || done)
 		return 0;
+	done = true;
 
 	file = bpf_get_task_exe_file(task);
 	if (!file) {
