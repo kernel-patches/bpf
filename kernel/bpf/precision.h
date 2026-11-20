@@ -5,6 +5,14 @@
 
 #include <linux/bpf_verifier.h>
 
+/*
+ * The xregs of a mask, see MAX_BPF_XREG. r10 is the same in all states.
+ * Its bit stands for the arguments on the stack.
+ */
+#define XREG_STACK_ARGS	BPF_REG_FP
+#define XREG_REGS	GENMASK(BPF_REG_9, BPF_REG_0)
+#define XREG_WORDS	BITS_TO_LONGS(MAX_BPF_XREG)
+
 /* What a pass finds about its errors */
 struct precision_per_pass {
 	/* bitmaps of insns */
@@ -15,18 +23,50 @@ struct precision_per_pass {
 	u64 suspect_loops, first_suspect_loops;	/* of the unproven states, of the first one */
 };
 
+/* callx calls one of the functions whose address is taken. They count as one function. */
+struct taken_funcs {
+	u16 args;
+	u8 needs, ret;
+	bool held;
+};
+
 struct bpf_precision {
+	/* Masks of xregs per insn. The masks of a function are as wide as its stack is deep. */
+	struct { u32 first, words; } *func;
+	size_t words;
+	unsigned long *data_deps, *control_deps, *disjoint_apart;
+	/* data_deps, and where only type and object matter */
+	unsigned long *type_apart;
+	unsigned long *in_frames;		/* see bpf_call_needs_frames() */
+	unsigned long *undo;			/* these five before the last partition */
+	unsigned long *kept;			/* these five, see keep_precision() */
+	/* of the unproven insns of the last pass */
+	unsigned long *new_data_deps, *new_control_deps;
+	struct taken_funcs taken;		/* see bpf_compute_deps() */
 	/* this pass, and the last pass whose partition was kept */
 	struct precision_per_pass this_pass, last_pass;
+	/* bitmaps of insns */
+	unsigned long *held_insns;		/* see reads_held() */
 	unsigned long *bad_value_insns;		/* unproven, its value is possibly the cause */
 	unsigned long *last_unproven_insns;	/* in the last pass */
 	unsigned long *bad_read_insns_done;
+	unsigned long *control_seeds, *controlled_insns, *controlled_insns_done, *def_insns;
 	u32 last_unproven_left;		/* last_unproven_insns whose check did not fail again */
 	bool new_nospec;
 
+	u16 *apart_xregno;	/* per insn, see bpf_range_of_data_dep() */
 	/* The path-sensitive run */
 	unsigned long *err_insns;		/* insns at which the failing path can end */
+	u32 *hops_to_err, *hops_to_exit;	/* per insn, see compute_hops() */
+	unsigned long *loop_control_deps;	/* see bpf_jumps_see_same() */
+	u32 loop_carried_at;
+	unsigned long loop_carried[XREG_WORDS];
 };
+
+u32 bpf_frame_mask(struct bpf_verifier_env *env, unsigned long *masks,
+		   const struct bpf_verifier_state *st, u32 fr, unsigned long *out);
+int bpf_compute_deps(struct bpf_verifier_env *env, unsigned long *masks,
+		     const unsigned long *seed_insns);
 
 static inline bool bpf_calls_function(struct bpf_verifier_env *env, int idx)
 {
@@ -34,6 +74,21 @@ static inline bool bpf_calls_function(struct bpf_verifier_env *env, int idx)
 
 	return bpf_pseudo_call(insn) || bpf_is_callx(insn) ||
 	       env->insn_aux_data[idx].calls_callback || bpf_is_async_callback_calling_insn(insn);
+}
+
+/* Word @i of a mask of xregs that has @slots */
+static inline unsigned long bpf_slots_to_xreg_word(const unsigned long *slots, u32 i)
+{
+	return (i < BITS_TO_LONGS(MAX_BPF_STACK_SLOTS) ? slots[i] << MAX_BPF_EXT_REG : 0) |
+	       (i ? slots[i - 1] >> (BITS_PER_LONG - MAX_BPF_EXT_REG) : 0);
+}
+
+static inline void bpf_add_slots(unsigned long *mask, const unsigned long *slots, u32 bits)
+{
+	u32 i;
+
+	for (i = 0; i < BITS_TO_LONGS(bits); i++)
+		mask[i] |= bpf_slots_to_xreg_word(slots, i);
 }
 
 #endif

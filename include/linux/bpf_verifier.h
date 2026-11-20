@@ -952,6 +952,8 @@ struct bpf_insn_aux_data {
 	u32 guard_no_unwind:1; /* it cannot unwind from here, at least sometimes */
 	u32 guard_unset_reg:1; /* where it goes a register is read that is not set here */
 	u32 non_speculative_first:1; /* speculative states end here, their fixups did not fit */
+	u32 acquires:1; /* a reference or a lock */
+	u32 releases:1;
 
 	/* below flags are initialized once */
 	u32 bb_end:1; /* last instruction of a basic block */
@@ -1641,6 +1643,8 @@ u64 bpf_hash64(const void *p, size_t len, u64 hash);
 u64 bpf_hash_join_key(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
 int bpf_renumber_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 
+bool bpf_xreg_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+		      u32 fr, u32 xregno);
 void bpf_note_reads_from_unproven(struct bpf_verifier_env *env, u32 idx);
 void bpf_note_unproven_insn(struct bpf_verifier_env *env,
 			    const struct bpf_verifier_state *st, u32 idx);
@@ -2366,6 +2370,8 @@ int bpf_compute_idoms(struct bpf_verifier_env *env);
 int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
+
+int bpf_insn_callee(struct bpf_verifier_env *env, int idx);
 
 /* equation.c */
 int bpf_equation_env_init(struct bpf_verifier_env *env);
