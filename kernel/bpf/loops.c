@@ -310,6 +310,16 @@ static int check_loop_depth(struct bpf_verifier_env *env, int idx)
 	return 0;
 }
 
+/* The last insn that dominates all back edges of @loop */
+int bpf_loop_spine_end(struct bpf_verifier_env *env, const struct bpf_loop *loop)
+{
+	int i, n = loop->backedges[0].from;
+
+	for (i = 1; i < loop->backedges_cnt; i++)
+		n = idoms_intersect(env, n, loop->backedges[i].from);
+	return n;
+}
+
 /*
  * The backedge->from and its latch can reside in an inner loop of @h, e.g.:
  *

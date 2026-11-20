@@ -826,6 +826,9 @@ void bpf_opt_hard_wire_dead_code_branches(struct bpf_verifier_env *env)
 		if (bpf_prog_is_offloaded(env->prog->aux))
 			bpf_prog_offload_replace_insn(env, i, &ja);
 
+		/* If both edges are dead, no run gets here. The driver keeps the old target. */
+		if (!aux_data[i + 1 + ja.off].seen)
+			ja.off = -1;
 		memcpy(insn, &ja, sizeof(ja));
 	}
 }
