@@ -29,11 +29,13 @@
 static const struct mfd_cell wm8994_regulator_devs[] = {
 	{
 		.name = "wm8994-ldo",
+		.level = MFD_DEP_LEVEL_HIGH,
 		.id = 0,
 		.pm_runtime_no_callbacks = true,
 	},
 	{
 		.name = "wm8994-ldo",
+		.level = MFD_DEP_LEVEL_HIGH,
 		.id = 1,
 		.pm_runtime_no_callbacks = true,
 	},
@@ -561,6 +563,15 @@ static int wm8994_device_init(struct wm8994 *wm8994, int irq)
 					WM8994_LDO1_DISCH, 0);
 	}
 
+	/*
+	 * Enable runtime PM before registering the IRQ chip and the
+	 * children, as the regmap IRQ chip and the child drivers rely on
+	 * it being functional already during their probe.
+	 */
+	pm_runtime_get_noresume(wm8994->dev);
+	pm_runtime_set_active(wm8994->dev);
+	pm_runtime_enable(wm8994->dev);
+
 	wm8994_irq_init(wm8994);
 
 	ret = mfd_add_devices(wm8994->dev, -1,
@@ -571,21 +582,22 @@ static int wm8994_device_init(struct wm8994 *wm8994, int irq)
 		goto err_irq;
 	}
 
-	pm_runtime_set_active(wm8994->dev);
-	pm_runtime_enable(wm8994->dev);
-	pm_runtime_idle(wm8994->dev);
+	pm_runtime_put_sync(wm8994->dev);
 
 	return 0;
 
 err_irq:
 	wm8994_irq_exit(wm8994);
+	pm_runtime_disable(wm8994->dev);
+	pm_runtime_set_suspended(wm8994->dev);
+	pm_runtime_put_noidle(wm8994->dev);
 err_enable:
 	regulator_bulk_disable(wm8994->num_supplies,
 			       wm8994->supplies);
 err_regulator_free:
 	regulator_bulk_free(wm8994->num_supplies, wm8994->supplies);
 err:
-	mfd_remove_devices(wm8994->dev);
+	mfd_remove_devices_late(wm8994->dev);
 	return ret;
 }
 
@@ -594,10 +606,11 @@ static void wm8994_device_exit(struct wm8994 *wm8994)
 	pm_runtime_get_sync(wm8994->dev);
 	pm_runtime_disable(wm8994->dev);
 	pm_runtime_put_noidle(wm8994->dev);
+	mfd_remove_devices(wm8994->dev);
 	wm8994_irq_exit(wm8994);
 	regulator_bulk_disable(wm8994->num_supplies, wm8994->supplies);
 	regulator_bulk_free(wm8994->num_supplies, wm8994->supplies);
-	mfd_remove_devices(wm8994->dev);
+	mfd_remove_devices_late(wm8994->dev);
 }
 
 static const struct of_device_id wm8994_of_match[] = {
