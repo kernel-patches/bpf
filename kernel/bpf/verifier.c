@@ -1817,11 +1817,11 @@ int bpf_copy_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_st
 		return err;
 	bpf_add_cost(env, bpf_xreg_cnt(src) + src->acquired_refs, BPF_COST_COPY);
 	dst_state->speculative = src->speculative;
-	dst_state->flow_entry = src->flow_entry;
 	dst_state->infeasible = src->infeasible;
 	dst_state->max_held_cnt = src->max_held_cnt;
 	dst_state->suspect_loops = src->suspect_loops;
 	dst_state->join_key = src->join_key;
+	dst_state->instance_id = src->instance_id;
 	dst_state->insn_idx = src->insn_idx;
 	dst_state->last_insn_idx = src->last_insn_idx;
 	for (i = 0; i <= src->curframe; i++) {
@@ -10927,7 +10927,7 @@ static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 			mark_reg_invalid(env, reg);
 		}
 	}));
-	if (env->cur_state->flow_entry)
+	if (env->cur_state->instance_id)
 		env->cur_state->changed_pkt_data = true;
 }
 
@@ -11515,7 +11515,7 @@ static bool func_is_on_its_own(struct bpf_verifier_env *env, struct bpf_verifier
 	if (sub->changes_pkt_data || sub->has_tail_call || sub->has_ld_abs ||
 	    sub->is_cb || sub->is_async_cb || sub->is_exception_cb)
 		return false;
-	if (state->speculative)
+	if (env->path_sensitive)
 		return false;
 	if (sub->releases_inherited &&
 	    (state->acquired_refs || state->active_rcu_locks || state->active_preempt_locks))
@@ -11560,6 +11560,7 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 	if (!callee)
 		return -ENOMEM;
 	entry.frame[0] = callee;
+	entry.speculative = state->speculative;
 	entry.in_sleepable = state->in_sleepable;
 	entry.suspect_loops = state->suspect_loops;
 	entry.callers_unknown = state->callers_unknown;
@@ -11628,6 +11629,8 @@ static int exit_func_on_its_own(struct bpf_verifier_env *env)
 	return err ?: PROCESS_BPF_EXIT;
 }
 
+static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno, bool is_null);
+
 static u32 returned_id(u32 id)
 {
 	return bpf_id_is_xreg(id) ? BPF_RETURNED_ID(id) : id;
@@ -11646,6 +11649,7 @@ int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *cal
 	struct bpf_reg_state *reg;
 	int err;
 
+	caller->speculative |= exit->speculative;
 	/*
 	 * Keep only what the function held all the time. The state at its exit looks the same if
 	 * the function released a lock and acquired it again. Else verify the function in the
@@ -11676,6 +11680,8 @@ int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *cal
 	 * the packet pointers of the caller is found out in the context of the caller.
 	 */
 	if (exit->changed_pkt_data) {
+		if (exit->speculative)
+			return -EACCES;
 		env->subprog_info[callee->subprogno].changes_pkt_data = true;
 		return BPF_EXIT_NEEDS_CALLER;
 	}
@@ -11700,6 +11706,9 @@ int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *cal
 		reg->id = returned_id(reg->id);
 		reg->parent_id = returned_id(reg->parent_id);
 		reg->map_uid = returned_id(reg->map_uid);
+		/* the function saw that a reference of the caller is not NULL */
+		if (reg->id && !type_may_be_null(reg->type))
+			mark_ptr_or_null_regs(caller, ret_regs[i], false);
 	}
 	return 0;
 }
@@ -20325,7 +20334,7 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 {
 	struct bpf_func_state *cur_frame = cur_func(env);
 
-	if (!exception_exit && !env->cur_state->curframe && env->cur_state->flow_entry)
+	if (!exception_exit && !env->cur_state->curframe && env->cur_state->instance_id)
 		return exit_func_on_its_own(env);
 
 	/* We must do check_reference_leak here before
@@ -21528,6 +21537,9 @@ static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
 		from_unproven = reads_from_unproven(env);
 		fixups = insn_aux->fixups;
 		err = do_check_insn(env, &do_print_state) ?: bpf_equations_after_insn(env);
+		/* a call or an exit gave the state to the flow, the error is from there */
+		if (err < 0 && !state->frame[0])
+			return err;
 		insn_aux->releases |= held_cnt(state) < held && err != PROCESS_BPF_EXIT;
 		insn_aux->acquires |= held_cnt(state) > held;
 		if (nospec_ends_path(env, state, err)) {

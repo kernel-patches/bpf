@@ -71,6 +71,12 @@ struct flow_state {
 INTERVAL_TREE_DEFINE(struct flow_state, tree_node, u64, subtree_last, FLOW_FIRST, FLOW_LAST, static,
 		     flow_tree)
 
+/* Instances that can wait for each other, see flow_find_ended() */
+struct flow_group {
+	u32 busy_cnt;			/* pending states, and open calls to other groups */
+	struct flow_instance *instances;
+};
+
 /* One check of a function: its entry state, its exit states and the calls that get them */
 struct flow_instance {
 	u32 id;
@@ -79,8 +85,11 @@ struct flow_instance {
 	u32 pending_cnt;		/* states */
 	/* calls from this instance that can get more exit states, and those that call itself */
 	u32 open_call_cnt, self_call_cnt;
+	struct flow_group *group;
+	struct flow_instance *next_in_group;
 	u64 *cost;			/* of its function, see flow_may_add_instance() */
 	bool in_peeled_trip;		/* a call of it, or of a caller, is in a peeled trip */
+	bool replaced;			/* no new call finds it, see flow_grow_instance() */
 	bool ended;			/* see flow_end_instance() */
 	struct flow_instance *next;
 	struct list_head waiting_calls;	/* calls of this instance */
@@ -113,6 +122,7 @@ struct bpf_flow {
 	struct rb_root_cached state_tree;
 	u32 *nr_states;				/* per insn */
 	struct rb_root_cached pending;
+	struct flow_group *groups;		/* bpf_subprog_info.cycle is the index */
 	struct flow_instance **instances;	/* bpf_verifier_state.instance_id is the index */
 	u32 instance_cnt, instance_cap;
 	struct flow_instance *last_instance;	/* of the last pending state */
@@ -537,6 +547,7 @@ int bpf_flow_prepare(struct bpf_verifier_env *env)
 	flow->pos = kvcalloc(2 * len, sizeof(u32), BPF_VERIFIER_GFP);
 	flow->rank = kvcalloc(env->subprog_cnt + 1, sizeof(u32), BPF_VERIFIER_GFP);
 	flow->cost = kvcalloc(env->subprog_cnt, sizeof(u64), BPF_VERIFIER_GFP);
+	flow->groups = kvcalloc(env->subprog_cnt, sizeof(*flow->groups), BPF_VERIFIER_GFP);
 	flow->bb_starts = kvcalloc(BITS_TO_LONGS(len), sizeof(long), BPF_VERIFIER_GFP);
 	flow->join_points = kvcalloc(BITS_TO_LONGS(len), sizeof(long), BPF_VERIFIER_GFP);
 	flow->nr_states = kvcalloc(len, sizeof(u32), BPF_VERIFIER_GFP);
@@ -626,6 +637,7 @@ static void flow_clear_pending(struct bpf_flow *flow, struct flow_state *s)
 		return;
 	rb_erase_cached(&s->rb, &flow->pending);
 	flow_state_instance(flow, s)->pending_cnt--;
+	flow_state_instance(flow, s)->group->busy_cnt--;
 	s->pending = false;
 }
 
@@ -640,6 +652,7 @@ static void flow_unlink(struct bpf_verifier_env *env, struct flow_state *s)
 		instance = flow_state_instance(env->flow, s);
 		instance->open_call_cnt--;
 		instance->self_call_cnt -= instance == s->callee;
+		instance->group->busy_cnt -= instance->group != s->callee->group;
 		s->callee = NULL;
 	}
 	if (!RB_EMPTY_NODE(&s->tree_node))
@@ -680,6 +693,7 @@ void bpf_flow_reset(struct bpf_verifier_env *env)
 	for (i = 0; i < flow->instance_cnt; i++) {
 		flow->instances[i]->group->instances = NULL;
 		kfree(flow->instances[i]);
+	}
 	env->mem -= flow->instance_cnt * INSTANCE_BYTES;
 	flow->instance_cnt = 0;
 	flow->last_instance = NULL;
@@ -695,6 +709,7 @@ void bpf_flow_free(struct bpf_verifier_env *env)
 	kvfree(flow->pos);
 	kvfree(flow->rank);
 	kvfree(flow->cost);
+	kvfree(flow->groups);
 	kvfree(flow->bb_starts);
 	kvfree(flow->join_points);
 	kvfree(flow->nr_states);
@@ -781,6 +796,7 @@ static void flow_set_pending(struct bpf_verifier_env *env, struct flow_state *s)
 	}
 	s->pending = true;
 	instance->pending_cnt++;
+	instance->group->busy_cnt++;
 	rb_add_cached(&s->rb, &flow->pending, flow_less);
 }
 
@@ -938,6 +954,7 @@ static bool flow_loop_is_left(struct flow_state *s, const struct flow_state *nex
 static struct flow_instance *flow_new_instance(struct bpf_verifier_env *env,
 					       struct flow_state *entry)
 {
+	const struct bpf_func_state *f = entry ? entry->st.frame[0] : NULL;
 	struct bpf_flow *flow = env->flow;
 	struct flow_instance **instances, *instance;
 	u32 cap;
@@ -957,6 +974,11 @@ static struct flow_instance *flow_new_instance(struct bpf_verifier_env *env,
 	INIT_LIST_HEAD(&instance->exit_states);
 	INIT_LIST_HEAD(&instance->done);
 	instance->entry_state = entry;
+	instance->group = flow->groups;
+	if (f && f->loop_stack_cnt && !f->loop_stack->peeled)
+		instance->group += env->subprog_info[f->subprogno].cycle;
+	instance->next_in_group = instance->group->instances;
+	instance->group->instances = instance;
 	env->mem += INSTANCE_BYTES;
 	instance->id = flow->instance_cnt++;
 	flow->instances[instance->id] = instance;
@@ -1332,6 +1354,301 @@ int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st
 		return 0;
 	}
 	return flow_add(env, s, false);
+}
+
+/* @x is an exit state of the instance of the call @w. @w can leave the instance. */
+static int flow_apply_exit(struct bpf_verifier_env *env, struct flow_state *w,
+			   struct flow_state *x)
+{
+	int call_idx = w->st.insn_idx, err;
+	struct bpf_verifier_state st = {};
+
+	err = bpf_copy_verifier_state(env, &st, &w->st) ?:
+	      bpf_flow_return(env, &st, &x->st, call_idx);
+	if (!err)
+		err = bpf_flow_deliver(env, &st, call_idx + 1, call_idx, false);
+	else if (err < 0 && st.speculative)
+		err = min(bpf_flow_edge_unproven(env, &st, call_idx + 1, err), 0);
+	else if (err < 0)
+		err = min(bpf_flow_edge_unproven(env, &x->st, x->prev_insn_idx, err), 0);
+	bpf_free_verifier_state(env, &st, false);
+	if (err <= 0)
+		return err;
+
+	/* The call is checked again in the frames of the caller */
+	flow_unlink(env, w);
+	flow_find(env, w);
+	flow_link(env, w);
+	return 0;
+}
+
+/* The arguments that are readable */
+static u64 flow_readable_args(const struct bpf_func_state *f)
+{
+	u64 mask = 0;
+	u32 i;
+
+	for (i = BPF_REG_1; i <= BPF_REG_5; i++)
+		mask |= (u64)(f->regs[i].type != NOT_INIT) << i;
+	for (i = 0; i < f->out_stack_arg_cnt; i++)
+		mask |= (u64)(f->stack_arg_regs[i].type != NOT_INIT) << (MAX_BPF_REG + i);
+	return mask;
+}
+
+/* The exit states of @old are exit states of @instance too */
+static int flow_copy_exit_states(struct bpf_verifier_env *env, struct flow_instance *instance,
+				 struct flow_instance *old)
+{
+	struct flow_state *x, *copy;
+	int err;
+
+	list_for_each_entry(x, &old->exit_states, node) {
+		if (x->pending)
+			continue;
+		copy = flow_new_state(env, x->prev_insn_idx);
+		if (!copy)
+			return -ENOMEM;
+		err = bpf_copy_verifier_state(env, &copy->st, &x->st);
+		if (err) {
+			flow_free_state(env, copy);
+			return err;
+		}
+		copy->kind = FLOW_FUNC_EXIT;
+		copy->st.instance_id = instance->id;
+		flow_find(env, copy);
+		flow_insert(env, copy);
+	}
+	return 0;
+}
+
+/* @s gets to the first insn. @t is there and does not subsume @s. */
+static int flow_grow_instance(struct bpf_verifier_env *env, struct flow_state *t,
+			      struct flow_state *s, struct bpf_loop *leftover_loop)
+{
+	u64 args = flow_readable_args(t->st.frame[0]);
+	struct flow_instance *old = t->started_instance, *instance = old;
+	int err;
+
+	if (!old->entry_state) {
+		instance = flow_new_instance(env, t);
+		if (!instance)
+			return -ENOMEM;
+		instance->cost = old->cost;
+	}
+	flow_unlink(env, t);
+	err = bpf_states_join(env, &t->st, &s->st, leftover_loop ?: &env->flow->call_loop,
+			      instance != old);
+	t->started_instance = instance;
+	flow_find(env, t);
+	flow_link(env, t);
+	if (args != flow_readable_args(t->st.frame[0]))
+		flow_free_list(env, &instance->exit_states);
+	else if (!err && instance != old)
+		err = flow_copy_exit_states(env, instance, old);
+	old->replaced = instance != old;
+	if (old->ended)
+		flow_free_list(env, &old->exit_states);
+	return err;
+}
+
+/*
+ * A chain of calls multiplies the instances. The functions that have more than one instance
+ * divide a budget. When a function has used its part, the next calls are joined.
+ */
+static bool flow_may_add_instance(struct bpf_verifier_env *env, int subprog)
+{
+	struct bpf_flow *flow = env->flow;
+
+	if (flow->cost[subprog] * flow->budget_func_cnt <= flow->budget)
+		return true;
+	env->calls_joined = true;
+	return false;
+}
+
+static bool flow_in_peeled_trip(const struct bpf_verifier_state *st)
+{
+	const struct loop_stack_entry *e;
+	u32 fr, i;
+
+	for (fr = 0; fr <= st->curframe; fr++)
+		for (i = 0, e = st->frame[fr]->loop_stack; i < st->frame[fr]->loop_stack_cnt; i++)
+			if (e[i].peeled && e[i].loop->kind != BPF_LOOP_RECURSION)
+				return true;
+	return false;
+}
+
+/*
+ * The call at @call_idx in @caller goes to a function that is verified on its own. @entry is
+ * the state at its first insn. Both states are taken. The first insn is the only join point
+ * for the states of two calls.
+ *
+ *  call1 f(0) --+                       pass 0: join          -> one instance for both calls
+ *  call2 f(1) --+--> first insn of f    data dep r1 differs   -> one instance for each call
+ *
+ * An instance that has started does not grow. The join starts a new instance:
+ *
+ *  call1 f(0)   instance 1: f(0)      exits 1 --> call1
+ *  call2 f(1)   instance 2: f(0..1)   exits 1 --> call2, call3   at once: the caller continues
+ *  call3 f(2)               f(0..2)   exits 2 --> call2, call3   later, if they have more
+ *
+ * An argument can have another type or object. Then the old exit states can refer to what the
+ * new call did not pass in, so the call waits. It waits in a peeled trip too: a late exit state
+ * checks all later trips again.
+ */
+int bpf_flow_call(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
+		  struct bpf_verifier_state *entry, int subprog, int call_idx)
+{
+	struct loop_stack_entry *e = bpf_top_loop(entry->frame[0]);
+	struct bpf_loop *leftover_loop = e && e->trip && !e->peeled ? e->loop : NULL;
+	struct flow_instance *instance, *from = env->flow->instances[caller->instance_id];
+	u64 *cost = &env->flow->cost[subprog];
+	struct flow_state *w, *s, *t, *tn, *x;
+	bool subsumed;
+	int err;
+
+	if (env->log.level & BPF_LOG_LEVEL2)
+		verbose(env, "call at %d waits for func#%d\n", call_idx, subprog);
+
+	s = flow_new_state(env, call_idx);
+	if (!s)
+		return -ENOMEM;
+	swap(s->st, *entry);
+	s->st.insn_idx = env->subprog_info[subprog].start;
+	s->st.last_insn_idx = call_idx;
+	s->kind = FLOW_FUNC_ENTRY;
+	err = bpf_clean_verifier_state(env, &s->st);
+	if (err)
+		goto free;
+again:
+	flow_for_each_near(env, s, t, tn) {
+		if (!flow_same_join_key(env, t, s) ||
+		    bpf_must_keep_apart(env, &t->st, &s->st, s->kind == FLOW_JOINED_CALLS ||
+					(leftover_loop && flow_same_entry(leftover_loop, t, s)) ?
+					BPF_JOIN_POINT_HEADER : BPF_JOIN_POINT_CALLS,
+					leftover_loop ? e : NULL))
+			continue;
+		subsumed = bpf_state_subsumes(env, &t->st, &s->st);
+		if (!subsumed && t->st.speculative != s->st.speculative)
+			continue;
+		env->imprecise |= !env->err;
+		if (!subsumed)
+			err = flow_grow_instance(env, t, s, leftover_loop);
+		flow_free_state(env, s);
+		if (err)
+			return err;
+		goto wait;
+	}
+	if (s->kind == FLOW_FUNC_ENTRY && !flow_may_add_instance(env, subprog)) {
+		s->kind = FLOW_JOINED_CALLS;
+		goto again;
+	}
+	t = s;
+	t->started_instance = flow_new_instance(env, t);
+	if (!t->started_instance) {
+		err = -ENOMEM;
+		goto free;
+	}
+	/* the first instance is free */
+	if ((*cost)++)
+		t->started_instance->cost = cost;
+	env->flow->budget_func_cnt += *cost == 2;
+	flow_link(env, t);
+wait:
+	w = flow_new_state(env, caller->last_insn_idx);
+	if (!w)
+		return -ENOMEM;
+	swap(w->st, *caller);
+	w->st.insn_idx = call_idx;
+	instance = w->callee = t->started_instance;
+	from->open_call_cnt++;
+	from->self_call_cnt += from == instance;
+	from->group->busy_cnt += from->group != instance->group;
+	flow_insert(env, w);
+	instance->in_peeled_trip |= t->kind == FLOW_FUNC_ENTRY &&
+				    (from->in_peeled_trip || flow_in_peeled_trip(&w->st));
+	if (instance->entry_state &&
+	    (list_empty(&instance->exit_states) || instance->in_peeled_trip))
+		flow_set_pending(env, w);
+	list_for_each_entry(x, &instance->exit_states, node)
+		if (!err && !x->pending && w->callee)
+			err = flow_apply_exit(env, w, x);
+	if (instance->ended && w->callee)
+		flow_free_state(env, w);
+	return err;
+free:
+	flow_free_state(env, s);
+	return err;
+}
+
+/* @st came to exit of the function that is verified on its own. It is taken. */
+int bpf_flow_exit(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int exit_idx)
+{
+	struct bpf_subprog_info *sub = &env->subprog_info[st->frame[0]->subprogno];
+	struct loop_stack_entry *e = bpf_top_loop(st->frame[0]);
+	struct flow_state *x;
+	int err;
+
+	st->insn_idx = exit_idx;
+	err = bpf_clean_verifier_state(env, st);
+	if (err)
+		return err;
+	x = flow_new_state(env, exit_idx);
+	if (!x)
+		return -ENOMEM;
+	x->st = *st;
+	memset(st, 0, sizeof(*st));
+	/* all exit states are compared at the first exit */
+	sub->first_exit = sub->first_exit ?: exit_idx;
+	x->st.insn_idx = sub->first_exit;
+	x->kind = FLOW_FUNC_EXIT;
+	return flow_prune_or_join(env, x, e && !e->peeled ? e->loop : NULL, false);
+}
+
+static void flow_add_ended(struct flow_instance *instance, struct flow_instance **ended)
+{
+	if (instance->ended)
+		return;
+	instance->ended = true;
+	instance->next = *ended;
+	*ended = instance;
+}
+
+/*
+ * A state of @instance comes from another state of it, or from an exit state that one of its
+ * open calls gets. If there is none of these, @instance ended. The same holds for a group.
+ * The instances in the leftover of a recursion are a group: they can wait for each other.
+ * All other instances are group 0.
+ */
+static void flow_find_ended(struct flow_instance *instance, struct flow_instance **ended)
+{
+	struct flow_group *group = instance->group;
+
+	if (!instance->pending_cnt && instance->open_call_cnt == instance->self_call_cnt)
+		flow_add_ended(instance, ended);
+	while (!group->busy_cnt && group->instances) {
+		flow_add_ended(group->instances, ended);
+		group->instances = group->instances->next_in_group;
+	}
+}
+
+/* If an instance ended, its waiting calls have all exit states */
+static void flow_end_instance(struct bpf_verifier_env *env, struct flow_instance *instance)
+{
+	struct flow_instance *from, *ended = NULL;
+	struct flow_state *w, *wn;
+
+	flow_find_ended(instance, &ended);
+	while ((instance = ended)) {
+		ended = instance->next;
+		list_for_each_entry_safe(w, wn, &instance->waiting_calls, node) {
+			from = flow_state_instance(env->flow, w);
+			flow_free_state(env, w);
+			flow_find_ended(from, &ended);
+		}
+		flow_free_list(env, &instance->done);
+		if (instance->replaced)
+			flow_free_list(env, &instance->exit_states);
+	}
 }
 
 /*
