@@ -153,8 +153,7 @@ static void flow_place_guards(struct bpf_verifier_env *env, int h, u32 *seen)
 	 */
 	if (loop->irreducible) {
 		for (i = 0; i < loop->backedges_cnt; i++)
-			if (!loop->backedges[i].latches_cnt ||
-			    loop->backedges[i].latches[0] != loop->backedges[i].from)
+			if (loop->backedges[i].latch != loop->backedges[i].from)
 				goto header;
 		for (i = 0; i < loop->backedges_cnt; i++)
 			flow_set_guard(env, h, loop->backedges[i].from);
@@ -177,10 +176,10 @@ static void flow_place_guards(struct bpf_verifier_env *env, int h, u32 *seen)
 	}
 
 	for (i = 0; i < loop->backedges_cnt; i++)
-		if (!loop->backedges[i].latches_cnt)
+		if (loop->backedges[i].latch < 0)
 			goto header;
 	for (i = 0; i < loop->backedges_cnt; i++)
-		flow_set_guard(env, h, loop->backedges[i].latches[0]);
+		flow_set_guard(env, h, loop->backedges[i].latch);
 	return;
 
 header:
@@ -197,9 +196,9 @@ header:
 	for (o = h; aux[o].loop_header >= 0; o = aux[o].loop_header)
 		;
 	/* a loop that has no exit can only be stopped together with the program */
-	if (!aux[o].loop->exits_cnt)
+	t = aux[o].loop->exit_to;
+	if (t < 0)
 		return;
-	t = aux[o].loop->exits[0].to;
 	aux[h].guard_place = true;
 	aux[h].guard_at_header = true;
 	aux[h].guard_to = t;
