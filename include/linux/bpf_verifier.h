@@ -241,6 +241,12 @@ static inline bool reg_fixed_part_equal(const struct bpf_reg_state *ra,
 	return ra->type == rb->type && !memcmp(&ra->raw, &rb->raw, sizeof(ra->raw));
 }
 
+/* That and the ids, see bpf_renumber_ids() */
+static inline bool reg_object_equal(const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
+{
+	return !memcmp(ra, rb, offsetof(struct bpf_reg_state, var_off));
+}
+
 /* All but the ids */
 static inline bool reg_value_equal(const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
 {
@@ -366,9 +372,13 @@ struct bpf_reference_state {
 	 * is used purely to inform the user of a reference leak.
 	 */
 	int insn_idx;
+	u32 diag_id;	/* finds the acquire in the report of a leak, it is not renumbered */
 	union {
 		/* For REF_TYPE_PTR */
-		int parent_id;
+		struct {
+			int parent_id;
+			u32 ctx_arg;	/* it came with that __ref argument, the first is 1 */
+		};
 		/* Use to keep track of the source object of a lock, to ensure
 		 * it matches on unlock.
 		 */
@@ -548,15 +558,17 @@ struct bpf_verifier_state {
 	u32 insn_idx;
 	u32 curframe;
 
+	struct_group(held,
+	void *active_lock_ptr;
 	u32 acquired_refs;
 	u32 active_locks;
 	u32 active_preempt_locks;
+	u32 active_rcu_locks;
 	u32 active_irq_id;
 	u32 active_lock_id;
-	void *active_lock_ptr;
-	u32 active_rcu_locks;
 
 	bool speculative;
+	);
 	bool in_sleepable;
 	/* a global function or an extension, and what it calls: exit of frame 0 is not the end */
 	bool callers_unknown;
@@ -1095,21 +1107,29 @@ struct bpf_id_pair {
 };
 
 /*
- * A function that is verified on its own, see func_is_on_its_own(), has no ids of its caller.
- * It has names for the ids of what is held: BPF_INHERITED_ID + i is the id of refs[i] at the call.
- * - A name depends only on the place. Each id in the state at the entry is replaced with its name.
- *   The ids of the caller can be names that it got from its own caller: they are replaced too.
- * - A name stands for the same thing in all states of the function. It is equal only to itself:
- *   check_ids() and jid_note() do not rename it. So two calls share a state at the entry, and what
- *   comes out for it, only if the same places have the same names.
- * - bpf_flow_return() puts the ids of the call that waits back. All other ids get new values.
- * - What comes out has the ranges of all calls that share the state at the entry. So a name is good
- *   for what holds whatever the ranges are: the same object. Other ids have no name: such an
- *   argument keeps the frames of the caller, see arg_needs_caller().
- * - env->id_gen stays below BPF_MAX_ID. So no id is a name.
+ * At a join point each id is named after the xreg that has it, see bpf_renumber_ids().
+ * The low bits give the origin of the id:
+ *
+ *  bpf_new_id()       an insn made it. It is renumbered at the end of the basic block.
+ *  BPF_REF_ID()       it is held. The number comes from the index in refs[].
+ *  BPF_XREG_ID()      the number comes from the first xreg that has it.
+ *  BPF_RETURNED_ID()  a function on its own returned it. No xreg of the caller has it.
+ *
+ * A function on its own, see func_is_on_its_own(), and its waiting call have the same ids for
+ * what is held. An exit state has the ranges of all calls of the instance. So such id shows
+ * only what holds for all ranges: the same object. An argument with another id keeps the
+ * frames of the caller, see arg_needs_caller().
  */
-#define BPF_INHERITED_ID	0x20000000
-#define BPF_MAX_ID		(BPF_INHERITED_ID / 2)
+#define bpf_new_id(env)		(((env)->id_gen += 4) - 3)
+#define BPF_REF_ID(i)		(((i) + 1) << 2)
+#define BPF_XREG_ID(i)		((i) << 2 | 2)
+#define BPF_RETURNED_ID(id)	((id) | 1)
+
+/* @id is 0 or renumbered: BPF_REF_ID() or BPF_XREG_ID() */
+static inline bool bpf_id_is_xreg(u32 id)
+{
+	return id & 2;
+}
 
 struct bpf_idmap {
 	u32 cnt;
@@ -1509,6 +1529,8 @@ int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state *old,
 			struct bpf_verifier_state *cur);
 
+int bpf_renumber_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
+
 /*
  * The two limits of the verifier, for the whole load. The unit of cost is one step of a scan,
  * about a dozen insns of the CPU. Memory is the bytes of states and tables at a time.
@@ -1553,6 +1575,7 @@ void bpf_flow_next_is_no_bound(struct bpf_verifier_env *env, int insn_idx, int h
 bool bpf_flow_loops_lost_bound(struct bpf_verifier_env *env);
 void bpf_flow_new_round(struct bpf_verifier_env *env);
 int bpf_flow_place_guards(struct bpf_verifier_env *env);
+#define BPF_EXIT_NEEDS_CALLER	1	/* verify the call in the frames of the caller */
 int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
 		    const struct bpf_verifier_state *exit, int call_idx);
 int bpf_insert_loop_guards(struct bpf_verifier_env *env);

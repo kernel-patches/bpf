@@ -35,6 +35,83 @@ static bool range_within(const struct bpf_reg_state *old,
 	       (cur->base - old->base) % old->step == 0;
 }
 
+static void renumber_id(struct bpf_verifier_env *env, u32 *id, u32 new_id)
+{
+	struct bpf_idmap *map = &env->idmap_scratch;
+	u32 i;
+
+	if (!*id)
+		return;
+	for (i = 0; i < map->cnt && map->map[i].old != *id; i++)
+		;
+	bpf_add_cost(env, 2 * i, BPF_COST_SCAN);
+	if (i == BPF_ID_MAP_SIZE)
+		return;
+	if (i == map->cnt)
+		map->map[map->cnt++] = (struct bpf_id_pair){ *id, new_id };
+	*id = map->map[i].cur;
+}
+
+static void renumber_reg_ids(struct bpf_verifier_env *env, struct bpf_reg_state *reg, u32 xreg)
+{
+	renumber_id(env, &reg->id, BPF_XREG_ID(3 * xreg));
+	renumber_id(env, &reg->parent_id, BPF_XREG_ID(3 * xreg + 1));
+	renumber_id(env, &reg->map_uid, BPF_XREG_ID(3 * xreg + 2));
+}
+
+/*
+ * An id stands for the set of xregs that have it. Name it after the first one. What is held goes
+ * first. Then states with the same sets have the same ids, and ids are compared as they are.
+ * The name is the xreg, not a number in a sequence. So an xreg that is not set does not change
+ * the names of other sets. But if only one state has r1 = r6, r6 has two names.
+ * Visit an xreg once: a name can be the old id of another xreg.
+ */
+int bpf_renumber_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
+{
+	u32 mask[] = { BIT(STACK_SPILL),
+		       BIT(STACK_DYNPTR) | BIT(STACK_ITER) | BIT(STACK_IRQ_FLAG) };
+	struct bpf_idmap *map = &env->idmap_scratch;
+	struct bpf_reg_state *reg;
+	struct bpf_func_state *f;
+	u32 fr, i, xreg;
+	int held;
+
+	map->cnt = 0;
+	for (i = 0; i < st->acquired_refs && i < BPF_ID_MAP_SIZE; i++) {
+		renumber_id(env, &st->refs[i].id, BPF_REF_ID(2 * i));
+		if (st->refs[i].type == REF_TYPE_PTR)
+			renumber_id(env, &st->refs[i].parent_id, BPF_REF_ID(2 * i + 1));
+	}
+	/* they are among these */
+	renumber_id(env, &st->active_irq_id, 0);
+	renumber_id(env, &st->active_lock_id, 0);
+	for (held = 1; held >= 0; held--) {
+		for (fr = 0; fr <= st->curframe; fr++) {
+			f = st->frame[fr];
+			/* registers, the frame, slots, arguments */
+			xreg = fr * (BPF_ID_MAP_SIZE / MAX_CALL_FRAMES + 1) + MAX_BPF_REG;
+			if (held)
+				renumber_id(env, &f->frame_id, BPF_XREG_ID(3 * xreg));
+			for (i = 0; i < bpf_stack_nr_slots(f); i++) {
+				reg = bpf_get_spilled_reg(i, f, mask[held]);
+				if (reg)
+					renumber_reg_ids(env, reg, xreg + 1 + i);
+			}
+			if (held)
+				continue;
+			for (i = 0; i < MAX_BPF_REG; i++)
+				renumber_reg_ids(env, &f->regs[i], xreg - MAX_BPF_REG + i);
+			for (i = 0; i < f->out_stack_arg_cnt; i++)
+				renumber_reg_ids(env, &f->stack_arg_regs[i],
+						 xreg + 1 + MAX_BPF_STACK_SLOTS + i);
+		}
+	}
+	if (map->cnt < BPF_ID_MAP_SIZE && st->acquired_refs < BPF_ID_MAP_SIZE)
+		return 0;
+	bpf_log(&env->log, "too many ids\n");
+	return -E2BIG;
+}
+
 /* If in the old state two registers had the same id, then they need to have
  * the same id in the new state as well.  But that id could be different from
  * the old state, so we need to track the mapping from old to new ids.
@@ -189,7 +266,7 @@ int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 
 		__clean_func_state(env, st->frame[i], live_regs, i);
 	}
-	return 0;
+	return bpf_renumber_ids(env, st);
 }
 
 static bool regs_exact(const struct bpf_reg_state *rold,
