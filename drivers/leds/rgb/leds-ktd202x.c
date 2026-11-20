@@ -738,20 +738,29 @@ static int ktd202x_probe_fw(struct ktd202x *chip)
 {
 	struct device *dev = chip->dev;
 	int count;
+	int ret;
 	int i = 0;
 
 	count = device_get_child_node_count(dev);
 	if (!count || count > chip->num_leds)
 		return -EINVAL;
 
+	/* The KTD202x does not ACK the byte that resets it, so ignore the result */
 	regmap_write(chip->regmap, KTD202X_REG_RESET_CONTROL, KTD202X_RSTR_RESET);
 
 	/* Allow the device to execute the complete reset */
 	usleep_range(200, 300);
 
-	device_for_each_child_node_scoped(dev, child) {
-		int ret = ktd202x_add_led(chip, child, i);
+	/*
+	 * Nothing is read back, so a failed write is the only sign of a missing
+	 * chip. Leave it asleep until a LED is turned on.
+	 */
+	ret = regmap_write(chip->regmap, KTD202X_REG_RESET_CONTROL, KTD202X_ENABLE_CTRL_SLEEP);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to reach the chip\n");
 
+	device_for_each_child_node_scoped(dev, child) {
+		ret = ktd202x_add_led(chip, child, i);
 		if (ret)
 			return ret;
 
