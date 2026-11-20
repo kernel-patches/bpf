@@ -83,11 +83,9 @@ static int __init orangefs_init(void)
 	int ret;
 	__u32 i = 0;
 
-	if (op_timeout_secs < 0)
-		op_timeout_secs = 0;
-
-	if (slot_timeout_secs < 0)
-		slot_timeout_secs = 0;
+	/* The timeouts are multiplied by HZ as int. */
+	op_timeout_secs = clamp(op_timeout_secs, 0, INT_MAX / HZ);
+	slot_timeout_secs = clamp(slot_timeout_secs, 0, INT_MAX / HZ);
 
 	/* initialize global book keeping data structures */
 	ret = op_cache_initialize();
