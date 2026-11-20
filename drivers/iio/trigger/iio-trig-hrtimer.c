@@ -29,7 +29,19 @@ struct iio_hrtimer_info {
 	ktime_t period;
 };
 
+static void iio_hrtimer_release(struct config_item *item)
+{
+	struct iio_sw_trigger *swt = to_iio_sw_trigger(item);
+
+	kfree(container_of(swt, struct iio_hrtimer_info, swt));
+}
+
+static const struct configfs_item_operations iio_hrtimer_item_ops = {
+	.release = iio_hrtimer_release,
+};
+
 static const struct config_item_type iio_hrtimer_type = {
+	.ct_item_ops = &iio_hrtimer_item_ops,
 	.ct_owner = THIS_MODULE,
 };
 
@@ -176,7 +188,6 @@ static int iio_trig_hrtimer_remove(struct iio_sw_trigger *swt)
 	/* cancel the timer after unreg to make sure no one rearms it */
 	hrtimer_cancel(&trig_info->timer);
 	iio_trigger_free(swt->trigger);
-	kfree(trig_info);
 
 	return 0;
 }

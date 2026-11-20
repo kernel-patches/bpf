@@ -1725,6 +1725,7 @@ static void iio_dev_release(struct device *device)
 	lockdep_unregister_key(&iio_dev_opaque->mlock_key);
 
 	ida_free(&iio_ida, iio_dev_opaque->id);
+	kfree(iio_dev_opaque->bounce_buffer);
 	kfree(iio_dev_opaque);
 }
 
