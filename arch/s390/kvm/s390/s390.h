@@ -474,7 +474,7 @@ int __kvm_s390_mprotect_many(struct gmap *gmap, gpa_t gpa, u8 npages, unsigned i
 
 bool kvm_arch_setup_async_pf(struct kvm_vcpu *vcpu);
 void kvm_s390_update_cmma_dirty(struct kvm *kvm, const struct kvm_memory_slot *old);
-int kvm_s390_vm_stop_migration(struct kvm *kvm);
+void kvm_s390_vm_stop_migration(struct kvm *kvm);
 
 
 /* implemented in diag.c */

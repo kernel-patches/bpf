@@ -91,8 +91,7 @@ int s390_kvm_mmu_prepare_memory_region(struct kvm *kvm,
 		 */
 		if (change != KVM_MR_DELETE &&
 		    !(new->flags & KVM_MEM_LOG_DIRTY_PAGES))
-			WARN(kvm_s390_vm_stop_migration(kvm),
-			     "Failed to stop migration mode");
+			kvm_s390_vm_stop_migration(kvm);
 	}
 
 	if (change == KVM_MR_FLAGS_ONLY)

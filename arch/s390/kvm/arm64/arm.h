@@ -50,9 +50,8 @@ static __always_inline void kvm_s390_update_cmma_dirty(struct kvm *kvm, const st
 }
 
 /* should never be called */
-static __always_inline int kvm_s390_vm_stop_migration(struct kvm *kvm)
+static __always_inline void kvm_s390_vm_stop_migration(struct kvm *kvm)
 {
-	return -EINVAL;
 }
 
 #endif /* ARCH_S390_KVM_ARM64_H */

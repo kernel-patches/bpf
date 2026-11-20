@@ -1242,11 +1242,11 @@ static int kvm_s390_vm_start_migration(struct kvm *kvm)
  * Must be called with kvm->slots_arch_lock to avoid races with ourselves,
  * kvm_s390_vm_start_migration() and kvm_s390_get_cmma_bits().
  */
-int kvm_s390_vm_stop_migration(struct kvm *kvm)
+void kvm_s390_vm_stop_migration(struct kvm *kvm)
 {
 	/* migration mode already disabled */
 	if (!kvm->arch.migration_mode)
-		return 0;
+		return;
 	/*
 	 * Unset the flag and propagate to all vCPUs. From now on the cmma_d
 	 * bit will not be touched on any PGSTE.
@@ -1255,7 +1255,7 @@ int kvm_s390_vm_stop_migration(struct kvm *kvm)
 	 */
 	WRITE_ONCE(kvm->arch.migration_mode, 0);
 	if (!kvm->arch.use_cmma)
-		return 0;
+		return;
 
 	kvm_s390_sync_request_broadcast(kvm, KVM_REQ_STOP_MIGRATION);
 	/* Clear cmma_d on all existing PGSTEs and set cmma_dirty_pages to 0. */
@@ -1266,7 +1266,6 @@ int kvm_s390_vm_stop_migration(struct kvm *kvm)
 	 * cmma_dirty_pages is 0, and all existing PGSTEs have their cmma_d bit
 	 * set to 0.
 	 */
-	return 0;
 }
 
 static int kvm_s390_vm_set_migration(struct kvm *kvm,
@@ -1282,7 +1281,8 @@ static int kvm_s390_vm_set_migration(struct kvm *kvm,
 		res = kvm_s390_vm_start_migration(kvm);
 		break;
 	case KVM_S390_VM_MIGRATION_STOP:
-		res = kvm_s390_vm_stop_migration(kvm);
+		kvm_s390_vm_stop_migration(kvm);
+		res = 0;
 		break;
 	default:
 		break;
