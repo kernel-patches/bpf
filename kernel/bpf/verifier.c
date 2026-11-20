@@ -11540,7 +11540,7 @@ static bool func_is_on_its_own(struct bpf_verifier_env *env, struct bpf_verifier
 		if (arg_needs_caller(env, state, sub, &caller->stack_arg_regs[i]))
 			return false;
 	}
-	return true;
+	return sub->recursive || !bpf_call_needs_frames(env, state, live);
 }
 
 static int enter_recursion(struct bpf_verifier_env *env, struct bpf_func_state *callee);
@@ -21607,6 +21607,36 @@ process_bpf_exit:
 static bool pass_needs_restart(struct bpf_verifier_env *env)
 {
 	return (env->restart && bpf_flow_loops_lost_bound(env)) || env->guards_late;
+}
+
+/*
+ * The loops that keep the current state apart pay for the work since the last state, but not
+ * a loop that the state enters. A trip that is peeled on the budget of a loop belongs to that
+ * loop. Such trips can use up the budget of an inner loop.
+ */
+static void charge_loops(struct bpf_verifier_env *env, u64 cost)
+{
+	const struct bpf_verifier_state *st = env->cur_state;
+	const struct loop_stack_entry *e;
+	struct bpf_loop *starved_loop = NULL;
+	int fr, i;
+
+	for (fr = st->curframe; env->pass && fr >= 0; fr--) {
+		for (i = st->frame[fr]->loop_stack_cnt - 1; i >= 0; i--) {
+			e = &st->frame[fr]->loop_stack[i];
+			if ((e->peeled || e->loop->disjoint_apart) &&
+			    (e->trip || e->loop->header != st->insn_idx))
+				e->loop->this_pass.cost += cost;
+			if (e->peeled && e->trip >= e->loop->peel_cnt) {
+				if (starved_loop && e->loop->partitioned)
+					starved_loop->this_pass.starved =
+						e->loop->this_pass.starves = true;
+				return;
+			}
+			if (e->loop->partitioned && !bpf_loop_has_budget(e->loop))
+				starved_loop = e->loop;
+		}
+	}
 }
 
 static int do_check(struct bpf_verifier_env *env)
