@@ -242,6 +242,31 @@ __naked void callx_rodata_callback_one_of_two(void)
 		: __clobber_all);
 }
 
+/* each call is checked for each function in r2, and the states meet at the next insn */
+SEC("socket")
+__success __retval(0)
+__naked void callx_rodata_one_of_two_at_many_calls(void)
+{
+	asm volatile (
+		FUNC_TABLE2(cbs, loop_cb_stop, loop_cb_go_on)
+		"call %[bpf_get_prandom_u32];"
+		"r0 &= 1;"
+		"r0 <<= 3;"
+		"r6 = cbs_%= ll;"
+		"r6 += r0;"
+		"r6 = *(u64 *)(r6 + 0);"
+		".rept 1024;"
+		"r2 = r6;"
+		"call %[bpf_get_prandom_u32];"
+		".endr;"
+		"callx r6;"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm(bpf_get_prandom_u32)
+		: __clobber_all);
+}
+
 __naked __noinline __used
 static unsigned long not_three(void)
 {
@@ -276,6 +301,53 @@ __naked void callx_rodata_one_of_two_at_loop_head(void)
 		"r7 += 1;"
 		"r1 = r7;"
 		"if r7 < 4 goto l_%=;"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm(bpf_get_prandom_u32)
+		: __clobber_all);
+}
+
+/*
+ * The error is on the edge after callx. It does not make callx unproven.
+ * r7 is 0 if r6 is 1. r9 has 1 << 24 values, no check depends on it.
+ */
+SEC("socket")
+__success __retval(0)
+__naked void callx_rodata_one_of_two_error_after_call(void)
+{
+	asm volatile (
+		FUNC_TABLE2(tbl, add1, add2)
+		"call %[bpf_get_prandom_u32];"
+		"r8 = r0;"
+		"r1 = r8;"
+		"call add1;"
+		"r6 = 0; r7 = 5;"
+		"if r8 == 9 goto 1f;"
+		"r6 = 2; r7 = 7;"
+		"if r8 == 11 goto 1f;"
+		"r6 = 1; r7 = 0;"
+	"1:"
+		"r9 = 0;"
+		"r5 = 3;"
+		".rept 24;"
+		"r8 >>= 1;"
+		"r5 *= 3;"
+		"r5 += 1;"
+		"if r8 & 1 goto +1;"
+		"r9 += r5;"
+		".endr;"
+		"if r6 != 1 goto 3f;"
+		"if r7 == 0 goto 3f;"
+		"r9 &= 8;"
+		"r2 = tbl_%= ll;"
+		"r2 += r9;"
+		"r2 = *(u64 *)(r2 + 0);"
+		"r1 = r8;"
+		"callx r2;"
+	"2:"
+		"goto 2b;"
+	"3:"
 		"r0 = 0;"
 		"exit;"
 		:
@@ -844,6 +916,64 @@ __naked void callx_rodata_recursion(void)
 		::: __clobber_all);
 }
 
+extern void bpf_preempt_disable(void) __ksym;
+extern void bpf_preempt_enable(void) __ksym;
+
+void __kfunc_btf_root(void)
+{
+	bpf_preempt_disable();
+	bpf_preempt_enable();
+}
+
+/* Each level holds more. callx is the last insn where the check of that fails. */
+__naked __noinline __used
+static unsigned long holds_more(void)
+{
+	asm volatile (
+		DATA(".rodata.held,\"a\"", tbl, ".quad holds_more; .quad ret0;")
+		"r0 = 0;"
+		"if r3 != 0 goto 2f;"
+		"if r1 == 0 goto 2f;"
+		"r6 = r1;"
+		"r6 += -1;"
+		"call %[bpf_preempt_disable];"
+		"call %[bpf_get_prandom_u32];"
+		"if r0 == 5 goto 1f;"
+		"r1 = r6;"
+		"r3 = 1;"
+		"call holds_more;"
+	"1:"
+		"call %[bpf_get_prandom_u32];"
+		"r0 &= 8;"
+		"r2 = tbl_%= ll;"
+		"r2 += r0;"
+		"r2 = *(u64 *)(r2 + 0);"
+		"r1 = r6;"
+		"r3 = 0;"
+		"callx r2;"
+		"call %[bpf_preempt_enable];"
+		"r0 = 0;"
+	"2:"
+		"exit;"
+		:
+		: __imm(bpf_get_prandom_u32), __imm(bpf_preempt_disable),
+		  __imm(bpf_preempt_enable)
+		: __clobber_all);
+}
+
+SEC("socket")
+__arch_x86_64
+__arch_arm64
+__success
+__naked void callx_rodata_one_of_two_holds_more(void)
+{
+	asm volatile (
+		"r1 = 800;"
+		"r3 = 0;"
+		"call holds_more;"
+		"exit;"
+		::: __clobber_all);
+}
 
 /* Four 480-byte frames, deeper than any budget together with their caller */
 __naked __noinline __used

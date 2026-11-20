@@ -142,3 +142,51 @@ __naked int liveness_exponential_complexity(void)
 		"exit;"
 		::: __clobber_all);
 }
+
+/* The number of calls has no limit of its own */
+SEC("?raw_tp")
+__success
+__naked int liveness_many_calls(void)
+{
+	asm volatile (
+		".rept 12000;"
+		C(exp_sub7, 8)
+		".endr;"
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+
+/*
+ * The pointer to the stack moves to the next slot in each trip. So the loop takes a round of the
+ * analysis for each slot. The insns before the loop take one.
+ */
+SEC("?raw_tp")
+__success
+__naked int liveness_many_rounds(void)
+{
+	asm volatile (
+		"r6 = 0;"
+		"r2 = r10;"
+		".rept 64;"
+		"r2 += -8;"
+		"*(u64 *)(r2 + 0) = r6;"
+		".endr;"
+		".rept 100000;"
+		"r0 = 0;"
+		".endr;"
+	"1:"
+		"r2 = r10;"
+		"r2 += -512;"
+		".rept 63;"
+		"r1 = *(u64 *)(r2 + 8);"
+		"*(u64 *)(r2 + 0) = r1;"
+		"r2 += 8;"
+		".endr;"
+		"*(u64 *)(r10 - 8) = r10;"
+		"r6 += 1;"
+		"if r6 < 3 goto 1b;"
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
