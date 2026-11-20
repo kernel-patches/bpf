@@ -1731,10 +1731,17 @@ static struct bpf_reference_state *find_lock_state(struct bpf_verifier_state *st
 	return NULL;
 }
 
+static void leave_loops(struct bpf_func_state *state, u32 cnt)
+{
+	while (state->loop_stack_cnt > cnt)
+		bpf_flow_put_header_state(&state->loop_stack[--state->loop_stack_cnt]);
+}
+
 static void free_func_state(struct bpf_func_state *state)
 {
 	if (!state)
 		return;
+	leave_loops(state, 0);
 	kfree(state->loop_stack);
 	kfree(state->stack_arg_regs);
 	kfree(state->stack);
@@ -1777,13 +1784,16 @@ void bpf_free_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 static int copy_func_state(struct bpf_func_state *dst,
 			   const struct bpf_func_state *src)
 {
+	leave_loops(dst, 0);
 	memcpy(dst, src, offsetof(struct bpf_func_state, stack));
 	/* Instruction accounting is path-local, not part of verifier state. */
 	dst->insns_subtotal = 0;
+	dst->loop_stack_cnt = 0;
 	dst->loop_stack = copy_array(dst->loop_stack, src->loop_stack, src->loop_stack_cnt,
 				     sizeof(*src->loop_stack), BPF_VERIFIER_GFP);
 	if (!dst->loop_stack)
 		return -ENOMEM;
+	dst->loop_stack_cnt = src->loop_stack_cnt;
 	return copy_stack_state(dst, src);
 }
 
@@ -1809,6 +1819,8 @@ int bpf_copy_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_st
 	dst_state->changed_pkt_data = src->changed_pkt_data;
 	dst_state->flow_entry = src->flow_entry;
 	dst_state->infeasible = src->infeasible;
+	dst_state->max_held_cnt = src->max_held_cnt;
+	dst_state->suspect_loops = src->suspect_loops;
 	dst_state->insn_idx = src->insn_idx;
 	dst_state->curframe = src->curframe;
 	dst_state->last_insn_idx = src->last_insn_idx;
@@ -2574,6 +2586,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	 * Initialize it similar to do_check_common().
 	 */
 	elem->st.in_sleepable = is_sleepable;
+	elem->st.suspect_loops = env->cur_state->suspect_loops;
 	frame = kzalloc_obj(*frame, BPF_VERIFIER_GFP);
 	if (!frame)
 		return ERR_PTR(-ENOMEM);
@@ -6019,6 +6032,8 @@ static int mark_recursive_subprogs(struct bpf_verifier_env *env)
 			break;
 		}
 		si[s].recursive = true;
+		j = cg.cycle[s];
+		si[s].cycle = cg.order[j] = min_t(u32, cg.order[j], s);
 		err = 0;
 	}
 out:
@@ -8783,15 +8798,14 @@ static struct bpf_reg_state *get_iter_from_state(struct bpf_verifier_state *cur_
 }
 
 /*
- * bpf_iter_*_next() that every trip of a loop goes through stops the loop if the iterator is
- * older than the loop: every trip takes an element, and there are only so many. It doesn't stop
- * - the loop that makes the iterator, which starts from the beginning in every trip then:
+ * Every trip of a loop goes through bpf_iter_*_next(). It stops the loop if the iterator is older
+ * than the loop: every trip takes an element, and the number of elements is finite.
+ * It does not stop
+ * - the loop that makes the iterator. The iterator starts again in every trip:
  *	while (v->x) { bpf_for(i, 0, 10) ...; }
- *   Of the loops that the program is in, the ones that it entered before it made the iterator
- *   are among the first iter.loops.
- * - any loop if nothing was left already: the program was told so and did not leave.
- * A loop with a known number of trips doesn't count on the iterator. Nor does a walk on patience:
- * there is none in a loop that is taken for bounded, see flow_try_walk().
+ *   The loops that the program entered before it made the iterator are among the first
+ *   iter.loops loops.
+ * - any loop, if no element was left already. The program knew that and did not leave.
  */
 static void iter_stops_loops(struct bpf_verifier_env *env, int insn_idx,
 			     const struct bpf_reg_state *iter)
@@ -8804,12 +8818,12 @@ static void iter_stops_loops(struct bpf_verifier_env *env, int insn_idx,
 	int i;
 
 	/* the loops of this subprog: flow_is_bound() doesn't look into the functions it calls */
-	for (i = frame->loop_stack_cnt - 1; i >= 0; i--) {
+	for (i = frame->loop_stack_cnt - 1; i >= 0 && !st->speculative; i--) {
 		entry = &frame->loop_stack[i];
 		stops = iter->iter.state != BPF_ITER_STATE_DRAINED && below + i >= iter->iter.loops;
-		if (entry->terminates || stops)
+		if (entry->loop->kind != BPF_LOOP_JUMPS || stops)
 			continue;
-		bpf_flow_next_is_no_bound(env, insn_idx, entry->loop_id);
+		bpf_flow_next_is_no_bound(env, insn_idx, entry->loop->header);
 		return;
 	}
 }
@@ -11311,6 +11325,16 @@ static int btf_check_subprog_call(struct bpf_verifier_env *env, int subprog)
 	return err;
 }
 
+/* The helper returns */
+static void leave_callback(struct bpf_func_state *caller)
+{
+	struct loop_stack_entry *entry = bpf_top_loop(caller);
+
+	caller->callback_depth = 0;
+	if (entry && entry->loop->kind == BPF_LOOP_CALLBACK)
+		leave_loops(caller, caller->loop_stack_cnt - 1);
+}
+
 static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			      int insn_idx, int subprog,
 			      set_callee_state_fn set_callee_state_cb)
@@ -11398,7 +11422,7 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 		return err;
 
 	callback_state->frame[callback_state->curframe - 1]->callback_depth++;
-	caller->callback_depth = 0;
+	leave_callback(caller);
 	return 0;
 }
 
@@ -11484,6 +11508,10 @@ static bool func_is_on_its_own(struct bpf_verifier_env *env, struct bpf_verifier
 	return true;
 }
 
+static int enter_recursion(struct bpf_verifier_env *env, struct bpf_func_state *callee);
+static int check_held_in_leftover(struct bpf_verifier_env *env,
+				  const struct loop_stack_entry *entry);
+
 static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int insn_idx)
 {
 	u16 live = env->insn_aux_data[env->subprog_info[subprog].start].live_regs_before;
@@ -11497,6 +11525,7 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 		return -ENOMEM;
 	entry.frame[0] = callee;
 	entry.in_sleepable = state->in_sleepable;
+	entry.suspect_loops = state->suspect_loops;
 	entry.callers_unknown = state->callers_unknown;
 	init_func_state(env, callee, BPF_MAIN_FUNC, 0, subprog);
 	/* the frame that says so is not there when the function is verified */
@@ -11504,7 +11533,8 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 	for (i = BPF_REG_1; i <= BPF_REG_5; i++)
 		if (live & BIT(i))
 			callee->regs[i] = caller->regs[i];
-	err = grow_stack_arg_slots(env, callee, bpf_in_stack_arg_cnt(&env->subprog_info[subprog]));
+	i = bpf_in_stack_arg_cnt(&env->subprog_info[subprog]);
+	err = grow_stack_arg_slots(env, callee, i) ?: enter_recursion(env, callee);
 	if (err) {
 		bpf_free_verifier_state(env, &entry, false);
 		return err;
@@ -11517,6 +11547,7 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 		bpf_free_verifier_state(env, &entry, false);
 		return err;
 	}
+	entry.max_held_cnt = state->max_held_cnt;
 	callee->entry_refs = entry.acquired_refs;
 	callee->entry_rcu_locks = entry.active_rcu_locks;
 	callee->entry_preempt_locks = entry.active_preempt_locks;
@@ -11549,6 +11580,9 @@ static int exit_func_on_its_own(struct bpf_verifier_env *env)
 	/* Invalidate callee-local dynptrs and their slices before the frame goes away. */
 	err = destroy_dynptrs_in_stack_slots(env, callee, 0,
 					     callee->allocated_stack / BPF_REG_SIZE - 1);
+	/* what comes out of a recursion goes around too */
+	if (!err && env->subprog_info[callee->subprogno].recursive)
+		err = check_held_in_leftover(env, callee->loop_stack);
 	if (err)
 		return err;
 
@@ -11596,6 +11630,8 @@ int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *cal
 		return -EINVAL;
 	}
 	caller->unwound = exit->unwound;
+	caller->max_held_cnt = max(caller->max_held_cnt, exit->max_held_cnt);
+	caller->suspect_loops |= exit->suspect_loops;
 
 	/*
 	 * bpf_check_cfg() takes the subprog that loads the address of a function for the
@@ -12959,7 +12995,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 						 set_loop_callback_state);
 		} else {
-			cur_func(env)->callback_depth = 0;
+			leave_callback(cur_func(env));
 			if (env->log.level & BPF_LOG_LEVEL2)
 				verbose(env, "frame%d bpf_loop iteration limit reached\n",
 					env->cur_state->curframe);
@@ -20605,6 +20641,105 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	return -EFAULT;
 }
 
+static u32 held_cnt(const struct bpf_verifier_state *st)
+{
+	return st->acquired_refs + st->active_rcu_locks + st->active_preempt_locks;
+}
+
+/* The current state enters @loop in @frame. It is in trip 0. */
+static struct loop_stack_entry *push_loop(struct bpf_verifier_env *env,
+					  struct bpf_func_state *frame, struct bpf_loop *loop)
+{
+	u32 cnt = frame->loop_stack_cnt;
+	struct loop_stack_entry *stack;
+
+	stack = krealloc(frame->loop_stack, kmalloc_size_roundup((cnt + 1) * sizeof(*stack)),
+			 BPF_VERIFIER_GFP);
+	if (!stack)
+		return NULL;
+	frame->loop_stack = stack;
+	stack[cnt] = (struct loop_stack_entry){
+		.loop = loop,
+		.held_cnt = held_cnt(env->cur_state),
+		.entry_id = ++env->loop_entry_cnt,
+		.peeled = true,
+	};
+	frame->loop_stack_cnt++;
+	return &frame->loop_stack[cnt];
+}
+
+static bool try_peel_trip(const struct loop_stack_entry *entry)
+{
+	struct bpf_loop *loop = entry->loop;
+
+	if (entry->trip >= loop->peel_cnt &&
+	    (entry->trip >= loop->max_peel_cnt || !bpf_loop_partition_is_active(loop)))
+		return false;
+	loop->this_pass.peeled_cnt = max(loop->this_pass.peeled_cnt, entry->trip + 1);
+	return true;
+}
+
+/* The loop of @entry starts its leftover. Nothing grew in it so far. */
+static void leave_peeled_trips(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
+{
+	struct bpf_func_state *frame;
+	struct bpf_reg_state *reg;
+
+	entry->peeled = false;
+	entry->loop->this_pass.has_leftover = true;
+	bpf_for_each_reg_in_vstate(env->cur_state, frame, reg, reg->grew_once = false);
+}
+
+/*
+ * Push the loop entered at insn_idx onto the stack. Usually this adds a single
+ * entry on top of its enclosing loop. However, an edge may enter an inner loop
+ * directly, bypassing the header(s) of its enclosing loop(s), e.g.:
+ *
+ *   1: for (...):       // enclosing loop, header at 1
+ *   2:   for (...):     // inner loop, header at 2
+ *        ...
+ *   3: if ...:
+ *        goto 2b;       // enters loop 2 without going through header 1
+ *
+ * Such a bypass makes the enclosing loop irreducible, so its header is missing
+ * from the stack and both headers (1) and (2) need to be pushed onto stack.
+ *
+ * Assumes loop_stack_pop() has already truncated the stack to the common ancestor
+ * of the bpf_loop_at_index(env->insn_idx) and whatever was at the top of the loop stack.
+ */
+static int loop_stack_push(struct bpf_verifier_env *env, bool *pushed)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_func_state *frame = cur_func(env);
+	struct loop_stack_entry *entry = bpf_top_loop(frame);
+	u32 missing_headers[LOOP_STACK_SIZE];
+	u32 num_missing = 0;
+	int h;
+
+	/* bpf_compute_loops() checked how deep loops nest */
+	for (h = bpf_loop_at_index(env, env->insn_idx);
+	     h >= 0 && !(entry && entry->loop == aux[h].loop); h = aux[h].loop_header)
+		missing_headers[num_missing++] = h;
+
+	*pushed = num_missing;
+	while (num_missing--) {
+		h = missing_headers[num_missing];
+		/* wherever it is entered: a loop can have more than one entry */
+		if (aux[h].loop->exit_to < 0) {
+			verbose(env, "loop at insn %d never exits\n", h);
+			return -EINVAL;
+		}
+		entry = push_loop(env, frame, aux[h].loop);
+		if (!entry)
+			return -ENOMEM;
+		if (env->log.level & BPF_LOG_LEVEL2)
+			verbose(env, "entering loop %d\n", h);
+		if (h != env->insn_idx && !env->path_sensitive && !try_peel_trip(entry))
+			leave_peeled_trips(env, entry);
+	}
+	return 0;
+}
+
 /*
  * An exit from a loop can cross several nested loops, e.g.:
  *
@@ -20614,13 +20749,15 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
  *            if ...:    // before goto the loop stack is [1, 2, 3 <top>]
  *              goto 1b; // after goto it should become [1]
  */
-static int loop_stack_pop(struct bpf_verifier_env *env)
+static void loop_stack_pop(struct bpf_verifier_env *env)
 {
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	struct bpf_func_state *frame = cur_func(env);
-	int new_cnt = 0;
+	int cnt = frame->loop_stack_cnt, new_cnt;
 	int h, i;
 
+	/* the function stays in its recursion */
+	new_cnt = cnt && frame->loop_stack[0].loop->kind == BPF_LOOP_RECURSION;
 	/*
 	 * Walk the loop nest of insn_idx outwards (innermost first) and stop at
 	 * the first loop that is present on the stack - that loop is the common
@@ -20628,8 +20765,8 @@ static int loop_stack_pop(struct bpf_verifier_env *env)
 	 * stack, drop all loops.
 	 */
 	for (h = bpf_loop_at_index(env, env->insn_idx); h >= 0; h = aux[h].loop_header) {
-		for (i = frame->loop_stack_cnt - 1; i >= 0; i--) {
-			if (frame->loop_stack[i].loop_id == h) {
+		for (i = cnt - 1; i >= 0; i--) {
+			if (frame->loop_stack[i].loop == aux[h].loop) {
 				new_cnt = i + 1;
 				goto pop;
 			}
@@ -20638,10 +20775,177 @@ static int loop_stack_pop(struct bpf_verifier_env *env)
 
 pop:
 	if (env->log.level & BPF_LOG_LEVEL2)
-		for (i = frame->loop_stack_cnt - 1; i >= new_cnt; i--)
-			verbose(env, "exiting loop %d\n", frame->loop_stack[i].loop_id);
-	frame->loop_stack_cnt = new_cnt;
+		for (i = cnt - 1; i >= new_cnt; i--)
+			if (frame->loop_stack[i].loop->kind == BPF_LOOP_JUMPS)
+				verbose(env, "exiting loop %d\n",
+					frame->loop_stack[i].loop->header);
+	leave_loops(frame, new_cnt);
+}
+
+static bool xreg_has_id(struct bpf_verifier_state *st, u32 id)
+{
+	u32 mask = BIT(STACK_SPILL) | BIT(STACK_DYNPTR) | BIT(STACK_ITER) | BIT(STACK_IRQ_FLAG);
+	struct bpf_stack_state *slot;
+	struct bpf_func_state *frame;
+	struct bpf_reg_state *reg;
+
+	bpf_for_each_reg_in_vstate_mask(st, frame, reg, slot, mask, ({
+		if (reg->id == id || reg->parent_id == id)
+			return true;
+	}));
+	return false;
+}
+
+/*
+ * The current state went around a loop. If it holds more than the states at the header, none of
+ * them subsumes it, and it has no join. It goes around again:
+ *	bpf_for(i, 0, n) { if (prev) release(prev); prev = cur; cur = acquire(); }
+ * The number of xregs limits the references: a reference that is in no xreg is a leak. The
+ * number of peeled trips limits the rest. The state continues until it holds more, so it is
+ * unproven where a check fails on a path. Returns 1 if it ends here.
+ */
+static int check_held_in_leftover(struct bpf_verifier_env *env,
+				  const struct loop_stack_entry *entry)
+{
+	struct bpf_verifier_state *st = env->cur_state;
+	u32 held = held_cnt(st), i;
+	bool leak = false;
+
+	if (entry->peeled || held <= entry->held_cnt)
+		return 0;
+	/* the callers have xregs for the first ones */
+	for (i = st->frame[0]->entry_refs; i < st->acquired_refs && !leak; i++) {
+		if (st->refs[i].type != REF_TYPE_PTR || st->refs[i].ctx_arg)
+			continue;
+		bpf_add_cost(env, bpf_xreg_cnt(st), BPF_COST_SCAN);
+		leak = !xreg_has_id(st, st->refs[i].id);
+		held--;
+	}
+	if (!leak && held <= entry->held_cnt + entry->loop->this_pass.peeled_cnt)
+		return 0;
+	if (st->speculative)
+		return -EINVAL;
+	verbose(env, "loop at insn %d acquires more than it releases\n", entry->loop->header);
+	env->imprecise |= !env->err;
+	st->suspect_loops |= entry->loop->suspect_bit;
+	st->holds_too_much = true;
+	if (bpf_same_insns_unproven(env))
+		return -EINVAL;
+	note_error(env, -EINVAL);
+	st->holds_too_much = false;
+	st->max_held_cnt = st->max_held_cnt ?: held_cnt(st);
+	return held_cnt(st) > st->max_held_cnt;
+}
+
+/* The current state came back to the header of the loop of @entry. Returns 1 if it ends here. */
+static int next_trip(struct bpf_verifier_env *env, struct loop_stack_entry *entry,
+		     bool *starts_leftover)
+{
+	entry->trip++;
+	if (env->path_sensitive)
+		return failing_path_trip(env, entry);
+	if (!entry->peeled)
+		return check_held_in_leftover(env, entry);
+	*starts_leftover = !bpf_flow_trip_is_new(env, entry) || !try_peel_trip(entry);
+	if (*starts_leftover)
+		entry->entry_id = ++env->loop_entry_cnt;
 	return 0;
+}
+
+/* @callee is the frame of a function that is verified on its own */
+static int enter_recursion(struct bpf_verifier_env *env, struct bpf_func_state *callee)
+{
+	u32 cycle = env->subprog_info[callee->subprogno].cycle;
+	struct bpf_loop *loop = env->insn_aux_data[env->subprog_info[cycle].start].recursion_loop;
+	struct loop_stack_entry *entry, *from = env->cur_state->frame[0]->loop_stack;
+	bool starts_leftover;
+	int err = 0;
+
+	if (!loop)
+		return 0;
+	entry = push_loop(env, callee, loop);
+	if (!entry)
+		return -ENOMEM;
+	starts_leftover = !try_peel_trip(entry);
+	if (env->cur_state->frame[0]->loop_stack_cnt && from->loop == loop) {
+		*entry = *from;
+		starts_leftover = false;
+		err = next_trip(env, entry, &starts_leftover);
+	}
+	if (starts_leftover)
+		leave_peeled_trips(env, entry);
+	return err;
+}
+
+/* The helper at env->insn_idx calls the callback again and again. @back: the callback returned. */
+static int enter_callback(struct bpf_verifier_env *env, bool back, struct bpf_loop **backedge_loop)
+{
+	struct bpf_loop *loop = cur_aux(env)->callback_loop;
+	struct bpf_func_state *frame = cur_func(env);
+	struct loop_stack_entry *entry;
+	bool starts_leftover = false;
+	int err = 0;
+
+	if (!loop)
+		return 0;
+	if (back) {
+		entry = bpf_top_loop(frame);
+		err = next_trip(env, entry, &starts_leftover);
+		*backedge_loop = starts_leftover ? NULL : loop;
+	} else {
+		entry = push_loop(env, frame, loop);
+		if (!entry)
+			return -ENOMEM;
+		if (env->path_sensitive)
+			return failing_path_trip(env, entry);
+		starts_leftover = !try_peel_trip(entry);
+	}
+	if (starts_leftover)
+		leave_peeled_trips(env, entry);
+	return err;
+}
+
+/*
+ * The current state gets to env->insn_idx. Leave the loops that the insn is not in. Enter
+ * the loops that it is in. Returns 1 if the state ends here.
+ * @backedge_loop: the state came back to the header of that loop.
+ * @starts_leftover: see bpf_flow_start_leftover()
+ */
+int bpf_flow_loop_enter(struct bpf_verifier_env *env, struct bpf_loop **backedge_loop,
+			bool *starts_leftover)
+{
+	struct bpf_func_state *frame = cur_func(env);
+	struct loop_stack_entry *entry;
+	bool pushed;
+	int err;
+
+	/* The callback came back to the helper that calls it, in the same trip. */
+	if (frame->callback_depth)
+		return enter_callback(env, true, backedge_loop);
+
+	loop_stack_pop(env);
+
+	err = loop_stack_push(env, &pushed);
+	if (err)
+		return err;
+
+	entry = bpf_top_loop(frame);
+	if (!entry || entry->loop != cur_aux(env)->loop)
+		return enter_callback(env, false, NULL);
+	if (env->path_sensitive)
+		return (pushed ? failing_path_trip(env, entry) :
+			next_trip(env, entry, starts_leftover)) ?:
+		       enter_callback(env, false, NULL);
+	if (pushed) {
+		*starts_leftover = !try_peel_trip(entry);
+		return *starts_leftover ? 0 : enter_callback(env, false, NULL);
+	}
+
+	*backedge_loop = entry->loop;
+	err = next_trip(env, entry, starts_leftover);
+	if (err || *starts_leftover)
+		return err;
+	return enter_callback(env, false, NULL);
 }
 
 /* Can the main program return 0? */

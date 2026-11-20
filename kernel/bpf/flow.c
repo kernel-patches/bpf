@@ -311,3 +311,20 @@ int bpf_check_limits(struct bpf_verifier_env *env)
 	env->over_limit = true;
 	return -E2BIG;
 }
+
+static struct bpf_loop *flow_new_call_loop(struct bpf_verifier_env *env, enum bpf_loop_kind kind,
+					   int header, int func)
+{
+	struct bpf_loop *loop = kvzalloc_obj(*loop, BPF_VERIFIER_GFP);
+
+	env->mem += sizeof(*loop);
+	if (!loop)
+		return NULL;
+	loop->kind = kind;
+	loop->header = header;
+	/* the helper stops, the function checks the stack, see check_recursion_guard() */
+	loop->rt_bounded = true;
+	loop->nr_insns = func < 0 ? 1 :
+			 env->subprog_info[func + 1].start - env->subprog_info[func].start;
+	return loop;
+}
