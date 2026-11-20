@@ -588,6 +588,7 @@ enum ovl_no_data_stage {
 struct ovl_no_data_result {
 	enum ovl_no_data_stage stage;
 	int err;
+	int open_err;
 };
 
 /*
@@ -628,20 +629,33 @@ static void ovl_no_data_child(int prog_fd, const char *dir, int wfd)
 		     strlen("/missing"), 0))
 		goto out_errno;
 
-	res.stage = OVL_NO_DATA_MOUNT;
 	snprintf(data, sizeof(data), "lowerdir=%s/lower::%s/data", dir, dir);
 	snprintf(path, sizeof(path), "%s/merged", dir);
-	if (mount("overlay", path, "overlay", 0, data))
+	if (mount("overlay", path, "overlay", 0, data)) {
+		res.stage = OVL_NO_DATA_MOUNT;
 		goto out_errno;
+	}
+
+	snprintf(path, sizeof(path), "%s/merged/f", dir);
+	/* Check that the overlay entry exists without resolving its lowerdata. */
+	fd = open(path, O_PATH);
+	if (fd < 0)
+		goto out_errno;
+	close(fd);
 
 	res.stage = OVL_NO_DATA_ATTACH;
-	snprintf(path, sizeof(path), "%s/merged/f", dir);
 	opts.uprobe_multi.path = path;
 	opts.uprobe_multi.offsets = &offset;
 	opts.uprobe_multi.cnt = 1;
 	res.err = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
 	if (res.err >= 0)
 		close(res.err);
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		res.open_err = -errno;
+	else
+		close(fd);
 	goto out;
 
 out_errno:
@@ -653,9 +667,8 @@ out:
 }
 
 /*
- * The data of a metacopy file in an overlayfs data-only layer is looked up
- * lazily. If it can't be found attaching must fail with the error from the
- * lookup.
+ * Opening a metacopy file and attaching a uprobe both resolve its lowerdata
+ * lazily. Attaching must report the same lookup error as open().
  */
 static void test_attach_api_fails_ovl_no_data(void)
 {
@@ -701,7 +714,9 @@ static void test_attach_api_fails_ovl_no_data(void)
 	}
 	if (!ASSERT_EQ(res.stage, OVL_NO_DATA_ATTACH, "setup"))
 		goto cleanup_pipe;
-	ASSERT_EQ(res.err, -ENOENT, "link_create");
+	if (!ASSERT_TRUE(res.open_err == -ENOENT || res.open_err == -EIO, "open_errno"))
+		goto cleanup_pipe;
+	ASSERT_EQ(res.err, res.open_err, "link_create");
 
 cleanup_pipe:
 	if (pipefd[0] >= 0)
