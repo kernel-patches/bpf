@@ -65,6 +65,12 @@
 		stdout-path = &lpuart1;
 	};
 
+	dmic: dmic {
+		compatible = "dmic-codec";
+		#sound-dai-cells = <0>;
+		num-channels = <2>;
+	};
+
 	reg_vref_1v8: regulator-1p8v {
 		compatible = "regulator-fixed";
 		regulator-name = "+V1.8_SW";
@@ -249,6 +255,10 @@
 		pri-dai-link {
 			format = "i2s";
 			link-name = "micfil hifi";
+
+			codec {
+				sound-dai = <&dmic>;
+			};
 
 			cpu {
 				sound-dai = <&micfil>;
