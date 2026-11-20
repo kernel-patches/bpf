@@ -8,10 +8,6 @@
 #ifndef LINUX_MOD_DEVICETABLE_H
 #define LINUX_MOD_DEVICETABLE_H
 
-#ifdef __KERNEL__
-#include <linux/types.h>
-#endif
-
 #include "device-id/acpi.h"
 #include "device-id/amba.h"
 #include "device-id/ap.h"
@@ -21,6 +17,7 @@
 #include "device-id/ccw.h"
 #include "device-id/cdx.h"
 #include "device-id/coreboot.h"
+#include "device-id/cpu_feature.h"
 #include "device-id/css.h"
 #include "device-id/dfl.h"
 #include "device-id/dmi.h"
@@ -68,14 +65,5 @@
 #include "device-id/wmi.h"
 #include "device-id/x86_cpu.h"
 #include "device-id/zorro.h"
-
-/*
- * Generic table type for matching CPU features.
- * @feature:	the bit number of the feature (0 - 65535)
- */
-
-struct cpu_feature {
-	__u16	feature;
-};
 
 #endif /* LINUX_MOD_DEVICETABLE_H */
