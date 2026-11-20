@@ -44,6 +44,7 @@
 #include "xe_tile.h"
 #include "xe_tlb_inval.h"
 #include "xe_trace_bo.h"
+#include "xe_userptr.h"
 #include "xe_vm_madvise.h"
 #include "xe_wa.h"
 
@@ -2372,6 +2373,26 @@ static void prep_vma_destroy(struct xe_vm *vm, struct xe_vma *vma,
 		xe_vm_remove_vma(vm, vma);
 }
 
+static void unprep_vma_destroy(struct xe_vm *vm, struct xe_vma *vma,
+			       bool post_commit)
+{
+	xe_svm_notifier_lock(vm);
+	vma->gpuva.flags &= ~XE_VMA_DESTROYED;
+	if (IS_ENABLED(CONFIG_DRM_GPUSVM) && !xe_vm_in_fault_mode(vm) &&
+	    xe_vma_is_userptr(vma) &&
+	    xe_vma_userptr_check_repin(to_userptr_vma(vma))) {
+		struct xe_userptr_vma *uvma = to_userptr_vma(vma);
+
+		spin_lock(&vm->userptr.invalidated_lock);
+		list_move_tail(&uvma->userptr.invalidate_link,
+			       &vm->userptr.invalidated);
+		spin_unlock(&vm->userptr.invalidated_lock);
+	}
+	xe_svm_notifier_unlock(vm);
+	if (post_commit)
+		xe_vm_insert_vma(vm, vma);
+}
+
 #undef ULL
 #define ULL	unsigned long long
 
@@ -3064,13 +3085,8 @@ static void xe_vma_op_unwind(struct xe_vm *vm, struct xe_vma_op *op,
 
 		xe_vm_assert_write_mode_or_garbage_collector(vm);
 
-		if (vma) {
-			xe_svm_notifier_lock(vm);
-			vma->gpuva.flags &= ~XE_VMA_DESTROYED;
-			xe_svm_notifier_unlock(vm);
-			if (post_commit)
-				xe_vm_insert_vma(vm, vma);
-		}
+		if (vma)
+			unprep_vma_destroy(vm, vma, post_commit);
 		break;
 	}
 	case DRM_GPUVA_OP_REMAP:
@@ -3088,9 +3104,6 @@ static void xe_vma_op_unwind(struct xe_vm *vm, struct xe_vma_op *op,
 			xe_vma_destroy_unlocked(op->remap.next);
 		}
 		if (vma) {
-			xe_svm_notifier_lock(vm);
-			vma->gpuva.flags &= ~XE_VMA_DESTROYED;
-			xe_svm_notifier_unlock(vm);
 			if (post_commit) {
 				/*
 				 * Restore the old va range, in case of the
@@ -3102,8 +3115,8 @@ static void xe_vma_op_unwind(struct xe_vm *vm, struct xe_vma_op *op,
 					op->remap.old_start;
 				op->base.remap.unmap->va->va.range =
 					op->remap.old_range;
-				xe_vm_insert_vma(vm, vma);
 			}
+			unprep_vma_destroy(vm, vma, post_commit);
 		}
 		break;
 	}
