@@ -230,14 +230,17 @@ static ssize_t sof_ipc4_mtrace_dfs_read(struct file *file, char __user *buffer,
 		/* Read data between read pointer and write pointer */
 		sof_mailbox_read(sdev, log_buffer_offset + read_ptr, log_buffer, avail);
 	} else {
+		/* avail may have been cut to the user's count above */
+		u32 tail = min(avail, log_buffer_size - read_ptr);
+
 		/* read from read pointer to end of the slot */
 		sof_mailbox_read(sdev, log_buffer_offset + read_ptr, log_buffer,
-				 avail - write_ptr);
-		/* read from slot start to write pointer */
-		if (write_ptr)
+				 tail);
+		/* read the rest from slot start */
+		if (avail > tail)
 			sof_mailbox_read(sdev, log_buffer_offset,
-					 (u8 *)(log_buffer) + avail - write_ptr,
-					 write_ptr);
+					 (u8 *)(log_buffer) + tail,
+					 avail - tail);
 	}
 
 	/* first write the number of bytes we have gathered */
