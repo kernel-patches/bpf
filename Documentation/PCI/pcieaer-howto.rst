@@ -34,9 +34,8 @@ set of error reporting requirements. Advanced Error Reporting
 capability is implemented with a PCIe Advanced Error Reporting
 extended capability structure providing more robust error reporting.
 
-The PCIe AER driver provides the infrastructure to support PCIe Advanced
-Error Reporting capability. The PCIe AER driver provides three basic
-functions:
+The PCIe AER driver provides the infrastructure to support both paradigms.
+It provides three basic functions:
 
   - Gathers the comprehensive error information if errors occurred.
   - Reports error to the users.
@@ -69,7 +68,7 @@ Specification for details regarding _OSC usage.
 AER error output
 ----------------
 
-When a PCIe AER error is captured, an error message will be output to
+When a PCIe error is captured, an error message will be output to
 console. If it's a correctable error, it is output as a warning message.
 Otherwise, it is printed as an error. So users could choose different
 log level to filter out correctable error messages.
@@ -113,7 +112,7 @@ See Documentation/ABI/testing/sysfs-bus-pci-devices-aer.
 AER Statistics / Counters
 -------------------------
 
-When PCIe AER errors are captured, the counters / statistics are also exposed
+When PCIe errors are captured, the counters / statistics are also exposed
 in the form of sysfs attributes which are documented at
 Documentation/ABI/testing/sysfs-bus-pci-devices-aer.
 

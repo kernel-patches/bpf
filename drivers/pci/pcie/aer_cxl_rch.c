@@ -87,8 +87,7 @@ static bool handles_cxl_errors(struct pci_dev *rcec)
 {
 	bool handles_cxl = false;
 
-	if (pci_pcie_type(rcec) == PCI_EXP_TYPE_RC_EC &&
-	    pcie_aer_is_native(rcec))
+	if (pci_pcie_type(rcec) == PCI_EXP_TYPE_RC_EC)
 		pcie_walk_rcec(rcec, handles_cxl_error_iter, &handles_cxl);
 
 	return handles_cxl;

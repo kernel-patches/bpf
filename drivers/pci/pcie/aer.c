@@ -141,6 +141,12 @@ struct aer_info {
 					PCI_ERR_ROOT_MULTI_COR_RCV |	\
 					PCI_ERR_ROOT_MULTI_UNCOR_RCV)
 
+static const u8 severity2devsta[] = {
+	[AER_NONFATAL]    = PCI_EXP_DEVSTA_NFED,
+	[AER_FATAL]       = PCI_EXP_DEVSTA_FED,
+	[AER_CORRECTABLE] = PCI_EXP_DEVSTA_CED,
+};
+
 static bool pcie_aer_disable;
 static pci_ers_result_t aer_root_reset(struct pci_dev *dev);
 
@@ -257,9 +263,6 @@ int pcie_aer_is_native(struct pci_dev *dev)
 {
 	struct pci_host_bridge *host = pci_find_host_bridge(dev->bus);
 
-	if (!dev->aer_cap)
-		return 0;
-
 	return host->native_aer;
 }
 EXPORT_SYMBOL_NS_GPL(pcie_aer_is_native, "CXL");
@@ -280,7 +283,7 @@ int pci_aer_clear_nonfatal_status(struct pci_dev *dev)
 	int aer = dev->aer_cap;
 	u32 status, sev;
 
-	if (!pcie_aer_is_native(dev))
+	if (!aer || !pcie_aer_is_native(dev))
 		return -EIO;
 
 	/* Clear status bits for ERR_NONFATAL errors only */
@@ -299,7 +302,7 @@ void pci_aer_clear_fatal_status(struct pci_dev *dev)
 	int aer = dev->aer_cap;
 	u32 status, sev;
 
-	if (!pcie_aer_is_native(dev))
+	if (!aer || !pcie_aer_is_native(dev))
 		return;
 
 	/* Clear status bits for ERR_FATAL errors only */
@@ -400,20 +403,21 @@ void pci_aer_init(struct pci_dev *dev)
 {
 	int n;
 
-	dev->aer_cap = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ERR);
-	if (!dev->aer_cap)
+	if (!pci_is_pcie(dev))
 		return;
 
 	dev->aer_info = kzalloc_obj(*dev->aer_info);
-	if (!dev->aer_info) {
-		dev->aer_cap = 0;
+	if (!dev->aer_info)
 		return;
-	}
 
 	ratelimit_state_init(&dev->aer_info->correctable_ratelimit,
 			     DEFAULT_RATELIMIT_INTERVAL, DEFAULT_RATELIMIT_BURST);
 	ratelimit_state_init(&dev->aer_info->nonfatal_ratelimit,
 			     DEFAULT_RATELIMIT_INTERVAL, DEFAULT_RATELIMIT_BURST);
+
+	dev->aer_cap = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ERR);
+	if (!dev->aer_cap)
+		goto enable;
 
 	/*
 	 * We save/restore PCI_ERR_UNCOR_MASK, PCI_ERR_UNCOR_SEVER,
@@ -435,6 +439,9 @@ void pci_aer_init(struct pci_dev *dev)
 					       PCI_ERR_COR_ADV_NFAT, 0);
 
 	pci_aer_clear_status(dev);
+enable:
+	if (pcie_aer_is_native(dev))
+		pcie_clear_device_status(dev);
 
 	if (pci_aer_available())
 		pci_enable_pcie_error_reporting(dev);
@@ -699,9 +706,9 @@ const struct attribute_group aer_stats_attr_group = {
 					 char *buf)			\
 	{								\
 		struct pci_dev *pdev = to_pci_dev(dev);			\
+		unsigned long iv = pdev->aer_info->ratelimit.interval;	\
 									\
-		return sysfs_emit(buf, "%d\n",				\
-				  pdev->aer_info->ratelimit.interval);	\
+		return sysfs_emit(buf, "%u\n", jiffies_to_msecs(iv));	\
 	}								\
 									\
 	static ssize_t							\
@@ -752,6 +759,9 @@ const struct attribute_group aer_stats_attr_group = {
 		if (kstrtoint(buf, 0, &burst) < 0)			\
 			return -EINVAL;					\
 									\
+		if (burst < 0)						\
+			burst = 0;					\
+									\
 		pdev->aer_info->ratelimit.burst = burst;		\
 									\
 		return count;						\
@@ -775,22 +785,19 @@ static struct attribute *aer_attrs[] = {
 	NULL
 };
 
-static umode_t aer_attrs_are_visible(struct kobject *kobj,
-				     struct attribute *a, int n)
+static bool aer_group_visible(struct kobject *kobj)
 {
-	struct device *dev = kobj_to_dev(kobj);
-	struct pci_dev *pdev = to_pci_dev(dev);
+	struct pci_dev *pdev = to_pci_dev(kobj_to_dev(kobj));
 
-	if (!pdev->aer_info)
-		return 0;
-
-	return a->mode;
+	return !!pdev->aer_info;
 }
+
+DEFINE_SIMPLE_SYSFS_GROUP_VISIBLE(aer);
 
 const struct attribute_group aer_attr_group = {
 	.name = "aer",
 	.attrs = aer_attrs,
-	.is_visible = aer_attrs_are_visible,
+	.is_visible = SYSFS_GROUP_VISIBLE(aer),
 };
 
 static void pci_dev_aer_stats_incr(struct pci_dev *pdev,
@@ -951,12 +958,13 @@ static void aer_print_source(struct pci_dev *dev, struct aer_err_info *info,
 {
 	u16 source = info->id;
 
-	pci_info(dev, "%s%s Error message%s from %04x:%02x:%02x.%d%s\n",
+	pci_info(dev, "%s%s Error message%s from %04x:%02x:%02x.%d%s%s\n",
 		 info->multi_error_valid ? "Multiple " : "",
 		 aer_error_severity_string[info->severity],
 		 info->multi_error_valid ? "s received, first one" : " received",
 		 pci_domain_nr(dev->bus), PCI_BUS_NUM(source),
 		 PCI_SLOT(source), PCI_FUNC(source),
+		 info->id_valid ? "" : " (invalid source)",
 		 found ? "" : " (no details found)");
 }
 
@@ -984,14 +992,12 @@ void aer_print_error(struct aer_err_info *info, int i)
 	if (!info->ratelimit_print[i])
 		goto anfe;
 
-	if (!info->status) {
-		pci_err(dev, "%s Bus Error: severity=%s (Inaccessible)\n",
-			bus_type, aer_error_severity_string[info->severity]);
-		return;
-	}
+	aer_printk(level, dev, "%s Bus Error: severity=%s%s\n",
+		   bus_type, aer_error_severity_string[info->severity],
+		   info->status ? "" : " (no details available)");
 
-	aer_printk(level, dev, "%s Bus Error: severity=%s\n",
-		   bus_type, aer_error_severity_string[info->severity]);
+	if (!info->status)
+		return;
 
 	aer_printk(level, dev, "  device [%04x:%04x] error status/mask=%08x/%08x\n",
 		   dev->vendor, dev->device, info->status, info->mask);
@@ -1146,6 +1152,24 @@ static int add_error_device(struct aer_err_info *e_info, struct pci_dev *dev)
 	return 0;
 }
 
+static bool source_id_valid(struct pci_dev *root, u16 id)
+{
+	/* The Root Port or RCEC can itself be a valid Error Source */
+	if (pci_dev_id(root) == id)
+		return true;
+
+	/* For RCECs, @id shall be in range of its associated buses/devices */
+	if (pci_pcie_type(root) == PCI_EXP_TYPE_RC_EC)
+		return pci_rcec_associated(root, id);
+
+	/* For Root Ports, @id shall be in range of its subordinate buses */
+	if (!root->subordinate)
+		return false;
+
+	return root->subordinate->busn_res.start <= PCI_BUS_NUM(id) &&
+	       PCI_BUS_NUM(id) <= root->subordinate->busn_res.end;
+}
+
 /**
  * is_error_source - check whether the device is source of reported error
  * @dev: pointer to pci_dev to be checked
@@ -1157,11 +1181,8 @@ static bool is_error_source(struct pci_dev *dev, struct aer_err_info *e_info)
 	u32 status, mask;
 	u16 reg16;
 
-	/*
-	 * When bus ID is equal to 0, it might be a bad ID
-	 * reported by Root Port.
-	 */
-	if ((PCI_BUS_NUM(e_info->id) != 0) &&
+	/* Some Root Ports report an invalid Error Source ID */
+	if (e_info->id_valid &&
 	    !(dev->bus->bus_flags & PCI_BUS_FLAGS_NO_AERSID)) {
 		/* Device ID match? */
 		if (e_info->id == pci_dev_id(dev))
@@ -1174,8 +1195,7 @@ static bool is_error_source(struct pci_dev *dev, struct aer_err_info *e_info)
 
 	/*
 	 * When either
-	 *      1) bus ID is equal to 0. Some ports might lose the bus
-	 *              ID of error source id;
+	 *      1) Error Source ID register is invalid;
 	 *      2) bus flag PCI_BUS_FLAGS_NO_AERSID is set
 	 *      3) There are multiple errors and prior ID comparing fails;
 	 * We check AER status registers to find possible reporter.
@@ -1186,8 +1206,11 @@ static bool is_error_source(struct pci_dev *dev, struct aer_err_info *e_info)
 	if (!(reg16 & PCI_EXP_AER_FLAGS))
 		return false;
 
-	if (!aer)
-		return false;
+	if (!aer) {
+		pcie_capability_read_word(dev, PCI_EXP_DEVSTA, &reg16);
+		return reg16 & severity2devsta[e_info->severity] &&
+		       !PCI_POSSIBLE_ERROR(reg16);
+	}
 
 	/* Check if error is recorded */
 	if (e_info->severity == AER_CORRECTABLE) {
@@ -1231,7 +1254,7 @@ static int find_device_iter(struct pci_dev *dev, void *data)
  * Return: true if found.
  *
  * Invoked by DPC when error is detected at the Root Port.
- * Caller of this function must set id, severity, and multi_error_valid of
+ * Callers must set id, id_valid, severity, and multi_error_valid fields of
  * struct aer_err_info pointed by @e_info properly.  This function must fill
  * e_info->error_dev_num and e_info->dev[], based on the given information.
  */
@@ -1251,7 +1274,7 @@ static bool find_source_device(struct pci_dev *parent,
 
 	if (pci_pcie_type(parent) == PCI_EXP_TYPE_RC_EC)
 		pcie_walk_rcec(parent, find_device_iter, e_info);
-	else
+	else if (parent->subordinate)
 		pci_walk_bus(parent->subordinate, find_device_iter, e_info);
 
 	if (!e_info->error_dev_num)
@@ -1267,7 +1290,7 @@ static bool find_source_device(struct pci_dev *parent,
  * Mask registers.
  *
  * Note: AER must be enabled and supported by the device which must be
- * checked in advance, e.g. with pcie_aer_is_native().
+ * checked in advance, e.g. with dev->aer_cap && pcie_aer_is_native(dev).
  */
 void pci_aer_unmask_internal_errors(struct pci_dev *dev)
 {
@@ -1299,6 +1322,17 @@ bool is_aer_internal_error(struct aer_err_info *info)
 }
 #endif
 
+static void pcie_clear_device_status_sev(struct pci_dev *dev, u8 severity,
+					 u32 uncor_status)
+{
+	u16 devsta = severity2devsta[severity];
+
+	if (uncor_status & PCI_ERR_UNC_UNSUP)
+		devsta |= PCI_EXP_DEVSTA_URD;
+
+	pcie_capability_write_word(dev, PCI_EXP_DEVSTA, devsta);
+}
+
 /**
  * pci_aer_handle_error - handle logging error into an event log
  * @dev: pointer to pci_dev data structure of error source device
@@ -1329,7 +1363,8 @@ static void pci_aer_handle_error(struct pci_dev *dev, struct aer_err_info *info)
 			if (pdrv && pdrv->err_handler &&
 			    pdrv->err_handler->cor_error_detected)
 				pdrv->err_handler->cor_error_detected(dev);
-			pcie_clear_device_status(dev);
+			pcie_clear_device_status_sev(dev, AER_CORRECTABLE,
+						     info->anfe_status);
 		}
 	} else if (info->severity == AER_NONFATAL)
 		pcie_do_recovery(dev, pci_channel_io_normal, aer_root_reset);
@@ -1491,6 +1526,7 @@ int aer_get_device_error_info(struct aer_err_info *info, int i)
 {
 	struct pci_dev *dev;
 	int type, aer;
+	u16 devsta;
 
 	if (i >= AER_MAX_MULTI_ERR_DEVICES)
 		return 0;
@@ -1501,13 +1537,22 @@ int aer_get_device_error_info(struct aer_err_info *info, int i)
 
 	/* Must reset in this function */
 	info->status = 0;
+	info->mask = 0;
 	info->anfe_status = 0;
+	info->first_error = 0;
 	info->tlp_header_valid = 0;
 	info->is_cxl = pcie_is_cxl(dev);
 
 	/* The device might not support AER */
-	if (!aer)
-		return 0;
+	if (!aer) {
+		if (info->severity != AER_CORRECTABLE) {
+			pcie_capability_read_word(dev, PCI_EXP_DEVSTA, &devsta);
+			if (devsta & PCI_EXP_DEVSTA_URD &&
+			    !PCI_POSSIBLE_ERROR(devsta))
+				info->status = PCI_ERR_UNC_UNSUP;
+		}
+		return 1;
+	}
 
 	if (info->severity == AER_CORRECTABLE) {
 		pci_read_config_dword(dev, aer + PCI_ERR_COR_STATUS,
@@ -1565,6 +1610,8 @@ static void aer_isr_one_error_type(struct pci_dev *root,
 				   struct aer_err_info *info)
 {
 	bool found;
+
+	info->id_valid = source_id_valid(root, info->id);
 
 	found = find_source_device(root, info);
 
