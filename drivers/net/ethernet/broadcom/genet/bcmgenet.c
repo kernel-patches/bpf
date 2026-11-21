@@ -1664,7 +1664,7 @@ static int bcmgenet_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 	struct bcmgenet_priv *priv = netdev_priv(dev);
 	struct bcmgenet_rxnfc_rule *rule;
 	int err = 0;
-	int i = 0;
+	u32 i = 0;
 
 	switch (cmd->cmd) {
 	case ETHTOOL_GRXCLSRLCNT:
@@ -1675,9 +1675,11 @@ static int bcmgenet_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 		err = bcmgenet_get_flow(dev, cmd, cmd->fs.location);
 		break;
 	case ETHTOOL_GRXCLSRLALL:
-		list_for_each_entry(rule, &priv->rxnfc_list, list)
-			if (i < cmd->rule_cnt)
-				rule_locs[i++] = rule->fs.location;
+		list_for_each_entry(rule, &priv->rxnfc_list, list) {
+			if (i == cmd->rule_cnt)
+				return -EMSGSIZE;
+			rule_locs[i++] = rule->fs.location;
+		}
 		cmd->rule_cnt = i;
 		cmd->data = MAX_NUM_OF_FS_RULES;
 		break;
