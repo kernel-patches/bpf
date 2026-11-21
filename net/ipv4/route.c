@@ -393,6 +393,42 @@ static inline int ip_rt_proc_init(void)
 }
 #endif /* CONFIG_PROC_FS */
 
+/*
+ * Draw rt_genid bumps from one sequence shared by all netns. A route keeps
+ * the genid of the netns it was created in, and is checked against the netns
+ * its device is in now, so distinct values make that check fail once the
+ * device has moved. Every netns starts at 0, which the sequence never hands
+ * out, and inserting a route bumps the genid, so cached routes carry values
+ * drawn from the sequence.
+ */
+static atomic_t rt_genid_seq;
+
+static int rt_genid_draw(void)
+{
+	int genid;
+
+	do {
+		genid = atomic_inc_return(&rt_genid_seq);
+	} while (!genid);
+
+	return genid;
+}
+
+/*
+ * Publish the drawn value with a cmpxchg on the netns genid, drawing again if
+ * another bump got there first, so that a stalled bump never overwrites a
+ * newer value and each bump is ordered after the ones it replaces.
+ */
+void rt_genid_bump_ipv4(struct net *net)
+{
+	int genid, old = atomic_read(&net->ipv4.rt_genid);
+
+	do {
+		genid = rt_genid_draw();
+	} while (!atomic_try_cmpxchg(&net->ipv4.rt_genid, &old, genid));
+}
+EXPORT_SYMBOL_GPL(rt_genid_bump_ipv4);
+
 static inline bool rt_is_expired(const struct rtable *rth)
 {
 	bool res;
