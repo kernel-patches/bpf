@@ -1072,9 +1072,6 @@ static int ocfs2_fill_super(struct super_block *sb, struct fs_context *fc)
 	osb->osb_debug_root = debugfs_create_dir(osb->uuid_str,
 						 ocfs2_debugfs_root);
 
-	debugfs_create_file("fs_state", S_IFREG|S_IRUSR, osb->osb_debug_root,
-			    osb, &ocfs2_osb_debug_fops);
-
 	if (ocfs2_meta_ecc(osb)) {
 		ocfs2_initialize_journal_triggers(sb, osb->s_journal_triggers);
 		ocfs2_blockcheck_stats_debugfs_install( &osb->osb_ecc_stats,
@@ -1157,6 +1154,10 @@ static int ocfs2_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	/* Start this when the mount is almost sure of being successful */
 	ocfs2_orphan_scan_start(osb);
+
+	/* Publish fs_state only after all fallible mount steps. */
+	debugfs_create_file("fs_state", 0400, osb->osb_debug_root,
+			    osb, &ocfs2_osb_debug_fops);
 
 	return status;
 
@@ -1555,7 +1556,12 @@ static void __exit ocfs2_exit(void)
 
 static void ocfs2_put_super(struct super_block *sb)
 {
+	struct ocfs2_super *osb = OCFS2_SB(sb);
+
 	trace_ocfs2_put_super(sb);
+
+	/* Drain fs_state opens before releasing their backing state. */
+	debugfs_lookup_and_remove("fs_state", osb->osb_debug_root);
 
 	ocfs2_sync_blockdev(sb);
 	ocfs2_dismount_volume(sb, 0);
