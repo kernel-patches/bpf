@@ -5006,23 +5006,33 @@ static inline void netif_tx_unlock_bh(struct net_device *dev)
 	}						\
 }
 
+/**
+ * netif_disable_subqueue() - stop subqueue and wait for xmit to finish
+ * @dev: network device
+ * @queue_index: sub queue index
+ *
+ * Stop the subqueue like netif_stop_subqueue(), but also make sure that
+ * ndo_start_xmit() is not running on it once this function returns.
+ * Does not synchronize with xmit of lltx devices.
+ */
+static inline void
+netif_disable_subqueue(struct net_device *dev, u16 queue_index)
+{
+	struct netdev_queue *txq = netdev_get_tx_queue(dev, queue_index);
+
+	__netif_tx_lock_bh(txq);
+	netif_tx_stop_queue(txq);
+	__netif_tx_unlock_bh(txq);
+}
+
 static inline void netif_tx_disable(struct net_device *dev)
 {
 	unsigned int i;
-	int cpu;
 
-	local_bh_disable();
-	cpu = smp_processor_id();
-	spin_lock(&dev->tx_global_lock);
-	for (i = 0; i < dev->num_tx_queues; i++) {
-		struct netdev_queue *txq = netdev_get_tx_queue(dev, i);
-
-		__netif_tx_lock(txq, cpu);
-		netif_tx_stop_queue(txq);
-		__netif_tx_unlock(txq);
-	}
-	spin_unlock(&dev->tx_global_lock);
-	local_bh_enable();
+	spin_lock_bh(&dev->tx_global_lock);
+	for (i = 0; i < dev->num_tx_queues; i++)
+		netif_disable_subqueue(dev, i);
+	spin_unlock_bh(&dev->tx_global_lock);
 }
 
 #ifndef CONFIG_PREEMPT_RT
