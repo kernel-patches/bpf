@@ -456,7 +456,11 @@ struct loop_stack_entry {
 	/* an xreg: how many times the program came back to the header */
 	struct scalar trip_index;
 	bool trip_widened;	/* it was moved to a threshold, or it does not grow */
-	u64 exit_threshold;	/* by the jumps that the state passed and that leave the loop */
+	/*
+	 * The trip index at which a jump that the state passed leaves the loop.
+	 * Path-sensitive run: the bound that the jump on the iv saw.
+	 */
+	u64 exit_threshold;
 	/* Path-sensitive run: the jump that tests the iv, the value it saw, the trips left */
 	u32 iv_jump_idx;
 	u64 iv_prev, trips_left;

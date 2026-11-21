@@ -21046,18 +21046,21 @@ static int check_held_in_leftover(struct bpf_verifier_env *env,
  *	for (i = 0; i < 100000; i++) { if (rnd() && n < 8) n++; }
  * Two trips show a step also for 'sum += i', and more than 2^32 trips also for a ring index.
  * If the steps are not constant, the skip or "infinite" is a guess.
+ * If the bound moved, there is no skip. A later saved trip can have the same bound.
  * Returns 1 if it skipped these trips.
  */
 static int fast_forward_trips(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
 {
 	struct bpf_verifier_state *cur = env->cur_state, *old = &entry->header_state->st;
-	u32 period = entry->trip - bpf_top_loop(old->frame[old->curframe])->trip;
+	const struct loop_stack_entry *saved = bpf_top_loop(old->frame[old->curframe]);
+	u32 period = entry->trip - saved->trip;
 	bool infinite = entry->trips_left > BPF_MAX_TRIPS, guess;
 	DECLARE_BITMAP(iv_xregs, MAX_BPF_XREG) = {};
 	int err;
 
 	/* the answer needs a walk over the program */
 	if ((infinite ? entry->loop->infinite : entry->trips_left <= period) ||
+	    (!infinite && saved->exit_threshold != entry->exit_threshold) ||
 	    (u64)entry->trip * entry->loop->nr_insns < env->prog->len)
 		return 0;
 	bpf_fast_forward_xregs(env, old, cur, 0, iv_xregs);
