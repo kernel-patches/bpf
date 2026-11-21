@@ -50,6 +50,10 @@
  #define mask_user_address(src) (src)
 #endif
 
+#ifndef user_access_may_speculate_kernel_addr
+#define user_access_may_speculate_kernel_addr() true
+#endif
+
 /*
  * Architectures should provide two primitives (raw_copy_{to,from}_user())
  * and get rid of their private instances of copy_{to,from}_user() and
@@ -179,7 +183,8 @@ _inline_copy_from_user(void *to, const void __user *from, unsigned long n)
 		 * lead to nasty side effects *after* the copy is
 		 * finished:
 		 */
-		barrier_nospec();
+		if (user_access_may_speculate_kernel_addr())
+			barrier_nospec();
 	}
 	instrument_copy_from_user_before(to, from, n);
 	res = raw_copy_from_user(to, from, n);
