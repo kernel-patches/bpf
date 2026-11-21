@@ -93,12 +93,14 @@
 #include <linux/limits.h>
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
+#include <bpf/libbpf_tools.h>
 #include "btf_colors.h"
 #include "fmodret.h"
 #include <subcmd/parse-options.h>
 
 #define BTF_IDS_SECTION	".BTF_ids"
 #define BTF_LINK_MODULE_NAME_MAX	64
+#define BTF_SHA256_DIGEST_LENGTH	SHA256_DIGEST_LENGTH
 #define BTF_ID_PREFIX	"__BTF_ID__"
 
 #define BTF_STRUCT	"struct"
@@ -1205,8 +1207,7 @@ static int patch_btf_link(struct object *obj, const struct btf_link *link)
 	}
 	memset(data->d_buf, 0, data->d_size);
 	memcpy(data->d_buf, link->module, strlen(link->module) + 1);
-	btf_sha256(raw_btf_data, raw_btf_size,
-		   (u8 *)data->d_buf + module_name_len);
+	libbpf_sha256(raw_btf_data, raw_btf_size, (u8 *)data->d_buf + module_name_len);
 	size = (u8 *)data->d_buf + module_name_len + BTF_SHA256_DIGEST_LENGTH;
 	if (obj->efile.encoding == ELFDATA2LSB) {
 		size[0] = raw_btf_size;
