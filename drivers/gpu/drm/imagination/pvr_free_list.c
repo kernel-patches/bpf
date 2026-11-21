@@ -193,7 +193,6 @@ free_list_fw_init(void *cpu_ptr, void *priv)
 
 static int
 free_list_create_fw_structure(struct pvr_file *pvr_file,
-			      struct drm_pvr_ioctl_create_free_list_args *args,
 			      struct pvr_free_list *free_list)
 {
 	struct pvr_device *pvr_dev = pvr_file->pvr_dev;
@@ -443,7 +442,7 @@ pvr_free_list_create(struct pvr_file *pvr_file,
 	if (err)
 		goto err_destroy_kernel_structure;
 
-	err = free_list_create_fw_structure(pvr_file, args, free_list);
+	err = free_list_create_fw_structure(pvr_file, free_list);
 	if (err < 0)
 		goto err_free_fw_id;
 

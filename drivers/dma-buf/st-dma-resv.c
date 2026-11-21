@@ -35,7 +35,7 @@ static struct dma_fence *alloc_fence(void)
 	if (!f)
 		return NULL;
 
-	dma_fence_init(f, &fence_ops, &fence_lock, 0, 0);
+	dma_fence_init(f, &fence_ops, &fence_lock, 0, 0, 0);
 	return f;
 }
 

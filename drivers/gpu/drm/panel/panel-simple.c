@@ -695,7 +695,7 @@ static struct panel_simple *panel_simple_probe(struct device *dev)
 
 	ddc = of_parse_phandle(dev->of_node, "ddc-i2c-bus", 0);
 	if (ddc) {
-		panel->ddc = of_find_i2c_adapter_by_node(ddc);
+		panel->ddc = of_get_i2c_adapter_by_node(ddc);
 		of_node_put(ddc);
 
 		if (!panel->ddc)
@@ -740,7 +740,7 @@ disable_pm_runtime:
 	pm_runtime_disable(dev);
 free_ddc:
 	if (panel->ddc)
-		put_device(&panel->ddc->dev);
+		i2c_put_adapter(panel->ddc);
 
 	return ERR_PTR(err);
 }
@@ -785,7 +785,7 @@ static void panel_simple_remove(struct device *dev)
 	pm_runtime_dont_use_autosuspend(dev);
 	pm_runtime_disable(dev);
 	if (panel->ddc)
-		put_device(&panel->ddc->dev);
+		i2c_put_adapter(panel->ddc);
 }
 
 static const struct drm_display_mode ampire_am_1280800n3tzqw_t00h_mode = {

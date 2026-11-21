@@ -8210,6 +8210,7 @@ DRM ACCEL DRIVER FOR ROCKCHIP NPU
 M:	Tomeu Vizoso <tomeu@tomeuvizoso.net>
 R:	Heiko Stuebner <heiko@sntech.de>
 L:	dri-devel@lists.freedesktop.org
+L:	linux-rockchip@lists.infradead.org
 S:	Supported
 T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
 F:	Documentation/accel/rocket/
@@ -8842,6 +8843,7 @@ M:	Louis Chauvet <louis.chauvet@bootlin.com>
 R:	Haneen Mohammed <hamohammed.sa@gmail.com>
 R:	Simona Vetter <simona@ffwll.ch>
 R:	Melissa Wen <melissa.srw@gmail.com>
+R:	Oarora Etimis <oaroraetimis@gmail.com>
 L:	dri-devel@lists.freedesktop.org
 S:	Maintained
 T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git

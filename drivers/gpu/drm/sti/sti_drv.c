@@ -202,12 +202,16 @@ static int sti_bind(struct device *dev)
 	if (ret)
 		goto err_cleanup;
 
-	drm_mode_config_reset(ddev);
+	ret = drm_mode_config_create_initial_state(ddev);
+	if (ret)
+		goto err_unregister;
 
 	drm_client_setup(ddev, NULL);
 
 	return 0;
 
+err_unregister:
+	drm_dev_unregister(ddev);
 err_cleanup:
 	sti_cleanup(ddev);
 err_drm_dev_put:

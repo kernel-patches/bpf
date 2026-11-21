@@ -1733,7 +1733,7 @@ static int ffs_dmabuf_transfer(struct file *file,
 	seqno = atomic_add_return(1, &epfile->seqno);
 
 	dma_fence_init(&fence->base, &ffs_dmabuf_fence_ops,
-		       &priv->lock, priv->context, seqno);
+		       &priv->lock, priv->context, seqno, 0);
 
 	resv_dir = epfile->in ? DMA_RESV_USAGE_READ : DMA_RESV_USAGE_WRITE;
 

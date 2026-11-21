@@ -33,15 +33,11 @@
 #define ADDR_TO_L2_CACHE_CFG(addr) ((addr) >> 31)
 
 /* Check if FW API is compatible with the driver */
-#define IVPU_FW_CHECK_API_COMPAT(vdev, name, min_major) \
+#define IVPU_FW_CHECK_API_COMPAT(vdev, name, min_major, min_minor) \
 	ivpu_fw_check_api(vdev, #name, \
 			  VPU_##name##_API_VER_INDEX, \
 			  VPU_##name##_API_VER_MAJOR, \
-			  VPU_##name##_API_VER_MINOR, min_major)
-
-/* Check if API version is lower that the given version */
-#define IVPU_FW_CHECK_API_VER_LT(vdev, name, major, minor) \
-	ivpu_fw_check_api_ver_lt(vdev, #name, VPU_##name##_API_VER_INDEX, major, minor)
+			  VPU_##name##_API_VER_MINOR, min_major, min_minor)
 
 #define IVPU_FOCUS_PRESENT_TIMER_MS 1000
 
@@ -97,28 +93,6 @@ static int ivpu_fw_request(struct ivpu_device *vdev)
 	return ret;
 }
 
-static int
-ivpu_fw_check_api(struct ivpu_device *vdev, const char *str, int index, u16 expected_major,
-		  u16 expected_minor, u16 min_major)
-{
-	u16 major = (u16)(vdev->fw->api_version[index] >> 16);
-	u16 minor = (u16)(vdev->fw->api_version[index]);
-
-	if (major < min_major) {
-		ivpu_err(vdev, "Incompatible FW %s API version: %d.%d, required %d.0 or later\n",
-			 str, major, minor, min_major);
-		return -EINVAL;
-	}
-	if (major != expected_major) {
-		ivpu_warn(vdev, "Major FW %s API version different: %d.%d (expected %d.%d)\n",
-			  str, major, minor, expected_major, expected_minor);
-	}
-	ivpu_dbg(vdev, FW_BOOT, "FW %s API version: %d.%d (expected %d.%d)\n",
-		 str, major, minor, expected_major, expected_minor);
-
-	return 0;
-}
-
 static bool
 ivpu_fw_check_api_ver_lt(struct ivpu_device *vdev, const char *str, int index, u16 major, u16 minor)
 {
@@ -129,6 +103,29 @@ ivpu_fw_check_api_ver_lt(struct ivpu_device *vdev, const char *str, int index, u
 		return true;
 
 	return false;
+}
+
+static int
+ivpu_fw_check_api(struct ivpu_device *vdev, const char *str, int index, u16 drv_major,
+		  u16 drv_minor, u16 min_major, u16 min_minor)
+{
+	u16 fw_major = (u16)(vdev->fw->api_version[index] >> 16);
+	u16 fw_minor = (u16)(vdev->fw->api_version[index]);
+
+	if (ivpu_fw_check_api_ver_lt(vdev, str, index, min_major, min_minor)) {
+		ivpu_err(vdev, "Firmware %s API version %u.%u is too old; minimum supported version is %u.%u\n",
+			 str, fw_major, fw_minor, min_major, min_minor);
+		ivpu_err(vdev, "Update firmware %s before using this device\n", vdev->fw->name);
+		return -EINVAL;
+	}
+	if (fw_major != drv_major) {
+		ivpu_warn(vdev, "Major %s API version different: firmware %u.%u, driver %u.%u\n",
+			  str, fw_major, fw_minor, drv_major, drv_minor);
+	}
+	ivpu_dbg(vdev, FW_BOOT, "%s API version: firmware %u.%u, driver %u.%u\n",
+		 str, fw_major, fw_minor, drv_major, drv_minor);
+
+	return 0;
 }
 
 bool ivpu_is_within_range(u64 addr, size_t size, struct ivpu_addr_range *range)
@@ -144,22 +141,18 @@ bool ivpu_is_within_range(u64 addr, size_t size, struct ivpu_addr_range *range)
 	return true;
 }
 
-static u32
-ivpu_fw_sched_mode_select(struct ivpu_device *vdev)
+static void ivpu_fw_sched_mode_init(struct ivpu_device *vdev)
 {
-	if (ivpu_hw_ip_gen(vdev) >= IVPU_HW_IP_60XX &&
-	    ivpu_sched_mode == VPU_SCHEDULING_MODE_OS) {
-		ivpu_warn(vdev, "OS sched mode is not supported, using HW mode\n");
-		return VPU_SCHEDULING_MODE_HW;
+	if (ivpu_test_mode & IVPU_TEST_MODE_HWS_DISABLE) {
+		if (ivpu_hw_ip_gen(vdev) < IVPU_HW_IP_60XX) {
+			vdev->fw->sched_mode = VPU_SCHEDULING_MODE_OS;
+			ivpu_warn(vdev, "OS scheduling mode enabled. Use for debug only!\n");
+			return;
+		}
+		ivpu_warn(vdev, "OS scheduling mode is not supported, using HW mode\n");
 	}
-
-	if (ivpu_sched_mode != IVPU_SCHED_MODE_AUTO)
-		return ivpu_sched_mode;
-
-	if (IVPU_FW_CHECK_API_VER_LT(vdev, JSM, 3, 24))
-		return VPU_SCHEDULING_MODE_OS;
-
-	return VPU_SCHEDULING_MODE_HW;
+	vdev->fw->sched_mode = VPU_SCHEDULING_MODE_HW;
+	ivpu_dbg(vdev, FW_BOOT, "Scheduling mode: HW\n");
 }
 
 static void
@@ -306,9 +299,9 @@ static int ivpu_fw_parse(struct ivpu_device *vdev)
 
 	memcpy(fw->api_version, fw_hdr->api_version, sizeof(fw->api_version));
 
-	if (IVPU_FW_CHECK_API_COMPAT(vdev, BOOT, 3))
+	if (IVPU_FW_CHECK_API_COMPAT(vdev, BOOT, 3, 17))
 		return -EINVAL;
-	if (IVPU_FW_CHECK_API_COMPAT(vdev, JSM, 3))
+	if (IVPU_FW_CHECK_API_COMPAT(vdev, JSM, 3, 24))
 		return -EINVAL;
 
 	fw->boot_params_addr = boot_params_addr;
@@ -322,8 +315,7 @@ static int ivpu_fw_parse(struct ivpu_device *vdev)
 	fw->shave_nn_size = PAGE_ALIGN(fw_hdr->shave_nn_fw_size);
 	fw->cold_boot_entry_point = fw_hdr->entry_point;
 
-	fw->sched_mode = ivpu_fw_sched_mode_select(vdev);
-	ivpu_info(vdev, "Scheduler mode: %s\n", fw->sched_mode ? "HW" : "OS");
+	ivpu_fw_sched_mode_init(vdev);
 
 	ivpu_preemption_config_parse(vdev, fw_hdr);
 

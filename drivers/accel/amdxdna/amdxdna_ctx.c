@@ -53,7 +53,7 @@ static struct dma_fence *amdxdna_fence_create(struct amdxdna_hwctx *hwctx)
 
 	spin_lock_init(&fence->lock);
 	/* Unique timeline context prevents eviction from shared BO reservation. */
-	dma_fence_init(&fence->base, &fence_ops, &fence->lock, dma_fence_context_alloc(1), 0);
+	dma_fence_init(&fence->base, &fence_ops, &fence->lock, dma_fence_context_alloc(1), 0, 0);
 	return &fence->base;
 }
 
@@ -365,9 +365,11 @@ int amdxdna_drm_config_hwctx_ioctl(struct drm_device *dev, void *data, struct dr
 
 	switch (args->param_type) {
 	case DRM_AMDXDNA_HWCTX_CONFIG_CU:
+	case DRM_AMDXDNA_HWCTX_ASSIGN_FW_BUF:
+	case DRM_AMDXDNA_HWCTX_REMOVE_FW_BUF:
 		/* For those types that param_val is pointer */
 		if (buf_size > PAGE_SIZE) {
-			XDNA_ERR(xdna, "Config CU param buffer too large");
+			XDNA_ERR(xdna, "Config param buffer too large");
 			return -E2BIG;
 		}
 

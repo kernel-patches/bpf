@@ -136,7 +136,7 @@ struct dma_fence *host1x_fence_create(struct host1x_syncpt *sp, u32 threshold,
 	fence->timeout = timeout;
 
 	dma_fence_init(&fence->base, &host1x_syncpt_fence_ops, &sp->fences.lock,
-		       dma_fence_context_alloc(1), 0);
+		       dma_fence_context_alloc(1), 0, 0);
 
 	INIT_DELAYED_WORK(&fence->timeout_work, do_fence_timeout);
 

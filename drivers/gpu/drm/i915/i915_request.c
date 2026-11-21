@@ -953,7 +953,7 @@ __i915_request_create(struct intel_context *ce, gfp_t gfp)
 		goto err_free;
 
 	dma_fence_init(&rq->fence, &i915_fence_ops, &rq->lock,
-		       tl->fence_context, seqno);
+		       tl->fence_context, seqno, 0);
 
 	RCU_INIT_POINTER(rq->timeline, tl);
 	rq->hwsp_seqno = tl->hwsp_seqno;

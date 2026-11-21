@@ -262,8 +262,10 @@ static int dw_hdmi_qp_audio_enable(struct drm_bridge *bridge,
 {
 	struct dw_hdmi_qp *hdmi = dw_hdmi_qp_from_bridge(bridge);
 
-	if (hdmi->tmds_char_rate)
-		dw_hdmi_qp_mod(hdmi, 0, AVP_DATAPATH_PACKET_AUDIO_SWDISABLE, GLOBAL_SWDISABLE);
+	if (!hdmi->tmds_char_rate)
+		return -EOPNOTSUPP;
+
+	dw_hdmi_qp_mod(hdmi, 0, AVP_DATAPATH_PACKET_AUDIO_SWDISABLE, GLOBAL_SWDISABLE);
 
 	return 0;
 }
@@ -277,7 +279,7 @@ static int dw_hdmi_qp_audio_prepare(struct drm_bridge *bridge,
 	bool ref2stream = false;
 
 	if (!hdmi->tmds_char_rate)
-		return -ENODEV;
+		return -EOPNOTSUPP;
 
 	if (fmt->bit_clk_provider | fmt->frame_clk_provider) {
 		dev_err(hdmi->dev, "unsupported clock settings\n");

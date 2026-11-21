@@ -263,7 +263,7 @@ void __i915_vma_resource_init(struct i915_vma_resource *vma_res)
 {
 	spin_lock_init(&vma_res->lock);
 	dma_fence_init(&vma_res->unbind_fence, &unbind_fence_ops,
-		       &vma_res->lock, 0, 0);
+		       &vma_res->lock, 0, 0, 0);
 	refcount_set(&vma_res->hold_count, 1);
 	i915_sw_fence_init(&vma_res->chain, i915_vma_resource_fence_notify);
 }

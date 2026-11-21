@@ -641,7 +641,7 @@ static struct dma_fence *alloc_dma_fence(void)
 
 	dma = kmalloc_obj(*dma);
 	if (dma)
-		dma_fence_init(dma, &mock_fence_ops, &mock_fence_lock, 0, 0);
+		dma_fence_init(dma, &mock_fence_ops, &mock_fence_lock, 0, 0, 0);
 
 	return dma;
 }

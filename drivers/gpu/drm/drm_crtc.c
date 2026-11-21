@@ -187,7 +187,7 @@ struct dma_fence *drm_crtc_create_fence(struct drm_crtc *crtc)
 		return NULL;
 
 	dma_fence_init(fence, &drm_crtc_fence_ops, &crtc->fence_lock,
-		       crtc->fence_context, ++crtc->fence_seqno);
+		       crtc->fence_context, ++crtc->fence_seqno, 0);
 
 	return fence;
 }

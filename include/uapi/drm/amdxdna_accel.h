@@ -135,6 +135,56 @@ enum amdxdna_drm_config_hwctx_param {
 	DRM_AMDXDNA_HWCTX_CONFIG_CU,
 	DRM_AMDXDNA_HWCTX_ASSIGN_DBG_BUF,
 	DRM_AMDXDNA_HWCTX_REMOVE_DBG_BUF,
+	DRM_AMDXDNA_HWCTX_ASSIGN_FW_BUF = 4,
+	DRM_AMDXDNA_HWCTX_REMOVE_FW_BUF,
+};
+
+/**
+ * enum amdxdna_fw_buf_type - Debug buffer type.
+ * @AMDXDNA_FW_BUF_DEBUG: Debug buffer.
+ * @AMDXDNA_FW_BUF_TRACE: Trace buffer.
+ * @AMDXDNA_FW_BUF_DBG_Q: Debug queue.
+ * @AMDXDNA_FW_BUF_LOG:   Log buffer.
+ * @AMDXDNA_FW_BUF_NUM:   Number of debug buffer types.
+ */
+enum amdxdna_fw_buf_type {
+	AMDXDNA_FW_BUF_DEBUG = 0,
+	AMDXDNA_FW_BUF_TRACE,
+	AMDXDNA_FW_BUF_DBG_Q,
+	AMDXDNA_FW_BUF_LOG,
+	AMDXDNA_FW_BUF_NUM,
+};
+
+/**
+ * struct amdxdna_uc_info_entry - per-uC slice descriptor in
+ *                                struct amdxdna_fw_buffer_metadata.
+ * @index: uC index. The payload BO is sliced per-uC; @index must be unique
+ *         within an array and stay below the device's CERT uC count.
+ * @size:  Per-uC slice size in bytes. Entries with size 0 are skipped.
+ *         At least one entry must have a size greater than 0.
+ */
+struct amdxdna_uc_info_entry {
+	__u32 index;
+	__u32 size;
+};
+
+/**
+ * struct amdxdna_fw_buffer_metadata - per-hwctx debug buffer description.
+ * @buf_type:   One of enum amdxdna_fw_buf_type.
+ * @num_ucs:    Number of valid entries in @uc_info.
+ * @pad:        MBZ. Reserved for ABI growth.
+ * @bo_handle:  Handle of the payload BO (AMDXDNA_BO_SHARE) holding the
+ *              concatenated per-uC slices.
+ * @command_id: User tag for trace correlation.
+ * @uc_info:    Per-uC slice descriptors, in payload BO layout order.
+ */
+struct amdxdna_fw_buffer_metadata {
+	__u8 buf_type;
+	__u8 num_ucs;
+	__u8 pad[2];
+	__u32 bo_handle;
+	__u64 command_id;
+	struct amdxdna_uc_info_entry uc_info[] __counted_by(num_ucs);
 };
 
 /**
@@ -475,6 +525,7 @@ enum amdxdna_drm_get_param {
 	DRM_AMDXDNA_GET_FORCE_PREEMPT_STATE,
 	DRM_AMDXDNA_QUERY_RESOURCE_INFO,
 	DRM_AMDXDNA_GET_FRAME_BOUNDARY_PREEMPT_STATE,
+	DRM_AMDXDNA_QUERY_CERT_FIRMWARE_VERSION = 14,
 };
 
 /**

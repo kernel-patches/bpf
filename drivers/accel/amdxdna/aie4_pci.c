@@ -937,6 +937,9 @@ static int aie4_get_info(struct amdxdna_client *client, struct amdxdna_drm_get_i
 	case DRM_AMDXDNA_QUERY_FIRMWARE_VERSION:
 		ret = amdxdna_get_firmware_version(client, args, &xdna->fw_ver);
 		break;
+	case DRM_AMDXDNA_QUERY_CERT_FIRMWARE_VERSION:
+		ret = amdxdna_get_firmware_version(client, args, &ndev->cert_version);
+		break;
 	case DRM_AMDXDNA_GET_POWER_MODE:
 		ret = aie4_get_power_mode(client, args);
 		break;
@@ -1495,6 +1498,8 @@ const struct amdxdna_dev_ops aie4_vf_ops = {
 	.hwctx_init		= aie4_hwctx_init,
 	.hwctx_stop		= aie4_hwctx_stop,
 	.hwctx_fini		= aie4_hwctx_fini,
+	.hwctx_config		= aie4_hwctx_config,
+	.hwctx_sync_debug_bo	= aie4_hwctx_sync_debug_bo,
 	.cmd_submit		= aie4_cmd_submit,
 	.cmd_wait		= aie4_cmd_wait,
 	.get_aie_info		= aie4_get_info,
@@ -1510,6 +1515,8 @@ const struct amdxdna_dev_ops aie4_classic_ops = {
 	.hwctx_init		= aie4_hwctx_init,
 	.hwctx_stop		= aie4_hwctx_stop,
 	.hwctx_fini		= aie4_hwctx_fini,
+	.hwctx_config		= aie4_hwctx_config,
+	.hwctx_sync_debug_bo	= aie4_hwctx_sync_debug_bo,
 	.cmd_submit		= aie4_cmd_submit,
 	.cmd_wait		= aie4_cmd_wait,
 	.get_aie_info		= aie4_get_info,

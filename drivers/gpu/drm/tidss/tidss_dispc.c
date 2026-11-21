@@ -90,7 +90,6 @@ const struct dispc_features dispc_k2g_feats = {
 	.vp_name = { "vp1" },
 	.ovr_name = { "ovr1" },
 	.vpclk_name =  { "vp1" },
-	.vp_bus_type = { DISPC_VP_DPI },
 
 	.vp_feat = { .color = {
 			.has_ctm = true,
@@ -167,7 +166,6 @@ const struct dispc_features dispc_am65x_feats = {
 	.vp_name = { "vp1", "vp2" },
 	.ovr_name = { "ovr1", "ovr2" },
 	.vpclk_name =  { "vp1", "vp2" },
-	.vp_bus_type = { DISPC_VP_OLDI_AM65X, DISPC_VP_DPI },
 
 	.vp_feat = { .color = {
 			.has_ctm = true,
@@ -262,9 +260,6 @@ const struct dispc_features dispc_j721e_feats = {
 	.vp_name = { "vp1", "vp2", "vp3", "vp4" },
 	.ovr_name = { "ovr1", "ovr2", "ovr3", "ovr4" },
 	.vpclk_name = { "vp1", "vp2", "vp3", "vp4" },
-	/* Currently hard coded VP routing (see dispc_initial_config()) */
-	.vp_bus_type =	{ DISPC_VP_INTERNAL, DISPC_VP_DPI,
-			  DISPC_VP_INTERNAL, DISPC_VP_DPI, },
 	.vp_feat = { .color = {
 			.has_ctm = true,
 			.gamma_size = 1024,
@@ -328,7 +323,6 @@ const struct dispc_features dispc_am625_feats = {
 	.vp_name = { "vp1", "vp2" },
 	.ovr_name = { "ovr1", "ovr2" },
 	.vpclk_name =  { "vp1", "vp2" },
-	.vp_bus_type = { DISPC_VP_INTERNAL, DISPC_VP_DPI },
 
 	.vp_feat = { .color = {
 			.has_ctm = true,
@@ -356,62 +350,6 @@ const struct dispc_features dispc_am625_feats = {
 	.vid_order = {1, 0},
 };
 
-const struct dispc_features dispc_am62a7_feats = {
-	.scaling = {
-		.in_width_max_5tap_rgb = 1280,
-		.in_width_max_3tap_rgb = 2560,
-		.in_width_max_5tap_yuv = 2560,
-		.in_width_max_3tap_yuv = 4096,
-		.upscale_limit = 16,
-		.downscale_limit_5tap = 4,
-		.downscale_limit_3tap = 2,
-		/*
-		 * The max supported pixel inc value is 255. The value
-		 * of pixel inc is calculated like this: 1+(xinc-1)*bpp.
-		 * The maximum bpp of all formats supported by the HW
-		 * is 8. So the maximum supported xinc value is 32,
-		 * because 1+(32-1)*8 < 255 < 1+(33-1)*4.
-		 */
-		.xinc_max = 32,
-	},
-
-	.subrev = DISPC_AM62A7,
-
-	.common = "common",
-	.common_regs = tidss_am65x_common_regs,
-
-	.num_vps = 2,
-	.vp_name = { "vp1", "vp2" },
-	.ovr_name = { "ovr1", "ovr2" },
-	.vpclk_name =  { "vp1", "vp2" },
-	/* VP1 of the DSS in AM62A7 SoC is tied off internally */
-	.vp_bus_type = { DISPC_VP_TIED_OFF, DISPC_VP_DPI },
-
-	.vp_feat = { .color = {
-			.has_ctm = true,
-			.gamma_size = 256,
-			.gamma_type = TIDSS_GAMMA_8BIT,
-		},
-	},
-
-	.num_vids = 2,
-
-	.vid_info = {
-		{
-			.name = "vid",
-			.is_lite = false,
-			.hw_id = 0,
-		},
-		{
-			.name = "vidl1",
-			.is_lite = true,
-			.hw_id = 1,
-		}
-	},
-
-	.vid_order = {1, 0},
-};
-
 const struct dispc_features dispc_am62l_feats = {
 	.subrev = DISPC_AM62L,
 
@@ -422,7 +360,6 @@ const struct dispc_features dispc_am62l_feats = {
 	.vp_name = { "vp1" },
 	.ovr_name = { "ovr1" },
 	.vpclk_name =  { "vp1" },
-	.vp_bus_type = { DISPC_VP_DPI },
 
 	.vp_feat = { .color = {
 			.has_ctm = true,
@@ -954,7 +891,6 @@ dispc_irq_t dispc_read_and_clear_irqstatus(struct dispc_device *dispc)
 	case DISPC_K2G:
 		return dispc_k2g_read_and_clear_irqstatus(dispc);
 	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM62L:
 	case DISPC_AM65X:
 	case DISPC_J721E:
@@ -972,7 +908,6 @@ void dispc_set_irqenable(struct dispc_device *dispc, dispc_irq_t mask)
 		dispc_k2g_set_irqenable(dispc, mask);
 		break;
 	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM62L:
 	case DISPC_AM65X:
 	case DISPC_J721E:
@@ -1034,7 +969,7 @@ int dispc_vp_bus_check(struct dispc_device *dispc, u32 hw_videoport,
 		return -EINVAL;
 	}
 
-	if (dispc->feat->vp_bus_type[hw_videoport] != DISPC_VP_OLDI_AM65X &&
+	if (!dispc_vp_is_am65x_oldi(dispc->feat, hw_videoport) &&
 	    fmt->is_oldi_fmt) {
 		drm_dbg(dev, "%s: %s is not OLDI-port\n",
 			__func__, dispc->feat->vp_name[hw_videoport]);
@@ -1143,7 +1078,7 @@ void dispc_vp_prepare(struct dispc_device *dispc, u32 hw_videoport,
 	if (WARN_ON(!fmt))
 		return;
 
-	if (dispc->feat->vp_bus_type[hw_videoport] == DISPC_VP_OLDI_AM65X) {
+	if (dispc_vp_is_am65x_oldi(dispc->feat, hw_videoport)) {
 		dispc_am65x_oldi_tx_power(dispc, true);
 
 		dispc_enable_am65x_oldi(dispc, hw_videoport, fmt);
@@ -1186,7 +1121,7 @@ void dispc_vp_prepare(struct dispc_device *dispc, u32 hw_videoport,
 	align = true;
 
 	/* always use DE_HIGH for OLDI */
-	if (dispc->feat->vp_bus_type[hw_videoport] == DISPC_VP_OLDI_AM65X)
+	if (dispc_vp_is_am65x_oldi(dispc->feat, hw_videoport))
 		ieo = false;
 
 	dispc_vp_write(dispc, hw_videoport, DISPC_VP_POL_FREQ,
@@ -1229,7 +1164,7 @@ void dispc_vp_unprepare(struct dispc_device *dispc, u32 hw_videoport)
 		VP_REG_FLD_MOD(dispc, hw_videoport, DISPC_VP_CONTROL, 0,
 			       DISPC_VP_CONTROL_DPIENABLE_MASK);
 
-	if (dispc->feat->vp_bus_type[hw_videoport] == DISPC_VP_OLDI_AM65X) {
+	if (dispc_vp_is_am65x_oldi(dispc->feat, hw_videoport)) {
 		dispc_vp_write(dispc, hw_videoport, DISPC_VP_DSS_OLDI_CFG, 0);
 
 		dispc_am65x_oldi_tx_power(dispc, false);
@@ -1317,6 +1252,8 @@ unsigned int dispc_pclk_diff(unsigned long rate, unsigned long real_rate)
 static int check_pixel_clock(struct dispc_device *dispc, u32 hw_videoport,
 			     unsigned long clock)
 {
+	struct tidss_device *tidss = dispc->tidss;
+	struct drm_device *dev = &tidss->ddev;
 	unsigned long round_clock;
 
 	/*
@@ -1331,8 +1268,11 @@ static int check_pixel_clock(struct dispc_device *dispc, u32 hw_videoport,
 	 * To keep the check consistent with dispc_vp_set_clk_rate(), we
 	 * use the same 5% check here.
 	 */
-	if (dispc_pclk_diff(clock, round_clock) > 5)
+	if (dispc_pclk_diff(clock, round_clock) > 5) {
+		drm_dbg(dev, "Pixel clock %lu differs from rounded clock %lu by more than 5%%\n",
+			clock, round_clock);
 		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -1341,26 +1281,28 @@ enum drm_mode_status dispc_vp_mode_valid(struct dispc_device *dispc,
 					 u32 hw_videoport,
 					 const struct drm_display_mode *mode)
 {
+	struct tidss_device *tidss = dispc->tidss;
+	struct drm_device *dev = &tidss->ddev;
 	u32 hsw, hfp, hbp, vsw, vfp, vbp;
-	enum dispc_vp_bus_type bus_type;
 
-	bus_type = dispc->feat->vp_bus_type[hw_videoport];
-
-	if (WARN_ON(bus_type == DISPC_VP_TIED_OFF))
+	if (mode->hdisplay > 4096) {
+		drm_dbg(dev, "Number of active horizontal pixels above hardware limits\n");
 		return MODE_BAD;
+	}
 
-	if (mode->hdisplay > 4096)
+	if (mode->vdisplay > 4096) {
+		drm_dbg(dev, "Number of active vertical lines above hardware limits\n");
 		return MODE_BAD;
-
-	if (mode->vdisplay > 4096)
-		return MODE_BAD;
+	}
 
 	if (check_pixel_clock(dispc, hw_videoport, mode->clock * 1000))
 		return MODE_CLOCK_RANGE;
 
 	/* TODO: add interlace support */
-	if (mode->flags & DRM_MODE_FLAG_INTERLACE)
+	if (mode->flags & DRM_MODE_FLAG_INTERLACE) {
+		drm_dbg(dev, "Interlace modes not supported\n");
 		return MODE_NO_INTERLACE;
+	}
 
 	/*
 	 * Enforce the output width is divisible by 2. Actually this
@@ -1370,8 +1312,10 @@ enum drm_mode_status dispc_vp_mode_valid(struct dispc_device *dispc,
 	 * - TDM with TDMCycleFormat == 3
 	 * But for simplicity we enforce that always.
 	 */
-	if ((mode->hdisplay % 2) != 0)
+	if ((mode->hdisplay % 2) != 0) {
+		drm_dbg(dev, "Number of active horizontal pixels must be even\n");
 		return MODE_BAD_HVALUE;
+	}
 
 	hfp = mode->hsync_start - mode->hdisplay;
 	hsw = mode->hsync_end - mode->hsync_start;
@@ -1383,12 +1327,20 @@ enum drm_mode_status dispc_vp_mode_valid(struct dispc_device *dispc,
 
 	if (hsw < 1 || hsw > 256 ||
 	    hfp < 1 || hfp > 4096 ||
-	    hbp < 1 || hbp > 4096)
+	    hbp < 1 || hbp > 4096) {
+		drm_dbg(dev,
+			"Horizontal blanking or sync outside of hardware limits (fp: %u, sw: %u, bp: %u)\n",
+			hfp, hsw, hbp);
 		return MODE_BAD_HVALUE;
+	}
 
 	if (vsw < 1 || vsw > 256 ||
-	    vfp > 4095 || vbp > 4095)
+	    vfp > 4095 || vbp > 4095) {
+		drm_dbg(dev,
+			"Vertical blanking or sync outside of hardware limits (fp: %u, sw: %u, bp: %u)\n",
+			vfp, vsw, vbp);
 		return MODE_BAD_VVALUE;
+	}
 
 	if (dispc->memory_bandwidth_limit) {
 		const unsigned int bpp = 4;
@@ -1398,8 +1350,10 @@ enum drm_mode_status dispc_vp_mode_valid(struct dispc_device *dispc,
 		bandwidth = bandwidth * mode->hdisplay * mode->vdisplay * bpp;
 		bandwidth = div_u64(bandwidth, mode->htotal * mode->vtotal);
 
-		if (dispc->memory_bandwidth_limit < bandwidth)
+		if (dispc->memory_bandwidth_limit < bandwidth) {
+			drm_dbg(dev, "Required memory bandwidth outside of hardware limits\n");
 			return MODE_BAD;
+		}
 	}
 
 	return MODE_OK;
@@ -1494,7 +1448,6 @@ void dispc_ovr_set_plane(struct dispc_device *dispc, u32 hw_plane,
 					x, y, layer);
 		break;
 	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM62L:
 	case DISPC_AM65X:
 		dispc_am65x_ovr_set_plane(dispc, hw_plane, hw_videoport,
@@ -2399,7 +2352,6 @@ static void dispc_plane_init(struct dispc_device *dispc)
 		dispc_k2g_plane_init(dispc);
 		break;
 	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM62L:
 	case DISPC_AM65X:
 	case DISPC_J721E:
@@ -2516,7 +2468,6 @@ static void dispc_vp_write_gamma_table(struct dispc_device *dispc,
 		dispc_k2g_vp_write_gamma_table(dispc, hw_videoport);
 		break;
 	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM62L:
 	case DISPC_AM65X:
 		dispc_am65x_vp_write_gamma_table(dispc, hw_videoport);
