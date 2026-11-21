@@ -5673,8 +5673,14 @@ static int rtl8169_poll(struct napi_struct *napi, int budget)
 	/* rtl8169_poll() is used only when there is a single RX ring. */
 	work_done = rtl_rx(dev, tp, &tp->rx_ring[0], budget, napi);
 
-	if (work_done < budget && napi_complete_done(napi, work_done))
+	if (work_done < budget && napi_complete_done(napi, work_done)) {
+		/* After running out of RX descriptors the chip does not
+		 * receive again until RxOverflow is cleared. The ring is
+		 * empty now, so clear it before unmasking.
+		 */
+		rtl_ack_events(tp, RxOverflow);
 		rtl_irq_enable(tp);
+	}
 
 	return work_done;
 }
