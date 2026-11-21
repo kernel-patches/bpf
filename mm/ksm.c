@@ -624,8 +624,8 @@ static int break_ksm_pmd_entry(pmd_t *pmdp, unsigned long addr, unsigned long en
 
 	if (ksm_test_exit(walk->mm))
 		return 0;
-	if (signal_pending(current))
-		return -ERESTARTSYS;
+	if (fatal_signal_pending(current))
+		return -EINTR;
 
 	start_ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
 	if (!start_ptep)
