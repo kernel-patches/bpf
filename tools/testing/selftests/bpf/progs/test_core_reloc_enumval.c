@@ -27,6 +27,18 @@ typedef enum {
 	ANON_ENUM_VAL3 = 0x30,
 } anon_enum;
 
+/* 4-byte enum with values out of the range of int, so it is unsigned */
+enum named_uint_enum {
+	UINT_ENUM_VAL1 = 0x80000000,
+	UINT_ENUM_VAL2 = 0xfffffff0,
+};
+
+/* signed 4-byte enum, with a non-negative value too */
+enum named_int_enum {
+	INT_ENUM_VAL1 = -1,
+	INT_ENUM_VAL2 = 1,
+};
+
 struct core_reloc_enumval_output {
 	bool named_val1_exists;
 	bool named_val2_exists;
@@ -39,7 +51,18 @@ struct core_reloc_enumval_output {
 	int named_val2;
 	int anon_val1;
 	int anon_val2;
+	long uint_val1;
+	long uint_val2;
+	long int_val1;
+	long int_val2;
 };
+
+#ifdef __clang__
+#define UINT_ENUM_VALUE(v) bpf_core_enum_value(enum named_uint_enum, v)
+#else
+/* GCC's __builtin_preserve_enum_value() returns int */
+#define UINT_ENUM_VALUE(v) ((unsigned int)bpf_core_enum_value(enum named_uint_enum, v))
+#endif
 
 SEC("raw_tracepoint/sys_enter")
 int test_core_enumval(void *ctx)
@@ -64,6 +87,18 @@ int test_core_enumval(void *ctx)
 	out->anon_val1 = bpf_core_enum_value(anon, ANON_ENUM_VAL1);
 	out->anon_val2 = bpf_core_enum_value(anon, ANON_ENUM_VAL2);
 	/* ANON_ENUM_VAL3 value is optional */
+
+	/* enum named_uint_enum is optional */
+	if (bpf_core_enum_value_exists(enum named_uint_enum, UINT_ENUM_VAL1))
+		out->uint_val1 = UINT_ENUM_VALUE(UINT_ENUM_VAL1);
+	if (bpf_core_enum_value_exists(enum named_uint_enum, UINT_ENUM_VAL2))
+		out->uint_val2 = UINT_ENUM_VALUE(UINT_ENUM_VAL2);
+
+	/* enum named_int_enum is optional */
+	if (bpf_core_enum_value_exists(enum named_int_enum, INT_ENUM_VAL1))
+		out->int_val1 = bpf_core_enum_value(enum named_int_enum, INT_ENUM_VAL1);
+	if (bpf_core_enum_value_exists(enum named_int_enum, INT_ENUM_VAL2))
+		out->int_val2 = bpf_core_enum_value(enum named_int_enum, INT_ENUM_VAL2);
 #else
 	data.skip = true;
 #endif

@@ -370,6 +370,14 @@ static int duration = 0;
 	.fails = true,							\
 }
 
+#define ENUMVAL_NO_KFLAG_CASE(name, ...) {				\
+	ENUMVAL_CASE_COMMON(name),					\
+	.output = STRUCT_TO_CHAR_PTR(core_reloc_enumval_output)		\
+			__VA_ARGS__,					\
+	.output_len = sizeof(struct core_reloc_enumval_output),		\
+	.clear_enum_kflag = true,					\
+}
+
 #define ENUM64VAL_CASE_COMMON(name)					\
 	.case_name = #name,						\
 	.bpf_obj_file = "test_core_reloc_enum64val.bpf.o",		\
@@ -406,6 +414,7 @@ struct core_reloc_test_case {
 	bool run_btfgen_fails;
 	bool needs_testmod;
 	bool relaxed_core_relocs;
+	bool clear_enum_kflag;
 	const char *prog_name;
 	const char *raw_tp_name;
 	setup_test_fn setup;
@@ -904,6 +913,26 @@ static const struct core_reloc_test_case test_cases[] = {
 		.named_val2 = 2,
 		.anon_val1 = 0x10,
 		.anon_val2 = 0x20,
+		.uint_val1 = 0x80000001,
+		.uint_val2 = 0xffffffff,
+		.int_val1 = -2,
+		.int_val2 = -3,
+	}),
+	ENUMVAL_NO_KFLAG_CASE(enumval___no_kflag, {
+		.named_val1_exists = true,
+		.named_val2_exists = true,
+		.named_val3_exists = true,
+		.anon_val1_exists = true,
+		.anon_val2_exists = true,
+		.anon_val3_exists = true,
+		.named_val1 = 1,
+		.named_val2 = 2,
+		.anon_val1 = 0x10,
+		.anon_val2 = 0x20,
+		.uint_val1 = 0x80000001,
+		.uint_val2 = 0xffffffff,
+		.int_val1 = -2,
+		.int_val2 = -3,
 	}),
 	ENUMVAL_CASE(enumval___diff, {
 		.named_val1_exists = true,
@@ -997,6 +1026,46 @@ static int run_btfgen(const char *src_btf, const char *dst_btf, const char *objp
 	return run_bpftool_command(args);
 }
 
+/*
+ * Write the BTF of src to dst with the kflag of every enum cleared, as in the
+ * BTF of a kernel before v6.0, where the kflag 0 doesn't mean unsigned.
+ */
+static int write_btf_no_enum_kflag(const char *src, const char *dst)
+{
+	const void *raw_data;
+	struct btf_type *t;
+	struct btf *btf;
+	__u32 i, n, raw_sz;
+	FILE *f = NULL;
+	int err = -1;
+
+	btf = btf__parse(src, NULL);
+	if (!ASSERT_OK_PTR(btf, "btf_parse"))
+		return -1;
+
+	n = btf__type_cnt(btf);
+	for (i = 1; i < n; i++) {
+		t = (struct btf_type *)btf__type_by_id(btf, i);
+		if (btf_is_enum(t))
+			t->info &= ~(1U << 31); /* the kflag */
+	}
+
+	raw_data = btf__raw_data(btf, &raw_sz);
+	if (!ASSERT_OK_PTR(raw_data, "btf_raw_data"))
+		goto out;
+	f = fopen(dst, "w");
+	if (!ASSERT_OK_PTR(f, "btf_fopen"))
+		goto out;
+	if (!ASSERT_EQ(fwrite(raw_data, 1, raw_sz, f), raw_sz, "btf_write"))
+		goto out;
+	err = 0;
+out:
+	if (f)
+		fclose(f);
+	btf__free(btf);
+	return err;
+}
+
 static void run_core_reloc_tests(bool use_btfgen)
 {
 	const size_t mmap_sz = roundup_page(sizeof(struct data));
@@ -1045,6 +1114,25 @@ static void run_core_reloc_tests(bool use_btfgen)
 			if (!ASSERT_OK(err, "run_btfgen"))
 				continue;
 
+			test_case->btf_src_file = btf_file;
+		}
+
+		/*
+		 * Without btfgen, create the temporary file here; with btfgen,
+		 * rewrite the one btfgen made.
+		 */
+		if (test_case->clear_enum_kflag) {
+			if (!use_btfgen) {
+				fd = mkstemp(btf_file);
+				if (!ASSERT_GE(fd, 0, "btf_tmp"))
+					continue;
+				close(fd); /* we only need the path */
+			}
+			err = write_btf_no_enum_kflag(test_case->btf_src_file, btf_file);
+			if (err) {
+				remove(btf_file);
+				continue;
+			}
 			test_case->btf_src_file = btf_file;
 		}
 
@@ -1139,8 +1227,8 @@ cleanup:
 			CHECK_FAIL(munmap(mmap_data, mmap_sz));
 			mmap_data = NULL;
 		}
-		if (use_btfgen)
-			remove(test_case->btf_src_file);
+		if (use_btfgen || test_case->clear_enum_kflag)
+			remove(btf_file);
 		bpf_link__destroy(link);
 		link = NULL;
 		bpf_object__close(obj);

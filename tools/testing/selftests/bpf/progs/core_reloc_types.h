@@ -1215,6 +1215,10 @@ struct core_reloc_enumval_output {
 	int named_val2;
 	int anon_val1;
 	int anon_val2;
+	long uint_val1;
+	long uint_val2;
+	long int_val1;
+	long int_val2;
 };
 
 struct core_reloc_enum64val_output {
@@ -1243,9 +1247,29 @@ typedef enum {
 	ANON_ENUM_VAL3 = 0x30,
 } anon_enum;
 
+enum named_uint_enum {
+	UINT_ENUM_VAL1 = 0x80000001,
+	UINT_ENUM_VAL2 = 0xffffffff,
+};
+
+enum named_int_enum {
+	INT_ENUM_VAL1 = -2,
+	INT_ENUM_VAL2 = -3,
+};
+
 struct core_reloc_enumval {
 	enum named_enum f1;
 	anon_enum f2;
+	enum named_uint_enum f3;
+	enum named_int_enum f4;
+};
+
+/* the same types, whose BTF gets the kflag of every enum cleared */
+struct core_reloc_enumval___no_kflag {
+	enum named_enum f1;
+	anon_enum f2;
+	enum named_uint_enum f3;
+	enum named_int_enum f4;
 };
 
 enum named_unsigned_enum64 {
