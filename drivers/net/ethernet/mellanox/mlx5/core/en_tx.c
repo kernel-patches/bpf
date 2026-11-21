@@ -365,6 +365,7 @@ static void mlx5e_tx_flush(struct mlx5e_txqsq *sq)
 	};
 
 	wqe = mlx5e_post_nop(&sq->wq, sq->sqn, &sq->pc);
+	mlx5e_tx_check_stop(sq);
 	mlx5e_notify_hw(&sq->wq, sq->pc, sq->uar_map, &wqe->ctrl);
 }
 
@@ -646,6 +647,7 @@ netdev_tx_t mlx5e_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct mlx5e_priv *priv = netdev_priv(dev);
 	struct mlx5e_accel_tx_state accel = {};
+	bool xmit_more = netdev_xmit_more();
 	struct mlx5e_tx_wqe_attr wqe_attr;
 	struct mlx5e_tx_attr attr;
 	struct mlx5e_tx_wqe *wqe;
@@ -672,17 +674,24 @@ netdev_tx_t mlx5e_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	/* May send SKBs and WQEs. */
-	if (unlikely(!mlx5e_accel_tx_begin(dev, sq, skb, &accel)))
+	if (unlikely(!mlx5e_accel_tx_begin(dev, sq, skb, &accel))) {
+		/* The skb was dropped: ring the doorbell which the previous
+		 * ones may have deferred to it
+		 */
+		mlx5e_tx_flush(sq);
 		return NETDEV_TX_OK;
+	}
 
 	mlx5e_sq_xmit_prepare(sq, skb, &accel, &attr);
 
 	if (test_bit(MLX5E_SQ_STATE_MPWQE, &sq->state)) {
-		if (mlx5e_tx_skb_supports_mpwqe(skb, &attr)) {
+		/* An MPWQE for a lone packet saves nothing, use a regular WQE. */
+		if (mlx5e_tx_skb_supports_mpwqe(skb, &attr) &&
+		    (xmit_more || mlx5e_tx_mpwqe_session_is_active(sq))) {
 			struct mlx5_wqe_eth_seg eseg = {};
 
 			mlx5e_txwqe_build_eseg(priv, sq, skb, &accel, &eseg, attr.ihs);
-			mlx5e_sq_xmit_mpwqe(sq, skb, &eseg, netdev_xmit_more());
+			mlx5e_sq_xmit_mpwqe(sq, skb, &eseg, xmit_more);
 			return NETDEV_TX_OK;
 		}
 
@@ -697,7 +706,7 @@ netdev_tx_t mlx5e_xmit(struct sk_buff *skb, struct net_device *dev)
 	mlx5e_accel_tx_finish(sq, wqe, &accel,
 			      (struct mlx5_wqe_inline_seg *)(wqe->data + wqe_attr.ds_cnt_inl));
 	mlx5e_txwqe_build_eseg(priv, sq, skb, &accel, &wqe->eth, attr.ihs);
-	mlx5e_sq_xmit_wqe(sq, skb, &attr, &wqe_attr, wqe, pi, netdev_xmit_more());
+	mlx5e_sq_xmit_wqe(sq, skb, &attr, &wqe_attr, wqe, pi, xmit_more);
 
 	return NETDEV_TX_OK;
 }

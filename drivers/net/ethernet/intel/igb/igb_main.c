@@ -1965,6 +1965,57 @@ static void igb_setup_tx_mode(struct igb_adapter *adapter)
 }
 
 /**
+ *  igb_set_rlpml - set the receive length limits
+ *  @adapter: private board structure
+ *
+ *  Called from igb_configure(), before Rx is enabled. igb_set_rx_mode() can
+ *  also run without RTNL, so it does not change these limits.
+ **/
+static void igb_set_rlpml(struct igb_adapter *adapter)
+{
+	u32 rlpml = MAX_JUMBO_FRAME_SIZE, pool_rlpml = MAX_JUMBO_FRAME_SIZE;
+	unsigned int vfn = adapter->vfs_allocated_count;
+	struct e1000_hw *hw = &adapter->hw;
+	u32 vmolr;
+
+#if (PAGE_SIZE < 8192)
+	/* restrict as needed to support build_skb */
+	if (adapter->max_frame_size <= IGB_MAX_FRAME_BUILD_SKB) {
+		pool_rlpml = IGB_MAX_FRAME_BUILD_SKB;
+		if (!vfn)
+			rlpml = IGB_MAX_FRAME_BUILD_SKB;
+	}
+#endif
+	/* XDP does not support frames that span more than one Rx buffer.
+	 * With VFs the global limit stays large and the PF pool is limited
+	 * through VMOLR.
+	 */
+	if (igb_xdp_is_enabled(adapter)) {
+		pool_rlpml = min(pool_rlpml, adapter->max_frame_size);
+		if (!vfn)
+			rlpml = min(rlpml, adapter->max_frame_size);
+	}
+	wr32(E1000_RLPML, rlpml);
+
+	/* the PF pool's VMOLR is used on these MACs, see igb_set_rx_mode(),
+	 * and with VFs it carries the only limit for the PF, also on i354
+	 */
+	if (hw->mac.type < e1000_82576 ||
+	    (hw->mac.type > e1000_i350 && !vfn))
+		return;
+
+	/* igb_set_rx_mode() also updates this register, and the core calls
+	 * it under the address lock
+	 */
+	netif_addr_lock_bh(adapter->netdev);
+	vmolr = rd32(E1000_VMOLR(vfn));
+	vmolr &= ~E1000_VMOLR_RLPML_MASK;
+	vmolr |= pool_rlpml | E1000_VMOLR_LPE;
+	wr32(E1000_VMOLR(vfn), vmolr);
+	netif_addr_unlock_bh(adapter->netdev);
+}
+
+/**
  *  igb_configure - configure the hardware for RX and TX
  *  @adapter: private board structure
  **/
@@ -1981,6 +2032,7 @@ static void igb_configure(struct igb_adapter *adapter)
 
 	igb_setup_tctl(adapter);
 	igb_setup_mrqc(adapter);
+	igb_set_rlpml(adapter);
 	igb_setup_rctl(adapter);
 
 	igb_nfc_filter_restore(adapter);
@@ -2468,6 +2520,14 @@ void igb_reset(struct igb_adapter *adapter)
 static netdev_features_t igb_fix_features(struct net_device *netdev,
 	netdev_features_t features)
 {
+	struct igb_adapter *adapter = netdev_priv(netdev);
+
+	/* with rx-all the MAC also stores frames longer than RLPML, which
+	 * XDP cannot handle
+	 */
+	if (igb_xdp_is_enabled(adapter))
+		features &= ~NETIF_F_RXALL;
+
 	/* Since there is no support for separate Rx/Tx vlan accel
 	 * enable/disable make sure Tx flag is always in same state as Rx.
 	 */
@@ -2886,6 +2946,27 @@ static int igb_setup_tc(struct net_device *dev, enum tc_setup_type type,
 	}
 }
 
+/* Check that a frame fits in one Rx buffer together with the inline Rx
+ * timestamp header, for the buffer size igb_set_rx_buffer_len() selects.
+ * The ring flags are only updated when the rings are configured, so they
+ * are not used here. For build_skb rings the frame is limited to
+ * IGB_MAX_FRAME_BUILD_SKB, which is below the 2 KiB hardware buffer size
+ * even with the header.
+ */
+static bool igb_xdp_frame_fits(struct igb_adapter *adapter, int max_frame)
+{
+#if (PAGE_SIZE < 8192)
+	if (!(adapter->flags & IGB_FLAG_RX_LEGACY)) {
+		if (max_frame <= IGB_MAX_FRAME_BUILD_SKB &&
+		    !IGB_2K_TOO_SMALL_WITH_PADDING)
+			return true;
+
+		return max_frame + IGB_TS_HDR_LEN <= IGB_RXBUFFER_3072;
+	}
+#endif
+	return max_frame + IGB_TS_HDR_LEN <= IGB_RXBUFFER_2048;
+}
+
 static int igb_xdp_setup(struct net_device *dev, struct netdev_bpf *bpf)
 {
 	int i, frame_size = dev->mtu + IGB_ETH_PKT_HDR_PAD;
@@ -2893,18 +2974,23 @@ static int igb_xdp_setup(struct net_device *dev, struct netdev_bpf *bpf)
 	struct bpf_prog *prog = bpf->prog, *old_prog;
 	bool running = netif_running(dev);
 	bool need_reset;
+	int err = 0;
 
-	/* verify igb ring attributes are sufficient for XDP */
-	for (i = 0; i < adapter->num_rx_queues; i++) {
-		struct igb_ring *ring = adapter->rx_ring[i];
+	/* with rx-all the MAC also stores frames longer than RLPML */
+	if (prog && (dev->features & NETIF_F_RXALL)) {
+		NL_SET_ERR_MSG_MOD(bpf->extack, "XDP is not supported with rx-all");
+		return -EOPNOTSUPP;
+	}
 
-		if (frame_size > igb_rx_bufsz(ring)) {
-			NL_SET_ERR_MSG_MOD(bpf->extack,
-					   "The RX buffer size is too small for the frame size");
-			netdev_warn(dev, "XDP RX buffer size %d is too small for the frame size %d\n",
-				    igb_rx_bufsz(ring), frame_size);
-			return -EINVAL;
-		}
+	/* verify igb ring attributes are sufficient for XDP, leaving room
+	 * for the inline Rx timestamp header
+	 */
+	if (prog && !igb_xdp_frame_fits(adapter, frame_size)) {
+		NL_SET_ERR_MSG_MOD(bpf->extack,
+				   "The RX buffer size is too small for the frame size");
+		netdev_warn(dev, "XDP RX buffer size is too small for the frame size %d\n",
+			    frame_size);
+		return -EINVAL;
 	}
 
 	old_prog = xchg(&adapter->xdp_prog, prog);
@@ -2933,7 +3019,20 @@ static int igb_xdp_setup(struct net_device *dev, struct netdev_bpf *bpf)
 	}
 
 	if (running)
-		igb_open(dev);
+		err = igb_open(dev);
+
+	/* rx-all may have been requested while XDP was attached. A failed
+	 * igb_open() leaves NAPI disabled, so do not reconfigure then. A down
+	 * interface can be runtime suspended; resume it first, as ethtool
+	 * does before it changes features.
+	 */
+	if (!prog && !err && (dev->wanted_features & NETIF_F_RXALL)) {
+		pm_runtime_get_sync(&adapter->pdev->dev);
+		/* still detached if the resume failed */
+		if (netif_device_present(dev))
+			netdev_update_features(dev);
+		pm_runtime_put(&adapter->pdev->dev);
+	}
 
 	return 0;
 }
@@ -3683,13 +3782,13 @@ err_dma:
 }
 
 #ifdef CONFIG_PCI_IOV
-static int igb_sriov_reinit(struct pci_dev *dev)
+static int igb_sriov_reinit_locked(struct pci_dev *dev)
 {
 	struct net_device *netdev = pci_get_drvdata(dev);
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct pci_dev *pdev = adapter->pdev;
 
-	rtnl_lock();
+	ASSERT_RTNL();
 
 	if (netif_running(netdev))
 		igb_close(netdev);
@@ -3701,7 +3800,6 @@ static int igb_sriov_reinit(struct pci_dev *dev)
 	igb_init_queue_configuration(adapter);
 
 	if (igb_init_interrupt_scheme(adapter, true)) {
-		rtnl_unlock();
 		dev_err(&pdev->dev, "Unable to allocate memory for queues\n");
 		return -ENOMEM;
 	}
@@ -3709,9 +3807,18 @@ static int igb_sriov_reinit(struct pci_dev *dev)
 	if (netif_running(netdev))
 		igb_open(netdev);
 
+	return 0;
+}
+
+static int igb_sriov_reinit(struct pci_dev *dev)
+{
+	int err;
+
+	rtnl_lock();
+	err = igb_sriov_reinit_locked(dev);
 	rtnl_unlock();
 
-	return 0;
+	return err;
 }
 
 static int igb_disable_sriov(struct pci_dev *pdev, bool reinit)
@@ -3757,6 +3864,7 @@ static int igb_enable_sriov(struct pci_dev *pdev, int num_vfs, bool reinit)
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	int old_vfs = pci_num_vf(pdev);
 	struct vf_mac_filter *mac_list;
+	unsigned int q, end;
 	int err = 0;
 	int num_vf_mac_filters, i;
 
@@ -3766,6 +3874,27 @@ static int igb_enable_sriov(struct pci_dev *pdev, int num_vfs, bool reinit)
 	}
 	if (!num_vfs)
 		goto out;
+
+	/* With VFs the PF keeps a single Tx queue, see
+	 * igb_set_interrupt_capability(). Refuse VFs while an XSK pool is
+	 * bound to another queue; the core refuses ethtool -L in the same
+	 * case. Check before any VF state is set up, and hold RTNL until the
+	 * queues are set up again, so that no pool can be bound in between.
+	 */
+	if (reinit) {
+		rtnl_lock();
+		end = max(netdev->real_num_rx_queues,
+			  netdev->real_num_tx_queues);
+		for (q = 1; q < end; q++) {
+			if (xsk_get_pool_from_qid(netdev, q)) {
+				dev_err(&pdev->dev,
+					"Cannot change the number of queues, an AF_XDP socket is bound to queue %u\n",
+					q);
+				err = -EBUSY;
+				goto err_unlock;
+			}
+		}
+	}
 
 	if (old_vfs) {
 		dev_info(&pdev->dev, "%d pre-allocated VFs found - override max_vfs setting of %d\n",
@@ -3781,7 +3910,7 @@ static int igb_enable_sriov(struct pci_dev *pdev, int num_vfs, bool reinit)
 	if (!adapter->vf_data) {
 		adapter->vfs_allocated_count = 0;
 		err = -ENOMEM;
-		goto out;
+		goto err_unlock;
 	}
 
 	/* Due to the limited number of RAR entries calculate potential
@@ -3824,7 +3953,8 @@ static int igb_enable_sriov(struct pci_dev *pdev, int num_vfs, bool reinit)
 	adapter->flags &= ~IGB_FLAG_DMAC;
 
 	if (reinit) {
-		err = igb_sriov_reinit(pdev);
+		err = igb_sriov_reinit_locked(pdev);
+		rtnl_unlock();
 		if (err)
 			goto err_out;
 	}
@@ -3844,6 +3974,11 @@ err_out:
 	kfree(adapter->vf_data);
 	adapter->vf_data = NULL;
 	adapter->vfs_allocated_count = 0;
+	goto out;
+
+err_unlock:
+	if (reinit)
+		rtnl_unlock();
 out:
 	return err;
 }
@@ -3887,8 +4022,8 @@ static void igb_remove(struct pci_dev *pdev)
 	timer_delete_sync(&adapter->watchdog_timer);
 	timer_delete_sync(&adapter->phy_info_timer);
 
-	cancel_work_sync(&adapter->reset_task);
-	cancel_work_sync(&adapter->watchdog_task);
+	disable_work_sync(&adapter->watchdog_task);
+	disable_work_sync(&adapter->reset_task);
 
 #ifdef CONFIG_IGB_DCA
 	if (adapter->flags & IGB_FLAG_DCA_ENABLED) {
@@ -4746,9 +4881,13 @@ void igb_setup_srrctl(struct igb_adapter *adapter, struct igb_ring *ring)
 	u32 srrctl = 0;
 	u32 buf_size;
 
-	if (ring->xsk_pool)
-		buf_size = xsk_pool_get_rx_frame_size(ring->xsk_pool);
-	else if (ring_uses_large_buffer(ring))
+	/* SRRCTL.BSIZEPKT has a 1 KiB granularity, so programming the XSK
+	 * frame size would round it down and split frames over several
+	 * buffers. XSK rings use the same buffer size as the other rings.
+	 * While XDP is attached, the receive length limit keeps frames
+	 * within the XSK frame, see igb_xsk_frame_fits().
+	 */
+	if (ring_uses_large_buffer(ring))
 		buf_size = IGB_RXBUFFER_3072;
 	else
 		buf_size = IGB_RXBUFFER_2048;
@@ -5322,7 +5461,7 @@ static void igb_set_rx_mode(struct net_device *netdev)
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
 	unsigned int vfn = adapter->vfs_allocated_count;
-	u32 rctl = 0, vmolr = 0, rlpml = MAX_JUMBO_FRAME_SIZE;
+	u32 rctl = 0, vmolr = 0;
 	int count;
 
 	/* Check for Promiscuous and All Multicast modes */
@@ -5379,14 +5518,6 @@ static void igb_set_rx_mode(struct net_device *netdev)
 				     E1000_RCTL_VFE);
 	wr32(E1000_RCTL, rctl);
 
-#if (PAGE_SIZE < 8192)
-	if (!adapter->vfs_allocated_count) {
-		if (adapter->max_frame_size <= IGB_MAX_FRAME_BUILD_SKB)
-			rlpml = IGB_MAX_FRAME_BUILD_SKB;
-	}
-#endif
-	wr32(E1000_RLPML, rlpml);
-
 	/* In order to support SR-IOV and eventually VMDq it is necessary to set
 	 * the VMOLR to enable the appropriate modes.  Without this workaround
 	 * we will have issues with VLAN tag stripping not being done for frames
@@ -5398,18 +5529,9 @@ static void igb_set_rx_mode(struct net_device *netdev)
 	/* set UTA to appropriate mode */
 	igb_set_uta(adapter, !!(vmolr & E1000_VMOLR_ROPE));
 
+	/* keep the receive length limit set by igb_set_rlpml() */
 	vmolr |= rd32(E1000_VMOLR(vfn)) &
 		 ~(E1000_VMOLR_ROPE | E1000_VMOLR_MPME | E1000_VMOLR_ROMPE);
-
-	/* enable Rx jumbo frames, restrict as needed to support build_skb */
-	vmolr &= ~E1000_VMOLR_RLPML_MASK;
-#if (PAGE_SIZE < 8192)
-	if (adapter->max_frame_size <= IGB_MAX_FRAME_BUILD_SKB)
-		vmolr |= IGB_MAX_FRAME_BUILD_SKB;
-	else
-#endif
-		vmolr |= MAX_JUMBO_FRAME_SIZE;
-	vmolr |= E1000_VMOLR_LPE;
 
 	wr32(E1000_VMOLR(vfn), vmolr);
 
@@ -6705,25 +6827,36 @@ static int igb_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	int max_frame = new_mtu + IGB_ETH_PKT_HDR_PAD;
+	int i;
 
-	if (igb_xdp_is_enabled(adapter)) {
-		int i;
-
-		for (i = 0; i < adapter->num_rx_queues; i++) {
-			struct igb_ring *ring = adapter->rx_ring[i];
-
-			if (max_frame > igb_rx_bufsz(ring)) {
-				netdev_warn(adapter->netdev,
-					    "Requested MTU size is not supported with XDP. Max frame size is %d\n",
-					    max_frame);
-				return -EINVAL;
-			}
-		}
+	if (igb_xdp_is_enabled(adapter) &&
+	    !igb_xdp_frame_fits(adapter, max_frame)) {
+		netdev_warn(adapter->netdev,
+			    "Requested MTU size is not supported with XDP. Frame size is %d\n",
+			    max_frame);
+		return -EINVAL;
 	}
 
 	/* adjust max frame to be at least the size of a standard frame */
 	if (max_frame < (ETH_FRAME_LEN + ETH_FCS_LEN))
 		max_frame = ETH_FRAME_LEN + ETH_FCS_LEN;
+
+	/* the frame must fit the buffers of a bound XSK pool, also while no
+	 * XDP program is attached, as attaching one does not check it again
+	 */
+	for (i = 0; i < adapter->num_rx_queues; i++) {
+		struct xsk_buff_pool *pool = xsk_get_pool_from_qid(netdev, i);
+
+		if (!pool || !pool->dev)
+			continue;
+
+		if (!igb_xsk_frame_fits(pool, max_frame)) {
+			netdev_warn(adapter->netdev,
+				    "Requested MTU size is not supported with AF_XDP. Frame size is %d\n",
+				    max_frame);
+			return -EINVAL;
+		}
+	}
 
 	while (test_and_set_bit(__IGB_RESETTING, &adapter->state))
 		usleep_range(1000, 2000);
@@ -9068,8 +9201,11 @@ static int igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
 		rx_buffer = igb_get_rx_buffer(rx_ring, size, &rx_buf_pgcnt);
 		pktbuf = page_address(rx_buffer->page) + rx_buffer->page_offset;
 
-		/* pull rx packet timestamp if available and valid */
-		if (igb_test_staterr(rx_desc, E1000_RXDADV_STAT_TSIP)) {
+		/* pull rx packet timestamp if available and valid; it is only
+		 * present on the first buffer of a frame
+		 */
+		if (!skb &&
+		    igb_test_staterr(rx_desc, E1000_RXDADV_STAT_TSIP)) {
 			int ts_hdr_len;
 
 			ts_hdr_len = igb_ptp_rx_pktstamp(rx_ring->q_vector,

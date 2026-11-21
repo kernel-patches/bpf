@@ -92,6 +92,11 @@ static void ipa_interrupt_process(struct ipa_interrupt *interrupt, u32 irq_id)
 		break;
 
 	case IPA_IRQ_TX_SUSPEND:
+		/* Data arrived for a suspended endpoint. Report it as a
+		 * wakeup event, so user space can see what woke the system.
+		 */
+		pm_wakeup_event(ipa->dev, 0);
+
 		/* Clearing the SUSPEND_TX interrupt also clears the
 		 * register that tells us which suspended endpoint(s)
 		 * caused the interrupt, so defer clearing until after

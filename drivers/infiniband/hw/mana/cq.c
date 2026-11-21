@@ -149,7 +149,8 @@ int mana_ib_create_cq(struct ib_cq *ibcq, const struct ib_cq_init_attr *attr,
 err_remove_cq_cb:
 	mana_ib_remove_cq_cb(mdev, cq);
 err_destroy_rnic_cq:
-	mana_ib_gd_destroy_cq(mdev, cq);
+	if (mana_gd_is_request_rejected(mana_ib_gd_destroy_cq(mdev, cq)))
+		WRITE_ONCE(cq->queue.retain_dma, true);
 err_destroy_queue:
 	mana_ib_destroy_queue(mdev, &cq->queue);
 
@@ -169,16 +170,14 @@ int mana_ib_destroy_cq(struct ib_cq *ibcq, struct ib_udata *udata)
 
 	mdev = container_of(ibdev, struct mana_ib_dev, ib_dev);
 
+	err = mana_ib_gd_destroy_cq(mdev, cq);
+	if (mana_gd_is_request_rejected(err) ||
+	    READ_ONCE(cq->queue.retain_dma))
+		return err ? err : -ENOTCONN;
+
 	mana_ib_remove_cq_cb(mdev, cq);
 
-	/* Ignore return code as there is not much we can do about it.
-	 * The error message is printed inside.
-	 */
-	mana_ib_gd_destroy_cq(mdev, cq);
-
-	mana_ib_destroy_queue(mdev, &cq->queue);
-
-	return 0;
+	return mana_ib_destroy_queue(mdev, &cq->queue);
 }
 
 static void mana_ib_cq_handler(void *ctx, struct gdma_queue *gdma_cq)

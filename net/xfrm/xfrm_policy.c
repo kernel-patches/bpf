@@ -2460,6 +2460,13 @@ int __xfrm_sk_clone_policy(struct sock *sk, const struct sock *osk)
 			rcu_assign_pointer(sk->sk_policy[i], np);
 		}
 	}
+	while (unlikely(ret) && i--) {
+		np = rcu_dereference(sk->sk_policy[i]);
+		if (rcu_access_pointer(osk->sk_policy[i])) {
+			RCU_INIT_POINTER(sk->sk_policy[i], NULL);
+			xfrm_policy_delete(np, XFRM_POLICY_MAX + i);
+		}
+	}
 	rcu_read_unlock();
 	return ret;
 }

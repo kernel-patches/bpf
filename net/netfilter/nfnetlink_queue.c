@@ -1084,13 +1084,13 @@ nf_queue_entry_dup(struct nf_queue_entry *e)
  */
 static void nf_bridge_adjust_skb_data(struct sk_buff *skb)
 {
-	if (nf_bridge_info_get(skb))
+	if (nf_bridge_info_get(skb) && skb_mac_header_was_set(skb))
 		__skb_push(skb, skb_mac_header_len(skb));
 }
 
 static void nf_bridge_adjust_segmented_data(struct sk_buff *skb)
 {
-	if (nf_bridge_info_get(skb))
+	if (nf_bridge_info_get(skb) && skb_mac_header_was_set(skb))
 		__skb_pull(skb, skb_mac_header_len(skb));
 }
 #else
@@ -1830,10 +1830,15 @@ static int nfqa_parse_bridge(struct nf_queue_entry *entry,
 
 		if (mac_header_len != nla_len(nfqa[NFQA_L2HDR]))
 			return -EINVAL;
-		else if (mac_header_len > 0)
+
+		if (mac_header_len > 0) {
+			if (skb_ensure_writable(entry->skb, 0))
+				return -ENOMEM;
+
 			memcpy(skb_mac_header(entry->skb),
 			       nla_data(nfqa[NFQA_L2HDR]),
 			       mac_header_len);
+		}
 	}
 
 	return 0;
@@ -2201,9 +2206,17 @@ static void __net_exit nfnl_queue_net_exit(struct net *net)
 		WARN_ON_ONCE(!hlist_empty(&q->instance_table[i]));
 }
 
+static void __net_exit nfnl_queue_net_exit_batch(struct list_head *net_exit_list)
+{
+	/* Wait for RCU callbacks to queue instance cleanup work. */
+	rcu_barrier();
+	flush_workqueue(nfq_cleanup_wq);
+}
+
 static struct pernet_operations nfnl_queue_net_ops = {
 	.init		= nfnl_queue_net_init,
 	.exit		= nfnl_queue_net_exit,
+	.exit_batch	= nfnl_queue_net_exit_batch,
 	.id		= &nfnl_queue_net_id,
 	.size		= sizeof(struct nfnl_queue_net),
 };

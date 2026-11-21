@@ -86,6 +86,11 @@ static void rds_ib_dev_shutdown(struct rds_ib_device *rds_ibdev)
 	unsigned long flags;
 
 	spin_lock_irqsave(&rds_ibdev->spinlock, flags);
+	/* Close the device to new connections under the same lock that
+	 * rds_ib_add_conn() attaches them under, so that every
+	 * connection is either dropped by the walk below or refused.
+	 */
+	rds_ibdev->shutting_down = true;
 	list_for_each_entry(ic, &rds_ibdev->conn_list, ib_node)
 		rds_conn_path_drop(&ic->conn->c_path[0], true);
 	spin_unlock_irqrestore(&rds_ibdev->spinlock, flags);
@@ -391,6 +396,20 @@ static void rds6_ib_ic_info(struct socket *sock, unsigned int len,
 }
 #endif
 
+struct rds_ib_destroy_work {
+	struct work_struct work;
+	struct rdma_cm_id *cm_id;
+};
+
+static void rds_ib_destroy_id_work(struct work_struct *work)
+{
+	struct rds_ib_destroy_work *w =
+		container_of(work, struct rds_ib_destroy_work, work);
+
+	rdma_destroy_id(w->cm_id);
+	kfree(w);
+}
+
 /*
  * Early RDS/IB was built to only bind to an address if there is an IPoIB
  * device with that address set.
@@ -411,14 +430,28 @@ static int rds_ib_laddr_check_cm(struct net *net, const struct in6_addr *addr,
 #endif
 	struct sockaddr_in sin;
 	struct sockaddr *sa;
+	struct rds_ib_destroy_work *w;
 	bool isv4;
 
 	isv4 = ipv6_addr_v4mapped(addr);
+
+	/*
+	 * The id is destroyed from rds_wq: rds_trans_get_preferred() calls this
+	 * function with rds_trans_sem held for reading, and rdma_destroy_id()
+	 * takes handler_mutex, which the CM callback path acquires before
+	 * taking rds_trans_sem.
+	 */
+	w = kzalloc_obj(*w, GFP_KERNEL);
+	if (!w)
+		return -ENOMEM;
+
 	/* Create a CMA ID restricted to IB devices and try to bind it. */
 	cm_id = rdma_create_id(&init_net, rds_rdma_cm_event_handler,
 			       NULL, RDMA_PS_TCP, IB_QPT_RC);
-	if (IS_ERR(cm_id))
+	if (IS_ERR(cm_id)) {
+		kfree(w);
 		return PTR_ERR(cm_id);
+	}
 	ret = rdma_restrict_node_type(cm_id, RDMA_NODE_IB_CA);
 	if (ret)
 		goto out;
@@ -484,7 +517,9 @@ static int rds_ib_laddr_check_cm(struct net *net, const struct in6_addr *addr,
 		 cm_id->device ? cm_id->device->node_type : -1);
 
 out:
-	rdma_destroy_id(cm_id);
+	INIT_WORK(&w->work, rds_ib_destroy_id_work);
+	w->cm_id = cm_id;
+	queue_work(rds_wq, &w->work);
 
 	return ret;
 }
@@ -523,10 +558,7 @@ static void rds_ib_set_unloading(void)
 
 static bool rds_ib_is_unloading(struct rds_connection *conn)
 {
-	struct rds_conn_path *cp = &conn->c_path[0];
-
-	return (test_bit(RDS_DESTROY_PENDING, &cp->cp_flags) ||
-		atomic_read(&rds_ib_unloading) != 0);
+	return atomic_read(&rds_ib_unloading) != 0;
 }
 
 void rds_ib_exit(void)
@@ -538,10 +570,32 @@ void rds_ib_exit(void)
 	rds_info_deregister_func(RDS6_INFO_IB_CONNECTIONS, rds6_ib_ic_info);
 #endif
 	rds_ib_unregister_client();
+
+	/* rds_ib_dev_shutdown() only dropped the connections still
+	 * attached to a device; each moves itself to ib_nodev_conns
+	 * from its shutdown work.  Destroy what is there now and keep
+	 * sweeping the list while the wait sees connections outstanding,
+	 * so a late arrival is destroyed rather than waited on forever.
+	 */
 	rds_ib_destroy_nodev_conns();
+	rds_conn_wait_conns_freed(&rds_ib_transport,
+				  rds_ib_destroy_nodev_conns);
+
+	/* Tearing down the last connection may have dropped the final
+	 * reference on a device, deferring rds_ib_dev_free() to rds_wq.
+	 * Drain it before the module goes away; it queues nothing
+	 * further on rds_wq.
+	 */
+	flush_workqueue(rds_wq);
+
 	rds_ib_sysctl_exit();
 	rds_ib_recv_exit();
 	rds_trans_unregister(&rds_ib_transport);
+	/*
+	 * rds_ib_laddr_check_cm() may have queued rdma_destroy_id() on rds_wq;
+	 * wait for it before the module text goes away.
+	 */
+	flush_workqueue(rds_wq);
 	rds_ib_mr_exit();
 }
 

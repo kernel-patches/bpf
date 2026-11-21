@@ -1009,8 +1009,12 @@ mtype_add(struct ip_set *set, void *value, const struct ip_set_ext *ext,
 	maxelem = t->maxelem;
 	if (elements >= maxelem) {
 		u32 e;
-		if (SET_WITH_TIMEOUT(set))
-			mtype_gc_do(set, h, t, r);
+		if (SET_WITH_TIMEOUT(set)) {
+			spin_lock_bh(&h->gc.lock);
+			if (!t->resizing)
+				mtype_gc_do(set, h, t, r);
+			spin_unlock_bh(&h->gc.lock);
+		}
 		maxelem = h->maxelem;
 		elements = 0;
 		for (e = 0; e < ahash_numof_locks(t->htable_bits); e++)
@@ -1068,7 +1072,11 @@ mtype_add(struct ip_set *set, void *value, const struct ip_set_ext *ext,
 		data = ahash_data(n, j, set->dsize);
 		if (!deleted) {
 			mtype_del_cidr_all(set, h, data);
-			ip_set_ext_destroy(set, data);
+			/* The resize copy shares this extension:
+			 * the replayed add destroys it.
+			 */
+			if (!(t->resizing && ext && ext->target))
+				ip_set_ext_destroy(set, data);
 			t->hregion[r].elements--;
 		}
 		goto copy_data;
@@ -1223,11 +1231,10 @@ mtype_del(struct ip_set *set, void *value, const struct ip_set_ext *ext,
 			smp_store_release(&n->pos, --pos);
 		t->hregion[r].elements--;
 		mtype_del_cidr_all(set, h, d);
-		ip_set_ext_destroy(set, data);
-
 		if (t->resizing && ext && ext->target) {
-			/* Resize is in process and kernel side del,
-			 * save values
+			/* Resize is in process and kernel side del, save
+			 * values.  The resize copy shares the extension:
+			 * the replayed del destroys it.
 			 */
 			x = kzalloc_obj(struct mtype_resize_ad, GFP_ATOMIC);
 			if (x) {
@@ -1236,6 +1243,8 @@ mtype_del(struct ip_set *set, void *value, const struct ip_set_ext *ext,
 				       sizeof(struct mtype_elem));
 				x->flags = flags;
 			}
+		} else {
+			ip_set_ext_destroy(set, data);
 		}
 		for (; i < pos; i++) {
 			if (!test_bit(i, n->used))

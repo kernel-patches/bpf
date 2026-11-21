@@ -660,7 +660,7 @@ int sctp_auth_send_cid(enum sctp_cid chunk, const struct sctp_association *asoc)
 	if (!asoc)
 		return 0;
 
-	if (!asoc->peer.auth_capable)
+	if (!asoc->peer.auth_capable || !asoc->shkey)
 		return 0;
 
 	return __sctp_auth_cid(chunk, asoc->peer.peer_chunks);

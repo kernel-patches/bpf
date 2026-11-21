@@ -74,9 +74,12 @@ enum mana_priv_flag_bits {
 /* 8-pkt mode packs up to 2 packets per PPI entry */
 #define MANA_CQE_COAL_PKTS_8 8
 
-/* Default/max interrupt moderation settings */
-#define MANA_INTR_MODR_USEC_DEF 0
-#define MANA_INTR_MODR_COMP_DEF 0
+/* Default/min interrupt moderation settings */
+#define MANA_INTR_MODR_USEC_DEF 1
+#define MANA_INTR_MODR_COMP_DEF 1
+
+#define MANA_INTR_MODR_USEC_MIN 1
+#define MANA_INTR_MODR_COMP_MIN 1
 
 #define MANA_ADAPTIVE_RX_DEF true
 #define MANA_ADAPTIVE_TX_DEF true
@@ -1162,8 +1165,8 @@ int mana_create_wq_obj(struct mana_port_context *apc,
 		       struct mana_obj_spec *cq_spec,
 		       mana_handle_t *wq_obj);
 
-void mana_destroy_wq_obj(struct mana_port_context *apc, u32 wq_type,
-			 mana_handle_t wq_obj);
+int mana_destroy_wq_obj(struct mana_port_context *apc, u32 wq_type,
+			mana_handle_t wq_obj);
 
 int mana_cfg_vport(struct mana_port_context *apc, u32 protection_dom_id,
 		   u32 doorbell_pg_id, bool check_channel_changing);

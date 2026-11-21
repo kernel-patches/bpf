@@ -109,15 +109,6 @@ bool inet_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2,
 				    match_wildcard);
 }
 
-bool inet_rcv_saddr_any(const struct sock *sk)
-{
-#if IS_ENABLED(CONFIG_IPV6)
-	if (sk->sk_family == AF_INET6)
-		return ipv6_addr_any(&sk->sk_v6_rcv_saddr);
-#endif
-	return !sk->sk_rcv_saddr;
-}
-
 /**
  *	inet_sk_get_local_port_range - fetch ephemeral ports range
  *	@sk: socket
@@ -343,8 +334,6 @@ other_half_scan:
 			low = half;
 	}
 	remaining = high - low;
-	if (likely(remaining > 1))
-		remaining &= ~1U;
 
 	offset = get_random_u32_below(remaining);
 	/* __inet_hash_connect() favors ports having @low parity
@@ -1082,6 +1071,7 @@ static void reqsk_timer_handler(struct timer_list *t)
 	net = sock_net(sk_listener);
 	max_syn_ack_retries = READ_ONCE(icsk->icsk_syn_retries) ? :
 		READ_ONCE(net->ipv4.sysctl_tcp_synack_retries);
+	max_syn_ack_retries = min_t(int, max_syn_ack_retries, MAX_TCP_SYNCNT);
 	/* Normally all the openreqs are young and become mature
 	 * (i.e. converted to established socket) for first timeout.
 	 * If synack was not acknowledged for 1 second, it means
@@ -1130,8 +1120,8 @@ static void reqsk_timer_handler(struct timer_list *t)
 			return;
 
 		if (!inet_ehash_insert(req_to_sk(nreq), req_to_sk(oreq), NULL)) {
-			/* delete timer */
-			__inet_csk_reqsk_queue_drop(sk_listener, nreq, false);
+			if (timer_delete(&nreq->rsk_timer))
+				reqsk_put(nreq);
 			goto no_ownership;
 		}
 
@@ -1369,6 +1359,7 @@ int inet_csk_listen_start(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct inet_sock *inet = inet_sk(sk);
+	bool bound;
 	int err;
 
 	err = inet_ulp_can_listen(sk);
@@ -1385,6 +1376,7 @@ int inet_csk_listen_start(struct sock *sk)
 	 * It is OK, because this socket enters to hash table only
 	 * after validation is complete.
 	 */
+	bound = !!icsk->icsk_bind_hash;
 	inet_sk_state_store(sk, TCP_LISTEN);
 	err = sk->sk_prot->get_port(sk, inet->inet_num);
 	if (!err) {
@@ -1398,6 +1390,10 @@ int inet_csk_listen_start(struct sock *sk)
 	}
 
 	inet_sk_set_state(sk, TCP_CLOSE);
+	if (!bound && icsk->icsk_bind_hash) {
+		inet->inet_sport = 0;
+		inet_put_port(sk);
+	}
 
 	/* A Fast Open child accepted before a previous shutdown() of this
 	 * listener might have queued its request in rskq_rst_head while

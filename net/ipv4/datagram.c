@@ -16,16 +16,16 @@
 #include <net/tcp_states.h>
 #include <net/sock_reuseport.h>
 
-int __ip4_datagram_connect(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len)
+static int ____ip4_datagram_connect(struct sock *sk,
+				    struct sockaddr_unsized *uaddr,
+				    int addr_len, struct flowi4 *fl4)
 {
+	struct sockaddr_in *usin = (struct sockaddr_in *)uaddr;
 	struct inet_sock *inet = inet_sk(sk);
-	struct sockaddr_in *usin = (struct sockaddr_in *) uaddr;
-	struct flowi4 *fl4;
 	struct rtable *rt;
 	__be32 saddr;
 	int oif;
 	int err;
-
 
 	if (addr_len < sizeof(*usin))
 		return -EINVAL;
@@ -45,7 +45,6 @@ int __ip4_datagram_connect(struct sock *sk, struct sockaddr_unsized *uaddr, int 
 	} else if (!oif) {
 		oif = READ_ONCE(inet->uc_index);
 	}
-	fl4 = &inet->cork.fl.u.ip4;
 	rt = ip_route_connect(fl4, usin->sin_addr.s_addr, saddr, oif,
 			      sk->sk_protocol, inet->inet_sport,
 			      usin->sin_port, sk);
@@ -81,6 +80,25 @@ int __ip4_datagram_connect(struct sock *sk, struct sockaddr_unsized *uaddr, int 
 	err = 0;
 out:
 	return err;
+}
+
+static noinline_for_stack int
+__ip4_datagram_connect_corked(struct sock *sk, struct sockaddr_unsized *uaddr,
+			      int addr_len)
+{
+	struct flowi4 fl4;
+
+	return ____ip4_datagram_connect(sk, uaddr, addr_len, &fl4);
+}
+
+int __ip4_datagram_connect(struct sock *sk, struct sockaddr_unsized *uaddr,
+			   int addr_len)
+{
+	if (unlikely(!skb_queue_empty(&sk->sk_write_queue)))
+		return __ip4_datagram_connect_corked(sk, uaddr, addr_len);
+
+	return ____ip4_datagram_connect(sk, uaddr, addr_len,
+					&inet_sk(sk)->cork.fl.u.ip4);
 }
 EXPORT_SYMBOL(__ip4_datagram_connect);
 

@@ -62,6 +62,7 @@ static inline bool rtpse_mcu_resp_is_final(const struct rtpse_mcu_msg *req,
 struct rtpse_mcu_dialect;
 struct rtpse_mcu_chip_info;
 struct rtpse_mcu_ctrl;
+struct regulator;
 
 /* Per-compatible match data (the of_match .data). */
 struct rtpse_mcu_match_data {
@@ -82,6 +83,8 @@ struct rtpse_mcu_ctrl {
 	const struct rtpse_mcu_dialect *dialect;
 	const struct rtpse_mcu_chip_info *chip;
 	const struct rtpse_mcu_transport_ops *transport;
+	struct regulator *vmain;
+	unsigned int requested_budget_mW;
 	u8 seq;			/* rolling request seq_num, echoed by the MCU */
 };
 

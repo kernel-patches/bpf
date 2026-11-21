@@ -4,7 +4,8 @@
 #define XSK_XDP_COMMON_H_
 
 #define MAX_SOCKETS 2
-#define PKT_HDR_ALIGN (sizeof(struct ethhdr) + 2) /* Just to align the data in the packet */
+/* Pads the UDP header of a test packet so that the payload is 4-byte aligned */
+#define PKT_HDR_PAD 2
 
 struct xdp_info {
 	__u64 count;

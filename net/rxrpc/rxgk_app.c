@@ -47,6 +47,7 @@ int rxgk_yfs_decode_ticket(struct rxrpc_connection *conn, struct sk_buff *skb,
 	const struct cred *cred = current_cred(); // TODO - use socket creds
 	struct key *key;
 	size_t pre_ticket_len, payload_len;
+	s64 endtime, now;
 	unsigned int klen, enctype;
 	void *payload, *ticket;
 	__be32 *t, *p, *q, *tmp;
@@ -96,6 +97,16 @@ int rxgk_yfs_decode_ticket(struct rxrpc_connection *conn, struct sk_buff *skb,
 	 * the ticket.
 	 */
 	t = ticket + sizeof(__be32) * 2 + xdr_round_up(klen);
+
+	/* Reject an expired ticket.  An end time of 0 means no expiry. */
+	endtime = (s64)((u64)ntohl(t[5]) << 32 | ntohl(t[6]));
+	now = div_s64(ktime_get_real_ns(), 100);
+	if (endtime != 0 && endtime <= now) {
+		ret = rxrpc_abort_conn(conn, skb, RXGK_EXPIRED, -EKEYEXPIRED,
+				       rxgk_abort_resp_tok_expired);
+		goto error;
+	}
+
 	q = payload + 5 * sizeof(__be32);
 	q[0]  = htonl(RXRPC_SECURITY_YFS_RXGK);
 	q[1]  = t[1];		/* begintime - msw */

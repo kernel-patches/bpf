@@ -238,7 +238,15 @@ enum enic_vf_type {
 	ENIC_VF_TYPE_V2,
 };
 
+enum enic_admin_chan_state {
+	ENIC_ADMIN_CHAN_DOWN,
+	ENIC_ADMIN_CHAN_LIVE,
+	ENIC_ADMIN_CHAN_QUARANTINED,
+};
+
 /* Per-instance private data structure */
+struct enic_mac_addr;
+
 struct enic {
 	struct net_device *netdev;
 	struct pci_dev *pdev;
@@ -265,6 +273,12 @@ struct enic {
 	u16 num_vfs;
 	enum enic_vf_type vf_type;
 	bool vf_registered;
+	u16 vf_id;
+	/* A statistics-command timeout leaves its persistent coherent target
+	 * device-owned until completion of a blocking QP or close command is
+	 * observed.
+	 */
+	bool sriov_stats_dma_unresolved;
 	u32 pf_cap_version;
 	unsigned int enable_count;
 	spinlock_t enic_api_lock;
@@ -298,13 +312,31 @@ struct enic {
 
 	/* Admin channel resources for SR-IOV MBOX */
 	bool has_admin_channel;
-	/* true only while the admin WQ/RQ/CQ are allocated and enabled; gates
-	 * enic_admin_channel_close() so it is a no-op after a failed (re)open
-	 * left the resources freed.
-	 */
-	bool admin_chan_up;
-	/* set on send timeout; cleared on channel re-open */
+	/* QUARANTINED retains admin DMA until a final teardown recheck. */
+	enum enic_admin_chan_state admin_chan_state;
+	/* Blocks sends throughout close, partial open and timeout recovery. */
 	bool mbox_send_disabled;
+	/* A send timeout leaves WQ descriptor ownership unresolved until channel
+	 * shutdown proves that both admin queues stopped.
+	 */
+	bool mbox_tx_poisoned;
+	/* After a lost or inconsistent reply, the VF cannot know whether the PF
+	 * applied the request. Reconnect during the next open or reset.
+	 */
+	bool vf_mbox_reconnect_required;
+	/* Suppress self-requeue while a reset worker is already attempting the
+	 * reconnect. The fault generation records a fault arriving during recovery
+	 * so one later generation is not lost. A failed handshake remains
+	 * quarantined until a later external recovery event or close/open.
+	 */
+	bool vf_mbox_recovery_active;
+	u32 vf_mbox_fault_generation;
+	/* One slow-path-owned predicate keeps the RX hot path fail-closed while
+	 * VF registration is lost or receive state may not match the PF.
+	 */
+	bool vf_rx_quarantined;
+	/* RTNL protects software open/stop pairing; this does not prove DMA stop. */
+	bool datapath_open;
 	struct vnic_wq admin_wq;
 	struct vnic_rq admin_rq;
 	struct vnic_cq admin_cq[2];
@@ -325,6 +357,9 @@ struct enic {
 	spinlock_t vf_link_state_lock;
 	enum enic_vf_link_state vf_link_state;
 	bool vf_link_running;
+	/* Last station address which may still be installed at the PF. */
+	u8 vf_station_addr[ETH_ALEN] __aligned(2);
+	bool vf_station_addr_valid;
 
 	/* MBOX protocol state — mbox_lock serializes admin WQ sends */
 	struct mutex mbox_lock;
@@ -335,9 +370,34 @@ struct enic {
 	 * the requester.
 	 */
 	struct completion mbox_comp;
+	struct mutex vf_mbox_request_lock; /* serializes VF request lifetimes */
 	spinlock_t mbox_state_lock;	/* protects expected reply state */
+	spinlock_t vf_ack_lock;		/* protects vf_ack_list */
+	struct list_head vf_ack_list;
+	struct work_struct vf_ack_work;
+	unsigned int vf_ack_count;
+	struct delayed_work vf_admin_mac_work;
+	spinlock_t vf_admin_mac_lock;	/* protects pending admin MAC */
+	u8 vf_admin_mac[ETH_ALEN];
+	u8 vf_admin_mac_random_addr[ETH_ALEN];
+	bool vf_admin_mac_pending;
+	bool vf_admin_mac_random_valid;
+	bool vf_admin_mac_work_enabled;
+	bool vf_admin_mac_recovery_attempted;
+	u32 vf_admin_mac_generation;
+	u8 vf_admin_mac_retries;
 	u64 mbox_expected_msg_num;
 	u8 mbox_expected_reply;
+	int mbox_reply_status;
+	u16 mbox_reply_filter_flags;
+	/* The request mutex keeps this caller-owned reply array alive until the
+	 * matching reply handler has copied all per-address result flags.
+	 */
+	struct enic_mac_addr *mbox_reply_mac_addrs;
+	u16 mbox_reply_mac_count;
+	u16 vf_pkt_filter_requested;
+	u16 vf_pkt_filter_applied;
+	bool vf_pkt_filter_valid;
 	bool mbox_initialized;
 
 	/* PF: per-VF MBOX state, allocated when SRIOV V2 is enabled */
@@ -462,6 +522,10 @@ static inline int enic_dma_map_check(struct enic *enic, dma_addr_t dma_addr)
 }
 
 void enic_reset_addr_lists(struct enic *enic);
+void enic_vf_admin_mac_notify(struct enic *enic, const u8 *addr);
+void enic_vf_admin_mac_quiesce(struct enic *enic);
+void enic_vf_admin_mac_rearm(struct enic *enic);
+void enic_vf_admin_mac_purge(struct enic *enic);
 int enic_sriov_enabled(struct enic *enic);
 int enic_is_valid_vf(struct enic *enic, int vf);
 int enic_is_dynamic(struct enic *enic);

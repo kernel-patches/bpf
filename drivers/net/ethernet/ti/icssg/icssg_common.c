@@ -39,16 +39,10 @@
 				 NETIF_MSG_HW | \
 				 NETIF_MSG_WOL)
 
-#define prueth_napi_to_emac(napi) container_of(napi, struct prueth_emac, napi_rx)
 
-void prueth_cleanup_rx_chns(struct prueth_emac *emac,
-			    struct prueth_rx_chn *rx_chn,
-			    int max_rflows)
+void prueth_cleanup_rx_chns(struct prueth_emac *emac)
 {
-	if (rx_chn->pg_pool) {
-		page_pool_destroy(rx_chn->pg_pool);
-		rx_chn->pg_pool = NULL;
-	}
+	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
 
 	if (rx_chn->desc_pool)
 		k3_cppi_desc_pool_destroy(rx_chn->desc_pool);
@@ -78,6 +72,20 @@ void prueth_cleanup_tx_chns(struct prueth_emac *emac)
 	}
 }
 EXPORT_SYMBOL_GPL(prueth_cleanup_tx_chns);
+
+void prueth_ndev_del_rx_napi(struct prueth_emac *emac, int num)
+{
+	int i;
+
+	for (i = 0; i < num; i++) {
+		struct prueth_rx_flow *rx_flow = &emac->rx_chns.flows[i];
+
+		if (rx_flow->irq)
+			free_irq(rx_flow->irq, &rx_flow->napi_rx);
+		netif_napi_del(&rx_flow->napi_rx);
+	}
+}
+EXPORT_SYMBOL_GPL(prueth_ndev_del_rx_napi);
 
 void prueth_ndev_del_tx_napi(struct prueth_emac *emac, int num)
 {
@@ -311,6 +319,19 @@ int emac_tx_complete_packets(struct prueth_emac *emac, int chn,
 	return num_tx;
 }
 
+static enum hrtimer_restart emac_rx_timer_callback(struct hrtimer *timer)
+{
+	struct prueth_rx_flow *rx_flow =
+				container_of(timer, struct prueth_rx_flow, rx_hrtimer);
+
+	if (rx_flow->irq_disabled) {
+		/* re-enable the RX IRQ */
+		rx_flow->irq_disabled = false;
+		enable_irq(rx_flow->irq);
+	}
+	return HRTIMER_NORESTART;
+}
+
 static enum hrtimer_restart emac_tx_timer_callback(struct hrtimer *timer)
 {
 	struct prueth_tx_chn *tx_chns =
@@ -362,6 +383,35 @@ static irqreturn_t prueth_tx_irq(int irq, void *dev_id)
 
 	return IRQ_HANDLED;
 }
+
+int prueth_ndev_add_rx_napi(struct prueth_emac *emac)
+{
+	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth *prueth = emac->prueth;
+	struct prueth_rx_flow *flow;
+	int i, ret;
+
+	for (i = 0; i < emac->rx_flow_num; i++) {
+		flow = &rx_chn->flows[i];
+
+		netif_napi_add(emac->ndev, &flow->napi_rx, icssg_napi_rx_poll);
+		hrtimer_setup(&flow->rx_hrtimer, &emac_rx_timer_callback, CLOCK_MONOTONIC,
+			      HRTIMER_MODE_REL_PINNED);
+		ret = request_irq(emac->rx_chns.flows[i].irq, prueth_rx_irq,
+				  IRQF_TRIGGER_HIGH, flow->name, &flow->napi_rx);
+		if (ret) {
+			netif_napi_del(&flow->napi_rx);
+			dev_err(prueth->dev, "unable to request RX IRQ\n");
+			goto fail;
+		}
+	}
+
+	return 0;
+fail:
+	prueth_ndev_del_rx_napi(emac, i);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(prueth_ndev_add_rx_napi);
 
 int prueth_ndev_add_tx_napi(struct prueth_emac *emac)
 {
@@ -475,7 +525,8 @@ EXPORT_SYMBOL_GPL(prueth_init_tx_chns);
 
 static struct page_pool *prueth_create_page_pool(struct prueth_emac *emac,
 						 struct device *dma_dev,
-						 int size)
+						 int size,
+						 struct prueth_rx_flow *rx_flow)
 {
 	struct page_pool_params pp_params = { 0 };
 	struct page_pool *pool;
@@ -486,7 +537,7 @@ static struct page_pool *prueth_create_page_pool(struct prueth_emac *emac,
 	pp_params.nid = dev_to_node(emac->prueth->dev);
 	pp_params.dma_dir = DMA_BIDIRECTIONAL;
 	pp_params.dev = dma_dev;
-	pp_params.napi = &emac->napi_rx;
+	pp_params.napi = &rx_flow->napi_rx;
 	pp_params.max_len = PAGE_SIZE;
 
 	pool = page_pool_create(&pp_params);
@@ -496,38 +547,30 @@ static struct page_pool *prueth_create_page_pool(struct prueth_emac *emac,
 	return pool;
 }
 
-int prueth_init_rx_chns(struct prueth_emac *emac,
-			struct prueth_rx_chn *rx_chn,
-			char *name, u32 max_rflows,
-			u32 max_desc_num)
+int prueth_init_rx_chns(struct prueth_emac *emac)
 {
+	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
 	struct k3_udma_glue_rx_channel_cfg rx_cfg;
 	struct device *dev = emac->prueth->dev;
 	struct net_device *ndev = emac->ndev;
+	struct prueth_rx_flow *flow;
 	u32 fdqring_id, hdesc_size;
-	struct page_pool *pool;
 	int i, ret = 0, slice;
-	int flow_id_base;
+	char udma_name[32];
 
 	slice = prueth_emac_slice(emac);
 	if (slice < 0)
 		return slice;
 
-	/* To differentiate channels for SLICE0 vs SLICE1 */
-	snprintf(rx_chn->name, sizeof(rx_chn->name), "%s%d", name, slice);
-
 	hdesc_size = cppi5_hdesc_calc_size(true, PRUETH_NAV_PS_DATA_SIZE,
 					   PRUETH_NAV_SW_DATA_SIZE);
 	memset(&rx_cfg, 0, sizeof(rx_cfg));
 	rx_cfg.swdata_size = PRUETH_NAV_SW_DATA_SIZE;
-	rx_cfg.flow_id_num = max_rflows;
+	rx_cfg.flow_id_num = emac->rx_flow_num;
 	rx_cfg.flow_id_base = -1; /* udmax will auto select flow id base */
 
-	/* init all flows */
-	rx_chn->dev = dev;
-	rx_chn->descs_num = max_desc_num;
-
-	rx_chn->rx_chn = k3_udma_glue_request_rx_chn(dev, rx_chn->name,
+	snprintf(udma_name, sizeof(udma_name), "%s%d", "rx", slice);
+	rx_chn->rx_chn = k3_udma_glue_request_rx_chn(dev, udma_name,
 						     &rx_cfg);
 	if (IS_ERR(rx_chn->rx_chn)) {
 		ret = PTR_ERR(rx_chn->rx_chn);
@@ -536,11 +579,14 @@ int prueth_init_rx_chns(struct prueth_emac *emac,
 		goto fail;
 	}
 
+	/* Initialize the RX channel (shared by all flows) */
+	rx_chn->emac = emac;
+	rx_chn->descs_num = PRUETH_MAX_RX_DESC * rx_cfg.flow_id_num;
 	rx_chn->dma_dev = k3_udma_glue_rx_get_dma_device(rx_chn->rx_chn);
 	rx_chn->desc_pool = k3_cppi_desc_pool_create_name(rx_chn->dma_dev,
 							  rx_chn->descs_num,
 							  hdesc_size,
-							  rx_chn->name);
+							  "rx_desc_pool");
 	if (IS_ERR(rx_chn->desc_pool)) {
 		ret = PTR_ERR(rx_chn->desc_pool);
 		rx_chn->desc_pool = NULL;
@@ -548,22 +594,14 @@ int prueth_init_rx_chns(struct prueth_emac *emac,
 		goto fail;
 	}
 
-	pool = prueth_create_page_pool(emac, rx_chn->dma_dev, rx_chn->descs_num);
-	if (IS_ERR(pool)) {
-		ret = PTR_ERR(pool);
-		goto fail;
+	for (i = 0; i < rx_cfg.flow_id_num; i++) {
+		flow = &rx_chn->flows[i];
+		flow->pg_pool = NULL;
+		flow->xsk_pool = NULL;
 	}
 
-	rx_chn->pg_pool = pool;
-
-	flow_id_base = k3_udma_glue_rx_get_flow_id_base(rx_chn->rx_chn);
-	if (emac->is_sr1 && !strcmp(name, "rxmgm")) {
-		emac->rx_mgm_flow_id_base = flow_id_base;
-		netdev_dbg(ndev, "mgm flow id base = %d\n", flow_id_base);
-	} else {
-		emac->rx_flow_id_base = flow_id_base;
-		netdev_dbg(ndev, "flow id base = %d\n", flow_id_base);
-	}
+	emac->rx_flow_id_base = k3_udma_glue_rx_get_flow_id_base(rx_chn->rx_chn);
+	netdev_dbg(ndev, "flow id base = %d\n", emac->rx_flow_id_base);
 
 	fdqring_id = K3_RINGACC_RING_ID_ANY;
 	for (i = 0; i < rx_cfg.flow_id_num; i++) {
@@ -584,9 +622,14 @@ int prueth_init_rx_chns(struct prueth_emac *emac,
 				K3_UDMA_GLUE_SRC_TAG_LO_USE_REMOTE_SRC_TAG,
 		};
 
+		flow = &rx_chn->flows[i];
+		flow->emac = emac;
+		flow->id = i;
+		flow->irq = -EINVAL;
+
 		rx_flow_cfg.ring_rxfdq0_id = fdqring_id;
-		rx_flow_cfg.rx_cfg.size = max_desc_num;
-		rx_flow_cfg.rxfdq_cfg.size = max_desc_num;
+		rx_flow_cfg.rx_cfg.size = PRUETH_MAX_RX_DESC;
+		rx_flow_cfg.rxfdq_cfg.size = PRUETH_MAX_RX_DESC;
 		rx_flow_cfg.rxfdq_cfg.mode = emac->prueth->pdata.fdqring_mode;
 
 		ret = k3_udma_glue_rx_flow_init(rx_chn->rx_chn,
@@ -599,31 +642,36 @@ int prueth_init_rx_chns(struct prueth_emac *emac,
 		if (!i)
 			fdqring_id = k3_udma_glue_rx_flow_get_fdq_id(rx_chn->rx_chn,
 								     i);
-		ret = k3_udma_glue_rx_get_irq(rx_chn->rx_chn, i);
-		if (ret < 0) {
+		flow->irq = k3_udma_glue_rx_get_irq(rx_chn->rx_chn, i);
+		if (flow->irq <= 0) {
+			ret = flow->irq < 0 ? flow->irq : -EINVAL;
 			netdev_err(ndev, "Failed to get rx dma irq");
 			goto fail;
 		}
-		rx_chn->irq[i] = ret;
+
+		snprintf(flow->name, sizeof(flow->name),
+			 "%s-rx%d-%d", dev_name(dev), slice, i);
 	}
 
 	return 0;
 
 fail:
-	prueth_cleanup_rx_chns(emac, rx_chn, max_rflows);
+	prueth_cleanup_rx_chns(emac);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(prueth_init_rx_chns);
 
 int prueth_dma_rx_push_mapped(struct prueth_emac *emac,
 			      struct prueth_rx_chn *rx_chn,
-			      struct page *page, u32 buf_len)
+			      struct page *page, u32 buf_len,
+			      int flow_id)
 {
 	struct net_device *ndev = emac->ndev;
 	struct cppi5_host_desc_t *desc_rx;
 	struct prueth_swdata *swdata;
 	dma_addr_t desc_dma;
 	dma_addr_t buf_dma;
+	int ret;
 
 	buf_dma = page_pool_get_dma_addr(page) + PRUETH_HEADROOM;
 	desc_rx = k3_cppi_desc_pool_alloc(rx_chn->desc_pool);
@@ -641,9 +689,12 @@ int prueth_dma_rx_push_mapped(struct prueth_emac *emac,
 	swdata = cppi5_hdesc_get_swdata(desc_rx);
 	swdata->type = PRUETH_SWDATA_PAGE;
 	swdata->data.page = page;
+	swdata->flow_id = flow_id;
 
-	return k3_udma_glue_push_rx_chn(rx_chn->rx_chn, PRUETH_RX_FLOW_DATA,
-					desc_rx, desc_dma);
+	ret = k3_udma_glue_push_rx_chn(rx_chn->rx_chn, flow_id, desc_rx, desc_dma);
+	if (ret)
+		k3_cppi_desc_pool_free(rx_chn->desc_pool, desc_rx);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(prueth_dma_rx_push_mapped);
 
@@ -860,14 +911,17 @@ drop:
 
 static int prueth_dma_rx_push_mapped_zc(struct prueth_emac *emac,
 					struct prueth_rx_chn *rx_chn,
-					struct xdp_buff *xdp)
+					struct xdp_buff *xdp,
+					int flow_id)
 {
+	struct prueth_rx_flow *rx_flow = &emac->rx_chns.flows[flow_id];
 	struct net_device *ndev = emac->ndev;
 	struct cppi5_host_desc_t *desc_rx;
 	struct prueth_swdata *swdata;
 	dma_addr_t desc_dma;
 	dma_addr_t buf_dma;
 	int buf_len;
+	int ret;
 
 	buf_dma = xsk_buff_xdp_get_dma(xdp);
 	desc_rx = k3_cppi_desc_pool_alloc(rx_chn->desc_pool);
@@ -880,28 +934,32 @@ static int prueth_dma_rx_push_mapped_zc(struct prueth_emac *emac,
 	cppi5_hdesc_init(desc_rx, CPPI5_INFO0_HDESC_EPIB_PRESENT,
 			 PRUETH_NAV_PS_DATA_SIZE);
 	k3_udma_glue_rx_dma_to_cppi5_addr(rx_chn->rx_chn, &buf_dma);
-	buf_len = xsk_pool_get_rx_frame_size(rx_chn->xsk_pool);
+	buf_len = xsk_pool_get_rx_frame_size(rx_flow->xsk_pool);
 	cppi5_hdesc_attach_buf(desc_rx, buf_dma, buf_len, buf_dma, buf_len);
 	swdata = cppi5_hdesc_get_swdata(desc_rx);
 	swdata->type = PRUETH_SWDATA_XSK;
 	swdata->data.xdp = xdp;
+	swdata->flow_id = flow_id;
 
-	return k3_udma_glue_push_rx_chn(rx_chn->rx_chn, PRUETH_RX_FLOW_DATA,
+	ret = k3_udma_glue_push_rx_chn(rx_chn->rx_chn, flow_id,
 					desc_rx, desc_dma);
+	if (ret)
+		k3_cppi_desc_pool_free(rx_chn->desc_pool, desc_rx);
+	return ret;
 }
 
-static int prueth_rx_alloc_zc(struct prueth_emac *emac, int budget)
+static int prueth_rx_alloc_zc(struct prueth_emac *emac, int flow_id, int budget)
 {
-	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth_rx_flow *rx_flow = &emac->rx_chns.flows[flow_id];
 	struct xdp_buff *xdp;
 	int i, ret;
 
 	for (i = 0; i < budget; i++) {
-		xdp = xsk_buff_alloc(rx_chn->xsk_pool);
+		xdp = xsk_buff_alloc(rx_flow->xsk_pool);
 		if (!xdp)
 			break;
 
-		ret = prueth_dma_rx_push_mapped_zc(emac, rx_chn, xdp);
+		ret = prueth_dma_rx_push_mapped_zc(emac, &emac->rx_chns, xdp, flow_id);
 		if (ret) {
 			netdev_err(emac->ndev, "rx alloc: failed to map descriptors to xdp buff\n");
 			xsk_buff_free(xdp);
@@ -912,14 +970,14 @@ static int prueth_rx_alloc_zc(struct prueth_emac *emac, int budget)
 	return i;
 }
 
-static void emac_dispatch_skb_zc(struct prueth_emac *emac, struct xdp_buff *xdp, u32 *psdata)
+static void emac_dispatch_skb_zc(struct prueth_emac *emac, struct xdp_buff *xdp, u32 *psdata, int flow_id)
 {
 	unsigned int headroom = xdp->data - xdp->data_hard_start;
 	unsigned int pkt_len = xdp->data_end - xdp->data;
 	struct net_device *ndev = emac->ndev;
 	struct sk_buff *skb;
 
-	skb = napi_alloc_skb(&emac->napi_rx, xdp->data_end - xdp->data_hard_start);
+	skb = napi_alloc_skb(&emac->rx_chns.flows[flow_id].napi_rx, xdp->data_end - xdp->data_hard_start);
 	if (unlikely(!skb)) {
 		ndev->stats.rx_dropped++;
 		return;
@@ -938,7 +996,7 @@ static void emac_dispatch_skb_zc(struct prueth_emac *emac, struct xdp_buff *xdp,
 		skb->offload_fwd_mark = emac->offload_fwd_mark;
 	skb->protocol = eth_type_trans(skb, ndev);
 
-	napi_gro_receive(&emac->napi_rx, skb);
+	napi_gro_receive(&emac->rx_chns.flows[flow_id].napi_rx, skb);
 	ndev->stats.rx_bytes += pkt_len;
 	ndev->stats.rx_packets++;
 }
@@ -947,6 +1005,7 @@ static int emac_rx_packet_zc(struct prueth_emac *emac, u32 flow_id,
 			     int budget)
 {
 	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth_rx_flow *rx_flow = &emac->rx_chns.flows[flow_id];
 	u32 buf_dma_len, pkt_len, port_id = 0;
 	struct net_device *ndev = emac->ndev;
 	struct cppi5_host_desc_t *desc_rx;
@@ -997,7 +1056,7 @@ static int emac_rx_packet_zc(struct prueth_emac *emac, u32 flow_id,
 			switch (ret) {
 			case ICSSG_XDP_PASS:
 				/* prepare skb and send to n/w stack */
-				emac_dispatch_skb_zc(emac, xdp, psdata);
+				emac_dispatch_skb_zc(emac, xdp, psdata, flow_id);
 				xsk_buff_free(xdp);
 				break;
 			case ICSSG_XDP_CONSUMED:
@@ -1010,7 +1069,7 @@ static int emac_rx_packet_zc(struct prueth_emac *emac, u32 flow_id,
 			}
 		} else {
 			/* prepare skb and send to n/w stack */
-			emac_dispatch_skb_zc(emac, xdp, psdata);
+			emac_dispatch_skb_zc(emac, xdp, psdata, flow_id);
 			xsk_buff_free(xdp);
 		}
 		k3_cppi_desc_pool_free(rx_chn->desc_pool, desc_rx);
@@ -1022,13 +1081,13 @@ static int emac_rx_packet_zc(struct prueth_emac *emac, u32 flow_id,
 	avail_desc = k3_cppi_desc_pool_avail(rx_chn->desc_pool);
 	alloc_budget = min_t(int, budget, avail_desc);
 
-	ret = prueth_rx_alloc_zc(emac, alloc_budget);
+	ret = prueth_rx_alloc_zc(emac, flow_id, alloc_budget);
 
-	if (xsk_uses_need_wakeup(rx_chn->xsk_pool)) {
+	if (xsk_uses_need_wakeup(rx_flow->xsk_pool)) {
 		if (ret < alloc_budget)
-			xsk_set_rx_need_wakeup(rx_chn->xsk_pool);
+			xsk_set_rx_need_wakeup(rx_flow->xsk_pool);
 		else
-			xsk_clear_rx_need_wakeup(rx_chn->xsk_pool);
+			xsk_clear_rx_need_wakeup(rx_flow->xsk_pool);
 	}
 
 	return count;
@@ -1037,6 +1096,7 @@ static int emac_rx_packet_zc(struct prueth_emac *emac, u32 flow_id,
 static int emac_rx_packet(struct prueth_emac *emac, u32 flow_id, u32 *xdp_state)
 {
 	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth_rx_flow *rx_flow = &emac->rx_chns.flows[flow_id];
 	u32 buf_dma_len, pkt_len, port_id = 0;
 	struct net_device *ndev = emac->ndev;
 	struct cppi5_host_desc_t *desc_rx;
@@ -1051,7 +1111,7 @@ static int emac_rx_packet(struct prueth_emac *emac, u32 flow_id, u32 *xdp_state)
 	void *pa;
 
 	*xdp_state = 0;
-	pool = rx_chn->pg_pool;
+	pool = rx_flow->pg_pool;
 	ret = k3_udma_glue_pop_rx_chn(rx_chn->rx_chn, flow_id, &desc_dma);
 	if (ret) {
 		if (ret != -ENODATA)
@@ -1093,7 +1153,7 @@ static int emac_rx_packet(struct prueth_emac *emac, u32 flow_id, u32 *xdp_state)
 
 	pa = page_address(page);
 	if (prueth_xdp_is_enabled(emac)) {
-		xdp_init_buff(&xdp, PAGE_SIZE, &rx_chn->xdp_rxq);
+		xdp_init_buff(&xdp, PAGE_SIZE, &rx_flow->xdp_rxq);
 		xdp_prepare_buff(&xdp, pa, PRUETH_HEADROOM, pkt_len, false);
 
 		*xdp_state = emac_run_xdp(emac, &xdp, &pkt_len);
@@ -1132,15 +1192,15 @@ static int emac_rx_packet(struct prueth_emac *emac, u32 flow_id, u32 *xdp_state)
 	skb->protocol = eth_type_trans(skb, ndev);
 
 	skb_mark_for_recycle(skb);
-	napi_gro_receive(&emac->napi_rx, skb);
+	napi_gro_receive(&emac->rx_chns.flows[flow_id].napi_rx, skb);
 	ndev->stats.rx_bytes += pkt_len;
 	ndev->stats.rx_packets++;
 
 requeue:
 	k3_cppi_desc_pool_free(rx_chn->desc_pool, desc_rx);
 	/* queue another RX DMA */
-	ret = prueth_dma_rx_push_mapped(emac, &emac->rx_chns, new_page,
-					PRUETH_MAX_PKT_SIZE);
+	ret = prueth_dma_rx_push_mapped(emac, rx_chn, new_page,
+					PRUETH_MAX_PKT_SIZE, flow_id);
 	if (WARN_ON(ret < 0)) {
 		page_pool_recycle_direct(pool, new_page);
 		ndev->stats.rx_errors++;
@@ -1155,19 +1215,22 @@ void prueth_rx_cleanup(void *data, dma_addr_t desc_dma)
 	struct prueth_rx_chn *rx_chn = data;
 	struct cppi5_host_desc_t *desc_rx;
 	struct prueth_swdata *swdata;
-	struct page_pool *pool;
+	struct page_pool *pool = NULL;
 	struct xdp_buff *xdp;
 	struct page *page;
 
-	pool = rx_chn->pg_pool;
 	desc_rx = k3_cppi_desc_pool_dma2virt(rx_chn->desc_pool, desc_dma);
 	swdata = cppi5_hdesc_get_swdata(desc_rx);
-	if (rx_chn->xsk_pool) {
+
+	if (swdata->type == PRUETH_SWDATA_XSK) {
 		xdp = swdata->data.xdp;
 		xsk_buff_free(xdp);
-	} else {
-		page = swdata->data.page;
-		page_pool_recycle_direct(pool, page);
+	} else if (swdata->type == PRUETH_SWDATA_PAGE) {
+		pool = rx_chn->flows[swdata->flow_id].pg_pool;
+		if (pool) {
+			page = swdata->data.page;
+			page_pool_recycle_direct(pool, page);
+		}
 	}
 
 	k3_cppi_desc_pool_free(rx_chn->desc_pool, desc_rx);
@@ -1411,11 +1474,12 @@ EXPORT_SYMBOL_GPL(prueth_tx_cleanup);
 
 irqreturn_t prueth_rx_irq(int irq, void *dev_id)
 {
-	struct prueth_emac *emac = dev_id;
+	struct napi_struct *napi_rx = dev_id;
+	struct prueth_rx_flow *rx_flow = container_of(napi_rx, struct prueth_rx_flow, napi_rx);
 
-	emac->rx_chns.irq_disabled = true;
+	rx_flow->irq_disabled = true;
 	disable_irq_nosync(irq);
-	napi_schedule(&emac->napi_rx);
+	napi_schedule(napi_rx);
 
 	return IRQ_HANDLED;
 }
@@ -1436,50 +1500,38 @@ EXPORT_SYMBOL_GPL(prueth_cleanup_tx_ts);
 
 int icssg_napi_rx_poll(struct napi_struct *napi_rx, int budget)
 {
-	struct prueth_emac *emac = prueth_napi_to_emac(napi_rx);
-	int rx_flow = emac->is_sr1 ?
-		PRUETH_RX_FLOW_DATA_SR1 : PRUETH_RX_FLOW_DATA;
-	int flow = emac->is_sr1 ?
-		PRUETH_MAX_RX_FLOWS_SR1 : PRUETH_MAX_RX_FLOWS;
-	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth_rx_flow *rx_flow = prueth_napi_to_rx_chn(napi_rx);
+	struct prueth_emac *emac = rx_flow->emac;
 	int xdp_state_or = 0;
 	int num_rx = 0;
-	int cur_budget;
 	u32 xdp_state;
 	int ret;
 
-	while (flow--) {
-		if (rx_chn->xsk_pool) {
-			num_rx = emac_rx_packet_zc(emac, flow, budget);
-		} else {
-			cur_budget = budget - num_rx;
-
-			while (cur_budget--) {
-				ret = emac_rx_packet(emac, flow, &xdp_state);
-				xdp_state_or |= xdp_state;
-				if (ret)
-					break;
-				num_rx++;
-			}
+	if (rx_flow->xsk_pool) {
+		num_rx = emac_rx_packet_zc(emac, rx_flow->id, budget);
+	} else {
+		while (budget - num_rx > 0) {
+			ret = emac_rx_packet(emac, rx_flow->id, &xdp_state);
+			xdp_state_or |= xdp_state;
+			if (ret)
+				break;
+			num_rx++;
 		}
-
-		if (num_rx >= budget)
-			break;
 	}
 
 	if (xdp_state_or & ICSSG_XDP_REDIR)
 		xdp_do_flush();
 
 	if (num_rx < budget && napi_complete_done(napi_rx, num_rx)) {
-		if (unlikely(emac->rx_pace_timeout_ns)) {
-			hrtimer_start(&emac->rx_hrtimer,
-				      ns_to_ktime(emac->rx_pace_timeout_ns),
+		if (unlikely(rx_flow->rx_pace_timeout_ns)) {
+			hrtimer_start(&rx_flow->rx_hrtimer,
+				      ns_to_ktime(rx_flow->rx_pace_timeout_ns),
 				      HRTIMER_MODE_REL_PINNED);
 		} else {
-			if (emac->rx_chns.irq_disabled) {
+			if (rx_flow->irq_disabled) {
 				/* re-enable the RX IRQ */
-				emac->rx_chns.irq_disabled = false;
-				enable_irq(emac->rx_chns.irq[rx_flow]);
+				rx_flow->irq_disabled = false;
+				enable_irq(rx_flow->irq);
 			}
 		}
 	}
@@ -1488,59 +1540,81 @@ int icssg_napi_rx_poll(struct napi_struct *napi_rx, int budget)
 }
 EXPORT_SYMBOL_GPL(icssg_napi_rx_poll);
 
-int prueth_prepare_rx_chan(struct prueth_emac *emac,
-			   struct prueth_rx_chn *chn,
-			   int buf_size)
+int prueth_prepare_rx_flow(struct prueth_emac *emac,
+			   int flow)
 {
+	int buf_size = PRUETH_MAX_PKT_SIZE;
+	struct prueth_rx_flow *rx_flow;
+	struct prueth_rx_chn *rx_chn;
+	struct page_pool *pool;
 	struct page *page;
 	int desc_avail;
 	int i, ret;
 
-	desc_avail = k3_cppi_desc_pool_avail(chn->desc_pool);
-	if (desc_avail < chn->descs_num)
-		netdev_warn(emac->ndev,
-			    "not enough RX descriptors available %d < %d\n",
-			    desc_avail, chn->descs_num);
+	rx_chn = &emac->rx_chns;
+	rx_flow = &emac->rx_chns.flows[flow];
 
-	if (chn->xsk_pool) {
-		/* get pages from xsk_pool and push to RX ring
-		 * queue as much as possible
+	if (rx_flow->xsk_pool) {
+		/* XSK zero-copy: buffers come from the XSK fill ring, no page
+		 * pool needed.  Push up to PRUETH_MAX_RX_DESC XSK buffers.
 		 */
-		ret = prueth_rx_alloc_zc(emac, desc_avail);
-		if (!ret)
-			goto recycle_alloc_pg;
-	} else {
-		for (i = 0; i < desc_avail; i++) {
-			/* NOTE: we're not using memory efficiently here.
-			 * 1 full page (4KB?) used here instead of
-			 * PRUETH_MAX_PKT_SIZE (~1.5KB?)
-			 */
-			page = page_pool_dev_alloc_pages(chn->pg_pool);
-			if (!page) {
-				netdev_err(emac->ndev, "couldn't allocate rx page\n");
-				ret = -ENOMEM;
-				goto recycle_alloc_pg;
-			}
+		desc_avail = k3_cppi_desc_pool_avail(rx_chn->desc_pool);
+		if (desc_avail < PRUETH_MAX_RX_DESC) {
+			netdev_err(emac->ndev,
+				   "not enough RX descriptors available %d < %d\n",
+				   desc_avail, PRUETH_MAX_RX_DESC);
+			return -ENOSPC;
+		}
 
-			ret = prueth_dma_rx_push_mapped(emac, chn, page, buf_size);
-			if (ret < 0) {
-				netdev_err(emac->ndev,
-					   "cannot submit page for rx chan %s ret %d\n",
-					   chn->name, ret);
-				page_pool_recycle_direct(chn->pg_pool, page);
-				goto recycle_alloc_pg;
-			}
+		prueth_rx_alloc_zc(emac, flow, PRUETH_MAX_RX_DESC);
+		return 0;
+	}
+
+	pool = prueth_create_page_pool(emac, rx_chn->dma_dev, rx_chn->descs_num, rx_flow);
+	if (IS_ERR(pool))
+		return PTR_ERR(pool);
+
+	rx_flow->pg_pool = pool;
+
+	desc_avail = k3_cppi_desc_pool_avail(rx_chn->desc_pool);
+	if (desc_avail < PRUETH_MAX_RX_DESC) {
+		netdev_err(emac->ndev,
+			   "not enough RX descriptors available %d < %d\n",
+			   desc_avail, PRUETH_MAX_RX_DESC);
+		ret = -ENOSPC;
+		goto err_free_pushed;
+	}
+
+	for (i = 0; i < PRUETH_MAX_RX_DESC; ++i) {
+		page = page_pool_dev_alloc_pages(pool);
+		if (!page) {
+			netdev_err(emac->ndev, "couldn't allocate rx page\n");
+			ret = -ENOMEM;
+			goto err_free_pushed;
+		}
+
+		ret = prueth_dma_rx_push_mapped(emac, rx_chn, page, buf_size, flow);
+		if (ret < 0) {
+			netdev_err(emac->ndev,
+				   "cannot submit skb for rx chan %s ret %d\n",
+				   rx_flow->name, ret);
+			page_pool_recycle_direct(pool, page);
+			goto err_free_pushed;
 		}
 	}
 
 	return 0;
 
-recycle_alloc_pg:
-	prueth_reset_rx_chan(&emac->rx_chns, PRUETH_MAX_RX_FLOWS, false);
-
+err_free_pushed:
+	/* i pages were successfully pushed to the ring.  Reset the channel
+	 * to drain them back and recycle via prueth_rx_cleanup before the
+	 * caller destroys the page pool.
+	 */
+	k3_udma_glue_reset_rx_chn(rx_chn->rx_chn, flow, rx_chn,
+				   prueth_rx_cleanup);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(prueth_prepare_rx_chan);
+EXPORT_SYMBOL_GPL(prueth_prepare_rx_flow);
 
 void prueth_reset_tx_chan(struct prueth_emac *emac, int ch_num,
 			  bool free_skb)
@@ -1557,16 +1631,20 @@ void prueth_reset_tx_chan(struct prueth_emac *emac, int ch_num,
 }
 EXPORT_SYMBOL_GPL(prueth_reset_tx_chan);
 
-void prueth_reset_rx_chan(struct prueth_rx_chn *chn,
-			  int num_flows, bool disable)
+void prueth_reset_rx_chan(struct prueth_emac *emac, bool disable)
 {
 	int i;
+	int num_flows = emac->rx_flow_num;
+	struct prueth_rx_chn *chn;
+
+	chn = &emac->rx_chns;
 
 	for (i = 0; i < num_flows; i++)
 		k3_udma_glue_reset_rx_chn(chn->rx_chn, i, chn,
 					  prueth_rx_cleanup);
+
 	if (disable)
-		k3_udma_glue_disable_rx_chn(chn->rx_chn);
+		k3_udma_glue_disable_rx_chn(emac->rx_chns.rx_chn);
 }
 EXPORT_SYMBOL_GPL(prueth_reset_rx_chan);
 
@@ -1752,7 +1830,9 @@ void prueth_netdev_exit(struct prueth *prueth,
 	if (of_phy_is_fixed_link(emac->phy_node))
 		of_phy_deregister_fixed_link(emac->phy_node);
 
-	netif_napi_del(&emac->napi_rx);
+	/* Free any rules added while the interface was down */
+	if (!emac->is_sr1)
+		icssg_rxnfc_rule_cleanup(emac);
 
 	pruss_release_mem_region(prueth->pruss, &emac->dram);
 	free_netdev(emac->ndev);

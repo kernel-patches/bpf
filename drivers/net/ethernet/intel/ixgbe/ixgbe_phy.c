@@ -1086,7 +1086,7 @@ int ixgbe_mii_bus_init(struct ixgbe_hw *hw)
 	hw->phy.mdio.mode_support = MDIO_SUPPORTS_C45 | MDIO_SUPPORTS_C22;
 
 	adapter->mii_bus = bus;
-	return mdiobus_register(bus);
+	return devm_mdiobus_register(dev, bus);
 }
 
 /**

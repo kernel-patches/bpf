@@ -142,6 +142,9 @@ struct hso_net {
 	struct sk_buff *skb_rx_buf;
 	struct sk_buff *skb_tx_buf;
 
+	/* serializes the hso_resume() replay with hso_net_close() */
+	struct mutex tx_replay_lock;
+
 	enum pkt_parse_state rx_parse_state;
 	spinlock_t net_lock;
 
@@ -720,6 +723,14 @@ static int hso_net_open(struct net_device *net)
 static int hso_net_close(struct net_device *net)
 {
 	struct hso_net *odev = netdev_priv(net);
+	struct sk_buff *skb;
+
+	/*
+	 * Serialize with the replay in hso_resume(): either the frame is
+	 * replayed before we stop the device, or it is taken and dropped
+	 * here, never both and never after the queue is gone.
+	 */
+	mutex_lock(&odev->tx_replay_lock);
 
 	/* we don't need the queue anymore */
 	netif_stop_queue(net);
@@ -727,6 +738,11 @@ static int hso_net_close(struct net_device *net)
 	clear_bit(HSO_NET_RUNNING, &odev->flags);
 
 	hso_stop_net_device(odev->parent);
+
+	skb = xchg(&odev->skb_tx_buf, NULL);
+	dev_kfree_skb(skb);
+
+	mutex_unlock(&odev->tx_replay_lock);
 
 	/* done */
 	return 0;
@@ -2393,11 +2409,13 @@ static void hso_net_init(struct net_device *net)
 	net->flags = IFF_POINTOPOINT | IFF_NOARP | IFF_MULTICAST;
 	net->type = ARPHRD_NONE;
 	net->mtu = DEFAULT_MTU - 14;
+	net->max_mtu = MUX_BULK_TX_BUF_SIZE - 14;
 	net->tx_queue_len = 10;
 	net->ethtool_ops = &ops;
 
 	/* and initialize the semaphore */
 	spin_lock_init(&hso_net->net_lock);
+	mutex_init(&hso_net->tx_replay_lock);
 }
 
 /* Adds a network device in the network device table */
@@ -3032,6 +3050,7 @@ static int hso_resume(struct usb_interface *iface)
 {
 	int i, result = 0;
 	struct hso_net *hso_net;
+	struct sk_buff *skb;
 
 	/* Start all serial ports */
 	for (i = 0; i < HSO_SERIAL_TTY_MINORS; i++) {
@@ -3051,21 +3070,38 @@ static int hso_resume(struct usb_interface *iface)
 		if (network_table[i] &&
 		    (network_table[i]->interface == iface)) {
 			hso_net = dev2net(network_table[i]);
-			if (hso_net->flags & IFF_UP) {
-				/* First transmit any lingering data,
-				   then restart the device. */
-				if (hso_net->skb_tx_buf) {
+			mutex_lock(&hso_net->tx_replay_lock);
+
+			/*
+			 * First transmit any lingering data, then restart
+			 * the device.
+			 */
+			if (test_bit(HSO_NET_RUNNING, &hso_net->flags)) {
+				/*
+				 * The frame is stashed by hso_net_start_xmit()
+				 * under the TX lock, so take the same lock here:
+				 * otherwise a concurrent transmit could store
+				 * after we took the pointer and leave the queue
+				 * stopped with the frame still stashed.
+				 */
+				netif_tx_lock_bh(hso_net->net);
+				skb = xchg(&hso_net->skb_tx_buf, NULL);
+				if (skb) {
 					dev_dbg(&iface->dev,
 						"Transmitting"
 						" lingering data\n");
-					hso_net_start_xmit(hso_net->skb_tx_buf,
-							   hso_net->net);
-					hso_net->skb_tx_buf = NULL;
+					hso_net_start_xmit(skb, hso_net->net);
 				}
+				netif_tx_unlock_bh(hso_net->net);
+
 				result = hso_start_net_device(network_table[i]);
-				if (result)
+				if (result) {
+					mutex_unlock(&hso_net->tx_replay_lock);
 					goto out;
+				}
 			}
+
+			mutex_unlock(&hso_net->tx_replay_lock);
 		}
 	}
 

@@ -885,6 +885,7 @@ static int adin1110_net_open(struct net_device *net_dev)
 {
 	struct adin1110_port_priv *port_priv = netdev_priv(net_dev);
 	struct adin1110_priv *priv = port_priv->priv;
+	u32 common, own, peer, irq_mask;
 	u32 val;
 	int ret;
 
@@ -895,12 +896,24 @@ static int adin1110_net_open(struct net_device *net_dev)
 	if (ret < 0)
 		goto out;
 
-	val = ADIN1110_TX_RDY_IRQ | ADIN1110_RX_RDY_IRQ | ADIN1110_SPI_ERR_IRQ;
-	if (priv->cfg->id == ADIN2111_MAC)
-		val |= ADIN2111_RX_RDY_IRQ;
+	common = ADIN1110_TX_RDY_IRQ | ADIN1110_SPI_ERR_IRQ;
+	own = !port_priv->nr ? ADIN1110_RX_RDY_IRQ : ADIN2111_RX_RDY_IRQ;
+	peer = !port_priv->nr ? ADIN2111_RX_RDY_IRQ : ADIN1110_RX_RDY_IRQ;
 
-	priv->irq_mask = val;
-	ret = adin1110_write_reg(priv, ADIN1110_IMASK1, ~val);
+	/*
+	 * The write below is absolute, so only keep the peer port's
+	 * RX-ready IRQ enabled while that port is running; a stopped peer
+	 * must stay masked until it is opened again.
+	 */
+	irq_mask = common | own;
+	priv->irq_mask = common | ADIN1110_RX_RDY_IRQ;
+	if (priv->cfg->id == ADIN2111_MAC) {
+		priv->irq_mask |= ADIN2111_RX_RDY_IRQ;
+		if (netif_running(priv->ports[!port_priv->nr]->netdev))
+			irq_mask |= peer;
+	}
+
+	ret = adin1110_write_reg(priv, ADIN1110_IMASK1, ~irq_mask);
 	if (ret < 0) {
 		netdev_err(net_dev, "Failed to enable chip IRQs: %d\n", ret);
 		goto out;
@@ -945,7 +958,7 @@ static int adin1110_net_stop(struct net_device *net_dev)
 	u32 mask;
 	int ret;
 
-	mask = !port_priv->nr ? ADIN2111_RX_RDY_IRQ : ADIN1110_RX_RDY_IRQ;
+	mask = !port_priv->nr ? ADIN1110_RX_RDY_IRQ : ADIN2111_RX_RDY_IRQ;
 
 	/* Disable RX RDY IRQs */
 	mutex_lock(&priv->lock);
@@ -1571,6 +1584,7 @@ static int adin1110_probe_netdevs(struct adin1110_priv *priv)
 	struct device *dev = &priv->spidev->dev;
 	struct adin1110_port_priv *port_priv;
 	struct net_device *netdev;
+	struct phy_device *phydev;
 	int ret;
 	int i;
 
@@ -1604,16 +1618,17 @@ static int adin1110_probe_netdevs(struct adin1110_priv *priv)
 		netdev->priv_flags |= IFF_UNICAST_FLT;
 		netdev->netns_immutable = true;
 
-		port_priv->phydev = get_phy_device(priv->mii_bus, i + 1, false);
-		if (IS_ERR(port_priv->phydev)) {
+		phydev = get_phy_device(priv->mii_bus, i + 1, false);
+		if (IS_ERR(phydev)) {
 			netdev_err(netdev, "Could not find PHY with device address: %d.\n", i);
-			return PTR_ERR(port_priv->phydev);
+			return PTR_ERR(phydev);
 		}
 
 		port_priv->phydev = phy_connect(netdev,
-						phydev_name(port_priv->phydev),
+						phydev_name(phydev),
 						adin1110_adjust_link,
 						PHY_INTERFACE_MODE_INTERNAL);
+		phy_device_free(phydev);
 		if (IS_ERR(port_priv->phydev)) {
 			netdev_err(netdev, "Could not connect PHY with device address: %d.\n", i);
 			return PTR_ERR(port_priv->phydev);

@@ -265,10 +265,8 @@ static int arfs_create_groups(struct mlx5e_flow_table *ft,
 		return -ENOMEM;
 
 	in = kvzalloc(inlen, GFP_KERNEL);
-	if (!in) {
-		err = -ENOMEM;
-		goto err_free_g;
-	}
+	if (!in)
+		return -ENOMEM;
 
 	mc = MLX5_ADDR_OF(create_flow_group_in, in, match_criteria);
 	outer_headers_c = MLX5_ADDR_OF(fte_match_param, mc,
@@ -338,9 +336,6 @@ err_clean_group:
 	ft->g[ft->num_groups] = NULL;
 err_free_in:
 	kvfree(in);
-err_free_g:
-	kfree(ft->g);
-	ft->g = NULL;
 	return err;
 }
 

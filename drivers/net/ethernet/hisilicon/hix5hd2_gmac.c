@@ -792,7 +792,7 @@ static netdev_tx_t hix5hd2_net_xmit(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 }
 
-static void hix5hd2_free_dma_desc_rings(struct hix5hd2_priv *priv)
+static void hix5hd2_free_rx_buffers(struct hix5hd2_priv *priv)
 {
 	struct hix5hd2_desc *desc;
 	dma_addr_t addr;
@@ -810,6 +810,13 @@ static void hix5hd2_free_dma_desc_rings(struct hix5hd2_priv *priv)
 		dev_kfree_skb_any(skb);
 		priv->rx_skb[i] = NULL;
 	}
+}
+
+static void hix5hd2_free_tx_buffers(struct hix5hd2_priv *priv)
+{
+	struct hix5hd2_desc *desc;
+	dma_addr_t addr;
+	int i;
 
 	for (i = 0; i < TX_DESC_NUM; i++) {
 		struct sk_buff *skb = priv->tx_skb[i];
@@ -873,7 +880,10 @@ static int hix5hd2_net_close(struct net_device *dev)
 	hix5hd2_irq_disable(priv);
 	napi_disable(&priv->napi);
 	netif_stop_queue(dev);
-	hix5hd2_free_dma_desc_rings(priv);
+	/* free rx buffers when device goes away, not when interface closed;
+	 * the hardware prefetches rx descriptors and cannot be expelled
+	 */
+	hix5hd2_free_tx_buffers(priv);
 
 	if (dev->phydev) {
 		phy_stop(dev->phydev);
@@ -984,6 +994,8 @@ out:
 static void hix5hd2_destroy_hw_desc_queue(struct hix5hd2_priv *priv)
 {
 	int i;
+
+	hix5hd2_free_rx_buffers(priv);
 
 	for (i = 0; i < QUEUE_NUMS; i++) {
 		if (priv->pool[i].desc) {
@@ -1189,7 +1201,12 @@ static int hix5hd2_dev_probe(struct platform_device *pdev)
 	snprintf(bus->id, MII_BUS_ID_SIZE, "%s-mii", dev_name(&pdev->dev));
 	priv->bus = bus;
 
-	ret = of_mdiobus_register(bus, node);
+	if (of_phy_is_fixed_link(node)) {
+		bus->phy_mask = ~0;
+		ret = mdiobus_register(bus);
+	} else {
+		ret = of_mdiobus_register(bus, node);
+	}
 	if (ret)
 		goto err_free_mdio;
 
@@ -1199,11 +1216,18 @@ static int hix5hd2_dev_probe(struct platform_device *pdev)
 		goto err_mdiobus;
 	}
 
-	priv->phy_node = of_parse_phandle(node, "phy-handle", 0);
-	if (!priv->phy_node) {
-		netdev_err(ndev, "not find phy-handle\n");
-		ret = -EINVAL;
-		goto err_mdiobus;
+	if (of_phy_is_fixed_link(node)) {
+		ret = of_phy_register_fixed_link(node);
+		if (ret < 0)
+			goto err_mdiobus;
+		priv->phy_node = of_node_get(node);
+	} else {
+		priv->phy_node = of_parse_phandle(node, "phy-handle", 0);
+		if (!priv->phy_node) {
+			netdev_err(ndev, "not find phy-handle\n");
+			ret = -EINVAL;
+			goto err_mdiobus;
+		}
 	}
 
 	ndev->irq = platform_get_irq(pdev, 0);
@@ -1268,6 +1292,8 @@ out_destroy_queue:
 	netif_napi_del(&priv->napi);
 	hix5hd2_destroy_hw_desc_queue(priv);
 out_phy_node:
+	if (of_phy_is_fixed_link(node))
+		of_phy_deregister_fixed_link(node);
 	of_node_put(priv->phy_node);
 err_mdiobus:
 	mdiobus_unregister(bus);
@@ -1296,6 +1322,8 @@ static void hix5hd2_dev_remove(struct platform_device *pdev)
 	if (HAS_CAP_TSO(priv->hw_cap))
 		hix5hd2_destroy_sg_desc_queue(priv);
 	hix5hd2_destroy_hw_desc_queue(priv);
+	if (of_phy_is_fixed_link(pdev->dev.of_node))
+		of_phy_deregister_fixed_link(pdev->dev.of_node);
 	of_node_put(priv->phy_node);
 	free_netdev(ndev);
 }

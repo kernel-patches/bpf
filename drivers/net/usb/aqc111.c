@@ -1078,7 +1078,7 @@ static int aqc111_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 	struct aqc111_data *aqc111_data = dev->driver_priv;
 	struct sk_buff *new_skb = NULL;
 	u32 pkt_total_offset = 0;
-	u64 *pkt_desc_ptr = NULL;
+	__le64 *pkt_desc_ptr = NULL;
 	u32 start_of_descs = 0;
 	u32 desc_offset = 0; /*RX Header Offset*/
 	u16 pkt_count = 0;
@@ -1095,7 +1095,7 @@ static int aqc111_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 
 	/* RX Descriptor Header */
 	skb_trim(skb, skb_len - sizeof(desc_hdr));
-	desc_hdr = le64_to_cpup((u64 *)skb_tail_pointer(skb));
+	desc_hdr = get_unaligned_le64((__le64 *)skb_tail_pointer(skb));
 
 	/* Check these packets */
 	desc_offset = (desc_hdr & AQ_RX_DH_DESC_OFFSET_MASK) >>
@@ -1120,10 +1120,10 @@ static int aqc111_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 		goto err;
 
 	/* Get the first RX packet descriptor */
-	pkt_desc_ptr = (u64 *)(skb->data + desc_offset);
+	pkt_desc_ptr = (__le64 *)(skb->data + desc_offset);
 
 	while (pkt_count--) {
-		u64 pkt_desc = le64_to_cpup(pkt_desc_ptr);
+		u64 pkt_desc = get_unaligned_le64(pkt_desc_ptr);
 		u32 pkt_len_with_padd = 0;
 		u32 pkt_len = 0;
 
@@ -1224,7 +1224,8 @@ static struct sk_buff *aqc111_tx_fixup(struct usbnet *dev, struct sk_buff *skb,
 	headroom = skb_headroom(skb);
 	tailroom = skb_tailroom(skb);
 
-	if (!(headroom >= sizeof(tx_desc) && tailroom >= padding_size)) {
+	if (skb_cloned(skb) ||
+	    !(headroom >= sizeof(tx_desc) && tailroom >= padding_size)) {
 		new_skb = skb_copy_expand(skb, sizeof(tx_desc),
 					  padding_size, flags);
 		dev_kfree_skb_any(skb);
@@ -1236,7 +1237,7 @@ static struct sk_buff *aqc111_tx_fixup(struct usbnet *dev, struct sk_buff *skb,
 		skb_put_zero(skb, padding_size);
 	/* Copy TX header */
 	tx_desc_ptr = skb_push(skb, sizeof(tx_desc));
-	*tx_desc_ptr = cpu_to_le64(tx_desc);
+	put_unaligned_le64(tx_desc, tx_desc_ptr);
 
 	usbnet_set_skb_tx_stats(skb, 1, 0);
 

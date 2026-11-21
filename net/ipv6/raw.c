@@ -255,6 +255,7 @@ static int rawv6_bind(struct sock *sk, struct sockaddr_unsized *uaddr,
 				 * one is supplied by user.
 				 */
 				sk->sk_bound_dev_if = addr->sin6_scope_id;
+				sk->sk_userlocks &= ~SOCK_CONNECT_IFINDEX;
 			}
 
 			/* Binding to link-local address requires an interface */

@@ -363,6 +363,18 @@ config ASSOCIATIVE_ARRAY
 
 	  for more information.
 
+config STRINGSET
+	bool
+	help
+	  A sorted set of strings, built once and then queried for
+	  membership and intersection.
+
+	  See:
+
+		Documentation/core-api/stringset.rst
+
+	  for more information.
+
 config CLOSURES
 	bool
 

@@ -69,7 +69,8 @@ static void ip6_datagram_flow_key_init(struct flowi6 *fl6,
 	security_sk_classify_flow(sk, flowi6_to_flowi_common(fl6));
 }
 
-int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr)
+static int __ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr,
+				     struct flowi6 *fl6, struct in6_addr *final)
 {
 	struct ip6_flowlabel *flowlabel = NULL;
 	struct inet_sock *inet = inet_sk(sk);
@@ -77,7 +78,6 @@ int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr)
 	struct ipv6_txoptions *opt;
 	struct in6_addr *final_p;
 	struct dst_entry *dst;
-	struct flowi6 *fl6;
 	int err = 0;
 
 	if (inet6_test_bit(SNDFLOW, sk) &&
@@ -86,12 +86,11 @@ int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr)
 		if (IS_ERR(flowlabel))
 			return -EINVAL;
 	}
-	fl6 = &inet_sk(sk)->cork.fl.u.ip6;
 	ip6_datagram_flow_key_init(fl6, sk);
 
 	rcu_read_lock();
 	opt = flowlabel ? flowlabel->opt : rcu_dereference(np->opt);
-	final_p = fl6_update_dst(fl6, opt, &np->final);
+	final_p = fl6_update_dst(fl6, opt, final);
 	rcu_read_unlock();
 
 	dst = ip6_dst_lookup_flow(sock_net(sk), sk, fl6, final_p);
@@ -117,6 +116,25 @@ int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr)
 out:
 	fl6_sock_release(flowlabel);
 	return err;
+}
+
+static noinline_for_stack int
+ip6_datagram_dst_update_corked(struct sock *sk, bool fix_sk_saddr)
+{
+	struct in6_addr final;
+	struct flowi6 fl6;
+
+	return __ip6_datagram_dst_update(sk, fix_sk_saddr, &fl6, &final);
+}
+
+int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr)
+{
+	if (unlikely(!skb_queue_empty(&sk->sk_write_queue)))
+		return ip6_datagram_dst_update_corked(sk, fix_sk_saddr);
+
+	return __ip6_datagram_dst_update(sk, fix_sk_saddr,
+					 &inet_sk(sk)->cork.fl.u.ip6,
+					 &inet6_sk(sk)->final);
 }
 
 void ip6_datagram_release_cb(struct sock *sk)
@@ -240,6 +258,8 @@ ipv4_connected:
 			err = -EINVAL;
 			goto out;
 		}
+		if (!old_bound_dev_if)
+			sk->sk_userlocks |= SOCK_CONNECT_IFINDEX;
 	}
 
 	/* save the current peer information before updating it */
@@ -264,6 +284,8 @@ ipv4_connected:
 		sk->sk_v6_daddr = old_daddr;
 		np->flow_label = old_fl6_flowlabel;
 		inet->inet_dport = old_dport;
+		if (!old_bound_dev_if)
+			sk->sk_userlocks &= ~SOCK_CONNECT_IFINDEX;
 		WRITE_ONCE(sk->sk_bound_dev_if, old_bound_dev_if);
 		goto out;
 	}

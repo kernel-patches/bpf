@@ -150,6 +150,8 @@ static struct neighbour *ipv4_dst_neigh_lookup(const struct dst_entry *dst,
 					       struct sk_buff *skb,
 					       const void *daddr);
 static void ipv4_confirm_neigh(const struct dst_entry *dst, const void *daddr);
+static struct fib_nh_exception *find_exception(struct fib_nh_common *nhc,
+					       __be32 daddr);
 
 static struct dst_ops ipv4_dst_ops = {
 	.family =		AF_INET,
@@ -392,6 +394,27 @@ static inline int ip_rt_proc_init(void)
 	return 0;
 }
 #endif /* CONFIG_PROC_FS */
+
+/*
+ * Draw rt_genid bumps from one sequence shared by all netns. A route keeps
+ * the genid of the netns it was created in, and is checked against the netns
+ * its device is in now, so distinct values make that check fail once the
+ * device has moved. Every netns starts at 0, which the sequence never hands
+ * out, and inserting a route bumps the genid, so cached routes carry values
+ * drawn from the sequence.
+ */
+static atomic_t rt_genid_seq;
+
+void rt_genid_bump_ipv4(struct net *net)
+{
+	int genid;
+
+	do {
+		genid = atomic_inc_return(&rt_genid_seq);
+	} while (!genid);
+	atomic_set(&net->ipv4.rt_genid, genid);
+}
+EXPORT_SYMBOL_GPL(rt_genid_bump_ipv4);
 
 static inline bool rt_is_expired(const struct rtable *rth)
 {
@@ -916,6 +939,7 @@ void ip_rt_send_redirect(struct sk_buff *skb)
 	struct inet_peer *peer;
 	int log_martians;
 	struct net *net;
+	u64 backoff;
 	int vif;
 
 	rcu_read_lock();
@@ -954,10 +978,10 @@ void ip_rt_send_redirect(struct sk_buff *skb)
 	/* Check for load limit; set rate_last to the latest sent
 	 * redirect.
 	 */
+	backoff = (u64)ip_rt_redirect_load << min(peer->n_redirects, 31U);
+	backoff = min_t(u64, backoff, MAX_JIFFY_OFFSET);
 	if (peer->n_redirects == 0 ||
-	    time_after(jiffies,
-		       (peer->rate_last +
-			(ip_rt_redirect_load << peer->n_redirects)))) {
+	    time_after(jiffies, peer->rate_last + (unsigned long)backoff)) {
 		__be32 gw = rt_nexthop(rt, ip_hdr(skb)->daddr);
 
 		icmp_send(skb, ICMP_REDIRECT, ICMP_REDIR_HOST, gw);
@@ -1054,54 +1078,87 @@ out:	kfree_skb_reason(skb, reason);
 	return 0;
 }
 
-static void __ip_rt_update_pmtu(struct rtable *rt, struct flowi4 *fl4, u32 mtu)
+/* The pmtu to cache on a path for the mtu of a Fragmentation Needed, 0 to
+ * leave the path alone: what it uses now, as ipv4_mtu() reports it, is not
+ * above the mtu, or its pmtu is locked. An exception about to expire is
+ * refreshed, a locked mtu is capped at what the path uses.
+ */
+static u32 fib_nhc_pmtu(struct fib_nh_common *nhc, const struct fib_info *fi,
+			__be32 daddr, u32 mtu, bool lock)
+{
+	struct fib_nh_exception *fnhe = find_exception(nhc, daddr);
+	struct net *net = dev_net(nhc->nhc_dev);
+	u32 path_mtu = 0;
+
+	if (fnhe && fnhe->fnhe_genid == fnhe_genid(net) &&
+	    time_before(jiffies, fnhe->fnhe_expires)) {
+		if (fnhe->fnhe_mtu_locked)
+			return 0;
+		if (!lock && fnhe->fnhe_pmtu == mtu &&
+		    time_before(jiffies, fnhe->fnhe_expires -
+					 net->ipv4.ip_rt_mtu_expires / 2))
+			return 0;
+		path_mtu = fnhe->fnhe_pmtu;
+	}
+	if (!path_mtu)
+		path_mtu = fi->fib_mtu;
+	if (!path_mtu)
+		path_mtu = READ_ONCE(nhc->nhc_dev->mtu);
+	path_mtu = min(path_mtu, IP_MAX_MTU);
+
+	if (lock)
+		return min(mtu, path_mtu);
+	return mtu > path_mtu ? 0 : mtu;
+}
+
+static void __ip_rt_update_pmtu(struct rtable *rt, struct flowi4 *fl4, u32 mtu,
+				bool from_lookup)
 {
 	struct dst_entry *dst = &rt->dst;
 	struct fib_result res;
 	bool lock = false;
 	struct net *net;
-	u32 old_mtu;
 
-	if (ip_mtu_locked(dst))
+	if (dst_metric_locked(dst, RTAX_MTU))
 		return;
 
-	old_mtu = ipv4_mtu(dst);
-	if (old_mtu < mtu)
+	/* A dst looked up for the Fragmentation Needed, without the ports
+	 * the packet was hashed on, may be another path of a multipath
+	 * route than the flow is on: don't judge the mtu by it, each path
+	 * does that below.
+	 */
+	if (!from_lookup && (rt->rt_mtu_locked || ipv4_mtu(dst) < mtu))
 		return;
 
 	rcu_read_lock();
 	net = dst_dev_net_rcu(dst);
 	if (mtu < net->ipv4.ip_rt_min_pmtu) {
 		lock = true;
-		mtu = min(old_mtu, net->ipv4.ip_rt_min_pmtu);
+		mtu = net->ipv4.ip_rt_min_pmtu;
 	}
 
-	if (rt->rt_pmtu == mtu && !lock &&
+	if (!from_lookup && rt->rt_pmtu == mtu && !lock &&
 	    time_before(jiffies, READ_ONCE(dst->expires) -
 				 net->ipv4.ip_rt_mtu_expires / 2))
 		goto out;
 
 	if (fib_lookup(net, fl4, &res, 0) == 0) {
 		struct fib_nh_common *nhc;
+		unsigned long expires;
+		u32 pmtu;
+		int nhsel;
 
 		fib_select_path(net, &res, fl4, NULL);
-#ifdef CONFIG_IP_ROUTE_MULTIPATH
-		if (fib_info_num_path(res.fi) > 1) {
-			int nhsel;
-
-			for (nhsel = 0; nhsel < fib_info_num_path(res.fi); nhsel++) {
-				nhc = fib_info_nhc(res.fi, nhsel);
-				if (!nhc)
-					break;
-				update_or_create_fnhe(nhc, fl4->daddr, 0, mtu, lock,
-						      jiffies + net->ipv4.ip_rt_mtu_expires);
-			}
-			goto out;
+		expires = jiffies + net->ipv4.ip_rt_mtu_expires;
+		for (nhsel = 0; nhsel < fib_info_num_path(res.fi); nhsel++) {
+			nhc = fib_info_nhc(res.fi, nhsel);
+			if (!nhc)
+				break;
+			pmtu = fib_nhc_pmtu(nhc, res.fi, fl4->daddr, mtu, lock);
+			if (pmtu)
+				update_or_create_fnhe(nhc, fl4->daddr, 0, pmtu,
+						      lock, expires);
 		}
-#endif /* CONFIG_IP_ROUTE_MULTIPATH */
-		nhc = FIB_RES_NHC(res);
-		update_or_create_fnhe(nhc, fl4->daddr, 0, mtu, lock,
-				      jiffies + net->ipv4.ip_rt_mtu_expires);
 	}
 out:
 	rcu_read_unlock();
@@ -1120,7 +1177,7 @@ static void ip_rt_update_pmtu(struct dst_entry *dst, struct sock *sk,
 	if (skb && netif_is_any_bridge_port(skb->dev))
 		fl4.flowi4_oif = 0;
 
-	__ip_rt_update_pmtu(rt, &fl4, mtu);
+	__ip_rt_update_pmtu(rt, &fl4, mtu, false);
 }
 
 void ipv4_update_pmtu(struct sk_buff *skb, struct net *net, u32 mtu,
@@ -1135,7 +1192,7 @@ void ipv4_update_pmtu(struct sk_buff *skb, struct net *net, u32 mtu,
 			 0);
 	rt = __ip_route_output_key(net, &fl4);
 	if (!IS_ERR(rt)) {
-		__ip_rt_update_pmtu(rt, &fl4, mtu);
+		__ip_rt_update_pmtu(rt, &fl4, mtu, true);
 		ip_rt_put(rt);
 	}
 }
@@ -1154,7 +1211,7 @@ static void __ipv4_sk_update_pmtu(struct sk_buff *skb, struct sock *sk, u32 mtu)
 
 	rt = __ip_route_output_key(sock_net(sk), &fl4);
 	if (!IS_ERR(rt)) {
-		__ip_rt_update_pmtu(rt, &fl4, mtu);
+		__ip_rt_update_pmtu(rt, &fl4, mtu, true);
 		ip_rt_put(rt);
 	}
 }
@@ -1191,7 +1248,8 @@ void ipv4_sk_update_pmtu(struct sk_buff *skb, struct sock *sk, u32 mtu)
 		new = true;
 	}
 
-	__ip_rt_update_pmtu(dst_rtable(xfrm_dst_path(&rt->dst)), &fl4, mtu);
+	__ip_rt_update_pmtu(dst_rtable(xfrm_dst_path(&rt->dst)), &fl4, mtu,
+			    new);
 
 	if (!dst_check(&rt->dst, 0)) {
 		if (new)
@@ -2858,36 +2916,33 @@ struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *fl4,
 		goto make_route;
 	}
 
-	err = fib_lookup(net, fl4, res, 0);
+	err = fib_lookup(net, fl4, res, FIB_LOOKUP_REPORT_MISS);
 	if (err) {
 		res->fi = NULL;
 		res->table = NULL;
 		if (fl4->flowi4_oif &&
-		    (ipv4_is_multicast(fl4->daddr) || !fl4->flowi4_l3mdev)) {
-			/* Apparently, routing tables are wrong. Assume,
-			 * that the destination is on link.
+		    (ipv4_is_multicast(fl4->daddr) ||
+		     (!fl4->flowi4_l3mdev && err == -ESRCH))) {
+			/* When oif is specified, fib_lookup() is called
+			 * primarily to determine if the destination is
+			 * accessible directly or through a gateway. It also
+			 * checks whether there are any traffic restrictions
+			 * (blackhole, prohibit, unreachable), or if there's a
+			 * routing lookup miss.
 			 *
-			 * WHY? DW.
-			 * Because we are allowed to send to iface
-			 * even if it has NO routes and NO assigned
-			 * addresses. When oif is specified, routing
-			 * tables are looked up with only one purpose:
-			 * to catch if destination is gatewayed, rather than
-			 * direct. Moreover, if MSG_DONTROUTE is set,
-			 * we send packet, ignoring both routing tables
-			 * and ifaddr state. --ANK
-			 *
-			 *
-			 * We could make it even if oif is unknown,
-			 * likely IPv6, but we do not.
+			 * Multicast is sent regardless of restriction or miss.
+			 * Non-vrf unicast honors restrictions but allows
+			 * oif-bound sends even when oif has no routes. In both
+			 * cases the destination is assumed on-link.
 			 */
-
 			if (fl4->saddr == 0)
 				fl4->saddr = inet_select_addr(dev_out, 0,
 							      RT_SCOPE_LINK);
 			res->type = RTN_UNICAST;
 			goto make_route;
 		}
+		/* Reverse the mapping induced by FIB_LOOKUP_REPORT_MISS. */
+		err = err == -ESRCH ? -ENETUNREACH : err;
 		rth = ERR_PTR(err);
 		goto out;
 	}
@@ -3582,7 +3637,8 @@ static struct ctl_table ipv4_route_table[] = {
 		.data		= &ip_rt_redirect_load,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
 	},
 	{
 		.procname	= "redirect_number",

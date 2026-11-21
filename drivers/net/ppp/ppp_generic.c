@@ -158,14 +158,13 @@ struct ppp {
 
 /*
  * Bits in flags: SC_NO_TCP_CCID, SC_CCP_OPEN, SC_CCP_UP, SC_LOOP_TRAFFIC,
- * SC_MULTILINK, SC_MP_SHORTSEQ, SC_MP_XSHORTSEQ, SC_COMP_TCP, SC_REJ_COMP_TCP,
- * SC_MUST_COMP
+ * SC_MULTILINK, SC_MP_SHORTSEQ, SC_MP_XSHORTSEQ, SC_COMP_TCP, SC_REJ_COMP_TCP.
  * Bits in rstate: SC_DECOMP_RUN, SC_DC_ERROR, SC_DC_FERROR.
  * Bits in xstate: SC_COMP_RUN
  */
 #define SC_FLAG_BITS	(SC_NO_TCP_CCID|SC_CCP_OPEN|SC_CCP_UP|SC_LOOP_TRAFFIC \
 			 |SC_MULTILINK|SC_MP_SHORTSEQ|SC_MP_XSHORTSEQ \
-			 |SC_COMP_TCP|SC_REJ_COMP_TCP|SC_MUST_COMP)
+			 |SC_COMP_TCP|SC_REJ_COMP_TCP)
 
 /*
  * Private data structure for each channel.
@@ -175,7 +174,7 @@ struct channel {
 	struct ppp_file	file;		/* stuff for read/write/poll */
 	struct list_head list;		/* link in all/new_channels list */
 	struct ppp_channel *chan;	/* public channel data structure */
-	struct mutex chan_sem;		/* protects `chan' during chan ioctl */
+	struct mutex chan_sem;		/* protects chan ioctl; serializes connect/unregister */
 	spinlock_t	downl;		/* protects `chan', file.xq dequeue */
 	struct ppp __rcu *ppp;		/* ppp unit we're connected to */
 	struct net	*chan_net;	/* the net channel belongs to */
@@ -755,7 +754,9 @@ static long ppp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		case PPPIOCCONNECT:
 			if (get_user(unit, p))
 				break;
+			mutex_lock(&pch->chan_sem);
 			err = ppp_connect_channel(pch, unit);
+			mutex_unlock(&pch->chan_sem);
 			break;
 
 		case PPPIOCDISCONN:
@@ -1747,18 +1748,15 @@ pad_compress_skb(struct ppp *ppp, struct sk_buff *skb)
 		skb = new_skb;
 		skb_put(skb, len);
 		skb_pull(skb, 2);	/* pull off A/C bytes */
-	} else if (len == 0) {
+	} else if (len == 0 ||
+		   (len > 0 && ppp->xcomp->compress_proto != CI_MPPE)) {
 		/* didn't compress, or CCP not up yet */
 		consume_skb(new_skb);
 		new_skb = skb;
 	} else {
-		/*
-		 * (len < 0)
-		 * MPPE requires that we do not send unencrypted
-		 * frames.  The compressor will return -1 if we
-		 * should drop the frame.  We cannot simply test
-		 * the compress_proto because MPPE and MPPC share
-		 * the same number.
+		/* A negative return means the original packet must not be sent.
+		 * Also prevent MPPE/MPPC from falling back to plaintext while
+		 * CCP is not up.
 		 */
 		if (net_ratelimit())
 			netdev_err(dev, "ppp: compressor dropped pkt\n");
@@ -1863,13 +1861,6 @@ ppp_prepare_tx_skb(struct ppp *ppp, struct sk_buff **pskb)
 	/* try to do packet compression */
 	if ((ppp->xstate & SC_COMP_RUN) && ppp->xc_state &&
 	    proto != PPP_LCP && proto != PPP_CCP) {
-		if (!(ppp->flags & SC_CCP_UP) && (ppp->flags & SC_MUST_COMP)) {
-			if (net_ratelimit())
-				netdev_err(dev,
-					   "ppp: compression required but "
-					   "down - pkt dropped.\n");
-			goto drop;
-		}
 		new_skb = pad_compress_skb(ppp, skb);
 		if (!new_skb)
 			goto drop;
@@ -2507,9 +2498,6 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 	    (ppp->rstate & (SC_DC_FERROR | SC_DC_ERROR)) == 0)
 		skb = ppp_decompress_frame(ppp, skb);
 
-	if (ppp->flags & SC_MUST_COMP && ppp->rstate & SC_DC_FERROR)
-		goto err;
-
 	/* At this point the "Protocol" field MUST be decompressed, either in
 	 * ppp_input(), ppp_decompress_frame() or in ppp_receive_mp_frame().
 	 */
@@ -3093,11 +3081,14 @@ ppp_unregister_channel(struct ppp_channel *chan)
 	chan->ppp = NULL;
 
 	/*
+	 * Prevent PPPIOCCONNECT from reattaching the channel during removal.
+	 */
+	mutex_lock(&pch->chan_sem);
+	/*
 	 * This ensures that we have returned from any calls into
 	 * the channel's start_xmit or ioctl routine before we proceed.
 	 */
 	ppp_disconnect_channel(pch);
-	mutex_lock(&pch->chan_sem);
 	spin_lock_bh(&pch->downl);
 	pch->chan = NULL;
 	spin_unlock_bh(&pch->downl);

@@ -11,6 +11,7 @@
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
+#include <linux/unaligned.h>
 #include <net/addrconf.h>
 
 #include "lan966x_main.h"
@@ -392,6 +393,7 @@ static netdev_tx_t lan966x_port_xmit(struct sk_buff *skb,
 	struct lan966x_port *port = netdev_priv(dev);
 	struct lan966x *lan966x = port->lan966x;
 	__be32 ifh[IFH_LEN];
+	netdev_tx_t ret;
 	int err;
 
 	memset(ifh, 0x0, sizeof(__be32) * IFH_LEN);
@@ -404,8 +406,11 @@ static netdev_tx_t lan966x_port_xmit(struct sk_buff *skb,
 
 	if (port->lan966x->ptp && skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) {
 		err = lan966x_ptp_txtstamp_request(port, skb);
-		if (err)
-			return err;
+		if (err) {
+			dev_kfree_skb_any(skb);
+			dev->stats.tx_dropped++;
+			return NETDEV_TX_OK;
+		}
 
 		lan966x_ifh_set_rew_op(ifh, LAN966X_SKB_CB(skb)->rew_op);
 		lan966x_ifh_set_oam_type(ifh, LAN966X_SKB_CB(skb)->pdu_type);
@@ -414,12 +419,12 @@ static netdev_tx_t lan966x_port_xmit(struct sk_buff *skb,
 
 	spin_lock(&lan966x->tx_lock);
 	if (port->lan966x->fdma)
-		err = lan966x->ops->fdma_xmit(skb, ifh, dev);
+		ret = lan966x->ops->fdma_xmit(skb, ifh, dev);
 	else
-		err = lan966x_port_ifh_xmit(skb, ifh, dev);
+		ret = lan966x_port_ifh_xmit(skb, ifh, dev);
 	spin_unlock(&lan966x->tx_lock);
 
-	return err;
+	return ret;
 }
 
 static int lan966x_port_change_mtu(struct net_device *dev, int new_mtu)
@@ -633,21 +638,18 @@ static int lan966x_rx_frame_word(struct lan966x *lan966x, u8 grp, u32 *rval)
 
 static u64 lan966x_ifh_get(u8 *ifh, size_t pos, size_t length)
 {
-	u64 val = 0;
-	u8 v;
+	size_t w = pos / 32;
+	u64 val;
 
-	for (int i = 0; i < length ; i++) {
-		int j = pos + i;
-		int k = j % 8;
+	/* Load the 32 bit word that holds bit pos */
+	val = get_unaligned_be32(ifh + IFH_LEN_BYTES - 4 * (w + 1));
 
-		if (i == 0 || k == 0)
-			v = ifh[IFH_LEN_BYTES - (j / 8) - 1];
+	/* If the field continues into the next word, load that word too */
+	if (pos % 32 + length > 32)
+		val |= (u64)get_unaligned_be32(ifh + IFH_LEN_BYTES - 4 * (w + 2)) << 32;
 
-		if (v & (1 << k))
-			val |= (1ULL << i);
-	}
-
-	return val;
+	/* Shift the field down to bit 0 and mask off the bits above it */
+	return (val >> (pos % 32)) & GENMASK_ULL(length - 1, 0);
 }
 
 void lan966x_ifh_get_src_port(void *ifh, u64 *src_port)

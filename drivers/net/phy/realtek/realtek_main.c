@@ -1839,6 +1839,21 @@ static int rtl822x_probe(struct phy_device *phydev)
 	return 0;
 }
 
+static int rtl_internal_nbaset_probe(struct phy_device *phydev)
+{
+	int ret;
+
+	ret = rtl822x_probe(phydev);
+	if (ret)
+		return ret;
+
+	/* Only the internal PHY of RTL8127A has a PTP block */
+	if (phydev->phy_id == RTL_8261C)
+		return rtl8127a_ptp_probe(phydev);
+
+	return 0;
+}
+
 /* RTL822x cannot access MDIO_MMD_VEND2 via MII_MMD_CTRL/MII_MMD_DATA.
  * A mapping to use paged access needs to be used instead.
  * All other MMD devices can be accessed as usual.
@@ -3413,7 +3428,9 @@ static struct phy_driver realtek_drvs[] = {
 		.match_phy_device = rtl_internal_nbaset_match_phy_device,
 		.name		= "Realtek Internal NBASE-T PHY",
 		.flags		= PHY_IS_INTERNAL,
-		.probe		= rtl822x_probe,
+		.probe		= rtl_internal_nbaset_probe,
+		.remove		= rtl8127a_ptp_remove,
+		.config_init	= rtl8127a_ptp_config_init,
 		.get_features	= rtl822x_get_features,
 		.config_aneg	= rtl822x_config_aneg,
 		.read_status	= rtl822x_read_status,

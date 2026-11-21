@@ -2116,6 +2116,7 @@ remove_nexthop_from_groups(struct net *net, struct nexthop *nh,
 	struct nh_grp_entry *nhge, *tmp;
 	LIST_HEAD(deferred_free);
 	bool need_flush = false;
+	struct nh_info *nhi;
 
 	/* If there is nothing to do, let's avoid the costly call to
 	 * synchronize_net()
@@ -2129,6 +2130,20 @@ remove_nexthop_from_groups(struct net *net, struct nexthop *nh,
 
 	/* make sure all see the newly published array before releasing rtnl */
 	synchronize_net();
+
+	/* Routes through the groups can still hold dsts cached through @nh,
+	 * which are only released when @nh is freed. Release them now that
+	 * no reader can pick @nh from the old groups any more.
+	 */
+	nhi = rtnl_dereference(nh->nh_info);
+	if (nhi->family == AF_INET6)
+		fib6_nh_release_dsts(&nhi->fib6_nh);
+	list_for_each_entry(nhge, &deferred_free, nh_list) {
+		if (!list_empty(&nhge->nh_parent->fi_list)) {
+			rt_cache_flush(net);
+			break;
+		}
+	}
 
 	/* Now safe to free percpu stats — all RCU readers have finished */
 	list_for_each_entry_safe(nhge, tmp, &deferred_free, nh_list) {

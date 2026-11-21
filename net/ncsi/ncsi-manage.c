@@ -242,28 +242,33 @@ struct ncsi_channel *ncsi_add_channel(struct ncsi_package *np, unsigned char id)
 	return nc;
 }
 
+static void ncsi_channel_free_rcu(struct rcu_head *head)
+{
+	struct ncsi_channel *nc = container_of(head, struct ncsi_channel, rcu);
+
+	kfree(nc->mac_filter.addrs);
+	kfree(nc->vlan_filter.vids);
+	kfree(nc);
+}
+
 static void ncsi_remove_channel(struct ncsi_channel *nc)
 {
 	struct ncsi_package *np = nc->package;
 	unsigned long flags;
 
-	spin_lock_irqsave(&nc->lock, flags);
-
-	/* Release filters */
-	kfree(nc->mac_filter.addrs);
-	kfree(nc->vlan_filter.vids);
-
-	nc->state = NCSI_CHANNEL_INACTIVE;
-	spin_unlock_irqrestore(&nc->lock, flags);
 	ncsi_stop_channel_monitor(nc);
 
-	/* Remove and free channel */
+	spin_lock_irqsave(&nc->lock, flags);
+	nc->state = NCSI_CHANNEL_INACTIVE;
+	spin_unlock_irqrestore(&nc->lock, flags);
+
+	/* Remove from list and defer free until after RCU grace period */
 	spin_lock_irqsave(&np->lock, flags);
 	list_del_rcu(&nc->node);
 	np->channel_num--;
 	spin_unlock_irqrestore(&np->lock, flags);
 
-	kfree(nc);
+	call_rcu(&nc->rcu, ncsi_channel_free_rcu);
 }
 
 struct ncsi_package *ncsi_find_package(struct ncsi_dev_priv *ndp,
@@ -326,7 +331,7 @@ void ncsi_remove_package(struct ncsi_package *np)
 	ndp->package_num--;
 	spin_unlock_irqrestore(&ndp->lock, flags);
 
-	kfree(np);
+	kfree_rcu_mightsleep(np);
 }
 
 void ncsi_find_package_and_channel(struct ncsi_dev_priv *ndp,
@@ -419,13 +424,18 @@ void ncsi_free_request(struct ncsi_request *nr)
 struct ncsi_dev *ncsi_find_dev(struct net_device *dev)
 {
 	struct ncsi_dev_priv *ndp;
+	struct ncsi_dev *nd = NULL;
 
+	rcu_read_lock();
 	NCSI_FOR_EACH_DEV(ndp) {
-		if (ndp->ndev.dev == dev)
-			return &ndp->ndev;
+		if (ndp->ndev.dev == dev) {
+			nd = &ndp->ndev;
+			break;
+		}
 	}
+	rcu_read_unlock();
 
-	return NULL;
+	return nd;
 }
 
 static void ncsi_request_timeout(struct timer_list *t)
@@ -520,7 +530,7 @@ static void ncsi_suspend_channel(struct ncsi_dev_priv *ndp)
 			goto error;
 		ndp->channel_probe_id++;
 
-		if (ndp->channel_probe_id == ndp->channel_count) {
+		if (ndp->channel_probe_id >= ndp->channel_count) {
 			ndp->channel_probe_id = 0;
 			nd->state = ncsi_dev_state_suspend_dcnt;
 		}
@@ -640,7 +650,7 @@ static int set_one_vid(struct ncsi_dev_priv *ndp, struct ncsi_channel *nc,
 	unsigned long flags;
 	int i, index;
 	void *bitmap;
-	u16 vid;
+	u16 vid = 0;
 
 	if (list_empty(&ndp->vlan_vids))
 		return -1;
@@ -1491,7 +1501,7 @@ static void ncsi_probe_channel(struct ncsi_dev_priv *ndp)
 			ndp->channel_probe_id++;
 		}
 
-		if (ndp->channel_probe_id == ndp->channel_count) {
+		if (ndp->channel_probe_id >= ndp->channel_count) {
 			ndp->channel_probe_id = 0;
 			nd->state = ncsi_dev_state_probe_dp;
 		}
@@ -1959,6 +1969,7 @@ void ncsi_unregister_dev(struct ncsi_dev *nd)
 	unsigned long flags;
 
 	dev_remove_pack(&ndp->ptype);
+	disable_work_sync(&ndp->work);
 
 	list_for_each_entry_safe(np, tmp, &ndp->packages, node)
 		ncsi_remove_package(np);
@@ -1967,8 +1978,6 @@ void ncsi_unregister_dev(struct ncsi_dev *nd)
 	list_del_rcu(&ndp->node);
 	spin_unlock_irqrestore(&ncsi_dev_lock, flags);
 
-	disable_work_sync(&ndp->work);
-
-	kfree(ndp);
+	kfree_rcu_mightsleep(ndp);
 }
 EXPORT_SYMBOL_GPL(ncsi_unregister_dev);

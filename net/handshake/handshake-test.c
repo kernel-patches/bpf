@@ -12,7 +12,9 @@
 
 #include <net/sock.h>
 #include <net/genetlink.h>
+#include <net/netlink.h>
 #include <net/netns/generic.h>
+#include <net/handshake.h>
 
 #include <uapi/linux/handshake.h>
 #include "handshake.h"
@@ -463,6 +465,84 @@ static void handshake_req_cancel_test3(struct kunit *test)
 	fput(filp);
 }
 
+static int handshake_try_complete_done_count;
+
+static void test_done_count_func(struct handshake_req *req, int status,
+				 struct genl_info *info)
+{
+	handshake_try_complete_done_count++;
+}
+
+static struct handshake_proto handshake_req_alloc_proto_count = {
+	.hp_handler_class	= HANDSHAKE_HANDLER_CLASS_TLSHD,
+	.hp_accept		= test_accept_func,
+	.hp_done		= test_done_count_func,
+};
+
+static void handshake_try_complete_test1(struct kunit *test)
+{
+	unsigned long fcount_before;
+	struct handshake_req *req, *next;
+	struct handshake_net *hn;
+	struct socket *sock;
+	struct file *filp;
+	struct net *net;
+	bool first, second;
+	int err;
+
+	/* Arrange */
+	handshake_try_complete_done_count = 0;
+
+	req = handshake_req_alloc(&handshake_req_alloc_proto_count, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, req);
+
+	err = __sock_create(&init_net, PF_INET, SOCK_STREAM, IPPROTO_TCP,
+			    &sock, 1);
+	KUNIT_ASSERT_EQ(test, err, 0);
+
+	filp = sock_alloc_file(sock, O_NONBLOCK, NULL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, filp);
+	KUNIT_ASSERT_NOT_NULL(test, sock->sk);
+	sock->file = filp;
+
+	fcount_before = file_count(filp);
+	err = handshake_req_submit(sock, req, GFP_KERNEL);
+	KUNIT_ASSERT_EQ(test, err, 0);
+	KUNIT_EXPECT_EQ(test, file_count(filp), fcount_before + 1);
+
+	net = sock_net(sock->sk);
+	hn = handshake_pernet(net);
+	KUNIT_ASSERT_NOT_NULL(test, hn);
+
+	/* Pretend to accept this request */
+	next = handshake_req_next(hn, HANDSHAKE_HANDLER_CLASS_TLSHD);
+	KUNIT_ASSERT_PTR_EQ(test, req, next);
+	/* Simulate FD_PREPARE() consuming the file reference handed
+	 * off by handshake_req_next(); see handshake_nl_accept_doit().
+	 */
+	fput(filp);
+
+	/* Act */
+	first = handshake_try_complete(req);
+	second = handshake_try_complete(req);
+	handshake_finish_complete(req, 0, NULL, NULL);
+	/* handshake_finish_complete() drops the request's pin on the file. */
+	KUNIT_EXPECT_EQ(test, file_count(filp), fcount_before);
+	/* handshake_complete() re-enters the gate via
+	 * handshake_try_complete(). With the gate already taken,
+	 * hp_done must not fire a second time.
+	 */
+	handshake_complete(req, 0, NULL);
+
+	/* Assert */
+	KUNIT_EXPECT_TRUE(test, first);
+	KUNIT_EXPECT_FALSE(test, second);
+	KUNIT_EXPECT_EQ(test, handshake_try_complete_done_count, 1);
+	KUNIT_EXPECT_EQ(test, file_count(filp), fcount_before);
+
+	fput(filp);
+}
+
 static struct handshake_req *handshake_req_destroy_test;
 
 static void test_destroy_func(struct handshake_req *req)
@@ -516,6 +596,197 @@ static void handshake_req_destroy_test1(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test, handshake_req_destroy_test, req);
 }
 
+static struct sk_buff *handshake_done_msg(struct kunit *test,
+					  struct nlmsghdr **nlhp)
+{
+	struct sk_buff *skb;
+
+	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, skb);
+	*nlhp = nlmsg_put(skb, 0, 0, HANDSHAKE_CMD_DONE, GENL_HDRLEN, 0);
+	KUNIT_ASSERT_NOT_NULL(test, *nlhp);
+	return skb;
+}
+
+/*
+ * handshake_get_sessiontags() leaves the collected set unfinalized,
+ * as the netlink handler does. Cases below that query membership
+ * finalize first, the way handshake_finish_complete() does before
+ * delivery to the consumer.
+ */
+static void handshake_sessiontags_basic(struct kunit *test)
+{
+	struct genl_info info = {};
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	DEFINE_STRINGSET(tags);
+
+	skb = handshake_done_msg(test, &nlh);
+	nla_put_string(skb, HANDSHAKE_A_DONE_TAG, "alpha");
+	nla_put_string(skb, HANDSHAKE_A_DONE_TAG, "beta");
+	nlmsg_end(skb, nlh);
+	info.nlhdr = nlh;
+
+	KUNIT_EXPECT_EQ(test, handshake_get_sessiontags(&tags, &info), 0);
+	stringset_finalize(&tags);
+	KUNIT_EXPECT_EQ(test, stringset_count(&tags), 2);
+	KUNIT_EXPECT_TRUE(test, stringset_is_member(&tags, "alpha"));
+	KUNIT_EXPECT_TRUE(test, stringset_is_member(&tags, "beta"));
+
+	stringset_destroy(&tags);
+	kfree_skb(skb);
+}
+
+static void handshake_sessiontags_none(struct kunit *test)
+{
+	struct genl_info info = {};
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	DEFINE_STRINGSET(tags);
+
+	skb = handshake_done_msg(test, &nlh);
+	nla_put_u32(skb, HANDSHAKE_A_DONE_STATUS, 0);
+	nlmsg_end(skb, nlh);
+	info.nlhdr = nlh;
+
+	KUNIT_EXPECT_EQ(test, handshake_get_sessiontags(&tags, &info), 0);
+	KUNIT_EXPECT_EQ(test, stringset_count(&tags), 0);
+
+	stringset_destroy(&tags);
+	kfree_skb(skb);
+}
+
+static void handshake_sessiontags_trailing_nul(struct kunit *test)
+{
+	struct genl_info info = {};
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	DEFINE_STRINGSET(tags);
+
+	/* A payload of 6 carries "gamma" plus its terminator. */
+	skb = handshake_done_msg(test, &nlh);
+	nla_put(skb, HANDSHAKE_A_DONE_TAG, 6, "gamma");
+	nlmsg_end(skb, nlh);
+	info.nlhdr = nlh;
+
+	KUNIT_EXPECT_EQ(test, handshake_get_sessiontags(&tags, &info), 0);
+	stringset_finalize(&tags);
+	KUNIT_EXPECT_EQ(test, stringset_count(&tags), 1);
+	KUNIT_EXPECT_TRUE(test, stringset_is_member(&tags, "gamma"));
+
+	stringset_destroy(&tags);
+	kfree_skb(skb);
+}
+
+static void handshake_sessiontags_embedded_nul(struct kunit *test)
+{
+	struct genl_info info = {};
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	DEFINE_STRINGSET(tags);
+
+	skb = handshake_done_msg(test, &nlh);
+	nla_put(skb, HANDSHAKE_A_DONE_TAG, 3, "a\0b");
+	nlmsg_end(skb, nlh);
+	info.nlhdr = nlh;
+
+	KUNIT_EXPECT_EQ(test, handshake_get_sessiontags(&tags, &info), -EINVAL);
+	KUNIT_EXPECT_EQ(test, stringset_count(&tags), 0);
+
+	stringset_destroy(&tags);
+	kfree_skb(skb);
+}
+
+static void handshake_sessiontags_empty(struct kunit *test)
+{
+	struct genl_info info = {};
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	DEFINE_STRINGSET(tags);
+
+	skb = handshake_done_msg(test, &nlh);
+	nla_put(skb, HANDSHAKE_A_DONE_TAG, 0, "");
+	nlmsg_end(skb, nlh);
+	info.nlhdr = nlh;
+
+	KUNIT_EXPECT_EQ(test, handshake_get_sessiontags(&tags, &info), -EINVAL);
+
+	stringset_destroy(&tags);
+	kfree_skb(skb);
+}
+
+static void handshake_sessiontags_duplicate(struct kunit *test)
+{
+	struct genl_info info = {};
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	DEFINE_STRINGSET(tags);
+
+	skb = handshake_done_msg(test, &nlh);
+	nla_put_string(skb, HANDSHAKE_A_DONE_TAG, "dup");
+	nla_put_string(skb, HANDSHAKE_A_DONE_TAG, "dup");
+	nlmsg_end(skb, nlh);
+	info.nlhdr = nlh;
+
+	KUNIT_EXPECT_EQ(test, handshake_get_sessiontags(&tags, &info), 0);
+	KUNIT_EXPECT_EQ(test, stringset_count(&tags), 1);
+	stringset_finalize(&tags);
+	KUNIT_EXPECT_EQ(test, stringset_count(&tags), 1);
+	KUNIT_EXPECT_TRUE(test, stringset_is_member(&tags, "dup"));
+
+	stringset_destroy(&tags);
+	kfree_skb(skb);
+}
+
+static void handshake_sessiontags_duplicate_at_cap(struct kunit *test)
+{
+	struct genl_info info = {};
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	DEFINE_STRINGSET(tags);
+	unsigned int i;
+
+	skb = handshake_done_msg(test, &nlh);
+	for (i = 0; i < HANDSHAKE_MAX_SESSIONTAGS; i++)
+		nla_put_string(skb, HANDSHAKE_A_DONE_TAG, "dup");
+	nla_put_string(skb, HANDSHAKE_A_DONE_TAG, "last");
+	nlmsg_end(skb, nlh);
+	info.nlhdr = nlh;
+
+	KUNIT_EXPECT_EQ(test, handshake_get_sessiontags(&tags, &info), 0);
+	KUNIT_EXPECT_EQ(test, stringset_count(&tags), 2);
+	stringset_finalize(&tags);
+	KUNIT_EXPECT_TRUE(test, stringset_is_member(&tags, "last"));
+
+	stringset_destroy(&tags);
+	kfree_skb(skb);
+}
+
+static void handshake_sessiontags_truncate(struct kunit *test)
+{
+	struct genl_info info = {};
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	DEFINE_STRINGSET(tags);
+	unsigned int i;
+
+	skb = handshake_done_msg(test, &nlh);
+	for (i = 0; i < HANDSHAKE_MAX_SESSIONTAGS + 6; i++) {
+		char tag[16];
+
+		snprintf(tag, sizeof(tag), "tag%u", i);
+		nla_put_string(skb, HANDSHAKE_A_DONE_TAG, tag);
+	}
+	nlmsg_end(skb, nlh);
+	info.nlhdr = nlh;
+
+	KUNIT_EXPECT_EQ(test, handshake_get_sessiontags(&tags, &info), 0);
+	KUNIT_EXPECT_EQ(test, stringset_count(&tags), HANDSHAKE_MAX_SESSIONTAGS);
+
+	stringset_destroy(&tags);
+	kfree_skb(skb);
+}
+
 static struct kunit_case handshake_api_test_cases[] = {
 	{
 		.name			= "req_alloc API fuzzing",
@@ -559,8 +830,44 @@ static struct kunit_case handshake_api_test_cases[] = {
 		.run_case		= handshake_req_cancel_test3,
 	},
 	{
+		.name			= "try_complete gate is exclusive",
+		.run_case		= handshake_try_complete_test1,
+	},
+	{
 		.name			= "req_destroy works",
 		.run_case		= handshake_req_destroy_test1,
+	},
+	{
+		.name			= "sessiontags basic",
+		.run_case		= handshake_sessiontags_basic,
+	},
+	{
+		.name			= "sessiontags none present",
+		.run_case		= handshake_sessiontags_none,
+	},
+	{
+		.name			= "sessiontags trailing NUL",
+		.run_case		= handshake_sessiontags_trailing_nul,
+	},
+	{
+		.name			= "sessiontags embedded NUL",
+		.run_case		= handshake_sessiontags_embedded_nul,
+	},
+	{
+		.name			= "sessiontags empty tag",
+		.run_case		= handshake_sessiontags_empty,
+	},
+	{
+		.name			= "sessiontags duplicate",
+		.run_case		= handshake_sessiontags_duplicate,
+	},
+	{
+		.name			= "sessiontags duplicates at cap",
+		.run_case		= handshake_sessiontags_duplicate_at_cap,
+	},
+	{
+		.name			= "sessiontags truncate at cap",
+		.run_case		= handshake_sessiontags_truncate,
 	},
 	{}
 };

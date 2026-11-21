@@ -2999,6 +2999,26 @@ static int esw_set_slave_root_fdb(struct mlx5_core_dev *master,
 	return err;
 }
 
+static void mlx5_esw_set_spec_source_port_vhca(struct mlx5_flow_spec *spec,
+					       u16 vport, u16 vhca_id)
+{
+	void *misc;
+
+	spec->match_criteria_enable = MLX5_MATCH_MISC_PARAMETERS;
+
+	misc = MLX5_ADDR_OF(fte_match_param, spec->match_value,
+			    misc_parameters);
+	MLX5_SET(fte_match_set_misc, misc, source_port, vport);
+	MLX5_SET(fte_match_set_misc, misc, source_eswitch_owner_vhca_id,
+		 vhca_id);
+
+	misc = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
+			    misc_parameters);
+	MLX5_SET_TO_ONES(fte_match_set_misc, misc, source_port);
+	MLX5_SET_TO_ONES(fte_match_set_misc, misc,
+			 source_eswitch_owner_vhca_id);
+}
+
 static int __esw_set_master_egress_rule(struct mlx5_core_dev *master,
 					struct mlx5_core_dev *slave,
 					struct mlx5_vport *vport,
@@ -3010,22 +3030,22 @@ static int __esw_set_master_egress_rule(struct mlx5_core_dev *master,
 	struct mlx5_flow_act flow_act = {};
 	struct mlx5_flow_spec *spec;
 	int err = 0;
-	void *misc;
+
+	if (mlx5_virt_lag_is_supported(master) &&
+	    !mlx5_eswitch_vport_match_metadata_enabled(slave->priv.eswitch))
+		return -EINVAL;
 
 	spec = kvzalloc_obj(*spec);
 	if (!spec)
 		return -ENOMEM;
 
-	spec->match_criteria_enable = MLX5_MATCH_MISC_PARAMETERS;
-	misc = MLX5_ADDR_OF(fte_match_param, spec->match_value,
-			    misc_parameters);
-	MLX5_SET(fte_match_set_misc, misc, source_port, MLX5_VPORT_UPLINK);
-	MLX5_SET(fte_match_set_misc, misc, source_eswitch_owner_vhca_id, slave_index);
-
-	misc = MLX5_ADDR_OF(fte_match_param, spec->match_criteria, misc_parameters);
-	MLX5_SET_TO_ONES(fte_match_set_misc, misc, source_port);
-	MLX5_SET_TO_ONES(fte_match_set_misc, misc,
-			 source_eswitch_owner_vhca_id);
+	if (mlx5_virt_lag_is_supported(master) &&
+	    mlx5_eswitch_vport_match_metadata_enabled(slave->priv.eswitch))
+		mlx5_esw_set_spec_source_port(slave->priv.eswitch,
+					      MLX5_VPORT_UPLINK, spec);
+	else
+		mlx5_esw_set_spec_source_port_vhca(spec, MLX5_VPORT_UPLINK,
+						   slave_index);
 
 	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
 	dest.type = MLX5_FLOW_DESTINATION_TYPE_VPORT;
@@ -3178,6 +3198,21 @@ static void esw_unset_slave_egress_rule(struct mlx5_core_dev *master,
 	esw_slave_egress_destroy_resources(slave_vport);
 }
 
+static void mlx5_esw_set_flow_group_source_port_vhca(u32 *flow_group_in)
+{
+	void *match_criteria = MLX5_ADDR_OF(create_flow_group_in,
+					    flow_group_in, match_criteria);
+
+	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
+			 misc_parameters.source_port);
+	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
+			 misc_parameters.source_eswitch_owner_vhca_id);
+	MLX5_SET(create_flow_group_in, flow_group_in,
+		 match_criteria_enable, MLX5_MATCH_MISC_PARAMETERS);
+	MLX5_SET(create_flow_group_in, flow_group_in,
+		 source_eswitch_owner_vhca_id_valid, 1);
+}
+
 static int esw_master_egress_create_resources(struct mlx5_eswitch *esw,
 					      struct mlx5_flow_namespace *egress_ns,
 					      struct mlx5_vport *vport, size_t count)
@@ -3188,12 +3223,15 @@ static int esw_master_egress_create_resources(struct mlx5_eswitch *esw,
 	};
 	struct mlx5_flow_table *acl;
 	struct mlx5_flow_group *g;
-	void *match_criteria;
 	u32 *flow_group_in;
 	int err;
 
 	if (vport->egress.acl)
 		return 0;
+
+	if (mlx5_virt_lag_is_supported(esw->dev) &&
+	    !mlx5_eswitch_vport_match_metadata_enabled(esw))
+		return -EINVAL;
 
 	flow_group_in = kvzalloc(inlen, GFP_KERNEL);
 	if (!flow_group_in)
@@ -3208,17 +3246,11 @@ static int esw_master_egress_create_resources(struct mlx5_eswitch *esw,
 		goto out;
 	}
 
-	match_criteria = MLX5_ADDR_OF(create_flow_group_in, flow_group_in,
-				      match_criteria);
-	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
-			 misc_parameters.source_port);
-	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
-			 misc_parameters.source_eswitch_owner_vhca_id);
-	MLX5_SET(create_flow_group_in, flow_group_in, match_criteria_enable,
-		 MLX5_MATCH_MISC_PARAMETERS);
-
-	MLX5_SET(create_flow_group_in, flow_group_in,
-		 source_eswitch_owner_vhca_id_valid, 1);
+	if (mlx5_virt_lag_is_supported(esw->dev) &&
+	    mlx5_eswitch_vport_match_metadata_enabled(esw))
+		mlx5_esw_set_flow_group_source_port(esw, flow_group_in, 0);
+	else
+		mlx5_esw_set_flow_group_source_port_vhca(flow_group_in);
 	MLX5_SET(create_flow_group_in, flow_group_in, start_flow_index, 0);
 	MLX5_SET(create_flow_group_in, flow_group_in, end_flow_index, count);
 
@@ -3348,12 +3380,32 @@ void mlx5_eswitch_offloads_single_fdb_del_one(struct mlx5_eswitch *master_esw,
 int mlx5_eswitch_offloads_vport_lag_add_one(struct mlx5_eswitch *master_esw,
 					    struct mlx5_eswitch *slave_esw)
 {
-	return esw_set_slave_egress_rule(master_esw->dev, slave_esw->dev);
+	int err;
+
+	err = esw_set_slave_egress_rule(master_esw->dev, slave_esw->dev);
+	if (err)
+		return err;
+
+	esw_unset_master_egress_rule(master_esw->dev, slave_esw->dev);
+
+	return 0;
 }
 
 void mlx5_eswitch_offloads_vport_lag_del_one(struct mlx5_eswitch *master_esw,
-					     struct mlx5_eswitch *slave_esw)
+					     struct mlx5_eswitch *slave_esw,
+					     int max_slaves)
 {
+	int err;
+
+	if (mlx5_sd_is_primary(slave_esw->dev)) {
+		err = esw_set_master_egress_rule(master_esw->dev,
+						 slave_esw->dev, max_slaves);
+		if (err)
+			esw_warn(master_esw->dev,
+				 "Failed to restore master egress rule (%d)\n",
+				 err);
+	}
+
 	esw_unset_slave_egress_rule(master_esw->dev, slave_esw->dev);
 }
 
@@ -3572,6 +3624,10 @@ void mlx5_esw_offloads_devcom_init(struct mlx5_eswitch *esw,
 	xa_init(&esw->offloads.peer_flows);
 	mutex_init(&esw->offloads.peer_mutex);
 
+	/* do not pair a virt LAG capable VF/SF that is not part of a LAG */
+	if (!mlx5_core_is_pf(esw->dev) && mlx5_virt_lag_nonmember(esw->dev))
+		return;
+
 	if (!MLX5_CAP_ESW(esw->dev, merged_eswitch))
 		return;
 
@@ -3646,6 +3702,48 @@ static u32 mlx5_esw_match_metadata_reserved(struct mlx5_eswitch *esw)
 	return MLX5_ESW_METADATA_RSVD_UPLINK;
 }
 
+/* Nested (virt LAG) source-port metadata layout: the upper ESW_NESTED_IDX_BITS
+ * hold the VF/SF's slot in the LAG and the lower ESW_NESTED_VPORT_BITS hold a
+ * vport id unique within its eswitch. The two fields still sum to
+ * ESW_SOURCE_PORT_METADATA_BITS. The LAG slot (0-254, per the xa_alloc() limit
+ * in mlx5_ldev_add_mdev()) fits in ESW_NESTED_IDX_BITS; slots 0xf0 and up would
+ * drive the PFNUM bits to the 0xf reserved by internal port offload, so only
+ * 0-239 are used.
+ */
+#define ESW_NESTED_VPORT_BITS 8
+#define ESW_NESTED_IDX_BITS (ESW_SOURCE_PORT_METADATA_BITS - ESW_NESTED_VPORT_BITS)
+
+static u32 mlx5_nested_esw_match_metadata_alloc(struct mlx5_eswitch *esw)
+{
+	u32 vport_end_ida = (1 << ESW_NESTED_VPORT_BITS) - 1;
+	u32 max_idx = (1 << ESW_NESTED_IDX_BITS) -
+		      (1 << (ESW_NESTED_IDX_BITS - ESW_PFNUM_BITS)) - 1;
+	int idx;
+	int id;
+
+	idx = mlx5_lag_get_member_idx(esw->dev);
+	if (idx < 0 || idx > max_idx)
+		return 0;
+
+	/* Use only non-zero id's (2-255). */
+	id = ida_alloc_range(&esw->offloads.vport_metadata_ida,
+			     MLX5_ESW_METADATA_RSVD_UPLINK + 1,
+			     vport_end_ida, GFP_KERNEL);
+	if (id < 0)
+		return 0;
+	id = (idx << ESW_NESTED_VPORT_BITS) | id;
+	return id;
+}
+
+static void mlx5_nested_esw_match_metadata_free(struct mlx5_eswitch *esw,
+						u32 metadata)
+{
+	u32 vport_bit_mask = (1 << ESW_NESTED_VPORT_BITS) - 1;
+
+	/* Metadata holds only ESW_NESTED_VPORT_BITS of actual ida id. */
+	ida_free(&esw->offloads.vport_metadata_ida, metadata & vport_bit_mask);
+}
+
 u32 mlx5_esw_match_metadata_alloc(struct mlx5_eswitch *esw)
 {
 	u32 vport_end_ida = (1 << ESW_VPORT_BITS) - 1;
@@ -3653,6 +3751,9 @@ u32 mlx5_esw_match_metadata_alloc(struct mlx5_eswitch *esw)
 	u32 max_pf_num = (1 << ESW_PFNUM_BITS) - 2;
 	int pf_num;
 	int id;
+
+	if (!mlx5_core_is_pf(esw->dev) && !mlx5_virt_lag_nonmember(esw->dev))
+		return mlx5_nested_esw_match_metadata_alloc(esw);
 
 	/* Only 4 bits of pf_num */
 	pf_num = mlx5_sd_pf_num_get(esw->dev);
@@ -3673,6 +3774,9 @@ u32 mlx5_esw_match_metadata_alloc(struct mlx5_eswitch *esw)
 void mlx5_esw_match_metadata_free(struct mlx5_eswitch *esw, u32 metadata)
 {
 	u32 vport_bit_mask = (1 << ESW_VPORT_BITS) - 1;
+
+	if (!mlx5_core_is_pf(esw->dev) && !mlx5_virt_lag_nonmember(esw->dev))
+		return mlx5_nested_esw_match_metadata_free(esw, metadata);
 
 	/* Metadata contains only 12 bits of actual ida id */
 	ida_free(&esw->offloads.vport_metadata_ida, metadata & vport_bit_mask);

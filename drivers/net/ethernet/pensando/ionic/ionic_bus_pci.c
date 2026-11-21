@@ -20,6 +20,8 @@ static const struct pci_device_id ionic_id_table[] = {
 };
 MODULE_DEVICE_TABLE(pci, ionic_id_table);
 
+static DEFINE_IDA(ionic_ida);
+
 int ionic_bus_get_irq(struct ionic *ionic, unsigned int num)
 {
 	return pci_irq_vector(ionic->pdev, num);
@@ -270,6 +272,7 @@ static int ionic_setup_one(struct ionic *ionic)
 		dev_err(dev, "Cannot identify device: %d, aborting\n", err);
 		goto err_out_teardown;
 	}
+	ionic_update_cmd_timeout(ionic);
 	ionic_debugfs_add_ident(ionic);
 
 	ionic_map_cmb(ionic);
@@ -320,13 +323,20 @@ static int ionic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	ionic->dev = dev;
 	pci_set_drvdata(pdev, ionic);
 	mutex_init(&ionic->dev_cmd_lock);
+	ionic->cmd_timeout = IONIC_CMD_TIMEOUT_DEF;
+	ionic->cmd_timeout_param = -EOPNOTSUPP;
+
+	err = ida_alloc(&ionic_ida, GFP_KERNEL);
+	if (err < 0)
+		goto err_out;
+	ionic->aux_id = err;
 
 	/* Query system for DMA addressing limitation for the device. */
 	err = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(IONIC_ADDR_LEN));
 	if (err) {
 		dev_err(dev, "Unable to obtain 64-bit DMA for consistent allocations, aborting.  err=%d\n",
 			err);
-		goto err_out;
+		goto err_out_free_id;
 	}
 
 #ifdef CONFIG_PPC64
@@ -336,7 +346,7 @@ static int ionic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	err = ionic_setup_one(ionic);
 	if (err)
-		goto err_out;
+		goto err_out_free_id;
 
 	/* Allocate and init the LIF */
 	err = ionic_lif_size(ionic);
@@ -401,6 +411,8 @@ err_out_pci:
 	ionic_dev_teardown(ionic);
 	ionic_clear_pci(ionic);
 	ionic_debugfs_del_dev(ionic);
+err_out_free_id:
+	ida_free(&ionic_ida, ionic->aux_id);
 err_out:
 	mutex_destroy(&ionic->dev_cmd_lock);
 	ionic_devlink_free(ionic);
@@ -437,6 +449,7 @@ static void ionic_remove(struct pci_dev *pdev)
 	ionic_dev_teardown(ionic);
 	ionic_clear_pci(ionic);
 	ionic_debugfs_del_dev(ionic);
+	ida_free(&ionic_ida, ionic->aux_id);
 	mutex_destroy(&ionic->dev_cmd_lock);
 	ionic_devlink_free(ionic);
 }

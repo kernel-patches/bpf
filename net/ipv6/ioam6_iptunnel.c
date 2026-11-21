@@ -166,7 +166,7 @@ static int ioam6_build_state(struct net *net, struct nlattr *nla,
 		return -ENOMEM;
 
 	ilwt = ioam6_lwt_state(lwt);
-	err = dst_cache_init(&ilwt->cache, GFP_ATOMIC);
+	err = dst_cache_init(&ilwt->cache, GFP_KERNEL);
 	if (err)
 		goto free_lwt;
 
@@ -328,11 +328,14 @@ static int ioam6_do_encap(struct net *net, struct sk_buff *skb,
 	hdr->payload_len = cpu_to_be16(skb->len - sizeof(*hdr));
 	hdr->daddr = *tundst;
 
-	if (has_tunsrc)
+	if (has_tunsrc) {
 		memcpy(&hdr->saddr, tunsrc, sizeof(*tunsrc));
-	else
-		ipv6_dev_get_saddr(net, dst_dev(dst), &hdr->daddr,
-				   IPV6_PREFER_SRC_PUBLIC, &hdr->saddr);
+	} else {
+		err = ipv6_dev_get_saddr(net, dst_dev(dst), &hdr->daddr,
+					 IPV6_PREFER_SRC_PUBLIC, &hdr->saddr);
+		if (unlikely(err))
+			return err;
+	}
 
 	skb_postpush_rcsum(skb, hdr, len);
 

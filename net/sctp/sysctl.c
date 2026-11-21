@@ -425,8 +425,9 @@ static int proc_sctp_do_rto_min(const struct ctl_table *ctl, int write,
 	struct net *net = container_of(ctl->data, struct net, sctp.rto_min);
 	unsigned int min = *(unsigned int *) ctl->extra1;
 	unsigned int max = *(unsigned int *) ctl->extra2;
+	int new_value = net->sctp.rto_min;
 	struct ctl_table tbl;
-	int ret, new_value;
+	int ret;
 
 	memset(&tbl, 0, sizeof(struct ctl_table));
 	tbl.maxlen = sizeof(unsigned int);
@@ -453,8 +454,9 @@ static int proc_sctp_do_rto_max(const struct ctl_table *ctl, int write,
 	struct net *net = container_of(ctl->data, struct net, sctp.rto_max);
 	unsigned int min = *(unsigned int *) ctl->extra1;
 	unsigned int max = *(unsigned int *) ctl->extra2;
+	int new_value = net->sctp.rto_max;
 	struct ctl_table tbl;
-	int ret, new_value;
+	int ret;
 
 	memset(&tbl, 0, sizeof(struct ctl_table));
 	tbl.maxlen = sizeof(unsigned int);
@@ -489,8 +491,9 @@ static int proc_sctp_do_auth(const struct ctl_table *ctl, int write,
 			     void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct net *net = container_of(ctl->data, struct net, sctp.auth_enable);
+	int new_value = net->sctp.auth_enable;
 	struct ctl_table tbl;
-	int new_value, ret;
+	int ret;
 
 	memset(&tbl, 0, sizeof(struct ctl_table));
 	tbl.maxlen = sizeof(unsigned int);
@@ -522,8 +525,9 @@ static int proc_sctp_do_udp_port(const struct ctl_table *ctl, int write,
 	struct net *net = container_of(ctl->data, struct net, sctp.udp_port);
 	unsigned int min = *(unsigned int *)ctl->extra1;
 	unsigned int max = *(unsigned int *)ctl->extra2;
+	int new_value = net->sctp.udp_port;
 	struct ctl_table tbl;
-	int ret, new_value;
+	int ret;
 
 	memset(&tbl, 0, sizeof(struct ctl_table));
 	tbl.maxlen = sizeof(unsigned int);
@@ -541,18 +545,20 @@ static int proc_sctp_do_udp_port(const struct ctl_table *ctl, int write,
 			return -EINVAL;
 
 		mutex_lock(&sctp_sysctl_mutex);
-		net->sctp.udp_port = new_value;
-		sctp_udp_sock_stop(net);
-		if (new_value) {
-			ret = sctp_udp_sock_start(net);
-			if (ret)
-				net->sctp.udp_port = 0;
-		}
+		if (new_value != net->sctp.udp_port) {
+			net->sctp.udp_port = new_value;
+			sctp_udp_sock_stop(net);
+			if (new_value) {
+				ret = sctp_udp_sock_start(net);
+				if (ret)
+					net->sctp.udp_port = 0;
+			}
 
-		/* Update the value in the control socket */
-		lock_sock(sk);
-		sctp_sk(sk)->udp_port = htons(net->sctp.udp_port);
-		release_sock(sk);
+			/* Update the value in the control socket */
+			lock_sock(sk);
+			sctp_sk(sk)->udp_port = htons(net->sctp.udp_port);
+			release_sock(sk);
+		}
 		mutex_unlock(&sctp_sysctl_mutex);
 	}
 
@@ -564,8 +570,9 @@ static int proc_sctp_do_probe_interval(const struct ctl_table *ctl, int write,
 {
 	struct net *net = container_of(ctl->data, struct net,
 				       sctp.probe_interval);
+	int new_value = net->sctp.probe_interval;
 	struct ctl_table tbl;
-	int ret, new_value;
+	int ret;
 
 	memset(&tbl, 0, sizeof(struct ctl_table));
 	tbl.maxlen = sizeof(unsigned int);

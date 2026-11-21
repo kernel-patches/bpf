@@ -461,6 +461,25 @@ int zl3073x_chan_df_offset_set(struct zl3073x_dev *zldev, u8 ch, s64 offset)
 }
 
 /**
+ * zl3073x_chan_tie_ready_wait - wait for the previous TIE write to complete
+ * @zldev: pointer to zl3073x device
+ *
+ * The TIE write operation is shared by all channels, and the device can take
+ * up to one second to complete it.
+ *
+ * Context: Caller must hold zldev->tie_lock.
+ * Return: 0 on success, <0 on error
+ */
+int zl3073x_chan_tie_ready_wait(struct zl3073x_dev *zldev)
+{
+	lockdep_assert_held(&zldev->tie_lock);
+
+	return zl3073x_poll_zero_u8(zldev, ZL_REG_DPLL_TIE_CTRL,
+				    ZL_DPLL_TIE_CTRL_OP,
+				    ZL_POLL_TIE_WR_TIMEOUT_US);
+}
+
+/**
  * zl3073x_chan_tie_write - adjust DPLL phase using TIE write
  * @zldev: pointer to zl3073x device
  * @ch: DPLL channel index
@@ -469,6 +488,8 @@ int zl3073x_chan_df_offset_set(struct zl3073x_dev *zldev, u8 ch, s64 offset)
  * Converts nanoseconds to TIE units (0.01 ps) and writes TIE data
  * to the specified channel.
  *
+ * Context: Caller must hold zldev->tie_lock and must have waited for the
+ * previous TIE write with zl3073x_chan_tie_ready_wait().
  * Return: 0 on success, <0 on error
  */
 int zl3073x_chan_tie_write(struct zl3073x_dev *zldev, u8 ch, s64 delta_ns)
@@ -476,14 +497,7 @@ int zl3073x_chan_tie_write(struct zl3073x_dev *zldev, u8 ch, s64 delta_ns)
 	s64 tie_data;
 	int rc;
 
-	guard(mutex)(&zldev->tie_lock);
-
-	/* Wait for any previous TIE operation to complete */
-	rc = zl3073x_poll_zero_u8(zldev, ZL_REG_DPLL_TIE_CTRL,
-				  ZL_DPLL_TIE_CTRL_OP,
-				  ZL_POLL_TIE_WR_TIMEOUT_US);
-	if (rc)
-		return rc;
+	lockdep_assert_held(&zldev->tie_lock);
 
 	/* Convert ns to TIE units (0.01 ps = 10^-14 s) */
 	tie_data = delta_ns * 100000LL;
@@ -501,6 +515,25 @@ int zl3073x_chan_tie_write(struct zl3073x_dev *zldev, u8 ch, s64 delta_ns)
 }
 
 /**
+ * zl3073x_chan_phase_step_ready_wait - wait for the previous phase step
+ * @zldev: pointer to zl3073x device
+ *
+ * The output phase step operation is shared by all channels, and the device
+ * can take seconds to complete it.
+ *
+ * Context: Caller must hold zldev->phase_step_lock.
+ * Return: 0 on success, <0 on error
+ */
+int zl3073x_chan_phase_step_ready_wait(struct zl3073x_dev *zldev)
+{
+	lockdep_assert_held(&zldev->phase_step_lock);
+
+	return zl3073x_poll_zero_u8(zldev, ZL_REG_OUTPUT_PHASE_STEP_CTRL,
+				    ZL_OUTPUT_PHASE_STEP_CTRL_OP,
+				    ZL_POLL_PHASE_STEP_TIMEOUT_US);
+}
+
+/**
  * zl3073x_chan_phase_step - execute one output phase step operation
  * @zldev: pointer to zl3073x device
  * @ch: DPLL channel index
@@ -511,6 +544,8 @@ int zl3073x_chan_tie_write(struct zl3073x_dev *zldev, u8 ch, s64 delta_ns)
  * All masked outputs must use synthesizers of the same frequency since
  * the step value is in synthesizer clock cycles.
  *
+ * Context: Caller must hold zldev->phase_step_lock and must have waited for
+ * the previous phase step with zl3073x_chan_phase_step_ready_wait().
  * Return: 0 on success, <0 on error
  */
 int zl3073x_chan_phase_step(struct zl3073x_dev *zldev, u8 ch,
@@ -520,14 +555,7 @@ int zl3073x_chan_phase_step(struct zl3073x_dev *zldev, u8 ch,
 	u8 ctrl;
 	int rc;
 
-	guard(mutex)(&zldev->phase_step_lock);
-
-	/* Wait for any previous phase step operation to complete */
-	rc = zl3073x_poll_zero_u8(zldev, ZL_REG_OUTPUT_PHASE_STEP_CTRL,
-				  ZL_OUTPUT_PHASE_STEP_CTRL_OP,
-				  ZL_POLL_PHASE_STEP_TIMEOUT_US);
-	if (rc)
-		return rc;
+	lockdep_assert_held(&zldev->phase_step_lock);
 
 	rc = zl3073x_write_u32(zldev, ZL_REG_OUTPUT_PHASE_STEP_DATA,
 			       step_cycles);

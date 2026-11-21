@@ -28,6 +28,7 @@ TEST_PROGS := \
 	cork_fragsize.py \
 	double_udp_encap.sh \
 	drop_monitor_tests.sh \
+	dualpi2_head.sh \
 	ecmp_rehash.sh \
 	exception_cache.sh \
 	fcnal-ipv4.sh \
@@ -94,6 +95,7 @@ TEST_PROGS := \
 	sctp_ifwdtsn.sh \
 	sctp_vrf.sh \
 	skf_net_off.sh \
+	srv6_csum_complete_test.sh \
 	srv6_encap_lookup_l3vpn_test.sh \
 	srv6_end_dt46_l3vpn_test.sh \
 	srv6_end_dt4_l3vpn_test.sh \
@@ -109,6 +111,7 @@ TEST_PROGS := \
 	stress_reuseport_listen.sh \
 	tcp_ecmp_failover.sh \
 	tcp_fastopen_backup_key.sh \
+	tcp_l3mdev_exempt_ports.sh \
 	test_bridge_backup_port.sh \
 	test_bridge_neigh_suppress.sh \
 	test_ingress_egress_chaining.sh \
@@ -118,6 +121,7 @@ TEST_PROGS := \
 	test_vxlan_mdb.sh \
 	test_vxlan_nh.sh \
 	test_vxlan_nolocalbypass.sh \
+	test_vxlan_snoop_move.sh \
 	test_vxlan_under_vrf.sh \
 	test_vxlan_vnifilter_notify.sh \
 	test_vxlan_vnifiltering.sh \
@@ -142,13 +146,13 @@ TEST_PROGS := \
 # end of TEST_PROGS
 
 TEST_PROGS_EXTENDED := \
-	test_xsk.sh \
 	xfrm_policy_add_speed.sh \
 # end of TEST_PROGS_EXTENDED
 
 TEST_GEN_FILES := \
 	bind_bhash \
 	cmsg_sender \
+	dualpi2_head \
 	fin_ack_lat \
 	hwtstamp_config \
 	io_uring_zerocopy_tx \
@@ -215,7 +219,6 @@ TEST_FILES := \
 	in_netns.sh \
 	lib.sh \
 	settings \
-	xsk_prereqs.sh \
 # end of TEST_FILES
 
 # YNL files, must be before "include ..lib.mk"
@@ -235,8 +238,6 @@ BPFTOOL ?= bpftool
 HAS_BPFTOOL := $(shell $(BPFTOOL) version >/dev/null 2>&1 && echo y)
 ifeq ($(HAS_BPFTOOL),y)
 COND_GEN_FILES += xdp_hw_metadata
-else
-$(warning excluding xdp_hw_metadata, bpftool not installed or not working)
 endif
 
 TEST_GEN_FILES += $(COND_GEN_FILES)

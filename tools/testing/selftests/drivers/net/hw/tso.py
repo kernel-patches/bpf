@@ -245,10 +245,10 @@ def run_big_tcp_stream(cfg, ipver, remote_v4, remote_v6):
 
 
 def build_tunnel(cfg, outer_ipver, tun_info):
-    local_v4  = NetDrvEpEnv.nsim_v4_pfx + "1"
-    local_v6  = NetDrvEpEnv.nsim_v6_pfx + "1"
-    remote_v4 = NetDrvEpEnv.nsim_v4_pfx + "2"
-    remote_v6 = NetDrvEpEnv.nsim_v6_pfx + "2"
+    local_v4  = NetDrvEpEnv.sw_v4_pfx + "1"
+    local_v6  = NetDrvEpEnv.sw_v6_pfx + "1"
+    remote_v4 = NetDrvEpEnv.sw_v4_pfx + "2"
+    remote_v6 = NetDrvEpEnv.sw_v6_pfx + "2"
 
     local_addr  = cfg.addr_v[outer_ipver]
     remote_addr = cfg.remote_addr_v[outer_ipver]

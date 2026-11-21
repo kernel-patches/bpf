@@ -467,6 +467,12 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	unsigned int prev_len = qdisc_pkt_len(skb);
 	int count = 1;
 
+	if (unlikely(qdisc_backlog_overflow(sch, skb))) {
+		qdisc_qstats_overlimit(sch);
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
+
 	/* Do not fool qdisc_drop_all() */
 	skb->prev = NULL;
 
@@ -567,7 +573,19 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		struct Qdisc *rootq = qdisc_root_bh(sch);
 
 		skb2->tc_depth++; /* prevent duplicating a dup... */
+		/* The clone re-enters the tree before this packet is booked,
+		 * so every guard it reaches would compare against a backlog
+		 * that does not hold it yet and admit two packets where it
+		 * has room for one.  Account it here and undo, because the
+		 * normal path below books it again.
+		 */
+		qstats_backlog_add(sch, prev_len);
+		qdisc_qlen_inc(sch);
+		qdisc_tree_reduce_backlog(sch, 0, -(int)prev_len);
 		rootq->enqueue(skb2, rootq, to_free);
+		qdisc_tree_reduce_backlog(sch, 0, prev_len);
+		qstats_backlog_sub(sch, prev_len);
+		qdisc_qlen_dec(sch);
 		skb2 = NULL;
 	}
 

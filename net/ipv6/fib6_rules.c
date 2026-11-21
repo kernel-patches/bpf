@@ -285,6 +285,14 @@ INDIRECT_CALLABLE_SCOPE bool fib6_rule_suppress(struct fib_rule *rule,
 	struct fib6_result *res = arg->result;
 	struct rt6_info *rt = res->rt6;
 	struct net_device *dev = NULL;
+	struct fib6_info *from;
+	int plen;
+
+	if (arg->lookup_ptr == fib6_table_lookup) {
+		/* fib6_table_lookup() returns 0 for reject routes. */
+		return !(res->fib6_flags & RTF_REJECT) &&
+		       res->f6i->fib6_dst.plen <= rule->suppress_prefixlen;
+	}
 
 	if (!rt)
 		return false;
@@ -292,10 +300,13 @@ INDIRECT_CALLABLE_SCOPE bool fib6_rule_suppress(struct fib_rule *rule,
 	if (rt->rt6i_idev)
 		dev = rt->rt6i_idev->dev;
 
+	from = rcu_dereference(rt->from);
+	plen = from ? from->fib6_dst.plen : rt->rt6i_dst.plen;
+
 	/* do not accept result if the route does
 	 * not meet the required prefix length
 	 */
-	if (rt->rt6i_dst.plen <= rule->suppress_prefixlen)
+	if (plen <= rule->suppress_prefixlen)
 		goto suppress_route;
 
 	/* do not accept result if the route uses a device

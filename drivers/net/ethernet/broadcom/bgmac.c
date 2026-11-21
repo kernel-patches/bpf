@@ -10,11 +10,13 @@
 #define pr_fmt(fmt)		KBUILD_MODNAME ": " fmt
 
 #include <linux/bcma/bcma.h>
+#include <linux/bitfield.h>
 #include <linux/etherdevice.h>
 #include <linux/interrupt.h>
 #include <linux/bcm47xx_nvram.h>
 #include <linux/phy.h>
 #include <linux/phy_fixed.h>
+#include <linux/of_mdio.h>
 #include <net/dsa.h>
 #include "bgmac.h"
 
@@ -144,9 +146,6 @@ static netdev_tx_t bgmac_dma_tx_add(struct bgmac *bgmac,
 		netdev_err(bgmac->net_dev, "Too long skb (%d)\n", skb->len);
 		goto err_drop;
 	}
-
-	if (skb->ip_summed == CHECKSUM_PARTIAL)
-		skb_checksum_help(skb);
 
 	nr_frags = skb_shinfo(skb)->nr_frags;
 
@@ -435,6 +434,13 @@ static int bgmac_dma_rx_read(struct bgmac *bgmac, struct bgmac_dma_ring *ring,
 		dma_addr_t dma_addr = slot->dma_addr;
 		u16 len, flags;
 
+		/* The rest of a multi descriptor frame that was dropped */
+		if (ring->rx_skip) {
+			ring->rx_skip--;
+			bgmac_dma_rx_poison_buf(dma_dev, slot);
+			goto next;
+		}
+
 		do {
 			/* Prepare new skb as replacement */
 			if (bgmac_dma_rx_skb_for_slot(bgmac, slot)) {
@@ -460,10 +466,34 @@ static int bgmac_dma_rx_read(struct bgmac *bgmac, struct bgmac_dma_ring *ring,
 				break;
 			}
 
-			if (len > BGMAC_RX_ALLOC_SIZE) {
+			/* The frame did not fit in one buffer. The following
+			 * buffers hold the rest of its data, not RX headers.
+			 */
+			if (flags & BGMAC_RXF_DC_MASK) {
+				ring->rx_skip = FIELD_GET(BGMAC_RXF_DC_MASK, flags);
+				put_page(virt_to_head_page(buf));
+				bgmac->net_dev->stats.rx_length_errors++;
+				bgmac->net_dev->stats.rx_errors++;
+				break;
+			}
+
+			if (flags & BGMAC_RXF_ERR) {
+				put_page(virt_to_head_page(buf));
+				if (flags & BGMAC_RXF_OVF)
+					bgmac->net_dev->stats.rx_fifo_errors++;
+				if (flags & BGMAC_RXF_OVERSIZE)
+					bgmac->net_dev->stats.rx_length_errors++;
+				if (flags & BGMAC_RXF_CRC)
+					bgmac->net_dev->stats.rx_crc_errors++;
+				bgmac->net_dev->stats.rx_errors++;
+				break;
+			}
+
+			if (len < ETH_HLEN + ETH_FCS_LEN ||
+			    len > BGMAC_RX_MAX_FRAME_SIZE) {
 				if (net_ratelimit())
-					netdev_err(bgmac->net_dev, "Found oversized packet at slot %d, DMA issue!\n",
-						   ring->start);
+					netdev_err(bgmac->net_dev, "Found packet with invalid length %u at slot %d, DMA issue!\n",
+						   len, ring->start);
 				put_page(virt_to_head_page(buf));
 				bgmac->net_dev->stats.rx_length_errors++;
 				bgmac->net_dev->stats.rx_errors++;
@@ -493,6 +523,7 @@ static int bgmac_dma_rx_read(struct bgmac *bgmac, struct bgmac_dma_ring *ring,
 			handled++;
 		} while (0);
 
+next:
 		bgmac_dma_rx_setup_desc(bgmac, ring, ring->start);
 
 		if (++ring->start >= BGMAC_RX_RING_SLOTS)
@@ -735,6 +766,7 @@ static int bgmac_dma_init(struct bgmac *bgmac)
 
 		ring->start = 0;
 		ring->end = 0;
+		ring->rx_skip = 0;
 		for (j = 0; j < BGMAC_RX_RING_SLOTS; j++) {
 			err = bgmac_dma_rx_skb_for_slot(bgmac, &ring->slots[j]);
 			if (err)
@@ -1110,6 +1142,13 @@ static void bgmac_enable(struct bgmac *bgmac)
 	}
 }
 
+/* The MAC counts the FCS in the maximum frame length. */
+static void bgmac_set_max_frame_len(struct bgmac *bgmac, int mtu)
+{
+	bgmac_umac_write(bgmac, UMAC_MAX_FRAME_LEN,
+			 mtu + VLAN_ETH_HLEN + ETH_FCS_LEN);
+}
+
 /* http://bcm-v4.sipsolutions.net/mac-gbit/gmac/chipinit */
 static void bgmac_chip_init(struct bgmac *bgmac)
 {
@@ -1131,7 +1170,7 @@ static void bgmac_chip_init(struct bgmac *bgmac)
 	else
 		bgmac_umac_cmd_maskset(bgmac, ~CMD_LCL_LOOP_EN, 0, false);
 
-	bgmac_umac_write(bgmac, UMAC_MAX_FRAME_LEN, 32 + ETHER_MAX_LEN);
+	bgmac_set_max_frame_len(bgmac, bgmac->net_dev->mtu);
 
 	bgmac_chip_intrs_on(bgmac);
 
@@ -1267,7 +1306,8 @@ static int bgmac_change_mtu(struct net_device *net_dev, int mtu)
 {
 	struct bgmac *bgmac = netdev_priv(net_dev);
 
-	bgmac_umac_write(bgmac, UMAC_MAX_FRAME_LEN, 32 + mtu);
+	bgmac_set_max_frame_len(bgmac, mtu);
+	WRITE_ONCE(net_dev->mtu, mtu);
 	return 0;
 }
 
@@ -1475,12 +1515,29 @@ int bgmac_phy_connect_direct(struct bgmac *bgmac)
 				 PHY_INTERFACE_MODE_MII);
 	if (err) {
 		dev_err(bgmac->dev, "Connecting PHY failed\n");
+		fixed_phy_unregister(phy_dev);
 		return err;
 	}
 
 	return err;
 }
 EXPORT_SYMBOL_GPL(bgmac_phy_connect_direct);
+
+/* Disconnect the PHY and release a fixed PHY registered for the connection. */
+static void bgmac_phy_disconnect(struct bgmac *bgmac)
+{
+	struct device_node *np = bgmac->dev->of_node;
+	struct phy_device *phydev = bgmac->net_dev->phydev;
+
+	if (!phydev)
+		return;
+
+	phy_disconnect(phydev);
+	if (np && of_phy_is_fixed_link(np))
+		of_phy_deregister_fixed_link(np);
+	else if (phy_is_pseudo_fixed_link(phydev))
+		fixed_phy_unregister(phydev);
+}
 
 struct bgmac *bgmac_alloc(struct device *dev)
 {
@@ -1555,12 +1612,11 @@ int bgmac_enet_probe(struct bgmac *bgmac)
 		goto err_dma_free;
 	}
 
-	net_dev->features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
+	net_dev->features = NETIF_F_SG;
 	net_dev->hw_features = net_dev->features;
 	net_dev->vlan_features = net_dev->features;
 
-	/* Omit FCS from max MTU size */
-	net_dev->max_mtu = BGMAC_RX_MAX_FRAME_SIZE - ETH_FCS_LEN;
+	net_dev->max_mtu = BGMAC_RX_MAX_MTU;
 
 	bgmac->in_init = false;
 
@@ -1575,7 +1631,7 @@ int bgmac_enet_probe(struct bgmac *bgmac)
 	return 0;
 
 err_phy_disconnect:
-	phy_disconnect(net_dev->phydev);
+	bgmac_phy_disconnect(bgmac);
 err_dma_free:
 	bgmac_dma_free(bgmac);
 err_out:
@@ -1587,7 +1643,7 @@ EXPORT_SYMBOL_GPL(bgmac_enet_probe);
 void bgmac_enet_remove(struct bgmac *bgmac)
 {
 	unregister_netdev(bgmac->net_dev);
-	phy_disconnect(bgmac->net_dev->phydev);
+	bgmac_phy_disconnect(bgmac);
 	netif_napi_del(&bgmac->napi);
 	bgmac_dma_free(bgmac);
 }
