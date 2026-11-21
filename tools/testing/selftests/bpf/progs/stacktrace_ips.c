@@ -19,14 +19,15 @@ struct {
 } stackmap SEC(".maps");
 
 extern bool CONFIG_UNWINDER_ORC __kconfig __weak;
+extern bool CONFIG_ARM64 __kconfig __weak;
 
 /*
- * This function is here to have CONFIG_UNWINDER_ORC
+ * This function is here to have CONFIG_UNWINDER_ORC and CONFIG_ARM64
  * used and added to object BTF.
  */
 int unused(void)
 {
-	return CONFIG_UNWINDER_ORC ? 0 : 1;
+	return CONFIG_UNWINDER_ORC || CONFIG_ARM64 ? 0 : 1;
 }
 
 __u32 stack_key;
@@ -50,6 +51,19 @@ int rawtp_test(void *ctx)
 {
 	/* Skip ebpf program entry in the stack. */
 	stack_key = bpf_get_stackid(ctx, &stackmap, 0);
+	return 0;
+}
+
+__u64 tp_ips[128];
+int my_pid;
+
+SEC("tp/bpf_testmod/bpf_testmod_test_read")
+int tp_test(void *ctx)
+{
+	if (bpf_get_current_pid_tgid() >> 32 != my_pid)
+		return 0;
+
+	bpf_get_stack(ctx, tp_ips, sizeof(tp_ips), 0);
 	return 0;
 }
 
