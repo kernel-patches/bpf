@@ -481,7 +481,7 @@ static inline void rht_assign_unlock(struct bucket_table *tbl,
  * rht_for_each_entry_safe - safely iterate over hash chain of given type
  * @tpos:	the type * to use as a loop cursor.
  * @pos:	the &struct rhash_head to use as a loop cursor.
- * @next:	the &struct rhash_head to use as next in loop cursor.
+ * @_next:	the &struct rhash_head to use as next in loop cursor.
  * @tbl:	the &struct bucket_table
  * @hash:	the hash value / bucket index
  * @member:	name of the &struct rhash_head within the hashable struct.
@@ -489,13 +489,13 @@ static inline void rht_assign_unlock(struct bucket_table *tbl,
  * This hash chain list-traversal primitive allows for the looped code to
  * remove the loop cursor from the list.
  */
-#define rht_for_each_entry_safe(tpos, pos, next, tbl, hash, member)	      \
+#define rht_for_each_entry_safe(tpos, pos, _next, tbl, hash, member)	      \
 	for (pos = rht_ptr(rht_bucket(tbl, hash), tbl, hash),		      \
-	     next = !rht_is_a_nulls(pos) ?				      \
+	     _next = !rht_is_a_nulls(pos) ?				      \
 		       rht_dereference_bucket(pos->next, tbl, hash) : NULL;   \
 	     (!rht_is_a_nulls(pos)) && rht_entry(tpos, pos, member);	      \
-	     pos = next,						      \
-	     next = !rht_is_a_nulls(pos) ?				      \
+	     pos = _next,						      \
+	     _next = !rht_is_a_nulls(pos) ?				      \
 		       rht_dereference_bucket(pos->next, tbl, hash) : NULL)
 
 /**
