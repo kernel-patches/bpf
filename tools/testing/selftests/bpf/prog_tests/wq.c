@@ -1,11 +1,109 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2024 Benjamin Tissoires */
+#include <errno.h>
+#include <sched.h>
+#include <unistd.h>
 #include <test_progs.h>
 #include "wq.skel.h"
 #include "wq_failures.skel.h"
 
 #define CALLBACK_WAIT_RETRIES 10000
 #define CALLBACK_WAIT_US 1000
+#define WQ_USERCNT_MAX_ATTEMPTS 256
+#define WQ_USERCNT_RETRY EAGAIN
+
+static int pin_to_first_cpu(cpu_set_t *old_mask)
+{
+	cpu_set_t new_mask;
+	int cpu;
+
+	if (sched_getaffinity(0, sizeof(*old_mask), old_mask))
+		return -errno;
+
+	for (cpu = 0; cpu < CPU_SETSIZE; cpu++)
+		if (CPU_ISSET(cpu, old_mask))
+			break;
+	if (cpu == CPU_SETSIZE)
+		return -EINVAL;
+
+	CPU_ZERO(&new_mask);
+	CPU_SET(cpu, &new_mask);
+	if (sched_setaffinity(0, sizeof(new_mask), &new_mask))
+		return -errno;
+	return 0;
+}
+
+static int run_wq_prog(int prog_fd, __s32 *retval)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	int err;
+
+	err = bpf_prog_test_run_opts(prog_fd, &opts);
+	if (err)
+		return err;
+	*retval = (__s32)opts.retval;
+	return 0;
+}
+
+/* Check callback setup after reusing an idle object with no map uref. */
+static void test_wq_usercnt_reuse(void)
+{
+	struct wq *skel = NULL;
+	cpu_set_t old_mask;
+	__s32 retval = 0;
+	int stage_b_fd = -1;
+	int err, attempt;
+
+	if (!ASSERT_OK(pin_to_first_cpu(&old_mask), "pin"))
+		return;
+
+	for (attempt = 0; attempt < WQ_USERCNT_MAX_ATTEMPTS; attempt++) {
+		skel = wq__open_and_load();
+		if (!ASSERT_OK_PTR(skel, "wq__open_and_load"))
+			break;
+
+		err = run_wq_prog(bpf_program__fd(skel->progs.test_deleted_wq),
+				  &retval);
+		if (!ASSERT_OK(err, "test_deleted_wq_run") ||
+		    !ASSERT_EQ(retval, (__s32)-ENOENT, "test_deleted_wq_ret"))
+			break;
+
+		stage_b_fd = dup(bpf_program__fd(skel->progs.test_wq_usercnt_reuse));
+		if (!ASSERT_GE(stage_b_fd, 0, "dup_stage_b"))
+			break;
+
+		/* Drop all target-map user FDs; the retained program FD keeps
+		 * the map alive through used_maps, but usercnt becomes zero.
+		 */
+		wq__destroy(skel);
+		skel = NULL;
+
+		err = run_wq_prog(stage_b_fd, &retval);
+		close(stage_b_fd);
+		if (!ASSERT_OK(err, "stage_b_run"))
+			break;
+
+		if (retval == WQ_USERCNT_RETRY) {
+			/* The cached element was not reused; try again. */
+			continue;
+		}
+		if (retval > 0) {
+			ASSERT_FAIL("usercnt stage error %d", retval);
+			break;
+		}
+
+		ASSERT_EQ(retval, (__s32)-EPERM, "usercnt_setter_ret");
+		break;
+	}
+
+	if (attempt == WQ_USERCNT_MAX_ATTEMPTS)
+		ASSERT_FAIL("usercnt reuse not hit after %d attempts",
+			    WQ_USERCNT_MAX_ATTEMPTS);
+
+	if (skel)
+		wq__destroy(skel);
+	sched_setaffinity(0, sizeof(old_mask), &old_mask);
+}
 
 void serial_test_wq(void)
 {
@@ -20,7 +118,7 @@ void serial_test_wq(void)
 
 	wq_skel = wq__open_and_load();
 	if (!ASSERT_OK_PTR(wq_skel, "wq__open_and_load"))
-		return;
+		goto clean_up;
 
 	err = wq__attach(wq_skel);
 	if (!ASSERT_OK(err, "wq_attach"))
@@ -37,6 +135,9 @@ void serial_test_wq(void)
 	ASSERT_EQ(wq_skel->bss->ok_sleepable, (1 << 1), "ok_sleepable");
 clean_up:
 	wq__destroy(wq_skel);
+
+	if (test__start_subtest("usercnt_reuse"))
+		test_wq_usercnt_reuse();
 }
 
 void serial_test_failures_wq(void)

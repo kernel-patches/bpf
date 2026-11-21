@@ -5478,6 +5478,8 @@ union bpf_attr {
  *	Return
  *		0 on success.
  *		**-EINVAL** if *timer* was not initialized with bpf_timer_init() earlier.
+ *		**-ENOENT** if the containing map element is no longer in the map
+ *		or the timer was invalidated by map cleanup.
  *		**-EPERM** if *timer* is in a map that doesn't have any user references.
  *		The user space should either hold a file descriptor to a map with timers
  *		or pin such map in bpffs. When map is unpinned or file descriptor is
