@@ -12,6 +12,8 @@ struct btf_header;
 struct btf_type;
 
 const struct btf_header *btf_header(const struct btf *btf);
+int btf_kfunc_proto_match(const struct btf *a, __u32 a_id,
+			  const struct btf *b, __u32 b_id);
 
 enum btf_field_iter_kind {
 	BTF_FIELD_ITER_IDS,

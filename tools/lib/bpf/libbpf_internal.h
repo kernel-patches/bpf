@@ -251,6 +251,8 @@ const struct btf_type *skip_mods_and_typedefs(const struct btf *btf, __u32 id, _
 void btf_set_base_btf(struct btf *btf, const struct btf *base_btf);
 int btf_relocate(struct btf *btf, const struct btf *base_btf, __u32 **id_map,
 		 __u32 **str_map);
+void btf_name_prefix_range(const struct btf *btf, const char *name, size_t name_len,
+			   __u32 *start, __u32 *end);
 bool btf_type_is_traceable_func(const struct btf *btf, const struct btf_type *t);
 
 static inline enum btf_func_linkage btf_func_linkage(const struct btf_type *t)
