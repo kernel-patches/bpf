@@ -21970,10 +21970,13 @@ static int do_check(struct bpf_verifier_env *env)
 		err = do_check_block(env, prev_insn_idx);
 		if (env->bug)
 			return -EFAULT;
-		/* a pass had no error at this insn, possibly with a state that has more values */
+		/*
+		 * A pass had no error at this insn, possibly with a state that has more values.
+		 * -E2BIG: a pass possibly does not have these calls in frames.
+		 */
 		if (err && env->path_sensitive && is_error_of_state(env, err) &&
 		    (env->cur_state->infeasible || env->cur_state->equations.infeasible ||
-		     !bpf_failing_path_may_end_at(env, env->insn_idx))) {
+		     err == -E2BIG || !bpf_failing_path_may_end_at(env, env->insn_idx))) {
 			bpf_free_verifier_state(env, env->cur_state, false);
 			memset(env->cur_state, 0, sizeof(*env->cur_state));
 			free_pushed_states(env);
