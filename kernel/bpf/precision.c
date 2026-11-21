@@ -1645,6 +1645,9 @@ int bpf_partition_for_pessimized(struct bpf_verifier_env *env)
 	prec->good_budget = prec->budget;
 	for (i = 0; i < prec->loop_cnt; i++)
 		prec->loops[i]->good = prec->loops[i]->precision;
+	/* bpf_partition_more() can fail before partition_next() makes this copy */
+	if (prec->data_deps)
+		memcpy(prec->undo, prec->data_deps, 5 * prec->words * sizeof(long));
 	for (i = 0; i < env->prog->len; i++)
 		if (env->insn_aux_data[i].pessimized)
 			note_unproven_after_pass(env, i);
