@@ -641,7 +641,6 @@ struct extern_desc {
 	int btf_id;
 	int sec_btf_id;
 	char *name;
-	char *essent_name;
 	bool is_set;
 	bool is_weak;
 	union {
@@ -4446,7 +4445,6 @@ static int bpf_object__collect_externs(struct bpf_object *obj)
 	struct extern_desc *ext;
 	int i, n, off, dummy_var_btf_id;
 	const char *ext_name, *sec_name;
-	size_t ext_essent_len;
 	Elf_Scn *scn;
 	Elf64_Shdr *sh;
 
@@ -4497,14 +4495,6 @@ static int bpf_object__collect_externs(struct bpf_object *obj)
 			return -ENOMEM;
 		ext->sym_idx = i;
 		ext->is_weak = ELF64_ST_BIND(sym->st_info) == STB_WEAK;
-
-		ext_essent_len = bpf_core_essential_name_len(ext->name);
-		ext->essent_name = NULL;
-		if (ext_essent_len != strlen(ext->name)) {
-			ext->essent_name = strndup(ext->name, ext_essent_len);
-			if (!ext->essent_name)
-				return -ENOMEM;
-		}
 
 		ext->sec_btf_id = find_extern_sec_btf_id(obj->btf, ext->btf_id);
 		if (ext->sec_btf_id <= 0) {
@@ -9513,41 +9503,99 @@ static int bpf_object__resolve_ksym_var_btf_id(struct bpf_object *obj,
 	return 0;
 }
 
+/* t is a FUNC whose essential name is the first name_len bytes of name */
+static bool btf_is_kfunc_candidate(const struct btf *btf, const struct btf_type *t,
+				   const char *name, size_t name_len)
+{
+	const char *tname;
+
+	if (!btf_is_func(t))
+		return false;
+	tname = btf__name_by_offset(btf, t->name_off);
+	if (strncmp(tname, name, name_len) != 0)
+		return false;
+	return bpf_core_essential_name_len(tname) == name_len;
+}
+
+/*
+ * Search vmlinux and module BTFs. Return:
+ *   - a BTF ID for a unique match;
+ *   - -ESRCH if the family is absent;
+ *   - -EINVAL if no candidate has a compatible prototype;
+ *   - -ENOTUNIQ if more than one candidate has a compatible prototype;
+ *   - another negative error on failure.
+ */
+static int find_kfunc_btf_id(struct bpf_object *obj, const struct extern_desc *ext,
+			     struct btf **res_btf, struct module_btf **res_mod_btf)
+{
+	size_t name_len = bpf_core_essential_name_len(ext->name);
+	int kfunc_id = 0, nr_cands = 0, err;
+	size_t i;
+
+	err = load_module_btfs(obj);
+	if (err)
+		return err;
+
+	for (i = 0; i <= obj->btf_module_cnt; i++) {
+		struct module_btf *mod = i ? &obj->btf_modules[i - 1] : NULL;
+		struct btf *btf = mod ? mod->btf : obj->btf_vmlinux;
+		__u32 id, end;
+
+		btf_name_prefix_range(btf, ext->name, name_len, &id, &end);
+		for (; id < end; id++) {
+			const struct btf_type *t = btf__type_by_id(btf, id);
+
+			if (!btf_is_kfunc_candidate(btf, t, ext->name, name_len))
+				continue;
+			nr_cands++;
+			if (btf_kfunc_proto_match(obj->btf, ext->ksym.type_id, btf, t->type) <= 0)
+				continue;
+			if (kfunc_id)
+				return -ENOTUNIQ;
+			kfunc_id = id;
+			*res_btf = btf;
+			*res_mod_btf = mod;
+		}
+	}
+	if (!nr_cands)
+		return -ESRCH;
+	if (!kfunc_id)
+		return -EINVAL;
+	return kfunc_id;
+}
+
 static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 						struct extern_desc *ext)
 {
-	int local_func_proto_id, kfunc_proto_id, kfunc_id;
 	struct module_btf *mod_btf = NULL;
 	const struct btf_type *kern_func;
 	struct btf *kern_btf = NULL;
-	int ret;
+	int kfunc_id, ret;
 
-	local_func_proto_id = ext->ksym.type_id;
-
-	kfunc_id = find_ksym_btf_id(obj, ext->essent_name ?: ext->name, BTF_KIND_FUNC, &kern_btf,
-				    &mod_btf);
-	if (kfunc_id < 0) {
-		if (kfunc_id == -ESRCH && ext->is_weak)
+	kfunc_id = find_kfunc_btf_id(obj, ext, &kern_btf, &mod_btf);
+	if (kfunc_id == -ESRCH) {
+		if (ext->is_weak)
 			return 0;
 		pr_warn("extern (func ksym) '%s': not found in kernel or module BTFs\n",
 			ext->name);
 		return kfunc_id;
 	}
-
-	kern_func = btf__type_by_id(kern_btf, kfunc_id);
-	kfunc_proto_id = kern_func->type;
-
-	ret = bpf_core_types_are_compat(obj->btf, local_func_proto_id,
-					kern_btf, kfunc_proto_id);
-	if (ret <= 0) {
+	if (kfunc_id == -EINVAL) {
 		if (ext->is_weak)
 			return 0;
-
-		pr_warn("extern (func ksym) '%s': func_proto [%d] incompatible with %s [%d]\n",
-			ext->name, local_func_proto_id,
-			mod_btf ? mod_btf->name : "vmlinux", kfunc_proto_id);
-		return -EINVAL;
+		pr_warn("extern (func ksym) '%s': no compatible prototype in kernel or module BTFs\n",
+			ext->name);
+		return kfunc_id;
 	}
+	/* an error even for a weak kfunc: ambiguity isn't absence */
+	if (kfunc_id == -ENOTUNIQ) {
+		pr_warn("extern (func ksym) '%s': more than one compatible prototype in kernel or module BTFs\n",
+			ext->name);
+		return kfunc_id;
+	}
+	if (kfunc_id < 0)
+		return kfunc_id;
+	kern_func = btf__type_by_id(kern_btf, kfunc_id);
 
 	/* set index for module BTF fd in fd_array, if unset */
 	if (mod_btf && !mod_btf->fd_array_idx) {
@@ -9579,8 +9627,9 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 	 * {kernel_btf_id, kernel_btf_obj_fd} -> fixup ld_imm64.
 	 */
 	ext->ksym.kernel_btf_obj_fd = mod_btf ? mod_btf->fd : 0;
-	pr_debug("extern (func ksym) '%s': resolved to %s [%d]\n",
-		 ext->name, mod_btf ? mod_btf->name : "vmlinux", kfunc_id);
+	pr_debug("extern (func ksym) '%s': resolved to %s '%s' [%d]\n",
+		 ext->name, mod_btf ? mod_btf->name : "vmlinux",
+		 btf__name_by_offset(kern_btf, kern_func->name_off), kfunc_id);
 
 	return 0;
 }
@@ -10441,10 +10490,8 @@ void bpf_object__close(struct bpf_object *obj)
 	zfree(&obj->btf_custom_path);
 	zfree(&obj->kconfig);
 
-	for (i = 0; i < obj->nr_extern; i++) {
+	for (i = 0; i < obj->nr_extern; i++)
 		zfree(&obj->externs[i].name);
-		zfree(&obj->externs[i].essent_name);
-	}
 
 	zfree(&obj->externs);
 	obj->nr_extern = 0;

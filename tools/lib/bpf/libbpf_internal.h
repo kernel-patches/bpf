@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <libelf.h>
+#include "libbpf_tools.h"
 #include "relo_core.h"
 
 /* Android's libc doesn't support AT_EACCESS in faccessat() implementation
@@ -247,10 +248,11 @@ struct btf_type;
 struct btf_type *btf_type_by_id(const struct btf *btf, __u32 type_id);
 const char *btf_kind_str(const struct btf_type *t);
 const struct btf_type *skip_mods_and_typedefs(const struct btf *btf, __u32 id, __u32 *res_id);
-const struct btf_header *btf_header(const struct btf *btf);
 void btf_set_base_btf(struct btf *btf, const struct btf *base_btf);
 int btf_relocate(struct btf *btf, const struct btf *base_btf, __u32 **id_map,
 		 __u32 **str_map);
+void btf_name_prefix_range(const struct btf *btf, const char *name, size_t name_len,
+			   __u32 *start, __u32 *end);
 bool btf_type_is_traceable_func(const struct btf *btf, const struct btf_type *t);
 
 static inline enum btf_func_linkage btf_func_linkage(const struct btf_type *t)
@@ -574,31 +576,6 @@ static inline void bpf_core_relo_bswap(struct bpf_core_relo *i)
 	i->kind = bswap_32(i->kind);
 }
 
-enum btf_field_iter_kind {
-	BTF_FIELD_ITER_IDS,
-	BTF_FIELD_ITER_STRS,
-};
-
-struct btf_field_desc {
-	/* once-per-type offsets */
-	int t_off_cnt, t_offs[2];
-	/* member struct size, or zero, if no members */
-	int m_sz;
-	/* repeated per-member offsets */
-	int m_off_cnt, m_offs[2];
-};
-
-struct btf_field_iter {
-	struct btf_field_desc desc;
-	void *p;
-	int m_idx;
-	int off_idx;
-	int vlen;
-};
-
-int btf_field_iter_init(struct btf_field_iter *it, struct btf_type *t, enum btf_field_iter_kind iter_kind);
-__u32 *btf_field_iter_next(struct btf_field_iter *it);
-
 typedef int (*type_id_visit_fn)(__u32 *type_id, void *ctx);
 typedef int (*str_off_visit_fn)(__u32 *str_off, void *ctx);
 int btf_ext_visit_type_ids(struct btf_ext *btf_ext, type_id_visit_fn visit, void *ctx);
@@ -772,8 +749,5 @@ int elf_resolve_pattern_offsets(const char *binary_path, const char *pattern,
 
 int probe_fd(int fd);
 
-#define SHA256_DIGEST_LENGTH 32
-
-void libbpf_sha256(const void *data, size_t len, __u8 out[SHA256_DIGEST_LENGTH]);
 int probe_sys_bpf_ext(void);
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */

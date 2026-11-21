@@ -29,8 +29,10 @@ struct cgroup *scx_bpf_task_cgroup___new(struct task_struct *p) __ksym __weak;
  * scx_bpf_dispatch_from_dsq() and friends were added during v6.12 by
  * 4c30f5ce4f7a ("sched_ext: Implement scx_bpf_dispatch[_vtime]_from_dsq()").
  *
- * v7.1: scx_bpf_dsq_move_to_local___v2() to add @enq_flags.
+ * v7.1: scx_bpf_dsq_move_to_local___v2() to add @enq_flags. Older libbpf can
+ * resolve it only through the extra ___compat suffix.
  */
+bool scx_bpf_dsq_move_to_local___v2(u64 dsq_id, u64 enq_flags) __ksym __weak;
 bool scx_bpf_dsq_move_to_local___v2___compat(u64 dsq_id, u64 enq_flags) __ksym __weak;
 bool scx_bpf_dsq_move_to_local___v1(u64 dsq_id) __ksym __weak;
 void scx_bpf_dsq_move_set_slice___new(struct bpf_iter_scx_dsq *it__iter, u64 slice) __ksym __weak;
@@ -45,11 +47,13 @@ bool scx_bpf_dispatch_from_dsq___old(struct bpf_iter_scx_dsq *it__iter, struct t
 bool scx_bpf_dispatch_vtime_from_dsq___old(struct bpf_iter_scx_dsq *it__iter, struct task_struct *p, u64 dsq_id, u64 enq_flags) __ksym __weak;
 
 #define scx_bpf_dsq_move_to_local(dsq_id, enq_flags)				\
-	(bpf_ksym_exists(scx_bpf_dsq_move_to_local___v2___compat) ?		\
-	 scx_bpf_dsq_move_to_local___v2___compat((dsq_id), (enq_flags)) :	\
-	 (bpf_ksym_exists(scx_bpf_dsq_move_to_local___v1) ?			\
-	  scx_bpf_dsq_move_to_local___v1((dsq_id)) :				\
-	  scx_bpf_consume___old((dsq_id))))
+	(bpf_ksym_exists(scx_bpf_dsq_move_to_local___v2) ?			\
+	 scx_bpf_dsq_move_to_local___v2((dsq_id), (enq_flags)) :		\
+	 (bpf_ksym_exists(scx_bpf_dsq_move_to_local___v2___compat) ?		\
+	  scx_bpf_dsq_move_to_local___v2___compat((dsq_id), (enq_flags)) :	\
+	  (bpf_ksym_exists(scx_bpf_dsq_move_to_local___v1) ?			\
+	   scx_bpf_dsq_move_to_local___v1((dsq_id)) :				\
+	   scx_bpf_consume___old((dsq_id)))))
 
 #define scx_bpf_dsq_move_set_slice(it__iter, slice)				\
 	(bpf_ksym_exists(scx_bpf_dsq_move_set_slice___new) ?			\
@@ -430,12 +434,13 @@ scx_bpf_dsq_insert_vtime(struct task_struct *p, u64 dsq_id, u64 slice, u64 vtime
 /*
  * v6.19: scx_bpf_dsq_insert() now returns bool instead of void. Move
  * scx_bpf_dsq_insert() decl to common.bpf.h and drop compat helper after v6.22.
- * The extra ___compat suffix is to work around libbpf not ignoring __SUFFIX on
- * kernel side. The entire suffix can be dropped later.
+ * Older libbpf can resolve scx_bpf_dsq_insert___v2() only through the extra
+ * ___compat suffix.
  *
  * v6.13: scx_bpf_dsq_insert() renaming is also handled here. See the block on
  * dispatch renaming above for more details.
  */
+bool scx_bpf_dsq_insert___v2(struct task_struct *p, u64 dsq_id, u64 slice, u64 enq_flags) __ksym __weak;
 bool scx_bpf_dsq_insert___v2___compat(struct task_struct *p, u64 dsq_id, u64 slice, u64 enq_flags) __ksym __weak;
 void scx_bpf_dsq_insert___v1(struct task_struct *p, u64 dsq_id, u64 slice, u64 enq_flags) __ksym __weak;
 void scx_bpf_dispatch___compat(struct task_struct *p, u64 dsq_id, u64 slice, u64 enq_flags) __ksym __weak;
@@ -443,7 +448,9 @@ void scx_bpf_dispatch___compat(struct task_struct *p, u64 dsq_id, u64 slice, u64
 static inline bool
 scx_bpf_dsq_insert(struct task_struct *p, u64 dsq_id, u64 slice, u64 enq_flags)
 {
-	if (bpf_ksym_exists(scx_bpf_dsq_insert___v2___compat)) {
+	if (bpf_ksym_exists(scx_bpf_dsq_insert___v2)) {
+		return scx_bpf_dsq_insert___v2(p, dsq_id, slice, enq_flags);
+	} else if (bpf_ksym_exists(scx_bpf_dsq_insert___v2___compat)) {
 		return scx_bpf_dsq_insert___v2___compat(p, dsq_id, slice, enq_flags);
 	} else if (bpf_ksym_exists(scx_bpf_dsq_insert___v1)) {
 		scx_bpf_dsq_insert___v1(p, dsq_id, slice, enq_flags);
@@ -506,12 +513,12 @@ static inline bool __COMPAT_has_dsq_reenq_task(void)
 
 /*
  * v6.19: The new void variant can be called from anywhere while the older v1
- * variant can only be called from ops.cpu_release(). The double ___ prefixes on
- * the v2 variant need to be removed once libbpf is updated to ignore ___ prefix
- * on kernel side. Drop the wrapper and move the decl to common.bpf.h after
- * v6.22.
+ * variant can only be called from ops.cpu_release(). Older libbpf can resolve
+ * the v2 variant only through the extra ___compat suffix. Drop the wrapper and
+ * move the decl to common.bpf.h after v6.22.
  */
 u32 scx_bpf_reenqueue_local___v1(void) __ksym __weak;
+void scx_bpf_reenqueue_local___v2(void) __ksym __weak;
 void scx_bpf_reenqueue_local___v2___compat(void) __ksym __weak;
 
 static inline bool __COMPAT_scx_bpf_reenqueue_local_from_anywhere(void)
@@ -523,6 +530,8 @@ static inline void scx_bpf_reenqueue_local(void)
 {
 	if (__COMPAT_has_generic_reenq())
 		scx_bpf_dsq_reenq___compat(SCX_DSQ_LOCAL, 0);
+	else if (bpf_ksym_exists(scx_bpf_reenqueue_local___v2))
+		scx_bpf_reenqueue_local___v2();
 	else if (__COMPAT_scx_bpf_reenqueue_local_from_anywhere())
 		scx_bpf_reenqueue_local___v2___compat();
 	else
@@ -539,6 +548,10 @@ static inline int scx_bpf_reenqueue_local_from_anywhere(void)
 	 */
 	if (__COMPAT_has_generic_reenq()) {
 		scx_bpf_dsq_reenq___compat(SCX_DSQ_LOCAL, 0);
+		return 0;
+	}
+	if (bpf_ksym_exists(scx_bpf_reenqueue_local___v2)) {
+		scx_bpf_reenqueue_local___v2();
 		return 0;
 	}
 	if (__COMPAT_scx_bpf_reenqueue_local_from_anywhere()) {

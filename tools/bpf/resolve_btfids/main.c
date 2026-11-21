@@ -93,12 +93,15 @@
 #include <linux/limits.h>
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
+#include <bpf/libbpf_tools.h>
+#include <bpf/relo_core.h>
 #include "btf_colors.h"
 #include "fmodret.h"
 #include <subcmd/parse-options.h>
 
 #define BTF_IDS_SECTION	".BTF_ids"
 #define BTF_LINK_MODULE_NAME_MAX	64
+#define BTF_SHA256_DIGEST_LENGTH	SHA256_DIGEST_LENGTH
 #define BTF_ID_PREFIX	"__BTF_ID__"
 
 #define BTF_STRUCT	"struct"
@@ -1205,8 +1208,7 @@ static int patch_btf_link(struct object *obj, const struct btf_link *link)
 	}
 	memset(data->d_buf, 0, data->d_size);
 	memcpy(data->d_buf, link->module, strlen(link->module) + 1);
-	btf_sha256(raw_btf_data, raw_btf_size,
-		   (u8 *)data->d_buf + module_name_len);
+	libbpf_sha256(raw_btf_data, raw_btf_size, (u8 *)data->d_buf + module_name_len);
 	size = (u8 *)data->d_buf + module_name_len + BTF_SHA256_DIGEST_LENGTH;
 	if (obj->efile.encoding == ELFDATA2LSB) {
 		size[0] = raw_btf_size;
@@ -1917,6 +1919,70 @@ out:
 	return err;
 }
 
+struct kfunc_variant {
+	const char *name;
+	size_t essent_len;
+	u32 id;
+};
+
+static int cmp_kfunc_variants(const void *lhs, const void *rhs)
+{
+	const struct kfunc_variant *a = lhs, *b = rhs;
+	int ret = strncmp(a->name, b->name, min(a->essent_len, b->essent_len));
+
+	return ret ?: (a->essent_len > b->essent_len) - (a->essent_len < b->essent_len);
+}
+
+/* libbpf rejects a declaration that matches more than one kfunc variant */
+static int check_kfunc_variants(const struct btf *btf)
+{
+	const struct btf *base = btf__base_btf(btf);
+	struct kfunc_variant *kfuncs = NULL;
+	u32 cnt = 0, cap = 0;
+	int err = 0;
+
+	for (u32 id = base ? btf__type_cnt(base) : 1; id < btf__type_cnt(btf); id++) {
+		const struct btf_type *t = btf__type_by_id(btf, id);
+		const char *name;
+
+		if (!btf_is_decl_tag(t) || btf_decl_tag(t)->component_idx != -1)
+			continue;
+		if (strcmp(btf__name_by_offset(btf, t->name_off), DECL_TAG_KFUNC) != 0)
+			continue;
+
+		err = ensure_mem(&kfuncs, &cap, cnt + 1);
+		if (err)
+			goto out;
+		name = btf__name_by_offset(btf, btf__type_by_id(btf, t->type)->name_off);
+		kfuncs[cnt++] = (struct kfunc_variant){
+			.name = name,
+			.essent_len = bpf_core_essential_name_len(name),
+			.id = t->type,
+		};
+	}
+	qsort(kfuncs, cnt, sizeof(*kfuncs), cmp_kfunc_variants);
+
+	for (u32 i = 0; i < cnt; i++) {
+		const struct btf_type *a = btf__type_by_id(btf, kfuncs[i].id);
+
+		for (u32 j = i + 1; j < cnt; j++) {
+			const struct btf_type *b;
+
+			if (cmp_kfunc_variants(&kfuncs[i], &kfuncs[j]) != 0)
+				break;
+			b = btf__type_by_id(btf, kfuncs[j].id);
+			if (btf_kfunc_proto_match(btf, a->type, btf, b->type) <= 0)
+				continue;
+			pr_err("ERROR: resolve_btfids: kfuncs %s and %s have matching prototypes\n",
+			       kfuncs[i].name, kfuncs[j].name);
+			err = -EINVAL;
+		}
+	}
+out:
+	free(kfuncs);
+	return err;
+}
+
 static int finalize_btf(struct object *obj)
 {
 	struct btf *base_btf = obj->base_btf, *btf = obj->btf;
@@ -1927,6 +1993,10 @@ static int finalize_btf(struct object *obj)
 		pr_err("FAILED to dedup BTF: %s\n", strerror(errno));
 		return err;
 	}
+
+	err = check_kfunc_variants(obj->btf);
+	if (err)
+		return err;
 
 	if (obj->base_btf && obj->distill_base) {
 		err = btf__distill_base(obj->btf, &base_btf, &btf);
