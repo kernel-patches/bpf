@@ -386,6 +386,19 @@ out:
 	return ret;
 }
 
+/*
+ * The listener frees a child that nobody has accepted yet without waiting
+ * for the owner of its socket lock. Unlink such a child without the lock,
+ * as a delete does.
+ */
+static bool sock_map_free_lock_sk(struct sock *sk)
+{
+	if (!READ_ONCE(sk->sk_socket))
+		return false;
+	lock_sock(sk);
+	return true;
+}
+
 static void sock_map_free(struct bpf_map *map)
 {
 	struct bpf_stab *stab = container_of(map, struct bpf_stab, map);
@@ -402,12 +415,15 @@ static void sock_map_free(struct bpf_map *map)
 
 		sk = xchg(psk, NULL);
 		if (sk) {
+			bool locked;
+
 			sock_hold(sk);
-			lock_sock(sk);
+			locked = sock_map_free_lock_sk(sk);
 			rcu_read_lock();
 			sock_map_unref(sk, psk);
 			rcu_read_unlock();
-			release_sock(sk);
+			if (locked)
+				release_sock(sk);
 			sock_put(sk);
 		}
 	}
@@ -1228,12 +1244,15 @@ static void sock_hash_free(struct bpf_map *map)
 		 * link to sockhash.
 		 */
 		hlist_for_each_entry_safe(elem, node, &unlink_list, node) {
+			bool locked;
+
 			hlist_del(&elem->node);
-			lock_sock(elem->sk);
+			locked = sock_map_free_lock_sk(elem->sk);
 			rcu_read_lock();
 			sock_map_unref(elem->sk, elem);
 			rcu_read_unlock();
-			release_sock(elem->sk);
+			if (locked)
+				release_sock(elem->sk);
 			sock_put(elem->sk);
 			sock_hash_free_elem(htab, elem);
 		}
