@@ -3191,7 +3191,7 @@ static int fbnic_queue_stop(struct net_device *dev, void *qmem, int idx)
 	for (i = 0; i < nv->txt_count; i++) {
 		if (nv->qt[i].sub0.flags & FBNIC_RING_F_DISABLED)
 			continue;
-		netif_stop_subqueue(dev, nv->qt[i].sub0.q_idx);
+		netif_disable_subqueue(dev, nv->qt[i].sub0.q_idx);
 	}
 	fbnic_nv_disable(fbn, nv);
 
