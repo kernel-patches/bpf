@@ -776,12 +776,16 @@ struct net_device *dsa_port_to_bridge_port(const struct dsa_port *dp)
 static inline struct net_device *
 dsa_port_bridge_dev_get(const struct dsa_port *dp)
 {
-	return dp->bridge ? dp->bridge->dev : NULL;
+	const struct dsa_bridge *bridge = READ_ONCE(dp->bridge);
+
+	return bridge ? bridge->dev : NULL;
 }
 
 static inline unsigned int dsa_port_bridge_num_get(struct dsa_port *dp)
 {
-	return dp->bridge ? dp->bridge->num : 0;
+	const struct dsa_bridge *bridge = READ_ONCE(dp->bridge);
+
+	return bridge ? bridge->num : 0;
 }
 
 static inline bool dsa_port_bridge_same(const struct dsa_port *a,
