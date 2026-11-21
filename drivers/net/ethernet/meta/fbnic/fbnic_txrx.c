@@ -2326,6 +2326,50 @@ fbnic_nv_disable(struct fbnic_net *fbn, struct fbnic_napi_vector *nv)
 	fbnic_wrfl(fbn->fbd);
 }
 
+static void fbnic_reenable_twq(struct fbnic_ring *twq, u32 csr)
+{
+	u32 twq_ctl;
+
+	if (!twq->size_mask)
+		return;
+
+	twq_ctl = fbnic_ring_rd32(twq, csr);
+	fbnic_ring_wr32(twq, csr, twq_ctl | FBNIC_QUEUE_TWQ_CTL_ENABLE);
+}
+
+static void
+fbnic_nv_reenable(struct fbnic_net *fbn, struct fbnic_napi_vector *nv)
+{
+	int j, t;
+
+	for (t = 0; t < nv->txt_count; t++) {
+		struct fbnic_q_triad *qt = &nv->qt[t];
+
+		if (qt->cmpl.size_mask) {
+			fbnic_ring_wr32(&qt->cmpl, FBNIC_QUEUE_TIM_MASK, 0);
+			fbnic_ring_wr32(&qt->cmpl, FBNIC_QUEUE_TCQ_CTL,
+					FBNIC_QUEUE_TCQ_CTL_ENABLE);
+		}
+		fbnic_reenable_twq(&qt->sub1, FBNIC_QUEUE_TWQ1_CTL);
+		fbnic_reenable_twq(&qt->sub0, FBNIC_QUEUE_TWQ0_CTL);
+	}
+
+	for (j = 0; j < nv->rxt_count; j++, t++) {
+		struct fbnic_q_triad *qt = &nv->qt[t];
+		u32 bdq_ctl;
+
+		fbnic_ring_wr32(&qt->cmpl, FBNIC_QUEUE_RIM_MASK, 0);
+		fbnic_ring_wr32(&qt->cmpl, FBNIC_QUEUE_RCQ_CTL,
+				FBNIC_QUEUE_RCQ_CTL_ENABLE);
+
+		bdq_ctl = fbnic_ring_rd32(&qt->sub0, FBNIC_QUEUE_BDQ_CTL);
+		fbnic_ring_wr32(&qt->sub0, FBNIC_QUEUE_BDQ_CTL,
+				bdq_ctl | FBNIC_QUEUE_BDQ_CTL_ENABLE);
+	}
+
+	fbnic_wrfl(fbn->fbd);
+}
+
 void fbnic_dbg_down(struct fbnic_net *fbn)
 {
 	int i;
@@ -3092,9 +3136,6 @@ static void __fbnic_nv_restart(struct fbnic_net *fbn,
 	struct fbnic_dev *fbd = fbn->fbd;
 	int i;
 
-	fbnic_nv_enable(fbn, nv);
-	fbnic_nv_fill(nv);
-
 	napi_enable_locked(&nv->napi);
 	fbnic_nv_irq_enable(nv);
 	fbnic_wr32(fbd, FBNIC_INTR_SET(nv->v_idx / 32), BIT(nv->v_idx % 32));
@@ -3125,6 +3166,8 @@ static int fbnic_queue_start(struct net_device *dev,
 
 	memcpy(real, qmem, sizeof(*real));
 
+	fbnic_nv_enable(fbn, nv);
+	fbnic_nv_fill(nv);
 	__fbnic_nv_restart(fbn, nv);
 
 	return 0;
@@ -3170,6 +3213,7 @@ static int fbnic_queue_stop(struct net_device *dev, void *qmem, int idx)
 	return 0;
 
 err_restart:
+	fbnic_nv_reenable(fbn, nv);
 	__fbnic_nv_restart(fbn, nv);
 	return err;
 }
