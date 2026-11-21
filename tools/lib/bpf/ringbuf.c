@@ -58,6 +58,35 @@ struct ringbuf_hdr {
 	__u32 pad;
 };
 
+/* 8-byte alignment lets compiler inline 64-bit __atomic_store_n() on i386. */
+typedef __u64 __attribute__((aligned(8), may_alias)) ringbuf_pos64_t;
+
+/*
+ * Carry 32-bit little-endian position updates into the upper 32 bits for
+ * 64-bit kernels. On 32-bit kernels the upper half lands in unused padding
+ * (RINGBUF) or unused pending_pos (USER_RINGBUF).
+ */
+static void ringbuf_store_pos(unsigned long *pos, unsigned long val)
+{
+	ringbuf_pos64_t *p = (void *)pos;
+	__u64 pos64;
+
+	if (sizeof(long) == 8 || __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) {
+		/* Pairs with smp_load_acquire() in the kernel. */
+		smp_store_release(pos, val);
+		return;
+	}
+
+	pos64 = READ_ONCE(*p);
+	pos64 += (__u32)(val - pos64);
+#if __GCC_ATOMIC_LLONG_LOCK_FREE == 2
+	__atomic_store_n(p, pos64, __ATOMIC_RELEASE);
+#else
+	/* Non-atomic store, but it only transiently fails reserve/peek. */
+	smp_store_release(p, pos64);
+#endif
+}
+
 static void ringbuf_free_ring(struct ring_buffer *rb, struct ring *r)
 {
 	if (r->consumer_pos) {
@@ -290,14 +319,13 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 				err = r->sample_cb(r->ctx, sample, len);
 				if (err < 0) {
 					/* update consumer pos and bail out */
-					smp_store_release(r->consumer_pos,
-							  cons_pos);
+					ringbuf_store_pos(r->consumer_pos, cons_pos);
 					return err;
 				}
 				cnt++;
 			}
 
-			smp_store_release(r->consumer_pos, cons_pos);
+			ringbuf_store_pos(r->consumer_pos, cons_pos);
 
 			if (cnt >= n)
 				goto done;
@@ -412,7 +440,7 @@ struct ring *ring_buffer__ring(struct ring_buffer *rb, unsigned int idx)
 
 unsigned long ring__consumer_pos(const struct ring *r)
 {
-	/* Synchronizes with smp_store_release() in ringbuf_process_ring(). */
+	/* Synchronizes with ringbuf_store_pos() in ringbuf_process_ring(). */
 	return smp_load_acquire(r->consumer_pos);
 }
 
@@ -652,7 +680,7 @@ void *user_ring_buffer__reserve(struct user_ring_buffer *rb, __u32 size)
 	/* Synchronizes with smp_load_acquire() in __bpf_user_ringbuf_peek() in
 	 * the kernel.
 	 */
-	smp_store_release(rb->producer_pos, prod_pos + total_size);
+	ringbuf_store_pos(rb->producer_pos, prod_pos + total_size);
 
 	return (void *)rb->data + ((prod_pos + BPF_RINGBUF_HDR_SZ) & rb->mask);
 }
