@@ -463,12 +463,19 @@ static int do_show_tree_fn(const char *fpath, const struct stat *sb,
 
 	cgroup_fd = open(fpath, O_RDONLY);
 	if (cgroup_fd < 0) {
+		/* cgroup may have been removed after nftw() found it */
+		if (errno == ENOENT)
+			return 0;
 		p_err("can't open cgroup %s: %s", fpath, strerror(errno));
 		return SHOW_TREE_FN_ERR;
 	}
 
 	has_attached_progs = cgroup_has_attached_progs(cgroup_fd);
 	if (has_attached_progs < 0) {
+		if (errno == ENOENT) {
+			close(cgroup_fd);
+			return 0;
+		}
 		p_err("can't query bpf programs attached to %s: %s",
 		      fpath, strerror(errno));
 		close(cgroup_fd);
