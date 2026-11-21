@@ -4961,17 +4961,45 @@ int pci_bridge_secondary_bus_reset(struct pci_dev *dev)
 }
 EXPORT_SYMBOL_GPL(pci_bridge_secondary_bus_reset);
 
+static int pci_root_bus_reset(struct pci_dev *dev, bool probe)
+{
+	struct pci_host_bridge *host = pci_find_host_bridge(dev->bus);
+	int rc;
+
+	/*
+	 * Bridges, e.g., Root Ports, are not eligible.  Check the header type
+	 * because dev->subordinate is not set up yet when the reset methods
+	 * are probed during enumeration.
+	 */
+	if (pci_is_bridge(dev) || !host->reset_root_port)
+		return -ENOTTY;
+
+	if (probe)
+		return 0;
+
+	rc = host->reset_root_port(host, dev);
+	if (rc)
+		return rc;
+
+	return pci_dev_wait(dev, "bus reset", PCIE_RESET_READY_POLL_MS);
+}
+
 static int pci_parent_bus_reset(struct pci_dev *dev, bool probe)
 {
 	struct pci_dev *pdev;
 
-	if (pci_is_root_bus(dev->bus) || dev->subordinate ||
-	    !dev->bus->self || dev->dev_flags & PCI_DEV_FLAGS_NO_BUS_RESET)
+	if (dev->subordinate || dev->dev_flags & PCI_DEV_FLAGS_NO_BUS_RESET)
 		return -ENOTTY;
 
 	list_for_each_entry(pdev, &dev->bus->devices, bus_list)
 		if (pdev != dev)
 			return -ENOTTY;
+
+	if (pci_is_root_bus(dev->bus))
+		return pci_root_bus_reset(dev, probe);
+
+	if (!dev->bus->self)
+		return -ENOTTY;
 
 	if (probe)
 		return 0;
@@ -5321,19 +5349,35 @@ int pci_reset_function(struct pci_dev *dev)
 	 * no upstream bridge configuration to hold consistent.
 	 */
 	bridge = pci_upstream_bridge(dev);
-	if (bridge)
-		pci_dev_lock(bridge);
 
-	pci_dev_lock(dev);
+	/*
+	 * Take the device locks, bridge before device, before blocking
+	 * config access to either of them.  device_lock() can sleep for as
+	 * long as another task holds it, e.g. a driver unbind waiting for
+	 * a vfio user to release the device.  If config access to the
+	 * bridge were already blocked at that point, every config read of
+	 * the bridge (lspci, sysfs "config") would sleep in pci_wait_cfg()
+	 * for the same time.
+	 */
+	if (bridge)
+		device_lock(&bridge->dev);
+	device_lock(&dev->dev);
+	if (bridge)
+		pci_cfg_access_lock(bridge);
+	pci_cfg_access_lock(dev);
+
 	pci_dev_save_and_disable(dev);
 
 	rc = __pci_reset_function_locked(dev);
 
 	pci_dev_restore(dev);
-	pci_dev_unlock(dev);
 
+	pci_cfg_access_unlock(dev);
 	if (bridge)
-		pci_dev_unlock(bridge);
+		pci_cfg_access_unlock(bridge);
+	device_unlock(&dev->dev);
+	if (bridge)
+		device_unlock(&bridge->dev);
 
 	return rc;
 }
