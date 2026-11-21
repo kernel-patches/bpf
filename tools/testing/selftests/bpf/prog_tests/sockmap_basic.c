@@ -14,6 +14,7 @@
 #include "test_sockmap_drop_prog.skel.h"
 #include "test_sockmap_change_tail.skel.h"
 #include "test_sockmap_msg_pop_data.skel.h"
+#include "test_sockmap_msg_apply.skel.h"
 #include "bpf_iter_sockmap.skel.h"
 
 #include "sockmap_helpers.h"
@@ -1362,6 +1363,129 @@ out:
 	test_sockmap_pass_prog__destroy(skel);
 }
 
+#define APPLY_MSG_MAGIC 0xbeefcafe
+
+/*
+ * One message: a header with its length, then the body. The sk_msg prog
+ * applies the verdict to the whole message and redirects it to the egress
+ * of b. b has the smallest send buffer and its peer the smallest receive
+ * buffer, so the first send() stops in the middle of the message. The rest
+ * must still go to b without another run of the prog.
+ */
+static void test_sockmap_msg_verdict_apply_partial(void)
+{
+	int a = -1, a_peer = -1, b = -1, b_peer = -1, s = -1;
+	struct test_sockmap_msg_apply *skel;
+	int err, map, one = 1, zero = 0;
+	struct sockaddr_storage addr;
+	size_t len, off = 0, got = 0;
+	char *buf = NULL, *rbuf = NULL;
+	int sndbuf, rcvbuf;
+	socklen_t optlen;
+	struct {
+		__u32 magic;
+		__u32 len;
+	} hdr;
+	ssize_t n;
+
+	skel = test_sockmap_msg_apply__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+	map = bpf_map__fd(skel->maps.sock_map);
+
+	err = bpf_prog_attach(bpf_program__fd(skel->progs.prog_msg_apply_redir),
+			      map, BPF_SK_MSG_VERDICT, 0);
+	if (!ASSERT_OK(err, "bpf_prog_attach"))
+		goto out;
+
+	err = create_pair(AF_INET, SOCK_STREAM, &a_peer, &a);
+	if (!ASSERT_OK(err, "create_pair"))
+		goto out;
+
+	/* The peer of b gets its receive buffer before the handshake */
+	s = socket_loopback(AF_INET, SOCK_STREAM);
+	if (!ASSERT_GE(s, 0, "socket_loopback"))
+		goto out_close;
+	if (xsetsockopt(s, SOL_SOCKET, SO_RCVBUF, &one, sizeof(one)))
+		goto out_close;
+	b = xsocket(AF_INET, SOCK_STREAM, 0);
+	if (b < 0)
+		goto out_close;
+	if (xsetsockopt(b, SOL_SOCKET, SO_SNDBUF, &one, sizeof(one)))
+		goto out_close;
+	optlen = sizeof(addr);
+	if (xgetsockname(s, sockaddr(&addr), &optlen))
+		goto out_close;
+	if (xconnect(b, sockaddr(&addr), optlen))
+		goto out_close;
+	b_peer = xaccept_nonblock(s, NULL, NULL);
+	if (b_peer < 0)
+		goto out_close;
+
+	optlen = sizeof(sndbuf);
+	if (xgetsockopt(b, SOL_SOCKET, SO_SNDBUF, &sndbuf, &optlen))
+		goto out_close;
+	optlen = sizeof(rcvbuf);
+	if (xgetsockopt(b_peer, SOL_SOCKET, SO_RCVBUF, &rcvbuf, &optlen))
+		goto out_close;
+	/* Larger than what b and its peer can hold */
+	len = 4 * (sndbuf + rcvbuf);
+
+	err = bpf_map_update_elem(map, &zero, &b, BPF_NOEXIST);
+	if (!ASSERT_OK(err, "bpf_map_update_elem(b)"))
+		goto out_close;
+	err = bpf_map_update_elem(map, &one, &a, BPF_NOEXIST);
+	if (!ASSERT_OK(err, "bpf_map_update_elem(a)"))
+		goto out_close;
+
+	buf = malloc(len);
+	rbuf = calloc(len, 1);
+	if (!ASSERT_OK_PTR(buf, "malloc") || !ASSERT_OK_PTR(rbuf, "calloc"))
+		goto out_close;
+	memset(buf, 0xaa, len);
+	hdr.magic = APPLY_MSG_MAGIC;
+	hdr.len = len;
+	memcpy(buf, &hdr, sizeof(hdr));
+
+	while (got < len) {
+		if (off < len) {
+			n = send(a, buf + off, len - off, MSG_DONTWAIT);
+			if (!ASSERT_TRUE(n >= 0 || errno == EAGAIN, "send"))
+				break;
+			if (n > 0) {
+				if (!off && !ASSERT_LT(n, len, "first send partial"))
+					break;
+				off += n;
+			} else {
+				usleep(1000);
+			}
+		}
+		while (got < off) {
+			n = recv_timeout(b_peer, rbuf + got, off - got, 0,
+					 IO_TIMEOUT_SEC);
+			if (!ASSERT_GT(n, 0, "recv_timeout"))
+				goto out_close;
+			got += n;
+		}
+	}
+
+	ASSERT_EQ(got, len, "received");
+	ASSERT_OK(memcmp(buf, rbuf, len), "data");
+	ASSERT_EQ(skel->bss->good_hdrs, 1, "prog runs on the header");
+	ASSERT_EQ(skel->bss->bad_hdrs, 0, "prog runs in the body");
+
+out_close:
+	free(buf);
+	free(rbuf);
+	close(s);
+	close(a);
+	close(a_peer);
+	close(b);
+	close(b_peer);
+out:
+	test_sockmap_msg_apply__destroy(skel);
+}
+
 void test_sockmap_basic(void)
 {
 	if (test__start_subtest("sockmap create_update_free"))
@@ -1438,4 +1562,6 @@ void test_sockmap_basic(void)
 		test_sockmap_multi_channels(SOCK_STREAM);
 	if (test__start_subtest("sockmap udp multi channels"))
 		test_sockmap_multi_channels(SOCK_DGRAM);
+	if (test__start_subtest("sockmap msg_verdict apply_bytes partial redirect"))
+		test_sockmap_msg_verdict_apply_partial();
 }
