@@ -2247,6 +2247,96 @@ static void raw_ranges(struct kunit *test)
 	}
 }
 
+#define TEST_INIT_LIMITS_REGS 16
+#define TEST_INIT_LIMITS_MAX_RAW 4
+
+struct test_init_limits_data {
+	int num_reads;
+	size_t read_sizes[TEST_INIT_LIMITS_REGS];
+};
+
+static void test_init_limits_bus_init_limits(void *context,
+					     const struct regmap_config *config,
+					     size_t *max_raw_read,
+					     size_t *max_raw_write)
+{
+	*max_raw_read = TEST_INIT_LIMITS_MAX_RAW;
+	*max_raw_write = TEST_INIT_LIMITS_MAX_RAW;
+}
+
+static int test_init_limits_bus_read(void *context, const void *reg_buf,
+				     size_t reg_size, void *val_buf,
+				     size_t val_size)
+{
+	struct test_init_limits_data *data = context;
+
+	if (data->num_reads < ARRAY_SIZE(data->read_sizes))
+		data->read_sizes[data->num_reads] = val_size;
+	data->num_reads++;
+
+	memset(val_buf, 0, val_size);
+
+	return 0;
+}
+
+static int test_init_limits_bus_write(void *context, const void *data,
+				      size_t count)
+{
+	return 0;
+}
+
+static const struct regmap_bus test_init_limits_bus = {
+	.read = test_init_limits_bus_read,
+	.write = test_init_limits_bus_write,
+	.init_limits = test_init_limits_bus_init_limits,
+};
+
+static const struct regmap_config test_init_limits_config = {
+	.reg_bits = 8,
+	.val_bits = 8,
+	.max_register = TEST_INIT_LIMITS_REGS - 1,
+	.cache_type = REGCACHE_FLAT,
+	.num_reg_defaults_raw = TEST_INIT_LIMITS_REGS,
+};
+
+static void test_init_limits(struct kunit *test)
+{
+	struct regmap_test_priv *priv = test->priv;
+	struct test_init_limits_data *data;
+	struct regmap *map;
+	int i, ret;
+
+	data = kunit_kzalloc(test, sizeof(*data), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, data);
+
+	map = regmap_init(priv->dev, &test_init_limits_bus, data,
+			  &test_init_limits_config);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(map));
+	if (IS_ERR(map))
+		return;
+
+	ret = kunit_add_action_or_reset(test, regmap_exit_action, map);
+	KUNIT_ASSERT_EQ(test, 0, ret);
+	if (ret)
+		return;
+
+	KUNIT_EXPECT_EQ(test, (size_t)TEST_INIT_LIMITS_MAX_RAW,
+			regmap_get_raw_read_max(map));
+	KUNIT_EXPECT_EQ(test, (size_t)TEST_INIT_LIMITS_MAX_RAW,
+			regmap_get_raw_write_max(map));
+
+	/*
+	 * regcache_hw_init() reads raw defaults during map initialization,
+	 * so the callback must already have set the limit which chunks the
+	 * readback.
+	 */
+	KUNIT_ASSERT_EQ(test, TEST_INIT_LIMITS_REGS / TEST_INIT_LIMITS_MAX_RAW,
+			data->num_reads);
+	for (i = 0; i < data->num_reads; i++)
+		KUNIT_EXPECT_EQ(test, (size_t)TEST_INIT_LIMITS_MAX_RAW,
+				data->read_sizes[i]);
+}
+
 static struct kunit_case regmap_test_cases[] = {
 	KUNIT_CASE_PARAM(basic_read_write, regcache_types_gen_params),
 	KUNIT_CASE_PARAM(read_bypassed, real_cache_types_gen_params),
@@ -2290,6 +2380,7 @@ static struct kunit_case regmap_test_cases[] = {
 	KUNIT_CASE_PARAM(raw_noinc_write, raw_test_types_gen_params),
 	KUNIT_CASE_PARAM(raw_sync, raw_test_cache_types_gen_params),
 	KUNIT_CASE_PARAM(raw_ranges, raw_test_cache_types_gen_params),
+	KUNIT_CASE(test_init_limits),
 	{}
 };
 
