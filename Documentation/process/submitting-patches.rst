@@ -496,8 +496,9 @@ If a person has had the opportunity to comment on a patch, but has not
 provided such comments, you may optionally add a ``Cc:`` tag to the patch.
 This tag documents that potentially interested parties have been included in
 the discussion. Note, this is one of only three tags you might be able to use
-without explicit permission of the person named (see 'Tagging people requires
-permission' below for details).
+without explicit permission of the person named (see
+:ref:`Tagging people requires permission <tagging_people>` below for
+details).
 
 Co-developed-by: states that the patch was co-created by multiple developers;
 it is used to give attribution to co-authors (in addition to the author
@@ -545,7 +546,8 @@ followed by a Closes: tag pointing to the report, unless the report is not
 available on the web. The Link: tag can be used instead of Closes: if the patch
 fixes a part of the issue(s) being reported. Note, the Reported-by tag is one
 of only three tags you might be able to use without explicit permission of the
-person named (see 'Tagging people requires permission' below for details).
+person named (see :ref:`Tagging people requires permission <tagging_people>`
+below for details).
 
 A Tested-by: tag indicates that the patch has been successfully tested (in
 some environment) by the person named.  This tag informs maintainers that
@@ -603,8 +605,9 @@ A Suggested-by: tag indicates that the patch idea is suggested by the person
 named and ensures credit to the person for the idea: if we diligently credit
 our idea reporters, they will, hopefully, be inspired to help us again in the
 future. Note, this is one of only three tags you might be able to use without
-explicit permission of the person named (see 'Tagging people requires
-permission' below for details).
+explicit permission of the person named (see
+:ref:`Tagging people requires permission <tagging_people>` below for
+details).
 
 A Fixes: tag indicates that the patch fixes a bug in a previous commit. It
 is used to make it easy to determine where an issue originated, which can help
@@ -834,8 +837,6 @@ lore.kernel.org archive link) is recommended to help reviewers::
 
 See more details on the proper patch format in the following
 references.
-
-.. _explicit_in_reply_to:
 
 Explicit In-Reply-To headers
 ----------------------------
