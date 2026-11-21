@@ -2532,36 +2532,44 @@ int fbnic_wait_all_queues_idle(struct fbnic_dev *fbd, bool may_fail)
 	return err;
 }
 
+struct fbnic_queue_idle_reg {
+	u32 reg;
+	u8 bits_per_q;
+};
+
 static int
 fbnic_wait_queue_idle(struct fbnic_net *fbn, bool rx, unsigned int idx)
 {
-	static const unsigned int tx_regs[] = {
-		FBNIC_QM_TWQ_IDLE(0), FBNIC_QM_TQS_IDLE(0),
-		FBNIC_QM_TDE_IDLE(0), FBNIC_QM_TCQ_IDLE(0),
+	static const struct fbnic_queue_idle_reg tx_regs[] = {
+		{ FBNIC_QM_TWQ_IDLE(0), 2 }, { FBNIC_QM_TQS_IDLE(0), 2 },
+		{ FBNIC_QM_TDE_IDLE(0), 2 }, { FBNIC_QM_TCQ_IDLE(0), 1 },
 	}, rx_regs[] = {
-		FBNIC_QM_HPQ_IDLE(0), FBNIC_QM_PPQ_IDLE(0),
-		FBNIC_QM_RCQ_IDLE(0),
+		{ FBNIC_QM_HPQ_IDLE(0), 1 }, { FBNIC_QM_PPQ_IDLE(0), 1 },
+		{ FBNIC_QM_RCQ_IDLE(0), 1 },
 	};
+	const struct fbnic_queue_idle_reg *regs;
 	struct fbnic_dev *fbd = fbn->fbd;
 	unsigned int val, mask, off;
-	const unsigned int *regs;
 	unsigned int reg_cnt;
 	int i, err;
 
 	regs = rx ? rx_regs : tx_regs;
 	reg_cnt = rx ? ARRAY_SIZE(rx_regs) : ARRAY_SIZE(tx_regs);
 
-	off = idx / 32;
-	mask = BIT(idx % 32);
-
 	for (i = 0; i < reg_cnt; i++) {
-		err = read_poll_timeout_atomic(fbnic_rd32, val, val & mask,
+		unsigned int bit = idx * regs[i].bits_per_q;
+
+		off = bit / 32;
+		mask = GENMASK(regs[i].bits_per_q - 1, 0) << (bit % 32);
+
+		err = read_poll_timeout_atomic(fbnic_rd32, val,
+					       (val & mask) == mask,
 					       2, 500000, false,
-					       fbd, regs[i] + off);
+					       fbd, regs[i].reg + off);
 		if (err) {
 			netdev_err(fbd->netdev,
 				   "wait for queue %s%d idle failed 0x%04x(%d): %08x (mask: %08x)\n",
-				   rx ? "Rx" : "Tx", idx, regs[i] + off, i,
+				   rx ? "Rx" : "Tx", idx, regs[i].reg + off, i,
 				   val, mask);
 			return err;
 		}
