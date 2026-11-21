@@ -465,6 +465,21 @@ config ARM_SP805_WATCHDOG
 	  ARM Primecell SP805 Watchdog timer. This will reboot your system when
 	  the timeout is reached.
 
+config ARM_TWD_WATCHDOG
+	tristate "ARM TWD (MPCore private) Watchdog"
+	depends on HAVE_ARM_TWD || COMPILE_TEST
+	depends on HAS_IOMEM
+	select WATCHDOG_CORE
+	help
+	  Say Y here to include support for the private watchdog found next
+	  to the local (TWD) timer of every CPU in ARM11 MPCore, Cortex-A5
+	  and Cortex-A9 MPCore systems. The watchdog of CPU0 is used as the
+	  system watchdog. A watchdog left running by the bootloader is
+	  taken over.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called arm_twd_wdt.
+
 config ARM_SBSA_WATCHDOG
 	tristate "ARM SBSA Generic Watchdog"
 	depends on ARM64
