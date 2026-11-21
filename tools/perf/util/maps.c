@@ -1457,13 +1457,3 @@ int maps__merge_in(struct maps *kmaps, struct map *new_map)
 	up_write(maps__lock(kmaps));
 	return 0;
 }
-
-void maps__load_first(struct maps *maps)
-{
-	down_read(maps__lock(maps));
-
-	if (maps__nr_maps(maps) > 0)
-		map__load(maps__maps_by_address(maps)[0]);
-
-	up_read(maps__lock(maps));
-}
