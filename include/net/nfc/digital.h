@@ -131,7 +131,15 @@ typedef void (*nfc_digital_cmd_complete_t)(struct nfc_digital_dev *ddev,
  * @switch_rf: Turns device radio on or off. The stack does not call explicitly
  *	switch_rf to turn the radio on. A call to in|tg_configure_hw must turn
  *	the device radio on.
- * @abort_cmd: Discard the last sent command.
+ * @abort_cmd: Discard the last sent command. When called from
+ *	nfc_digital_unregister_device(), the command is freed after this
+ *	returns, so the driver must ensure that no completion callback for
+ *	that command can run afterwards. The driver may do this in
+ *	abort_cmd() itself, or by serializing removal before calling
+ *	nfc_digital_unregister_device() (for example, by shutting the
+ *	device down and flushing its completion paths). Any completion
+ *	path started before that point must have finished before the
+ *	command is freed.
  *
  * Notes: Asynchronous functions have a timeout parameter. It is the driver
  *	responsibility to call the digital stack back through the
