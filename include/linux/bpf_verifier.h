@@ -456,7 +456,11 @@ struct loop_stack_entry {
 	/* an xreg: how many times the program came back to the header */
 	struct scalar trip_index;
 	bool trip_widened;	/* it was moved to a threshold, or it does not grow */
-	u64 exit_threshold;	/* by the jumps that the state passed and that leave the loop */
+	/*
+	 * The trip index at which a jump that the state passed leaves the loop.
+	 * Path-sensitive run: the bound that the jump on the iv saw.
+	 */
+	u64 exit_threshold;
 	/* Path-sensitive run: the jump that tests the iv, the value it saw, the trips left */
 	u32 iv_jump_idx;
 	u64 iv_prev, trips_left;
@@ -582,7 +586,10 @@ struct bpf_verifier_state {
 	struct bpf_reference_state *refs;
 	u32 insn_idx;
 	bool speculative;
-	/* an xreg has no value: unreachable. Only a path-sensitive run drops such a state. */
+	/*
+	 * An xreg has no value: unreachable. Only a path-sensitive run drops such a state.
+	 * The run also sets it when it is out of frames.
+	 */
 	bool infeasible;
 	/* an error only in a leftover, see check_held_in_leftover() */
 	bool holds_too_much;
@@ -1663,6 +1670,7 @@ static inline struct bpf_reg_state *cur_regs(struct bpf_verifier_env *env)
 	return cur_func(env)->regs;
 }
 
+#ifdef CONFIG_NET
 int bpf_prog_offload_verifier_prep(struct bpf_prog *prog);
 int bpf_prog_offload_verify_insn(struct bpf_verifier_env *env,
 				 int insn_idx, int prev_insn_idx);
@@ -1672,6 +1680,32 @@ bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
 			      struct bpf_insn *insn);
 void
 bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt);
+#else
+static inline int bpf_prog_offload_verifier_prep(struct bpf_prog *prog)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int bpf_prog_offload_verify_insn(struct bpf_verifier_env *env,
+					       int insn_idx, int prev_insn_idx)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int bpf_prog_offload_finalize(struct bpf_verifier_env *env)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
+						 struct bpf_insn *insn)
+{
+}
+
+static inline void bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
+{
+}
+#endif
 
 /* this lives here instead of in bpf.h because it needs to dereference tgt_prog */
 static inline u64 bpf_trampoline_compute_key(const struct bpf_prog *tgt_prog,
@@ -1758,7 +1792,7 @@ int bpf_partition_for_pessimized(struct bpf_verifier_env *env);
 void bpf_restore_precision(struct bpf_verifier_env *env);
 bool bpf_same_insns_unproven(struct bpf_verifier_env *env);
 int bpf_partition_more(struct bpf_verifier_env *env);
-bool bpf_undo_precision(struct bpf_verifier_env *env);
+int bpf_undo_precision(struct bpf_verifier_env *env);
 void bpf_precision_new_pass(struct bpf_verifier_env *env);
 u64 bpf_pass_max_cost(struct bpf_verifier_env *env);
 u64 bpf_precision_budget(struct bpf_verifier_env *env);
@@ -2562,7 +2596,7 @@ void bpf_collect_iv_thresholds(struct bpf_verifier_env *env);
 int bpf_guess_first_trips(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			  struct bpf_loop *loop);
 bool bpf_steps_are_constant(struct bpf_verifier_env *env, const struct loop_stack_entry *entry,
-			    const unsigned long *iv_xregs, bool infinite);
+			    const unsigned long *iv_xregs, bool infinite, u64 factor);
 void bpf_fast_forward_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
 			    struct bpf_verifier_state *cur, u64 factor, unsigned long *iv_xregs);
 

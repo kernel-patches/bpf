@@ -11240,6 +11240,8 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	if (state->curframe + 1 >= MAX_CALL_FRAMES) {
 		verbose(env, "the call stack of %d frames is too deep\n",
 			state->curframe + 2);
+		/* drop the path: a pass possibly does not have these calls in frames */
+		env->cur_state->infeasible |= env->path_sensitive;
 		return -E2BIG;
 	}
 	/* in the frames of the callers it has no end */
@@ -21046,32 +21048,36 @@ static int check_held_in_leftover(struct bpf_verifier_env *env,
  *	for (i = 0; i < 100000; i++) { if (rnd() && n < 8) n++; }
  * Two trips show a step also for 'sum += i', and more than 2^32 trips also for a ring index.
  * If the steps are not constant, the skip or "infinite" is a guess.
+ * If the bound moved, there is no skip. A later saved trip can have the same bound.
  * Returns 1 if it skipped these trips.
  */
 static int fast_forward_trips(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
 {
 	struct bpf_verifier_state *cur = env->cur_state, *old = &entry->header_state->st;
-	u32 period = entry->trip - bpf_top_loop(old->frame[old->curframe])->trip;
+	const struct loop_stack_entry *saved = bpf_top_loop(old->frame[old->curframe]);
+	u32 period = entry->trip - saved->trip;
 	bool infinite = entry->trips_left > BPF_MAX_TRIPS, guess;
+	u64 factor = div_u64(entry->trips_left - 1, period);
 	DECLARE_BITMAP(iv_xregs, MAX_BPF_XREG) = {};
 	int err;
 
 	/* the answer needs a walk over the program */
 	if ((infinite ? entry->loop->infinite : entry->trips_left <= period) ||
+	    (!infinite && saved->exit_threshold != entry->exit_threshold) ||
 	    (u64)entry->trip * entry->loop->nr_insns < env->prog->len)
 		return 0;
 	bpf_fast_forward_xregs(env, old, cur, 0, iv_xregs);
 	err = bpf_jumps_see_same(env, old, cur, entry->iv_jump_idx, infinite ? NULL : iv_xregs);
 	if (err <= 0)
 		return err;
-	guess = !bpf_steps_are_constant(env, entry, iv_xregs, infinite);
+	guess = !bpf_steps_are_constant(env, entry, iv_xregs, infinite, factor);
 	if (infinite) {
 		entry->loop->infinite = true;
 		entry->loop->infinite_is_guess = guess || env->run_has_guess;
 		return 0;
 	}
 	env->run_has_guess |= guess;
-	bpf_fast_forward_xregs(env, old, cur, div_u64(entry->trips_left - 1, period), iv_xregs);
+	bpf_fast_forward_xregs(env, old, cur, factor, iv_xregs);
 	entry->iv_jump_idx = 0;
 	entry->trips_left = 1;
 	return 1;
@@ -23678,8 +23684,13 @@ static int do_check_all(struct bpf_verifier_env *env)
 			err = ret;
 			break;
 		}
-		if (bpf_undo_precision(env))
+		more = bpf_undo_precision(env);
+		if (more > 0)
 			continue;
+		if (more == -ENOMEM && !good_pass) {
+			err = more;
+			break;
+		}
 		if (ret && good_pass) {
 			restore_snapshot(env, good_pass);
 			err = 0;

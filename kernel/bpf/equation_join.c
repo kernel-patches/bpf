@@ -622,12 +622,13 @@ bool bpf_equations_join_forgets(struct bpf_verifier_env *env, const struct bpf_v
 	return false;
 }
 
-/* Which xregs of @xregs in frame @fr have one sym? */
+/* Which xregs of @xregs in frame @fr have one sym, and how does one give the other? */
 u32 bpf_equations_hash(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u32 fr,
 		       const unsigned long *xregs, u32 bits)
 {
-	const struct bpf_xreg_equation *xreg_eq;
-	u32 i, hash = 0, *first;
+	const struct bpf_xreg_equation *xreg_eq, *first;
+	u32 i, hash = 0, *first_pos;
+	u64 key[5];
 
 	for (i = 0; i < st->equations.sym_cnt; i++)
 		env->eq_env->scratch[i].new_symno = U32_MAX;
@@ -635,10 +636,18 @@ u32 bpf_equations_hash(struct bpf_verifier_env *env, const struct bpf_verifier_s
 		if (xreg_eq->xreg >> 32 != fr || (u32)xreg_eq->xreg >= bits ||
 		    !test_bit((u32)xreg_eq->xreg, xregs))
 			continue;
-		first = &env->eq_env->scratch[xreg_eq->sym].new_symno;
-		if (*first != U32_MAX)
-			hash = jhash_2words(*first, xreg_eq->xreg, hash);
-		*first = min_t(u32, *first, xreg_eq->xreg);
+		first_pos = &env->eq_env->scratch[xreg_eq->sym].new_symno;
+		if (*first_pos == U32_MAX) {
+			*first_pos = xreg_eq - st->equations.xreg_equations;
+			continue;
+		}
+		first = &st->equations.xreg_equations[*first_pos];
+		key[0] = first->xreg;
+		key[1] = xreg_eq->xreg;
+		key[2] = first->coef;
+		key[3] = xreg_eq->coef;
+		key[4] = first->coef * xreg_eq->off - xreg_eq->coef * first->off;
+		hash = jhash(key, sizeof(key), hash);
 	}
 	return hash;
 }
@@ -756,11 +765,19 @@ static void note_trips_left(struct bpf_verifier_env *env, struct loop_stack_entr
 	far_end = value + (step < 0 ? 0 : jmp32 ? x->r32.size : x->r64.size);
 	if (e->iv_jump_idx)
 		e->trips_left = step ? compute_trip_count(step, &far_end, op, jmp32, *bound) : 0;
-	if (e->iv_jump_idx && step && is_body_jump && !e->trips_left)
-		e->trips_left = compute_trip_count(step, &far_end, bpf_rev_opcode(op),
-						   jmp32, *bound);
+	if (e->iv_jump_idx && step && is_body_jump && !e->trips_left) {
+		op = bpf_rev_opcode(op);
+		e->trips_left = compute_trip_count(step, &far_end, op, jmp32, *bound);
+	}
 	e->iv_jump_idx = env->insn_idx;
 	e->iv_prev = value;
+	/* the jump moves the other end of the bound */
+	op = bpf_signed_opcode(op);
+	e->exit_threshold = jmp32 ? bound->r32.base : bound->r64.base;
+	if (op != BPF_JSGT && op != BPF_JSGE && (op != BPF_JNE || step > 0))
+		e->exit_threshold += jmp32 ? bound->r32.size : bound->r64.size;
+	if (jmp32)
+		e->exit_threshold = (u32)e->exit_threshold;
 }
 
 static void move_bounds(struct bpf_verifier_env *env, struct scalar *s, bool is_ptr, u64 off)
@@ -820,24 +837,27 @@ static u32 slot_of_insn(struct bpf_verifier_env *env, const struct bpf_insn *ins
 	return 0;
 }
 
-/* If the operand has a constant step, the result has one too. @prev: in the same block. */
+/*
+ * If the operand has a constant step, the result has one too. @prev: in the same block.
+ * @wraps: the low 32 bits of the result can wrap.
+ */
 static bool keeps_constant_step(const struct bpf_insn *insn, const struct bpf_insn *prev,
-				bool infinite)
+				bool wraps)
 {
 	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
 
 	if (bpf_is_ldimm64(insn))
 		return true;
-	if (class != BPF_ALU64 && (class != BPF_ALU || infinite))
+	if (class != BPF_ALU64 && (class != BPF_ALU || wraps))
 		return false;
 	if (op == BPF_MOV)
-		return !insn->off || (!infinite && insn->off == 32);
+		return !insn->off || (!wraps && insn->off == 32);
 	if (BPF_SRC(insn->code) == BPF_X)
 		return false;
 	if (op == BPF_ADD || op == BPF_SUB)
 		return true;
 	/* x <<= 32; x >>= 32; */
-	return !infinite && insn->imm == 32 &&
+	return !wraps && insn->imm == 32 &&
 	       (op == BPF_LSH || ((op == BPF_RSH || op == BPF_ARSH) && prev && prev->imm == 32 &&
 				  prev->code == (BPF_ALU64 | BPF_LSH | BPF_K) &&
 				  prev->dst_reg == insn->dst_reg));
@@ -856,6 +876,26 @@ static u64 step_of_xreg(struct bpf_verifier_env *env, const struct loop_stack_en
 	       bpf_find_var_bounds(env, &entry->header_state->st, xreg, &is_ptr)->r64.base;
 }
 
+/* An xreg of @xregs passes a multiple of 2^31 if it moves @factor times as far */
+static bool skip_wraps(struct bpf_verifier_env *env, const struct loop_stack_entry *entry,
+		       const unsigned long *xregs, u64 factor)
+{
+	u64 off, end;
+	struct cnum64 x;
+	bool is_ptr;
+	u32 n;
+
+	for_each_set_bit(n, xregs, MAX_BPF_XREG) {
+		x = bpf_find_var_bounds(env, env->cur_state,
+					bpf_xreg(env->cur_state->curframe, n), &is_ptr)->r64;
+		off = step_of_xreg(env, entry, xregs, n) * factor;
+		end = x.base + x.size;
+		if (!is_ptr && ((x.base ^ (x.base + off)) | (end ^ (end + off))) >> 31)
+			return true;
+	}
+	return false;
+}
+
 /*
  * Two trips gave the steps. Does each trip add the same constant to the operands of the jump on
  * the iv, and to @iv_xregs? The code shows it, or a pass saw it at the header.
@@ -863,9 +903,10 @@ static u64 step_of_xreg(struct bpf_verifier_env *env, const struct loop_stack_en
  *	sum += i; x = n / i;		no
  *	a = b; b = 0;			no, if a moved and b did not
  * @infinite: above 2^32 trips. Only the jump counts, and 32-bit insns wrap.
+ * @factor: of the skip. If a 32-bit insn wraps in it, the upper half of its result has no step.
  */
 bool bpf_steps_are_constant(struct bpf_verifier_env *env, const struct loop_stack_entry *entry,
-			    const unsigned long *iv_xregs, bool infinite)
+			    const unsigned long *iv_xregs, bool infinite, u64 factor)
 {
 	const struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	const struct bpf_insn *insn, *prev = NULL;
@@ -875,11 +916,12 @@ bool bpf_steps_are_constant(struct bpf_verifier_env *env, const struct loop_stac
 	u16 new_step = 0;	/* the last write in this basic block has a constant step */
 	u16 last_round, uses_no_step;
 	u64 steps[MAX_BPF_EXT_REG];
-	bool has_step;
+	bool has_step, wraps, insn_wraps;
 	u32 slot;
 	int n;
 
 	bitmap_andnot(not_linear, iv_xregs, loop->linear_xregs, MAX_BPF_XREG);
+	wraps = skip_wraps(env, entry, not_linear, factor);
 	do {
 		last_round = no_step;
 		bpf_add_cost(env, loop->nr_insns, BPF_COST_SCAN);
@@ -896,11 +938,13 @@ bool bpf_steps_are_constant(struct bpf_verifier_env *env, const struct loop_stac
 			if (n == entry->iv_jump_idx && (uses_no_step & ~aux[n].const_reg_mask))
 				return false;
 			slot = slot_of_insn(env, insn);
-			has_step = !slot ? keeps_constant_step(insn, prev, infinite) :
+			insn_wraps = infinite || (wraps && (BPF_CLASS(insn->code) != BPF_ALU ||
+							    aux[n].zext_dst));
+			has_step = !slot ? keeps_constant_step(insn, prev, insn_wraps) :
 				   test_bit(bpf_xreg_to_spi(slot),
 					    aux[loop->header].live_stack_before) &&
 				   !test_bit(slot, not_linear) &&
-				   (!infinite || BPF_SIZE(insn->code) == BPF_DW);
+				   (!insn_wraps || BPF_SIZE(insn->code) == BPF_DW);
 			/* a copy that the run made has the step of its source */
 			if (has_step && aux[n].seen && (aux[n].def_regs & ~aux[n].use_regs))
 				steps[insn->dst_reg] =
