@@ -1763,6 +1763,7 @@ retry:
 		sock_map_remove_links(sk, psock);
 		rcu_read_unlock();
 		sk_psock_stop(psock);
+		sk_psock_set_state(psock, SK_PSOCK_CLOSING);
 		release_sock(sk);
 		cancel_delayed_work_sync(&psock->work);
 		sk_psock_put(sk, psock);

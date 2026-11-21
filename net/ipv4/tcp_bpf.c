@@ -710,12 +710,33 @@ static struct proto *tcpv6_prot_saved __read_mostly;
 static DEFINE_SPINLOCK(tcpv6_prot_lock);
 static struct proto tcp_bpf_prots[TCP_BPF_NUM_PROTS][TCP_BPF_NUM_CFGS];
 
+static int tcp_bpf_disconnect(struct sock *sk, int flags)
+{
+	struct sk_psock *psock;
+	bool reject;
+
+	/*
+	 * A new connection must not reuse the psock. Let through a child
+	 * that nobody has accepted yet, a socket in close() and a listener.
+	 */
+	rcu_read_lock();
+	psock = sk_psock(sk);
+	reject = psock && sk->sk_socket && sk->sk_state != TCP_LISTEN &&
+		 !sk_psock_test_state(psock, SK_PSOCK_CLOSING);
+	rcu_read_unlock();
+	if (reject)
+		return -EOPNOTSUPP;
+
+	return tcp_disconnect(sk, flags);
+}
+
 static void tcp_bpf_rebuild_protos(struct proto prot[TCP_BPF_NUM_CFGS],
 				   struct proto *base)
 {
 	prot[TCP_BPF_BASE]			= *base;
 	prot[TCP_BPF_BASE].destroy		= sock_map_destroy;
 	prot[TCP_BPF_BASE].close		= sock_map_close;
+	prot[TCP_BPF_BASE].disconnect		= tcp_bpf_disconnect;
 	prot[TCP_BPF_BASE].recvmsg		= tcp_bpf_recvmsg;
 	prot[TCP_BPF_BASE].sock_is_readable	= sk_msg_is_readable;
 	prot[TCP_BPF_BASE].ioctl		= tcp_bpf_ioctl;
