@@ -932,7 +932,7 @@ int bpf_bprintf_prepare(const char *fmt, u32 fmt_size, const u64 *raw_args,
 			i++;
 		if (fmt[i] >= '1' && fmt[i] <= '9') {
 			i++;
-			while (fmt[i] >= '0' && fmt[i] <= '9')
+			while (isdigit(fmt[i]))
 				i++;
 		}
 
