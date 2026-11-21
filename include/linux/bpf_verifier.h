@@ -25,7 +25,7 @@
  */
 static inline bool bpf_must_abort(void)
 {
-	cond_resched();
+	cond_resched_tasks_rcu_qs();
 	return task_sigpending(current) &&
 	       (__fatal_signal_pending(current) || freezing(current) ||
 		(READ_ONCE(current->jobctl) & JOBCTL_TRAP_FREEZE));
