@@ -879,8 +879,14 @@ static int scmi_dvfs_device_opps_add(const struct scmi_protocol_handle *ph,
 		else
 			freq = dom->opp[idx].indicative_freq * dom->mult_factor;
 
-		/* All OPPs above the sustained frequency are treated as turbo */
-		data.turbo = freq > dom->sustained_freq_khz * 1000UL;
+		/*
+		 * All OPPs above the sustained frequency are treated as turbo.
+		 * A sustained freq/perf of 0 means the firmware didn't provide
+		 * one, so don't mark anything as turbo in that case.
+		 */
+		data.turbo = dom->sustained_freq_khz &&
+			     dom->sustained_perf_level &&
+			     freq > dom->sustained_freq_khz * 1000UL;
 
 		data.level = dom->opp[idx].perf;
 		data.freq = freq;
