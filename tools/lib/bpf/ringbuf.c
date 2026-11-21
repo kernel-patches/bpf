@@ -255,55 +255,158 @@ static int ringbuf_validate_callbacks(const struct ring_buffer *rb)
 	return 0;
 }
 
+/*
+ * The private state aliases the public iterator's opaque __u64 storage.
+ * Allow that access without violating strict aliasing rules.
+ */
+struct ring_buffer_iter_state {
+	struct ring *ring;
+	unsigned long cons_pos;
+	unsigned long prod_pos;
+	bool consumer_dirty;
+	bool needs_wakeup;
+} __attribute__((__may_alias__));
+
+_Static_assert(sizeof(struct ring_buffer_iter_state) <=
+		       sizeof(struct ring_buffer_iter),
+	       "ring buffer iterator state exceeds opaque storage");
+_Static_assert(__alignof__(struct ring_buffer_iter_state) <=
+		       __alignof__(struct ring_buffer_iter),
+	       "ring buffer iterator is under-aligned");
+
+static void ringbuf_iter_publish(struct ring_buffer_iter_state *state)
+{
+	if (!state->consumer_dirty)
+		return;
+
+	/* Release consumed records to the producer. */
+	__atomic_store_n(state->ring->consumer_pos, state->cons_pos,
+			 __ATOMIC_RELEASE);
+	state->consumer_dirty = false;
+	state->needs_wakeup = true;
+}
+
+static void ringbuf_iter_init(struct ring_buffer_iter *it, struct ring *r)
+{
+	struct ring_buffer_iter_state *state = (void *)it;
+
+	memset(it, 0, sizeof(*it));
+	state->ring = r;
+	state->cons_pos = __atomic_load_n(r->consumer_pos, __ATOMIC_ACQUIRE);
+	state->prod_pos = state->cons_pos;
+}
+
+int ring_buffer_iter_new(struct ring_buffer_iter *it, struct ring *r)
+{
+	if (r->overwrite)
+		return libbpf_err(-EOPNOTSUPP);
+
+	ringbuf_iter_init(it, r);
+	return 0;
+}
+
+static const void *ringbuf_iter_next(struct ring_buffer_iter *it, size_t *size,
+				     bool sync)
+{
+	struct ring_buffer_iter_state *state = (void *)it;
+	struct ring *r = state->ring;
+	int *len_ptr, len;
+
+	if (!r)
+		return NULL;
+	if (sync)
+		ringbuf_iter_publish(state);
+
+	for (;;) {
+		if (state->cons_pos == state->prod_pos) {
+			ringbuf_iter_publish(state);
+			if (state->needs_wakeup) {
+				/*
+				 * Ensure either this sees a new record or its producer sees
+				 * the updated consumer position and sends a notification.
+				 */
+				__atomic_thread_fence(__ATOMIC_SEQ_CST);
+				state->needs_wakeup = false;
+			}
+			state->prod_pos = __atomic_load_n(r->producer_pos,
+							  __ATOMIC_ACQUIRE);
+		}
+
+		if (state->cons_pos == state->prod_pos) {
+			state->ring = NULL;
+			return NULL;
+		}
+
+		len_ptr = r->data + (state->cons_pos & r->mask);
+		len = __atomic_load_n(len_ptr, __ATOMIC_ACQUIRE);
+
+		/* Publish prior records and retry a record that is still busy. */
+		if (len & BPF_RINGBUF_BUSY_BIT) {
+			ringbuf_iter_publish(state);
+			if (!state->needs_wakeup) {
+				state->ring = NULL;
+				return NULL;
+			}
+			/* Order the consumer update before retrying the header. */
+			__atomic_thread_fence(__ATOMIC_SEQ_CST);
+			state->needs_wakeup = false;
+			continue;
+		}
+
+		state->cons_pos += roundup_len(len);
+		state->consumer_dirty = true;
+
+		if (len & BPF_RINGBUF_DISCARD_BIT) {
+			if (sync)
+				ringbuf_iter_publish(state);
+			continue;
+		}
+
+		if (size)
+			*size = len;
+		return (void *)len_ptr + BPF_RINGBUF_HDR_SZ;
+	}
+}
+
+const void *ring_buffer_iter_next(struct ring_buffer_iter *it, size_t *size,
+				  bool sync)
+{
+	return ringbuf_iter_next(it, size, sync);
+}
+
+void ring_buffer_iter_destroy(struct ring_buffer_iter *it)
+{
+	struct ring_buffer_iter_state *state = (void *)it;
+
+	ringbuf_iter_publish(state);
+	/* Order publication before a producer load in a later invocation. */
+	if (state->needs_wakeup)
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	memset(it, 0, sizeof(*it));
+}
+
 static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 {
-	int *len_ptr, len, err;
+	struct ring_buffer_iter it
+		__attribute__((cleanup(ring_buffer_iter_destroy))) = {};
+	const void *sample;
+	size_t size;
+	int err = ringbuf_validate(r);
 	/* 64-bit to avoid overflow in case of extreme application behavior */
 	int64_t cnt = 0;
-	unsigned long cons_pos, prod_pos;
-	bool got_new_data;
-	void *sample;
 
-	err = ringbuf_validate(r);
 	if (err)
 		return err;
 	if (n == 0)
 		return 0;
 
-	cons_pos = smp_load_acquire(r->consumer_pos);
-	do {
-		got_new_data = false;
-		prod_pos = smp_load_acquire(r->producer_pos);
-		while (prod_pos - cons_pos > 0) {
-			len_ptr = r->data + (cons_pos & r->mask);
-			len = smp_load_acquire(len_ptr);
-
-			/* sample not committed yet, bail out for now */
-			if (len & BPF_RINGBUF_BUSY_BIT)
-				goto done;
-
-			got_new_data = true;
-			cons_pos += roundup_len(len);
-
-			if ((len & BPF_RINGBUF_DISCARD_BIT) == 0) {
-				sample = (void *)len_ptr + BPF_RINGBUF_HDR_SZ;
-				err = r->sample_cb(r->ctx, sample, len);
-				if (err < 0) {
-					/* update consumer pos and bail out */
-					smp_store_release(r->consumer_pos,
-							  cons_pos);
-					return err;
-				}
-				cnt++;
-			}
-
-			smp_store_release(r->consumer_pos, cons_pos);
-
-			if (cnt >= n)
-				goto done;
-		}
-	} while (got_new_data);
-done:
+	ringbuf_iter_init(&it, r);
+	while (cnt < n && (sample = ringbuf_iter_next(&it, &size, true))) {
+		err = r->sample_cb(r->ctx, (void *)sample, size);
+		if (err < 0)
+			return err;
+		cnt++;
+	}
 	return cnt;
 }
 
@@ -412,8 +515,8 @@ struct ring *ring_buffer__ring(struct ring_buffer *rb, unsigned int idx)
 
 unsigned long ring__consumer_pos(const struct ring *r)
 {
-	/* Synchronizes with smp_store_release() in ringbuf_process_ring(). */
-	return smp_load_acquire(r->consumer_pos);
+	/* Synchronizes with the iterator's release store. */
+	return __atomic_load_n(r->consumer_pos, __ATOMIC_ACQUIRE);
 }
 
 unsigned long ring__producer_pos(const struct ring *r)
@@ -421,7 +524,7 @@ unsigned long ring__producer_pos(const struct ring *r)
 	/* Synchronizes with smp_store_release() in __bpf_ringbuf_reserve() in
 	 * the kernel.
 	 */
-	return smp_load_acquire(r->producer_pos);
+	return __atomic_load_n(r->producer_pos, __ATOMIC_ACQUIRE);
 }
 
 size_t ring__avail_data_size(const struct ring *r)

@@ -3,6 +3,7 @@
 
 #include <linux/bpf.h>
 #include <sched.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
@@ -22,7 +23,8 @@ struct {
 } ringbuf SEC(".maps");
 
 int pid = 0;
-long value = 0;
+__s64 value = 0;
+bool discard = false;
 
 SEC("fentry/" SYS_PREFIX "sys_getpgid")
 int test_ringbuf_n(void *ctx)
@@ -41,7 +43,10 @@ int test_ringbuf_n(void *ctx)
 	sample->value = value;
 	bpf_get_current_comm(sample->comm, sizeof(sample->comm));
 
-	bpf_ringbuf_submit(sample, 0);
+	if (discard)
+		bpf_ringbuf_discard(sample, 0);
+	else
+		bpf_ringbuf_submit(sample, 0);
 
 	return 0;
 }

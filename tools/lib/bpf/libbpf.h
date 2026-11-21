@@ -1541,7 +1541,17 @@ struct ring_buffer;
 struct ring;
 struct user_ring_buffer;
 
+/* Opaque caller-owned iterator state. */
+struct ring_buffer_iter {
+	__u64 __opaque[8];
+};
+
 /* Callback-based consumption is unsupported for BPF_F_RB_OVERWRITE maps. */
+/*
+ * A negative return stops consumption; non-negative values continue. Stopping
+ * can leave records queued without a new readiness notification. Before
+ * waiting for readiness again, consume until no records remain.
+ */
 typedef int (*ring_buffer_sample_fn)(void *ctx, void *data, size_t size);
 
 struct ring_buffer_opts {
@@ -1558,6 +1568,20 @@ LIBBPF_API int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 				ring_buffer_sample_fn sample_cb, void *ctx);
 LIBBPF_API int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
 LIBBPF_API int ring_buffer__consume(struct ring_buffer *rb);
+
+/**
+ * @brief **ring_buffer__consume_n()** consumes up to a requested number of
+ * records from a ring buffer manager without event polling.
+ *
+ * @param rb A ring buffer manager object.
+ * @param n Maximum number of records to consume.
+ * @return The number of records consumed, or a negative error code on failure.
+ *
+ * Reaching the requested bound does not establish that every ring is empty.
+ * Records can remain queued without a new readiness notification. Before
+ * calling ring_buffer__poll() or waiting on ring_buffer__epoll_fd(), call
+ * ring_buffer__consume() until it returns 0.
+ */
 LIBBPF_API int ring_buffer__consume_n(struct ring_buffer *rb, size_t n);
 LIBBPF_API int ring_buffer__epoll_fd(const struct ring_buffer *rb);
 
@@ -1574,6 +1598,68 @@ LIBBPF_API int ring_buffer__epoll_fd(const struct ring_buffer *rb);
  */
 LIBBPF_API struct ring *ring_buffer__ring(struct ring_buffer *rb,
 					  unsigned int idx);
+
+/**
+ * @brief **ring_buffer_iter_new()** initializes a caller-owned iterator for a
+ * ring buffer map.
+ *
+ * @param it Pointer to the iterator to initialize.
+ * @param r Ring buffer map to iterate. Its ring buffer manager must remain
+ * valid until the iterator is destroyed.
+ * @return 0 on success; a negative error code on failure.
+ *
+ * Every successful call must be paired with ring_buffer_iter_destroy() before
+ * the iterator storage is reused or the ring buffer manager is freed. An
+ * active iterator must not be copied. On failure, the iterator is unchanged.
+ *
+ * A ring consumed only through iterators may be registered with a NULL sample
+ * callback. A sample callback is required to consume records through
+ * callback-based APIs.
+ *
+ * Only one iterator or callback-based consumer may operate on a ring buffer
+ * map at a time. BPF_F_RB_OVERWRITE ring buffer maps are not supported.
+ */
+LIBBPF_API int ring_buffer_iter_new(struct ring_buffer_iter *it,
+				    struct ring *r);
+
+/**
+ * @brief **ring_buffer_iter_next()** returns the next available record.
+ *
+ * @param it Pointer to an initialized ring buffer iterator.
+ * @param size Optional pointer that receives the record size.
+ * @param sync Publish consumed records before advancing.
+ * @return A read-only pointer to the record data, or NULL if the iterator is
+ * exhausted.
+ *
+ * The returned record's data becomes invalid on the next call to
+ * ring_buffer_iter_next() or ring_buffer_iter_destroy(), regardless of sync.
+ * When sync is true, this call publishes records returned by earlier calls
+ * before inspecting another one. Otherwise publication may be deferred until
+ * the iterator refreshes the producer position, observes a busy record, or
+ * is destroyed. Once this function returns NULL, it continues returning NULL.
+ * Create a new iterator to check the ring again.
+ *
+ * Only a NULL return establishes a notification-safe observation: after
+ * publishing the consumer position, the iterator observed no committed record.
+ * Before waiting for ring buffer readiness, drive an iterator to NULL. If an
+ * iterator was destroyed early, create another iterator and drive it to NULL
+ * before waiting.
+ */
+LIBBPF_API const void *ring_buffer_iter_next(struct ring_buffer_iter *it,
+					     size_t *size, bool sync);
+
+/**
+ * @brief **ring_buffer_iter_destroy()** destroys a ring buffer iterator.
+ *
+ * @param it Pointer to a zero-initialized iterator or one initialized by
+ * ring_buffer_iter_new().
+ *
+ * Any record returned by the previous ring_buffer_iter_next() call is consumed.
+ * Destroying an iterator before ring_buffer_iter_next() returns NULL publishes
+ * the consumed position, but records can remain queued without a new readiness
+ * notification.
+ */
+LIBBPF_API void ring_buffer_iter_destroy(struct ring_buffer_iter *it);
 
 /**
  * @brief **ring__consumer_pos()** returns the current consumer position in the
@@ -1640,6 +1726,10 @@ LIBBPF_API int ring__consume(struct ring *r);
  * @param r A ringbuffer object.
  * @param n Maximum number of records to consume.
  * @return The number of records consumed, or a negative error code on failure.
+ *
+ * Reaching the requested bound does not establish that the ring is empty.
+ * Records can remain queued without a new readiness notification. Before
+ * waiting on ring__map_fd(), call ring__consume() until it returns 0.
  */
 LIBBPF_API int ring__consume_n(struct ring *r, size_t n);
 
