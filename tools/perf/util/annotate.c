@@ -167,7 +167,7 @@ annotated_source__hist_entry(struct annotated_source *src, const struct evsel *e
  * unannotated symbols do not pay the memory cost of struct annotation.
  */
 static struct rw_semaphore _annotations_lock;
-static struct hashmap *annotations GUARDED_BY(_annotations_lock);
+static struct hashmap *annotations __guarded_by(&_annotations_lock);
 static atomic_size_t nr_annotations;
 
 static void annotations_lock_init(void)
@@ -175,7 +175,7 @@ static void annotations_lock_init(void)
 	init_rwsem(&_annotations_lock);
 }
 
-static struct rw_semaphore *annotations_lock(void) LOCK_RETURNED(_annotations_lock)
+static struct rw_semaphore *annotations_lock(void) __returns_ctx_lock(&_annotations_lock)
 {
 	static pthread_once_t annotations_lock_once = PTHREAD_ONCE_INIT;
 
@@ -796,7 +796,7 @@ static struct mutex *annotation__get_mutex(const struct annotation *notes)
 }
 
 void annotation__lock(struct annotation *notes)
-	NO_THREAD_SAFETY_ANALYSIS
+	__no_context_analysis
 {
 	struct mutex *mutex = annotation__get_mutex(notes);
 
@@ -805,7 +805,7 @@ void annotation__lock(struct annotation *notes)
 }
 
 void annotation__unlock(struct annotation *notes)
-	NO_THREAD_SAFETY_ANALYSIS
+	__no_context_analysis
 {
 	struct mutex *mutex = annotation__get_mutex(notes);
 
