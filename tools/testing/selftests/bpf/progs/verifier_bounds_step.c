@@ -38,7 +38,7 @@ __naked void step_arith64_no_overflow(void)
 /*
  * Safe ALU32 multiplication and addition preserve the stride and scale its base:
  * step=0+3 -> step=1+3 -> step=2+6. MOV32 preserves the result.
- * LSH32 currently resets the stride, but must preserve the correct upper bound.
+ * LSH32 resets the stride, the equation of the result tells it again.
  */
 SEC("socket")
 __success __log_level(2)
@@ -46,7 +46,7 @@ __msg("w0 *= 3 {{.*}}step=0+3)")
 __msg("w0 += 1 {{.*}}step=1+3)")
 __msg("w0 *= 2 {{.*}}step=2+6)")
 __msg("w1 = w0 {{.*}}R0=scalar({{.*}}step=2+6) R1=scalar({{.*}}step=2+6)")
-__msg("w0 <<= 1 {{.*}}smax=umax=smax32=umax32=3064,") __no_step
+__msg("w0 <<= 1 {{.*}}smax=umax=smax32=umax32=3064,{{.*}}step=4+12)")
 __naked void step_arith32_no_overflow(void)
 {
 	asm volatile ("					\
@@ -93,13 +93,14 @@ __naked void step_neg_value_range(void)
  * incorrectly narrows the result to 1.
  * Shifting the same input left by 1 gives {0xfffffff8, 0xfffffffe};
  * inferring step=0+6 incorrectly narrows the result to 0xfffffffc.
+ * The equation of a result tells the right base.
  */
 SEC("socket")
 __success __log_level(2)
 __msg("w0 *= 7 {{.*}}umax=0xffffffff,") __no_step
 __msg("r2 = r0 {{.*}}R0=scalar({{.*}}step=0+3) R2=scalar({{.*}}step=0+3)")
-__msg("w0 += 4 {{.*}}smax=umax=smax32=umax32=3,") __no_step
-__msg("w2 <<= 1 {{.*}}smax=umax=umax32=0xfffffffe,") __no_step
+__msg("w0 += 4 {{.*}}smax=umax=smax32=umax32=3,{{.*}}step=0+3)")
+__msg("w2 <<= 1 {{.*}}smax=umax=umax32=0xfffffffe,{{.*}}step=2+6)")
 __naked void step_arith32_overflow(void)
 {
 	asm volatile ("					\
@@ -132,16 +133,18 @@ __naked void step_arith32_overflow(void)
  *
  * Shifting {0x4000000000000008, 0x400000000000000b} left by 1 gives
  * {S64_MIN + 16, S64_MIN + 22}. Keeping step=0+6 excludes both.
+ *
+ * The equation of a result tells the right base.
  */
 SEC("socket")
 __success __log_level(2)
-__msg("r0 *= 3 {{.*}}smax=0x8000000000000004,") __no_step
+__msg("r0 *= 3 {{.*}}smax=0x8000000000000004,{{.*}}step=2+3)")
 __msg("r0 += r1 {{.*}}step=0+3)")
-__msg("r0 += 5 {{.*}}smax=0x8000000000000003,") __no_step
+__msg("r0 += 5 {{.*}}smax=0x8000000000000003,{{.*}}step=1+3)")
 __msg("r0 += r1 {{.*}}step=2+3)")
-__msg("r0 += -5 {{.*}}umax=0x7fffffffffffffff,") __no_step
+__msg("r0 += -5 {{.*}}umax=0x7fffffffffffffff,{{.*}}step=1+3)")
 __msg("r0 += r1 {{.*}}step=0+3)")
-__msg("r0 <<= 1 {{.*}}smax=0x8000000000000016,") __no_step
+__msg("r0 <<= 1 {{.*}}smax=0x8000000000000016,{{.*}}step=2+6)")
 __naked void step_arith64_overflow(void)
 {
 	asm volatile ("					\
@@ -231,11 +234,11 @@ __naked void step_mov32_negative(void)
 SEC("socket")
 __success __log_level(2)
 __msg("r0 += 128 {{.*}}step=2+3)")
-__msg("r0 = (s8)r0 {{.*}}smax=smax32=-125,") __no_step
+__msg("r0 = (s8)r0 {{.*}}smax=smax32=-125,{{.*}}step=1+3)")
 __msg("r0 += 32768 {{.*}}step=2+3)")
-__msg("r0 = (s16)r0 {{.*}}smax=smax32=-32765,") __no_step
+__msg("r0 = (s16)r0 {{.*}}smax=smax32=-32765,{{.*}}step=1+3)")
 __msg("r0 += r1 {{.*}}step=2+3)")
-__msg("r0 = (s32)r0 {{.*}}smax=0xffffffff80000003,") __no_step
+__msg("r0 = (s32)r0 {{.*}}smax=0xffffffff80000003,{{.*}}step=1+3)")
 __naked void step_movsx(void)
 {
 	asm volatile ("					\
@@ -329,18 +332,18 @@ l_out_%=:						\
  * r1 = (s16)r0  -> [0, 168]    step=0+24
  * r0 += -24     -> [-24, 144]  step=0+24
  * r2 = (s16)r0  -> [-24, 144]  step=0+24
- * r3 = (s8)r0   -> [-128, 127] no step
+ * r3 = (s8)r0   -> [-128, 120] no step
  * w4 = (s16)w1  -> [0, 168]    step=0+24
- * w5 = (s8)w1   -> [-128, 127] no step
+ * w5 = (s8)w1   -> [-128, 120] no step
  * Bounds and step stay in sync, the step is dropped when the value does not fit.
  */
 SEC("socket")
 __success __log_level(2)
 __msg("r1 = (s16)r0 {{.*}}R1=scalar(smin=smin32=0,smax=umax=smax32=umax32=168,{{.*}}step=0+24)")
 __msg("r2 = (s16)r0 {{.*}}R2=scalar(smin=smin32=-24,smax=smax32=144,{{.*}}step=0+24)")
-__msg("r3 = (s8)r0 {{.*}}R3=scalar(smin=smin32=-128,smax=smax32=127)")
+__msg("r3 = (s8)r0 {{.*}}R3=scalar(smin=smin32=-128,smax=smax32=120,var_off=(0x0; 0xfffffffffffffff8))")
 __msg("w4 = (s16)w1 {{.*}}R4=scalar(smin=smin32=0,smax=umax=smax32=umax32=168,{{.*}}step=0+24)")
-__msg("w5 = (s8)w1 {{.*}}R5=scalar({{.*}}smin32=-128,smax32=127,var_off=(0x0; 0xffffffff))")
+__msg("w5 = (s8)w1 {{.*}}R5=scalar({{.*}}smin32=-128,smax32=120,var_off=(0x0; 0xfffffff8))")
 __naked void step_movsx_bounds_on_line(void)
 {
 	asm volatile ("					\
@@ -539,6 +542,59 @@ l_out_%=:						\
 	: __imm(bpf_get_prandom_u32),
 	  __imm(bpf_map_lookup_elem),
 	  __imm_addr(step_map)
+	: __clobber_all);
+}
+
+/*
+ * Three states join: r6 is a multiple of 3 and has no bounds. r7 = r6 + 1 is not a multiple of 3.
+ * r7 <= 10 leaves r6 = 0, 3, 6, 9.
+ */
+SEC("socket")
+__failure __log_level(2)
+__msg("(bf) r7 = r6 {{.*}}R6=scalar(step=0+3)")
+__msg("if r7 > 0xa {{.*}}R6=scalar(smin=smin32=0,smax=umax=smax32=umax32=9,")
+__msg("div by zero")
+__naked void step_with_no_bounds(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r8 = r0;					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r6 <<= 32;					\
+	r6 s>>= 2;					\
+	r1 = 0x2800000000000000 ll;			\
+	r2 = -0x2800000000000000 ll;			\
+	if r6 s> r1 goto l_out_%=;			\
+	if r6 s< r2 goto l_out_%=;			\
+	r6 |= r8;					\
+	if r6 s> r1 goto l_out_%=;			\
+	if r6 s< r2 goto l_out_%=;			\
+	if r8 < 100 goto l_all_%=;			\
+	r1 s>>= 1;					\
+	r2 s>>= 1;					\
+	if r6 s> r1 goto l_high_%=;			\
+	if r6 s> r2 goto l_out_%=;			\
+	r6 *= 3;					\
+	goto l_ends_%=;					\
+l_high_%=:						\
+	r6 *= 3;					\
+l_ends_%=:						\
+	r0 = 0;						\
+	goto l_join_%=;					\
+l_all_%=:						\
+	r6 *= 3;					\
+l_join_%=:						\
+	r7 = r6;					\
+	r7 += 1;					\
+	if r7 > 10 goto l_out_%=;			\
+	if r6 != 9 goto l_out_%=;			\
+	r0 /= 0;					\
+l_out_%=:						\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
 	: __clobber_all);
 }
 

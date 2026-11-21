@@ -48,7 +48,7 @@ SEC("socket")
 __description("subtraction bounds (map value) variant 2")
 __failure
 __msg("R0 min value is negative, either use unsigned index or do a if (index >=0) check.")
-__msg_unpriv("R1 has unknown scalar with mixed signed bounds")
+__failure_unpriv
 __naked void bounds_map_value_variant_2(void)
 {
 	asm volatile ("					\
@@ -140,7 +140,7 @@ l0_%=:	/* exit */					\
 
 SEC("socket")
 __description("bounds check based on sign-extended MOV. test1")
-__failure __msg("map_value pointer and 4294967295")
+__failure __msg("R0 min value is outside of the allowed memory range")
 __failure_unpriv
 __naked void on_sign_extended_mov_test1(void)
 {
@@ -202,7 +202,7 @@ l0_%=:	/* exit */					\
 
 SEC("tc")
 __description("bounds check based on reg_off + var_off + insn_off. test1")
-__failure __msg("map_value pointer offset 1073741822 is not allowed")
+__failure __msg("R0 min value is outside of the allowed memory range")
 __naked void var_off_insn_off_test1(void)
 {
 	asm volatile ("					\
@@ -218,8 +218,8 @@ __naked void var_off_insn_off_test1(void)
 	r6 += %[__imm_0];				\
 	r0 += r6;					\
 	r0 += %[__imm_0];				\
-l0_%=:	r0 = *(u8*)(r0 + 3);				\
-	r0 = 0;						\
+	r0 = *(u8*)(r0 + 3);				\
+l0_%=:	r0 = 0;						\
 	exit;						\
 "	:
 	: __imm(bpf_map_lookup_elem),
@@ -231,7 +231,7 @@ l0_%=:	r0 = *(u8*)(r0 + 3);				\
 
 SEC("tc")
 __description("bounds check based on reg_off + var_off + insn_off. test2")
-__failure __msg("value 1073741823")
+__failure __msg("R0 min value is outside of the allowed memory range")
 __naked void var_off_insn_off_test2(void)
 {
 	asm volatile ("					\
@@ -247,8 +247,8 @@ __naked void var_off_insn_off_test2(void)
 	r6 += %[__imm_0];				\
 	r0 += r6;					\
 	r0 += %[__imm_1];				\
-l0_%=:	r0 = *(u8*)(r0 + 3);				\
-	r0 = 0;						\
+	r0 = *(u8*)(r0 + 3);				\
+l0_%=:	r0 = 0;						\
 	exit;						\
 "	:
 	: __imm(bpf_map_lookup_elem),
@@ -484,7 +484,7 @@ l0_%=:	/* exit */					\
 
 SEC("socket")
 __description("bounds check after 32-bit right shift with 64-bit input")
-__failure __msg("math between map_value pointer and 4294967294 is not allowed")
+__failure __msg("R0 min value is outside of the allowed memory range")
 __failure_unpriv
 __naked void shift_with_64_bit_input(void)
 {
@@ -503,10 +503,10 @@ __naked void shift_with_64_bit_input(void)
 	w1 >>= 31;					\
 	/* r1 = 0xffff'fffe (NOT 0!) */			\
 	w1 -= 2;					\
-	/* error on computing OOB pointer */		\
+	/* computes OOB pointer */			\
 	r0 += r1;					\
-	/* exit */					\
-	r0 = 0;						\
+	/* OOB access */				\
+	r0 = *(u8*)(r0 + 0);				\
 l0_%=:	exit;						\
 "	:
 	: __imm(bpf_map_lookup_elem),
@@ -516,7 +516,7 @@ l0_%=:	exit;						\
 
 SEC("socket")
 __description("bounds check map access with off+size signed 32bit overflow. test1")
-__failure __msg("map_value pointer and 2147483646")
+__failure __msg("R0 min value is outside of the allowed memory range")
 __failure_unpriv
 __naked void size_signed_32bit_overflow_test1(void)
 {
@@ -541,7 +541,7 @@ l1_%=:	exit;						\
 
 SEC("socket")
 __description("bounds check map access with off+size signed 32bit overflow. test2")
-__failure __msg("pointer offset 1073741822")
+__failure __msg("R0 min value is outside of the allowed memory range")
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range")
 __naked void size_signed_32bit_overflow_test2(void)
 {
@@ -568,7 +568,7 @@ l1_%=:	exit;						\
 
 SEC("socket")
 __description("bounds check map access with off+size signed 32bit overflow. test3")
-__failure __msg("pointer offset -1073741822")
+__failure __msg("R0 min value is negative")
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range")
 __naked void size_signed_32bit_overflow_test3(void)
 {
@@ -594,7 +594,7 @@ l1_%=:	exit;						\
 
 SEC("socket")
 __description("bounds check map access with off+size signed 32bit overflow. test4")
-__failure __msg("map_value pointer and 1000000000000")
+__failure __msg("R0 min value is outside of the allowed memory range")
 __failure_unpriv
 __naked void size_signed_32bit_overflow_test4(void)
 {
@@ -1572,7 +1572,7 @@ l0_%=:	r0 = 0;				\
 SEC("socket")
 __description("bounds deduction cross sign boundary, negative overlap")
 __success __log_level(2)
-__msg("7: (1f) r0 -= r6 {{.*}} R0=scalar(smin=smin32=-527,smax=smax32=-146,umin=0xfffffffffffffdf1,umax=0xffffffffffffff6e,umin32=0xfffffdf1,umax32=0xffffff6e,var_off=(0xfffffffffffffc00; 0x3ff))")
+__msg("7: (1f) r0 -= r6 {{.*}} R0=scalar(smin=smin32=-400,smax=smax32=-273,umin=0xfffffffffffffe70,umax=0xfffffffffffffeef,umin32=0xfffffe70,umax32=0xfffffeef,var_off=(0xfffffffffffffe00; 0xff))")
 __retval(0)
 __naked void bounds_deduct_negative_overlap(void)
 {
@@ -2286,7 +2286,7 @@ l0_%=:	r0 = 0;						\
 }
 
 /*
- * The insn that forks is the head of a loop that scalar evolution counted. The state with
+ * The insn that forks is the head of a loop with a trip count. The state with
  * [-1, 0] is kept there, and the state with 0 that is split off is within it.
  */
 SEC("socket")

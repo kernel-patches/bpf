@@ -94,8 +94,8 @@ It's the maximum number of instructions that the unprivileged bpf
 program can have. The verifier has various internal limits.
 The largest program can consist of 1 million instructions.
 There is a limit to the number of nested bpf-to-bpf
-calls, a limit to the number of the verifier states per instruction,
-a limit to the number of maps used by the program.
+calls, a limit to the work of the verifier and a limit to its memory.
+See 'Limits' in Documentation/bpf/verifier.rst.
 All these limits can be hit with a sufficiently complex program.
 There are also non-numerical limits that can cause the program
 to be rejected. The verifier used to recognize only pointer + constant
@@ -121,7 +121,7 @@ C code cannot express them and has to use builtin intrinsics?
 
 A: This is artifact of compatibility with classic BPF. Modern
 networking code in BPF performs better without them.
-See 'direct packet access'.
+See 'Packets' in Documentation/bpf/verifier.rst.
 
 Q: BPF instructions mapping not one-to-one to native CPU
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

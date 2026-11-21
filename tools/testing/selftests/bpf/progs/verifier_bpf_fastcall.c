@@ -671,6 +671,39 @@ __naked void helper_zero_size_buffer(void)
 	: __clobber_all);
 }
 
+/* The size is 0 only at the largest offset. The other offsets touch the stack. */
+SEC("raw_tp")
+__arch_x86_64
+__log_level(4)
+__msg("subprog 0 (helper_zero_size_at_max_offset) main {{.*}} stack 128")
+__success
+__naked void helper_zero_size_at_max_offset(void)
+{
+	asm volatile (
+	"call %[bpf_ktime_get_ns];"
+	"r6 = r0;"
+	"if r6 > 128 goto 1f;"
+	"r1 = 1;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"call %[bpf_get_smp_processor_id];"
+	"r1 = *(u64 *)(r10 - 8);"
+	"r1 = r10;"
+	"r1 += -128;"
+	"r1 += r6;"
+	"r2 = 128;"
+	"r2 -= r6;"
+	"r3 = 0;"
+	"call %[bpf_probe_read_kernel];"
+"1:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_get_smp_processor_id),
+	  __imm(bpf_ktime_get_ns),
+	  __imm(bpf_probe_read_kernel)
+	: __clobber_all);
+}
+
 SEC("raw_tp")
 __arch_x86_64
 /* main, not patched */

@@ -283,7 +283,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("xdp")
 __description("meta access, 8-aligned offset, check p, load a byte at p + 1 via p + 8")
-__failure __msg("invalid access to packet, off=51 size=1")
+__failure __msg("invalid access to packet, off=49 size=1")
 __naked void meta_access_check_base_load_via_copy(void)
 {
 	asm volatile ("					\

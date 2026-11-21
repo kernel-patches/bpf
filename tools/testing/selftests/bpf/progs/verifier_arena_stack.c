@@ -737,6 +737,61 @@ __naked void callback(void)
 	: __clobber_all);
 }
 
+static __naked __noinline __used long add_index_cb(void)
+{
+	asm volatile (
+	"r3 = *(u64 *)(r2 + 0);"
+	"r3 += r1;"
+	"*(u64 *)(r2 + 0) = r3;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* takes a stack in arena, has all of its own frame in use, and bpf_loop() is inlined */
+static __naked __noinline __used long full_frame_cb(void)
+{
+	asm volatile (
+	".8byte %[adj];"
+	".8byte %[stx16];"	/* *(u64 *)(r12 - 16) = r1 */
+	"*(u64 *)(r10 - %[depth]) = r1;"
+	"r3 = r2;"
+	"r1 = 3;"
+	"r2 = add_index_cb ll;"
+	"r4 = 0;"
+	"call %[bpf_loop];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_loop), __imm_const(depth, 2008),
+	  __imm_insn(adj, ADJ(16)),
+	  __imm_insn(stx16, STX(BPF_DW, -16, BPF_REG_1))
+	: __clobber_all);
+}
+
+SEC("syscall")
+__description("arena stack: the arguments of a callback need no room of their own")
+__success __retval(6)
+__xlated("*(u64 *)(r10 -16) = r2")
+__xlated("*(u64 *)(r10 -24) = r3")
+__naked void callback_full_frame(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r1 = 2;"
+	"r2 = full_frame_cb ll;"
+	"r3 = r10;"
+	"r3 += -8;"
+	"r4 = 0;"
+	"call %[bpf_loop];"
+	"r0 = *(u64 *)(r10 - 8);"
+	"exit;"
+	:
+	: __imm(bpf_loop)
+	: __clobber_all);
+}
+
 /* has no frame: its first insn is the call, not r12 += N */
 static __naked __noinline __used long calls_loop_cb(void)
 {
@@ -1304,6 +1359,56 @@ __naked void packet_write_prologue(void)
 	  __imm_insn(ldx, LDX(BPF_DW, BPF_REG_0, -8)),
 	  __imm_const(data, offsetof(struct __sk_buff, data)),
 	  __imm_const(data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+/* r12 is live after the first move. The number in fp-16 is another number. */
+SEC("syscall")
+__description("arena stack: r12 is not a slot")
+__success __retval(1)
+__naked void not_a_slot(void)
+{
+	asm volatile (
+	".8byte %[adj];"
+	"r1 = 0;"
+	"*(u64 *)(r10 - 16) = r1;"
+	".8byte %[mov1];"	/* r1 = r12 */
+	".8byte %[mov2];"	/* r2 = r12 */
+	"r0 = 0;"
+	"if r1 == 0 goto 1f;"
+	"r0 = 1;"
+"1:"
+	"exit;"
+	:
+	: __imm_insn(adj, ADJ(16)),
+	  __imm_insn(mov1, MOV(BPF_REG_1)),
+	  __imm_insn(mov2, MOV(BPF_REG_2))
+	: __clobber_all);
+}
+
+SEC("syscall")
+__description("arena stack: r12 has no bound from a slot")
+__failure __msg("math between fp pointer and register with unbounded min value")
+__naked void no_bound_from_slot(void)
+{
+	asm volatile (
+	".8byte %[adj];"
+	"call %[bpf_get_prandom_u32];"
+	"*(u64 *)(r10 - 16) = r0;"
+	".8byte %[mov1];"	/* r1 = r12 */
+	".8byte %[mov2];"	/* r2 = r12 */
+	"if r0 > 7 goto 1f;"
+	"r3 = r10;"
+	"r3 += -16;"
+	"r3 += r1;"
+	"r0 = *(u8 *)(r3 + 0);"
+"1:"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_insn(adj, ADJ(16)),
+	  __imm_insn(mov1, MOV(BPF_REG_1)),
+	  __imm_insn(mov2, MOV(BPF_REG_2))
 	: __clobber_all);
 }
 

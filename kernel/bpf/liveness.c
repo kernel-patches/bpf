@@ -3,8 +3,6 @@
 
 #include <linux/bpf_verifier.h>
 #include <linux/btf.h>
-#include <linux/hashtable.h>
-#include <linux/jhash.h>
 #include <linux/slab.h>
 #include <linux/sort.h>
 
@@ -54,7 +52,9 @@ struct frame_masks {
  * Marks are tracked for each frame up to @depth.
  */
 struct func_instance {
-	struct hlist_node hl_node;
+	struct list_head node;		/* all instances */
+	struct func_instance *next;	/* same callsite, other depth */
+	struct bpf_verifier_env *env;
 	u32 callsite;		/* call insn that invoked this subprog (subprog_start for depth 0) */
 	u32 depth;		/* call depth (0 = entry subprog) */
 	u32 subprog;		/* subprog index */
@@ -75,36 +75,25 @@ struct live_stack_query {
 struct arg_track;
 
 struct bpf_liveness {
-	DECLARE_HASHTABLE(func_instances, 8);		/* maps (depth, callsite) to func_instance */
-	struct live_stack_query live_stack_query;	/* cache to avoid repetitive ht lookups */
-	u32 subprog_calls;				/* analyze_subprog() invocations */
+	struct list_head func_instances;
+	struct live_stack_query live_stack_query;	/* cache to avoid repetitive lookups */
 	/* MAX_AT_TRACK_REGS for every depth: analyze_subprog() calls itself, keep its frame small */
 	struct arg_track *callee_args;
+	struct func_instance *by_callsite[];
 };
 
 /*
- * Hash/compare key for func_instance: (depth, callsite).
  * For depth == 0 (entry subprog), @callsite is the subprog start insn.
  * For depth > 0, @callsite is the call instruction index that invoked the subprog.
  */
-static u32 instance_hash(u32 callsite, u32 depth)
-{
-	u32 key[2] = { depth, callsite };
-
-	return jhash2(key, 2, 0);
-}
-
 static struct func_instance *find_instance(struct bpf_verifier_env *env,
 					   u32 callsite, u32 depth)
 {
-	struct bpf_liveness *liveness = env->liveness;
-	struct func_instance *f;
-	u32 key = instance_hash(callsite, depth);
+	struct func_instance *f = env->liveness->by_callsite[callsite];
 
-	hash_for_each_possible(liveness->func_instances, f, hl_node, key)
-		if (f->depth == depth && f->callsite == callsite)
-			return f;
-	return NULL;
+	while (f && f->depth != depth)
+		f = f->next;
+	return f;
 }
 
 static struct func_instance *call_instance(struct bpf_verifier_env *env,
@@ -115,7 +104,6 @@ static struct func_instance *call_instance(struct bpf_verifier_env *env,
 	u32 subprog_start = env->subprog_info[subprog].start;
 	u32 lookup_key = depth > 0 ? callsite : subprog_start;
 	struct func_instance *f;
-	u32 hash;
 
 	f = find_instance(env, lookup_key, depth);
 	if (f)
@@ -124,13 +112,16 @@ static struct func_instance *call_instance(struct bpf_verifier_env *env,
 	f = kvzalloc_obj(*f, BPF_VERIFIER_GFP);
 	if (!f)
 		return ERR_PTR(-ENOMEM);
+	f->env = env;
 	f->callsite = lookup_key;
 	f->depth = depth;
 	f->subprog = subprog;
 	f->subprog_start = subprog_start;
 	f->insn_cnt = (env->subprog_info + subprog + 1)->start - subprog_start;
-	hash = instance_hash(lookup_key, depth);
-	hash_add(env->liveness->func_instances, &f->hl_node, hash);
+	f->next = env->liveness->by_callsite[lookup_key];
+	env->liveness->by_callsite[lookup_key] = f;
+	list_add(&f->node, &env->liveness->func_instances);
+	env->mem += sizeof(*f);
 	return f;
 }
 
@@ -155,22 +146,23 @@ static struct func_instance *lookup_instance(struct bpf_verifier_env *env,
 
 int bpf_stack_liveness_init(struct bpf_verifier_env *env)
 {
-	env->liveness = kvzalloc_obj(*env->liveness, BPF_VERIFIER_GFP);
+	env->liveness = kvzalloc_flex(*env->liveness, by_callsite, env->prog->len,
+				      BPF_VERIFIER_GFP);
 	if (!env->liveness)
 		return -ENOMEM;
-	hash_init(env->liveness->func_instances);
+	INIT_LIST_HEAD(&env->liveness->func_instances);
+	env->mem += env->prog->len * sizeof(*env->liveness->by_callsite);
 	return 0;
 }
 
 void bpf_stack_liveness_free(struct bpf_verifier_env *env)
 {
-	struct func_instance *instance;
-	struct hlist_node *tmp;
-	int bkt, i;
+	struct func_instance *instance, *tmp;
+	int i;
 
 	if (!env->liveness)
 		return;
-	hash_for_each_safe(env->liveness->func_instances, bkt, tmp, instance, hl_node) {
+	list_for_each_entry_safe(instance, tmp, &env->liveness->func_instances, node) {
 		for (i = 0; i <= instance->depth; i++)
 			kvfree(instance->frames[i]);
 		kvfree(instance);
@@ -213,12 +205,18 @@ static struct frame_masks *widen_frame_masks(struct func_instance *instance,
 {
 	struct frame_masks *old = instance->frames[frame], *new;
 	u32 i, kind;
+	int err;
 
 	if (old && old->words >= words)
 		return old;
+	instance->env->mem += frame_mask_words(instance, words - (old ? old->words : 0)) *
+			      sizeof(long);
+	err = bpf_check_limits(instance->env);
+	if (err)
+		return ERR_PTR(err);
 	new = kvzalloc_flex(*new, bits, frame_mask_words(instance, words), BPF_VERIFIER_GFP);
 	if (!new)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 	new->words = words;
 	if (old) {
 		for (i = 0; i < instance->insn_cnt; i++)
@@ -249,8 +247,8 @@ static int mark_stack_range(struct func_instance *instance, u32 frame, u32 insn_
 	if (lo > hi)
 		return 0;
 	fm = widen_frame_masks(instance, frame, BITS_TO_LONGS(hi + 1));
-	if (!fm)
-		return -ENOMEM;
+	if (IS_ERR(fm))
+		return PTR_ERR(fm);
 	bitmap_set(rel_mask(fm, relative_idx(instance, insn_idx), kind), lo, hi - lo + 1);
 	return 0;
 }
@@ -314,8 +312,8 @@ static int mark_stack_mask(struct func_instance *instance, u32 frame, u32 insn_i
 	if (last == nbits)
 		return 0;
 	fm = widen_frame_masks(instance, frame, BITS_TO_LONGS(last + 1));
-	if (!fm)
-		return -ENOMEM;
+	if (IS_ERR(fm))
+		return PTR_ERR(fm);
 	dst = rel_mask(fm, relative_idx(instance, insn_idx), kind);
 	/* @src has no bits set past @last, hence none past @fm->words either */
 	src_words = min(src_words, fm->words);
@@ -420,6 +418,7 @@ static inline bool update_insn(struct bpf_verifier_env *env, struct func_instanc
 	unsigned long *may_read, *must_write, *live_before;
 	struct frame_masks *fm = instance->frames[frame];
 	u32 rel = relative_idx(instance, insn_idx);
+	int t = bpf_head_guard_target(env, insn_idx);
 	struct bpf_iarray *succ;
 	bool changed = false;
 	u32 s, w;
@@ -447,6 +446,8 @@ static inline bool update_insn(struct bpf_verifier_env *env, struct func_instanc
 	for (w = 0; w < fm->words; w++) {
 		unsigned long new_before = (new_after[w] & ~must_write[w]) | may_read[w];
 
+		if (t >= 0)
+			new_before |= rel_mask(fm, relative_idx(instance, t), before)[w];
 		if (new_before != live_before[w]) {
 			live_before[w] = new_before;
 			changed = true;
@@ -462,6 +463,7 @@ static int update_instance(struct bpf_verifier_env *env, struct func_instance *i
 	int *insn_postorder = env->cfg.insn_postorder;
 	struct bpf_subprog_info *subprog;
 	bool changed;
+	int err;
 
 	instance->must_write_initialized = true;
 	subprog = &env->subprog_info[instance->subprog];
@@ -469,12 +471,15 @@ static int update_instance(struct bpf_verifier_env *env, struct func_instance *i
 	po_end = (subprog + 1)->postorder_start;
 	/* repeat until fixed point is reached */
 	do {
-		if (bpf_must_abort())
-			return -EINTR;
 		changed = false;
 		for (frame = 0; frame <= instance->depth; frame++) {
 			if (!instance->frames[frame])
 				continue;
+			err = bpf_add_cost_and_check(env, (po_end - po_start) *
+							  (4ULL + instance->frames[frame]->words),
+						     BPF_COST_XREG);
+			if (err)
+				return err;
 
 			for (i = po_start; i < po_end; i++) {
 				changed |= update_insn(env, instance, frame, insn_postorder[i],
@@ -594,9 +599,9 @@ bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 half_sp
  * fill a pointer, and a helper, a kfunc or a global subprog that gets a pointer to the stack reads
  * memory. Such a read keeps the bytes of the slot alive, not what the verifier knows about them.
  *
- * A short load at an offset that is known here counts as a fill: the main pass rejects it when it
- * finds a pointer. If only the main pass knows the offset, the load doesn't count. It is rejected
- * too, or it reads unknown bytes if the state was cleaned between the spill and the load.
+ * A short load at an offset that is known here counts as a fill. A NULL check can make the
+ * pointer the number 0, and the load gets a part of it. If only the main pass knows the offset,
+ * the load doesn't count.
  */
 bool bpf_stack_slot_filled(struct bpf_verifier_env *env, u32 frameno, u32 half_spi)
 {
@@ -752,57 +757,58 @@ static int cmp_instances(const void *pa, const void *pb)
 /* OR the 8-byte slots touched by a half-slot (4-byte) mask into @slots. */
 static void half_spis_to_slots(unsigned long *slots, const unsigned long *mask, u32 nbits)
 {
-	u32 slot;
+	unsigned long x;
+	u32 i;
 
-	for (slot = 0; slot < MAX_BPF_STACK_SLOTS && slot * 2 + 1 < nbits; slot++)
-		if (test_bit(slot * 2, mask) || test_bit(slot * 2 + 1, mask))
-			__set_bit(slot, slots);
-}
-
-/*
- * Precompute, for each instruction, the OR of may_write and live_before masks
- * over its top frame across all func_instances reaching it, stash them in the
- * insn_aux_data.
- */
-static void compute_may_write_masks(struct bpf_verifier_env *env)
-{
-	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	struct bpf_liveness *liveness = env->liveness;
-	struct func_instance *instance;
-	struct frame_masks *fm;
-	u32 nbits;
-	int bkt, i;
-
-	hash_for_each(liveness->func_instances, bkt, instance, hl_node) {
-		fm = instance->frames[instance->depth];
-		if (!fm)
-			continue;
-		nbits = frame_mask_bits(fm);
-		for (i = 0; i < instance->insn_cnt; i++) {
-			half_spis_to_slots(aux[instance->subprog_start + i].may_write_mask,
-					   rel_mask(fm, i, FM_MAY_WRITE), nbits);
-			half_spis_to_slots(aux[instance->subprog_start + i].live_stack_before,
-					   rel_mask(fm, i, FM_LIVE_BEFORE), nbits);
-		}
+	nbits = min(nbits, FRAME_HALF_SPIS);
+	for (i = 0; i < nbits; i += 32) {
+		x = bitmap_read(mask, i, min(nbits - i, 32));
+		x = (x | x >> 1) & 0x55555555;
+		x = (x | x >> 1) & 0x33333333;
+		x = (x | x >> 2) & 0x0f0f0f0f;
+		x = (x | x >> 4) & 0x00ff00ff;
+		x = (x | x >> 8) & 0x0000ffff;
+		slots[BIT_WORD(i / 2)] |= x << (i / 2 % BITS_PER_LONG);
 	}
 }
 
-/* live_stack_before of the insn at @insn_idx for one half-slot */
-bool bpf_half_slot_live_before(struct bpf_verifier_env *env, u32 insn_idx, u32 half_spi)
+/*
+ * Precompute, for each instruction, the OR of may_read, may_write and live_before masks
+ * over its top frame across all func_instances reaching it, stash them in the
+ * insn_aux_data. The other frames set reads_outer and writes_outer.
+ */
+static void compute_may_write_masks(struct bpf_verifier_env *env)
 {
+	struct bpf_insn_aux_data *aux = env->insn_aux_data, *a;
+	struct bpf_liveness *liveness = env->liveness;
 	struct func_instance *instance;
-	int bkt;
+	unsigned long *read, *write;
+	struct frame_masks *fm;
+	u32 nbits, f;
+	int i;
 
-	hash_for_each(env->liveness->func_instances, bkt, instance, hl_node)
-		if (insn_idx - instance->subprog_start < instance->insn_cnt &&
-		    is_live_before(instance, insn_idx, instance->depth, half_spi, FM_LIVE_BEFORE))
-			return true;
-	return false;
-}
-
-const unsigned long *bpf_may_write_mask(struct bpf_verifier_env *env, u32 insn_idx)
-{
-	return env->insn_aux_data[insn_idx].may_write_mask;
+	list_for_each_entry(instance, &liveness->func_instances, node) {
+		for (f = 0; f <= instance->depth; f++) {
+			fm = instance->frames[f];
+			if (!fm)
+				continue;
+			nbits = frame_mask_bits(fm);
+			for (i = 0; i < instance->insn_cnt; i++) {
+				a = &aux[instance->subprog_start + i];
+				read = rel_mask(fm, i, FM_MAY_READ);
+				write = rel_mask(fm, i, FM_MAY_WRITE);
+				if (f < instance->depth) {
+					a->reads_outer |= !bitmap_empty(read, nbits);
+					a->writes_outer |= !bitmap_empty(write, nbits);
+					continue;
+				}
+				half_spis_to_slots(a->may_read_mask, read, nbits);
+				half_spis_to_slots(a->may_write_mask, write, nbits);
+				half_spis_to_slots(a->live_stack_before,
+						   rel_mask(fm, i, FM_LIVE_BEFORE), nbits);
+			}
+		}
+	}
 }
 
 /* print use/def slots for all instances ordered by callsite first, then by depth */
@@ -810,16 +816,16 @@ static int print_instances(struct bpf_verifier_env *env)
 {
 	struct func_instance *instance, **sorted_instances;
 	struct bpf_liveness *liveness = env->liveness;
-	int i, bkt, cnt;
+	int i, cnt;
 
 	cnt = 0;
-	hash_for_each(liveness->func_instances, bkt, instance, hl_node)
+	list_for_each_entry(instance, &liveness->func_instances, node)
 		cnt++;
 	sorted_instances = kvmalloc_objs(*sorted_instances, cnt, BPF_VERIFIER_GFP);
 	if (!sorted_instances)
 		return -ENOMEM;
 	cnt = 0;
-	hash_for_each(liveness->func_instances, bkt, instance, hl_node)
+	list_for_each_entry(instance, &liveness->func_instances, node)
 		sorted_instances[cnt++] = instance;
 	sort(sorted_instances, cnt, sizeof(*sorted_instances), cmp_instances, NULL);
 	for (i = 0; i < cnt; i++)
@@ -858,7 +864,7 @@ static int print_instances(struct bpf_verifier_env *env)
 struct arg_track {
 	union {
 		s16 off[MAX_ARG_OFFSETS]; /* byte offsets; off_cnt says how many */
-		u32 mask;	/* arg bitmask when arg == ARG_IMPRECISE */
+		u64 mask;	/* arg bitmask if ARG_IMPRECISE. As wide as off[] for memcmp() */
 	};
 	s8 frame;	/* absolute frame index, or enum arg_track_state */
 	s8 off_cnt;	/* 0 = offset-imprecise, 1-4 = # of precise offsets */
@@ -912,7 +918,7 @@ static void verbose_arg_track(struct bpf_verifier_env *env, struct arg_track *at
 	switch (at->frame) {
 	case ARG_NONE:      verbose(env, "_");                          break;
 	case ARG_UNVISITED: verbose(env, "?");                          break;
-	case ARG_IMPRECISE: verbose(env, "IMP%x", at->mask);            break;
+	case ARG_IMPRECISE: verbose(env, "IMP%llx", at->mask);          break;
 	default:
 		/* frame >= 0: absolute frame index */
 		if (at->off_cnt == 0) {
@@ -1068,9 +1074,13 @@ static struct arg_track __arg_track_join(struct arg_track a, struct arg_track b)
 static bool arg_track_join(struct bpf_verifier_env *env, int idx, int target, int r,
 			   struct arg_track *in, struct arg_track out)
 {
-	struct arg_track old = *in;
-	struct arg_track new_val = __arg_track_join(old, out);
+	struct arg_track old, new_val;
 
+	/* most registers and slots hold no argument */
+	if (out.frame == ARG_NONE && in->frame == ARG_NONE)
+		return false;
+	old = *in;
+	new_val = __arg_track_join(old, out);
 	if (arg_track_eq(&new_val, &old))
 		return false;
 
@@ -1100,12 +1110,21 @@ static bool arg_track_join_all(struct bpf_verifier_env *env, int idx, int target
 			       const struct arg_track *out, const struct arg_track *stack_out,
 			       u32 nslots)
 {
-	bool changed = false;
+	bool changed = false, same;
 	int r;
 
+	if (!arg_is_visited(&in[BPF_REG_FP])) {
+		memcpy(in, out, MAX_AT_TRACK_REGS * sizeof(*in));
+		memcpy(stack_in, stack_out, nslots * sizeof(*stack_in));
+		return true;
+	}
 	for (r = 0; r < MAX_AT_TRACK_REGS; r++)
 		changed |= arg_track_join(env, idx, target, r, &in[r], out[r]);
-	for (r = 0; r < nslots; r++)
+	same = !memcmp(stack_in, stack_out, nslots * sizeof(*stack_in));
+	/* a change pays for the next visit of @target too */
+	bpf_add_cost(env, MAX_AT_TRACK_REGS + nslots,
+		     same && !changed ? BPF_COST_COPY : BPF_COST_XREG);
+	for (r = 0; r < nslots && !same; r++)
 		changed |= arg_track_join(env, idx, target, -r - 1, &stack_in[r], stack_out[r]);
 	return changed;
 }
@@ -1649,7 +1668,9 @@ static int record_stack_access_off(struct func_instance *instance, const struct 
 			return err;
 	}
 	if (info.may_write) {
-		err = mark_stack_may_write(instance, frame, insn_idx, slot_lo, slot_hi);
+		/* A join of the offsets is a range. A write forgets the slots between them. */
+		err = mark_stack_may_write(instance, frame, insn_idx, slot_lo,
+					   (-arg->off[0] - 1) / STACK_SLOT_SZ);
 		if (err)
 			return err;
 	}
@@ -2045,6 +2066,18 @@ static void record_stack_ptrs(struct bpf_verifier_env *env, int idx, struct arg_
 	env->insn_aux_data[idx].stack_ptrs |= mask;
 }
 
+/* Return true if any of R1-R5 or stack args is derived from a frame pointer. */
+static bool has_fp_args(struct arg_track *args)
+{
+	for (int r = BPF_REG_1; r <= BPF_REG_5; r++)
+		if (arg_is_fp(&args[r]))
+			return true;
+	for (int r = 0; r < MAX_STACK_ARG_SLOTS; r++)
+		if (arg_is_fp(&args[MAX_BPF_REG + r]))
+			return true;
+	return false;
+}
+
 /*
  * Compute arg tracking dataflow for a single subprog.
  * Runs forward fixed-point with arg_track_xfer(), then records
@@ -2078,9 +2111,15 @@ static noinline_for_stack int compute_subprog_args(struct bpf_verifier_env *env,
 	struct arg_track at_stack_arg_entry[MAX_STACK_ARG_SLOTS];
 	struct arg_track unvisited = { .frame = ARG_UNVISITED };
 	struct arg_track none = { .frame = ARG_NONE };
-	bool changed;
-	int i, p, r, err = -ENOMEM;
+	size_t bytes = (size_t)len * nslots * sizeof(*at_stack_in);
+	unsigned long *changed = NULL;
+	int i, p, r, err;
 
+	env->mem += bytes;
+	err = bpf_check_limits(env);
+	if (err)
+		goto err_free;
+	err = -ENOMEM;
 	at_in = kvmalloc_objs(*at_in, len, BPF_VERIFIER_GFP);
 	if (!at_in)
 		goto err_free;
@@ -2090,7 +2129,8 @@ static noinline_for_stack int compute_subprog_args(struct bpf_verifier_env *env,
 		goto err_free;
 
 	at_stack_out = kvmalloc_objs(*at_stack_out, nslots, BPF_VERIFIER_GFP);
-	if (!at_stack_out)
+	changed = kvcalloc(BITS_TO_LONGS(len), sizeof(long), BPF_VERIFIER_GFP);
+	if (!at_stack_out || !changed)
 		goto err_free;
 
 	for (i = 0; i < len; i++) {
@@ -2123,9 +2163,11 @@ static noinline_for_stack int compute_subprog_args(struct bpf_verifier_env *env,
 	if (env->log.level & BPF_LOG_LEVEL2)
 		verbose(env, "subprog#%d: analyzing (depth %d)...\n", subprog, depth);
 
-	/* Forward fixed-point iteration in reverse post order */
+	/* Forward fixed-point iteration in reverse post order, over insns whose input changed */
+	__set_bit(0, changed);
+	/* the first visit of each insn, see arg_track_join_all() for the others */
+	bpf_add_cost(env, (u64)len * (MAX_AT_TRACK_REGS + nslots), BPF_COST_XREG);
 redo:
-	changed = false;
 	for (p = po_end - 1; p >= po_start; p--) {
 		int idx = env->cfg.insn_postorder[p];
 		int i = idx - start;
@@ -2133,20 +2175,20 @@ redo:
 		struct bpf_iarray *succ;
 		int ti;
 
-		err = -EINTR;
-		if (bpf_must_abort())
+		err = bpf_add_cost_and_check(env, 1, BPF_COST_SCAN);
+		if (err)
 			goto err_free;
-		if (!arg_is_visited(&at_in[i][0]) && !arg_is_visited(&at_in[i][1]))
+		if (!__test_and_clear_bit(i, changed))
 			continue;
 
 		memcpy(at_out, at_in[i], sizeof(at_out));
 		memcpy(at_stack_out, &at_stack_in[(size_t)i * nslots], nslots * sizeof(*at_stack_out));
 
 		ti = bpf_head_guard_target(env, idx) - start;
-		if (ti >= 0)
-			changed |= arg_track_join_all(env, idx, start + ti, at_in[ti],
-						      &at_stack_in[(size_t)ti * nslots],
-						      at_out, at_stack_out, nslots);
+		if (ti >= 0 && arg_track_join_all(env, idx, start + ti, at_in[ti],
+						  &at_stack_in[(size_t)ti * nslots],
+						  at_out, at_stack_out, nslots))
+			__set_bit(ti, changed);
 
 		arg_track_xfer(env, insn, idx, at_out, at_stack_out, nslots,
 			       at_stack_arg_entry, instance, callsites);
@@ -2162,12 +2204,13 @@ redo:
 			if (target < start || target >= end)
 				continue;
 			ti = target - start;
-			changed |= arg_track_join_all(env, idx, target, at_in[ti],
-						      &at_stack_in[(size_t)ti * nslots],
-						      at_out, at_stack_out, nslots);
+			if (arg_track_join_all(env, idx, target, at_in[ti],
+					       &at_stack_in[(size_t)ti * nslots],
+					       at_out, at_stack_out, nslots))
+				__set_bit(ti, changed);
 		}
 	}
-	if (changed)
+	if (!bitmap_empty(changed, len))
 		goto redo;
 
 	/* Record memory accesses using converged at_in (RPO skips dead code) */
@@ -2186,16 +2229,18 @@ redo:
 				goto err_free;
 		}
 
-		if (bpf_pseudo_call(insn) || bpf_calls_callback(env, idx)) {
-			struct spill_snapshot *snap;
+		if ((bpf_pseudo_call(insn) || bpf_calls_callback(env, idx)) &&
+		    has_fp_args(at_in[i])) {
+			struct spill_snapshot *snap = env->callsite_at_stack[idx];
 
-			kvfree(env->callsite_at_stack[idx]);
-			env->callsite_at_stack[idx] = kvmalloc_flex(*snap, at, nslots, BPF_VERIFIER_GFP);
-			snap = env->callsite_at_stack[idx];
 			if (!snap) {
-				err = -ENOMEM;
-				goto err_free;
+				snap = kmalloc_flex(*snap, at, nslots, BPF_VERIFIER_GFP);
+				env->callsite_at_stack[idx] = snap;
+				env->mem += ksize(snap);
 			}
+			err = snap ? bpf_check_limits(env) : -ENOMEM;
+			if (err)
+				goto err_free;
 			snap->slots = nslots;
 			memcpy(snap->at, &at_stack_in[(size_t)i * nslots], nslots * sizeof(*snap->at));
 		}
@@ -2210,22 +2255,12 @@ redo:
 	err = 0;
 
 err_free:
+	env->mem -= bytes;
+	kvfree(changed);
 	kvfree(at_stack_out);
 	kvfree(at_stack_in);
 	kvfree(at_in);
 	return err;
-}
-
-/* Return true if any of R1-R5 or stack args is derived from a frame pointer. */
-static bool has_fp_args(struct arg_track *args)
-{
-	for (int r = BPF_REG_1; r <= BPF_REG_5; r++)
-		if (arg_is_fp(&args[r]))
-			return true;
-	for (int r = 0; r < MAX_STACK_ARG_SLOTS; r++)
-		if (arg_is_fp(&args[MAX_BPF_REG + r]))
-			return true;
-	return false;
 }
 
 /*
@@ -2265,8 +2300,8 @@ static int merge_instances(struct func_instance *dst, struct func_instance *src)
 			continue;
 		}
 		d = widen_frame_masks(dst, f, s->words);
-		if (!d)
-			return -ENOMEM;
+		if (IS_ERR(d))
+			return PTR_ERR(d);
 		for (i = 0; i < dst->insn_cnt; i++) {
 			unsigned long *dst_read = rel_mask(d, i, FM_MAY_READ);
 			unsigned long *dst_write = rel_mask(d, i, FM_MUST_WRITE);
@@ -2324,6 +2359,7 @@ static struct func_instance *fresh_instance(struct func_instance *src)
 	f = kvzalloc_obj(*f, BPF_VERIFIER_GFP);
 	if (!f)
 		return ERR_PTR(-ENOMEM);
+	f->env = src->env;
 	f->callsite = src->callsite;
 	f->depth = src->depth;
 	f->subprog = src->subprog;
@@ -2336,8 +2372,12 @@ static void free_instance(struct func_instance *instance)
 {
 	int i;
 
-	for (i = 0; i <= instance->depth; i++)
+	for (i = 0; i <= instance->depth; i++) {
+		if (instance->frames[i])
+			instance->env->mem -= sizeof(long) *
+				frame_mask_words(instance, instance->frames[i]->words);
 		kvfree(instance->frames[i]);
+	}
 	kvfree(instance);
 }
 
@@ -2364,16 +2404,6 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 	int po_end = env->subprog_info[subprog + 1].postorder_start;
 	struct func_instance *prev_instance = NULL;
 	int j, err;
-
-	/* a subprog on its own is analyzed once, chains of calls multiply */
-	if (depth && ++env->liveness->subprog_calls > 10000) {
-		verbose(env, "liveness analysis exceeded complexity limit (%d calls)\n",
-			env->liveness->subprog_calls);
-		return -E2BIG;
-	}
-
-	if (bpf_must_abort())
-		return -EINTR;
 
 	/*
 	 * When an instance is reused (must_write_initialized == true),
@@ -2545,12 +2575,15 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	struct func_instance *instance;
 	struct subprog_at_info *info;
+	/* each subprog keeps its at_in[] to the end */
+	size_t bytes = insn_cnt * (sizeof(*info->at_in) + sizeof(*env->callsite_at_stack));
 	int k, err = 0;
 
 	info = kvzalloc_objs(*info, env->subprog_cnt, BPF_VERIFIER_GFP);
 	if (!info)
 		return -ENOMEM;
 
+	env->mem += bytes;
 	env->callsite_at_stack = kvzalloc_objs(*env->callsite_at_stack, insn_cnt,
 					       BPF_VERIFIER_GFP);
 	env->liveness->callee_args = kvcalloc(MAX_CALL_FRAMES * MAX_AT_TRACK_REGS,
@@ -2593,8 +2626,11 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 		err = print_instances(env);
 
 out:
-	for (k = 0; k < insn_cnt; k++)
-		kvfree(env->callsite_at_stack[k]);
+	env->mem -= bytes;
+	for (k = 0; k < insn_cnt; k++) {
+		env->mem -= ksize(env->callsite_at_stack[k]);
+		kfree(env->callsite_at_stack[k]);
+	}
 	kvfree(env->callsite_at_stack);
 	env->callsite_at_stack = NULL;
 	kvfree(env->liveness->callee_args);
@@ -2660,7 +2696,8 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 			break;
 		case BPF_ABS:
 		case BPF_IND:
-			/* stick with defaults */
+			def = mask_widen(ALL_CALLER_SAVED_REGS);
+			use = reg64_mask(BPF_REG_6) | (mode == BPF_IND ? src : 0);
 			break;
 		}
 		break;
@@ -2888,10 +2925,9 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 
 		changed = false;
 		/* a cycle of calls takes a round for each link */
-		if (bpf_must_abort()) {
-			err = -EINTR;
+		err = bpf_add_cost_and_check(env, env->cfg.cur_postorder, BPF_COST_XREG);
+		if (err)
 			goto out;
-		}
 		for (i = 0; i < env->cfg.cur_postorder; ++i) {
 			int insn_idx = order[i];
 			struct insn_live_regs *live = &state[insn_idx];
@@ -2934,6 +2970,8 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 		u32 in = state[i].in;
 
 		insn_aux[i].live_regs_before = mask_lo(in) | mask_hi(in);
+		insn_aux[i].use_regs = mask_lo(state[i].use) | mask_hi(state[i].use);
+		insn_aux[i].def_regs = mask_lo(state[i].def);
 		/*
 		 * On architectures where 32-bit operations do not reset upper halves
 		 * of the registers, the verifier needs to zero extend a destination
@@ -2942,7 +2980,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 		 */
 		insn_aux[i].zext_dst = def32 >= 0 && (mask_hi(out) & BIT(def32));
 	}
-	/* the exit that stands for 'r0 = 0; exit' may be dead code, see push_budget_exit() */
+	/* the exit that stands for 'r0 = 0; exit' may be dead code, see push_unwind_exit() */
 	for (i = 0; i < env->subprog_cnt; i++)
 		if (env->subprog_info[i].bail_insn >= 0)
 			insn_aux[env->subprog_info[i].bail_insn].live_regs_before |=

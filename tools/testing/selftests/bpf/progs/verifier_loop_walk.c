@@ -65,17 +65,19 @@ WALKS(walks_32, 11)
 
 /*
  *	for (i = 7; i >= 0; i--) { if (i >= n) continue; a[i] = 0; }
- * A compiler tests 'i >= n' in front of the loop too and jumps into the middle of it. Such a loop
- * has no count. It's walked to its end whichever way its jumps go: no may_goto is added.
+ * A compiler tests 'i >= n' before the loop too and jumps into the middle of it. Such a loop
+ * has no trip count, so may_goto is added.
  */
 SEC("socket")
 __description("walk: a loop with two entries")
 __success __retval(0)
 __arch_x86_64
 __arch_arm64
+__xlated("if r13 == 0x0 goto")
+__xlated("...")
 __xlated("w3 += -1")
 __xlated("if w3 s< 0x0 goto pc+2")
-__xlated("if w3 < w2 goto pc-6")
+__xlated("if w3 < w2 goto pc-{{[0-9]+}}")
 __xlated("goto pc-4")
 __xlated("exit")
 __naked void two_entries(void)
@@ -285,7 +287,7 @@ static __naked __noinline __used int long_loop(void)
  */
 SEC("socket")
 __description("walk: no other try for a loop that is too long")
-__success __log_level(4) __msg("processed {{....}} insns")
+__success __log_level(4) __msg("processed {{[0-9][0-9]}} insns")
 __naked void walk_fails_once(void)
 {
 	asm volatile ("								\

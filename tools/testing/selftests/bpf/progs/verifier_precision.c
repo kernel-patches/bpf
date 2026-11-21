@@ -141,7 +141,7 @@ __naked int state_loop_first_last_equal(void)
 		"r0 = 0;"
 	"l0_%=:"
 		"r0 += 2;"
-		/* scalar evolution has no formula for it: the loop is not counted */
+		/* no equation holds for it: the loop is not counted */
 		"r0 |= 0;"
 		/* every few iterations we'll have a checkpoint here with
 		 * first_idx == last_idx, potentially confusing precision

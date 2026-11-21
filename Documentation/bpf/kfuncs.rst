@@ -704,8 +704,8 @@ from a pointer is a leak, so the verifier rejects it with::
 Initialize the whole return value, for example ``struct pair p = {};``, to
 avoid this. A static subprogram is exempt from the scalar-only rule: it is
 verified inline, so an unassigned R2 is simply passed back to the caller as
-uninitialized and only a caller that reads it fails. A stack pointer left in
-R2 is still rejected there, just as one in R0 is.
+uninitialized and only a caller that reads it fails. The same holds for a
+stack pointer left in R2 or in R0.
 
 .. _BPF_kfunc_lifecycle_expectations:
 

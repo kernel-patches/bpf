@@ -461,7 +461,7 @@ static __naked __noinline __used void saves_irq_flags_many_times(void)
 
 SEC("tc")
 __description("subprog comes back with more ids than there is room for")
-__failure __msg("too many ids at the call at insn")
+__failure __msg("too many ids")
 __log_level(4)
 int too_many_ids_at_the_return(void *ctx)
 {

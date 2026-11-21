@@ -30,7 +30,7 @@ int force_clang_to_emit_btf_for_externs(void *ctx)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("fp-8=iter_num(id=1,state=active)")
+__msg("fp-8=iter_num(id={{[0-9]+}},state=active)")
 int create_and_destroy(void *ctx)
 {
 	struct bpf_iter_num iter;
@@ -208,7 +208,7 @@ SEC("?raw_tp")
 __failure
 /* ensure there was a call to subprog, which might happen without __noinline */
 __msg("0: (85) call pc+2")
-__msg("Unreleased reference id=2 alloc_insn=7")
+__msg("Unreleased reference id={{[0-9]+}} alloc_insn=7")
 int leak_iter_from_subprog_fail(void *ctx)
 {
 	subprog_with_iter();
@@ -218,7 +218,7 @@ int leak_iter_from_subprog_fail(void *ctx)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("fp-8=iter_num(id=1,state=active)")
+__msg("fp-8=iter_num(id={{[0-9]+}},state=active)")
 int valid_stack_reuse(void *ctx)
 {
 	struct bpf_iter_num iter;

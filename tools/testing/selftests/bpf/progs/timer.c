@@ -159,10 +159,7 @@ static __noinline int sum_to(__u64 n)
 
 static int loop_cb(void *map, int *key, struct elem *val);
 
-/*
- * Re-arms from a frame below the callback's, where the caller frame carries
- * no async_entry_cnt of its own.
- */
+/* Re-arms from a function that the callback calls. */
 static __noinline void rearm(struct elem *val)
 {
 	if (loop_rearm > 0) {

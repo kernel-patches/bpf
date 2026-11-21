@@ -8,6 +8,9 @@
 #include "../bpf_experimental.h"
 #include "../test_kmods/bpf_testmod_kfunc.h"
 
+/* Do not make one call for the drop of plain_local and the drop of node_data */
+__attribute__((nomerge)) extern void bpf_obj_drop(void *p) __weak __ksym;
+
 struct plain_local;
 
 struct node_data {

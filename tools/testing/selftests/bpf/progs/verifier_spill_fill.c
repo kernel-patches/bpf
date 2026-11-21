@@ -296,7 +296,11 @@ l0_%=:	r0 = 0;						\
 
 SEC("tc")
 __description("Spill u32 const scalars.  Refill as u64.  Offset to skb->data")
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+__failure __msg("makes pkt pointer be out of bounds")
+#else
 __failure __msg("math between pkt pointer and register with unbounded min value is not allowed")
+#endif
 __naked void u64_offset_to_skb_data(void)
 {
 	asm volatile ("					\
@@ -431,7 +435,7 @@ __naked void and_then_at_fp_8(void)
 
 SEC("xdp")
 __description("32-bit spill of 64-bit reg should clear ID")
-__failure __msg("math between ctx pointer and 4294967295 is not allowed")
+__failure __msg("variable ctx access var_off=(0x0; 0xffffffff) disallowed")
 __naked void spill_32bit_of_64bit_fail(void)
 {
 	asm volatile ("					\
@@ -1053,7 +1057,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("xdp")
 __description("32-bit fill after 64-bit spill should clear ID")
-__failure __msg("math between ctx pointer and 4294967295 is not allowed")
+__failure __msg("variable ctx access var_off=(0x0; 0xffffffff) disallowed")
 __naked void fill_32bit_after_spill_64bit_clear_id(void)
 {
 	asm volatile ("					\
@@ -1102,13 +1106,13 @@ l0_%=:	r1 >>= 32;					\
  */
 SEC("socket")
 __success __log_level(2)
-__msg("8: R0=scalar() R10=fp0 fp-8=??mm??mm")
+__msg("8: R0=scalar() R10=fp0 fp-8=mm??mm??")
 __msg("8: (79) r1 = *(u64 *)(r10 -8)")
 __msg("processed 10 insns")
 /* STACK_INVALID is an error in unpriv mode */
 __failure_unpriv
 __msg_unpriv("8: (79) r1 = *(u64 *)(r10 -8)")
-__msg_unpriv("invalid read from stack off -8+2 size 8")
+__msg_unpriv("invalid read from stack off -8+0 size 8")
 __naked void old_imprecise_scalar_vs_cur_stack_misc(void)
 {
 	asm volatile(
@@ -1117,8 +1121,8 @@ __naked void old_imprecise_scalar_vs_cur_stack_misc(void)
 	"if r0 == 0 goto 1f;"
 	/* conjure STACK_{MISC,INVALID} at fp-8 */
 	"call %[bpf_ktime_get_ns];"
-	"*(u16*)(r10 - 8) = r0;"
-	"*(u16*)(r10 - 4) = r0;"
+	"*(u16*)(r10 - 6) = r0;"
+	"*(u16*)(r10 - 2) = r0;"
 	"goto 2f;"
 "1:"
 	/* conjure scalar at fp-8 */
@@ -1152,7 +1156,7 @@ __naked void old_precise_scalar_vs_cur_stack_misc(void)
 	/* conjure STACK_MISC at fp-8 */
 	"call %[bpf_ktime_get_ns];"
 	"*(u64*)(r10 - 8) = r0;"
-	"*(u32*)(r10 - 4) = r0;"
+	"lock *(u64*)(r10 - 8) += r0;"
 	"goto 2f;"
 "1:"
 	/* conjure scalar at fp-8 */
@@ -1176,7 +1180,7 @@ __naked void old_precise_scalar_vs_cur_stack_misc(void)
  */
 SEC("socket")
 __success  __log_level(2)
-__msg("from 4 to 8: within")
+__msg("from 4 to 8: pruned")
 __msg("8: (79) r0 = *(u64 *)(r10 -8)")
 __msg("processed 10 insns")
 __naked void old_stack_misc_vs_cur_scalar(void)
@@ -1192,8 +1196,8 @@ __naked void old_stack_misc_vs_cur_scalar(void)
 "1:"
 	/* conjure STACK_{MISC,INVALID} at fp-8 */
 	"call %[bpf_ktime_get_ns];"
-	"*(u16*)(r10 - 8) = r0;"
-	"*(u16*)(r10 - 4) = r0;"
+	"*(u16*)(r10 - 6) = r0;"
+	"*(u16*)(r10 - 2) = r0;"
 "2:"
 	/* read fp-8, it's looked at once */
 	"r0 = *(u64*)(r10 - 8);"
@@ -1204,15 +1208,14 @@ __naked void old_stack_misc_vs_cur_scalar(void)
 }
 
 /*
- * stacksafe(): the state with STACK_MISC is there, the state with a stack spill
- * of a non-scalar arrives. A program that may read uninitialized stack may
- * take a pointer for a number: the second state is within the first one.
+ * One state has STACK_MISC, the other one has a stack spill of a non-scalar.
+ * The slot is live, so the states stay apart.
  */
 SEC("socket")
 __success  __log_level(2)
-__msg("from 4 to 8: within")
 __msg("8: (79) r1 = *(u64 *)(r10 -8)         ; R1=scalar()")
-__msg("processed 10 insns")
+__msg("8: (79) r1 = *(u64 *)(r10 -8)         ; R1=ctx()")
+__msg("processed 12 insns")
 __naked void old_stack_misc_vs_cur_ctx_ptr(void)
 {
 	asm volatile(
@@ -1228,9 +1231,9 @@ __naked void old_stack_misc_vs_cur_ctx_ptr(void)
 	/* conjure STACK_MISC at fp-8 */
 	"call %[bpf_ktime_get_ns];"
 	"*(u64*)(r10 - 8) = r0;"
-	"*(u32*)(r10 - 4) = r0;"
+	"lock *(u64*)(r10 - 8) += r0;"
 "2:"
-	/* read fp-8, it's looked at once */
+	/* read fp-8 */
 	"r1 = *(u64*)(r10 - 8);"
 	"exit;"
 	:
@@ -1284,9 +1287,9 @@ __naked void stack_noperfmon_spill_32bit_onto_64bit_slot(void)
  */
 SEC("socket")
 __success __log_level(2)
-__msg("from 5 to 8: within")
+__msg("from 5 to 8: pruned")
 __msg("8: (79) r1 = *(u64 *)(r10 -8)")
-__msg("processed 10 insns")
+__msg("processed 11 insns")
 __naked void old_imprecise_scalar32_vs_cur_stack_misc(void)
 {
 	asm volatile(
@@ -1295,8 +1298,8 @@ __naked void old_imprecise_scalar32_vs_cur_stack_misc(void)
 	"if r0 == 0 goto 1f;"
 	/* conjure STACK_MISC at fp-8 */
 	"call %[bpf_ktime_get_ns];"
-	"*(u16*)(r10 - 8) = r0;"
-	"*(u16*)(r10 - 6) = r0;"
+	"*(u32*)(r10 - 8) = r0;"
+	"lock *(u32*)(r10 - 8) += w0;"
 	"goto 2f;"
 "1:"
 	/* conjure 32-bit scalar spill at fp-8 */
@@ -1305,6 +1308,7 @@ __naked void old_imprecise_scalar32_vs_cur_stack_misc(void)
 "2:"
 	/* read fp-8, it's looked at once */
 	"r1 = *(u64*)(r10 - 8);"
+	"r0 = 0;"
 	"exit;"
 	:
 	: __imm(bpf_ktime_get_ns)
@@ -1395,11 +1399,11 @@ __naked void var_off_write_over_scalar_spill(void)
 
 SEC("socket")
 __description("partial fill from cleaned pointer spill")
-__failure
+__success __caps_unpriv(CAP_BPF) __failure_unpriv
 __log_level(2)
-__msg("1: (05) goto pc+0")
-__msg("2: (61) r0 = *(u32 *)(r10 -4)")
-__msg("invalid size of register fill")
+__msg_unpriv("1: (05) goto pc+0")
+__msg_unpriv("2: (61) r0 = *(u32 *)(r10 -4)")
+__msg_unpriv("invalid size of register fill")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked void partial_fill_from_cleaned_pointer_spill(void)
 {
@@ -1481,6 +1485,32 @@ FIRST_HALF(first_half_of_spill_second_half_dead,
 FIRST_HALF(spill_of_64_bits_vs_spill_of_32_bits,
 	   "r6 = r0; r6 <<= 32; if r0 > 5 goto 1f; *(u32 *)(r10 - 8) = r6; goto 2f;"
 	   "1: r6 = 0x7ffffff000000000 ll; *(u64 *)(r10 - 8) = r6; 2:")
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+/* The low 16 bits of the fill are from the spill */
+#define FILL_32_SPILL_16(mask)							\
+	asm volatile (								\
+	"call %[bpf_ktime_get_ns];"						\
+	"*(u64 *)(r10 - 8) = r0; r1 = 5; *(u16 *)(r10 - 8) = r1;"		\
+	"r1 = *(u32 *)(r10 - 8); r1 &= " #mask ";"				\
+	"if r1 == 5 goto 1f; r0 /= 0;"						\
+	"1: r0 = 0; exit;"							\
+	:: __imm(bpf_ktime_get_ns) : __clobber_all)
+
+SEC("raw_tp")
+__success
+__naked void fill_32_bits_spill_16_bits(void)
+{
+	FILL_32_SPILL_16(0xffff);
+}
+
+SEC("raw_tp")
+__failure __msg("div by zero")
+__naked void fill_32_bits_spill_16_bits_bad(void)
+{
+	FILL_32_SPILL_16(0x1ffff);
+}
+#endif
 
 /* check valid spill/fill, ptr to tp buffer */
 SEC("raw_tracepoint.w")
