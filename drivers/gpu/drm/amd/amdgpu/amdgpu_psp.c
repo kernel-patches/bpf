@@ -4525,6 +4525,9 @@ int psp_ring_cmd_submit(struct psp_context *psp,
 /**
  * parse_psp_v1_bin_descriptor - Populate struct psp_bin_desc from a
  * v1.0 PSP firmware header (standalone images such as ASD or TOC).
+ * @desc: the descriptor to populate
+ * @hdr: the firmware header to read
+ * Return: 0 on success, -EINVAL if either argument is NULL.
  */
 static int parse_psp_v1_bin_descriptor(struct psp_bin_desc *desc,
 					const struct psp_firmware_header_v1_0 *hdr)
