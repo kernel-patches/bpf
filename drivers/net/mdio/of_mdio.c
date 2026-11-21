@@ -46,6 +46,9 @@ EXPORT_SYMBOL(of_mdiobus_phy_device_register);
 static int of_mdiobus_register_phy(struct mii_bus *mdio,
 				    struct device_node *child, u32 addr)
 {
+	if (of_property_read_bool(child, "broken-turn-around"))
+		mdio->phy_ignore_ta_mask |= BIT(addr);
+
 	return fwnode_mdiobus_register_phy(mdio, of_fwnode_handle(child), addr);
 }
 
@@ -55,6 +58,9 @@ static int of_mdiobus_register_device(struct mii_bus *mdio,
 	struct fwnode_handle *fwnode = of_fwnode_handle(child);
 	struct mdio_device *mdiodev;
 	int rc;
+
+	if (fwnode_property_read_bool(fwnode, "broken-turn-around"))
+		mdio->phy_ignore_ta_mask |= BIT(addr);
 
 	mdiodev = mdio_device_create(mdio, addr);
 	if (IS_ERR(mdiodev))
