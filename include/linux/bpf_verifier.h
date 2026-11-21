@@ -1663,6 +1663,7 @@ static inline struct bpf_reg_state *cur_regs(struct bpf_verifier_env *env)
 	return cur_func(env)->regs;
 }
 
+#ifdef CONFIG_NET
 int bpf_prog_offload_verifier_prep(struct bpf_prog *prog);
 int bpf_prog_offload_verify_insn(struct bpf_verifier_env *env,
 				 int insn_idx, int prev_insn_idx);
@@ -1672,6 +1673,32 @@ bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
 			      struct bpf_insn *insn);
 void
 bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt);
+#else
+static inline int bpf_prog_offload_verifier_prep(struct bpf_prog *prog)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int bpf_prog_offload_verify_insn(struct bpf_verifier_env *env,
+					       int insn_idx, int prev_insn_idx)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int bpf_prog_offload_finalize(struct bpf_verifier_env *env)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
+						 struct bpf_insn *insn)
+{
+}
+
+static inline void bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
+{
+}
+#endif
 
 /* this lives here instead of in bpf.h because it needs to dereference tgt_prog */
 static inline u64 bpf_trampoline_compute_key(const struct bpf_prog *tgt_prog,
