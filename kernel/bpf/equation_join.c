@@ -756,11 +756,17 @@ static void note_trips_left(struct bpf_verifier_env *env, struct loop_stack_entr
 	far_end = value + (step < 0 ? 0 : jmp32 ? x->r32.size : x->r64.size);
 	if (e->iv_jump_idx)
 		e->trips_left = step ? compute_trip_count(step, &far_end, op, jmp32, *bound) : 0;
-	if (e->iv_jump_idx && step && is_body_jump && !e->trips_left)
-		e->trips_left = compute_trip_count(step, &far_end, bpf_rev_opcode(op),
-						   jmp32, *bound);
+	if (e->iv_jump_idx && step && is_body_jump && !e->trips_left) {
+		op = bpf_rev_opcode(op);
+		e->trips_left = compute_trip_count(step, &far_end, op, jmp32, *bound);
+	}
 	e->iv_jump_idx = env->insn_idx;
 	e->iv_prev = value;
+	/* the jump moves the other end of the bound */
+	op = bpf_signed_opcode(op);
+	e->exit_threshold = jmp32 ? bound->r32.base : bound->r64.base;
+	if (op != BPF_JSGT && op != BPF_JSGE && (op != BPF_JNE || step > 0))
+		e->exit_threshold += jmp32 ? bound->r32.size : bound->r64.size;
 }
 
 static void move_bounds(struct bpf_verifier_env *env, struct scalar *s, bool is_ptr, u64 off)

@@ -21046,12 +21046,14 @@ static int check_held_in_leftover(struct bpf_verifier_env *env,
  *	for (i = 0; i < 100000; i++) { if (rnd() && n < 8) n++; }
  * Two trips show a step also for 'sum += i', and more than 2^32 trips also for a ring index.
  * If the steps are not constant, the skip or "infinite" is a guess.
+ * If the bound moved, the skip is a guess.
  * Returns 1 if it skipped these trips.
  */
 static int fast_forward_trips(struct bpf_verifier_env *env, struct loop_stack_entry *entry)
 {
 	struct bpf_verifier_state *cur = env->cur_state, *old = &entry->header_state->st;
-	u32 period = entry->trip - bpf_top_loop(old->frame[old->curframe])->trip;
+	const struct loop_stack_entry *saved = bpf_top_loop(old->frame[old->curframe]);
+	u32 period = entry->trip - saved->trip;
 	bool infinite = entry->trips_left > BPF_MAX_TRIPS, guess;
 	DECLARE_BITMAP(iv_xregs, MAX_BPF_XREG) = {};
 	int err;
@@ -21064,7 +21066,8 @@ static int fast_forward_trips(struct bpf_verifier_env *env, struct loop_stack_en
 	err = bpf_jumps_see_same(env, old, cur, entry->iv_jump_idx, infinite ? NULL : iv_xregs);
 	if (err <= 0)
 		return err;
-	guess = !bpf_steps_are_constant(env, entry, iv_xregs, infinite);
+	guess = (!infinite && saved->exit_threshold != entry->exit_threshold) ||
+		!bpf_steps_are_constant(env, entry, iv_xregs, infinite);
 	if (infinite) {
 		entry->loop->infinite = true;
 		entry->loop->infinite_is_guess = guess || env->run_has_guess;
