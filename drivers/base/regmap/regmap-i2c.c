@@ -13,6 +13,43 @@
 
 #include "internal.h"
 
+static void regmap_i2c_init_limits(void *context,
+				   const struct regmap_config *config,
+				   size_t *max_raw_read,
+				   size_t *max_raw_write)
+{
+	struct device *dev = context;
+	struct i2c_client *i2c = to_i2c_client(dev);
+	const struct i2c_adapter_quirks *quirks = i2c->adapter->quirks;
+	size_t val_bytes = BITS_TO_BYTES(config->val_bits);
+	size_t max_read = *max_raw_read;
+	size_t max_write = *max_raw_write;
+
+	if (!quirks)
+		return;
+
+	if (quirks->max_read_len &&
+	    quirks->max_read_len >= val_bytes &&
+	    (max_read == 0 || max_read > quirks->max_read_len))
+		max_read = quirks->max_read_len;
+
+	if (quirks->max_write_len) {
+		size_t reg_reserve_size, max_payload;
+
+		reg_reserve_size = (config->reg_bits + config->pad_bits) /
+				   BITS_PER_BYTE;
+		if (quirks->max_write_len > reg_reserve_size) {
+			max_payload = quirks->max_write_len - reg_reserve_size;
+			if (max_payload >= val_bytes &&
+			    (max_write == 0 || max_write > max_payload))
+				max_write = max_payload;
+		}
+	}
+
+	*max_raw_read = max_read;
+	*max_raw_write = max_write;
+}
+
 static int regmap_smbus_byte_reg_read(void *context, unsigned int reg,
 				      unsigned int *val)
 {
@@ -47,6 +84,7 @@ static int regmap_smbus_byte_reg_write(void *context, unsigned int reg,
 static const struct regmap_bus regmap_smbus_byte = {
 	.reg_write = regmap_smbus_byte_reg_write,
 	.reg_read = regmap_smbus_byte_reg_read,
+	.init_limits = regmap_i2c_init_limits,
 };
 
 static int regmap_smbus_word_reg_read(void *context, unsigned int reg,
@@ -83,6 +121,7 @@ static int regmap_smbus_word_reg_write(void *context, unsigned int reg,
 static const struct regmap_bus regmap_smbus_word = {
 	.reg_write = regmap_smbus_word_reg_write,
 	.reg_read = regmap_smbus_word_reg_read,
+	.init_limits = regmap_i2c_init_limits,
 };
 
 static int regmap_smbus_word_read_swapped(void *context, unsigned int reg,
@@ -119,6 +158,7 @@ static int regmap_smbus_word_write_swapped(void *context, unsigned int reg,
 static const struct regmap_bus regmap_smbus_word_swapped = {
 	.reg_write = regmap_smbus_word_write_swapped,
 	.reg_read = regmap_smbus_word_read_swapped,
+	.init_limits = regmap_i2c_init_limits,
 };
 
 static int regmap_i2c_write(void *context, const void *data, size_t count)
@@ -204,6 +244,7 @@ static const struct regmap_bus regmap_i2c = {
 	.read = regmap_i2c_read,
 	.reg_format_endian_default = REGMAP_ENDIAN_BIG,
 	.val_format_endian_default = REGMAP_ENDIAN_BIG,
+	.init_limits = regmap_i2c_init_limits,
 };
 
 static int regmap_i2c_smbus_i2c_write(void *context, const void *data,
@@ -245,6 +286,7 @@ static const struct regmap_bus regmap_i2c_smbus_i2c_block = {
 	.read = regmap_i2c_smbus_i2c_read,
 	.max_raw_read = I2C_SMBUS_BLOCK_MAX - 1,
 	.max_raw_write = I2C_SMBUS_BLOCK_MAX - 1,
+	.init_limits = regmap_i2c_init_limits,
 };
 
 static int regmap_i2c_smbus_i2c_write_reg16(void *context, const void *data,
@@ -302,6 +344,7 @@ static const struct regmap_bus regmap_i2c_smbus_i2c_block_reg16 = {
 	.read = regmap_i2c_smbus_i2c_read_reg16,
 	.max_raw_read = I2C_SMBUS_BLOCK_MAX - 2,
 	.max_raw_write = I2C_SMBUS_BLOCK_MAX - 2,
+	.init_limits = regmap_i2c_init_limits,
 };
 
 /*
@@ -346,16 +389,13 @@ static const struct regmap_bus regmap_smbus_byte_word_reg16 = {
 	.read = regmap_i2c_smbus_i2c_read_reg16,
 	.max_raw_read = I2C_SMBUS_BLOCK_MAX - 2,
 	.max_raw_write = 1,
+	.init_limits = regmap_i2c_init_limits,
 };
 
 static const struct regmap_bus *regmap_get_i2c_bus(struct i2c_client *i2c,
 					const struct regmap_config *config)
 {
-	const struct i2c_adapter_quirks *quirks;
 	const struct regmap_bus *bus = NULL;
-	struct regmap_bus *ret_bus;
-	size_t val_bytes;
-	u16 max_read, max_write;
 
 	if (i2c_check_functionality(i2c->adapter, I2C_FUNC_I2C))
 		bus = &regmap_i2c;
@@ -392,43 +432,6 @@ static const struct regmap_bus *regmap_get_i2c_bus(struct i2c_client *i2c,
 
 	if (!bus)
 		return ERR_PTR(-ENOTSUPP);
-
-	max_read = bus->max_raw_read;
-	max_write = bus->max_raw_write;
-	val_bytes = BITS_TO_BYTES(config->val_bits);
-
-	quirks = i2c->adapter->quirks;
-	if (quirks) {
-		if (quirks->max_read_len &&
-		    quirks->max_read_len >= val_bytes &&
-		    (max_read == 0 || max_read > quirks->max_read_len))
-			max_read = quirks->max_read_len;
-
-		if (quirks->max_write_len) {
-			size_t reg_reserve_size, max_payload;
-
-			reg_reserve_size = (config->reg_bits + config->pad_bits) /
-					   BITS_PER_BYTE;
-			if (quirks->max_write_len > reg_reserve_size) {
-				max_payload = quirks->max_write_len -
-					      reg_reserve_size;
-				if (max_payload >= val_bytes &&
-				    (max_write == 0 || max_write > max_payload))
-					max_write = max_payload;
-			}
-		}
-
-		if (max_read != bus->max_raw_read ||
-		    max_write != bus->max_raw_write) {
-			ret_bus = kmemdup(bus, sizeof(*bus), GFP_KERNEL);
-			if (!ret_bus)
-				return ERR_PTR(-ENOMEM);
-			ret_bus->free_on_exit = true;
-			ret_bus->max_raw_read = max_read;
-			ret_bus->max_raw_write = max_write;
-			bus = ret_bus;
-		}
-	}
 
 	return bus;
 }
