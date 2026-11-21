@@ -2557,7 +2557,7 @@ static void zap_huge_pmd_folio(struct mmu_gather *tlb, struct vm_area_struct *vm
 	/* Device private folios are pinned and don't need a TLB flush. */
 	if (is_device_private)
 		folio_put(folio);
-	else if (__tlb_remove_page_size(tlb, &folio->page, HPAGE_PMD_SIZE))
+	else if (__tlb_remove_page_size(tlb, &folio->page, HPAGE_PMD_SIZE, false))
 		*force_flush = true;
 
 	if (delay_rmap) {

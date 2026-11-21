@@ -5477,7 +5477,7 @@ static void hugetlb_unmap_range(struct mmu_gather *tlb,
 		 * entries are gone, unless the mm has no users left.
 		 */
 		if (folio_test_anon(folio) && !tlb->fullmm) {
-			delay_rmap = tlb_delay_rmap(tlb);
+			delay_rmap = tlb_can_delay_rmap();
 			/*
 			 * Without delay-rmap support, just flush before
 			 * dropping the PTL. Except with MMU_GATHER_NO_GATHER
