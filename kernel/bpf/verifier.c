@@ -11240,6 +11240,8 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	if (state->curframe + 1 >= MAX_CALL_FRAMES) {
 		verbose(env, "the call stack of %d frames is too deep\n",
 			state->curframe + 2);
+		/* drop the path: a pass possibly does not have these calls in frames */
+		env->cur_state->infeasible |= env->path_sensitive;
 		return -E2BIG;
 	}
 	/* in the frames of the callers it has no end */

@@ -586,7 +586,10 @@ struct bpf_verifier_state {
 	struct bpf_reference_state *refs;
 	u32 insn_idx;
 	bool speculative;
-	/* an xreg has no value: unreachable. Only a path-sensitive run drops such a state. */
+	/*
+	 * An xreg has no value: unreachable. Only a path-sensitive run drops such a state.
+	 * The run also sets it when it is out of frames.
+	 */
 	bool infeasible;
 	/* an error only in a leftover, see check_held_in_leftover() */
 	bool holds_too_much;
