@@ -72,17 +72,6 @@ enum cachefiles_trunc_trace {
 	cachefiles_trunc_zap,
 };
 
-enum cachefiles_prepare_read_trace {
-	cachefiles_trace_read_after_eof,
-	cachefiles_trace_read_found_hole,
-	cachefiles_trace_read_found_part,
-	cachefiles_trace_read_have_data,
-	cachefiles_trace_read_no_data,
-	cachefiles_trace_read_no_file,
-	cachefiles_trace_read_seek_error,
-	cachefiles_trace_read_seek_nxio,
-};
-
 enum cachefiles_error_trace {
 	cachefiles_trace_alignment_error,
 	cachefiles_trace_create_nospace,
@@ -163,16 +152,6 @@ enum cachefiles_error_trace {
 	EM(cachefiles_trunc_shrink,		"SHRINK")		\
 	E_(cachefiles_trunc_zap,		"ZAP   ")
 
-#define cachefiles_prepare_read_traces					\
-	EM(cachefiles_trace_read_after_eof,	"after-eof ")		\
-	EM(cachefiles_trace_read_found_hole,	"found-hole")		\
-	EM(cachefiles_trace_read_found_part,	"found-part")		\
-	EM(cachefiles_trace_read_have_data,	"have-data ")		\
-	EM(cachefiles_trace_read_no_data,	"no-data   ")		\
-	EM(cachefiles_trace_read_no_file,	"no-file   ")		\
-	EM(cachefiles_trace_read_seek_error,	"seek-error")		\
-	E_(cachefiles_trace_read_seek_nxio,	"seek-enxio")
-
 #define cachefiles_error_traces						\
 	EM(cachefiles_trace_alignment_error,	"align")		\
 	EM(cachefiles_trace_create_nospace,	"create-nospace")	\
@@ -210,7 +189,6 @@ cachefiles_obj_kill_traces;
 cachefiles_obj_ref_traces;
 cachefiles_coherency_traces;
 cachefiles_trunc_traces;
-cachefiles_prepare_read_traces;
 cachefiles_error_traces;
 
 /*
@@ -466,48 +444,6 @@ TRACE_EVENT(cachefiles_vol_coherency,
 		      __entry->vol,
 		      __print_symbolic(__entry->why, cachefiles_coherency_traces),
 		      __entry->ino)
-	    );
-
-TRACE_EVENT(cachefiles_prep_read,
-	    TP_PROTO(struct cachefiles_object *obj,
-		     uoff_t start,
-		     size_t len,
-		     unsigned short flags,
-		     enum netfs_io_source source,
-		     enum cachefiles_prepare_read_trace why,
-		     ino_t cache_inode, ino_t netfs_inode),
-
-	    TP_ARGS(obj, start, len, flags, source, why, cache_inode, netfs_inode),
-
-	    TP_STRUCT__entry(
-		    __field(unsigned int,		obj)
-		    __field(unsigned short,		flags)
-		    __field(enum netfs_io_source,	source)
-		    __field(enum cachefiles_prepare_read_trace,	why)
-		    __field(size_t,			len)
-		    __field(uoff_t,			start)
-		    __field(unsigned int,		netfs_inode)
-		    __field(unsigned int,		cache_inode)
-			     ),
-
-	    TP_fast_assign(
-		    __entry->obj	= obj ? obj->debug_id : 0;
-		    __entry->flags	= flags;
-		    __entry->source	= source;
-		    __entry->why	= why;
-		    __entry->len	= len;
-		    __entry->start	= start;
-		    __entry->netfs_inode = netfs_inode;
-		    __entry->cache_inode = cache_inode;
-			   ),
-
-	    TP_printk("o=%08x %s %s f=%02x s=%llx %zx ni=%x B=%x",
-		      __entry->obj,
-		      __print_symbolic(__entry->source, netfs_sreq_sources),
-		      __print_symbolic(__entry->why, cachefiles_prepare_read_traces),
-		      __entry->flags,
-		      __entry->start, __entry->len,
-		      __entry->netfs_inode, __entry->cache_inode)
 	    );
 
 TRACE_EVENT(cachefiles_read,

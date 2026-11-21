@@ -7313,7 +7313,6 @@ static const struct bpf_raw_tp_null_args raw_tp_null_args[] = {
 	{ "cachefiles_lookup", 0x1 | 0x200 },
 	{ "cachefiles_unlink", 0x1 },
 	{ "cachefiles_rename", 0x1 },
-	{ "cachefiles_prep_read", 0x1 },
 	{ "cachefiles_mark_active", 0x1 },
 	{ "cachefiles_mark_failed", 0x1 },
 	{ "cachefiles_mark_inactive", 0x1 },
