@@ -566,7 +566,8 @@ static int msg_loop(int fd, int iov_count, int iov_length, int cnt,
 			sent = sendmsg(fd, &msg, flags);
 
 			if (!drop && sent < 0) {
-				if (opt->tx_wait_mem && errno == EACCES) {
+				if (opt->tx_wait_mem &&
+				    (errno == EACCES || errno == EPIPE)) {
 					errno = 0;
 					goto out_errno;
 				}

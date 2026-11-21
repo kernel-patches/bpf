@@ -364,6 +364,88 @@ out:
 	test_sockmap_strp__destroy(strp);
 }
 
+static int sockmap_strp_wait_fionread(int fd, int expected)
+{
+	int err, avail = 0;
+
+	while (1) {
+		err = ioctl(fd, FIONREAD, &avail);
+		if (!ASSERT_OK(err, "ioctl(FIONREAD) error"))
+			return -1;
+		if (avail >= expected)
+			break;
+		usleep(10000);
+	}
+	return ASSERT_EQ(avail, expected, "ioctl(FIONREAD)") ? 0 : -1;
+}
+
+/*
+ * Let the parser run twice before the reader reads anything. Each round
+ * must keep the SK_PASS bytes of the earlier rounds out of copied_seq,
+ * otherwise copied_seq runs past rcv_nxt and the stream stalls.
+ */
+static void test_sockmap_strp_pass_unread(int family, int sotype)
+{
+	int zero = 0, one = 1, pkt_size = STRP_PKT_FULL_LEN, sent, recvd;
+	int err, map, i;
+	int c = -1, p = -1;
+	struct test_sockmap_strp *strp = NULL;
+	char rcv[STRP_PKT_FULL_LEN * 2 + 1] = "0";
+
+	strp = sockmap_strp_init(&map, true, true);
+	if (!ASSERT_TRUE(strp, "sockmap_strp_init"))
+		return;
+
+	err = create_pair(family, sotype, &c, &p);
+	if (err)
+		goto out;
+
+	err = bpf_map_update_elem(map, &zero, &p, BPF_NOEXIST);
+	if (!ASSERT_OK(err, "bpf_map_update_elem(p)"))
+		goto out_close;
+
+	err = setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+	if (!ASSERT_OK(err, "setsockopt(TCP_NODELAY)"))
+		goto out_close;
+
+	/*
+	 * wait for each packet to reach ingress_msg before sending the
+	 * next one, so that the parser runs once per packet
+	 */
+	for (i = 1; i <= 2; i++) {
+		sent = xsend(c, packet, pkt_size, 0);
+		if (!ASSERT_EQ(sent, pkt_size, "xsend(c)"))
+			goto out_close;
+		if (sockmap_strp_wait_fionread(p, pkt_size * i))
+			goto out_close;
+	}
+
+	recvd = recv_timeout(p, rcv, sizeof(rcv), MSG_DONTWAIT, IO_TIMEOUT_SEC);
+	if (!ASSERT_EQ(recvd, pkt_size * 2, "recv_timeout(p)") ||
+	    !ASSERT_OK(memcmp(packet, rcv, pkt_size), "memcmp, data mismatch") ||
+	    !ASSERT_OK(memcmp(packet, rcv + pkt_size, pkt_size),
+		       "memcmp, second data mismatch"))
+		goto out_close;
+
+	/* the next packet must still wake the parser */
+	sent = xsend(c, packet, pkt_size, 0);
+	if (!ASSERT_EQ(sent, pkt_size, "xsend(c) after read"))
+		goto out_close;
+
+	recvd = recv_timeout(p, rcv, sizeof(rcv), MSG_DONTWAIT, IO_TIMEOUT_SEC);
+	if (!ASSERT_EQ(recvd, pkt_size, "recv_timeout(p) after read") ||
+	    !ASSERT_OK(memcmp(packet, rcv, pkt_size),
+		       "memcmp, data mismatch after read"))
+		goto out_close;
+
+out_close:
+	close(c);
+	close(p);
+
+out:
+	test_sockmap_strp__destroy(strp);
+}
+
 /* Test strparser with verdict mode */
 static void test_sockmap_strp_verdict(int family, int sotype)
 {
@@ -470,6 +552,10 @@ void test_sockmap_strp(void)
 		test_sockmap_strp_pass(AF_INET, SOCK_STREAM, true);
 	if (test__start_subtest("sockmap strp tcp v6 pass fionread"))
 		test_sockmap_strp_pass(AF_INET6, SOCK_STREAM, true);
+	if (test__start_subtest("sockmap strp tcp pass unread"))
+		test_sockmap_strp_pass_unread(AF_INET, SOCK_STREAM);
+	if (test__start_subtest("sockmap strp tcp v6 pass unread"))
+		test_sockmap_strp_pass_unread(AF_INET6, SOCK_STREAM);
 	if (test__start_subtest("sockmap strp tcp verdict"))
 		test_sockmap_strp_verdict(AF_INET, SOCK_STREAM);
 	if (test__start_subtest("sockmap strp tcp v6 verdict"))

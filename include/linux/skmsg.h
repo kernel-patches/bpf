@@ -68,6 +68,9 @@ struct sk_psock_progs {
 enum sk_psock_state_bits {
 	SK_PSOCK_TX_ENABLED,
 	SK_PSOCK_RX_STRP_ENABLED,
+	SK_PSOCK_STRP_DONE_PENDING,
+	SK_PSOCK_TX_BUSY,
+	SK_PSOCK_CLOSING,
 };
 
 struct sk_psock_link {
@@ -459,6 +462,7 @@ void sk_psock_stop(struct sk_psock *psock);
 int sk_psock_init_strp(struct sock *sk, struct sk_psock *psock);
 void sk_psock_start_strp(struct sock *sk, struct sk_psock *psock);
 void sk_psock_stop_strp(struct sock *sk, struct sk_psock *psock);
+void sk_psock_queue_strp_done(struct sk_psock *psock);
 #else
 static inline int sk_psock_init_strp(struct sock *sk, struct sk_psock *psock)
 {
@@ -470,6 +474,10 @@ static inline void sk_psock_start_strp(struct sock *sk, struct sk_psock *psock)
 }
 
 static inline void sk_psock_stop_strp(struct sock *sk, struct sk_psock *psock)
+{
+}
+
+static inline void sk_psock_queue_strp_done(struct sk_psock *psock)
 {
 }
 #endif
