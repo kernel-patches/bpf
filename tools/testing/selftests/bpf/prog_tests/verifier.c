@@ -8,6 +8,7 @@
 #include "cap_helpers.h"
 #include "sysctl_helpers.h"
 #include "cb_refs.skel.h"
+#include "kfunc_variants.skel.h"
 #include "verifier_aggregate_arg.skel.h"
 #include "verifier_aggregate_ret.skel.h"
 #include "verifier_alu_range.skel.h"
@@ -224,6 +225,8 @@ void test_arena_noarena(void)                 { RUN_TESTS(arena_noarena); }
 void test_arena_kfunc_jit(void)               { RUN_TESTS(arena_kfunc_jit); }
 
 void test_cb_refs(void)                       { RUN_TESTS(cb_refs); }
+
+void test_kfunc_variants(void)                { RUN_TESTS(kfunc_variants); }
 
 void test_verifier_aggregate_arg(void)        { RUN_TESTS(verifier_aggregate_arg); }
 void test_verifier_aggregate_ret(void)        { RUN_TESTS(verifier_aggregate_ret); }
