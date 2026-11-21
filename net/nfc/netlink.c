@@ -1472,6 +1472,19 @@ struct se_io_ctx {
 	u32 se_idx;
 };
 
+/*
+ * Only listeners whose socket was opened with the capability that
+ * NFC_CMD_SE_IO requires get the response APDU. Check the opener of the
+ * socket, as do_one_broadcast() does, since this runs in the driver's
+ * context. Kernel sockets have no file and get nothing.
+ */
+static int se_io_filter(struct sock *dsk, struct sk_buff *skb, void *data)
+{
+	struct file *file = dsk->sk_socket->file;
+
+	return !file || !file_ns_capable(file, &init_user_ns, CAP_NET_ADMIN);
+}
+
 static void se_io_cb(void *context, u8 *apdu, size_t apdu_len, int err)
 {
 	struct se_io_ctx *ctx = context;
@@ -1496,7 +1509,8 @@ static void se_io_cb(void *context, u8 *apdu, size_t apdu_len, int err)
 
 	genlmsg_end(msg, hdr);
 
-	genlmsg_multicast(&nfc_genl_family, msg, 0, 0, GFP_KERNEL);
+	genlmsg_multicast_netns_filtered(&nfc_genl_family, &init_net, msg, 0, 0,
+					 GFP_KERNEL, se_io_filter, NULL);
 
 	kfree(ctx);
 
