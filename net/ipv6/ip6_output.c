@@ -1660,8 +1660,18 @@ alloc_new_skb:
 			 */
 			datalen = length + fraggap;
 
-			if (datalen > (cork->length <= mtu ? mtu : maxfraglen) - fragheaderlen)
-				datalen = maxfraglen - fragheaderlen - rt->dst.trailer_len;
+			if (datalen > (cork->length <= mtu ? mtu : maxfraglen) - fragheaderlen) {
+				unsigned int need = (unsigned int)transhdrlen + fraggap;
+				unsigned int room = maxfraglen - fragheaderlen;
+				unsigned int trailer = (unsigned int)rt->dst.trailer_len;
+
+				if (maxfraglen <= fragheaderlen || room <= trailer ||
+				    room - trailer < need) {
+					err = -EMSGSIZE;
+					goto error;
+				}
+				datalen = room - trailer;
+			}
 			fraglen = datalen + fragheaderlen;
 			pagedlen = 0;
 
