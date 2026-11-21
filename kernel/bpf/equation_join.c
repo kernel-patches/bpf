@@ -622,12 +622,13 @@ bool bpf_equations_join_forgets(struct bpf_verifier_env *env, const struct bpf_v
 	return false;
 }
 
-/* Which xregs of @xregs in frame @fr have one sym? */
+/* Which xregs of @xregs in frame @fr have one sym, and how does one give the other? */
 u32 bpf_equations_hash(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u32 fr,
 		       const unsigned long *xregs, u32 bits)
 {
-	const struct bpf_xreg_equation *xreg_eq;
-	u32 i, hash = 0, *first;
+	const struct bpf_xreg_equation *xreg_eq, *first;
+	u32 i, hash = 0, *first_pos;
+	u64 key[5];
 
 	for (i = 0; i < st->equations.sym_cnt; i++)
 		env->eq_env->scratch[i].new_symno = U32_MAX;
@@ -635,10 +636,18 @@ u32 bpf_equations_hash(struct bpf_verifier_env *env, const struct bpf_verifier_s
 		if (xreg_eq->xreg >> 32 != fr || (u32)xreg_eq->xreg >= bits ||
 		    !test_bit((u32)xreg_eq->xreg, xregs))
 			continue;
-		first = &env->eq_env->scratch[xreg_eq->sym].new_symno;
-		if (*first != U32_MAX)
-			hash = jhash_2words(*first, xreg_eq->xreg, hash);
-		*first = min_t(u32, *first, xreg_eq->xreg);
+		first_pos = &env->eq_env->scratch[xreg_eq->sym].new_symno;
+		if (*first_pos == U32_MAX) {
+			*first_pos = xreg_eq - st->equations.xreg_equations;
+			continue;
+		}
+		first = &st->equations.xreg_equations[*first_pos];
+		key[0] = first->xreg;
+		key[1] = xreg_eq->xreg;
+		key[2] = first->coef;
+		key[3] = xreg_eq->coef;
+		key[4] = first->coef * xreg_eq->off - xreg_eq->coef * first->off;
+		hash = jhash(key, sizeof(key), hash);
 	}
 	return hash;
 }
