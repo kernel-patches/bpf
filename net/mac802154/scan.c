@@ -826,6 +826,11 @@ int mac802154_process_association_req(struct ieee802154_sub_if_data *sdata,
 		return -ENODEV;
 	}
 
+	/* mac802154_send_association_resp_locked() uses the MLME TX helpers,
+	 * which require the RTNL.  Take it before association_lock to keep the
+	 * same lock order as the netlink paths (RTNL then association_lock).
+	 */
+	rtnl_lock();
 	mutex_lock(&wpan_dev->association_lock);
 
 	memcpy(&assoc_req_pl, skb->data, sizeof(assoc_req_pl));
@@ -895,6 +900,7 @@ int mac802154_process_association_req(struct ieee802154_sub_if_data *sdata,
 
 unlock:
 	mutex_unlock(&wpan_dev->association_lock);
+	rtnl_unlock();
 	return ret;
 }
 
