@@ -107,12 +107,13 @@ static int nla_put_srh(struct sk_buff *skb, int attrtype,
 	return 0;
 }
 
-static void set_tun_src(struct net *net, struct net_device *dev,
-			struct in6_addr *daddr, struct in6_addr *saddr,
-			struct in6_addr *route_tunsrc)
+static int set_tun_src(struct net *net, struct net_device *dev,
+		       struct in6_addr *daddr, struct in6_addr *saddr,
+		       struct in6_addr *route_tunsrc)
 {
 	struct seg6_pernet_data *sdata = seg6_pernet(net);
 	struct in6_addr *tun_src;
+	int err = 0;
 
 	/* Priority order to select tunnel source address:
 	 *  1. per route source address (if configured)
@@ -128,12 +129,14 @@ static void set_tun_src(struct net *net, struct net_device *dev,
 		if (!ipv6_addr_any(tun_src)) {
 			memcpy(saddr, tun_src, sizeof(struct in6_addr));
 		} else {
-			ipv6_dev_get_saddr(net, dev, daddr,
-					   IPV6_PREFER_SRC_PUBLIC, saddr);
+			err = ipv6_dev_get_saddr(net, dev, daddr,
+						 IPV6_PREFER_SRC_PUBLIC, saddr);
 		}
 
 		rcu_read_unlock();
 	}
+
+	return err;
 }
 
 /* Compute flowlabel for outer IPv6 header */
@@ -213,7 +216,9 @@ static int __seg6_do_srh_encap(struct sk_buff *skb, struct ipv6_sr_hdr *osrh,
 	isrh->nexthdr = proto;
 
 	hdr->daddr = isrh->segments[isrh->first_segment];
-	set_tun_src(net, dev, &hdr->daddr, &hdr->saddr, route_tunsrc);
+	err = set_tun_src(net, dev, &hdr->daddr, &hdr->saddr, route_tunsrc);
+	if (unlikely(err))
+		return err;
 
 #ifdef CONFIG_IPV6_SEG6_HMAC
 	if (sr_has_hmac(isrh)) {
@@ -304,7 +309,10 @@ static int seg6_do_srh_encap_red(struct sk_buff *skb,
 	if (skip_srh) {
 		hdr->nexthdr = proto;
 
-		set_tun_src(net, dev, &hdr->daddr, &hdr->saddr, route_tunsrc);
+		err = set_tun_src(net, dev, &hdr->daddr, &hdr->saddr,
+				  route_tunsrc);
+		if (unlikely(err))
+			return err;
 		goto out;
 	}
 
@@ -340,7 +348,9 @@ static int seg6_do_srh_encap_red(struct sk_buff *skb,
 
 srcaddr:
 	isrh->nexthdr = proto;
-	set_tun_src(net, dev, &hdr->daddr, &hdr->saddr, route_tunsrc);
+	err = set_tun_src(net, dev, &hdr->daddr, &hdr->saddr, route_tunsrc);
+	if (unlikely(err))
+		return err;
 
 #ifdef CONFIG_IPV6_SEG6_HMAC
 	if (unlikely(!skip_srh && sr_has_hmac(isrh))) {
@@ -472,7 +482,7 @@ static int seg6_do_srh(struct sk_buff *skb, struct dst_entry *cache_dst)
 			return err;
 
 		skb_mac_header_rebuild(skb);
-		skb_push(skb, skb->mac_len);
+		skb_push_rcsum(skb, skb->mac_len);
 
 		if (tinfo->mode == SEG6_IPTUN_MODE_L2ENCAP)
 			err = __seg6_do_srh_encap(skb, tinfo->srh,
@@ -871,11 +881,11 @@ static int seg6_build_state(struct net *net, struct nlattr *nla,
 
 	slwt = seg6_lwt_lwtunnel(newts);
 
-	err = dst_cache_init(&slwt->cache_input, GFP_ATOMIC);
+	err = dst_cache_init(&slwt->cache_input, GFP_KERNEL);
 	if (err)
 		goto err_free_newts;
 
-	err = dst_cache_init(&slwt->cache_output, GFP_ATOMIC);
+	err = dst_cache_init(&slwt->cache_output, GFP_KERNEL);
 	if (err)
 		goto err_destroy_input;
 

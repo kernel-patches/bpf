@@ -882,6 +882,7 @@ static void digital_in_recv_dep_res(struct nfc_digital_dev *ddev, void *arg,
 
 exit:
 	data_exch->cb(data_exch->cb_context, resp, rc);
+	resp = NULL;
 
 error:
 	kfree(data_exch);

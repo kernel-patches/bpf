@@ -107,8 +107,8 @@ struct ib_mr *mana_ib_reg_user_mr(struct ib_pd *ibpd, u64 start, u64 length,
 	struct ib_device *ibdev = ibpd->device;
 	struct mana_ib_dev *dev;
 	struct mana_ib_mr *mr;
-	u64 dma_region_handle;
-	int err;
+	u64 dma_region_handle = GDMA_INVALID_DMA_REGION;
+	int err, destroy_err;
 
 	if (dmah)
 		return ERR_PTR(-EOPNOTSUPP);
@@ -178,10 +178,16 @@ struct ib_mr *mana_ib_reg_user_mr(struct ib_pd *ibpd, u64 start, u64 length,
 	return &mr->ibmr;
 
 err_dma_region:
-	mana_gd_destroy_dma_region(mdev_to_gc(dev), dma_region_handle);
+	destroy_err = mana_gd_destroy_dma_region(mdev_to_gc(dev),
+						 dma_region_handle);
+	if (mana_gd_is_request_rejected(destroy_err))
+		goto err_free;
+	dma_region_handle = GDMA_INVALID_DMA_REGION;
 
 err_umem:
-	ib_umem_release(mr->umem);
+	if (!mana_gd_is_request_rejected(err) ||
+	    dma_region_handle == GDMA_INVALID_DMA_REGION)
+		ib_umem_release(mr->umem);
 
 err_free:
 	kfree(mr);
@@ -199,8 +205,8 @@ struct ib_mr *mana_ib_reg_user_mr_dmabuf(struct ib_pd *ibpd, u64 start, u64 leng
 	struct ib_umem_dmabuf *umem_dmabuf;
 	struct mana_ib_dev *dev;
 	struct mana_ib_mr *mr;
-	u64 dma_region_handle;
-	int err;
+	u64 dma_region_handle = GDMA_INVALID_DMA_REGION;
+	int err, destroy_err;
 
 	if (dmah)
 		return ERR_PTR(-EOPNOTSUPP);
@@ -252,10 +258,16 @@ struct ib_mr *mana_ib_reg_user_mr_dmabuf(struct ib_pd *ibpd, u64 start, u64 leng
 	return &mr->ibmr;
 
 err_dma_region:
-	mana_gd_destroy_dma_region(mdev_to_gc(dev), dma_region_handle);
+	destroy_err = mana_gd_destroy_dma_region(mdev_to_gc(dev),
+						 dma_region_handle);
+	if (mana_gd_is_request_rejected(destroy_err))
+		goto err_free;
+	dma_region_handle = GDMA_INVALID_DMA_REGION;
 
 err_umem:
-	ib_umem_release(mr->umem);
+	if (!mana_gd_is_request_rejected(err) ||
+	    dma_region_handle == GDMA_INVALID_DMA_REGION)
+		ib_umem_release(mr->umem);
 
 err_free:
 	kfree(mr);

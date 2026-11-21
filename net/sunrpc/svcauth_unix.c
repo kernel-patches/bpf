@@ -1100,7 +1100,8 @@ struct auth_ops svcauth_null = {
  *
  * Return values:
  *   %SVC_OK: Both credential and verifier are valid
- *   %SVC_DENIED: Credential or verifier is not valid
+ *   %SVC_DENIED: Credential or verifier is not valid, or a TLS
+ *                session already exists on this transport
  *   %SVC_GARBAGE: Failed to decode credential or verifier
  *   %SVC_CLOSE: Temporary failure
  *
@@ -1134,6 +1135,17 @@ svcauth_tls_accept(struct svc_rqst *rqstp)
 
 	/* AUTH_TLS is not valid on non-NULL procedures */
 	if (rqstp->rq_proc != 0) {
+		rqstp->rq_auth_stat = rpc_autherr_badcred;
+		return SVC_DENIED;
+	}
+
+	/*
+	 * AUTH_TLS initiates a handshake, and a second handshake
+	 * would destroy xpt_handshake_tags while other workers read
+	 * them. This test can pass before a concurrent handshake
+	 * completes; svc_tcp_handshake() rechecks under XPT_BUSY.
+	 */
+	if (test_bit(XPT_TLS_SESSION, &xprt->xpt_flags)) {
 		rqstp->rq_auth_stat = rpc_autherr_badcred;
 		return SVC_DENIED;
 	}

@@ -36,8 +36,6 @@
 #include "icssg_switchdev.h"
 #include "../k3-cppi-desc-pool.h"
 
-#define PRUETH_MODULE_DESCRIPTION "PRUSS ICSSG Ethernet driver"
-
 #define DEFAULT_VID		1
 #define DEFAULT_PORT_MASK	1
 #define DEFAULT_UNTAG_MASK	1
@@ -50,8 +48,6 @@
 #define PRUETH_RX_DMA_ATTR			(DMA_ATTR_SKIP_CPU_SYNC |\
 						 DMA_ATTR_WEAK_ORDERING)
 
-/* CTRLMMR_ICSSG_RGMII_CTRL register bits */
-#define ICSSG_CTRL_RGMII_ID_MODE                BIT(24)
 
 static void emac_adjust_link(struct net_device *ndev);
 
@@ -403,20 +399,6 @@ static void emac_adjust_link(struct net_device *ndev)
 	}
 }
 
-static enum hrtimer_restart emac_rx_timer_callback(struct hrtimer *timer)
-{
-	struct prueth_emac *emac =
-			container_of(timer, struct prueth_emac, rx_hrtimer);
-	int rx_flow = PRUETH_RX_FLOW_DATA;
-
-	if (emac->rx_chns.irq_disabled) {
-		/* re-enable the RX IRQ */
-		emac->rx_chns.irq_disabled = false;
-		enable_irq(emac->rx_chns.irq[rx_flow]);
-	}
-	return HRTIMER_NORESTART;
-}
-
 static int emac_phy_connect(struct prueth_emac *emac)
 {
 	struct prueth *prueth = emac->prueth;
@@ -586,43 +568,6 @@ const struct icss_iep_clockops prueth_iep_clockops = {
 	.gettime = prueth_iep_gettime,
 	.perout_enable = prueth_perout_enable,
 };
-
-static void prueth_destroy_xdp_rxqs(struct prueth_emac *emac)
-{
-	struct xdp_rxq_info *rxq = &emac->rx_chns.xdp_rxq;
-
-	if (xdp_rxq_info_is_reg(rxq))
-		xdp_rxq_info_unreg(rxq);
-}
-
-static int prueth_create_xdp_rxqs(struct prueth_emac *emac)
-{
-	struct xdp_rxq_info *rxq = &emac->rx_chns.xdp_rxq;
-	struct page_pool *pool = emac->rx_chns.pg_pool;
-	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
-	int ret;
-
-	ret = xdp_rxq_info_reg(rxq, emac->ndev, 0, emac->napi_rx.napi_id);
-	if (ret)
-		return ret;
-
-	if (rx_chn->xsk_pool) {
-		ret = xdp_rxq_info_reg_mem_model(rxq, MEM_TYPE_XSK_BUFF_POOL, NULL);
-		if (ret)
-			goto xdp_unreg;
-		xsk_pool_set_rxq_info(rx_chn->xsk_pool, rxq);
-	} else {
-		ret = xdp_rxq_info_reg_mem_model(rxq, MEM_TYPE_PAGE_POOL, pool);
-		if (ret)
-			goto xdp_unreg;
-	}
-
-	return 0;
-
-xdp_unreg:
-	prueth_destroy_xdp_rxqs(emac);
-	return ret;
-}
 
 static int icssg_prueth_add_mcast(struct net_device *ndev, const u8 *addr)
 {
@@ -883,14 +828,14 @@ static int icssg_update_vlan_mcast(struct net_device *vdev, int vid,
 static void prueth_set_xsk_pool(struct prueth_emac *emac, u16 queue_id)
 {
 	struct prueth_tx_chn *tx_chn = &emac->tx_chns[queue_id];
-	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth_rx_flow *rx_flow = &emac->rx_chns.flows[queue_id];
 
-	if (emac->xsk_qid != queue_id) {
-		rx_chn->xsk_pool = NULL;
-		tx_chn->xsk_pool = NULL;
-	} else {
-		rx_chn->xsk_pool = xsk_get_pool_from_qid(emac->ndev, queue_id);
+	if (test_bit(queue_id, emac->xsk_queues)) {
+		rx_flow->xsk_pool = xsk_get_pool_from_qid(emac->ndev, queue_id);
 		tx_chn->xsk_pool = xsk_get_pool_from_qid(emac->ndev, queue_id);
+	} else {
+		rx_flow->xsk_pool = NULL;
+		tx_chn->xsk_pool = NULL;
 	}
 }
 
@@ -921,7 +866,43 @@ static void prueth_destroy_txq(struct prueth_emac *emac)
 	}
 }
 
-static void prueth_destroy_rxq(struct prueth_emac *emac)
+static void prueth_destroy_rxq(struct prueth_emac *emac, int qid)
+{
+	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth_rx_flow *flow = &rx_chn->flows[qid];
+	dma_addr_t desc_dma;
+
+	napi_disable(&flow->napi_rx);
+	hrtimer_cancel(&flow->rx_hrtimer);
+	if (flow->irq_disabled) {
+		enable_irq(flow->irq);
+		flow->irq_disabled = false;
+	}
+
+	/* k3_udma_glue_reset_rx_chn() only drains the FDQ; it resets the
+	 * completion ring (RXCQ) without freeing descriptors still in it.
+	 * Teardown posts TDCM only to flow 0's RXCQ; flows 1..N have no
+	 * NAPI trigger to drain their RXCQs. Drain each flow's RXCQ here
+	 * so page_pool_destroy() finds no inflight pages.
+	 */
+	while (!k3_udma_glue_pop_rx_chn(rx_chn->rx_chn, qid, &desc_dma)) {
+		if (!cppi5_desc_is_tdcm(desc_dma))
+			prueth_rx_cleanup(rx_chn, desc_dma);
+	}
+
+	k3_udma_glue_reset_rx_chn(rx_chn->rx_chn, flow->id, rx_chn,
+				  prueth_rx_cleanup);
+
+	if (xdp_rxq_info_is_reg(&flow->xdp_rxq))
+		xdp_rxq_info_unreg(&flow->xdp_rxq);
+
+	if (flow->pg_pool) {
+		page_pool_destroy(flow->pg_pool);
+		flow->pg_pool = NULL;
+	}
+}
+
+static void prueth_destroy_rxqs(struct prueth_emac *emac)
 {
 	int i, ret;
 
@@ -929,16 +910,14 @@ static void prueth_destroy_rxq(struct prueth_emac *emac)
 	reinit_completion(&emac->tdown_complete);
 	k3_udma_glue_tdown_rx_chn(emac->rx_chns.rx_chn, true);
 
-	/* When RX DMA Channel Teardown is initiated, it will result in an
-	 * interrupt and a Teardown Completion Marker (TDCM) is queued into
-	 * the RX Completion queue. Acknowledging the interrupt involves
-	 * popping the TDCM descriptor from the RX Completion queue via the
-	 * RX NAPI Handler. To avoid timing out when waiting for the TDCM to
-	 * be popped, schedule the RX NAPI handler to run immediately.
+	/* When RX DMA Channel Teardown is initiated, the hardware posts a
+	 * Teardown Completion Marker (TDCM) to flow 0's RXCQ. Schedule flow
+	 * 0's NAPI unconditionally so the TDCM is popped promptly regardless
+	 * of whether the RX IRQ is currently disabled by hrtimer coalescing.
 	 */
-	if (!napi_if_scheduled_mark_missed(&emac->napi_rx)) {
-		if (napi_schedule_prep(&emac->napi_rx))
-			__napi_schedule(&emac->napi_rx);
+	if (!napi_if_scheduled_mark_missed(&emac->rx_chns.flows[0].napi_rx)) {
+		if (napi_schedule_prep(&emac->rx_chns.flows[0].napi_rx))
+			__napi_schedule(&emac->rx_chns.flows[0].napi_rx);
 	}
 
 	ret = wait_for_completion_timeout(&emac->tdown_complete,
@@ -946,15 +925,9 @@ static void prueth_destroy_rxq(struct prueth_emac *emac)
 	if (!ret)
 		netdev_err(emac->ndev, "rx teardown timeout\n");
 
-	for (i = 0; i < PRUETH_MAX_RX_FLOWS; i++) {
-		napi_disable(&emac->napi_rx);
-		hrtimer_cancel(&emac->rx_hrtimer);
-		k3_udma_glue_reset_rx_chn(emac->rx_chns.rx_chn, i,
-					  &emac->rx_chns,
-					  prueth_rx_cleanup);
-	}
+	for (i = 0; i < emac->rx_flow_num; i++)
+		prueth_destroy_rxq(emac, i);
 
-	prueth_destroy_xdp_rxqs(emac);
 	k3_udma_glue_disable_rx_chn(emac->rx_chns.rx_chn);
 }
 
@@ -978,27 +951,78 @@ reset_tx_chan:
 	return ret;
 }
 
-static int prueth_create_rxq(struct prueth_emac *emac)
+static int prueth_create_rxq(struct prueth_emac *emac, int id)
 {
+	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth_rx_flow *flow = &rx_chn->flows[id];
+	struct xdp_rxq_info *rxq = &flow->xdp_rxq;
 	int ret;
 
-	ret = prueth_prepare_rx_chan(emac, &emac->rx_chns, PRUETH_MAX_PKT_SIZE);
+	ret = prueth_prepare_rx_flow(emac, id);
 	if (ret)
-		return ret;
+		goto err;
 
-	ret = k3_udma_glue_enable_rx_chn(emac->rx_chns.rx_chn);
+	ret = xdp_rxq_info_reg(rxq, emac->ndev, id, flow->napi_rx.napi_id);
 	if (ret)
-		goto reset_rx_chn;
+		goto err;
 
-	ret = prueth_create_xdp_rxqs(emac);
-	if (ret)
-		goto reset_rx_chn;
+	if (flow->xsk_pool) {
+		ret = xdp_rxq_info_reg_mem_model(rxq, MEM_TYPE_XSK_BUFF_POOL, NULL);
+		if (ret)
+			goto err;
+		xsk_pool_set_rxq_info(flow->xsk_pool, rxq);
+	} else {
+		ret = xdp_rxq_info_reg_mem_model(rxq, MEM_TYPE_PAGE_POOL, flow->pg_pool);
+		if (ret)
+			goto err;
+	}
 
-	napi_enable(&emac->napi_rx);
+	napi_enable(&flow->napi_rx);
 	return 0;
 
-reset_rx_chn:
-	prueth_reset_rx_chan(&emac->rx_chns, PRUETH_MAX_RX_FLOWS, false);
+err:
+	/* napi_enable() not yet called; prueth_destroy_rxq() calls
+	 * napi_disable() which busy-waits for NAPI_STATE_SCHED to clear —
+	 * a bit set by netif_napi_add() that only clears after napi_enable().
+	 * Clean up directly to avoid hanging.
+	 */
+	hrtimer_cancel(&flow->rx_hrtimer);
+	if (flow->irq_disabled) {
+		enable_irq(flow->irq);
+		flow->irq_disabled = false;
+	}
+	k3_udma_glue_reset_rx_chn(rx_chn->rx_chn, id, rx_chn, prueth_rx_cleanup);
+	if (xdp_rxq_info_is_reg(&flow->xdp_rxq))
+		xdp_rxq_info_unreg(&flow->xdp_rxq);
+	if (flow->pg_pool) {
+		page_pool_destroy(flow->pg_pool);
+		flow->pg_pool = NULL;
+	}
+	return ret;
+}
+
+static int prueth_create_rxqs(struct prueth_emac *emac)
+{
+	int i, ret;
+
+	for (i = 0; i < emac->rx_flow_num; i++) {
+		ret = prueth_create_rxq(emac, i);
+		if (ret) {
+			netdev_err(emac->ndev, "failed to create rxq for flow %d: %d\n",
+				   i, ret);
+			goto err;
+		}
+	}
+
+	/* All flows share the same DMA channel */
+	ret = k3_udma_glue_enable_rx_chn(emac->rx_chns.rx_chn);
+	if (ret)
+		goto err;
+	return 0;
+
+err:
+	for (--i; i >= 0; i--)
+		prueth_destroy_rxq(emac, i);
 	return ret;
 }
 
@@ -1018,8 +1042,6 @@ static int emac_ndo_open(struct net_device *ndev)
 	struct prueth *prueth = emac->prueth;
 	int slice = prueth_emac_slice(emac);
 	struct device *dev = prueth->dev;
-	int max_rx_flows;
-	int rx_flow;
 
 	/* set h/w MAC as user might have re-configured */
 	ether_addr_copy(emac->mac_addr, ndev->dev_addr);
@@ -1034,7 +1056,12 @@ static int emac_ndo_open(struct net_device *ndev)
 		return ret;
 	}
 
-	emac->xsk_qid = -EINVAL;
+	ret = netif_set_real_num_rx_queues(ndev, emac->rx_flow_num);
+	if (ret) {
+		dev_err(dev, "cannot set real number of rx queues\n");
+		return ret;
+	}
+
 	init_completion(&emac->cmd_complete);
 	ret = prueth_init_tx_chns(emac);
 	if (ret) {
@@ -1042,9 +1069,7 @@ static int emac_ndo_open(struct net_device *ndev)
 		return ret;
 	}
 
-	max_rx_flows = PRUETH_MAX_RX_FLOWS;
-	ret = prueth_init_rx_chns(emac, &emac->rx_chns, "rx",
-				  max_rx_flows, PRUETH_MAX_RX_DESC);
+	ret = prueth_init_rx_chns(emac);
 	if (ret) {
 		dev_err(dev, "failed to init rx channel: %d\n", ret);
 		goto cleanup_tx;
@@ -1054,14 +1079,9 @@ static int emac_ndo_open(struct net_device *ndev)
 	if (ret)
 		goto cleanup_rx;
 
-	/* we use only the highest priority flow for now i.e. @irq[3] */
-	rx_flow = PRUETH_RX_FLOW_DATA;
-	ret = request_irq(emac->rx_chns.irq[rx_flow], prueth_rx_irq,
-			  IRQF_TRIGGER_HIGH, dev_name(dev), emac);
-	if (ret) {
-		dev_err(dev, "unable to request RX IRQ\n");
+	ret = prueth_ndev_add_rx_napi(emac);
+	if (ret)
 		goto cleanup_napi;
-	}
 
 	if (!prueth->emacs_initialized) {
 		ret = prueth_emac_common_start(prueth);
@@ -1081,13 +1101,19 @@ static int emac_ndo_open(struct net_device *ndev)
 
 	icssg_mii_update_mtu(prueth->mii_rt, slice, ndev->max_mtu);
 
+	/* Re-program FT3 filters and classifier OR tables from the persistent
+	 * rule list. icssg_class_default() called above resets all classifiers,
+	 * so rules must be restored here on every open/restart.
+	 */
+	icssg_rxnfc_rule_restore(emac);
+
 	ret = request_threaded_irq(emac->tx_ts_irq, NULL, prueth_tx_ts_irq,
 				   IRQF_ONESHOT, dev_name(dev), emac);
 	if (ret)
 		goto stop;
 
 	/* Prepare RX */
-	ret = prueth_create_rxq(emac);
+	ret = prueth_create_rxqs(emac);
 	if (ret)
 		goto free_tx_ts_irq;
 
@@ -1100,23 +1126,23 @@ static int emac_ndo_open(struct net_device *ndev)
 
 	prueth->emacs_initialized++;
 
-	queue_work(system_long_wq, &emac->stats_work.work);
+	queue_work(system_dfl_long_wq, &emac->stats_work.work);
 
 	return 0;
 
 destroy_rxq:
-	prueth_destroy_rxq(emac);
+	prueth_destroy_rxqs(emac);
 free_tx_ts_irq:
 	free_irq(emac->tx_ts_irq, emac);
 stop:
 	if (!prueth->emacs_initialized)
 		prueth_emac_common_stop(prueth);
 free_rx_irq:
-	free_irq(emac->rx_chns.irq[rx_flow], emac);
+	prueth_ndev_del_rx_napi(emac, emac->rx_flow_num);
 cleanup_napi:
 	prueth_ndev_del_tx_napi(emac, emac->tx_ch_num);
 cleanup_rx:
-	prueth_cleanup_rx_chns(emac, &emac->rx_chns, max_rx_flows);
+	prueth_cleanup_rx_chns(emac);
 cleanup_tx:
 	prueth_cleanup_tx_chns(emac);
 
@@ -1149,7 +1175,7 @@ static int emac_ndo_stop(struct net_device *ndev)
 		__dev_mc_unsync(ndev, icssg_prueth_del_mcast);
 
 	prueth_destroy_txq(emac);
-	prueth_destroy_rxq(emac);
+	prueth_destroy_rxqs(emac);
 
 	cancel_work_sync(&emac->rx_mode_work);
 
@@ -1162,10 +1188,10 @@ static int emac_ndo_stop(struct net_device *ndev)
 
 	free_irq(emac->tx_ts_irq, emac);
 
-	free_irq(emac->rx_chns.irq[PRUETH_RX_FLOW_DATA], emac);
+	prueth_ndev_del_rx_napi(emac, emac->rx_flow_num);
 	prueth_ndev_del_tx_napi(emac, emac->tx_ch_num);
 
-	prueth_cleanup_rx_chns(emac, &emac->rx_chns, PRUETH_MAX_RX_FLOWS);
+	prueth_cleanup_rx_chns(emac);
 	prueth_cleanup_tx_chns(emac);
 
 	prueth->emacs_initialized--;
@@ -1467,11 +1493,11 @@ static int emac_xdp_setup(struct prueth_emac *emac, struct netdev_bpf *bpf)
 static int prueth_xsk_pool_enable(struct prueth_emac *emac,
 				  struct xsk_buff_pool *pool, u16 queue_id)
 {
-	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
 	u32 frame_size;
 	int ret;
 
 	if (queue_id >= PRUETH_MAX_RX_FLOWS ||
+	    queue_id >= emac->rx_flow_num ||
 	    queue_id >= emac->tx_ch_num) {
 		netdev_err(emac->ndev, "Invalid XSK queue ID %d\n", queue_id);
 		return -EINVAL;
@@ -1481,7 +1507,7 @@ static int prueth_xsk_pool_enable(struct prueth_emac *emac,
 	if (frame_size < PRUETH_MAX_PKT_SIZE)
 		return -EOPNOTSUPP;
 
-	ret = xsk_pool_dma_map(pool, rx_chn->dma_dev, PRUETH_RX_DMA_ATTR);
+	ret = xsk_pool_dma_map(pool, emac->rx_chns.dma_dev, PRUETH_RX_DMA_ATTR);
 	if (ret) {
 		netdev_err(emac->ndev, "Failed to map XSK pool: %d\n", ret);
 		return ret;
@@ -1492,21 +1518,24 @@ static int prueth_xsk_pool_enable(struct prueth_emac *emac,
 		ret = icssg_set_port_state(emac, ICSSG_EMAC_PORT_DISABLE);
 		if (ret)
 			return ret;
-		prueth_destroy_rxq(emac);
+		prueth_destroy_rxq(emac, queue_id);
 	}
 
-	emac->xsk_qid = queue_id;
+	set_bit(queue_id, emac->xsk_queues);
 	prueth_set_xsk_pool(emac, queue_id);
 
 	if (netif_running(emac->ndev)) {
-		ret = prueth_create_rxq(emac);
+		ret = prueth_create_rxq(emac, queue_id);
 		if (ret) {
 			netdev_err(emac->ndev, "Failed to create RX queue: %d\n", ret);
+			clear_bit(queue_id, emac->xsk_queues);
+			prueth_set_xsk_pool(emac, queue_id);
+			xsk_pool_dma_unmap(pool, PRUETH_RX_DMA_ATTR);
 			return ret;
 		}
 		ret = icssg_set_port_state(emac, ICSSG_EMAC_PORT_FORWARD);
 		if (ret) {
-			prueth_destroy_rxq(emac);
+			prueth_destroy_rxq(emac, queue_id);
 			return ret;
 		}
 		ret = prueth_xsk_wakeup(emac->ndev, queue_id, XDP_WAKEUP_RX);
@@ -1523,12 +1552,13 @@ static int prueth_xsk_pool_disable(struct prueth_emac *emac, u16 queue_id)
 	int ret;
 
 	if (queue_id >= PRUETH_MAX_RX_FLOWS ||
+	    queue_id >= emac->rx_flow_num ||
 	    queue_id >= emac->tx_ch_num) {
 		netdev_err(emac->ndev, "Invalid XSK queue ID %d\n", queue_id);
 		return -EINVAL;
 	}
 
-	if (emac->xsk_qid != queue_id) {
+	if (!test_bit(queue_id, emac->xsk_queues)) {
 		netdev_err(emac->ndev, "XSK queue ID %d not registered\n", queue_id);
 		return -EINVAL;
 	}
@@ -1544,27 +1574,28 @@ static int prueth_xsk_pool_disable(struct prueth_emac *emac, u16 queue_id)
 		ret = icssg_set_port_state(emac, ICSSG_EMAC_PORT_DISABLE);
 		if (ret)
 			return ret;
-		prueth_destroy_rxq(emac);
+		prueth_destroy_rxq(emac, queue_id);
 	}
 
 	xsk_pool_dma_unmap(pool, PRUETH_RX_DMA_ATTR);
-	emac->xsk_qid = -EINVAL;
+	clear_bit(queue_id, emac->xsk_queues);
 	prueth_set_xsk_pool(emac, queue_id);
 
 	if (netif_running(emac->ndev)) {
-		ret = prueth_create_rxq(emac);
-		if (ret) {
-			netdev_err(emac->ndev, "Failed to create RX queue: %d\n", ret);
-			return ret;
-		}
-		ret = icssg_set_port_state(emac, ICSSG_EMAC_PORT_FORWARD);
-		if (ret) {
-			prueth_destroy_rxq(emac);
-			return ret;
-		}
+		ret = prueth_create_rxq(emac, queue_id);
+		if (ret)
+			netdev_err(emac->ndev, "Failed to recreate RX queue after XSK disable: %d\n",
+				   ret);
+
+		/* Always re-enable port forwarding so the interface is not left
+		 * permanently disabled if prueth_create_rxq() failed due to a
+		 * transient descriptor shortage (inflight pages not yet returned
+		 * by the network stack).
+		 */
+		icssg_set_port_state(emac, ICSSG_EMAC_PORT_FORWARD);
 	}
 
-	return 0;
+	return ret;
 }
 
 /**
@@ -1593,25 +1624,31 @@ static int emac_ndo_bpf(struct net_device *ndev, struct netdev_bpf *bpf)
 int prueth_xsk_wakeup(struct net_device *ndev, u32 qid, u32 flags)
 {
 	struct prueth_emac *emac = netdev_priv(ndev);
-	struct prueth_tx_chn *tx_chn = &emac->tx_chns[qid];
-	struct prueth_rx_chn *rx_chn = &emac->rx_chns;
+	struct prueth_tx_chn *tx_chn;
+	struct prueth_rx_flow *rx_flow;
 
-	if (emac->xsk_qid != qid) {
+	/* Bounds check before any array/bitmap access */
+	if (qid >= PRUETH_MAX_RX_FLOWS ||
+	    qid >= emac->rx_flow_num ||
+	    qid >= emac->tx_ch_num) {
+		netdev_err(ndev, "Invalid XSK queue ID %d\n", qid);
+		return -EINVAL;
+	}
+
+	if (!test_bit(qid, emac->xsk_queues)) {
 		netdev_err(ndev, "XSK queue %d not registered\n", qid);
 		return -EINVAL;
 	}
 
-	if (qid >= PRUETH_MAX_RX_FLOWS || qid >= emac->tx_ch_num) {
-		netdev_err(ndev, "Invalid XSK queue ID %d\n", qid);
-		return -EINVAL;
-	}
+	tx_chn = &emac->tx_chns[qid];
+	rx_flow = &emac->rx_chns.flows[qid];
 
 	if (!tx_chn->xsk_pool) {
 		netdev_err(ndev, "XSK pool not registered for queue %d\n", qid);
 		return -EINVAL;
 	}
 
-	if (!rx_chn->xsk_pool) {
+	if (!rx_flow->xsk_pool) {
 		netdev_err(ndev, "XSK pool not registered for RX queue %d\n", qid);
 		return -EINVAL;
 	}
@@ -1624,9 +1661,9 @@ int prueth_xsk_wakeup(struct net_device *ndev, u32 qid, u32 flags)
 	}
 
 	if (flags & XDP_WAKEUP_RX) {
-		if (!napi_if_scheduled_mark_missed(&emac->napi_rx)) {
-			if (likely(napi_schedule_prep(&emac->napi_rx)))
-				__napi_schedule(&emac->napi_rx);
+		if (!napi_if_scheduled_mark_missed(&rx_flow->napi_rx)) {
+			if (likely(napi_schedule_prep(&rx_flow->napi_rx)))
+				__napi_schedule(&rx_flow->napi_rx);
 		}
 	}
 
@@ -1657,12 +1694,12 @@ static const struct net_device_ops emac_netdev_ops = {
 static int prueth_netdev_init(struct prueth *prueth,
 			      struct device_node *eth_node)
 {
-	int ret, num_tx_chn = PRUETH_MAX_TX_QUEUES;
 	struct prueth_emac *emac;
 	struct net_device *ndev;
 	enum prueth_port port;
 	const char *irq_name;
 	enum prueth_mac mac;
+	int ret;
 
 	port = prueth_node_port(eth_node);
 	if (port == PRUETH_PORT_INVALID)
@@ -1672,7 +1709,7 @@ static int prueth_netdev_init(struct prueth *prueth,
 	if (mac == PRUETH_MAC_INVALID)
 		return -EINVAL;
 
-	ndev = alloc_etherdev_mq(sizeof(*emac), num_tx_chn);
+	ndev = alloc_etherdev_mqs(sizeof(*emac), PRUETH_MAX_TX_QUEUES, PRUETH_MAX_RX_FLOWS);
 	if (!ndev)
 		return -ENOMEM;
 
@@ -1683,6 +1720,9 @@ static int prueth_netdev_init(struct prueth *prueth,
 	emac->xdp_prog = NULL;
 	emac->ndev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
 	INIT_WORK(&emac->rx_mode_work, emac_ndo_set_rx_mode_work);
+
+	/* Initialize RX flow classification */
+	icssg_rxnfc_rule_init(emac);
 
 	INIT_DELAYED_WORK(&emac->stats_work, icssg_stats_work_handler);
 
@@ -1697,6 +1737,14 @@ static int prueth_netdev_init(struct prueth *prueth,
 	}
 
 	emac->tx_ch_num = 1;
+	emac->rx_flow_num = 1;
+	emac->xsk_queues = devm_bitmap_zalloc(prueth->dev,
+					      PRUETH_MAX_RX_FLOWS, GFP_KERNEL);
+	if (!emac->xsk_queues) {
+		dev_err(prueth->dev, "failed to allocate xsk_queues bitmap\n");
+		ret = -ENOMEM;
+		goto free;
+	}
 
 	irq_name = "tx_ts0";
 	if (emac->port_id == PRUETH_PORT_MII1)
@@ -1783,11 +1831,7 @@ static int prueth_netdev_init(struct prueth *prueth,
 			      NETDEV_XDP_ACT_NDO_XMIT |
 			      NETDEV_XDP_ACT_XSK_ZEROCOPY);
 
-	netif_napi_add(ndev, &emac->napi_rx, icssg_napi_rx_poll);
-	hrtimer_setup(&emac->rx_hrtimer, &emac_rx_timer_callback, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL_PINNED);
 	prueth->emac[mac] = emac;
-
 	return 0;
 
 free:
@@ -2217,24 +2261,34 @@ static int prueth_probe(struct platform_device *pdev)
 		if (ret < 0) {
 			dev_err(dev, "%pOF error reading port_id %d\n",
 				eth_node, ret);
+			continue;
 		}
 
-		of_node_get(eth_node);
+		if (reg != 0 && reg != 1) {
+			dev_err(dev, "port reg should be 0 or 1\n");
+			continue;
+		}
+
+		if ((reg == 0 && eth0_node) || (reg == 1 && eth1_node)) {
+			dev_err(dev, "port reg %d already in use\n", reg);
+			ret = -ENODEV;
+			of_node_put(eth_node);
+			of_node_put(eth_ports_node);
+			goto put_cores;
+		}
 
 		if (reg == 0) {
-			eth0_node = eth_node;
+			eth0_node = of_node_get(eth_node);
 			if (!of_device_is_available(eth0_node)) {
 				of_node_put(eth0_node);
 				eth0_node = NULL;
 			}
 		} else if (reg == 1) {
-			eth1_node = eth_node;
+			eth1_node = of_node_get(eth_node);
 			if (!of_device_is_available(eth1_node)) {
 				of_node_put(eth1_node);
 				eth1_node = NULL;
 			}
-		} else {
-			dev_err(dev, "port reg should be 0 or 1\n");
 		}
 	}
 
@@ -2246,25 +2300,21 @@ static int prueth_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	if (eth0_node == eth1_node) {
-		dev_err(dev, "port0 and port1 can't have same reg\n");
-		of_node_put(eth0_node);
-		return -ENODEV;
-	}
-
 	prueth->eth_node[PRUETH_MAC0] = eth0_node;
 	prueth->eth_node[PRUETH_MAC1] = eth1_node;
 
 	prueth->miig_rt = syscon_regmap_lookup_by_phandle(np, "ti,mii-g-rt");
 	if (IS_ERR(prueth->miig_rt)) {
 		dev_err(dev, "couldn't get ti,mii-g-rt syscon regmap\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto put_cores;
 	}
 
 	prueth->mii_rt = syscon_regmap_lookup_by_phandle(np, "ti,mii-rt");
 	if (IS_ERR(prueth->mii_rt)) {
 		dev_err(dev, "couldn't get ti,mii-rt syscon regmap\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto put_cores;
 	}
 
 	prueth->pa_stats = syscon_regmap_lookup_by_phandle(np, "ti,pa-stats");

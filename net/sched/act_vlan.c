@@ -214,8 +214,8 @@ static int tcf_vlan_init(struct net *net, struct nlattr *nla,
 	action = parm->v_action;
 
 	if (!exists) {
-		ret = tcf_idr_create_from_flags(tn, index, est, a,
-						&act_vlan_ops, bind, flags);
+		ret = tcf_idr_create(tn, index, est, a,
+				     &act_vlan_ops, bind, flags);
 		if (ret) {
 			tcf_idr_cleanup(tn, index);
 			return ret;
@@ -348,7 +348,8 @@ static size_t tcf_vlan_get_fill_size(const struct tc_action *act)
 	return nla_total_size(sizeof(struct tc_vlan))
 		+ nla_total_size(sizeof(u16)) /* TCA_VLAN_PUSH_VLAN_ID */
 		+ nla_total_size(sizeof(u16)) /* TCA_VLAN_PUSH_VLAN_PROTOCOL */
-		+ nla_total_size(sizeof(u8)); /* TCA_VLAN_PUSH_VLAN_PRIORITY */
+		+ nla_total_size(sizeof(u8)) /* TCA_VLAN_PUSH_VLAN_PRIORITY */
+		+ 2 * nla_total_size(ETH_ALEN); /* TCA_VLAN_PUSH_ETH_{DST,SRC} */
 }
 
 static int tcf_vlan_offload_act_setup(struct tc_action *act, void *entry_data,

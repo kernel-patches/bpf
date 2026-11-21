@@ -1739,8 +1739,9 @@ static int mlx4_en_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 {
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 	struct mlx4_en_dev *mdev = priv->mdev;
+	u32 count = 0;
 	int err = 0;
-	int i = 0, priority = 0;
+	int i;
 
 	if ((cmd->cmd == ETHTOOL_GRXCLSRLCNT ||
 	     cmd->cmd == ETHTOOL_GRXCLSRULE ||
@@ -1758,12 +1759,17 @@ static int mlx4_en_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 		break;
 	case ETHTOOL_GRXCLSRLALL:
 		cmd->data = MAX_NUM_OF_FS_RULES;
-		while ((!err || err == -ENOENT) && priority < cmd->rule_cnt) {
+		for (i = 0; i < MAX_NUM_OF_FS_RULES; i++) {
 			err = mlx4_en_get_flow(dev, cmd, i);
-			if (!err)
-				rule_locs[priority++] = i;
-			i++;
+			if (err == -ENOENT)
+				continue;
+			if (err)
+				return err;
+			if (count == cmd->rule_cnt)
+				return -EMSGSIZE;
+			rule_locs[count++] = i;
 		}
+		cmd->rule_cnt = count;
 		err = 0;
 		break;
 	default:

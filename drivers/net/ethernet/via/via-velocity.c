@@ -2942,6 +2942,32 @@ static void velocity_pci_remove(struct pci_dev *pdev)
 	pci_disable_device(pdev);
 }
 
+/**
+ *	velocity_pci_shutdown	-	stop the device on shutdown
+ *	@pdev: PCI device
+ *
+ *	Called on reboot, power off and kexec. Close the interface, which
+ *	stops the chip and masks its interrupts, and disable the PCI device,
+ *	which turns off bus mastering. Otherwise the chip keeps receiving
+ *	packets into its rings by DMA and raising interrupts while the rest
+ *	of the restart runs.
+ */
+static void velocity_pci_shutdown(struct pci_dev *pdev)
+{
+	struct net_device *netdev = pci_get_drvdata(pdev);
+
+	rtnl_lock();
+
+	netif_device_detach(netdev);
+
+	if (netif_running(netdev))
+		dev_close(netdev);
+
+	rtnl_unlock();
+
+	pci_disable_device(pdev);
+}
+
 static int velocity_platform_probe(struct platform_device *pdev)
 {
 	const struct velocity_info_tbl *info;
@@ -3241,6 +3267,7 @@ static struct pci_driver velocity_pci_driver = {
 	.id_table	= velocity_pci_id_table,
 	.probe		= velocity_pci_probe,
 	.remove		= velocity_pci_remove,
+	.shutdown	= velocity_pci_shutdown,
 	.driver = {
 		.pm = &velocity_pm_ops,
 	},

@@ -441,7 +441,8 @@ static int bnge_hwrm_get_rings(struct bnge_dev *bd)
 	tx = hw_resc->resv_tx_rings;
 	if (bnge_is_agg_reqd(bd))
 		rx >>= 1;
-	if (cp < (rx + tx)) {
+	/* RoCE ring counts are adjusted after excluding MPC resources. */
+	if (!bnge_is_roce_en(bd) && cp < (rx + tx)) {
 		rc = bnge_fix_rings_count(&rx, &tx, cp, false);
 		if (rc)
 			goto get_rings_exit;
@@ -1302,7 +1303,8 @@ int hwrm_ring_free_send_msg(struct bnge_net *bn,
 	bnge_hwrm_req_drop(bd, req);
 exit:
 	if (rc) {
-		netdev_err(bd->netdev, "hwrm_ring_free type %d failed. rc:%d\n", ring_type, rc);
+		bnge_err(bd, "hwrm_ring_free type %d failed. rc:%d\n",
+			 ring_type, rc);
 		return -EIO;
 	}
 	return 0;
@@ -1395,7 +1397,7 @@ int hwrm_ring_alloc_send_msg(struct bnge_net *bn,
 		req->int_mode = RING_ALLOC_REQ_INT_MODE_MSIX;
 		break;
 	default:
-		netdev_err(bn->netdev, "hwrm alloc invalid ring type %d\n", ring_type);
+		bnge_err(bd, "hwrm alloc invalid ring type %d\n", ring_type);
 		return -EINVAL;
 	}
 
@@ -1406,7 +1408,8 @@ int hwrm_ring_alloc_send_msg(struct bnge_net *bn,
 
 exit:
 	if (rc) {
-		netdev_err(bd->netdev, "hwrm_ring_alloc type %d failed. rc:%d\n", ring_type, rc);
+		bnge_err(bd, "hwrm_ring_alloc type %d failed. rc:%d\n",
+			 ring_type, rc);
 		return -EIO;
 	}
 	ring->fw_ring_id = ring_id;

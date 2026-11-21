@@ -76,6 +76,8 @@ struct mana_ib_queue {
 	struct gdma_queue *kmem;
 	u64 gdma_region;
 	u64 id;
+	/* A locally rejected parent destroy left this mapping PF-owned. */
+	bool retain_dma;
 };
 
 struct mana_ib_dev {
@@ -823,7 +825,8 @@ int mana_ib_create_kernel_queue(struct mana_ib_dev *mdev, u32 size, enum gdma_qu
 				struct mana_ib_queue *queue);
 int mana_ib_create_queue(struct mana_ib_dev *mdev, u64 addr, u32 size,
 			 struct mana_ib_queue *queue, bool is_cq);
-void mana_ib_destroy_queue(struct mana_ib_dev *mdev, struct mana_ib_queue *queue);
+int mana_ib_destroy_queue(struct mana_ib_dev *mdev,
+			  struct mana_ib_queue *queue);
 
 struct ib_wq *mana_ib_create_wq(struct ib_pd *pd,
 				struct ib_wq_init_attr *init_attr,

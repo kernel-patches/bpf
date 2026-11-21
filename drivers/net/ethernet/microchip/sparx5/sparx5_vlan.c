@@ -199,6 +199,8 @@ void sparx5_update_fwd(struct sparx5 *sparx5)
 		spx5_wr(mask[1], sparx5, ANA_L2_AUTO_LRN_CFG1);
 		spx5_wr(mask[2], sparx5, ANA_L2_AUTO_LRN_CFG2);
 	}
+
+	sparx5_rr_port_fwd_update(sparx5);
 }
 
 void sparx5_vlan_port_apply(struct sparx5 *sparx5,

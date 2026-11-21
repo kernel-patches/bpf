@@ -92,6 +92,15 @@ properties:
       asserted.
     maxItems: 1
 
+  vmain-supply:
+    description:
+      Regulator representing the PoE power allocation of the 44-57V VMAIN
+      supply. This MCU must be its only power-budget consumer. Its unclaimed
+      power budget is used to configure the MCU global PoE power budget. The
+      regulator must define a finite regulator-power-budget-milliwatt value.
+      The supply is available independently of the host driver and is used
+      for power-budget accounting only.
+
 required:
   - compatible
 

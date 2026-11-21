@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-2.0
+// Test that after black hole detection, each further retransmission timeout
+// halves the MSS, but not below tcp_mtu_probe_floor.
+
+`./defaults.sh
+sysctl -q net.ipv4.tcp_mtu_probing=1
+sysctl -q net.ipv4.tcp_base_mss=1024
+sysctl -q net.ipv4.tcp_mtu_probe_floor=300
+sysctl -q net.ipv4.tcp_retries1=1
+sysctl -q net.ipv4.tcp_early_retrans=0`
+
+    0 socket(..., SOCK_STREAM, IPPROTO_TCP) = 3
+   +0 setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+   +0 bind(3, ..., ...) = 0
+   +0 listen(3, 1) = 0
+
+   +0 < S 0:0(0) win 65535 <mss 1460,nop,nop,sackOK>
+   +0 > S. 0:0(0) ack 1 <mss 1460,nop,nop,sackOK>
+  +.1 < . 1:1(0) ack 1 win 65535
+   +0 accept(3, ..., ...) = 4
+
+   +0 write(4, ..., 1460) = 1460
+   +0 > P. 1:1461(1460) ack 1
+  +.3 > P. 1:1461(1460) ack 1
+
+// The first detection falls back to tcp_base_mss.
+  +.6 > . 1:1025(1024) ack 1
+
+// Each further timeout halves the MSS.
+ +1.2 > . 1:513(512) ack 1
+
+// Half of 512 is below tcp_mtu_probe_floor, so the floor is used.
+ +2.4 > . 1:301(300) ack 1
+
+// The MSS does not go below the floor.
+ +4.8 > . 1:301(300) ack 1
+  +.1 < . 1:1(0) ack 1461 win 65535

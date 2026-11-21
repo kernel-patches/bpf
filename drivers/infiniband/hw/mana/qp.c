@@ -5,6 +5,53 @@
 
 #include "mana_ib.h"
 
+static void mana_ib_retain_cq(struct ib_cq *ibcq)
+{
+	struct mana_ib_cq *cq = container_of(ibcq, struct mana_ib_cq, ibcq);
+
+	WRITE_ONCE(cq->queue.retain_dma, true);
+}
+
+static void mana_ib_destroy_wq_obj(struct mana_port_context *mpc, u32 type,
+				   mana_handle_t handle,
+				   struct mana_ib_queue *queue,
+				   struct ib_cq *cq)
+{
+	int err;
+
+	err = mana_destroy_wq_obj(mpc, type, handle);
+	if (mana_gd_is_request_rejected(err)) {
+		queue->retain_dma = true;
+		mana_ib_retain_cq(cq);
+	}
+}
+
+static void mana_ib_retain_qp(struct mana_ib_qp *qp)
+{
+	struct mana_ib_queue *queues;
+	int i, count;
+
+	switch (qp->ibqp.qp_type) {
+	case IB_QPT_RC:
+		queues = qp->rc_qp.queues;
+		count = MANA_RC_QUEUE_TYPE_MAX;
+		break;
+	case IB_QPT_UC:
+		queues = qp->uc_qp.queues;
+		count = MANA_UC_QUEUE_TYPE_MAX;
+		break;
+	default:
+		queues = qp->ud_qp.queues;
+		count = MANA_UD_QUEUE_TYPE_MAX;
+		break;
+	}
+
+	for (i = 0; i < count; i++)
+		queues[i].retain_dma = true;
+	mana_ib_retain_cq(qp->ibqp.send_cq);
+	mana_ib_retain_cq(qp->ibqp.recv_cq);
+}
+
 static int mana_ib_cfg_vport_steering(struct mana_ib_dev *dev,
 				      struct net_device *ndev,
 				      mana_handle_t default_rxobj,
@@ -229,7 +276,8 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 		/* Create CQ table entry */
 		ret = mana_ib_install_cq_cb(mdev, cq);
 		if (ret) {
-			mana_destroy_wq_obj(mpc, GDMA_RQ, wq->rx_object);
+			mana_ib_destroy_wq_obj(mpc, GDMA_RQ, wq->rx_object,
+					       &wq->queue, ibcq);
 			goto free_vport;
 		}
 	}
@@ -261,7 +309,8 @@ free_vport:
 		cq = container_of(ibcq, struct mana_ib_cq, ibcq);
 
 		mana_ib_remove_cq_cb(mdev, cq);
-		mana_destroy_wq_obj(mpc, GDMA_RQ, wq->rx_object);
+		mana_ib_destroy_wq_obj(mpc, GDMA_RQ, wq->rx_object,
+				       &wq->queue, ibcq);
 	}
 
 	mutex_lock(&mana_pd->vport_mutex);
@@ -405,7 +454,8 @@ err_remove_cq_cb:
 	mana_ib_remove_cq_cb(mdev, send_cq);
 
 err_destroy_wq_obj:
-	mana_destroy_wq_obj(mpc, GDMA_SQ, qp->qp_handle);
+	mana_ib_destroy_wq_obj(mpc, GDMA_SQ, qp->qp_handle,
+			       &qp->raw_sq, qp->ibqp.send_cq);
 
 err_destroy_queue:
 	mana_ib_destroy_queue(mdev, &qp->raw_sq);
@@ -634,7 +684,8 @@ static int mana_ib_create_rc_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
 	return 0;
 
 destroy_qp:
-	mana_ib_gd_destroy_rnic_qp(mdev, qp);
+	if (mana_gd_is_request_rejected(mana_ib_gd_destroy_rnic_qp(mdev, qp)))
+		mana_ib_retain_qp(qp);
 destroy_queues:
 	while (i-- > 0)
 		mana_ib_destroy_queue(mdev, &qp->rc_qp.queues[i]);
@@ -688,7 +739,8 @@ static int mana_ib_create_uc_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
 		goto destroy_qp;
 	return 0;
 destroy_qp:
-	mana_ib_gd_destroy_rnic_qp(mdev, qp);
+	if (mana_gd_is_request_rejected(mana_ib_gd_destroy_rnic_qp(mdev, qp)))
+		mana_ib_retain_qp(qp);
 destroy_queues:
 	while (i-- > 0)
 		mana_ib_destroy_queue(mdev, &qp->uc_qp.queues[i]);
@@ -770,7 +822,8 @@ static int mana_ib_create_ud_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
 	return 0;
 
 destroy_qp:
-	mana_ib_gd_destroy_ud_qp(mdev, qp);
+	if (mana_gd_is_request_rejected(mana_ib_gd_destroy_ud_qp(mdev, qp)))
+		mana_ib_retain_qp(qp);
 destroy_shadow_queues:
 	destroy_shadow_queue(&qp->shadow_rq);
 	destroy_shadow_queue(&qp->shadow_sq);
@@ -981,7 +1034,13 @@ static int mana_ib_destroy_qp_rss(struct mana_ib_qp *qp,
 		wq = container_of(ibwq, struct mana_ib_wq, ibwq);
 		ibdev_dbg(&mdev->ib_dev, "destroying wq->rx_object %llu\n",
 			  wq->rx_object);
-		mana_destroy_wq_obj(mpc, GDMA_RQ, wq->rx_object);
+		if (wq->rx_object == INVALID_MANA_HANDLE)
+			continue;
+		err = mana_destroy_wq_obj(mpc, GDMA_RQ, wq->rx_object);
+		if (mana_gd_is_request_rejected(err))
+			return err;
+		if (!err)
+			wq->rx_object = INVALID_MANA_HANDLE;
 	}
 
 	mutex_lock(&pd->vport_mutex);
@@ -1011,9 +1070,13 @@ static int mana_ib_destroy_qp_raw(struct mana_ib_qp *qp, struct ib_udata *udata)
 	mpc = netdev_priv(ndev);
 	pd = container_of(ibpd, struct mana_ib_pd, ibpd);
 
-	mana_destroy_wq_obj(mpc, GDMA_SQ, qp->qp_handle);
+	err = mana_destroy_wq_obj(mpc, GDMA_SQ, qp->qp_handle);
+	if (mana_gd_is_request_rejected(err))
+		return err;
 
-	mana_ib_destroy_queue(mdev, &qp->raw_sq);
+	err = mana_ib_destroy_queue(mdev, &qp->raw_sq);
+	if (mana_gd_is_request_rejected(err))
+		return err;
 
 	mana_ib_uncfg_vport(mdev, pd, qp->port);
 
@@ -1030,12 +1093,11 @@ static int mana_ib_destroy_rc_qp(struct mana_ib_qp *qp, struct ib_udata *udata)
 	if (err)
 		return err;
 
-	mana_table_remove_qp(mdev, qp);
+	err = mana_ib_gd_destroy_rnic_qp(mdev, qp);
+	if (mana_gd_is_request_rejected(err))
+		return err;
 
-	/* Ignore return code as there is not much we can do about it.
-	 * The error message is printed inside.
-	 */
-	mana_ib_gd_destroy_rnic_qp(mdev, qp);
+	mana_table_remove_qp(mdev, qp);
 	for (i = 0; i < MANA_RC_QUEUE_TYPE_MAX; ++i)
 		mana_ib_destroy_queue(mdev, &qp->rc_qp.queues[i]);
 
@@ -1052,11 +1114,11 @@ static int mana_ib_destroy_uc_qp(struct mana_ib_qp *qp, struct ib_udata *udata)
 	if (err)
 		return err;
 
+	err = mana_ib_gd_destroy_rnic_qp(mdev, qp);
+	if (mana_gd_is_request_rejected(err))
+		return err;
+
 	mana_table_remove_qp(mdev, qp);
-	/* Ignore return code as there is not much we can do about it.
-	 * The error message is printed inside.
-	 */
-	mana_ib_gd_destroy_rnic_qp(mdev, qp);
 	for (i = 0; i < MANA_UC_QUEUE_TYPE_MAX; ++i)
 		mana_ib_destroy_queue(mdev, &qp->uc_qp.queues[i]);
 
@@ -1073,16 +1135,16 @@ static int mana_ib_destroy_ud_qp(struct mana_ib_qp *qp, struct ib_udata *udata)
 	if (err)
 		return err;
 
+	err = mana_ib_gd_destroy_ud_qp(mdev, qp);
+	if (mana_gd_is_request_rejected(err))
+		return err;
+
 	mana_table_remove_qp(mdev, qp);
 	mana_remove_qp_from_cqs(qp, false);
 
 	destroy_shadow_queue(&qp->shadow_rq);
 	destroy_shadow_queue(&qp->shadow_sq);
 
-	/* Ignore return code as there is not much we can do about it.
-	 * The error message is printed inside.
-	 */
-	mana_ib_gd_destroy_ud_qp(mdev, qp);
 	for (i = 0; i < MANA_UD_QUEUE_TYPE_MAX; ++i)
 		mana_ib_destroy_queue(mdev, &qp->ud_qp.queues[i]);
 

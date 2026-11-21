@@ -29,6 +29,7 @@ config ADIN1110
 config ADIN1140
 	tristate "Analog Devices ADIN1140 MAC-PHY"
 	depends on SPI
+	depends on PTP_1588_CLOCK_OPTIONAL
 	select ADIN1140_PHY
 	select OA_TC6
 	help

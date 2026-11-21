@@ -91,7 +91,21 @@ struct xsk_buff_pool *igb_xsk_pool(struct igb_adapter *adapter,
 	if (!igb_xdp_is_enabled(adapter))
 		return NULL;
 
-	return (pool && pool->dev) ? pool : NULL;
+	if (!pool || !pool->dev)
+		return NULL;
+
+	/* igb_change_mtu() does not see a pool on a queue that is hidden, for
+	 * example after a fallback from MSI-X to MSI. The hardware buffer can
+	 * be larger than the XSK frame, so check again when the ring is set up.
+	 */
+	if (!igb_xsk_frame_fits(pool, adapter->max_frame_size)) {
+		netdev_warn_once(adapter->netdev,
+				 "XSK frame size is too small for the MTU, queue %d is not used in zero-copy mode\n",
+				 qid);
+		return NULL;
+	}
+
+	return pool;
 }
 
 static int igb_xsk_pool_enable(struct igb_adapter *adapter,
@@ -103,12 +117,21 @@ static int igb_xsk_pool_enable(struct igb_adapter *adapter,
 	bool if_running;
 	int err;
 
-	if (qid >= adapter->num_rx_queues)
+	/* the real queue counts are only updated when the interface is
+	 * opened, so also check the PF's own queues, see
+	 * igb_set_interrupt_capability()
+	 */
+	if (qid >= adapter->num_rx_queues ||
+	    qid >= adapter->num_tx_queues)
 		return -EINVAL;
 
 	if (qid >= netdev->real_num_rx_queues ||
 	    qid >= netdev->real_num_tx_queues)
 		return -EINVAL;
+
+	/* checked again on MTU changes and when the ring is set up */
+	if (!igb_xsk_frame_fits(pool, adapter->max_frame_size))
+		return -EOPNOTSUPP;
 
 	err = xsk_pool_dma_map(pool, &adapter->pdev->dev, IGB_RX_DMA_ATTR);
 	if (err)

@@ -500,6 +500,12 @@ int __inet_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 	tb_id = l3mdev_fib_table_by_index(net, sk->sk_bound_dev_if) ? : tb_id;
 	chk_addr_ret = inet_addr_type_table(net, addr->sin_addr.s_addr, tb_id);
 
+	err = -EINVAL;
+	if (sk->sk_type == SOCK_STREAM &&
+	    addr->sin_addr.s_addr != htonl(INADDR_ANY) &&
+	    (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST))
+		goto out;
+
 	/* Not specified by any standard per-se, however it breaks too
 	 * many applications when removed.  It is unfortunate since
 	 * allowing applications to make a non-local bind solves

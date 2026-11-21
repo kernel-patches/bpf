@@ -490,6 +490,8 @@ int pn_sock_get_port(struct sock *sk, unsigned short sport)
 			port_cur++;
 			if (port_cur < pmin || port_cur > pmax)
 				port_cur = pmin;
+			if (!port_cur)
+				continue;
 
 			pn_sockaddr_set_port(&try_sa, port_cur);
 			tmpsk = pn_find_sock_by_sa(net, &try_sa);

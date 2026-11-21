@@ -1457,17 +1457,20 @@ void fun_set_ring_count(struct net_device *netdev, unsigned int ntx,
 	}
 }
 
+static size_t fun_stats_area_size(void)
+{
+	unsigned int nstats = (unsigned int)PORT_MAC_RX_STATS_MAX +
+			      PORT_MAC_TX_STATS_MAX + PORT_MAC_FEC_STATS_MAX;
+
+	return nstats * sizeof(u64);
+}
+
 static int fun_init_stats_area(struct funeth_priv *fp)
 {
-	unsigned int nstats;
-
 	if (!(fp->port_caps & FUN_PORT_CAP_STATS))
 		return 0;
 
-	nstats = PORT_MAC_RX_STATS_MAX + PORT_MAC_TX_STATS_MAX +
-		 PORT_MAC_FEC_STATS_MAX;
-
-	fp->stats = dma_alloc_coherent(&fp->pdev->dev, nstats * sizeof(u64),
+	fp->stats = dma_alloc_coherent(&fp->pdev->dev, fun_stats_area_size(),
 				       &fp->stats_dma_addr, GFP_KERNEL);
 	if (!fp->stats)
 		return -ENOMEM;
@@ -1476,11 +1479,8 @@ static int fun_init_stats_area(struct funeth_priv *fp)
 
 static void fun_free_stats_area(struct funeth_priv *fp)
 {
-	unsigned int nstats;
-
 	if (fp->stats) {
-		nstats = PORT_MAC_RX_STATS_MAX + PORT_MAC_TX_STATS_MAX;
-		dma_free_coherent(&fp->pdev->dev, nstats * sizeof(u64),
+		dma_free_coherent(&fp->pdev->dev, fun_stats_area_size(),
 				  fp->stats, fp->stats_dma_addr);
 		fp->stats = NULL;
 	}

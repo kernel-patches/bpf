@@ -10,6 +10,8 @@
 #ifndef _INTERNAL_HANDSHAKE_H
 #define _INTERNAL_HANDSHAKE_H
 
+#include <linux/stringset.h>
+
 /* Per-net namespace context */
 struct handshake_net {
 	spinlock_t		hn_lock;	/* protects next 3 fields */
@@ -36,6 +38,7 @@ struct handshake_req {
 	struct file			*hr_file;
 	struct sock			*hr_sk;
 	void				(*hr_odestruct)(struct sock *sk);
+	struct stringset		hr_tags;
 
 	/* Always the last field */
 	char				hr_priv[];
@@ -77,6 +80,9 @@ int handshake_genl_notify(struct net *net, const struct handshake_proto *proto,
 struct nlmsghdr *handshake_genl_put(struct sk_buff *msg,
 				    struct genl_info *info);
 struct handshake_net *handshake_pernet(struct net *net);
+#if IS_ENABLED(CONFIG_KUNIT)
+int handshake_get_sessiontags(struct stringset *tags, struct genl_info *info);
+#endif
 
 /* request.c */
 struct handshake_req *handshake_req_alloc(const struct handshake_proto *proto,
@@ -88,6 +94,9 @@ struct handshake_req *handshake_req_hash_lookup(struct sock *sk);
 struct handshake_req *handshake_req_next(struct handshake_net *hn, int class);
 int handshake_req_submit(struct socket *sock, struct handshake_req *req,
 			 gfp_t flags);
+bool handshake_try_complete(struct handshake_req *req);
+void handshake_finish_complete(struct handshake_req *req, int status,
+			       struct genl_info *info, struct stringset *tags);
 void handshake_complete(struct handshake_req *req, int status,
 			struct genl_info *info);
 bool handshake_req_cancel(struct sock *sk);

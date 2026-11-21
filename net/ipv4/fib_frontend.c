@@ -868,7 +868,10 @@ static int rtm_to_fib_config(struct net *net, struct sk_buff *skb,
 		goto errout;
 	}
 
-	if (cfg->fc_nh_id) {
+	/* Dumps can include both a nexthop ID and compatibility attributes.
+	 * On deletion, fib_nh_match() uses the ID to match the nexthop.
+	 */
+	if (cfg->fc_nh_id && nlh->nlmsg_type != RTM_DELROUTE) {
 		if (cfg->fc_oif || cfg->fc_gw_family ||
 		    cfg->fc_encap || cfg->fc_mp) {
 			NL_SET_ERR_MSG(extack,

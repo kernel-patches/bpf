@@ -1332,7 +1332,28 @@ static int m88e1318_config_init(struct phy_device *phydev)
 	return marvell_config_init(phydev);
 }
 
-static int m88e1510_config_init(struct phy_device *phydev)
+static int m88e1510_config_mode(struct phy_device *phydev, u16 mode)
+{
+	int oldpage;
+	int ret = 0;
+
+	oldpage = phy_select_page(phydev, MII_MARVELL_MODE_PAGE);
+	if (oldpage < 0)
+		goto error;
+
+	ret = __phy_modify(phydev, MII_88E1510_GEN_CTRL_REG_1,
+			   MII_88E1510_GEN_CTRL_REG_1_MODE_MASK, mode);
+	if (ret < 0)
+		goto error;
+
+	ret = __phy_set_bits(phydev, MII_88E1510_GEN_CTRL_REG_1,
+			     MII_88E1510_GEN_CTRL_REG_1_RESET);
+
+error:
+	return phy_restore_page(phydev, oldpage, ret);
+}
+
+static int m88e1510_eee_errata(struct phy_device *phydev)
 {
 	static const struct {
 		u16 reg17, reg16;
@@ -1342,62 +1363,54 @@ static int m88e1510_config_init(struct phy_device *phydev)
 		{ 0xb233, 0x214d },
 		{ 0xcc0c, 0x2159 },
 	};
-	int err;
-	int i;
+	int i, oldpage, ret = 0;
 
 	/* As per Marvell Release Notes - Alaska 88E1510/88E1518/88E1512/
 	 * 88E1514 Rev A0, Errata Section 5.1:
 	 * If EEE is intended to be used, the following register writes
 	 * must be done once after every hardware reset.
 	 */
-	err = marvell_set_page(phydev, 0x00FF);
-	if (err < 0)
-		return err;
+	oldpage = phy_select_page(phydev, 0x00FF);
+	if (oldpage < 0)
+		goto restore;
 
 	for (i = 0; i < ARRAY_SIZE(errata_vals); ++i) {
-		err = phy_write(phydev, 17, errata_vals[i].reg17);
-		if (err)
-			return err;
-		err = phy_write(phydev, 16, errata_vals[i].reg16);
-		if (err)
-			return err;
+		ret = __phy_write(phydev, 17, errata_vals[i].reg17);
+		if (ret)
+			goto restore;
+
+		ret = __phy_write(phydev, 16, errata_vals[i].reg16);
+		if (ret)
+			goto restore;
 	}
 
-	err = marvell_set_page(phydev, 0x00FB);
-	if (err < 0)
-		return err;
-	err = phy_write(phydev, 07, 0xC00D);
+restore:
+	ret = phy_restore_page(phydev, oldpage, ret);
+	if (ret < 0)
+		return ret;
+
+	return phy_write_paged(phydev, 0x00FB, 07, 0xC00D);
+}
+
+static int m88e1510_config_init(struct phy_device *phydev)
+{
+	int err;
+
+	err = m88e1510_eee_errata(phydev);
 	if (err < 0)
 		return err;
 	err = marvell_set_page(phydev, MII_MARVELL_COPPER_PAGE);
 	if (err < 0)
 		return err;
 
-	/* SGMII-to-Copper mode initialization */
-	if (phydev->interface == PHY_INTERFACE_MODE_SGMII) {
-		/* Select page 18 */
-		err = marvell_set_page(phydev, 18);
-		if (err < 0)
-			return err;
+	/* RGMII/SGMII-to-Copper mode initialization */
+	if (phydev->interface == PHY_INTERFACE_MODE_SGMII)
+		err = m88e1510_config_mode(phydev, MII_88E1510_GEN_CTRL_REG_1_MODE_SGMII);
+	else if (phy_interface_is_rgmii(phydev))
+		err = m88e1510_config_mode(phydev, MII_88E1510_GEN_CTRL_REG_1_MODE_RGMII);
+	if (err < 0)
+		return err;
 
-		/* In reg 20, write MODE[2:0] = 0x1 (SGMII to Copper) */
-		err = phy_modify(phydev, MII_88E1510_GEN_CTRL_REG_1,
-				 MII_88E1510_GEN_CTRL_REG_1_MODE_MASK,
-				 MII_88E1510_GEN_CTRL_REG_1_MODE_SGMII);
-		if (err < 0)
-			return err;
-
-		/* PHY reset is necessary after changing MODE[2:0] */
-		err = phy_set_bits(phydev, MII_88E1510_GEN_CTRL_REG_1,
-				   MII_88E1510_GEN_CTRL_REG_1_RESET);
-		if (err < 0)
-			return err;
-
-		/* Reset page selection */
-		err = marvell_set_page(phydev, MII_MARVELL_COPPER_PAGE);
-		if (err < 0)
-			return err;
-	}
 	err = m88e1011_set_downshift(phydev, 3);
 	if (err < 0)
 		return err;
@@ -3656,8 +3669,6 @@ static int m88e1510_port_configure_serdes(struct phy_port *port, bool enable,
 {
 	struct phy_device *phydev = port_phydev(port);
 	struct device *dev;
-	int oldpage;
-	int ret = 0;
 	u16 mode;
 
 	dev = &phydev->mdio.dev;
@@ -3685,20 +3696,7 @@ static int m88e1510_port_configure_serdes(struct phy_port *port, bool enable,
 		mode = MII_88E1510_GEN_CTRL_REG_1_MODE_RGMII;
 	}
 
-	oldpage = phy_select_page(phydev, MII_MARVELL_MODE_PAGE);
-	if (oldpage < 0)
-		goto error;
-
-	ret = __phy_modify(phydev, MII_88E1510_GEN_CTRL_REG_1,
-			   MII_88E1510_GEN_CTRL_REG_1_MODE_MASK, mode);
-	if (ret < 0)
-		goto error;
-
-	ret = __phy_set_bits(phydev, MII_88E1510_GEN_CTRL_REG_1,
-			     MII_88E1510_GEN_CTRL_REG_1_RESET);
-
-error:
-	return phy_restore_page(phydev, oldpage, ret);
+	return m88e1510_config_mode(phydev, mode);
 }
 
 static const struct phy_port_ops m88e1510_serdes_port_ops = {

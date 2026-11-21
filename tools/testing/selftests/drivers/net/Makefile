@@ -30,6 +30,7 @@ TEST_PROGS := \
 	so_txtime.py \
 	stats.py \
 	xdp.py \
+	xsk.py \
 # end of TEST_PROGS
 
 TEST_FILES := \

@@ -7,6 +7,7 @@
 
 #include <linux/sunrpc/cache.h>
 #include <linux/percpu_counter.h>
+#include <linux/stringset.h>
 #include <uapi/linux/nfsd/export.h>
 #include <linux/nfs4.h>
 
@@ -47,6 +48,13 @@ struct exp_flavor_info {
 	u32	flags;
 };
 
+/*
+ * Bounds the per-request cost of the stringset_intersection() in
+ * check_xprtsec_policy(). Independent of the per-handshake session
+ * tag cap, HANDSHAKE_MAX_SESSIONTAGS.
+ */
+#define NFSD_MAX_ALLOW_TAGS	64
+
 /* Per-export stats */
 enum {
 	EXP_STATS_FH_STALE,
@@ -78,6 +86,7 @@ struct svc_export {
 	struct rcu_head		ex_rcu;
 	unsigned long		ex_xprtsec_modes;
 	struct export_stats	*ex_stats;
+	struct stringset	ex_allow_tags;
 };
 
 /* an "export key" (expkey) maps a filehandlefragement to an

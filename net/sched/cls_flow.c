@@ -17,6 +17,7 @@
 #include <linux/ipv6.h>
 #include <linux/if_vlan.h>
 #include <linux/slab.h>
+#include <linux/fs.h>
 #include <linux/module.h>
 #include <net/inet_sock.h>
 
@@ -208,10 +209,16 @@ static u32 flow_get_rtclassid(const struct sk_buff *skb)
 static u32 flow_get_skuid(const struct sk_buff *skb)
 {
 	struct sock *sk = skb_to_full_sk(skb);
+	struct file *filp;
 
-	if (sk && sk->sk_socket && sk->sk_socket->file) {
-		kuid_t skuid = sk->sk_socket->file->f_cred->fsuid;
+	if (!sk || !sk->sk_socket)
+		return 0;
 
+	filp = get_file_active(&sk->sk_socket->file);
+	if (filp) {
+		kuid_t skuid = filp->f_cred->fsuid;
+
+		fput(filp);
 		return from_kuid(&init_user_ns, skuid);
 	}
 	return 0;
@@ -220,10 +227,16 @@ static u32 flow_get_skuid(const struct sk_buff *skb)
 static u32 flow_get_skgid(const struct sk_buff *skb)
 {
 	struct sock *sk = skb_to_full_sk(skb);
+	struct file *filp;
 
-	if (sk && sk->sk_socket && sk->sk_socket->file) {
-		kgid_t skgid = sk->sk_socket->file->f_cred->fsgid;
+	if (!sk || !sk->sk_socket)
+		return 0;
 
+	filp = get_file_active(&sk->sk_socket->file);
+	if (filp) {
+		kgid_t skgid = filp->f_cred->fsgid;
+
+		fput(filp);
 		return from_kgid(&init_user_ns, skgid);
 	}
 	return 0;
@@ -357,6 +370,10 @@ static void flow_perturbation(struct timer_list *t)
 		mod_timer(&f->perturb_timer, jiffies + f->perturb_period);
 }
 
+static const struct netlink_range_validation flow_perturb_range = {
+	.max = INT_MAX / HZ,
+};
+
 static const struct nla_policy flow_policy[TCA_FLOW_MAX + 1] = {
 	[TCA_FLOW_KEYS]		= { .type = NLA_U32 },
 	[TCA_FLOW_MODE]		= { .type = NLA_U32 },
@@ -370,7 +387,8 @@ static const struct nla_policy flow_policy[TCA_FLOW_MAX + 1] = {
 	[TCA_FLOW_ACT]		= { .type = NLA_NESTED },
 	[TCA_FLOW_POLICE]	= { .type = NLA_NESTED },
 	[TCA_FLOW_EMATCHES]	= { .type = NLA_NESTED },
-	[TCA_FLOW_PERTURB]	= { .type = NLA_U32 },
+	[TCA_FLOW_PERTURB]	= NLA_POLICY_FULL_RANGE(NLA_U32,
+							&flow_perturb_range),
 };
 
 static void __flow_destroy_filter(struct flow_filter *f)
@@ -413,7 +431,7 @@ static int flow_change(struct net *net, struct sk_buff *in_skb,
 		return -EINVAL;
 
 	err = nla_parse_nested_deprecated(tb, TCA_FLOW_MAX, opt, flow_policy,
-					  NULL);
+					  extack);
 	if (err < 0)
 		return err;
 

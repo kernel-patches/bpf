@@ -813,14 +813,12 @@ int tcp_ao_prepare_reset(const struct sock *sk, struct sk_buff *skb,
 			sisn = th->seq;
 			disn = 0;
 		}
+		if (skb->protocol == htons(ETH_P_IP))
+			family = AF_INET;
 		if (IS_ENABLED(CONFIG_IPV6) && family == AF_INET6)
 			addr = (union tcp_md5_addr *)&ipv6_hdr(skb)->saddr;
 		else
 			addr = (union tcp_md5_addr *)&ip_hdr(skb)->saddr;
-#if IS_ENABLED(CONFIG_IPV6)
-		if (family == AF_INET6 && ipv6_addr_v4mapped(&sk->sk_v6_daddr))
-			family = AF_INET;
-#endif
 
 		sk = sk_const_to_full_sk(sk);
 		ao_info = rcu_dereference(tcp_sk(sk)->ao_info);

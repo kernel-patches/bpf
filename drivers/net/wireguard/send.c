@@ -270,6 +270,10 @@ void wg_packet_tx_worker(struct work_struct *work)
 	       (state = atomic_read_acquire(&PACKET_CB(first)->state)) !=
 		       PACKET_STATE_UNCRYPTED) {
 		wg_prev_queue_drop_peeked(&peer->tx_queue);
+		if (unlikely(state == PACKET_STATE_DRAIN)) {
+			complete(PACKET_CB(first)->completion);
+			break;
+		}
 		keypair = PACKET_CB(first)->keypair;
 
 		if (likely(state == PACKET_STATE_CRYPTED))

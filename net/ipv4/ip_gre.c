@@ -255,13 +255,13 @@ static void gre_err(struct sk_buff *skb, u32 info)
 	ipgre_err(skb, info, &tpi);
 }
 
-static bool is_erspan_type1(int gre_hdr_len)
+static bool is_erspan_type1(const struct tnl_ptk_info *tpi, int gre_hdr_len)
 {
 	/* Both ERSPAN type I (version 0) and type II (version 1) use
 	 * protocol 0x88BE, but the type I has only 4-byte GRE header,
 	 * while type II has 8-byte.
 	 */
-	return gre_hdr_len == 4;
+	return tpi->proto == htons(ETH_P_ERSPAN) && gre_hdr_len == 4;
 }
 
 static int erspan_rcv(struct sk_buff *skb, struct tnl_ptk_info *tpi,
@@ -282,7 +282,7 @@ static int erspan_rcv(struct sk_buff *skb, struct tnl_ptk_info *tpi,
 
 	itn = net_generic(net, erspan_net_id);
 	iph = ip_hdr(skb);
-	if (is_erspan_type1(gre_hdr_len)) {
+	if (is_erspan_type1(tpi, gre_hdr_len)) {
 		ver = 0;
 		__set_bit(IP_TUNNEL_NO_KEY_BIT, flags);
 		tunnel = ip_tunnel_lookup(itn, skb->dev->ifindex, flags,
@@ -301,10 +301,12 @@ static int erspan_rcv(struct sk_buff *skb, struct tnl_ptk_info *tpi,
 	}
 
 	if (tunnel) {
-		if (is_erspan_type1(gre_hdr_len))
+		if (is_erspan_type1(tpi, gre_hdr_len))
 			len = gre_hdr_len;
-		else
+		else if (ver == ERSPAN_VERSION || ver == ERSPAN_VERSION2)
 			len = gre_hdr_len + erspan_hdr_len(ver);
+		else
+			return PACKET_REJECT;
 
 		if (unlikely(!pskb_may_pull(skb, len)))
 			return PACKET_REJECT;
@@ -1351,7 +1353,7 @@ static const struct net_device_ops gre_tap_netdev_ops = {
 	.ndo_fill_metadata_dst	= gre_fill_metadata_dst,
 };
 
-static int erspan_tunnel_init(struct net_device *dev)
+static void erspan_calc_hlen(struct net_device *dev)
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 
@@ -1360,9 +1362,16 @@ static int erspan_tunnel_init(struct net_device *dev)
 	else
 		tunnel->tun_hlen = 8; /* 8-byte GRE hdr. */
 
-	tunnel->parms.iph.protocol = IPPROTO_GRE;
 	tunnel->hlen = tunnel->tun_hlen + tunnel->encap_hlen +
 		       erspan_hdr_len(tunnel->erspan_ver);
+}
+
+static int erspan_tunnel_init(struct net_device *dev)
+{
+	struct ip_tunnel *tunnel = netdev_priv(dev);
+
+	erspan_calc_hlen(dev);
+	tunnel->parms.iph.protocol = IPPROTO_GRE;
 
 	dev->features		|= GRE_FEATURES;
 	dev->hw_features	|= GRE_FEATURES;
@@ -1523,6 +1532,19 @@ static int erspan_changelink(struct net_device *dev, struct nlattr *tb[],
 
 	ip_tunnel_flags_copy(t->parms.i_flags, p.i_flags);
 	ip_tunnel_flags_copy(t->parms.o_flags, p.o_flags);
+
+	if (data && data[IFLA_GRE_ERSPAN_VER]) {
+		int len = t->hlen;
+
+		erspan_calc_hlen(dev);
+		len = t->hlen - len;
+		if (len) {
+			dev->needed_headroom += len;
+			if (!tb[IFLA_MTU])
+				WRITE_ONCE(dev->mtu, max_t(int, dev->mtu - len,
+							   68));
+		}
+	}
 
 	return 0;
 }

@@ -106,7 +106,7 @@ static int __ipv6_dev_mc_inc(struct net_device *dev,
 #define IPV6_MLD_MAX_MSF	64
 
 int sysctl_mld_max_msf __read_mostly = IPV6_MLD_MAX_MSF;
-int sysctl_mld_qrv __read_mostly = MLD_QRV_DEFAULT;
+u8 sysctl_mld_qrv __read_mostly = MLD_QRV_DEFAULT;
 
 #define mc_assert_locked(idev)			\
 	lockdep_assert_held(&(idev)->mc_lock)
@@ -196,7 +196,8 @@ static struct net_device *ip6_mc_find_dev(struct net *net,
  *	socket join on multicast group
  */
 static int __ipv6_sock_mc_join(struct sock *sk, int ifindex,
-			       const struct in6_addr *addr, unsigned int mode)
+			       const struct in6_addr *addr, unsigned int mode,
+			       int *resolved_ifindex)
 {
 	struct ipv6_pinfo *np = inet6_sk(sk);
 	struct ipv6_mc_socklist *mc_lst;
@@ -207,24 +208,29 @@ static int __ipv6_sock_mc_join(struct sock *sk, int ifindex,
 	if (!ipv6_addr_is_multicast(addr))
 		return -EINVAL;
 
+	dev = ip6_mc_find_dev(net, addr, ifindex);
+	if (!dev)
+		return -ENODEV;
+	ifindex = dev->ifindex;
+	if (resolved_ifindex)
+		*resolved_ifindex = ifindex;
+
 	for_each_pmc_socklock(np, sk, mc_lst) {
-		if ((ifindex == 0 || mc_lst->ifindex == ifindex) &&
-		    ipv6_addr_equal(&mc_lst->addr, addr))
+		if (mc_lst->ifindex == ifindex &&
+		    ipv6_addr_equal(&mc_lst->addr, addr)) {
+			dev_put(dev);
 			return -EADDRINUSE;
+		}
 	}
 
 	mc_lst = sock_kmalloc(sk, sizeof(struct ipv6_mc_socklist), GFP_KERNEL);
-	if (!mc_lst)
+	if (!mc_lst) {
+		dev_put(dev);
 		return -ENOMEM;
+	}
 
 	mc_lst->next = NULL;
 	mc_lst->addr = *addr;
-
-	dev = ip6_mc_find_dev(net, addr, ifindex);
-	if (!dev) {
-		sock_kfree_s(sk, mc_lst, sizeof(*mc_lst));
-		return -ENODEV;
-	}
 
 	mc_lst->ifindex = dev->ifindex;
 	mc_lst->sfmode = mode;
@@ -249,14 +255,15 @@ static int __ipv6_sock_mc_join(struct sock *sk, int ifindex,
 
 int ipv6_sock_mc_join(struct sock *sk, int ifindex, const struct in6_addr *addr)
 {
-	return __ipv6_sock_mc_join(sk, ifindex, addr, MCAST_EXCLUDE);
+	return __ipv6_sock_mc_join(sk, ifindex, addr, MCAST_EXCLUDE, NULL);
 }
 EXPORT_SYMBOL(ipv6_sock_mc_join);
 
 int ipv6_sock_mc_join_ssm(struct sock *sk, int ifindex,
-			  const struct in6_addr *addr, unsigned int mode)
+			  const struct in6_addr *addr, unsigned int mode,
+			  int *resolved_ifindex)
 {
-	return __ipv6_sock_mc_join(sk, ifindex, addr, mode);
+	return __ipv6_sock_mc_join(sk, ifindex, addr, mode, resolved_ifindex);
 }
 
 /*
@@ -362,6 +369,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 	struct net *net = sock_net(sk);
 	struct ipv6_mc_socklist *pmc;
 	struct inet6_dev *idev;
+	int ifindex;
 	int leavegroup = 0;
 	int i, j;
 	int err;
@@ -375,6 +383,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 	idev = ip6_mc_find_idev(net, group, pgsr->gsr_interface);
 	if (!idev)
 		return -ENODEV;
+	ifindex = idev->dev->ifindex;
 
 	mutex_lock(&idev->mc_lock);
 
@@ -386,7 +395,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 	err = -EADDRNOTAVAIL;
 
 	for_each_pmc_socklock(inet6, sk, pmc) {
-		if (pgsr->gsr_interface && pmc->ifindex != pgsr->gsr_interface)
+		if (pmc->ifindex != ifindex)
 			continue;
 		if (ipv6_addr_equal(&pmc->addr, group))
 			break;
@@ -395,6 +404,10 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 		err = -EINVAL;
 		goto done;
 	}
+	psl = sock_dereference(pmc->sflist, sk);
+	if (!add && !psl)
+		goto done;	/* err = -EADDRNOTAVAIL */
+
 	/* if a source filter was set, must be the same mode as before */
 	if (rcu_access_pointer(pmc->sflist)) {
 		if (pmc->sfmode != omode) {
@@ -408,10 +421,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 		pmc->sfmode = omode;
 	}
 
-	psl = sock_dereference(pmc->sflist, sk);
 	if (!add) {
-		if (!psl)
-			goto done;	/* err = -EADDRNOTAVAIL */
 		for (i = 0; i < psl->sl_count; i++) {
 			if (ipv6_addr_equal(&psl->sl_addr[i], source))
 				break;
@@ -497,7 +507,7 @@ done:
 	mutex_unlock(&idev->mc_lock);
 	in6_dev_put(idev);
 	if (leavegroup)
-		err = ipv6_sock_mc_drop(sk, pgsr->gsr_interface, group);
+		err = ipv6_sock_mc_drop(sk, ifindex, group);
 	return err;
 }
 
@@ -600,14 +610,14 @@ done:
 }
 
 int ip6_mc_msfget(struct sock *sk, struct group_filter *gsf,
-		  sockptr_t optval, size_t ss_offset)
+		  sockopt_t *opt, size_t ss_offset)
 {
 	struct ipv6_pinfo *inet6 = inet6_sk(sk);
 	const struct in6_addr *group;
 	struct ipv6_mc_socklist *pmc;
 	struct ip6_sf_socklist *psl;
+	int i, copycount, err;
 	unsigned int count;
-	int i, copycount;
 
 	group = &((struct sockaddr_in6 *)&gsf->gf_group)->sin6_addr;
 
@@ -629,6 +639,18 @@ int ip6_mc_msfget(struct sock *sk, struct group_filter *gsf,
 
 	copycount = min(count, gsf->gf_numsrc);
 	gsf->gf_numsrc = count;
+
+	/* The source list is sized by the gf_numsrc the caller left in optval,
+	 * not by optlen, which only has to cover the fixed part.
+	 */
+	err = sockopt_expand_out(opt, ss_offset +
+				 copycount * sizeof(struct sockaddr_storage));
+	if (err)
+		return err;
+
+	/* The caller fills the fixed part in once it knows gf_numsrc. */
+	iov_iter_advance(&opt->iter_out, ss_offset);
+
 	for (i = 0; i < copycount; i++) {
 		struct sockaddr_in6 *psin6;
 		struct sockaddr_storage ss;
@@ -637,9 +659,8 @@ int ip6_mc_msfget(struct sock *sk, struct group_filter *gsf,
 		memset(&ss, 0, sizeof(ss));
 		psin6->sin6_family = AF_INET6;
 		psin6->sin6_addr = psl->sl_addr[i];
-		if (copy_to_sockptr_offset(optval, ss_offset, &ss, sizeof(ss)))
+		if (copy_to_iter(&ss, sizeof(ss), &opt->iter_out) != sizeof(ss))
 			return -EFAULT;
-		ss_offset += sizeof(ss);
 	}
 	return 0;
 }

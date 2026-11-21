@@ -125,13 +125,24 @@ static int mana_smc_read_response(struct shm_channel *sc, u32 msg_type,
 void mana_smc_init(struct shm_channel *sc, struct device *dev,
 		   void __iomem *base)
 {
+	/* The first call precedes channel publication. Later calls refresh the
+	 * BAR mapping after reset or resume without reinitializing a live lock.
+	 */
+	if (!sc->transaction_lock_initialized) {
+		mutex_init(&sc->transaction_lock);
+		sc->transaction_lock_initialized = true;
+	}
+
+	mutex_lock(&sc->transaction_lock);
 	sc->dev = dev;
 	sc->base = base;
+	mutex_unlock(&sc->transaction_lock);
 }
 
-int mana_smc_setup_hwc(struct shm_channel *sc, bool reset_vf, u64 eq_addr,
-		       u64 cq_addr, u64 rq_addr, u64 sq_addr,
-		       u32 eq_msix_index)
+static int mana_smc_setup_hwc_locked(struct shm_channel *sc, bool reset_vf,
+				     u64 eq_addr, u64 cq_addr, u64 rq_addr,
+				     u64 sq_addr, u32 eq_msix_index,
+				     bool *submitted)
 {
 	union smc_proto_hdr *hdr;
 	u16 all_addr_h4bits = 0;
@@ -143,6 +154,9 @@ int mana_smc_setup_hwc(struct shm_channel *sc, bool reset_vf, u64 eq_addr,
 	u8 *ptr;
 	int err;
 	int i;
+
+	lockdep_assert_held(&sc->transaction_lock);
+	*submitted = false;
 
 	/* Ensure VF already has possession of shared memory */
 	err = mana_smc_poll_register(sc->base, false);
@@ -229,6 +243,7 @@ int mana_smc_setup_hwc(struct shm_channel *sc, bool reset_vf, u64 eq_addr,
 	/* Write 256-message buffer to shared memory (final 32-bit write
 	 * triggers HW to set possession bit to PF).
 	 */
+	*submitted = true;
 	dword = (u32 *)shm_buf;
 	for (i = 0; i < SMC_APERTURE_DWORDS; i++)
 		writel(*dword++, sc->base + i * SMC_BASIC_UNIT);
@@ -248,10 +263,31 @@ int mana_smc_setup_hwc(struct shm_channel *sc, bool reset_vf, u64 eq_addr,
 	return 0;
 }
 
-int mana_smc_teardown_hwc(struct shm_channel *sc, bool reset_vf)
+int mana_smc_setup_hwc(struct shm_channel *sc, bool reset_vf, u64 eq_addr,
+		       u64 cq_addr, u64 rq_addr, u64 sq_addr,
+		       u32 eq_msix_index, bool *submitted)
+{
+	int err;
+
+	mutex_lock(&sc->transaction_lock);
+	err = mana_smc_setup_hwc_locked(sc, reset_vf, eq_addr, cq_addr,
+					rq_addr, sq_addr, eq_msix_index,
+					submitted);
+	mutex_unlock(&sc->transaction_lock);
+
+	return err;
+}
+
+static int mana_smc_teardown_hwc_locked(struct shm_channel *sc, bool reset_vf,
+					bool *setup_active)
 {
 	union smc_proto_hdr hdr = {};
 	int err;
+
+	lockdep_assert_held(&sc->transaction_lock);
+
+	if (!*setup_active)
+		return 0;
 
 	/* Ensure already has possession of shared memory */
 	err = mana_smc_poll_register(sc->base, false);
@@ -283,5 +319,19 @@ int mana_smc_teardown_hwc(struct shm_channel *sc, bool reset_vf)
 		return err;
 	}
 
+	*setup_active = false;
+
 	return 0;
+}
+
+int mana_smc_teardown_hwc(struct shm_channel *sc, bool reset_vf,
+			  bool *setup_active)
+{
+	int err;
+
+	mutex_lock(&sc->transaction_lock);
+	err = mana_smc_teardown_hwc_locked(sc, reset_vf, setup_active);
+	mutex_unlock(&sc->transaction_lock);
+
+	return err;
 }

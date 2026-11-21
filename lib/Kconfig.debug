@@ -2531,6 +2531,12 @@ config STRING_HELPERS_KUNIT_TEST
 	depends on KUNIT
 	default KUNIT_ALL_TESTS
 
+config STRINGSET_KUNIT_TEST
+	tristate "KUnit test the stringset data structure at runtime" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	select STRINGSET
+	default KUNIT_ALL_TESTS
+
 config STRING_KUNIT_BENCH
        bool "Benchmark string functions at runtime"
        depends on STRING_KUNIT_TEST

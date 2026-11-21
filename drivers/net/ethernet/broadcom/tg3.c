@@ -56,6 +56,7 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/crc32.h>
 #include <linux/dmi.h>
+#include <linux/log2.h>
 
 #include <net/checksum.h>
 #include <net/gso.h>
@@ -2558,7 +2559,8 @@ static int tg3_phy_reset_5703_4_5(struct tg3 *tp)
 		}
 
 		/* Disable transmitter and interrupt.  */
-		if (tg3_readphy(tp, MII_TG3_EXT_CTRL, &reg32))
+		err = tg3_readphy(tp, MII_TG3_EXT_CTRL, &reg32);
+		if (err)
 			continue;
 
 		reg32 |= 0x3000;
@@ -2569,7 +2571,8 @@ static int tg3_phy_reset_5703_4_5(struct tg3 *tp)
 			     BMCR_FULLDPLX | BMCR_SPEED1000);
 
 		/* Set to master mode.  */
-		if (tg3_readphy(tp, MII_CTRL1000, &phy9_orig))
+		err = tg3_readphy(tp, MII_CTRL1000, &phy9_orig);
+		if (err)
 			continue;
 
 		tg3_writephy(tp, MII_CTRL1000,
@@ -2586,6 +2589,9 @@ static int tg3_phy_reset_5703_4_5(struct tg3 *tp)
 		if (!err)
 			break;
 	} while (--retries);
+
+	if (err)
+		return err;
 
 	err = tg3_phy_reset_chanpat(tp);
 	if (err)
@@ -2840,6 +2846,9 @@ static void tg3_pwrsrc_die_with_vmain(struct tg3 *tp)
 	    tg3_asic_rev(tp) == ASIC_REV_5701)
 		return;
 
+	if (tg3_flag(tp, CITADEL))
+		return;
+
 	grc_local_ctrl = tp->grc_local_ctrl | GRC_LCLCTRL_GPIO_OE1;
 
 	tw32_wait_f(GRC_LOCAL_CTRL,
@@ -2913,6 +2922,9 @@ static void tg3_pwrsrc_switch_to_vaux(struct tg3 *tp)
 			grc_local_ctrl &= ~(GRC_LCLCTRL_GPIO_OE2 |
 					    GRC_LCLCTRL_GPIO_OUTPUT2);
 		}
+		if (tg3_flag(tp, CITADEL))
+			grc_local_ctrl &= ~(GRC_LCLCTRL_GPIO_OE1 |
+					    GRC_LCLCTRL_GPIO_OUTPUT1);
 		tw32_wait_f(GRC_LOCAL_CTRL,
 			    tp->grc_local_ctrl | grc_local_ctrl,
 			    TG3_GRC_LCLCTL_PWRSW_DELAY);
@@ -3379,6 +3391,9 @@ static int tg3_nvram_write_block_unbuffered(struct tg3 *tp, u32 offset, u32 len,
 	u32 nvram_cmd;
 	u8 *tmp;
 
+	if (pagesize < 4 || !is_power_of_2(pagesize))
+		return -EINVAL;
+
 	tmp = kmalloc(pagesize, GFP_KERNEL);
 	if (tmp == NULL)
 		return -ENOMEM;
@@ -3399,13 +3414,14 @@ static int tg3_nvram_write_block_unbuffered(struct tg3 *tp, u32 offset, u32 len,
 			break;
 
 		page_off = offset & pagemask;
-		size = pagesize;
+		size = pagesize - page_off;
 		if (len < size)
 			size = len;
 
 		len -= size;
 
 		memcpy(tmp + page_off, buf, size);
+		buf += size;
 
 		offset = offset + (pagesize - page_off);
 
@@ -8867,6 +8883,13 @@ static int tg3_alloc_consistent(struct tg3 *tp)
 		if (!tnapi->hw_status)
 			goto err_out;
 
+		if (tg3_asic_rev(tp) == ASIC_REV_57766 &&
+		    (lower_32_bits(tnapi->status_mapping) & 0xffff0000) ==
+		    0xffff0000)
+			dev_warn(&tp->pdev->dev,
+				 "Status block at DMA address %pad may cause TX timeouts on this device\n",
+				 &tnapi->status_mapping);
+
 		sblk = tnapi->hw_status;
 
 		if (tg3_flag(tp, ENABLE_RSS)) {
@@ -10537,7 +10560,10 @@ static int tg3_reset_hw(struct tg3 *tp, bool reset_phy)
 		tp->grc_local_ctrl |= tr32(GRC_LOCAL_CTRL) & gpio_mask;
 
 		/* GPIO1 must be driven high for eeprom write protect */
-		if (tg3_flag(tp, EEPROM_WRITE_PROT))
+		if (tg3_flag(tp, CITADEL))
+			tp->grc_local_ctrl &= ~(GRC_LCLCTRL_GPIO_OE1 |
+						GRC_LCLCTRL_GPIO_OUTPUT1);
+		else if (tg3_flag(tp, EEPROM_WRITE_PROT))
 			tp->grc_local_ctrl |= (GRC_LCLCTRL_GPIO_OE1 |
 					       GRC_LCLCTRL_GPIO_OUTPUT1);
 	}
@@ -15220,6 +15246,38 @@ static struct subsys_tbl_ent *tg3_lookup_by_subsys(struct tg3 *tp)
 	return NULL;
 }
 
+static bool tg3_is_citadel(struct tg3 *tp)
+{
+	if (tp->pdev->subsystem_vendor == TG3PCI_SUBVENDOR_ID_BROADCOM) {
+		switch (tp->pdev->subsystem_device) {
+		case TG3PCI_SUBDEVICE_ID_CITADEL_BEVERLYWOOD:
+		case TG3PCI_SUBDEVICE_ID_CITADEL_BEL_AIR:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2908:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2909:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2906:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_E14A:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_E34A:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2904:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2905:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	if (tp->pdev->subsystem_vendor == TG3PCI_SUBVENDOR_ID_DELL) {
+		switch (tp->pdev->subsystem_device) {
+		case TG3PCI_SUBDEVICE_ID_DELL_5720_L21T00:
+		case TG3PCI_SUBDEVICE_ID_DELL_5720_XE9880L:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	return false;
+}
+
 static void tg3_get_eeprom_hw_cfg(struct tg3 *tp)
 {
 	u32 val;
@@ -15230,6 +15288,9 @@ static void tg3_get_eeprom_hw_cfg(struct tg3 *tp)
 	/* Assume an onboard device and WOL capable by default.  */
 	tg3_flag_set(tp, EEPROM_WRITE_PROT);
 	tg3_flag_set(tp, WOL_CAP);
+
+	if (tg3_is_citadel(tp))
+		tg3_flag_set(tp, CITADEL);
 
 	if (tg3_asic_rev(tp) == ASIC_REV_5906) {
 		if (!(tr32(PCIE_TRANSACTION_CFG) & PCIE_TRANS_CFG_LOM)) {
@@ -15430,6 +15491,12 @@ static void tg3_get_eeprom_hw_cfg(struct tg3 *tp)
 			tp->phy_flags |= TG3_PHYFLG_DISABLE_1G_HD_ADV;
 	}
 done:
+	if (tg3_flag(tp, CITADEL)) {
+		tg3_flag_clear(tp, EEPROM_WRITE_PROT);
+		tg3_flag_clear(tp, WOL_CAP);
+		tg3_flag_clear(tp, WOL_ENABLE);
+	}
+
 	if (tg3_flag(tp, WOL_CAP))
 		device_set_wakeup_enable(&tp->pdev->dev,
 					 tg3_flag(tp, WOL_ENABLE));
@@ -15990,20 +16057,26 @@ static void tg3_read_mgmtfw_ver(struct tg3 *tp)
 	}
 }
 
-static void tg3_probe_ncsi(struct tg3 *tp)
+/* Returns true if valid, ready APE firmware is present, regardless of
+ * whether it advertises NCSI (it may be DASH or SMASH).  Sets APE_HAS_NCSI
+ * if the NCSI feature is advertised.
+ */
+static bool tg3_probe_ncsi(struct tg3 *tp)
 {
 	u32 apedata;
 
 	apedata = tg3_ape_read32(tp, TG3_APE_SEG_SIG);
 	if (apedata != APE_SEG_SIG_MAGIC)
-		return;
+		return false;
 
 	apedata = tg3_ape_read32(tp, TG3_APE_FW_STATUS);
 	if (!(apedata & APE_FW_STATUS_READY))
-		return;
+		return false;
 
 	if (tg3_ape_read32(tp, TG3_APE_FW_FEATURES) & TG3_APE_FW_FEATURE_NCSI)
 		tg3_flag_set(tp, APE_HAS_NCSI);
+
+	return true;
 }
 
 static void tg3_read_dash_ver(struct tg3 *tp)
@@ -16082,8 +16155,7 @@ static void tg3_read_fw_ver(struct tg3 *tp)
 
 	if (tg3_flag(tp, ENABLE_ASF)) {
 		if (tg3_flag(tp, ENABLE_APE)) {
-			tg3_probe_ncsi(tp);
-			if (!vpd_vers)
+			if (tg3_probe_ncsi(tp) && !vpd_vers)
 				tg3_read_dash_ver(tp);
 		} else if (!vpd_vers) {
 			tg3_read_mgmtfw_ver(tp);
@@ -17756,6 +17828,7 @@ static int tg3_init_one(struct pci_dev *pdev,
 	u64 dma_mask, persist_dma_mask;
 	netdev_features_t features = 0;
 	u8 addr[ETH_ALEN] __aligned(2);
+	u64 test_dma_mask = 0;
 
 	err = pci_enable_device(pdev);
 	if (err) {
@@ -17895,15 +17968,22 @@ static int tg3_init_one(struct pci_dev *pdev,
 		persist_dma_mask = dma_mask = DMA_BIT_MASK(64);
 
 	if (tg3_asic_rev(tp) == ASIC_REV_57766)
-		persist_dma_mask = DMA_BIT_MASK(31);
+		test_dma_mask = DMA_BIT_MASK(31);
 
 	/* Configure DMA attributes. */
 	if (dma_mask > DMA_BIT_MASK(32)) {
 		err = dma_set_mask(&pdev->dev, dma_mask);
 		if (!err) {
 			features |= NETIF_F_HIGHDMA;
-			err = dma_set_coherent_mask(&pdev->dev,
-						    persist_dma_mask);
+			if (!test_dma_mask ||
+			    dma_set_coherent_mask(&pdev->dev,
+						  test_dma_mask)) {
+				if (test_dma_mask)
+					dev_warn(&pdev->dev,
+						 "Unable to set 31 bit coherent DMA mask, workaround not applied\n");
+				err = dma_set_coherent_mask(&pdev->dev,
+							    persist_dma_mask);
+			}
 			if (err < 0) {
 				dev_err(&pdev->dev, "Unable to obtain 64 bit "
 					"DMA for consistent allocations\n");

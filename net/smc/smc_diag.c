@@ -245,6 +245,9 @@ static int smc_diag_handler_dump(struct sk_buff *skb, struct nlmsghdr *h)
 {
 	struct net *net = sock_net(skb->sk);
 
+	if (nlmsg_len(h) < sizeof(struct smc_diag_req))
+		return -EINVAL;
+
 	if (h->nlmsg_type == SOCK_DIAG_BY_FAMILY &&
 	    h->nlmsg_flags & NLM_F_DUMP) {
 		{

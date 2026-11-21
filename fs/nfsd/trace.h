@@ -467,6 +467,33 @@ TRACE_EVENT(nfsd_export_update,
 	)
 );
 
+TRACE_EVENT(nfsd_export_tags_denied,
+	TP_PROTO(
+		const struct svc_rqst *rqstp,
+		const struct svc_export *exp
+	),
+	TP_ARGS(rqstp, exp),
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__sockaddr(client, rqstp->rq_xprt->xpt_remotelen)
+		__string(path, exp->ex_path.dentry->d_name.name)
+		__string(auth_domain, exp->ex_client->name)
+	),
+	TP_fast_assign(
+		const struct svc_xprt *xprt = rqstp->rq_xprt;
+
+		__entry->xid = be32_to_cpu(rqstp->rq_xid);
+		__assign_sockaddr(client, &xprt->xpt_remote,
+				  xprt->xpt_remotelen);
+		__assign_str(path);
+		__assign_str(auth_domain);
+	),
+	TP_printk("xid=0x%08x client=%pISpc path=%s domain=%s",
+		__entry->xid, __get_sockaddr(client),
+		__get_str(path), __get_str(auth_domain)
+	)
+);
+
 DECLARE_EVENT_CLASS(nfsd_io_class,
 	TP_PROTO(struct svc_rqst *rqstp,
 		 struct svc_fh	*fhp,

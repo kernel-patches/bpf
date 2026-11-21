@@ -628,8 +628,11 @@ static int mctp_i2c_tx_thread(void *data)
 	unsigned long flags;
 
 	for (;;) {
-		if (kthread_should_stop())
+		if (kthread_should_stop()) {
+			/* Only the rt_mutex owner may release the bus lock */
+			mctp_i2c_unlock_reset(midev);
 			break;
+		}
 
 		spin_lock_irqsave(&midev->tx_queue.lock, flags);
 		skb = __skb_dequeue(&midev->tx_queue);
@@ -782,11 +785,46 @@ static struct mctp_i2c_dev *mctp_i2c_midev_init(struct net_device *dev,
 	return midev;
 }
 
+/* Removes midev from the parent i2c client and moves sel off it.
+ * Safe to call more than once.
+ */
+static void mctp_i2c_midev_detach(struct mctp_i2c_dev *midev)
+{
+	struct mctp_i2c_client *mcli = midev->client;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mcli->sel_lock, flags);
+	if (list_empty(&midev->list)) {
+		spin_unlock_irqrestore(&mcli->sel_lock, flags);
+		return;
+	}
+	list_del_init(&midev->list);
+	if (mcli->sel == midev) {
+		struct mctp_i2c_dev *first;
+
+		first = list_first_entry_or_null(&mcli->devs, struct mctp_i2c_dev, list);
+		__mctp_i2c_device_select(mcli, first);
+	}
+	spin_unlock_irqrestore(&mcli->sel_lock, flags);
+}
+
+/* The unlock marker is embedded in midev, so keep it from kfree_skb() */
+static void mctp_i2c_tx_purge(struct mctp_i2c_dev *midev)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&midev->tx_queue.lock, flags);
+	if (midev->unlock_marker.next)
+		__skb_unlink(&midev->unlock_marker, &midev->tx_queue);
+	spin_unlock_irqrestore(&midev->tx_queue.lock, flags);
+
+	skb_queue_purge(&midev->tx_queue);
+}
+
 /* Counterpart of mctp_i2c_midev_init */
 static void mctp_i2c_midev_free(struct mctp_i2c_dev *midev)
 {
 	struct mctp_i2c_client *mcli = midev->client;
-	unsigned long flags;
 
 	if (midev->tx_thread) {
 		kthread_stop(midev->tx_thread);
@@ -797,17 +835,9 @@ static void mctp_i2c_midev_free(struct mctp_i2c_dev *midev)
 	mctp_i2c_unlock_reset(midev);
 
 	/* Remove the netdev from the parent i2c client. */
-	spin_lock_irqsave(&mcli->sel_lock, flags);
-	list_del(&midev->list);
-	if (mcli->sel == midev) {
-		struct mctp_i2c_dev *first;
+	mctp_i2c_midev_detach(midev);
 
-		first = list_first_entry_or_null(&mcli->devs, struct mctp_i2c_dev, list);
-		__mctp_i2c_device_select(mcli, first);
-	}
-	spin_unlock_irqrestore(&mcli->sel_lock, flags);
-
-	skb_queue_purge(&midev->tx_queue);
+	mctp_i2c_tx_purge(midev);
 	put_device(&midev->adapter->dev);
 	put_device(&mcli->client->dev);
 }
@@ -827,8 +857,13 @@ static void mctp_i2c_unregister(struct mctp_i2c_dev *midev)
 	spin_unlock_irqrestore(&midev->lock, flags);
 	wait_for_completion(&midev->rx_done);
 
+	/* Release sel's reference on the netdev, otherwise
+	 * mctp_unregister_netdev() blocks waiting for it.
+	 */
+	mctp_i2c_midev_detach(midev);
+
 	mctp_unregister_netdev(midev->ndev);
-	/* midev has been freed now by mctp_i2c_ndo_uninit callback */
+	mctp_i2c_midev_free(midev);
 
 	free_netdev(midev->ndev);
 }
@@ -837,11 +872,11 @@ static void mctp_i2c_ndo_uninit(struct net_device *dev)
 {
 	struct mctp_i2c_dev *midev = netdev_priv(dev);
 
-	/* Perform cleanup here to ensure that mcli->sel isn't holding
-	 * a reference that would prevent unregister_netdevice()
-	 * from completing.
+	/* Drop sel's reference and queued skbs before unregister waits
+	 * for the last netdev reference. midev is freed elsewhere.
 	 */
-	mctp_i2c_midev_free(midev);
+	mctp_i2c_midev_detach(midev);
+	mctp_i2c_tx_purge(midev);
 }
 
 static int mctp_i2c_ndo_open(struct net_device *dev)
@@ -855,6 +890,24 @@ static int mctp_i2c_ndo_open(struct net_device *dev)
 	spin_unlock_irqrestore(&midev->lock, flags);
 
 	return 0;
+}
+
+static struct mctp_i2c_dev *mctp_i2c_find_dev(struct mctp_i2c_client *mcli,
+					      struct i2c_adapter *adap)
+{
+	struct mctp_i2c_dev *midev = NULL, *m = NULL;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mcli->sel_lock, flags);
+	/* List size is limited by number of MCTP netdevs on a single hardware bus */
+	list_for_each_entry(m, &mcli->devs, list)
+		if (m->adapter == adap) {
+			midev = m;
+			break;
+		}
+	spin_unlock_irqrestore(&mcli->sel_lock, flags);
+
+	return midev;
 }
 
 static int mctp_i2c_add_netdev(struct mctp_i2c_client *mcli,
@@ -876,6 +929,9 @@ static int mctp_i2c_add_netdev(struct mctp_i2c_client *mcli,
 	}
 
 	WARN_ON(!mutex_is_locked(&driver_clients_lock));
+	if (mctp_i2c_find_dev(mcli, adap))
+		return 0;
+
 	snprintf(namebuf, sizeof(namebuf), "mctpi2c%d", adap->nr);
 	ndev = alloc_netdev(sizeof(*midev), namebuf, NET_NAME_ENUM, mctp_i2c_net_setup);
 	if (!ndev) {
@@ -920,19 +976,10 @@ err:
 static void mctp_i2c_remove_netdev(struct mctp_i2c_client *mcli,
 				   struct i2c_adapter *adap)
 {
-	struct mctp_i2c_dev *midev = NULL, *m = NULL;
-	unsigned long flags;
+	struct mctp_i2c_dev *midev;
 
 	WARN_ON(!mutex_is_locked(&driver_clients_lock));
-	spin_lock_irqsave(&mcli->sel_lock, flags);
-	/* List size is limited by number of MCTP netdevs on a single hardware bus */
-	list_for_each_entry(m, &mcli->devs, list)
-		if (m->adapter == adap) {
-			midev = m;
-			break;
-		}
-	spin_unlock_irqrestore(&mcli->sel_lock, flags);
-
+	midev = mctp_i2c_find_dev(mcli, adap);
 	if (midev)
 		mctp_i2c_unregister(midev);
 }
@@ -1077,6 +1124,79 @@ static void mctp_i2c_remove(struct i2c_client *client)
 	mutex_unlock(&driver_clients_lock);
 }
 
+/* Returns the named adapter in mcli's mux tree, with a reference held */
+static struct i2c_adapter *mctp_i2c_find_named(struct mctp_i2c_client *mcli,
+					       const char *name)
+{
+	struct i2c_adapter *adap = NULL, *root = NULL;
+	struct device *dev;
+
+	dev = bus_find_device_by_name(&i2c_bus_type, NULL, name);
+	if (!dev)
+		return ERR_PTR(-ENODEV);
+
+	adap = mctp_i2c_get_adapter(dev, &root);
+	if (!adap || root != mcli->client->adapter) {
+		put_device(dev);
+		return ERR_PTR(-EINVAL);
+	}
+	return adap;
+}
+
+static ssize_t mctp_i2c_controller_write(struct device *dev, const char *buf,
+					 size_t count, bool add)
+{
+	struct mctp_i2c_client *mcli = i2c_get_clientdata(to_i2c_client(dev));
+	struct i2c_adapter *adap;
+	int rc = 0;
+
+	if (!ns_capable(current->nsproxy->net_ns->user_ns, CAP_NET_ADMIN))
+		return -EPERM;
+
+	mutex_lock(&driver_clients_lock);
+	adap = mctp_i2c_find_named(mcli, buf);
+	if (IS_ERR(adap)) {
+		rc = PTR_ERR(adap);
+		goto out;
+	}
+
+	if (add && mctp_i2c_find_dev(mcli, adap))
+		rc = -EEXIST;
+	else if (add)
+		rc = mctp_i2c_add_netdev(mcli, adap);
+	else if (!mctp_i2c_find_dev(mcli, adap))
+		rc = -ENODEV;
+	else
+		mctp_i2c_remove_netdev(mcli, adap);
+	put_device(&adap->dev);
+out:
+	mutex_unlock(&driver_clients_lock);
+	return rc < 0 ? rc : count;
+}
+
+static ssize_t add_mctp_controller_store(struct device *dev,
+					 struct device_attribute *attr,
+					 const char *buf, size_t count)
+{
+	return mctp_i2c_controller_write(dev, buf, count, true);
+}
+static DEVICE_ATTR_WO(add_mctp_controller);
+
+static ssize_t remove_mctp_controller_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
+{
+	return mctp_i2c_controller_write(dev, buf, count, false);
+}
+static DEVICE_ATTR_WO(remove_mctp_controller);
+
+static struct attribute *mctp_i2c_attrs[] = {
+	&dev_attr_add_mctp_controller.attr,
+	&dev_attr_remove_mctp_controller.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(mctp_i2c);
+
 /* We look for a 'mctp-controller' property on I2C busses as they are
  * added/deleted, creating/removing netdevs as required.
  */
@@ -1090,6 +1210,8 @@ static int mctp_i2c_notifier_call(struct notifier_block *nb,
 		mctp_i2c_notify_add(dev);
 		break;
 	case BUS_NOTIFY_DEL_DEVICE:
+	/* A sysfs write can add a netdev after DEL_DEVICE */
+	case BUS_NOTIFY_REMOVED_DEVICE:
 		mctp_i2c_notify_del(dev);
 		break;
 	}
@@ -1116,6 +1238,7 @@ static struct i2c_driver mctp_i2c_driver = {
 	.driver = {
 		.name = "mctp-i2c-interface",
 		.of_match_table = mctp_i2c_of_match,
+		.dev_groups = mctp_i2c_groups,
 	},
 	.probe = mctp_i2c_probe,
 	.remove = mctp_i2c_remove,

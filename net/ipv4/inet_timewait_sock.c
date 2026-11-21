@@ -333,7 +333,8 @@ restart:
 			if (unlikely(!refcount_inc_not_zero_acquire(&sk->sk_refcnt)))
 				continue;
 
-			if (check_net(sock_net(sk))) {
+			if (unlikely(hlist_nulls_unhashed_lockless(&sk->sk_nulls_node) ||
+				     check_net(sock_net(sk)))) {
 				sock_gen_put(sk);
 				goto restart;
 			}

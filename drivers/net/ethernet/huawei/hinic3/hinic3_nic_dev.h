@@ -112,6 +112,7 @@ struct hinic3_nic_dev {
 	struct hinic3_dyna_txrxq_params q_params;
 	struct hinic3_txq               *txqs;
 	struct hinic3_rxq               *rxqs;
+	unsigned long                   *rx_oom_bitmap;
 
 	enum hinic3_rss_hash_type       rss_hash_type;
 	struct hinic3_rss_type          rss_type;
@@ -126,6 +127,7 @@ struct hinic3_nic_dev {
 
 	struct workqueue_struct         *workq;
 	struct delayed_work             periodic_work;
+	struct delayed_work             rx_oom_work;
 	struct work_struct              rx_mode_work;
 	/* lock for enable/disable port */
 	struct mutex                    port_state_mutex;
@@ -145,6 +147,7 @@ void hinic3_set_netdev_ops(struct net_device *netdev);
 int hinic3_set_hw_features(struct net_device *netdev);
 int hinic3_qps_irq_init(struct net_device *netdev);
 void hinic3_qps_irq_uninit(struct net_device *netdev);
+void hinic3_rx_oom_schedule(struct net_device *netdev, u16 q_id);
 
 void hinic3_set_rx_mode_work(struct work_struct *work);
 void hinic3_clean_mac_list_filter(struct net_device *netdev);

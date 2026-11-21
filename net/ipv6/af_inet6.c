@@ -324,6 +324,14 @@ int __inet6_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 		chk_addr_ret = inet_addr_type_dev_table(net, dev, v4addr);
 		rcu_read_unlock();
 
+		if (sk->sk_type == SOCK_STREAM &&
+		    v4addr != htonl(INADDR_ANY) &&
+		    (chk_addr_ret == RTN_MULTICAST ||
+		     chk_addr_ret == RTN_BROADCAST)) {
+			err = -EINVAL;
+			goto out;
+		}
+
 		if (!inet_addr_valid_or_nonlocal(net, inet, v4addr,
 						 chk_addr_ret)) {
 			err = -EADDRNOTAVAIL;
@@ -341,6 +349,7 @@ int __inet6_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 					 * is supplied by user.
 					 */
 					sk->sk_bound_dev_if = addr->sin6_scope_id;
+					sk->sk_userlocks &= ~SOCK_CONNECT_IFINDEX;
 				}
 
 				/* Binding to link-local address requires an interface */

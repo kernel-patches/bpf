@@ -78,7 +78,7 @@ static struct vhost_vsock *vhost_vsock_get(u32 guest_cid, struct net *net)
 
 	hash_for_each_possible_rcu(vhost_vsock_hash, vsock, hash, guest_cid,
 				   lockdep_is_held(&vhost_vsock_mutex)) {
-		u32 other_cid = vsock->guest_cid;
+		u32 other_cid = READ_ONCE(vsock->guest_cid);
 
 		/* Skip instances that have no CID yet */
 		if (other_cid == 0)
@@ -229,7 +229,7 @@ vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
 		/* Deliver to monitoring devices all packets that we
 		 * will transmit.
 		 */
-		virtio_transport_deliver_tap_pkt(skb);
+		virtio_transport_deliver_tap_pkt(skb, vsock->net);
 
 		vhost_add_used(vq, head, sizeof(*hdr) + payload_len);
 		added = true;
@@ -567,12 +567,12 @@ static void vhost_vsock_handle_tx_kick(struct vhost_work *work)
 		total_len += sizeof(*hdr) + skb->len;
 
 		/* Deliver to monitoring devices all received packets */
-		virtio_transport_deliver_tap_pkt(skb);
+		virtio_transport_deliver_tap_pkt(skb, vsock->net);
 
 		hdr = virtio_vsock_hdr(skb);
 
 		/* Only accept correctly addressed packets */
-		if (le64_to_cpu(hdr->src_cid) == vsock->guest_cid &&
+		if (le64_to_cpu(hdr->src_cid) == READ_ONCE(vsock->guest_cid) &&
 		    le64_to_cpu(hdr->dst_cid) ==
 		    vhost_transport_get_local_cid())
 			virtio_transport_recv_pkt(&vhost_transport, skb,
@@ -859,7 +859,7 @@ static int vhost_vsock_set_cid(struct vhost_vsock *vsock, u64 guest_cid)
 	if (vsock->guest_cid)
 		hash_del_rcu(&vsock->hash);
 
-	vsock->guest_cid = guest_cid;
+	WRITE_ONCE(vsock->guest_cid, guest_cid);
 	hash_add_rcu(vhost_vsock_hash, &vsock->hash, vsock->guest_cid);
 	mutex_unlock(&vhost_vsock_mutex);
 

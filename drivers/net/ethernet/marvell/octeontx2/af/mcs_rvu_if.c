@@ -682,11 +682,14 @@ int rvu_mbox_handler_mcs_alloc_resources(struct rvu *rvu,
 {
 	u16 pcifunc = req->hdr.pcifunc;
 	struct mcs_rsrc_map *map;
+	int rsrc_id = -EINVAL, i;
 	struct mcs *mcs;
-	int rsrc_id, i;
 
 	if (req->mcs_id >= rvu->mcs_blk_cnt)
 		return MCS_AF_ERR_INVALID_MCSID;
+
+	if (!req->all && !req->rsrc_cnt)
+		return -EINVAL;
 
 	mcs = mcs_get_pdata(req->mcs_id);
 
@@ -709,6 +712,8 @@ int rvu_mbox_handler_mcs_alloc_resources(struct rvu *rvu,
 
 	switch (req->rsrc_type) {
 	case MCS_RSRC_TYPE_FLOWID:
+		if (req->rsrc_cnt > ARRAY_SIZE(rsp->flow_ids))
+			goto exit;
 		for (i = 0; i < req->rsrc_cnt; i++) {
 			rsrc_id = mcs_alloc_rsrc(&map->flow_ids, map->flowid2pf_map, pcifunc);
 			if (rsrc_id < 0)
@@ -718,6 +723,8 @@ int rvu_mbox_handler_mcs_alloc_resources(struct rvu *rvu,
 		}
 		break;
 	case MCS_RSRC_TYPE_SECY:
+		if (req->rsrc_cnt > ARRAY_SIZE(rsp->secy_ids))
+			goto exit;
 		for (i = 0; i < req->rsrc_cnt; i++) {
 			rsrc_id = mcs_alloc_rsrc(&map->secy, map->secy2pf_map, pcifunc);
 			if (rsrc_id < 0)
@@ -727,6 +734,8 @@ int rvu_mbox_handler_mcs_alloc_resources(struct rvu *rvu,
 		}
 		break;
 	case MCS_RSRC_TYPE_SC:
+		if (req->rsrc_cnt > ARRAY_SIZE(rsp->sc_ids))
+			goto exit;
 		for (i = 0; i < req->rsrc_cnt; i++) {
 			rsrc_id = mcs_alloc_rsrc(&map->sc, map->sc2pf_map, pcifunc);
 			if (rsrc_id < 0)
@@ -744,6 +753,8 @@ int rvu_mbox_handler_mcs_alloc_resources(struct rvu *rvu,
 			rsp->rsrc_cnt++;
 		}
 		break;
+	default:
+		goto exit;
 	}
 
 	rsp->rsrc_type = req->rsrc_type;
@@ -793,6 +804,9 @@ int rvu_mbox_handler_mcs_alloc_ctrl_pkt_rule(struct rvu *rvu,
 	case MCS_CTRL_PKT_RULE_TYPE_MAC:
 		offset = MCS_CTRLPKT_MAC_EN_RULE_OFFSET;
 		break;
+	default:
+		rsrc_id = -EINVAL;
+		goto exit;
 	}
 
 	rsrc_id = mcs_alloc_ctrlpktrule(&map->ctrlpktrule, map->ctrlpktrule2pf_map, offset,

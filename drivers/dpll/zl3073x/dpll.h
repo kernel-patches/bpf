@@ -19,10 +19,12 @@
  * @ops: DPLL device operations for this instance
  * @dpll_dev: pointer to registered DPLL device
  * @tracker: tracking object for the acquired reference
- * @lock: per-DPLL mutex serializing all operations
+ * @lock: per-DPLL mutex serializing DPLL operations and channel state access
  * @type: DPLL type (PPS or EEC)
  * @lock_status: last saved DPLL lock status
  * @pins: list of pins
+ * @ptp_lock: serializes PTP clock operations, taken before @lock, which they
+ *	      hold only while they use the channel state
  * @ptp_info: PTP clock info
  * @ptp_clock: registered PTP clock (or NULL)
  */
@@ -39,6 +41,7 @@ struct zl3073x_dpll {
 	enum dpll_type			type;
 	enum dpll_lock_status		lock_status;
 	struct list_head		pins;
+	struct mutex			ptp_lock;
 	struct ptp_clock_info		ptp_info;
 	struct ptp_clock		*ptp_clock;
 };

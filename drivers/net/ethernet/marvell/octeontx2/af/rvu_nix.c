@@ -599,18 +599,56 @@ static u16 nix_get_channel(u16 chan, bool cpt_link)
 	return cpt_link ? chan | BIT(11) : chan;
 }
 
+static void nix_bp_free_lbk_bpid(struct rvu *rvu, struct nix_bp *bp,
+				 u16 bpid, u16 pcifunc)
+{
+	int idx;
+
+	/* Skip channels never enabled (reset value 0) or not using an LBK bpid */
+	if (bpid < bp->free_pool_base ||
+	    bpid >= bp->free_pool_base + bp->bpids.max)
+		return;
+
+	idx = bpid - bp->free_pool_base;
+
+	/* Only release the bpid if it is owned by this function. */
+	mutex_lock(&rvu->rsrc_lock);
+	if (bp->fn_map[idx] == pcifunc) {
+		rvu_free_rsrc(&bp->bpids, idx);
+		bp->fn_map[idx] = 0;
+		bp->ref_cnt[idx] = 0;
+	}
+	mutex_unlock(&rvu->rsrc_lock);
+}
+
+static void nix_bp_chan_disable(struct rvu *rvu, struct nix_bp *bp,
+				int blkaddr, u16 chan, bool cpt_link,
+				int type, u16 pcifunc)
+{
+	u16 chan_v = nix_get_channel(chan, cpt_link);
+	u64 cfg;
+
+	cfg = rvu_read64(rvu, blkaddr, NIX_AF_RX_CHANX_CFG(chan_v));
+	rvu_write64(rvu, blkaddr, NIX_AF_RX_CHANX_CFG(chan_v),
+		    cfg & ~BIT_ULL(16));
+
+	if (type != NIX_INTF_TYPE_LBK)
+		return;
+
+	nix_bp_free_lbk_bpid(rvu, bp, cfg & GENMASK_ULL(8, 0), pcifunc);
+}
+
 static int nix_bp_disable(struct rvu *rvu,
 			  struct nix_bp_cfg_req *req,
 			  struct msg_rsp *rsp, bool cpt_link)
 {
 	u16 pcifunc = req->hdr.pcifunc;
 	int blkaddr, pf, type, err;
-	u16 chan_base, chan, bpid;
 	struct rvu_pfvf *pfvf;
 	struct nix_hw *nix_hw;
 	struct nix_bp *bp;
-	u16 chan_v;
-	u64 cfg;
+	u16 chan_base;
+	int i;
 
 	pf = rvu_get_pf(rvu->pdev, pcifunc);
 	type = is_lbk_vf(rvu, pcifunc) ? NIX_INTF_TYPE_LBK : NIX_INTF_TYPE_CGX;
@@ -629,26 +667,19 @@ static int nix_bp_disable(struct rvu *rvu,
 		return err;
 
 	bp = &nix_hw->bp;
-	chan_base = pfvf->rx_chan_base + req->chan_base;
-	for (chan = chan_base; chan < (chan_base + req->chan_cnt); chan++) {
-		chan_v = nix_get_channel(chan, cpt_link);
-		cfg = rvu_read64(rvu, blkaddr, NIX_AF_RX_CHANX_CFG(chan_v));
-		rvu_write64(rvu, blkaddr, NIX_AF_RX_CHANX_CFG(chan_v),
-			    cfg & ~BIT_ULL(16));
 
-		if (type == NIX_INTF_TYPE_LBK) {
-			bpid = cfg & GENMASK(8, 0);
-			mutex_lock(&rvu->rsrc_lock);
-			rvu_free_rsrc(&bp->bpids, bpid - bp->free_pool_base);
-			for (bpid = 0; bpid < bp->bpids.max; bpid++) {
-				if (bp->fn_map[bpid] == pcifunc) {
-					bp->fn_map[bpid] = 0;
-					bp->ref_cnt[bpid] = 0;
-				}
-			}
-			mutex_unlock(&rvu->rsrc_lock);
-		}
+	/* CGX may use up to NIX_BPIDS_PER_LMAC channels (PFC) */
+	if (type == NIX_INTF_TYPE_CGX) {
+		if ((u32)req->chan_base + req->chan_cnt > NIX_BPIDS_PER_LMAC)
+			return NIX_AF_ERR_INVALID_BPID_REQ;
+	} else if ((u32)req->chan_base + req->chan_cnt > pfvf->rx_chan_cnt) {
+		return NIX_AF_ERR_INVALID_BPID_REQ;
 	}
+
+	chan_base = pfvf->rx_chan_base + req->chan_base;
+	for (i = 0; i < req->chan_cnt; i++)
+		nix_bp_chan_disable(rvu, bp, blkaddr, chan_base + i, cpt_link,
+				    type, pcifunc);
 	return 0;
 }
 
@@ -750,13 +781,17 @@ static int nix_bp_enable(struct rvu *rvu,
 			 struct nix_bp_cfg_rsp *rsp,
 			 bool cpt_link)
 {
-	int blkaddr, pf, type, chan_id = 0;
 	u16 pcifunc = req->hdr.pcifunc;
 	struct rvu_pfvf *pfvf;
+	struct nix_hw *nix_hw;
+	int blkaddr, pf, type;
 	u16 chan_base, chan;
-	s16 bpid, bpid_base;
+	struct nix_bp *bp;
 	u16 chan_v;
+	s16 bpid;
 	u64 cfg;
+	int err;
+	int i;
 
 	pf = rvu_get_pf(rvu->pdev, pcifunc);
 	type = is_lbk_vf(rvu, pcifunc) ? NIX_INTF_TYPE_LBK : NIX_INTF_TYPE_CGX;
@@ -771,35 +806,54 @@ static int nix_bp_enable(struct rvu *rvu,
 	if (cpt_link && !rvu->hw->cpt_links)
 		return 0;
 
+	if (!req->chan_cnt) {
+		rsp->chan_cnt = 0;
+		return 0;
+	}
+
 	pfvf = rvu_get_pfvf(rvu, pcifunc);
-	blkaddr = rvu_get_blkaddr(rvu, BLKTYPE_NIX, pcifunc);
+	err = nix_get_struct_ptrs(rvu, pcifunc, &nix_hw, &blkaddr);
+	if (err)
+		return err;
 
-	bpid_base = rvu_nix_get_bpid(rvu, req, type, chan_id);
+	bp = &nix_hw->bp;
+
+	/* CGX may use up to NIX_BPIDS_PER_LMAC channels (PFC) */
+	if (type == NIX_INTF_TYPE_CGX) {
+		if ((u32)req->chan_base + req->chan_cnt > NIX_BPIDS_PER_LMAC)
+			return NIX_AF_ERR_INVALID_BPID_REQ;
+	} else if ((u32)req->chan_base + req->chan_cnt > pfvf->rx_chan_cnt) {
+		return NIX_AF_ERR_INVALID_BPID_REQ;
+	}
+
 	chan_base = pfvf->rx_chan_base + req->chan_base;
-	bpid = bpid_base;
 
-	for (chan = chan_base; chan < (chan_base + req->chan_cnt); chan++) {
+	/* Get all bpids first so a failure leaves the channels untouched */
+	for (i = 0; i < req->chan_cnt; i++) {
+		bpid = rvu_nix_get_bpid(rvu, req, type, i);
 		if (bpid < 0) {
 			dev_warn(rvu->dev, "Fail to enable backpressure\n");
+			if (type == NIX_INTF_TYPE_LBK)
+				while (i--)
+					nix_bp_free_lbk_bpid(rvu, bp,
+							     rsp->chan_bpid[i] & 0x3FF,
+							     pcifunc);
 			return -EINVAL;
 		}
 
+		rsp->chan_bpid[i] = ((req->chan_base + i) & 0x7F) << 10 |
+				    (bpid & 0x3FF);
+	}
+
+	for (i = 0; i < req->chan_cnt; i++) {
+		chan = chan_base + i;
+		bpid = rsp->chan_bpid[i] & 0x3FF;
 		chan_v = nix_get_channel(chan, cpt_link);
 
 		cfg = rvu_read64(rvu, blkaddr, NIX_AF_RX_CHANX_CFG(chan_v));
 		cfg &= ~GENMASK_ULL(8, 0);
 		rvu_write64(rvu, blkaddr, NIX_AF_RX_CHANX_CFG(chan_v),
 			    cfg | (bpid & GENMASK_ULL(8, 0)) | BIT_ULL(16));
-		chan_id++;
-		bpid = rvu_nix_get_bpid(rvu, req, type, chan_id);
-	}
-
-	for (chan = 0; chan < req->chan_cnt; chan++) {
-		/* Map channel and bpid assign to it */
-		rsp->chan_bpid[chan] = ((req->chan_base + chan) & 0x7F) << 10 |
-					(bpid_base & 0x3FF);
-		if (req->bpid_per_chan)
-			bpid_base++;
 	}
 	rsp->chan_cnt = req->chan_cnt;
 
@@ -2848,9 +2902,9 @@ static void nix_tl1_default_cfg(struct rvu *rvu, struct nix_hw *nix_hw,
 }
 
 /* Register offset - [15:0]
- * Scheduler Queue number - [25:16]
+ * Scheduler Queue number - [26:16]
  */
-#define NIX_TX_SCHQ_MASK	GENMASK_ULL(25, 0)
+#define NIX_TX_SCHQ_MASK	GENMASK_ULL(26, 0)
 
 static int nix_txschq_cfg_read(struct rvu *rvu, struct nix_hw *nix_hw,
 			       int blkaddr, struct nix_txschq_config *req,

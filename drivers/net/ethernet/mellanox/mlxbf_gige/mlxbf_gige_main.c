@@ -12,6 +12,7 @@
 #include <linux/interrupt.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
+#include <linux/panic_notifier.h>
 #include <linux/phy.h>
 #include <linux/platform_device.h>
 #include <linux/rtnetlink.h>
@@ -125,6 +126,27 @@ static int mlxbf_gige_clean_port(struct mlxbf_gige *priv)
 	writeq(control, priv->base + MLXBF_GIGE_CONTROL);
 
 	return err;
+}
+
+static void mlxbf_gige_disable_port(struct mlxbf_gige *priv)
+{
+	u64 control;
+
+	/* Disable RX DMA */
+	control = readq(priv->base + MLXBF_GIGE_RX_DMA);
+	control &= ~MLXBF_GIGE_RX_DMA_EN;
+	writeq(control, priv->base + MLXBF_GIGE_RX_DMA);
+
+	/* Disable port */
+	control = readq(priv->base + MLXBF_GIGE_CONTROL);
+	control &= ~MLXBF_GIGE_CONTROL_PORT_EN;
+	writeq(control, priv->base + MLXBF_GIGE_CONTROL);
+
+	/* Disable interrupts */
+	writeq(0, priv->base + MLXBF_GIGE_INT_EN);
+
+	/* Ensure completion of disable writes before cleaning the port */
+	mb();
 }
 
 static int mlxbf_gige_open(struct net_device *netdev)
@@ -382,6 +404,17 @@ static struct mlxbf_gige_link_cfg mlxbf_gige_link_cfgs[] = {
 	}
 };
 
+static int mlxbf_gige_on_panic(struct notifier_block *nb,
+			       unsigned long action, void *data)
+{
+	struct mlxbf_gige *priv;
+
+	priv = container_of(nb, struct mlxbf_gige, panic_nb);
+	mlxbf_gige_disable_port(priv);
+	mlxbf_gige_clean_port(priv);
+	return NOTIFY_DONE;
+}
+
 static int mlxbf_gige_probe(struct platform_device *pdev)
 {
 	struct phy_device *phydev;
@@ -446,6 +479,10 @@ static int mlxbf_gige_probe(struct platform_device *pdev)
 	/* Write initial MAC address to hardware */
 	mlxbf_gige_initial_mac(priv);
 
+	priv->panic_nb.priority = INT_MAX;
+	priv->panic_nb.notifier_call = mlxbf_gige_on_panic;
+	atomic_notifier_chain_register(&panic_notifier_list, &priv->panic_nb);
+
 	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (err) {
 		dev_err(&pdev->dev, "DMA configuration failed: %pe\n", ERR_PTR(err));
@@ -497,6 +534,7 @@ static int mlxbf_gige_probe(struct platform_device *pdev)
 	return 0;
 
 out:
+	atomic_notifier_chain_unregister(&panic_notifier_list, &priv->panic_nb);
 	mlxbf_gige_mdio_remove(priv);
 	return err;
 }
@@ -507,6 +545,7 @@ static void mlxbf_gige_remove(struct platform_device *pdev)
 
 	unregister_netdev(priv->netdev);
 	phy_disconnect(priv->netdev->phydev);
+	atomic_notifier_chain_unregister(&panic_notifier_list, &priv->panic_nb);
 	mlxbf_gige_mdio_remove(priv);
 	platform_set_drvdata(pdev, NULL);
 }

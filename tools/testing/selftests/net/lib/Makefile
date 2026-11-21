@@ -10,8 +10,6 @@ BPFTOOL ?= bpftool
 HAS_BPFTOOL := $(shell $(BPFTOOL) version >/dev/null 2>&1 && echo y)
 ifeq ($(HAS_BPFTOOL),y)
 COND_GEN_FILES += xskxceiver
-else
-$(warning excluding xskxceiver, bpftool not installed or not working)
 endif
 
 TEST_FILES := \
@@ -35,7 +33,7 @@ include ../../lib.mk
 BPF_PROG_DIRS := xsk
 include ../bpf.mk
 
-# AF_XDP test engine used by net/test_xsk.sh.
+# AF_XDP test engine used by drivers/net/xsk.py.
 XSK_SRCS := $(filter-out %.bpf.c,$(wildcard xsk/*.c)) \
 	$(top_srcdir)/tools/lib/find_bit.c
 
@@ -44,7 +42,7 @@ $(OUTPUT)/xskxceiver: $(XSK_SRCS) $(wildcard xsk/*.h) \
 	$(call msg,CC,,$@)
 	$(Q)$(CC) -I$(top_srcdir)/tools/include $(CFLAGS) -I$(OUTPUT) \
 		-I$(SCRATCH_DIR)/include \
-		$(XSK_SRCS) $(BPFOBJ) $(LDLIBS) -lelf -lz -lpthread -o $@
+		$(XSK_SRCS) $(BPFOBJ) $(LDLIBS) -lelf -lz -o $@
 
 # TEST_GEN_FILES lacks xskxceiver when bpftool fails; clean it anyway.
 EXTRA_CLEAN += $(OUTPUT)/xskxceiver

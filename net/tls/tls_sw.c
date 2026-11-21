@@ -142,12 +142,16 @@ static int __skb_nsg(struct sk_buff *skb, int offset, int len,
                         start = end;
                 }
         }
-        BUG_ON(len);
+	if (unlikely(len)) {
+		DEBUG_NET_WARN_ON_ONCE(1);
+		return -EINVAL;
+	}
         return elt;
 }
 
 /* Return the number of scatterlist elements required to completely map the
- * skb, or -EMSGSIZE if the recursion depth is exceeded.
+ * skb, -EMSGSIZE if the recursion depth is exceeded, or -EINVAL if the skb
+ * runs out before @len does.
  */
 static int skb_nsg(struct sk_buff *skb, int offset, int len)
 {
@@ -413,6 +417,9 @@ int tls_tx_records(struct sock *sk, int flags)
 	struct sk_msg *msg_en;
 	int tx_flags, rc = 0;
 
+	if (unlikely(ctx->abort_err))
+		return ctx->abort_err;
+
 	if (tls_is_partially_sent_record(tls_ctx)) {
 		rec = list_first_entry(&ctx->tx_list,
 				       struct tls_rec, list);
@@ -459,8 +466,11 @@ int tls_tx_records(struct sock *sk, int flags)
 	}
 
 tx_err:
-	if (rc < 0 && rc != -EAGAIN && rc != -EINTR && rc != -ERESTARTSYS)
+	if (rc < 0 && rc != -EAGAIN && rc != -EINTR && rc != -ERESTARTSYS) {
+		/* sk_err is cleared when it is reported, keep the abort */
+		ctx->abort_err = rc;
 		tls_err_abort(sk, rc);
+	}
 
 	return rc;
 }
@@ -636,6 +646,9 @@ static int tls_push_record(struct sock *sk, int flags,
 	if (!rec)
 		return 0;
 
+	if (unlikely(ctx->abort_err))
+		return ctx->abort_err;
+
 	msg_pl = &rec->msg_plaintext;
 	msg_en = &rec->msg_encrypted;
 
@@ -708,13 +721,15 @@ static int tls_push_record(struct sock *sk, int flags,
 static int bpf_exec_tx_verdict(struct sk_msg *msg, struct sock *sk,
 			       u8 record_type, ssize_t *copied, int flags)
 {
+	struct tls_sw_context_tx *ctx = tls_sw_ctx_tx(tls_get_ctx(sk));
 	int err;
 
 	err = tls_push_record(sk, flags, record_type);
-	if (err && err != -EINPROGRESS && sk->sk_err == EBADMSG) {
+	if (err && err != -EINPROGRESS &&
+	    (ctx->abort_err || sk->sk_err == EBADMSG)) {
 		*copied -= sk_msg_free(sk, msg);
 		tls_free_open_rec(sk);
-		err = -sk->sk_err;
+		err = ctx->abort_err ?: -EBADMSG;
 	}
 	return err;
 }
@@ -760,8 +775,10 @@ static int tls_sw_sendmsg_splice(struct sock *sk, struct msghdr *msg,
 		}
 
 		sk_msg_page_add(msg_pl, page, part, off);
-		msg_pl->sg.copybreak = 0;
+		/* keep sg.curr on the last frag so a later copy won't wrap */
 		msg_pl->sg.curr = msg_pl->sg.end;
+		sk_msg_iter_var_prev(msg_pl->sg.curr);
+		msg_pl->sg.copybreak = sk_msg_elem(msg_pl, msg_pl->sg.curr)->length;
 		sk_mem_charge(sk, part);
 		*copied += part;
 		try_to_copy -= part;
@@ -807,6 +824,11 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 	}
 
 	while (msg_data_left(msg)) {
+		if (unlikely(ctx->abort_err)) {
+			ret = ctx->abort_err;
+			goto send_end;
+		}
+
 		if (sk->sk_err) {
 			ret = -sk->sk_err;
 			goto send_end;

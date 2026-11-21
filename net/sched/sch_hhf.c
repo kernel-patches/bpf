@@ -373,9 +373,16 @@ static int hhf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		       struct sk_buff **to_free)
 {
 	struct hhf_sched_data *q = qdisc_priv(sch);
-	enum wdrr_bucket_idx idx;
+	unsigned int len = qdisc_pkt_len(skb);
 	struct wdrr_bucket *bucket;
 	unsigned int prev_backlog;
+	enum wdrr_bucket_idx idx;
+
+	if (unlikely(qdisc_backlog_overflow(sch, skb))) {
+		qdisc_qstats_overlimit(sch);
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
 
 	idx = hhf_classify(skb, sch);
 
@@ -409,8 +416,15 @@ static int hhf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	/* Return Congestion Notification only if we dropped a packet from this
 	 * bucket.
 	 */
-	if (hhf_drop(sch, to_free) == idx)
+	if (hhf_drop(sch, to_free) == idx) {
+		/* The parent does not book this packet on CN, so pass the net
+		 * change on instead.
+		 */
+		qdisc_tree_reduce_backlog(sch, 0,
+					  prev_backlog - sch->qstats.backlog -
+					  len);
 		return NET_XMIT_CN;
+	}
 
 	/* As we dropped a packet, better let upper stack know this. */
 	qdisc_tree_reduce_backlog(sch, 1, prev_backlog - sch->qstats.backlog);

@@ -95,6 +95,10 @@ bool mlx5_eswitch_vport_match_metadata_enabled(const struct mlx5_eswitch *esw);
  * unique non-zero vport id (range 1-4095). The rest (lowest 16 bits) is left
  * for user data objects managed by a common mapping context.
  * PFNUM + VPORT comprise the SOURCE_PORT matching.
+ *
+ * A nested (virt LAG) VF/SF eswitch splits the SOURCE_PORT bits differently:
+ * the highest 8 bits are its slot in the LAG (range 0-239) and the next 8
+ * bits are a unique non-zero vport id (range 2-255).
  */
 #define ESW_VPORT_BITS 12
 #define ESW_PFNUM_BITS 4

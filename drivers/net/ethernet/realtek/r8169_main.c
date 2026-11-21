@@ -2686,7 +2686,10 @@ void r8169_apply_firmware(struct rtl8169_private *tp)
 
 	/* TODO: release firmware if rtl_fw_write_firmware signals failure. */
 	if (tp->rtl_fw) {
+		/* Keep phylib users (hwmon, PTP) off the bus meanwhile. */
+		phy_lock_mdio_bus(tp->phydev);
 		rtl_fw_write_firmware(tp, tp->rtl_fw);
+		phy_unlock_mdio_bus(tp->phydev);
 		/* At least one firmware doesn't reset tp->ocp_base. */
 		tp->ocp_base = OCP_STD_PHY_BASE;
 
@@ -5670,8 +5673,14 @@ static int rtl8169_poll(struct napi_struct *napi, int budget)
 	/* rtl8169_poll() is used only when there is a single RX ring. */
 	work_done = rtl_rx(dev, tp, &tp->rx_ring[0], budget, napi);
 
-	if (work_done < budget && napi_complete_done(napi, work_done))
+	if (work_done < budget && napi_complete_done(napi, work_done)) {
+		/* After running out of RX descriptors the chip does not
+		 * receive again until RxOverflow is cleared. The ring is
+		 * empty now, so clear it before unmasking.
+		 */
+		rtl_ack_events(tp, RxOverflow);
 		rtl_irq_enable(tp);
+	}
 
 	return work_done;
 }
@@ -5975,7 +5984,14 @@ static int rtl8169_runtime_suspend(struct device *device)
 		return 0;
 	}
 
-	rtnl_lock();
+	/*
+	 * Do not block on RTNL.
+	 * Other callers holding RTNL may wait for suspend to complete
+	 * in pm_runtime_get_sync(), which would deadlock.
+	 */
+	if (!rtnl_trylock())
+		return -EBUSY;
+
 	__rtl8169_set_wol(tp, WAKE_PHY);
 	rtl8169_net_suspend(tp);
 	rtnl_unlock();

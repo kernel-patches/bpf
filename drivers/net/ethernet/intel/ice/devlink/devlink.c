@@ -1747,11 +1747,20 @@ struct ice_sf_priv *ice_allocate_sf(struct device *dev, struct ice_pf *pf)
  *
  * Return: zero on success or an error code on failure.
  */
-void ice_devlink_register(struct ice_pf *pf)
+int ice_devlink_register(struct ice_pf *pf)
 {
 	struct devlink *devlink = priv_to_devlink(pf);
+	struct ice_adapter *adapter = pf->adapter;
+	int err;
 
+	if (adapter) {
+		err = devl_nested_devlink_set(adapter->devlink, devlink);
+		if (err)
+			return err;
+	}
 	devl_register(devlink);
+
+	return 0;
 }
 
 /**
@@ -1953,7 +1962,7 @@ static int ice_devlink_nvm_read(struct devlink *devlink,
 		return -EOPNOTSUPP;
 	}
 
-	if (offset + size >= nvm_size) {
+	if (offset + size > nvm_size) {
 		NL_SET_ERR_MSG_MOD(extack, "Cannot read beyond the region size");
 		return -ERANGE;
 	}

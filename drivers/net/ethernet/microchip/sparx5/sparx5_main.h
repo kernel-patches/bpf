@@ -19,6 +19,7 @@
 #include <linux/hrtimer.h>
 #include <linux/debugfs.h>
 #include <net/flow_offload.h>
+#include <net/pkt_cls.h>
 
 #include <fdma_api.h>
 
@@ -109,6 +110,8 @@ enum sparx5_feature {
 #define SPX5_BUFFER_CELL_SZ    184   /* Cell size  */
 #define SPX5_BUFFER_MEMORY     4194280 /* 22795 words * 184 bytes */
 #define SPX5_TAS_ENTRIES_PER_PORT 2 /* TAS lists per port */
+#define SPX5_HW_MTU(mtu)       ((mtu) + ETH_HLEN + ETH_FCS_LEN)
+#define SPX5_MAX_FRAME_LEN     14000 /* Max frame length of the MACs */
 
 #define XTR_QUEUE     0
 #define INJ_QUEUE     0
@@ -136,6 +139,11 @@ enum sparx5_feature {
 #define SPX5_DSM_CAL_EMPTY             0xFFFF
 
 #define SPARX5_MAX_PTP_ID	512
+
+/* Must be the maximum across all L3 enabled platforms, which
+ * sparx5_rr_router_init() checks against the per-platform consts.
+ */
+#define SPARX5_ROUTER_LEG_N_VMID 511
 
 struct sparx5;
 
@@ -179,6 +187,7 @@ struct sparx5_tx_buf {
 	dma_addr_t dma_addr;
 	bool used;
 	bool ptp;
+	u32 len;
 };
 
 /* Frame DMA transmit state:
@@ -207,12 +216,34 @@ struct sparx5_port_config {
 	u32 sd_sgpio;
 };
 
+#define SPX5_POLICERS_PER_PORT 4 /* Number of ingress port policers */
+
+struct sparx5_port_policer {
+	/* Last raw values of the 40-bit hardware counters */
+	struct flow_stats raw;
+	/* 64-bit totals, and the totals last reported to tc */
+	struct flow_stats stats;
+	struct flow_stats prev;
+	/* Port policers hold the client reference (cookie) */
+	unsigned long policer;
+	/* tc police action, the same for every filter bound to it */
+	unsigned long act_cookie;
+};
+
+struct sparx5_port_tc {
+	/* Ingress uses a shared filter block */
+	bool ingress_block_shared;
+	struct sparx5_port_policer port_policer[SPX5_POLICERS_PER_PORT];
+};
+
 struct sparx5_port {
 	struct net_device *ndev;
 	struct sparx5 *sparx5;
 	struct device_node *of_node;
 	struct phy *serdes;
 	struct sparx5_port_config conf;
+	struct mutex wm_lock; /* Protects the QSYS watermarks and wm_pause */
+	u8 wm_pause;
 	struct phylink_config phylink_config;
 	struct phylink *phylink;
 	struct phylink_pcs phylink_pcs;
@@ -230,6 +261,7 @@ struct sparx5_port {
 	enum sparx5_vlan_port_type vlan_type;
 	u32 custom_etype;
 	bool vlan_aware;
+	struct sparx5_port_tc tc;
 	struct hrtimer inj_timer;
 	/* ptp */
 	u8 ptp_cmd;
@@ -242,6 +274,12 @@ struct sparx5_port {
 		int gcl_base;
 		int gcl_count;
 	} tas_lists[SPX5_TAS_ENTRIES_PER_PORT];
+};
+
+/* lan969x core PLL reference clock, from CHIP_TOP:HW_STAT.REFCLK_SEL */
+enum sparx5_core_clockref {
+	SPX5_CORE_CLOCK_REF_25MHZ,
+	SPX5_CORE_CLOCK_REF_39MHZ,
 };
 
 enum sparx5_core_clockfreq {
@@ -282,6 +320,11 @@ struct sparx5_mall_mirror_entry {
 	struct sparx5_port *port;
 };
 
+struct sparx5_mall_port_policer_entry {
+	struct flow_action_police police;
+	unsigned long act_cookie;
+};
+
 struct sparx5_mall_entry {
 	struct list_head list;
 	struct sparx5_port *port;
@@ -290,6 +333,7 @@ struct sparx5_mall_entry {
 	bool ingress;
 	union {
 		struct sparx5_mall_mirror_entry mirror;
+		struct sparx5_mall_port_policer_entry port_policer;
 	};
 };
 
@@ -328,6 +372,7 @@ struct sparx5_consts {
 	u32 qres_max_prio_idx;   /* Maximum QRES prio index */
 	u32 qres_max_colour_idx; /* Maximum QRES colour index */
 	u32 tod_pin;             /* PTP TOD pin */
+	u32 vmid_cnt;            /* Number of router leg VMID's */
 	const struct sparx5_vcap_inst *vcaps_cfg;
 	const struct vcap_info *vcaps;
 	const struct vcap_statistics *vcap_stats;
@@ -356,6 +401,8 @@ struct sparx5_ops {
 	int (*fdma_poll)(struct napi_struct *napi, int weight);
 	int (*fdma_xmit)(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb,
 			 struct net_device *dev);
+	int (*fdma_resize)(struct sparx5 *sparx5, struct sparx5_port *port,
+			   int new_mtu);
 };
 
 struct sparx5_main_io_resource {
@@ -387,6 +434,7 @@ struct sparx5 {
 	/* port structures are in net device */
 	struct sparx5_port *ports[SPX5_PORTS];
 	enum sparx5_core_clockfreq coreclock;
+	enum sparx5_core_clockref coreclockref;
 	/* Statistics */
 	u32 num_stats;
 	u32 num_ethtool_stats;
@@ -445,6 +493,8 @@ struct sparx5 {
 	/* Common root for debugfs */
 	struct dentry *debugfs_root;
 	const struct sparx5_match_data *data;
+	/* L3 Forwarding */
+	struct sparx5_router *router;
 };
 
 /* sparx5_main.c */
@@ -479,6 +529,12 @@ int sparx5_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb,
 irqreturn_t sparx5_fdma_handler(int irq, void *args);
 void sparx5_fdma_reload(struct sparx5 *sparx5, struct fdma *fdma);
 void sparx5_fdma_injection_mode(struct sparx5 *sparx5);
+u32 sparx5_fdma_get_max_frame(struct sparx5 *sparx5,
+			      struct sparx5_port *port, int new_mtu);
+void sparx5_fdma_pause(struct sparx5 *sparx5);
+void sparx5_fdma_resume(struct sparx5 *sparx5);
+int sparx5_fdma_resize(struct sparx5 *sparx5, struct sparx5_port *port,
+		       int new_mtu);
 
 /* sparx5_mactable.c */
 int sparx5_mact_learn(struct sparx5 *sparx5, int port,
@@ -513,6 +569,35 @@ int sparx5_vlan_vid_add(struct sparx5_port *port, u16 vid, bool pvid,
 			bool untagged);
 int sparx5_vlan_vid_del(struct sparx5_port *port, u16 vid);
 void sparx5_vlan_port_apply(struct sparx5 *sparx5, struct sparx5_port *port);
+
+/* sparx5_router.c */
+void sparx5_rr_port_fwd_update(struct sparx5 *sparx5);
+int sparx5_rr_router_init(struct sparx5 *sparx5);
+void sparx5_rr_router_deinit(struct sparx5 *sparx5);
+void sparx5_rr_bridge_legs_flush(struct sparx5 *sparx5,
+				 const struct net_device *bridge);
+void sparx5_rr_legs_reconcile(struct sparx5 *sparx5);
+void sparx5_rr_legs_reconcile_schedule(struct sparx5 *sparx5);
+void sparx5_rr_bridge_vlan_clear(struct sparx5 *sparx5,
+				 const struct net_device *bridge, u16 vid);
+
+struct sparx5_router {
+	struct sparx5 *sparx5;
+	struct notifier_block inetaddr_nb;
+	struct notifier_block inetaddr_valid_nb;
+	struct notifier_block netdevice_nb;
+	struct notifier_block inet6addr_nb;
+	struct notifier_block inet6addr_valid_nb;
+
+	struct mutex lock; /* Global router lock for all shared data. */
+
+	struct workqueue_struct *sparx5_router_owq;
+	struct work_struct legs_work;
+
+	struct list_head leg_list;
+	/* Track allocated router leg indices in hw */
+	DECLARE_BITMAP(vmid_mask, SPARX5_ROUTER_LEG_N_VMID);
+};
 
 /* sparx5_calendar.c */
 int sparx5_calendar_init(struct sparx5 *sparx5);
@@ -639,8 +724,8 @@ void sparx5_sdlb_group_init(struct sparx5 *sparx5, u64 max_rate, u32 min_burst,
 
 /* sparx5_police.c */
 enum {
-	/* More policer types will be added later */
-	SPX5_POL_SERVICE
+	SPX5_POL_SERVICE,
+	SPX5_POL_PORT,
 };
 
 struct sparx5_policer {
@@ -653,6 +738,13 @@ struct sparx5_policer {
 };
 
 int sparx5_policer_conf_set(struct sparx5 *sparx5, struct sparx5_policer *pol);
+int sparx5_port_policer_init(struct sparx5 *sparx5);
+int sparx5_add_port_policer(struct sparx5_mall_entry *entry,
+			    struct netlink_ext_ack *extack);
+int sparx5_delete_port_policer(struct sparx5_mall_entry *entry);
+int sparx5_update_port_policer_stats(struct net_device *ndev,
+				     struct tc_cls_matchall_offload *tmo);
+void sparx5_port_policer_stats_poll(struct sparx5_port *port);
 
 /* sparx5_psfp.c */
 #define SPX5_PSFP_GCE_CNT 4
@@ -734,6 +826,7 @@ int sparx5_tas_enable(struct sparx5_port *port,
 		      struct tc_taprio_qopt_offload *qopt);
 int sparx5_tas_disable(struct sparx5_port *port);
 void sparx5_tas_speed(struct sparx5_port *port, int speed);
+void sparx5_tas_gb_update(struct sparx5 *sparx5);
 
 /* sparx5_mirror.c */
 int sparx5_mirror_add(struct sparx5_mall_entry *entry);

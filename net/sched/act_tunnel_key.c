@@ -481,9 +481,13 @@ static int tunnel_key_init(struct net *net, struct nlattr *nla,
 		}
 
 #ifdef CONFIG_DST_CACHE
-		ret = dst_cache_init(&metadata->u.tun_info.dst_cache, GFP_KERNEL);
-		if (ret)
-			goto release_tun_meta;
+		if (!((exists ? (*a)->tcfa_flags : act_flags) &
+		      TCA_ACT_FLAGS_SKIP_SW)) {
+			ret = dst_cache_init(&metadata->u.tun_info.dst_cache,
+					     GFP_KERNEL);
+			if (ret)
+				goto release_tun_meta;
+		}
 #endif
 
 		if (opts_len) {
@@ -503,9 +507,8 @@ static int tunnel_key_init(struct net *net, struct nlattr *nla,
 	}
 
 	if (!exists) {
-		ret = tcf_idr_create_from_flags(tn, index, est, a,
-						&act_tunnel_key_ops, bind,
-						act_flags);
+		ret = tcf_idr_create(tn, index, est, a,
+				     &act_tunnel_key_ops, bind, act_flags);
 		if (ret) {
 			NL_SET_ERR_MSG(extack, "Cannot create TC IDR");
 			goto release_tun_meta;

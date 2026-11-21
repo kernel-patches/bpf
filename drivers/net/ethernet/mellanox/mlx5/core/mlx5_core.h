@@ -275,6 +275,7 @@ void mlx5_lag_add_mdev(struct mlx5_core_dev *dev);
 void mlx5_lag_remove_mdev(struct mlx5_core_dev *dev);
 void mlx5_lag_disable_change(struct mlx5_core_dev *dev);
 void mlx5_lag_enable_change(struct mlx5_core_dev *dev);
+int mlx5_lag_get_member_idx(struct mlx5_core_dev *dev);
 
 int mlx5_events_init(struct mlx5_core_dev *dev);
 void mlx5_events_cleanup(struct mlx5_core_dev *dev);

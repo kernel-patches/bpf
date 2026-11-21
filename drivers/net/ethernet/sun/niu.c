@@ -4650,6 +4650,7 @@ static void niu_txc_set_imask(struct niu *np, u64 imask)
 	val = nr64(TXC_INT_MASK);
 	val &= ~TXC_INT_MASK_VAL(np->port);
 	val |= (imask << TXC_INT_MASK_VAL_SHIFT(np->port));
+	nw64(TXC_INT_MASK, val);
 	niu_unlock_parent(np, flags);
 }
 

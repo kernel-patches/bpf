@@ -9,6 +9,7 @@
 #define SUNRPC_SVC_XPRT_H
 
 #include <linux/sunrpc/svc.h>
+#include <linux/stringset.h>
 
 struct module;
 
@@ -82,6 +83,7 @@ struct svc_xprt {
 	const struct cred	*xpt_cred;
 	struct rpc_xprt		*xpt_bc_xprt;	/* NFSv4.1 backchannel */
 	struct rpc_xprt_switch	*xpt_bc_xps;	/* NFSv4.1 backchannel */
+	struct stringset	xpt_handshake_tags;	/* TLS session tags */
 };
 
 /* flag bits for xpt_flags */
@@ -101,7 +103,10 @@ enum {
 	XPT_KILL_TEMP,		/* call xpo_kill_temp_xprt before closing */
 	XPT_CONG_CTRL,		/* has congestion control */
 	XPT_HANDSHAKE,		/* xprt requests a handshake */
-	XPT_TLS_SESSION,	/* transport-layer security established */
+	XPT_TLS_SESSION,	/* transport-layer security established;
+				 * also gates xpt_handshake_tags
+				 * visibility and destruction
+				 */
 	XPT_PEER_AUTH,		/* peer has been authenticated */
 	XPT_PEER_VALID,		/* peer has presented a filehandle that
 				 * it has access to.  It is NOT counted

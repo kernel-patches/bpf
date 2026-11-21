@@ -364,12 +364,15 @@ static int icmp_glue_bits(void *from, char *to, int offset, int len, int odd,
 	DEFINE_RAW_FLEX(struct icmp_bxm, icmp_param, replyopts.opt.__data,
 			IP_OPTIONS_DATA_FIXED_SIZE);
 	__wsum csum;
+	int err;
 
 	icmp_param = from;
 
-	csum = skb_copy_and_csum_bits(icmp_param->skb,
-				      icmp_param->offset + offset,
-				      to, len);
+	err = skb_copy_and_csum_bits(icmp_param->skb,
+				     icmp_param->offset + offset,
+				     to, len, &csum);
+	if (err)
+		return err;
 
 	skb->csum = csum_block_add(skb->csum, csum, odd);
 	if (icmp_param->data.icmph.type <= NR_ICMP_TYPES &&
@@ -977,6 +980,18 @@ void __icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info,
 		goto out_unlock;
 
 	if (rt->rt_flags & (RTCF_BROADCAST | RTCF_MULTICAST))
+		goto ende;
+
+	/* Don't send parts of a decrypted skb onto the network. A received skb
+	 * was decrypted by the device, and the transport header may have been
+	 * encrypted. The different offloads can't be distinguished in all cases
+	 * so simply don't send the error.
+	 *
+	 * A locally originated skb to be encrypted may be quoted if its source
+	 * address (target of the error) is local.
+	 */
+	if (unlikely(skb_is_decrypted(skb_in)) &&
+	    (skb_in->skb_iif || !(rt->rt_flags & RTCF_LOCAL)))
 		goto ende;
 
 	/* peer icmp_ratelimit */

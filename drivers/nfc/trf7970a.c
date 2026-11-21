@@ -652,6 +652,12 @@ static void trf7970a_send_upstream(struct trf7970a *trf)
 	dev_kfree_skb_any(trf->tx_skb);
 	trf->tx_skb = NULL;
 
+	/*
+	 * A timeout handler may already be running and waiting for trf->lock.
+	 * It must not deliver another completion after this one.
+	 */
+	trf->ignore_timeout = true;
+
 	if (trf->rx_skb && !IS_ERR(trf->rx_skb) && !trf->aborting)
 		print_hex_dump_debug("trf7970a rx data: ", DUMP_PREFIX_NONE,
 				     16, 1, trf->rx_skb->data, trf->rx_skb->len,
@@ -1903,7 +1909,9 @@ static void trf7970a_abort_cmd(struct nfc_digital_dev *ddev)
 		trf->aborting = true;
 		break;
 	case TRF7970A_ST_LISTENING:
-		trf->ignore_timeout = !cancel_delayed_work(&trf->timeout_work);
+	case TRF7970A_ST_LISTENING_MD:
+		if (!cancel_delayed_work(&trf->timeout_work))
+			trf->ignore_timeout = true;
 		trf7970a_send_err_upstream(trf, -ECANCELED);
 		dev_dbg(trf->dev, "Abort process complete\n");
 		break;
@@ -2017,6 +2025,9 @@ static void trf7970a_shutdown(struct trf7970a *trf)
 	case TRF7970A_ST_WAIT_FOR_RX_DATA_CONT:
 	case TRF7970A_ST_WAIT_TO_ISSUE_EOF:
 	case TRF7970A_ST_LISTENING:
+	case TRF7970A_ST_LISTENING_MD:
+		if (!cancel_delayed_work(&trf->timeout_work))
+			trf->ignore_timeout = true;
 		trf7970a_send_err_upstream(trf, -ECANCELED);
 		fallthrough;
 	case TRF7970A_ST_IDLE:
@@ -2228,6 +2239,13 @@ static void trf7970a_remove(struct spi_device *spi)
 	trf7970a_shutdown(trf);
 
 	mutex_unlock(&trf->lock);
+
+	/*
+	 * shutdown() leaves the chip powered off, so no IRQ or command path
+	 * can arm the timeout again.  Wait for a handler that was already
+	 * running before unregister frees the commands it may complete.
+	 */
+	cancel_delayed_work_sync(&trf->timeout_work);
 
 	nfc_digital_unregister_device(trf->ddev);
 	nfc_digital_free_device(trf->ddev);

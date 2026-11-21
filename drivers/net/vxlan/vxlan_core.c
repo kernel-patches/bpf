@@ -1434,6 +1434,51 @@ errout:
 	return err;
 }
 
+static bool vxlan_snoop_same_remote(const struct vxlan_rdst *rdst,
+				    const union vxlan_addr *src_ip,
+				    u32 ifindex)
+{
+	return vxlan_addr_equal(&rdst->remote_ip, src_ip) &&
+	       (!ifindex || rdst->remote_ifindex == ifindex);
+}
+
+static enum skb_drop_reason vxlan_snoop_move(struct net_device *dev,
+					     struct vxlan_fdb *f,
+					     const u8 *src_mac,
+					     union vxlan_addr *src_ip,
+					     u32 ifindex)
+{
+	struct vxlan_dev *vxlan = netdev_priv(dev);
+	struct vxlan_rdst *rdst;
+
+	lockdep_assert_held(&vxlan->hash_lock);
+
+	/* The entry may have changed before the lock was taken */
+	if (hlist_unhashed(&f->fdb_node))
+		return SKB_NOT_DROPPED_YET;
+
+	if (rcu_access_pointer(f->nh) ||
+	    (f->state & (NUD_PERMANENT | NUD_NOARP)))
+		return SKB_DROP_REASON_VXLAN_ENTRY_EXISTS;
+
+	rdst = first_remote_rcu(f);
+	if (vxlan_snoop_same_remote(rdst, src_ip, ifindex))
+		return SKB_NOT_DROPPED_YET;
+
+	if (net_ratelimit())
+		netdev_info(dev,
+			    "%pM migrated from %pIS to %pIS\n",
+			    src_mac, &rdst->remote_ip.sa, &src_ip->sa);
+
+	dst_cache_reset(&rdst->dst_cache);
+	rdst->remote_ip = *src_ip;
+	rdst->remote_ifindex = ifindex;
+	rdst->offloaded = false;
+	vxlan_fdb_notify(vxlan, f, rdst, RTM_NEWNEIGH, true, NULL);
+
+	return SKB_NOT_DROPPED_YET;
+}
+
 /* Watch incoming packets to learn mapping between Ethernet address
  * and Tunnel endpoint.
  */
@@ -1461,6 +1506,7 @@ static enum skb_drop_reason vxlan_snoop(struct net_device *dev,
 	if (likely(f)) {
 		struct vxlan_rdst *rdst = first_remote_rcu(f);
 		unsigned long now = jiffies;
+		enum skb_drop_reason reason;
 
 		if (READ_ONCE(f->updated) != now)
 			WRITE_ONCE(f->updated, now);
@@ -1469,21 +1515,18 @@ static enum skb_drop_reason vxlan_snoop(struct net_device *dev,
 		if (rcu_access_pointer(f->nh))
 			return SKB_DROP_REASON_VXLAN_ENTRY_EXISTS;
 
-		if (likely(vxlan_addr_equal(&rdst->remote_ip, src_ip) &&
-			   rdst->remote_ifindex == ifindex))
+		if (likely(vxlan_snoop_same_remote(rdst, src_ip, ifindex)))
 			return SKB_NOT_DROPPED_YET;
 
 		/* Don't migrate static entries, drop packets */
 		if (f->state & (NUD_PERMANENT | NUD_NOARP))
 			return SKB_DROP_REASON_VXLAN_ENTRY_EXISTS;
 
-		if (net_ratelimit())
-			netdev_info(dev,
-				    "%pM migrated from %pIS to %pIS\n",
-				    src_mac, &rdst->remote_ip.sa, &src_ip->sa);
+		spin_lock(&vxlan->hash_lock);
+		reason = vxlan_snoop_move(dev, f, src_mac, src_ip, ifindex);
+		spin_unlock(&vxlan->hash_lock);
 
-		rdst->remote_ip = *src_ip;
-		vxlan_fdb_notify(vxlan, f, rdst, RTM_NEWNEIGH, true, NULL);
+		return reason;
 	} else {
 		/* learned new entry */
 		spin_lock(&vxlan->hash_lock);

@@ -614,6 +614,35 @@ static const struct sfp_quirk sfp_quirks[] = {
 	SFP_QUIRK("Lantech", "8330-265D", sfp_quirk_2500basex,
 		  sfp_fixup_ignore_los),
 
+	// ODI DFP-34X-2C3 XPON stick can operate at 2500base-X
+	SFP_QUIRK_S("ODI", "DFP-34X-2C3", sfp_quirk_2500basex),
+
+	// HORACO HC-10GE-113C uses Rollball protocol to talk to the PHY.
+	SFP_QUIRK_F("OEM", "HC-10GE-113C", sfp_fixup_rollball),
+	SFP_QUIRK_F("OEM", "RTSFP-10", sfp_fixup_rollball_cc),
+	SFP_QUIRK_F("OEM", "RTSFP-10G", sfp_fixup_rollball_cc),
+
+	// OEM SFP+ONU-XGSPON is a XGS-PON ONT stick with broken TX_FAULT and
+	// LOS indicators and slow startup, just like potron.
+	SFP_QUIRK_F("OEM", "SFP+ONU-XGSPON", sfp_fixup_potron),
+
+	SFP_QUIRK_F("OEM", "SFP-10G-T", sfp_fixup_rollball_cc),
+	SFP_QUIRK_S("OEM", "SFP-2.5G-BX10-D", sfp_quirk_2500basex),
+	SFP_QUIRK_S("OEM", "SFP-2.5G-BX10-U", sfp_quirk_2500basex),
+	SFP_QUIRK_S("OEM", "SFP-2.5G-LH03-B", sfp_quirk_2500basex),
+	SFP_QUIRK_S("OEM", "SFP-2.5G-LH20-A", sfp_quirk_2500basex),
+	SFP_QUIRK_S("OEM", "SFP-2.5G-T", sfp_quirk_oem_2_5g),
+
+	// OEM SFP-GE-T is a 1000Base-T module with broken TX_FAULT indicator
+	SFP_QUIRK_F("OEM", "SFP-GE-T", sfp_fixup_ignore_tx_fault),
+
+	// OEM XGSPONST2001 is an XGS-PON ONT stick with broken TX_FAULT and
+	// LOS indicators and slow startup, just like potron. On cold
+	// power-up the EEPROM vendor PN field reads back with non-printable
+	// garbage past the legitimate string instead of space padding, so
+	// match the part as a prefix.
+	SFP_QUIRK_F_PREFIX("OEM", "XGSPONST2001", sfp_fixup_potron),
+
 	SFP_QUIRK_S("UBNT", "UF-INSTANT", sfp_quirk_ubnt_uf_instant),
 
 	// Walsun HXSX-ATR[CI]-1 don't identify as copper, and use the
@@ -623,33 +652,11 @@ static const struct sfp_quirk sfp_quirks[] = {
 
 	SFP_QUIRK_F("YV", "SFP+ONU-XGSPON", sfp_fixup_potron),
 
-	// HORACO HC-10GE-113C uses Rollball protocol to talk to the PHY.
-	SFP_QUIRK_F("OEM", "HC-10GE-113C", sfp_fixup_rollball),
-
-	// OEM SFP-GE-T is a 1000Base-T module with broken TX_FAULT indicator
-	SFP_QUIRK_F("OEM", "SFP-GE-T", sfp_fixup_ignore_tx_fault),
-
-	SFP_QUIRK_F("OEM", "SFP-10G-T", sfp_fixup_rollball_cc),
-	SFP_QUIRK_S("OEM", "SFP-2.5G-T", sfp_quirk_oem_2_5g),
-	SFP_QUIRK_S("OEM", "SFP-2.5G-BX10-D", sfp_quirk_2500basex),
-	SFP_QUIRK_S("OEM", "SFP-2.5G-BX10-U", sfp_quirk_2500basex),
-	SFP_QUIRK_S("OEM", "SFP-2.5G-LH03-B", sfp_quirk_2500basex),
-	SFP_QUIRK_S("OEM", "SFP-2.5G-LH20-A", sfp_quirk_2500basex),
-	SFP_QUIRK_F("OEM", "RTSFP-10", sfp_fixup_rollball_cc),
-	SFP_QUIRK_F("OEM", "RTSFP-10G", sfp_fixup_rollball_cc),
-
-	// OEM XGSPONST2001 is an XGS-PON ONT stick with broken TX_FAULT and
-	// LOS indicators and slow startup, just like potron. On cold
-	// power-up the EEPROM vendor PN field reads back with non-printable
-	// garbage past the legitimate string instead of space padding, so
-	// match the part as a prefix.
-	SFP_QUIRK_F_PREFIX("OEM", "XGSPONST2001", sfp_fixup_potron),
-
 	SFP_QUIRK_S("TP-LINK", "TL-SM410U", sfp_quirk_oem_2_5g),
 
-	SFP_QUIRK_F("Turris", "RTSFP-2.5G", sfp_fixup_rollball),
 	SFP_QUIRK_F("Turris", "RTSFP-10", sfp_fixup_rollball),
 	SFP_QUIRK_F("Turris", "RTSFP-10G", sfp_fixup_rollball),
+	SFP_QUIRK_F("Turris", "RTSFP-2.5G", sfp_fixup_rollball),
 
 	SFP_QUIRK_F("XikeStor", "SKT-2.5G-100M", sfp_fixup_xikestor_2_5g),
 
