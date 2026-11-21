@@ -123,6 +123,7 @@ ice_rx_csum(struct ice_rx_ring *ring, struct sk_buff *skb,
 	rx_status1 = le16_to_cpu(rx_desc->wb.status_error1);
 
 	if ((ring->flags & ICE_RX_FLAGS_RING_GCS) &&
+	    !READ_ONCE(ring->xdp_prog) &&
 	    rx_desc->wb.rxdid == ICE_RXDID_FLEX_NIC &&
 	    (decoded.inner_prot == LIBETH_RX_PT_INNER_TCP ||
 	     decoded.inner_prot == LIBETH_RX_PT_INNER_UDP ||
