@@ -683,6 +683,7 @@ static void _hci_cmd_sync_cancel_entry(struct hci_dev *hdev,
 
 void hci_cmd_sync_clear(struct hci_dev *hdev)
 {
+	LIST_HEAD(cancel_list);
 	struct hci_cmd_sync_work_entry *entry, *tmp;
 
 	/* cmd_work is disabled, the pending request can only time out */
@@ -690,10 +691,13 @@ void hci_cmd_sync_clear(struct hci_dev *hdev)
 	cancel_work_sync(&hdev->cmd_sync_work);
 	cancel_work_sync(&hdev->reenable_adv_work);
 
+	/* Run destroy callbacks without holding cmd_sync_work_lock. */
 	mutex_lock(&hdev->cmd_sync_work_lock);
-	list_for_each_entry_safe(entry, tmp, &hdev->cmd_sync_work_list, list)
-		_hci_cmd_sync_cancel_entry(hdev, entry, -ECANCELED);
+	list_splice_init(&hdev->cmd_sync_work_list, &cancel_list);
 	mutex_unlock(&hdev->cmd_sync_work_lock);
+
+	list_for_each_entry_safe(entry, tmp, &cancel_list, list)
+		_hci_cmd_sync_cancel_entry(hdev, entry, -ECANCELED);
 }
 
 void hci_cmd_sync_cancel(struct hci_dev *hdev, int err)
