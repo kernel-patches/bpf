@@ -23684,8 +23684,13 @@ static int do_check_all(struct bpf_verifier_env *env)
 			err = ret;
 			break;
 		}
-		if (bpf_undo_precision(env))
+		more = bpf_undo_precision(env);
+		if (more > 0)
 			continue;
+		if (more == -ENOMEM && !good_pass) {
+			err = more;
+			break;
+		}
 		if (ret && good_pass) {
 			restore_snapshot(env, good_pass);
 			err = 0;
