@@ -381,4 +381,7 @@ void bpf_testmod_test_hardirq_fn(void);
 void bpf_testmod_test_softirq_fn(void);
 void bpf_kfunc_trigger_ctx_check(void) __ksym;
 
+int bpf_kfunc_variant(struct task_struct *p__nullable) __ksym;
+int bpf_kfunc_variant___v2(struct file *p__nullable) __ksym;
+
 #endif /* _BPF_TESTMOD_KFUNC_H */
