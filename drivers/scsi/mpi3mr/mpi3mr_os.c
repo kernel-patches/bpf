@@ -788,6 +788,64 @@ struct mpi3mr_tgt_dev *mpi3mr_get_tgtdev_by_handle(
 	return tgtdev;
 }
 
+static atomic64_t mpi3mr_stgt_seq = ATOMIC64_INIT(0);
+
+/**
+ * mpi3mr_tgtdev_block_io_inc - Block I/O on the SCSI target of a tgtdev
+ * @mrioc: Adapter instance reference
+ * @tgtdev: Target device reference, held by the caller
+ *
+ * Increment block_io of the SCSI target private data of the tgtdev. The
+ * private data is looked up and incremented under tgtdev_lock, which is
+ * also held when the target is destroyed.
+ *
+ * Return: Sequence number of the private data that was incremented, to be
+ * handed back when block_io is decremented. 0 if the tgtdev has no private
+ * data.
+ */
+u64 mpi3mr_tgtdev_block_io_inc(struct mpi3mr_ioc *mrioc,
+			       struct mpi3mr_tgt_dev *tgtdev)
+{
+	struct mpi3mr_stgt_priv_data *stgt_priv;
+	unsigned long flags;
+	u64 seq = 0;
+
+	spin_lock_irqsave(&mrioc->tgtdev_lock, flags);
+	stgt_priv = tgtdev->stgt_priv;
+	if (stgt_priv) {
+		atomic_inc(&stgt_priv->block_io);
+		seq = stgt_priv->seq;
+	}
+	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
+	return seq;
+}
+
+/**
+ * mpi3mr_tgtdev_block_io_dec - Undo mpi3mr_tgtdev_block_io_inc
+ * @mrioc: Adapter instance reference
+ * @tgtdev: Target device reference, held by the caller
+ * @seq: Value returned by mpi3mr_tgtdev_block_io_inc
+ *
+ * Decrement block_io only if the tgtdev still has the private data that was
+ * incremented. A private data allocated later at the same address has a
+ * different sequence number and is left alone.
+ */
+void mpi3mr_tgtdev_block_io_dec(struct mpi3mr_ioc *mrioc,
+				struct mpi3mr_tgt_dev *tgtdev, u64 seq)
+{
+	struct mpi3mr_stgt_priv_data *stgt_priv;
+	unsigned long flags;
+
+	if (!seq)
+		return;
+
+	spin_lock_irqsave(&mrioc->tgtdev_lock, flags);
+	stgt_priv = tgtdev->stgt_priv;
+	if (stgt_priv && stgt_priv->seq == seq)
+		atomic_dec_if_positive(&stgt_priv->block_io);
+	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
+}
+
 /**
  * __mpi3mr_get_tgtdev_by_perst_id -Get tgtdev from persist ID
  * @mrioc: Adapter instance reference
@@ -3273,6 +3331,10 @@ void mpi3mr_os_handle_events(struct mpi3mr_ioc *mrioc,
 		break;
 	}
 	case MPI3_EVENT_DEVICE_INFO_CHANGED:
+	{
+		process_evt_bh = 1;
+		break;
+	}
 	case MPI3_EVENT_LOG_DATA:
 
 		if (mrioc->reply_sz > offsetof(struct mpi3_event_notification_reply, event_data))
@@ -4944,6 +5006,8 @@ static void mpi3mr_target_destroy(struct scsi_target *starget)
 	    (tgt_dev->perst_id == starget->id))
 		tgt_dev->starget = NULL;
 	if (tgt_dev) {
+		if (tgt_dev->stgt_priv == scsi_tgt_priv_data)
+			tgt_dev->stgt_priv = NULL;
 		scsi_tgt_priv_data->tgt_dev = NULL;
 		scsi_tgt_priv_data->perst_id = 0;
 		mpi3mr_tgtdev_put(tgt_dev);
@@ -5084,6 +5148,8 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 	if (!scsi_tgt_priv_data)
 		return -ENOMEM;
 
+	scsi_tgt_priv_data->seq = atomic64_inc_return(&mpi3mr_stgt_seq);
+
 	starget->hostdata = scsi_tgt_priv_data;
 
 	spin_lock_irqsave(&mrioc->tgtdev_lock, flags);
@@ -5096,6 +5162,7 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 			scsi_tgt_priv_data->dev_type = tgt_dev->dev_type;
 			scsi_tgt_priv_data->tgt_dev = tgt_dev;
 			tgt_dev->starget = starget;
+			tgt_dev->stgt_priv = scsi_tgt_priv_data;
 			atomic_set(&scsi_tgt_priv_data->block_io, 0);
 			retval = 0;
 			if ((tgt_dev->dev_type == MPI3_DEVICE_DEVFORM_PCIE) &&
@@ -5110,8 +5177,11 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 			scsi_tgt_priv_data->wslen = tgt_dev->wslen;
 			if (tgt_dev->dev_type == MPI3_DEVICE_DEVFORM_VD)
 				scsi_tgt_priv_data->throttle_group = tgt_dev->dev_spec.vd_inf.tg;
-		} else
+		} else {
+			if (tgt_dev)
+				mpi3mr_tgtdev_put(tgt_dev);
 			retval = -ENXIO;
+		}
 	} else if (mrioc->sas_transport_enabled && !starget->channel) {
 		rphy = dev_to_rphy(starget->dev.parent);
 		tgt_dev = __mpi3mr_get_tgtdev_by_addr_and_rphy(mrioc,
@@ -5126,10 +5196,14 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 			scsi_tgt_priv_data->io_throttle_enabled = tgt_dev->io_throttle_enabled;
 			scsi_tgt_priv_data->wslen = tgt_dev->wslen;
 			tgt_dev->starget = starget;
+			tgt_dev->stgt_priv = scsi_tgt_priv_data;
 			atomic_set(&scsi_tgt_priv_data->block_io, 0);
 			retval = 0;
-		} else
+		} else {
+			if (tgt_dev)
+				mpi3mr_tgtdev_put(tgt_dev);
 			retval = -ENXIO;
+		}
 	}
 	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
 
@@ -5511,6 +5585,7 @@ static inline void mpi3mr_init_drv_cmd(struct mpi3mr_drv_cmd *cmdptr,
 	u16 host_tag)
 {
 	mutex_init(&cmdptr->mutex);
+	spin_lock_init(&cmdptr->state_lock);
 	cmdptr->reply = NULL;
 	cmdptr->state = MPI3MR_CMD_NOTUSED;
 	cmdptr->dev_handle = MPI3MR_INVALID_DEV_HANDLE;
@@ -5645,6 +5720,7 @@ mpi3mr_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	spin_lock_init(&mrioc->adm_reply_q_bar_writeq_lock);
 	spin_lock_init(&mrioc->sas_node_lock);
 	spin_lock_init(&mrioc->trigger_lock);
+	spin_lock_init(&mrioc->logdata_lock);
 
 	INIT_LIST_HEAD(&mrioc->fwevt_list);
 	INIT_LIST_HEAD(&mrioc->tgtdev_list);
@@ -5661,6 +5737,8 @@ mpi3mr_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	mpi3mr_init_drv_cmd(&mrioc->cfg_cmds, MPI3MR_HOSTTAG_CFG_CMDS);
 	mpi3mr_init_drv_cmd(&mrioc->transport_cmds,
 	    MPI3MR_HOSTTAG_TRANSPORT_CMDS);
+	mpi3mr_init_drv_cmd(&mrioc->pel_cmds, MPI3MR_HOSTTAG_PEL_WAIT);
+	mpi3mr_init_drv_cmd(&mrioc->pel_abort_cmd, MPI3MR_HOSTTAG_PEL_ABORT);
 
 	for (i = 0; i < MPI3MR_NUM_DEVRMCMD; i++)
 		mpi3mr_init_drv_cmd(&mrioc->dev_rmhs_cmds[i],

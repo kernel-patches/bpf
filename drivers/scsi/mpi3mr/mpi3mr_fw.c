@@ -402,8 +402,15 @@ static void mpi3mr_process_admin_reply_desc(struct mpi3mr_ioc *mrioc,
 		addr_desc = (struct mpi3_address_reply_descriptor *)reply_desc;
 		*reply_dma = le64_to_cpu(addr_desc->reply_frame_address);
 		def_reply = mpi3mr_get_reply_virt_addr(mrioc, *reply_dma);
-		if (!def_reply)
+		if (!def_reply) {
+			ioc_err(mrioc, "def_reply is NULL, invalid reply_frame_address\n");
+			/*
+			 * Do not let the caller repost an address that
+			 * failed virt-addr lookup back to the hardware.
+			 */
+			*reply_dma = 0;
 			goto out;
+		}
 		host_tag = le16_to_cpu(def_reply->host_tag);
 		ioc_status = le16_to_cpu(def_reply->ioc_status);
 		if (ioc_status &
@@ -435,6 +442,9 @@ static void mpi3mr_process_admin_reply_desc(struct mpi3mr_ioc *mrioc,
 
 	cmdptr = mpi3mr_get_drv_cmd(mrioc, host_tag, def_reply);
 	if (cmdptr) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&cmdptr->state_lock, flags);
 		if (cmdptr->state & MPI3MR_CMD_PENDING) {
 			cmdptr->state |= MPI3MR_CMD_COMPLETE;
 			cmdptr->ioc_loginfo = ioc_loginfo;
@@ -459,6 +469,7 @@ static void mpi3mr_process_admin_reply_desc(struct mpi3mr_ioc *mrioc,
 			} else if (cmdptr->callback)
 				cmdptr->callback(mrioc, cmdptr);
 		}
+		spin_unlock_irqrestore(&cmdptr->state_lock, flags);
 	}
 out:
 	if (sense_buf)
@@ -5018,6 +5029,7 @@ void mpi3mr_memset_buffers(struct mpi3mr_ioc *mrioc)
 void mpi3mr_free_mem(struct mpi3mr_ioc *mrioc)
 {
 	u16 i, j;
+	unsigned long flags;
 	struct mpi3mr_intr_info *intr_info;
 	struct diag_buffer_desc *diag_buffer;
 
@@ -5186,8 +5198,10 @@ void mpi3mr_free_mem(struct mpi3mr_ioc *mrioc)
 	kfree(mrioc->throttle_groups);
 	mrioc->throttle_groups = NULL;
 
+	spin_lock_irqsave(&mrioc->logdata_lock, flags);
 	kfree(mrioc->logdata_buf);
 	mrioc->logdata_buf = NULL;
+	spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
 
 }
 
@@ -5326,6 +5340,9 @@ void mpi3mr_cleanup_ioc(struct mpi3mr_ioc *mrioc)
 static inline void mpi3mr_drv_cmd_comp_reset(struct mpi3mr_ioc *mrioc,
 	struct mpi3mr_drv_cmd *cmdptr)
 {
+	unsigned long flags;
+
+	spin_lock_irqsave(&cmdptr->state_lock, flags);
 	if (cmdptr->state & MPI3MR_CMD_PENDING) {
 		cmdptr->state |= MPI3MR_CMD_RESET;
 		cmdptr->state &= ~MPI3MR_CMD_PENDING;
@@ -5335,6 +5352,7 @@ static inline void mpi3mr_drv_cmd_comp_reset(struct mpi3mr_ioc *mrioc,
 		} else if (cmdptr->callback)
 			cmdptr->callback(mrioc, cmdptr);
 	}
+	spin_unlock_irqrestore(&cmdptr->state_lock, flags);
 }
 
 /**
