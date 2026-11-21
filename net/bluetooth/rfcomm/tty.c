@@ -292,6 +292,13 @@ static struct rfcomm_dev *__rfcomm_dev_add(struct rfcomm_dev_req *req,
 			skb_queue_tail(&dev->pending, skb);
 			atomic_sub(skb->len, &sk->sk_rmem_alloc);
 		}
+
+		/* Finish RFCOMM_CONNINFO before replacing the callback
+		 * which serializes session teardown with the socket.
+		 */
+		lock_sock(sk);
+		sk->sk_state = BT_CLOSED;
+		release_sock(sk);
 	}
 
 	dlc->data_ready   = rfcomm_dev_data_ready;
@@ -404,7 +411,6 @@ static int __rfcomm_create_dev(struct sock *sk, void __user *arg)
 {
 	struct rfcomm_dev_req req;
 	struct rfcomm_dlc *dlc;
-	int id;
 
 	if (copy_from_user(&req, arg, sizeof(req)))
 		return -EFAULT;
@@ -433,17 +439,7 @@ static int __rfcomm_create_dev(struct sock *sk, void __user *arg)
 			return -ENOMEM;
 	}
 
-	id = rfcomm_dev_add(&req, dlc);
-	if (id < 0)
-		return id;
-
-	if (req.flags & (1 << RFCOMM_REUSE_DLC)) {
-		/* DLC is now used by device.
-		 * Socket must be disconnected */
-		sk->sk_state = BT_CLOSED;
-	}
-
-	return id;
+	return rfcomm_dev_add(&req, dlc);
 }
 
 static int __rfcomm_release_dev(void __user *arg)
