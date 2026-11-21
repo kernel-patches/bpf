@@ -37,7 +37,7 @@
 const volatile bool __SCX_MARKER_arena_scalar __weak = true;
 #elif defined(__BPF_FEATURE_ADDR_SPACE_CAST) && !defined(BPF_ARENA_FORCE_ASM)
 #ifndef __arena
-#define __arena __attribute__((address_space(1)))
+#define __arena __attribute__((address_space(1))) __attribute__((btf_type_tag("arena")))
 #endif
 #define __arena_global __attribute__((address_space(1)))
 #define cast_kern(ptr) /* nop for bpf prog. emitted by LLVM */
@@ -95,7 +95,7 @@ const volatile bool __SCX_MARKER_arena_scalar __weak = true;
 		     , [as]"i"((dst_as << 16) | src_as));
 #endif
 
-#define __arena
+#define __arena __attribute__((btf_type_tag("arena")))
 #define __arena_global SEC(".addr_space.1")
 #define cast_kern(ptr) bpf_addr_space_cast(ptr, 0, 1)
 #define cast_user(ptr) bpf_addr_space_cast(ptr, 1, 0)
