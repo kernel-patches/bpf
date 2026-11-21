@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 #include <test_progs.h>
+#include <pthread.h>
 #include <string.h>
 #include <stdio.h>
 #include "rhash.skel.h"
@@ -149,6 +150,171 @@ out:
 	bpf_iter_bpf_rhash_map__destroy(skel);
 }
 
+#define BATCH_ENTRIES 64
+#define BATCH_VALUE_SIZE 4000
+
+static int rhash_batch_map_create(__u32 entries)
+{
+	LIBBPF_OPTS(bpf_map_create_opts, opts,
+		    .map_flags = BPF_F_NO_PREALLOC,
+		    .map_extra = entries);
+	char value[BATCH_VALUE_SIZE] = {};
+	__u64 key;
+	int fd;
+
+	fd = bpf_map_create(BPF_MAP_TYPE_RHASH, "rhash_batch", sizeof(key),
+			    sizeof(value), entries, &opts);
+	if (!ASSERT_OK_FD(fd, "map_create"))
+		return -1;
+	for (key = 0; key < entries; key++) {
+		if (!ASSERT_OK(bpf_map_update_elem(fd, &key, value, BPF_ANY), "map_update")) {
+			close(fd);
+			return -1;
+		}
+	}
+	return fd;
+}
+
+static int rhash_lookup_batch(int fd, void *in, void *out, void *keys,
+			      void *values, __u32 *count, bool delete)
+{
+	if (delete)
+		return bpf_map_lookup_and_delete_batch(fd, in, out, keys, values, count, NULL);
+	return bpf_map_lookup_batch(fd, in, out, keys, values, count, NULL);
+}
+
+static void rhash_batch_test(bool delete, bool lost_cursor)
+{
+	__u64 key, cursor, seen = 0;
+	char value[BATCH_VALUE_SIZE];
+	__u32 count;
+	int fd, err;
+	void *in = NULL;
+
+	/* Two entries fit in the minimum table, including while deleting. */
+	fd = rhash_batch_map_create(2);
+	if (fd < 0)
+		return;
+	if (lost_cursor) {
+		count = 1;
+		err = rhash_lookup_batch(fd, NULL, &cursor, &key, value, &count, delete);
+		if (!ASSERT_OK(err, "first_batch") || !ASSERT_EQ(count, 1, "first_count") ||
+		    !ASSERT_OK(bpf_map_delete_elem(fd, &cursor), "delete_cursor"))
+			goto out;
+		count = 1;
+		err = rhash_lookup_batch(fd, &cursor, &cursor, &key, value, &count, delete);
+		ASSERT_EQ(err, -EAGAIN, "lost_cursor");
+		ASSERT_EQ(count, 0, "lost_count");
+		goto out;
+	}
+	do {
+		count = 1;
+		err = rhash_lookup_batch(fd, in, &cursor, &key, value, &count, delete);
+		if (!ASSERT_TRUE(!err || err == -ENOENT, "batch_result") ||
+		    !ASSERT_EQ(count, 1, "batch_count") ||
+		    !ASSERT_LT(key, 2, "key_range") ||
+		    !ASSERT_EQ(seen & (1ULL << key), 0, "unique_key"))
+			goto out;
+		seen |= 1ULL << key;
+		in = &cursor;
+	} while (!err);
+	ASSERT_EQ(seen, 3, "all_keys");
+	if (delete) {
+		ASSERT_EQ(bpf_map_get_next_key(fd, NULL, &cursor), -ENOENT, "empty_map");
+		count = 1;
+		err = rhash_lookup_batch(fd, NULL, &cursor, &key, value, &count, true);
+		ASSERT_EQ(err, -ENOENT, "empty_batch");
+		ASSERT_EQ(count, 0, "empty_count");
+	}
+out:
+	close(fd);
+}
+
+struct batch_race_ctx {
+	int fd;
+	__u64 key;
+	bool stop;
+	int err;
+	unsigned int updates;
+};
+
+static void *rhash_batch_update_key(void *arg)
+{
+	struct batch_race_ctx *ctx = arg;
+	char value[BATCH_VALUE_SIZE] = {};
+
+	while (!__atomic_load_n(&ctx->stop, __ATOMIC_RELAXED)) {
+		ctx->err = bpf_map_delete_elem(ctx->fd, &ctx->key);
+		if (ctx->err)
+			break;
+		ctx->err = bpf_map_update_elem(ctx->fd, &ctx->key, value, BPF_ANY);
+		if (ctx->err)
+			break;
+		ctx->updates++;
+	}
+	return NULL;
+}
+
+static void rhash_batch_concurrent_delete(void)
+{
+	struct batch_race_ctx ctx = {};
+	__u64 keys[BATCH_ENTRIES], cursor, seen = 0, expected;
+	unsigned int completed = 0, attempt;
+	__u32 count, i;
+	void *in = NULL, *values;
+	pthread_t thread;
+	int err;
+
+	ctx.fd = rhash_batch_map_create(BATCH_ENTRIES);
+	if (ctx.fd < 0)
+		return;
+	values = malloc(BATCH_ENTRIES * BATCH_VALUE_SIZE);
+	if (!ASSERT_OK_PTR(values, "values"))
+		goto close;
+	if (!ASSERT_OK(bpf_map_get_next_key(ctx.fd, NULL, &ctx.key), "first_key"))
+		goto out;
+	expected = ~(1ULL << ctx.key);
+	if (!ASSERT_OK(pthread_create(&thread, NULL, rhash_batch_update_key, &ctx),
+		       "thread_create"))
+		goto out;
+	/* Only the first key changes; no resize is needed at this load. */
+	for (attempt = 0; attempt < 5000; attempt++) {
+		count = BATCH_ENTRIES;
+		err = bpf_map_lookup_batch(ctx.fd, in, &cursor, keys, values, &count, NULL);
+		if (err == -EAGAIN) {
+			in = NULL;
+			seen = 0;
+			continue;
+		}
+		if (!ASSERT_TRUE(!err || err == -ENOENT, "batch_result"))
+			break;
+		for (i = 0; i < count; i++) {
+			if (!ASSERT_LT(keys[i], BATCH_ENTRIES, "key_range"))
+				goto stop;
+			seen |= 1ULL << keys[i];
+		}
+		if (err == -ENOENT) {
+			if (!ASSERT_EQ(seen & expected, expected, "persistent_keys"))
+				break;
+			completed++;
+			in = NULL;
+			seen = 0;
+		} else {
+			in = &cursor;
+		}
+	}
+stop:
+	__atomic_store_n(&ctx.stop, true, __ATOMIC_RELAXED);
+	pthread_join(thread, NULL);
+	ASSERT_OK(ctx.err, "writer_result");
+	ASSERT_GT(ctx.updates, 0, "concurrent_updates");
+	ASSERT_GT(completed, 0, "completed_walks");
+out:
+	free(values);
+close:
+	close(ctx.fd);
+}
+
 void test_rhash(void)
 {
 	if (test__start_subtest("test_rhash_lookup_update"))
@@ -186,4 +352,15 @@ void test_rhash(void)
 
 	if (test__start_subtest("test_rhash_iter"))
 		rhash_iter_test();
+
+	if (test__start_subtest("test_rhash_batch_lookup"))
+		rhash_batch_test(false, false);
+	if (test__start_subtest("test_rhash_batch_lookup_delete"))
+		rhash_batch_test(true, false);
+	if (test__start_subtest("test_rhash_batch_lost_lookup_cursor"))
+		rhash_batch_test(false, true);
+	if (test__start_subtest("test_rhash_batch_lost_delete_cursor"))
+		rhash_batch_test(true, true);
+	if (test__start_subtest("test_rhash_batch_concurrent_delete"))
+		rhash_batch_concurrent_delete();
 }
