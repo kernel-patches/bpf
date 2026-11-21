@@ -2593,7 +2593,7 @@ void bpf_collect_iv_thresholds(struct bpf_verifier_env *env);
 int bpf_guess_first_trips(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			  struct bpf_loop *loop);
 bool bpf_steps_are_constant(struct bpf_verifier_env *env, const struct loop_stack_entry *entry,
-			    const unsigned long *iv_xregs, bool infinite);
+			    const unsigned long *iv_xregs, bool infinite, u64 factor);
 void bpf_fast_forward_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
 			    struct bpf_verifier_state *cur, u64 factor, unsigned long *iv_xregs);
 

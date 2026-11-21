@@ -21055,6 +21055,7 @@ static int fast_forward_trips(struct bpf_verifier_env *env, struct loop_stack_en
 	const struct loop_stack_entry *saved = bpf_top_loop(old->frame[old->curframe]);
 	u32 period = entry->trip - saved->trip;
 	bool infinite = entry->trips_left > BPF_MAX_TRIPS, guess;
+	u64 factor = div_u64(entry->trips_left - 1, period);
 	DECLARE_BITMAP(iv_xregs, MAX_BPF_XREG) = {};
 	int err;
 
@@ -21067,14 +21068,14 @@ static int fast_forward_trips(struct bpf_verifier_env *env, struct loop_stack_en
 	err = bpf_jumps_see_same(env, old, cur, entry->iv_jump_idx, infinite ? NULL : iv_xregs);
 	if (err <= 0)
 		return err;
-	guess = !bpf_steps_are_constant(env, entry, iv_xregs, infinite);
+	guess = !bpf_steps_are_constant(env, entry, iv_xregs, infinite, factor);
 	if (infinite) {
 		entry->loop->infinite = true;
 		entry->loop->infinite_is_guess = guess || env->run_has_guess;
 		return 0;
 	}
 	env->run_has_guess |= guess;
-	bpf_fast_forward_xregs(env, old, cur, div_u64(entry->trips_left - 1, period), iv_xregs);
+	bpf_fast_forward_xregs(env, old, cur, factor, iv_xregs);
 	entry->iv_jump_idx = 0;
 	entry->trips_left = 1;
 	return 1;
