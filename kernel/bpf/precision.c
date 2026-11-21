@@ -1440,7 +1440,10 @@ static void keep_precision(struct bpf_precision *prec, bool keep)
 	}
 }
 
-/* The first partition that adds something. If all others are too costly, start again. */
+/*
+ * The first partition that adds something. If all others are too costly, start again.
+ * Returns 1 if the next pass has a new partition, barrier or budget, else 0 or an error.
+ */
 static int partition_next(struct bpf_verifier_env *env)
 {
 	struct bpf_precision *prec = env->precision;
@@ -1500,8 +1503,8 @@ static bool partition_helped(struct bpf_verifier_env *env)
 		 !prec->this_pass.over_budget));
 }
 
-/* The pass is over its budget. Returns true if another partition replaces the last one. */
-bool bpf_undo_precision(struct bpf_verifier_env *env)
+/* If the pass is over its budget, undo the last partition. Returns as partition_next(). */
+int bpf_undo_precision(struct bpf_verifier_env *env)
 {
 	struct bpf_precision *prec = env->precision;
 	bool over_budget = false, again = false;
@@ -1511,11 +1514,11 @@ bool bpf_undo_precision(struct bpf_verifier_env *env)
 	prec->this_pass.over_budget = env->over_limit;
 	prec->this_pass.calls_joined = env->calls_joined;
 	if (!env->over_limit || env->cost > env->max_cost)
-		return false;
+		return 0;
 	if (prec->partitioned_by <= BIT(PARTITION_ADD_DEPS) ||
 	    (env->err && (prec->last_pass.over_budget || partition_helped(env)))) {
 		env->over_limit = !env->err;
-		return false;
+		return 0;
 	}
 	env->over_limit = false;
 	prec->live_types_over = false;
@@ -1540,7 +1543,7 @@ bool bpf_undo_precision(struct bpf_verifier_env *env)
 	}
 	if (partition_by[__ffs(prec->partitioned_by)] != partition_suspect_loops && !again)
 		prec->too_costly |= prec->partitioned_by;
-	return partition_next(env) > 0;
+	return partition_next(env);
 }
 
 /*
@@ -1569,7 +1572,7 @@ bool bpf_undo_precision(struct bpf_verifier_env *env)
  *       |             v
  *       +--- budget *= 4, undo all since one helped, see keep_precision()
  *
- * Returns 1 if more is kept apart.
+ * Returns as partition_next().
  */
 int bpf_partition_more(struct bpf_verifier_env *env)
 {
@@ -1629,7 +1632,7 @@ int bpf_partition_more(struct bpf_verifier_env *env)
 /*
  * The pass has no error. But an imprecise state can raise a bound that is checked at attach
  * time or at run time. It can also ask for a barrier. Partition as if such an insn is
- * unproven. Returns 1 if more is kept apart.
+ * unproven. Returns as partition_next().
  */
 int bpf_partition_for_pessimized(struct bpf_verifier_env *env)
 {
