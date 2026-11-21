@@ -3620,6 +3620,7 @@ static void test_tail_call(void)
 		{ (~0ULL << 32) | 2, TAIL_FALL }, { ~0ULL, TAIL_FALL },
 	};
 	LIBBPF_OPTS(bpf_prog_load_opts, lopts,
+		.prog_flags = BPF_F_ANY_ALIGNMENT,
 		.log_buf = log,
 		.log_size = sizeof(log),
 	);
@@ -3688,7 +3689,11 @@ out:
 
 void test_jit_insns(void)
 {
-	RUN_TESTS(jit_insns_arena);
+	if (libbpf_probe_bpf_map_type(BPF_MAP_TYPE_ARENA, NULL))
+		RUN_TESTS(jit_insns_arena);
+	else
+		SKIP_TESTS(jit_insns_arena);
+
 	if (test__start_subtest("alu_imm"))
 		test_alu_imm();
 	if (test__start_subtest("alu_reg"))

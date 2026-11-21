@@ -528,6 +528,7 @@ struct test_loader {
 	pre_execution_cb pre_execution_cb;
 
 	struct bpf_object *obj;
+	bool skip;
 };
 
 static inline void test_loader__set_pre_execution_cb(struct test_loader *tester,
@@ -549,6 +550,13 @@ extern void test_loader_fini(struct test_loader *tester);
 									       \
 	test_loader__run_subtests(&tester, #skel, skel##__elf_bytes);	       \
 	test_loader_fini(&tester);					       \
+})
+
+#define SKIP_TESTS(skel) ({							\
+	struct test_loader tester = { .skip = true };				\
+										\
+	test_loader__run_subtests(&tester, #skel, skel##__elf_bytes);		\
+	test_loader_fini(&tester);						\
 })
 
 struct expect_msg {
