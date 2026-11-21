@@ -5425,9 +5425,15 @@ static enum priv_stack_mode bpf_enable_priv_stack(struct bpf_prog *prog)
 	if (!bpf_jit_supports_private_stack())
 		return NO_PRIV_STACK;
 
-	/* bpf_prog_check_recur() checks all prog types that use bpf trampoline
-	 * while kprobe/tp/perf_event/raw_tp don't use trampoline hence checked
-	 * explicitly.
+	/*
+	 * A private stack is per CPU, so a program using it must never run in two
+	 * tasks at once on one CPU. Tracing, raw_tp and tracepoint programs run
+	 * preemptibly, and the same program can be entered by another task on the
+	 * same CPU, e.g. through a second tail-call dispatcher, or as a tracepoint
+	 * program attached to both a syscall and a regular tracepoint. They always
+	 * use the task's kernel stack. Kprobe multi, kprobe session and perf_event
+	 * programs are serialized per CPU by bpf_prog_active, and struct_ops
+	 * programs that request a private stack keep per-CPU recursion protection.
 	 */
 	switch (prog->type) {
 	case BPF_PROG_TYPE_KPROBE:
@@ -5440,14 +5446,10 @@ static enum priv_stack_mode bpf_enable_priv_stack(struct bpf_prog *prog)
 		    prog->expected_attach_type != BPF_TRACE_KPROBE_SESSION)
 			return NO_PRIV_STACK;
 		fallthrough;
-	case BPF_PROG_TYPE_TRACEPOINT:
 	case BPF_PROG_TYPE_PERF_EVENT:
-	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 		return PRIV_STACK_ADAPTIVE;
-	case BPF_PROG_TYPE_TRACING:
-	case BPF_PROG_TYPE_LSM:
 	case BPF_PROG_TYPE_STRUCT_OPS:
-		if (prog->aux->priv_stack_requested || bpf_prog_check_recur(prog))
+		if (prog->aux->priv_stack_requested)
 			return PRIV_STACK_ADAPTIVE;
 		fallthrough;
 	default:
@@ -5455,6 +5457,22 @@ static enum priv_stack_mode bpf_enable_priv_stack(struct bpf_prog *prog)
 	}
 
 	return NO_PRIV_STACK;
+}
+
+/* Progs that run on top of other progs, whose frames are still on the stack */
+static bool bpf_prog_runs_nested(struct bpf_prog *prog)
+{
+	switch (prog->type) {
+	case BPF_PROG_TYPE_KPROBE:
+	case BPF_PROG_TYPE_PERF_EVENT:
+	case BPF_PROG_TYPE_TRACEPOINT:
+	case BPF_PROG_TYPE_RAW_TRACEPOINT:
+		return true;
+	case BPF_PROG_TYPE_TRACING:
+		return bpf_prog_check_recur(prog);
+	default:
+		return false;
+	}
 }
 
 static int round_up_stack_depth(struct bpf_verifier_env *env, int stack_depth)
@@ -5589,12 +5607,10 @@ static int check_recursion(struct bpf_verifier_env *env, struct bpf_call_graph *
 		}
 		if (env->subprog_info[s].recursive) {
 			/*
-			 * These progs run on top of other progs. Their frames belong in the
-			 * private stack, which has room for one frame of a subprog. A kprobe prog
-			 * that can be attached to a uprobe has no private stack, and is no better.
+			 * These progs run on top of other progs. A private stack has room for one
+			 * frame of a subprog, and the kernel stack under them is already in use.
 			 */
-			if ((bpf_enable_priv_stack(env->prog) != NO_PRIV_STACK ||
-			     env->prog->type == BPF_PROG_TYPE_KPROBE) &&
+			if (bpf_prog_runs_nested(env->prog) &&
 			    !env->prog->aux->priv_stack_requested) {
 				verbose(env, "recursive %s() in a tracing program\n",
 					bpf_subprog_name(env, s));
@@ -6137,6 +6153,7 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		if (round_up_stack_depth(env, si[s].stack_depth) >= BPF_PRIV_STACK_MIN_SIZE) {
 			si[s].priv_stack_mode = PRIV_STACK_ADAPTIVE;
 			env->prog->aux->jits_use_priv_stack = true;
+			env->prog->recur_per_cpu = true;
 		}
 	}
 
@@ -13051,6 +13068,10 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (err)
 		return err;
 
+	/* A per-CPU value stays the run's own only while no other run starts on the CPU */
+	if (meta.map.ptr && bpf_map_is_percpu_map(meta.map.ptr->map_type))
+		env->prog->recur_per_cpu = true;
+
 	err = record_func_map(env, &meta, func_id, insn_idx);
 	if (err)
 		return err;
@@ -13077,6 +13098,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	switch (func_id) {
 	case BPF_FUNC_tail_call:
+		/* The target runs without a recursion check of its own */
+		env->prog->recur_per_cpu = true;
 		err = check_resource_leak(env, false, true, "tail_call");
 		if (err)
 			return err;
@@ -13191,6 +13214,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	{
 		struct bpf_reg_state *reg = &regs[BPF_REG_1];
 		const struct btf_type *type;
+
+		env->prog->recur_per_cpu = true;
 
 		if (reg->type & MEM_RCU) {
 			type = btf_type_by_id(reg->btf, reg->btf_id);
@@ -19572,6 +19597,8 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 		__mark_reg_known(dst_reg, aux->map_off);
 		dst_reg->type = PTR_TO_MAP_VALUE;
 		dst_reg->map_ptr = map;
+		if (bpf_map_is_percpu_map(map->map_type))
+			env->prog->recur_per_cpu = true;
 		WARN_ON_ONCE(map->map_type != BPF_MAP_TYPE_INSN_ARRAY &&
 			     map->max_entries != 1);
 		/* We want reg->id to be same (0) as map_value is not distinct */
