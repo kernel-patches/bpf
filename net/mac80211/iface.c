@@ -272,12 +272,22 @@ static int _ieee80211_change_mac(struct ieee80211_sub_if_data *sdata,
 	struct sockaddr *sa = addr;
 	bool check_dup = true;
 	bool live = false;
+	u8 old_addr[ETH_ALEN];
 	int ret;
 
 	if (ieee80211_sdata_running(sdata)) {
 		ret = ieee80211_can_powered_addr_change(sdata);
 		if (ret)
 			return ret;
+
+		/*
+		 * The driver may have refused to add the interface back
+		 * after a previous address change, e.g. because the device
+		 * disappeared. In that case the interface is not in the
+		 * driver, so don't try to remove/add it again.
+		 */
+		if (!(sdata->flags & IEEE80211_SDATA_IN_DRIVER))
+			return -ENODEV;
 
 		live = true;
 	}
@@ -290,8 +300,10 @@ static int _ieee80211_change_mac(struct ieee80211_sub_if_data *sdata,
 	if (ret)
 		return ret;
 
-	if (live)
+	if (live) {
+		ether_addr_copy(old_addr, sdata->dev->dev_addr);
 		drv_remove_interface(local, sdata);
+	}
 	ret = eth_mac_addr(sdata->dev, sa);
 
 	if (ret == 0) {
@@ -300,10 +312,30 @@ static int _ieee80211_change_mac(struct ieee80211_sub_if_data *sdata,
 	}
 
 	/* Regardless of eth_mac_addr() return we still want to add the
-	 * interface back. This should not fail...
+	 * interface back, but the driver may refuse, e.g. if the device
+	 * disappeared in the meantime.
 	 */
-	if (live)
-		WARN_ON(drv_add_interface(local, sdata));
+	if (live) {
+		int err = drv_add_interface(local, sdata);
+
+		if (err && !ret) {
+			struct sockaddr old_sa = {
+				.sa_family = sdata->dev->type,
+			};
+
+			/*
+			 * Undo the address update, the change didn't happen.
+			 * This also makes sure that a retry with the same
+			 * address reaches us again instead of being filtered
+			 * out by netif_set_mac_address().
+			 */
+			ether_addr_copy(old_sa.sa_data, old_addr);
+			eth_mac_addr(sdata->dev, &old_sa);
+			memcpy(sdata->vif.addr, old_addr, ETH_ALEN);
+			ether_addr_copy(sdata->vif.bss_conf.addr, old_addr);
+			ret = err;
+		}
+	}
 
 	return ret;
 }
