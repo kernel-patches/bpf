@@ -79,6 +79,12 @@ static void test_snprintf_positive(void)
 
 	ASSERT_EQ(skel->bss->nobuf_ret, EXP_NO_BUF_RET, "no_buf_ret");
 
+	ASSERT_EQ(skel->bss->ip4_ovf_ret, -ENOSPC, "ip4_ovf_ret");
+	ASSERT_EQ(skel->bss->ip6_ovf_ret, -ENOSPC, "ip6_ovf_ret");
+	ASSERT_EQ(skel->bss->sym_ovf_ret, -ENOSPC, "sym_ovf_ret");
+	ASSERT_EQ(skel->bss->sym_full_ret, -ENOSPC, "sym_full_ret");
+	ASSERT_EQ(skel->bss->ip6_tail_ovf_ret, -ENOSPC, "ip6_tail_ovf_ret");
+
 cleanup:
 	test_snprintf__destroy(skel);
 }
