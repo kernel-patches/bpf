@@ -714,7 +714,7 @@ static u8 check_enc_key_size(struct l2cap_conn *conn, __u8 max_key_size)
 		return SMP_ENC_KEY_SIZE;
 
 	if (max_key_size > hdev->le_max_key_size ||
-	    max_key_size < SMP_MIN_ENC_KEY_SIZE)
+	    max_key_size < hdev->le_min_key_size)
 		return SMP_ENC_KEY_SIZE;
 
 	smp->enc_key_size = max_key_size;
