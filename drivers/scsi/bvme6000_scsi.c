@@ -93,7 +93,8 @@ static void
 bvme6000_device_remove(struct platform_device *dev)
 {
 	struct Scsi_Host *host = platform_get_drvdata(dev);
-	struct NCR_700_Host_Parameters *hostdata = shost_priv(host);
+	struct NCR_700_Host_Parameters *hostdata =
+		(struct NCR_700_Host_Parameters *)host->hostdata[0];
 
 	scsi_remove_host(host);
 	NCR_700_release(host);

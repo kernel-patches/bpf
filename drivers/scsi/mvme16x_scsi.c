@@ -107,7 +107,8 @@ static int mvme16x_probe(struct platform_device *dev)
 static void mvme16x_device_remove(struct platform_device *dev)
 {
 	struct Scsi_Host *host = platform_get_drvdata(dev);
-	struct NCR_700_Host_Parameters *hostdata = shost_priv(host);
+	struct NCR_700_Host_Parameters *hostdata =
+		(struct NCR_700_Host_Parameters *)host->hostdata[0];
 
 	/* Disable scsi chip ints */
 	{
