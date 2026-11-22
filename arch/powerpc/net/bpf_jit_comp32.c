@@ -199,6 +199,13 @@ void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
 		if (bpf_is_seen_register(ctx, i))
 			EMIT(PPC_RAW_STW(i, _R1, bpf_jit_stack_offsetof(ctx, i)));
 
+	/* If this is a subprogram, load fifth argument from the stack */
+	if (ctx->is_subprog && bpf_is_seen_register(ctx, bpf_to_ppc(BPF_REG_5))) {
+		int offset = bpf_has_stack_frame(ctx) ? BPF_PPC_STACKFRAME(ctx) : 0;
+		EMIT(PPC_RAW_LWZ(bpf_to_ppc(BPF_REG_5) - 1, _R1, offset + 8));
+		EMIT(PPC_RAW_LWZ(bpf_to_ppc(BPF_REG_5), _R1, offset + 12));
+	}
+
 	/* Setup frame pointer to point to the bpf stack area */
 	if (bpf_is_seen_register(ctx, bpf_to_ppc(BPF_REG_FP))) {
 		EMIT(PPC_RAW_LI(bpf_to_ppc(BPF_REG_FP) - 1, 0));
