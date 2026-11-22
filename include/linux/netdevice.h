@@ -2532,6 +2532,12 @@ struct net_device {
 	unsigned long		netns_immutable:1;
 	unsigned long		fcoe_mtu:1;
 	/**
+	 * @xdp_pending: an XDP program is being installed, but is not in
+	 *	@xdp_state yet. Most users should access it implicitly via
+	 *	helpers like dev_xdp_prog_count(), rather than directly.
+	 */
+	unsigned long		xdp_pending:1;
+	/**
 	 * @xdp_from_upper: the program in @xdp_state was installed by an
 	 *	upper device with netif_xdp_propagate(); it belongs to the
 	 *	upper and can't be replaced or removed through this device.

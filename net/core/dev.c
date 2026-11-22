@@ -1904,23 +1904,6 @@ void netif_disable_lro(struct net_device *dev)
 	}
 }
 
-/**
- *	dev_disable_gro_hw - disable HW Generic Receive Offload on a device
- *	@dev: device
- *
- *	Disable HW Generic Receive Offload (GRO_HW) on a net device.  Must be
- *	called under RTNL.  This is needed if Generic XDP is installed on
- *	the device.
- */
-static void dev_disable_gro_hw(struct net_device *dev)
-{
-	dev->wanted_features &= ~NETIF_F_GRO_HW;
-	netdev_update_features(dev);
-
-	if (unlikely(dev->features & NETIF_F_GRO_HW))
-		netdev_WARN(dev, "failed to disable GRO_HW!\n");
-}
-
 const char *netdev_cmd_to_name(enum netdev_cmd cmd)
 {
 #define N(val) 						\
@@ -6659,7 +6642,6 @@ static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 		} else if (new && !old) {
 			static_branch_inc(&generic_xdp_needed_key);
 			netif_disable_lro(dev);
-			dev_disable_gro_hw(dev);
 		}
 		break;
 
@@ -10578,7 +10560,7 @@ u8 dev_xdp_prog_count(struct net_device *dev)
 	for (i = 0; i < __MAX_XDP_MODE; i++)
 		if (dev->xdp_state[i].prog || dev->xdp_state[i].link)
 			count++;
-	return count;
+	return count ?: !!dev->xdp_pending;
 }
 EXPORT_SYMBOL_GPL(dev_xdp_prog_count);
 
@@ -10619,6 +10601,32 @@ static void dev_xdp_set_prog(struct net_device *dev, enum bpf_xdp_mode mode,
 	dev->xdp_state[mode].prog = prog;
 }
 
+/* Try to clear HW-GRO before the driver reconfigures for XDP.
+ * Driver may add features back in via ndo_fix_features(), due to feature
+ * dependencies. In that case we can't run XDP at all.
+ */
+static int dev_xdp_clear_rx_agg(struct net_device *dev,
+				struct netlink_ext_ack *extack)
+{
+	if (!(dev->features & NETIF_F_GRO_HW))
+		return 0;
+	if (!(dev->hw_features & NETIF_F_GRO_HW)) {
+		NL_SET_ERR_MSG(extack,
+			       "unable to disable HW-GRO, fixed on");
+		return -EOPNOTSUPP;
+	}
+
+	netdev_update_features(dev);
+
+	if (dev->features & NETIF_F_GRO_HW) {
+		NL_SET_ERR_MSG(extack,
+			       "unable to disable HW-GRO, required by another feature");
+		return -EBUSY;
+	}
+
+	return 0;
+}
+
 int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 {
 	struct bpf_prog *old_prog;
@@ -10652,11 +10660,17 @@ int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 				       "unable to propagate XDP to device using memory provider");
 			return -EBUSY;
 		}
+
+		dev->xdp_pending = 1;
+
+		err = dev_xdp_clear_rx_agg(dev, bpf->extack);
+		if (err)
+			goto err_clear_pending;
 	}
 
 	err = dev->netdev_ops->ndo_bpf(dev, bpf);
 	if (err)
-		return err;
+		goto err_clear_pending;
 	if (bpf->prog)
 		bpf_prog_inc(bpf->prog);
 
@@ -10669,11 +10683,22 @@ int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 	old_prog = dev_xdp_prog(dev, XDP_MODE_DRV);
 	bpf_prog_change_xdp(old_prog, bpf->prog);
 	dev_xdp_set_prog(dev, XDP_MODE_DRV, bpf->prog);
+	dev->xdp_pending = 0;
 	dev->xdp_from_upper = !!bpf->prog;
-	if (old_prog)
+
+	if (old_prog) {
 		bpf_prog_put(old_prog);
+		/* The last program is gone, HW-GRO may be available again */
+		if (!bpf->prog)
+			netdev_update_features(dev);
+	}
 
 	return 0;
+
+err_clear_pending:
+	dev->xdp_pending = 0;
+	netdev_update_features(dev);
+	return err;
 }
 EXPORT_SYMBOL_GPL(netif_xdp_propagate);
 
@@ -10882,19 +10907,36 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 			return -EOPNOTSUPP;
 		}
 
+		if (new_prog) {
+			dev->xdp_pending = 1;
+			err = dev_xdp_clear_rx_agg(dev, extack);
+			if (err)
+				goto err_clear_pending;
+		}
+
 		err = dev_xdp_install(dev, mode, bpf_op, extack, flags, new_prog);
 		if (err)
-			return err;
+			goto err_clear_pending;
 	}
 
 	if (link)
 		dev_xdp_set_link(dev, mode, link);
 	else
 		dev_xdp_set_prog(dev, mode, new_prog);
-	if (cur_prog)
+	dev->xdp_pending = 0;
+	if (cur_prog) {
 		bpf_prog_put(cur_prog);
+		/* The last program is gone, HW-GRO may be available again */
+		if (!new_prog)
+			netdev_update_features(dev);
+	}
 
 	return 0;
+
+err_clear_pending:
+	dev->xdp_pending = 0;
+	netdev_update_features(dev);
+	return err;
 }
 
 static int dev_xdp_attach_link(struct net_device *dev,
@@ -10920,6 +10962,7 @@ static int dev_xdp_detach_link(struct net_device *dev,
 	bpf_op = dev_xdp_bpf_op(dev, mode);
 	WARN_ON(dev_xdp_install(dev, mode, bpf_op, NULL, 0, NULL));
 	dev_xdp_set_link(dev, mode, NULL);
+	netdev_update_features(dev);
 	return 0;
 }
 
@@ -11391,6 +11434,14 @@ int __netdev_update_features(struct net_device *dev)
 	netdev_assert_locked_ops_compat(dev);
 
 	features = netdev_get_wanted_features(dev);
+
+	/* GRO_HW may be added back in via ndo_fix_features e.g. if driver needs
+	 * it to honor the HDS config, clear it before the fix features call.
+	 */
+	if ((features & NETIF_F_GRO_HW) && dev_xdp_prog_count(dev)) {
+		netdev_dbg(dev, "Dropping HW-GRO feature since XDP is attached.\n");
+		features &= ~NETIF_F_GRO_HW;
+	}
 
 	if (dev->netdev_ops->ndo_fix_features)
 		features = dev->netdev_ops->ndo_fix_features(dev, features);
