@@ -2197,6 +2197,8 @@ static int ntlm_negotiate(struct ksmbd_work *work,
 	unsigned char *spnego_blob = NULL;
 	u16 spnego_blob_len;
 	char *neg_blob;
+	size_t neg_buf_len = MAX_CIFS_SMALL_BUFFER_SIZE;
+	size_t rsp_buf_len, rsp_buf_off;
 	int sz, rc;
 
 	ksmbd_debug(SMB, "negotiate phase\n");
@@ -2204,30 +2206,33 @@ static int ntlm_negotiate(struct ksmbd_work *work,
 	if (rc)
 		return rc;
 
-	sz = le16_to_cpu(rsp->SecurityBufferOffset);
-	chgblob = (struct challenge_message *)rsp->Buffer;
-	memset(chgblob, 0, sizeof(struct challenge_message));
+	if (work->next_smb2_rsp_hdr_off < 0)
+		return -ENOSPC;
+	rsp_buf_off = work->next_smb2_rsp_hdr_off + 4 +
+		sizeof(*rsp);
+	if (rsp_buf_off > work->response_sz)
+		return -ENOSPC;
+	rsp_buf_len = work->response_sz - rsp_buf_off;
 
 	if (!work->conn->use_spnego) {
-		sz = ksmbd_build_ntlmssp_challenge_blob(chgblob, work->conn);
+		chgblob = (struct challenge_message *)
+			((char *)work->response_buf + rsp_buf_off);
+		sz = ksmbd_build_ntlmssp_challenge_blob(chgblob, work->conn, rsp_buf_len);
 		if (sz < 0)
-			return -ENOMEM;
+			return sz;
 
 		rsp->SecurityBufferLength = cpu_to_le16(sz);
 		return 0;
 	}
 
-	sz = sizeof(struct challenge_message);
-	sz += (strlen(ksmbd_netbios_name()) * 2 + 1 + 4) * 6;
-
-	neg_blob = kzalloc(sz, KSMBD_DEFAULT_GFP);
+	neg_blob = kzalloc(neg_buf_len, KSMBD_DEFAULT_GFP);
 	if (!neg_blob)
 		return -ENOMEM;
 
 	chgblob = (struct challenge_message *)neg_blob;
-	sz = ksmbd_build_ntlmssp_challenge_blob(chgblob, work->conn);
+	sz = ksmbd_build_ntlmssp_challenge_blob(chgblob, work->conn, neg_buf_len);
 	if (sz < 0) {
-		rc = -ENOMEM;
+		rc = sz;
 		goto out;
 	}
 
@@ -2235,6 +2240,11 @@ static int ntlm_negotiate(struct ksmbd_work *work,
 					   neg_blob, sz);
 	if (rc) {
 		rc = -ENOMEM;
+		goto out;
+	}
+
+	if (spnego_blob_len > rsp_buf_len) {
+		rc = -ENOSPC;
 		goto out;
 	}
 

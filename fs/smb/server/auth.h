@@ -51,9 +51,9 @@ int ksmbd_decode_ntlmssp_auth_blob(struct authenticate_message *authblob,
 				   struct ksmbd_session *sess, char *sess_key);
 int ksmbd_decode_ntlmssp_neg_blob(struct negotiate_message *negblob,
 				  int blob_len, struct ksmbd_conn *conn);
-unsigned int
+int
 ksmbd_build_ntlmssp_challenge_blob(struct challenge_message *chgblob,
-				   struct ksmbd_conn *conn);
+				   struct ksmbd_conn *conn, size_t buflen);
 int ksmbd_krb5_authenticate(struct ksmbd_session *sess, char *in_blob,
 			    int in_len, char *out_blob, int *out_len,
 			    char *sess_key);
