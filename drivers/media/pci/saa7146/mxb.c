@@ -721,6 +721,8 @@ static int mxb_attach(struct saa7146_dev *dev, struct saa7146_pci_extension_data
 	if (saa7146_register_device(&mxb->video_dev, dev, "mxb", VFL_TYPE_VIDEO)) {
 		ERR("cannot register capture v4l2 device. skipping.\n");
 		saa7146_vv_release(dev);
+		i2c_del_adapter(&mxb->i2c_adapter);
+		kfree(mxb);
 		return -1;
 	}
 
