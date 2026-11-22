@@ -73,8 +73,7 @@ static void raid6_avx5121_gen_syndrome(int disks, size_t bytes, void **ptrs)
 			     "vpxorq %%zmm2,%%zmm2,%%zmm2\n\t"
 			     "vmovntdq %%zmm4,%1\n\t"
 			     "vpxorq %%zmm4,%%zmm4,%%zmm4"
-			     :
-			     : "m" (p[d]), "m" (q[d]));
+			     : "=m" (p[d]), "=m" (q[d]));
 	}
 
 	asm volatile("sfence" : : : "memory");
@@ -133,8 +132,7 @@ static void raid6_avx5121_xor_syndrome(int disks, int start, int stop,
 		/* Don't use movntdq for r/w memory area < cache line */
 			     "vmovdqa64 %%zmm4,%0\n\t"
 			     "vmovdqa64 %%zmm2,%1"
-			     :
-			     : "m" (q[d]), "m" (p[d]));
+			     : "+m" (q[d]), "=m" (p[d]));
 	}
 
 	asm volatile("sfence" : : : "memory");
@@ -204,9 +202,8 @@ static void raid6_avx5122_gen_syndrome(int disks, size_t bytes, void **ptrs)
 			     "vmovntdq %%zmm3,%1\n\t"
 			     "vmovntdq %%zmm4,%2\n\t"
 			     "vmovntdq %%zmm6,%3"
-			     :
-			     : "m" (p[d]), "m" (p[d+64]), "m" (q[d]),
-			       "m" (q[d+64]));
+			     : "=m" (p[d]), "=m" (p[d+64]), "=m" (q[d]),
+			       "=m" (q[d+64]));
 	}
 
 	asm volatile("sfence" : : : "memory");
@@ -289,9 +286,8 @@ static void raid6_avx5122_xor_syndrome(int disks, int start, int stop,
 			     "vmovdqa64 %%zmm6,%1\n\t"
 			     "vmovdqa64 %%zmm2,%2\n\t"
 			     "vmovdqa64 %%zmm3,%3"
-			     :
-			     : "m" (q[d]), "m" (q[d+64]), "m" (p[d]),
-			       "m" (p[d+64]));
+			     : "+m" (q[d]), "+m" (q[d+64]), "=m" (p[d]),
+			       "=m" (p[d+64]));
 	}
 
 	asm volatile("sfence" : : : "memory");
@@ -393,10 +389,9 @@ static void raid6_avx5124_gen_syndrome(int disks, size_t bytes, void **ptrs)
 			     "vpxorq %%zmm12,%%zmm12,%%zmm12\n\t"
 			     "vmovntdq %%zmm14,%7\n\t"
 			     "vpxorq %%zmm14,%%zmm14,%%zmm14"
-			     :
-			     : "m" (p[d]), "m" (p[d+64]), "m" (p[d+128]),
-			       "m" (p[d+192]), "m" (q[d]), "m" (q[d+64]),
-			       "m" (q[d+128]), "m" (q[d+192]));
+			     : "=m" (p[d]), "=m" (p[d+64]), "=m" (p[d+128]),
+			       "=m" (p[d+192]), "=m" (q[d]), "=m" (q[d+64]),
+			       "=m" (q[d+128]), "=m" (q[d+192]));
 	}
 
 	asm volatile("sfence" : : : "memory");
@@ -528,10 +523,9 @@ static void raid6_avx5124_xor_syndrome(int disks, int start, int stop,
 			     "vmovdqa64 %%zmm6,%5\n\t"
 			     "vmovdqa64 %%zmm12,%6\n\t"
 			     "vmovdqa64 %%zmm14,%7"
-			     :
-			     : "m" (p[d]),  "m" (p[d+64]), "m" (p[d+128]),
-			       "m" (p[d+192]), "m" (q[d]),  "m" (q[d+64]),
-			       "m" (q[d+128]), "m" (q[d+192]));
+			     : "=m" (p[d]), "=m" (p[d+64]), "=m" (p[d+128]),
+			       "=m" (p[d+192]), "+m" (q[d]), "+m" (q[d+64]),
+			       "+m" (q[d+128]), "+m" (q[d+192]));
 	}
 	asm volatile("sfence" : : : "memory");
 	asm volatile("vzeroupper");
