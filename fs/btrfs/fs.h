@@ -378,8 +378,8 @@ struct btrfs_dev_replace {
 	/* See #define above */
 	u64 cont_reading_from_srcdev_mode;
 
-	int is_valid;
-	int item_needs_writeback;
+	bool is_valid;
+	bool item_needs_writeback;
 	struct btrfs_device *srcdev;
 	struct btrfs_device *tgtdev;
 

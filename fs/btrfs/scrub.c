@@ -2928,7 +2928,7 @@ int scrub_enumerate_chunks(struct scrub_ctx *sctx,
 		down_write(&dev_replace->rwsem);
 		dev_replace->cursor_right = found_key.offset + dev_extent_len;
 		dev_replace->cursor_left = found_key.offset;
-		dev_replace->item_needs_writeback = 1;
+		dev_replace->item_needs_writeback = true;
 		up_write(&dev_replace->rwsem);
 
 		ret = scrub_chunk(sctx, cache, scrub_dev, found_key.offset,
@@ -2940,7 +2940,7 @@ int scrub_enumerate_chunks(struct scrub_ctx *sctx,
 
 		down_write(&dev_replace->rwsem);
 		dev_replace->cursor_left = dev_replace->cursor_right;
-		dev_replace->item_needs_writeback = 1;
+		dev_replace->item_needs_writeback = true;
 		up_write(&dev_replace->rwsem);
 
 		if (ro_set)
