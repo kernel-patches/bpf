@@ -84,6 +84,7 @@ struct audit_krule;
 struct ns_common;
 struct user_namespace;
 struct timezone;
+struct userland;
 
 enum lsm_event {
 	LSM_POLICY_CHANGE,
@@ -2468,5 +2469,41 @@ static inline void security_initramfs_populated(void)
 {
 }
 #endif /* CONFIG_SECURITY */
+
+#ifdef CONFIG_USERLAND
+#ifdef CONFIG_SECURITY
+int security_userland_alloc(struct userland *userland, unsigned int flags);
+void security_userland_free(struct userland *userland);
+int security_userland_share(struct userland *userland, struct ns_common *ns);
+int security_userland_clone(struct userland *userland);
+int security_userland_kill(struct userland *userland, int sig);
+#else
+static inline int security_userland_alloc(struct userland *userland,
+					  unsigned int flags)
+{
+	return 0;
+}
+
+static inline void security_userland_free(struct userland *userland)
+{
+}
+
+static inline int security_userland_share(struct userland *userland,
+					  struct ns_common *ns)
+{
+	return 0;
+}
+
+static inline int security_userland_clone(struct userland *userland)
+{
+	return 0;
+}
+
+static inline int security_userland_kill(struct userland *userland, int sig)
+{
+	return 0;
+}
+#endif /* CONFIG_SECURITY */
+#endif /* CONFIG_USERLAND */
 
 #endif /* ! __LINUX_SECURITY_H */

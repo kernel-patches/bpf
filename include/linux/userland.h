@@ -61,6 +61,9 @@ enum userland_state {
 struct userland {
 	refcount_t		usage;
 	int			exit_code;
+#ifdef CONFIG_SECURITY
+	void			*security;
+#endif
 	struct user_namespace	*user_ns;
 	struct nsproxy		*ns;
 	struct pid		*init_pid;

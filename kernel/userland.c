@@ -40,15 +40,13 @@
 #include <linux/uts_namespace.h>
 #include <net/net_namespace.h>
 #include <linux/idr.h>
+#include <linux/security.h>
 #include <uapi/linux/userland.h>
 
 #include "exit.h"
 
-void userland_put(struct userland *c)
+static void userland_free(struct userland *c)
 {
-	if (!c || !refcount_dec_and_test(&c->usage))
-		return;
-
 	if (c->ns)
 		put_nsproxy(c->ns);
 	if (c->init_pid)
@@ -58,6 +56,15 @@ void userland_put(struct userland *c)
 		put_user_ns(c->user_ns);
 	}
 	kfree(c);
+}
+
+void userland_put(struct userland *c)
+{
+	if (!c || !refcount_dec_and_test(&c->usage))
+		return;
+
+	security_userland_free(c);
+	userland_free(c);
 }
 
 static __poll_t userland_poll(struct file *file, poll_table *wait)
@@ -136,6 +143,7 @@ static long userland_share_nsfd(struct userland *c, unsigned long arg)
 	struct ns_common *old_time_children = NULL;
 	struct ns_common *old_ns = NULL;
 	struct ns_common *ns;
+	int ret;
 
 	if (arg > INT_MAX)
 		return -EBADF;
@@ -166,6 +174,10 @@ static long userland_share_nsfd(struct userland *c, unsigned long arg)
 	if (!is_current_namespace(ns) &&
 	    !ns_capable(ns->ops->owner(ns), CAP_SYS_ADMIN))
 		return -EPERM;
+
+	ret = security_userland_share(c, ns);
+	if (ret)
+		return ret;
 
 	scoped_guard(spinlock, &c->lock) {
 		if (c->state != USERLAND_INIT)
@@ -315,6 +327,7 @@ int userland_send_signal(struct file *file, int sig,
 	bool any_perm = false;
 	int other_err = 0;
 	struct pid *pid;
+	int ret;
 	int nr;
 
 	if (info || flags || sig < 0 || !valid_signal(sig))
@@ -323,6 +336,10 @@ int userland_send_signal(struct file *file, int sig,
 		return -EXDEV;
 	if (READ_ONCE(userland->state) != USERLAND_RUNNING)
 		return -ESRCH;
+
+	ret = security_userland_kill(userland, sig);
+	if (ret)
+		return ret;
 
 	scoped_guard(rcu) {
 		read_lock(&tasklist_lock);
@@ -489,20 +506,20 @@ static struct userland *userland_create(unsigned int flags)
 	user_ns = userland_create_user_ns();
 	if (IS_ERR(user_ns)) {
 		ret = PTR_ERR(user_ns);
-		goto err_put;
+		goto err_free;
 	}
 	c->user_ns = user_ns;
 	ns_ref_active_get(user_ns);
 
 	if (!ns_capable(user_ns, CAP_SYS_ADMIN)) {
 		ret = -EPERM;
-		goto err_put;
+		goto err_free;
 	}
 
 	ns = create_new_namespaces(clone_flags, current, user_ns, NULL);
 	if (IS_ERR(ns)) {
 		ret = PTR_ERR(ns);
-		goto err_put;
+		goto err_free;
 	}
 
 	if (ns->time_ns != ns->time_ns_for_children) {
@@ -513,10 +530,14 @@ static struct userland *userland_create(unsigned int flags)
 	c->ns = ns;
 	nsproxy_ns_active_get(ns);
 
+	ret = security_userland_alloc(c, flags);
+	if (ret < 0)
+		goto err_free;
+
 	return c;
 
-err_put:
-	userland_put(c);
+err_free:
+	userland_free(c);
 	return ERR_PTR(ret);
 }
 
@@ -609,6 +630,10 @@ int userland_prepare_fork(struct kernel_clone_args *args)
 	pid_ns = userland->ns->pid_ns_for_children;
 	if (!pidns_is_ancestor(pid_ns, task_active_pid_ns(current)))
 		return -EXDEV;
+
+	ret = security_userland_clone(userland);
+	if (ret)
+		return ret;
 
 	ret = mnt_ns_get_root(userland->ns->mnt_ns, &root);
 	if (ret)
