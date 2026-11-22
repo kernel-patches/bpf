@@ -408,8 +408,8 @@ static void raid6_avx24_xor_syndrome(int disks, int start, int stop,
 			asm volatile("vpxor %ymm13,%ymm12,%ymm12");
 			asm volatile("vpxor %ymm15,%ymm14,%ymm14");
 		}
-		asm volatile("prefetchnta %0" :: "m" (q[d]));
-		asm volatile("prefetchnta %0" :: "m" (q[d+64]));
+		asm volatile("prefetcht0 %0" :: "m" (q[d]));
+		asm volatile("prefetcht0 %0" :: "m" (q[d+64]));
 		/* P/Q left side optimization */
 		for (z = start-1 ; z >= 0 ; z--) {
 			asm volatile("vpxor %ymm5,%ymm5,%ymm5");

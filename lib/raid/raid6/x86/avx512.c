@@ -476,8 +476,8 @@ static void raid6_avx5124_xor_syndrome(int disks, int start, int stop,
 				       "m" (dptr[z][d+128]),
 				       "m" (dptr[z][d+192]));
 		}
-		asm volatile("prefetchnta %0\n\t"
-			     "prefetchnta %1\n\t"
+		asm volatile("prefetcht0 %0\n\t"
+			     "prefetcht0 %1\n\t"
 			     :
 			     : "m" (q[d]), "m" (q[d+128]));
 		/* P/Q left side optimization */
