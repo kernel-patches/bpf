@@ -5538,7 +5538,10 @@ int btrfs_relocate_block_group(struct btrfs_fs_info *fs_info, u64 group_start,
 	btrfs_wait_ordered_roots(fs_info, U64_MAX, rc->block_group);
 
 	ret = btrfs_zone_finish(rc->block_group);
-	WARN_ON(ret && ret != -EAGAIN);
+	if (ret && ret != -EAGAIN)
+		btrfs_warn(fs_info,
+			   "zoned: failed to finish zones of block group %llu before relocation: %d",
+			   rc->block_group->start, ret);
 
 	if (should_relocate_using_remap_tree(bg)) {
 		if (bg->remap_bytes != 0) {
