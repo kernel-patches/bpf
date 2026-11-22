@@ -345,9 +345,9 @@ def rand_ports(count, stype=socket.SOCK_STREAM):
 def wait_port_listen(port, proto="tcp", ns=None, host=None, sleep=0.005, deadline=5):
     end = time.monotonic() + deadline
 
-    pattern = f":{port:04X} .* "
+    pattern = rf"^\s*\d+:\s+\S+:{port:04X}\s+\S+\s+"
     if proto == "tcp": # for tcp protocol additionally check the socket state
-        pattern += "0A"
+        pattern += r"0A\b"
     pattern = re.compile(pattern)
 
     while True:
