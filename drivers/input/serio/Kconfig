@@ -86,7 +86,8 @@ config SERIO_RPCKBD
 
 config SERIO_ASUS_TRANSFORMER_EC
 	tristate "Asus Transformer's Dock keyboard and touchpad controller"
-	depends on MFD_ASUS_TRANSFORMER_EC
+	depends on I2C
+	depends on MFD_ASUS_TRANSFORMER_EC || COMPILE_TEST
 	help
 	  Say Y here if you want to use the keyboard and/or touchpad on
 	  Asus Transformed's Mobile Dock.
