@@ -141,6 +141,14 @@ static int mlx5e_tc_tun_parse_geneve_vni(struct mlx5e_priv *priv,
 	if (!enc_keyid.mask->keyid)
 		return 0;
 
+	if (be32_to_cpu(enc_keyid.key->keyid) >= MLX5E_TC_TUN_N_VNI) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Tunnel key does not fit the 24 bit VNI");
+		netdev_warn(priv->netdev,
+			    "Tunnel key does not fit the 24 bit VNI\n");
+		return -EOPNOTSUPP;
+	}
+
 	if (!MLX5_CAP_ESW_FLOWTABLE_FDB(priv->mdev, ft_field_support.outer_geneve_vni)) {
 		NL_SET_ERR_MSG_MOD(extack, "Matching on GENEVE VNI is not supported");
 		netdev_warn(priv->netdev, "Matching on GENEVE VNI is not supported\n");
