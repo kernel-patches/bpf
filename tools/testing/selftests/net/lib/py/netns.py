@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .utils import ip
 
-libc = ctypes.cdll.LoadLibrary('libc.so.6')
+libc = ctypes.CDLL('libc.so.6', use_errno=True)
 
 
 class NetNS:
@@ -111,12 +111,24 @@ class NetNSEnter:
     def __init__(self, ns_name):
         self.ns_path = f"/run/netns/{ns_name}"
 
+    @staticmethod
+    def _setns(fd):
+        if libc.setns(fd, 0) == -1:
+            err = ctypes.get_errno()
+            raise OSError(err, os.strerror(err))
+
     def __enter__(self):
         self.saved = open("/proc/thread-self/ns/net")
-        with open(self.ns_path) as ns_file:
-            libc.setns(ns_file.fileno(), 0)
+        try:
+            with open(self.ns_path) as ns_file:
+                self._setns(ns_file.fileno())
+        except BaseException:
+            self.saved.close()
+            raise
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        libc.setns(self.saved.fileno(), 0)
-        self.saved.close()
+        try:
+            self._setns(self.saved.fileno())
+        finally:
+            self.saved.close()
