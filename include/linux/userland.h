@@ -16,8 +16,10 @@ struct file;
 struct nsproxy;
 struct pid;
 struct pid_namespace;
+struct rusage;
 struct task_struct;
 struct user_namespace;
+struct waitid_info;
 
 enum userland_state {
 	USERLAND_INIT		= 0,
@@ -45,6 +47,8 @@ bool userland_is_file(struct file *file);
 void userland_copy(struct task_struct *tsk, struct pid *pid,
 		   struct userland *userland);
 void userland_exit(struct pid_namespace *pid_ns, struct task_struct *tsk);
+long userland_waitid(int upid, struct waitid_info *infop, int options,
+		     struct rusage *ru);
 #else
 static inline void userland_put(struct userland *c)
 {
@@ -63,6 +67,12 @@ static inline void userland_copy(struct task_struct *tsk, struct pid *pid,
 static inline void userland_exit(struct pid_namespace *pid_ns,
 				 struct task_struct *tsk)
 {
+}
+
+static inline long userland_waitid(int upid, struct waitid_info *infop,
+				   int options, struct rusage *ru)
+{
+	return -EINVAL;
 }
 #endif /* CONFIG_USERLAND */
 

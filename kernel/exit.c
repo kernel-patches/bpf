@@ -71,6 +71,7 @@
 #include <linux/unwind_deferred.h>
 #include <linux/uaccess.h>
 #include <linux/pidfs.h>
+#include <linux/userland.h>
 
 #include <uapi/linux/wait.h>
 
@@ -1802,6 +1803,9 @@ static long kernel_waitid(int which, pid_t upid, struct waitid_info *infop,
 {
 	struct wait_opts wo;
 	long ret;
+
+	if (which == P_USERLAND)
+		return userland_waitid(upid, infop, options, ru);
 
 	ret = kernel_waitid_prepare(&wo, which, upid, infop, options, ru);
 	if (ret)
