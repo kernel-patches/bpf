@@ -698,7 +698,8 @@ static int dso__synthesize_plt_got_symbols(struct dso *dso, Elf *elf,
 		sym = symbol__new(shdr.sh_offset + i, shdr.sh_entsize, STB_GLOBAL, STT_FUNC, buf);
 		if (!sym)
 			goto out;
-		symbols__insert(dso__symbols(dso), sym);
+		if (symbols__insert(dso__symbols(dso), sym))
+			goto out;
 	}
 	err = 0;
 out:
@@ -752,7 +753,8 @@ int dso__synthesize_plt_symbols(struct dso *dso, struct symsrc *ss)
 	plt_sym = symbol__new(shdr_plt.sh_offset, plt_header_size, STB_GLOBAL, STT_FUNC, ".plt");
 	if (!plt_sym)
 		goto out_elf_end;
-	symbols__insert(dso__symbols(dso), plt_sym);
+	if (symbols__insert(dso__symbols(dso), plt_sym))
+		goto out_elf_end;
 
 	/* Only x86 has .plt.got */
 	if (machine_is_x86(ehdr.e_machine) &&
@@ -874,7 +876,8 @@ int dso__synthesize_plt_symbols(struct dso *dso, struct symsrc *ss)
 			goto out_elf_end;
 
 		plt_offset += plt_entry_size;
-		symbols__insert(dso__symbols(dso), f);
+		if (symbols__insert(dso__symbols(dso), f))
+			goto out_elf_end;
 		++nr;
 	}
 
@@ -1938,7 +1941,8 @@ dso__load_sym_internal(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 
 		arch__sym_update(f, &sym);
 
-		__symbols__insert(dso__symbols(curr_dso), f);
+		if (symbols__insert(dso__symbols(curr_dso), f))
+			goto out_elf_end;
 		nr++;
 	}
 	dso__put(curr_dso);

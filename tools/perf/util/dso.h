@@ -13,6 +13,7 @@
 #include "build-id.h"
 #include "debuginfo.h"
 #include "mutex.h"
+#include "symbol.h"
 #include <internal/rc_check.h>
 
 struct machine;
@@ -284,18 +285,12 @@ struct auxtrace_cache;
 DECLARE_RC_STRUCT(dso) {
 	struct mutex	 lock;
 	struct dsos	 *dsos;
-	struct rb_root_cached symbols;
-	struct symbol	 **symbol_names;
-	size_t		 symbol_names_len;
+	struct symbols	 symbols;
 	struct rb_root_cached inlined_nodes;
 	struct rb_root_cached srclines;
 	struct rb_root	 data_types;
 	struct rb_root	 global_vars;
 
-	struct {
-		u64		addr;
-		struct symbol	*symbol;
-	} last_find_result;
 	u64		 text_offset;
 	u64		 text_end;
 	const char	 *short_name;
@@ -348,7 +343,6 @@ DECLARE_RC_STRUCT(dso) {
 	u8		 is_64_bit:1;
 	u8		 bintype_searched:1;
 	u8		 debuginfo_searched:1;
-	bool		 sorted_by_name;
 	bool		 loaded;
 	u8		 rel;
 	char		 name[];
@@ -369,7 +363,7 @@ int dso_id__cmp(const struct dso_id *a, const struct dso_id *b);
 	symbols__visit(dso__symbols(dso), cb, data)
 
 #define dso__for_each_symbol_by_name(dso, cb, data)	\
-	dso__visit_symbols_by_name(dso, cb, data)
+	symbols__visit_by_name(dso__symbols(dso), cb, data)
 
 static inline void *dso__a2l(const struct dso *dso)
 {
@@ -598,26 +592,6 @@ static inline void dso__set_kernel(struct dso *dso, enum dso_space_type kernel)
 	RC_CHK_ACCESS(dso)->kernel = kernel;
 }
 
-static inline u64 dso__last_find_result_addr(const struct dso *dso)
-{
-	return RC_CHK_ACCESS(dso)->last_find_result.addr;
-}
-
-static inline void dso__set_last_find_result_addr(struct dso *dso, u64 addr)
-{
-	RC_CHK_ACCESS(dso)->last_find_result.addr = addr;
-}
-
-static inline struct symbol *dso__last_find_result_symbol(const struct dso *dso)
-{
-	return RC_CHK_ACCESS(dso)->last_find_result.symbol;
-}
-
-static inline void dso__set_last_find_result_symbol(struct dso *dso, struct symbol *symbol)
-{
-	RC_CHK_ACCESS(dso)->last_find_result.symbol = symbol;
-}
-
 static inline enum dso_load_errno *dso__load_errno(struct dso *dso)
 {
 	return &RC_CHK_ACCESS(dso)->load_errno;
@@ -731,29 +705,9 @@ static inline struct rb_root *dso__global_vars(struct dso *dso)
 	return &RC_CHK_ACCESS(dso)->global_vars;
 }
 
-static inline struct rb_root_cached *dso__symbols(struct dso *dso)
+static inline struct symbols *dso__symbols(struct dso *dso)
 {
 	return &RC_CHK_ACCESS(dso)->symbols;
-}
-
-static inline struct symbol **dso__symbol_names(struct dso *dso)
-{
-	return RC_CHK_ACCESS(dso)->symbol_names;
-}
-
-static inline void dso__set_symbol_names(struct dso *dso, struct symbol **names)
-{
-	RC_CHK_ACCESS(dso)->symbol_names = names;
-}
-
-static inline size_t dso__symbol_names_len(struct dso *dso)
-{
-	return RC_CHK_ACCESS(dso)->symbol_names_len;
-}
-
-static inline void dso__set_symbol_names_len(struct dso *dso, size_t len)
-{
-	RC_CHK_ACCESS(dso)->symbol_names_len = len;
 }
 
 static inline const char *dso__symsrc_filename(const struct dso *dso)
@@ -825,13 +779,18 @@ bool dso__loaded(const struct dso *dso);
 
 static inline bool dso__has_symbols(const struct dso *dso)
 {
-	return !RB_EMPTY_ROOT(&RC_CHK_ACCESS(dso)->symbols.rb_root);
+	struct symbols *symbols = (struct symbols *)&RC_CHK_ACCESS(dso)->symbols;
+	bool res;
+
+	down_read(&symbols->lock);
+	res = symbols->cnt > 0;
+	up_read(&symbols->lock);
+	return res;
 }
 
 char *dso__filename_with_chroot(const struct dso *dso, const char *filename);
 
 bool dso__sorted_by_name(const struct dso *dso);
-void dso__set_sorted_by_name(struct dso *dso);
 void dso__sort_by_name(struct dso *dso);
 
 int dso__swap_init(struct dso *dso, unsigned char eidata);
@@ -954,8 +913,6 @@ ssize_t dso__data_write_cache_addr(struct dso *dso, struct map *map,
 struct map *dso__new_map(const char *name);
 struct dso *machine__findnew_kernel(struct machine *machine, const char *name,
 				    const char *short_name, int dso_type);
-
-void dso__reset_find_symbol_cache(struct dso *dso);
 
 size_t dso__fprintf_symbols_by_name(struct dso *dso, FILE *fp);
 size_t dso__fprintf(struct dso *dso, FILE *fp);

@@ -2532,7 +2532,8 @@ static struct symbol *symbol__new_unresolved(u64 addr, struct map *map)
 			return NULL;
 		}
 
-		dso__insert_symbol(map__dso(map), sym);
+		if (dso__insert_symbol(map__dso(map), sym))
+			return NULL;
 	}
 
 	return sym;

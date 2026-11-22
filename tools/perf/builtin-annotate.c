@@ -258,17 +258,6 @@ static int add_sample(struct perf_sample *sample,
 	    (al->sym == NULL ||
 	     strcmp(ann->sym_hist_filter, al->sym->name) != 0)) {
 		/* We're only interested in a symbol named sym_hist_filter */
-		/*
-		 * FIXME: why isn't this done in the symbol_filter when loading
-		 * the DSO?
-		 */
-		if (al->sym != NULL) {
-			struct dso *dso = map__dso(al->map);
-
-			rb_erase_cached(&al->sym->rb_node, dso__symbols(dso));
-			symbol__delete(al->sym);
-			dso__reset_find_symbol_cache(dso);
-		}
 		return 0;
 	}
 

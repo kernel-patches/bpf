@@ -1802,12 +1802,13 @@ bool dso__loaded(const struct dso *dso)
 
 bool dso__sorted_by_name(const struct dso *dso)
 {
-	return RC_CHK_ACCESS(dso)->sorted_by_name;
-}
+	struct symbols *symbols = (struct symbols *)&RC_CHK_ACCESS(dso)->symbols;
+	bool res;
 
-void dso__set_sorted_by_name(struct dso *dso)
-{
-	RC_CHK_ACCESS(dso)->sorted_by_name = true;
+	down_read(&symbols->lock);
+	res = symbols->sorted_by_name;
+	up_read(&symbols->lock);
+	return res;
 }
 
 struct dso *dso__new_id(const char *name, const struct dso_id *id)
@@ -1825,9 +1826,7 @@ struct dso *dso__new_id(const char *name, const struct dso_id *id)
 			dso->id = *id;
 		dso__set_long_name_id(res, dso->name, false);
 		dso__set_short_name(res, dso->name, false);
-		dso->symbols = RB_ROOT_CACHED;
-		dso->symbol_names = NULL;
-		dso->symbol_names_len = 0;
+		symbols__init(&dso->symbols);
 		dso->inlined_nodes = RB_ROOT_CACHED;
 		dso->srclines = RB_ROOT_CACHED;
 		dso->data_types = RB_ROOT;
@@ -1838,7 +1837,6 @@ struct dso *dso__new_id(const char *name, const struct dso_id *id)
 		dso->is_64_bit = (sizeof(void *) == 8);
 		dso->loaded = 0;
 		dso->rel = 0;
-		dso->sorted_by_name = 0;
 		dso->has_srcline = 1;
 		dso->a2l_fails = 1;
 		dso->kernel = DSO_SPACE__USER;
@@ -1869,9 +1867,7 @@ void dso__delete(struct dso *dso)
 	/* free inlines first, as they reference symbols */
 	inlines__tree_delete(&RC_CHK_ACCESS(dso)->inlined_nodes);
 	srcline__tree_delete(&RC_CHK_ACCESS(dso)->srclines);
-	symbols__delete(&RC_CHK_ACCESS(dso)->symbols);
-	RC_CHK_ACCESS(dso)->symbol_names_len = 0;
-	zfree(&RC_CHK_ACCESS(dso)->symbol_names);
+	symbols__exit(&RC_CHK_ACCESS(dso)->symbols);
 	annotated_data_type__tree_delete(dso__data_types(dso));
 	global_var_type__tree_delete(dso__global_vars(dso));
 

@@ -453,7 +453,8 @@ int dso__load_bfd_symbols(struct dso *dso, const char *debugfile)
 		if (!symbol)
 			goto out_free;
 
-		symbols__insert(dso__symbols(dso), symbol);
+		if (symbols__insert(dso__symbols(dso), symbol))
+			goto out_free;
 	}
 #ifdef bfd_get_section
 #undef bfd_asymbol_section

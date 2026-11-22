@@ -213,57 +213,169 @@ static int choose_best_symbol(struct symbol *syma, struct symbol *symb)
 	return arch__choose_best_symbol(syma, symb);
 }
 
-void symbols__fixup_duplicate(struct rb_root_cached *symbols)
+void symbols__init(struct symbols *symbols)
+	__context_unsafe(/* initialization */)
 {
-	struct rb_node *nd;
-	struct symbol *curr, *next;
+	init_rwsem(&symbols->lock);
+	symbols->symbols = NULL;
+	symbols->symbols_by_name = NULL;
+	symbols->cnt = 0;
+	symbols->allocated = 0;
+	symbols->num_by_name = 0;
+	symbols->sorted = true;
+	symbols->sorted_by_name = false;
+}
+
+static void symbols__delete_locked(struct symbols *symbols)
+	__must_hold(&symbols->lock)
+{
+	for (unsigned int i = 0; i < symbols->cnt; i++)
+		symbol__delete(symbols->symbols[i]);
+
+	zfree(&symbols->symbols);
+	zfree(&symbols->symbols_by_name);
+	symbols->cnt = 0;
+	symbols->allocated = 0;
+	symbols->num_by_name = 0;
+	symbols->sorted = true;
+	symbols->sorted_by_name = false;
+}
+
+void symbols__delete(struct symbols *symbols)
+{
+	down_write(&symbols->lock);
+	symbols__delete_locked(symbols);
+	up_write(&symbols->lock);
+}
+
+void symbols__exit(struct symbols *symbols)
+{
+	symbols__delete(symbols);
+	exit_rwsem(&symbols->lock);
+}
+
+/*
+ * Order symbols by start address only, preserving insertion order among
+ * symbols sharing the same start address (matching the previous rbtree
+ * __symbols__insert() behavior so alias deduplication and IFUNC resolution
+ * remain unchanged).
+ */
+static inline bool symbol__less_or_equal(const struct symbol *a, const struct symbol *b)
+{
+	return a->start <= b->start;
+}
+
+static int symbols__sort_cmp(const void *vlhs, const void *vrhs)
+{
+	const struct symbol *lhs = *((const struct symbol **)vlhs);
+	const struct symbol *rhs = *((const struct symbol **)vrhs);
+
+	if (lhs->start != rhs->start)
+		return lhs->start < rhs->start ? -1 : 1;
+	return 0;
+}
+
+static void symbols__sort_locked(struct symbols *symbols)
+	__must_hold(&symbols->lock)
+{
+	if (symbols->sorted)
+		return;
+
+	if (symbols->cnt > 1) {
+		qsort(symbols->symbols, symbols->cnt, sizeof(struct symbol *),
+		      symbols__sort_cmp);
+	}
+	symbols->sorted = true;
+}
+
+/*
+ * Acquire @symbols->lock for reading after ensuring @symbols->symbols is
+ * sorted.
+ */
+void symbols__sort_read_lock(struct symbols *symbols)
+{
+	down_read(&symbols->lock);
+	while (!symbols->sorted) {
+		up_read(&symbols->lock);
+		down_write(&symbols->lock);
+		symbols__sort_locked(symbols);
+		up_write(&symbols->lock);
+		down_read(&symbols->lock);
+	}
+}
+
+/*
+ * Deduplicate symbols sharing the same start address by sorting @symbols and
+ * compacting the array in place, keeping the best symbol at each address as
+ * chosen by choose_best_symbol().
+ */
+void symbols__fixup_duplicate(struct symbols *symbols)
+{
+	unsigned int write_idx = 0;
 
 	if (symbol_conf.allow_aliases)
 		return;
 
-	nd = rb_first_cached(symbols);
+	down_write(&symbols->lock);
+	symbols__sort_locked(symbols);
+	if (symbols->cnt <= 1) {
+		up_write(&symbols->lock);
+		return;
+	}
 
-	while (nd) {
-		curr = rb_entry(nd, struct symbol, rb_node);
-again:
-		nd = rb_next(&curr->rb_node);
-		if (!nd)
-			break;
+	for (unsigned int read_idx = 1; read_idx < symbols->cnt; read_idx++) {
+		struct symbol *curr = symbols->symbols[write_idx];
+		struct symbol *next = symbols->symbols[read_idx];
 
-		next = rb_entry(nd, struct symbol, rb_node);
-		if (curr->start != next->start)
+		if (curr->start != next->start) {
+			symbols->symbols[++write_idx] = next;
 			continue;
+		}
 
 		if (choose_best_symbol(curr, next) == SYMBOL_A) {
 			if (symbol__type(next) == STT_GNU_IFUNC)
 				symbol__set_ifunc_alias(curr, true);
-			rb_erase_cached(&next->rb_node, symbols);
 			symbol__delete(next);
-			goto again;
 		} else {
 			if (symbol__type(curr) == STT_GNU_IFUNC)
 				symbol__set_ifunc_alias(next, true);
-			nd = rb_next(&curr->rb_node);
-			rb_erase_cached(&curr->rb_node, symbols);
 			symbol__delete(curr);
+			symbols->symbols[write_idx] = next;
 		}
 	}
+	symbols->cnt = write_idx + 1;
+	zfree(&symbols->symbols_by_name);
+	symbols->num_by_name = 0;
+	symbols->sorted_by_name = false;
+	up_write(&symbols->lock);
 }
 
 /* Update zero-sized symbols using the address of the next symbol */
-void symbols__fixup_end(struct rb_root_cached *symbols, bool is_kallsyms)
+void symbols__fixup_end(struct symbols *symbols, bool is_kallsyms)
 {
-	struct rb_node *nd, *prevnd = rb_first_cached(symbols);
 	struct symbol *curr, *prev;
+	bool addr_has_sized;
 
-	if (prevnd == NULL)
+	down_write(&symbols->lock);
+	symbols__sort_locked(symbols);
+
+	if (symbols->cnt == 0) {
+		up_write(&symbols->lock);
 		return;
+	}
 
-	curr = rb_entry(prevnd, struct symbol, rb_node);
+	curr = symbols->symbols[0];
+	addr_has_sized = curr->end > curr->start;
 
-	for (nd = rb_next(prevnd); nd; nd = rb_next(nd)) {
+	for (unsigned int i = 1; i < symbols->cnt; i++) {
 		prev = curr;
-		curr = rb_entry(nd, struct symbol, rb_node);
+		curr = symbols->symbols[i];
+
+		if (curr->start == prev->start) {
+			if (curr->end > curr->start)
+				addr_has_sized = true;
+			continue;
+		}
 
 		/*
 		 * On some architecture kernel text segment start is located at
@@ -281,39 +393,42 @@ void symbols__fixup_end(struct rb_root_cached *symbols, bool is_kallsyms)
 		 * like in:
 		 *   ffffffffc1937000 T hdmi_driver_init  [snd_hda_codec_hdmi]
 		 */
-		if (prev->end == prev->start) {
+		if (!addr_has_sized && prev->end == prev->start) {
 			const char *prev_mod;
 			const char *curr_mod;
 
 			if (!is_kallsyms) {
 				prev->end = curr->start;
-				continue;
+			} else {
+				prev_mod = strchr(prev->name, '[');
+				curr_mod = strchr(curr->name, '[');
+
+				/* Last kernel/module symbol mapped to end of page */
+				if (!prev_mod != !curr_mod) {
+					prev->end = roundup(prev->end + 4096, 4096);
+				/* Last symbol in the previous module */
+				} else if (prev_mod && strcmp(prev_mod, curr_mod)) {
+					prev->end = roundup(prev->end + 4096, 4096);
+				} else {
+					prev->end = curr->start;
+				}
+
+				/* The next module can start within that page */
+				if (prev->end > curr->start)
+					prev->end = curr->start;
+
+				pr_debug4("%s sym:%s end:%#" PRIx64 "\n",
+					  __func__, prev->name, prev->end);
 			}
-
-			prev_mod = strchr(prev->name, '[');
-			curr_mod = strchr(curr->name, '[');
-
-			/* Last kernel/module symbol mapped to end of page */
-			if (!prev_mod != !curr_mod)
-				prev->end = roundup(prev->end + 4096, 4096);
-			/* Last symbol in the previous module */
-			else if (prev_mod && strcmp(prev_mod, curr_mod))
-				prev->end = roundup(prev->end + 4096, 4096);
-			else
-				prev->end = curr->start;
-
-			/* The next module can start within that page */
-			if (prev->end > curr->start)
-				prev->end = curr->start;
-
-			pr_debug4("%s sym:%s end:%#" PRIx64 "\n",
-				  __func__, prev->name, prev->end);
 		}
+		addr_has_sized = curr->end > curr->start;
 	}
 
 	/* Last entry */
-	if (curr->end == curr->start)
+	if (!addr_has_sized && curr->end == curr->start)
 		curr->end = roundup(curr->start, 4096) + 4096;
+
+	up_write(&symbols->lock);
 }
 
 struct symbol *symbol__new(u64 start, u64 len, u8 binding, u8 type, const char *name)
@@ -388,67 +503,117 @@ static void symbol__set_idle(struct symbol *sym, bool idle)
 		new_flags |= (idle_val << SYMBOL_FLAG_IDLE_SHIFT);
 	} while (!atomic_compare_exchange_weak(&sym->flags, &old_flags, new_flags));
 }
-void symbols__delete(struct rb_root_cached *symbols)
+
+static int __symbols__insert(struct symbols *symbols, struct symbol *sym)
+	__must_hold(&symbols->lock)
 {
-	struct symbol *pos;
-	struct rb_node *next = rb_first_cached(symbols);
+	if (symbols->cnt == symbols->allocated) {
+		unsigned int to_allocate = symbols->allocated ? symbols->allocated * 2 : 32;
+		struct symbol **temp = realloc(symbols->symbols,
+					       sizeof(struct symbol *) * to_allocate);
 
-	while (next) {
-		pos = rb_entry(next, struct symbol, rb_node);
-		next = rb_next(&pos->rb_node);
-		rb_erase_cached(&pos->rb_node, symbols);
-		symbol__delete(pos);
-	}
-}
-
-void __symbols__insert(struct rb_root_cached *symbols, struct symbol *sym)
-{
-	struct rb_node **p = &symbols->rb_root.rb_node;
-	struct rb_node *parent = NULL;
-	const u64 ip = sym->start;
-	struct symbol *s;
-	bool leftmost = true;
-
-	while (*p != NULL) {
-		parent = *p;
-		s = rb_entry(parent, struct symbol, rb_node);
-		if (ip < s->start)
-			p = &(*p)->rb_left;
-		else {
-			p = &(*p)->rb_right;
-			leftmost = false;
+		if (!temp) {
+			symbol__delete(sym);
+			return -ENOMEM;
 		}
+		symbols->symbols = temp;
+		symbols->allocated = to_allocate;
 	}
-	rb_link_node(&sym->rb_node, parent, p);
-	rb_insert_color_cached(&sym->rb_node, symbols, leftmost);
+
+	if (symbols->sorted && symbols->cnt > 0 &&
+	    !symbol__less_or_equal(symbols->symbols[symbols->cnt - 1], sym))
+		symbols->sorted = false;
+
+	symbols->symbols[symbols->cnt++] = sym;
+	zfree(&symbols->symbols_by_name);
+	symbols->num_by_name = 0;
+	symbols->sorted_by_name = false;
+	return 0;
 }
 
-void symbols__insert(struct rb_root_cached *symbols, struct symbol *sym)
+int symbols__insert(struct symbols *symbols, struct symbol *sym)
 {
-	__symbols__insert(symbols, sym);
+	int ret;
+
+	down_write(&symbols->lock);
+	ret = __symbols__insert(symbols, sym);
+	up_write(&symbols->lock);
+	return ret;
 }
 
-static struct symbol *symbols__find(struct rb_root_cached *symbols, u64 ip)
+static inline bool symbol__covers(const struct symbol *s, u64 ip)
 {
-	struct rb_node *n;
+	u64 start = s->start;
+	u64 end = s->end;
+
+	return ip >= start && (ip < end || (ip == end && ip == start));
+}
+
+static struct symbol *symbols__find_range(struct symbol **arr, unsigned int cnt, u64 ip)
+{
+	unsigned int low = 0, high = cnt, idx;
+	u64 start;
+
+	while (low < high) {
+		unsigned int mid = low + (high - low) / 2;
+
+		if (arr[mid]->start <= ip)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+	if (low == 0)
+		return NULL;
+
+	/*
+	 * Rewind across any equal-start group so a trailing zero-length or
+	 * shorter alias at the same start address cannot mask an earlier
+	 * covering symbol.
+	 */
+	idx = low - 1;
+	start = arr[idx]->start;
+	while (idx > 0 && arr[idx - 1]->start == start)
+		idx--;
+	for (; idx < low; idx++) {
+		if (symbol__covers(arr[idx], ip))
+			return arr[idx];
+	}
+	return NULL;
+}
+
+/*
+ * Binary search @symbols->symbols for a symbol covering @ip. Lazily sorts
+ * @symbols under @symbols->lock if unsorted.
+ */
+static struct symbol *symbols__find(struct symbols *symbols, u64 ip)
+{
+	struct symbol *res;
 
 	if (symbols == NULL)
 		return NULL;
 
-	n = symbols->rb_root.rb_node;
+	symbols__sort_read_lock(symbols);
+	res = symbols__find_range(symbols->symbols, symbols->cnt, ip);
+	up_read(&symbols->lock);
 
-	while (n) {
-		struct symbol *s = rb_entry(n, struct symbol, rb_node);
+	return res;
+}
 
-		if (ip < s->start)
-			n = n->rb_left;
-		else if (ip > s->end || (ip == s->end && ip != s->start))
-			n = n->rb_right;
-		else
-			return s;
+int symbols__visit(struct symbols *symbols,
+		   int (*cb)(struct symbol *sym, void *data),
+		   void *data)
+{
+	int err = 0;
+
+	symbols__sort_read_lock(symbols);
+	for (unsigned int i = 0; i < symbols->cnt; i++) {
+		err = cb(symbols->symbols[i], data);
+		if (err)
+			break;
 	}
+	up_read(&symbols->lock);
 
-	return NULL;
+	return err;
 }
 
 static int symbols__sort_name_cmp(const void *vlhs, const void *vrhs)
@@ -459,27 +624,51 @@ static int symbols__sort_name_cmp(const void *vlhs, const void *vrhs)
 	return strcmp(lhs->name, rhs->name);
 }
 
-static struct symbol **symbols__sort_by_name(struct rb_root_cached *source, size_t *len)
+static int symbols__sort_by_name_locked(struct symbols *symbols)
+	__must_hold(&symbols->lock)
 {
-	struct rb_node *nd;
 	struct symbol **result;
-	size_t i = 0, size = 0;
+	unsigned int size = symbols->cnt;
 
-	for (nd = rb_first_cached(source); nd; nd = rb_next(nd))
-		size++;
+	if (symbols->sorted_by_name)
+		return 0;
+
+	zfree(&symbols->symbols_by_name);
+	symbols->num_by_name = 0;
+
+	if (size == 0) {
+		symbols->sorted_by_name = true;
+		return 0;
+	}
 
 	result = malloc(sizeof(*result) * size);
 	if (!result)
-		return NULL;
+		return -ENOMEM;
 
-	for (nd = rb_first_cached(source); nd; nd = rb_next(nd)) {
-		struct symbol *pos = rb_entry(nd, struct symbol, rb_node);
-
-		result[i++] = pos;
-	}
+	memcpy(result, symbols->symbols, sizeof(*result) * size);
 	qsort(result, size, sizeof(*result), symbols__sort_name_cmp);
-	*len = size;
-	return result;
+	symbols->symbols_by_name = result;
+	symbols->num_by_name = size;
+	symbols->sorted_by_name = true;
+	return 0;
+}
+
+static int symbols__sort_by_name_read_lock(struct symbols *symbols)
+	__acquires_shared(&symbols->lock)
+{
+	int err = 0;
+
+	down_read(&symbols->lock);
+	while (!symbols->sorted_by_name) {
+		up_read(&symbols->lock);
+		down_write(&symbols->lock);
+		err = symbols__sort_by_name_locked(symbols);
+		up_write(&symbols->lock);
+		down_read(&symbols->lock);
+		if (err)
+			break;
+	}
+	return symbols->sorted_by_name ? 0 : err;
 }
 
 int symbol__match_symbol_name(const char *name, const char *str,
@@ -548,58 +737,34 @@ static struct symbol *symbols__find_by_name(struct symbol *symbols[],
 	return s;
 }
 
-void dso__reset_find_symbol_cache(struct dso *dso)
+int dso__insert_symbol(struct dso *dso, struct symbol *sym)
 {
-	dso__set_last_find_result_addr(dso, 0);
-	dso__set_last_find_result_symbol(dso, NULL);
-}
-
-void dso__insert_symbol(struct dso *dso, struct symbol *sym)
-{
-	__symbols__insert(dso__symbols(dso), sym);
-
-	/* update the symbol cache if necessary */
-	if (dso__last_find_result_addr(dso) >= sym->start &&
-	    (dso__last_find_result_addr(dso) < sym->end ||
-	    sym->start == sym->end)) {
-		dso__set_last_find_result_symbol(dso, sym);
-	}
+	return symbols__insert(dso__symbols(dso), sym);
 }
 
 void dso__delete_symbol(struct dso *dso, struct symbol *sym)
 {
-	rb_erase_cached(&sym->rb_node, dso__symbols(dso));
-	symbol__delete(sym);
-	dso__reset_find_symbol_cache(dso);
+	struct symbols *symbols = dso__symbols(dso);
+
+	down_write(&symbols->lock);
+	for (unsigned int i = 0; i < symbols->cnt; i++) {
+		if (symbols->symbols[i] == sym) {
+			memmove(&symbols->symbols[i], &symbols->symbols[i + 1],
+				(symbols->cnt - i - 1) * sizeof(struct symbol *));
+			symbols->cnt--;
+			zfree(&symbols->symbols_by_name);
+			symbols->num_by_name = 0;
+			symbols->sorted_by_name = false;
+			symbol__delete(sym);
+			break;
+		}
+	}
+	up_write(&symbols->lock);
 }
 
 struct symbol *dso__find_symbol(struct dso *dso, u64 addr)
 {
-	if (dso__last_find_result_addr(dso) != addr || dso__last_find_result_symbol(dso) == NULL) {
-		dso__set_last_find_result_addr(dso, addr);
-		dso__set_last_find_result_symbol(dso, symbols__find(dso__symbols(dso), addr));
-	}
-
-	return dso__last_find_result_symbol(dso);
-}
-
-int symbols__visit(struct rb_root_cached *symbols,
-		   int (*cb)(struct symbol *sym, void *data),
-		   void *data)
-{
-	struct rb_node *nd;
-
-	if (!symbols)
-		return 0;
-
-	for (nd = rb_first_cached(symbols); nd; nd = rb_next(nd)) {
-		struct symbol *sym = rb_entry(nd, struct symbol, rb_node);
-		int ret = cb(sym, data);
-
-		if (ret)
-			return ret;
-	}
-	return 0;
+	return symbols__find(dso__symbols(dso), addr);
 }
 
 struct symbol *dso__find_symbol_nocache(struct dso *dso, u64 addr)
@@ -607,30 +772,23 @@ struct symbol *dso__find_symbol_nocache(struct dso *dso, u64 addr)
 	return symbols__find(dso__symbols(dso), addr);
 }
 
-int dso__visit_symbols_by_name(struct dso *dso,
-			       int (*cb)(struct symbol *sym, void *data),
-			       void *data)
-{
-	if (!dso)
-		return 0;
-
-	dso__sort_by_name(dso);
-	for (size_t i = 0; i < dso__symbol_names_len(dso); i++) {
-		int ret = cb(dso__symbol_names(dso)[i], data);
-
-		if (ret)
-			return ret;
-	}
-	return 0;
-}
-
 struct symbol *dso__next_symbol_by_name(struct dso *dso, size_t *idx)
 {
-	if (*idx + 1 >= dso__symbol_names_len(dso))
+	struct symbols *symbols;
+	struct symbol *res = NULL;
+
+	if (!dso)
 		return NULL;
 
-	++*idx;
-	return dso__symbol_names(dso)[*idx];
+	symbols = dso__symbols(dso);
+	if (!symbols__sort_by_name_read_lock(symbols) &&
+	    *idx + 1 < symbols->num_by_name) {
+		++*idx;
+		res = symbols->symbols_by_name[*idx];
+	}
+	up_read(&symbols->lock);
+
+	return res;
 }
 
  /*
@@ -638,29 +796,58 @@ struct symbol *dso__next_symbol_by_name(struct dso *dso, size_t *idx)
   */
 struct symbol *dso__find_symbol_by_name(struct dso *dso, const char *name, size_t *idx)
 {
-	struct symbol *s = symbols__find_by_name(dso__symbol_names(dso),
-						 dso__symbol_names_len(dso),
-						 name, SYMBOL_TAG_INCLUDE__NONE, idx);
-	if (!s) {
-		s = symbols__find_by_name(dso__symbol_names(dso), dso__symbol_names_len(dso),
-					  name, SYMBOL_TAG_INCLUDE__DEFAULT_ONLY, idx);
+	struct symbols *symbols;
+	struct symbol *s = NULL;
+
+	if (idx)
+		*idx = SIZE_MAX;
+	if (!dso)
+		return NULL;
+	symbols = dso__symbols(dso);
+	if (!symbols__sort_by_name_read_lock(symbols)) {
+		s = symbols__find_by_name(symbols->symbols_by_name,
+					  symbols->num_by_name,
+					  name, SYMBOL_TAG_INCLUDE__NONE, idx);
+		if (!s) {
+			s = symbols__find_by_name(symbols->symbols_by_name, symbols->num_by_name,
+						  name, SYMBOL_TAG_INCLUDE__DEFAULT_ONLY, idx);
+		}
 	}
+	up_read(&symbols->lock);
 	return s;
 }
 
 void dso__sort_by_name(struct dso *dso)
 {
-	mutex_lock(dso__lock(dso));
-	if (!dso__sorted_by_name(dso)) {
-		size_t len = 0;
+	struct symbols *symbols = dso__symbols(dso);
 
-		dso__set_symbol_names(dso, symbols__sort_by_name(dso__symbols(dso), &len));
-		if (dso__symbol_names(dso)) {
-			dso__set_symbol_names_len(dso, len);
-			dso__set_sorted_by_name(dso);
+	down_read(&symbols->lock);
+	if (!symbols->sorted_by_name) {
+		up_read(&symbols->lock);
+		down_write(&symbols->lock);
+		symbols__sort_by_name_locked(symbols);
+		up_write(&symbols->lock);
+		return;
+	}
+	up_read(&symbols->lock);
+}
+
+int symbols__visit_by_name(struct symbols *symbols,
+			   int (*cb)(struct symbol *sym, void *data),
+			   void *data)
+{
+	int err = symbols__sort_by_name_read_lock(symbols);
+
+	if (!err) {
+		for (size_t i = 0; i < symbols->num_by_name; i++) {
+			err = cb(symbols->symbols_by_name[i], data);
+			if (err)
+				break;
 		}
 	}
-	mutex_unlock(dso__lock(dso));
+	up_read(&symbols->lock);
+
+	return err;
 }
 
 /*
@@ -860,7 +1047,7 @@ static int map__process_kallsym_symbol(void *arg, const char *name,
 {
 	struct symbol *sym;
 	struct dso *dso = arg;
-	struct rb_root_cached *root = dso__symbols(dso);
+	struct symbols *root = dso__symbols(dso);
 
 	if (!symbol_type__filter(type))
 		return 0;
@@ -881,9 +1068,7 @@ static int map__process_kallsym_symbol(void *arg, const char *name,
 	 * We will pass the symbols to the filter later, in
 	 * map__split_kallsyms, when we have split the maps per module
 	 */
-	__symbols__insert(root, sym);
-
-	return 0;
+	return symbols__insert(root, sym);
 }
 
 /*
@@ -900,25 +1085,32 @@ static int maps__split_kallsyms_for_kcore(struct maps *kmaps, struct dso *dso)
 {
 	struct symbol *pos;
 	int count = 0;
-	struct rb_root_cached *root = dso__symbols(dso);
-	struct rb_root_cached old_root = *root;
-	struct rb_node *next = rb_first_cached(root);
+	struct symbols *root = dso__symbols(dso);
+	struct symbol **old_symbols;
+	unsigned int old_cnt;
 
 	if (!kmaps)
 		return -1;
 
-	*root = RB_ROOT_CACHED;
+	down_write(&root->lock);
+	symbols__sort_locked(root);
+	old_symbols = root->symbols;
+	old_cnt = root->cnt;
+	root->symbols = NULL;
+	root->cnt = 0;
+	root->allocated = 0;
+	root->sorted = true;
+	zfree(&root->symbols_by_name);
+	root->num_by_name = 0;
+	root->sorted_by_name = false;
+	up_write(&root->lock);
 
-	while (next) {
+	for (unsigned int i = 0; i < old_cnt; i++) {
 		struct map *curr_map;
 		struct dso *curr_map_dso;
 		char *module;
 
-		pos = rb_entry(next, struct symbol, rb_node);
-		next = rb_next(&pos->rb_node);
-
-		rb_erase_cached(&pos->rb_node, &old_root);
-		RB_CLEAR_NODE(&pos->rb_node);
+		pos = old_symbols[i];
 		module = strchr(pos->name, '\t');
 		if (module)
 			*module = '\0';
@@ -935,10 +1127,12 @@ static int maps__split_kallsyms_for_kcore(struct maps *kmaps, struct dso *dso)
 			pos->end = map__end(curr_map);
 		if (pos->end)
 			pos->end -= map__start(curr_map) - map__pgoff(curr_map);
-		symbols__insert(dso__symbols(curr_map_dso), pos);
-		++count;
+		if (symbols__insert(dso__symbols(curr_map_dso), pos) == 0)
+			++count;
 		map__put(curr_map);
 	}
+
+	free(old_symbols);
 
 	/* Symbols have been adjusted */
 	dso__set_adjust_symbols(dso, true);
@@ -958,8 +1152,10 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 	struct map *curr_map = map__get(initial_map);
 	struct symbol *pos;
 	int count = 0, moved = 0;
-	struct rb_root_cached *root = dso__symbols(dso);
-	struct rb_node *next = rb_first_cached(root);
+	struct symbols *root = dso__symbols(dso);
+	struct symbol **old_symbols;
+	unsigned int old_cnt, old_allocated;
+	unsigned int i, write_idx = 0;
 	int kernel_range = 0;
 	uint16_t e_machine = EM_NONE;
 
@@ -969,11 +1165,24 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 	machine = maps__machine(kmaps);
 	e_machine = perf_env__e_machine(machine->env, /*e_flags=*/NULL);
 
-	while (next) {
+	down_write(&root->lock);
+	symbols__sort_locked(root);
+	old_symbols = root->symbols;
+	old_cnt = root->cnt;
+	old_allocated = root->allocated;
+	root->symbols = NULL;
+	root->cnt = 0;
+	root->allocated = 0;
+	root->sorted = true;
+	zfree(&root->symbols_by_name);
+	root->num_by_name = 0;
+	root->sorted_by_name = false;
+	up_write(&root->lock);
+
+	for (i = 0; i < old_cnt; i++) {
 		char *module;
 
-		pos = rb_entry(next, struct symbol, rb_node);
-		next = rb_next(&pos->rb_node);
+		pos = old_symbols[i];
 
 		module = strchr(pos->name, '\t');
 		if (module) {
@@ -1058,7 +1267,7 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 			ndso = dso__new(dso_name);
 			map__zput(curr_map);
 			if (ndso == NULL)
-				return -1;
+				goto out_err;
 
 			dso__set_kernel(ndso, dso__kernel(dso));
 			if (dso__kernel(dso) == DSO_SPACE__KERNEL_GUEST) {
@@ -1071,20 +1280,20 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 			dso__set_loaded(ndso);
 			if (dsos__add(&machine->dsos, ndso)) {
 				dso__put(ndso);
-				return -1;
+				goto out_err;
 			}
 
 			curr_map = map__new2(pos->start, ndso);
 			if (curr_map == NULL) {
 				dso__put(ndso);
-				return -1;
+				goto out_err;
 			}
 
 			map__set_mapping_type(curr_map, MAPPING_TYPE__IDENTITY);
 			if (maps__insert(kmaps, curr_map)) {
 				map__zput(curr_map);
 				dso__put(ndso);
-				return -1;
+				goto out_err;
 			}
 			dso__put(ndso);
 			++kernel_range;
@@ -1097,17 +1306,34 @@ add_symbol:
 		if (!RC_CHK_EQUAL(curr_map, initial_map)) {
 			struct dso *curr_map_dso = map__dso(curr_map);
 
-			rb_erase_cached(&pos->rb_node, root);
-			symbols__insert(dso__symbols(curr_map_dso), pos);
-			++moved;
-		} else
+			if (symbols__insert(dso__symbols(curr_map_dso), pos) == 0)
+				++moved;
+		} else {
+			old_symbols[write_idx++] = pos;
 			++count;
+		}
 
 		continue;
 discard_symbol:
-		rb_erase_cached(&pos->rb_node, root);
 		symbol__delete(pos);
 	}
+
+	down_write(&root->lock);
+	if (root->cnt == 0) {
+		root->symbols = old_symbols;
+		root->cnt = write_idx;
+		root->allocated = old_allocated;
+		root->sorted = true;
+		old_symbols = NULL;
+	} else {
+		for (unsigned int j = 0; j < write_idx; j++)
+			__symbols__insert(root, old_symbols[j]);
+	}
+	zfree(&root->symbols_by_name);
+	root->num_by_name = 0;
+	root->sorted_by_name = false;
+	up_write(&root->lock);
+	free(old_symbols);
 
 	if (!RC_CHK_EQUAL(curr_map, initial_map) &&
 	    dso__kernel(dso) == DSO_SPACE__KERNEL_GUEST &&
@@ -1116,6 +1342,29 @@ discard_symbol:
 	}
 	map__put(curr_map);
 	return count + moved;
+
+out_err:
+	memmove(&old_symbols[write_idx], &old_symbols[i],
+		(old_cnt - i) * sizeof(struct symbol *));
+	write_idx += old_cnt - i;
+	down_write(&root->lock);
+	if (root->cnt == 0) {
+		root->symbols = old_symbols;
+		root->cnt = write_idx;
+		root->allocated = old_allocated;
+		root->sorted = (delta == 0);
+		old_symbols = NULL;
+	} else {
+		for (unsigned int j = 0; j < write_idx; j++)
+			__symbols__insert(root, old_symbols[j]);
+		root->sorted = false;
+	}
+	zfree(&root->symbols_by_name);
+	root->num_by_name = 0;
+	root->sorted_by_name = false;
+	up_write(&root->lock);
+	free(old_symbols);
+	return -1;
 }
 
 bool symbol__restricted_filename(const char *filename,
@@ -1676,7 +1925,8 @@ static int dso__load_perf_map(const char *map_path, struct dso *dso)
 		if (sym == NULL)
 			goto out_delete_line;
 
-		symbols__insert(dso__symbols(dso), sym);
+		if (symbols__insert(dso__symbols(dso), sym))
+			goto out_delete_line;
 		nr_syms++;
 	}
 

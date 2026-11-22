@@ -822,7 +822,7 @@ static int machine__process_ksymbol_register(struct machine *machine,
 		err = -ENOMEM;
 		goto out;
 	}
-	dso__insert_symbol(dso, sym);
+	err = dso__insert_symbol(dso, sym);
 out:
 	map__put(map);
 	dso__put(dso);

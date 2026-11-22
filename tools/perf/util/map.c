@@ -304,27 +304,35 @@ void map__put(struct map *map)
 
 void map__fixup_start(struct map *map)
 {
-	struct dso *dso = map__dso(map);
-	struct rb_root_cached *symbols = dso__symbols(dso);
-	struct rb_node *nd = rb_first_cached(symbols);
+	struct symbols *symbols = dso__symbols(map__dso(map));
 
-	if (nd != NULL) {
-		struct symbol *sym = rb_entry(nd, struct symbol, rb_node);
-
-		map__set_start(map, sym->start);
-	}
+	symbols__sort_read_lock(symbols);
+	if (symbols->cnt > 0)
+		map__set_start(map, symbols->symbols[0]->start);
+	up_read(&symbols->lock);
 }
 
 void map__fixup_end(struct map *map)
 {
-	struct dso *dso = map__dso(map);
-	struct rb_root_cached *symbols = dso__symbols(dso);
-	struct rb_node *nd = rb_last(&symbols->rb_root);
+	struct symbols *symbols = dso__symbols(map__dso(map));
 
-	if (nd != NULL) {
-		struct symbol *sym = rb_entry(nd, struct symbol, rb_node);
-		map__set_end(map, sym->end);
+	symbols__sort_read_lock(symbols);
+	if (symbols->cnt > 0) {
+		u64 last_start = symbols->symbols[symbols->cnt - 1]->start;
+		u64 end = symbols->symbols[symbols->cnt - 1]->end;
+
+		for (unsigned int i = symbols->cnt - 1; i > 0; i--) {
+			u64 sym_end;
+
+			if (symbols->symbols[i - 1]->start != last_start)
+				break;
+			sym_end = symbols->symbols[i - 1]->end;
+			if (sym_end > end)
+				end = sym_end;
+		}
+		map__set_end(map, end);
 	}
+	up_read(&symbols->lock);
 }
 
 #define DSO__DELETED "(deleted)"

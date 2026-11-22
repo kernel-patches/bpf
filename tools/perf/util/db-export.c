@@ -289,8 +289,8 @@ static int db_ids_from_al(struct db_export *dbe, struct addr_location *al,
 
 		if (!al->sym) {
 			al->sym = symbol__new(al->addr, 0, 0, 0, "unknown");
-			if (al->sym)
-				dso__insert_symbol(dso, al->sym);
+			if (al->sym && dso__insert_symbol(dso, al->sym))
+				al->sym = NULL;
 		}
 
 		if (al->sym) {
