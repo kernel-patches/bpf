@@ -12,6 +12,7 @@ hostprogs-always-$(CONFIG_SYSTEM_EXTRA_CERTIFICATE)	+= insert-sys-cert
 hostprogs-always-$(CONFIG_RUST_KERNEL_DOCTESTS)		+= rustdoc_test_builder
 hostprogs-always-$(CONFIG_RUST_KERNEL_DOCTESTS)		+= rustdoc_test_gen
 hostprogs-always-$(CONFIG_TRACEPOINTS)			+= tracepoint-update
+hostprogs-always-$(CONFIG_UNWINDER_DWARF_CFI_MINIFY)	+= min_eh_frame
 
 kallsyms-objs := kallsyms.o kallsyms-sysmap.o elf-parse.o
 sorttable-objs := sorttable.o elf-parse.o

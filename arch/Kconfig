@@ -528,6 +528,16 @@ config HAVE_UNWIND_USER_CFI
 	select UNWIND_USER
 	select UNWIND_DWARF_CFI
 
+config UNWINDER_DWARF_CFI_MINIFY
+	bool "Minify .eh_frame tables at build time"
+	depends on UNWINDER_DWARF_CFI
+	default y
+	help
+	  Strip unneeded callee-saved register opcodes and coalesce PC-advance
+	  bytecodes in .eh_frame sections at build time, reducing kernel unwind
+	  table memory usage while ensuring only Minimal DWARF CFA bytecodes
+	  remain in vmlinux and modules.
+
 config HAVE_PERF_REGS
 	bool
 	help
