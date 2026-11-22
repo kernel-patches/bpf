@@ -211,8 +211,8 @@ static int __rxe_odp_mr_copy(struct rxe_mr *mr, u64 iova, void *addr,
 		page = hmm_pfn_to_page(umem_odp->map.pfn_list[idx]);
 		user_va = kmap_local_page(page);
 
-		src = (dir == RXE_TO_MR_OBJ) ? addr : user_va;
-		dest = (dir == RXE_TO_MR_OBJ) ? user_va : addr;
+		src = (dir == RXE_TO_MR_OBJ) ? addr : user_va + offset;
+		dest = (dir == RXE_TO_MR_OBJ) ? user_va + offset : addr;
 
 		bytes = BIT(umem_odp->page_shift) - offset;
 		if (bytes > length)
@@ -222,6 +222,7 @@ static int __rxe_odp_mr_copy(struct rxe_mr *mr, u64 iova, void *addr,
 		kunmap_local(user_va);
 
 		length  -= bytes;
+		addr += bytes;
 		idx++;
 		offset = 0;
 	}
