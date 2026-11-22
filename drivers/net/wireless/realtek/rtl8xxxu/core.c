@@ -5242,6 +5242,24 @@ static bool rtl8xxxu_tx_rate_inject(struct ieee80211_tx_info *tx_info,
 }
 
 /*
+ * Retry limit of an injected frame: none if no ACK is expected, else the
+ * radiotap retry count. -1 leaves it to the hardware.
+ */
+static int rtl8xxxu_tx_retry_inject(struct ieee80211_tx_info *tx_info)
+{
+	if (!(tx_info->flags & IEEE80211_TX_CTL_INJECTED))
+		return -1;
+
+	if (tx_info->flags & IEEE80211_TX_CTL_NO_ACK)
+		return 0;
+
+	if (tx_info->control.flags & IEEE80211_TX_CTRL_RATE_INJECT)
+		return tx_info->control.rates[0].count - 1;
+
+	return -1;
+}
+
+/*
  * Fill in v1 (gen1) specific TX descriptor bits.
  * This format is used on 8188cu/8192cu/8723au
  */
@@ -5258,9 +5276,11 @@ rtl8xxxu_fill_txdesc_v1(struct ieee80211_hw *hw, struct ieee80211_hdr *hdr,
 	u8 tid = qc[0] & IEEE80211_QOS_CTL_TID_MASK;
 	u32 rate = 0;
 	u16 seq_number;
+	int retries;
 	bool inject;
 
 	inject = rtl8xxxu_tx_rate_inject(tx_info, &rate, &sgi);
+	retries = rtl8xxxu_tx_retry_inject(tx_info);
 
 	if (rtl8xxxu_debug & RTL8XXXU_DEBUG_TX)
 		dev_info(dev, "%s: TX rate: %d, pkt size %u\n",
@@ -5283,7 +5303,13 @@ rtl8xxxu_fill_txdesc_v1(struct ieee80211_hw *hw, struct ieee80211_hdr *hdr,
 	if (ieee80211_is_mgmt(hdr->frame_control)) {
 		tx_desc->txdw5 = cpu_to_le32(rate);
 		tx_desc->txdw4 |= cpu_to_le32(TXDESC32_USE_DRIVER_RATE);
-		tx_desc->txdw5 |= cpu_to_le32(6 << TXDESC32_RETRY_LIMIT_SHIFT);
+		if (retries < 0)
+			retries = 6;
+	}
+
+	if (retries >= 0) {
+		tx_desc->txdw5 |= le32_encode_bits(retries,
+						   TXDESC32_RETRY_LIMIT_MASK);
 		tx_desc->txdw5 |= cpu_to_le32(TXDESC32_RETRY_LIMIT_ENABLE);
 	}
 
@@ -7975,6 +8001,7 @@ static int rtl8xxxu_probe(struct usb_interface *interface,
 	SET_IEEE80211_PERM_ADDR(hw, priv->mac_addr);
 
 	hw->extra_tx_headroom = priv->fops->tx_desc_size;
+	hw->max_rate_tries = TXDESC32_RETRY_LIMIT_MAX + 1;
 	ieee80211_hw_set(hw, SIGNAL_DBM);
 
 	/*
