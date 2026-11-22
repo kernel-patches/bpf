@@ -3935,6 +3935,20 @@ static int hci_write_auth_enable_sync(struct hci_dev *hdev)
 				     HCI_CMD_TIMEOUT);
 }
 
+int hci_write_page_timeout_sync(struct hci_dev *hdev)
+{
+	__le16 timeout;
+
+	if (!hdev->def_page_timeout || !lmp_bredr_capable(hdev))
+		return 0;
+
+	timeout = cpu_to_le16(hdev->def_page_timeout);
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_WRITE_PG_TIMEOUT,
+				     sizeof(timeout), &timeout,
+				     HCI_CMD_TIMEOUT);
+}
+
 int hci_write_fast_connectable_sync(struct hci_dev *hdev, bool enable)
 {
 	struct hci_cp_write_page_scan_activity cp;
@@ -4542,6 +4556,8 @@ static const struct hci_init_stage hci_init2[] = {
 	HCI_INIT(hci_read_local_ext_features_1_sync),
 	/* HCI_OP_WRITE_AUTH_ENABLE */
 	HCI_INIT(hci_write_auth_enable_sync),
+	/* HCI_OP_WRITE_PG_TIMEOUT */
+	HCI_INIT(hci_write_page_timeout_sync),
 	{}
 };
 
