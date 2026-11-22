@@ -488,9 +488,13 @@ static int mlx5e_set_ringparam(struct net_device *dev,
 	if (err)
 		return err;
 
-	/* Might need to adjust HW-GRO if it was kept on/off due to hds. */
-	if (dev->cfg->hds_config != kernel_param->tcp_data_split)
+	/* Might need to adjust HW-GRO if it was kept on/off due to hds.
+	 * XDP features depend on hds as well.
+	 */
+	if (dev->cfg->hds_config != kernel_param->tcp_data_split) {
 		netdev_update_features(priv->netdev);
+		mlx5e_set_xdp_feature(priv);
+	}
 
 	return 0;
 }

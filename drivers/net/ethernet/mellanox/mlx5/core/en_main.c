@@ -4577,12 +4577,14 @@ static int mlx5e_handle_feature(struct net_device *netdev,
 
 void mlx5e_set_xdp_feature(struct mlx5e_priv *priv)
 {
+	struct netdev_config *cfg = priv->netdev->cfg_pending;
 	struct mlx5e_params *params = &priv->channels.params;
 	struct net_device *netdev = priv->netdev;
 	xdp_features_t val = 0;
 
+	/* XDP can't run with HW-GRO, and tcp-data-split keeps HW-GRO on */
 	if (netdev->netdev_ops->ndo_bpf &&
-	    params->packet_merge.type == MLX5E_PACKET_MERGE_NONE)
+	    cfg->hds_config != ETHTOOL_TCP_DATA_SPLIT_ENABLED)
 		val = NETDEV_XDP_ACT_BASIC | NETDEV_XDP_ACT_REDIRECT |
 		      NETDEV_XDP_ACT_XSK_ZEROCOPY |
 		      NETDEV_XDP_ACT_RX_SG;
@@ -4690,17 +4692,6 @@ static netdev_features_t mlx5e_fix_features(struct net_device *netdev,
 		}
 		if (features & NETIF_F_GRO_HW) {
 			netdev_warn(netdev, "Disabling HW-GRO, not supported in legacy RQ\n");
-			features &= ~NETIF_F_GRO_HW;
-		}
-	}
-
-	if (params->xdp_prog) {
-		if (features & NETIF_F_LRO) {
-			netdev_warn(netdev, "LRO is incompatible with XDP\n");
-			features &= ~NETIF_F_LRO;
-		}
-		if (features & NETIF_F_GRO_HW) {
-			netdev_warn(netdev, "HW GRO is incompatible with XDP\n");
 			features &= ~NETIF_F_GRO_HW;
 		}
 	}
@@ -5293,20 +5284,6 @@ static void mlx5e_tx_timeout(struct net_device *dev, unsigned int txqueue)
 	queue_work(priv->wq, &priv->tx_timeout_work);
 }
 
-static int mlx5e_xdp_allowed(struct net_device *netdev, struct mlx5_core_dev *mdev,
-			     struct mlx5e_params *params)
-{
-	if (params->packet_merge.type != MLX5E_PACKET_MERGE_NONE) {
-		netdev_warn(netdev, "can't set XDP while HW-GRO/LRO is on, disable them first\n");
-		return -EINVAL;
-	}
-
-	if (!mlx5e_params_validate_xdp(netdev, mdev, params))
-		return -EINVAL;
-
-	return 0;
-}
-
 static void mlx5e_rq_replace_xdp_prog(struct mlx5e_rq *rq, struct bpf_prog *prog)
 {
 	struct bpf_prog *old_prog;
@@ -5331,10 +5308,9 @@ static int mlx5e_xdp_set(struct net_device *netdev, struct bpf_prog *prog)
 	new_params = priv->channels.params;
 	new_params.xdp_prog = prog;
 
-	if (prog) {
-		err = mlx5e_xdp_allowed(netdev, priv->mdev, &new_params);
-		if (err)
-			goto unlock;
+	if (prog && !mlx5e_params_validate_xdp(netdev, priv->mdev, &new_params)) {
+		err = -EINVAL;
+		goto unlock;
 	}
 
 	/* no need for full reset when exchanging programs */
@@ -5368,10 +5344,6 @@ static int mlx5e_xdp_set(struct net_device *netdev, struct bpf_prog *prog)
 
 unlock:
 	mutex_unlock(&priv->state_lock);
-
-	/* Need to fix some features. */
-	if (!err)
-		netdev_update_features(netdev);
 
 	return err;
 }
