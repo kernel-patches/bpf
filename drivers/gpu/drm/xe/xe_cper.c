@@ -205,20 +205,18 @@ static void cper_record_emit(struct xe_device *xe, u8 severity,
  * @xe: The &xe_device
  * @cper_sev: CPER severity
  * @sigid: Error signature identifier
- * @counter: RAS error class
- * @response: Counter response returned by firmware for @counter
+ * @response: Counter response returned by firmware
  *
  * Build and emit a CPER record from @response.
  */
 void xe_cper_emit_counter(struct xe_device *xe, int cper_sev, enum xe_sigid sigid,
-			  const struct xe_ras_error_class *counter,
 			  const struct xe_ras_get_counter_response *response)
 {
 	struct xe_cper_intel_hdr ihdr = {};
 
 	xe_assert(xe, is_hw_sigid(sigid));
 
-	cper_init_intel_hdr(xe, counter, response->timestamp,
+	cper_init_intel_hdr(xe, &response->counter, response->timestamp,
 			    sigid, response->value, &ihdr);
 	cper_record_emit(xe, cper_sev, &INTEL_CPER_NOTIFY_GPU_ERROR, &ihdr, NULL, 0);
 }
@@ -237,7 +235,7 @@ static void cper_emit_hw_err(struct xe_device *xe, int cper_sev, enum xe_sigid s
 		return;
 	}
 
-	xe_cper_emit_counter(xe, cper_sev, sigid, counter, &response);
+	xe_cper_emit_counter(xe, cper_sev, sigid, &response);
 }
 
 /**

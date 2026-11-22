@@ -763,8 +763,7 @@ static int get_counter(struct xe_device *xe, struct xe_ras_error_class *counter,
 	*value = response.value;
 	if (emit_cper)
 		xe_cper_emit_counter(xe, ras_sev_to_cper_sev(counter->common.severity),
-				     ras_comp_to_hw_sigid(counter->common.component),
-				     counter, &response);
+				     ras_comp_to_hw_sigid(counter->common.component), &response);
 	return 0;
 }
 
