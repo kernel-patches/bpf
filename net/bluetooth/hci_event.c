@@ -6814,6 +6814,13 @@ static void hci_le_pa_sync_established_evt(struct hci_dev *hdev, void *data,
 
 	bt_dev_dbg(hdev, "status 0x%2.2x", ev->status);
 
+	/* HCI_LE_Periodic_Advertising_Create_Sync_Cancel is only sent when
+	 * hci_le_pa_create_sync() times out, which create_pa_complete()
+	 * already reports.
+	 */
+	if (ev->status == HCI_ERROR_CANCELLED_BY_HOST)
+		return;
+
 	hci_dev_lock(hdev);
 	hci_store_wake_reason(hdev, &ev->bdaddr, ev->bdaddr_type);
 
