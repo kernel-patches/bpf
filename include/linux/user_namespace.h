@@ -35,8 +35,6 @@ struct uid_gid_map { /* 64 bytes -- 1 cache line */
 	};
 };
 
-#define USERNS_SETGROUPS_ALLOWED 1UL
-
 #define USERNS_INIT_FLAGS USERNS_SETGROUPS_ALLOWED
 
 struct ucounts;
