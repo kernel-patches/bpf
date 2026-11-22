@@ -2881,7 +2881,7 @@ static int unpin_extent_range(struct btrfs_fs_info *fs_info,
 		if (cluster && cluster->fragmented &&
 		    total_unpinned > empty_cluster) {
 			spin_lock(&cluster->lock);
-			cluster->fragmented = 0;
+			cluster->fragmented = false;
 			spin_unlock(&cluster->lock);
 		}
 
@@ -3956,7 +3956,7 @@ static int find_free_extent_unclustered(struct btrfs_block_group *bg,
 	 */
 	if (unlikely(last_ptr)) {
 		spin_lock(&last_ptr->lock);
-		last_ptr->fragmented = 1;
+		last_ptr->fragmented = true;
 		spin_unlock(&last_ptr->lock);
 	}
 	if (ffe_ctl->cached) {
