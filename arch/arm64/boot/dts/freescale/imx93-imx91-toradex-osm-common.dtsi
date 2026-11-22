@@ -517,6 +517,7 @@
 	pinctrl-1 = <&pinctrl_sdio_b>;
 	pinctrl-2 = <&pinctrl_sdio_b>;
 	disable-wp;
+	vqmmc-supply = <&reg_1v8>;
 };
 
 &wdog3 {
