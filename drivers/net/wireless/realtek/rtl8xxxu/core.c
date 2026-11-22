@@ -5223,6 +5223,24 @@ static void rtl8xxxu_dump_action(struct device *dev,
 	}
 }
 
+static bool rtl8xxxu_tx_rate_inject(struct ieee80211_tx_info *tx_info,
+				    u32 *rate, bool *sgi)
+{
+	struct ieee80211_tx_rate *txrate = &tx_info->control.rates[0];
+
+	if (!(tx_info->control.flags & IEEE80211_TX_CTRL_RATE_INJECT))
+		return false;
+
+	if (txrate->flags & IEEE80211_TX_RC_MCS)
+		*rate = DESC_RATE_MCS0 + txrate->idx;
+	else
+		*rate = rtl8xxxu_legacy_ratetable[txrate->idx].hw_value;
+
+	*sgi = txrate->flags & IEEE80211_TX_RC_SHORT_GI;
+
+	return true;
+}
+
 /*
  * Fill in v1 (gen1) specific TX descriptor bits.
  * This format is used on 8188cu/8192cu/8723au
@@ -5240,6 +5258,9 @@ rtl8xxxu_fill_txdesc_v1(struct ieee80211_hw *hw, struct ieee80211_hdr *hdr,
 	u8 tid = qc[0] & IEEE80211_QOS_CTL_TID_MASK;
 	u32 rate = 0;
 	u16 seq_number;
+	bool inject;
+
+	inject = rtl8xxxu_tx_rate_inject(tx_info, &rate, &sgi);
 
 	if (rtl8xxxu_debug & RTL8XXXU_DEBUG_TX)
 		dev_info(dev, "%s: TX rate: %d, pkt size %u\n",
@@ -5284,6 +5305,10 @@ rtl8xxxu_fill_txdesc_v1(struct ieee80211_hw *hw, struct ieee80211_hdr *hdr,
 
 	if (sgi)
 		tx_desc->txdw5 |= cpu_to_le32(TXDESC32_SHORT_GI);
+
+	if (inject)
+		tx_desc->txdw4 |= cpu_to_le32(TXDESC32_USE_DRIVER_RATE |
+					      TXDESC_DISABLE_DATA_FB);
 
 	/*
 	 * rts_rate is zero if RTS/CTS or CTS to SELF are not enabled
