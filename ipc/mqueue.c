@@ -32,6 +32,7 @@
 #include <linux/mutex.h>
 #include <linux/nsproxy.h>
 #include <linux/pid.h>
+#include <linux/userland.h>
 #include <linux/ipc_namespace.h>
 #include <linux/user_namespace.h>
 #include <linux/slab.h>
@@ -398,6 +399,20 @@ out_inode:
 	iput(inode);
 err:
 	return ERR_PTR(ret);
+}
+
+static int mqueue_set_userland(struct fs_context *fc, struct userland *userland)
+{
+	struct mqueue_fs_context *ctx = fc->fs_private;
+	struct ipc_namespace *ipc_ns;
+
+	scoped_guard(spinlock, &userland->lock)
+		ipc_ns = get_ipc_ns(userland->ns->ipc_ns);
+	put_ipc_ns(ctx->ipc_ns);
+	ctx->ipc_ns = ipc_ns;
+	put_user_ns(fc->user_ns);
+	fc->user_ns = get_user_ns(ipc_ns->user_ns);
+	return 0;
 }
 
 static int mqueue_fill_super(struct super_block *sb, struct fs_context *fc)
@@ -1613,6 +1628,7 @@ static const struct super_operations mqueue_super_ops = {
 
 static const struct fs_context_operations mqueue_fs_context_ops = {
 	.free		= mqueue_fs_context_free,
+	.set_userland	= mqueue_set_userland,
 	.get_tree	= mqueue_get_tree,
 };
 
@@ -1620,7 +1636,7 @@ static struct file_system_type mqueue_fs_type = {
 	.name			= "mqueue",
 	.init_fs_context	= mqueue_init_fs_context,
 	.kill_sb		= kill_anon_super,
-	.fs_flags		= FS_USERNS_MOUNT,
+	.fs_flags		= FS_USERNS_MOUNT | FS_USERLAND_MOUNT,
 };
 
 int mq_init_ns(struct ipc_namespace *ns)
