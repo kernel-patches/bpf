@@ -246,6 +246,19 @@ config UNWINDER_ORC
 	  Enabling this option will increase the kernel's runtime memory usage
 	  by roughly 2-4MB, depending on your kernel config.
 
+config UNWINDER_DWARF_CFI
+	bool "Minimal DWARF CFI unwinder"
+	depends on X86_64
+	select UNWIND_DWARF_CFI
+	select UNWIND_TABLES
+	help
+	  This option enables the Minimal DWARF Call Frame Information (CFI)
+	  unwinder for kernel stack traces.  It interprets a strictly bounded
+	  subset of compiler-generated .eh_frame / .eh_frame_hdr tables
+	  matching SFrame's stack state model (PC advances, SP/FP-based CFA
+	  offsets, and FP/RA stack offsets) without requiring frame pointers
+	  in C code or objtool ORC table generation.
+
 config UNWINDER_FRAME_POINTER
 	bool "Frame pointer unwinder"
 	select ARCH_WANT_FRAME_POINTERS
