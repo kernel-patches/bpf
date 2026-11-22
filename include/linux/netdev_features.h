@@ -234,6 +234,12 @@ static inline int find_next_netdev_feature(u64 feature, unsigned long start)
  */
 #define NETIF_F_UPPER_DISABLES	NETIF_F_LRO
 
+/*
+ * Receive offloads which coalesce frames. XDP has to see the frames as the
+ * wire delivered them, so these are disabled while a program is attached.
+ */
+#define NETIF_F_XDP_DISABLES	(NETIF_F_GRO_HW | NETIF_F_LRO)
+
 /* changeable features with no special hardware requirements */
 #define NETIF_F_SOFT_FEATURES	(NETIF_F_GSO | NETIF_F_GRO)
 

@@ -6641,7 +6641,6 @@ static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 			static_branch_dec(&generic_xdp_needed_key);
 		} else if (new && !old) {
 			static_branch_inc(&generic_xdp_needed_key);
-			netif_disable_lro(dev);
 		}
 		break;
 
@@ -10601,26 +10600,35 @@ static void dev_xdp_set_prog(struct net_device *dev, enum bpf_xdp_mode mode,
 	dev->xdp_state[mode].prog = prog;
 }
 
-/* Try to clear HW-GRO before the driver reconfigures for XDP.
+static const char *dev_xdp_rx_agg_name(netdev_features_t features)
+{
+	return features & NETIF_F_GRO_HW ? "HW-GRO" : "LRO";
+}
+
+/* Try to clear HW-GRO and LRO before the driver reconfigures for XDP.
  * Driver may add features back in via ndo_fix_features(), due to feature
  * dependencies. In that case we can't run XDP at all.
  */
 static int dev_xdp_clear_rx_agg(struct net_device *dev,
 				struct netlink_ext_ack *extack)
 {
-	if (!(dev->features & NETIF_F_GRO_HW))
+	netdev_features_t agg = dev->features & NETIF_F_XDP_DISABLES;
+
+	if (!agg)
 		return 0;
-	if (!(dev->hw_features & NETIF_F_GRO_HW)) {
-		NL_SET_ERR_MSG(extack,
-			       "unable to disable HW-GRO, fixed on");
+	if (agg & ~dev->hw_features) {
+		NL_SET_ERR_MSG_FMT(extack, "unable to disable %s, fixed on",
+				   dev_xdp_rx_agg_name(agg & ~dev->hw_features));
 		return -EOPNOTSUPP;
 	}
 
 	netdev_update_features(dev);
 
-	if (dev->features & NETIF_F_GRO_HW) {
-		NL_SET_ERR_MSG(extack,
-			       "unable to disable HW-GRO, required by another feature");
+	agg = dev->features & NETIF_F_XDP_DISABLES;
+	if (agg) {
+		NL_SET_ERR_MSG_FMT(extack,
+				   "unable to disable %s, required by another feature",
+				   dev_xdp_rx_agg_name(agg));
 		return -EBUSY;
 	}
 
@@ -10688,7 +10696,7 @@ int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 
 	if (old_prog) {
 		bpf_prog_put(old_prog);
-		/* The last program is gone, HW-GRO may be available again */
+		/* No program left, HW-GRO and LRO may be available again */
 		if (!bpf->prog)
 			netdev_update_features(dev);
 	}
@@ -10926,7 +10934,7 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 	dev->xdp_pending = 0;
 	if (cur_prog) {
 		bpf_prog_put(cur_prog);
-		/* The last program is gone, HW-GRO may be available again */
+		/* No program left, HW-GRO and LRO may be available again */
 		if (!new_prog)
 			netdev_update_features(dev);
 	}
@@ -11438,9 +11446,9 @@ int __netdev_update_features(struct net_device *dev)
 	/* GRO_HW may be added back in via ndo_fix_features e.g. if driver needs
 	 * it to honor the HDS config, clear it before the fix features call.
 	 */
-	if ((features & NETIF_F_GRO_HW) && dev_xdp_prog_count(dev)) {
-		netdev_dbg(dev, "Dropping HW-GRO feature since XDP is attached.\n");
-		features &= ~NETIF_F_GRO_HW;
+	if ((features & NETIF_F_XDP_DISABLES) && dev_xdp_prog_count(dev)) {
+		netdev_dbg(dev, "Dropping HW-GRO and LRO features since XDP is attached.\n");
+		features &= ~NETIF_F_XDP_DISABLES;
 	}
 
 	if (dev->netdev_ops->ndo_fix_features)
