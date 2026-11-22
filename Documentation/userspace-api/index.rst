@@ -17,6 +17,7 @@ System calls
    :maxdepth: 1
 
    unshare
+   userland
    futex2
    ebpf/index
    ioctl/index
