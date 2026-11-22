@@ -18,6 +18,7 @@
 #define P_PID		1
 #define P_PGID		2
 #define P_PIDFD		3
+#define P_USERLAND	4
 
 
 #endif /* _UAPI_LINUX_WAIT_H */

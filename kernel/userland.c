@@ -15,6 +15,7 @@
 #include <linux/wait.h>
 #include <uapi/linux/wait.h>
 #include <linux/file.h>
+#include <linux/freezer.h>
 #include <linux/fs.h>
 #include <linux/anon_inodes.h>
 #include <linux/userland.h>
@@ -39,6 +40,8 @@
 #include <net/net_namespace.h>
 #include <linux/idr.h>
 #include <uapi/linux/userland.h>
+
+#include "exit.h"
 
 void userland_put(struct userland *c)
 {
@@ -211,6 +214,86 @@ static long userland_share_nsfd(struct userland *c, unsigned long arg)
 		old_time_children->ops->put(old_time_children);
 	}
 	return 0;
+}
+
+/**
+ * DOC: P_USERLAND
+ *
+ * ``waitid(P_USERLAND, userland_fd, infop, options, NULL)`` waits freezably until
+ * ``userland_fd`` reaches ``USERLAND_DEAD`` (unless ``WNOHANG`` or ``O_NONBLOCK`` is
+ * set) and writes init's exit information into ``infop`` without consuming it.
+ * ``options`` must include ``WEXITED`` and may include ``WNOHANG`` and
+ * ``WNOWAIT``; ``rusage`` must be ``NULL``, and the caller must run in an
+ * ancestor active PID namespace.
+ */
+long userland_waitid(int upid, struct waitid_info *infop, int options,
+		     struct rusage *ru)
+{
+	struct pid_namespace *pid_ns;
+	unsigned int f_flags;
+	struct userland *userland;
+	bool nonblock;
+	int status;
+	kuid_t uid;
+	long ret;
+
+	if (upid < 0 || ru)
+		return -EINVAL;
+	if (options & ~(WEXITED | WNOHANG | WNOWAIT))
+		return -EINVAL;
+	if (!(options & WEXITED))
+		return -EINVAL;
+
+	CLASS(fd, f)(upid);
+	if (fd_empty(f) || !userland_is_file(fd_file(f)))
+		return -EBADF;
+
+	f_flags = READ_ONCE(fd_file(f)->f_flags);
+	nonblock = (options & WNOHANG) || (f_flags & O_NONBLOCK);
+	userland = fd_file(f)->private_data;
+	pid_ns = task_active_pid_ns(current);
+
+	if (!pidns_is_ancestor(userland->ns->pid_ns_for_children, pid_ns))
+		return -ECHILD;
+	for (;;) {
+		enum userland_state state;
+
+		scoped_guard(spinlock, &userland->lock) {
+			state = userland->state;
+			if (state == USERLAND_INIT)
+				return -ECHILD;
+			if (state == USERLAND_DEAD) {
+				ret = pid_nr_ns(userland->init_pid, pid_ns);
+				if (ret <= 0)
+					return -ECHILD;
+				status = userland->exit_code;
+				uid = userland->init_uid;
+			}
+		}
+		if (state == USERLAND_DEAD)
+			break;
+		if (nonblock)
+			return (options & WNOHANG) ? 0 : -EAGAIN;
+
+		ret = wait_event_freezable(userland->waitq,
+					   READ_ONCE(userland->state) ==
+					   USERLAND_DEAD ||
+					   READ_ONCE(userland->state) ==
+					   USERLAND_INIT);
+		if (ret)
+			return ret;
+	}
+
+	if ((status & 0x7f) == 0) {
+		infop->cause = CLD_EXITED;
+		infop->status = status >> 8;
+	} else {
+		infop->cause = (status & 0x80) ? CLD_DUMPED : CLD_KILLED;
+		infop->status = status & 0x7f;
+	}
+	infop->pid = ret;
+	infop->uid = from_kuid_munged(current_user_ns(), uid);
+	return ret;
 }
 
 static long userland_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
