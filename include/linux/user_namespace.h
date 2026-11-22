@@ -182,6 +182,7 @@ static inline struct user_namespace *get_user_ns(struct user_namespace *ns)
 }
 
 extern int create_user_ns(struct cred *new);
+int install_user_ns_cred(struct cred *cred, struct user_namespace *user_ns);
 extern int unshare_userns(unsigned long unshare_flags, struct cred **new_cred);
 extern void __put_user_ns(struct user_namespace *ns);
 
@@ -220,6 +221,12 @@ static inline struct user_namespace *get_user_ns(struct user_namespace *ns)
 }
 
 static inline int create_user_ns(struct cred *new)
+{
+	return -EINVAL;
+}
+
+static inline int install_user_ns_cred(struct cred *cred,
+				       struct user_namespace *user_ns)
 {
 	return -EINVAL;
 }
