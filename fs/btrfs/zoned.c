@@ -2541,9 +2541,6 @@ static int call_zone_finish(struct btrfs_block_group *block_group,
 	bool cleared;
 	int ret;
 
-	if (!device->bdev)
-		return 0;
-
 	if (zinfo->max_active_zones == 0)
 		return 0;
 
@@ -2576,6 +2573,9 @@ static int do_zone_finish(struct btrfs_block_group *block_group, bool fully_writ
 	const bool is_metadata = (block_group->flags &
 			(BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM));
 	struct btrfs_dev_replace *dev_replace = &fs_info->dev_replace;
+	enum btrfs_raid_types index;
+	bool zones_full;
+	int failed = 0;
 	int ret = 0;
 	int i;
 
@@ -2642,6 +2642,13 @@ static int do_zone_finish(struct btrfs_block_group *block_group, bool fully_writ
 	}
 
 	clear_bit(BLOCK_GROUP_FLAG_ZONE_IS_ACTIVE, &block_group->runtime_flags);
+	/*
+	 * If the block group is allocated up to the zone capacity,
+	 * everything is written and the zones should be full already. A
+	 * truncated or failed write at the end is not detected here. That
+	 * would need a zone report from every device.
+	 */
+	zones_full = (block_group->alloc_offset == block_group->zone_capacity);
 	block_group->alloc_offset = block_group->zone_capacity;
 	if (block_group->flags & (BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM))
 		block_group->meta_write_pointer = block_group->start +
@@ -2654,11 +2661,40 @@ static int do_zone_finish(struct btrfs_block_group *block_group, bool fully_writ
 	down_read(&dev_replace->rwsem);
 	map = block_group->physical_map;
 	for (i = 0; i < map->num_stripes; i++) {
-		ret = call_zone_finish(block_group, &map->stripes[i]);
-		if (ret)
-			break;
+		struct btrfs_io_stripe *stripe = &map->stripes[i];
+		int err;
+
+		if (!stripe->dev->bdev) {
+			failed++;
+			continue;
+		}
+
+		err = call_zone_finish(block_group, stripe);
+		if (err) {
+			btrfs_warn(fs_info,
+		"zoned: failed to finish zone at physical %llu on devid %llu: %d",
+				   stripe->physical, stripe->dev->devid, err);
+			failed++;
+			ret = err;
+			/*
+			 * Do not finish more zones of a partly written block
+			 * group. They would end at a different write pointer
+			 * than the failed one.
+			 */
+			if (!zones_full)
+				break;
+		}
 	}
 	up_read(&dev_replace->rwsem);
+
+	/*
+	 * Zones that are already full do not change with a failed finish.
+	 * Like a write, fail only if more devices failed than the profile
+	 * tolerates. A missing device counts toward the limit.
+	 */
+	index = btrfs_bg_flags_to_raid_index(map->type);
+	if (zones_full && failed <= btrfs_raid_array[index].tolerated_failures)
+		ret = 0;
 
 	if (!ret && !fully_written)
 		btrfs_dec_block_group_ro(block_group);
