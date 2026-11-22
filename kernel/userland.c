@@ -85,3 +85,46 @@ bool userland_is_file(struct file *file)
 {
 	return file->f_op == &userland_fops;
 }
+
+void userland_copy(struct task_struct *tsk, struct pid *pid, struct userland *c)
+{
+	if (likely(!c || !is_child_reaper(pid)))
+		return;
+
+	scoped_guard(spinlock, &c->lock) {
+		if (c->state != USERLAND_FORKING)
+			return;
+		refcount_inc(&c->usage);
+		ns_of_pid(pid)->userland = c;
+		WRITE_ONCE(c->init_pid, get_pid(pid));
+		WRITE_ONCE(c->state, USERLAND_RUNNING);
+	}
+}
+
+void userland_exit(struct pid_namespace *pid_ns, struct task_struct *tsk)
+{
+	struct userland *c = pid_ns->userland;
+	struct task_struct *leader;
+	kuid_t uid;
+	int status;
+
+	if (!c)
+		return;
+
+	leader = tsk->group_leader;
+	rcu_read_lock();
+	uid = task_uid(leader);
+	rcu_read_unlock();
+	status = (tsk->signal->flags & SIGNAL_GROUP_EXIT) ?
+		 tsk->signal->group_exit_code : leader->exit_code;
+
+	scoped_guard(spinlock, &c->lock) {
+		c->exit_code = status;
+		c->init_uid = uid;
+		WRITE_ONCE(c->state, USERLAND_DEAD);
+	}
+
+	pid_ns->userland = NULL;
+	__wake_up(&c->waitq, TASK_NORMAL, 0, poll_to_key(EPOLLHUP));
+	userland_put(c);
+}
