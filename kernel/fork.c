@@ -83,6 +83,7 @@
 #include <linux/fs_struct.h>
 #include <linux/magic.h>
 #include <linux/perf_event.h>
+#include <linux/userland.h>
 #include <linux/posix-timers.h>
 #include <linux/user-return-notifier.h>
 #include <linux/oom.h>
@@ -2583,6 +2584,9 @@ __latent_entropy struct task_struct *copy_process(
 	spin_unlock(&current->sighand->siglock);
 	syscall_tracepoint_update(p);
 	write_unlock_irq(&tasklist_lock);
+
+	if (likely(p->pid) && thread_group_leader(p))
+		userland_copy(p, pid, NULL);
 
 	if (pidfile)
 		fd_install(pidfd, pidfile);

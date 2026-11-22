@@ -9,11 +9,14 @@
 
 #include <linux/refcount.h>
 #include <linux/spinlock.h>
+#include <linux/uidgid.h>
 #include <linux/wait.h>
 
 struct file;
 struct nsproxy;
 struct pid;
+struct pid_namespace;
+struct task_struct;
 struct user_namespace;
 
 /**
@@ -57,6 +60,7 @@ struct userland {
 	struct user_namespace	*user_ns;
 	struct nsproxy		*ns;
 	struct pid		*init_pid;
+	kuid_t			init_uid;
 	spinlock_t		lock;		/* Guards userland lifecycle state */
 	wait_queue_head_t	waitq;
 	unsigned int		flags;
@@ -66,6 +70,9 @@ struct userland {
 #ifdef CONFIG_USERLAND
 void userland_put(struct userland *c);
 bool userland_is_file(struct file *file);
+void userland_copy(struct task_struct *tsk, struct pid *pid,
+		   struct userland *userland);
+void userland_exit(struct pid_namespace *pid_ns, struct task_struct *tsk);
 #else
 static inline void userland_put(struct userland *c)
 {
@@ -74,6 +81,16 @@ static inline void userland_put(struct userland *c)
 static inline bool userland_is_file(struct file *file)
 {
 	return false;
+}
+
+static inline void userland_copy(struct task_struct *tsk, struct pid *pid,
+				 struct userland *userland)
+{
+}
+
+static inline void userland_exit(struct pid_namespace *pid_ns,
+				 struct task_struct *tsk)
+{
 }
 #endif /* CONFIG_USERLAND */
 
