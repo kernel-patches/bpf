@@ -16,6 +16,7 @@
 #include <linux/btf_ids.h>
 #include <linux/ima.h>
 #include <linux/bpf-cgroup.h>
+#include <linux/userland.h>
 
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached. Notably, we qualify each with
@@ -411,6 +412,12 @@ BTF_ID(func, bpf_lsm_task_setscheduler)
 BTF_ID(func, bpf_lsm_userns_create)
 BTF_ID(func, bpf_lsm_bdev_alloc_security)
 BTF_ID(func, bpf_lsm_bdev_setintegrity)
+#ifdef CONFIG_USERLAND
+BTF_ID(func, bpf_lsm_userland_alloc)
+BTF_ID(func, bpf_lsm_userland_share)
+BTF_ID(func, bpf_lsm_userland_clone)
+BTF_ID(func, bpf_lsm_userland_kill)
+#endif /* CONFIG_USERLAND */
 BTF_SET_END(sleepable_lsm_hooks)
 
 BTF_SET_START(untrusted_lsm_hooks)
@@ -429,6 +436,10 @@ BTF_ID(func, bpf_lsm_sk_free_security)
 BTF_ID(func, bpf_lsm_task_free)
 BTF_ID(func, bpf_lsm_bdev_alloc_security)
 BTF_ID(func, bpf_lsm_bdev_free_security)
+#ifdef CONFIG_USERLAND
+BTF_ID(func, bpf_lsm_userland_alloc)
+BTF_ID(func, bpf_lsm_userland_free)
+#endif /* CONFIG_USERLAND */
 BTF_SET_END(untrusted_lsm_hooks)
 
 bool bpf_lsm_is_sleepable_hook(u32 btf_id)
