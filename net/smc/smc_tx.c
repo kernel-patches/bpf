@@ -235,6 +235,13 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		writespace = atomic_read(&conn->sndbuf_space);
 		/* not more than what user space asked for */
 		copylen = min_t(size_t, send_remaining, writespace);
+		/* and never more than the send buffer holds.  sndbuf_space is
+		 * credited in smc_cdc_msg_recv_action() from the peer's
+		 * consumer cursor on the SMC-D DMB-nocopy path, so it is not a
+		 * value this side computed, and the second chunk below is not
+		 * clamped against the buffer the way the first one is.
+		 */
+		copylen = min_t(size_t, copylen, conn->sndbuf_desc->len);
 		/* determine start of sndbuf */
 		sndbuf_base = conn->sndbuf_desc->cpu_addr;
 		smc_curs_copy(&prep, &conn->tx_curs_prep, conn);
