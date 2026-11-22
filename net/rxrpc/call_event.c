@@ -141,6 +141,7 @@ void rxrpc_resend_tlp(struct rxrpc_call *call)
 	/* There's a chance it'll be on the tail segment of the queue. */
 	req.tq = READ_ONCE(call->tx_qtail);
 	if (req.tq &&
+	    after_eq(call->tx_transmitted, req.tq->qbase) &&
 	    before(call->tx_transmitted, req.tq->qbase + RXRPC_NR_TXQUEUE)) {
 		rxrpc_retransmit_data(call, &req);
 		return;
