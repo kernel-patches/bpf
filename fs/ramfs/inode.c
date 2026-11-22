@@ -319,7 +319,7 @@ static struct file_system_type ramfs_fs_type = {
 	.init_fs_context = ramfs_init_fs_context,
 	.parameters	= ramfs_fs_parameters,
 	.kill_sb	= ramfs_kill_sb,
-	.fs_flags	= FS_USERNS_MOUNT,
+	.fs_flags	= FS_USERNS_MOUNT | FS_USERLAND_MOUNT,
 };
 
 static int __init init_ramfs_fs(void)

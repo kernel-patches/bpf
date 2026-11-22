@@ -41,11 +41,17 @@ int __block_write_begin_int(struct folio *folio, loff_t pos, unsigned len,
 extern void __init chrdev_init(void);
 
 /*
+ * filesystems.c
+ */
+struct file_system_type *get_fs_type_noload(const char *name);
+
+/*
  * fs_context.c
  */
 extern int parse_monolithic_mount_data(struct fs_context *, void *);
 extern void vfs_clean_context(struct fs_context *fc);
 extern int finish_clean_context(struct fs_context *fc);
+struct fs_context *fs_context_for_unpriv_mount(struct file_system_type *fs_type);
 
 /*
  * namei.c

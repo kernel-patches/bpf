@@ -434,6 +434,8 @@ static int devpts_init_fs_context(struct fs_context *fc)
 	fsi->mount_opts.max     = NR_UNIX98_PTY_MAX;
 
 	if (fc->purpose == FS_CONTEXT_FOR_MOUNT &&
+	    !fc->userland_bound &&
+	    fc->user_ns == &init_user_ns &&
 	    current->nsproxy->mnt_ns == init_task.nsproxy->mnt_ns)
 		fsi->mount_opts.reserve = true;
 
@@ -457,7 +459,7 @@ static struct file_system_type devpts_fs_type = {
 	.init_fs_context = devpts_init_fs_context,
 	.parameters	= devpts_param_specs,
 	.kill_sb	= devpts_kill_sb,
-	.fs_flags	= FS_USERNS_MOUNT,
+	.fs_flags	= FS_USERNS_MOUNT | FS_USERLAND_MOUNT,
 };
 
 /*

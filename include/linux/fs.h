@@ -2306,6 +2306,7 @@ struct file_system_type {
 #define FS_USERNS_MOUNT_RESTRICTED 512	/* Restrict mount in userns if not already visible */
 #define FS_USERNS_DELEGATABLE	1024	/* Can be mounted inside userns from outside */
 #define FS_DISALLOW_NOTIFY	2048	/* No fsnotify marks on its objects */
+#define FS_USERLAND_MOUNT	4096	/* Supports FSCONFIG_SET_USERLAND */
 #define FS_RENAME_DOES_D_MOVE	32768	/* FS will handle d_move() during rename() internally. */
 	int (*init_fs_context)(struct fs_context *);
 	const struct fs_parameter_spec *parameters;

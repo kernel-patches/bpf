@@ -5607,7 +5607,8 @@ static struct file_system_type shmem_fs_type = {
 	.parameters	= shmem_fs_parameters,
 #endif
 	.kill_sb	= kill_anon_super,
-	.fs_flags	= FS_USERNS_MOUNT | FS_ALLOW_IDMAP | FS_MGTIME,
+	.fs_flags	= FS_USERNS_MOUNT | FS_USERLAND_MOUNT |
+			  FS_ALLOW_IDMAP | FS_MGTIME,
 };
 
 #if defined(CONFIG_SYSFS) && defined(CONFIG_TMPFS)
@@ -6036,7 +6037,7 @@ static struct file_system_type shmem_fs_type = {
 	.init_fs_context = ramfs_init_fs_context,
 	.parameters	= ramfs_fs_parameters,
 	.kill_sb	= ramfs_kill_sb,
-	.fs_flags	= FS_USERNS_MOUNT,
+	.fs_flags	= FS_USERNS_MOUNT | FS_USERLAND_MOUNT,
 };
 
 void __init shmem_init(void)
