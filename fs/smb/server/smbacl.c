@@ -963,6 +963,9 @@ int parse_sec_desc(const struct mnt_idmap *idmap, struct smb_ntsd *pntsd,
 	pntsd_type = le16_to_cpu(pntsd->type);
 	if (!(pntsd_type & DACL_PRESENT)) {
 		ksmbd_debug(SMB, "DACL_PRESENT in DACL type is not set\n");
+		/* Without DACL_PRESENT, OffsetDacl must be 0 (MS-DTYP 2.4.6) */
+		if (dacloffset)
+			return -EINVAL;
 		return rc;
 	}
 
