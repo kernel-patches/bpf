@@ -53,13 +53,14 @@ static void skl_set_hda_codec_autosuspend_delay(struct snd_soc_card *card)
 #define DMIC01_BE_ID		6
 #define DMIC16K_BE_ID		7
 #define BT_OFFLOAD_BE_ID	8
+#define HDMI_IN_BE_ID		13
 
 #define HDA_LINK_ORDER	SOF_LINK_ORDER(SOF_LINK_IDISP_HDMI,  \
 				       SOF_LINK_HDA,        \
 				       SOF_LINK_DMIC01,     \
 				       SOF_LINK_DMIC16K,    \
 				       SOF_LINK_BT_OFFLOAD, \
-				       SOF_LINK_NONE,       \
+				       SOF_LINK_HDMI_IN,    \
 				       SOF_LINK_NONE)
 
 #define HDA_LINK_IDS	SOF_LINK_ORDER(IDISP_HDMI_BE_ID,  \
@@ -67,7 +68,7 @@ static void skl_set_hda_codec_autosuspend_delay(struct snd_soc_card *card)
 				       DMIC01_BE_ID,     \
 				       DMIC16K_BE_ID,    \
 				       BT_OFFLOAD_BE_ID, \
-				       0,                \
+				       HDMI_IN_BE_ID,    \
 				       0)
 
 static unsigned long
