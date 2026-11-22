@@ -1,1 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config UNWINDER_DWARF_CFI
+	bool "Minimal DWARF CFI kernel unwinder"
+	depends on 64BIT && MMU
+	depends on (!FUNCTION_TRACER || DYNAMIC_FTRACE_WITH_ARGS) && !SHADOW_CALL_STACK
+	select HAVE_MOD_ARCH_SPECIFIC if MODULES
+	select UNWIND_DWARF_CFI
+	select UNWIND_TABLES
+	help
+	  This option enables the Minimal DWARF Call Frame Information (CFI)
+	  unwinder for kernel stack traces on 64-bit RISC-V.  It interprets a
+	  strictly bounded subset of compiler-generated .eh_frame /
+	  .eh_frame_hdr tables matching SFrame's stack state model without
+	  requiring frame pointers.
+
 source "arch/riscv/kernel/tests/Kconfig.debug"

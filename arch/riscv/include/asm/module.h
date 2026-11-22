@@ -11,18 +11,40 @@ struct module;
 unsigned long module_emit_got_entry(struct module *mod, unsigned long val);
 unsigned long module_emit_plt_entry(struct module *mod, unsigned long val);
 
+struct mod_dwarf_cfi_index;
+
 #ifdef CONFIG_MODULE_SECTIONS
 struct mod_section {
 	Elf_Shdr *shdr;
 	int num_entries;
 	int max_entries;
 };
+#endif
 
+#if defined(CONFIG_MODULE_SECTIONS) || defined(CONFIG_UNWINDER_DWARF_CFI)
 struct mod_arch_specific {
+#ifdef CONFIG_MODULE_SECTIONS
 	struct mod_section got;
 	struct mod_section plt;
 	struct mod_section got_plt;
+#endif
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+	struct mod_dwarf_cfi_index __rcu *dwarf_cfi_index;
+#endif
 };
+#endif
+
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+void riscv_unwind_module_init(struct module *mod, void *eh_frame,
+			      size_t eh_frame_size);
+void riscv_unwind_module_cleanup(struct module *mod);
+#else
+static inline void riscv_unwind_module_init(struct module *mod, void *eh_frame,
+					    size_t eh_frame_size) {}
+static inline void riscv_unwind_module_cleanup(struct module *mod) {}
+#endif
+
+#ifdef CONFIG_MODULE_SECTIONS
 
 struct got_entry {
 	unsigned long symbol_addr;	/* the real variable address */

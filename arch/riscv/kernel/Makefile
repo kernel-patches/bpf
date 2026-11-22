@@ -42,7 +42,11 @@ CFLAGS_REMOVE_patch.o	= $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_sbi.o	= $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_return_address.o	= $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_sbi_ecall.o = $(CC_FLAGS_FTRACE)
+CFLAGS_REMOVE_stacktrace.o = $(CC_FLAGS_FTRACE)
 endif
+
+KASAN_SANITIZE_stacktrace.o := n
+KCOV_INSTRUMENT_stacktrace.o := n
 
 always-$(KBUILD_BUILTIN) += vmlinux.lds
 
