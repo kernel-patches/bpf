@@ -30,6 +30,7 @@
 #include <linux/overflow.h>
 #include <linux/perf_event.h>
 #include <linux/fs.h>
+#include <linux/userland.h>
 #include <net/flow.h>
 #include <net/sock.h>
 
@@ -5795,3 +5796,74 @@ void security_initramfs_populated(void)
 {
 	call_void_hook(initramfs_populated);
 }
+
+#ifdef CONFIG_USERLAND
+/**
+ * security_userland_alloc() - Allocate LSM blob and check userland creation
+ * @userland: the new userland
+ * @flags: creation flags passed to userland_open()
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int security_userland_alloc(struct userland *userland, unsigned int flags)
+{
+	int rc;
+
+	rc = lsm_blob_alloc(&userland->security, blob_sizes.lbs_userland,
+			    GFP_KERNEL);
+	if (unlikely(rc))
+		return rc;
+
+	rc = call_int_hook(userland_alloc, userland, flags);
+	if (unlikely(rc))
+		security_userland_free(userland);
+
+	return rc;
+}
+
+/**
+ * security_userland_free() - Release LSM blob from @userland
+ * @userland: the userland being freed
+ */
+void security_userland_free(struct userland *userland)
+{
+	call_void_hook(userland_free, userland);
+	kfree(userland->security);
+	userland->security = NULL;
+}
+
+/**
+ * security_userland_share() - Check permission to share @ns into @userland
+ * @userland: the target userland
+ * @ns: the namespace being shared
+ *
+ * Return: 0 if permission is granted, negative error code on failure.
+ */
+int security_userland_share(struct userland *userland, struct ns_common *ns)
+{
+	return call_int_hook(userland_share, userland, ns);
+}
+
+/**
+ * security_userland_clone() - Check permission to spawn into @userland
+ * @userland: the target userland
+ *
+ * Return: 0 if permission is granted, negative error code on failure.
+ */
+int security_userland_clone(struct userland *userland)
+{
+	return call_int_hook(userland_clone, userland);
+}
+
+/**
+ * security_userland_kill() - Check permission to signal @userland
+ * @userland: the target userland
+ * @sig: signal number (or 0 for permission probe)
+ *
+ * Return: 0 if permission is granted, negative error code on failure.
+ */
+int security_userland_kill(struct userland *userland, int sig)
+{
+	return call_int_hook(userland_kill, userland, sig);
+}
+#endif /* CONFIG_USERLAND */
