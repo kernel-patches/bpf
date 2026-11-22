@@ -727,6 +727,9 @@ int reuseport_detach_prog(struct sock *sk)
 	struct sock_reuseport *reuse;
 	struct bpf_prog *old_prog;
 
+	if (sock_flag(sk, SOCK_FILTER_LOCKED))
+		return -EPERM;
+
 	old_prog = NULL;
 	spin_lock_bh(&reuseport_lock);
 	reuse = rcu_dereference_protected(sk->sk_reuseport_cb,
