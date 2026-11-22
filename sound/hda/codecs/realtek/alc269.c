@@ -1116,6 +1116,21 @@ static void alc269vb_fixup_aspire_e1_coef(struct hda_codec *codec,
 		alc_update_coef_idx(codec, 0x0d, 0x6000, 0x6000);
 }
 
+/*
+ * After a warm reboot from Windows, bit 4 of COEF 0x66 is left set, which
+ * mutes the internal speaker, and bit 10 of COEF 0x1b is left clear, which
+ * distorts the output. Restore both at init and resume.
+ */
+static void alc294_fixup_asus_spk_coefs(struct hda_codec *codec,
+					const struct hda_fixup *fix,
+					int action)
+{
+	if (action != HDA_FIXUP_ACT_INIT)
+		return;
+	alc_update_coef_idx(codec, 0x66, 1 << 4, 0);
+	alc_update_coef_idx(codec, 0x1b, 0, 1 << 10);
+}
+
 static void alc269_fixup_pcm_44k(struct hda_codec *codec,
 				 const struct hda_fixup *fix, int action)
 {
@@ -4435,6 +4450,7 @@ enum {
 	ALC294_FIXUP_ASUS_ALLY_VERBS,
 	ALC294_FIXUP_ASUS_HPE,
 	ALC294_FIXUP_ASUS_COEF_1B,
+	ALC294_FIXUP_ASUS_SPK_COEFS,
 	ALC294_FIXUP_ASUS_GX502_HP,
 	ALC294_FIXUP_ASUS_GX502_PINS,
 	ALC294_FIXUP_ASUS_GX502_VERBS,
@@ -6312,6 +6328,10 @@ static const struct hda_fixup alc269_fixups[] = {
 		},
 		.chained = true,
 		.chain_id = ALC289_FIXUP_ASUS_GA401,
+	},
+	[ALC294_FIXUP_ASUS_SPK_COEFS] = {
+		.type = HDA_FIXUP_FUNC,
+		.v.func = alc294_fixup_asus_spk_coefs,
 	},
 	[ALC285_FIXUP_HP_GPIO_LED] = {
 		.type = HDA_FIXUP_FUNC,
@@ -8275,6 +8295,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x1043, 0x1a83, "ASUS UM5302LA", ALC287_FIXUP_CS35L41_I2C_2),
 	SND_PCI_QUIRK(0x1043, 0x1a8e, "ASUS G712LWS", ALC294_FIXUP_LENOVO_MIC_LOCATION),
 	SND_PCI_QUIRK(0x1043, 0x1a8f, "ASUS UX582ZS", ALC245_FIXUP_CS35L41_SPI_2),
+	SND_PCI_QUIRK(0x1043, 0x1b02, "ASUS ExpertBook B7402FEA", ALC294_FIXUP_ASUS_SPK_COEFS),
 	SND_PCI_QUIRK(0x1043, 0x1b11, "ASUS UX431DA", ALC294_FIXUP_ASUS_COEF_1B),
 	SND_PCI_QUIRK(0x1043, 0x1b13, "ASUS U41SV/GA403U", ALC285_FIXUP_ASUS_GA403U_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1043, 0x1b93, "ASUS G614JVR/JIR", ALC245_FIXUP_CS35L41_SPI_2),
