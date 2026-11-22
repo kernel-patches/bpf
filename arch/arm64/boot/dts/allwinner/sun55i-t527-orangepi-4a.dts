@@ -341,7 +341,6 @@
 		reg = <0x36>;
 		#interrupt-cells = <1>;
 		interrupt-controller;
-		status = "okay";
 
 		vin1-supply = <&reg_vcc5v>;
 		vin2-supply = <&reg_vcc5v>;
