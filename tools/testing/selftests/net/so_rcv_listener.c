@@ -65,6 +65,7 @@ static void parse_args(int argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
+	int enable = 1;
 	int err = 0;
 	int recv_fd = -1;
 	int ret_value = 0;
@@ -88,7 +89,7 @@ int main(int argc, char *argv[])
 		goto cleanup;
 	}
 
-	err = setsockopt(recv_fd, SOL_SOCKET, opt.rcvname, &opt.val, sizeof(opt.val));
+	err = setsockopt(recv_fd, SOL_SOCKET, opt.rcvname, &enable, sizeof(enable));
 	if (err < 0) {
 		perror("Recv setsockopt error");
 		ret_value = -errno;
