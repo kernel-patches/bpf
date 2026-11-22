@@ -311,6 +311,13 @@ static int ipc_server_config_on_startup(struct ksmbd_startup_request *req)
 {
 	int ret;
 
+	if (!memchr(req->min_prot, '\0', sizeof(req->min_prot)) ||
+	    !memchr(req->max_prot, '\0', sizeof(req->max_prot)) ||
+	    !memchr(req->netbios_name, '\0', sizeof(req->netbios_name)) ||
+	    !memchr(req->work_group, '\0', sizeof(req->work_group)) ||
+	    !memchr(req->server_string, '\0', sizeof(req->server_string)))
+		return -EINVAL;
+
 	ksmbd_set_fd_limit(req->file_max);
 	server_conf.flags = req->flags;
 	server_conf.signing = req->signing;
