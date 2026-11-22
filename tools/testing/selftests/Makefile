@@ -145,6 +145,7 @@ TARGETS += tty
 TARGETS += ublk
 TARGETS += uevent
 TARGETS += user_events
+TARGETS += userland
 TARGETS += vDSO
 TARGETS += mm
 TARGETS += vfio
