@@ -41,4 +41,18 @@ enum userland_flags {
  */
 #define USERLAND_GET_NSFD	_IO(USERLAND_IOCTL_MAGIC, 0x01)
 
+/**
+ * DOC: USERLAND_SHARE_NSFD
+ *
+ * ``ioctl(userland_fd, USERLAND_SHARE_NSFD, ns_fd)`` replaces the corresponding
+ * member namespace of ``userland_fd`` with ``ns_fd`` (``CLONE_NEWCGROUP``,
+ * ``CLONE_NEWIPC``, ``CLONE_NEWUTS``, ``CLONE_NEWNET``, or ``CLONE_NEWTIME``)
+ * while ``userland_fd`` is in ``USERLAND_INIT``.
+ *
+ * Requires ``CAP_SYS_ADMIN`` in the userland's user namespace, plus
+ * ``CAP_SYS_ADMIN`` in ``ns_fd``'s owning user namespace when the caller is
+ * not already a member of ``ns_fd``.
+ */
+#define USERLAND_SHARE_NSFD	_IO(USERLAND_IOCTL_MAGIC, 0x02)
+
 #endif /* _UAPI_LINUX_USERLAND_H */

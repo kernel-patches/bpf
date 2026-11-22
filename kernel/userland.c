@@ -31,6 +31,8 @@
 #include <linux/nsfs.h>
 #include <linux/pid.h>
 #include <linux/pid_namespace.h>
+#include <linux/proc_fs.h>
+#include <linux/proc_ns.h>
 #include <linux/time_namespace.h>
 #include <linux/user_namespace.h>
 #include <linux/uts_namespace.h>
@@ -125,6 +127,92 @@ static long userland_get_nsfd(struct userland *userland, unsigned long nstype)
 	return open_namespace(ns);
 }
 
+static long userland_share_nsfd(struct userland *c, unsigned long arg)
+{
+	struct ns_common *old_time_children = NULL;
+	struct ns_common *old_ns = NULL;
+	struct ns_common *ns;
+
+	if (arg > INT_MAX)
+		return -EBADF;
+
+	CLASS(fd, f)((int)arg);
+	if (fd_empty(f))
+		return -EBADF;
+	if (!proc_ns_file(fd_file(f)))
+		return -EINVAL;
+
+	ns = get_proc_ns(file_inode(fd_file(f)));
+	switch (ns->ns_type) {
+	case CLONE_NEWCGROUP:
+	case CLONE_NEWIPC:
+	case CLONE_NEWUTS:
+	case CLONE_NEWNET:
+		break;
+	case CLONE_NEWTIME:
+		if (!IS_ENABLED(CONFIG_TIME_NS))
+			return -EOPNOTSUPP;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (!ns_capable(c->user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+	if (!is_current_namespace(ns) &&
+	    !ns_capable(ns->ops->owner(ns), CAP_SYS_ADMIN))
+		return -EPERM;
+
+	scoped_guard(spinlock, &c->lock) {
+		if (c->state != USERLAND_INIT)
+			return -EBUSY;
+
+		__ns_ref_inc(ns);
+		__ns_ref_active_get(ns);
+
+		switch (ns->ns_type) {
+		case CLONE_NEWCGROUP:
+			old_ns = to_ns_common(c->ns->cgroup_ns);
+			c->ns->cgroup_ns = to_cg_ns(ns);
+			break;
+		case CLONE_NEWIPC:
+			old_ns = to_ns_common(c->ns->ipc_ns);
+			c->ns->ipc_ns = to_ipc_ns(ns);
+			break;
+		case CLONE_NEWUTS:
+			old_ns = to_ns_common(c->ns->uts_ns);
+			c->ns->uts_ns = to_uts_ns(ns);
+			break;
+		case CLONE_NEWNET:
+			old_ns = to_ns_common(c->ns->net_ns);
+			c->ns->net_ns = to_net_ns(ns);
+			break;
+#ifdef CONFIG_TIME_NS
+		case CLONE_NEWTIME:
+			__ns_ref_inc(ns);
+			__ns_ref_active_get(ns);
+			old_ns = to_ns_common(c->ns->time_ns);
+			old_time_children =
+				to_ns_common(c->ns->time_ns_for_children);
+			c->ns->time_ns = to_time_ns(ns);
+			c->ns->time_ns_for_children = to_time_ns(ns);
+			break;
+#endif
+		default:
+			WARN_ON_ONCE(1);
+			break;
+		}
+	}
+
+	__ns_ref_active_put(old_ns);
+	old_ns->ops->put(old_ns);
+	if (old_time_children) {
+		__ns_ref_active_put(old_time_children);
+		old_time_children->ops->put(old_time_children);
+	}
+	return 0;
+}
+
 static long userland_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct userland *userland = file->private_data;
@@ -132,6 +220,8 @@ static long userland_ioctl(struct file *file, unsigned int cmd, unsigned long ar
 	switch (cmd) {
 	case USERLAND_GET_NSFD:
 		return userland_get_nsfd(userland, arg);
+	case USERLAND_SHARE_NSFD:
+		return userland_share_nsfd(userland, arg);
 	default:
 		return -ENOIOCTLCMD;
 	}
