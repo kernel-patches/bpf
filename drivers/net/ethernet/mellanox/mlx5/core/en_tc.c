@@ -2790,16 +2790,19 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 		if (err)
 			return err;
 	} else if (dissector->used_keys &
-		   (BIT_ULL(FLOW_DISSECTOR_KEY_ENC_KEYID) |
-		    BIT_ULL(FLOW_DISSECTOR_KEY_ENC_IPV4_ADDRS) |
+		   (BIT_ULL(FLOW_DISSECTOR_KEY_ENC_IPV4_ADDRS) |
 		    BIT_ULL(FLOW_DISSECTOR_KEY_ENC_IPV6_ADDRS) |
 		    BIT_ULL(FLOW_DISSECTOR_KEY_ENC_PORTS) |
 		    BIT_ULL(FLOW_DISSECTOR_KEY_ENC_CONTROL) |
 		    BIT_ULL(FLOW_DISSECTOR_KEY_ENC_IP) |
 		    BIT_ULL(FLOW_DISSECTOR_KEY_ENC_OPTS))) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "Tunnel keys are only supported on tunnel devices");
+				   "Tunnel keys other than enc_key_id require a tunnel device");
 		return -EOPNOTSUPP;
+	} else if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ENC_KEYID)) {
+		err = mlx5e_tc_tun_parse_outer_key(priv, spec, f, fs_type);
+		if (err)
+			return err;
 	}
 
 	err = mlx5e_flower_parse_meta(filter_dev, f);
