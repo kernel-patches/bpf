@@ -339,7 +339,7 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, u32 *fimage, struct code
 {
 	const struct bpf_insn *insn = fp->insnsi;
 	int flen = fp->len;
-	int i, ret;
+	int i, ret, max_arg;
 
 	/* Start of epilogue code - will only be valid 2nd pass onwards */
 	u32 exit_addr = addrs[flen];
@@ -1183,6 +1183,18 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, u32 *fimage, struct code
 			if (ret < 0)
 				return ret;
 
+			/*
+			 * We don't know which arguments the called function will use,
+			 * so if this is a subprogram, assume the worst case where it
+			 * uses all of them. Regular programs only get one argument,
+			 * so any others would have been explicitly set.
+			 */
+			max_arg = ctx->is_subprog ? BPF_REG_5 : BPF_REG_1;
+			for (int reg = BPF_REG_1; reg <= max_arg; ++reg) {
+				bpf_set_seen_register(ctx, bpf_to_ppc(reg) - 1);
+				bpf_set_seen_register(ctx, bpf_to_ppc(reg));
+			}
+
 			if (bpf_is_seen_register(ctx, bpf_to_ppc(BPF_REG_5))) {
 				EMIT(PPC_RAW_STW(bpf_to_ppc(BPF_REG_5) - 1, _R1, 8));
 				EMIT(PPC_RAW_STW(bpf_to_ppc(BPF_REG_5), _R1, 12));
@@ -1412,6 +1424,9 @@ cond_branch:
 		 * Tail call
 		 */
 		case BPF_JMP | BPF_TAIL_CALL:
+			bpf_set_seen_register(ctx, bpf_to_ppc(BPF_REG_1) - 1);
+			bpf_set_seen_register(ctx, bpf_to_ppc(BPF_REG_1));
+
 			ctx->seen |= SEEN_TAILCALL;
 			ret = bpf_jit_emit_tail_call(image, ctx, addrs[i + 1]);
 			if (ret < 0)
