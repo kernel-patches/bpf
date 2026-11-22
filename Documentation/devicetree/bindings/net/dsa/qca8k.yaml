@@ -75,13 +75,15 @@ patternProperties:
     type: object
     additionalProperties: true
     patternProperties:
-      "^(ethernet-)?port@[0-6]$":
+      "^(ethernet-)?port@":
         type: object
         description: Ethernet switch ports
 
         $ref: dsa-port.yaml#
 
         properties:
+          reg:
+            maximum: 6
           qca,sgmii-rxclk-falling-edge:
             $ref: /schemas/types.yaml#/definitions/flag
             description:

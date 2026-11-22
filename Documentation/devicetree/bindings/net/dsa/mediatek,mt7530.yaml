@@ -179,12 +179,13 @@ patternProperties:
     additionalProperties: true
 
     patternProperties:
-      "^(ethernet-)?port@[0-6]$":
+      "^(ethernet-)?port@":
         type: object
         additionalProperties: true
 
         properties:
           reg:
+            maximum: 6
             description:
               Port address described must be 5 or 6 for CPU port and from 0 to 5
               for user ports.
@@ -208,7 +209,7 @@ $defs:
     patternProperties:
       "^(ethernet-)?ports$":
         patternProperties:
-          "^(ethernet-)?port@[0-6]$":
+          "^(ethernet-)?port@":
             if:
               required: [ ethernet ]
             then:
@@ -220,7 +221,7 @@ $defs:
     patternProperties:
       "^(ethernet-)?ports$":
         patternProperties:
-          "^(ethernet-)?port@[0-6]$":
+          "^(ethernet-)?port@":
             if:
               required: [ ethernet ]
             then:
@@ -246,7 +247,7 @@ $defs:
     patternProperties:
       "^(ethernet-)?ports$":
         patternProperties:
-          "^(ethernet-)?port@[0-6]$":
+          "^(ethernet-)?port@":
             if:
               required: [ ethernet ]
             then:

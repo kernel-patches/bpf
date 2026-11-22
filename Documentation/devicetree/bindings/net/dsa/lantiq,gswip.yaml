@@ -108,13 +108,15 @@ patternProperties:
   "^(ethernet-)?ports$":
     type: object
     patternProperties:
-      "^(ethernet-)?port@[0-6]$":
+      "^(ethernet-)?port@":
         $ref: dsa-port.yaml#
         allOf:
           - $ref: /schemas/phy/phy-common-props.yaml#
         unevaluatedProperties: false
 
         properties:
+          reg:
+            maximum: 6
           maxlinear,slew-rate-txc:
             $ref: /schemas/types.yaml#/definitions/uint32
             enum: [0, 1]
