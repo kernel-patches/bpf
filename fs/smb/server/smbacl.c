@@ -1114,13 +1114,17 @@ int build_sec_desc(const struct mnt_idmap *idmap,
 	pntsd->revision = cpu_to_le16(1);
 	pntsd->type = cpu_to_le16(SELF_RELATIVE);
 	if (ppntsd) {
-		pntsd->type |= ppntsd->type;
-		/* These DACL flags are returned only with the DACL */
-		if (!(addition_info & DACL_SECINFO))
-			pntsd->type &= ~cpu_to_le16(DACL_PRESENT |
-						    DACL_DEFAULTED |
-						    DACL_AUTO_INHERITED |
-						    DACL_PROTECTED);
+		u16 flags = 0;
+
+		/* Return the stored flags only of the parts in the reply */
+		if (addition_info & OWNER_SECINFO)
+			flags |= OWNER_DEFAULTED;
+		if (addition_info & GROUP_SECINFO)
+			flags |= GROUP_DEFAULTED;
+		if (addition_info & DACL_SECINFO)
+			flags |= DACL_PRESENT | DACL_DEFAULTED |
+				 DACL_AUTO_INHERITED | DACL_PROTECTED;
+		pntsd->type |= ppntsd->type & cpu_to_le16(flags);
 	}
 
 	if (addition_info & OWNER_SECINFO) {
