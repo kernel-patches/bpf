@@ -92,7 +92,8 @@ static int skl_hda_add_dai_link(struct snd_soc_card *card,
 	struct sof_card_private *ctx = snd_soc_card_get_drvdata(card);
 
 	/* Ignore the HDMI PCM link if iDisp is not present */
-	if (strstr(link->stream_name, "HDMI") && !ctx->hdmi.idisp_codec)
+	if (strstr(link->stream_name, "HDMI") && !link->no_pcm &&
+	    !link->capture_only && !ctx->hdmi.idisp_codec)
 		link->ignore = true;
 
 	return 0;
