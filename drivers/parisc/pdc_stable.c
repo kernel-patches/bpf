@@ -484,6 +484,14 @@ ATTRIBUTE_GROUPS(paths_subsys);
 
 /* Specific kobject type for our PDC paths */
 static const struct kobj_type ktype_pdcspath = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): pdcspath_entry
+	 * instances are static in tristate module pdc_stable, and
+	 * pdc_stable_exit() calls kobject_put(&entry->kobj); unloading the
+	 * module unmaps the static storage without waiting for final kobject
+	 * cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &pdcspath_attr_ops,
 	.default_groups = paths_subsys_groups,
 };

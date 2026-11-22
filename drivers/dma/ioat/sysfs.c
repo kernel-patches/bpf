@@ -167,6 +167,14 @@ static const struct attribute *const ioat_attrs[] = {
 ATTRIBUTE_GROUPS(ioat);
 
 const struct kobj_type ioat_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix):
+	 * ioat_kobject_del() calls kobject_put(&ioat_chan->kobj) and
+	 * release_ioatdma() frees ioat_chan via kfree() without waiting for
+	 * final kobject cleanup (use-after-free if a sysfs reference is held
+	 * or under CONFIG_DEBUG_KOBJECT_RELEASE).
+	 */
+	.release = NULL,
 	.sysfs_ops = &ioat_sysfs_ops,
 	.default_groups = ioat_groups,
 };

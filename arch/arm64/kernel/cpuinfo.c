@@ -295,6 +295,13 @@ const struct seq_operations cpuinfo_op = {
 
 
 static const struct kobj_type cpuregs_kobj_type = {
+	/*
+	 * Omitting release() violates the kobject API contract, but lifetime
+	 * is safe: info->kobj is embedded in built-in static per-CPU cpu_data
+	 * that is never freed or passed to kobject_put() (CPU hotplug only
+	 * toggles sysfs visibility via kobject_add() and kobject_del()).
+	 */
+	.release = NULL,
 	.sysfs_ops = &kobj_sysfs_ops,
 };
 

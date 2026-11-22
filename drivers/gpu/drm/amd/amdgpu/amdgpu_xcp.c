@@ -797,6 +797,16 @@ static const struct sysfs_ops xcp_cfg_res_sysfs_ops = {
 };
 
 static const struct kobj_type xcp_cfg_res_sysfs_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): xcp_res->kobj
+	 * is embedded in struct amdgpu_xcp_cfg, freed by parent xcp_cfg->kobj's
+	 * xcp_cfg_sysfs_release(). While an added child pins xcp_cfg->kobj
+	 * until kobject_cleanup() finishes, if kobject_init_and_add() fails in
+	 * amdgpu_xcp_cfg_sysfs_init() no parent reference is held and
+	 * kfree(xcp_cfg) can race with delayed cleanup under
+	 * CONFIG_DEBUG_KOBJECT_RELEASE.
+	 */
+	.release = NULL,
 	.sysfs_ops = &xcp_cfg_res_sysfs_ops,
 	.default_groups = xcp_cfg_res_sysfs_groups,
 };
@@ -1061,6 +1071,13 @@ static const struct attribute_group amdgpu_xcp_attrs_group = {
 };
 
 static const struct kobj_type xcp_sysfs_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): xcp->kobj is
+	 * embedded in adev->xcp_mgr; amdgpu_xcp_sysfs_entries_fini() calls
+	 * kobject_put() and amdgpu_device_fini_sw() later calls
+	 * kfree(adev->xcp_mgr) without waiting for final kobject cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &kobj_sysfs_ops,
 };
 

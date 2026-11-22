@@ -1038,6 +1038,12 @@ static struct attribute *hccs_port_default_attrs[] = {
 ATTRIBUTE_GROUPS(hccs_port_default);
 
 static const struct kobj_type hccs_port_type = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): hccs_port_info
+	 * is allocated via devm_kzalloc(), and devm frees it on unbind or probe
+	 * failure without waiting for kobject_put(&port->kobj) final cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &hccs_comm_ops,
 	.default_groups = hccs_port_default_groups,
 };
@@ -1110,6 +1116,12 @@ static struct attribute *hccs_die_default_attrs[] = {
 ATTRIBUTE_GROUPS(hccs_die_default);
 
 static const struct kobj_type hccs_die_type = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): hccs_die_info
+	 * is allocated via devm_kzalloc(), and devm frees it on unbind or probe
+	 * failure without waiting for kobject_put(&die->kobj) final cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &hccs_comm_ops,
 	.default_groups = hccs_die_default_groups,
 };
@@ -1213,6 +1225,12 @@ static struct attribute *hccs_chip_default_attrs[] = {
 ATTRIBUTE_GROUPS(hccs_chip_default);
 
 static const struct kobj_type hccs_chip_type = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): hccs_chip_info
+	 * is allocated via devm_kzalloc(), and devm frees it on unbind or probe
+	 * failure without waiting for kobject_put(&chip->kobj) final cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &hccs_comm_ops,
 	.default_groups = hccs_chip_default_groups,
 };

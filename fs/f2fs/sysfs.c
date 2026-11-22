@@ -1683,6 +1683,13 @@ static const struct kobj_type f2fs_sb_ktype = {
 
 static const struct kobj_type f2fs_ktype = {
 	.sysfs_ops	= &f2fs_attr_ops,
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): f2fs_kset is
+	 * a static struct kset in tristate module f2fs, and f2fs_exit_sysfs()
+	 * calls kset_unregister(); unloading the module unmaps the static
+	 * storage without waiting for final kobject cleanup.
+	 */
+	.release	= NULL,
 };
 
 static struct kset f2fs_kset = {
@@ -1697,6 +1704,13 @@ static const struct sysfs_ops f2fs_feat_attr_ops = {
 static const struct kobj_type f2fs_feat_ktype = {
 	.default_groups = f2fs_feat_groups,
 	.sysfs_ops	= &f2fs_feat_attr_ops,
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): f2fs_feat is
+	 * a static struct kobject in tristate module f2fs, and
+	 * f2fs_exit_sysfs() calls kobject_put(); unloading the module unmaps
+	 * the static storage without waiting for final kobject cleanup.
+	 */
+	.release	= NULL,
 };
 
 static struct kobject f2fs_feat = {
@@ -1711,6 +1725,13 @@ static const struct sysfs_ops f2fs_tune_attr_ops = {
 static const struct kobj_type f2fs_tune_ktype = {
 	.default_groups = f2fs_tune_groups,
 	.sysfs_ops	= &f2fs_tune_attr_ops,
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): f2fs_tune is
+	 * a static struct kobject in tristate module f2fs, and
+	 * f2fs_exit_sysfs() calls kobject_put(); unloading the module unmaps
+	 * the static storage without waiting for final kobject cleanup.
+	 */
+	.release	= NULL,
 };
 
 static struct kobject f2fs_tune = {

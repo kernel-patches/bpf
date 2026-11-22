@@ -429,6 +429,13 @@ static const struct sysfs_ops overlay_sysfs_ops = {
 };
 
 static struct kobj_type overlay_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): ovl->kobj is
+	 * embedded in dynamically allocated overlays[] and freed in
+	 * dss_uninit_overlays() right after dss_overlay_kobj_uninit() calls
+	 * kobject_put(), without waiting for final kobject cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &overlay_sysfs_ops,
 	.default_groups = overlay_sysfs_groups,
 };
