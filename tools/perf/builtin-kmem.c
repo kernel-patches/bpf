@@ -341,13 +341,33 @@ static int callcmp(const void *a, const void *b)
 		return -1;
 }
 
+static int build_alloc_func_list_cb(struct symbol *sym, void *data)
+{
+	regex_t *alloc_func_regex = data;
+	struct alloc_func *func;
+
+	if (regexec(alloc_func_regex, sym->name, 0, NULL, 0))
+		return 0;
+
+	func = realloc(alloc_func_list,
+		       (nr_alloc_funcs + 1) * sizeof(*func));
+	if (func == NULL)
+		return -ENOMEM;
+
+	pr_debug("alloc func: %s\n", sym->name);
+	func[nr_alloc_funcs].start = sym->start;
+	func[nr_alloc_funcs].end   = sym->end;
+	func[nr_alloc_funcs].name  = sym->name;
+
+	alloc_func_list = func;
+	nr_alloc_funcs++;
+	return 0;
+}
+
 static int build_alloc_func_list(void)
 {
 	int ret;
 	struct map *kernel_map;
-	struct symbol *sym;
-	struct rb_node *node;
-	struct alloc_func *func;
 	struct machine *machine = &kmem_session->machines.host;
 	regex_t alloc_func_regex;
 	static const char pattern[] = "^_?_?(alloc|get_free|get_zeroed)_pages?";
@@ -368,29 +388,13 @@ static int build_alloc_func_list(void)
 		return -ENOENT;
 	}
 
-	map__for_each_symbol(kernel_map, sym, node) {
-		if (regexec(&alloc_func_regex, sym->name, 0, NULL, 0))
-			continue;
-
-		func = realloc(alloc_func_list,
-			       (nr_alloc_funcs + 1) * sizeof(*func));
-		if (func == NULL) {
-			regfree(&alloc_func_regex);
-			return -ENOMEM;
-		}
-
-		pr_debug("alloc func: %s\n", sym->name);
-		func[nr_alloc_funcs].start = sym->start;
-		func[nr_alloc_funcs].end   = sym->end;
-		func[nr_alloc_funcs].name  = sym->name;
-
-		alloc_func_list = func;
-		nr_alloc_funcs++;
-	}
-
-	qsort(alloc_func_list, nr_alloc_funcs, sizeof(*func), funcmp);
-
+	ret = map__for_each_symbol(kernel_map, build_alloc_func_list_cb, &alloc_func_regex);
 	regfree(&alloc_func_regex);
+	if (ret)
+		return ret;
+
+	qsort(alloc_func_list, nr_alloc_funcs, sizeof(*alloc_func_list), funcmp);
+
 	return 0;
 }
 

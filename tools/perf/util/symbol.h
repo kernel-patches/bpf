@@ -141,16 +141,16 @@ void symbol__set_annotate2(struct symbol *sym, bool annotate2);
 void symbol__set_inlined(struct symbol *sym, bool inlined);
 void symbol__set_ifunc_alias(struct symbol *sym, bool ifunc_alias);
 
-/* symbols__for_each_entry - iterate over symbols (rb_root)
+/*
+ * symbols__visit - iterate over symbols calling @cb for each entry
  *
- * @symbols: the rb_root of symbols
- * @pos: the 'struct symbol *' to use as a loop cursor
- * @nd: the 'struct rb_node *' to use as a temporary storage
+ * @symbols: the rb_root_cached of symbols
+ * @cb: callback function invoked for each symbol
+ * @data: opaque data pointer passed to @cb
  */
-#define symbols__for_each_entry(symbols, pos, nd)			\
-	for (nd = rb_first_cached(symbols);					\
-	     nd && (pos = rb_entry(nd, struct symbol, rb_node));	\
-	     nd = rb_next(nd))
+int symbols__visit(struct rb_root_cached *symbols,
+		   int (*cb)(struct symbol *sym, void *data),
+		   void *data);
 
 static inline size_t symbol__size(const struct symbol *sym)
 {

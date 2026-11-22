@@ -146,12 +146,12 @@ struct thread;
 /* map__for_each_symbol - iterate over the symbols in the given map
  *
  * @map: the 'struct map *' in which symbols are iterated
- * @pos: the 'struct symbol *' to use as a loop cursor
- * @n: the 'struct rb_node *' to use as a temporary storage
+ * @cb: callback function invoked for each symbol
+ * @data: opaque data pointer passed to @cb
  * Note: caller must ensure map->dso is not NULL (map is loaded).
  */
-#define map__for_each_symbol(map, pos, n)	\
-	dso__for_each_symbol(map__dso(map), pos, n)
+#define map__for_each_symbol(map, cb, data)	\
+	dso__for_each_symbol(map__dso(map), cb, data)
 
 /* map__for_each_symbol_with_name - iterate over the symbols in the given map
  *                                  that have the given name

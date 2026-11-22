@@ -613,6 +613,25 @@ struct symbol *dso__find_symbol(struct dso *dso, u64 addr)
 	return dso__last_find_result_symbol(dso);
 }
 
+int symbols__visit(struct rb_root_cached *symbols,
+		   int (*cb)(struct symbol *sym, void *data),
+		   void *data)
+{
+	struct rb_node *nd;
+
+	if (!symbols)
+		return 0;
+
+	for (nd = rb_first_cached(symbols); nd; nd = rb_next(nd)) {
+		struct symbol *sym = rb_entry(nd, struct symbol, rb_node);
+		int ret = cb(sym, data);
+
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
 struct symbol *dso__find_symbol_nocache(struct dso *dso, u64 addr)
 {
 	return symbols__find(dso__symbols(dso), addr);

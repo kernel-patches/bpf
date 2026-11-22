@@ -3047,49 +3047,63 @@ close_out:
 	return ret;
 }
 
+struct find_probe_functions_args {
+	const char *name;
+	struct symbol **syms;
+	int found;
+	bool cut_version;
+};
+
+static int find_probe_functions_cb(struct symbol *sym, void *data)
+{
+	struct find_probe_functions_args *args = data;
+	const char *norm, *ver;
+	char *buf = NULL;
+
+	norm = arch__normalize_symbol_name(sym->name);
+	if (!norm)
+		return 0;
+
+	if (args->cut_version) {
+		/* We don't care about default symbol or not */
+		ver = strchr(norm, '@');
+		if (ver) {
+			buf = strndup(norm, ver - norm);
+			if (!buf)
+				return -ENOMEM;
+			norm = buf;
+		}
+	}
+
+	if (strglobmatch(norm, args->name)) {
+		args->found++;
+		if (args->syms && args->found < probe_conf.max_probes)
+			args->syms[args->found - 1] = sym;
+	}
+	free(buf);
+	return 0;
+}
+
 static int find_probe_functions(struct map *map, char *name,
 				struct symbol **syms)
 {
-	int found = 0;
-	struct symbol *sym;
-	struct rb_node *tmp;
-	const char *norm, *ver;
-	char *buf = NULL;
-	bool cut_version = true;
+	struct find_probe_functions_args args = {
+		.name = name,
+		.syms = syms,
+		/* If user gives a version, don't cut off the version from symbols */
+		.cut_version = strchr(name, '@') == NULL,
+		.found = 0,
+	};
+	int ret;
 
 	if (map__load(map) < 0)
 		return -EACCES;	/* Possible permission error to load symbols */
 
-	/* If user gives a version, don't cut off the version from symbols */
-	if (strchr(name, '@'))
-		cut_version = false;
+	ret = map__for_each_symbol(map, find_probe_functions_cb, &args);
+	if (ret < 0)
+		return ret;
 
-	map__for_each_symbol(map, sym, tmp) {
-		norm = arch__normalize_symbol_name(sym->name);
-		if (!norm)
-			continue;
-
-		if (cut_version) {
-			/* We don't care about default symbol or not */
-			ver = strchr(norm, '@');
-			if (ver) {
-				buf = strndup(norm, ver - norm);
-				if (!buf)
-					return -ENOMEM;
-				norm = buf;
-			}
-		}
-
-		if (strglobmatch(norm, name)) {
-			found++;
-			if (syms && found < probe_conf.max_probes)
-				syms[found - 1] = sym;
-		}
-		if (buf)
-			zfree(&buf);
-	}
-
-	return found;
+	return args.found;
 }
 
 void __weak arch__fix_tev_from_maps(struct perf_probe_event *pev __maybe_unused,
