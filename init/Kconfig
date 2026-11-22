@@ -1283,6 +1283,16 @@ config NET_NS
 
 endif # NAMESPACES
 
+config USERLAND
+	bool "Userland support"
+	depends on NAMESPACES && USER_NS && PID_NS && UTS_NS && IPC_NS && NET_NS && CGROUPS
+	help
+	  Allow user space to open and manage isolated userlands and their init
+	  process lifecycle through an anonymous-inode control file descriptor
+	  via userland_open(), waitid(P_USERLAND), pidfd_send_signal(),
+	  USERLAND_GET_NSFD, USERLAND_SHARE_NSFD, FSCONFIG_SET_USERLAND, and
+	  clone3() with CLONE_INTO_USERLAND.
+
 config CHECKPOINT_RESTORE
 	bool "Checkpoint/restore support"
 	depends on PROC_FS
