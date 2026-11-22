@@ -145,26 +145,7 @@ def _setup_hw_gro(cfg):
     set_ethtool_feat(cfg.ifname, feat,
                      {"generic-receive-offload": False,
                       "rx-gro-hw": True,
-                      "large-receive-offload": False},
-                     check=False)
-
-    # Some NICs treat HW GRO as a GRO sub-feature so disabling GRO
-    # will also clear HW GRO. Use a hack of installing XDP generic
-    # to skip SW GRO, even when enabled.
-    feat = ethtool(f"-k {cfg.ifname}", json=True)[0]
-    if not feat["rx-gro-hw"]["active"]:
-        ksft_pr("Driver clears HW GRO when SW GRO is cleared, using generic XDP workaround")
-        prog = cfg.net_lib_dir / "xdp_dummy.bpf.o"
-        ip(f"link set dev {cfg.ifname} xdpgeneric obj {prog} sec xdp")
-        defer(ip, f"link set dev {cfg.ifname} xdpgeneric off")
-
-        # Attaching XDP may change features, fetch the latest state
-        feat = ethtool(f"-k {cfg.ifname}", json=True)[0]
-
-        set_ethtool_feat(cfg.ifname, feat,
-                         {"generic-receive-offload": True,
-                          "rx-gro-hw": True,
-                          "large-receive-offload": False})
+                      "large-receive-offload": False})
 
 
 def _check_gro_stats(cfg, test_queue, stats_before,
