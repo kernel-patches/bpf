@@ -364,6 +364,7 @@ static int build_alloc_func_list(void)
 	kernel_map = machine__kernel_map(machine);
 	if (map__load(kernel_map) < 0) {
 		pr_err("cannot load kernel map\n");
+		regfree(&alloc_func_regex);
 		return -ENOENT;
 	}
 
@@ -373,8 +374,10 @@ static int build_alloc_func_list(void)
 
 		func = realloc(alloc_func_list,
 			       (nr_alloc_funcs + 1) * sizeof(*func));
-		if (func == NULL)
+		if (func == NULL) {
+			regfree(&alloc_func_regex);
 			return -ENOMEM;
+		}
 
 		pr_debug("alloc func: %s\n", sym->name);
 		func[nr_alloc_funcs].start = sym->start;
