@@ -89,7 +89,7 @@ static u64 cper_timestamp_now(void)
 
 static void cper_init_intel_hdr(struct xe_device *xe, const struct xe_ras_error_class *counter,
 				u64 first_timestamp, u32 sig_id, u32 error_count,
-				struct xe_cper_intel_hdr *ihdr)
+				u32 einfo_size, struct xe_cper_intel_hdr *ihdr)
 {
 	ihdr->counter = *counter;
 	ihdr->validation_bits |= XE_CPER_VALID_LOCATION;
@@ -106,6 +106,7 @@ static void cper_init_intel_hdr(struct xe_device *xe, const struct xe_ras_error_
 	}
 
 	ihdr->error_count = error_count;
+	ihdr->einfo_size = einfo_size;
 
 	strscpy(ihdr->pci_bdf, pci_name(to_pci_dev(xe->drm.dev)), sizeof(ihdr->pci_bdf));
 	ihdr->validation_bits |= XE_CPER_VALID_PCI_BDF;
@@ -200,6 +201,226 @@ static void cper_record_emit(struct xe_device *xe, u8 severity,
 	kfree(rec);
 }
 
+static struct xe_cper_intel_info *fill_einfo(const struct xe_ras_error_class *counter,
+					     u32 error_count, const struct xe_ras_error_log *logs,
+					     u32 num_logs)
+{
+	struct xe_cper_intel_event *event;
+	struct xe_cper_intel_info *einfo;
+	u32 event_queue_size, i;
+
+	event_queue_size = num_logs * XE_CPER_INTEL_EVENT_SIZE;
+	einfo = kzalloc_flex(*einfo, event_queue, event_queue_size);
+	if (!einfo)
+		return NULL;
+
+	einfo->error_count = error_count;
+	einfo->event_queue_size = event_queue_size;
+	einfo->event_queue_count = num_logs;
+	einfo->counter = *counter;
+
+	event = (struct xe_cper_intel_event *)einfo->event_queue;
+	for (i = 0; i < num_logs; i++) {
+		event->size = sizeof_field(struct xe_ras_error_log, details);
+		event->timestamp = logs[i].timestamp;
+		memcpy(event->metadata, logs[i].details, sizeof(logs[i].details));
+		event = (void *)event + XE_CPER_INTEL_EVENT_SIZE;
+	}
+
+	return einfo;
+}
+
+static void free_info_arr(struct xe_cper_info_entry *info_arr, u32 num_entries)
+{
+	u32 i;
+
+	for (i = 0; i < num_entries; i++)
+		kfree(info_arr[i].einfo);
+	kfree(info_arr);
+}
+
+static bool build_info(struct xe_cper_info_entry *entry, const struct xe_ras_error_class *counter,
+		       u32 error_count, const struct xe_ras_error_log *logs, u32 num_logs)
+{
+	entry->einfo = fill_einfo(counter, error_count, logs, num_logs);
+	if (!entry->einfo)
+		return false;
+
+	entry->einfo_size = struct_size(entry->einfo, event_queue, entry->einfo->event_queue_size);
+	/* The first log is the first occurrence of the error */
+	entry->timestamp = logs[0].timestamp;
+	entry->hdr.counter = *counter;
+	entry->hdr.error_count = error_count;
+	return true;
+}
+
+static u32 build_detailed_info(const struct xe_ras_error_class *counter, u32 error_count,
+			       const struct xe_ras_error_log *logs, u32 num_logs,
+			       struct xe_cper_info_entry *info_arr)
+{
+	/* All logs belong to the queried class; the error count may exceed the logs kept */
+	if (!num_logs)
+		return 0;
+
+	num_logs = min_t(u32, num_logs, XE_RAS_NUM_COUNTERS);
+
+	return build_info(&info_arr[0], counter, error_count, logs, num_logs) ? 1 : 0;
+}
+
+static u32 build_aggregate_info(struct xe_device *xe,
+				const struct xe_ras_dynamic_counter_hdr *hdrs,
+				u32 num_hdrs, const struct xe_ras_error_log *logs,
+				u32 avail_logs, struct xe_cper_info_entry *info_arr)
+{
+	u32 num_entries = 0;
+
+	for (u32 i = 0, log_offset = 0; i < num_hdrs; i++) {
+		u32 num_logs = min_t(u32, hdrs[i].error_count, XE_RAS_NUM_COUNTERS);
+
+		if (num_logs > avail_logs - log_offset) {
+			xe_warn(xe, "CPER: header[%u] claims %u logs but only %u remain\n",
+				i, num_logs, avail_logs - log_offset);
+			break;
+		}
+
+		if (!num_logs)
+			continue;
+
+		if (!build_info(&info_arr[num_entries], &hdrs[i].counter, hdrs[i].error_count,
+				&logs[log_offset], num_logs))
+			break;
+
+		log_offset += num_logs;
+		num_entries++;
+	}
+
+	return num_entries;
+}
+
+static u32 cper_get_info_queue_buffer(struct xe_device *xe,
+				      const struct xe_ras_get_counter_response *response,
+				      u32 buf_size, u8 **raw_buf_out)
+{
+	u32 raw_total;
+	u8 *raw_buf;
+
+	/* Draining the info queue sends sysctrl commands */
+	might_sleep();
+	xe_device_assert_mem_access(xe);
+
+	raw_buf = kzalloc_objs(*raw_buf, buf_size);
+	if (!raw_buf)
+		return 0;
+
+	raw_total = xe_ras_drain_info_queue(xe, response, raw_buf, buf_size);
+	if (!raw_total) {
+		kfree(raw_buf);
+		return 0;
+	}
+
+	*raw_buf_out = raw_buf;
+	return raw_total;
+}
+
+static u32 cper_build_info_arr(struct xe_device *xe,
+			       const struct xe_ras_get_counter_response *response,
+			       const u8 *raw_buf, u32 raw_total,
+			       struct xe_cper_info_entry **info_arr_out)
+{
+	const struct xe_ras_error_log *logs;
+	struct xe_cper_info_entry *info_arr;
+	u32 num_headers, headers_size, avail_logs, num_entries;
+
+	num_headers = response->first.header.num_headers;
+	headers_size = num_headers * sizeof(struct xe_ras_dynamic_counter_hdr);
+	if (headers_size > raw_total) {
+		xe_warn(xe, "CPER: aggregate headers size (%u) exceeds raw total (%u)\n",
+			headers_size, raw_total);
+		return 0;
+	}
+
+	logs = (const struct xe_ras_error_log *)(raw_buf + headers_size);
+	avail_logs = (raw_total - headers_size) / sizeof(*logs);
+
+	info_arr = kzalloc_objs(*info_arr, num_headers ?: 1);
+	if (!info_arr)
+		return 0;
+
+	if (num_headers)
+		num_entries = build_aggregate_info(xe, (const void *)raw_buf, num_headers,
+						   logs, avail_logs, info_arr);
+	else
+		num_entries = build_detailed_info(&response->counter, response->value,
+						  logs, avail_logs, info_arr);
+
+	if (!num_entries) {
+		kfree(info_arr);
+		return 0;
+	}
+
+	*info_arr_out = info_arr;
+	return num_entries;
+}
+
+/**
+ * cper_prepare_info() - Build the CPER error info records from RAS info queue data
+ * @xe: xe device instance
+ * @response: counter response containing the first embedded chunk
+ * @info_arr: output array of CPER info entries
+ *
+ * Assembles the complete raw info queue data from the first chunk already
+ * embedded in @response and any additional chunks fetched via
+ * GET_INFO_QUEUE.  Two use cases are supported based on num_headers in
+ * the info queue header:
+ *
+ * Detail error counter (num_headers == 0)::
+ *
+ *   [xe_ras_error_log * N]
+ *
+ *   Returns one xe_cper_info_entry covering up to XE_RAS_NUM_COUNTERS logs.
+ *
+ * Aggregate error counter (num_headers > 0)::
+ *
+ *   [xe_ras_dynamic_counter_hdr * num_headers]
+ *   [xe_ras_error_log * N]
+ *
+ *   Returns one xe_cper_info_entry per header. Each header's @counter
+ *   identifies its error class, and @error_count gives its error count. Up to
+ *   XE_RAS_NUM_COUNTERS xe_ras_error_log entries are associated with each
+ *   header. The header's counter populates the entry's einfo->counter.
+ *
+ * Returns: Number of entries in @info_arr, or zero if no info queue is
+ *          available or no error info could be built. The caller must free
+ *          @info_arr with free_info_arr() when the return value is nonzero.
+ */
+static u32 cper_prepare_info(struct xe_device *xe,
+			     const struct xe_ras_get_counter_response *response,
+			     struct xe_cper_info_entry **info_arr)
+{
+	u32 buf_size, raw_total, num_entries;
+	u8 *raw_buf = NULL;
+
+	buf_size = xe_ras_get_info_queue_size(xe, response);
+	if (!buf_size)
+		return 0;
+
+	raw_total = cper_get_info_queue_buffer(xe, response, buf_size, &raw_buf);
+	if (!raw_total) {
+		xe_warn(xe, "CPER: failed to build error info from info queue, emitting record without it\n");
+		return 0;
+	}
+
+	num_entries = cper_build_info_arr(xe, response, raw_buf, raw_total, info_arr);
+
+	kfree(raw_buf);
+	if (!num_entries) {
+		xe_warn(xe, "CPER: failed to build error info from info queue, emitting record without it\n");
+		return 0;
+	}
+
+	return num_entries;
+}
+
 /**
  * xe_cper_emit_counter() - Emit CPER records for an already fetched error counter
  * @xe: The &xe_device
@@ -207,18 +428,42 @@ static void cper_record_emit(struct xe_device *xe, u8 severity,
  * @sigid: Error signature identifier
  * @response: Counter response returned by firmware
  *
- * Build and emit a CPER record from @response.
+ * Build and emit CPER records from @response, including any info queue data.
  */
 void xe_cper_emit_counter(struct xe_device *xe, int cper_sev, enum xe_sigid sigid,
 			  const struct xe_ras_get_counter_response *response)
 {
-	struct xe_cper_intel_hdr ihdr = {};
+	struct xe_cper_info_entry *info_arr = NULL, *entries;
+	struct xe_cper_info_entry single = {};
+	u32 num_entries, count, i;
 
 	xe_assert(xe, is_hw_sigid(sigid));
 
-	cper_init_intel_hdr(xe, &response->counter, response->timestamp,
-			    sigid, response->value, &ihdr);
-	cper_record_emit(xe, cper_sev, &INTEL_CPER_NOTIFY_GPU_ERROR, &ihdr, NULL, 0);
+	/* Without info queue data, emit a single record from the counter itself */
+	single.hdr.counter = response->counter;
+	single.hdr.error_count = response->value;
+	single.timestamp = response->timestamp;
+	entries = &single;
+	count = 1;
+
+	num_entries = cper_prepare_info(xe, response, &info_arr);
+	if (num_entries) {
+		entries = info_arr;
+		count = num_entries;
+	}
+
+	for (i = 0; i < count; i++) {
+		struct xe_cper_intel_hdr ihdr = {};
+
+		cper_init_intel_hdr(xe, &entries[i].hdr.counter, entries[i].timestamp,
+				    sigid, entries[i].hdr.error_count,
+				    entries[i].einfo_size, &ihdr);
+
+		cper_record_emit(xe, cper_sev, &INTEL_CPER_NOTIFY_GPU_ERROR, &ihdr,
+				 entries[i].einfo, entries[i].einfo_size);
+	}
+
+	free_info_arr(info_arr, num_entries);
 }
 
 static void cper_emit_hw_err(struct xe_device *xe, int cper_sev, enum xe_sigid sigid,

@@ -12,6 +12,8 @@
 #define XE_RAS_NUM_COUNTERS			16
 #define XE_RAS_NUM_ERROR_ARR			3
 #define XE_RAS_NUM_PAGES			25
+#define XE_RAS_ERROR_DWORDS_MAX			16
+
 /* Error bits in IEH global error status register */
 #define XE_RAS_SOC_IEH_PUNIT			BIT(1)
 /* Device memory error categories */
@@ -169,6 +171,31 @@ struct xe_ras_info_queue_data_response {
 	struct xe_ras_info_queue_header header;
 	/** @data: Info queue data for this chunk */
 	u8 data[XE_RAS_INFO_QUEUE_MAX_CHUNK_SIZE];
+} __packed;
+
+/**
+ * struct xe_ras_dynamic_counter_hdr - Aggregate counter header entry
+ *
+ * When a session requests aggregate counter data, one header per matching
+ * dynamic counter class is prepended to the queue data. The @counter field
+ * identifies the error class, and @error_count is its error count; at most
+ * XE_RAS_NUM_COUNTERS error log entries follow for it.
+ */
+struct xe_ras_dynamic_counter_hdr {
+	/** @counter: Error class associated with this counter group */
+	struct xe_ras_error_class counter;
+	/** @error_count: Error count of this class */
+	u32 error_count;
+} __packed;
+
+/**
+ * struct xe_ras_error_log - Single error log entry following dynamic counter headers
+ */
+struct xe_ras_error_log {
+	/** @timestamp: Timestamp when the error was recorded */
+	u64 timestamp;
+	/** @details: Error-specific details */
+	u32 details[XE_RAS_ERROR_DWORDS_MAX];
 } __packed;
 
 /**
