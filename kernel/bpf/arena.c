@@ -694,6 +694,34 @@ static int arena_map_mmap(struct bpf_map *map, struct vm_area_struct *vma)
 	if (remember_vma(arena, vma))
 		return -ENOMEM;
 
+	if (!arena->user_vm_start && vma_pages(vma) < map->max_entries) {
+		/*
+		 * The range tree spans max_entries pages, but the user VMA
+		 * set below is smaller and its lower 32 bits do not wrap
+		 * past the 32-bit boundary.  Mark the pages past the VMA as
+		 * allocated so that bpf_arena_alloc_pages() can never hand
+		 * out a range that would be mapped past the end of the
+		 * arena's kernel vm area and could never be freed.
+		 */
+		unsigned long flags;
+		int ret = -EBUSY;
+
+		if (!raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
+			ret = range_tree_clear(&arena->rt, vma_pages(vma),
+					       map->max_entries - vma_pages(vma));
+			raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+			WARN_ON_ONCE(ret);
+		}
+		if (ret) {
+			struct vma_list *vml = vma->vm_private_data;
+
+			list_del(&vml->head);
+			vma->vm_private_data = NULL;
+			kfree(vml);
+			return ret;
+		}
+	}
+
 	arena->user_vm_start = vma->vm_start;
 	arena->user_vm_end = vma->vm_end;
 	/*
@@ -743,7 +771,8 @@ static u64 clear_lo32(u64 val)
 	return val & ~(u64)~0U;
 }
 
-static int arena_adjust_tree(struct bpf_arena *arena, long uaddr, long page_cnt, long *pgoff)
+static int arena_adjust_tree(struct bpf_arena *arena, long uaddr, long page_cnt,
+			     long page_cnt_max, long *pgoff)
 {
 	int ret;
 
@@ -758,6 +787,17 @@ static int arena_adjust_tree(struct bpf_arena *arena, long uaddr, long page_cnt,
 	ret = range_tree_find(&arena->rt, page_cnt);
 	if (ret < 0)
 		return ret;
+
+	/*
+	 * The range tree spans max_entries pages, but when map_extra was
+	 * not given at arena creation time the user VMA, and hence the
+	 * range whose lower 32 bits do not wrap past the 32-bit boundary,
+	 * can be smaller.  A pgoff past the VMA would wrap uaddr32 past
+	 * the 32-bit boundary, be mapped past the end of the arena's
+	 * kernel vm area, and could never be freed, so reject it.
+	 */
+	if (ret > page_cnt_max - page_cnt)
+		return -ERANGE;
 
 	*pgoff = ret;
 
@@ -812,7 +852,7 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags))
 		goto out_free_pages;
 
-	ret = arena_adjust_tree(arena, uaddr, page_cnt, &pgoff);
+	ret = arena_adjust_tree(arena, uaddr, page_cnt, page_cnt_max, &pgoff);
 	if (ret) {
 		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 		goto out_free_pages;
