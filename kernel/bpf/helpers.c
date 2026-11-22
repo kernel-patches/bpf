@@ -3406,6 +3406,251 @@ __bpf_kfunc int bpf_dynptr_memset(const struct bpf_dynptr *p, u64 offset, u64 si
 	return 0;
 }
 
+#define BPF_MEMMEM_MAX_LEN (2 * 1024 * 1024)
+#define BPF_MEMMEM_MAX_NEEDLE_SZ 4096
+
+/*
+ * Crochemore-Perrin Two-Way string matching algorithm.
+ * Computes the maximal suffix for lexicographical order (<=) to find
+ * the critical factorization split index and local period in O(m) time and O(1) space.
+ */
+static size_t bpf_max_suffix(const unsigned char *needle, size_t needle_sz,
+			     size_t *out_period)
+{
+	ssize_t max_suf_idx = -1;
+	ssize_t curr_pos = 0;
+	ssize_t offset = 1;
+	ssize_t period = 1;
+	ssize_t len = (ssize_t)needle_sz;
+
+	while (curr_pos + offset < len) {
+		unsigned char char_a = needle[curr_pos + offset];
+		unsigned char char_b = needle[max_suf_idx + offset];
+
+		if (char_a < char_b) {
+			curr_pos += offset;
+			offset = 1;
+			period = curr_pos - max_suf_idx;
+		} else if (char_a > char_b) {
+			max_suf_idx = curr_pos;
+			curr_pos = max_suf_idx + 1;
+			offset = 1;
+			period = 1;
+		} else {
+			if (offset == period) {
+				curr_pos += period;
+				offset = 1;
+			} else {
+				offset++;
+			}
+		}
+	}
+	*out_period = (size_t)period;
+	return (size_t)(max_suf_idx + 1);
+}
+
+/*
+ * Computes the maximal suffix for reverse lexicographical order (>=).
+ */
+static size_t bpf_max_suffix_rev(const unsigned char *needle, size_t needle_sz,
+				 size_t *out_period)
+{
+	ssize_t max_suf_idx = -1;
+	ssize_t curr_pos = 0;
+	ssize_t offset = 1;
+	ssize_t period = 1;
+	ssize_t len = (ssize_t)needle_sz;
+
+	while (curr_pos + offset < len) {
+		unsigned char char_a = needle[curr_pos + offset];
+		unsigned char char_b = needle[max_suf_idx + offset];
+
+		if (char_a > char_b) {
+			curr_pos += offset;
+			offset = 1;
+			period = curr_pos - max_suf_idx;
+		} else if (char_a < char_b) {
+			max_suf_idx = curr_pos;
+			curr_pos = max_suf_idx + 1;
+			offset = 1;
+			period = 1;
+		} else {
+			if (offset == period) {
+				curr_pos += period;
+				offset = 1;
+			} else {
+				offset++;
+			}
+		}
+	}
+	*out_period = (size_t)period;
+	return (size_t)(max_suf_idx + 1);
+}
+
+/*
+ * In-kernel binary byte sequence search using the Crochemore-Perrin
+ * Two-Way algorithm. Guarantees O(N) linear time in the worst case with
+ * strictly O(1) extra space, eliminating quadratic RCU stalls without
+ * artificial comparison budgets or premature abort hazards.
+ */
+static void *__bpf_memmem(const void *haystack, size_t haystack_sz,
+			  const void *needle, size_t needle_sz)
+{
+	const unsigned char *h = (const unsigned char *)haystack;
+	const unsigned char *n = (const unsigned char *)needle;
+	size_t period_fwd, period_rev, period;
+	size_t split_fwd, split_rev, split_idx;
+	size_t h_idx, n_idx, memory, shift;
+
+	if (needle_sz == 0)
+		return (void *)haystack;
+	if (needle_sz > haystack_sz)
+		return NULL;
+	if (needle_sz == 1)
+		return (void *)memchr(haystack, n[0], haystack_sz);
+
+	/* Preprocessing: Find critical factorization split point */
+	split_fwd = bpf_max_suffix(n, needle_sz, &period_fwd);
+	split_rev = bpf_max_suffix_rev(n, needle_sz, &period_rev);
+
+	if (split_fwd > split_rev) {
+		split_idx = split_fwd;
+		period = period_fwd;
+	} else {
+		split_idx = split_rev;
+		period = period_rev;
+	}
+
+	if (memcmp(n, n + period, needle_sz - period) == 0) {
+		/* Case 1: Periodic needle */
+		memory = 0;
+		h_idx = 0;
+		while (h_idx <= haystack_sz - needle_sz) {
+			n_idx = (split_idx > memory) ? split_idx : memory;
+			while (n_idx < needle_sz && n[n_idx] == h[h_idx + n_idx])
+				n_idx++;
+
+			if (n_idx < needle_sz) {
+				h_idx += (n_idx - split_idx + 1);
+				memory = 0;
+			} else {
+				n_idx = split_idx;
+				while (n_idx > memory && n[n_idx - 1] == h[h_idx + n_idx - 1])
+					n_idx--;
+				if (n_idx <= memory)
+					return (void *)(h + h_idx);
+				h_idx += period;
+				memory = needle_sz - period;
+			}
+		}
+	} else {
+		/* Case 2: Non-periodic needle */
+		shift = (split_idx > needle_sz - split_idx) ? split_idx : (needle_sz - split_idx);
+		shift++;
+		h_idx = 0;
+		while (h_idx <= haystack_sz - needle_sz) {
+			n_idx = split_idx;
+			while (n_idx < needle_sz && n[n_idx] == h[h_idx + n_idx])
+				n_idx++;
+
+			if (n_idx < needle_sz) {
+				h_idx += (n_idx - split_idx + 1);
+			} else {
+				n_idx = split_idx;
+				while (n_idx > 0 && n[n_idx - 1] == h[h_idx + n_idx - 1])
+					n_idx--;
+				if (n_idx == 0)
+					return (void *)(h + h_idx);
+				h_idx += shift;
+			}
+		}
+	}
+
+	return NULL;
+}
+
+/**
+ * bpf_memmem - search for needle byte pattern in a flat memory buffer
+ * @haystack: pointer to haystack memory buffer
+ * @haystack__sz: size of haystack buffer in bytes
+ * @needle: pointer to byte pattern to search for
+ * @needle__sz: size of pattern in bytes
+ * @flags: reserved for future options (must be 0)
+ *
+ * Return:
+ * * >=0      - 0-based byte offset of match in haystack
+ * * %-ENOENT - needle was not found in haystack
+ * * %-EINVAL - invalid flags or parameters
+ * * %-E2BIG  - haystack exceeds 2 MB or needle exceeds 4 KB
+ */
+__bpf_kfunc long bpf_memmem(const void *haystack, u32 haystack__sz,
+			    const void *needle, u32 needle__sz,
+			    u64 flags)
+{
+	const void *match;
+
+	if (flags)
+		return -EINVAL;
+	if (!haystack || !needle || needle__sz == 0 || haystack__sz == 0)
+		return -EINVAL;
+	if (needle__sz > haystack__sz)
+		return -EINVAL;
+	if (haystack__sz > BPF_MEMMEM_MAX_LEN || needle__sz > BPF_MEMMEM_MAX_NEEDLE_SZ)
+		return -E2BIG;
+
+	match = __bpf_memmem(haystack, haystack__sz, needle, needle__sz);
+	if (!match)
+		return -ENOENT;
+
+	return (long)((const char *)match - (const char *)haystack);
+}
+
+/**
+ * bpf_dynptr_memmem - search for needle within a dynamic pointer
+ * @haystack: pointer to dynptr representing the search buffer
+ * @needle: pointer to pattern to search for
+ * @needle__sz: size of pattern in bytes
+ * @flags: reserved for future options (must be 0)
+ *
+ * Return:
+ * * >=0      - 0-based byte offset of match in dynptr buffer
+ * * %-ENOENT - needle was not found
+ * * %-EINVAL - invalid flags, non-linear buffer, or parameters
+ * * %-E2BIG  - dynptr buffer exceeds 2 MB or needle exceeds 4 KB
+ */
+__bpf_kfunc long bpf_dynptr_memmem(const struct bpf_dynptr *haystack,
+				   const void *needle, u32 needle__sz,
+				   u64 flags)
+{
+	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)haystack;
+	const void *data;
+	const void *match;
+	u64 size;
+
+	if (flags)
+		return -EINVAL;
+	if (!ptr || !needle || needle__sz == 0)
+		return -EINVAL;
+	if (needle__sz > BPF_MEMMEM_MAX_NEEDLE_SZ)
+		return -E2BIG;
+
+	size = __bpf_dynptr_size(ptr);
+	if (size > BPF_MEMMEM_MAX_LEN)
+		return -E2BIG;
+	if (size == 0 || needle__sz > size)
+		return -EINVAL;
+
+	data = __bpf_dynptr_data(ptr, size);
+	if (!data)
+		return -EINVAL;
+
+	match = __bpf_memmem(data, size, needle, needle__sz);
+	if (!match)
+		return -ENOENT;
+
+	return (long)((const char *)match - (const char *)data);
+}
+
 __bpf_kfunc void *bpf_cast_to_kern_ctx(void *obj)
 {
 	return obj;
@@ -5214,6 +5459,8 @@ BTF_ID_FLAGS(func, bpf_dynptr_size)
 BTF_ID_FLAGS(func, bpf_dynptr_clone)
 BTF_ID_FLAGS(func, bpf_dynptr_copy)
 BTF_ID_FLAGS(func, bpf_dynptr_memset)
+BTF_ID_FLAGS(func, bpf_memmem)
+BTF_ID_FLAGS(func, bpf_dynptr_memmem)
 #ifdef CONFIG_NET
 BTF_ID_FLAGS(func, bpf_modify_return_test_tp)
 #endif
