@@ -105,6 +105,9 @@ class cmd:
         if terminate:
             self.proc.terminate()
         stdout, stderr = self.proc.communicate(timeout=timeout)
+        if self.ksft_term_fd is not None:
+            os.close(self.ksft_term_fd)
+            self.ksft_term_fd = None
         self.stdout = stdout.decode("utf-8")
         self.stderr = stderr.decode("utf-8")
         self.proc.stdout.close()
