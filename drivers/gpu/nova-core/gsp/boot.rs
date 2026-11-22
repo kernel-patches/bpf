@@ -40,7 +40,8 @@ impl<'gsp> super::Gsp<'gsp> {
         let dev = pdev.as_ref();
         let hal = super::hal::gsp_hal(chipset);
 
-        let gsp_fw = KBox::pin_init(GspFirmware::new(dev, chipset), GFP_KERNEL)?;
+        // Initialize the firmware in place to limit stack usage during boot.
+        let gsp_fw = KBox::init(GspFirmware::new(dev, chipset), GFP_KERNEL)?;
 
         self.cmdq
             .send_command_no_wait(commands::SetSystemInfo::new(pdev, chipset))?;

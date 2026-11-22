@@ -32,7 +32,6 @@ use crate::{
 };
 
 /// A radix3 page table and the data it maps.
-#[pin_data]
 pub(crate) struct Radix3<'a> {
     /// The mapped data.
     data: SGTable<Owned<'a, VVec<u8>>>,
@@ -51,41 +50,37 @@ impl<'a> Radix3<'a> {
     pub(crate) fn new(
         dev: &'a device::Device<device::Bound>,
         data: VVec<u8>,
-    ) -> impl PinInit<Self, Error> + 'a {
-        let size = data.len();
+    ) -> impl Init<Self, Error> + 'a {
+        try_init!(Self {
+            size: data.len(),
+            data: SGTable::new(dev, data, DataDirection::ToDevice, GFP_KERNEL)?,
+            level2: {
+                let l2 = build_lvl(data)?;
+                SGTable::new(dev, l2, DataDirection::ToDevice, GFP_KERNEL)?
+            },
+            level1: {
+                let l1 = build_lvl(level2)?;
+                SGTable::new(dev, l1, DataDirection::ToDevice, GFP_KERNEL)?
+            },
+            level0: {
+                // Allocate the level 0 page table as a device-visible DMA object, and map the
+                // level 1 page table onto it.
 
-        pin_init::pin_init_scope(move || {
-            Ok(try_pin_init!(Self {
-                data: SGTable::new(dev, data, DataDirection::ToDevice, GFP_KERNEL)?,
-                level2: {
-                    let l2 = build_lvl(data)?;
-                    SGTable::new(dev, l2, DataDirection::ToDevice, GFP_KERNEL)?
-                },
-                level1: {
-                    let l1 = build_lvl(level2)?;
-                    SGTable::new(dev, l1, DataDirection::ToDevice, GFP_KERNEL)?
-                },
-                level0: {
-                    // Allocate the level 0 page table as a device-visible DMA object, and map the
-                    // level 1 page table onto it.
+                // Fill level 1 page entry.
+                let level1_entry = level1.iter().next().ok_or(EINVAL)?;
+                let level1_entry_addr = level1_entry.dma_address();
 
-                    // Fill level 1 page entry.
-                    let level1_entry = level1.iter().next().ok_or(EINVAL)?;
-                    let level1_entry_addr = level1_entry.dma_address();
+                // Create level 0 page table data and fill its first entry with the level 1
+                // table.
+                let mut level0 = CoherentBox::<'_, [u64]>::zeroed_slice(
+                    dev,
+                    GSP_PAGE_SIZE / size_of::<u64>(),
+                    GFP_KERNEL,
+                )?;
+                level0[0] = level1_entry_addr.to_le();
 
-                    // Create level 0 page table data and fill its first entry with the level 1
-                    // table.
-                    let mut level0 = CoherentBox::<'_, [u64]>::zeroed_slice(
-                        dev,
-                        GSP_PAGE_SIZE / size_of::<u64>(),
-                        GFP_KERNEL,
-                    )?;
-                    level0[0] = level1_entry_addr.to_le();
-
-                    level0.into()
-                },
-                size,
-            }))
+                level0.into()
+            },
         })
     }
 
