@@ -16,6 +16,8 @@
 #include <linux/slab.h>
 #include <linux/syscalls.h>
 #include <linux/uaccess.h>
+#include <linux/cgroup_namespace.h>
+#include <linux/ipc_namespace.h>
 #include <linux/mnt_namespace.h>
 #include <linux/nsproxy.h>
 #include <linux/ns_common.h>
@@ -24,6 +26,8 @@
 #include <linux/pid_namespace.h>
 #include <linux/time_namespace.h>
 #include <linux/user_namespace.h>
+#include <linux/uts_namespace.h>
+#include <net/net_namespace.h>
 #include <linux/idr.h>
 #include <uapi/linux/userland.h>
 
@@ -56,6 +60,76 @@ static __poll_t userland_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
+static long userland_get_nsfd(struct userland *userland, unsigned long nstype)
+{
+	struct ns_common *ns = NULL;
+
+	if (nstype > UINT_MAX)
+		return -EINVAL;
+	if (!ns_capable(userland->user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if (nstype == CLONE_NEWPID) {
+		if (!pidns_is_ancestor(userland->ns->pid_ns_for_children,
+				       task_active_pid_ns(current)))
+			return -EXDEV;
+		if (READ_ONCE(userland->state) != USERLAND_RUNNING)
+			return -ESRCH;
+	}
+
+	scoped_guard(spinlock, &userland->lock) {
+		switch (nstype) {
+		case CLONE_NEWNS:
+			ns = from_mnt_ns(userland->ns->mnt_ns);
+			break;
+		case CLONE_NEWCGROUP:
+			ns = to_ns_common(userland->ns->cgroup_ns);
+			break;
+		case CLONE_NEWUTS:
+			ns = to_ns_common(userland->ns->uts_ns);
+			break;
+		case CLONE_NEWIPC:
+			ns = to_ns_common(userland->ns->ipc_ns);
+			break;
+		case CLONE_NEWUSER:
+			ns = to_ns_common(userland->user_ns);
+			break;
+		case CLONE_NEWPID:
+			ns = to_ns_common(userland->ns->pid_ns_for_children);
+			break;
+		case CLONE_NEWNET:
+			ns = to_ns_common(userland->ns->net_ns);
+			break;
+		case CLONE_NEWTIME:
+#ifdef CONFIG_TIME_NS
+			ns = to_ns_common(userland->ns->time_ns);
+			break;
+#else
+			return -EOPNOTSUPP;
+#endif
+		default:
+			return -EINVAL;
+		}
+
+		if (!__ns_ref_get(ns))
+			return -ESRCH;
+	}
+
+	return open_namespace(ns);
+}
+
+static long userland_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct userland *userland = file->private_data;
+
+	switch (cmd) {
+	case USERLAND_GET_NSFD:
+		return userland_get_nsfd(userland, arg);
+	default:
+		return -ENOIOCTLCMD;
+	}
+}
+
 static int userland_release(struct inode *inode, struct file *file)
 {
 	struct userland *userland = file->private_data;
@@ -78,6 +152,8 @@ static int userland_release(struct inode *inode, struct file *file)
 
 static const struct file_operations userland_fops = {
 	.poll		= userland_poll,
+	.unlocked_ioctl	= userland_ioctl,
+	.compat_ioctl	= userland_ioctl,
 	.release	= userland_release,
 };
 
