@@ -1792,8 +1792,8 @@ void free_huge_folio(struct folio *folio)
 		h->resv_huge_pages++;
 
 	if (folio_test_hugetlb_temporary(folio)) {
-		folio_clear_hugetlb_temporary(folio);
 		remove_hugetlb_folio(h, folio, false);
+		folio_clear_hugetlb_temporary(folio);
 		spin_unlock_irqrestore(&hugetlb_lock, flags);
 		update_and_free_hugetlb_folio(h, folio, true);
 	} else if (h->surplus_huge_pages_node[nid]) {
