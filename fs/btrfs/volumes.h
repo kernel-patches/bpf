@@ -191,7 +191,7 @@ struct btrfs_device {
 
 	/* disk I/O failure stats. For detailed description refer to
 	 * enum btrfs_dev_stat_values in ioctl.h */
-	int dev_stats_valid;
+	bool dev_stats_valid;
 
 	/* Counter to record the change of device stats */
 	atomic_t dev_stats_ccnt;

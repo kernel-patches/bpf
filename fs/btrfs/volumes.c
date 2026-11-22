@@ -3065,7 +3065,7 @@ int btrfs_init_new_device(struct btrfs_fs_info *fs_info, const char *device_path
 	 * created at the next transaction commit.
 	 */
 	atomic_inc(&device->dev_stats_ccnt);
-	device->dev_stats_valid = 1;
+	device->dev_stats_valid = true;
 
 	if (seeding_dev) {
 		/* GFP_KERNEL allocation must not be under device_list_mutex */
@@ -8440,7 +8440,7 @@ static int btrfs_device_init_dev_stats(struct btrfs_device *device,
 	if (ret) {
 		for (i = 0; i < BTRFS_DEV_STAT_VALUES_MAX; i++)
 			btrfs_dev_stat_set(device, i, 0);
-		device->dev_stats_valid = 1;
+		device->dev_stats_valid = true;
 		btrfs_release_path(path);
 		return ret < 0 ? ret : 0;
 	}
@@ -8458,7 +8458,7 @@ static int btrfs_device_init_dev_stats(struct btrfs_device *device,
 			btrfs_dev_stat_set(device, i, 0);
 	}
 
-	device->dev_stats_valid = 1;
+	device->dev_stats_valid = true;
 	btrfs_dev_stat_print_on_load(device);
 	btrfs_release_path(path);
 
