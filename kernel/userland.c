@@ -135,3 +135,111 @@ void userland_exit(struct pid_namespace *pid_ns, struct task_struct *tsk)
 	__wake_up(&c->waitq, TASK_NORMAL, 0, poll_to_key(EPOLLHUP));
 	userland_put(c);
 }
+
+static struct user_namespace *userland_create_user_ns(void)
+{
+	struct user_namespace *user_ns;
+	struct cred *new;
+	int ret;
+
+	new = prepare_creds();
+	if (!new)
+		return ERR_PTR(-ENOMEM);
+
+	ret = create_user_ns(new);
+	if (ret < 0) {
+		abort_creds(new);
+		return ERR_PTR(ret);
+	}
+
+	user_ns = get_user_ns(new->user_ns);
+	abort_creds(new);
+	return user_ns;
+}
+
+static struct userland *userland_create(unsigned int flags)
+{
+	u64 clone_flags = CLONE_NEWNS | CLONE_EMPTY_MNTNS | CLONE_NEWPID |
+			  CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC |
+			  CLONE_NEWNET |
+			  (IS_ENABLED(CONFIG_TIME_NS) ? CLONE_NEWTIME : 0);
+	struct user_namespace *user_ns;
+	struct nsproxy *ns;
+	struct userland *c;
+	int ret;
+
+	c = kzalloc_obj(*c, GFP_KERNEL);
+	if (!c)
+		return ERR_PTR(-ENOMEM);
+
+	init_waitqueue_head(&c->waitq);
+	spin_lock_init(&c->lock);
+	refcount_set(&c->usage, 1);
+	c->flags = flags;
+
+	user_ns = userland_create_user_ns();
+	if (IS_ERR(user_ns)) {
+		ret = PTR_ERR(user_ns);
+		goto err_put;
+	}
+	c->user_ns = user_ns;
+	ns_ref_active_get(user_ns);
+
+	if (!ns_capable(user_ns, CAP_SYS_ADMIN)) {
+		ret = -EPERM;
+		goto err_put;
+	}
+
+	ns = create_new_namespaces(clone_flags, current, user_ns, NULL);
+	if (IS_ERR(ns)) {
+		ret = PTR_ERR(ns);
+		goto err_put;
+	}
+
+	if (ns->time_ns != ns->time_ns_for_children) {
+		get_time_ns(ns->time_ns_for_children);
+		put_time_ns(ns->time_ns);
+		ns->time_ns = ns->time_ns_for_children;
+	}
+	c->ns = ns;
+	nsproxy_ns_active_get(ns);
+
+	return c;
+
+err_put:
+	userland_put(c);
+	return ERR_PTR(ret);
+}
+
+/**
+ * sys_userland_open - Open a new userland
+ * @flags: Combination of &enum userland_flags values
+ *
+ * Allocate a userland owning a fresh child user namespace (with the caller's
+ * effective UID and GID as owner and initially empty ID mappings) and dedicated
+ * empty mount, PID, UTS, IPC, network, cgroup, and time namespaces. Control
+ * operations authorize against capabilities in the userland's owning user
+ * namespace.
+ *
+ * Return: Userland file descriptor on success, negative error code on failure.
+ */
+SYSCALL_DEFINE1(userland_open, unsigned int, flags)
+{
+	struct userland *c;
+	int fd;
+
+	if (flags & ~USERLAND_ALL_FLAGS)
+		return -EINVAL;
+
+	c = userland_create(flags);
+	if (IS_ERR(c))
+		return PTR_ERR(c);
+
+	fd = anon_inode_getfd("userland", &userland_fops, c,
+			      O_RDWR |
+			      (flags & USERLAND_CLOSE_ON_EXEC ? O_CLOEXEC : 0));
+	if (fd < 0)
+		userland_put(c);
+
+	return fd;
+}
