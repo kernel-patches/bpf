@@ -5148,6 +5148,105 @@ static void rtl8xxxu_free_tx_urb(struct rtl8xxxu_priv *priv,
 	spin_unlock_irqrestore(&priv->tx_urb_lock, flags);
 }
 
+/*
+ * Gen1 chips can report the ACK status of a frame through the C2H event
+ * mailbox. There is no way to tell which frame a report belongs to, so
+ * only one frame at a time asks for one, until its report arrives. The
+ * report comes when the frame is done, which can take seconds with many
+ * retries, so wait for it rather than risk taking it for the next frame.
+ */
+#define RTL8XXXU_TX_REPORT_TIMEOUT	msecs_to_jiffies(10000)
+
+static bool rtl8xxxu_tx_report_claim(struct rtl8xxxu_priv *priv,
+				     struct sk_buff *skb)
+{
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+	struct ieee80211_tx_info *tx_info = IEEE80211_SKB_CB(skb);
+	bool claimed = false;
+	unsigned long flags;
+
+	if (!priv->fops->has_c2hevt_tx_report ||
+	    !(tx_info->flags & IEEE80211_TX_CTL_REQ_TX_STATUS) ||
+	    (tx_info->flags & IEEE80211_TX_CTL_NO_ACK) ||
+	    is_multicast_ether_addr(hdr->addr1))
+		return false;
+
+	spin_lock_irqsave(&priv->tx_report_lock, flags);
+	if (!priv->tx_report_skb) {
+		priv->tx_report_skb = skb;
+		claimed = true;
+	}
+	spin_unlock_irqrestore(&priv->tx_report_lock, flags);
+
+	return claimed;
+}
+
+static bool rtl8xxxu_tx_report_release(struct rtl8xxxu_priv *priv,
+				       struct sk_buff *skb)
+{
+	unsigned long flags;
+	bool claimed;
+
+	spin_lock_irqsave(&priv->tx_report_lock, flags);
+	claimed = priv->tx_report_skb == skb;
+	if (claimed)
+		priv->tx_report_skb = NULL;
+	spin_unlock_irqrestore(&priv->tx_report_lock, flags);
+
+	return claimed;
+}
+
+static void rtl8xxxu_tx_report_poll_work(struct work_struct *work)
+{
+	struct rtl8xxxu_priv *priv = container_of(work, struct rtl8xxxu_priv,
+						  tx_report_poll_work.work);
+	struct ieee80211_tx_info *tx_info;
+	unsigned long flags, elapsed;
+	u8 retry = 0, status = 0;
+	bool reported = false;
+	struct sk_buff *skb;
+
+	if (rtl8xxxu_read8(priv, REG_C2HEVT_CLEAR) == C2H_EVT_FW_CLOSE) {
+		u8 id = rtl8xxxu_read8(priv, REG_C2HEVT_MSG_NORMAL);
+
+		if ((id & C2H_EVT_ID_MASK) == C2H_EVT_CCX_TX_RPT) {
+			retry = rtl8xxxu_read8(priv, REG_C2HEVT_MSG_NORMAL +
+						     C2H_EVT_CCX_RETRY_OFFSET);
+			status = rtl8xxxu_read8(priv, REG_C2HEVT_MSG_NORMAL +
+						      C2H_EVT_CCX_STATUS_OFFSET);
+			reported = true;
+		}
+		rtl8xxxu_write8(priv, REG_C2HEVT_CLEAR, C2H_EVT_HOST_CLOSE);
+	}
+
+	elapsed = jiffies - priv->tx_report_start;
+	if (!reported && elapsed < RTL8XXXU_TX_REPORT_TIMEOUT) {
+		/* Most frames are done within a few ms, poll often at first */
+		ieee80211_queue_delayed_work(priv->hw, &priv->tx_report_poll_work,
+					     elapsed < msecs_to_jiffies(20) ?
+					     1 : msecs_to_jiffies(10));
+		return;
+	}
+
+	spin_lock_irqsave(&priv->tx_report_lock, flags);
+	skb = priv->tx_report_skb;
+	priv->tx_report_skb = NULL;
+	spin_unlock_irqrestore(&priv->tx_report_lock, flags);
+
+	if (!skb)
+		return;
+
+	tx_info = IEEE80211_SKB_CB(skb);
+	ieee80211_tx_info_clear_status(tx_info);
+	if (!(tx_info->flags & IEEE80211_TX_CTL_INJECTED))
+		tx_info->status.rates[0].idx = -1;
+	tx_info->status.rates[0].count = (retry & CCX_RETRY_CNT_MASK) + 1;
+	if (status & CCX_PKT_OK)
+		tx_info->flags |= IEEE80211_TX_STAT_ACK;
+
+	ieee80211_tx_status_irqsafe(priv->hw, skb);
+}
+
 static void rtl8xxxu_tx_complete(struct urb *urb)
 {
 	struct sk_buff *skb = (struct sk_buff *)urb->context;
@@ -5162,6 +5261,16 @@ static void rtl8xxxu_tx_complete(struct urb *urb)
 	priv = hw->priv;
 
 	skb_pull(skb, priv->fops->tx_desc_size);
+
+	if (READ_ONCE(priv->tx_report_skb) == skb) {
+		if (!urb->status) {
+			priv->tx_report_start = jiffies;
+			ieee80211_queue_delayed_work(hw, &priv->tx_report_poll_work, 0);
+			rtl8xxxu_free_tx_urb(priv, tx_urb);
+			return;
+		}
+		rtl8xxxu_tx_report_release(priv, skb);
+	}
 
 	ieee80211_tx_info_clear_status(tx_info);
 	tx_info->status.rates[0].idx = -1;
@@ -5649,6 +5758,9 @@ static void rtl8xxxu_tx(struct ieee80211_hw *hw,
 	priv->fops->fill_txdesc(hw, hdr, tx_info, tx_desc, sgi, short_preamble,
 				ampdu_enable, rts_rate, macid);
 
+	if (rtl8xxxu_tx_report_claim(priv, skb))
+		tx_desc->txdw2 |= cpu_to_le32(TXDESC32_ACK_REPORT);
+
 	rtl8xxxu_calc_tx_desc_csum(tx_desc);
 
 	/* avoid zero checksum make tx hang */
@@ -5663,6 +5775,7 @@ static void rtl8xxxu_tx(struct ieee80211_hw *hw,
 	if (ret) {
 		usb_unanchor_urb(&tx_urb->urb);
 		rtl8xxxu_free_tx_urb(priv, tx_urb);
+		rtl8xxxu_tx_report_release(priv, skb);
 		goto error;
 	}
 	return;
@@ -7596,6 +7709,11 @@ static void rtl8xxxu_stop(struct ieee80211_hw *hw, bool suspend)
 
 	usb_kill_anchored_urbs(&priv->rx_anchor);
 	usb_kill_anchored_urbs(&priv->tx_anchor);
+	cancel_delayed_work_sync(&priv->tx_report_poll_work);
+	if (priv->tx_report_skb) {
+		ieee80211_free_txskb(hw, priv->tx_report_skb);
+		priv->tx_report_skb = NULL;
+	}
 	if (priv->usb_interrupts)
 		usb_kill_anchored_urbs(&priv->int_anchor);
 
@@ -7908,6 +8026,8 @@ static int rtl8xxxu_probe(struct usb_interface *interface,
 	INIT_DELAYED_WORK(&priv->rx_urb_wq, rtl8xxxu_rx_urb_work);
 	INIT_DELAYED_WORK(&priv->ra_watchdog, rtl8xxxu_watchdog_callback);
 	INIT_DELAYED_WORK(&priv->update_beacon_work, rtl8xxxu_update_beacon_work_callback);
+	spin_lock_init(&priv->tx_report_lock);
+	INIT_DELAYED_WORK(&priv->tx_report_poll_work, rtl8xxxu_tx_report_poll_work);
 	skb_queue_head_init(&priv->c2hcmd_queue);
 
 	usb_set_intfdata(interface, hw);

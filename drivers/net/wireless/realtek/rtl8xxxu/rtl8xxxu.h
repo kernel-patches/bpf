@@ -1812,6 +1812,11 @@ struct rtl8xxxu_priv {
 	bool shutdown;
 	struct delayed_work rx_urb_wq;
 
+	spinlock_t tx_report_lock; /* protects tx_report_skb */
+	struct sk_buff *tx_report_skb;
+	unsigned long tx_report_start;
+	struct delayed_work tx_report_poll_work;
+
 	u8 mac_addr[ETH_ALEN];
 	char chip_name[8];
 	char chip_vendor[8];
@@ -2010,6 +2015,7 @@ struct rtl8xxxu_fileops {
 	char rx_desc_size;
 	u8 has_s0s1:1;
 	u8 has_tx_report:1;
+	u8 has_c2hevt_tx_report:1;
 	u8 gen2_thermal_meter:1;
 	u8 needs_full_init:1;
 	u8 init_reg_rxfltmap:1;
