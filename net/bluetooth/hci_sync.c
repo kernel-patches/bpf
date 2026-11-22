@@ -3222,6 +3222,7 @@ static u8 hci_update_accept_list_sync(struct hci_dev *hdev)
 	struct conn_params *params;
 	u8 num_entries = 0;
 	bool pend_conn, pend_report;
+	bool resolve = true;
 	u8 filter_policy;
 	size_t i, n;
 	int err;
@@ -3263,6 +3264,16 @@ static u8 hci_update_accept_list_sync(struct hci_dev *hdev)
 			pa.addr_type = conn->dst_type;
 
 			rcu_read_unlock();
+
+			/* With address resolution enabled, a controller may
+			 * drop the advertising reports of an RPA it has no IRK
+			 * for instead of matching the address as it is against
+			 * the accept list. The SID the PA sync waits for then
+			 * never arrives. Match a broadcaster without an IRK by
+			 * the address it advertises from.
+			 */
+			resolve = !hci_bdaddr_is_rpa(&pa.addr, pa.addr_type) ||
+				  hci_find_irk_by_rpa(hdev, &pa.addr);
 
 			/* Clear first since there could be addresses left
 			 * behind.
@@ -3389,9 +3400,12 @@ done:
 	filter_policy = err ? 0x00 : 0x01;
 
 	/* Enable address resolution when LL Privacy is enabled. */
-	err = hci_le_set_addr_resolution_enable_sync(hdev, 0x01);
-	if (err)
-		bt_dev_err(hdev, "Unable to enable LL privacy: %d", err);
+	if (resolve) {
+		err = hci_le_set_addr_resolution_enable_sync(hdev, 0x01);
+		if (err)
+			bt_dev_err(hdev, "Unable to enable LL privacy: %d",
+				   err);
+	}
 
 	/* Resume advertising if it was paused */
 	if (ll_privacy_capable(hdev))
