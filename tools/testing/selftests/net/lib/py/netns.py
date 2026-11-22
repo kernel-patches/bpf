@@ -15,11 +15,11 @@ libc = ctypes.cdll.LoadLibrary('libc.so.6')
 
 class NetNS:
     def __init__(self, name=None):
-        if name:
-            self.name = name
-        else:
-            self.name = ''.join(random.choice(string.ascii_lowercase) for _ in range(8))
-        ip('netns add ' + self.name)
+        self.name = None
+        if not name:
+            name = ''.join(random.choice(string.ascii_lowercase) for _ in range(8))
+        ip('netns add ' + name)
+        self.name = name
 
     def __del__(self):
         if self.name:
