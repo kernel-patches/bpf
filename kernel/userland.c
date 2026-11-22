@@ -287,6 +287,65 @@ long userland_waitid(int upid, struct waitid_info *infop, int options,
 	return ret;
 }
 
+/**
+ * DOC: pidfd_send_signal
+ *
+ * ``pidfd_send_signal(userland_fd, sig, NULL, 0)`` delivers ``sig`` (or ``0`` for
+ * a permission and existence probe) once to each member thread group in a
+ * running userland. ``info`` must be ``NULL``, ``flags`` must be ``0``, and the
+ * caller must run in an ancestor active PID namespace.
+ */
+int userland_send_signal(struct file *file, int sig,
+			 struct siginfo __user *info, unsigned int flags)
+{
+	struct userland *userland = file->private_data;
+	struct pid_namespace *pid_ns = userland->ns->pid_ns_for_children;
+	bool any_success = false;
+	bool any_other = false;
+	bool any_perm = false;
+	int other_err = 0;
+	struct pid *pid;
+	int nr;
+
+	if (info || flags || sig < 0 || !valid_signal(sig))
+		return -EINVAL;
+	if (!pidns_is_ancestor(pid_ns, task_active_pid_ns(current)))
+		return -EXDEV;
+	if (READ_ONCE(userland->state) != USERLAND_RUNNING)
+		return -ESRCH;
+
+	scoped_guard(rcu) {
+		read_lock(&tasklist_lock);
+		idr_for_each_entry(&pid_ns->idr, pid, nr) {
+			struct task_struct *task = pid_task(pid, PIDTYPE_TGID);
+			int err;
+
+			if (!task)
+				continue;
+
+			err = group_send_sig_info(sig, SEND_SIG_NOINFO, task,
+						  PIDTYPE_MAX);
+			if (!err) {
+				any_success = true;
+			} else if (err == -EPERM) {
+				any_perm = true;
+			} else if (err != -ESRCH && !any_other) {
+				any_other = true;
+				other_err = err;
+			}
+		}
+		read_unlock(&tasklist_lock);
+	}
+
+	if (any_success)
+		return 0;
+	if (any_other)
+		return other_err;
+	if (any_perm)
+		return -EPERM;
+	return -ESRCH;
+}
+
 static long userland_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct userland *userland = file->private_data;
