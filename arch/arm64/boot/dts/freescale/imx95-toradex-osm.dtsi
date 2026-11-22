@@ -669,6 +669,7 @@
 	pinctrl-1 = <&pinctrl_sdio_b>;
 	pinctrl-2 = <&pinctrl_sdio_b_200mhz>;
 	disable-wp;
+	vqmmc-supply = <&reg_1p8v>;
 };
 
 &wdog3 {
