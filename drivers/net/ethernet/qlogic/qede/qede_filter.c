@@ -915,8 +915,7 @@ netdev_features_t qede_fix_features(struct net_device *dev,
 {
 	struct qede_dev *edev = netdev_priv(dev);
 
-	if (edev->xdp_prog || edev->ndev->mtu > PAGE_SIZE ||
-	    !(features & NETIF_F_GRO))
+	if (edev->xdp_prog || edev->ndev->mtu > PAGE_SIZE)
 		features &= ~NETIF_F_GRO_HW;
 
 	return features;

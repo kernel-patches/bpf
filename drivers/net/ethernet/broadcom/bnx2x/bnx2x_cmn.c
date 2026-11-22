@@ -4934,7 +4934,7 @@ netdev_features_t bnx2x_fix_features(struct net_device *dev,
 	if (!(features & NETIF_F_RXCSUM))
 		features &= ~NETIF_F_LRO;
 
-	if (!(features & NETIF_F_GRO) || !bnx2x_mtu_allows_gro(dev->mtu))
+	if (!bnx2x_mtu_allows_gro(dev->mtu))
 		features &= ~NETIF_F_GRO_HW;
 	if (features & NETIF_F_GRO_HW)
 		features &= ~NETIF_F_LRO;
