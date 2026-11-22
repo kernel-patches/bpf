@@ -367,7 +367,8 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, u32 *fimage, struct code
 		if (i && (BPF_CLASS(code) == BPF_ALU64 || BPF_CLASS(code) == BPF_ALU) &&
 		    (BPF_CLASS(prevcode) == BPF_ALU64 || BPF_CLASS(prevcode) == BPF_ALU) &&
 		    BPF_OP(prevcode) == BPF_MOV && BPF_SRC(prevcode) == BPF_X &&
-		    insn[i - 1].dst_reg == insn[i].dst_reg && insn[i - 1].imm != 1) {
+		    insn[i - 1].dst_reg == insn[i].dst_reg && insn[i - 1].imm != 1 &&
+		    !(BPF_SRC(code) == BPF_X && insn[i].src_reg == insn[i].dst_reg)) {
 			src2_reg = bpf_to_ppc(insn[i - 1].src_reg);
 			src2_reg_h = src2_reg - 1;
 			ctx->idx = addrs[i - 1] / 4;
