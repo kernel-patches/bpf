@@ -251,6 +251,13 @@ static const struct dmi_system_id adr_remap_quirk_table[] = {
 	},
 	{
 		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Micro-Star International Co., Ltd."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Modern 16S AI+ G3MG"),
+		},
+		.driver_data = (void *)ghost_realtek,
+	},
+	{
+		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "83SN"),
 		},
