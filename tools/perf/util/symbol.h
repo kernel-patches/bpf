@@ -197,10 +197,9 @@ struct symbol *dso__find_symbol_nocache(struct dso *dso, u64 addr);
 
 struct symbol *dso__next_symbol_by_name(struct dso *dso, size_t *idx);
 struct symbol *dso__find_symbol_by_name(struct dso *dso, const char *name, size_t *idx);
-
-struct symbol *dso__first_symbol(struct dso *dso);
-struct symbol *dso__last_symbol(struct dso *dso);
-struct symbol *dso__next_symbol(struct symbol *sym);
+int dso__visit_symbols_by_name(struct dso *dso,
+			       int (*cb)(struct symbol *sym, void *data),
+			       void *data);
 
 enum dso_type dso__type_fd(int fd);
 

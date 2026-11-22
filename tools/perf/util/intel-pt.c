@@ -2988,13 +2988,37 @@ static int intel_pt_sample(struct intel_pt_queue *ptq)
 	return 0;
 }
 
+struct intel_pt_switch_ip_args {
+	struct map *map;
+	const char *name;
+	bool check_global;
+	u64 ip;
+};
+
+static int intel_pt_switch_ip_cb(struct symbol *sym, void *data)
+{
+	struct intel_pt_switch_ip_args *args = data;
+	u64 ip;
+
+	if (args->check_global && symbol__binding(sym) != STB_GLOBAL)
+		return 0;
+
+	if (!strcmp(sym->name, args->name)) {
+		ip = map__unmap_ip(args->map, sym->start);
+		if (ip >= map__start(args->map) && ip < map__end(args->map)) {
+			args->ip = ip;
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static u64 intel_pt_switch_ip(struct intel_pt *pt, u64 *ptss_ip)
 {
 	struct machine *machine = pt->machine;
 	struct map *map;
-	struct symbol *sym, *start;
-	u64 ip, switch_ip = 0;
-	const char *ptss;
+	struct intel_pt_switch_ip_args args;
+	u64 switch_ip = 0;
 
 	if (ptss_ip)
 		*ptss_ip = 0;
@@ -3006,36 +3030,28 @@ static u64 intel_pt_switch_ip(struct intel_pt *pt, u64 *ptss_ip)
 	if (map__load(map))
 		return 0;
 
-	start = dso__first_symbol(map__dso(map));
-
-	for (sym = start; sym; sym = dso__next_symbol(sym)) {
-		if (symbol__binding(sym) == STB_GLOBAL &&
-		    !strcmp(sym->name, "__switch_to")) {
-			ip = map__unmap_ip(map, sym->start);
-			if (ip >= map__start(map) && ip < map__end(map)) {
-				switch_ip = ip;
-				break;
-			}
-		}
-	}
+	args = (struct intel_pt_switch_ip_args) {
+		.map = map,
+		.name = "__switch_to",
+		.check_global = true,
+		.ip = 0,
+	};
+	map__for_each_symbol(map, intel_pt_switch_ip_cb, &args);
+	switch_ip = args.ip;
 
 	if (!switch_ip || !ptss_ip)
 		return 0;
 
-	if (pt->have_sched_switch == 1)
-		ptss = "perf_trace_sched_switch";
-	else
-		ptss = "__perf_event_task_sched_out";
-
-	for (sym = start; sym; sym = dso__next_symbol(sym)) {
-		if (!strcmp(sym->name, ptss)) {
-			ip = map__unmap_ip(map, sym->start);
-			if (ip >= map__start(map) && ip < map__end(map)) {
-				*ptss_ip = ip;
-				break;
-			}
-		}
-	}
+	args = (struct intel_pt_switch_ip_args) {
+		.map = map,
+		.name = pt->have_sched_switch == 1 ?
+			"perf_trace_sched_switch" :
+			"__perf_event_task_sched_out",
+		.check_global = false,
+		.ip = 0,
+	};
+	map__for_each_symbol(map, intel_pt_switch_ip_cb, &args);
+	*ptss_ip = args.ip;
 
 	return switch_ip;
 }

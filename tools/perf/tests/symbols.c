@@ -116,39 +116,50 @@ static int create_map(struct test_info *ti, char *filename, struct map **map_p)
 	return TEST_OK;
 }
 
+struct test_dso_args {
+	struct symbol *last_sym;
+	int ret;
+};
+
+static int test_dso_cb(struct symbol *sym, void *data)
+{
+	struct test_dso_args *args = data;
+	struct symbol *last_sym = args->last_sym;
+
+	if (symbol__type(sym) != STT_FUNC && symbol__type(sym) != STT_GNU_IFUNC)
+		return 0;
+
+	/* Check for overlapping function symbols */
+	if (last_sym && sym->start < last_sym->end) {
+		pr_debug("Overlapping symbols:\n");
+		symbol__fprintf(last_sym, stderr);
+		symbol__fprintf(sym, stderr);
+		args->ret = TEST_FAIL;
+	}
+	/* Check for zero-length function symbol */
+	if (sym->start == sym->end) {
+		pr_debug("Zero-length symbol:\n");
+		symbol__fprintf(sym, stderr);
+		args->ret = TEST_FAIL;
+	}
+	args->last_sym = sym;
+	return 0;
+}
+
 static int test_dso(struct dso *dso)
 {
-	struct symbol *last_sym = NULL;
-	struct rb_node *nd;
-	int ret = TEST_OK;
+	struct test_dso_args args = {
+		.last_sym = NULL,
+		.ret = TEST_OK,
+	};
 
 	/* dso__fprintf() prints all the symbols */
 	if (verbose > 1)
 		dso__fprintf(dso, stderr);
 
-	for (nd = rb_first_cached(dso__symbols(dso)); nd; nd = rb_next(nd)) {
-		struct symbol *sym = rb_entry(nd, struct symbol, rb_node);
+	dso__for_each_symbol(dso, test_dso_cb, &args);
 
-		if (symbol__type(sym) != STT_FUNC && symbol__type(sym) != STT_GNU_IFUNC)
-			continue;
-
-		/* Check for overlapping function symbols */
-		if (last_sym && sym->start < last_sym->end) {
-			pr_debug("Overlapping symbols:\n");
-			symbol__fprintf(last_sym, stderr);
-			symbol__fprintf(sym, stderr);
-			ret = TEST_FAIL;
-		}
-		/* Check for zero-length function symbol */
-		if (sym->start == sym->end) {
-			pr_debug("Zero-length symbol:\n");
-			symbol__fprintf(sym, stderr);
-			ret = TEST_FAIL;
-		}
-		last_sym = sym;
-	}
-
-	return ret;
+	return args.ret;
 }
 
 static int subdivided_dso_cb(struct dso *dso, struct machine *machine __maybe_unused, void *d)

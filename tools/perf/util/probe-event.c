@@ -3788,6 +3788,15 @@ void cleanup_perf_probe_events(struct perf_probe_event *pevs, int npevs)
 	}
 }
 
+static int show_available_funcs_cb(struct symbol *pos, void *data)
+{
+	struct strfilter *_filter = data;
+
+	if (strfilter__compare(_filter, pos->name))
+		printf("%s\n", pos->name);
+	return 0;
+}
+
 int show_available_funcs(const char *target, struct nsinfo *nsi,
 			 struct strfilter *_filter, bool user)
 {
@@ -3824,12 +3833,7 @@ int show_available_funcs(const char *target, struct nsinfo *nsi,
 	/* Show all (filtered) symbols */
 	setup_pager();
 
-	for (size_t i = 0; i < dso__symbol_names_len(dso); i++) {
-		struct symbol *pos = dso__symbol_names(dso)[i];
-
-		if (strfilter__compare(_filter, pos->name))
-			printf("%s\n", pos->name);
-	}
+	dso__for_each_symbol_by_name(dso, show_available_funcs_cb, _filter);
 end:
 	map__put(map);
 	exit_probe_symbol_maps();

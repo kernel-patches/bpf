@@ -451,36 +451,6 @@ static struct symbol *symbols__find(struct rb_root_cached *symbols, u64 ip)
 	return NULL;
 }
 
-static struct symbol *symbols__first(struct rb_root_cached *symbols)
-{
-	struct rb_node *n = rb_first_cached(symbols);
-
-	if (n)
-		return rb_entry(n, struct symbol, rb_node);
-
-	return NULL;
-}
-
-static struct symbol *symbols__last(struct rb_root_cached *symbols)
-{
-	struct rb_node *n = rb_last(&symbols->rb_root);
-
-	if (n)
-		return rb_entry(n, struct symbol, rb_node);
-
-	return NULL;
-}
-
-static struct symbol *symbols__next(struct symbol *sym)
-{
-	struct rb_node *n = rb_next(&sym->rb_node);
-
-	if (n)
-		return rb_entry(n, struct symbol, rb_node);
-
-	return NULL;
-}
-
 static int symbols__sort_name_cmp(const void *vlhs, const void *vrhs)
 {
 	const struct symbol *lhs = *((const struct symbol **)vlhs);
@@ -637,19 +607,21 @@ struct symbol *dso__find_symbol_nocache(struct dso *dso, u64 addr)
 	return symbols__find(dso__symbols(dso), addr);
 }
 
-struct symbol *dso__first_symbol(struct dso *dso)
+int dso__visit_symbols_by_name(struct dso *dso,
+			       int (*cb)(struct symbol *sym, void *data),
+			       void *data)
 {
-	return symbols__first(dso__symbols(dso));
-}
+	if (!dso)
+		return 0;
 
-struct symbol *dso__last_symbol(struct dso *dso)
-{
-	return symbols__last(dso__symbols(dso));
-}
+	dso__sort_by_name(dso);
+	for (size_t i = 0; i < dso__symbol_names_len(dso); i++) {
+		int ret = cb(dso__symbol_names(dso)[i], data);
 
-struct symbol *dso__next_symbol(struct symbol *sym)
-{
-	return symbols__next(sym);
+		if (ret)
+			return ret;
+	}
+	return 0;
 }
 
 struct symbol *dso__next_symbol_by_name(struct dso *dso, size_t *idx)

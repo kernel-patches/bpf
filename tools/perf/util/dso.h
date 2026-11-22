@@ -368,6 +368,9 @@ int dso_id__cmp(const struct dso_id *a, const struct dso_id *b);
 #define dso__for_each_symbol(dso, cb, data)	\
 	symbols__visit(dso__symbols(dso), cb, data)
 
+#define dso__for_each_symbol_by_name(dso, cb, data)	\
+	dso__visit_symbols_by_name(dso, cb, data)
+
 static inline void *dso__a2l(const struct dso *dso)
 {
 	return RC_CHK_ACCESS(dso)->a2l;
