@@ -2064,7 +2064,7 @@ ip6gre_changelink_common(struct net_device *dev, struct nlattr *tb[],
 
 	ip6gre_netlink_parms(data, p_p);
 
-	t = ip6gre_tunnel_locate(net, p_p, 0);
+	t = ip6gre_tunnel_find(net, p_p, dev->type);
 
 	if (t) {
 		if (t->dev != dev)
