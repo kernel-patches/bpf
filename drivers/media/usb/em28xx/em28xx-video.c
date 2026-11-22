@@ -1018,7 +1018,7 @@ static void em28xx_v4l2_media_release(struct em28xx *dev)
 #ifdef CONFIG_MEDIA_CONTROLLER
 	int i;
 
-	if (dev->board.decoder == EM28XX_BUILTIN) {
+	if (dev->board.decoder == EM28XX_BUILTIN && dev->v4l2->decoder) {
 		media_device_unregister_entity(dev->v4l2->decoder);
 		kfree(dev->v4l2->decoder);
 		dev->v4l2->decoder = NULL;
@@ -1170,6 +1170,9 @@ static void em28xx_v4l2_create_entities(struct em28xx *dev)
 		v4l2->decoder_pads[EM2828X_PAD_VID_OUT].sig_type = PAD_SIGNAL_DV;
 
 		v4l2->decoder = kzalloc_obj(*v4l2->decoder);
+		if (!v4l2->decoder)
+			return;
+
 		v4l2->decoder->name = "em2828x_builtin";
 		v4l2->decoder->function = MEDIA_ENT_F_ATV_DECODER;
 
