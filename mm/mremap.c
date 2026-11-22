@@ -17,6 +17,7 @@
 #include <linux/swap.h>
 #include <linux/capability.h>
 #include <linux/fs.h>
+#include <linux/fsnotify.h>
 #include <linux/leafops.h>
 #include <linux/highmem.h>
 #include <linux/security.h>
@@ -2028,6 +2029,9 @@ static unsigned long remap_move(struct vma_remap_struct *vrm)
 static unsigned long do_mremap(struct vma_remap_struct *vrm)
 {
 	struct mm_struct *mm = current->mm;
+	struct file *notified_file = NULL;
+	loff_t notified_off = 0;
+	size_t notified_len = 0;
 	unsigned long res;
 	bool failed;
 
@@ -2038,22 +2042,60 @@ static unsigned long do_mremap(struct vma_remap_struct *vrm)
 	if (res)
 		return res;
 
-	if (mmap_write_lock_killable(mm))
+retry:
+	if (mmap_write_lock_killable(mm)) {
+		if (notified_file)
+			fput(notified_file);
 		return -EINTR;
+	}
 	vrm->mmap_locked = true;
 
 	if (!check_map_count_against_split_early(vrm)) {
 		mmap_write_unlock(mm);
+		if (notified_file)
+			fput(notified_file);
 		return -ENOMEM;
 	}
 
 	if (vrm_move_only(vrm)) {
 		res = remap_move(vrm);
 	} else {
+		struct vm_area_struct *vma;
+		loff_t off;
+		size_t len;
+
+		vrm->populate_expand = false;
 		vrm->vma = vma_lookup(current->mm, vrm->addr);
 		res = check_prep_vma(vrm);
 		if (res)
 			goto out;
+
+		vma = vrm->vma;
+		if (vma->vm_file &&
+		    FMODE_FSNOTIFY_HSM(vma->vm_file->f_mode) &&
+		    vrm->new_len > vma->vm_end - vrm->addr) {
+			off = (loff_t)linear_page_index(vma, vma->vm_end)
+				<< PAGE_SHIFT;
+			len = vrm->new_len - (vma->vm_end - vrm->addr);
+			if (notified_file != vma->vm_file ||
+			    notified_off != off || notified_len != len) {
+				struct file *file = get_file(vma->vm_file);
+
+				notified_off = off;
+				notified_len = len;
+				mmap_write_unlock(mm);
+				vrm->mmap_locked = false;
+				if (notified_file)
+					fput(notified_file);
+				notified_file = file;
+				/* The pre-content hook does not use prot. */
+				res = fsnotify_mmap_perm(notified_file, 0, off,
+							len);
+				if (res)
+					goto out;
+				goto retry;
+			}
+		}
 
 		/* Actually execute mremap. */
 		res = vrm_implies_new_addr(vrm) ? mremap_to(vrm) : mremap_at(vrm);
@@ -2064,6 +2106,8 @@ out:
 
 	if (vrm->mmap_locked)
 		mmap_write_unlock(mm);
+	if (notified_file)
+		fput(notified_file);
 
 	/* VMA mlock'd + was expanded, so populated expanded region. */
 	if (!failed && vrm->populate_expand)
