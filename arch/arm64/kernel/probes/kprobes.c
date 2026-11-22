@@ -416,10 +416,13 @@ kprobe_ss_brk_handler(struct pt_regs *regs, unsigned long esr)
 int __kprobes
 kretprobe_brk_handler(struct pt_regs *regs, unsigned long esr)
 {
+	void *frame = IS_ENABLED(CONFIG_UNWINDER_DWARF_CFI) ?
+		      (void *)regs->sp : (void *)regs->regs[29];
+
 	if (regs->pc != (unsigned long)__kretprobe_trampoline)
 		return DBG_HOOK_ERROR;
 
-	regs->pc = kretprobe_trampoline_handler(regs, (void *)regs->regs[29]);
+	regs->pc = kretprobe_trampoline_handler(regs, frame);
 	return DBG_HOOK_HANDLED;
 }
 
@@ -452,7 +455,14 @@ void __kprobes arch_prepare_kretprobe(struct kretprobe_instance *ri,
 				      struct pt_regs *regs)
 {
 	ri->ret_addr = (kprobe_opcode_t *)regs->regs[30];
-	ri->fp = (void *)regs->regs[29];
+	/*
+	 * Under CONFIG_UNWINDER_DWARF_CFI (-fomit-frame-pointer), nested C
+	 * functions do not update x29; key the kretprobe instance on the
+	 * probed function's entry SP (its DWARF CFA), which matches regs->sp
+	 * upon returning to __kretprobe_trampoline.
+	 */
+	ri->fp = IS_ENABLED(CONFIG_UNWINDER_DWARF_CFI) ?
+		 (void *)regs->sp : (void *)regs->regs[29];
 
 	/* replace return addr (x30) with trampoline */
 	regs->regs[30] = (long)&__kretprobe_trampoline;

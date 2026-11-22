@@ -553,6 +553,14 @@ void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 {
 	unsigned long return_hooker = (unsigned long)&return_to_handler;
 	unsigned long frame_pointer = arch_ftrace_regs(fregs)->fp;
+	/*
+	 * With -fomit-frame-pointer under CONFIG_UNWINDER_DWARF_CFI, nested
+	 * functions share x29, whereas each frame's entry SP (its DWARF CFA)
+	 * uniquely keys its shadow stack slot for ftrace_graph_ret_addr().
+	 */
+	unsigned long *retp = IS_ENABLED(CONFIG_UNWINDER_DWARF_CFI) ?
+			      (unsigned long *)arch_ftrace_regs(fregs)->sp :
+			      (unsigned long *)frame_pointer;
 	unsigned long *parent = &arch_ftrace_regs(fregs)->lr;
 	unsigned long old;
 
@@ -561,10 +569,8 @@ void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 
 	old = *parent;
 
-	if (!function_graph_enter_regs(old, ip, frame_pointer,
-				       (void *)frame_pointer, fregs)) {
+	if (!function_graph_enter_regs(old, ip, frame_pointer, retp, fregs))
 		*parent = return_hooker;
-	}
 }
 #else
 /*

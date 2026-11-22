@@ -144,7 +144,23 @@ jiffies = jiffies_64;
 #define TRAMP_TEXT
 #endif
 
-#ifdef CONFIG_UNWIND_TABLES
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+#define UNWIND_RODATA_SECTIONS				\
+	.eh_frame_hdr : ALIGN(4) {			\
+		__start_eh_frame_hdr = .;		\
+		*(.eh_frame_hdr)			\
+		__stop_eh_frame_hdr = .;		\
+	}						\
+	.eh_frame : ALIGN(8) {				\
+		__start_eh_frame = .;			\
+		__pi___eh_frame_start = .;		\
+		*(.eh_frame)				\
+		__pi___eh_frame_end = .;		\
+		__stop_eh_frame = .;			\
+	}
+#define UNWIND_DATA_SECTIONS
+#elif defined(CONFIG_UNWIND_TABLES)
+#define UNWIND_RODATA_SECTIONS
 #define UNWIND_DATA_SECTIONS				\
 	.eh_frame : {					\
 		__pi___eh_frame_start = .;		\
@@ -152,6 +168,7 @@ jiffies = jiffies_64;
 		__pi___eh_frame_end = .;		\
 	}
 #else
+#define UNWIND_RODATA_SECTIONS
 #define UNWIND_DATA_SECTIONS
 #endif
 
@@ -211,6 +228,8 @@ SECTIONS
 
 	/* everything from this point to __init_begin will be marked RO NX */
 	RO_DATA(PAGE_SIZE)
+
+	UNWIND_RODATA_SECTIONS
 
 	HYPERVISOR_RODATA_SECTIONS
 

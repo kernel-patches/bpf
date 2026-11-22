@@ -104,6 +104,7 @@ KBUILD_CFLAGS := $(filter-out $(CC_FLAGS_FTRACE) $(CC_FLAGS_SCS), $(KBUILD_CFLAG
 # when profile optimization is applied. gen-hyprel does not support SHT_REL and
 # causes a build failure. Remove profile optimization flags.
 KBUILD_CFLAGS := $(filter-out -fprofile-sample-use=% -fprofile-use=%, $(KBUILD_CFLAGS))
+KBUILD_CFLAGS := $(filter-out -fomit-frame-pointer, $(KBUILD_CFLAGS)) -fno-omit-frame-pointer
 KBUILD_CFLAGS += -fno-asynchronous-unwind-tables -fno-unwind-tables
 
 ifeq ($(CONFIG_UBSAN_KVM_EL2),y)

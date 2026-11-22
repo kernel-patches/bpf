@@ -10,16 +10,221 @@
 #include <linux/filter.h>
 #include <linux/ftrace.h>
 #include <linux/kprobes.h>
+#include <linux/module.h>
+#include <linux/perf_event.h>
+#include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/task_stack.h>
 #include <linux/stacktrace.h>
+#include <linux/unwind_dwarf_cfi.h>
 
 #include <asm/efi.h>
 #include <asm/irq.h>
+#include <asm/module.h>
+#include <asm/sections.h>
 #include <asm/stack_pointer.h>
 #include <asm/stacktrace.h>
 
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+static const struct dwarf_cfi_arch arm64_cfi_arch = {
+	.ws	= 8,
+	.sp_reg	= 31,	/* sp */
+	.fp_reg	= 29,	/* x29 */
+	.ra_reg	= 30,	/* x30 (lr) */
+};
+
+#ifdef CONFIG_MODULES
+/**
+ * arm64_unwind_module_init() - Build Minimal DWARF CFI index for a module
+ * @mod: Module being loaded.
+ * @eh_frame: Pointer to the module's SHF_ALLOC .eh_frame section.
+ * @eh_frame_size: Size in bytes of @eh_frame.
+ *
+ * Scans and sorts the module's FDEs and publishes the index to
+ * @mod->arch.dwarf_cfi_index for RCU-protected lockless unwinding.
+ */
+void arm64_unwind_module_init(struct module *mod, void *eh_frame,
+			      size_t eh_frame_size)
+{
+	struct mod_dwarf_cfi_index *idx;
+
+	idx = dwarf_cfi_mod_alloc(eh_frame, eh_frame_size, &arm64_cfi_arch);
+	if (idx)
+		rcu_assign_pointer(mod->arch.dwarf_cfi_index, idx);
+}
+
+/**
+ * arm64_unwind_module_cleanup() - Unpublish and RCU-free module DWARF CFI index
+ * @mod: Module being unloaded or cleaned up after a failed load.
+ */
+void arm64_unwind_module_cleanup(struct module *mod)
+{
+	struct mod_dwarf_cfi_index *idx;
+
+	idx = rcu_replace_pointer(mod->arch.dwarf_cfi_index, /*ptr=*/NULL,
+				  /*c=*/true);
+	dwarf_cfi_mod_free_rcu(idx);
+}
+
+/**
+ * arm64_dwarf_cfi_module_find() - Look up Minimal DWARF CFI in loadable modules
+ * @pc: Kernel instruction pointer to evaluate.
+ * @row: Output evaluated Minimal DWARF CFI row.
+ *
+ * Uses rcu_read_lock_sched_notrace() and rcu_dereference_raw() so lookups are
+ * safe inside noinstr stack walks and NMI contexts.
+ *
+ * Return: 0 on success, -ENOENT if @pc is not in a module FDE, or a negative
+ * errno on invalid FDE bytecode.
+ */
+static __always_inline int
+arm64_dwarf_cfi_module_find(unsigned long pc, struct dwarf_cfi_row *row)
+{
+	struct mod_dwarf_cfi_index *idx;
+	struct module *mod;
+	int ret;
+
+	rcu_read_lock_sched_notrace();
+	mod = __module_address(pc);
+	if (!mod) {
+		rcu_read_unlock_sched_notrace();
+		return -ENOENT;
+	}
+	idx = rcu_dereference_raw(mod->arch.dwarf_cfi_index);
+	ret = dwarf_cfi_mod_eval(idx, pc, &arm64_cfi_arch, row);
+	rcu_read_unlock_sched_notrace();
+	return ret;
+}
+#else
+static __always_inline int
+arm64_dwarf_cfi_module_find(unsigned long pc, struct dwarf_cfi_row *row)
+{
+	return -ENOENT;
+}
+#endif /* CONFIG_MODULES */
+
+/**
+ * arm64_dwarf_cfi_find() - Evaluate Minimal DWARF CFI for core or module @pc
+ * @pc: Kernel instruction pointer to look up.
+ * @row: Output evaluated Minimal DWARF CFI row.
+ *
+ * Return: 0 on success, -ENOENT if no FDE covers @pc, or a negative errno on
+ * malformed CFI data.
+ */
+static __always_inline int
+arm64_dwarf_cfi_find(unsigned long pc, struct dwarf_cfi_row *row)
+{
+	size_t hdr_size = __stop_eh_frame_hdr - __start_eh_frame_hdr;
+	int err;
+
+	err = dwarf_cfi_unwind_eh_frame_hdr(__start_eh_frame_hdr, hdr_size,
+					    __start_eh_frame, __stop_eh_frame,
+					    pc, &arm64_cfi_arch, row);
+	if (!err)
+		return 0;
+
+	return arm64_dwarf_cfi_module_find(pc, row);
+}
+
+/**
+ * arm64_unwind_perf_caller_regs() - Populate caller pt_regs for perf events
+ * @regs: Output pt_regs initialized for the caller frame.
+ * @pc: Current instruction pointer inside the function invoking perf_fetch_caller_regs.
+ * @caller_ip: Target caller instruction pointer to record in @regs->pc.
+ * @sp: Current stack pointer corresponding to @pc.
+ * @fp: Current x29 value corresponding to @pc.
+ *
+ * Under -fomit-frame-pointer, __builtin_frame_address(0) does not yield a
+ * valid frame chain; step one frame via Minimal DWARF CFI at @pc so @regs->sp
+ * and @regs->regs[29] match the caller's stack state for subsequent unwinding.
+ */
+void arm64_unwind_perf_caller_regs(struct pt_regs *regs, unsigned long pc,
+				   unsigned long caller_ip, unsigned long sp,
+				   unsigned long fp)
+{
+	struct stack_info stacks[] = {
+		stackinfo_get_task(current),
+		!preemptible() ? stackinfo_get_irq() : stackinfo_get_unknown(),
+		!preemptible() ? stackinfo_get_overflow() : stackinfo_get_unknown(),
+#if defined(CONFIG_ARM_SDE_INTERFACE)
+		in_nmi() ? stackinfo_get_sdei_normal() : stackinfo_get_unknown(),
+		in_nmi() ? stackinfo_get_sdei_critical() : stackinfo_get_unknown(),
+#endif
+#ifdef CONFIG_EFI
+		current_in_efi() ? stackinfo_get_efi() : stackinfo_get_unknown(),
+#endif
+	};
+	struct unwind_state common = {
+		.stacks = stacks,
+		.nr_stacks = ARRAY_SIZE(stacks),
+	};
+	struct dwarf_cfi_row row;
+
+	unwind_init_common(&common);
+
+	regs->pc = caller_ip;
+	regs->regs[29] = fp;
+	regs->regs[30] = 0;
+	regs->sp = sp;
+	regs->pstate = PSR_MODE_EL1h;
+
+	if (arm64_dwarf_cfi_find(pc, &row))
+		return;
+
+	switch (row.cfa_base) {
+	case DWARF_CFI_BASE_SP:
+		sp += row.cfa_off;
+		break;
+	case DWARF_CFI_BASE_FP:
+		sp = fp + row.cfa_off;
+		break;
+	case DWARF_CFI_BASE_FP_INDIRECT: {
+		unsigned long cfa_addr = fp + row.cfa_off;
+
+		if ((cfa_addr & 0x7) ||
+		    !unwind_find_stack(&common, cfa_addr, sizeof(long)))
+			return;
+		sp = READ_ONCE(*(unsigned long *)cfa_addr);
+		break;
+	}
+	default:
+		return;
+	}
+
+	if ((sp & 0x7) || !unwind_find_stack(&common, sp, /*size=*/0))
+		return;
+
+	if (row.fp_rule == DWARF_CFI_RULE_OFFSET) {
+		unsigned long fp_addr = sp + row.fp_off;
+
+		if ((fp_addr & 0x7) ||
+		    !unwind_find_stack(&common, fp_addr, sizeof(long)))
+			return;
+		fp = READ_ONCE(*(unsigned long *)fp_addr);
+	} else if (row.fp_rule == DWARF_CFI_RULE_FP_OFFSET) {
+		unsigned long fp_addr = fp + row.fp_off;
+
+		if ((fp_addr & 0x7) ||
+		    !unwind_find_stack(&common, fp_addr, sizeof(long)))
+			return;
+		fp = READ_ONCE(*(unsigned long *)fp_addr);
+	}
+
+	regs->sp = sp;
+	regs->regs[29] = fp;
+}
+EXPORT_SYMBOL_GPL(arm64_unwind_perf_caller_regs);
+#endif /* CONFIG_UNWINDER_DWARF_CFI */
+
+/**
+ * enum kunwind_source - Origin of the current frame's PC during kernel unwind
+ * @KUNWIND_SOURCE_UNKNOWN: Uninitialized or invalid unwind state.
+ * @KUNWIND_SOURCE_FRAME: Unwound from a callee stack frame or return address.
+ * @KUNWIND_SOURCE_CALLER: Initialized from the immediate caller of the walker.
+ * @KUNWIND_SOURCE_TASK: Initialized from a blocked task's saved thread_struct.
+ * @KUNWIND_SOURCE_REGS_PC: Exact PC from an exception/interrupt &struct pt_regs.
+ */
 enum kunwind_source {
 	KUNWIND_SOURCE_UNKNOWN,
 	KUNWIND_SOURCE_FRAME,
@@ -36,27 +241,36 @@ union unwind_flags {
 	};
 };
 
-/*
- * Kernel unwind state
- *
- * @common:      Common unwind state.
- * @task:        The task being unwound.
- * @graph_idx:   Used by ftrace_graph_ret_addr() for optimized stack unwinding.
- * @kr_cur:      When KRETPROBES is selected, holds the kretprobe instance
- *               associated with the most recently encountered replacement lr
- *               value.
+/**
+ * struct kunwind_state - ARM64 kernel stack unwind iteration state
+ * @common: Common stack-bounds, PC, and FP unwind state.
+ * @task: The task being unwound.
+ * @sp: Current frame's stack pointer (equal to the callee's CFA after stepping).
+ * @lr: Saved link register (x30) when @lr_valid is true.
+ * @graph_idx: Shadow-stack cursor for ftrace_graph_ret_addr().
+ * @kr_cur: Cursor into @task->kretprobe_instances for kretprobe_find_ret_addr().
+ * @source: How @common.pc was obtained (&enum kunwind_source).
+ * @flags: Return-address recovery annotations (fgraph / kretprobe) for printing.
+ * @lr_valid: True if @lr holds a live return address for leaf/entry frames.
+ * @unreliable: True if an unannotated fallback (LR guess or non-CFI frame
+ *              record) was used, disqualifying reliable stacktraces.
  */
 struct kunwind_state {
 	struct unwind_state common;
 	struct task_struct *task;
+	unsigned long sp;
+	unsigned long lr;
 	int graph_idx;
 #ifdef CONFIG_KRETPROBES
 	struct llist_node *kr_cur;
 #endif
 	enum kunwind_source source;
 	union unwind_flags flags;
-	struct pt_regs *regs;
+	bool lr_valid;
+	bool unreliable;
 };
+
+static __always_inline int kunwind_next(struct kunwind_state *state);
 
 static __always_inline void
 kunwind_init(struct kunwind_state *state,
@@ -64,9 +278,12 @@ kunwind_init(struct kunwind_state *state,
 {
 	unwind_init_common(&state->common);
 	state->task = task;
+	state->sp = 0;
+	state->lr = 0;
+	state->lr_valid = false;
+	state->unreliable = false;
 	state->source = KUNWIND_SOURCE_UNKNOWN;
 	state->flags.all = 0;
-	state->regs = NULL;
 }
 
 /*
@@ -82,9 +299,11 @@ kunwind_init_from_regs(struct kunwind_state *state,
 {
 	kunwind_init(state, current);
 
-	state->regs = regs;
 	state->common.fp = regs->regs[29];
 	state->common.pc = regs->pc;
+	state->sp = regs->sp;
+	state->lr = regs->regs[30];
+	state->lr_valid = !!state->lr;
 	state->source = KUNWIND_SOURCE_REGS_PC;
 }
 
@@ -101,9 +320,29 @@ kunwind_init_from_caller(struct kunwind_state *state)
 {
 	kunwind_init(state, current);
 
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+	{
+		unsigned long pc, fp;
+
+		asm volatile("1: adr %0, 1b\n\t"
+			     "mov %1, x29"
+			     : "=r"(pc), "=r"(fp));
+		state->common.pc = pc;
+		state->common.fp = fp;
+		state->sp = current_stack_pointer;
+		state->lr = (unsigned long)__builtin_return_address(0);
+		state->lr_valid = true;
+		state->source = KUNWIND_SOURCE_REGS_PC;
+		if (!kunwind_next(state))
+			state->source = KUNWIND_SOURCE_CALLER;
+		else
+			state->source = KUNWIND_SOURCE_UNKNOWN;
+	}
+#else
 	state->common.fp = (unsigned long)__builtin_frame_address(1);
 	state->common.pc = (unsigned long)__builtin_return_address(0);
 	state->source = KUNWIND_SOURCE_CALLER;
+#endif
 }
 
 /*
@@ -124,19 +363,35 @@ kunwind_init_from_task(struct kunwind_state *state,
 
 	state->common.fp = thread_saved_fp(task);
 	state->common.pc = thread_saved_pc(task);
+	state->sp = thread_saved_sp(task);
 	state->source = KUNWIND_SOURCE_TASK;
 }
 
+/**
+ * kunwind_recover_return_address() - Restore fgraph/kretprobe return addresses
+ * @state: Current ARM64 kernel unwind state.
+ *
+ * Replaces return_to_handler and __kretprobe_trampoline return addresses with
+ * the original caller PC from @state->task's shadow stacks in either hooking
+ * order. Under CONFIG_UNWINDER_DWARF_CFI (-fomit-frame-pointer), entries are
+ * keyed on the frame's entry SP (@state->sp, equal to the callee's CFA) rather
+ * than x29.
+ *
+ * Return: 0 on success, or -EINVAL if a shadow return address cannot be found.
+ */
 static __always_inline int
 kunwind_recover_return_address(struct kunwind_state *state)
 {
+	void *frame_key = IS_ENABLED(CONFIG_UNWINDER_DWARF_CFI) ?
+			  (void *)state->sp : (void *)state->common.fp;
+
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 	if (state->task->ret_stack &&
 	    (state->common.pc == (unsigned long)return_to_handler)) {
 		unsigned long orig_pc;
+
 		orig_pc = ftrace_graph_ret_addr(state->task, &state->graph_idx,
-						state->common.pc,
-						(void *)state->common.fp);
+						state->common.pc, frame_key);
 		if (state->common.pc == orig_pc) {
 			WARN_ON_ONCE(state->task == current);
 			return -EINVAL;
@@ -149,8 +404,8 @@ kunwind_recover_return_address(struct kunwind_state *state)
 #ifdef CONFIG_KRETPROBES
 	if (is_kretprobe_trampoline(state->common.pc)) {
 		unsigned long orig_pc;
-		orig_pc = kretprobe_find_ret_addr(state->task,
-						  (void *)state->common.fp,
+
+		orig_pc = kretprobe_find_ret_addr(state->task, frame_key,
 						  &state->kr_cur);
 		if (!orig_pc)
 			return -EINVAL;
@@ -158,6 +413,22 @@ kunwind_recover_return_address(struct kunwind_state *state)
 		state->flags.kretprobe = 1;
 	}
 #endif /* CONFIG_KRETPROBES */
+
+#ifdef CONFIG_FUNCTION_GRAPH_TRACER
+	if (state->task->ret_stack &&
+	    (state->common.pc == (unsigned long)return_to_handler)) {
+		unsigned long orig_pc;
+
+		orig_pc = ftrace_graph_ret_addr(state->task, &state->graph_idx,
+						state->common.pc, frame_key);
+		if (state->common.pc == orig_pc) {
+			WARN_ON_ONCE(state->task == current);
+			return -EINVAL;
+		}
+		state->common.pc = orig_pc;
+		state->flags.fgraph = 1;
+	}
+#endif /* CONFIG_FUNCTION_GRAPH_TRACER */
 
 	return 0;
 }
@@ -178,10 +449,11 @@ int kunwind_next_regs_pc(struct kunwind_state *state)
 	unwind_consume_stack(&state->common, info, (unsigned long)regs,
 			     sizeof(*regs));
 
-	state->regs = regs;
 	state->common.pc = regs->pc;
 	state->common.fp = regs->regs[29];
-	state->regs = NULL;
+	state->sp = regs->sp;
+	state->lr = regs->regs[30];
+	state->lr_valid = !!state->lr;
 	state->source = KUNWIND_SOURCE_REGS_PC;
 	return 0;
 }
@@ -201,11 +473,19 @@ kunwind_next_frame_record_meta(struct kunwind_state *state)
 	meta = (struct frame_record_meta *)fp;
 	switch (READ_ONCE(meta->type)) {
 	case FRAME_META_TYPE_FINAL:
-		if (meta == &task_pt_regs(tsk)->stackframe)
+		if (meta == &task_pt_regs(tsk)->stackframe) {
+			if (IS_ENABLED(CONFIG_UNWINDER_DWARF_CFI) &&
+			    state->sp != (unsigned long)task_pt_regs(tsk))
+				return -EINVAL;
 			return -ENOENT;
+		}
 		WARN_ON_ONCE(tsk == current);
 		return -EINVAL;
 	case FRAME_META_TYPE_PT_REGS:
+		if (IS_ENABLED(CONFIG_UNWINDER_DWARF_CFI) &&
+		    state->sp != (unsigned long)container_of(meta, struct pt_regs,
+							     stackframe))
+			return -EINVAL;
 		return kunwind_next_regs_pc(state);
 	default:
 		WARN_ON_ONCE(tsk == current);
@@ -251,6 +531,212 @@ kunwind_next_frame_record(struct kunwind_state *state)
  * records (e.g. a cycle), determined based on the location and fp value of A
  * and the location (but not the fp value) of B.
  */
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+/**
+ * kunwind_next_cfi() - Step one ARM64 kernel frame using Minimal DWARF CFI
+ * @state: Current ARM64 kernel unwind state.
+ *
+ * Evaluates the Minimal DWARF CFI table at @state->common.pc (or pc - 4 for
+ * call return addresses), validates stack bounds and monotonic stack
+ * consumption across task/IRQ/overflow/SDEI/EFI stacks, and handles ftrace
+ * trampolines, SP-verified exception frame_record_meta boundaries, and
+ * frame-pointer fallbacks for JITed BPF code.
+ *
+ * Return: 0 on success, -ENOENT at the final user/kthread boundary or an
+ * explicit DW_CFA_undefined root frame, or -EINVAL on invalid unwind state.
+ */
+static __always_inline int kunwind_next_cfi(struct kunwind_state *state)
+{
+	unsigned long lookup_pc, cfa, ra_addr = 0, new_pc, new_fp = state->common.fp;
+	struct stack_info *info, *ra_info = NULL;
+	struct dwarf_cfi_row row;
+	int err;
+
+	lookup_pc = (state->source == KUNWIND_SOURCE_REGS_PC) ?
+		    state->common.pc : state->common.pc - 4;
+
+	err = arm64_dwarf_cfi_find(lookup_pc, &row);
+	if (err) {
+		unsigned long old_fp = state->common.fp;
+
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_ARGS
+		if (lookup_pc >= (unsigned long)ftrace_caller &&
+		    lookup_pc < (unsigned long)ftrace_caller_end &&
+		    old_fp == state->sp + sizeof(struct __arch_ftrace_regs)) {
+			struct __arch_ftrace_regs *fregs = (void *)state->sp;
+			size_t fsize = sizeof(*fregs) + 32;
+
+			info = unwind_find_stack(&state->common, state->sp, fsize);
+			if (!info || READ_ONCE(fregs->sp) != state->sp + fsize)
+				return -EINVAL;
+			unwind_consume_stack(&state->common, info, state->sp, fsize);
+			state->common.pc = READ_ONCE(fregs->pc);
+			state->common.fp = READ_ONCE(fregs->fp);
+			state->lr = ptrauth_strip_kernel_insn_pac(READ_ONCE(fregs->lr));
+			state->lr_valid = true;
+			state->sp += fsize;
+			state->source = KUNWIND_SOURCE_FRAME;
+			return 0;
+		}
+#endif
+		if (!(old_fp & 0x7) &&
+		    unwind_find_stack(&state->common, old_fp,
+				      sizeof(struct frame_record_meta))) {
+			struct frame_record_meta *m = (void *)old_fp;
+
+			if (state->sp == (unsigned long)container_of(m,
+					struct pt_regs, stackframe) &&
+			    !READ_ONCE(m->record.fp) &&
+			    !READ_ONCE(m->record.lr))
+				return kunwind_next_frame_record_meta(state);
+		}
+
+		if (state->lr_valid && !is_bpf_text_address(lookup_pc)) {
+			state->common.pc = state->lr;
+			state->lr_valid = false;
+			state->source = KUNWIND_SOURCE_FRAME;
+			state->unreliable = true;
+			return 0;
+		}
+
+		info = !(old_fp & 0x7) ?
+		       unwind_find_stack(&state->common, old_fp,
+					 sizeof(struct frame_record)) : NULL;
+		if (!info ||
+		    (stackinfo_on_stack(info, state->sp, /*size=*/0) &&
+		     old_fp < state->sp)) {
+			if (state->lr_valid) {
+				state->common.pc = state->lr;
+				state->lr_valid = false;
+				state->source = KUNWIND_SOURCE_FRAME;
+				state->unreliable = true;
+				return 0;
+			}
+			return -EINVAL;
+		}
+
+		err = kunwind_next_frame_record(state);
+		if (!err && state->source == KUNWIND_SOURCE_FRAME) {
+			state->sp = old_fp + sizeof(struct frame_record);
+			state->lr_valid = false;
+			state->unreliable = true;
+		} else if (err && state->lr_valid) {
+			state->common.pc = state->lr;
+			state->lr_valid = false;
+			state->source = KUNWIND_SOURCE_FRAME;
+			state->unreliable = true;
+			return 0;
+		}
+		return err;
+	}
+
+	if (row.ra_rule == DWARF_CFI_RULE_UNDEFINED)
+		return -ENOENT;
+
+	switch (row.cfa_base) {
+	case DWARF_CFI_BASE_SP:
+		cfa = state->sp + row.cfa_off;
+		break;
+	case DWARF_CFI_BASE_FP:
+		cfa = state->common.fp + row.cfa_off;
+		break;
+	case DWARF_CFI_BASE_FP_INDIRECT:
+		info = unwind_find_stack(&state->common,
+					 state->common.fp + row.cfa_off,
+					 sizeof(long));
+		if (!info)
+			return -EINVAL;
+		cfa = READ_ONCE(*(unsigned long *)(state->common.fp + row.cfa_off));
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (cfa & 0x7)
+		return -EINVAL;
+
+	if (row.ra_rule == DWARF_CFI_RULE_SAME) {
+		if (!state->lr_valid) {
+			/*
+			 * Non-struct_ops BPF trampolines push a synthetic
+			 * parent frame record above the inner traced-function
+			 * frame record; consume it at the pre-prologue entry.
+			 */
+			if (state->unreliable &&
+			    row.cfa_base == DWARF_CFI_BASE_SP &&
+			    row.cfa_off == 0 &&
+			    state->common.fp == state->sp) {
+				unsigned long old_fp = state->common.fp;
+
+				err = kunwind_next_frame_record(state);
+				if (!err && state->source == KUNWIND_SOURCE_FRAME)
+					state->sp = old_fp + sizeof(struct frame_record);
+				return err;
+			}
+			return -EINVAL;
+		}
+		if (cfa < state->sp)
+			return -EINVAL;
+		new_pc = state->lr;
+	} else if (row.ra_rule == DWARF_CFI_RULE_OFFSET) {
+		ra_addr = cfa + row.ra_off;
+
+		ra_info = unwind_find_stack(&state->common, ra_addr, sizeof(long));
+		if (!ra_info || !stackinfo_on_stack(ra_info, cfa, /*size=*/0))
+			return -EINVAL;
+		new_pc = READ_ONCE(*(unsigned long *)ra_addr);
+	} else {
+		return -EINVAL;
+	}
+
+	if (row.fp_rule == DWARF_CFI_RULE_OFFSET) {
+		unsigned long fp_addr = cfa + row.fp_off;
+
+		info = unwind_find_stack(&state->common, fp_addr, sizeof(long));
+		if (!info)
+			return -EINVAL;
+		new_fp = READ_ONCE(*(unsigned long *)fp_addr);
+	} else if (row.fp_rule == DWARF_CFI_RULE_FP_OFFSET) {
+		unsigned long fp_addr = state->common.fp + row.fp_off;
+
+		info = unwind_find_stack(&state->common, fp_addr, sizeof(long));
+		if (!info)
+			return -EINVAL;
+		new_fp = READ_ONCE(*(unsigned long *)fp_addr);
+	}
+
+	if (row.ra_rule == DWARF_CFI_RULE_OFFSET) {
+		if (stackinfo_on_stack(ra_info, state->sp, /*size=*/0)) {
+			if (cfa <= state->sp ||
+			    !stackinfo_on_stack(ra_info, state->sp,
+						cfa - state->sp))
+				return -EINVAL;
+			unwind_consume_stack(&state->common, ra_info, state->sp,
+					     cfa - state->sp);
+		} else {
+			if (row.cfa_base == DWARF_CFI_BASE_SP || cfa <= ra_addr)
+				return -EINVAL;
+			unwind_consume_stack(&state->common, ra_info, ra_addr,
+					     cfa - ra_addr);
+		}
+	} else if (cfa > state->sp) {
+		info = unwind_find_stack(&state->common, state->sp,
+					 cfa - state->sp);
+		if (!info)
+			return -EINVAL;
+		unwind_consume_stack(&state->common, info, state->sp,
+				     cfa - state->sp);
+	}
+
+	state->sp = cfa;
+	state->common.fp = new_fp;
+	state->common.pc = new_pc;
+	state->lr_valid = false;
+	state->source = KUNWIND_SOURCE_FRAME;
+	return 0;
+}
+#endif /* CONFIG_UNWINDER_DWARF_CFI */
+
 static __always_inline int
 kunwind_next(struct kunwind_state *state)
 {
@@ -263,7 +749,11 @@ kunwind_next(struct kunwind_state *state)
 	case KUNWIND_SOURCE_CALLER:
 	case KUNWIND_SOURCE_TASK:
 	case KUNWIND_SOURCE_REGS_PC:
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+		err = kunwind_next_cfi(state);
+#else
 		err = kunwind_next_frame_record(state);
+#endif
 		break;
 	default:
 		err = -EINVAL;
@@ -284,6 +774,9 @@ do_kunwind(struct kunwind_state *state, kunwind_consume_fn consume_state,
 	   void *cookie)
 {
 	int ret;
+
+	if (state->source == KUNWIND_SOURCE_UNKNOWN)
+		return -EINVAL;
 
 	ret = kunwind_recover_return_address(state);
 	if (ret)
@@ -401,7 +894,7 @@ arch_reliable_kunwind_consume_entry(const struct kunwind_state *state, void *coo
 	 * All that matters is whether the *entire* unwind is reliable, so give
 	 * up as soon as we hit an exception boundary.
 	 */
-	if (state->source == KUNWIND_SOURCE_REGS_PC)
+	if (state->source == KUNWIND_SOURCE_REGS_PC || state->unreliable)
 		return false;
 
 	return arch_kunwind_consume_entry(state, cookie);
@@ -474,8 +967,8 @@ static bool dump_backtrace_entry(const struct kunwind_state *state, void *arg)
 	return true;
 }
 
-void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk,
-		    const char *loglvl)
+noinline void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk,
+			     const char *loglvl)
 {
 	pr_debug("%s(regs = %p tsk = %p)\n", __func__, regs, tsk);
 

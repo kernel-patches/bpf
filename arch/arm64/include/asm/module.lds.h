@@ -4,7 +4,7 @@ SECTIONS {
 	.text.ftrace_trampoline 0 : { BYTE(0) }
 	.init.text.ftrace_trampoline 0 : { BYTE(0) }
 
-#ifdef CONFIG_UNWIND_TABLES
+#if defined(CONFIG_UNWIND_TABLES) && !defined(CONFIG_UNWINDER_DWARF_CFI)
 	/*
 	 * Currently, we only use unwind info at module load time, so we can
 	 * put it into the .init allocation.

@@ -56,6 +56,7 @@ unsigned long arch_ftrace_get_symaddr(unsigned long fentry_ip);
 #define ftrace_get_symaddr(fentry_ip) arch_ftrace_get_symaddr(fentry_ip)
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_ARGS
+extern void ftrace_caller_end(void);
 #define HAVE_ARCH_FTRACE_REGS
 struct dyn_ftrace;
 struct ftrace_ops;
@@ -158,10 +159,11 @@ ftrace_partial_regs(const struct ftrace_regs *fregs, struct pt_regs *regs)
 }
 
 #define arch_ftrace_fill_perf_regs(fregs, _regs) do {		\
-		(_regs)->pc = arch_ftrace_regs(fregs)->pc;			\
-		(_regs)->regs[29] = arch_ftrace_regs(fregs)->fp;		\
-		(_regs)->sp = arch_ftrace_regs(fregs)->sp;			\
-		(_regs)->pstate = PSR_MODE_EL1h;		\
+		(_regs)->pc = arch_ftrace_regs(fregs)->pc;		\
+		(_regs)->regs[29] = arch_ftrace_regs(fregs)->fp;	\
+		(_regs)->regs[30] = arch_ftrace_regs(fregs)->lr;	\
+		(_regs)->sp = arch_ftrace_regs(fregs)->sp;		\
+		(_regs)->pstate = PSR_MODE_EL1h;			\
 	} while (0)
 
 int ftrace_regs_query_register_offset(const char *name);
