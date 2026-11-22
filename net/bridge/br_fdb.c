@@ -1031,6 +1031,7 @@ static void __fdb_update(struct net_bridge *br,
 		      !test_bit(BR_FDB_STICKY, &fdb->flags)))) {
 		if (source != old_port) {
 			br_switchdev_fdb_notify(br, fdb, RTM_DELNEIGH);
+			clear_bit(BR_FDB_OFFLOADED, &fdb->flags);
 			br_fdb_dst_write(fdb, dst);
 			fdb_modified = true;
 			roamed = true;
