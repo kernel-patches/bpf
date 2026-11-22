@@ -278,15 +278,11 @@ static void sis_update_voice(struct voice *voice)
 
 static void sis_voice_irq(u32 status, struct voice *voice)
 {
+	unsigned long bits = status;
 	int bit;
 
-	while (status) {
-		bit = __ffs(status);
-		status >>= bit + 1;
-		voice += bit;
-		sis_update_voice(voice);
-		voice++;
-	}
+	for_each_set_bit(bit, &bits, 32)
+		sis_update_voice(&voice[bit]);
 }
 
 static irqreturn_t sis_interrupt(int irq, void *dev)
