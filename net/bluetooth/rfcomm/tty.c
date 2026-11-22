@@ -303,6 +303,9 @@ static struct rfcomm_dev *__rfcomm_dev_add(struct rfcomm_dev_req *req,
 	   holds reference to this module. */
 	__module_get(THIS_MODULE);
 
+	/* Hold an extra reference for rfcomm_dev_add() until setup completes */
+	tty_port_get(&dev->port);
+
 	mutex_unlock(&rfcomm_dev_lock);
 	return dev;
 
@@ -316,6 +319,7 @@ static int rfcomm_dev_add(struct rfcomm_dev_req *req, struct rfcomm_dlc *dlc)
 {
 	struct rfcomm_dev *dev;
 	struct device *tty;
+	int id;
 
 	BT_DBG("id %d channel %d", req->dev_id, req->channel);
 
@@ -328,6 +332,8 @@ static int rfcomm_dev_add(struct rfcomm_dev_req *req, struct rfcomm_dlc *dlc)
 	tty = tty_port_register_device(&dev->port, rfcomm_tty_driver,
 			dev->id, NULL);
 	if (IS_ERR(tty)) {
+		if (!test_and_set_bit(RFCOMM_TTY_OWNED, &dev->status))
+			tty_port_put(&dev->port);
 		tty_port_put(&dev->port);
 		return PTR_ERR(tty);
 	}
@@ -342,7 +348,10 @@ static int rfcomm_dev_add(struct rfcomm_dev_req *req, struct rfcomm_dlc *dlc)
 	if (device_create_file(dev->tty_dev, &dev_attr_channel) < 0)
 		BT_ERR("Failed to create channel attribute");
 
-	return dev->id;
+	id = dev->id;
+	tty_port_put(&dev->port);
+
+	return id;
 }
 
 /* ---- Send buffer ---- */
