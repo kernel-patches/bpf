@@ -398,6 +398,7 @@
 471	common	rseq_slice_yield	sys_rseq_slice_yield
 472	common	fchroot			sys_fchroot
 473	common	userns_set_idmap	sys_userns_set_idmap
+474	common	userland_open		sys_userland_open
 
 #
 # Due to a historical design error, certain syscalls are numbered differently
