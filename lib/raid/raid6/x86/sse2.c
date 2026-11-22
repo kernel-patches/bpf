@@ -113,7 +113,6 @@ static void raid6_sse21_xor_syndrome(int disks, int start, int stop,
 		asm volatile("movdqa %%xmm2,%0" : "=m" (p[d]));
 	}
 
-	asm volatile("sfence" : : : "memory");
 	kernel_fpu_end();
 }
 
@@ -241,7 +240,6 @@ static void raid6_sse22_xor_syndrome(int disks, int start, int stop,
 		asm volatile("movdqa %%xmm3,%0" : "=m" (p[d+16]));
 	}
 
-	asm volatile("sfence" : : : "memory");
 	kernel_fpu_end();
 }
 
@@ -445,7 +443,6 @@ static void raid6_sse24_xor_syndrome(int disks, int start, int stop,
 		asm volatile("movdqa %%xmm12,%0" : "=m" (q[d+32]));
 		asm volatile("movdqa %%xmm14,%0" : "=m" (q[d+48]));
 	}
-	asm volatile("sfence" : : : "memory");
 	kernel_fpu_end();
 }
 

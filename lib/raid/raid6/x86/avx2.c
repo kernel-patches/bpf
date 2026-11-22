@@ -115,7 +115,6 @@ static void raid6_avx21_xor_syndrome(int disks, int start, int stop,
 		asm volatile("vmovdqa %%ymm2,%0" : "=m" (p[d]));
 	}
 
-	asm volatile("sfence" : : : "memory");
 	asm volatile("vzeroupper");
 	kernel_fpu_end();
 }
@@ -245,7 +244,6 @@ static void raid6_avx22_xor_syndrome(int disks, int start, int stop,
 		asm volatile("vmovdqa %%ymm3,%0" : "=m" (p[d+32]));
 	}
 
-	asm volatile("sfence" : : : "memory");
 	asm volatile("vzeroupper");
 	kernel_fpu_end();
 }
@@ -448,7 +446,6 @@ static void raid6_avx24_xor_syndrome(int disks, int start, int stop,
 		asm volatile("vmovdqa %%ymm12,%0" : "=m" (q[d+64]));
 		asm volatile("vmovdqa %%ymm14,%0" : "=m" (q[d+96]));
 	}
-	asm volatile("sfence" : : : "memory");
 	asm volatile("vzeroupper");
 	kernel_fpu_end();
 }
