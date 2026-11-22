@@ -207,7 +207,11 @@ __recover_probed_insn(kprobe_opcode_t *buf, unsigned long addr)
 	bool faddr;
 
 	kp = get_kprobe((void *)addr);
-	faddr = ftrace_location(addr) == addr;
+	/*
+	 * Only the exact ftrace location matters, so skip the symbol
+	 * lookup ftrace_location() does to map sym+0 to its location.
+	 */
+	faddr = ftrace_location_range(addr, addr) == addr;
 	/*
 	 * Use the current code if it is not modified by Kprobe
 	 * and it cannot be modified by ftrace.
