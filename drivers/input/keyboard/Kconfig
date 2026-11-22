@@ -91,7 +91,8 @@ config KEYBOARD_APPLESPI
 
 config KEYBOARD_ASUS_TRANSFORMER_EC
 	tristate "Asus Transformer's Mobile Dock multimedia keys"
-	depends on MFD_ASUS_TRANSFORMER_EC
+	depends on I2C
+	depends on MFD_ASUS_TRANSFORMER_EC || COMPILE_TEST
 	help
 	  Say Y here if you want to use multimedia keys present on Asus
 	  Transformer's Mobile Dock.
