@@ -80,6 +80,7 @@ context.  This is represented by the fs_context structure::
 		unsigned int		sb_flags_mask;
 		unsigned int		s_iflags;
 		enum fs_context_purpose	purpose:8;
+		bool			userland_bound:1;
 		...
 	};
 
@@ -123,7 +124,8 @@ The fs_context fields are as follows:
      There are a subset of the namespaces in use by the invoking process.  They
      retain references on each namespace.  The subscribed namespaces may be
      replaced by the filesystem to reflect other sources, such as the parent
-     mount superblock on an automount.
+     mount superblock on an automount, or to the target userland's
+     namespaces when bound via FSCONFIG_SET_USERLAND.
 
    * ::
 
@@ -186,6 +188,15 @@ The fs_context fields are as follows:
 	FS_CONTEXT_FOR_RECONFIGURE	Change an existing mount
 	==========================	======================================
 
+   * ::
+
+       bool userland_bound:1
+
+     Set when the filesystem context has been bound to a target userland via
+     FSCONFIG_SET_USERLAND.  Filesystems may inspect this flag (for example in
+     ->init_fs_context() or ->parse_param()) to distinguish userland-delegated
+     mounts from host mounts.
+
 The mount context is created by calling vfs_new_fs_context() or
 vfs_dup_fs_context() and is destroyed with put_fs_context().  Note that the
 structure is not refcounted.
@@ -214,6 +225,8 @@ The filesystem context points to a table of operations::
 		int (*parse_param)(struct fs_context *fc,
 				   struct fs_parameter *param);
 		int (*parse_monolithic)(struct fs_context *fc, void *data);
+		int (*set_userland)(struct fs_context *fc,
+				    struct userland *userland);
 		int (*get_tree)(struct fs_context *fc);
 		int (*reconfigure)(struct fs_context *fc);
 	};
@@ -271,6 +284,23 @@ manage the filesystem context.  They are as follows:
      If the filesystem (e.g. NFS) needs to examine the data first and then
      finds it's the standard key-val list then it may pass it off to
      generic_parse_monolithic().
+
+   * ::
+
+	int (*set_userland)(struct fs_context *fc,
+			    struct userland *userland);
+
+     Called by FSCONFIG_SET_USERLAND after updating fc->user_ns, fc->net_ns,
+     and fc->cred, setting fc->userland_bound, and re-running
+     ->init_fs_context().  Filesystems opting into FS_USERLAND_MOUNT (or
+     FS_USERNS_DELEGATABLE) that capture additional namespaces from current in
+     ->init_fs_context() (such as PID or IPC namespaces) can implement this
+     operation to rebind their private context to the target userland's
+     namespaces.  It may update fc->user_ns, which must equal userland->user_ns
+     on return or the bind fails with -EOPNOTSUPP.
+
+     On success it should return 0.  In the case of an error, it should return
+     a negative error code and the context transitions to FS_CONTEXT_FAILED.
 
    * ::
 
