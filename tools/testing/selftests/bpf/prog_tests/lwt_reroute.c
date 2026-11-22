@@ -18,8 +18,8 @@
  *
  *    ip route add 10.0.0.0/24 encap bpf xmit <obj> sec "<section_N>" dev link_err
  *
- *  Here <obj> is statically defined to test_lwt_reroute.bpf.o, and it contains
- *  a single test program entry. This program sets packet mark by last byte of
+ *  Here <obj> is statically defined to test_lwt_reroute.bpf.o.
+ *  The lwt_xmit program sets packet mark by last byte of
  *  the IPv4 daddr. For example, a packet going to 1.2.3.4 will receive a skb
  *  mark 4. A packet will only be marked once, and IP x.x.x.0 will be skipped
  *  to avoid route loop. We didn't use generated BPF skeleton since the
@@ -42,6 +42,7 @@
  * --------------------------------
  *  1. Reroute to a running tun device
  *  2. Reroute to a device where qdisc drop
+ *  3. Reroute an IPv4 packet with a pushed IPv6 header
  *
  *  For case 1, ping packets should be received by the tun device.
  *
@@ -241,11 +242,26 @@ fail:
 		close(tun_fd);
 }
 
+static void test_lwt_reroute_push6(void)
+{
+	SYS(out, "ip link add link_err type dummy");
+	SYS(out, "ip link set lo up");
+	SYS(out, "ip addr add dev lo " LOCAL_SRC "/32");
+	SYS(out, "ip link set link_err up");
+	SYS(out, "ip route add %s dev link_err encap bpf xmit obj %s sec push6_zerosrc",
+	    TEST_CIDR, BPF_OBJECT);
+
+	ping_once("10.0.0.2");
+out:
+	return;
+}
+
 static void *test_lwt_reroute_run(void *arg)
 {
 	netns_delete();
 	RUN_TEST(lwt_reroute_normal_xmit);
 	RUN_TEST(lwt_reroute_qdisc_dropped);
+	RUN_TEST(lwt_reroute_push6);
 	return NULL;
 }
 
