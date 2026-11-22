@@ -6279,6 +6279,12 @@ static void hci_le_past_received_evt(struct hci_dev *hdev, void *data,
 		bt_dev_err(hdev,
 			   "Unable to find connection for dst %pMR sid 0x%2.2x",
 			   &ev->bdaddr, ev->sid);
+		/* No PA sync is pending, the PAST parameters are just left
+		 * set from a previous one, so terminate the sync instead of
+		 * leaving it behind in the controller.
+		 */
+		if (!ev->status)
+			hci_le_pa_term_sync(hdev, ev->sync_handle);
 		goto unlock;
 	}
 
