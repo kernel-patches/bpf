@@ -109,29 +109,51 @@ static void line6_unlink_audio_urbs(struct snd_line6_pcm *line6pcm,
 }
 
 /*
-	Wait until unlinking of all currently active URBs has been finished.
-*/
-static void line6_wait_clear_audio_urbs(struct snd_line6_pcm *line6pcm,
-					struct line6_pcm_stream *pcms)
+ * Mark all currently active URBs for unlinking and kill them.
+ *
+ * The unlink bit is set under the stream lock, so the completion
+ * callbacks cannot resubmit these URBs any longer.  usb_kill_urb() then
+ * waits for the giveback of every URB, hence the stream buffer is no
+ * longer referenced by the host controller.  This function must be
+ * called from a sleepable context.
+ *
+ * When @idle_only is set, nothing is done if some stream is still running
+ * on @pcms, and only the URBs that are active at that moment are killed,
+ * so that a concurrently started stream is never stopped.
+ */
+static void line6_kill_audio_urbs(struct snd_line6_pcm *line6pcm,
+				  struct line6_pcm_stream *pcms, bool idle_only)
 {
-	int timeout = HZ;
+	unsigned long active;
 	int i;
-	int alive;
 
-	do {
-		alive = 0;
-		for (i = 0; i < line6pcm->line6->iso_buffers; i++) {
-			if (test_bit(i, &pcms->active_urbs))
-				alive++;
-		}
-		if (!alive)
-			break;
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		schedule_timeout(1);
-	} while (--timeout > 0);
-	if (alive)
-		dev_err(line6pcm->line6->ifcdev,
-			"timeout: still %d active urbs..\n", alive);
+	/* May be called when the URB creation failed during the probe */
+	if (!pcms->urbs)
+		return;
+
+	scoped_guard(spinlock_irqsave, &pcms->lock) {
+		if (idle_only && pcms->running)
+			return;
+		active = pcms->active_urbs;
+		for_each_set_bit(i, &active, line6pcm->line6->iso_buffers)
+			set_bit(i, &pcms->unlink_urbs);
+	}
+
+	for_each_set_bit(i, &active, line6pcm->line6->iso_buffers)
+		if (pcms->urbs[i])
+			usb_kill_urb(pcms->urbs[i]);
+
+	/*
+	 * Drop the unlink marks left on URBs that were completed and not
+	 * resubmitted, so that a later stream start can submit the URBs
+	 * again.  An URB that is still active keeps its mark.
+	 */
+	scoped_guard(spinlock_irqsave, &pcms->lock) {
+		for_each_set_bit(i, &pcms->unlink_urbs,
+				 line6pcm->line6->iso_buffers)
+			if (!test_bit(i, &pcms->active_urbs))
+				clear_bit(i, &pcms->unlink_urbs);
+	}
 }
 
 static inline struct line6_pcm_stream *
@@ -172,7 +194,7 @@ static void line6_buffer_release(struct snd_line6_pcm *line6pcm,
 {
 	clear_bit(type, &pstr->opened);
 	if (!pstr->opened) {
-		line6_wait_clear_audio_urbs(line6pcm, pstr);
+		line6_kill_audio_urbs(line6pcm, pstr, false);
 		if (pstr == &line6pcm->in) {
 			/* prev_fbuf points into the capture buffer we are about
 			 * to free; drop it while no capture URB is in flight.
@@ -337,8 +359,7 @@ int line6_pcm_acquire(struct snd_line6_pcm *line6pcm, int type, bool start)
 		ret = line6_buffer_acquire(line6pcm, pstr, dir, type);
 		if (ret < 0)
 			goto error;
-		if (!pstr->running)
-			line6_wait_clear_audio_urbs(line6pcm, pstr);
+		line6_kill_audio_urbs(line6pcm, pstr, true);
 	}
 	if (start) {
 		for (dir = 0; dir < 2; dir++) {
@@ -510,10 +531,8 @@ static int snd_line6_new_pcm(struct usb_line6 *line6, struct snd_pcm **pcm_ret)
 */
 void line6_pcm_disconnect(struct snd_line6_pcm *line6pcm)
 {
-	line6_unlink_audio_urbs(line6pcm, &line6pcm->out);
-	line6_unlink_audio_urbs(line6pcm, &line6pcm->in);
-	line6_wait_clear_audio_urbs(line6pcm, &line6pcm->out);
-	line6_wait_clear_audio_urbs(line6pcm, &line6pcm->in);
+	line6_kill_audio_urbs(line6pcm, &line6pcm->out, false);
+	line6_kill_audio_urbs(line6pcm, &line6pcm->in, false);
 }
 
 /*
@@ -592,6 +611,27 @@ int line6_init_pcm(struct usb_line6 *line6,
 }
 EXPORT_SYMBOL_GPL(line6_init_pcm);
 
+/* common PCM sync_stop callback */
+int snd_line6_sync_stop(struct snd_pcm_substream *substream)
+{
+	struct snd_line6_pcm *line6pcm = snd_pcm_substream_chip(substream);
+	struct line6_pcm_stream *pstr = get_stream(line6pcm, substream->stream);
+
+	guard(mutex)(&line6pcm->state_mutex);
+	line6_kill_audio_urbs(line6pcm, pstr, true);
+	/*
+	 * A capture stream may use the playback stream as a helper, and
+	 * snd_line6_trigger() stops it together with the capture stream.
+	 * Stop the leftover playback URBs here as well, so that the helper
+	 * stream can be restarted at the next trigger.
+	 */
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE &&
+	    (line6pcm->line6->properties->capabilities &
+	     LINE6_CAP_IN_NEEDS_OUT))
+		line6_kill_audio_urbs(line6pcm, &line6pcm->out, true);
+	return 0;
+}
+
 /* prepare pcm callback */
 int snd_line6_prepare(struct snd_pcm_substream *substream)
 {
@@ -599,8 +639,12 @@ int snd_line6_prepare(struct snd_pcm_substream *substream)
 	struct line6_pcm_stream *pstr = get_stream(line6pcm, substream->stream);
 
 	guard(mutex)(&line6pcm->state_mutex);
-	if (!pstr->running)
-		line6_wait_clear_audio_urbs(line6pcm, pstr);
+	/*
+	 * sync_stop() is called only after this substream itself was
+	 * stopped; other stream types sharing the stream (monitor, impulse
+	 * or the capture helper) may have left URBs unlinking.
+	 */
+	line6_kill_audio_urbs(line6pcm, pstr, true);
 
 	if (!test_and_set_bit(LINE6_FLAG_PREPARED, &line6pcm->flags)) {
 		line6pcm->out.count = 0;
