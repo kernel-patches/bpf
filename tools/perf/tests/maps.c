@@ -392,10 +392,56 @@ static int test__maps__remove(struct test_suite *t __maybe_unused, int subtest _
 	return TEST_OK;
 }
 
+static int test__maps__tail_insert(struct test_suite *t __maybe_unused,
+				   int subtest __maybe_unused)
+{
+	struct map_def ascending_maps[] = {
+		{ "map_c", 1000, 2000 },
+		{ "map_a", 2000, 3000 },
+		{ "map_d", 4000, 5000 },
+	};
+	struct map *map, *found;
+	struct perf_env host_env;
+	struct machine *machine;
+	struct maps *maps;
+	int ret;
+
+	perf_env__init(&host_env);
+	machine = machine__new_live(&host_env, /*kernel_maps=*/false, getpid());
+	maps = maps__new(machine);
+
+	TEST_ASSERT_VAL("failed to create machine", machine);
+	TEST_ASSERT_VAL("failed to create maps", maps);
+
+	/* Exercise tail fast-path in maps__fixup_overlap_and_insert. */
+	for (unsigned int i = 0; i < ARRAY_SIZE(ascending_maps); i++) {
+		map = dso__new_map(ascending_maps[i].name);
+		TEST_ASSERT_VAL("failed to create map", map);
+		map__set_start(map, ascending_maps[i].start);
+		map__set_end(map, ascending_maps[i].end);
+		TEST_ASSERT_VAL("failed to insert sorted map",
+				maps__fixup_overlap_and_insert(maps, map) == 0);
+		map__put(map);
+	}
+
+	ret = check_maps(ascending_maps, ARRAY_SIZE(ascending_maps), maps);
+	TEST_ASSERT_VAL("tail insert check_maps failed", !ret);
+
+	found = maps__find(maps, 2500);
+	TEST_ASSERT_VAL("failed to find map_a by address", found && map__start(found) == 2000);
+	map__zput(found);
+
+	maps__zput(maps);
+	machine__delete(machine);
+	perf_env__exit(&host_env);
+	return TEST_OK;
+}
+
 static struct test_case tests__maps[] = {
 	TEST_CASE("Test merge_in interface", maps__merge_in),
 	TEST_CASE("Test fix up overlap interface", maps__fixup_overlap_and_insert),
 	TEST_CASE("Test remove interface", maps__remove),
+	TEST_CASE("Test tail insert fast-path", maps__tail_insert),
 	{	.name = NULL, }
 };
 
