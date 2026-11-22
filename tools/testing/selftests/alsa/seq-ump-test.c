@@ -620,4 +620,24 @@ TEST_F(seq_pair, ump_midi2_to_midi1_note)
 			  { 0x20913c01, 0 }, { 0x20813c00, 0 });
 }
 
+TEST_F(seq_pair, ump_midi2_to_midi1_rpn)
+{
+	int skip = 0;
+	int err;
+
+	err = open_pair(&self->dst, SNDRV_SEQ_CLIENT_UMP_MIDI_1_0,
+			&self->src, SNDRV_SEQ_CLIENT_UMP_MIDI_2_0, &skip);
+	if (skip)
+		SKIP(return, "UMP sequencer client unavailable: %s",
+		     strerror(-err));
+	ASSERT_EQ(0, err);
+
+	SEND_UMP(0x40210001, 0x80000000);
+	SEND_UMP(0x40310203, 0x12345678);
+	EXPECT_MT_PACKETS(2, { 0x20b16500, 0 }, { 0x20b16401, 0 },
+			  { 0x20b10640, 0 }, { 0x20b12600, 0 },
+			  { 0x20b16302, 0 }, { 0x20b16203, 0 },
+			  { 0x20b10609, 0 }, { 0x20b1260d, 0 });
+}
+
 TEST_HARNESS_MAIN
