@@ -370,6 +370,7 @@ The machine driver sets some additional parameters to the DAI link i.e.
 		.num_c2c_params = 1,
 	}
 	< ... more DAI links here ... >
+  };
 
 These parameters are used to configure the DAI hw_params() when DAPM detects a
 valid path and then calls the PCM operations to start the link. DAPM will also
