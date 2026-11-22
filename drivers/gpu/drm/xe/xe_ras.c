@@ -277,21 +277,20 @@ static int send_page_offline_cmd(struct xe_device *xe, u64 page_address,
 
 	ret = xe_sysctrl_send_command(&xe->sc, &command, &rlen);
 	if (ret) {
-		xe_log_err(xe, SYSCTRL, ret, "failed to send page offline command\n");
+		xe_err(xe, "sysctrl: failed to send page offline command %d\n", ret);
 		return ret;
 	}
 
 	if (rlen != sizeof(response)) {
-		xe_log_err(xe, SYSCTRL, -EINVAL,
-			   "unexpected page offline response length %zu (expected %zu)\n",
-			   rlen, sizeof(response));
+		xe_err(xe, "sysctrl: unexpected page offline response length %zu (expected %zu)\n",
+		       rlen, sizeof(response));
 		return -EINVAL;
 	}
 
 	ret = ras_status_to_errno(response.status);
 	if (ret) {
-		xe_log_err(xe, SYSCTRL, ret, "page offline command failed with status %u\n",
-			   response.status);
+		xe_err(xe, "sysctrl: page offline command failed with status %#x\n",
+		       response.status);
 		return ret;
 	}
 
@@ -421,15 +420,15 @@ static void process_offline_pages(struct xe_device *xe, u32 cmd, void *req, size
 
 		ret = xe_sysctrl_send_command(&xe->sc, &command, &rlen);
 		if (ret) {
-			xe_log_err(xe, SYSCTRL, ret, "failed to get page offline data, cmd=%#x\n",
-				   cmd);
+			xe_err(xe, "sysctrl: failed to get page offline data %d, cmd=%#x\n", ret,
+			       cmd);
 			return;
 		}
 
 		if (rlen != resp_size) {
-			xe_log_err(xe, SYSCTRL, -EINVAL,
-				   "unexpected page offline response length %zu (expected %zu), cmd=%#x\n",
-				   rlen, resp_size, cmd);
+			xe_err(xe,
+			       "sysctrl: unexpected page offline response length %zu (expected %zu), cmd=%#x\n",
+			       rlen, resp_size, cmd);
 			return;
 		}
 
@@ -459,9 +458,8 @@ static void process_offline_pages(struct xe_device *xe, u32 cmd, void *req, size
 			total_pages = common->total_pages;
 
 		if (count > total_pages) {
-			xe_log_err(xe, SYSCTRL, -EINVAL,
-				   "Pages returned exceed total pages %u, returned %u, cmd=%#x\n",
-				   total_pages, count, cmd);
+			xe_err(xe, "sysctrl: pages returned %u exceed total pages %u, cmd=%#x\n",
+			       count, total_pages, cmd);
 			return;
 		}
 	} while (common->additional_data);
