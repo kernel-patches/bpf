@@ -14222,7 +14222,7 @@ static netdev_features_t bnxt_fix_features(struct net_device *dev,
 	    bp->tx_ring_size < 2 * BNXT_SW_USO_MAX_DESCS)
 		features &= ~NETIF_F_GSO_UDP_L4;
 
-	if ((bp->flags & BNXT_FLAG_NO_AGG_RINGS) || bp->xdp_prog)
+	if (bp->flags & BNXT_FLAG_NO_AGG_RINGS)
 		features &= ~(NETIF_F_LRO | NETIF_F_GRO_HW);
 
 	if (features & NETIF_F_GRO_HW)
