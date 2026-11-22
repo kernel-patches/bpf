@@ -65,6 +65,7 @@
 #include <linux/rcupdate.h>
 #include <linux/ptrace.h>
 #include <linux/mount.h>
+#include <linux/mnt_namespace.h>
 #include <linux/audit.h>
 #include <linux/memcontrol.h>
 #include <linux/ftrace.h>
@@ -1616,7 +1617,7 @@ static int copy_exec_state(u64 clone_flags, struct task_struct *tsk)
 	struct task_exec_state *exec_state;
 
 	/* CLONE_VM siblings refcount-share the parent's exec_state. */
-	if (clone_flags & CLONE_VM) {
+	if ((clone_flags & (CLONE_VM | CLONE_INTO_USERLAND)) == CLONE_VM) {
 		exec_state = rcu_dereference_protected(current->exec_state, true);
 		refcount_inc(&exec_state->count);
 		rcu_assign_pointer(tsk->exec_state, exec_state);
@@ -1633,7 +1634,7 @@ enum copy_fs_flags_t {
 };
 
 static int copy_fs(u64 clone_flags, struct task_struct *tsk,
-		   enum copy_fs_flags_t flags)
+		   enum copy_fs_flags_t flags, struct userland *userland)
 {
 	struct fs_struct *fs;
 
@@ -1649,7 +1650,7 @@ static int copy_fs(u64 clone_flags, struct task_struct *tsk,
 		if (current->nsproxy->mnt_ns != &init_mnt_ns)
 			return -EINVAL;
 		fs = userspace_init_fs;
-	} else if (flags & COPY_FS_IDLE) {
+	} else if (flags & COPY_FS_IDLE || userland) {
 		fs = &init_fs;
 	} else {
 		fs = current->fs;
@@ -1671,6 +1672,21 @@ static int copy_fs(u64 clone_flags, struct task_struct *tsk,
 	tsk->real_fs = tsk->fs = copy_fs_struct(fs);
 	if (!tsk->fs)
 		return -ENOMEM;
+	if (userland) {
+		struct path root __free(path_put) = {};
+		int err;
+
+		err = mnt_ns_get_root(userland->ns->mnt_ns, &root);
+		if (err) {
+			free_fs_struct(tsk->fs);
+			tsk->real_fs = NULL;
+			tsk->fs = NULL;
+			return err;
+		}
+		tsk->fs->umask = READ_ONCE(current->fs->umask);
+		set_fs_root(tsk->fs, &root);
+		set_fs_pwd(tsk->fs, &root);
+	}
 	return 0;
 }
 
@@ -2186,7 +2202,7 @@ __latent_entropy struct task_struct *copy_process(
 #ifdef CONFIG_PROVE_LOCKING
 	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
 #endif
-	retval = copy_creds(p, clone_flags);
+	retval = copy_creds(p, clone_flags, args->userland);
 	if (retval < 0)
 		goto bad_fork_free;
 
@@ -2317,7 +2333,7 @@ __latent_entropy struct task_struct *copy_process(
 		goto bad_fork_cleanup_semundo;
 	retval = copy_fs(clone_flags, p,
 			 (args->umh ? COPY_FS_UMH : 0) |
-			 (args->idle ? COPY_FS_IDLE : 0));
+			 (args->idle ? COPY_FS_IDLE : 0), args->userland);
 	if (retval)
 		goto bad_fork_cleanup_semundo;
 	retval = copy_sighand(clone_flags, p);
@@ -2329,7 +2345,7 @@ __latent_entropy struct task_struct *copy_process(
 	retval = copy_mm(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_signal;
-	retval = copy_namespaces(clone_flags, p);
+	retval = copy_namespaces(clone_flags, p, args->userland);
 	if (retval)
 		goto bad_fork_cleanup_mm;
 	retval = copy_io(clone_flags, p);
@@ -2510,6 +2526,11 @@ __latent_entropy struct task_struct *copy_process(
 		goto bad_fork_core_free;
 	}
 
+	if (unlikely(args->userland_bootstrapping && !is_child_reaper(pid))) {
+		retval = -EBUSY;
+		goto bad_fork_core_free;
+	}
+
 	/* Let kill terminate clone/fork in the middle */
 	if (fatal_signal_pending(current)) {
 		retval = -EINTR;
@@ -2578,7 +2599,7 @@ __latent_entropy struct task_struct *copy_process(
 		}
 		attach_pid(p, PIDTYPE_PID);
 		if (thread_group_leader(p))
-			userland_copy(p, pid, NULL);
+			userland_copy(p, pid, args->userland);
 		nr_threads++;
 	}
 	total_forks++;
@@ -2780,6 +2801,13 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	if (!valid_signal(args->exit_signal))
 		return -EINVAL;
 
+	if (unlikely(clone_flags & CLONE_INTO_USERLAND)) {
+		int err = userland_prepare_fork(args);
+
+		if (err)
+			return err;
+	}
+
 	/*
 	 * Determine whether and which event to report to ptracer.  When
 	 * called from kernel_thread or CLONE_UNTRACED is explicitly
@@ -2800,6 +2828,13 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 
 	p = copy_process(NULL, trace, NUMA_NO_NODE, args);
 	add_latent_entropy();
+
+	if (unlikely(clone_flags & CLONE_INTO_USERLAND)) {
+		int err = userland_finish_fork(args, p);
+
+		if (err)
+			return err;
+	}
 
 	if (IS_ERR(p))
 		return PTR_ERR(p);
@@ -2958,7 +2993,9 @@ static noinline int copy_clone_args_from_user(struct kernel_clone_args *kargs,
 		     CLONE_ARGS_SIZE_VER1);
 	BUILD_BUG_ON(offsetofend(struct clone_args, cgroup) !=
 		     CLONE_ARGS_SIZE_VER2);
-	BUILD_BUG_ON(sizeof(struct clone_args) != CLONE_ARGS_SIZE_VER2);
+	BUILD_BUG_ON(offsetofend(struct clone_args, userland) !=
+		     CLONE_ARGS_SIZE_VER3);
+	BUILD_BUG_ON(sizeof(struct clone_args) != CLONE_ARGS_SIZE_VER3);
 
 	if (unlikely(usize > PAGE_SIZE))
 		return -E2BIG;
@@ -2988,6 +3025,10 @@ static noinline int copy_clone_args_from_user(struct kernel_clone_args *kargs,
 	    (args.cgroup > INT_MAX || usize < CLONE_ARGS_SIZE_VER2))
 		return -EINVAL;
 
+	if ((args.flags & CLONE_INTO_USERLAND) &&
+	    (args.userland > INT_MAX || usize < CLONE_ARGS_SIZE_VER3))
+		return -EINVAL;
+
 	*kargs = (struct kernel_clone_args){
 		.flags		= args.flags,
 		.pidfd		= u64_to_user_ptr(args.pidfd),
@@ -2999,6 +3040,7 @@ static noinline int copy_clone_args_from_user(struct kernel_clone_args *kargs,
 		.tls		= args.tls,
 		.set_tid_size	= args.set_tid_size,
 		.cgroup		= args.cgroup,
+		.userland_fd	= args.userland,
 	};
 
 	if (args.set_tid &&
@@ -3039,13 +3081,19 @@ static inline bool clone3_stack_valid(struct kernel_clone_args *kargs)
 	return true;
 }
 
+#define CLONE_INTO_USERLAND_FLAGS \
+	(CLONE_INTO_USERLAND | CLONE_VFORK | CLONE_PIDFD | \
+	 CLONE_CLEAR_SIGHAND | CLONE_INTO_CGROUP | CLONE_AUTOREAP | \
+	 CLONE_NNP | CLONE_PIDFD_AUTOKILL)
+
 static bool clone3_args_valid(struct kernel_clone_args *kargs)
 {
 	/* Verify that no unknown flags are passed along. */
 	if (kargs->flags &
 	    ~(CLONE_LEGACY_FLAGS | CLONE_CLEAR_SIGHAND |
 	      CLONE_INTO_CGROUP | CLONE_AUTOREAP | CLONE_NNP |
-	      CLONE_PIDFD_AUTOKILL | CLONE_EMPTY_MNTNS))
+	      CLONE_PIDFD_AUTOKILL | CLONE_EMPTY_MNTNS |
+	      CLONE_INTO_USERLAND))
 		return false;
 
 	/*
@@ -3061,6 +3109,10 @@ static bool clone3_args_valid(struct kernel_clone_args *kargs)
 
 	if ((kargs->flags & (CLONE_THREAD | CLONE_PARENT)) &&
 	    kargs->exit_signal)
+		return false;
+
+	if ((kargs->flags & CLONE_INTO_USERLAND) &&
+	    (kargs->flags & ~CLONE_INTO_USERLAND_FLAGS))
 		return false;
 
 	if (!clone3_stack_valid(kargs))

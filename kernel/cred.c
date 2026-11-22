@@ -12,13 +12,16 @@
 #include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/sched/coredump.h>
+#include <linux/sched/exec_state.h>
 #include <linux/key.h>
 #include <linux/keyctl.h>
 #include <linux/init_task.h>
+#include <linux/userland.h>
 #include <linux/security.h>
 #include <linux/binfmts.h>
 #include <linux/cn_proc.h>
 #include <linux/uidgid.h>
+#include <linux/user_namespace.h>
 
 #if 0
 #define kdebug(FMT, ...)						\
@@ -251,6 +254,9 @@ struct cred *prepare_exec_creds(void)
 	return new;
 }
 
+static bool cred_cap_issubset(const struct cred *set,
+			      const struct cred *subset);
+
 /*
  * Copy credentials for the new process created by fork()
  *
@@ -260,7 +266,8 @@ struct cred *prepare_exec_creds(void)
  * The new process gets the current process's subjective credentials as its
  * objective and subjective credentials
  */
-int copy_creds(struct task_struct *p, u64 clone_flags)
+int copy_creds(struct task_struct *p, u64 clone_flags,
+	       struct userland *userland)
 {
 	struct cred *new;
 	int ret;
@@ -286,6 +293,24 @@ int copy_creds(struct task_struct *p, u64 clone_flags)
 	new = prepare_creds();
 	if (!new)
 		return -ENOMEM;
+
+	if (userland) {
+		const struct cred *old = current_cred();
+
+		if (new->user_ns != userland->user_ns) {
+			ret = install_user_ns_cred(new, userland->user_ns);
+			if (ret < 0)
+				goto error_put;
+		}
+		if (!cred_cap_issubset(old, new) ||
+		    old->user_ns != new->user_ns) {
+			struct task_exec_state *exec_state;
+
+			exec_state = rcu_dereference_protected(p->exec_state, true);
+			if (exec_state != &init_task_exec_state)
+				WRITE_ONCE(exec_state->dumpable, suid_dumpable);
+		}
+	}
 
 	if (clone_flags & CLONE_NEWUSER) {
 		ret = create_user_ns(new);

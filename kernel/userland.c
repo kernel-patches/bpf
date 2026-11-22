@@ -10,6 +10,7 @@
 #include <linux/file.h>
 #include <linux/freezer.h>
 #include <linux/fs.h>
+#include <linux/fs_struct.h>
 #include <linux/anon_inodes.h>
 #include <linux/userland.h>
 #include <linux/sched/signal.h>
@@ -540,4 +541,136 @@ SYSCALL_DEFINE1(userland_open, unsigned int, flags)
 		userland_put(c);
 
 	return fd;
+}
+
+/**
+ * DOC: CLONE_INTO_USERLAND
+ *
+ * Passing ``CLONE_INTO_USERLAND`` in ``struct clone_args.flags`` (with
+ * ``size >= CLONE_ARGS_SIZE_VER3``) spawns the child into the userland identified
+ * by ``struct clone_args.userland`` once ``"/"`` is mounted in its mount
+ * namespace. The first caller bootstraps PID 1 while concurrent bootstrap
+ * callers wait killably; subsequent callers join the running PID namespace
+ * until teardown begins.
+ *
+ * Requires ``CAP_SYS_ADMIN`` and ``CAP_SYS_CHROOT`` in the target user
+ * namespace (plus ``CAP_SYS_CHROOT`` in the caller's user namespace when
+ * chrooted) and an ancestor active PID namespace. May be combined with
+ * ``CLONE_VFORK``, ``CLONE_PIDFD``, ``CLONE_PIDFD_AUTOKILL``,
+ * ``CLONE_AUTOREAP``, ``CLONE_CLEAR_SIGHAND``, ``CLONE_INTO_CGROUP``, and
+ * ``CLONE_NNP``.
+ */
+static bool userland_pidns_alive(struct pid_namespace *pid_ns)
+{
+	for (; pid_ns != &init_pid_ns; pid_ns = pid_ns->parent) {
+		if (!(READ_ONCE(pid_ns->pid_allocated) & PIDNS_ADDING))
+			return false;
+	}
+	return true;
+}
+
+int userland_prepare_fork(struct kernel_clone_args *args)
+{
+	struct file *file __free(fput) = fget(args->userland_fd);
+	struct path root __free(path_put) = {};
+	struct pid_namespace *pid_ns;
+	bool bootstrapping = false;
+	struct userland *userland;
+	int ret;
+
+	if (!file)
+		return -EBADF;
+	if (!userland_is_file(file))
+		return -EINVAL;
+
+	userland = file->private_data;
+	if (!ns_capable(userland->user_ns, CAP_SYS_ADMIN) ||
+	    !ns_capable(userland->user_ns, CAP_SYS_CHROOT))
+		return -EPERM;
+	if (current_chrooted() && !ns_capable(current_user_ns(), CAP_SYS_CHROOT))
+		return -EPERM;
+
+	pid_ns = userland->ns->pid_ns_for_children;
+	if (!pidns_is_ancestor(pid_ns, task_active_pid_ns(current)))
+		return -EXDEV;
+
+	ret = mnt_ns_get_root(userland->ns->mnt_ns, &root);
+	if (ret)
+		return ret;
+
+	for (;;) {
+		bool wait = false;
+
+		scoped_guard(spinlock, &userland->lock) {
+			switch (userland->state) {
+			case USERLAND_INIT:
+				if (!userland_pidns_alive(pid_ns))
+					return -ESRCH;
+				if (READ_ONCE(pid_ns->child_reaper))
+					return -EBUSY;
+				WRITE_ONCE(userland->state, USERLAND_FORKING);
+				bootstrapping = true;
+				break;
+			case USERLAND_FORKING:
+				wait = true;
+				break;
+			case USERLAND_RUNNING:
+				if (!userland_pidns_alive(pid_ns))
+					return -ESRCH;
+				break;
+			case USERLAND_DEAD:
+				return -ESRCH;
+			}
+		}
+		if (!wait)
+			break;
+
+		ret = wait_event_killable(userland->waitq,
+					  READ_ONCE(userland->state) !=
+					  USERLAND_FORKING);
+		if (ret)
+			return ret;
+	}
+
+	args->userland_file = no_free_ptr(file);
+	args->userland = userland;
+	args->userland_bootstrapping = bootstrapping;
+	return 0;
+}
+
+int userland_finish_fork(struct kernel_clone_args *args,
+			 struct task_struct *p)
+{
+	struct file *file __free(fput) = args->userland_file;
+	struct userland *userland = args->userland;
+	struct pid_namespace *pid_ns = userland->ns->pid_ns_for_children;
+	int ret;
+
+	args->userland_file = NULL;
+	args->userland = NULL;
+	if (!IS_ERR(p)) {
+		if (args->userland_bootstrapping)
+			wake_up_all(&userland->waitq);
+		if (current->nsproxy->time_ns != userland->ns->time_ns)
+			timens_commit(p, userland->ns->time_ns);
+		return 0;
+	}
+
+	ret = PTR_ERR(p);
+	if (args->userland_bootstrapping) {
+		scoped_guard(spinlock, &userland->lock) {
+			if (userland->state == USERLAND_FORKING)
+				WRITE_ONCE(userland->state, USERLAND_INIT);
+		}
+		wake_up_all(&userland->waitq);
+		if (ret == -EINVAL && !args->set_tid_size &&
+		    (READ_ONCE(pid_ns->child_reaper) ||
+		     (READ_ONCE(pid_ns->pid_allocated) & ~PIDNS_ADDING)))
+			ret = -EBUSY;
+	}
+	if ((ret == -ENOMEM || ret == -EBUSY) &&
+	    !userland_pidns_alive(pid_ns))
+		return -ESRCH;
+
+	return ret;
 }

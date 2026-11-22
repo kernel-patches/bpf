@@ -13,6 +13,7 @@
 #include <linux/wait.h>
 
 struct file;
+struct kernel_clone_args;
 struct nsproxy;
 struct pid;
 struct pid_namespace;
@@ -52,6 +53,9 @@ long userland_waitid(int upid, struct waitid_info *infop, int options,
 		     struct rusage *ru);
 int userland_send_signal(struct file *file, int sig,
 			 struct siginfo __user *info, unsigned int flags);
+int userland_prepare_fork(struct kernel_clone_args *args);
+int userland_finish_fork(struct kernel_clone_args *args,
+			 struct task_struct *p);
 #else
 static inline void userland_put(struct userland *c)
 {
@@ -83,6 +87,17 @@ static inline int userland_send_signal(struct file *file, int sig,
 				       unsigned int flags)
 {
 	return -EBADF;
+}
+
+static inline int userland_prepare_fork(struct kernel_clone_args *args)
+{
+	return -EINVAL;
+}
+
+static inline int userland_finish_fork(struct kernel_clone_args *args,
+				       struct task_struct *p)
+{
+	return 0;
 }
 #endif /* CONFIG_USERLAND */
 
