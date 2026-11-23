@@ -532,6 +532,16 @@ static void *__bpf_ringbuf_reserve(struct bpf_ringbuf *rb, u64 size)
 	/* pairs with consumer's smp_load_acquire() */
 	smp_store_release(&rb->producer_pos, new_prod_pos);
 
+	if (unlikely(rb->overwrite_mode)) {
+		/*
+		 * The consumer reads a record and then checks producer_pos to
+		 * see if the record was overwritten in the meantime. Make sure
+		 * it can't see the record data that our caller is going to write
+		 * before it sees the producer_pos update above.
+		 */
+		smp_wmb();
+	}
+
 	raw_res_spin_unlock_irqrestore(&rb->spinlock, flags);
 
 	return (void *)hdr + BPF_RINGBUF_HDR_SZ;
