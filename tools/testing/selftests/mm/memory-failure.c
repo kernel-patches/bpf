@@ -17,6 +17,7 @@
 #include <sys/vfs.h>
 #include <linux/magic.h>
 #include <errno.h>
+#include <stdlib.h>
 
 #include "vm_util.h"
 
@@ -264,18 +265,30 @@ TEST_F(memory_failure, anon)
 static int prepare_file(const char *fname, unsigned long size)
 {
 	int fd;
+	char *zeros;
+	ssize_t written;
 
 	fd = open(fname, O_RDWR | O_CREAT | O_TRUNC, 0664);
 	if (fd < 0)
 		return fd;
 
-	/* HPFS cannot grow files with ftruncate(). */
-	if (pwrite(fd, "\0", 1, size - 1) != 1) {
-		close(fd);
-		unlink(fname);
-		return -1;
-	}
+	/*
+	 * HPFS cannot grow files with ftruncate(), and OMFS does not support
+	 * holes. Write the whole page so OMFS allocates its blocks before
+	 * mmap(). A write of only the last byte loses data after eviction.
+	 */
+	zeros = calloc(size, 1);
+	if (!zeros)
+		goto failed;
+	written = pwrite(fd, zeros, size, 0);
+	free(zeros);
+	if (written != (ssize_t)size)
+		goto failed;
 	return fd;
+failed:
+	close(fd);
+	unlink(fname);
+	return -1;
 }
 
 static int prepare_shmem(const char *fname, unsigned long size)
