@@ -40,7 +40,10 @@ void *alloc_insn_page(void)
 	page = execmem_alloc(EXECMEM_KPROBES, PAGE_SIZE);
 	if (!page)
 		return NULL;
-	set_memory_rox((unsigned long)page, 1);
+	if (set_memory_rox((unsigned long)page, 1)) {
+		execmem_free(page);
+		return NULL;
+	}
 	return page;
 }
 

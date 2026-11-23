@@ -475,13 +475,18 @@ static int module_alloc_ftrace_hotpatch_trampolines(struct module *me,
 	char *start, *end;
 	int numpages;
 	size_t size;
+	int rc;
 
 	size = FTRACE_HOTPATCH_TRAMPOLINES_SIZE(s->sh_size);
 	numpages = DIV_ROUND_UP(size, PAGE_SIZE);
 	start = execmem_alloc(EXECMEM_FTRACE, numpages * PAGE_SIZE);
 	if (!start)
 		return -ENOMEM;
-	set_memory_rox((unsigned long)start, numpages);
+	rc = set_memory_rox((unsigned long)start, numpages);
+	if (rc) {
+		execmem_free(start);
+		return rc;
+	}
 	end = start + size;
 
 	me->arch.trampolines_start = (struct ftrace_hotpatch_trampoline *)start;
