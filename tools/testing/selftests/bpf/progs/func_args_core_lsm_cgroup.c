@@ -20,7 +20,7 @@ struct socket_create_args {
 } __bpf_func_args;
 
 int lc_calls, lc_family = -1, lc_protocol = -1, lc_kern = -1;
-int lc_ret_exists = -1, lc_added_exists = -1;
+int lc_ret_exists = -1, lc_added_exists = -1, lc_supported = -1;
 
 SEC("lsm_cgroup/socket_create")
 int socket_create_struct(struct socket_create_args *args)
@@ -29,6 +29,7 @@ int socket_create_struct(struct socket_create_args *args)
 		return 1;
 
 	lc_calls++;
+	lc_supported = bpf_func_args_supported(args);
 	lc_family = args->family;
 	lc_protocol = args->protocol;
 	lc_kern = args->kern;
