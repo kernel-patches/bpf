@@ -7,20 +7,35 @@ import shlex
 import subprocess
 import uuid
 from dataclasses import dataclass
+from typing import Optional
 
 from lib.py import cmd, ksft_pr, rand_port, wait_port_listen
 
 
 _SECTION_RE = re.compile(r"==\s+(Source|Target)\b")
 _RATE_RE = re.compile(r"\b(Tx|Rx)\s*([0-9]+(?:\.[0-9]+)?)\s+Gbps\b")
+_RPS_RE = re.compile(r"\b([0-9]+(?:\.[0-9]+)?) RPS\b")
+_LAT_RE = re.compile(
+    r"\b(p25|p50|p90|p99|p999|p9999|max):([0-9]+(?:\.[0-9]+)?)us\b")
 
 
 @dataclass
 class KperfResult:
-    """Aggregate throughput (Gbps) of both endpoints."""
+    """Aggregate throughput (Gbps) of both endpoints. Request-response tests
+    also tell the rate (per second) of the source, which sends the requests,
+    and with --time-stats 2 its latencies (usec).
+    """
 
     source_throughput: float
     target_throughput: float
+    rate: Optional[float] = None
+    p25: Optional[float] = None
+    p50: Optional[float] = None
+    p90: Optional[float] = None
+    p99: Optional[float] = None
+    p999: Optional[float] = None
+    p9999: Optional[float] = None
+    lat_max: Optional[float] = None
 
 
 class KperfRunner:
@@ -133,6 +148,7 @@ class KperfRunner:
     def parse(output):
         """Parse human-readable kperf client output."""
         throughput = {"Source": [], "Target": []}
+        rr = {}
         section = None
 
         for line in output.splitlines():
@@ -149,9 +165,20 @@ class KperfRunner:
                 if (section, direction) in (("Source", "Tx"),
                                              ("Target", "Rx")):
                     throughput[section].append(float(value))
+            if section != "Source":
+                continue
+
+            # Request-response tests run a single flow, take the first one
+            # and ignore the rest
+            match = _RPS_RE.search(line)
+            if match:
+                rr.setdefault("rate", float(match.group(1)))
+            for name, value in _LAT_RE.findall(line):
+                key = "lat_max" if name == "max" else name
+                rr.setdefault(key, float(value))
 
         if not all(throughput.values()):
             raise ValueError("incomplete kperf result")
 
         return KperfResult(sum(throughput["Source"]),
-                           sum(throughput["Target"]))
+                           sum(throughput["Target"]), **rr)
