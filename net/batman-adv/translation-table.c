@@ -539,6 +539,12 @@ static void batadv_tt_local_size_inc(struct batadv_priv *bat_priv,
  * was removed from bat_priv->tt.local_hash (under the specific
  * list_locks[i]) or when it is ensured that it is not accessible
  * in this list.
+ *
+ * The only exception is an entry which stays in bat_priv->tt.local_hash but is
+ * brought back into the NEW state by batadv_tt_local_commit_change(). The NEW
+ * flag must then be set under the same list_locks[i] and the flags_lock of the
+ * entry. batadv_tt_local_size_inc() counts the entry again when its NEW flag
+ * is removed.
  */
 static void batadv_tt_local_size_dec(struct batadv_priv *bat_priv,
 				     unsigned short vid)
@@ -1876,9 +1882,8 @@ batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
  *
  * All checks and modifications happen under the hash bucket list_lock and the
  * flags_lock of the entry. This prevents a concurrent
- * batadv_tt_local_purge_pending_clients() from removing the entry,
- * batadv_tt_local_transition_new() from clearing BATADV_TT_CLIENT_NEW and
- * batadv_tt_local_refresh() from modifying the entry after it was checked.
+ * batadv_tt_local_commit_change() from removing the entry and
+ * batadv_tt_local_refresh() from modifying it after it was checked.
  */
 static void
 batadv_tt_local_remove_entry(struct batadv_priv *bat_priv,
@@ -4546,49 +4551,6 @@ void batadv_tt_free(struct batadv_priv *bat_priv)
 }
 
 /**
- * batadv_tt_local_transition_new() - unset the NEW flag on the local
- *  table and count them in the TT size
- * @bat_priv: the bat priv with all the mesh interface information
- */
-static void batadv_tt_local_transition_new(struct batadv_priv *bat_priv)
-{
-	spinlock_t *list_lock; /* protects write access to the hash lists */
-	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
-	struct batadv_tt_common_entry *tt_common_entry;
-	struct hlist_head *head;
-	u32 i;
-
-	if (!hash)
-		return;
-
-	for (i = 0; i < hash->size; i++) {
-		head = &hash->table[i];
-		list_lock = &hash->list_locks[i];
-
-		spin_lock_bh(list_lock);
-		hlist_for_each_entry(tt_common_entry, head, hash_entry) {
-			bool cont = false;
-
-			scoped_guard(spinlock_bh, &tt_common_entry->flags_lock) {
-				if (!(tt_common_entry->flags & BATADV_TT_CLIENT_NEW)) {
-					cont = true;
-					break;
-				}
-
-				tt_common_entry->flags &= ~BATADV_TT_CLIENT_NEW;
-			}
-
-			if (cont)
-				continue;
-
-			batadv_tt_local_size_inc(bat_priv,
-						 tt_common_entry->key.vid);
-		}
-		spin_unlock_bh(list_lock);
-	}
-}
-
-/**
  * batadv_tt_local_unhash_pending() - remove a pending entry from the local table
  * @bat_priv: the bat priv with all the mesh interface information
  * @tt_local: the local TT entry to remove
@@ -4626,6 +4588,112 @@ batadv_tt_local_unhash_pending(struct batadv_priv *bat_priv,
 }
 
 /**
+ * batadv_tt_local_commit_change() - apply a committed change to the local table
+ * @bat_priv: the bat priv with all the mesh interface information
+ * @change: the change which is announced with the new ttvn
+ *
+ * The CRC and the full table responses of a ttvn must reflect exactly the
+ * changes announced with it. Only the entry affected by a committed change is
+ * therefore modified. An entry which was added or marked for removal after the
+ * change set was taken stays in its current state until its own change is
+ * committed with a later ttvn.
+ *
+ * An ADD finishes the BATADV_TT_CLIENT_NEW state of the entry and it is counted
+ * as part of the local table from now on. A DEL removes the entry which is
+ * marked as BATADV_TT_CLIENT_PENDING from the local table.
+ *
+ * The entry is not protected by bat_priv->tt.commit_lock against a concurrent
+ * refresh and removal. The client of a committed DEL can therefore be detected
+ * again after the change set was taken. Its entry is then no longer
+ * BATADV_TT_CLIENT_PENDING or it was marked for removal again without a queued
+ * DEL (del_unqueued). Such an entry must stay hashed because its ADD is queued
+ * for a later ttvn. But the other nodes remove the client with the new ttvn.
+ * The entry is therefore brought back into the BATADV_TT_CLIENT_NEW state and
+ * is not counted as part of the local table until its ADD is committed.
+ *
+ * The caller must hold tt->commit_lock. It is the one which took @change from
+ * the queued changes of the new ttvn.
+ */
+static void
+batadv_tt_local_commit_change(struct batadv_priv *bat_priv,
+			      const struct batadv_tvlv_tt_change *change)
+	__must_hold(&bat_priv->tt.commit_lock)
+{
+	spinlock_t *list_lock; /* protects write access to the hash lists */
+	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	struct batadv_tt_local_entry *tt_local = NULL;
+	struct batadv_tt_common_entry *tt_common;
+	struct batadv_tt_common_entry_key key;
+	struct hlist_head *head;
+	bool committed = false;
+	bool del_op;
+	u32 i;
+
+	lockdep_assert_held(&bat_priv->tt.commit_lock);
+
+	if (!hash)
+		return;
+
+	ether_addr_copy(key.addr, change->addr);
+	key.vid = ntohs(change->vid);
+	del_op = change->flags & BATADV_TT_CLIENT_DEL;
+
+	i = batadv_choose_tt(&key, hash->size);
+	head = &hash->table[i];
+	list_lock = &hash->list_locks[i];
+
+	spin_lock_bh(list_lock);
+
+	hlist_for_each_entry(tt_common, head, hash_entry) {
+		if (!batadv_compare_tt(&tt_common->hash_entry, &key))
+			continue;
+
+		scoped_guard(spinlock_bh, &tt_common->flags_lock) {
+			if (!del_op) {
+				/* an ADD of an already committed entry only
+				 * announces new flags or cancels its removal
+				 */
+				if (!(tt_common->flags & BATADV_TT_CLIENT_NEW))
+					break;
+
+				tt_common->flags &= ~BATADV_TT_CLIENT_NEW;
+				committed = true;
+				break;
+			}
+
+			tt_local = container_of(tt_common,
+						struct batadv_tt_local_entry,
+						common);
+			if (batadv_tt_local_unhash_pending(bat_priv, tt_local))
+				break;
+
+			tt_local = NULL;
+
+			/* The client was detected again after its DEL was
+			 * taken. The other nodes remove it with this ttvn and
+			 * only add it again with the still queued ADD. The
+			 * entry must be hidden from the CRC and the full table
+			 * responses until this ADD is committed.
+			 */
+			if (!(tt_common->flags & BATADV_TT_CLIENT_NEW)) {
+				tt_common->flags |= BATADV_TT_CLIENT_NEW;
+				batadv_tt_local_size_dec(bat_priv, key.vid);
+			}
+		}
+
+		if (committed)
+			batadv_tt_local_size_inc(bat_priv, key.vid);
+
+		break;
+	}
+
+	spin_unlock_bh(list_lock);
+
+	/* drop reference of removed hash entry */
+	batadv_tt_local_entry_put(tt_local);
+}
+
+/**
  * batadv_tt_local_purge_pending_clients() - finalise removal of pending local
  *  clients
  * @bat_priv: the bat priv with all the mesh interface information
@@ -4633,8 +4701,14 @@ batadv_tt_local_unhash_pending(struct batadv_priv *bat_priv,
  * Iterate over the local TT and physically remove every entry that has been
  * marked as BATADV_TT_CLIENT_PENDING and whose DEL was queued. An entry which
  * still waits for its DEL (del_unqueued) stays in the local table.
+ *
+ * The caller must hold tt->commit_lock and has to commit the queued changes
+ * right away. The DEL of each removed entry is still queued because no commit
+ * could have taken it since the entry was marked. All removals are therefore
+ * announced with the next ttvn.
  */
 static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
+	__must_hold(&bat_priv->tt.commit_lock)
 {
 	spinlock_t *list_lock; /* protects write access to the hash lists */
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
@@ -4643,6 +4717,8 @@ static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
 	struct hlist_node *node_tmp;
 	struct hlist_head *head;
 	u32 i;
+
+	lockdep_assert_held(&bat_priv->tt.commit_lock);
 
 	if (!hash)
 		return;
@@ -4683,6 +4759,7 @@ static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
 static void batadv_tt_local_commit_changes_nolock(struct batadv_priv *bat_priv)
 	__must_hold(&bat_priv->tt.commit_lock)
 {
+	struct batadv_tt_change_node *tt_change_node;
 	LIST_HEAD(changes_list);
 	int changes_num;
 
@@ -4705,9 +4782,12 @@ static void batadv_tt_local_commit_changes_nolock(struct batadv_priv *bat_priv)
 		return;
 	}
 
-	batadv_tt_local_transition_new(bat_priv);
+	/* bring the affected local entries into the state announced with the
+	 * new ttvn
+	 */
+	list_for_each_entry(tt_change_node, &changes_list, list)
+		batadv_tt_local_commit_change(bat_priv, &tt_change_node->change);
 
-	batadv_tt_local_purge_pending_clients(bat_priv);
 	batadv_tt_local_update_crc(bat_priv);
 
 	/* Increment the TTVN only once per OGM interval */
