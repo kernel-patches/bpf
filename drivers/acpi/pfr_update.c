@@ -16,12 +16,14 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/idr.h>
+#include <linux/kref.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
-#include <linux/uio.h>
 #include <linux/uuid.h>
 
 #include <uapi/linux/pfrut.h>
@@ -82,6 +84,14 @@ struct pfru_device {
 	u32 rev_id, index;
 	struct device *parent_dev;
 	struct miscdevice miscdev;
+	struct kref kref;
+	/*
+	 * Serializes the firmware calls, rev_id and the communication buffer
+	 * of the file operations, and remove(), which sets removed under it
+	 * and so waits for calls already running.
+	 */
+	struct mutex lock;
+	bool removed;
 };
 
 static DEFINE_IDA(pfru_ida);
@@ -420,6 +430,15 @@ free_acpi_buffer:
 	return ret;
 }
 
+static int pfru_start_update(int action, struct pfru_device *pfru_dev)
+{
+	guard(mutex)(&pfru_dev->lock);
+	if (pfru_dev->removed)
+		return -ENODEV;
+
+	return start_update(action, pfru_dev);
+}
+
 static long pfru_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct pfru_update_cap_info cap_hdr = {};
@@ -430,7 +449,12 @@ static long pfru_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 	case PFRU_IOC_QUERY_CAP:
-		ret = query_capability(&cap_hdr, pfru_dev);
+		scoped_guard(mutex, &pfru_dev->lock) {
+			if (pfru_dev->removed)
+				return -ENODEV;
+
+			ret = query_capability(&cap_hdr, pfru_dev);
+		}
 		if (ret)
 			return ret;
 
@@ -446,18 +470,23 @@ static long pfru_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (!pfru_valid_revid(rev))
 			return -EINVAL;
 
-		pfru_dev->rev_id = rev;
+		scoped_guard(mutex, &pfru_dev->lock) {
+			if (pfru_dev->removed)
+				return -ENODEV;
+
+			pfru_dev->rev_id = rev;
+		}
 
 		return 0;
 
 	case PFRU_IOC_STAGE:
-		return start_update(START_STAGE, pfru_dev);
+		return pfru_start_update(START_STAGE, pfru_dev);
 
 	case PFRU_IOC_ACTIVATE:
-		return start_update(START_ACTIVATE, pfru_dev);
+		return pfru_start_update(START_ACTIVATE, pfru_dev);
 
 	case PFRU_IOC_STAGE_ACTIVATE:
-		return start_update(START_STAGE_ACTIVATE, pfru_dev);
+		return pfru_start_update(START_STAGE_ACTIVATE, pfru_dev);
 
 	default:
 		return -ENOTTY;
@@ -471,11 +500,33 @@ static ssize_t pfru_write(struct file *file, const char __user *buf,
 	struct pfru_update_cap_info cap;
 	struct pfru_com_buf_info buf_info;
 	phys_addr_t phy_addr;
-	struct iov_iter iter;
-	struct iovec iov;
 	char *buf_ptr;
 	int ret;
 
+	scoped_guard(mutex, &pfru_dev->lock) {
+		if (pfru_dev->removed)
+			return -ENODEV;
+
+		ret = query_buffer(&buf_info, pfru_dev);
+	}
+	if (ret)
+		return ret;
+
+	if (len > buf_info.buf_size) {
+		dev_dbg(pfru_dev->parent_dev, "Capsule image size too large\n");
+		return -EINVAL;
+	}
+
+	/* Copy from the user outside the lock, which remove() waits for */
+	void *data __free(kvfree) = vmemdup_user(buf, len);
+	if (IS_ERR(data))
+		return PTR_ERR(data);
+
+	guard(mutex)(&pfru_dev->lock);
+	if (pfru_dev->removed)
+		return -ENODEV;
+
+	/* Query again: SET_REV may have run while the lock was dropped */
 	ret = query_buffer(&buf_info, pfru_dev);
 	if (ret)
 		return ret;
@@ -485,10 +536,6 @@ static ssize_t pfru_write(struct file *file, const char __user *buf,
 		return -EINVAL;
 	}
 
-	iov.iov_base = (void __user *)buf;
-	iov.iov_len = len;
-	iov_iter_init(&iter, ITER_SOURCE, &iov, 1, len);
-
 	/* map the communication buffer */
 	phy_addr = (phys_addr_t)((buf_info.addr_hi << 32) | buf_info.addr_lo);
 	buf_ptr = memremap(phy_addr, buf_info.buf_size, MEMREMAP_WB);
@@ -497,29 +544,51 @@ static ssize_t pfru_write(struct file *file, const char __user *buf,
 		return -ENOMEM;
 	}
 
-	if (!copy_from_iter_full(buf_ptr, len, &iter)) {
-		dev_dbg(pfru_dev->parent_dev,
-			"Failed to copy the data from the user space buffer\n");
-		ret = -EINVAL;
-		goto unmap;
-	}
+	memcpy(buf_ptr, data, len);
 
 	/* check if the capsule header has a valid version number */
 	ret = query_capability(&cap, pfru_dev);
-	if (ret)
-		goto unmap;
-
-	if (!applicable_image(buf_ptr, &cap, pfru_dev))
+	if (!ret && !applicable_image(buf_ptr, &cap, pfru_dev))
 		ret = -EINVAL;
 
-unmap:
 	memunmap(buf_ptr);
 
 	return ret ?: len;
 }
 
+static void pfru_free(struct kref *kref)
+{
+	struct pfru_device *pfru_dev =
+		container_of(kref, struct pfru_device, kref);
+
+	put_device(pfru_dev->parent_dev);
+	kfree(pfru_dev);
+}
+
+static void pfru_put(void *data)
+{
+	struct pfru_device *pfru_dev = data;
+
+	kref_put(&pfru_dev->kref, pfru_free);
+}
+
+/* misc_open() holds misc_mtx here, and misc_deregister() takes it. */
+static int pfru_open(struct inode *inode, struct file *file)
+{
+	kref_get(&to_pfru_dev(file)->kref);
+	return 0;
+}
+
+static int pfru_release(struct inode *inode, struct file *file)
+{
+	pfru_put(to_pfru_dev(file));
+	return 0;
+}
+
 static const struct file_operations acpi_pfru_fops = {
 	.owner		= THIS_MODULE,
+	.open		= pfru_open,
+	.release	= pfru_release,
 	.write		= pfru_write,
 	.unlocked_ioctl = pfru_ioctl,
 	.llseek		= noop_llseek,
@@ -530,6 +599,8 @@ static void acpi_pfru_remove(struct platform_device *pdev)
 	struct pfru_device *pfru_dev = platform_get_drvdata(pdev);
 
 	misc_deregister(&pfru_dev->miscdev);
+	scoped_guard(mutex, &pfru_dev->lock)
+		pfru_dev->removed = true;
 }
 
 static void pfru_put_idx(void *data)
@@ -554,9 +625,16 @@ static int acpi_pfru_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	pfru_dev = devm_kzalloc_obj(&pdev->dev, *pfru_dev);
+	pfru_dev = kzalloc_obj(*pfru_dev);
 	if (!pfru_dev)
 		return -ENOMEM;
+
+	kref_init(&pfru_dev->kref);
+	mutex_init(&pfru_dev->lock);
+	pfru_dev->parent_dev = get_device(&pdev->dev);
+	ret = devm_add_action_or_reset(&pdev->dev, pfru_put, pfru_dev);
+	if (ret)
+		return ret;
 
 	ret = ida_alloc(&pfru_ida, GFP_KERNEL);
 	if (ret < 0)
@@ -568,7 +646,6 @@ static int acpi_pfru_probe(struct platform_device *pdev)
 		return ret;
 
 	pfru_dev->rev_id = PFRU_DEFAULT_REV_ID;
-	pfru_dev->parent_dev = &pdev->dev;
 
 	pfru_dev->miscdev.minor = MISC_DYNAMIC_MINOR;
 	pfru_dev->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,

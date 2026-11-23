@@ -199,8 +199,21 @@ static struct configfs_attribute *acpi_table_attrs[] = {
 	NULL,
 };
 
+static void acpi_table_release(struct config_item *cfg)
+{
+	struct acpi_table *table = container_of(cfg, struct acpi_table, cfg);
+
+	/* ACPICA retains the table buffer for possible reload after unload. */
+	kfree(table);
+}
+
+static const struct configfs_item_operations acpi_table_item_ops = {
+	.release = acpi_table_release,
+};
+
 static const struct config_item_type acpi_table_type = {
 	.ct_owner = THIS_MODULE,
+	.ct_item_ops = &acpi_table_item_ops,
 	.ct_bin_attrs = acpi_table_bin_attrs,
 	.ct_attrs = acpi_table_attrs,
 };
@@ -224,7 +237,8 @@ static void acpi_table_drop_item(struct config_group *group,
 	struct acpi_table *table = container_of(cfg, struct acpi_table, cfg);
 
 	pr_debug("Host-directed Dynamic ACPI Table Unload\n");
-	acpi_unload_table(table->index);
+	if (table->header)
+		acpi_unload_table(table->index);
 	config_item_put(cfg);
 }
 
