@@ -547,10 +547,12 @@ static void fq_pie_reset(struct Qdisc *sch)
 		/* Removes all packets from flow */
 		rtnl_kfree_skbs(flow->head, flow->tail);
 		flow->head = NULL;
+		flow->backlog = 0;
 
 		INIT_LIST_HEAD(&flow->flowchain);
 		pie_vars_init(&flow->vars);
 	}
+	q->memory_usage = 0;
 }
 
 static void fq_pie_destroy(struct Qdisc *sch)
