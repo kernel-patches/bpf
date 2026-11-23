@@ -243,6 +243,8 @@ static void hws_rule_create_init(struct mlx5hws_rule *rule,
 		 * new action STEs and a corresponding match STE.
 		 */
 		rule->old_action_ste = rule->action_ste;
+		/* The rule may need no action STEs once updated */
+		rule->action_ste.action_tbl = NULL;
 	}
 
 	rule->pending_wqes = 0;
