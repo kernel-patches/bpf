@@ -9,6 +9,7 @@
 #include <linux/mm.h>
 #include <linux/mmzone.h>
 #include <linux/nodemask.h>
+#include <linux/sched/sysctl.h>
 #include <linux/types.h>
 
 #define ALLOC_DEFAULT		0
@@ -303,6 +304,17 @@ static inline int gfp_migratetype(const gfp_t gfp_flags)
 }
 #undef GFP_MOVABLE_MASK
 #undef GFP_MOVABLE_SHIFT
+
+/*
+ * The watermark kswapd reclaims zones up to. With NUMA balancing memory
+ * tiering, kswapd keeps room above the high watermark for promotions.
+ */
+static inline unsigned long kswapd_wmark_pages(const struct zone *zone)
+{
+	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING)
+		return promo_wmark_pages(zone);
+	return high_wmark_pages(zone);
+}
 
 bool decay_pcp_high(struct zone *zone, struct per_cpu_pages *pcp);
 void drain_zone_pages(struct zone *zone, struct per_cpu_pages *pcp);
