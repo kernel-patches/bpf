@@ -2705,9 +2705,12 @@ static const char *dev_uevent_name(const struct kobject *kobj)
  * risky as driver pointer is transitioning to NULL, so READ_ONCE() should
  * be used to make sure we are dealing with the same pointer, and to
  * ensure that driver structure is not going to disappear from under us
- * we take bus' drivers klist lock. The assumption that only registered
- * driver can be bound to a device, and to unregister a driver bus code
- * will take the same lock.
+ * we take the bus' drivers klist lock. During driver unregistration,
+ * bus_remove_driver() acquires and releases this lock after detaching
+ * all devices and clearing their driver pointers. This waits for readers
+ * that observed the old pointer to finish accessing the driver name
+ * before the driver can be freed. Readers acquiring the lock afterward
+ * cannot observe the removed driver.
  */
 static void dev_driver_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {

@@ -849,6 +849,15 @@ void bus_remove_driver(struct device_driver *drv)
 	driver_remove_file(drv, &driver_attr_uevent);
 	klist_remove(&drv->p->knode_bus);
 	driver_detach(drv);
+
+	/*
+	 * Ensure that any concurrent dev_driver_uevent() that observed
+	 * dev->driver before driver_detach() cleared it, finishes
+	 * accessing drv->name.
+	 */
+	scoped_guard(spinlock, &sp->klist_drivers.k_lock) {
+	}
+
 	module_remove_driver(drv);
 	kobject_put(&drv->p->kobj);
 
