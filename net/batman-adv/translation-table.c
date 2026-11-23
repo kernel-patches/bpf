@@ -651,13 +651,20 @@ static u16 batadv_tt_flags_get(struct batadv_tt_common_entry *common)
 }
 
 /**
- * __batadv_tt_local_event() - store a local TT event (ADD/DEL) with given flags
+ * batadv_tt_local_event() - store a local TT event (ADD/DEL) with given flags
  * @bat_priv: the bat priv with all the mesh interface information
  * @common: the TT entry involved in the event
  * @flags: flags of the TT entry combined with the event flags
+ * @initial_add: whether the ADD is the first one of a client which was never
+ *  announced to the other nodes
+ * @cancelled: set to true if a DEL cancelled the initial ADD of the client and
+ *  to false otherwise (optional)
  *
  * Only a single change per client is queued. It describes the latest state of
- * the client and a new event therefore replaces an already queued one.
+ * the client and a new event therefore replaces an already queued one. The
+ * only exception is a DEL for a client whose initial ADD is still queued. The
+ * other nodes don't need to know anything about such a client and the ADD is
+ * cancelled instead.
  *
  * The other nodes only learn about the modification of a local entry through
  * the queued change. The caller must therefore not modify the entry in a way
@@ -669,12 +676,12 @@ static u16 batadv_tt_flags_get(struct batadv_tt_common_entry *common)
  * The caller must hold the flags_lock of @common. The events of an entry are
  * then queued in the same order in which its flags were modified.
  *
- * Return: true if the event was stored, false if the memory for it could not
- * be allocated.
+ * Return: true if the event was stored (or cancelled a queued ADD), false if
+ * the memory for it could not be allocated.
  */
-static bool __batadv_tt_local_event(struct batadv_priv *bat_priv,
-				    const struct batadv_tt_common_entry *common,
-				    u8 flags)
+static bool batadv_tt_local_event(struct batadv_priv *bat_priv,
+				  const struct batadv_tt_common_entry *common,
+				  u8 flags, bool initial_add, bool *cancelled)
 	__must_hold(&common->flags_lock)
 {
 	struct batadv_tt_change_node *tt_change_node;
@@ -684,6 +691,9 @@ static bool __batadv_tt_local_event(struct batadv_priv *bat_priv,
 	size_t changes;
 
 	lockdep_assert_held(&common->flags_lock);
+
+	if (cancelled)
+		*cancelled = false;
 
 	tt_change_node = kmem_cache_alloc(batadv_tt_change_cache, GFP_ATOMIC);
 	if (!tt_change_node)
@@ -704,6 +714,7 @@ static bool __batadv_tt_local_event(struct batadv_priv *bat_priv,
 		flags &= ~BATADV_TT_CLIENT_ROAM;
 
 	tt_change_node->change.flags = flags;
+	tt_change_node->initial_add = initial_add && !del_op_requested;
 
 	/* check for ADD+DEL, DEL+ADD, ADD+ADD or DEL+DEL events */
 	spin_lock_bh(&bat_priv->tt.changes_list_lock);
@@ -716,12 +727,31 @@ static bool __batadv_tt_local_event(struct batadv_priv *bat_priv,
 		if (entry->change.vid != tt_change_node->change.vid)
 			continue;
 
-		/* the other nodes may know the client with different
-		 * flags. A DEL+ADD must therefore still announce the
-		 * current flags and an ADD+DEL must still remove the
-		 * client. ADD+ADD and DEL+DEL only update the flags
-		 */
-		entry->change.flags = flags;
+		if (del_op_requested && entry->initial_add) {
+			/* ADD+DEL of a client which was never announced (e.g.
+			 * roaming of a client still in the NEW state) have no
+			 * effect and can be removed.
+			 */
+			list_del(&entry->list);
+			kmem_cache_free(batadv_tt_change_cache, entry);
+			changes--;
+			if (cancelled)
+				*cancelled = true;
+		} else {
+			/* the other nodes may know the client with different
+			 * flags. A DEL+ADD must therefore still announce the
+			 * current flags and an ADD+DEL must still remove the
+			 * client. ADD+ADD and DEL+DEL only update the flags.
+			 *
+			 * The queued change keeps its initial_add state. An
+			 * ADD which only updates the flags of a still queued
+			 * initial ADD stays cancellable. But an ADD queued
+			 * after the initial ADD was committed (and before the
+			 * entry left the NEW state) must not become
+			 * cancellable.
+			 */
+			entry->change.flags = flags;
+		}
 
 		kmem_cache_free(batadv_tt_change_cache, tt_change_node);
 		goto update_changes;
@@ -1063,6 +1093,10 @@ batadv_tt_local_refresh_needed(struct batadv_tt_local_entry *tt_local,
  * updated. An ADD event is queued when @announce is set, the pending removal
  * was cancelled or a flag announced to the other nodes was modified.
  *
+ * @announce is only set for an entry which is just being inserted. Its ADD is
+ * therefore the initial ADD of a client which was never announced to the other
+ * nodes.
+ *
  * The entry is left untouched when the ADD event could not be queued. The
  * other nodes would otherwise never be informed about the new state. An already
  * hashed entry is simply refreshed again when the next packet of the client is
@@ -1083,6 +1117,7 @@ batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
 {
 	struct batadv_tt_common_entry *common = &tt_local->common;
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	bool initial_add = announce;
 	bool readded = false;
 	bool roamed = false;
 	u8 remote_flags;
@@ -1131,7 +1166,8 @@ batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
 		 * without a queued change which commits/announces it
 		 */
 		if (announce &&
-		    !__batadv_tt_local_event(bat_priv, common, flags))
+		    !batadv_tt_local_event(bat_priv, common, flags,
+					   initial_add, NULL))
 			return false;
 
 		common->flags = flags;
@@ -1883,6 +1919,11 @@ static void batadv_tt_local_unhash(struct batadv_priv *bat_priv,
  * retry it. Such an entry is marked as del_unqueued instead. It stays in the
  * local table until batadv_tt_local_purge_list() was able to queue its DEL.
  *
+ * A client whose initial ADD is still queued was never announced to the other
+ * nodes. Its DEL cancels the ADD and the entry is removed from the local table
+ * right away. The caller has to drop the hash reference of the entry after it
+ * released the flags_lock.
+ *
  * The caller must hold the flags_lock of @tt_local_entry and must not have
  * released it since it checked that the entry has to be removed. Both the
  * queue-then-mark order and this single flags_lock section are required.
@@ -1891,8 +1932,11 @@ static void batadv_tt_local_unhash(struct batadv_priv *bat_priv,
  * must have ensured that the entry is still part of the local table. A DEL for
  * an entry which was already purged could otherwise cancel the ADD of a new
  * entry for the same client.
+ *
+ * Return: true if the entry was removed from the local table instead of being
+ * marked as pending, false otherwise.
  */
-static void
+static bool
 batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
 			    struct batadv_tt_local_entry *tt_local_entry,
 			    u16 flags, const char *message)
@@ -1900,6 +1944,7 @@ batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
 {
 	struct batadv_tt_common_entry *common = &tt_local_entry->common;
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	bool cancelled;
 	bool queued;
 	u32 i;
 
@@ -1907,8 +1952,13 @@ batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
 	lockdep_assert_held(&hash->list_locks[i]);
 	lockdep_assert_held(&common->flags_lock);
 
-	queued = __batadv_tt_local_event(bat_priv, common,
-					 common->flags | flags);
+	queued = batadv_tt_local_event(bat_priv, common, common->flags | flags,
+				       false, &cancelled);
+	if (cancelled) {
+		/* the entry was never announced */
+		batadv_tt_local_unhash(bat_priv, tt_local_entry, message);
+		return true;
+	}
 
 	/* a failed attempt must not hide the still queued DEL of an already
 	 * pending entry
@@ -1924,6 +1974,8 @@ batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
 		   "Local tt entry (%pM, vid: %d) pending to be removed: %s\n",
 		   tt_local_entry->common.key.addr,
 		   batadv_print_vid(tt_local_entry->common.key.vid), message);
+
+	return false;
 }
 
 /**
@@ -1939,6 +1991,9 @@ batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
  * local table until the DEL is committed with the next ttvn increment. This
  * also applies to an entry which still carries BATADV_TT_CLIENT_NEW because its
  * ADD might already have been taken for the next ttvn.
+ *
+ * Only an entry whose initial ADD is still queued is removed from the local
+ * table immediately. Nothing was announced about it to the other nodes.
  *
  * An entry which was already removed from the local table after it was looked
  * up is ignored and BATADV_NO_FLAGS is stored in @curr_flags.
@@ -1956,6 +2011,7 @@ batadv_tt_local_remove_entry(struct batadv_priv *bat_priv,
 	spinlock_t *list_lock; /* protects write access to the hash lists */
 	struct batadv_tt_common_entry *common = &tt_local_entry->common;
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	bool unhashed = false;
 	u16 flags;
 	u32 i;
 
@@ -1984,11 +2040,15 @@ batadv_tt_local_remove_entry(struct batadv_priv *bat_priv,
 		if (roaming)
 			flags |= BATADV_TT_CLIENT_ROAM;
 
-		batadv_tt_local_set_pending(bat_priv, tt_local_entry, flags,
-					    message);
+		unhashed = batadv_tt_local_set_pending(bat_priv, tt_local_entry,
+						       flags, message);
 	}
 
 	spin_unlock_bh(list_lock);
+
+	/* drop reference of removed hash entry */
+	if (unhashed)
+		batadv_tt_local_entry_put(tt_local_entry);
 }
 
 /**
@@ -2037,6 +2097,8 @@ static void batadv_tt_local_purge_list(struct batadv_priv *bat_priv,
 
 	hlist_for_each_entry_safe(tt_common_entry, node_tmp, head,
 				  hash_entry) {
+		bool unhashed = false;
+
 		tt_local_entry = container_of(tt_common_entry,
 					      struct batadv_tt_local_entry,
 					      common);
@@ -2046,10 +2108,10 @@ static void batadv_tt_local_purge_list(struct batadv_priv *bat_priv,
 			if (tt_local_entry->common.flags & BATADV_TT_CLIENT_PENDING) {
 				/* but its removal must still be announced */
 				if (tt_local_entry->del_unqueued)
-					batadv_tt_local_set_pending(bat_priv,
-								    tt_local_entry,
-								    BATADV_TT_CLIENT_DEL,
-								    "requeued");
+					unhashed = batadv_tt_local_set_pending(bat_priv,
+									       tt_local_entry,
+									       BATADV_TT_CLIENT_DEL,
+									       "requeued");
 				break;
 			}
 
@@ -2060,10 +2122,15 @@ static void batadv_tt_local_purge_list(struct batadv_priv *bat_priv,
 						  timeout))
 				break;
 
-			batadv_tt_local_set_pending(bat_priv, tt_local_entry,
-						    BATADV_TT_CLIENT_DEL,
-						    "timed out");
+			unhashed = batadv_tt_local_set_pending(bat_priv,
+							       tt_local_entry,
+							       BATADV_TT_CLIENT_DEL,
+							       "timed out");
 		}
+
+		/* drop reference of removed hash entry */
+		if (unhashed)
+			batadv_tt_local_entry_put(tt_local_entry);
 	}
 }
 

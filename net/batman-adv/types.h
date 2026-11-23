@@ -2005,6 +2005,13 @@ struct batadv_tt_change_node {
 
 	/** @change: holds the actual translation table diff data */
 	struct batadv_tvlv_tt_change change;
+
+	/**
+	 * @initial_add: the change is the initial ADD of a client which was
+	 *  never announced to the other nodes. A DEL of this client cancels
+	 *  the change instead of being queued
+	 */
+	bool initial_add:1;
 };
 
 /**
