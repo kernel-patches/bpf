@@ -1012,7 +1012,7 @@ static void ibmveth_rxq_advance(struct ibmveth_adapter *adapter,
  * @correlator: correlator of the current rx queue entry, as read by poll
  * @reuse:      whether to reuse buffer
  *
- * Context: called from ibmveth_poll
+ * Context: NAPI poll, from the per-slot RX helpers
  *
  * The ring advances even on error, so poll does not return to a bad
  * slot before the scheduled reset can run.
@@ -2011,6 +2011,148 @@ bad_hdr:
 	skb->ip_summed = CHECKSUM_NONE;
 }
 
+/* Returns true if the slot could not be recycled; poll then counts it
+ * against the budget.
+ */
+static bool ibmveth_poll_recycle_invalid(struct net_device *netdev,
+					 struct ibmveth_adapter *adapter,
+					 int queue_index, u64 correlator)
+{
+	int rc;
+
+	adapter->rx_invalid_buffer++;
+	netdev_dbg(netdev, "recycling invalid buffer\n");
+	rc = ibmveth_rxq_harvest_buffer(adapter, queue_index, correlator,
+					true);
+	if (unlikely(rc))
+		netdev->stats.rx_dropped++;
+	return rc;
+}
+
+static void ibmveth_poll_drop_bad_frame(struct net_device *netdev,
+					struct ibmveth_adapter *adapter,
+					int queue_index, unsigned int off,
+					unsigned int len, unsigned int room,
+					u64 correlator)
+{
+	if (net_ratelimit())
+		netdev_err(netdev,
+			   "bad RX frame offset %u length %u (buffer %u) on queue %d, dropping\n",
+			   off, len, room, queue_index);
+	ibmveth_rxq_harvest_buffer(adapter, queue_index, correlator, true);
+	netdev->stats.rx_dropped++;
+}
+
+/**
+ * ibmveth_poll_deliver_frame - Build SKB from one valid RX slot and GRO it
+ * @napi: NAPI context for this RX queue
+ * @adapter: ibmveth adapter
+ * @netdev: net_device for @adapter
+ * @queue_index: RX queue index
+ * @correlator: correlator of the current rx queue entry, as read by poll
+ */
+static void ibmveth_poll_deliver_frame(struct napi_struct *napi,
+				       struct ibmveth_adapter *adapter,
+				       struct net_device *netdev,
+				       int queue_index, u64 correlator)
+{
+	int length = ibmveth_rxq_frame_length(adapter, queue_index);
+	int offset = ibmveth_rxq_frame_offset(adapter, queue_index);
+	int csum_good = ibmveth_rxq_csum_good(adapter, queue_index);
+	int lrg_pkt = ibmveth_rxq_large_packet(adapter, queue_index);
+	unsigned int pool, room, off, len;
+	struct ibmveth_buff_pool *bpool;
+	struct sk_buff *skb, *new_skb;
+	__sum16 iph_check = 0;
+	u16 mss = 0;
+	int rc;
+
+	skb = ibmveth_rxq_get_buffer(adapter, queue_index, correlator);
+	if (unlikely(!skb)) {
+		ibmveth_rxq_advance(adapter, queue_index);
+		netdev->stats.rx_dropped++;
+		return;
+	}
+
+	pool = correlator >> 32;
+	bpool = &adapter->rx_buff_pool[queue_index][pool];
+	room = min_t(unsigned int, skb_tailroom(skb), bpool->buff_size);
+	off = offset;
+	len = length;
+	if (unlikely(len < ETH_HLEN || off >= room || len > room - off)) {
+		ibmveth_poll_drop_bad_frame(netdev, adapter, queue_index,
+					    off, len, room, correlator);
+		return;
+	}
+
+	/* if the large packet bit is set in the rx queue
+	 * descriptor, the mss will be written by PHYP eight
+	 * bytes from the start of the rx buffer, which is
+	 * skb->data at this stage
+	 */
+	if (lrg_pkt) {
+		__be64 *rxmss = (__be64 *)(skb->data + 8);
+
+		mss = (u16)be64_to_cpu(*rxmss);
+	}
+
+	new_skb = NULL;
+	if (length < rx_copybreak)
+		new_skb = netdev_alloc_skb(netdev, length);
+
+	if (new_skb) {
+		skb_copy_to_linear_data(new_skb, skb->data + offset, length);
+		if (rx_flush)
+			ibmveth_flush_buffer(skb->data, length + offset);
+		rc = ibmveth_rxq_harvest_buffer(adapter, queue_index,
+						correlator, true);
+		if (unlikely(rc)) {
+			dev_kfree_skb_any(new_skb);
+			netdev->stats.rx_dropped++;
+			return;
+		}
+		skb = new_skb;
+	} else {
+		rc = ibmveth_rxq_harvest_buffer(adapter, queue_index,
+						correlator, false);
+		if (unlikely(rc)) {
+			netdev->stats.rx_dropped++;
+			return;
+		}
+		skb_reserve(skb, offset);
+	}
+
+	skb_put(skb, length);
+	skb->protocol = eth_type_trans(skb, netdev);
+
+	/* PHYP without PLSO support places a -1 in the ip
+	 * checksum for large send frames.
+	 */
+	if (skb->protocol == cpu_to_be16(ETH_P_IP) &&
+	    skb_headlen(skb) >= sizeof(struct iphdr)) {
+		struct iphdr *iph = (struct iphdr *)skb->data;
+
+		iph_check = iph->check;
+	}
+
+	if ((length > netdev->mtu + ETH_HLEN) ||
+	    lrg_pkt || iph_check == 0xffff) {
+		if (!ibmveth_rx_mss_helper(skb, mss, lrg_pkt))
+			csum_good = 0;
+		adapter->rx_large_packets++;
+	}
+
+	if (csum_good) {
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		ibmveth_rx_csum_helper(skb, adapter);
+	}
+
+	napi_gro_receive(napi, skb);	/* send it up */
+
+	netdev->stats.rx_packets++;
+	netdev->stats.rx_bytes += length;
+}
+
 static int ibmveth_poll(struct napi_struct *napi, int budget)
 {
 	struct net_device *netdev = napi->dev;
@@ -2018,7 +2160,6 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 	int frames_processed = 0;
 	int queue_index;
 	u64 correlator;
-	u16 mss = 0;
 	int rc;
 
 	queue_index = napi - adapter->napi;
@@ -2031,132 +2172,13 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 		correlator = ibmveth_rxq_correlator(adapter, queue_index);
 		if (!ibmveth_rxq_buffer_valid(adapter, queue_index)) {
 			wmb(); /* suggested by larson1 */
-			adapter->rx_invalid_buffer++;
-			netdev_dbg(netdev, "recycling invalid buffer\n");
-			rc = ibmveth_rxq_harvest_buffer(adapter, queue_index,
-							correlator, true);
-			if (unlikely(rc)) {
-				netdev->stats.rx_dropped++;
+			if (ibmveth_poll_recycle_invalid(netdev, adapter,
+							 queue_index,
+							 correlator))
 				frames_processed++;
-				continue;
-			}
 		} else {
-			struct sk_buff *skb, *new_skb;
-			int length = ibmveth_rxq_frame_length(adapter,
-							      queue_index);
-			int offset = ibmveth_rxq_frame_offset(adapter,
-							      queue_index);
-			int csum_good = ibmveth_rxq_csum_good(adapter,
-							      queue_index);
-			int lrg_pkt = ibmveth_rxq_large_packet(adapter,
-							       queue_index);
-			unsigned int pool, room, off, len;
-			struct ibmveth_buff_pool *bpool;
-			__sum16 iph_check = 0;
-
-			skb = ibmveth_rxq_get_buffer(adapter, queue_index,
-						     correlator);
-			if (unlikely(!skb)) {
-				ibmveth_rxq_advance(adapter, queue_index);
-				netdev->stats.rx_dropped++;
-				frames_processed++;
-				continue;
-			}
-
-			pool = correlator >> 32;
-			bpool = &adapter->rx_buff_pool[queue_index][pool];
-			room = min_t(unsigned int, skb_tailroom(skb),
-				     bpool->buff_size);
-			off = offset;
-			len = length;
-			if (unlikely(len < ETH_HLEN || off >= room ||
-				     len > room - off)) {
-				if (net_ratelimit())
-					netdev_err(netdev,
-						   "bad RX frame offset %u length %u (buffer %u), dropping\n",
-						   off, len, room);
-				ibmveth_rxq_harvest_buffer(adapter, queue_index,
-							   correlator, true);
-				netdev->stats.rx_dropped++;
-				frames_processed++;
-				continue;
-			}
-
-			/* if the large packet bit is set in the rx queue
-			 * descriptor, the mss will be written by PHYP eight
-			 * bytes from the start of the rx buffer, which is
-			 * skb->data at this stage
-			 */
-			if (lrg_pkt) {
-				__be64 *rxmss = (__be64 *)(skb->data + 8);
-
-				mss = (u16)be64_to_cpu(*rxmss);
-			}
-
-			new_skb = NULL;
-			if (length < rx_copybreak)
-				new_skb = netdev_alloc_skb(netdev, length);
-
-			if (new_skb) {
-				skb_copy_to_linear_data(new_skb,
-							skb->data + offset,
-							length);
-				if (rx_flush)
-					ibmveth_flush_buffer(skb->data,
-						length + offset);
-				rc = ibmveth_rxq_harvest_buffer(adapter,
-								queue_index,
-								correlator,
-								true);
-				if (unlikely(rc)) {
-					dev_kfree_skb_any(new_skb);
-					netdev->stats.rx_dropped++;
-					frames_processed++;
-					continue;
-				}
-				skb = new_skb;
-			} else {
-				rc = ibmveth_rxq_harvest_buffer(adapter,
-								queue_index,
-								correlator,
-								false);
-				if (unlikely(rc)) {
-					netdev->stats.rx_dropped++;
-					frames_processed++;
-					continue;
-				}
-				skb_reserve(skb, offset);
-			}
-
-			skb_put(skb, length);
-			skb->protocol = eth_type_trans(skb, netdev);
-
-			/* PHYP without PLSO support places a -1 in the ip
-			 * checksum for large send frames.
-			 */
-			if (skb->protocol == cpu_to_be16(ETH_P_IP) &&
-			    skb_headlen(skb) >= sizeof(struct iphdr)) {
-				struct iphdr *iph = (struct iphdr *)skb->data;
-
-				iph_check = iph->check;
-			}
-
-			if ((length > netdev->mtu + ETH_HLEN) ||
-			    lrg_pkt || iph_check == 0xffff) {
-				if (!ibmveth_rx_mss_helper(skb, mss, lrg_pkt))
-					csum_good = 0;
-				adapter->rx_large_packets++;
-			}
-
-			if (csum_good) {
-				skb->ip_summed = CHECKSUM_UNNECESSARY;
-				ibmveth_rx_csum_helper(skb, adapter);
-			}
-
-			napi_gro_receive(napi, skb);	/* send it up */
-
-			netdev->stats.rx_packets++;
-			netdev->stats.rx_bytes += length;
+			ibmveth_poll_deliver_frame(napi, adapter, netdev,
+						   queue_index, correlator);
 			frames_processed++;
 		}
 	}
@@ -2981,7 +3003,8 @@ static void ibmveth_rxq_get_buffer_test(struct kunit *test)
  *
  * A bad correlator must still advance the RX ring, wrapping and flipping
  * the toggle at the end. This covers the harvest path; the advance after
- * ibmveth_rxq_get_buffer() fails in ibmveth_poll() is not tested here.
+ * ibmveth_rxq_get_buffer() fails in ibmveth_poll_deliver_frame() is not
+ * tested here.
  *
  * Return: void
  */
