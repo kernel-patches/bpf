@@ -3865,8 +3865,8 @@ static void dm_integrity_postsuspend(struct dm_target *ti)
 }
 
 /*
- * The superblock is re-read from the device on every resume, so that we pick
- * up the flags and the recalculate position. The geometry described by the
+ * Outside recovery mode, resume re-reads the superblock to pick up the
+ * flags and the recalculate position. The geometry described by the
  * superblock must not change though - the in-memory structures (and the
  * journal in particular) were sized according to the superblock that was
  * validated in the constructor. Reject a superblock that was modified behind
@@ -3922,6 +3922,9 @@ static void dm_integrity_resume(struct dm_target *ti)
 
 	ic->wrote_to_journal = false;
 
+	if (ic->mode == 'R')
+		goto skip_writes;
+
 	flags = ic->sb->flags & cpu_to_le32(SB_FLAG_RECALCULATING);
 	if (ic->discard_keyed)
 		flags |= cpu_to_le32(SB_FLAG_DISCARD_KEYED);
@@ -3948,9 +3951,6 @@ static void dm_integrity_resume(struct dm_target *ti)
 		dm_integrity_io_error(ic, "inconsistent superblock", -EINVAL);
 		goto skip_writes;
 	}
-
-	if (ic->mode == 'R')
-		goto skip_writes;
 
 	if ((ic->sb->flags & flags) != flags) {
 		ic->sb->flags |= flags;
