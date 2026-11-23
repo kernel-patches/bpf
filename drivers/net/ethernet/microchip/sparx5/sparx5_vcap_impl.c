@@ -250,7 +250,7 @@ static void sparx5_vcap_block_init(struct sparx5 *sparx5,
 {
 	_sparx5_vcap_range_init(sparx5, admin, admin->first_valid_addr,
 				admin->last_valid_addr -
-					admin->first_valid_addr);
+					admin->first_valid_addr + 1);
 }
 
 /* Get the keyset name from the sparx5 VCAP model */
