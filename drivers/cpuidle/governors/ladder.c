@@ -71,7 +71,7 @@ static int ladder_select_state(struct cpuidle_driver *drv,
 	struct ladder_device_state *last_state;
 	int last_idx = dev->last_state_idx;
 	int first_idx = drv->states[0].flags & CPUIDLE_FLAG_POLLING ? 1 : 0;
-	s64 latency_req = cpuidle_governor_latency_req(dev->cpu);
+	s64 latency_req = dev->latency_req;
 	s64 last_residency;
 
 	/* Special case when user has set very strict latency requirement */
