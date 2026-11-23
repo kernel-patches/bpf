@@ -134,10 +134,10 @@ static ssize_t field##_dpn_show(struct sdw_slave *slave,		\
 	for_each_set_bit(bit, &mask, 32) {				\
 		if (bit == N) {						\
 			for (j = 0; j < dpn[i].num_##field; j++)	\
-				size += sprintf(buf + size,		\
-						format_string,		\
-						dpn[i].field[j]);	\
-			size += sprintf(buf + size, "\n");		\
+				size += sysfs_emit_at(buf, size,	\
+						      format_string,	\
+						      dpn[i].field[j]);	\
+			size += sysfs_emit_at(buf, size, "\n");		\
 			return size;					\
 		}							\
 		i++;							\
