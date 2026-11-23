@@ -2,626 +2,249 @@
 /*
  * Join of verifier states.
  *
- * bpf_states_join(dst, a, b) computes the state that describes every concrete
- * state described by 'a' or by 'b'. With @widen a number that is larger in the
- * result than in 'a' gets the bound that moved put further out, so that a sequence
- * of states at a loop head ends. A pointer whose offset is larger has no join.
+ * Two states at one insn with the same join_key always have a join, see bpf_same_join_key().
  *
- * Numbers and offsets of pointers are joined. A pointer and a number, pointers
- * to different objects, different references and locks are not: there is no
- * join and the states stay apart.
+ *  map ptr  |  scalar      -> unreadable -+
+ *  two objects             -> unreadable -+-> a use is unproven -> partition
+ *  p+1, p+2, ... at header -> p+unknown  -+
  *
- * The contract is checked on every call: both inputs have to be within the
- * result, see bpf_state_subsumes(). A violation is a verifier bug.
+ * Values of one type and object differ only in a number, see bpf_same_type_and_object().
+ * Numbers are joined. At a loop header they are widened, so the sequence of states ends.
  *
- * Inputs have to be at the same insn and cleaned with
- * bpf_clean_verifier_state(): dead registers and stack slots are the same on
- * both sides then, but for dynptrs, iterators and irq flags: they stay.
+ * bpf_clean_verifier_state() cleans the inputs: dead xregs are the same in both.
  */
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
 #include <linux/cnum.h>
-#include <linux/tnum.h>
 #include <linux/filter.h>
-#include <linux/slab.h>
 
-struct join_idpair {
-	u32 a;
-	u32 b;
-	bool bad;
-};
-
-struct bpf_join_state {
+struct join {
 	struct bpf_verifier_env *env;
-	struct join_idpair pairs[BPF_ID_MAP_SIZE];
-	u32 npairs;
-	bool pairs_overflow;
+	struct bpf_verifier_state *dst;
+	struct bpf_loop *leftover_loop;	/* the states are at its header, in its leftover */
 	bool widen;
-	/* the states came around this loop in the frame that is joined, NULL if not */
-	const struct bpf_loop *loop;
-	/* the register or stack slot that is joined, as in struct bpf_loop_rungs, or -1 */
-	int place;
+	u32 fr;
+	u32 xregno;		/* see MAX_BPF_XREG, BPF_REG_FP for stack args */
+	int err;
 };
 
-static struct bpf_join_state *join_state(struct bpf_verifier_env *env)
-{
-	if (!env->join) {
-		env->join = kvzalloc_obj(*env->join, BPF_VERIFIER_GFP);
-		if (env->join)
-			env->join->env = env;
-	}
-	return env->join;
-}
-
-void bpf_join_free(struct bpf_verifier_env *env)
-{
-	kvfree(env->join);
-	env->join = NULL;
-}
-
 /*
- * An id in the result stands for the pair (id in 'a', id in 'b'). For the
- * result to be within both inputs the pairs have to form a bijection,
- * see check_ids(). The first pass over all locations records the pairs. An id
- * seen with two partners makes all pairs it takes part in bad.
- * The second pass keeps the id of 'a' for good pairs.
- */
-static void jid_mark_bad(struct bpf_join_state *js, u32 a, u32 b)
-{
-	u32 i;
-
-	for (i = 0; i < js->npairs; i++)
-		if ((a && js->pairs[i].a == a) || (b && js->pairs[i].b == b))
-			js->pairs[i].bad = true;
-}
-
-static void jid_note(struct bpf_join_state *js, u32 a, u32 b)
-{
-	bool consistent, other = false;
-	struct join_idpair *p;
-	u32 i;
-
-	if (!a || !b)
-		return;
-	/* a name of what the caller has, see BPF_INHERITED_ID */
-	consistent = a == b || (a | b) < BPF_INHERITED_ID;
-	for (i = 0; i < js->npairs; i++) {
-		p = &js->pairs[i];
-		if (p->a == a && p->b == b) {
-			if (!consistent)
-				jid_mark_bad(js, a, b);
-			return;
-		}
-		if (p->a == a || p->b == b)
-			other = true;
-	}
-	if (other) {
-		jid_mark_bad(js, a, b);
-		consistent = false;
-	}
-	if (js->npairs == ARRAY_SIZE(js->pairs)) {
-		js->pairs_overflow = true;
-		return;
-	}
-	p = &js->pairs[js->npairs++];
-	p->a = a;
-	p->b = b;
-	p->bad = !consistent;
-}
-
-static bool jid_good(struct bpf_join_state *js, u32 a, u32 b)
-{
-	u32 i;
-
-	if (!a || !b || js->pairs_overflow)
-		return false;
-	for (i = 0; i < js->npairs; i++)
-		if (js->pairs[i].a == a && js->pairs[i].b == b)
-			return !js->pairs[i].bad;
-	return false;
-}
-
-/* Ids that have to match: both zero, or a good pair */
-static bool jid_strict_ok(struct bpf_join_state *js, u32 ida, u32 idb)
-{
-	if (!ida && !idb)
-		return true;
-	return jid_good(js, ida, idb);
-}
-
-static const struct bpf_loop_rungs *join_rungs(const struct bpf_join_state *js)
-{
-	u32 i;
-
-	for (i = 0; js->loop && i < js->loop->rungs_cnt; i++)
-		if (js->loop->rungs[i].place == js->place)
-			return &js->loop->rungs[i];
-	return NULL;
-}
-
-/* Does every iteration add a constant to what is in the place? In 64 or in 32 bits, 0 if not */
-static int join_place_is_linear(const struct bpf_join_state *js)
-{
-	/* the place as scalar evolution numbers it */
-	u32 r = js->place < BPF_LOOP_SLOT ? js->place : js->place - BPF_LOOP_SLOT + MAX_BPF_REG;
-
-	if (!js->loop || js->place < 0 || r >= BPF_SCEV_REGS_NUM)
-		return 0;
-	return test_bit(r, js->loop->linear_regs) ? 64 :
-	       test_bit(r, js->loop->linear32_regs) ? 32 : 0;
-}
-
-/*
- * Join of the range of two registers of the same type, numbers or pointers
- * with variable offset. @dst is a copy of @ra. Returns false if there is no join.
- */
-static bool join_range(struct bpf_join_state *js, struct bpf_reg_state *dst,
-		       const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
-{
-	if (scalar_equal(scalar_of(ra), scalar_of(rb)))
-		return true;
-	scalar_union(scalar_of(dst), scalar_of(rb));
-	if (!js->widen || scalar_equal(scalar_of(dst), scalar_of(ra)))
-		return true;
-	/*
-	 * The bound of a number that grows around a cycle is put where it may come to rest. If
-	 * that is far out the number gets a bound again from the next comparison. The offset of
-	 * a pointer doesn't: there is no access through a pointer at an offset that is not
-	 * known. So there is nothing to gain from that join. If the offset stops to grow
-	 * the next state is within the last one.
-	 */
-	if (dst->type != SCALAR_VALUE)
-		return false;
-	scalar_widen(scalar_of(dst), scalar_of(ra), join_rungs(js), join_place_is_linear(js));
-	return true;
-}
-
-/*
- * Join two registers, regsafe() documents what each type needs.
- * Pass 1 records id pairs, pass 2 computes @dst, which is a copy of @ra on entry.
- * Returns false if there is no join.
- */
-static bool join_reg(struct bpf_join_state *js, struct bpf_reg_state *dst,
-		     const struct bpf_reg_state *ra, const struct bpf_reg_state *rb, int pass)
-{
-	if (ra->type == NOT_INIT || rb->type == NOT_INIT) {
-		if (pass == 2 && ra->type != NOT_INIT)
-			*dst = *rb;
-		return true;
-	}
-
-	if (ra->type != rb->type)
-		return false;
-
-	switch (base_type(ra->type)) {
-	case SCALAR_VALUE:
-		if (js->env->explore_alu_limits && !reg_value_equal(ra, rb))
-			return false;
-		if (pass == 2)
-			join_range(js, dst, ra, rb);
-		return true;
-	case PTR_TO_MAP_KEY:
-	case PTR_TO_MAP_VALUE:
-	case PTR_TO_MEM:
-	case PTR_TO_BUF:
-	case PTR_TO_TP_BUFFER:
-		if (!reg_fixed_part_equal(ra, rb))
-			return false;
-		/*
-		 * Two places in an object are two pointers: what is at a place
-		 * and how much is left behind it is lost in a range of them.
-		 */
-		if (!js->widen && tnum_is_const(ra->var_off) && tnum_is_const(rb->var_off) &&
-		    ra->var_off.value != rb->var_off.value)
-			return false;
-		break;
-	case PTR_TO_PACKET_META:
-	case PTR_TO_PACKET:
-		if ((ra->range < 0 || rb->range < 0) && ra->range != rb->range)
-			return false;
-		/* how much of the packet was checked goes with numbers elsewhere in the state */
-		if (!js->widen && ra->range != rb->range)
-			return false;
-		/*
-		 * Displacements between pointers that share an id are kept. No id is an id too:
-		 * the start of the packet plus a constant, see find_good_pkt_pointers().
-		 */
-		if (ra->r64.base != rb->r64.base)
-			return false;
-		if (pass == 1) {
-			jid_note(js, ra->id, rb->id);
-			return true;
-		}
-		if (!jid_strict_ok(js, ra->id, rb->id))
-			return false;
-		if (rb->range != ra->range)
-			dst->range = min(ra->range, rb->range);
-		return join_range(js, dst, ra, rb);
-	case PTR_TO_ARENA:
-		/* The offset is not tracked. */
-		return true;
-	case PTR_TO_INSN:
-		if (!reg_fixed_part_equal(ra, rb))
-			return false;
-		return pass == 1 || join_range(js, dst, ra, rb);
-	default:
-		if (!reg_value_equal(ra, rb))
-			return false;
-		break;
-	}
-
-	if (pass == 1) {
-		jid_note(js, ra->id, rb->id);
-		jid_note(js, ra->parent_id, rb->parent_id);
-		jid_note(js, ra->map_uid, rb->map_uid);
-		return true;
-	}
-	if (!jid_strict_ok(js, ra->id, rb->id) ||
-	    !jid_strict_ok(js, ra->parent_id, rb->parent_id) ||
-	    !jid_strict_ok(js, ra->map_uid, rb->map_uid))
-		return false;
-	return join_range(js, dst, ra, rb);
-}
-
-static bool slot_is_special(const struct bpf_stack_state *s)
-{
-	u8 t = s->slot_type[BPF_REG_SIZE - 1];
-
-	return t == STACK_DYNPTR || t == STACK_ITER || t == STACK_IRQ_FLAG;
-}
-
-static bool stype_is_invalid(u8 t)
-{
-	return t == STACK_INVALID || t == STACK_POISON;
-}
-
-static bool slot_has_spill(const struct bpf_stack_state *s)
-{
-	int i;
-
-	for (i = 0; i < BPF_REG_SIZE; i++)
-		if (s->slot_type[i] == STACK_SPILL)
-			return true;
-	return false;
-}
-
-static bool join_special_slot(struct bpf_join_state *js, const struct bpf_stack_state *sa,
-			      const struct bpf_stack_state *sb, int pass)
-{
-	const struct bpf_reg_state *ra = &sa->spilled_ptr, *rb = &sb->spilled_ptr;
-
-	if (memcmp(sa->slot_type, sb->slot_type, sizeof(sa->slot_type)))
-		return false;
-	switch (sa->slot_type[BPF_REG_SIZE - 1]) {
-	case STACK_DYNPTR:
-		if (ra->dynptr.type != rb->dynptr.type ||
-		    ra->dynptr.first_slot != rb->dynptr.first_slot)
-			return false;
-		break;
-	case STACK_ITER:
-		if (ra->type != rb->type || ra->iter.btf != rb->iter.btf ||
-		    ra->iter.btf_id != rb->iter.btf_id || ra->iter.state != rb->iter.state ||
-		    ra->iter.loops != rb->iter.loops)
-			return false;
-		break;
-	case STACK_IRQ_FLAG:
-		if (ra->irq.kfunc_class != rb->irq.kfunc_class)
-			return false;
-		break;
-	}
-	if (pass == 1) {
-		jid_note(js, ra->id, rb->id);
-		jid_note(js, ra->parent_id, rb->parent_id);
-		return true;
-	}
-	return jid_strict_ok(js, ra->id, rb->id) &&
-	       jid_strict_ok(js, ra->parent_id, rb->parent_id);
-}
-
-/*
- * Join of one 8 byte stack slot, @ds is a copy of @sa on entry.
- * stacksafe() documents which slot is within which.
- */
-static bool join_slot(struct bpf_join_state *js, struct bpf_stack_state *ds,
-		      const struct bpf_stack_state *sa, const struct bpf_stack_state *sb, int pass)
-{
-	static const struct bpf_stack_state invalid_slot;
-	bool a_ptr, b_ptr;
-	u8 res[BPF_REG_SIZE];
-	int i;
-
-	if (!sb)
-		sb = &invalid_slot;
-
-	if (slot_is_special(sa) || slot_is_special(sb))
-		return join_special_slot(js, sa, sb, pass);
-
-	if (!memcmp(sa->slot_type, sb->slot_type, sizeof(sa->slot_type)) &&
-	    sa->slot_type[BPF_REG_SIZE - 1] == STACK_SPILL)
-		return join_reg(js, &ds->spilled_ptr, &sa->spilled_ptr, &sb->spilled_ptr, pass);
-
-	a_ptr = slot_has_spill(sa) && sa->spilled_ptr.type != SCALAR_VALUE;
-	b_ptr = slot_has_spill(sb) && sb->spilled_ptr.type != SCALAR_VALUE;
-	/* a pointer and something else */
-	if (a_ptr || b_ptr)
-		return false;
-
-	/* the prog can't read uninitialized stack: slots of different kinds have no join */
-	if (!js->env->allow_uninit_stack)
-		return !memcmp(sa->slot_type, sb->slot_type, sizeof(sa->slot_type));
-
-	/* scalar spills, MISC, ZERO, INVALID, POISON: no ids are kept */
-	if (pass == 1)
-		return true;
-
-	for (i = 0; i < BPF_REG_SIZE; i++) {
-		u8 x = sa->slot_type[i], y = sb->slot_type[i];
-
-		if (x == STACK_SPILL)
-			x = STACK_MISC;
-		if (y == STACK_SPILL)
-			y = STACK_MISC;
-		if (stype_is_invalid(x) && stype_is_invalid(y))
-			res[i] = sa->slot_type[i];
-		else if (stype_is_invalid(x) || stype_is_invalid(y))
-			res[i] = STACK_INVALID;
-		else if (x == y)
-			res[i] = x;
-		else
-			res[i] = STACK_MISC;
-	}
-	memcpy(ds->slot_type, res, sizeof(res));
-	bpf_mark_reg_not_init(js->env, &ds->spilled_ptr);
-	return true;
-}
-
-static bool join_loop_stack(const struct bpf_func_state *fa, const struct bpf_func_state *fb)
-{
-	u32 i;
-
-	if (fa->loop_stack_cnt != fb->loop_stack_cnt)
-		return false;
-	/* what is known about a counted loop comes from the state it was entered with */
-	for (i = 0; i < fa->loop_stack_cnt; i++)
-		if (fa->loop_stack[i].loop_id != fb->loop_stack[i].loop_id ||
-		    fa->loop_stack[i].terminates != fb->loop_stack[i].terminates ||
-		    fa->loop_stack[i].guarded != fb->loop_stack[i].guarded ||
-		    fa->loop_stack[i].counted != fb->loop_stack[i].counted ||
-		    fa->loop_stack[i].apart != fb->loop_stack[i].apart ||
-		    fa->loop_stack[i].first != fb->loop_stack[i].first ||
-		    (fa->loop_stack[i].apart && fa->loop_stack[i].trip != fb->loop_stack[i].trip) ||
-		    fa->loop_stack[i].refs != fb->loop_stack[i].refs ||
-		    fa->loop_stack[i].max_header_count != fb->loop_stack[i].max_header_count ||
-		    fa->loop_stack[i].entry_state != fb->loop_stack[i].entry_state)
-			return false;
-	return true;
-}
-
-static bool join_func(struct bpf_join_state *js, struct bpf_func_state *fd,
-		      const struct bpf_func_state *fa, const struct bpf_func_state *fb,
-		      u16 live_regs, int pass)
-{
-	static const struct bpf_reg_state not_init = { .type = NOT_INIT };
-	struct bpf_verifier_env *env = js->env;
-	u32 i, nslots_b;
-	bool in_a, in_b;
-
-	if (pass == 1) {
-		if (fa->callsite != fb->callsite || fa->frameno != fb->frameno ||
-		    fa->subprogno != fb->subprogno)
-			return false;
-		if (fa->in_callback_fn != fb->in_callback_fn ||
-		    fa->in_async_callback_fn != fb->in_async_callback_fn ||
-		    fa->in_exception_callback_fn != fb->in_exception_callback_fn ||
-		    fa->in_rcu_callback_fn != fb->in_rcu_callback_fn ||
-		    fa->async_entry_cnt != fb->async_entry_cnt ||
-		    memcmp(&fa->callback_ret_range, &fb->callback_ret_range,
-			   sizeof(fa->callback_ret_range)))
-			return false;
-		if (fa->entry_refs != fb->entry_refs ||
-		    fa->entry_rcu_locks != fb->entry_rcu_locks ||
-		    fa->entry_preempt_locks != fb->entry_preempt_locks)
-			return false;
-		if (!join_loop_stack(fa, fb))
-			return false;
-		jid_note(js, fa->frame_id, fb->frame_id);
-	} else if (!jid_strict_ok(js, fa->frame_id, fb->frame_id)) {
-		return false;
-	}
-
-	for (i = 0; i < MAX_BPF_REG; i++) {
-		if (!(live_regs & BIT(i))) {
-			if (pass == 2 && i < BPF_REG_FP)
-				bpf_mark_reg_not_init(env, &fd->regs[i]);
-			continue;
-		}
-		js->place = i;
-		if (!join_reg(js, &fd->regs[i], &fa->regs[i], &fb->regs[i], pass))
-			return false;
-	}
-
-	nslots_b = bpf_stack_nr_slots(fb);
-	for (i = 0; i < bpf_stack_nr_slots(fa); i++) {
-		const struct bpf_stack_state *sb = i < nslots_b ? bpf_stack_slot(fb, i) : NULL;
-
-		js->place = BPF_LOOP_SLOT + i;
-		if (!join_slot(js, bpf_stack_slot(fd, i), bpf_stack_slot(fa, i), sb, pass))
-			return false;
-	}
-	js->place = -1;
-	/* Slots that exist only in 'b' are STACK_INVALID in the result. */
-	for (i = bpf_stack_nr_slots(fa); pass == 1 && i < nslots_b; i++) {
-		const struct bpf_stack_state *sb = bpf_stack_slot(fb, i);
-
-		if (slot_is_special(sb) ||
-		    (slot_has_spill(sb) && sb->spilled_ptr.type != SCALAR_VALUE))
-			return false;
-	}
-
-	if (fa->out_stack_arg_cnt < fb->out_stack_arg_cnt)
-		return false;
-	/* incoming arguments are not joined with outgoing ones: that side has no outgoing ones */
-	in_a = bpf_stack_args_are_incoming(fa) && !bpf_stack_args_are_incoming(fb);
-	in_b = bpf_stack_args_are_incoming(fb) && !bpf_stack_args_are_incoming(fa);
-	for (i = 0; i < fa->out_stack_arg_cnt; i++) {
-		const struct bpf_reg_state *rb;
-
-		if (in_a) {
-			if (pass == 2)
-				bpf_mark_reg_not_init(env, &fd->stack_arg_regs[i]);
-			continue;
-		}
-		rb = i < fb->out_stack_arg_cnt && !in_b ? &fb->stack_arg_regs[i] : &not_init;
-		if (!join_reg(js, &fd->stack_arg_regs[i], &fa->stack_arg_regs[i], rb, pass))
-			return false;
-	}
-
-	if (pass == 2) {
-		fd->no_stack_arg_load = fa->no_stack_arg_load || fb->no_stack_arg_load;
-		fd->callback_depth = min(fa->callback_depth, fb->callback_depth);
-		for (i = 0; i < fd->loop_stack_cnt; i++)
-			fd->loop_stack[i].trip = max(fd->loop_stack[i].trip, fb->loop_stack[i].trip);
-	}
-	return true;
-}
-
-/* Things that can't be different in two states that are joined */
-static bool join_check_state(const struct bpf_verifier_state *a,
-			     const struct bpf_verifier_state *b)
-{
-	int i;
-
-	if (a->curframe != b->curframe || a->insn_idx != b->insn_idx)
-		return false;
-	if (a->speculative != b->speculative || a->in_sleepable != b->in_sleepable ||
-	    a->callers_unknown != b->callers_unknown ||
-	    a->unwound != b->unwound || a->changed_pkt_data != b->changed_pkt_data)
-		return false;
-	if (a->active_locks != b->active_locks ||
-	    a->active_preempt_locks != b->active_preempt_locks ||
-	    a->active_rcu_locks != b->active_rcu_locks ||
-	    a->active_lock_ptr != b->active_lock_ptr ||
-	    !a->active_irq_id != !b->active_irq_id ||
-	    !a->active_lock_id != !b->active_lock_id)
-		return false;
-	if (a->acquired_refs != b->acquired_refs)
-		return false;
-	for (i = 0; i < a->acquired_refs; i++) {
-		if (a->refs[i].type != b->refs[i].type)
-			return false;
-		switch (a->refs[i].type) {
-		case REF_TYPE_PTR:
-		case REF_TYPE_IRQ:
-			break;
-		default:
-			if (a->refs[i].ptr != b->refs[i].ptr)
-				return false;
-		}
-	}
-	return true;
-}
-
-static void join_refs_note(struct bpf_join_state *js, const struct bpf_verifier_state *a,
-			   const struct bpf_verifier_state *b)
-{
-	int i;
-
-	jid_note(js, a->active_irq_id, b->active_irq_id);
-	jid_note(js, a->active_lock_id, b->active_lock_id);
-	for (i = 0; i < a->acquired_refs; i++) {
-		jid_note(js, a->refs[i].id, b->refs[i].id);
-		if (a->refs[i].type == REF_TYPE_PTR)
-			jid_note(js, a->refs[i].parent_id, b->refs[i].parent_id);
-	}
-}
-
-static bool join_refs_check(struct bpf_join_state *js, const struct bpf_verifier_state *a,
-			    const struct bpf_verifier_state *b)
-{
-	int i;
-
-	if (!jid_strict_ok(js, a->active_irq_id, b->active_irq_id) ||
-	    !jid_strict_ok(js, a->active_lock_id, b->active_lock_id))
-		return false;
-	for (i = 0; i < a->acquired_refs; i++) {
-		if (!jid_strict_ok(js, a->refs[i].id, b->refs[i].id))
-			return false;
-		if (a->refs[i].type == REF_TYPE_PTR &&
-		    !jid_strict_ok(js, a->refs[i].parent_id, b->refs[i].parent_id))
-			return false;
-	}
-	return true;
-}
-
-/* The result has to describe everything that an input describes */
-static int join_check(struct bpf_join_state *js, struct bpf_verifier_state *dst,
-		      const struct bpf_verifier_state *in, const char *which)
-{
-	struct bpf_verifier_env *env = js->env;
-
-	if (bpf_state_subsumes(env, dst, (struct bpf_verifier_state *)in))
-		return 0;
-	/* check_ids() has no room left: that says nothing about the join */
-	if (env->idmap_scratch.cnt == BPF_ID_MAP_SIZE)
-		return 1;
-	bpf_log(&env->log, "join:");
-	print_verifier_state(env, dst, dst->curframe, true);
-	bpf_log(&env->log, "input %s:", which);
-	print_verifier_state(env, in, in->curframe, true);
-	verifier_bug(env, "join of states at insn %u does not subsume input '%s'",
-		     dst->insn_idx, which);
-	return -EFAULT;
-}
-
-/*
- * Compute in @dst the state that describes everything that @a or @b describe.
- * @dst has to be a valid state (zeroed is fine) different from @a and @b, its
- * previous content is released. Bookkeeping fields are copied from @a.
+ * A number can grow in each trip. The bound that moved goes to a threshold. The constants of
+ * the loop give the thresholds:
+ *	do { a[i] = 0; i += 3; } while (i < 30);		29 at most comes back to the header
+ *	while (i < 30) { a[i] = 0; i += 3; }			32
+ *	loop { if (...) { if (n >= 64) break; a[n++] = x; } }	64
+ * A threshold is a guess. The state that comes back to the header is compared with it.
  *
- * Returns 0 on success, 1 if there is no join, negative error otherwise.
- * When 1 is returned the content of @dst is undefined, but it's a valid state.
+ * Only a number on a cycle grows again and again. So the first growth is a join.
+ *	x = 0; loop { a[x]; x = rnd & 7; }
+ */
+static void join_range(struct join *j, struct bpf_reg_state *dst, const struct bpf_reg_state *src)
+{
+	s64 min_threshold = S64_MIN, max_threshold = S64_MAX, off;
+	struct bpf_loop *loop = j->leftover_loop;
+	struct bpf_reg_state old = *dst;
+	bool in_deps;
+	int i, n;
+
+	if (scalar_equal(scalar_of(dst), scalar_of(src)))
+		return;
+	scalar_union(scalar_of(dst), scalar_of(src));
+	if (loop && !scalar_equal(scalar_of(dst), scalar_of(&old))) {
+		if (!j->widen || !old.grew_once)
+			goto out;
+		/* two pointers are compared by their offsets up to there */
+		if (dst->type != SCALAR_VALUE) {
+			if (reg_smax(dst) < BPF_MAX_VAR_OFF)
+				max_threshold = BPF_MAX_VAR_OFF - 1;
+			if (reg_smin(dst) > -BPF_MAX_VAR_OFF)
+				min_threshold = -BPF_MAX_VAR_OFF + 1;
+		}
+		in_deps = bpf_xreg_in_deps(j->env, j->dst, j->fr, j->xregno);
+		if (in_deps)
+			j->err = j->err ?: bpf_loop_collect_thresholds(j->env, loop);
+		/* at the constant or one before it, and the largest step or this step further */
+		for (i = 0; i < 6 && in_deps && !j->err; i++) {
+			off = i & 4 ? reg_smax(dst) - reg_smax(&old) : i & 2 ? loop->max_step : 0;
+			off -= i & 1;
+			n = bpf_loop_thresholds_below(loop, reg_smax(dst) - off);
+			if (n < loop->threshold_cnt && loop->thresholds[n] + off >= reg_smax(dst))
+				max_threshold = min(max_threshold, loop->thresholds[n] + off);
+			off = i & 4 ? reg_smin(dst) - reg_smin(&old) : i & 2 ? loop->min_step : 0;
+			off += i & 1;
+			n = bpf_loop_thresholds_below(loop, reg_smin(dst) - off + 1);
+			if (n && loop->thresholds[n - 1] + off <= reg_smin(dst))
+				min_threshold = max(min_threshold, loop->thresholds[n - 1] + off);
+		}
+		scalar_widen(scalar_of(dst), scalar_of(&old), min_threshold, max_threshold);
+out:
+		dst->grew_once = true;
+	}
+	if (!bpf_scalar_subsumes(dst, &old) || !bpf_scalar_subsumes(dst, src))
+		scalar_set_unknown(scalar_of(dst));
+}
+
+/*
+ * Pointers to the packet that share an id keep their displacement. No id is an id too:
+ * the start of the packet plus a constant, see find_good_pkt_pointers().
+ */
+static u32 join_pkt_id(struct bpf_verifier_env *env, const struct bpf_reg_state *ra,
+		       const struct bpf_reg_state *rb)
+{
+	struct bpf_pkt_pair new = { ra->id, rb->id, rb->r64.base - ra->r64.base, ra->type, ra->id };
+	struct bpf_pkt_pair *p = env->pkt_pairs;
+	bool taken = !ra->id;
+
+	bpf_add_cost(env, env->pkt_pair_cnt, BPF_COST_SCAN);
+	for (; p < env->pkt_pairs + env->pkt_pair_cnt; taken |= p++->id == ra->id)
+		if (!memcmp(p, &new, offsetof(struct bpf_pkt_pair, id)))
+			return p->id;
+	if (taken && (new.old || new.cur || new.delta))
+		new.id = bpf_new_id(env);
+	/* with no memory the load fails, see bpf_check_limits() */
+	bpf_add_pkt_pair(env, &new);
+	return new.id;
+}
+
+/* The bytes that are left after the pointer in both states are left in the join */
+static void join_pkt(struct join *j, struct bpf_reg_state *dst, const struct bpf_reg_state *src)
+{
+	struct bpf_reg_state old = *dst;
+	struct cnum64 both = cnum64_union(old.r64, src->r64);
+
+	dst->id = join_pkt_id(j->env, &old, src);
+	join_range(j, dst, src);
+	dst->pkt_min_len = min(pkt_min_len(&old), pkt_min_len(src));
+	if (old.r64.size == dst->r64.size && src->r64.size == dst->r64.size) {
+		if (old.range != src->range)
+			dst->range = max(min(old.range, src->range), 0);
+		return;
+	}
+	if (pkt_has_bytes_left(&old) && pkt_has_bytes_left(src) && pkt_has_bytes_left(dst))
+		dst->range = reg_smax(dst) + min(pkt_bytes_left(&old), pkt_bytes_left(src));
+	else
+		dst->range = 0;
+	dst->range = max(dst->range, dst->pkt_min_len);
+	/* pointers that share an id have ranges of the same size */
+	if (cnum64_umax(dst->r64) > MAX_PACKET_OFF || dst->r64.size != both.size)
+		dst->id = bpf_new_id(j->env);
+}
+
+static void join_reg(struct join *j, struct bpf_reg_state *dst, const struct bpf_reg_state *src)
+{
+	bool from_unproven = dst->from_unproven || (src && src->from_unproven);
+
+	if (!src || dst->type == NOT_INIT || !bpf_same_type_and_object(j->env, dst, src))
+		bpf_mark_reg_not_init(j->env, dst);
+	else if (type_is_pkt_pointer(dst->type))
+		join_pkt(j, dst, src);
+	else if (base_type(dst->type) != PTR_TO_ARENA) /* its offset is not tracked */
+		join_range(j, dst, src);
+	dst->from_unproven = from_unproven;
+}
+
+/* What a byte of a slot is if the number in the slot is not known */
+static u8 join_byte(struct bpf_stack_state *s, int i)
+{
+	if (s->slot_type[i] != STACK_SPILL)
+		return s->slot_type[i];
+	return bpf_register_is_null(&s->spilled_ptr) ? STACK_ZERO : STACK_MISC;
+}
+
+static bool byte_is_set(u8 t)
+{
+	return t != STACK_INVALID && t != STACK_POISON;
+}
+
+static void join_slot(struct join *j, struct bpf_stack_state *dst, struct bpf_stack_state *src)
+{
+	u8 x, y, ptr_type = STACK_SPILL;
+	bool ptr;
+	int i;
+
+	/* it is in the join_key */
+	if (bpf_slot_is_held(dst))
+		return;
+	if (!memcmp(dst->slot_type, src->slot_type, sizeof(dst->slot_type))) {
+		if (bpf_is_spilled_reg(dst))
+			join_reg(j, &dst->spilled_ptr, &src->spilled_ptr);
+		return;
+	}
+	ptr = (bpf_is_spilled_reg(dst) && !bpf_is_spilled_scalar_reg(dst)) ||
+	      (bpf_is_spilled_reg(src) && !bpf_is_spilled_scalar_reg(src));
+	/* a byte that is possibly not written is not read, not even into an unreadable register */
+	for (i = 0; i < BPF_REG_SIZE && !j->env->allow_uninit_stack; i++)
+		if (!byte_is_set(dst->slot_type[i]) || !byte_is_set(src->slot_type[i]))
+			ptr_type = STACK_INVALID;
+	for (i = 0; i < BPF_REG_SIZE; i++) {
+		x = join_byte(dst, i);
+		y = join_byte(src, i);
+		dst->slot_type[i] = ptr ? ptr_type : !byte_is_set(x) || x == y ? x :
+				    !byte_is_set(y) ? STACK_INVALID : STACK_MISC;
+	}
+	bpf_mark_reg_not_init(j->env, &dst->spilled_ptr);
+}
+
+static void join_func(struct join *j, struct bpf_func_state *dst, struct bpf_func_state *src,
+		      u16 live_regs)
+{
+	static struct bpf_stack_state invalid_slot;
+	const struct loop_stack_entry *s;
+	struct loop_stack_entry *d;
+	u32 i;
+
+	for (i = 0; i < dst->loop_stack_cnt; i++) {
+		d = &dst->loop_stack[i];
+		s = &src->loop_stack[i];
+		d->trip = max(d->trip, s->trip);
+		d->held_cnt = min(d->held_cnt, s->held_cnt);
+	}
+	for (i = 0; i < BPF_REG_FP; i++) {
+		j->xregno = i;
+		if (live_regs & BIT(i))
+			join_reg(j, &dst->regs[i], &src->regs[i]);
+		else
+			bpf_mark_reg_not_init(j->env, &dst->regs[i]);
+	}
+	/* slots and arguments that only @src has are unreadable */
+	for (i = 0; i < bpf_stack_nr_slots(dst); i++) {
+		j->xregno = bpf_spi_to_xreg(i);
+		join_slot(j, bpf_stack_slot(dst, i),
+			  i < bpf_stack_nr_slots(src) ? bpf_stack_slot(src, i) : &invalid_slot);
+	}
+	j->xregno = BPF_REG_FP;
+	for (i = 0; i < dst->out_stack_arg_cnt; i++)
+		join_reg(j, &dst->stack_arg_regs[i],
+			 bpf_stack_arg(dst, src, i) ? bpf_stack_arg(src, dst, i) : NULL);
+	dst->no_stack_arg_load |= src->no_stack_arg_load;
+	dst->callback_depth = min(dst->callback_depth, src->callback_depth);
+}
+
+/*
+ * Make @dst describe all that @dst or @src describe. They have the same join_key.
+ * Both are speculative, or neither is.
+ * @leftover_loop: they are at its header, in its leftover.
  */
 int bpf_states_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
-		    const struct bpf_verifier_state *a, const struct bpf_verifier_state *b,
+		    const struct bpf_verifier_state *src, struct bpf_loop *leftover_loop,
 		    bool widen)
 {
-	struct bpf_join_state *js = join_state(env);
-	const struct bpf_func_state *frame;
-	int pass, fr, err;
+	struct join j = { .env = env, .dst = dst, .leftover_loop = leftover_loop, .widen = widen };
 
-	if (!js)
-		return -ENOMEM;
-	js->widen = widen;
-	js->npairs = 0;
-	js->pairs_overflow = false;
-
-	if (!join_check_state(a, b))
-		return 1;
-	err = bpf_copy_verifier_state(dst, a);
-	if (err)
-		return err;
-
-	for (pass = 1; pass <= 2; pass++) {
-		if (pass == 1)
-			join_refs_note(js, a, b);
-		else if (!join_refs_check(js, a, b))
-			return 1;
-		for (fr = 0; fr <= a->curframe; fr++) {
-			u32 insn_idx = bpf_frame_insn_idx((struct bpf_verifier_state *)a, fr);
-			u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before;
-			u32 cnt;
-
-			/* not the states that get to the head through a call of the function */
-			frame = a->frame[fr];
-			cnt = frame->loop_stack_cnt;
-			js->loop = widen && fr == a->curframe && cnt &&
-				   frame->loop_stack[cnt - 1].loop_id == insn_idx ?
-				   env->insn_aux_data[insn_idx].loop : NULL;
-			if (!join_func(js, dst->frame[fr], a->frame[fr], b->frame[fr],
-				       live_regs, pass))
-				return 1;
-		}
-	}
-
-	return join_check(js, dst, a, "a") ?: join_check(js, dst, b, "b");
+	bpf_add_cost(env, bpf_xreg_cnt(dst), BPF_COST_XREG);
+	env->pkt_pair_cnt = 0;
+	env->imprecise |= !env->err;
+	dst->suspect_loops |= src->suspect_loops;
+	bpf_equations_pre_join(env, dst, src, leftover_loop, leftover_loop && widen);
+	for (j.fr = 0; j.fr <= dst->curframe; j.fr++)
+		join_func(&j, dst->frame[j.fr], src->frame[j.fr],
+			  env->insn_aux_data[bpf_frame_insn_idx(dst, j.fr)].live_regs_before);
+	bpf_equations_post_join(env, dst, src);
+	dst->max_held_cnt = max(dst->max_held_cnt, src->max_held_cnt);
+	/* no equation is found over a limit */
+	if (env->test_reg_invariants && !bpf_state_subsumes(env, dst, src) &&
+	    verifier_bug_if(!bpf_check_limits(env), env, "join at %d", dst->insn_idx))
+		return -EFAULT;
+	/* the first xreg that had an id can be gone */
+	return j.err ?: bpf_renumber_ids(env, dst);
 }

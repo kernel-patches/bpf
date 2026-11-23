@@ -12,6 +12,7 @@
 #include <linux/math64.h> /* for div_s64_rem() */
 #include <linux/freezer.h>
 #include <linux/sched/signal.h>
+#include <linux/sizes.h>
 
 /* No memory fails the load. It does not wake up the OOM killer. */
 #define BPF_GFP_MAYFAIL (__GFP_RETRY_MAYFAIL | __GFP_NOWARN)
@@ -25,7 +26,7 @@
  */
 static inline bool bpf_must_abort(void)
 {
-	cond_resched();
+	cond_resched_tasks_rcu_qs();
 	return task_sigpending(current) &&
 	       (__fatal_signal_pending(current) || freezing(current) ||
 		(READ_ONCE(current->jobctl) & JOBCTL_TRAP_FREEZE));
@@ -93,6 +94,10 @@ struct scalar {
 	 */
 	u16 base;
 	u16 step;
+	/* Not a part of the value: it grew once at a loop header, see join_range() */
+	bool grew_once;
+	/* The value comes from an unproven insn (its check failed), see skip_unproven_insn() */
+	bool from_unproven;
 };
 
 /* The struct scalar that is an anonymous member of *@p */
@@ -113,13 +118,15 @@ struct bpf_reg_state {
 	 * the dynptr to determine proper reference freeing.
 	 * Similarly to dynptrs, we use ID to track "belonging" of a reference
 	 * to a specific instance of bpf_iter.
-	 * A scalar has no id. The scalars that it is linked to are static: computed before the
-	 * main pass, see bpf_scev_next_linked_reg().
+	 * A scalar has no id, see struct bpf_equations.
 	 */
 	u32 id;
 	union {
 		/* valid when type == PTR_TO_PACKET */
-		int range;
+		struct {
+			int range;
+			int pkt_min_len;	/* see pkt_min_len() */
+		};
 		/*
 		 * Valid when type == PTR_TO_STACK. Inside the callee two registers
 		 * can be both PTR_TO_STACK like R1=fp-8 and R2=fp-8, but one of them
@@ -241,6 +248,12 @@ static inline bool reg_fixed_part_equal(const struct bpf_reg_state *ra,
 					const struct bpf_reg_state *rb)
 {
 	return ra->type == rb->type && !memcmp(&ra->raw, &rb->raw, sizeof(ra->raw));
+}
+
+/* That and the ids, see bpf_renumber_ids() */
+static inline bool reg_object_equal(const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
+{
+	return !memcmp(ra, rb, offsetof(struct bpf_reg_state, var_off));
 }
 
 /* All but the ids */
@@ -368,9 +381,13 @@ struct bpf_reference_state {
 	 * is used purely to inform the user of a reference leak.
 	 */
 	int insn_idx;
+	u32 diag_id;	/* finds the acquire in the report of a leak, it is not renumbered */
 	union {
 		/* For REF_TYPE_PTR */
-		int parent_id;
+		struct {
+			int parent_id;
+			u32 ctx_arg;	/* it came with that __ref argument, the first is 1 */
+		};
 		/* Use to keep track of the source object of a lock, to ensure
 		 * it matches on unlock.
 		 */
@@ -381,101 +398,78 @@ struct bpf_reference_state {
 struct bpf_retval_range {
 	s32 minval;
 	s32 maxval;
-	bool return_32bit;
+	u32 return_32bit;	/* no padding, see bpf_same_join_key() */
 };
 
-/* SCEV/widening register space: r0..r10 plus every stack slot of a frame. */
-#define BPF_SCEV_REGS_NUM (MAX_BPF_REG + MAX_BPF_STACK_SLOTS)
+/*
+ * An xreg is a register or a stack slot of a frame:
+ *
+ *	0 .. 10		11 .. 13		MAX_BPF_EXT_REG ..
+ *	r0 .. r10	hidden registers	fp-8, fp-16, ...
+ *
+ * A state has no value for a hidden register. No mask of xregs has its bit.
+ */
+#define MAX_BPF_XREG (MAX_BPF_EXT_REG + MAX_BPF_STACK_SLOTS)
 
-struct bpf_loop_iters {
-	u32 min_header_count;   /* min number of times header is executed */
-	u32 max_header_count;   /* max number of times header is executed */
-	/* live, changed by the loop, no summary of how: left to the join at the head */
-	unsigned long forget_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
-	/*
-	 * live, made anew in every iteration: the first one tells what it is in the rest.
-	 * Or not set at the entry, and also in forget_regs: the first one sets it.
-	 */
-	unsigned long fresh_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
-	/* [0, max] at the entry, and the loop only clears bits */
-	unsigned long mask_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
-	/*
-	 * The variable that the latches of all back edges test, or -1, and what
-	 * it can be at the loop header: what it is at the entry or what one of
-	 * the latches lets through. A 32-bit latch bounds its low 32 bits only.
-	 */
-	int iv_reg;
-	struct scalar iv_range;
-	/* a jump that counts: it leaves the loop in the last iteration, if not before. Or -1 */
-	int count_insn;
-	/* a pointer to the stack that stores go through moves in the loop */
-	bool spill_base;
-};
-
-/* Where may_goto that the verifier adds goes, see check_loop_guard() */
-enum bpf_guard_edge {
-	BPF_NO_GUARD_EDGE,
-	BPF_GUARD_LEAVES_SUBPROG,
-	BPF_GUARD_LEAVES_LOOP,
-};
-
-struct loop_stack_entry {
-	struct bpf_verifier_state *entry_state;
-	u32 min_header_count;
-	u32 max_header_count;
-	u32 loop_id:23;
-	u32 terminates:1;
-	/* the loop had may_goto when the state entered it, see check_loop_guard() */
-	u32 guarded:1;
-	/*
-	 * The iterations are kept apart: states with different @trip are not
-	 * joined for as long as they are in the loop.
-	 */
-	u32 apart:1;
-	/* max_header_count follows from the state at the entry, not from patience */
-	u32 counted:1;
-	/* the walk goes on for as long as each iteration decides a jump that leaves the loop */
-	u32 probe:1;
-	/* this one did */
-	u32 decided:1;
-	/*
-	 * The state is kept apart from one with the other value of a flag, see
-	 * flow_join_makes_up(). The test of the flag is decided in both, and decides nothing.
-	 */
-	u32 flag_apart:1;
-	/*
-	 * The first iteration of a counted loop is kept apart. The state that comes back
-	 * to the head is made to stand for the rest.
-	 */
-	u32 first:1;
-	/*
-	 * How many times the state came back to the head of the loop. With @apart that is
-	 * the iteration that it is in. A state that stands for many iterations is a join, and has
-	 * the largest number of the states that it is made of.
-	 */
-	u32 trip;
-	/* the number of references that the state had when it entered the loop */
-	u32 refs;
-	/*
-	 * Which of the states that entered the loop this one comes from. What comes back to
-	 * the head is for that state, see flow_merge(). A join has the number of one of the two.
-	 */
-	u32 entry_id;
-	/*
-	 * A walk on patience: which one it is, and how many insns may be looked at in it, see
-	 * env->walk_insns. The size of the loop says nothing about the functions that it calls.
-	 */
-	u32 walk_id;
-	u32 walk_patience;
-	int iv_reg;
-	struct scalar iv_range;
-	int count_insn;
-};
-
-/* The state is in a walk on patience, which may not get to the end of the loop */
-static inline bool bpf_loop_walk_may_give_up(const struct loop_stack_entry *entry)
+static inline bool bpf_xreg_is_slot(u32 xregno)
 {
-	return entry->apart && entry->terminates && !entry->counted && !entry->first;
+	return xregno >= MAX_BPF_EXT_REG;
+}
+
+static inline u32 bpf_spi_to_xreg(u32 spi)
+{
+	return MAX_BPF_EXT_REG + spi;
+}
+
+static inline u32 bpf_xreg_to_spi(u32 xregno)
+{
+	return xregno - MAX_BPF_EXT_REG;
+}
+
+/* The trip index of a loop is an xreg too. The loops of a frame come after its slots. */
+#define BPF_XREG_TRIP MAX_BPF_XREG
+/* A loop that can make more trips gets may_goto */
+#define BPF_MAX_TRIPS BIT_ULL(32)
+
+static inline u64 bpf_xreg(u32 frameno, u32 xregno)
+{
+	return (u64)frameno << 32 | xregno;
+}
+
+/*
+ * A state in a loop, see bpf_flow_loop_enter()
+ *
+ * entry -> [0] -> [1] -> ... -> [d-1] -> +----------+ <--+
+ *          peeled trips, kept apart      | LEFTOVER |    |
+ *                                        |  widened |----+
+ *                                        +----------+
+ */
+struct loop_stack_entry {
+	struct bpf_loop *loop;
+	struct bpf_header_state *header_state;	/* see failing_path_trip() */
+	/* How many times the state came back to the header. A join has the larger number. */
+	u32 trip;
+	/* The state that entered the loop. What comes back to the header is for that state. */
+	u32 entry_id;
+	u32 held_cnt;		/* when the state entered the loop */
+	bool peeled;		/* in a peeled trip, not in the leftover */
+	/* an xreg: how many times the program came back to the header */
+	struct scalar trip_index;
+	bool trip_widened;	/* it was moved to a threshold, or it does not grow */
+	/*
+	 * The trip index at which a jump that the state passed leaves the loop.
+	 * Path-sensitive run: the bound that the jump on the iv saw.
+	 */
+	u64 exit_threshold;
+	/* Path-sensitive run: the jump that tests the iv, the value it saw, the trips left */
+	u32 iv_jump_idx;
+	u64 iv_prev, trips_left;
+};
+
+/* The states of trip 0, 1, 2, 4, 8, ... are saved. A compare with them finds any period. */
+static inline bool bpf_trip_is_saved(const struct loop_stack_entry *entry)
+{
+	return !(entry->trip & (entry->trip - 1));
 }
 
 #define LOOP_STACK_SIZE 16
@@ -485,6 +479,8 @@ static inline bool bpf_loop_walk_may_give_up(const struct loop_stack_entry *entr
  */
 struct bpf_func_state {
 	struct bpf_reg_state regs[MAX_BPF_REG];
+	/* equal in states that have a join, see bpf_same_join_key() */
+	struct_group(join_key,
 	/* index of call instruction that called into this func */
 	int callsite;
 	/* stack frame number of this function state from pov of
@@ -492,32 +488,36 @@ struct bpf_func_state {
 	 * 0 = main function, 1 = first callee.
 	 */
 	u32 frameno;
-	/*
-	 * Unique diagnostic identity for this function invocation. Frame depth is
-	 * reused after returns, while this ID is preserved across state clones.
-	 */
-	u32 diag_frame_id;
-	/* parent_id of the args that are gone when this frame returns */
-	u32 frame_id;
 	/* subprog number == index within subprog_info
 	 * zero == main subprog
 	 */
 	u32 subprogno;
 	/*
-	 * The frame of an async callback has the count of frame 0 of the state
-	 * that sets the callback plus one. Frames that differ in it are not joined.
+	 * What was held at the entry of the frame and is still held. For references these are
+	 * the first entry_refs of refs[]. What is released and acquired again does not count.
+	 * This frame must release all the rest.
 	 */
-	u32 async_entry_cnt;
+	u32 entry_refs;
+	u32 entry_rcu_locks;
+	u32 entry_preempt_locks;
 	struct bpf_retval_range callback_ret_range;
 	bool in_callback_fn;
 	bool in_async_callback_fn;
 	bool in_exception_callback_fn;
-	bool no_stack_arg_load;
 	/*
 	 * The helper invokes this callback under rcu_read_lock(), so the
 	 * callback and its callees run in an RCU read-side critical section.
 	 */
 	bool in_rcu_callback_fn;
+	/* parent_id of the args that are gone when this frame returns */
+	u32 frame_id;
+	);
+	bool no_stack_arg_load;
+	/*
+	 * Unique diagnostic identity for this function invocation. Frame depth is
+	 * reused after returns, while this ID is preserved across state clones.
+	 */
+	u32 diag_frame_id;
 	/* For callback calling functions that limit number of possible
 	 * callback executions (e.g. bpf_loop) keeps track of current
 	 * simulated iteration number.
@@ -529,8 +529,6 @@ struct bpf_func_state {
 	 *                           | number of simulations is tracked in frame N
 	 */
 	u32 callback_depth;
-	/* Which of the states that got to the call this one comes from, see flow_merge() */
-	u32 callback_entry_id;
 	/* Instructions processed in this frame and callees on the current path. */
 	u32 insns_subtotal;
 	/*
@@ -538,14 +536,6 @@ struct bpf_func_state {
 	 * subprogram (loops never cross subprogram boundaries).
 	 */
 	u32 loop_stack_cnt;
-	/*
-	 * How much of what was held when the frame was entered is held ever since. For
-	 * references that is the first entry_refs of refs[]. What is released and taken again
-	 * doesn't count. More than that is for this frame to release.
-	 */
-	u32 entry_refs;
-	u32 entry_rcu_locks;
-	u32 entry_preempt_locks;
 
 	/* The following fields should be last. See copy_func_state() */
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
@@ -575,23 +565,50 @@ struct bpf_func_state {
 #define BPF_ID_MAP_SIZE ((MAX_BPF_REG + MAX_BPF_STACK_SLOTS + MAX_STACK_ARG_SLOTS) * \
 			 MAX_CALL_FRAMES)
 
+/* See equation.c */
+struct bpf_equations {
+	struct bpf_xreg_equation *xreg_equations;	/* the three tables are one allocation */
+	struct bpf_sym_equation *sym_equations;
+	struct scalar *syms;
+	u32 xreg_equation_cnt, sym_equation_cnt, sym_cnt;
+	u32 xreg_equation_cap, sym_equation_cap, sym_cap;
+	bool normalized;	/* see normalize_equations() */
+	bool infeasible;	/* the equations cannot hold: the program does not get here */
+	bool needs_refine;	/* widened: the equations are not applied, see bpf_flow_next() */
+	u32 clean_sym_cnt;	/* after the last bpf_equations_clean() */
+};
+
 struct bpf_verifier_state {
+	struct bpf_equations equations;
 	/* call stack tracking */
 	struct bpf_func_state *frame[MAX_CALL_FRAMES];
 	/* Acquired reference states */
 	struct bpf_reference_state *refs;
 	u32 insn_idx;
-	u32 curframe;
+	bool speculative;
+	/*
+	 * An xreg has no value: unreachable. Only a path-sensitive run drops such a state.
+	 * The run also sets it when it is out of frames.
+	 */
+	bool infeasible;
+	/* an error only in a leftover, see check_held_in_leftover() */
+	bool holds_too_much;
+	u32 max_held_cnt;	/* when it first held too much */
+	/* the loops that made an xreg of data_deps imprecise, see bpf_loop.suspect_bit */
+	u64 suspect_loops;
 
+	/* equal in states that have a join, see bpf_same_join_key(). No holes. */
+	struct_group(join_key,
+	struct_group(held,
+	void *active_lock_ptr;
 	u32 acquired_refs;
 	u32 active_locks;
 	u32 active_preempt_locks;
+	u32 active_rcu_locks;
 	u32 active_irq_id;
 	u32 active_lock_id;
-	void *active_lock_ptr;
-	u32 active_rcu_locks;
-
-	bool speculative;
+	);
+	u32 curframe;
 	bool in_sleepable;
 	/* a global function or an extension, and what it calls: exit of frame 0 is not the end */
 	bool callers_unknown;
@@ -602,14 +619,14 @@ struct bpf_verifier_state {
 	 * and their packet pointers are not in the state, see bpf_flow_return().
 	 */
 	bool changed_pkt_data;
-	/*
-	 * Not zero in a function that is verified on its own: the call that the
-	 * state at its entry came from, see bpf_flow_call().
-	 */
-	u32 flow_entry;
+	);
+	/* Not zero in a function that is verified on its own, see bpf_flow_call() */
+	u32 instance_id;
 
 	/* The insn that the state comes from, -1 if no instructions have been executed yet. */
 	u32 last_insn_idx;
+	/* its part of env->mem */
+	u32 bytes;
 };
 
 /* Number of BPF_REG_SIZE stack slots tracked for the frame so far. */
@@ -620,12 +637,18 @@ static inline u32 bpf_stack_nr_slots(const struct bpf_func_state *frame)
 
 /*
  * Stack slot @spi of @frame, covering bytes [fp - (spi + 1) * 8, fp - spi * 8).
- * The caller must ensure spi < bpf_stack_nr_slots(frame), see bpf_grow_stack_state().
+ * The caller must ensure spi < bpf_stack_nr_slots(frame), see grow_stack_state().
  */
 static inline struct bpf_stack_state *bpf_stack_slot(const struct bpf_func_state *frame, u32 spi)
 {
 	return &frame->stack[spi];
 }
+
+/* The state in which a path started a trip, see failing_path_trip() */
+struct bpf_header_state {
+	struct bpf_verifier_state st;
+	u32 refcnt;
+};
 
 static inline struct bpf_reg_state *
 bpf_get_spilled_reg(int slot, struct bpf_func_state *frame, u32 mask)
@@ -657,6 +680,16 @@ bpf_get_spilled_stack_arg(int slot, struct bpf_func_state *frame)
 static inline bool bpf_stack_args_are_incoming(const struct bpf_func_state *frame)
 {
 	return !frame->frameno && !frame->no_stack_arg_load;
+}
+
+/* Stack argument @i of @frame to compare with @other or NULL: incoming ones are not outgoing */
+static inline const struct bpf_reg_state *
+bpf_stack_arg(const struct bpf_func_state *frame, const struct bpf_func_state *other, u32 i)
+{
+	if (i >= frame->out_stack_arg_cnt ||
+	    (bpf_stack_args_are_incoming(frame) && !bpf_stack_args_are_incoming(other)))
+		return NULL;
+	return &frame->stack_arg_regs[i];
 }
 
 /* Iterate over 'frame', setting 'reg' to either NULL or a spilled register. */
@@ -801,103 +834,106 @@ void bpf_call_graph_free(struct bpf_call_graph *cg);
 	     ___idx++)
 
 #define MAX_BACKEDGES 16
-#define MAX_LOOP_EXITS 256
-
-/* Number of exit conditions dominating a backedge. */
-#define MAX_LATCHES 4
 
 struct bpf_backedge {
 	int from;
-	/*
-	 * Conditional jumps within the loop that dominate 'from' and have
-	 * a successor outside the loop, nearest first. latches[0] is the
-	 * latch; the remaining entries are additional exit conditions.
-	 * After scalar evolution: those that test a counter, see bpf_scev_jump_counts().
-	 * One of them may leave the loop by way of a flag, see bpf_edge_leaves_loop().
-	 * Each usable condition tells iterations in which the back edge is
-	 * not taken, so keeping only a subset is sound.
-	 */
-	int latches[MAX_LATCHES];
-	u8 latches_cnt;
-	/* bit k: the loop is left on the edge of latches[k] that is taken, not on the other one */
-	u8 taken_leaves;
+	/* the nearest conditional jump of the loop that dominates 'from' and leaves it, or -1 */
+	int latch;
 };
 
-struct bpf_loop_exit {
-	int from; /* instruction inside the loop */
-	int to; /* instruction outside the loop */
+/* Calls of a callback and recursive calls go around like the body of a loop does */
+enum bpf_loop_kind {
+	BPF_LOOP_JUMPS,
+	BPF_LOOP_CALLBACK,	/* the header is the call of the helper */
+	/* the header is the first insn of the first function of the cycle */
+	BPF_LOOP_RECURSION,
 };
 
-/* The places that the table of a loop knows: registers, then stack slots, fp-8 first */
-#define BPF_LOOP_SLOT	64
-#define BPF_LOOP_PLACES	128
-
-/*
- * Where the bounds of the number in @place may come to rest at the head of a loop: the lowest and
- * the highest upper bound, the highest and the lowest lower bound that the jumps of the loop
- * let come back to the head, see flow_compute_rungs().
- */
-struct bpf_loop_rungs {
-	s64 max[2];
-	s64 min[2];
-	bool has_max;
-	bool has_min;
-	u8 place;
+/* What a pass finds about a loop */
+struct bpf_loop_per_pass {
+	bool needs_guard;	/* see bpf_flow_needs_guard() */
+	bool no_guard_edges;	/* a state did not take the edges of may_goto */
+	bool has_leftover;	/* the peeled trips were not enough */
+	bool peel_pruned;	/* see flow_prune_peeled() */
+	/* a check failed in a state that the loop kept apart, with no other suspect */
+	bool has_unproven;
+	bool starves, starved;	/* see charge_loops() */
+	u32 last_peeled_trip;	/* see flow_keep_peeled() */
+	u32 peeled_cnt;		/* trips that the pass peeled */
+	u64 cost;		/* for the states that the loop keeps apart */
 };
 
 struct bpf_loop {
+	enum bpf_loop_kind kind;
+	u32 header;
+	/* in bpf_verifier_state.suspect_loops. Loops with the same bit are suspects together. */
+	u64 suspect_bit;
 	struct bpf_backedge backedges[MAX_BACKEDGES];
-	/* edges exiting from this loop, includes edges from nested loops */
-	struct bpf_loop_exit *exits;
+	int exit_to;		/* where the first edge that leaves the loop goes, or -1 */
 	int backedges_cnt;
-	int exits_cnt;
 	bool irreducible;
 	bool backedges_overflow;
-	/* @exits is cut at MAX_LOOP_EXITS. Only a loop around this one needs all of them. */
-	bool exits_overflow;
-	/* @exits of a loop in this one is cut. Then @exits of this loop can lack exits too. */
-	bool nested_exits_overflow;
 	/* every trip goes through an insn that stops the loop, see flow_is_bound() */
 	bool rt_bounded;
 	/* insns in the loop, nested loops included */
 	u32 nr_insns;
-	/*
-	 * a walk on patience whose jumps were all decided, or the two trips of a loop with calls,
-	 * didn't get to the end of the loop: there is no other try
-	 */
-	bool walk_failed;
-	/* functions of the program are called in the loop */
-	bool has_calls;
 	/* not rt_bounded: there are places for may_goto, see guard_to in bpf_insn_aux_data */
 	bool has_guards;
-	/* and it is going to be there, see bpf_flow_loop_gets_guards() */
-	bool guarded;
-	/* a state went through it without the edges of may_goto, see bpf_flow_loop_gets_guards() */
-	bool no_guard_edges;
-	/*
-	 * Loop-entry registers used to compute stack addresses for loads,
-	 * stores and calls requiring fixed stack offsets, in this and nested
-	 * loops.
-	 */
-	unsigned long store_base_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
-	/*
-	 * Loop-entry registers used to compute the operands of conditional jumps, in this and
-	 * nested loops.
-	 */
-	unsigned long tested_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
-	/*
-	 * what gets a constant added in every iteration, in 64 and in 32 bits. A sum that is
-	 * not among tested_regs is taken for that too: nothing stops it either
-	 */
-	unsigned long linear_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
-	unsigned long linear32_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
-	/* the places that insns of the loop write, as far as the insns tell */
-	unsigned long writes[BITS_TO_LONGS(BPF_LOOP_PLACES)];
-	struct bpf_loop_rungs *rungs;
-	u32 rungs_cnt;
+
+	/* What one pass gives to the next pass */
+	struct_group_tagged(bpf_loop_precision, precision,
+	u32 peel_cnt;		/* trips before the leftover */
+	/* while bpf_loop_per_pass.cost is not above @budget: */
+	u64 budget;
+	u32 max_peel_cnt;	/* peel up to this trip */
+	bool peeled_apart;	/* the join rule holds for states that start a peeled trip */
+	bool disjoint_apart;	/* disjoint values in data_deps stay apart, also in the leftover */
+	bool no_peel_prune;	/* a larger earlier trip does not prune, see flow_prune_peeled() */
+	);
+	struct bpf_loop_precision undo;	/* before the last partition */
+	struct bpf_loop_precision kept;	/* see keep_precision() */
+	struct bpf_loop_precision good;	/* see bpf_restore_precision() */
+	struct bpf_loop_per_pass last_pass;	/* the last pass whose partition was kept */
+	/* to peel all trips, estimated from a partition that was over its budget */
+	u64 full_peel_cost;
+	u16 tried;		/* bits of PARTITION_*, with this budget */
+	bool partitioned;	/* the last partition was for this loop */
+	bool peeled_joined;	/* at the start of a peeled trip, against the join rule */
+	bool changed;		/* see flow_forget_loop() */
+	bool guarded;		/* states take the edges of may_goto */
+	bool was_infinite;	/* at the start of the last path-sensitive run */
+	bool infinite;		/* see failing_path_trip() */
+	bool infinite_is_guess;	/* see fast_forward_trips() */
+	bool no_first_trips_guess;	/* a state had no trip count, @steps can be wrong */
+	struct bpf_loop_steps *steps;	/* see bpf_guess_first_trips() */
+	struct bpf_iv_threshold *iv_thresholds;	/* where an iv can stop, see equation_join.c */
+	u32 iv_threshold_cnt, iv_threshold_cap;
+	u32 leftover_epoch;	/* how many leftovers started */
+	u64 exit_trip;		/* the trip in which the loop can end, 0 if it is not known */
+	/* they move with the trip index, or only at first, see bpf_note_linear_xregs() */
+	DECLARE_BITMAP(linear_xregs, MAX_BPF_XREG);
+	DECLARE_BITMAP(nonlinear_xregs, MAX_BPF_XREG);
+	struct bpf_loop_per_pass this_pass;
+	/* sorted constants of the loop, the largest and the smallest constant that an insn adds */
+	s64 *thresholds;
+	u32 threshold_cnt, threshold_cap;
+	s32 max_step, min_step;
 };
 
+static inline bool bpf_loop_has_budget(const struct bpf_loop *loop)
+{
+	return loop->this_pass.cost <= loop->budget;
+}
+
+/* A partition for a loop ends when a state that it kept apart is unproven */
+static inline bool bpf_loop_partition_is_active(const struct bpf_loop *loop)
+{
+	return bpf_loop_has_budget(loop) && !(loop->partitioned && loop->this_pass.has_unproven);
+}
+
 struct bpf_insn_aux_data {
+	/* What a pass writes for the rewrite of the insn. Each pass starts from the snapshot. */
+	struct_group_tagged(bpf_insn_fixups, fixups,
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
 		struct bpf_map_ptr_state map_ptr_state;
@@ -926,40 +962,28 @@ struct bpf_insn_aux_data {
 		u64 obj_new_size;
 		/* remember the offset of node field within type to rewrite */
 		u64 insert_off;
+		/* {this,per}_cpu_ptr() with prog percpu alloc */
+		u64 call_with_percpu_alloc_ptr;
+		u64 call_num;	/* any of these, or the offset of a refcount */
 	};
 	struct btf_struct_meta *kptr_struct_meta;
+	u64 suspect_loops; /* of the states that got here */
 	u64 map_key_state; /* constant (32 bit) key tracking for maps */
-	/*
-	 * Per-instruction summary of stack slots in the current frame
-	 * that this instruction may write to.
-	 */
-	DECLARE_BITMAP(may_write_mask, MAX_BPF_STACK_SLOTS);
-	DECLARE_BITMAP(live_stack_before, MAX_BPF_STACK_SLOTS);
-	u16 stack_ptrs; /* bitmask of regs that may hold a frame pointer here (arg_track) */
-	/* regs that hold a number or a pointer to arena; that, or a pointer to a plain map value */
-	u16 plain_regs;
-	u16 value_regs;
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
-	u32 seen; /* this insn was processed by the verifier at env->pass_cnt */
+	u32 seen; /* this insn was processed by the verifier at env->check_cnt */
 	u64 nospec:1; /* do not execute this instruction speculatively */
 	u64 nospec_result:1; /* result is unsafe under speculation, nospec must follow */
 	u64 zext_dst:1; /* this insn zero extends dst reg */
 	u64 needs_zext:1; /* alu op needs to clear upper bits */
 	u64 prevent_zext:1; /* alu op cannot be zext (already used with 64-bit scalars) */
 	u64 non_sleepable:1; /* helper/kfunc may be called from non-sleepable context */
-	u64 call_with_percpu_alloc_ptr:1; /* {this,per}_cpu_ptr() with prog percpu alloc */
 	u64 cast_arena:1; /* addr_space_cast of an address in arena */
 	u64 cast_mov:1; /* addr_space_cast of a pointer that is not in arena, it's a move */
-	u64 bb_end:1; /* last instruction of a basic block */
 	u64 loop_guard:1; /* may_goto is added in front of this instruction */
-	u64 guard_place:1; /* it's the place for may_goto if the loop needs one */
-	u64 guard_at_header:1; /* there is no better place than the head of the loop */
-	u64 guard_no_unwind:1; /* it cannot unwind from here, at least sometimes */
-	u64 guard_unset_reg:1; /* where it goes a register is read that is not set here */
-	u64 guard_edge_dropped:1; /* an edge of may_goto from here was dropped */
-	u64 need_scev:1;
-	/* a jump in a loop: the edge that is not taken, bit 0, or the other one leaves the loop */
-	u64 edge_leaves:2;
+	u64 guard_unwinds:1; /* it leaves the subprog */
+	u64 speculative_first:1; /* a speculative state came to it first */
+	u64 call_recorded:1; /* see record_call_fixup() */
+	u64 pessimized:1; /* see bpf_partition_for_pessimized() */
 	u64 alu_state:5; /* used in combination with alu_limit */
 	/* true if STX or LDX instruction is a part of a spill/fill
 	 * pattern for a bpf_fastcall call.
@@ -978,31 +1002,59 @@ struct bpf_insn_aux_data {
 	u64 arena_member:1;
 	u64 arena_member_nullable:1;
 	u64 non_arena_load:1;
+	u64 indirect_target:1; /* if it is an indirect jump target */
+	u64 non_stack_access:1; /* instruction can access non-stack memory */
+	);
+
+	/* what one pass gives to the next pass, see bpf_flow_new_pass() */
+	u32 guard_no_unwind:1; /* it cannot unwind from here, at least sometimes */
+	u32 guard_unset_reg:1; /* where it goes a register is read that is not set here */
+	u32 non_speculative_first:1; /* speculative states end here, their fixups did not fit */
+	u32 acquires:1; /* a reference or a lock */
+	u32 releases:1;
 
 	/* below flags are initialized once */
+	u32 bb_end:1; /* last instruction of a basic block */
+	u32 guard_place:1; /* it is the place for may_goto if the loop needs one */
+	u32 guard_at_header:1; /* there is no better place than the header of the loop */
 	/* true if instruction is a call to a helper function that
 	 * accepts callback function as a parameter.
 	 */
-	u64 calls_callback:1;
-	u64 indirect_target:1; /* if it is an indirect jump target */
-	u64 non_stack_access:1; /* instruction can access non-stack memory */
+	u32 calls_callback:1;
 	/* true if some jump or call instruction targets this instruction */
-	u64 jump_target:1;
+	u32 jump_target:1;
+	/* it can read or write the frame of a caller, in a call with a known callee */
+	u32 reads_outer:1;
+	u32 writes_outer:1;
+	/*
+	 * Per-instruction summary of stack slots in the current frame
+	 * that this instruction may write, may read, and that are live before it.
+	 */
+	DECLARE_BITMAP(may_write_mask, MAX_BPF_STACK_SLOTS);
+	DECLARE_BITMAP(may_read_mask, MAX_BPF_STACK_SLOTS);
+	DECLARE_BITMAP(live_stack_before, MAX_BPF_STACK_SLOTS);
+	u16 stack_ptrs; /* bitmask of regs that may hold a frame pointer here (arg_track) */
 
 	unsigned int orig_idx; /* original instruction index, initialized once */
+	u32 thresholds_epoch;	/* see bpf_collect_iv_thresholds() */
+	u8 iv_operand;		/* the operand of the jump that tests the iv, + 1 */
 	/* registers alive before this instruction. */
 	u16 live_regs_before;
 	/*
+	 * Registers that it reads and writes. The arguments of a static function and of callx
+	 * are not in @use_regs. The bits above r10 are not valid.
+	 */
+	u16 use_regs, def_regs;
+	u16 needs_ptr_regs;	/* see bpf_note_needs_ptr() */
+	/*
 	 * Bitmask of R0-R9 that hold known values at this instruction.
 	 * const_reg_mask: scalar constants that fit in 32 bits.
-	 * const_reg_wide_mask: scalar constants that don't, there is no val.
 	 * const_reg_map_mask: map pointers, val is map_index into used_maps[].
 	 * const_reg_subprog_mask: subprog pointers, val is subprog number.
 	 * const_reg_vals[i] holds the 32-bit value for register i.
 	 * Populated by compute_const_regs() pre-pass.
 	 */
 	u16 const_reg_mask;
-	u16 const_reg_wide_mask;
 	u16 const_reg_map_mask;
 	u16 const_reg_subprog_mask;
 	u32 const_reg_vals[10];
@@ -1020,6 +1072,8 @@ struct bpf_insn_aux_data {
 	s32 guard_to;
 	/* additional information about the loop if this instruction is a loop header */
 	struct bpf_loop *loop;
+	/* the call of a callback, or the first insn of a recursive function */
+	struct bpf_loop *callback_loop, *recursion_loop;
 };
 
 /*
@@ -1113,9 +1167,12 @@ struct bpf_subprog_info {
 	u32 exit_idx;
 	u32 callx_edge; /* 1 + the first of its env->callx_edges, 0 if none */
 	struct bpf_iarray *jt; /* jump table shared by all gotox of this subprogram */
+	u32 deepest_insn; /* the insn that set stack_depth */
+	u32 first_exit; /* see bpf_flow_exit() */
 	u16 stack_depth; /* max. stack depth used by this function */
 	u16 stack_extra;
 	u16 arena_stack_depth; /* size of the frame in the stack in arena */
+	u32 cycle; /* the first subprog of its cycle of the call graph, 0 if it is on none */
 	u32 insns_total;
 	u32 insns_self;
 	/* offsets in range [stack_depth .. fastcall_stack_off)
@@ -1194,21 +1251,39 @@ struct bpf_id_pair {
 };
 
 /*
- * A function that is verified on its own, see func_is_on_its_own(), has no ids of its caller.
- * It has names for the ids of what is held: BPF_INHERITED_ID + i is the id of refs[i] at the call.
- * - A name depends only on the place. Each id in the state at the entry is replaced with its name.
- *   The ids of the caller can be names that it got from its own caller: they are replaced too.
- * - A name stands for the same thing in all states of the function. It is equal only to itself:
- *   check_ids() and jid_note() do not rename it. So two calls share a state at the entry, and what
- *   comes out for it, only if the same places have the same names.
- * - bpf_flow_return() puts the ids of the call that waits back. All other ids get new values.
- * - What comes out has the ranges of all calls that share the state at the entry. So a name is good
- *   for what holds whatever the ranges are: the same object. Other ids have no name: such an
- *   argument keeps the frames of the caller, see arg_needs_caller().
- * - env->id_gen stays below BPF_MAX_ID. So no id is a name.
+ * At a join point each id is named after the xreg that has it, see bpf_renumber_ids().
+ * The low bits give the origin of the id:
+ *
+ *  bpf_new_id()       an insn made it. It is renumbered at the end of the basic block.
+ *  BPF_REF_ID()       it is held. The number comes from the index in refs[].
+ *  BPF_XREG_ID()      the number comes from the first xreg that has it.
+ *  BPF_RETURNED_ID()  a function on its own returned it. No xreg of the caller has it.
+ *
+ * A function on its own, see func_is_on_its_own(), and its waiting call have the same ids for
+ * what is held. An exit state has the ranges of all calls of the instance. So such id shows
+ * only what holds for all ranges: the same object. An argument with another id keeps the
+ * frames of the caller, see arg_needs_caller().
  */
-#define BPF_INHERITED_ID	0x20000000
-#define BPF_MAX_ID		(BPF_INHERITED_ID / 2)
+#define bpf_new_id(env)		(((env)->id_gen += 4) - 3)
+#define BPF_REF_ID(i)		(((i) + 1) << 2)
+#define BPF_XREG_ID(i)		((i) << 2 | 2)
+#define BPF_RETURNED_ID(id)	((id) | 1)
+
+/* @id is 0 or renumbered: BPF_REF_ID() or BPF_XREG_ID() */
+static inline bool bpf_id_is_xreg(u32 id)
+{
+	return id & 2;
+}
+
+/* pointers to the packet with id @old are those with id @cur moved by @delta */
+struct bpf_pkt_pair {
+	u32 old;
+	u32 cur;
+	u64 delta;
+	/* for a join */
+	u32 type;
+	u32 id;
+};
 
 struct bpf_idmap {
 	u32 cnt;
@@ -1216,7 +1291,6 @@ struct bpf_idmap {
 };
 
 struct bpf_liveness;
-struct scev;
 
 struct bpf_fd_array {
 	union {
@@ -1307,12 +1381,46 @@ struct bpf_verifier_env {
 	bool strict_alignment;		/* perform strict pointer alignment checks */
 	bool test_reg_invariants;	/* fail verification on register invariants violations */
 	bool uses_arena_sp;		/* the program has insns with BPF_REG_ARENA_SP */
+	bool replay;			/* the good pass, once more for the driver */
+	bool path_sensitive;		/* no joins, see run_path_sensitive() */
+	bool for_log;			/* the verdict is known, see do_check_all() */
+	bool fallthrough_first;		/* see find_failing_path() */
+	bool run_has_guess;		/* see run_path_sensitive() */
+	u32 failing_path_budget_shift;	/* see func_failing_path_budget() */
+	u32 failing_path_max_trips;	/* see failing_path_trip() */
+	u32 pass;			/* number of the pass, see do_check_all() */
+	struct bpf_precision *precision;
+	u64 cost, mem;			/* see bpf_check_limits() */
+	u64 max_cost, max_mem;
+	u64 hash_seed;			/* see bpf_hash_join_key() */
+	u64 failing_path_budget, failing_path_max_cost;	/* see find_failing_path() */
+	u64 pass_max_cost;		/* see bpf_undo_precision() */
+	bool aborted;			/* a thaw does not take it back */
+	bool no_mem;			/* a table cannot grow, see bpf_check_limits() */
+	/* What a pass writes. Each pass starts from the snapshot. */
+	struct_group_tagged(bpf_env_per_pass, per_pass,
+	int err;			/* the first error */
+	u32 err_insn;
+	bool pessimized;		/* see bpf_partition_for_pessimized() */
+	bool imprecise;			/* a state before the first error is imprecise */
+	bool over_limit;		/* see bpf_check_limits() */
+	bool too_deep;			/* see failing_path_trip() */
+	bool run_over_budget;		/* in one of its functions, see find_failing_path() */
 	bool restart;			/* see bpf_flow_next_is_no_bound() */
-	bool guards_late;		/* see bpf_flow_loop_gets_guards() */
-	u32 loop_entry_cnt;		/* see loop_stack_entry.entry_id, callback_entry_id */
-	u32 walk_cnt;			/* see loop_stack_entry.walk_id */
-	u32 *walk_insns;		/* the insns that were looked at in each of them */
+	bool guards_late;		/* see bpf_flow_needs_guard() */
+	bool calls_joined;		/* see flow_may_add_instance() */
+	bool extra_values;		/* a state can have constants that no run has */
+	bool new_linear_xreg;		/* see bpf_same_insns_unproven() */
+	bool seen_direct_write;
+	/* a register may point to the stack and is not PTR_TO_STACK, see bpf_reg_state::buf */
+	bool seen_stack_slice;
+	bool seen_exception;
+	bool sleepable_async_cb;
+	u32 id_gen;			/* used to generate unique reg IDs */
+	u32 max_stack_depth;		/* maximum combined stack depth */
 	u32 max_arena_stack_depth;	/* of all call chains */
+	u32 loop_entry_cnt;		/* see loop_stack_entry.entry_id */
+	);
 	struct bpf_verifier_state *cur_state; /* current verifier state */
 	struct bpf_map **used_maps;	/* array of map's used by eBPF program */
 	struct btf_mod_pair *used_btfs;	/* array of BTF's used by BPF program */
@@ -1324,10 +1432,8 @@ struct bpf_verifier_env {
 	u32 used_map_cnt;		/* number of used maps */
 	u32 used_btf_cnt;		/* number of used BTF objects */
 	u32 insn_array_map_cnt;		/* number of used maps of type BPF_MAP_TYPE_INSN_ARRAY */
-	u32 id_gen;			/* used to generate unique reg IDs */
 	u32 hidden_subprog_cnt;		/* number of hidden subprogs */
 	int exception_callback_subprog;
-	bool explore_alu_limits;
 	bool allow_ptr_leaks;
 	/* Allow access to uninitialized stack memory. Writes with fixed offset are
 	 * always allowed, so this refers to reads (with fixed or variable offset),
@@ -1337,13 +1443,11 @@ struct bpf_verifier_env {
 	bool bpf_capable;
 	bool bypass_spec_v1;
 	bool bypass_spec_v4;
-	bool seen_direct_write;
-	/* a register may point to the stack and is not PTR_TO_STACK, see bpf_reg_state::buf */
-	bool seen_stack_slice;
 	/* a global function is verified for BPF_FUNC_CTX_NO_RCU_LOCK */
 	bool no_rcu_read_lock;
-	bool seen_exception;
 	bool signature;
+	u8 bug:1;			/* ends the load, see bpf_note_bug() */
+	u8 log_level:7;			/* of the user */
 	u32 insn_aux_data_len;
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
 	struct bpf_patch_list patch_list;
@@ -1372,6 +1476,8 @@ struct bpf_verifier_env {
 	} *callx_edges;
 	struct bpf_index callx_index;
 	struct bpf_idmap idmap_scratch;
+	struct bpf_pkt_pair *pkt_pairs;	/* of the two states that are compared or joined */
+	u32 pkt_pair_cnt, pkt_pair_cap;
 	struct {
 		int *insn_state;
 		int *insn_stack;
@@ -1389,12 +1495,10 @@ struct bpf_verifier_env {
 	} cfg;
 	/* Per-callsite snapshot of the parent's tracked spill slots for cross-frame fills. */
 	struct spill_snapshot **callsite_at_stack;
-	u32 pass_cnt; /* number of times do_check() was called */
+	u32 check_cnt; /* number of times do_check() was called */
 	u32 subprog_cnt;
 	/* number of instructions analyzed by the verifier */
 	u32 insn_processed;
-	/* maximum combined stack depth */
-	u32 max_stack_depth;
 	/* stack budget of the program, see bpf_prog_stack_limit() */
 	u32 stack_limit;
 	/* total verification time */
@@ -1446,11 +1550,9 @@ struct bpf_verifier_env {
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
 	int *idoms;
-	/* per insn, while bpf_compute_leave_conds() runs */
-	struct bpf_leave_cond *leave_conds;
-	struct scev *scev;
+	struct bpf_equation_env *eq_env;
 	struct bpf_flow *flow;
-	struct bpf_join_state *join;
+	bool no_report;		/* an error does not end the path, see diag_write() */
 };
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
@@ -1509,22 +1611,18 @@ __printf(2, 3) void bpf_log(struct bpf_verifier_log *log,
 int bpf_vlog_init(struct bpf_verifier_log *log, u32 log_level,
 		  char __user *log_buf, u32 log_size);
 void bpf_vlog_reset(struct bpf_verifier_log *log, u64 new_pos);
-
-/* The end of the log, taken out of it by bpf_vlog_stash() */
-struct bpf_vlog_stash {
-	char *buf;
-	u64 len, lost_start, lost_end;
-};
-
-int bpf_vlog_stash(struct bpf_verifier_log *log, u64 pos, struct bpf_vlog_stash *stash);
-void bpf_vlog_unstash(struct bpf_verifier_log *log, struct bpf_vlog_stash *stash);
 int bpf_vlog_finalize(struct bpf_verifier_log *log, u32 *log_size_actual);
 
 __printf(3, 4) void verbose_linfo(struct bpf_verifier_env *env,
 				  u32 insn_off,
 				  const char *prefix_fmt, ...);
-void bpf_verbose_snum(struct bpf_verifier_env *env, s64 num);
-void bpf_verbose_snum32(struct bpf_verifier_env *env, s32 num);
+
+/* No later pass can hide a bug of the verifier. Its message goes into the log. */
+static inline void bpf_note_bug(struct bpf_verifier_env *env)
+{
+	env->bug = true;
+	env->log.level = env->log_level;
+}
 
 #define verifier_bug_if(cond, env, fmt, args...)						\
 	({											\
@@ -1536,6 +1634,7 @@ void bpf_verbose_snum32(struct bpf_verifier_env *env, s32 num);
 #define verifier_bug(env, fmt, args...)								\
 	({											\
 		BPF_WARN_ONCE(1, "verifier bug: " fmt "\n", ##args);				\
+		bpf_note_bug(env);								\
 		bpf_log(&env->log, "verifier bug: " fmt "\n", ##args);				\
 	})
 
@@ -1571,6 +1670,7 @@ static inline struct bpf_reg_state *cur_regs(struct bpf_verifier_env *env)
 	return cur_func(env)->regs;
 }
 
+#ifdef CONFIG_NET
 int bpf_prog_offload_verifier_prep(struct bpf_prog *prog);
 int bpf_prog_offload_verify_insn(struct bpf_verifier_env *env,
 				 int insn_idx, int prev_insn_idx);
@@ -1580,6 +1680,32 @@ bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
 			      struct bpf_insn *insn);
 void
 bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt);
+#else
+static inline int bpf_prog_offload_verifier_prep(struct bpf_prog *prog)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int bpf_prog_offload_verify_insn(struct bpf_verifier_env *env,
+					       int insn_idx, int prev_insn_idx)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int bpf_prog_offload_finalize(struct bpf_verifier_env *env)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
+						 struct bpf_insn *insn)
+{
+}
+
+static inline void bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
+{
+}
+#endif
 
 /* this lives here instead of in bpf.h because it needs to dereference tgt_prog */
 static inline u64 bpf_trampoline_compute_key(const struct bpf_prog *tgt_prog,
@@ -1618,63 +1744,148 @@ void bpf_free_kfunc_btf_tab(struct bpf_kfunc_btf_tab *tab);
 
 
 int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
-bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state *old,
-			struct bpf_verifier_state *cur);
+bool bpf_add_pkt_pair(struct bpf_verifier_env *env, const struct bpf_pkt_pair *pair);
+bool bpf_state_subsumes(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			const struct bpf_verifier_state *cur);
+bool bpf_scalar_subsumes(const struct bpf_reg_state *old, const struct bpf_reg_state *cur);
+bool bpf_same_type_and_object(struct bpf_verifier_env *env, const struct bpf_reg_state *a,
+			      const struct bpf_reg_state *b);
+bool bpf_same_join_key(const struct bpf_verifier_state *a, const struct bpf_verifier_state *b);
+u64 bpf_hash64(const void *p, size_t len, u64 hash);
+u64 bpf_hash_join_key(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
+int bpf_renumber_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 
 /* join.c */
 int bpf_states_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
-		    const struct bpf_verifier_state *a, const struct bpf_verifier_state *b,
+		    const struct bpf_verifier_state *src, struct bpf_loop *leftover_loop,
 		    bool widen);
-void bpf_join_free(struct bpf_verifier_env *env);
+
+/* precision.c, failing_path.c */
+enum bpf_join_point { BPF_JOIN_POINT, BPF_JOIN_POINT_HEADER, BPF_JOIN_POINT_CALLS };
+bool bpf_must_keep_apart(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			 struct bpf_verifier_state *new, enum bpf_join_point kind,
+			 const struct loop_stack_entry *entry);
+bool bpf_values_grew_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			     const struct bpf_verifier_state *new);
+u64 bpf_hash_live_types(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			u64 hash, u64 apart_cost);
+u64 bpf_hash_apart_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			 u64 hash, bool consts);
+u64 bpf_hash_args(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u64 hash);
+void bpf_range_of_data_dep(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			   u32 *first, u32 *last);
+bool bpf_call_needs_frames(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			   u16 args);
+bool bpf_xregs_are_partitioned(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			       u32 fr, const unsigned long *xregs);
+bool bpf_xreg_in_data_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			   u32 fr, u32 xregno);
+bool bpf_xreg_in_deps(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+		      u32 fr, u32 xregno);
+void bpf_note_reads_from_unproven(struct bpf_verifier_env *env, u32 idx);
+void bpf_note_unproven_insn(struct bpf_verifier_env *env,
+			    const struct bpf_verifier_state *st, u32 idx);
+bool bpf_insn_is_unproven(struct bpf_verifier_env *env);
+void bpf_note_fixups_differ(struct bpf_verifier_env *env);
+void bpf_find_unproven_after_pass(struct bpf_verifier_env *env);
+int bpf_partition_for_pessimized(struct bpf_verifier_env *env);
+void bpf_restore_precision(struct bpf_verifier_env *env);
+bool bpf_same_insns_unproven(struct bpf_verifier_env *env);
+int bpf_partition_more(struct bpf_verifier_env *env);
+int bpf_undo_precision(struct bpf_verifier_env *env);
+void bpf_precision_new_pass(struct bpf_verifier_env *env);
+u64 bpf_pass_max_cost(struct bpf_verifier_env *env);
+u64 bpf_precision_budget(struct bpf_verifier_env *env);
+u64 bpf_precision_first_budget(struct bpf_verifier_env *env);
+void bpf_note_needs_ptr(struct bpf_verifier_env *env, const struct bpf_reg_state *reg);
+bool bpf_insn_makes_ptr(struct bpf_verifier_env *env);
+bool bpf_failing_path_is_due(struct bpf_verifier_env *env);
+int bpf_failing_path_prepare(struct bpf_verifier_env *env, bool repeat);
+bool bpf_failing_path_may_end_at(struct bpf_verifier_env *env, u32 idx);
+u32 bpf_failing_path_hops(struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
+int bpf_failing_path_was_here(struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
+int bpf_jumps_see_same(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+		       const struct bpf_verifier_state *new, int iv_jump_idx,
+		       const unsigned long *iv_xregs);
+int bpf_precision_init(struct bpf_verifier_env *env);
+void bpf_precision_free(struct bpf_verifier_env *env);
+
+/*
+ * The two limits of the verifier, for the whole load. The unit of cost is one step of a scan,
+ * about a dozen insns of the CPU. Memory is the bytes of states and tables at a time.
+ */
+#define BPF_COST_SCAN	1	/* one step of a scan */
+#define BPF_COST_COPY	4	/* copy an xreg, or look at its type */
+#define BPF_COST_XREG	16	/* clean, compare or join an xreg */
+#define BPF_COST_INSN	128	/* check an insn */
+#define BPF_COST_STATE	512	/* make, order and free a state */
+#define BPF_MAX_COST	(1ULL << 33)
+#define BPF_MAX_MEM	(1ULL << 31)
+/* What the passes can add to the tables. A loop keeps a state at each join point. */
+#define BPF_PASS_MEM_BASE	SZ_256M
+#define BPF_PASS_MEM_PER_INSN	SZ_32K	/* a state with a full stack */
+/* The floors of the cost after the first error, and of the budget of a partition */
+#define BPF_PARTITION_BUDGET	(BPF_MAX_COST / 3)
+#define BPF_MIN_BUDGET	(BPF_MAX_COST >> 12)
+/* Without CAP_BPF programs are small, and their loads wait for each other */
+#define BPF_LIMITS_SHIFT_UNPRIV	5
 
 /* flow.c */
+int bpf_check_limits(struct bpf_verifier_env *env);
+
+static inline void bpf_add_cost(struct bpf_verifier_env *env, u64 cnt, u32 weight)
+{
+	env->cost += cnt * weight;
+}
+
+static inline int bpf_add_cost_and_check(struct bpf_verifier_env *env, u64 cnt, u32 weight)
+{
+	bpf_add_cost(env, cnt, weight);
+	return bpf_check_limits(env);
+}
+
 int bpf_flow_prepare(struct bpf_verifier_env *env);
 void bpf_flow_reset(struct bpf_verifier_env *env);
 void bpf_flow_free(struct bpf_verifier_env *env);
-bool bpf_flow_is_point(struct bpf_verifier_env *env, int insn_idx);
-struct bpf_verifier_state *bpf_flow_keep_state(struct bpf_verifier_env *env,
-					       const struct bpf_verifier_state *st);
+bool bpf_flow_trip_is_new(struct bpf_verifier_env *env, struct loop_stack_entry *entry);
+bool bpf_flow_is_bb_start(struct bpf_verifier_env *env, int insn_idx);
+int bpf_flow_save_header_state(struct bpf_verifier_env *env, struct loop_stack_entry *entry);
+void bpf_flow_put_header_state(struct loop_stack_entry *entry);
 int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
-		     int insn_idx, int prev_insn_idx);
-int bpf_flow_guard_edge(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
-			int insn_idx, int prev_insn_idx, enum bpf_guard_edge edge);
-int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx);
-void bpf_flow_print_way(struct bpf_verifier_env *env, u64 log_pos, int head, int i);
+		     int insn_idx, int prev_insn_idx, bool again);
+int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx, u64 *log_pos, u64 *diag_pos);
+int bpf_flow_needs_guard(struct bpf_verifier_env *env, struct bpf_loop *loop);
 int bpf_flow_call(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
 		  struct bpf_verifier_state *entry, int subprog, int call_idx);
 int bpf_flow_exit(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int exit_idx);
 void bpf_flow_next_is_no_bound(struct bpf_verifier_env *env, int insn_idx, int h);
 bool bpf_flow_loops_lost_bound(struct bpf_verifier_env *env);
-void bpf_flow_loop_gets_guards(struct bpf_verifier_env *env, int h);
-void bpf_flow_new_round(struct bpf_verifier_env *env);
+void bpf_flow_new_pass(struct bpf_verifier_env *env);
+void bpf_flow_drop_guards(struct bpf_verifier_env *env);
 int bpf_flow_place_guards(struct bpf_verifier_env *env);
-int bpf_flow_compute_kinds(struct bpf_verifier_env *env);
-u16 bpf_flow_flag_regs(struct bpf_verifier_env *env, int idx);
-bool bpf_flow_is_needed(struct bpf_verifier_env *env, int idx, u32 r);
 /* verifier.c, for flow.c */
-int bpf_flow_loop_leave(struct bpf_verifier_env *env, bool *enters);
-int bpf_flow_loop_enter(struct bpf_verifier_env *env, bool *backedge, bool *drop, bool *ends_walk);
+int bpf_flow_loop_enter(struct bpf_verifier_env *env, struct bpf_loop **backedge_loop,
+			bool *starts_leftover);
+int bpf_flow_start_leftover(struct bpf_verifier_env *env);
+int bpf_flow_edge_unproven(struct bpf_verifier_env *env, struct bpf_verifier_state *st, u32 idx,
+			   int err);
+#define BPF_EXIT_NEEDS_CALLER	1	/* verify the call in the frames of the caller */
 int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
 		    const struct bpf_verifier_state *exit, int call_idx);
 int bpf_insert_loop_guards(struct bpf_verifier_env *env);
-u16 bpf_call_const_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn);
-u16 bpf_call_checked_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn);
 bool bpf_insn_is_iter_next(struct bpf_verifier_env *env, struct bpf_insn *insn);
 bool bpf_insn_leaves_loop(struct bpf_verifier_env *env, int h, int n);
-int bpf_compute_leave_conds(struct bpf_verifier_env *env);
-bool bpf_edge_leaves_loop(struct bpf_verifier_env *env, int h, int n, int t);
-int bpf_find_latches(struct bpf_verifier_env *env, bool flags);
-bool bpf_jump_leaves_loop(struct bpf_verifier_env *env, int h, int n);
 int bpf_insert_recursion_checks(struct bpf_verifier_env *env);
 
-int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
+int bpf_copy_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_state *dst_state,
 			    const struct bpf_verifier_state *src);
-void bpf_free_verifier_state(struct bpf_verifier_state *state, bool free_self);
+void bpf_charge_state(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
+void bpf_free_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_state *state,
+			     bool free_self);
 void bpf_mark_reg_not_init(const struct bpf_verifier_env *env,
 			   struct bpf_reg_state *reg);
 void bpf_mark_reg_known_scalar(struct bpf_reg_state *reg, u64 imm);
 void bpf_mark_reg_unknown(struct bpf_reg_state *reg);
-int bpf_grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *state, int size);
 
 static inline int bpf_get_spi(s32 off)
 {
@@ -1715,7 +1926,7 @@ static inline struct bpf_func_state *bpf_func(struct bpf_verifier_env *env,
 }
 
 /* Return IP for a given frame in a call stack */
-static inline u32 bpf_frame_insn_idx(struct bpf_verifier_state *st, u32 frame)
+static inline u32 bpf_frame_insn_idx(const struct bpf_verifier_state *st, u32 frame)
 {
 	return frame == st->curframe
 	       ? st->insn_idx
@@ -1878,6 +2089,27 @@ static inline bool type_may_be_null(u32 type)
 	return type & PTR_MAYBE_NULL;
 }
 
+/* A number, or a pointer that stands for the offsets in its range */
+static inline bool bpf_reg_has_range(const struct bpf_reg_state *reg)
+{
+	switch (base_type(reg->type)) {
+	case SCALAR_VALUE:
+	case PTR_TO_MAP_KEY:
+	case PTR_TO_MAP_VALUE:
+	case PTR_TO_STACK:
+	case PTR_TO_PACKET:
+	case PTR_TO_PACKET_META:
+	case PTR_TO_MEM:
+	case PTR_TO_BUF:
+	case PTR_TO_TP_BUFFER:
+	case PTR_TO_BTF_ID:
+	case PTR_TO_INSN:
+		return !type_may_be_null(reg->type);
+	default:
+		return false;
+	}
+}
+
 static inline void mark_reg_scratched(struct bpf_verifier_env *env, u32 regno)
 {
 	env->scratched_regs |= 1U << regno;
@@ -1952,18 +2184,16 @@ struct bpf_iarray *bpf_insn_successors(struct bpf_verifier_env *env, u32 idx);
 
 /*
  * Where the program goes from may_goto and from the checks that the verifier adds:
- * - May_goto in front of a jump goes where the jump goes, with the registers and the stack
- *   as they are in front of the jump. bpf_insn_successors() has that edge.
+ * - May_goto before a jump goes where the jump goes, with the registers and the stack
+ *   as they are before the jump. bpf_insn_successors() has that edge.
  * - A subprog that is out of budget goes to bail_insn, an exit. No such edge.
- * - May_goto in front of the head of a loop goes to where the loops around it are left: from
+ * - May_goto before the header of a loop goes to where the loops around it are left: from
  *   @idx to what is returned here, -1 if there is none. No such edge either. The registers
- *   and the stack are what they are in front of @idx.
+ *   and the stack are what they are before @idx.
  *
  * The main pass looks at the states that go there. What is computed from the graph before
- * the main pass has to take these edges into account where the main pass believes it:
- * - Against the direction of the edges, liveness: a register that is live at the target is
- *   live at @idx. Stack that is dead at @idx stays dead: a read of it at the target is
- *   rejected.
+ * the main pass has to take these edges into account where the main pass relies on it:
+ * - Against the direction of the edges, liveness: what is live at the target is live at @idx.
  * - In the direction of the edges, bpf_compute_const_regs() and compute_subprog_args(): what
  *   holds on all edges of the graph to the target doesn't hold on this one.
  */
@@ -2002,7 +2232,6 @@ u32 btf_func_arg_align(const struct btf *btf, const struct btf_type *t);
 
 int bpf_find_subprog(struct bpf_verifier_env *env, int off);
 bool bpf_is_throw_kfunc(struct bpf_insn *insn);
-bool bpf_is_dynptr_slice_rdwr_kfunc(struct bpf_insn *insn);
 int bpf_compute_const_regs(struct bpf_verifier_env *env);
 int bpf_prune_dead_branches(struct bpf_verifier_env *env);
 int bpf_check_cfg(struct bpf_verifier_env *env);
@@ -2074,6 +2303,7 @@ struct bpf_call_arg_meta {
 
 	/* Only set by subprog */
 	bool subprog_may_change_pkt;
+	bool subprog_is_static;
 
 	/* Only set by kfunc */
 	bool r0_rdonly;
@@ -2133,7 +2363,7 @@ static inline bool bpf_is_kfunc_sleepable(struct bpf_call_arg_meta *meta)
 	return meta->kfunc_flags & KF_SLEEPABLE;
 }
 bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta);
-bool bpf_is_cast_kfunc(const struct bpf_call_arg_meta *meta);
+bool bpf_grow_array(struct bpf_verifier_env *env, void *array, u32 *cap, u32 cnt, size_t size);
 struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem);
 int bpf_copy_insn_array_uniq(struct bpf_map *map, u32 start, u32 end, u32 *off);
 bool bpf_insn_is_cond_jump(u8 code);
@@ -2163,31 +2393,22 @@ bpf_global_subprog_stack_access_bytes(struct bpf_verifier_env *env,
 int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env);
 bool bpf_same_memory_origin(const struct bpf_reg_state *reg_a,
 			    const struct bpf_reg_state *reg_b);
+void bpf_blur_far_offset(struct bpf_verifier_env *env, struct bpf_reg_state *reg);
 void bpf_trim_pkt_range(struct bpf_reg_state *reg, s64 smax);
 void scalar_set_unknown(struct scalar *s);
 void scalar_set_const(struct scalar *s, u64 imm);
+void scalar_step_scale(struct scalar *dst, s64 amount);
 void scalar_add(struct scalar *dst, const struct scalar *a, const struct scalar *b);
 void scalar_alu(struct scalar *dst, const struct scalar *src, const struct bpf_insn *insn);
-void scalar_zext32(struct scalar *s);
-void scalar_ext(struct scalar *s, u32 bits, bool sign);
 bool scalar_intersect(struct scalar *dst, const struct scalar *src, u32 bits);
 void scalar_union(struct scalar *acc, const struct scalar *src);
-int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-		      const struct scalar *range);
-bool bpf_reg_union_compatible(const struct bpf_reg_state *a, const struct bpf_reg_state *b);
-void scalar_widen(struct scalar *s, const struct scalar *old,
-		  const struct bpf_loop_rungs *rungs, int linear);
-int bpf_reg_union(struct bpf_verifier_env *env, struct bpf_reg_state *acc,
-		  const struct bpf_reg_state *src);
+void scalar_widen(struct scalar *s, const struct scalar *old, s64 min_threshold, s64 max_threshold);
 
 int bpf_stack_liveness_init(struct bpf_verifier_env *env);
 void bpf_stack_liveness_free(struct bpf_verifier_env *env);
 int bpf_live_stack_query_init(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
-const unsigned long *bpf_may_write_mask(struct bpf_verifier_env *env, u32 insn_idx);
-bool bpf_needs_fixed_stack_off(struct bpf_verifier_env *env, int insn_idx);
 bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 spi);
 bool bpf_stack_slot_filled(struct bpf_verifier_env *env, u32 frameno, u32 spi);
-bool bpf_half_slot_live_before(struct bpf_verifier_env *env, u32 insn_idx, u32 half_spi);
 int bpf_compute_live_registers(struct bpf_verifier_env *env);
 
 #define BPF_MAP_KEY_POISON	(1ULL << 63)
@@ -2322,33 +2543,114 @@ u8 bpf_rev_opcode(u8 opcode);
 int bpf_compute_idoms(struct bpf_verifier_env *env);
 int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
+int bpf_loop_spine_end(struct bpf_verifier_env *env, const struct bpf_loop *loop);
+int bpf_flow_insn_after(struct bpf_verifier_env *env, int idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
+u32 bpf_loop_thresholds_below(const struct bpf_loop *loop, s64 k);
+int bpf_loop_collect_thresholds(struct bpf_verifier_env *env, struct bpf_loop *loop);
+int bpf_insn_callee(struct bpf_verifier_env *env, int idx);
 
-int bpf_init_scev(struct bpf_verifier_env *env);
-void bpf_free_scev(struct bpf_verifier_env *env);
-int bpf_compute_scev(struct bpf_verifier_env *env);
-int bpf_scev_jump_counts(struct bpf_verifier_env *env, int header, int n, bool taken_leaves);
-/* What is known about a scalar or about the offset of a pointer. */
-struct scev_value {
-	struct scalar;
-	int ptr_reg;	/* SCEV register identifying the pointer origin, or -1. */
-	u8 bits;	/* The value is known modulo 2^bits. 0: nothing is known. */
-	bool refined;	/* It depends on a register that the jump refined. */
-};
-bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, struct bpf_func_state *st, int insn_idx,
-			      int next_idx, u16 refined_regs, u32 *pos, u32 *linked_regno,
-			      u32 *fill_off, struct scev_value *val);
-bool bpf_scev_mem_addr(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *base_regno,
-		       s64 *off);
-bool bpf_is_widenable_reg_type(const struct bpf_reg_state *reg);
-bool bpf_scev_in_slice_slots(struct bpf_verifier_env *env, int off, u32 size, bool fixed_off);
+/* equation.c */
+int bpf_equation_env_init(struct bpf_verifier_env *env);
+void bpf_equation_env_free(struct bpf_verifier_env *env);
+int bpf_equations_copy(struct bpf_verifier_env *env, struct bpf_equations *dst,
+		       const struct bpf_equations *src);
+void bpf_equations_free(struct bpf_equations *eqs);
+void bpf_equations_clean(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
+s64 bpf_equations_max_sum(struct bpf_verifier_env *env, int regno1, int regno2);
+void bpf_equations_before_insn(struct bpf_verifier_env *env);
+int bpf_equations_after_insn(struct bpf_verifier_env *env);
+void bpf_equations_forget_xreg(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			       u64 xreg);
+void bpf_equations_spill(struct bpf_verifier_env *env, struct bpf_func_state *frame, int spi,
+			 int regno);
+void bpf_equations_fill(struct bpf_verifier_env *env, struct bpf_func_state *frame, int spi,
+			int size);
+void bpf_equations_refine_all(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
+void bpf_equations_refine_by_reg(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+				 u32 regno);
+void bpf_equations_jump(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int idx,
+			bool taken);
+u16 bpf_args_with_equation(const struct bpf_verifier_state *st);
+void bpf_equations_fork(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			const struct scalar *part);
+void bpf_equations_next_trip(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			     u32 depth);
+bool bpf_equations_subsume(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			   const struct bpf_verifier_state *cur);
+void bpf_equations_print(struct bpf_verifier_env *env, const struct bpf_verifier_state *st);
+void bpf_equations_pre_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
+			    const struct bpf_verifier_state *src, struct bpf_loop *leftover_loop,
+			    bool widen);
+void bpf_equations_post_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
+			     const struct bpf_verifier_state *src);
+u32 bpf_equations_bytes(const struct bpf_equations *eqs);
+/* equation_join.c */
+bool bpf_equations_join_forgets(struct bpf_verifier_env *env, const struct bpf_verifier_state *a,
+				const struct bpf_verifier_state *b, u32 fr,
+				const unsigned long *data_deps, const unsigned long *xregs,
+				u32 bits);
+u32 bpf_equations_hash(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, u32 fr,
+		       const unsigned long *xregs, u32 bits);
+void bpf_collect_iv_thresholds(struct bpf_verifier_env *env);
+int bpf_guess_first_trips(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			  struct bpf_loop *loop);
+bool bpf_steps_are_constant(struct bpf_verifier_env *env, const struct loop_stack_entry *entry,
+			    const unsigned long *iv_xregs, bool infinite, u64 factor);
+void bpf_fast_forward_xregs(struct bpf_verifier_env *env, const struct bpf_verifier_state *old,
+			    struct bpf_verifier_state *cur, u64 factor, unsigned long *iv_xregs);
 
-int bpf_compute_loop_iters(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
-			   struct bpf_loop_iters *iters);
-int bpf_widen_scev_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
-			struct bpf_verifier_state *loop_entry, struct bpf_loop_iters *iters,
-			bool back);
-int bpf_clamp_scev_regs(struct bpf_verifier_env *env, struct bpf_func_state *st, u32 insn_idx,
-			const struct loop_stack_entry *entry, bool behind);
+void scalar_bounds_sync(struct scalar *s);
+bool scalar_subsumes(const struct scalar *old, const struct scalar *cur);
+bool scalars_fit_in_bits(const struct scalar *a, const struct scalar *b, u32 bits);
+void scalars_refine_cond_op(struct scalar *a, struct scalar *b, u8 opcode, bool is_jmp32);
+
+static inline u8 bpf_signed_opcode(u8 op)
+{
+	if (op == BPF_JLT || op == BPF_JLE)
+		return op + BPF_JSLT - BPF_JLT;
+	return op == BPF_JGT || op == BPF_JGE ? op + BPF_JSGT - BPF_JGT : op;
+}
+
+/* True if pkt_bytes_left() is valid */
+static inline bool pkt_has_bytes_left(const struct bpf_reg_state *reg)
+{
+	return reg->range >= 0 && reg_smin(reg) >= -MAX_PACKET_OFF &&
+	       reg_smax(reg) <= MAX_PACKET_OFF;
+}
+
+/* How many bytes are checked from the start of the packet, wherever the pointer is */
+static inline int pkt_min_len(const struct bpf_reg_state *reg)
+{
+	return reg->r64.size ? reg->pkt_min_len : max(reg->range, reg->pkt_min_len);
+}
+
+/* How many bytes are checked after a pointer to the packet */
+static inline s64 pkt_bytes_left(const struct bpf_reg_state *reg)
+{
+	return reg->range - reg_smax(reg);
+}
+
+/* The loop that the frame is in, or NULL */
+static inline struct loop_stack_entry *bpf_top_loop(const struct bpf_func_state *frame)
+{
+	return frame->loop_stack_cnt ? &frame->loop_stack[frame->loop_stack_cnt - 1] : NULL;
+}
+
+static inline u32 bpf_xreg_cnt(const struct bpf_verifier_state *st)
+{
+	u32 fr, nr = 0;
+
+	for (fr = 0; fr <= st->curframe; fr++)
+		nr += MAX_BPF_REG + bpf_stack_nr_slots(st->frame[fr]);
+	return nr;
+}
+
+static inline bool bpf_slot_is_held(const struct bpf_stack_state *slot)
+{
+	u8 t = slot->slot_type[BPF_REG_SIZE - 1];
+
+	return t == STACK_DYNPTR || t == STACK_ITER || t == STACK_IRQ_FLAG;
+}
 
 #endif /* _LINUX_BPF_VERIFIER_H */

@@ -759,4 +759,50 @@ __naked void variable_offset_stack_access_ok(void)
 	: __clobber_all);
 }
 
+/* The next two need bpf_jit_bypass_spec_v1() */
+SEC("socket")
+__description("variable-offset stack write of a pointer")
+__arch_loongarch
+__success __caps_unpriv(CAP_BPF) __failure_unpriv
+__msg_unpriv("R1 leaks addr into stack")
+__naked void stack_write_ptr_var_off(void)
+{
+	asm volatile ("					\
+	r0 = 0;						\
+	*(u64*)(r10 - 8) = r0;				\
+	*(u64*)(r10 - 16) = r0;				\
+	lock *(u64*)(r10 - 8) += r0;			\
+	lock *(u64*)(r10 - 16) += r0;			\
+	r2 = *(u32*)(r1 + 0);				\
+	r2 &= 8;					\
+	r2 -= 16;					\
+	r2 += r10;					\
+	*(u64*)(r2 + 0) = r1;				\
+	r0 = *(u64*)(r10 - 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+
+SEC("socket")
+__description("variable-offset stack pointer at the header of a loop")
+__arch_loongarch
+__success __caps_unpriv(CAP_BPF) __success_unpriv
+__naked void stack_ptr_var_off_in_loop(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	*(u64*)(r10 - 8) = r1;				\
+	r2 = r10;					\
+	r2 += -8;					\
+1:	r0 = *(u8*)(r2 + 0);				\
+	r1 += 1;					\
+	r2 = r1;					\
+	r2 &= 7;					\
+	r2 -= 8;					\
+	r2 += r10;					\
+	if r1 < 0x10000000 goto 1b;			\
+	exit;						\
+"	::: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";

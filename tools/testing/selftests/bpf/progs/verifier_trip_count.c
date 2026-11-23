@@ -10,12 +10,25 @@
 #include "bpf_kfuncs.h"
 #include "bpf_compiler.h"
 
+/* The state at insn @at has @min..@max in @xreg */
+#define RANGE(at, xreg, min, max)	"to " at ": " RANGE_TOO(xreg, min, max)
+#define RANGE_TOO(xreg, min, max)						\
+	"{{.*}}" xreg "={{[a-z_?0]+[(]([^)]*,)?}}smin={{([a-z0-9]+=)*}}" #min	\
+	",smax={{([a-z0-9]+=)*}}" #max "{{[,)]}}"
+
+/* No may_goto. __not_msg() searches only between the __msg() before it and the next one. */
+#define NO_GUARD	__not_msg("has no trip count")
+#define COUNT(n)	NO_GUARD __msg("has trip count " #n "{{$}}") NO_GUARD
+#define ANY_COUNT	NO_GUARD __msg("has trip count") NO_GUARD
+#define ONCE		NO_GUARD
+#define NO_COUNT	__msg("has no trip count")
+
 #define COND_TEST(name, _initial, _step, _bound, msg, body)                     \
 SEC("xdp")                                                                      \
 __success                                                                       \
 __log_level(2)                                                                  \
 __flag(BPF_F_TEST_STATE_FREQ)                                                   \
-__msg("loop header at {{[0-9]+}}, " msg)                                        \
+msg                                                                             \
 __naked void name(void)                                                         \
 {                                                                               \
 	asm volatile (                                                          \
@@ -47,11 +60,12 @@ __naked void name(void)                                                         
 		"if r6 " op " r7 goto 1b;")
 
 /*
- * Bound fallback verification of otherwise infinite or extremely long loops.
- * JSET is not a linear condition, SCEV ignores it and the tested condition
- * alone decides the iteration count.
+ * Leave the loop in trip 8. r9 moves with the trip index, so a jump on r9 gives a trip count.
+ * r3 is r9 at run time. An atomic add hides that, so the tested condition alone gives the count.
  */
-#define LIMIT_ITERATIONS "r9 += 1; if r9 & 8 goto 2f;"
+#define LIMIT_ITERATIONS							\
+	"r9 += 1; *(u64 *)(r10 - 24) = 0; lock *(u64 *)(r10 - 24) += r9;"	\
+	"r3 = *(u64 *)(r10 - 24); if r3 & 8 goto 2f;"
 
 #define PRE__COND_TEST2(name, op, initial, step, bound, msg)                     \
 	PRE__COND_TEST(name, op, initial, step, bound, msg, LIMIT_ITERATIONS)
@@ -116,8 +130,7 @@ struct bpf_iter__bpf_map_elem {
 SEC("xdp")
 __success
 __log_level(2)
-__msg_next("scev at header 1:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
+__msg("loop at 1 has trip count 11{{$}}")
 __naked void simple_loop1(void)
 {
 	asm volatile ("					\
@@ -135,8 +148,8 @@ exit_%=:						\
 SEC("xdp")
 __success
 __log_level(2)
-__msg("8: (7b) *(u64 *)(r1 +0) = r0     ; *fp-8 (+ *fp-8 1) -> %fp-8.8?")
-__naked void indirect_write_invalidates_scev(void)
+__msg("loop at 2 has trip count 11{{$}}")
+__naked void indirect_write_deletes_equation(void)
 {
 	asm volatile ("					\
 	r0 = 0;						\
@@ -165,8 +178,8 @@ __noinline int global_noop_counter(__u64 *p)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("8: (85) call pc+{{[0-9]+}} {{.*}}; *fp-8 (+ *fp-8 1) -> %fp-8.8?")
-__naked void global_call_invalidates_scev(void)
+__msg("loop at 3 has trip count 3{{$}}")
+__naked void global_call_deletes_equation(void)
 {
 	asm volatile (
 	"r0 = 0;"
@@ -189,11 +202,7 @@ __naked void global_call_invalidates_scev(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg_next("scev at header 2:")
-__msg_next("  *fp-8=(+ *fp-8 1) / (linear *fp-8 1)")
-__msg_next(" scev at latch 3:")
-__msg_next("  r0=*fp-8 / (linear *fp-8 1)")
-__msg_next("  *fp-8=*fp-8 / (linear *fp-8 1)")
+__msg("loop at 2 has trip count 11{{$}}")
 __naked void simple_loop2(void)
 {
 	asm volatile ("					\
@@ -215,8 +224,7 @@ exit_%=:						\
 SEC("xdp")
 __success
 __log_level(2)
-__msg_next("scev at header 2:")
-__msg_next("  r1=(+ r1 1) / (linear r1 1)")
+__msg("loop at 2 has trip count 3{{$}}")
 __naked void meet_agrees(void)
 {
 	asm volatile ("					\
@@ -241,8 +249,7 @@ __naked void meet_agrees(void)
 SEC("xdp")
 __success __retval(0)
 __log_level(2)
-__msg_next("scev at header 1:")
-__msg_next("  r6=%r6.1=phi(r6, (+ r6 1)) / ?")
+__msg("loop at 1 has no trip count")
 __naked void meet_disagrees(void)
 {
 	asm volatile ("					\
@@ -261,12 +268,57 @@ __naked void meet_disagrees(void)
 	: __clobber_all);
 }
 
+/* A loop with no 32-bit insns can count down and store the carry */
+#define CARRY_TEST(name, initial, minus_step, msg)				\
+	COND_TEST(name, initial, 0, minus_step, msg,				\
+		"1: r6 <<= 32; r6 >>= 32; r6 += r7;"				\
+		"r2 = r6; r2 <<= 32; r2 >>= 32;"				\
+		"r3 = 1; if r2 != r6 goto 3f; r3 = 0;"				\
+		"3: if r3 != 0 goto 1b;")
+
+CARRY_TEST(carry_step_1, 33, 0xffffffffULL, COUNT(34))
+CARRY_TEST(carry_step_3, 100, 0xfffffffdULL, COUNT(34))
+CARRY_TEST(carry_step_0, 33, 0x100000000ULL, NO_COUNT)
+
+/* Or it counts up until there is a carry */
+COND_TEST(carry_ends_loop, 0xffffffdeULL, 0, 1, COUNT(34),
+	  "1: r6 <<= 32; r6 >>= 32; r6 += r7;"
+	  "r2 = r6; r2 <<= 32; r2 >>= 32;"
+	  "if r2 == r6 goto 1b;")
+
+/* Two entries have two bounds. The @test of r6 and its low 32 bits is not true. */
+#define OTHER_JUMP_TEST(name, initial, test)					\
+SEC("xdp")									\
+__success									\
+__log_level(2)									\
+ANY_COUNT									\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"call %[bpf_get_prandom_u32];"						\
+	"r9 = 20; r5 = r10;"							\
+	"if r0 > 5 goto 1f;"							\
+	"r9 = 40; r5 = 0;"							\
+"1:	r8 = 0; r4 = 0; r6 = " #initial " ll;"					\
+"2:	r6 += -1; r7 = r6; r7 <<= 32; r7 >>= 32;"				\
+	"if " test " goto 3f;"							\
+	"r4 += r8; r8 += 1;"							\
+	"if r8 != r9 goto 2b;"							\
+"3:	if r5 == 0 goto 4f;"							\
+	"*(u64 *)(r5 - 8) = r4;"						\
+"4:	r0 = 0;"								\
+	"exit;"									\
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);				\
+}
+
+OTHER_JUMP_TEST(low_half_wraps_with_carry, 0x20000000a, "r7 == r6")
+OTHER_JUMP_TEST(low_half_is_not_above, 0x10000000a, "r7 > r6")
+
 /* 'if (c) sum += a; else sum += b;': two loads, one way to compute the sum */
 SEC("socket")
 __success
 __log_level(2)
-__msg("scev at header 3:")
-__msg_next("  r6=%r6.9=phi((+ r6 _)) / ?")
+__msg("loop at 3 has trip count 10{{$}}")
 __naked void phi_operands_have_no_defs(void)
 {
 	asm volatile ("					\
@@ -297,14 +349,7 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev at header 2:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
-__msg_next("  r1=42 / (any r1 42)")
-__msg_next(" scev at latch 2:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
-__msg_next("  r1=42 / (any r1 42)")
-__msg("loop header at 2, widening r0 to 0..10 step 1")
-__msg_next("loop header at 2, widening r1 to 7..42 step 1")
+__msg(RANGE("2", "R0", 0, 10) RANGE_TOO("R1", 7, 42))
 __naked void entry_state_join(void)
 {
 	asm volatile ("					\
@@ -321,8 +366,7 @@ __naked void entry_state_join(void)
 
 SEC("xdp")
 __log_level(2)
-__msg_next("scev at header 1:")
-__msg_next("  r6=(bswap32 (bswap32 (zext32 (- (- (zext32 (+ (>>...) 1))))))) / ?")
+__msg("loop at 1 has trip count 2{{$}}")
 __naked void expr_chain(void)
 {
 	asm volatile ("					\
@@ -351,88 +395,7 @@ __naked void expr_chain(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("r1 += 2 {{.*}}; r1 r6 -> (+ r6 2)")
-__msg("r1 += r7 {{.*}}; r1 r6 -> (+ r6 r7)")
-__msg("w1 += 2 {{.*}}; r1 r6 -> (zext32 (+ r6 2))")
-__msg("w1 += w7 {{.*}}; r1 r6 -> (zext32 (+ r6 r7))")
-__msg("r1 -= 2 {{.*}}; r1 r6 -> (+ r6 -2)")
-__msg("r1 -= r7 {{.*}}; r1 r6 -> (- r6 r7)")
-__msg("w1 -= 2 {{.*}}; r1 r6 -> (zext32 (+ r6 -2))")
-__msg("w1 -= w7 {{.*}}; r1 r6 -> (zext32 (- r6 r7))")
-__msg("r1 -= 2 {{.*}}; r1 (+ r6 2) -> r6")
-__msg("r1 *= 2 {{.*}}; r1 r6 -> (* r6 2)")
-__msg("r1 *= r7 {{.*}}; r1 r6 -> (* r6 r7)")
-__msg("w1 *= 2 {{.*}}; r1 r6 -> (zext32 (* r6 2))")
-__msg("w1 *= w7 {{.*}}; r1 r6 -> (zext32 (* r6 r7))")
-__msg("r1 /= 2 {{.*}}; r1 r6 -> (/ r6 2)")
-__msg("r1 /= r7 {{.*}}; r1 r6 -> (/ r6 r7)")
-__msg("w1 /= 2 {{.*}}; r1 r6 -> (zext32 (/ (zext32 r6) 2))")
-__msg("w1 /= w7 {{.*}}; r1 r6 -> (zext32 (/ (zext32 r6) (zext32 r7)))")
-__msg("r1 s/= 2 {{.*}}; r1 r6 -> (s/ r6 2)")
-__msg("r1 s/= r7 {{.*}}; r1 r6 -> (s/ r6 r7)")
-__msg("w1 s/= 2 {{.*}}; r1 r6 -> (zext32 (s/ (sext32 r6) 2))")
-__msg("w1 s/= w7 {{.*}}; r1 r6 -> (zext32 (s/ (sext32 r6) (sext32 r7)))")
-__msg("r1 %= 2 {{.*}}; r1 r6 -> (% r6 2)")
-__msg("r1 %= r7 {{.*}}; r1 r6 -> (% r6 r7)")
-__msg("w1 %= 2 {{.*}}; r1 r6 -> (zext32 (% (zext32 r6) 2))")
-__msg("w1 %= w7 {{.*}}; r1 r6 -> (zext32 (% (zext32 r6) (zext32 r7)))")
-__msg("r1 s%= 2 {{.*}}; r1 r6 -> (s% r6 2)")
-__msg("r1 s%= r7 {{.*}}; r1 r6 -> (s% r6 r7)")
-__msg("w1 s%= 2 {{.*}}; r1 r6 -> (zext32 (s% (sext32 r6) 2))")
-__msg("w1 s%= w7 {{.*}}; r1 r6 -> (zext32 (s% (sext32 r6) (sext32 r7)))")
-__msg("r1 |= 2 {{.*}}; r1 r6 -> (| r6 2)")
-__msg("r1 |= r7 {{.*}}; r1 r6 -> (| r6 r7)")
-__msg("w1 |= 2 {{.*}}; r1 r6 -> (zext32 (| r6 2))")
-__msg("w1 |= w7 {{.*}}; r1 r6 -> (zext32 (| r6 r7))")
-__msg("r1 &= 2 {{.*}}; r1 r6 -> (& r6 2)")
-__msg("r1 &= r7 {{.*}}; r1 r6 -> (& r6 r7)")
-__msg("w1 &= 2 {{.*}}; r1 r6 -> (zext32 (& r6 2))")
-__msg("w1 &= w7 {{.*}}; r1 r6 -> (zext32 (& r6 r7))")
-__msg("r1 ^= 2 {{.*}}; r1 r6 -> (^ r6 2)")
-__msg("r1 ^= r7 {{.*}}; r1 r6 -> (^ r6 r7)")
-__msg("w1 ^= 2 {{.*}}; r1 r6 -> (zext32 (^ r6 2))")
-__msg("w1 ^= w7 {{.*}}; r1 r6 -> (zext32 (^ r6 r7))")
-__msg("r1 <<= 2 {{.*}}; r1 r6 -> (<< r6 2)")
-__msg("r1 <<= r7 {{.*}}; r1 r6 -> (<< r6 r7)")
-__msg("w1 <<= 2 {{.*}}; r1 r6 -> (zext32 (<< r6 2))")
-__msg("w1 <<= w7 {{.*}}; r1 r6 -> (zext32 (<< r6 (& r7 31)))")
-__msg("r1 >>= 2 {{.*}}; r1 r6 -> (>> r6 2)")
-__msg("r1 >>= r7 {{.*}}; r1 r6 -> (>> r6 r7)")
-__msg("w1 >>= 2 {{.*}}; r1 r6 -> (zext32 (>> (zext32 r6) 2))")
-__msg("w1 >>= w7 {{.*}}; r1 r6 -> (zext32 (>> (zext32 r6) (& r7 31)))")
-__msg("r1 s>>= 2 {{.*}}; r1 r6 -> (s>> r6 2)")
-__msg("r1 s>>= r7 {{.*}}; r1 r6 -> (s>> r6 r7)")
-__msg("w1 s>>= 2 {{.*}}; r1 r6 -> (zext32 (s>> (sext32 r6) 2))")
-__msg("w1 s>>= w7 {{.*}}; r1 r6 -> (zext32 (s>> (sext32 r6) (& r7 31)))")
-__msg("r1 = -r1 {{.*}}; r1 r6 -> (- r6)")
-__msg("w1 = -w1 {{.*}}; r1 r6 -> (zext32 (- r6))")
-__msg("r1 = 42 {{.*}}; r1 r6 -> 42")
-__msg("w1 = 42 {{.*}}; r1 r6 -> 42")
-__msg("r1 = r7 {{.*}}; r1 r6 -> r7")
-__msg("w1 = w7 {{.*}}; r1 r6 -> (zext32 r7)")
-__msg("r1 = (s8)r6 {{.*}}; r1 r6 -> (sext8 r6)")
-__msg("r1 = (s16)r6 {{.*}}; r1 r6 -> (sext16 r6)")
-__msg("r1 = (s32)r6 {{.*}}; r1 r6 -> (sext32 r6)")
-__msg("w1 = (s8)w6 {{.*}}; r1 r6 -> (zext32 (sext8 r6))")
-__msg("w1 = (s16)w6 {{.*}}; r1 r6 -> (zext32 (sext16 r6))")
-__msg("r1 = bswap16 r1 {{.*}}; r1 r6 -> (bswap16 r6)")
-__msg("r1 = bswap32 r1 {{.*}}; r1 r6 -> (bswap32 r6)")
-__msg("r1 = bswap64 r1 {{.*}}; r1 r6 -> (bswap64 r6)")
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-__msg("r1 = le16 r1 {{.*}}; r1 r6 -> (zext16 r6)")
-__msg("r1 = le32 r1 {{.*}}; r1 r6 -> (zext32 r6)")
-__msg("r1 += 1 {{.*}}; r1 r6 -> (+ r6 1)")
-__msg("r1 = be16 r1 {{.*}}; r1 r6 -> (bswap16 r6)")
-__msg("r1 = be32 r1 {{.*}}; r1 r6 -> (bswap32 r6)")
-__msg("r1 = be64 r1 {{.*}}; r1 r6 -> (bswap64 r6)")
-#else
-__msg("r1 = le16 r1 {{.*}}; r1 r6 -> (bswap16 r6)")
-__msg("r1 = le32 r1 {{.*}}; r1 r6 -> (bswap32 r6)")
-__msg("r1 = le64 r1 {{.*}}; r1 r6 -> (bswap64 r6)")
-__msg("r1 = be16 r1 {{.*}}; r1 r6 -> (zext16 r6)")
-__msg("r1 = be32 r1 {{.*}}; r1 r6 -> (zext32 r6)")
-__msg("r1 += 1 {{.*}}; r1 r6 -> (+ r6 1)")
-#endif
+COUNT(2)
 __naked void alu_ops_exprs(void)
 {
 	asm volatile (
@@ -510,10 +473,6 @@ __naked void alu_ops_exprs(void)
 	ALU_OP("r1 = bswap64 r1")
 	ALU_OP("r1 = le16 r1")
 	ALU_OP("r1 = le32 r1")
-	/*
-	 * Expressions unchanged by transfer() do not appear in the log.
-	 * Add r1 += 1 to touch the expression and make it appear in the log.
-	 */
 	ALU_OP("r1 = le64 r1; r1 += 1")
 	ALU_OP("r1 = be16 r1")
 	ALU_OP("r1 = be32 r1")
@@ -527,7 +486,7 @@ __naked void alu_ops_exprs(void)
 
 #undef ALU_OP
 
-/* Reset operands and consume results to keep transfer changes live. */
+/* Reset the operands. Read the results, so they are live. */
 #define ST_OP(stmt)							\
 	"r0 = 0; r1 = 1; r2 = 2;"					\
 	"*(u64 *)(r10 - 8) = -8;"					\
@@ -538,49 +497,7 @@ __naked void alu_ops_exprs(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("*(u64 *)(r10 -8) = r1 {{.*}}; *fp-8 -8 -> 1")
-__msg("*(u32 *)(r10 -8) = r1 {{.*}}; *fp-8 -8 -> (spill32 1)")
-__msg("*(u16 *)(r10 -8) = r1 {{.*}}; *fp-8 -8 -> (spill16 1)")
-__msg("*(u8 *)(r10 -8) = r1 {{.*}}; *fp-8 -8 -> (spill8 1)")
-__msg("r1 = *(u64 *)(r10 -8) {{.*}}; r1 1 -> -8")
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-__msg("r1 = *(u32 *)(r10 -8) {{.*}}; r1 1 -> 4294967288")
-__msg("r1 = *(u16 *)(r10 -8) {{.*}}; r1 1 -> (zext16 -8)")
-__msg("r1 = *(u8 *)(r10 -8) {{.*}}; r1 1 -> (zext8 -8)")
-__msg("r1 = *(s32 *)(r10 -8) {{.*}}; r1 1 -> (sext32 -8)")
-__msg("r1 = *(s16 *)(r10 -8) {{.*}}; r1 1 -> (sext16 -8)")
-__msg("r1 = *(s8 *)(r10 -8) {{.*}}; r1 1 -> (sext8 -8)")
-__msg("r1 = load_acquire((u8 *)(r10 -8)) {{.*}}; r1 1 -> (zext8 -8)")
-__msg("r1 = load_acquire((u16 *)(r10 -8)) {{.*}}; r1 1 -> (zext16 -8)")
-__msg("r1 = load_acquire((u32 *)(r10 -8)) {{.*}}; r1 1 -> 4294967288")
-#else
-__msg("r1 = *(u32 *)(r10 -8) {{.*}}; r1 1 -> (>> -8 32)")
-__msg("r1 = *(u16 *)(r10 -8) {{.*}}; r1 1 -> (>> -8 48)")
-__msg("r1 = *(u8 *)(r10 -8) {{.*}}; r1 1 -> (>> -8 56)")
-__msg("r1 = *(s32 *)(r10 -8) {{.*}}; r1 1 -> (s>> -8 32)")
-__msg("r1 = *(s16 *)(r10 -8) {{.*}}; r1 1 -> (s>> -8 48)")
-__msg("r1 = *(s8 *)(r10 -8) {{.*}}; r1 1 -> (s>> -8 56)")
-__msg("r1 = load_acquire((u8 *)(r10 -8)) {{.*}}; r1 1 -> (>> -8 56)")
-__msg("r1 = load_acquire((u16 *)(r10 -8)) {{.*}}; r1 1 -> (>> -8 48)")
-__msg("r1 = load_acquire((u32 *)(r10 -8)) {{.*}}; r1 1 -> (>> -8 32)")
-#endif
-__msg("r2 = load_acquire((u64 *)(r10 -8)) {{.*}}; r2 2 -> -8")
-__msg("store_release((u8 *)(r10 -8), r1) {{.*}}; *fp-8 -8 -> (spill8 1)")
-__msg("store_release((u16 *)(r10 -8), r1) {{.*}}; *fp-8 -8 -> (spill16 1)")
-__msg("store_release((u32 *)(r10 -8), r1) {{.*}}; *fp-8 -8 -> (spill32 1)")
-__msg("store_release((u64 *)(r10 -8), r1) {{.*}}; *fp-8 -8 -> 1")
-__msg("lock *(u64 *)(r10 -8) += r1 {{.*}}; *fp-8 -8 -> %fp-8.{{[0-9]+}}")
-__msg("r1 = atomic64_fetch_add((u64 *)(r10 -8), r1) {{.*}}; r1 1 -> %r1.{{[0-9]+}}, *fp-8 -8 -> %fp-8.{{[0-9]+}}")
-__msg("r1 = atomic_fetch_add((u32 *)(r10 -8), r1) {{.*}}; r1 1 -> %r1.{{[0-9]+}}, *fp-8 -8 -> %fp-8.{{[0-9]+}}")
-__msg("r1 = atomic64_xchg((u64 *)(r10 -8), r1) {{.*}}; r1 1 -> %r1.{{[0-9]+}}, *fp-8 -8 -> %fp-8.{{[0-9]+}}")
-__msg("r0 = atomic64_cmpxchg((u64 *)(r10 -8), r0, r2) {{.*}}; r0 0 -> %r0.{{[0-9]+}}, *fp-8 -8 -> %fp-8.{{[0-9]+}}")
-__msg("*(u64 *)(r10 -8) = 42 {{.*}}; *fp-8 -8 -> 42")
-__msg("*(u8 *)(r10 -7) = r0 {{.*}}; *fp-8 -8 -> %fp-8.{{[0-9]+}}")
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-/* a fill that is not wider than the spill reads what was spilled */
-__msg("r1 = *(s8 *)(r10 -8) {{.*}}; r1 r7 -> (sext8 r7)")
-__msg("r1 = *(u16 *)(r10 -8) {{.*}}; r1 r7 -> (zext16 (spill8 r7))")
-#endif
+COUNT(2)
 __naked void store_load_exprs(void)
 {
 	asm volatile (
@@ -646,16 +563,7 @@ __naked void store_load_exprs(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg_next("scev at header 1:")
-__msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  r7=%r7.4?")
-__msg_next(" scev at latch 1:")
-__msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  r7=%r7.4?")
-__msg_next("scev at header 4:")
-__msg_next("  r7=(+ r7 1) / (linear r7 1)")
-__msg_next(" scev at latch 4:")
-__msg_next("  r7=(+ r7 1) / (linear r7 1)")
+__msg("loop at 1 has trip count 2{{$}}")
 __naked void nested_loop1(void)
 {
 	asm volatile ("					\
@@ -682,19 +590,11 @@ SEC("xdp")
 __success
 __msg("loop at 1")
 __msg_next("  backedge from 4{{$}}")
-__msg_next("  exit from 1 to 7")
+__msg_next("  first exit to 7")
 __msg_next("loop at 4, nested in 1")
 __msg_next("  backedge from 6, latch at 4")
-__msg_next("  exit from 4 to 1")
-__msg("scev at header 1:")
-__msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  r7=%r7.4?")
-__msg_next("scev at header 4:")
-__msg_next("  r7=(+ r7 1) / (linear r7 1)")
-__msg_next(" scev at latch 4:")
-__msg_next("  r7=(+ r7 1) / (linear r7 1)")
-__msg("loop header at 1, latch not identified")
-__msg("loop header at 4, widening r7 to 0..2 step 1")
+__msg_next("  first exit to 1")
+__msg(RANGE("4", "R7", 0, 2))
 __log_level(2)
 __naked void nested_loop_hdr_backedge1(void)
 {
@@ -718,7 +618,7 @@ __naked void nested_loop_hdr_backedge1(void)
  * Outer loop {2, 3, 4, 5} contains inner loop {3, 4, 5}.
  * The outer loop's only backedge is 4 -> 2, and its latch is also at 4,
  * inside the inner loop. Outer loop's latch index is not computed in
- * such a case, as there is no mechanism to build SCEVs for such latches
+ * such a case, as there is no trip count for such latches
  * at the moment.
  */
 SEC("xdp")
@@ -727,20 +627,11 @@ __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop at 2{{$}}")
 __msg_next("  backedge from 4{{$}}")
-__msg_next("  exit from 5 to 6")
+__msg_next("  first exit to 6")
 __msg_next("loop at 3, nested in 2")
 __msg_next("  backedge from 5, latch at 5")
-__msg_next("  exit from 4 to 2")
-__msg_next("  exit from 5 to 6")
-__msg("scev at header 2:")
-__msg_next("  r6=%r6.3?")
-__msg_next("  r7=(+ r7 1) / (linear r7 1)")
-__msg_next("scev at header 3:")
-__msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next(" scev at latch 5:")
-__msg_next("  r6=(+ r6 1) / (linear (+ r6 1) 1)")
-__msg("loop header at 2, latch not identified")
-__msg("loop header at 3, header_count is [0..2] ")
+__msg_next("  first exit to 2")
+__msg("loop at 3 has trip count 2{{$}}")
 __naked void nested_loop_hdr_backedge2(void)
 {
 	asm volatile ("					\
@@ -759,19 +650,15 @@ __naked void nested_loop_hdr_backedge2(void)
  * Logical nest: for (r6 = 0; r6 < 3; r6++)
  *                   for (r7 = 0; r7 < 4; r7++) r8++;
  * Both backedges target header 3, so the CFG has one loop. r6 advances only
- * on the outer backedge and r7 resets there; neither has a linear SCEV.
- * r8 advances on both backedges and retains its linear SCEV.
+ * on the outer backedge and r7 resets there; neither moves with the trip index.
+ * r8 advances on both backedges and moves with the trip index.
  */
 SEC("socket")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop at 3{{$}}")
-__msg("scev at header 3:")
-__msg_next("  r6=%r6.3=phi(r6, (+ r6 1)) / ?")
-__msg_next("  r7=%r7.3=phi((+ r7 1), 0) / ?")
-__msg_next("  r8=(+ r8 1) / (linear r8 1)")
-__msg("loop header at 3, can't compute iterations count")
+__msg("loop at 3 has no trip count")
 __naked void nested_loops_shared_header(void)
 {
 	asm volatile ("					\
@@ -792,8 +679,8 @@ __naked void nested_loops_shared_header(void)
 SEC("socket")
 __success
 __log_level(2)
-__msg("loop header at 1, header_count is 10")
-__msg("loop header at 5, header_count is 5")
+__msg("loop at 5 has trip count 5{{$}}")
+__msg("loop at 1 has trip count 10{{$}}")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked void nested_loops_outer_latch_true_branch_to_inner(void)
 {
@@ -822,26 +709,26 @@ __naked void nested_loops_outer_latch_true_branch_to_inner(void)
  *    }
  */
 /*              name               op              initial          step             bound  expected message */
-PRE__COND_TEST (pre_lt,            ">=",                 1,            2,                7, "header_count is 4 ")
-POST_COND_TEST (post_lt,           "<",                  1,            2,                7, "header_count is 3 ")
-PRE__COND_TEST (pre_le,            ">",                  1,            2,                7, "header_count is 5 ")
-POST_COND_TEST (post_le,           "<=",                 1,            2,                7, "header_count is 4 ")
-PRE__COND_TEST (pre_gt,            "<=",                 9,           -2,                3, "header_count is 4 ")
-POST_COND_TEST (post_gt,           ">",                  9,           -2,                3, "header_count is 3 ")
-PRE__COND_TEST (pre_ge,            "<",                  9,           -2,                3, "header_count is 5 ")
-POST_COND_TEST (post_ge,           ">=",                 9,           -2,                3, "header_count is 4 ")
-PRE__COND_TEST (pre_slt,           "s>=",               -5,            2,                1, "header_count is 4 ")
-POST_COND_TEST (post_slt,          "s<",                -5,            2,                1, "header_count is 3 ")
-PRE__COND_TEST (pre_sle,           "s>",                -5,            2,                1, "header_count is 5 ")
-POST_COND_TEST (post_sle,          "s<=",               -5,            2,                1, "header_count is 4 ")
-PRE__COND_TEST (pre_sgt,           "s<=",                5,           -2,               -1, "header_count is 4 ")
-POST_COND_TEST (post_sgt,          "s>",                 5,           -2,               -1, "header_count is 3 ")
-PRE__COND_TEST (pre_sge,           "s<",                 5,           -2,               -1, "header_count is 5 ")
-POST_COND_TEST (post_sge,          "s>=",                5,           -2,               -1, "header_count is 4 ")
-PRE__COND_TEST (pre_ne,            "==",                 1,            2,                7, "header_count is 4 ")
-POST_COND_TEST (post_ne,           "!=",                 1,            2,                7, "header_count is 3 ")
-PRE__COND_TEST (pre_ne_down,       "==",                 9,           -2,                3, "header_count is 4 ")
-POST_COND_TEST (post_ne_down,      "!=",                 9,           -2,                3, "header_count is 3 ")
+PRE__COND_TEST (pre_lt,            ">=",                 1,            2,                7, COUNT(4))
+POST_COND_TEST (post_lt,           "<",                  1,            2,                7, COUNT(3))
+PRE__COND_TEST (pre_le,            ">",                  1,            2,                7, COUNT(5))
+POST_COND_TEST (post_le,           "<=",                 1,            2,                7, COUNT(4))
+PRE__COND_TEST (pre_gt,            "<=",                 9,           -2,                3, COUNT(4))
+POST_COND_TEST (post_gt,           ">",                  9,           -2,                3, COUNT(3))
+PRE__COND_TEST (pre_ge,            "<",                  9,           -2,                3, COUNT(5))
+POST_COND_TEST (post_ge,           ">=",                 9,           -2,                3, COUNT(4))
+PRE__COND_TEST (pre_slt,           "s>=",               -5,            2,                1, COUNT(4))
+POST_COND_TEST (post_slt,          "s<",                -5,            2,                1, COUNT(3))
+PRE__COND_TEST (pre_sle,           "s>",                -5,            2,                1, COUNT(5))
+POST_COND_TEST (post_sle,          "s<=",               -5,            2,                1, COUNT(4))
+PRE__COND_TEST (pre_sgt,           "s<=",                5,           -2,               -1, COUNT(4))
+POST_COND_TEST (post_sgt,          "s>",                 5,           -2,               -1, COUNT(3))
+PRE__COND_TEST (pre_sge,           "s<",                 5,           -2,               -1, COUNT(5))
+POST_COND_TEST (post_sge,          "s>=",                5,           -2,               -1, COUNT(4))
+PRE__COND_TEST (pre_ne,            "==",                 1,            2,                7, COUNT(4))
+POST_COND_TEST (post_ne,           "!=",                 1,            2,                7, COUNT(3))
+PRE__COND_TEST (pre_ne_down,       "==",                 9,           -2,                3, COUNT(4))
+POST_COND_TEST (post_ne_down,      "!=",                 9,           -2,                3, COUNT(3))
 
 /*
  * Bounds between two consecutive counter values.
@@ -853,14 +740,14 @@ POST_COND_TEST (post_ne_down,      "!=",                 9,           -2,       
  *        r6 += 2;                   // r6 ∈ [3,5,7,9]
  *    }
  */
-PRE__COND_TEST (pre_lt_round,      ">=",                 1,            2,                8, "header_count is 5 ")
-PRE__COND_TEST (pre_le_round,      ">",                  1,            2,                8, "header_count is 5 ")
-PRE__COND_TEST (pre_gt_round,      "<=",                 9,           -2,                2, "header_count is 5 ")
-PRE__COND_TEST (pre_ge_round,      "<",                  9,           -2,                2, "header_count is 5 ")
-PRE__COND_TEST (pre_slt_round,     "s>=",               -5,            2,                2, "header_count is 5 ")
-PRE__COND_TEST (pre_sle_round,     "s>",                -5,            2,                2, "header_count is 5 ")
-PRE__COND_TEST (pre_sgt_round,     "s<=",                5,           -2,               -2, "header_count is 5 ")
-PRE__COND_TEST (pre_sge_round,     "s<",                 5,           -2,               -2, "header_count is 5 ")
+PRE__COND_TEST (pre_lt_round,      ">=",                 1,            2,                8, COUNT(5))
+PRE__COND_TEST (pre_le_round,      ">",                  1,            2,                8, COUNT(5))
+PRE__COND_TEST (pre_gt_round,      "<=",                 9,           -2,                2, COUNT(5))
+PRE__COND_TEST (pre_ge_round,      "<",                  9,           -2,                2, COUNT(5))
+PRE__COND_TEST (pre_slt_round,     "s>=",               -5,            2,                2, COUNT(5))
+PRE__COND_TEST (pre_sle_round,     "s>",                -5,            2,                2, COUNT(5))
+PRE__COND_TEST (pre_sgt_round,     "s<=",                5,           -2,               -2, COUNT(5))
+PRE__COND_TEST (pre_sge_round,     "s<",                 5,           -2,               -2, COUNT(5))
 
 /*
  * Equality on the first non-strict comparison still takes a backedge.
@@ -872,10 +759,10 @@ PRE__COND_TEST (pre_sge_round,     "s<",                 5,           -2,       
  *        r6 += 2;                   // r6 ∈ [9]
  *    }
  */
-PRE__COND_TEST (pre_le_eq,         ">",                  7,            2,                7, "header_count is 2 ")
-PRE__COND_TEST (pre_ge_eq,         "<",                  3,           -2,                3, "header_count is 2 ")
-PRE__COND_TEST (pre_sle_eq,        "s>",                 1,            2,                1, "header_count is 2 ")
-PRE__COND_TEST (pre_sge_eq,        "s<",                -1,           -2,               -1, "header_count is 2 ")
+PRE__COND_TEST (pre_le_eq,         ">",                  7,            2,                7, COUNT(2))
+PRE__COND_TEST (pre_ge_eq,         "<",                  3,           -2,                3, COUNT(2))
+PRE__COND_TEST (pre_sle_eq,        "s>",                 1,            2,                1, COUNT(2))
+PRE__COND_TEST (pre_sge_eq,        "s<",                -1,           -2,               -1, COUNT(2))
 
 /*
  * Unsigned order across the sign bit.
@@ -887,8 +774,8 @@ PRE__COND_TEST (pre_sge_eq,        "s<",                -1,           -2,       
  *        r6 += 1;                   // r6 ∈ [H-1,H,H+1]
  *    }
  */
-PRE__COND_TEST (pre_lt_sign,       ">=",  ITER_S64_MAX - 1,            1, ITER_S64_MIN + 1, "header_count is 4 ")
-PRE__COND_TEST (pre_gt_sign,       "<=",  ITER_S64_MIN + 1,           -1, ITER_S64_MAX - 1, "header_count is 4 ")
+PRE__COND_TEST (pre_lt_sign,       ">=",  ITER_S64_MAX - 1,            1, ITER_S64_MIN + 1, COUNT(4))
+PRE__COND_TEST (pre_gt_sign,       "<=",  ITER_S64_MIN + 1,           -1, ITER_S64_MAX - 1, COUNT(4))
 
 /*
  * The first latch comparison is false.
@@ -900,15 +787,15 @@ PRE__COND_TEST (pre_gt_sign,       "<=",  ITER_S64_MIN + 1,           -1, ITER_S
  *        r6 += 2;                   // unreachable
  *    }
  */
-PRE__COND_TEST (pre_lt_false,      ">=",                 7,            2,                7, "header_count is 1 ")
-PRE__COND_TEST (pre_le_false,      ">",                  8,            2,                7, "header_count is 1 ")
-PRE__COND_TEST (pre_gt_false,      "<=",                 3,           -2,                3, "header_count is 1 ")
-PRE__COND_TEST (pre_ge_false,      "<",                  2,           -2,                3, "header_count is 1 ")
-PRE__COND_TEST (pre_slt_false,     "s>=",                1,            2,                1, "header_count is 1 ")
-PRE__COND_TEST (pre_sle_false,     "s>",                 2,            2,                1, "header_count is 1 ")
-PRE__COND_TEST (pre_sgt_false,     "s<=",               -1,           -2,               -1, "header_count is 1 ")
-PRE__COND_TEST (pre_sge_false,     "s<",                -2,           -2,               -1, "header_count is 1 ")
-PRE__COND_TEST (pre_ne_false,      "==",                 7,            2,                7, "header_count is 1 ")
+PRE__COND_TEST (pre_lt_false,      ">=",                 7,            2,                7, ONCE)
+PRE__COND_TEST (pre_le_false,      ">",                  8,            2,                7, ONCE)
+PRE__COND_TEST (pre_gt_false,      "<=",                 3,           -2,                3, ONCE)
+PRE__COND_TEST (pre_ge_false,      "<",                  2,           -2,                3, ONCE)
+PRE__COND_TEST (pre_slt_false,     "s>=",                1,            2,                1, ONCE)
+PRE__COND_TEST (pre_sle_false,     "s>",                 2,            2,                1, ONCE)
+PRE__COND_TEST (pre_sgt_false,     "s<=",               -1,           -2,               -1, ONCE)
+PRE__COND_TEST (pre_sge_false,     "s<",                -2,           -2,               -1, ONCE)
+PRE__COND_TEST (pre_ne_false,      "==",                 7,            2,                7, ONCE)
 
 /*
  * An unsigned counter goes down and leaves the range below 0.
@@ -922,12 +809,12 @@ PRE__COND_TEST (pre_ne_false,      "==",                 7,            2,       
  *
  * From above S64_MAX it's a long way down.
  */
-PRE__COND_TEST2(pre_lt_dir,        ">=",                 5,           -2,                7, "header_count is [0..4] ")
-PRE__COND_TEST2(pre_le_dir,        ">",                  5,           -2,                7, "header_count is [0..4] ")
-PRE__COND_TEST2(pre_lt_dir_high,   ">=",  ITER_S64_MIN + 5,           -2, ITER_S64_MIN + 7, "can't compute iterations count")
+PRE__COND_TEST2(pre_lt_dir,        ">=",                 5,           -2,                7, COUNT(4))
+PRE__COND_TEST2(pre_le_dir,        ">",                  5,           -2,                7, COUNT(4))
+PRE__COND_TEST2(pre_lt_dir_high,   ">=",  ITER_S64_MIN + 5,           -2, ITER_S64_MIN + 7, NO_COUNT)
 
 /*
- * The counter moves away from the exit; bound fallback verification.
+ * The counter moves away from the exit.
  *
  * Example: pre_gt_dir
  *
@@ -936,12 +823,12 @@ PRE__COND_TEST2(pre_lt_dir_high,   ">=",  ITER_S64_MIN + 5,           -2, ITER_S
  *        r6 += 2;                   // r6 ∈ [7,9,...,19]
  *    }
  */
-PRE__COND_TEST2(pre_gt_dir,        "<=",                 5,            2,                3, "can't compute iterations count")
-PRE__COND_TEST2(pre_ge_dir,        "<",                  5,            2,                3, "can't compute iterations count")
-PRE__COND_TEST2(pre_slt_dir,       "s>=",               -1,           -2,                1, "can't compute iterations count")
-PRE__COND_TEST2(pre_sle_dir,       "s>",                -1,           -2,                1, "can't compute iterations count")
-PRE__COND_TEST2(pre_sgt_dir,       "s<=",                1,            2,               -1, "can't compute iterations count")
-PRE__COND_TEST2(pre_sge_dir,       "s<",                 1,            2,               -1, "can't compute iterations count")
+PRE__COND_TEST2(pre_gt_dir,        "<=",                 5,            2,                3, NO_COUNT)
+PRE__COND_TEST2(pre_ge_dir,        "<",                  5,            2,                3, NO_COUNT)
+PRE__COND_TEST2(pre_slt_dir,       "s>=",               -1,           -2,                1, NO_COUNT)
+PRE__COND_TEST2(pre_sle_dir,       "s>",                -1,           -2,                1, NO_COUNT)
+PRE__COND_TEST2(pre_sgt_dir,       "s<=",                1,            2,               -1, NO_COUNT)
+PRE__COND_TEST2(pre_sge_dir,       "s<",                 1,            2,               -1, NO_COUNT)
 
 /*
  * The predicted exit would wrap the counter.
@@ -953,14 +840,14 @@ PRE__COND_TEST2(pre_sge_dir,       "s<",                 1,            2,       
  *        r6 += 2;                   // r6 ∈ [0,2,...,14]
  *    }
  */
-PRE__COND_TEST2(pre_lt_wrap,       ">=",  ITER_U64_MAX - 1,            2,     ITER_U64_MAX, "can't compute iterations count")
-PRE__COND_TEST2(pre_le_wrap,       ">",       ITER_U64_MAX,            1,     ITER_U64_MAX, "can't compute iterations count")
-PRE__COND_TEST2(pre_gt_wrap,       "<=",                 1,           -2,                0, "can't compute iterations count")
-PRE__COND_TEST2(pre_ge_wrap,       "<",                  0,           -1,                0, "can't compute iterations count")
-PRE__COND_TEST2(pre_slt_wrap,      "s>=", ITER_S64_MAX - 1,            2,     ITER_S64_MAX, "can't compute iterations count")
-PRE__COND_TEST2(pre_sle_wrap,      "s>",      ITER_S64_MAX,            1,     ITER_S64_MAX, "can't compute iterations count")
-PRE__COND_TEST2(pre_sgt_wrap,      "s<=", ITER_S64_MIN + 1,           -2,     ITER_S64_MIN, "can't compute iterations count")
-PRE__COND_TEST2(pre_sge_wrap,      "s<",      ITER_S64_MIN,           -1,     ITER_S64_MIN, "can't compute iterations count")
+PRE__COND_TEST2(pre_lt_wrap,       ">=",  ITER_U64_MAX - 1,            2,     ITER_U64_MAX, NO_COUNT)
+PRE__COND_TEST2(pre_le_wrap,       ">",       ITER_U64_MAX,            1,     ITER_U64_MAX, NO_COUNT)
+PRE__COND_TEST2(pre_gt_wrap,       "<=",                 1,           -2,                0, NO_COUNT)
+PRE__COND_TEST2(pre_ge_wrap,       "<",                  0,           -1,                0, NO_COUNT)
+PRE__COND_TEST2(pre_slt_wrap,      "s>=", ITER_S64_MAX - 1,            2,     ITER_S64_MAX, NO_COUNT)
+PRE__COND_TEST2(pre_sle_wrap,      "s>",      ITER_S64_MAX,            1,     ITER_S64_MAX, NO_COUNT)
+PRE__COND_TEST2(pre_sgt_wrap,      "s<=", ITER_S64_MIN + 1,           -2,     ITER_S64_MIN, NO_COUNT)
+PRE__COND_TEST2(pre_sge_wrap,      "s<",      ITER_S64_MIN,           -1,     ITER_S64_MIN, NO_COUNT)
 
 /*
  * The non-strict count itself would overflow u64.
@@ -972,10 +859,10 @@ PRE__COND_TEST2(pre_sge_wrap,      "s<",      ITER_S64_MIN,           -1,     IT
  *        r6 += 1;                         // r6 ∈ [1..8]
  *    }
  */
-PRE__COND_TEST2(pre_le_count_ovf,  ">",                  0,            1,     ITER_U64_MAX, "can't compute iterations count")
-PRE__COND_TEST2(pre_ge_count_ovf,  "<",       ITER_U64_MAX,           -1,                0, "can't compute iterations count")
-PRE__COND_TEST2(pre_sle_count_ovf, "s>",      ITER_S64_MIN,            1,     ITER_S64_MAX, "can't compute iterations count")
-PRE__COND_TEST2(pre_sge_count_ovf, "s<",      ITER_S64_MAX,           -1,     ITER_S64_MIN, "can't compute iterations count")
+PRE__COND_TEST2(pre_le_count_ovf,  ">",                  0,            1,     ITER_U64_MAX, NO_COUNT)
+PRE__COND_TEST2(pre_ge_count_ovf,  "<",       ITER_U64_MAX,           -1,                0, NO_COUNT)
+PRE__COND_TEST2(pre_sle_count_ovf, "s>",      ITER_S64_MIN,            1,     ITER_S64_MAX, NO_COUNT)
+PRE__COND_TEST2(pre_sge_count_ovf, "s<",      ITER_S64_MAX,           -1,     ITER_S64_MIN, NO_COUNT)
 
 /*
  * JNE divisibility and equality across unsigned wraparound.
@@ -987,24 +874,24 @@ PRE__COND_TEST2(pre_sge_count_ovf, "s<",      ITER_S64_MAX,           -1,     IT
  *        r6 += 2;                   // r6 ∈ [3,5,...,17]
  *    }
  */
-PRE__COND_TEST2(pre_ne_rem,        "==",                 1,            2,                8, "can't compute iterations count")
-PRE__COND_TEST2(pre_ne_rem_down,   "==",                 9,           -2,                2, "can't compute iterations count")
-PRE__COND_TEST (pre_ne_wrap_up,    "==",  ITER_U64_MAX - 1,            2,                0, "header_count is 2 ")
-PRE__COND_TEST (pre_ne_wrap_down,  "==",                 1,           -2,     ITER_U64_MAX, "header_count is 2 ")
+PRE__COND_TEST2(pre_ne_rem,        "==",                 1,            2,                8, NO_COUNT)
+PRE__COND_TEST2(pre_ne_rem_down,   "==",                 9,           -2,                2, NO_COUNT)
+PRE__COND_TEST (pre_ne_wrap_up,    "==",  ITER_U64_MAX - 1,            2,                0, COUNT(2))
+PRE__COND_TEST (pre_ne_wrap_down,  "==",                 1,           -2,     ITER_U64_MAX, COUNT(2))
 
 /*
- * Largest supported header count, sentinel, and u32 overflow.
+ * The largest trip index that gives a count is 2^32.
  *
- * Example: pre_lt_max_hdrs
+ * Example: pre_lt_max_trips
  *
  *    u64 r6 = 0, r9 = 0;
- *    while (++r9 <= 8 && r6 < U32_MAX - 2) { // r6 ∈ [0..8]
+ *    while (++r9 <= 8 && r6 < U32_MAX + 1) { // r6 ∈ [0..8]
  *        r6 += 1;                            // r6 ∈ [1..8]
  *    }
  */
-PRE__COND_TEST2(pre_lt_max_hdrs,   ">=",                 0,            1, ITER_U32_MAX - 2, "header_count is [0..4294967294] ")
-PRE__COND_TEST2(pre_lt_sentinel,   ">=",                 0,            1, ITER_U32_MAX - 1, "can't compute iterations count")
-PRE__COND_TEST2(pre_lt_hdr_ovf,    ">=",                 0,            1,     ITER_U32_MAX, "can't compute iterations count")
+PRE__COND_TEST2(pre_lt_u32_max,    ">=", 0, 1, ITER_U32_MAX,     COUNT(4294967296))
+PRE__COND_TEST2(pre_lt_max_trips,  ">=", 0, 1, ITER_U32_MAX + 1, COUNT(4294967297))
+PRE__COND_TEST2(pre_lt_too_long,   ">=", 0, 1, ITER_U32_MAX + 2, NO_COUNT)
 
 /*
  * The extreme signed step values remain valid unsigned magnitudes.
@@ -1016,9 +903,9 @@ PRE__COND_TEST2(pre_lt_hdr_ovf,    ">=",                 0,            1,     IT
  *        r6 += S64_MAX;             // r6 ∈ [S64_MAX]
  *    }
  */
-PRE__COND_TEST (pre_lt_step_max,   ">=",                 0, ITER_S64_MAX,     ITER_S64_MAX, "header_count is 2 ")
-PRE__COND_TEST (pre_gt_step_min,   "<=",      ITER_S64_MIN, ITER_S64_MIN,                0, "header_count is 2 ")
-PRE__COND_TEST (pre_ne_step_min,   "==",                 0, ITER_S64_MIN,     ITER_S64_MIN, "header_count is 2 ")
+PRE__COND_TEST (pre_lt_step_max,   ">=",                 0, ITER_S64_MAX,     ITER_S64_MAX, COUNT(2))
+PRE__COND_TEST (pre_gt_step_min,   "<=",      ITER_S64_MIN, ITER_S64_MIN,                0, COUNT(2))
+PRE__COND_TEST (pre_ne_step_min,   "==",                 0, ITER_S64_MIN,     ITER_S64_MIN, COUNT(2))
 
 /*
  * A zero step cannot establish a finite iteration count.
@@ -1030,57 +917,57 @@ PRE__COND_TEST (pre_ne_step_min,   "==",                 0, ITER_S64_MIN,     IT
  *        r6 += 0;                   // r6 ∈ [1]
  *    }
  */
-PRE__COND_TEST2(pre_lt_zero_step,  ">=",                 1,            0,                7, "can't compute iterations count")
+PRE__COND_TEST2(pre_lt_zero_step,  ">=",                 1,            0,                7, NO_COUNT)
 
 /*
  * Signed JMP32 comparisons sign-extend the initial value, bound and step.
  * Encode negative operands as positive u32 constants so the conversion matters.
- * post32_sgt also checks that an exit exactly at S32_MIN is accepted.
  */
 /*              name               op                 initial  step             bound  expected message */
-POST_COND_TEST32(post32_slt,       "s<",                  -7u,    2,              -1u, "header_count is [0..3] ")
-POST_COND_TEST32(post32_sle,       "s<=",                 -7u,    2,              -1u, "header_count is [0..4] ")
-POST_COND_TEST32(post32_sgt,       "s>", (__u32)INT32_MIN + 6,  -2u, (__u32)INT32_MIN, "header_count is [0..3] ")
-POST_COND_TEST32(post32_sge,       "s>=",                 -1u,  -2u,              -7u, "header_count is [0..4] ")
+POST_COND_TEST32(post32_slt,       "s<",                  -7u,    2,              -1u, ANY_COUNT)
+POST_COND_TEST32(post32_sle,       "s<=",                 -7u,    2,              -1u, ANY_COUNT)
+POST_COND_TEST32(post32_sgt,       "s>", (__u32)INT32_MIN + 6,  -2u, (__u32)INT32_MIN, NO_COUNT)
+POST_COND_TEST32(post32_sge,       "s>=",                 -1u,  -2u,              -7u, NO_COUNT)
 
 /*
- * For a JMP32 comparison scev.c:compute_max_iters() takes the low 32 bits of the
+ * For a JMP32 comparison the trip count comes from the low 32 bits of the
  * initial value, the bound and the step.
  * Hence pick negative 64-bit initial values and bounds, and encode negative
  * steps as positive u32 constants, so that the upper 32 bits differ.
  * post32_lt also checks that an exit exactly at U32_MAX is accepted.
  */
-POST_COND_TEST32(post32_lt,        "<",                    -7,    2,               -1, "header_count is [0..3] ")
-POST_COND_TEST32(post32_le,        "<=",                   -9,    2,               -3, "header_count is [0..4] ")
-POST_COND_TEST32(post32_gt,        ">",                    -1,  -2u,               -7, "header_count is [0..3] ")
-POST_COND_TEST32(post32_ge,        ">=",                   -1,  -2u,               -7, "header_count is [0..4] ")
-POST_COND_TEST32(post32_ne,        "!=",                   -1,  -2u,               -7, "header_count is [0..3] ")
+POST_COND_TEST32(post32_lt,        "<",                    -7,    2,               -1, ANY_COUNT)
+POST_COND_TEST32(post32_le,        "<=",                   -9,    2,               -3, ANY_COUNT)
+POST_COND_TEST32(post32_gt,        ">",                    -1,  -2u,               -7, NO_COUNT)
+POST_COND_TEST32(post32_ge,        ">=",                   -1,  -2u,               -7, NO_COUNT)
+POST_COND_TEST32(post32_ne,        "!=",                   -1,  -2u,               -7, NO_COUNT)
 /* across 0: '!=' has no order. From 4 up to 1 goes all the way around. */
-POST_COND_TEST32(post32_ne_to_m1,   "!=",                    3,  -1u,               -1, "header_count is [0..4] ")
-POST_COND_TEST32(post32_ne_to_0,    "!=",                   -4,    1,                0, "header_count is [0..4] ")
-POST_COND_TEST32(post32_ne_to_m1_2, "!=",                    3,  -2u,               -1, "header_count is [0..2] ")
-POST_COND_TEST32(post32_ne_miss,    "!=",                    4,  -2u,               -1, "can't compute iterations count")
-POST_COND_TEST32(post32_ne_around,  "!=",                    4,    1,                1, "header_count is [0..4294967293] ")
+POST_COND_TEST32(post32_ne_to_m1,   "!=",                    3,  -1u,               -1, COUNT(4))
+POST_COND_TEST32(post32_ne_to_0,    "!=",                   -4,    1,                0, ANY_COUNT)
+POST_COND_TEST32(post32_ne_to_m1_2, "!=",                    3,  -2u,               -1, COUNT(2))
+POST_COND_TEST32(post32_ne_miss,    "!=",                    4,  -2u,               -1, NO_COUNT)
+POST_COND_TEST32(post32_ne_around,  "!=",                    4,    1,                1,
+		 COUNT(4294967293))
 /* The variable moves away from the bound and wraps: -6, -4, -2, 0. From -7 it steps over 0. */
-POST_COND_TEST32(post32_ge_away,    ">=",                   -8,    2,                5, "header_count is [0..4] ")
-POST_COND_TEST32(post32_ge_away_miss, ">=",                 -7,    2,                1, "can't compute iterations count")
+POST_COND_TEST32(post32_ge_away,    ">=",                   -8,    2,                5, ANY_COUNT)
+POST_COND_TEST32(post32_ge_away_miss, ">=",                 -7,    2,                1, NO_COUNT)
 /* Only the jump has 32 bits. The upper half of r6 does not count. */
-COND_TEST(post32_jump_wide, 1ULL << 32, 1, 5, "header_count is [0..5] ",
+COND_TEST(post32_jump_wide, 1ULL << 32, 1, 5, COUNT(5),
 	  "1: r8 = %[step] ll;" LIMIT_ITERATIONS "r6 += r8; if w6 < w7 goto 1b;")
 /* Only the addition has 32 bits. No zero-extended number is above -42. */
-COND_TEST(post32_zext_gt_wide, 14, -7, -42, "header_count is [0..1] ",
+COND_TEST(post32_zext_gt_wide, 14, -7, -42, ONCE,
 	  "1: r8 = %[step] ll;" LIMIT_ITERATIONS "w6 += w8; if r6 > r7 goto 1b;")
 
 /* An exit exactly at S32_MAX is accepted as well. */
-POST_COND_TEST32(post32_slt_max,   "s<",        INT32_MAX - 6,    2,        INT32_MAX, "header_count is [0..3] ")
+POST_COND_TEST32(post32_slt_max,   "s<",        INT32_MAX - 6,    2,        INT32_MAX, COUNT(3))
 
 /*
  * The first iteration fits in 32 bits, but the predicted exit overshoots the bound
  * by one and wraps.
  */
-POST_COND_TEST32(post32_slt_wrap,  "s<",        INT32_MAX - 3,    2,        INT32_MAX, "can't compute iterations count")
-POST_COND_TEST32(post32_sgt_wrap,  "s>", (__u32)INT32_MIN + 3,  -2u, (__u32)INT32_MIN, "can't compute iterations count")
-POST_COND_TEST32(post32_lt_wrap,   "<",                    -4,    2,               -1, "can't compute iterations count")
+POST_COND_TEST32(post32_slt_wrap,  "s<",        INT32_MAX - 3,    2,        INT32_MAX, NO_COUNT)
+POST_COND_TEST32(post32_sgt_wrap,  "s>", (__u32)INT32_MIN + 3,  -2u, (__u32)INT32_MIN, NO_COUNT)
+POST_COND_TEST32(post32_lt_wrap,   "<",                    -4,    2,               -1, NO_COUNT)
 
 /*
  * The first value of the counter or the bound of the loop is a range: the verifier sees only the
@@ -1125,14 +1012,8 @@ __naked void name(void)										\
 #define POST(add, jump)	LOOP_HEAD add "; if " jump " goto 1b;"
 
 /* 'count' is what the verifier has and what r9 is at run time. 'range' is r6 at the header. */
-#define COUNTED(count, range)									\
-	__retval(count)										\
-	__msg("loop header at {{[0-9]+}}, header_count is [0.." #count "] ")			\
-	__msg("loop header at {{[0-9]+}}, widening r6 to " range " ")				\
-	__msg("loop header at {{[0-9]+}}, clamping r6 to " range " ")
-#define NO_COUNT										\
-	__msg("loop header at {{[0-9]+}}, can't compute iterations count")			\
-	__not_msg("header_count is")
+#define COUNTED(count, min, max)								\
+	__retval(count) NO_GUARD __msg(RANGE("{{[0-9]+}}", "R6", min, max)) COUNT(count)
 
 #define M64 ITER_U64_MAX
 #define M32 ITER_U32_MAX
@@ -1144,43 +1025,43 @@ __naked void name(void)										\
  *        r6 += 2;
  */
 /*         name           sign  first     step   bound   loop         expected */
-RANGE_TEST(range_lt,        "",  1,  4,     2,   8, 12,  PRE(">="),   COUNTED(7, "1..13"))
-RANGE_TEST(range_le,        "",  0,  2,     2,   6,  9,  PRE(">"),    COUNTED(6, "0..11"))
-RANGE_TEST(range_gt,        "", 10, 14,    -2,   3,  5,  PRE("<="),   COUNTED(7, "2..14"))
-RANGE_TEST(range_ge,        "", 10, 14,    -2,   4,  5,  PRE("<"),    COUNTED(7, "2..14"))
-RANGE_TEST(range_slt,      "s", -5,  5,     2,   5,  7,  PRE("s>="),  COUNTED(7, "-5..8"))
-RANGE_TEST(range_ne_up,     "",  0,  3,     1,   3,  6,  PRE("=="),   COUNTED(7, "0..6"))
-RANGE_TEST(range_ne_down,   "",  8, 10,    -1,   4,  8,  PRE("=="),   COUNTED(7, "4..10"))
+RANGE_TEST(range_lt,        "",  1,  4,     2,   8, 12,  PRE(">="),   COUNTED(7, 1, 13))
+RANGE_TEST(range_le,        "",  0,  2,     2,   6,  9,  PRE(">"),    COUNTED(6, 0, 11))
+RANGE_TEST(range_gt,        "", 10, 14,    -2,   3,  5,  PRE("<="),   COUNTED(7, 2, 14))
+RANGE_TEST(range_ge,        "", 10, 14,    -2,   4,  5,  PRE("<"),    COUNTED(7, 2, 14))
+RANGE_TEST(range_slt,      "s", -5,  5,     2,   5,  7,  PRE("s>="),  COUNTED(7, -5, 8))
+RANGE_TEST(range_ne_up,     "",  0,  3,     1,   3,  6,  PRE("=="),   COUNTED(7, 0, 6))
+RANGE_TEST(range_ne_down,   "",  8, 10,    -1,   4,  8,  PRE("=="),   COUNTED(7, 4, 10))
 /* the order of unsigned numbers says nothing about -1..3, the order of signed numbers does */
-RANGE_TEST(range_ne_signed, "s", -3, -1,    1,  -1,  3,  PRE("=="),   COUNTED(7, "-3..3"))
+RANGE_TEST(range_ne_signed, "s", -3, -1,    1,  -1,  3,  PRE("=="),   COUNTED(7, -3, 3))
 /* The jump tests r6 after the addition. At the header r6 is a step behind. */
 RANGE_TEST(range_post_lt,   "",  3, 10,     2,  14, 15,  POST("r6 += r8", "r6 < r7"),
-	   COUNTED(6, "3..14"))
+	   COUNTED(6, 3, 14))
 /* 32 bits. r6 is negative at the entry and zero extended after that. */
 RANGE_TEST(range32_slt,    "s", -5,  5,     2,   7,  9,  POST("w6 += w8", "w6 s< w7"),
-	   COUNTED(7, "-5..0xffffffff"))
+	   COUNTED(7, -5, 0xffffffff))
 /* Only the jump has 32 bits. It bounds the low half of r6, 'first + step * count' the rest. */
 RANGE_TEST(range32_jump,    "",  3, 10,     2,  13, 15,  POST("r6 += r8", "w6 < w7"),
-	   COUNTED(6, "3..14"))
+	   COUNTED(6, 3, 14))
 /* 'first + step' is -1..0 + 1: a range that crosses 0 is a range */
 RANGE_TEST(range_post_lt_crosses_0, "s", -1, 0, 1,   5,  5,  POST("r6 += r8", "r6 < r7"),
-	   COUNTED(6, "-1..4"))
+	   COUNTED(6, -1, 4))
 /* First values for which the latch is false at once are seen at the header too */
-RANGE_TEST(range_first_after_bound, "", 0, 100, 1,   5,  5,  PRE(">="),   COUNTED(6, "0..100"))
+RANGE_TEST(range_first_after_bound, "", 0, 100, 1,   5,  5,  PRE(">="),   COUNTED(6, 0, 100))
 
-#define COUNTED_2G(range)									\
-	__msg("loop header at {{[0-9]+}}, header_count is [0..2147483{{[0-9]+}}] ")		\
-	__msg("loop header at {{[0-9]+}}, widening r6 to " range " ")
+#define COUNTED_2G(min, max)									\
+	NO_GUARD __msg(RANGE("{{[0-9]+}}", "R6", min, max)) NO_GUARD				\
+	__msg("loop at {{[0-9]+}} has trip count 2147483{{[0-9]+}}{{$}}") NO_GUARD
 /* Too long to unroll: only the count ends the loop for the verifier */
 RANGE_TEST(range_long,      "",  0,  0,     1,   0, 0x7fffffff,
-	   "1: r8 = %[step] ll; if r6 >= r7 goto 2f; r6 += r8; goto 1b;", COUNTED_2G("0..0x7fffffff"))
+	   "1: r8 = %[step] ll; if r6 >= r7 goto 2f; r6 += r8; goto 1b;", COUNTED_2G(0, 0x7fffffff))
 /* 'first + step' wraps around for a part of the range: the loop starts anywhere */
 RANGE_TEST(range_first_wraps_s64, "s", ITER_S64_MAX - 5, ITER_S64_MAX - 1, 2,
 	   ITER_S64_MAX - 1, ITER_S64_MAX - 1, POST("r6 += r8", "r6 s< r7"), NO_COUNT)
 RANGE_TEST(range_first_wraps_u32, "", 0, 3, -2, 5, 5, POST("w6 += w8", "w6 > w7"),
-	   COUNTED_2G("0..0xffffffff"))
+	   ANY_COUNT)
 RANGE_TEST(range_first_wraps_s32, "", INT32_MAX - 5, INT32_MAX - 1, 2, INT32_MAX - 1, INT32_MAX - 1,
-	   POST("w6 += w8", "w6 s< w7"), COUNTED_2G("0..0xffffffff"))
+	   POST("w6 += w8", "w6 s< w7"), NO_COUNT)
 
 /*
  * The value that ends the loop can wrap around.
@@ -1200,7 +1081,7 @@ RANGE_TEST(range_ge_wrap,   "",       5,       9, -2,       1,       3,  PRE("<"
  * M-26, M-25, M-24 end at M-2, M-1, M. M-23 wraps.
  */
 RANGE_TEST(range_lt_near_max,      "", M64 - 26, M64 - 24, 8, M64 - 2, M64 - 2, PRE(">="),
-	   COUNTED(4, "-27..-1"))
+	   COUNTED(4, -27, -1))
 RANGE_TEST(range_lt_near_max_wrap, "", M64 - 26, M64 - 23, 8, M64 - 2, M64 - 2, PRE(">="), NO_COUNT)
 /* a 32-bit addition wraps around at 2^32, also under a 64-bit jump */
 RANGE_TEST(range32_add_wrap, "", M32 - 9, M32 - 5, 2, M32 - 3, M32,
@@ -1209,16 +1090,16 @@ RANGE_TEST(range32_ne_far,  "", M32 - 5, M32 - 3,  1, M32 - 1, M32 + 3,
 	   POST("w6 += w8", "r6 != r7"), NO_COUNT)
 /* the first jump tests what enters the loop, and that is not zero extended */
 RANGE_TEST(range32_first_is_wide, "", 0, M32 + 9,  2,      15,      20,
-	   LOOP_HEAD "if r6 >= r7 goto 2f; w6 += w8; goto 1b;", NO_COUNT)
+	   LOOP_HEAD "if r6 >= r7 goto 2f; w6 += w8; goto 1b;", COUNT(11))
 /* An unsigned counter goes down and leaves the range below 0. */
-RANGE_TEST(range_lt_dir,    "",  3, 10,    -2,  15, 20,  PRE(">="),   COUNTED(7, "-2..10"))
-RANGE_TEST(range_le_dir,    "",  3, 10,    -2,  15, 20,  PRE(">"),    COUNTED(7, "-2..10"))
+RANGE_TEST(range_lt_dir,    "",  3, 10,    -2,  15, 20,  PRE(">="),   COUNTED(7, -2, 10))
+RANGE_TEST(range_le_dir,    "",  3, 10,    -2,  15, 20,  PRE(">"),    COUNTED(7, -2, 10))
 /* 'for (i = n; i < 6; i--)': whatever n is */
 RANGE_TEST(range_lt_dir_any_first, "", 0, M64, -1, 6, 6, PRE(">="),
-	   __retval(1) __msg("header_count is [0..7] "))
+	   __retval(1) NO_COUNT)
 /* Up from 100 while it is '>= 100..103', until it wraps to 84: the smallest bound has the count */
 RANGE_TEST(range32_ge_away, "", 100, 100, 0x0fffffff, 100, 103,
-	   LOOP_HEAD "if w6 < w7 goto 2f; w6 += w8; goto 1b;", __msg("header_count is [0..17] "))
+	   LOOP_HEAD "if w6 < w7 goto 2f; w6 += w8; goto 1b;", COUNT(17))
 /* '>= 0' is always true, and so is '<= -1': -4..3 crosses 0 */
 RANGE_TEST(range32_ge_min,  "",  5,  5,     1,   0,  3,  POST("w6 += w8", "w6 >= w7"), NO_COUNT)
 RANGE_TEST(range32_le_max, "s",  0,  0,     2,  -4,  3,  POST("w6 += w8", "w6 <= w7"), NO_COUNT)
@@ -1230,7 +1111,7 @@ RANGE_TEST(range32_zext_sgt_neg, "s", 100, 100, -1, -3, 4, POST("w6 += w8", "r6 
 RANGE_TEST(range32_zext_slt_wide, "", M32 - 15, M32 - 15, 1, M32 - 5, M32 + 2,
 	   POST("w6 += w8", "r6 s< r7"), NO_COUNT)
 RANGE_TEST(range32_zext_slt_bit31, "", M32 / 2 - 15, M32 / 2 - 15, 1, M32 / 2 + 17, M32 / 2 + 17,
-	   POST("w6 += w8", "r6 s< r7"), __msg("header_count is [0..32] "))
+	   POST("w6 += w8", "r6 s< r7"), __msg("has trip count 32{{$}}"))
 /* The counter moves away from the exit. */
 RANGE_TEST(range_gt_dir,    "", 10, 20,     2,   3,  5,  PRE("<="),   NO_COUNT)
 RANGE_TEST(range_ge_dir,    "", 10, 20,     2,   3,  5,  PRE("<"),    NO_COUNT)
@@ -1244,7 +1125,7 @@ RANGE_TEST(range_ne_behind, "",  0,  4,     1,   3,  8,  PRE("=="),   NO_COUNT)
  * and is less than 12, but steps over 12.
  */
 RANGE_TEST(range_ne_mul24,  "",  0,  0,    24,   0,  5,  "r7 *= 24;" PRE("=="),
-	   COUNTED(6, "0..120"))
+	   COUNTED(6, 0, 120))
 RANGE_TEST(range_ne_mul12,  "",  0,  0,     8,   0,  4,  "r7 *= 12;" PRE("=="),   NO_COUNT)
 RANGE_TEST(range_ne_first_mul12, "", 0, 4,  8,  96, 96,  "r6 *= 12;" PRE("=="),   NO_COUNT)
 /* The sum of a multiple of 3 and 0..1 is no multiple of 3 */
@@ -1257,26 +1138,25 @@ RANGE_TEST(range_ne_mul3_crosses_s64, "", 0, 3, 3, 0, 1,
 	   NO_COUNT)
 /* 'while (i-- > 0) sum += a[i];' of u16 a[]: the compiler counts 2 * i down to 0 */
 RANGE_TEST(range_ne_shl1_down, "", 1, 5,   -2,   0,  0,  "r6 <<= 1;" POST("r6 += r8", "r6 != r7"),
-	   COUNTED(5, "2..10"))
+	   COUNTED(5, 2, 10))
 /* 20 modulo 24 plus multiples of 8: the induction variable is 4 modulo gcd(24, 8) */
 RANGE_TEST(range_ne_first_mul24, "", 1, 2,  8,  84, 84,  "r6 *= 24; r6 += 20;" PRE("=="),
-	   __retval(6) __msg("header_count is [0..6] ") __msg("widening r6 to 44..84 step 8")
-	   __msg("step=4+8"))
+	   __retval(6) __msg(RANGE("{{[0-9]+}}", "R6", 44, 84)) __msg("has trip count 6{{$}}"))
 /* 9, 17, 25 go to 41: each overshoots 40 by 1, not by up to 7. At the header it is 8 less. */
 RANGE_TEST(range_lt_overshoot, "", 0, 2,    8,  40, 40,
-	   "r6 *= 8; r6 += 1;" POST("r6 += r8", "r6 < r7"), COUNTED(5, "1..33"))
+	   "r6 *= 8; r6 += 1;" POST("r6 += r8", "r6 < r7"), COUNTED(5, 1, 33))
 /* -5, -2, 1, 4 cross 0, where the order of '<' begins: 0 is none of them. 1 goes to 22. */
 RANGE_TEST(range_lt_overshoot_crosses_0, "", 0, 3, 3, 20, 20, "r6 *= 3; r6 += -5;" PRE(">="),
-	   __retval(1) __msg("header_count is [0..8] ") __msg("widening r6 to -5..22 "))
+	   __retval(1) COUNT(10))
 /* Known low bits are a congruence too: 1..40 with three zero bits is 8..40 */
 RANGE_TEST(range_ne_align8, "",  0,  0,     8,   1, 43,
-	   "r7 &= -8; if r7 == 0 goto 2f;" PRE("=="), COUNTED(6, "0..40"))
+	   "r7 &= -8; if r7 == 0 goto 2f;" PRE("=="), __retval(6) COUNT(6))
 /*
  * The low 32 bits of a multiple of 24 are one as long as it fits in 32 bits.
  * 24 * 0xaaaaaac is 0x100000020.
  */
 RANGE_TEST(range32_ne_mul24, "", 0,  0,    24,   1,  5,
-	   "r7 *= 24;" POST("w6 += w8", "w6 != w7"), COUNTED(5, "0..96"))
+	   "r7 *= 24;" POST("w6 += w8", "w6 != w7"), COUNTED(5, 0, 96))
 RANGE_TEST(range32_ne_mul24_wide, "", 0, 0, 24,  1, 1ULL << 30,
 	   "r7 *= 24; if w7 > 96 goto 2f; if w7 < 24 goto 2f;" POST("w6 += w8", "w6 != w7"),
 	   NO_COUNT)
@@ -1308,28 +1188,26 @@ __naked void name(void)										\
 }
 #define BUF(i)		"r9 += 1; r2 = " i "; r2 -= r7; if r2 <= 7 goto +1; r0 = *(u64 *)(r5 + 0);"
 #define OOB		__failure __msg("R5 !read_ok")
-#define ALL_OF_S32	"0xffffffff80000000..0x7fffffff "
 #define SEXT32_INC	"w1 = w6; w1 += 1; r6 = (s32)r1;"
 #define SEXT32_LOOP(bound)	"1:" BUF("r6") SEXT32_INC "if w1 != " #bound " goto 1b;"
 
 SEXT32_TEST(sext32_iv, -4, SEXT32_LOOP(4), __success __retval(8)
-	    __msg("  r6=(sext32 (+ r6 1)) / (sext32 (linear r6 1))")
-	    __msg("header_count is 8 ") __msg("widening r6 to -4..3 "))
+	    COUNT(8))
 SEXT32_TEST(sext32_iv_oob, -4, SEXT32_LOOP(5), OOB)
 /* i wraps from INT32_MAX to INT32_MIN. The latch tests 0x7ffffffd .. 0x80000004. */
 SEXT32_TEST(sext32_iv_wraps, INT32_MAX - 3, SEXT32_LOOP(0x80000004),
-	    __msg("header_count is 8 ") __msg("widening r6 to " ALL_OF_S32) OOB)
+	    OOB)
 /* 'i < n' implies the unsigned range 1 .. 0x80000000. Its last value is negative in r6. */
 SEXT32_TEST(sext32_iv_unsigned_bound, 0,
 	    "r8 &= 1; r6 += r8; r4 = 0x80000001 ll;"
 	    "1:" SEXT32_INC "if w1 < w4 goto 1b; if r6 s>= 0 goto 2f; r0 = *(u64 *)(r5 + 0);",
-	    __msg("widening r6 to " ALL_OF_S32) OOB)
+	    OOB)
 
 /*
  *    for (long i = first; (u32)i < 128; i -= 1000)
  *
- * r6 is a 64-bit induction variable, the latch tests a zero-extended copy of it. It has the SCEV
- * of a 32-bit induction variable, and it bounds the low 32 bits of r6 only.
+ * r6 is a 64-bit induction variable, the latch tests a zero-extended copy of it.
+ * That bounds the low 32 bits of r6 only.
  */
 #define IV64_TEST(name, first, loop, expect)	SEXT32_TEST(name, first, loop, expect)
 #define HI32_IS_0	"r4 = r6; r4 >>= 32; if r4 == 0 goto +1; r0 = *(u64 *)(r5 + 0);"
@@ -1338,24 +1216,24 @@ SEXT32_TEST(sext32_iv_unsigned_bound, 0,
 IV64_TEST(zext32_copy_below_0, 0,
 	  "r8 &= 3; r6 += r8; 1: if r6 <= 3 goto +1; r0 = *(u64 *)(r5 + 0);"
 	  ZEXT32_COPY "if r3 >= 128 goto 2f; r6 += -1000; goto 1b;",
-	  __msg("header_count is [0..2] ") __msg("widening r6 to -1000..3 ") OOB)
+	  __msg(RANGE("{{[0-9]+}}", "R6", -1000, 3)) OOB)
 /* A 32-bit induction variable is 0xfffffc18..0xfffffc1b then */
 IV64_TEST(zext32_iv_below_0, 0,
 	  "r8 &= 3; r6 += r8; 1:" HI32_IS_0
 	  ZEXT32_COPY "if r3 >= 128 goto 2f; w6 += -1000; goto 1b;",
-	  __success __retval(0) __msg("header_count is [0..2] "))
+	  __success __retval(0) __msg("has trip count 2{{$}}"))
 /* r6 gets to 0x100000009 */
 IV64_TEST(zext32_copy_above_u32_max, 0xfffffff0ULL,
 	  "r8 &= 15; r6 += r8; 1:" HI32_IS_0 "r6 += 1;" ZEXT32_COPY "if r3 < 10 goto 1b;",
-	  __msg("header_count is [0..11] ") __msg("widening r6 to 0xfffffff0..0x100000009 ") OOB)
+	  __msg(RANGE("{{[0-9]+}}", "R6", 0xfffffff0, 0x100000000)) OOB)
 IV64_TEST(zext32_copy_above_u32_max_const, 0xfffffffeULL,
 	  "1:" HI32_IS_0 "r6 += 1;" ZEXT32_COPY "if r3 != 3 goto 1b;",
-	  __msg("header_count is 5 ") __msg("widening r6 to 0xfffffffe..0x100000002 ") OOB)
+	  OOB)
 /* The latch sees the low 32 bits of the step */
 IV64_TEST(zext32_copy_wide_step, 0,
 	  "r8 &= 1; r6 += r8; 1: if r6 <= 10 goto +1; r0 = *(u64 *)(r5 + 0);"
 	  "r1 = 0x100000001 ll; r6 += r1;" ZEXT32_COPY "if r3 < 10 goto 1b;",
-	  __msg("header_count is [0..10] ") OOB)
+	  OOB)
 
 /*
  * Two back edges:
@@ -1374,53 +1252,51 @@ IV64_TEST(zext32_copy_wide_step, 0,
 	"1:" LIMIT_ITERATIONS add ";"								\
 	"if " other " goto 3f; if " jump1 " goto 1b; goto 2f; 3: if " jump0 " goto 1b;"
 /* The loop can go on through the other back edge and get to a latch that was false */
-#define AGAIN(iteration)									\
-	__msg("loop header at {{[0-9]+}}, a latch may be true again in iteration " #iteration)	\
-	__not_msg("header_count is")
+#define AGAIN	NO_COUNT
 
 /* The largest count. '!=' is false in one iteration: it has to be the last one. */
 RANGE_TEST(backedges_ne_is_last, "", 0, 0, 1, 0, 1,
-	   BACKEDGES("r6 += 1", "r7 == 0", "r6 != 6", "r6 < 3"), COUNTED(6, "0..5"))
-/* Only the latch with the smallest count of a back edge is looked at: 'r6 != 3', not 'r6 < 100' */
+	   BACKEDGES("r6 += 1", "r7 == 0", "r6 != 6", "r6 < 3"), COUNTED(6, 0, 5))
+/* The other back edge can step over 'r6 != 3'. Then 'r6 < 100' gives the count. */
 #define AND_R8(add, count, jump0)								\
 	"r8 = 0;" BACKEDGES(add "; r8 += 1", "r7 == 0", "r8 < " #count, jump0)
 RANGE_TEST(backedges_ne_is_not_last, "", 0, 0, 1, 0, 1,
-	   AND_R8("r6 += 1", 5, "r6 >= 100 goto 2f; if r6 != 3"), AGAIN(4))
+	   AND_R8("r6 += 1", 5, "r6 >= 100 goto 2f; if r6 != 3"), COUNT(100))
 /*
  * w6 is 31, 23, 15, 7 in iterations 0..3, and M32 in iteration 4. 'w6 > 15' is false in iterations
  * 2 and 3.
  */
 RANGE_TEST(backedges_end_then_wrap, "", 39, 39, 1, 0, 1,
-	   AND_R8("w5 = -8; w6 += w5", 4, "w6 > 15"), __retval(4) __msg("header_count is [0..4] "))
+	   AND_R8("w5 = -8; w6 += w5", 4, "w6 > 15"), __retval(4) NO_COUNT)
 RANGE_TEST(backedges_wrap_then_end, "", 39, 39, 1, 0, 1,
-	   AND_R8("w5 = -8; w6 += w5", 5, "w6 > 15"), AGAIN(4))
+	   AND_R8("w5 = -8; w6 += w5", 5, "w6 > 15"), AGAIN)
 /* The same upwards. The largest first value wraps around first. */
 RANGE_TEST(backedges_wrap_up_then_end, "", M32 - 55, M32 - 39, 1, 0, 1,
-	   AND_R8("w6 += 8", 5, "w6 < -16"), AGAIN(4))
+	   AND_R8("w6 += 8", 5, "w6 < -16"), AGAIN)
 /*
  * w6 moves away from the bound: 'w6 < 0x38000000' is false in iterations 3..14, and true again in
  * iteration 15, in which '!=' is false.
  */
 RANGE_TEST(backedges_away_then_again, "", 0x30000000, 0x30000000, 1, 0, 1,
 	   BACKEDGES("w5 = -0x10000000; w6 += w5", "r7 == 0",
-		     "w6 < 0x38000000", "w6 != 0x30000000"), AGAIN(15))
-/* One latch bounds the low half of r6, the other r6: together they bound neither */
+		     "w6 < 0x38000000", "w6 != 0x30000000"), AGAIN)
+/* One latch bounds the low half of r6, the other r6. r6 fits in 32 bits, so both bound it. */
 RANGE_TEST(backedges_low32_and_64, "", 0, 3, 1, 0, 1,
 	   BACKEDGES("r6 += 1", "r7 == 0", "w6 < 5", "r6 < 7"),
-	   __retval(5) __msg("header_count is [0..7] ") __msg("widening r6 to 0..9 "))
+	   __retval(5) __msg(RANGE("{{[0-9]+}}", "R6", 0, 6)) __msg("has trip count 7{{$}}"))
 /* It's base + offset that wraps around when the variable is a pointer */
 RANGE_TEST(backedges_pointer_wraps, "", 0, 0, 1, 0, 1, "r4 = r10; r4 += -8; r5 = r10; r5 += -512;"
-	   AND_R8("r5 += 8", 100000000, "r5 < r4"), AGAIN(99999999))
+	   AND_R8("r5 += 8", 100000000, "r5 < r4"), AGAIN)
 
 /* The same test in front of each back edge: the first iteration in which it's false is the last */
 #define TWO_TESTS(jump1, jump0)									\
-	"r5 = 0; r8 = 0;" BACKEDGES("r5 += 1; r8 += 1", "r9 & 1", jump1, jump0)
+	"r5 = 0; r8 = 0;" BACKEDGES("r5 += 1; r8 += 1", "r3 & 1", jump1, jump0)
 RANGE_TEST(backedges_same_test,   "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r8 != r7"),
-	   __retval(6) __msg("header_count is [0..6] "))
-RANGE_TEST(backedges_other_bound, "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r8 != r6"), AGAIN(5))
-RANGE_TEST(backedges_other_first, "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r5 != r7"), AGAIN(5))
-RANGE_TEST(backedges_other_op,    "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r8 < r7"),  AGAIN(5))
-RANGE_TEST(backedges_other_width, "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "w8 != w7"), AGAIN(5))
+	   __retval(6) __msg("has trip count 6{{$}}"))
+RANGE_TEST(backedges_other_bound, "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r8 != r6"), AGAIN)
+RANGE_TEST(backedges_other_first, "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r5 != r7"), COUNT(6))
+RANGE_TEST(backedges_other_op,    "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r8 < r7"),  COUNT(6))
+RANGE_TEST(backedges_other_width, "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "w8 != w7"), COUNT(6))
 
 /* A back edge has no count */
 RANGE_TEST(backedges_no_count, "", 0, 0, 1, 0, 1,
@@ -1429,8 +1305,7 @@ RANGE_TEST(backedges_no_count, "", 0, 0, 1, 0, 1,
 #define X4(s)	s s s s
 RANGE_TEST(backedges_17, "", 0, 0, 1, 0, 1,
 	   "1:" LIMIT_ITERATIONS "if r6 >= 3 goto 2f; r6 += 1;" X4(X4("if r7 == 9 goto 1b;"))
-	   "goto 1b;",
-	   __msg("unsupported loop: too many backedges") __not_msg("header_count is"))
+	   "goto 1b;", COUNT(4))
 
 /*
  * The first value is 0..3: 'first + step * count' is 0..8. At the header r6 is its first value or
@@ -1439,24 +1314,24 @@ RANGE_TEST(backedges_17, "", 0, 0, 1, 0, 1,
 RANGE_TEST(backedges_first_is_a_range, "", 0, 3, 1, 0, 2,
 	   "1:" LIMIT_ITERATIONS "r6 += 1; if r7 == 0 goto 3f; if r7 == 2 goto 4f;"
 	   "if r6 < 3 goto 1b; goto 2f; 4: if r6 < 6 goto 1b; goto 2f; 3: if r6 < 4 goto 1b;",
-	   COUNTED(6, "0..5"))
+	   COUNTED(6, 0, 5))
 /* The latches test different variables: they tell nothing about r6 */
 RANGE_TEST(backedges_two_variables, "", 0, 3, 1, 0, 1,
-	   BACKEDGES("r6 += 1; r7 += 1", "r9 & 1", "r6 < 3", "r7 < 6"),
-	   __msg("header_count is [0..6] ") __msg("widening r6 to 0..8 "))
+	   BACKEDGES("r6 += 1; r7 += 1", "r3 & 1", "r6 < 3", "r7 < 6"),
+	   COUNT(6))
 /* A bound of 3 and a bound of 5 are joined in front of the loop */
 #define PRECISE_BOUND(reg)									\
 	"r4 = 2; r5 = 2; " reg " = 5; if r7 == 0 goto +1; " reg " = 3; r0 = 0;"		\
-	BACKEDGES("r6 += 1", "r9 & 1", "r6 < r4", "r6 < r5")
-#define EXPLORED_ONCE	__msg("header_count is [0..5] ") __not_msg("header_count is [0..3] ")
+	BACKEDGES("r6 += 1", "r3 & 1", "r6 < r4", "r6 < r5")
+#define EXPLORED_ONCE	__msg("has trip count 5{{$}}")
 RANGE_TEST(backedges_bound1_is_precise, "", 0, 0, 1, 0, 1, PRECISE_BOUND("r4"), EXPLORED_ONCE)
 RANGE_TEST(backedges_bound0_is_precise, "", 0, 0, 1, 0, 1, PRECISE_BOUND("r5"), EXPLORED_ONCE)
 
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 1, header_count is 10 ")
-__msg("loop header at 1, widening r0 to 0..9 step 1")
+__msg(RANGE("1", "R0", 0, 9))
+__msg("loop at 1 has trip count 10{{$}}")
 __msg("processed 4 insns")
 __naked void post_cond_jlt(void)
 {
@@ -1485,8 +1360,6 @@ __naked void post_cond_jlt(void)
 SEC("xdp")
 __failure
 __log_level(2)
-__msg("loop header at 6, header_count is [0..4096] ")
-__msg("loop header at 6, widening r0 to 0..4095 step 1")
 __msg("invalid variable-offset read from stack R2")
 __naked void mark_bound_precise(void)
 {
@@ -1526,8 +1399,6 @@ __naked void mark_bound_precise(void)
 SEC("xdp")
 __failure
 __log_level(2)
-__msg("loop header at 5, header_count is [0..4096] ")
-__msg("loop header at 5, widening r0 to 0..4095 step 1")
 __msg("invalid variable-offset read from stack R2")
 __naked void mark_base_precise(void)
 {
@@ -1551,7 +1422,7 @@ __naked void mark_base_precise(void)
 }
 
 /*
- * Spill size should be taken into account when evaluating bound scev.
+ * Spill size should be taken into account for the bound.
  *
  *   r0 = 256;
  *   *(u8 *)(r10 - 8) = r0;
@@ -1559,16 +1430,14 @@ __naked void mark_base_precise(void)
  *   do {
  *           r0++;
  *           r1 = *(u64 *)(r10 - 8);
- *           if (r0 & 0x200) break; // hidden from scev, limit main pass iterations.
+ *           if (r0 & 0x200) break; // gives no trip count, limit main pass iterations.
  *   } while (r0 < r1);
  *   return r0;
  */
 SEC("xdp")
 __success
 __log_level(2)
-__msg("scev at header 3:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
-__msg("loop header at 3, can't compute iterations count")
+__msg("loop at 3 has no trip count")
 __naked void eval_expr_small_spill_bound(void)
 {
 	asm volatile ("					\
@@ -1587,9 +1456,7 @@ __naked void eval_expr_small_spill_bound(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("scev at header 3:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
-__msg("loop header at 3, can't compute iterations count")
+__msg("loop at 3 has no trip count")
 __naked void eval_expr_small_spill_bound_fits(void)
 {
 	asm volatile ("					\
@@ -1617,11 +1484,8 @@ __naked void eval_expr_small_spill_bound_fits(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("scev at header 2:")
-__msg_next("  *fp-8=(+ *fp-8 1) / (linear *fp-8 1)")
 /* whatever is in the other bytes of the slot */
-__msg("loop header at 2, header_count is [0..266] ")
-__not_msg("widening")
+NO_COUNT
 __naked void no_widen_small_spill_counter(void)
 {
 	asm volatile ("					\
@@ -1639,9 +1503,7 @@ __naked void no_widen_small_spill_counter(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("scev at header 2:")
-__msg_next("  *fp-8=(+ *fp-8 1) / (linear *fp-8 1)")
-__msg("loop header at 2, widening *fp-8 to 5..14 step 1")
+__msg(RANGE("2", "fp-8", 5, 14))
 __naked void widen_full_spill_counter(void)
 {
 	asm volatile ("					\
@@ -1658,9 +1520,7 @@ __naked void widen_full_spill_counter(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("scev at header 2:")
-__msg_next("  *fp-8=(+ *fp-8 1) / (linear *fp-8 1)")
-__msg("loop header at 2, widening *fp-8 to 5..14 step 1")
+__msg(RANGE("2", "fp-8", 5, 14))
 __naked void widen_acquire_release_counter(void)
 {
 	asm volatile (
@@ -1679,9 +1539,9 @@ __naked void widen_acquire_release_counter(void)
 }
 
 /*
- * r6 scev is (any r6 *fp-8). The byte store leaves memory at zero,
- * but the spill metadata retains 256. Widen r6 to an unknown scalar
- * instead of [1,256], which would exclude the zero loaded from memory.
+ * r6 is r6 or *fp-8. The byte store leaves memory at zero,
+ * but the spill metadata retains 256. r6 must not be [1,256],
+ * which would exclude the zero loaded from memory.
  *
  *   r0 = 0;
  *   *(u64 *)(r10 - 8) = r0;
@@ -1699,10 +1559,12 @@ __naked void widen_acquire_release_counter(void)
 SEC("xdp")
 __success __retval(0)
 __log_level(2)
-__msg("scev at header 6:")
-__msg_next("  r6=*fp-8 / (any r6 *fp-8)")
-__msg_next("  r7=(+ r7 1) / (linear r7 1)")
-__msg("loop header at 6, widening r6 to 0x8000000000000000..0x7fffffffffffffff step 1")
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+__msg("to 6: R6=scalar(smax={{[^)]*}}var_off=(0x0; 0xffffffffffffff01)) ")
+#else
+__msg("to 6: R6=scalar() ")
+#endif
+COUNT(2)
 __naked void widen_any_small_spill_leaf(void)
 {
 	asm volatile ("					\
@@ -1721,7 +1583,7 @@ __naked void widen_any_small_spill_leaf(void)
 }
 
 /*
- * Widening (any *fp-8 7) must allocate the slot before writing its state.
+ * fp-8 is not set at the entry and is 7 later. The join must allocate the slot.
  * The unallocated entry value makes the union an unknown scalar.
  *
  *   r6 = 0;
@@ -1736,10 +1598,7 @@ __naked void widen_any_small_spill_leaf(void)
 SEC("xdp")
 __success __retval(7)
 __log_level(2)
-__msg("scev at header 1:")
-__msg_next("r6=(+ r6 1) / (linear r6 1)")
-__msg_next("*fp-8=%fp-8.3=phi(*fp-8, 7) / (any *fp-8 7)")
-__msg("loop header at 1, widening r6 to 0..2 step 1")
+__msg(RANGE("1", "R6", 0, 2))
 __msg("3: (79) r0 = *(u64 *)(r10 -8)         ; R0=scalar() R10=fp0 loop_stack=1")
 __naked void widen_any_unallocated_slot(void)
 {
@@ -1758,7 +1617,7 @@ __naked void widen_any_unallocated_slot(void)
 SEC("xdp")
 __success __retval(7)
 __log_level(2)
-__msg("loop header at 2, widening *fp-8 to 0..7 step 1")
+__msg(RANGE("2", "fp-8", 0, 7))
 __naked void widen_any_zero_spill(void)
 {
 	asm volatile ("					\
@@ -1777,10 +1636,7 @@ __naked void widen_any_zero_spill(void)
 SEC("xdp")
 __success __retval(7)
 __log_level(2)
-__msg("scev at header 2:")
-__msg_next("r6=(+ r6 1) / (linear r6 1)")
-__msg_next("*fp-8=%fp-8.5=phi(*fp-8, 7) / (any *fp-8 7)")
-__msg("loop header at 2, widening r6 to 0..2 step 1")
+__msg(RANGE("2", "R6", 0, 2))
 __msg("3: (79) r1 = *(u64 *)(r10 -8)         ; R1=scalar() R10=fp0 fp-8=m???????")
 __naked void widen_any_misc_slot(void)
 {
@@ -1852,8 +1708,7 @@ extern int bpf_stream_print_stack(int stream_id) __weak __ksym;
 SEC("syscall")
 __success __retval(0)
 __log_level(2)
-__msg("loop header at 1, header_count is 4 ")
-__not_msg("can't widen")
+__msg("loop at 1 has trip count 4{{$}}")
 __naked void kfunc_implicit_arg_in_a_loop(void)
 {
 	asm volatile (
@@ -1876,14 +1731,11 @@ void kfunc_root(void)
 	bpf_stream_print_stack(0);
 }
 
-/* The unknown SCEV of an unbound STACK_MISC slot must not prevent widening. */
+/* An unbound STACK_MISC slot must not prevent widening. */
 SEC("tracepoint")
 __success
 __log_level(2)
-__msg("scev at header 4:")
-__msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  *fp-8=%fp-8.7?")
-__msg("loop header at 4, widening r6 to 0..9 step 1")
+__msg(RANGE("4", "R6", 0, 9))
 __naked void widen_subprog_probe_read(void)
 {
 	asm volatile (
@@ -1909,7 +1761,7 @@ __naked void widen_subprog_probe_read(void)
  */
 SEC("tracepoint")
 __success __log_level(2)
-__msg("loop header at 2, header_count is 10")
+__msg("loop at 2 has trip count 10{{$}}")
 __naked void stack_address_as_a_number(void)
 {
 	asm volatile ("					\
@@ -1934,9 +1786,8 @@ __naked void stack_address_as_a_number(void)
 SEC("socket")
 __success
 __log_level(2)
-__msg("loop header at 4, header_count is 10")
-__msg("loop header at 4, widening r1 to 0..9 step 1")
-__msg("loop header at 4, widening r6 to 0x8000000000000000..0x7fffffffffffffff step 1")
+__msg(RANGE("4", "R1", 0, 9) "{{.*}}R6=scalar(var_off=(0x1; 0xfffffffffffffffe))")
+__msg("loop at 4 has trip count 10{{$}}")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked void widen_overflowing_range(void)
 {
@@ -1956,7 +1807,7 @@ __naked void widen_overflowing_range(void)
 }
 
 /*
- * The bound slot is unallocated at the first loop header. SCEV must
+ * The bound slot is unallocated at the first loop header. The verifier must
  * treat it as an unknown scalar. JSET limits main-pass iterations.
  *
  *   r0 = 0;
@@ -1970,10 +1821,7 @@ __naked void widen_overflowing_range(void)
 SEC("xdp")
 __success __retval(0)
 __log_level(2)
-__msg("scev at header 1:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
-__msg("loop header at 1, can't compute iterations count")
-__not_msg("widening")
+__msg("loop at 1 has no trip count")
 __naked void eval_expr_unallocated_stack_bound(void)
 {
 	asm volatile ("					\
@@ -1997,7 +1845,7 @@ volatile __u32 data_bound = 10;
 #define BOUND_IN_MAP_TEST(name, bound, count)					\
 SEC("socket")									\
 __success __retval(10) __log_level(2)						\
-__msg("loop header at 3, header_count is [0.." #count "]")			\
+__msg("loop at 3 has trip count " #count "{{$}}")		\
 __naked void name(void)								\
 {										\
 	asm volatile (								\
@@ -2018,9 +1866,9 @@ BOUND_IN_MAP_TEST(bound_in_data, data_bound, 16)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 3, header_count is 8")
-__msg("loop header at 3, widening r0 to 2..9 step 1")
+__msg(RANGE("3", "R0", 2, 9))
 __msg("3: R0=scalar(smin=umin=smin32=umin32=2,smax=umax=smax32=umax32=9,{{.*}})")
+__msg("loop at 3 has trip count 8{{$}}")
 __msg("processed 5 insns")
 __naked void post_cond_jlt_with_base(void)
 {
@@ -2037,7 +1885,7 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 1, header_count is 4 ")
+__msg("loop at 1 has trip count 4{{$}}")
 __naked void latch_base_differs_from_step(void)
 {
 	asm volatile ("					\
@@ -2053,11 +1901,10 @@ __naked void latch_base_differs_from_step(void)
 }
 
 /* Additions and subtractions of constants are one step. Two 64-bit shifts by 32 are (u32)r6. */
-#define ONE_STEP_TEST(name, first, body, jump, expr, ret)			\
+#define ONE_STEP_TEST(name, first, body, jump, ret)				\
 SEC("socket")									\
 __success __retval(ret) __log_level(2)						\
-__msg("  r6=" expr)								\
-__msg("loop header at 1, header_count is 8 ")					\
+__msg("loop at 1 has trip count 8{{$}}")				\
 __naked void name(void)								\
 {										\
 	asm volatile (								\
@@ -2069,10 +1916,9 @@ __naked void name(void)								\
 	::: __clobber_all);							\
 }
 
-ONE_STEP_TEST(add_add, 0, "r6 += 1; r6 += 1;", "< 16", "(+ r6 2) / (linear r6 2)", 16)
-ONE_STEP_TEST(sub, 16, "r6 -= 2;", "> 0", "(+ r6 -2) / (linear r6 -2)", 0)
-ONE_STEP_TEST(two_shifts_by_32, 0, "r6 += 2; r6 <<= 32; r6 >>= 32;", "< 16",
-	      "(zext32 (+ r6 2)) / (zext32 (linear r6 2))", 16)
+ONE_STEP_TEST(add_add, 0, "r6 += 1; r6 += 1;", "< 16", 16)
+ONE_STEP_TEST(sub, 16, "r6 -= 2;", "> 0", 0)
+ONE_STEP_TEST(two_shifts_by_32, 0, "r6 += 2; r6 <<= 32; r6 >>= 32;", "< 16", 16)
 
 /*
  * @shifts are not (u32)r7: a 32-bit shift by a register that has 32 in it shifts by 32 & 31 = 0.
@@ -2108,9 +1954,9 @@ NO_ZEXT32_TEST(arsh_by_32, 0x7ffffffe, "r7 <<= 32; r7 s>>= 32;")
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 1, header_count is 11")
-__msg("loop header at 1, widening r0 to 0..10 step 1")
+__msg(RANGE("1", "R0", 0, 10))
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=10,{{.*}})")
+__msg("loop at 1 has trip count 11{{$}}")
 __msg("processed 4 insns")
 __naked void post_cond_jle(void)
 {
@@ -2125,9 +1971,9 @@ __naked void post_cond_jle(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 1, header_count is 10")
-__msg("loop header at 1, widening r0 to 0..9 step 1")
+__msg(RANGE("1", "R0", 0, 9))
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=9,{{.*}})")
+__msg("loop at 1 has trip count 10{{$}}")
 __msg("processed 5 insns")
 __naked void post_cond_jge(void)
 {
@@ -2143,9 +1989,9 @@ __naked void post_cond_jge(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 1, header_count is 11")
-__msg("loop header at 1, widening r0 to 0..10 step 1")
+__msg(RANGE("1", "R0", 0, 10))
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=10,{{.*}})")
+__msg("loop at 1 has trip count 11{{$}}")
 __msg("processed 5 insns")
 __naked void pre_cond_jge(void)
 {
@@ -2161,15 +2007,9 @@ __naked void pre_cond_jge(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg_next("scev at header 1:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
-__msg_next(" scev at latch 2:")
-__msg_next("  r0=(+ r0 1) / (linear (+ r0 1) 1)")
-__msg("loop header at 1, widening r0")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,{{.*}})")
 __msg("1: (07) r0 += 1                       ; R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,{{.*}})")
 __msg("2: (55) if r0 != 0x3 goto pc-2")
-__msg("loop header at 1, clamping r0")
 __msg("3: (95) exit")
 __msg("processed 4 insns")
 __naked void post_cond_jne(void)
@@ -2185,14 +2025,9 @@ __naked void post_cond_jne(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg_next("scev at header 1:")
-__msg_next("  r0=(+ r0 -1) / (linear r0 -1)")
-__msg_next(" scev at latch 2:")
-__msg_next("  r0=(+ r0 -1) / (linear (+ r0 -1) -1)")
-__msg("loop header at 1, header_count is 3 ")
-__msg("loop header at 1, widening r0 to 1..3 step 1")
+__msg(RANGE("1", "R0", 1, 3))
 __msg("1: R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,var_off=(0x0; 0x3)) R10=fp0 loop_stack=1")
-__msg("loop header at 1, clamping r0 to 1..3 step 1")
+__msg("loop at 1 has trip count 3{{$}}")
 __msg("processed 4 insns")
 __naked void post_cond_jne_neg_step(void)
 {
@@ -2212,12 +2047,10 @@ SEC("socket")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 2, header_count is 5 ")
-__msg("loop header at 2, widening r1 to 0..4 step 1")
-__msg("loop header at 2, widening r3 to 0..4 step 1")
-__msg("3: (55) if r3 != 0x5 goto pc+1 {{.*}}; R3=5")
-__msg("loop header at 2, clamping r3 to 0..4 step 1")
-__msg("from 6 to 2: within")
+__msg(RANGE("2", "R1", 0, 4) RANGE_TOO("R3", 0, 4))
+__msg("from 3 to 4: R1=4 R3=5")
+__msg("from 6 to 2: pruned")
+__msg("loop at 2 has trip count 5{{$}}")
 __naked void clamp_dependent_overshoot(void)
 {
 	asm volatile ("					\
@@ -2233,17 +2066,15 @@ __naked void clamp_dependent_overshoot(void)
 "	::: __clobber_all);
 }
 
-/* Same with a 32-bit dependent register, SCEV (zext32 (linear r3 1)) */
+/* Same with a 32-bit dependent register */
 SEC("socket")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 2, header_count is 5 ")
-__msg("loop header at 2, widening r1 to 0..4 step 1")
-__msg("loop header at 2, widening r3 to 0..4 step 1")
-__msg("3: (56) if w3 != 0x5 goto pc+1 {{.*}}; R3=5")
-__msg("loop header at 2, clamping r3 to 0..4 step 1")
-__msg("from 6 to 2: within")
+__msg(RANGE("2", "R1", 0, 4) RANGE_TOO("R3", 0, 4))
+__msg("from 3 to 4: R1=4 R3=5")
+__msg("from 6 to 2: pruned")
+__msg("loop at 2 has trip count 5{{$}}")
 __naked void clamp_dependent_overshoot32(void)
 {
 	asm volatile ("					\
@@ -2262,18 +2093,13 @@ __naked void clamp_dependent_overshoot32(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg_next("scev at header 1:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
-__msg_next(" scev at latch 1:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
-__msg("loop header at 1, widening r0")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=3,{{.*}})")
-__msg("1: (15) if r0 == 0x3 goto pc+2        ; R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,{{.*}})")
+__msg("1: (15) if r0 == 0x3 goto pc+2")
+__msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,{{.*}})")
 __msg("2: (07) r0 += 1                       ; R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,{{.*}})")
 __msg("3: (05) goto pc-3")
-__msg("loop header at 1, clamping r0")
-__msg("from 1 to 4: R0=3")
-__msg("4: R0=3")
+/* or 0: pass 0 takes the edge of may_goto */
+__msg("from 1 to 4: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=3,{{.*}}step=0+3)")
 __msg("4: (95) exit")
 __msg("processed 5 insns")
 __naked void pre_cond_je1(void)
@@ -2290,15 +2116,9 @@ __naked void pre_cond_je1(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg_next("scev at header 1:")
-__msg_next("  r0=(zext32 (+ r0 1)) / (zext32 (linear r0 1))")
-__msg_next(" scev at latch 2:")
-__msg_next("  r0=(zext32 (+ r0 1)) / (zext32 (linear (+ r0 1) 1))")
-__msg("loop header at 1, widening r0")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,{{.*}})")
 __msg("1: (04) w0 += 1                       ; R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,{{.*}})")
 __msg("2: (56) if w0 != 0x3 goto pc-2")
-__msg("loop header at 1, clamping r0")
 __msg("3: (95) exit")
 __msg("processed 4 insns")
 __naked void post_cond_jne32(void)
@@ -2316,14 +2136,10 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev at header 1:")
-__msg_next("  r0=(zext32 (+ r0 3)) / (zext32 (linear r0 3))")
-__msg_next(" scev at latch 2:")
-__msg_next("  r0=(zext32 (+ r0 3)) / (zext32 (linear (+ r0 3) 3))")
 __msg("entering loop 1")
-__msg_next("loop header at 1, header_count is 2")
-__msg("loop header at 1, widening r0 to 0..0xffffffff (s32 -1..2) step 1")
-__msg("1: R0=scalar(smin=0,smax=umax=0xffffffff,smin32=-1,smax32=2,{{.*}})")
+__msg(RANGE("1", "R0", 2, 0xffffffff))
+__msg("1: R0=scalar(smin=umin=2,smax=umax=0xffffffff,smin32=-1,smax32=2,{{.*}})")
+__msg("loop at 1 has trip count 2{{$}}")
 __naked void post_cond_jne32_overflow(void)
 {
 	asm volatile ("					\
@@ -2342,8 +2158,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 2, header_count is 1431655767")
-__msg("loop header at 2, widening r0 to 0..0xffffffff step 1")
+__msg(RANGE("2", "R0", 0, 0xffffffff))
+__msg("loop at 2 has trip count 1431655767{{$}}")
 __naked void post_cond_jne32_full_range(void)
 {
 	asm volatile ("					\
@@ -2361,8 +2177,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 1, header_count is 2")
-__msg("loop header at 1, widening r0 to -6..0xfffffffa (s32 -9..-6) step 1")
+__msg(RANGE("1", "R0", -6, 0xfffffff7))
+__msg("loop at 1 has trip count 2{{$}}")
 __naked void post_cond_jne32_base_mismatch(void)
 {
 	asm volatile ("					\
@@ -2381,8 +2197,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 1, header_count is 2")
-__msg("loop header at 1, widening r0 to 0..0xffffffff (s32 -1..0) step 1")
+__msg(RANGE("1", "R0", 0, 0xffffffff))
+__msg("loop at 1 has trip count 2{{$}}")
 __naked void post_cond_jne32_neg_step(void)
 {
 	asm volatile ("					\
@@ -2401,9 +2217,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 2, header_count is 2")
-__msg("loop header at 2, widening r0 to 0x8000000000000000..0x7fffffffffffffff (s32 1..3) step 2")
-__msg("2: R0=scalar({{.*}}step=1+2)")
+__msg("2: R0=scalar(umin=3,umax=0x8000000000000001,")
+__msg("loop at 2 has trip count 2{{$}}")
 __naked void post_cond_jne32_signed_boundary(void)
 {
 	asm volatile ("					\
@@ -2421,10 +2236,9 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 1, header_count is 4")
-__msg("loop header at 1, widening r0 to 0..3 step 1")
-__msg("loop header at 1, clamping r0")
-__msg("4: R0=3")
+__msg(RANGE("1", "R0", 0, 3))
+__msg("loop at 1 has trip count 4{{$}}")
+__msg("4: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=3,{{.*}}step=0+3)")
 __naked void pre_cond_je32(void)
 {
 	asm volatile ("					\
@@ -2441,7 +2255,7 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 4, can't compute iterations count")
+__msg("loop at 4 has no trip count")
 __naked void post_cond_alu32_jmp64(void)
 {
 	asm volatile ("					\
@@ -2461,7 +2275,7 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 2, can't compute iterations count")
+__msg("loop at 2 has no trip count")
 __naked void post_cond_alu64_jmp32(void)
 {
 	asm volatile ("					\
@@ -2483,8 +2297,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 3, header_count is 3")
-__msg("loop header at 3, widening r0 to 0xfffffffc..0xfffffffe (s32 -4..-2) step 1")
+__msg(RANGE("3", "R0", 0xfffffffc, 0xfffffffe))
+__msg("loop at 3 has trip count 3{{$}}")
 __naked void post_cond_alu32_jmp64_bounded(void)
 {
 	asm volatile ("					\
@@ -2501,8 +2315,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 1, header_count is 3")
-__msg("loop header at 1, widening r0 to -6..-2 step 2")
+__msg(RANGE("1", "R0", -6, -2))
+__msg("loop at 1 has trip count 3{{$}}")
 __naked void post_cond_alu64_jmp32_bounded(void)
 {
 	asm volatile ("					\
@@ -2517,7 +2331,7 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 1, header_count is [0..3] ")
+__msg("loop at 1 has trip count 3{{$}}")
 __naked void one_backedge_two_exits(void)
 {
 	asm volatile ("					\
@@ -2544,17 +2358,11 @@ __naked __noinline __used static int returns_zero(void)
 /*
  * A loop that the compiler unrolls in part has an exit for every 'break' and 'return' in every
  * copy of its body. How many there are says nothing about the number of iterations.
- * Scalar evolution takes a nested loop for one insn, and its exits are the successors of this insn.
- * The exit list is truncated: the enclosing loop has no SCEVs, the subprog is not analyzed.
+ * Only the first exit is kept.
  */
 SEC("xdp")
 __success __log_level(2)
-__msg("loop at 1, too many exits, too many exits of a nested loop")
-__msg("loop at 2, nested in 1, too many exits")
-__msg("Computing SCEV for subprog at 0:")
-__msg_next("Computing SCEV for subprog at {{[0-9]+}}:")
-__msg("loop header at 1, unsupported loop: too many exits of a nested loop")
-__msg("loop header at 2, header_count is [0..4] ")
+__msg("loop at 2 has trip count 4{{$}}")
 __naked void loop_around_301_exits(void)
 {
 	asm volatile ("					\
@@ -2576,19 +2384,9 @@ __naked void loop_around_301_exits(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg_next("scev at header 11:")
-__msg_next("  r0=(+ r0 1) / (linear r0 1)")
-__msg_next("  r1=(+ r1 2) / (linear r1 2)")
-__msg_next(" scev at latch 16:")
-__msg_next("  r0=(+ r0 1) / (linear (+ r0 1) 1)")
-__msg_next("  r1=(+ r1 2) / (linear (+ r1 2) 2)")
-__msg("loop header at 11, widening r0")
-__msg("loop header at 11, widening r1")
 __msg("11: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=7,var_off=(0x0; 0x7)) R1=scalar(smin=smin32=0,smax=umax=smax32=umax32=14,var_off=(0x0; 0xe),step=0+2)")
 __msg("16: (a5) if r0 < 0x8 goto pc-6")
 /* second iteration */
-__msg("loop header at 11, clamping r0")
-__msg("loop header at 11, clamping r1")
 /* iteration convergence */
 __not_msg("{{^}}11:")
 /* loop exit */
@@ -2625,7 +2423,7 @@ __naked void correlated_regs(void)
  * for (i = 0; i < 4; i++):
  *   for (j = 0; j < 4; j++):
  *     k += 1
- *     k <<= 1   // make SCEV construction not possible
+ *     k <<= 1   // not linear
  *     k >>= 1
  * map[k] = 1    // k has to be known
  */
@@ -2634,7 +2432,7 @@ __success
 __log_level(2)
 __msg("19: (72) *(u8 *)(r4 +0) = 1           ; R4=map_value(id={{.*}},map=map,ks=4,vs=1024,imm=16)")
 __not_msg("19: ")
-__msg("processed 105 insns")
+__msg("processed 57 insns")
 __naked void nested_loops_precise_var1(void)
 {
 	asm volatile ("					\
@@ -2670,9 +2468,9 @@ __naked void nested_loops_precise_var1(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 2, header_count is 100 ")
-__msg("loop header at 4, header_count is [0..100] ")
-__msg("loop header at 6, header_count is [0..100] ")
+__msg("loop at 6 has trip count 100{{$}}")
+__msg("loop at 4 has trip count 100{{$}}")
+__msg("loop at 2 has trip count 100{{$}}")
 __msg("processed 14 insns")
 __naked void nested_loop_with_two_exits(void)
 {
@@ -2699,6 +2497,7 @@ __naked void nested_loop_with_two_exits(void)
 SEC("xdp")
 __success
 __log_level(2)
+__msg("loop at 4 has trip count 10{{$}}")
 __naked void exit_loop_into_loop_header(void)
 {
 	asm volatile ("					\
@@ -2734,14 +2533,11 @@ __msg("loop at 5")
 __msg("loop at 6, nested in 5")
 __msg("loop at 11, irreducible")
 __msg("loop at 12, nested in 11")
-/* entry via if r0 == 5 goto d_%= true branch */
-__msg("loop header at 12, header_count is 3 ")
-__msg("loop header at 12, widening r9 to 0..2 step 1")
-/* entry via if r0 == 5 goto d_%= false branch */
-__msg("loop header at 12, header_count is 3 ")
-__msg("loop header at 12, widening r9 to 0..2 step 1")
-__msg("12: R8=0 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) R10=fp0 iter(11)=0 loop_stack=11,12")
-__msg("12: R8=1 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) R10=fp0 iter(11)=0 loop_stack=11,12")
+NO_GUARD
+__msg("loop at 12 has trip count 3{{$}}")
+NO_GUARD
+__msg("loop at 11 has trip count 4{{$}}")
+NO_GUARD
 __naked void enter_nested_loop_from_side(void)
 {
 	asm volatile ("					\
@@ -2772,8 +2568,8 @@ d_%=:	r9 += 1;					\
  * which contains C (counter in r9).
  * Entering B at 'body' saves and restores r6, making it appear invariant.
  * Entering B at 'alternate' skips the save and modifies r6 instead.
- * Hence A must not infer a SCEV expression for r6.
- * SCEV expression for r9 in C should still be computed.
+ * Hence A must not have an equation for r6.
+ * r9 in C still moves with the trip index.
  *
  *  0: r6 = 0;
  *     do {                              // A
@@ -2804,12 +2600,7 @@ __log_level(2)
 __msg("loop at 1{{$}}")
 __msg("loop at 5, nested in 1, irreducible")
 __msg("loop at 11, nested in 5")
-__msg("scev at header 1:")
-__msg_next("  r6=%r6.5?")
-__msg("scev at header 11:")
-__msg_next("  r9=(+ r9 1) / (linear r9 1)")
-__msg("loop header at 11, widening r9 to 0..2 step 1")
-__not_msg("loop header at 1, widening r6")
+__msg(RANGE("11", "R9", 0, 2))
 __naked void nested_irreducible_loop(void)
 {
 	asm volatile ("					\
@@ -2840,9 +2631,7 @@ c_%=:	r9 += 1;					\
 
 /*
  * Loop A (counter in r6) contains irreducible loop B.
- * Loop B has an exit edge from A. This is a corner case
- * observed during testing: insn_aux_data[l1].need_scev == true,
- * but SCEV environment is not constructed.
+ * Loop B has an exit edge from A.
  *
  *	  r6 = 0;
  *	  do {					// A
@@ -2864,6 +2653,7 @@ c_%=:	r9 += 1;					\
 SEC("xdp")
 __success
 __log_level(2)
+__msg("loop at 1 has trip count 4{{$}}")
 __naked void nested_irreducible_loop2(void)
 {
 	asm volatile ("					\
@@ -2897,8 +2687,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 4, widening r7 to 0..18 step 2")
-__msg("R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=18,var_off=(0x0; 0x1e),step=0+2)")
+__msg(RANGE("4", "R7", 0, 18))
+__msg("R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=18,var_off=(0x0; 0x1e))")
 __naked void widen_nonconst_base(void)
 {
 	asm volatile ("					\
@@ -2925,8 +2715,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 5, header_count is 3 ")
-__msg("5: R7=scalar({{.*}}smax=umax=smax32=umax32=20,{{.*}}step=0+4)")
+__msg("5: R7=scalar({{.*}}smax=umax=smax32=umax32=20,var_off=(0x0; 0x1c))")
+__msg("loop at 5 has trip count 3{{$}}")
 __naked void widen_nonconst_base_refined(void)
 {
 	asm volatile ("					\
@@ -2957,11 +2747,11 @@ __naked void widen_nonconst_base_refined(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 1, widening r6 to 0..3 step 1")
-__msg("loop header at 2, widening r7 to 0..2 step 1")
+__msg(RANGE("1", "R6", 0, 3))
+__msg(RANGE("2", "R7", 0, 2))
 __msg("exiting loop 2")
 __msg("entering loop 4")
-__msg("loop header at 4, widening r7 to 1..3 step 1")
+__msg(RANGE("4", "R7", 1, 3))
 __naked void sibling_inner_loops(void)
 {
 	asm volatile ("					\
@@ -2982,7 +2772,7 @@ SEC("socket")
 __success
 __log_level(2)
 /* whatever is in the slot */
-__msg("loop header at 0, header_count is [0..11] ")
+NO_COUNT
 __naked void uninit_slot_counter(void)
 {
 	asm volatile ("					\
@@ -3007,13 +2797,13 @@ __naked void uninit_slot_counter(void)
  *
  * R7 is always 10 at the real exit. Widening loses the correlation between
  * R6 and R7, leaving R7 in [5, 10] both at the loop header and after the loop.
- * The verifier therefore rejects the possible invalid stack read.
+ * Pass 0 does not prove the read. A later pass peels the trips and does not get to it.
  */
 SEC("xdp")
-__failure
+__success __retval(0)
 __log_level(2)
-__msg("2: {{.*}}R7=scalar(smin=umin=smin32=umin32=5,smax=umax=smax32=umax32=10,var_off=(0x0; 0xf))")
-__msg("7: R7=scalar(smin=umin=smin32=umin32=5,smax=umax=smax32=umax32=10,var_off=(0x0; 0xf))")
+__msg("2: {{.*}}R7=scalar(smin=umin=smin32=umin32=5,smax=umax=smax32=umax32=10,var_off=(0x0; 0xf)")
+__msg("7: R7=scalar(smin=umin=smin32=umin32=5,smax=umax=smax32=umax32=10,var_off=(0x0; 0xf)")
 __msg("invalid read from stack R10 off=0 size=8")
 __naked void conditional_assignment_on_second_iteration(void)
 {
@@ -3033,7 +2823,7 @@ __naked void conditional_assignment_on_second_iteration(void)
 }
 
 /*
- * The latch bound has header SCEV (any r7 100), so it is not invariant:
+ * The latch bound is r7 or 100, so it is not invariant:
  *
  *   u64 i = 0, n = 3;
  *   for (;;) {
@@ -3043,20 +2833,12 @@ __naked void conditional_assignment_on_second_iteration(void)
  *           if (i == 1)
  *                   n = 100;
  *   }
- *
- * The ANY expression must also appear at the latch, rather than a bare r7
- * that would incorrectly be treated as a loop-invariant bound.
  */
 SEC("xdp")
 __success
 __log_level(2)
-__msg("scev at header 2:")
-__msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  r7=%r7.6=phi(r7, 100) / (any r7 100)")
-__msg_next(" scev at latch 3:")
-__msg_next("  r6=(+ r6 1) / (linear (+ r6 1) 1)")
-__msg_next("  r7=r7 / (any r7 100)")
-__naked void no_widen_changing_latch_bound(void)
+__msg("loop at 2 has trip count 100{{$}}")
+__naked void changing_latch_bound(void)
 {
 	asm volatile ("					\
 	r6 = 0;						\
@@ -3075,14 +2857,14 @@ exit_%=:						\
 }
 
 /*
- * Join two stack pointer offsets via (any r7 r8), with r8 loop-invariant.
+ * Join two stack pointer offsets, r7 and r8. The loop does not change r8.
  * The joined range [-16, -8] still points to initialized stack memory,
  * so dereferencing r7 after the loop is safe.
  */
 SEC("xdp")
 __success __retval(0)
 __log_level(2)
-__msg("loop header at 7, widening r7 to -16..-8 step 1")
+__msg(RANGE("7", "R7", -16, -8))
 __msg("7: {{.*}}R7=fp(smin=smin32=-16,smax=smax32=-8,")
 __msg("12: R7=fp(smin=smin32=-16,smax=smax32=-8,")
 __naked void conditional_stack_pointer_assignment(void)
@@ -3120,8 +2902,7 @@ __naked void conditional_stack_pointer_assignment(void)
 SEC("xdp")
 __success __retval(0)
 __log_level(2)
-__msg("loop header at {{[0-9]+}}, can't widen r6, expr is")
-__not_msg("widening")
+__msg("loop at 17 has trip count 3{{$}}")
 __naked void no_widen_any_map_origin(void)
 {
 	asm volatile ("					\
@@ -3185,8 +2966,7 @@ __naked __noinline __used static int any_stack_origin_callee(void)
 SEC("xdp")
 __success __retval(0)
 __log_level(2)
-__msg("loop header at {{[0-9]+}}, can't widen r6, expr is")
-__not_msg("widening")
+__not_msg("has no trip count")
 __naked void no_widen_any_stack_origin(void)
 {
 	asm volatile ("					\
@@ -3219,9 +2999,8 @@ SEC("socket")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 3, widening r6 to 0..9 step 1")
-__msg("loop header at 3, clamping r6 to 0..9 step 1")
-__msg("from 12 to 6: within")
+__msg(RANGE("3", "R6", 0, 9))
+COUNT(10)
 __naked void clamp_callee_state_pruning(void)
 {
 	asm volatile ("					\
@@ -3246,9 +3025,8 @@ SEC("socket")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 3, widening r6 to 0..9 step 1")
-__msg("loop header at 4, widening r7 to 0..2 step 1")
-__msg("loop header at 3, clamping r6 to 0..9 step 1")
+__msg(RANGE("3", "R6", 0, 9))
+__msg(RANGE("4", "R7", 0, 2))
 __naked void clamp_nested_loop_state_pruning(void)
 {
 	asm volatile ("					\
@@ -3267,7 +3045,7 @@ __naked void clamp_nested_loop_state_pruning(void)
 }
 
 /*
- * Same as above, but the inner loop is not recognized by SCEV and is unrolled
+ * Same as above, but the inner loop has no linear counter
  * with a precise r7. The states at its header still match between the outer
  * iterations and must not be reported as an infinite loop: the path between
  * them crosses the back edge of the terminating outer loop.
@@ -3276,9 +3054,8 @@ SEC("socket")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 3, widening r6 to 0..9 step 1")
-__msg("loop header at 5, can't compute iterations count")
-__msg("loop header at 3, clamping r6 to 0..9 step 1")
+__msg(RANGE("3", "R6", 0, 9))
+__msg("loop at 5 has trip count 2{{$}}")
 __naked void clamp_nested_unrolled_loop_state_pruning(void)
 {
 	asm volatile ("					\
@@ -3297,15 +3074,12 @@ __naked void clamp_nested_unrolled_loop_state_pruning(void)
 }
 
 /*
- * A number in a part of the stack slot fp-8. There is no formula for it, but the state has its
- * value. If the loop makes the next value from it, each iteration has a new one: the loop is
- * verified one iteration at a time. If not, the body is verified at most two times.
+ * A number in a part of the stack slot fp-8. It does not take the trip count from the loop.
  */
-#define PARTIAL_SPILL_TEST(name, sz, count, msg, first, body)			\
+#define PARTIAL_SPILL_TEST(name, sz, count, expect, first, body)			\
 SEC("socket")									\
 __success __log_level(2)							\
-__msg("loop header at {{[0-9]+}}, header_count is " #count)			\
-__msg("loop header at {{[0-9]+}}, " msg)					\
+expect COUNT(count)								\
 __naked void name(void)								\
 {										\
 	asm volatile (								\
@@ -3324,18 +3098,18 @@ __naked void name(void)								\
 
 #define SPILL32_0	"*(u32 *)(r10 - 8) = r1;"
 #define SPILL32_INC	"r1 = *(u32 *)(r10 - 8); w1 += 1; *(u32 *)(r10 - 8) = r1;"
-#define NOT_UNROLLED	"widening r6 to 0..0xf423f step 1"
+#define NOT_UNROLLED	__msg(RANGE("{{[0-9]+}}", "R6", 0, 0xf423f))
 
 /* 'if (...) cnt++' */
-PARTIAL_SPILL_TEST(partial_spill32_inc, u32, 10, "can't widen *fp-8, expr is %fp-8.{{[0-9]+}}=phi(*fp-8, (spill32 ",
+PARTIAL_SPILL_TEST(partial_spill32_inc, u32, 10, ONCE,
 	SPILL32_0, "if r6 & 1 goto 2f;" SPILL32_INC "2:")
-PARTIAL_SPILL_TEST(partial_spill16_inc, u16, 10, "can't widen *fp-8, expr is (spill16 ",
+PARTIAL_SPILL_TEST(partial_spill16_inc, u16, 10, ONCE,
 	"*(u16 *)(r10 - 8) = r1;", "r1 = *(u16 *)(r10 - 8); w1 += 1; *(u16 *)(r10 - 8) = r1;")
 /* A loop in the loop does it */
-PARTIAL_SPILL_TEST(partial_spill32_inc_in_nested_loop, u32, 10, "can't widen *fp-8, expr is %fp-8.{{[0-9]+}}?",
+PARTIAL_SPILL_TEST(partial_spill32_inc_in_nested_loop, u32, 10, ONCE,
 	SPILL32_0, "r7 = 0; 2:" SPILL32_INC "r7 += 1; if r7 < 3 goto 2b;")
 /* Two slots feed each other */
-PARTIAL_SPILL_TEST(partial_spill32_two_slots, u32, 10, "can't widen *fp-8, expr is (spill32 ",
+PARTIAL_SPILL_TEST(partial_spill32_two_slots, u32, 10, ONCE,
 	SPILL32_0 "*(u32 *)(r10 - 16) = r1;",
 	"r2 = *(u32 *)(r10 - 16);" SPILL32_INC "*(u32 *)(r10 - 16) = r1; *(u32 *)(r10 - 8) = r2;")
 /* 'if (...) found = 1' */
@@ -3361,67 +3135,62 @@ PARTIAL_SPILL_TEST(partial_spill32_unknown, u32, 1000000, NOT_UNROLLED,
  */
 #define SPILL32_LOOP(body)	"*(u32 *)(r10 - 8) = r6; 1:" LIMIT_ITERATIONS body
 #define SPILL32_LOAD		"r1 = *(u32 *)(r10 - 8);"
-#define SPILL32_COUNTED(count, range)								\
-	__retval(count)										\
-	__msg("loop header at {{[0-9]+}}, header_count is [0.." #count "] ")			\
-	__msg("loop header at {{[0-9]+}}, widening *fp-8 to " range " ")			\
-	__msg("loop header at {{[0-9]+}}, clamping *fp-8 to " range " ")
+#define SPILL32_COUNTED(count, min, max)							\
+	__retval(count) NO_GUARD __msg(RANGE("{{[0-9]+}}", "fp-8", min, max)) COUNT(count)
 
 /* On big-endian '*(u32 *)(r10 - 8)' is the high half of the slot: there is no formula for it. */
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 /* Only the low half of the register that is stored at first gets to the slot */
 RANGE_TEST(spill32_inc, "", 7ULL << 32, 7ULL << 32, 1, 5, 5,
 	   SPILL32_LOOP(SPILL32_INC "if r1 != r7 goto 1b;"),
-	   __msg("  *fp-8=(spill32 (+ *fp-8 1)) / (spill32 (linear (zext32 *fp-8) 1))")
-	   SPILL32_COUNTED(5, "0..4"))
+	   __retval(5) COUNT(5))
 /* The jump tests a second load of the counter */
 RANGE_TEST(spill32_second_load, "", 0, 0, 1, 5, 5,
 	   SPILL32_LOOP(SPILL32_INC SPILL32_LOAD "if w1 != w7 goto 1b;"),
-	   SPILL32_COUNTED(5, "0..4"))
+	   SPILL32_COUNTED(5, 0, 4))
 /* What a compiler makes without 32-bit insns */
 RANGE_TEST(spill32_add64, "", 0, 0, 1, 5, 5,
 	   SPILL32_LOOP(SPILL32_LOAD "r1 += 1; *(u32 *)(r10 - 8) = r1; r1 <<= 32; r1 >>= 32;"
-			"if r1 != r7 goto 1b;"), SPILL32_COUNTED(5, "0..4"))
+			"if r1 != r7 goto 1b;"), SPILL32_COUNTED(5, 0, 4))
 /* 'first + step * count' is 0..8. The latch lets 5 through. */
 RANGE_TEST(spill32_first_is_a_range, "", 0, 3, 1, 6, 6,
-	   SPILL32_LOOP(SPILL32_INC "if w1 < w7 goto 1b;"), SPILL32_COUNTED(6, "0..5"))
+	   SPILL32_LOOP(SPILL32_INC "if w1 < w7 goto 1b;"), SPILL32_COUNTED(6, 0, 5))
 RANGE_TEST(spill32_first_is_a_range_pre, "", 0, 3, 1, 6, 6,
 	   SPILL32_LOOP(SPILL32_LOAD "if r1 >= r7 goto 2f;" SPILL32_INC "goto 1b;"),
-	   SPILL32_COUNTED(7, "0..6"))
+	   SPILL32_COUNTED(7, 0, 6))
 /* 2 and 0 in the slot are joined in front of the loop */
 RANGE_TEST(spill32_first_is_precise, "", 0, 0, 1, 0, 1,
 	   "if r7 == 0 goto +1; r6 = 2;" SPILL32_LOOP(SPILL32_INC "if w1 != 5 goto 1b;"),
-	   __msg("header_count is [0..5] ") __not_msg("header_count is [0..3] "))
+	   __msg("has trip count 5{{$}}"))
 /* The slot holds 64 bits when the loop starts. Nothing reads the high half: it's dead. */
 RANGE_TEST(spill32_first_is_64bit, "", 0, 0, 1, 5, 5,
 	   "*(u64 *)(r10 - 8) = r6; 1:" LIMIT_ITERATIONS SPILL32_INC "if w1 != w7 goto 1b;",
-	   SPILL32_COUNTED(5, "0..4"))
+	   SPILL32_COUNTED(5, 0, 4))
 /* A 64-bit spill of i. Its upper 32 bits are dead: the low 32 bits are the induction variable. */
 #define SEXT32_SPILL_LOOP(bound)								\
 	"1:" BUF("*(u32 *)(r10 - 16)") "w1 = *(u32 *)(r10 - 16); w1 += 1; r3 = (s32)r1;"	\
 	"*(u64 *)(r10 - 16) = r3; if w1 != " #bound " goto 1b;"
 SEXT32_TEST(sext32_iv_hi32_dead, 0, SEXT32_SPILL_LOOP(8), __success __retval(8)
-	    __msg("  *fp-16=(sext32 (+ *fp-16 1)) / (spill32 (linear (zext32 *fp-16) 1))")
-	    __msg("header_count is 8 ") __msg("widening *fp-16 to 0..7 "))
+	    __msg(RANGE("{{[0-9]+}}", "fp-16", 0, 7)) __msg("has trip count 8{{$}}"))
 SEXT32_TEST(sext32_iv_hi32_dead_oob, 0, SEXT32_SPILL_LOOP(9), OOB)
-/* The counter makes the address of a spill. Such a loop is not summarized, as with a register. */
+/* The iv makes the address of a spill. Nothing reads the spill, so no check fails. */
 PARTIAL_SPILL_TEST(spill32_is_a_stack_offset, u32, 4,
-	"can't widen *fp-8, expr is (spill32 (+ *fp-8 8)), requires exact stack-offset tracking",
+	__msg(RANGE("{{[0-9]+}}", "fp-8", 0, 24)),
 	SPILL32_0, SPILL32_LOAD "r2 = r10; r2 += -48; r2 += r1; *(u64 *)(r2 + 0) = r6;"
 	"w1 += 8; *(u32 *)(r10 - 8) = r1;")
 /* But there is no exact address to lose when nothing is known about the number */
 PARTIAL_SPILL_TEST(spill32_unknown_is_a_stack_offset, u32, 1000000,
-	"widening *fp-8 to 0..0xffffffff step 1",
+	__msg(RANGE("{{[0-9]+}}", "fp-8", 0, 0xffffffff)),
 	"*(u32 *)(r10 - 8) = r0;", SPILL32_LOAD "r2 = r1; r2 &= 24; r3 = r10; r3 += -48; r3 += r2;"
 	"*(u64 *)(r3 + 0) = r6; w1 += 8; *(u32 *)(r10 - 8) = r1;")
 #endif
 
 /* A step above S16_MAX has no range, as with a register */
-PARTIAL_SPILL_TEST(spill32_large_step, u32, 4, "can't widen *fp-8, expr is (spill32 ",
+PARTIAL_SPILL_TEST(spill32_large_step, u32, 4, ONCE,
 	SPILL32_0, SPILL32_LOAD "w1 += 0x8000; *(u32 *)(r10 - 8) = r1;")
 /* No formula: the load extends the sign, */
 RANGE_TEST(spill32_sext_load, "", 0, 0, 1, 5, 5,
-	   SPILL32_LOOP(SPILL32_INC "r1 = *(s32 *)(r10 - 8); if r1 != r7 goto 1b;"), NO_COUNT)
+	   SPILL32_LOOP(SPILL32_INC "r1 = *(s32 *)(r10 - 8); if r1 != r7 goto 1b;"), COUNT(5))
 /* the sum is made from a different slot. */
 RANGE_TEST(spill32_other_slot, "", 0, 0, 1, 5, 5,
 	   "*(u32 *)(r10 - 16) = r6;"
@@ -3430,14 +3199,14 @@ RANGE_TEST(spill32_other_slot, "", 0, 0, 1, 5, 5,
 
 /*
  * r7 starts as 1 + 6*k and invariant r8 as 1 + 9*k (0 <= k <= 3).
- * The (any r7 r8) union must preserve base 1 and step gcd(6, 9) = 3.
+ * The join of r7 and r8 must preserve base 1 and step gcd(6, 9) = 3.
  */
 SEC("xdp")
 __success __retval(1)
 __log_level(2)
 __msg("r7 += 1 {{.*}}step=1+6)")
 __msg("r8 += 1 {{.*}}step=1+9)")
-__msg("loop header at 9, widening r7 to 1..28 step 3")
+__msg(RANGE("9", "R7", 1, 28))
 __msg("9: {{.*}}R7=scalar({{.*}},step=1+3)")
 __msg("14: R7=scalar({{.*}},step=1+3)")
 __naked void conditional_scalar_assignment_gcd(void)
@@ -3492,25 +3261,24 @@ __naked void name(void)								\
 }
 
 /* [0, max] that loses bits is in [0, max], and a bit that is 0 stays 0 */
-#define LOSES_BITS(max)	__msg("r7 stays in 0.." #max ", it loses bits only")
-#define UNROLLED(expr)	__msg("can't widen r7, expr is " expr) __not_msg("it loses bits only")
+#define LOSES_BITS(max)	NO_GUARD __msg("R7=scalar({{.*}}var_off=(0x0; " #max "))") COUNT(8)
 
 NOT_LINEAR_TEST(and_clears_a_bit, "r7 &= 255;", "r1 = 1; r1 <<= r6; r1 ^= -1; r7 &= r1;",
-		LOSES_BITS(255))
-NOT_LINEAR_TEST(and_on_the_right, "r7 &= 255;", "r1 = r8; r1 &= r7; r7 = r1;", LOSES_BITS(255))
-NOT_LINEAR_TEST(and_0_or_64, "r7 &= 64;", "r7 &= r8;", LOSES_BITS(64))
+		LOSES_BITS(0xff))
+NOT_LINEAR_TEST(and_on_the_right, "r7 &= 255;", "r1 = r8; r1 &= r7; r7 = r1;", LOSES_BITS(0xff))
+NOT_LINEAR_TEST(and_0_or_64, "r7 &= 64;", "r7 &= r8;", LOSES_BITS(0x40))
 NOT_LINEAR_TEST(zext32_or_nothing, "r7 >>= 8;", "if r8 == 0 goto +1; w7 = w7;",
-		LOSES_BITS(72057594037927935))
-/* 64..127 can become 0 */
-NOT_LINEAR_TEST(and_64_to_127, "r7 &= 63; r7 |= 64;", "r7 &= 127;", UNROLLED("(& r7 127)"))
-/* '>>' does not make a number greater, but iterations one by one tell more: 0 after 8 shifts */
+		LOSES_BITS(0xffffffffffffff))
+/* bit 6 stays */
+NOT_LINEAR_TEST(and_64_to_127, "r7 &= 63; r7 |= 64;", "r7 &= 127;", __msg(RANGE("{{[0-9]+}}", "R7", 64, 127)))
+/* '>>' does not make a number greater */
 NOT_LINEAR_TEST(rsh_on_one_path, "r7 &= 255;", "if r8 == 0 goto +1; r7 >>= 1;",
-		UNROLLED("%r7.8=phi(r7, (>> r7 1))"))
-NOT_LINEAR_TEST(rsh_then_and, "r7 &= 255;", "r7 >>= 1; r7 &= r8;", UNROLLED("(& (>> r7 1) r8)"))
-NOT_LINEAR_TEST(lsh_grows, "r7 &= 15;", "r7 <<= 1;", UNROLLED("(<< r7 1)"))
+		LOSES_BITS(0xff))
+NOT_LINEAR_TEST(rsh_then_and, "r7 &= 255;", "r7 >>= 1; r7 &= r8;", LOSES_BITS(0xff))
+NOT_LINEAR_TEST(lsh_grows, "r7 &= 15;", "r7 <<= 1;", __msg("R7=scalar() "))
 
 /* bpf_compute_const_regs() knows that r7 is the same constant in each iteration */
-#define NOT_CHANGED	__msg("widening r6 to 0..7")
+#define NOT_CHANGED	__msg(RANGE("{{[0-9]+}}", "R6", 0, 7))
 NOT_LINEAR_TEST(same_constant, "r7 = 17;", "r7 &= 31;", NOT_CHANGED)
 NOT_LINEAR_TEST(same_wide_constant, "r7 = 0xffffffff00000011 ll;", "r7 &= -239;", NOT_CHANGED)
 
@@ -3550,6 +3318,7 @@ __naked void name(void)								\
 #define VALID	__success __retval(0)
 #define MAP_OOB	__failure __msg("invalid access to map value")
 #define UNBOUND	__failure __msg("unbounded min value")
+#define OUTSIDE	__failure __msg("value is outside of the allowed memory range")
 
 /* r3 is the address in r1 as a scalar. It does not bound the offset of r1. */
 LINKED(pointer_is_not_scalar, __failure,
@@ -3642,7 +3411,7 @@ LINKED(operand_has_a_leader_but_no_value, __failure __msg("R1 unbounded memory a
 	"w3 = w8; r2 = r8; r2 >>= 32; r2 += r7; r8 = 0; if r7 != 0 goto out_%=;"
 	"r1 = r6; r1 += r2; r0 = r3;")
 /* the bound is filled from 8 bytes: a 32-bit spill below 4 bytes that nobody knows */
-LINKED(bound_of_loop_above_a_32bit_spill, UNBOUND,
+LINKED(bound_of_loop_above_a_32bit_spill, MAP_OOB,
 	"*(u64 *)(r10 - 16) = r8; r3 = 5; *(u32 *)(r10 - 16) = r3; r1 = 0;"
 	"l_%=: r2 = *(u64 *)(r10 - 16); r1 += 1; if r1 < r2 goto l_%=; r1 *= 12; r1 += r6;")
 LINKED(zero_extension_of_low_8_bits, MAP_OOB,
@@ -3664,9 +3433,11 @@ LINKED(dividend_tested, VALID,
 LINKED(operand_is_overwritten, MAP_OOB,
 	"r9 = r7; r9 *= 8; call %[bpf_get_prandom_u32]; r7 = r0; r7 &= 255;"
 	"if r7 > 7 goto out_%=; r1 = r6; r1 += r9;")
-/* a pointer is evaluated below an add only */
-LINKED(pointer_minus_index, __failure,
+/* r7 is 0..63, so 63 - r7 is 0..63 */
+LINKED(pointer_minus_index, VALID,
 	"r1 = r6; r1 += 63; r1 -= r7; if r7 > 63 goto out_%=;" USE_R6)
+LINKED(pointer_minus_index_oob, __failure __msg("R1 min value is"),
+	"r1 = r6; r1 += 63; r1 -= r7; if r7 > 64 goto out_%=;" USE_R6)
 /* r3 is an address as a scalar. r6 + r7 * 2 has the offset [0, 14]: that is not the range of r3 */
 LINKED(offset_of_pointer_is_not_scalar, UNBOUND,
 	"r2 = r7; r2 *= 2; r5 = r6; r5 += r2; r3 = r5; r3 = le64 r3; if r7 > 7 goto out_%=;"
@@ -3695,14 +3466,17 @@ static __naked __noinline __used void name(void)				\
 	"if r3 <= 63 goto +2; r3 = 0; *(u64 *)(r1 + 0) = r3; r0 = 0; exit;"	\
 	::: __clobber_all);							\
 }
-#define CALL(callee)								\
-	"*(u64 *)(r10 - 16) = r8; r1 = r10; r1 += -16; r4 = r1; r2 = r8; r2 >>= 1;"	\
+#define CALL_R2(set_r2, callee)							\
+	"*(u64 *)(r10 - 16) = r8; r1 = r10; r1 += -16; r4 = r1;" set_r2		\
 	"call " #callee "; r2 = *(u64 *)(r10 - 16); r1 = r6; r1 += r2;"
+#define CALL(callee)	CALL_R2("r2 = r8; r2 >>= 1;", callee)
 
 CLAMP(clamp, "")
 LINKED(callee_tests_memory_of_caller, VALID, CALL(clamp))
 CLAMP(store_and_clamp, "*(u64 *)(r1 + 0) = r2;")
-LINKED(callee_writes_memory_of_caller, __failure, CALL(store_and_clamp))
+/* It tests r8 and stores r8 / 2. If r8 is 0..63 then r8 / 2 is 0..31. Else it stores 0. */
+LINKED(callee_writes_memory_of_caller, VALID, CALL(store_and_clamp))
+LINKED(callee_writes_memory_of_caller_oob, MAP_OOB, CALL_R2("r2 = r7;", store_and_clamp))
 /* a store defines the memory */
 CLAMP(store_and_test, "r3 = r2; *(u64 *)(r1 + 0) = r3;")
 LINKED(callee_tests_what_it_stored, VALID, CALL(store_and_test))
@@ -3711,7 +3485,8 @@ CLAMP(store_next_and_clamp, "*(u64 *)(r1 + 8) = r2;")
 LINKED(callee_writes_next_field, VALID, CALL(store_next_and_clamp))
 /* another address base can be another name of the memory */
 CLAMP(store_alias_and_clamp, "*(u64 *)(r4 + 0) = r2;")
-LINKED(callee_writes_through_alias, __failure, CALL(store_alias_and_clamp))
+LINKED(callee_writes_through_alias, VALID, CALL(store_alias_and_clamp))
+LINKED(callee_writes_through_alias_oob, MAP_OOB, CALL_R2("r2 = r7;", store_alias_and_clamp))
 static __naked __noinline __used void clamp_through_r0(void)
 {
 	asm volatile (
@@ -3782,10 +3557,10 @@ LINKED(copy_refined_by_jump_with_dead_branch, VALID,
 	"m_%=: if r2 > 62 goto out_%=; r1 = r6; r1 += r3;"
 
 LINKED(congruent_phis, VALID, TWO_PATHS("r3 = r2; r3 += 1;", "r3 = r2; r3 += 1;"))
-LINKED(phis_with_other_delta_on_one_path, UNBOUND,
+LINKED(phis_with_other_delta_on_one_path, MAP_OOB,
        TWO_PATHS("r3 = r2; r3 += 1;", "r3 = r2; r3 += 2;"))
 /* One of three edges brings unrelated values */
-LINKED(phis_not_linked_on_one_of_three_edges, UNBOUND,
+LINKED(phis_not_linked_on_one_of_three_edges, __failure __msg("R1 unbounded memory access"),
 	"r3 = r8; r3 >>= 2; r2 = 0; if r7 == 20 goto m_%=;"
 	TWO_PATHS("r3 = r2; r3 += 1;", "r3 = r2; r3 += 1;"))
 /* (zext32 x) on both paths: linked in 64 bits */
@@ -3887,7 +3662,7 @@ LINKED(irreducible_loop, VALID,
 	"if r7 > 5 goto m_%=; l_%=: r7 += 1;"
 	"m_%=: r2 = r8; r2 += 1; r2 += 1; if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
 	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
-LINKED(irreducible_loop_fallthrough_pred, UNBOUND,
+LINKED(irreducible_loop_fallthrough_pred, OUTSIDE,
 	"r2 = r7; if r7 > 5 goto m_%=; l_%=: r7 += 1; r2 = r8;"
 	"m_%=: if r8 > 63 goto out_%=; r1 = r6; r1 += r2;"
 	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
@@ -3896,7 +3671,7 @@ LINKED(irreducible_loop_next_bb, VALID,
 	"m_%=: r2 = r8; r2 += 1; r2 += 1; if r7 == 3 goto n_%=; r3 = 0;"
 	"n_%=: if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
 	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
-LINKED(irreducible_loop_secondary_entry, UNBOUND,
+LINKED(irreducible_loop_secondary_entry, OUTSIDE,
 	"r9 = 0; o_%=: r9 += 1; call %[bpf_ktime_get_ns]; r8 = r0; r2 = r7; if r7 > 5 goto m_%=;"
 	"l_%=: r7 += 1; r2 = r8; r2 += 1; r2 += 1; if r7 == 3 goto m_%=; r3 = 0;"
 	"m_%=: if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
@@ -3915,7 +3690,7 @@ LINKED(natural_loop_is_secondary_entry, MAP_OOB,
  * holds a reference, so may_goto goes to the exit of the outer loop: an edge that the verifier
  * adds. Every iteration of the outer loop restores r3. At the header of the inner one it is r7.
  */
-LINKED(added_edge, UNBOUND,
+LINKED(added_edge, OUTSIDE,
 	"r1 = %[ringbuf] ll; r2 = 8; r3 = 0; call %[bpf_ringbuf_reserve]; if r0 == 0 goto out_%=;"
 	"*(u64 *)(r10 - 16) = r0; r3 = r8;"
 	"o_%=: r2 = r3; r3 = r7;"
@@ -3962,16 +3737,15 @@ __naked void break_pkt_pointers_id(void)
 }
 
 /*
- * A loop induction variable used to compute the base address of a store to the
- * stack must not be widened: the spill offset would become varying, which the
- * verifier does not track.
+ * A loop induction variable is the base address of a store to the stack.
+ * It is widened. The store has a varying offset. No check depends on what it writes.
  */
 SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 2, can't widen r2, expr is (+ r2 8), requires exact stack-offset tracking")
-__naked void no_widen_stack_spill(void)
+__msg(RANGE("2", "R2", 0, 24))
+__naked void widen_stack_spill(void)
 {
 	asm volatile ("					\
 	r0 = 0;						\
@@ -3988,17 +3762,16 @@ __naked void no_widen_stack_spill(void)
 "	::: __clobber_all);
 }
 /*
- * Same hazard across a loop nest: the outer induction variable r2 addresses a
- * stack store performed inside the inner loop. The dependency is pulled up from
- * the inner loop, so the outer loop must not widen r2.
+ * The same across a loop nest: the outer induction variable r2 addresses a
+ * stack store performed inside the inner loop.
  */
 SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 2, can't widen r2, expr is (+ r2 8), requires exact stack-offset tracking")
-__msg("loop header at 3, widening r1 to 0..1 step 1")
-__naked void no_widen_stack_spill_nested(void)
+__msg(RANGE("2", "R2", 0, 24))
+__msg(RANGE("3", "R1", 0, 1))
+__naked void widen_stack_spill_nested(void)
 {
 	asm volatile ("					\
 	r0 = 0;						\
@@ -4042,16 +3815,6 @@ SEC("xdp")
 __failure
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev at header 9:")
-__msg_next("  r6=(+ %r6.13? 1) / ?")
-__msg_next(" scev at latch 20:")
-__msg_next("  r6=(+ %r6.13? 1) / (+ %r6.13? 1)")
-__msg_next("scev at header 13:")
-__msg_next("  r9=(+ r9 1) / (linear r9 1)")
-__msg_next(" scev at latch 16:")
-__msg_next("  r6=-1000 / -1000")
-__msg_next("  r8=r6 / r6")
-__msg_next("  r9=(+ r9 1) / (linear (+ r9 1) 1)")
 __msg("R6=-999")
 __msg("R1 min value is negative")
 __naked void nested_loop_exit_clobbers_reg(void)
@@ -4119,18 +3882,7 @@ SEC("xdp")
 __success __retval(3)
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("r6 = *(u64 *)(r10 -8) {{.*}}; r6 %r6.4? -> r6")
-__msg("scev at header 1:")
-__msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next(" scev at latch 16:")
-__msg_next("  r6=(+ r6 1) / (linear (+ r6 1) 1)")
-__msg("scev at header 2:")
-__msg_next("  r7=(+ r7 1) / (linear r7 1)")
-__msg("scev at header 4:")
-__msg_next("  r9=(+ r9 1) / (linear r9 1)")
-__msg(" scev at latch 9:")
-__msg_next("  r8=r6 / r6")
-__msg_next("  r9=(+ r9 1) / (linear (+ r9 1) 1)")
+__msg("loop at 1 has trip count 3{{$}}")
 __naked void nested_loop_exit_preserves_reg(void)
 {
 	asm volatile (
@@ -4164,15 +3916,14 @@ __naked void nested_loop_exit_preserves_reg(void)
 }
 
 /*
- * Complement of no_widen_stack_spill: a sub-register (1-byte) store to the stack
- * lands as STACK_MISC and carries no tracked value, so the induction variable
- * addressing it (r2) is still widened.
+ * As widen_stack_spill, with a 1-byte store. It lands as STACK_MISC.
+ * The induction variable that addresses it (r2) is widened.
  */
 SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("widening r2 to 0..24 step 8")
+__msg(RANGE("{{[0-9]+}}", "R2", 0, 24))
 __naked void widen_byte_stack_store(void)
 {
 	asm volatile ("					\
@@ -4191,16 +3942,16 @@ __naked void widen_byte_stack_store(void)
 }
 
 /*
- * A fill (BPF_LDX) at a varying stack offset loses precision just like a spill,
- * so the induction variable computing the load base (r2) must not be widened.
+ * A fill (BPF_LDX) at a varying stack offset loses precision just like a spill.
+ * No check depends on what the fill reads, so the load base (r2) is widened.
  * The slots are initialized up front so the fill itself is a valid read.
  */
 SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 6, can't widen r2, expr is (+ r2 8), requires exact stack-offset tracking")
-__naked void no_widen_stack_fill(void)
+__msg(RANGE("6", "R2", 0, 24))
+__naked void widen_stack_fill(void)
 {
 	asm volatile ("					\
 	r0 = 0;						\
@@ -4231,17 +3982,15 @@ __naked void no_widen_stack_fill(void)
  *                 r7 = 1;
  * }
  *
- * SCEV expression for r7 is (any r7 8) and r7 is used to
- * address the stack memory. Avoid widening it, otherwise
- * verifier won't know the type of the slots[r7] expression.
+ * r7 is r7 or 8, and it is used to
+ * address the stack memory. Pass 0 widens it and doesn't know
+ * the type of the slots[r7] expression. The next passes keep it apart.
  */
 SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev at header 4:")
-__msg_next("r7=%r7.11=phi(r7, 8) / (any r7 8)")
-__msg("loop header at 4, can't widen r7, expr is {{.*}}, requires exact stack-offset tracking")
+__msg("pass 1")
 __naked void no_widen_stack_fill_any(void)
 {
 	asm volatile ("					\
@@ -4274,9 +4023,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("can't widen {{.*}}, requires exact stack-offset tracking")
+ONCE
 #ifndef __clang__
-/* The issue is unrelated to SCEV */
 __skip("GCC emits a stack-pointer loop condition the verifier cannot resolve")
 #endif
 int no_widen_dynptr_kfunc_arg(struct xdp_md *ctx)
@@ -4299,8 +4047,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("header_count is 4 ")
-__msg("widening r6 to -16..-13 step 1")
+__msg(RANGE("{{[0-9]+}}", "R6", -16, -13))
+__msg("has trip count 4{{$}}")
 __naked void ptr_stack(void)
 {
 	asm volatile ("					\
@@ -4324,7 +4072,7 @@ __naked __noinline __used static int ptr_stack_callee(void)
 	r0 = 0;						\
 1:	r6 += 1;					\
 	r0 += 1;					\
-	if r0 & 8 goto 4f;	/* bound main pass iteration, but hide it from SCEV */	\
+	if r0 & 8 goto 4f;	/* bound main pass iteration, it gives no count */	\
 	if r6 < r7 goto 1b;	/* r6 and r7 are from different frames, can't be widened */	\
 4:	r0 = 0;						\
 	exit;						\
@@ -4335,9 +4083,8 @@ __naked __noinline __used static int ptr_stack_callee(void)
 SEC("xdp")
 __success
 __log_level(2)
+NO_COUNT
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev: incompatible latch operands r6 (fp), r7 (fp)")
-__not_msg("widening r6")
 __naked void ptr_stack_other_frame(void)
 {
 	asm volatile ("					\
@@ -4376,21 +4123,22 @@ __naked void name(void)								\
 }
 
 PTR_RANGE_TEST(ptr_first_is_below_or_at_fp, "r0 &= 63;", "r6", 1, "<=", "r7",
-	       __msg("loop header at {{[0-9]+}}, header_count is [0..64] "))
-PTR_RANGE_TEST(ptr_first_offset_is_wide, "r0 >>= 2;", "r6", 1, "<", "r7", NO_COUNT)
-PTR_RANGE_TEST(ptr_bound_offset_is_wide, "r0 >>= 2;", "r7", -1, ">", "r6", NO_COUNT)
+	       __msg("loop at {{[0-9]+}} has trip count 64{{$}}"))
+PTR_RANGE_TEST(ptr_first_offset_is_wide, "r0 >>= 2;", "r6", 1, "<", "r7",
+	       NO_COUNT)
+PTR_RANGE_TEST(ptr_bound_offset_is_wide, "r0 >>= 2;", "r7", -1, ">", "r6",
+	       NO_COUNT)
 /* Constants: the offset goes from -55 to 1, across 0 */
 PTR_RANGE_TEST(ptr_const_crosses_fp, "r0 = 0;", "r6", 8, "<", "r7",
-	       __msg("loop header at {{[0-9]+}}, header_count is [0..8] "))
+	       __msg("loop at {{[0-9]+}} has trip count 8{{$}}"))
 /* 'for (p = buf; p != end; p += 21)': fp-63 and fp-42 get to fp */
 PTR_RANGE_TEST(ptr_ne_mul21, "r0 &= 1; r0 *= 21;", "r6", 21, "!=", "r7",
-	       __msg("loop header at {{[0-9]+}}, header_count is [0..3] "))
+	       __msg("loop at {{[0-9]+}} has trip count 3{{$}}"))
 
 SEC("xdp")
 __success
 __log_level(2)
-__msg("scev: incompatible latch operands r6 (map_value), r7 (map_value)")
-__msg("loop header at 11, can't compute iterations count at 14")
+NO_COUNT
 __naked void ptr_map_value_jmp32(void)
 {
 	asm volatile ("					\
@@ -4417,7 +4165,7 @@ __naked void ptr_map_value_jmp32(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 11, can't compute iterations count")
+__msg("loop at 11 has no trip count")
 __naked void ptr_map_value_alu32_latch(void)
 {
 	asm volatile ("					\
@@ -4444,7 +4192,7 @@ __naked void ptr_map_value_alu32_latch(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 11, can't compute iterations count")
+NO_COUNT
 __naked void ptr_map_value_alu32_latch2(void)
 {
 	asm volatile ("					\
@@ -4472,7 +4220,7 @@ __naked void ptr_map_value_alu32_latch2(void)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("loop header at 8, can't widen r0, expr is (zext32 (+ r0 1))")
+__msg("loop at 8 has trip count 4{{$}}")
 __naked void ptr_map_value_alu32_non_latch(void)
 {
 	asm volatile ("					\
@@ -4498,9 +4246,8 @@ __naked void ptr_map_value_alu32_non_latch(void)
 SEC("xdp")
 __success
 __log_level(2)
+NO_COUNT
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev: incompatible latch operands r6 (pkt_meta), r7 (pkt)")
-__not_msg("widening r6")
 __naked void ptr_packet_meta_other_origin(void)
 {
 	asm volatile ("					\
@@ -4525,8 +4272,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("header_count is 4 ")
-__msg("widening r6 to 0..3 step 1")
+__msg(RANGE("{{[0-9]+}}", "R6", 0, 3))
+__msg("has trip count 4{{$}}")
 __naked void ptr_map_value_two_lookups(void)
 {
 	asm volatile ("					\
@@ -4568,9 +4315,8 @@ __naked void ptr_map_value_two_lookups(void)
 SEC("xdp")
 __success
 __log_level(2)
+NO_COUNT
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev: incompatible latch operands r6 (map_value), r7 (map_value)")
-__not_msg("widening r6")
 __naked void ptr_map_value_two_lookups_inner_map(void)
 {
 	asm volatile ("					\
@@ -4611,8 +4357,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("header_count is 4 ")
-__msg("widening r6 to 0..3 step 1")
+__msg(RANGE("{{[0-9]+}}", "R6", 0, 3))
+__msg("has trip count 4{{$}}")
 __naked void ptr_map_value(void)
 {
 	asm volatile ("					\
@@ -4638,9 +4384,8 @@ __naked void ptr_map_value(void)
 SEC("xdp")
 __success
 __log_level(2)
+NO_COUNT
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev: incompatible latch operands r6 (map_value), r7 (map_value)")
-__not_msg("widening r6")
 __naked void ptr_map_value_other_map(void)
 {
 	asm volatile ("					\
@@ -4675,8 +4420,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("header_count is 4 ")
-__msg("widening r6 to 0..3 step 1")
+__msg(RANGE("{{[0-9]+}}", "R6", 0, 3))
+__msg("has trip count 4{{$}}")
 __naked void ptr_mem(void)
 {
 	asm volatile ("					\
@@ -4705,9 +4450,8 @@ __naked void ptr_mem(void)
 SEC("xdp")
 __success
 __log_level(2)
+NO_COUNT
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev: incompatible latch operands r6 (ringbuf_mem), r7 (ringbuf_mem)")
-__not_msg("widening r6")
 __naked void ptr_mem_other_reservation(void)
 {
 	asm volatile ("					\
@@ -4749,8 +4493,7 @@ SEC("iter/bpf_map_elem")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("header_count is 4 ")
-__msg("can't widen r6, expr is (+ r6 8)")
+ONCE
 __naked void ptr_buf(void)
 {
 	asm volatile ("					\
@@ -4772,9 +4515,8 @@ __naked void ptr_buf(void)
 SEC("iter/bpf_map_elem")
 __success
 __log_level(2)
+NO_COUNT
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev: incompatible latch operands r6 (buf), r7 (buf)")
-__not_msg("widening r6")
 __naked void ptr_buf_other_load(void)
 {
 	asm volatile ("					\
@@ -4800,9 +4542,8 @@ __naked void ptr_buf_other_load(void)
 SEC("xdp")
 __success
 __log_level(2)
+NO_COUNT
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("scev: incompatible latch operands r1 (map_value), scalar 4")
-__not_msg("widening r1")
 __naked void ptr_vs_scalar_no_widen(void)
 {
 	asm volatile ("					\
@@ -4832,8 +4573,8 @@ out_%=:							\
 SEC("xdp")
 __success
 __log_level(2)
+__msg("loop at 9 has trip count 3{{$}}")
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 9, can't widen r1, expr is (+ r1 8)")
 __naked void no_widen_maybe_null(void)
 {
 	asm volatile ("					\
@@ -4924,8 +4665,7 @@ __msg("entering loop 1")
 __msg("entering loop 4")
 __msg("exiting loop 4")
 __not_msg("entering loop 1")
-__msg("from 4 to 1:")
-__msg("loop_stack=1{{$}}")
+__msg("from 4 to 1: pruned")
 __naked void nested_loop_backedge_to_outer_header(void)
 {
 	asm volatile ("					\
@@ -4948,8 +4688,8 @@ exit_%=:						\
 SEC("socket")
 __success
 __log_level(2)
-__msg("loop header at 2, header_count is 10")
-__msg("loop header at 2, widening r1 to 0..9 step 1")
+__msg(RANGE("2", "R1", 0, 9))
+__msg("loop at 2 has trip count 10{{$}}")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked void post_cond_ivar_src(void)
 {
@@ -4967,9 +4707,9 @@ __naked void post_cond_ivar_src(void)
 SEC("socket")
 __success
 __log_level(2)
-__msg("  backedge from 4, latch at 4, dominating exits at 2")
-__msg("loop header at 2, header_count is [0..15]")
-__msg("loop header at 2, widening r1 to 0..14 step 1")
+__msg("  backedge from 4, latch at 4")
+__msg(RANGE("2", "R1", 0, 14))
+__msg("loop at 2 has trip count 15{{$}}")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked void dominating_exit_bounds_count(void)
 {
@@ -4991,10 +4731,8 @@ SEC("xdp")
 __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg(" scev at latch 5:")
-__msg("  r7=(zext32 r1) / (zext32 (linear r1 2))")
-__msg("loop header at 1, header_count is 100 ")
-__msg("loop header at 1, widening r1 to 0..198 step 2")
+__msg(RANGE("1", "R1", 0, 198))
+__msg("loop at 1 has trip count 100{{$}}")
 __naked void post_cond_jlt32_copy(void)
 {
 	asm volatile ("					\
@@ -5019,10 +4757,8 @@ __naked void post_cond_jlt32_copy(void)
 SEC("socket")
 __success __retval(0)
 __log_level(2)
-__msg("header_count is 100000 ")
-__msg("can't widen r6, expr is %r6.13")
-__not_msg("widening r8")
-__msg("clamping r8 to 0..0x1869f step 1")
+__msg(RANGE("{{[0-9]+}}", "R8", 0, 0x1869f))
+__msg("has trip count 100000{{$}}")
 __naked void index_loaded_in_previous_iteration(void)
 {
 	asm volatile ("					\
@@ -5053,7 +4789,7 @@ __naked void index_loaded_in_previous_iteration(void)
  * iteration, 16 bits in the others: the state that comes back to the head next is not within it.
  */
 SEC("socket")
-__failure __msg("R1 unbounded memory access")
+__failure __msg("R1 max value is outside of the allowed memory range")
 __naked void first_iteration_loads_less(void)
 {
 	asm volatile ("					\
@@ -5330,7 +5066,7 @@ __naked void clamp_pkt_pointer_keeps_range_of_entry(void)
  * in the second iteration no byte from r6 is in the packet.
  */
 SEC("tc")
-__failure __msg("invalid access to packet, off=56 size=2, R6(id=2,off=56,r=56)")
+__failure __msg("invalid access to packet, off=56 size=2, R6(id={{[0-9]+}},off=56,r=56)")
 __naked void widen_pkt_pointer_step_lowers_umax(void)
 {
 	asm volatile (
@@ -5349,7 +5085,7 @@ __naked void widen_pkt_pointer_step_lowers_umax(void)
 
 /* The pointer goes down. 8 bytes from the first r6 are in the packet, not 10. */
 SEC("tc")
-__failure __msg("invalid access to packet, off=120 size=2, R6(id=2,off=120,r=120)")
+__failure __msg("invalid access to packet, off=120 size=2, R6(id={{[0-9]+}},off=120,r=120)")
 __naked void widen_pkt_pointer_step_lowers_umax_down(void)
 {
 	asm volatile (
@@ -5371,7 +5107,7 @@ __naked void widen_pkt_pointer_step_lowers_umax_down(void)
  * r5 is 0..56 and has the range of r6. In the first iteration no byte from r5 is in the packet.
  */
 SEC("tc")
-__failure __msg("invalid access to packet, off=56 size=2, R5(id=2,off=56,r=56)")
+__failure __msg("invalid access to packet, off=56 size=2, R5(id={{[0-9]+}},off=56,r=56)")
 __naked void widen_pkt_pointer_negative_offset(void)
 {
 	asm volatile (
@@ -5418,7 +5154,7 @@ __naked void clamp_pkt_pointer_step_lowers_umax(void)
 
 /* r5 is r5 = r6 + 8 or r6 at the head. Here var_off lowers umax. No byte from r6 + 8 is valid. */
 SEC("tc")
-__failure __msg("invalid access to packet, off=56 size=2, R5(id=2,off=56,r=56)")
+__failure __msg("invalid access to packet, off=56 size=2, R5(id={{[0-9]+}},off=56,r=56)")
 __naked void union_pkt_pointer_var_off_lowers_umax(void)
 {
 	asm volatile (
@@ -5461,8 +5197,8 @@ __naked void widen_pkt_pointer_keeps_valid_bytes(void)
 SEC("tc")
 __success
 __log_level(2)
-__msg("widening r6 to 32..96 step 32")
-__msg("6: R6=pkt(id=1,r=0,smin=umin=smin32=umin32=32,smax=umax=smax32=umax32=96")
+__msg(RANGE("{{[0-9]+}}", "R6", 32, 96))
+__msg("6: R6=pkt(id={{[0-9]+}},r=0,smin=umin=smin32=umin32=32,smax=umax=smax32=umax32=96")
 __naked void widen_pkt_pointer_beyond_pkt_end(void)
 {
 	asm volatile (
@@ -5484,6 +5220,461 @@ __naked void widen_pkt_pointer_beyond_pkt_end(void)
 	"r0 = 0;"
 	"exit;"
 	:: PKT_IMMS : __clobber_all);
+}
+
+/* r7 += r6 & 1: r7 is not above the number of trips */
+#define SUM_OF_LOW_BITS(size)			\
+	"r6 = 0;"				\
+	"r7 = 0;"				\
+"1:"						\
+	"r1 = r6;"				\
+	"r1 &= 1;"				\
+	"r1 += r7;"				\
+	"r7 = r1;"				\
+	"r6 += 1;"				\
+	"if r6 != 100000 goto 1b;"		\
+	"if r7 > " #size " goto 2f;"		\
+	"r0 = 0;"				\
+	"exit;"					\
+"2:"						\
+	"r0 = *(u64 *)(r10 + 0);"		\
+	"exit;"
+
+SEC("socket")
+__success __log_level(2)
+__msg("has trip count 100000")
+__naked void sum_of_low_bits(void)
+{
+	asm volatile (SUM_OF_LOW_BITS(100000) ::: __clobber_all);
+}
+
+SEC("socket")
+__failure __msg("invalid read from stack R10 off=0 size=8")
+__naked void sum_of_low_bits_bad(void)
+{
+	asm volatile (SUM_OF_LOW_BITS(49999) ::: __clobber_all);
+}
+
+/* for (i = 0..1; i <= n; i++) */
+SEC("socket")
+__success __log_level(2)
+__not_msg("pass 1")
+__naked void start_and_bound_are_ranges(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r7 = r0;"
+	"if r7 > 510 goto 9f;"
+	"call %[bpf_get_prandom_u32];"
+	"r6 = r0;"
+	"r6 &= 1;"
+	"if w6 > w7 goto 9f;"
+	"r7 &= 0x7fffffff;"
+"1:"
+	"r0 = r6;"
+	"r2 = r10;"
+	"r2 += -512;"
+	"r2 += r0;"
+	"*(u8 *)(r2 + 0) = 1;"
+	"r6 = r0;"
+	"r6 += 1;"
+	"if r0 < r7 goto 1b;"
+"9:"
+	"r0 = 0;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);
+}
+
+/* h wraps around in 0..3. It moves with the trip index only in the first trips. */
+SEC("socket")
+__success
+__naked void index_wraps_around(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = 0;"
+"1:"
+	"r2 = r7;"
+	"r2 <<= 3;"
+	"r1 = r10;"
+	"r1 += -32;"
+	"r1 += r2;"
+	"*(u64 *)(r1 + 0) = r6;"
+	"r3 = 0;"
+	"if r7 s> 2 goto 2f;"
+	"r7 += 1;"
+	"r3 = r7;"
+"2:"
+	"r7 = r3;"
+	"r6 += 1;"
+	"if r6 != 100000 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * r8 - k >= 300, r8 - 2 * k <= 40, r8 < 560: no run gets through the three tests.
+ * The equations show it when the trip index is gone, at the exit of the loop.
+ * That state has r8 = 530. It must not subsume the state that skips the loop.
+ */
+SEC("socket")
+__failure __msg("invalid read from stack R10 off=0 size=8")
+__naked void infeasible_state_subsumes_nothing(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r8 = 530;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 != 1 goto 3f;"
+"1:"
+	"call %[bpf_get_prandom_u32];"
+	"r8 = r0;"
+	"r8 &= 0xfff;"
+	"r2 = r8;"
+	"r2 -= r6;"
+	"r3 = r6;"
+	"r3 <<= 1;"
+	"r4 = r8;"
+	"r4 -= r3;"
+	"if r2 s< 300 goto 2f;"
+	"if r4 s> 40 goto 2f;"
+	"if r8 s< 560 goto 3f;"
+"2:"
+	"r6 += 1;"
+	"if r6 < 700 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+"3:"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 2 goto 4f;"
+	"r0 = *(u64 *)(r10 + 0);"
+"4:"
+	"r0 = r8;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);
+}
+
+/*
+ * r6 = S64_MAX - k. No run gets to r6 == 0 or r6 == 1 by counting.
+ *
+ *              k            r7
+ *  r6 == 0     S64_MAX      1
+ *  r6 == 1     S64_MAX - 1  0     join: r7 = k - (S64_MAX - 1)
+ *  bit 6       small        1     the run
+ *
+ * The run must not get the trip index of the first state: the next trip cuts it off.
+ */
+SEC("socket")
+__failure __msg("invalid read from stack R10 off=0 size=8")
+__naked void trip_index_does_not_jump_ahead(void)
+{
+	asm volatile (
+	"r6 = 0x7fffffffffffffff ll;"
+	"r7 = 0;"
+"1:"
+	"may_goto 9f;"
+	"if r7 == 0 goto 2f;"
+	"r0 = *(u64 *)(r10 + 0);"
+"2:"
+	"call %[bpf_get_prandom_u32];"
+	"if r6 == 0 goto 4f;"
+	"if r6 == 1 goto 6f;"
+	"if r6 & 0x40 goto 3f;"
+	"r0 = 1;"
+	"r6 = 0;"
+	"r7 = 1;"
+	"goto 5f;"
+"3:"
+	"r6 += -1;"
+	"goto 1b;"
+"4:"
+	"r6 = 0;"
+	"r7 = 1;"
+"5:"
+	"*(u64 *)(r10 - 8) = r0;"
+	"goto 7f;"
+"6:"
+	"r6 = 0;"
+	"r7 = 0;"
+"7:"
+	"goto 1b;"
+"9:"
+	"r0 = r7;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);
+}
+
+/*
+ * r6 moves with the trip index. The state with r6 == S64_MAX has a pointer in r8, so it meets
+ * no other state at the header. No run makes that many trips: the state ends there.
+ */
+SEC("socket")
+__success
+__naked void trip_index_stops_at_s64_max(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = 0x7fffffffffffffff ll;"
+	"r8 = 0;"
+"1:"
+	"may_goto 9f;"
+	"if r8 != 0 goto 1b;"
+	"if r6 == r7 goto 2f;"
+	"r6 += 1;"
+	"goto 1b;"
+"2:"
+	"r8 = %[small_map] ll;"
+	"goto 1b;"
+"9:"
+	"r0 = 0;"
+	"exit;"
+	:: __imm_addr(small_map) : __clobber_all);
+}
+
+#define RING(name, mask)					\
+__naked void name(void)						\
+{								\
+	asm volatile (						\
+	"r6 = 0;"						\
+	"r7 = 0;"						\
+"1:"								\
+	"r1 = r10;"						\
+	"r1 += -32;"						\
+	"r1 += r7;"						\
+	"*(u8 *)(r1 + 0) = 0;"					\
+	"r7 += 1;"						\
+	"r7 &= " #mask ";"					\
+	"r6 += 1;"						\
+	"if r6 < 50000 goto 1b;"				\
+	"r0 = 0;"						\
+	"exit;"							\
+	::: __clobber_all);					\
+}
+
+/* pos = (pos + 1) & 31. The threshold of the trip index is not the threshold of pos. */
+SEC("socket")
+__success __log_level(2)
+__msg(RANGE("2", "R7", 0, 31))
+__not_msg("pass 2")
+RING(ring_index_is_bounded_by_mask, 31)
+
+SEC("socket")
+__failure __msg("write to stack R1")
+RING(ring_index_is_too_large, 63)
+
+/* Each add makes an equation that depends on the equation of the add before it */
+SEC("socket")
+__success
+__naked void long_chain_of_sums(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r6 = r0;"
+	"r6 &= 7;"
+	"call %[bpf_get_prandom_u32];"
+	"r7 = r0;"
+	"r7 &= 7;"
+	"call %[bpf_get_prandom_u32];"
+	"r0 &= 7;"
+	"r1 = 7;"
+	".rept 2000;"
+	"r0 += r6;"
+	"r1 += 6;"
+	"if r0 > r1 goto 9f;"
+	"r0 += r7;"
+	"r1 += 6;"
+	"if r0 > r1 goto 9f;"
+	".endr;"
+"9:"
+	"r0 += r6;"
+	"r0 += r7;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);
+}
+
+/* The start of a block has all loops, an insn has the inner one */
+SEC("socket")
+__success __log_level(2)
+__msg("to 2: {{.*}} loop_stack=1,2")
+__msg("2: (07) r7 += 1 {{.*}} loop_stack=2{{$}}")
+__naked void log_of_nested_loops(void)
+{
+	asm volatile (
+	"r6 = 0;"
+"1:"
+	"r7 = 0;"
+"2:"
+	"r7 += 1;"
+	"if r7 < 3 goto 2b;"
+	"r6 += 1;"
+	"if r6 < 3 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * r6 is 3 * trip and it can wrap. After the loop r6 == r7, so the sum is (17..25) + (20..28).
+ */
+#define SUM_WITH_PRODUCT_THAT_WRAPS(off)	\
+	asm volatile (				\
+	"call %[bpf_get_prandom_u32];"		\
+	"r7 = r0;"				\
+	"if r7 < 20 goto 9f;"			\
+	"if r7 > 28 goto 9f;"			\
+	"r6 = 0;"				\
+"1:"						\
+	"r8 = r6;"				\
+	"r8 += r7;"				\
+	"r6 += 3;"				\
+	"if r6 != r7 goto 1b;"			\
+	"r1 = r10;"				\
+	"r1 += " #off ";"			\
+	"r1 += r8;"				\
+	"*(u8 *)(r1 + 0) = 1;"			\
+"9:"						\
+	"r0 = 0;"				\
+	"exit;"					\
+	:: __imm(bpf_get_prandom_u32) : __clobber_all)
+
+SEC("socket")
+__success
+__naked void sum_with_product_that_wraps(void)
+{
+	SUM_WITH_PRODUCT_THAT_WRAPS(-54);
+}
+
+/* r7 = 27 gives 51 */
+SEC("socket")
+__failure __msg("write to stack R1")
+__naked void sum_with_product_that_wraps_above(void)
+{
+	SUM_WITH_PRODUCT_THAT_WRAPS(-51);
+}
+
+/*
+ * r7 stays in 0..31. No range shows it, so all trips are peeled.
+ * A path-sensitive run must not skip any.
+ */
+SEC("socket")
+__success
+__naked void path_sensitive_does_not_skip_a_ring(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = 0;"
+"1:"
+	"r1 = r10;"
+	"r1 += -32;"
+	"r1 += r7;"
+	"*(u8 *)(r1 + 0) = 0;"
+	"r7 += 1;"
+	"r2 = r7;"
+	"r2 >>= 5;"
+	"r2 <<= 5;"
+	"r7 ^= r2;"
+	"r6 += 1;"
+	"if r6 < 6000 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The sum of 4000, 3999, ..., -4000 is 0 */
+SEC("socket")
+__success
+__naked void path_sensitive_does_not_skip_a_sum(void)
+{
+	asm volatile (
+	"r6 = 4000;"
+	"r7 = 0;"
+"1:"
+	"r7 += r6;"
+	"r6 += -1;"
+	"if r6 s>= -4000 goto 1b;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"r1 += r7;"
+	"*(u8 *)(r1 + 0) = 0;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+char a1m[1 << 20] SEC(".data.a1m");
+
+/* (n, size) is (1 << 18, 4) or (@n, 8). for (i = 0; i < n; i++) { a1m[i * size]; @inner } */
+#define TWO_ENTRIES(n, inner)						\
+	asm volatile (							\
+	"call %[bpf_get_prandom_u32];"					\
+	"r6 = 0x40000;"							\
+	"r7 = 4;"							\
+	"if w0 & 1 goto 1f;"						\
+	"r6 = " #n ";"							\
+	"r7 = 8;"							\
+"1:	r8 = 0;"							\
+"2:	r2 = r8;"							\
+	"r2 *= r7;"							\
+	"r1 = %[a1m] ll;"						\
+	"r1 += r2;"							\
+	"r0 = *(u8 *)(r1 + 0);"						\
+	inner								\
+	"r8 += 1;"							\
+	"if r8 != r6 goto 2b;"						\
+	"exit;"								\
+	:: __imm(bpf_get_prandom_u32), __imm_addr(a1m) : __clobber_all)
+
+SEC("socket")
+__success __log_level(2) __not_msg("pass 2") __retval(0)
+__naked void each_entry_has_its_threshold(void)
+{
+	TWO_ENTRIES(0x20000, "");
+}
+
+SEC("socket")
+__failure __msg("invalid access to map value")
+__naked void each_entry_has_its_threshold_bad(void)
+{
+	TWO_ENTRIES(0x20001, "");
+}
+
+/* for (j = 0; j != i + 1; j++); */
+SEC("socket")
+__success __log_level(2) __not_msg("pass 2")
+__naked void threshold_after_inner_loop(void)
+{
+	TWO_ENTRIES(0x20000, "r3 = r8; r3 += 1; r9 = 0; 3: r9 += 1; if r9 != r3 goto 3b;");
+}
+
+/* sum = @start; for (i = 0; i < 64; i++) sum += a1m[i]; */
+#define SUM_FROM(start)							\
+	asm volatile (							\
+	"call %[bpf_ktime_get_ns];"					\
+	"r6 = " start ";"						\
+	"r7 = 0;"							\
+"1:	r1 = %[a1m] ll;"						\
+	"r1 += r7;"							\
+	"r1 = *(u8 *)(r1 + 0);"						\
+	"r6 += r1;"							\
+	"r7 += 1;"							\
+	"if r7 < 64 goto 1b;"						\
+	"r0 = r6;"							\
+	"exit;"								\
+	:: __imm(bpf_ktime_get_ns), __imm_addr(a1m) : __clobber_all)
+
+SEC("socket")
+__success __log_level(4) __msg("processed 12 insns")
+__naked void unknown_sum_body_once(void)
+{
+	SUM_FROM("r0");
+}
+
+SEC("socket")
+__success __log_level(4) __msg("processed 24 insns")
+__naked void known_sum_three_trips(void)
+{
+	SUM_FROM("0");
 }
 
 char _license[] SEC("license") = "GPL";

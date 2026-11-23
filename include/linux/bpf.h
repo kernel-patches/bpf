@@ -71,6 +71,7 @@ extern spinlock_t btf_idr_lock;
 extern struct kobject *btf_kobj;
 extern struct bpf_mem_alloc bpf_global_ma, bpf_global_percpu_ma;
 extern bool bpf_global_ma_set;
+extern struct workqueue_struct *bpf_prog_free_wq __ro_after_init;
 
 typedef u64 (*bpf_callback_t)(u64, u64, u64, u64, u64);
 typedef int (*bpf_iter_init_seq_priv_t)(void *private_data,
@@ -1189,7 +1190,7 @@ struct bpf_insn_access_aux {
 		struct {
 			struct btf *btf;
 			u32 btf_id;
-			u32 ref_id;
+			u32 ref_arg;	/* see struct bpf_ctx_arg_aux */
 		};
 	};
 	u32 mem_size;
@@ -1827,7 +1828,7 @@ struct bpf_ctx_arg_aux {
 	enum bpf_reg_type reg_type;
 	struct btf *btf;
 	u32 btf_id;
-	u32 ref_id;
+	u32 ref_arg;	/* a number for a __ref argument, else 0 */
 	u32 mem_size;
 	bool refcounted;
 };
@@ -2627,8 +2628,8 @@ struct bpf_array {
 int bpf_array_get_next_key(struct bpf_map *map, void *key, void *next_key);
 
 /*
- * the longest program. The verifier limits the number of states, not of
- * processed insns, see BPF_FLOW_MAX_STATES.
+ * the longest program. The verifier limits the cost of a load, not the number
+ * of processed insns, see BPF_MAX_COST.
  */
 #define BPF_COMPLEXITY_LIMIT_INSNS      1000000 /* yes. 1M insns */
 #define MAX_TAIL_CALL_CNT 33

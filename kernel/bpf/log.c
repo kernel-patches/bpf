@@ -177,53 +177,6 @@ void bpf_vlog_reset(struct bpf_verifier_log *log, u64 new_pos)
 		log->ubuf = NULL;
 }
 
-/*
- * Take what was written since @pos out of the log. bpf_vlog_unstash() appends it to what is
- * written in between. The text is in the buffer of the user and nowhere else. What the buffer
- * doesn't hold, the start of the text if it's rolling and the end if it's fixed, is counted.
- */
-int bpf_vlog_stash(struct bpf_verifier_log *log, u64 pos, struct bpf_vlog_stash *stash)
-{
-	u64 from = max(pos, log->start_pos), to = log->end_pos, i;
-	u32 off, n;
-
-	if (!log->ubuf)
-		from = to;
-	else if (log->level & BPF_LOG_FIXED)
-		to = clamp(log->len_total - 1ULL, from, to);
-	stash->lost_start = from - pos;
-	stash->lost_end = log->end_pos - to;
-	stash->len = to - from;
-	/* as large as the buffer at worst: fail before the OOM killer is called */
-	stash->buf = kvzalloc(stash->len, BPF_VERIFIER_GFP);
-	if (!stash->buf)
-		return -ENOMEM;
-	/* two pieces if it wraps around */
-	for (i = from; i < to && log->ubuf; i += n) {
-		div_u64_rem(i, log->len_total, &off);
-		n = min(to - i, log->len_total - off);
-		if (copy_from_user(stash->buf + (i - from), log->ubuf + off, n))
-			log->ubuf = NULL;
-	}
-	bpf_vlog_reset(log, pos);
-	return 0;
-}
-
-void bpf_vlog_unstash(struct bpf_verifier_log *log, struct bpf_vlog_stash *stash)
-{
-	u64 i, n;
-
-	log->end_pos += stash->lost_start;
-	for (i = 0; i < stash->len; i += n) {
-		n = min(stash->len - i, sizeof(log->kbuf) - 1);
-		bpf_log(log, "%.*s", (int)n, stash->buf + i);
-		cond_resched();
-	}
-	log->end_pos += stash->lost_end;
-	bpf_vlog_update_len_max(log, 1);
-	kvfree(stash->buf);
-}
-
 static void bpf_vlog_reverse_kbuf(char *buf, int len)
 {
 	int i, j;
@@ -574,20 +527,12 @@ static void verbose_unum(struct bpf_verifier_env *env, u64 num)
 		verbose(env, "%#llx", num);
 }
 
-void bpf_verbose_snum(struct bpf_verifier_env *env, s64 num)
+static void verbose_snum(struct bpf_verifier_env *env, s64 num)
 {
 	if (is_snum_decimal(num))
 		verbose(env, "%lld", num);
 	else
 		verbose(env, "%#llx", num);
-}
-
-void bpf_verbose_snum32(struct bpf_verifier_env *env, s32 num)
-{
-	if (is_snum_decimal(num))
-		verbose(env, "%d", num);
-	else
-		verbose(env, "%#x", (u32)num);
 }
 
 int tnum_strn(char *str, size_t size, struct tnum a)
@@ -664,7 +609,7 @@ static void print_scalar_ranges(struct bpf_verifier_env *env,
 		}
 
 		if (m1->name[0] == 's')
-			bpf_verbose_snum(env, m1->val);
+			verbose_snum(env, m1->val);
 		else
 			verbose_unum(env, m1->val);
 	}
@@ -685,7 +630,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 
 	t = reg->type;
 	if (t == SCALAR_VALUE && tnum_is_const(reg->var_off)) {
-		bpf_verbose_snum(env, reg->var_off.value);
+		verbose_snum(env, reg->var_off.value);
 		return;
 	}
 
@@ -696,7 +641,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		if (state->frameno != reg->frameno)
 			verbose(env, "[%d]", reg->frameno);
 		if (tnum_is_const(reg->var_off)) {
-			bpf_verbose_snum(env, reg->var_off.value);
+			verbose_snum(env, reg->var_off.value);
 			return;
 		}
 	}
@@ -721,6 +666,8 @@ static void print_reg_state(struct bpf_verifier_env *env,
 	if (type_is_pkt_pointer(t)) {
 		verbose_a("r=");
 		verbose_unum(env, reg->range);
+		if (pkt_min_len(reg) && pkt_min_len(reg) != reg->range)
+			verbose_a("min_len=%d", pkt_min_len(reg));
 	}
 	if (base_type(t) == PTR_TO_MEM) {
 		verbose_a("sz=");
@@ -734,7 +681,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		/* a pointer register with fixed offset */
 		if (reg->var_off.value) {
 			verbose_a("imm=");
-			bpf_verbose_snum(env, reg->var_off.value);
+			verbose_snum(env, reg->var_off.value);
 		}
 	} else {
 		print_scalar_ranges(env, reg, &sep);
@@ -755,7 +702,7 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 {
 	const struct bpf_func_state *state = vstate->frame[frameno];
 	const struct bpf_reg_state *reg;
-	int i;
+	int i, first;
 
 	if (state->frameno)
 		verbose(env, " frame%d:", state->frameno);
@@ -804,7 +751,8 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 			break;
 		case STACK_DYNPTR:
 			/* skip to main dynptr slot */
-			i += BPF_DYNPTR_NR_SLOTS - 1;
+			if (!reg->dynptr.first_slot)
+				i += BPF_DYNPTR_NR_SLOTS - 1;
 			reg = &bpf_stack_slot(state, i)->spilled_ptr;
 
 			verbose(env, " fp%d", (-i - 1) * BPF_REG_SIZE);
@@ -842,16 +790,23 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 		verbose(env, " cb");
 	if (state->in_async_callback_fn)
 		verbose(env, " async_cb");
-	/* the iterations of the loops in which they are kept apart */
-	for (i = 0; i < state->loop_stack_cnt; i++)
-		if (state->loop_stack[i].apart)
-			verbose(env, " iter(%d)=%u", state->loop_stack[i].loop_id,
+	/* The innermost loop. Level 2 has all loops, once for each block. */
+	first = print_all && (env->log.level & BPF_LOG_LEVEL2) ? 0 :
+		max(state->loop_stack_cnt, 1U) - 1;
+	/* the peeled trips */
+	for (i = first; i < state->loop_stack_cnt; i++)
+		if (state->loop_stack[i].peeled)
+			verbose(env, " iter(%d)=%u", state->loop_stack[i].loop->header,
 				state->loop_stack[i].trip);
 	if (state->loop_stack_cnt) {
 		verbose(env, " loop_stack=");
-		for (i = 0; i < state->loop_stack_cnt; i++)
-			verbose(env, "%s%d", i ? "," : "", state->loop_stack[i].loop_id);
+		for (i = first; i < state->loop_stack_cnt; i++)
+			verbose(env, "%s%d", i > first ? "," : "",
+				state->loop_stack[i].loop->header);
 	}
+	/* one table for all frames */
+	if (print_all && frameno == vstate->curframe)
+		bpf_equations_print(env, vstate);
 	verbose(env, "\n");
 	if (!print_all)
 		mark_verifier_state_clean(env);

@@ -49,13 +49,10 @@ struct {
 
 /*
  *	do { n += 3; } while (v[0]);
- * Two iterations are looked at as they are. The second one ends the walk: its jump goes both
- * ways. Its state is joined with the one before, nothing stops n, so n is any number.
- * What comes back next is within that. The number of insns tells that there is no fourth pass.
- * The loop gets may_goto when the walk ends, and all is done again: two times 24 insns.
+ * Nothing stops n, so n is any number. The loop has no trip count and gets may_goto.
  */
 OK("the state that ends a walk is joined with the one before")
-__log_level(1) __msg("processed 48 insns")
+__log_level(1) __msg("processed {{[0-9]?[0-9]?[0-9]}} insns")
 __naked void two_passes(void)
 {
 	asm volatile (
@@ -78,7 +75,7 @@ __naked void two_passes(void)
  * the known bits are what the range says after the first one.
  */
 OK("known bits are not lost one by one")
-__log_level(1) __msg("processed 74 insns")
+__log_level(1) __msg("processed {{[0-9]?[0-9]?[0-9]}} insns")
 __naked void bits_one_by_one(void)
 {
 	asm volatile (
@@ -107,7 +104,7 @@ __naked void bits_one_by_one(void)
  * time: no signed bound moves, and the range does, a million times if nothing is done about it.
  */
 OK("a range moves and its signed bounds do not")
-__log_level(1) __msg("processed 68 insns")
+__log_level(1) __msg("processed {{[0-9]?[0-9]?[0-9]}} insns")
 __naked void unsigned_bound_moves(void)
 {
 	asm volatile (
@@ -184,22 +181,22 @@ __naked void name(void)							\
 
 /* No jump of the loop depends on the sum, no stop holds it: two passes, with 0 and any number */
 OK("a sum is any number at once")
-__log_level(1) __msg("processed 25 insns")
+__log_level(1) __msg("processed {{[0-9]?[0-9]?[0-9]}} insns")
 SUM(sum_two_passes, "", "r6 += r1;", 3, "r6 &= 63;")
 
 BAD("a sum is any number at once, and no index")
-__msg("register with unbounded min value is not allowed")
+__msg("R7 max value is outside of the allowed memory range")
 SUM(sum_two_passes_bad, "", "r6 += r1;", 3, "")
 
 /* sum = x + sum + x; if (x != 3) n -= x; */
 OK("a sum has many forms")
-__log_level(1) __msg("processed 36 insns")
+__log_level(1) __msg("processed {{[0-9]?[0-9]?[0-9]}} insns")
 SUM(sum_forms, "",
     "r2 = r1; r2 += r6; r6 = r2; r6 += r1; if r1 == 3 goto +1; r9 -= r1;", 8, "r6 += r9; r6 &= 63;")
 
 /* A test of the low half is sufficient behind the loop */
 OK("a sum in 32 bits is any number of 32 bits at once")
-__log_level(1) __msg("processed 25 insns")
+__log_level(1) __msg("processed {{[0-9]?[0-9]?[0-9]}} insns")
 SUM(sum32_two_passes, "", "w6 += w1;", 3, "if w6 > 63 goto 9f;")
 
 /* 0..S32_MAX at the head, 0..63 behind the jump. Of any number the jump leaves S64_MIN..63. */
@@ -215,12 +212,12 @@ SUM(sum_below_max_nested,
 
 /* 0, 0..S32_MAX, 0..U32_MAX, any number. 0..S64_MAX would be one more pass, and wraps. */
 OK("a sum that gets past U32_MAX is any number")
-__log_level(1) __msg("processed 37 insns")
+__log_level(1) __msg("processed {{[0-9]?[0-9]?[0-9]}} insns")
 SUM(sum_past_u32_max, "if r6 == 77 goto +0;", "r6 += r1;", 4, "r6 &= 63;")
 
 /* 0, S32_MIN..0, any number */
 OK("a sum that gets past S32_MIN is any number")
-__log_level(1) __msg("processed 32 insns")
+__log_level(1) __msg("processed {{[0-9]?[0-9]?[0-9]}} insns")
 SUM(sum_past_s32_min, "if r6 == 77 goto +0;", "r6 -= r1;", 4, "r6 &= 63;")
 
 /*

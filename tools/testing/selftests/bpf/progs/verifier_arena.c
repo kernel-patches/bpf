@@ -618,7 +618,7 @@ __naked void name(void)								\
 	:: __imm_addr(arena) : __clobber_all);					\
 }
 
-#define NOT_UNROLLED100	__msg("loop header at 5, widening r7 to 0..99 step 1")
+#define NOT_UNROLLED100	__msg("to 5: {{.*}}R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=99,")
 /* A loop that moves the pointer is not unrolled */
 ARENA_TEST(arena_pointer_moves, "r6 += 8;", __success NOT_UNROLLED100)
 /* The loop makes a number of it: the state that returns to the loop header tells */

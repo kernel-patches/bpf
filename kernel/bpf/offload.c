@@ -315,6 +315,9 @@ int bpf_prog_offload_verifier_prep(struct bpf_prog *prog)
 	down_read(&bpf_devs_lock);
 	offload = prog->aux->offload;
 	if (offload) {
+		/* the driver starts again, see do_check_all() */
+		if (offload->dev_state)
+			offload->offdev->ops->destroy(prog);
 		ret = offload->offdev->ops->prepare(prog);
 		offload->dev_state = !ret;
 	}

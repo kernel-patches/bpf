@@ -27,6 +27,20 @@ __naked int stats_main_only(void)
 	);
 }
 
+/* The pass checks 3 insns, the path-sensitive run 2. The repeat for the log does not count. */
+SEC("?raw_tp")
+__failure __log_level(4)
+__msg("subprog 0 (stats_failure) main insns_self 5 insns_total 5 stack 0")
+__msg("processed 5 insns")
+__naked int stats_failure(void)
+{
+	asm volatile (
+		"r0 = 0;"
+		"r0 = *(u64 *)(r10 + 8);"
+		"exit;"
+	);
+}
+
 __naked __noinline __used
 static int stats_chain_leaf(void)
 {

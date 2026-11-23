@@ -3,12 +3,13 @@
 #include <linux/bpf.h>
 #include <limits.h>
 #include <bpf/bpf_helpers.h>
+#include "../../../include/linux/filter.h"
 #include "bpf_misc.h"
 
 SEC("socket")
 __description("scalars: find linked scalars")
 __failure
-__msg("math between fp pointer and 2147483647 is not allowed")
+__msg("invalid unbounded variable-offset write to stack R3")
 __naked void scalars(void)
 {
 	asm volatile ("				\
@@ -715,5 +716,148 @@ l_exit_%=:							\
 	: __imm(bpf_get_prandom_u32)
 	: __clobber_all);
 }
+
+/* r6 is an index in 8 bytes of the stack if it is 0..7 */
+#define LINK_TEST(name, verdict, body)				\
+SEC("raw_tp")							\
+verdict								\
+__naked void name(void)						\
+{								\
+	asm volatile (						\
+	"call %[bpf_get_prandom_u32];"				\
+	"r6 = r0;"						\
+	"r1 = 0;"						\
+	"*(u64 *)(r10 - 8) = r1;"				\
+	"*(u64 *)(r10 - 16) = r1;"				\
+	body							\
+	"r1 = r10;"						\
+	"r1 += -8;"						\
+	"r1 += r6;"						\
+	"r0 = *(u8 *)(r1 + 0);"					\
+"1:"								\
+	"r0 = 0;"						\
+	"exit;"							\
+	:							\
+	: __imm(bpf_get_prandom_u32)				\
+	: __clobber_all);					\
+}
+
+#define NO_LINK __failure __msg("math between fp pointer and register with unbounded min value")
+
+/* An atomic insn writes the register that it fetches to, and no other */
+LINK_TEST(atomic_keeps_src, __success,
+	  "r7 = r6; lock *(u64 *)(r10 - 16) += r7; if r7 > 7 goto 1f;")
+LINK_TEST(atomic_keeps_r0, __success,
+	  "r7 = 1; lock *(u64 *)(r10 - 16) += r7; if r0 > 7 goto 1f;")
+LINK_TEST(fetch_keeps_r0, __success,
+	  "r7 = 1; r7 = atomic_fetch_add((u64 *)(r10 - 16), r7); if r0 > 7 goto 1f;")
+LINK_TEST(cmpxchg_keeps_src, __success,
+	  "r7 = r6; r0 = cmpxchg_64(r10 - 16, r0, r7); if r7 > 7 goto 1f;")
+LINK_TEST(fetch_writes_src, NO_LINK,
+	  "r7 = r6; r7 = atomic_fetch_add((u64 *)(r10 - 16), r7); if r7 > 7 goto 1f;")
+LINK_TEST(xchg_writes_src, NO_LINK,
+	  "r7 = r6; r7 = xchg_64(r10 - 16, r7); if r7 > 7 goto 1f;")
+LINK_TEST(cmpxchg_writes_r0, NO_LINK,
+	  "r7 = 1; r0 = cmpxchg_64(r10 - 16, r0, r7); if r0 > 7 goto 1f;")
+
+/* r1 moves with the trip index, r1 >> 14 is 0..6 */
+SEC("raw_tp")
+__success __log_level(2)
+__msg("has trip count 100000") __not_msg("pass 1")
+__naked void atomic_keeps_counter(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"r2 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"*(u64 *)(r10 - 16) = r1;"
+"1:"
+	"r3 = r1;"
+	"r3 >>= 14;"
+	"r3 += r10;"
+	"r0 = *(u8 *)(r3 - 8);"
+	"lock *(u64 *)(r10 - 16) += r1;"
+	"r1 += 1;"
+	"r2 += 1;"
+	"if r2 < 100000 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+#define TOO_FAR __failure __msg("invalid variable-offset read from stack")
+
+/* AND that clears no bit is a move */
+LINK_TEST(and_clears_no_bit, __success,
+	  "r6 &= 0xc6; r7 = r6; r7 &= 0x1c6; if r7 > 7 goto 1f;")
+LINK_TEST(and32_clears_no_bit, __success,
+	  "r6 &= 0xc6; r7 = r6; w7 &= 0x1c6; if w7 > 7 goto 1f;")
+LINK_TEST(and_clears_a_bit, TOO_FAR,
+	  "r6 &= 0xc6; r7 = r6; r7 &= 0x146; if r7 > 7 goto 1f;")
+LINK_TEST(and_reg_may_clear_a_bit, TOO_FAR,
+	  "r6 &= 0xc6; r7 = r6; r8 = r0; r8 |= 0x46; r7 &= r8; if r7 > 7 goto 1f;")
+/* the high bits are cleared */
+LINK_TEST(and32_of_wide, NO_LINK,
+	  "r6 <<= 8; r7 = r6; w7 &= -256; if r7 > 7 goto 1f;")
+LINK_TEST(and_mask_comes_first_far, TOO_FAR,
+	  "r6 &= 0xc6; r7 = 0x146; r7 &= r6; if r7 > 7 goto 1f;")
+
+/* The compiler clears the bits of the mask that are 0 in the number */
+LINK_TEST(and_low_bits, __success,
+	  "r6 <<= 2; r7 = r6; r6 &= 0xfffc; if r7 > 7 goto 1f;")
+LINK_TEST(and_rounds_down, __success,
+	  "r6 &= 0xff; r7 = r6; r6 &= 0xfc; if r7 > 7 goto 1f;")
+LINK_TEST(and_cuts_in_the_middle, TOO_FAR,
+	  "r7 = r6; r7 &= 0xff; r6 = r7; r7 &= 0xef; if r7 > 7 goto 1f;")
+LINK_TEST(and_rounds_down_far, TOO_FAR,
+	  "r6 &= 0xff; r7 = r6; r7 &= 0xf0; if r7 > 7 goto 1f;")
+
+/* r7 is 4 * trip + 8, r8 is 8 * trip. The loop has no trip count, so the products wrap. */
+#define STRIDE_TEST(name, verdict, body)			\
+SEC("raw_tp")							\
+verdict								\
+__naked void name(void)						\
+{								\
+	asm volatile (						\
+	"r7 = 8;"						\
+	"r8 = 0;"						\
+	"*(u64 *)(r10 - 8) = r8;"				\
+"2:"								\
+	".8byte %[may_goto];"					\
+	"r7 += 4;"						\
+	"r8 += 8;"						\
+	"goto 2b;"						\
+	body							\
+	"r1 = r10;"						\
+	"r1 += -8;"						\
+	"r1 += r6;"						\
+	"r0 = *(u8 *)(r1 + 0);"					\
+"1:"								\
+	"r0 = r8;"						\
+	"exit;"							\
+	:							\
+	: __imm(bpf_get_prandom_u32),				\
+	  __imm_insn(may_goto, BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 3, 0)) \
+	: __clobber_all);					\
+}
+
+#define PASSES __success __log_level(2) __not_msg("pass 1")
+#define AT_FP __failure __msg("invalid read from stack R1 off=0")
+#define NEXT_BLOCK "call %[bpf_get_prandom_u32]; if r0 > 5 goto 3f; r9 = 1; 3:"
+
+STRIDE_TEST(stride_low32, PASSES, "w6 = w7; if r7 > 7 goto 1f;")
+STRIDE_TEST(stride_low32_both, PASSES, "w6 = w7; if w7 > 7 goto 1f;")
+STRIDE_TEST(stride_low32_next_block, PASSES, "w6 = w7;" NEXT_BLOCK "if r7 > 7 goto 1f;")
+STRIDE_TEST(stride_times_2, PASSES, "r6 = r7; r6 <<= 1; if r7 > 3 goto 1f;")
+STRIDE_TEST(stride_neg, PASSES, "r6 = 7; r6 -= r7; if r7 > 7 goto 1f;")
+STRIDE_TEST(stride_shift, PASSES, "r6 = r7; r6 >>= 3; if r7 > 63 goto 1f;")
+STRIDE_TEST(stride_exact_shift, PASSES, "r6 = r7; r6 >>= 2; if r7 > 31 goto 1f;")
+STRIDE_TEST(stride_mask_low16, PASSES, "r6 = r7; r6 &= 0xfffc; if r7 > 7 goto 1f;")
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+STRIDE_TEST(stride_fill32, PASSES,
+	    "*(u64 *)(r10 - 16) = r7; r6 = *(u32 *)(r10 - 16); if r7 > 7 goto 1f;")
+#endif
+STRIDE_TEST(stride_low32_far, AT_FP, "w6 = w7; if r7 > 8 goto 1f;")
+STRIDE_TEST(stride_shift_far, AT_FP, "r6 = r7; r6 >>= 3; if r7 > 64 goto 1f;")
 
 char _license[] SEC("license") = "GPL";

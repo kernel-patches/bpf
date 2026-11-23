@@ -536,6 +536,59 @@ int flex_array_inner_array_out_of_bounds(void *ctx)
 	return val;
 }
 
+/*
+ * struct mm_struct ends with a flexible array of bytes. The pointer is trusted.
+ * The address is not mapped, so the load needs a fault handler.
+ */
+SEC("syscall")
+__success __retval(0)
+int flex_array_far_load(void *ctx)
+{
+	struct bpf_iter_task_vma it;
+	struct vm_area_struct *vma;
+	struct mm_struct *mm;
+	int err = 1;
+
+	bpf_iter_task_vma_new(&it, bpf_get_current_task_btf(), 0);
+	vma = bpf_iter_task_vma_next(&it);
+	mm = vma ? vma->vm_mm : NULL;
+	if (mm) {
+		asm volatile ("					\
+		r1 = %[mm];					\
+		r2 = 0x10000000000000 ll;			\
+		r1 += r2;					\
+		r1 = *(u8 *)(r1 + 0);				\
+"		:
+		: [mm] "r"(mm)
+		: "r1", "r2");
+		err = 0;
+	}
+	bpf_iter_task_vma_destroy(&it);
+	return err;
+}
+
+/* The join has the offsets from the start of the array to 1 << 40. */
+SEC("tp_btf/exit_mmap")
+__success __arch_x86_64
+__jited("	leaq	0xa00000(%rbx), %r11")
+__naked void flex_array_far_join(void)
+{
+	asm volatile ("						\
+	r6 = *(u64 *)(r1 + 0);					\
+	call %[bpf_get_prandom_u32];				\
+	r1 = %[size];						\
+	if r0 > 5 goto 1f;					\
+	r1 = 0x10000000000 ll;					\
+1:	r6 += r1;						\
+	r0 = *(u8 *)(r6 + 0);					\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(size, sizeof(struct mm_struct))
+	: __clobber_all);
+}
+
 typedef int array_element_t;
 typedef array_element_t array_type_t[4];
 
