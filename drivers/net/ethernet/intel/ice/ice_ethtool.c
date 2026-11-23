@@ -3681,10 +3681,10 @@ ice_set_rxfh(struct net_device *netdev, struct ethtool_rxfh_param *rxfh,
 	     struct netlink_ext_ack *extack)
 {
 	struct ice_netdev_priv *np = netdev_priv(netdev);
-	u8 hfunc = ICE_AQ_VSI_Q_OPT_RSS_HASH_TPLZ;
 	struct ice_vsi *vsi = np->vsi;
 	struct ice_pf *pf = vsi->back;
 	struct device *dev;
+	u8 hfunc;
 	int err;
 
 	dev = ice_pf_to_dev(pf);
@@ -3703,9 +3703,12 @@ ice_set_rxfh(struct net_device *netdev, struct ethtool_rxfh_param *rxfh,
 		return -EOPNOTSUPP;
 	}
 
-	/* Update the VSI's hash function */
-	if (rxfh->input_xfrm & RXH_XFRM_SYM_XOR)
+	if (rxfh->input_xfrm == RXH_XFRM_NO_CHANGE)
+		hfunc = vsi->rss_hfunc;
+	else if (rxfh->input_xfrm & RXH_XFRM_SYM_XOR)
 		hfunc = ICE_AQ_VSI_Q_OPT_RSS_HASH_SYM_TPLZ;
+	else /* input_xfrm == 0; core rejects any other value */
+		hfunc = ICE_AQ_VSI_Q_OPT_RSS_HASH_TPLZ;
 
 	err = ice_set_rss_hfunc(vsi, hfunc);
 	if (err)
