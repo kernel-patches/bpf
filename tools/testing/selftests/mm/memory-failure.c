@@ -442,8 +442,16 @@ TEST_F(memory_failure, dirty_pagecache)
 		ASSERT_EQ(ftruncate(fd, 0), 0);
 	}
 
+	/*
+	 * OrangeFS writes dirty pages from close(). Unlinking first removes
+	 * the server's file handle, so writeback returns -ENOENT and close()
+	 * fails. Close while the file is still linked. Remove the name
+	 * before checking the result so a failed close cannot leave a file
+	 * for the next test.
+	 */
+	ret = close(fd);
 	unlink(fname);
-	ASSERT_EQ(close(fd), 0);
+	ASSERT_EQ(ret, 0);
 }
 
 TEST_F(memory_failure, dirty_shmem)
