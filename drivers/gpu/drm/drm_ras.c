@@ -616,8 +616,10 @@ int drm_ras_nl_get_error_counter_dumpit(struct sk_buff *skb,
 		 * For non-contiguous range, driver return -ENOENT as indication
 		 * to skip this ID when listing all errors.
 		 */
-		if (ret == -ENOENT)
+		if (ret == -ENOENT) {
+			ret = 0;
 			continue;
+		}
 		if (ret)
 			break;
 
