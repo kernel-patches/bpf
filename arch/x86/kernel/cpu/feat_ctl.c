@@ -36,7 +36,7 @@ static void init_vmx_capabilities(struct cpuinfo_x86 *c)
 	 * features that can be turned off.  Ignore the allowed-0 settings,
 	 * if a feature can be turned on then it's supported.
 	 *
-	 * Use raw rdmsr() for primary processor controls and pin controls MSRs
+	 * Use raw rdmsrq() for primary processor controls and pin controls MSRs
 	 * as they exist on any CPU that supports VMX, i.e. we want the WARN if
 	 * the RDMSR faults.
 	 */

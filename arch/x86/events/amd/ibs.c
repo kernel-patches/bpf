@@ -591,7 +591,7 @@ static void perf_ibs_start(struct perf_event *event, int flags)
 		 *  o Set VAL bit            CTL2[Dis] = 1
 		 *  o Raise NMI --.        o ...
 		 *                 \       o ->start()
-		 *                  \        wrmsr(IBS_{FETCH|OP}_CTL, new value);
+		 *                  \        wrmsrq(IBS_{FETCH|OP}_CTL, new value);
 		 *                   \       (wrmsr clears the VAL bit)
 		 *                    `--> o Receives delayed NMI
 		 *                           (Unknown NMI since VAL bit is cleared)

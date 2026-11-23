@@ -222,7 +222,7 @@ enum {
  * are the TSX flags when TSX is supported, but when TSX is not supported
  * they have no consistent behavior:
  *
- *   - For wrmsr(), bits 61:62 are considered part of the sign extension.
+ *   - For wrmsrq(), bits 61:62 are considered part of the sign extension.
  *   - For HW updates (branch captures) bits 61:62 are always OFF and are not
  *     part of the sign extension.
  *
@@ -231,8 +231,8 @@ enum {
  *   1) LBR format LBR_FORMAT_EIP_FLAGS2
  *   2) CPU has no TSX support enabled
  *
- * ... then any value passed to wrmsr() must be sign extended to 63 bits and any
- * value from rdmsr() must be converted to have a 61 bits sign extension,
+ * ... then any value passed to wrmsrq() must be sign extended to 63 bits and
+ * any value from rdmsrq() must be converted to have a 61 bits sign extension,
  * ignoring the TSX flags.
  */
 static inline bool lbr_from_signext_quirk_needed(void)

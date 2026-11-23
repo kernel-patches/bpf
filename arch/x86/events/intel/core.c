@@ -6963,7 +6963,7 @@ static bool check_msr(unsigned long msr, u64 mask)
 		return false;
 
 	/*
-	 * Quirk only affects validation in wrmsr(), so wrmsrq()'s value
+	 * Quirk only affects validation in wrmsrq(), so wrmsrq()'s value
 	 * should equal rdmsrq()'s even with the quirk.
 	 */
 	if (val_new != val_tmp)
