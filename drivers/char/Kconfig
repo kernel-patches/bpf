@@ -223,16 +223,6 @@ config SONYPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called sonypi.
 
-config SCx200_GPIO
-	tristate "NatSemi SCx200 GPIO Support"
-	depends on SCx200
-	select NSC_GPIO
-	help
-	  Give userspace access to the GPIO pins on the National
-	  Semiconductor SCx200 processors.
-
-	  If compiled as a module, it will be called scx200_gpio.
-
 config NSC_GPIO
 	tristate "NatSemi Base GPIO Support"
 	depends on X86_32

@@ -9,11 +9,10 @@
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/mutex.h>
 #include <linux/pci.h>
+#include <linux/platform_device.h>
 
 #include <linux/scx200.h>
-#include <linux/scx200_gpio.h>
 
 /* Verify that the configuration block really is there */
 #define scx200_cb_probe(base) (inw((base) + SCx200_CBA) == (base))
@@ -21,9 +20,6 @@
 MODULE_AUTHOR("Christer Weinigel <wingel@nano-system.com>");
 MODULE_DESCRIPTION("NatSemi SCx200 Driver");
 MODULE_LICENSE("GPL");
-
-unsigned scx200_gpio_base = 0;
-unsigned long scx200_gpio_shadow[2];
 
 unsigned scx200_cb_base = 0;
 
@@ -44,15 +40,31 @@ static struct pci_driver scx200_pci_driver = {
 	.probe = scx200_probe,
 };
 
-static DEFINE_MUTEX(scx200_gpio_config_lock);
-
-static void scx200_init_shadow(void)
+static void scx200_unregister_gpio(void *data)
 {
-	int bank;
+	platform_device_unregister(data);
+}
 
-	/* read the current values driven on the GPIO signals */
-	for (bank = 0; bank < 2; ++bank)
-		scx200_gpio_shadow[bank] = inl(scx200_gpio_base + 0x10 * bank);
+static int scx200_register_gpio(struct pci_dev *pdev)
+{
+	struct resource res = DEFINE_RES_IO(pci_resource_start(pdev, 0),
+					     SCx200_GPIO_SIZE);
+	struct platform_device *gpio;
+
+	if (!IS_ENABLED(CONFIG_SCx200_GPIO))
+		return 0;
+
+	if (!(pci_resource_flags(pdev, 0) & IORESOURCE_IO) || !res.start ||
+	    pci_resource_len(pdev, 0) < SCx200_GPIO_SIZE)
+		return -ENODEV;
+
+	gpio = platform_device_register_resndata(&pdev->dev, "gpio-scx200",
+						 PLATFORM_DEVID_NONE, &res, 1,
+						 NULL, 0);
+	if (IS_ERR(gpio))
+		return PTR_ERR(gpio);
+
+	return devm_add_action_or_reset(&pdev->dev, scx200_unregister_gpio, gpio);
 }
 
 static int scx200_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
@@ -60,53 +72,23 @@ static int scx200_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	unsigned base;
 
 	if (pdev->device == PCI_DEVICE_ID_NS_SCx200_BRIDGE ||
-	    pdev->device == PCI_DEVICE_ID_NS_SC1100_BRIDGE) {
-		base = pci_resource_start(pdev, 0);
-		pr_info("GPIO base 0x%x\n", base);
+	    pdev->device == PCI_DEVICE_ID_NS_SC1100_BRIDGE)
+		return scx200_register_gpio(pdev);
 
-		if (!request_region(base, SCx200_GPIO_SIZE,
-				    "NatSemi SCx200 GPIO")) {
-			pr_err("can't allocate I/O for GPIOs\n");
-			return -EBUSY;
-		}
-
-		scx200_gpio_base = base;
-		scx200_init_shadow();
-
+	/* Find the base of the configuration block. */
+	if (scx200_cb_probe(SCx200_CB_BASE_FIXED)) {
+		scx200_cb_base = SCx200_CB_BASE_FIXED;
 	} else {
-		/* find the base of the Configuration Block */
-		if (scx200_cb_probe(SCx200_CB_BASE_FIXED)) {
-			scx200_cb_base = SCx200_CB_BASE_FIXED;
-		} else {
-			pci_read_config_dword(pdev, SCx200_CBA_SCRATCH, &base);
-			if (scx200_cb_probe(base)) {
-				scx200_cb_base = base;
-			} else {
-				pr_warn("Configuration Block not found\n");
-				return -ENODEV;
-			}
+		pci_read_config_dword(pdev, SCx200_CBA_SCRATCH, &base);
+		if (!scx200_cb_probe(base)) {
+			pr_warn("Configuration Block not found\n");
+			return -ENODEV;
 		}
-		pr_info("Configuration Block base 0x%x\n", scx200_cb_base);
+		scx200_cb_base = base;
 	}
+	pr_info("Configuration Block base 0x%x\n", scx200_cb_base);
 
 	return 0;
-}
-
-u32 scx200_gpio_configure(unsigned index, u32 mask, u32 bits)
-{
-	u32 config, new_config;
-
-	mutex_lock(&scx200_gpio_config_lock);
-
-	outl(index, scx200_gpio_base + 0x20);
-	config = inl(scx200_gpio_base + 0x24);
-
-	new_config = (config & mask) | bits;
-	outl(new_config, scx200_gpio_base + 0x24);
-
-	mutex_unlock(&scx200_gpio_config_lock);
-
-	return config;
 }
 
 static int __init scx200_init(void)
@@ -118,13 +100,9 @@ static int __init scx200_init(void)
 static void __exit scx200_cleanup(void)
 {
 	pci_unregister_driver(&scx200_pci_driver);
-	release_region(scx200_gpio_base, SCx200_GPIO_SIZE);
 }
 
 module_init(scx200_init);
 module_exit(scx200_cleanup);
 
-EXPORT_SYMBOL(scx200_gpio_base);
-EXPORT_SYMBOL(scx200_gpio_shadow);
-EXPORT_SYMBOL(scx200_gpio_configure);
 EXPORT_SYMBOL(scx200_cb_base);

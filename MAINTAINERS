@@ -25358,8 +25358,8 @@ F:	include/linux/scx200.h
 SCx200 GPIO DRIVER
 M:	Jim Cromie <jim.cromie@gmail.com>
 S:	Maintained
-F:	drivers/char/scx200_gpio.c
-F:	include/linux/scx200_gpio.h
+F:	drivers/gpio/gpio-scx200.c
+F:	include/linux/scx200.h
 
 SCx200 HRT CLOCKSOURCE DRIVER
 M:	Jim Cromie <jim.cromie@gmail.com>

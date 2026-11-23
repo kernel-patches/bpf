@@ -9,6 +9,7 @@
 /* Interesting stuff for the National Semiconductor SCx200 CPU */
 
 extern unsigned scx200_cb_base;
+extern const struct software_node scx200_gpio_swnode;
 
 #define scx200_cb_present() (scx200_cb_base!=0)
 
