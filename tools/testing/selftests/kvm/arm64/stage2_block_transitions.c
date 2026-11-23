@@ -3,10 +3,10 @@
  * Copyright (c) 2026 Google LLC
  * Author: Fuad Tabba <fuad.tabba@linux.dev>
  *
- * stage2_block_transitions - Exercise stage-2 block/page granularity changes
- * that dirty logging forces at fault time, and assert the guest completes.
+ * stage2_block_transitions - Exercise stage-2 block/page granularity at fault
+ * time: the changes dirty logging forces, and how far a THP block reaches.
  *
- * Both scenarios need the fault handler to allocate at fault time (a fresh
+ * Scenarios 1 and 2 need the fault handler to allocate at fault time (a fresh
  * mapping and/or page-table pages while holding mmu_lock), so a fault path
  * that fails to stage that memory manifests as a KVM_RUN error or, worse, a
  * host crash. The asserted property is host-agnostic: the guest runs the
@@ -27,6 +27,11 @@
  *   fault that must split the block into pages during logging, draining
  *   page-table pages. Skipped on CTR_EL0.DIC hardware, where mappings are
  *   made executable eagerly and the execute fault never occurs.
+ *
+ * Scenario 3 - THP whose first fault is on a tail page:
+ *   The guest writes to the second host page of a memslot backed by one
+ *   THP, then reads the first address past it. If KVM mapped the THP and
+ *   nothing past it, the write lands in the memslot and the read exits as MMIO.
  */
 #include <linux/bitfield.h>
 #include <linux/bitmap.h>
@@ -198,6 +203,49 @@ static void test_exec_split_drain(void)
 	kvm_vm_free(vm);
 }
 
+static void thp_guest_code(u64 touch_gva, u64 past_gva)
+{
+	WRITE_ONCE(*(u64 *)touch_gva, 0x1);
+	READ_ONCE(*(u64 *)past_gva);
+	GUEST_DONE();
+}
+
+static void test_thp_tail_first_touch(void)
+{
+	struct kvm_vcpu *vcpu;
+	struct kvm_vm *vm;
+	struct ucall uc;
+	size_t npages;
+	u64 thp_size;
+	u64 gpa;
+
+	if (!thp_configured()) {
+		ksft_print_msg("SKIP THP tail first touch: THP not configured\n");
+		return;
+	}
+	thp_size = get_trans_hugepagesz();
+
+	vm = vm_create_with_one_vcpu(&vcpu, thp_guest_code);
+	npages = thp_size / vm->page_size;
+
+	gpa = (vm_compute_max_gfn(vm) * vm->page_size) - 2 * thp_size;
+	gpa = align_down(gpa, thp_size);
+
+	vm_userspace_mem_region_add(vm, VM_MEM_SRC_ANONYMOUS_THP, gpa, DATA_SLOT, npages, 0);
+	virt_pg_map(vm, TEST_GVA + getpagesize(), gpa + getpagesize());
+	virt_pg_map(vm, TEST_GVA + thp_size, gpa + thp_size);
+	vcpu_args_set(vcpu, 2, TEST_GVA + getpagesize(), TEST_GVA + thp_size);
+
+	vcpu_run(vcpu);
+	TEST_ASSERT(get_ucall(vcpu, &uc) != UCALL_DONE,
+		    "Read past the memslot completed without an exit");
+	TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_MMIO);
+	TEST_ASSERT_EQ(vcpu->run->mmio.phys_addr, gpa + thp_size);
+	TEST_ASSERT_EQ(*(u64 *)addr_gpa2hva(vm, gpa + getpagesize()), 0x1);
+
+	kvm_vm_free(vm);
+}
+
 /*
  * The explicit-size hugetlb backing hard-fails region creation if the pages
  * are not already reserved, so probe here and skip rather than abort. The
@@ -216,6 +264,8 @@ static void require_hugepages(size_t bytes)
 
 int main(void)
 {
+	test_thp_tail_first_touch();
+
 	require_hugepages(NR_BLOCKS * BLOCK_SIZE);
 
 	test_block_collapse();
