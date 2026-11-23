@@ -792,6 +792,7 @@ enum rtl8152_flags {
 	IN_PRE_RESET,
 	PROBED_WITH_NO_ERRORS,
 	PROBE_SHOULD_RETRY,
+	PM_NOTIFIER_AUTOPM_HELD,
 };
 
 #define DEVICE_ID_LENOVO_USB_C_TRAVEL_HUB		0x721e
@@ -7078,12 +7079,18 @@ static int rtl_notifier(struct notifier_block *nb, unsigned long action,
 	switch (action) {
 	case PM_HIBERNATION_PREPARE:
 	case PM_SUSPEND_PREPARE:
-		usb_autopm_get_interface(tp->intf);
+		/*
+		 * Remember that the reference was taken. The device may be
+		 * probed or removed before the matching PM_POST_* event.
+		 */
+		if (!usb_autopm_get_interface(tp->intf))
+			set_bit(PM_NOTIFIER_AUTOPM_HELD, &tp->flags);
 		break;
 
 	case PM_POST_HIBERNATION:
 	case PM_POST_SUSPEND:
-		usb_autopm_put_interface(tp->intf);
+		if (test_and_clear_bit(PM_NOTIFIER_AUTOPM_HELD, &tp->flags))
+			usb_autopm_put_interface(tp->intf);
 		break;
 
 	case PM_POST_RESTORE:
@@ -7136,10 +7143,6 @@ static int rtl8152_open(struct net_device *netdev)
 	mutex_unlock(&tp->control);
 
 	usb_autopm_put_interface(tp->intf);
-#ifdef CONFIG_PM_SLEEP
-	tp->pm_notifier.notifier_call = rtl_notifier;
-	register_pm_notifier(&tp->pm_notifier);
-#endif
 	return 0;
 
 out_unlock:
@@ -7156,9 +7159,6 @@ static int rtl8152_close(struct net_device *netdev)
 	struct r8152 *tp = netdev_priv(netdev);
 	int res = 0;
 
-#ifdef CONFIG_PM_SLEEP
-	unregister_pm_notifier(&tp->pm_notifier);
-#endif
 	tasklet_disable(&tp->tx_tl);
 	clear_bit(WORK_ENABLE, &tp->flags);
 	usb_kill_urb(tp->intr_urb);
@@ -10284,6 +10284,15 @@ static int rtl8152_probe_once(struct usb_interface *intf,
 
 	netif_napi_add(netdev, &tp->napi, r8152_poll);
 
+#ifdef CONFIG_PM_SLEEP
+	/*
+	 * Not in ndo_open(): this takes the PM notifier chain lock, which
+	 * must not be taken under RTNL.
+	 */
+	tp->pm_notifier.notifier_call = rtl_notifier;
+	register_pm_notifier(&tp->pm_notifier);
+#endif
+
 	ret = register_netdev(netdev);
 	if (ret != 0) {
 		dev_err(&intf->dev, "couldn't register the device\n");
@@ -10309,6 +10318,12 @@ out2:
 	unregister_netdev(netdev);
 
 out1:
+#ifdef CONFIG_PM_SLEEP
+	unregister_pm_notifier(&tp->pm_notifier);
+	/* No PM_POST_* event is going to be delivered anymore. */
+	if (test_and_clear_bit(PM_NOTIFIER_AUTOPM_HELD, &tp->flags))
+		usb_autopm_put_interface(tp->intf);
+#endif
 	tasklet_kill(&tp->tx_tl);
 	cancel_delayed_work_sync(&tp->hw_phy_work);
 	if (tp->rtl_ops.unload)
@@ -10365,6 +10380,12 @@ static void rtl8152_disconnect(struct usb_interface *intf)
 		rtl_set_unplug(tp);
 
 		unregister_netdev(tp->netdev);
+#ifdef CONFIG_PM_SLEEP
+		unregister_pm_notifier(&tp->pm_notifier);
+		/* No PM_POST_* event is going to be delivered anymore. */
+		if (test_and_clear_bit(PM_NOTIFIER_AUTOPM_HELD, &tp->flags))
+			usb_autopm_put_interface(tp->intf);
+#endif
 		tasklet_kill(&tp->tx_tl);
 		cancel_delayed_work_sync(&tp->hw_phy_work);
 		if (tp->rtl_ops.unload)
