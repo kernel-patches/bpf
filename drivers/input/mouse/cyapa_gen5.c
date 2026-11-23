@@ -1206,7 +1206,7 @@ int cyapa_pip_bl_enter(struct cyapa *cyapa)
 }
 
 static int cyapa_pip_fw_head_check(struct cyapa *cyapa,
-		struct cyapa_tsg_bin_image_head *image_head)
+				   const struct cyapa_tsg_bin_image_head *image_head)
 {
 	if (image_head->head_size != 0x0C && image_head->head_size != 0x12)
 		return -EINVAL;
@@ -1239,8 +1239,9 @@ static int cyapa_pip_fw_head_check(struct cyapa *cyapa,
 int cyapa_pip_check_fw(struct cyapa *cyapa, const struct firmware *fw)
 {
 	struct device *dev = &cyapa->client->dev;
-	struct cyapa_tsg_bin_image_data_record *image_records;
+	const struct cyapa_tsg_bin_image_data_record *image_records;
 	const struct cyapa_tsg_bin_image_data_record *app_integrity;
+	const struct cyapa_tsg_bin_image_head *image_head;
 	const struct tsg_bl_metadata_row_params *metadata;
 	int flash_records_count;
 	u32 fw_app_start, fw_upgrade_start;
@@ -1249,16 +1250,25 @@ int cyapa_pip_check_fw(struct cyapa *cyapa, const struct firmware *fw)
 	u16 app_integrity_crc;
 	int i;
 
-	/* Verify the firmware image not miss-used for Gen5 and Gen6. */
-	if (cyapa_pip_fw_head_check(cyapa,
-		(struct cyapa_tsg_bin_image_head *)fw->data)) {
-		dev_err(dev, "%s: firmware image not match TP device.\n",
-			     __func__);
+	if (fw->size < sizeof(*image_head)) {
+		dev_err(dev, "%s: firmware image is too small.\n", __func__);
 		return -EINVAL;
 	}
 
-	image_records =
-		cyapa_get_image_record_data_num(fw, &flash_records_count);
+	image_head = (const void *)fw->data;
+
+	/* Verify the firmware image not miss-used for Gen5 and Gen6. */
+	if (cyapa_pip_fw_head_check(cyapa, image_head)) {
+		dev_err(dev, "%s: firmware image not match TP device.\n", __func__);
+		return -EINVAL;
+	}
+
+	image_records = cyapa_get_image_record_data_num(fw, &flash_records_count);
+	if (flash_records_count <= 0) {
+		dev_err(dev, "%s: firmware image has no flash records.\n",
+			__func__);
+		return -EINVAL;
+	}
 
 	/*
 	 * APP_INTEGRITY row is always the last row block,
@@ -1292,6 +1302,11 @@ int cyapa_pip_check_fw(struct cyapa *cyapa, const struct firmware *fw)
 	    fw_upgrade_start % CYAPA_TSG_FW_ROW_SIZE ||
 	    fw_upgrade_len % CYAPA_TSG_FW_ROW_SIZE) {
 		dev_err(dev, "%s: invalid image alignment.\n", __func__);
+		return -EINVAL;
+	}
+
+	if (fw_app_len / CYAPA_TSG_FW_ROW_SIZE > flash_records_count - 1) {
+		dev_err(dev, "%s: invalid firmware app length.\n", __func__);
 		return -EINVAL;
 	}
 
