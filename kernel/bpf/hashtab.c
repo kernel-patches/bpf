@@ -2983,6 +2983,7 @@ struct bpf_rhtab {
 static const struct rhashtable_params rhtab_params = {
 	.head_offset = offsetof(struct rhtab_elem, node),
 	.key_offset  = offsetof(struct rhtab_elem, data),
+	.trylock_irqsoff = true,
 };
 
 static inline void *rhtab_elem_value(struct rhtab_elem *l, u32 key_size)
@@ -3011,6 +3012,7 @@ static const struct rhashtable_params rhtab_params_long = {
 	.head_offset = offsetof(struct rhtab_elem, node),
 	.key_offset  = offsetof(struct rhtab_elem, data),
 	.key_len     = sizeof(long),
+	.trylock_irqsoff = true,
 	.hashfn      = rhtab_hashfn_long,
 	.obj_cmpfn   = rhtab_key_cmp_long,
 };
@@ -3143,20 +3145,10 @@ static int rhtab_delete_elem(struct bpf_rhtab *rhtab, struct rhtab_elem *elem, v
 {
 	int err;
 
-	/*
-	 * disable_instrumentation() mitigates the deadlock for programs running in NMI context.
-	 * rhashtable locks bucket with local_irq_save(). Only NMI programs may reenter
-	 * rhashtable code, bpf_disable_instrumentation() disables programs running in NMI, except
-	 * raw tracepoints, which we don't have in rhashtable.
-	 */
-	bpf_disable_instrumentation();
-
 	if (rhtab->map.key_size == sizeof(long))
 		err = rhashtable_remove_fast(&rhtab->ht, &elem->node, rhtab_params_long);
 	else
 		err = rhashtable_remove_fast(&rhtab->ht, &elem->node, rhtab_params);
-
-	bpf_enable_instrumentation();
 
 	if (err)
 		return err;
@@ -3268,15 +3260,10 @@ static long rhtab_map_update_elem(struct bpf_map *map, void *key, void *value, u
 	memcpy(elem->data, key, map->key_size);
 	copy_map_value(map, rhtab_elem_value(elem, map->key_size), value);
 
-	/* Prevent deadlock for NMI programs attempting to take bucket lock */
-	bpf_disable_instrumentation();
-
 	if (map->key_size == sizeof(long))
 		tmp = rhashtable_lookup_get_insert_fast(&rhtab->ht, &elem->node, rhtab_params_long);
 	else
 		tmp = rhashtable_lookup_get_insert_fast(&rhtab->ht, &elem->node, rhtab_params);
-
-	bpf_enable_instrumentation();
 
 	if (tmp) {
 		bpf_mem_cache_free(&rhtab->ma, elem);
