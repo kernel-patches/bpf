@@ -28,6 +28,7 @@ struct ring {
 	void *data;
 	unsigned long *consumer_pos;
 	unsigned long *producer_pos;
+	unsigned long *overwrite_pos;
 	unsigned long mask;
 	int map_fd;
 	bool overwrite;
@@ -150,6 +151,13 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 	}
 	r->producer_pos = tmp;
 	r->data = tmp + rb->page_size;
+	/*
+	 * overwrite_pos comes after producer_pos and pending_pos. Its offset
+	 * depends on the size of the kernel's unsigned long, which 32-bit libbpf
+	 * can't know.
+	 */
+	if (r->overwrite && sizeof(unsigned long) == sizeof(__u64))
+		r->overwrite_pos = r->producer_pos + 2;
 
 	e = &rb->events[rb->ring_cnt];
 	memset(e, 0, sizeof(*e));
@@ -426,11 +434,16 @@ unsigned long ring__producer_pos(const struct ring *r)
 
 size_t ring__avail_data_size(const struct ring *r)
 {
-	unsigned long cons_pos, prod_pos;
+	unsigned long cons_pos, prod_pos, over_pos;
 
 	cons_pos = ring__consumer_pos(r);
 	prod_pos = ring__producer_pos(r);
-	return prod_pos - cons_pos;
+	if (!r->overwrite_pos)
+		return prod_pos - cons_pos;
+
+	/* records before overwrite_pos are gone */
+	over_pos = smp_load_acquire(r->overwrite_pos);
+	return min(prod_pos - cons_pos, prod_pos - over_pos);
 }
 
 size_t ring__size(const struct ring *r)
