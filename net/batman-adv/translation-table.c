@@ -984,13 +984,77 @@ batadv_tt_local_create(struct net_device *mesh_iface, const u8 *addr,
 	return tt_local;
 }
 
+/* flags of a local TT entry which depend on the packets of the client */
+#define BATADV_TT_LOCAL_DYNAMIC_MASK \
+	(BATADV_TT_CLIENT_WIFI | BATADV_TT_CLIENT_ISOLA)
+
+/**
+ * batadv_tt_local_dynamic_flags() - get the dynamic flags of a local client
+ * @bat_priv: the bat priv with all the mesh interface information
+ * @iif_is_wifi: whether the client is connected via a wifi interface
+ * @mark: the value contained in the skb->mark field of the received packet (if
+ *  any)
+ *
+ * Return: the BATADV_TT_CLIENT_WIFI and BATADV_TT_CLIENT_ISOLA flags which the
+ * local entry of the client has to carry.
+ */
+static u16 batadv_tt_local_dynamic_flags(struct batadv_priv *bat_priv,
+					 bool iif_is_wifi, u32 mark)
+{
+	u32 match_mark;
+	u16 flags = 0;
+
+	if (iif_is_wifi)
+		flags |= BATADV_TT_CLIENT_WIFI;
+
+	/* check the mark in the skb: if it's equal to the configured
+	 * isolation_mark, it means the packet is coming from an
+	 * isolated non-mesh client
+	 */
+	match_mark = (mark & bat_priv->isolation_mark_mask);
+	if (bat_priv->isolation_mark_mask &&
+	    match_mark == bat_priv->isolation_mark)
+		flags |= BATADV_TT_CLIENT_ISOLA;
+
+	return flags;
+}
+
+/**
+ * batadv_tt_local_refresh_needed() - check if a local entry has to be modified
+ * @tt_local: the local TT entry to check
+ * @dynamic_flags: the dynamic flags the entry has to carry
+ *
+ * The bucket list_lock which is shared by many entries is only needed when
+ * the entry has to be modified or announced. For the common case of an
+ * already announced client with unchanged flags, it is enough to refresh the
+ * last_seen timestamp.
+ *
+ * Return: true if the slow path of batadv_tt_local_refresh() is required,
+ * false otherwise.
+ */
+static bool
+batadv_tt_local_refresh_needed(struct batadv_tt_local_entry *tt_local,
+			       u16 dynamic_flags)
+{
+	struct batadv_tt_common_entry *common = &tt_local->common;
+	u16 flags;
+
+	flags = batadv_tt_flags_get(common);
+
+	if (flags & (BATADV_TT_CLIENT_PENDING | BATADV_TT_CLIENT_ROAM))
+		return true;
+
+	if ((flags & BATADV_TT_LOCAL_DYNAMIC_MASK) != dynamic_flags)
+		return true;
+
+	return hlist_unhashed_lockless(&common->hash_entry);
+}
+
 /**
  * batadv_tt_local_refresh_locked() - refresh a local TT entry
  * @bat_priv: the bat priv with all the mesh interface information
  * @tt_local: the local TT entry to refresh
- * @iif_is_wifi: whether the client is connected via a wifi interface
- * @mark: the value contained in the skb->mark field of the received packet (if
- *  any)
+ * @dynamic_flags: the dynamic flags the entry has to carry
  * @announce: whether an ADD event has to be queued even when no announced
  *  flag was modified
  * @roamed_back: set to true when the client returned to its original location
@@ -1014,7 +1078,7 @@ batadv_tt_local_create(struct net_device *mesh_iface, const u8 *addr,
 static bool
 batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
 			       struct batadv_tt_local_entry *tt_local,
-			       bool iif_is_wifi, u32 mark, bool announce,
+			       u16 dynamic_flags, bool announce,
 			       bool *roamed_back)
 {
 	struct batadv_tt_common_entry *common = &tt_local->common;
@@ -1022,7 +1086,6 @@ batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
 	bool readded = false;
 	bool roamed = false;
 	u8 remote_flags;
-	u32 match_mark;
 	u16 flags;
 	u32 i;
 
@@ -1058,21 +1121,8 @@ batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
 		 */
 		remote_flags = flags & BATADV_TT_REMOTE_MASK;
 
-		if (iif_is_wifi)
-			flags |= BATADV_TT_CLIENT_WIFI;
-		else
-			flags &= ~BATADV_TT_CLIENT_WIFI;
-
-		/* check the mark in the skb: if it's equal to the configured
-		 * isolation_mark, it means the packet is coming from an
-		 * isolated non-mesh client
-		 */
-		match_mark = (mark & bat_priv->isolation_mark_mask);
-		if (bat_priv->isolation_mark_mask &&
-		    match_mark == bat_priv->isolation_mark)
-			flags |= BATADV_TT_CLIENT_ISOLA;
-		else
-			flags &= ~BATADV_TT_CLIENT_ISOLA;
+		flags &= ~BATADV_TT_LOCAL_DYNAMIC_MASK;
+		flags |= dynamic_flags;
 
 		if (remote_flags ^ (flags & BATADV_TT_REMOTE_MASK))
 			announce = true;
@@ -1119,7 +1169,8 @@ batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
  *  any)
  * @roamed_back: set to true when the client returned to its original location
  *
- * See batadv_tt_local_refresh_locked() for the actual refresh.
+ * See batadv_tt_local_refresh_locked() for the actual refresh. The hash bucket
+ * list_lock is only taken when the entry has to be modified or announced.
  *
  * An entry whose modification could not be announced stays in its previous
  * state. The refresh is then retried with the next packet of the client.
@@ -1135,13 +1186,21 @@ batadv_tt_local_refresh(struct batadv_priv *bat_priv,
 	spinlock_t *list_lock; /* protects write access to the hash lists */
 	struct batadv_tt_common_entry *common = &tt_local->common;
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	u16 dynamic_flags;
 	int ret = 0;
 	u32 i;
 
-	i = batadv_choose_tt(&common->key, hash->size);
-	list_lock = &hash->list_locks[i];
+	dynamic_flags = batadv_tt_local_dynamic_flags(bat_priv, iif_is_wifi,
+						      mark);
 
 	WRITE_ONCE(tt_local->last_seen, jiffies);
+
+	/* fast path: nothing to modify or to announce */
+	if (!batadv_tt_local_refresh_needed(tt_local, dynamic_flags))
+		return 0;
+
+	i = batadv_choose_tt(&common->key, hash->size);
+	list_lock = &hash->list_locks[i];
 
 	spin_lock_bh(list_lock);
 
@@ -1151,8 +1210,8 @@ batadv_tt_local_refresh(struct batadv_priv *bat_priv,
 		return -ENOENT;
 	}
 
-	if (!batadv_tt_local_refresh_locked(bat_priv, tt_local, iif_is_wifi,
-					    mark, false, roamed_back))
+	if (!batadv_tt_local_refresh_locked(bat_priv, tt_local, dynamic_flags,
+					    false, roamed_back))
 		ret = -ENOMEM;
 
 	spin_unlock_bh(list_lock);
@@ -1191,7 +1250,11 @@ static bool batadv_tt_local_insert(struct batadv_priv *bat_priv,
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
 	struct hlist_head *head;
 	struct hlist_node *node;
+	u16 dynamic_flags;
 	u32 i;
+
+	dynamic_flags = batadv_tt_local_dynamic_flags(bat_priv, iif_is_wifi,
+						      mark);
 
 	i = batadv_choose_tt(&common->key, hash->size);
 	head = &hash->table[i];
@@ -1208,8 +1271,8 @@ static bool batadv_tt_local_insert(struct batadv_priv *bat_priv,
 	}
 
 	/* announce the added client to the mesh */
-	if (!batadv_tt_local_refresh_locked(bat_priv, tt_local, iif_is_wifi,
-					    mark, true, roamed_back)) {
+	if (!batadv_tt_local_refresh_locked(bat_priv, tt_local, dynamic_flags,
+					    true, roamed_back)) {
 		spin_unlock_bh(list_lock);
 		return false;
 	}
