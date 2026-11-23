@@ -966,7 +966,7 @@ batadv_tt_local_create(struct net_device *mesh_iface, const u8 *addr,
 }
 
 /**
- * batadv_tt_local_refresh() - refresh a local TT entry of an active client
+ * batadv_tt_local_refresh_locked() - refresh a hashed local TT entry
  * @bat_priv: the bat priv with all the mesh interface information
  * @tt_local: the local TT entry to refresh
  * @iif_is_wifi: whether the client is connected via a wifi interface
@@ -980,19 +980,23 @@ batadv_tt_local_create(struct net_device *mesh_iface, const u8 *addr,
  * updated. An ADD event is queued when @announce is set, the pending removal
  * was cancelled or a flag announced to the other nodes was modified.
  *
- * All checks and modifications of the flags and the queueing of the ADD event
- * happen in a single flags_lock section. The announced flags are therefore the
- * ones which were just stored in the entry.
+ * The caller must hold the hash bucket list_lock of the entry and must have
+ * checked that the entry is still part of the local table.
  */
 static void
-batadv_tt_local_refresh(struct batadv_priv *bat_priv,
-			struct batadv_tt_local_entry *tt_local,
-			bool iif_is_wifi, u32 mark, bool announce,
-			bool *roamed_back)
+batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
+			       struct batadv_tt_local_entry *tt_local,
+			       bool iif_is_wifi, u32 mark, bool announce,
+			       bool *roamed_back)
 {
 	struct batadv_tt_common_entry *common = &tt_local->common;
+	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
 	u8 remote_flags;
 	u32 match_mark;
+	u32 i;
+
+	i = batadv_choose_tt(&common->key, hash->size);
+	lockdep_assert_held(&hash->list_locks[i]);
 
 	scoped_guard(spinlock_bh, &common->flags_lock) {
 		if (common->flags & BATADV_TT_CLIENT_PENDING) {
@@ -1054,6 +1058,109 @@ batadv_tt_local_refresh(struct batadv_priv *bat_priv,
 }
 
 /**
+ * batadv_tt_local_refresh() - refresh a local TT entry of an active client
+ * @bat_priv: the bat priv with all the mesh interface information
+ * @tt_local: the local TT entry to refresh
+ * @iif_is_wifi: whether the client is connected via a wifi interface
+ * @mark: the value contained in the skb->mark field of the received packet (if
+ *  any)
+ * @roamed_back: set to true when the client returned to its original location
+ *
+ * See batadv_tt_local_refresh_locked() for the actual refresh.
+ *
+ * Return: 0 if the entry was refreshed, -ENOENT if the entry is no longer part
+ * of the local table.
+ */
+static int
+batadv_tt_local_refresh(struct batadv_priv *bat_priv,
+			struct batadv_tt_local_entry *tt_local,
+			bool iif_is_wifi, u32 mark, bool *roamed_back)
+{
+	spinlock_t *list_lock; /* protects write access to the hash lists */
+	struct batadv_tt_common_entry *common = &tt_local->common;
+	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	u32 i;
+
+	i = batadv_choose_tt(&common->key, hash->size);
+	list_lock = &hash->list_locks[i];
+
+	WRITE_ONCE(tt_local->last_seen, jiffies);
+
+	spin_lock_bh(list_lock);
+
+	/* the entry was removed from the local table after it was looked up */
+	if (hlist_unhashed(&common->hash_entry)) {
+		spin_unlock_bh(list_lock);
+		return -ENOENT;
+	}
+
+	batadv_tt_local_refresh_locked(bat_priv, tt_local, iif_is_wifi, mark,
+				       false, roamed_back);
+
+	spin_unlock_bh(list_lock);
+
+	return 0;
+}
+
+/**
+ * batadv_tt_local_insert() - add a new local TT entry to the local table
+ * @bat_priv: the bat priv with all the mesh interface information
+ * @tt_local: the new local TT entry (not yet hashed)
+ * @iif_is_wifi: whether the client is connected via a wifi interface
+ * @mark: the value contained in the skb->mark field of the received packet (if
+ *  any)
+ * @roamed_back: set to true when the client returned to its original location
+ *
+ * The entry is inserted into the local hash and its initial ADD event is
+ * queued under the same hash bucket list_lock. A concurrent
+ * batadv_tt_local_commit_changes() can therefore not count the entry in the
+ * CRC of a ttvn before its ADD was queued and a concurrent
+ * batadv_tt_local_remove() can not unhash it before the ADD was queued.
+ *
+ * Return: true if the entry was added, false if the client already has an
+ * entry in the local table.
+ */
+static bool batadv_tt_local_insert(struct batadv_priv *bat_priv,
+				   struct batadv_tt_local_entry *tt_local,
+				   bool iif_is_wifi, u32 mark,
+				   bool *roamed_back)
+{
+	spinlock_t *list_lock; /* protects write access to the hash lists */
+	struct batadv_tt_common_entry *common = &tt_local->common;
+	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	struct hlist_head *head;
+	struct hlist_node *node;
+	u32 i;
+
+	i = batadv_choose_tt(&common->key, hash->size);
+	head = &hash->table[i];
+	list_lock = &hash->list_locks[i];
+
+	spin_lock_bh(list_lock);
+
+	hlist_for_each(node, head) {
+		if (!batadv_compare_tt(node, &common->key))
+			continue;
+
+		spin_unlock_bh(list_lock);
+		return false;
+	}
+
+	/* reference for the hash */
+	kref_get(&common->refcount);
+	hlist_add_head_rcu(&common->hash_entry, head);
+	atomic_inc(&hash->generation);
+
+	/* announce the added client to the mesh */
+	batadv_tt_local_refresh_locked(bat_priv, tt_local, iif_is_wifi, mark,
+				       true, roamed_back);
+
+	spin_unlock_bh(list_lock);
+
+	return true;
+}
+
+/**
  * batadv_tt_local_add() - add a new client to the local table or update an
  *  existing client
  * @mesh_iface: netdev struct of the mesh interface
@@ -1073,10 +1180,9 @@ bool batadv_tt_local_add(struct net_device *mesh_iface, const u8 *addr,
 	struct batadv_tt_global_entry *tt_global = NULL;
 	struct batadv_tt_local_entry *tt_local;
 	bool roamed_back = false;
-	bool added = false;
 	bool iif_is_wifi;
 	bool ret = false;
-	int hash_added;
+	int err;
 
 	iif_is_wifi = batadv_tt_iif_is_wifi(dev_net(mesh_iface), ifindex);
 
@@ -1086,29 +1192,25 @@ bool batadv_tt_local_add(struct net_device *mesh_iface, const u8 *addr,
 		tt_global = batadv_tt_global_hash_find(bat_priv, addr, vid);
 
 	if (tt_local) {
-		WRITE_ONCE(tt_local->last_seen, jiffies);
-	} else {
+		err = batadv_tt_local_refresh(bat_priv, tt_local, iif_is_wifi,
+					      mark, &roamed_back);
+		if (err == -ENOENT) {
+			/* stale entry which has to be replaced by a new one */
+			batadv_tt_local_entry_put(tt_local);
+			tt_local = NULL;
+		}
+	}
+
+	if (!tt_local) {
 		tt_local = batadv_tt_local_create(mesh_iface, addr, vid, iif_is_wifi);
 		if (!tt_local)
 			goto out;
 
-		kref_get(&tt_local->common.refcount);
-		hash_added = batadv_hash_add(bat_priv->tt.local_hash, batadv_compare_tt,
-					     batadv_choose_tt, &tt_local->common.key,
-					     &tt_local->common.hash_entry);
-
-		if (unlikely(hash_added != 0)) {
-			/* remove the reference for the hash */
-			batadv_tt_local_entry_put(tt_local);
+		if (unlikely(!batadv_tt_local_insert(bat_priv, tt_local,
+						     iif_is_wifi, mark,
+						     &roamed_back)))
 			goto out;
-		}
-
-		added = true;
 	}
-
-	/* announce the (re-)added client or its modified flags to the mesh */
-	batadv_tt_local_refresh(bat_priv, tt_local, iif_is_wifi, mark, added,
-				&roamed_back);
 
 	batadv_tt_local_add_roam(bat_priv, tt_global, roamed_back);
 
