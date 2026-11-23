@@ -837,7 +837,10 @@ bool amd_mce_usable_address(struct mce *m)
 			return false;
 	}
 
-	if (this_cpu_ptr(smca_banks)[m->bank].paddrv)
+	if (m->bank >= per_cpu(mce_num_banks, m->extcpu))
+		return false;
+
+	if (per_cpu(smca_banks, m->extcpu)[m->bank].paddrv)
 		return m->status & MCI_STATUS_PADDRV;
 
 	/* Check poison bit for all other bank types. */
