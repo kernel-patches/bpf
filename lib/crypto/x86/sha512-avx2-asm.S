@@ -2,6 +2,7 @@
 # Implement fast SHA-512 with AVX2 instructions. (x86_64)
 #
 # Copyright (C) 2013 Intel Corporation.
+# Copyright 2026 Google LLC
 #
 # Authors:
 #     James Guilford <james.guilford@intel.com>
@@ -46,26 +47,33 @@
 # and search for that title.
 #
 ########################################################################
-# This code schedules 1 blocks at a time, with 4 lanes per block
-########################################################################
 
 #include <linux/linkage.h>
 
 .text
 
-# Virtual Registers
+# Rolling window of 16 scheduled message words W[t-16..t-1]
 Y_0 = %ymm4
 Y_1 = %ymm5
 Y_2 = %ymm6
 Y_3 = %ymm7
+X_0 = %xmm4
+X_1 = %xmm5
+X_2 = %xmm6
+X_3 = %xmm7
 
 YTMP0 = %ymm0
 YTMP1 = %ymm1
 YTMP2 = %ymm2
 YTMP3 = %ymm3
 YTMP4 = %ymm8
+XTMP1 = %xmm1
+XTMP2 = %xmm2
+XTMP3 = %xmm3
+XTMP4 = %xmm8
 XFER  = YTMP0
 YBSWAP = %ymm9
+YROR8 = %ymm10
 
 # 1st arg is %rdi, which is saved to the stack and accessed later via %r12
 CTX1        = %rdi
@@ -117,13 +125,18 @@ frame_size = frame_CTX + CTX_SIZE
 .endm
 
 # rotate_Ys
-# Rotate values of symbols Y0...Y3
+# Rotate values of symbols Y_0..Y_3 and X_0..X_3
 .macro rotate_Ys
-	Y_ = Y_0
+	Y_  = Y_0
 	Y_0 = Y_1
 	Y_1 = Y_2
 	Y_2 = Y_3
 	Y_3 = Y_
+	X_  = X_0
+	X_0 = X_1
+	X_1 = X_2
+	X_2 = X_3
+	X_3 = X_
 .endm
 
 # RotateState
@@ -144,28 +157,24 @@ frame_size = frame_CTX + CTX_SIZE
 # macro MY_VPALIGNR	YDST, YSRC1, YSRC2, RVAL
 # YDST = {YSRC1, YSRC2} >> RVAL*8
 .macro MY_VPALIGNR YDST YSRC1 YSRC2 RVAL
-	vperm2f128      $0x3, \YSRC2, \YSRC1, \YDST     # YDST = {YS1_LO, YS2_HI}
-	vpalignr        $\RVAL, \YSRC2, \YDST, \YDST    # YDST = {YDS1, YS2} >> RVAL*8
+	vperm2i128	$0x3, \YSRC2, \YSRC1, \YDST	# YDST = {YSRC1_LO, YSRC2_HI}
+	vpalignr	$\RVAL, \YSRC2, \YDST, \YDST	# YDST = {YSRC1, YSRC2} >> RVAL*8
 .endm
 
+# Compute 4 rounds (t-16..t-13) using W+K from frame_XFER while scheduling
+# W[t..t+3] into Y_0 (then rotated to Y_3).  Vector comments show the low qword
+# lane unless all lanes are written out as {q3, q2, q1, q0}.
 .macro FOUR_ROUNDS_AND_SCHED
-################################### RND N + 0 #########################################
+################################### Round t-16 ########################################
 
-	# Extract w[t-7]
-	MY_VPALIGNR	YTMP0, Y_3, Y_2, 8		# YTMP0 = W[-7]
-	# Calculate w[t-16] + w[t-7]
-	vpaddq		Y_0, YTMP0, YTMP0		# YTMP0 = W[-7] + W[-16]
-	# Extract w[t-15]
-	MY_VPALIGNR	YTMP1, Y_1, Y_0, 8		# YTMP1 = W[-15]
-
-	# Calculate sigma0
-
-	# Calculate w[t-15] ror 1
-	vpsrlq		$1, YTMP1, YTMP2
-	vpsllq		$(64-1), YTMP1, YTMP3
-	vpor		YTMP2, YTMP3, YTMP3		# YTMP3 = W[-15] ror 1
-	# Calculate w[t-15] shr 7
-	vpsrlq		$7, YTMP1, YTMP4		# YTMP4 = W[-15] >> 7
+	# Compute W[t-16] + W[t-7] + s0(W[t-15]) for W[t..t+3]
+	MY_VPALIGNR	YTMP0, Y_3, Y_2, 8		# YTMP0 = W[t-7]
+	vpaddq		Y_0, YTMP0, YTMP0		# YTMP0 = W[t-16] + W[t-7]
+	MY_VPALIGNR	YTMP1, Y_1, Y_0, 8		# YTMP1 = W[t-15]
+	vpsrlq		$1, YTMP1, YTMP2		# YTMP2 = W[t-15] >> 1
+	vpsllq		$(64-1), YTMP1, YTMP3		# YTMP3 = W[t-15] << 63
+	vpor		YTMP2, YTMP3, YTMP3		# YTMP3 = W[t-15] ror 1
+	vpsrlq		$7, YTMP1, YTMP4		# YTMP4 = W[t-15] >> 7
 
 	mov	a, y3		# y3 = a                                # MAJA
 	rorx	$41, e, y0	# y0 = e >> 41				# S1A
@@ -204,30 +213,16 @@ frame_size = frame_CTX + CTX_SIZE
 
 	RotateState
 
-################################### RND N + 1 #########################################
+################################### Round t-15 ########################################
 
-	# Calculate w[t-15] ror 8
-	vpsrlq		$8, YTMP1, YTMP2
-	vpsllq		$(64-8), YTMP1, YTMP1
-	vpor		YTMP2, YTMP1, YTMP1		# YTMP1 = W[-15] ror 8
-	# XOR the three components
-	vpxor		YTMP4, YTMP3, YTMP3		# YTMP3 = W[-15] ror 1 ^ W[-15] >> 7
-	vpxor		YTMP1, YTMP3, YTMP1		# YTMP1 = s0
+	vpshufb		YROR8, YTMP1, YTMP1		# YTMP1 = W[t-15] ror 8
+	vpxor		YTMP4, YTMP3, YTMP3		# YTMP3 = (W[t-15] ror 1) ^ (W[t-15] >> 7)
+	vpxor		YTMP1, YTMP3, YTMP1		# YTMP1 = s0(W[t-15])
+	vpaddq		YTMP1, YTMP0, YTMP0		# YTMP0 = W[t-16] + W[t-7] + s0(W[t-15])
 
-
-	# Add three components, w[t-16], w[t-7] and sigma0
-	vpaddq		YTMP1, YTMP0, YTMP0		# YTMP0 = W[-16] + W[-7] + s0
-	# Move to appropriate lanes for calculating w[16] and w[17]
-	vperm2f128	$0x0, YTMP0, YTMP0, Y_0		# Y_0 = W[-16] + W[-7] + s0 {BABA}
-	# Move to appropriate lanes for calculating w[18] and w[19]
-	vpand		MASK_YMM_LO(%rip), YTMP0, YTMP0	# YTMP0 = W[-16] + W[-7] + s0 {DC00}
-
-	# Calculate w[16] and w[17] in both 128 bit lanes
-
-	# Calculate sigma1 for w[16] and w[17] on both 128 bit lanes
-	vperm2f128	$0x11, Y_3, Y_3, YTMP2		# YTMP2 = W[-2] {BABA}
-	vpsrlq		$6, YTMP2, YTMP4		# YTMP4 = W[-2] >> 6 {BABA}
-
+	# Compute s1({W[t-1], W[t-2]}) for {W[t+1], W[t]}
+	vextracti128	$1, Y_3, XTMP2			# XTMP2 = {W[t-1], W[t-2]}
+	vpsrlq		$6, XTMP2, XTMP4		# XTMP4 = W[t-2] >> 6
 
 	mov	a, y3		# y3 = a                                # MAJA
 	rorx	$41, e, y0	# y0 = e >> 41				# S1A
@@ -268,24 +263,20 @@ frame_size = frame_CTX + CTX_SIZE
 
 	RotateState
 
+################################### Round t-14 ########################################
 
-################################### RND N + 2 #########################################
+	vpsrlq		$19, XTMP2, XTMP3		# XTMP3 = W[t-2] >> 19
+	vpsllq		$(64-19), XTMP2, XTMP1		# XTMP1 = W[t-2] << 45
+	vpor		XTMP1, XTMP3, XTMP3		# XTMP3 = W[t-2] ror 19
+	vpxor		XTMP3, XTMP4, XTMP4		# XTMP4 = (W[t-2] ror 19) ^ (W[t-2] >> 6)
+	vpsrlq		$61, XTMP2, XTMP3		# XTMP3 = W[t-2] >> 61
+	vpsllq		$(64-61), XTMP2, XTMP1		# XTMP1 = W[t-2] << 3
+	vpor		XTMP1, XTMP3, XTMP3		# XTMP3 = W[t-2] ror 61
+	vpxor		XTMP3, XTMP4, XTMP4		# YTMP4 = {0, 0, s1(W[t-1]), s1(W[t-2])}
+	vpaddq		YTMP0, YTMP4, Y_0		# Y_0 = {YTMP0[3..2], W[t+1], W[t]}
 
-	vpsrlq		$19, YTMP2, YTMP3		# YTMP3 = W[-2] >> 19 {BABA}
-	vpsllq		$(64-19), YTMP2, YTMP1		# YTMP1 = W[-2] << 19 {BABA}
-	vpor		YTMP1, YTMP3, YTMP3		# YTMP3 = W[-2] ror 19 {BABA}
-	vpxor		YTMP3, YTMP4, YTMP4		# YTMP4 = W[-2] ror 19 ^ W[-2] >> 6 {BABA}
-	vpsrlq		$61, YTMP2, YTMP3		# YTMP3 = W[-2] >> 61 {BABA}
-	vpsllq		$(64-61), YTMP2, YTMP1		# YTMP1 = W[-2] << 61 {BABA}
-	vpor		YTMP1, YTMP3, YTMP3		# YTMP3 = W[-2] ror 61 {BABA}
-	vpxor		YTMP3, YTMP4, YTMP4		# YTMP4 = s1 = (W[-2] ror 19) ^
-							#  (W[-2] ror 61) ^ (W[-2] >> 6) {BABA}
-
-	# Add sigma1 to the other compunents to get w[16] and w[17]
-	vpaddq		YTMP4, Y_0, Y_0			# Y_0 = {W[1], W[0], W[1], W[0]}
-
-	# Calculate sigma1 for w[18] and w[19] for upper 128 bit lane
-	vpsrlq		$6, Y_0, YTMP4			# YTMP4 = W[-2] >> 6 {DC--}
+	# Compute s1({W[t+1], W[t]}) for {W[t+3], W[t+2]}
+	vpsrlq		$6, X_0, XTMP4			# XTMP4 = W[t] >> 6
 
 	mov	a, y3		# y3 = a                                # MAJA
 	rorx	$41, e, y0	# y0 = e >> 41				# S1A
@@ -325,24 +316,20 @@ frame_size = frame_CTX + CTX_SIZE
 
 	RotateState
 
-################################### RND N + 3 #########################################
+################################### Round t-13 ########################################
 
-	vpsrlq		$19, Y_0, YTMP3			# YTMP3 = W[-2] >> 19 {DC--}
-	vpsllq		$(64-19), Y_0, YTMP1		# YTMP1 = W[-2] << 19 {DC--}
-	vpor		YTMP1, YTMP3, YTMP3		# YTMP3 = W[-2] ror 19 {DC--}
-	vpxor		YTMP3, YTMP4, YTMP4		# YTMP4 = W[-2] ror 19 ^ W[-2] >> 6 {DC--}
-	vpsrlq		$61, Y_0, YTMP3			# YTMP3 = W[-2] >> 61 {DC--}
-	vpsllq		$(64-61), Y_0, YTMP1		# YTMP1 = W[-2] << 61 {DC--}
-	vpor		YTMP1, YTMP3, YTMP3		# YTMP3 = W[-2] ror 61 {DC--}
-	vpxor		YTMP3, YTMP4, YTMP4		# YTMP4 = s1 = (W[-2] ror 19) ^
-							#  (W[-2] ror 61) ^ (W[-2] >> 6) {DC--}
+	vpsrlq		$19, X_0, XTMP3			# XTMP3 = W[t] >> 19
+	vpsllq		$(64-19), X_0, XTMP1		# XTMP1 = W[t] << 45
+	vpor		XTMP1, XTMP3, XTMP3		# XTMP3 = W[t] ror 19
+	vpxor		XTMP3, XTMP4, XTMP4		# XTMP4 = (W[t] ror 19) ^ (W[t] >> 6)
+	vpsrlq		$61, X_0, XTMP3			# XTMP3 = W[t] >> 61
+	vpsllq		$(64-61), X_0, XTMP1		# XTMP1 = W[t] << 3
+	vpor		XTMP1, XTMP3, XTMP3		# XTMP3 = W[t] ror 61
+	vpxor		XTMP3, XTMP4, XTMP4		# XTMP4 = {s1(W[t+1]), s1(W[t])}
 
-	# Add the sigma0 + w[t-7] + w[t-16] for w[18] and w[19]
-	# to newly calculated sigma1 to get w[18] and w[19]
-	vpaddq		YTMP4, YTMP0, YTMP2		# YTMP2 = {W[3], W[2], --, --}
-
-	# Form w[19, w[18], w17], w[16]
-	vpblendd		$0xF0, YTMP2, Y_0, Y_0		# Y_0 = {W[3], W[2], W[1], W[0]}
+	# Move s1 to bits 255:128 while zeroing bits 127:0, then add into Y_0
+	vperm2i128	$0x08, YTMP4, YTMP4, YTMP4	# YTMP4 = {s1(W[t+1]), s1(W[t]), 0, 0}
+	vpaddq		Y_0, YTMP4, Y_0			# Y_0 = {W[t+3], W[t+2], W[t+1], W[t]}
 
 	mov	a, y3		# y3 = a                                # MAJA
 	rorx	$41, e, y0	# y0 = e >> 41				# S1A
@@ -589,6 +576,7 @@ SYM_FUNC_START(sha512_transform_rorx)
 	mov	%rdi, frame_CTX(%rsp)
 
 	vbroadcasti128	.L_XMM_QWORD_BSWAP(%rip), YBSWAP
+	vbroadcasti128	.L_XMM_QWORD_ROR8(%rip), YROR8
 
 .Lloop0:
 	lea	K512(%rip), TBL
@@ -601,7 +589,8 @@ SYM_FUNC_START(sha512_transform_rorx)
 
 	mov	INP, frame_INP(%rsp)
 
-	## schedule 64 input dwords, by doing 12 rounds of 4 each
+	# Do rounds 0..63 and compute W[16..79] (interleaved) in four loop
+	# iterations, each of which does four groups of four rounds.
 	movq	$4, frame_SRND(%rsp)
 
 .align 16
@@ -626,6 +615,8 @@ SYM_FUNC_START(sha512_transform_rorx)
 	subq	$1, frame_SRND(%rsp)
 	jne	.Lloop1
 
+	# Do rounds 64..79 in two loop iterations, each of which does two groups
+	# of four rounds.
 	movq	$2, frame_SRND(%rsp)
 .Lloop2:
 	vpaddq	(TBL), Y_0, XFER
@@ -730,8 +721,8 @@ K512:
 .L_XMM_QWORD_BSWAP:
 	.octa 0x08090a0b0c0d0e0f0001020304050607
 
-.section	.rodata.cst32.MASK_YMM_LO, "aM", @progbits, 32
-.align 32
-MASK_YMM_LO:
-	.octa 0x00000000000000000000000000000000
-	.octa 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+.section	.rodata.cst16.XMM_QWORD_ROR8, "aM", @progbits, 16
+.align 16
+# Mask for rotating each qword right by 8 bits using vpshufb
+.L_XMM_QWORD_ROR8:
+	.octa 0x080f0e0d0c0b0a090007060504030201
