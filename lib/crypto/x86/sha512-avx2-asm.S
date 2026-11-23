@@ -65,8 +65,7 @@ YTMP2 = %ymm2
 YTMP3 = %ymm3
 YTMP4 = %ymm8
 XFER  = YTMP0
-
-BYTE_FLIP_MASK  = %ymm9
+YBSWAP = %ymm9
 
 # 1st arg is %rdi, which is saved to the stack and accessed later via %r12
 CTX1        = %rdi
@@ -110,9 +109,6 @@ frame_INPEND = frame_INP + INP_SIZE
 frame_CTX = frame_INPEND + INPEND_SIZE
 frame_size = frame_CTX + CTX_SIZE
 
-## assume buffers not aligned
-#define	VMOVDQ vmovdqu
-
 # addm [mem], reg
 # Add reg to mem using reg-mem add and store
 .macro addm p1 p2
@@ -120,13 +116,6 @@ frame_size = frame_CTX + CTX_SIZE
 	mov	\p2, \p1
 .endm
 
-
-# COPY_YMM_AND_BSWAP ymm, [mem], byte_flip_mask
-# Load ymm with mem and byte swap each dword
-.macro COPY_YMM_AND_BSWAP p1 p2 p3
-	VMOVDQ \p2, \p1
-	vpshufb \p3, \p1, \p1
-.endm
 # rotate_Ys
 # Rotate values of symbols Y0...Y3
 .macro rotate_Ys
@@ -599,16 +588,16 @@ SYM_FUNC_START(sha512_transform_rorx)
 	# save %rdi (CTX) before it gets clobbered
 	mov	%rdi, frame_CTX(%rsp)
 
-	vmovdqa	PSHUFFLE_BYTE_FLIP_MASK(%rip), BYTE_FLIP_MASK
+	vbroadcasti128	.L_XMM_QWORD_BSWAP(%rip), YBSWAP
 
 .Lloop0:
 	lea	K512(%rip), TBL
 
-	## byte swap first 16 dwords
-	COPY_YMM_AND_BSWAP	Y_0, (INP), BYTE_FLIP_MASK
-	COPY_YMM_AND_BSWAP	Y_1, 1*32(INP), BYTE_FLIP_MASK
-	COPY_YMM_AND_BSWAP	Y_2, 2*32(INP), BYTE_FLIP_MASK
-	COPY_YMM_AND_BSWAP	Y_3, 3*32(INP), BYTE_FLIP_MASK
+	# Load and byte-swap W[0..15]
+.irp i, 0,1,2,3
+	vmovdqu	\i*32(INP), Y_\i
+	vpshufb	YBSWAP, Y_\i, Y_\i
+.endr
 
 	mov	INP, frame_INP(%rsp)
 
@@ -735,12 +724,11 @@ K512:
 	.quad	0x4cc5d4becb3e42b6,0x597f299cfc657e2a
 	.quad	0x5fcb6fab3ad6faec,0x6c44198c4a475817
 
-.section	.rodata.cst32.PSHUFFLE_BYTE_FLIP_MASK, "aM", @progbits, 32
-.align 32
-# Mask for byte-swapping a couple of qwords in an XMM register using (v)pshufb.
-PSHUFFLE_BYTE_FLIP_MASK:
+.section	.rodata.cst16.XMM_QWORD_BSWAP, "aM", @progbits, 16
+.align 16
+# Mask for byte-swapping each qword using vpshufb
+.L_XMM_QWORD_BSWAP:
 	.octa 0x08090a0b0c0d0e0f0001020304050607
-	.octa 0x18191a1b1c1d1e1f1011121314151617
 
 .section	.rodata.cst32.MASK_YMM_LO, "aM", @progbits, 32
 .align 32
