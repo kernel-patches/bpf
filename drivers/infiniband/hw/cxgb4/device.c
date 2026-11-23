@@ -1548,6 +1548,8 @@ static int __init c4iw_init_module(void)
 	reg_workq = create_singlethread_workqueue("Register_iWARP_device");
 	if (!reg_workq) {
 		pr_err("Failed creating workqueue to register iwarp device\n");
+		debugfs_remove_recursive(c4iw_debugfs_root);
+		c4iw_cm_term();
 		return -ENOMEM;
 	}
 
