@@ -12,6 +12,8 @@
 #define SW_SD2_EN		0
 #define SW_DPI_EN		0
 #define SW_GPIO4		1
+#define SW_GPIO8_CAN0_STB	0
+#define SW_GPIO9_CAN1_STB	0
 #define SW_I3C_EN		0
 #define SW_SER0_PMOD		1
 
@@ -69,6 +71,38 @@
 		};
 	};
 #endif
+};
+
+&canfd {
+	pinctrl-0 = <&canfd_pins>;
+	pinctrl-names = "default";
+
+	channel0 {
+		phys = <&can_transceiver 0>;
+		status = "okay";
+	};
+
+#if (!SW_DPI_EN)
+	channel1 {
+		phys = <&can_transceiver 1>;
+		status = "okay";
+	};
+#endif
+};
+
+&can_transceiver {
+	standby-gpios =
+#if (!SW_SD2_EN) && (!SW_DPI_EN) && (SW_GPIO8_CAN0_STB)
+			<&pinctrl RZG3L_GPIO(K, 0) GPIO_ACTIVE_HIGH>,
+#else
+			<0>,
+#endif
+#if (!SW_SD2_EN) && (!SW_DPI_EN) && (SW_GPIO9_CAN1_STB)
+			<&pinctrl RZG3L_GPIO(K, 1) GPIO_ACTIVE_HIGH>;
+#else
+			<0>;
+#endif
+	status = "okay";
 };
 
 &ehci0 {
@@ -151,6 +185,18 @@
 	audio_clk_pins: audio-clock {
 		pinmux = <RZG3L_PORT_PINMUX(H, 4, 6)>, /* AUDIO_CLK_B */
 			 <RZG3L_PORT_PINMUX(H, 5, 6)>; /* AUDIO_CLK_C */
+	};
+
+	canfd_pins: canfd {
+		can0_pins: can0 {
+			pinmux = <RZG3L_PORT_PINMUX(3, 2, 3)>, /* CAN_RX0 */
+				 <RZG3L_PORT_PINMUX(3, 3, 3)>; /* CAN_TX0 */
+		};
+
+		can1_pins: can1 {
+			pinmux = <RZG3L_PORT_PINMUX(5, 2, 3)>, /* CAN_RX1 */
+				 <RZG3L_PORT_PINMUX(5, 3, 3)>; /* CAN_TX1 */
+		};
 	};
 
 	i2c2_pins: i2c2 {
