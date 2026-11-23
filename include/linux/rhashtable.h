@@ -638,6 +638,15 @@ static __always_inline int rhashtable_compare(struct rhashtable_compare_arg *arg
 		      params.key_len ? : ht->p.key_len);
 }
 
+/*
+ * A caller with irqs disabled may have interrupted the rehash on this cpu, so
+ * its retry would never end. It finds the moved entries in the future table.
+ */
+static __always_inline bool rht_lookup_retry(const struct rhashtable_params params)
+{
+	return !params.trylock_irqsoff || !irqs_disabled();
+}
+
 /* Internal function, do not use. */
 static __always_inline struct rhash_head *__rhashtable_lookup(
 	struct rhashtable *ht, const void *key,
@@ -670,7 +679,7 @@ restart:
 		/* An object might have been moved to a different hash chain,
 		 * while we walk along it - better check and retry.
 		 */
-	} while (he != RHT_NULLS_MARKER(bkt));
+	} while (he != RHT_NULLS_MARKER(bkt) && rht_lookup_retry(params));
 
 	/* Ensure we see any new tables. */
 	smp_rmb();

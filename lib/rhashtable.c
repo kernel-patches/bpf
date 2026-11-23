@@ -274,7 +274,11 @@ static int rhashtable_rehash_one(struct rhashtable *ht,
 
 	head = rht_ptr(new_tbl->buckets + new_hash, new_tbl, new_hash);
 
-	RCU_INIT_POINTER(entry->next, head);
+	/*
+	 * Pairs with smp_rmb() in __rhashtable_lookup() for lookups that
+	 * don't retry.
+	 */
+	rcu_assign_pointer(entry->next, head);
 
 	rht_assign_unlock(new_tbl, &new_tbl->buckets[new_hash], entry, flags);
 
