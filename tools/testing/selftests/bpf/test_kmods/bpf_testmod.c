@@ -2531,7 +2531,13 @@ int bpf_kfunc_multi_st_ops_test_1_assoc(struct st_ops_args *args, struct bpf_pro
 
 int bpf_kfunc_implicit_arg(int a, struct bpf_prog_aux *aux)
 {
-	if (aux && a > 0)
+	/*
+	 * Verify that the verifier injected a real bpf_prog_aux instead
+	 * of leaving a stale register value.
+	 */
+	if (!aux || aux->prog->aux != aux)
+		return -EINVAL;
+	if (a > 0)
 		return a;
 	return -EINVAL;
 }
