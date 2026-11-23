@@ -1051,6 +1051,79 @@ err_out:
 	return -EINVAL;
 }
 
+static int verify_gen_loader_no_token(const struct bpf_object_open_opts *opts)
+{
+	LIBBPF_OPTS(gen_loader_opts, gen_opts);
+	struct priv_prog *skel;
+	int err;
+
+	skel = priv_prog__open_opts(opts);
+	if (!ASSERT_OK_PTR(skel, "gen_loader_open"))
+		return -EINVAL;
+
+	err = bpf_object__gen_loader(skel->obj, &gen_opts);
+	if (!ASSERT_OK(err, "gen_loader_init"))
+		goto out;
+
+	err = bpf_object__load(skel->obj);
+	if (!ASSERT_OK(err, "gen_loader_load"))
+		goto out;
+
+	if (!ASSERT_EQ(bpf_object__token_fd(skel->obj), -1, "gen_loader_token_fd") ||
+	    !ASSERT_OK_PTR(gen_opts.insns, "gen_loader_insns") ||
+	    !ASSERT_GT(gen_opts.insns_sz, 0, "gen_loader_insns_sz") ||
+	    !ASSERT_OK_PTR(gen_opts.data, "gen_loader_data") ||
+	    !ASSERT_GT(gen_opts.data_sz, 0, "gen_loader_data_sz"))
+		err = -EINVAL;
+
+out:
+	priv_prog__destroy(skel);
+	return err;
+}
+
+static int userns_obj_gen_loader_no_token(int mnt_fd, struct token_lsm *lsm_skel)
+{
+	LIBBPF_OPTS(bpf_object_open_opts, opts);
+	struct priv_prog *skel;
+	char buf[256];
+	int err;
+
+	/* Mount delegated BPF FS over /sys/fs/bpf and confirm normal load uses it. */
+	err = sys_move_mount(mnt_fd, "", AT_FDCWD, "/sys/fs/bpf", MOVE_MOUNT_F_EMPTY_PATH);
+	if (!ASSERT_OK(err, "move_mount_bpffs"))
+		return -EINVAL;
+
+	skel = priv_prog__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "normal_implicit_token_load"))
+		return -EINVAL;
+	if (!ASSERT_OK_FD(bpf_object__token_fd(skel->obj), "normal_load_token_fd")) {
+		priv_prog__destroy(skel);
+		return -EINVAL;
+	}
+	priv_prog__destroy(skel);
+
+	/* Implicit /sys/fs/bpf token must not be created during gen_loader. */
+	if (verify_gen_loader_no_token(NULL))
+		return -EINVAL;
+
+	/* Explicit bpf_token_path must also be ignored during gen_loader. */
+	snprintf(buf, sizeof(buf), "/proc/self/fd/%d", mnt_fd);
+	opts.bpf_token_path = buf;
+	if (verify_gen_loader_no_token(&opts))
+		return -EINVAL;
+
+	/* Invalid LIBBPF_BPF_TOKEN_PATH must not fail offline gen_loader. */
+	err = setenv(TOKEN_ENVVAR, "/nonexistent/bpffs", 1 /*overwrite*/);
+	if (!ASSERT_OK(err, "setenv_invalid_token_path"))
+		return -EINVAL;
+	err = verify_gen_loader_no_token(NULL);
+	unsetenv(TOKEN_ENVVAR);
+	if (err)
+		return -EINVAL;
+
+	return 0;
+}
+
 static bool kallsyms_has_bpf_func(struct ksyms *ksyms, const char *func_name)
 {
 	char name[256];
@@ -1242,6 +1315,15 @@ void serial_test_token(void)
 		};
 
 		subtest_userns(&opts, userns_obj_priv_implicit_token_envvar);
+	}
+	if (test__start_subtest("obj_gen_loader_no_token")) {
+		struct bpffs_opts opts = {
+			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_PROG_LOAD),
+			.progs = bit(BPF_PROG_TYPE_XDP),
+			.attachs = ~0ULL,
+		};
+
+		subtest_userns(&opts, userns_obj_gen_loader_no_token);
 	}
 	if (test__start_subtest("bpf_token_info")) {
 		struct bpffs_opts opts = {
