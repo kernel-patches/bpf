@@ -652,8 +652,8 @@ struct phy_oatc14_sqi_capability {
  * @interrupts: Flag interrupts have been enabled
  * @irq_suspended: Flag indicating PHY is suspended and therefore interrupt
  *                 handling shall be postponed until PHY has resumed
- * @irq_rerun: Flag indicating interrupts occurred while PHY was suspended,
- *             requiring a rerun of the interrupt handler after resume
+ * @irq_rerun: Set by the postponed interrupt that disabled the line
+ * @irq_rerun_line: The line the postponed interrupt disabled
  * @default_timestamp: Flag indicating whether we are using the phy
  *		       timestamp as the default one
  * @interface: enum phy_interface_t value
@@ -676,6 +676,9 @@ struct phy_oatc14_sqi_capability {
  * @n_ports: Number of ports currently attached to the PHY
  * @max_n_ports: Max number of ports this PHY can expose
  * @lock:  Mutex for serialization access to PHY
+ * @irq_pm_lock: Held by the PM callbacks, and by the requesting and freeing
+ *               of the interrupt where they test and clear @irq_rerun;
+ *               phy_interrupt() never takes it
  * @state_queue: Work queue for state machine
  * @link_down_events: Number of times link was lost
  * @shared: Pointer to private data shared by phys in one package
@@ -732,6 +735,7 @@ struct phy_device {
 	 */
 	bool irq_suspended;
 	bool irq_rerun;
+	int irq_rerun_line;
 
 	unsigned default_timestamp:1;
 
@@ -809,6 +813,10 @@ struct phy_device {
 	struct delayed_work state_queue;
 
 	struct mutex lock;
+	/* Held where the PM callbacks and the requesting and freeing of the
+	 * interrupt test and clear irq_rerun
+	 */
+	struct mutex irq_pm_lock;
 
 	/* This may be modified under the rtnl lock */
 	bool sfp_bus_attached;
