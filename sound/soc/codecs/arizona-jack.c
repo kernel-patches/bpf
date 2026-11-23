@@ -1183,18 +1183,20 @@ static int arizona_extcon_device_get_pdata(struct device *dev,
 					   struct arizona *arizona)
 {
 	struct arizona_pdata *pdata = &arizona->pdata;
-	unsigned int val = ARIZONA_ACCDET_MODE_HPL;
+	unsigned int val;
 	int ret;
 
-	device_property_read_u32(arizona->dev, "wlf,hpdet-channel", &val);
-	switch (val) {
-	case ARIZONA_ACCDET_MODE_HPL:
-	case ARIZONA_ACCDET_MODE_HPR:
-		pdata->hpdet_channel = val;
-		break;
-	default:
-		dev_err(arizona->dev, "Wrong wlf,hpdet-channel DT value %d\n", val);
-		pdata->hpdet_channel = ARIZONA_ACCDET_MODE_HPL;
+	if (!device_property_read_u32(arizona->dev, "wlf,hpdet-channel", &val)) {
+		switch (val) {
+		case ARIZONA_ACCDET_MODE_HPL:
+		case ARIZONA_ACCDET_MODE_HPR:
+			pdata->hpdet_channel = val;
+			break;
+		default:
+			dev_err(arizona->dev,
+				"Wrong wlf,hpdet-channel DT value %d\n", val);
+			break;
+		}
 	}
 
 	device_property_read_u32(arizona->dev, "wlf,micd-detect-debounce",
@@ -1212,21 +1214,23 @@ static int arizona_extcon_device_get_pdata(struct device *dev,
 	device_property_read_u32(arizona->dev, "wlf,micd-timeout-ms",
 				 &pdata->micd_timeout);
 
-	pdata->micd_force_micbias = device_property_read_bool(arizona->dev,
-						"wlf,micd-force-micbias");
+	pdata->micd_force_micbias |=
+		device_property_read_bool(arizona->dev,
+					  "wlf,micd-force-micbias");
 
-	pdata->micd_software_compare = device_property_read_bool(arizona->dev,
-						"wlf,micd-software-compare");
+	pdata->micd_software_compare |=
+		device_property_read_bool(arizona->dev,
+					  "wlf,micd-software-compare");
 
-	pdata->jd_invert = device_property_read_bool(arizona->dev,
-						     "wlf,jd-invert");
+	pdata->jd_invert |= device_property_read_bool(arizona->dev,
+						      "wlf,jd-invert");
 
 	device_property_read_u32(arizona->dev, "wlf,gpsw", &pdata->gpsw);
 
-	pdata->jd_gpio5 = device_property_read_bool(arizona->dev,
-						    "wlf,use-jd2");
-	pdata->jd_gpio5_nopull = device_property_read_bool(arizona->dev,
-						"wlf,use-jd2-nopull");
+	pdata->jd_gpio5 |= device_property_read_bool(arizona->dev,
+						     "wlf,use-jd2");
+	pdata->jd_gpio5_nopull |=
+		device_property_read_bool(arizona->dev, "wlf,use-jd2-nopull");
 
 	ret = arizona_extcon_get_micd_configs(dev, arizona);
 	if (ret < 0)
@@ -1241,8 +1245,7 @@ int arizona_jack_codec_dev_probe(struct arizona_priv *info, struct device *dev)
 	struct arizona_pdata *pdata = &arizona->pdata;
 	int ret, mode;
 
-	if (!dev_get_platdata(arizona->dev))
-		arizona_extcon_device_get_pdata(dev, arizona);
+	arizona_extcon_device_get_pdata(dev, arizona);
 
 	info->micvdd = devm_regulator_get(dev, "MICVDD");
 	if (IS_ERR(info->micvdd))
@@ -1285,6 +1288,9 @@ int arizona_jack_codec_dev_probe(struct arizona_priv *info, struct device *dev)
 	default:
 		break;
 	}
+
+	if (!pdata->hpdet_channel)
+		pdata->hpdet_channel = ARIZONA_ACCDET_MODE_HPL;
 
 	if (!pdata->micd_timeout)
 		pdata->micd_timeout = DEFAULT_MICD_TIMEOUT;
