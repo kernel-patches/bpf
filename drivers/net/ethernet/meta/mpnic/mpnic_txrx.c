@@ -662,8 +662,12 @@ mpnic_page_pool_get(struct mpnic_pg_ctxt *pg_ctxt, struct mpnic_ring *ring,
 
 	if (unlikely(pg_ctxt->idx != idx)) {
 		if (pg_ctxt->pagecnt_bias &&
-		    !page_pool_unref_page(page, pg_ctxt->pagecnt_bias))
-			page_pool_put_unrefed_page(page->pp, page, -1, true);
+		    !page_pool_unref_page(page, pg_ctxt->pagecnt_bias)) {
+			netmem_ref netmem = page_to_netmem(page);
+
+			page_pool_put_unrefed_netmem(netmem_get_pp(netmem),
+						     netmem, -1, true);
+		}
 
 		page = ring->rx_buf[idx];
 		page_pool_fragment_page(page, MPNIC_PAGECNT_BIAS_MAX);
@@ -685,8 +689,12 @@ static void mpnic_flush_pg_ctxt(struct mpnic_pg_ctxt *ctxt, bool napi)
 	if (pagecnt_bias) {
 		struct page *page = ctxt->page;
 
-		if (!page_pool_unref_page(page, pagecnt_bias))
-			page_pool_put_unrefed_page(page->pp, page, -1, napi);
+		if (!page_pool_unref_page(page, pagecnt_bias)) {
+			netmem_ref netmem = page_to_netmem(page);
+
+			page_pool_put_unrefed_netmem(netmem_get_pp(netmem),
+						     netmem, -1, napi);
+		}
 	}
 }
 
@@ -774,6 +782,7 @@ mpnic_add_rx_frag(u64 rcd, struct mpnic_rcq_state *state,
 static void mpnic_put_pkt_buff(struct mpnic_pkt_ctxt *ctxt, bool napi)
 {
 	struct xdp_buff *buff = &ctxt->buff;
+	netmem_ref netmem;
 	struct page *page;
 
 	if (!buff->data_hard_start)
@@ -787,13 +796,15 @@ static void mpnic_put_pkt_buff(struct mpnic_pkt_ctxt *ctxt, bool napi)
 		nr_frags = shinfo->nr_frags;
 
 		while (nr_frags--) {
-			page = skb_frag_page(&shinfo->frags[nr_frags]);
-			page_pool_put_full_page(page->pp, page, napi);
+			netmem = skb_frag_netmem(&shinfo->frags[nr_frags]);
+			page_pool_put_full_netmem(netmem_get_pp(netmem),
+						  netmem, napi);
 		}
 	}
 
 	page = virt_to_head_page(buff->data_hard_start);
-	page_pool_put_full_page(page->pp, page, napi);
+	netmem = page_to_netmem(page);
+	page_pool_put_full_netmem(netmem_get_pp(netmem), netmem, napi);
 }
 
 static void mpnic_rx_csum(u64 rcd, struct sk_buff *skb,
@@ -1684,9 +1695,9 @@ static void mpnic_clean_bdq(struct mpnic_ring *bdq)
 	unsigned int head = bdq->head;
 
 	while (head != bdq->tail) {
-		struct page *page = bdq->rx_buf[head];
+		netmem_ref netmem = page_to_netmem(bdq->rx_buf[head]);
 
-		page_pool_put_full_page(page->pp, page, false);
+		page_pool_put_full_netmem(netmem_get_pp(netmem), netmem, false);
 
 		head++;
 		head &= bdq->size_mask;
