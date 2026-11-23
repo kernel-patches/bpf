@@ -7321,6 +7321,7 @@ int btrfs_map_block(struct btrfs_fs_info *fs_info, enum btrfs_map_op op,
 	struct btrfs_io_context *bioc = NULL;
 	struct btrfs_dev_replace *dev_replace = &fs_info->dev_replace;
 	bool dev_replace_is_ongoing = false;
+	bool commit_root_locked = false;
 	u16 num_alloc_stripes;
 	u64 max_len;
 
@@ -7364,6 +7365,18 @@ int btrfs_map_block(struct btrfs_fs_info *fs_info, enum btrfs_map_op op,
 	max_len = btrfs_max_io_len(map, map_offset, &io_geom);
 	*length = min_t(u64, map->chunk_len - map_offset, max_len);
 	io_geom.use_rst = btrfs_need_stripe_tree_update(fs_info, map->type);
+
+	/*
+	 * Relocation and scrub look up the raid stripe tree in its commit root.
+	 * Hold off a transaction commit, which switches and frees that root,
+	 * until the mapping is done. Take the lock before dev_replace->rwsem,
+	 * as the csum lookup of a read does.
+	 */
+	if (io_geom.use_rst && op == BTRFS_MAP_READ && smap &&
+	    smap->rst_search_commit_root) {
+		down_read(&fs_info->commit_root_sem);
+		commit_root_locked = true;
+	}
 
 	if (dev_replace->replace_task != current)
 		down_read(&dev_replace->rwsem);
@@ -7521,6 +7534,8 @@ out:
 		/* Unlock and let waiting writers proceed */
 		up_read(&dev_replace->rwsem);
 	}
+	if (commit_root_locked)
+		up_read(&fs_info->commit_root_sem);
 	btrfs_free_chunk_map(map);
 	return ret;
 }

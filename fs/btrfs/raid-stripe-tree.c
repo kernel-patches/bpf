@@ -436,6 +436,8 @@ int btrfs_get_raid_extent_offset(struct btrfs_fs_info *fs_info,
 		return -ENOMEM;
 
 	if (stripe->rst_search_commit_root) {
+		/* btrfs_map_block() holds commit_root_sem for this search. */
+		lockdep_assert_held_read(&fs_info->commit_root_sem);
 		path->skip_locking = true;
 		path->search_commit_root = true;
 	}
