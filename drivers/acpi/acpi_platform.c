@@ -25,12 +25,12 @@
 #define ACPI_ALLOW_WO_RESOURCES		BIT(0)
 
 static const struct acpi_device_id forbidden_id_list[] = {
-	{"ACPI0009", 0},	/* IOxAPIC */
-	{"ACPI000A", 0},	/* IOAPIC */
-	{"PNP0000",  0},	/* PIC */
-	{"PNP0100",  0},	/* Timer */
-	{"PNP0200",  0},	/* AT DMA Controller */
-	{ACPI_SMBUS_MS_HID,  ACPI_ALLOW_WO_RESOURCES},	/* ACPI SMBUS virtual device */
+	{ .id = "ACPI0009", .driver_data = 0 },	/* IOxAPIC */
+	{ .id = "ACPI000A", .driver_data = 0 },	/* IOAPIC */
+	{ .id = "PNP0000", .driver_data = 0 },	/* PIC */
+	{ .id = "PNP0100", .driver_data = 0 },	/* Timer */
+	{ .id = "PNP0200", .driver_data = 0 },	/* AT DMA Controller */
+	{ .id = ACPI_SMBUS_MS_HID, .driver_data = ACPI_ALLOW_WO_RESOURCES },	/* ACPI SMBUS virtual device */
 	{ }
 };
 

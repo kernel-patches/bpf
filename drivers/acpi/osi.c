@@ -473,7 +473,7 @@ static const struct dmi_system_id acpi_osi_dmi_table[] __initconst = {
 		     DMI_MATCH(DMI_PRODUCT_NAME, "1015PX"),
 		},
 	},
-	{}
+	{ }
 };
 
 static __init void acpi_osi_dmi_blacklisted(void)

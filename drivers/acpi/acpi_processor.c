@@ -631,8 +631,8 @@ void __init acpi_early_processor_control_setup(void)
  */
 static const struct acpi_device_id processor_device_ids[] = {
 
-	{ ACPI_PROCESSOR_OBJECT_HID, },
-	{ ACPI_PROCESSOR_DEVICE_HID, },
+	{ .id = ACPI_PROCESSOR_OBJECT_HID },
+	{ .id = ACPI_PROCESSOR_DEVICE_HID },
 
 	{ }
 };
@@ -655,7 +655,7 @@ static int acpi_processor_container_attach(struct acpi_device *dev,
 }
 
 static const struct acpi_device_id processor_container_ids[] = {
-	{ ACPI_PROCESSOR_CONTAINER_HID, },
+	{ .id = ACPI_PROCESSOR_CONTAINER_HID },
 	{ }
 };
 

@@ -46,8 +46,8 @@ MODULE_PARM_DESC(cache_time, "cache time in milliseconds");
 #define ACPI_SBS_BLOCK_MAX		32
 
 static const struct acpi_device_id sbs_device_ids[] = {
-	{"ACPI0002", 0},
-	{"", 0},
+	{ .id = "ACPI0002" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, sbs_device_ids);
 

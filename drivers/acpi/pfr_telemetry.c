@@ -415,8 +415,8 @@ static int acpi_pfrt_log_probe(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id acpi_pfrt_log_ids[] = {
-	{"INTC1081"},
-	{}
+	{ .id = "INTC1081" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, acpi_pfrt_log_ids);
 

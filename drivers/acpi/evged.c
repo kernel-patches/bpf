@@ -179,8 +179,8 @@ static void ged_remove(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id ged_acpi_ids[] = {
-	{"ACPI0013"},
-	{},
+	{ .id = "ACPI0013" },
+	{ }
 };
 
 static struct platform_driver ged_driver = {

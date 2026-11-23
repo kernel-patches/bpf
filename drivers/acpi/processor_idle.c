@@ -109,7 +109,7 @@ static const struct dmi_system_id processor_power_dmi_table[] = {
 	  DMI_MATCH(DMI_BOARD_VENDOR, "HA0QING"),
 	  DMI_MATCH(DMI_BOARD_NAME, "A520") },
 	 (void *)1},
-	{},
+	{ }
 };
 
 
