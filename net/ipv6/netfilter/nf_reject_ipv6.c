@@ -145,6 +145,13 @@ struct sk_buff *nf_reject_skb_v6_unreach(struct net *net,
 	if (!nf_reject_ip6hdr_validate(oldskb))
 		return NULL;
 
+	/* Don't send the decrypted part of an skb onto the network: the
+	 * device decrypted a received skb, and this reply quotes it. Only
+	 * received skbs get here (bridge, netdev ingress).
+	 */
+	if (unlikely(skb_is_decrypted(oldskb)))
+		return NULL;
+
 	/* Don't reply to ICMPV6_DEST_UNREACH with ICMPV6_DEST_UNREACH */
 	if (nf_skb_is_icmp6_unreach(oldskb))
 		return NULL;
