@@ -652,16 +652,22 @@ static u16 batadv_tt_flags_get(struct batadv_tt_common_entry *common)
  *
  * Only a single change per client is queued. It describes the latest state of
  * the client and a new event therefore replaces an already queued one.
+ *
+ * The caller must hold the flags_lock of @common. The events of an entry are
+ * then queued in the same order in which its flags were modified.
  */
 static void __batadv_tt_local_event(struct batadv_priv *bat_priv,
 				    const struct batadv_tt_common_entry *common,
 				    u8 flags)
+	__must_hold(&common->flags_lock)
 {
 	struct batadv_tt_change_node *tt_change_node;
 	struct batadv_tt_change_node *entry;
 	struct batadv_tt_change_node *safe;
 	bool del_op_requested;
 	size_t changes;
+
+	lockdep_assert_held(&common->flags_lock);
 
 	tt_change_node = kmem_cache_alloc(batadv_tt_change_cache, GFP_ATOMIC);
 	if (!tt_change_node)
@@ -712,23 +718,6 @@ static void __batadv_tt_local_event(struct batadv_priv *bat_priv,
 update_changes:
 	WRITE_ONCE(bat_priv->tt.local_changes, changes);
 	spin_unlock_bh(&bat_priv->tt.changes_list_lock);
-}
-
-/**
- * batadv_tt_local_event() - store a local TT event (ADD/DEL)
- * @bat_priv: the bat priv with all the mesh interface information
- * @tt_local_entry: the TT entry involved in the event
- * @event_flags: flags to store in the event structure
- */
-static void batadv_tt_local_event(struct batadv_priv *bat_priv,
-				  struct batadv_tt_local_entry *tt_local_entry,
-				  u8 event_flags)
-{
-	struct batadv_tt_common_entry *common = &tt_local_entry->common;
-	u8 flags;
-
-	flags = batadv_tt_flags_get(common) | event_flags;
-	__batadv_tt_local_event(bat_priv, common, flags);
 }
 
 /**
@@ -1614,10 +1603,14 @@ int batadv_tt_local_dump(struct sk_buff *msg, struct netlink_callback *cb)
  * entry. The entry is kept in the local table until the next TTVN increment
  * so that a consistency-check response can still be answered.
  *
- * Next to the flags_lock of the entry, the caller must hold the hash bucket
- * list_lock of @tt_local_entry. Otherwise
- * batadv_tt_local_purge_pending_clients() could remove the entry before its
- * change was queued.
+ * The caller must hold the flags_lock of @tt_local_entry and must not have
+ * released it since it checked that the entry has to be removed. Both the
+ * queue-then-mark order and this single flags_lock section are required.
+ *
+ * The caller must also hold the hash bucket list_lock of @tt_local_entry and
+ * must have ensured that the entry is still part of the local table. A DEL for
+ * an entry which was already purged could otherwise cancel the ADD of a new
+ * entry for the same client.
  */
 static void
 batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
@@ -1643,31 +1636,39 @@ batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
 }
 
 /**
- * batadv_tt_local_mark_removed() - mark a local entry as removed and queue DEL
+ * batadv_tt_local_remove_entry() - logically remove a local entry
  * @bat_priv: the bat priv with all the mesh interface information
- * @tt_local_entry: local TT entry to mark
+ * @tt_local_entry: local TT entry to remove
  * @message: message to append to the log on deletion
  * @roaming: true if the deletion is due to a roaming event
- * @curr_flags: pointer to store the flags of the entry before it was marked
+ * @curr_flags: pointer to store the flags of the entry before it was removed
  *
- * An already announced entry is marked as BATADV_TT_CLIENT_PENDING and the
- * (roamed) DEL change is queued. Both happen under the hash bucket list_lock
- * of the entry to prevent concurrent batadv_tt_local_purge_pending_clients()
- * from removing the entry and batadv_tt_local_transition_new() from clearing
- * BATADV_TT_CLIENT_NEW after it was checked.
+ * For an already announced entry, the (roamed) DEL change is queued and the
+ * entry is marked as BATADV_TT_CLIENT_PENDING by batadv_tt_local_set_pending().
+ * It stays in the local table until the next ttvn increment.
  *
- * Return: true if the entry has to be kept in the local table until the next
- * ttvn increment, false if it can be purged immediately.
+ * An entry which still carries BATADV_TT_CLIENT_NEW was added right after the
+ * last ttvn increment and was not (yet) announced. It is therefore removed
+ * from the local table immediately.
+ *
+ * An entry which was already removed from the local table after it was looked
+ * up is ignored and BATADV_NO_FLAGS is stored in @curr_flags.
+ *
+ * All checks and modifications happen under the hash bucket list_lock and the
+ * flags_lock of the entry. This prevents a concurrent
+ * batadv_tt_local_purge_pending_clients() from removing the entry,
+ * batadv_tt_local_transition_new() from clearing BATADV_TT_CLIENT_NEW and
+ * batadv_tt_local_refresh() from modifying the entry after it was checked.
  */
-static bool
-batadv_tt_local_mark_removed(struct batadv_priv *bat_priv,
+static void
+batadv_tt_local_remove_entry(struct batadv_priv *bat_priv,
 			     struct batadv_tt_local_entry *tt_local_entry,
 			     const char *message, bool roaming, u16 *curr_flags)
 {
 	spinlock_t *list_lock; /* protects write access to the hash lists */
 	struct batadv_tt_common_entry *common = &tt_local_entry->common;
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
-	bool pending = false;
+	bool unhashed = false;
 	u16 flags;
 	u32 i;
 
@@ -1675,6 +1676,12 @@ batadv_tt_local_mark_removed(struct batadv_priv *bat_priv,
 	list_lock = &hash->list_locks[i];
 
 	spin_lock_bh(list_lock);
+
+	if (hlist_unhashed(&common->hash_entry)) {
+		*curr_flags = BATADV_NO_FLAGS;
+		spin_unlock_bh(list_lock);
+		return;
+	}
 
 	scoped_guard(spinlock_bh, &common->flags_lock) {
 		*curr_flags = common->flags;
@@ -1686,8 +1693,23 @@ batadv_tt_local_mark_removed(struct batadv_priv *bat_priv,
 		if (roaming)
 			common->flags |= BATADV_TT_CLIENT_ROAM;
 
-		if (common->flags & BATADV_TT_CLIENT_NEW)
+		if (common->flags & BATADV_TT_CLIENT_NEW) {
+			batadv_dbg(BATADV_DBG_TT, bat_priv,
+				   "Deleting local tt entry (%pM, vid: %d): %s\n",
+				   common->key.addr,
+				   batadv_print_vid(common->key.vid), message);
+
+			hlist_del_init_rcu(&common->hash_entry);
+			atomic_inc(&hash->generation);
+
+			/* The entry was never announced and was therefore
+			 * never counted in the local table size.
+			 */
+			__batadv_tt_local_event(bat_priv, common,
+						common->flags | BATADV_TT_CLIENT_DEL);
+			unhashed = true;
 			break;
+		}
 
 		flags = BATADV_TT_CLIENT_DEL;
 		if (roaming)
@@ -1695,51 +1717,13 @@ batadv_tt_local_mark_removed(struct batadv_priv *bat_priv,
 
 		batadv_tt_local_set_pending(bat_priv, tt_local_entry, flags,
 					    message);
-		pending = true;
 	}
 
 	spin_unlock_bh(list_lock);
 
-	return pending;
-}
-
-/**
- * batadv_tt_local_remove_now() - purge a local entry which was not (yet) announced
- * @bat_priv: the bat priv with all the mesh interface information
- * @tt_local_entry: local TT entry to purge
- *
- * A client which was added right after the last ttvn increment was not (yet)
- * sent to the other nodes. It can therefore be dropped from the local table
- * without waiting for the next ttvn increment.
- *
- * If it was still announced by a parallel context before it was removed from
- * the hash, then the local TT size adjustment will be handled automatically.
- */
-static void
-batadv_tt_local_remove_now(struct batadv_priv *bat_priv,
-			   struct batadv_tt_local_entry *tt_local_entry)
-{
-	struct batadv_tt_common_entry *common = &tt_local_entry->common;
-	struct hlist_node *tt_removed_node;
-
-	/* remove exactly this object when still present in hash */
-	tt_removed_node = batadv_hash_remove(bat_priv->tt.local_hash,
-					     batadv_compare_tt_entry,
-					     batadv_choose_tt, &common->key);
-	if (!tt_removed_node)
-		return;
-
-	batadv_tt_local_event(bat_priv, tt_local_entry, BATADV_TT_CLIENT_DEL);
-
-	/* batadv_tt_local_transition_new() may have committed the entry and
-	 * thus counted it in the local table size since the
-	 * BATADV_TT_CLIENT_NEW check in batadv_tt_local_mark_removed().
-	 */
-	if (!(batadv_tt_flags_get(common) & BATADV_TT_CLIENT_NEW))
-		batadv_tt_local_size_dec(bat_priv, common->key.vid);
-
-	/* drop reference of remove hash entry */
-	batadv_tt_local_entry_put(tt_local_entry);
+	/* drop reference of removed hash entry */
+	if (unhashed)
+		batadv_tt_local_entry_put(tt_local_entry);
 }
 
 /**
@@ -1763,12 +1747,8 @@ u16 batadv_tt_local_remove(struct batadv_priv *bat_priv, const u8 *addr,
 	if (!tt_local_entry)
 		return BATADV_NO_FLAGS;
 
-	/* if this client has been added right now, it is possible to
-	 * immediately purge it
-	 */
-	if (!batadv_tt_local_mark_removed(bat_priv, tt_local_entry, message,
-					  roaming, &curr_flags))
-		batadv_tt_local_remove_now(bat_priv, tt_local_entry);
+	batadv_tt_local_remove_entry(bat_priv, tt_local_entry, message,
+				     roaming, &curr_flags);
 
 	batadv_tt_local_entry_put(tt_local_entry);
 
