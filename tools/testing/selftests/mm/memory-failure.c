@@ -395,6 +395,15 @@ TEST_F(memory_failure, dirty_pagecache)
 		close(fd);
 		SKIP(return, "nilfs2 fsync() does not report poisoned dirty data\n");
 	}
+	/*
+	 * ceph_fsync() loses the writeback error recorded for a poisoned
+	 * dirty page. Remove this skip when it preserves that error.
+	 */
+	if (fs_type == CEPH_SUPER_MAGIC && variant->type == MADV_HARD) {
+		unlink(fname);
+		close(fd);
+		SKIP(return, "cephfs fsync() does not report poisoned dirty data\n");
+	}
 
 	addr = mmap(0, self->page_size, PROT_READ | PROT_WRITE,
 		    MAP_SHARED, fd, 0);
