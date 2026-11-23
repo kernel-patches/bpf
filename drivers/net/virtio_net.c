@@ -698,8 +698,10 @@ static void give_pages(struct receive_queue *rq, struct page *page)
 	struct page *end;
 
 	/* Find end of list, sew whole thing into vi->rq.pages. */
-	for (end = page; end->private; end = (struct page *)end->private);
-	end->private = (unsigned long)rq->pages;
+	for (end = page; page_private(end);
+	     end = (struct page *)page_private(end))
+		;
+	set_page_private(end, (unsigned long)rq->pages);
 	rq->pages = page;
 }
 
@@ -708,9 +710,9 @@ static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask)
 	struct page *p = rq->pages;
 
 	if (p) {
-		rq->pages = (struct page *)p->private;
+		rq->pages = (struct page *)page_private(p);
 		/* clear private here, it is used to chain pages */
-		p->private = 0;
+		set_page_private(p, 0);
 	} else
 		p = alloc_page(gfp_mask);
 	return p;
@@ -899,7 +901,7 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 		 * Currently, big packets mode doesn't use page pools.
 		 */
 		if (!rq->page_pool) {
-			page = (struct page *)page->private;
+			page = (struct page *)page_private(page);
 			if (page)
 				give_pages(rq, page);
 		}
@@ -947,7 +949,7 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 		skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page, offset,
 				frag_size, truesize);
 		len -= frag_size;
-		page = (struct page *)page->private;
+		page = (struct page *)page_private(page);
 		offset = 0;
 	}
 
@@ -2723,7 +2725,7 @@ static int add_recvbuf_big(struct virtnet_info *vi, struct receive_queue *rq,
 		sg_set_buf(&rq->sg[i], page_address(first), PAGE_SIZE);
 
 		/* chain new page in list head to match sg */
-		first->private = (unsigned long)list;
+		set_page_private(first, (unsigned long)list);
 		list = first;
 	}
 
@@ -2743,7 +2745,7 @@ static int add_recvbuf_big(struct virtnet_info *vi, struct receive_queue *rq,
 	sg_set_buf(&rq->sg[1], p + offset, PAGE_SIZE - offset);
 
 	/* chain first in list head */
-	first->private = (unsigned long)list;
+	set_page_private(first, (unsigned long)list);
 	err = virtqueue_add_inbuf(rq->vq, rq->sg, vi->big_packets_num_skbfrags + 2,
 				  first, gfp);
 	if (err < 0)
