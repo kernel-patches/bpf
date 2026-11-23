@@ -196,10 +196,13 @@ __bpf_kfunc u32 bpf_skb_get_hash(struct sk_buff *skb)
 
 /* bpf_kfree_skb - Release an skb's reference and drop it immediately.
  * @skb: The skb whose reference to be released and dropped.
+ *
+ * Also the destructor of an skb kptr, which runs wherever an object or a map
+ * value with such a field is freed: under a bpf_spin_lock too, with irqs off.
  */
 __bpf_kfunc void bpf_kfree_skb(struct sk_buff *skb)
 {
-	kfree_skb(skb);
+	dev_kfree_skb_any(skb);
 }
 
 __bpf_kfunc void bpf_kfree_skb_dtor(void *skb)
