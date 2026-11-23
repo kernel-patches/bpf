@@ -14,10 +14,9 @@ struct mgb4_i2c_client {
 	int addr_size;
 };
 
-struct mgb4_i2c_kv {
+struct mgb4_i2c_key {
 	u16 reg;
 	u8 mask;
-	u8 val;
 };
 
 int mgb4_i2c_init(struct mgb4_i2c_client *client, struct i2c_adapter *adap,
@@ -30,6 +29,12 @@ s32 mgb4_i2c_mask_byte(struct mgb4_i2c_client *client, u16 reg, u8 mask,
 		       u8 val);
 
 int mgb4_i2c_configure(struct mgb4_i2c_client *client,
-		       const struct mgb4_i2c_kv *values, size_t count);
+		       const struct mgb4_i2c_key *keys,
+		       const u8 *values,
+		       size_t count);
+int mgb4_i2c_store(struct mgb4_i2c_client *client,
+		   const struct mgb4_i2c_key *keys,
+		   u8 *values,
+		   size_t count);
 
 #endif

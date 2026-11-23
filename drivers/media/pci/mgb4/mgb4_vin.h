@@ -36,6 +36,18 @@ struct mgb4_vin_config {
 	struct mgb4_vin_regs regs;
 };
 
+struct mgb4_vin_fpga_pm {
+	u32 config;
+	u32 resolution;
+	u32 frame_period;
+	u32 sync;
+	u32 pclk;
+	u32 hsync;
+	u32 vsync;
+	u32 padding;
+	u32 timer;
+};
+
 struct mgb4_vin_dev {
 	struct mgb4_dev *mgbdev;
 	struct v4l2_device v4l2dev;
@@ -54,8 +66,13 @@ struct mgb4_vin_dev {
 	u32 padding;
 
 	struct mgb4_i2c_client deser;
+	const struct mgb4_i2c_key *deser_regs;
+	size_t deser_regs_size;
 
 	const struct mgb4_vin_config *config;
+
+	u8 *pm_deser;
+	struct mgb4_vin_fpga_pm pm_fpga;
 
 #ifdef CONFIG_DEBUG_FS
 	struct debugfs_regset32 regset;
@@ -65,5 +82,7 @@ struct mgb4_vin_dev {
 
 struct mgb4_vin_dev *mgb4_vin_create(struct mgb4_dev *mgbdev, int id);
 void mgb4_vin_free(struct mgb4_vin_dev *vindev);
+int mgb4_vin_suspend(struct mgb4_vin_dev *vindev);
+int mgb4_vin_resume(struct mgb4_vin_dev *vindev);
 
 #endif
