@@ -612,6 +612,7 @@ static struct sock *x25_make_new(struct sock *osk)
 	sk->sk_state       = TCP_ESTABLISHED;
 	sk->sk_backlog_rcv = osk->sk_backlog_rcv;
 	sock_copy_flags(sk, osk);
+	security_sk_clone(osk, sk);
 
 	ox25 = x25_sk(osk);
 	x25->t21        = ox25->t21;
