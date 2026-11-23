@@ -403,8 +403,20 @@ static void fuse_init_submount_lookup(struct fuse_submount_lookup *sl,
 	refcount_set(&sl->count, 1);
 }
 
+/*
+ * Address space operations for an inode backed by a passthrough extent map on
+ * a dax device.  Such an inode never uses the page cache: FOPEN_PASSTHROUGH is
+ * mandatory for a dax inode (see fuse_file_io_open()), so all I/O goes through
+ * the passthrough handlers and none of the generic page cache helpers can be
+ * reached.  That is why there's no ->read_folio here.
+ *
+ * ->direct_IO is never called for the same reason, but the pointer still needs
+ * to be non-NULL, because that's what do_dentry_open() and fcntl() look at to
+ * decide whether O_DIRECT is allowed on the file.
+ */
 static const struct address_space_operations fuse_dax_aops = {
 	.dirty_folio	= noop_dirty_folio,
+	.direct_IO	= noop_direct_IO,
 };
 
 static void fuse_init_inode(struct inode *inode, struct fuse_attr *attr,
