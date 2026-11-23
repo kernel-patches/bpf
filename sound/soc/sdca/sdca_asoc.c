@@ -1214,19 +1214,28 @@ static u64 width_find_mask(unsigned int bits)
 {
 	switch (bits) {
 	case 0:
-		return SNDRV_PCM_FMTBIT_S8 | SNDRV_PCM_FMTBIT_S16_LE |
-		       SNDRV_PCM_FMTBIT_S20_LE | SNDRV_PCM_FMTBIT_S24_LE |
-		       SNDRV_PCM_FMTBIT_S32_LE;
+		return SNDRV_PCM_FMTBIT_S8 |
+		       SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S16_BE |
+		       SNDRV_PCM_FMTBIT_S18_3LE | SNDRV_PCM_FMTBIT_S18_3BE |
+		       SNDRV_PCM_FMTBIT_S20_LE | SNDRV_PCM_FMTBIT_S20_BE |
+		       SNDRV_PCM_FMTBIT_S20_3LE | SNDRV_PCM_FMTBIT_S20_3BE |
+		       SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S24_BE |
+		       SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_S24_3BE |
+		       SNDRV_PCM_FMTBIT_S32_LE | SNDRV_PCM_FMTBIT_S32_BE;
 	case 8:
 		return SNDRV_PCM_FMTBIT_S8;
 	case 16:
-		return SNDRV_PCM_FMTBIT_S16_LE;
+		return SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S16_BE;
+	case 18:
+		return SNDRV_PCM_FMTBIT_S18_3LE | SNDRV_PCM_FMTBIT_S18_3BE;
 	case 20:
-		return SNDRV_PCM_FMTBIT_S20_LE;
+		return SNDRV_PCM_FMTBIT_S20_LE | SNDRV_PCM_FMTBIT_S20_BE |
+		       SNDRV_PCM_FMTBIT_S20_3LE | SNDRV_PCM_FMTBIT_S20_3BE;
 	case 24:
-		return SNDRV_PCM_FMTBIT_S24_LE;
+		return SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S24_BE |
+		       SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_S24_3BE;
 	case 32:
-		return SNDRV_PCM_FMTBIT_S32_LE;
+		return SNDRV_PCM_FMTBIT_S32_LE | SNDRV_PCM_FMTBIT_S32_BE;
 	default:
 		return 0;
 	}
@@ -1510,35 +1519,6 @@ static int get_cluster_mask(struct device *dev, struct sdca_function_data *funct
 	return 0;
 }
 
-static u64 get_word_mask(unsigned int width)
-{
-	switch (width) {
-	case 8:
-		return SNDRV_PCM_FMTBIT_S8 | SNDRV_PCM_FMTBIT_U8;
-	case 16:
-		return SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S16_BE |
-		       SNDRV_PCM_FMTBIT_U16_LE | SNDRV_PCM_FMTBIT_U16_BE;
-	case 18:
-		return SNDRV_PCM_FMTBIT_S18_3LE | SNDRV_PCM_FMTBIT_U18_3LE |
-		       SNDRV_PCM_FMTBIT_S18_3BE | SNDRV_PCM_FMTBIT_U18_3BE;
-	case 20:
-		return SNDRV_PCM_FMTBIT_S20_LE | SNDRV_PCM_FMTBIT_U20_LE |
-		       SNDRV_PCM_FMTBIT_S20_BE | SNDRV_PCM_FMTBIT_U20_BE |
-		       SNDRV_PCM_FMTBIT_S20_3LE | SNDRV_PCM_FMTBIT_U20_3LE |
-		       SNDRV_PCM_FMTBIT_S20_3BE | SNDRV_PCM_FMTBIT_U20_3BE;
-	case 24:
-		return SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S24_BE |
-		       SNDRV_PCM_FMTBIT_U24_LE | SNDRV_PCM_FMTBIT_U24_BE |
-		       SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_U24_3LE |
-		       SNDRV_PCM_FMTBIT_S24_3BE | SNDRV_PCM_FMTBIT_U24_3BE;
-	case 32:
-		return SNDRV_PCM_FMTBIT_S32_LE | SNDRV_PCM_FMTBIT_S32_BE |
-		       SNDRV_PCM_FMTBIT_U32_LE | SNDRV_PCM_FMTBIT_U32_BE;
-	default:
-		return 0;
-	}
-}
-
 static int get_port_masks(struct sdw_slave *sdw, unsigned int port,
 			  struct snd_pcm_substream *substream,
 			  u64 *word_mask, unsigned int *ch_mask)
@@ -1564,7 +1544,7 @@ static int get_port_masks(struct sdw_slave *sdw, unsigned int port,
 
 		if (prop[i].num_words) {
 			for (j = 0; j < prop[i].num_words; j++)
-				*word_mask |= get_word_mask(prop[i].words[j]);
+				*word_mask |= width_find_mask(prop[i].words[j]);
 		} else {
 			unsigned int max = prop[i].max_word;
 
@@ -1572,7 +1552,7 @@ static int get_port_masks(struct sdw_slave *sdw, unsigned int port,
 				max = 32;
 
 			for (j = MAX(1, prop[i].min_word); j <= max; j++)
-				*word_mask |= get_word_mask(j);
+				*word_mask |= width_find_mask(j);
 		}
 
 		/* Only handle the number of channels for constraints. */
