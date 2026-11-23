@@ -390,6 +390,8 @@ int bpf_local_storage_delete(void *owner, struct bpf_local_storage_map *smap)
 	struct bpf_local_storage __rcu **owner_ptr = owner_storage(smap, owner);
 	struct bpf_local_storage *local_storage;
 	struct bpf_local_storage_data *sdata;
+	unsigned long flags;
+	int err;
 
 	/* An inode can have no LSM blob, so no storage pointer */
 	local_storage = owner_ptr ? rcu_dereference_check(*owner_ptr, bpf_rcu_lock_held()) : NULL;
@@ -397,7 +399,24 @@ int bpf_local_storage_delete(void *owner, struct bpf_local_storage_map *smap)
 	if (!sdata)
 		return -ENOENT;
 
-	return bpf_selem_unlink(SELEM(sdata));
+	if (sdata != bpf_local_storage_inline(local_storage, smap))
+		return bpf_selem_unlink(SELEM(sdata));
+
+	/* As bpf_selem_unlink(): the result must not depend on the place */
+	if (in_nmi())
+		return -EOPNOTSUPP;
+
+	/* The value bytes stay: a program can still hold a pointer to them */
+	err = raw_res_spin_lock_irqsave(&local_storage->lock, flags);
+	if (err)
+		return err;
+	/* A racing delete can clear the tag before this one takes the lock */
+	if (sdata->inline_tag == bpf_local_storage_inline_tag(smap))
+		WRITE_ONCE(sdata->inline_tag, 0);
+	else
+		err = -ENOENT;
+	raw_res_spin_unlock_irqrestore(&local_storage->lock, flags);
+	return err;
 }
 
 /*
@@ -565,20 +584,30 @@ static u32 bpf_local_storage_obj_size(struct bpf_local_storage_map *smap)
 	return end ? kmalloc_size_roundup(end) : sizeof(struct bpf_local_storage);
 }
 
-int bpf_local_storage_alloc(void *owner,
-			    struct bpf_local_storage_map *smap,
-			    struct bpf_local_storage_elem *first_selem)
+/*
+ * The first value for owner goes into first_selem or, if first_selem is NULL,
+ * into the inline slot of smap (value, or zeros if value is NULL). Return the
+ * new storage, so that the caller does not read the owner pointer again.
+ */
+struct bpf_local_storage *
+bpf_local_storage_alloc(void *owner, struct bpf_local_storage_map *smap,
+			struct bpf_local_storage_elem *first_selem, void *value)
 {
+	struct bpf_local_storage **owner_storage_ptr =
+		(struct bpf_local_storage **)owner_storage(smap, owner);
 	struct bpf_local_storage *prev_storage, *storage;
-	struct bpf_local_storage **owner_storage_ptr;
 	struct bpf_local_storage_map_bucket *b;
 	u32 size = bpf_local_storage_obj_size(smap);
+	struct bpf_local_storage_data *sdata;
 	unsigned long flags;
 	int err;
 
+	/* The new object holds the slot of an inline map: no selem for it */
+	WARN_ON_ONCE(first_selem && bpf_local_storage_map_inline(smap));
+
 	err = mem_charge(smap, owner, size);
 	if (err)
-		return err;
+		return ERR_PTR(err);
 
 	storage = bpf_map_kmalloc_nolock(&smap->map, size, __GFP_ZERO,
 					 NUMA_NO_NODE);
@@ -594,6 +623,24 @@ int bpf_local_storage_alloc(void *owner,
 	storage->mem_charge = size;
 	refcount_set(&storage->owner_refcnt, 1);
 
+	if (!first_selem) {
+		/*
+		 * Nobody can see storage before it is published, so fill the
+		 * slot with no lock. With no selem, nobody can find storage
+		 * through the map, so no bucket lock either. cmpxchg() orders
+		 * the slot before the pointer. sdata is not NULL:
+		 * bpf_local_storage_obj_size() covers the slot of smap.
+		 */
+		sdata = bpf_local_storage_inline(storage, smap);
+		if (value)
+			copy_map_value(&smap->map, sdata->data, value);
+		sdata->inline_tag = bpf_local_storage_inline_tag(smap);
+		if (likely(!cmpxchg(owner_storage_ptr, NULL, storage)))
+			return storage;
+		err = -EAGAIN;
+		goto uncharge;
+	}
+
 	bpf_selem_link_storage_nolock(storage, first_selem);
 
 	b = select_bucket(smap, storage);
@@ -601,8 +648,6 @@ int bpf_local_storage_alloc(void *owner,
 	if (err)
 		goto uncharge;
 
-	owner_storage_ptr =
-		(struct bpf_local_storage **)owner_storage(smap, owner);
 	/* Publish storage to the owner.
 	 * Instead of using any lock of the kernel object (i.e. owner),
 	 * cmpxchg will work with any kernel object regardless what
@@ -628,13 +673,53 @@ int bpf_local_storage_alloc(void *owner,
 	bpf_selem_link_map_nolock(b, first_selem);
 	raw_res_spin_unlock_irqrestore(&b->lock, flags);
 
-	return 0;
+	return storage;
 
 uncharge:
 	/* storage was never published: no reader can see it */
 	kfree_nolock(storage);
 	mem_uncharge(smap, owner, size);
-	return err;
+	return ERR_PTR(err);
+}
+
+/* Write the value of smap into its slot, in place */
+static struct bpf_local_storage_data *
+bpf_local_storage_update_inline(struct bpf_local_storage *local_storage,
+				struct bpf_local_storage_map *smap,
+				void *value, u64 map_flags)
+{
+	u64 tag = bpf_local_storage_inline_tag(smap);
+	struct bpf_local_storage_data *sdata;
+	unsigned long flags;
+	int err;
+
+	sdata = bpf_local_storage_inline(local_storage, smap);
+	err = raw_res_spin_lock_irqsave(&local_storage->lock, flags);
+	if (err)
+		return ERR_PTR(err);
+
+	/* As an empty list in the selem path: destroy() has started */
+	if (unlikely(bpf_local_storage_gone(local_storage)))
+		err = -EAGAIN;
+	else
+		err = check_flags(sdata->inline_tag == tag ? sdata : NULL, map_flags);
+	if (err)
+		goto unlock;
+
+	/*
+	 * Lockless readers (programs, the syscall lookup, sk diag) can see a
+	 * torn value. This race is intended, as in array maps. The init value
+	 * can be the old value in the slot: keep it.
+	 */
+	if (!value)
+		memset(sdata->data, 0, smap->map.value_size);
+	else if (value != sdata->data)
+		copy_map_value(&smap->map, sdata->data, value);
+	/* A reader that sees the tag must see the value */
+	smp_store_release(&sdata->inline_tag, tag);
+unlock:
+	raw_res_spin_unlock_irqrestore(&local_storage->lock, flags);
+	return err ? ERR_PTR(err) : sdata;
 }
 
 /* sk cannot be going away because it is linking new elem
@@ -663,25 +748,43 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 
 	local_storage = rcu_dereference_check(*owner_storage(smap, owner),
 					      bpf_rcu_lock_held());
+	/* One gone() read decides slot or selem: a second read can differ */
 	if (!local_storage || bpf_local_storage_gone(local_storage)) {
 		/* Very first elem for the owner */
 		err = check_flags(NULL, map_flags);
 		if (err)
 			return ERR_PTR(err);
 
+		/* destroy() has started: no new object can be published */
+		if (local_storage && READ_ONCE(local_storage->dying))
+			return ERR_PTR(-EAGAIN);
+
+		if (bpf_local_storage_map_inline(smap)) {
+			/* Only destroy() frees the new object with the slot */
+			local_storage = bpf_local_storage_alloc(owner, smap, NULL,
+								value);
+			return IS_ERR(local_storage) ? ERR_CAST(local_storage) :
+			       bpf_local_storage_inline(local_storage, smap);
+		}
+
 		selem = bpf_selem_alloc(smap, owner, value, swap_uptrs);
 		if (!selem)
 			return ERR_PTR(-ENOMEM);
 
-		err = bpf_local_storage_alloc(owner, smap, selem);
-		if (err) {
+		local_storage = bpf_local_storage_alloc(owner, smap, selem, NULL);
+		if (IS_ERR(local_storage)) {
 			bpf_selem_free_unpublished(selem, smap);
 			mem_uncharge(smap, owner, smap->elem_size);
-			return ERR_PTR(err);
+			return ERR_CAST(local_storage);
 		}
 
 		return SDATA(selem);
 	}
+
+	/* An object without room for the slot keeps the value in an selem */
+	if (bpf_local_storage_inline(local_storage, smap))
+		return bpf_local_storage_update_inline(local_storage, smap,
+						       value, map_flags);
 
 	if ((map_flags & BPF_F_LOCK) && !(map_flags & BPF_NOEXIST)) {
 		/* Hoping to find an old_sdata to do inline update
