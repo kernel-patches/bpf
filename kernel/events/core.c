@@ -11210,7 +11210,7 @@ static void do_perf_sw_event(enum perf_type_id type, u32 event_id,
 				    u64 nr, struct pt_regs *regs, u64 addr)
 {
 	struct swevent_htable *swhash = this_cpu_ptr(&swevent_htable);
-	struct perf_sample_data data __uninitialized;
+	struct perf_sample_data sample __uninitialized;
 	struct perf_event *event;
 	struct hlist_head *head;
 
@@ -11221,8 +11221,8 @@ static void do_perf_sw_event(enum perf_type_id type, u32 event_id,
 
 	hlist_for_each_entry_rcu(event, head, hlist_entry) {
 		if (perf_swevent_match(event, type, event_id, regs)) {
-			perf_sample_data_init(&data, addr, 0);
-			perf_swevent_event(event, nr, &data, regs);
+			perf_sample_data_init(&sample, addr, 0);
+			perf_swevent_event(event, nr, &sample, regs);
 		}
 	}
 end:
@@ -11601,7 +11601,7 @@ void perf_tp_event(u16 event_type, u64 count, void *record, int entry_size,
 		   struct pt_regs *regs, struct hlist_head *head, int rctx,
 		   struct task_struct *task)
 {
-	struct perf_sample_data data __uninitialized;
+	struct perf_sample_data sample __uninitialized;
 	struct perf_event *event;
 
 	/*
@@ -11622,15 +11622,15 @@ void perf_tp_event(u16 event_type, u64 count, void *record, int entry_size,
 		if (perf_tp_event_match(event, &raw, regs)) {
 			/*
 			 * Here use the same on-stack perf_sample_data,
-			 * some members in data are event-specific and
+			 * some members in sample are event-specific and
 			 * need to be re-computed for different sweveents.
-			 * Re-initialize data->sample_flags safely to avoid
+			 * Re-initialize sample->sample_flags safely to avoid
 			 * the problem that next event skips preparing data
-			 * because data->sample_flags is set.
+			 * because sample->sample_flags is set.
 			 */
-			perf_sample_data_init(&data, 0, 0);
-			perf_sample_save_raw_data(&data, event, &raw);
-			perf_swevent_event(event, count, &data, regs);
+			perf_sample_data_init(&sample, 0, 0);
+			perf_sample_save_raw_data(&sample, event, &raw);
+			perf_swevent_event(event, count, &sample, regs);
 		}
 	}
 
@@ -11647,7 +11647,7 @@ void perf_tp_event(u16 event_type, u64 count, void *record, int entry_size,
 			goto unlock;
 
 		raw_spin_lock(&ctx->lock);
-		perf_tp_event_target_task(count, record, regs, &data, &raw, ctx);
+		perf_tp_event_target_task(count, record, regs, &sample, &raw, ctx);
 		raw_spin_unlock(&ctx->lock);
 unlock:
 		rcu_read_unlock();
@@ -12401,7 +12401,7 @@ static int perf_event_set_filter(struct perf_event *event, void __user *arg)
 static enum hrtimer_restart perf_swevent_hrtimer(struct hrtimer *hrtimer)
 {
 	enum hrtimer_restart ret = HRTIMER_RESTART;
-	struct perf_sample_data data __uninitialized;
+	struct perf_sample_data sample __uninitialized;
 	struct pt_regs *regs;
 	struct perf_event *event;
 	u64 period;
@@ -12414,12 +12414,12 @@ static enum hrtimer_restart perf_swevent_hrtimer(struct hrtimer *hrtimer)
 
 	event->pmu->read(event);
 
-	perf_sample_data_init(&data, 0, event->hw.last_period);
+	perf_sample_data_init(&sample, 0, event->hw.last_period);
 	regs = get_irq_regs();
 
 	if (regs && !perf_exclude_event(event, regs)) {
 		if (!(event->attr.exclude_idle && is_idle_task(current)))
-			if (perf_event_overflow(event, &data, regs))
+			if (perf_event_overflow(event, &sample, regs))
 				ret = HRTIMER_NORESTART;
 	}
 
