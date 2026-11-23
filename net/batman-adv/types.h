@@ -1939,6 +1939,13 @@ struct batadv_tt_local_entry {
 	/** @last_seen: timestamp used for purging stale tt local entries */
 	unsigned long last_seen;
 
+	/**
+	 * @del_unqueued: the DEL of this BATADV_TT_CLIENT_PENDING entry could
+	 *  not be queued and must be queued by the next purge. Protected by
+	 *  common.flags_lock
+	 */
+	bool del_unqueued;
+
 	/** @vlan: mesh-interface vlan of the entry */
 	struct batadv_meshif_vlan *vlan;
 };

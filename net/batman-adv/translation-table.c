@@ -655,8 +655,10 @@ static u16 batadv_tt_flags_get(struct batadv_tt_common_entry *common)
  *
  * The other nodes only learn about the modification of a local entry through
  * the queued change. The caller must therefore not modify the entry in a way
- * which depends on this change (e.g. hash it as BATADV_TT_CLIENT_NEW or mark it
- * as BATADV_TT_CLIENT_PENDING) when the event could not be stored.
+ * which depends on this change (e.g. hash it as BATADV_TT_CLIENT_NEW) when the
+ * event could not be stored. The only exception is the DEL of
+ * batadv_tt_local_set_pending(). Its entry is marked as del_unqueued to get the
+ * DEL requeued by batadv_tt_local_purge_list().
  *
  * The caller must hold the flags_lock of @common. The events of an entry are
  * then queued in the same order in which its flags were modified.
@@ -955,6 +957,7 @@ batadv_tt_local_create(struct net_device *mesh_iface, const u8 *addr,
 	kref_init(&tt_local->common.refcount);
 	last_seen = jiffies;
 	WRITE_ONCE(tt_local->last_seen, last_seen);
+	tt_local->del_unqueued = false;
 	tt_local->common.added_at = last_seen;
 	tt_local->vlan = vlan;
 	spin_lock_init(&tt_local->common.flags_lock);
@@ -1076,6 +1079,12 @@ batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
 			return false;
 
 		common->flags = flags;
+
+		/* the queued ADD replaces the DEL which still had to be
+		 * queued for the no longer pending entry
+		 */
+		if (readded)
+			tt_local->del_unqueued = false;
 	}
 
 	if (readded)
@@ -1762,6 +1771,11 @@ int batadv_tt_local_dump(struct sk_buff *msg, struct netlink_callback *cb)
  * entry. The entry is kept in the local table until the next TTVN increment
  * so that a consistency-check response can still be answered.
  *
+ * The entry is also marked as BATADV_TT_CLIENT_PENDING when the DEL could not
+ * be queued. The removal must not be lost because not all callers are able to
+ * retry it. Such an entry is marked as del_unqueued instead. It stays in the
+ * local table until batadv_tt_local_purge_list() was able to queue its DEL.
+ *
  * The caller must hold the flags_lock of @tt_local_entry and must not have
  * released it since it checked that the entry has to be removed. Both the
  * queue-then-mark order and this single flags_lock section are required.
@@ -1779,13 +1793,24 @@ batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
 {
 	struct batadv_tt_common_entry *common = &tt_local_entry->common;
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	bool queued;
 	u32 i;
 
 	i = batadv_choose_tt(&common->key, hash->size);
 	lockdep_assert_held(&hash->list_locks[i]);
 	lockdep_assert_held(&common->flags_lock);
 
-	__batadv_tt_local_event(bat_priv, common, common->flags | flags);
+	queued = __batadv_tt_local_event(bat_priv, common,
+					 common->flags | flags);
+
+	/* a failed attempt must not hide the still queued DEL of an already
+	 * pending entry
+	 */
+	if (queued)
+		tt_local_entry->del_unqueued = false;
+	else if (!(common->flags & BATADV_TT_CLIENT_PENDING))
+		tt_local_entry->del_unqueued = true;
+
 	common->flags |= BATADV_TT_CLIENT_PENDING;
 
 	batadv_dbg(BATADV_DBG_TT, bat_priv,
@@ -1911,11 +1936,18 @@ static void batadv_tt_local_purge_list(struct batadv_priv *bat_priv,
 					      common);
 
 		scoped_guard(spinlock_bh, &tt_local_entry->common.flags_lock) {
-			if (tt_local_entry->common.flags & BATADV_TT_CLIENT_NOPURGE)
-				break;
-
 			/* entry already marked for deletion */
-			if (tt_local_entry->common.flags & BATADV_TT_CLIENT_PENDING)
+			if (tt_local_entry->common.flags & BATADV_TT_CLIENT_PENDING) {
+				/* but its removal must still be announced */
+				if (tt_local_entry->del_unqueued)
+					batadv_tt_local_set_pending(bat_priv,
+								    tt_local_entry,
+								    BATADV_TT_CLIENT_DEL,
+								    "requeued");
+				break;
+			}
+
+			if (tt_local_entry->common.flags & BATADV_TT_CLIENT_NOPURGE)
 				break;
 
 			if (!batadv_has_timed_out(READ_ONCE(tt_local_entry->last_seen),
@@ -4524,7 +4556,8 @@ static void batadv_tt_local_transition_new(struct batadv_priv *bat_priv)
  * @bat_priv: the bat priv with all the mesh interface information
  *
  * Iterate over the local TT and physically remove every entry that has been
- * marked as BATADV_TT_CLIENT_PENDING.
+ * marked as BATADV_TT_CLIENT_PENDING and whose DEL was queued. An entry which
+ * still waits for its DEL (del_unqueued) stays in the local table.
  */
 static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
 {
@@ -4548,8 +4581,18 @@ static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
 					  hash_entry) {
 			bool cont = false;
 
+			tt_local = container_of(tt_common,
+						struct batadv_tt_local_entry,
+						common);
+
 			scoped_guard(spinlock_bh, &tt_common->flags_lock) {
 				if (!(tt_common->flags & BATADV_TT_CLIENT_PENDING)) {
+					cont = true;
+					break;
+				}
+
+				/* the removal must be announced first */
+				if (tt_local->del_unqueued) {
 					cont = true;
 					break;
 				}
@@ -4571,10 +4614,6 @@ static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
 
 			if (cont)
 				continue;
-
-			tt_local = container_of(tt_common,
-						struct batadv_tt_local_entry,
-						common);
 
 			batadv_tt_local_entry_put(tt_local);
 		}
