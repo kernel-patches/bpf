@@ -5,6 +5,7 @@
  * Clément Léger <clement.leger@bootlin.com>
  */
 
+#include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/etherdevice.h>
 #include <linux/if_bridge.h>
@@ -118,6 +119,12 @@ static void a5psw_port_mgmtfwd_set(struct a5psw *a5psw, int port, bool enable)
 	 * isolate the port.
 	 */
 	a5psw_port_pattern_set(a5psw, port, A5PSW_PATTERN_MGMTFWD, enable);
+}
+
+static void a5psw_set_learncount(struct a5psw *a5psw, u32 mode)
+{
+	a5psw_reg_writel(a5psw, A5PSW_LK_LEARNCOUNT,
+			 FIELD_PREP(A5PSW_LK_LEARNCOUNT_MODE, mode));
 }
 
 static void a5psw_port_tx_enable(struct a5psw *a5psw, int port, bool enable)
@@ -544,10 +551,8 @@ static int a5psw_port_fdb_add(struct dsa_switch *ds, int port,
 	if (ret)
 		goto lk_unlock;
 
-	if (inc_learncount) {
-		reg = A5PSW_LK_LEARNCOUNT_MODE_INC;
-		a5psw_reg_writel(a5psw, A5PSW_LK_LEARNCOUNT, reg);
-	}
+	if (inc_learncount)
+		a5psw_set_learncount(a5psw, A5PSW_LK_LEARNCOUNT_MODE_INC);
 
 lk_unlock:
 	mutex_unlock(&a5psw->lk_lock);
@@ -603,10 +608,8 @@ static int a5psw_port_fdb_del(struct dsa_switch *ds, int port,
 		goto lk_unlock;
 
 	/* Decrement LEARNCOUNT */
-	if (clear) {
-		reg = A5PSW_LK_LEARNCOUNT_MODE_DEC;
-		a5psw_reg_writel(a5psw, A5PSW_LK_LEARNCOUNT, reg);
-	}
+	if (clear)
+		a5psw_set_learncount(a5psw, A5PSW_LK_LEARNCOUNT_MODE_DEC);
 
 lk_unlock:
 	mutex_unlock(&a5psw->lk_lock);
@@ -963,8 +966,7 @@ static int a5psw_setup(struct dsa_switch *ds)
 	}
 
 	/* Reset learn count to 0 */
-	reg = A5PSW_LK_LEARNCOUNT_MODE_SET;
-	a5psw_reg_writel(a5psw, A5PSW_LK_LEARNCOUNT, reg);
+	a5psw_set_learncount(a5psw, A5PSW_LK_LEARNCOUNT_MODE_SET);
 
 	/* Clear VLAN resource table */
 	reg = A5PSW_VLAN_RES_WR_PORTMASK | A5PSW_VLAN_RES_WR_TAGMASK;
