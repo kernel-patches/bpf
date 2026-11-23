@@ -107,7 +107,7 @@ static void vmstat_test_interleaved_zone_page_state(struct kunit *test)
 
 /*
  * Test 3: count_vm_event() benchmark.
- * Restores counter balance with count_vm_events(item, -TEST_COUNT).
+ * Restores counter balance after measurement.
  */
 static void vmstat_test_count_vm_event(struct kunit *test)
 {
@@ -124,7 +124,7 @@ static void vmstat_test_count_vm_event(struct kunit *test)
 	time2 = get_cycles();
 
 	/* Restore balance */
-	count_vm_events(SLABS_SCANNED, -TEST_COUNT);
+	count_vm_events(SLABS_SCANNED, -(long)i);
 
 	time = time2 - time1;
 	avg_cycles = div_u64(time, TEST_COUNT);
