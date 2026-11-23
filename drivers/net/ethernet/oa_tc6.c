@@ -89,7 +89,7 @@ struct oa_tc6 {
 	bool int_flag;
 	bool disable_traffic;
 	bool prot_ctrl;
-	enum oa_tc6_quirk_flag quirk_flags;
+	struct oa_tc6_quirks quirks;
 	struct gpio_desc *reset_gpio;
 };
 
@@ -582,7 +582,7 @@ static int oa_tc6_phy_init(struct oa_tc6 *tc6)
 {
 	int ret;
 
-	if (tc6->quirk_flags & OA_TC6_BROKEN_PHY)
+	if (tc6->quirks.quirk_flags & OA_TC6_BROKEN_PHY)
 		return 0;
 
 	ret = oa_tc6_check_phy_reg_direct_access_capability(tc6);
@@ -621,7 +621,7 @@ static int oa_tc6_phy_init(struct oa_tc6 *tc6)
 
 static void oa_tc6_phy_exit(struct oa_tc6 *tc6)
 {
-	if (tc6->quirk_flags & OA_TC6_BROKEN_PHY)
+	if (tc6->quirks.quirk_flags & OA_TC6_BROKEN_PHY)
 		return;
 
 	phy_disconnect(tc6->phydev);
@@ -651,6 +651,8 @@ static int oa_tc6_sw_reset_macphy(struct oa_tc6 *tc6)
 	ret = oa_tc6_write_register(tc6, OA_TC6_REG_RESET, regval);
 	if (ret)
 		return ret;
+
+	fsleep(tc6->quirks.softreset_settle_us);
 
 	/* Poll for soft reset complete for every 1ms until 1s timeout */
 	ret = readx_poll_timeout(oa_tc6_read_status0, tc6, regval,
@@ -1475,7 +1477,9 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,
 	spin_lock_init(&tc6->tx_skb_lock);
 
 	if (quirks)
-		tc6->quirk_flags = quirks->quirk_flags;
+		tc6->quirks = *quirks;
+	if (!tc6->quirks.hwreset_settle_us)
+		tc6->quirks.hwreset_settle_us = 1000;
 
 	/* Set the SPI controller to pump at realtime priority */
 	tc6->spi->rt = true;
@@ -1515,12 +1519,12 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,
 					     "failed to get reset gpio\n"));
 
 	if (tc6->reset_gpio) {
-		/* Keep the reset asserted for 10 us and then allow 1 ms of
-		 * settle time for the crystal oscillator startup.
+		/* Keep the reset asserted for 10 us and then allow the reset
+		 * settle time (1 ms by default).
 		 */
 		fsleep(10);
 		gpiod_set_value_cansleep(tc6->reset_gpio, 0);
-		fsleep(1000);
+		fsleep(tc6->quirks.hwreset_settle_us);
 	}
 
 	/* Check the PROTE bit status so that we can reset the device */

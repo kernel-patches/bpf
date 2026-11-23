@@ -73,6 +73,10 @@ enum oa_tc6_quirk_flag {
 
 struct oa_tc6_quirks {
 	enum oa_tc6_quirk_flag quirk_flags;
+	/* Wait after deasserting the reset GPIO, 1 ms if not set */
+	u32 hwreset_settle_us;
+	/* Wait after the software reset, before polling for RESETC */
+	u32 softreset_settle_us;
 };
 
 struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,
