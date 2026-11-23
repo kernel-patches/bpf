@@ -57,6 +57,8 @@
 #include <net/lwtunnel.h>
 #include <net/ip_tunnels.h>
 
+#include <trace/events/skb.h>
+
 static int ip6_finish_output2(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	struct dst_entry *dst = skb_dst(skb);
@@ -718,6 +720,7 @@ static void ip6_copy_metadata(struct sk_buff *to, struct sk_buff *from)
 #endif
 	nf_copy(to, from);
 	skb_ext_copy(to, from);
+	trace_skb_copy(to, from);
 	skb_copy_secmark(to, from);
 }
 

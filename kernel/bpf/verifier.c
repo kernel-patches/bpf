@@ -6634,6 +6634,10 @@ BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct vm_area_struct) {
 	struct file *vm_file;
 };
 
+BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct bpf_sock_ops_kern) {
+	struct sk_buff *skb;
+};
+
 static bool type_is_rcu(struct bpf_verifier_env *env,
 			struct bpf_reg_state *reg,
 			const char *field_name, u32 btf_id)
@@ -6681,6 +6685,7 @@ static bool type_is_trusted_or_null(struct bpf_verifier_env *env,
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct dentry));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct linux_binprm));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct vm_area_struct));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct bpf_sock_ops_kern));
 
 	return btf_nested_type_is_trusted(&env->log, reg, field_name, btf_id,
 					  "__safe_trusted_or_null");
@@ -9439,6 +9444,17 @@ static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *re
 	    reg_from_argno(argno) == BPF_REG_2) {
 		type &= ~MEM_ALLOC;
 		type &= ~MEM_PERCPU;
+	}
+
+	/* Also accept a trusted pointer to the kernel context type in place of PTR_TO_CTX. */
+	if (is_kfunc(meta) && base_type(arg_type) == ARG_PTR_TO_CTX &&
+	    base_type(type) == PTR_TO_BTF_ID && reg->btf == btf_vmlinux &&
+	    !reg->var_off.value && is_trusted_reg(env, reg)) {
+		int kern_ctx_btf_id = get_kern_ctx_btf_id(&env->log,
+							  resolve_prog_type(env->prog));
+
+		if (kern_ctx_btf_id > 0 && reg->btf_id == kern_ctx_btf_id)
+			type = PTR_TO_CTX;
 	}
 
 	for (i = 0; i < ARRAY_SIZE(compatible->types); i++) {

@@ -3,9 +3,11 @@
 
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include <errno.h>
 
 #include "bpf_kfuncs.h"
+#include "bpf_misc.h"
 #include "bpf_tracing_net.h"
 
 #define META_SIZE 32
@@ -687,6 +689,319 @@ int helper_skb_change_proto(struct __sk_buff *ctx)
 	test_pass = true;
 out:
 	return TC_ACT_SHOT;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RHASH);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__uint(max_entries, 128);
+	__type(key, struct __sk_buff *);
+	__type(value, __u8[META_SIZE]);
+} meta_map SEC(".maps");
+
+bool write_done;
+
+static void write_meta(struct __sk_buff *ctx, void *map)
+{
+	if (bpf_map_update_elem(map, &ctx, &meta_want, BPF_NOEXIST))
+		return;
+	bpf_trace_skb(bpf_cast_to_kern_ctx(ctx), 0);
+	write_done = true;
+}
+
+/* Stash test metadata in the meta_map, keyed by the skb address */
+SEC("tc")
+int tc_meta_write(struct __sk_buff *ctx)
+{
+	if (!is_test_packet_tc(ctx))
+		return TC_ACT_SHOT;
+
+	write_meta(ctx, &meta_map);
+	return TC_ACT_UNSPEC;
+}
+
+/* Read test metadata stashed in the meta_map on the same hook */
+SEC("tc")
+int tc_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		return TC_ACT_SHOT;
+	if (!check_metadata(meta_have))
+		return TC_ACT_SHOT;
+
+	test_pass = true;
+	return TC_ACT_UNSPEC;
+}
+
+int free_count;
+
+SEC("raw_tp/skb_free")
+int BPF_PROG(skb_free, struct sk_buff *skb, enum skb_drop_reason reason,
+	     void *location)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &skb);
+	if (!meta_have)
+		return 0;
+	if (bpf_map_delete_elem(&meta_map, &skb))
+		return 0;
+
+	free_count++;
+	return 0;
+}
+
+bool copy_done;
+
+SEC("tp_btf/skb_copy")
+int BPF_PROG(skb_copy, struct sk_buff *dst, struct sk_buff *src)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &src);
+	if (!meta_have)
+		return 0;
+	if (bpf_map_update_elem(&meta_map, &dst, meta_have, BPF_NOEXIST))
+		return 0;
+
+	bpf_trace_skb(dst, 0);
+	copy_done = true;
+	return 0;
+}
+
+/* Read skb_ext from cgroup/skb ingress -- tests cross-hook survival */
+SEC("cgroup_skb/ingress")
+int cgrp_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		return 1;
+	if (!check_metadata(meta_have))
+		return 1;
+
+	test_pass = true;
+	return 1;
+}
+
+__be16 target_port;
+
+#define TCPV4_HDR_OFF	(sizeof(struct ethhdr) + sizeof(struct iphdr))
+#define TCPV4_SPORT_OFF	(TCPV4_HDR_OFF + offsetof(struct tcphdr, source))
+#define TCPV4_DPORT_OFF	(TCPV4_HDR_OFF + offsetof(struct tcphdr, dest))
+
+/* Write metadata on TCP packets to/from target_port */
+SEC("tc")
+int tc_meta_write_port(struct __sk_buff *ctx)
+{
+	__be16 sport, dport;
+
+	if (ctx->protocol != __bpf_constant_htons(ETH_P_IP))
+		return TC_ACT_UNSPEC;
+	if (bpf_skb_load_bytes(ctx, TCPV4_SPORT_OFF, &sport, sizeof(sport)))
+		return TC_ACT_UNSPEC;
+	if (bpf_skb_load_bytes(ctx, TCPV4_DPORT_OFF, &dport, sizeof(dport)))
+		return TC_ACT_UNSPEC;
+	if (sport != target_port && dport != target_port)
+		return TC_ACT_UNSPEC;
+
+	write_meta(ctx, &meta_map);
+
+	return TC_ACT_UNSPEC;
+}
+
+/* Read stashed metadata from sock_ops passive established hook */
+SEC("sockops")
+int skops_meta_read(struct bpf_sock_ops *ctx)
+{
+	struct bpf_sock_ops_kern *kctx;
+	struct sk_buff *skb;
+	__u8 *meta_have;
+
+	if (ctx->op != BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB)
+		return 1;
+
+	kctx = bpf_cast_to_kern_ctx(ctx);
+	skb = kctx->skb;
+	if (!skb)
+		return 1;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &skb);
+	if (!meta_have)
+		return 1;
+	if (!check_metadata(meta_have))
+		return 1;
+
+	test_pass = true;
+	return 1;
+}
+
+/* Read stashed metadata from LSM inet_conn_established hook */
+SEC("lsm/inet_conn_established")
+int BPF_PROG(lsm_meta_read, struct sock *sk, struct sk_buff *skb)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &skb);
+	if (!meta_have)
+		return 0;
+	if (!check_metadata(meta_have))
+		return 0;
+
+	test_pass = true;
+	return 0;
+}
+
+/* Read skb_ext from socket filter -- tests TC -> sk_filter path */
+SEC("socket")
+int sk_filter_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		goto out;
+	if (!check_metadata(meta_have))
+		goto out;
+
+	test_pass = true;
+out:
+	return ctx->len;
+}
+
+/* Write skb_ext from cgroup/skb egress */
+SEC("cgroup_skb/egress")
+int cgrp_meta_write(struct __sk_buff *ctx)
+{
+	if (!is_test_packet_tc(ctx))
+		return 1;
+
+	write_meta(ctx, &meta_map);
+
+	return 1;
+}
+
+bool write_once_done;
+
+/* Write skb_ext from cgroup/skb egress -- only the first matching packet */
+SEC("cgroup_skb/egress")
+int cgrp_meta_write_once(struct __sk_buff *ctx)
+{
+	if (write_once_done || !is_test_packet_tc(ctx))
+		return 1;
+
+	write_meta(ctx, &meta_map);
+	write_once_done = true;
+
+	return 1;
+}
+
+/* Read skb_ext from tp_btf/kfree_skb -- tests survival until skb free */
+SEC("tp_btf/kfree_skb")
+int BPF_PROG(tp_kfree_meta_read, struct sk_buff *skb)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &skb);
+	if (!meta_have)
+		return 0;
+	if (!check_metadata(meta_have))
+		return 0;
+
+	test_pass = true;
+	return 0;
+}
+
+#define NF_ACCEPT 1
+
+SEC("netfilter")
+int nf_meta_read(struct bpf_nf_ctx *ctx)
+{
+	struct __sk_buff *skb = (struct __sk_buff *)ctx->skb;
+	__u8 *meta_have;
+
+	if (!skb)
+		return NF_ACCEPT;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &skb);
+	if (!meta_have)
+		return NF_ACCEPT;
+	if (!check_metadata(meta_have))
+		return NF_ACCEPT;
+
+	test_pass = true;
+	return NF_ACCEPT;
+}
+
+SEC("lwt_in")
+int lwt_in_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		return BPF_OK;
+	if (!check_metadata(meta_have))
+		return BPF_OK;
+
+	test_pass = true;
+	return BPF_OK;
+}
+
+SEC("lwt_out")
+int lwt_out_meta_write(struct __sk_buff *ctx)
+{
+	if (!is_test_packet_tc(ctx))
+		return BPF_OK;
+	write_meta(ctx, &meta_map);
+
+	return BPF_OK;
+}
+
+SEC("lwt_xmit")
+int lwt_xmit_meta_write(struct __sk_buff *ctx)
+{
+	if (!is_test_packet_tc(ctx))
+		return BPF_OK;
+	write_meta(ctx, &meta_map);
+
+	return BPF_OK;
+}
+
+/* Read stashed metadata from seg6local End.BPF */
+SEC("lwt_seg6local")
+int seg6local_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		return BPF_OK;
+	if (!check_metadata(meta_have))
+		return BPF_OK;
+
+	test_pass = true;
+	return BPF_OK;
+}
+
+/* Read stashed metadata from sk_skb stream verdict hook */
+SEC("sk_skb/stream_verdict")
+int sk_skb_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		return SK_PASS;
+	if (!check_metadata(meta_have))
+		return SK_PASS;
+
+	test_pass = true;
+	return SK_PASS;
 }
 
 char _license[] SEC("license") = "GPL";

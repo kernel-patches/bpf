@@ -27,6 +27,7 @@
 #include <net/sock.h>
 
 #include <trace/events/mctp.h>
+#include <trace/events/skb.h>
 
 static const unsigned int mctp_message_maxlen = 64 * 1024;
 static const unsigned long mctp_key_lifetime = 6 * CONFIG_HZ;
@@ -1138,6 +1139,7 @@ static int mctp_do_fragment_route(struct mctp_dst *dst, struct sk_buff *skb,
 
 		/* we need to copy the extensions, for MCTP flow data */
 		skb_ext_copy(skb2, skb);
+		trace_skb_copy(skb2, skb);
 
 		/* do route */
 		rc = dst->output(dst, skb2);

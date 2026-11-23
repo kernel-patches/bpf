@@ -4,6 +4,7 @@
 #include <net/dst_metadata.h>
 #include <net/busy_poll.h>
 #include <trace/events/net.h>
+#include <trace/events/skb.h>
 #include <linux/skbuff_ref.h>
 
 #define MAX_GRO_SKBS 8
@@ -709,6 +710,8 @@ static void napi_reuse_skb(struct napi_struct *napi, struct sk_buff *skb)
 		nf_reset_ct(skb);
 		skb->slow_gro = 0;
 	}
+	trace_skb_free(skb, SKB_CONSUMED, __builtin_return_address(0));
+	skb->traced = 0;
 
 	napi->skb = skb;
 }
