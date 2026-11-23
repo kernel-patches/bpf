@@ -482,4 +482,5 @@ LIBBPF_1.9.0 {
 		ring__next;
 		ring__release;
 		ring__rewind;
+		ring_buffer__wait;
 } LIBBPF_1.8.0;

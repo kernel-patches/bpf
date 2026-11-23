@@ -412,6 +412,18 @@ int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms)
 	return res;
 }
 
+/* Wait for data in the ring(s) without consuming it */
+int ring_buffer__wait(struct ring_buffer *rb, int timeout_ms)
+{
+	int cnt;
+
+	cnt = epoll_wait(rb->epoll_fd, rb->events, rb->ring_cnt, timeout_ms);
+	if (cnt < 0)
+		return libbpf_err(-errno);
+
+	return cnt;
+}
+
 /* Get an fd that can be used to sleep until data is available in the ring(s) */
 int ring_buffer__epoll_fd(const struct ring_buffer *rb)
 {

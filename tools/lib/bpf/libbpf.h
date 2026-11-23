@@ -1560,6 +1560,21 @@ LIBBPF_API void ring_buffer__free(struct ring_buffer *rb);
 LIBBPF_API int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 				ring_buffer_sample_fn sample_cb, void *ctx);
 LIBBPF_API int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
+
+/**
+ * @brief **ring_buffer__wait()** waits until at least one of the rings has
+ * data, without consuming it.
+ *
+ * Unlike **ring_buffer__poll()** it doesn't call sample callbacks, so it also
+ * works for rings that are consumed with **ring__next()**.
+ *
+ * @param rb A ringbuffer manager object.
+ * @param timeout_ms Maximum time to wait in milliseconds, 0 to not wait at
+ * all, -1 to wait indefinitely.
+ * @return The number of rings that have data, 0 if the timeout expired, or a
+ * negative error code on failure.
+ */
+LIBBPF_API int ring_buffer__wait(struct ring_buffer *rb, int timeout_ms);
 LIBBPF_API int ring_buffer__consume(struct ring_buffer *rb);
 LIBBPF_API int ring_buffer__consume_n(struct ring_buffer *rb, size_t n);
 LIBBPF_API int ring_buffer__epoll_fd(const struct ring_buffer *rb);
