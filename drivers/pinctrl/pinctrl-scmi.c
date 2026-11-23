@@ -11,6 +11,7 @@
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/overflow.h>
 #include <linux/scmi_protocol.h>
 #include <linux/slab.h>
 #include <linux/types.h>
@@ -179,8 +180,11 @@ static int pinctrl_scmi_map_pinconf_arg_get(enum pin_config_param param, u32 *va
 	if (pinctrl_scmi_pinconf_inactive_flag(param, *value))
 		return -EINVAL;
 
-	if (param == PIN_CONFIG_DRIVE_STRENGTH)
+	if (param == PIN_CONFIG_DRIVE_STRENGTH) {
+		if (*value % MILLI)
+			return -EINVAL;
 		*value /= MILLI;
+	}
 
 	return 0;
 }
@@ -223,8 +227,10 @@ static int pinctrl_scmi_map_pinconf_type_set(enum pin_config_param param,
 	if (pinctrl_scmi_pinconf_arg_ignored(param))
 		*arg = 1;
 
-	if (param == PIN_CONFIG_DRIVE_STRENGTH)
-		*arg *= MILLI;
+	if (param == PIN_CONFIG_DRIVE_STRENGTH) {
+		if (check_mul_overflow(*arg, MILLI, arg))
+			return -EINVAL;
+	}
 
 	return pinctrl_scmi_map_pinconf_type(param, type);
 }
