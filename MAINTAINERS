@@ -21360,7 +21360,7 @@ F:	drivers/hwmon/pc87360.c
 PC8736x GPIO DRIVER
 M:	Jim Cromie <jim.cromie@gmail.com>
 S:	Maintained
-F:	drivers/char/pc8736x_gpio.c
+F:	drivers/gpio/gpio-pc8736x.c
 
 PC87427 HARDWARE MONITORING DRIVER
 M:	Jean Delvare <jdelvare@suse.com>

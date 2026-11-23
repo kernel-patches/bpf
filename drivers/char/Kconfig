@@ -233,19 +233,6 @@ config SCx200_GPIO
 
 	  If compiled as a module, it will be called scx200_gpio.
 
-config PC8736x_GPIO
-	tristate "NatSemi PC8736x GPIO Support"
-	depends on X86_32 && !UML
-	default SCx200_GPIO	# mostly N
-	select NSC_GPIO		# needed for support routines
-	help
-	  Give userspace access to the GPIO pins on the National
-	  Semiconductor PC-8736x (x=[03456]) SuperIO chip.  The chip
-	  has multiple functional units, inc several managed by
-	  hwmon/pc87360 driver.  Tested with PC-87366
-
-	  If compiled as a module, it will be called pc8736x_gpio.
-
 config NSC_GPIO
 	tristate "NatSemi Base GPIO Support"
 	depends on X86_32
