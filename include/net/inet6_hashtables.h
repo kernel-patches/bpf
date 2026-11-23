@@ -102,11 +102,23 @@ static inline struct sock *__inet6_lookup(const struct net *net,
 				     daddr, hnum, dif, sdif);
 }
 
+static inline bool inet6_prefetched_sk_mismatch(const struct sock *sk,
+						const struct net *net,
+						u8 protocol)
+{
+	if (unlikely(sk->sk_family != AF_INET6 || !net_eq(sock_net(sk), net)))
+		return true;
+	if (!sk_fullsock(sk))
+		return unlikely(protocol != IPPROTO_TCP);
+	return unlikely(sk->sk_protocol != protocol);
+}
+
 static inline
 struct sock *inet6_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 			      const struct in6_addr *saddr, const __be16 sport,
 			      const struct in6_addr *daddr, const __be16 dport,
-			      bool *refcounted, inet6_ehashfn_t *ehashfn)
+			      bool *refcounted, inet6_ehashfn_t *ehashfn,
+			      u8 protocol)
 {
 	struct sock *sk, *reuse_sk;
 	bool prefetched;
@@ -115,16 +127,16 @@ struct sock *inet6_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 	if (!sk)
 		return NULL;
 
-	if (!prefetched || !sk_fullsock(sk))
+	if (!prefetched)
 		return sk;
 
-	if (sk->sk_protocol == IPPROTO_TCP) {
+	if (unlikely(inet6_prefetched_sk_mismatch(sk, net, protocol)))
+		goto mismatch;
+
+	if (protocol == IPPROTO_TCP) {
 		if (sk->sk_state != TCP_LISTEN)
 			return sk;
-	} else if (sk->sk_protocol == IPPROTO_UDP) {
-		if (sk->sk_state != TCP_CLOSE)
-			return sk;
-	} else {
+	} else if (sk->sk_state != TCP_CLOSE) {
 		return sk;
 	}
 
@@ -140,6 +152,11 @@ struct sock *inet6_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 	WARN_ON_ONCE(*refcounted);
 
 	return reuse_sk;
+
+mismatch:
+	inet_prefetched_sk_release(skb, sk, *refcounted);
+	*refcounted = false;
+	return NULL;
 }
 
 static inline struct sock *__inet6_lookup_skb(struct sk_buff *skb, int doff,
@@ -153,7 +170,7 @@ static inline struct sock *__inet6_lookup_skb(struct sk_buff *skb, int doff,
 	struct sock *sk;
 
 	sk = inet6_steal_sock(net, skb, doff, &ip6h->saddr, sport, &ip6h->daddr, dport,
-			      refcounted, inet6_ehashfn);
+			      refcounted, inet6_ehashfn, IPPROTO_TCP);
 	if (IS_ERR(sk))
 		return NULL;
 	if (sk)

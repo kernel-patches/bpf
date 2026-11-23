@@ -521,6 +521,19 @@ void sock_gen_put(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(sock_gen_put);
 
+/* release a prefetched socket that won't be used, drop the reference
+ * on @sk if @refcounted is set and orphan the skb to release any socket
+ * still attached to it (e.g. bpf syncookie request sock)
+ */
+void inet_prefetched_sk_release(struct sk_buff *skb, struct sock *sk,
+				bool refcounted)
+{
+	if (refcounted)
+		sock_gen_put(sk);
+	skb_orphan(skb);
+}
+EXPORT_SYMBOL_GPL(inet_prefetched_sk_release);
+
 void sock_edemux(struct sk_buff *skb)
 {
 	sock_gen_put(skb->sk);

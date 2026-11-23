@@ -403,6 +403,8 @@ static inline unsigned int __inet_ehashfn(const __be32 laddr,
 struct request_sock *inet_reqsk_alloc(const struct request_sock_ops *ops,
 				      struct sock *sk_listener,
 				      bool attach_listener);
+void inet_prefetched_sk_release(struct sk_buff *skb, struct sock *sk,
+				bool refcounted);
 
 static inline __u8 inet_sk_flowi_flags(const struct sock *sk)
 {
