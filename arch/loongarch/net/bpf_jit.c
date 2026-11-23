@@ -2395,6 +2395,13 @@ skip_init_ctx:
 		for (i = 0; i <= prog->len; i++)
 			ctx.offset[i] *= LOONGARCH_INSN_SIZE;
 		bpf_prog_fill_jited_linfo(prog, ctx.offset + 1);
+		/*
+		 * The bpf_prog_update_insn_ptrs function expects offsets to
+		 * point to the first byte of the jitted instruction (unlike
+		 * the bpf_prog_fill_jited_linfo above, which, for historical
+		 * reasons, expects to point to the next instruction)
+		 */
+		bpf_prog_update_insn_ptrs(prog, ctx.offset, ctx.ro_image);
 
 out_offset:
 		kvfree(ctx.offset);
