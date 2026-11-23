@@ -113,7 +113,7 @@
 
 // Shrink SO_RCVBUF so sk_rcvbuf (320,000) is smaller than current
 // sk_rmem_alloc (334,592 on x86_64 default), but larger than sk_rmem_alloc
-// after collapsing the 30 bloated skbs (300,288 on x86_64 default).
+// after collapsing the 30 bloated skbs (296,448 on x86_64 default).
    +0 setsockopt(4, SOL_SOCKET, SO_RCVBUF, [160000], 4) = 0
 
 // Inject the next 1,000 B segment with a changed window to bypass

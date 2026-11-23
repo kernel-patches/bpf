@@ -5837,7 +5837,7 @@ static struct sk_buff *tcp_skb_next(struct sk_buff *skb, struct sk_buff_head *li
 #define TCP_COLLAPSE_SCALING_RATIO				\
 	((TCP_COLLAPSE_MAX_SIZE << TCP_RMEM_TO_WIN_SCALE) /	\
 	 (SKB_TRUESIZE(TCP_COLLAPSE_MAX_SIZE)))
-/* Cap pool preallocation per sub-range to at most 16 skbs in seq
+/* Cap pool preallocation per sub-range to about 15 pages in seq
  * space.  A single first skb exceeding this is still collapsed,
  * whereas an exceeding overlapping ofo range is skipped.
  */
@@ -5886,6 +5886,57 @@ static struct sk_buff *tcp_collapse_one(struct sock *sk, struct sk_buff *skb,
 	return next;
 }
 
+/* Allocate an skb with @linear bytes in its head, and @size bytes
+ * in order-0 page frags. All frags are full pages, but possibly the last one.
+ */
+static struct sk_buff *tcp_collapse_alloc_skb(int linear, int size)
+{
+	struct sk_buff *nskb = alloc_skb(linear, GFP_ATOMIC);
+
+	if (!nskb)
+		return NULL;
+
+	__skb_put(nskb, linear);
+
+	while (size > 0) {
+		int len = min_t(int, size, PAGE_SIZE);
+		struct page *page;
+
+		/* No __GFP_HIGHMEM: the page is directly mapped. */
+		page = alloc_page(GFP_ATOMIC | __GFP_NOMEMALLOC | __GFP_NOWARN);
+		if (!page) {
+			__kfree_skb(nskb);
+			return NULL;
+		}
+		skb_add_rx_frag(nskb, skb_shinfo(nskb)->nr_frags, page, 0, len,
+				PAGE_SIZE);
+		size -= len;
+	}
+
+	return nskb;
+}
+
+/* Return the address of the byte at @offset in nskb, and the room
+ * left in the linear part or in the page frag containing this byte.
+ */
+static void *tcp_collapse_dst(const struct sk_buff *nskb, int offset, int *room)
+{
+	int hlen = skb_headlen(nskb);
+	const skb_frag_t *frag;
+
+	if (offset < hlen) {
+		*room = hlen - offset;
+		return nskb->data + offset;
+	}
+
+	offset -= hlen;
+	frag = &skb_shinfo(nskb)->frags[offset >> PAGE_SHIFT];
+	offset &= ~PAGE_MASK;
+	*room = skb_frag_size(frag) - offset;
+
+	return skb_frag_address(frag) + offset;
+}
+
 /* Collapse bloated sub-ranges in contiguous sequence of skbs
  * head..tail starting from sequence number start.
  *
@@ -5901,7 +5952,7 @@ tcp_collapse(struct sock *sk, struct sk_buff_head *list, struct rb_root *root,
 	unsigned int old_truesize, new_truesize;
 	struct sk_buff *skb = head, *n;
 	struct sk_buff_head tmp, pool;
-	int remainder, nskbs;
+	int size, linear, npages;
 	struct sk_buff *nskb;
 	u8 scaling_ratio;
 	int released = 0;
@@ -5983,34 +6034,47 @@ restart:
 	    sub_end - start >= TCP_COLLAPSE_MAX_TOTAL_SIZE)
 		goto skip;
 
-	/* Third, check if the new skbs have high density. */
-	nskbs = (sub_end - start) / TCP_COLLAPSE_MAX_SIZE;
-	new_truesize = nskbs * SKB_TRUESIZE(TCP_COLLAPSE_MAX_SIZE);
+	/* Third, check if the new skbs have high density.
+	 *
+	 * Payload is stored in order-0 page frags: one sk_buff can hold
+	 * up to MAX_SKB_FRAGS pages, and truesize stays close to the
+	 * payload size.
+	 *
+	 * What does not fill a page is stored in the linear part of
+	 * the first new skb, unless a page is cheaper.
+	 */
+	size = sub_end - start;
+	linear = size & ~PAGE_MASK;
+	if (linear > TCP_COLLAPSE_MAX_SIZE)
+		linear = 0;
 
-	remainder = (sub_end - start) % TCP_COLLAPSE_MAX_SIZE;
-	if (remainder) {
-		nskbs++;
-		new_truesize += skb_head_truesize(remainder, GFP_ATOMIC);
-	} else {
-		remainder = TCP_COLLAPSE_MAX_SIZE;
-	}
+	npages = DIV_ROUND_UP(size - linear, PAGE_SIZE);
+	new_truesize = skb_head_truesize(linear, GFP_ATOMIC) +
+		       npages * PAGE_SIZE;
+	if (npages > MAX_SKB_FRAGS)
+		new_truesize += (DIV_ROUND_UP(npages, MAX_SKB_FRAGS) - 1) *
+				skb_head_truesize(0, GFP_ATOMIC);
 
 	if (old_truesize <= new_truesize)
 		goto skip;
 
-	while (nskbs--) {
-		nskb = alloc_skb(nskbs ? TCP_COLLAPSE_MAX_SIZE : remainder,
-				 GFP_ATOMIC);
+	while (size > 0) {
+		int len = min_t(int, size - linear, MAX_SKB_FRAGS * PAGE_SIZE);
+
+		nskb = tcp_collapse_alloc_skb(linear, len);
 		if (!nskb)
 			goto end;
 
 		__skb_queue_tail(&pool, nskb);
+		size -= linear + len;
+		linear = 0;
 	}
 
 	while (before(start, sub_end)) {
-		int copy = min_t(int, TCP_COLLAPSE_MAX_SIZE, sub_end - start);
+		int copy;
 
 		nskb = __skb_dequeue(&pool);
+		copy = nskb->len;
 		memcpy(nskb->cb, skb->cb, sizeof(skb->cb));
 		TCP_SKB_CB(nskb)->has_rxtstamp = false;
 		skb_copy_decrypted(nskb, skb);
@@ -6026,12 +6090,17 @@ restart:
 		/* Copy data, releasing collapsed skbs. */
 		while (copy > 0) {
 			int offset = start - TCP_SKB_CB(skb)->seq;
-			int size = TCP_SKB_CB(skb)->end_seq - start;
+			int room;
+			void *dst;
+
+			size = TCP_SKB_CB(skb)->end_seq - start;
 
 			BUG_ON(offset < 0);
 			if (size > 0) {
-				size = min(copy, size);
-				if (skb_copy_bits(skb, offset, skb_put(nskb, size), size))
+				dst = tcp_collapse_dst(nskb, nskb->len - copy,
+						       &room);
+				size = min3(copy, size, room);
+				if (skb_copy_bits(skb, offset, dst, size))
 					BUG();
 				TCP_SKB_CB(nskb)->end_seq += size;
 				if (TCP_SKB_CB(skb)->has_rxtstamp) {
