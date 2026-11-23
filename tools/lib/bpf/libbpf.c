@@ -5267,6 +5267,9 @@ static int bpf_object_prepare_token(struct bpf_object *obj)
 	bool mandatory;
 	enum libbpf_print_level level;
 
+	if (obj->gen_loader)
+		return 0;
+
 	/* token is explicitly prevented */
 	if (obj->token_path && obj->token_path[0] == '\0') {
 		pr_debug("object '%s': token is prevented, skipping...\n", obj->name);
