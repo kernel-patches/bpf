@@ -353,6 +353,17 @@ static int tls_clone_plaintext_msg(struct sock *sk, int required)
 	 */
 	skip = prot->prepend_size + msg_pl->sg.size;
 
+	if (msg_pl->sg.size) {
+		u32 i = msg_pl->sg.end;
+
+		sk_msg_iter_var_prev(i);
+		msg_pl->sg.curr = i;
+		msg_pl->sg.copybreak = msg_pl->sg.data[i].length;
+	} else {
+		msg_pl->sg.curr = msg_pl->sg.start;
+		msg_pl->sg.copybreak = 0;
+	}
+
 	return sk_msg_clone(sk, msg_pl, msg_en, skip, len);
 }
 
