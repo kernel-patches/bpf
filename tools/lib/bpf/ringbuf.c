@@ -36,6 +36,9 @@ struct ring {
 	struct ring_rec rec;
 	/* always zero, in case struct ring_rec needs new fields */
 	unsigned long rec_reserved[2];
+	/* overwrite mode: first record returned since the last release or rewind */
+	unsigned long batch_pos;
+	bool has_batch;
 	int map_fd;
 	bool overwrite;
 };
@@ -497,9 +500,70 @@ static int ringbuf_validate_rec_api(const struct ring *r)
 {
 	if (unlikely(r->sample_cb))
 		return -EINVAL;
-	if (unlikely(r->overwrite))
+	/* 32-bit: no overwrite_pos, and positions wrap after 4 GiB of records */
+	if (unlikely(r->overwrite && !r->overwrite_pos))
 		return -EOPNOTSUPP;
 	return 0;
+}
+
+/*
+ * Overwrite mode: check that whatever was read at pos, and at later positions,
+ * was not overwritten while we were reading it. The producer can overwrite pos
+ * once it is a ring size ahead of pos.
+ */
+static bool ringbuf_pos_valid(const struct ring *r, unsigned long pos, unsigned long *prod_pos)
+{
+	/* pairs with smp_wmb() after the producer_pos update in the kernel */
+	smp_rmb();
+	*prod_pos = smp_load_acquire(r->producer_pos);
+	return *prod_pos - pos <= r->mask;
+}
+
+/* ring__next() for overwritable ring buffers */
+static const struct ring_rec *ringbuf_overwrite_next(struct ring *r)
+{
+	unsigned long pos = r->next_pos, prod_pos;
+	__u32 *len_ptr, len;
+
+	prod_pos = smp_load_acquire(r->producer_pos);
+	for (;;) {
+		if (prod_pos - pos > r->mask) {
+			/*
+			 * The producer lapped us, continue from the oldest record.
+			 * overwrite_pos is never ahead of a producer_pos that is
+			 * loaded after it.
+			 */
+			pos = smp_load_acquire(r->overwrite_pos);
+			prod_pos = smp_load_acquire(r->producer_pos);
+			continue;
+		}
+		r->next_pos = pos;
+		if (pos == prod_pos)
+			return NULL;
+
+		len_ptr = r->data + (pos & r->mask);
+		len = smp_load_acquire(len_ptr);
+		/* if the producer lapped us, this is not a record header */
+		if (!ringbuf_pos_valid(r, pos, &prod_pos))
+			continue;
+		/* record is not committed yet */
+		if (len & BPF_RINGBUF_BUSY_BIT)
+			return NULL;
+
+		r->next_pos = pos + roundup_len(len);
+		if (len & BPF_RINGBUF_DISCARD_BIT) {
+			pos = r->next_pos;
+			continue;
+		}
+		if (!r->has_batch) {
+			r->batch_pos = pos;
+			r->has_batch = true;
+		}
+		r->rec.data = (void *)len_ptr + BPF_RINGBUF_HDR_SZ;
+		r->rec.pos = pos;
+		r->rec.len = len;
+		return &r->rec;
+	}
 }
 
 const struct ring_rec *ring__next(struct ring *r)
@@ -511,6 +575,9 @@ const struct ring_rec *ring__next(struct ring *r)
 	err = ringbuf_validate_rec_api(r);
 	if (err)
 		return libbpf_err_ptr(err);
+
+	if (r->overwrite)
+		return ringbuf_overwrite_next(r);
 
 	pos = r->next_pos;
 	prod_pos = r->prod_pos;
@@ -540,9 +607,20 @@ const struct ring_rec *ring__next(struct ring *r)
 	}
 }
 
+bool ring__invalidated(const struct ring *r)
+{
+	unsigned long prod_pos;
+
+	if (!r->has_batch)
+		return false;
+
+	/* records are overwritten in order, so it is enough to check the first one */
+	return !ringbuf_pos_valid(r, r->batch_pos, &prod_pos);
+}
+
 int ring__release(struct ring *r)
 {
-	unsigned long pos = r->next_pos;
+	unsigned long pos = r->next_pos, prod_pos;
 	__u32 len;
 	int err;
 
@@ -550,6 +628,7 @@ int ring__release(struct ring *r)
 	if (err)
 		return libbpf_err(err);
 
+	r->has_batch = false;
 	smp_store_release(r->consumer_pos, pos);
 	/*
 	 * bpf_ringbuf_commit() clears the busy bit of a record and then checks
@@ -563,8 +642,14 @@ int ring__release(struct ring *r)
 	if (pos == r->prod_pos)
 		return 0;
 	len = smp_load_acquire((__u32 *)(r->data + (pos & r->mask)));
-	/* we get a wakeup when a busy record is committed */
-	return !(len & BPF_RINGBUF_BUSY_BIT);
+	if (!(len & BPF_RINGBUF_BUSY_BIT))
+		return 1;
+	/*
+	 * A busy record wakes us up when it is committed, so return 0. In
+	 * overwrite mode return 1 if the producer lapped us, as len was not
+	 * read from a record header then.
+	 */
+	return r->overwrite && !ringbuf_pos_valid(r, pos, &prod_pos);
 }
 
 void ring__rewind(struct ring *r)
@@ -573,6 +658,7 @@ void ring__rewind(struct ring *r)
 		return;
 
 	r->next_pos = smp_load_acquire(r->consumer_pos);
+	r->has_batch = false;
 }
 
 static void user_ringbuf_unmap_ring(struct user_ring_buffer *rb)

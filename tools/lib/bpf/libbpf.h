@@ -1691,6 +1691,10 @@ struct ring_rec {
  * Each call invalidates and reuses the previous struct ring_rec, so copy it if
  * it is needed later.
  *
+ * In an overwritable ring buffer (BPF_F_RB_OVERWRITE) record data can be
+ * overwritten at any time, see **ring__invalidated()**. Such ring buffers are
+ * not supported by 32-bit libbpf: **ring__next()** fails with EOPNOTSUPP.
+ *
  * @param r A ringbuffer object.
  * @return The next record, or NULL if there is nothing to consume. errno is
  * set on any error.
@@ -1718,6 +1722,34 @@ LIBBPF_API int ring__release(struct ring *r);
  * @param r A ringbuffer object.
  */
 LIBBPF_API void ring__rewind(struct ring *r);
+
+/**
+ * @brief **ring__invalidated()** checks if any of the records returned by
+ * **ring__next()** since the last **ring__release()** or **ring__rewind()**
+ * may have been overwritten.
+ *
+ * The kernel can overwrite records of an overwritable ring buffer
+ * (BPF_F_RB_OVERWRITE) while they are being read. Copy record data first, and
+ * use the copy only if this function returns false afterwards:
+ *
+ *	do {
+ *		while ((rec = ring__next(r))) {
+ *			memcpy(copy, rec->data, rec->len);
+ *			if (ring__invalidated(r))
+ *				break;
+ *			handle(copy, rec->len);
+ *		}
+ *	} while (ring__release(r) > 0);
+ *
+ * Once it returns true, it keeps returning true until **ring__release()** or
+ * **ring__rewind()** is called. *pos* and *len* of a returned record are
+ * always valid and don't need this check.
+ *
+ * @param r A ringbuffer object.
+ * @return true if records may have been overwritten, false if not. Always
+ * false for a ring buffer that is not overwritable.
+ */
+LIBBPF_API bool ring__invalidated(const struct ring *r);
 
 struct user_ring_buffer_opts {
 	size_t sz; /* size of this struct, for forward/backward compatibility */
