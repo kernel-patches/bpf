@@ -1863,7 +1863,6 @@ static void vlv_atomic_update_fifo(struct intel_atomic_state *state,
 				   struct intel_crtc *crtc)
 {
 	struct intel_display *display = to_intel_display(crtc);
-	struct intel_uncore *uncore = to_intel_uncore(display->drm);
 	const struct intel_crtc_state *crtc_state =
 		intel_atomic_get_new_crtc_state(state, crtc);
 	const struct vlv_fifo_state *fifo_state =
@@ -1884,15 +1883,15 @@ static void vlv_atomic_update_fifo(struct intel_atomic_state *state,
 	trace_vlv_fifo_size(crtc, sprite0_start, sprite1_start, fifo_size);
 
 	/*
-	 * uncore.lock serves a double purpose here. It allows us to
-	 * use the less expensive I915_{READ,WRITE}_FW() functions, and
+	 * display->mmio.lock serves a double purpose here. It allows us to
+	 * use the less expensive intel_de_{read,write}_fw() functions, and
 	 * it protects the DSPARB registers from getting clobbered by
 	 * parallel updates from multiple pipes.
 	 *
 	 * intel_pipe_update_start() has already disabled interrupts
 	 * for us, so a plain spin_lock() is sufficient here.
 	 */
-	spin_lock(&uncore->lock);
+	spin_lock(&display->mmio.lock);
 
 	switch (crtc->pipe) {
 	case PIPE_A:
@@ -1952,7 +1951,7 @@ static void vlv_atomic_update_fifo(struct intel_atomic_state *state,
 
 	intel_de_read_fw(display, DSPARB(display));
 
-	spin_unlock(&uncore->lock);
+	spin_unlock(&display->mmio.lock);
 }
 
 #undef VLV_FIFO
@@ -4150,7 +4149,7 @@ static const struct intel_wm_funcs nop_funcs = {
 void i9xx_wm_init(struct intel_display *display)
 {
 	/* For FIFO watermark updates */
-	if (HAS_PCH_SPLIT(display)) {
+	if (!HAS_GMCH(display)) {
 		ilk_setup_wm_latency(display);
 		display->wm.funcs = &ilk_wm_funcs;
 	} else if (display->platform.valleyview || display->platform.cherryview) {

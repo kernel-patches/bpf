@@ -119,6 +119,8 @@ intel_user_framebuffer_create(struct drm_device *dev,
 bool intel_fb_modifier_uses_dpt(struct intel_display *display, u64 modifier);
 bool intel_fb_uses_dpt(const struct drm_framebuffer *fb);
 
+u32 intel_dumb_fb_max_stride(struct drm_device *drm, u32 pixel_format, u64 modifier);
+
 unsigned int intel_fb_modifier_to_tiling(u64 fb_modifier);
 
 struct drm_gem_object *intel_fb_bo(const struct drm_framebuffer *fb);

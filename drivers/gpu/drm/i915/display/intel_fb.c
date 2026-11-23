@@ -12,6 +12,7 @@
 #include <drm/drm_print.h>
 
 #include "intel_bo.h"
+#include "intel_crtc.h"
 #include "intel_display.h"
 #include "intel_display_core.h"
 #include "intel_display_types.h"
@@ -1328,6 +1329,41 @@ static bool intel_plane_needs_remap(const struct intel_plane_state *plane_state)
 				       fb->base.modifier, rotation);
 
 	return stride > max_stride;
+}
+
+static u32 intel_plane_fb_max_stride(struct intel_display *display,
+				     const struct drm_format_info *info,
+				     u64 modifier)
+{
+	struct intel_crtc *crtc;
+	struct intel_plane *plane;
+
+	/*
+	 * We assume the primary plane for pipe A has
+	 * the highest stride limits of them all,
+	 * if in case pipe A is disabled, use the first pipe from pipe_mask.
+	 */
+	crtc = intel_first_crtc(display);
+	if (!crtc)
+		return 0;
+
+	plane = to_intel_plane(crtc->base.primary);
+
+	return plane->max_stride(plane, info, modifier,
+				 DRM_MODE_ROTATE_0);
+}
+
+u32 intel_dumb_fb_max_stride(struct drm_device *drm,
+			     u32 pixel_format, u64 modifier)
+{
+	struct intel_display *display = to_intel_display(drm);
+
+	if (!HAS_DISPLAY(display))
+		return 0;
+
+	return intel_plane_fb_max_stride(display,
+					 drm_get_format_info(drm, pixel_format, modifier),
+					 modifier);
 }
 
 static int convert_plane_offset_to_xy(const struct intel_framebuffer *fb, int color_plane,
