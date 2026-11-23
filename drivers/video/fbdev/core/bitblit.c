@@ -76,13 +76,15 @@ static void bit_clear(struct vc_data *vc, struct fb_info *info, int sy,
 
 static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 				     const u16 *s, u32 attr, u32 cnt,
-				     u32 d_pitch, u32 s_pitch, u32 cellsize,
+				     u32 d_pitch, u32 s_width, u32 s_vpitch,
 				     struct fb_image *image,
 				     unsigned char *buf, u8 *dst)
 {
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
 	unsigned int charcnt = vc->vc_font.charcount;
 	u32 idx = vc->vc_font.width >> 3;
+	font_data_t *fd = (font_data_t *)vc->vc_font.data; /* upcast to font_data_t */
+	u32 s_pitch = font_glyph_pitch(s_width);
 	const unsigned char *src;
 
 	while (cnt--) {
@@ -90,7 +92,7 @@ static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 
 		if (ch >= charcnt)
 			ch = 0;
-		src = vc->vc_font.data + (unsigned int)ch * cellsize;
+		src = font_data_glyph_buf(fd, s_width, s_vpitch, ch);
 
 		if (attr) {
 			update_attr(buf, src, attr, vc);
@@ -113,7 +115,7 @@ static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 static inline void bit_putcs_unaligned(struct vc_data *vc,
 				       struct fb_info *info, const u16 *s,
 				       u32 attr, u32 cnt, u32 d_pitch,
-				       u32 s_pitch, u32 cellsize,
+				       u32 s_width, u32 s_vpitch,
 				       struct fb_image *image,
 				       unsigned char *buf, u8 *dst)
 {
@@ -122,6 +124,8 @@ static inline void bit_putcs_unaligned(struct vc_data *vc,
 	u32 shift_low = 0, mod = vc->vc_font.width % 8;
 	u32 shift_high = 8;
 	u32 idx = vc->vc_font.width >> 3;
+	font_data_t *fd = (font_data_t *)vc->vc_font.data; /* upcast to font_data_t */
+	u32 s_pitch = font_glyph_pitch(s_width);
 	const unsigned char *src;
 
 	while (cnt--) {
@@ -129,7 +133,7 @@ static inline void bit_putcs_unaligned(struct vc_data *vc,
 
 		if (ch >= charcnt)
 			ch = 0;
-		src = vc->vc_font.data + (unsigned int)ch * cellsize;
+		src = font_data_glyph_buf(fd, s_width, s_vpitch, ch);
 
 		if (attr) {
 			update_attr(buf, src, attr, vc);
@@ -156,8 +160,9 @@ static void bit_putcs(struct vc_data *vc, struct fb_info *info,
 	struct fbcon_par *par = info->fbcon_par;
 	struct fb_image image;
 	u32 vyres = GETVYRES(par->p, info);
-	u32 width = DIV_ROUND_UP(vc->vc_font.width, 8);
-	u32 cellsize = width * vc->vc_font.height;
+	u32 width = vc->vc_font.width;
+	u32 vpitch = vc->vc_font.height;
+	u32 cellsize = font_glyph_size(width, vpitch);
 	u32 maxcnt = info->pixmap.size/cellsize;
 	u32 scan_align = info->pixmap.scan_align - 1;
 	u32 buf_align = info->pixmap.buf_align - 1;
@@ -212,10 +217,10 @@ static void bit_putcs(struct vc_data *vc, struct fb_info *info,
 
 		if (!mod)
 			bit_putcs_aligned(vc, info, s, attribute, cnt, pitch,
-					  width, cellsize, &image, buf, dst);
+					  width, vpitch, &image, buf, dst);
 		else
 			bit_putcs_unaligned(vc, info, s, attribute, cnt,
-					    pitch, width, cellsize, &image,
+					    pitch, width, vpitch, &image,
 					    buf, dst);
 
 		image.dx += cnt * vc->vc_font.width;
@@ -271,6 +276,7 @@ static void bit_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	int width = vc->vc_font.width;
 	int vpitch = vc->vc_font.height;
 	int cellsize = font_glyph_size(width, vpitch);
+	font_data_t *fd = (font_data_t *)vc->vc_font.data; /* upcast to font_data_t */
 	int c;
 	int y = real_y(par->p, vc->state.y);
 	int attribute, use_sw = vc->vc_cursor_type & CUR_SW;
@@ -289,7 +295,7 @@ static void bit_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	/* Clamp to font size, same as bit_putcs_aligned() */
 	if (c >= vc->vc_font.charcount)
 		c = 0;
-	src = vc->vc_font.data + (c * cellsize);
+	src = font_data_glyph_buf(fd, width, vpitch, c);
 
 	if (par->cursor_state.image.data != (const char *)src ||
 	    par->cursor_reset) {
