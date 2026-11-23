@@ -101,6 +101,7 @@ struct rockchip_pm_domain {
 	struct clk_bulk_data *clks;
 	struct device_node *node;
 	struct regulator *supply;
+	bool off_at_probe;
 };
 
 struct rockchip_pmu {
@@ -798,7 +799,8 @@ static void rockchip_pd_detach_dev(struct generic_pm_domain *genpd,
 }
 
 static int rockchip_pm_add_one_domain(struct rockchip_pmu *pmu,
-				      struct device_node *node)
+				      struct device_node *node,
+				      struct rockchip_pm_domain *parent)
 {
 	const struct rockchip_domain_info *pd_info;
 	struct rockchip_pm_domain *pd;
@@ -910,9 +912,16 @@ static int rockchip_pm_add_one_domain(struct rockchip_pmu *pmu,
 	 * the regulator state is unknown at probe time. Also the regulator
 	 * state cannot be checked, since that usually requires IP needing
 	 * (a different) power domain.
+	 *
+	 * The domains below such a domain have to start off too, or genpd
+	 * would see them off behind a parent that is off while the
+	 * bootloader left them on, and never idle them before the regulator
+	 * is cut. Only mark them here: the subdomains are not added yet, so
+	 * rockchip_pm_power_off_subtree() switches the whole subtree off,
+	 * children first, once it is complete.
 	 */
-	if (pd->info->need_regulator)
-		rockchip_pd_power(pd, false);
+	pd->off_at_probe = pd->info->need_regulator ||
+			   (parent && parent->off_at_probe);
 
 	pd->genpd.power_off = rockchip_pd_power_off;
 	pd->genpd.power_on = rockchip_pd_power_on;
@@ -922,7 +931,7 @@ static int rockchip_pm_add_one_domain(struct rockchip_pmu *pmu,
 	if (pd_info->active_wakeup)
 		pd->genpd.flags |= GENPD_FLAG_ACTIVE_WAKEUP;
 	pm_genpd_init(&pd->genpd, NULL,
-		      !rockchip_pmu_domain_is_on(pd) ||
+		      pd->off_at_probe || !rockchip_pmu_domain_is_on(pd) ||
 		      (pd->info->mem_status_mask && !rockchip_pmu_domain_is_mem_on(pd)));
 
 	pmu->genpd_data.domains[id] = &pd->genpd;
@@ -986,6 +995,41 @@ static void rockchip_configure_pd_cnt(struct rockchip_pmu *pmu,
 	regmap_write(pmu->regmap, domain_reg_offset + 4, count);
 }
 
+/*
+ * Switch off the domains marked off_at_probe below and including @np,
+ * children before their parent. If a child fails to switch off, leave its
+ * ancestors on.
+ */
+static int rockchip_pm_power_off_subtree(struct rockchip_pmu *pmu,
+					 struct device_node *np)
+{
+	struct rockchip_pm_domain *pd;
+	u32 idx;
+	int ret;
+
+	for_each_child_of_node_scoped(np, child) {
+		ret = rockchip_pm_power_off_subtree(pmu, child);
+		if (ret)
+			return ret;
+	}
+
+	if (of_property_read_u32(np, "reg", &idx) ||
+	    idx >= pmu->genpd_data.num_domains ||
+	    !pmu->genpd_data.domains[idx])
+		return 0;
+
+	pd = to_rockchip_pd(pmu->genpd_data.domains[idx]);
+	if (!pd->off_at_probe)
+		return 0;
+
+	ret = rockchip_pd_power(pd, false);
+	if (ret)
+		dev_warn(pmu->dev, "failed to switch off %s at probe: %d\n",
+			 pd->genpd.name, ret);
+
+	return ret;
+}
+
 static int rockchip_pm_add_subdomain(struct rockchip_pmu *pmu,
 				     struct device_node *parent)
 {
@@ -1004,7 +1048,8 @@ static int rockchip_pm_add_subdomain(struct rockchip_pmu *pmu,
 		}
 		parent_domain = pmu->genpd_data.domains[idx];
 
-		error = rockchip_pm_add_one_domain(pmu, np);
+		error = rockchip_pm_add_one_domain(pmu, np,
+						   to_rockchip_pd(parent_domain));
 		if (error) {
 			if (error != -EPROBE_DEFER)
 				dev_err(pmu->dev,
@@ -1100,7 +1145,7 @@ static int rockchip_pm_domain_probe(struct platform_device *pdev)
 	guard(mutex)(&dmc_pmu_mutex);
 
 	for_each_available_child_of_node_scoped(np, node) {
-		error = rockchip_pm_add_one_domain(pmu, node);
+		error = rockchip_pm_add_one_domain(pmu, node, NULL);
 		if (error) {
 			if (error != -EPROBE_DEFER)
 				dev_err(dev, "failed to handle node %pOFn: %d\n",
@@ -1115,6 +1160,9 @@ static int rockchip_pm_domain_probe(struct platform_device *pdev)
 					node, error);
 			goto err_out;
 		}
+
+		/* A domain left on is not fatal; carry on with the others. */
+		rockchip_pm_power_off_subtree(pmu, node);
 	}
 
 	if (error) {
