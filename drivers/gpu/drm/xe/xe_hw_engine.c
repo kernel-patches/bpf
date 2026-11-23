@@ -581,6 +581,13 @@ static void hw_engine_init_early(struct xe_gt *gt, struct xe_hw_engine *hwe,
 			}
 		}
 
+		/* CRI compute uses thread-group preemption, which needs a longer timeout */
+		if (gt_to_xe(gt)->info.platform == XE_CRESCENTISLAND &&
+		    hwe->class == XE_ENGINE_CLASS_COMPUTE)
+			hwe->eclass->sched_props.preempt_timeout_us =
+				min_t(u32, 7500 * 1000,
+				      hwe->eclass->sched_props.preempt_timeout_max);
+
 		/* Record default props */
 		hwe->eclass->defaults = hwe->eclass->sched_props;
 	}
