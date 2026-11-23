@@ -223,16 +223,6 @@ config SONYPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called sonypi.
 
-config NSC_GPIO
-	tristate "NatSemi Base GPIO Support"
-	depends on X86_32
-	# selected by SCx200_GPIO and PC8736x_GPIO
-	# what about 2 selectors differing: m != y
-	help
-	  Common support used (and needed) by scx200_gpio and
-	  pc8736x_gpio drivers.  If those drivers are built as
-	  modules, this one will be too, named nsc_gpio
-
 config DEVMEM
 	bool "/dev/mem virtual device support"
 	default y

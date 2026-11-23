@@ -8,20 +8,16 @@
  */
 
 #include <linux/bitops.h>
-#include <linux/cdev.h>
 #include <linux/cleanup.h>
-#include <linux/fs.h>
 #include <linux/gpio/driver.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/isa.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/nsc_gpio.h>
 #include <linux/pinctrl/pinconf-generic.h>
 
 #define DRVNAME			"gpio-pc8736x"
-#define LEGACY_NAME		"pc8736x_gpio"
 
 #define SIO_BASE1		0x2e
 #define SIO_BASE2		0x4e
@@ -39,7 +35,6 @@
 
 #define PC8736X_GPIO_RANGE	16
 #define PC8736X_NGPIO		29
-#define LEGACY_NGPIO		32
 #define PC8736X_GPIO_PORT_OUT		0
 #define PC8736X_GPIO_PORT_IN		1
 #define PC8736X_GPIO_OUTPUT_ENABLE	BIT(0)
@@ -203,103 +198,10 @@ static int pc8736x_gpio_set_config(struct gpio_chip *gc, unsigned int offset,
 	return pc8736x_gpio_update_config(gpio, old_config, mask, value);
 }
 
-static int major;
-module_param(major, int, 0);
-MODULE_PARM_DESC(major, "Major device number for the legacy interface");
-
-static struct pc8736x_gpio *pc8736x_legacy_gpio;
-static struct cdev pc8736x_gpio_cdev;
-static dev_t pc8736x_devt;
-static u8 pc8736x_legacy_shadow[ARRAY_SIZE(port_offset)];
-
-static u32 pc8736x_legacy_config(unsigned int offset, u32 mask, u32 value)
-{
-	struct pc8736x_gpio *gpio = pc8736x_legacy_gpio;
-	u8 config;
-
-	guard(mutex)(&gpio->lock);
-	config = pc8736x_select_pin(gpio, offset);
-	pc8736x_gpio_update_config(gpio, config, ~mask, value);
-	return config;
-}
-
-static int pc8736x_legacy_get(unsigned int offset)
-{
-	struct pc8736x_gpio *gpio = pc8736x_legacy_gpio;
-
-	return pc8736x_gpio_get(&gpio->gc, offset);
-}
-
-static void pc8736x_legacy_set(unsigned int offset, int value)
-{
-	struct pc8736x_gpio *gpio = pc8736x_legacy_gpio;
-	unsigned int port = offset / 8;
-
-	guard(mutex)(&gpio->lock);
-	pc8736x_gpio_write(gpio, offset, value);
-	pc8736x_legacy_shadow[port] =
-		inb_p(gpio->base + port_offset[port] + PC8736X_GPIO_PORT_IN);
-}
-
-static int pc8736x_legacy_current(unsigned int offset)
-{
-	return !!(READ_ONCE(pc8736x_legacy_shadow[offset / 8]) & BIT(offset % 8));
-}
-
-static struct nsc_gpio_ops pc8736x_legacy_ops = {
-	.gpio_config = pc8736x_legacy_config,
-	.gpio_dump = nsc_gpio_dump,
-	.gpio_get = pc8736x_legacy_get,
-	.gpio_set = pc8736x_legacy_set,
-	.gpio_current = pc8736x_legacy_current,
-};
-
-static int pc8736x_legacy_open(struct inode *inode, struct file *file)
-{
-	file->private_data = &pc8736x_legacy_ops;
-	return nonseekable_open(inode, file);
-}
-
-static const struct file_operations pc8736x_legacy_fops = {
-	.owner = THIS_MODULE,
-	.open = pc8736x_legacy_open,
-	.read = nsc_gpio_read,
-	.write = nsc_gpio_write,
-};
-
-static int pc8736x_legacy_register(struct pc8736x_gpio *gpio)
-{
-	int ret, port;
-
-	for (port = 0; port < ARRAY_SIZE(port_offset); port++)
-		pc8736x_legacy_shadow[port] =
-			inb_p(gpio->base + port_offset[port] + PC8736X_GPIO_PORT_OUT);
-
-	if (major) {
-		pc8736x_devt = MKDEV(major, 0);
-		ret = register_chrdev_region(pc8736x_devt, LEGACY_NGPIO, LEGACY_NAME);
-	} else {
-		ret = alloc_chrdev_region(&pc8736x_devt, 0, LEGACY_NGPIO, LEGACY_NAME);
-	}
-	if (ret)
-		return ret;
-
-	pc8736x_legacy_gpio = gpio;
-	pc8736x_legacy_ops.dev = gpio->gc.parent;
-	cdev_init(&pc8736x_gpio_cdev, &pc8736x_legacy_fops);
-	pc8736x_gpio_cdev.owner = THIS_MODULE;
-	ret = cdev_add(&pc8736x_gpio_cdev, pc8736x_devt, LEGACY_NGPIO);
-	if (ret)
-		unregister_chrdev_region(pc8736x_devt, LEGACY_NGPIO);
-
-	return ret;
-}
-
 static int pc8736x_gpio_probe(struct device *dev, unsigned int id)
 {
 	struct pc8736x_gpio *gpio;
 	unsigned int sio, base;
-	int ret;
 
 	if (pc8736x_present(SIO_BASE1))
 		sio = SIO_BASE1;
@@ -345,32 +247,18 @@ static int pc8736x_gpio_probe(struct device *dev, unsigned int id)
 		.set_config = pc8736x_gpio_set_config,
 	};
 
-	ret = devm_gpiochip_add_data(dev, &gpio->gc, gpio);
-	if (ret)
-		return ret;
-
-	return pc8736x_legacy_register(gpio);
-}
-
-static void pc8736x_gpio_remove(struct device *dev, unsigned int id)
-{
-	cdev_del(&pc8736x_gpio_cdev);
-	unregister_chrdev_region(pc8736x_devt, LEGACY_NGPIO);
+	return devm_gpiochip_add_data(dev, &gpio->gc, gpio);
 }
 
 static struct isa_driver pc8736x_gpio_driver = {
 	.driver = {
 		.name = DRVNAME,
 		.owner = THIS_MODULE,
-		/* An open legacy GPIO file pins the module, but not the chip. */
-		.suppress_bind_attrs = true,
 	},
 	.probe = pc8736x_gpio_probe,
-	.remove = pc8736x_gpio_remove,
 };
 module_isa_driver(pc8736x_gpio_driver, 1);
 
 MODULE_AUTHOR("Jim Cromie <jim.cromie@gmail.com>");
 MODULE_DESCRIPTION("NatSemi/Winbond PC87365/PC87366 GPIO driver");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS(LEGACY_NAME);

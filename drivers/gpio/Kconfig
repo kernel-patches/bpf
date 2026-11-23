@@ -1118,7 +1118,6 @@ config PC8736x_GPIO
 	depends on X86_32
 	default SCx200_GPIO
 	select ISA_BUS_API
-	select NSC_GPIO
 	help
 	  Support the GPIO controller in the National Semiconductor
 	  PC87365 and PC87366 Super I/O chips. The GPIO logical device
@@ -1129,7 +1128,6 @@ config PC8736x_GPIO
 config SCx200_GPIO
 	tristate "NatSemi SCx200 GPIO support"
 	depends on SCx200 && HAS_IOPORT
-	select NSC_GPIO
 	help
 	  Support the GPIO controller on National Semiconductor SCx200 and
 	  SC1100 processors. The first bank is exposed to GPIO consumers
