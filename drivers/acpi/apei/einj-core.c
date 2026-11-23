@@ -275,6 +275,12 @@ static void check_vendor_extension(u64 paddr,
 	if (!p)
 		return;
 	memcpy_fromio(&v, p, sizeof(v));
+	if (v.length < sizeof(v) || v.length > PAGE_SIZE) {
+		pr_warn(FW_BUG "Invalid vendor error extension length %u\n",
+			v.length);
+		acpi_os_unmap_iomem(p, sizeof(v));
+		return;
+	}
 	get_oem_vendor_struct(paddr, offset, &v);
 	sbdf = v.pcie_sbdf;
 	sprintf(vendor_dev, "%x:%x:%x.%x vendor_id=%x device_id=%x rev_id=%x\n",
