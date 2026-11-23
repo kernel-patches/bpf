@@ -1419,7 +1419,7 @@ static int qcom_swrm_stream_alloc_ports(struct qcom_swrm_ctrl *ctrl,
 	struct sdw_slave_runtime *s_rt;
 	struct sdw_port_runtime *p_rt;
 	struct sdw_slave *slave;
-	unsigned long *port_mask;
+	unsigned long *port_mask, allocated = 0;
 	int maxport, pn, nports = 0;
 	unsigned int m_port;
 	struct sdw_port_config *pconfig __free(kfree) = kzalloc_objs(*pconfig,
@@ -1463,11 +1463,13 @@ static int qcom_swrm_stream_alloc_ports(struct qcom_swrm_ctrl *ctrl,
 				else
 					pn = find_first_zero_bit(port_mask, maxport);
 
-				if (pn >= maxport) {
+				if (pn >= maxport || nports >= maxport) {
 					dev_err(ctrl->dev, "All ports busy\n");
+					*port_mask &= ~allocated;
 					return -EBUSY;
 				}
-				set_bit(pn, port_mask);
+				if (!test_and_set_bit(pn, port_mask))
+					__set_bit(pn, &allocated);
 				pconfig[nports].num = pn;
 				pconfig[nports].ch_mask = p_rt->ch_mask;
 				nports++;
