@@ -1886,6 +1886,13 @@ static int qca_power_on(struct hci_dev *hdev)
 	if (!hu->serdev)
 		return 0;
 
+	qcadev = serdev_device_get_drvdata(hu->serdev);
+
+	if (qcadev->bt_power.pwrseq) {
+		ret = qca_regulator_init(hu);
+		goto done;
+	}
+
 	switch (soc_type) {
 	case QCA_QCA6390:
 	case QCA_WCN3950:
@@ -1901,7 +1908,6 @@ static int qca_power_on(struct hci_dev *hdev)
 		break;
 
 	default:
-		qcadev = serdev_device_get_drvdata(hu->serdev);
 		if (qcadev->bt_en) {
 			gpiod_set_value_cansleep(qcadev->bt_en, 1);
 			/* Controller needs time to bootup. */
@@ -1909,6 +1915,7 @@ static int qca_power_on(struct hci_dev *hdev)
 		}
 	}
 
+done:
 	clear_bit(QCA_BT_OFF, &qca->flags);
 	return ret;
 }
@@ -2456,6 +2463,9 @@ static int qca_serdev_get_m2_pwrseq(struct qca_serdev *qcadev)
 	struct serdev_device *serdev = qcadev->serdev_hu.serdev;
 	struct pwrseq_desc *pwrseq;
 
+	if (!qca_serdev_is_m2(serdev))
+		return 0;
+
 	/* The pwrseq is looked up on the serdev controller (which holds the
 	 * OF graph to the M.2 connector), but its lifetime must follow this
 	 * serdev consumer device, not the controller. So acquire it with the
@@ -2501,6 +2511,17 @@ static int qca_serdev_probe(struct serdev_device *serdev)
 	else
 		qcadev->btsoc_type = QCA_ROME;
 
+	err = qca_serdev_get_m2_pwrseq(qcadev);
+	if (err)
+		return err;
+
+	/*
+	 * A module behind a connector is powered entirely by the
+	 * connector's power sequencer.
+	 */
+	if (qcadev->bt_power.pwrseq)
+		goto power_ctrl_done;
+
 	switch (qcadev->btsoc_type) {
 	case QCA_WCN3950:
 	case QCA_WCN3988:
@@ -2511,14 +2532,6 @@ static int qca_serdev_probe(struct serdev_device *serdev)
 	case QCA_QCA2066:
 	case QCA_WCN6855:
 	case QCA_WCN7850:
-		if (qca_serdev_is_m2(serdev)) {
-			err = qca_serdev_get_m2_pwrseq(qcadev);
-			if (err)
-				return err;
-
-			break;
-		}
-
 		if (!device_property_present(&serdev->dev, "enable-gpios")) {
 			/*
 			 * Backward compatibility with old DT sources. If the
@@ -2612,6 +2625,7 @@ static int qca_serdev_probe(struct serdev_device *serdev)
 		}
 	}
 
+power_ctrl_done:
 	if (qcadev->bt_power.pwrseq) {
 		bt_en_available = pwrseq_is_controllable(qcadev->bt_power.pwrseq);
 		if (!bt_en_available) {
