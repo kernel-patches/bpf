@@ -1824,7 +1824,8 @@ static int iavf_set_rxfh(struct net_device *netdev,
 	    rxfh->hfunc != ETH_RSS_HASH_TOP)
 		return -EOPNOTSUPP;
 
-	if ((rxfh->input_xfrm & RXH_XFRM_SYM_XOR) &&
+	if (rxfh->input_xfrm != RXH_XFRM_NO_CHANGE &&
+	    (rxfh->input_xfrm & RXH_XFRM_SYM_XOR) &&
 	    adapter->hfunc != VIRTCHNL_RSS_ALG_TOEPLITZ_SYMMETRIC) {
 		if (!ADV_RSS_SUPPORT(adapter))
 			return -EOPNOTSUPP;
