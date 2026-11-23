@@ -986,18 +986,22 @@ static bool batadv_handle_claim(struct batadv_priv *bat_priv,
 				unsigned short vid)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
+	bool own_backbone;
+
+	own_backbone = batadv_compare_eth(backbone_addr,
+					  primary_if->net_dev->dev_addr);
 
 	/* register the gateway if not yet available, and add the claim. */
 
 	backbone_gw = batadv_bla_get_backbone_gw(bat_priv, backbone_addr, vid,
-						 false);
+						 own_backbone);
 
 	if (unlikely(!backbone_gw))
 		return true;
 
 	/* this must be a CLAIM frame */
 	batadv_bla_add_claim(bat_priv, claim_addr, vid, backbone_gw);
-	if (batadv_compare_eth(backbone_addr, primary_if->net_dev->dev_addr))
+	if (own_backbone)
 		batadv_bla_send_claim(bat_priv, claim_addr, vid,
 				      BATADV_CLAIM_TYPE_CLAIM);
 
