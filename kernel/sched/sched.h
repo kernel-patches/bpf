@@ -1534,6 +1534,16 @@ static inline bool sched_core_disabled(void)
 }
 
 /*
+ * True while core scheduling keeps @rq idle because a SMT sibling runs a task
+ * with an incompatible cookie, even though @rq has runnable tasks of its own.
+ */
+static inline bool forced_idle_rq(struct rq *rq)
+{
+	return sched_core_enabled(rq) && rq->core->core_forceidle_count &&
+	       rq->nr_running;
+}
+
+/*
  * Be careful with this function; not for general use. The return value isn't
  * stable unless you actually hold a relevant rq->__lock.
  */
@@ -1665,6 +1675,11 @@ static inline bool sched_core_enabled(struct rq *rq)
 static inline bool sched_core_disabled(void)
 {
 	return true;
+}
+
+static inline bool forced_idle_rq(struct rq *rq)
+{
+	return false;
 }
 
 static inline raw_spinlock_t *rq_lockp(struct rq *rq)
