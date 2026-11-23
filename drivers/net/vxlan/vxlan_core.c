@@ -4765,18 +4765,17 @@ static int vxlan_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	if (cfg->remote_ifindex && nla_put_u32(skb, IFLA_VXLAN_LINK, cfg->remote_ifindex))
 		goto nla_put_failure;
 
-	if (!vxlan_addr_any(&cfg->saddr)) {
-		if (cfg->saddr.sa.sa_family == AF_INET) {
-			if (nla_put_in_addr(skb, IFLA_VXLAN_LOCAL,
-					    cfg->saddr.sin.sin_addr.s_addr))
-				goto nla_put_failure;
+	/* Report the address family even when the local address is unspecified. */
+	if (cfg->saddr.sa.sa_family == AF_INET) {
+		if (nla_put_in_addr(skb, IFLA_VXLAN_LOCAL,
+				    cfg->saddr.sin.sin_addr.s_addr))
+			goto nla_put_failure;
 #if IS_ENABLED(CONFIG_IPV6)
-		} else {
-			if (nla_put_in6_addr(skb, IFLA_VXLAN_LOCAL6,
-					     &cfg->saddr.sin6.sin6_addr))
-				goto nla_put_failure;
+	} else {
+		if (nla_put_in6_addr(skb, IFLA_VXLAN_LOCAL6,
+				     &cfg->saddr.sin6.sin6_addr))
+			goto nla_put_failure;
 #endif
-		}
 	}
 
 	if (nla_put_u8(skb, IFLA_VXLAN_TTL, cfg->ttl) ||
