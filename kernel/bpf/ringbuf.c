@@ -336,12 +336,18 @@ static u32 ringbuf_total_data_sz(const struct bpf_ringbuf *rb)
 static __poll_t ringbuf_map_poll_kern(struct bpf_map *map, struct file *filp,
 				      struct poll_table_struct *pts)
 {
-	struct bpf_ringbuf_map *rb_map;
+	struct bpf_ringbuf *rb;
 
-	rb_map = container_of(map, struct bpf_ringbuf_map, map);
-	poll_wait(filp, &rb_map->rb->waitq, pts);
+	rb = container_of(map, struct bpf_ringbuf_map, map)->rb;
+	poll_wait(filp, &rb->waitq, pts);
 
-	if (ringbuf_avail_data_sz(rb_map->rb))
+	/*
+	 * In overwrite mode ringbuf_avail_data_sz() can return 0 for a ring
+	 * with unread records: a reservation can move overwrite_pos up to
+	 * producer_pos before it updates producer_pos. Check if the consumer
+	 * is behind the producer instead.
+	 */
+	if (smp_load_acquire(&rb->producer_pos) != smp_load_acquire(&rb->consumer_pos))
 		return EPOLLIN | EPOLLRDNORM;
 	return 0;
 }
