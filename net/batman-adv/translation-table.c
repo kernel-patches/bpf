@@ -1745,13 +1745,11 @@ batadv_tt_local_set_pending(struct batadv_priv *bat_priv,
  * @roaming: true if the deletion is due to a roaming event
  * @curr_flags: pointer to store the flags of the entry before it was removed
  *
- * For an already announced entry, the (roamed) DEL change is queued and the
- * entry is marked as BATADV_TT_CLIENT_PENDING by batadv_tt_local_set_pending().
- * It stays in the local table until the next ttvn increment.
- *
- * An entry which still carries BATADV_TT_CLIENT_NEW was added right after the
- * last ttvn increment and was not (yet) announced. It is therefore removed
- * from the local table immediately.
+ * The (roamed) DEL change is queued and the entry is marked as
+ * BATADV_TT_CLIENT_PENDING by batadv_tt_local_set_pending(). It stays in the
+ * local table until the DEL is committed with the next ttvn increment. This
+ * also applies to an entry which still carries BATADV_TT_CLIENT_NEW because its
+ * ADD might already have been taken for the next ttvn.
  *
  * An entry which was already removed from the local table after it was looked
  * up is ignored and BATADV_NO_FLAGS is stored in @curr_flags.
@@ -1770,7 +1768,6 @@ batadv_tt_local_remove_entry(struct batadv_priv *bat_priv,
 	spinlock_t *list_lock; /* protects write access to the hash lists */
 	struct batadv_tt_common_entry *common = &tt_local_entry->common;
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
-	bool unhashed = false;
 	u16 flags;
 	u32 i;
 
@@ -1795,24 +1792,6 @@ batadv_tt_local_remove_entry(struct batadv_priv *bat_priv,
 		if (roaming)
 			common->flags |= BATADV_TT_CLIENT_ROAM;
 
-		if (common->flags & BATADV_TT_CLIENT_NEW) {
-			batadv_dbg(BATADV_DBG_TT, bat_priv,
-				   "Deleting local tt entry (%pM, vid: %d): %s\n",
-				   common->key.addr,
-				   batadv_print_vid(common->key.vid), message);
-
-			hlist_del_init_rcu(&common->hash_entry);
-			atomic_inc(&hash->generation);
-
-			/* The entry was never announced and was therefore
-			 * never counted in the local table size.
-			 */
-			__batadv_tt_local_event(bat_priv, common,
-						common->flags | BATADV_TT_CLIENT_DEL);
-			unhashed = true;
-			break;
-		}
-
 		flags = BATADV_TT_CLIENT_DEL;
 		if (roaming)
 			flags |= BATADV_TT_CLIENT_ROAM;
@@ -1822,10 +1801,6 @@ batadv_tt_local_remove_entry(struct batadv_priv *bat_priv,
 	}
 
 	spin_unlock_bh(list_lock);
-
-	/* drop reference of removed hash entry */
-	if (unhashed)
-		batadv_tt_local_entry_put(tt_local_entry);
 }
 
 /**
