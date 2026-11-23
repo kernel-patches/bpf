@@ -1258,6 +1258,13 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 
 		break;
 
+	/* indirect call to a bpf subprog via the address in dst */
+	case BPF_JMP | BPF_CALL | BPF_X:
+		tcc_ptr_off = BPF_TAIL_CALL_CNT_PTR_STACK_OFF(ctx->stack_size);
+		emit_insn(ctx, ldd, REG_TCC, LOONGARCH_GPR_SP, tcc_ptr_off);
+		emit_insn(ctx, jirl, LOONGARCH_GPR_RA, dst, 0);
+		break;
+
 	/* tail call */
 	case BPF_JMP | BPF_TAIL_CALL:
 		if (emit_bpf_tail_call(ctx, i) < 0)
@@ -2552,4 +2559,9 @@ bool bpf_jit_inlines_helper_call(s32 imm)
 	default:
 		return false;
 	}
+}
+
+bool bpf_jit_supports_callx(void)
+{
+	return true;
 }
