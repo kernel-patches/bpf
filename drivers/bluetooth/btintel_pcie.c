@@ -1035,6 +1035,7 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 
 		if (config_set->config_set_type == BTINTEL_PCIE_CFGSET_PERIPH_MAC ||
 		    config_set->config_set_type == BTINTEL_PCIE_CFGSET_DEVICE_MEM) {
+			mutex_lock(&data->mac_access_lock);
 			ret = btintel_pcie_get_mac_access(data);
 			if (ret) {
 				BT_WARN("YoYo: MAC access failed for config set (%d), skipping",
@@ -1044,6 +1045,7 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 				 * request bit is not leaked.
 				 */
 				btintel_pcie_release_mac_access(data);
+				mutex_unlock(&data->mac_access_lock);
 				continue;
 			}
 		}
@@ -1104,8 +1106,10 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 		}
 
 		if (config_set->config_set_type == BTINTEL_PCIE_CFGSET_PERIPH_MAC ||
-		    config_set->config_set_type == BTINTEL_PCIE_CFGSET_DEVICE_MEM)
+		    config_set->config_set_type == BTINTEL_PCIE_CFGSET_DEVICE_MEM) {
 			btintel_pcie_release_mac_access(data);
+			mutex_unlock(&data->mac_access_lock);
+		}
 	}
 }
 
@@ -1752,15 +1756,19 @@ static void btintel_pcie_dump_traces(struct hci_dev *hdev)
 	struct btintel_pcie_data *data = hci_get_drvdata(hdev);
 	int ret;
 
+	mutex_lock(&data->mac_access_lock);
 	ret = btintel_pcie_get_mac_access(data);
 	if (ret) {
 		bt_dev_err(hdev, "Failed to get mac access: (%d)", ret);
+		btintel_pcie_release_mac_access(data);
+		mutex_unlock(&data->mac_access_lock);
 		return;
 	}
 
 	ret = btintel_pcie_read_debug_regions(data);
 
 	btintel_pcie_release_mac_access(data);
+	mutex_unlock(&data->mac_access_lock);
 
 	if (ret)
 		bt_dev_err(hdev, "Failed to dump traces: (%d)", ret);
@@ -1884,9 +1892,12 @@ static int btintel_pcie_read_device_mem(struct btintel_pcie_data *data,
 	u32 *val = buf;
 
 	/* Get device mac access */
+	mutex_lock(&data->mac_access_lock);
 	err = btintel_pcie_get_mac_access(data);
 	if (err) {
 		bt_dev_err(data->hdev, "Failed to get mac access %d", err);
+		btintel_pcie_release_mac_access(data);
+		mutex_unlock(&data->mac_access_lock);
 		return err;
 	}
 
@@ -1899,6 +1910,7 @@ static int btintel_pcie_read_device_mem(struct btintel_pcie_data *data,
 		*val = btintel_pcie_rd_dev_mem(data, dev_addr);
 
 	btintel_pcie_release_mac_access(data);
+	mutex_unlock(&data->mac_access_lock);
 
 	return 0;
 }
@@ -4863,6 +4875,7 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 	spin_lock_init(&data->hci_rx_lock);
 	spin_lock_init(&data->ipc_lock);
 	spin_lock_init(&data->dev_mem_lock);
+	mutex_init(&data->mac_access_lock);
 	mutex_init(&data->rfkill_doorbell_lock);
 
 	init_waitqueue_head(&data->gp0_wait_q);

@@ -773,6 +773,10 @@ struct btintel_pcie_data {
 	 * PRPH_DEV_RD target access register pair. Never sleep while held.
 	 */
 	spinlock_t	dev_mem_lock;
+	/* lock to serialize the MAC_ACCESS_REQ get/release sequence together
+	 * with the target accesses done under it. Held across sleeping calls.
+	 */
+	struct mutex	mac_access_lock;
 
 	void __iomem	*base_addr;
 
