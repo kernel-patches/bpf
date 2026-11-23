@@ -3852,10 +3852,12 @@ static void dm_integrity_postsuspend(struct dm_target *ti)
 #if 1
 		/* set to 0 to test bitmap replay code */
 		init_journal(ic, 0, ic->journal_sections, 0);
-		ic->sb->flags &= ~cpu_to_le32(SB_FLAG_DIRTY_BITMAP);
-		r = sync_rw_sb(ic, REQ_OP_WRITE | REQ_FUA);
-		if (unlikely(r))
-			dm_integrity_io_error(ic, "writing superblock", r);
+		if (!dm_integrity_failed(ic)) {
+			ic->sb->flags &= ~cpu_to_le32(SB_FLAG_DIRTY_BITMAP);
+			r = sync_rw_sb(ic, REQ_OP_WRITE | REQ_FUA);
+			if (unlikely(r))
+				dm_integrity_io_error(ic, "writing superblock", r);
+		}
 #endif
 	}
 
