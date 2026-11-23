@@ -3316,6 +3316,11 @@ static int handle_indirect_tree_backref(struct btrfs_trans_handle *trans,
 	}
 
 	level = cur->level + 1;
+	if (unlikely(level >= BTRFS_MAX_LEVEL)) {
+		btrfs_put_root(root);
+		btrfs_err(fs_info, "invalid search level %d", level);
+		return -EUCLEAN;
+	}
 
 	/* Search the tree to find parent blocks referring to the block */
 	path->search_commit_root = true;
