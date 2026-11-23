@@ -2913,7 +2913,7 @@ static int kvm_inject_nested(struct kvm_vcpu *vcpu, u64 esr_el2,
 	 * Make sure the exception actually took place before we load
 	 * the new context.
 	 */
-	__kvm_adjust_pc(vcpu);
+	commit_pending_events(vcpu);
 
 	kvm_arch_vcpu_load(vcpu, smp_processor_id());
 	vcpu_clear_flag(vcpu, IN_NESTED_EXCEPTION);
