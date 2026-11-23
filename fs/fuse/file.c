@@ -1825,14 +1825,15 @@ static ssize_t __fuse_direct_read(struct fuse_io_priv *io,
 	return res;
 }
 
-static ssize_t fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter);
+static ssize_t __fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter,
+				bool exclusive);
 
 static ssize_t fuse_direct_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 	ssize_t res;
 
 	if (!is_sync_kiocb(iocb)) {
-		res = fuse_direct_IO(iocb, to);
+		res = __fuse_direct_IO(iocb, to, true);
 	} else {
 		struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(iocb);
 
@@ -1856,7 +1857,7 @@ static ssize_t fuse_direct_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 		task_io_account_write(res);
 		if (!is_sync_kiocb(iocb)) {
-			res = fuse_direct_IO(iocb, from);
+			res = __fuse_direct_IO(iocb, from, exclusive);
 		} else {
 			struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(iocb);
 
@@ -2774,8 +2775,13 @@ static inline loff_t fuse_round_up(struct fuse_conn *fc, loff_t off)
 	return round_up(off, fc->max_pages << PAGE_SHIFT);
 }
 
+/*
+ * @exclusive tells whether the inode lock is held exclusively.  Only then is
+ * it allowed to truncate the file in the error path below.  It is only looked
+ * at for writes, so read callers may pass anything.
+ */
 static ssize_t
-fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
+__fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter, bool exclusive)
 {
 	DECLARE_COMPLETION_ONSTACK(wait);
 	ssize_t ret = 0;
@@ -2869,12 +2875,29 @@ fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 
 	if (iov_iter_rw(iter) == WRITE) {
 		fuse_write_update_attr(inode, pos, ret);
-		/* For extending writes we already hold exclusive lock */
-		if (ret < 0 && offset + count > i_size)
+		/*
+		 * Rolling back a failed extending write needs the exclusive
+		 * inode lock.  The i_size read above may have raced with a
+		 * concurrent shrink by the server, in which case this is not
+		 * an extending write after all and there's nothing to roll
+		 * back; the attributes were invalidated above anyway.
+		 */
+		if (exclusive && ret < 0 && offset + count > i_size)
 			fuse_do_truncate(file);
 	}
 
 	return ret;
+}
+
+/*
+ * Writes only get here through generic_file_direct_write(), which is always
+ * invoked with the inode lock held exclusively.  Reads also get here from
+ * generic_file_read_iter() without any inode lock, but @exclusive is not
+ * looked at in that case.
+ */
+static ssize_t fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
+{
+	return __fuse_direct_IO(iocb, iter, true);
 }
 
 static int fuse_writeback_range(struct inode *inode, loff_t start, loff_t end)
