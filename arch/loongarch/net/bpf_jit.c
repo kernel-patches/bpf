@@ -1184,6 +1184,11 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 			goto toofar;
 		break;
 
+	/* PC = dst */
+	case BPF_JMP | BPF_JA | BPF_X:
+		emit_insn(ctx, jirl, LOONGARCH_GPR_ZERO, dst, 0);
+		break;
+
 	/* PC += off */
 	case BPF_JMP | BPF_JA:
 		jmp_offset = bpf2la_offset(i, off, ctx);
