@@ -1949,7 +1949,7 @@ static int acpi_add_single_object(struct acpi_device **child,
 	 * this must be done before the get power-/wakeup_dev-flags calls.
 	 */
 	if (type == ACPI_BUS_TYPE_DEVICE || type == ACPI_BUS_TYPE_PROCESSOR) {
-		if (dep_init) {
+		if (type == ACPI_BUS_TYPE_DEVICE && dep_init) {
 			mutex_lock(&acpi_dep_list_lock);
 			/*
 			 * Hold the lock until the acpi_tie_acpi_dev() call

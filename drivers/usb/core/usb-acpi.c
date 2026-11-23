@@ -278,9 +278,9 @@ usb_acpi_get_companion_for_port(struct usb_port *port_dev)
 	return acpi_find_child_by_adr(adev, port1);
 }
 
-static struct acpi_device *
-usb_acpi_find_companion_for_port(struct usb_port *port_dev)
+static struct acpi_device *usb_acpi_find_companion_for_port(struct device *dev)
 {
+	struct usb_port *port_dev = to_usb_port(dev);
 	struct acpi_device *adev;
 
 	adev = usb_acpi_get_companion_for_port(port_dev);
@@ -292,9 +292,9 @@ usb_acpi_find_companion_for_port(struct usb_port *port_dev)
 	return adev;
 }
 
-static struct acpi_device *
-usb_acpi_find_companion_for_device(struct usb_device *udev)
+static struct acpi_device *usb_acpi_find_companion_for_device(struct device *dev)
 {
+	struct usb_device *udev = to_usb_device(dev);
 	struct acpi_device *adev;
 	struct usb_port *port_dev;
 	struct usb_hub *hub;
@@ -326,7 +326,17 @@ usb_acpi_find_companion_for_device(struct usb_device *udev)
 	return usb_acpi_get_companion_for_port(port_dev);
 }
 
-static struct acpi_device *usb_acpi_find_companion(struct device *dev)
+static struct acpi_dev_type usb_dev_acpi_dev_type = {
+	.dev_type = &usb_device_type,
+	.find_companion = usb_acpi_find_companion_for_device,
+};
+
+static struct acpi_dev_type usb_port_acpi_dev_type = {
+	.dev_type = &usb_port_device_type,
+	.find_companion = usb_acpi_find_companion_for_port,
+};
+
+void usb_acpi_register(void)
 {
 	/*
 	 * The USB hierarchy like following:
@@ -356,31 +366,12 @@ static struct acpi_device *usb_acpi_find_companion(struct device *dev)
 	 * devices yet, for that we would need to assign companions to
 	 * devices corresponding to USB interfaces.
 	 */
-	if (is_usb_device(dev))
-		return usb_acpi_find_companion_for_device(to_usb_device(dev));
-	else if (is_usb_port(dev))
-		return usb_acpi_find_companion_for_port(to_usb_port(dev));
-
-	return NULL;
-}
-
-static bool usb_acpi_bus_match(struct device *dev)
-{
-	return is_usb_device(dev) || is_usb_port(dev);
-}
-
-static struct acpi_bus_type usb_acpi_bus = {
-	.name = "USB",
-	.match = usb_acpi_bus_match,
-	.find_companion = usb_acpi_find_companion,
-};
-
-int usb_acpi_register(void)
-{
-	return register_acpi_bus_type(&usb_acpi_bus);
+	register_acpi_dev_type(&usb_dev_acpi_dev_type);
+	register_acpi_dev_type(&usb_port_acpi_dev_type);
 }
 
 void usb_acpi_unregister(void)
 {
-	unregister_acpi_bus_type(&usb_acpi_bus);
+	unregister_acpi_dev_type(&usb_port_acpi_dev_type);
+	unregister_acpi_dev_type(&usb_dev_acpi_dev_type);
 }
