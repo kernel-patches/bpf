@@ -1723,7 +1723,8 @@ static void bpf_trampoline_multi_attach_rollback(struct bpf_trampoline *tr)
 	for_each_mnode_cnt(mnode, link, link->nodes_cnt)
 
 int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
-				struct bpf_tracing_multi_link *link)
+				struct bpf_tracing_multi_link *link,
+				struct bpf_verifier_log *log)
 {
 	struct bpf_tracing_multi_data *data = &link->data;
 	struct bpf_attach_target_info tgt_info = {};
@@ -1736,7 +1737,7 @@ int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
 	for_each_mnode(mnode, link) {
 		rollback_cnt = i;
 
-		err = bpf_check_attach_btf_id_multi(btf, prog, ids[i], &tgt_info);
+		err = bpf_check_attach_btf_id_multi(log, btf, prog, ids[i], &tgt_info);
 		if (err)
 			goto rollback_put;
 

@@ -3842,7 +3842,7 @@ static void ids_swap_r(void *a, void *b, int size __maybe_unused,
 	swap(*id_a, *id_b);
 }
 
-static int check_dup_ids(u32 *ids, u64 *cookies, u32 cnt)
+static int check_dup_ids(u32 *ids, u64 *cookies, u32 cnt, struct bpf_verifier_log *log)
 {
 	void *data[2] = { ids, cookies };
 	int err = 0;
@@ -3856,6 +3856,7 @@ static int check_dup_ids(u32 *ids, u64 *cookies, u32 cnt)
 
 	for (int i = 1; i < cnt; i++) {
 		if (ids[i] == ids[i - 1]) {
+			bpf_log(log, "id %u is in tracing_multi.ids more than once.\n", ids[i]);
 			err = -EINVAL;
 			break;
 		}
@@ -3863,7 +3864,8 @@ static int check_dup_ids(u32 *ids, u64 *cookies, u32 cnt)
 	return err;
 }
 
-int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
+int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr,
+			     struct bpf_verifier_log *log)
 {
 	struct bpf_tracing_multi_link *link = NULL;
 	struct bpf_tramp_node *fexits = NULL;
@@ -3879,10 +3881,19 @@ int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 
 	if (!cnt || !uids)
 		return -EINVAL;
-	if (cnt > MAX_TRACING_MULTI_CNT)
+	if (cnt > MAX_TRACING_MULTI_CNT) {
+		bpf_log(log, "tracing_multi.cnt %u is above the limit %u.\n",
+			cnt, MAX_TRACING_MULTI_CNT);
 		return -E2BIG;
-	if (attr->link_create.flags || attr->link_create.target_fd)
+	}
+	if (attr->link_create.flags) {
+		bpf_log(log, "flags must be zero.\n");
 		return -EINVAL;
+	}
+	if (attr->link_create.target_fd) {
+		bpf_log(log, "target_fd must be zero.\n");
+		return -EINVAL;
+	}
 
 	ids = kvmalloc_objs(*ids, cnt);
 	if (!ids)
@@ -3906,7 +3917,7 @@ int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 		}
 	}
 
-	err = check_dup_ids(ids, cookies, cnt);
+	err = check_dup_ids(ids, cookies, cnt, log);
 	if (err)
 		goto error;
 
@@ -3935,7 +3946,7 @@ int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 	link->cookies = cookies;
 	link->fexits = fexits;
 
-	err = bpf_trampoline_multi_attach(prog, ids, link);
+	err = bpf_trampoline_multi_attach(prog, ids, link, log);
 	kvfree(ids);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
@@ -3953,8 +3964,10 @@ error:
 
 #else
 
-int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
+int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr,
+			     struct bpf_verifier_log *log)
 {
+	bpf_log(log, "This kernel does not support tracing_multi.\n");
 	return -EOPNOTSUPP;
 }
 
