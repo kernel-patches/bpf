@@ -799,7 +799,8 @@ static void fbcon_release(struct fb_info *info)
 		kfree(par->cursor_data);
 		kfree(par->cursor_src);
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
-		kfree(par->rotated.buf);
+		if (par->rotated.buf)
+			font_data_put(par->rotated.buf);
 #endif
 		kfree(info->fbcon_par);
 		info->fbcon_par = NULL;
@@ -2506,8 +2507,10 @@ static int fbcon_do_set_font(struct vc_data *vc, int w, int h, int charcount,
 	}
 
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
-	if (rotated_saved)
-		kfree(saved_rotated.buf);
+	if (rotated_saved) {
+		if (saved_rotated.buf)
+			font_data_put(saved_rotated.buf);
+	}
 #endif
 	if (old_fontdata)
 		font_data_put(old_fontdata);
@@ -2521,7 +2524,8 @@ err_out:
 	 * state.
 	 */
 	if (rotated_saved) {
-		kfree(par->rotated.buf);
+		if (par->rotated.buf)
+			font_data_put(par->rotated.buf);
 		par->rotated = saved_rotated;
 	}
 #endif
