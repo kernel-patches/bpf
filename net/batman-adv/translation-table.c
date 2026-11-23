@@ -653,10 +653,18 @@ static u16 batadv_tt_flags_get(struct batadv_tt_common_entry *common)
  * Only a single change per client is queued. It describes the latest state of
  * the client and a new event therefore replaces an already queued one.
  *
+ * The other nodes only learn about the modification of a local entry through
+ * the queued change. The caller must therefore not modify the entry in a way
+ * which depends on this change (e.g. hash it as BATADV_TT_CLIENT_NEW or mark it
+ * as BATADV_TT_CLIENT_PENDING) when the event could not be stored.
+ *
  * The caller must hold the flags_lock of @common. The events of an entry are
  * then queued in the same order in which its flags were modified.
+ *
+ * Return: true if the event was stored, false if the memory for it could not
+ * be allocated.
  */
-static void __batadv_tt_local_event(struct batadv_priv *bat_priv,
+static bool __batadv_tt_local_event(struct batadv_priv *bat_priv,
 				    const struct batadv_tt_common_entry *common,
 				    u8 flags)
 	__must_hold(&common->flags_lock)
@@ -671,7 +679,7 @@ static void __batadv_tt_local_event(struct batadv_priv *bat_priv,
 
 	tt_change_node = kmem_cache_alloc(batadv_tt_change_cache, GFP_ATOMIC);
 	if (!tt_change_node)
-		return;
+		return false;
 
 	memset(tt_change_node->change.reserved, 0,
 	       sizeof(tt_change_node->change.reserved));
@@ -718,6 +726,8 @@ static void __batadv_tt_local_event(struct batadv_priv *bat_priv,
 update_changes:
 	WRITE_ONCE(bat_priv->tt.local_changes, changes);
 	spin_unlock_bh(&bat_priv->tt.changes_list_lock);
+
+	return true;
 }
 
 /**
@@ -966,7 +976,7 @@ batadv_tt_local_create(struct net_device *mesh_iface, const u8 *addr,
 }
 
 /**
- * batadv_tt_local_refresh_locked() - refresh a hashed local TT entry
+ * batadv_tt_local_refresh_locked() - refresh a local TT entry
  * @bat_priv: the bat priv with all the mesh interface information
  * @tt_local: the local TT entry to refresh
  * @iif_is_wifi: whether the client is connected via a wifi interface
@@ -980,10 +990,19 @@ batadv_tt_local_create(struct net_device *mesh_iface, const u8 *addr,
  * updated. An ADD event is queued when @announce is set, the pending removal
  * was cancelled or a flag announced to the other nodes was modified.
  *
+ * The entry is left untouched when the ADD event could not be queued. The
+ * other nodes would otherwise never be informed about the new state. An already
+ * hashed entry is simply refreshed again when the next packet of the client is
+ * received.
+ *
  * The caller must hold the hash bucket list_lock of the entry and must have
- * checked that the entry is still part of the local table.
+ * checked that the entry is still part of the local table or is inserting it
+ * under this list_lock.
+ *
+ * Return: true if the entry was refreshed, false if the required ADD event
+ * could not be queued.
  */
-static void
+static bool
 batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
 			       struct batadv_tt_local_entry *tt_local,
 			       bool iif_is_wifi, u32 mark, bool announce,
@@ -991,51 +1010,49 @@ batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
 {
 	struct batadv_tt_common_entry *common = &tt_local->common;
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	bool readded = false;
+	bool roamed = false;
 	u8 remote_flags;
 	u32 match_mark;
+	u16 flags;
 	u32 i;
 
 	i = batadv_choose_tt(&common->key, hash->size);
 	lockdep_assert_held(&hash->list_locks[i]);
 
 	scoped_guard(spinlock_bh, &common->flags_lock) {
-		if (common->flags & BATADV_TT_CLIENT_PENDING) {
-			batadv_dbg(BATADV_DBG_TT, bat_priv,
-				   "Re-adding pending client %pM (vid: %d)\n",
-				   common->key.addr,
-				   batadv_print_vid(common->key.vid));
+		flags = common->flags;
+
+		if (flags & BATADV_TT_CLIENT_PENDING) {
 			/* whatever the reason why the PENDING flag was set,
 			 * this is a client which was enqueued to be removed in
 			 * this orig_interval. Since it popped up again, the
 			 * flag can be reset like it was never enqueued
 			 */
-			common->flags &= ~BATADV_TT_CLIENT_PENDING;
+			flags &= ~BATADV_TT_CLIENT_PENDING;
+			readded = true;
 			announce = true;
 		}
 
-		if (common->flags & BATADV_TT_CLIENT_ROAM) {
-			batadv_dbg(BATADV_DBG_TT, bat_priv,
-				   "Roaming client %pM (vid: %d) came back to its original location\n",
-				   common->key.addr,
-				   batadv_print_vid(common->key.vid));
+		if (flags & BATADV_TT_CLIENT_ROAM) {
 			/* the ROAM flag is set because this client roamed away
 			 * and the node got a roaming_advertisement message. Now
 			 * that the client popped up again at its original
 			 * location such flag can be unset
 			 */
-			common->flags &= ~BATADV_TT_CLIENT_ROAM;
-			*roamed_back = true;
+			flags &= ~BATADV_TT_CLIENT_ROAM;
+			roamed = true;
 		}
 
 		/* store the current remote flags before altering them. This
 		 * helps understanding is flags are changing or not
 		 */
-		remote_flags = common->flags & BATADV_TT_REMOTE_MASK;
+		remote_flags = flags & BATADV_TT_REMOTE_MASK;
 
 		if (iif_is_wifi)
-			common->flags |= BATADV_TT_CLIENT_WIFI;
+			flags |= BATADV_TT_CLIENT_WIFI;
 		else
-			common->flags &= ~BATADV_TT_CLIENT_WIFI;
+			flags &= ~BATADV_TT_CLIENT_WIFI;
 
 		/* check the mark in the skb: if it's equal to the configured
 		 * isolation_mark, it means the packet is coming from an
@@ -1044,17 +1061,38 @@ batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
 		match_mark = (mark & bat_priv->isolation_mark_mask);
 		if (bat_priv->isolation_mark_mask &&
 		    match_mark == bat_priv->isolation_mark)
-			common->flags |= BATADV_TT_CLIENT_ISOLA;
+			flags |= BATADV_TT_CLIENT_ISOLA;
 		else
-			common->flags &= ~BATADV_TT_CLIENT_ISOLA;
+			flags &= ~BATADV_TT_CLIENT_ISOLA;
 
-		if (remote_flags ^ (common->flags & BATADV_TT_REMOTE_MASK))
+		if (remote_flags ^ (flags & BATADV_TT_REMOTE_MASK))
 			announce = true;
 
-		if (announce)
-			__batadv_tt_local_event(bat_priv, common,
-						common->flags);
+		/* queue-then-modify: the new state must not become visible
+		 * without a queued change which commits/announces it
+		 */
+		if (announce &&
+		    !__batadv_tt_local_event(bat_priv, common, flags))
+			return false;
+
+		common->flags = flags;
 	}
+
+	if (readded)
+		batadv_dbg(BATADV_DBG_TT, bat_priv,
+			   "Re-adding pending client %pM (vid: %d)\n",
+			   common->key.addr,
+			   batadv_print_vid(common->key.vid));
+
+	if (roamed) {
+		batadv_dbg(BATADV_DBG_TT, bat_priv,
+			   "Roaming client %pM (vid: %d) came back to its original location\n",
+			   common->key.addr,
+			   batadv_print_vid(common->key.vid));
+		*roamed_back = true;
+	}
+
+	return true;
 }
 
 /**
@@ -1068,8 +1106,11 @@ batadv_tt_local_refresh_locked(struct batadv_priv *bat_priv,
  *
  * See batadv_tt_local_refresh_locked() for the actual refresh.
  *
+ * An entry whose modification could not be announced stays in its previous
+ * state. The refresh is then retried with the next packet of the client.
+ *
  * Return: 0 if the entry was refreshed, -ENOENT if the entry is no longer part
- * of the local table.
+ * of the local table, -ENOMEM if the required ADD event could not be queued.
  */
 static int
 batadv_tt_local_refresh(struct batadv_priv *bat_priv,
@@ -1079,6 +1120,7 @@ batadv_tt_local_refresh(struct batadv_priv *bat_priv,
 	spinlock_t *list_lock; /* protects write access to the hash lists */
 	struct batadv_tt_common_entry *common = &tt_local->common;
 	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	int ret = 0;
 	u32 i;
 
 	i = batadv_choose_tt(&common->key, hash->size);
@@ -1094,12 +1136,13 @@ batadv_tt_local_refresh(struct batadv_priv *bat_priv,
 		return -ENOENT;
 	}
 
-	batadv_tt_local_refresh_locked(bat_priv, tt_local, iif_is_wifi, mark,
-				       false, roamed_back);
+	if (!batadv_tt_local_refresh_locked(bat_priv, tt_local, iif_is_wifi,
+					    mark, false, roamed_back))
+		ret = -ENOMEM;
 
 	spin_unlock_bh(list_lock);
 
-	return 0;
+	return ret;
 }
 
 /**
@@ -1111,14 +1154,17 @@ batadv_tt_local_refresh(struct batadv_priv *bat_priv,
  *  any)
  * @roamed_back: set to true when the client returned to its original location
  *
- * The entry is inserted into the local hash and its initial ADD event is
- * queued under the same hash bucket list_lock. A concurrent
- * batadv_tt_local_commit_changes() can therefore not count the entry in the
- * CRC of a ttvn before its ADD was queued and a concurrent
- * batadv_tt_local_remove() can not unhash it before the ADD was queued.
+ * The initial ADD event is queued and the entry is inserted into the local
+ * hash under the same hash bucket list_lock. A concurrent
+ * batadv_tt_local_commit_changes() can therefore not commit the entry without
+ * its ADD (or the ADD without the entry) and a concurrent
+ * batadv_tt_local_remove() can not unhash the entry before the ADD was queued.
+ *
+ * The entry is not inserted when its ADD could not be queued. The other nodes
+ * would otherwise never be informed about the new client.
  *
  * Return: true if the entry was added, false if the client already has an
- * entry in the local table.
+ * entry in the local table or the ADD event could not be queued.
  */
 static bool batadv_tt_local_insert(struct batadv_priv *bat_priv,
 				   struct batadv_tt_local_entry *tt_local,
@@ -1146,14 +1192,17 @@ static bool batadv_tt_local_insert(struct batadv_priv *bat_priv,
 		return false;
 	}
 
+	/* announce the added client to the mesh */
+	if (!batadv_tt_local_refresh_locked(bat_priv, tt_local, iif_is_wifi,
+					    mark, true, roamed_back)) {
+		spin_unlock_bh(list_lock);
+		return false;
+	}
+
 	/* reference for the hash */
 	kref_get(&common->refcount);
 	hlist_add_head_rcu(&common->hash_entry, head);
 	atomic_inc(&hash->generation);
-
-	/* announce the added client to the mesh */
-	batadv_tt_local_refresh_locked(bat_priv, tt_local, iif_is_wifi, mark,
-				       true, roamed_back);
 
 	spin_unlock_bh(list_lock);
 
@@ -1198,6 +1247,14 @@ bool batadv_tt_local_add(struct net_device *mesh_iface, const u8 *addr,
 			/* stale entry which has to be replaced by a new one */
 			batadv_tt_local_entry_put(tt_local);
 			tt_local = NULL;
+		} else if (err) {
+			/* The entry is still in its previous state (e.g.
+			 * pending to be removed). The caller must not treat
+			 * the client as added and the roaming is handled
+			 * together with the refresh which is retried with the
+			 * next packet of the client.
+			 */
+			goto out;
 		}
 	}
 
