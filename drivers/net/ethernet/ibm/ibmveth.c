@@ -1052,6 +1052,48 @@ static int ibmveth_allocate_tx_ltb(struct ibmveth_adapter *adapter, int idx)
 	return 0;
 }
 
+/**
+ * ibmveth_alloc_tx_resources - Allocate TX LTBs for real_num_tx_queues
+ * @adapter: ibmveth adapter structure
+ *
+ * Allocate a TX long-term buffer for each live TX queue. On a
+ * partial failure this helper already frees what it allocated.
+ *
+ * Return: 0 on success, -ENOMEM on failure
+ */
+static int ibmveth_alloc_tx_resources(struct ibmveth_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+	int i;
+
+	for (i = 0; i < netdev->real_num_tx_queues; i++) {
+		if (ibmveth_allocate_tx_ltb(adapter, i))
+			goto err_free_ltbs;
+	}
+
+	return 0;
+
+err_free_ltbs:
+	while (--i >= 0)
+		ibmveth_free_tx_ltb(adapter, i);
+	return -ENOMEM;
+}
+
+/**
+ * ibmveth_free_tx_resources - Free TX LTBs for real_num_tx_queues
+ * @adapter: ibmveth adapter structure
+ *
+ * Free the TX long-term buffers for each live TX queue.
+ */
+static void ibmveth_free_tx_resources(struct ibmveth_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+	int i;
+
+	for (i = 0; i < netdev->real_num_tx_queues; i++)
+		ibmveth_free_tx_ltb(adapter, i);
+}
+
 static int ibmveth_register_logical_lan(struct ibmveth_adapter *adapter,
         union ibmveth_buf_desc rxq_desc, u64 mac_address)
 {
@@ -1102,11 +1144,13 @@ static int ibmveth_open(struct net_device *netdev)
 	if (rc)
 		goto out_free_filter_list;
 
-	rc = -ENOMEM;
-	for (i = 0; i < netdev->real_num_tx_queues; i++) {
-		if (ibmveth_allocate_tx_ltb(adapter, i))
-			goto out_free_tx_ltb;
-	}
+	/* Map the TX LTBs before RX buffers go to PHYP: under CMO they
+	 * draw on the same IO entitlement, and only RX copes with a
+	 * failed mapping.
+	 */
+	rc = ibmveth_alloc_tx_resources(adapter);
+	if (rc)
+		goto out_free_queue_mem;
 
 	mac_address = ether_addr_to_u64(netdev->dev_addr);
 
@@ -1147,7 +1191,12 @@ static int ibmveth_open(struct net_device *netdev)
 	netdev_dbg(netdev, "initial replenish cycle\n");
 	ibmveth_schedule_rx_queue(adapter, 0);
 
+	/* netif_tx_lock() takes each txq lock, so a sender that then sees
+	 * DRV_XOFF clear under its txq lock also sees the LTBs set up above.
+	 */
+	netif_tx_lock_bh(netdev);
 	netif_tx_start_all_queues(netdev);
+	netif_tx_unlock_bh(netdev);
 
 	adapter->opened = true;
 	netdev_dbg(netdev, "open complete\n");
@@ -1160,8 +1209,8 @@ out_free_buffer_pools:
 	} while (H_IS_LONG_BUSY(lpar_rc) || (lpar_rc == H_BUSY));
 	ibmveth_free_buffer_pools(adapter);
 out_free_tx_ltb:
-	for (i = netdev->real_num_tx_queues - 1; i >= 0; i--)
-		ibmveth_free_tx_ltb(adapter, i);
+	ibmveth_free_tx_resources(adapter);
+out_free_queue_mem:
 	ibmveth_cleanup_rx_resources(adapter);
 out_free_filter_list:
 	ibmveth_free_filter_list(adapter);
@@ -1173,7 +1222,6 @@ static int ibmveth_close(struct net_device *netdev)
 {
 	struct ibmveth_adapter *adapter = netdev_priv(netdev);
 	long lpar_rc;
-	int i;
 
 	/* change_mtu, pool sysfs, set_csum and set_tso call close() and
 	 * open() directly. If that open() fails, IFF_UP stays set and
@@ -1201,9 +1249,7 @@ static int ibmveth_close(struct net_device *netdev)
 	ibmveth_free_buffer_pools(adapter);
 	ibmveth_cleanup_rx_resources(adapter);
 	ibmveth_free_filter_list(adapter);
-
-	for (i = 0; i < netdev->real_num_tx_queues; i++)
-		ibmveth_free_tx_ltb(adapter, i);
+	ibmveth_free_tx_resources(adapter);
 
 	netdev_dbg(netdev, "close complete\n");
 
