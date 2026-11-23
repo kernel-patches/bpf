@@ -1219,6 +1219,9 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		if (insn->src_reg == BPF_PSEUDO_CALL) {
 			tcc_ptr_off = BPF_TAIL_CALL_CNT_PTR_STACK_OFF(ctx->stack_size);
 			emit_insn(ctx, ldd, REG_TCC, LOONGARCH_GPR_SP, tcc_ptr_off);
+			move_addr(ctx, t1, func_addr);
+			emit_insn(ctx, jirl, LOONGARCH_GPR_RA, t1, 0);
+			break;
 		}
 
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
@@ -1245,8 +1248,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		 * convention with the argument and return value in BPF_REG_AX,
 		 * so skip moving the C return value into BPF_REG_0.
 		 */
-		if (insn->src_reg != BPF_PSEUDO_CALL &&
-		    func_addr != (u64)arch_bpf_timed_may_goto)
+		if (func_addr != (u64)arch_bpf_timed_may_goto)
 			move_reg(ctx, regmap[BPF_REG_0], LOONGARCH_GPR_A0);
 
 		break;
