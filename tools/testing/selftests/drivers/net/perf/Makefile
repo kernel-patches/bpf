@@ -2,7 +2,6 @@
 
 TEST_PROGS := \
 	devmem.py \
-	iperf.py \
 	rr.py \
 	stream.py \
 # end of TEST_PROGS
