@@ -165,6 +165,9 @@ static irqreturn_t pm8941_pwrkey_irq(int irq, void *_data)
 	if (err)
 		return IRQ_HANDLED;
 
+	/* Let user space see that the key woke the system */
+	pm_wakeup_event(pwrkey->dev, 0);
+
 	sts &= pwrkey->data->status_bit;
 
 	if (pwrkey->sw_debounce_time_us && !sts)
