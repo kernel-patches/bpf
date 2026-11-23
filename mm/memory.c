@@ -5151,6 +5151,11 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		pte_t *folio_ptep;
 		pte_t folio_pte;
 
+		/* A poisoned page in the folio must take its own fault. */
+		if (folio_test_anon(folio) &&
+		    folio_contain_hwpoisoned_page(folio))
+			goto check_folio;
+
 		folio_pte_range(folio, vma, address, idx, &folio_start,
 				&folio_end);
 		if (unlikely((folio_end - folio_start) >> PAGE_SHIFT != nr))
