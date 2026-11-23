@@ -2353,6 +2353,9 @@ static int snd_hda_spdif_out_switch_put(struct snd_kcontrol *kcontrol,
 
 	if (WARN_ON(codec->spdif_out.used <= idx))
 		return -EINVAL;
+	if (ucontrol->value.integer.value[0] < 0 ||
+	    ucontrol->value.integer.value[0] > 1)
+		return -EINVAL;
 	guard(mutex)(&codec->spdif_mutex);
 	spdif = snd_array_elem(&codec->spdif_out, idx);
 	nid = spdif->nid;
@@ -2557,9 +2560,11 @@ static int spdif_share_sw_put(struct snd_kcontrol *kcontrol,
 {
 	struct hda_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct hda_multi_out *mout = (void *)kcontrol->private_value;
-	bool val = !!ucontrol->value.integer.value[0];
+	long val = ucontrol->value.integer.value[0];
 	int change;
 
+	if (val < 0 || val > 1)
+		return -EINVAL;
 	guard(mutex)(&codec->spdif_mutex);
 	change = mout->share_spdif != val;
 	mout->share_spdif = val;
@@ -2632,9 +2637,11 @@ static int snd_hda_spdif_in_switch_put(struct snd_kcontrol *kcontrol,
 {
 	struct hda_codec *codec = snd_kcontrol_chip(kcontrol);
 	hda_nid_t nid = kcontrol->private_value;
-	unsigned int val = !!ucontrol->value.integer.value[0];
+	long val = ucontrol->value.integer.value[0];
 	int change;
 
+	if (val < 0 || val > 1)
+		return -EINVAL;
 	guard(mutex)(&codec->spdif_mutex);
 	change = codec->spdif_in_enable != val;
 	if (change) {
