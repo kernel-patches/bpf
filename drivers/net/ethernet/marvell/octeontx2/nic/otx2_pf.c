@@ -213,6 +213,7 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 	if (ret) {
 		dev_err(pf->dev,
 			"RVUPF: IRQ registration failed for ME0\n");
+		return ret;
 	}
 
 	/* Register FLR interrupt handler */
@@ -224,7 +225,7 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 	if (ret) {
 		dev_err(pf->dev,
 			"RVUPF: IRQ registration failed for FLR0\n");
-		return ret;
+		goto free_me0;
 	}
 
 	if (numvfs > 64) {
@@ -237,6 +238,7 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 		if (ret) {
 			dev_err(pf->dev,
 				"RVUPF: IRQ registration failed for ME1\n");
+			goto free_flr0;
 		}
 		irq_name = &hw->irq_name[RVU_PF_INT_VEC_VFFLR1 * NAME_SIZE];
 		snprintf(irq_name, NAME_SIZE, "RVUPF%d_FLR1",
@@ -247,7 +249,7 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 		if (ret) {
 			dev_err(pf->dev,
 				"RVUPF: IRQ registration failed for FLR1\n");
-			return ret;
+			goto free_me1;
 		}
 	}
 
@@ -271,6 +273,14 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 			     INTR_MASK(numvfs));
 	}
 	return 0;
+
+free_me1:
+	free_irq(pci_irq_vector(pf->pdev, RVU_PF_INT_VEC_VFME1), pf);
+free_flr0:
+	free_irq(pci_irq_vector(pf->pdev, RVU_PF_INT_VEC_VFFLR0), pf);
+free_me0:
+	free_irq(pci_irq_vector(pf->pdev, RVU_PF_INT_VEC_VFME0), pf);
+	return ret;
 }
 
 static int otx2_pf_flr_init(struct otx2_nic *pf, int num_vfs)
