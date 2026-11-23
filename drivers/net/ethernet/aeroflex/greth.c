@@ -1519,7 +1519,9 @@ error5:
 error4:
 	dma_free_coherent(greth->dev, 1024, greth->tx_bd_base, greth->tx_bd_base_phys);
 error3:
+	phy_disconnect(dev->phydev);
 	mdiobus_unregister(greth->mdio);
+	mdiobus_free(greth->mdio);
 error2:
 	of_iounmap(&ofdev->resource[0], greth->regs, resource_size(&ofdev->resource[0]));
 error1:
@@ -1538,8 +1540,9 @@ static void greth_of_remove(struct platform_device *of_dev)
 	dma_free_coherent(&of_dev->dev, 1024, greth->tx_bd_base, greth->tx_bd_base_phys);
 
 	if (ndev->phydev)
-		phy_stop(ndev->phydev);
+		phy_disconnect(ndev->phydev);
 	mdiobus_unregister(greth->mdio);
+	mdiobus_free(greth->mdio);
 
 	unregister_netdev(ndev);
 
