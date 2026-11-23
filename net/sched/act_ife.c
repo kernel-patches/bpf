@@ -275,6 +275,10 @@ static int load_metaops_and_vet(u32 metaid, void *val, int len, bool rtnl_held)
 		if (rtnl_held)
 			rtnl_lock();
 		ops = find_ife_oplist(metaid);
+		if (ops && rtnl_held) {
+			module_put(ops->owner);
+			return -EAGAIN;
+		}
 #endif
 	}
 
