@@ -678,7 +678,7 @@ struct phy_oatc14_sqi_capability {
  * @lock:  Mutex for serialization access to PHY
  * @irq_pm_lock: Held by the PM callbacks, and by the requesting and freeing
  *               of the interrupt where they test and clear @irq_rerun;
- *               phy_interrupt() never takes it
+ *               taken before @lock; phy_interrupt() never takes it
  * @state_queue: Work queue for state machine
  * @link_down_events: Number of times link was lost
  * @shared: Pointer to private data shared by phys in one package

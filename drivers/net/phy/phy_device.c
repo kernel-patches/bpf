@@ -355,12 +355,19 @@ static __maybe_unused void mdio_bus_phy_resume_irq(struct phy_device *phydev)
 	mutex_lock(&phydev->irq_pm_lock);
 	if (phy_interrupt_is_valid(phydev))
 		synchronize_irq(phydev->irq);
-	/* The PHY may have fallen back to polling since it disabled the line */
+	/* The PHY may have fallen back to polling since it disabled the line,
+	 * or freed its interrupt while another user keeps the line.
+	 */
 	if (phydev->irq_rerun) {
 		phydev->irq_rerun = false;
 		enable_irq(phydev->irq_rerun_line);
-		if (phydev->irq == phydev->irq_rerun_line)
-			irq_wake_thread(phydev->irq, phydev);
+		/* A nested threaded line has no thread; we run the handler */
+		if (phydev->irq == phydev->irq_rerun_line &&
+		    phydev->interrupts) {
+			mutex_lock(&phydev->lock);
+			phydev->drv->handle_interrupt(phydev);
+			mutex_unlock(&phydev->lock);
+		}
 	}
 	mutex_unlock(&phydev->irq_pm_lock);
 }
