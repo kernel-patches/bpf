@@ -265,9 +265,16 @@ static int prepare_file(const char *fname, unsigned long size)
 {
 	int fd;
 
-	fd = open(fname, O_RDWR | O_CREAT, 0664);
-	if (fd >= 0)
-		ftruncate(fd, size);
+	fd = open(fname, O_RDWR | O_CREAT | O_TRUNC, 0664);
+	if (fd < 0)
+		return fd;
+
+	/* HPFS cannot grow files with ftruncate(). */
+	if (pwrite(fd, "\0", 1, size - 1) != 1) {
+		close(fd);
+		unlink(fname);
+		return -1;
+	}
 	return fd;
 }
 
