@@ -1909,6 +1909,69 @@ static void alc298_fixup_alc1316_amp(struct hda_codec *codec,
 	}
 }
 
+/*
+ * The ONEXPLAYER X1 i drives its speakers through a Realtek smart amplifier at
+ * I2C address 0x10, reached over the ALC245 coefficient tunnel. The firmware
+ * leaves the amplifier unconfigured, so the speakers stay silent. The register
+ * writes below replay what the Windows driver does at initialization.
+ *
+ * Tunnel layout: coefficient 0x24 selects the amplifier, 0x25 and 0x26 carry
+ * the high and low halves of the register address, 0x28 the value, and 0x29
+ * commits. Bit 5 of the commit word is a self-clearing go bit; a write takes
+ * about 200 us.
+ */
+static void alc245_onexplayer_amp_write(struct hda_codec *codec, u32 reg, u8 val)
+{
+	int i;
+
+	alc_write_coef_idx(codec, 0x24, 0x0010);
+	alc_write_coef_idx(codec, 0x25, reg >> 16);
+	alc_write_coef_idx(codec, 0x26, reg & 0xffff);
+	alc_write_coef_idx(codec, 0x27, 0x0000);
+	alc_write_coef_idx(codec, 0x28, val);
+	alc_write_coef_idx(codec, 0x29, 0xb023);
+
+	for (i = 0; i < 10; i++) {
+		if (!(alc_read_coef_idx(codec, 0x29) & 0x0020))
+			return;
+		usleep_range(100, 200);
+	}
+	codec_warn(codec, "amp write timeout, reg 0x%x\n", reg);
+}
+
+static void alc245_fixup_onexplayer_amp(struct hda_codec *codec,
+					const struct hda_fixup *fix, int action)
+{
+	static const struct {
+		u32 reg;
+		u8 val;
+	} init_seq[] = {
+		{ 0xf10a, 0x09 }, { 0xf104, 0xf6 }, { 0xf105, 0x22 },
+		{ 0xf10b, 0x2c }, { 0xf10b, 0x7c }, { 0xc000, 0x01 },
+		{ 0xf20d, 0x00 }, { 0xf212, 0x3e }, { 0xc001, 0x02 },
+		{ 0xc003, 0x22 }, { 0xc004, 0x44 }, { 0xc005, 0x44 },
+		{ 0xc007, 0x64 }, { 0xc00e, 0xe7 }, { 0xf223, 0x7f },
+		{ 0xf224, 0xdb }, { 0xf225, 0xee }, { 0xf226, 0x3f },
+		{ 0xf227, 0x0f }, { 0xf21a, 0x78 }, { 0xf242, 0x3c },
+		{ 0xc120, 0x40 }, { 0xc125, 0x03 }, { 0xc321, 0x0b },
+		{ 0xc200, 0xd8 }, { 0xc201, 0x27 }, { 0xc202, 0x0f },
+		{ 0xc400, 0x0e }, { 0xc401, 0x43 }, { 0xc402, 0xe0 },
+		{ 0xc403, 0x00 }, { 0xc404, 0x4c }, { 0xc406, 0x40 },
+		{ 0xc407, 0x02 }, { 0xc408, 0x3f }, { 0xc300, 0x01 },
+		{ 0x41001888, 0x00 }, { 0xc121, 0x0b }, { 0xf102, 0x00 },
+		{ 0xf103, 0x00 }, { 0xf104, 0xf5 }, { 0xf105, 0x23 },
+		{ 0xf109, 0x00 }, { 0xf10a, 0x0b }, { 0xf10b, 0x4c },
+		{ 0xf10b, 0x5c },
+	};
+	int i;
+
+	if (action != HDA_FIXUP_ACT_INIT)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(init_seq); i++)
+		alc245_onexplayer_amp_write(codec, init_seq[i].reg, init_seq[i].val);
+}
+
 static void alc298_fixup_samsung_amp(struct hda_codec *codec,
 				     const struct hda_fixup *fix, int action)
 {
@@ -4553,6 +4616,7 @@ enum {
 	ALC256_FIXUP_ASUS_SPEAKER_COEFS,
 	ALC245_FIXUP_MINISFORUM_V3_MIC_NO_PRESENCE,
 	ALC287_FIXUP_TAS2781_I2C_DAC,
+	ALC245_FIXUP_ONEXPLAYER_AMP,
 };
 
 /* A special fixup for Lenovo C940 and Yoga Duet 7;
@@ -7472,6 +7536,10 @@ static const struct hda_fixup alc269_fixups[] = {
 		.chained = true,
 		.chain_id = ALC245_FIXUP_BASS_HP_DAC
 	},
+	[ALC245_FIXUP_ONEXPLAYER_AMP] = {
+		.type = HDA_FIXUP_FUNC,
+		.v.func = alc245_fixup_onexplayer_amp,
+	},
 };
 
 static const struct hda_quirk alc269_fixup_tbl[] = {
@@ -8750,6 +8818,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x1f4c, 0xe001, "Minisforum V3 (SE)",
 		      ALC245_FIXUP_MINISFORUM_V3_MIC_NO_PRESENCE),
 	SND_PCI_QUIRK(0x1f66, 0x0105, "Ayaneo Portable Game Player", ALC287_FIXUP_CS35L41_I2C_2),
+	SND_PCI_QUIRK(0x1f75, 0x1602, "ONEXPLAYER X1 i", ALC245_FIXUP_ONEXPLAYER_AMP),
 	SND_PCI_QUIRK(0x2014, 0x800a, "Positivo ARN50", ALC269_FIXUP_LIMIT_INT_MIC_BOOST),
 	SND_PCI_QUIRK(0x2039, 0x0001, "Inspur S14-G1", ALC295_FIXUP_CHROME_BOOK),
 	SND_PCI_QUIRK(0x2145, 0x0001, "Star Labs StarFighter", ALC233_FIXUP_STARLABS_STARFIGHTER),
