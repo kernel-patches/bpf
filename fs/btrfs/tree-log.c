@@ -7541,11 +7541,19 @@ static int log_all_new_ancestors(struct btrfs_trans_handle *trans,
 
 	trace_btrfs_log_all_new_ancestors_enter(trans, inode);
 
+	if (inode->vfs_inode.i_nlink == 0) {
+		ret = 0;
+		goto out;
+	}
+
 	/*
 	 * For a single hard link case, go through a fast path that does not
-	 * need to iterate the fs/subvolume tree.
+	 * need to iterate the fs/subvolume tree. But not if the inode had a
+	 * link, unlink or rename in the current transaction, since the dentry
+	 * used for the fsync may then be an unlinked one.
 	 */
-	if (inode->vfs_inode.i_nlink < 2) {
+	if (inode->vfs_inode.i_nlink < 2 &&
+	    inode->last_unlink_trans < trans->transid) {
 		ret = log_new_ancestors_fast(trans, inode, parent, ctx);
 		goto out;
 	}
