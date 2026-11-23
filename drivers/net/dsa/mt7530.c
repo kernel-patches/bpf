@@ -2411,24 +2411,6 @@ mt7530_setup(struct dsa_switch *ds)
 	ds->ageing_time_min = 2 * 1000;
 	ds->ageing_time_max = (AGE_CNT_MAX + 1) * (AGE_UNIT_MAX + 1) * 1000;
 
-	if (priv->id == ID_MT7530) {
-		regulator_set_voltage(priv->core_pwr, 1000000, 1000000);
-		ret = regulator_enable(priv->core_pwr);
-		if (ret < 0) {
-			dev_err(priv->dev,
-				"Failed to enable core power: %d\n", ret);
-			return ret;
-		}
-
-		regulator_set_voltage(priv->io_pwr, 3300000, 3300000);
-		ret = regulator_enable(priv->io_pwr);
-		if (ret < 0) {
-			dev_err(priv->dev, "Failed to enable io pwr: %d\n",
-				ret);
-			return ret;
-		}
-	}
-
 	/* Reset whole chip through gpio pin or memory-mapped registers for
 	 * different type of hardware
 	 */
