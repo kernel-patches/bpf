@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
+
+#include <linux/text-patching.h>
+#include <linux/memory.h>
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/cpu.h>
@@ -108,6 +111,7 @@ static void __init_or_module __nospec_revert(s32 *start, s32 *end)
 
 	/* Second part of the instruction replace is always a nop */
 	memcpy(insnbuf + 2, branch, sizeof(branch));
+	guard(mutex)(&text_mutex);
 	for (epo = start; epo < end; epo++) {
 		instr = (u8 *) epo + *epo;
 		if (instr[0] == 0xc0 && (instr[1] & 0x0f) == 0x04)
