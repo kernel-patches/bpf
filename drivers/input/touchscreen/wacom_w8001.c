@@ -369,7 +369,7 @@ static int w8001_command(struct w8001 *w8001, unsigned char command,
 	int rc;
 
 	w8001->response_type = 0;
-	init_completion(&w8001->cmd_done);
+	reinit_completion(&w8001->cmd_done);
 
 	rc = serio_write(w8001->serio, command);
 	if (rc == 0 && wait_response) {
