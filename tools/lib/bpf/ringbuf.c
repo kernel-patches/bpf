@@ -30,6 +30,12 @@ struct ring {
 	unsigned long *producer_pos;
 	unsigned long *overwrite_pos;
 	unsigned long mask;
+	/* ring__next() state: position of the next record and cached producer_pos */
+	unsigned long next_pos;
+	unsigned long prod_pos;
+	struct ring_rec rec;
+	/* always zero, in case struct ring_rec needs new fields */
+	unsigned long rec_reserved[2];
 	int map_fd;
 	bool overwrite;
 };
@@ -158,6 +164,8 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 	 */
 	if (r->overwrite && sizeof(unsigned long) == sizeof(__u64))
 		r->overwrite_pos = r->producer_pos + 2;
+	r->next_pos = smp_load_acquire(r->consumer_pos);
+	r->prod_pos = r->next_pos;
 
 	e = &rb->events[rb->ring_cnt];
 	memset(e, 0, sizeof(*e));
@@ -420,7 +428,7 @@ struct ring *ring_buffer__ring(struct ring_buffer *rb, unsigned int idx)
 
 unsigned long ring__consumer_pos(const struct ring *r)
 {
-	/* Synchronizes with smp_store_release() in ringbuf_process_ring(). */
+	/* Synchronizes with smp_store_release() in ringbuf_process_ring() and ring__release(). */
 	return smp_load_acquire(r->consumer_pos);
 }
 
@@ -470,6 +478,89 @@ int ring__consume_n(struct ring *r, size_t n)
 int ring__consume(struct ring *r)
 {
 	return ring__consume_n(r, INT_MAX);
+}
+
+/* ring__next() and friends can't be mixed with callbacks on the same ring */
+static int ringbuf_validate_rec_api(const struct ring *r)
+{
+	if (unlikely(r->sample_cb))
+		return -EINVAL;
+	if (unlikely(r->overwrite))
+		return -EOPNOTSUPP;
+	return 0;
+}
+
+const struct ring_rec *ring__next(struct ring *r)
+{
+	unsigned long pos, prod_pos;
+	__u32 *len_ptr, len, rec_sz;
+	int err;
+
+	err = ringbuf_validate_rec_api(r);
+	if (err)
+		return libbpf_err_ptr(err);
+
+	pos = r->next_pos;
+	prod_pos = r->prod_pos;
+	for (;;) {
+		if (pos == prod_pos) {
+			prod_pos = smp_load_acquire(r->producer_pos);
+			if (pos == prod_pos)
+				return NULL;
+		}
+
+		len_ptr = r->data + (pos & r->mask);
+		len = smp_load_acquire(len_ptr);
+		/* record is not committed yet */
+		if (len & BPF_RINGBUF_BUSY_BIT)
+			return NULL;
+
+		rec_sz = roundup_len(len);
+		r->next_pos = pos + rec_sz;
+		r->prod_pos = prod_pos;
+		if (!(len & BPF_RINGBUF_DISCARD_BIT)) {
+			r->rec.data = (void *)len_ptr + BPF_RINGBUF_HDR_SZ;
+			r->rec.pos = pos;
+			r->rec.len = len;
+			return &r->rec;
+		}
+		pos += rec_sz;
+	}
+}
+
+int ring__release(struct ring *r)
+{
+	unsigned long pos = r->next_pos;
+	__u32 len;
+	int err;
+
+	err = ringbuf_validate_rec_api(r);
+	if (err)
+		return libbpf_err(err);
+
+	smp_store_release(r->consumer_pos, pos);
+	/*
+	 * bpf_ringbuf_commit() clears the busy bit of a record and then checks
+	 * consumer_pos to see if it has to wake us up. We update consumer_pos
+	 * and then check the record, so without a full barrier in between both
+	 * sides can miss each other's update.
+	 */
+	smp_mb();
+
+	r->prod_pos = smp_load_acquire(r->producer_pos);
+	if (pos == r->prod_pos)
+		return 0;
+	len = smp_load_acquire((__u32 *)(r->data + (pos & r->mask)));
+	/* we get a wakeup when a busy record is committed */
+	return !(len & BPF_RINGBUF_BUSY_BIT);
+}
+
+void ring__rewind(struct ring *r)
+{
+	if (ringbuf_validate_rec_api(r))
+		return;
+
+	r->next_pos = smp_load_acquire(r->consumer_pos);
 }
 
 static void user_ringbuf_unmap_ring(struct user_ring_buffer *rb)

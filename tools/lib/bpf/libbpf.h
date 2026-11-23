@@ -1541,7 +1541,10 @@ struct ring_buffer;
 struct ring;
 struct user_ring_buffer;
 
-/* Callback-based consumption is unsupported for BPF_F_RB_OVERWRITE maps. */
+/*
+ * Callback-based consumption is unsupported for BPF_F_RB_OVERWRITE maps.
+ * The callback can be NULL for rings that are consumed with ring__next().
+ */
 typedef int (*ring_buffer_sample_fn)(void *ctx, void *data, size_t size);
 
 struct ring_buffer_opts {
@@ -1642,6 +1645,64 @@ LIBBPF_API int ring__consume(struct ring *r);
  * @return The number of records consumed, or a negative error code on failure.
  */
 LIBBPF_API int ring__consume_n(struct ring *r, size_t n);
+
+/*
+ * Record API: get records one by one with ring__next() instead of having them
+ * passed to a sample callback. It can only be used on rings that don't have a
+ * sample callback.
+ */
+
+/**
+ * struct ring_rec describes a record returned by **ring__next()**.
+ */
+struct ring_rec {
+	const void *data;	/* record data */
+	unsigned long pos;	/* position of the record in the ring buffer */
+	__u32 len;		/* size of record data in bytes */
+};
+
+/**
+ * @brief **ring__next()** returns the next record in the ring buffer without
+ * consuming it.
+ *
+ * Record data stays valid until **ring__release()** is called, so multiple
+ * records can be processed and then consumed together:
+ *
+ *	do {
+ *		while ((rec = ring__next(r)))
+ *			handle(rec->data, rec->len);
+ *	} while (ring__release(r) > 0);
+ *
+ * Each call invalidates and reuses the previous struct ring_rec, so copy it if
+ * it is needed later.
+ *
+ * @param r A ringbuffer object.
+ * @return The next record, or NULL if there is nothing to consume. errno is
+ * set on any error.
+ */
+LIBBPF_API const struct ring_rec *ring__next(struct ring *r);
+
+/**
+ * @brief **ring__release()** consumes all records returned by **ring__next()**
+ * since the last **ring__release()** or **ring__rewind()**.
+ *
+ * Call it before waiting for new data. If it returns 1, call **ring__next()**
+ * again instead of waiting, as there may be no wakeup for records that were
+ * committed before the release.
+ *
+ * @param r A ringbuffer object.
+ * @return 1 if **ring__next()** has to be called again, 0 if the caller can
+ * wait for new data, or a negative error code on failure.
+ */
+LIBBPF_API int ring__release(struct ring *r);
+
+/**
+ * @brief **ring__rewind()** goes back to the first record that was not
+ * released, so that **ring__next()** returns the same records again.
+ *
+ * @param r A ringbuffer object.
+ */
+LIBBPF_API void ring__rewind(struct ring *r);
 
 struct user_ring_buffer_opts {
 	size_t sz; /* size of this struct, for forward/backward compatibility */
