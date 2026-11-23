@@ -120,12 +120,14 @@ reference-tracking logic, similar to socket ref-tracking. It is thus
 impossible to reserve a record, but forget to submit (or discard) it.
 
 ``bpf_ringbuf_query()`` helper allows to query various properties of ring
-buffer.  Currently 4 are supported:
+buffer.  Currently 5 are supported:
 
 - ``BPF_RB_AVAIL_DATA`` returns amount of unconsumed data in ring buffer;
 - ``BPF_RB_RING_SIZE`` returns the size of ring buffer;
 - ``BPF_RB_CONS_POS``/``BPF_RB_PROD_POS`` returns current logical position
-  of consumer/producer, respectively.
+  of consumer/producer, respectively;
+- ``BPF_RB_OVERWRITE_POS`` returns the logical position of the oldest record
+  that is not overwritten yet (see `Overwrite mode`_).
 
 Returned values are momentarily snapshots of ring buffer state and could be
 off by the time helper returns, so this should be used only for
@@ -204,3 +206,41 @@ buffer. For extreme cases, when BPF program wants more manual control of
 notifications, commit/discard/output helpers accept ``BPF_RB_NO_WAKEUP`` and
 ``BPF_RB_FORCE_WAKEUP`` flags, which give full control over notifications of
 data availability, but require extra caution and diligence in using this API.
+
+Overwrite mode
+--------------
+
+In a ring buffer created with the ``BPF_F_RB_OVERWRITE`` map flag, reservations
+don't fail when the ring buffer is full. The producer overwrites the oldest
+records instead, so the ring buffer always holds the most recent data.
+
+The read-only page mapped before the data area holds three ``unsigned long``
+counters in this order: producer position, pending position (used only by
+producers), and overwrite position. The overwrite position is the position of
+the oldest record that is not overwritten yet. The producer updates it before
+the producer position, and it is always less than a ring buffer size behind the
+producer position.
+
+The producer doesn't wait for the consumer, so a record can be overwritten
+while it is being read. The consumer has to read first and check afterwards:
+
+1. Read the overwrite position and then the producer position. Start at the
+   consumer position, or at the overwrite position if the producer position is
+   a ring buffer size or more ahead of the consumer position. If the start is
+   the producer position, there is nothing to read.
+2. Read the record header and do the check in step 4. Use the length and flags
+   of the header only if it passes.
+3. Read or copy the record data, without using it yet.
+4. Issue a read barrier and read the producer position again. If it is less
+   than a ring buffer size ahead of the record's position, everything read
+   from the record is valid. Otherwise the record may have been overwritten:
+   drop what was read and start again from step 1.
+
+Records are overwritten in order, so when several records are read in a row it
+is enough to do the check in step 4 for the first one, after reading the last
+one.
+
+Positions wrap around, so compare them by subtracting one from the other. The
+check in step 4 can't notice a producer position that wrapped all the way
+around since the consumer stored the position it starts from. With a 32-bit
+``unsigned long`` that takes only 4 GiB of records.
