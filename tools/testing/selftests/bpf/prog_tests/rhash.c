@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "rhash.skel.h"
 #include "bpf_iter_bpf_rhash_map.skel.h"
+#include "rhash_resize.skel.h"
 #include <linux/bpf.h>
 #include <linux/perf_event.h>
 #include <sys/syscall.h>
@@ -149,6 +150,36 @@ out:
 	bpf_iter_bpf_rhash_map__destroy(skel);
 }
 
+static void rhash_resize_test(void)
+{
+	struct rhash_resize *skel;
+	int fd, i, n;
+	__u64 val = 0;
+
+	skel = rhash_resize__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "rhash_resize__open_and_load"))
+		return;
+
+	if (!ASSERT_OK(rhash_resize__attach(skel), "rhash_resize__attach"))
+		goto out;
+
+	fd = bpf_map__fd(skel->maps.rhmap);
+	/* let the resize worker run after each half */
+	for (n = 0; n < 5000 && !skel->bss->busy; n++) {
+		for (i = 0; i < 64; i++)
+			bpf_map_update_elem(fd, &i, &val, BPF_ANY);
+		usleep(100);
+		for (i = 0; i < 64; i++)
+			bpf_map_delete_elem(fd, &i);
+		usleep(100);
+	}
+
+	ASSERT_GT(skel->bss->hits, 0, "hits");
+	ASSERT_GT(skel->bss->busy, 0, "busy");
+out:
+	rhash_resize__destroy(skel);
+}
+
 void test_rhash(void)
 {
 	if (test__start_subtest("test_rhash_lookup_update"))
@@ -186,4 +217,7 @@ void test_rhash(void)
 
 	if (test__start_subtest("test_rhash_iter"))
 		rhash_iter_test();
+
+	if (test__start_subtest("test_rhash_resize"))
+		rhash_resize_test();
 }
