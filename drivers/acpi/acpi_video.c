@@ -533,6 +533,13 @@ acpi_video_bqc_value_to_level(struct acpi_video_device *device,
 		 * items with special meaning (see enum acpi_video_level_idx),
 		 * so we need to compensate for that by offsetting ourselves
 		 */
+		if (device->brightness->count <= ACPI_VIDEO_FIRST_LEVEL)
+			return U64_MAX;
+
+		if (bqc_value >= device->brightness->count -
+				 ACPI_VIDEO_FIRST_LEVEL)
+			return U64_MAX;
+
 		if (device->brightness->flags._BCL_reversed)
 			bqc_value = device->brightness->count -
 				ACPI_VIDEO_FIRST_LEVEL - 1 - bqc_value;
@@ -781,7 +788,7 @@ static int acpi_video_bqc_quirk(struct acpi_video_device *device,
 
 	if (level != test_level) {
 		/* buggy _BQC found, need to find out if it uses index */
-		if (level < br->count) {
+		if (level < br->count - ACPI_VIDEO_FIRST_LEVEL) {
 			if (br->flags._BCL_reversed)
 				level = br->count - ACPI_VIDEO_FIRST_LEVEL - 1 - level;
 			if (br->levels[level + ACPI_VIDEO_FIRST_LEVEL] == test_level)
