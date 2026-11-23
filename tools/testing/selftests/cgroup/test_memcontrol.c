@@ -33,7 +33,17 @@ static int page_size;
 
 int get_temp_fd(void)
 {
-	return open(".", O_TMPFILE | O_RDWR | O_EXCL, 0600);
+	char name[] = "./cgroup_test_XXXXXX";
+	int fd;
+
+	fd = open(".", O_TMPFILE | O_RDWR | O_EXCL, 0600);
+	if (fd >= 0 || errno != EOPNOTSUPP)
+		return fd;
+
+	fd = mkstemp(name);
+	if (fd >= 0)
+		unlink(name);
+	return fd;
 }
 
 int alloc_pagecache(int fd, size_t size)
