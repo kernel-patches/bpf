@@ -829,7 +829,17 @@ static int ncsi_rsp_handler_gc(struct ncsi_request *nr)
 	 */
 	nc->vlan_filter.bitmap = U64_MAX;
 	nc->vlan_filter.n_vids = rsp->vlan_cnt;
-	np->ndp->channel_count = rsp->channel_cnt;
+	/* Channel Count bounds the per-channel walks in ncsi-manage.c, and
+	 * the channel ID is only 5 bits wide with 0x1f reserved. A controller
+	 * that answered on this channel has at least one channel, so keep
+	 * the value in [1, NCSI_RESERVED_CHANNEL].
+	 */
+	if (!rsp->channel_cnt || rsp->channel_cnt > NCSI_RESERVED_CHANNEL)
+		netdev_warn(ndp->ndev.dev,
+			    "NCSI: Package %u reports invalid Channel Count %u\n",
+			    np->id, rsp->channel_cnt);
+	ndp->channel_count = clamp_t(unsigned char, rsp->channel_cnt, 1,
+				     NCSI_RESERVED_CHANNEL);
 
 	return 0;
 }
