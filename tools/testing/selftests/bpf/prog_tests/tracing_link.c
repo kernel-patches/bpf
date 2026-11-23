@@ -6,6 +6,7 @@
 #include "xdp_dummy.skel.h"
 #include "kprobe_write_ctx.skel.h"
 #include "tracing_link_ctx.skel.h"
+#include "tracing_link_multi.skel.h"
 
 static void test_fentry_link_create_log(int target_fd, __u32 target_btf_id, int cookie,
 					enum bpf_attach_type attach_type,
@@ -389,4 +390,352 @@ void test_tracing_link_log(void)
 		test_log_invalid_kprobe_write_ctx();
 	if (test__start_subtest("freplace_ctx_size"))
 		test_log_freplace_ctx_size();
+}
+
+static void test_tracing_multi_link_create_log(const char *prog_name, int target_fd,
+					       struct bpf_link_create_opts *opts,
+					       int err_exp, const char *msg)
+{
+	struct tracing_link_multi *skel;
+	struct bpf_program *prog;
+	char log_buf[128] = {};
+	int err, fd;
+	LIBBPF_OPTS(bpf_log_opts, log_opts,
+		    .buf = log_buf,
+		    .size = sizeof(log_buf),
+		    .level = 1,
+	);
+
+	skel = tracing_link_multi__open();
+	if (!ASSERT_OK_PTR(skel, "tracing_link_multi__open"))
+		return;
+
+	prog = bpf_object__find_program_by_name(skel->obj, prog_name);
+	if (!ASSERT_OK_PTR(prog, "bpf_object__find_program_by_name"))
+		goto out;
+
+	bpf_program__set_autoload(prog, true);
+	err = tracing_link_multi__load(skel);
+	if (!ASSERT_OK(err, "tracing_link_multi__load"))
+		goto out;
+
+	opts->log_opts = &log_opts;
+	fd = bpf_link_create(bpf_program__fd(prog), target_fd,
+			     bpf_program__expected_attach_type(prog), opts);
+	opts->log_opts = NULL;
+	if (!ASSERT_LT(fd, 0, "bpf_link_create")) {
+		close(fd);
+		goto out;
+	}
+
+	ASSERT_EQ(fd, err_exp, "err");
+	ASSERT_STREQ(log_buf, msg, "log_buf");
+	ASSERT_EQ(log_opts.true_size, msg[0] ? strlen(msg) + 1 : 0, "log_size");
+
+out:
+	tracing_link_multi__destroy(skel);
+}
+
+static void test_multi_log_excessive_count(void)
+{
+	const char *msg = "tracing_multi.cnt 2147483647 is above the limit 1048576.\n";
+	__u32 id = 0;
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		    .tracing_multi.ids = &id,
+		    .tracing_multi.cnt = INT_MAX,
+	);
+
+	test_tracing_multi_link_create_log("fentry", 0, &opts, -E2BIG, msg);
+}
+
+static void test_multi_log_invalid_flags(void)
+{
+	const char *msg = "flags must be zero.\n";
+	__u32 id = 0;
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		    .flags = 1,
+		    .tracing_multi.ids = &id,
+		    .tracing_multi.cnt = 1,
+	);
+
+	test_tracing_multi_link_create_log("fentry", 0, &opts, -EINVAL, msg);
+}
+
+static void test_multi_log_invalid_target_fd(void)
+{
+	const char *msg = "target_fd must be zero.\n";
+	__u32 id = 0;
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		    .tracing_multi.ids = &id,
+		    .tracing_multi.cnt = 1,
+	);
+
+	test_tracing_multi_link_create_log("fentry", -1, &opts, -EINVAL, msg);
+}
+
+static void test_multi_log_duplicate_ids(void)
+{
+	struct btf *btf;
+	char msg[128];
+	__u32 ids[2];
+	int id;
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		    .tracing_multi.ids = ids,
+		    .tracing_multi.cnt = ARRAY_SIZE(ids),
+	);
+
+	btf = btf__load_vmlinux_btf();
+	if (!ASSERT_OK_PTR(btf, "btf__load_vmlinux_btf"))
+		return;
+
+	id = btf__find_by_name_kind(btf, "bpf_fentry_test1", BTF_KIND_FUNC);
+	if (!ASSERT_GT(id, 0, "target_btf_id"))
+		goto out;
+
+	ids[0] = ids[1] = id;
+
+	snprintf(msg, sizeof(msg), "id %u is in tracing_multi.ids more than once.\n", id);
+	test_tracing_multi_link_create_log("fentry", 0, &opts, -EINVAL, msg);
+
+out:
+	btf__free(btf);
+}
+
+static void test_multi_log_target(struct btf *btf, const char *prog_name, const char *target,
+				  int err_exp, const char *format)
+{
+	char msg[128];
+	__u32 id;
+	int ret;
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		    .tracing_multi.ids = &id,
+		    .tracing_multi.cnt = 1,
+	);
+
+	ret = btf__find_by_name_kind(btf, target, BTF_KIND_FUNC);
+	if (!ASSERT_GT(ret, 0, "target_btf_id"))
+		return;
+
+	id = ret;
+	snprintf(msg, sizeof(msg), format, id, target);
+	test_tracing_multi_link_create_log(prog_name, 0, &opts, err_exp, msg);
+}
+
+static void test_multi_log_vmlinux_target(const char *prog_name, const char *target,
+					  int err_exp, const char *format)
+{
+	struct btf *btf;
+
+	btf = btf__load_vmlinux_btf();
+	if (!ASSERT_OK_PTR(btf, "btf__load_vmlinux_btf"))
+		return;
+
+	test_multi_log_target(btf, prog_name, target, err_exp, format);
+	btf__free(btf);
+}
+
+static void test_multi_log_module_target(const char *prog_name, const char *target,
+					 int err_exp, const char *format)
+{
+	struct btf *vmlinux, *btf;
+
+	if (!env.has_testmod) {
+		test__skip();
+		return;
+	}
+
+	vmlinux = btf__load_vmlinux_btf();
+	if (!ASSERT_OK_PTR(vmlinux, "btf__load_vmlinux_btf"))
+		return;
+
+	btf = btf__load_module_btf("bpf_testmod", vmlinux);
+	if (!ASSERT_OK_PTR(btf, "btf__load_module_btf"))
+		goto out;
+
+	test_multi_log_target(btf, prog_name, target, err_exp, format);
+	btf__free(btf);
+
+out:
+	btf__free(vmlinux);
+}
+
+static void test_multi_log_noreturn_fexit(void)
+{
+	const char *msg = "Cannot attach fexit/fsession_multi prog to noreturn btf id %u.\n";
+
+	test_multi_log_vmlinux_target("fexit", "do_exit", -EINVAL, msg);
+}
+
+static void test_multi_log_denylist(void)
+{
+	const char *msg = "Cannot attach to denylist btf id %u.\n";
+	const char *target = "migrate_disable";
+	struct btf *btf;
+
+	btf = btf__load_vmlinux_btf();
+	if (!ASSERT_OK_PTR(btf, "btf__load_vmlinux_btf"))
+		return;
+
+	/* migrate_disable is only in the denylist on SMP kernels. */
+	if (btf__find_by_name_kind(btf, target, BTF_KIND_FUNC) == -ENOENT)
+		test__skip();
+	else
+		test_multi_log_target(btf, "fentry", target, -EINVAL, msg);
+
+	btf__free(btf);
+}
+
+static void test_multi_log_invalid_btf_id(void)
+{
+	const char *msg = "Cannot resolve type of btf id 4294967295.\n";
+	__u32 id = ~0U;
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		    .tracing_multi.ids = &id,
+		    .tracing_multi.cnt = 1,
+	);
+
+	test_tracing_multi_link_create_log("fentry", 0, &opts, -EINVAL, msg);
+}
+
+static void test_multi_log_non_function(void)
+{
+	const char *target = "bpf_fentry_test_t";
+	struct btf *btf;
+	char msg[128];
+	__u32 id;
+	int ret;
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		    .tracing_multi.ids = &id,
+		    .tracing_multi.cnt = 1,
+	);
+
+	btf = btf__load_vmlinux_btf();
+	if (!ASSERT_OK_PTR(btf, "btf__load_vmlinux_btf"))
+		return;
+
+	ret = btf__find_by_name_kind(btf, target, BTF_KIND_STRUCT);
+	if (!ASSERT_GT(ret, 0, "target_btf_id"))
+		goto out;
+
+	id = ret;
+	snprintf(msg, sizeof(msg), "Type of id %u is not function.\n", id);
+	test_tracing_multi_link_create_log("fentry", 0, &opts, -EINVAL, msg);
+
+out:
+	btf__free(btf);
+}
+
+static void test_multi_log_too_many_args(void)
+{
+	const char *msg = "The function bpf_trace_run12 has 13 arguments. Too many.\n";
+
+	test_multi_log_vmlinux_target("fentry", "bpf_trace_run12", -EINVAL, msg);
+}
+
+static void test_multi_log_varargs(void)
+{
+	const char *msg = "The function _printk with variable args is unsupported.\n";
+
+	test_multi_log_vmlinux_target("fentry", "_printk", -EINVAL, msg);
+}
+
+static void test_multi_log_large_return(void)
+{
+	const char *msg = "The function bpf_kfunc_call_test_ret_big return type STRUCT is unsupported.\n";
+
+	test_multi_log_module_target("module_fentry", "bpf_kfunc_call_test_ret_big", -EINVAL, msg);
+}
+
+static void test_multi_log_large_arg(void)
+{
+	const char *msg = "The function bpf_testmod_large_arg arg0 type STRUCT is unsupported.\n";
+
+	test_multi_log_module_target("module_fentry", "bpf_testmod_large_arg", -EINVAL, msg);
+}
+
+static void test_multi_log_large_return_fexit(void)
+{
+	const char *msg = "Attach to target %u:%s with a >8 byte return value is not supported for this attach type.\n";
+
+	test_multi_log_module_target("module_fexit", "bpf_kfunc_call_test_ret_pair",
+				     -EOPNOTSUPP, msg);
+}
+
+static void test_multi_log_missing_address(void)
+{
+	const char *msg = "Cannot resolve address of target %u:%s.\n";
+
+	/* The type is visible through base BTF, but the symbol is in vmlinux. */
+	test_multi_log_module_target("module_fentry", "bpf_fentry_test1", -ENOENT, msg);
+}
+
+static void test_multi_log_notrace(void)
+{
+	const char *msg = "Target %u:%s is not ftrace attachable.\n";
+
+	test_multi_log_vmlinux_target("fentry", "__bpf_tramp_enter", -ENOENT, msg);
+}
+
+static void test_multi_log_not_sleepable(void)
+{
+	const char *msg = "Target %u:%s is not sleepable.\n";
+
+	test_multi_log_vmlinux_target("fentry_sleepable", "bpf_fentry_test2", -EINVAL, msg);
+}
+
+#ifndef __x86_64__
+static void test_multi_log_kernel_unsupported(void)
+{
+	const char *msg = "This kernel does not support tracing_multi.\n";
+	__u32 id = 0;
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		    .flags = 1,
+		    .tracing_multi.ids = &id,
+		    .tracing_multi.cnt = 1,
+	);
+
+	test_tracing_multi_link_create_log("fentry", 0, &opts, -EOPNOTSUPP, msg);
+}
+#endif
+
+void test_tracing_multi_link_log(void)
+{
+#ifndef __x86_64__
+	if (test__start_subtest("kernel_unsupported"))
+		test_multi_log_kernel_unsupported();
+	return;
+#endif
+
+	if (test__start_subtest("excessive_count"))
+		test_multi_log_excessive_count();
+	if (test__start_subtest("invalid_flags"))
+		test_multi_log_invalid_flags();
+	if (test__start_subtest("invalid_target_fd"))
+		test_multi_log_invalid_target_fd();
+	if (test__start_subtest("duplicate_ids"))
+		test_multi_log_duplicate_ids();
+	if (test__start_subtest("noreturn_fexit"))
+		test_multi_log_noreturn_fexit();
+	if (test__start_subtest("denylist"))
+		test_multi_log_denylist();
+	if (test__start_subtest("invalid_btf_id"))
+		test_multi_log_invalid_btf_id();
+	if (test__start_subtest("non_function"))
+		test_multi_log_non_function();
+	if (test__start_subtest("too_many_args"))
+		test_multi_log_too_many_args();
+	if (test__start_subtest("varargs"))
+		test_multi_log_varargs();
+	if (test__start_subtest("large_return"))
+		test_multi_log_large_return();
+	if (test__start_subtest("large_arg"))
+		test_multi_log_large_arg();
+	if (test__start_subtest("large_return_fexit"))
+		test_multi_log_large_return_fexit();
+	if (test__start_subtest("missing_address"))
+		test_multi_log_missing_address();
+	if (test__start_subtest("notrace"))
+		test_multi_log_notrace();
+	if (test__start_subtest("not_sleepable"))
+		test_multi_log_not_sleepable();
 }
