@@ -20,6 +20,7 @@ static int mptcp_pernet_id;
 
 #ifdef CONFIG_SYSCTL
 static int mptcp_pm_type_max = __MPTCP_PM_TYPE_MAX;
+static int one_day_secs = 24 * 3600;
 #endif
 
 struct mptcp_pernet {
@@ -350,6 +351,7 @@ static struct ctl_table mptcp_sysctl_table[] = {
 		.mode = 0644,
 		.proc_handler = proc_blackhole_detect_timeout,
 		.extra1 = SYSCTL_ZERO,
+		.extra2 = &one_day_secs,
 	},
 	{
 		.procname = "syn_retrans_before_tcp_fallback",
@@ -487,6 +489,7 @@ bool mptcp_active_should_disable(struct sock *ssk)
 	unsigned long timeout;
 	int disable_times;
 	int multiplier;
+	u64 delay;
 
 	pernet = mptcp_get_pernet(net);
 	blackhole_timeout = READ_ONCE(pernet->blackhole_timeout);
@@ -503,10 +506,11 @@ bool mptcp_active_should_disable(struct sock *ssk)
 
 	/* Limit timeout to max: 2^6 * initial timeout */
 	multiplier = 1 << min(disable_times - 1, 6);
+	delay = (u64)multiplier * blackhole_timeout * HZ;
 
 	/* Paired with the WRITE_ONCE() in mptcp_active_disable(). */
 	timeout = READ_ONCE(pernet->active_disable_stamp) +
-		  multiplier * blackhole_timeout * HZ;
+		  min(delay, MAX_JIFFY_OFFSET);
 
 	return time_before(jiffies, timeout);
 }
