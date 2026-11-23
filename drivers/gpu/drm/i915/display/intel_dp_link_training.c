@@ -773,11 +773,14 @@ static u8 intel_dp_phy_preemph_max(struct intel_dp *intel_dp,
 }
 
 static bool has_per_lane_signal_levels(struct intel_dp *intel_dp,
+				       const struct intel_crtc_state *crtc_state,
 				       enum drm_dp_phy dp_phy)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 
-	return !intel_dp_phy_is_downstream_of_source(intel_dp, dp_phy) ||
+	/* UHBR training always adjusts the source PHY, even with LTTPRs. */
+	return (!intel_dp_is_uhbr(crtc_state) &&
+		!intel_dp_phy_is_downstream_of_source(intel_dp, dp_phy)) ||
 		DISPLAY_VER(display) >= 10 || display->platform.broxton;
 }
 
@@ -790,7 +793,7 @@ static u8 intel_dp_get_lane_adjust_tx_ffe_preset(struct intel_dp *intel_dp,
 {
 	u8 tx_ffe = 0;
 
-	if (has_per_lane_signal_levels(intel_dp, dp_phy)) {
+	if (has_per_lane_signal_levels(intel_dp, crtc_state, dp_phy)) {
 		lane = min(lane, crtc_state->lane_count - 1);
 		tx_ffe = drm_dp_get_adjust_tx_ffe_preset(link_status, lane);
 	} else {
@@ -813,7 +816,7 @@ static u8 intel_dp_get_lane_adjust_vswing_preemph(struct intel_dp *intel_dp,
 	u8 voltage_max;
 	u8 preemph_max;
 
-	if (has_per_lane_signal_levels(intel_dp, dp_phy)) {
+	if (has_per_lane_signal_levels(intel_dp, crtc_state, dp_phy)) {
 		lane = min(lane, crtc_state->lane_count - 1);
 
 		v = drm_dp_get_adjust_request_voltage(link_status, lane);
@@ -1021,7 +1024,12 @@ void intel_dp_set_signal_levels(struct intel_dp *intel_dp,
 		       TRAIN_SET_PREEMPH_ARGS(intel_dp->train_set));
 	}
 
-	if (intel_dp_phy_is_downstream_of_source(intel_dp, dp_phy))
+	/*
+	 * UHBR links use transparent training, so the source PHY must be
+	 * programmed during the DPRX training phase even with LTTPRs present.
+	 */
+	if (intel_dp_is_uhbr(crtc_state) ||
+	    intel_dp_phy_is_downstream_of_source(intel_dp, dp_phy))
 		encoder->set_signal_levels(encoder, crtc_state);
 }
 
