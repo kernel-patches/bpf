@@ -1761,6 +1761,44 @@ int batadv_tt_local_dump(struct sk_buff *msg, struct netlink_callback *cb)
 }
 
 /**
+ * batadv_tt_local_unhash() - remove an entry from the local table
+ * @bat_priv: the bat priv with all the mesh interface information
+ * @tt_local: the local TT entry to remove
+ * @message: message to append to the log on deletion
+ *
+ * The caller must hold the hash bucket list_lock and the flags_lock of the
+ * entry. It must have checked that the entry is still part of the local table
+ * and has to drop the reference of the hash after it released the flags_lock.
+ */
+static void batadv_tt_local_unhash(struct batadv_priv *bat_priv,
+				   struct batadv_tt_local_entry *tt_local,
+				   const char *message)
+	__must_hold(&tt_local->common.flags_lock)
+{
+	struct batadv_tt_common_entry *tt_common = &tt_local->common;
+	struct batadv_hashtable *hash = bat_priv->tt.local_hash;
+	u32 i;
+
+	i = batadv_choose_tt(&tt_common->key, hash->size);
+	lockdep_assert_held(&hash->list_locks[i]);
+	lockdep_assert_held(&tt_common->flags_lock);
+
+	batadv_dbg(BATADV_DBG_TT, bat_priv,
+		   "Deleting local tt entry (%pM, vid: %d): %s\n",
+		   tt_common->key.addr, batadv_print_vid(tt_common->key.vid),
+		   message);
+
+	hlist_del_init_rcu(&tt_common->hash_entry);
+	atomic_inc(&hash->generation);
+
+	/* An entry which still carries BATADV_TT_CLIENT_NEW was never counted
+	 * and must not be uncounted here.
+	 */
+	if (!(tt_common->flags & BATADV_TT_CLIENT_NEW))
+		batadv_tt_local_size_dec(bat_priv, tt_common->key.vid);
+}
+
+/**
  * batadv_tt_local_set_pending() - mark local TT entry as pending removal
  * @bat_priv: the bat priv with all the mesh interface information
  * @tt_local_entry: local TT entry to mark as BATADV_TT_CLIENT_PENDING
@@ -4551,6 +4589,43 @@ static void batadv_tt_local_transition_new(struct batadv_priv *bat_priv)
 }
 
 /**
+ * batadv_tt_local_unhash_pending() - remove a pending entry from the local table
+ * @bat_priv: the bat priv with all the mesh interface information
+ * @tt_local: the local TT entry to remove
+ *
+ * Only an entry which is marked as BATADV_TT_CLIENT_PENDING and whose DEL was
+ * queued is removed. An entry which still waits for its DEL (del_unqueued) must
+ * stay in the local table until batadv_tt_local_purge_list() was able to queue
+ * it.
+ *
+ * The caller must hold the hash bucket list_lock and the flags_lock of the
+ * entry.
+ *
+ * Return: true if the entry was unhashed and the caller has to drop the
+ * reference of the hash, false otherwise.
+ */
+static bool
+batadv_tt_local_unhash_pending(struct batadv_priv *bat_priv,
+			       struct batadv_tt_local_entry *tt_local)
+	__must_hold(&tt_local->common.flags_lock)
+{
+	struct batadv_tt_common_entry *tt_common = &tt_local->common;
+
+	lockdep_assert_held(&tt_common->flags_lock);
+
+	if (!(tt_common->flags & BATADV_TT_CLIENT_PENDING))
+		return false;
+
+	/* the removal must be announced first */
+	if (tt_local->del_unqueued)
+		return false;
+
+	batadv_tt_local_unhash(bat_priv, tt_local, "pending");
+
+	return true;
+}
+
+/**
  * batadv_tt_local_purge_pending_clients() - finalise removal of pending local
  *  clients
  * @bat_priv: the bat priv with all the mesh interface information
@@ -4579,40 +4654,17 @@ static void batadv_tt_local_purge_pending_clients(struct batadv_priv *bat_priv)
 		spin_lock_bh(list_lock);
 		hlist_for_each_entry_safe(tt_common, node_tmp, head,
 					  hash_entry) {
-			bool cont = false;
+			bool unhashed;
 
 			tt_local = container_of(tt_common,
 						struct batadv_tt_local_entry,
 						common);
 
-			scoped_guard(spinlock_bh, &tt_common->flags_lock) {
-				if (!(tt_common->flags & BATADV_TT_CLIENT_PENDING)) {
-					cont = true;
-					break;
-				}
+			scoped_guard(spinlock_bh, &tt_common->flags_lock)
+				unhashed = batadv_tt_local_unhash_pending(bat_priv,
+									  tt_local);
 
-				/* the removal must be announced first */
-				if (tt_local->del_unqueued) {
-					cont = true;
-					break;
-				}
-
-				batadv_dbg(BATADV_DBG_TT, bat_priv,
-					   "Deleting local tt entry (%pM, vid: %d): pending\n",
-					   tt_common->key.addr,
-					   batadv_print_vid(tt_common->key.vid));
-
-				hlist_del_init_rcu(&tt_common->hash_entry);
-				atomic_inc(&hash->generation);
-
-				/* An entry which still carries BATADV_TT_CLIENT_NEW was
-				 * never counted and must not be uncounted here.
-				 */
-				if (!(tt_common->flags & BATADV_TT_CLIENT_NEW))
-					batadv_tt_local_size_dec(bat_priv, tt_common->key.vid);
-			}
-
-			if (cont)
+			if (!unhashed)
 				continue;
 
 			batadv_tt_local_entry_put(tt_local);
