@@ -25,10 +25,6 @@ description: |
   The device has a 4-wire SPI interface for communication
   between the MAC and host processor.
 
-allOf:
-  - $ref: ethernet-controller.yaml#
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
-
 properties:
   compatible:
     enum:
@@ -43,6 +39,12 @@ properties:
       Enable CRC8 checks on SPI read/writes.
     type: boolean
 
+  adi,spi-oa-tc6:
+    description:
+      The device is configured, through the SPI_CFG1 pin, for the
+      OPEN Alliance TC6 protocol instead of the generic SPI one.
+    type: boolean
+
   interrupts:
     maxItems: 1
 
@@ -54,6 +56,16 @@ required:
   - compatible
   - reg
   - interrupts
+
+allOf:
+  - $ref: ethernet-controller.yaml#
+  - $ref: /schemas/spi/spi-peripheral-props.yaml#
+  - if:
+      required:
+        - adi,spi-oa-tc6
+    then:
+      properties:
+        adi,spi-crc: false
 
 unevaluatedProperties: false
 
