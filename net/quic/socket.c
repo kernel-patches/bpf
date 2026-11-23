@@ -40,11 +40,38 @@ static void quic_write_space(struct sock *sk)
 	rcu_read_unlock();
 }
 
+static void quic_crypto_free_work(struct work_struct *w)
+{
+	struct quic_crypto *crypto = container_of(w, struct quic_crypto, work);
+
+	/* Deferred crypto cleanup in process context. */
+	quic_crypto_free(crypto);
+	kfree(crypto);
+}
+
+static void quic_sock_destruct(struct sock *sk)
+{
+	struct quic_crypto *crypto;
+	u8 i;
+
+	/* Deferred crypto free for async encryption/decryption. */
+	for (i = 0; i < QUIC_CRYPTO_MAX; i++) {
+		crypto = quic_crypto(sk, i);
+		if (!crypto)
+			continue;
+		queue_work(quic_wq, &crypto->work);
+	}
+
+	quic_sk_destruct(sk);
+}
+
 static int quic_init_sock(struct sock *sk)
 {
 	struct quic_pnspace *space;
+	struct quic_crypto *crypto;
 	u8 i;
 
+	sk->sk_destruct = quic_sock_destruct;
 	sk->sk_write_space = quic_write_space;
 	sock_set_flag(sk, SOCK_USE_WRITE_QUEUE);
 	sock_set_flag(sk, SOCK_RCU_FREE);
@@ -71,6 +98,15 @@ static int quic_init_sock(struct sock *sk)
 			return -ENOMEM;
 		}
 		quic_sk(sk)->space[i] = space;
+	}
+
+	/* Allocate crypto structures for each encryption level. */
+	for (i = 0; i < QUIC_CRYPTO_MAX; i++) {
+		crypto = kzalloc_obj(*crypto);
+		if (!crypto)
+			return -ENOMEM;
+		INIT_WORK(&crypto->work, quic_crypto_free_work);
+		quic_sk(sk)->crypto[i] = crypto;
 	}
 
 	return 0;
