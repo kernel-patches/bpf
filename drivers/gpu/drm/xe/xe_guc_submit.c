@@ -2569,7 +2569,20 @@ static int guc_exec_queue_wait_suspend_done(struct xe_exec_queue *q, bool blocki
 {
 	struct xe_guc *guc = exec_queue_to_guc(q);
 	struct xe_device *xe = guc_to_xe(guc);
-	int ret;
+	long timeout;
+	long ret;
+
+	/*
+	 * The SUSPEND worker may sleep up to min_run_period_ms before disabling,
+	 * and GuC may then take up to preempt_timeout_us (sysfs tunable up to
+	 * XE_HW_ENGINE_PREEMPT_TIMEOUT_MAX) to preempt the context. Keep the
+	 * historical 5s as slack on top of both.
+	 */
+	timeout = HZ * 5;
+	if (!xe_exec_queue_is_multi_queue_secondary(q))
+		timeout += usecs_to_jiffies(READ_ONCE(q->sched_props.preempt_timeout_us));
+	if (q->vm)
+		timeout += msecs_to_jiffies(q->vm->preempt.min_run_period_ms);
 
 	/*
 	 * A kill does not clear suspend_pending, the queue may still be running
@@ -2583,16 +2596,16 @@ static int guc_exec_queue_wait_suspend_done(struct xe_exec_queue *q, bool blocki
 retry:
 	if (blocking) {
 		if (IS_SRIOV_VF(xe))
-			ret = wait_event_timeout(guc->ct.wq, WAIT_COND, HZ * 5);
+			ret = wait_event_timeout(guc->ct.wq, WAIT_COND, timeout);
 		else
 			ret = wait_event_timeout(q->guc->suspend_wait, WAIT_COND,
-						 HZ * 5);
+						 timeout);
 	} else if (IS_SRIOV_VF(xe)) {
 		ret = wait_event_interruptible_timeout(guc->ct.wq, WAIT_COND ||
-						       vf_recovery(guc), HZ * 5);
+						       vf_recovery(guc), timeout);
 	} else {
 		ret = wait_event_interruptible_timeout(q->guc->suspend_wait,
-						       WAIT_COND, HZ * 5);
+						       WAIT_COND, timeout);
 	}
 
 	if (!blocking && vf_recovery(guc) && !xe_wedged(xe))
