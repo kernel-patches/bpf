@@ -3336,7 +3336,8 @@ static int handle_indirect_tree_backref(struct btrfs_trans_handle *trans,
 		path->slots[level]--;
 
 	eb = path->nodes[level];
-	if (btrfs_node_blockptr(eb, path->slots[level]) != cur->bytenr) {
+	if (unlikely(!eb ||
+		     btrfs_node_blockptr(eb, path->slots[level]) != cur->bytenr)) {
 		btrfs_err(fs_info,
 "couldn't find block (%llu) (level %d) in tree (%llu) with key " BTRFS_KEY_FMT,
 			  cur->bytenr, level - 1, btrfs_root_id(root),
