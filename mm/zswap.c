@@ -1597,10 +1597,8 @@ static bool zswap_store_page(struct folio *folio, long index,
 	entry->swpentry = page_swpentry;
 	entry->objcg = objcg;
 	entry->referenced = true;
-	if (entry->length) {
-		INIT_LIST_HEAD(&entry->lru);
-		zswap_lru_add(entry);
-	}
+	INIT_LIST_HEAD(&entry->lru);
+	zswap_lru_add(entry);
 
 	return true;
 
