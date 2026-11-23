@@ -258,10 +258,17 @@ static void nci_add_rx_data_frag(struct nci_dev *ndev,
 
 exit:
 	if (ndev->nfc_dev->rf_mode == NFC_RF_TARGET) {
-		/* Data received in Target mode, forward to nfc core */
-		err = nfc_tm_data_received(ndev->nfc_dev, skb);
-		if (err)
-			pr_err("unable to handle received data\n");
+		/*
+		 * Data received in Target mode, forward to nfc core.  skb is
+		 * NULL when the reassembly above could not make room for the
+		 * accumulated data; there is nothing left to forward and the
+		 * core would dereference it.
+		 */
+		if (skb) {
+			err = nfc_tm_data_received(ndev->nfc_dev, skb);
+			if (err)
+				pr_err("unable to handle received data\n");
+		}
 	} else {
 		nci_data_exchange_complete(ndev, skb, conn_id, err);
 	}
