@@ -42,6 +42,8 @@ struct ring {
 	size_t page_size;
 	int map_fd;
 	bool overwrite;
+	/* created by ring__new(), not owned by a ring_buffer */
+	bool standalone;
 };
 
 struct ring_buffer {
@@ -202,6 +204,44 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 err_out:
 	ringbuf_free_ring(r);
 	return libbpf_err(err);
+}
+
+struct ring *ring__new(int map_fd, const struct ring_opts *opts)
+{
+	struct ring *r;
+	int err;
+
+	if (!OPTS_VALID(opts, ring_opts))
+		return errno = EINVAL, NULL;
+
+	r = calloc(1, sizeof(*r));
+	if (!r)
+		return errno = ENOMEM, NULL;
+
+	r->page_size = getpagesize();
+	r->standalone = true;
+
+	err = ringbuf_map_ring(r, map_fd);
+	if (err) {
+		ringbuf_free_ring(r);
+		return errno = -err, NULL;
+	}
+
+	return r;
+}
+
+void ring__free(struct ring *r)
+{
+	if (!r)
+		return;
+
+	if (!r->standalone) {
+		pr_warn("ringbuf: ring__free() called for a ring owned by ring_buffer, map fd=%d\n",
+			r->map_fd);
+		return;
+	}
+
+	ringbuf_free_ring(r);
 }
 
 void ring_buffer__free(struct ring_buffer *rb)

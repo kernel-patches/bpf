@@ -479,7 +479,9 @@ LIBBPF_1.9.0 {
 		bpf_program__load;
 		bpf_program__load_strategy;
 		bpf_program__set_load_strategy;
+		ring__free;
 		ring__invalidated;
+		ring__new;
 		ring__next;
 		ring__release;
 		ring__rewind;

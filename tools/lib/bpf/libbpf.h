@@ -1593,6 +1593,35 @@ LIBBPF_API int ring_buffer__epoll_fd(const struct ring_buffer *rb);
 LIBBPF_API struct ring *ring_buffer__ring(struct ring_buffer *rb,
 					  unsigned int idx);
 
+struct ring_opts {
+	size_t sz;
+	size_t :0;
+};
+#define ring_opts__last_field sz
+
+/**
+ * @brief **ring__new()** creates a ringbuffer object for a single
+ * BPF_MAP_TYPE_RINGBUF map, without a ringbuffer manager.
+ *
+ * The ring has no sample callback, so it can only be consumed with
+ * **ring__next()**. Free it with **ring__free()**. To wait for data, poll
+ * *map_fd*.
+ *
+ * @param map_fd File descriptor of a BPF_MAP_TYPE_RINGBUF map.
+ * @param opts Options, can be NULL.
+ * @return A ringbuffer object on success; NULL and errno set on error.
+ */
+LIBBPF_API struct ring *ring__new(int map_fd, const struct ring_opts *opts);
+
+/**
+ * @brief **ring__free()** frees a ringbuffer object created with
+ * **ring__new()**. Rings returned by **ring_buffer__ring()** are freed by
+ * **ring_buffer__free()** and must not be passed to this function.
+ *
+ * @param r A ringbuffer object, can be NULL.
+ */
+LIBBPF_API void ring__free(struct ring *r);
+
 /**
  * @brief **ring__consumer_pos()** returns the current consumer position in the
  * given ringbuffer.
