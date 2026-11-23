@@ -158,7 +158,7 @@ static int acpi_ac_battery_notify(struct notifier_block *nb,
 	return NOTIFY_OK;
 }
 
-static int __init thinkpad_e530_quirk(const struct dmi_system_id *d)
+static int __init ac_sleep_quirk(const struct dmi_system_id *d)
 {
 	ac_sleep_before_get_state_ms = 1000;
 	return 0;
@@ -173,6 +173,18 @@ static int __init ac_only_quirk(const struct dmi_system_id *d)
 /* Please keep this list alphabetically sorted */
 static const struct dmi_system_id ac_dmi_table[]  __initconst = {
 	{
+		/*
+		 * ASUS ROG Flow X13 GV301Q notifies AC on a plug-in about 400ms
+		 * before _PSR reports it online. Seen on the GV301QH, and the
+		 * GV301QE runs the same EC handler
+		 */
+		.callback = ac_sleep_quirk,
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "ROG Flow X13 GV301Q"),
+		},
+	},
+	{
 		/* Kodlix GK45 returning incorrect state */
 		.callback = ac_only_quirk,
 		.matches = {
@@ -181,7 +193,7 @@ static const struct dmi_system_id ac_dmi_table[]  __initconst = {
 	},
 	{
 		/* Lenovo Thinkpad e530, see comment in acpi_ac_notify() */
-		.callback = thinkpad_e530_quirk,
+		.callback = ac_sleep_quirk,
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "32597CG"),

@@ -289,7 +289,7 @@ static int acer_wmi_battery_probe(struct wmi_device *wdev, const void *context)
 	data->hook.add_battery = acer_battery_add;
 	data->hook.remove_battery = acer_battery_remove;
 
-	return devm_battery_hook_register(&data->wdev->dev, &data->hook);
+	return devm_acpi_battery_hook_register(&data->wdev->dev, &data->hook);
 }
 
 static const struct wmi_device_id acer_wmi_battery_id_table[] = {

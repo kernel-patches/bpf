@@ -3301,7 +3301,7 @@ static void toshiba_acpi_remove(struct platform_device *pdev)
 	}
 
 	if (dev->battery_charge_mode_supported)
-		battery_hook_unregister(&battery_hook);
+		acpi_battery_hook_unregister(&battery_hook);
 
 	if (toshiba_acpi)
 		toshiba_acpi = NULL;
@@ -3566,7 +3566,7 @@ iio_error:
 	 * set, this must be done after toshiba_acpi is assigned.
 	 */
 	if (dev->battery_charge_mode_supported)
-		battery_hook_register(&battery_hook);
+		acpi_battery_hook_register(&battery_hook);
 
 	return 0;
 
