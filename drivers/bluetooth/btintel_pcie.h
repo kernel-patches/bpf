@@ -174,8 +174,6 @@ enum {
 	BTINTEL_PCIE_HW_RFKILL_STATE_CHECK,
 	BTINTEL_PCIE_SETUP_DONE,
 	BTINTEL_PCIE_MAIL_BOX_INTR,
-	BTINTEL_PCIE_MBOX_PARSE_PENDING,
-	BTINTEL_PCIE_MBOX_PARSE_READY,
 	BTINTEL_PCIE_FATAL_ERR_POST_SETUP_PENDING,
 };
 
@@ -237,7 +235,6 @@ enum btintel_pcie_mbox_msg {
 
 /* Default interrupt timeout in msec */
 #define BTINTEL_DEFAULT_INTR_TIMEOUT_MS	3000
-#define BTINTEL_PCIE_MBOX_INTR_TIMEOUT_MS	500
 
 #define BTINTEL_PCIE_DX_TRANSITION_MAX_RETRIES	3
 
@@ -842,10 +839,6 @@ struct btintel_pcie_data {
 	struct btintel_pcie_mbox	mbox;
 	atomic64_t	last_dump_jiffies64;
 
-	/* Wait queue for mbox_worker to wait for GP0 alive interrupt */
-	wait_queue_head_t	mbox_parse_wait_q;
-	/* Timestamp captured in GP1 handler when mbox interrupt is received */
-	ktime_t	mbox_intr_ts;
 	bool		pcie_alloc_init;
 };
 

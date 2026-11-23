@@ -1986,25 +1986,6 @@ static int btintel_parse_mbox_tlv(struct btintel_pcie_data *data)
 	struct mbox_tlv *tlv;
 	struct btintel_data *cnvi_data = hci_get_priv(data->hdev);
 	u8 hw_variant = INTEL_HW_VARIANT(cnvi_data->cnvi_bt);
-	long t;
-
-	/* Wait for GP0 alive interrupt to post RX buffers */
-	t = wait_event_timeout(data->mbox_parse_wait_q,
-			       test_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags),
-			       msecs_to_jiffies(BTINTEL_PCIE_MBOX_INTR_TIMEOUT_MS));
-	if (!t) {
-		bt_dev_warn(data->hdev,
-			    "Timeout (%u ms) waiting for alive interrupt before mbox TLV parse; skipping",
-			    BTINTEL_PCIE_MBOX_INTR_TIMEOUT_MS);
-		return 0;
-	}
-	clear_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags);
-
-	if (data->log_mask & BTINTEL_PCIE_LOG_MBOX)
-		bt_dev_info(data->hdev,
-			    "mbox TLV parse started at %lld ns (%lld us after mbox interrupt)",
-			    ktime_to_ns(ktime_get()),
-			    ktime_to_us(ktime_sub(ktime_get(), data->mbox_intr_ts)));
 
 	memset(&data->dump_info, 0, sizeof(data->dump_info));
 
@@ -2288,23 +2269,12 @@ static void btintel_pcie_msix_gp1_handler(struct btintel_pcie_data *data)
 	if (target_access &&
 	    !test_and_set_bit(BTINTEL_PCIE_MAIL_BOX_INTR,
 				   &data->flags)) {
-		/* Arm the mbox<->alive handshake */
-		clear_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags);
-		set_bit(BTINTEL_PCIE_MBOX_PARSE_PENDING, &data->flags);
-		data->mbox_intr_ts = ktime_get();
-
-		if (data->log_mask & BTINTEL_PCIE_LOG_MBOX)
-			bt_dev_info(data->hdev,
-				    "mbox interrupt received at %lld ns; queuing mbox_work",
-				    ktime_to_ns(data->mbox_intr_ts));
-
 		WRITE_ONCE(data->debug_table_addr, addr);
 		WRITE_ONCE(data->debug_table_size, size);
 		if (!queue_work(data->dump_workqueue,
-				&data->mbox_work)) {
-			clear_bit(BTINTEL_PCIE_MAIL_BOX_INTR, &data->flags);
-			clear_bit(BTINTEL_PCIE_MBOX_PARSE_PENDING, &data->flags);
-		}
+				&data->mbox_work))
+			clear_bit(BTINTEL_PCIE_MAIL_BOX_INTR,
+				  &data->flags);
 	}
 
 	/* Mailbox is read, ack to FW */
@@ -2421,12 +2391,6 @@ static void btintel_pcie_msix_gp0_handler(struct btintel_pcie_data *data)
 	if (submit_rx) {
 		btintel_pcie_reset_ia(data);
 		btintel_pcie_start_rx(data);
-
-		/* Complete the mbox<->alive handshake */
-		if (test_and_clear_bit(BTINTEL_PCIE_MBOX_PARSE_PENDING, &data->flags)) {
-			set_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags);
-			wake_up(&data->mbox_parse_wait_q);
-		}
 	}
 
 	if (signal_waitq) {
@@ -4911,8 +4875,6 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 	init_waitqueue_head(&data->rfkill_wait_q);
 	data->rfkill_wait_done = false;
 
-	init_waitqueue_head(&data->mbox_parse_wait_q);
-
 	data->workqueue = alloc_ordered_workqueue(KBUILD_MODNAME, WQ_HIGHPRI);
 	if (!data->workqueue)
 		return -ENOMEM;
@@ -5260,13 +5222,6 @@ static int btintel_pcie_set_dxstate(struct btintel_pcie_data *data, u32 dxstate)
 				err = btintel_pcie_start_rx(data);
 				if (err)
 					return err;
-
-				/* Complete the mbox<->alive handshake */
-				if (test_and_clear_bit(BTINTEL_PCIE_MBOX_PARSE_PENDING,
-						       &data->flags)) {
-					set_bit(BTINTEL_PCIE_MBOX_PARSE_READY, &data->flags);
-					wake_up(&data->mbox_parse_wait_q);
-				}
 
 				return 0;
 			}
