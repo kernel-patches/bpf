@@ -3534,7 +3534,7 @@ static void set_discard_limits(struct cache *cache, struct queue_limits *limits)
 	 * cache_iterate_devices() is stacking both origin and fast device limits
 	 * but discards aren't passed to fast device, so inherit origin's limits.
 	 */
-	limits->max_hw_discard_sectors = origin_limits->max_hw_discard_sectors;
+	limits->max_hw_discard_sectors = origin_limits->max_discard_sectors;
 	limits->discard_granularity = origin_limits->discard_granularity;
 	limits->discard_alignment = origin_limits->discard_alignment;
 }

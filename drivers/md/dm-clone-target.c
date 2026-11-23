@@ -2041,7 +2041,7 @@ static void set_discard_limits(struct clone *clone, struct queue_limits *limits)
 	 * device limits but discards aren't passed to the source device, so
 	 * inherit destination's limits.
 	 */
-	limits->max_hw_discard_sectors = dest_limits->max_hw_discard_sectors;
+	limits->max_hw_discard_sectors = dest_limits->max_discard_sectors;
 	limits->discard_granularity = dest_limits->discard_granularity;
 	limits->discard_alignment = dest_limits->discard_alignment;
 	limits->max_discard_segments = dest_limits->max_discard_segments;
