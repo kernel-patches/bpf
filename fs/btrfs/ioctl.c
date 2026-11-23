@@ -284,7 +284,7 @@ int btrfs_fileattr_set(const struct mnt_idmap *idmap,
 	struct btrfs_inode *inode = BTRFS_I(d_inode(dentry));
 	struct btrfs_root *root = inode->root;
 	struct btrfs_fs_info *fs_info = root->fs_info;
-	struct btrfs_trans_handle *trans;
+	struct btrfs_trans_handle *trans = NULL;
 	unsigned int fsflags, old_fsflags;
 	int ret;
 	const char *comp = NULL;
@@ -297,15 +297,30 @@ int btrfs_fileattr_set(const struct mnt_idmap *idmap,
 	if (fileattr_has_fsx(fa))
 		return -EOPNOTSUPP;
 
+	/*
+	 * Lock the inode, flush delalloc and wait for any ordered extents
+	 * to complete. Otherwise a concurrent writeback could be modifying
+	 * the inode's flags (such as setting BTRFS_INODE_NOCOMPRESS when
+	 * dellaloc runs and we find the file's data is incompressible).
+	 * VFS already locked the inode's lock, so we only lock the mmap lock
+	 * to avoid races with mmap writes.
+	 */
+	btrfs_assert_inode_locked(inode);
+	down_write(&inode->i_mmap_lock);
+
+	ret = btrfs_wait_ordered_range(inode, 0, U64_MAX);
+	if (ret)
+		goto out;
+
 	fsflags = btrfs_mask_fsflags_for_type(&inode->vfs_inode, fa->flags);
 	old_fsflags = btrfs_inode_flags_to_fsflags(inode);
 	ret = check_fsflags(old_fsflags, fsflags);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = check_fsflags_compatible(fs_info, fsflags);
 	if (ret)
-		return ret;
+		goto out;
 
 	inode_flags = inode->flags;
 	if (fsflags & FS_SYNC_FL)
@@ -333,8 +348,10 @@ int btrfs_fileattr_set(const struct mnt_idmap *idmap,
 	if (!fa->flags_valid) {
 		/* 1 item for the inode */
 		trans = btrfs_start_transaction(root, 1);
-		if (IS_ERR(trans))
-			return PTR_ERR(trans);
+		if (IS_ERR(trans)) {
+			ret = PTR_ERR(trans);
+			goto out;
+		}
 		goto update_flags;
 	}
 
@@ -383,8 +400,10 @@ int btrfs_fileattr_set(const struct mnt_idmap *idmap,
 	if (!((fsflags ^ old_fsflags) & (FS_COMPR_FL | FS_NOCOMP_FL))) {
 		/* 1 item for the inode */
 		trans = btrfs_start_transaction(root, 1);
-		if (IS_ERR(trans))
-			return PTR_ERR(trans);
+		if (IS_ERR(trans)) {
+			ret = PTR_ERR(trans);
+			goto out;
+		}
 		goto update_flags;
 	}
 
@@ -399,8 +418,10 @@ int btrfs_fileattr_set(const struct mnt_idmap *idmap,
 	} else if (fsflags & FS_COMPR_FL) {
 		enum btrfs_compression_type comp_type;
 
-		if (IS_SWAPFILE(&inode->vfs_inode))
-			return -ETXTBSY;
+		if (IS_SWAPFILE(&inode->vfs_inode)) {
+			ret = -ETXTBSY;
+			goto out;
+		}
 
 		inode_flags |= BTRFS_INODE_COMPRESS;
 		inode_flags &= ~BTRFS_INODE_NOCOMPRESS;
@@ -431,21 +452,23 @@ int btrfs_fileattr_set(const struct mnt_idmap *idmap,
 	 * 1 for property
 	 */
 	trans = btrfs_start_transaction(root, 2);
-	if (IS_ERR(trans))
-		return PTR_ERR(trans);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		goto out;
+	}
 
 	if (comp) {
 		ret = btrfs_set_prop(trans, inode, "btrfs.compression",
 				     comp, strlen(comp), 0);
 		if (ret)
-			goto out_end_trans;
+			goto out;
 		prop_set = true;
 	} else {
 		ret = btrfs_set_prop(trans, inode, "btrfs.compression", NULL, 0, 0);
 		prop_set = (ret == 0);
 		/* If ret == -ENODATA ignore and proceed to update inode item. */
 		if (ret && ret != -ENODATA)
-			goto out_end_trans;
+			goto out;
 	}
 
 update_flags:
@@ -462,8 +485,10 @@ update_flags:
 	if (unlikely(ret && prop_set))
 		btrfs_abort_transaction(trans, ret);
 
- out_end_trans:
-	btrfs_end_transaction(trans);
+out:
+	up_write(&inode->i_mmap_lock);
+	if (!IS_ERR_OR_NULL(trans))
+		btrfs_end_transaction(trans);
 	return ret;
 }
 
