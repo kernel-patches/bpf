@@ -106,6 +106,7 @@ allOf:
           compatible:
             contains:
               enum:
+                - allwinner,sun50i-h616-spi
                 - allwinner,sun50i-r329-spi
                 - allwinner,sun55i-a523-spi
     then:
