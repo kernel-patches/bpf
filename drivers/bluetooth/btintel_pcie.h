@@ -769,6 +769,10 @@ struct btintel_pcie_data {
 	spinlock_t	hci_rx_lock;
 	/* lock to serialize IPC control register updates */
 	spinlock_t	ipc_lock;
+	/* lock to serialize HBUS_TARG_WRPTR writes against the PRPH_DEV_ADDR/
+	 * PRPH_DEV_RD target access register pair. Never sleep while held.
+	 */
+	spinlock_t	dev_mem_lock;
 
 	void __iomem	*base_addr;
 
@@ -880,9 +884,36 @@ static inline void btintel_pcie_clr_reg_bits(struct btintel_pcie_data *data,
 	iowrite32(r, data->base_addr + offset);
 }
 
+/* Caller must hold MAC access. The address/data register pair is accessed
+ * under dev_mem_lock so that it neither overlaps a HBUS_TARG_WRPTR write nor
+ * interleaves with another reader.
+ */
 static inline u32 btintel_pcie_rd_dev_mem(struct btintel_pcie_data *data,
 					  u32 addr)
 {
+	u32 val;
+
+	spin_lock(&data->dev_mem_lock);
 	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_PRPH_DEV_ADDR_REG, addr);
-	return btintel_pcie_rd_reg32(data, BTINTEL_PCIE_PRPH_DEV_RD_REG);
+	val = btintel_pcie_rd_reg32(data, BTINTEL_PCIE_PRPH_DEV_RD_REG);
+	spin_unlock(&data->dev_mem_lock);
+
+	return val;
+}
+
+static inline void btintel_pcie_wr_dev_mem(struct btintel_pcie_data *data,
+					  u32 addr, u32 val)
+{
+	spin_lock(&data->dev_mem_lock);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_PRPH_DEV_ADDR_REG, addr);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_PRPH_DEV_WR_REG, val);
+	spin_unlock(&data->dev_mem_lock);
+}
+
+static inline void btintel_pcie_wr_wrptr(struct btintel_pcie_data *data,
+					 u32 val)
+{
+	spin_lock(&data->dev_mem_lock);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_HBUS_TARG_WRPTR, val);
+	spin_unlock(&data->dev_mem_lock);
 }

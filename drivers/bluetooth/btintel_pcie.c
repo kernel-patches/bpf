@@ -540,7 +540,7 @@ static void btintel_pcie_set_tx_db(struct btintel_pcie_data *data, u16 index)
 	val = index;
 	val |= (BTINTEL_PCIE_TX_DB_VEC << 16);
 
-	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_HBUS_TARG_WRPTR, val);
+	btintel_pcie_wr_wrptr(data, val);
 }
 
 /* Copy the data to next(@tfd_index) data buffer and update the TFD(transfer
@@ -754,7 +754,7 @@ static void btintel_pcie_set_rx_db(struct btintel_pcie_data *data, u16 index)
 	val = index;
 	val |= (BTINTEL_PCIE_RX_DB_VEC << 16);
 
-	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_HBUS_TARG_WRPTR, val);
+	btintel_pcie_wr_wrptr(data, val);
 }
 
 /* Update the FRBD (free buffer descriptor) with the @frbd_index and the
@@ -1075,7 +1075,10 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 				}
 
 				BT_DBG("YoYo: CSR write [0x%08x] = 0x%08x", addr, value);
+				/* addr may be PRPH_DEV_* or HBUS_TARG_WRPTR */
+				spin_lock(&data->dev_mem_lock);
 				btintel_pcie_wr_reg32(data, addr, value);
+				spin_unlock(&data->dev_mem_lock);
 				break;
 			/* Indirect Address Access (Peripheral MAC and Device Memory) */
 			case BTINTEL_PCIE_CFGSET_PERIPH_MAC:
@@ -1089,12 +1092,7 @@ btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 					continue;
 				}
 
-				btintel_pcie_wr_reg32(data,
-						      BTINTEL_PCIE_PRPH_DEV_ADDR_REG,
-						      addr);
-				btintel_pcie_wr_reg32(data,
-						      BTINTEL_PCIE_PRPH_DEV_WR_REG,
-						      value);
+				btintel_pcie_wr_dev_mem(data, addr, value);
 				BT_DBG("YoYo: indirect write type %u addr 0x%08x value 0x%08x",
 				       config_set->config_set_type, addr, value);
 				break;
@@ -4864,6 +4862,7 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 	spin_lock_init(&data->irq_lock);
 	spin_lock_init(&data->hci_rx_lock);
 	spin_lock_init(&data->ipc_lock);
+	spin_lock_init(&data->dev_mem_lock);
 	mutex_init(&data->rfkill_doorbell_lock);
 
 	init_waitqueue_head(&data->gp0_wait_q);
