@@ -907,8 +907,15 @@ static int bpf_core_spec_match(struct bpf_core_spec *local_spec,
 	targ_spec->relo_kind = local_spec->relo_kind;
 
 	if (func_args) {
-		/* only field accesses (args->x...) of the arguments struct
-		 * have a meaning for function argument candidates
+		/* the existence of an arguments struct indicates that it is
+		 * matched against the attach target, as only libbpf and
+		 * kernel versions supporting that find a candidate for it,
+		 * allowing programs to detect that support
+		 */
+		if (local_spec->relo_kind == BPF_CORE_TYPE_EXISTS)
+			return 1;
+		/* otherwise, only field accesses (args->x...) have a meaning
+		 * for function argument candidates
 		 */
 		if (!core_relo_is_field_based(local_spec->relo_kind) ||
 		    local_spec->len < 2 || local_spec->spec[0].idx != 0)
