@@ -178,7 +178,7 @@ int bpf_sk_assign_test(struct __sk_buff *skb)
 
 	tuple = get_tuple(skb, &ipv4, &tcp);
 	if (!tuple)
-		return TC_ACT_SHOT;
+		return TC_ACT_OK;
 
 	/* Note that the verifier socket return type for bpf_skc_lookup_tcp()
 	 * differs from bpf_sk_lookup_udp(), so even though the C-level type is

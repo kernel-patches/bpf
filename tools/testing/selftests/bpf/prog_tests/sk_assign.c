@@ -199,6 +199,37 @@ prepare_addr(struct sockaddr *addr, int family, __u16 port, bool rewrite_addr)
 	}
 }
 
+static void
+run_udp_to_tcp_listener(int server_map, int family)
+{
+	struct sockaddr_storage addr;
+	char buf[] = "testing";
+	const int zero = 0;
+	int client = -1;
+	socklen_t len;
+	__s64 server;
+
+	len = family == AF_INET ? sizeof(struct sockaddr_in) :
+				  sizeof(struct sockaddr_in6);
+	prepare_addr((struct sockaddr *)&addr, family, BIND_PORT, false);
+	server = start_server_addr(SOCK_STREAM, &addr, len, NULL);
+	if (!ASSERT_GE(server, 0, "start_server_addr"))
+		return;
+	if (!ASSERT_OK(bpf_map_update_elem(server_map, &zero, &server, BPF_ANY),
+		       "update_server_map"))
+		goto out;
+
+	prepare_addr((struct sockaddr *)&addr, family, CONNECT_PORT, false);
+	client = connect_to_addr(SOCK_DGRAM, &addr, len, NULL);
+	if (ASSERT_GE(client, 0, "connect_to_addr") &&
+	    ASSERT_EQ(write(client, buf, sizeof(buf)), sizeof(buf), "write") &&
+	    ASSERT_LT(recv(client, buf, sizeof(buf), 0), 0, "recv"))
+		ASSERT_EQ(errno, ECONNREFUSED, "recv_errno");
+	close(client);
+out:
+	close(server);
+}
+
 struct test_sk_cfg {
 	const char *name;
 	int family;
@@ -254,6 +285,11 @@ void test_sk_assign(void)
 		perror("Unable to open " SERVER_MAP_PATH);
 		goto cleanup;
 	}
+
+	if (test__start_subtest("ipv4 udp to tcp listener"))
+		run_udp_to_tcp_listener(server_map, AF_INET);
+	if (test__start_subtest("ipv6 udp to tcp listener"))
+		run_udp_to_tcp_listener(server_map, AF_INET6);
 
 	for (i = 0; i < ARRAY_SIZE(tests) && !READ_ONCE(stop); i++) {
 		struct test_sk_cfg *test = &tests[i];
