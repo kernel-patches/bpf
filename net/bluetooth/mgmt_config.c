@@ -143,6 +143,11 @@ int read_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 	return ret;
 }
 
+static int page_timeout_sync(struct hci_dev *hdev, void *data)
+{
+	return hci_write_page_timeout_sync(hdev);
+}
+
 #define TO_TLV(x)		((struct mgmt_tlv *)(x))
 #define TLV_GET_LE32(tlv)	le32_to_cpu(*((__le32 *)(TO_TLV(tlv)->value)))
 #define TLV_GET_LE16(tlv)	le16_to_cpu(*((__le16 *)(TO_TLV(tlv)->value)))
@@ -349,6 +354,9 @@ int set_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 			break;
 		case 0x0007:
 			hdev->def_page_timeout = TLV_GET_LE16(buffer);
+			if (test_bit(HCI_UP, &hdev->flags))
+				hci_cmd_sync_queue(hdev, page_timeout_sync,
+						   NULL, NULL);
 			break;
 		case 0x0008:
 			hdev->sniff_min_interval = TLV_GET_LE16(buffer);

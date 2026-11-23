@@ -839,6 +839,18 @@ static void find_bis(struct hci_conn *conn, void *data)
 	d->count++;
 }
 
+static void find_pa_sync(struct hci_conn *conn, void *data)
+{
+	struct iso_list_data *d = data;
+
+	/* Ignore if BIG or PA sync doesn't match */
+	if (d->big != conn->iso_qos.bcast.big ||
+	    d->sync_handle != conn->sync_handle)
+		return;
+
+	d->count++;
+}
+
 static int hci_le_big_terminate(struct hci_dev *hdev, struct hci_conn *conn)
 {
 	struct iso_list_data *d;
@@ -856,7 +868,7 @@ static int hci_le_big_terminate(struct hci_dev *hdev, struct hci_conn *conn)
 
 	if (conn->type == PA_LINK &&
 	    test_and_clear_bit(HCI_CONN_PA_SYNC, conn->flags)) {
-		hci_conn_hash_list_flag(hdev, find_bis, PA_LINK,
+		hci_conn_hash_list_flag(hdev, find_pa_sync, PA_LINK,
 					HCI_CONN_PA_SYNC, d);
 
 		if (!d->count)

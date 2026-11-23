@@ -120,6 +120,11 @@ struct sk_buff *h4_recv_skb(struct hci_dev *hdev, u8 *alignment, u8 *padding,
 				/* Double octet variable length */
 				dlen = get_unaligned_le16(skb->data +
 							  pkts[i].loff);
+
+				/* The top two bits of the ISO length are RFU */
+				if (hci_skb_pkt_type(skb) == HCI_ISODATA_PKT)
+					dlen &= 0x3fff;
+
 				hci_skb_expect(skb) += dlen;
 
 				if (skb_tailroom(skb) < dlen) {

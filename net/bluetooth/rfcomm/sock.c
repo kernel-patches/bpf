@@ -65,7 +65,8 @@ static void rfcomm_sk_data_ready(struct rfcomm_dlc *d, struct sk_buff *skb)
 static void rfcomm_sk_state_change(struct rfcomm_dlc *d, int err)
 	__must_hold(&d->lock)
 {
-	struct sock *sk = d->owner, *parent;
+	struct sock *sk = d->owner, *parent, *parent_ref = NULL;
+	bool kill;
 
 	if (!sk)
 		return;
@@ -82,6 +83,9 @@ static void rfcomm_sk_state_change(struct rfcomm_dlc *d, int err)
 	parent = bt_sk(sk)->parent;
 	if (parent) {
 		if (d->state == BT_CLOSED) {
+			/* Keep the listener alive across unlink. */
+			sock_hold(parent);
+			parent_ref = parent;
 			sock_set_flag(sk, SOCK_ZAPPED);
 			bt_accept_unlink(sk);
 		}
@@ -95,11 +99,14 @@ static void rfcomm_sk_state_change(struct rfcomm_dlc *d, int err)
 
 	release_sock(sk);
 
-	if (parent && sock_flag(sk, SOCK_ZAPPED)) {
-		/* We have to drop DLC lock here, otherwise
-		 * rfcomm_sock_destruct() will dead lock. */
+	kill = parent && sock_flag(sk, SOCK_ZAPPED);
+	if (kill || parent_ref) {
+		/* Socket destruction takes a DLC lock. */
 		rfcomm_dlc_unlock(d);
-		rfcomm_sock_kill(sk);
+		if (kill)
+			rfcomm_sock_kill(sk);
+		if (parent_ref)
+			sock_put(parent_ref);
 		rfcomm_dlc_lock(d);
 	}
 }

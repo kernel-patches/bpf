@@ -683,6 +683,7 @@ static void _hci_cmd_sync_cancel_entry(struct hci_dev *hdev,
 
 void hci_cmd_sync_clear(struct hci_dev *hdev)
 {
+	LIST_HEAD(cancel_list);
 	struct hci_cmd_sync_work_entry *entry, *tmp;
 
 	/* cmd_work is disabled, the pending request can only time out */
@@ -690,10 +691,13 @@ void hci_cmd_sync_clear(struct hci_dev *hdev)
 	cancel_work_sync(&hdev->cmd_sync_work);
 	cancel_work_sync(&hdev->reenable_adv_work);
 
+	/* Run destroy callbacks without holding cmd_sync_work_lock. */
 	mutex_lock(&hdev->cmd_sync_work_lock);
-	list_for_each_entry_safe(entry, tmp, &hdev->cmd_sync_work_list, list)
-		_hci_cmd_sync_cancel_entry(hdev, entry, -ECANCELED);
+	list_splice_init(&hdev->cmd_sync_work_list, &cancel_list);
 	mutex_unlock(&hdev->cmd_sync_work_lock);
+
+	list_for_each_entry_safe(entry, tmp, &cancel_list, list)
+		_hci_cmd_sync_cancel_entry(hdev, entry, -ECANCELED);
 }
 
 void hci_cmd_sync_cancel(struct hci_dev *hdev, int err)
@@ -1519,10 +1523,12 @@ int hci_setup_ext_adv_instance_sync(struct hci_dev *hdev, u8 instance)
 	flags = hci_adv_instance_flags(hdev, instance);
 
 	/* If the "connectable" instance flag was not set, then choose between
-	 * ADV_IND and ADV_NONCONN_IND based on the global connectable setting.
+	 * ADV_IND and ADV_NONCONN_IND based on the global connectable setting,
+	 * unless the instance carries periodic advertising, which can only be
+	 * enabled on a non-connectable advertising set.
 	 */
 	connectable = (flags & MGMT_ADV_FLAG_CONNECTABLE) ||
-		      mgmt_get_connectable(hdev);
+		      (mgmt_get_connectable(hdev) && !(adv && adv->periodic));
 
 	if (!is_advertising_allowed(hdev, connectable)) {
 		if (instance)
@@ -3216,6 +3222,7 @@ static u8 hci_update_accept_list_sync(struct hci_dev *hdev)
 	struct conn_params *params;
 	u8 num_entries = 0;
 	bool pend_conn, pend_report;
+	bool resolve = true;
 	u8 filter_policy;
 	size_t i, n;
 	int err;
@@ -3257,6 +3264,16 @@ static u8 hci_update_accept_list_sync(struct hci_dev *hdev)
 			pa.addr_type = conn->dst_type;
 
 			rcu_read_unlock();
+
+			/* With address resolution enabled, a controller may
+			 * drop the advertising reports of an RPA it has no IRK
+			 * for instead of matching the address as it is against
+			 * the accept list. The SID the PA sync waits for then
+			 * never arrives. Match a broadcaster without an IRK by
+			 * the address it advertises from.
+			 */
+			resolve = !hci_bdaddr_is_rpa(&pa.addr, pa.addr_type) ||
+				  hci_find_irk_by_rpa(hdev, &pa.addr);
 
 			/* Clear first since there could be addresses left
 			 * behind.
@@ -3383,9 +3400,12 @@ done:
 	filter_policy = err ? 0x00 : 0x01;
 
 	/* Enable address resolution when LL Privacy is enabled. */
-	err = hci_le_set_addr_resolution_enable_sync(hdev, 0x01);
-	if (err)
-		bt_dev_err(hdev, "Unable to enable LL privacy: %d", err);
+	if (resolve) {
+		err = hci_le_set_addr_resolution_enable_sync(hdev, 0x01);
+		if (err)
+			bt_dev_err(hdev, "Unable to enable LL privacy: %d",
+				   err);
+	}
 
 	/* Resume advertising if it was paused */
 	if (ll_privacy_capable(hdev))
@@ -3912,6 +3932,20 @@ static int hci_write_auth_enable_sync(struct hci_dev *hdev)
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_WRITE_AUTH_ENABLE,
 				     sizeof(link_sec), &link_sec,
+				     HCI_CMD_TIMEOUT);
+}
+
+int hci_write_page_timeout_sync(struct hci_dev *hdev)
+{
+	__le16 timeout;
+
+	if (!hdev->def_page_timeout || !lmp_bredr_capable(hdev))
+		return 0;
+
+	timeout = cpu_to_le16(hdev->def_page_timeout);
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_WRITE_PG_TIMEOUT,
+				     sizeof(timeout), &timeout,
 				     HCI_CMD_TIMEOUT);
 }
 
@@ -4522,6 +4556,8 @@ static const struct hci_init_stage hci_init2[] = {
 	HCI_INIT(hci_read_local_ext_features_1_sync),
 	/* HCI_OP_WRITE_AUTH_ENABLE */
 	HCI_INIT(hci_write_auth_enable_sync),
+	/* HCI_OP_WRITE_PG_TIMEOUT */
+	HCI_INIT(hci_write_page_timeout_sync),
 	{}
 };
 

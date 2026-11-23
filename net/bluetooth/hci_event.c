@@ -6751,6 +6751,12 @@ static void hci_le_past_received_evt(struct hci_dev *hdev, void *data,
 		bt_dev_err(hdev,
 			   "Unable to find connection for dst %pMR sid 0x%2.2x",
 			   &ev->bdaddr, ev->sid);
+		/* No PA sync is pending, the PAST parameters are just left
+		 * set from a previous one, so terminate the sync instead of
+		 * leaving it behind in the controller.
+		 */
+		if (!ev->status)
+			hci_le_pa_term_sync(hdev, ev->sync_handle);
 		goto unlock;
 	}
 
@@ -7297,6 +7303,13 @@ static void hci_le_pa_sync_established_evt(struct hci_dev *hdev, void *data,
 	struct hci_conn *pa_sync, *conn;
 
 	bt_dev_dbg(hdev, "status 0x%2.2x", ev->status);
+
+	/* HCI_LE_Periodic_Advertising_Create_Sync_Cancel is only sent when
+	 * hci_le_pa_create_sync() times out, which create_pa_complete()
+	 * already reports.
+	 */
+	if (ev->status == HCI_ERROR_CANCELLED_BY_HOST)
+		return;
 
 	hci_dev_lock(hdev);
 	hci_store_wake_reason(hdev, &ev->bdaddr, ev->bdaddr_type);
