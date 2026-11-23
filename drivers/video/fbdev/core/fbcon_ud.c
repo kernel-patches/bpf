@@ -22,13 +22,13 @@
  * Rotation 180 degrees
  */
 
-static void ud_update_attr(u8 *dst, u8 *src, int attribute,
-				  struct vc_data *vc)
+static void ud_update_attr(unsigned char *dst, const unsigned char *src, int attribute,
+			   struct vc_data *vc)
 {
 	int i, offset = (vc->vc_font.height < 10) ? 1 : 2;
 	int width = font_glyph_pitch(vc->vc_font.width);
 	unsigned int cellsize = vc->vc_font.height * width;
-	u8 c;
+	unsigned char c;
 
 	offset = offset * width;
 
@@ -84,12 +84,13 @@ static void ud_clear(struct vc_data *vc, struct fb_info *info, int sy,
 static inline void ud_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 				    const u16 *s, u32 attr, u32 cnt,
 				    u32 d_pitch, u32 s_pitch, u32 cellsize,
-				    struct fb_image *image, u8 *buf, u8 *dst)
+				    struct fb_image *image,
+				    unsigned char *buf, u8 *dst)
 {
 	struct fbcon_par *par = info->fbcon_par;
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
 	u32 idx = vc->vc_font.width >> 3;
-	u8 *src;
+	const unsigned char *src;
 
 	while (cnt--) {
 		src = par->rotated.buf + (scr_readw(s--) & charmask) * cellsize;
@@ -116,15 +117,15 @@ static inline void ud_putcs_unaligned(struct vc_data *vc,
 				      struct fb_info *info, const u16 *s,
 				      u32 attr, u32 cnt, u32 d_pitch,
 				      u32 s_pitch, u32 cellsize,
-				      struct fb_image *image, u8 *buf,
-				      u8 *dst)
+				      struct fb_image *image,
+				      unsigned char *buf, u8 *dst)
 {
 	struct fbcon_par *par = info->fbcon_par;
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
 	u32 shift_low = 0, mod = vc->vc_font.width % 8;
 	u32 shift_high = 8;
 	u32 idx = vc->vc_font.width >> 3;
-	u8 *src;
+	const unsigned char *src;
 
 	while (cnt--) {
 		src = par->rotated.buf + (scr_readw(s--) & charmask) * cellsize;
@@ -160,9 +161,10 @@ static void ud_putcs(struct vc_data *vc, struct fb_info *info,
 	u32 buf_align = info->pixmap.buf_align - 1;
 	u32 mod = vc->vc_font.width % 8, cnt, pitch, size;
 	u32 attribute = get_attribute(info, scr_readw(s));
-	u8 *dst, *buf = NULL;
+	unsigned char *buf = NULL;
 	u32 vyres = GETVYRES(par->p, info);
 	u32 vxres = GETVXRES(par->p, info);
+	u8 *dst;
 
 	if (!par->rotated.buf)
 		return;
@@ -258,7 +260,7 @@ static void ud_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	int y = real_y(par->p, vc->state.y);
 	int attribute, use_sw = vc->vc_cursor_type & CUR_SW;
 	int err = 1, dx, dy;
-	char *src;
+	const unsigned char *src;
 	u32 vyres = GETVYRES(par->p, info);
 	u32 vxres = GETVXRES(par->p, info);
 
@@ -271,14 +273,14 @@ static void ud_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	attribute = get_attribute(info, c);
 	src = par->rotated.buf + ((c & charmask) * (w * vc->vc_font.height));
 
-	if (par->cursor_state.image.data != src ||
+	if (par->cursor_state.image.data != (const char *)src ||
 	    par->cursor_reset) {
-		par->cursor_state.image.data = src;
+		par->cursor_state.image.data = (const char *)src;
 		cursor.set |= FB_CUR_SETIMAGE;
 	}
 
 	if (attribute) {
-		u8 *dst;
+		unsigned char *dst;
 
 		dst = kmalloc_array(w, vc->vc_font.height, GFP_ATOMIC);
 		if (!dst)

@@ -23,12 +23,12 @@
  * Rotation 90 degrees
  */
 
-static void cw_update_attr(u8 *dst, u8 *src, int attribute,
-				  struct vc_data *vc)
+static void cw_update_attr(unsigned char *dst, const unsigned char *src, int attribute,
+			   struct vc_data *vc)
 {
 	int i, j, offset = (vc->vc_font.height < 10) ? 1 : 2;
 	int width = font_glyph_pitch(vc->vc_font.height);
-	u8 c, msk = ~(0xff >> offset);
+	unsigned char c, msk = ~(0xff >> offset);
 
 	for (i = 0; i < vc->vc_font.width; i++) {
 		for (j = 0; j < width; j++) {
@@ -83,12 +83,13 @@ static void cw_clear(struct vc_data *vc, struct fb_info *info, int sy,
 static inline void cw_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 				    const u16 *s, u32 attr, u32 cnt,
 				    u32 d_pitch, u32 s_pitch, u32 cellsize,
-				    struct fb_image *image, u8 *buf, u8 *dst)
+				    struct fb_image *image,
+				    unsigned char *buf, u8 *dst)
 {
 	struct fbcon_par *par = info->fbcon_par;
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
 	u32 idx = font_glyph_pitch(vc->vc_font.height);
-	u8 *src;
+	const unsigned char *src;
 
 	while (cnt--) {
 		src = par->rotated.buf + (scr_readw(s++) & charmask) * cellsize;
@@ -124,8 +125,9 @@ static void cw_putcs(struct vc_data *vc, struct fb_info *info,
 	u32 buf_align = info->pixmap.buf_align - 1;
 	u32 cnt, pitch, size;
 	u32 attribute = get_attribute(info, scr_readw(s));
-	u8 *dst, *buf = NULL;
+	unsigned char *buf = NULL;
 	u32 vxres = GETVXRES(par->p, info);
+	u8 *dst;
 
 	if (!par->rotated.buf)
 		return;
@@ -212,7 +214,7 @@ static void cw_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	int y = real_y(par->p, vc->state.y);
 	int attribute, use_sw = vc->vc_cursor_type & CUR_SW;
 	int err = 1, dx, dy;
-	char *src;
+	const unsigned char *src;
 	u32 vxres = GETVXRES(par->p, info);
 
 	if (!par->rotated.buf)
@@ -224,14 +226,14 @@ static void cw_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	attribute = get_attribute(info, c);
 	src = par->rotated.buf + ((c & charmask) * (w * vc->vc_font.width));
 
-	if (par->cursor_state.image.data != src ||
+	if (par->cursor_state.image.data != (const char *)src ||
 	    par->cursor_reset) {
-		par->cursor_state.image.data = src;
+		par->cursor_state.image.data = (const char *)src;
 		cursor.set |= FB_CUR_SETIMAGE;
 	}
 
 	if (attribute) {
-		u8 *dst;
+		unsigned char *dst;
 
 		dst = kmalloc_array(w, vc->vc_font.width, GFP_ATOMIC);
 		if (!dst)
