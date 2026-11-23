@@ -506,13 +506,14 @@ static inline __attribute_const__ int ffs(int x)
 	return __ffs(x) + 1;
 }
 
+#include <asm-generic/bitops/builtin-fls.h>
+#include <asm-generic/bitops/builtin-__fls.h>
 #else
 #include <asm-generic/bitops/ffs.h>
 #include <asm-generic/bitops/__ffs.h>
-#endif
-
 #include <asm-generic/bitops/fls.h>
 #include <asm-generic/bitops/__fls.h>
+#endif
 
 #else
 
