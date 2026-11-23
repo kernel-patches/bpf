@@ -70,8 +70,7 @@ config PINCTRL_IPQ4019
 
 config PINCTRL_IPQ5018
 	tristate "Qualcomm IPQ5018 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for
 	  the Qualcomm Technologies Inc. TLMM block found on the
@@ -265,8 +264,7 @@ config PINCTRL_MSM8952
 
 config PINCTRL_MSM8953
 	tristate "Qualcomm 8953 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm TLMM block found on the Qualcomm MSM8953 platform.
@@ -275,8 +273,7 @@ config PINCTRL_MSM8953
 
 config PINCTRL_MSM8976
 	tristate "Qualcomm 8976 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm TLMM block found on the Qualcomm MSM8976 platform.
@@ -285,8 +282,7 @@ config PINCTRL_MSM8976
 
 config PINCTRL_MSM8994
 	tristate "Qualcomm 8994 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm TLMM block found in the Qualcomm 8994 platform. The
@@ -302,8 +298,7 @@ config PINCTRL_MSM8996
 
 config PINCTRL_MSM8998
 	tristate "Qualcomm MSM8998 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm TLMM block found in the Qualcomm MSM8998 platform.
@@ -326,8 +321,7 @@ config PINCTRL_QCM2290
 
 config PINCTRL_QCS404
 	tristate "Qualcomm QCS404 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default y if ARCH_QCOM && ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  TLMM block found in the Qualcomm QCS404 platform.
@@ -467,8 +461,7 @@ config PINCTRL_SDX65
 
 config PINCTRL_SDX75
         tristate "Qualcomm SDX75 pin controller driver"
-        depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
         help
          This is the pinctrl, pinmux, pinconf and gpiolib driver for the
          Qualcomm Technologies Inc TLMM block found on the Qualcomm
