@@ -568,20 +568,13 @@ static int stmfts5_set_scan(struct stmfts_data *sdata, bool enable)
 	return 0;
 }
 
-static int stmfts_input_open(struct input_dev *dev)
+static int stmfts_start_scan(struct stmfts_data *sdata)
 {
-	struct stmfts_data *sdata = input_get_drvdata(dev);
 	int err;
 
-	err = pm_runtime_resume_and_get(&sdata->client->dev);
+	err = sdata->ops->set_scan(sdata, true);
 	if (err)
 		return err;
-
-	err = sdata->ops->set_scan(sdata, true);
-	if (err) {
-		pm_runtime_put_sync(&sdata->client->dev);
-		return err;
-	}
 
 	scoped_guard(mutex, &sdata->mutex) {
 		sdata->running = true;
@@ -604,6 +597,22 @@ static int stmfts_input_open(struct input_dev *dev)
 	}
 
 	return 0;
+}
+
+static int stmfts_input_open(struct input_dev *dev)
+{
+	struct stmfts_data *sdata = input_get_drvdata(dev);
+	int err;
+
+	err = pm_runtime_resume_and_get(&sdata->client->dev);
+	if (err)
+		return err;
+
+	err = stmfts_start_scan(sdata);
+	if (err)
+		pm_runtime_put_sync(&sdata->client->dev);
+
+	return err;
 }
 
 static void stmfts_input_close(struct input_dev *dev)
@@ -1168,8 +1177,32 @@ static int stmfts_suspend(struct device *dev)
 static int stmfts_resume(struct device *dev)
 {
 	struct stmfts_data *sdata = dev_get_drvdata(dev);
+	int err;
 
-	return stmfts_power_on(sdata);
+	err = stmfts_power_on(sdata);
+	if (err)
+		return err;
+
+	/*
+	 * stmfts_power_on() leaves the controller in sleep mode. If the
+	 * input device is open, runtime PM still considers the device
+	 * active and will not wake it up again, so redo the runtime
+	 * resume sequence and re-enable scanning here.
+	 */
+	guard(mutex)(&sdata->input->mutex);
+
+	if (!input_device_enabled(sdata->input))
+		return 0;
+
+	err = stmfts_runtime_resume(dev);
+	if (err)
+		return err;
+
+	err = stmfts_start_scan(sdata);
+	if (err)
+		return err;
+
+	return 0;
 }
 
 static const struct dev_pm_ops stmfts_pm_ops = {
