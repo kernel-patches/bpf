@@ -52,6 +52,8 @@ typedef int (*rht_obj_cmpfn_t)(struct rhashtable_compare_arg *arg,
  * @min_size: Minimum size while shrinking
  * @insecure_elasticity: Set to true to disable chain length checks
  * @automatic_shrinking: Enable automatic shrinking of tables
+ * @trylock_irqsoff: With irqs disabled insert and remove don't spin on
+ *		     the bucket lock and return -EBUSY
  * @hashfn: Hash function (default: jhash2 if !(key_len % 4), or jhash)
  * @obj_hashfn: Function to hash object
  * @obj_cmpfn: Function to compare key with object
@@ -65,6 +67,7 @@ struct rhashtable_params {
 	u16			min_size;
 	bool			insecure_elasticity;
 	bool			automatic_shrinking;
+	bool			trylock_irqsoff;
 	rht_hashfn_t		hashfn;
 	rht_obj_hashfn_t	obj_hashfn;
 	rht_obj_cmpfn_t		obj_cmpfn;

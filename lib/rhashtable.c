@@ -650,7 +650,8 @@ static void *rhashtable_try_insert(struct rhashtable *ht, const void *key,
 		} else {
 			bool inserted;
 
-			flags = rht_lock(tbl, bkt);
+			if (!rht_lock_or_busy(tbl, bkt, ht->p, &flags))
+				return ERR_PTR(-EBUSY);
 			data = rhashtable_lookup_one(ht, bkt, tbl,
 						     hash, key, obj);
 			new_tbl = rhashtable_insert_one(ht, bkt, tbl,

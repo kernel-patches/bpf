@@ -339,6 +339,32 @@ static inline unsigned long rht_lock(struct bucket_table *tbl,
 	return rht_lock_nested(tbl, bkt, 0);
 }
 
+/*
+ * A caller with irqs disabled may be inside this cpu's locked section (NMI,
+ * kprobe, tracepoint), so it only tries the lock.
+ */
+static __always_inline bool rht_lock_or_busy(struct bucket_table *tbl,
+					     struct rhash_lock_head __rcu **bkt,
+					     const struct rhashtable_params params,
+					     unsigned long *flags)
+	__cond_acquires(true, __bitlock(0, bkt))
+{
+	if (!params.trylock_irqsoff || !irqs_disabled()) {
+		*flags = rht_lock(tbl, bkt);
+		return true;
+	}
+	/* bit_spin_trylock() always succeeds on UP without DEBUG_SPINLOCK */
+	if (!IS_ENABLED(CONFIG_SMP) && !IS_ENABLED(CONFIG_DEBUG_SPINLOCK))
+		return false;
+	local_irq_save(*flags);
+	if (!bit_spin_trylock(0, (unsigned long *)bkt)) {
+		local_irq_restore(*flags);
+		return false;
+	}
+	lock_acquire_exclusive(&tbl->dep_map, 0, 1, NULL, _THIS_IP_);
+	return true;
+}
+
 static inline void rht_unlock(struct bucket_table *tbl,
 			      struct rhash_lock_head __rcu **bkt,
 			      unsigned long flags)
@@ -785,7 +811,9 @@ static __always_inline void *__rhashtable_insert_fast(
 	if (!bkt)
 		goto out;
 	pprev = NULL;
-	flags = rht_lock(tbl, bkt);
+	data = ERR_PTR(-EBUSY);
+	if (!rht_lock_or_busy(tbl, bkt, params, &flags))
+		goto out;
 
 	if (unlikely(rcu_access_pointer(tbl->future_tbl))) {
 slow_path:
@@ -1066,7 +1094,8 @@ static __always_inline int __rhashtable_remove_fast_one(
 	if (!bkt)
 		return -ENOENT;
 	pprev = NULL;
-	flags = rht_lock(tbl, bkt);
+	if (!rht_lock_or_busy(tbl, bkt, params, &flags))
+		return -EBUSY;
 
 	rht_for_each_from(he, rht_ptr(bkt, tbl, hash), tbl, hash) {
 		struct rhlist_head *list;
@@ -1149,6 +1178,7 @@ static __always_inline int __rhashtable_remove_fast(
 	 */
 	while ((err = __rhashtable_remove_fast_one(ht, tbl, obj, params,
 						   rhlist)) &&
+	       err != -EBUSY &&
 	       (tbl = rht_dereference_rcu(tbl->future_tbl, ht)))
 		;
 
