@@ -1113,8 +1113,10 @@ static int sdw_master_port_alloc(struct sdw_master_runtime *m_rt,
 	/* Iterate for number of ports to perform initialization */
 	for (i = 0; i < num_ports; i++) {
 		p_rt = sdw_port_alloc(&m_rt->port_list);
-		if (!p_rt)
+		if (!p_rt) {
+			sdw_master_port_free(m_rt);
 			return -ENOMEM;
+		}
 	}
 
 	return 0;
@@ -2063,7 +2065,8 @@ int sdw_stream_add_master(struct sdw_bus *bus,
 		if (ret)
 			goto alloc_error;
 
-		stream->m_rt_count++;
+		if (sdw_master_port_allocated(m_rt))
+			stream->m_rt_count++;
 	}
 
 	ret = sdw_master_rt_config(m_rt, stream_config);
@@ -2110,9 +2113,10 @@ int sdw_stream_remove_master(struct sdw_bus *bus,
 		if (m_rt->bus != bus)
 			continue;
 
+		if (sdw_master_port_allocated(m_rt))
+			stream->m_rt_count--;
 		sdw_master_port_free(m_rt);
 		sdw_master_rt_free(m_rt, stream);
-		stream->m_rt_count--;
 	}
 
 	if (list_empty(&stream->master_list))
