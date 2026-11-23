@@ -86,7 +86,6 @@ NUM_BLKS    = %rdx
 c           = %rcx
 d           = %r8
 e           = %rdx
-y3          = %rsi
 
 TBL   = %rdi # clobbers CTX1
 
@@ -105,14 +104,12 @@ y2    = %r15
 # Local variables (stack frame)
 XFER_SIZE = 4*8
 SRND_SIZE = 1*8
-INP_SIZE = 1*8
 INPEND_SIZE = 1*8
 CTX_SIZE = 1*8
 
 frame_XFER = 0
 frame_SRND = frame_XFER + XFER_SIZE
-frame_INP = frame_SRND + SRND_SIZE
-frame_INPEND = frame_INP + INP_SIZE
+frame_INPEND = frame_SRND + SRND_SIZE
 frame_CTX = frame_INPEND + INPEND_SIZE
 frame_size = frame_CTX + CTX_SIZE
 
@@ -162,38 +159,38 @@ frame_size = frame_CTX + CTX_SIZE
 # Do one SHA-512 round using the state a-h and \wk = W[t] + K[t].  Updates a-h
 # and rotates their aliases to match what the next round expects.
 .macro SHA512_Round wk
+	add	\wk, h		# h = h + w + k
 	mov	f, y2		# y2 = f
 	rorx	$41, e, y0	# y0 = e ror 41
 	rorx	$18, e, y1	# y1 = e ror 18
 	xor	g, y2		# y2 = f ^ g
-	add	\wk, h		# h = h + w + k
 
 	xor	y1, y0		# y0 = (e ror 41) ^ (e ror 18)
 	rorx	$14, e, y1	# y1 = e ror 14
 	and	e, y2		# y2 = (f ^ g) & e
-	add	h, d		# d = d + h + w + k
 
 	xor	y1, y0		# y0 = S1(e)
 	xor	g, y2		# y2 = Ch(e, f, g) = ((f ^ g) & e) ^ g
-	rorx	$34, a, T1	# T1 = a ror 34
+	add	y2, h		# h = h + w + k + Ch(e, f, g)
+
+	mov	b, y2		# y2 = b
+	mov	b, T1		# T1 = b
+	or	c, y2		# y2 = b | c
+	and	c, T1		# T1 = b & c
+	add	y0, h		# h = t1 = h + w + k + Ch(e, f, g) + S1(e)
+
 	rorx	$39, a, y1	# y1 = a ror 39
-	mov	a, y3		# y3 = a
+	and	a, y2		# y2 = (b | c) & a
+	rorx	$34, a, y0	# y0 = a ror 34
+	or	T1, y2		# y2 = Maj(a, b, c) = ((b | c) & a) | (b & c)
 
-	xor	T1, y1		# y1 = (a ror 39) ^ (a ror 34)
-	rorx	$28, a, T1	# T1 = a ror 28
-	or	c, y3		# y3 = a | c
+	xor	y0, y1		# y1 = (a ror 39) ^ (a ror 34)
+	rorx	$28, a, y0	# y0 = a ror 28
+	add	h, d		# d = d + t1
+	xor	y0, y1		# y1 = S0(a)
 
-	xor	T1, y1		# y1 = S0(a)
-	mov	a, T1		# T1 = a
-	and	b, y3		# y3 = (a | c) & b
-	and	c, T1		# T1 = a & c
-	add	y0, y2		# y2 = S1(e) + Ch(e, f, g)
-
-	or	T1, y3		# y3 = Maj(a, b, c) = ((a | c) & b) | (a & c)
-	add	y1, h		# h = h + w + k + S0(a)
-	add	y2, d		# d = d + t1
-	add	y2, h		# h = t1 + S0(a)
-	add	y3, h		# h = t1 + S0(a) + Maj(a, b, c)
+	add	y1, y2		# y2 = t2 = Maj(a, b, c) + S0(a)
+	add	y2, h		# h = t1 + t2
 
 	RotateState
 .endm
@@ -326,8 +323,6 @@ SYM_FUNC_START(sha512_transform_rorx)
 	vpshufb	YBSWAP, Y_\i, Y_\i
 .endr
 
-	mov	INP, frame_INP(%rsp)
-
 	# Do rounds 0..63 and compute W[16..79] (interleaved) in four loop
 	# iterations, each of which does four groups of four rounds.
 	movq	$4, frame_SRND(%rsp)
@@ -382,7 +377,6 @@ SYM_FUNC_START(sha512_transform_rorx)
 	addm	8*6(CTX2), g
 	addm	8*7(CTX2), h
 
-	mov	frame_INP(%rsp), INP
 	add	$128, INP
 	cmp	frame_INPEND(%rsp), INP
 	jne	.Lloop0
