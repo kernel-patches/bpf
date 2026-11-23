@@ -535,6 +535,13 @@ struct rxrpc_bundle {
 };
 
 /*
+ * Maximum number of out-of-band messages that may be queued against a
+ * connection.  A connection cannot make progress while a CHALLENGE is
+ * outstanding, so a deeper queue only represents a peer flooding us.
+ */
+#define RXRPC_OOB_MAX_QUEUED	4
+
+/*
  * RxRPC connection definition
  * - matched by { local, peer, epoch, conn_id, direction }
  * - each connection can only handle four simultaneous calls
@@ -575,6 +582,7 @@ struct rxrpc_connection {
 	struct list_head	proc_link;	/* link in procfs list */
 	struct list_head	link;		/* link in master connection list */
 	struct sk_buff_head	rx_queue;	/* received conn-level packets */
+	atomic_t		n_oobq;		/* Number of OOB messages queued */
 	struct page_frag_cache	tx_data_alloc;	/* Tx DATA packet allocation */
 	struct mutex		tx_data_alloc_lock;
 

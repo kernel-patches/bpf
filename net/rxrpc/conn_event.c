@@ -436,7 +436,7 @@ static bool rxrpc_post_challenge(struct rxrpc_connection *conn,
 	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
 	struct rxrpc_call *call = NULL;
 	struct rxrpc_sock *rx;
-	bool respond = false, queued = false;
+	bool respond = false, queued = false, drop = false;
 
 	sp->chall.conn =
 		rxrpc_get_connection(conn, rxrpc_conn_get_challenge_input);
@@ -471,13 +471,25 @@ static bool rxrpc_post_challenge(struct rxrpc_connection *conn,
 		return false;
 	}
 
-	if (call)
-		queued = rxrpc_notify_socket_oob(call, skb);
+	if (call) {
+		/* A connection can only make progress by answering one
+		 * CHALLENGE at a time, so don't let a peer pile an unbounded
+		 * number of them up on the socket queue.
+		 */
+		if (atomic_inc_return(&conn->n_oobq) <= RXRPC_OOB_MAX_QUEUED) {
+			queued = rxrpc_notify_socket_oob(call, skb);
+			if (!queued)
+				atomic_dec(&conn->n_oobq);
+		} else {
+			atomic_dec(&conn->n_oobq);
+			drop = true;
+		}
+	}
 	rcu_read_unlock();
 	if (call && !queued) {
 		rxrpc_put_connection(conn, rxrpc_conn_put_challenge_input);
 		sp->chall.conn = NULL;
-		return false;
+		return drop;	/* Silently consume a challenge we dropped. */
 	}
 
 	if (!call)
