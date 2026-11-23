@@ -4,6 +4,7 @@
 #define _LIB_FONTS_FONT_H
 
 #include <linux/font.h>
+#include <linux/types.h>
 
 /*
  * Font data
@@ -15,6 +16,17 @@ struct font_data {
 	unsigned int extra[FONT_EXTRA_WORDS];
 	unsigned char data[];
 } __packed;
+
+/*
+ * font_data_t and helpers
+ */
+
+static inline unsigned char *__font_data_wrbuf(font_data_t *fd)
+{
+	return (unsigned char *)fd;
+}
+
+font_data_t *__font_data_alloc(unsigned int size, gfp_t flags);
 
 /*
  * Built-in fonts
