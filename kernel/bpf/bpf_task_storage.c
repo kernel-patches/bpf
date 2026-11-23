@@ -128,13 +128,7 @@ out:
 
 static int task_storage_delete(struct task_struct *task, struct bpf_map *map)
 {
-	struct bpf_local_storage_data *sdata;
-
-	sdata = task_storage_lookup(task, map, false);
-	if (!sdata)
-		return -ENOENT;
-
-	return bpf_selem_unlink(SELEM(sdata));
+	return bpf_local_storage_delete(task, (struct bpf_local_storage_map *)map);
 }
 
 static long bpf_pid_task_storage_delete_elem(struct bpf_map *map, void *key)

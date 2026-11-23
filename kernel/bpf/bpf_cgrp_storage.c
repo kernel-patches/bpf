@@ -83,13 +83,7 @@ static long bpf_cgrp_storage_update_elem(struct bpf_map *map, void *key,
 
 static int cgroup_storage_delete(struct cgroup *cgroup, struct bpf_map *map)
 {
-	struct bpf_local_storage_data *sdata;
-
-	sdata = cgroup_storage_lookup(cgroup, map, false);
-	if (!sdata)
-		return -ENOENT;
-
-	return bpf_selem_unlink(SELEM(sdata));
+	return bpf_local_storage_delete(cgroup, (struct bpf_local_storage_map *)map);
 }
 
 static long bpf_cgrp_storage_delete_elem(struct bpf_map *map, void *key)
