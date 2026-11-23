@@ -130,8 +130,7 @@ static irqreturn_t sx8650_irq(int irq, void *handle)
 {
 	struct sx8654 *ts = handle;
 	struct device *dev = &ts->client->dev;
-	int len, i;
-	u8 stat;
+	int len, i, stat;
 	u16 x, y;
 	u16 ch;
 	u16 chdata;
@@ -141,6 +140,9 @@ static irqreturn_t sx8650_irq(int irq, void *handle)
 
 	stat = i2c_smbus_read_byte_data(ts->client, CMD_READ_REGISTER
 						    | I2C_REG_SX8650_STAT);
+
+	if (stat < 0)
+		return IRQ_HANDLED;
 
 	if (!(stat & SX8650_STAT_CONVIRQ)) {
 		dev_dbg(dev, "%s ignore stat [0x%02x]", __func__, stat);
