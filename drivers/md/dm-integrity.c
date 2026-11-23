@@ -3941,6 +3941,14 @@ static void dm_integrity_resume(struct dm_target *ti)
 		goto skip_writes;
 	}
 
+	if (unlikely(!ic->recalc_wq &&
+		     (ic->sb->flags & cpu_to_le32(SB_FLAG_RECALCULATING)))) {
+		memcpy(ic->sb, ic->sb_copy, sizeof(struct superblock));
+		DMERR("Recalculate requested, but internal_hash is not used");
+		dm_integrity_io_error(ic, "inconsistent superblock", -EINVAL);
+		goto skip_writes;
+	}
+
 	if (ic->mode == 'R')
 		goto skip_writes;
 
