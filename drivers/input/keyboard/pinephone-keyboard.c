@@ -412,17 +412,17 @@ static int ppkb_probe(struct i2c_client *client)
 		return error;
 	}
 
-	error = input_register_device(ppkb->input);
-	if (error) {
-		dev_err(dev, "Failed to register input: %d\n", error);
-		return error;
-	}
-
 	error = devm_request_threaded_irq(dev, client->irq,
 					  NULL, ppkb_irq_thread,
 					  IRQF_ONESHOT, client->name, client);
 	if (error) {
 		dev_err(dev, "Failed to request IRQ: %d\n", error);
+		return error;
+	}
+
+	error = input_register_device(ppkb->input);
+	if (error) {
+		dev_err(dev, "Failed to register input: %d\n", error);
 		return error;
 	}
 
