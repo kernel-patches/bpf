@@ -172,7 +172,7 @@ void rmi_set_attn_data(struct rmi_device *rmi_dev, unsigned long irq_status,
 	struct rmi4_attn_data attn_data;
 	void *fifo_data;
 
-	if (!drvdata->enabled)
+	if (!drvdata || !drvdata->enabled)
 		return;
 
 	fifo_data = kmemdup(data, size, GFP_ATOMIC);
