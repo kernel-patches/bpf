@@ -266,10 +266,8 @@ static int prepare_file(const char *fname, unsigned long size)
 	int fd;
 
 	fd = open(fname, O_RDWR | O_CREAT, 0664);
-	if (fd >= 0) {
-		unlink(fname);
+	if (fd >= 0)
 		ftruncate(fd, size);
-	}
 	return fd;
 }
 
@@ -329,20 +327,25 @@ TEST_F(memory_failure, clean_pagecache)
 	char *addr;
 	int ret;
 	int fs_type;
+	const char *fname = "./clean-page-cache-test-file";
 
-	fd = prepare_file("./clean-page-cache-test-file", self->page_size);
+	fd = prepare_file(fname, self->page_size);
 	if (fd < 0)
 		SKIP(return, "failed to open test file.\n");
 	fs_type = get_fs_type(fd);
 	if (!fs_has_backing_store(fs_type)) {
+		unlink(fname);
 		close(fd);
 		SKIP(return, "unsupported filesystem :%x\n", fs_type);
 	}
 
 	addr = mmap(0, self->page_size, PROT_READ | PROT_WRITE,
 		    MAP_SHARED, fd, 0);
-	if (addr == MAP_FAILED)
+	if (addr == MAP_FAILED) {
+		unlink(fname);
+		close(fd);
 		SKIP(return, "mmap failed, not enough memory.\n");
+	}
 	memset(addr, 0xce, self->page_size);
 	fsync(fd);
 
@@ -362,6 +365,7 @@ TEST_F(memory_failure, clean_pagecache)
 
 	ASSERT_EQ(munmap(addr, self->page_size), 0);
 
+	unlink(fname);
 	ASSERT_EQ(close(fd), 0);
 }
 
@@ -371,12 +375,14 @@ TEST_F(memory_failure, dirty_pagecache)
 	char *addr;
 	int ret;
 	int fs_type;
+	const char *fname = "./dirty-page-cache-test-file";
 
-	fd = prepare_file("./dirty-page-cache-test-file", self->page_size);
+	fd = prepare_file(fname, self->page_size);
 	if (fd < 0)
 		SKIP(return, "failed to open test file.\n");
 	fs_type = get_fs_type(fd);
 	if (!fs_has_backing_store(fs_type)) {
+		unlink(fname);
 		close(fd);
 		SKIP(return, "unsupported filesystem :%x\n", fs_type);
 	}
@@ -385,14 +391,18 @@ TEST_F(memory_failure, dirty_pagecache)
 	 * Remove this skip when its fsync() reports poisoned dirty data.
 	 */
 	if (fs_type == NILFS_SUPER_MAGIC && variant->type == MADV_HARD) {
+		unlink(fname);
 		close(fd);
 		SKIP(return, "nilfs2 fsync() does not report poisoned dirty data\n");
 	}
 
 	addr = mmap(0, self->page_size, PROT_READ | PROT_WRITE,
 		    MAP_SHARED, fd, 0);
-	if (addr == MAP_FAILED)
+	if (addr == MAP_FAILED) {
+		unlink(fname);
+		close(fd);
 		SKIP(return, "mmap failed, not enough memory.\n");
+	}
 	memset(addr, 0xce, self->page_size);
 
 	prepare(_metadata, self, addr);
@@ -423,6 +433,7 @@ TEST_F(memory_failure, dirty_pagecache)
 		ASSERT_EQ(ftruncate(fd, 0), 0);
 	}
 
+	unlink(fname);
 	ASSERT_EQ(close(fd), 0);
 }
 
