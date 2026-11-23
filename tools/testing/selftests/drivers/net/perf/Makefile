@@ -3,6 +3,7 @@
 TEST_PROGS := \
 	devmem.py \
 	iperf.py \
+	rr.py \
 # end of TEST_PROGS
 
 TEST_INCLUDES := \
