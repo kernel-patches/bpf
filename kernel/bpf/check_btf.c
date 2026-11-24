@@ -352,6 +352,7 @@ int bpf_check_core_relo(struct bpf_verifier_env *env,
 	struct bpf_core_ctx ctx = {
 		.log = &env->log,
 		.btf = btf,
+		.prog = prog,
 	};
 	bpfptr_t u_core_relo;
 	int err;
