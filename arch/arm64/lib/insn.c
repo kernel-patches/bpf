@@ -1444,19 +1444,16 @@ u32 aarch64_insn_gen_adr(unsigned long pc, unsigned long addr,
 			 enum aarch64_insn_adr_type type)
 {
 	u32 insn;
-	s32 offset;
+	s64 offset;
 
 	switch (type) {
 	case AARCH64_INSN_ADR_TYPE_ADR:
 		insn = aarch64_insn_get_adr_value();
-		/* The s32 offset would truncate a difference beyond 4GB */
-		if ((long)(addr - pc) != (s32)(addr - pc))
-			return AARCH64_BREAK_FAULT;
-		offset = addr - pc;
+		offset = (s64)(addr - pc);
 		break;
 	case AARCH64_INSN_ADR_TYPE_ADRP:
 		insn = aarch64_insn_get_adrp_value();
-		offset = (addr - ALIGN_DOWN(pc, SZ_4K)) >> 12;
+		offset = (s64)(addr - ALIGN_DOWN(pc, SZ_4K)) >> 12;
 		break;
 	default:
 		pr_err("%s: unknown adr encoding %d\n", __func__, type);
