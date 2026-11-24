@@ -158,9 +158,11 @@ extern struct mm_struct *mm_access(struct task_struct *task, unsigned int mode);
 
 /*
  * Remove the current tasks stale references to the old mm_struct on exit() and
- * exec(). Cleans up futexes as well.
+ * exec(). Cleans up futexes as well. A parent that sleeps in vfork() is only
+ * woken up by complete_vfork_done() once the task has left the mm.
  */
 extern void mm_exit_exec_release(struct task_struct *, struct mm_struct *);
+void complete_vfork_done(struct task_struct *tsk);
 
 #ifdef CONFIG_MEMCG
 extern void mm_update_next_owner(struct mm_struct *mm);

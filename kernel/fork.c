@@ -1428,9 +1428,20 @@ struct mm_struct *mm_access(struct task_struct *task, unsigned int mode)
 	return mm;
 }
 
-static void complete_vfork_done(struct task_struct *tsk)
+/**
+ * complete_vfork_done - wake up whoever waits for @tsk in vfork()
+ * @tsk: task that execs or exits
+ *
+ * A parent that sleeps in vfork() must not run before the child is off its
+ * mm. So this is called once @tsk has switched to its new mm in exec or has
+ * dropped its mm in exit. kthread_stop() uses this completion as well.
+ */
+void complete_vfork_done(struct task_struct *tsk)
 {
 	struct completion *vfork;
+
+	if (!tsk->vfork_done)
+		return;
 
 	task_lock(tsk);
 	vfork = tsk->vfork_done;
@@ -1465,8 +1476,8 @@ static int wait_for_vfork_done(struct task_struct *child,
  * mmput is called whenever we stop holding onto a mm_struct,
  * error success whatever.
  *
- * mm_release is called after a mm_struct has been removed
- * from the current process.
+ * mm_release is called when the current process is about to
+ * leave a mm_struct in exec or in exit. It's still on it.
  *
  * This difference is important for error handling, when we
  * only half set up a mm_struct for a new process and need to restore
@@ -1498,13 +1509,6 @@ static void mm_release(struct task_struct *tsk, struct mm_struct *mm)
 		}
 		tsk->clear_child_tid = NULL;
 	}
-
-	/*
-	 * All done, finally we can wake up parent and return this mm to him.
-	 * Also kthread_stop() uses this completion for synchronization.
-	 */
-	if (tsk->vfork_done)
-		complete_vfork_done(tsk);
 }
 
 void mm_exit_exec_release(struct task_struct *tsk, struct mm_struct *mm)

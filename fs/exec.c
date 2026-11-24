@@ -854,7 +854,6 @@ static int exec_mmap(struct linux_binprm *bprm)
 	if (!exec_state)
 		return -ENOMEM;
 
-	/* Notify parent that we're no longer interested in the old VM */
 	tsk = current;
 	old_mm = current->mm;
 	/* Clean up futexes and release the mm */
@@ -897,6 +896,8 @@ static int exec_mmap(struct linux_binprm *bprm)
 		mmdrop_lazy_tlb(active_mm);
 	}
 	futex_exec_done(tsk);
+	/* We've left the old mm so a vfork() parent can run again. */
+	complete_vfork_done(tsk);
 	return 0;
 }
 
