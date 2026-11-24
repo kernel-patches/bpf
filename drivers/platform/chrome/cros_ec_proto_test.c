@@ -611,11 +611,7 @@ static void cros_ec_proto_test_query_all_legacy_xfer_error(struct kunit *test)
 	struct ec_xfer_mock *mock;
 	int ret;
 
-	/* For cros_ec_get_proto_info() without passthru. */
-	{
-		mock = cros_kunit_ec_xfer_mock_addx(test, 0, EC_RES_INVALID_COMMAND, 0);
-		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
-	}
+	ec_dev->pkt_xfer = NULL;
 
 	/* For cros_ec_get_proto_info_legacy(). */
 	{
@@ -627,18 +623,6 @@ static void cros_ec_proto_test_query_all_legacy_xfer_error(struct kunit *test)
 	ret = cros_ec_query_all(ec_dev);
 	KUNIT_EXPECT_EQ(test, ret, -EIO);
 	KUNIT_EXPECT_EQ(test, ec_dev->proto_version, EC_PROTO_VERSION_UNKNOWN);
-
-	/* For cros_ec_get_proto_info() without passthru. */
-	{
-		mock = cros_kunit_ec_xfer_mock_next();
-		KUNIT_EXPECT_PTR_NE(test, mock, NULL);
-
-		KUNIT_EXPECT_EQ(test, mock->msg.version, 0);
-		KUNIT_EXPECT_EQ(test, mock->msg.command, EC_CMD_GET_PROTOCOL_INFO);
-		KUNIT_EXPECT_EQ(test, mock->msg.insize,
-				sizeof(struct ec_response_get_protocol_info));
-		KUNIT_EXPECT_EQ(test, mock->msg.outsize, 0);
-	}
 
 	/* For cros_ec_get_proto_info_legacy(). */
 	{
@@ -659,11 +643,7 @@ static void cros_ec_proto_test_query_all_legacy_return_error(struct kunit *test)
 	struct ec_xfer_mock *mock;
 	int ret;
 
-	/* For cros_ec_get_proto_info() without passthru. */
-	{
-		mock = cros_kunit_ec_xfer_mock_addx(test, 0, EC_RES_INVALID_COMMAND, 0);
-		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
-	}
+	ec_dev->pkt_xfer = NULL;
 
 	/* For cros_ec_get_proto_info_legacy(). */
 	{
@@ -675,18 +655,6 @@ static void cros_ec_proto_test_query_all_legacy_return_error(struct kunit *test)
 	ret = cros_ec_query_all(ec_dev);
 	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
 	KUNIT_EXPECT_EQ(test, ec_dev->proto_version, EC_PROTO_VERSION_UNKNOWN);
-
-	/* For cros_ec_get_proto_info() without passthru. */
-	{
-		mock = cros_kunit_ec_xfer_mock_next();
-		KUNIT_EXPECT_PTR_NE(test, mock, NULL);
-
-		KUNIT_EXPECT_EQ(test, mock->msg.version, 0);
-		KUNIT_EXPECT_EQ(test, mock->msg.command, EC_CMD_GET_PROTOCOL_INFO);
-		KUNIT_EXPECT_EQ(test, mock->msg.insize,
-				sizeof(struct ec_response_get_protocol_info));
-		KUNIT_EXPECT_EQ(test, mock->msg.outsize, 0);
-	}
 
 	/* For cros_ec_get_proto_info_legacy(). */
 	{
@@ -707,11 +675,7 @@ static void cros_ec_proto_test_query_all_legacy_data_error(struct kunit *test)
 	struct ec_xfer_mock *mock;
 	int ret;
 
-	/* For cros_ec_get_proto_info() without passthru. */
-	{
-		mock = cros_kunit_ec_xfer_mock_addx(test, 0, EC_RES_INVALID_COMMAND, 0);
-		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
-	}
+	ec_dev->pkt_xfer = NULL;
 
 	/* For cros_ec_get_proto_info_legacy(). */
 	{
@@ -728,18 +692,6 @@ static void cros_ec_proto_test_query_all_legacy_data_error(struct kunit *test)
 	ret = cros_ec_query_all(ec_dev);
 	KUNIT_EXPECT_EQ(test, ret, -EBADMSG);
 	KUNIT_EXPECT_EQ(test, ec_dev->proto_version, EC_PROTO_VERSION_UNKNOWN);
-
-	/* For cros_ec_get_proto_info() without passthru. */
-	{
-		mock = cros_kunit_ec_xfer_mock_next();
-		KUNIT_EXPECT_PTR_NE(test, mock, NULL);
-
-		KUNIT_EXPECT_EQ(test, mock->msg.version, 0);
-		KUNIT_EXPECT_EQ(test, mock->msg.command, EC_CMD_GET_PROTOCOL_INFO);
-		KUNIT_EXPECT_EQ(test, mock->msg.insize,
-				sizeof(struct ec_response_get_protocol_info));
-		KUNIT_EXPECT_EQ(test, mock->msg.outsize, 0);
-	}
 
 	/* For cros_ec_get_proto_info_legacy(). */
 	{
@@ -760,11 +712,7 @@ static void cros_ec_proto_test_query_all_legacy_return0(struct kunit *test)
 	struct ec_xfer_mock *mock;
 	int ret;
 
-	/* For cros_ec_get_proto_info() without passthru. */
-	{
-		mock = cros_kunit_ec_xfer_mock_addx(test, 0, EC_RES_INVALID_COMMAND, 0);
-		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
-	}
+	ec_dev->pkt_xfer = NULL;
 
 	/* For cros_ec_get_proto_info_legacy(). */
 	{
@@ -776,18 +724,6 @@ static void cros_ec_proto_test_query_all_legacy_return0(struct kunit *test)
 	ret = cros_ec_query_all(ec_dev);
 	KUNIT_EXPECT_EQ(test, ret, -EPROTO);
 	KUNIT_EXPECT_EQ(test, ec_dev->proto_version, EC_PROTO_VERSION_UNKNOWN);
-
-	/* For cros_ec_get_proto_info() without passthru. */
-	{
-		mock = cros_kunit_ec_xfer_mock_next();
-		KUNIT_EXPECT_PTR_NE(test, mock, NULL);
-
-		KUNIT_EXPECT_EQ(test, mock->msg.version, 0);
-		KUNIT_EXPECT_EQ(test, mock->msg.command, EC_CMD_GET_PROTOCOL_INFO);
-		KUNIT_EXPECT_EQ(test, mock->msg.insize,
-				sizeof(struct ec_response_get_protocol_info));
-		KUNIT_EXPECT_EQ(test, mock->msg.outsize, 0);
-	}
 
 	/* For cros_ec_get_proto_info_legacy(). */
 	{
