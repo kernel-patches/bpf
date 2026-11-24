@@ -57,6 +57,11 @@ struct stmmac_tx_info {
 	bool is_jumbo;
 };
 
+/* Number of 802.1Q priorities. This is also the number of queues that have a
+ * per-priority register (PSRQ field, Qx_TX_FLOW_CTRL) on DWMAC4/XGMAC.
+ */
+#define STMMAC_NUM_PRIO_QUEUES	8
+
 #define STMMAC_TBS_AVAIL	BIT(0)
 #define STMMAC_TBS_EN		BIT(1)
 
@@ -439,6 +444,18 @@ struct plat_stmmacenet_data *stmmac_plat_dat_alloc(struct device *dev);
 static inline bool stmmac_check_timestamp_cap(struct stmmac_priv *priv)
 {
 	return priv->dma_cap.time_stamp || priv->dma_cap.atime_stamp;
+}
+
+/* Most cores have one traffic class per queue, but newer XGMAC can have more
+ * queues than traffic classes (the number of TCs is reported by the HW
+ * feature register).
+ */
+static inline u32 stmmac_num_tc(const struct stmmac_priv *priv)
+{
+	if (!priv->dma_cap.numtc)
+		return priv->plat->tx_queues_to_use;
+
+	return min_t(u32, priv->dma_cap.numtc, priv->plat->tx_queues_to_use);
 }
 
 static inline bool stmmac_xdp_is_enabled(struct stmmac_priv *priv)

@@ -686,12 +686,16 @@ static struct stmmac_rfs_entry *tc_find_rfs(struct stmmac_priv *priv,
 
 static void tc_update_vlan_prio(struct stmmac_priv *priv, u8 prio)
 {
-	u8 prios[MTL_MAX_RX_QUEUES] = {};
+	u8 prios[STMMAC_NUM_PRIO_QUEUES] = {};
 	struct stmmac_rfs_entry *entry;
+	unsigned int rx_cnt = min_t(unsigned int, priv->plat->rx_queues_to_use,
+				    STMMAC_NUM_PRIO_QUEUES);
 	unsigned int queue, i;
 
-	/* Restore platform assignments with the same precedence as setup. */
-	for (queue = 0; queue < priv->plat->rx_queues_to_use; queue++) {
+	/* Restore platform assignments with the same precedence as setup. Only
+	 * the first STMMAC_NUM_PRIO_QUEUES queues have a PSRQ field.
+	 */
+	for (queue = 0; queue < rx_cnt; queue++) {
 		if (!priv->plat->rx_queues_cfg[queue].use_prio)
 			continue;
 
@@ -706,19 +710,19 @@ static void tc_update_vlan_prio(struct stmmac_priv *priv, u8 prio)
 	 */
 	list_for_each_entry(entry, &priv->vlan_prio, vlan_node) {
 		/* The RX queue count may have been reduced with ethtool. */
-		if (entry->tc >= priv->plat->rx_queues_to_use)
+		if (entry->tc >= rx_cnt)
 			continue;
 
-		for (queue = 0; queue < priv->plat->rx_queues_to_use; queue++)
+		for (queue = 0; queue < rx_cnt; queue++)
 			prios[queue] &= ~entry->vlan_prio;
 		prios[entry->tc] |= entry->vlan_prio;
 	}
 
 	/* Install the new assignment before clearing the previous queue. */
-	for (queue = 0; queue < priv->plat->rx_queues_to_use; queue++)
+	for (queue = 0; queue < rx_cnt; queue++)
 		if (prios[queue] & prio)
 			stmmac_rx_queue_prio(priv, priv->hw, prios[queue], queue);
-	for (queue = 0; queue < priv->plat->rx_queues_to_use; queue++)
+	for (queue = 0; queue < rx_cnt; queue++)
 		if (!(prios[queue] & prio))
 			stmmac_rx_queue_prio(priv, priv->hw, prios[queue], queue);
 }
@@ -749,7 +753,8 @@ static int tc_add_vlan_flow(struct stmmac_priv *priv,
 	if (!dissector_uses_key(dissector, FLOW_DISSECTOR_KEY_VLAN))
 		return -EINVAL;
 
-	if (tc < 0 || tc >= priv->plat->rx_queues_to_use) {
+	if (tc < 0 || tc >= priv->plat->rx_queues_to_use ||
+	    tc >= STMMAC_NUM_PRIO_QUEUES) {
 		netdev_err(priv->dev, "Invalid traffic class\n");
 		return -EINVAL;
 	}

@@ -1023,7 +1023,11 @@ static int stmmac_legacy_serdes_power_up(struct stmmac_priv *priv)
 static void stmmac_mac_flow_ctrl(struct stmmac_priv *priv, u32 duplex,
 				 unsigned int flow_ctrl)
 {
-	u8 tx_cnt = priv->plat->tx_queues_to_use;
+	/* The per-queue flow control registers exist for the first
+	 * STMMAC_NUM_PRIO_QUEUES queues only.
+	 */
+	u8 tx_cnt = min_t(u8, priv->plat->tx_queues_to_use,
+			  STMMAC_NUM_PRIO_QUEUES);
 
 	stmmac_flow_ctrl(priv, priv->hw, duplex, flow_ctrl, priv->pause_time,
 			 tx_cnt);
@@ -3531,11 +3535,11 @@ static void stmmac_set_rings_length(struct stmmac_priv *priv)
  */
 static void stmmac_set_tx_queue_weight(struct stmmac_priv *priv)
 {
-	u8 tx_queues_count = priv->plat->tx_queues_to_use;
+	u8 num_tc = stmmac_num_tc(priv);
 	u32 weight;
 	u8 queue;
 
-	for (queue = 0; queue < tx_queues_count; queue++) {
+	for (queue = 0; queue < num_tc; queue++) {
 		weight = priv->plat->tx_queues_cfg[queue].weight;
 		stmmac_set_mtl_tx_queue_weight(priv, priv->hw, weight, queue);
 	}
@@ -3548,12 +3552,12 @@ static void stmmac_set_tx_queue_weight(struct stmmac_priv *priv)
  */
 void stmmac_configure_cbs(struct stmmac_priv *priv)
 {
-	u8 tx_queues_count = priv->plat->tx_queues_to_use;
+	u8 num_tc = stmmac_num_tc(priv);
 	u32 mode_to_use;
 	u8 queue;
 
 	/* queue 0 is reserved for legacy traffic */
-	for (queue = 1; queue < tx_queues_count; queue++) {
+	for (queue = 1; queue < num_tc; queue++) {
 		mode_to_use = priv->plat->tx_queues_cfg[queue].mode_to_use;
 		if (mode_to_use == MTL_QUEUE_DCB)
 			continue;
@@ -3591,7 +3595,8 @@ static void stmmac_rx_queue_dma_chan_map(struct stmmac_priv *priv)
  */
 static void stmmac_mac_config_rx_queues_prio(struct stmmac_priv *priv)
 {
-	u8 rx_queues_count = priv->plat->rx_queues_to_use;
+	u8 rx_queues_count = min_t(u8, priv->plat->rx_queues_to_use,
+				   STMMAC_NUM_PRIO_QUEUES);
 	u8 queue;
 	u32 prio;
 
@@ -3611,9 +3616,10 @@ static void stmmac_mac_config_rx_queues_prio(struct stmmac_priv *priv)
  */
 static void stmmac_mac_config_tx_queues_prio(struct stmmac_priv *priv)
 {
-	int i;
+	u32 num_tc = stmmac_num_tc(priv);
+	u32 i;
 
-	for (i = 0; i < priv->plat->tx_queues_to_use; i++)
+	for (i = 0; i < num_tc; i++)
 		stmmac_tx_queue_prio(priv, priv->hw,
 				     priv->xmit_qdisc.prio[i], i);
 }
