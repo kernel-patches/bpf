@@ -11158,7 +11158,7 @@ __bpf_kfunc struct task_struct *scx_bpf_dsq_peek(u64 dsq_id,
 		return NULL;
 	}
 
-	return rcu_dereference(dsq->first_task);
+	return rcu_dereference_all(dsq->first_task);
 }
 
 /**
@@ -11899,8 +11899,6 @@ __bpf_kfunc struct task_struct *scx_bpf_cpu_curr(s32 cpu, const struct bpf_prog_
 {
 	struct scx_sched *sch;
 
-	guard(rcu)();
-
 	sch = scx_prog_sched(aux);
 	if (unlikely(!sch))
 		return NULL;
@@ -11908,7 +11906,7 @@ __bpf_kfunc struct task_struct *scx_bpf_cpu_curr(s32 cpu, const struct bpf_prog_
 	if (!scx_cpu_valid(sch, cpu, NULL))
 		return NULL;
 
-	return rcu_dereference(cpu_rq(cpu)->donor);
+	return rcu_dereference_all(cpu_rq(cpu)->donor);
 }
 
 /**
@@ -11924,15 +11922,13 @@ __bpf_kfunc struct task_struct *scx_bpf_cid_curr(s32 cid, const struct bpf_prog_
 	struct scx_sched *sch;
 	s32 cpu;
 
-	guard(rcu)();
-
 	sch = scx_prog_sched(aux);
 	if (unlikely(!sch))
 		return NULL;
 	cpu = scx_cid_to_cpu(sch, cid);
 	if (cpu < 0)
 		return NULL;
-	return rcu_dereference(cpu_rq(cpu)->donor);
+	return rcu_dereference_all(cpu_rq(cpu)->donor);
 }
 
 /**
@@ -11949,7 +11945,7 @@ __bpf_kfunc struct task_struct *scx_bpf_tid_to_task(u64 tid)
 	struct sched_ext_entity *scx;
 
 	if (!scx_tid_to_task_enabled()) {
-		struct scx_sched *sch = rcu_dereference(scx_root);
+		struct scx_sched *sch = rcu_dereference_all(scx_root);
 
 		if (sch)
 			scx_error(sch, "scx_bpf_tid_to_task() called without SCX_OPS_TID_TO_TASK");
