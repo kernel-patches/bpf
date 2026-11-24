@@ -24,7 +24,7 @@ static const struct {
 	{ "bpf_testmod_retval_no_effect",	"-28,-22,-16" },
 	{ "bpf_testmod_retval_err_ptr",		"-34,-14" },
 	{ "bpf_testmod_retval_no_branch",	"-14" },
-	{ "bpf_testmod_retval_pointer",		"" },
+	{ "bpf_testmod_retval_pointer",		"-22" },
 	{ "bpf_testmod_retval_argument",	"" },
 	{ "bpf_testmod_retval_notrace",		"" },
 	{ "bpf_testmod_retval_variadic",	"" },
