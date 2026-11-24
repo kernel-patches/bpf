@@ -886,7 +886,7 @@ int mac802154_process_association_req(struct ieee802154_sub_if_data *sdata,
 	/* Ensure this child is not already associated (might happen due to
 	 * retransmissions), in this case drop the ex structure.
 	 */
-	tmp.mode = child->mode;
+	tmp.mode = IEEE802154_EXTENDED_ADDRESSING;
 	tmp.extended_addr = child->extended_addr;
 	exchild = cfg802154_device_is_child(wpan_dev, &tmp);
 	if (exchild) {
