@@ -198,6 +198,129 @@ about the field that should be relocated on the target kernel. i.e, if the
 ``struct task_struct`` due to some new field added in front of it, libbpf will
 automatically adjust the actual offset to the proper value.
 
+CO-RE for Function Arguments
+----------------------------
+
+The context of tp_btf, fentry, fexit, fmod_ret, fsession and LSM programs is
+an array of u64 slots holding the arguments of the attach target, followed by
+its return value where the program can see it. ``BPF_PROG()`` accesses them by
+position, so when a traced function or tracepoint gains, loses or reorders
+parameters, programs silently read the wrong argument.
+
+Instead, a program can describe the arguments it needs as a struct named
+``bpf_func_args___<flavor>``, with members named after the parameters of the
+attach target, in any order, and ``__ret`` for the return value:
+
+.. code-block:: C
+
+    struct bpf_func_args___unlink {
+            struct filename *name;
+            int dfd;
+            int __ret;
+    } __attribute__((preserve_access_index));
+
+    SEC("fexit/filename_unlinkat")
+    int handle(struct bpf_func_args___unlink *ctx)
+    {
+            if (bpf_core_field_exists(ctx->dfd))
+                    bpf_printk("dfd %d", ctx->dfd);
+            bpf_printk("%s %d", ctx->name->name, ctx->__ret);
+            return 0;
+    }
+
+libbpf relocates accesses to such a struct against a struct of the same name
+describing the context of the program, with one member per parameter of its
+attach target, followed by ``__ret`` for fexit, fmod_ret, fsession and LSM
+programs. For tp_btf programs, the parameters are those of the tracepoint,
+without its ``void *__data``. Otherwise, these are ordinary CO-RE relocations,
+and the usual CO-RE helpers apply. The struct can be accessed through a
+typedef, and an anonymous struct takes its name from its typedef, but
+type-based relocations such as ``bpf_core_type_exists()`` need a named struct.
+
+Common cases:
+
+- *Only some parameters are needed, regardless of their order.* Declare
+  just those, in any order: each member is relocated to wherever its
+  parameter is, so parameters added, removed or reordered elsewhere in the
+  signature don't matter.
+
+- *A parameter may not exist on every kernel.* ``bpf_core_field_exists()``
+  tells whether it does. Unguarded accesses to a missing parameter fail to
+  load. Likewise, ``__ret`` only exists where the program sees the return
+  value.
+
+- *A parameter is renamed across kernels.* Declare both names in the same
+  struct, and read whichever exists:
+
+  .. code-block:: C
+
+    if (bpf_core_field_exists(ctx->new_name))
+            val = ctx->new_name;
+    else
+            val = ctx->old_name;
+
+- *A parameter's type varies across kernels.* Declare it once, with the
+  same name, and:
+
+  - for an unsigned integer whose width varies, declare it at the widest
+    width and read it as usual: the load is resized to the parameter, and
+    zero-extended;
+  - for a signed integer whose width varies, declare it at the widest width
+    and read it with ``BPF_CORE_READ_BITFIELD(ctx, name)``, which loads it
+    at its size on the running kernel and sign-extends it. A plain access
+    with another size is poisoned, as for other CO-RE relocations;
+  - for a pointer to a type that varies, read it as usual, as any two
+    pointers are compatible, and tell which type it points to with
+    ``bpf_core_type_matches()`` on another flavor of the struct, with just
+    that parameter:
+
+    .. code-block:: C
+
+      struct bpf_func_args___new {
+              struct mm_area *vma;
+      } __attribute__((preserve_access_index));
+
+      if (bpf_core_type_matches(struct bpf_func_args___new))
+              mm = (struct mm_area *)ctx->vma;
+      else
+              vma = (struct vm_area_struct *)ctx->vma;
+
+    ``bpf_core_type_matches()`` also compares the names of integer types,
+    which may differ between the compiler and kernel BTF (e.g., ``long`` and
+    ``long int``), so such flavors should only describe the parameters that
+    differ;
+  - for other changes, e.g. a struct passed by value becoming a pointer,
+    the parameter isn't compatible with one of the declarations, so it
+    appears to be missing from it: declare a flavor of the struct for each
+    variant, and read through the one where ``bpf_core_field_exists()``
+    finds it.
+
+Limitations:
+
+- with libbpf applying the relocations, accesses need to be made from the
+  entry program (or inlined code), as a shared subprogram has no single
+  attach target;
+- the attach target needs to be in kernel BTF: programs attached to BPF
+  programs and multi-attach programs are not supported;
+- with libbpf applying the relocations, the type, attach type and attach
+  target of the program can't be changed once the object is prepared, as
+  the relocations depend on them;
+- ``bpf_core_type_id_kernel()`` can't be used on such a struct, as it only
+  exists in libbpf;
+- tracepoints only have parameter names in kernel BTF from Linux 5.10, so on
+  older kernels all arguments of tp_btf programs appear to be missing;
+- clang can turn loads of members of the same size in alternative branches,
+  e.g. for a renamed parameter, into one load from the context plus an
+  offset set in each branch, and ``BPF_CORE_READ_BITFIELD()`` loads from
+  the context plus an offset too. The verifier only allows such loads from
+  Linux 7.1, so these programs can fail to load on older kernels;
+- on big-endian targets, arguments smaller than 8 bytes are at the end of
+  their slot, where older kernels don't allow context loads, so programs
+  reading them fail to load there;
+- light skeletons need the kernel to support these relocations. Older
+  kernels and older libbpf versions find no candidate, so all arguments
+  appear to be missing.
+
 Getting Started with libbpf
 ===========================
 
