@@ -46,7 +46,6 @@ netdev_features_t                   gso_partial_features        read_mostly     
 unsigned_int                        min_mtu
 unsigned_int                        max_mtu
 unsigned_short                      type
-unsigned_char                       min_header_len
 unsigned_char                       name_assign_type
 int                                 group
 struct net_device_stats             stats

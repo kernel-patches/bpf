@@ -1929,7 +1929,6 @@ enum netdev_reg_state {
  *	@max_mtu:	Interface Maximum MTU value
  *	@type:		Interface hardware type
  *	@hard_header_len: Maximum hardware header length.
- *	@min_header_len:  Minimum hardware header length
  *
  *	@needed_headroom: Extra headroom the hardware may need, but not in all
  *			  cases can this be guaranteed
@@ -2292,7 +2291,6 @@ struct net_device {
 	unsigned int		min_mtu;
 	unsigned int		max_mtu;
 	unsigned short		type;
-	unsigned char		min_header_len;
 	unsigned char		name_assign_type;
 
 	int			group;
