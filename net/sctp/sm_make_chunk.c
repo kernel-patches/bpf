@@ -2525,10 +2525,14 @@ int sctp_process_init(struct sctp_association *asoc, struct sctp_chunk *chunk,
 	return 1;
 
 clean_up:
-	/* Release the transport structures. */
+	/*
+	 * Release non-ACTIVE transports except the one for peer_addr.
+	 * Keep it so sctp_assoc_rm_peer() always has a replacement path.
+	 */
 	list_for_each_safe(pos, temp, &asoc->peer.transport_addr_list) {
 		transport = list_entry(pos, struct sctp_transport, transports);
-		if (transport->state != SCTP_ACTIVE)
+		if (transport->state != SCTP_ACTIVE &&
+		    !sctp_cmp_addr_exact(&transport->ipaddr, peer_addr))
 			sctp_assoc_rm_peer(asoc, transport);
 	}
 
