@@ -2263,6 +2263,7 @@ static struct v4l2_ctrl *v4l2_ctrl_new(struct v4l2_ctrl_handler *hdl,
 		ctrl->p_array = kvzalloc(2 * elems * elem_size, GFP_KERNEL);
 		if (!ctrl->p_array) {
 			kvfree(ctrl);
+			handler_set_err(hdl, -ENOMEM);
 			return NULL;
 		}
 		data = ctrl->p_array;
