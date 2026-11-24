@@ -63,7 +63,7 @@ static __always_inline u32 get_alt_insn(struct alt_instr *alt, __le32 *insnptr, 
 	insn = le32_to_cpu(*altinsnptr);
 
 	if (aarch64_insn_is_branch_imm(insn)) {
-		s32 offset = aarch64_get_branch_offset(insn);
+		s64 offset = aarch64_get_branch_offset(insn);
 		unsigned long target;
 
 		target = (unsigned long)altinsnptr + offset;

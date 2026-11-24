@@ -1506,24 +1506,36 @@ s32 aarch64_get_branch_offset(u32 insn)
 	BUG();
 }
 
+static u32 branch_imm_set(enum aarch64_insn_imm_type type, s64 range,
+			  u32 insn, s64 offset)
+{
+	if ((offset & 0x3) || offset < -range || offset >= range) {
+		pr_err("%s: invalid offset %lld\n", __func__, offset);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	return aarch64_insn_encode_immediate(type, insn, offset >> 2);
+}
+
 /*
  * Encode the displacement of a branch in the imm field and return the
- * updated instruction.
+ * updated instruction, or AARCH64_BREAK_FAULT for a displacement out of
+ * the reach of the branch.
  */
-u32 aarch64_set_branch_offset(u32 insn, s32 offset)
+u32 aarch64_set_branch_offset(u32 insn, s64 offset)
 {
 	if (aarch64_insn_is_b(insn) || aarch64_insn_is_bl(insn))
-		return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_26, insn,
-						     offset >> 2);
+		return branch_imm_set(AARCH64_INSN_IMM_26, SZ_128M, insn,
+				      offset);
 
 	if (aarch64_insn_is_cbz(insn) || aarch64_insn_is_cbnz(insn) ||
 	    aarch64_insn_is_bcond(insn))
-		return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_19, insn,
-						     offset >> 2);
+		return branch_imm_set(AARCH64_INSN_IMM_19, SZ_1M, insn,
+				      offset);
 
 	if (aarch64_insn_is_tbz(insn) || aarch64_insn_is_tbnz(insn))
-		return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_14, insn,
-						     offset >> 2);
+		return branch_imm_set(AARCH64_INSN_IMM_14, SZ_32K, insn,
+				      offset);
 
 	/* Unhandled instruction */
 	BUG();
