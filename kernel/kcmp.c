@@ -94,6 +94,34 @@ static int kcmp_lock(struct rw_semaphore *l1, struct rw_semaphore *l2)
 	return err;
 }
 
+static void kcmp_unlock_tasks(struct task_struct *task1,
+			      struct task_struct *task2)
+{
+	kcmp_unlock(&task1->signal->exec_update_lock,
+		    &task2->signal->exec_update_lock);
+}
+
+static int kcmp_lock_tasks(struct task_struct *task1,
+			   struct task_struct *task2)
+{
+	int ret;
+
+	ret = kcmp_lock(&task1->signal->exec_update_lock,
+			&task2->signal->exec_update_lock);
+	if (ret)
+		return ret;
+
+	/*
+	 * One should have enough rights to inspect task details.
+	 */
+	if (ptrace_may_access(task1, PTRACE_MODE_READ_REALCREDS) &&
+	    ptrace_may_access(task2, PTRACE_MODE_READ_REALCREDS))
+		return 0;
+
+	kcmp_unlock_tasks(task1, task2);
+	return -EPERM;
+}
+
 #ifdef CONFIG_EPOLL
 static int kcmp_epoll_target(struct task_struct *task1,
 			     struct task_struct *task2,
@@ -102,18 +130,26 @@ static int kcmp_epoll_target(struct task_struct *task1,
 {
 	struct file *filp, *filp_epoll, *filp_tgt;
 	struct kcmp_epoll_slot slot;
+	int ret;
 
+	/* This may fault so do it before exec_update_lock is taken. */
 	if (copy_from_user(&slot, uslot, sizeof(slot)))
 		return -EFAULT;
 
-	filp = get_file_raw_ptr(task1, idx1);
-	if (!filp)
-		return -EBADF;
+	ret = kcmp_lock_tasks(task1, task2);
+	if (ret)
+		return ret;
 
-	filp_epoll = fget_task(task2, slot.efd);
+	filp = get_file_raw_ptr(task1, idx1);
+	filp_epoll = filp ? fget_task(task2, slot.efd) : NULL;
+	kcmp_unlock_tasks(task1, task2);
 	if (!filp_epoll)
 		return -EBADF;
 
+	/*
+	 * This takes the epoll mutex which is held across page faults. So
+	 * do it after exec_update_lock has been dropped.
+	 */
 	filp_tgt = get_epoll_tfile_raw_ptr(filp_epoll, slot.tfd, slot.toff);
 	fput(filp_epoll);
 
@@ -153,18 +189,15 @@ SYSCALL_DEFINE5(kcmp, pid_t, pid1, pid_t, pid2, int, type,
 
 	rcu_read_unlock();
 
-	/*
-	 * One should have enough rights to inspect task details.
-	 */
-	ret = kcmp_lock(&task1->signal->exec_update_lock,
-			&task2->signal->exec_update_lock);
-	if (ret)
-		goto err;
-	if (!ptrace_may_access(task1, PTRACE_MODE_READ_REALCREDS) ||
-	    !ptrace_may_access(task2, PTRACE_MODE_READ_REALCREDS)) {
-		ret = -EPERM;
-		goto err_unlock;
+	/* Takes and drops exec_update_lock itself. */
+	if (type == KCMP_EPOLL_TFD) {
+		ret = kcmp_epoll_target(task1, task2, idx1, (void __user *)idx2);
+		goto out;
 	}
+
+	ret = kcmp_lock_tasks(task1, task2);
+	if (ret)
+		goto out;
 
 	switch (type) {
 	case KCMP_FILE: {
@@ -203,18 +236,13 @@ SYSCALL_DEFINE5(kcmp, pid_t, pid1, pid_t, pid2, int, type,
 		ret = -EOPNOTSUPP;
 #endif
 		break;
-	case KCMP_EPOLL_TFD:
-		ret = kcmp_epoll_target(task1, task2, idx1, (void *)idx2);
-		break;
 	default:
 		ret = -EINVAL;
 		break;
 	}
 
-err_unlock:
-	kcmp_unlock(&task1->signal->exec_update_lock,
-		    &task2->signal->exec_update_lock);
-err:
+	kcmp_unlock_tasks(task1, task2);
+out:
 	put_task_struct(task1);
 	put_task_struct(task2);
 
