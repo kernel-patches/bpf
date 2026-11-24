@@ -19598,21 +19598,31 @@ X:	Documentation/networking/j1939.rst
 X:	Documentation/networking/mac80211-injection.rst
 X:	Documentation/networking/mac80211_hwsim/
 X:	Documentation/networking/regulatory.rst
+X:	include/linux/netfilter*
+X:	include/linux/netfilter/
 X:	include/net/bluetooth/
 X:	include/net/cfg80211.h
 X:	include/net/ieee80211_radiotap.h
 X:	include/net/iw_handler.h
 X:	include/net/mac80211.h
+X:	include/net/netfilter/
 X:	include/net/wext.h
+X:	include/uapi/linux/netfilter*
+X:	include/uapi/linux/netfilter/
+X:	net/*/netfilter.c
+X:	net/*/netfilter/
 X:	net/9p/
 X:	net/batman-adv/
 X:	net/bluetooth/
+X:	net/bridge/br_netfilter*.c
 X:	net/can/
 X:	net/ceph/
 X:	net/mac80211/
+X:	net/netfilter/
 X:	net/rfkill/
 X:	net/wireless/
 X:	tools/testing/selftests/net/can/
+X:	tools/testing/selftests/net/netfilter/
 
 NETWORKING [IOAM]
 M:	Justin Iurman <justin.iurman@gmail.com>
