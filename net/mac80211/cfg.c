@@ -986,9 +986,9 @@ static int ieee80211_config_default_beacon_key(struct wiphy *wiphy,
 	return 0;
 }
 
-void sta_set_rate_info_tx(struct sta_info *sta,
-			  const struct ieee80211_tx_rate *rate,
-			  struct rate_info *rinfo)
+void sta_set_rate_info_tx(const struct ieee80211_tx_rate *rate,
+			  struct rate_info *rinfo,
+			  const struct ieee80211_supported_band *sband)
 {
 	rinfo->flags = 0;
 	if (rate->flags & IEEE80211_TX_RC_MCS) {
@@ -999,9 +999,6 @@ void sta_set_rate_info_tx(struct sta_info *sta,
 		rinfo->mcs = ieee80211_rate_get_vht_mcs(rate);
 		rinfo->nss = ieee80211_rate_get_vht_nss(rate);
 	} else {
-		struct ieee80211_supported_band *sband;
-
-		sband = ieee80211_get_sband(sta->sdata);
 		WARN_ON_ONCE(sband && !sband->bitrates);
 		if (sband && sband->bitrates)
 			rinfo->legacy = sband->bitrates[rate->idx].bitrate;
