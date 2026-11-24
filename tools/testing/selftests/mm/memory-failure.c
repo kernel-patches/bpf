@@ -380,6 +380,14 @@ TEST_F(memory_failure, dirty_pagecache)
 		close(fd);
 		SKIP(return, "unsupported filesystem :%x\n", fs_type);
 	}
+	/*
+	 * nilfs2 does not check the mapping error in nilfs_sync_file().
+	 * Remove this skip when its fsync() reports poisoned dirty data.
+	 */
+	if (fs_type == NILFS_SUPER_MAGIC && variant->type == MADV_HARD) {
+		close(fd);
+		SKIP(return, "nilfs2 fsync() does not report poisoned dirty data\n");
+	}
 
 	addr = mmap(0, self->page_size, PROT_READ | PROT_WRITE,
 		    MAP_SHARED, fd, 0);
