@@ -153,8 +153,9 @@ static int goodix_enter_upload_mode(struct i2c_client *client)
 	return 0;
 }
 
-static int goodix_start_firmware(struct i2c_client *client)
+static int goodix_start_firmware(struct goodix_ts_data *ts)
 {
+	struct i2c_client *client = ts->client;
 	int error;
 	u8 val;
 
@@ -165,6 +166,10 @@ static int goodix_start_firmware(struct i2c_client *client)
 
 	/* Release SS51 & DSP */
 	error = goodix_i2c_write_u8(client, GOODIX_REG_MISCTL_SWRST, 0x00);
+	if (error)
+		return error;
+
+	error = goodix_int_sync(ts);
 	if (error)
 		return error;
 
@@ -249,11 +254,7 @@ static int goodix_firmware_upload(struct goodix_ts_data *ts)
 	if (error)
 		return error;
 
-	error = goodix_start_firmware(ts->client);
-	if (error)
-		return error;
-
-	error = goodix_int_sync(ts);
+	error = goodix_start_firmware(ts);
 	if (error)
 		return error;
 
