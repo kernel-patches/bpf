@@ -185,6 +185,8 @@ bool ipc_protocol_suspend(struct iosm_protocol *ipc_protocol)
 
 	if (!ipc_pm_wait_for_device_active(&ipc_protocol->pm)) {
 		ipc_uevent_send(ipc_protocol->pcie->dev, UEVENT_MDM_TIMEOUT);
+		/* The modem wasn't told to sleep, we are still active */
+		ipc_protocol->pm.host_pm_state = IPC_MEM_HOST_PM_ACTIVE;
 		goto err;
 	}
 
