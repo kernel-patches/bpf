@@ -64,7 +64,7 @@ void free_kallsyms_local(struct ksyms *ksyms)
 static struct ksyms *load_kallsyms_local_common(ksym_cmp_t cmp_cb)
 {
 	FILE *f;
-	char func[256], buf[256];
+	char func[512], buf[1024];
 	char symbol;
 	void *addr;
 	int ret;
@@ -81,7 +81,7 @@ static struct ksyms *load_kallsyms_local_common(ksym_cmp_t cmp_cb)
 	}
 
 	while (fgets(buf, sizeof(buf), f)) {
-		if (sscanf(buf, "%p %c %s", &addr, &symbol, func) != 3)
+		if (sscanf(buf, "%p %c %511s", &addr, &symbol, func) != 3)
 			break;
 		if (!addr)
 			continue;
