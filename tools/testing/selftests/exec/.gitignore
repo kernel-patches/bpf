@@ -16,6 +16,7 @@ null-argv
 !load_address.c
 /recursion-depth
 /set-exec
+/update-lock-fault
 xxxxxxxx*
 pipe
 S_I*.test
