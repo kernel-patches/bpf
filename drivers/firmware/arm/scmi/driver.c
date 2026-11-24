@@ -1852,7 +1852,7 @@ static int __scmi_iterator_run(void *iter, unsigned int *start, unsigned int *en
 	const struct scmi_protocol_handle *ph;
 	struct scmi_iterator_state *st;
 	struct scmi_iterator *i;
-	unsigned int n;
+	unsigned int n, i_start, i_max, i_returned;
 
 	if (!iter)
 		return -EINVAL;
@@ -1862,10 +1862,15 @@ static int __scmi_iterator_run(void *iter, unsigned int *start, unsigned int *en
 	ph = i->ph;
 	st = &i->state;
 
+	/* Initialize iteration counters used to check consistency */
+	i_max = 0;
+	i_returned = 0;
+	i_start = start ? *start : 0;
+
 	/* Reinitialize state for next run */
 	st->num_returned = 0;
 	st->num_remaining = 0;
-	st->desc_index = start ? *start : 0;
+	st->desc_index = i_start;
 
 	do {
 		iops->prepare_message(i->msg, st->desc_index, i->priv);
@@ -1883,10 +1888,33 @@ static int __scmi_iterator_run(void *iter, unsigned int *start, unsigned int *en
 		if (ret)
 			return ret;
 
-		if (!st->num_returned && st->num_remaining) {
-			dev_err(ph->dev, "Inconsistent multi-part reply.\n");
+		/*
+		 * Initialize max items expectation for this run based on
+		 * values returned on first message exchange: during the
+		 * following iterations consistency will be validated against
+		 * these parameters, so as to spot FW anomalies like sudden
+		 * termination or unplausible conditions.
+		 */
+		if (!i_max)
+			i_max = i_start + st->num_returned + st->num_remaining;
+
+		if ((!st->num_returned && st->num_remaining) ||
+		    (i_max != i_start + i_returned + st->num_returned + st->num_remaining)) {
+			dev_err(ph->dev,
+				"Inconsistent multi-part reply. max:%u  i_max:%u  i_start:%u  i_returned:%u  returned:%u  remaining:%u  desc_index:%u\n",
+				st->max_resources, i_max, i_start, i_returned,
+				st->num_returned, st->num_remaining,
+				st->desc_index);
 			return -EINVAL;
 		}
+
+		dev_dbg(ph->dev,
+			"Multi-part - max:%u  i_max:%u  i_start:%u  i_returned:%u  returned:%u  remaining:%u  desc_index:%u\n",
+			st->max_resources, i_max, i_start, i_returned,
+			st->num_returned, st->num_remaining, st->desc_index);
+
+		/* Account for last batch received */
+		i_returned += st->num_returned;
 
 		if (st->num_returned > st->max_resources - st->desc_index) {
 			dev_err(ph->dev,
