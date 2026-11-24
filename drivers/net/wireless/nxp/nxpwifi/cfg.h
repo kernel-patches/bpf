@@ -141,6 +141,7 @@ static inline bool nxpwifi_radio_ctl_valid(enum nxpwifi_radio_ctl v)
 
 #define NXPWIFI_MAX_STA_NUM		3
 #define NXPWIFI_MAX_UAP_NUM		3
+#define NXPWIFI_MAX_P2P_NUM		1
 
 #define NXPWIFI_A_BAND_START_FREQ	5000
 
@@ -155,6 +156,7 @@ static inline bool nxpwifi_radio_ctl_valid(enum nxpwifi_radio_ctl v)
 enum nxpwifi_bss_type {
 	NXPWIFI_BSS_TYPE_STA = 0,
 	NXPWIFI_BSS_TYPE_UAP = 1,
+	NXPWIFI_BSS_TYPE_P2P = 2,
 	NXPWIFI_BSS_TYPE_ANY = 0xff,
 };
 
@@ -261,6 +263,7 @@ struct nxpwifi_histogram_data {
 struct nxpwifi_iface_comb {
 	u8 sta_intf;
 	u8 uap_intf;
+	u8 p2p_intf;
 };
 
 struct nxpwifi_radar_params {

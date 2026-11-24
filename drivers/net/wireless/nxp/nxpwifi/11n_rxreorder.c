@@ -677,14 +677,16 @@ static void nxpwifi_update_ampdu_rxwinsize(struct nxpwifi_adapter *adapter,
 		priv = adapter->priv[i];
 		rx_win_size = priv->add_ba_param.rx_win_size;
 		if (coex_flag) {
-			if (priv->bss_type == NXPWIFI_BSS_TYPE_STA)
+			if (priv->bss_type == NXPWIFI_BSS_TYPE_STA ||
+			    priv->bss_type == NXPWIFI_BSS_TYPE_P2P)
 				priv->add_ba_param.rx_win_size =
 					NXPWIFI_STA_COEX_AMPDU_DEF_RXWINSIZE;
 			if (priv->bss_type == NXPWIFI_BSS_TYPE_UAP)
 				priv->add_ba_param.rx_win_size =
 					NXPWIFI_UAP_COEX_AMPDU_DEF_RXWINSIZE;
 		} else {
-			if (priv->bss_type == NXPWIFI_BSS_TYPE_STA)
+			if (priv->bss_type == NXPWIFI_BSS_TYPE_STA ||
+			    priv->bss_type == NXPWIFI_BSS_TYPE_P2P)
 				priv->add_ba_param.rx_win_size =
 					NXPWIFI_STA_AMPDU_DEF_RXWINSIZE;
 			if (priv->bss_type == NXPWIFI_BSS_TYPE_UAP)

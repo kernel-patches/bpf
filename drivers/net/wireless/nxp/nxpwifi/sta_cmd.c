@@ -144,7 +144,11 @@ nxpwifi_ret_sta_get_hw_spec(struct nxpwifi_private *priv,
 				break;
 			case TLV_TYPE_MAX_CONN:
 				max_conn = (struct hw_spec_max_conn *)tlv;
+				adapter->max_p2p_conn = max_conn->max_p2p_conn;
 				adapter->max_sta_conn = max_conn->max_sta_conn;
+				nxpwifi_dbg(adapter, INFO,
+					    "max p2p connections: %u\n",
+					    adapter->max_p2p_conn);
 				nxpwifi_dbg(adapter, INFO,
 					    "max sta connections: %u\n",
 					    adapter->max_sta_conn);
@@ -2379,6 +2383,21 @@ nxpwifi_ret_sta_802_11_hs_cfg(struct nxpwifi_private *priv,
 }
 
 static int
+nxpwifi_cmd_sta_p2p_mode_cfg(struct nxpwifi_private *priv,
+			     struct host_cmd_ds_command *cmd,
+			     u16 cmd_no, void *data_buf,
+			     u16 cmd_action, u32 cmd_type)
+{
+	cmd->command = cpu_to_le16(cmd_no);
+	cmd->params.mode_cfg.action = cpu_to_le16(cmd_action);
+	cmd->params.mode_cfg.mode = cpu_to_le16(get_unaligned((u16 *)data_buf));
+	cmd->size = cpu_to_le16(sizeof(struct host_cmd_ds_p2p_mode_cfg) +
+				S_DS_GEN);
+
+	return 0;
+}
+
+static int
 nxpwifi_cmd_sta_set_bss_mode(struct nxpwifi_private *priv,
 			     struct host_cmd_ds_command *cmd,
 			     u16 cmd_no, void *data_buf,
@@ -3160,6 +3179,9 @@ static const struct nxpwifi_cmd_entry cmd_table_sta[] = {
 	{.cmd_no = HOST_CMD_802_11_HS_CFG_ENH,
 	.prepare_cmd = nxpwifi_cmd_sta_802_11_hs_cfg,
 	.cmd_resp = nxpwifi_ret_sta_802_11_hs_cfg},
+	{.cmd_no = HOST_CMD_P2P_MODE_CFG,
+	.prepare_cmd = nxpwifi_cmd_sta_p2p_mode_cfg,
+	.cmd_resp = NULL},
 	{.cmd_no = HOST_CMD_CAU_REG_ACCESS,
 	.prepare_cmd = nxpwifi_cmd_sta_reg_access,
 	.cmd_resp = nxpwifi_ret_sta_reg_access},

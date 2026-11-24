@@ -1154,6 +1154,12 @@ int nxpwifi_mgmt_frame_reg(struct nxpwifi_private *priv, u32 mask)
 				0, &mask, false);
 }
 
+int nxpwifi_set_p2p_mode(struct nxpwifi_private *priv, u16 mode, bool sync)
+{
+	return nxpwifi_send_cmd(priv, HOST_CMD_P2P_MODE_CFG, HOST_ACT_GEN_SET,
+				0, &mode, sync);
+}
+
 int nxpwifi_set_uap_sys_cfg(struct nxpwifi_private *priv,
 			    struct nxpwifi_uap_bss_param *cfg)
 {
@@ -1248,6 +1254,11 @@ int nxpwifi_ap_sys_reset(struct nxpwifi_private *priv)
 {
 	return nxpwifi_send_cmd(priv, HOST_CMD_APCMD_SYS_RESET,
 				HOST_ACT_GEN_SET, 0, NULL, true);
+}
+
+int nxpwifi_cfg80211_deinit_p2p(struct nxpwifi_private *priv)
+{
+	return nxpwifi_set_p2p_mode(priv, NXPWIFI_P2P_MODE_DISABLE, true);
 }
 
 int nxpwifi_ap_get_sta_list(struct nxpwifi_private *priv)

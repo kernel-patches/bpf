@@ -816,7 +816,8 @@ void nxpwifi_update_ampdu_txwinsize(struct nxpwifi_adapter *adapter)
 		priv = adapter->priv[i];
 		tx_win_size = priv->add_ba_param.tx_win_size;
 
-		if (priv->bss_type == NXPWIFI_BSS_TYPE_STA)
+		if (priv->bss_type == NXPWIFI_BSS_TYPE_STA ||
+		    priv->bss_type == NXPWIFI_BSS_TYPE_P2P)
 			priv->add_ba_param.tx_win_size =
 				NXPWIFI_STA_AMPDU_DEF_TXWINSIZE;
 

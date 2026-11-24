@@ -385,6 +385,7 @@ enum NXPWIFI_802_11_PRIVACY_FILTER {
 #define HOST_CMD_ROBUST_COEX                       0x00e0
 #define HOST_CMD_802_11_PS_MODE_ENH                0x00e4
 #define HOST_CMD_802_11_HS_CFG_ENH                 0x00e5
+#define HOST_CMD_P2P_MODE_CFG                      0x00eb
 #define HOST_CMD_CAU_REG_ACCESS                    0x00ed
 #define HOST_CMD_SET_BSS_MODE                      0x00f7
 #define HOST_CMD_PCIE_DESC_DETAILS                 0x00fa
@@ -433,6 +434,13 @@ enum ENH_PS_MODES {
 	GET_PS = 0,
 	EN_AUTO_PS = 0xff,
 	DIS_AUTO_PS = 0xfe,
+};
+
+enum nxpwifi_p2p_mode {
+	NXPWIFI_P2P_MODE_DISABLE = 0,
+	NXPWIFI_P2P_MODE_DEVICE = 1,
+	NXPWIFI_P2P_MODE_GO = 2,
+	NXPWIFI_P2P_MODE_CLIENT = 3,
 };
 
 enum nxpwifi_channel_flags {
@@ -1138,6 +1146,7 @@ struct hw_spec_api_rev {
 struct hw_spec_max_conn {
 	struct nxpwifi_ie_types_header header;
 	u8 reserved;
+	u8 max_p2p_conn;
 	u8 max_sta_conn;
 } __packed;
 
@@ -2369,6 +2378,12 @@ struct host_cmd_ds_802_11_net_monitor {
 	struct nxpwifi_ie_types_chan_band_list monitor_chan;
 } __packed;
 
+/* P2P mode configuration command. */
+struct host_cmd_ds_p2p_mode_cfg {
+	__le16 action;
+	__le16 mode;
+} __packed;
+
 struct host_cmd_twt_cfg {
 	__le16 action;
 	__le16 sub_id;
@@ -2449,6 +2464,7 @@ struct host_cmd_ds_command {
 		struct host_cmd_11ax_cmd ax_cmd;
 		struct host_cmd_ds_802_11_net_monitor net_mon;
 		struct host_cmd_twt_cfg twt_cfg;
+		struct host_cmd_ds_p2p_mode_cfg mode_cfg;
 	} params;
 } __packed;
 
