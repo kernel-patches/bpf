@@ -468,8 +468,14 @@ TEST_F(memory_failure, dirty_pagecache)
 	 * fails. Close while the file is still linked. Remove the name
 	 * before checking the result so a failed close cannot leave a file
 	 * for the next test.
+	 *
+	 * With a virtiofs upper, overlayfs can also report -EIO from close()
+	 * after fsync() has reported the poisoned dirty page. Accept this
+	 * second error only for the hard-poison test and only if it is -EIO.
 	 */
 	ret = close(fd);
+	if (ret < 0 && variant->type == MADV_HARD)
+		ret = errno == EIO ? 0 : ret;
 	unlink(fname);
 	ASSERT_EQ(ret, 0);
 }
