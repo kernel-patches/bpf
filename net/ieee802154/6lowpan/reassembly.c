@@ -103,6 +103,9 @@ static int lowpan_frag_queue(struct lowpan_frag_queue *fq,
 	offset = lowpan_802154_cb(skb)->d_offset << 3;
 	end = lowpan_802154_cb(skb)->d_size;
 
+	if (!skb->len || offset > end || skb->len > end - offset)
+		goto err;
+
 	/* Is this the final fragment? */
 	if (offset + skb->len == end) {
 		/* If we already have some bits beyond end
