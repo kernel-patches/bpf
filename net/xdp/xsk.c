@@ -606,18 +606,6 @@ out:
 }
 EXPORT_SYMBOL(xsk_tx_peek_desc);
 
-static u32 xsk_tx_peek_release_fallback(struct xsk_buff_pool *pool, u32 max_entries)
-{
-	struct xdp_desc *descs = pool->tx_descs;
-	u32 nb_pkts = 0;
-
-	while (nb_pkts < max_entries && xsk_tx_peek_desc(pool, &descs[nb_pkts]))
-		nb_pkts++;
-
-	xsk_tx_release(pool);
-	return nb_pkts;
-}
-
 static void xsk_tx_commit_batch(struct xsk_buff_pool *pool,
 				struct xsk_tx_batch *batch)
 {
@@ -764,11 +752,6 @@ u32 xsk_tx_peek_release_desc_batch(struct xsk_buff_pool *pool, u32 nb_pkts)
 		goto out;
 
 	umem_shared = !list_is_singular(&pool->xsk_tx_list);
-
-	if (umem_shared && !(pool->umem->flags & XDP_UMEM_SG_FLAG)) {
-		rcu_read_unlock();
-		return xsk_tx_peek_release_fallback(pool, nb_pkts);
-	}
 
 	/* This is the backpressure mechanism for the Tx path. Try to
 	 * reserve space in the completion queue for all packets, but
