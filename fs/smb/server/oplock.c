@@ -487,7 +487,7 @@ int opinfo_write_to_read(struct oplock_info *opinfo)
 	      opinfo->level == SMB2_OPLOCK_LEVEL_EXCLUSIVE)) {
 		pr_err("bad oplock(0x%x)\n", opinfo->level);
 		if (opinfo->is_lease)
-			pr_err("lease state(0x%x)\n", lease->state);
+			pr_err("lease state(0x%x)\n", le32_to_cpu(lease->state));
 		return -EINVAL;
 	}
 	opinfo->level = SMB2_OPLOCK_LEVEL_II;
@@ -528,7 +528,7 @@ int opinfo_write_to_none(struct oplock_info *opinfo)
 	      opinfo->level == SMB2_OPLOCK_LEVEL_EXCLUSIVE)) {
 		pr_err("bad oplock(0x%x)\n", opinfo->level);
 		if (opinfo->is_lease)
-			pr_err("lease state(0x%x)\n", lease->state);
+			pr_err("lease state(0x%x)\n", le32_to_cpu(lease->state));
 		return -EINVAL;
 	}
 	opinfo->level = SMB2_OPLOCK_LEVEL_NONE;
@@ -552,7 +552,7 @@ int opinfo_read_to_none(struct oplock_info *opinfo)
 	if (opinfo->level != SMB2_OPLOCK_LEVEL_II) {
 		pr_err("bad oplock(0x%x)\n", opinfo->level);
 		if (opinfo->is_lease)
-			pr_err("lease state(0x%x)\n", lease->state);
+			pr_err("lease state(0x%x)\n", le32_to_cpu(lease->state));
 		return -EINVAL;
 	}
 	opinfo->level = SMB2_OPLOCK_LEVEL_NONE;
@@ -574,7 +574,8 @@ int lease_read_to_write(struct oplock_info *opinfo)
 	struct lease *lease = opinfo->o_lease;
 
 	if (!(lease->state & SMB2_LEASE_READ_CACHING_LE)) {
-		ksmbd_debug(OPLOCK, "bad lease state(0x%x)\n", lease->state);
+		ksmbd_debug(OPLOCK, "bad lease state(0x%x)\n",
+			    le32_to_cpu(lease->state));
 		return -EINVAL;
 	}
 
@@ -596,7 +597,8 @@ static int lease_none_upgrade(struct oplock_info *opinfo, __le32 new_state)
 	struct lease *lease = opinfo->o_lease;
 
 	if (!(lease->state == SMB2_LEASE_NONE_LE)) {
-		ksmbd_debug(OPLOCK, "bad lease state(0x%x)\n", lease->state);
+		ksmbd_debug(OPLOCK, "bad lease state(0x%x)\n",
+			    le32_to_cpu(lease->state));
 		return -EINVAL;
 	}
 

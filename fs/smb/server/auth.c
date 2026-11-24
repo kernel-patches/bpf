@@ -670,7 +670,7 @@ static void generate_smb3encryptionkey(struct ksmbd_conn *conn,
 		     sess->smb3decryptionkey, SMB3_ENC_DEC_KEY_SIZE);
 
 	ksmbd_debug(AUTH, "generated SMB3 encryption/decryption keys\n");
-	ksmbd_debug(AUTH, "Cipher type   %d\n", conn->cipher_type);
+	ksmbd_debug(AUTH, "Cipher type   %d\n", le16_to_cpu(conn->cipher_type));
 	ksmbd_debug(AUTH, "Session Id    %llu\n", sess->id);
 }
 

@@ -1661,7 +1661,7 @@ static void decode_encrypt_ctxt(struct ksmbd_conn *conn,
 		    pneg_ctxt->Ciphers[i] == SMB2_ENCRYPTION_AES256_CCM ||
 		    pneg_ctxt->Ciphers[i] == SMB2_ENCRYPTION_AES256_GCM) {
 			ksmbd_debug(SMB, "Cipher ID = 0x%x\n",
-				    pneg_ctxt->Ciphers[i]);
+				    le16_to_cpu(pneg_ctxt->Ciphers[i]));
 			conn->cipher_type = pneg_ctxt->Ciphers[i];
 			break;
 		}
@@ -1776,7 +1776,7 @@ static void decode_sign_cap_ctxt(struct ksmbd_conn *conn,
 		if (pneg_ctxt->SigningAlgorithms[i] == SIGNING_ALG_HMAC_SHA256_LE ||
 		    pneg_ctxt->SigningAlgorithms[i] == SIGNING_ALG_AES_CMAC_LE) {
 			ksmbd_debug(SMB, "Signing Algorithm ID = 0x%x\n",
-				    pneg_ctxt->SigningAlgorithms[i]);
+				    le16_to_cpu(pneg_ctxt->SigningAlgorithms[i]));
 			conn->signing_negotiated = true;
 			conn->signing_algorithm =
 				pneg_ctxt->SigningAlgorithms[i];
@@ -2015,7 +2015,7 @@ int smb2_handle_negotiate(struct ksmbd_work *work)
 						 get_rfc1002_len(work->request_buf));
 		if (status != STATUS_SUCCESS) {
 			pr_err("deassemble_neg_contexts error(0x%x)\n",
-			       status);
+			       le32_to_cpu(status));
 			rsp->hdr.Status = status;
 			rc = -EINVAL;
 			kfree(conn->preauth_info);
@@ -3338,7 +3338,8 @@ int smb2_tree_disconnect(struct ksmbd_work *work)
 	WORK_BUFFERS(work, req, rsp);
 
 	if (!tcon) {
-		ksmbd_debug(SMB, "Invalid tid %d\n", req->hdr.Id.SyncId.TreeId);
+		ksmbd_debug(SMB, "Invalid tid %d\n",
+			    le32_to_cpu(req->hdr.Id.SyncId.TreeId));
 
 		rsp->hdr.Status = STATUS_NETWORK_NAME_DELETED;
 		err = -ENOENT;
@@ -3425,7 +3426,8 @@ int smb2_session_logoff(struct ksmbd_work *work)
 	ksmbd_session_rpc_clear_list(sess);
 
 	if (ksmbd_tree_conn_session_logoff(sess)) {
-		ksmbd_debug(SMB, "Invalid tid %d\n", req->hdr.Id.SyncId.TreeId);
+		ksmbd_debug(SMB, "Invalid tid %d\n",
+			    le32_to_cpu(req->hdr.Id.SyncId.TreeId));
 		rsp->hdr.Status = STATUS_NETWORK_NAME_DELETED;
 		smb2_set_err_rsp(work);
 		err = -ENOENT;
@@ -4974,7 +4976,7 @@ resolve_path:
 	    S_ISDIR(d_inode(path.dentry)->i_mode) &&
 	    !(req->CreateOptions & FILE_DELETE_ON_CLOSE_LE)) {
 		ksmbd_debug(SMB, "open() argument is a directory: %s, %x\n",
-			    name, req->CreateOptions);
+			    name, le32_to_cpu(req->CreateOptions));
 		rsp->hdr.Status = STATUS_FILE_IS_A_DIRECTORY;
 		rc = -EIO;
 		goto err_out;
@@ -5373,7 +5375,7 @@ resolve_path:
 			req_op_level = smb2_map_lease_to_oplock(lc->req_state);
 			ksmbd_debug(SMB,
 				    "lease req for(%s) req oplock state 0x%x, lease state 0x%x\n",
-				    name, req_op_level, lc->req_state);
+				    name, req_op_level, le32_to_cpu(lc->req_state));
 			rc = find_same_lease_key(conn, fp->f_ci, lc);
 			if (rc)
 				goto err_out1;
@@ -5627,7 +5629,7 @@ resolve_path:
 		struct create_context *lease_ccontext;
 
 		ksmbd_debug(SMB, "lease granted on(%s) lease state 0x%x\n",
-			    name, opinfo->o_lease->state);
+			    name, le32_to_cpu(opinfo->o_lease->state));
 		rsp->OplockLevel = SMB2_OPLOCK_LEVEL_LEASE;
 
 		lease_ccontext = (struct create_context *)rsp->Buffer;
@@ -5839,7 +5841,7 @@ err_out2:
 			}
 		}
 		smb2_set_err_rsp(work);
-		ksmbd_debug(SMB, "Error response: %x\n", rsp->hdr.Status);
+		ksmbd_debug(SMB, "Error response: %x\n", le32_to_cpu(rsp->hdr.Status));
 	}
 
 	if (dh_info.replay)
@@ -7121,7 +7123,7 @@ static int smb2_get_ea(struct ksmbd_work *work, struct ksmbd_file *fp,
 
 	if (!(fp->daccess & FILE_READ_EA_LE)) {
 		pr_err("Not permitted to read ext attr : 0x%x\n",
-		       fp->daccess);
+		       le32_to_cpu(fp->daccess));
 		return -EACCES;
 	}
 
@@ -7286,7 +7288,7 @@ static int get_file_basic_info(struct smb2_query_info_rsp *rsp,
 
 	if (!(fp->daccess & FILE_READ_ATTRIBUTES_LE)) {
 		pr_err("no right to read the attributes : 0x%x\n",
-		       fp->daccess);
+		       le32_to_cpu(fp->daccess));
 		return -EACCES;
 	}
 
@@ -7393,7 +7395,7 @@ static int get_file_all_info(struct ksmbd_work *work,
 
 	if (!(fp->daccess & FILE_READ_ATTRIBUTES_LE)) {
 		ksmbd_debug(SMB, "no right to read the attributes : 0x%x\n",
-			    fp->daccess);
+			    le32_to_cpu(fp->daccess));
 		return -EACCES;
 	}
 
@@ -7749,7 +7751,7 @@ static int get_file_network_open_info(struct smb2_query_info_rsp *rsp,
 
 	if (!(fp->daccess & FILE_READ_ATTRIBUTES_LE)) {
 		pr_err("no right to read the attributes : 0x%x\n",
-		       fp->daccess);
+		       le32_to_cpu(fp->daccess));
 		return -EACCES;
 	}
 
@@ -7855,7 +7857,7 @@ static int get_file_attribute_tag_info(struct smb2_query_info_rsp *rsp,
 
 	if (!(fp->daccess & FILE_READ_ATTRIBUTES_LE)) {
 		pr_err("no right to read the attributes : 0x%x\n",
-		       fp->daccess);
+		       le32_to_cpu(fp->daccess));
 		return -EACCES;
 	}
 
@@ -7888,7 +7890,7 @@ static int find_file_posix_info(struct ksmbd_work *work,
 
 	if (!(fp->daccess & FILE_READ_ATTRIBUTES_LE)) {
 		pr_err("no right to read the attributes : 0x%x\n",
-		       fp->daccess);
+		       le32_to_cpu(fp->daccess));
 		return -EACCES;
 	}
 
@@ -9205,7 +9207,7 @@ static int set_rename_info(struct ksmbd_work *work, struct ksmbd_file *fp,
 			   unsigned int buf_len)
 {
 	if (!(fp->daccess & FILE_DELETE_LE)) {
-		pr_err("no right to delete : 0x%x\n", fp->daccess);
+		pr_err("no right to delete : 0x%x\n", le32_to_cpu(fp->daccess));
 		return -EACCES;
 	}
 
@@ -9227,7 +9229,7 @@ static int set_file_disposition_info(struct ksmbd_work *work,
 	int err;
 
 	if (!(fp->daccess & FILE_DELETE_LE)) {
-		pr_err("no right to delete : 0x%x\n", fp->daccess);
+		pr_err("no right to delete : 0x%x\n", le32_to_cpu(fp->daccess));
 		return -EACCES;
 	}
 
@@ -9362,7 +9364,7 @@ static int smb2_set_info_file(struct ksmbd_work *work, struct ksmbd_file *fp,
 
 		file_info = (struct smb2_file_link_info *)buffer;
 		if (file_info->ReplaceIfExists && !(fp->daccess & FILE_DELETE_LE)) {
-			pr_err("no right to delete : 0x%x\n", fp->daccess);
+			pr_err("no right to delete : 0x%x\n", le32_to_cpu(fp->daccess));
 			return -EACCES;
 		}
 
@@ -9382,7 +9384,7 @@ static int smb2_set_info_file(struct ksmbd_work *work, struct ksmbd_file *fp,
 	{
 		if (!(fp->daccess & FILE_WRITE_EA_LE)) {
 			pr_err("Not permitted to write ext  attr: 0x%x\n",
-			       fp->daccess);
+			       le32_to_cpu(fp->daccess));
 			return -EACCES;
 		}
 
@@ -10081,7 +10083,7 @@ int smb2_read(struct ksmbd_work *work)
 		goto out;
 
 	if (!(fp->daccess & (FILE_READ_DATA_LE | FILE_READ_ATTRIBUTES_LE))) {
-		pr_err("Not permitted to read : 0x%x\n", fp->daccess);
+		pr_err("Not permitted to read : 0x%x\n", le32_to_cpu(fp->daccess));
 		err = -EACCES;
 		goto out;
 	}
@@ -10553,7 +10555,7 @@ int smb2_write(struct ksmbd_work *work)
 	}
 
 	if (!(fp->daccess & (FILE_WRITE_DATA_LE | FILE_APPEND_DATA_LE))) {
-		pr_err("Not permitted to write : 0x%x\n", fp->daccess);
+		pr_err("Not permitted to write : 0x%x\n", le32_to_cpu(fp->daccess));
 		err = -EACCES;
 		goto out;
 	}
@@ -12802,7 +12804,8 @@ static void smb21_lease_break_ack(struct ksmbd_work *work)
 		rsp->hdr.Status = STATUS_REQUEST_NOT_ACCEPTED;
 		ksmbd_debug(OPLOCK,
 			    "req lease state: 0x%x, expected state: 0x%x\n",
-			    req->LeaseState, lease->new_state);
+			    le32_to_cpu(req->LeaseState),
+			    le32_to_cpu(lease->new_state));
 		goto err_unlock;
 	}
 

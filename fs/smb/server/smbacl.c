@@ -956,8 +956,8 @@ int parse_sec_desc(const struct mnt_idmap *idmap, struct smb_ntsd *pntsd,
 	dacloffset = le32_to_cpu(pntsd->dacloffset);
 	ksmbd_debug(SMB,
 		    "revision %d type 0x%x ooffset 0x%x goffset 0x%x sacloffset 0x%x dacloffset 0x%x\n",
-		    pntsd->revision, pntsd->type, le32_to_cpu(pntsd->osidoffset),
-		    le32_to_cpu(pntsd->gsidoffset),
+		    le16_to_cpu(pntsd->revision), le16_to_cpu(pntsd->type),
+		    le32_to_cpu(pntsd->osidoffset), le32_to_cpu(pntsd->gsidoffset),
 		    le32_to_cpu(pntsd->sacloffset), dacloffset);
 
 	pntsd_type = le16_to_cpu(pntsd->type);
