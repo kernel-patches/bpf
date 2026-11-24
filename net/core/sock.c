@@ -2871,6 +2871,13 @@ void sock_pfree(struct sk_buff *skb)
 	sock_gen_put(sk);
 }
 EXPORT_SYMBOL(sock_pfree);
+
+void sock_pfree_ref(struct sk_buff *skb)
+{
+	DEBUG_NET_WARN_ON_ONCE(!sk_fullsock(skb->sk));
+	sock_gen_put(skb->sk);
+}
+EXPORT_SYMBOL(sock_pfree_ref);
 #endif /* CONFIG_INET */
 
 /*
