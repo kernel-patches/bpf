@@ -4,6 +4,7 @@
 #include <linux/if_link.h>
 #include <net/if.h>
 #include "xdp_dummy.skel.h"
+#include "test_xdp_adjust_frags_tail_grow_lo.skel.h"
 
 static void test_xdp_adjust_tail_shrink(void)
 {
@@ -406,6 +407,139 @@ out:
 	xdp_dummy__destroy(skel);
 }
 
+/*
+ * test_run allocates PAGE_SIZE frags, so a program may grow the last one up
+ * to the end of its page, also when ingress_ifindex picks the rxq info of
+ * another device.
+ */
+static void test_xdp_adjust_frags_tail_grow_ingress_ifindex(void)
+{
+	const char *file = "./test_xdp_adjust_tail_grow.bpf.o";
+	struct xdp_md ctx = { .data_end = 9000 };
+	struct netns_obj *ns = NULL;
+	struct bpf_program *prog;
+	struct bpf_object *obj;
+	__u8 *buf = NULL;
+	int err, ifindex;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.ctx_in = &ctx,
+		.ctx_size_in = sizeof(ctx),
+	);
+
+	if (getpagesize() != 4096) {
+		test__skip();
+		return;
+	}
+
+	obj = bpf_object__open(file);
+	if (!ASSERT_OK_PTR(obj, "open"))
+		return;
+
+	prog = bpf_object__next_program(obj, NULL);
+	if (!ASSERT_OK(bpf_object__load(obj), "load"))
+		goto out;
+
+	ns = netns_new("xdp_adjust_tail_ns", true);
+	if (!ASSERT_OK_PTR(ns, "netns_new"))
+		goto out;
+
+	SYS(out, "ip link add veth_xat0 type veth peer name veth_xat1");
+	ifindex = if_nametoindex("veth_xat0");
+	if (!ASSERT_GT(ifindex, 0, "veth ifindex"))
+		goto out;
+	ctx.ingress_ifindex = ifindex;
+
+	buf = malloc(16384);
+	if (!ASSERT_OK_PTR(buf, "alloc buf 16Kb"))
+		goto out;
+	memset(buf, 1, 16384);
+
+	/* Test case add 10 bytes to last frag */
+	topts.data_in = buf;
+	topts.data_out = buf;
+	topts.data_size_in = 9000;
+	topts.data_size_out = 16384;
+	err = bpf_prog_test_run_opts(bpf_program__fd(prog), &topts);
+
+	ASSERT_OK(err, "9Kb+10b");
+	ASSERT_EQ(topts.retval, XDP_TX, "9Kb+10b retval");
+	ASSERT_EQ(topts.data_size_out, 9000 + 10, "9Kb+10b size");
+out:
+	free(buf);
+	netns_free(ns);
+	bpf_object__close(obj);
+}
+
+/*
+ * The frags generic XDP gets from skb_pp_cow_data() can be parts of a
+ * page_pool page, so its rxq info must not allow growing them. test_run
+ * must not change that for lo.
+ */
+static void test_xdp_adjust_frags_tail_grow_lo_after_test_run(void)
+{
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+		.sin_port = htons(9),
+	};
+	struct test_xdp_adjust_frags_tail_grow_lo *skel;
+	struct netns_obj *ns = NULL;
+	static char payload[60000];
+	int fd = -1, lo, i, len, prog_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = &pkt_v4,
+		.data_size_in = sizeof(pkt_v4),
+		.repeat = 1,
+	);
+
+	/* larger than the head generic XDP copies the packet into */
+	len = getpagesize() + 500;
+	if (len > (int)sizeof(payload)) {
+		test__skip();
+		return;
+	}
+
+	skel = test_xdp_adjust_frags_tail_grow_lo__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel open_and_load"))
+		return;
+
+	ns = netns_new("xdp_adjust_tail_ns", true);
+	if (!ASSERT_OK_PTR(ns, "netns_new"))
+		goto out;
+
+	SYS(out, "ip link set dev lo up");
+	lo = if_nametoindex("lo");
+	if (!ASSERT_GT(lo, 0, "lo ifindex"))
+		goto out;
+
+	/* a test run in this netns, before generic XDP sees a packet on lo */
+	prog_fd = bpf_program__fd(skel->progs.xdp_grow_frags);
+	ASSERT_OK(bpf_prog_test_run_opts(prog_fd, &topts), "test_run");
+
+	if (!ASSERT_OK(bpf_xdp_attach(lo, prog_fd, XDP_FLAGS_SKB_MODE, NULL),
+		       "attach generic XDP"))
+		goto out;
+
+	/*
+	 * a linear skb with little headroom: generic XDP copies it into a
+	 * page_pool head page and a frag
+	 */
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (ASSERT_GE(fd, 0, "socket"))
+		ASSERT_EQ(sendto(fd, payload, len, 0, (struct sockaddr *)&addr,
+				 sizeof(addr)), len, "sendto");
+	for (i = 0; i < 100 && skel->data->grow_ret == 1; i++)
+		usleep(10000);
+	bpf_xdp_detach(lo, XDP_FLAGS_SKB_MODE, NULL);
+
+	ASSERT_EQ(skel->data->grow_ret, -EOPNOTSUPP, "grow frag on lo");
+out:
+	if (fd >= 0)
+		close(fd);
+	netns_free(ns);
+	test_xdp_adjust_frags_tail_grow_lo__destroy(skel);
+}
+
 void test_xdp_adjust_tail(void)
 {
 	int page_size = getpagesize();
@@ -426,4 +560,8 @@ void test_xdp_adjust_tail(void)
 		else
 			test_xdp_adjust_frags_tail_grow_4k();
 	}
+	if (test__start_subtest("xdp_adjust_frags_tail_grow_ingress_ifindex"))
+		test_xdp_adjust_frags_tail_grow_ingress_ifindex();
+	if (test__start_subtest("xdp_adjust_frags_tail_grow_lo_after_test_run"))
+		test_xdp_adjust_frags_tail_grow_lo_after_test_run();
 }
