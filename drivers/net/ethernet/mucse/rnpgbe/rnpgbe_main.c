@@ -160,6 +160,8 @@ static const struct net_device_ops rnpgbe_netdev_ops = {
 	.ndo_stop		 = rnpgbe_close,
 	.ndo_start_xmit		 = rnpgbe_xmit_frame,
 	.ndo_set_rx_mode_async = rnpgbe_set_rx_mode,
+	.ndo_set_mac_address	 = rnpgbe_set_mac_address,
+	.ndo_validate_addr	 = eth_validate_addr,
 	.ndo_get_stats64	 = rnpgbe_get_stats64,
 };
 
@@ -253,7 +255,7 @@ static int rnpgbe_add_adapter(struct pci_dev *pdev,
 
 	netdev->netdev_ops = &rnpgbe_netdev_ops;
 	netdev->ethtool_ops = &rnpgbe_ethtool_ops;
-	netdev->priv_flags |= IFF_UNICAST_FLT;
+	netdev->priv_flags |= IFF_UNICAST_FLT | IFF_LIVE_ADDR_CHANGE;
 	rnpgbe_sw_init(mucse);
 	err = rnpgbe_reset_hw(hw);
 	if (err) {
