@@ -59,6 +59,28 @@ struct tasdev_reg_map {
 /* YM955 */
 #define TAS2573_SHORTCKT		TASDEVICE_REG(0x00, 0x83, 0x6C)
 
+/* Registers for the speaker calibration */
+static const __maybe_unused unsigned int fct_status_regs[] = {
+	TAS2573_FCT_INT_LATCH,
+	TAS2573_FCT_STATUS_CTRL,
+	TAS2573_FCT_STATUS_BINNING,
+	TAS2573_SILENCE_DETECTED,
+	TAS2573_OPEN_CIRCUIT,
+	TAS2573_SHORTCKT,
+	TAS2573_FCT_OUTPUT_R0,
+	TAS2573_FCT_OUTPUT_R0_LOW,
+	TAS2573_FCT_OUTPUT_INV_R0,
+	TAS2573_FCT_OUTPUT_POWERTOT,
+	TAS2573_FCT_OUTPUT_F0,
+	TAS2573_RE_OUT,
+};
+
+static const __maybe_unused struct tasdev_reg_map calib_status_map = {
+	.regs  = fct_status_regs,
+	.nregs = ARRAY_SIZE(fct_status_regs),
+	.tag   = "fct_status_regs",
+};
+
 /* Registers for the realtime (RT) speaker protection data */
 static const __maybe_unused unsigned int tas2573_rt_data_regs[] = {
 	TAS2573_TDM_DET_REG,

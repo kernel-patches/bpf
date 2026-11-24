@@ -1605,70 +1605,12 @@ static int tas2573_status_get_common(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+/* Calibration status control */
 static int tas2573_calib_status_get(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
-	struct tasdevice_priv *priv = snd_soc_component_get_drvdata(comp);
-	unsigned char *dst = ucontrol->value.bytes.data;
-	struct soc_bytes_ext *bytes_ext =
-		(struct soc_bytes_ext *) kcontrol->private_value;
-	unsigned int fct_status_regs[] = {
-		TAS2573_FCT_INT_LATCH,
-		TAS2573_FCT_STATUS_CTRL,
-		TAS2573_FCT_STATUS_BINNING,
-		TAS2573_SILENCE_DETECTED,
-		TAS2573_OPEN_CIRCUIT,
-		TAS2573_SHORTCKT,
-		TAS2573_FCT_OUTPUT_R0,
-		TAS2573_FCT_OUTPUT_R0_LOW,
-		TAS2573_FCT_OUTPUT_INV_R0,
-		TAS2573_FCT_OUTPUT_POWERTOT,
-		TAS2573_FCT_OUTPUT_F0,
-		TAS2573_RE_OUT,
-	};
-	unsigned int j, k, val;
-	unsigned int i = 0;
-	int rc;
-
-	guard(mutex)(&priv->codec_lock);
-	dst[i++] = bytes_ext->max;
-	dst[i++] = 'r';
-
-	for (j = 0; j < ARRAY_SIZE(fct_status_regs); j++) {
-		dst[i++] = TASDEVICE_BOOK_ID(fct_status_regs[j]);
-		dst[i++] = TASDEVICE_PAGE_ID(fct_status_regs[j]);
-		dst[i++] = TASDEVICE_PAGE_REG(fct_status_regs[j]);
-	}
-	dst[i++] = 'D';
-
-	for (j = 0; j < priv->ndev; j++) {
-		dst[i++] = j;
-		dst[i++] = 0;
-		dst[i++] = 0;
-		dst[i++] = 0;
-
-		rc = tasdevice_dev_read(priv, j, fct_status_regs[0], &val);
-		if (rc < 0)
-			dev_err(priv->dev,
-				"chn %d fct_status_regs[0] rd err = %d\n",
-				j, rc);
-		else
-			dst[i++] = val;
-
-		for (k = 1; k < ARRAY_SIZE(fct_status_regs); k++, i += 4) {
-			rc = tasdevice_dev_bulk_read(priv, j,
-				fct_status_regs[k], &dst[i], 4);
-			if (rc < 0) {
-				dev_err(priv->dev,
-					"chn %d regs[%u] bulk_rd err = %d\n",
-					j, k, rc);
-			}
-		}
-
-	}
-
-	return 0;
+	return tas2573_status_get_common(kcontrol, ucontrol,
+					 &calib_status_map);
 }
 
 static int create_tas2573_cali_status_ktrl(struct tasdevice_priv
@@ -1696,7 +1638,8 @@ static int create_tas2573_cali_status_ktrl(struct tasdevice_priv
 	 *		Sine gain for Device #i (48 bytes)
 	 *	}
 	 */
-	ext_cali_start->max = 39 + priv->ndev * 49;
+	ext_cali_start->max = calib_status_map.nregs * 3 + 3 +
+		priv->ndev * (calib_status_map.nregs * 4 + 1);
 	cali_ctrl->name = cali_start_name;
 	cali_ctrl->iface = SNDRV_CTL_ELEM_IFACE_MIXER;
 	cali_ctrl->info = snd_soc_bytes_info_ext;
