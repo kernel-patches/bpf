@@ -1865,7 +1865,10 @@ static void xennet_disconnect_backend(struct netfront_info *info)
 		queue->tx.sring = NULL;
 		queue->rx.sring = NULL;
 
+		if (xdp_rxq_info_is_reg(&queue->xdp_rxq))
+			xdp_rxq_info_unreg(&queue->xdp_rxq);
 		page_pool_destroy(queue->page_pool);
+		queue->page_pool = NULL;
 	}
 }
 
