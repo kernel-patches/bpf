@@ -1626,6 +1626,10 @@
 	};
 };
 
+&watchdog {
+	mediatek,disable-extrst;
+};
+
 &xhci0 {
 	rx-fifo-depth = <3072>;
 	vbus-supply = <&usb_vbus>;
