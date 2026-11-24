@@ -202,15 +202,15 @@ static int __init tc2_pm_init(void)
 	unsigned int mpidr, cpu, cluster;
 	int ret, irq;
 	u32 a15_cluster_id, a7_cluster_id, sys_info;
-	struct device_node *np;
 
 	/*
 	 * The power management-related features are hidden behind
 	 * SCC registers. We need to extract runtime information like
 	 * cluster ids and number of CPUs really available in clusters.
 	 */
-	np = of_find_compatible_node(NULL, NULL,
-			"arm,vexpress-scc,v2p-ca15_a7");
+	struct device_node *np __free(device_node) =
+		of_find_compatible_node(NULL, NULL,
+					"arm,vexpress-scc,v2p-ca15_a7");
 	scc = of_iomap(np, 0);
 	if (!scc)
 		return -ENODEV;
