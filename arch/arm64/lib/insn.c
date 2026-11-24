@@ -751,6 +751,15 @@ u32 aarch64_insn_gen_load_store_ex(enum aarch64_insn_register reg,
 		return AARCH64_BREAK_FAULT;
 	}
 
+	/* The loads have no status register, Rs is (1)(1)(1)(1)(1) */
+	if ((type == AARCH64_INSN_LDST_LOAD_EX ||
+	     type == AARCH64_INSN_LDST_LOAD_ACQ_EX) &&
+	    state != AARCH64_INSN_REG_ZR) {
+		pr_err("%s: invalid status register %d for a load\n", __func__,
+		       state);
+		return AARCH64_BREAK_FAULT;
+	}
+
 	insn = aarch64_insn_encode_ldst_size(size, insn);
 
 	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RT, insn,
