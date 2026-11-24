@@ -2303,7 +2303,7 @@ scmi_alloc_init_protocol_instance(struct scmi_info *info,
 	ret = idr_alloc(&info->protocols, pi, proto->id, proto->id + 1,
 			GFP_KERNEL);
 	if (ret != proto->id)
-		goto clean;
+		goto deinit;
 
 	/*
 	 * Warn but ignore events registration errors since we do not want
@@ -2324,6 +2324,9 @@ scmi_alloc_init_protocol_instance(struct scmi_info *info,
 
 	return pi;
 
+deinit:
+	if (pi->proto->instance_deinit)
+		pi->proto->instance_deinit(&pi->ph);
 clean:
 	/* Take care to put the protocol module's owner before releasing all */
 	scmi_protocol_put(proto);
