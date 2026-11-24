@@ -6256,6 +6256,104 @@ static const struct bpf_core_relo *find_relo_core(struct bpf_program *prog, int 
 	return NULL;
 }
 
+#define BPF_FUNC_ARGS "bpf_func_args"
+
+static int bpf_prog_func_args_btf(const struct bpf_program *prog, const char *name,
+				  struct btf **res);
+
+/*
+ * Is the root type of a relocation 'struct bpf_func_args___xyz'? Clang uses
+ * the typedef as the root type of relocations against a struct accessed
+ * through one, so skip typedefs and modifiers, and take the name of an
+ * anonymous struct from its typedef. Returns the root type to relocate
+ * against in *res_id: the struct, unless it is anonymous.
+ *
+ * Unlike for other types, the flavor is everything after the first triple
+ * underscore, so that it can start with or contain underscores, e.g. when
+ * generated from a program's name.
+ */
+static bool bpf_core_is_func_args(const struct btf *btf, __u32 id, __u32 *res_id)
+{
+	const char *name = NULL;
+	const struct btf_type *t;
+	__u32 root_id = id;
+	int depth = 32;
+
+	t = btf__type_by_id(btf, id);
+	while (t && (btf_is_typedef(t) || btf_is_mod(t)) && depth--) {
+		if (btf_is_typedef(t))
+			name = btf__name_by_offset(btf, t->name_off);
+		id = t->type;
+		t = btf__type_by_id(btf, id);
+	}
+	if (!t || !btf_is_struct(t))
+		return false;
+	/* relocations can't have an anonymous root type, keep its typedef */
+	if (t->name_off) {
+		name = btf__name_by_offset(btf, t->name_off);
+		*res_id = id;
+	} else {
+		*res_id = root_id;
+	}
+
+	return name && (strcmp(name, BPF_FUNC_ARGS) == 0 ||
+			str_has_pfx(name, BPF_FUNC_ARGS "___"));
+}
+
+/*
+ * Resolve a relocation against 'struct bpf_func_args___xyz', whose only
+ * candidate is the struct describing the context of the program, see
+ * bpf_prog_func_args_btf(). The candidate depends on the program, so it is
+ * kept out of the object-wide candidate cache.
+ */
+static int bpf_core_resolve_func_args(struct bpf_program *prog,
+				      const struct bpf_core_relo *relo, int relo_idx,
+				      const struct btf *local_btf, const char *local_name,
+				      __u32 struct_id, struct bpf_core_spec *specs_scratch,
+				      struct bpf_core_relo_res *targ_res)
+{
+	struct bpf_core_cand_list cands = {};
+	struct bpf_core_relo struct_relo;
+	struct bpf_core_cand cand;
+	const char *struct_name;
+	struct btf *btf;
+	int err;
+
+	/* the type only exists in libbpf, not in the kernel */
+	if (relo->kind == BPF_CORE_TYPE_ID_TARGET) {
+		pr_warn("prog '%s': relo #%d: no kernel type ID for struct %s\n",
+			prog->name, relo_idx, local_name);
+		return -EOPNOTSUPP;
+	}
+
+	/*
+	 * Name the candidate after the program's struct, so that the names
+	 * that type-based relocations compare match whatever its flavor is.
+	 */
+	struct_name = btf__name_by_offset(local_btf,
+					  btf__type_by_id(local_btf, struct_id)->name_off);
+	err = bpf_prog_func_args_btf(prog, struct_name, &btf);
+	if (err) {
+		pr_warn("prog '%s': relo #%d: failed to find the arguments of the attach target for struct %s: %s\n",
+			prog->name, relo_idx, local_name, errstr(err));
+		return err;
+	}
+	if (btf) {
+		cand.btf = btf;
+		cand.id = btf__type_cnt(btf) - 1;
+		cands.cands = &cand;
+		cands.len = 1;
+	}
+
+	/* type-based relocations need the root to be the struct, not a typedef */
+	struct_relo = *relo;
+	struct_relo.type_id = struct_id;
+	err = bpf_core_calc_relo_insn(prog->name, &struct_relo, relo_idx, local_btf, &cands,
+				      specs_scratch, targ_res);
+	btf__free(btf);
+	return err;
+}
+
 static int bpf_core_resolve_relo(struct bpf_program *prog,
 				 const struct bpf_core_relo *relo,
 				 int relo_idx,
@@ -6269,6 +6367,7 @@ static int bpf_core_resolve_relo(struct bpf_program *prog,
 	const struct btf_type *local_type;
 	const char *local_name;
 	__u32 local_id = relo->type_id;
+	__u32 struct_id;
 	int err;
 
 	local_type = btf__type_by_id(local_btf, local_id);
@@ -6278,6 +6377,11 @@ static int bpf_core_resolve_relo(struct bpf_program *prog,
 	local_name = btf__name_by_offset(local_btf, local_type->name_off);
 	if (!local_name)
 		return -EINVAL;
+
+	if (relo->kind != BPF_CORE_TYPE_ID_LOCAL &&
+	    bpf_core_is_func_args(local_btf, local_id, &struct_id))
+		return bpf_core_resolve_func_args(prog, relo, relo_idx, local_btf, local_name,
+						  struct_id, specs_scratch, targ_res);
 
 	if (relo->kind != BPF_CORE_TYPE_ID_LOCAL &&
 	    !hashmap__find(cand_cache, local_id, &cands)) {
@@ -11638,6 +11742,198 @@ static int libbpf_find_attach_btf_id(struct bpf_program *prog, const char *attac
 			prog->name, attach_name, errstr(err));
 		return err;
 	}
+	return 0;
+}
+
+/* Find the BTF and type ID of the kernel attach target of a program */
+static int bpf_prog_attach_target(const struct bpf_program *prog,
+				  struct btf **btf, int *btf_id)
+{
+	struct bpf_object *obj = prog->obj;
+	int btf_obj_fd = 0, i, err;
+	const char *attach_name;
+
+	if (prog->attach_btf_id) {
+		/* set via bpf_program__set_attach_target() */
+		btf_obj_fd = prog->attach_btf_obj_fd;
+		*btf_id = prog->attach_btf_id;
+	} else {
+		attach_name = strchr(prog->sec_name, '/');
+		if (!prog->sec_def || !(prog->sec_def->cookie & SEC_ATTACH_BTF) ||
+		    !attach_name || !attach_name[1]) {
+			pr_warn("prog '%s': struct %s needs an attach target in kernel BTF\n",
+				prog->name, BPF_FUNC_ARGS);
+			return -EINVAL;
+		}
+		attach_name++;
+		err = find_kernel_btf_id(obj, attach_name, prog->expected_attach_type,
+					 &btf_obj_fd, btf_id);
+		if (err) {
+			pr_warn("prog '%s': failed to find kernel BTF type ID of '%s': %s\n",
+				prog->name, attach_name, errstr(err));
+			return err;
+		}
+	}
+
+	*btf = btf_obj_fd ? NULL : obj->btf_vmlinux;
+	for (i = 0; btf_obj_fd && i < obj->btf_module_cnt; i++) {
+		if (obj->btf_modules[i].fd == btf_obj_fd) {
+			*btf = obj->btf_modules[i].btf;
+			break;
+		}
+	}
+	return *btf ? 0 : -ESRCH;
+}
+
+/*
+ * Add a member for an argument or the return value to the struct being built.
+ * Each takes up a whole number of u64 slots in the context, as laid out by
+ * btf_ctx_arg_idx() in the kernel.
+ */
+static int func_args_add(struct btf *btf, const struct btf *targ_btf,
+			 const char *name, __u32 type_id, __u32 *off)
+{
+	const struct btf_type *t;
+	__u32 pad = 0;
+	__s64 sz;
+	int err;
+
+	t = skip_mods_and_typedefs(targ_btf, type_id, NULL);
+	sz = t && btf_is_ptr(t) ? 8 : btf__resolve_size(targ_btf, type_id);
+	if (sz <= 0)
+		return sz ?: -EINVAL;
+	/* a small argument is in the low bytes of its slot */
+	if (sz < 8 && btf__endianness(targ_btf) == BTF_BIG_ENDIAN)
+		pad = 8 - sz;
+	/* unnamed parameters still take up their slots */
+	if (!str_is_empty(name)) {
+		err = btf__add_field(btf, name, type_id, (*off + pad) * 8, 0);
+		if (err)
+			return err;
+	}
+	*off += roundup(sz, 8);
+	return 0;
+}
+
+/*
+ * The context of tp_btf, fentry, fexit, fmod_ret, fsession and LSM programs
+ * is an array of u64 slots: the arguments of the attach target, then, where
+ * the program can see it, its return value. Describe it as
+ *
+ *	struct bpf_func_args___xyz {
+ *		<type of the parameter> <name of the parameter>;
+ *		...
+ *		<return type> __ret;
+ *	};
+ *
+ * in a split BTF on top of the BTF of the attach target, with the same
+ * name as the program's own struct (the name argument), so that it matches
+ * whatever that struct's flavor is. This struct is then the only CO-RE
+ * candidate for the program's struct, and relocations against it are
+ * ordinary CO-RE.
+ *
+ * Sets *res to NULL, so that there is no candidate, if the attach target is
+ * a tracepoint without parameter names in BTF (kernels before 5.10).
+ */
+static int bpf_prog_func_args_btf(const struct bpf_program *prog, const char *name,
+				  struct btf **res)
+{
+	int i, id, first = 0, err;
+	const struct btf_param *p;
+	const struct btf_type *t;
+	struct btf *targ_btf, *btf;
+	bool has_ret = false;
+	const char *tp_name;
+	__u32 off = 0;
+
+	*res = NULL;
+
+	/* shared subprogs have no single attach target */
+	if (prog_is_subprog(prog->obj, prog)) {
+		pr_warn("prog '%s': struct %s can only be used in entry programs\n",
+			prog->name, BPF_FUNC_ARGS);
+		return -EOPNOTSUPP;
+	}
+	if ((prog->type != BPF_PROG_TYPE_TRACING && prog->type != BPF_PROG_TYPE_LSM) ||
+	    prog->attach_prog_fd) {
+		pr_warn("prog '%s': struct %s needs an attach target in kernel BTF\n",
+			prog->name, BPF_FUNC_ARGS);
+		return -EOPNOTSUPP;
+	}
+
+	switch (prog->expected_attach_type) {
+	case BPF_TRACE_FEXIT:
+	case BPF_MODIFY_RETURN:
+	case BPF_TRACE_FSESSION:
+	case BPF_LSM_MAC:
+	case BPF_LSM_CGROUP:
+		has_ret = true;
+		break;
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_RAW_TP:
+		break;
+	default:
+		pr_warn("prog '%s': struct %s is not supported for this attach type\n",
+			prog->name, BPF_FUNC_ARGS);
+		return -EOPNOTSUPP;
+	}
+
+	err = bpf_prog_attach_target(prog, &targ_btf, &id);
+	if (err)
+		return err;
+
+	t = btf__type_by_id(targ_btf, id);
+	if (t && btf_is_typedef(t)) {
+		/*
+		 * btf_trace_xyz has no names of parameters. __probestub_xyz()
+		 * has (6.5+), and __traceiter_xyz() has (5.10+). Both take
+		 * void *__data first, which is not in the context.
+		 */
+		tp_name = btf__name_by_offset(targ_btf, t->name_off);
+		if (!tp_name || !str_has_pfx(tp_name, BTF_TRACE_PREFIX))
+			return -EINVAL;
+		tp_name += sizeof(BTF_TRACE_PREFIX) - 1;
+		id = find_btf_by_prefix_kind(targ_btf, "__probestub_", tp_name, BTF_KIND_FUNC);
+		if (id == -ENOENT)
+			id = find_btf_by_prefix_kind(targ_btf, "__traceiter_", tp_name,
+						     BTF_KIND_FUNC);
+		if (id == -ENOENT) {
+			pr_debug("prog '%s': tracepoint '%s' has no parameter names in BTF, struct %s has no members\n",
+				 prog->name, tp_name, BPF_FUNC_ARGS);
+			return 0;
+		}
+		if (id < 0)
+			return id;
+		t = btf__type_by_id(targ_btf, id);
+		first = 1;
+	}
+	if (!t || !btf_is_func(t))
+		return -EINVAL;
+	t = btf__type_by_id(targ_btf, t->type);
+	if (!t || !btf_is_func_proto(t))
+		return -EINVAL;
+
+	btf = btf__new_empty_split(targ_btf);
+	if (!btf)
+		return -errno;
+
+	id = btf__add_struct(btf, name, 0);
+	err = id < 0 ? id : 0;
+	p = btf_params(t);
+	/* a trailing parameter of type void is '...' */
+	for (i = first; !err && i < btf_vlen(t) && p[i].type; i++)
+		err = func_args_add(btf, targ_btf, btf__name_by_offset(targ_btf, p[i].name_off),
+				    p[i].type, &off);
+	if (!err && has_ret && t->type)
+		err = func_args_add(btf, targ_btf, "__ret", t->type, &off);
+	if (err) {
+		pr_warn("prog '%s': failed to describe the arguments of the attach target: %s\n",
+			prog->name, errstr(err));
+		btf__free(btf);
+		return err;
+	}
+	btf_type_by_id(btf, id)->size = off;
+	*res = btf;
 	return 0;
 }
 
