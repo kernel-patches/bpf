@@ -13,6 +13,7 @@
 #include <linux/workqueue.h>
 
 #include "rnpgbe_hw.h"
+#include "rnpgbe_stats.h"
 
 enum rnpgbe_boards {
 	board_n500,
@@ -119,8 +120,13 @@ struct mucse_tx_buffer {
 struct mucse_queue_stats {
 	u64 packets;
 	u64 bytes;
+	u64 delivered_packets;
+	u64 delivered_bytes;
 	u64 length_errors;
 	atomic64_t dropped;
+	atomic64_t page_alloc_failures;
+	atomic64_t skb_alloc_failures;
+	atomic64_t dma_map_failures;
 	struct u64_stats_sync syncp;
 } ____cacheline_aligned_in_smp;
 
@@ -231,6 +237,7 @@ struct mucse {
 	struct net_device *netdev;
 	struct pci_dev *pdev;
 	struct mucse_hw hw;
+	struct mucse_hw_stats hw_stats;
 	struct mucse_ring *tx_ring[RNPGBE_MAX_QUEUES]
 		____cacheline_aligned_in_smp;
 	struct mucse_ring *rx_ring[RNPGBE_MAX_QUEUES]
