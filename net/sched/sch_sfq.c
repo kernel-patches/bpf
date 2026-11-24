@@ -130,11 +130,10 @@ struct sfq_sched_data {
 					 * dep[X] : list of flows with X packets
 					 */
 
+	unsigned long	perturb_time;	/* next hash perturbation */
 	unsigned int	maxflows;	/* number of flows in flows array */
 	int		perturb_period;
 	unsigned int	quantum;	/* Allotment per round: MUST BE >= MTU */
-	struct timer_list perturb_timer;
-	struct Qdisc	*sch;
 };
 
 /*
@@ -340,6 +339,8 @@ static int sfq_headdrop(const struct sfq_sched_data *q)
 	return q->headdrop;
 }
 
+static void sfq_perturbation(struct Qdisc *sch, struct sk_buff **to_free);
+
 static int
 sfq_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff **to_free)
 {
@@ -350,6 +351,10 @@ sfq_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff **to_free)
 	int ret;
 	struct sk_buff *head;
 	int delta;
+
+	if (q->perturb_period &&
+	    unlikely(time_after_eq(jiffies, q->perturb_time)))
+		sfq_perturbation(sch, to_free);
 
 	hash = sfq_classify(skb, sch, &ret);
 	if (hash == 0) {
@@ -531,7 +536,7 @@ sfq_reset(struct Qdisc *sch)
  * We dont use sfq_dequeue()/sfq_enqueue() because we dont want to change
  * counters.
  */
-static void sfq_rehash(struct Qdisc *sch)
+static void sfq_rehash(struct Qdisc *sch, struct sk_buff **to_free)
 {
 	struct sfq_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
@@ -569,7 +574,7 @@ static void sfq_rehash(struct Qdisc *sch)
 drop:
 				qdisc_qstats_backlog_dec(sch, skb);
 				drop_len += qdisc_pkt_len(skb);
-				kfree_skb(skb);
+				__qdisc_drop(skb, to_free);
 				dropped++;
 				continue;
 			}
@@ -601,29 +606,14 @@ drop:
 	qdisc_tree_reduce_backlog(sch, dropped, drop_len);
 }
 
-static void sfq_perturbation(struct timer_list *t)
+static void sfq_perturbation(struct Qdisc *sch, struct sk_buff **to_free)
 {
-	struct sfq_sched_data *q = timer_container_of(q, t, perturb_timer);
-	struct Qdisc *sch = q->sch;
-	spinlock_t *root_lock;
-	siphash_key_t nkey;
-	int period;
+	struct sfq_sched_data *q = qdisc_priv(sch);
 
-	get_random_bytes(&nkey, sizeof(nkey));
-	rcu_read_lock();
-	root_lock = qdisc_lock_root_sleeping(sch);
-	q->perturbation = nkey;
+	q->perturb_time = jiffies + q->perturb_period;
+	get_random_bytes(&q->perturbation, sizeof(q->perturbation));
 	if (!q->filter_list && q->tail)
-		sfq_rehash(sch);
-	spin_unlock(root_lock);
-
-	/* q->perturb_period can change under us from
-	 * sfq_change() and sfq_destroy().
-	 */
-	period = READ_ONCE(q->perturb_period);
-	if (period)
-		mod_timer(&q->perturb_timer, jiffies + period);
-	rcu_read_unlock();
+		sfq_rehash(sch, to_free);
 }
 
 static int sfq_change(struct Qdisc *sch, struct nlattr *opt,
@@ -746,11 +736,7 @@ static int sfq_change(struct Qdisc *sch, struct nlattr *opt,
 	rtnl_kfree_skbs(to_free, tail);
 	qdisc_tree_reduce_backlog(sch, qlen - sch->q.qlen, dropped);
 
-	timer_delete(&q->perturb_timer);
-	if (q->perturb_period) {
-		mod_timer(&q->perturb_timer, jiffies + q->perturb_period);
-		get_random_bytes(&q->perturbation, sizeof(q->perturbation));
-	}
+	q->perturb_time = jiffies + q->perturb_period;
 	sch_tree_unlock(sch);
 	kfree(p);
 	return 0;
@@ -771,8 +757,6 @@ static void sfq_destroy(struct Qdisc *sch)
 	struct sfq_sched_data *q = qdisc_priv(sch);
 
 	tcf_block_put(q->block);
-	WRITE_ONCE(q->perturb_period, 0);
-	timer_delete_sync(&q->perturb_timer);
 	sfq_free(q->ht);
 	sfq_free(q->slots);
 	kfree(q->red_parms);
@@ -784,9 +768,6 @@ static int sfq_init(struct Qdisc *sch, struct nlattr *opt,
 	struct sfq_sched_data *q = qdisc_priv(sch);
 	int i;
 	int err;
-
-	q->sch = sch;
-	timer_setup(&q->perturb_timer, sfq_perturbation, TIMER_DEFERRABLE);
 
 	err = tcf_block_get(&q->block, &q->filter_list, sch, extack);
 	if (err)
