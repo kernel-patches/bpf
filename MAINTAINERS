@@ -18944,6 +18944,7 @@ M:	Dan Callaghan <dan.callaghan@morsemicro.com>
 R:	Arien Judge <arien.judge@morsemicro.com>
 L:	linux-wireless@vger.kernel.org
 S:	Supported
+T:	git https://github.com/MorseMicro/linux-wireless.git
 F:	drivers/net/wireless/morsemicro/
 
 MOST(R) TECHNOLOGY DRIVER
