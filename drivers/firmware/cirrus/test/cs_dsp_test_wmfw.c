@@ -16,6 +16,7 @@
 #include <linux/firmware/cirrus/wmfw.h>
 #include <linux/random.h>
 #include <linux/regmap.h>
+#include <linux/seq_buf.h>
 #include <linux/string.h>
 #include <linux/vmalloc.h>
 
@@ -1722,6 +1723,7 @@ static void wmfw_load_with_info(struct kunit *test)
 	unsigned int reg_addr;
 	u8 *payload_data, *readback;
 	char *infobuf;
+	struct seq_buf sb;
 	const unsigned int payload_size_bytes = 48;
 	int ret;
 
@@ -1745,8 +1747,9 @@ static void wmfw_load_with_info(struct kunit *test)
 	infobuf = kunit_kzalloc(test, 512, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, infobuf);
 
-	for (; strlcat(infobuf, "Waffle{Blah}\n", 512) < 512;)
-		;
+	seq_buf_init(&sb, infobuf, 512);
+	while (!seq_buf_has_overflowed(&sb))
+		seq_buf_puts(&sb, "Waffle{Blah}\n");
 
 	cs_dsp_mock_wmfw_add_info(local->wmfw_builder, infobuf);
 	cs_dsp_mock_wmfw_add_info(local->wmfw_builder, "Another block of info");
