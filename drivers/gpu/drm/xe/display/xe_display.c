@@ -85,9 +85,6 @@ int xe_display_init_early(struct xe_device *xe)
 	if (!xe->info.probe_display)
 		return 0;
 
-	/* Fake uncore lock */
-	spin_lock_init(&xe->uncore.lock);
-
 	intel_display_driver_early_probe(display);
 
 	intel_display_device_info_runtime_init(display);
