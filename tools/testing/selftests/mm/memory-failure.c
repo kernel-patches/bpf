@@ -300,6 +300,29 @@ static int get_fs_type(int fd)
 	return ret ? 0 : (int)fs.f_type;
 }
 
+/*
+ * The page-cache tests need a filesystem which keeps its data on backing
+ * store.  When a clean page is poisoned the kernel drops it and the data is
+ * read back in.  When a dirty page is poisoned the data is lost, and the
+ * kernel records -EIO in the mapping for fsync() to report.
+ *
+ * tmpfs and ramfs keep their data only in the page cache.  The poisoned
+ * page cannot be dropped and read back, and their fsync() does nothing, so
+ * neither expectation holds.  hugetlbfs is the same, and it also poisons a
+ * whole huge page.  shmem has its own tests below.
+ */
+static bool fs_has_backing_store(int fs_type)
+{
+	switch ((unsigned int)fs_type) {
+	case 0:
+	case TMPFS_MAGIC:
+	case RAMFS_MAGIC:
+	case HUGETLBFS_MAGIC:
+		return false;
+	}
+	return true;
+}
+
 TEST_F(memory_failure, clean_pagecache)
 {
 	int fd;
@@ -311,7 +334,7 @@ TEST_F(memory_failure, clean_pagecache)
 	if (fd < 0)
 		SKIP(return, "failed to open test file.\n");
 	fs_type = get_fs_type(fd);
-	if (!fs_type || fs_type == TMPFS_MAGIC) {
+	if (!fs_has_backing_store(fs_type)) {
 		close(fd);
 		SKIP(return, "unsupported filesystem :%x\n", fs_type);
 	}
@@ -353,13 +376,7 @@ TEST_F(memory_failure, dirty_pagecache)
 	if (fd < 0)
 		SKIP(return, "failed to open test file.\n");
 	fs_type = get_fs_type(fd);
-	/*
-	 * MADV_HARD poisoning of dirty page-cache data records an expected
-	 * -EIO in the file mapping. NFS reports this error on close(), so
-	 * skip this variant.
-	 */
-	if (!fs_type || fs_type == TMPFS_MAGIC ||
-	    (fs_type == NFS_SUPER_MAGIC && variant->type == MADV_HARD)) {
+	if (!fs_has_backing_store(fs_type)) {
 		close(fd);
 		SKIP(return, "unsupported filesystem :%x\n", fs_type);
 	}
@@ -385,6 +402,11 @@ TEST_F(memory_failure, dirty_pagecache)
 		check(_metadata, self, addr, MADV_SOFT_DIRTY_PAGECACHE, ret);
 
 	ASSERT_EQ(munmap(addr, self->page_size), 0);
+
+	if (variant->type == MADV_HARD) {
+		ASSERT_EQ(fsync(fd), -1);
+		ASSERT_EQ(errno, EIO);
+	}
 
 	ASSERT_EQ(close(fd), 0);
 }
