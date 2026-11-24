@@ -298,11 +298,13 @@ static int rtw_pci_init_rx_ring(struct rtw_dev *rtwdev,
 
 err_out:
 	for (i = 0; i < allocated; i++) {
+		dma_addr_t buf_dma;
+
 		skb = rx_ring->buf[i];
 		if (!skb)
 			continue;
-		dma = *((dma_addr_t *)skb->cb);
-		dma_unmap_single(&pdev->dev, dma, buf_sz, DMA_FROM_DEVICE);
+		buf_dma = *((dma_addr_t *)skb->cb);
+		dma_unmap_single(&pdev->dev, buf_dma, buf_sz, DMA_FROM_DEVICE);
 		dev_kfree_skb_any(skb);
 		rx_ring->buf[i] = NULL;
 	}
@@ -568,6 +570,23 @@ static void rtw_pci_napi_stop(struct rtw_dev *rtwdev)
 	napi_disable(&rtwpci->napi);
 }
 
+static void rtw_pci_reset_tx_queue_state(struct rtw_dev *rtwdev)
+{
+	struct rtw_pci *rtwpci = (struct rtw_pci *)rtwdev->priv;
+	enum rtw_tx_queue_type queue;
+	bool wake = false;
+
+	lockdep_assert_held(&rtwpci->irq_lock);
+
+	for (queue = 0; queue < RTK_MAX_TX_QUEUE_NUM; queue++) {
+		wake |= rtwpci->tx_rings[queue].queue_stopped;
+		rtwpci->tx_rings[queue].queue_stopped = false;
+	}
+
+	if (wake)
+		ieee80211_wake_queues(rtwdev->hw);
+}
+
 static int rtw_pci_start(struct rtw_dev *rtwdev)
 {
 	struct rtw_pci *rtwpci = (struct rtw_pci *)rtwdev->priv;
@@ -575,6 +594,8 @@ static int rtw_pci_start(struct rtw_dev *rtwdev)
 	rtw_pci_napi_start(rtwdev);
 
 	spin_lock_bh(&rtwpci->irq_lock);
+	rtw_pci_reset_tx_queue_state(rtwdev);
+
 	rtwpci->running = true;
 	rtw_pci_enable_interrupt(rtwdev, rtwpci, false);
 	spin_unlock_bh(&rtwpci->irq_lock);
@@ -1775,6 +1796,16 @@ static const struct dmi_system_id rtw_pci_quirks[] = {
 			DMI_MATCH(DMI_SYS_VENDOR, "HP"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "HP Notebook"),
 			DMI_MATCH(DMI_PRODUCT_SKU, "P3S95EA#ACB"),
+		},
+		.driver_data = (void *)(BIT(QUIRK_DIS_CAP_PCI_ASPM) |
+					BIT(QUIRK_DIS_CAP_LPS_DEEP)),
+	},
+	{
+		.callback = rtw_pci_disable_caps,
+		.ident = "HP Laptop 15s-fr5xxx",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "HP"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "HP Laptop 15s-fr5xxx"),
 		},
 		.driver_data = (void *)(BIT(QUIRK_DIS_CAP_PCI_ASPM) |
 					BIT(QUIRK_DIS_CAP_LPS_DEEP)),

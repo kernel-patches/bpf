@@ -343,7 +343,7 @@ static void rtw89_phy_ra_sta_update(struct rtw89_dev *rtwdev,
 	bool sgi = false;
 	bool fix_giltf_en = false;
 
-	memset(ra, 0, sizeof(*ra));
+	memset(ra, 0, offsetof(typeof(*ra), helpers));
 	/* Set the ra mask from sta's capability */
 	if (link_sta->eht_cap.has_eht) {
 		mode |= RTW89_RA_MODE_EHT;
@@ -502,6 +502,20 @@ static void rtw89_phy_ra_sta_update(struct rtw89_dev *rtwdev,
 	ra->csi_mode = csi_mode;
 }
 
+static u8 rtw89_phy_ra_get_init_rate_lv(struct rtw89_sta_link *rtwsta_link)
+{
+	u8 rssi = ewma_rssi_read(&rtwsta_link->avg_rssi) >> RSSI_FACTOR;
+
+	if (rssi > 40)
+		return 1;
+	if (rssi > 20)
+		return 2;
+	if (rssi > 1)
+		return 3;
+
+	return 0;
+}
+
 void rtw89_phy_ra_update_sta_link(struct rtw89_dev *rtwdev,
 				  struct rtw89_sta_link *rtwsta_link,
 				  u32 changed)
@@ -510,6 +524,7 @@ void rtw89_phy_ra_update_sta_link(struct rtw89_dev *rtwdev,
 	struct ieee80211_vif *vif = rtwvif_link_to_vif(rtwvif_link);
 	struct rtw89_ra_info *ra = &rtwsta_link->ra;
 	struct ieee80211_link_sta *link_sta;
+	u8 init_rate_lv;
 
 	rcu_read_lock();
 
@@ -518,6 +533,15 @@ void rtw89_phy_ra_update_sta_link(struct rtw89_dev *rtwdev,
 				link_sta, vif->p2p, false);
 
 	rcu_read_unlock();
+
+	if (ra->rssi_unknown) {
+		init_rate_lv = rtw89_phy_ra_get_init_rate_lv(rtwsta_link);
+		if (init_rate_lv) {
+			ra->init_rate_lv = init_rate_lv;
+			ra->upd_all = 1;
+			ra->rssi_unknown = false;
+		}
+	}
 
 	if (changed & IEEE80211_RC_SUPP_RATES_CHANGED)
 		ra->upd_mask = 1;
@@ -733,7 +757,6 @@ void rtw89_phy_ra_assoc(struct rtw89_dev *rtwdev, struct rtw89_sta_link *rtwsta_
 	struct rtw89_vif_link *rtwvif_link = rtwsta_link->rtwvif_link;
 	struct ieee80211_vif *vif = rtwvif_link_to_vif(rtwvif_link);
 	struct rtw89_ra_info *ra = &rtwsta_link->ra;
-	u8 rssi = ewma_rssi_read(&rtwsta_link->avg_rssi) >> RSSI_FACTOR;
 	struct ieee80211_link_sta *link_sta;
 	bool csi;
 
@@ -747,14 +770,8 @@ void rtw89_phy_ra_assoc(struct rtw89_dev *rtwdev, struct rtw89_sta_link *rtwsta_
 
 	rcu_read_unlock();
 
-	if (rssi > 40)
-		ra->init_rate_lv = 1;
-	else if (rssi > 20)
-		ra->init_rate_lv = 2;
-	else if (rssi > 1)
-		ra->init_rate_lv = 3;
-	else
-		ra->init_rate_lv = 0;
+	ra->init_rate_lv = rtw89_phy_ra_get_init_rate_lv(rtwsta_link);
+	ra->rssi_unknown = !ra->init_rate_lv;
 	ra->upd_all = 1;
 	rtw89_debug(rtwdev, RTW89_DBG_RA,
 		    "ra assoc: macid = %d, mode = %d, bw = %d, nss = %d, lv = %d",
@@ -2391,6 +2408,7 @@ EXPORT_SYMBOL(rtw89_phy_ant_gain_pwr_offset);
 int rtw89_print_ant_gain(struct rtw89_dev *rtwdev, char *buf, size_t bufsz,
 			 const struct rtw89_chan *chan)
 {
+	u8 factor = rtwdev->chip->txpwr_factor_rf;
 	char *p = buf, *end = buf + bufsz;
 	s8 offset_patha, offset_pathb;
 
@@ -2402,8 +2420,8 @@ int rtw89_print_ant_gain(struct rtw89_dev *rtwdev, char *buf, size_t bufsz,
 	offset_patha = rtw89_phy_ant_gain_query(rtwdev, RF_PATH_A, chan->freq);
 	offset_pathb = rtw89_phy_ant_gain_query(rtwdev, RF_PATH_B, chan->freq);
 
-	p += scnprintf(p, end - p, "ChainA offset: %d dBm\n", offset_patha);
-	p += scnprintf(p, end - p, "ChainB offset: %d dBm\n", offset_pathb);
+	p += scnprintf(p, end - p, "ChainA offset: %d dBm\n", offset_patha >> factor);
+	p += scnprintf(p, end - p, "ChainB offset: %d dBm\n", offset_pathb >> factor);
 
 out:
 	return p - buf;
@@ -5828,6 +5846,211 @@ static void rtw89_phy_thermal_protect(struct rtw89_dev *rtwdev)
 	rtw89_fw_h2c_tx_duty(rtwdev, hal->thermal_prot_lv);
 }
 
+static void rtw89_phy_dtp_update_is_noisy(struct rtw89_dev *rtwdev,
+					  struct rtw89_bb_ctx *bb)
+{
+	struct rtw89_env_monitor_info *env = &bb->env_monitor;
+	bool was_noisy = bb->dtp.is_noisy;
+	u8 noisy_th = RTW89_NHM_RATIO_TH;
+
+	if (env->nhm_ratio == RTW89_NHM_RATIO_FAIL) {
+		if (bb->dtp.nhm_fail_cnt < RTW89_DTP_NHM_FAIL_MAX)
+			bb->dtp.nhm_fail_cnt++;
+		else
+			bb->dtp.is_noisy = false;
+
+		rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+			    "NHM phy %u no valid ratio (%u), noisy %d -> %d\n",
+			    bb->phy_idx, bb->dtp.nhm_fail_cnt, was_noisy,
+			    bb->dtp.is_noisy);
+		return;
+	}
+
+	bb->dtp.nhm_fail_cnt = 0;
+
+	if (was_noisy)
+		noisy_th -= RTW89_NHM_RATIO_TH_GAP;
+
+	bb->dtp.is_noisy = env->nhm_ratio >= noisy_th;
+	rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+		    "NHM phy %u ratio=%u threshold=%u noisy %d -> %d\n",
+		    bb->phy_idx, env->nhm_ratio, noisy_th,
+		    was_noisy, bb->dtp.is_noisy);
+}
+
+static bool rtw89_phy_dtp_enable_check(struct rtw89_dev *rtwdev, s8 rssi_dbm,
+				       bool cur_enabled)
+{
+	s8 rssi_th = RTW89_DTP_RSSI_TH;
+
+	if (cur_enabled)
+		rssi_th -= RTW89_DTP_FLOOR_UP_GAP;
+
+	return rssi_dbm >= rssi_th;
+}
+
+void rtw89_phy_dtp_set_pwr_ctrl(struct rtw89_dev *rtwdev, u8 mac_id,
+				bool enable_pwrctrl)
+{
+	s8 dbm = enable_pwrctrl ? RTW89_DTP_TX_PWR_CAP : 0;
+
+	rtw89_phy_bb_wrap_dtp_set_pwr_ctrl(rtwdev, mac_id, enable_pwrctrl, dbm);
+}
+
+static void __rtw89_phy_dtp_track(struct rtw89_dev *rtwdev,
+				  struct rtw89_sta_link *rtwsta_link)
+{
+	s8 rssi_dbm = RTW89_RSSI_RAW_TO_DBM(ewma_rssi_read(&rtwsta_link->avg_rssi));
+	struct rtw89_vif_link *rtwvif_link = rtwsta_link->rtwvif_link;
+	struct rtw89_bb_ctx *bb = rtw89_get_bb_ctx(rtwdev, rtwvif_link->phy_idx);
+	bool enabled;
+
+	if (bb->dtp.is_noisy || bb->dtp.nhm_fail_cnt >= RTW89_DTP_NHM_FAIL_MAX)
+		enabled = false;
+	else
+		enabled = rtw89_phy_dtp_enable_check(rtwdev, rssi_dbm,
+						     rtwsta_link->dtp_enabled);
+
+	if (enabled == rtwsta_link->dtp_enabled)
+		return;
+
+	rtw89_debug(rtwdev, RTW89_DBG_TXPWR,
+		    "mac_id %u dtp_enabled %d -> %d (rssi %d dBm)\n",
+		    rtwsta_link->mac_id, rtwsta_link->dtp_enabled, enabled, rssi_dbm);
+
+	rtw89_phy_dtp_set_pwr_ctrl(rtwdev, rtwsta_link->mac_id, enabled);
+	rtwsta_link->dtp_enabled = enabled;
+}
+
+static void __rtw89_phy_dtp_reset(struct rtw89_dev *rtwdev,
+				  struct rtw89_sta_link *rtwsta_link)
+{
+	if (!rtwsta_link->dtp_enabled)
+		return;
+
+	rtw89_debug(rtwdev, RTW89_DBG_TXPWR, "mac_id %u dtp_enabled 1 -> 0 (reset)\n",
+		    rtwsta_link->mac_id);
+
+	rtw89_phy_dtp_set_pwr_ctrl(rtwdev, rtwsta_link->mac_id, false);
+	rtwsta_link->dtp_enabled = false;
+}
+
+static void rtw89_phy_dtp_reset(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_sta_link *rtwsta_link;
+	struct ieee80211_sta *sta;
+	struct rtw89_sta *rtwsta;
+	unsigned int link_id;
+
+	for_each_station(sta, rtwdev->hw) {
+		rtwsta = sta_to_rtwsta(sta);
+
+		rtw89_sta_for_each_link(rtwsta, rtwsta_link, link_id)
+			__rtw89_phy_dtp_reset(rtwdev, rtwsta_link);
+	}
+}
+
+static void rtw89_phy_dtp_bb_wrap_update(struct rtw89_dev *rtwdev,
+					 struct rtw89_bb_ctx *bb, bool en)
+{
+	struct rtw89_dtp_info *dtp = &bb->dtp;
+
+	if (rtw89_phy_bb_wrap_dtp_en(rtwdev, bb->phy_idx, en)) {
+		dtp->bb_wrap_valid = false;
+		rtw89_debug(rtwdev, RTW89_DBG_TXPWR,
+			    "BB wrap phy %u en=%d not synced; retry later\n",
+			    bb->phy_idx, en);
+		return;
+	}
+
+	dtp->bb_wrap_valid = true;
+	dtp->bb_wrap_en = en;
+}
+
+static void rtw89_phy_dtp_bb_wrap_sync(struct rtw89_dev *rtwdev, bool enable)
+{
+	struct rtw89_bb_ctx *bb;
+
+	rtw89_for_each_active_bb(rtwdev, bb) {
+		if (bb->dtp.bb_wrap_valid && bb->dtp.bb_wrap_en == enable)
+			continue;
+
+		rtw89_phy_dtp_bb_wrap_update(rtwdev, bb, enable);
+	}
+}
+
+static void rtw89_phy_dtp_init(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_bb_ctx *bb;
+
+	if (!rtw89_chip_support_dtp(rtwdev))
+		return;
+
+	clear_bit(RTW89_FLAG_DTP_EN, rtwdev->flags);
+
+	rtw89_for_each_capab_bb(rtwdev, bb)
+		rtw89_phy_dtp_bb_wrap_update(rtwdev, bb, false);
+
+	rtw89_phy_dtp_reset(rtwdev);
+}
+
+static void rtw89_phy_dtp_enable(struct rtw89_dev *rtwdev, bool enable)
+{
+	rtw89_phy_dtp_bb_wrap_sync(rtwdev, enable);
+
+	if (test_bit(RTW89_FLAG_DTP_EN, rtwdev->flags) == enable)
+		return;
+
+	assign_bit(RTW89_FLAG_DTP_EN, rtwdev->flags, enable);
+	rtw89_debug(rtwdev, RTW89_DBG_TXPWR, "dtp protection en=%d\n", enable);
+
+	if (!enable)
+		rtw89_phy_dtp_reset(rtwdev);
+}
+
+static void rtw89_phy_thermal_protect_dtp(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_phy_stat *phystat = &rtwdev->phystat;
+	bool en;
+
+	if (!rtw89_chip_support_dtp(rtwdev))
+		return;
+
+	if (rtwdev->hal.disabled_dm_bitmap & BIT(RTW89_DM_DTP)) {
+		rtw89_phy_dtp_enable(rtwdev, false);
+		return;
+	}
+
+	if (test_bit(RTW89_FLAG_DTP_EN, rtwdev->flags))
+		en = phystat->last_thermal_max >=
+		     rtwdev->chip->dtp_thermal_th - RTW89_DTP_THERMAL_GAP;
+	else
+		en = phystat->last_thermal_max > rtwdev->chip->dtp_thermal_th;
+
+	rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK, "dtp thermal: sensor=%u th=%u en=%d\n",
+		    phystat->last_thermal_max, rtwdev->chip->dtp_thermal_th, en);
+
+	rtw89_phy_dtp_enable(rtwdev, en);
+}
+
+void rtw89_phy_dtp_track(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_sta_link *rtwsta_link;
+	struct ieee80211_sta *sta;
+	struct rtw89_sta *rtwsta;
+	unsigned int link_id;
+
+	if (!test_bit(RTW89_FLAG_DTP_EN, rtwdev->flags))
+		return;
+
+	for_each_station(sta, rtwdev->hw) {
+		rtwsta = sta_to_rtwsta(sta);
+
+		rtw89_sta_for_each_link(rtwsta, rtwsta_link, link_id)
+			__rtw89_phy_dtp_track(rtwdev, rtwsta_link);
+	}
+}
+
 static void rtw89_phy_stat_thermal_update(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_phy_stat *phystat = &rtwdev->phystat;
@@ -6273,6 +6496,7 @@ void rtw89_phy_stat_track(struct rtw89_dev *rtwdev)
 	rtw89_phy_stat_thermal_update(rtwdev);
 	rtw89_phy_thermal_protect_vcore(rtwdev);
 	rtw89_phy_thermal_protect(rtwdev);
+	rtw89_phy_thermal_protect_dtp(rtwdev);
 	rtw89_phy_stat_rssi_update(rtwdev);
 	rtw89_phy_stat_update(rtwdev);
 
@@ -6477,9 +6701,28 @@ static void __rtw89_phy_nhm_setting_init(struct rtw89_dev *rtwdev,
 	env->nhm_mntr_time = 0;
 	env->nhm_sum = 0;
 
+	if (rtw89_chip_support_dtp(rtwdev)) {
+		env->nhm_ratio = RTW89_NHM_RATIO_FAIL;
+		env->nhm_bg_ongoing = false;
+		bb->dtp.is_noisy = false;
+		bb->dtp.nhm_fail_cnt = 0;
+
+		/* Force the first background measurement to exclude CCA. */
+		env->nhm_include_cca = true;
+
+		if (ccx->nhm_filter)
+			rtw89_phy_write32_idx(rtwdev, ccx->nhm_filter,
+					      ccx->nhm_filter_mask, 0, bb->phy_idx);
+	}
+
 	rtw89_phy_write32_idx_set(rtwdev, ccx->nhm_config, ccx->nhm_en_mask, bb->phy_idx);
-	rtw89_phy_write32_idx_set(rtwdev, ccx->nhm_method, ccx->nhm_pwr_method_msk,
-				  bb->phy_idx);
+
+	if (rtw89_chip_support_dtp(rtwdev))
+		rtw89_phy_write32_idx(rtwdev, ccx->nhm_method,
+				      ccx->nhm_pwr_method_msk, 1, bb->phy_idx);
+	else
+		rtw89_phy_write32_idx_set(rtwdev, ccx->nhm_method,
+					  ccx->nhm_pwr_method_msk, bb->phy_idx);
 }
 
 void rtw89_phy_nhm_setting_init(struct rtw89_dev *rtwdev)
@@ -6688,25 +6931,23 @@ static u8 rtw89_nhm_weighted_avg(struct rtw89_dev *rtwdev, struct rtw89_bb_ctx *
 	return (nhm_weighted_sum / env->nhm_sum) >> RTW89_NHM_TH_FACTOR;
 }
 
-static void __rtw89_phy_nhm_get_result(struct rtw89_dev *rtwdev,
-				       struct rtw89_bb_ctx *bb, enum rtw89_band hw_band,
-				       u16 ch_hw_value)
+static bool __rtw89_phy_nhm_read_result(struct rtw89_dev *rtwdev,
+					struct rtw89_bb_ctx *bb)
 {
 	const struct rtw89_phy_gen_def *phy = rtwdev->chip->phy_def;
 	struct rtw89_env_monitor_info *env = &bb->env_monitor;
 	const struct rtw89_chip_info *chip = rtwdev->chip;
 	const struct rtw89_ccx_regs *ccx = phy->ccx;
-	struct ieee80211_supported_band *sband;
 	const struct rtw89_reg_def *nhm_rpt;
-	enum nl80211_band band;
 	u32 sum = 0;
-	u8 chan_idx;
-	u8 nhm_pwr;
 	u8 i;
 
 	if (!rtw89_phy_read32_idx(rtwdev, ccx->nhm, ccx->nhm_ready, bb->phy_idx)) {
 		rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,  "[NHM] Get NHM report Fail\n");
-		return;
+		if (rtw89_chip_support_dtp(rtwdev))
+			rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+				    "NHM phy %u report not ready\n", bb->phy_idx);
+		return false;
 	}
 
 	for (i = 0; i < RTW89_NHM_RPT_NUM; i++) {
@@ -6718,6 +6959,38 @@ static void __rtw89_phy_nhm_get_result(struct rtw89_dev *rtwdev,
 		sum += env->nhm_result[i];
 	}
 	env->nhm_sum = sum;
+
+	if (!rtw89_chip_support_dtp(rtwdev) ||
+	    !rtw89_debug_is_enabled(rtwdev, RTW89_DBG_PHY_TRACK))
+		return true;
+
+	rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+		    "NHM phy %u bins 0-5: %u,%u,%u,%u,%u,%u\n",
+		    bb->phy_idx, env->nhm_result[0], env->nhm_result[1],
+		    env->nhm_result[2], env->nhm_result[3],
+		    env->nhm_result[4], env->nhm_result[5]);
+	rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+		    "NHM phy %u bins 6-11: %u,%u,%u,%u,%u,%u\n",
+		    bb->phy_idx, env->nhm_result[6], env->nhm_result[7],
+		    env->nhm_result[8], env->nhm_result[9],
+		    env->nhm_result[10], env->nhm_result[11]);
+
+	return true;
+}
+
+static void __rtw89_phy_nhm_get_result(struct rtw89_dev *rtwdev,
+				       struct rtw89_bb_ctx *bb, enum rtw89_band hw_band,
+				       u16 ch_hw_value)
+{
+	struct rtw89_env_monitor_info *env = &bb->env_monitor;
+	struct ieee80211_supported_band *sband;
+	enum nl80211_band band;
+	u8 chan_idx;
+	u8 nhm_pwr;
+
+	if (!__rtw89_phy_nhm_read_result(rtwdev, bb))
+		return;
+
 	nhm_pwr = rtw89_nhm_weighted_avg(rtwdev, bb);
 
 	if (!ch_hw_value)
@@ -6944,7 +7217,7 @@ static int rtw89_phy_nhm_set(struct rtw89_dev *rtwdev,
 		rtw89_phy_write32_idx(rtwdev, ccx->nhm_config,
 				      ccx->nhm_period_mask, period, bb->phy_idx);
 		rtw89_phy_write32_idx(rtwdev, ccx->nhm_config,
-				      ccx->nhm_unit_mask, period, bb->phy_idx);
+				      ccx->nhm_unit_mask, unit_idx, bb->phy_idx);
 
 		env->nhm_mntr_time = para->mntr_time;
 		env->ccx_period = period;
@@ -6962,6 +7235,62 @@ static int rtw89_phy_nhm_set(struct rtw89_dev *rtwdev,
 	rtw89_phy_nhm_th_update(rtwdev, bb);
 
 	return 0;
+}
+
+static u8 rtw89_phy_nhm_get_ratio(struct rtw89_dev *rtwdev,
+				  struct rtw89_bb_ctx *bb)
+{
+	struct rtw89_env_monitor_info *env = &bb->env_monitor;
+	struct rtw89_entity_conf conf;
+	const struct rtw89_chan *chan;
+	u8 first_idx = RTW89_NHM_RPT_NUM;
+	u32 non_noise = env->nhm_sum;
+	u16 period = env->ccx_period;
+	u8 noise_th;
+	u8 weight;
+	u8 ratio;
+	u8 i;
+
+	if (!period || env->nhm_sum > period) {
+		rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+			    "NHM phy %u invalid period=%u sum=%u\n",
+			    bb->phy_idx, period, env->nhm_sum);
+		return RTW89_NHM_RATIO_FAIL;
+	}
+
+	rtw89_entity_get_conf(rtwdev, &conf);
+	chan = conf.chans[bb->phy_idx];
+
+	noise_th = chan->band_width == RTW89_CHANNEL_WIDTH_160 ||
+		   chan->band_width == RTW89_CHANNEL_WIDTH_80_80 ? 70 : 60;
+
+	/* Exclude the first low-power cluster (up to three bins). */
+	for (i = 0; i < RTW89_NHM_RPT_NUM; i++) {
+		if (first_idx == RTW89_NHM_RPT_NUM &&
+		    DIV_ROUND_CLOSEST((u32)env->nhm_result[i] * 100, period))
+			first_idx = i;
+
+		if (i == 0)
+			weight = env->nhm_th[0] - RTW89_NHM_WEIGHT_OFFSET;
+		else if (i == RTW89_NHM_RPT_NUM - 1)
+			weight = env->nhm_th[i - 1] + RTW89_NHM_WEIGHT_OFFSET;
+		else
+			weight = (env->nhm_th[i - 1] + env->nhm_th[i]) / 2;
+
+		if (i < first_idx + 3 && weight <= noise_th)
+			non_noise -= env->nhm_result[i];
+	}
+
+	ratio = DIV_ROUND_CLOSEST(non_noise * 100, period);
+	rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+		    "NHM phy %u bw=%u period=%u sum=%u first=%u floor=%u\n",
+		    bb->phy_idx, chan->band_width, period, env->nhm_sum,
+		    first_idx, noise_th);
+	rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+		    "NHM phy %u non_noise=%u ratio=%u\n",
+		    bb->phy_idx, non_noise, ratio);
+
+	return ratio;
 }
 
 static void __rtw89_phy_nhm_trigger(struct rtw89_dev *rtwdev, struct rtw89_bb_ctx *bb)
@@ -7044,6 +7373,15 @@ static void __rtw89_phy_env_monitor_track(struct rtw89_dev *rtwdev,
 
 	env->ccx_watchdog_result = RTW89_PHY_ENV_MON_CCX_FAIL;
 	if (env->ccx_manual_ctrl) {
+		if (rtw89_chip_support_dtp(rtwdev)) {
+			env->nhm_bg_ongoing = false;
+			env->nhm_ratio = RTW89_NHM_RATIO_FAIL;
+			rtw89_phy_dtp_update_is_noisy(rtwdev, bb);
+
+			rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+				    "NHM phy %u suspended by manual CCX control\n",
+				    bb->phy_idx);
+		}
 		rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
 			    "CCX in manual ctrl\n");
 		return;
@@ -7059,6 +7397,22 @@ static void __rtw89_phy_env_monitor_track(struct rtw89_dev *rtwdev,
 	if (rtw89_phy_edcca_clm_get_result(rtwdev, bb))
 		env->ccx_watchdog_result |= RTW89_PHY_ENV_MON_EDCCA_CLM;
 
+	if (rtw89_chip_support_dtp(rtwdev)) {
+		if (!env->nhm_bg_ongoing)
+			rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+				    "NHM phy %u no background sample\n", bb->phy_idx);
+		if (env->nhm_bg_ongoing && __rtw89_phy_nhm_read_result(rtwdev, bb)) {
+			env->nhm_ratio = rtw89_phy_nhm_get_ratio(rtwdev, bb);
+			if (env->nhm_ratio != RTW89_NHM_RATIO_FAIL)
+				env->ccx_watchdog_result |= RTW89_PHY_ENV_MON_NHM;
+		} else {
+			env->nhm_ratio = RTW89_NHM_RATIO_FAIL;
+		}
+
+		env->nhm_bg_ongoing = false;
+		rtw89_phy_dtp_update_is_noisy(rtwdev, bb);
+	}
+
 	rtw89_phy_ccx_racing_release(rtwdev, bb);
 	para.mntr_time = 1900;
 	para.rac_lv = RTW89_RAC_LV_1;
@@ -7066,6 +7420,18 @@ static void __rtw89_phy_env_monitor_track(struct rtw89_dev *rtwdev,
 
 	if (rtw89_phy_ifs_clm_set(rtwdev, bb, &para) == 0)
 		chk_result |= RTW89_PHY_ENV_MON_IFS_CLM;
+
+	if (rtw89_chip_support_dtp(rtwdev)) {
+		if (!rtw89_phy_nhm_set(rtwdev, bb, &para))
+			chk_result |= RTW89_PHY_ENV_MON_NHM;
+
+		env->nhm_bg_ongoing = !!(chk_result & RTW89_PHY_ENV_MON_NHM);
+		rtw89_debug(rtwdev, RTW89_DBG_PHY_TRACK,
+			    "NHM phy %u armed=%d period=%u unit=%u include_cca=%d\n",
+			    bb->phy_idx, env->nhm_bg_ongoing, env->ccx_period,
+			    env->ccx_unit_idx, env->nhm_include_cca);
+	}
+
 	if (chk_result)
 		rtw89_phy_ccx_trigger(rtwdev, bb, chk_result);
 
@@ -8199,6 +8565,9 @@ static void __rtw89_phy_env_monitor_init(struct rtw89_dev *rtwdev,
 
 	rtw89_phy_ccx_top_setting_init(rtwdev, bb);
 	rtw89_phy_ifs_clm_setting_init(rtwdev, bb);
+
+	if (rtw89_chip_support_dtp(rtwdev))
+		__rtw89_phy_nhm_setting_init(rtwdev, bb);
 }
 
 static void rtw89_phy_env_monitor_init(struct rtw89_dev *rtwdev)
@@ -8265,6 +8634,7 @@ void rtw89_phy_dm_init(struct rtw89_dev *rtwdev)
 	rtw89_phy_cfo_init(rtwdev);
 	rtw89_phy_bb_wrap_init(rtwdev);
 	rtw89_phy_edcca_init(rtwdev);
+	rtw89_phy_dtp_init(rtwdev);
 	rtw89_phy_ch_info_init(rtwdev);
 	rtw89_phy_ul_tb_info_init(rtwdev);
 	rtw89_phy_antdiv_init(rtwdev);
@@ -9017,6 +9387,8 @@ static const struct rtw89_ccx_regs rtw89_ccx_regs_ax = {
 	.nhm_en_mask = B_NHM_EN_MSK,
 	.nhm_method = R_NHM_TH9,
 	.nhm_pwr_method_msk = B_NHM_PWDB_METHOD_MSK,
+	.nhm_filter = 0,
+	.nhm_filter_mask = 0,
 	.edcca_clm_rdy = R_CLM_EDCCA_RDY,
 	.edcca_clm_rdy_mask = B_CLM_EDCCA_RDY,
 	.edcca_clm_cnt = R_CLM_EDCCA_RESULT,

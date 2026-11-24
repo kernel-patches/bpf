@@ -138,6 +138,7 @@ static void __rtw89_enter_lps_link(struct rtw89_dev *rtwdev,
 
 	rtw89_btc_ntfy_radio_state(rtwdev, BTC_RFCTRL_FW_CTRL);
 	rtw89_fw_h2c_lps_parm(rtwdev, &lps_param);
+	rtw89_fw_h2c_lps_adv_param(rtwdev, rtwvif_link);
 
 	if (RTW89_CHK_FW_FEATURE(BEACON_TRACKING, &rtwdev->fw))
 		rtw89_fw_h2c_pwr_lvl(rtwdev, rtwvif_link);
@@ -222,7 +223,7 @@ void rtw89_leave_lps(struct rtw89_dev *rtwdev)
 		rtw89_vif_for_each_link(rtwvif, rtwvif_link, link_id)
 			rtw89_leave_lps_vif(rtwdev, rtwvif_link);
 
-	rtw89_fw_h2c_init_trx_protect(rtwdev);
+	rtw89_core_config_active_bands(rtwdev);
 }
 
 void rtw89_enter_ips(struct rtw89_dev *rtwdev)

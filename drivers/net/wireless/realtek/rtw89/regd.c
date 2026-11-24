@@ -3,7 +3,9 @@
  */
 
 #include "acpi.h"
+#include "chan.h"
 #include "debug.h"
+#include "fw.h"
 #include "ps.h"
 #include "util.h"
 
@@ -585,8 +587,7 @@ bottom:
 
 static void rtw89_regd_setup_6ghz(struct rtw89_dev *rtwdev, struct wiphy *wiphy)
 {
-	const struct rtw89_chip_info *chip = rtwdev->chip;
-	bool chip_support_6ghz = chip->support_bands & BIT(NL80211_BAND_6GHZ);
+	bool chip_support_6ghz = test_bit(NL80211_BAND_6GHZ, rtwdev->supported_bands);
 	bool skip_acpi_dsm = rtwdev->hci.type == RTW89_HCI_TYPE_USB;
 	bool regd_allow_6ghz = chip_support_6ghz;
 	struct ieee80211_supported_band *sband;
@@ -704,6 +705,252 @@ static void rtw89_regd_setup_reg_rules(struct rtw89_dev *rtwdev)
 		!u8_get_bits(ptr->conf, RTW89_ACPI_CONF_REG_RULE_REGD_UK);
 
 	kfree(ptr);
+}
+
+void rtw89_regd_learn_queue(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_regd_learn *regd_learn = &rtwdev->regd_learn;
+	static const unsigned int backoff_list[] = {
+		4, 16, 64, 256, 1024, 4096,
+	};
+	struct wiphy *wiphy = rtwdev->hw->wiphy;
+	struct rtw89_hal *hal = &rtwdev->hal;
+	unsigned int delay;
+	unsigned int index;
+
+	lockdep_assert_wiphy(wiphy);
+
+	if (!regd_learn->can_activate)
+		return;
+
+	if (!regd_learn->shall_run)
+		return;
+
+	if (hal->disabled_dm_bitmap & BIT(RTW89_DM_REGD_LEARN))
+		return;
+
+	rtw89_debug(rtwdev, RTW89_DBG_REGD, "regd_learn: queue (retry=%u)\n",
+		    regd_learn->retry);
+
+	index = min_t(unsigned int, regd_learn->retry,
+		      ARRAY_SIZE(backoff_list) - 1);
+	delay = backoff_list[index] * HZ;
+
+	wiphy_delayed_work_queue(wiphy, &regd_learn->work, delay);
+}
+
+static int __rtw89_regd_learn_retry(struct rtw89_dev *rtwdev, void *data)
+{
+	struct rtw89_regd_learn *regd_learn = &rtwdev->regd_learn;
+
+	regd_learn->retry++;
+	rtw89_regd_learn_queue(rtwdev);
+
+	return 0;
+}
+
+static void __rtw89_regd_learn_start_setup(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_chanctx_pause_parm pause_parm = {
+		.rsn = RTW89_CHANCTX_PAUSE_REASON_REGD_LEARN,
+	};
+
+	rtw89_leave_ips_by_hwflags(rtwdev);
+	rtw89_leave_lps(rtwdev);
+	rtw89_chanctx_pause(rtwdev, &pause_parm);
+
+	set_bit(RTW89_FLAG_REGD_LEARNING, rtwdev->flags);
+}
+
+static void __rtw89_regd_learn_stop_cleanup(struct rtw89_dev *rtwdev, bool retry)
+{
+	static const struct rtw89_chanctx_cb_parm cb_retry = {
+		.cb = __rtw89_regd_learn_retry,
+		.data = NULL,
+		.caller = __func__,
+	};
+
+	clear_bit(RTW89_FLAG_REGD_LEARNING, rtwdev->flags);
+
+	rtw89_chanctx_proceed(rtwdev, retry ? &cb_retry : NULL);
+	rtw89_enter_ips_by_hwflags(rtwdev);
+}
+
+static void __rtw89_regd_learn_finish(struct rtw89_dev *rtwdev, bool retry)
+{
+	struct rtw89_regd_learn *regd_learn = &rtwdev->regd_learn;
+	struct wiphy *wiphy = rtwdev->hw->wiphy;
+
+	wiphy_delayed_work_cancel(wiphy, &regd_learn->work);
+	wiphy_delayed_work_cancel(wiphy, &regd_learn->timeout_work);
+
+	if (test_bit(RTW89_FLAG_REGD_LEARNING, rtwdev->flags))
+		__rtw89_regd_learn_stop_cleanup(rtwdev, retry);
+}
+
+void rtw89_regd_learn_cancel(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_regd_learn *regd_learn = &rtwdev->regd_learn;
+	struct wiphy *wiphy = rtwdev->hw->wiphy;
+	int ret;
+
+	lockdep_assert_wiphy(wiphy);
+
+	if (!regd_learn->can_activate)
+		return;
+
+	rtw89_debug(rtwdev, RTW89_DBG_REGD, "regd_learn: cancel\n");
+
+	if (test_bit(RTW89_FLAG_REGD_LEARNING, rtwdev->flags)) {
+		ret = rtw89_fw_h2c_regd_learn(rtwdev, NULL);
+		if (ret)
+			rtw89_warn(rtwdev, "regd_learn: abort failed (ret=%d)\n", ret);
+	}
+
+	__rtw89_regd_learn_finish(rtwdev, false);
+}
+
+void rtw89_regd_learn_update(struct rtw89_dev *rtwdev, const char *alpha2, bool sync)
+{
+	struct rtw89_regd_learn *regd_learn = &rtwdev->regd_learn;
+	struct wiphy *wiphy = rtwdev->hw->wiphy;
+	const struct ieee80211_regdomain *wiphy_regd = get_wiphy_regdom(wiphy);
+	int ret;
+
+	lockdep_assert_wiphy(wiphy);
+
+	/*
+	 * Calls with REGD_LEARNING are only allowed in c2h context,
+	 * i.e. other callers should rtw89_regd_learn_cancel() first.
+	 */
+	if (test_bit(RTW89_FLAG_REGD_LEARNING, rtwdev->flags)) {
+		__rtw89_regd_learn_finish(rtwdev, !alpha2);
+
+		if (!alpha2)
+			return;
+
+		regd_learn->shall_run = false;
+		regd_learn->retry = 0;
+	} else {
+		regd_learn->retry = 0;
+
+		if (!wiphy_regd || memcmp(alpha2, wiphy_regd->alpha2, 2) == 0)
+			return;
+	}
+
+	rtw89_debug(rtwdev, RTW89_DBG_REGD,
+		    "regd_learn: reg_hint %.2s (sync=%d)\n", alpha2, sync);
+
+	ret = regulatory_hint(wiphy, alpha2);
+	if (ret) {
+		rtw89_warn(rtwdev, "regd_learn: reg_hint failed (ret=%d)\n", ret);
+		return;
+	}
+
+	if (!sync)
+		return;
+
+	memcpy(regd_learn->hinted_alpha2, alpha2, 2);
+	regd_learn->last_hint = jiffies;
+}
+
+static void rtw89_regd_learn_work(struct wiphy *wiphy, struct wiphy_work *work)
+{
+	struct rtw89_dev *rtwdev = container_of(work, struct rtw89_dev,
+						regd_learn.work.work);
+	struct rtw89_regd_learn *regd_learn = &rtwdev->regd_learn;
+	char *alpha2 = regd_learn->hinted_alpha2;
+	int ret;
+
+	lockdep_assert_wiphy(wiphy);
+
+	wiphy_delayed_work_cancel(wiphy, &regd_learn->timeout_work);
+
+	if (rtwdev->scanning || rtw89_chanctx_paused(rtwdev)) {
+		rtw89_regd_learn_queue(rtwdev);
+		return;
+	}
+
+	if (regd_learn->last_hint &&
+	    time_is_before_jiffies(regd_learn->last_hint +
+				   RTW89_REGD_LEARN_CACHE_TTL * HZ)) {
+		rtw89_debug(rtwdev, RTW89_DBG_REGD,
+			    "regd_learn: %.2s is outdated\n", alpha2);
+		memset(alpha2, 0, 2);
+	}
+
+	rtw89_debug(rtwdev, RTW89_DBG_REGD, "regd_learn: start\n");
+
+	__rtw89_regd_learn_start_setup(rtwdev);
+
+	ret = rtw89_fw_h2c_regd_learn(rtwdev, alpha2);
+	if (ret) {
+		rtw89_warn(rtwdev, "regd_learn: h2c failed (ret=%d)\n", ret);
+		__rtw89_regd_learn_stop_cleanup(rtwdev, true);
+		return;
+	}
+
+	wiphy_delayed_work_queue(wiphy, &regd_learn->timeout_work,
+				 RTW89_REGD_LEARN_TIMEOUT * HZ);
+}
+
+static void rtw89_regd_learn_timeout_work(struct wiphy *wiphy, struct wiphy_work *work)
+{
+	struct rtw89_dev *rtwdev = container_of(work, struct rtw89_dev,
+						regd_learn.timeout_work.work);
+
+	lockdep_assert_wiphy(wiphy);
+
+	rtw89_debug(rtwdev, RTW89_DBG_REGD, "regd_learn: timeout\n");
+
+	rtw89_regd_learn_cancel(rtwdev);
+	__rtw89_regd_learn_retry(rtwdev, NULL);
+}
+
+void rtw89_regd_learn_init(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_regulatory_info *regulatory = &rtwdev->regulatory;
+	struct rtw89_regd_learn *regd_learn = &rtwdev->regd_learn;
+	struct wiphy *wiphy = rtwdev->hw->wiphy;
+
+	lockdep_assert_wiphy(wiphy);
+
+	if (regd_learn->can_activate)
+		return;
+
+	regd_learn->can_activate = !regulatory->programmed &&
+				   RTW89_CHK_FW_FEATURE(REGD_LEARN, &rtwdev->fw);
+	if (!regd_learn->can_activate)
+		return;
+
+	rtw89_debug(rtwdev, RTW89_DBG_REGD, "regd_learn: init\n");
+
+	wiphy_delayed_work_init(&regd_learn->work, rtw89_regd_learn_work);
+	wiphy_delayed_work_init(&regd_learn->timeout_work, rtw89_regd_learn_timeout_work);
+
+	regd_learn->retry = 0;
+
+	rtw89_regd_learn_queue(rtwdev);
+}
+
+void rtw89_regd_learn_deinit(struct rtw89_dev *rtwdev, bool ser)
+{
+	struct rtw89_regd_learn *regd_learn = &rtwdev->regd_learn;
+	struct wiphy *wiphy = rtwdev->hw->wiphy;
+
+	lockdep_assert_wiphy(wiphy);
+
+	if (!regd_learn->can_activate)
+		return;
+
+	if (ser)
+		__rtw89_regd_learn_finish(rtwdev, false);
+	else
+		rtw89_regd_learn_cancel(rtwdev);
+
+	rtw89_debug(rtwdev, RTW89_DBG_REGD, "regd_learn: deinit\n");
+
+	regd_learn->can_activate = false;
 }
 
 int rtw89_regd_setup(struct rtw89_dev *rtwdev)
@@ -883,6 +1130,8 @@ static void rtw89_regd_notifier_apply(struct rtw89_dev *rtwdev,
 				      struct wiphy *wiphy,
 				      struct regulatory_request *request)
 {
+	struct rtw89_regd_learn *regd_learn = &rtwdev->regd_learn;
+
 	rtwdev->regulatory.regd = rtw89_regd_find_reg_by_name(rtwdev, request->alpha2);
 	/* This notification might be set from the system of distros,
 	 * and it does not expect the regulatory will be modified by
@@ -893,6 +1142,18 @@ static void rtw89_regd_notifier_apply(struct rtw89_dev *rtwdev,
 		wiphy->regulatory_flags |= REGULATORY_COUNTRY_IE_IGNORE;
 	else
 		wiphy->regulatory_flags &= ~REGULATORY_COUNTRY_IE_IGNORE;
+
+	rtw89_regd_learn_cancel(rtwdev);
+
+	regd_learn->shall_run = request->initiator != NL80211_REGDOM_SET_BY_USER &&
+				memcmp(request->alpha2, "00", 2) == 0;
+	if (!regd_learn->shall_run) {
+		rtw89_regd_learn_update(rtwdev, request->alpha2,
+					request->initiator != NL80211_REGDOM_SET_BY_USER);
+		return;
+	}
+
+	rtw89_regd_learn_queue(rtwdev);
 }
 
 static

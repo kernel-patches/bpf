@@ -255,7 +255,13 @@ static void rtl8180_handle_rx(struct ieee80211_hw *dev)
 			goto done;
 		else {
 			struct ieee80211_rx_status rx_status = {0};
-			struct sk_buff *new_skb = dev_alloc_skb(MAX_RX_SIZE);
+			u32 rx_len = flags & 0xFFF;
+			struct sk_buff *new_skb;
+
+			if (unlikely(rx_len > MAX_RX_SIZE))
+				goto done;
+
+			new_skb = dev_alloc_skb(MAX_RX_SIZE);
 
 			if (unlikely(!new_skb))
 				goto done;
@@ -274,7 +280,7 @@ static void rtl8180_handle_rx(struct ieee80211_hw *dev)
 			dma_unmap_single(&priv->pdev->dev,
 					 *((dma_addr_t *)skb->cb),
 					 MAX_RX_SIZE, DMA_FROM_DEVICE);
-			skb_put(skb, flags & 0xFFF);
+			skb_put(skb, rx_len);
 
 			rx_status.antenna = (flags2 >> 15) & 1;
 			rx_status.rate_idx = (flags >> 20) & 0xF;

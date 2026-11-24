@@ -575,6 +575,7 @@ struct rtl8xxxu_txdesc40 {
 #define TXDESC32_RETRY_LIMIT_ENABLE	BIT(17)
 #define TXDESC32_RETRY_LIMIT_SHIFT	18
 #define TXDESC32_RETRY_LIMIT_MASK	0x00fc0000
+#define TXDESC32_RETRY_LIMIT_MAX	63
 
 /* Word 6 */
 #define TXDESC_MAX_AGG_SHIFT		11
@@ -1811,6 +1812,11 @@ struct rtl8xxxu_priv {
 	bool shutdown;
 	struct delayed_work rx_urb_wq;
 
+	spinlock_t tx_report_lock; /* protects tx_report_skb */
+	struct sk_buff *tx_report_skb;
+	unsigned long tx_report_start;
+	struct delayed_work tx_report_poll_work;
+
 	u8 mac_addr[ETH_ALEN];
 	char chip_name[8];
 	char chip_vendor[8];
@@ -1891,7 +1897,7 @@ struct rtl8xxxu_priv {
 		__le32 val32;
 		__le16 val16;
 		u8 val8;
-	} usb_buf;
+	} *usb_buf;
 	union {
 		u8 raw[EFUSE_MAP_LEN];
 		struct rtl8723au_efuse efuse8723;
@@ -2009,6 +2015,7 @@ struct rtl8xxxu_fileops {
 	char rx_desc_size;
 	u8 has_s0s1:1;
 	u8 has_tx_report:1;
+	u8 has_c2hevt_tx_report:1;
 	u8 gen2_thermal_meter:1;
 	u8 needs_full_init:1;
 	u8 init_reg_rxfltmap:1;

@@ -197,7 +197,7 @@ print_hw_cap:
 		efuse->hw_cap.ant_num, efuse->hw_cap.nss);
 }
 
-int rtw88xxa_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+int rtw88xxa_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	const struct rtw_chip_info *chip = rtwdev->chip;
 	struct rtw_efuse *efuse = &rtwdev->efuse;

@@ -1281,7 +1281,7 @@ static u32 __rtw89_pci_check_and_reclaim_tx_resource(struct rtw89_dev *rtwdev,
 	bd_cnt = rtw89_pci_get_avail_txbd_num(tx_ring);
 	wd_cnt = wd_ring->curr_num;
 
-	if (wd_cnt == 0 || bd_cnt == 0) {
+	if (wd_cnt == 0 || bd_cnt < RTW89_PCI_TXBD_RECLAIM_TH) {
 		cnt = rtw89_pci_rxbd_recalc(rtwdev, rx_ring);
 		if (cnt)
 			rtw89_pci_release_tx(rtwdev, rx_ring, cnt);
@@ -1289,7 +1289,7 @@ static u32 __rtw89_pci_check_and_reclaim_tx_resource(struct rtw89_dev *rtwdev,
 			goto out_unlock;
 
 		bd_cnt = rtw89_pci_get_avail_txbd_num(tx_ring);
-		if (bd_cnt == 0)
+		if (bd_cnt < RTW89_PCI_TXBD_RECLAIM_TH)
 			rtw89_pci_reclaim_txbd(rtwdev, tx_ring);
 	}
 
@@ -4268,6 +4268,7 @@ static void rtw89_pci_recalc_int_mit(struct rtw89_dev *rtwdev)
 	u32 val = 0;
 
 	if (rtwdev->scanning ||
+	    test_bit(RTW89_FLAG_REGD_LEARNING, rtwdev->flags) ||
 	    (tx_tfc_lv < RTW89_TFC_HIGH && rx_tfc_lv < RTW89_TFC_HIGH))
 		goto out;
 

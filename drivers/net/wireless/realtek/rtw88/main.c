@@ -386,6 +386,9 @@ void rtw_sta_remove(struct rtw_dev *rtwdev, struct ieee80211_sta *sta,
 
 	cancel_work_sync(&si->rc_work);
 
+	if (!vif)
+		return;
+
 	if (vif->type != NL80211_IFTYPE_STATION || sta->tdls)
 		rtw_release_macid(rtwdev, si->mac_id);
 	if (fw_exist)
@@ -395,8 +398,11 @@ void rtw_sta_remove(struct rtw_dev *rtwdev, struct ieee80211_sta *sta,
 		rtw_txq_cleanup(rtwdev, sta->txq[i]);
 
 	kfree(si->mask);
+	si->mask = NULL;
+	si->use_cfg_mask = false;
 
 	rtwdev->sta_cnt--;
+	si->vif = NULL;
 	rtw_dbg(rtwdev, RTW_DBG_STATE, "sta %pM with macid %d left\n",
 		sta->addr, si->mac_id);
 }
@@ -1531,6 +1537,8 @@ int rtw_core_start(struct rtw_dev *rtwdev)
 
 	set_bit(RTW_FLAG_RUNNING, rtwdev->flags);
 
+	rtwdev->ps_hang_cnt = 0;
+
 	return 0;
 }
 
@@ -2443,28 +2451,26 @@ void rtw_core_port_switch(struct rtw_dev *rtwdev, struct ieee80211_vif *vif)
 	rtw_iterate_vifs(rtwdev, rtw_port_switch_iter, &iter_data);
 }
 
-static void rtw_check_sta_active_iter(void *data, struct ieee80211_vif *vif)
-{
-	struct rtw_vif *rtwvif = (struct rtw_vif *)vif->drv_priv;
-	bool *active = data;
-
-	if (*active)
-		return;
-
-	if (vif->type != NL80211_IFTYPE_STATION)
-		return;
-
-	if (vif->cfg.assoc || !is_zero_ether_addr(rtwvif->bssid))
-		*active = true;
-}
-
 bool rtw_core_check_sta_active(struct rtw_dev *rtwdev)
 {
-	bool sta_active = false;
+	struct ieee80211_vif *vif;
+	struct rtw_vif *rtwvif;
 
-	rtw_iterate_vifs(rtwdev, rtw_check_sta_active_iter, &sta_active);
+	lockdep_assert_wiphy(rtwdev->hw->wiphy);
 
-	return rtwdev->ap_active || sta_active;
+	if (rtwdev->ap_active)
+		return true;
+
+	for_each_active_interface(vif, rtwdev->hw) {
+		if (vif->type != NL80211_IFTYPE_STATION)
+			continue;
+
+		rtwvif = (struct rtw_vif *)vif->drv_priv;
+		if (vif->cfg.assoc || !is_zero_ether_addr(rtwvif->bssid))
+			return true;
+	}
+
+	return false;
 }
 
 void rtw_core_enable_beacon(struct rtw_dev *rtwdev, bool enable)

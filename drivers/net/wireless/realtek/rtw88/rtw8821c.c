@@ -45,7 +45,7 @@ enum rtw8821ce_rf_set {
 	SWITCH_TO_BT,
 };
 
-static int rtw8821c_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static int rtw8821c_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_hal *hal = &rtwdev->hal;
 	struct rtw_efuse *efuse = &rtwdev->efuse;

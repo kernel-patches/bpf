@@ -173,7 +173,7 @@ int rtw_parse_efuse_map(struct rtw_dev *rtwdev)
 		goto out_free;
 	}
 
-	ret = chip->ops->read_efuse(rtwdev, log_map);
+	ret = chip->ops->read_efuse(rtwdev, log_map, phy_map);
 	if (ret) {
 		rtw_err(rtwdev, "failed to read efuse map\n");
 		goto out_free;

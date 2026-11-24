@@ -1280,7 +1280,7 @@ static void rtw8723b_query_phy_status_ofdm(struct rtw_dev *rtwdev, void *phy_raw
 	pkt_stat->rx_power[RF_PATH_A] = (val_s8 * 2) - 110;
 
 	pkt_stat->rssi = rtw_phy_rf_power_2_rssi(pkt_stat->rx_power, 1);
-	pkt_stat->rx_snr[RF_PATH_A] = (s8)(phy_status->path_rxsnr[RF_PATH_A] / 2);
+	pkt_stat->rx_snr[RF_PATH_A] = phy_status->path_rxsnr[RF_PATH_A];
 
 	/* signal power reported by HW */
 	val_s8 = phy_status->cck_sig_qual_ofdm_pwdb_all >> 1;
@@ -1303,13 +1303,6 @@ static void rtw8723b_query_phy_status_ofdm(struct rtw_dev *rtwdev, void *phy_raw
 static void rtw8723b_query_phy_status(struct rtw_dev *rtwdev, u8 *phy_status,
 				      struct rtw_rx_pkt_stat *pkt_stat)
 {
-	/*
-	 * The 8723B PHY status does not report the channel, so we must
-	 * mark it invalid to allow mac80211/rtw88 to parse it from the IE
-	 * during scanning.
-	 */
-	pkt_stat->channel_invalid = true;
-
 	if (pkt_stat->rate <= DESC_RATE11M)
 		rtw8723b_query_phy_status_cck(rtwdev, phy_status, pkt_stat);
 	else
@@ -2349,12 +2342,51 @@ static void rtw8723b_fill_txdesc_checksum(struct rtw_dev *rtwdev,
 	fill_txdesc_checksum_common(txdesc, 16);
 }
 
-static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static void rtw8723b_read_package_type(struct rtw_dev *rtwdev, u8 *phy_map)
+{
+	struct rtw_hal *hal = &rtwdev->hal;
+	u8 val_1fb, package;
+
+	val_1fb = phy_map[RTW8723B_EFUSE_PACKAGE_TYPE];
+	package = u8_get_bits(val_1fb, RTW8723B_PACKAGE_TYPE_MASK);
+
+	switch (package) {
+	case 0x4:
+		hal->pkg_type = RTW8723B_PACKAGE_TFBGA79;
+		break;
+	case 0x5:
+		hal->pkg_type = RTW8723B_PACKAGE_TFBGA90;
+		break;
+	case 0x6:
+		hal->pkg_type = RTW8723B_PACKAGE_QFN68;
+		break;
+	case 0x7:
+		hal->pkg_type = RTW8723B_PACKAGE_TFBGA80;
+		break;
+	default:
+		hal->pkg_type = RTW8723B_PACKAGE_DEFAULT;
+		break;
+	}
+}
+
+static void rtw8723b_read_chip_variant(struct rtw_dev *rtwdev, u8 *phy_map)
+{
+	u8 val_1fb, variant;
+
+	val_1fb = phy_map[RTW8723B_EFUSE_PACKAGE_TYPE];
+	variant = u8_get_bits(val_1fb, RTW8723B_VARIANT_MASK);
+
+	if (rtw_hci_type(rtwdev) == RTW_HCI_TYPE_SDIO &&
+	    variant == RTW8723B_VARIANT_8703AS)
+		rtwdev->efuse.hw_cap.bw &= ~BIT(RTW_CHANNEL_WIDTH_40);
+}
+
+static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
 	int ret;
 
-	ret = rtw8723x_read_efuse(rtwdev, log_map);
+	ret = rtw8723x_read_efuse(rtwdev, log_map, phy_map);
 	if (ret)
 		return ret;
 
@@ -2365,14 +2397,14 @@ static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
 	if (efuse->power_track_type != 0)
 		rtw_warn(rtwdev, "unsupported power track type\n");
 
-	/*
-	 * No firmware hardware feature report exists, so fill the hardware
-	 * capability here; a zero stream count kills the HT MCS set.
-	 */
-	efuse->hw_cap.nss = max_t(u8, rtwdev->hal.rf_path_num, 1);
-	efuse->hw_cap.ant_num = efuse->hw_cap.nss;
+	/* No firmware hardware feature report exists, so fill it in here. */
+	efuse->hw_cap.nss = 1;
+	efuse->hw_cap.ant_num = 1;
 	efuse->hw_cap.bw = BIT(RTW_CHANNEL_WIDTH_20) |
 			   BIT(RTW_CHANNEL_WIDTH_40);
+
+	rtw8723b_read_package_type(rtwdev, phy_map);
+	rtw8723b_read_chip_variant(rtwdev, phy_map);
 
 	return 0;
 }

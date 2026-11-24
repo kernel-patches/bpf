@@ -739,8 +739,8 @@ static int rtw_debugfs_get_tx_pwr_tbl(struct seq_file *m, void *v)
 			seq_printf(m, "%4c ", path + 'A');
 			rtw_print_rate(m, rate);
 			seq_printf(m, " %3u(0x%02x) %4u %4d (%4d %4d %4d) %4d\n",
-				   hal->tx_pwr_tbl[path][rate],
-				   hal->tx_pwr_tbl[path][rate],
+				   (u8)hal->tx_pwr_tbl[path][rate],
+				   (u8)hal->tx_pwr_tbl[path][rate],
 				   pwr_param.pwr_base,
 				   min3(pwr_param.pwr_offset,
 					pwr_param.pwr_limit,

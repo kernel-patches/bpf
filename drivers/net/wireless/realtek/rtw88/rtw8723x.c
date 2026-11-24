@@ -250,7 +250,7 @@ static const u8 rtw8723x_txpwr_idx_table[] = {
 	0x2D, 0x2D, 0x2D, 0x2D, 0x2D, 0x02
 };
 
-static int __rtw8723x_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static int __rtw8723x_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
 	u8 *pwr = (u8 *)efuse->txpwr_idx_table;
