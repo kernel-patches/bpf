@@ -2256,24 +2256,21 @@ best_effort:
  *
  * Context: Assumes to be called with @protocols_mtx already acquired.
  * Return: A reference to a freshly allocated and initialized protocol instance
- *	   or ERR_PTR on failure. On failure the @proto reference is at first
- *	   put using @scmi_protocol_put() before releasing all the devres group.
+ *	   or ERR_PTR on failure.
  */
 static struct scmi_protocol_instance *
 scmi_alloc_init_protocol_instance(struct scmi_info *info,
 				  const struct scmi_protocol *proto)
 {
+	const struct scmi_handle *handle = &info->handle;
+	struct scmi_protocol_instance *pi;
 	int ret = -ENOMEM;
 	void *gid;
-	struct scmi_protocol_instance *pi;
-	const struct scmi_handle *handle = &info->handle;
 
 	/* Protocol specific devres group */
 	gid = devres_open_group(handle->dev, NULL, GFP_KERNEL);
-	if (!gid) {
-		scmi_protocol_put(proto);
-		goto out;
-	}
+	if (!gid)
+		return ERR_PTR(ret);
 
 	pi = devm_kzalloc(handle->dev, sizeof(*pi), GFP_KERNEL);
 	if (!pi)
@@ -2328,10 +2325,7 @@ deinit:
 	if (pi->proto->instance_deinit)
 		pi->proto->instance_deinit(&pi->ph);
 clean:
-	/* Take care to put the protocol module's owner before releasing all */
-	scmi_protocol_put(proto);
 	devres_release_group(handle->dev, gid);
-out:
 	return ERR_PTR(ret);
 }
 
@@ -2351,25 +2345,25 @@ out:
 static struct scmi_protocol_instance * __must_check
 scmi_get_protocol_instance(const struct scmi_handle *handle, u8 protocol_id)
 {
-	struct scmi_protocol_instance *pi;
 	struct scmi_info *info = handle_to_scmi_info(handle);
+	struct scmi_protocol_instance *pi;
+	const struct scmi_protocol *proto;
 
-	mutex_lock(&info->protocols_mtx);
+	guard(mutex)(&info->protocols_mtx);
 	pi = idr_find(&info->protocols, protocol_id);
-
 	if (pi) {
 		refcount_inc(&pi->users);
-	} else {
-		const struct scmi_protocol *proto;
-
-		/* Fails if protocol not registered on bus */
-		proto = scmi_protocol_get(protocol_id, &info->version);
-		if (proto)
-			pi = scmi_alloc_init_protocol_instance(info, proto);
-		else
-			pi = ERR_PTR(-EPROBE_DEFER);
+		return pi;
 	}
-	mutex_unlock(&info->protocols_mtx);
+
+	/* Fails if protocol not registered on bus */
+	proto = scmi_protocol_get(protocol_id, &info->version);
+	if (!proto)
+		return ERR_PTR(-EPROBE_DEFER);
+
+	pi = scmi_alloc_init_protocol_instance(info, proto);
+	if (IS_ERR(pi))
+		scmi_protocol_put(proto);
 
 	return pi;
 }
@@ -2402,12 +2396,13 @@ void scmi_protocol_release(const struct scmi_handle *handle, u8 protocol_id)
 	struct scmi_info *info = handle_to_scmi_info(handle);
 	struct scmi_protocol_instance *pi;
 
-	mutex_lock(&info->protocols_mtx);
+	guard(mutex)(&info->protocols_mtx);
 	pi = idr_find(&info->protocols, protocol_id);
 	if (WARN_ON(!pi))
-		goto out;
+		return;
 
 	if (refcount_dec_and_test(&pi->users)) {
+		const struct scmi_protocol *proto = pi->proto;
 		void *gid = pi->gid;
 
 		if (pi->proto->events)
@@ -2418,15 +2413,11 @@ void scmi_protocol_release(const struct scmi_handle *handle, u8 protocol_id)
 
 		idr_remove(&info->protocols, protocol_id);
 
-		scmi_protocol_put(pi->proto);
-
 		devres_release_group(handle->dev, gid);
+		scmi_protocol_put(proto);
 		dev_dbg(handle->dev, "De-Initialized protocol: 0x%X\n",
 			protocol_id);
 	}
-
-out:
-	mutex_unlock(&info->protocols_mtx);
 }
 
 void scmi_setup_protocol_implemented(const struct scmi_protocol_handle *ph,
