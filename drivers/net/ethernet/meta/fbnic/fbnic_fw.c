@@ -968,7 +968,7 @@ msg_err:
 	complete(&cmpl_data->done);
 	fbnic_fw_put_cmpl(cmpl_data);
 
-	return err;
+	return 0;
 }
 
 /**
