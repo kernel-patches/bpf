@@ -748,9 +748,8 @@ static int rfcomm_sock_getsockopt_old(struct socket *sock, int optname,
 				      sockopt_t *sopt)
 {
 	struct sock *sk = sock->sk;
-	struct sock *l2cap_sk;
-	struct l2cap_conn *conn;
 	struct rfcomm_conninfo cinfo;
+	struct rfcomm_dlc *d;
 	int err = 0;
 	size_t len;
 	u32 opt;
@@ -793,20 +792,21 @@ static int rfcomm_sock_getsockopt_old(struct socket *sock, int optname,
 		break;
 
 	case RFCOMM_CONNINFO:
-		if ((sk->sk_state != BT_CONNECTED &&
-		     !(sk->sk_state == BT_CONNECT2 &&
-		       rfcomm_pi(sk)->dlc->defer_setup)) ||
-		    !rfcomm_pi(sk)->dlc->session) {
+		if (sk->sk_state != BT_CONNECTED &&
+		    !(sk->sk_state == BT_CONNECT2 &&
+		      rfcomm_pi(sk)->dlc->defer_setup)) {
 			err = -ENOTCONN;
 			break;
 		}
 
-		l2cap_sk = rfcomm_pi(sk)->dlc->session->sock->sk;
-		conn = l2cap_pi(l2cap_sk)->chan->conn;
-
-		memset(&cinfo, 0, sizeof(cinfo));
-		cinfo.hci_handle = conn->hcon->handle;
-		memcpy(cinfo.dev_class, conn->hcon->dev_class, 3);
+		d = rfcomm_pi(sk)->dlc;
+		rfcomm_dlc_hold(d);
+		release_sock(sk);
+		err = rfcomm_dlc_get_conninfo(d, &cinfo);
+		rfcomm_dlc_put(d);
+		lock_sock(sk);
+		if (err)
+			break;
 
 		len = min(len, sizeof(cinfo));
 		if (copy_to_iter(&cinfo, len, &sopt->iter_out) != len)

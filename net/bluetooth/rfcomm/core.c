@@ -1427,6 +1427,29 @@ void rfcomm_dlc_accept(struct rfcomm_dlc *d)
 	rfcomm_unlock();
 }
 
+int rfcomm_dlc_get_conninfo(struct rfcomm_dlc *d, struct rfcomm_conninfo *ci)
+{
+	struct l2cap_conn *conn;
+	struct sock *l2cap_sk;
+	int err = 0;
+
+	rfcomm_lock();
+
+	if (!d->session) {
+		err = -ENOTCONN;
+	} else {
+		l2cap_sk = d->session->sock->sk;
+		conn = l2cap_pi(l2cap_sk)->chan->conn;
+
+		memset(ci, 0, sizeof(*ci));
+		ci->hci_handle = conn->hcon->handle;
+		memcpy(ci->dev_class, conn->hcon->dev_class, 3);
+	}
+
+	rfcomm_unlock();
+	return err;
+}
+
 static void rfcomm_check_accept(struct rfcomm_dlc *d)
 {
 	if (rfcomm_check_security(d)) {
