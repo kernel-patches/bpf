@@ -284,6 +284,7 @@ int big_alloc2(void *ctx)
 /* Nonsleepable because it binds to a socket program. */
 SEC("socket")
 __success __retval(0)
+__skip("nonsleepable allocation failed") __retval(1)
 __skip_without_arena
 int big_alloc3(void *ctx)
 {
@@ -291,7 +292,13 @@ int big_alloc3(void *ctx)
 	u64 i;
 	int err = 0;
 
-	/* Verify that a nonsleepable allocation larger than 1024 pages succeeds. */
+	/*
+	 * Verify that a nonsleepable allocation larger than 1024 pages works.
+	 * Each page comes from alloc_pages_nolock(), which does not reclaim and
+	 * only uses trylock, so the allocation can fail when memory is low,
+	 * for example in a small KASAN VM. If it fails, return 1 to report
+	 * SKIP. big_alloc4 checks the sleepable path, which can reclaim.
+	 */
 	pages = bpf_arena_alloc_pages(&arena, NULL, LARGE_PAGE_CNT, NUMA_NO_NODE, 0);
 	if (!pages)
 		return 1;
