@@ -292,9 +292,12 @@ static bool uac_clock_source_is_valid(struct snd_usb_audio *chip,
 		return uac_clock_source_is_valid_quirk(chip, fmt, source_id);
 }
 
+#define MAX_CLOCK_DEPTH	16
+
 static int __uac_clock_find_source(struct snd_usb_audio *chip,
 				   const struct audioformat *fmt, int entity_id,
-				   unsigned long *visited, bool validate)
+				   unsigned long *visited, bool validate,
+				   int depth)
 {
 	union uac23_clock_source_desc *source;
 	union uac23_clock_selector_desc *selector;
@@ -306,6 +309,13 @@ static int __uac_clock_find_source(struct snd_usb_audio *chip,
 	u32 bmControls;
 
 	entity_id &= 0xff;
+
+	if (depth >= MAX_CLOCK_DEPTH) {
+		usb_audio_warn(chip,
+			 "%s(): clock topology is too deep, id %d.\n",
+			 __func__, entity_id);
+		return -EINVAL;
+	}
 
 	if (test_and_set_bit(entity_id, visited)) {
 		usb_audio_warn(chip,
@@ -381,7 +391,7 @@ static int __uac_clock_find_source(struct snd_usb_audio *chip,
 		cur = ret;
 		ret = __uac_clock_find_source(chip, fmt,
 					      sources[ret - 1],
-					      visited, validate);
+					      visited, validate, depth + 1);
 		if (ret > 0) {
 			/* Skip setting clock selector again for some devices */
 			if (chip->quirk_flags & QUIRK_FLAG_SKIP_CLOCK_SELECTOR ||
@@ -414,7 +424,7 @@ static int __uac_clock_find_source(struct snd_usb_audio *chip,
 
 			ret = __uac_clock_find_source(chip, fmt,
 						      sources[i - 1],
-						      visited, true);
+						      visited, true, depth + 1);
 			if (ret < 0)
 				continue;
 
@@ -436,7 +446,7 @@ static int __uac_clock_find_source(struct snd_usb_audio *chip,
 	if (multiplier)
 		return __uac_clock_find_source(chip, fmt,
 					       GET_VAL(multiplier, proto, bCSourceID),
-					       visited, validate);
+					       visited, validate, depth + 1);
 
 	return -EINVAL;
 }
@@ -462,7 +472,7 @@ int snd_usb_clock_find_source(struct snd_usb_audio *chip,
 	case UAC_VERSION_2:
 	case UAC_VERSION_3:
 		return __uac_clock_find_source(chip, fmt, fmt->clock, visited,
-					       validate);
+					       validate, 0);
 	default:
 		return -EINVAL;
 	}
