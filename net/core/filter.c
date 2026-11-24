@@ -2546,6 +2546,41 @@ static struct net_device *skb_get_peer_dev(struct net_device *dev)
 	return NULL;
 }
 
+#if IS_ENABLED(CONFIG_INET)
+static void skb_redirect_prefetched_sk(struct sk_buff *skb,
+				       const struct net_device *dev, u32 flags)
+{
+	struct sock *sk;
+
+	if (!skb_sk_is_prefetched(skb))
+		return;
+
+	sk = skb->sk;
+	/*
+	 * tc ingress redirects to ingress in the same namespace keep a
+	 * prefetched socket if the skb owns a reference or can acquire one.
+	 * Other redirects and request sockets lose the assignment.
+	 */
+	if (!skb_at_tc_ingress(skb) || flags != BPF_F_INGRESS ||
+	    !net_eq(sock_net(sk), dev_net(dev)) || !sk_fullsock(sk))
+		goto orphan;
+	if (skb->destructor == sock_pfree_ref || sk_is_refcounted(sk))
+		return;
+	if (refcount_inc_not_zero_acquire(&sk->sk_refcnt)) {
+		skb->destructor = sock_pfree_ref;
+		return;
+	}
+
+orphan:
+	skb_orphan(skb);
+}
+#else
+static inline void skb_redirect_prefetched_sk(struct sk_buff *skb,
+					      const struct net_device *dev, u32 flags)
+{
+}
+#endif
+
 int skb_do_redirect(struct sk_buff *skb)
 {
 	struct bpf_redirect_info *ri = bpf_net_ctx_get_ri();
@@ -2558,6 +2593,8 @@ int skb_do_redirect(struct sk_buff *skb)
 	ri->flags = 0;
 	if (unlikely(!dev))
 		goto out_drop;
+
+	skb_redirect_prefetched_sk(skb, dev, flags);
 	if (flags & BPF_F_PEER) {
 		dev = skb_get_peer_dev(dev);
 		if (unlikely(!dev ||
