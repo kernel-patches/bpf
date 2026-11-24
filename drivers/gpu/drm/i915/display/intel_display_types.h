@@ -63,6 +63,7 @@ struct intel_dp_link_training;
 struct intel_fbc;
 struct intel_global_objs_state;
 struct intel_hdcp_shim;
+struct intel_panel_bl_funcs;
 struct intel_panic;
 struct intel_tc_port;
 
@@ -303,17 +304,6 @@ struct intel_encoder {
 
 	/* VBT information for this encoder (may be NULL for older platforms) */
 	const struct intel_bios_encoder_data *devdata;
-};
-
-struct intel_panel_bl_funcs {
-	/* Connector and platform specific backlight functions */
-	int (*setup)(struct intel_connector *connector, enum pipe pipe);
-	u32 (*get)(struct intel_connector *connector, enum pipe pipe);
-	void (*set)(const struct drm_connector_state *conn_state, u32 level);
-	void (*disable)(const struct drm_connector_state *conn_state, u32 level);
-	void (*enable)(const struct intel_crtc_state *crtc_state,
-		       const struct drm_connector_state *conn_state, u32 level);
-	u32 (*hz_to_pwm)(struct intel_connector *connector, u32 hz);
 };
 
 /* in 100us units */
