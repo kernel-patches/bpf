@@ -1287,6 +1287,7 @@ static void smc_buf_unuse(struct smc_connection *conn,
 /* remove a finished connection from its link group */
 void smc_conn_free(struct smc_connection *conn)
 {
+	struct smc_sock *smc = container_of(conn, struct smc_sock, conn);
 	struct smc_link_group *lgr = conn->lgr;
 
 	if (!lgr || conn->freed)
@@ -1309,8 +1310,9 @@ void smc_conn_free(struct smc_connection *conn)
 			smcd_buf_detach(conn);
 	} else {
 		smc_cdc_wait_pend_tx_wr(conn);
-		if (current_work() != &conn->abort_work)
-			cancel_work_sync(&conn->abort_work);
+		if (current_work() != &conn->abort_work &&
+		    cancel_work_sync(&conn->abort_work))
+			sock_put(&smc->sk);
 	}
 	/* The handshake can retry another device or SMC version with this
 	 * connection, so it must never stay registered in an lgr it left.
