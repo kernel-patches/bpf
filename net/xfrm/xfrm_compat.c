@@ -642,16 +642,25 @@ static struct nlmsghdr *xfrm_user_rcv_msg_compat(const struct nlmsghdr *h32,
 	return h64;
 }
 
-static int xfrm_user_policy_compat(u8 **pdata32, int optlen)
+static int xfrm_user_policy_compat(u8 **pdata32, int *optlen)
 {
 	struct compat_xfrm_userpolicy_info *p = (void *)*pdata32;
 	u8 *src_templates, *dst_templates;
 	u8 *data64;
 
-	if (optlen < sizeof(*p))
+	/* The 64-bit layout only adds tail padding, and the templates
+	 * after it are the same in both layouts.
+	 */
+	BUILD_BUG_ON(sizeof(struct xfrm_userpolicy_info) -
+		     sizeof(struct compat_xfrm_userpolicy_info) != 4);
+	BUILD_BUG_ON(offsetof(struct xfrm_userpolicy_info, share) !=
+		     offsetof(struct compat_xfrm_userpolicy_info, share));
+	BUILD_BUG_ON(__alignof__(struct xfrm_user_tmpl) > 4);
+
+	if (*optlen < sizeof(*p))
 		return -EINVAL;
 
-	data64 = kmalloc_track_caller(optlen + 4, GFP_USER | __GFP_NOWARN);
+	data64 = kmalloc_track_caller(*optlen + 4, GFP_USER | __GFP_NOWARN);
 	if (!data64)
 		return -ENOMEM;
 
@@ -660,10 +669,11 @@ static int xfrm_user_policy_compat(u8 **pdata32, int optlen)
 
 	src_templates = *pdata32 + sizeof(*p);
 	dst_templates = data64 + sizeof(*p) + 4;
-	memcpy(dst_templates, src_templates, optlen - sizeof(*p));
+	memcpy(dst_templates, src_templates, *optlen - sizeof(*p));
 
 	kfree(*pdata32);
 	*pdata32 = data64;
+	*optlen += 4;
 	return 0;
 }
 

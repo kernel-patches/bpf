@@ -3115,7 +3115,7 @@ int xfrm_user_policy(struct sock *sk, int optname, sockptr_t optval, int optlen)
 			return -EOPNOTSUPP;
 		}
 
-		err = xtr->xlate_user_policy_sockptr(&data, optlen);
+		err = xtr->xlate_user_policy_sockptr(&data, &optlen);
 		xfrm_put_translator(xtr);
 		if (err) {
 			kfree(data);
