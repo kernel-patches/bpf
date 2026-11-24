@@ -2080,7 +2080,7 @@ retry:
 		goto retry;
 	}
 
-	if (!dev_validate_header(dev, skb->data, len) || !skb->len) {
+	if (len < hard_header_len || !skb->len) {
 		err = -EINVAL;
 		goto out_unlock;
 	}
@@ -2664,7 +2664,7 @@ static int tpacket_fill_skb(struct packet_sock *po, struct sk_buff *skb,
 		err = skb_store_bits(skb, 0, data, hdrlen);
 		if (unlikely(err))
 			return err;
-		if (!dev_validate_header(dev, skb->data, hdrlen))
+		if (hdrlen < hard_header_len)
 			return -EINVAL;
 
 		data += hdrlen;
@@ -3135,8 +3135,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	if (err)
 		goto out_free;
 
-	if ((sock->type == SOCK_RAW &&
-	     !dev_validate_header(dev, skb->data, len)) || !skb->len) {
+	if ((sock->type == SOCK_RAW && len < hard_header_len) || !skb->len) {
 		err = -EINVAL;
 		goto out_free;
 	}

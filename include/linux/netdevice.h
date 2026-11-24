@@ -326,7 +326,6 @@ struct header_ops {
 	void	(*cache_update)(struct hh_cache *hh,
 				const struct net_device *dev,
 				const unsigned char *haddr);
-	bool	(*validate)(const char *ll_header, unsigned int len);
 	__be16	(*parse_protocol)(const struct sk_buff *skb);
 };
 
@@ -3591,21 +3590,6 @@ static inline __be16 dev_parse_header_protocol(const struct sk_buff *skb)
 	if (!dev->header_ops || !dev->header_ops->parse_protocol)
 		return 0;
 	return dev->header_ops->parse_protocol(skb);
-}
-
-/* ll_header must have at least hard_header_len allocated */
-static inline bool dev_validate_header(const struct net_device *dev,
-				       char *ll_header, int len)
-{
-	if (likely(len >= dev->hard_header_len))
-		return true;
-	if (len < dev->min_header_len)
-		return false;
-
-	if (dev->header_ops && dev->header_ops->validate)
-		return dev->header_ops->validate(ll_header, len);
-
-	return false;
 }
 
 static inline bool dev_has_header(const struct net_device *dev)
