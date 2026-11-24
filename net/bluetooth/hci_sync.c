@@ -2320,8 +2320,13 @@ int hci_le_terminate_big_sync(struct hci_dev *hdev, u8 handle, u8 reason)
 	cp.handle = handle;
 	cp.reason = reason;
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_TERM_BIG,
-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	/* Wait for HCI_LE_Terminate_BIG_Complete, so the periodic advertising
+	 * of the BIG is not disabled while the BIG is still being terminated.
+	 */
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_TERM_BIG,
+					sizeof(cp), &cp,
+					HCI_EVT_LE_TERM_BIG_COMPLETE,
+					HCI_CMD_TIMEOUT, NULL);
 }
 
 int hci_schedule_adv_instance_sync(struct hci_dev *hdev, u8 instance,
