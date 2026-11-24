@@ -1232,10 +1232,6 @@ int begin_new_exec(struct linux_binprm * bprm)
 
 	bprm->mm = NULL;
 
-	retval = exec_task_namespaces();
-	if (retval)
-		goto out_unlock_exec_update;
-
 	me->flags &= ~(PF_RANDOMIZE | PF_FORKNOEXEC |
 					PF_NOFREEZE | PF_NO_SETAFFINITY);
 	flush_thread();
@@ -1333,6 +1329,11 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 * credentials; any time after this it may be unlocked.
 	 */
 	security_bprm_committed_creds(bprm);
+
+	/* Switch time namespace now that the task has a new mm. */
+	retval = exec_task_namespaces();
+	if (retval)
+		goto out_unlock_cred_guard;
 
 	/* Pass the opened binary to the interpreter. */
 	if (bprm->have_execfd) {
