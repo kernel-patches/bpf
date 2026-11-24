@@ -3034,6 +3034,9 @@ struct page *bpf_alloc_page(int nid, bool sleepable);
 int bpf_alloc_pages(int nid, unsigned long nr_pages,
 		    struct llist_head *pages, bool sleepable);
 void bpf_free_pages(struct llist_head *pages);
+
+void *bpf_map_kmalloc_maylock(const struct bpf_map *map, size_t size, gfp_t flags);
+
 #ifdef CONFIG_MEMCG
 void bpf_map_memcg_enter(const struct bpf_map *map, struct mem_cgroup **old_memcg,
 			 struct mem_cgroup **new_memcg);

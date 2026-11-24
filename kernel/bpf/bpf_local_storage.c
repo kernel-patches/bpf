@@ -75,8 +75,7 @@ bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
 	if (mem_charge(smap, owner, smap->elem_size))
 		return NULL;
 
-	selem = bpf_map_kmalloc_nolock(&smap->map, smap->elem_size,
-				       __GFP_ZERO, NUMA_NO_NODE);
+	selem = bpf_map_kmalloc_maylock(&smap->map, smap->elem_size, __GFP_ZERO);
 
 	if (selem) {
 		RCU_INIT_POINTER(SDATA(selem)->smap, smap);
@@ -512,8 +511,7 @@ int bpf_local_storage_alloc(void *owner,
 	if (err)
 		return err;
 
-	storage = bpf_map_kmalloc_nolock(&smap->map, sizeof(*storage),
-					 __GFP_ZERO, NUMA_NO_NODE);
+	storage = bpf_map_kmalloc_maylock(&smap->map, sizeof(*storage), __GFP_ZERO);
 	if (!storage) {
 		err = -ENOMEM;
 		goto uncharge;

@@ -597,15 +597,38 @@ static void bpf_map_release_memcg(struct bpf_map *map)
 }
 #endif
 
-static bool can_alloc_pages(void)
+static bool can_spin_in_alloc(void)
 {
 	return preempt_count() == 0 && !irqs_disabled() &&
 		!IS_ENABLED(CONFIG_PREEMPT_RT);
 }
 
+void *bpf_map_kmalloc_maylock(const struct bpf_map *map, size_t size, gfp_t flags)
+{
+	const gfp_t nolock_flags = __GFP_ACCOUNT | __GFP_ZERO |
+				   __GFP_NOWARN | __GFP_NOMEMALLOC;
+	struct mem_cgroup *memcg, *old_memcg;
+	void *ptr = NULL;
+
+	bpf_map_memcg_enter(map, &old_memcg, &memcg);
+	if (IS_ENABLED(CONFIG_MEMCG))
+		flags |= __GFP_ACCOUNT;
+
+	/* Only try the spinning allocation when preemption disables are tracked. */
+	if (IS_ENABLED(CONFIG_PREEMPT_COUNT) && can_spin_in_alloc() &&
+	    size <= KMALLOC_MAX_CACHE_SIZE && !(flags & ~nolock_flags))
+		ptr = kmalloc(size, flags | GFP_NOWAIT | __GFP_NOMEMALLOC);
+	/* Allocation failed or kmalloc_nolock()-only context. */
+	if (!ptr)
+		ptr = kmalloc_nolock(size, flags, NUMA_NO_NODE);
+
+	bpf_map_memcg_exit(old_memcg, memcg);
+	return ptr;
+}
+
 struct page *bpf_alloc_page(int nid, bool sleepable)
 {
-	if (!sleepable || !can_alloc_pages())
+	if (!sleepable || !can_spin_in_alloc())
 		return alloc_pages_nolock(__GFP_ACCOUNT, nid, 0);
 
 	return alloc_pages_node(nid,
