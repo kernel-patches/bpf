@@ -6,6 +6,8 @@
 #ifndef __DRM_RAS_H__
 #define __DRM_RAS_H__
 
+#include <linux/completion.h>
+#include <linux/refcount.h>
 #include <linux/types.h>
 
 #include <uapi/drm/drm_ras.h>
@@ -102,6 +104,20 @@ struct drm_ras_node {
 
 	/** @priv: Driver private data */
 	void *priv;
+
+	/* private: Internal drm_ras bookkeeping, drivers must not touch. */
+
+	/*
+	 * @ref: One reference is held while the node is registered in the
+	 * xarray; netlink handlers take an additional reference across their
+	 * use of the node. See drm_ras_node_get()/drm_ras_node_put().
+	 */
+	refcount_t ref;
+	/*
+	 * @unregistered: Completed when the last reference is dropped, so
+	 * drm_ras_node_unregister() can wait for in-flight handlers.
+	 */
+	struct completion unregistered;
 };
 
 struct drm_device;
