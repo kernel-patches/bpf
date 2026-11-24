@@ -267,42 +267,6 @@ static const struct snd_kcontrol_new asp1_tx4_mux =
 	SOC_DAPM_ENUM_EXT("ASP1TX4 SRC", cs35l56_asp1tx4_enum,
 			  cs35l56_asp_tx_get, cs35l56_asp_tx_put);
 
-static SOC_VALUE_ENUM_SINGLE_DECL(cs35l56_sdw1tx1_enum,
-				CS35L56_SWIRE_DP3_CH1_INPUT,
-				0, CS35L56_SWIRETXn_SRC_MASK,
-				cs35l56_tx_input_texts,
-				cs35l56_tx_input_values);
-
-static const struct snd_kcontrol_new sdw1_tx1_mux =
-	SOC_DAPM_ENUM("SDW1TX1 SRC", cs35l56_sdw1tx1_enum);
-
-static SOC_VALUE_ENUM_SINGLE_DECL(cs35l56_sdw1tx2_enum,
-				CS35L56_SWIRE_DP3_CH2_INPUT,
-				0, CS35L56_SWIRETXn_SRC_MASK,
-				cs35l56_tx_input_texts,
-				cs35l56_tx_input_values);
-
-static const struct snd_kcontrol_new sdw1_tx2_mux =
-	SOC_DAPM_ENUM("SDW1TX2 SRC", cs35l56_sdw1tx2_enum);
-
-static SOC_VALUE_ENUM_SINGLE_DECL(cs35l56_sdw1tx3_enum,
-				CS35L56_SWIRE_DP3_CH3_INPUT,
-				0, CS35L56_SWIRETXn_SRC_MASK,
-				cs35l56_tx_input_texts,
-				cs35l56_tx_input_values);
-
-static const struct snd_kcontrol_new sdw1_tx3_mux =
-	SOC_DAPM_ENUM("SDW1TX3 SRC", cs35l56_sdw1tx3_enum);
-
-static SOC_VALUE_ENUM_SINGLE_DECL(cs35l56_sdw1tx4_enum,
-				CS35L56_SWIRE_DP3_CH4_INPUT,
-				0, CS35L56_SWIRETXn_SRC_MASK,
-				cs35l56_tx_input_texts,
-				cs35l56_tx_input_values);
-
-static const struct snd_kcontrol_new sdw1_tx4_mux =
-	SOC_DAPM_ENUM("SDW1TX4 SRC", cs35l56_sdw1tx4_enum);
-
 static int cs35l56_play_event(struct snd_soc_dapm_widget *w,
 			      struct snd_kcontrol *kcontrol, int event)
 {
@@ -407,11 +371,6 @@ static const struct snd_soc_dapm_widget cs35l56_dapm_widgets[] = {
 	SND_SOC_DAPM_MUX("ASP1 TX3 Source", SND_SOC_NOPM, 0, 0, &asp1_tx3_mux),
 	SND_SOC_DAPM_MUX("ASP1 TX4 Source", SND_SOC_NOPM, 0, 0, &asp1_tx4_mux),
 
-	SND_SOC_DAPM_MUX("SDW1 TX1 Source", SND_SOC_NOPM, 0, 0, &sdw1_tx1_mux),
-	SND_SOC_DAPM_MUX("SDW1 TX2 Source", SND_SOC_NOPM, 0, 0, &sdw1_tx2_mux),
-	SND_SOC_DAPM_MUX("SDW1 TX3 Source", SND_SOC_NOPM, 0, 0, &sdw1_tx3_mux),
-	SND_SOC_DAPM_MUX("SDW1 TX4 Source", SND_SOC_NOPM, 0, 0, &sdw1_tx4_mux),
-
 	SND_SOC_DAPM_SIGGEN("VMON ADC"),
 	SND_SOC_DAPM_SIGGEN("IMON ADC"),
 	SND_SOC_DAPM_SIGGEN("ERRVOL ADC"),
@@ -420,6 +379,7 @@ static const struct snd_soc_dapm_widget cs35l56_dapm_widgets[] = {
 	SND_SOC_DAPM_SIGGEN("VBSTMON ADC"),
 	SND_SOC_DAPM_SIGGEN("TEMPMON ADC"),
 	SND_SOC_DAPM_SIGGEN("OT25 Reference"),
+	SND_SOC_DAPM_SIGGEN("OT127 Source"),
 
 	SND_SOC_DAPM_INPUT("Calibrate"),
 };
@@ -476,14 +436,7 @@ static const struct snd_soc_dapm_route cs35l56_audio_map[] = {
 	{ "ASP1 Capture", NULL, "ASP1TX3" },
 	{ "ASP1 Capture", NULL, "ASP1TX4" },
 
-	CS35L56_SRC_ROUTE("SDW1 TX1")
-	CS35L56_SRC_ROUTE("SDW1 TX2")
-	CS35L56_SRC_ROUTE("SDW1 TX3")
-	CS35L56_SRC_ROUTE("SDW1 TX4")
-	{ "SDW1 Capture", NULL, "SDW1 TX1 Source" },
-	{ "SDW1 Capture", NULL, "SDW1 TX2 Source" },
-	{ "SDW1 Capture", NULL, "SDW1 TX3 Source" },
-	{ "SDW1 Capture", NULL, "SDW1 TX4 Source" },
+	{ "OT127", NULL, "OT127 Source" },
 
 	{ "OT25", NULL, "OT25 Reference" },
 };
@@ -902,10 +855,10 @@ static struct snd_soc_dai_driver cs35l56_dai[] = {
 		.ops = &cs35l56_sdw_dai_ops,
 	},
 	{
-		.name = "cs35l56-sdw1c",
+		.name = "cs35l56-ot127",
 		.id = 2,
 		.capture = {
-			.stream_name = "SDW1 Capture",
+			.stream_name = "OT127",
 			.channels_min = 1,
 			.channels_max = 4,
 			.rates = CS35L56_RATES,
