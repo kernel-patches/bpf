@@ -36,7 +36,7 @@ static void fuse_add_dirent_to_cache(struct file *file,
 	size_t reclen = FUSE_DIRENT_SIZE(dirent);
 	pgoff_t index;
 	struct folio *folio;
-	loff_t size;
+	loff_t size, cache_pos;
 	u64 version;
 	unsigned int offset;
 	size_t folio_offset;
@@ -57,12 +57,14 @@ static void fuse_add_dirent_to_cache(struct file *file,
 	version = fi->rdc.version;
 	size = fi->rdc.size;
 	offset = offset_in_page(size);
-	index = size >> PAGE_SHIFT;
 	/* Dirent doesn't fit in current page?  Jump to next page. */
 	if (offset + reclen > PAGE_SIZE) {
-		index++;
+		cache_pos = PAGE_ALIGN(size);
 		offset = 0;
+	} else {
+		cache_pos = size;
 	}
+	index = cache_pos >> PAGE_SHIFT;
 	spin_unlock(&fi->rdc.lock);
 
 	if (offset)
@@ -78,7 +80,7 @@ static void fuse_add_dirent_to_cache(struct file *file,
 	    WARN_ON(fi->rdc.pos != pos))
 		goto unlock;
 
-	folio_offset = offset_in_folio(folio, (index << PAGE_SHIFT) + offset);
+	folio_offset = offset_in_folio(folio, cache_pos);
 	if (!offset) {
 		folio_fill_tail(folio, folio_offset, (const char *)dirent,
 				reclen);
@@ -87,7 +89,7 @@ static void fuse_add_dirent_to_cache(struct file *file,
 		memcpy_to_folio(folio, folio_offset, (const char *)dirent,
 				reclen);
 	}
-	fi->rdc.size = (index << PAGE_SHIFT) + offset + reclen;
+	fi->rdc.size = cache_pos + reclen;
 	fi->rdc.pos = dirent->off;
 unlock:
 	spin_unlock(&fi->rdc.lock);
