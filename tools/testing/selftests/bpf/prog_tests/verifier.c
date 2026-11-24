@@ -233,7 +233,8 @@ void test_verifier_and(void)                  { RUN(verifier_and); }
 void test_verifier_arena(void)                { RUN(verifier_arena); }
 void test_verifier_arena_cast(void)           { RUN(verifier_arena_cast); }
 void test_verifier_arena_stack(void)          { RUN_TESTS(verifier_arena_stack); }
-void test_verifier_arena_large(void)          { RUN(verifier_arena_large); }
+/* Serial, as prog_tests/arena_*.c: each arena takes 512 MB of KASAN shadow */
+void serial_test_verifier_arena_large(void)   { RUN(verifier_arena_large); }
 void test_verifier_arena_globals1(void)       { RUN(verifier_arena_globals1); }
 void test_verifier_arena_globals2(void)       { RUN(verifier_arena_globals2); }
 void test_verifier_barrier(void)              { RUN(verifier_barrier); }
