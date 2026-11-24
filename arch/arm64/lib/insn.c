@@ -1529,17 +1529,25 @@ u32 aarch64_set_branch_offset(u32 insn, s32 offset)
 	BUG();
 }
 
-s32 aarch64_insn_adrp_get_offset(u32 insn)
+s64 aarch64_insn_adrp_get_offset(u32 insn)
 {
 	BUG_ON(!aarch64_insn_is_adrp(insn));
-	return aarch64_insn_decode_immediate(AARCH64_INSN_IMM_ADR, insn) << 12;
+	return sign_extend64(aarch64_insn_decode_immediate(AARCH64_INSN_IMM_ADR,
+							  insn), 20) << 12;
 }
 
-u32 aarch64_insn_adrp_set_offset(u32 insn, s32 offset)
+u32 aarch64_insn_adrp_set_offset(u32 insn, s64 offset)
 {
 	BUG_ON(!aarch64_insn_is_adrp(insn));
+
+	if ((offset & (SZ_4K - 1)) || offset < -(s64)SZ_4G ||
+	    offset >= (s64)SZ_4G) {
+		pr_err("%s: invalid offset %lld\n", __func__, offset);
+		return AARCH64_BREAK_FAULT;
+	}
+
 	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_ADR, insn,
-						offset >> 12);
+					     offset >> 12);
 }
 
 /*

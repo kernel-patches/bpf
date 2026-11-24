@@ -733,8 +733,8 @@ u32 aarch64_insn_gen_mrs(enum aarch64_insn_register result,
 s32 aarch64_get_branch_offset(u32 insn);
 u32 aarch64_set_branch_offset(u32 insn, s32 offset);
 
-s32 aarch64_insn_adrp_get_offset(u32 insn);
-u32 aarch64_insn_adrp_set_offset(u32 insn, s32 offset);
+s64 aarch64_insn_adrp_get_offset(u32 insn);
+u32 aarch64_insn_adrp_set_offset(u32 insn, s64 offset);
 
 bool aarch32_insn_is_wide(u32 insn);
 

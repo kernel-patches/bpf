@@ -78,7 +78,7 @@ static __always_inline u32 get_alt_insn(struct alt_instr *alt, __le32 *insnptr, 
 			insn = aarch64_set_branch_offset(insn, offset);
 		}
 	} else if (aarch64_insn_is_adrp(insn)) {
-		s32 orig_offset, new_offset;
+		s64 orig_offset, new_offset;
 		unsigned long target;
 
 		/*
