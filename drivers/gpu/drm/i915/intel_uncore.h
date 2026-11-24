@@ -175,14 +175,6 @@ struct intel_uncore {
 	unsigned int user_forcewake_count;
 };
 
-/* Iterate over initialised fw domains */
-#define for_each_fw_domain_masked(domain__, mask__, uncore__, tmp__) \
-	for (tmp__ = (mask__); tmp__ ;) \
-		for_each_if(domain__ = (uncore__)->fw_domain[__mask_next_bit(tmp__)])
-
-#define for_each_fw_domain(domain__, uncore__, tmp__) \
-	for_each_fw_domain_masked(domain__, (uncore__)->fw_domains, uncore__, tmp__)
-
 static inline bool
 intel_uncore_has_forcewake(const struct intel_uncore *uncore)
 {
