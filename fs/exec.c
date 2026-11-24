@@ -864,19 +864,6 @@ static int exec_mmap(struct linux_binprm *bprm)
 	if (ret)
 		return ret;
 
-	if (old_mm) {
-		/*
-		 * If there is a pending fatal signal perhaps a signal
-		 * whose default action is to create a coredump get
-		 * out and die instead of going through with the exec.
-		 */
-		ret = mmap_read_lock_killable(old_mm);
-		if (ret) {
-			up_write(&tsk->signal->exec_update_lock);
-			return ret;
-		}
-	}
-
 	task_lock(tsk);
 	membarrier_exec_mmap(mm);
 
@@ -903,7 +890,6 @@ static int exec_mmap(struct linux_binprm *bprm)
 	task_unlock(tsk);
 	lru_gen_use_mm(mm);
 	if (old_mm) {
-		mmap_read_unlock(old_mm);
 		BUG_ON(active_mm != old_mm);
 		/* Defer teardown to setup_new_exec(), outside the exec locks. */
 		bprm->old_mm = old_mm;
