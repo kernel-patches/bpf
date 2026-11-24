@@ -1289,6 +1289,10 @@ check_cleanup_prefix_route(struct inet6_ifaddr *ifp, unsigned long *expires)
 		action = CLEANUP_PREFIX_RT_EXPIRE;
 
 		spin_lock(&ifa->lock);
+		if (ifa->valid_lft == INFINITY_LIFE_TIME) {
+			spin_unlock(&ifa->lock);
+			return CLEANUP_PREFIX_RT_NOP;
+		}
 
 		lifetime = addrconf_timeout_fixup(ifa->valid_lft, HZ);
 		/*
