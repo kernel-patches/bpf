@@ -11,6 +11,7 @@
 #include <linux/route.h>
 #include <linux/skbuff.h>
 #include <linux/netfilter.h>
+#include <linux/netfilter_bridge.h>
 #include <net/checksum.h>
 #include <net/flow.h>
 #include <net/icmp.h>
@@ -52,6 +53,11 @@ void nf_dup_ipv4(struct net *net, struct sk_buff *skb, unsigned int hooknum,
 		 const struct in_addr *gw, int oif)
 {
 	struct iphdr *iph;
+
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
+	if (nf_bridge_info_exists(skb))
+		return;
+#endif
 
 	local_bh_disable();
 	if (current->in_nf_duplicate)
