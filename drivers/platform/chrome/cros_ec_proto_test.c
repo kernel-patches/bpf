@@ -1744,6 +1744,46 @@ static void cros_ec_proto_test_cmd_xfer_protocol_v2_no_op(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, ret, -EIO);
 }
 
+static void cros_ec_proto_test_cmd_xfer_eagain_once(struct kunit *test)
+{
+	struct cros_ec_proto_test_priv *priv = test->priv;
+	struct cros_ec_device *ec_dev = &priv->ec_dev;
+	struct ec_xfer_mock *mock;
+	struct cros_ec_command msg;
+	int ret;
+
+	ec_dev->pkt_xfer = cros_kunit_ec_pkt_xfer_mock;
+	memset(&msg, 0, sizeof(msg));
+
+	{
+		mock = cros_kunit_ec_xfer_mock_addx(test, -EAGAIN, EC_RES_SUCCESS, 0);
+		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
+	}
+
+	ret = cros_ec_cmd_xfer(ec_dev, &msg);
+	KUNIT_EXPECT_EQ(test, ret, 0);
+
+	KUNIT_EXPECT_EQ(test, cros_kunit_ec_pkt_xfer_mock_called, 2);
+}
+
+static void cros_ec_proto_test_cmd_xfer_eagain_exhausted(struct kunit *test)
+{
+	struct cros_ec_proto_test_priv *priv = test->priv;
+	struct cros_ec_device *ec_dev = &priv->ec_dev;
+	struct cros_ec_command msg;
+	int ret;
+
+	ec_dev->pkt_xfer = cros_kunit_ec_pkt_xfer_mock;
+	memset(&msg, 0, sizeof(msg));
+
+	cros_kunit_ec_xfer_mock_default_ret = -EAGAIN;
+
+	ret = cros_ec_cmd_xfer(ec_dev, &msg);
+	KUNIT_EXPECT_EQ(test, ret, -EAGAIN);
+
+	KUNIT_EXPECT_EQ(test, cros_kunit_ec_pkt_xfer_mock_called, 6);
+}
+
 static void cros_ec_proto_test_cmd_xfer_in_progress_payload_0byte(struct kunit *test)
 {
 	struct cros_ec_proto_test_priv *priv = test->priv;
@@ -2853,6 +2893,8 @@ static struct kunit_case cros_ec_proto_test_cases[] = {
 	KUNIT_CASE(cros_ec_proto_test_cmd_xfer_protocol_v3_no_op),
 	KUNIT_CASE(cros_ec_proto_test_cmd_xfer_protocol_v2_normal),
 	KUNIT_CASE(cros_ec_proto_test_cmd_xfer_protocol_v2_no_op),
+	KUNIT_CASE(cros_ec_proto_test_cmd_xfer_eagain_once),
+	KUNIT_CASE(cros_ec_proto_test_cmd_xfer_eagain_exhausted),
 	KUNIT_CASE(cros_ec_proto_test_cmd_xfer_in_progress_payload_0byte),
 	KUNIT_CASE(cros_ec_proto_test_cmd_xfer_in_progress_payload_4bytes),
 	KUNIT_CASE(cros_ec_proto_test_cmd_xfer_in_progress_payload_gt4bytes),
