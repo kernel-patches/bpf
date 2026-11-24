@@ -82,6 +82,16 @@ static void smc_bpf_hs_ctrl_unreg(void *kdata, struct bpf_link *link)
 	smc_hs_ctrl_unreg(kdata);
 }
 
+static int smc_bpf_hs_ctrl_check_member(const struct btf_type *t,
+					const struct btf_member *member,
+					const struct bpf_prog *prog)
+{
+	if (prog->sleepable)
+		return -EINVAL;
+
+	return 0;
+}
+
 static int smc_bpf_hs_ctrl_init_member(const struct btf_type *t,
 				       const struct btf_member *member,
 				       void *kdata, const void *udata)
@@ -130,6 +140,7 @@ static struct bpf_struct_ops bpf_smc_hs_ctrl_ops = {
 	.unreg		= smc_bpf_hs_ctrl_unreg,
 	.cfi_stubs	= &__smc_bpf_hs_ctrl,
 	.verifier_ops	= &smc_bpf_verifier_ops,
+	.check_member	= smc_bpf_hs_ctrl_check_member,
 	.init_member	= smc_bpf_hs_ctrl_init_member,
 	.owner		= THIS_MODULE,
 };
