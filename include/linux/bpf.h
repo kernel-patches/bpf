@@ -2091,6 +2091,11 @@ static inline bool bpf_prog_runs_sleepable(const struct bpf_prog *prog)
 	return prog->sleepable || prog->aux->sleepable_async_cb;
 }
 
+static inline bool bpf_prog_can_sleep(const struct bpf_prog *prog)
+{
+	return prog->sleepable && preemptible() && !rcu_preempt_depth();
+}
+
 struct bpf_array_aux {
 	/* Programs with direct jumps into programs part of this array. */
 	struct list_head poke_progs;
