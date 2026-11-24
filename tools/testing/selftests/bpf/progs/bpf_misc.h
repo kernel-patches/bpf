@@ -115,6 +115,12 @@
  *                   running it. For placeholder programs that stand in for a
  *                   feature the toolchain or JIT cannot provide, so a run does
  *                   not report OK for coverage it never executed.
+ *                   With __retval right after __skip, run the program and
+ *                   report SKIP only if it returns that value. For programs
+ *                   that need a resource the kernel can refuse at run time:
+ *
+ *                       __success __retval(0)
+ *                       __skip("no memory") __retval(1)
  *
  * __skip_without_arena
  *                   __skip() when the compiler does not support the arena
