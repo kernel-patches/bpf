@@ -51,6 +51,7 @@
 #include "power.h"
 
 #define MAX_ID_ELEMS	256
+#define MAX_UNIT_DEPTH	16
 
 struct usb_audio_term {
 	int id;
@@ -69,6 +70,8 @@ struct mixer_build {
 	unsigned int buflen;
 	DECLARE_BITMAP(unitbitmap, MAX_ID_ELEMS);
 	DECLARE_BITMAP(termbitmap, MAX_ID_ELEMS);
+	unsigned int unit_depth;
+	unsigned int term_depth;
 	struct usb_audio_term oterm;
 	const struct usbmix_name_map *map;
 	const struct usbmix_selector_map *selector_map;
@@ -1023,6 +1026,9 @@ static int __check_input_term(struct mixer_build *state, int id,
 	void *p1;
 	unsigned char *hdr;
 
+	if (++state->term_depth > MAX_UNIT_DEPTH)
+		return -EINVAL;
+
 	for (;;) {
 		/* a loop in the terminal chain? */
 		if (test_and_set_bit(id, state->termbitmap))
@@ -1093,6 +1099,7 @@ static int check_input_term(struct mixer_build *state, int id,
 {
 	memset(term, 0, sizeof(*term));
 	memset(state->termbitmap, 0, sizeof(state->termbitmap));
+	state->term_depth = 0;
 	return __check_input_term(state, id, term);
 }
 
@@ -3180,7 +3187,7 @@ static int parse_audio_selector_unit(struct mixer_build *state, int unitid,
  * parse an audio unit recursively
  */
 
-static int parse_audio_unit(struct mixer_build *state, int unitid)
+static int __parse_audio_unit(struct mixer_build *state, int unitid)
 {
 	unsigned char *p1;
 	int protocol = state->mixer->protocol;
@@ -3238,6 +3245,22 @@ static int parse_audio_unit(struct mixer_build *state, int unitid)
 			      unitid, p1[2]);
 		return -EINVAL;
 	}
+}
+
+static int parse_audio_unit(struct mixer_build *state, int unitid)
+{
+	int err;
+
+	if (state->unit_depth >= MAX_UNIT_DEPTH) {
+		usb_audio_err(state->chip,
+			      "unit %d: unit chain is too deep\n", unitid);
+		return -EINVAL;
+	}
+
+	state->unit_depth++;
+	err = __parse_audio_unit(state, unitid);
+	state->unit_depth--;
+	return err;
 }
 
 static void snd_usb_mixer_free(struct usb_mixer_interface *mixer)
