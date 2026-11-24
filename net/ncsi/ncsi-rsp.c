@@ -1095,7 +1095,18 @@ static int ncsi_rsp_handler_gmcma(struct ncsi_request *nr)
 	struct sockaddr_storage *saddr = &ndp->pending_mac;
 	struct net_device *ndev = ndp->ndev.dev;
 	struct ncsi_rsp_gmcma_pkt *rsp;
+	size_t hdr_len, needed;
 	int i;
+
+	hdr_len = offsetof(struct ncsi_rsp_gmcma_pkt, addresses);
+	if (!pskb_may_pull(nr->rsp, hdr_len))
+		return -EINVAL;
+
+	rsp = (struct ncsi_rsp_gmcma_pkt *)skb_network_header(nr->rsp);
+	needed = hdr_len + (size_t)rsp->address_count * ETH_ALEN;
+	if (ntohs(rsp->rsp.common.length) < needed - sizeof(struct ncsi_pkt_hdr) ||
+	    !pskb_may_pull(nr->rsp, needed))
+		return -EINVAL;
 
 	rsp = (struct ncsi_rsp_gmcma_pkt *)skb_network_header(nr->rsp);
 	ndev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
@@ -1184,6 +1195,10 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 		goto err_free_skb;
 	}
 
+	skb = skb_share_check(skb, GFP_ATOMIC);
+	if (!skb)
+		return -ENOMEM;
+
 	/* Check if it is AEN packet */
 	hdr = (struct ncsi_pkt_hdr *)skb_network_header(skb);
 	if (hdr->type == NCSI_PKT_AEN)
@@ -1253,7 +1268,7 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 	if (ret)
 		netdev_err(ndp->ndev.dev,
 			   "NCSI: Handler for packet type 0x%x returned %d\n",
-			   hdr->type, ret);
+			   nrh->type, ret);
 
 out_netlink:
 	if (nr->flags == NCSI_REQ_FLAG_NETLINK_DRIVEN) {
@@ -1261,7 +1276,7 @@ out_netlink:
 		if (ret) {
 			netdev_err(ndp->ndev.dev,
 				   "NCSI: Netlink handler for packet type 0x%x returned %d\n",
-				   hdr->type, ret);
+				   nrh->type, ret);
 		}
 	}
 
