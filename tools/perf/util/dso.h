@@ -154,6 +154,15 @@ enum dso_swap_type {
 	DSO_SWAP__YES,
 };
 
+enum dso_lazy_names {
+	/* No symbol has a lazy name. */
+	DSO_LAZY_NAMES__NONE,
+	/* Some symbol names are not loaded yet. */
+	DSO_LAZY_NAMES__PENDING,
+	/* All names were needed once, so later loads read names eagerly. */
+	DSO_LAZY_NAMES__EAGER,
+};
+
 enum dso_data_status {
 	DSO_DATA_STATUS_ERROR	= -1,
 	DSO_DATA_STATUS_UNKNOWN	= 0,
@@ -344,6 +353,8 @@ DECLARE_RC_STRUCT(dso) {
 	u8		 bintype_searched:1;
 	u8		 debuginfo_searched:1;
 	bool		 loaded;
+	/* Under the DSO lock. */
+	enum dso_lazy_names lazy_names;
 	u8		 rel;
 	char		 name[];
 };
@@ -360,10 +371,10 @@ int dso_id__cmp(const struct dso_id *a, const struct dso_id *b);
  * @data: opaque data pointer passed to @cb
  */
 #define dso__for_each_symbol(dso, cb, data)	\
-	symbols__visit(dso__symbols(dso), cb, data)
+	symbols__visit(dso__named_symbols(dso), cb, data)
 
 #define dso__for_each_symbol_by_name(dso, cb, data)	\
-	symbols__visit_by_name(dso__symbols(dso), cb, data)
+	symbols__visit_by_name(dso__named_symbols(dso), cb, data)
 
 static inline void *dso__a2l(const struct dso *dso)
 {
@@ -602,6 +613,16 @@ static inline void dso__set_loaded(struct dso *dso)
 	RC_CHK_ACCESS(dso)->loaded = true;
 }
 
+static inline enum dso_lazy_names dso__lazy_names(const struct dso *dso)
+{
+	return RC_CHK_ACCESS(dso)->lazy_names;
+}
+
+static inline void dso__set_lazy_names(struct dso *dso, enum dso_lazy_names lazy_names)
+{
+	RC_CHK_ACCESS(dso)->lazy_names = lazy_names;
+}
+
 static inline struct mutex *dso__lock(struct dso *dso)
 	__returns_ctx_lock(&RC_CHK_ACCESS(dso)->lock)
 {
@@ -792,6 +813,9 @@ char *dso__filename_with_chroot(const struct dso *dso, const char *filename);
 
 bool dso__sorted_by_name(const struct dso *dso);
 void dso__sort_by_name(struct dso *dso);
+struct symbols *dso__named_symbols(struct dso *dso);
+void dso__load_symbol_names(struct dso *dso, struct symbol **syms, size_t nr)
+	__must_hold(dso__lock(dso));
 
 int dso__swap_init(struct dso *dso, unsigned char eidata);
 

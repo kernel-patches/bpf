@@ -79,8 +79,16 @@ enum symbol_idle_kind {
 #define SYMBOL_FLAG_INLINED         (1 << 11)
 #define SYMBOL_FLAG_ANNOTATE2       (1 << 12)
 #define SYMBOL_FLAG_IFUNC_ALIAS     (1 << 13)
+#define SYMBOL_FLAG_LAZY_NAME       (1 << 14)
+#define SYMBOL_FLAG_NAME_ALLOCATED  (1 << 15)
 /**
  * A symtab entry.
+ *
+ * The DSO lookups such as dso__find_symbol() load a lazy name before
+ * returning the symbol, and the address lookups return NULL if it cannot
+ * be read. Code that walks dso__symbols() directly must use
+ * dso__named_symbols() or not read the name of a symbol with
+ * SYMBOL_FLAG_LAZY_NAME.
  */
 struct symbol {
 	/** Range of symbol [start, end). */
@@ -91,8 +99,12 @@ struct symbol {
 	_Atomic uint16_t flags;
 	/** Architecture specific. Unused except on PPC where it holds st_other. */
 	u8		arch_sym;
-	/** The name of length namelen associated with the symbol. */
-	char		*name;
+	union {
+		/** The name of length namelen associated with the symbol. */
+		char	*name;
+		/** File offset of the name while SYMBOL_FLAG_LAZY_NAME is set. */
+		u64	name_off;
+	};
 };
 
 /**
@@ -131,6 +143,13 @@ void symbols__init(struct symbols *symbols);
 void symbols__exit(struct symbols *symbols);
 void symbols__delete(struct symbols *symbols);
 void symbols__sort_read_lock(struct symbols *symbols) __acquires_shared(&symbols->lock);
+
+/* Pairs with the release in symbol__set_loaded_name(). */
+static inline bool symbol__needs_lazy_name(const struct symbol *sym)
+{
+	return (atomic_load_explicit(&sym->flags, memory_order_acquire) &
+		SYMBOL_FLAG_LAZY_NAME) != 0;
+}
 
 static inline u8 symbol__type(const struct symbol *sym)
 {
@@ -252,6 +271,9 @@ void symbol__elf_init(void);
 int symbol__annotation_init(void);
 
 struct symbol *symbol__new(u64 start, u64 len, u8 binding, u8 type, const char *name);
+struct symbol *symbol__new_lazy(u64 start, u64 len, u8 binding, u8 type, u64 name_off);
+void symbol__set_loaded_name(struct symbol *sym, char *name);
+void symbol__set_unknown_name(struct symbol *sym);
 size_t __symbol__fprintf_symname_offs(const struct symbol *sym,
 				      const struct addr_location *al,
 				      bool unknown_as_addr,
@@ -282,10 +304,10 @@ int dso__load_bfd_symbols(struct dso *dso, const char *debugfile);
 int dso__load_sym(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 		  struct symsrc *runtime_ss, int kmodule);
 int dso__synthesize_plt_symbols(struct dso *dso, struct symsrc *ss);
-
 char *dso__demangle_sym(struct dso *dso, int kmodule, const char *elf_name);
 
 int symbols__insert(struct symbols *symbols, struct symbol *sym);
+struct symbol *symbols__find(struct symbols *symbols, u64 ip);
 void symbols__fixup_duplicate(struct symbols *symbols);
 void symbols__fixup_end(struct symbols *symbols, bool is_kallsyms);
 

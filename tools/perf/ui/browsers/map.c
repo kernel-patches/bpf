@@ -108,7 +108,7 @@ out:
 
 int map__browse(struct map *map)
 {
-	struct symbols *symbols = dso__symbols(map__dso(map));
+	struct symbols *symbols = dso__named_symbols(map__dso(map));
 	struct map_browser mb = {
 		.b = {
 			.refresh = ui_browser__argv_refresh,
