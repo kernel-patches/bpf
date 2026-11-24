@@ -113,7 +113,7 @@ jobs:
           sudo apt-get install -y python3 jq lei
 
       - name: Download Linux source tree
-        uses: libbpf/ci/get-linux-source@v4
+        uses: Tropicao/libbpf-ci/get-linux-source@bpftool_synctypes
         with:
           repo: 'https://github.com/kernel-patches/bpf.git'
           rev: 'bpf-next'

@@ -81,7 +81,7 @@ jobs:
         run: .github/scripts/tmpfsify-workspace.sh
 
       - name: Download bpf-next tree @ ${{ env.KERNEL_REVISION }}
-        uses: libbpf/ci/get-linux-source@v4
+        uses: Tropicao/libbpf-ci/get-linux-source@bpftool_synctypes
         env:
           FETCH_DEPTH: ${{ env.BPF_NEXT_FETCH_DEPTH }}
         with:
@@ -98,13 +98,13 @@ jobs:
           cd ..
           rmdir .kernel
 
-      - uses:  libbpf/ci/patch-kernel@v4
+      - uses:  Tropicao/libbpf-ci/patch-kernel@bpftool_synctypes
         with:
           patches-root: '${{ github.workspace }}/ci/diffs'
           repo-root: ${{ env.REPO_ROOT }}
 
       - name: Setup build environment
-        uses: libbpf/ci/setup-build-env@v4
+        uses: Tropicao/libbpf-ci/setup-build-env@bpftool_synctypes
         with:
           arch: ${{ inputs.arch }}
           gcc-version: ${{ inputs.gcc_version }}
@@ -112,7 +112,7 @@ jobs:
           pahole: master
 
       - name: Build kernel image
-        uses: libbpf/ci/build-linux@v4
+        uses: Tropicao/libbpf-ci/build-linux@bpftool_synctypes
         with:
           arch: ${{ inputs.arch }}
           toolchain: ${{ inputs.toolchain }}
@@ -121,7 +121,7 @@ jobs:
           llvm-version: ${{ inputs.llvm_version }}
 
       - name: Build selftests/bpf
-        uses: libbpf/ci/build-selftests@v4
+        uses: Tropicao/libbpf-ci/build-selftests@bpftool_synctypes
         env:
           MAX_MAKE_JOBS: 32
           RELEASE: ${{ inputs.release && '1' || '' }}
@@ -133,7 +133,7 @@ jobs:
 
       - if: ${{ env.BUILD_SCHED_EXT_SELFTESTS }}
         name: Build selftests/sched_ext
-        uses: libbpf/ci/build-scx-selftests@v4
+        uses: Tropicao/libbpf-ci/build-scx-selftests@bpftool_synctypes
         with:
           kbuild-output: ${{ env.KBUILD_OUTPUT }}
           repo-root: ${{ env.REPO_ROOT }}
@@ -144,7 +144,7 @@ jobs:
 
       - if: ${{ github.event_name != 'push' }}
         name: Build samples
-        uses: libbpf/ci/build-samples@v4
+        uses: Tropicao/libbpf-ci/build-samples@bpftool_synctypes
         with:
           arch: ${{ inputs.arch }}
           toolchain: ${{ inputs.toolchain }}
@@ -153,7 +153,7 @@ jobs:
           llvm-version: ${{ inputs.llvm_version }}
       - name: Tar artifacts
         id: tar-artifacts
-        uses: libbpf/ci/tar-artifacts@v4
+        uses: Tropicao/libbpf-ci/tar-artifacts@bpftool_synctypes
         env:
           ARCHIVE_BPF_SELFTESTS: 'true'
           ARCHIVE_MAKE_HELPERS: 'true'

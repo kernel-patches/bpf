@@ -75,7 +75,7 @@ jobs:
         run: python3 ci/veristat/create_manifest.py --config ci/veristat/meta.json --output manifest.json
 
       - name: Run veristat
-        uses: libbpf/ci/run-vmtest@v4
+        uses: Tropicao/libbpf-ci/run-vmtest@bpftool_synctypes
         env:
           VMTEST_SCRIPT: ${{ github.workspace }}/ci/veristat/run-veristat.sh
           VERISTAT_BINARY: ${{ github.workspace }}/selftests/bpf/veristat

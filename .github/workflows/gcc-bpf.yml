@@ -54,7 +54,7 @@ jobs:
 
       - if: ${{ inputs.download_sources }}
         name: Download bpf-next tree
-        uses: libbpf/ci/get-linux-source@v4
+        uses: Tropicao/libbpf-ci/get-linux-source@bpftool_synctypes
         with:
           dest: ${{ env.REPO_ROOT }}
           rev: ${{ env.BPF_NEXT_BASE_BRANCH }}
@@ -65,7 +65,7 @@ jobs:
         with:
           path: 'src'
 
-      - uses:  libbpf/ci/patch-kernel@v4
+      - uses:  Tropicao/libbpf-ci/patch-kernel@bpftool_synctypes
         with:
           patches-root: '${{ github.workspace }}/ci/diffs'
           repo-root: ${{ env.REPO_ROOT }}
@@ -80,7 +80,7 @@ jobs:
         run: zstd -d -T0 vmlinux-${{ inputs.arch }}-${{ inputs.toolchain_full }}.tar.zst --stdout | tar -xf -
 
       - name: Setup build environment
-        uses: libbpf/ci/setup-build-env@v4
+        uses: Tropicao/libbpf-ci/setup-build-env@bpftool_synctypes
         with:
           arch: ${{ inputs.arch }}
           gcc-version: ${{ inputs.gcc_version }}
@@ -93,7 +93,7 @@ jobs:
         run: .github/scripts/download-gh-release.sh ${{ env.GCC_BPF_RELEASE_REPO }} ${{ env.GCC_BPF_INSTALL_DIR }}
 
       - name: Build selftests/bpf/test_progs-bpf_gcc
-        uses: libbpf/ci/build-selftests@v4
+        uses: Tropicao/libbpf-ci/build-selftests@bpftool_synctypes
         env:
           BPF_GCC: ${{ env.GCC_BPF_INSTALL_DIR }}
           MAX_MAKE_JOBS: 32
@@ -105,7 +105,7 @@ jobs:
           toolchain: ${{ inputs.toolchain }}
 
       - name: Tar artifacts
-        uses: libbpf/ci/tar-artifacts@v4
+        uses: Tropicao/libbpf-ci/tar-artifacts@bpftool_synctypes
         env:
           ARCHIVE_BPF_SELFTESTS: 'true'
           ARCHIVE_KBUILD_OUTPUT: '' # emptystring means false
@@ -162,7 +162,7 @@ jobs:
         run: zstd -d -T0 selftests-bpf-gcc-${{ inputs.arch }}-${{ inputs.toolchain_full }}.tar.zst --stdout | tar -xf -
 
       - name: Run selftests
-        uses: libbpf/ci/run-vmtest@v4
+        uses: Tropicao/libbpf-ci/run-vmtest@bpftool_synctypes
         env:
           ARCH: ${{ inputs.arch }}
           DEPLOYMENT: ${{ env.DEPLOYMENT }}

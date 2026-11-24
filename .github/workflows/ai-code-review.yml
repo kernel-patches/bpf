@@ -23,7 +23,7 @@ jobs:
     steps:
 
       - name: Download Linux source tree
-        uses: libbpf/ci/get-linux-source@v4
+        uses: Tropicao/libbpf-ci/get-linux-source@bpftool_synctypes
         with:
           repo: ${{ github.event.pull_request.head.repo.clone_url }}
           rev: ${{ github.event.pull_request.head.sha }}
@@ -79,7 +79,7 @@ jobs:
           cp ci/claude/settings.json ~/.claude/settings.json
 
       - name: Download Linux source tree
-        uses: libbpf/ci/get-linux-source@v4
+        uses: Tropicao/libbpf-ci/get-linux-source@bpftool_synctypes
         with:
           repo: ${{ github.event.pull_request.head.repo.clone_url }}
           rev: ${{ github.event.pull_request.head.sha }}
