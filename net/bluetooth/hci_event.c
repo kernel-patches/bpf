@@ -7900,6 +7900,17 @@ static void hci_le_create_big_complete(struct hci_dev *hdev, u8 status,
 			continue;
 		}
 
+		/* A BIS closed during LE Create BIG is still bound. Delete it
+		 * now, so that the last one terminates the BIG first.
+		 */
+		if (conn->abort_reason) {
+			i++;
+			set_bit(HCI_CONN_BIG_CREATED, conn->flags);
+			hci_connect_cfm(conn, conn->abort_reason);
+			hci_conn_del(conn);
+			continue;
+		}
+
 		if (hci_conn_set_handle(conn,
 					__le16_to_cpu(bis_handle[i++]))) {
 			bt_dev_err(hdev,

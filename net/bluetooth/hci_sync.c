@@ -8998,8 +8998,15 @@ static int hci_le_create_big_v2_sync(struct hci_conn *conn,
 		cp.bis.hdt_rates = cpu_to_le16(qos->bcast.out.rates ? :
 					       hci_hdt_tx_rates(hdev));
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_CREATE_BIG_V2,
-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	/* Wait for LE BIG Complete, so that the cleanup of BISes closed
+	 * meanwhile terminates the BIG before removing its advertising set.
+	 * An HDT capable controller reports it with LE Create BIG Complete v2,
+	 * which hci_le_set_event_mask_sync() unmasks for it.
+	 */
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_CREATE_BIG_V2,
+					sizeof(cp), &cp,
+					HCI_EVT_LE_CREATE_BIG_COMPLETE_V2,
+					conn->conn_timeout, NULL);
 }
 
 int hci_le_create_big_sync(struct hci_conn *conn, struct bt_iso_qos_ext *qos,
@@ -9025,8 +9032,16 @@ int hci_le_create_big_sync(struct hci_conn *conn, struct bt_iso_qos_ext *qos,
 	cp.bis.encryption = qos->bcast.encryption;
 	memcpy(cp.bis.bcode, qos->bcast.bcode, sizeof(cp.bis.bcode));
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_CREATE_BIG,
-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	/* Wait for LE BIG Complete, so that the cleanup of BISes closed
+	 * meanwhile terminates the BIG before removing its advertising set.
+	 * An HDT capable controller reports it with LE Create BIG Complete v2
+	 * even here, since that is the one unmasked.
+	 */
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_CREATE_BIG,
+					sizeof(cp), &cp, hdt_capable(hdev) ?
+					HCI_EVT_LE_CREATE_BIG_COMPLETE_V2 :
+					HCI_EVT_LE_CREATE_BIG_COMPLETE,
+					conn->conn_timeout, NULL);
 }
 
 static void le_enable_encrypt_complete(struct hci_dev *hdev, void *data, int err)
