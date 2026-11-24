@@ -29,8 +29,8 @@
 /* More than any arch has argument registers */
 #define MAX_PARAMS	16
 
-/* Return the size of the integer which FUNC returns, or 0 */
-static __u32 int_return_size(const struct btf *btf, const struct btf_type *func)
+/* Return the size of the integer or of the pointer which FUNC returns, or 0 */
+static __u32 return_size(const struct btf *btf, const struct btf_type *func)
 {
 	const struct btf_type *t = btf__type_by_id(btf, func->type);
 	int ret = t->type ? btf__resolve_type(btf, t->type) : -1;
@@ -38,6 +38,8 @@ static __u32 int_return_size(const struct btf *btf, const struct btf_type *func)
 	if (ret < 0)
 		return 0;
 	t = btf__type_by_id(btf, ret);
+	if (btf_is_ptr(t))
+		return 8;
 	return btf_is_int(t) || btf_is_any_enum(t) ? t->size : 0;
 }
 
@@ -80,7 +82,8 @@ static int cmp_error(const void *va, const void *vb)
 
 /*
  * Write the tag for a function which returns SIZE bytes, and in them one of the
- * NR VALUES of the return value register. In 8 bytes an error is sign extended.
+ * NR VALUES of the return value register. In 8 bytes an error is sign extended,
+ * as in ERR_PTR(). NULL is 0: no program can return it instead of the function.
  * Return false if there is nothing to tag.
  *
  * The machine code cannot tell the -EPERM of a permission check from the -1 of a
@@ -217,7 +220,7 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		if (!btf_is_func(t))
 			continue;
 		nr_funcs++;
-		size = int_return_size(btf, t);
+		size = return_size(btf, t);
 		if ((size != 4 && size != 8) || !fits_trampoline(btf, t))
 			continue;
 		/* Init code is gone before a program can attach */
