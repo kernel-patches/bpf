@@ -208,17 +208,13 @@ static int axi_i2s_probe(struct platform_device *pdev)
 	if (IS_ERR(i2s->regmap))
 		return PTR_ERR(i2s->regmap);
 
-	i2s->clk = devm_clk_get(&pdev->dev, "axi");
+	i2s->clk = devm_clk_get_enabled(&pdev->dev, "axi");
 	if (IS_ERR(i2s->clk))
 		return PTR_ERR(i2s->clk);
 
 	i2s->clk_ref = devm_clk_get(&pdev->dev, "ref");
 	if (IS_ERR(i2s->clk_ref))
 		return PTR_ERR(i2s->clk_ref);
-
-	ret = clk_prepare_enable(i2s->clk);
-	if (ret)
-		return ret;
 
 	if (i2s->has_playback) {
 		axi_i2s_dai.playback.channels_min = 2;
@@ -257,28 +253,17 @@ static int axi_i2s_probe(struct platform_device *pdev)
 	ret = devm_snd_soc_register_component(&pdev->dev, &axi_i2s_component,
 					 &axi_i2s_dai, 1);
 	if (ret)
-		goto err_clk_disable;
+		return ret;
 
 	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (ret)
-		goto err_clk_disable;
+		return ret;
 
 	dev_info(&pdev->dev, "probed, capture %s, playback %s\n",
 		 str_enabled_disabled(i2s->has_capture),
 		 str_enabled_disabled(i2s->has_playback));
 
 	return 0;
-
-err_clk_disable:
-	clk_disable_unprepare(i2s->clk);
-	return ret;
-}
-
-static void axi_i2s_dev_remove(struct platform_device *pdev)
-{
-	struct axi_i2s *i2s = platform_get_drvdata(pdev);
-
-	clk_disable_unprepare(i2s->clk);
 }
 
 static const struct of_device_id axi_i2s_of_match[] = {
@@ -293,7 +278,6 @@ static struct platform_driver axi_i2s_driver = {
 		.of_match_table = axi_i2s_of_match,
 	},
 	.probe = axi_i2s_probe,
-	.remove = axi_i2s_dev_remove,
 };
 module_platform_driver(axi_i2s_driver);
 
