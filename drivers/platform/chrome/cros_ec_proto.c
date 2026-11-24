@@ -385,7 +385,8 @@ static int cros_ec_get_proto_info(struct cros_ec_device *ec_dev, int devidx)
 {
 	struct cros_ec_command *msg;
 	struct ec_response_get_protocol_info *info;
-	int ret, mapped;
+	int ret, mapped, din_size, dout_size;
+	u8 *din, *dout;
 
 	ec_dev->proto_version = 3;
 	if (devidx > 0)
@@ -422,14 +423,27 @@ static int cros_ec_get_proto_info(struct cros_ec_device *ec_dev, int devidx)
 
 	switch (devidx) {
 	case CROS_EC_DEV_EC_INDEX:
+		ret = -ENOMEM;
+		din_size = info->max_response_packet_size + EC_MAX_RESPONSE_OVERHEAD;
+		din = devm_krealloc(ec_dev->dev, ec_dev->din, din_size, GFP_KERNEL);
+		if (!din)
+			goto exit;
+		ec_dev->din_size = din_size;
+		ec_dev->din = din;
+
+		dout_size = info->max_request_packet_size + EC_MAX_REQUEST_OVERHEAD;
+		dout = devm_krealloc(ec_dev->dev, ec_dev->dout, dout_size, GFP_KERNEL);
+		if (!dout)
+			goto exit;
+		ec_dev->dout_size = dout_size;
+		ec_dev->dout = dout;
+
 		ec_dev->max_request = info->max_request_packet_size -
 						sizeof(struct ec_host_request);
 		ec_dev->max_response = info->max_response_packet_size -
 						sizeof(struct ec_host_response);
 		ec_dev->proto_version = min(EC_HOST_REQUEST_VERSION,
 					    fls(info->protocol_versions) - 1);
-		ec_dev->din_size = info->max_response_packet_size + EC_MAX_RESPONSE_OVERHEAD;
-		ec_dev->dout_size = info->max_request_packet_size + EC_MAX_REQUEST_OVERHEAD;
 
 		dev_dbg(ec_dev->dev, "using proto v%u\n", ec_dev->proto_version);
 		break;
@@ -456,6 +470,7 @@ static int cros_ec_get_proto_info_legacy(struct cros_ec_device *ec_dev)
 	struct ec_params_hello *params;
 	struct ec_response_hello *response;
 	int ret, mapped;
+	u8 *din, *dout;
 
 	ec_dev->proto_version = 2;
 
@@ -497,12 +512,23 @@ static int cros_ec_get_proto_info_legacy(struct cros_ec_device *ec_dev)
 		goto exit;
 	}
 
+	ret = -ENOMEM;
+	din = devm_krealloc(ec_dev->dev, ec_dev->din, EC_PROTO2_MSG_BYTES, GFP_KERNEL);
+	if (!din)
+		goto exit;
+	ec_dev->din_size = EC_PROTO2_MSG_BYTES;
+	ec_dev->din = din;
+
+	dout = devm_krealloc(ec_dev->dev, ec_dev->dout, EC_PROTO2_MSG_BYTES, GFP_KERNEL);
+	if (!dout)
+		goto exit;
+	ec_dev->dout_size = EC_PROTO2_MSG_BYTES;
+	ec_dev->dout = dout;
+
 	ec_dev->max_request = EC_PROTO2_MAX_PARAM_SIZE;
 	ec_dev->max_response = EC_PROTO2_MAX_PARAM_SIZE;
 	ec_dev->max_passthru = 0;
 	ec_dev->pkt_xfer = NULL;
-	ec_dev->din_size = EC_PROTO2_MSG_BYTES;
-	ec_dev->dout_size = EC_PROTO2_MSG_BYTES;
 
 	dev_dbg(ec_dev->dev, "falling back to proto v2\n");
 	ret = 0;
@@ -578,7 +604,6 @@ exit:
  */
 int cros_ec_query_all(struct cros_ec_device *ec_dev)
 {
-	struct device *dev = ec_dev->dev;
 	u32 ver_mask;
 	int ret;
 
@@ -599,22 +624,6 @@ int cros_ec_query_all(struct cros_ec_device *ec_dev)
 			dev_dbg(ec_dev->dev, "EC query failed: %d\n", ret);
 			return ret;
 		}
-	}
-
-	devm_kfree(dev, ec_dev->din);
-	devm_kfree(dev, ec_dev->dout);
-
-	ec_dev->din = devm_kzalloc(dev, ec_dev->din_size, GFP_KERNEL);
-	if (!ec_dev->din) {
-		ret = -ENOMEM;
-		goto exit;
-	}
-
-	ec_dev->dout = devm_kzalloc(dev, ec_dev->dout_size, GFP_KERNEL);
-	if (!ec_dev->dout) {
-		devm_kfree(dev, ec_dev->din);
-		ret = -ENOMEM;
-		goto exit;
 	}
 
 	/* Probe if MKBP event is supported */
@@ -660,10 +669,7 @@ int cros_ec_query_all(struct cros_ec_device *ec_dev)
 				"failed to retrieve wake mask: %d\n", ret);
 	}
 
-	ret = 0;
-
-exit:
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL(cros_ec_query_all);
 
