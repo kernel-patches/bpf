@@ -78,6 +78,9 @@ struct test_spec {
 	int stack_mask;
 	int linear_sz;
 	const char *skip_reason;
+	const char *skip_retval_reason;
+	int skip_retval;
+	bool has_skip_retval;
 	bool prepare_priv;
 	bool auxiliary;
 	bool valid;
@@ -380,6 +383,19 @@ static const char **collect_decl_tags(struct btf *btf, int id, int *cnt)
 	return tags;
 }
 
+/* Return the value of the __retval tag right after tags[i], or NULL */
+static const char *next_retval_tag(const char **tags, int i, int nr_tags)
+{
+	const char *s;
+
+	if (i + 1 >= nr_tags)
+		return NULL;
+	s = skip_decl_tag_pfx(tags[i + 1]);
+	if (!s)
+		return NULL;
+	return str_has_pfx(s, "test_retval=");
+}
+
 enum arch {
 	ARCH_UNKNOWN	= 0x1,
 	ARCH_X86_64	= 0x2,
@@ -457,7 +473,7 @@ static int parse_test_spec(struct test_loader *tester,
 		return PTR_ERR(tags);
 
 	for (i = 0; i < nr_tags; i++) {
-		const char *s, *val, *msg;
+		const char *s, *val, *msg, *skip_val;
 		bool clear;
 		int flags;
 
@@ -467,7 +483,19 @@ static int parse_test_spec(struct test_loader *tester,
 		if ((val = str_has_pfx(s, "test_description="))) {
 			description = val;
 		} else if ((val = str_has_pfx(s, "test_skip="))) {
-			spec->skip_reason = val;
+			/* __skip() __retval(N): SKIP when the run returns N */
+			skip_val = next_retval_tag(tags, i, nr_tags);
+			if (!skip_val) {
+				spec->skip_reason = val;
+				continue;
+			}
+			err = parse_retval(skip_val, &spec->skip_retval, "__retval");
+			if (err)
+				goto cleanup;
+			spec->skip_retval_reason = val;
+			spec->has_skip_retval = true;
+			spec->priv.execute = true;
+			i++;
 		} else if (strcmp(s, "test_expect_failure") == 0) {
 			spec->priv.expect_failure = true;
 			spec->mode_mask |= PRIV;
@@ -1547,6 +1575,11 @@ void run_subtest(struct test_loader *tester,
 				       bpf_program__type(tprog) == BPF_PROG_TYPE_SYSCALL ||
 				       bpf_program__type(tprog) == BPF_PROG_TYPE_RAW_TRACEPOINT,
 				       spec->linear_sz);
+		if (!err && spec->has_skip_retval && retval == spec->skip_retval) {
+			printf("%s:SKIP: %s\n", __func__, spec->skip_retval_reason ?: "N/A");
+			test__skip();
+			goto tobj_cleanup;
+		}
 		if (!err && retval != subspec->retval && subspec->retval != POINTER_VALUE) {
 			PRINT_FAIL("Unexpected retval: %d != %d\n", retval, subspec->retval);
 			goto tobj_cleanup;
