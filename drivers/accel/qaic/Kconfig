@@ -8,6 +8,7 @@ config DRM_ACCEL_QAIC
 	depends on DRM_ACCEL
 	depends on PCI && HAS_IOMEM
 	depends on MHI_BUS
+	depends on DRM_RAS
 	select CRC32
 	select WANT_DEV_COREDUMP
 	help
