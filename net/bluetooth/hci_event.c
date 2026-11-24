@@ -6842,7 +6842,8 @@ static void hci_le_pa_sync_established_evt(struct hci_dev *hdev, void *data,
 
 	clear_bit(HCI_CONN_CREATE_PA_SYNC, conn->flags);
 
-	conn->sync_handle = le16_to_cpu(ev->handle);
+	if (!ev->status)
+		conn->sync_handle = le16_to_cpu(ev->handle);
 	conn->sid = HCI_SID_INVALID;
 
 	mask |= hci_proto_connect_ind(hdev, &ev->bdaddr, PA_LINK,
@@ -6862,7 +6863,8 @@ static void hci_le_pa_sync_established_evt(struct hci_dev *hdev, void *data,
 	if (IS_ERR(pa_sync))
 		goto unlock;
 
-	pa_sync->sync_handle = le16_to_cpu(ev->handle);
+	if (!ev->status)
+		pa_sync->sync_handle = le16_to_cpu(ev->handle);
 
 	if (ev->status) {
 		set_bit(HCI_CONN_PA_SYNC_FAILED, pa_sync->flags);
