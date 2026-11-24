@@ -2059,7 +2059,7 @@ retry:
 	if (!skb) {
 		size_t reserved = LL_RESERVED_SPACE_EX(dev, hard_header_len);
 		int tlen = dev->needed_tailroom;
-		unsigned int hhlen = dev->header_ops ? hard_header_len : 0;
+		unsigned int hhlen = dev_has_header(dev) ? hard_header_len : 0;
 
 		rcu_read_unlock();
 		skb = sock_wmalloc(sk, len + reserved + tlen, 0, GFP_KERNEL);
@@ -2658,6 +2658,8 @@ static int tpacket_fill_skb(struct packet_sock *po, struct sk_buff *skb,
 	} else if (copylen) {
 		skb_push(skb, hard_header_len);
 		skb_put(skb, copylen - hard_header_len);
+		if (!dev_has_header(dev))
+			skb_reset_network_header(skb);
 		err = skb_store_bits(skb, 0, data, copylen);
 		if (unlikely(err))
 			return err;
@@ -3129,8 +3131,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 			goto out_free;
 	} else if (reserve) {
 		skb_reserve(skb, -reserve);
-		if (len < reserve + sizeof(struct ipv6hdr) &&
-		    dev->min_header_len != hard_header_len)
+		if (!dev_has_header(dev))
 			skb_reset_network_header(skb);
 	}
 
