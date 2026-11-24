@@ -188,6 +188,9 @@ static void cros_ec_proto_test_query_all_pretest(struct kunit *test)
 	 */
 	ec_dev->din = NULL;
 	ec_dev->dout = NULL;
+
+	/* Fallback to -EOPNOTSUPP for all un-specified mocks. */
+	cros_kunit_ec_xfer_mock_default_result = EC_RES_INVALID_COMMAND;
 }
 
 static void cros_ec_proto_test_query_all_normal(struct kunit *test)
@@ -1069,7 +1072,7 @@ static void cros_ec_proto_test_query_all_no_mkbp_return0(struct kunit *test)
 
 	cros_ec_proto_test_query_all_pretest(test);
 	ret = cros_ec_query_all(ec_dev);
-	KUNIT_EXPECT_EQ(test, ret, 0);
+	KUNIT_EXPECT_EQ(test, ret, -EPROTO);
 
 	/* For cros_ec_get_proto_info() without passthru. */
 	{
@@ -1113,7 +1116,8 @@ static void cros_ec_proto_test_query_all_no_mkbp_return0(struct kunit *test)
 		data = (struct ec_params_get_cmd_versions *)mock->i_data;
 		KUNIT_EXPECT_EQ(test, data->cmd, EC_CMD_GET_NEXT_EVENT);
 
-		KUNIT_EXPECT_EQ(test, ec_dev->mkbp_event_supported, 0);
+		KUNIT_EXPECT_EQ(test, ec_dev->mkbp_event_supported, 0xbf);
+		KUNIT_EXPECT_EQ(test, ec_dev->proto_version, EC_PROTO_VERSION_UNKNOWN);
 	}
 }
 
@@ -1151,7 +1155,7 @@ static void cros_ec_proto_test_query_all_no_host_sleep(struct kunit *test)
 
 	/* For cros_ec_get_host_command_version_mask() for MKBP. */
 	{
-		mock = cros_kunit_ec_xfer_mock_add(test, 0);
+		mock = cros_kunit_ec_xfer_mock_addx(test, 0, EC_RES_INVALID_COMMAND, 0);
 		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
 	}
 
@@ -1275,7 +1279,7 @@ static void cros_ec_proto_test_query_all_no_host_sleep_return0(struct kunit *tes
 
 	cros_ec_proto_test_query_all_pretest(test);
 	ret = cros_ec_query_all(ec_dev);
-	KUNIT_EXPECT_EQ(test, ret, 0);
+	KUNIT_EXPECT_EQ(test, ret, -EPROTO);
 
 	/* For cros_ec_get_proto_info() without passthru. */
 	{
@@ -1326,7 +1330,8 @@ static void cros_ec_proto_test_query_all_no_host_sleep_return0(struct kunit *tes
 				sizeof(struct ec_response_get_cmd_versions));
 		KUNIT_EXPECT_EQ(test, mock->msg.outsize, sizeof(struct ec_params_get_cmd_versions));
 
-		KUNIT_EXPECT_FALSE(test, ec_dev->host_sleep_v1);
+		KUNIT_EXPECT_TRUE(test, ec_dev->host_sleep_v1);
+		KUNIT_EXPECT_EQ(test, ec_dev->proto_version, EC_PROTO_VERSION_UNKNOWN);
 	}
 }
 
@@ -1364,13 +1369,13 @@ static void cros_ec_proto_test_query_all_default_wake_mask_return_error(struct k
 
 	/* For cros_ec_get_host_command_version_mask() for MKBP. */
 	{
-		mock = cros_kunit_ec_xfer_mock_add(test, 0);
+		mock = cros_kunit_ec_xfer_mock_addx(test, 0, EC_RES_INVALID_COMMAND, 0);
 		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
 	}
 
 	/* For cros_ec_get_host_command_version_mask() for host sleep v1. */
 	{
-		mock = cros_kunit_ec_xfer_mock_add(test, 0);
+		mock = cros_kunit_ec_xfer_mock_addx(test, 0, EC_RES_INVALID_COMMAND, 0);
 		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
 	}
 
@@ -1491,13 +1496,13 @@ static void cros_ec_proto_test_query_all_default_wake_mask_return0(struct kunit 
 
 	/* For cros_ec_get_host_command_version_mask() for MKBP. */
 	{
-		mock = cros_kunit_ec_xfer_mock_add(test, 0);
+		mock = cros_kunit_ec_xfer_mock_addx(test, 0, EC_RES_INVALID_COMMAND, 0);
 		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
 	}
 
 	/* For cros_ec_get_host_command_version_mask() for host sleep v1. */
 	{
-		mock = cros_kunit_ec_xfer_mock_add(test, 0);
+		mock = cros_kunit_ec_xfer_mock_addx(test, 0, EC_RES_INVALID_COMMAND, 0);
 		KUNIT_ASSERT_PTR_NE(test, mock, NULL);
 	}
 
@@ -1509,7 +1514,7 @@ static void cros_ec_proto_test_query_all_default_wake_mask_return0(struct kunit 
 
 	cros_ec_proto_test_query_all_pretest(test);
 	ret = cros_ec_query_all(ec_dev);
-	KUNIT_EXPECT_EQ(test, ret, 0);
+	KUNIT_EXPECT_EQ(test, ret, -EPROTO);
 
 	/* For cros_ec_get_proto_info() without passthru. */
 	{
@@ -1563,8 +1568,6 @@ static void cros_ec_proto_test_query_all_default_wake_mask_return0(struct kunit 
 
 	/* For get_host_event_wake_mask(). */
 	{
-		u32 mask;
-
 		mock = cros_kunit_ec_xfer_mock_next();
 		KUNIT_EXPECT_PTR_NE(test, mock, NULL);
 
@@ -1573,14 +1576,8 @@ static void cros_ec_proto_test_query_all_default_wake_mask_return0(struct kunit 
 		KUNIT_EXPECT_EQ(test, mock->msg.insize, sizeof(struct ec_response_host_event_mask));
 		KUNIT_EXPECT_EQ(test, mock->msg.outsize, 0);
 
-		mask = ec_dev->host_event_wake_mask;
-		KUNIT_EXPECT_EQ(test, mask & EC_HOST_EVENT_MASK(EC_HOST_EVENT_LID_CLOSED), 0);
-		KUNIT_EXPECT_EQ(test, mask & EC_HOST_EVENT_MASK(EC_HOST_EVENT_AC_DISCONNECTED), 0);
-		KUNIT_EXPECT_EQ(test, mask & EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY_LOW), 0);
-		KUNIT_EXPECT_EQ(test, mask & EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY_CRITICAL), 0);
-		KUNIT_EXPECT_EQ(test, mask & EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY), 0);
-		KUNIT_EXPECT_EQ(test, mask & EC_HOST_EVENT_MASK(EC_HOST_EVENT_PD_MCU), 0);
-		KUNIT_EXPECT_EQ(test, mask & EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY_STATUS), 0);
+		KUNIT_EXPECT_EQ(test, ec_dev->host_event_wake_mask, U32_MAX);
+		KUNIT_EXPECT_EQ(test, ec_dev->proto_version, EC_PROTO_VERSION_UNKNOWN);
 	}
 }
 

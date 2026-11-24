@@ -578,6 +578,17 @@ static int cros_ec_get_host_command_version_mask(struct cros_ec_device *ec_dev, 
 
 	mapped = cros_ec_map_error(msg->result);
 	if (mapped) {
+		/*
+		 * EC returns EC_RES_INVALID_COMMAND if EC_CMD_GET_CMD_VERSIONS
+		 * isn't implemented.
+		 *
+		 * EC_CMD_GET_CMD_VERSIONS returns EC_RES_INVALID_PARAM if @cmd
+		 * isn't implemented.
+		 *
+		 * Return -EOPNOTSUPP to indicate "unsupported".
+		 */
+		if (mapped == -EINVAL)
+			mapped = -EOPNOTSUPP;
 		ret = mapped;
 		goto exit;
 	}
@@ -640,34 +651,34 @@ int cros_ec_query_all(struct cros_ec_device *ec_dev)
 		/* pkt_xfer is NULL (v2-only EC); query with v2 directly. */
 		ret = cros_ec_get_proto_info_legacy(ec_dev);
 	}
-	if (ret) {
-		/*
-		 * It's possible for a test to occur too early when
-		 * the EC isn't listening. If this happens, we'll
-		 * test later when the first command is run.
-		 */
-		ec_dev->proto_version = EC_PROTO_VERSION_UNKNOWN;
-		dev_dbg(ec_dev->dev, "EC query failed: %d\n", ret);
-		return ret;
-	}
+	if (ret)
+		goto exit;
 
 	/* Probe if MKBP event is supported */
 	ret = cros_ec_get_host_command_version_mask(ec_dev, EC_CMD_GET_NEXT_EVENT, &ver_mask);
-	if (ret < 0 || ver_mask == 0) {
+	if (ret == -EOPNOTSUPP)
 		ec_dev->mkbp_event_supported = 0;
-	} else {
+	else if (ret)
+		goto exit;
+	else
 		ec_dev->mkbp_event_supported = fls(ver_mask);
-
+	if (ec_dev->mkbp_event_supported)
 		dev_dbg(ec_dev->dev, "MKBP support version %u\n", ec_dev->mkbp_event_supported - 1);
-	}
+	else
+		dev_dbg(ec_dev->dev, "MKBP unsupported\n");
 
 	/* Probe if host sleep v1 is supported for S0ix failure detection. */
 	ret = cros_ec_get_host_command_version_mask(ec_dev, EC_CMD_HOST_SLEEP_EVENT, &ver_mask);
-	ec_dev->host_sleep_v1 = (ret == 0 && (ver_mask & EC_VER_MASK(1)));
+	if (ret == -EOPNOTSUPP)
+		ec_dev->host_sleep_v1 = false;
+	else if (ret)
+		goto exit;
+	else
+		ec_dev->host_sleep_v1 = ver_mask & EC_VER_MASK(1);
 
 	/* Get host event wake mask. */
 	ret = cros_ec_get_host_event_wake_mask(ec_dev, &ec_dev->host_event_wake_mask);
-	if (ret < 0) {
+	if (ret == -EOPNOTSUPP) {
 		/*
 		 * If the EC doesn't support EC_CMD_HOST_EVENT_GET_WAKE_MASK,
 		 * use a reasonable default. Note that we ignore various
@@ -685,16 +696,20 @@ int cros_ec_query_all(struct cros_ec_device *ec_dev)
 			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY) |
 			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_PD_MCU) |
 			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY_STATUS));
-		/*
-		 * Old ECs may not support this command. Complain about all
-		 * other errors.
-		 */
-		if (ret != -EOPNOTSUPP)
-			dev_err(ec_dev->dev,
-				"failed to retrieve wake mask: %d\n", ret);
+	} else if (ret) {
+		dev_err(ec_dev->dev, "failed to retrieve wake mask: %d\n", ret);
+		goto exit;
 	}
 
 	return 0;
+exit:
+	/*
+	 * Reset `proto_version` so the next transfer retries
+	 * cros_ec_query_all() once the EC is ready.
+	 */
+	ec_dev->proto_version = EC_PROTO_VERSION_UNKNOWN;
+	dev_dbg(ec_dev->dev, "EC query failed: %d\n", ret);
+	return ret;
 }
 EXPORT_SYMBOL(cros_ec_query_all);
 
