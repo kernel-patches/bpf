@@ -1098,9 +1098,12 @@ static int set_features(struct hinic_dev *nic_dev,
 		ret = hinic_set_vlan_fliter(nic_dev,
 					    !!(features &
 					       NETIF_F_HW_VLAN_CTAG_FILTER));
-		if (ret) {
+		if (ret && ret != HINIC_MGMT_CMD_UNSUPPORTED) {
 			err = ret;
 			failed_features |= NETIF_F_HW_VLAN_CTAG_FILTER;
+		} else if (ret) {
+			dev_info(&nic_dev->hwdev->hwif->pdev->dev,
+				 "Firmware does not support rx-vlan-filter, feature left enabled\n");
 		}
 	}
 
