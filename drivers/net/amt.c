@@ -2157,6 +2157,30 @@ static void amt_igmpv2_leave_handler(struct amt_dev *amt, struct sk_buff *skb,
 		amt_del_group(amt, gnode);
 }
 
+/* The source-state work one group record can cause: AMT_REC_WALKS passes
+ * over the group's buckets and sources, which add_srcs may grow by nsrcs,
+ * plus AMT_REC_LOOKUPS hash lookups per record source.
+ */
+static u64 amt_rec_cost(const struct amt_dev *amt, u32 nr_sources, u16 nsrcs)
+{
+	return (u64)AMT_REC_WALKS * (amt->hash_buckets + nr_sources + nsrcs) +
+	       (u64)AMT_REC_LOOKUPS * nsrcs;
+}
+
+/* The most work one Membership Update may cause: twice what refreshing
+ * every group the tunnel may hold, with every source, costs.  The packet
+ * length used to be the only bound, and a report that names one full
+ * group many times costs far more than one that refreshes the whole
+ * tunnel.
+ */
+static u64 amt_report_budget(const struct amt_dev *amt)
+{
+	return 2 * ((u64)AMT_REC_WALKS *
+		    ((u64)amt->max_groups * amt->hash_buckets +
+		     2 * amt->max_sources) +
+		    (u64)AMT_REC_LOOKUPS * amt->max_sources);
+}
+
 static void amt_igmpv3_report_handler(struct amt_dev *amt, struct sk_buff *skb,
 				      struct amt_tunnel_list *tunnel)
 {
@@ -2167,6 +2191,7 @@ static void amt_igmpv3_report_handler(struct amt_dev *amt, struct sk_buff *skb,
 	union amt_addr group, host;
 	struct igmpv3_grec *grec;
 	__be32 saddr;
+	u64 budget = amt_report_budget(amt), work = 0;
 	u16 nsrcs;
 	u16 ngrec;
 	int i;
@@ -2194,6 +2219,20 @@ static void amt_igmpv3_report_handler(struct amt_dev *amt, struct sk_buff *skb,
 		memset(&host, 0, sizeof(union amt_addr));
 		host.ip4 = saddr;
 		gnode = amt_lookup_group(tunnel, &group, &host, false);
+		/* A record for a group the tunnel has no room for does no
+		 * walk, so it is not charged.  Charging it would let a host
+		 * joined to more than max_groups groups lose the same tail
+		 * records from every report.
+		 */
+		if (!gnode && tunnel->nr_groups >= amt->max_groups)
+			continue;
+		work += amt_rec_cost(amt, gnode ? gnode->nr_sources : 0, nsrcs);
+		if (work > budget) {
+			netdev_dbg(amt->dev,
+				   "Membership Update over work budget, %u of %u records ignored\n",
+				   ngrec - i, ngrec);
+			break;
+		}
 		if (!gnode) {
 			gnode = amt_add_group(amt, tunnel, &group, &host,
 					      false);
@@ -2335,6 +2374,7 @@ static void amt_mldv2_report_handler(struct amt_dev *amt, struct sk_buff *skb,
 	union amt_addr group, host;
 	struct mld2_grec *grec;
 	struct in6_addr saddr;
+	u64 budget = amt_report_budget(amt), work = 0;
 	u16 nsrcs;
 	u16 ngrec;
 	int i;
@@ -2362,6 +2402,20 @@ static void amt_mldv2_report_handler(struct amt_dev *amt, struct sk_buff *skb,
 		memset(&host, 0, sizeof(union amt_addr));
 		host.ip6 = saddr;
 		gnode = amt_lookup_group(tunnel, &group, &host, true);
+		/* A record for a group the tunnel has no room for does no
+		 * walk, so it is not charged.  Charging it would let a host
+		 * joined to more than max_groups groups lose the same tail
+		 * records from every report.
+		 */
+		if (!gnode && tunnel->nr_groups >= amt->max_groups)
+			continue;
+		work += amt_rec_cost(amt, gnode ? gnode->nr_sources : 0, nsrcs);
+		if (work > budget) {
+			netdev_dbg(amt->dev,
+				   "Membership Update over work budget, %u of %u records ignored\n",
+				   ngrec - i, ngrec);
+			break;
+		}
 		if (!gnode) {
 			gnode = amt_add_group(amt, tunnel, &group, &host,
 					      ETH_P_IPV6);

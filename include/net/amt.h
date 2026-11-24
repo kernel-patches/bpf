@@ -392,6 +392,14 @@ struct amt_dev {
 #define AMT_GC_KICK		2048
 #define AMT_MAX_GROUP		32
 #define AMT_MAX_SOURCE		128
+/* Per group record, an upper bound on the passes the mode handlers plus
+ * amt_cleanup_srcs() make over a group's buckets and sources, and on the
+ * hash lookups they make per record source.  The handlers need at most 5
+ * and 7 (EXCLUDE TO_IN and EXCLUDE BLOCK); the bound is rounded up so a
+ * later pass does not silently exceed it.  See amt_rec_cost().
+ */
+#define AMT_REC_WALKS		7
+#define AMT_REC_LOOKUPS		8
 #define AMT_HSIZE_SHIFT		8
 #define AMT_HSIZE		(1 << AMT_HSIZE_SHIFT)
 
