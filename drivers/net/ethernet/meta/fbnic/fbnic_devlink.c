@@ -385,7 +385,8 @@ static int fbnic_fw_reporter_dump(struct devlink_health_reporter *reporter,
 	if (!fw_cmpl)
 		return -ENOMEM;
 
-	err = fbnic_fw_xmit_coredump_info_msg(fbd, fw_cmpl, true);
+	/* Only create a new coredump when the user asks for one */
+	err = fbnic_fw_xmit_coredump_info_msg(fbd, fw_cmpl, !priv_ctx);
 	if (err) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Failed to transmit core dump info msg");
