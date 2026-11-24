@@ -2394,6 +2394,7 @@ int dso__load(struct dso *dso, struct map *map)
 		bool next_slot = false;
 		bool is_reg;
 		bool nsexit;
+		bool chroot = false;
 		int bfdrc = -1;
 		int sirc = -1;
 
@@ -2419,6 +2420,7 @@ int dso__load(struct dso *dso, struct map *map)
 				is_reg = is_regular_file(new_name);
 				strlcpy(name, new_name, PATH_MAX);
 				free(new_name);
+				chroot = true;
 			}
 		}
 
@@ -2440,6 +2442,7 @@ int dso__load(struct dso *dso, struct map *map)
 
 		if (!is_reg || sirc < 0)
 			continue;
+		ss->chroot = chroot;
 
 		if (!syms_ss && symsrc__has_symtab(ss)) {
 			syms_ss = ss;

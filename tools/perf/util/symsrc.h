@@ -16,6 +16,8 @@ struct symsrc {
 	char		     *name;
 	int		     fd;
 	enum dso_binary_type type;
+	/* Found through the chroot fallback of dso__load(). */
+	bool		     chroot;
 
 #ifdef HAVE_LIBELF_SUPPORT
 	Elf		     *elf;
