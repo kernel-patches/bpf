@@ -547,29 +547,18 @@ static void *packet_current_frame(struct packet_sock *po,
 	return packet_lookup_frame(po, rb, rb->head, status);
 }
 
-static u16 vlan_get_tci(const struct sk_buff *skb, struct net_device *dev)
+static u16 vlan_get_tci(const struct sk_buff *skb, unsigned short type)
 {
 	struct vlan_hdr vhdr, *vh;
-	unsigned int header_len;
 
-	if (!dev)
+	if (type != ARPHRD_ETHER && type != ARPHRD_LOOPBACK)
 		return 0;
 
 	/* In the SOCK_DGRAM scenario, skb data starts at the network
 	 * protocol, which is after the VLAN headers. The outer VLAN
-	 * header is at the hard_header_len offset in non-variable
-	 * length link layer headers. If it's a VLAN device, the
-	 * min_header_len should be used to exclude the VLAN header
-	 * size.
+	 * header is at the ETH_HLEN offset from the MAC header.
 	 */
-	if (dev->min_header_len == dev->hard_header_len)
-		header_len = dev->hard_header_len;
-	else if (is_vlan_dev(dev))
-		header_len = dev->min_header_len;
-	else
-		return 0;
-
-	vh = skb_header_pointer(skb, skb_mac_offset(skb) + header_len,
+	vh = skb_header_pointer(skb, skb_mac_offset(skb) + ETH_HLEN,
 				sizeof(vhdr), &vhdr);
 	if (unlikely(!vh))
 		return 0;
@@ -1031,7 +1020,7 @@ static void prb_fill_vlan_info(struct tpacket_kbdq_core *pkc,
 		ppd->hv1.tp_vlan_tpid = ntohs(pkc->skb->vlan_proto);
 		ppd->tp_status = TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 	} else if (unlikely(po->sk.sk_type == SOCK_DGRAM && eth_type_vlan(pkc->skb->protocol))) {
-		ppd->hv1.tp_vlan_tci = vlan_get_tci(pkc->skb, pkc->skb->dev);
+		ppd->hv1.tp_vlan_tci = vlan_get_tci(pkc->skb, pkc->skb->dev->type);
 		ppd->hv1.tp_vlan_tpid = ntohs(pkc->skb->protocol);
 		ppd->tp_status = TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 	} else {
@@ -2474,7 +2463,7 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 			h.h2->tp_vlan_tpid = ntohs(skb->vlan_proto);
 			status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else if (unlikely(sk->sk_type == SOCK_DGRAM && eth_type_vlan(skb->protocol))) {
-			h.h2->tp_vlan_tci = vlan_get_tci(skb, skb->dev);
+			h.h2->tp_vlan_tci = vlan_get_tci(skb, dev->type);
 			h.h2->tp_vlan_tpid = ntohs(skb->protocol);
 			status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else {
@@ -3646,19 +3635,10 @@ static int packet_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 			aux.tp_status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else if (unlikely(sock->type == SOCK_DGRAM && eth_type_vlan(skb->protocol))) {
 			struct sockaddr_ll *sll = &PACKET_SKB_CB(skb)->sa.ll;
-			struct net_device *dev;
 
-			rcu_read_lock();
-			dev = dev_get_by_index_rcu(sock_net(sk), sll->sll_ifindex);
-			if (dev) {
-				aux.tp_vlan_tci = vlan_get_tci(skb, dev);
-				aux.tp_vlan_tpid = ntohs(skb->protocol);
-				aux.tp_status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
-			} else {
-				aux.tp_vlan_tci = 0;
-				aux.tp_vlan_tpid = 0;
-			}
-			rcu_read_unlock();
+			aux.tp_vlan_tci = vlan_get_tci(skb, sll->sll_hatype);
+			aux.tp_vlan_tpid = ntohs(skb->protocol);
+			aux.tp_status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else {
 			aux.tp_vlan_tci = 0;
 			aux.tp_vlan_tpid = 0;
