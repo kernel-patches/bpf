@@ -3616,9 +3616,9 @@ int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_device
 	 * on-disk UUID directly from the super_copy.
 	 */
 	if (fs_info->fs_devices->temp_fsid)
-		memcpy(&sb->s_uuid, fs_info->super_copy->fsid, BTRFS_FSID_SIZE);
+		super_set_uuid(sb, fs_info->super_copy->fsid, BTRFS_FSID_SIZE);
 	else
-		memcpy(&sb->s_uuid, fs_info->fs_devices->fsid, BTRFS_FSID_SIZE);
+		super_set_uuid(sb, fs_info->fs_devices->fsid, BTRFS_FSID_SIZE);
 
 	mutex_lock(&fs_info->chunk_mutex);
 	ret = btrfs_read_sys_array(fs_info);
