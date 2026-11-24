@@ -5830,6 +5830,10 @@ static u32 netif_receive_generic_xdp(struct sk_buff **pskb,
 	if (skb_is_redirected(skb))
 		return XDP_PASS;
 
+	/* XDP is Ethernet only, skip skbs without an Ethernet header. */
+	if (skb->data - skb_mac_header(skb) != ETH_HLEN)
+		return XDP_PASS;
+
 	/* XDP packets must have sufficient headroom of XDP_PACKET_HEADROOM
 	 * bytes. This is the guarantee that also native XDP provides,
 	 * thus we need to do it here as well.
@@ -10919,6 +10923,12 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 		if ((flags & XDP_FLAGS_UPDATE_IF_NOEXIST) && cur_prog) {
 			NL_SET_ERR_MSG(extack, "XDP program already attached");
 			return -EBUSY;
+		}
+		/* lo is ARPHRD_LOOPBACK but uses Ethernet framing. */
+		if (mode == XDP_MODE_SKB && dev->type != ARPHRD_ETHER &&
+		    dev->type != ARPHRD_LOOPBACK) {
+			NL_SET_ERR_MSG(extack, "Generic XDP only supports Ethernet devices");
+			return -EOPNOTSUPP;
 		}
 	}
 
