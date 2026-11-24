@@ -243,6 +243,9 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 		prtd->state = Q6ASM_STREAM_STOPPED;
 	}
 
+	/* ALSA resets appl_ptr for every prepare, including xrun recovery. */
+	prtd->queue_ptr = 0;
+
 	ret = q6asm_map_memory_regions(substream->stream, prtd->audio_client,
 				       prtd->phys,
 				       (prtd->pcm_size / prtd->periods),
@@ -896,6 +899,9 @@ static int q6asm_dai_compr_set_params(struct snd_soc_component *component,
 		dev_err(dev, "private data null or audio client freed\n");
 		return -EINVAL;
 	}
+
+	if (runtime->buffer_size > prtd->dma_buffer.bytes)
+		return -EINVAL;
 
 	prtd->periods = runtime->fragments;
 	prtd->pcm_count = runtime->fragment_size;

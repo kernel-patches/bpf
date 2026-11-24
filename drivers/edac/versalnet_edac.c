@@ -70,8 +70,6 @@
 #define XDDR5_BUS_WIDTH_32		1
 #define XDDR5_BUS_WIDTH_16		2
 
-#define MC_NAME_LEN			32
-
 /**
  * struct ecc_error_info - ECC error log information.
  * @burstpos:		Burst position.
@@ -777,7 +775,6 @@ static int init_one_mc(struct mc_priv *priv, struct platform_device *pdev, int i
 	u32 num_chans, rank, dwidth, config;
 	struct edac_mc_layer layers[2];
 	struct mem_ctl_info *mci;
-	char name[MC_NAME_LEN];
 	struct device *dev;
 	enum dev_type dt;
 	int rc;
@@ -817,20 +814,23 @@ static int init_one_mc(struct mc_priv *priv, struct platform_device *pdev, int i
 	if (!dev)
 		return rc;
 
+	dev->release = versal_edac_release;
+	device_initialize(dev);
+
+	rc = dev_set_name(dev, "versal-net-ddrmc5-edac-%d", i);
+	if (rc)
+		goto err_put_dev;
+
+	rc = device_add(dev);
+	if (rc)
+		goto err_put_dev;
+
 	mci = edac_mc_alloc(i, ARRAY_SIZE(layers), layers, sizeof(struct mc_priv));
 	if (!mci) {
 		edac_printk(KERN_ERR, EDAC_MC, "Failed memory allocation for MC%d\n", i);
-		goto err_dev_free;
+		rc = -ENOMEM;
+		goto err_dev_del;
 	}
-
-	sprintf(name, "versal-net-ddrmc5-edac-%d", i);
-
-	dev->init_name = name;
-	dev->release = versal_edac_release;
-
-	rc = device_register(dev);
-	if (rc)
-		goto err_mc_free;
 
 	mci->pdev = dev;
 	mc_init(mci, dev);
@@ -838,7 +838,7 @@ static int init_one_mc(struct mc_priv *priv, struct platform_device *pdev, int i
 	rc = edac_mc_add_mc(mci);
 	if (rc) {
 		edac_printk(KERN_ERR, EDAC_MC, "Failed to register MC%d with EDAC core\n", i);
-		goto err_unreg;
+		goto err_mc_free;
 	}
 
 	priv->mci[i] = mci;
@@ -848,12 +848,12 @@ static int init_one_mc(struct mc_priv *priv, struct platform_device *pdev, int i
 
 	return 0;
 
-err_unreg:
-	device_unregister(mci->pdev);
 err_mc_free:
 	edac_mc_free(mci);
-err_dev_free:
-	kfree(dev);
+err_dev_del:
+	device_del(dev);
+err_put_dev:
+	put_device(dev);
 
 	return rc;
 }
