@@ -276,7 +276,7 @@ ath12k_update_per_peer_tx_stats(struct ath12k_pdev_dp *dp_pdev,
 	rcu_read_lock();
 	peer = ath12k_dp_link_peer_find_by_peerid(dp_pdev, usr_stats->peer_id);
 
-	if (!peer || !peer->sta) {
+	if (!ath12k_dp_link_peer_get_sta(peer)) {
 		rcu_read_unlock();
 		return;
 	}
@@ -627,6 +627,7 @@ void ath12k_dp_htt_htc_t2h_msg_handler(struct ath12k_base *ab,
 	struct ath12k_dp *dp = ath12k_ab_to_dp(ab);
 	struct htt_resp_msg *resp = (struct htt_resp_msg *)skb->data;
 	enum htt_t2h_msg_type type;
+	u8 logical_link_id, valid;
 	u16 peer_id;
 	u8 vdev_id;
 	u8 mac_addr[ETH_ALEN];
@@ -707,6 +708,22 @@ void ath12k_dp_htt_htc_t2h_msg_handler(struct ath12k_base *ab,
 		break;
 	case HTT_T2H_MSG_TYPE_MLO_RX_PEER_MAP:
 		ath12k_dp_htt_mlo_peer_map_handler(ab, skb);
+		break;
+	case HTT_T2H_MSG_TYPE_PEER_EXTENDED:
+		peer_id = le32_get_bits(resp->peer_extended_ev.info,
+					HTT_T2H_PEER_EXT_INFO_PEER_ID);
+		vdev_id = le32_get_bits(resp->peer_extended_ev.info,
+					HTT_T2H_PEER_EXT_INFO_VDEV_ID);
+		peer_mac_h16 = le32_get_bits(resp->peer_extended_ev.info1,
+					     HTT_T2H_PEER_EXT_INFO1_MAC_ADDR_H16);
+		ath12k_dp_get_mac_addr(le32_to_cpu(resp->peer_extended_ev.mac_addr_l32),
+				       peer_mac_h16, mac_addr);
+		logical_link_id = le32_get_bits(resp->peer_extended_ev.info1,
+						HTT_T2H_PEER_EXT_INFO1_LOGICAL_LINK_ID);
+		valid = le32_get_bits(resp->peer_extended_ev.info1,
+				      HTT_T2H_PEER_EXT_INFO1_LOGICAL_LINK_ID_VALID);
+		ath12k_dp_link_peer_extended_event(ab, vdev_id, peer_id, mac_addr,
+						   logical_link_id, valid);
 		break;
 	default:
 		ath12k_dbg(ab, ATH12K_DBG_DP_HTT, "dp_htt event %d not handled\n",
