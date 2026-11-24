@@ -9,6 +9,7 @@
 #include <linux/bug.h>
 #include <linux/completion.h>
 #include <linux/device.h>
+#include <linux/minmax.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
 
@@ -105,6 +106,54 @@ void i3c_device_get_info(const struct i3c_device *dev,
 	i3c_bus_normaluse_unlock(dev->bus);
 }
 EXPORT_SYMBOL_GPL(i3c_device_get_info);
+
+/**
+ * i3c_device_get_max_read_xfer_bytes() - get the maximum readable message size
+ *
+ * @dev: device the transfers would be directed to
+ *
+ * Return: the smaller of @dev's MRL and the controller's receive limit for a
+ * single message, or 0 if neither reports a limit.
+ */
+u16 i3c_device_get_max_read_xfer_bytes(const struct i3c_device *dev)
+{
+	u16 mrl = 0, max_rx_bytes = 0;
+
+	i3c_bus_normaluse_lock(dev->bus);
+	if (dev->desc) {
+		mrl = dev->desc->info.max_read_len;
+		max_rx_bytes = i3c_dev_get_master(dev->desc)->max_rx_bytes;
+	}
+	i3c_bus_normaluse_unlock(dev->bus);
+
+	/* 0 means "no limit reported" on either side. */
+	return min_not_zero(mrl, max_rx_bytes);
+}
+EXPORT_SYMBOL_GPL(i3c_device_get_max_read_xfer_bytes);
+
+/**
+ * i3c_device_get_max_write_xfer_bytes() - get the maximum writable message size
+ *
+ * @dev: device the transfers would be directed to
+ *
+ * Return: the smaller of @dev's MWL and the controller's transmit limit for a
+ * single message, or 0 if neither reports a limit.
+ */
+u16 i3c_device_get_max_write_xfer_bytes(const struct i3c_device *dev)
+{
+	u16 mwl = 0, max_tx_bytes = 0;
+
+	i3c_bus_normaluse_lock(dev->bus);
+	if (dev->desc) {
+		mwl = dev->desc->info.max_write_len;
+		max_tx_bytes = i3c_dev_get_master(dev->desc)->max_tx_bytes;
+	}
+	i3c_bus_normaluse_unlock(dev->bus);
+
+	/* 0 means "no limit reported" on either side. */
+	return min_not_zero(mwl, max_tx_bytes);
+}
+EXPORT_SYMBOL_GPL(i3c_device_get_max_write_xfer_bytes);
 
 /**
  * i3c_device_disable_ibi() - Disable IBIs coming from a specific device
