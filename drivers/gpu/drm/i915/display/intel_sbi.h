@@ -23,5 +23,7 @@ u32 intel_sbi_read(struct intel_display *display, u16 reg,
 		   enum intel_sbi_destination destination);
 void intel_sbi_write(struct intel_display *display, u16 reg, u32 value,
 		     enum intel_sbi_destination destination);
+u32 intel_sbi_rmw(struct intel_display *display, u16 reg, u32 clear, u32 set,
+		  enum intel_sbi_destination destination);
 
 #endif /* _INTEL_SBI_H_ */
