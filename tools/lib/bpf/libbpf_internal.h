@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <libelf.h>
+#include "libbpf_tools.h"
 #include "relo_core.h"
 
 /* Android's libc doesn't support AT_EACCESS in faccessat() implementation
@@ -94,12 +95,6 @@
 #define BTF_TYPE_TYPE_TAG_ENC(value, type) \
 	BTF_TYPE_ENC(value, BTF_INFO_ENC(BTF_KIND_TYPE_TAG, 0, 0), type)
 
-#ifndef likely
-#define likely(x) __builtin_expect(!!(x), 1)
-#endif
-#ifndef unlikely
-#define unlikely(x) __builtin_expect(!!(x), 0)
-#endif
 #ifndef min
 # define min(x, y) ((x) < (y) ? (x) : (y))
 #endif
@@ -184,10 +179,6 @@ const char *libbpf_errstr(int err);
 
 #define errstr(err) libbpf_errstr(err)
 
-#ifndef __has_builtin
-#define __has_builtin(x) 0
-#endif
-
 struct bpf_link {
 	int (*detach)(struct bpf_link *link);
 	void (*dealloc)(struct bpf_link *link);
@@ -195,30 +186,6 @@ struct bpf_link {
 	int fd;			/* hook FD, -1 if not applicable */
 	bool disconnected;
 };
-
-/*
- * Re-implement glibc's reallocarray() for libbpf internal-only use.
- * reallocarray(), unfortunately, is not available in all versions of glibc,
- * so requires extra feature detection and using reallocarray() stub from
- * <tools/libc_compat.h> and COMPAT_NEED_REALLOCARRAY. All this complicates
- * build of libbpf unnecessarily and is just a maintenance burden. Instead,
- * it's trivial to implement libbpf-specific internal version and use it
- * throughout libbpf.
- */
-static inline void *libbpf_reallocarray(void *ptr, size_t nmemb, size_t size)
-{
-	size_t total;
-
-#if __has_builtin(__builtin_mul_overflow)
-	if (unlikely(__builtin_mul_overflow(nmemb, size, &total)))
-		return NULL;
-#else
-	if (size == 0 || nmemb > ULONG_MAX / size)
-		return NULL;
-	total = nmemb * size;
-#endif
-	return realloc(ptr, total);
-}
 
 /* Copy up to sz - 1 bytes from zero-terminated src string and ensure that dst
  * is zero-terminated string no matter what (unless sz == 0, in which case
@@ -245,9 +212,6 @@ struct btf;
 struct btf_type;
 
 struct btf_type *btf_type_by_id(const struct btf *btf, __u32 type_id);
-const char *btf_kind_str(const struct btf_type *t);
-const struct btf_type *skip_mods_and_typedefs(const struct btf *btf, __u32 id, __u32 *res_id);
-const struct btf_header *btf_header(const struct btf *btf);
 void btf_set_base_btf(struct btf *btf, const struct btf *base_btf);
 int btf_relocate(struct btf *btf, const struct btf *base_btf, __u32 **id_map,
 		 __u32 **str_map);
@@ -431,7 +395,6 @@ int probe_memcg_account(int token_fd);
 int bump_rlimit_memlock(void);
 
 int parse_cpu_mask_str(const char *s, bool **mask, int *mask_sz);
-int parse_cpu_mask_file(const char *fcpu, bool **mask, int *mask_sz);
 int libbpf__load_raw_btf(const char *raw_types, size_t types_len,
 			 const char *str_sec, size_t str_len,
 			 int token_fd);
@@ -447,92 +410,6 @@ struct btf *btf_load_from_kernel(__u32 id, struct btf *base_btf, int token_fd);
 struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf);
 void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
 				const char **prefix, int *kind);
-
-struct btf_ext_info {
-	/*
-	 * info points to the individual info section (e.g. func_info and
-	 * line_info) from the .BTF.ext. It does not include the __u32 rec_size.
-	 */
-	void *info;
-	__u32 rec_size;
-	__u32 len;
-	/* optional (maintained internally by libbpf) mapping between .BTF.ext
-	 * section and corresponding ELF section. This is used to join
-	 * information like CO-RE relocation records with corresponding BPF
-	 * programs defined in ELF sections
-	 */
-	__u32 *sec_idxs;
-	int sec_cnt;
-};
-
-#define for_each_btf_ext_sec(seg, sec)					\
-	for (sec = (seg)->info;						\
-	     (void *)sec < (seg)->info + (seg)->len;			\
-	     sec = (void *)sec + sizeof(struct btf_ext_info_sec) +	\
-		   (seg)->rec_size * sec->num_info)
-
-#define for_each_btf_ext_rec(seg, sec, i, rec)				\
-	for (i = 0, rec = (void *)&(sec)->data;				\
-	     i < (sec)->num_info;					\
-	     i++, rec = (void *)rec + (seg)->rec_size)
-
-/*
- * The .BTF.ext ELF section layout defined as
- *   struct btf_ext_header
- *   func_info subsection
- *
- * The func_info subsection layout:
- *   record size for struct bpf_func_info in the func_info subsection
- *   struct btf_ext_info_sec for section #1
- *   a list of bpf_func_info records for section #1
- *     where struct bpf_func_info mimics one in include/uapi/linux/bpf.h
- *     but may not be identical
- *   struct btf_ext_info_sec for section #2
- *   a list of bpf_func_info records for section #2
- *   ......
- *
- * Note that the bpf_func_info record size in .BTF.ext may not
- * be the same as the one defined in include/uapi/linux/bpf.h.
- * The loader should ensure that record_size meets minimum
- * requirement and pass the record as is to the kernel. The
- * kernel will handle the func_info properly based on its contents.
- */
-struct btf_ext_header {
-	__u16	magic;
-	__u8	version;
-	__u8	flags;
-	__u32	hdr_len;
-
-	/* All offsets are in bytes relative to the end of this header */
-	__u32	func_info_off;
-	__u32	func_info_len;
-	__u32	line_info_off;
-	__u32	line_info_len;
-
-	/* optional part of .BTF.ext header */
-	__u32	core_relo_off;
-	__u32	core_relo_len;
-};
-
-struct btf_ext {
-	union {
-		struct btf_ext_header *hdr;
-		void *data;
-	};
-	void *data_swapped;
-	bool swapped_endian;
-	struct btf_ext_info func_info;
-	struct btf_ext_info line_info;
-	struct btf_ext_info core_relo_info;
-	__u32 data_size;
-};
-
-struct btf_ext_info_sec {
-	__u32	sec_name_off;
-	__u32	num_info;
-	/* Followed by num_info * record_size number of bytes */
-	__u8	data[];
-};
 
 /* The minimum bpf_func_info checked by the loader */
 struct bpf_func_info_min {
@@ -573,31 +450,6 @@ static inline void bpf_core_relo_bswap(struct bpf_core_relo *i)
 	i->access_str_off = bswap_32(i->access_str_off);
 	i->kind = bswap_32(i->kind);
 }
-
-enum btf_field_iter_kind {
-	BTF_FIELD_ITER_IDS,
-	BTF_FIELD_ITER_STRS,
-};
-
-struct btf_field_desc {
-	/* once-per-type offsets */
-	int t_off_cnt, t_offs[2];
-	/* member struct size, or zero, if no members */
-	int m_sz;
-	/* repeated per-member offsets */
-	int m_off_cnt, m_offs[2];
-};
-
-struct btf_field_iter {
-	struct btf_field_desc desc;
-	void *p;
-	int m_idx;
-	int off_idx;
-	int vlen;
-};
-
-int btf_field_iter_init(struct btf_field_iter *it, struct btf_type *t, enum btf_field_iter_kind iter_kind);
-__u32 *btf_field_iter_next(struct btf_field_iter *it);
 
 typedef int (*type_id_visit_fn)(__u32 *type_id, void *ctx);
 typedef int (*str_off_visit_fn)(__u32 *str_off, void *ctx);
@@ -721,15 +573,6 @@ static inline int reuse_fd(int fixed_fd, int tmp_fd)
 	return err;
 }
 
-/* The following two functions are exposed to bpftool */
-int bpf_core_add_cands(struct bpf_core_cand *local_cand,
-		       size_t local_essent_len,
-		       const struct btf *targ_btf,
-		       const char *targ_btf_name,
-		       int targ_start_id,
-		       struct bpf_core_cand_list *cands);
-void bpf_core_free_cands(struct bpf_core_cand_list *cands);
-
 struct usdt_manager *usdt_manager_new(struct bpf_object *obj);
 void usdt_manager_free(struct usdt_manager *man);
 struct bpf_link * usdt_manager_attach_usdt(struct usdt_manager *man,
@@ -772,8 +615,5 @@ int elf_resolve_pattern_offsets(const char *binary_path, const char *pattern,
 
 int probe_fd(int fd);
 
-#define SHA256_DIGEST_LENGTH 32
-
-void libbpf_sha256(const void *data, size_t len, __u8 out[SHA256_DIGEST_LENGTH]);
 int probe_sys_bpf_ext(void);
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */

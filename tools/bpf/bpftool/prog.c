@@ -29,7 +29,7 @@
 #include <bpf/btf.h>
 #include <bpf/hashmap.h>
 #include <bpf/libbpf.h>
-#include <bpf/libbpf_internal.h>
+#include <bpf/libbpf_tools.h>
 #include <bpf/skel_internal.h>
 
 #include "cfg.h"

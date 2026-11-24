@@ -15,7 +15,8 @@
 #include <unistd.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
-#include <bpf/libbpf_internal.h>
+#include <bpf/libbpf_tools.h>
+#include <bpf/relo_core.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>

@@ -1,17 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
-#include <bpf/libbpf_internal.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <bpf/libbpf_tools.h>
 #include "btf_colors.h"
-
-/*
- * Functions in this file mainly exist to refer to functions from libbpf_internal.h,
- * which can't be included in main.c because of the u32 poison and pr_warn macro conflicts.
- */
-
-void btf_sha256(const void *data, size_t len,
-		__u8 out[BTF_SHA256_DIGEST_LENGTH])
-{
-	libbpf_sha256(data, len, out);
-}
 
 /*
  * Marks `root_id` and local types reachable from it with `color`.

@@ -31,7 +31,7 @@
 #include <bpf/bpf.h>
 #include <bpf/hashmap.h>
 #include <bpf/libbpf.h> /* libbpf_num_possible_cpus */
-#include <bpf/libbpf_internal.h>
+#include <bpf/libbpf_tools.h>
 #include <bpf/btf.h>
 #include <zlib.h>
 

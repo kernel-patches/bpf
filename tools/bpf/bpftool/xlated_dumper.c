@@ -10,7 +10,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <bpf/libbpf.h>
-#include <bpf/libbpf_internal.h>
+#include <bpf/libbpf_tools.h>
 
 #include "disasm.h"
 #include "json_writer.h"
