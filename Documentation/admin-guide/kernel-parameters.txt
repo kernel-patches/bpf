@@ -8553,16 +8553,11 @@ Kernel parameters
 			The default is 4 times. 0 disables the warning.
 
 	workqueue.power_efficient
-			Per-cpu workqueues are generally preferred because
-			they show better performance thanks to cache
-			locality; unfortunately, per-cpu workqueues tend to
-			be more power hungry than unbound workqueues.
-
-			Enabling this makes the per-cpu workqueues which
-			were observed to contribute significantly to power
-			consumption unbound, leading to measurably lower
-			power usage at the cost of small performance
-			overhead.
+			Enabling workqueue.power_efficient kernel parameter makes
+			the per-cpu workqueues which were observed to contribute
+			significantly to power consumption unbound, leading to
+			measurably lower power usage at the cost of small
+			performance overhead.
 
 			The default value of this parameter is determined by
 			the config option CONFIG_WQ_POWER_EFFICIENT_DEFAULT.
