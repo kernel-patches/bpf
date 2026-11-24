@@ -6188,8 +6188,15 @@ unlock:
 	return ret;
 }
 
-static int perf_read_group(struct perf_event *event,
-				   u64 read_format, char __user *buf)
+/* What a read of an event returns, filled in with ctx->mutex held. */
+struct perf_read_buf {
+	size_t	count;		/* room in the buffer of the reader */
+	u64	values[5];	/* a single event */
+	u64	*group_values;	/* PERF_FORMAT_GROUP, allocated */
+};
+
+static int perf_read_group(struct perf_event *event, u64 read_format,
+			   struct perf_read_buf *rb)
 {
 	struct perf_event *leader = event->group_leader, *child;
 	struct perf_event_context *ctx = leader->ctx;
@@ -6218,23 +6225,20 @@ static int perf_read_group(struct perf_event *event,
 
 	mutex_unlock(&leader->child_mutex);
 
-	ret = event->read_size;
-	if (copy_to_user(buf, values, event->read_size))
-		ret = -EFAULT;
-	goto out;
+	rb->group_values = values;
+	return event->read_size;
 
 unlock:
 	mutex_unlock(&leader->child_mutex);
-out:
 	kfree(values);
 	return ret;
 }
 
-static int perf_read_one(struct perf_event *event,
-				 u64 read_format, char __user *buf)
+static int perf_read_one(struct perf_event *event, u64 read_format,
+			 struct perf_read_buf *rb)
 {
 	u64 enabled, running;
-	u64 values[5];
+	u64 *values = rb->values;
 	int n = 0;
 
 	values[n++] = __perf_event_read_value(event, &enabled, &running);
@@ -6246,9 +6250,6 @@ static int perf_read_one(struct perf_event *event,
 		values[n++] = primary_event_id(event);
 	if (read_format & PERF_FORMAT_LOST)
 		values[n++] = atomic64_read(&event->lost_samples);
-
-	if (copy_to_user(buf, values, n * sizeof(u64)))
-		return -EFAULT;
 
 	return n * sizeof(u64);
 }
@@ -6270,7 +6271,7 @@ static bool is_event_hup(struct perf_event *event)
  * Read the performance event - simple non blocking version for now
  */
 static ssize_t
-__perf_read(struct perf_event *event, char __user *buf, size_t count)
+__perf_read(struct perf_event *event, struct perf_read_buf *rb)
 {
 	u64 read_format = event->attr.read_format;
 	int ret;
@@ -6283,14 +6284,14 @@ __perf_read(struct perf_event *event, char __user *buf, size_t count)
 	if (event->state == PERF_EVENT_STATE_ERROR)
 		return 0;
 
-	if (count < event->read_size)
+	if (rb->count < event->read_size)
 		return -ENOSPC;
 
 	WARN_ON_ONCE(event->ctx->parent_ctx);
 	if (read_format & PERF_FORMAT_GROUP)
-		ret = perf_read_group(event, read_format, buf);
+		ret = perf_read_group(event, read_format, rb);
 	else
-		ret = perf_read_one(event, read_format, buf);
+		ret = perf_read_one(event, read_format, rb);
 
 	return ret;
 }
@@ -6299,6 +6300,7 @@ static ssize_t
 perf_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 {
 	struct perf_event *event = file->private_data;
+	struct perf_read_buf rb = { .count = count };
 	struct perf_event_context *ctx;
 	int ret;
 
@@ -6307,9 +6309,14 @@ perf_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 		return ret;
 
 	ctx = perf_event_ctx_lock(event);
-	ret = __perf_read(event, buf, count);
+	ret = __perf_read(event, &rb);
 	perf_event_ctx_unlock(event, ctx);
 
+	/* The copy can sleep in a page fault. Don't hold ctx->mutex for it. */
+	if (ret > 0 && copy_to_user(buf, rb.group_values ?: rb.values, ret))
+		ret = -EFAULT;
+
+	kfree(rb.group_values);
 	return ret;
 }
 
