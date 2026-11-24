@@ -2530,6 +2530,20 @@ static inline void flush_unauthorized_files(const struct cred *cred,
 }
 
 /*
+ * Close files for which the new task SID is not authorized. Called before
+ * exec_update_lock is taken as closing files may block in the filesystem.
+ */
+static void selinux_bprm_revalidate_files(const struct linux_binprm *bprm)
+{
+	const struct cred_security_struct *new_crsec = selinux_cred(bprm->cred);
+
+	if (new_crsec->sid == new_crsec->osid)
+		return;
+
+	flush_unauthorized_files(bprm->cred, current->files);
+}
+
+/*
  * Prepare a process for imminent new credential changes due to exec
  */
 static void selinux_bprm_committing_creds(const struct linux_binprm *bprm)
@@ -2541,9 +2555,6 @@ static void selinux_bprm_committing_creds(const struct linux_binprm *bprm)
 	new_crsec = selinux_cred(bprm->cred);
 	if (new_crsec->sid == new_crsec->osid)
 		return;
-
-	/* Close files for which the new task SID is not authorized. */
-	flush_unauthorized_files(bprm->cred, current->files);
 
 	/* Always clear parent death signal on SID transitions. */
 	current->pdeath_signal = 0;
@@ -7693,6 +7704,7 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(netlink_send, selinux_netlink_send),
 
 	LSM_HOOK_INIT(bprm_creds_for_exec, selinux_bprm_creds_for_exec),
+	LSM_HOOK_INIT(bprm_revalidate_files, selinux_bprm_revalidate_files),
 	LSM_HOOK_INIT(bprm_committing_creds, selinux_bprm_committing_creds),
 	LSM_HOOK_INIT(bprm_committed_creds, selinux_bprm_committed_creds),
 
