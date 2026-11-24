@@ -8132,21 +8132,28 @@ static const struct bpf_func_proto bpf_tcp_gen_syncookie_proto = {
 
 BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 {
+	bool from_netkit = netkit_runs_skb(skb);
+
 	if (!sk || flags != 0)
 		return -EINVAL;
-	if (!skb_at_tc_ingress(skb))
+	if (from_netkit) {
+		if (!sk_fullsock(sk) || (!sk_is_tcp(sk) && !sk_is_udp(sk)) ||
+		    (skb->sk && !skb->destructor))
+			return -EOPNOTSUPP;
+	} else if (!skb_at_tc_ingress(skb)) {
 		return -EOPNOTSUPP;
+	}
 	if (unlikely(dev_net(skb->dev) != sock_net(sk)))
 		return -ENETUNREACH;
 	if (sk_unhashed(sk))
 		return -EOPNOTSUPP;
-	if (sk_is_refcounted(sk) &&
+	if ((from_netkit || sk_is_refcounted(sk)) &&
 	    unlikely(!refcount_inc_not_zero_acquire(&sk->sk_refcnt)))
 		return -ENOENT;
 
 	skb_orphan(skb);
 	skb->sk = sk;
-	skb->destructor = sock_pfree;
+	skb->destructor = from_netkit ? sock_pfree_ref : sock_pfree;
 
 	return 0;
 }

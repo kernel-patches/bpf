@@ -981,6 +981,7 @@ struct bpf_nh_params {
 #define BPF_RI_F_CPU_MAP_INIT	BIT(2)
 #define BPF_RI_F_DEV_MAP_INIT	BIT(3)
 #define BPF_RI_F_XSK_MAP_INIT	BIT(4)
+#define BPF_RI_F_NETKIT_SK_ASSIGN	BIT(5)
 
 struct bpf_redirect_info {
 	u64 tgt_index;
@@ -998,6 +999,9 @@ struct bpf_net_context {
 	struct list_head cpu_map_flush_list;
 	struct list_head dev_map_flush_list;
 	struct list_head xskmap_map_flush_list;
+#ifdef CONFIG_NETKIT
+	struct sk_buff *sk_assign_skb;
+#endif
 };
 
 static inline struct bpf_net_context *bpf_net_ctx_set(struct bpf_net_context *bpf_net_ctx)
