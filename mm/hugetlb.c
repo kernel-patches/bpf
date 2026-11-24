@@ -2489,6 +2489,8 @@ free:
 		 * count as persistent and we must keep them.
 		 */
 		if (!h->surplus_huge_pages_node[folio_nid(folio)]) {
+			mod_node_page_state(folio_pgdat(folio), NR_HUGETLB,
+					    -(long)pages_per_huge_page(h));
 			enqueue_hugetlb_folio(h, folio);
 			continue;
 		}
