@@ -30,6 +30,7 @@
 
 #define BTINTEL_EFI_DSBR	L"UefiCnvCommonDSBR"
 #define BTINTEL_EFI_BRDS	L"UefiCnvBtBRDS"
+#define BTINTEL_EFI_BPMO	L"UefiCnvBtBPMO"
 #define BTINTEL_EFI_BSSS	L"UefiCnvBtBSSS"
 #define BTINTEL_EFI_GLUI	L"UefiCnvCommonGLUI"
 
@@ -60,6 +61,13 @@ struct btintel_uefi_sar {
 	__le32 inc_power_mode;
 	u8 chain_a[5];
 	u8 chain_b[5];
+} __packed;
+
+struct btintel_bpmo {
+	u8	header;
+	__le32	mode;
+	u8	chain_a[BTINTEL_BPMO_NUM_MODULATIONS];
+	u8	chain_b[BTINTEL_BPMO_NUM_MODULATIONS];
 } __packed;
 
 enum {
@@ -3739,7 +3747,64 @@ static int btintel_uefi_read_sar(struct hci_dev *hdev, efi_char16_t *name,
 	return 0;
 }
 
-static int btintel_set_uefi_sar(struct hci_dev *hdev)
+static int btintel_uefi_set_bpmo(struct hci_dev *hdev, u8 lock_status)
+{
+	u8 buffer[sizeof(struct btintel_cp_ddc_write) +
+		  BTINTEL_BPMO_NUM_MODULATIONS];
+	struct btintel_cp_ddc_write *cmd = (void *)buffer;
+	unsigned long size = sizeof(struct btintel_bpmo);
+	struct btintel_bpmo bpmo;
+	efi_status_t status;
+	int ret;
+
+	if (lock_status != BTINTEL_UEFI_LOCK_LOCKED &&
+	    lock_status != BTINTEL_UEFI_LOCK_TEST_MODE)
+		return -EOPNOTSUPP;
+
+	if (!IS_ENABLED(CONFIG_EFI) ||
+	    !efi_rt_services_supported(EFI_RT_SUPPORTED_GET_VARIABLE))
+		return -EOPNOTSUPP;
+
+	status = efi.get_variable(BTINTEL_EFI_BPMO, &btintel_efi_sar_guid, NULL,
+				  &size, &bpmo);
+	if (status == EFI_NOT_FOUND)
+		return -ENOENT;
+	if (status != EFI_SUCCESS) {
+		bt_dev_dbg(hdev, "Failed to read UEFI BPMO variable: 0x%lx",
+			   status);
+		return -EOPNOTSUPP;
+	}
+
+	if (size != sizeof(bpmo) || bpmo.header != 0) {
+		bt_dev_dbg(hdev, "Unsupported UEFI BPMO variable");
+		return -EOPNOTSUPP;
+	}
+	if (!(le32_to_cpu(bpmo.mode) & BIT(0))) {
+		bt_dev_dbg(hdev, "UEFI BPMO is disabled");
+		return -EOPNOTSUPP;
+	}
+
+	cmd->len = 3;
+	cmd->id = cpu_to_le16(BTINTEL_DDC_ID_SAR_BPMO_ENABLE);
+	cmd->data[0] = 0x01;
+	ret = btintel_send_sar_ddc(hdev, cmd, sizeof(*cmd) + 1);
+	if (ret)
+		return ret;
+
+	cmd->len = 2 + BTINTEL_BPMO_NUM_MODULATIONS;
+	cmd->id = cpu_to_le16(BTINTEL_DDC_ID_SAR_BPMO_CHAIN_A);
+	memcpy(cmd->data, bpmo.chain_a, BTINTEL_BPMO_NUM_MODULATIONS);
+	ret = btintel_send_sar_ddc(hdev, cmd, sizeof(buffer));
+	if (ret)
+		return ret;
+
+	cmd->id = cpu_to_le16(BTINTEL_DDC_ID_SAR_BPMO_CHAIN_B);
+	memcpy(cmd->data, bpmo.chain_b, BTINTEL_BPMO_NUM_MODULATIONS);
+	return btintel_send_sar_ddc(hdev, cmd, sizeof(buffer));
+}
+
+static int btintel_set_uefi_sar(struct hci_dev *hdev,
+				struct intel_version_tlv *ver)
 {
 	/* 5G8 and 5G9 share a limit but have separate DDC identifiers. */
 	static const struct {
@@ -3826,6 +3891,12 @@ static int btintel_set_uefi_sar(struct hci_dev *hdev)
 		ret = 0;
 	}
 
+	if (INTEL_CNVX_TOP_TYPE(ver->cnvr_top) >= BTINTEL_CNVR_PEP) {
+		ret = btintel_uefi_set_bpmo(hdev, lock_status);
+		if (ret == -ENOENT || ret == -EOPNOTSUPP)
+			ret = 0;
+	}
+
 complete:
 	skb = __hci_cmd_sync(hdev, 0xfe25, sizeof(enable), &enable,
 			     HCI_CMD_TIMEOUT);
@@ -3853,7 +3924,7 @@ static int btintel_set_specific_absorption_rate(struct hci_dev *hdev,
 	/* Supported SCP2+ platforms use this UEFI DDC map regardless of CNVr. */
 	if (hw_variant >= BTINTEL_HWID_SCP2 &&
 	    hw_variant != BTINTEL_HWID_BZRIW)
-		btintel_set_uefi_sar(hdev);
+		btintel_set_uefi_sar(hdev, ver);
 
 	/*
 	 * Platforms with UEFI BSSS do not provide ACPI BRDS. If UEFI BRDS is
