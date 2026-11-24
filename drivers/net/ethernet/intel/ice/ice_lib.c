@@ -2849,9 +2849,8 @@ void ice_dis_vsi(struct ice_vsi *vsi, bool locked)
 		if (netif_running(vsi->netdev)) {
 			if (!locked)
 				rtnl_lock();
-			already_down = test_bit(ICE_VSI_DOWN, vsi->state);
-			if (!already_down)
-				ice_vsi_close(vsi);
+			/* ice_ena_vsi() reopens the VSI, release it even if down */
+			ice_vsi_close(vsi);
 
 			if (!locked)
 				rtnl_unlock();
