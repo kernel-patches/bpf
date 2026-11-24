@@ -1151,6 +1151,7 @@ int __ip6_datagram_connect(struct sock *sk, struct sockaddr_unsized *addr,
 int ip6_datagram_connect(struct sock *sk, struct sockaddr_unsized *addr, int addr_len);
 int ip6_datagram_connect_v6_only(struct sock *sk, struct sockaddr_unsized *addr,
 				 int addr_len);
+void ip6_datagram_flow_key_init(struct flowi6 *fl6, const struct sock *sk);
 int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr);
 void ip6_datagram_release_cb(struct sock *sk);
 
