@@ -147,6 +147,7 @@ static void vgacon_scrolldelta(struct vc_data *c, int lines)
 	/* Turn scrollback off */
 	if (!lines) {
 		c->vc_visible_origin = c->vc_origin;
+		vga_set_mem_top(c);
 		return;
 	}
 
