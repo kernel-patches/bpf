@@ -1147,12 +1147,11 @@ static int __init reboot_setup(char *str)
 			str += str[1] == 'm' && str[2] == 'p' ? 3 : 1;
 
 			if (isdigit(str[0])) {
-				int cpu = simple_strtoul(str, NULL, 0);
+				unsigned long long cpu = simple_strtoull(str, NULL, 0);
 
-				if (cpu >= num_possible_cpus()) {
-					pr_err("Ignoring the CPU number in reboot= option. "
-					"CPU %d exceeds possible cpu number %d\n",
-					cpu, num_possible_cpus());
+				if (cpu >= nr_cpu_ids || !cpu_possible(cpu)) {
+					pr_err("Ignoring invalid CPU %llu in reboot= option\n",
+					       cpu);
 					break;
 				}
 				reboot_cpu = cpu;
@@ -1354,7 +1353,7 @@ static ssize_t cpu_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (rc)
 		return rc;
 
-	if (cpunum >= num_possible_cpus())
+	if (cpunum >= nr_cpu_ids || !cpu_possible(cpunum))
 		return -ERANGE;
 
 	reboot_default = 0;
