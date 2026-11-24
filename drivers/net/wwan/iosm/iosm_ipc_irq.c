@@ -40,8 +40,7 @@ static irqreturn_t ipc_msi_interrupt(int irq, void *dev_id)
 	if (instance >= ipc_pcie->nvec)
 		return IRQ_NONE;
 
-	if (!test_bit(0, &ipc_pcie->suspend))
-		ipc_imem_irq_process(ipc_pcie->imem, instance);
+	ipc_imem_irq_process(ipc_pcie->imem, instance);
 
 	return IRQ_HANDLED;
 }

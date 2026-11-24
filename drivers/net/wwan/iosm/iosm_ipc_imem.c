@@ -1036,11 +1036,6 @@ void ipc_imem_pm_suspend(struct iosm_imem *ipc_imem)
 	ipc_protocol_suspend(ipc_imem->ipc_protocol);
 }
 
-void ipc_imem_pm_s2idle_sleep(struct iosm_imem *ipc_imem, bool sleep)
-{
-	ipc_protocol_s2idle_sleep(ipc_imem->ipc_protocol, sleep);
-}
-
 void ipc_imem_pm_resume(struct iosm_imem *ipc_imem)
 {
 	enum ipc_mem_exec_stage stage;

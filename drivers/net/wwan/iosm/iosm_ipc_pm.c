@@ -238,20 +238,6 @@ bool ipc_pm_prepare_host_active(struct iosm_pm *ipc_pm)
 	return true;
 }
 
-void ipc_pm_set_s2idle_sleep(struct iosm_pm *ipc_pm, bool sleep)
-{
-	if (sleep) {
-		ipc_pm->ap_state = IPC_MEM_DEV_PM_SLEEP;
-		ipc_pm->cp_state = IPC_MEM_DEV_PM_SLEEP;
-		ipc_pm->device_sleep_notification = IPC_MEM_DEV_PM_SLEEP;
-	} else {
-		ipc_pm->ap_state = IPC_MEM_DEV_PM_ACTIVE;
-		ipc_pm->cp_state = IPC_MEM_DEV_PM_ACTIVE;
-		ipc_pm->device_sleep_notification = IPC_MEM_DEV_PM_ACTIVE;
-		ipc_pm->pm_cond.link = IPC_PM_ACTIVE;
-	}
-}
-
 bool ipc_pm_dev_slp_notification(struct iosm_pm *ipc_pm, u32 cp_pm_req)
 {
 	if (cp_pm_req == ipc_pm->device_sleep_notification)
