@@ -2228,18 +2228,40 @@ static const struct dentry_operations tid_map_files_dentry_operations = {
 	.d_delete	= pid_delete_dentry,
 };
 
-static int map_files_get_link(struct dentry *dentry, struct path *path,
-			      struct task_struct *task)
+/* Check the access and pin the mm with exec_update_lock held. */
+static struct mm_struct *map_files_mm(struct inode *inode)
+{
+	struct task_struct *task __free(put_task) = NULL;
+	struct mm_struct *mm;
+	int err;
+
+	task = get_proc_task(inode);
+	if (!task)
+		return ERR_PTR(-ENOENT);
+
+	err = down_read_killable(&task->signal->exec_update_lock);
+	if (err)
+		return ERR_PTR(err);
+	if (ptrace_may_access(task, PTRACE_MODE_READ_FSCREDS))
+		mm = get_task_mm(task) ?: ERR_PTR(-ENOENT);
+	else
+		mm = ERR_PTR(-EACCES);
+	up_read(&task->signal->exec_update_lock);
+	return mm;
+}
+
+/* The vma lookup waits for the mmap lock so do it without exec_update_lock. */
+static int map_files_get_link(struct dentry *dentry, struct inode *inode,
+			      struct path *path)
 {
 	unsigned long vm_start, vm_end;
 	struct vm_area_struct *vma;
 	struct mm_struct *mm;
 	int rc;
 
-	rc = -ENOENT;
-	mm = get_task_mm(task);
-	if (!mm)
-		goto out;
+	mm = map_files_mm(inode);
+	if (IS_ERR(mm))
+		return PTR_ERR(mm);
 
 	rc = dname_to_vma_addr(dentry, &vm_start, &vm_end);
 	if (rc)
@@ -2260,7 +2282,6 @@ static int map_files_get_link(struct dentry *dentry, struct path *path,
 
 out_mmput:
 	mmput(mm);
-out:
 	return rc;
 }
 
@@ -2280,17 +2301,36 @@ proc_map_files_get_link(struct dentry *dentry,
 			struct inode *inode,
 		        struct delayed_call *done)
 {
+	struct path path;
+	int error;
+
 	if (!checkpoint_restore_ns_capable(&init_user_ns))
 		return ERR_PTR(-EPERM);
 
-	return proc_pid_get_link(dentry, inode, done);
+	if (!dentry)
+		return ERR_PTR(-ECHILD);
+	error = map_files_get_link(dentry, inode, &path);
+	if (!error)
+		error = nd_jump_link(&path);
+	return ERR_PTR(error);
 }
 
-/*
- * Identical to proc_pid_link_inode_operations except for get_link()
- */
+static int proc_map_files_readlink(struct dentry *dentry, char __user *buffer,
+				   int buflen)
+{
+	struct path path;
+	int error;
+
+	error = map_files_get_link(dentry, d_inode(dentry), &path);
+	if (!error) {
+		error = do_proc_readlink(&path, buffer, buflen);
+		path_put(&path);
+	}
+	return error;
+}
+
 static const struct inode_operations proc_map_files_link_inode_operations = {
-	.readlink	= proc_pid_readlink,
+	.readlink	= proc_map_files_readlink,
 	.get_link	= proc_map_files_get_link,
 	.setattr	= proc_nochmod_setattr,
 };
@@ -2300,7 +2340,6 @@ proc_map_files_instantiate(struct dentry *dentry,
 			   struct task_struct *task, const void *ptr)
 {
 	fmode_t mode = (fmode_t)(unsigned long)ptr;
-	struct proc_inode *ei;
 	struct inode *inode;
 
 	inode = proc_pid_make_inode(dentry->d_sb, task, S_IFLNK |
@@ -2308,9 +2347,6 @@ proc_map_files_instantiate(struct dentry *dentry,
 				    ((mode & FMODE_WRITE) ? S_IWUSR : 0));
 	if (!inode)
 		return ERR_PTR(-ENOENT);
-
-	ei = PROC_I(inode);
-	ei->op.proc_get_link = map_files_get_link;
 
 	inode->i_op = &proc_map_files_link_inode_operations;
 	inode->i_size = 64;
