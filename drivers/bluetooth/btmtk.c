@@ -1858,6 +1858,10 @@ int btmtk_usb_setup(struct hci_dev *hdev)
 
 	btmtk_data->dev_id = dev_id;
 
+	/* MT7922 needs per-link requests despite suggested defaults. */
+	if (dev_id == 0x7922)
+		hci_set_quirk(hdev, HCI_QUIRK_NEEDS_LE_SET_DATA_LEN);
+
 	err = btmtk_register_coredump(hdev, btmtk_data->drv_name, fw_version);
 	if (err < 0)
 		bt_dev_err(hdev, "Failed to register coredump (%d)", err);

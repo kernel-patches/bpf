@@ -348,6 +348,11 @@ enum {
 	 */
 	HCI_QUIRK_BROKEN_READ_ENC_KEY_SIZE,
 
+	/* The controller needs an explicit LE Set Data Length request for
+	 * each central-role connection despite accepting suggested defaults.
+	 */
+	HCI_QUIRK_NEEDS_LE_SET_DATA_LEN,
+
 	/*
 	 * When this quirk is set, the reserved bits of Primary/Secondary_PHY
 	 * inside the LE Extended Advertising Report events are discarded.

@@ -7442,6 +7442,14 @@ static void hci_le_remote_feat_complete_evt(struct hci_dev *hdev, void *data,
 			 */
 			conn->le_tx_def_phys &= ~HCI_LE_SET_PHY_HDT;
 			conn->le_rx_def_phys &= ~HCI_LE_SET_PHY_HDT;
+
+			if (hci_test_quirk(hdev, HCI_QUIRK_NEEDS_LE_SET_DATA_LEN) &&
+			    conn->role == HCI_ROLE_MASTER &&
+			    (hdev->commands[33] & BIT(6)) &&
+			    (hdev->le_features[0] & HCI_LE_DATA_LEN_EXT) &&
+			    (conn->le_features[0] & HCI_LE_DATA_LEN_EXT) &&
+			    hdev->le_def_tx_len > 27)
+				hci_le_set_data_len(conn);
 		}
 
 		if (conn->state == BT_CONFIG) {
