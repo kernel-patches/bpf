@@ -24882,7 +24882,8 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 
 	env->fmodret_retvals = tgt_info.fmodret_retvals;
 	/* The interpreter returns only 32 bits */
-	if (env->fmodret_retvals && tgt_info.fmodel.ret_size == 8)
+	if (prog->expected_attach_type == BPF_MODIFY_RETURN &&
+	    tgt_info.fmodel.ret_size == 8)
 		prog->jit_required = 1;
 
 	/*
