@@ -406,6 +406,13 @@ TEST_F(memory_failure, dirty_pagecache)
 	if (variant->type == MADV_HARD) {
 		ASSERT_EQ(fsync(fd), -1);
 		ASSERT_EQ(errno, EIO);
+		/*
+		 * A filesystem which could not remove the poisoned page from
+		 * its page cache (FUSE, for one) keeps it until the inode is
+		 * evicted, which can be after close() returns.  Remove it now
+		 * so that teardown can unpoison the page.
+		 */
+		ASSERT_EQ(ftruncate(fd, 0), 0);
 	}
 
 	ASSERT_EQ(close(fd), 0);
