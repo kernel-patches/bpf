@@ -2044,8 +2044,13 @@ retry:
 	}
 
 	/* Keep the allocation-time header length across retry. */
-	if (!skb)
+	if (!skb) {
 		hard_header_len = READ_ONCE(dev->hard_header_len);
+		if (len < hard_header_len || !len) {
+			err = -EINVAL;
+			goto out_unlock;
+		}
+	}
 
 	err = -EMSGSIZE;
 	if (len > dev->mtu + hard_header_len + VLAN_HLEN + extra_len)
@@ -2071,8 +2076,6 @@ retry:
 		if (hhlen) {
 			skb->data -= hhlen;
 			skb->tail -= hhlen;
-			if (len < hhlen)
-				skb_reset_network_header(skb);
 		}
 		err = memcpy_from_msg(skb_put(skb, len), msg, len);
 		if (err)
@@ -2080,10 +2083,6 @@ retry:
 		goto retry;
 	}
 
-	if (len < hard_header_len || !skb->len) {
-		err = -EINVAL;
-		goto out_unlock;
-	}
 	if (len > (dev->mtu + hard_header_len + extra_len) &&
 	    !packet_extra_vlan_len_allowed(dev, skb)) {
 		err = -EMSGSIZE;
@@ -2657,18 +2656,14 @@ static int tpacket_fill_skb(struct packet_sock *po, struct sk_buff *skb,
 		if (unlikely(err < 0))
 			return -EINVAL;
 	} else if (copylen) {
-		int hdrlen = min_t(int, copylen, tp_len);
-
 		skb_push(skb, hard_header_len);
 		skb_put(skb, copylen - hard_header_len);
-		err = skb_store_bits(skb, 0, data, hdrlen);
+		err = skb_store_bits(skb, 0, data, copylen);
 		if (unlikely(err))
 			return err;
-		if (hdrlen < hard_header_len)
-			return -EINVAL;
 
-		data += hdrlen;
-		to_write -= hdrlen;
+		data += copylen;
+		to_write -= copylen;
 	}
 
 	offset = offset_in_page(data);
@@ -2898,6 +2893,10 @@ static int tpacket_snd(struct packet_sock *po, struct msghdr *msg)
 						    vnet_hdr.hdr_len);
 			has_vnet_hdr = true;
 		}
+		if (unlikely(tp_len < reserve)) {
+			tp_len = -EINVAL;
+			goto tpacket_error;
+		}
 		/* Prevent the byte count from wrapping into a negative errno */
 		if (unlikely(tp_len > INT_MAX - len_sum))
 			break;
@@ -3106,6 +3105,11 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	    (len > dev->mtu + reserve + VLAN_HLEN + extra_len))
 		goto out_unlock;
 
+	if (unlikely(len < reserve)) {
+		err = -EINVAL;
+		goto out_unlock;
+	}
+
 	err = -ENOBUFS;
 	hlen = LL_RESERVED_SPACE_EX(dev, hard_header_len);
 	tlen = dev->needed_tailroom;
@@ -3135,7 +3139,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	if (err)
 		goto out_free;
 
-	if ((sock->type == SOCK_RAW && len < hard_header_len) || !skb->len) {
+	if (unlikely(!skb->len)) {
 		err = -EINVAL;
 		goto out_free;
 	}
