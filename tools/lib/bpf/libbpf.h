@@ -1015,7 +1015,9 @@ LIBBPF_API enum bpf_prog_type bpf_program__type(const struct bpf_program *prog);
  * @param prog BPF program to set the program type for
  * @param type program type to set the BPF map to have
  * @return error code; or 0 if no error. An error occurs
- * if the object is already loaded.
+ * if the object is already loaded, or, with -EBUSY, if it is
+ * prepared and libbpf relocated accesses to the arguments of the
+ * program through struct bpf_func_args___xyz, which depend on it.
  *
  * This must be called before the BPF object is loaded,
  * otherwise it has no effect and an error is returned.
@@ -1033,7 +1035,9 @@ bpf_program__expected_attach_type(const struct bpf_program *prog);
  * @param prog BPF program to set the attach type for
  * @param type attach type to set the BPF map to have
  * @return error code; or 0 if no error. An error occurs
- * if the object is already loaded.
+ * if the object is already loaded, or, with -EBUSY, if it is
+ * prepared and libbpf relocated accesses to the arguments of the
+ * program through struct bpf_func_args___xyz, which depend on it.
  *
  * This must be called before the BPF object is loaded,
  * otherwise it has no effect and an error is returned.
@@ -1127,7 +1131,10 @@ LIBBPF_API __u32 bpf_program__line_info_cnt(const struct bpf_program *prog);
  * attach_prog_fd to find destination BTF type ID in that BPF program, or
  * alone (no attach_prog_fd) to resolve kernel (vmlinux/module) BTF ID.
  * Must be provided if attach_prog_fd is 0.
- * @return error code; or 0 if no error occurred.
+ * @return error code; or 0 if no error occurred. Fails with -EBUSY
+ * if the object is prepared and libbpf relocated accesses to the
+ * arguments of the program through struct bpf_func_args___xyz, which
+ * depend on its attach target.
  */
 LIBBPF_API int
 bpf_program__set_attach_target(struct bpf_program *prog, int attach_prog_fd,
