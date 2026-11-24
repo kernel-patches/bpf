@@ -120,6 +120,17 @@ bool housekeeping_test_cpu(int cpu, enum hk_type type)
 }
 EXPORT_SYMBOL_GPL(housekeeping_test_cpu);
 
+void __init housekeeping_set_cpu(int cpu, enum hk_type type)
+{
+	/* Only CPU setting of HK_TYPE_KERNEL_NOISE is currently supported */
+	if (type != HK_TYPE_KERNEL_NOISE)
+		return;
+
+	if (static_branch_unlikely(&housekeeping_overridden) &&
+	    READ_ONCE(housekeeping.flags) & BIT(type))
+		cpumask_set_cpu(cpu, housekeeping_cpumask_dereference(type));
+}
+
 int housekeeping_update(struct cpumask *isol_mask)
 {
 	struct cpumask *trial, *old = NULL;
@@ -220,6 +231,7 @@ static int __init housekeeping_setup(char *str, unsigned long flags)
 {
 	cpumask_var_t non_housekeeping_mask, housekeeping_staging;
 	unsigned int first_cpu;
+	int boot_cpu = smp_processor_id();
 	int err = 0;
 
 	if ((flags & HK_FLAG_KERNEL_NOISE) && !(housekeeping.flags & HK_FLAG_KERNEL_NOISE)) {
@@ -242,12 +254,25 @@ static int __init housekeeping_setup(char *str, unsigned long flags)
 
 	first_cpu = cpumask_first_and(cpu_present_mask, housekeeping_staging);
 	if (first_cpu >= nr_cpu_ids || first_cpu >= setup_max_cpus) {
-		__cpumask_set_cpu(smp_processor_id(), housekeeping_staging);
-		__cpumask_clear_cpu(smp_processor_id(), non_housekeeping_mask);
+		__cpumask_set_cpu(boot_cpu, housekeeping_staging);
+		__cpumask_clear_cpu(boot_cpu, non_housekeeping_mask);
 		if (!housekeeping.flags) {
-			pr_warn("Housekeeping: must include one present CPU, "
-				"using boot CPU:%d\n", smp_processor_id());
+			pr_warn("Housekeeping: must include one present CPU, using boot CPU:%d\n",
+				boot_cpu);
 		}
+	} else if ((flags & HK_FLAG_DOMAIN) &&
+		   cpumask_test_cpu(boot_cpu, non_housekeeping_mask)) {
+		/*
+		 * If the same isolcpus boot parameter covers both domain and
+		 * managed_irq/nohz, the boot CPU will also be removed from the
+		 * managed_irq/nohz isolation list. Users have to use a separate
+		 * isolcpus boot parameter for them if they want to include the
+		 * boot CPU.
+		 */
+		pr_warn("Housekeeping: Boot CPU must not be domain isolated, clearing %d from isolcpus range\n",
+			 boot_cpu);
+		__cpumask_set_cpu(boot_cpu, housekeeping_staging);
+		__cpumask_clear_cpu(boot_cpu, non_housekeeping_mask);
 	}
 
 	if (cpumask_empty(non_housekeeping_mask))

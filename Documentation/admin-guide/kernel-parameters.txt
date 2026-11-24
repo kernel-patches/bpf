@@ -2808,11 +2808,12 @@ Kernel parameters
 
 			  You can move a process onto or off an "isolated" CPU via
 			  the CPU affinity syscalls or cpuset.
-			  <cpu number> begins at 0 and the maximum value is
-			  "number of CPUs in system - 1".
+			  <cpu number> begins at 0 and the maximum value
+			  is "number of CPUs in system - 1". However boot
+			  CPU (cpu 0) cannot be domain isolated as it
+			  may cause problem with some kernel subsystems.
 
 			managed_irq
-
 			  Isolate from being targeted by managed interrupts
 			  which have an interrupt mask containing isolated
 			  CPUs. The affinity of managed interrupts is
