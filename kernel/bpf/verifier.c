@@ -7089,9 +7089,10 @@ static int check_stack_access_within_bounds(
 static bool get_func_retval_range(struct bpf_prog *prog,
 				  struct bpf_retval_range *range)
 {
-	if (prog->type == BPF_PROG_TYPE_LSM &&
+	if (IS_ENABLED(CONFIG_BPF_LSM) && prog->type == BPF_PROG_TYPE_LSM &&
 		prog->expected_attach_type == BPF_LSM_MAC &&
-		!bpf_lsm_get_retval_range(prog, range)) {
+		prog->aux->attach_func_proto->type) {
+		bpf_lsm_get_retval_range(prog, range);
 		return true;
 	}
 	return false;

@@ -866,6 +866,7 @@ static int bpf_core_calc_enumval_relo(const struct bpf_core_relo *relo,
 				      __u64 *val)
 {
 	const struct btf_type *t;
+	const struct btf_enum *e;
 
 	switch (relo->kind) {
 	case BPF_CORE_ENUMVAL_EXISTS:
@@ -875,10 +876,12 @@ static int bpf_core_calc_enumval_relo(const struct bpf_core_relo *relo,
 		if (!spec)
 			return -EUCLEAN; /* request instruction poisoning */
 		t = btf_type_by_id(spec->btf, spec->spec[0].type_id);
-		if (btf_is_enum(t))
-			*val = btf_enum(t)[spec->spec[0].idx].val;
-		else
+		if (btf_is_enum(t)) {
+			e = btf_enum(t) + spec->spec[0].idx;
+			*val = BTF_INFO_KFLAG(t->info) ? (__s64)e->val : (__u32)e->val;
+		} else {
 			*val = btf_enum64_value(btf_enum64(t) + spec->spec[0].idx);
+		}
 		break;
 	default:
 		return -EOPNOTSUPP;
