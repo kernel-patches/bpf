@@ -1926,6 +1926,14 @@ qca8k_setup(struct dsa_switch *ds)
 		return cpu_port;
 	}
 
+	/* The QCA tagger uses two-byte headers, regardless of firmware setup. */
+	ret = regmap_clear_bits(priv->regmap, QCA8K_REG_GLOBAL_HDR_CTRL,
+				QCA8K_GLOBAL_HDR_CTRL_LEN_4B);
+	if (ret) {
+		dev_err(priv->dev, "failed selecting two-byte QCA headers\n");
+		return ret;
+	}
+
 	/* Parse CPU port config to be later used in phy_link mac_config */
 	ret = qca8k_parse_port_config(priv);
 	if (ret)
