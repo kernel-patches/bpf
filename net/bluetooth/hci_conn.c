@@ -769,18 +769,23 @@ static void bis_list(struct hci_conn *conn, void *data)
 static int terminate_big_sync(struct hci_dev *hdev, void *data)
 {
 	struct iso_list_data *d = data;
+	int err = 0;
 
 	bt_dev_dbg(hdev, "big 0x%2.2x bis 0x%2.2x", d->big, d->bis);
+
+	/* Only terminate BIG if it has been created. Terminate it before the
+	 * periodic advertising that carries its BIGInfo, in the reverse order
+	 * of creating them: some controllers fail to terminate a BIG whose
+	 * advertising set has already been removed.
+	 */
+	if (d->big_term)
+		err = hci_le_terminate_big_sync(hdev, d->big,
+						HCI_ERROR_LOCAL_HOST_TERM);
 
 	hci_disable_per_advertising_sync(hdev, d->bis);
 	hci_remove_ext_adv_instance_sync(hdev, d->bis, NULL);
 
-	/* Only terminate BIG if it has been created */
-	if (!d->big_term)
-		return 0;
-
-	return hci_le_terminate_big_sync(hdev, d->big,
-					 HCI_ERROR_LOCAL_HOST_TERM);
+	return err;
 }
 
 static void terminate_big_destroy(struct hci_dev *hdev, void *data, int err)
@@ -935,6 +940,13 @@ static void bis_cleanup(struct hci_conn *conn)
 		bis = hci_conn_hash_lookup_big_state(hdev,
 						     conn->iso_qos.bcast.big,
 						     BT_OPEN,
+						     HCI_ROLE_MASTER);
+		if (bis)
+			return;
+
+		bis = hci_conn_hash_lookup_big_state(hdev,
+						     conn->iso_qos.bcast.big,
+						     BT_BOUND,
 						     HCI_ROLE_MASTER);
 		if (bis)
 			return;
