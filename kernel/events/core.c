@@ -6635,14 +6635,25 @@ static inline bool is_perf_file(struct fd f)
 
 static int perf_event_set_output(struct perf_event *event,
 				 struct perf_event *output_event);
-static int perf_event_set_filter(struct perf_event *event, void __user *arg);
+static int perf_event_set_filter(struct perf_event *event, char *filter_str);
 static int perf_copy_attr(struct perf_event_attr __user *uattr,
 			  struct perf_event_attr *attr);
 static int __perf_event_set_bpf_prog(struct perf_event *event,
 				     struct bpf_prog *prog,
 				     u64 bpf_cookie);
 
-static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned long arg)
+/*
+ * What perf_ioctl() copies from userspace before it takes ctx->mutex and
+ * what it copies back once it dropped it.
+ */
+struct perf_ioctl_data {
+	u64			value;
+	char			*filter;
+	struct perf_event_attr	attr;
+};
+
+static long _perf_ioctl(struct perf_event *event, unsigned int cmd,
+			unsigned long arg, struct perf_ioctl_data *data)
 {
 	void (*func)(struct perf_event *);
 	u32 flags = arg;
@@ -6665,22 +6676,11 @@ static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned lon
 		return _perf_event_refresh(event, arg);
 
 	case PERF_EVENT_IOC_PERIOD:
-	{
-		u64 value;
+		return _perf_event_period(event, data->value);
 
-		if (copy_from_user(&value, (u64 __user *)arg, sizeof(value)))
-			return -EFAULT;
-
-		return _perf_event_period(event, value);
-	}
 	case PERF_EVENT_IOC_ID:
-	{
-		u64 id = primary_event_id(event);
-
-		if (copy_to_user((void __user *)arg, &id, sizeof(id)))
-			return -EFAULT;
+		data->value = primary_event_id(event);
 		return 0;
-	}
 
 	case PERF_EVENT_IOC_SET_OUTPUT:
 	{
@@ -6695,7 +6695,7 @@ static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned lon
 	}
 
 	case PERF_EVENT_IOC_SET_FILTER:
-		return perf_event_set_filter(event, (void __user *)arg);
+		return perf_event_set_filter(event, data->filter);
 
 	case PERF_EVENT_IOC_SET_BPF:
 	{
@@ -6729,19 +6729,9 @@ static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned lon
 		return 0;
 	}
 
-	case PERF_EVENT_IOC_QUERY_BPF:
-		return perf_event_query_prog_array(event, (void __user *)arg);
+	case PERF_EVENT_IOC_MODIFY_ATTRIBUTES:
+		return perf_event_modify_attr(event, &data->attr);
 
-	case PERF_EVENT_IOC_MODIFY_ATTRIBUTES: {
-		struct perf_event_attr new_attr;
-		int err = perf_copy_attr((struct perf_event_attr __user *)arg,
-					 &new_attr);
-
-		if (err)
-			return err;
-
-		return perf_event_modify_attr(event,  &new_attr);
-	}
 	default:
 		return -ENOTTY;
 	}
@@ -6758,6 +6748,7 @@ static long perf_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct perf_event *event = file->private_data;
 	struct perf_event_context *ctx;
+	struct perf_ioctl_data data;
 	long ret;
 
 	/* Treat ioctl like writes as it is likely a mutating operation. */
@@ -6765,9 +6756,45 @@ static long perf_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	if (ret)
 		return ret;
 
+	/*
+	 * A copy from or to userspace can sleep in a page fault. Don't hold
+	 * ctx->mutex for it.
+	 */
+	data.filter = NULL;
+	switch (cmd) {
+	case PERF_EVENT_IOC_PERIOD:
+		if (copy_from_user(&data.value, (u64 __user *)arg,
+				   sizeof(data.value)))
+			return -EFAULT;
+		break;
+
+	case PERF_EVENT_IOC_SET_FILTER:
+		data.filter = strndup_user((void __user *)arg, PAGE_SIZE);
+		if (IS_ERR(data.filter))
+			return PTR_ERR(data.filter);
+		break;
+
+	case PERF_EVENT_IOC_QUERY_BPF:
+		/* Looks at the tracepoint's programs under bpf_event_mutex. */
+		return perf_event_query_prog_array(event, (void __user *)arg);
+
+	case PERF_EVENT_IOC_MODIFY_ATTRIBUTES:
+		ret = perf_copy_attr((struct perf_event_attr __user *)arg,
+				     &data.attr);
+		if (ret)
+			return ret;
+		break;
+	}
+
 	ctx = perf_event_ctx_lock(event);
-	ret = _perf_ioctl(event, cmd, arg);
+	ret = _perf_ioctl(event, cmd, arg, &data);
 	perf_event_ctx_unlock(event, ctx);
+
+	kfree(data.filter);
+
+	if (!ret && cmd == PERF_EVENT_IOC_ID &&
+	    copy_to_user((void __user *)arg, &data.value, sizeof(data.value)))
+		return -EFAULT;
 
 	return ret;
 }
@@ -12376,14 +12403,9 @@ fail_clear_files:
 	return ret;
 }
 
-static int perf_event_set_filter(struct perf_event *event, void __user *arg)
+static int perf_event_set_filter(struct perf_event *event, char *filter_str)
 {
 	int ret = -EINVAL;
-	char *filter_str;
-
-	filter_str = strndup_user(arg, PAGE_SIZE);
-	if (IS_ERR(filter_str))
-		return PTR_ERR(filter_str);
 
 #ifdef CONFIG_EVENT_TRACING
 	if (perf_event_is_tracing(event)) {
@@ -12408,7 +12430,6 @@ static int perf_event_set_filter(struct perf_event *event, void __user *arg)
 	if (has_addr_filter(event))
 		ret = perf_event_set_addr_filter(event, filter_str);
 
-	kfree(filter_str);
 	return ret;
 }
 
