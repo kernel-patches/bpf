@@ -69,6 +69,7 @@ perf-test-y += sigtrap.o
 perf-test-y += event_groups.o
 perf-test-y += hybrid-merge.o
 perf-test-y += symbols.o
+perf-test-y += symbol-lazy.o
 perf-test-y += util.o
 perf-test-y += hwmon_pmu.o
 perf-test-y += tool_pmu.o
