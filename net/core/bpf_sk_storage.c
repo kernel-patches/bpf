@@ -106,7 +106,7 @@ static long bpf_fd_sk_storage_update_elem(struct bpf_map *map, void *key,
 	if (sock) {
 		sdata = bpf_local_storage_update(
 			sock->sk, (struct bpf_local_storage_map *)map, value,
-			map_flags, false);
+			map_flags, false, NULL);
 		sockfd_put(sock);
 		return PTR_ERR_OR_ZERO(sdata);
 	}
@@ -232,8 +232,8 @@ out:
 	return ret;
 }
 
-BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
-	   void *, value, u64, flags)
+BPF_CALL_5(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
+	   void *, value, u64, flags, struct bpf_prog_aux *, aux)
 {
 	struct bpf_local_storage_data *sdata;
 
@@ -254,7 +254,7 @@ BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
 	    refcount_inc_not_zero(&sk->sk_refcnt)) {
 		sdata = bpf_local_storage_update(
 			sk, (struct bpf_local_storage_map *)map, value,
-			BPF_NOEXIST, false);
+			BPF_NOEXIST, false, aux);
 		/* sk must be a fullsock (guaranteed by verifier),
 		 * so sock_gen_put() is unnecessary.
 		 */
@@ -341,6 +341,7 @@ const struct bpf_func_proto bpf_sk_storage_get_proto = {
 	.arg2_type	= ARG_PTR_TO_BTF_ID_SOCK_COMMON,
 	.arg3_type	= ARG_PTR_TO_MAP_VALUE_OR_NULL,
 	.arg4_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_PTR_TO_PROG_AUX,
 };
 
 const struct bpf_func_proto bpf_sk_storage_get_cg_sock_proto = {
@@ -351,6 +352,7 @@ const struct bpf_func_proto bpf_sk_storage_get_cg_sock_proto = {
 	.arg2_type	= ARG_PTR_TO_CTX, /* context is 'struct sock' */
 	.arg3_type	= ARG_PTR_TO_MAP_VALUE_OR_NULL,
 	.arg4_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_PTR_TO_PROG_AUX,
 };
 
 const struct bpf_func_proto bpf_sk_storage_delete_proto = {
@@ -387,14 +389,14 @@ static bool bpf_sk_storage_tracing_allowed(const struct bpf_prog *prog)
 	return false;
 }
 
-BPF_CALL_4(bpf_sk_storage_get_tracing, struct bpf_map *, map, struct sock *, sk,
-	   void *, value, u64, flags)
+BPF_CALL_5(bpf_sk_storage_get_tracing, struct bpf_map *, map, struct sock *, sk,
+	   void *, value, u64, flags, struct bpf_prog_aux *, aux)
 {
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
 	if (in_hardirq() || in_nmi())
 		return (unsigned long)NULL;
 
-	return (unsigned long)____bpf_sk_storage_get(map, sk, value, flags);
+	return ____bpf_sk_storage_get(map, sk, value, flags, aux);
 }
 
 BPF_CALL_2(bpf_sk_storage_delete_tracing, struct bpf_map *, map,
@@ -416,6 +418,7 @@ const struct bpf_func_proto bpf_sk_storage_get_tracing_proto = {
 	.arg2_btf_id	= &btf_sock_ids[BTF_SOCK_TYPE_SOCK_COMMON],
 	.arg3_type	= ARG_PTR_TO_MAP_VALUE_OR_NULL,
 	.arg4_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_PTR_TO_PROG_AUX,
 	.allowed	= bpf_sk_storage_tracing_allowed,
 };
 

@@ -118,7 +118,7 @@ static long bpf_pid_task_storage_update_elem(struct bpf_map *map, void *key,
 
 	sdata = bpf_local_storage_update(
 		task, (struct bpf_local_storage_map *)map, value, map_flags,
-		true);
+		true, NULL);
 
 	err = PTR_ERR_OR_ZERO(sdata);
 out:
@@ -165,8 +165,8 @@ out:
 	return err;
 }
 
-BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
-	   task, void *, value, u64, flags)
+BPF_CALL_5(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *, task,
+	   void *, value, u64, flags, struct bpf_prog_aux *, aux)
 {
 	struct bpf_local_storage_data *sdata;
 
@@ -183,7 +183,7 @@ BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
 	    (flags & BPF_LOCAL_STORAGE_GET_F_CREATE)) {
 		sdata = bpf_local_storage_update(
 			task, (struct bpf_local_storage_map *)map, value,
-			BPF_NOEXIST, false);
+			BPF_NOEXIST, false, aux);
 		return IS_ERR(sdata) ? (unsigned long)NULL : (unsigned long)sdata->data;
 	}
 
@@ -244,6 +244,7 @@ const struct bpf_func_proto bpf_task_storage_get_proto = {
 	.arg2_btf_id = &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
 	.arg3_type = ARG_PTR_TO_MAP_VALUE_OR_NULL,
 	.arg4_type = ARG_ANYTHING,
+	.arg5_type = ARG_PTR_TO_PROG_AUX,
 };
 
 const struct bpf_func_proto bpf_task_storage_delete_proto = {
