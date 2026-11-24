@@ -10,6 +10,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/acpi.h>
+#include <linux/async.h>
 #include <linux/bitmap.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
@@ -745,8 +746,12 @@ static int phy_request_driver_module(struct phy_device *dev, u32 phy_id)
 {
 	int ret;
 
-	ret = request_module(MDIO_MODULE_PREFIX MDIO_ID_FMT,
-			     MDIO_ID_ARGS(phy_id));
+	if (current_is_async())
+		ret = request_module_nowait(MDIO_MODULE_PREFIX MDIO_ID_FMT,
+					    MDIO_ID_ARGS(phy_id));
+	else
+		ret = request_module(MDIO_MODULE_PREFIX MDIO_ID_FMT,
+				     MDIO_ID_ARGS(phy_id));
 	/* We only check for failures in executing the usermode binary,
 	 * not whether a PHY driver module exists for the PHY ID.
 	 * Accept -ENOENT because this may occur in case no initramfs exists,
