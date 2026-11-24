@@ -263,6 +263,8 @@ unsigned int inet_dev_addr_type(struct net *net, const struct net_device *dev,
 unsigned int inet_addr_type_dev_table(struct net *net,
 				      const struct net_device *dev,
 				      __be32 addr);
+bool inet_addr_is_mcast_or_bcast(struct net *net, u32 tb_id, __be32 addr,
+				 unsigned int addr_type);
 void ip_rt_multicast_event(struct in_device *);
 int ip_rt_ioctl(struct net *, unsigned int cmd, struct rtentry *rt);
 void ip_rt_get_source(u8 *src, struct sk_buff *skb, struct rtable *rt);

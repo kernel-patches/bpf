@@ -322,6 +322,13 @@ int __inet6_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 		/* Reproduce AF_INET checks to make the bindings consistent */
 		v4addr = addr->sin6_addr.s6_addr32[3];
 		chk_addr_ret = inet_addr_type_dev_table(net, dev, v4addr);
+		if (sk->sk_type == SOCK_STREAM &&
+		    inet_addr_is_mcast_or_bcast(net,
+						l3mdev_fib_table_rcu(dev) ? : RT_TABLE_LOCAL,
+						v4addr, chk_addr_ret)) {
+			err = -EINVAL;
+			goto out_unlock;
+		}
 		rcu_read_unlock();
 
 		if (!inet_addr_valid_or_nonlocal(net, inet, v4addr,
