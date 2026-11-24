@@ -109,17 +109,14 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem, unsigned long address)
 
 	if (npgs != umem->npgs) {
 		if (npgs >= 0) {
-			umem->npgs = npgs;
-			err = -ENOMEM;
-			goto out_pin;
+			unpin_user_pages(umem->pgs, npgs);
+			npgs = -ENOMEM;
 		}
 		err = npgs;
 		goto out_pgs;
 	}
 	return 0;
 
-out_pin:
-	xdp_umem_unpin_pages(umem);
 out_pgs:
 	kvfree(umem->pgs);
 	umem->pgs = NULL;
