@@ -82,6 +82,10 @@ scsi_trace_rw16(struct trace_seq *p, unsigned char *cdb, int len)
 	trace_seq_printf(p, "lba=%llu txlen=%u protect=%u", lba, txlen,
 			 cdb[1] >> 5);
 
+	if (cdb[0] == READ_16 || cdb[0] == WRITE_16)
+		trace_seq_printf(p, " dld=%u",
+				 ((cdb[1] & 0x01) << 2) | (cdb[14] >> 6));
+
 	if (cdb[0] == WRITE_SAME_16)
 		trace_seq_printf(p, " unmap=%u", cdb[1] >> 3 & 1);
 
@@ -121,6 +125,10 @@ scsi_trace_rw32(struct trace_seq *p, unsigned char *cdb, int len)
 
 	trace_seq_printf(p, "%s_32 lba=%llu txlen=%u protect=%u ei_lbrt=%u",
 			 cmd, lba, txlen, cdb[10] >> 5, ei_lbrt);
+
+	if (SERVICE_ACTION32(cdb) == READ_32 ||
+	    SERVICE_ACTION32(cdb) == WRITE_32)
+		trace_seq_printf(p, " dld=%u", cdb[11] & 0x07);
 
 	if (SERVICE_ACTION32(cdb) == WRITE_SAME_32)
 		trace_seq_printf(p, " unmap=%u", cdb[10] >> 3 & 1);
