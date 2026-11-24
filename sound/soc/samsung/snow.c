@@ -222,11 +222,11 @@ static int snow_probe(struct platform_device *pdev)
 
 static void snow_remove(struct platform_device *pdev)
 {
-	struct snow_priv *priv = platform_get_drvdata(pdev);
+	struct snd_soc_card *card = platform_get_drvdata(pdev);
+	struct snow_priv *priv = snd_soc_card_get_drvdata(card);
 	struct snd_soc_dai_link *link = &priv->dai_link;
 
 	of_node_put(link->cpus->of_node);
-	of_node_put(link->codecs->of_node);
 	snd_soc_of_put_dai_link_codecs(link);
 
 	clk_put(priv->clk_i2s_bus);
