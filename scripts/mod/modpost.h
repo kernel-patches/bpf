@@ -160,6 +160,14 @@ struct elf_info {
 	Elf32_Word   *symtab_shndx_stop;
 
 	struct symsearch *symsearch;
+
+	/*
+	 * Section mismatch cache, indexed by destination section:
+	 *   0 - uncached.
+	 *  -1 - no mismatch.
+	 *  >0 - mismatch index + 1.
+	 */
+	int *mismatch_cache;
 };
 
 /* Accessor for sym->st_shndx, hides ugliness of "64k sections" */

@@ -1155,12 +1155,62 @@ static void check_export_symbol(struct module *mod, struct elf_info *elf,
 			 name);
 }
 
+static void init_mismatch_cache(struct elf_info *elf)
+{
+	elf->mismatch_cache = xcalloc(elf->num_sections,
+				      sizeof(*elf->mismatch_cache));
+}
+
+static void reset_mismatch_cache(struct elf_info *elf)
+{
+	memset(elf->mismatch_cache, 0,
+	       elf->num_sections * sizeof(*elf->mismatch_cache));
+}
+
+static void free_mismatch_cache(struct elf_info *elf)
+{
+	free(elf->mismatch_cache);
+	elf->mismatch_cache = NULL;
+}
+
+static const struct sectioncheck
+*cache_mismatch(const struct elf_info *elf, unsigned int to_secndx,
+		const struct sectioncheck *mismatch)
+{
+	if (!mismatch) {
+		elf->mismatch_cache[to_secndx] = -1;
+		return NULL;
+	}
+
+	elf->mismatch_cache[to_secndx] = (mismatch - sectioncheck) + 1;
+	return mismatch;
+}
+
+static const struct sectioncheck *get_section_mismatch(const struct elf_info *elf,
+		const char *fromsec, unsigned int to_secndx)
+{
+	int cached;
+
+	if (to_secndx >= elf->num_sections)
+		return section_mismatch(fromsec, sec_name(elf, to_secndx));
+
+	cached = elf->mismatch_cache[to_secndx];
+	if (cached < 0)
+		return NULL;
+	if (cached > 0)
+		return &sectioncheck[cached - 1];
+
+	return cache_mismatch(elf, to_secndx,
+			      section_mismatch(fromsec, sec_name(elf, to_secndx)));
+}
+
 static void check_section_mismatch(struct module *mod, struct elf_info *elf,
 				   Elf_Sym *sym,
 				   unsigned int fsecndx, const char *fromsec,
 				   Elf_Addr faddr, Elf_Addr taddr)
 {
-	const char *tosec = sec_name(elf, get_secindex(elf, sym));
+	unsigned int to_secndx = get_secindex(elf, sym);
+	const char *tosec = sec_name(elf, to_secndx);
 	const struct sectioncheck *mismatch;
 
 	if (module_enabled && elf->export_symbol_secndx == fsecndx) {
@@ -1168,7 +1218,7 @@ static void check_section_mismatch(struct module *mod, struct elf_info *elf,
 		return;
 	}
 
-	mismatch = section_mismatch(fromsec, tosec);
+	mismatch = get_section_mismatch(elf, fromsec, to_secndx);
 	if (!mismatch)
 		return;
 
@@ -1445,6 +1495,8 @@ static void check_sec_ref(struct module *mod, struct elf_info *elf)
 {
 	int i;
 
+	init_mismatch_cache(elf);
+
 	/* Walk through all sections */
 	for (i = 0; i < elf->num_sections; i++) {
 		Elf_Shdr *sechdr = &elf->sechdrs[i];
@@ -1461,6 +1513,9 @@ static void check_sec_ref(struct module *mod, struct elf_info *elf)
 			if (match(secname, section_white_list))
 				continue;
 
+			/* Reset cache per-section. */
+			reset_mismatch_cache(elf);
+
 			start = sym_get_data_by_offset(elf, i, 0);
 			stop = start + sechdr->sh_size;
 
@@ -1472,6 +1527,8 @@ static void check_sec_ref(struct module *mod, struct elf_info *elf)
 					    start, stop);
 		}
 	}
+
+	free_mismatch_cache(elf);
 }
 
 static char *remove_dot(char *s)
