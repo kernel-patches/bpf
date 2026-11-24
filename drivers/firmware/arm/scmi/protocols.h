@@ -106,6 +106,13 @@ struct scmi_msg_hdr {
  * @rx: Receive message, the buffer should be pre-allocated to store
  *	message. If request-ACK protocol is used, we can reuse the same
  *	buffer for the rx path as we use for the tx path.
+ * @expected_rx_len: The expected length of the payload in the reply, excluding
+ *		     the status field. When set to a non-zero value this is used
+ *		     to evaluate if a reply had been possibly truncated due to a
+ *		     misconfigured transport: it is only set to some meaningful
+ *		     non-zero value for replies having a very well known fixed
+ *		     size, definitely not for variable-sized xfers with an RX
+ *		     len initialized to max_msg_size.
  * @done: command message transmit completion event
  * @async_done: pointer to delayed response message received event completion,
  *		or NULL when no delayed response is expected. Protected by
@@ -139,6 +146,7 @@ struct scmi_xfer {
 	struct scmi_msg_hdr hdr;
 	struct scmi_msg tx;
 	struct scmi_msg rx;
+	size_t expected_rx_len;
 	struct completion done;
 	struct completion *async_done;
 	bool pending;
