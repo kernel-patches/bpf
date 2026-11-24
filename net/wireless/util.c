@@ -1034,7 +1034,9 @@ void ieee80211_amsdu_to_8023s(struct sk_buff *skb, struct sk_buff_head *list,
 		frame->priority = skb->priority;
 
 		if (likely(iftype != NL80211_IFTYPE_MESH_POINT &&
-			   ieee80211_get_8023_tunnel_proto(frame->data, &hdr.eth.h_proto)))
+			   pskb_may_pull(frame, ETH_ALEN + 2) &&
+			   ieee80211_get_8023_tunnel_proto(frame->data,
+							   &hdr.eth.h_proto)))
 			skb_pull(frame, ETH_ALEN + 2);
 
 		memcpy(skb_push(frame, sizeof(hdr.eth)), &hdr.eth, sizeof(hdr.eth));
