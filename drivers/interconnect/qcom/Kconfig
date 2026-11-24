@@ -439,6 +439,20 @@ config INTERCONNECT_QCOM_SM7150
 	  This is a driver for the Qualcomm Network-on-Chip on sm7150-based
 	  platforms.
 
+config INTERCONNECT_QCOM_SM7250
+	tristate "Qualcomm SM7250 interconnect driver"
+	depends on INTERCONNECT_QCOM_RPMH_POSSIBLE
+	depends on ARM64 || COMPILE_TEST
+	select INTERCONNECT_QCOM_RPMH
+	select INTERCONNECT_QCOM_BCM_VOTER
+	default ARCH_QCOM
+	help
+	  This is a driver for the Qualcomm Network-on-Chip on sm7250-based
+	  platforms.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called qnoc-sm7250.
+
 config INTERCONNECT_QCOM_MILOS
 	tristate "Qualcomm Milos interconnect driver"
 	depends on INTERCONNECT_QCOM_RPMH_POSSIBLE
