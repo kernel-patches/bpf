@@ -2,6 +2,7 @@
 /* Copyright(c) 2020 - 2025 Mucse Corporation. */
 
 #include <linux/pci.h>
+#include <linux/ethtool.h>
 #include <linux/skbuff.h>
 #include <net/rtnetlink.h>
 #include <linux/etherdevice.h>
@@ -169,6 +170,7 @@ static void rnpgbe_sw_init(struct mucse *mucse)
 	mucse->tx_ring_item_count = M_DEFAULT_TXD;
 	mucse->rx_ring_item_count = M_DEFAULT_RXD;
 	mucse->tx_work_limit = M_DEFAULT_TX_WORK;
+	mucse->hw.mdix_ctrl = ETH_TP_MDI_AUTO;
 
 	for (i = 0; i < RNPGBE_MAX_QUEUES; i++) {
 		u64_stats_init(&mucse->tx_stats[i].syncp);
@@ -256,6 +258,11 @@ static int rnpgbe_add_adapter(struct pci_dev *pdev,
 	err = rnpgbe_reset_hw(hw);
 	if (err) {
 		dev_err(&pdev->dev, "Hw reset failed %d\n", err);
+		goto err_powerdown;
+	}
+	err = rnpgbe_init_link_config(hw);
+	if (err) {
+		dev_err(&pdev->dev, "Get link capabilities failed %d\n", err);
 		goto err_powerdown;
 	}
 	err = rnpgbe_setup_default_link(hw);
