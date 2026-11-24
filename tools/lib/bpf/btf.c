@@ -1140,7 +1140,7 @@ static void btf_check_sorted(struct btf *btf)
 }
 
 static __s32 btf_find_type_by_name_bsearch(const struct btf *btf, const char *name,
-					   __s32 start_id)
+					   size_t name_len, __s32 start_id)
 {
 	const struct btf_type *t;
 	const char *tname;
@@ -1152,7 +1152,7 @@ static __s32 btf_find_type_by_name_bsearch(const struct btf *btf, const char *na
 		m = l + (r - l) / 2;
 		t = btf_type_by_id(btf, m);
 		tname = btf__str_by_offset(btf, t->name_off);
-		if (strcmp(tname, name) >= 0) {
+		if (strncmp(tname, name, name_len) >= 0) {
 			if (l == r)
 				return r;
 			r = m;
@@ -1162,6 +1162,99 @@ static __s32 btf_find_type_by_name_bsearch(const struct btf *btf, const char *na
 	}
 
 	return btf__type_cnt(btf);
+}
+
+/*
+ * Set [*start, *end) to the range of own type IDs that may match the
+ * first name_len bytes of name. For unsorted BTF, include all own type IDs.
+ */
+void btf_name_prefix_range(const struct btf *btf, const char *name, size_t name_len,
+			   __u32 *start, __u32 *end)
+{
+	__u32 i, n = btf__type_cnt(btf);
+
+	if (btf->named_start_id <= 0) {
+		*start = btf->start_id;
+		*end = n;
+		return;
+	}
+	*start = btf_find_type_by_name_bsearch(btf, name, name_len, btf->named_start_id);
+	for (i = *start; i < n; i++) {
+		const struct btf_type *t = btf_type_by_id(btf, i);
+		const char *tname = btf__str_by_offset(btf, t->name_off);
+
+		if (strncmp(tname, name, name_len) != 0)
+			break;
+	}
+	*end = i;
+}
+
+static __u16 kfunc_type_kind(const struct btf_type *t)
+{
+	if (btf_is_fwd(t))
+		return btf_kflag(t) ? BTF_KIND_UNION : BTF_KIND_STRUCT;
+	if (btf_is_enum64(t))
+		return BTF_KIND_ENUM;
+	return btf_kind(t);
+}
+
+/*
+ * Return 1 if the types match, 0 if they don't, or -EINVAL if a type
+ * can't be looked up or the types nest deeper than depth.
+ */
+static int kfunc_type_match(const struct btf *a, __u32 a_id,
+			    const struct btf *b, __u32 b_id, int depth)
+{
+	const struct btf_type *at = skip_mods_and_typedefs(a, a_id, NULL);
+	const struct btf_type *bt = skip_mods_and_typedefs(b, b_id, NULL);
+	__u16 kind;
+	int i, ret;
+
+	if (!at || !bt || !depth)
+		return -EINVAL;
+
+	kind = kfunc_type_kind(at);
+	if (kind != kfunc_type_kind(bt))
+		return 0;
+
+	switch (kind) {
+	case BTF_KIND_STRUCT:
+	case BTF_KIND_UNION: {
+		const char *an = btf__name_by_offset(a, at->name_off);
+		const char *bn = btf__name_by_offset(b, bt->name_off);
+		size_t name_len = bpf_core_essential_name_len(an);
+
+		return name_len == bpf_core_essential_name_len(bn) &&
+		       strncmp(an, bn, name_len) == 0;
+	}
+	case BTF_KIND_UNKN:
+	case BTF_KIND_ENUM:
+		return 1;
+	case BTF_KIND_INT:
+		return btf_int_offset(at) == 0 && btf_int_offset(bt) == 0;
+	case BTF_KIND_PTR:
+		return kfunc_type_match(a, at->type, b, bt->type, depth - 1);
+	case BTF_KIND_ARRAY:
+		return kfunc_type_match(a, btf_array(at)->type, b, btf_array(bt)->type, depth - 1);
+	case BTF_KIND_FUNC_PROTO:
+		if (btf_vlen(at) != btf_vlen(bt))
+			return 0;
+		for (i = 0; i < btf_vlen(at); i++) {
+			ret = kfunc_type_match(a, btf_params(at)[i].type,
+					       b, btf_params(bt)[i].type, depth - 1);
+			if (ret <= 0)
+				return ret;
+		}
+		return kfunc_type_match(a, at->type, b, bt->type, depth - 1);
+	default:
+		return 0;
+	}
+}
+
+int btf_kfunc_proto_match(const struct btf *a, __u32 a_id,
+			  const struct btf *b, __u32 b_id)
+{
+	return kfunc_type_match(a, a_id, b, b_id, 32);
 }
 
 static __s32 btf_find_by_name_kind(const struct btf *btf, int start_id,
@@ -1185,7 +1278,7 @@ static __s32 btf_find_by_name_kind(const struct btf *btf, int start_id,
 
 	if (btf->named_start_id > 0 && type_name[0]) {
 		start_id = max(start_id, btf->named_start_id);
-		id = btf_find_type_by_name_bsearch(btf, type_name, start_id);
+		id = btf_find_type_by_name_bsearch(btf, type_name, strlen(type_name), start_id);
 		for (; id < nr_types; id++) {
 			t = btf__type_by_id(btf, id);
 			tname = btf__str_by_offset(btf, t->name_off);

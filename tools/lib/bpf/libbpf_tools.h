@@ -52,6 +52,8 @@ struct bpf_core_cand;
 struct bpf_core_cand_list;
 
 const struct btf_header *btf_header(const struct btf *btf);
+int btf_kfunc_proto_match(const struct btf *a, __u32 a_id,
+			  const struct btf *b, __u32 b_id);
 const char *btf_kind_str(const struct btf_type *t);
 const struct btf_type *skip_mods_and_typedefs(const struct btf *btf, __u32 id, __u32 *res_id);
 
