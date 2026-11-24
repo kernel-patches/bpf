@@ -595,6 +595,24 @@ exit:
 	return ret;
 }
 
+static bool cros_ec_proto_can_fallback_to_v2(struct cros_ec_device *ec_dev,
+					     int ret)
+{
+	/* The EC does support v3. */
+	if (ec_dev->registered && ec_dev->pkt_xfer)
+		return false;
+
+	/* The transport doesn't support v2. */
+	if (!ec_dev->cmd_xfer)
+		return false;
+
+	/* The system or EC is encountering transient failures. */
+	if (ret == -ENOMEM || ret == -EAGAIN)
+		return false;
+
+	return true;
+}
+
 /**
  * cros_ec_query_all() -  Query the protocol version supported by the
  *         ChromeOS EC.
@@ -607,23 +625,30 @@ int cros_ec_query_all(struct cros_ec_device *ec_dev)
 	u32 ver_mask;
 	int ret;
 
-	/* First try sending with proto v3. */
-	if (!cros_ec_get_proto_info(ec_dev, CROS_EC_DEV_EC_INDEX)) {
-		/* Check for PD. */
-		cros_ec_get_proto_info(ec_dev, CROS_EC_DEV_PD_INDEX);
-	} else {
-		/* Try querying with a v2 hello message. */
-		ret = cros_ec_get_proto_info_legacy(ec_dev);
-		if (ret) {
-			/*
-			 * It's possible for a test to occur too early when
-			 * the EC isn't listening. If this happens, we'll
-			 * test later when the first command is run.
-			 */
-			ec_dev->proto_version = EC_PROTO_VERSION_UNKNOWN;
-			dev_dbg(ec_dev->dev, "EC query failed: %d\n", ret);
-			return ret;
+	if (ec_dev->pkt_xfer) {
+		/* First try sending with proto v3. */
+		ret = cros_ec_get_proto_info(ec_dev, CROS_EC_DEV_EC_INDEX);
+
+		if (!ret) {
+			/* Check for optional PD chip; ignore errors. */
+			cros_ec_get_proto_info(ec_dev, CROS_EC_DEV_PD_INDEX);
+		} else if (cros_ec_proto_can_fallback_to_v2(ec_dev, ret)) {
+			/* Fall back to querying with a v2 hello message. */
+			ret = cros_ec_get_proto_info_legacy(ec_dev);
 		}
+	} else {
+		/* pkt_xfer is NULL (v2-only EC); query with v2 directly. */
+		ret = cros_ec_get_proto_info_legacy(ec_dev);
+	}
+	if (ret) {
+		/*
+		 * It's possible for a test to occur too early when
+		 * the EC isn't listening. If this happens, we'll
+		 * test later when the first command is run.
+		 */
+		ec_dev->proto_version = EC_PROTO_VERSION_UNKNOWN;
+		dev_dbg(ec_dev->dev, "EC query failed: %d\n", ret);
+		return ret;
 	}
 
 	/* Probe if MKBP event is supported */
