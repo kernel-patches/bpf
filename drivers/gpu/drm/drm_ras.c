@@ -7,6 +7,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/netdevice.h>
+#include <linux/netlink.h>
 #include <linux/refcount.h>
 #include <linux/xarray.h>
 #include <net/genetlink.h>
@@ -55,6 +56,19 @@
  * 7. SET_ERROR_THRESHOLD: Set error threshold of a given counter.
  *    Userspace must provide Node ID, Error ID and threshold to be set.
  *
+ * 8. TELEMETRY_GET: Read a telemetry value.
+ *    Userspace must provide Node ID and telemetry field to be read.
+ *    Returns the status of the read and the value read (if valid).
+ *
+ * 9. TELEMETRY_SET: Write a telemetry value.
+ *    Userspace must provide Node ID, the telemetry field to write, and the value
+ *    to be written.
+ *    Returns the status of the write.
+ *
+ * 10. TELEMETRY_LIST_FIELDS: List the telemetry fields provided by the device.
+ *     Each field contains the uAPI defined enum string, its numerical value,
+ *     and its mode bitmask, which encodes read/write capabilities.
+ *
  * Node registration:
  *
  * - drm_ras_node_register(): Registers a new node and assigns
@@ -80,7 +94,6 @@
  * Node type:
  *
  * - ERROR_COUNTER:
- *     + Currently, only error counters are supported.
  *     + The driver must implement the query_error_counter() callback to provide
  *       the name and the value of the error counter.
  *     + The driver must provide a error_counter_range.last value informing the
@@ -98,6 +111,16 @@
  *       that are raised by the hardware.
  *     + The driver is responsible for error threshold bounds checking.
  *
+ * - TELEMETRY:
+ *     + The driver must implement the telemetry_get() callbacks, telemetry_set()
+ *       is optional.
+ *     + The driver must provide a list of telemetry fields corresponding to
+ *       their uAPI definitions and values, with each field's supported access
+ *       modes (read/write) encoded in its mode bitmask. Fields writable via
+ *       telemetry_set() must have the write mode bit set.
+ *     + The driver can optionally provide a pre_doit callback, telemetry_pre(),
+ *       to enforce permissions checks on telemetry operations.
+ *
  * Netlink handlers:
  *
  * - drm_ras_nl_list_nodes_dumpit(): Implements the LIST_NODES
@@ -112,17 +135,36 @@
  *   operation, fetching the error threshold of a specific counter.
  * - drm_ras_nl_set_error_threshold_doit(): Implements the SET_ERROR_THRESHOLD doit
  *   operation, setting the error threshold of a specific counter.
+ * - drm_ras_nl_pre_telemetry(): TELEMETRY_GET and TELEMETRY_SET pre_doit
+ *   operation. Looks the node up, takes a reference on it and stashes it in
+ *   info->ctx, and enforces the node's optional permission check.
+ * - drm_ras_nl_post_telemetry(): TELEMETRY_GET and TELEMETRY_SET post_doit
+ *   operation, dropping the reference taken by drm_ras_nl_pre_telemetry().
+ * - drm_ras_nl_telemetry_get_doit(): Implements the TELEMETRY_GET doit operation,
+ *   invoking the driver's telemetry_get callback and returning the results.
+ * - drm_ras_nl_telemetry_set_doit(): Implements the TELEMETRY_SET doit operation,
+ *   invoking the driver's telemetry_set callback and returning the results.
+ * - drm_ras_nl_telemetry_list_fields_dumpit(): Implements the TELEMETRY_LIST_FIELDS
+ *   dumpit operation, enumerating all telemetry fields and their supported
+ *   access modes for a telemetry node.
  */
 
 static DEFINE_XARRAY_ALLOC(drm_ras_xa);
 
 /*
- * The netlink callback context carries dump state across multiple dumpit calls
+ * Per-command netlink context. Overlaid on the callback storage (cb->ctx) for
+ * dumps and on genl_info (info->ctx) for doits. @node pins the node targeted by
+ * a telemetry get/set doit between its pre_doit and post_doit. Dumps never
+ * hold a node reference across dumpit() calls.
  */
 struct drm_ras_ctx {
-	/* Which xarray id to restart the dump from */
+	/* Which xarray id, error id, or field id to restart the dump from */
 	unsigned long restart;
+	/* Node targeted by a telemetry get/set doit */
+	struct drm_ras_node *node;
 };
+
+static_assert(sizeof(struct drm_ras_ctx) <= NETLINK_CTX_SIZE);
 
 /**
  * drm_ras_node_get() - Look up a RAS node by ID and take a reference
@@ -738,6 +780,311 @@ int drm_ras_nl_set_error_threshold_doit(struct sk_buff *skb, struct genl_info *i
 }
 
 /**
+ * drm_ras_nl_pre_telemetry - Look up the telemetry node and enforce permissions
+ * @ops: Generic netlink operations
+ * @skb: Netlink message buffer
+ * @info: Generic Netlink info containing attributes of the request
+ *
+ * Looks up the telemetry node, takes a reference on it with drm_ras_node_get()
+ * and stashes it in @info->ctx so the doit handler can use it without a second
+ * lookup. The reference is dropped by drm_ras_nl_post_telemetry(), which
+ * genetlink only calls when this pre_doit succeeds; every error path here must
+ * therefore drop the reference itself. Also enforces the node's optional
+ * permission check via the telemetry_pre() callback.
+ *
+ * Return: 0 on success, or negative errno on failure.
+ */
+int drm_ras_nl_pre_telemetry(const struct genl_split_ops *ops, struct sk_buff *skb,
+			     struct genl_info *info)
+{
+	struct drm_ras_ctx *ctx = (void *)info->ctx;
+	struct drm_ras_node *node;
+	u32 node_id;
+	int ret;
+
+	if (!info->attrs || GENL_REQ_ATTR_CHECK(info, DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID))
+		return -EINVAL;
+
+	node_id = nla_get_u32(info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID]);
+	node = drm_ras_node_get(node_id);
+	if (!node || node->type != DRM_RAS_NODE_TYPE_TELEMETRY) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID]);
+		drm_ras_node_put(node);
+		return -ENOENT;
+	}
+
+	if (node->telemetry_pre) {
+		ret = node->telemetry_pre(node);
+		if (ret) {
+			drm_ras_node_put(node);
+			return ret;
+		}
+	}
+
+	ctx->node = node;
+
+	return 0;
+}
+
+/**
+ * drm_ras_nl_post_telemetry - Release the telemetry node after a doit handler
+ * @ops: Generic netlink operations
+ * @skb: Netlink message buffer
+ * @info: Generic Netlink info containing attributes of the request
+ *
+ * Drops the reference that drm_ras_nl_pre_telemetry() took and stashed in
+ * @info->ctx. genetlink only invokes this post_doit when the matching pre_doit
+ * succeeded, so ctx->node is always the referenced node here.
+ */
+void drm_ras_nl_post_telemetry(const struct genl_split_ops *ops, struct sk_buff *skb,
+			       struct genl_info *info)
+{
+	struct drm_ras_ctx *ctx = (void *)info->ctx;
+
+	drm_ras_node_put(ctx->node);
+}
+
+static bool telemetry_fields_contains(const struct drm_ras_telemetry_field *fields, u64 value,
+				      u32 mode)
+{
+	unsigned long idx;
+
+	if (!fields)
+		return false;
+
+	for (idx = 0; fields[idx].name; idx++) {
+		if (fields[idx].value == value && (fields[idx].mode & mode))
+			return true;
+	}
+
+	return false;
+}
+
+/**
+ * drm_ras_nl_telemetry_list_fields_dumpit() - Dump a node's telemetry fields.
+ * @skb: Netlink message buffer
+ * @cb: Callback context for multi-part dumps
+ *
+ * Displays every telemetry field exposed by the given node, along with
+ * each field's supported access modes (read/write).
+ *
+ * The node reference is taken and dropped within each dumpit() call rather
+ * than held across the whole dump, so a userspace dump that is never
+ * completed cannot block drm_ras_node_unregister().
+ *
+ * Return: 0 on success, or negative errno on failure.
+ */
+int drm_ras_nl_telemetry_list_fields_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
+{
+	const struct genl_info *info = genl_info_dump(cb);
+	struct drm_ras_ctx *ctx = (void *)cb->ctx;
+	const struct drm_ras_telemetry_field *field;
+	struct drm_ras_node *node;
+	struct nlattr *hdr;
+	unsigned long idx;
+	u32 node_id;
+	int ret = 0;
+
+	if (!info->attrs || GENL_REQ_ATTR_CHECK(info, DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID))
+		return -EINVAL;
+
+	node_id = nla_get_u32(info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID]);
+
+	node = drm_ras_node_get(node_id);
+	if (!node || node->type != DRM_RAS_NODE_TYPE_TELEMETRY) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID]);
+		drm_ras_node_put(node);
+		return -ENOENT;
+	}
+
+	/*
+	 * Node IDs may be reused, so the node found here is not necessarily the
+	 * one seen by a previous dumpit() call of this dump. Walk the field list
+	 * from the start rather than indexing at ctx->restart directly, so a
+	 * shorter list can never be read past its terminator.
+	 */
+	for (idx = 0; node->telemetry_fields[idx].name; idx++) {
+		if (idx < ctx->restart)
+			continue;
+
+		field = &node->telemetry_fields[idx];
+
+		hdr = genlmsg_iput(skb, info);
+		if (!hdr) {
+			ret = -EMSGSIZE;
+			break;
+		}
+
+		ret = nla_put_uint(skb, DRM_RAS_A_TELEMETRY_ATTRS_FIELD, field->value);
+		if (ret) {
+			genlmsg_cancel(skb, hdr);
+			break;
+		}
+
+		ret = nla_put_string(skb, DRM_RAS_A_TELEMETRY_ATTRS_FIELD_NAME, field->name);
+		if (ret) {
+			genlmsg_cancel(skb, hdr);
+			break;
+		}
+
+		ret = nla_put_uint(skb, DRM_RAS_A_TELEMETRY_ATTRS_MODE, field->mode);
+		if (ret) {
+			genlmsg_cancel(skb, hdr);
+			break;
+		}
+
+		genlmsg_end(skb, hdr);
+	}
+
+	if (ret == -EMSGSIZE)
+		ctx->restart = idx;
+
+	drm_ras_node_put(node);
+
+	return ret;
+}
+
+/**
+ * drm_ras_nl_telemetry_get_doit() - Query a telemetry value
+ * @skb: Netlink message buffer
+ * @info: Generic Netlink info containing attributes of the request
+ *
+ * Extracts the telemetry field from the netlink attributes and
+ * reads that value from the device.
+ *
+ * Return: 0 on success, or negative errno on failure.
+ */
+int drm_ras_nl_telemetry_get_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct drm_ras_ctx *ctx = (void *)info->ctx;
+	struct drm_ras_node *node = ctx->node;
+	struct sk_buff *msg;
+	struct nlattr *hdr;
+	u64 field;
+	s64 status = 0;
+	s64 value = 0;
+	int ret = 0;
+
+	if (!info->attrs || GENL_REQ_ATTR_CHECK(info, DRM_RAS_A_TELEMETRY_ATTRS_FIELD))
+		return -EINVAL;
+
+	field = nla_get_uint(info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_FIELD]);
+
+	if (!node->telemetry_get) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID]);
+		return -ENOENT;
+	}
+
+	if (!telemetry_fields_contains(node->telemetry_fields, field,
+				       DRM_RAS_TELEMETRY_FIELD_MODE_READ)) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_FIELD]);
+		return -EINVAL;
+	}
+
+	msg = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!msg)
+		return -ENOMEM;
+
+	hdr = genlmsg_iput(msg, info);
+	if (!hdr) {
+		nlmsg_free(msg);
+		return -EMSGSIZE;
+	}
+
+	ret = node->telemetry_get(node, &field, &value, &status);
+	if (ret) {
+		nlmsg_free(msg);
+		return ret;
+	}
+
+	ret = nla_put_sint(msg, DRM_RAS_A_TELEMETRY_ATTRS_STATUS, status);
+	if (ret) {
+		genlmsg_cancel(msg, hdr);
+		nlmsg_free(msg);
+		return ret;
+	}
+
+	ret = nla_put_sint(msg, DRM_RAS_A_TELEMETRY_ATTRS_VALUE, value);
+	if (ret) {
+		genlmsg_cancel(msg, hdr);
+		nlmsg_free(msg);
+		return ret;
+	}
+
+	genlmsg_end(msg, hdr);
+
+	return genlmsg_reply(msg, info);
+}
+
+/**
+ * drm_ras_nl_telemetry_set_doit() - Write a telemetry value
+ * @skb: Netlink message buffer
+ * @info: Generic Netlink info containing attributes of the request
+ *
+ * Extracts the telemetry field and value to be written from the netlink
+ * attributes and writes that value to the specified field on the device.
+ *
+ * Return: 0 on success, or negative errno on failure.
+ */
+int drm_ras_nl_telemetry_set_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct drm_ras_ctx *ctx = (void *)info->ctx;
+	struct drm_ras_node *node = ctx->node;
+	struct sk_buff *msg;
+	struct nlattr *hdr;
+	u64 field;
+	s64 status = 0;
+	s64 value = 0;
+	int ret = 0;
+
+	if (!info->attrs ||
+	    GENL_REQ_ATTR_CHECK(info, DRM_RAS_A_TELEMETRY_ATTRS_VALUE) ||
+	    GENL_REQ_ATTR_CHECK(info, DRM_RAS_A_TELEMETRY_ATTRS_FIELD))
+		return -EINVAL;
+
+	value = nla_get_sint(info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_VALUE]);
+	field = nla_get_uint(info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_FIELD]);
+
+	if (!node->telemetry_set) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID]);
+		return -ENOENT;
+	}
+
+	if (!telemetry_fields_contains(node->telemetry_fields, field,
+				       DRM_RAS_TELEMETRY_FIELD_MODE_WRITE)) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[DRM_RAS_A_TELEMETRY_ATTRS_FIELD]);
+		return -EINVAL;
+	}
+
+	msg = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!msg)
+		return -ENOMEM;
+
+	hdr = genlmsg_iput(msg, info);
+	if (!hdr) {
+		nlmsg_free(msg);
+		return -EMSGSIZE;
+	}
+
+	ret = node->telemetry_set(node, &field, &value, &status);
+	if (ret) {
+		nlmsg_free(msg);
+		return ret;
+	}
+
+	ret = nla_put_sint(msg, DRM_RAS_A_TELEMETRY_ATTRS_STATUS, status);
+	if (ret) {
+		genlmsg_cancel(msg, hdr);
+		nlmsg_free(msg);
+		return ret;
+	}
+
+	genlmsg_end(msg, hdr);
+
+	return genlmsg_reply(msg, info);
+}
+
+/**
  * drm_ras_node_register() - Register a new RAS node
  * @node: Node structure to register
  *
@@ -751,14 +1098,21 @@ int drm_ras_node_register(struct drm_ras_node *node)
 	if (!node->device_name || !node->node_name)
 		return -EINVAL;
 
-	/* Currently, only Error Counter Endpoints are supported */
-	if (node->type != DRM_RAS_NODE_TYPE_ERROR_COUNTER)
+	/* Currently, only Error Counter and Telemetry endpoints are supported */
+	switch (node->type) {
+	case DRM_RAS_NODE_TYPE_ERROR_COUNTER:
+		/* Mandatory entries for Error Counter Node */
+		if (!node->error_counter_range.last || !node->query_error_counter)
+			return -EINVAL;
+		break;
+	case DRM_RAS_NODE_TYPE_TELEMETRY:
+		/* Must provide telemetry_get, telemetry_set is optional */
+		if (!node->telemetry_get || !node->telemetry_fields)
+			return -EINVAL;
+		break;
+	default:
 		return -EINVAL;
-
-	/* Mandatory entries for Error Counter Node */
-	if (node->type == DRM_RAS_NODE_TYPE_ERROR_COUNTER &&
-	    (!node->error_counter_range.last || !node->query_error_counter))
-		return -EINVAL;
+	}
 
 	/* One reference is held for being registered in the xarray */
 	refcount_set(&node->ref, 1);
