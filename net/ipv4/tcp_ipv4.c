@@ -1732,7 +1732,7 @@ struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 	if (!dst) {
 		dst = inet_csk_route_child_sock(sk, newsk, req);
 		if (!dst)
-			goto put_and_exit;
+			goto clear_ca_and_exit;
 	} else {
 		/* syncookie case : see end of cookie_v4_check() */
 	}
@@ -1790,6 +1790,9 @@ exit_nonewsk:
 exit:
 	tcp_listendrop(sk);
 	return NULL;
+clear_ca_and_exit:
+	/* newsk holds no reference on the inherited CA yet. */
+	inet_csk(newsk)->icsk_ca_ops = NULL;
 put_and_exit:
 	newinet->inet_opt = NULL;
 	inet_csk_prepare_forced_close(newsk);
