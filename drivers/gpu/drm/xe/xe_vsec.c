@@ -149,6 +149,8 @@ int xe_pmt_telem_read(struct device *dev, u32 guid, u64 *data, loff_t user_offse
 	u32 offset;
 	int ret;
 
+	xe_assert(xe, !IS_SRIOV_VF(xe));
+
 	ret = xe_guid_decode(guid, &mem_region, &offset);
 	if (ret)
 		return ret;
@@ -156,9 +158,6 @@ int xe_pmt_telem_read(struct device *dev, u32 guid, u64 *data, loff_t user_offse
 	telem_addr += offset + user_offset;
 
 	guard(mutex)(&xe->pmt.lock);
-
-	if (!xe->soc_remapper.set_telem_region)
-		return -ENODEV;
 
 	/* indicate that we are not at an appropriate power level */
 	if (!xe_pm_runtime_get_if_active(xe))
@@ -184,6 +183,9 @@ static const int vsec_platforms[] = {
 static enum xe_vsec get_platform_info(struct xe_device *xe)
 {
 	if (xe->info.platform > XE_BATTLEMAGE)
+		return XE_VSEC_UNKNOWN;
+
+	if (IS_SRIOV_VF(xe) && xe->info.platform == XE_BATTLEMAGE)
 		return XE_VSEC_UNKNOWN;
 
 	return vsec_platforms[xe->info.platform];
