@@ -415,11 +415,10 @@ int __ipv6_dev_ac_dec(struct inet6_dev *idev, const struct in6_addr *addr)
 		rcu_assign_pointer(prev_aca->aca_next, aca->aca_next);
 	else
 		rcu_assign_pointer(idev->ac_list, aca->aca_next);
+	ip6_del_rt(dev_net(idev->dev), aca->aca_rt, false);
 	write_unlock_bh(&idev->lock);
 	ipv6_del_acaddr_hash(aca);
 	addrconf_leave_solict(idev, &aca->aca_addr);
-
-	ip6_del_rt(dev_net(idev->dev), aca->aca_rt, false);
 
 	inet6_ifacaddr_notify(idev->dev, aca, RTM_DELANYCAST);
 
