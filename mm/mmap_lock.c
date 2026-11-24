@@ -304,7 +304,7 @@ err_unstable:
 	 * is dropped and before rcuwait_wake_up(mm) is called. Grab it before
 	 * releasing vma->vm_refcnt.
 	 */
-	other_mm = vma->vm_mm; /* use a copy as vma can be freed after we drop vm_refcnt */
+	other_mm = vma->vm_mm; /* use a copy as vma can be reused after we drop vm_refcnt */
 
 	mmgrab(other_mm);
 	vma_refcount_put(vma);
