@@ -7503,10 +7503,22 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	u32 nr_args, arg;
 	int i, ret;
 
+	/*
+	 * Loads start at an 8-byte boundary: the start of a u64 slot, or of a
+	 * field of an iterator's context struct. Arguments and return values
+	 * smaller than 8 bytes are in the low-order bytes of their slot, which
+	 * on big-endian are at its end, so loads ending there are allowed too,
+	 * except for iterators, whose fields are followed by padding.
+	 */
 	if (off % 8) {
-		bpf_log(log, "func '%s' offset %d is not multiple of 8\n",
-			tname, off);
-		return false;
+		bool iter = prog->type == BPF_PROG_TYPE_TRACING &&
+			    prog->expected_attach_type == BPF_TRACE_ITER;
+
+		if (!IS_ENABLED(CONFIG_CPU_BIG_ENDIAN) || iter || off % 8 != 8 - size) {
+			bpf_log(log, "func '%s' offset %d is not multiple of 8\n",
+				tname, off);
+			return false;
+		}
 	}
 	arg = btf_ctx_arg_idx(btf, t, off);
 	args = (const struct btf_param *)(t + 1);
