@@ -2167,18 +2167,33 @@ static u64 amt_rec_cost(const struct amt_dev *amt, u32 nr_sources, u16 nsrcs)
 	       (u64)AMT_REC_LOOKUPS * nsrcs;
 }
 
-/* The most work one Membership Update may cause: twice what refreshing
- * every group the tunnel may hold, with every source, costs.  The packet
- * length used to be the only bound, and a report that names one full
- * group many times costs far more than one that refreshes the whole
- * tunnel.
+/* The work of a report naming @recs groups, each walked in full, plus two
+ * passes over every source the tunnel may hold and a lookup per source.
+ */
+static u64 amt_report_cost(const struct amt_dev *amt, u64 recs)
+{
+	return (u64)AMT_REC_WALKS *
+	       (recs * amt->hash_buckets + 2 * (u64)amt->max_sources) +
+	       (u64)AMT_REC_LOOKUPS * amt->max_sources;
+}
+
+/* The most work one Membership Update may cause.  The packet length used
+ * to be the only bound, and a report that names one full group many times
+ * costs far more than one that refreshes the whole tunnel.
+ *
+ * Twice what refreshing every group the tunnel may hold costs, but never
+ * more than a report as large as this device's MTU can legitimately cost:
+ * a host splits its report to the MTU (RFC 3376 s4.2.16, RFC 3810
+ * s5.2.15), so one report names at most mtu / 8 groups, IGMPv3 records
+ * being the smallest.  The second bound is what limits the work at high
+ * IFLA_AMT_MAX_GROUPS; at the defaults the first is the smaller.
  */
 static u64 amt_report_budget(const struct amt_dev *amt)
 {
-	return 2 * ((u64)AMT_REC_WALKS *
-		    ((u64)amt->max_groups * amt->hash_buckets +
-		     2 * amt->max_sources) +
-		    (u64)AMT_REC_LOOKUPS * amt->max_sources);
+	u64 recs = READ_ONCE(amt->dev->mtu) / sizeof(struct igmpv3_grec);
+
+	return min(2 * amt_report_cost(amt, amt->max_groups),
+		   amt_report_cost(amt, recs));
 }
 
 static void amt_igmpv3_report_handler(struct amt_dev *amt, struct sk_buff *skb,
@@ -3583,6 +3598,7 @@ static void amt_link_setup(struct net_device *dev)
 }
 
 static const struct nla_policy amt_policy[IFLA_AMT_MAX + 1] = {
+	[IFLA_AMT_UNSPEC]	= { .strict_start_type = IFLA_AMT_MAX_GROUPS },
 	[IFLA_AMT_MODE]		= { .type = NLA_U32 },
 	[IFLA_AMT_RELAY_PORT]	= { .type = NLA_U16 },
 	[IFLA_AMT_GATEWAY_PORT]	= { .type = NLA_U16 },
@@ -3591,6 +3607,8 @@ static const struct nla_policy amt_policy[IFLA_AMT_MAX + 1] = {
 	[IFLA_AMT_REMOTE_IP]	= { .len = sizeof_field(struct iphdr, daddr) },
 	[IFLA_AMT_DISCOVERY_IP]	= NLA_POLICY_EXACT_LEN(sizeof(__be32)),
 	[IFLA_AMT_MAX_TUNNELS]	= { .type = NLA_U32 },
+	[IFLA_AMT_MAX_GROUPS]	= NLA_POLICY_MAX(NLA_U32, AMT_MAX_GROUP_LIMIT),
+	[IFLA_AMT_MAX_SOURCES]	= NLA_POLICY_MAX(NLA_U32, AMT_MAX_SOURCE_LIMIT),
 };
 
 static int amt_validate(struct nlattr *tb[], struct nlattr *data[],
@@ -3657,8 +3675,10 @@ static int amt_newlink(struct net_device *dev,
 
 	spin_lock_init(&amt->lock);
 	seqcount_spinlock_init(&amt->key_seq, &amt->lock);
-	amt->max_groups = AMT_MAX_GROUP;
-	amt->max_sources = AMT_MAX_SOURCE;
+	amt->max_groups = nla_get_u32_default(data[IFLA_AMT_MAX_GROUPS], 0) ?:
+			  AMT_MAX_GROUP;
+	amt->max_sources = nla_get_u32_default(data[IFLA_AMT_MAX_SOURCES], 0) ?:
+			   AMT_MAX_SOURCE;
 	amt->hash_buckets = AMT_HSIZE;
 	amt->nr_tunnels = 0;
 	get_random_bytes(&amt->hash_seed, sizeof(amt->hash_seed));
@@ -3774,6 +3794,8 @@ static size_t amt_get_size(const struct net_device *dev)
 	       nla_total_size(sizeof(__u16)) + /* IFLA_AMT_GATEWAY_PORT */
 	       nla_total_size(sizeof(__u32)) + /* IFLA_AMT_LINK */
 	       nla_total_size(sizeof(__u32)) + /* IFLA_MAX_TUNNELS */
+	       nla_total_size(sizeof(__u32)) + /* IFLA_AMT_MAX_GROUPS */
+	       nla_total_size(sizeof(__u32)) + /* IFLA_AMT_MAX_SOURCES */
 	       nla_total_size(sizeof(__be32)) + /* IFLA_AMT_DISCOVERY_IP */
 	       nla_total_size(sizeof(__be32)) + /* IFLA_AMT_REMOTE_IP */
 	       nla_total_size(sizeof(__be32)); /* IFLA_AMT_LOCAL_IP */
@@ -3803,6 +3825,10 @@ static int amt_fill_info(struct sk_buff *skb, const struct net_device *dev)
 		if (nla_put_in_addr(skb, IFLA_AMT_REMOTE_IP, remote_ip))
 			goto nla_put_failure;
 	if (nla_put_u32(skb, IFLA_AMT_MAX_TUNNELS, amt->max_tunnels))
+		goto nla_put_failure;
+	if (nla_put_u32(skb, IFLA_AMT_MAX_GROUPS, amt->max_groups))
+		goto nla_put_failure;
+	if (nla_put_u32(skb, IFLA_AMT_MAX_SOURCES, amt->max_sources))
 		goto nla_put_failure;
 
 	rcu_read_unlock();

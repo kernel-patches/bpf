@@ -392,6 +392,15 @@ struct amt_dev {
 #define AMT_GC_KICK		2048
 #define AMT_MAX_GROUP		32
 #define AMT_MAX_SOURCE		128
+/* Upper bounds for IFLA_AMT_MAX_GROUPS and IFLA_AMT_MAX_SOURCES. Gateways
+ * drive these allocations: at the bounds one tunnel holds about 2 MiB of
+ * group nodes (each a kmalloc-4k object with AMT_HSIZE bucket heads) and
+ * under 1 MiB of source nodes, and max_tunnels multiplies that.  The work
+ * one Membership Update may cause is bounded separately, by
+ * amt_report_budget().
+ */
+#define AMT_MAX_GROUP_LIMIT	512
+#define AMT_MAX_SOURCE_LIMIT	4096
 /* Per group record, an upper bound on the passes the mode handlers plus
  * amt_cleanup_srcs() make over a group's buckets and sources, and on the
  * hash lookups they make per record source.  The handlers need at most 5
