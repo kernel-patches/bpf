@@ -210,7 +210,12 @@ int mucse_mbx_get_macaddr(struct mucse_hw *hw, int pfvfnum,
  * @duplex: forced duplex mode when autonegotiation is disabled
  * @mdix_ctrl: MDI/MDI-X control mode
  *
- * Firmware ignores @speed, @duplex when @autoneg is true.
+ * Firmware ignores @speed and @duplex when @autoneg is true, and
+ * @advertising when @autoneg is false.
+ *
+ * Firmware acknowledges the request when it consumes it. If the ACK
+ * wait times out, firmware will not apply the request later, so the
+ * previous link configuration remains valid.
  *
  * Return: 0 on success, negative errno on failure
  **/
@@ -236,7 +241,7 @@ int mucse_mbx_set_link(struct mucse_hw *hw, u32 advertising, bool autoneg,
 
 	len = le16_to_cpu(req.r.datalen);
 	mutex_lock(&hw->mbx.lock);
-	err = mucse_write_and_wait_ack_mbx(hw, req.dwords, len);
+	err = mucse_write_mbx_coalesce_event(hw, req.dwords, len);
 	mutex_unlock(&hw->mbx.lock);
 
 	return err;
