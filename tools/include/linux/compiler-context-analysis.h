@@ -60,7 +60,11 @@
  *		long counter __guarded_by(&lock1, &lock2);
  *	};
  */
+#if defined(__clang__) && __clang_major__ < 19
+# define __guarded_by(...)
+#else /* !(__clang_major__ < 19) */
 # define __guarded_by(...)		__attribute__((guarded_by(__VA_ARGS__)))
+#endif /* __clang_major__ < 19 */
 
 /**
  * __pt_guarded_by() - struct member and globals attribute, declares pointed-to
@@ -85,7 +89,11 @@
  *		long *counter __pt_guarded_by(&lock1, &lock2);
  *	};
  */
+#if defined(__clang__) && __clang_major__ < 19
+# define __pt_guarded_by(...)
+#else /* !(__clang_major__ < 19) */
 # define __pt_guarded_by(...)		__attribute__((pt_guarded_by(__VA_ARGS__)))
+#endif /* __clang_major__ < 19 */
 
 /**
  * context_lock_struct() - declare or define a context lock struct
