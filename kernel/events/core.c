@@ -14880,7 +14880,7 @@ static void perf_event_exit_task_context(struct task_struct *task, bool exit)
  * When a task exits, feed back event values to parent events.
  *
  * Can be called with exec_update_lock held when called from
- * setup_new_exec().
+ * begin_new_exec().
  */
 void perf_event_exit_task(struct task_struct *task)
 {
