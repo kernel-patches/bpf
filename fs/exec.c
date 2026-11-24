@@ -1203,6 +1203,9 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 */
 	close_cloexec_files(me->files);
 
+	/* Let LSMs revoke inherited files the new creds may not use. */
+	security_bprm_revalidate_files(bprm);
+
 	/*
 	 * Must be called _before_ exec_mmap() as bprm->mm is
 	 * not visible until then. Doing it here also ensures

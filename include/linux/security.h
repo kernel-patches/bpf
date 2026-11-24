@@ -360,6 +360,7 @@ int security_vm_enough_memory_mm(struct mm_struct *mm, long pages);
 int security_bprm_creds_for_exec(struct linux_binprm *bprm);
 int security_bprm_creds_from_file(struct linux_binprm *bprm, const struct file *file);
 int security_bprm_check(struct linux_binprm *bprm);
+void security_bprm_revalidate_files(const struct linux_binprm *bprm);
 void security_bprm_committing_creds(const struct linux_binprm *bprm);
 void security_bprm_committed_creds(const struct linux_binprm *bprm);
 int security_fs_context_submount(struct fs_context *fc, struct super_block *reference);
@@ -751,6 +752,10 @@ static inline int security_bprm_creds_from_file(struct linux_binprm *bprm,
 static inline int security_bprm_check(struct linux_binprm *bprm)
 {
 	return 0;
+}
+
+static inline void security_bprm_revalidate_files(const struct linux_binprm *bprm)
+{
 }
 
 static inline void security_bprm_committing_creds(const struct linux_binprm *bprm)

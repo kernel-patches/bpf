@@ -835,6 +835,25 @@ int security_bprm_check(struct linux_binprm *bprm)
 }
 
 /**
+ * security_bprm_revalidate_files() - Revalidate open files during exec()
+ * @bprm: binary program information
+ *
+ * Revalidate access to the controlling tty and the open file descriptors of a
+ * process being transformed by an execve operation, based on the old
+ * credentials pointed to by @current->cred and the information set in
+ * @bprm->cred by the bprm_creds_for_exec hook.  Files to which access will no
+ * longer be granted may be closed or replaced.  @bprm points to the
+ * linux_binprm structure.  This is called after the point of no return, once
+ * the file descriptor table has been unshared and close-on-exec files have been
+ * closed, but before exec_update_lock is taken, as closing a file may block in
+ * the filesystem.
+ */
+void security_bprm_revalidate_files(const struct linux_binprm *bprm)
+{
+	call_void_hook(bprm_revalidate_files, bprm);
+}
+
+/**
  * security_bprm_committing_creds() - Install creds for a process during exec()
  * @bprm: binary program information
  *
@@ -842,9 +861,11 @@ int security_bprm_check(struct linux_binprm *bprm)
  * transformed by an execve operation, based on the old credentials pointed to
  * by @current->cred and the information set in @bprm->cred by the
  * bprm_creds_for_exec hook.  @bprm points to the linux_binprm structure.  This
- * hook is a good place to perform state changes on the process such as closing
- * open file descriptors to which access will no longer be granted when the
- * attributes are changed.  This is called immediately before commit_creds().
+ * hook is a good place to perform state changes on the process such as
+ * resetting resource limits.  It is called with exec_update_lock held so it
+ * should not block on a filesystem.  In particular, it must not close files.
+ * Use the bprm_revalidate_files hook for that.  This is called immediately
+ * before commit_creds().
  */
 void security_bprm_committing_creds(const struct linux_binprm *bprm)
 {
