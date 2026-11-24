@@ -12808,7 +12808,8 @@ S:	Supported
 F:	drivers/vfio/vfio_iommu_spapr_tce.c
 
 IBM Power Virtual Ethernet Device Driver
-M:	Nick Child <nnac123@linux.ibm.com>
+M:	Mingming Cao <mmc@linux.ibm.com>
+R:	Dave Marquardt <davemarq@linux.ibm.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	drivers/net/ethernet/ibm/ibmveth.*
