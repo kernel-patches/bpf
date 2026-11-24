@@ -111,7 +111,8 @@ struct dma_buf *amdxdna_get_ubuf(struct drm_device *dev,
 
 	for (i = 0, exp_info.size = 0; i < num_entries; i++) {
 		if (!IS_ALIGNED(va_ent[i].vaddr, PAGE_SIZE) ||
-		    !IS_ALIGNED(va_ent[i].len, PAGE_SIZE)) {
+		    !IS_ALIGNED(va_ent[i].len, PAGE_SIZE) ||
+		    !va_ent[i].len) {
 			XDNA_ERR(xdna, "Invalid address or len %llx, %llx",
 				 va_ent[i].vaddr, va_ent[i].len);
 			ret = -EINVAL;
