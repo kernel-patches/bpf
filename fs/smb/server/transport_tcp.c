@@ -5,6 +5,7 @@
  */
 
 #include <linux/freezer.h>
+#include <linux/page_frag_cache.h>
 #include <linux/uio.h>
 
 #include "smb_common.h"
@@ -46,6 +47,7 @@ struct tcp_transport {
 	unsigned int			nr_iov;
 	/* Serializes queue access and socket writes. Never taken by callbacks. */
 	struct mutex			tx_lock;
+	struct page_frag_cache		tx_frag_cache;
 	struct list_head		tx_queue;
 	struct delayed_work		tx_work;
 	size_t				tx_queued;
@@ -91,6 +93,7 @@ static struct tcp_transport *alloc_transport(struct socket *client_sk)
 		return NULL;
 	t->sock = client_sk;
 	mutex_init(&t->tx_lock);
+	page_frag_cache_init(&t->tx_frag_cache);
 	INIT_LIST_HEAD(&t->tx_queue);
 	INIT_DELAYED_WORK(&t->tx_work, ksmbd_tcp_tx_work);
 
@@ -142,6 +145,7 @@ static void ksmbd_tcp_free_transport(struct ksmbd_transport *kt)
 
 	ksmbd_tcp_stop_tx(t);
 	sock_release(t->sock);
+	page_frag_cache_drain(&t->tx_frag_cache);
 	kfree(t->iov);
 	kfree(t);
 }
@@ -613,14 +617,54 @@ static void ksmbd_tcp_stop_tx(struct tcp_transport *t)
 	wake_up_all(&t->transport.conn->req_running_q);
 }
 
+static int ksmbd_tcp_send(struct tcp_transport *t,
+			  const struct ksmbd_transport_write *tx)
+{
+	struct msghdr hdr = {
+		.msg_flags = MSG_NOSIGNAL | MSG_DONTWAIT | tx->msg_flags,
+	};
+	struct kvec *iov = tx->iov;
+	struct kvec vec[2];
+	void *header;
+	size_t len;
+	int ret;
+
+	if (!tx->splice_read)
+		goto copy;
+
+	len = iov[0].iov_len + iov[1].iov_len;
+	header = page_frag_alloc(&t->tx_frag_cache, len, GFP_NOWAIT);
+	if (!header)
+		goto copy;
+
+	/*
+	 * Copy the length prefix and SMB header into a fragment
+	 * TCP can retain. The READ payload is already spliceable.
+	 */
+	memcpy(header, iov[0].iov_base, iov[0].iov_len);
+	memcpy(header + iov[0].iov_len, iov[1].iov_base, iov[1].iov_len);
+	vec[0].iov_base = header;
+	vec[0].iov_len = len;
+	vec[1] = iov[2];
+	hdr.msg_flags |= MSG_SPLICE_PAGES;
+	ret = kernel_sendmsg(t->sock, &hdr, vec, ARRAY_SIZE(vec), tx->size);
+	page_frag_free(header);
+	return ret;
+
+copy:
+	return kernel_sendmsg(t->sock, &hdr, iov, tx->iov_cnt, tx->size);
+}
+
+bool ksmbd_transport_is_tcp(struct ksmbd_transport *t)
+{
+	return t->ops == &ksmbd_tcp_transport_ops;
+}
+
 static int ksmbd_tcp_writev(struct ksmbd_transport *t,
 			    const struct ksmbd_transport_write *tx)
 {
 	struct tcp_transport *tt = TCP_TRANS(t);
 	struct sock *sk = tt->sock->sk;
-	struct msghdr hdr = {
-		.msg_flags = MSG_NOSIGNAL | MSG_DONTWAIT | tx->msg_flags,
-	};
 	struct tcp_tx *msg;
 	unsigned long deadline = jiffies + KSMBD_TCP_SEND_TIMEOUT;
 	long timeout;
@@ -659,7 +703,7 @@ static int ksmbd_tcp_writev(struct ksmbd_transport *t,
 
 	/* Avoid an extra copy when the socket accepts the whole PDU at once. */
 	if (list_empty(&tt->tx_queue)) {
-		sent = kernel_sendmsg(tt->sock, &hdr, tx->iov, tx->iov_cnt, tx->size);
+		sent = ksmbd_tcp_send(tt, tx);
 		if (sent > 0) {
 			tt->tx_sent += sent;
 			if (sent == tx->size)

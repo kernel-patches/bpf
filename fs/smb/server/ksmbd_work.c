@@ -65,6 +65,14 @@ struct ksmbd_work *ksmbd_alloc_work_struct(void)
 	return work;
 }
 
+void ksmbd_free_read_buf(void *buf, struct folio *folio)
+{
+	if (folio)
+		folio_put(folio);
+	else
+		kvfree(buf);
+}
+
 void ksmbd_free_work_struct(struct ksmbd_work *work)
 {
 	struct aux_read *ar, *tmp;
@@ -74,7 +82,7 @@ void ksmbd_free_work_struct(struct ksmbd_work *work)
 	kvfree(work->response_buf);
 
 	list_for_each_entry_safe(ar, tmp, &work->aux_read_list, entry) {
-		kvfree(ar->buf);
+		ksmbd_free_read_buf(ar->buf, ar->folio);
 		list_del(&ar->entry);
 		kfree(ar);
 	}
@@ -151,8 +159,9 @@ static inline void __ksmbd_iov_pin(struct ksmbd_work *work, void *ib,
 	work->iov_cnt++;
 }
 
-static int __ksmbd_iov_pin_rsp(struct ksmbd_work *work, void *ib, int len,
-			       void *aux_buf, unsigned int aux_size)
+int ksmbd_iov_pin_rsp_read(struct ksmbd_work *work, void *ib, int len,
+			   void *aux_buf, unsigned int aux_size,
+			   struct folio *folio)
 {
 	struct aux_read *ar = NULL;
 	int need_iov_cnt = 1;
@@ -185,6 +194,7 @@ static int __ksmbd_iov_pin_rsp(struct ksmbd_work *work, void *ib, int len,
 		inc_rfc1001_len(work->iov[0].iov_base, aux_size);
 
 		ar->buf = aux_buf;
+		ar->folio = folio;
 		list_add(&ar->entry, &work->aux_read_list);
 	}
 
@@ -193,13 +203,7 @@ static int __ksmbd_iov_pin_rsp(struct ksmbd_work *work, void *ib, int len,
 
 int ksmbd_iov_pin_rsp(struct ksmbd_work *work, void *ib, int len)
 {
-	return __ksmbd_iov_pin_rsp(work, ib, len, NULL, 0);
-}
-
-int ksmbd_iov_pin_rsp_read(struct ksmbd_work *work, void *ib, int len,
-			   void *aux_buf, unsigned int aux_size)
-{
-	return __ksmbd_iov_pin_rsp(work, ib, len, aux_buf, aux_size);
+	return ksmbd_iov_pin_rsp_read(work, ib, len, NULL, 0, NULL);
 }
 
 int allocate_interim_rsp_buf(struct ksmbd_work *work)

@@ -533,6 +533,23 @@ retry_idle:
 	return 0;
 }
 
+static bool ksmbd_can_splice_read(const struct ksmbd_work *work, int size)
+{
+	const struct kvec *iov = work->iov;
+	const struct smb2_read_rsp *rsp;
+
+	/* A credit error or a transform can replace the response iovs. */
+	if (!work->splice_read || work->iov_cnt != 3 ||
+	    iov[0].iov_len != sizeof(__be32) ||
+	    iov[1].iov_len != offsetof(struct smb2_read_rsp, Buffer))
+		return false;
+
+	rsp = iov[1].iov_base;
+	return !(rsp->hdr.Flags & SMB2_FLAGS_SIGNED) &&
+		iov[2].iov_len == le32_to_cpu(rsp->DataLength) &&
+		iov[0].iov_len + iov[1].iov_len + iov[2].iov_len == size;
+}
+
 static int __ksmbd_conn_write(struct ksmbd_work *work,
 			      struct ksmbd_transport_write *tx)
 {
@@ -553,6 +570,7 @@ static int __ksmbd_conn_write(struct ksmbd_work *work,
 	tx->iov = work->iov;
 	tx->iov_cnt = work->iov_cnt;
 	tx->size = get_rfc1002_len(work->iov[0].iov_base) + 4;
+	tx->splice_read = ksmbd_can_splice_read(work, tx->size);
 	tx->need_invalidate_rkey = work->need_invalidate_rkey;
 	tx->remote_key = work->remote_key;
 

@@ -175,6 +175,7 @@ struct ksmbd_transport_write {
 	struct kvec	*iov;
 	int		iov_cnt;
 	int		size;
+	bool		splice_read;
 	bool		need_invalidate_rkey;
 	unsigned int	remote_key;
 	int		msg_flags;
