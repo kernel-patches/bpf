@@ -951,6 +951,26 @@ static int apparmor_setprocattr(const char *name, void *value,
 }
 
 /**
+ * apparmor_bprm_revalidate_files - revalidate inherited files on exec
+ * @bprm: binprm for the exec  (NOT NULL)
+ *
+ * Called before exec_update_lock is taken as closing files may block in
+ * the filesystem.
+ */
+static void apparmor_bprm_revalidate_files(const struct linux_binprm *bprm)
+{
+	struct aa_label *label = aa_current_raw_label();
+	struct aa_label *new_label = cred_label(bprm->cred);
+
+	/* bail out if unconfined or not changing profile */
+	if ((new_label->proxy == label->proxy) ||
+	    (unconfined(new_label)))
+		return;
+
+	aa_inherit_files(bprm->cred, current->files);
+}
+
+/**
  * apparmor_bprm_committing_creds - do task cleanup on committing new creds
  * @bprm: binprm for the exec  (NOT NULL)
  */
@@ -963,8 +983,6 @@ static void apparmor_bprm_committing_creds(const struct linux_binprm *bprm)
 	if ((new_label->proxy == label->proxy) ||
 	    (unconfined(new_label)))
 		return;
-
-	aa_inherit_files(bprm->cred, current->files);
 
 	current->pdeath_signal = 0;
 
@@ -1860,6 +1878,7 @@ static struct security_hook_list apparmor_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(cred_transfer, apparmor_cred_transfer),
 
 	LSM_HOOK_INIT(bprm_creds_for_exec, apparmor_bprm_creds_for_exec),
+	LSM_HOOK_INIT(bprm_revalidate_files, apparmor_bprm_revalidate_files),
 	LSM_HOOK_INIT(bprm_committing_creds, apparmor_bprm_committing_creds),
 	LSM_HOOK_INIT(bprm_committed_creds, apparmor_bprm_committed_creds),
 
