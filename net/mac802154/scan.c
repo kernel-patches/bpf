@@ -893,10 +893,12 @@ int mac802154_process_association_req(struct ieee802154_sub_if_data *sdata,
 		dev_dbg(&sdata->dev->dev,
 			"Child %8phC was already known\n", &ceaddr);
 		list_del(&exchild->node);
+		kfree(exchild);
+	} else {
+		wpan_dev->nchildren++;
 	}
 
 	list_add(&child->node, &wpan_dev->children);
-	wpan_dev->nchildren++;
 
 unlock:
 	mutex_unlock(&wpan_dev->association_lock);
