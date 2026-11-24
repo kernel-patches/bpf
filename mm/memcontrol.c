@@ -4525,6 +4525,13 @@ static void mem_cgroup_css_free(struct cgroup_subsys_state *css)
 	irq_work_sync(&memcg->high_irq_work);
 	cancel_work_sync(&memcg->high_work);
 	free_shrinker_info(memcg);
+
+	/*
+	 * The css_create() error path bypasses normal CSS release, leaving
+	 * CSS_RELEASED clear. Drop any private ID that is still reserved.
+	 */
+	if (!css_is_released(css))
+		mem_cgroup_private_id_remove(memcg);
 	mem_cgroup_free(memcg);
 }
 
