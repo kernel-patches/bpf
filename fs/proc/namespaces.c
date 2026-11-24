@@ -92,12 +92,11 @@ static int proc_ns_readlink(struct dentry *dentry, char __user *buffer, int bufl
 		goto out_put_task;
 
 	res = -EACCES;
-	if (ptrace_may_access(task, PTRACE_MODE_READ_FSCREDS)) {
+	if (ptrace_may_access(task, PTRACE_MODE_READ_FSCREDS))
 		res = ns_get_name(name, sizeof(name), task, ns_ops);
-		if (res >= 0)
-			res = readlink_copy(buffer, buflen, name, strlen(name));
-	}
 	up_read(&task->signal->exec_update_lock);
+	if (res >= 0)
+		res = readlink_copy(buffer, buflen, name, strlen(name));
 out_put_task:
 	put_task_struct(task);
 	return res;
