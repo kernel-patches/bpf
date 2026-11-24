@@ -300,7 +300,7 @@ err:
 err_unstable:
 	/*
 	 * If vma got attached to another mm from under us, that mm is not
-	 * stable and can be freed in the narrow window after vma->vm_refcnt
+	 * stable and can be reused in the narrow window after vma->vm_refcnt
 	 * is dropped and before rcuwait_wake_up(mm) is called. Grab it before
 	 * releasing vma->vm_refcnt.
 	 */
