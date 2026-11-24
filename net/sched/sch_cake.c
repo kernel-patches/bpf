@@ -2038,7 +2038,9 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 		unsigned int ntx;
 
 		for (ntx = 0; ntx < dev->num_tx_queues; ntx++) {
-			other_sch = rcu_dereference(netdev_get_tx_queue(dev, ntx)->qdisc_sleeping);
+			struct netdev_queue *txq = netdev_get_tx_queue(dev, ntx);
+
+			other_sch = rcu_dereference_bh(txq->qdisc_sleeping);
 			other_priv = qdisc_priv(other_sch);
 
 			if (other_priv == q)
