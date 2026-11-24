@@ -72,19 +72,25 @@ bool ipc_pm_wait_for_device_active(struct iosm_pm *ipc_pm)
 {
 	bool ret_val = false;
 
-	if (ipc_pm->ap_state != IPC_MEM_DEV_PM_ACTIVE) {
-		/* Complete all memory stores before setting bit */
-		smp_mb__before_atomic();
+	/* Drop a completion left over from an earlier timeout */
+	reinit_completion(&ipc_pm->host_sleep_complete);
 
+	/* Complete all memory stores before setting bit */
+	smp_mb__before_atomic();
+
+	set_bit(0, &ipc_pm->host_sleep_pend);
+
+	/* Set the bit before testing ap_state, so that a wake-up after the
+	 * test completes host_sleep_complete. Pairs with the barrier in
+	 * ipc_pm_on_link_wake().
+	 */
+	smp_mb__after_atomic();
+
+	if (ipc_pm->ap_state != IPC_MEM_DEV_PM_ACTIVE) {
 		/* Wait for IPC_PM_ACTIVE_TIMEOUT_MS for Device sleep state
 		 * machine to enter ACTIVE state.
 		 */
-		set_bit(0, &ipc_pm->host_sleep_pend);
-
-		/* Complete all memory stores after setting bit */
-		smp_mb__after_atomic();
-
-		if (!wait_for_completion_interruptible_timeout
+		if (!wait_for_completion_timeout
 		   (&ipc_pm->host_sleep_complete,
 		    msecs_to_jiffies(IPC_PM_ACTIVE_TIMEOUT_MS))) {
 			dev_err(ipc_pm->dev,
@@ -129,6 +135,11 @@ static void ipc_pm_on_link_wake(struct iosm_pm *ipc_pm, bool ack)
 		ipc_pm->cp_state = IPC_MEM_DEV_PM_ACTIVE;
 
 		ipc_cp_irq_sleep_control(ipc_pm->pcie, IPC_MEM_DEV_PM_ACTIVE);
+
+		/* Order the ap_state store before the bit test, pairs with
+		 * ipc_pm_wait_for_device_active().
+		 */
+		smp_mb();
 
 		/* check the consume state !!! */
 		if (test_bit(CONSUME_STATE, &ipc_pm->host_sleep_pend))
