@@ -470,6 +470,8 @@ static inline void __iomem *intel_uncore_regs(struct intel_uncore *uncore)
 	return uncore->regs;
 }
 
+void intel_uncore_fw_domains_show(struct seq_file *m, struct intel_uncore *uncore);
+
 struct intel_uncore *to_intel_uncore(struct drm_device *drm);
 
 /*
