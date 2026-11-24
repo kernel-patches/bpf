@@ -20,12 +20,6 @@ struct mod_arch_specific {
 
 #ifdef CONFIG_MMU
 
-#define MODULE_ARCH_INIT {				\
-	.fixup_start		= __start_fixup,	\
-	.fixup_end		= __stop_fixup,		\
-}
-
-
 #define m68k_fixup(type, addr)			\
 	"	.section \".m68k_fixup\",\"aw\"\n"	\
 	"	.long " #type "," #addr "\n"	\

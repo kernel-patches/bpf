@@ -20,10 +20,14 @@ __modfinal: $(modules:%.o=%.ko)
 modname = $(notdir $(@:.mod.o=))
 part-of-module = y
 GCOV_PROFILE := n
-ccflags-remove-y := $(CC_FLAGS_CFI)
 
-%.mod.o: %.mod.c FORCE
-	$(call if_changed_rule,cc_o_c)
+# modpost lays the <module>.mod.S out completely (write_mod_S_file()), so it
+# needs only the assembler and no dependency tracking.
+quiet_cmd_as_mod_o = AS [M]  $@
+      cmd_as_mod_o = $(CC) $(_a_flags) $(modkern_aflags) -c -o $@ $<
+
+%.mod.o: %.mod.S FORCE
+	$(call if_changed,as_mod_o)
 
 .module-common.o: $(srctree)/scripts/module-common.c FORCE
 	$(call if_changed_rule,cc_o_c)

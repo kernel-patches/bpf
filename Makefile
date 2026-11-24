@@ -1408,8 +1408,8 @@ archprepare: outputmakefile archheaders archscripts scripts include/config/kerne
 	include/generated/rustc_cfg remove-stale-files
 
 prepare0: archprepare
-	$(Q)$(MAKE) $(build)=scripts/mod
 	$(Q)$(MAKE) $(build)=. prepare
+	$(Q)$(MAKE) $(build)=scripts/mod
 
 # All the preparing..
 prepare: prepare0
@@ -2249,7 +2249,7 @@ clean: $(clean-dirs)
 		-o -name '*.dt.yaml' -o -name 'dtbs-list' \
 		-o -name '*.dwo' -o -name '*.lst' \
 		-o -name '*.su' -o -name '*.mod' \
-		-o -name '.*.d' -o -name '.*.tmp' -o -name '*.mod.c' \
+		-o -name '.*.d' -o -name '.*.tmp' -o -name '*.mod.c' -o -name '*.mod.S' \
 		-o -name '*.lex.c' -o -name '*.tab.[ch]' \
 		-o -name '*.asn1.[ch]' \
 		-o -name '*.symtypes' -o -name 'modules.order' \
