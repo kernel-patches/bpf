@@ -18,6 +18,7 @@ null-argv
 /set-exec
 /unshare-sighand
 /update-lock-fault
+/vfork-mm
 xxxxxxxx*
 pipe
 S_I*.test
