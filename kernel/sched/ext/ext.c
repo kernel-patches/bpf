@@ -9225,10 +9225,14 @@ static int bpf_scx_init_member(const struct btf_type *t,
 			return -E2BIG;
 		ops->timeout_ms = *(u32 *)(udata + moff);
 		return 1;
-	case offsetof(struct sched_ext_ops, exit_dump_len):
-		ops->exit_dump_len =
-			*(u32 *)(udata + moff) ?: SCX_EXIT_DUMP_DFL_LEN;
+	case offsetof(struct sched_ext_ops, exit_dump_len): {
+		u32 dump_len = *(u32 *)(udata + moff);
+
+		if (dump_len > INT_MAX)
+			return -E2BIG;
+		ops->exit_dump_len = dump_len ?: SCX_EXIT_DUMP_DFL_LEN;
 		return 1;
+	}
 	case offsetof(struct sched_ext_ops, hotplug_seq):
 		ops->hotplug_seq = *(u64 *)(udata + moff);
 		return 1;
