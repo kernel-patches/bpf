@@ -1418,8 +1418,7 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	}
 
 	rxqueue = __netif_get_rx_queue(current->nsproxy->net_ns->loopback_dev, 0);
-	rxqueue->xdp_rxq.frag_size = PAGE_SIZE;
-	xdp_init_buff(&xdp, rxqueue->xdp_rxq.frag_size, &rxqueue->xdp_rxq);
+	xdp_init_buff(&xdp, PAGE_SIZE, &rxqueue->xdp_rxq);
 	xdp_prepare_buff(&xdp, data, headroom, linear_sz, true);
 	sinfo = xdp_get_shared_info_from_buff(&xdp);
 
@@ -1430,10 +1429,12 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	/*
 	 * xdp.rxq points to the rxq info of a real device queue, which
 	 * generic XDP updates for every packet it runs on. Use a private
-	 * copy with the mem type of the frags allocated below.
+	 * copy with the mem type and the frag size of the frags allocated
+	 * below.
 	 */
 	rxq = *xdp.rxq;
 	rxq.mem = (struct xdp_mem_info){ .type = MEM_TYPE_PAGE_SHARED };
+	rxq.frag_size = PAGE_SIZE;
 	xdp.rxq = &rxq;
 
 	size = linear_sz;
