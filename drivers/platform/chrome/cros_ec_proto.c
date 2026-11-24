@@ -16,6 +16,7 @@
 #include "cros_ec_trace.h"
 
 #define EC_COMMAND_RETRIES	50
+#define EC_COMMAND_SEND_RETRIES	5
 #define RWSIG_CONTINUE_RETRIES	8
 #define RWSIG_CONTINUE_MAX_ERRORS_IN_ROW	3
 
@@ -194,6 +195,9 @@ static int cros_ec_wait_until_complete(struct cros_ec_device *ec_dev,
 			orig_msg->command = orig_cmd;
 			orig_msg->outsize = orig_outsize;
 			orig_msg->version = orig_version;
+
+			if (ret == -EAGAIN)
+				continue;
 			return ret;
 		}
 	}
@@ -203,10 +207,19 @@ static int cros_ec_wait_until_complete(struct cros_ec_device *ec_dev,
 
 static int cros_ec_send_command(struct cros_ec_device *ec_dev, struct cros_ec_command *msg)
 {
-	int ret = cros_ec_xfer_command(ec_dev, msg);
+	int retry_count = EC_COMMAND_SEND_RETRIES;
+	int ret;
+
+retry:
+	ret = cros_ec_xfer_command(ec_dev, msg);
 
 	if (msg->result == EC_RES_IN_PROGRESS)
-		ret = cros_ec_wait_until_complete(ec_dev, msg);
+		return cros_ec_wait_until_complete(ec_dev, msg);
+
+	if (ret == -EAGAIN && retry_count--) {
+		usleep_range(10000, 11000);
+		goto retry;
+	}
 
 	return ret;
 }
