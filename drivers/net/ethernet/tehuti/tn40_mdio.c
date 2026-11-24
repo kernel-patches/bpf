@@ -113,6 +113,13 @@ static int tn40_mdio_write_c45(struct mii_bus *mii_bus, int addr, int devnum,
 	return  tn40_mdio_write(mii_bus->priv, addr, devnum, regnum, val);
 }
 
+static const struct property_entry tn40_phy_props[] = {
+	PROPERTY_ENTRY_STRING("compatible", "ethernet-phy-id03a1.b4a3"),
+	PROPERTY_ENTRY_U32("reg", 1),
+	PROPERTY_ENTRY_STRING("firmware-name", AQR105_FIRMWARE),
+	{ }
+};
+
 /* registers an mdio node and an aqr105 PHY at address 1
  * tn40_mdio-%id {
  *	ethernet-phy@1 {
@@ -139,14 +146,9 @@ static int tn40_swnodes_register(struct tn40_priv *priv)
 
 	swnodes[SWNODE_MDIO] = NODE_PROP(nodes->mdio_name, NULL);
 
-	nodes->phy_props[0] = PROPERTY_ENTRY_STRING("compatible",
-						    "ethernet-phy-id03a1.b4a3");
-	nodes->phy_props[1] = PROPERTY_ENTRY_U32("reg", 1);
-	nodes->phy_props[2] = PROPERTY_ENTRY_STRING("firmware-name",
-						    AQR105_FIRMWARE);
 	swnodes[SWNODE_PHY] = NODE_PAR_PROP(nodes->phy_name,
 					    &swnodes[SWNODE_MDIO],
-					    nodes->phy_props);
+					    tn40_phy_props);
 
 	nodes->group[SWNODE_PHY] = &swnodes[SWNODE_PHY];
 	nodes->group[SWNODE_MDIO] = &swnodes[SWNODE_MDIO];
