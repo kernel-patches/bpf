@@ -1171,6 +1171,14 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 */
 	posixtimer_exec();
 
+	/*
+	 * Make the signal table private before a vfork() parent that shares
+	 * it is woken up.
+	 */
+	retval = unshare_sighand(me);
+	if (retval)
+		goto out;
+
 	/* see the comment in check_unsafe_exec() */
 	current->fs->in_exec = 0;
 
@@ -1220,13 +1228,6 @@ int begin_new_exec(struct linux_binprm * bprm)
 	bprm->mm = NULL;
 
 	retval = exec_task_namespaces();
-	if (retval)
-		goto out_unlock;
-
-	/*
-	 * Make the signal table private.
-	 */
-	retval = unshare_sighand(me);
 	if (retval)
 		goto out_unlock;
 
