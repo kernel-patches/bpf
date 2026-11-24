@@ -277,7 +277,8 @@ struct spi_mem_dirmap_desc {
  * @spi: the underlying SPI device
  * @drvpriv: spi_mem_driver private data
  * @name: name of the SPI memory device
- * @dqs: extra data trobe pin available for high frequency read operations
+ * @dqs_pin: the memory provides a DQS pin
+ * @dqs_wired: the DQS line is routed to the controller
  *
  * Extra information that describe the SPI memory device and may be needed by
  * the controller to properly handle this device should be placed here.
@@ -289,7 +290,8 @@ struct spi_mem {
 	struct spi_device *spi;
 	void *drvpriv;
 	const char *name;
-	bool dqs;
+	bool dqs_pin;
+	bool dqs_wired;
 };
 
 /**
@@ -396,6 +398,7 @@ struct spi_controller_mem_ops {
  *                   continuous reads shall not be leveraged.
  * @panic_write: Set to true if the controller driver supports writing to a
  *               connected NAND/NOR memory in a kernel panic context
+ * @dqs: The controller can use the DQS signal provided by the memory
  */
 struct spi_controller_mem_caps {
 	bool dtr;
@@ -405,6 +408,7 @@ struct spi_controller_mem_caps {
 	bool secondary_op_tmpl;
 	bool no_cs_assertion;
 	bool panic_write;
+	bool dqs;
 };
 
 #define spi_mem_controller_is_capable(ctlr, cap)	\
@@ -468,8 +472,8 @@ bool spi_mem_default_supports_op(struct spi_mem *mem,
 }
 #endif /* CONFIG_SPI_MEM */
 
-void spi_mem_set_dqs(struct spi_mem *mem);
-bool spi_mem_has_dqs(struct spi_mem *mem);
+void spi_mem_set_dqs_pin_available(struct spi_mem *mem);
+bool spi_mem_dqs_is_usable(struct spi_mem *mem);
 int spi_mem_adjust_op_size(struct spi_mem *mem, struct spi_mem_op *op);
 void spi_mem_adjust_op_freq(struct spi_mem *mem, struct spi_mem_op *op);
 u64 spi_mem_calc_op_duration(struct spi_mem *mem, struct spi_mem_op *op);

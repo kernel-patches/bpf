@@ -8,6 +8,7 @@
 #include <linux/dmaengine.h>
 #include <linux/iopoll.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/spi-mem.h>
 #include <linux/sched/task_stack.h>
@@ -580,7 +581,7 @@ const char *spi_mem_get_name(struct spi_mem *mem)
 EXPORT_SYMBOL_GPL(spi_mem_get_name);
 
 /**
- * spi_mem_set_dqs() - Mark DQS as being available
+ * spi_mem_set_dqs_pin_available() - Mark DQS as being available
  * @mem: the SPI memory
  *
  * When reading at high frequencies (> 100MHz), especially when DTR is enabled,
@@ -590,26 +591,30 @@ EXPORT_SYMBOL_GPL(spi_mem_get_name);
  * Mitigating this limitation is possible with the addition of a data strobe
  * signal, commonly named DQS.
  *
- * Set the DQS boolean if the feature is available and configured at the chip
- * level. Controllers may query this value.
+ * Set the DQS pin boolean if the feature is available.
  */
-void spi_mem_set_dqs(struct spi_mem *mem)
+void spi_mem_set_dqs_pin_available(struct spi_mem *mem)
 {
-	mem->dqs = true;
+	mem->dqs_pin = true;
 }
-EXPORT_SYMBOL_GPL(spi_mem_set_dqs);
+EXPORT_SYMBOL_GPL(spi_mem_set_dqs_pin_available);
 
 /**
- * spi_mem_has_dqs() - Query whether the DQS is available or not
+ * spi_mem_dqs_is_usable() - Query whether the DQS is usable or not
  * @mem: the SPI memory
  *
- * Return: a boolean indicating whether the DQS signal is available or not.
+ * Return: a boolean indicating whether the DQS signal is usable or not. DQS is
+ * usable when the memory supports it, the line is wired and the controller is
+ * capable of using it.
  */
-bool spi_mem_has_dqs(struct spi_mem *mem)
+bool spi_mem_dqs_is_usable(struct spi_mem *mem)
 {
-	return mem->dqs;
+	struct spi_controller *ctlr = mem->spi->controller;
+
+	return mem->dqs_pin && mem->dqs_wired &&
+	       spi_mem_controller_is_capable(ctlr, dqs);
 }
-EXPORT_SYMBOL_GPL(spi_mem_has_dqs);
+EXPORT_SYMBOL_GPL(spi_mem_dqs_is_usable);
 
 /**
  * spi_mem_adjust_op_size() - Adjust the data size of a SPI mem operation to
@@ -1123,6 +1128,8 @@ static int spi_mem_probe(struct spi_device *spi)
 		return -ENOMEM;
 
 	mem->spi = spi;
+	mem->dqs_wired = !device_property_read_bool(&spi->dev,
+						    "spi-dqs-not-wired");
 
 	if (ctlr->mem_ops && ctlr->mem_ops->get_name)
 		mem->name = ctlr->mem_ops->get_name(mem);
