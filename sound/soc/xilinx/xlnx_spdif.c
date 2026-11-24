@@ -22,32 +22,42 @@
 
 #define XLNX_SPDIF_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE)
 
+#define XSPDIF_GLOBAL_IRQ_REG		0x1C
+#define XSPDIF_GLOBAL_IRQ_ENABLE_MASK	BIT(31)
 #define XSPDIF_IRQ_STS_REG		0x20
+#define XSPDIF_IRQ_CH_STS_MASK		BIT(5)
 #define XSPDIF_IRQ_ENABLE_REG		0x28
 #define XSPDIF_SOFT_RESET_REG		0x40
+#define XSPDIF_SOFT_RESET_VAL		0xA
 #define XSPDIF_CONTROL_REG		0x44
+#define XSPDIF_CONTROL_ENABLE_MASK	BIT(0)
+#define XSPDIF_CONTROL_FIFO_FLUSH_MASK	BIT(1)
+#define XSPDIF_CONTROL_CLK_CFG_MASK	GENMASK(5, 2)
+#define XSPDIF_CONTROL_CLK_CFG_SHIFT	2
 #define XSPDIF_CHAN_0_STS_REG		0x4C
-#define XSPDIF_GLOBAL_IRQ_ENABLE_REG	0x1C
 #define XSPDIF_CH_A_USER_DATA_REG_0	0x64
 
-#define XSPDIF_CORE_ENABLE_MASK		BIT(0)
-#define XSPDIF_FIFO_FLUSH_MASK		BIT(1)
-#define XSPDIF_CH_STS_MASK		BIT(5)
-#define XSPDIF_GLOBAL_IRQ_ENABLE	BIT(31)
-#define XSPDIF_CLOCK_CONFIG_BITS_MASK	GENMASK(5, 2)
-#define XSPDIF_CLOCK_CONFIG_BITS_SHIFT	2
-#define XSPDIF_SOFT_RESET_VALUE		0xA
+#define XSPDIF_MAX_CHANNELS		2
+#define XSPDIF_AES_SAMPLE_WIDTH		32
+#define XSPDIF_CH_STS_UPDATE_TIMEOUT	40
 
-#define MAX_CHANNELS			2
-#define AES_SAMPLE_WIDTH		32
-#define CH_STATUS_UPDATE_TIMEOUT	40
+enum xspdif_clk_div {
+	XSPDIF_CLK_DIV_BY_4,
+	XSPDIF_CLK_DIV_BY_8,
+	XSPDIF_CLK_DIV_BY_16,
+	XSPDIF_CLK_DIV_BY_24,
+	XSPDIF_CLK_DIV_BY_32,
+	XSPDIF_CLK_DIV_BY_48,
+	XSPDIF_CLK_DIV_BY_64,
+};
 
 struct spdif_dev_data {
 	u32 mode;
-	u32 aclk;
 	bool rx_chsts_updated;
 	void __iomem *base;
 	struct clk *axi_clk;
+	struct clk *axis_clk;
+	struct clk *aud_clk;
 	wait_queue_head_t chsts_q;
 };
 
@@ -57,12 +67,12 @@ static irqreturn_t xlnx_spdifrx_irq_handler(int irq, void *arg)
 	struct spdif_dev_data *ctx = arg;
 
 	val = readl(ctx->base + XSPDIF_IRQ_STS_REG);
-	if (val & XSPDIF_CH_STS_MASK) {
-		writel(val & XSPDIF_CH_STS_MASK,
+	if (val & XSPDIF_IRQ_CH_STS_MASK) {
+		writel(val & XSPDIF_IRQ_CH_STS_MASK,
 		       ctx->base + XSPDIF_IRQ_STS_REG);
 		val = readl(ctx->base +
 			    XSPDIF_IRQ_ENABLE_REG);
-		writel(val & ~XSPDIF_CH_STS_MASK,
+		writel(val & ~XSPDIF_IRQ_CH_STS_MASK,
 		       ctx->base + XSPDIF_IRQ_ENABLE_REG);
 
 		ctx->rx_chsts_updated = true;
@@ -80,14 +90,14 @@ static int xlnx_spdif_startup(struct snd_pcm_substream *substream,
 	struct spdif_dev_data *ctx = dev_get_drvdata(dai->dev);
 
 	val = readl(ctx->base + XSPDIF_CONTROL_REG);
-	val |= XSPDIF_FIFO_FLUSH_MASK;
+	val |= XSPDIF_CONTROL_FIFO_FLUSH_MASK;
 	writel(val, ctx->base + XSPDIF_CONTROL_REG);
 
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
-		writel(XSPDIF_CH_STS_MASK,
+		writel(XSPDIF_IRQ_CH_STS_MASK,
 		       ctx->base + XSPDIF_IRQ_ENABLE_REG);
-		writel(XSPDIF_GLOBAL_IRQ_ENABLE,
-		       ctx->base + XSPDIF_GLOBAL_IRQ_ENABLE_REG);
+		writel(XSPDIF_GLOBAL_IRQ_ENABLE_MASK,
+		       ctx->base + XSPDIF_GLOBAL_IRQ_REG);
 	}
 
 	return 0;
@@ -98,48 +108,57 @@ static void xlnx_spdif_shutdown(struct snd_pcm_substream *substream,
 {
 	struct spdif_dev_data *ctx = dev_get_drvdata(dai->dev);
 
-	writel(XSPDIF_SOFT_RESET_VALUE, ctx->base + XSPDIF_SOFT_RESET_REG);
+	writel(XSPDIF_SOFT_RESET_VAL, ctx->base + XSPDIF_SOFT_RESET_REG);
 }
 
 static int xlnx_spdif_hw_params(struct snd_pcm_substream *substream,
 				struct snd_pcm_hw_params *params,
 				struct snd_soc_dai *dai)
 {
-	u32 val, clk_div, clk_cfg;
+	enum xspdif_clk_div clk_cfg;
+	u32 val, clk_div;
 	struct spdif_dev_data *ctx = dev_get_drvdata(dai->dev);
+	unsigned long rate;
 
-	clk_div = DIV_ROUND_CLOSEST(ctx->aclk, MAX_CHANNELS * AES_SAMPLE_WIDTH *
+	rate = clk_get_rate(ctx->aud_clk);
+	if (!rate) {
+		dev_err(dai->dev, "aud_clk_i rate is not available\n");
+		return -EINVAL;
+	}
+
+	clk_div = DIV_ROUND_CLOSEST(rate, XSPDIF_MAX_CHANNELS *
+				    XSPDIF_AES_SAMPLE_WIDTH *
 				    params_rate(params));
 
 	switch (clk_div) {
 	case 4:
-		clk_cfg = 0;
+		clk_cfg = XSPDIF_CLK_DIV_BY_4;
 		break;
 	case 8:
-		clk_cfg = 1;
+		clk_cfg = XSPDIF_CLK_DIV_BY_8;
 		break;
 	case 16:
-		clk_cfg = 2;
+		clk_cfg = XSPDIF_CLK_DIV_BY_16;
 		break;
 	case 24:
-		clk_cfg = 3;
+		clk_cfg = XSPDIF_CLK_DIV_BY_24;
 		break;
 	case 32:
-		clk_cfg = 4;
+		clk_cfg = XSPDIF_CLK_DIV_BY_32;
 		break;
 	case 48:
-		clk_cfg = 5;
+		clk_cfg = XSPDIF_CLK_DIV_BY_48;
 		break;
 	case 64:
-		clk_cfg = 6;
+		clk_cfg = XSPDIF_CLK_DIV_BY_64;
 		break;
 	default:
 		return -EINVAL;
 	}
 
 	val = readl(ctx->base + XSPDIF_CONTROL_REG);
-	val &= ~XSPDIF_CLOCK_CONFIG_BITS_MASK;
-	val |= clk_cfg << XSPDIF_CLOCK_CONFIG_BITS_SHIFT;
+	val &= ~XSPDIF_CONTROL_CLK_CFG_MASK;
+	val |= clk_cfg << XSPDIF_CONTROL_CLK_CFG_SHIFT;
 	writel(val, ctx->base + XSPDIF_CONTROL_REG);
 
 	return 0;
@@ -149,7 +168,7 @@ static int rx_stream_detect(struct snd_soc_dai *dai)
 {
 	int err;
 	struct spdif_dev_data *ctx = dev_get_drvdata(dai->dev);
-	unsigned long jiffies = msecs_to_jiffies(CH_STATUS_UPDATE_TIMEOUT);
+	unsigned long jiffies = msecs_to_jiffies(XSPDIF_CH_STS_UPDATE_TIMEOUT);
 
 	/* start capture only if stream is detected within 40ms timeout */
 	err = wait_event_interruptible_timeout(ctx->chsts_q,
@@ -176,7 +195,7 @@ static int xlnx_spdif_trigger(struct snd_pcm_substream *substream, int cmd,
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		val |= XSPDIF_CORE_ENABLE_MASK;
+		val |= XSPDIF_CONTROL_ENABLE_MASK;
 		writel(val, ctx->base + XSPDIF_CONTROL_REG);
 		if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
 			ret = rx_stream_detect(dai);
@@ -184,7 +203,7 @@ static int xlnx_spdif_trigger(struct snd_pcm_substream *substream, int cmd,
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		val &= ~XSPDIF_CORE_ENABLE_MASK;
+		val &= ~XSPDIF_CONTROL_ENABLE_MASK;
 		writel(val, ctx->base + XSPDIF_CONTROL_REG);
 		break;
 	default:
@@ -260,8 +279,18 @@ static int xlnx_spdif_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret, "cannot get SPDIF mode\n");
 
 	if (ctx->mode) {
+		ctx->axis_clk = devm_clk_get_optional_enabled(dev, "s_axis_aclk");
+		if (IS_ERR(ctx->axis_clk))
+			return dev_err_probe(dev, PTR_ERR(ctx->axis_clk),
+					     "failed to get s_axis_aclk\n");
+
 		dai_drv = &xlnx_spdif_tx_dai;
 	} else {
+		ctx->axis_clk = devm_clk_get_optional_enabled(dev, "m_axis_aclk");
+		if (IS_ERR(ctx->axis_clk))
+			return dev_err_probe(dev, PTR_ERR(ctx->axis_clk),
+					     "failed to get m_axis_aclk\n");
+
 		ret = platform_get_irq(pdev, 0);
 		if (ret < 0)
 			return ret;
@@ -276,9 +305,10 @@ static int xlnx_spdif_probe(struct platform_device *pdev)
 		dai_drv = &xlnx_spdif_rx_dai;
 	}
 
-	ret = device_property_read_u32(dev, "xlnx,aud_clk_i", &ctx->aclk);
-	if (ret < 0)
-		return dev_err_probe(dev, ret, "cannot get aud_clk_i value\n");
+	ctx->aud_clk = devm_clk_get_enabled(dev, "aud_clk_i");
+	if (IS_ERR(ctx->aud_clk))
+		return dev_err_probe(dev, PTR_ERR(ctx->aud_clk),
+				     "failed to get aud_clk_i\n");
 
 	dev_set_drvdata(dev, ctx);
 
@@ -287,7 +317,7 @@ static int xlnx_spdif_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	writel(XSPDIF_SOFT_RESET_VALUE, ctx->base + XSPDIF_SOFT_RESET_REG);
+	writel(XSPDIF_SOFT_RESET_VAL, ctx->base + XSPDIF_SOFT_RESET_REG);
 	dev_info(dev, "%s DAI registered\n", dai_drv->name);
 
 	return 0;
