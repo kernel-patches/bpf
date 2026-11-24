@@ -2417,8 +2417,9 @@ void tipc_crypto_rekeying_sched(struct tipc_crypto *tx, bool changed,
 	}
 
 	if (tx->rekeying_intv || now) {
-		delay = (now) ? 0 : tx->rekeying_intv * 60 * 1000;
-		queue_delayed_work(tx->wq, &tx->work, msecs_to_jiffies(delay));
+		delay = now ? 0 : min_t(u64, (u64)tx->rekeying_intv * 60 * HZ,
+					MAX_JIFFY_OFFSET);
+		queue_delayed_work(tx->wq, &tx->work, delay);
 	}
 }
 
