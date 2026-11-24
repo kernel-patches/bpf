@@ -162,6 +162,15 @@ static int ieee80211_set_mon_options(struct ieee80211_sub_if_data *sdata,
 	return 0;
 }
 
+static void ieee80211_clear_ap_mbssid_options(struct ieee80211_bss_conf *link_conf)
+{
+	RCU_INIT_POINTER(link_conf->tx_bss_conf, NULL);
+	link_conf->bssid_index = 0;
+	link_conf->nontransmitted = false;
+	link_conf->ema_ap = false;
+	link_conf->bssid_indicator = 0;
+}
+
 static int ieee80211_set_ap_mbssid_options(struct ieee80211_sub_if_data *sdata,
 					   struct cfg80211_mbssid_config *params,
 					   struct ieee80211_bss_conf *link_conf)
@@ -1941,6 +1950,7 @@ static int ieee80211_start_ap(struct wiphy *wiphy, struct net_device *dev,
 		ieee80211_link_copy_chanctx_to_vlans(link, false);
 	if (err) {
 		link_conf->beacon_int = prev_beacon_int;
+		ieee80211_clear_ap_mbssid_options(link_conf);
 		return err;
 	}
 
@@ -2059,6 +2069,7 @@ error:
 	link_conf->beacon_int = prev_beacon_int;
 	sdata->vif.cfg.ssid_len = 0;
 	ieee80211_link_release_channel(link);
+	ieee80211_clear_ap_mbssid_options(link_conf);
 
 	return err;
 }
