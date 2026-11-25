@@ -914,7 +914,7 @@ static void swiotlb_dyn_free_work(struct work_struct *work)
 static void swiotlb_schedule_dyn_free(struct io_tlb_pool *pool)
 {
 	INIT_RCU_WORK(&pool->dyn_free, swiotlb_dyn_free_work);
-	queue_rcu_work(system_wq, &pool->dyn_free);
+	queue_rcu_work(system_percpu_wq, &pool->dyn_free);
 }
 
 /**
