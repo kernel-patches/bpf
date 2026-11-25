@@ -1761,15 +1761,20 @@ static void bpf_async_cancel_and_free(struct bpf_async_kern *async)
 {
 	struct bpf_async_cb *cb;
 
-	if (!READ_ONCE(async->cb))
-		return;
-
-	cb = xchg(&async->cb, NULL);
+	/* Another canceller can release the map-owned cb reference. */
+	guard(rcu)();
+	/* Order unlink before reading async->cb, including an empty slot. */
+	smp_mb();
+	cb = READ_ONCE(async->cb);
 	if (!cb)
 		return;
 
 	/* Callbacks that run after this see NULL and return. */
 	WRITE_ONCE(cb->map, NULL);
+	/* The one who detaches cb drops the map's reference. */
+	if (cmpxchg(&async->cb, cb, NULL) != cb)
+		return;
+
 	bpf_async_update_prog_callback(cb, NULL, NULL);
 	/*
 	 * No refcount_inc_not_zero(&cb->refcnt) here. Dropping the last
