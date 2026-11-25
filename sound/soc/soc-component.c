@@ -104,6 +104,11 @@ unsigned int snd_soc_component_active(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_active);
 
+void snd_soc_component_active_update(struct snd_soc_component *component, int action)
+{
+	component->active += action;
+}
+
 int snd_soc_component_num_dai(struct snd_soc_component *component)
 {
 	return component->num_dai;
