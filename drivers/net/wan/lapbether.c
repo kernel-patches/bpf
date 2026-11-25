@@ -53,8 +53,7 @@ struct lapbethdev {
 	struct list_head	node;
 	struct net_device	*ethdev;	/* link to ethernet device */
 	struct net_device	*axdev;		/* lapbeth device (lapb#) */
-	bool			up;
-	spinlock_t		up_lock;	/* Protects "up" */
+	bool			up;		/* See lapbeth_close() */
 	struct sk_buff_head	rx_queue;
 	struct napi_struct	napi;
 };
@@ -126,11 +125,8 @@ static int lapbeth_rcv(struct sk_buff *skb, struct net_device *dev,
 
 	rcu_read_lock();
 	lapbeth = lapbeth_get_x25_dev(dev);
-	if (!lapbeth)
+	if (!lapbeth || !READ_ONCE(lapbeth->up))
 		goto drop_unlock_rcu;
-	spin_lock_bh(&lapbeth->up_lock);
-	if (!lapbeth->up)
-		goto drop_unlock;
 
 	len = skb->data[0] + skb->data[1] * 256;
 	dev->stats.rx_packets++;
@@ -142,15 +138,10 @@ static int lapbeth_rcv(struct sk_buff *skb, struct net_device *dev,
 	err = lapb_data_received(lapbeth->axdev, skb);
 	if (err != LAPB_OK) {
 		printk(KERN_DEBUG "lapbether: lapb_data_received err - %d\n", err);
-		goto drop_unlock;
+		goto drop_unlock_rcu;
 	}
-out:
-	spin_unlock_bh(&lapbeth->up_lock);
 	rcu_read_unlock();
 	return 0;
-drop_unlock:
-	kfree_skb(skb);
-	goto out;
 drop_unlock_rcu:
 	rcu_read_unlock();
 drop:
@@ -188,8 +179,7 @@ static netdev_tx_t lapbeth_xmit(struct sk_buff *skb,
 	struct lapbethdev *lapbeth = netdev_priv(dev);
 	int err;
 
-	spin_lock_bh(&lapbeth->up_lock);
-	if (!lapbeth->up)
+	if (!READ_ONCE(lapbeth->up))
 		goto drop;
 
 	/* There should be a pseudo header of 1 byte added by upper layers.
@@ -226,12 +216,10 @@ static netdev_tx_t lapbeth_xmit(struct sk_buff *skb,
 		pr_err("lapb_data_request error - %d\n", err);
 		goto drop;
 	}
-out:
-	spin_unlock_bh(&lapbeth->up_lock);
 	return NETDEV_TX_OK;
 drop:
 	kfree_skb(skb);
-	goto out;
+	return NETDEV_TX_OK;
 }
 
 static void lapbeth_data_transmit(struct net_device *ndev, struct sk_buff *skb)
@@ -331,9 +319,7 @@ static int lapbeth_open(struct net_device *dev)
 		return -ENODEV;
 	}
 
-	spin_lock_bh(&lapbeth->up_lock);
-	lapbeth->up = true;
-	spin_unlock_bh(&lapbeth->up_lock);
+	WRITE_ONCE(lapbeth->up, true);
 
 	return 0;
 }
@@ -343,9 +329,13 @@ static int lapbeth_close(struct net_device *dev)
 	struct lapbethdev *lapbeth = netdev_priv(dev);
 	int err;
 
-	spin_lock_bh(&lapbeth->up_lock);
-	lapbeth->up = false;
-	spin_unlock_bh(&lapbeth->up_lock);
+	/* lapbeth_xmit() and lapbeth_rcv() only call into LAPB after seeing
+	 * "up" set, from within an RCU read-side critical section. Wait for
+	 * them to finish so that none of these calls races with
+	 * lapb_unregister().
+	 */
+	WRITE_ONCE(lapbeth->up, false);
+	synchronize_net();
 
 	err = lapb_unregister(dev);
 	if (err != LAPB_OK)
@@ -411,7 +401,6 @@ static int lapbeth_new_device(struct net_device *dev)
 	lapbeth->ethdev = dev;
 
 	lapbeth->up = false;
-	spin_lock_init(&lapbeth->up_lock);
 
 	skb_queue_head_init(&lapbeth->rx_queue);
 	netif_napi_add_weight(ndev, &lapbeth->napi, lapbeth_napi_poll, 16);
