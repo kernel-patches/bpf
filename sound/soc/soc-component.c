@@ -86,6 +86,12 @@ struct snd_soc_card *snd_soc_component_to_card(struct snd_soc_component *compone
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_to_card);
 
+struct dentry *snd_soc_component_to_debugfs_root(struct snd_soc_component *component)
+{
+	return component->debugfs_root;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_debugfs_root);
+
 unsigned int snd_soc_component_active(struct snd_soc_component *component)
 {
 	return component->active;
