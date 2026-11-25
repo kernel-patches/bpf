@@ -19710,6 +19710,8 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_range *range)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
+	const struct bpf_prog_aux *aux = env->prog->aux;
+	const struct btf_type *t;
 
 	/* Default return value range. */
 	*range = retval_range(0, 1);
@@ -19762,8 +19764,19 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 			*range = retval_range(0, 0);
 			break;
 		case BPF_TRACE_RAW_TP:
-		case BPF_MODIFY_RETURN:
 			return false;
+		case BPF_MODIFY_RETURN:
+			/* An extension replaces a global function of the program */
+			if (!aux->attach_btf)
+				return false;
+
+			/* Allow only NULL or an error pointer for functions returning pointers */
+			t = btf_type_skip_modifiers(aux->attach_btf,
+						    aux->attach_func_proto->type, NULL);
+			if (!btf_type_is_ptr(t))
+				return false;
+			*range = retval_range(-MAX_ERRNO, 0);
+			break;
 		case BPF_TRACE_ITER:
 		default:
 			break;
