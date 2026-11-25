@@ -2926,6 +2926,9 @@ static int scmi_channels_setup(struct scmi_info *info)
 
 			if (prot_id == SCMI_PROTOCOL_BASE)
 				continue;
+			if (info->desc->ops->protocol_available &&
+			    !info->desc->ops->protocol_available(fwnode, prot_id))
+				continue;
 
 			ret = scmi_txrx_setup(info, fwnode, prot_id);
 			if (ret)
@@ -3448,6 +3451,9 @@ static int scmi_probe(struct platform_device *pdev)
 			int prot_id = scmi_dsd_info_list[idx].protocol_id;
 
 			if (prot_id == SCMI_PROTOCOL_BASE)
+				continue;
+			if (info->desc->ops->protocol_available &&
+			    !info->desc->ops->protocol_available(dev_fwnode(dev), prot_id))
 				continue;
 
 			scmi_device_check_create(dev_fwnode(dev), prot_id,

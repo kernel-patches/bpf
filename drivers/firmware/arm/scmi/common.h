@@ -193,6 +193,8 @@ struct scmi_chan_info {
 /**
  * struct scmi_transport_ops - Structure representing a SCMI transport ops
  *
+ * @protocol_available: Optional callback to check if firmware describes a
+ *                      protocol, independently of dedicated channel presence
  * @chan_available: Callback to check if channel is available or not
  * @chan_setup: Callback to allocate and setup a channel
  * @chan_free: Callback to free a channel
@@ -207,6 +209,7 @@ struct scmi_chan_info {
  * @poll_done: Callback to poll transfer status
  */
 struct scmi_transport_ops {
+	bool (*protocol_available)(struct fwnode_handle *fwnode, int prot_id);
 	bool (*chan_available)(struct fwnode_handle *fwnode, int prot_id,
 			       int idx);
 	int (*chan_setup)(struct scmi_chan_info *cinfo, struct device *dev,
