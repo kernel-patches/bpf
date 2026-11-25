@@ -2252,8 +2252,9 @@ static int xennet_create_queues(struct netfront_info *info,
 		ret = xennet_create_page_pool(queue);
 		if (ret < 0) {
 			dev_err(&info->xbdev->dev, "can't allocate page pool\n");
-			*num_queues = i;
-			return ret;
+			gnttab_free_grant_references(queue->gref_tx_head);
+			gnttab_free_grant_references(queue->gref_rx_head);
+			goto err_unwind;
 		}
 
 		netif_napi_add(queue->info->netdev, &queue->napi, xennet_poll);
@@ -2268,6 +2269,21 @@ static int xennet_create_queues(struct netfront_info *info,
 		return -EINVAL;
 	}
 	return 0;
+
+err_unwind:
+	while (i--) {
+		struct netfront_queue *queue = &info->queues[i];
+
+		if (netif_running(info->netdev))
+			napi_disable(&queue->napi);
+		netif_napi_del(&queue->napi);
+		xdp_rxq_info_unreg(&queue->xdp_rxq);
+		page_pool_destroy(queue->page_pool);
+		gnttab_free_grant_references(queue->gref_tx_head);
+		gnttab_free_grant_references(queue->gref_rx_head);
+	}
+	*num_queues = 0;
+	return ret;
 }
 
 /* Common code used when first setting up, and when resuming. */
