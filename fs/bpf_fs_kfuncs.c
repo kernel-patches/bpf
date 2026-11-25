@@ -107,8 +107,9 @@ static int bpf_xattr_read_permission(const char *name, struct inode *inode)
 		return -EINVAL;
 
 	/* Allow reading xattr with user. and security.bpf. prefix */
-	if (strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN) &&
-	    !match_security_bpf_prefix(name))
+	if (match_security_bpf_prefix(name))
+		return 0;
+	if (strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN))
 		return -EPERM;
 
 	return inode_permission(&nop_mnt_idmap, inode, MAY_READ);
