@@ -30,6 +30,7 @@ declare -a FILES=(
   "include/linux/hash.h"
   "include/linux/kmsan-checks.h"
   "include/linux/list-sort.h"
+  "include/linux/unwind_dwarf_cfi.h"
   "include/uapi/linux/hw_breakpoint.h"
   "arch/x86/include/asm/cpufeatures.h"
   "arch/x86/include/asm/inat_types.h"
