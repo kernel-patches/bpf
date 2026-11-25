@@ -26,7 +26,6 @@ test_cgrp2_sock2
 test_current_task_under_cgroup
 test_lru_dist
 test_map_in_map
-test_overhead
 test_probe_write_user
 trace_event
 trace_output
