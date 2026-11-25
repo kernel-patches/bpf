@@ -182,6 +182,8 @@ struct netvsc_device_info {
 	struct bpf_prog *bprog;
 
 	u8 rss_key[NETVSC_HASH_KEYLEN];
+	u16 *rss_indir_table;
+	u32 rss_indir_size;
 };
 
 enum rndis_device_state {

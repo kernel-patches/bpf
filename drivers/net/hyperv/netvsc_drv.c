@@ -928,6 +928,7 @@ static void netvsc_get_channels(struct net_device *net,
 static
 struct netvsc_device_info *netvsc_devinfo_get(struct netvsc_device *nvdev)
 {
+	struct net_device_context *ndc;
 	struct netvsc_device_info *dev_info;
 	struct bpf_prog *prog;
 
@@ -938,6 +939,21 @@ struct netvsc_device_info *netvsc_devinfo_get(struct netvsc_device *nvdev)
 
 	if (nvdev) {
 		ASSERT_RTNL();
+
+		ndc = netdev_priv(nvdev->extension->ndev);
+		if (netif_is_rxfh_configured(nvdev->extension->ndev) &&
+		    ndc->rx_table_sz) {
+			dev_info->rss_indir_table =
+				kmemdup(ndc->rx_table,
+					ndc->rx_table_sz * sizeof(*ndc->rx_table),
+					GFP_ATOMIC);
+			if (!dev_info->rss_indir_table) {
+				kfree(dev_info);
+				return NULL;
+			}
+
+			dev_info->rss_indir_size = ndc->rx_table_sz;
+		}
 
 		dev_info->num_chn = nvdev->num_chn;
 		dev_info->send_sections = nvdev->send_section_cnt;
@@ -973,6 +989,7 @@ static void netvsc_devinfo_put(struct netvsc_device_info *dev_info)
 		bpf_prog_put(dev_info->bprog);
 	}
 
+	kfree(dev_info->rss_indir_table);
 	kfree(dev_info);
 }
 
@@ -1023,6 +1040,7 @@ static int netvsc_attach(struct net_device *ndev,
 	struct netvsc_device *nvdev;
 	struct rndis_device *rdev;
 	struct bpf_prog *prog;
+	bool rss_failed = false;
 	int ret = 0;
 
 	nvdev = rndis_filter_device_add(hdev, dev_info);
@@ -1036,6 +1054,19 @@ static int netvsc_attach(struct net_device *ndev,
 		if (ret) {
 			nvdev->max_chn = 1;
 			nvdev->num_chn = 1;
+		} else {
+			ret = rndis_filter_set_rss_param(nvdev->extension, dev_info->rss_key);
+		}
+
+		if (ret) {
+			netdev_err(ndev,
+				   "unable to restore RSS parameters (ret %d).\n",
+				   ret);
+			/* Do not report the saved parameters as restored. */
+			memset(ndev_ctx->rx_table, 0,
+			       ndev_ctx->rx_table_sz * sizeof(*ndev_ctx->rx_table));
+			memset(nvdev->extension->rss_key, 0, NETVSC_HASH_KEYLEN);
+			rss_failed = true;
 		}
 	}
 
@@ -1065,6 +1096,14 @@ static int netvsc_attach(struct net_device *ndev,
 		if (!rdev->link_state)
 			netif_carrier_on(ndev);
 	}
+
+	/* Check whether the custom RSS table was lost and notify ethtool. */
+	if (netif_is_rxfh_configured(ndev) &&
+	    (rss_failed || !ndev_ctx->rx_table_sz ||
+	     ndev_ctx->rx_table_sz != dev_info->rss_indir_size ||
+	     memcmp(ndev_ctx->rx_table, dev_info->rss_indir_table,
+		    dev_info->rss_indir_size * sizeof(*ndev_ctx->rx_table))))
+		ethtool_rxfh_indir_lost(ndev);
 
 	return 0;
 
@@ -2761,6 +2800,11 @@ static int netvsc_suspend(struct hv_device *dev)
 		goto out;
 	}
 	ret = netvsc_detach(net, nvdev);
+	if (ret) {
+		netvsc_devinfo_put(ndev_ctx->saved_netvsc_dev_info);
+		ndev_ctx->saved_netvsc_dev_info = NULL;
+	}
+
 out:
 	rtnl_unlock();
 
