@@ -10243,7 +10243,7 @@ EXPORT_SYMBOL(netif_set_mtu);
 int netif_change_tx_queue_len(struct net_device *dev, unsigned long new_len)
 {
 	unsigned int orig_len = dev->tx_queue_len;
-	int res;
+	int res, err;
 
 	if (new_len > S16_MAX)
 		return -ERANGE;
@@ -10264,6 +10264,11 @@ int netif_change_tx_queue_len(struct net_device *dev, unsigned long new_len)
 err_rollback:
 	netdev_err(dev, "refused to change device tx_queue_len\n");
 	WRITE_ONCE(dev->tx_queue_len, orig_len);
+	/* Notify everyone again so that they have a chance to revert. */
+	err = call_netdevice_notifiers(NETDEV_CHANGE_TX_QUEUE_LEN, dev);
+	err = notifier_to_errno(err);
+	if (err)
+		netdev_err(dev, "tx_queue_len rollback failed: %d\n", err);
 	return res;
 }
 
