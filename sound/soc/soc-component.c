@@ -435,7 +435,7 @@ EXPORT_SYMBOL_GPL(snd_soc_component_regmap_async_complete);
 #ifdef CONFIG_REGMAP
 
 /**
- * snd_soc_component_init_regmap() - Initialize regmap instance for the
+ * snd_soc_component_regmap_init() - Initialize regmap instance for the
  *                                   component
  * @component: The component for which to initialize the regmap instance
  * @regmap: The regmap instance that should be used by the component
@@ -445,30 +445,30 @@ EXPORT_SYMBOL_GPL(snd_soc_component_regmap_async_complete);
  * yet ready when the component is registered. The function must also be called
  * before the first IO attempt of the component.
  */
-void snd_soc_component_init_regmap(struct snd_soc_component *component,
+void snd_soc_component_regmap_init(struct snd_soc_component *component,
 				   struct regmap *regmap)
 {
 	component->regmap = regmap;
 }
-EXPORT_SYMBOL_GPL(snd_soc_component_init_regmap);
+EXPORT_SYMBOL_GPL(snd_soc_component_regmap_init);
 
 /**
- * snd_soc_component_exit_regmap() - De-initialize regmap instance for the
+ * snd_soc_component_regmap_exit() - De-initialize regmap instance for the
  *                                   component
  * @component: The component for which to de-initialize the regmap instance
  *
  * Calls regmap_exit() on the regmap instance associated to the component and
  * removes the regmap instance from the component.
  *
- * This function should only be used if snd_soc_component_init_regmap() was used
+ * This function should only be used if snd_soc_component_regmap_init() was used
  * to initialize the regmap instance.
  */
-void snd_soc_component_exit_regmap(struct snd_soc_component *component)
+void snd_soc_component_regmap_exit(struct snd_soc_component *component)
 {
 	regmap_exit(component->regmap);
 	component->regmap = NULL;
 }
-EXPORT_SYMBOL_GPL(snd_soc_component_exit_regmap);
+EXPORT_SYMBOL_GPL(snd_soc_component_regmap_exit);
 
 #endif
 
