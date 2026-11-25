@@ -884,12 +884,8 @@ static void snd_soc_remove_device_links(struct snd_soc_card *card)
 {
 	struct snd_soc_component *component;
 
-	for_each_card_components(card, component) {
-		if (component->card_device_link) {
-			device_link_del(component->card_device_link);
-			component->card_device_link = NULL;
-		}
-	}
+	for_each_card_components(card, component)
+		snd_soc_component_device_link_del(component);
 }
 
 void snd_soc_card_unbind(struct snd_soc_card *card, bool reuse)
@@ -1043,18 +1039,8 @@ static int snd_soc_card_bind(struct snd_soc_card *card)
 	 * If a driver pair already have a link in the opposite direction
 	 * they must manage their own suspend order.
 	 */
-	for_each_card_components(card, component) {
-		if (card->dev == component->dev)
-			continue;
-
-		component->card_device_link = device_link_add(card->dev,
-							      component->dev,
-							      DL_FLAG_STATELESS);
-		if (!component->card_device_link) {
-			dev_warn(card->dev, "Could not create device link to %s\n",
-				 dev_name(component->dev));
-		}
-	}
+	for_each_card_components(card, component)
+		snd_soc_component_device_link_add(component);
 
 	ret = snd_soc_card_late_probe(card);
 	if (ret < 0)

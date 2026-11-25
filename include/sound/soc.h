@@ -447,17 +447,6 @@ static inline int snd_soc_resume(struct device *dev)
 }
 #endif
 int snd_soc_poweroff(struct device *dev);
-int snd_soc_register_component(struct device *dev,
-			       const struct snd_soc_component_driver *component_driver,
-			       struct snd_soc_dai_driver *dai_drv, int num_dai);
-
-int devm_snd_soc_register_component(struct device *dev,
-			 const struct snd_soc_component_driver *component_driver,
-			 struct snd_soc_dai_driver *dai_drv, int num_dai);
-#define snd_soc_unregister_component(dev) snd_soc_unregister_component_by_driver(dev, NULL)
-void snd_soc_unregister_component_by_driver(struct device *dev,
-			 const struct snd_soc_component_driver *component_driver);
-
 int soc_new_pcm(struct snd_soc_pcm_runtime *rtd);
 #ifdef CONFIG_SND_SOC_COMPRESS
 int snd_soc_new_compress(struct snd_soc_pcm_runtime *rtd);
@@ -1314,9 +1303,6 @@ int snd_soc_of_parse_tdm_slot(struct device_node *np,
 			      unsigned int *rx_mask,
 			      unsigned int *slots,
 			      unsigned int *slot_width);
-int snd_soc_of_xlate_dai_name(struct snd_soc_component *component,
-			      const struct of_phandle_args *args,
-			      const char **dai_name);
 void snd_soc_of_parse_node_prefix(struct device_node *np,
 				   struct snd_soc_codec_conf *codec_conf,
 				   struct device_node *of_node,

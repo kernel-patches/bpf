@@ -69,6 +69,10 @@ bool snd_soc_component_matches_dlc(struct snd_soc_component *component,
 void snd_soc_component_remove(struct snd_soc_component *component, int probed);
 int snd_soc_component_probe(struct snd_soc_component *component, struct snd_soc_card *card);
 struct list_head *snd_soc_component_get_list_head(void);
+void snd_soc_component_connect_dai(struct snd_soc_component *component, struct snd_soc_dai *dai);
+void snd_soc_component_active_update(struct snd_soc_component *component, int action);
+void snd_soc_component_device_link_del(struct snd_soc_component *component);
+int snd_soc_component_device_link_add(struct snd_soc_component *component);
 
 #define for_each_component(component)					\
 	list_for_each_entry(component, snd_soc_component_get_list_head(), list)
