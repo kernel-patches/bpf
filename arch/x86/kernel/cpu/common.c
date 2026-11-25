@@ -346,7 +346,7 @@ static void squash_the_stupid_serial_number(struct cpuinfo_x86 *c)
 
 	/* Disable processor serial number: */
 
-	rdmsrq(MSR_IA32_BBL_CR_CTL, val.q);
+	val.q = rdmsrq(MSR_IA32_BBL_CR_CTL);
 	val.l |= 0x200000;
 	wrmsrq(MSR_IA32_BBL_CR_CTL, val.q);
 
@@ -607,7 +607,7 @@ __noendbr u64 ibt_save(bool disable)
 	u64 msr = 0;
 
 	if (cpu_feature_enabled(X86_FEATURE_IBT)) {
-		rdmsrq(MSR_IA32_S_CET, msr);
+		msr = rdmsrq(MSR_IA32_S_CET);
 		if (disable)
 			wrmsrq(MSR_IA32_S_CET, msr & ~CET_ENDBR_EN);
 	}
@@ -620,7 +620,7 @@ __noendbr void ibt_restore(u64 save)
 	u64 msr;
 
 	if (cpu_feature_enabled(X86_FEATURE_IBT)) {
-		rdmsrq(MSR_IA32_S_CET, msr);
+		msr = rdmsrq(MSR_IA32_S_CET);
 		msr &= ~CET_ENDBR_EN;
 		msr |= (save & CET_ENDBR_EN);
 		wrmsrq(MSR_IA32_S_CET, msr);
@@ -1356,7 +1356,7 @@ u64 x86_read_arch_cap_msr(void)
 	u64 x86_arch_cap_msr = 0;
 
 	if (boot_cpu_has(X86_FEATURE_ARCH_CAPABILITIES))
-		rdmsrq(MSR_IA32_ARCH_CAPABILITIES, x86_arch_cap_msr);
+		x86_arch_cap_msr = rdmsrq(MSR_IA32_ARCH_CAPABILITIES);
 
 	return x86_arch_cap_msr;
 }
@@ -1948,10 +1948,10 @@ static bool detect_null_seg_behavior(void)
 	 */
 
 	unsigned long old_base, tmp;
-	rdmsrq(MSR_FS_BASE, old_base);
+	old_base = rdmsrq(MSR_FS_BASE);
 	wrmsrq(MSR_FS_BASE, 1);
 	loadsegment(fs, 0);
-	rdmsrq(MSR_FS_BASE, tmp);
+	tmp = rdmsrq(MSR_FS_BASE);
 	wrmsrq(MSR_FS_BASE, old_base);
 	return tmp == 0;
 }

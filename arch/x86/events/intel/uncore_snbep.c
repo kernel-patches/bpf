@@ -645,7 +645,7 @@ static void snbep_uncore_msr_disable_box(struct intel_uncore_box *box)
 
 	msr = uncore_msr_box_ctl(box);
 	if (msr) {
-		rdmsrq(msr, config);
+		config = rdmsrq(msr);
 		config |= SNBEP_PMON_BOX_CTL_FRZ;
 		wrmsrq(msr, config);
 	}
@@ -658,7 +658,7 @@ static void snbep_uncore_msr_enable_box(struct intel_uncore_box *box)
 
 	msr = uncore_msr_box_ctl(box);
 	if (msr) {
-		rdmsrq(msr, config);
+		config = rdmsrq(msr);
 		config &= ~SNBEP_PMON_BOX_CTL_FRZ;
 		wrmsrq(msr, config);
 	}
@@ -6373,7 +6373,7 @@ void spr_uncore_cpu_init(void)
 		 * of UNCORE_SPR_CHA) is incorrect on some SPR variants because of a
 		 * firmware bug. Using the value from SPR_MSR_UNC_CBO_CONFIG to replace it.
 		 */
-		rdmsrq(SPR_MSR_UNC_CBO_CONFIG, num_cbo);
+		num_cbo = rdmsrq(SPR_MSR_UNC_CBO_CONFIG);
 		/*
 		 * The MSR doesn't work on the EMR XCC, but the firmware bug doesn't impact
 		 * the EMR XCC. Don't let the value from the MSR replace the existing value.

@@ -211,7 +211,7 @@ static int doscan(void *data)
 	 * are processed in a single pass) before it retires.
 	 */
 	wrmsrq(MSR_ACTIVATE_SCAN, params->activate->data);
-	rdmsrq(MSR_SCAN_STATUS, status.data);
+	status.data = rdmsrq(MSR_SCAN_STATUS);
 
 	trace_ifs_status(ifsd->cur_batch, start, stop, status.data);
 
@@ -324,7 +324,7 @@ static int do_array_test(void *data)
 	if (cpu == first) {
 		wrmsrq(MSR_ARRAY_BIST, command->data);
 		/* Pass back the result of the test */
-		rdmsrq(MSR_ARRAY_BIST, command->data);
+		command->data = rdmsrq(MSR_ARRAY_BIST);
 	}
 
 	return 0;
@@ -376,7 +376,7 @@ static int do_array_test_gen1(void *status)
 
 	if (cpu == first) {
 		wrmsrq(MSR_ARRAY_TRIGGER, ARRAY_GEN1_TEST_ALL_ARRAYS);
-		rdmsrq(MSR_ARRAY_STATUS, *((u64 *)status));
+		*((u64 *)status) = rdmsrq(MSR_ARRAY_STATUS);
 	}
 
 	return 0;
@@ -528,7 +528,7 @@ static int dosbaf(void *data)
 	 * during the "execution" of the WRMSR.
 	 */
 	wrmsrq(MSR_ACTIVATE_SBAF, run_params->activate->data);
-	rdmsrq(MSR_SBAF_STATUS, status.data);
+	status.data = rdmsrq(MSR_SBAF_STATUS);
 	trace_ifs_sbaf(ifsd->cur_batch, *run_params->activate, status);
 
 	/* Pass back the result of the test */

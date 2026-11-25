@@ -178,7 +178,7 @@ static __init int __x86_vmx_init(void)
 	if (!cpu_feature_enabled(X86_FEATURE_VMX))
 		return -EOPNOTSUPP;
 
-	rdmsrq(MSR_IA32_VMX_BASIC, basic_msr);
+	basic_msr = rdmsrq(MSR_IA32_VMX_BASIC);
 
 	/* IA-32 SDM Vol 3B: VMCS size is never greater than 4kB. */
 	if (WARN_ON_ONCE(vmx_basic_vmcs_size(basic_msr) > PAGE_SIZE))
@@ -230,7 +230,7 @@ static int x86_svm_enable_virtualization_cpu(void)
 {
 	u64 efer;
 
-	rdmsrq(MSR_EFER, efer);
+	efer = rdmsrq(MSR_EFER);
 	if (efer & EFER_SVME)
 		return -EBUSY;
 
@@ -253,7 +253,7 @@ static int x86_svm_disable_virtualization_cpu(void)
 	r = 0;
 
 fault:
-	rdmsrq(MSR_EFER, efer);
+	efer = rdmsrq(MSR_EFER);
 	wrmsrq(MSR_EFER, efer & ~EFER_SVME);
 	return r;
 }
@@ -264,7 +264,7 @@ static void x86_svm_emergency_disable_virtualization_cpu(void)
 
 	virt_rebooting = true;
 
-	rdmsrq(MSR_EFER, efer);
+	efer = rdmsrq(MSR_EFER);
 	if (!(efer & EFER_SVME))
 		return;
 

@@ -249,7 +249,7 @@ static void amd_mediated_pmu_load(struct kvm_vcpu *vcpu)
 	struct kvm_pmu *pmu = vcpu_to_pmu(vcpu);
 	u64 global_status;
 
-	rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS, global_status);
+	global_status = rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS);
 	/* Clear host global_status MSR if non-zero. */
 	if (global_status)
 		wrmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS_CLR, global_status);
@@ -263,7 +263,7 @@ static void amd_mediated_pmu_put(struct kvm_vcpu *vcpu)
 	struct kvm_pmu *pmu = vcpu_to_pmu(vcpu);
 
 	wrmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_CTL, 0);
-	rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS, pmu->global_status);
+	pmu->global_status = rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS);
 
 	/* Clear global status bits if non-zero */
 	if (pmu->global_status)

@@ -175,7 +175,7 @@ int resctrl_arch_pseudo_lock_fn(void *_plr)
 	 * pseudo-locked followed by reading of kernel memory to load it
 	 * into the cache.
 	 */
-	native_wrmsr(MSR_IA32_PQR_ASSOC, rmid_p, plr->closid);
+	native_wrmsrq(MSR_IA32_PQR_ASSOC, (u64)plr->closid << 32 | rmid_p);
 
 	/*
 	 * Cache was flushed earlier. Now access kernel memory to read it
@@ -212,7 +212,7 @@ int resctrl_arch_pseudo_lock_fn(void *_plr)
 	 * Critical section end: restore closid with capacity bitmask that
 	 * does not overlap with pseudo-locked region.
 	 */
-	native_wrmsr(MSR_IA32_PQR_ASSOC, rmid_p, closid_p);
+	native_wrmsrq(MSR_IA32_PQR_ASSOC, (u64)closid_p << 32 | rmid_p);
 
 	/* Re-enable the hardware prefetcher(s) */
 	wrmsrq(MSR_MISC_FEATURE_CONTROL, saved_msr);
@@ -250,7 +250,7 @@ int resctrl_arch_measure_cycles_lat_fn(void *_plr)
 	/*
 	 * Disable hardware prefetchers.
 	 */
-	rdmsrq(MSR_MISC_FEATURE_CONTROL, saved);
+	saved = rdmsrq(MSR_MISC_FEATURE_CONTROL);
 	wrmsrq(MSR_MISC_FEATURE_CONTROL, prefetch_disable_bits);
 	mem_r = READ_ONCE(plr->kmem);
 	/*
@@ -346,7 +346,7 @@ static int measure_residency_fn(struct perf_event_attr *miss_attr,
 	/*
 	 * Disable hardware prefetchers.
 	 */
-	rdmsrq(MSR_MISC_FEATURE_CONTROL, saved);
+	saved = rdmsrq(MSR_MISC_FEATURE_CONTROL);
 	wrmsrq(MSR_MISC_FEATURE_CONTROL, prefetch_disable_bits);
 
 	/* Initialize rest of local variables */

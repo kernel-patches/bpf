@@ -971,7 +971,7 @@ static bool __init hpet_is_pc10_damaged(void)
 		return false;
 
 	/* Check whether PC10 is enabled in PKG C-state limit */
-	rdmsrq(MSR_PKG_CST_CONFIG_CONTROL, pcfg);
+	pcfg = rdmsrq(MSR_PKG_CST_CONFIG_CONTROL);
 	if ((pcfg & 0xF) < 8)
 		return false;
 

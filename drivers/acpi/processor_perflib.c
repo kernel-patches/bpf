@@ -296,7 +296,7 @@ static void amd_fixup_frequency(struct acpi_processor_px *px, int i)
 
 	if ((boot_cpu_data.x86 == 0x10 && boot_cpu_data.x86_model < 10) ||
 	    boot_cpu_data.x86 == 0x11) {
-		rdmsrq(MSR_AMD_PSTATE_DEF_BASE + index, val.q);
+		val.q = rdmsrq(MSR_AMD_PSTATE_DEF_BASE + index);
 		/*
 		 * MSR C001_0064+:
 		 * Bit 63: PstateEn. Read-write. If set, the P-state is valid.

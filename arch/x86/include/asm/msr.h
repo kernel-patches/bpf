@@ -83,23 +83,15 @@ static __always_inline void __wrmsrq(u32 msr, u64 val)
 		     : : "c" (msr), "a" ((u32)val), "d" ((u32)(val >> 32)) : "memory");
 }
 
-#define native_rdmsr(msr, val1, val2)			\
-do {							\
-	u64 __val = __rdmsr((msr));			\
-	(void)((val1) = (u32)__val);			\
-	(void)((val2) = (u32)(__val >> 32));		\
-} while (0)
-
 static __always_inline u64 native_rdmsrq(u32 msr)
 {
 	return __rdmsr(msr);
 }
 
-#define native_wrmsr(msr, low, high)			\
-	__wrmsrq((msr), (u64)(high) << 32 | (low))
-
-#define native_wrmsrq(msr, val)				\
-	__wrmsrq((msr), (val))
+static __always_inline void native_wrmsrq(u32 msr, u64 val)
+{
+	__wrmsrq(msr, val);
+}
 
 static inline u64 native_read_msr(u32 msr)
 {
@@ -173,26 +165,13 @@ static inline u64 native_read_pmc(int counter)
 #include <asm/paravirt.h>
 #else
 #include <linux/errno.h>
-/*
- * Access to machine-specific registers (available on 586 and better only)
- * Note: the rd* operations modify the parameters directly (without using
- * pointer indirection), this allows gcc to optimize better
- */
 
-#define rdmsr(msr, low, high)					\
-do {								\
-	u64 __val = native_read_msr((msr));			\
-	(void)((low) = (u32)__val);				\
-	(void)((high) = (u32)(__val >> 32));			\
-} while (0)
+/* Access to machine-specific registers (available on 586 and better only) */
 
-static inline void wrmsr(u32 msr, u32 low, u32 high)
+static __always_inline u64 rdmsrq(u32 msr)
 {
-	native_write_msr(msr, (u64)high << 32 | low);
+	return native_read_msr(msr);
 }
-
-#define rdmsrq(msr, val)			\
-	((val) = native_read_msr((msr)))
 
 static inline void wrmsrq(u32 msr, u64 val)
 {
@@ -204,16 +183,6 @@ static inline int wrmsrq_safe(u32 msr, u64 val)
 {
 	return native_write_msr_safe(msr, val);
 }
-
-/* rdmsr with exception handling */
-#define rdmsr_safe(msr, low, high)				\
-({								\
-	u64 __val;						\
-	int __err = native_read_msr_safe((msr), &__val);	\
-	(*low) = (u32)__val;					\
-	(*high) = (u32)(__val >> 32);				\
-	__err;							\
-})
 
 static inline int rdmsrq_safe(u32 msr, u64 *p)
 {
@@ -242,14 +211,6 @@ static __always_inline void wrmsrns(u32 msr, u64 val)
 		     : : "c" (msr), "a" ((u32)val), "d" ((u32)(val >> 32)));
 }
 
-/*
- * Dual u32 version of wrmsrq_safe():
- */
-static inline int wrmsr_safe(u32 msr, u32 low, u32 high)
-{
-	return wrmsrq_safe(msr, (u64)high << 32 | low);
-}
-
 struct msr __percpu *msrs_alloc(void);
 void msrs_free(struct msr __percpu *msrs);
 int msr_set_bit(u32 msr, u8 bit);
@@ -267,7 +228,7 @@ int wrmsr_safe_regs_on_cpu(unsigned int cpu, u32 regs[8]);
 #else  /*  CONFIG_SMP  */
 static inline int rdmsrq_on_cpu(unsigned int cpu, u32 msr_no, u64 *q)
 {
-	rdmsrq(msr_no, *q);
+	*q = rdmsrq(msr_no);
 	return 0;
 }
 static inline int wrmsrq_on_cpu(unsigned int cpu, u32 msr_no, u64 q)

@@ -187,7 +187,7 @@ static inline void enable_pkg_thres_interrupt(void)
 	u8 thres_0, thres_1;
 	struct msr val;
 
-	rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT, val.q);
+	val.q = rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT);
 	/* only enable/disable if it had valid threshold value */
 	thres_0 = (val.l & THERM_MASK_THRESHOLD0) >> THERM_SHIFT_THRESHOLD0;
 	thres_1 = (val.l & THERM_MASK_THRESHOLD1) >> THERM_SHIFT_THRESHOLD1;
@@ -203,7 +203,7 @@ static inline void disable_pkg_thres_interrupt(void)
 {
 	struct msr val;
 
-	rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT, val.q);
+	val.q = rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT);
 
 	val.l &= ~(THERM_INT_THRESHOLD0_ENABLE | THERM_INT_THRESHOLD1_ENABLE);
 	wrmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT, val.q);
@@ -356,7 +356,7 @@ static int pkg_temp_thermal_device_add(unsigned int cpu)
 		goto out_unregister_tz;
 
 	/* Store MSR value for package thermal interrupt, to restore at exit */
-	rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT, zonedev->msr_pkg_therm);
+	zonedev->msr_pkg_therm = rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT);
 
 	cpumask_set_cpu(cpu, &zonedev->cpumask);
 	raw_spin_lock_irq(&pkg_temp_lock);

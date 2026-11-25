@@ -147,7 +147,7 @@ static int __rmid_read_phys(u32 prmid, enum resctrl_event_id eventid, u64 *val)
 	 * are error bits.
 	 */
 	wrmsrq(MSR_IA32_QM_EVTSEL, msr_val.q);
-	rdmsrq(MSR_IA32_QM_CTR, msr_val.q);
+	msr_val.q = rdmsrq(MSR_IA32_QM_CTR);
 
 	if (msr_val.q & RMID_VAL_ERROR)
 		return -EIO;
@@ -310,7 +310,7 @@ static int __cntr_id_read(u32 cntr_id, u64 *val)
 	 * is set if the counter data is unavailable.
 	 */
 	wrmsrq(MSR_IA32_QM_EVTSEL, msr_val.q);
-	rdmsrq(MSR_IA32_QM_CTR, msr_val.q);
+	msr_val.q = rdmsrq(MSR_IA32_QM_CTR);
 
 	if (msr_val.q & RMID_VAL_ERROR)
 		return -EIO;

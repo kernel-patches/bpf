@@ -378,7 +378,7 @@ static int centrino_cpu_init(struct cpufreq_policy *policy)
 
 	/* Check to see if Enhanced SpeedStep is enabled, and try to
 	   enable it if not. */
-	rdmsrq(MSR_IA32_MISC_ENABLE, q);
+	q = rdmsrq(MSR_IA32_MISC_ENABLE);
 
 	if (!(q & MSR_IA32_MISC_ENABLE_ENHANCED_SPEEDSTEP)) {
 		q |= MSR_IA32_MISC_ENABLE_ENHANCED_SPEEDSTEP;
@@ -386,7 +386,7 @@ static int centrino_cpu_init(struct cpufreq_policy *policy)
 		wrmsrq(MSR_IA32_MISC_ENABLE, q);
 
 		/* check to see if it stuck */
-		rdmsrq(MSR_IA32_MISC_ENABLE, q);
+		q = rdmsrq(MSR_IA32_MISC_ENABLE);
 		if (!(q & MSR_IA32_MISC_ENABLE_ENHANCED_SPEEDSTEP)) {
 			pr_info("couldn't enable Enhanced SpeedStep\n");
 			return -ENODEV;

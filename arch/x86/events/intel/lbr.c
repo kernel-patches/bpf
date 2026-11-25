@@ -141,7 +141,7 @@ static void __intel_pmu_lbr_enable(bool pmi)
 	if (!cpu_feature_enabled(X86_FEATURE_ARCH_LBR) && !pmi && cpuc->lbr_sel)
 		wrmsrq(MSR_LBR_SELECT, lbr_select);
 
-	rdmsrq(MSR_IA32_DEBUGCTLMSR, debugctl);
+	debugctl = rdmsrq(MSR_IA32_DEBUGCTLMSR);
 	orig_debugctl = debugctl;
 
 	if (!cpu_feature_enabled(X86_FEATURE_ARCH_LBR))
@@ -209,10 +209,7 @@ void intel_pmu_lbr_reset(void)
  */
 static inline u64 intel_pmu_lbr_tos(void)
 {
-	u64 tos;
-
-	rdmsrq(x86_pmu.lbr_tos, tos);
-	return tos;
+	return rdmsrq(x86_pmu.lbr_tos);
 }
 
 enum {
@@ -225,7 +222,7 @@ enum {
  * are the TSX flags when TSX is supported, but when TSX is not supported
  * they have no consistent behavior:
  *
- *   - For wrmsr(), bits 61:62 are considered part of the sign extension.
+ *   - For wrmsrq(), bits 61:62 are considered part of the sign extension.
  *   - For HW updates (branch captures) bits 61:62 are always OFF and are not
  *     part of the sign extension.
  *
@@ -234,8 +231,8 @@ enum {
  *   1) LBR format LBR_FORMAT_EIP_FLAGS2
  *   2) CPU has no TSX support enabled
  *
- * ... then any value passed to wrmsr() must be sign extended to 63 bits and any
- * value from rdmsr() must be converted to have a 61 bits sign extension,
+ * ... then any value passed to wrmsrq() must be sign extended to 63 bits and
+ * any value from rdmsrq() must be converted to have a 61 bits sign extension,
  * ignoring the TSX flags.
  */
 static inline bool lbr_from_signext_quirk_needed(void)
@@ -304,33 +301,25 @@ static __always_inline u64 rdlbr_from(unsigned int idx, struct lbr_entry *lbr)
 	if (lbr)
 		return lbr->from;
 
-	rdmsrq(x86_pmu.lbr_from + idx, val);
+	val = rdmsrq(x86_pmu.lbr_from + idx);
 
 	return lbr_from_signext_quirk_rd(val);
 }
 
 static __always_inline u64 rdlbr_to(unsigned int idx, struct lbr_entry *lbr)
 {
-	u64 val;
-
 	if (lbr)
 		return lbr->to;
 
-	rdmsrq(x86_pmu.lbr_to + idx, val);
-
-	return val;
+	return rdmsrq(x86_pmu.lbr_to + idx);
 }
 
 static __always_inline u64 rdlbr_info(unsigned int idx, struct lbr_entry *lbr)
 {
-	u64 val;
-
 	if (lbr)
 		return lbr->info;
 
-	rdmsrq(x86_pmu.lbr_info + idx, val);
-
-	return val;
+	return rdmsrq(x86_pmu.lbr_info + idx);
 }
 
 static inline void
@@ -477,7 +466,7 @@ void intel_pmu_lbr_save(void *ctx)
 	task_ctx->tos = tos;
 
 	if (cpuc->lbr_select)
-		rdmsrq(MSR_LBR_SELECT, task_ctx->lbr_sel);
+		task_ctx->lbr_sel = rdmsrq(MSR_LBR_SELECT);
 }
 
 static void intel_pmu_arch_lbr_save(void *ctx)
@@ -754,7 +743,7 @@ void intel_pmu_lbr_read_32(struct cpu_hw_events *cpuc)
 			u64     lbr;
 		} msr_lastbranch;
 
-		rdmsrq(x86_pmu.lbr_from + lbr_idx, msr_lastbranch.lbr);
+		msr_lastbranch.lbr = rdmsrq(x86_pmu.lbr_from + lbr_idx);
 
 		*br = (struct perf_branch_entry){
 			.from	= msr_lastbranch.from,
