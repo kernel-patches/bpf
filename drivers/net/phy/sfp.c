@@ -2249,6 +2249,7 @@ static int sfp_sm_add_mdio_bus(struct sfp *sfp)
 static int sfp_sm_probe_for_phy(struct sfp *sfp)
 {
 	int err = 0;
+	int ret;
 
 	switch (sfp->mdio_protocol) {
 	case MDIO_I2C_NONE:
@@ -2263,6 +2264,16 @@ static int sfp_sm_probe_for_phy(struct sfp *sfp)
 		break;
 
 	case MDIO_I2C_ROLLBALL:
+		/* mdio-i2c reports a RollBall command timeout as 0xffff, both
+		 * for a bridge that is still booting and for a module without
+		 * a bridge. Retry after one cheap read instead of a full PHY
+		 * probe, which times out on every register under rtnl_lock.
+		 */
+		ret = mdiobus_c45_read(sfp->i2c_mii, SFP_PHY_ADDR_ROLLBALL,
+				       MDIO_MMD_PMAPMD, MII_PHYSID1);
+		if (ret == 0xffff)
+			return -ENODEV;
+
 		err = sfp_sm_probe_phy(sfp, SFP_PHY_ADDR_ROLLBALL, true);
 		break;
 	}
