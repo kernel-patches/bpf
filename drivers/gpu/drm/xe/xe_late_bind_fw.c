@@ -12,6 +12,7 @@
 #include <drm/intel/intel_lb_mei_interface.h>
 #include <drm/drm_print.h>
 
+#include "xe_configfs.h"
 #include "xe_device.h"
 #include "xe_late_bind_fw.h"
 #include "xe_pcode.h"
@@ -259,7 +260,8 @@ static void xe_late_bind_work(struct work_struct *work)
 	xe_device_assert_mem_access(xe);
 
 	/* TODO: Compare the running OCODE version at probe when available. */
-	if (lbfw->type == INTEL_LB_TYPE_OCODE && xe_sysctrl_is_oobmsm_fw_ready(xe)) {
+	if (lbfw->type == INTEL_LB_TYPE_OCODE && !late_bind->force_ocode_load &&
+	    xe_sysctrl_is_oobmsm_fw_ready(xe)) {
 		drm_dbg(&xe->drm, "%s firmware already loaded, skipping\n",
 			fw_id_to_name[lbfw->id]);
 		goto out;
@@ -556,6 +558,8 @@ int xe_late_bind_init(struct xe_late_bind *late_bind)
 	err = xe_late_bind_fw_init(late_bind);
 	if (err)
 		return err;
+
+	late_bind->force_ocode_load = xe_configfs_get_force_ocode_load(to_pci_dev(xe->drm.dev));
 
 	xe_late_bind_fw_load(late_bind);
 
