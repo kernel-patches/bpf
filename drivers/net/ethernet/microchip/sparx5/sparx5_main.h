@@ -576,6 +576,9 @@ int sparx5_rr_router_init(struct sparx5 *sparx5);
 void sparx5_rr_router_deinit(struct sparx5 *sparx5);
 void sparx5_rr_bridge_legs_flush(struct sparx5 *sparx5,
 				 const struct net_device *bridge);
+void sparx5_rr_legs_reconcile_schedule(struct sparx5 *sparx5);
+void sparx5_rr_bridge_vlan_clear(struct sparx5 *sparx5,
+				 const struct net_device *bridge, u16 vid);
 
 struct sparx5_router {
 	struct sparx5 *sparx5;

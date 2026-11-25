@@ -152,6 +152,11 @@ static int sparx5_port_attr_set(struct net_device *dev, const void *ctx,
 		sparx5_port_attr_ageing_set(port, attr->u.ageing_time);
 		break;
 	case SWITCHDEV_ATTR_ID_BRIDGE_VLAN_FILTERING:
+		/* L3 offload requires a VLAN aware bridge. */
+		if (!attr->u.vlan_filtering)
+			sparx5_rr_bridge_legs_flush(port->sparx5,
+						    attr->orig_dev);
+		sparx5_rr_legs_reconcile_schedule(port->sparx5);
 		/* Used PVID 1 when default_pvid is 0, to avoid
 		 * collision with non-bridged ports.
 		 */
@@ -160,6 +165,13 @@ static int sparx5_port_attr_set(struct net_device *dev, const void *ctx,
 		port->vlan_aware = attr->u.vlan_filtering;
 		sparx5_vlan_port_apply(port->sparx5, port);
 		break;
+	case SWITCHDEV_ATTR_ID_BRIDGE_VLAN_PROTOCOL:
+		/* A leg is classified by vid alone, whatever the protocol. */
+		if (attr->u.vlan_protocol != ETH_P_8021Q)
+			sparx5_rr_bridge_legs_flush(port->sparx5,
+						    attr->orig_dev);
+		sparx5_rr_legs_reconcile_schedule(port->sparx5);
+		return -EOPNOTSUPP;
 	case SWITCHDEV_ATTR_ID_PORT_MROUTER:
 		sparx5_port_attr_mrouter_set(port,
 					     attr->orig_dev,
@@ -179,9 +191,11 @@ static int sparx5_port_bridge_join(struct sparx5_port *port,
 	struct switchdev_brport_flags flags = {0};
 	struct sparx5 *sparx5 = port->sparx5;
 	struct net_device *ndev = port->ndev;
+	bool first;
 	int err;
 
-	if (bitmap_empty(sparx5->bridge_mask, SPX5_PORTS))
+	first = bitmap_empty(sparx5->bridge_mask, SPX5_PORTS);
+	if (first)
 		/* First bridged port */
 		sparx5->hw_bridge_dev = bridge;
 	else
@@ -210,6 +224,10 @@ static int sparx5_port_bridge_join(struct sparx5_port *port,
 	flags.mask = BR_FLOOD | BR_MCAST_FLOOD | BR_BCAST_FLOOD;
 	flags.val = flags.mask;
 	sparx5_port_attr_bridge_flags(port, flags);
+
+	/* The bridge's legs were flushed when its last port left. */
+	if (first)
+		sparx5_rr_legs_reconcile_schedule(sparx5);
 
 	return 0;
 
@@ -448,6 +466,10 @@ static int sparx5_handle_port_vlan_add(struct net_device *dev,
 		/* Flood broadcast to CPU */
 		sparx5_mact_learn(sparx5, sparx5_get_pgid(sparx5, PGID_BCAST),
 				  dev->broadcast, v->vid);
+		if (v->flags & BRIDGE_VLAN_INFO_UNTAGGED)
+			sparx5_rr_bridge_vlan_clear(sparx5, dev, v->vid);
+		else
+			sparx5_rr_legs_reconcile_schedule(sparx5);
 		return 0;
 	}
 
@@ -683,6 +705,7 @@ static int sparx5_handle_port_vlan_del(struct net_device *dev,
 				     switchdev_blocking_nb);
 
 		sparx5_mact_forget(sparx5, dev->broadcast, vid);
+		sparx5_rr_bridge_vlan_clear(sparx5, dev, vid);
 		return 0;
 	}
 
