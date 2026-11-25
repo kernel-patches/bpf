@@ -525,7 +525,7 @@ resubmit:
 	res = usb_submit_urb (urb, GFP_ATOMIC);
 	if (res == -ENODEV)
 		netif_device_detach(dev->netdev);
-	else if (res)
+	else if (res && res != -EPERM)
 		dev_err(&dev->udev->dev,
 			"can't resubmit intr, %s-%s/input0, status %d\n",
 			dev->udev->bus->bus_name, dev->udev->devpath, res);
@@ -775,20 +775,22 @@ static int rtl8150_open(struct net_device *netdev)
 
 	usb_fill_bulk_urb(dev->rx_urb, dev->udev, usb_rcvbulkpipe(dev->udev, 1),
 		      dev->rx_skb->data, RTL8150_MTU, read_bulk_callback, dev);
-	if ((res = usb_submit_urb(dev->rx_urb, GFP_KERNEL))) {
-		if (res == -ENODEV)
-			netif_device_detach(dev->netdev);
-		dev_warn(&netdev->dev, "rx_urb submit failed: %d\n", res);
-		return res;
-	}
 	usb_fill_int_urb(dev->intr_urb, dev->udev, usb_rcvintpipe(dev->udev, 3),
-		     dev->intr_buff, INTBUFSIZE, intr_callback,
-		     dev, dev->intr_interval);
-	if ((res = usb_submit_urb(dev->intr_urb, GFP_KERNEL))) {
+			dev->intr_buff, INTBUFSIZE, intr_callback,
+			dev, dev->intr_interval);
+	res = usb_submit_urb(dev->intr_urb, GFP_KERNEL);
+	if (res) {
 		if (res == -ENODEV)
 			netif_device_detach(dev->netdev);
 		dev_warn(&netdev->dev, "intr_urb submit failed: %d\n", res);
-		usb_kill_urb(dev->rx_urb);
+		return res;
+	}
+	res = usb_submit_urb(dev->rx_urb, GFP_KERNEL);
+	if (res) {
+		if (res == -ENODEV)
+			netif_device_detach(dev->netdev);
+		usb_kill_urb(dev->intr_urb);
+		dev_warn(&netdev->dev, "rx_urb submit failed: %d\n", res);
 		return res;
 	}
 	enable_net_traffic(dev);
