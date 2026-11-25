@@ -19903,9 +19903,11 @@ static int check_fmodret_retval(struct bpf_verifier_env *env, int regno,
 	 *
 	 * The trampolines of x86-64, arm64 and s390x do that: look here before
 	 * another architecture is added to CONFIG_BPF_FMODRET_SCAN.
+	 *
+	 * A pointer is compared in 64 bits. Its t->size is the id of the type it points to.
 	 */
 	t = btf_type_skip_modifiers(aux->attach_btf, aux->attach_func_proto->type, NULL);
-	if (t->size == 4 && reg_umax(reg) <= U32_MAX) {
+	if (!btf_type_is_ptr(t) && t->size == 4 && reg_umax(reg) <= U32_MAX) {
 		smin = reg_s32_min(reg);
 		smax = reg_s32_max(reg);
 	}
