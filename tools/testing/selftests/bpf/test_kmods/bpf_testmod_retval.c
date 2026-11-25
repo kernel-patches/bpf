@@ -131,7 +131,7 @@ static __used noinline int bpf_testmod_retval_no_branch(unsigned long left)
 	return left ? -EFAULT : 0;
 }
 
-/* Not an integer, and an error which is not returned */
+/* ERR_PTR() is an error, NULL is not */
 static __used noinline void *bpf_testmod_retval_pointer(int value)
 {
 	return value ? ERR_PTR(-EINVAL) : NULL;
