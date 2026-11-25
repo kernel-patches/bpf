@@ -5,6 +5,7 @@
 /generate_rust_target
 /insert-sys-cert
 /kallsyms
+/min_eh_frame
 /module.lds
 /recordmcount
 /rustdoc_test_builder
