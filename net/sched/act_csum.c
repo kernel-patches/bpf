@@ -135,8 +135,14 @@ static void *tcf_csum_skb_nextlayer(struct sk_buff *skb,
 				    unsigned int ihl, unsigned int ipl,
 				    unsigned int jhl)
 {
-	int ntkoff = skb_network_offset(skb);
-	int hl = ihl + jhl;
+	unsigned int ntkoff = skb_network_offset(skb);
+	unsigned int hl = ihl + jhl;
+
+	/* @ipl comes from the packet and may exceed the skb; reject it before
+	 * adding @ntkoff, which would otherwise wrap.
+	 */
+	if (ntkoff > skb->len || ipl > skb->len - ntkoff)
+		return NULL;
 
 	if (!pskb_may_pull(skb, ipl + ntkoff) || (ipl < hl) ||
 	    skb_try_make_writable(skb, hl + ntkoff))
