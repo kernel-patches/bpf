@@ -357,6 +357,7 @@ void snd_soc_component_regmap_exit(struct snd_soc_component *component);
 int snd_soc_component_regmap_get_val_bytes(struct snd_soc_component *component);
 void snd_soc_component_regmap_async_complete(struct snd_soc_component *component);
 int snd_soc_component_regcache_sync(struct snd_soc_component *component);
+void snd_soc_component_regcache_mark_dirty(struct snd_soc_component *component);
 
 int snd_soc_component_fixup_controls(struct snd_soc_component *component);
 int snd_soc_component_add_controls(struct snd_soc_component *component,

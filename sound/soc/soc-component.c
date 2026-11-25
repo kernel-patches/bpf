@@ -509,6 +509,15 @@ int snd_soc_component_regcache_sync(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_regcache_sync);
 
+void snd_soc_component_regcache_mark_dirty(struct snd_soc_component *component)
+{
+	struct regmap *regmap = component->regmap;
+
+	if (regmap)
+		regcache_mark_dirty(regmap);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regcache_mark_dirty);
+
 int snd_soc_component_compr_open(struct snd_soc_component *component,
 				 struct snd_compr_stream *cstream)
 {
