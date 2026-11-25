@@ -407,7 +407,8 @@ err:
  * @key: route key snapshot used for cache validation and flow lookup
  *
  * rcu_read_lock should be held on entry.
- * On return, the skb is consumed.
+ * On success, the skb is passed to the transport stack and consumed. On
+ * error, ownership remains with the caller.
  *
  * Return: 0 on success or a negative error code otherwise
  */
@@ -455,15 +456,26 @@ out:
  * @peer: the destination peer
  * @sk: peer socket
  * @skb: the packet to send
+ *
+ * On success, the skb is passed to the transport stack and consumed. On
+ * error, ownership remains with the caller.
+ *
+ * Return: 0 on success or a negative error code otherwise
  */
-void ovpn_udp_send_skb(struct ovpn_peer *peer, struct sock *sk,
-		       struct sk_buff *skb)
+int ovpn_udp_send_skb(struct ovpn_peer *peer, struct sock *sk,
+		      struct sk_buff *skb)
 {
 	struct ovpn_route_key key = {
 		.mark = READ_ONCE(sk->sk_mark),
 		.sport = READ_ONCE(inet_sk(sk)->inet_sport),
 	};
-	int ret;
+
+	/* an uninitialized socket or connect(AF_UNSPEC) can cause this */
+	if (unlikely(!key.sport)) {
+		net_warn_ratelimited("%s: peer %u: UDP source port is 0\n",
+				     netdev_name(peer->ovpn->dev), peer->id);
+		return -EADDRNOTAVAIL;
+	}
 
 	skb->dev = peer->ovpn->dev;
 	skb->mark = key.mark;
@@ -473,9 +485,7 @@ void ovpn_udp_send_skb(struct ovpn_peer *peer, struct sock *sk,
 	ovpn_dst_cache_check_key(peer, &peer->dst_cache, &key);
 
 	/* crypto layer -> transport (UDP) */
-	ret = ovpn_udp_output(peer, &peer->dst_cache, sk, skb, &key);
-	if (unlikely(ret < 0))
-		kfree_skb(skb);
+	return ovpn_udp_output(peer, &peer->dst_cache, sk, skb, &key);
 }
 
 static void ovpn_udp_encap_destroy(struct sock *sk)
