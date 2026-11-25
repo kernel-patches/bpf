@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+/*
+ * DT Overlay for enabling PCIe channel 0 in Endpoint Configuration with the
+ * R-Car S4-8 Spider board.
+ *
+ * Copyright (C) 2026 Renesas Electronics Corp.
+ *
+ * For example, follow the standard configfs steps for pci-epf-test documented
+ * in Documentation/PCI/endpoint/pci-test-howto.rst to set the endpoint up.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&pciec0 {
+	status = "disabled";
+};
+
+&pciec0_ep {
+	status = "okay";
+};
