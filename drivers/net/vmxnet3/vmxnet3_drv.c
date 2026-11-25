@@ -2111,7 +2111,6 @@ vmxnet3_rq_cleanup_all(struct vmxnet3_adapter *adapter)
 
 	for (i = 0; i < adapter->num_rx_queues; i++)
 		vmxnet3_rq_cleanup(&adapter->rx_queue[i], adapter);
-	rcu_assign_pointer(adapter->xdp_bpf_prog, NULL);
 }
 
 
@@ -3669,6 +3668,11 @@ vmxnet3_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct vmxnet3_adapter *adapter = netdev_priv(netdev);
 	int err = 0;
+
+	if (vmxnet3_xdp_enabled(adapter) && new_mtu > VMXNET3_XDP_MAX_MTU) {
+		netdev_err(netdev, "MTU %d too large for XDP\n", new_mtu);
+		return -EINVAL;
+	}
 
 	/*
 	 * Reset_work may be in the middle of resetting the device, wait for its
