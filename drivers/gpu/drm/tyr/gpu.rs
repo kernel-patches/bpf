@@ -36,6 +36,15 @@ pub(crate) struct GpuInfo(pub(crate) uapi::drm_panthor_gpu_info);
 
 impl GpuInfo {
     pub(crate) fn new(io: &IoMem<'_>) -> Self {
+        let mut mmu_features = io.read(MMU_FEATURES);
+
+        // In io_pgtable_ops, input virtual addresses can't exceed unsigned long.
+        // Check that the virtual address bits reported by the gpu are
+        // architecturally supported and, if not, clamp them to the available bits.
+        if mmu_features.va_bits().get() > usize::BITS {
+            mmu_features = mmu_features.with_const_va_bits::<{ usize::BITS }>();
+        }
+
         Self(uapi::drm_panthor_gpu_info {
             gpu_id: io.read(GPU_ID).into_raw(),
             gpu_rev: io.read(REVIDR).into_raw(),
@@ -43,7 +52,7 @@ impl GpuInfo {
             l2_features: io.read(L2_FEATURES).into_raw(),
             tiler_features: io.read(TILER_FEATURES).into_raw(),
             mem_features: io.read(MEM_FEATURES).into_raw(),
-            mmu_features: io.read(MMU_FEATURES).into_raw(),
+            mmu_features: mmu_features.into_raw(),
             thread_features: io.read(THREAD_FEATURES).into_raw(),
             max_threads: io.read(THREAD_MAX_THREADS).into_raw(),
             thread_max_workgroup_size: io.read(THREAD_MAX_WORKGROUP_SIZE).into_raw(),
