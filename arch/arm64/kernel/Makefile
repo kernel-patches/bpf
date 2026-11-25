@@ -8,6 +8,9 @@ CFLAGS_armv8_deprecated.o := -I$(src)
 CFLAGS_REMOVE_ftrace.o = $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_insn.o = $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_return_address.o = $(CC_FLAGS_FTRACE)
+ifdef CONFIG_UNWINDER_DWARF_CFI
+CFLAGS_REMOVE_stacktrace.o = $(CC_FLAGS_FTRACE)
+endif
 
 # Remove stack protector to avoid triggering unneeded stack canary
 # checks due to randomize_kstack_offset.
@@ -24,6 +27,9 @@ KASAN_SANITIZE_stacktrace.o := n
 # inhibit KCOV instrumentation, disable it for the entire compilation unit.
 KCOV_INSTRUMENT_entry-common.o := n
 KCOV_INSTRUMENT_idle.o := n
+ifdef CONFIG_UNWINDER_DWARF_CFI
+KCOV_INSTRUMENT_stacktrace.o := n
+endif
 
 # Softirq stack switching can run outside interrupt context.
 KCOV_INSTRUMENT_irq.o := n

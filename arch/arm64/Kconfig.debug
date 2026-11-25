@@ -1,5 +1,37 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+choice
+	prompt "Choose kernel unwinder"
+	default UNWINDER_FRAME_POINTER
+	help
+	  This determines which method will be used for unwinding kernel stack
+	  traces for panics, oopses, bugs, warnings, perf, /proc/<pid>/stack,
+	  livepatch, lockdep, and more.  If unsure, keep the default frame
+	  pointer unwinder.
+
+config UNWINDER_FRAME_POINTER
+	bool "Frame pointer unwinder"
+	select ARCH_WANT_FRAME_POINTERS
+	select FRAME_POINTER
+	help
+	  This option enables the standard frame pointer (x29) unwinder for
+	  unwinding kernel stack traces on arm64.  Kernel code is compiled
+	  with frame records stored on the stack at a small runtime register
+	  and code-size cost.
+
+config UNWINDER_DWARF_CFI
+	bool "Minimal DWARF CFI unwinder"
+	depends on (!FUNCTION_TRACER || DYNAMIC_FTRACE_WITH_ARGS) && (!SHADOW_CALL_STACK || DYNAMIC_SCS)
+	select UNWIND_DWARF_CFI
+	select UNWIND_TABLES
+	help
+	  This option enables the Minimal DWARF Call Frame Information (CFI)
+	  unwinder for kernel stack traces.  It interprets a strictly bounded
+	  subset of compiler-generated .eh_frame / .eh_frame_hdr tables
+	  matching SFrame's stack state model without requiring frame pointers.
+
+endchoice
+
 config PID_IN_CONTEXTIDR
 	bool "Write the current PID to the CONTEXTIDR register"
 	help

@@ -13,6 +13,8 @@ struct mod_plt_sec {
 	int			plt_max_entries;
 };
 
+struct mod_dwarf_cfi_index;
+
 struct mod_arch_specific {
 	struct mod_plt_sec	core;
 	struct mod_plt_sec	init;
@@ -20,7 +22,21 @@ struct mod_arch_specific {
 	/* for CONFIG_DYNAMIC_FTRACE */
 	struct plt_entry	*ftrace_trampolines;
 	struct plt_entry	*init_ftrace_trampolines;
+
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+	struct mod_dwarf_cfi_index __rcu *dwarf_cfi_index;
+#endif
 };
+
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+void arm64_unwind_module_init(struct module *mod, void *eh_frame,
+			      size_t eh_frame_size);
+void arm64_unwind_module_cleanup(struct module *mod);
+#else
+static inline void arm64_unwind_module_init(struct module *mod, void *eh_frame,
+					    size_t eh_frame_size) {}
+static inline void arm64_unwind_module_cleanup(struct module *mod) {}
+#endif
 
 u64 module_emit_plt_entry(struct module *mod, Elf64_Shdr *sechdrs,
 			  void *loc, const Elf64_Rela *rela,

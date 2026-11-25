@@ -56,6 +56,7 @@ unsigned long arch_ftrace_get_symaddr(unsigned long fentry_ip);
 #define ftrace_get_symaddr(fentry_ip) arch_ftrace_get_symaddr(fentry_ip)
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_ARGS
+void ftrace_caller_end(void);
 #define HAVE_ARCH_FTRACE_REGS
 struct dyn_ftrace;
 struct ftrace_ops;
@@ -154,14 +155,21 @@ ftrace_partial_regs(const struct ftrace_regs *fregs, struct pt_regs *regs)
 	regs->regs[29] = afregs->fp;
 	regs->regs[30] = afregs->lr;
 	regs->pstate = PSR_MODE_EL1h;
+	regs->stackframe.type = FRAME_META_TYPE_NONE;
 	return regs;
 }
 
-#define arch_ftrace_fill_perf_regs(fregs, _regs) do {		\
-		(_regs)->pc = arch_ftrace_regs(fregs)->pc;			\
-		(_regs)->regs[29] = arch_ftrace_regs(fregs)->fp;		\
-		(_regs)->sp = arch_ftrace_regs(fregs)->sp;			\
-		(_regs)->pstate = PSR_MODE_EL1h;		\
+#define arch_ftrace_fill_perf_regs(fregs, _regs) do {			\
+		const struct __arch_ftrace_regs *__afregs =		\
+			arch_ftrace_regs(fregs);			\
+		struct pt_regs *__regs = (_regs);			\
+									\
+		__regs->pc = __afregs->pc;				\
+		__regs->regs[29] = __afregs->fp;			\
+		__regs->regs[30] = __afregs->lr;			\
+		__regs->sp = __afregs->sp;				\
+		__regs->pstate = PSR_MODE_EL1h;				\
+		__regs->stackframe.type = FRAME_META_TYPE_NONE;		\
 	} while (0)
 
 int ftrace_regs_query_register_offset(const char *name);

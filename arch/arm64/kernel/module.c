@@ -499,6 +499,8 @@ int module_finalize(const Elf_Ehdr *hdr,
 
 	if (scs_is_dynamic()) {
 		s = find_section(hdr, sechdrs, ".init.eh_frame");
+		if (!s)
+			s = find_section(hdr, sechdrs, ".eh_frame");
 		if (s) {
 			/*
 			 * Because we can reject modules that are malformed
@@ -515,5 +517,18 @@ int module_finalize(const Elf_Ehdr *hdr,
 		}
 	}
 
-	return module_init_ftrace_plt(hdr, sechdrs, me);
+	ret = module_init_ftrace_plt(hdr, sechdrs, me);
+	if (ret)
+		return ret;
+
+	s = find_section(hdr, sechdrs, ".eh_frame");
+	if (s && (s->sh_flags & SHF_ALLOC))
+		arm64_unwind_module_init(me, (void *)s->sh_addr, s->sh_size);
+
+	return 0;
+}
+
+void module_arch_cleanup(struct module *mod)
+{
+	arm64_unwind_module_cleanup(mod);
 }

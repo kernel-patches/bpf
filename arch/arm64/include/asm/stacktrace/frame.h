@@ -18,12 +18,18 @@
  *   an arbitrary point in time.
  *   Unwinding should consume pt_regs::pc, followed by pt_regs::lr.
  *
+ * - FRAME_META_TYPE_CALLER
+ *
+ *   Synthetic caller-fetched struct pt_regs from perf_arch_fetch_caller_regs()
+ *   (not linked into the stack frame chain).
+ *
  * Note: all other values are reserved and should result in unwinding
  * terminating with an error.
  */
 #define FRAME_META_TYPE_NONE		0
 #define FRAME_META_TYPE_FINAL		1
 #define FRAME_META_TYPE_PT_REGS		2
+#define FRAME_META_TYPE_CALLER		3
 
 #ifndef __ASSEMBLER__
 /* 
