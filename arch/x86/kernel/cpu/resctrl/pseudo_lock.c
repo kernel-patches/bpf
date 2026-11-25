@@ -9,7 +9,7 @@
  * Author: Reinette Chatre <reinette.chatre@intel.com>
  */
 
-#define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
+#define pr_fmt(fmt)	"resctrl: " fmt
 
 #include <linux/cacheflush.h>
 #include <linux/cpu.h>

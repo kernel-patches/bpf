@@ -9,7 +9,7 @@
  *    Tony Luck <tony.luck@intel.com>
  */
 
-#define pr_fmt(fmt)   "resctrl: " fmt
+#define pr_fmt(fmt)	"resctrl: " fmt
 
 #include <linux/bits.h>
 #include <linux/compiler_types.h>
