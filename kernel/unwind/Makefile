@@ -9,4 +9,5 @@ KCOV_INSTRUMENT_dwarf_cfi.o := n
 
 obj-$(CONFIG_UNWIND_DWARF_CFI)		+= dwarf_cfi.o
 obj-$(CONFIG_UNWIND_USER)		+= user.o deferred.o
+obj-$(CONFIG_HAVE_UNWIND_USER_CFI)	+= user_cfi.o
 obj-$(CONFIG_UNWIND_DWARF_CFI_KUNIT_TEST) += dwarf_cfi_kunit.o
