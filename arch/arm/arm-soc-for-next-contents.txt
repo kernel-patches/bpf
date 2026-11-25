@@ -1,8 +1,16 @@
 soc/arm
+	arm/boards
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/soc/soc tags/board-remove-for-7
 
 soc/dt
 	stefandoesinger/zx29-dts
 		https://gitlab.com/stefandoesinger/zx297520-kernel tags/zx29-dts-7.5
+	mmind/dt64
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v7.5-rockchip-dts64-1
+	geert/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v7.5-tag1
+	linusw/ux500/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-nomadik tags/ux500-pd-v7.5
 
 soc/drivers
 	linusw/sram-soc
@@ -19,6 +27,8 @@ soc/defconfig
 		git://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-nomadik tags/u8500-defconfig-v7.5-soc
 	patch
 		arm64: defconfig: drop four symbols that no longer exist
+	geert/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v7.5-tag1
 
 soc/late
 
