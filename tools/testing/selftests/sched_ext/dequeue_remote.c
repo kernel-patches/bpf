@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Verify that ops.dequeue() is called for tasks leaving BPF custody through
- * an SCX-internal cross-CPU migration (move_remote_task_to_local_dsq()).
+ * an SCX-internal cross-CPU migration (move_remote_task_to_local_dsq()) and
+ * that it always runs with the task's rq locked, including when the task is
+ * inserted into SCX_DSQ_GLOBAL from another CPU.
  *
  * Copyright (c) 2026 Google LLC.
  */
@@ -54,7 +56,7 @@ static void worker_fn(int id)
 }
 
 static enum scx_test_status run_scenario(struct dequeue_remote *skel,
-					 bool use_move_to_local,
+					 bool use_move_to_local, bool use_global,
 					 const char *name)
 {
 	enum scx_test_status ret = SCX_TEST_PASS;
@@ -69,6 +71,7 @@ static enum scx_test_status run_scenario(struct dequeue_remote *skel,
 		nr_workers = MAX_WORKERS;
 
 	skel->bss->test_use_move_to_local = use_move_to_local;
+	skel->bss->test_use_global = use_global;
 	skel->bss->enqueue_cnt = 0;
 	skel->bss->dequeue_cnt = 0;
 	skel->bss->dispatch_dequeue_cnt = 0;
@@ -77,6 +80,8 @@ static enum scx_test_status run_scenario(struct dequeue_remote *skel,
 	skel->bss->remote_running_cnt = 0;
 	skel->bss->missed_dequeue_cnt = 0;
 	skel->bss->core_sched_exec_dequeue_cnt = 0;
+	skel->bss->remote_global_cnt = 0;
+	skel->bss->wrong_rq_dequeue_cnt = 0;
 	memset(&skel->data->uei, 0, sizeof(skel->data->uei));
 
 	link = bpf_map__attach_struct_ops(skel->maps.dequeue_remote_ops);
@@ -126,7 +131,10 @@ static enum scx_test_status run_scenario(struct dequeue_remote *skel,
 	       (unsigned long)skel->bss->dequeue_cnt,
 	       (unsigned long)skel->bss->dispatch_dequeue_cnt,
 	       (unsigned long)skel->bss->change_dequeue_cnt);
-	if (!use_move_to_local)
+	if (use_global)
+		printf("  remote SCX_DSQ_GLOBAL dispatches: %lu\n",
+		       (unsigned long)skel->bss->remote_global_cnt);
+	else if (!use_move_to_local)
 		printf("  remote SCX_DSQ_LOCAL_ON dispatches: %lu\n",
 		       (unsigned long)skel->bss->remote_dispatch_cnt);
 	printf("  ran on a CPU other than the enqueue CPU: %lu\n",
@@ -135,15 +143,25 @@ static enum scx_test_status run_scenario(struct dequeue_remote *skel,
 	       (unsigned long)skel->bss->missed_dequeue_cnt);
 	printf("  late SCX_DEQ_CORE_SCHED_EXEC dequeues: %lu\n",
 	       (unsigned long)skel->bss->core_sched_exec_dequeue_cnt);
+	printf("  dequeues without the task's rq locked: %lu\n",
+	       (unsigned long)skel->bss->wrong_rq_dequeue_cnt);
 
 	if (skel->data->uei.kind != EXIT_KIND(SCX_EXIT_UNREG))
 		SCX_ERR("Scheduler exited with kind=%lld: %s",
 			(long long)skel->data->uei.kind, skel->data->uei.msg);
 	SCX_EQ(skel->data->uei.kind, EXIT_KIND(SCX_EXIT_UNREG));
 
-	/* the test is meaningless if no task was moved across CPUs */
-	SCX_GT(skel->bss->remote_running_cnt, 0);
+	/*
+	 * The test is meaningless if no task was moved across CPUs. Global DSQs
+	 * are per node, so the global scenario may not migrate tasks at all and
+	 * needs remote global dispatches instead.
+	 */
+	if (use_global)
+		SCX_GT(skel->bss->remote_global_cnt, 0);
+	else
+		SCX_GT(skel->bss->remote_running_cnt, 0);
 	SCX_EQ(skel->bss->enqueue_cnt, skel->bss->dequeue_cnt);
+	SCX_EQ(skel->bss->wrong_rq_dequeue_cnt, 0);
 
 	return SCX_TEST_PASS;
 }
@@ -174,13 +192,18 @@ static enum scx_test_status run(void *ctx)
 	struct dequeue_remote *skel = ctx;
 	enum scx_test_status status;
 
-	status = run_scenario(skel, false,
+	status = run_scenario(skel, false, false,
 			      "BPF queue -> SCX_DSQ_LOCAL_ON | cpu");
 	if (status != SCX_TEST_PASS)
 		return status;
 
-	status = run_scenario(skel, true,
+	status = run_scenario(skel, true, false,
 			      "user DSQ -> scx_bpf_dsq_move_to_local()");
+	if (status != SCX_TEST_PASS)
+		return status;
+
+	status = run_scenario(skel, false, true,
+			      "BPF queue -> SCX_DSQ_GLOBAL");
 	if (status != SCX_TEST_PASS)
 		return status;
 
