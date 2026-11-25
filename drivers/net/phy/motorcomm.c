@@ -97,6 +97,9 @@
  */
 #define YTPHY_SADCR_SPEED_RETRY_LIMIT		(0x3 << 2)
 
+#define YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK		GENMASK(4, 2)
+#define YTPHY_SADCR_DOWNSHIFT_ATTEMPTS_MIN		2
+#define YTPHY_SADCR_DOWNSHIFT_ATTEMPTS_MAX		9
 /* Rx Error Counter Register */
 #define YTPHY_RX_ERROR_COUNTER_REG		0x15
 
@@ -1203,6 +1206,96 @@ static int yt8521_probe(struct phy_device *phydev)
 
 	return ytphy_modify_ext_with_lock(phydev, YTPHY_SYNCE_CFG_REG, mask,
 					  val);
+}
+
+static int yt8521_modify_bmcr_paged(struct phy_device *phydev, int page,
+				    u16 mask, u16 set);
+
+static int yt8531_get_downshift(struct phy_device *phydev, u8 *data)
+{
+	int val, cnt, enable;
+
+	val = phy_read_paged(phydev, YT8521_RSSR_UTP_SPACE,
+			     YTPHY_SPEED_AUTO_DOWNGRADE_CONTROL_REG);
+	if (val < 0)
+		return val;
+
+	enable = FIELD_GET(YTPHY_SADCR_SPEED_DOWNGRADE_EN, val);
+	/* The retry limit field stores (attempts - 2): the default 0x3
+	 * means 5 attempts before downgrading.
+	 */
+	cnt = FIELD_GET(YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK, val) + 2;
+
+	*data = enable ? cnt : DOWNSHIFT_DEV_DISABLE;
+
+	return 0;
+}
+
+static int yt8531_set_downshift(struct phy_device *phydev, u8 cnt)
+{
+	u16 mask, set;
+	int err;
+
+	if (cnt == DOWNSHIFT_DEV_DEFAULT_COUNT) {
+		/* Restore the power-on default: enabled, 5 attempts */
+		mask = YTPHY_SADCR_SPEED_DOWNGRADE_EN |
+		       YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK;
+		set = YTPHY_SADCR_SPEED_DOWNGRADE_EN |
+		      FIELD_PREP(YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK, 3);
+	} else if (!cnt) {
+		mask = YTPHY_SADCR_SPEED_DOWNGRADE_EN;
+		set = 0;
+	} else {
+		/* The tunable value is the number of autoneg attempts
+		 * before downgrading, in range [2, 9]. The register
+		 * field stores (cnt - 2).
+		 */
+		if (cnt < YTPHY_SADCR_DOWNSHIFT_ATTEMPTS_MIN ||
+		    cnt > YTPHY_SADCR_DOWNSHIFT_ATTEMPTS_MAX)
+			return -ERANGE;
+
+		mask = YTPHY_SADCR_SPEED_DOWNGRADE_EN |
+		       YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK;
+		set = YTPHY_SADCR_SPEED_DOWNGRADE_EN |
+		      FIELD_PREP(YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK, cnt - 2);
+	}
+
+	/* The SADCR change is only committed by a UTP-space software reset.
+	 * genphy_soft_reset() resets the BMCR of the currently selected
+	 * register space only, and YT8531S powers up with the fiber space
+	 * selected, so reset the UTP space explicitly. Both helpers manage
+	 * their own paged access window.
+	 */
+	err = phy_modify_paged(phydev, YT8521_RSSR_UTP_SPACE,
+			       YTPHY_SPEED_AUTO_DOWNGRADE_CONTROL_REG,
+			       mask, set);
+	if (err < 0)
+		return err;
+
+	return yt8521_modify_bmcr_paged(phydev, YT8521_RSSR_UTP_SPACE,
+					0, BMCR_RESET);
+}
+
+static int yt8531_get_tunable(struct phy_device *phydev,
+			      struct ethtool_tunable *tuna, void *data)
+{
+	switch (tuna->id) {
+	case ETHTOOL_PHY_DOWNSHIFT:
+		return yt8531_get_downshift(phydev, data);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+static int yt8531_set_tunable(struct phy_device *phydev,
+			      struct ethtool_tunable *tuna,
+			      const void *data)
+{
+	if (tuna->id != ETHTOOL_PHY_DOWNSHIFT ||
+	    tuna->len != sizeof(u8))
+		return -EOPNOTSUPP;
+
+	return yt8531_set_downshift(phydev, *(const u8 *)data);
 }
 
 static int yt8531_probe(struct phy_device *phydev)
@@ -3280,6 +3373,8 @@ static struct phy_driver motorcomm_phy_drvs[] = {
 	},
 	{
 		PHY_ID_MATCH_EXACT(PHY_ID_YT8531),
+		.get_tunable	= yt8531_get_tunable,
+		.set_tunable	= yt8531_set_tunable,
 		.name		= "YT8531 Gigabit Ethernet",
 		.probe		= yt8531_probe,
 		.config_init	= yt8531_config_init,
@@ -3294,6 +3389,8 @@ static struct phy_driver motorcomm_phy_drvs[] = {
 	},
 	{
 		PHY_ID_MATCH_EXACT(PHY_ID_YT8531S),
+		.get_tunable	= yt8531_get_tunable,
+		.set_tunable	= yt8531_set_tunable,
 		.name		= "YT8531S Gigabit Ethernet",
 		.get_features	= yt8521_get_features,
 		.probe		= yt8521_probe,
