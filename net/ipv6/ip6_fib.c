@@ -100,6 +100,9 @@ static void fib6_walkers_replace_leaf(struct net *net, struct fib6_info *old,
 
 	read_lock(&net->ipv6.fib6_walker_lock);
 	FOR_WALKERS(net, w) {
+		/* Only walkers of this table are serialized by its tb6_lock */
+		if (w->root != &old->fib6_table->tb6_root)
+			continue;
 		if (w->state == FWS_C && w->leaf == old) {
 			pr_debug("walker %p adjusted by unlink of %p\n", w, old);
 			w->leaf = new;
