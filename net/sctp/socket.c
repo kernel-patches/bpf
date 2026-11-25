@@ -9635,6 +9635,23 @@ static int sctp_sock_migrate(struct sock *oldsk, struct sock *newsk,
 	if (err)
 		return err;
 
+	/* Copy the endpoint's feature flags and AUTH settings from the original
+	 * endpoint so that restarts on the accepted or peeled-off socket
+	 * negotiate the same capabilities.
+	 */
+	newep->prsctp_enable = oldsp->ep->prsctp_enable;
+	newep->ecn_enable = oldsp->ep->ecn_enable;
+	newep->reconf_enable = oldsp->ep->reconf_enable;
+	newep->asconf_enable = oldsp->ep->asconf_enable;
+	newep->intl_enable = oldsp->ep->intl_enable;
+	newep->strreset_enable = oldsp->ep->strreset_enable;
+	newep->sndbuf_policy = oldsp->ep->sndbuf_policy;
+	newep->rcvbuf_policy = oldsp->ep->rcvbuf_policy;
+
+	err = sctp_auth_ep_copy(newep, oldsp->ep, GFP_KERNEL);
+	if (err)
+		return err;
+
 	sctp_auto_asconf_init(newsp);
 
 	/* Move any messages in the old socket's receive queue that are for the
