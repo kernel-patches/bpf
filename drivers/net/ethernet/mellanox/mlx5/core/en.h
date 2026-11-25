@@ -998,6 +998,16 @@ static inline void mlx5e_stats_nch_write(struct mlx5e_priv *priv, u16 n)
 	smp_store_release(&priv->stats_nch, n);
 }
 
+static inline
+struct mlx5e_channel_stats *mlx5e_channel_stats_get(struct mlx5e_priv *priv,
+						    int channel)
+{
+	if (channel >= mlx5e_stats_nch_read(priv))
+		return NULL;
+
+	return priv->channel_stats[channel];
+}
+
 struct mlx5e_dev {
 	struct net_device *netdev;
 	struct devlink_port dl_port;
