@@ -15,6 +15,35 @@
 #include "sof-priv.h"
 #include "sof-audio.h"
 
+/* the maximum value as snd_soc_info_volsw() reports it */
+static int sof_mixer_max(const struct soc_mixer_control *sm)
+{
+	int max = sm->max - sm->min;
+
+	if (sm->platform_max && sm->platform_max < max)
+		max = sm->platform_max;
+
+	return max;
+}
+
+/* the IPC put handlers do not check the range */
+static int sof_mixer_check_values(const struct soc_mixer_control *sm,
+				  const struct snd_sof_control *scontrol,
+				  const struct snd_ctl_elem_value *ucontrol)
+{
+	int max = sof_mixer_max(sm);
+	unsigned int i;
+
+	for (i = 0; i < scontrol->num_channels; i++) {
+		long val = ucontrol->value.integer.value[i];
+
+		if (val < 0 || val > max)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
 int snd_sof_volume_get(struct snd_kcontrol *kcontrol,
 		       struct snd_ctl_elem_value *ucontrol)
 {
@@ -38,6 +67,11 @@ int snd_sof_volume_put(struct snd_kcontrol *kcontrol,
 	struct snd_soc_component *scomp = scontrol->scomp;
 	struct snd_sof_dev *sdev = snd_soc_component_get_drvdata(scomp);
 	const struct sof_ipc_tplg_ops *tplg_ops = sof_ipc_get_ops(sdev, tplg);
+	int ret;
+
+	ret = sof_mixer_check_values(sm, scontrol, ucontrol);
+	if (ret)
+		return ret;
 
 	if (tplg_ops && tplg_ops->control && tplg_ops->control->volume_put)
 		return tplg_ops->control->volume_put(scontrol, ucontrol);
@@ -50,20 +84,16 @@ int snd_sof_volume_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info 
 	struct soc_mixer_control *sm = (struct soc_mixer_control *)kcontrol->private_value;
 	struct snd_sof_control *scontrol = sm->dobj.private;
 	unsigned int channels = scontrol->num_channels;
-	int platform_max;
+	int max = sof_mixer_max(sm);
 
-	if (!sm->platform_max)
-		sm->platform_max = sm->max;
-	platform_max = sm->platform_max;
-
-	if (platform_max == 1 && !strstr(kcontrol->id.name, " Volume"))
+	if (max == 1 && !strstr(kcontrol->id.name, " Volume"))
 		uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
 	else
 		uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
 
 	uinfo->count = channels;
 	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = platform_max - sm->min;
+	uinfo->value.integer.max = max;
 	return 0;
 }
 
@@ -90,6 +120,11 @@ int snd_sof_switch_put(struct snd_kcontrol *kcontrol,
 	struct snd_soc_component *scomp = scontrol->scomp;
 	struct snd_sof_dev *sdev = snd_soc_component_get_drvdata(scomp);
 	const struct sof_ipc_tplg_ops *tplg_ops = sof_ipc_get_ops(sdev, tplg);
+	int ret;
+
+	ret = sof_mixer_check_values(sm, scontrol, ucontrol);
+	if (ret)
+		return ret;
 
 	if (tplg_ops && tplg_ops->control && tplg_ops->control->switch_put)
 		return tplg_ops->control->switch_put(scontrol, ucontrol);
