@@ -1455,7 +1455,7 @@ int bpf_guess_first_trips(struct bpf_verifier_env *env, struct bpf_verifier_stat
 			  struct bpf_loop *loop)
 {
 	struct loop_stack_entry *e = bpf_top_loop(st->frame[st->curframe]);
-	struct bpf_verifier_state next = {};
+	struct bpf_verifier_state *next;
 	struct bpf_loop_steps *steps;
 	u64 trips = U64_MAX, xreg;
 	struct scalar *s;
@@ -1488,15 +1488,18 @@ int bpf_guess_first_trips(struct bpf_verifier_env *env, struct bpf_verifier_stat
 		return 0;
 	e->exit_threshold = e->trip_index.r64.base + trips;
 	add_iv_threshold(env, loop, e->exit_threshold, 1, THRESHOLD_EXIT_JUMP, U32_MAX);
+	next = kzalloc_obj(*next, BPF_VERIFIER_GFP);
+	if (!next)
+		return -ENOMEM;
 	for (i = 0; i < min(trips, 2) && !err; i++) {
-		err = bpf_copy_verifier_state(env, &next, st);
-		if (err || !move_by_steps(env, &next, steps))
+		err = bpf_copy_verifier_state(env, next, st);
+		if (err || !move_by_steps(env, next, steps))
 			break;
-		err = bpf_states_join(env, st, &next, loop, true);
+		err = bpf_states_join(env, st, next, loop, true);
 		env->extra_values = true;
 		bitmap_or(loop->nonlinear_xregs, loop->nonlinear_xregs, steps->nonlinear_xregs,
 			  MAX_BPF_XREG);
 	}
-	bpf_free_verifier_state(env, &next, false);
+	bpf_free_verifier_state(env, next, true);
 	return err ?: i > 0;
 }
