@@ -64,11 +64,16 @@ struct squashfs_sb_info {
 	struct mutex				meta_index_mutex;
 	struct meta_index			*meta_index;
 	void					*stream;
-	__le64					*inode_lookup_table;
+	union {
+		__le64				*inode_lookup_array;
+		struct squashfs_cache		*inode_lookup_cache;
+	};
 	u64					inode_table;
 	u64					directory_table;
 	u64					directory_table_end;
 	u64					xattr_table;
+	u64					lookup_table;
+	u64					lookup_table_start;
 	unsigned int				block_size;
 	unsigned short				block_log;
 	long long				bytes_used;
@@ -79,5 +84,6 @@ struct squashfs_sb_info {
 	bool					panic_on_errors;
 	const struct squashfs_decompressor_thread_ops *thread_ops;
 	int					max_thread_num;
+	bool					lookup_table_is_cache;
 };
 #endif

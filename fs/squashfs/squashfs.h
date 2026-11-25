@@ -64,8 +64,9 @@ extern const struct squashfs_decompressor_thread_ops squashfs_decompressor_percp
 #endif
 
 /* export.c */
-extern __le64 *squashfs_read_inode_lookup_table(struct super_block *, u64, u64,
+extern int squashfs_read_inode_lookup_table(struct super_block *, u64, u64,
 				unsigned int);
+extern s64 squashfs_inode_lookup_start(struct super_block *sb, u32 ino_num);
 
 /* fragment.c */
 extern int squashfs_frag_lookup(struct super_block *sb, unsigned int fragment,
