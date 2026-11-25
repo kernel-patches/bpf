@@ -312,7 +312,7 @@ char *strstr(const char *haystack, const char *needle)
 
 	len_needle = strlen(needle);
 	if (!len_needle)
-		return NULL;
+		return (char *)haystack;
 
 	len_haystack = strlen(haystack);
 	while (len_haystack >= len_needle) {
