@@ -1153,6 +1153,18 @@ static void *map_key_from_value(struct bpf_map *map, void *value, u32 *arr_idx)
 	return (void *)value - round_up(map->key_size, 8);
 }
 
+/* Is the element that holds this value still in the map? */
+static bool bpf_map_value_is_linked(struct bpf_map *map, void *value)
+{
+	u32 idx;
+	void *key = map_key_from_value(map, value, &idx);
+
+	/* It's not a use of the element. Don't set the ref bit of LRU node. */
+	if (map->ops->map_lookup_elem_sys_only)
+		return map->ops->map_lookup_elem_sys_only(map, key) == value;
+	return map->ops->map_lookup_elem(map, key) == value;
+}
+
 enum bpf_async_type {
 	BPF_ASYNC_TYPE_TIMER = 0,
 	BPF_ASYNC_TYPE_WQ,
@@ -4869,9 +4881,26 @@ static struct bpf_task_work_ctx *bpf_task_work_acquire_ctx(struct bpf_task_work 
 	}
 
 	/*
+	 * The prog can still hold a value of an element that was deleted from the map.
+	 * bpf_task_work_cancel_and_free() is done with it and nothing stops a new callback
+	 * when the element is freed. The ctx is published and PENDING at this point: either
+	 * the lookup doesn't find the element or bpf_task_work_cancel_and_free() finds the ctx.
+	 * An idle ctx stays in the element until the element is reused or freed.
+	 */
+	if (!bpf_map_value_is_linked(map, (void *)tw - map->record->task_work_off)) {
+		(void)cmpxchg(&ctx->state, BPF_TW_PENDING, BPF_TW_STANDBY);
+		bpf_task_work_ctx_put(ctx);
+		return ERR_PTR(-ENOENT);
+	}
+
+	/* Order the lookup before the read of usercnt. See __bpf_async_set_callback(). */
+	smp_mb();
+
+	/*
 	 * If no process or bpffs is holding a reference to the map, no new callbacks should be
-	 * scheduled. This does not address any race or correctness issue, but rather is a policy
-	 * choice: dropping user references should stop everything.
+	 * scheduled. The full barrier above ensures that when the membership lookup observes
+	 * an element linked after the last user reference was dropped, the usercnt read below
+	 * cannot return the old nonzero count. The uref walk may have missed this element.
 	 */
 	if (!atomic64_read(&map->usercnt)) {
 		/* drop ref we just got for task_work callback itself */
@@ -4939,7 +4968,9 @@ release_prog:
  * @callback: pointer to BPF subprogram to call
  * @aux: pointer to bpf_prog_aux of the caller BPF program, implicitly set by the verifier
  *
- * Return: 0 if task work has been scheduled successfully, negative error code otherwise
+ * Return: 0 if the scheduling irq_work was queued, -ENOENT if the value is
+ * no longer the current map value at the membership check, -EBUSY for a busy
+ * context or zero usercnt, or another negative error code on failure.
  */
 __bpf_kfunc int bpf_task_work_schedule_signal(struct task_struct *task, struct bpf_task_work *tw,
 					      void *map__const_map, bpf_task_work_callback_t callback,
@@ -4957,7 +4988,7 @@ __bpf_kfunc int bpf_task_work_schedule_signal(struct task_struct *task, struct b
  * @callback: pointer to BPF subprogram to call
  * @aux: pointer to bpf_prog_aux of the caller BPF program, implicitly set by the verifier
  *
- * Return: 0 if task work has been scheduled successfully, negative error code otherwise
+ * Return: See bpf_task_work_schedule_signal().
  */
 __bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task, struct bpf_task_work *tw,
 					      void *map__const_map, bpf_task_work_callback_t callback,
