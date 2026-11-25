@@ -891,13 +891,6 @@ static const struct i2c_algorithm gmbus_algorithm = {
 	.functionality	= gmbus_func
 };
 
-static bool intel_gmbus_is_adapter(struct intel_connector *connector)
-{
-	struct i2c_adapter *adapter = connector->base.ddc;
-
-	return adapter && adapter->algo == &gmbus_algorithm;
-}
-
 static void gmbus_lock_bus(struct i2c_adapter *adapter,
 			   unsigned int flags)
 {
@@ -1139,7 +1132,7 @@ void intel_gmbus_connector_debugfs_add(struct intel_connector *connector)
 {
 	struct i2c_adapter *adapter = connector->base.ddc;
 
-	if (intel_gmbus_is_adapter(connector))
+	if (adapter && adapter->algo == &gmbus_algorithm)
 		debugfs_create_file("intel_force_bit_banging", 0644,
 				    connector->base.debugfs_entry, adapter,
 				    &intel_force_bit_banging_fops);
