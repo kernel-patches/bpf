@@ -1742,6 +1742,7 @@ skip_xdp:
 					ctx->skb = skb_xdp_pass;
 					goto sop_done;
 				}
+				ctx->skb = NULL;
 				need_flush |= act == XDP_REDIRECT;
 
 				goto rcd_done;
