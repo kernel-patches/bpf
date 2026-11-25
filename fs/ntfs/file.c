@@ -231,6 +231,10 @@ int ntfs_fileattr_set(const struct mnt_idmap *idmap, struct dentry *dentry,
 	if (fa->flags & ~allowed)
 		return -EOPNOTSUPP;
 
+	/* File flag updates would modify $Extend metadata. */
+	if (ni->mft_no == FILE_Extend || NInoExtendSys(ni))
+		return -EPERM;
+
 	forced_immutable = ntfs_is_forced_immutable(vi);
 	if (!(fa->flags & FS_IMMUTABLE_FL) && forced_immutable)
 		return -EPERM;

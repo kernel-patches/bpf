@@ -960,6 +960,15 @@ skip_attr_list_load:
 		goto unm_err_out;
 	}
 
+	/* Classify $Extend children regardless of their data or index layout. */
+	if (ni->mft_no >= FILE_first_user) {
+		err = ntfs_is_extended_system_file(ctx);
+		if (err < 0)
+			goto unm_err_out;
+		if (err > 0)
+			NInoSetExtendSys(ni);
+	}
+
 	if (ni->flags & FILE_ATTR_REPARSE_POINT) {
 		unsigned int mode;
 
@@ -1307,11 +1316,13 @@ no_data_attr_special_case:
 
 	/*
 	 * System files such as $Bitmap and $MFT are maintained by the driver
-	 * itself, and writing them from userspace corrupts the volume.
-	 * Always make them immutable regardless of the sys_immutable option.
-	 * Directories are skipped so the root and $Extend stay usable.
+	 * itself. Always make them immutable regardless of the sys_immutable
+	 * option. Protect $Extend and its system files too; modifying them
+	 * through the VFS can corrupt NTFS metadata.
 	 */
-	if (ni->mft_no < FILE_first_user && S_ISREG(vi->i_mode))
+	if (NInoExtendSys(ni) ||
+	    ni->mft_no == FILE_Extend ||
+	    (ni->mft_no < FILE_first_user && S_ISREG(vi->i_mode)))
 		vi->i_flags |= S_IMMUTABLE;
 
 	/*
