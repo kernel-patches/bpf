@@ -756,8 +756,8 @@ intel_dp_mst_toggle_hdcp_stream_select(struct intel_connector *connector,
 					 hdcp->stream_transcoder, enable,
 					 TRANS_DDI_HDCP_SELECT);
 	if (ret)
-		drm_err(display->drm, "%s HDCP stream select failed (%d)\n",
-			enable ? "Enable" : "Disable", ret);
+		drm_err(display->drm, "HDCP stream select %s failed (%pe)\n",
+			str_enable_disable(enable), ERR_PTR(ret));
 	return ret;
 }
 

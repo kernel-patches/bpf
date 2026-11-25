@@ -1572,8 +1572,8 @@ int intel_hdmi_hdcp_toggle_signalling(struct intel_digital_port *dig_port,
 					 cpu_transcoder, enable,
 					 TRANS_DDI_HDCP_SIGNALLING);
 	if (ret) {
-		drm_err(display->drm, "%s HDCP signalling failed (%d)\n",
-			enable ? "Enable" : "Disable", ret);
+		drm_err(display->drm, "HDCP signalling %s failed (%pe)\n",
+			str_enable_disable(enable), ERR_PTR(ret));
 		return ret;
 	}
 
