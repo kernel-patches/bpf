@@ -404,19 +404,19 @@ int snd_soc_component_regmap_get_val_bytes(struct snd_soc_component *component)
 EXPORT_SYMBOL_GPL(snd_soc_component_regmap_get_val_bytes);
 
 /**
- * snd_soc_component_regmap_cache_sync() - Sync the register cache with the hardware
+ * snd_soc_component_regcache_sync() - Sync the register cache with the hardware
  * @component: COMPONENT to sync
  *
  * Note: This function will call regcache_sync()
  */
-int snd_soc_component_regmap_cache_sync(struct snd_soc_component *component)
+int snd_soc_component_regcache_sync(struct snd_soc_component *component)
 {
 	if (!component->regmap)
 		return 0;
 
 	return regcache_sync(component->regmap);
 }
-EXPORT_SYMBOL_GPL(snd_soc_component_regmap_cache_sync);
+EXPORT_SYMBOL_GPL(snd_soc_component_regcache_sync);
 
 /**
  * snd_soc_component_regmap_async_complete() - Ensure asynchronous I/O has completed
