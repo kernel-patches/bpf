@@ -4028,7 +4028,8 @@ static int bnxt_alloc_rx_page_pool(struct bnxt *bp,
 				   struct bnxt_rx_ring_info *rxr,
 				   int numa_node)
 {
-	unsigned int agg_size_fac = rxr->rx_page_size / BNXT_RX_PAGE_SIZE;
+	unsigned int agg_size_fac = max(PAGE_SIZE, rxr->rx_page_size) /
+				    BNXT_RX_PAGE_SIZE;
 	const unsigned int rx_size_fac = PAGE_SIZE / SZ_4K;
 	struct page_pool_params pp = { 0 };
 	struct page_pool *pool;
