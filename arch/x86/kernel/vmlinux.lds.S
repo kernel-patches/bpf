@@ -21,6 +21,22 @@
 #define EMITS_PT_NOTE
 #define RO_EXCEPTION_TABLE_ALIGN	16
 
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+#define ARCH_RODATA_SECTIONS						\
+	. = ALIGN(4);							\
+	.eh_frame_hdr : AT(ADDR(.eh_frame_hdr) - LOAD_OFFSET) {		\
+		__start_eh_frame_hdr = .;				\
+		*(.eh_frame_hdr)					\
+		__stop_eh_frame_hdr = .;				\
+	}								\
+	. = ALIGN(8);							\
+	.eh_frame : AT(ADDR(.eh_frame) - LOAD_OFFSET) {			\
+		__start_eh_frame = .;					\
+		*(.eh_frame) *(.eh_frame.*)				\
+		__stop_eh_frame = .;					\
+	}
+#endif
+
 #include <asm-generic/vmlinux.lds.h>
 #include <asm/asm-offsets.h>
 #include <asm/thread_info.h>

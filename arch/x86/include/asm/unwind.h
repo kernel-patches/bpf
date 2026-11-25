@@ -20,7 +20,7 @@ struct unwind_state {
 	struct llist_node *kr_cur;
 #endif
 	bool error;
-#if defined(CONFIG_UNWINDER_ORC)
+#if defined(CONFIG_UNWINDER_ORC) || defined(CONFIG_UNWINDER_DWARF_CFI)
 	bool signal, full_regs;
 	unsigned long sp, bp, ip;
 	struct pt_regs *regs, *prev_regs;
@@ -64,7 +64,8 @@ void unwind_start(struct unwind_state *state, struct task_struct *task,
 	__unwind_start(state, task, regs, first_frame);
 }
 
-#if defined(CONFIG_UNWINDER_ORC) || defined(CONFIG_UNWINDER_FRAME_POINTER)
+#if defined(CONFIG_UNWINDER_ORC) || defined(CONFIG_UNWINDER_DWARF_CFI) || \
+	defined(CONFIG_UNWINDER_FRAME_POINTER)
 /*
  * If 'partial' returns true, only the iret frame registers are valid.
  */
@@ -75,7 +76,7 @@ static inline struct pt_regs *unwind_get_entry_regs(struct unwind_state *state,
 		return NULL;
 
 	if (partial) {
-#ifdef CONFIG_UNWINDER_ORC
+#if defined(CONFIG_UNWINDER_ORC) || defined(CONFIG_UNWINDER_DWARF_CFI)
 		*partial = !state->full_regs;
 #else
 		*partial = false;
@@ -92,7 +93,7 @@ static inline struct pt_regs *unwind_get_entry_regs(struct unwind_state *state,
 }
 #endif
 
-#ifdef CONFIG_UNWINDER_ORC
+#if defined(CONFIG_UNWINDER_ORC) || defined(CONFIG_UNWINDER_DWARF_CFI)
 void unwind_init(void);
 void unwind_module_init(struct module *mod, void *orc_ip, size_t orc_ip_size,
 			void *orc, size_t orc_size);
@@ -101,6 +102,12 @@ static inline void unwind_init(void) {}
 static inline
 void unwind_module_init(struct module *mod, void *orc_ip, size_t orc_ip_size,
 			void *orc, size_t orc_size) {}
+#endif
+
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+void unwind_module_cleanup(struct module *mod);
+#else
+static inline void unwind_module_cleanup(struct module *mod) {}
 #endif
 
 static inline

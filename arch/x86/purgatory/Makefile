@@ -35,6 +35,7 @@ PURGATORY_CFLAGS := -mcmodel=small -ffreestanding -fno-zero-initialized-in-bss -
 PURGATORY_CFLAGS += -fpic -fvisibility=hidden
 PURGATORY_CFLAGS += $(DISABLE_KSTACK_ERASE) -DDISABLE_BRANCH_PROFILING
 PURGATORY_CFLAGS += -fno-stack-protector
+PURGATORY_CFLAGS += -fno-unwind-tables -fno-asynchronous-unwind-tables
 PURGATORY_CFLAGS += -D__DISABLE_EXPORTS -D__NO_FORTIFY
 
 # Default KBUILD_CFLAGS can have -pg option set when FTRACE is enabled. That

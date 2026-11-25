@@ -208,7 +208,14 @@ endif
 # Workaround for a gcc prelease that unfortunately was shipped in a suse release
 KBUILD_CFLAGS += -Wno-sign-compare
 #
+ifdef CONFIG_UNWINDER_DWARF_CFI
+KBUILD_CFLAGS += -fasynchronous-unwind-tables
+KBUILD_RUSTFLAGS += -Cforce-unwind-tables=y -Zuse-sync-unwind=n
+KBUILD_RUSTFLAGS += $(if $(call rustc-min-version,109800),,-Zllvm_module_flag=uwtable:u32:2:max)
+LDFLAGS_vmlinux += --eh-frame-hdr
+else
 KBUILD_CFLAGS += -fno-asynchronous-unwind-tables
+endif
 
 # Avoid indirect branches in kernel to deal with Spectre
 ifdef CONFIG_MITIGATION_RETPOLINE

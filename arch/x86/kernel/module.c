@@ -228,7 +228,7 @@ int module_finalize(const Elf_Ehdr *hdr,
 		    struct module *me)
 {
 	const Elf_Shdr *s, *alt = NULL,
-		*orc = NULL, *orc_ip = NULL,
+		*orc = NULL, *orc_ip = NULL, *eh_frame = NULL,
 		*retpolines = NULL, *returns = NULL, *ibt_endbr = NULL,
 		*calls = NULL, *cfi = NULL;
 	char *secstrings = (void *)hdr + sechdrs[hdr->e_shstrndx].sh_offset;
@@ -240,6 +240,8 @@ int module_finalize(const Elf_Ehdr *hdr,
 			orc = s;
 		if (!strcmp(".orc_unwind_ip", secstrings + s->sh_name))
 			orc_ip = s;
+		if (!strcmp(".eh_frame", secstrings + s->sh_name))
+			eh_frame = s;
 		if (!strcmp(".retpoline_sites", secstrings + s->sh_name))
 			retpolines = s;
 		if (!strcmp(".return_sites", secstrings + s->sh_name))
@@ -299,14 +301,19 @@ int module_finalize(const Elf_Ehdr *hdr,
 		apply_seal_endbr(iseg, iseg + ibt_endbr->sh_size);
 	}
 
-	if (orc && orc_ip)
+	if (IS_ENABLED(CONFIG_UNWINDER_ORC) && orc && orc_ip)
 		unwind_module_init(me, (void *)orc_ip->sh_addr, orc_ip->sh_size,
 				   (void *)orc->sh_addr, orc->sh_size);
+	if (IS_ENABLED(CONFIG_UNWINDER_DWARF_CFI) && eh_frame &&
+	    (eh_frame->sh_flags & SHF_ALLOC) && eh_frame->sh_addr)
+		unwind_module_init(me, /*orc_ip=*/NULL, /*orc_ip_size=*/0,
+				   (void *)eh_frame->sh_addr, eh_frame->sh_size);
 
 	return 0;
 }
 
 void module_arch_cleanup(struct module *mod)
 {
+	unwind_module_cleanup(mod);
 	its_free_mod(mod);
 }

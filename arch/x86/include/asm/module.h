@@ -12,11 +12,16 @@ struct its_array {
 #endif
 };
 
+struct mod_dwarf_cfi_index;
+
 struct mod_arch_specific {
 #ifdef CONFIG_UNWINDER_ORC
 	unsigned int num_orcs;
 	int *orc_unwind_ip;
 	struct orc_entry *orc_unwind;
+#endif
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+	struct mod_dwarf_cfi_index __rcu *dwarf_cfi_index;
 #endif
 	struct its_array its_pages;
 };

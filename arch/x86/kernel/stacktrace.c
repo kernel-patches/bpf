@@ -49,10 +49,12 @@ int arch_stack_walk_reliable(stack_trace_consume_fn consume_entry,
 			/*
 			 * Kernel mode registers on the stack indicate an
 			 * in-kernel interrupt or exception (e.g., preemption
-			 * or a page fault), which can make frame pointers
-			 * unreliable.
+			 * or a page fault), which can make frame pointers or
+			 * compiler-generated DWARF CFI (across unannotated
+			 * inline assembly stack adjustments) unreliable.
 			 */
-			if (IS_ENABLED(CONFIG_FRAME_POINTER))
+			if (IS_ENABLED(CONFIG_FRAME_POINTER) ||
+			    IS_ENABLED(CONFIG_UNWINDER_DWARF_CFI))
 				return -EINVAL;
 		}
 
