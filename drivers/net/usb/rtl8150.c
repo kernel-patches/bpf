@@ -97,6 +97,7 @@ enum rtl8150_usb_ep {
 #define	RX_REG_SET		1
 #define	RTL8150_UNPLUG		2
 #define	RX_URB_FAIL		3
+#define RTL8150_QUIET		4
 
 /* Define these values to match your device */
 #define	VENDOR_ID_REALTEK		0x0bda
@@ -360,11 +361,11 @@ static void terminate_all_urbs(rtl8150_t *dev)
 	usb_poison_urb(dev->intr_urb);
 }
 
-static void unlink_all_urbs(rtl8150_t * dev)
+static void enable_all_urbs(rtl8150_t *dev)
 {
-	usb_kill_urb(dev->rx_urb);
-	usb_kill_urb(dev->tx_urb);
-	usb_kill_urb(dev->intr_urb);
+	usb_unpoison_urb(dev->rx_urb);
+	usb_unpoison_urb(dev->tx_urb);
+	usb_unpoison_urb(dev->intr_urb);
 }
 
 static inline struct sk_buff *pull_skb(rtl8150_t *dev)
@@ -453,7 +454,8 @@ goon:
 
 	return;
 resched:
-	tasklet_schedule(&dev->tl);
+	if (!test_bit(RTL8150_QUIET, &dev->flags))
+		tasklet_schedule(&dev->tl);
 }
 
 static void write_bulk_callback(struct urb *urb)
@@ -536,7 +538,7 @@ static int rtl8150_suspend(struct usb_interface *intf, pm_message_t message)
 	rtl8150_t *dev = usb_get_intfdata(intf);
 
 	spin_lock_irq(&dev->rx_pool_lock);
-	set_bit(RTL8150_UNPLUG, &dev->flags);
+	set_bit(RTL8150_QUIET, &dev->flags);
 	spin_unlock_irq(&dev->rx_pool_lock);
 
 	netif_device_detach(dev->netdev);
@@ -552,7 +554,7 @@ static int rtl8150_resume(struct usb_interface *intf)
 	rtl8150_t *dev = usb_get_intfdata(intf);
 
 	spin_lock_irq(&dev->rx_pool_lock);
-	clear_bit(RTL8150_UNPLUG, &dev->flags);
+	clear_bit(RTL8150_QUIET, &dev->flags);
 	spin_unlock_irq(&dev->rx_pool_lock);
 
 	usb_unpoison_urb(dev->rx_urb);
@@ -636,7 +638,8 @@ try_again:
 	return;
 tlsched:
 	spin_lock_irq(&dev->rx_pool_lock);
-	if (!test_bit(RTL8150_UNPLUG, &dev->flags))
+	if (!test_bit(RTL8150_UNPLUG, &dev->flags) &&
+			!test_bit(RTL8150_QUIET, &dev->flags))
 		tasklet_schedule(&dev->tl);
 	spin_unlock_irq(&dev->rx_pool_lock);
 }
@@ -805,9 +808,12 @@ static int rtl8150_close(struct net_device *netdev)
 	rtl8150_t *dev = netdev_priv(netdev);
 
 	netif_stop_queue(netdev);
+	set_bit(RTL8150_QUIET, &dev->flags);
 	if (!test_bit(RTL8150_UNPLUG, &dev->flags))
 		disable_net_traffic(dev);
-	unlink_all_urbs(dev);
+	terminate_all_urbs(dev);
+	tasklet_kill(&dev->tl);
+	enable_all_urbs(dev);
 
 	return 0;
 }
