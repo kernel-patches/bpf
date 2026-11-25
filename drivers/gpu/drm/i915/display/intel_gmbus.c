@@ -1023,9 +1023,8 @@ static void intel_gmbus_force_bit_unlocked(struct i2c_adapter *adapter, bool for
 	lockdep_assert_held(&display->gmbus.mutex);
 
 	bus->force_bit += force_bit ? 1 : -1;
-	drm_dbg_kms(display->drm,
-		    "%sabling bit-banging on %s. force bit now %d\n",
-		    force_bit ? "en" : "dis", adapter->name,
+	drm_dbg_kms(display->drm, "%s bit-banging on %s. force bit now %d\n",
+		    str_enable_disable(force_bit), adapter->name,
 		    bus->force_bit);
 }
 
