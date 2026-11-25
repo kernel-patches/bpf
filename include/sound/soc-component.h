@@ -333,14 +333,14 @@ int snd_soc_component_stream_event(struct snd_soc_component *component,
 int snd_soc_component_set_bias_level(struct snd_soc_component *component,
 				     enum snd_soc_bias_level level);
 
-int snd_soc_component_regmap_get_val_bytes(struct snd_soc_component *component);
-void snd_soc_component_regmap_async_complete(struct snd_soc_component *component);
-int snd_soc_component_regcache_sync(struct snd_soc_component *component);
 #ifdef CONFIG_REGMAP
 void snd_soc_component_regmap_init(struct snd_soc_component *component,
 				   struct regmap *regmap);
 void snd_soc_component_regmap_exit(struct snd_soc_component *component);
 #endif
+int snd_soc_component_regmap_get_val_bytes(struct snd_soc_component *component);
+void snd_soc_component_regmap_async_complete(struct snd_soc_component *component);
+int snd_soc_component_regcache_sync(struct snd_soc_component *component);
 
 int snd_soc_component_fixup_controls(struct snd_soc_component *component);
 int snd_soc_component_add_controls(struct snd_soc_component *component,
