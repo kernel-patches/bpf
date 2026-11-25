@@ -27,7 +27,6 @@
 
 #include "clockdomain.h"
 #include "common.h"
-#include "common-board-devices.h"
 #include "control.h"
 #include "omap_device.h"
 #include "omap-secure.h"
@@ -41,15 +40,6 @@ struct pdata_init {
 };
 
 static struct of_dev_auxdata omap_auxdata_lookup[];
-
-#ifdef CONFIG_MACH_NOKIA_N8X0
-static void __init omap2420_n8x0_legacy_init(void)
-{
-	omap_auxdata_lookup[0].platform_data = n8x0_legacy_init();
-}
-#else
-#define omap2420_n8x0_legacy_init	NULL
-#endif
 
 #ifdef CONFIG_ARCH_OMAP3
 /*
@@ -431,26 +421,9 @@ static void __init omap3_mcbsp_init(void)
 static void __init omap3_mcbsp_init(void) {}
 #endif
 
-/*
- * Few boards still need auxdata populated before we populate
- * the dev entries in of_platform_populate().
- */
-static struct pdata_init auxdata_quirks[] __initdata = {
-#ifdef CONFIG_SOC_OMAP2420
-	{ "nokia,n800", omap2420_n8x0_legacy_init, },
-	{ "nokia,n810", omap2420_n8x0_legacy_init, },
-	{ "nokia,n810-wimax", omap2420_n8x0_legacy_init, },
-#endif
-	{ /* sentinel */ },
-};
-
 struct omap_sr_data __maybe_unused omap_sr_pdata[OMAP_SR_NR];
 
 static struct of_dev_auxdata omap_auxdata_lookup[] = {
-#ifdef CONFIG_MACH_NOKIA_N8X0
-	OF_DEV_AUXDATA("ti,omap2420-mmc", 0x4809c000, "mmci-omap.0", NULL),
-	OF_DEV_AUXDATA("menelaus", 0x72, "1-0072", &n8x0_menelaus_platform_data),
-#endif
 #ifdef CONFIG_ARCH_OMAP3
 	OF_DEV_AUXDATA("ti,omap2-iommu", 0x5d000000, "5d000000.mmu",
 		       &omap3_iommu_pdata),
@@ -557,16 +530,14 @@ pdata_quirks_init_clocks(const struct of_device_id *omap_dt_match_table)
 void __init pdata_quirks_init(const struct of_device_id *omap_dt_match_table)
 {
 	/*
-	 * We still need this for omap2420 and omap3 PM to work, others are
+	 * We still need this for omap3 PM to work, others are
 	 * using drivers/misc/sram.c already.
 	 */
-	if (of_machine_is_compatible("ti,omap2420") ||
-	    of_machine_is_compatible("ti,omap3"))
+	if (IS_ENABLED(CONFIG_ARCH_OMAP3) &&
+	    of_machine_is_compatible("ti,omap3")) {
 		omap_sdrc_init(NULL, NULL);
-
-	if (of_machine_is_compatible("ti,omap3"))
 		omap3_mcbsp_init();
-	pdata_quirks_check(auxdata_quirks);
+	}
 
 	pdata_quirks_init_clocks(omap_dt_match_table);
 

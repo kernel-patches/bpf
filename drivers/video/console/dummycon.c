@@ -18,15 +18,9 @@
  *  Dummy console driver
  */
 
-#if defined(CONFIG_ARCH_FOOTBRIDGE) && defined(CONFIG_VGA_CONSOLE)
-#include <asm/vga.h>
-#define DUMMY_COLUMNS	vgacon_screen_info.orig_video_cols
-#define DUMMY_ROWS	vgacon_screen_info.orig_video_lines
-#else
 /* set by Kconfig. Use 80x25 for 640x480 and 160x64 for 1280x1024 */
 #define DUMMY_COLUMNS	CONFIG_DUMMY_CONSOLE_COLUMNS
 #define DUMMY_ROWS	CONFIG_DUMMY_CONSOLE_ROWS
-#endif
 
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER
 /* These are both protected by the console_lock */

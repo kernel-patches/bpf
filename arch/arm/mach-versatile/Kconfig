@@ -109,16 +109,6 @@ config INTEGRATOR_CM1026EJS
 	depends on ARCH_MULTI_V5
 	select CPU_ARM1026
 
-config INTEGRATOR_CM1136JFS
-	bool "Integrator/CM1136JF-S core module (DEPRECATED)"
-	depends on ARCH_INTEGRATOR_AP
-	depends on ARCH_MULTI_V6
-	depends on !SMP
-	select CPU_ARM1136R0
-	help
-	  This machine is scheduled for removal in early 2027,
-	  since it uses the ARM1136r0 CPU revision.
-
 config ARCH_INTEGRATOR_CP
 	bool "Support Integrator/CP platform"
 	depends on ARCH_MULTI_V5 || ARCH_MULTI_V6
