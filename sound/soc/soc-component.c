@@ -386,7 +386,7 @@ int snd_soc_component_of_xlate_dai_name(struct snd_soc_component *component,
 	return -ENOTSUPP;
 }
 
-int snd_soc_component_regmap_val_bytes(struct snd_soc_component *component)
+int snd_soc_component_regmap_get_val_bytes(struct snd_soc_component *component)
 {
 	int val_bytes;
 
@@ -401,7 +401,7 @@ int snd_soc_component_regmap_val_bytes(struct snd_soc_component *component)
 
 	return val_bytes;
 }
-EXPORT_SYMBOL_GPL(snd_soc_component_regmap_val_bytes);
+EXPORT_SYMBOL_GPL(snd_soc_component_regmap_get_val_bytes);
 
 /**
  * snd_soc_component_regmap_cache_sync() - Sync the register cache with the hardware

@@ -333,7 +333,7 @@ int snd_soc_component_stream_event(struct snd_soc_component *component,
 int snd_soc_component_set_bias_level(struct snd_soc_component *component,
 				     enum snd_soc_bias_level level);
 
-int snd_soc_component_regmap_val_bytes(struct snd_soc_component *component);
+int snd_soc_component_regmap_get_val_bytes(struct snd_soc_component *component);
 int snd_soc_component_regmap_cache_sync(struct snd_soc_component *component);
 void snd_soc_component_regmap_async_complete(struct snd_soc_component *component);
 #ifdef CONFIG_REGMAP
@@ -448,6 +448,7 @@ void snd_soc_pcm_component_delay(struct snd_pcm_substream *substream,
 #define snd_soc_component_init_regmap			snd_soc_component_regmap_init
 #define snd_soc_component_exit_regmap			snd_soc_component_regmap_exit
 #define snd_soc_component_cache_sync			snd_soc_component_regmap_cache_sync
+#define snd_soc_component_regmap_val_bytes		snd_soc_component_regmap_get_val_bytes
 #define snd_soc_component_async_complete		snd_soc_component_regmap_async_complete
 #define snd_soc_lookup_component_nolocked		snd_soc_component_lookup_nolock
 #define snd_soc_lookup_component			snd_soc_component_lookup
