@@ -92,6 +92,12 @@ struct dentry *snd_soc_component_to_debugfs_root(struct snd_soc_component *compo
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_to_debugfs_root);
 
+struct regmap *snd_soc_component_to_regmap(struct snd_soc_component *component)
+{
+	return component->regmap;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_regmap);
+
 unsigned int snd_soc_component_active(struct snd_soc_component *component)
 {
 	return component->active;
