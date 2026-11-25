@@ -1769,6 +1769,8 @@ void idpf_init_task(struct work_struct *work)
 	return;
 
 unwind_vports:
+	idpf_ptp_release(adapter);
+
 	if (default_vport) {
 		for (index = 0; index < adapter->max_vports; index++) {
 			if (adapter->vports[index])
@@ -1782,7 +1784,6 @@ unwind_vports:
 		cancel_delayed_work_sync(&adapter->serv_task);
 		cancel_delayed_work_sync(&adapter->mbx_task);
 	}
-	idpf_ptp_release(adapter);
 
 	clear_bit(IDPF_HR_RESET_IN_PROG, adapter->flags);
 }
