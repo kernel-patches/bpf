@@ -11,9 +11,9 @@
 
 static void devm_component_release(struct device *dev, void *res)
 {
-	const struct snd_soc_component_driver **cmpnt_drv = res;
+	struct snd_soc_component **component = res;
 
-	snd_soc_unregister_component_by_driver(dev, *cmpnt_drv);
+	snd_soc_component_unregister(*component);
 }
 
 /**
@@ -30,21 +30,32 @@ int devm_snd_soc_register_component(struct device *dev,
 			 const struct snd_soc_component_driver *cmpnt_drv,
 			 struct snd_soc_dai_driver *dai_drv, int num_dai)
 {
-	const struct snd_soc_component_driver **ptr;
-	int ret;
+	const struct snd_soc_component **ptr;
+	struct snd_soc_component *component;
+	int ret = -ENOMEM;
+
+	component = snd_soc_component_new(dev, NULL, cmpnt_drv);
+	if (IS_ERR(component))
+		goto err;
 
 	ptr = devres_alloc(devm_component_release, sizeof(*ptr), GFP_KERNEL);
 	if (!ptr)
-		return -ENOMEM;
+		goto free_component;
 
-	ret = snd_soc_register_component(dev, cmpnt_drv, dai_drv, num_dai);
-	if (ret == 0) {
-		*ptr = cmpnt_drv;
-		devres_add(dev, ptr);
-	} else {
-		devres_free(ptr);
-	}
+	ret = snd_soc_component_register(component, dai_drv, num_dai);
+	if (ret < 0)
+		goto free_devres;
 
+	*ptr = component;
+	devres_add(dev, ptr);
+
+	return ret;
+
+free_devres:
+	devres_free(ptr);
+free_component:
+	devm_kfree(dev, component);
+err:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(devm_snd_soc_register_component);
