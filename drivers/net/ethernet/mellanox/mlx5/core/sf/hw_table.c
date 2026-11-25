@@ -37,7 +37,7 @@ struct mlx5_sf_hw_table {
 };
 
 static struct mlx5_sf_hwc_table *
-mlx5_sf_controller_to_hwc(struct mlx5_core_dev *dev, u32 controller)
+mlx5_sf_controller_to_hwc(struct mlx5_core_dev *dev, u32 controller, u32 pfnum)
 {
 	struct mlx5_sf_hw_table *table = dev->priv.sf_hw_table;
 	int i;
@@ -50,11 +50,12 @@ mlx5_sf_controller_to_hwc(struct mlx5_core_dev *dev, u32 controller)
 	return &table->hwc[!!controller];
 }
 
-u16 mlx5_sf_sw_to_hw_id(struct mlx5_core_dev *dev, u32 controller, u16 sw_id)
+u16 mlx5_sf_sw_to_hw_id(struct mlx5_core_dev *dev, u32 controller, u32 pfnum,
+			u16 sw_id)
 {
 	struct mlx5_sf_hwc_table *hwc;
 
-	hwc = mlx5_sf_controller_to_hwc(dev, controller);
+	hwc = mlx5_sf_controller_to_hwc(dev, controller, pfnum);
 	return hwc->start_fn_id + sw_id;
 }
 
@@ -79,14 +80,14 @@ mlx5_sf_table_fn_to_hwc(struct mlx5_sf_hw_table *table, u16 fn_id)
 
 static int mlx5_sf_hw_table_id_alloc(struct mlx5_core_dev *dev,
 				     struct mlx5_sf_hw_table *table,
-				     u32 controller,
+				     u32 controller, u32 pfnum,
 				     u32 usr_sfnum)
 {
 	struct mlx5_sf_hwc_table *hwc;
 	int free_idx = -1;
 	int i;
 
-	hwc = mlx5_sf_controller_to_hwc(dev, controller);
+	hwc = mlx5_sf_controller_to_hwc(dev, controller, pfnum);
 	if (!hwc->sfs)
 		return -ENOSPC;
 
@@ -110,16 +111,17 @@ static int mlx5_sf_hw_table_id_alloc(struct mlx5_core_dev *dev,
 
 static void mlx5_sf_hw_table_id_free(struct mlx5_core_dev *dev,
 				     struct mlx5_sf_hw_table *table,
-				     u32 controller, int id)
+				     u32 controller, u32 pfnum, int id)
 {
 	struct mlx5_sf_hwc_table *hwc;
 
-	hwc = mlx5_sf_controller_to_hwc(dev, controller);
+	hwc = mlx5_sf_controller_to_hwc(dev, controller, pfnum);
 	hwc->sfs[id].allocated = false;
 	hwc->sfs[id].pending_delete = false;
 }
 
-int mlx5_sf_hw_table_sf_alloc(struct mlx5_core_dev *dev, u32 controller, u32 usr_sfnum)
+int mlx5_sf_hw_table_sf_alloc(struct mlx5_core_dev *dev, u32 controller,
+			      u32 pfnum, u32 usr_sfnum)
 {
 	struct mlx5_sf_hw_table *table = dev->priv.sf_hw_table;
 	u16 hw_fn_id;
@@ -130,13 +132,14 @@ int mlx5_sf_hw_table_sf_alloc(struct mlx5_core_dev *dev, u32 controller, u32 usr
 		return -EOPNOTSUPP;
 
 	mutex_lock(&table->table_lock);
-	sw_id = mlx5_sf_hw_table_id_alloc(dev, table, controller, usr_sfnum);
+	sw_id = mlx5_sf_hw_table_id_alloc(dev, table, controller, pfnum,
+					  usr_sfnum);
 	if (sw_id < 0) {
 		err = sw_id;
 		goto exist_err;
 	}
 
-	hw_fn_id = mlx5_sf_sw_to_hw_id(dev, controller, sw_id);
+	hw_fn_id = mlx5_sf_sw_to_hw_id(dev, controller, pfnum, sw_id);
 	err = mlx5_cmd_alloc_sf(dev, hw_fn_id);
 	if (err)
 		goto err;
@@ -161,21 +164,22 @@ int mlx5_sf_hw_table_sf_alloc(struct mlx5_core_dev *dev, u32 controller, u32 usr
 vhca_err:
 	mlx5_cmd_dealloc_sf(dev, hw_fn_id);
 err:
-	mlx5_sf_hw_table_id_free(dev, table, controller, sw_id);
+	mlx5_sf_hw_table_id_free(dev, table, controller, pfnum, sw_id);
 exist_err:
 	mutex_unlock(&table->table_lock);
 	return err;
 }
 
-void mlx5_sf_hw_table_sf_free(struct mlx5_core_dev *dev, u32 controller, u16 id)
+void mlx5_sf_hw_table_sf_free(struct mlx5_core_dev *dev, u32 controller,
+			      u32 pfnum, u16 id)
 {
 	struct mlx5_sf_hw_table *table = dev->priv.sf_hw_table;
 	u16 hw_fn_id;
 
 	mutex_lock(&table->table_lock);
-	hw_fn_id = mlx5_sf_sw_to_hw_id(dev, controller, id);
+	hw_fn_id = mlx5_sf_sw_to_hw_id(dev, controller, pfnum, id);
 	mlx5_cmd_dealloc_sf(dev, hw_fn_id);
-	mlx5_sf_hw_table_id_free(dev, table, controller, id);
+	mlx5_sf_hw_table_id_free(dev, table, controller, pfnum, id);
 	mutex_unlock(&table->table_lock);
 }
 
@@ -188,7 +192,8 @@ static void mlx5_sf_hw_table_hwc_sf_free(struct mlx5_core_dev *dev,
 	trace_mlx5_sf_hwc_free(dev, hwc->start_fn_id + idx);
 }
 
-void mlx5_sf_hw_table_sf_deferred_free(struct mlx5_core_dev *dev, u32 controller, u16 id)
+void mlx5_sf_hw_table_sf_deferred_free(struct mlx5_core_dev *dev,
+				       u32 controller, u32 pfnum, u16 id)
 {
 	struct mlx5_sf_hw_table *table = dev->priv.sf_hw_table;
 	u32 out[MLX5_ST_SZ_DW(query_vhca_state_out)] = {};
@@ -197,8 +202,8 @@ void mlx5_sf_hw_table_sf_deferred_free(struct mlx5_core_dev *dev, u32 controller
 	u8 state;
 	int err;
 
-	hw_fn_id = mlx5_sf_sw_to_hw_id(dev, controller, id);
-	hwc = mlx5_sf_controller_to_hwc(dev, controller);
+	hw_fn_id = mlx5_sf_sw_to_hw_id(dev, controller, pfnum, id);
+	hwc = mlx5_sf_controller_to_hwc(dev, controller, pfnum);
 	mutex_lock(&table->table_lock);
 	err = mlx5_cmd_query_vhca_state(dev, hw_fn_id, out, sizeof(out));
 	if (err)

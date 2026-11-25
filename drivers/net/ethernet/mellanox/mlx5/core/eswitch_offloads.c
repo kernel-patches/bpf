@@ -2918,11 +2918,14 @@ void mlx5_esw_offloads_cleanup_pf_vf_rep(struct mlx5_eswitch *esw, struct mlx5_v
 	mlx5_esw_offloads_pf_vf_devlink_port_cleanup(esw, vport);
 }
 
-int mlx5_esw_offloads_init_sf_rep(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
+int mlx5_esw_offloads_init_sf_rep(struct mlx5_eswitch *esw,
+				  struct mlx5_vport *vport,
 				  struct mlx5_devlink_port *dl_port,
-				  u32 controller, u32 sfnum)
+				  u32 controller, u32 pfnum, u32 sfnum)
 {
-	return mlx5_esw_offloads_sf_devlink_port_init(esw, vport, dl_port, controller, sfnum);
+	return mlx5_esw_offloads_sf_devlink_port_init(esw, vport, dl_port,
+						      controller, pfnum,
+						      sfnum);
 }
 
 void mlx5_esw_offloads_cleanup_sf_rep(struct mlx5_eswitch *esw, struct mlx5_vport *vport)
