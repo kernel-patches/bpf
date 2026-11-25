@@ -285,9 +285,9 @@ static bool smc_pnet_apply_smcd(struct smcd_dev *smcd_dev, char *pnet_name)
  */
 static bool smc_pnetid_valid(const char *pnet_name, char *pnetid)
 {
-	char *bf = skip_spaces(pnet_name);
+	const char *bf = skip_spaces(pnet_name);
 	size_t len = strlen(bf);
-	char *end = bf + len;
+	const char *end = bf + len;
 
 	if (!len)
 		return false;
