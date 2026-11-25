@@ -43,6 +43,12 @@ const char *snd_soc_component_name(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_name);
 
+const char *snd_soc_component_name_prefix(struct snd_soc_component *component)
+{
+	return component->name_prefix;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_name_prefix);
+
 void snd_soc_component_set_priv(struct snd_soc_component *component, void *priv)
 {
 	component->priv = priv;

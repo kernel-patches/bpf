@@ -289,6 +289,7 @@ int devm_snd_soc_register_component(struct device *dev,
 void snd_soc_unregister_component(struct device *dev);
 
 const char *snd_soc_component_name(struct snd_soc_component *component);
+const char *snd_soc_component_name_prefix(struct snd_soc_component *component);
 
 void snd_soc_component_set_priv(struct snd_soc_component *component, void *priv);
 void *snd_soc_component_to_priv(struct snd_soc_component *component);
