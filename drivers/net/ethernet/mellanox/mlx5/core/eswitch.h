@@ -370,6 +370,9 @@ struct mlx5_esw_functions {
 	bool			has_spf_sfs;
 	struct mlx5_esw_spf	*spfs;
 	int			num_spfs;
+	u32			controller_num;
+	u32			phys_port_cnum;
+	u32			self_pf_pfnum;
 };
 
 enum {
@@ -916,7 +919,10 @@ int mlx5_esw_spf_get_host_number(struct mlx5_core_dev *dev, int spf_idx,
 				 u16 *host_number);
 u16 mlx5_esw_get_hpf_host_number(struct mlx5_core_dev *dev);
 u16 mlx5_esw_get_hpf_pf_num(struct mlx5_core_dev *dev);
-u16 mlx5_esw_sf_controller_to_pfnum(struct mlx5_core_dev *dev, u32 controller);
+u32 mlx5_esw_get_self_pf_ctrl_num(struct mlx5_eswitch *esw);
+u16 mlx5_esw_get_self_pf_pfnum(struct mlx5_eswitch *esw);
+bool mlx5_esw_sf_controller_to_pfnum_valid(struct mlx5_core_dev *dev,
+					   u32 controller, u32 pfnum);
 bool mlx5_esw_has_spf_sfs(struct mlx5_core_dev *dev);
 
 int mlx5_esw_vport_vhca_id_map(struct mlx5_eswitch *esw,

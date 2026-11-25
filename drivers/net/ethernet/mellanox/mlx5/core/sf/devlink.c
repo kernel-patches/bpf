@@ -237,6 +237,18 @@ int mlx5_devlink_sf_port_fn_state_set(struct devlink_port *dl_port,
 	return mlx5_sf_state_set(dev, table, sf, state, extack);
 }
 
+static u32
+mlx5_sf_get_self_controller(struct mlx5_eswitch *esw,
+			    const struct devlink_port_new_attrs *new_attr)
+{
+	struct mlx5_esw_functions *esw_funcs = &esw->esw_funcs;
+
+	if (!new_attr->controller_valid && esw_funcs->phys_port_cnum)
+		return esw_funcs->phys_port_cnum;
+
+	return new_attr->controller;
+}
+
 static int mlx5_sf_add(struct mlx5_core_dev *dev, struct mlx5_sf_table *table,
 		       const struct devlink_port_new_attrs *new_attr,
 		       struct netlink_ext_ack *extack,
@@ -244,9 +256,11 @@ static int mlx5_sf_add(struct mlx5_core_dev *dev, struct mlx5_sf_table *table,
 {
 	struct mlx5_eswitch *esw = dev->priv.eswitch;
 	struct mlx5_sf *sf;
+	u32 controller;
 	int err;
 
-	sf = mlx5_sf_alloc(table, esw, new_attr->controller, new_attr->pfnum,
+	controller = mlx5_sf_get_self_controller(esw, new_attr);
+	sf = mlx5_sf_alloc(table, esw, controller, new_attr->pfnum,
 			   new_attr->sfnum, extack);
 	if (IS_ERR(sf))
 		return PTR_ERR(sf);
@@ -254,7 +268,7 @@ static int mlx5_sf_add(struct mlx5_core_dev *dev, struct mlx5_sf_table *table,
 	mlx5_esw_reps_block(esw);
 	err = mlx5_eswitch_load_sf_vport(esw, sf->hw_fn_id,
 					 MLX5_VPORT_UC_ADDR_CHANGE,
-					 &sf->dl_port, new_attr->controller,
+					 &sf->dl_port, controller,
 					 new_attr->pfnum,
 					 new_attr->sfnum);
 	mlx5_esw_reps_unblock(esw);
@@ -274,6 +288,8 @@ static int
 mlx5_sf_new_check_attr(struct mlx5_core_dev *dev, const struct devlink_port_new_attrs *new_attr,
 		       struct netlink_ext_ack *extack)
 {
+	struct mlx5_esw_functions *esw_funcs;
+	struct mlx5_eswitch *esw;
 	u32 controller;
 
 	if (new_attr->flavour != DEVLINK_PORT_FLAVOUR_PCI_SF) {
@@ -295,9 +311,16 @@ mlx5_sf_new_check_attr(struct mlx5_core_dev *dev, const struct devlink_port_new_
 		NL_SET_ERR_MSG_MOD(extack, "External controller is unsupported");
 		return -EOPNOTSUPP;
 	}
+	esw = dev->priv.eswitch;
+	esw_funcs = &esw->esw_funcs;
+	if (new_attr->controller_valid && !new_attr->controller &&
+	    esw_funcs->phys_port_cnum) {
+		NL_SET_ERR_MSG_MOD(extack, "Invalid controller supplied");
+		return -EOPNOTSUPP;
+	}
 	controller = new_attr->controller_valid ? new_attr->controller : 0;
-	if (new_attr->pfnum !=
-	    mlx5_esw_sf_controller_to_pfnum(dev, controller)) {
+	if (!mlx5_esw_sf_controller_to_pfnum_valid(dev, controller,
+						   new_attr->pfnum)) {
 		NL_SET_ERR_MSG_MOD(extack, "Invalid pfnum supplied");
 		return -EOPNOTSUPP;
 	}

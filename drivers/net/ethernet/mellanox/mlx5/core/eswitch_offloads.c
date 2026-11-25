@@ -4244,6 +4244,12 @@ bool mlx5_esw_offloads_controller_valid(const struct mlx5_eswitch *esw, u32 cont
 	const struct mlx5_esw_functions *esw_funcs;
 	int i;
 
+	/* User specifies correct non-zero self PF controller number */
+	esw_funcs = &esw->esw_funcs;
+	if (esw_funcs->phys_port_cnum &&
+	    controller == esw_funcs->phys_port_cnum)
+		return true;
+
 	/* Local controller is always valid */
 	if (controller == 0)
 		return true;
@@ -4255,7 +4261,6 @@ bool mlx5_esw_offloads_controller_valid(const struct mlx5_eswitch *esw, u32 cont
 	if (controller == mlx5_esw_get_hpf_host_number(esw->dev) + 1)
 		return true;
 
-	esw_funcs = &esw->esw_funcs;
 	for (i = 0; i < esw_funcs->num_spfs; i++) {
 		if (controller == esw_funcs->spfs[i].host_number + 1)
 			return true;

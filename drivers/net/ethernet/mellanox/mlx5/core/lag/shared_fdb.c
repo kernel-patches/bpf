@@ -192,6 +192,44 @@ void mlx5_lag_destroy_single_fdb(struct mlx5_lag *ldev)
 	mlx5_lag_destroy_single_fdb_filter(ldev, MLX5_LAG_FILTER_ALL);
 }
 
+static void mlx5_self_controller_set(struct mlx5_lag *ldev, u32 filter)
+{
+	struct mlx5_core_dev *dev, *master_dev = NULL;
+	struct mlx5_esw_functions *esw_funcs;
+	struct mlx5_eswitch *esw;
+	int i;
+
+	mlx5_lag_for_each(i, 0, ldev, filter) {
+		dev = mlx5_lag_fn(ldev, i)->dev;
+		esw = dev->priv.eswitch;
+		esw_funcs = &esw->esw_funcs;
+		if (!mlx5_lag_is_master(dev))
+			esw_funcs->phys_port_cnum = esw_funcs->controller_num;
+		else
+			master_dev = dev;
+	}
+
+	if (!master_dev)
+		return;
+
+	mlx5_lag_for_each(i, 0, ldev, filter) {
+		struct mlx5_esw_functions *master_esw_funcs;
+		u32 host_ctrl_num, master_host_ctrl_num;
+		struct mlx5_eswitch *master_esw;
+
+		dev = mlx5_lag_fn(ldev, i)->dev;
+		esw = dev->priv.eswitch;
+		esw_funcs = &esw->esw_funcs;
+		host_ctrl_num = esw_funcs->controller_num;
+
+		master_esw = master_dev->priv.eswitch;
+		master_esw_funcs = &master_esw->esw_funcs;
+		master_host_ctrl_num = master_esw_funcs->controller_num;
+		if (host_ctrl_num == master_host_ctrl_num)
+			esw_funcs->phys_port_cnum = 0;
+	}
+}
+
 /**
  * mlx5_lag_shared_fdb_create - Create shared FDB LAG
  * @ldev: LAG device
@@ -259,6 +297,9 @@ int mlx5_lag_shared_fdb_create(struct mlx5_lag *ldev,
 
 	if (filter == MLX5_LAG_FILTER_PORTS || filter == MLX5_LAG_FILTER_ALL)
 		mlx5_lag_set_vports_agg_speed(ldev);
+
+	mlx5_self_controller_set(ldev, filter);
+
 	return 0;
 
 err_rescan_drivers:
@@ -279,12 +320,29 @@ err_add_devices:
 	return err;
 }
 
+static void mlx5_self_controller_reset(struct mlx5_lag *ldev, u32 filter)
+{
+	struct mlx5_esw_functions *esw_funcs;
+	struct mlx5_core_dev *dev;
+	struct mlx5_eswitch *esw;
+	int i;
+
+	mlx5_lag_for_each(i, 0, ldev, filter) {
+		dev = mlx5_lag_fn(ldev, i)->dev;
+		esw = dev->priv.eswitch;
+		esw_funcs = &esw->esw_funcs;
+		esw_funcs->phys_port_cnum = 0;
+	}
+}
+
 void mlx5_lag_shared_fdb_destroy(struct mlx5_lag *ldev, u32 group_id)
 {
 	u32 filter = group_id ? group_id : MLX5_LAG_FILTER_ALL;
 	struct lag_fn *fn;
 	int err;
 	int i;
+
+	mlx5_self_controller_reset(ldev, filter);
 
 	mlx5_lag_remove_devices_filter(ldev, filter);
 

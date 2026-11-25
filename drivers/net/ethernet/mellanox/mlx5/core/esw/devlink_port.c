@@ -83,7 +83,9 @@ static void mlx5_esw_offloads_pf_vf_devlink_port_attrs_set(struct mlx5_eswitch *
 
 		memcpy(dl_port->attrs.switch_id.id, ppid.id, ppid.id_len);
 		dl_port->attrs.switch_id.id_len = ppid.id_len;
-		devlink_port_attrs_pci_vf_set(dl_port, 0, pfnum,
+		controller_num = mlx5_esw_get_self_pf_ctrl_num(esw);
+		pfnum = mlx5_esw_get_self_pf_pfnum(esw);
+		devlink_port_attrs_pci_vf_set(dl_port, controller_num, pfnum,
 					      vport_num - base_vport, false);
 	} else if (mlx5_esw_is_spf_vport(esw, vport_num)) {
 		int spf_idx = mlx5_esw_spf_vport_to_idx(esw, vport_num);

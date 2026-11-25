@@ -40,7 +40,17 @@ static struct mlx5_sf_hwc_table *
 mlx5_sf_controller_to_hwc(struct mlx5_core_dev *dev, u32 controller, u32 pfnum)
 {
 	struct mlx5_sf_hw_table *table = dev->priv.sf_hw_table;
+	struct mlx5_eswitch *esw = dev->priv.eswitch;
+	struct mlx5_esw_functions *esw_funcs;
 	int i;
+
+	/* If shared fdb is destroyed, phys_port_cnum is reset to 0.
+	 * So use controller_num directly which is read from firmware.
+	 */
+	esw_funcs = &esw->esw_funcs;
+	if (controller == esw_funcs->controller_num &&
+	    pfnum == mlx5_esw_get_self_pf_pfnum(esw))
+		return &table->hwc[MLX5_SF_HWC_LOCAL];
 
 	for (i = MLX5_SF_HWC_FIRST_SPF; i < table->num_hwc; i++) {
 		if (table->hwc[i].controller == controller)
