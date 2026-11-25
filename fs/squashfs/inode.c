@@ -136,6 +136,7 @@ int squashfs_read_inode(struct inode *inode, long long ino)
 	type = le16_to_cpu(sqshb_ino->inode_type);
 	switch (type) {
 	case SQUASHFS_REG_TYPE: {
+		char has_fragment;
 		unsigned int frag_offset, frag;
 		int frag_size;
 		u64 frag_blk;
@@ -158,12 +159,12 @@ int squashfs_read_inode(struct inode *inode, long long ino)
 				goto failed_read;
 			}
 			frag_offset = le32_to_cpu(sqsh_ino->offset);
-			frag_size = squashfs_frag_lookup(sb, frag, &frag_blk);
-			if (frag_size < 0) {
-				err = frag_size;
+			err = squashfs_frag_lookup(sb, frag, &frag_blk, &frag_size);
+			if (err < 0)
 				goto failed_read;
-			}
+			has_fragment = true;
 		} else {
+			has_fragment = false;
 			frag_blk = SQUASHFS_INVALID_BLK;
 			frag_size = 0;
 			frag_offset = 0;
@@ -173,6 +174,7 @@ int squashfs_read_inode(struct inode *inode, long long ino)
 		inode->i_fop = &squashfs_file_operations;
 		inode->i_mode |= S_IFREG;
 		inode->i_blocks = ((inode->i_size - 1) >> 9) + 1;
+		squashfs_i(inode)->has_fragment = has_fragment;
 		squashfs_i(inode)->fragment_block = frag_blk;
 		squashfs_i(inode)->fragment_size = frag_size;
 		squashfs_i(inode)->fragment_offset = frag_offset;
@@ -189,6 +191,7 @@ int squashfs_read_inode(struct inode *inode, long long ino)
 		break;
 	}
 	case SQUASHFS_LREG_TYPE: {
+		char has_fragment;
 		unsigned int frag_offset, frag;
 		int frag_size;
 		u64 frag_blk;
@@ -215,12 +218,12 @@ int squashfs_read_inode(struct inode *inode, long long ino)
 				goto failed_read;
 			}
 			frag_offset = le32_to_cpu(sqsh_ino->offset);
-			frag_size = squashfs_frag_lookup(sb, frag, &frag_blk);
-			if (frag_size < 0) {
-				err = frag_size;
+			err = squashfs_frag_lookup(sb, frag, &frag_blk, &frag_size);
+			if (err < 0)
 				goto failed_read;
-			}
+			has_fragment = true;
 		} else {
+			has_fragment = false;
 			frag_blk = SQUASHFS_INVALID_BLK;
 			frag_size = 0;
 			frag_offset = 0;
@@ -234,6 +237,7 @@ int squashfs_read_inode(struct inode *inode, long long ino)
 		inode->i_blocks = (inode->i_size -
 				le64_to_cpu(sqsh_ino->sparse) + 511) >> 9;
 
+		squashfs_i(inode)->has_fragment = has_fragment;
 		squashfs_i(inode)->fragment_block = frag_blk;
 		squashfs_i(inode)->fragment_size = frag_size;
 		squashfs_i(inode)->fragment_offset = frag_offset;

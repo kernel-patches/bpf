@@ -17,6 +17,7 @@ struct squashfs_inode_info {
 	unsigned int	xattr_size;
 	unsigned int	xattr_count;
 	int		parent;
+	bool		has_fragment;
 	union {
 		struct {
 			u64		fragment_block;

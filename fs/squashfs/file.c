@@ -443,7 +443,7 @@ static int squashfs_readpage_fragment(struct folio *folio, int expected)
 	struct squashfs_cache_entry *buffer = squashfs_get_fragment(inode->i_sb,
 		squashfs_i(inode)->fragment_block,
 		squashfs_i(inode)->fragment_size);
-	int res = buffer->error;
+	int res = IS_ERR(buffer) ? PTR_ERR(buffer) : buffer->error;
 
 	if (res)
 		ERROR("Unable to read page, block %llx, size %x\n",
@@ -453,7 +453,8 @@ static int squashfs_readpage_fragment(struct folio *folio, int expected)
 		squashfs_copy_cache(folio, buffer, expected,
 			squashfs_i(inode)->fragment_offset);
 
-	squashfs_cache_put(buffer);
+	if (!IS_ERR(buffer))
+		squashfs_cache_put(buffer);
 	return res;
 }
 
@@ -481,8 +482,7 @@ static int squashfs_read_folio(struct file *file, struct folio *folio)
 					PAGE_SHIFT))
 		goto out;
 
-	if (index < file_end || squashfs_i(inode)->fragment_block ==
-					SQUASHFS_INVALID_BLK) {
+	if (index < file_end || !squashfs_i(inode)->has_fragment) {
 		u64 block = 0;
 
 		res = read_blocklist(inode, index, &block);
@@ -518,6 +518,9 @@ static int squashfs_readahead_fragment(struct inode *inode, struct page **page,
 	unsigned int offset;
 	void *addr;
 	struct page *last_page;
+
+	if (IS_ERR(buffer))
+		return 1;
 
 	if (buffer->error)
 		goto out;
@@ -616,7 +619,7 @@ static void squashfs_readahead(struct readahead_control *ractl)
 			goto skip_pages;
 
 		if (start >> msblk->block_log == file_end &&
-				squashfs_i(inode)->fragment_block != SQUASHFS_INVALID_BLK) {
+				squashfs_i(inode)->has_fragment) {
 			res = squashfs_readahead_fragment(inode, pages,
 					nr_pages, expected, start);
 			if (res)
@@ -686,8 +689,7 @@ static loff_t seek_hole_data(struct file *file, loff_t offset, int whence)
 		return -ENXIO;
 
 	/* is offset within tailend and is tailend packed into a fragment? */
-	if (index + 1 == file_end &&
-			squashfs_i(inode)->fragment_block != SQUASHFS_INVALID_BLK) {
+	if (index + 1 == file_end && squashfs_i(inode)->has_fragment) {
 		if (whence == SEEK_DATA)
 			return offset;
 
