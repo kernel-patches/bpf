@@ -660,17 +660,7 @@ static struct platform_driver twlreg_driver = {
 	},
 };
 
-static int __init twlreg_init(void)
-{
-	return platform_driver_register(&twlreg_driver);
-}
-subsys_initcall(twlreg_init);
-
-static void __exit twlreg_exit(void)
-{
-	platform_driver_unregister(&twlreg_driver);
-}
-module_exit(twlreg_exit)
+subsys_platform_driver(twlreg_driver);
 
 MODULE_DESCRIPTION("TWL4030 regulator driver");
 MODULE_LICENSE("GPL");
