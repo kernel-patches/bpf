@@ -433,7 +433,7 @@ static int sctp_diag_dump_one(struct netlink_callback *cb,
 	struct sk_buff *skb = cb->skb;
 	struct net *net = sock_net(skb->sk);
 	const struct nlmsghdr *nlh = cb->nlh;
-	union sctp_addr laddr, paddr;
+	union sctp_addr laddr = {}, paddr = {};
 	int dif = req->id.idiag_if;
 	struct sctp_comm_param commp = {
 		.skb = skb,
