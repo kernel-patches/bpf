@@ -92,6 +92,8 @@ def _uso_variants():
     for ipver in ["4", "6"]:
         yield KsftNamedVariant(f"v{ipver}_partial", ipver, 1400, 1400 * 10 + 500)
         yield KsftNamedVariant(f"v{ipver}_exact", ipver, 1400, 1400 * 5)
+        yield KsftNamedVariant(f"v{ipver}_small_partial", ipver, 8, 8 * 10 + 4)
+        yield KsftNamedVariant(f"v{ipver}_small_exact", ipver, 32, 32 * 3)
 
 
 @ksft_variants(_uso_variants())
