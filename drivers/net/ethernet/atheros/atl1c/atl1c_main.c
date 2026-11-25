@@ -2883,6 +2883,7 @@ static void atl1c_remove(struct pci_dev *pdev)
 	struct atl1c_adapter *adapter = netdev_priv(netdev);
 
 	unregister_netdev(netdev);
+	cancel_work_sync(&adapter->common_task);
 	/* restore permanent address */
 	atl1c_hw_set_mac_addr(&adapter->hw, adapter->hw.perm_mac_addr);
 	atl1c_phy_disable(&adapter->hw);
