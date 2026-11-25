@@ -122,6 +122,34 @@ void snd_soc_component_connect_dai(struct snd_soc_component *component, struct s
 	component->num_dai++;
 }
 
+void snd_soc_component_device_link_del(struct snd_soc_component *component)
+{
+	if (component->card_device_link) {
+		device_link_del(component->card_device_link);
+		component->card_device_link = NULL;
+	}
+}
+
+int snd_soc_component_device_link_add(struct snd_soc_component *component)
+{
+	struct snd_soc_card *card = snd_soc_component_to_card(component);
+	struct device *card_dev = card->dev;
+	struct device *component_dev = snd_soc_component_to_dev(component);
+
+	if (card_dev == component_dev)
+		return 0;
+
+	component->card_device_link = device_link_add(card_dev, component_dev,
+						      DL_FLAG_STATELESS);
+	if (!component->card_device_link) {
+		dev_warn(card_dev, "Could not create device link to %s\n",
+			 dev_name(component_dev));
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 /*
  * We might want to check substream by using list.
  * In such case, we can update these macros.
