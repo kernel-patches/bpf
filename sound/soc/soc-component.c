@@ -61,6 +61,12 @@ void *snd_soc_component_to_priv(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_to_priv);
 
+struct device *snd_soc_component_to_dev(struct snd_soc_component *component)
+{
+	return component->dev;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_dev);
+
 struct snd_soc_dapm_context *snd_soc_component_to_dapm(struct snd_soc_component *component)
 {
 	return component->dapm;
