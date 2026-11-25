@@ -247,8 +247,10 @@ static __inline__ void x25_neigh_hold(struct x25_neigh *nb)
 
 static __inline__ void x25_neigh_put(struct x25_neigh *nb)
 {
-	if (refcount_dec_and_test(&nb->refcnt))
+	if (refcount_dec_and_test(&nb->refcnt)) {
+		skb_queue_purge(&nb->queue);
 		kfree(nb);
+	}
 }
 
 /* x25_out.c */
