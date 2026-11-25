@@ -138,9 +138,7 @@ impl<T: DriverObject> Object<T> {
         vmap: Some(bindings::drm_gem_shmem_object_vmap),
         vunmap: Some(bindings::drm_gem_shmem_object_vunmap),
         mmap: Some(bindings::drm_gem_shmem_object_mmap),
-        #[allow(unused_unsafe, reason = "Safe since Rust 1.82.0")]
-        // SAFETY: `drm_gem_shmem_vm_ops` is a valid, static const on the C side.
-        vm_ops: unsafe { &raw const bindings::drm_gem_shmem_vm_ops },
+        vm_ops: &raw const bindings::drm_gem_shmem_vm_ops,
         ..pin_init::zeroed()
     };
 
