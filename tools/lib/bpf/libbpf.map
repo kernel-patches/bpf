@@ -458,7 +458,11 @@ LIBBPF_1.7.0 {
 
 LIBBPF_1.8.0 {
 	global:
+		bpf_btf_get_next_id_opts;
+		bpf_link_get_next_id_opts;
 		bpf_map__attach_cgroup_opts;
+		bpf_map_get_next_id_opts;
+		bpf_prog_get_next_id_opts;
 		bpf_prog_stream_open;
 		bpf_program__add_flags;
 		bpf_program__attach_tracing_multi;
