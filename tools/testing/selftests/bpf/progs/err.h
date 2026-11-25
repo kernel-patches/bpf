@@ -25,4 +25,9 @@ static inline long PTR_ERR(const void *ptr)
 	return (long) ptr;
 }
 
+static inline void *ERR_PTR(long error)
+{
+	return (void *) error;
+}
+
 #endif /* __ERR_H__ */

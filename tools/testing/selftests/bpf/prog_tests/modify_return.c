@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include "modify_return.skel.h"
 #include "modify_return_width.skel.h"
+#include "modify_return_ptr.skel.h"
+#include "modify_return_ext.skel.h"
 
 #define LOWER(x) ((x) & 0xffff)
 #define UPPER(x) ((x) >> 16)
@@ -143,4 +145,46 @@ void test_modify_return_graph(void)
 	SYS(out, "grep -q bpf_modify_return_test2 %s/trace", instance);
 out:
 	ASSERT_OK(rmdir(instance), "rmdir");
+}
+
+/* An extension of a global function of such a program */
+static void test_extension(void)
+{
+	struct modify_return_ptr *skel;
+	struct modify_return_ext *ext;
+	struct bpf_program *prog;
+
+	/* The function returns 64 bits */
+	if (!is_jit_enabled()) {
+		printf("%s:SKIP:JIT is disabled\n", __func__);
+		test__skip();
+		return;
+	}
+
+	skel = modify_return_ptr__open();
+	if (!ASSERT_OK_PTR(skel, "open"))
+		return;
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, prog == skel->progs.calls_global);
+	if (!ASSERT_OK(modify_return_ptr__load(skel), "load"))
+		goto out;
+	ext = modify_return_ext__open();
+	if (!ASSERT_OK_PTR(ext, "open extension"))
+		goto out;
+	ASSERT_OK(bpf_program__set_attach_target(ext->progs.replace_global,
+						 bpf_program__fd(skel->progs.calls_global),
+						 "global_func"), "set_attach_target");
+	ASSERT_OK(modify_return_ext__load(ext), "load extension");
+	modify_return_ext__destroy(ext);
+out:
+	modify_return_ptr__destroy(skel);
+}
+
+/* NULL or an error from a declared function that returns a pointer */
+void test_modify_return_ptr(void)
+{
+	if (test__start_subtest("extension"))
+		test_extension();
+
+	RUN_TESTS(modify_return_ptr);
 }
