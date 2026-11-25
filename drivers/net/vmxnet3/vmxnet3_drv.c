@@ -1614,7 +1614,8 @@ vmxnet3_rq_rx_complete(struct vmxnet3_rx_queue *rq,
 		adapter->rx_prod_offset, adapter->rx_prod2_offset
 	};
 	u32 num_pkts = 0;
-	bool skip_page_frags = false;
+	/* A frame dropped at its head may continue in the next poll. */
+	bool skip_page_frags = !rq->rx_ctx.skb;
 	bool encap_lro = false;
 	struct Vmxnet3_RxCompDesc *rcd;
 	struct vmxnet3_rx_ctx *ctx = &rq->rx_ctx;
@@ -1662,7 +1663,26 @@ vmxnet3_rq_rx_complete(struct vmxnet3_rx_queue *rq,
 		       rxd->len != rbi->len);
 
 		if (unlikely(rcd->eop && rcd->err)) {
+			/* The last body buffer of a frame already dropped
+			 * and counted
+			 */
+			if (!rcd->sop && skip_page_frags)
+				goto rcd_done;
 			vmxnet3_rx_error(rq, rcd, ctx, adapter);
+			goto rcd_done;
+		}
+
+		if (rcd->sop && !rcd->eop &&
+		    rbi->buf_type == VMXNET3_RX_BUF_XDP &&
+		    !VMXNET3_RX_DATA_RING(adapter, rcd->rqID)) {
+			/* The frame did not fit one XDP buffer. XDP here is
+			 * single-buffer and the head holds a page, not an
+			 * skb: drop the frame, reuse the head buffer and
+			 * skip the body buffers.
+			 */
+			rq->stats.drop_total++;
+			ctx->skb = NULL;
+			skip_page_frags = true;
 			goto rcd_done;
 		}
 
@@ -1845,6 +1865,7 @@ skip_xdp:
 				 */
 				if (unlikely(!new_page)) {
 					rq->stats.rx_buf_alloc_failure++;
+					rq->stats.drop_total++;
 					dev_kfree_skb(ctx->skb);
 					ctx->skb = NULL;
 					skip_page_frags = true;
@@ -1858,6 +1879,7 @@ skip_xdp:
 						      new_dma_addr)) {
 					put_page(new_page);
 					rq->stats.rx_buf_alloc_failure++;
+					rq->stats.drop_total++;
 					dev_kfree_skb(ctx->skb);
 					ctx->skb = NULL;
 					skip_page_frags = true;
