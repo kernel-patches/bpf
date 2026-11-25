@@ -7730,6 +7730,126 @@ struct skb_ext *__skb_ext_alloc(gfp_t flags)
 	return new;
 }
 
+#ifdef CONFIG_XFRM
+static void skb_ext_put_sp(struct sec_path *sp)
+{
+	unsigned int i;
+
+	if (!sp->len)
+		return;
+
+	for (i = 0; i < sp->len; i++)
+		xfrm_state_put(sp->xvec[i]);
+	sp->len = 0;
+}
+#endif
+
+#ifdef CONFIG_MCTP_FLOWS
+static void skb_ext_put_mctp(struct mctp_flow *flow)
+{
+	if (!flow->key)
+		return;
+
+	mctp_key_unref(flow->key);
+	flow->key = NULL;
+}
+#endif
+
+/* Release the references owned by one slot of an extension chunk. */
+static void skb_ext_put_slot(struct skb_ext *ext, enum skb_ext_id id)
+{
+	if (!__skb_ext_exist(ext, id))
+		return;
+
+	switch (id) {
+#ifdef CONFIG_XFRM
+	case SKB_EXT_SEC_PATH:
+		skb_ext_put_sp(skb_ext_get_ptr(ext, SKB_EXT_SEC_PATH));
+		break;
+#endif
+#ifdef CONFIG_MCTP_FLOWS
+	case SKB_EXT_MCTP:
+		skb_ext_put_mctp(skb_ext_get_ptr(ext, SKB_EXT_MCTP));
+		break;
+#endif
+	default:
+		break;
+	}
+}
+
+/* Release the references of every slot of an extension chunk. */
+static void skb_ext_put_refs(struct skb_ext *ext)
+{
+	enum skb_ext_id id;
+
+	for (id = 0; id < SKB_EXT_NUM; id++)
+		skb_ext_put_slot(ext, id);
+}
+
+/*
+ * A COW copy carries the data of every slot, but only the slots that
+ * are active on the source skb may own references.  For an inactive
+ * slot the references stay with the old chunk.
+ */
+static void skb_ext_copy_refs(struct skb_ext *old, struct skb_ext *new,
+			      unsigned int old_active)
+{
+	enum skb_ext_id id;
+
+	for (id = 0; id < SKB_EXT_NUM; id++) {
+		if (!__skb_ext_exist(old, id))
+			continue;
+
+		switch (id) {
+#ifdef CONFIG_XFRM
+		case SKB_EXT_SEC_PATH: {
+			struct sec_path *sp;
+
+			sp = skb_ext_get_ptr(old, SKB_EXT_SEC_PATH);
+			if (old_active & (1 << id)) {
+				unsigned int i;
+
+				for (i = 0; i < sp->len; i++)
+					xfrm_state_hold(sp->xvec[i]);
+			} else {
+				struct sec_path *new_sp;
+
+				new_sp = skb_ext_get_ptr(new, SKB_EXT_SEC_PATH);
+				new_sp->len = 0;
+			}
+			break;
+		}
+#endif
+#ifdef CONFIG_MCTP_FLOWS
+		case SKB_EXT_MCTP: {
+			struct mctp_flow *flow;
+
+			flow = skb_ext_get_ptr(old, SKB_EXT_MCTP);
+			if (old_active & (1 << id)) {
+				if (flow->key)
+					refcount_inc(&flow->key->refs);
+			} else {
+				struct mctp_flow *new_flow;
+
+				new_flow = skb_ext_get_ptr(new, SKB_EXT_MCTP);
+				new_flow->key = NULL;
+			}
+			break;
+		}
+#endif
+		default:
+			break;
+		}
+	}
+}
+
+/*
+ * A slot that exists in the chunk but is not active must not own
+ * references: they belong to the chunk and are dropped by
+ * __skb_ext_put() when the chunk is freed, or released by
+ * skb_ext_add() when the slot is reused.  A COW copy of such a slot
+ * must therefore not take references for it.
+ */
 static struct skb_ext *skb_ext_maybe_cow(struct skb_ext *old,
 					 unsigned int old_active)
 {
@@ -7745,23 +7865,7 @@ static struct skb_ext *skb_ext_maybe_cow(struct skb_ext *old,
 	memcpy(new, old, old->chunks * SKB_EXT_ALIGN_VALUE);
 	refcount_set(&new->refcnt, 1);
 
-#ifdef CONFIG_XFRM
-	if (old_active & (1 << SKB_EXT_SEC_PATH)) {
-		struct sec_path *sp = skb_ext_get_ptr(old, SKB_EXT_SEC_PATH);
-		unsigned int i;
-
-		for (i = 0; i < sp->len; i++)
-			xfrm_state_hold(sp->xvec[i]);
-	}
-#endif
-#ifdef CONFIG_MCTP_FLOWS
-	if (old_active & (1 << SKB_EXT_MCTP)) {
-		struct mctp_flow *flow = skb_ext_get_ptr(old, SKB_EXT_MCTP);
-
-		if (flow->key)
-			refcount_inc(&flow->key->refs);
-	}
-#endif
+	skb_ext_copy_refs(old, new, old_active);
 	__skb_ext_put(old);
 	return new;
 }
@@ -7817,8 +7921,11 @@ void *skb_ext_add(struct sk_buff *skb, enum skb_ext_id id)
 		if (!new)
 			return NULL;
 
-		if (__skb_ext_exist(new, id))
+		if (__skb_ext_exist(new, id)) {
+			if (!(skb->active_extensions & (1 << id)))
+				skb_ext_put_slot(new, id);
 			goto set_active;
+		}
 
 		newoff = new->chunks;
 	} else {
@@ -7840,31 +7947,6 @@ set_active:
 }
 EXPORT_SYMBOL(skb_ext_add);
 
-#ifdef CONFIG_XFRM
-static void skb_ext_put_sp(struct sec_path *sp)
-{
-	unsigned int i;
-
-	if (!sp->len)
-		return;
-
-	for (i = 0; i < sp->len; i++)
-		xfrm_state_put(sp->xvec[i]);
-	sp->len = 0;
-}
-#endif
-
-#ifdef CONFIG_MCTP_FLOWS
-static void skb_ext_put_mctp(struct mctp_flow *flow)
-{
-	if (!flow->key)
-		return;
-
-	mctp_key_unref(flow->key);
-	flow->key = NULL;
-}
-#endif
-
 void __skb_ext_del(struct sk_buff *skb, enum skb_ext_id id)
 {
 	struct skb_ext *ext = skb->extensions;
@@ -7879,14 +7961,7 @@ void __skb_ext_del(struct sk_buff *skb, enum skb_ext_id id)
 	if (refcount_read(&ext->refcnt) > 1)
 		return;
 
-#ifdef CONFIG_XFRM
-	if (id == SKB_EXT_SEC_PATH)
-		skb_ext_put_sp(skb_ext_get_ptr(ext, SKB_EXT_SEC_PATH));
-#endif
-#ifdef CONFIG_MCTP_FLOWS
-	if (id == SKB_EXT_MCTP)
-		skb_ext_put_mctp(skb_ext_get_ptr(ext, SKB_EXT_MCTP));
-#endif
+	skb_ext_put_slot(ext, id);
 }
 EXPORT_SYMBOL(__skb_ext_del);
 
@@ -7901,14 +7976,7 @@ void __skb_ext_put(struct skb_ext *ext)
 	if (!refcount_dec_and_test(&ext->refcnt))
 		return;
 free_now:
-#ifdef CONFIG_XFRM
-	if (__skb_ext_exist(ext, SKB_EXT_SEC_PATH))
-		skb_ext_put_sp(skb_ext_get_ptr(ext, SKB_EXT_SEC_PATH));
-#endif
-#ifdef CONFIG_MCTP_FLOWS
-	if (__skb_ext_exist(ext, SKB_EXT_MCTP))
-		skb_ext_put_mctp(skb_ext_get_ptr(ext, SKB_EXT_MCTP));
-#endif
+	skb_ext_put_refs(ext);
 
 	kmem_cache_free(skbuff_ext_cache, ext);
 }
