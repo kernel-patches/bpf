@@ -284,18 +284,22 @@ void ovpn_encrypt_post(void *data, int ret)
 		ret = ovpn_udp_send_skb(peer, sock->sk, skb);
 		if (unlikely(ret < 0))
 			goto err_unlock;
+
+		ovpn_peer_stats_increment_tx(&peer->link_stats, orig_len);
+		/* keep track of last sent packet for keepalive */
+		WRITE_ONCE(peer->last_sent, ktime_get_boottime_seconds());
 		break;
 	case IPPROTO_TCP:
-		ovpn_tcp_send_skb(peer, sock->sk, skb);
+		/* TCP accounts the packet once it is actually sent */
+		ret = ovpn_tcp_send_skb(peer, sock->sk, skb);
+		if (unlikely(ret < 0))
+			goto err_unlock;
 		break;
 	default:
 		/* no transport configured yet */
 		goto err_unlock;
 	}
 
-	ovpn_peer_stats_increment_tx(&peer->link_stats, orig_len);
-	/* keep track of last sent packet for keepalive */
-	WRITE_ONCE(peer->last_sent, ktime_get_boottime_seconds());
 	/* skb passed down the stack - don't free it */
 	skb = NULL;
 err_unlock:
