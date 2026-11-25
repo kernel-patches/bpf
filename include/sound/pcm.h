@@ -702,6 +702,32 @@ DEFINE_LOCK_GUARD_1(pcm_stream_lock_irqsave, struct snd_pcm_substream,
 	     stream <= SNDRV_PCM_STREAM_LAST;		\
 	     stream++)
 
+/*
+ * helpers for restricting hw_params / hw_refine changes
+ */
+static inline int snd_pcm_buffer_access_get(struct snd_pcm_runtime *runtime)
+{
+	if (!atomic_inc_unless_negative(&runtime->buffer_accessing))
+		return -EBUSY;
+	return 0;
+}
+
+static inline void snd_pcm_buffer_access_put(struct snd_pcm_runtime *runtime)
+{
+	atomic_dec(&runtime->buffer_accessing);
+}
+
+/* auto-cleanup macros */
+DEFINE_GUARD(snd_pcm_buffer_access, struct snd_pcm_runtime *,
+	     snd_pcm_buffer_access_get(_T), snd_pcm_buffer_access_put(_T));
+DEFINE_GUARD_COND(snd_pcm_buffer_access, _try,
+		  snd_pcm_buffer_access_get(_T), _RET == 0);
+
+#define SND_PCM_BUFFER_ACQUIRE(runtime, var) \
+	ACQUIRE(snd_pcm_buffer_access_try, var)(runtime)
+#define SND_PCM_BUFFER_ACQUIRE_ERR(var) \
+	ACQUIRE_ERR(snd_pcm_buffer_access_try, &(var))
+
 /**
  * snd_pcm_running - Check whether the substream is in a running state
  * @substream: substream to check
@@ -1189,6 +1215,17 @@ snd_pcm_sframes_t __snd_pcm_lib_xfer(struct snd_pcm_substream *substream,
 				     snd_pcm_uframes_t frames, bool in_kernel);
 
 static inline snd_pcm_sframes_t
+snd_pcm_lib_get_and_xfer(struct snd_pcm_substream *substream,
+			 void *buf, bool interleaved,
+			 snd_pcm_uframes_t frames, bool in_kernel)
+{
+	SND_PCM_BUFFER_ACQUIRE(substream->runtime, lock);
+	if (SND_PCM_BUFFER_ACQUIRE_ERR(lock))
+		return -EBUSY;
+	return __snd_pcm_lib_xfer(substream, buf, interleaved, frames, in_kernel);
+}
+
+static inline snd_pcm_sframes_t
 snd_pcm_lib_write(struct snd_pcm_substream *substream,
 		  const void __user *buf, snd_pcm_uframes_t frames)
 {
@@ -1220,28 +1257,28 @@ static inline snd_pcm_sframes_t
 snd_pcm_kernel_write(struct snd_pcm_substream *substream,
 		     const void *buf, snd_pcm_uframes_t frames)
 {
-	return __snd_pcm_lib_xfer(substream, (void *)buf, true, frames, true);
+	return snd_pcm_lib_get_and_xfer(substream, (void *)buf, true, frames, true);
 }
 
 static inline snd_pcm_sframes_t
 snd_pcm_kernel_read(struct snd_pcm_substream *substream,
 		    void *buf, snd_pcm_uframes_t frames)
 {
-	return __snd_pcm_lib_xfer(substream, buf, true, frames, true);
+	return snd_pcm_lib_get_and_xfer(substream, buf, true, frames, true);
 }
 
 static inline snd_pcm_sframes_t
 snd_pcm_kernel_writev(struct snd_pcm_substream *substream,
 		      void **bufs, snd_pcm_uframes_t frames)
 {
-	return __snd_pcm_lib_xfer(substream, bufs, false, frames, true);
+	return snd_pcm_lib_get_and_xfer(substream, bufs, false, frames, true);
 }
 
 static inline snd_pcm_sframes_t
 snd_pcm_kernel_readv(struct snd_pcm_substream *substream,
 		     void **bufs, snd_pcm_uframes_t frames)
 {
-	return __snd_pcm_lib_xfer(substream, bufs, false, frames, true);
+	return snd_pcm_lib_get_and_xfer(substream, bufs, false, frames, true);
 }
 
 int snd_pcm_hw_limit_rates(struct snd_pcm_hardware *hw);
