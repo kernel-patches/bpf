@@ -79,6 +79,16 @@ BTF_ID(func, bpf_lsm_inet_conn_established)
 #endif
 BTF_SET_END(bpf_lsm_locked_sockopt_hooks)
 
+/*
+ * List of LSM hooks that trigger on a locked child socket which is not
+ * set up yet, bpf_setsockopt is restricted there.
+ */
+BTF_SET_START(bpf_lsm_clone_sockopt_hooks)
+#ifdef CONFIG_SECURITY_NETWORK
+BTF_ID(func, bpf_lsm_inet_csk_clone)
+#endif
+BTF_SET_END(bpf_lsm_clone_sockopt_hooks)
+
 /* List of LSM hooks that trigger while the socket is _not_ locked,
  * but it's ok to call bpf_{g,s}etsockopt because the socket is still
  * in the early init phase.
@@ -282,6 +292,9 @@ bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_setsockopt:
 		if (prog->expected_attach_type != BPF_LSM_CGROUP)
 			return NULL;
+		if (btf_id_set_contains(&bpf_lsm_clone_sockopt_hooks,
+					prog->aux->attach_btf_id))
+			return &bpf_sk_clone_setsockopt_proto;
 		if (btf_id_set_contains(&bpf_lsm_locked_sockopt_hooks,
 					prog->aux->attach_btf_id))
 			return &bpf_sk_setsockopt_proto;
