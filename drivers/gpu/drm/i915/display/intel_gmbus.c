@@ -1015,19 +1015,27 @@ struct i2c_adapter *intel_gmbus_get_adapter(struct intel_display *display,
 	return &display->gmbus.bus[pin]->adapter;
 }
 
-void intel_gmbus_force_bit(struct i2c_adapter *adapter, bool force_bit)
+static void intel_gmbus_force_bit_unlocked(struct i2c_adapter *adapter, bool force_bit)
 {
 	struct intel_gmbus *bus = to_intel_gmbus(adapter);
 	struct intel_display *display = bus->display;
 
-	mutex_lock(&display->gmbus.mutex);
+	lockdep_assert_held(&display->gmbus.mutex);
 
 	bus->force_bit += force_bit ? 1 : -1;
 	drm_dbg_kms(display->drm,
 		    "%sabling bit-banging on %s. force bit now %d\n",
 		    force_bit ? "en" : "dis", adapter->name,
 		    bus->force_bit);
+}
 
+void intel_gmbus_force_bit(struct i2c_adapter *adapter, bool force_bit)
+{
+	struct intel_gmbus *bus = to_intel_gmbus(adapter);
+	struct intel_display *display = bus->display;
+
+	mutex_lock(&display->gmbus.mutex);
+	intel_gmbus_force_bit_unlocked(adapter, force_bit);
 	mutex_unlock(&display->gmbus.mutex);
 }
 
@@ -1085,29 +1093,19 @@ static ssize_t intel_force_bit_banging_write(struct file *file,
 	struct i2c_adapter *adapter = m->private;
 	struct intel_gmbus *bus = to_intel_gmbus(adapter);
 	struct intel_display *display = bus->display;
-	bool force_bit_banging;
-	bool changed = false;
-	u32 force_bit = 0;
+	bool force_bit;
 	int ret;
 
-	ret = kstrtobool_from_user(ubuf, len, &force_bit_banging);
+	ret = kstrtobool_from_user(ubuf, len, &force_bit);
 	if (ret)
 		return ret;
 
 	mutex_lock(&display->gmbus.mutex);
-	if (force_bit_banging != bus->debugfs_force_bit) {
-		bus->force_bit += force_bit_banging ? 1 : -1;
-		force_bit = bus->force_bit;
-		bus->debugfs_force_bit = force_bit_banging;
-		changed = true;
+	if (force_bit != bus->debugfs_force_bit) {
+		intel_gmbus_force_bit_unlocked(adapter, force_bit);
+		bus->debugfs_force_bit = force_bit;
 	}
 	mutex_unlock(&display->gmbus.mutex);
-
-	if (changed)
-		drm_dbg_kms(display->drm,
-			    "%sabling bit-banging on %s. force bit now %d\n",
-			    force_bit_banging ? "en" : "dis",
-			    adapter->name, force_bit);
 
 	*offp += len;
 
