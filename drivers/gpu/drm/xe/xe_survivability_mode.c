@@ -169,11 +169,9 @@ static void populate_survivability_info(struct xe_device *xe)
 			set_survivability_info(mmio, info, POSTCODE_TRACE_OVERFLOW);
 	}
 
-	/* Traverse the linked list of aux info registers */
+	/* Read all aux info registers */
 	if (reg_value & AUXINFO_SUPPORT) {
-		for (id = REG_FIELD_GET(AUXINFO_REG_OFFSET, reg_value);
-		     id >= AUX_INFO0 && id < MAX_SCRATCH_REG;
-		     id =  REG_FIELD_GET(AUXINFO_HISTORY_OFFSET, info[id]))
+		for (id = AUX_INFO0; id < MAX_SCRATCH_REG; id++)
 			set_survivability_info(mmio, info, id);
 	}
 }
