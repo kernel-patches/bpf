@@ -1457,18 +1457,6 @@ static void convert_endianness_formats(struct snd_soc_pcm_stream *stream)
 			stream->formats |= endianness_format_map[i];
 }
 
-static void snd_soc_del_component_unlocked(struct snd_soc_component *component)
-{
-	struct snd_soc_card *card = component->card;
-
-	snd_soc_unregister_dais(component);
-
-	if (card)
-		snd_soc_card_unbind(card, true);
-
-	list_del(&component->list);
-}
-
 struct snd_soc_component *snd_soc_component_new(struct device *dev, const char *name,
 						const struct snd_soc_component_driver *driver)
 {
@@ -1504,6 +1492,18 @@ struct snd_soc_component *snd_soc_component_new(struct device *dev, const char *
 	return component;
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_new);
+
+static void snd_soc_del_component_unlocked(struct snd_soc_component *component)
+{
+	struct snd_soc_card *card = component->card;
+
+	snd_soc_unregister_dais(component);
+
+	if (card)
+		snd_soc_card_unbind(card, true);
+
+	list_del(&component->list);
+}
 
 int snd_soc_component_register(struct snd_soc_component *component,
 			       struct snd_soc_dai_driver *dai_drv,
