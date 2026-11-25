@@ -1295,6 +1295,7 @@ static struct idpf_vport *idpf_vport_alloc(struct idpf_adapter *adapter,
 	vport->compln_clean_budget = IDPF_TX_COMPLQ_CLEAN_BUDGET;
 	vport->default_vport = adapter->num_alloc_vports <
 			       idpf_get_default_vports(adapter);
+	spin_lock_init(&vport->rxq_grps_lock);
 
 	rsrc = &vport->dflt_qv_rsrc;
 	rsrc->dev = &adapter->pdev->dev;
@@ -2097,6 +2098,11 @@ int idpf_initiate_soft_reset(struct idpf_vport *vport,
 	} else {
 		set_bit(IDPF_VPORT_DEL_QUEUES, vport->flags);
 		idpf_vport_stop(vport, false);
+
+		/* Drop the stale pointer in the clone, as rxq_grps was freed
+		 * by idpf_vport_stop().
+		 */
+		new_rsrc->rxq_grps = NULL;
 	}
 
 	err = idpf_send_add_queues_msg(adapter, vport_config, new_rsrc,

@@ -373,6 +373,8 @@ struct idpf_q_vec_rsrc {
  * @default_vport: Use this vport if one isn't specified
  * @crc_enable: Enable CRC insertion offload
  * @link_up: True if link is up
+ * @rxq_grps_lock: Serializes every transition of the @dflt_qv_rsrc.rxq_grps
+ *		   pointer of a vport against the PTP auxiliary worker
  * @tx_tstamp_caps: Capabilities negotiated for Tx timestamping
  * @tstamp_config: The Tx tstamp config
  * @tstamp_task: Tx timestamping task
@@ -405,6 +407,9 @@ struct idpf_vport {
 	bool default_vport;
 	bool crc_enable;
 	bool link_up;
+
+	/* Must be past the point idpf_initiate_soft_reset() memcpy()s */
+	spinlock_t rxq_grps_lock;
 
 	struct idpf_ptp_vport_tx_tstamp_caps *tx_tstamp_caps;
 	struct kernel_hwtstamp_config tstamp_config;
