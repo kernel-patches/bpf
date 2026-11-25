@@ -279,6 +279,14 @@ void snd_soc_component_unregister(struct snd_soc_component *component);
 int snd_soc_component_register(struct snd_soc_component *component,
 			       struct snd_soc_dai_driver *dai_drv,
 			       int num_dai);
+int snd_soc_register_component(struct device *dev,
+			       const struct snd_soc_component_driver *component_driver,
+			       struct snd_soc_dai_driver *dai_drv, int num_dai);
+
+int devm_snd_soc_register_component(struct device *dev,
+				    const struct snd_soc_component_driver *component_driver,
+				    struct snd_soc_dai_driver *dai_drv, int num_dai);
+void snd_soc_unregister_component(struct device *dev);
 
 const char *snd_soc_component_name(struct snd_soc_component *component);
 
