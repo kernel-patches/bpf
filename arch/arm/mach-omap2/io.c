@@ -35,7 +35,6 @@
 #include "sdrc.h"
 #include "control.h"
 #include "sram.h"
-#include "cm2xxx.h"
 #include "cm3xxx.h"
 #include "cm33xx.h"
 #include "cm44xx.h"
@@ -43,11 +42,9 @@
 #include "cm.h"
 #include "prcm_mpu44xx.h"
 #include "prminst44xx.h"
-#include "prm2xxx.h"
 #include "prm3xxx.h"
 #include "prm33xx.h"
 #include "prm44xx.h"
-#include "opp2xxx.h"
 #include "omap-secure.h"
 
 /*
@@ -60,76 +57,6 @@ static int (*omap_clk_soc_init)(void);
  * The machine specific code may provide the extra mapping besides the
  * default mapping provided here.
  */
-
-#if defined(CONFIG_SOC_OMAP2420) || defined(CONFIG_SOC_OMAP2430)
-static struct map_desc omap24xx_io_desc[] __initdata = {
-	{
-		.virtual	= L3_24XX_VIRT,
-		.pfn		= __phys_to_pfn(L3_24XX_PHYS),
-		.length		= L3_24XX_SIZE,
-		.type		= MT_DEVICE
-	},
-	{
-		.virtual	= L4_24XX_VIRT,
-		.pfn		= __phys_to_pfn(L4_24XX_PHYS),
-		.length		= L4_24XX_SIZE,
-		.type		= MT_DEVICE
-	},
-};
-
-#ifdef CONFIG_SOC_OMAP2420
-static struct map_desc omap242x_io_desc[] __initdata = {
-	{
-		.virtual	= DSP_MEM_2420_VIRT,
-		.pfn		= __phys_to_pfn(DSP_MEM_2420_PHYS),
-		.length		= DSP_MEM_2420_SIZE,
-		.type		= MT_DEVICE
-	},
-	{
-		.virtual	= DSP_IPI_2420_VIRT,
-		.pfn		= __phys_to_pfn(DSP_IPI_2420_PHYS),
-		.length		= DSP_IPI_2420_SIZE,
-		.type		= MT_DEVICE
-	},
-	{
-		.virtual	= DSP_MMU_2420_VIRT,
-		.pfn		= __phys_to_pfn(DSP_MMU_2420_PHYS),
-		.length		= DSP_MMU_2420_SIZE,
-		.type		= MT_DEVICE
-	},
-};
-
-#endif
-
-#ifdef CONFIG_SOC_OMAP2430
-static struct map_desc omap243x_io_desc[] __initdata = {
-	{
-		.virtual	= L4_WK_243X_VIRT,
-		.pfn		= __phys_to_pfn(L4_WK_243X_PHYS),
-		.length		= L4_WK_243X_SIZE,
-		.type		= MT_DEVICE
-	},
-	{
-		.virtual	= OMAP243X_GPMC_VIRT,
-		.pfn		= __phys_to_pfn(OMAP243X_GPMC_PHYS),
-		.length		= OMAP243X_GPMC_SIZE,
-		.type		= MT_DEVICE
-	},
-	{
-		.virtual	= OMAP243X_SDRC_VIRT,
-		.pfn		= __phys_to_pfn(OMAP243X_SDRC_PHYS),
-		.length		= OMAP243X_SDRC_SIZE,
-		.type		= MT_DEVICE
-	},
-	{
-		.virtual	= OMAP243X_SMS_VIRT,
-		.pfn		= __phys_to_pfn(OMAP243X_SMS_PHYS),
-		.length		= OMAP243X_SMS_SIZE,
-		.type		= MT_DEVICE
-	},
-};
-#endif
-#endif
 
 #ifdef	CONFIG_ARCH_OMAP3
 static struct map_desc omap34xx_io_desc[] __initdata = {
@@ -305,22 +232,6 @@ static struct map_desc dra7xx_io_desc[] __initdata = {
 };
 #endif
 
-#ifdef CONFIG_SOC_OMAP2420
-void __init omap242x_map_io(void)
-{
-	iotable_init(omap24xx_io_desc, ARRAY_SIZE(omap24xx_io_desc));
-	iotable_init(omap242x_io_desc, ARRAY_SIZE(omap242x_io_desc));
-}
-#endif
-
-#ifdef CONFIG_SOC_OMAP2430
-void __init omap243x_map_io(void)
-{
-	iotable_init(omap24xx_io_desc, ARRAY_SIZE(omap24xx_io_desc));
-	iotable_init(omap243x_io_desc, ARRAY_SIZE(omap243x_io_desc));
-}
-#endif
-
 #ifdef CONFIG_ARCH_OMAP3
 void __init omap3_map_io(void)
 {
@@ -365,6 +276,8 @@ void __init dra7xx_map_io(void)
 	omap_barriers_init();
 }
 #endif
+
+#ifdef CONFIG_ARCH_OMAP3
 /*
  * omap2_init_reprogram_sdrc - reprogram SDRC timing parameters
  *
@@ -399,7 +312,6 @@ static int __init _omap2_init_reprogram_sdrc(void)
 	return v;
 }
 
-#ifdef CONFIG_OMAP_HWMOD
 static int _set_hwmod_postsetup_state(struct omap_hwmod *oh, void *data)
 {
 	return omap_hwmod_set_postsetup_state(oh, *(u8 *)data);
@@ -412,55 +324,11 @@ static void __init __maybe_unused omap_hwmod_init_postsetup(void)
 	/* Set the default postsetup state for all hwmods */
 	omap_hwmod_for_each(_set_hwmod_postsetup_state, &postsetup_state);
 }
-#else
-static inline void omap_hwmod_init_postsetup(void)
-{
-}
-#endif
-
-#ifdef CONFIG_SOC_OMAP2420
-void __init omap2420_init_early(void)
-{
-	omap2_set_globals_tap(OMAP242X_CLASS, OMAP2_L4_IO_ADDRESS(0x48014000));
-	omap2_set_globals_sdrc(OMAP2_L3_IO_ADDRESS(OMAP2420_SDRC_BASE),
-			       OMAP2_L3_IO_ADDRESS(OMAP2420_SMS_BASE));
-	omap2_control_base_init();
-	omap2xxx_check_revision();
-	omap2_prcm_base_init();
-	omap2xxx_voltagedomains_init();
-	omap242x_powerdomains_init();
-	omap242x_clockdomains_init();
-	omap2420_hwmod_init();
-	omap_hwmod_init_postsetup();
-	omap_clk_soc_init = omap2420_dt_clk_init;
-	rate_table = omap2420_rate_table;
-}
-#endif
-
-#ifdef CONFIG_SOC_OMAP2430
-void __init omap2430_init_early(void)
-{
-	omap2_set_globals_tap(OMAP243X_CLASS, OMAP2_L4_IO_ADDRESS(0x4900a000));
-	omap2_set_globals_sdrc(OMAP2_L3_IO_ADDRESS(OMAP243X_SDRC_BASE),
-			       OMAP2_L3_IO_ADDRESS(OMAP243X_SMS_BASE));
-	omap2_control_base_init();
-	omap2xxx_check_revision();
-	omap2_prcm_base_init();
-	omap2xxx_voltagedomains_init();
-	omap243x_powerdomains_init();
-	omap243x_clockdomains_init();
-	omap2430_hwmod_init();
-	omap_hwmod_init_postsetup();
-	omap_clk_soc_init = omap2430_dt_clk_init;
-	rate_table = omap2430_rate_table;
-}
-#endif
 
 /*
  * Currently only board-omap3beagle.c should call this because of the
  * same machine_id for 34xx and 36xx beagle.. Will get fixed with DT.
  */
-#ifdef CONFIG_ARCH_OMAP3
 static void __init omap3_init_early(void)
 {
 	omap2_set_globals_tap(OMAP343X_CLASS, OMAP2_L4_IO_ADDRESS(0x4830A000));
@@ -661,16 +529,18 @@ void __init dra7xx_init_late(void)
 #endif
 
 
+#ifdef CONFIG_ARCH_OMAP3
 void __init omap_sdrc_init(struct omap_sdrc_params *sdrc_cs0,
 				      struct omap_sdrc_params *sdrc_cs1)
 {
 	omap_sram_init();
 
-	if (cpu_is_omap24xx() || omap3_has_sdrc()) {
+	if (omap3_has_sdrc()) {
 		omap2_sdrc_init(sdrc_cs0, sdrc_cs1);
 		_omap2_init_reprogram_sdrc();
 	}
 }
+#endif
 
 int __init omap_clk_init(void)
 {

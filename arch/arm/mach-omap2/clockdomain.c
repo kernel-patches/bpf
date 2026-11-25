@@ -1213,7 +1213,7 @@ ccd_exit:
 int clkdm_hwmod_enable(struct clockdomain *clkdm, struct omap_hwmod *oh)
 {
 	/* The clkdm attribute does not exist yet prior OMAP4 */
-	if (cpu_is_omap24xx() || cpu_is_omap34xx())
+	if (cpu_is_omap34xx())
 		return 0;
 
 	/*
@@ -1244,7 +1244,7 @@ int clkdm_hwmod_enable(struct clockdomain *clkdm, struct omap_hwmod *oh)
 int clkdm_hwmod_disable(struct clockdomain *clkdm, struct omap_hwmod *oh)
 {
 	/* The clkdm attribute does not exist yet prior OMAP4 */
-	if (cpu_is_omap24xx() || cpu_is_omap34xx())
+	if (cpu_is_omap34xx())
 		return 0;
 
 	if (!oh)

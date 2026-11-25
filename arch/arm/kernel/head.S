@@ -347,16 +347,6 @@ __create_page_tables:
 	/* we don't need any serial debugging mappings */
 	ldr	r7, [r10, #PROCINFO_IO_MMUFLAGS] @ io_mmuflags
 #endif
-
-#if defined(CONFIG_ARCH_NETWINDER)
-	/*
-	 * If we're using the NetWinder or CATS, we also need to map
-	 * in the 16550-type serial port for the debug messages
-	 */
-	add	r0, r4, #0xff000000 >> (SECTION_SHIFT - PMD_ENTRY_ORDER)
-	orr	r3, r7, #0x7c000000
-	str	r3, [r0]
-#endif
 #ifdef CONFIG_ARCH_RPC
 	/*
 	 * Map in screen at 0x02000000 & SCREEN2_BASE

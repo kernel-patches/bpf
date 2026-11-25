@@ -197,7 +197,7 @@ config PCI_LOONGSON
 
 config PCI_MVEBU
 	tristate "Marvell EBU PCIe controller"
-	depends on ARCH_MVEBU || ARCH_DOVE || COMPILE_TEST
+	depends on ARCH_MVEBU || COMPILE_TEST
 	depends on MVEBU_MBUS
 	depends on ARM
 	depends on OF

@@ -124,9 +124,7 @@ static void omap_dsi_disable_pads(int dsi_id, unsigned lane_mask)
 
 static enum omapdss_version __init omap_display_get_version(void)
 {
-	if (cpu_is_omap24xx())
-		return OMAPDSS_VER_OMAP24xx;
-	else if (cpu_is_omap3630())
+	if (cpu_is_omap3630())
 		return OMAPDSS_VER_OMAP3630;
 	else if (cpu_is_omap34xx()) {
 		if (soc_is_am35xx()) {
