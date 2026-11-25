@@ -140,6 +140,11 @@ enum sparx5_feature {
 
 #define SPARX5_MAX_PTP_ID	512
 
+/* Must be the maximum across all L3 enabled platforms, which
+ * sparx5_rr_router_init() checks against the per-platform consts.
+ */
+#define SPARX5_ROUTER_LEG_N_VMID 511
+
 struct sparx5;
 
 struct sparx5_calendar_data {
@@ -367,6 +372,7 @@ struct sparx5_consts {
 	u32 qres_max_prio_idx;   /* Maximum QRES prio index */
 	u32 qres_max_colour_idx; /* Maximum QRES colour index */
 	u32 tod_pin;             /* PTP TOD pin */
+	u32 vmid_cnt;            /* Number of router leg VMID's */
 	const struct sparx5_vcap_inst *vcaps_cfg;
 	const struct vcap_info *vcaps;
 	const struct vcap_statistics *vcap_stats;
@@ -487,6 +493,8 @@ struct sparx5 {
 	/* Common root for debugfs */
 	struct dentry *debugfs_root;
 	const struct sparx5_match_data *data;
+	/* L3 Forwarding */
+	struct sparx5_router *router;
 };
 
 /* sparx5_main.c */
@@ -561,6 +569,31 @@ int sparx5_vlan_vid_add(struct sparx5_port *port, u16 vid, bool pvid,
 			bool untagged);
 int sparx5_vlan_vid_del(struct sparx5_port *port, u16 vid);
 void sparx5_vlan_port_apply(struct sparx5 *sparx5, struct sparx5_port *port);
+
+/* sparx5_router.c */
+void sparx5_rr_port_fwd_update(struct sparx5 *sparx5);
+int sparx5_rr_router_init(struct sparx5 *sparx5);
+void sparx5_rr_router_deinit(struct sparx5 *sparx5);
+void sparx5_rr_bridge_legs_flush(struct sparx5 *sparx5,
+				 const struct net_device *bridge);
+
+struct sparx5_router {
+	struct sparx5 *sparx5;
+	struct notifier_block inetaddr_nb;
+	struct notifier_block inetaddr_valid_nb;
+	struct notifier_block netdevice_nb;
+	struct notifier_block inet6addr_nb;
+	struct notifier_block inet6addr_valid_nb;
+
+	struct mutex lock; /* Global router lock for all shared data. */
+
+	struct workqueue_struct *sparx5_router_owq;
+	struct work_struct legs_work;
+
+	struct list_head leg_list;
+	/* Track allocated router leg indices in hw */
+	DECLARE_BITMAP(vmid_mask, SPARX5_ROUTER_LEG_N_VMID);
+};
 
 /* sparx5_calendar.c */
 int sparx5_calendar_init(struct sparx5 *sparx5);
