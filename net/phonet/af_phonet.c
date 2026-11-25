@@ -294,9 +294,9 @@ static inline int can_respond(struct sk_buff *skb)
 		return 0;
 
 	ph = pn_hdr(skb);
-	if (ph->pn_res == PN_PREFIX && !pskb_may_pull(skb, 5))
-		return 0;
 	if (ph->pn_res == PN_COMMGR) /* indications */
+		return 0;
+	if (ph->pn_res == PN_PREFIX && !pskb_may_pull(skb, 5))
 		return 0;
 
 	ph = pn_hdr(skb); /* re-acquires the pointer */
