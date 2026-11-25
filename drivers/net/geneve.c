@@ -1471,11 +1471,11 @@ static int geneve_xmit_skb(struct sk_buff *skb, struct net_device *dev,
 		if (cfg->df == GENEVE_DF_SET) {
 			df = htons(IP_DF);
 		} else if (cfg->df == GENEVE_DF_INHERIT) {
-			struct ethhdr *eth = skb_eth_hdr(skb);
+			__be16 inner_proto = skb_protocol(skb, true);
 
-			if (ntohs(eth->h_proto) == ETH_P_IPV6) {
+			if (inner_proto == htons(ETH_P_IPV6)) {
 				df = htons(IP_DF);
-			} else if (ntohs(eth->h_proto) == ETH_P_IP) {
+			} else if (inner_proto == htons(ETH_P_IP)) {
 				struct iphdr *iph = ip_hdr(skb);
 
 				if (iph->frag_off & htons(IP_DF))
