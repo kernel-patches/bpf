@@ -56,6 +56,37 @@ static bool fits_trampoline(const struct btf *btf, const struct btf_type *func)
 	return btf_vlen(t) <= 12;
 }
 
+static bool is_bpf_type(const struct btf *btf, __u32 type)
+{
+	while (type) {
+		const struct btf_type *t = btf__type_by_id(btf, type);
+		const char *name = btf__name_by_offset(btf, t->name_off);
+
+		if (!strncmp(name, "bpf_", 4) || !strcmp(name, "btf") || !strncmp(name, "btf_", 4))
+			return true;
+		if (btf_is_array(t))
+			type = btf_array(t)->type;
+		else if (btf_is_ptr(t) || btf_is_mod(t) || btf_is_typedef(t))
+			type = t->type;
+		else
+			return false;
+	}
+	return false;
+}
+
+static bool has_bpf_types(const struct btf *btf, const struct btf_type *func)
+{
+	const struct btf_type *proto = btf__type_by_id(btf, func->type);
+	unsigned int i;
+
+	if (is_bpf_type(btf, proto->type))
+		return true;
+	for (i = 0; i < btf_vlen(proto); i++)
+		if (is_bpf_type(btf, btf_params(proto)[i].type))
+			return true;
+	return false;
+}
+
 /*
  * The codes of include/linux/errno.h, 512 and up, never reach user space. They,
  * -EAGAIN, -EMSGSIZE and -EINPROGRESS tell the caller to retry, to go on or to
@@ -219,6 +250,9 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		nr_funcs++;
 		size = int_return_size(btf, t);
 		if ((size != 4 && size != 8) || !fits_trampoline(btf, t))
+			continue;
+		/* Skip functions which take or return BPF objects */
+		if (has_bpf_types(btf, t))
 			continue;
 		/* Init code is gone before a program can attach */
 		name = btf__name_by_offset(btf, t->name_off);
