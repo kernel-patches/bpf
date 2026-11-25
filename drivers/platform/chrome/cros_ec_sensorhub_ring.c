@@ -10,6 +10,7 @@
 #include <linux/iio/iio.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/overflow.h>
 #include <linux/platform_data/cros_ec_commands.h>
 #include <linux/platform_data/cros_ec_proto.h>
 #include <linux/platform_data/cros_ec_sensorhub.h>
@@ -967,6 +968,13 @@ static void cros_ec_sensorhub_ring_handler(struct cros_ec_sensorhub *sensorhub)
 			dev_warn(sensorhub->dev,
 				 "Invalid EC data: too many entry received: %d, expected %d\n",
 				 number_data, fifo_info->count - i);
+			break;
+		}
+		if (ret < struct_size(&sensorhub->resp->fifo_read, data,
+				      number_data)) {
+			dev_warn_ratelimited(sensorhub->dev,
+					     "Invalid EC data: %d entries in %d bytes\n",
+					     number_data, ret);
 			break;
 		}
 		if (out + number_data >
