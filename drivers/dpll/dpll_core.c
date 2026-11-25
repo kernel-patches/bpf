@@ -534,12 +534,14 @@ void dpll_device_unregister(struct dpll_device *dpll,
 
 	mutex_lock(&dpll_lock);
 	ASSERT_DPLL_REGISTERED(dpll);
-	dpll_device_delete_ntf(dpll);
 	reg = dpll_device_registration_find(dpll, ops, priv);
 	if (WARN_ON(!reg)) {
 		mutex_unlock(&dpll_lock);
 		return;
 	}
+	/* The device goes away with its last registration */
+	if (list_is_singular(&dpll->registration_list))
+		dpll_device_delete_ntf(dpll);
 	list_del(&reg->list);
 	__dpll_device_put(dpll, &reg->tracker);
 	kfree(reg);
