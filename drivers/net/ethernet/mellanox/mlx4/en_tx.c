@@ -759,6 +759,14 @@ void mlx4_en_xmit_doorbell(struct mlx4_en_tx_ring *ring)
 		  (__force u32)ring->doorbell_qpn, ring->doorbell_address);
 }
 
+static void mlx4_en_flush_pending_doorbell(struct mlx4_en_tx_ring *ring)
+{
+	if (ring->doorbell_pending) {
+		mlx4_en_xmit_doorbell(ring);
+		ring->doorbell_pending = false;
+	}
+}
+
 static void mlx4_en_tx_write_desc(struct mlx4_en_tx_ring *ring,
 				  struct mlx4_en_tx_desc *tx_desc,
 				  union mlx4_wqe_qpn_vlan qpn_vlan,
@@ -1131,6 +1139,8 @@ netdev_tx_t mlx4_en_xmit(struct sk_buff *skb, struct net_device *dev)
 
 tx_drop_count:
 	ring->tx_dropped++;
+	/* an earlier skb in this batch may have deferred the doorbell */
+	mlx4_en_flush_pending_doorbell(ring);
 tx_drop:
 	dev_kfree_skb_any(skb);
 	return NETDEV_TX_OK;
