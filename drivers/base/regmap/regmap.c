@@ -673,48 +673,33 @@ enum regmap_endian regmap_get_val_endian(struct device *dev,
 }
 EXPORT_SYMBOL_GPL(regmap_get_val_endian);
 
-struct regmap *__regmap_init(struct device *dev,
-			     const struct regmap_bus *bus,
-			     void *bus_context,
-			     const struct regmap_config *config,
-			     struct lock_class_key *lock_key,
-			     const char *lock_name)
+/*
+ * Select the locking scheme for the map. The fast_io argument tells whether
+ * the map has to be usable from atomic context.
+ */
+static int regmap_set_lock(struct regmap *map, const struct regmap_config *config,
+			   bool fast_io, struct lock_class_key *lock_key,
+			   const char *lock_name)
 {
-	struct regmap *map;
-	int ret = -EINVAL;
-	enum regmap_endian reg_endian, val_endian;
-	int i, j;
-
-	if (!config)
-		goto err;
-
-	map = kzalloc_obj(*map);
-	if (map == NULL) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	ret = regmap_set_name(map, config);
-	if (ret)
-		goto err_map;
-
-	ret = -EINVAL; /* Later error paths rely on this */
-
 	if (config->disable_locking) {
 		map->lock = map->unlock = regmap_lock_unlock_none;
 		map->can_sleep = config->can_sleep;
 		regmap_debugfs_disable(map);
-	} else if (config->lock && config->unlock) {
+		return 0;
+	}
+
+	if (config->lock && config->unlock) {
 		map->lock = config->lock;
 		map->unlock = config->unlock;
 		map->lock_arg = config->lock_arg;
 		map->can_sleep = config->can_sleep;
-	} else if (config->use_hwlock) {
+		return 0;
+	}
+
+	if (config->use_hwlock) {
 		map->hwlock = hwspin_lock_request_specific(config->hwlock_id);
-		if (!map->hwlock) {
-			ret = -ENXIO;
-			goto err_name;
-		}
+		if (!map->hwlock)
+			return -ENXIO;
 
 		switch (config->hwlock_mode) {
 		case HWLOCK_IRQSTATE:
@@ -732,42 +717,374 @@ struct regmap *__regmap_init(struct device *dev,
 		}
 
 		map->lock_arg = map;
-	} else {
-		if ((bus && bus->fast_io) ||
-		    config->fast_io) {
-			if (config->use_raw_spinlock) {
-				raw_spin_lock_init(&map->raw_spinlock);
-				map->lock = regmap_lock_raw_spinlock;
-				map->unlock = regmap_unlock_raw_spinlock;
-				lockdep_set_class_and_name(&map->raw_spinlock,
-							   lock_key, lock_name);
-			} else {
-				spin_lock_init(&map->spinlock);
-				map->lock = regmap_lock_spinlock;
-				map->unlock = regmap_unlock_spinlock;
-				lockdep_set_class_and_name(&map->spinlock,
-							   lock_key, lock_name);
-			}
+		return 0;
+	}
+
+	if (fast_io) {
+		if (config->use_raw_spinlock) {
+			raw_spin_lock_init(&map->raw_spinlock);
+			map->lock = regmap_lock_raw_spinlock;
+			map->unlock = regmap_unlock_raw_spinlock;
+			lockdep_set_class_and_name(&map->raw_spinlock,
+						   lock_key, lock_name);
 		} else {
-			mutex_init(&map->mutex);
-			map->lock = regmap_lock_mutex;
-			map->unlock = regmap_unlock_mutex;
-			map->can_sleep = true;
-			lockdep_set_class_and_name(&map->mutex,
+			spin_lock_init(&map->spinlock);
+			map->lock = regmap_lock_spinlock;
+			map->unlock = regmap_unlock_spinlock;
+			lockdep_set_class_and_name(&map->spinlock,
 						   lock_key, lock_name);
 		}
-		map->lock_arg = map;
-		map->lock_key = lock_key;
+	} else {
+		mutex_init(&map->mutex);
+		map->lock = regmap_lock_mutex;
+		map->unlock = regmap_unlock_mutex;
+		map->can_sleep = true;
+		lockdep_set_class_and_name(&map->mutex, lock_key, lock_name);
 	}
+
+	map->lock_arg = map;
+	map->lock_key = lock_key;
+
+	return 0;
+}
+
+/* Validate config->ranges and build the range rbtree. */
+static int regmap_init_ranges(struct regmap *map, const struct regmap_config *config)
+{
+	int i, j;
+
+	map->range_tree = RB_ROOT;
+
+	for (i = 0; i < config->num_ranges; i++) {
+		const struct regmap_range_cfg *range_cfg = &config->ranges[i];
+		struct regmap_range_node *new;
+
+		/* Sanity check */
+		if (range_cfg->range_max < range_cfg->range_min) {
+			dev_err(map->dev, "Invalid range %d: %u < %u\n", i,
+				range_cfg->range_max, range_cfg->range_min);
+			return -EINVAL;
+		}
+
+		if (range_cfg->range_max > map->max_register) {
+			dev_err(map->dev, "Invalid range %d: %u > %u\n", i,
+				range_cfg->range_max, map->max_register);
+			return -EINVAL;
+		}
+
+		if (range_cfg->selector_reg > map->max_register) {
+			dev_err(map->dev,
+				"Invalid range %d: selector out of map\n", i);
+			return -EINVAL;
+		}
+
+		if (range_cfg->window_len == 0) {
+			dev_err(map->dev, "Invalid range %d: window_len 0\n",
+				i);
+			return -EINVAL;
+		}
+
+		/*
+		 * Make sure that this register range has no selector
+		 * or data window within its boundary.
+		 */
+		for (j = 0; j < config->num_ranges; j++) {
+			unsigned int sel_reg = config->ranges[j].selector_reg;
+			unsigned int win_min = config->ranges[j].window_start;
+			unsigned int win_max = win_min +
+					       config->ranges[j].window_len - 1;
+
+			/* Allow data window inside its own virtual range */
+			if (j == i)
+				continue;
+
+			if (range_cfg->range_min <= sel_reg &&
+			    sel_reg <= range_cfg->range_max) {
+				dev_err(map->dev,
+					"Range %d: selector for %d in window\n",
+					i, j);
+				return -EINVAL;
+			}
+
+			if (!(win_max < range_cfg->range_min ||
+			      win_min > range_cfg->range_max)) {
+				dev_err(map->dev,
+					"Range %d: window for %d in window\n",
+					i, j);
+				return -EINVAL;
+			}
+		}
+
+		new = kzalloc_obj(*new);
+		if (new == NULL)
+			return -ENOMEM;
+
+		new->map = map;
+		new->name = range_cfg->name;
+		new->range_min = range_cfg->range_min;
+		new->range_max = range_cfg->range_max;
+		new->selector_reg = range_cfg->selector_reg;
+		new->selector_mask = range_cfg->selector_mask;
+		new->selector_shift = range_cfg->selector_shift;
+		new->window_start = range_cfg->window_start;
+		new->window_len = range_cfg->window_len;
+
+		if (!_regmap_range_add(map, new)) {
+			dev_err(map->dev, "Failed to add range %d\n", i);
+			kfree(new);
+			return -EINVAL;
+		}
+
+		if (map->selector_work_buf == NULL) {
+			map->selector_work_buf =
+				kzalloc(map->format.buf_size, GFP_KERNEL);
+			if (map->selector_work_buf == NULL)
+				return -ENOMEM;
+		}
+	}
+
+	return 0;
+}
+
+/* Pick format_reg()/format_write() for the register width and endianness. */
+static int regmap_set_reg_format(struct regmap *map, const struct regmap_config *config,
+				 enum regmap_endian reg_endian)
+{
+	switch (config->reg_bits + map->reg_shift) {
+	case 2:
+		if (config->val_bits != 6)
+			return -EINVAL;
+		map->format.format_write = regmap_format_2_6_write;
+		return 0;
+
+	case 4:
+		if (config->val_bits != 12)
+			return -EINVAL;
+		map->format.format_write = regmap_format_4_12_write;
+		return 0;
+
+	case 7:
+		switch (config->val_bits) {
+		case 9:
+			map->format.format_write = regmap_format_7_9_write;
+			return 0;
+		case 17:
+			map->format.format_write = regmap_format_7_17_write;
+			return 0;
+		}
+		return -EINVAL;
+
+	case 10:
+		if (config->val_bits != 14)
+			return -EINVAL;
+		map->format.format_write = regmap_format_10_14_write;
+		return 0;
+
+	case 12:
+		if (config->val_bits != 20)
+			return -EINVAL;
+		map->format.format_write = regmap_format_12_20_write;
+		return 0;
+
+	case 8:
+		map->format.format_reg = regmap_format_8;
+		return 0;
+
+	case 16:
+		switch (reg_endian) {
+		case REGMAP_ENDIAN_BIG:
+			map->format.format_reg = regmap_format_16_be;
+			return 0;
+		case REGMAP_ENDIAN_LITTLE:
+			map->format.format_reg = regmap_format_16_le;
+			return 0;
+		case REGMAP_ENDIAN_NATIVE:
+			map->format.format_reg = regmap_format_16_native;
+			return 0;
+		default:
+			return -EINVAL;
+		}
+
+	case 24:
+		if (reg_endian != REGMAP_ENDIAN_BIG)
+			return -EINVAL;
+		map->format.format_reg = regmap_format_24_be;
+		return 0;
+
+	case 32:
+		switch (reg_endian) {
+		case REGMAP_ENDIAN_BIG:
+			map->format.format_reg = regmap_format_32_be;
+			return 0;
+		case REGMAP_ENDIAN_LITTLE:
+			map->format.format_reg = regmap_format_32_le;
+			return 0;
+		case REGMAP_ENDIAN_NATIVE:
+			map->format.format_reg = regmap_format_32_native;
+			return 0;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	return -EINVAL;
+}
+
+/* Pick format_val()/parse_val() for the value width and endianness. */
+static int regmap_set_val_format(struct regmap *map, const struct regmap_config *config,
+				 enum regmap_endian val_endian)
+{
+	if (val_endian == REGMAP_ENDIAN_NATIVE)
+		map->format.parse_inplace = regmap_parse_inplace_noop;
+
+	switch (config->val_bits) {
+	case 8:
+		map->format.format_val = regmap_format_8;
+		map->format.parse_val = regmap_parse_8;
+		map->format.parse_inplace = regmap_parse_inplace_noop;
+		return 0;
+	case 16:
+		switch (val_endian) {
+		case REGMAP_ENDIAN_BIG:
+			map->format.format_val = regmap_format_16_be;
+			map->format.parse_val = regmap_parse_16_be;
+			map->format.parse_inplace = regmap_parse_16_be_inplace;
+			return 0;
+		case REGMAP_ENDIAN_LITTLE:
+			map->format.format_val = regmap_format_16_le;
+			map->format.parse_val = regmap_parse_16_le;
+			map->format.parse_inplace = regmap_parse_16_le_inplace;
+			return 0;
+		case REGMAP_ENDIAN_NATIVE:
+			map->format.format_val = regmap_format_16_native;
+			map->format.parse_val = regmap_parse_16_native;
+			return 0;
+		default:
+			return -EINVAL;
+		}
+	case 24:
+		if (val_endian != REGMAP_ENDIAN_BIG)
+			return -EINVAL;
+		map->format.format_val = regmap_format_24_be;
+		map->format.parse_val = regmap_parse_24_be;
+		return 0;
+	case 32:
+		switch (val_endian) {
+		case REGMAP_ENDIAN_BIG:
+			map->format.format_val = regmap_format_32_be;
+			map->format.parse_val = regmap_parse_32_be;
+			map->format.parse_inplace = regmap_parse_32_be_inplace;
+			return 0;
+		case REGMAP_ENDIAN_LITTLE:
+			map->format.format_val = regmap_format_32_le;
+			map->format.parse_val = regmap_parse_32_le;
+			map->format.parse_inplace = regmap_parse_32_le_inplace;
+			return 0;
+		case REGMAP_ENDIAN_NATIVE:
+			map->format.format_val = regmap_format_32_native;
+			map->format.parse_val = regmap_parse_32_native;
+			return 0;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Set up the format/parse functions, cross-validate endianness,
+ * allocate the work buffer and select the bus write path.
+ */
+static int regmap_init_format(struct regmap *map,
+			      const struct regmap_config *config,
+			      enum regmap_endian reg_endian,
+			      enum regmap_endian val_endian)
+{
+	int ret;
+
+	ret = regmap_set_reg_format(map, config, reg_endian);
+	if (ret)
+		return ret;
+
+	ret = regmap_set_val_format(map, config, val_endian);
+	if (ret)
+		return ret;
+
+	if (map->format.format_write) {
+		if (reg_endian != REGMAP_ENDIAN_BIG ||
+		    val_endian != REGMAP_ENDIAN_BIG)
+			return -EINVAL;
+		map->use_single_write = true;
+	}
+
+	if (!map->format.format_write &&
+	    !(map->format.format_reg && map->format.format_val))
+		return -EINVAL;
+
+	map->work_buf = kzalloc(map->format.buf_size, GFP_KERNEL);
+	if (map->work_buf == NULL)
+		return -ENOMEM;
+
+	if (map->format.format_write) {
+		map->defer_caching = false;
+		map->reg_write = _regmap_bus_formatted_write;
+	} else if (map->format.format_val) {
+		map->defer_caching = true;
+		map->reg_write = _regmap_bus_raw_write;
+	}
+
+	return 0;
+}
+
+static void regmap_init_release(struct regmap *map)
+{
+	if (!map)
+		return;
+
+	regcache_exit(map);
+	regmap_range_exit(map);
+	kfree(map->work_buf);
+	if (map->hwlock)
+		hwspin_lock_free(map->hwlock);
+	kfree_const(map->name);
+	kfree(map);
+}
+
+DEFINE_FREE(regmap_init_release, struct regmap *, regmap_init_release(_T));
+
+struct regmap *__regmap_init(struct device *dev,
+			     const struct regmap_bus *bus,
+			     void *bus_context,
+			     const struct regmap_config *config,
+			     struct lock_class_key *lock_key,
+			     const char *lock_name)
+{
+	bool fast_io;
+	int ret;
+
+	if (!config)
+		return ERR_PTR(-EINVAL);
+
+	struct regmap *map __free(regmap_init_release) = kzalloc_obj(*map);
+	if (map == NULL)
+		return ERR_PTR(-ENOMEM);
+
+	ret = regmap_set_name(map, config);
+	if (ret)
+		return ERR_PTR(ret);
+
+	fast_io = (bus && bus->fast_io) || config->fast_io;
+
+	ret = regmap_set_lock(map, config, fast_io, lock_key, lock_name);
+	if (ret)
+		return ERR_PTR(ret);
 
 	/*
 	 * When we write in fast-paths with regmap_bulk_write() don't allocate
 	 * scratch buffers with sleeping allocations.
 	 */
-	if ((bus && bus->fast_io) || config->fast_io)
-		map->alloc_flags = GFP_ATOMIC;
-	else
-		map->alloc_flags = GFP_KERNEL;
+	map->alloc_flags = fast_io ? GFP_ATOMIC : GFP_KERNEL;
 
 	map->reg_base = config->reg_base;
 	map->reg_shift = config->pad_bits % 8;
@@ -813,7 +1130,6 @@ struct regmap *__regmap_init(struct device *dev,
 	map->writeable_noinc_reg = config->writeable_noinc_reg;
 	map->readable_noinc_reg = config->readable_noinc_reg;
 	map->reg_default_cb = config->reg_default_cb;
-	map->cache_type = config->cache_type;
 
 	spin_lock_init(&map->async_lock);
 	INIT_LIST_HEAD(&map->async_list);
@@ -838,22 +1154,23 @@ struct regmap *__regmap_init(struct device *dev,
 		map->read = config->read;
 		map->write = config->write;
 
-		reg_endian = REGMAP_ENDIAN_NATIVE;
-		val_endian = REGMAP_ENDIAN_NATIVE;
+		ret = regmap_init_format(map, config,
+					 REGMAP_ENDIAN_NATIVE,
+					 REGMAP_ENDIAN_NATIVE);
+		if (ret)
+			return ERR_PTR(ret);
 	} else if (!bus) {
 		map->reg_read  = config->reg_read;
 		map->reg_write = config->reg_write;
 		map->reg_update_bits = config->reg_update_bits;
 
 		map->defer_caching = false;
-		goto skip_format_initialization;
 	} else if (!bus->read || !bus->write) {
 		map->reg_read = _regmap_bus_reg_read;
 		map->reg_write = _regmap_bus_reg_write;
 		map->reg_update_bits = bus->reg_update_bits;
 
 		map->defer_caching = false;
-		goto skip_format_initialization;
 	} else {
 		map->reg_read  = _regmap_bus_read;
 		map->reg_update_bits = bus->reg_update_bits;
@@ -861,323 +1178,37 @@ struct regmap *__regmap_init(struct device *dev,
 		map->read = bus->read;
 		map->write = bus->write;
 
-		reg_endian = regmap_get_reg_endian(bus, config);
-		val_endian = regmap_get_val_endian(dev, bus, config);
+		ret = regmap_init_format(map, config,
+					 regmap_get_reg_endian(bus, config),
+					 regmap_get_val_endian(dev, bus, config));
+		if (ret)
+			return ERR_PTR(ret);
 	}
 
-	switch (config->reg_bits + map->reg_shift) {
-	case 2:
-		switch (config->val_bits) {
-		case 6:
-			map->format.format_write = regmap_format_2_6_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
+	ret = regmap_init_ranges(map, config);
+	if (ret)
+		return ERR_PTR(ret);
 
-	case 4:
-		switch (config->val_bits) {
-		case 12:
-			map->format.format_write = regmap_format_4_12_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
+	if (bus && bus->init_limits)
+		bus->init_limits(bus_context, config,
+				 &map->max_raw_read, &map->max_raw_write);
 
-	case 7:
-		switch (config->val_bits) {
-		case 9:
-			map->format.format_write = regmap_format_7_9_write;
-			break;
-		case 17:
-			map->format.format_write = regmap_format_7_17_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 10:
-		switch (config->val_bits) {
-		case 14:
-			map->format.format_write = regmap_format_10_14_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 12:
-		switch (config->val_bits) {
-		case 20:
-			map->format.format_write = regmap_format_12_20_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 8:
-		map->format.format_reg = regmap_format_8;
-		break;
-
-	case 16:
-		switch (reg_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_reg = regmap_format_16_be;
-			break;
-		case REGMAP_ENDIAN_LITTLE:
-			map->format.format_reg = regmap_format_16_le;
-			break;
-		case REGMAP_ENDIAN_NATIVE:
-			map->format.format_reg = regmap_format_16_native;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 24:
-		switch (reg_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_reg = regmap_format_24_be;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 32:
-		switch (reg_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_reg = regmap_format_32_be;
-			break;
-		case REGMAP_ENDIAN_LITTLE:
-			map->format.format_reg = regmap_format_32_le;
-			break;
-		case REGMAP_ENDIAN_NATIVE:
-			map->format.format_reg = regmap_format_32_native;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	default:
-		goto err_hwlock;
-	}
-
-	if (val_endian == REGMAP_ENDIAN_NATIVE)
-		map->format.parse_inplace = regmap_parse_inplace_noop;
-
-	switch (config->val_bits) {
-	case 8:
-		map->format.format_val = regmap_format_8;
-		map->format.parse_val = regmap_parse_8;
-		map->format.parse_inplace = regmap_parse_inplace_noop;
-		break;
-	case 16:
-		switch (val_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_val = regmap_format_16_be;
-			map->format.parse_val = regmap_parse_16_be;
-			map->format.parse_inplace = regmap_parse_16_be_inplace;
-			break;
-		case REGMAP_ENDIAN_LITTLE:
-			map->format.format_val = regmap_format_16_le;
-			map->format.parse_val = regmap_parse_16_le;
-			map->format.parse_inplace = regmap_parse_16_le_inplace;
-			break;
-		case REGMAP_ENDIAN_NATIVE:
-			map->format.format_val = regmap_format_16_native;
-			map->format.parse_val = regmap_parse_16_native;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-	case 24:
-		switch (val_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_val = regmap_format_24_be;
-			map->format.parse_val = regmap_parse_24_be;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-	case 32:
-		switch (val_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_val = regmap_format_32_be;
-			map->format.parse_val = regmap_parse_32_be;
-			map->format.parse_inplace = regmap_parse_32_be_inplace;
-			break;
-		case REGMAP_ENDIAN_LITTLE:
-			map->format.format_val = regmap_format_32_le;
-			map->format.parse_val = regmap_parse_32_le;
-			map->format.parse_inplace = regmap_parse_32_le_inplace;
-			break;
-		case REGMAP_ENDIAN_NATIVE:
-			map->format.format_val = regmap_format_32_native;
-			map->format.parse_val = regmap_parse_32_native;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-	}
-
-	if (map->format.format_write) {
-		if ((reg_endian != REGMAP_ENDIAN_BIG) ||
-		    (val_endian != REGMAP_ENDIAN_BIG))
-			goto err_hwlock;
-		map->use_single_write = true;
-	}
-
-	if (!map->format.format_write &&
-	    !(map->format.format_reg && map->format.format_val))
-		goto err_hwlock;
-
-	map->work_buf = kzalloc(map->format.buf_size, GFP_KERNEL);
-	if (map->work_buf == NULL) {
-		ret = -ENOMEM;
-		goto err_hwlock;
-	}
-
-	if (map->format.format_write) {
-		map->defer_caching = false;
-		map->reg_write = _regmap_bus_formatted_write;
-	} else if (map->format.format_val) {
-		map->defer_caching = true;
-		map->reg_write = _regmap_bus_raw_write;
-	}
-
-skip_format_initialization:
-
-	map->range_tree = RB_ROOT;
-	for (i = 0; i < config->num_ranges; i++) {
-		const struct regmap_range_cfg *range_cfg = &config->ranges[i];
-		struct regmap_range_node *new;
-
-		/* Sanity check */
-		if (range_cfg->range_max < range_cfg->range_min) {
-			dev_err(map->dev, "Invalid range %d: %u < %u\n", i,
-				range_cfg->range_max, range_cfg->range_min);
-			goto err_range;
-		}
-
-		if (range_cfg->range_max > map->max_register) {
-			dev_err(map->dev, "Invalid range %d: %u > %u\n", i,
-				range_cfg->range_max, map->max_register);
-			goto err_range;
-		}
-
-		if (range_cfg->selector_reg > map->max_register) {
-			dev_err(map->dev,
-				"Invalid range %d: selector out of map\n", i);
-			goto err_range;
-		}
-
-		if (range_cfg->window_len == 0) {
-			dev_err(map->dev, "Invalid range %d: window_len 0\n",
-				i);
-			goto err_range;
-		}
-
-		/* Make sure, that this register range has no selector
-		   or data window within its boundary */
-		for (j = 0; j < config->num_ranges; j++) {
-			unsigned int sel_reg = config->ranges[j].selector_reg;
-			unsigned int win_min = config->ranges[j].window_start;
-			unsigned int win_max = win_min +
-					       config->ranges[j].window_len - 1;
-
-			/* Allow data window inside its own virtual range */
-			if (j == i)
-				continue;
-
-			if (range_cfg->range_min <= sel_reg &&
-			    sel_reg <= range_cfg->range_max) {
-				dev_err(map->dev,
-					"Range %d: selector for %d in window\n",
-					i, j);
-				goto err_range;
-			}
-
-			if (!(win_max < range_cfg->range_min ||
-			      win_min > range_cfg->range_max)) {
-				dev_err(map->dev,
-					"Range %d: window for %d in window\n",
-					i, j);
-				goto err_range;
-			}
-		}
-
-		new = kzalloc_obj(*new);
-		if (new == NULL) {
-			ret = -ENOMEM;
-			goto err_range;
-		}
-
-		new->map = map;
-		new->name = range_cfg->name;
-		new->range_min = range_cfg->range_min;
-		new->range_max = range_cfg->range_max;
-		new->selector_reg = range_cfg->selector_reg;
-		new->selector_mask = range_cfg->selector_mask;
-		new->selector_shift = range_cfg->selector_shift;
-		new->window_start = range_cfg->window_start;
-		new->window_len = range_cfg->window_len;
-
-		if (!_regmap_range_add(map, new)) {
-			dev_err(map->dev, "Failed to add range %d\n", i);
-			kfree(new);
-			goto err_range;
-		}
-
-		if (map->selector_work_buf == NULL) {
-			map->selector_work_buf =
-				kzalloc(map->format.buf_size, GFP_KERNEL);
-			if (map->selector_work_buf == NULL) {
-				ret = -ENOMEM;
-				goto err_range;
-			}
-		}
-	}
-
+	map->cache_type = config->cache_type;
 	ret = regcache_init(map, config);
-	if (ret != 0)
-		goto err_range;
+	if (ret) {
+		map->cache_type = REGCACHE_NONE;
+		return ERR_PTR(ret);
+	}
 
 	if (dev) {
 		ret = regmap_attach_dev(dev, map, config);
 		if (ret != 0)
-			goto err_regcache;
+			return ERR_PTR(ret);
 	} else {
 		regmap_debugfs_init(map);
 	}
 
-	return map;
-
-err_regcache:
-	regcache_exit(map);
-err_range:
-	regmap_range_exit(map);
-	kfree(map->work_buf);
-err_hwlock:
-	if (map->hwlock)
-		hwspin_lock_free(map->hwlock);
-err_name:
-	kfree_const(map->name);
-err_map:
-	kfree(map);
-err:
-	if (bus && bus->free_on_exit)
-		kfree(bus);
-	return ERR_PTR(ret);
+	return_ptr(map);
 }
 EXPORT_SYMBOL_GPL(__regmap_init);
 
@@ -1215,7 +1246,7 @@ static void regmap_field_init(struct regmap_field *rm_field,
 	rm_field->regmap = regmap;
 	rm_field->reg = reg_field.reg;
 	rm_field->shift = reg_field.lsb;
-	rm_field->mask = GENMASK(reg_field.msb, reg_field.lsb);
+	rm_field->mask = REG_FIELD_GENMASK(reg_field);
 
 	WARN_ONCE(rm_field->mask == 0, "invalid empty mask defined\n");
 
@@ -1422,6 +1453,7 @@ int regmap_reinit_cache(struct regmap *map, const struct regmap_config *config)
 
 	regmap_debugfs_exit(map);
 	regcache_exit(map);
+	map->cache_ops = NULL;
 
 	map->max_register = config->max_register;
 	map->max_register_is_set = map->max_register ?: config->max_register_is_0;
@@ -1432,22 +1464,29 @@ int regmap_reinit_cache(struct regmap *map, const struct regmap_config *config)
 	map->writeable_noinc_reg = config->writeable_noinc_reg;
 	map->readable_noinc_reg = config->readable_noinc_reg;
 	map->reg_default_cb = config->reg_default_cb;
-	map->cache_type = config->cache_type;
 
 	ret = regmap_set_name(map, config);
 	if (ret)
-		return ret;
+		goto err_none;
 
 	map->cache_bypass = false;
 	map->cache_only = false;
 
+	map->cache_type = config->cache_type;
 	ret = regcache_init(map, config);
 	if (ret)
-		return ret;
+		goto err_none;
 
 	regmap_debugfs_init(map);
 
 	return 0;
+
+err_none:
+	map->cache_ops = NULL;
+	map->cache_type = REGCACHE_NONE;
+	map->cache_bypass = true;
+	map->cache_only = false;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(regmap_reinit_cache);
 
@@ -1481,8 +1520,6 @@ void regmap_exit(struct regmap *map)
 		mutex_destroy(&map->mutex);
 	kfree_const(map->name);
 	kfree(map->patch);
-	if (map->bus && map->bus->free_on_exit)
-		kfree(map->bus);
 	kfree(map);
 }
 EXPORT_SYMBOL_GPL(regmap_exit);
@@ -1640,11 +1677,10 @@ static int _regmap_raw_write_impl(struct regmap *map, unsigned int reg,
 {
 	struct regmap_range_node *range;
 	unsigned long flags;
-	void *work_val = map->work_buf + map->format.reg_bytes +
-		map->format.pad_bytes;
+	void *work_val;
 	void *buf;
-	int ret = -ENOTSUPP;
 	size_t len;
+	int ret;
 	int i;
 
 	/* Check for unwritable or noinc registers in range
@@ -1724,6 +1760,7 @@ static int _regmap_raw_write_impl(struct regmap *map, unsigned int reg,
 	 * buffer to write.  Since register syncs often generate raw
 	 * writes of single registers optimise that case.
 	 */
+	work_val = map->work_buf + map->format.reg_bytes + map->format.pad_bytes;
 	if (val != work_val && val_len == map->format.val_bytes) {
 		memcpy(work_val, val, map->format.val_bytes);
 		val = work_val;
@@ -2327,8 +2364,8 @@ EXPORT_SYMBOL_GPL(regmap_fields_update_bits_base);
 int regmap_bulk_write(struct regmap *map, unsigned int reg, const void *val,
 		     size_t val_count)
 {
-	int ret = 0, i;
 	size_t val_bytes = map->format.val_bytes;
+	int ret, i;
 
 	if (!IS_ALIGNED(reg, map->reg_stride))
 		return -EINVAL;
@@ -2338,6 +2375,8 @@ int regmap_bulk_write(struct regmap *map, unsigned int reg, const void *val,
 	 * single write operations.
 	 */
 	if (!map->write || !map->format.parse_inplace) {
+		ret = 0; /* Later error paths rely on this */
+
 		guard(regmap)(map);
 
 		for (i = 0; i < val_count; i++) {
@@ -2595,9 +2634,9 @@ static int _regmap_multi_reg_write(struct regmap *map,
 		 */
 		range = _regmap_range_lookup(map, reg);
 		if (range || regs[i].delay_us) {
-			size_t len = sizeof(struct reg_sequence)*num_regs;
-			struct reg_sequence *base = kmemdup(regs, len,
-							   GFP_KERNEL);
+			struct reg_sequence *base;
+
+			base = kmemdup_array(regs, num_regs, sizeof(*regs), GFP_KERNEL);
 			if (!base)
 				return -ENOMEM;
 			ret = _regmap_range_multi_paged_reg_write(map, base,
@@ -2775,12 +2814,12 @@ static int _regmap_bus_read(void *context, unsigned int reg,
 {
 	int ret;
 	struct regmap *map = context;
-	void *work_val = map->work_buf + map->format.reg_bytes +
-		map->format.pad_bytes;
+	void *work_val;
 
 	if (!map->format.parse_val)
 		return -EINVAL;
 
+	work_val = map->work_buf + map->format.reg_bytes + map->format.pad_bytes;
 	ret = _regmap_raw_read(map, reg, work_val, map->format.val_bytes, false);
 	if (ret == 0)
 		*val = map->format.parse_val(work_val);

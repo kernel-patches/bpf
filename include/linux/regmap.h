@@ -10,6 +10,8 @@
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
  */
 
+#include <linux/bitfield.h>
+#include <linux/bits.h>
 #include <linux/bug.h>
 #include <linux/cleanup.h>
 #include <linux/delay.h>
@@ -248,9 +250,9 @@ struct regmap_range {
  * check function will return true. "no_ranges" are searched first.
  */
 struct regmap_access_table {
-	const struct regmap_range *yes_ranges;
+	const struct regmap_range *yes_ranges __counted_by_ptr(n_yes_ranges);
 	unsigned int n_yes_ranges;
-	const struct regmap_range *no_ranges;
+	const struct regmap_range *no_ranges __counted_by_ptr(n_no_ranges);
 	unsigned int n_no_ranges;
 };
 
@@ -579,7 +581,6 @@ typedef void (*regmap_hw_free_context)(void *context);
  *	     to perform locking. This field is ignored if custom lock/unlock
  *	     functions are used (see fields lock/unlock of
  *	     struct regmap_config).
- * @free_on_exit: kfree this on exit of regmap
  * @write: Write operation.
  * @gather_write: Write operation with split register/value, return -ENOTSUPP
  *                if not implemented  on a given device.
@@ -610,10 +611,13 @@ typedef void (*regmap_hw_free_context)(void *context);
  *     DEFAULT, BIG is assumed.
  * @max_raw_read: Max raw read size that can be used on the bus.
  * @max_raw_write: Max raw write size that can be used on the bus.
+ * @init_limits: Optional callback to adjust the maximum raw read and write
+ *     sizes for a device. Called with the bus context, the config and
+ *     pointers to the limits during regmap initialization before the cache
+ *     is initialized.
  */
 struct regmap_bus {
 	bool fast_io;
-	bool free_on_exit;
 	regmap_hw_write write;
 	regmap_hw_gather_write gather_write;
 	regmap_hw_async_write async_write;
@@ -630,6 +634,10 @@ struct regmap_bus {
 	enum regmap_endian val_format_endian_default;
 	size_t max_raw_read;
 	size_t max_raw_write;
+	void (*init_limits)(void *context,
+			    const struct regmap_config *config,
+			    size_t *max_raw_read,
+			    size_t *max_raw_write);
 };
 
 /*
@@ -1463,25 +1471,27 @@ struct reg_field {
 	unsigned int id_offset;
 };
 
-#define REG_FIELD(_reg, _lsb, _msb) {		\
-				.reg = _reg,	\
-				.lsb = _lsb,	\
-				.msb = _msb,	\
-				}
+#define REG_FIELD(_reg, _lsb, _msb) ((struct reg_field){ \
+				.reg = _reg,		 \
+				.lsb = _lsb,		 \
+				.msb = _msb,		 \
+				})
 
-#define REG_FIELD_ID(_reg, _lsb, _msb, _size, _offset) {	\
-				.reg = _reg,			\
-				.lsb = _lsb,			\
-				.msb = _msb,			\
-				.id_size = _size,		\
-				.id_offset = _offset,		\
-				}
+#define REG_FIELD_ID(_reg, _lsb, _msb, _size, _offset) ((struct reg_field){ \
+				.reg = _reg,				    \
+				.lsb = _lsb,				    \
+				.msb = _msb,				    \
+				.id_size = _size,			    \
+				.id_offset = _offset,			    \
+				})
+
+#define REG_FIELD_GENMASK(_reg_field)	GENMASK(_reg_field.msb, _reg_field.lsb)
 
 struct regmap_field *regmap_field_alloc(struct regmap *regmap,
 		struct reg_field reg_field);
 void regmap_field_free(struct regmap_field *field);
 
-DEFINE_FREE(regmap_field, struct regmap_field *, if (_T) regmap_field_free(_T))
+DEFINE_FREE(regmap_field, struct regmap_field *, if (!IS_ERR_OR_NULL(_T)) regmap_field_free(_T))
 
 struct regmap_field *devm_regmap_field_alloc(struct device *dev,
 		struct regmap *regmap, struct reg_field reg_field);
@@ -1581,6 +1591,29 @@ regmap_fields_force_update_bits(struct regmap_field *field, unsigned int id,
 {
 	return regmap_fields_update_bits_base(field, id, mask, val,
 					      NULL, false, true);
+}
+
+static inline int
+regmap_reg_field_read(struct regmap *regmap, struct reg_field field,
+		      unsigned int *val)
+{
+	int ret;
+
+	ret = regmap_read(regmap, field.reg, val);
+	if (ret)
+		return ret;
+
+	*val = field_get(REG_FIELD_GENMASK(field), *val);
+
+	return ret;
+}
+
+static inline int
+regmap_reg_field_write(struct regmap *regmap, struct reg_field field,
+		       unsigned int val)
+{
+	return regmap_update_bits(regmap, field.reg,
+				  REG_FIELD_GENMASK(field), val << field.lsb);
 }
 
 /**
@@ -2066,6 +2099,22 @@ regmap_fields_update_bits(struct regmap_field *field, unsigned int id,
 static inline int
 regmap_fields_force_update_bits(struct regmap_field *field, unsigned int id,
 				unsigned int mask, unsigned int val)
+{
+	WARN_ONCE(1, "regmap API is disabled");
+	return -EINVAL;
+}
+
+static inline int
+regmap_reg_field_read(struct regmap *regmap, struct reg_field field,
+		      unsigned int *val)
+{
+	WARN_ONCE(1, "regmap API is disabled");
+	return -EINVAL;
+}
+
+static inline int
+regmap_reg_field_write(struct regmap *regmap, struct reg_field field,
+		       unsigned int val)
 {
 	WARN_ONCE(1, "regmap API is disabled");
 	return -EINVAL;
