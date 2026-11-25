@@ -306,7 +306,7 @@ loop:
 	/* The file system has been taken offline. No new transactions. */
 	if (unlikely(BTRFS_FS_ERROR(fs_info))) {
 		spin_unlock(&fs_info->trans_lock);
-		return -EROFS;
+		return btrfs_is_shutdown(fs_info) ? -EIO : -EROFS;
 	}
 
 	cur_trans = fs_info->running_transaction;
@@ -361,7 +361,7 @@ loop:
 		btrfs_lockdep_release(fs_info, btrfs_trans_num_extwriters);
 		btrfs_lockdep_release(fs_info, btrfs_trans_num_writers);
 		kfree(cur_trans);
-		return -EROFS;
+		return btrfs_is_shutdown(fs_info) ? -EIO : -EROFS;
 	}
 
 	cur_trans->fs_info = fs_info;
@@ -654,7 +654,7 @@ start_transaction(struct btrfs_root *root, unsigned int num_items,
 	ASSERT(has_single_bit_set(type));
 
 	if (unlikely(BTRFS_FS_ERROR(fs_info)))
-		return ERR_PTR(-EROFS);
+		return ERR_PTR(btrfs_is_shutdown(fs_info) ? -EIO : -EROFS);
 
 	if (current->journal_info) {
 		WARN_ON(type & TRANS_EXTWRITERS_MASK);
@@ -1156,7 +1156,7 @@ static int __btrfs_end_transaction(struct btrfs_trans_handle *trans,
 		if (TRANS_ABORTED(trans))
 			ret = trans->aborted;
 		else
-			ret = -EROFS;
+			ret = btrfs_is_shutdown(info) ? -EIO : -EROFS;
 	}
 
 	kmem_cache_free(btrfs_trans_handle_cachep, trans);
@@ -2371,7 +2371,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		 */
 		if (unlikely(BTRFS_FS_ERROR(fs_info))) {
 			spin_unlock(&fs_info->trans_lock);
-			ret = -EROFS;
+			ret = btrfs_is_shutdown(fs_info) ? -EIO : -EROFS;
 			goto lockdep_release;
 		}
 	}
