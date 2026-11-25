@@ -32,6 +32,9 @@
 /* Max length of filename (not 255) */
 #define SQUASHFS_NAME_LEN		256
 
+/* Max on-disk length of filename */
+#define SQUASHFS_DISK_NAME_LEN		255
+
 /* Max value for directory header count*/
 #define SQUASHFS_DIR_COUNT		256
 
