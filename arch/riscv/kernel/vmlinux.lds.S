@@ -125,6 +125,19 @@ SECTIONS
 		*(.srodata*)
 	}
 
+#ifdef CONFIG_UNWINDER_DWARF_CFI
+	.eh_frame_hdr : ALIGN(4) {
+		__start_eh_frame_hdr = .;
+		*(.eh_frame_hdr)
+		__stop_eh_frame_hdr = .;
+	}
+	.eh_frame : ALIGN(8) {
+		__start_eh_frame = .;
+		*(.eh_frame)
+		__stop_eh_frame = .;
+	}
+#endif
+
 	. = ALIGN(SECTION_ALIGN);
 	_data = .;
 

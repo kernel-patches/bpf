@@ -902,5 +902,14 @@ int module_finalize(const Elf_Ehdr *hdr,
 	if (s)
 		apply_module_alternatives((void *)s->sh_addr, s->sh_size);
 
+	s = find_section(hdr, sechdrs, ".eh_frame");
+	if (s && (s->sh_flags & SHF_ALLOC))
+		riscv_unwind_module_init(me, (void *)s->sh_addr, s->sh_size);
+
 	return 0;
+}
+
+void module_arch_cleanup(struct module *mod)
+{
+	riscv_unwind_module_cleanup(mod);
 }

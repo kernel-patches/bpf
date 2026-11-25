@@ -7,6 +7,9 @@
 #
 
 LDFLAGS_vmlinux := -z norelro
+ifeq ($(CONFIG_UNWINDER_DWARF_CFI),y)
+	LDFLAGS_vmlinux += --eh-frame-hdr
+endif
 ifeq ($(CONFIG_RELOCATABLE),y)
 	LDFLAGS_vmlinux += -shared -Bsymbolic -z notext
 	KBUILD_CFLAGS += -fPIE
@@ -96,8 +99,18 @@ ifeq ($(CONFIG_CMODEL_MEDANY),y)
 	KBUILD_CFLAGS += -mcmodel=medany
 endif
 
-# Avoid generating .eh_frame sections.
+# Avoid generating .eh_frame sections unless runtime unwind tables are enabled.
+ifeq ($(CONFIG_UNWIND_TABLES),y)
+KBUILD_CFLAGS += -fasynchronous-unwind-tables
+KBUILD_AFLAGS += -fasynchronous-unwind-tables
+ifeq ($(CONFIG_UNWINDER_DWARF_CFI),y)
+KBUILD_CFLAGS += -fomit-frame-pointer
+KBUILD_RUSTFLAGS += -Cforce-unwind-tables=y -Zuse-sync-unwind=n
+KBUILD_RUSTFLAGS += $(if $(call rustc-min-version,109800),,-Zllvm_module_flag=uwtable:u32:2:max)
+endif
+else
 KBUILD_CFLAGS += -fno-asynchronous-unwind-tables -fno-unwind-tables
+endif
 
 # The RISC-V attributes frequently cause compatibility issues and provide no
 # information, so just turn them off.

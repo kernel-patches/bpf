@@ -42,6 +42,15 @@ CFLAGS_REMOVE_patch.o	= $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_sbi.o	= $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_return_address.o	= $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_sbi_ecall.o = $(CC_FLAGS_FTRACE)
+ifdef CONFIG_UNWINDER_DWARF_CFI
+CFLAGS_REMOVE_stacktrace.o = $(CC_FLAGS_FTRACE)
+endif
+endif
+
+ifdef CONFIG_UNWINDER_DWARF_CFI
+CFLAGS_stacktrace.o += -fno-optimize-sibling-calls
+KASAN_SANITIZE_stacktrace.o := n
+KCOV_INSTRUMENT_stacktrace.o := n
 endif
 
 always-$(KBUILD_BUILTIN) += vmlinux.lds

@@ -217,6 +217,7 @@ ftrace_partial_regs(const struct ftrace_regs *fregs, struct pt_regs *regs)
 	regs->sp = afregs->sp;
 	regs->s0 = afregs->s0;
 	regs->t1 = afregs->t1;
+	regs->cause = 0;
 	return regs;
 }
 
