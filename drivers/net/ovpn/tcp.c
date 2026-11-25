@@ -294,7 +294,8 @@ static void ovpn_tcp_send_sock(struct ovpn_peer *peer, struct sock *sk)
 
 	if (!peer->tcp.out_msg.len) {
 		local_bh_disable();
-		dev_dstats_tx_add(peer->ovpn->dev, skb->len);
+		dev_dstats_tx_add(peer->ovpn->dev,
+				  skb->len - skb_inner_network_offset(skb));
 		local_bh_enable();
 	}
 
@@ -446,6 +447,8 @@ static int ovpn_tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 		goto peer_free;
 	}
 
+	/* userspace messages are not encrypted: account them entirely */
+	skb_reset_inner_network_header(skb);
 	ovpn_skb_cb(skb)->nosignal = msg->msg_flags & MSG_NOSIGNAL;
 	ovpn_tcp_send_sock_skb(peer, sk, skb);
 	ret = size;
