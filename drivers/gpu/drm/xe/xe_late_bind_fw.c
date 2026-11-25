@@ -258,6 +258,13 @@ static void xe_late_bind_work(struct work_struct *work)
 
 	xe_device_assert_mem_access(xe);
 
+	/* TODO: Compare the running OCODE version at probe when available. */
+	if (lbfw->type == INTEL_LB_TYPE_OCODE && xe_sysctrl_is_oobmsm_fw_ready(xe)) {
+		drm_dbg(&xe->drm, "%s firmware already loaded, skipping\n",
+			fw_id_to_name[lbfw->id]);
+		goto out;
+	}
+
 	/* we can queue this before the component is bound */
 	for (slept = 0; slept < LB_INIT_TIMEOUT_MS; slept += 100) {
 		if (late_bind->component.ops)
