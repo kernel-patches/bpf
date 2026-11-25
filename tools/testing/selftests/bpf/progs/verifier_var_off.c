@@ -762,7 +762,7 @@ __naked void variable_offset_stack_access_ok(void)
 /* The next two need bpf_jit_bypass_spec_v1() */
 SEC("socket")
 __description("variable-offset stack write of a pointer")
-__arch_loongarch
+__arch_loongarch64
 __success __caps_unpriv(CAP_BPF) __failure_unpriv
 __msg_unpriv("R1 leaks addr into stack")
 __naked void stack_write_ptr_var_off(void)
@@ -785,7 +785,7 @@ __naked void stack_write_ptr_var_off(void)
 
 SEC("socket")
 __description("variable-offset stack pointer at the header of a loop")
-__arch_loongarch
+__arch_loongarch64
 __success __caps_unpriv(CAP_BPF) __success_unpriv
 __naked void stack_ptr_var_off_in_loop(void)
 {

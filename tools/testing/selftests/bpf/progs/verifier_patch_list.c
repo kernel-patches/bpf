@@ -129,7 +129,7 @@ __naked void patch_list_may_goto(void)
 /* the JITs that support gotol */
 #if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64) || \
 	defined(__TARGET_ARCH_powerpc) || defined(__TARGET_ARCH_s390) || \
-	defined(__TARGET_ARCH_loongarch) || \
+	(defined(__TARGET_ARCH_loongarch) && __loongarch_grlen == 64) || \
 	(defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64)
 
 /* The patches turn 8200 divisions into 32800 insns, too far for a 16-bit offset. */
@@ -400,7 +400,7 @@ __arch_x86_64
 __arch_s390x
 __arch_arm64
 __arch_riscv64
-__arch_loongarch
+__arch_loongarch64
 __success
 __xlated("23: call pc+7")
 __xlated("...")

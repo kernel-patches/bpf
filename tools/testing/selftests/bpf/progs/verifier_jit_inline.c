@@ -12,7 +12,7 @@ __arch_arm64
 __jited("	mrs	x8, SP_EL0")
 __arch_riscv64
 __jited("	mv	t6, tp")
-__arch_loongarch
+__arch_loongarch64
 __jited("	move	$a5, $tp")
 int inline_bpf_get_current_task(void)
 {
@@ -23,7 +23,7 @@ int inline_bpf_get_current_task(void)
 
 SEC("fentry/bpf_fentry_test2")
 __success __retval(0)
-__arch_loongarch
+__arch_loongarch64
 __jited("	ld.wu	$a5, $tp, 16")
 int inline_bpf_get_smp_processor_id(void)
 {

@@ -42,7 +42,7 @@ SEC("tc")
 __description("stack_arg: static subprog takes less than its prototype says")
 __success __retval(15)
 __load_if_JITed()
-__arch_x86_64 __arch_arm64 __arch_riscv64 __arch_s390x __arch_loongarch
+__arch_x86_64 __arch_arm64 __arch_riscv64 __arch_s390x __arch_loongarch64
 __naked void less_than_prototype(void)
 {
 	asm volatile ("r2 = %[jmp_table] ll; r3 = 0; call %[bpf_tail_call];"
@@ -1162,7 +1162,7 @@ __naked void stack_arg_precision_fallback(void)
 SEC("tc")
 __description("stack_arg: r11 where JIT has no stack arguments")
 __failure __msg("JIT does not support stack arguments")
-__arch_s390x __arch_loongarch
+__arch_s390x __arch_loongarch64
 __naked void r11_no_jit_support(void)
 {
 	asm volatile (".8byte %[st_r11]; r0 = 0; exit;"

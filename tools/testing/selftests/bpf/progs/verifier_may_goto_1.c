@@ -12,7 +12,7 @@ __arch_x86_64
 __arch_s390x
 __arch_arm64
 __arch_riscv64
-__arch_loongarch
+__arch_loongarch64
 __xlated("0: r0 = 1")
 __xlated("1: exit")
 __success
@@ -34,7 +34,7 @@ __arch_x86_64
 __arch_s390x
 __arch_arm64
 __arch_riscv64
-__arch_loongarch
+__arch_loongarch64
 __xlated("0: r0 = 1")
 __xlated("1: exit")
 __success
@@ -58,7 +58,7 @@ __arch_x86_64
 __arch_s390x
 __arch_arm64
 __arch_riscv64
-__arch_loongarch
+__arch_loongarch64
 __xlated("0: r0 = 1")
 __xlated("1: exit")
 __success
@@ -87,7 +87,7 @@ __arch_x86_64
 __arch_s390x
 __arch_arm64
 __arch_riscv64
-__arch_loongarch
+__arch_loongarch64
 /* the main prog sets count, timestamp, owner */
 __xlated("0: r0 = ")
 __xlated("2: r0 = &(void __percpu *)(r0)")
@@ -132,7 +132,7 @@ __arch_x86_64
 __arch_s390x
 __arch_arm64
 __arch_riscv64
-__arch_loongarch
+__arch_loongarch64
 __success
 __retval(0)
 __naked void timed_may_goto_preserves_regs(void)

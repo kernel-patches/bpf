@@ -185,7 +185,7 @@
 #define __arch_arm64		__arch("ARM64")
 #define __arch_riscv64		__arch("RISCV64")
 #define __arch_s390x		__arch("s390x")
-#define __arch_loongarch	__arch("LOONGARCH")
+#define __arch_loongarch64	__arch("LOONGARCH64")
 #define __caps_unpriv(caps)	__test_tag("test_caps_unpriv=" EXPAND_QUOTE(caps))
 #define __prepare_priv		__test_tag("test_prepare_priv")
 #define __load_if_JITed()	__test_tag("load_mode=jited")
@@ -285,7 +285,7 @@
 #if (defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86) ||	\
      (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) ||		\
      defined(__TARGET_ARCH_arm) || defined(__TARGET_ARCH_s390) ||	\
-     defined(__TARGET_ARCH_loongarch)) &&				\
+     (defined(__TARGET_ARCH_loongarch) && __loongarch_grlen == 64)) &&	\
 	(__clang_major__ >= 18 || defined(__BPF_FEATURE_GOTOL))
 #define CAN_USE_GOTOL
 #endif
@@ -300,7 +300,7 @@
 	 (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) ||	\
 	 defined(__TARGET_ARCH_s390) ||					\
 	 defined(__TARGET_ARCH_powerpc) ||				\
-	 defined(__TARGET_ARCH_loongarch))
+	 (defined(__TARGET_ARCH_loongarch) && __loongarch_grlen == 64))
 #define CAN_USE_LOAD_ACQ_STORE_REL
 #endif
 
