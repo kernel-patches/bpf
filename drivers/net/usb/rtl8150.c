@@ -353,6 +353,13 @@ static void free_all_urbs(rtl8150_t * dev)
 	usb_free_urb(dev->intr_urb);
 }
 
+static void terminate_all_urbs(rtl8150_t *dev)
+{
+	usb_poison_urb(dev->rx_urb);
+	usb_poison_urb(dev->tx_urb);
+	usb_poison_urb(dev->intr_urb);
+}
+
 static void unlink_all_urbs(rtl8150_t * dev)
 {
 	usb_kill_urb(dev->rx_urb);
@@ -528,18 +535,28 @@ static int rtl8150_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	rtl8150_t *dev = usb_get_intfdata(intf);
 
+	spin_lock_irq(&dev->rx_pool_lock);
+	set_bit(RTL8150_UNPLUG, &dev->flags);
+	spin_unlock_irq(&dev->rx_pool_lock);
+
 	netif_device_detach(dev->netdev);
 
-	if (netif_running(dev->netdev)) {
-		usb_kill_urb(dev->rx_urb);
-		usb_kill_urb(dev->intr_urb);
-	}
+	usb_poison_urb(dev->rx_urb);
+	usb_poison_urb(dev->intr_urb);
+
 	return 0;
 }
 
 static int rtl8150_resume(struct usb_interface *intf)
 {
 	rtl8150_t *dev = usb_get_intfdata(intf);
+
+	spin_lock_irq(&dev->rx_pool_lock);
+	clear_bit(RTL8150_UNPLUG, &dev->flags);
+	spin_unlock_irq(&dev->rx_pool_lock);
+
+	usb_unpoison_urb(dev->rx_urb);
+	usb_unpoison_urb(dev->intr_urb);
 
 	netif_device_attach(dev->netdev);
 	if (netif_running(dev->netdev)) {
@@ -618,7 +635,10 @@ try_again:
 
 	return;
 tlsched:
-	tasklet_schedule(&dev->tl);
+	spin_lock_irq(&dev->rx_pool_lock);
+	if (!test_bit(RTL8150_UNPLUG, &dev->flags))
+		tasklet_schedule(&dev->tl);
+	spin_unlock_irq(&dev->rx_pool_lock);
 }
 
 static int enable_net_traffic(rtl8150_t * dev)
@@ -970,7 +990,8 @@ static void rtl8150_disconnect(struct usb_interface *intf)
 		set_bit(RTL8150_UNPLUG, &dev->flags);
 		tasklet_kill(&dev->tl);
 		unregister_netdev(dev->netdev);
-		unlink_all_urbs(dev);
+		terminate_all_urbs(dev);
+		tasklet_kill(&dev->tl);
 		free_all_urbs(dev);
 		free_skb_pool(dev);
 		dev_kfree_skb(dev->rx_skb);
