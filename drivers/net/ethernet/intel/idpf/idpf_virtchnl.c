@@ -41,6 +41,10 @@ static void idpf_handle_event_link(struct idpf_adapter *adapter,
 	struct idpf_netdev_priv *np;
 	struct idpf_vport *vport;
 
+	/* The vports are released on remove and shutdown */
+	if (test_bit(IDPF_REMOVE_IN_PROG, adapter->flags))
+		return;
+
 	vport = idpf_vid_to_vport(adapter, le32_to_cpu(v2e->vport_id));
 	if (!vport) {
 		dev_err_ratelimited(&adapter->pdev->dev, "Failed to find vport_id %d for link event\n",
