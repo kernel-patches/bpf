@@ -401,6 +401,9 @@ int snd_soc_component_of_xlate_dai_id(struct snd_soc_component *component,
 int snd_soc_component_of_xlate_dai_name(struct snd_soc_component *component,
 					const struct of_phandle_args *args,
 					const char **dai_name);
+int snd_soc_component_of_simple_xlate_dai_name(struct snd_soc_component *component,
+					       const struct of_phandle_args *args,
+					       const char **dai_name);
 int snd_soc_component_compr_open(struct snd_soc_component *component,
 				 struct snd_compr_stream *cstream);
 void snd_soc_component_compr_free(struct snd_soc_component *component,
@@ -462,5 +465,6 @@ void snd_soc_pcm_component_delay(struct snd_pcm_substream *substream,
 #define snd_soc_lookup_component_nolocked		snd_soc_component_lookup_nolock
 #define snd_soc_lookup_component			snd_soc_component_lookup
 #define snd_soc_lookup_component_by_name		snd_soc_component_lookup_by_name
+#define snd_soc_of_xlate_dai_name			snd_soc_component_of_simple_xlate_dai_name
 
 #endif /* __SOC_COMPONENT_H */
