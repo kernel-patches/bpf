@@ -248,7 +248,52 @@ void atl1c_reinit_locked(struct atl1c_adapter *adapter)
 	clear_bit(__AT_RESETTING, &adapter->flags);
 }
 
-static void atl1c_check_link_status(struct atl1c_adapter *adapter)
+#define ATL1C_POLL_SYNC_TRIES 500
+
+/* atl1c_clean_rx() looks at the carrier only when it is entered.  A poll
+ * that passed that test before the carrier went off keeps walking the RRD
+ * ring.  NAPI_STATE_SCHED is held for the whole poll, and a poll that
+ * starts later sees the carrier off and returns without touching the
+ * rings, so once the bit is observed clear on every RX queue no poll is
+ * running and none can start.
+ *
+ * Only the link-change work item needs the wait: atl1c_up() calls
+ * atl1c_check_link_status() before napi_enable(), when no poll can run,
+ * and a disabled NAPI keeps NAPI_STATE_SCHED set, so waiting there would
+ * only spin.
+ *
+ * Returns false when the caller must leave the rings alone:
+ *  - __AT_DOWN is set: a concurrent close, down or suspend is tearing the
+ *    device down and resets the rings itself, after napi_disable();
+ *  - the wait timed out: a poll is not finishing (threaded busy-poll
+ *    keeps NAPI_STATE_SCHED set while the interface is up).  Resetting
+ *    under a running poll is the race this wait exists to avoid.
+ */
+static bool atl1c_rx_poll_sync(struct atl1c_adapter *adapter)
+{
+	int i;
+
+	for (i = 0; i < adapter->rx_queue_count; ++i) {
+		int tries = ATL1C_POLL_SYNC_TRIES;
+
+		while (test_bit(NAPI_STATE_SCHED,
+				&adapter->rrd_ring[i].napi.state)) {
+			if (test_bit(__AT_DOWN, &adapter->flags))
+				return false;
+			if (!tries--) {
+				dev_warn_ratelimited(&adapter->pdev->dev,
+						     "RX poll won't finish, skipping link-down reset\n");
+				return false;
+			}
+			usleep_range(1000, 2000);
+		}
+	}
+
+	return true;
+}
+
+static void atl1c_check_link_status(struct atl1c_adapter *adapter,
+				    bool sync_polls)
 {
 	struct atl1c_hw *hw = &adapter->hw;
 	struct net_device *netdev = adapter->netdev;
@@ -265,6 +310,20 @@ static void atl1c_check_link_status(struct atl1c_adapter *adapter)
 	if (!link) {
 		/* link down */
 		netif_carrier_off(netdev);
+		if (sync_polls) {
+			/* Store-buffer pattern against the poll: we store
+			 * carrier-off and then load NAPI_STATE_SCHED, the
+			 * scheduling side stores NAPI_STATE_SCHED
+			 * (napi_schedule_prep()) and the poll then loads the
+			 * carrier.  A full barrier on each side guarantees that
+			 * either we see the poll or the poll sees the carrier
+			 * off.  The cmpxchg provides it there; do not depend on
+			 * how netif_carrier_off() sets its bit here.
+			 */
+			smp_mb();
+			if (!atl1c_rx_poll_sync(adapter))
+				return;
+		}
 		hw->hibernate = true;
 		if (atl1c_reset_mac(hw) != 0)
 			if (netif_msg_hw(adapter))
@@ -349,7 +408,7 @@ static void atl1c_common_task(struct work_struct *work)
 	if (test_and_clear_bit(ATL1C_WORK_EVENT_LINK_CHANGE,
 		&adapter->work_event)) {
 		atl1c_irq_disable(adapter);
-		atl1c_check_link_status(adapter);
+		atl1c_check_link_status(adapter, true);
 		atl1c_irq_enable(adapter);
 	}
 }
@@ -2435,7 +2494,7 @@ static int atl1c_up(struct atl1c_adapter *adapter)
 	if (unlikely(err))
 		goto err_up;
 
-	atl1c_check_link_status(adapter);
+	atl1c_check_link_status(adapter, false);
 	clear_bit(__AT_DOWN, &adapter->flags);
 	for (i = 0; i < adapter->tx_queue_count; ++i)
 		napi_enable(&adapter->tpd_ring[i].napi);
