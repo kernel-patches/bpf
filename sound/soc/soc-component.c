@@ -110,6 +110,13 @@ int snd_soc_component_num_dai(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_num_dai);
 
+void snd_soc_component_connect_dai(struct snd_soc_component *component, struct snd_soc_dai *dai)
+{
+	/* dai->list <-> component->dai_list */
+	list_add_tail(snd_soc_dai_to_list(dai), &component->dai_list);
+	component->num_dai++;
+}
+
 /*
  * We might want to check substream by using list.
  * In such case, we can update these macros.
