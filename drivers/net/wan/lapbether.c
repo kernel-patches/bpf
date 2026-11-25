@@ -364,6 +364,11 @@ static void lapbeth_setup(struct net_device *dev)
 	dev->hard_header_len = 0;
 	dev->mtu             = 1000;
 	dev->addr_len        = 0;
+	/* LAPB serializes transmission under its own lock and may transmit
+	 * through another lapbeth device while holding it, so the TX lock
+	 * must not be taken around lapbeth_xmit().
+	 */
+	dev->lltx            = true;
 }
 
 /*	Setup a new device.
