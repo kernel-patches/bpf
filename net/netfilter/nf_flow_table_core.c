@@ -580,9 +580,6 @@ static void nf_flow_offload_gc_step(struct nf_flowtable *flow_table,
 {
 	bool teardown;
 
-	if (test_bit(NF_FLOW_PENDING, &flow->flags))
-		return;
-
 	teardown = test_bit(NF_FLOW_TEARDOWN, &flow->flags);
 
 	if (nf_flow_has_expired(flow) ||
@@ -595,6 +592,11 @@ static void nf_flow_offload_gc_step(struct nf_flowtable *flow_table,
 	} else if (!teardown) {
 		nf_flow_table_extend_ct_timeout(flow->ct);
 	}
+
+	/* Pairs with test_and_set_bit(NF_FLOW_PENDING) in work_alloc(). */
+	smp_mb();
+	if (test_bit(NF_FLOW_PENDING, &flow->flags))
+		return;
 
 	if (teardown) {
 		if (test_bit(NF_FLOW_HW, &flow->flags)) {
