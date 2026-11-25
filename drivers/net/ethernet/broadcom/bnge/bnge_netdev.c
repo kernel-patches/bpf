@@ -18,6 +18,7 @@
 #include <net/ip.h>
 #include <linux/skbuff.h>
 #include <net/page_pool/helpers.h>
+#include <linux/cpu_rmap.h>
 
 #include "bnge.h"
 #include "bnge_hwrm.h"
@@ -2539,10 +2540,23 @@ static int bnge_setup_interrupts(struct bnge_net *bn)
 {
 	struct net_device *dev = bn->netdev;
 	struct bnge_dev *bd = bn->bd;
+	int rc;
 
 	bnge_setup_msix(bn);
 
-	return netif_set_real_num_queues(dev, bd->tx_nr_rings, bd->rx_nr_rings);
+	rc = netif_set_real_num_queues(dev, bd->tx_nr_rings, bd->rx_nr_rings);
+	if (rc)
+		return rc;
+
+#ifdef CONFIG_RFS_ACCEL
+	if (bn->priv_flags & BNGE_NET_EN_NTUPLE) {
+		dev->rx_cpu_rmap = alloc_irq_cpu_rmap(bd->rx_nr_rings);
+		if (!dev->rx_cpu_rmap)
+			netdev_warn(dev, "Unable to allocate the CPU rmap, aRFS disabled\n");
+	}
+#endif
+
+	return rc;
 }
 
 static void bnge_hwrm_resource_free(struct bnge_net *bn, bool close_path)
@@ -2569,6 +2583,50 @@ static void bnge_nq_free_irq(struct bnge_net *bn, struct bnge_napi *bnapi)
 	irq->requested = 0;
 }
 
+#ifdef CONFIG_RFS_ACCEL
+/* set_rps_cpu() reads rx_cpu_rmap under rcu_read_lock(). Hide the pointer and
+ * wait for readers that already loaded it before the rmap is freed.
+ */
+static void bnge_free_cpu_rmap(struct bnge_net *bn)
+{
+	struct cpu_rmap *rmap = bn->netdev->rx_cpu_rmap;
+
+	if (!rmap)
+		return;
+
+	WRITE_ONCE(bn->netdev->rx_cpu_rmap, NULL);
+	synchronize_net();
+	free_irq_cpu_rmap(rmap);
+}
+#else
+static void bnge_free_cpu_rmap(struct bnge_net *bn)
+{
+}
+#endif
+
+/* The index of a vector in the aRFS cpu_rmap is the index of its RX ring, so
+ * the vectors must be added in ring order, starting with NQ0 (ring 0).
+ */
+static void bnge_nq_add_cpu_rmap(struct bnge_net *bn, struct bnge_napi *bnapi)
+{
+#ifdef CONFIG_RFS_ACCEL
+	int map_idx = bnapi->nq_ring.ring_struct.map_idx;
+	struct cpu_rmap *rmap = bn->netdev->rx_cpu_rmap;
+	int rc;
+
+	if (!rmap || !bnapi->rx_ring)
+		return;
+
+	rc = irq_cpu_rmap_add(rmap, bn->bd->irq_tbl[map_idx].vector);
+	if (rc) {
+		netdev_warn(bn->netdev,
+			    "failed adding irq rmap for ring %d, disabling aRFS\n",
+			    bnapi->index);
+		bnge_free_cpu_rmap(bn);
+	}
+#endif
+}
+
 static int bnge_nq_request_irq(struct bnge_net *bn, struct bnge_napi *bnapi)
 {
 	int map_idx = bnapi->nq_ring.ring_struct.map_idx;
@@ -2577,6 +2635,8 @@ static int bnge_nq_request_irq(struct bnge_net *bn, struct bnge_napi *bnapi)
 	int rc;
 
 	irq = &bd->irq_tbl[map_idx];
+
+	bnge_nq_add_cpu_rmap(bn, bnapi);
 
 	rc = request_irq(irq->vector, irq->handler, 0, irq->name, bnapi);
 	if (rc)
@@ -2602,6 +2662,8 @@ static void bnge_free_irq(struct bnge_net *bn)
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
+	bnge_free_cpu_rmap(bn);
+
 	bnge_for_each_open_nq(i, bd)
 		bnge_nq_free_irq(bn, bn->bnapi[i]);
 }
@@ -2616,6 +2678,13 @@ static int bnge_request_irq(struct bnge_net *bn)
 		netdev_err(bn->netdev, "bnge_setup_interrupts err: %d\n", rc);
 		return rc;
 	}
+
+	/* NQ0 is requested at probe, before the rmap exists, and is not one
+	 * of the open NQs below. Add it first, so that the rmap index of
+	 * every vector is its RX ring index.
+	 */
+	bnge_nq_add_cpu_rmap(bn, bn->bnapi[0]);
+
 	bnge_for_each_open_nq(i, bd) {
 		rc = bnge_nq_request_irq(bn, bn->bnapi[i]);
 		if (rc)
