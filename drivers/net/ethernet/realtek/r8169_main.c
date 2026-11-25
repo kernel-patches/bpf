@@ -2686,9 +2686,14 @@ void r8169_apply_firmware(struct rtl8169_private *tp)
 
 	/* TODO: release firmware if rtl_fw_write_firmware signals failure. */
 	if (tp->rtl_fw) {
+		/* Keep phylib users (hwmon, PTP) off the bus meanwhile. */
+		if (tp->phydev)
+			phy_lock_mdio_bus(tp->phydev);
 		rtl_fw_write_firmware(tp, tp->rtl_fw);
 		/* At least one firmware doesn't reset tp->ocp_base. */
 		tp->ocp_base = OCP_STD_PHY_BASE;
+		if (tp->phydev)
+			phy_unlock_mdio_bus(tp->phydev);
 
 		/* PHY soft reset may still be in progress */
 		if (tp->phydev)
