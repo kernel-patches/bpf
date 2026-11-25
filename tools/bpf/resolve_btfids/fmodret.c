@@ -87,6 +87,29 @@ static bool has_bpf_types(const struct btf *btf, const struct btf_type *func)
 	return false;
 }
 
+/* Find kfuncs and helpers */
+static bool *find_bpf_funcs(const struct btf *btf)
+{
+	const struct btf *base = btf__base_btf(btf);
+	__u32 id, nr_types = btf__type_cnt(btf);
+	bool *funcs = calloc(nr_types, sizeof(*funcs));
+
+	for (id = base ? btf__type_cnt(base) : 1; funcs && id < nr_types; id++) {
+		const struct btf_type *t = btf__type_by_id(btf, id);
+		const char *name = btf__name_by_offset(btf, t->name_off);
+
+		if (btf_is_decl_tag(t) && !strcmp(name, "bpf_kfunc"))
+			funcs[t->type] = true;
+		if (btf_is_typedef(t) && !strncmp(name, "btf_", 4) && strncmp(name, "btf_trace_", 10)) {
+			int func = btf__find_by_name_kind(btf, name + 4, BTF_KIND_FUNC);
+
+			if (func > 0)
+				funcs[func] = true;
+		}
+	}
+	return funcs;
+}
+
 /*
  * The codes of include/linux/errno.h, 512 and up, never reach user space. They,
  * -EAGAIN, -EMSGSIZE and -EINPROGRESS tell the caller to retry, to go on or to
@@ -225,6 +248,7 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 	const struct btf *base = btf__base_btf(btf);
 	__u32 id, nr_types = btf__type_cnt(btf);
 	struct scan *scan = NULL;
+	bool *bpf_funcs = NULL;
 	struct image img;
 	char counts[200];
 	int err;
@@ -237,6 +261,10 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 	if (!scan)
 		goto out;
 	set_protos(scan, &img, btf);
+	err = -ENOMEM;
+	bpf_funcs = find_bpf_funcs(btf);
+	if (!bpf_funcs)
+		goto out;
 
 	for (id = base ? btf__type_cnt(base) : 1, err = 0; id < nr_types && err >= 0; id++) {
 		const struct btf_type *t = btf__type_by_id(btf, id);
@@ -253,6 +281,9 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 			continue;
 		/* Skip functions which take or return BPF objects */
 		if (has_bpf_types(btf, t))
+			continue;
+		/* Skip kfuncs and helpers which escaped the previous check */
+		if (bpf_funcs[id])
 			continue;
 		/* Init code is gone before a program can attach */
 		name = btf__name_by_offset(btf, t->name_off);
@@ -291,6 +322,7 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		printf("  FMODRET %s\n", counts);
 	}
 out:
+	free(bpf_funcs);
 	scan_close(scan);
 	image_close(&img);
 	return err < 0 ? err : 0;
