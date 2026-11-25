@@ -975,7 +975,7 @@ int  radeon_match_mode(struct radeonfb_info *rinfo,
 		       const struct fb_var_screeninfo *src)
 {
 	const struct fb_videomode	*db = vesa_modes;
-	int				i, dbsize = 34;
+	int				i, dbsize = VESA_MODEDB_SIZE;
 	int				has_rmx, native_db = 0;
 	int				distance = INT_MAX;
 	const struct fb_videomode	*candidate = NULL;
@@ -997,8 +997,9 @@ int  radeon_match_mode(struct radeonfb_info *rinfo,
 	 * FB_ACTIVATE_NOW, just do basic checking and return if the
 	 * mode match
 	 */
-	if ((src->activate & FB_ACTIVATE_MASK) == FB_ACTIVATE_TEST ||
-	    (src->activate & FB_ACTIVATE_MASK) == FB_ACTIVATE_NOW) {
+	if (src->pixclock &&
+	    ((src->activate & FB_ACTIVATE_MASK) == FB_ACTIVATE_TEST ||
+	     (src->activate & FB_ACTIVATE_MASK) == FB_ACTIVATE_NOW)) {
 		/* We don't have an RMX, validate timings. If we don't have
 	 	 * monspecs, we should be paranoid and not let use go above
 		 * 640x480-60, but I assume userland knows what it's doing here
@@ -1010,11 +1011,13 @@ int  radeon_match_mode(struct radeonfb_info *rinfo,
 		return 0;
 	}
 
-	/* Now look for a mode in the database */
+	/* Look up complete timings when the requested pixel period is zero. */
 	while (db) {
 		for (i = 0; i < dbsize; i++) {
 			int d;
 
+			if (!db[i].pixclock)
+				continue;
 			if (db[i].yres < src->yres)
 				continue;	
 			if (db[i].xres < src->xres)
@@ -1032,7 +1035,7 @@ int  radeon_match_mode(struct radeonfb_info *rinfo,
 		/* If we have a scaler, we allow any mode from the database */
 		if (native_db && has_rmx) {
 			db = vesa_modes;
-			dbsize = 34;
+			dbsize = VESA_MODEDB_SIZE;
 			native_db = 0;
 		}
 	}
@@ -1040,11 +1043,15 @@ int  radeon_match_mode(struct radeonfb_info *rinfo,
 	/* If we have found a match, return it */
 	if (candidate != NULL) {
 		radeon_videomode_to_var(dest, candidate);
+		if (!src->pixclock) {
+			dest->xres_virtual = max(dest->xres, src->xres_virtual);
+			dest->yres_virtual = max(dest->yres, src->yres_virtual);
+		}
 		return 0;
 	}
 
-	/* If we haven't and don't have a scaler, fail */
-	if (!has_rmx)
+	/* A scaler can use the requested timings if they include a clock. */
+	if (!has_rmx || !src->pixclock)
 		return -EINVAL;
 
 	return 0;
