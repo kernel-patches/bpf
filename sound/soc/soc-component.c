@@ -104,6 +104,12 @@ unsigned int snd_soc_component_active(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_active);
 
+int snd_soc_component_num_dai(struct snd_soc_component *component)
+{
+	return component->num_dai;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_num_dai);
+
 /*
  * We might want to check substream by using list.
  * In such case, we can update these macros.

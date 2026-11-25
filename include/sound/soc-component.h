@@ -393,6 +393,7 @@ static inline void *snd_soc_component_get_drvdata(struct snd_soc_component *c)
 }
 
 unsigned int snd_soc_component_active(struct snd_soc_component *component);
+int snd_soc_component_num_dai(struct snd_soc_component *component);
 
 /* component controls */
 struct snd_kcontrol *snd_soc_component_get_kcontrol(struct snd_soc_component *component,
