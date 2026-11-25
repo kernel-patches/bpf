@@ -86,6 +86,8 @@ MODULE_PARM_DESC(phyaddr, "Physical device address");
 #define STMMAC_XSK_TX_BUDGET_MAX	256
 #define STMMAC_TX_XSK_AVAIL		16
 #define STMMAC_RX_FILL_BATCH		16
+#define STMMAC_RX_REFILL_THRESH		16
+#define STMMAC_RX_REFILL_RETRY_MS	10
 
 #define STMMAC_XDP_PASS		0
 #define STMMAC_XDP_CONSUMED	BIT(0)
@@ -263,6 +265,33 @@ static void stmmac_verify_args(void)
 		pr_warn("stmmac: module parameter 'flow_ctrl' is obsolete - please remove from your module configuration\n");
 }
 
+/* The RX DMA suspends once it has used all its buffers, and no interrupt
+ * schedules RX NAPI when that happens, so a refill that failed for lack of
+ * memory would never be retried. Retry it from a timer when few slots are left
+ * with the DMA.
+ */
+static bool stmmac_rx_refill_needed(struct stmmac_priv *priv, u32 queue)
+{
+	struct stmmac_rx_queue *rx_q = &priv->dma_conf.rx_queue[queue];
+
+	return CIRC_SPACE(rx_q->cur_rx, rx_q->dirty_rx,
+			  priv->dma_conf.dma_rx_size) < STMMAC_RX_REFILL_THRESH;
+}
+
+static void stmmac_rx_refill_timer_arm(struct stmmac_channel *ch)
+{
+	if (!timer_pending(&ch->rx_refill_timer))
+		mod_timer(&ch->rx_refill_timer,
+			  jiffies + msecs_to_jiffies(STMMAC_RX_REFILL_RETRY_MS));
+}
+
+static void stmmac_rx_refill_timer(struct timer_list *t)
+{
+	struct stmmac_channel *ch = timer_container_of(ch, t, rx_refill_timer);
+
+	napi_schedule(&ch->rx_napi);
+}
+
 static void __stmmac_disable_all_queues(struct stmmac_priv *priv)
 {
 	u8 rx_queues_cnt = priv->plat->rx_queues_to_use;
@@ -284,6 +313,10 @@ static void __stmmac_disable_all_queues(struct stmmac_priv *priv)
 		if (queue < tx_queues_cnt)
 			napi_disable(&ch->tx_napi);
 	}
+
+	/* With NAPI disabled no poll can re-arm the refill timers */
+	for (queue = 0; queue < rx_queues_cnt; queue++)
+		timer_delete_sync(&priv->channel[queue].rx_refill_timer);
 }
 
 /**
@@ -328,8 +361,17 @@ static void stmmac_enable_all_queues(struct stmmac_priv *priv)
 			continue;
 		}
 
-		if (queue < rx_queues_cnt)
+		if (queue < rx_queues_cnt) {
+			/* Disabling the queues cancelled any pending refill
+			 * retry, but the ring may have been kept as it was.
+			 * Check it while no poll can run.
+			 */
+			bool refill = stmmac_rx_refill_needed(priv, queue);
+
 			napi_enable(&ch->rx_napi);
+			if (refill)
+				stmmac_rx_refill_timer_arm(ch);
+		}
 		if (queue < tx_queues_cnt)
 			napi_enable(&ch->tx_napi);
 	}
@@ -5926,6 +5968,7 @@ static int stmmac_rx(struct stmmac_priv *priv, int limit, u32 queue)
 	struct sk_buff *skb = NULL;
 	struct stmmac_xdp_buff ctx;
 	bool fcs_stripped = false;
+	bool at_dirty = false;
 	int xdp_status = 0;
 	int bufsz;
 
@@ -5974,15 +6017,21 @@ read_again:
 
 		p = stmmac_get_rx_desc(priv, rx_q, entry);
 
+		/* The descriptor before dirty_rx is only processed once the
+		 * refill has moved dirty_rx on. Check this before reading the
+		 * status, so that a retry does not count the frame again.
+		 */
+		next_entry = STMMAC_NEXT_ENTRY(rx_q->cur_rx,
+					       priv->dma_conf.dma_rx_size);
+		if (unlikely(next_entry == rx_q->dirty_rx)) {
+			at_dirty = true;
+			break;
+		}
+
 		/* read the status of the incoming frame */
 		status = stmmac_rx_status(priv, &priv->xstats, p);
 		/* check if managed by the DMA otherwise go ahead */
 		if (unlikely(status & dma_own))
-			break;
-
-		next_entry = STMMAC_NEXT_ENTRY(rx_q->cur_rx,
-					       priv->dma_conf.dma_rx_size);
-		if (unlikely(next_entry == rx_q->dirty_rx))
 			break;
 
 		rx_q->cur_rx = next_entry;
@@ -6195,6 +6244,13 @@ next:
 	priv->xstats.rx_dropped += rx_dropped;
 	priv->xstats.rx_errors += rx_errors;
 
+	/* A frame may be waiting in the descriptor we stopped at. If the
+	 * refill freed it, poll again rather than wait for an interrupt
+	 * that already fired. If not, the refill timer polls again.
+	 */
+	if (unlikely(at_dirty) && !stmmac_rx_refill_needed(priv, queue))
+		return limit;
+
 	return count;
 }
 
@@ -6213,6 +6269,8 @@ static int stmmac_napi_poll_rx(struct napi_struct *napi, int budget)
 	u64_stats_update_end(&rxq_stats->napi_syncp);
 
 	work_done = stmmac_rx(priv, budget, chan);
+	if (unlikely(stmmac_rx_refill_needed(priv, chan)))
+		stmmac_rx_refill_timer_arm(ch);
 	if (work_done < budget && napi_complete_done(napi, work_done)) {
 		unsigned long flags;
 
@@ -7853,6 +7911,8 @@ static void stmmac_napi_add(struct net_device *dev)
 
 		if (queue < priv->plat->rx_queues_to_use) {
 			netif_napi_add(dev, &ch->rx_napi, stmmac_napi_poll_rx);
+			timer_setup(&ch->rx_refill_timer,
+				    stmmac_rx_refill_timer, 0);
 		}
 		if (queue < priv->plat->tx_queues_to_use) {
 			netif_napi_add_tx(dev, &ch->tx_napi,
