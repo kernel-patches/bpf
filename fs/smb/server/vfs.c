@@ -29,6 +29,7 @@
 #include "connection.h"
 #include "vfs.h"
 #include "vfs_cache.h"
+#include "secdesc.h"
 #include "smbacl.h"
 #include "ndr.h"
 #include "auth.h"
@@ -1699,7 +1700,7 @@ out:
 int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 			   const struct mnt_idmap *idmap,
 			   const struct path *path,
-			   const struct smb_ntsd *pntsd, int len)
+			   const void *pntsd, int len)
 {
 	int rc;
 	struct ndr sd_ndr = {0}, acl_ndr = {0};
@@ -1780,10 +1781,13 @@ out:
 }
 EXPORT_SYMBOL_IF_KUNIT(ksmbd_vfs_set_sd_xattr);
 
+/*
+ * Returns -EBADMSG if the stored SD is malformed. The caller frees *@sd with
+ * kvfree().
+ */
 int ksmbd_vfs_get_sd_xattr(struct ksmbd_conn *conn,
 			   const struct mnt_idmap *idmap,
-			   struct dentry *dentry,
-			   struct smb_ntsd **pntsd)
+			   struct dentry *dentry, struct ksmbd_sd **sd)
 {
 	int rc;
 	struct ndr n;
@@ -1792,10 +1796,12 @@ int ksmbd_vfs_get_sd_xattr(struct ksmbd_conn *conn,
 	struct xattr_ntacl acl = {0};
 	struct xattr_smb_acl *smb_acl = NULL, *def_smb_acl = NULL;
 	__u8 cmp_hash[XATTR_SD_HASH_SIZE] = {0};
+	struct smb_ntsd *pntsd;
 
+	*sd = NULL;
 	rc = ksmbd_vfs_getxattr(idmap, dentry, XATTR_NAME_SD, &n.data);
 	if (rc <= 0)
-		return rc;
+		return rc ?: -ENODATA;
 
 	n.length = rc;
 	rc = ndr_decode_v4_ntacl(&n, &acl);
@@ -1836,29 +1842,29 @@ int ksmbd_vfs_get_sd_xattr(struct ksmbd_conn *conn,
 		goto out_free;
 	}
 
-	*pntsd = acl.sd_buf;
+	pntsd = acl.sd_buf;
 	if (acl.sd_size < sizeof(struct smb_ntsd)) {
-		pr_err("sd size is invalid\n");
-		rc = -EINVAL;
-		goto out_free;
+		rc = -EBADMSG;
+		goto malformed;
 	}
 
-	(*pntsd)->osidoffset = cpu_to_le32(le32_to_cpu((*pntsd)->osidoffset) -
-					   NDR_NTSD_OFFSETOF);
-	(*pntsd)->gsidoffset = cpu_to_le32(le32_to_cpu((*pntsd)->gsidoffset) -
-					   NDR_NTSD_OFFSETOF);
-	(*pntsd)->dacloffset = cpu_to_le32(le32_to_cpu((*pntsd)->dacloffset) -
-					   NDR_NTSD_OFFSETOF);
+	pntsd->osidoffset = cpu_to_le32(le32_to_cpu(pntsd->osidoffset) -
+					NDR_NTSD_OFFSETOF);
+	pntsd->gsidoffset = cpu_to_le32(le32_to_cpu(pntsd->gsidoffset) -
+					NDR_NTSD_OFFSETOF);
+	pntsd->dacloffset = cpu_to_le32(le32_to_cpu(pntsd->dacloffset) -
+					NDR_NTSD_OFFSETOF);
 
-	rc = acl.sd_size;
+	rc = ksmbd_sd_decode(acl.sd_buf, acl.sd_size, sd);
+malformed:
+	if (rc == -EBADMSG)
+		pr_warn_ratelimited("malformed stored security descriptor of %pd\n",
+				    dentry);
 out_free:
 	kfree(acl_ndr.data);
 	kfree(smb_acl);
 	kfree(def_smb_acl);
-	if (rc < 0) {
-		kfree(acl.sd_buf);
-		*pntsd = NULL;
-	}
+	kfree(acl.sd_buf);
 	kfree(n.data);
 	return rc;
 }

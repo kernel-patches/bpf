@@ -270,6 +270,47 @@ ksmbd_smb_check_perm_dacl_maximal_boundary_test(struct kunit *test)
 
 	rc = smb_check_perm_dacl(NULL, &file->f_path, &daccess,
 				 FILE_MAXIMAL_ACCESS_LE, 0, true, false);
+
+	/*
+	 * The DACL counts two ACEs and holds one, so the stored descriptor
+	 * is malformed and every request against it is denied.
+	 */
+	KUNIT_EXPECT_EQ(test, -EACCES, rc);
+out:
+	fput(file);
+}
+
+/*
+ * The same descriptor with a DACL that counts its one ACE is well formed.
+ * The trailing ACE is outside the DACL, so maximal access has the read
+ * access of the first ACE and not the write access of the trailing one.
+ */
+static void ksmbd_smb_check_perm_dacl_maximal_test(struct kunit *test)
+{
+	struct file *file;
+	struct smb_ntsd *pntsd;
+	struct smb_acl *pdacl;
+	__le32 daccess = FILE_MAXIMAL_ACCESS_LE;
+	int ntsd_size, rc;
+
+	pntsd = build_boundary_ntsd(test, &test_owner_sid, FILE_READ_DATA,
+				    FILE_WRITE_DATA, &ntsd_size);
+	KUNIT_ASSERT_NOT_NULL(test, pntsd);
+	pdacl = (struct smb_acl *)((char *)pntsd + sizeof(struct smb_ntsd));
+	pdacl->num_aces = cpu_to_le16(1);
+
+	file = shmem_file_setup("ksmbd-kunit-dacl-valid", 0,
+				mk_vma_flags(VMA_NORESERVE_BIT));
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, file);
+
+	rc = ksmbd_vfs_set_sd_xattr(NULL, mnt_idmap(file->f_path.mnt),
+				    &file->f_path, pntsd, ntsd_size);
+	KUNIT_EXPECT_EQ(test, 0, rc);
+	if (rc)
+		goto out;
+
+	rc = smb_check_perm_dacl(NULL, &file->f_path, &daccess,
+				 FILE_MAXIMAL_ACCESS_LE, 0, true, false);
 	KUNIT_EXPECT_EQ(test, 0, rc);
 	if (rc)
 		goto out;
@@ -319,6 +360,7 @@ static struct kunit_case ksmbd_smbacl_test_cases[] = {
 	KUNIT_CASE(ksmbd_dacl_walk_must_stop_at_declared_size),
 	KUNIT_CASE(ksmbd_smb_check_perm_dacl_boundary_test),
 	KUNIT_CASE(ksmbd_smb_check_perm_dacl_maximal_boundary_test),
+	KUNIT_CASE(ksmbd_smb_check_perm_dacl_maximal_test),
 	KUNIT_CASE(ksmbd_vfs_set_sd_xattr_keeps_caller_sd_test),
 	{}
 };

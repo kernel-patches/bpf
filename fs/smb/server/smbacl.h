@@ -38,6 +38,7 @@
 #define SELF_RELATIVE		0x8000
 
 struct ksmbd_conn;
+struct ksmbd_sd;
 
 struct smb_fattr {
 	kuid_t	cf_uid;
@@ -83,9 +84,9 @@ struct posix_acl_state {
 };
 
 int parse_sec_desc(const struct mnt_idmap *idmap, struct smb_ntsd *pntsd,
-		   int acl_len, struct smb_fattr *fattr);
-int build_sec_desc(const struct mnt_idmap *idmap, struct smb_ntsd *pntsd,
-		   struct smb_ntsd *ppntsd, int ppntsd_size, int addition_info,
+		   int acl_len, struct smb_fattr *fattr, struct ksmbd_sd **psd);
+int build_sec_desc(const struct mnt_idmap *idmap, struct smb_ntsd **pntsd,
+		   const struct ksmbd_sd *ppntsd, int addition_info,
 		   __u32 *secdesclen, struct smb_fattr *fattr);
 int init_acl_state(struct posix_acl_state *state, u16 cnt);
 void free_acl_state(struct posix_acl_state *state);
@@ -95,7 +96,7 @@ int compare_sids(const struct smb_sid *ctsid, const struct smb_sid *cwsid);
 bool smb_inherit_flags(int flags, bool is_dir);
 int smb_inherit_dacl(struct ksmbd_conn *conn, const struct path *path,
 		     unsigned int uid, unsigned int gid);
-/* Missing, unsupported, malformed or stale SDs retain the POSIX fallback */
+/* Missing, unsupported, unreadable, or stale SDs retain the POSIX fallback */
 static inline bool smb_no_stored_sd(int rc)
 {
 	return rc == -ENODATA || rc == -EOPNOTSUPP || rc == -EINVAL;
@@ -110,8 +111,6 @@ int set_info_sec(struct ksmbd_conn *conn, struct ksmbd_tree_connect *tcon,
 		 bool dacl_requested);
 void id_to_sid(unsigned int cid, uint sidtype, struct smb_sid *ssid);
 void ksmbd_init_domain(u32 *sub_auth);
-size_t smb_acl_sec_desc_scratch_len(struct smb_fattr *fattr,
-		struct smb_ntsd *ppntsd, int ppntsd_size, int addition_info);
 
 static inline uid_t posix_acl_uid_translate(const struct mnt_idmap *idmap,
 					    struct posix_acl_entry *pace)

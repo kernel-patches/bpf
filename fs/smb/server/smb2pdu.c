@@ -5247,47 +5247,30 @@ resolve_path:
 					struct smb_fattr fattr;
 					struct smb_ntsd *pntsd;
 					int pntsd_size;
-					size_t scratch_len;
 
 					rc = ksmbd_acls_fattr(&fattr, idmap, inode);
 					if (rc)
 						goto err_out;
 
-					scratch_len = smb_acl_sec_desc_scratch_len(&fattr,
-							NULL, 0,
-							OWNER_SECINFO | GROUP_SECINFO |
-							DACL_SECINFO);
-					if (!scratch_len || scratch_len == SIZE_MAX) {
-						rc = -EFBIG;
-						posix_acl_release(fattr.cf_acls);
-						posix_acl_release(fattr.cf_dacls);
-						goto err_out;
-					}
-
-					pntsd = kvzalloc(scratch_len, KSMBD_DEFAULT_GFP);
-					if (!pntsd) {
-						rc = -ENOMEM;
-						posix_acl_release(fattr.cf_acls);
-						posix_acl_release(fattr.cf_dacls);
-						goto err_out;
-					}
-
 					rc = build_sec_desc(idmap,
-							    pntsd, NULL, 0,
+							    &pntsd, NULL,
 							    OWNER_SECINFO |
 							    GROUP_SECINFO |
 							    DACL_SECINFO,
 							    &pntsd_size, &fattr);
 					posix_acl_release(fattr.cf_acls);
 					posix_acl_release(fattr.cf_dacls);
-					if (rc) {
-						kvfree(pntsd);
-						goto err_out;
-					}
-
-					ksmbd_vfs_set_sd_xattr(conn, idmap, &path,
-							       pntsd, pntsd_size);
+					/*
+					 * A DACL too large for an SD is not
+					 * stored. The file keeps the POSIX
+					 * ACL it inherited.
+					 */
+					if (!rc)
+						ksmbd_vfs_set_sd_xattr(conn, idmap, &path,
+								       pntsd, pntsd_size);
 					kvfree(pntsd);
+					if (rc && rc != -E2BIG)
+						goto err_out;
 				}
 			}
 		}
@@ -8439,14 +8422,14 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 {
 	struct ksmbd_file *fp;
 	const struct mnt_idmap *idmap;
-	struct smb_ntsd *pntsd = NULL, *ppntsd = NULL;
+	struct smb_ntsd *pntsd = NULL;
+	struct ksmbd_sd *ppntsd = NULL;
 	struct smb_fattr fattr = {{0}};
 	struct inode *inode;
 	__u32 secdesclen = 0;
 	unsigned int id = KSMBD_NO_FID, pid = KSMBD_NO_FID;
 	int addition_info = le32_to_cpu(req->AdditionalInformation);
-	int rc = 0, ppntsd_size = 0, max_len;
-	size_t scratch_len = 0;
+	int rc = 0, max_len;
 
 	if (addition_info & ~(OWNER_SECINFO | GROUP_SECINFO | DACL_SECINFO |
 			      PROTECTED_DACL_SECINFO |
@@ -8498,11 +8481,13 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 
 	if (test_share_config_flag(work->tcon->share_conf,
 				   KSMBD_SHARE_FLAG_ACL_XATTR)) {
-		ppntsd_size = ksmbd_vfs_get_sd_xattr(work->conn, idmap,
-						     fp->filp->f_path.dentry,
-						     &ppntsd);
-		if (ppntsd_size < 0 && !smb_no_stored_sd(ppntsd_size)) {
-			rc = ppntsd_size == -ENOMEM ? -ENOMEM : -EIO;
+		rc = ksmbd_vfs_get_sd_xattr(work->conn, idmap,
+					    fp->filp->f_path.dentry, &ppntsd);
+		if (rc && !smb_no_stored_sd(rc)) {
+			if (rc == -EBADMSG)
+				rsp->hdr.Status = STATUS_INVALID_SECURITY_DESCR;
+			else if (rc != -ENOMEM)
+				rc = -EIO;
 			goto release_acl;
 		}
 	}
@@ -8516,32 +8501,18 @@ static int smb2_get_info_sec(struct ksmbd_work *work,
 		goto release_acl;
 	}
 
-	scratch_len = smb_acl_sec_desc_scratch_len(&fattr, ppntsd,
-			ppntsd_size, addition_info);
-	if (!scratch_len || scratch_len > SIZE_MAX - 7) {
-		rc = -EFBIG;
-		goto release_acl;
-	}
-
-	/* A compound response pads the descriptor to 8 bytes in this buffer */
-	scratch_len = ALIGN(scratch_len, 8);
-	pntsd = kvzalloc(scratch_len, KSMBD_DEFAULT_GFP);
-	if (!pntsd) {
-		rc = -ENOMEM;
-		goto release_acl;
-	}
-
-	rc = build_sec_desc(idmap, pntsd, ppntsd, ppntsd_size,
-			addition_info, &secdesclen, &fattr);
+	rc = build_sec_desc(idmap, &pntsd, ppntsd, addition_info, &secdesclen,
+			    &fattr);
+	/* The DACL is too large for an SD */
+	if (rc == -E2BIG)
+		rsp->hdr.Status = STATUS_INSUFFICIENT_RESOURCES;
 
 release_acl:
 	posix_acl_release(fattr.cf_acls);
 	posix_acl_release(fattr.cf_dacls);
-	kfree(ppntsd);
+	kvfree(ppntsd);
 	ksmbd_fd_put(work, fp);
 
-	if (!rc && ALIGN(secdesclen, 8) > scratch_len)
-		rc = -EFBIG;
 	if (rc)
 		goto err_out;
 
@@ -8551,6 +8522,19 @@ release_acl:
 			      rsp);
 	if (rc)
 		goto err_out;
+
+	/* A compound response pads the descriptor to 8 bytes in this buffer */
+	if (!IS_ALIGNED(secdesclen, 8)) {
+		void *padded = kvrealloc(pntsd, ALIGN(secdesclen, 8),
+					 KSMBD_DEFAULT_GFP);
+
+		if (!padded) {
+			rc = -ENOMEM;
+			goto err_out;
+		}
+		memset(padded + secdesclen, 0, ALIGN(secdesclen, 8) - secdesclen);
+		pntsd = padded;
+	}
 
 	rc = ksmbd_iov_pin_rsp_read(work, (void *)rsp,
 			offsetof(struct smb2_query_info_rsp, Buffer),
