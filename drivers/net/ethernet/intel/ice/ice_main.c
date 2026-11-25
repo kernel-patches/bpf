@@ -2944,6 +2944,8 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
 			}
 		}
 		xdp_features_set_redirect_target(vsi->netdev, true);
+		if (ice_is_feature_supported(vsi->back, ICE_F_GCS))
+			netdev_info(vsi->netdev, "XDP program attached, Rx CHECKSUM_COMPLETE disabled\n");
 	} else if (ice_is_xdp_ena_vsi(vsi) && !prog) {
 		xdp_features_clear_redirect_target(vsi->netdev);
 		xdp_ring_err = ice_destroy_xdp_rings(vsi, ICE_XDP_CFG_FULL);
