@@ -912,10 +912,18 @@ xdp_xmit:
 
 static int veth_xdp_rcv(struct veth_rq *rq, int budget,
 			struct veth_xdp_tx_bq *bq,
-			struct veth_stats *stats)
+			struct veth_stats *stats,
+			struct netdev_queue *peer_txq)
 {
-	int i, done = 0, n_xdpf = 0;
+	int i, done = 0, n_xdpf = 0, wake_at = 0;
 	void *xdpf[VETH_XDP_BATCH];
+
+	/* Wake a stopped peer txq in the middle of the poll, so that the
+	 * producer refills the ring while this poll goes on.
+	 */
+	if (budget > PTR_RING_BATCH && peer_txq &&
+	    netif_tx_queue_stopped(peer_txq))
+		wake_at = PTR_RING_BATCH;
 
 	for (i = 0; i < budget; i++) {
 		void *ptr = __ptr_ring_consume(&rq->xdp_ring);
@@ -952,6 +960,11 @@ static int veth_xdp_rcv(struct veth_rq *rq, int budget,
 			}
 		}
 		done++;
+
+		if (done == wake_at) {
+			txq_trans_cond_update(peer_txq);
+			netif_tx_wake_queue(peer_txq);
+		}
 	}
 
 	if (n_xdpf)
@@ -988,7 +1001,7 @@ static int veth_poll(struct napi_struct *napi, int budget)
 		   netdev_get_tx_queue(peer_dev, queue_idx) : NULL;
 
 	xdp_set_return_frame_no_direct();
-	done = veth_xdp_rcv(rq, budget, &bq, &stats);
+	done = veth_xdp_rcv(rq, budget, &bq, &stats, peer_txq);
 
 	if (stats.xdp_redirect > 0)
 		xdp_do_flush();
@@ -1007,9 +1020,13 @@ static int veth_poll(struct napi_struct *napi, int budget)
 		}
 	}
 
-	/* Release backpressure per NAPI poll */
+	/* Release backpressure before NAPI may go idle, and after every poll
+	 * that veth_xdp_rcv() cannot wake in the middle of
+	 */
 	smp_rmb(); /* Paired with netif_tx_stop_queue set_bit */
-	if (peer_txq && netif_tx_queue_stopped(peer_txq)) {
+	if (peer_txq && netif_tx_queue_stopped(peer_txq) &&
+	    (budget <= PTR_RING_BATCH || done < budget ||
+	     __ptr_ring_empty(&rq->xdp_ring))) {
 		txq_trans_cond_update(peer_txq);
 		netif_tx_wake_queue(peer_txq);
 	}
