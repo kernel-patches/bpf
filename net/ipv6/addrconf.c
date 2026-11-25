@@ -3954,9 +3954,12 @@ static int addrconf_ifdown(struct net_device *dev, bool unregister)
 	}
 
 	/* combine the user config with event to determine if permanent
-	 * addresses are to be removed from address hash table
+	 * addresses are to be removed from address hash table. IPv6 cannot
+	 * operate below IPV6_MIN_MTU, so treat that like disable_ipv6 and do
+	 * not keep addresses without their host routes.
 	 */
-	if (!unregister && !idev->cnf.disable_ipv6) {
+	if (!unregister && !idev->cnf.disable_ipv6 &&
+	    dev->mtu >= IPV6_MIN_MTU) {
 		/* aggregate the system setting and interface setting */
 		int _keep_addr = READ_ONCE(net->ipv6.devconf_all->keep_addr_on_down);
 
