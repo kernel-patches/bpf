@@ -1570,24 +1570,17 @@ int snd_soc_register_component(struct device *dev,
 EXPORT_SYMBOL_GPL(snd_soc_register_component);
 
 /**
- * snd_soc_unregister_component_by_driver - Unregister component using a given driver
+ * snd_soc_unregister_component - Unregister component using a given driver
  * from the ASoC core
  *
  * @dev: The device to unregister
- * @component_driver: The component driver to unregister
  */
-void snd_soc_unregister_component_by_driver(struct device *dev,
-					    const struct snd_soc_component_driver *component_driver)
+void snd_soc_unregister_component(struct device *dev)
 {
-	const char *driver_name = NULL;
-
-	if (component_driver)
-		driver_name = component_driver->name;
-
 	guard(mutex)(&client_mutex);
 
 	while (1) {
-		struct snd_soc_component *component = snd_soc_lookup_component_nolocked(dev, driver_name);
+		struct snd_soc_component *component = snd_soc_lookup_component_nolocked(dev, NULL);
 
 		if (!component)
 			break;
@@ -1595,7 +1588,7 @@ void snd_soc_unregister_component_by_driver(struct device *dev,
 		snd_soc_component_unregister_unlocked(component);
 	}
 }
-EXPORT_SYMBOL_GPL(snd_soc_unregister_component_by_driver);
+EXPORT_SYMBOL_GPL(snd_soc_unregister_component);
 
 /* Retrieve a card's name from device tree */
 int snd_soc_of_parse_card_name(struct snd_soc_card *card,
