@@ -40,6 +40,11 @@
 #define VETH_XDP_TX_BULK_SIZE	16
 #define VETH_XDP_BATCH		16
 
+/* Returned by veth_xdp_rx() when the skb filled the ring. Internal to
+ * veth, veth_xmit() returns NETDEV_TX_OK for it.
+ */
+#define VETH_RING_FULL		0x20
+
 struct veth_stats {
 	u64	rx_drops;
 	/* xdp */
@@ -312,10 +317,17 @@ static void __veth_xdp_flush(struct veth_rq *rq)
 
 static int veth_xdp_rx(struct veth_rq *rq, struct sk_buff *skb)
 {
-	if (unlikely(ptr_ring_produce(&rq->xdp_ring, skb)))
-		return NETDEV_TX_BUSY; /* signal qdisc layer */
+	struct ptr_ring *ring = &rq->xdp_ring;
+	int ret = NET_RX_SUCCESS; /* same as NETDEV_TX_OK */
 
-	return NET_RX_SUCCESS; /* same as NETDEV_TX_OK */
+	spin_lock(&ring->producer_lock);
+	if (__ptr_ring_produce(ring, skb))
+		ret = NETDEV_TX_BUSY; /* signal qdisc layer */
+	else if (__ptr_ring_check_produce(ring) == -ENOSPC)
+		ret = VETH_RING_FULL;
+	spin_unlock(&ring->producer_lock);
+
+	return ret;
 }
 
 static int veth_forward_skb(struct net_device *dev, struct sk_buff *skb,
@@ -387,6 +399,13 @@ static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 			dev_sw_netstats_tx_add(dev, 1, length);
 		else
 			__veth_xdp_flush(rq);
+		break;
+	case VETH_RING_FULL:
+		txq = netdev_get_tx_queue(dev, rxq);
+		if (!qdisc_txq_has_no_queue(txq))
+			netif_tx_stop_queue(txq);
+		__veth_xdp_flush(rq);
+		ret = NETDEV_TX_OK;
 		break;
 	case NETDEV_TX_BUSY:
 		/* If a qdisc is attached to our virtual device, returning
