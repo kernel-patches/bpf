@@ -10,6 +10,7 @@
 #include <bpf/bpf_tracing.h>
 #include "bpf_misc.h"
 #include "bpf_experimental.h"
+#include "err.h"
 
 char _license[] SEC("license") = "GPL";
 
@@ -106,6 +107,15 @@ __naked void zero_extended(void)
 	"w0 = -14;"
 	"exit;"
 	::: __clobber_all);
+}
+
+/* NULL calls the function */
+SEC("fmod_ret/bpf_testmod_retval_pointer")
+__load_if_JITed()
+__success
+void *BPF_PROG(err_ptr, int value)
+{
+	return value ? ERR_PTR(-EINVAL) : NULL;
 }
 
 /* A privileged program may return a pointer, but not here */

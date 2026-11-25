@@ -19710,6 +19710,8 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_range *range)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
+	const struct bpf_prog_aux *aux = env->prog->aux;
+	const struct btf_type *t;
 
 	/* Default return value range. */
 	*range = retval_range(0, 1);
@@ -19762,8 +19764,19 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 			*range = retval_range(0, 0);
 			break;
 		case BPF_TRACE_RAW_TP:
-		case BPF_MODIFY_RETURN:
 			return false;
+		case BPF_MODIFY_RETURN:
+			/* An extension replaces a global function of the program */
+			if (!aux->attach_btf)
+				return false;
+
+			/* Allow only NULL or an error pointer for functions returning pointers */
+			t = btf_type_skip_modifiers(aux->attach_btf,
+						    aux->attach_func_proto->type, NULL);
+			if (!btf_type_is_ptr(t))
+				return false;
+			*range = retval_range(-MAX_ERRNO, 0);
+			break;
 		case BPF_TRACE_ITER:
 		default:
 			break;
@@ -19890,9 +19903,11 @@ static int check_fmodret_retval(struct bpf_verifier_env *env, int regno,
 	 *
 	 * The trampolines of x86-64, arm64 and s390x do that: look here before
 	 * another architecture is added to CONFIG_BPF_FMODRET_SCAN.
+	 *
+	 * A pointer is compared in 64 bits. Its t->size is the id of the type it points to.
 	 */
 	t = btf_type_skip_modifiers(aux->attach_btf, aux->attach_func_proto->type, NULL);
-	if (t->size == 4 && reg_umax(reg) <= U32_MAX) {
+	if (!btf_type_is_ptr(t) && t->size == 4 && reg_umax(reg) <= U32_MAX) {
 		smin = reg_s32_min(reg);
 		smax = reg_s32_max(reg);
 	}
@@ -24882,7 +24897,8 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 
 	env->fmodret_retvals = tgt_info.fmodret_retvals;
 	/* The interpreter returns only 32 bits */
-	if (env->fmodret_retvals && tgt_info.fmodel.ret_size == 8)
+	if (prog->expected_attach_type == BPF_MODIFY_RETURN &&
+	    tgt_info.fmodel.ret_size == 8)
 		prog->jit_required = 1;
 
 	/*

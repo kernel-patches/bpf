@@ -774,6 +774,13 @@ noinline bool bpf_testmod_modify_return_bool(void)
 }
 ALLOW_ERROR_INJECTION(bpf_testmod_modify_return_bool, TRUE);
 
+noinline void *bpf_testmod_modify_return_ptr(void)
+{
+	asm volatile ("");
+	return NULL;
+}
+ALLOW_ERROR_INJECTION(bpf_testmod_modify_return_ptr, ERRNO);
+
 noinline ssize_t
 bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 		      const struct bin_attribute *bin_attr,
