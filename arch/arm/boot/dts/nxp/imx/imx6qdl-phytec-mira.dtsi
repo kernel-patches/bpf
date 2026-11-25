@@ -121,6 +121,7 @@
 		power-supply = <&reg_panel>;
 		enable-gpios = <&gpio2 28 GPIO_ACTIVE_LOW>;
 		backlight = <&backlight>;
+		data-mapping = "jeida-18";
 
 		port {
 			panel_in: endpoint {
@@ -204,7 +205,7 @@
 
 	lvds-channel@0 {
 		fsl,data-mapping = "spwg";
-		fsl,data-width = <24>;
+		fsl,data-width = <18>;
 		status = "disabled";
 
 		port@4 {
