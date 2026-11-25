@@ -415,4 +415,61 @@ __naked void probe_mem(void)
 	: __clobber_all);
 }
 
+/* 32-bit def whose upper half is never read -> upper half is randomized */
+SEC("socket")
+__flag(BPF_F_TEST_RND_HI32)
+__success __retval(0)
+__xlated("w1 = w0")
+__xlated("r12 = {{.*}}")
+__xlated("r12 <<= 32")
+__xlated("r1 |= r12")
+__xlated("r0 = 0")
+__naked void rnd_hi32_alu32_hi_unused(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w1 = w0;					\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * The zext is inserted behind the cmpxchg, between a jump with the smallest
+ * offset and its target. The program is valid, it is only rejected because the
+ * verifier can not widen a jump when it patches a program.
+ */
+SEC("tc")
+__description("zext does not fit behind a cmpxchg")
+__failure __msg("cannot be patched due to 16-bit range")
+__naked void zext_cmpxchg32_jump_out_of_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r7 = 0;						\
+	goto l1_%=;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+l1_%=:	r1 = 0;						\
+	*(u64 *)(r10 - 8) = r1;				\
+	w0 = 0;						\
+	w1 = 1;						\
+	.8byte %[cmpxchg32];				\
+	r2 = r0;					\
+	.rept 32759;					\
+	r1 = 0;						\
+	.endr;						\
+	if r7 != r6 goto l0_%=;				\
+	r0 = r2;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_insn(cmpxchg32,
+		     BPF_ATOMIC_OP(BPF_W, BPF_CMPXCHG, BPF_REG_10, BPF_REG_1, -8))
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";

@@ -57,6 +57,37 @@ __naked void percpu_addr(void)
 	: __clobber_all);
 }
 
+/*
+ * The mov_percpu_addr is inserted behind the ld_imm64, between a jump with the
+ * smallest offset and its target. The program is valid, it is only rejected
+ * because the verifier can not widen a jump when it patches a program.
+ */
+SEC("raw_tp")
+__description("per-CPU address does not fit behind a ld_imm64")
+__failure __msg("cannot be patched due to 16-bit range")
+__arch_x86_64
+__naked void percpu_addr_jump_out_of_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r7 = 0;						\
+	goto l1_%=;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+l1_%=:	r1 = %[percpu_data] ll;				\
+	.rept 32763;					\
+	r2 = 0;						\
+	.endr;						\
+	if r7 != r6 goto l0_%=;				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_addr(percpu_data)
+	: __clobber_all);
+}
+
 #else
 
 SEC("raw_tp")
