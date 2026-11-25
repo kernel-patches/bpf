@@ -1412,6 +1412,7 @@ static int ip6gre_header(struct sk_buff *skb, struct net_device *dev,
 	ip6_flow_hdr(ipv6h, 0, ip6_make_flowlabel(dev_net(dev), skb,
 						  t->fl.u.ip6.flowlabel,
 						  true, &t->fl.u.ip6));
+	ipv6h->payload_len = htons(t->hlen + len);
 	ipv6h->hop_limit = t->parms.hop_limit;
 	ipv6h->nexthdr = NEXTHDR_GRE;
 	ipv6h->saddr = t->parms.laddr;
@@ -1430,9 +1431,9 @@ static int ip6gre_header(struct sk_buff *skb, struct net_device *dev,
 	if (daddr)
 		memcpy(&ipv6h->daddr, daddr, sizeof(struct in6_addr));
 	if (!ipv6_addr_any(&ipv6h->daddr))
-		return t->hlen;
+		return needed;
 
-	return -t->hlen;
+	return -needed;
 }
 
 static const struct header_ops ip6gre_header_ops = {
