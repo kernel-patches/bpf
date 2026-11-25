@@ -529,5 +529,6 @@ void ufs_debugfs_hba_init(struct ufs_hba *hba)
 void ufs_debugfs_hba_exit(struct ufs_hba *hba)
 {
 	debugfs_remove_recursive(hba->debugfs_root);
-	cancel_delayed_work_sync(&hba->debugfs_ee_work);
+	hba->debugfs_root = NULL;
+	disable_delayed_work_sync(&hba->debugfs_ee_work);
 }
