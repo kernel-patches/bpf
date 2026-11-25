@@ -9,6 +9,7 @@
 #include <linux/bits.h>
 #include <linux/skbuff.h>
 #include <linux/types.h>
+#include <linux/wwan.h>
 #include <linux/xarray.h>
 
 #include "mtk_ctrl_plane.h"
@@ -34,8 +35,10 @@
 #define MTK_INFO_FLD_EN		((u16)BIT(15))
 #define MTK_INFO_FLD_CHID	GENMASK(14, 0)
 
-/* State bits, not locks: callers serialise ->enable(), ->disable() and
- * open of a port.  The atomic bitops only make a repeated call a no-op.
+/* State bits, not locks: callers serialise ->enable(), ->disable() and the
+ * open of an internal port.  A WWAN open comes from userspace: its node
+ * exists only after ->enable(), and w_priv.w_lock orders it against
+ * ->disable().  The atomic bitops only make a repeated call a no-op.
  */
 enum mtk_port_status {
 	PORT_S_ENABLE,
@@ -57,12 +60,25 @@ enum mtk_port_tbl {
 
 enum mtk_port_type {
 	PORT_TYPE_INTERNAL,
+	PORT_TYPE_WWAN,
 	PORT_TYPE_MAX
 };
 
 struct mtk_internal_port {
 	void *arg;
 	int (*recv_cb)(void *arg, struct sk_buff *skb);
+};
+
+struct mtk_wwan_port {
+	/* w_lock serialises w_port and PORT_S_OPEN against the receive path,
+	 * and txoff/txon against TX completion.  It is a leaf: the receive
+	 * path and TX completion can both take it with trans->submit_lock
+	 * held, during HIF teardown, so it is never held across a call into
+	 * the HIF.
+	 */
+	struct mutex w_lock;
+	enum wwan_port_type w_type;
+	struct wwan_port *w_port;
 };
 
 struct mtk_port_cfg {
@@ -89,6 +105,7 @@ struct mtk_port {
 	wait_queue_head_t trb_wq;
 	struct mtk_port_mngr *port_mngr;
 	struct mtk_internal_port i_priv;
+	struct mtk_wwan_port w_priv;
 };
 
 struct mtk_port_mngr {

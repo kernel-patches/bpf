@@ -267,6 +267,10 @@ static int mtk_port_tx_complete(struct sk_buff *skb)
 				     "Failed to send data: status:%d, port:%s\n",
 				     trb->status, port->info.name);
 
+	/* Locking rule: see struct mtk_port_ops. */
+	if (mtk_port_get_ops(port->info.type)->tx_complete)
+		mtk_port_get_ops(port->info.type)->tx_complete(port);
+
 	return mtk_port_ch_trb_complete(skb);
 }
 
@@ -612,6 +616,21 @@ int mtk_port_ch_disable(struct mtk_port *port)
 	return ret;
 }
 
+static void mtk_port_enable_by_type(struct mtk_port_mngr *port_mngr, int tbl_type)
+{
+	struct mtk_port *port;
+	unsigned long index;
+
+	/* READY is reached at most once per bind and FSM_STATE_OFF is
+	 * terminal, so port->enable never carries over from an earlier port
+	 * enumeration.
+	 */
+	xa_for_each(&port_mngr->port_tbl[tbl_type], index, port) {
+		if (port->enable)
+			mtk_port_get_ops(port->info.type)->enable(port);
+	}
+}
+
 void mtk_port_mngr_fsm_state_handler(struct mtk_fsm_param *fsm_param, void *arg)
 {
 	struct mtk_port_mngr *port_mngr;
@@ -624,6 +643,9 @@ void mtk_port_mngr_fsm_state_handler(struct mtk_fsm_param *fsm_param, void *arg)
 	switch (fsm_param->to) {
 	case FSM_STATE_OFF:
 		mtk_port_disable(port_mngr);
+		break;
+	case FSM_STATE_READY:
+		mtk_port_enable_by_type(port_mngr, PORT_TBL_MD);
 		break;
 	default:
 		break;
