@@ -514,7 +514,7 @@ void snd_dmaengine_pcm_unregister(struct device *dev)
 
 	pcm = snd_soc_component_to_priv(component);
 
-	snd_soc_unregister_component_by_driver(dev, component->driver);
+	snd_soc_component_unregister(component);
 	dmaengine_pcm_release_chan(pcm);
 	kfree(pcm);
 }
