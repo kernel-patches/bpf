@@ -3505,7 +3505,8 @@ slave_start:
 				goto err_fw;
 			}
 
-			if (mlx4_check_dev_cap(dev, dev_cap, nvfs))
+			err = mlx4_check_dev_cap(dev, dev_cap, nvfs);
+			if (err)
 				goto err_fw;
 
 			if (!(dev_cap->flags2 & MLX4_DEV_CAP_FLAG2_SYS_EQS)) {
@@ -3540,7 +3541,8 @@ slave_start:
 				goto err_fw;
 			}
 
-			if (mlx4_check_dev_cap(dev, dev_cap, nvfs))
+			err = mlx4_check_dev_cap(dev, dev_cap, nvfs);
+			if (err)
 				goto err_fw;
 		}
 	}
