@@ -2096,6 +2096,12 @@ int run_stdlib(int min, int max)
 		CASE_TEST(limit_ptrdiff_min);       EXPECT_EQ(1, PTRDIFF_MIN, sizeof(long) == 8 ? (ptrdiff_t) 0x8000000000000000LL  : (ptrdiff_t) 0x80000000); break;
 		CASE_TEST(limit_ptrdiff_max);       EXPECT_EQ(1, PTRDIFF_MAX, sizeof(long) == 8 ? (ptrdiff_t) 0x7fffffffffffffffLL  : (ptrdiff_t) 0x7fffffff); break;
 		CASE_TEST(limit_size_max);          EXPECT_EQ(1, SIZE_MAX,    sizeof(long) == 8 ? (size_t)    0xffffffffffffffffULL : (size_t)    0xffffffffU); break;
+		CASE_TEST(atoi_simple);             EXPECT_EQ(1, atoi("35"), 35); break;
+		CASE_TEST(atoi_negative);           EXPECT_EQ(1, atoi("-35"), -35); break;
+		CASE_TEST(atoi_positive);           EXPECT_EQ(1, atoi("+35"), 35); break;
+		CASE_TEST(atoi_space);              EXPECT_EQ(1, atoi(" \t\n35"), 35); break;
+		CASE_TEST(atoi_space_negative);     EXPECT_EQ(1, atoi(" -35"), -35); break;
+		CASE_TEST(atol_space_positive);     EXPECT_EQ(1, atol(" +35"), 35L); break;
 		CASE_TEST(strtol_simple);           EXPECT_STRTOX(1, strtol, "35", 10, 35, -1, 0); break;
 		CASE_TEST(strtol_positive);         EXPECT_STRTOX(1, strtol, "+35", 10, 35, -1, 0); break;
 		CASE_TEST(strtol_negative);         EXPECT_STRTOX(1, strtol, "-35", 10, -35, -1, 0); break;

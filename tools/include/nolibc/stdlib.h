@@ -66,8 +66,13 @@ long atol(const char *s)
 	unsigned long d;
 	int neg = 0;
 
+	while (isspace(*s))
+		s++;
+
 	if (*s == '-') {
 		neg = 1;
+		s++;
+	} else if (*s == '+') {
 		s++;
 	}
 
