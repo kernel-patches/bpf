@@ -2665,7 +2665,14 @@ static int btf_dump_dump_type_data(struct btf_dump *d,
 			if (err)
 				break;
 			enum_val = (__s64)print_num;
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 			err = btf_dump_enum_data(d, t, id, &enum_val);
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+			err = btf_dump_enum_data(d, t, id,
+						 (void *)&enum_val + sizeof(enum_val) - t->size);
+#else
+# error "Unrecognized __BYTE_ORDER__"
+#endif
 		} else
 			err = btf_dump_enum_data(d, t, id, data);
 		break;
