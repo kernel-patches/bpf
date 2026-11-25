@@ -1183,6 +1183,7 @@ static int rza1_parse_gpiochip(struct rza1_pinctrl *rza1_pctl,
 			list_name);
 		return ret;
 	}
+	fwnode_handle_put(args.fwnode);
 
 	/*
 	 * Find out on which port this gpio-chip maps to by inspecting the
