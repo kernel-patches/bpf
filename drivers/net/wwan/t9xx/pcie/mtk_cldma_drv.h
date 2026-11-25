@@ -10,6 +10,7 @@
 
 #define ALLQ			(0xFF)
 #define LINK_ERROR_VAL		(0xFFFFFFFF)
+#define CLDMA_INT_MASK_ALL	(0xFFFFFFFF)
 #define CLDMA0_HW_ID		(0)
 #define CLDMA1_HW_ID		(1)
 
@@ -78,8 +79,17 @@ struct cldma_drv_info {
 	struct dma_pool *gpd_dma_pool;
 	struct workqueue_struct *wq;
 	const struct cldma_hw_regs *hw_regs;
+	struct work_struct err_work;
+	atomic_t tx_err_qs;
+	atomic_t rx_err_qs;
+	/* a ring could not be stopped and was leaked on free */
+	bool ring_leaked;
+	/* the quiesce of this instance has started: nothing may queue its
+	 * work any more, and a repeated quiesce returns early
+	 */
+	bool quiesced;
 	/* serialises the instance reset and re-arm against queue kicks and
-	 * RX resume/restart: no queue is kicked while it has no address
+	 * RX resume/restart, and re-arming against setting quiesced
 	 */
 	struct mutex rearm_lock;
 };

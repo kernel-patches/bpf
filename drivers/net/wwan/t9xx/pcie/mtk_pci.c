@@ -14,6 +14,7 @@
 #include <linux/pci.h>
 
 #include "../mtk_dev.h"
+#include "../mtk_fsm.h"
 #include "mtk_trans_ctrl.h"
 #include "mtk_pci.h"
 #include "mtk_pci_reg.h"
@@ -854,22 +855,45 @@ static int mtk_pci_dev_init(struct mtk_md_dev *mdev)
 {
 	int ret;
 
-	ret = mtk_trans_ctrl_init(mdev);
+	ret = mtk_fsm_init(mdev);
 	if (ret) {
-		dev_err(mdev->dev, "Failed to initialize control plane: %d\n", ret);
+		dev_err(mdev->dev, "Failed to initialize FSM: %d\n", ret);
 		return ret;
 	}
 
+	ret = mtk_trans_ctrl_init(mdev);
+	if (ret)
+		goto free_fsm;
+
 	return 0;
+free_fsm:
+	mtk_fsm_exit(mdev);
+	return ret;
 }
 
 static void mtk_pci_dev_exit(struct mtk_md_dev *mdev)
 {
+	int ret;
+
 	/* remove() can follow a kexec shutdown that already ran this. */
 	if (!mdev->ctrl_blk)
 		return;
 
+	ret = mtk_fsm_evt_submit(mdev, FSM_EVT_DEV_RM, 0, NULL,
+				 EVT_MODE_BLOCKING | EVT_MODE_TOHEAD);
+	if (ret < 0)
+		dev_err(mdev->dev, "FSM DEV_RM failed: %d, forcing cleanup\n", ret);
+	/* Close the event gate and stop the FSM thread before the transport
+	 * plane it drives is torn down.
+	 */
+	mtk_fsm_stop(mdev);
 	mtk_trans_ctrl_exit(mdev);
+	mtk_fsm_exit(mdev);
+}
+
+static int mtk_pci_dev_start(struct mtk_md_dev *mdev)
+{
+	return mtk_fsm_evt_submit(mdev, FSM_EVT_DEV_ADD, 0, NULL, 0);
 }
 
 static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
@@ -945,8 +969,16 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	pci_set_master(pdev);
 	mtk_pci_unmask_irq(mdev, priv->mhccif_irq_id);
 
+	ret = mtk_pci_dev_start(mdev);
+	if (ret) {
+		dev_err(mdev->dev, "Failed to start dev.\n");
+		goto clear_master;
+	}
+
 	return 0;
 
+clear_master:
+	pci_clear_master(pdev);
 dev_exit:
 	mtk_pci_dev_exit(mdev);
 free_irq:
