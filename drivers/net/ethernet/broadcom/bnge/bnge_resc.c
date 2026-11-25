@@ -12,6 +12,7 @@
 #include "bnge_hwrm_lib.h"
 #include "bnge_resc.h"
 #include "bnge_vnic.h"
+#include "bnge_filter.h"
 
 static u16 bnge_num_tx_to_cp(struct bnge_dev *bd, u16 tx)
 {
@@ -715,7 +716,6 @@ bool bnge_rss_ctx_capable(struct bnge_dev *bd)
 
 int bnge_net_init_dflt_config(struct bnge_dev *bd)
 {
-	struct bnge_hw_resc *hw_resc;
 	int rc;
 
 	rc = bnge_alloc_rss_indir_tbl(bd);
@@ -727,9 +727,7 @@ int bnge_net_init_dflt_config(struct bnge_dev *bd)
 		goto err_free_tbl;
 
 	bnge_set_dflt_rss_indir_tbl(bd, NULL);
-	hw_resc = &bd->hw_resc;
-	bd->max_fltr = hw_resc->max_rx_em_flows + hw_resc->max_rx_wm_flows +
-		       BNGE_L2_FLTR_MAX_FLTR;
+	bd->max_fltr = BNGE_MAX_NTUPLE_FLTRS;
 
 	return 0;
 

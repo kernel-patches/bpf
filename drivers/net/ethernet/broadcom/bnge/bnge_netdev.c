@@ -1226,6 +1226,10 @@ static void bnge_free_core(struct bnge_net *bn)
 	bnge_free_ring_stats(bn);
 	bnge_free_ring_grps(bn);
 	bnge_free_vnics(bn);
+
+	/* Free non-user filters only */
+	bnge_free_ntp_fltrs(bn, true);
+
 	kfree(bn->tx_ring_map);
 	bn->tx_ring_map = NULL;
 	kfree(bn->tx_ring);
@@ -1314,6 +1318,10 @@ static int bnge_alloc_core(struct bnge_net *bn)
 		goto err_free_tx_ring_map;
 
 	bnge_init_stats(bn);
+
+	rc = bnge_fltrs_mem(bn);
+	if (rc)
+		goto err_free_ring_stats;
 
 	rc = bnge_alloc_vnics(bn);
 	if (rc)
@@ -2110,7 +2118,7 @@ static int bnge_cfg_rx_mode(struct bnge_net *bn, struct netdev_hw_addr_list *uc,
 		struct bnge_l2_filter *fltr = vnic->l2_filters[i];
 
 		bnge_hwrm_l2_filter_free(bd, fltr);
-		bnge_del_l2_filter(bn, fltr);
+		bnge_del_l2_filter_rcu(bn, fltr);
 	}
 
 	vnic->uc_filter_count = 1;
@@ -2330,7 +2338,7 @@ static void bnge_hwrm_clear_vnic_filter(struct bnge_net *bn)
 		struct bnge_l2_filter *fltr = vnic->l2_filters[i];
 
 		bnge_hwrm_l2_filter_free(bn->bd, fltr);
-		bnge_del_l2_filter(bn, fltr);
+		bnge_del_l2_filter_rcu(bn, fltr);
 	}
 
 	vnic->uc_filter_count = 0;
@@ -3214,6 +3222,7 @@ static void bnge_nq0_napi_to_wq(struct bnge_net *bn)
 
 static void bnge_close_core(struct bnge_net *bn)
 {
+	struct bnge_filter_base *fltr;
 	struct bnge_dev *bd = bn->bd;
 
 	bnge_tx_disable(bn);
@@ -3226,6 +3235,20 @@ static void bnge_close_core(struct bnge_net *bn)
 	bnge_shutdown_nic(bn);
 
 	bnge_nq0_napi_to_wq(bn);
+
+	/* Invalidate user L2 filters now that NAPI is disabled so that
+	 * subsequent re-enabling during open cannot read a stale or torn
+	 * filter_id before bnge_cfg_usr_fltrs() completes reallocation.
+	 */
+	/* Only the driver's tracking is reset here. The user filters are
+	 * programmed again by bnge_cfg_usr_fltrs() on the next open.
+	 */
+	list_for_each_entry(fltr, &bn->usr_fltr_list, list_node) {
+		if (fltr->type == BNGE_FLTR_TYPE_L2)
+			clear_bit(BNGE_FLTR_VALID, &fltr->state);
+		else
+			fltr->filter_id = BNGE_FLTR_ID_INVALID;
+	}
 
 	/* Save ring stats before shutdown */
 	spin_lock_bh(&bn->stats_lock);
@@ -3629,6 +3652,9 @@ int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 		goto err_free_nq0_wq;
 	spin_lock_init(&bn->stats_lock);
 
+	spin_lock_init(&bn->ntp_fltr_lock);
+	INIT_LIST_HEAD(&bn->usr_fltr_list);
+
 	netdev->request_ops_lock = true;
 
 	rc = bnge_nq0_init(bn);
@@ -3671,6 +3697,9 @@ void bnge_netdev_free(struct bnge_dev *bd)
 	/* NQ0 can queue sp_task; destroy it before the timer and workqueue */
 	bnge_nq0_uninit(bn);
 	destroy_workqueue(bn->nq0_wq);
+
+	bnge_free_ntp_fltrs(bn, false);
+	bnge_free_l2_filters(bn);
 
 	timer_shutdown_sync(&bn->timer);
 	cancel_work_sync(&bn->sp_task);

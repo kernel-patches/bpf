@@ -39,8 +39,6 @@ struct bnge_hw_resc {
 	u32	max_decap_records;
 	u32	max_tx_em_flows;
 	u32	max_tx_wm_flows;
-	u32	max_rx_em_flows;
-	u32	max_rx_wm_flows;
 };
 
 struct bnge_hw_rings {
