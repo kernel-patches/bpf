@@ -527,6 +527,15 @@ void snd_soc_component_regcache_cache_only(struct snd_soc_component *component, 
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_regcache_cache_only);
 
+void snd_soc_component_regcache_cache_bypass(struct snd_soc_component *component, bool enable)
+{
+	struct regmap *regmap = component->regmap;
+
+	if (regmap)
+		regcache_cache_bypass(regmap, enable);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regcache_cache_bypass);
+
 int snd_soc_component_compr_open(struct snd_soc_component *component,
 				 struct snd_compr_stream *cstream)
 {
