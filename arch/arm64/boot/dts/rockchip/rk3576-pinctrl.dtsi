@@ -613,7 +613,7 @@
 		emmc_strb: emmc-strb {
 			rockchip,pins =
 				/* emmc_strb */
-				<1 RK_PB2 1 &pcfg_pull_none>;
+				<1 RK_PB2 1 &pcfg_pull_down>;
 		};
 	};
 
