@@ -940,7 +940,6 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 	const struct bpf_verifier_ops *ops = env->ops;
 	int i, cnt, size, ctx_field_size, ret, delta = 0, epilogue_cnt = 0;
 	const int insn_cnt = env->prog->len;
-	const struct bpf_insn nospec = BPF_ST_NOSPEC();
 	struct bpf_insn *epilogue_buf = env->epilogue_buf;
 	struct bpf_insn *insn_buf = env->insn_buf;
 	struct bpf_insn *insn;
@@ -1022,25 +1021,6 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 		enum bpf_reg_type ptr_type;
 		u8 mode;
 
-		if (env->insn_aux_data[i + delta].nospec) {
-			WARN_ON_ONCE(env->insn_aux_data[i + delta].alu_state);
-
-			new_prog = bpf_insert_insns(env, i + delta, &nospec, 1,
-						    BPF_INSERT_BEFORE);
-			if (IS_ERR(new_prog))
-				return PTR_ERR(new_prog);
-
-			delta    += 1;
-			env->prog = new_prog;
-			insn      = new_prog->insnsi + i + delta;
-			/* This can not be easily merged with the
-			 * nospec_result-case, because an insn may require a
-			 * nospec before and after itself. Therefore also do not
-			 * 'continue' here but potentially apply further
-			 * patching to insn.
-			 */
-		}
-
 		if (insn->code == (BPF_LDX | BPF_MEM | BPF_B) ||
 		    insn->code == (BPF_LDX | BPF_MEM | BPF_H) ||
 		    insn->code == (BPF_LDX | BPF_MEM | BPF_W) ||
@@ -1101,22 +1081,6 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			}
 			goto patch_insn_buf;
 		} else {
-			continue;
-		}
-
-		if (type == BPF_WRITE &&
-		    env->insn_aux_data[i + delta].nospec_result) {
-			/* nospec_result is only used to mitigate Spectre v4 and
-			 * to limit verification-time for Spectre v1.
-			 */
-			new_prog = bpf_insert_insns(env, i + delta, &nospec, 1,
-						    BPF_INSERT_AFTER);
-			if (IS_ERR(new_prog))
-				return PTR_ERR(new_prog);
-
-			delta    += 1;
-			env->prog = new_prog;
-			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}
 
@@ -1863,6 +1827,61 @@ static int may_goto_expand_timed(struct bpf_insn *insn_buf, int off,
 	if (save_off)
 		insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, reg, BPF_REG_10, save_off);
 	return cnt;
+}
+
+/*
+ * Emit the speculation barriers that do_check() asked for:
+ *
+ * - nospec: a nospec in front of the insn. It is set if the insn failed a
+ *   check on a speculative path.
+ *
+ * - nospec_result: a nospec behind the insn. It is only used to mitigate
+ *   Spectre v4 and to limit verification-time for Spectre v1. It is set for a
+ *   store to the stack, whatever the insn that stores is: BPF_ST, BPF_STX
+ *   including BPF_ATOMIC, or a call of a helper or kfunc.
+ *
+ * An insn may require both. The insn keeps its aux data, so this has to run
+ * before the passes that rewrite the insn itself: what they emit for the insn
+ * stays between the two nospec.
+ */
+int bpf_emit_nospec(struct bpf_verifier_env *env)
+{
+	const struct bpf_insn nospec = BPF_ST_NOSPEC();
+	struct bpf_prog *new_prog;
+	int i;
+
+	/* Neither of the two is set without the mitigations. */
+	if (env->bypass_spec_v1 && env->bypass_spec_v4)
+		return 0;
+
+	if (bpf_prog_is_offloaded(env->prog->aux))
+		return 0;
+
+	for (i = 0; i < env->prog->len; i++) {
+		if (env->insn_aux_data[i].nospec) {
+			WARN_ON_ONCE(env->insn_aux_data[i].alu_state);
+
+			new_prog = bpf_insert_insns(env, i, &nospec, 1, BPF_INSERT_BEFORE);
+			if (IS_ERR(new_prog))
+				return PTR_ERR(new_prog);
+
+			env->prog = new_prog;
+			/* the insn and its aux data are behind the nospec now */
+			i++;
+		}
+
+		if (env->insn_aux_data[i].nospec_result) {
+			new_prog = bpf_insert_insns(env, i, &nospec, 1, BPF_INSERT_AFTER);
+			if (IS_ERR(new_prog))
+				return PTR_ERR(new_prog);
+
+			env->prog = new_prog;
+			/* skip the nospec */
+			i++;
+		}
+	}
+
+	return 0;
 }
 
 /* Do various post-verification rewrites in a single program pass.

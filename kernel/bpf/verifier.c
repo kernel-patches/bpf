@@ -24265,6 +24265,9 @@ skip_full_check:
 	}
 
 	if (ret == 0)
+		ret = bpf_emit_nospec(env);
+
+	if (ret == 0)
 		/* program is valid, convert *(u32*)(ctx + off) accesses */
 		ret = bpf_convert_ctx_accesses(env);
 
