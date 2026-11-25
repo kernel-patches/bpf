@@ -1062,6 +1062,10 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			env->prog = new_prog;
 			insn      = new_prog->insnsi + i + delta;
 			continue;
+		} else if (BPF_CLASS(insn->code) == BPF_STX &&
+			   BPF_MODE(insn->code) == BPF_ATOMIC &&
+			   env->insn_aux_data[i + delta].nospec_result) {
+			type = BPF_WRITE;
 		} else if (insn->code == (BPF_JMP | BPF_EXIT) &&
 			   epilogue_cnt &&
 			   i + delta < subprogs[1].start) {
