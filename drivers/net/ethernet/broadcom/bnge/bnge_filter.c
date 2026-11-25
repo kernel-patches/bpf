@@ -584,3 +584,135 @@ err_del_l2_filter:
 	bnge_del_l2_filter_rcu(bn, fltr);
 	return rc;
 }
+
+/* bnge_cfg_rx_mode() installs no filter for a unicast address that already
+ * has a user L2 rule; reinstall it once the user rule is gone.
+ */
+void bnge_del_usr_l2_filter(struct bnge_net *bn, struct bnge_l2_filter *fltr)
+{
+	u8 mac[ETH_ALEN] __aligned(2);
+	struct bnge_vnic_info *vnic;
+	int i, off;
+	bool vlan;
+
+	ether_addr_copy(mac, fltr->l2_key.dst_mac_addr);
+	vlan = !!fltr->l2_key.vlan;
+	bnge_del_l2_filter_rcu(bn, fltr);
+
+	if (vlan || !test_bit(BNGE_STATE_OPEN, &bn->bd->state))
+		return;
+
+	/* Deleting the rule frees an L2 filter, but the promiscuous decision
+	 * in bnge_cfg_rx_mode() is not run again. A VNIC that was made
+	 * promiscuous stays so until the next rx_mode update.
+	 */
+	vnic = &bn->vnic_info[BNGE_VNIC_DEFAULT];
+	for (i = 1, off = 0; i < vnic->uc_filter_count; i++, off += ETH_ALEN) {
+		if (vnic->l2_filters[i] ||
+		    !ether_addr_equal(vnic->uc_list + off, mac))
+			continue;
+		if (bnge_hwrm_set_vnic_filter(bn, 0, i, vnic->uc_list + off))
+			netdev_warn(bn->netdev,
+				    "failed to restore uc filter %pM\n", mac);
+		break;
+	}
+}
+
+static bool bnge_usr_fltr_ring_lost(struct bnge_net *bn,
+				    struct bnge_filter_base *fltr)
+{
+	if (fltr->flags & (BNGE_ACT_DROP | BNGE_ACT_RSS_CTX) ||
+	    fltr->rxq < bn->bd->rx_nr_rings)
+		return false;
+
+	netdev_warn(bn->netdev, "filter id %d: rx ring %u no longer exists\n",
+		    fltr->type == BNGE_FLTR_TYPE_NTUPLE ?
+		    BNGE_MAX_L2_FLTRS + fltr->sw_id : fltr->sw_id, fltr->rxq);
+	return true;
+}
+
+static void bnge_cfg_one_usr_fltr(struct bnge_net *bn,
+				  struct bnge_filter_base *fltr)
+{
+	struct bnge_ntuple_filter *ntp_fltr;
+	struct bnge_l2_filter *l2_fltr;
+
+	if (list_empty(&fltr->list_node))
+		return;
+
+	if (fltr->type == BNGE_FLTR_TYPE_NTUPLE) {
+		ntp_fltr = container_of(fltr, struct bnge_ntuple_filter, base);
+		l2_fltr = bn->vnic_info[BNGE_VNIC_DEFAULT].l2_filters[0];
+		ntp_fltr->l2_filter_id = l2_fltr->base.filter_id;
+		if (bnge_usr_fltr_ring_lost(bn, fltr) ||
+		    bnge_hwrm_cfa_ntuple_filter_alloc(bn->bd, ntp_fltr)) {
+			netdev_err(bn->netdev,
+				   "restoring previously configured ntuple filter id %d failed\n",
+				   BNGE_MAX_L2_FLTRS + fltr->sw_id);
+			bnge_del_ntp_filter_rcu(bn, ntp_fltr);
+		}
+	} else if (fltr->type == BNGE_FLTR_TYPE_L2) {
+		l2_fltr = container_of(fltr, struct bnge_l2_filter, base);
+		fltr->fw_vnic_id = bn->vnic_info[BNGE_VNIC_NTUPLE].fw_vnic_id;
+		if (bnge_usr_fltr_ring_lost(bn, fltr) ||
+		    bnge_hwrm_l2_filter_alloc(bn->bd, l2_fltr)) {
+			netdev_err(bn->netdev,
+				   "restoring previously configured l2 filter id %d failed\n",
+				   fltr->sw_id);
+			bnge_del_usr_l2_filter(bn, l2_fltr);
+		}
+	}
+}
+
+void bnge_cfg_usr_fltrs(struct bnge_net *bn)
+{
+	struct bnge_filter_base *usr_fltr, *tmp;
+
+	list_for_each_entry_safe(usr_fltr, tmp, &bn->usr_fltr_list, list_node)
+		bnge_cfg_one_usr_fltr(bn, usr_fltr);
+}
+
+/* User ntuple rules are kept in the hash table across down/up, indexed by a
+ * hash of the RSS key and hash fields. They are not rehashed, so the key and
+ * fields must not change while any exists.
+ */
+bool bnge_has_usr_ntp_fltr(struct bnge_net *bn)
+{
+	struct bnge_filter_base *fltr;
+
+	list_for_each_entry(fltr, &bn->usr_fltr_list, list_node)
+		if (fltr->type == BNGE_FLTR_TYPE_NTUPLE)
+			return true;
+
+	return false;
+}
+
+void bnge_clear_usr_fltrs(struct bnge_net *bn)
+{
+	struct bnge_filter_base *usr_fltr, *tmp;
+	struct bnge_ntuple_filter *ntp_fltr;
+	struct bnge_l2_filter *l2_fltr;
+
+	netdev_assert_locked(bn->netdev);
+
+	/* bnge_fix_features() ensures NTUPLE can only be toggled while the
+	 * interface is administrative down (!netif_running). At this point,
+	 * all NAPIs and softirqs are disabled, sp_task is locked out under
+	 * netdev_lock() and gated by !BNGE_STATE_OPEN, and the device is
+	 * closed with no active hardware filters in firmware. Therefore,
+	 * synchronous deletion of retained software filter entries here has
+	 * no concurrent readers and leaks no firmware filter resources.
+	 */
+	list_for_each_entry_safe(usr_fltr, tmp, &bn->usr_fltr_list, list_node) {
+		if (usr_fltr->type == BNGE_FLTR_TYPE_NTUPLE) {
+			ntp_fltr = container_of(usr_fltr,
+						struct bnge_ntuple_filter,
+						base);
+			bnge_del_ntp_filter(bn, ntp_fltr);
+		} else if (usr_fltr->type == BNGE_FLTR_TYPE_L2) {
+			l2_fltr = container_of(usr_fltr, struct bnge_l2_filter,
+					       base);
+			bnge_del_l2_filter(bn, l2_fltr);
+		}
+	}
+}

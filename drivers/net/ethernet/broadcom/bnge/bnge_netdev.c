@@ -1132,7 +1132,7 @@ static int bnge_alloc_vnic_attributes(struct bnge_net *bn)
 		vnic = &bn->vnic_info[i];
 
 		if (vnic->flags & BNGE_VNIC_UCAST_FLAG) {
-			int mem_size = (BNGE_MAX_UC_ADDRS - 1) * ETH_ALEN;
+			int mem_size = (BNGE_MAX_L2_FLTRS - 1) * ETH_ALEN;
 
 			vnic->uc_list = kmalloc(mem_size, GFP_KERNEL);
 			if (!vnic->uc_list)
@@ -2110,6 +2110,7 @@ static int bnge_cfg_rx_mode(struct bnge_net *bn, struct netdev_hw_addr_list *uc,
 	int i, off = 0, rc, uc_count = 0;
 	struct bnge_dev *bd = bn->bd;
 	struct netdev_hw_addr *ha;
+	int l2_free;
 
 	if (!uc_update)
 		goto skip_uc;
@@ -2117,6 +2118,8 @@ static int bnge_cfg_rx_mode(struct bnge_net *bn, struct netdev_hw_addr_list *uc,
 	for (i = 1; i < vnic->uc_filter_count; i++) {
 		struct bnge_l2_filter *fltr = vnic->l2_filters[i];
 
+		if (!fltr)
+			continue;
 		bnge_hwrm_l2_filter_free(bd, fltr);
 		bnge_del_l2_filter_rcu(bn, fltr);
 	}
@@ -2126,14 +2129,24 @@ static int bnge_cfg_rx_mode(struct bnge_net *bn, struct netdev_hw_addr_list *uc,
 	if (!snapshot)
 		netif_addr_lock_bh(dev);
 	/* dev_addr is already programmed as L2 filter 0, so it takes neither a
-	 * uc_list slot nor an l2_filters[] slot. Count only the entries that
-	 * will actually be programmed so the overflow check matches the fill
-	 * loop below (and bnge_uc_list_updated()).
+	 * uc_list slot nor an l2_filters[] slot. Count the entries that go to
+	 * the fill loop below (and bnge_uc_list_updated()). An address that a
+	 * user ETHER_FLOW rule already serves gets -EEXIST there and needs no
+	 * filter of its own, but it is counted here and its rule's filter is
+	 * already taken from l2_free. Such addresses are counted twice, so the
+	 * VNIC can go promiscuous earlier than needed.
 	 */
 	netdev_hw_addr_list_for_each(ha, uc)
 		if (!ether_addr_equal(ha->addr, dev->dev_addr))
 			uc_count++;
-	if (uc_count > BNGE_MAX_UC_ADDRS - 1) {
+	/* The unicast addresses and the user ETHER_FLOW rules share the L2
+	 * filters. Receive the addresses that do not fit in promiscuous mode.
+	 * The firmware supports many more L2 filters than BNGE_MAX_L2_FLTRS,
+	 * so it is not expected to refuse a filter in the loop below.
+	 */
+	l2_free = BNGE_MAX_L2_FLTRS -
+		  bitmap_weight(bn->l2_fltr_bmap, BNGE_MAX_L2_FLTRS);
+	if (uc_count > BNGE_MAX_L2_FLTRS - 1 || uc_count > l2_free) {
 		vnic->rx_mask |= CFA_L2_SET_RX_MASK_REQ_MASK_PROMISCUOUS;
 	} else {
 		netdev_hw_addr_list_for_each(ha, uc) {
@@ -2149,6 +2162,11 @@ static int bnge_cfg_rx_mode(struct bnge_net *bn, struct netdev_hw_addr_list *uc,
 
 	for (i = 1, off = 0; i < vnic->uc_filter_count; i++, off += ETH_ALEN) {
 		rc = bnge_hwrm_set_vnic_filter(bn, 0, i, vnic->uc_list + off);
+		if (rc == -EEXIST) {
+			/* Already delivered by a user L2 rule */
+			vnic->l2_filters[i] = NULL;
+			continue;
+		}
 		if (rc) {
 			if (rc == -EAGAIN)
 				netdev_warn(dev, "FW busy while setting vnic filter, will retry\n");
@@ -2337,6 +2355,8 @@ static void bnge_hwrm_clear_vnic_filter(struct bnge_net *bn)
 	for (i = 0; i < vnic->uc_filter_count; i++) {
 		struct bnge_l2_filter *fltr = vnic->l2_filters[i];
 
+		if (!fltr)
+			continue;
 		bnge_hwrm_l2_filter_free(bn->bd, fltr);
 		bnge_del_l2_filter_rcu(bn, fltr);
 	}
@@ -2344,8 +2364,29 @@ static void bnge_hwrm_clear_vnic_filter(struct bnge_net *bn)
 	vnic->uc_filter_count = 0;
 }
 
+/* User ETHER_FLOW rules are L2 filters whose destination is the NTUPLE VNIC.
+ * Free them in firmware before that VNIC goes away, as is done for the
+ * default VNIC filters. The rules stay in usr_fltr_list and are programmed
+ * again by bnge_cfg_usr_fltrs() on the next open.
+ */
+static void bnge_hwrm_clear_usr_l2_fltrs(struct bnge_net *bn)
+{
+	struct bnge_filter_base *fltr;
+
+	list_for_each_entry(fltr, &bn->usr_fltr_list, list_node) {
+		if (fltr->type != BNGE_FLTR_TYPE_L2 ||
+		    !test_and_clear_bit(BNGE_FLTR_VALID, &fltr->state))
+			continue;
+		bnge_hwrm_l2_filter_free(bn->bd,
+					 container_of(fltr,
+						      struct bnge_l2_filter,
+						      base));
+	}
+}
+
 static void bnge_clear_vnic(struct bnge_net *bn)
 {
+	bnge_hwrm_clear_usr_l2_fltrs(bn);
 	bnge_hwrm_clear_vnic_filter(bn);
 	bnge_hwrm_vnic_free(bn);
 	bnge_hwrm_vnic_ctx_free(bn);
@@ -2983,6 +3024,7 @@ static int bnge_open_core(struct bnge_net *bn)
 	bnge_get_port_module_status(bn);
 
 	bnge_hwrm_realloc_rss_ctx_vnic(bn);
+	bnge_cfg_usr_fltrs(bn);
 
 	return 0;
 
@@ -3383,6 +3425,9 @@ static int bnge_set_features(struct net_device *dev, netdev_features_t features)
 	if (flags == bn->priv_flags)
 		return 0;
 
+	if (!(flags & BNGE_NET_EN_NTUPLE))
+		bnge_clear_usr_fltrs(bn);
+
 	bn->priv_flags = flags;
 
 	return 0;
@@ -3522,6 +3567,13 @@ static void bnge_init_ring_params(struct bnge_net *bn)
 	bn->netdev->cfg->hds_thresh = max(BNGE_DEFAULT_RX_COPYBREAK, rx_size);
 }
 
+static void bnge_set_dflt_rfs(struct bnge_net *bn)
+{
+	bn->netdev->hw_features |= NETIF_F_NTUPLE;
+	bn->netdev->features |= NETIF_F_NTUPLE;
+	bn->priv_flags |= BNGE_NET_EN_NTUPLE;
+}
+
 int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 {
 	struct net_device *netdev;
@@ -3640,6 +3692,7 @@ int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 	bnge_set_ring_params(bd);
 
 	bnge_init_l2_fltr_tbl(bn);
+	bnge_set_dflt_rfs(bn);
 
 	bnge_init_mac_addr(bd);
 

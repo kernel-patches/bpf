@@ -4,6 +4,8 @@
 #ifndef _BNGE_VNIC_H_
 #define _BNGE_VNIC_H_
 
+#include "bnge_filter.h"
+
 struct bnge_net;
 struct bnge_dev;
 struct bnge_l2_filter;
@@ -20,7 +22,6 @@ struct bnge_l2_filter;
 #define BNGE_MAX_CTX_PER_VNIC	8
 
 #define BNGE_MAX_MC_ADDRS	16
-#define BNGE_MAX_UC_ADDRS	4
 
 #define BNGE_VNIC_ID_INVALID	0xffffffff
 
@@ -46,7 +47,7 @@ struct bnge_vnic_info {
 	u16		fw_rss_cos_lb_ctx[BNGE_MAX_CTX_PER_VNIC];
 	u16		mru;
 	/* index 0 always dev_addr */
-	struct bnge_l2_filter *l2_filters[BNGE_MAX_UC_ADDRS];
+	struct bnge_l2_filter *l2_filters[BNGE_MAX_L2_FLTRS];
 	u16		uc_filter_count;
 	u8		*uc_list;
 	dma_addr_t	rss_table_dma_addr;
