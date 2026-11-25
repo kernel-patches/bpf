@@ -2545,8 +2545,9 @@ static int tg3_phy_reset_chanpat(struct tg3 *tp)
 
 static int tg3_phy_reset_5703_4_5(struct tg3 *tp)
 {
-	u32 reg32, phy9_orig;
 	int retries, do_phy_reset, err;
+	bool phy9_orig_set = false;
+	u32 reg32, phy9_orig = 0;
 
 	retries = 10;
 	do_phy_reset = 1;
@@ -2572,6 +2573,7 @@ static int tg3_phy_reset_5703_4_5(struct tg3 *tp)
 		/* Set to master mode.  */
 		if (tg3_readphy(tp, MII_CTRL1000, &phy9_orig))
 			continue;
+		phy9_orig_set = true;
 
 		tg3_writephy(tp, MII_CTRL1000,
 			     CTL1000_AS_MASTER | CTL1000_ENABLE_MASTER);
@@ -2599,7 +2601,8 @@ static int tg3_phy_reset_5703_4_5(struct tg3 *tp)
 
 	tg3_phy_toggle_auxctl_smdsp(tp, false);
 
-	tg3_writephy(tp, MII_CTRL1000, phy9_orig);
+	if (phy9_orig_set)
+		tg3_writephy(tp, MII_CTRL1000, phy9_orig);
 
 	err = tg3_readphy(tp, MII_TG3_EXT_CTRL, &reg32);
 	if (err)
