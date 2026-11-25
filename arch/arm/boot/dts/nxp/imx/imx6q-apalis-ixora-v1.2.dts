@@ -57,6 +57,13 @@
 		};
 	};
 
+	reg_3v3_sw: regulator-3v3-sw {
+		compatible = "regulator-fixed";
+		regulator-max-microvolt = <3300000>;
+		regulator-min-microvolt = <3300000>;
+		regulator-name = "3.3V_SW";
+	};
+
 	reg_3v3_vmmc: regulator-3v3-vmmc {
 		compatible = "regulator-fixed";
 		enable-active-high;
@@ -97,6 +104,16 @@
 
 &can2 {
 	xceiver-supply = <&reg_can2_supply>;
+	status = "okay";
+};
+
+/* Apalis SPI1 */
+&ecspi1 {
+	status = "okay";
+};
+
+/* Apalis SPI2 */
+&ecspi2 {
 	status = "okay";
 };
 

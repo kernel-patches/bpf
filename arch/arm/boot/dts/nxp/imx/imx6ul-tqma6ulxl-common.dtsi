@@ -20,6 +20,10 @@
 	};
 };
 
+&adc1 {
+	vref-supply = <&reg_vin>;
+};
+
 &m24c64_50 {
 	vcc-supply = <&reg_vin>;
 };

@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Copyright (c) Toradex
+ *
+ * Panel, backlight and LCDIF part of the Toradex Capacitive Touch Display 7"
+ * Parallel overlays, connected through the 40-way Unified Interface Display
+ * connector, shared by the Colibri iMX6ULL eMMC and Colibri iMX7 eMMC overlays.
+ *
+ * The Atmel MaxTouch controller wiring is SoC specific and is described by
+ * the overlay including this file.
+ *
+ * https://docs.toradex.com/104497-7-inch-parallel-capacitive-touch-display-800x480-datasheet.pdf
+ * https://developer.toradex.com/hardware/accessories/displays/capacitive-touch-display-7inch-parallel/
+ * https://www.toradex.com/accessories/capacitive-touch-display-7-inch-parallel
+ */
+
+&backlight {
+	status = "okay";
+};
+
+&lcdif {
+	status = "okay";
+};
+
+&panel_dpi {
+	compatible = "logictechno,lt161010-2nhc";
+
+	status = "okay";
+};

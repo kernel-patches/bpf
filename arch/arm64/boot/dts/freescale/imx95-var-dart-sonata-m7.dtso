@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Cortex-M7 support for Variscite DART-MX95 on Sonata-Board
+ *
+ * Link: https://variscite.com/carrier-boards/sonata-board/
+ *
+ * Copyright (C) 2026 Variscite Ltd. - https://www.variscite.com/
+ *
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include "imx95-var-common-m7.dtsi"
+
+/* SAI3 requires eDMA2, which is reserved for the Cortex-M7. */
+&{/sound-wm8904} {
+	status = "disabled";
+};
+
+/* Reserve the peripherals used by the Cortex-M7 firmware. */
+&edma1 {
+	status = "reserved";
+};
+
+&edma2 {
+	status = "reserved";
+};
+
+&flexcan1 {
+	status = "reserved";
+};
+
+/* Keep Linux I2C, SPI and UART controllers running in PIO mode. */
+&lpi2c3 {
+	dmas = <0>, <0>;
+};
+
+&lpi2c4 {
+	status = "reserved";
+};
+
+&lpi2c8 {
+	dmas = <0>, <0>;
+};
+
+&lpspi7 {
+	dmas = <0>, <0>;
+};
+
+&lpuart1 {
+	dmas = <0>, <0>;
+};
+
+&lpuart3 {
+	status = "reserved";
+};
+
+&lpuart5 {
+	dmas = <0>, <0>;
+};
+
+&lpuart8 {
+	status = "reserved";
+};
+
+&sai3 {
+	status = "disabled";
+};

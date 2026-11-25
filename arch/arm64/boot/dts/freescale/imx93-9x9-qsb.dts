@@ -40,6 +40,12 @@
 		stdout-path = &lpuart1;
 	};
 
+	dmic: dmic {
+		compatible = "dmic-codec";
+		#sound-dai-cells = <0>;
+		num-channels = <4>;
+	};
+
 	reserved-memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
@@ -174,6 +180,10 @@
 		pri-dai-link {
 			link-name = "micfil hifi";
 			format = "i2s";
+
+			codec {
+				sound-dai = <&dmic>;
+			};
 
 			cpu {
 				sound-dai = <&micfil>;

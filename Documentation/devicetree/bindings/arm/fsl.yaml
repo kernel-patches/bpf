@@ -261,6 +261,7 @@ properties:
               - boundary,imx6q-nitrogen6x
               - compulab,cm-fx6           # CompuLab CM-FX6
               - dmo,imx6q-edmqmx6         # Data Modul eDM-QMX6 Board
+              - draeger,imx6q-m48         # Draeger imx6q variant of M48
               - ds,imx6q-sbc              # Da Sheng COM-9XX Modules
               - embest,imx6q-marsboard    # Embest MarS Board i.MX6Dual
               - emtrion,emcon-mx6         # emCON-MX6D or emCON-MX6Q SoM
@@ -459,6 +460,7 @@ properties:
               - boundary,imx6dl-nit6xlite     # Boundary Devices Nitrogen6 Lite
               - boundary,imx6dl-nitrogen6x    # Boundary Devices Nitrogen6x
               - bticino,imx6dl-mamoj      # BTicino i.MX6DL Mamoj
+              - draeger,imx6dl-m48        # Draeger imx6dl variant of M48
               - eckelmann,imx6dl-ci4x10
               - emtrion,emcon-mx6         # emCON-MX6S or emCON-MX6DL SoM
               - emtrion,emcon-mx6-avari   # emCON-MX6S or emCON-MX6DL SoM on Avari Base
@@ -867,6 +869,7 @@ properties:
         items:
           - enum:
               - bsh,imx6ulz-bsh-smm-m2    # i.MX6 ULZ BSH SystemMaster
+              - bsh,imx6ulz-bsh-smm-m2b   # i.MX6 ULZ BSH SystemMaster
               - fsl,imx6ulz-14x14-evk     # i.MX6 ULZ 14x14 EVK Board
           - const: fsl,imx6ull # This seems odd. Should be last?
           - const: fsl,imx6ulz
@@ -1222,6 +1225,13 @@ properties:
           - const: engicam,icore-mx8mp             # i.MX8MP Engicam i.Core MX8M Plus SoM
           - const: fsl,imx8mp
 
+      - description: Engicam i.Core MX8M Plus Fast Ethernet SoM based boards
+        items:
+          - enum:
+              - engicam,icore-mx8mp-fe-ctouch2     # i.MX8MP Engicam i.Core MX8M Plus FE C.TOUCH 2.0 Board
+          - const: engicam,icore-mx8mp-fe          # i.MX8MP Engicam i.Core MX8M Plus FE SoM
+          - const: fsl,imx8mp
+
       - description: Ka-Ro TX8P-ML81 SoM based boards
         items:
           - enum:
@@ -1350,6 +1360,12 @@ properties:
         items:
           - const: variscite,var-dart-mx8mp-sonata # Variscite DART-MX8MP on Sonata Development Board
           - const: variscite,var-dart-mx8mp # Variscite DART-MX8MP SOM
+          - const: fsl,imx8mp
+
+      - description: Variscite VAR-SMARC-MX8M Plus based boards
+        items:
+          - const: variscite,var-smarc-mx8mp-echo
+          - const: variscite,var-smarc-mx8mp
           - const: fsl,imx8mp
 
       - description: Variscite VAR-SOM-MX8M Plus based boards
@@ -1579,6 +1595,7 @@ properties:
       - description: i.MX95 based Boards
         items:
           - enum:
+              - dmo,imx95-data-modul-edm-sbc # i.MX95 eDM SBC
               - fsl,imx95-15x15-ab2       # i.MX95 15x15 Audio Board V2
               - fsl,imx95-15x15-evk       # i.MX95 15x15 EVK Board
               - fsl,imx95-15x15-frdm      # i.MX95 15x15 FRDM Board
@@ -1607,6 +1624,7 @@ properties:
           - enum:
               - toradex,aquila-imx95-clover # Aquila iMX95 Module on Clover Board
               - toradex,aquila-imx95-dev    # Aquila iMX95 Module on Aquila Development Board
+              - toradex,aquila-imx95-lotus  # Aquila iMX95 Module on Lotus Board
           - const: toradex,aquila-imx95     # Aquila iMX95 Module
           - const: fsl,imx95
 
@@ -1722,6 +1740,7 @@ properties:
       - description: PHYTEC phyCORE-i.MX93 SoM based boards
         items:
           - enum:
+              - chargebyte,imx93-charge-control-y # chargebyte Charge Control Y
               - phytec,imx93-phyboard-nash  # phyBOARD-Nash-i.MX93
               - phytec,imx93-phyboard-segin # phyBOARD-Segin with i.MX93
           - const: phytec,imx93-phycore-som # phyCORE-i.MX93 SoM

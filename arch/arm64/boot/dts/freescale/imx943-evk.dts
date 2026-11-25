@@ -115,6 +115,7 @@
 	dmic: dmic {
 		compatible = "dmic-codec";
 		#sound-dai-cells = <0>;
+		num-channels = <4>;
 	};
 
 	m2_connector: m2-connector {
@@ -790,11 +791,13 @@ mqs1_conflict_dev: &micfil {
 };
 
 &netc_blk_ctrl {
-	assigned-clocks = <&scmi_clk IMX94_CLK_MAC4>,
+	assigned-clocks = <&scmi_clk IMX94_CLK_MAC2>,
+			  <&scmi_clk IMX94_CLK_MAC4>,
 			  <&scmi_clk IMX94_CLK_MAC5>;
 	assigned-clock-parents = <&scmi_clk IMX94_CLK_SYSPLL1_PFD0>,
+				 <&scmi_clk IMX94_CLK_SYSPLL1_PFD0>,
 				 <&scmi_clk IMX94_CLK_SYSPLL1_PFD0>;
-	assigned-clock-rates = <250000000>, <250000000>;
+	assigned-clock-rates = <250000000>, <250000000>, <250000000>;
 	status = "okay";
 };
 
@@ -802,6 +805,19 @@ mqs1_conflict_dev: &micfil {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_emdio>;
 	status = "okay";
+
+	ethphy0: ethernet-phy@2 {
+		reg = <0x2>;
+	};
+
+	ethphy1: ethernet-phy@3 {
+		reg = <0x3>;
+	};
+
+	ethphy2: ethernet-phy@5 {
+		reg = <0x5>;
+		realtek,clkout-disable;
+	};
 
 	ethphy3: ethernet-phy@6 {
 		reg = <0x6>;
@@ -812,6 +828,39 @@ mqs1_conflict_dev: &micfil {
 		reg = <0x7>;
 		realtek,clkout-disable;
 	};
+};
+
+&netc_switch {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_switch>;
+	status = "okay";
+};
+
+&netc_switch_port0 {
+	label = "swp0";
+	phy-handle = <&ethphy0>;
+	phy-mode = "mii";
+	status = "okay";
+};
+
+&netc_switch_port1 {
+	label = "swp1";
+	phy-handle = <&ethphy1>;
+	phy-mode = "mii";
+	status = "okay";
+};
+
+&netc_switch_port2 {
+	label = "swp2";
+	clocks = <&scmi_clk IMX94_CLK_MAC2>;
+	clock-names = "ref";
+	phy-handle = <&ethphy2>;
+	phy-mode = "rgmii-id";
+	status = "okay";
+};
+
+&netc_switch_port3 {
+	status = "okay";
 };
 
 &netc_timer0 {
@@ -993,6 +1042,55 @@ mqs1_conflict_dev: &micfil {
 			IMX94_PAD_GPIO_IO56__SAI3_TX_SYNC	0x31e
 			IMX94_PAD_GPIO_IO46__SAI3_RX_DATA0	0x31e
 			IMX94_PAD_GPIO_IO47__SAI3_TX_DATA0	0x31e
+		>;
+	};
+
+	pinctrl_switch: switchgrp {
+		fsl,pins = <
+			IMX94_PAD_ETH0_RX_CLK__NETC_PINMUX_ETH0_RX_CLK		0x58e
+			IMX94_PAD_ETH0_RX_DV__NETC_PINMUX_ETH0_RX_DV		0x50e
+			IMX94_PAD_ETH0_RX_ER__NETC_PINMUX_ETH0_RX_ER		0x50e
+			IMX94_PAD_ETH0_RXD0__NETC_PINMUX_ETH0_RXD0		0x50e
+			IMX94_PAD_ETH0_RXD1__NETC_PINMUX_ETH0_RXD1		0x50e
+			IMX94_PAD_ETH0_RXD2__NETC_PINMUX_ETH0_RXD2		0x50e
+			IMX94_PAD_ETH0_RXD3__NETC_PINMUX_ETH0_RXD3		0x50e
+			IMX94_PAD_ETH0_TX_CLK__NETC_PINMUX_ETH0_TX_CLK		0x58e
+			IMX94_PAD_ETH0_TX_EN__NETC_PINMUX_ETH0_TX_EN		0x50e
+			IMX94_PAD_ETH0_TX_ER__NETC_PINMUX_ETH0_TX_ER		0x50e
+			IMX94_PAD_ETH0_TXD0__NETC_PINMUX_ETH0_TXD0		0x50e
+			IMX94_PAD_ETH0_TXD1__NETC_PINMUX_ETH0_TXD1		0x50e
+			IMX94_PAD_ETH0_TXD2__NETC_PINMUX_ETH0_TXD2		0x50e
+			IMX94_PAD_ETH0_TXD3__NETC_PINMUX_ETH0_TXD3		0x50e
+			IMX94_PAD_ETH0_CRS__NETC_PINMUX_ETH0_CRS		0x50e
+			IMX94_PAD_ETH0_COL__NETC_PINMUX_ETH0_COL		0x50e
+			IMX94_PAD_ETH1_RX_CLK__NETC_PINMUX_ETH1_RX_CLK		0x58e
+			IMX94_PAD_ETH1_RX_DV__NETC_PINMUX_ETH1_RX_DV		0x50e
+			IMX94_PAD_ETH1_RX_ER__NETC_PINMUX_ETH1_RX_ER		0x50e
+			IMX94_PAD_ETH1_RXD0__NETC_PINMUX_ETH1_RXD0		0x50e
+			IMX94_PAD_ETH1_RXD1__NETC_PINMUX_ETH1_RXD1		0x50e
+			IMX94_PAD_ETH1_RXD2__NETC_PINMUX_ETH1_RXD2		0x50e
+			IMX94_PAD_ETH1_RXD3__NETC_PINMUX_ETH1_RXD3		0x50e
+			IMX94_PAD_ETH1_TX_CLK__NETC_PINMUX_ETH1_TX_CLK		0x58e
+			IMX94_PAD_ETH1_TX_EN__NETC_PINMUX_ETH1_TX_EN		0x50e
+			IMX94_PAD_ETH1_TX_ER__NETC_PINMUX_ETH1_TX_ER		0x50e
+			IMX94_PAD_ETH1_TXD0__NETC_PINMUX_ETH1_TXD0		0x50e
+			IMX94_PAD_ETH1_TXD1__NETC_PINMUX_ETH1_TXD1		0x50e
+			IMX94_PAD_ETH1_TXD2__NETC_PINMUX_ETH1_TXD2		0x50e
+			IMX94_PAD_ETH1_TXD3__NETC_PINMUX_ETH1_TXD3		0x50e
+			IMX94_PAD_ETH1_CRS__NETC_PINMUX_ETH1_CRS		0x50e
+			IMX94_PAD_ETH1_COL__NETC_PINMUX_ETH1_COL		0x50e
+			IMX94_PAD_ETH2_TXD3__NETC_PINMUX_ETH2_TXD3		0x50e
+			IMX94_PAD_ETH2_TXD2__NETC_PINMUX_ETH2_TXD2		0x50e
+			IMX94_PAD_ETH2_TXD1__NETC_PINMUX_ETH2_TXD1		0x50e
+			IMX94_PAD_ETH2_TXD0__NETC_PINMUX_ETH2_TXD0		0x50e
+			IMX94_PAD_ETH2_TX_CTL__NETC_PINMUX_ETH2_TX_CTL		0x51e
+			IMX94_PAD_ETH2_TX_CLK__NETC_PINMUX_ETH2_TX_CLK		0x59e
+			IMX94_PAD_ETH2_RX_CTL__NETC_PINMUX_ETH2_RX_CTL		0x51e
+			IMX94_PAD_ETH2_RX_CLK__NETC_PINMUX_ETH2_RX_CLK		0x59e
+			IMX94_PAD_ETH2_RXD0__NETC_PINMUX_ETH2_RXD0		0x51e
+			IMX94_PAD_ETH2_RXD1__NETC_PINMUX_ETH2_RXD1		0x51e
+			IMX94_PAD_ETH2_RXD2__NETC_PINMUX_ETH2_RXD2		0x51e
+			IMX94_PAD_ETH2_RXD3__NETC_PINMUX_ETH2_RXD3		0x51e
 		>;
 	};
 

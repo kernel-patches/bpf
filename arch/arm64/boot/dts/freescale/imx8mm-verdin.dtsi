@@ -16,6 +16,8 @@
 	aliases {
 		rtc0 = &rtc_i2c;
 		rtc1 = &snvs_rtc;
+		spi0 = &ecspi2;
+		/delete-property/ spi1;
 	};
 
 	/* Fixed clock dedicated to SPI CAN controller */
@@ -776,7 +778,7 @@
  * Verdin UART_4
  * Resource allocated to M4 by default, must not be accessed from Cortex-A35 or you get an OOPS
  */
-&uart4 {
+uart_mcu: &uart4 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_uart4>;
 };
@@ -1031,7 +1033,7 @@
 			<MX8MM_IOMUXC_I2C1_SDA_GPIO5_IO15		0x146>;	/* PMIC_I2C_SDA */
 	};
 
-	/* Verdin I2C_4_CSI */
+	/* Verdin I2C_2_DSI */
 	pinctrl_i2c2: i2c2grp {
 		fsl,pins =
 			<MX8MM_IOMUXC_I2C2_SCL_I2C2_SCL			0x40000146>,	/* SODIMM 55 */
@@ -1044,7 +1046,7 @@
 			<MX8MM_IOMUXC_I2C2_SDA_GPIO5_IO17		0x146>;	/* SODIMM 53 */
 	};
 
-	/* Verdin I2C_2_DSI */
+	/* Verdin I2C_4_CSI */
 	pinctrl_i2c3: i2c3grp {
 		fsl,pins =
 			<MX8MM_IOMUXC_I2C3_SCL_I2C3_SCL			0x40000146>,	/* SODIMM 95 */
