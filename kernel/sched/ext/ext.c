@@ -1778,6 +1778,8 @@ static void rq_owned_post_enq(struct scx_sched *sch, struct rq *rq,
 			      struct scx_dispatch_q *dsq, struct task_struct *p,
 			      u64 enq_flags)
 {
+	lockdep_assert_rq_held(rq);
+
 	if (task_leave_custody(p) && SCX_HAS_OP(sch, dequeue))
 		SCX_CALL_OP_TASK(sch, dequeue, rq, p, 0);
 
@@ -1852,11 +1854,17 @@ static void rq_owned_post_enq(struct scx_sched *sch, struct rq *rq,
 	}
 }
 
+/*
+ * Insert @p into @dsq with @rq locked. Unless finish_dispatch() is inserting a
+ * remote task into a user DSQ, @rq must be @p's rq.
+ */
 static void scx_dispatch_enqueue(struct scx_sched *sch, struct rq *rq,
 				 struct scx_dispatch_q *dsq, struct task_struct *p,
 				 u64 slice, u64 vtime, u64 enq_flags)
 {
-	bool is_rq_owned = dsq_is_rq_owned(dsq);
+	bool is_rq_owned = dsq_is_rq_owned(dsq), call_dequeue = false;
+
+	lockdep_assert_rq_held(rq);
 
 	if (dsq->id == SCX_DSQ_LOCAL)
 		dsq = scx_resolve_local_dsq(sch, rq, p, &enq_flags);
@@ -1871,10 +1879,16 @@ static void scx_dispatch_enqueue(struct scx_sched *sch, struct rq *rq,
 
 		if (unlikely(dsq->id == SCX_DSQ_INVALID)) {
 			scx_error(sch, "attempting to dispatch to a destroyed dsq");
-			/* fall back to the global dsq */
 			raw_spin_unlock(&dsq->lock);
-			dsq = find_global_dsq(sch, task_cpu(p));
-			raw_spin_lock(&dsq->lock);
+			/*
+			 * @sch is being ejected and scx_bypass() will cycle its
+			 * runnable tasks. Release ownership and let bypass
+			 * recover @p.
+			 */
+			if (enq_flags & SCX_ENQ_CLEAR_OPSS)
+				atomic_long_set_release(&p->scx.ops_state,
+							SCX_OPSS_NONE);
+			return;
 		}
 	}
 
@@ -1960,45 +1974,47 @@ static void scx_dispatch_enqueue(struct scx_sched *sch, struct rq *rq,
 	p->scx.dsq = dsq;
 
 	/*
-	 * Update custody and call ops.dequeue() before clearing ops_state:
-	 * once ops_state is cleared, waiters in ops_dequeue() can proceed
-	 * and dequeue_task_scx() will RMW p->scx.flags. If we clear
-	 * ops_state first, both sides would modify p->scx.flags
-	 * concurrently in a non-atomic way.
+	 * Global and bypass DSQs are terminal - the task leaves the scheduler's
+	 * custody, so ops.dequeue() fires. A non-terminal DSQ keeps the task in
+	 * custody. The custody transfer happens under @dsq->lock so that later
+	 * consumers see the flag clear; the callback runs after @dsq->lock is
+	 * dropped because it may lock a DSQ itself.
+	 *
+	 * @p->scx.flags is protected by @p's rq lock. finish_dispatch() may
+	 * insert a remote task without it but only into a user DSQ and only
+	 * with %SCX_TASK_IN_CUSTODY already set, so @p->scx.flags is updated
+	 * only when @p's rq is locked.
 	 */
-	if (is_rq_owned) {
-		rq_owned_post_enq(sch, rq, dsq, p, enq_flags);
-	} else {
-		bool call_dequeue = false;
-
-		/*
-		 * Global and bypass DSQs are terminal - the task leaves the
-		 * scheduler's custody, so ops.dequeue() fires. It can run
-		 * without @p's rq lock (finish_dispatch() passes the dispatch
-		 * rq); that's safe because dequeue_task_scx() waits on
-		 * SCX_OPSS_DISPATCHING (see the ops_state note above) and so
-		 * can't race it. A non-terminal DSQ keeps the task in custody.
-		 * The custody transfer happens under @dsq->lock so that later
-		 * consumers see the flag clear; the callback runs after
-		 * @dsq->lock is dropped because it may lock a DSQ itself.
-		 */
-		if (dsq->id == SCX_DSQ_GLOBAL || dsq->id == SCX_DSQ_BYPASS)
+	if (!is_rq_owned) {
+		if (dsq->id == SCX_DSQ_GLOBAL || dsq->id == SCX_DSQ_BYPASS) {
+			lockdep_assert_rq_held(task_rq(p));
 			call_dequeue = task_leave_custody(p);
-		else
+		} else if (rq == task_rq(p)) {
 			p->scx.flags |= SCX_TASK_IN_CUSTODY;
-
-		raw_spin_unlock(&dsq->lock);
-
-		if (call_dequeue && SCX_HAS_OP(sch, dequeue))
-			SCX_CALL_OP_TASK(sch, dequeue, rq, p, 0);
+		}
 	}
 
 	/*
 	 * We're transitioning out of QUEUEING or DISPATCHING. store_release to
 	 * match waiters' load_acquire.
+	 *
+	 * Do it while @dsq is still locked and before ops.dequeue() so that @p
+	 * is never visible on a DSQ while still owned by the dispatcher.
+	 * Anyone who finds @p on @dsq can take it off without waiting on
+	 * DISPATCHING. Updating @p->scx.flags and calling ops.dequeue() after
+	 * the transition is safe as both are done under @p's rq lock.
 	 */
 	if (enq_flags & SCX_ENQ_CLEAR_OPSS)
 		atomic_long_set_release(&p->scx.ops_state, SCX_OPSS_NONE);
+
+	if (is_rq_owned) {
+		rq_owned_post_enq(sch, rq, dsq, p, enq_flags);
+	} else {
+		raw_spin_unlock(&dsq->lock);
+
+		if (call_dequeue && SCX_HAS_OP(sch, dequeue))
+			SCX_CALL_OP_TASK(sch, dequeue, rq, p, 0);
+	}
 }
 
 void scx_task_unlink_from_dsq(struct task_struct *p, struct scx_dispatch_q *dsq)
@@ -2528,7 +2544,6 @@ static void ops_dequeue(struct rq *rq, struct task_struct *p, u64 deq_flags)
 	 */
 	clr_task_runnable(p, false);
 
-retry:
 	/* acquire ensures that we see the preceding updates on QUEUED */
 	opss = atomic_long_read_acquire(&p->scx.ops_state);
 
@@ -2542,20 +2557,6 @@ retry:
 		 */
 		BUG();
 	case SCX_OPSS_QUEUED:
-		/*
-		 * A queued task must always be in BPF scheduler's custody. If
-		 * SCX_TASK_IN_CUSTODY is clear, finish_dispatch() on another
-		 * CPU has already passed task_leave_custody() (which clears the
-		 * flag), but has not yet written SCX_OPSS_NONE. That final
-		 * store does not require this rq's lock, so retrying with
-		 * cpu_relax() is bounded: we will observe NONE (or DISPATCHING,
-		 * handled by the fallthrough) on a subsequent iteration.
-		 */
-		if (unlikely(!(READ_ONCE(p->scx.flags) & SCX_TASK_IN_CUSTODY))) {
-			cpu_relax();
-			goto retry;
-		}
-
 		if (atomic_long_try_cmpxchg(&p->scx.ops_state, &opss,
 					    SCX_OPSS_NONE))
 			break;
@@ -2580,18 +2581,15 @@ retry:
 	}
 
 	/*
-	 * Call ops.dequeue() if the task is still in BPF custody.
+	 * Call ops.dequeue() if @p is still in BPF custody. @p can be in
+	 * %SCX_OPSS_NONE with %SCX_TASK_IN_CUSTODY set in three cases:
 	 *
-	 * The code that clears ops_state to %SCX_OPSS_NONE does not always
-	 * clear %SCX_TASK_IN_CUSTODY: in dispatch_to_local_dsq(), when
-	 * we're moving a task that was in %SCX_OPSS_DISPATCHING to a
-	 * remote CPU's local DSQ, we only set ops_state to %SCX_OPSS_NONE
-	 * so that a concurrent dequeue can proceed, but we clear
-	 * %SCX_TASK_IN_CUSTODY only when we later enqueue or move the
-	 * task. So we can see NONE + IN_CUSTODY here and we must handle
-	 * it. Similarly, after waiting on %SCX_OPSS_DISPATCHING we see
-	 * NONE but the task may still have %SCX_TASK_IN_CUSTODY set until
-	 * it is enqueued on the destination.
+	 * - @p is on, or being moved off, a user DSQ.
+	 * - release_dispatching_and_lock_task_rq() cleared ops_state to let a
+	 *   racing dequeue proceed, before locking @p's rq to finish the
+	 *   dispatch.
+	 * - scx_dispatch_enqueue() aborted an insert into a destroyed user DSQ
+	 *   and left @p for scx_bypass() to recover.
 	 */
 	if (task_leave_custody(p) && SCX_HAS_OP(sch, dequeue))
 		SCX_CALL_OP_TASK(sch, dequeue, rq, p, deq_flags);
@@ -2728,14 +2726,11 @@ static void wakeup_preempt_scx(struct rq *rq, struct task_struct *p, int wake_fl
 void scx_move_local_task_to_local_dsq(struct scx_sched *sch, struct task_struct *p,
 				      u64 enq_flags, struct rq *dst_rq)
 {
-	struct scx_dispatch_q *dst_dsq;
+	struct scx_dispatch_q *dst_dsq = scx_resolve_local_dsq(sch, dst_rq, p, &enq_flags);
 
 	lockdep_assert_rq_held(dst_rq);
 
 	WARN_ON_ONCE(p->scx.holding_cpu >= 0);
-	scx_wait_dispatching(p);
-
-	dst_dsq = scx_resolve_local_dsq(sch, dst_rq, p, &enq_flags);
 
 	if (enq_flags & (SCX_ENQ_HEAD | SCX_ENQ_PREEMPT | SCX_ENQ_PREEMPT_LAZY))
 		dsq_insert_head(dst_dsq, p);
@@ -2995,7 +2990,6 @@ static bool unlink_dsq_and_switch_rq_lock(struct task_struct *p,
 		 */
 		p->scx.dsq = NULL;
 		p->scx.holding_cpu = -1;
-		scx_wait_dispatching(p);
 		return true;
 	}
 
@@ -3054,8 +3048,6 @@ static struct rq *move_task_between_dsqs(struct scx_sched *sch,
 	BUG_ON(src_dsq->id == SCX_DSQ_LOCAL);
 	lockdep_assert_held(&src_dsq->lock);
 	lockdep_assert_rq_held(src_rq);
-
-	scx_wait_dispatching(p);
 
 	if (dst_dsq->id == SCX_DSQ_LOCAL) {
 		dst_rq = container_of(dst_dsq, struct rq, scx.local_dsq);
@@ -3167,6 +3159,48 @@ bool scx_consume_global_dsq(struct scx_sched *sch, struct rq *rq)
 }
 
 /**
+ * release_dispatching_and_lock_task_rq - Release DISPATCHING and lock task_rq
+ * @p: task being dispatched, owned by the caller (e.g. through
+ *     %SCX_OPSS_DISPATCHING)
+ * @locked_rq: currently locked rq
+ * @src_rq: @p's rq, stable while the caller owns @p
+ *
+ * @p is on a possibly remote @src_rq which we need to lock. If dequeue is in
+ * progress, it'd be locking @src_rq and waiting on DISPATCHING, so we can't
+ * grab @src_rq lock while holding DISPATCHING.
+ *
+ * As @p is wholly ours, we can pretend that we're moving from a DSQ and use the
+ * same mechanism - mark the task under transfer with holding_cpu, release
+ * DISPATCHING and then follow the same protocol. See
+ * unlink_dsq_and_switch_rq_lock().
+ *
+ * On return, @src_rq is locked. Return %true if @p is still ours, with
+ * holding_cpu cleared. Return %false if @p was lost to a dequeue.
+ */
+static bool release_dispatching_and_lock_task_rq(struct task_struct *p,
+						 struct rq *locked_rq,
+						 struct rq *src_rq)
+{
+	p->scx.holding_cpu = raw_smp_processor_id();
+
+	/* store_release ensures that dequeue sees the above */
+	atomic_long_set_release(&p->scx.ops_state, SCX_OPSS_NONE);
+
+	if (locked_rq != src_rq)
+		switch_rq_lock(locked_rq, src_rq);
+
+	/* task_rq couldn't have changed if we're still the holding cpu */
+	if (likely(p->scx.holding_cpu == raw_smp_processor_id()) &&
+	    !WARN_ON_ONCE(src_rq != task_rq(p))) {
+		/* the handshake is over, see unlink_dsq_and_switch_rq_lock() */
+		p->scx.holding_cpu = -1;
+		return true;
+	}
+
+	return false;
+}
+
+/**
  * dispatch_to_local_dsq - Dispatch a task to a local dsq
  * @sch: scx_sched being operated on
  * @rq: current rq which is locked
@@ -3189,7 +3223,7 @@ static void dispatch_to_local_dsq(struct scx_sched *sch, struct rq *rq,
 {
 	struct rq *src_rq = task_rq(p);
 	struct rq *dst_rq = container_of(dst_dsq, struct rq, scx.local_dsq);
-	struct rq *locked_rq = rq;
+	struct rq *locked_rq;
 
 	/*
 	 * We're synchronized against dequeue through DISPATCHING. As @p can't
@@ -3203,35 +3237,10 @@ static void dispatch_to_local_dsq(struct scx_sched *sch, struct rq *rq,
 		return;
 	}
 
-	/*
-	 * @p is on a possibly remote @src_rq which we need to lock to move the
-	 * task. If dequeue is in progress, it'd be locking @src_rq and waiting
-	 * on DISPATCHING, so we can't grab @src_rq lock while holding
-	 * DISPATCHING.
-	 *
-	 * As DISPATCHING guarantees that @p is wholly ours, we can pretend that
-	 * we're moving from a DSQ and use the same mechanism - mark the task
-	 * under transfer with holding_cpu, release DISPATCHING and then follow
-	 * the same protocol. See unlink_dsq_and_switch_rq_lock().
-	 */
-	p->scx.holding_cpu = raw_smp_processor_id();
-
-	/* store_release ensures that dequeue sees the above */
-	atomic_long_set_release(&p->scx.ops_state, SCX_OPSS_NONE);
-
 	/* switch to @src_rq lock */
-	if (locked_rq != src_rq) {
-		switch_rq_lock(locked_rq, src_rq);
-		locked_rq = src_rq;
-	}
-
-	/* task_rq couldn't have changed if we're still the holding cpu */
-	if (likely(p->scx.holding_cpu == raw_smp_processor_id()) &&
-	    !WARN_ON_ONCE(src_rq != task_rq(p))) {
+	locked_rq = src_rq;
+	if (release_dispatching_and_lock_task_rq(p, rq, src_rq)) {
 		bool fallback = false;
-
-		/* the handshake is over, see unlink_dsq_and_switch_rq_lock() */
-		p->scx.holding_cpu = -1;
 
 		/*
 		 * If @p is staying on the same rq, there's no need to go
@@ -3266,6 +3275,36 @@ static void dispatch_to_local_dsq(struct scx_sched *sch, struct rq *rq,
 	/* switch back to @rq lock */
 	if (locked_rq != rq)
 		switch_rq_lock(locked_rq, rq);
+}
+
+/**
+ * dispatch_remote_task_to_global_dsq - Dispatch a remote task to the global DSQ
+ * @sch: scx_sched being operated on
+ * @rq: current rq which is locked, not @p's rq
+ * @p: task to dispatch
+ * @slice: slice carried by the insert verdict, 0 keeps the current value
+ * @vtime: vtime carried by the insert verdict
+ * @enq_flags: %SCX_ENQ_*
+ *
+ * Inserting @p into the global DSQ takes @p out of the BPF scheduler's custody,
+ * which clears %SCX_TASK_IN_CUSTODY and calls ops.dequeue(). Both must be done
+ * under @p's rq lock. Switch to it the same way dispatch_to_local_dsq() does
+ * and switch back to @rq lock afterwards.
+ *
+ * The caller must have exclusive ownership of @p through %SCX_OPSS_DISPATCHING.
+ */
+static void dispatch_remote_task_to_global_dsq(struct scx_sched *sch,
+					       struct rq *rq,
+					       struct task_struct *p, u64 slice,
+					       u64 vtime, u64 enq_flags)
+{
+	struct rq *src_rq = task_rq(p);
+
+	if (release_dispatching_and_lock_task_rq(p, rq, src_rq))
+		scx_dispatch_enqueue(sch, src_rq, find_global_dsq(sch, task_cpu(p)),
+				     p, slice, vtime, enq_flags | SCX_ENQ_APPLY_SLICE);
+
+	switch_rq_lock(src_rq, rq);
 }
 
 /**
@@ -3350,11 +3389,22 @@ retry:
 
 	dsq = find_dsq_for_dispatch(sch, rq, dsq_id, task_cpu(p));
 
-	if (dsq->id == SCX_DSQ_LOCAL)
+	if (dsq->id == SCX_DSQ_LOCAL) {
 		dispatch_to_local_dsq(sch, rq, dsq, p, slice, vtime, enq_flags);
-	else
-		scx_dispatch_enqueue(sch, rq, dsq, p, slice, vtime,
-				     enq_flags | SCX_ENQ_APPLY_SLICE | SCX_ENQ_CLEAR_OPSS);
+		return;
+	}
+
+	/*
+	 * A remote task can enter a user DSQ without its rq lock. Inserting
+	 * into the global DSQ ends custody and requires @p's rq lock.
+	 */
+	if (dsq->id == SCX_DSQ_GLOBAL && rq != task_rq(p)) {
+		dispatch_remote_task_to_global_dsq(sch, rq, p, slice, vtime, enq_flags);
+		return;
+	}
+
+	scx_dispatch_enqueue(sch, rq, dsq, p, slice, vtime,
+			     enq_flags | SCX_ENQ_APPLY_SLICE | SCX_ENQ_CLEAR_OPSS);
 }
 
 void scx_flush_dispatch_buf(struct scx_sched *sch, struct rq *rq)
@@ -5190,18 +5240,6 @@ static bool local_task_should_reenq(struct rq *rq, struct task_struct *p,
 	return *reenq_flags & SCX_REENQ_ANY;
 }
 
-/*
- * The dispatcher runs ops.dequeue() and stores the final ops_state after
- * dropping the DSQ lock, so @p can be found on a DSQ while still
- * %SCX_OPSS_DISPATCHING. Wait for the dispatch to finish before operating on
- * @p.
- */
-void scx_wait_dispatching(struct task_struct *p)
-{
-	if (unlikely(atomic_long_read_acquire(&p->scx.ops_state) == SCX_OPSS_DISPATCHING))
-		wait_ops_state(p, SCX_OPSS_DISPATCHING);
-}
-
 static u32 reenq_local(struct scx_sched *sch, struct rq *rq, u64 reenq_flags)
 {
 	LIST_HEAD(tasks);
@@ -5245,7 +5283,6 @@ static u32 reenq_local(struct scx_sched *sch, struct rq *rq, u64 reenq_flags)
 		if (!local_task_should_reenq(rq, p, &reenq_flags, &reason))
 			continue;
 
-		scx_wait_dispatching(p);
 		scx_dispatch_dequeue(rq, p);
 
 		WARN_ON_ONCE(p->scx.flags & SCX_TASK_REENQ_REASON_MASK);
@@ -5384,7 +5421,6 @@ static void reenq_user(struct rq *rq, struct scx_dispatch_q *dsq, u64 reenq_flag
 		}
 
 		/* @p is on @dsq, its rq and @dsq are locked */
-		scx_wait_dispatching(p);
 		dispatch_dequeue_locked(p, dsq);
 		raw_spin_unlock(&dsq->lock);
 
@@ -5489,7 +5525,6 @@ static void scx_reenq_reject(struct rq *rq)
 			WARN_ON_ONCE(p->migration_pending);
 		}
 
-		scx_wait_dispatching(p);
 		scx_dispatch_dequeue(rq, p);
 
 		list_add_tail(&p->scx.dsq_list.node, &tasks);
@@ -6753,7 +6788,6 @@ static s32 bypass_lb_move(struct scx_sched *sch, struct rq *donor_rq,
 	lockdep_assert_held(&donor_dsq->lock);
 
 	if (rq == donor_rq) {
-		scx_wait_dispatching(p);
 		dispatch_dequeue_locked(p, donor_dsq);
 		raw_spin_unlock(&donor_dsq->lock);
 	} else if (!unlink_dsq_and_switch_rq_lock(p, donor_dsq, donor_rq, rq)) {
@@ -7307,10 +7341,6 @@ void scx_bypass(struct scx_sched *sch, bool bypass)
 				 * that sched. Restart the wait unless @owner is
 				 * the root, which runs its own tasks bypassing
 				 * or not.
-				 *
-				 * A dispatch in flight writes p->scx.flags
-				 * without @p's rq lock. The dequeue waits it
-				 * out, so set the flag after it.
 				 */
 				if (scx_parent(owner))
 					p->scx.flags |= SCX_TASK_RESET_RUNNABLE_AT;
