@@ -168,6 +168,7 @@ struct netpoll;
  *	@vlan_proto: VLAN encapsulation protocol
  *	@vlan_id: VLAN identifier
  *	@flags: device flags
+ *	@uninit: the promisc/allmulti references on @real_dev were dropped
  *	@real_dev: underlying netdevice
  *	@dev_tracker: refcount tracker for @real_dev reference
  *	@real_dev_addr: address of underlying netdevice
@@ -184,6 +185,7 @@ struct vlan_dev_priv {
 	__be16					vlan_proto;
 	u16					vlan_id;
 	u16					flags;
+	bool					uninit;
 
 	struct net_device			*real_dev;
 	netdevice_tracker			dev_tracker;
