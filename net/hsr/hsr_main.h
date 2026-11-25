@@ -72,11 +72,6 @@ static inline void set_hsr_tag_LSDU_size(struct hsr_tag *ht, u16 LSDU_size)
 				       0xF000) | (LSDU_size & 0x0FFF));
 }
 
-struct hsr_ethhdr {
-	struct ethhdr	ethhdr;
-	struct hsr_tag	hsr_tag;
-} __packed;
-
 struct hsr_vlan_ethhdr {
 	struct vlan_ethhdr vlanhdr;
 	struct hsr_tag	hsr_tag;
