@@ -461,6 +461,19 @@ void snd_soc_component_regmap_exit(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_regmap_exit);
 
+int snd_soc_component_regmap_multi_reg_write_bypassed(struct snd_soc_component *component,
+						      const struct reg_sequence *regs,
+						      int num_regs)
+{
+	struct regmap *regmap = component->regmap;
+
+	if (!regmap)
+		return 0;
+
+	return regmap_multi_reg_write_bypassed(regmap, regs, num_regs);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regmap_multi_reg_write_bypassed);
+
 #endif
 
 int snd_soc_component_regmap_get_val_bytes(struct snd_soc_component *component)
