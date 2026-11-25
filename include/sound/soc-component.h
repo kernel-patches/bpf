@@ -275,6 +275,7 @@ struct snd_soc_component {
 struct snd_soc_dapm_context *snd_soc_component_to_dapm(struct snd_soc_component *component);
 struct snd_soc_component *snd_soc_component_new(struct device *dev, const char *name,
 						const struct snd_soc_component_driver *driver);
+void snd_soc_component_unregister(struct snd_soc_component *component);
 int snd_soc_component_register(struct snd_soc_component *component,
 			       struct snd_soc_dai_driver *dai_drv,
 			       int num_dai);
