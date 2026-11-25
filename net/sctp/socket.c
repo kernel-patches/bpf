@@ -420,6 +420,7 @@ static int sctp_do_bind(struct sock *sk, union sctp_addr *addr, int len)
 	struct sctp_bind_addr *bp = &ep->base.bind_addr;
 	struct sctp_af *af;
 	unsigned short snum;
+	bool bound;
 	int ret = 0;
 
 	/* Common sockaddr verification. */
@@ -467,6 +468,7 @@ static int sctp_do_bind(struct sock *sk, union sctp_addr *addr, int len)
 	 * The function sctp_get_port_local() does duplicate address
 	 * detection.
 	 */
+	bound = sp->bind_hash;
 	addr->v4.sin_port = htons(snum);
 	if (sctp_get_port_local(sk, addr))
 		return -EADDRINUSE;
@@ -484,7 +486,8 @@ static int sctp_do_bind(struct sock *sk, union sctp_addr *addr, int len)
 				 SCTP_ADDR_SRC, GFP_ATOMIC);
 
 	if (ret) {
-		sctp_put_port(sk);
+		if (!bound)
+			sctp_put_port(sk);
 		return ret;
 	}
 	/* Copy back into socket for getsockname() use. */
