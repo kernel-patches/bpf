@@ -1035,6 +1035,71 @@ __naked void stack_write_nospec_slot_index(void)
 "	::: __clobber_all);
 }
 
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} map_ringbuf SEC(".maps");
+
+/* The helper initializes the dynptr on the stack. */
+SEC("socket")
+__description("unpriv: Spectre v4 nospec after stack write in helper")
+__success __success_unpriv
+__caps_unpriv(CAP_BPF)
+__retval(0)
+#ifdef SPEC_V4
+__xlated_unpriv("r4 = r10")
+__xlated_unpriv("r4 += -16")
+__xlated_unpriv("call")
+__xlated_unpriv("nospec")
+__xlated_unpriv("r1 = r10")
+#endif
+__naked void helper_stack_write_nospec_result(void)
+{
+	asm volatile ("					\
+	r1 = %[map_ringbuf] ll;				\
+	r2 = 8;						\
+	r3 = 0;						\
+	r4 = r10;					\
+	r4 += -16;					\
+	call %[bpf_ringbuf_reserve_dynptr];		\
+	r1 = r10;					\
+	r1 += -16;					\
+	r2 = 0;						\
+	call %[bpf_ringbuf_discard_dynptr];		\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ringbuf_reserve_dynptr),
+	  __imm(bpf_ringbuf_discard_dynptr),
+	  __imm_addr(map_ringbuf)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("unpriv: Spectre v4 nospec after atomic stack write")
+__success __success_unpriv
+__caps_unpriv(CAP_BPF)
+__retval(2)
+#ifdef SPEC_V4
+__xlated_unpriv("r1 = 1")
+__xlated_unpriv("*(u64 *)(r10 -8) = r1")
+__xlated_unpriv("nospec")
+__xlated_unpriv("lock *(u64 *)(r10 -8) += r1")
+__xlated_unpriv("nospec")
+__xlated_unpriv("r0 = *(u64 *)(r10 -8)")
+__xlated_unpriv("exit")
+#endif
+__naked void atomic_stack_write_nospec_result(void)
+{
+	asm volatile ("					\
+	r1 = 1;						\
+	*(u64 *)(r10 - 8) = r1;				\
+	lock *(u64 *)(r10 - 8) += r1;			\
+	r0 = *(u64 *)(r10 - 8);				\
+	exit;						\
+"	::: __clobber_all);
+}
+
 __noinline int nospec_global_func(int x)
 {
 	return x + 1;
@@ -1070,6 +1135,142 @@ __naked void nospec_backward_call(void)
 	call nospec_call_subprog;			\
 	exit;						\
 "	::: __clobber_all);
+}
+
+/*
+ * The jump is reached with a pointer in r6 on a speculative path only, so a
+ * nospec is required in front of it. Its offset is the smallest one that a
+ * jump can have, and the nospec is between the jump and its target: the offset
+ * can not be adjusted for the nospec.
+ *
+ * The program is valid, it is only rejected because the verifier can not widen
+ * a jump when it patches a program. Any insn that is inserted between such a
+ * jump and its target has the same effect. Without the nospec the program
+ * would not be safe, so it must not be loaded. If jumps can be widened one day,
+ * this program has to be accepted.
+ *
+ * The insns that are only executed speculatively are removed as dead code, so
+ * they must not be between the jump and its target.
+ */
+SEC("socket")
+__description("unpriv: nospec does not fit in front of a jump")
+__success __failure_unpriv
+__msg_unpriv("cannot be patched due to 16-bit range")
+__caps_unpriv(CAP_BPF)
+__retval(0)
+__naked void nospec_jump_out_of_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r0 &= 0xff;					\
+	r6 = r0;					\
+	r7 = 0;						\
+	if r0 < 0x100 goto l1_%=;			\
+	/* executed only speculatively */		\
+	r6 = r10;					\
+	goto l1_%=;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+l1_%=:	.rept 32765;					\
+	r1 = 0;						\
+	.endr;						\
+	if r7 != r6 goto l0_%=;				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Like above, but for the nospec behind a store to the stack that is between
+ * the jump and its target.
+ */
+SEC("socket")
+__description("unpriv: nospec does not fit behind a store")
+__success __failure_unpriv
+__msg_unpriv("cannot be patched due to 16-bit range")
+__caps_unpriv(CAP_BPF)
+__retval(0)
+__naked void nospec_result_jump_out_of_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r7 = 0;						\
+	goto l1_%=;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+l1_%=:	*(u64 *)(r10 - 8) = r7;				\
+	.rept 32764;					\
+	r1 = 0;						\
+	.endr;						\
+	if r7 != r6 goto l0_%=;				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* The store is only reached speculatively and is replaced as dead code. */
+SEC("socket")
+__description("unpriv: Spectre v4 nospec after dead stack write")
+__success __success_unpriv
+__retval(0)
+#ifdef SPEC_V4
+__xlated_unpriv("if r0 == 0x0 goto pc+2")
+__xlated_unpriv("goto pc-1")
+__xlated_unpriv("nospec")
+__xlated_unpriv("exit")
+#endif
+__naked void dead_stack_write_nospec_result(void)
+{
+	asm volatile ("					\
+	w7 = 0;						\
+	w7 ^= w7;					\
+	w0 = w7;					\
+	if r0 == 0 goto l0_%=;				\
+	*(u64 *)(r10 - 8) = r0;				\
+l0_%=:	exit;						\
+"	::: __clobber_all);
+}
+
+/*
+ * The jump is reached with a pointer in r6 on a speculative path only. Its
+ * offset is adjusted for the nospec in front of it.
+ */
+SEC("socket")
+__description("unpriv: nospec in front of a backward jump")
+__success __success_unpriv
+__retval(0)
+#ifdef SPEC_V1
+__xlated_unpriv("nospec")
+__xlated_unpriv("if r7 != r6 goto pc-6")
+__xlated_unpriv("r0 = 0")
+__xlated_unpriv("exit")
+#endif
+__naked void nospec_backward_jump(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r0 &= 0xff;					\
+	r6 = r0;					\
+	r7 = 0;						\
+	if r0 < 0x100 goto l1_%=;			\
+	/* executed only speculatively */		\
+	r6 = r10;					\
+	goto l1_%=;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+l1_%=:	r1 = 0;						\
+	r1 = 0;						\
+	if r7 != r6 goto l0_%=;				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
 }
 
 char _license[] SEC("license") = "GPL";
