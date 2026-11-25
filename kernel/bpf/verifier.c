@@ -20828,13 +20828,14 @@ static int do_check(struct bpf_verifier_env *env)
 			env->insn_idx++;
 		}
 
-		if (state->speculative && insn_aux->nospec_result) {
+		if (state->speculative && insn_aux->nospec_result &&
+		    (BPF_CLASS(insn->code) != BPF_JMP || BPF_OP(insn->code) != BPF_CALL)) {
 			/* If we are on a path that performed a jump-op, this
 			 * may skip a nospec patched-in after the jump. This can
 			 * currently never happen because nospec_result is only
 			 * used for the write-ops
-			 * `*(size*)(dst_reg+off)=src_reg|imm32` and helper
-			 * calls. These must never skip the following insn
+			 * `*(size*)(dst_reg+off)=src_reg|imm32` here.
+			 * These must never skip the following insn
 			 * (i.e., bpf_insn_successors()'s opcode_info.can_jump
 			 * is false). Still, add a warning to document this in
 			 * case nospec_result is used elsewhere in the future.
@@ -20843,9 +20844,8 @@ static int do_check(struct bpf_verifier_env *env)
 			 * fall-through edge. For these, nospec_result should
 			 * already work.
 			 */
-			if (verifier_bug_if((BPF_CLASS(insn->code) == BPF_JMP ||
-					     BPF_CLASS(insn->code) == BPF_JMP32) &&
-					    BPF_OP(insn->code) != BPF_CALL, env,
+			if (verifier_bug_if(BPF_CLASS(insn->code) == BPF_JMP ||
+					    BPF_CLASS(insn->code) == BPF_JMP32, env,
 					    "speculation barrier after jump instruction may not have the desired effect"))
 				return -EFAULT;
 process_bpf_exit:
