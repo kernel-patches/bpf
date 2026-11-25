@@ -80,6 +80,12 @@ snd_soc_component_to_driver(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_to_driver);
 
+struct snd_soc_card *snd_soc_component_to_card(struct snd_soc_component *component)
+{
+	return component->card;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_card);
+
 unsigned int snd_soc_component_active(struct snd_soc_component *component)
 {
 	return component->active;
