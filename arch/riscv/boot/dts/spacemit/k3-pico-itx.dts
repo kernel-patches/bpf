@@ -100,7 +100,7 @@
 	pinctrl-0 = <&i2c8_cfg>;
 	status = "okay";
 
-	p1@41 {
+	pmic@41 {
 		compatible = "spacemit,p1";
 		reg = <0x41>;
 		interrupts = <64 IRQ_TYPE_LEVEL_HIGH>;
