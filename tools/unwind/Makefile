@@ -87,7 +87,8 @@ KERNEL_CFI_DEPS := $(srctree)/kernel/unwind/dwarf_cfi.c \
 		   $(srctree)/tools/include/linux/unwind_dwarf_cfi.h
 
 VERIFY_OBJS := $(OUTPUT)dwarf_cfi_host.o \
-		 $(OUTPUT)verify_cfi.o
+		 $(OUTPUT)verify_cfi.o \
+		 $(OUTPUT)verify_insn_arch.o
 
 ifeq ($(HAS_LIBLLVM),1)
 all: $(OUTPUT)verify_cfi
