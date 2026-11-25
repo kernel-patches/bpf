@@ -73,6 +73,13 @@ struct snd_soc_dapm_context *snd_soc_component_to_dapm(struct snd_soc_component 
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_to_dapm);
 
+const struct snd_soc_component_driver *
+snd_soc_component_to_driver(struct snd_soc_component *component)
+{
+	return component->driver;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_driver);
+
 unsigned int snd_soc_component_active(struct snd_soc_component *component)
 {
 	return component->active;
