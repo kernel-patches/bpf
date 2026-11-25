@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# usage: llvm-mc.sh SRCARCH [cxxflags | libs]
+# usage: llvm-mc.sh SRCARCH [cxxflags | libs | nm]
 #
 # text_mc.cpp reads the machine code of the kernel arch SRCARCH with LLVM's MC
 # layer. Fail, and say why, if this host lacks what it takes to build it.
@@ -9,7 +9,8 @@
 # one run of llvm-config. Whether text_mc.cpp works with this LLVM shows when the
 # tool is built, and in text_arch_init() when it starts.
 #
-# For the Makefile print the flags to compile text_mc.cpp, or the libraries.
+# For the Makefile print the flags to compile text_mc.cpp, the libraries, or
+# llvm-nm, which reads kbuild's objects for fmodret.c.
 #
 # The host's LLVM need not be the one which compiles the kernel, if any does.
 
@@ -55,5 +56,8 @@ libs)
 	libs=$($LLVM_CONFIG --link-static "$@" 2> /dev/null) ||
 	libs=$($LLVM_CONFIG --link-shared "$@") || die "no libraries of LLVM"
 	echo $libs -lstdc++ -lm
+	;;
+nm)
+	echo "$($LLVM_CONFIG --bindir)/llvm-nm"
 	;;
 esac

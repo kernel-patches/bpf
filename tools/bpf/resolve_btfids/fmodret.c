@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <bpf/btf.h>
 
@@ -101,6 +102,71 @@ static bool excluded_by_name(const char *name)
 		if (!strcmp(name, names[i]))
 			return true;
 	return false;
+}
+
+#ifndef LLVM_NM
+#define LLVM_NM "llvm-nm"
+#endif
+
+/* The code of BPF itself, in the build directory of vmlinux */
+static const char * const bpf_archives[] = {
+	"kernel/bpf/built-in.a",
+	"arch/x86/net/built-in.a",
+	"arch/arm64/net/built-in.a",
+};
+
+static int cmp_name(const void *a, const void *b)
+{
+	return strcmp(*(char * const *)a, *(char * const *)b);
+}
+
+/* Read the symbols of bpf_archives[] into NAMES, sorted */
+static int read_bpf_code(char ***names, size_t *nr)
+{
+	char cmd[sizeof(LLVM_NM) + 256] = LLVM_NM " --defined-only -j", *line = NULL;
+	size_t i, size = 0;
+	int err = 0;
+	FILE *f;
+
+	if (access(bpf_archives[0], F_OK)) {
+		fprintf(stderr, "FAILED: --fmodret_scan: no %s\n", bpf_archives[0]);
+		return -ENOENT;
+	}
+	for (i = 0; i < sizeof(bpf_archives) / sizeof(bpf_archives[0]); i++)
+		if (!access(bpf_archives[i], F_OK))
+			strcat(strcat(cmd, " "), bpf_archives[i]);
+	f = popen(cmd, "r");
+	if (!f)
+		return -errno;
+	while (getline(&line, &size, f) > 0) {
+		char **p = *nr % 4096 ? *names : realloc(*names, (*nr + 4096) * sizeof(*p));
+
+		if (!p) {
+			err = -ENOMEM;
+			break;
+		}
+		*names = p;
+		line[strcspn(line, "\n")] = 0;
+		p[(*nr)++] = line;
+		line = NULL;
+		size = 0;
+	}
+	free(line);
+	if (!feof(f) && !err)
+		err = -EIO;
+	if (pclose(f) && !err)
+		err = -EINVAL;
+	if (err) {
+		fprintf(stderr, "FAILED: --fmodret_scan: %s\n", cmd);
+		return err;
+	}
+	qsort(*names, *nr, sizeof(**names), cmp_name);
+	return 0;
+}
+
+static bool is_bpf_code(char **names, size_t nr, const char *name)
+{
+	return bsearch(&name, names, nr, sizeof(*names), cmp_name);
 }
 
 /* Find kfuncs and helpers */
@@ -260,11 +326,12 @@ static void set_protos(struct scan *scan, const struct image *img, const struct 
 
 int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 {
-	size_t nr_funcs = 0, nr_scanned = 0, nr_undecodable = 0, nr_tags = 0;
+	size_t nr_funcs = 0, nr_scanned = 0, nr_undecodable = 0, nr_tags = 0, nr_bpf_code = 0, i;
 	const struct btf *base = btf__base_btf(btf);
 	__u32 id, nr_types = btf__type_cnt(btf);
 	struct scan *scan = NULL;
 	bool *bpf_funcs = NULL;
+	char **bpf_code = NULL;
 	struct image img;
 	char counts[200];
 	int err;
@@ -281,6 +348,11 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 	bpf_funcs = find_bpf_funcs(btf);
 	if (!bpf_funcs)
 		goto out;
+	if (!base) {
+		err = read_bpf_code(&bpf_code, &nr_bpf_code);
+		if (err)
+			goto out;
+	}
 
 	for (id = base ? btf__type_cnt(base) : 1, err = 0; id < nr_types && err >= 0; id++) {
 		const struct btf_type *t = btf__type_by_id(btf, id);
@@ -307,6 +379,9 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		if (!func || !strcmp(func->section, ".init.text"))
 			continue;
 		if (excluded_by_name(name))
+			continue;
+		/* Skip the code of kernel/bpf and of the JIT */
+		if (is_bpf_code(bpf_code, nr_bpf_code, name))
 			continue;
 		nr_scanned++;
 		err = scan_func(scan, func, &values);
@@ -340,6 +415,9 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		printf("  FMODRET %s\n", counts);
 	}
 out:
+	for (i = 0; i < nr_bpf_code; i++)
+		free(bpf_code[i]);
+	free(bpf_code);
 	free(bpf_funcs);
 	scan_close(scan);
 	image_close(&img);

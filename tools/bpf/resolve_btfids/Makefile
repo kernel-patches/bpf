@@ -93,6 +93,7 @@ LLVM_MC_HELP := CONFIG_BPF_FMODRET_SCAN=y needs a C++17 compiler (HOSTCXX=$(HOST
 		llvm-dev, llvm-devel). See above what is wrong, or switch the option off
 or_llvm_mc_help := || { echo '$(LLVM_MC_HELP)' >&2; false; }
 HOSTCFLAGS_resolve_btfids += -DHAVE_LLVM_MC
+HOSTCFLAGS_resolve_btfids += -DLLVM_NM='"$(shell $(LLVM_MC_SH) nm)"'
 CXX := $(HOSTCXX)
 CXXFLAGS := $(filter-out -Werror,$(HOSTCFLAGS_resolve_btfids)) -O2 \
 	    $(or $(shell $(LLVM_MC_SH) cxxflags),$(error $(LLVM_MC_HELP)))
