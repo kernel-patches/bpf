@@ -143,8 +143,10 @@ static void pm_clk_op_unlock(struct pm_subsys_data *psd, unsigned long *flags)
  * __pm_clk_enable - Enable a clock, reporting any errors
  * @dev: The device for the given clock
  * @ce: PM clock entry corresponding to the clock.
+ *
+ * Return: 0 on success or the error from enabling the clock.
  */
-static inline void __pm_clk_enable(struct device *dev, struct pm_clock_entry *ce)
+static inline int __pm_clk_enable(struct device *dev, struct pm_clock_entry *ce)
 {
 	int ret;
 
@@ -156,13 +158,29 @@ static inline void __pm_clk_enable(struct device *dev, struct pm_clock_entry *ce
 		ret = clk_enable(ce->clk);
 		break;
 	default:
-		return;
+		return 0;
 	}
 	if (!ret)
 		ce->status = PCE_STATUS_ENABLED;
 	else
 		dev_err(dev, "%s: failed to enable clk %p, error %d\n",
 			__func__, ce->clk, ret);
+
+	return ret;
+}
+
+static inline void __pm_clk_disable(struct pm_clock_entry *ce)
+{
+	if (ce->status != PCE_STATUS_ENABLED)
+		return;
+
+	if (ce->enabled_when_prepared) {
+		clk_disable_unprepare(ce->clk);
+		ce->status = PCE_STATUS_ACQUIRED;
+	} else {
+		clk_disable(ce->clk);
+		ce->status = PCE_STATUS_PREPARED;
+	}
 }
 
 /**
@@ -483,17 +501,8 @@ int pm_clk_suspend(struct device *dev)
 	if (ret)
 		return ret;
 
-	list_for_each_entry_reverse(ce, &psd->clock_list, node) {
-		if (ce->status == PCE_STATUS_ENABLED) {
-			if (ce->enabled_when_prepared) {
-				clk_disable_unprepare(ce->clk);
-				ce->status = PCE_STATUS_ACQUIRED;
-			} else {
-				clk_disable(ce->clk);
-				ce->status = PCE_STATUS_PREPARED;
-			}
-		}
-	}
+	list_for_each_entry_reverse(ce, &psd->clock_list, node)
+		__pm_clk_disable(ce);
 
 	pm_clk_op_unlock(psd, &flags);
 
@@ -504,6 +513,9 @@ EXPORT_SYMBOL_GPL(pm_clk_suspend);
 /**
  * pm_clk_resume - Enable clocks in a device's PM clock list.
  * @dev: Device to enable the clocks for.
+ *
+ * Return: 0 on success or a negative error code. If a clock fails to start,
+ * the clocks started before it are stopped again.
  */
 int pm_clk_resume(struct device *dev)
 {
@@ -521,12 +533,24 @@ int pm_clk_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	list_for_each_entry(ce, &psd->clock_list, node)
-		__pm_clk_enable(dev, ce);
+	list_for_each_entry(ce, &psd->clock_list, node) {
+		ret = __pm_clk_enable(dev, ce);
+		if (ret)
+			break;
+	}
+
+	/*
+	 * A device whose clocks are not running cannot be accessed. Do not
+	 * pretend it resumed, and leave its clocks off as it stays suspended.
+	 */
+	if (ret) {
+		list_for_each_entry_continue_reverse(ce, &psd->clock_list, node)
+			__pm_clk_disable(ce);
+	}
 
 	pm_clk_op_unlock(psd, &flags);
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(pm_clk_resume);
 
