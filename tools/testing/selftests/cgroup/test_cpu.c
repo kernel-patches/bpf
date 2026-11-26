@@ -809,6 +809,76 @@ cleanup:
 	return ret;
 }
 
+static int test_cpucg_uclamp_parse(const char *root)
+{
+	static const struct {
+		char *input;
+		char *expected;	/* NULL if the write must fail */
+	} cases[] = {
+		{ "12.34", "12.34\n" },
+		{ "50", "50.00\n" },
+		{ "0.125", "0.13\n" },
+		{ "0.999", "1.00\n" },
+		{ "100.01", NULL },
+		{ "abc", NULL },
+		{ "0.5000000000000", "0.50\n" },
+		{ "0.123456789012", "0.12\n" },
+		{ "0.99999999999999999999", "1.00\n" },
+		{ "0.0000000000000000000000000000000000", "0.00\n" },
+	};
+	int ret = KSFT_FAIL;
+	char buf[64];
+	char *cpucg;
+	int i, err;
+
+	cpucg = cg_name(root, "cpucg_test");
+	if (!cpucg)
+		goto cleanup;
+
+	if (cg_create(cpucg))
+		goto cleanup;
+
+	if (cg_read(cpucg, "cpu.uclamp.min", buf, sizeof(buf))) {
+		ret = KSFT_SKIP;
+		goto cleanup;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		err = cg_write(cpucg, "cpu.uclamp.min", cases[i].input);
+
+		if (!cases[i].expected) {
+			if (!err) {
+				ksft_print_msg("%s was accepted\n", cases[i].input);
+				goto cleanup;
+			}
+			continue;
+		}
+
+		if (err) {
+			ksft_print_msg("%s was rejected: %s\n", cases[i].input,
+				       strerror(-err));
+			goto cleanup;
+		}
+
+		if (cg_read(cpucg, "cpu.uclamp.min", buf, sizeof(buf)))
+			goto cleanup;
+
+		if (strcmp(buf, cases[i].expected)) {
+			ksft_print_msg("%s reads back as %s", cases[i].input,
+				       buf);
+			goto cleanup;
+		}
+	}
+
+	ret = KSFT_PASS;
+
+cleanup:
+	cg_destroy(cpucg);
+	free(cpucg);
+
+	return ret;
+}
+
 #define T(x) { x, #x }
 struct cpucg_test {
 	int (*fn)(const char *root);
@@ -823,6 +893,7 @@ struct cpucg_test {
 	T(test_cpucg_nested_weight_underprovisioned),
 	T(test_cpucg_max),
 	T(test_cpucg_max_nested),
+	T(test_cpucg_uclamp_parse),
 };
 #undef T
 
