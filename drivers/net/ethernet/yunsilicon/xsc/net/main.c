@@ -721,6 +721,62 @@ static void xsc_eth_sw_deinit(struct xsc_adapter *adapter)
 	xsc_eth_close_channels(adapter);
 }
 
+static int xsc_eth_get_link_status(struct xsc_adapter *adapter, bool *link_up)
+{
+	struct xsc_core_device *xdev = adapter->xdev;
+	u8 state;
+	int err;
+
+	err = xsc_core_query_vport_state(xdev, 0, &state);
+	if (err)
+		return err;
+
+	*link_up = state;
+	return 0;
+}
+
+static int xsc_eth_change_link_status(struct xsc_adapter *adapter)
+{
+	bool link_up;
+	int err;
+
+	err = xsc_eth_get_link_status(adapter, &link_up);
+	if (err) {
+		netdev_err(adapter->netdev, "failed to query link status, err=%d\n",
+			   err);
+		return err;
+	}
+
+	if (link_up && !netif_carrier_ok(adapter->netdev)) {
+		netdev_info(adapter->netdev, "Link up\n");
+		netif_carrier_on(adapter->netdev);
+	} else if (!link_up && netif_carrier_ok(adapter->netdev)) {
+		netdev_info(adapter->netdev, "Link down\n");
+		netif_carrier_off(adapter->netdev);
+	}
+
+	return 0;
+}
+
+/*
+ * Registered with the PCI layer, which runs it on its own workqueue for
+ * every XSC_CMD_EVENT_RESP_CHANGE_LINK event.
+ */
+static void xsc_eth_link_event_handler(void *arg)
+{
+	struct xsc_core_device *xdev = arg;
+	struct xsc_adapter *adapter = xdev->eth_priv;
+	int err;
+
+	if (!adapter || !adapter->opened)
+		return;
+
+	err = xsc_eth_change_link_status(adapter);
+	if (err)
+		netdev_err(adapter->netdev, "failed to change linkstatus, err=%d\n",
+			   err);
+}
+
 static bool xsc_get_pct_drop_config(struct xsc_core_device *xdev)
 {
 	return (xdev->pdev->device == XSC_MC_PF_DEV_ID) ||
@@ -813,6 +869,7 @@ static void xsc_set_port_admin_status(struct xsc_adapter *adapter,
 static int xsc_eth_open(struct net_device *netdev)
 {
 	struct xsc_adapter *adapter = netdev_priv(netdev);
+	bool link_up;
 	int ret;
 
 	ret = xsc_eth_sw_init(adapter);
@@ -822,6 +879,16 @@ static int xsc_eth_open(struct net_device *netdev)
 	ret = xsc_eth_enable_nic_hca(adapter);
 	if (ret)
 		goto err_sw_deinit;
+
+	ret = xsc_eth_get_link_status(adapter, &link_up);
+	if (ret) {
+		netdev_warn(netdev, "failed to query link status, err=%d\n", ret);
+	} else if (link_up) {
+		netdev_info(netdev, "Link up\n");
+		netif_carrier_on(adapter->netdev);
+	} else {
+		netdev_info(netdev, "Link down\n");
+	}
 
 	adapter->opened = true;
 
@@ -1005,14 +1072,18 @@ static int xsc_eth_probe(struct auxiliary_device *adev,
 		goto err_free_netdev;
 	}
 
+	xsc_irq_event_register(xdev, xsc_eth_link_event_handler);
+
 	err = register_netdev(netdev);
 	if (err) {
 		netdev_err(netdev, "register_netdev failed, err=%d\n", err);
-		goto err_free_netdev;
+		goto err_unregister_event;
 	}
 
 	return 0;
 
+err_unregister_event:
+	xsc_irq_event_unregister(xdev);
 err_free_netdev:
 	xdev->eth_priv = NULL;
 	free_netdev(netdev);
@@ -1025,6 +1096,11 @@ static void xsc_eth_remove(struct auxiliary_device *adev)
 	struct xsc_adev *xsc_adev = container_of(adev, struct xsc_adev, adev);
 	struct xsc_core_device *xdev = xsc_adev->xdev;
 	struct xsc_adapter *adapter = xdev->eth_priv;
+
+	/* Stop link events reaching this adapter and wait out one already in
+	 * flight, which would otherwise touch the memory freed below.
+	 */
+	xsc_irq_event_unregister(xdev);
 
 	/* Runs ndo_stop(), so the queues and the HCA are shut down first. */
 	unregister_netdev(adapter->netdev);

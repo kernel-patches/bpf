@@ -270,6 +270,9 @@ int xsc_core_eth_create_cq(struct xsc_core_device *xdev,
 int xsc_core_eth_destroy_cq(struct xsc_core_device *xdev,
 			    struct xsc_core_cq *xcq);
 
+int xsc_core_query_vport_state(struct xsc_core_device *xdev, u16 vport,
+			       u8 *state);
+
 /*
  * Link event callback registration. The events are dispatched from the PCI
  * layer's own workqueue; unregister detaches the callback and waits for one

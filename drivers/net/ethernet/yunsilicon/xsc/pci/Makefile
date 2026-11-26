@@ -6,4 +6,4 @@ ccflags-y += -I$(srctree)/drivers/net/ethernet/yunsilicon/xsc
 
 obj-$(CONFIG_YUNSILICON_XSC_PCI) += xsc_pci.o
 
-xsc_pci-y := main.o adev.o cmd.o eq.o cq.o qp.o pci_irq.o alloc.o doorbell.o
+xsc_pci-y := main.o adev.o cmd.o eq.o cq.o qp.o vport.o pci_irq.o alloc.o doorbell.o
