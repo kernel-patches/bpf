@@ -1160,14 +1160,21 @@ int bpf_prog_test_run_opts(int prog_fd, struct bpf_test_run_opts *opts)
 	return libbpf_err_errno(ret);
 }
 
-static int bpf_obj_get_next_id(__u32 start_id, __u32 *next_id, int cmd)
+static int bpf_obj_get_next_id(__u32 start_id, __u32 *next_id, int cmd,
+			       const struct bpf_get_next_id_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, open_flags);
+	const size_t attr_sz = offsetofend(union bpf_attr, get_next_id_token_fd);
 	union bpf_attr attr;
 	int err;
 
+	if (!OPTS_VALID(opts, bpf_get_next_id_opts))
+		return libbpf_err(-EINVAL);
+
 	memset(&attr, 0, attr_sz);
 	attr.start_id = start_id;
+	attr.get_next_id_token_fd = OPTS_GET(opts, token_fd, 0);
+	if (attr.get_next_id_token_fd)
+		attr.open_flags = BPF_F_TOKEN_FD;
 
 	err = sys_bpf(cmd, &attr, attr_sz);
 	if (!err)
@@ -1178,22 +1185,46 @@ static int bpf_obj_get_next_id(__u32 start_id, __u32 *next_id, int cmd)
 
 int bpf_prog_get_next_id(__u32 start_id, __u32 *next_id)
 {
-	return bpf_obj_get_next_id(start_id, next_id, BPF_PROG_GET_NEXT_ID);
+	return bpf_obj_get_next_id(start_id, next_id, BPF_PROG_GET_NEXT_ID, NULL);
+}
+
+int bpf_prog_get_next_id_opts(__u32 start_id, __u32 *next_id,
+			      const struct bpf_get_next_id_opts *opts)
+{
+	return bpf_obj_get_next_id(start_id, next_id, BPF_PROG_GET_NEXT_ID, opts);
 }
 
 int bpf_map_get_next_id(__u32 start_id, __u32 *next_id)
 {
-	return bpf_obj_get_next_id(start_id, next_id, BPF_MAP_GET_NEXT_ID);
+	return bpf_obj_get_next_id(start_id, next_id, BPF_MAP_GET_NEXT_ID, NULL);
+}
+
+int bpf_map_get_next_id_opts(__u32 start_id, __u32 *next_id,
+			     const struct bpf_get_next_id_opts *opts)
+{
+	return bpf_obj_get_next_id(start_id, next_id, BPF_MAP_GET_NEXT_ID, opts);
 }
 
 int bpf_btf_get_next_id(__u32 start_id, __u32 *next_id)
 {
-	return bpf_obj_get_next_id(start_id, next_id, BPF_BTF_GET_NEXT_ID);
+	return bpf_obj_get_next_id(start_id, next_id, BPF_BTF_GET_NEXT_ID, NULL);
+}
+
+int bpf_btf_get_next_id_opts(__u32 start_id, __u32 *next_id,
+			      const struct bpf_get_next_id_opts *opts)
+{
+	return bpf_obj_get_next_id(start_id, next_id, BPF_BTF_GET_NEXT_ID, opts);
 }
 
 int bpf_link_get_next_id(__u32 start_id, __u32 *next_id)
 {
-	return bpf_obj_get_next_id(start_id, next_id, BPF_LINK_GET_NEXT_ID);
+	return bpf_obj_get_next_id(start_id, next_id, BPF_LINK_GET_NEXT_ID, NULL);
+}
+
+int bpf_link_get_next_id_opts(__u32 start_id, __u32 *next_id,
+			      const struct bpf_get_next_id_opts *opts)
+{
+	return bpf_obj_get_next_id(start_id, next_id, BPF_LINK_GET_NEXT_ID, opts);
 }
 
 int bpf_prog_get_fd_by_id_opts(__u32 id,
