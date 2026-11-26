@@ -134,6 +134,10 @@ struct xsc_cqe {
 	__le32		data1;
 };
 
+#define XSC_CQE_DATA0_MSG_OPCD_MASK		GENMASK(7, 0)
+#define XSC_CQE_DATA0_ERR_CODE_MASK		GENMASK(6, 0)
+#define XSC_CQE_DATA0_IS_ERR			BIT(7)
+#define XSC_CQE_DATA0_QP_ID_MASK		GENMASK(22, 8)
 #define XSC_CQE_DATA1_OWNER			BIT(31)
 
 /* eq */

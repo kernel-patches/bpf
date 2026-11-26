@@ -106,6 +106,13 @@ static void xsc_eth_cq_error_event(struct xsc_core_cq *xcq,
 		   "Eth catch CQ ERROR: %x, cqn: %d\n", event, xcq->cqn);
 }
 
+static void xsc_eth_comp(struct xsc_core_cq *xcq)
+{
+	struct xsc_cq *cq = container_of(xcq, struct xsc_cq, xcq);
+
+	napi_schedule(cq->napi);
+}
+
 static int xsc_eth_alloc_cq(struct xsc_channel *c, struct xsc_cq *pcq,
 			    struct xsc_cq_param *pcq_param)
 {
@@ -125,6 +132,7 @@ static int xsc_eth_alloc_cq(struct xsc_channel *c, struct xsc_cq *pcq,
 	if (ret)
 		return ret;
 
+	core_cq->comp = xsc_eth_comp;
 	core_cq->event = xsc_eth_cq_error_event;
 	core_cq->vector = 0;
 
@@ -204,6 +212,7 @@ static int xsc_eth_open_cq(struct xsc_channel *c,
 
 	xsc_arm_cq(pcq->xdev, pcq->xcq.cqn, pcq->wq.cc, 0);
 
+	pcq->napi = &c->napi;
 	pcq->channel = c;
 
 	return 0;
@@ -448,6 +457,8 @@ static int xsc_eth_open_channel(struct xsc_adapter *adapter,
 	if (ret)
 		goto err_close_sq_cq;
 
+	netif_napi_add(adapter->netdev, &c->napi, xsc_eth_napi_poll);
+
 	netdev_dbg(adapter->netdev, "open channel ok\n");
 	return 0;
 
@@ -464,6 +475,8 @@ static int xsc_eth_modify_qps_channel(struct xsc_adapter *adapter,
 				      struct xsc_channel *c)
 {
 	int ret;
+
+	xsc_eth_post_rx_wqes(&c->qp.rq);
 
 	ret = xsc_core_eth_modify_qp_status(adapter->xdev, c->qp.rq.rqn,
 					    XSC_CMD_OP_RTR2RTS_QP);
@@ -612,6 +625,8 @@ err_free_rq:
 static void xsc_eth_close_qp_rq(struct xsc_channel *c, struct xsc_rq *prq)
 {
 	struct xsc_core_device *xdev = c->adapter->xdev;
+	u32 wq_sz = xsc_wq_cyc_get_size(&prq->wqe.wq);
+	u32 i;
 
 	xsc_core_destroy_resource_common(xdev, &prq->cqp);
 
@@ -625,11 +640,17 @@ static void xsc_eth_close_qp_rq(struct xsc_channel *c, struct xsc_rq *prq)
 		return;
 	}
 
+	/* return the pages still posted to hardware before the pool dies */
+	for (i = 0; i < wq_sz; i++)
+		xsc_eth_dealloc_rx_wqe(prq, i);
+
 	xsc_eth_free_qp_rq(prq);
 }
 
 static void xsc_eth_close_channel(struct xsc_channel *c, bool free_rq)
 {
+	netif_napi_del(&c->napi);
+
 	if (free_rq)
 		xsc_eth_close_qp_rq(c, &c->qp.rq);
 	xsc_eth_close_cq(c, &c->qp.rq.cq);
@@ -644,6 +665,7 @@ static int xsc_eth_open_channels(struct xsc_adapter *adapter)
 {
 	struct xsc_channel_param *chl_param;
 	bool free_rq = false;
+	bool napi_enabled = false;
 	int ret = 0;
 
 	chl_param = kvzalloc_obj(*chl_param, GFP_KERNEL);
@@ -662,6 +684,9 @@ static int xsc_eth_open_channels(struct xsc_adapter *adapter)
 		goto err_close_channel;
 	free_rq = true;
 
+	napi_enable(&adapter->channel.napi);
+	napi_enabled = true;
+
 	ret = xsc_eth_modify_qps_channel(adapter, &adapter->channel);
 	if (ret)
 		goto err_close_channel;
@@ -670,6 +695,8 @@ static int xsc_eth_open_channels(struct xsc_adapter *adapter)
 	return 0;
 
 err_close_channel:
+	if (napi_enabled)
+		napi_disable(&adapter->channel.napi);
 	xsc_eth_close_channel(&adapter->channel, free_rq);
 err_free_param:
 	kvfree(chl_param);
@@ -702,6 +729,9 @@ static void xsc_eth_deactivate_channel(struct xsc_channel *c)
 	clear_bit(XSC_ETH_SQ_STATE_ENABLED, &c->qp.sq.state);
 
 	synchronize_net();
+
+	/* last doorbell out */
+	napi_disable(&c->napi);
 }
 
 static int xsc_eth_sw_init(struct xsc_adapter *adapter)

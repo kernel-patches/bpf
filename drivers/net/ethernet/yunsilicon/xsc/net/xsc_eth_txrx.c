@@ -18,6 +18,28 @@ struct xsc_cqe *xsc_cqwq_get_cqe(struct xsc_cqwq *wq)
 	return cqe;
 }
 
+void xsc_cq_notify_hw_rearm(struct xsc_cq *cq)
+{
+	xsc_arm_cq(cq->xdev, cq->xcq.cqn, cq->wq.cc, 0);
+}
+
+void xsc_cq_notify_hw(struct xsc_cq *cq)
+{
+	xsc_update_cq_ci(cq->xdev, cq->xcq.cqn, cq->wq.cc);
+}
+
+static void xsc_dump_error_sqcqe(struct xsc_sq *sq, struct xsc_cqe *cqe)
+{
+	struct xsc_channel *c = sq->channel;
+	u32 data0 = le32_to_cpu(cqe->data0);
+
+	net_err_ratelimited("Err cqe on dev %s cqn=0x%x ci=0x%x sqn=0x%x err_code=0x%lx qpid=0x%lx\n",
+			    c->netdev->name, sq->cq.xcq.cqn,
+			    xsc_cqwq_get_ci(&sq->cq.wq), sq->sqn,
+			    FIELD_GET(XSC_CQE_DATA0_ERR_CODE_MASK, data0),
+			    FIELD_GET(XSC_CQE_DATA0_QP_ID_MASK, data0));
+}
+
 int xsc_poll_tx_cq(struct xsc_cq *cq, int budget)
 {
 	struct xsc_cqe *cqe;
@@ -42,6 +64,9 @@ int xsc_poll_tx_cq(struct xsc_cq *cq, int budget)
 			break;
 		/* ensure cqe content is read after cqe ownership bit */
 		dma_rmb();
+
+		if (unlikely(le32_to_cpu(cqe->data0) & XSC_CQE_DATA0_IS_ERR))
+			xsc_dump_error_sqcqe(sq, cqe);
 
 		xsc_cqwq_pop(&cq->wq);
 		wi = &sq->wqe_info[xsc_wq_cyc_ctr2ix(&sq->wq, sqcc)];

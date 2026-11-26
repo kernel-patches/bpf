@@ -37,7 +37,7 @@ enum {
 struct xsc_cq {
 	/* data path - accessed per cqe */
 	struct xsc_cqwq		wq;
-
+	struct napi_struct	*napi;
 	struct xsc_core_cq	xcq;
 	struct xsc_channel	*channel;
 

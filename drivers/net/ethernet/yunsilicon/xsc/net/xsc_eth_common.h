@@ -106,6 +106,7 @@ struct xsc_eth_params {
 struct xsc_channel {
 	/* data path */
 	struct xsc_eth_qp	qp;
+	struct napi_struct	napi;
 
 	/* relationship */
 	struct xsc_adapter	*adapter;
