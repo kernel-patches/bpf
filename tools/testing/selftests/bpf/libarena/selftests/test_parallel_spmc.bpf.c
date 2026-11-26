@@ -70,6 +70,7 @@ static volatile u64 round_steals;
  */
 #if defined(ENABLE_ATOMICS_TESTS) &&		  \
 	(defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86) || \
+	 defined(__TARGET_ARCH_loongarch) || \
 	 (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64))
 static bool spmc_tests_enabled(void)
 {

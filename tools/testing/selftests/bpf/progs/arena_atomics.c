@@ -30,6 +30,7 @@ bool skip_all_tests = true;
 	defined(__BPF_FEATURE_ADDR_SPACE_CAST) && \
 	(defined(__TARGET_ARCH_arm64) || \
 	 defined(__TARGET_ARCH_x86) || \
+	 defined(__TARGET_ARCH_loongarch) || \
 	 (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) || \
 	 defined(__TARGET_ARCH_s390))
 bool skip_lacq_srel_tests __attribute((__section__(".data"))) = false;
@@ -454,6 +455,7 @@ int load_acquire(const void *ctx)
 	defined(__BPF_FEATURE_ADDR_SPACE_CAST) && \
 	(defined(__TARGET_ARCH_arm64) || \
 	 defined(__TARGET_ARCH_x86) || \
+	 defined(__TARGET_ARCH_loongarch) || \
 	 (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) || \
 	 defined(__TARGET_ARCH_s390))
 
@@ -508,6 +510,7 @@ int store_release(const void *ctx)
 	defined(__BPF_FEATURE_ADDR_SPACE_CAST) && \
 	(defined(__TARGET_ARCH_arm64) || \
 	 defined(__TARGET_ARCH_x86) || \
+	 defined(__TARGET_ARCH_loongarch) || \
 	 (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) || \
 	 defined(__TARGET_ARCH_s390))
 

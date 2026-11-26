@@ -24,6 +24,7 @@ static volatile bool test_abort;
 	(defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86) || \
 	 defined(__TARGET_ARCH_s390) || \
 	 defined(__TARGET_ARCH_powerpc) ||				  \
+	 defined(__TARGET_ARCH_loongarch) || \
 	 (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64))
 static bool bitmap_tests_enabled(void)
 {
