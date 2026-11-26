@@ -1215,6 +1215,8 @@ struct core_reloc_enumval_output {
 	int named_val2;
 	int anon_val1;
 	int anon_val2;
+	int byte_val1;
+	int byte_val2;
 	long uint_val1;
 	long uint_val2;
 };
@@ -1245,6 +1247,11 @@ typedef enum {
 	ANON_ENUM_VAL3 = 0x30,
 } anon_enum;
 
+enum named_byte_enum {
+	BYTE_ENUM_VAL1 = 0x11,
+	BYTE_ENUM_VAL2 = 0xff,
+} __attribute__((packed));
+
 enum named_uint_enum {
 	UINT_ENUM_VAL1 = 0x80000001,
 	UINT_ENUM_VAL2 = 0xffffffff,
@@ -1253,7 +1260,8 @@ enum named_uint_enum {
 struct core_reloc_enumval {
 	enum named_enum f1;
 	anon_enum f2;
-	enum named_uint_enum f3;
+	enum named_byte_enum f3;
+	enum named_uint_enum f4;
 };
 
 enum named_unsigned_enum64 {
@@ -1353,6 +1361,52 @@ typedef enum {
 struct core_reloc_enumval___err_missing {
 	enum named_enum___err_missing f1;
 	anon_enum___err_missing f2;
+};
+
+/* 8-byte target enums, whose relocated values fit in the int enumerators of
+ * the local enums
+ */
+enum named_enum___enum64 {
+	NAMED_ENUM_VAL1___enum64 = 1001,
+	NAMED_ENUM_VAL2___enum64 = 2002,
+	NAMED_ENUM_VAL3___enum64 = 0x300000000ULL,
+};
+
+typedef enum {
+	ANON_ENUM_VAL1___enum64 = 0x11,
+	ANON_ENUM_VAL2___enum64 = 0x22,
+	ANON_ENUM_VAL3___enum64 = 0x300000000ULL,
+} anon_enum___enum64;
+
+struct core_reloc_enumval___enum64 {
+	enum named_enum___enum64 f1;
+	anon_enum___enum64 f2;
+};
+
+/* negative value for an int enumerator */
+typedef enum {
+	ANON_ENUM_VAL1___negative = -0x10,
+	ANON_ENUM_VAL2___negative = 0x20,
+	ANON_ENUM_VAL3___negative = 0x30,
+} anon_enum___negative;
+
+struct core_reloc_enumval___negative {
+	enum named_enum f1;
+	anon_enum___negative f2;
+};
+
+/* 4-byte target enum with a value out of a byte, for the int enumerators of
+ * the local 1-byte enum
+ */
+enum named_byte_enum___byte_unpacked {
+	BYTE_ENUM_VAL1___byte_unpacked = 0x11,
+	BYTE_ENUM_VAL2___byte_unpacked = 0x100,
+};
+
+struct core_reloc_enumval___byte_unpacked {
+	enum named_enum f1;
+	anon_enum f2;
+	enum named_byte_enum___byte_unpacked f3;
 };
 
 enum named_unsigned_enum64___err_missing {

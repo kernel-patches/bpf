@@ -27,6 +27,12 @@ typedef enum {
 	ANON_ENUM_VAL3 = 0x30,
 } anon_enum;
 
+/* 1-byte enum, whose values fit in int, so its enumerators are int */
+enum named_byte_enum {
+	BYTE_ENUM_VAL1 = 1,
+	BYTE_ENUM_VAL2 = 2,
+} __attribute__((packed));
+
 /* 4-byte enum with values out of the range of int, so it is unsigned */
 enum named_uint_enum {
 	UINT_ENUM_VAL1 = 0x80000000,
@@ -45,6 +51,8 @@ struct core_reloc_enumval_output {
 	int named_val2;
 	int anon_val1;
 	int anon_val2;
+	int byte_val1;
+	int byte_val2;
 	long uint_val1;
 	long uint_val2;
 };
@@ -72,6 +80,12 @@ int test_core_enumval(void *ctx)
 	out->anon_val1 = bpf_core_enum_value(anon, ANON_ENUM_VAL1);
 	out->anon_val2 = bpf_core_enum_value(anon, ANON_ENUM_VAL2);
 	/* ANON_ENUM_VAL3 value is optional */
+
+	/* enum named_byte_enum is optional */
+	if (bpf_core_enum_value_exists(enum named_byte_enum, BYTE_ENUM_VAL1))
+		out->byte_val1 = bpf_core_enum_value(enum named_byte_enum, BYTE_ENUM_VAL1);
+	if (bpf_core_enum_value_exists(enum named_byte_enum, BYTE_ENUM_VAL2))
+		out->byte_val2 = bpf_core_enum_value(enum named_byte_enum, BYTE_ENUM_VAL2);
 
 	/* enum named_uint_enum is optional */
 #ifdef __clang__
