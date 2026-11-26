@@ -248,6 +248,7 @@ __description("private stack: two frames of 2048 bytes")
 __load_if_large_stack()
 __arch_x86_64
 __arch_arm64
+__arch_loongarch
 __success __log_level(4)
 __msg("stack depth max 2048")
 __msg("subprog 0 (private_stack_two_frames) main {{.*}} stack 2048")
