@@ -578,6 +578,9 @@ static void socfpga_agilex5_setup_plat_dat(struct socfpga_dwmac *dwmac)
 	/* Enable TSO */
 	plat_dat->flags |= STMMAC_FLAG_TSO_EN;
 
+	/* Disable split header */
+	plat_dat->flags |= STMMAC_FLAG_SPH_DISABLE;
+
 	/* Enable TBS */
 	switch (plat_dat->tx_queues_to_use) {
 	case 8:
