@@ -2549,6 +2549,10 @@ local_input:
 
 no_route:
 	RT_CACHE_STAT_INC(in_no_route);
+	if (skb->protocol != htons(ETH_P_IP)) {
+		reason = SKB_DROP_REASON_INVALID_PROTO;
+		goto out;
+	}
 	res->type = RTN_UNREACHABLE;
 	res->fi = NULL;
 	res->table = NULL;
