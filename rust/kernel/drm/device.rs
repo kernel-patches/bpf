@@ -273,6 +273,7 @@ impl<T: drm::Driver> UnregisteredDevice<T> {
         fops.read = Some(bindings::drm_read);
         fops.llseek = Some(bindings::noop_llseek);
         fops.mmap = Some(bindings::drm_gem_mmap);
+        fops.show_fdinfo = Some(bindings::drm_show_fdinfo);
         fops.fop_flags = bindings::FOP_UNSIGNED_OFFSET;
 
         fops
