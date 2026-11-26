@@ -5685,8 +5685,17 @@ static int rtl8169_poll(struct napi_struct *napi, int budget)
 	/* rtl8169_poll() is used only when there is a single RX ring. */
 	work_done = rtl_rx(dev, tp, &tp->rx_ring[0], budget, napi);
 
-	if (work_done < budget && napi_complete_done(napi, work_done))
-		rtl_irq_enable(tp);
+	if (work_done < budget) {
+		/* At least the RTL8125B stops receiving after running out of
+		 * RX descriptors until RxOverflow is cleared. All descriptors
+		 * are back with the chip now, so clear it, also when busy
+		 * polling keeps NAPI from completing.
+		 */
+		rtl_ack_events(tp, RxOverflow);
+
+		if (napi_complete_done(napi, work_done))
+			rtl_irq_enable(tp);
+	}
 
 	return work_done;
 }
