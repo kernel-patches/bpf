@@ -100,7 +100,7 @@ __description("No private stack, stack arguments")
 __success
 __load_if_JITed()
 __arch_x86_64
-__log_level(4) __msg("stack depth max 128")
+__log_level(4) __msg("stack depth max 144")
 __naked void no_private_stack_stack_args(void)
 {
 	asm volatile ("			\

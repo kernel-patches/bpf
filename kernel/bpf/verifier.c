@@ -5712,10 +5712,11 @@ struct bpf_subprog_call_depth_info {
 static int subprog_stack_size(struct bpf_verifier_env *env, int s)
 {
 	struct bpf_subprog_info *sub = &env->subprog_info[s];
+	int args = (sub->stack_arg_cnt - bpf_in_stack_arg_cnt(sub)) * BPF_REG_SIZE;
 
 	if (sub->priv_stack_mode == PRIV_STACK_ADAPTIVE)
-		return 0;
-	return round_up_stack_depth(env, sub->stack_depth);
+		return args;
+	return round_up_stack_depth(env, sub->stack_depth + args);
 }
 
 static void max_call_depth(struct bpf_subprog_call_depth_info *to,
@@ -5912,7 +5913,6 @@ static int check_call_depth(struct bpf_verifier_env *env, struct bpf_call_graph 
 					s, depth);
 				goto out;
 			}
-			continue;
 		}
 		depth = dinfo[s].depth + subprog_stack_size(env, s);
 		if (depth > env->max_stack_depth)
