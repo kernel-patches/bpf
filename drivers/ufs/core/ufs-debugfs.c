@@ -15,7 +15,10 @@ struct ufs_debugfs_attr {
 	const struct file_operations	*fops;
 };
 
-/* @file corresponds to a debugfs attribute in directory hba->debugfs_root. */
+/*
+ * @file corresponds to a debugfs attribute whose parent directory stores
+ * hba in i_private.
+ */
 static inline struct ufs_hba *hba_from_file(const struct file *file)
 {
 	return d_inode(file->f_path.dentry->d_parent)->i_private;
@@ -205,6 +208,229 @@ static const struct file_operations ufs_saved_err_fops = {
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
+
+#define UFS_PA_ERR_REC_READ_RETRIES	3
+
+struct ufs_pa_err_attr {
+	const char *name;
+	u32 mib_attr;
+};
+
+static int ufs_dme_err_to_errno(int err)
+{
+	if (err <= 0)
+		return err;
+
+	switch (err) {
+	case UIC_CMD_RESULT_INVALID_ATTR:
+		return -EOPNOTSUPP;
+	case UIC_CMD_RESULT_INVALID_ATTR_VALUE:
+		return -EINVAL;
+	case UIC_CMD_RESULT_READ_ONLY_ATTR:
+		return -EPERM;
+	case UIC_CMD_RESULT_BUSY:
+		return -EBUSY;
+	default:
+		return -EIO;
+	}
+}
+
+static int ufs_pa_err_read_rec_cnt(struct ufs_hba *hba, u8 peer, u64 *val)
+{
+	u32 hi_before, lo, hi_after;
+	int err, retry;
+
+	/*
+	 * MIPI UniPro v3.0 Section 5.6.7 defines PA_TFS_RecErrorCountH and
+	 * PA_TFS_RecErrorCountL as separate 32-bit MIB attributes without
+	 * latching the upper word on a low-word read. Sample hi-lo-hi to
+	 * avoid 32-bit rollover tearing.
+	 */
+	for (retry = 0; retry < UFS_PA_ERR_REC_READ_RETRIES; retry++) {
+		err = ufshcd_dme_get_attr(hba,
+					  UIC_ARG_MIB(PA_TFS_RECERRORCOUNTH),
+					  &hi_before, peer);
+		if (err)
+			return ufs_dme_err_to_errno(err);
+
+		err = ufshcd_dme_get_attr(hba,
+					  UIC_ARG_MIB(PA_TFS_RECERRORCOUNTL),
+					  &lo, peer);
+		if (err)
+			return ufs_dme_err_to_errno(err);
+
+		err = ufshcd_dme_get_attr(hba,
+					  UIC_ARG_MIB(PA_TFS_RECERRORCOUNTH),
+					  &hi_after, peer);
+		if (err)
+			return ufs_dme_err_to_errno(err);
+
+		if (hi_before == hi_after) {
+			*val = ((u64)hi_after << 32) | lo;
+			return 0;
+		}
+	}
+
+	return -EAGAIN;
+}
+
+static int ufs_pa_err_cnt_show(struct seq_file *s, void *data)
+{
+	const struct ufs_pa_err_attr *attr = s->private;
+	struct ufs_hba *hba = hba_from_file(s->file);
+	u8 peer = debugfs_get_aux_num(s->file);
+	int err;
+
+	if (!hba->ufs_device_wlun)
+		return -ENODEV;
+
+	err = ufs_debugfs_get_user_access(hba);
+	if (err)
+		return err;
+
+	if (hba->ufshcd_state != UFSHCD_STATE_OPERATIONAL) {
+		err = -EBUSY;
+		goto out;
+	}
+
+	if (attr->mib_attr == PA_TFS_RECERRORCOUNTL) {
+		u64 val;
+
+		err = ufs_pa_err_read_rec_cnt(hba, peer, &val);
+		if (!err)
+			seq_printf(s, "%llu\n", val);
+	} else {
+		u32 val;
+
+		err = ufshcd_dme_get_attr(hba, UIC_ARG_MIB(attr->mib_attr),
+					  &val, peer);
+		err = ufs_dme_err_to_errno(err);
+		if (!err)
+			seq_printf(s, "%u\n", val);
+	}
+
+out:
+	ufs_debugfs_put_user_access(hba);
+	return err;
+}
+
+static ssize_t ufs_pa_err_cnt_write(struct file *file, const char __user *buf,
+				    size_t count, loff_t *ppos)
+{
+	const struct ufs_pa_err_attr *attr = file->f_inode->i_private;
+	struct ufs_hba *hba = hba_from_file(file);
+	u8 peer = debugfs_get_aux_num(file);
+	unsigned int val;
+	int err;
+
+	if (!hba->ufs_device_wlun)
+		return -ENODEV;
+
+	err = kstrtouint_from_user(buf, count, 0, &val);
+	if (err)
+		return err;
+
+	if (val != 0)
+		return -EINVAL;
+
+	err = ufs_debugfs_get_user_access(hba);
+	if (err)
+		return err;
+
+	if (hba->ufshcd_state != UFSHCD_STATE_OPERATIONAL) {
+		err = -EBUSY;
+		goto out;
+	}
+
+	/*
+	 * Writing 0 resets the selected counter. For recovered_fec_symbols
+	 * (PA_TFS_RECERRORCOUNTL), setting the low word clears the entire
+	 * 64-bit PA_TFS_RecErrorCount counter per MIPI UniPro v3.0
+	 * Section 5.6.7.
+	 */
+	err = ufshcd_dme_set_attr(hba, UIC_ARG_MIB(attr->mib_attr),
+				  ATTR_SET_NOR, 0, peer);
+	err = ufs_dme_err_to_errno(err);
+
+out:
+	ufs_debugfs_put_user_access(hba);
+	return err ? err : count;
+}
+
+static int ufs_pa_err_cnt_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, ufs_pa_err_cnt_show, inode->i_private);
+}
+
+static const struct file_operations ufs_pa_err_cnt_fops = {
+	.owner		= THIS_MODULE,
+	.open		= ufs_pa_err_cnt_open,
+	.read		= seq_read,
+	.write		= ufs_pa_err_cnt_write,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static const struct ufs_pa_err_attr ufs_pa_err_attrs[] = {
+	{ "fec_err_cnt", PA_TFS_FECERRORCOUNT },
+	{ "crc_err_cnt", PA_TFS_CRCERRORCOUNT },
+	{ "format_err_cnt", PA_TFS_FORMATERRORCOUNT },
+	{ "recovered_fec_symbols", PA_TFS_RECERRORCOUNTL },
+	{ }
+};
+
+static enum ufs_unipro_ver ufs_get_unipro_ver(struct ufs_hba *hba, u8 peer)
+{
+	u32 attr = peer == DME_PEER ? PA_REMOTEVERINFO : PA_LOCALVERINFO;
+	u32 val;
+
+	/* PA_REMOTEVERINFO is a local MIB attribute cached at link startup. */
+	if (ufshcd_dme_get(hba, UIC_ARG_MIB(attr), &val))
+		return UFS_UNIPRO_VER_RESERVED;
+
+	return val & UFS_UNIPRO_VER_MASK;
+}
+
+static void ufs_debugfs_pa_err_create_dir(struct ufs_hba *hba,
+					  struct dentry *parent,
+					  const char *name, u8 peer)
+{
+	const struct ufs_pa_err_attr *pa_attr;
+	struct dentry *sub_dir;
+
+	sub_dir = debugfs_create_dir(name, parent);
+	if (IS_ERR_OR_NULL(sub_dir))
+		return;
+
+	d_inode(sub_dir)->i_private = hba;
+	for (pa_attr = ufs_pa_err_attrs; pa_attr->name; pa_attr++)
+		debugfs_create_file_aux_num(pa_attr->name, 0600, sub_dir,
+					    (void *)pa_attr, peer,
+					    &ufs_pa_err_cnt_fops);
+}
+
+static void ufs_debugfs_pa_err_init(struct ufs_hba *hba)
+{
+	bool host_sup, dev_sup;
+	struct dentry *pa_dir;
+
+	if (hba->quirks & UFSHCD_QUIRK_BROKEN_UIC_CMD)
+		return;
+
+	host_sup = ufs_get_unipro_ver(hba, DME_LOCAL) >= UFS_UNIPRO_VER_3_0;
+	dev_sup = ufs_get_unipro_ver(hba, DME_PEER) >= UFS_UNIPRO_VER_3_0;
+	if (!host_sup && !dev_sup)
+		return;
+
+	pa_dir = debugfs_create_dir("pa_err_stats", hba->debugfs_root);
+	if (IS_ERR_OR_NULL(pa_dir))
+		return;
+
+	if (host_sup)
+		ufs_debugfs_pa_err_create_dir(hba, pa_dir, "host", DME_LOCAL);
+	if (dev_sup)
+		ufs_debugfs_pa_err_create_dir(hba, pa_dir, "device", DME_PEER);
+}
 
 static const struct ufs_debugfs_attr ufs_attrs[] = {
 	{ "stats", 0400, &ufs_debugfs_stats_fops },
@@ -472,14 +698,17 @@ static const struct ufs_debugfs_attr ufs_tx_eqtr_attrs[] = {
 	{ }
 };
 
+void ufs_debugfs_ee_init(struct ufs_hba *hba)
+{
+	/* Set default exception event rate limit period to 20ms */
+	hba->debugfs_ee_rate_limit_ms = 20;
+	INIT_DELAYED_WORK(&hba->debugfs_ee_work, ufs_debugfs_restart_ee);
+}
+
 void ufs_debugfs_hba_init(struct ufs_hba *hba)
 {
 	const struct ufs_debugfs_attr *attr;
 	struct dentry *root;
-
-	/* Set default exception event rate limit period to 20ms */
-	hba->debugfs_ee_rate_limit_ms = 20;
-	INIT_DELAYED_WORK(&hba->debugfs_ee_work, ufs_debugfs_restart_ee);
 
 	root = debugfs_create_dir(dev_name(hba->dev), ufs_debugfs_root);
 	if (IS_ERR_OR_NULL(root))
@@ -493,6 +722,8 @@ void ufs_debugfs_hba_init(struct ufs_hba *hba)
 			    hba, &ee_usr_mask_fops);
 	debugfs_create_u32("exception_event_rate_limit_ms", 0600, hba->debugfs_root,
 			   &hba->debugfs_ee_rate_limit_ms);
+
+	ufs_debugfs_pa_err_init(hba);
 
 	if (!(hba->caps & UFSHCD_CAP_TX_EQUALIZATION))
 		return;
@@ -529,5 +760,6 @@ void ufs_debugfs_hba_init(struct ufs_hba *hba)
 void ufs_debugfs_hba_exit(struct ufs_hba *hba)
 {
 	debugfs_remove_recursive(hba->debugfs_root);
-	cancel_delayed_work_sync(&hba->debugfs_ee_work);
+	hba->debugfs_root = NULL;
+	disable_delayed_work_sync(&hba->debugfs_ee_work);
 }

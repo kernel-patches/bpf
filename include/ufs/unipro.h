@@ -200,6 +200,11 @@
 #define PA_PACPFRAMECOUNT	0x15C0
 #define PA_PACPERRORCOUNT	0x15C1
 #define PA_PHYTESTCONTROL	0x15C2
+#define PA_TFS_FECERRORCOUNT	0x15C3
+#define PA_TFS_CRCERRORCOUNT	0x15C4
+#define PA_TFS_FORMATERRORCOUNT	0x15C5
+#define PA_TFS_RECERRORCOUNTL	0x15C6
+#define PA_TFS_RECERRORCOUNTH	0x15C7
 #define PA_TXHSG4SYNCLENGTH	0x15D0
 #define PA_PEERRXHSG4ADAPTINITIAL		0x15D3
 #define PA_TXHSADAPTTYPE	0x15D4
@@ -391,7 +396,9 @@ enum ufs_unipro_ver {
 	UFS_UNIPRO_VER_1_6  = 3, /* UniPro version 1.6 */
 	UFS_UNIPRO_VER_1_61 = 4, /* UniPro version 1.61 */
 	UFS_UNIPRO_VER_1_8  = 5, /* UniPro version 1.8 */
-	UFS_UNIPRO_VER_MAX  = 6, /* UniPro unsupported version */
+	UFS_UNIPRO_VER_2_0  = 6, /* UniPro version 2.0 */
+	UFS_UNIPRO_VER_3_0  = 7, /* UniPro version 3.0 */
+	UFS_UNIPRO_VER_MAX  = 8, /* UniPro unsupported version */
 	/* UniPro version field mask in PA_LOCALVERINFO */
 	UFS_UNIPRO_VER_MASK = 0xF,
 };
