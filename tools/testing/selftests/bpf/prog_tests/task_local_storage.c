@@ -495,6 +495,65 @@ done:
 	uptr_map_failure__destroy(skel);
 }
 
+static long map_memlock(int map_fd)
+{
+	char path[64], line[128];
+	long memlock = -1;
+	FILE *f;
+
+	snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", map_fd);
+	f = fopen(path, "r");
+	if (!ASSERT_OK_PTR(f, "open_fdinfo"))
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		if (sscanf(line, "memlock:\t%ld", &memlock) == 1)
+			break;
+	}
+	fclose(f);
+	ASSERT_NEQ(memlock, -1, "parse_memlock");
+	return memlock;
+}
+
+static void test_memory_usage(void)
+{
+	struct task_local_storage_exit_creds *skel;
+	struct bpf_program *prog;
+	int map_fd, task_fd = -1;
+	long baseline;
+	u64 value = 12;
+
+	skel = task_local_storage_exit_creds__open();
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		return;
+
+	/* Just load the map */
+	bpf_object__for_each_program(prog, skel->obj) {
+		if (!ASSERT_OK(bpf_program__set_autoload(prog, false), "disable_autoload"))
+			goto out;
+	}
+
+	if (!ASSERT_OK(task_local_storage_exit_creds__load(skel), "skel_load"))
+		goto out;
+
+	map_fd = bpf_map__fd(skel->maps.task_storage);
+	baseline = map_memlock(map_fd);
+	if (!ASSERT_GE(baseline, 0, "baseline_greater_zero"))
+		goto out;
+
+	task_fd = sys_pidfd_open(getpid(), 0);
+	if (!ASSERT_OK_FD(task_fd, "task_fd"))
+		goto out;
+
+	if (!ASSERT_OK(bpf_map_update_elem(map_fd, &task_fd, &value, BPF_NOEXIST), "update_map"))
+		goto out;
+
+	ASSERT_GT(map_memlock(map_fd), baseline, "memory_increase");
+out:
+	if (task_fd >= 0)
+		close(task_fd);
+	task_local_storage_exit_creds__destroy(skel);
+}
+
 void test_task_local_storage(void)
 {
 	if (test__start_subtest("sys_enter_exit"))
@@ -521,5 +580,7 @@ void test_task_local_storage(void)
 		test_uptr_map_failure("empty_uptr_map", EINVAL);
 	if (test__start_subtest("uptr_map_failure_kstruct"))
 		test_uptr_map_failure("kstruct_uptr_map", EINVAL);
+	if (test__start_subtest("memory_usage"))
+		test_memory_usage();
 	RUN_TESTS(uptr_failure);
 }
