@@ -105,6 +105,12 @@ static bool excluded_by_name(const char *name)
 	return false;
 }
 
+/* bpf_*() and __bpf_*() */
+static bool excluded_by_prefix(const char *name, bool vmlinux)
+{
+	return vmlinux && !strncmp(name + strspn(name, "_"), "bpf_", 4);
+}
+
 /* Find kfuncs and helpers */
 static bool *find_bpf_funcs(const struct btf *btf)
 {
@@ -309,6 +315,8 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		if (!func || !strcmp(func->section, ".init.text"))
 			continue;
 		if (excluded_by_name(name))
+			continue;
+		if (excluded_by_prefix(name, !base))
 			continue;
 		nr_scanned++;
 		err = scan_func(scan, func, &values);
