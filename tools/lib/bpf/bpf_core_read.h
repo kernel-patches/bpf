@@ -283,6 +283,11 @@ enum bpf_enum_value_kind {
  *    64-bit value, if specified enum type and its enumerator value are
  *    present in target kernel's BTF;
  *    0, if no matching enum and/or enum value within that enum is found.
+ * If the target value does not fit in the type of the local enumerator, the
+ * instruction is poisoned, so the program is rejected if it is reachable.
+ * The local enumerator has type int if all values of the local enum fit in
+ * int. Otherwise, it has type unsigned int for a 4-byte enum, and long or
+ * unsigned long for an 8-byte enum, depending on whether the enum is signed.
  */
 #ifdef __clang__
 #define bpf_core_enum_value(enum_type, enum_value)			    \
