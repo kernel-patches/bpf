@@ -663,6 +663,114 @@ static void ip_tunnel_flags_test_run(struct kunit *test)
 	KUNIT_ASSERT_TRUE(test, __ipt_flag_op(bitmap_equal, exp, out));
 }
 
+/* netif_tx_stop_queue() and txq->trans_start */
+
+#include <linux/etherdevice.h>
+#include <linux/jiffies.h>
+#include <linux/netdevice.h>
+
+/* dev_watchdog() reports a timeout when a queue stays stopped for longer
+ * than watchdog_timeo after txq->trans_start. A trans_start value this far
+ * in the past is distinguishable from a fresh one.
+ */
+#define TXQ_TEST_OLD_DELTA	(10 * HZ)
+
+KUNIT_DEFINE_ACTION_WRAPPER(txq_test_free_netdev, free_netdev,
+			    struct net_device *);
+
+static struct netdev_queue *txq_test_alloc(struct kunit *test)
+{
+	struct net_device *dev;
+
+	dev = alloc_etherdev(0);
+	KUNIT_ASSERT_NOT_NULL(test, dev);
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, txq_test_free_netdev,
+						  dev));
+
+	return netdev_get_tx_queue(dev, 0);
+}
+
+static void txq_test_expect_fresh(struct kunit *test,
+				  struct netdev_queue *txq,
+				  unsigned long before)
+{
+	unsigned long stamp = READ_ONCE(txq->trans_start);
+
+	KUNIT_EXPECT_TRUE_MSG(test, time_in_range(stamp, before, jiffies),
+			      "trans_start=%lu not in [%lu, %lu]",
+			      stamp, before, jiffies);
+}
+
+/* A stop on a running queue records the stop time in trans_start */
+static void txq_stop_stamps_running_queue(struct kunit *test)
+{
+	struct netdev_queue *txq = txq_test_alloc(test);
+	unsigned long before;
+
+	WRITE_ONCE(txq->trans_start, jiffies - TXQ_TEST_OLD_DELTA);
+	before = jiffies;
+	netif_tx_stop_queue(txq);
+
+	KUNIT_EXPECT_TRUE(test, netif_tx_queue_stopped(txq));
+	txq_test_expect_fresh(test, txq, before);
+}
+
+/* A stop on a queue that is already stopped keeps the first stop time, so
+ * repeated stops from a driver hang check do not postpone dev_watchdog()
+ */
+static void txq_stop_keeps_stamp_stopped_queue(struct kunit *test)
+{
+	struct netdev_queue *txq = txq_test_alloc(test);
+	unsigned long old, stamp;
+
+	netif_tx_stop_queue(txq);
+	old = jiffies - TXQ_TEST_OLD_DELTA;
+	WRITE_ONCE(txq->trans_start, old);
+	netif_tx_stop_queue(txq);
+	stamp = READ_ONCE(txq->trans_start);
+
+	KUNIT_EXPECT_TRUE(test, netif_tx_queue_stopped(txq));
+	KUNIT_EXPECT_EQ_MSG(test, stamp, old,
+			    "second stop moved trans_start forward by %lu jiffies",
+			    stamp - old);
+}
+
+/* A stop after a restart records a new stop time */
+static void txq_stop_stamps_restarted_queue(struct kunit *test)
+{
+	struct netdev_queue *txq = txq_test_alloc(test);
+	unsigned long before;
+
+	netif_tx_stop_queue(txq);
+	netif_tx_start_queue(txq);
+	KUNIT_EXPECT_FALSE(test, netif_tx_queue_stopped(txq));
+
+	WRITE_ONCE(txq->trans_start, jiffies - TXQ_TEST_OLD_DELTA);
+	before = jiffies;
+	netif_tx_stop_queue(txq);
+
+	KUNIT_EXPECT_TRUE(test, netif_tx_queue_stopped(txq));
+	txq_test_expect_fresh(test, txq, before);
+}
+
+/* Only the driver XOFF bit decides whether the stop is a transition. A queue
+ * stopped by BQL (stack XOFF) gets a new stop time when the driver stops it.
+ */
+static void txq_stop_stamps_stack_stopped_queue(struct kunit *test)
+{
+	struct netdev_queue *txq = txq_test_alloc(test);
+	unsigned long before;
+
+	set_bit(__QUEUE_STATE_STACK_XOFF, &txq->state);
+	WRITE_ONCE(txq->trans_start, jiffies - TXQ_TEST_OLD_DELTA);
+	before = jiffies;
+	netif_tx_stop_queue(txq);
+
+	KUNIT_EXPECT_TRUE(test, netif_tx_queue_stopped(txq));
+	txq_test_expect_fresh(test, txq, before);
+}
+
 /* Netmem & SKB fragment refcounting */
 
 #include <linux/skbuff_ref.h>
@@ -1995,6 +2103,10 @@ static struct kunit_case net_test_cases[] = {
 	KUNIT_CASE(netmem_ref_test_tcp_devmem_recv),
 #endif
 #endif
+	KUNIT_CASE(txq_stop_stamps_running_queue),
+	KUNIT_CASE(txq_stop_keeps_stamp_stopped_queue),
+	KUNIT_CASE(txq_stop_stamps_restarted_queue),
+	KUNIT_CASE(txq_stop_stamps_stack_stopped_queue),
 	{ },
 };
 
