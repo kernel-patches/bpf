@@ -4432,7 +4432,7 @@ bool amdgpu_dm_crtc_complete_writeback(struct amdgpu_crtc *acrtc)
 	if (!pending)
 		return false;
 
-	drm_writeback_signal_completion(acrtc->wb_conn, 0);
+	drm_writeback_signal_completion(drm_writeback_to_connector(acrtc->wb_conn), 0);
 	drm_crtc_vblank_put(&acrtc->base);
 
 	return true;
