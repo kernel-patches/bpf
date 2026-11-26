@@ -1940,6 +1940,7 @@ static void ip6_tnl_dev_setup(struct net_device *dev)
 	dev->lltx = true;
 	dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
 	netif_keep_dst(dev);
+	netif_set_tso_max_size(dev, GSO_MAX_SIZE);
 
 	dev->features		|= IPXIPX_FEATURES;
 	dev->hw_features	|= IPXIPX_FEATURES;
