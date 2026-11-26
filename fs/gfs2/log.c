@@ -877,8 +877,10 @@ void gfs2_write_log_header(struct gfs2_sbd *sdp, struct gfs2_jdesc *jd,
 
 		extlen = 1;
 		ret = gfs2_get_extent(jd->jd_inode, lblock, &dblock, &extlen);
-		if (gfs2_assert_withdraw(sdp, ret == 0))
+		if (gfs2_assert_withdraw(sdp, ret == 0)) {
+			mempool_free(page, gfs2_page_pool);
 			return;
+		}
 	}
 	lh->lh_addr = cpu_to_be64(dblock);
 	lh->lh_jinode = cpu_to_be64(GFS2_I(jd->jd_inode)->i_no_addr);
