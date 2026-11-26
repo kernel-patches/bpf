@@ -53,11 +53,15 @@ void ptp_disable_all_events(struct ptp_clock *ptp)
 	unsigned int i;
 
 	mutex_lock(&ptp->pincfg_mux);
-	/* Disable any pins that may raise EXTTS events */
-	for (i = 0; i < info->n_pins; i++)
-		if (info->pin_config[i].func == PTP_PF_EXTTS)
-			ptp_disable_pinfunc(info, info->pin_config[i].func,
-					    info->pin_config[i].chan);
+	/* EXTTS requests do not require a pin assignment. */
+	for (i = 0; i < info->n_ext_ts; i++) {
+		struct ptp_clock_request req = {
+			.type = PTP_CLK_REQ_EXTTS,
+			.extts.index = i,
+		};
+
+		info->enable(info, &req, 0);
+	}
 
 	/* Disable the PPS event if the driver has PPS support */
 	if (info->pps) {
