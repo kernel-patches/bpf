@@ -266,13 +266,46 @@ static void set_protos(struct scan *scan, const struct image *img, const struct 
 	}
 }
 
-int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
+/*
+ * Mark the functions of IMG which are in PATH, the output of nm. The line of a
+ * symbol is "<address> <type> <name>". The other lines have fewer words.
+ */
+static bool *read_denied(const struct image *img, const char *path)
+{
+	bool *denied = calloc(img->nr_funcs, sizeof(*denied));
+	FILE *f = fopen(path, "r");
+	char line[1024], name[1024];
+
+	if (!denied || !f) {
+		fprintf(stderr, "FAILED: --fmodret_deny: cannot read %s\n", path);
+		free(denied);
+		denied = NULL;
+	}
+	while (denied && fgets(line, sizeof(line), f)) {
+		const struct image_func *func = NULL;
+
+		if (sscanf(line, "%*s %*s %1023s", name) == 1)
+			func = image_func(img, name);
+		if (func)
+			denied[func - img->funcs] = true;
+	}
+	if (denied && !feof(f)) {
+		fprintf(stderr, "FAILED: --fmodret_deny: cannot read %s\n", path);
+		free(denied);
+		denied = NULL;
+	}
+	if (f)
+		fclose(f);
+	return denied;
+}
+
+int fmodret_tag(Elf *elf, struct btf *btf, const char *deny_path, int verbose)
 {
 	size_t nr_funcs = 0, nr_scanned = 0, nr_undecodable = 0, nr_tags = 0;
 	const struct btf *base = btf__base_btf(btf);
 	__u32 id, nr_types = btf__type_cnt(btf);
 	struct scan *scan = NULL;
-	bool *bpf_funcs = NULL;
+	bool *bpf_funcs = NULL, *denied = NULL;
 	struct image img;
 	char counts[200];
 	int err;
@@ -289,6 +322,11 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 	bpf_funcs = find_bpf_funcs(btf);
 	if (!bpf_funcs)
 		goto out;
+	if (deny_path) {
+		denied = read_denied(&img, deny_path);
+		if (!denied)
+			goto out;
+	}
 
 	for (id = base ? btf__type_cnt(base) : 1, err = 0; id < nr_types && err >= 0; id++) {
 		const struct btf_type *t = btf__type_by_id(btf, id);
@@ -317,6 +355,9 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		if (excluded_by_name(name))
 			continue;
 		if (excluded_by_prefix(name, !base))
+			continue;
+		/* Skip the code of kernel/bpf and of the JIT */
+		if (denied && denied[func - img.funcs])
 			continue;
 		nr_scanned++;
 		err = scan_func(scan, func, &values);
@@ -350,6 +391,7 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		printf("  FMODRET %s\n", counts);
 	}
 out:
+	free(denied);
 	free(bpf_funcs);
 	scan_close(scan);
 	image_close(&img);
