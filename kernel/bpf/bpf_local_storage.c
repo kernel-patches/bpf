@@ -792,11 +792,19 @@ u32 bpf_local_storage_destroy(struct bpf_local_storage *local_storage)
 u64 bpf_local_storage_map_mem_usage(const struct bpf_map *map)
 {
 	struct bpf_local_storage_map *smap = (struct bpf_local_storage_map *)map;
-	u64 usage = sizeof(*smap);
+	struct bpf_local_storage_elem *selem;
+	u64 nbuckets = 1ULL << smap->bucket_log;
+	u64 nr_elem = 0;
+	u64 i;
 
-	/* The dynamically callocated selems are not counted currently. */
-	usage += sizeof(*smap->buckets) * (1ULL << smap->bucket_log);
-	return usage;
+	for (i = 0; i < nbuckets; i++) {
+		rcu_read_lock();
+		hlist_for_each_entry_rcu(selem, &smap->buckets[i].list, map_node)
+			nr_elem++;
+		rcu_read_unlock();
+	}
+
+	return sizeof(*smap) + nbuckets * sizeof(*smap->buckets) + nr_elem * smap->elem_size;
 }
 
 struct bpf_map *
