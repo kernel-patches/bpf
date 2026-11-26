@@ -61,7 +61,7 @@ int amdgpu_dm_wb_encoder_atomic_check(struct drm_encoder *encoder,
 int amdgpu_dm_wb_connector_get_modes(struct drm_connector *connector);
 int amdgpu_dm_wb_prepare_job(struct drm_connector *wb_connector,
 			     struct drm_writeback_job *job);
-void amdgpu_dm_wb_cleanup_job(struct drm_writeback_connector *connector,
+void amdgpu_dm_wb_cleanup_job(struct drm_connector *connector,
 			      struct drm_writeback_job *job);
 void amdgpu_dm_wb_kunit_set_ops(const struct amdgpu_dm_wb_kunit_ops *ops);
 #endif
