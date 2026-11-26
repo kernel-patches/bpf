@@ -56,6 +56,84 @@ static bool fits_trampoline(const struct btf *btf, const struct btf_type *func)
 	return btf_vlen(t) <= 12;
 }
 
+static bool is_bpf_type(const struct btf *btf, __u32 type)
+{
+	while (type) {
+		const struct btf_type *t = btf__type_by_id(btf, type);
+		const char *name = btf__name_by_offset(btf, t->name_off);
+
+		if (!strncmp(name, "bpf_", 4) || !strcmp(name, "btf") || !strncmp(name, "btf_", 4))
+			return true;
+		if (btf_is_array(t))
+			type = btf_array(t)->type;
+		else if (btf_is_ptr(t) || btf_is_mod(t) || btf_is_typedef(t))
+			type = t->type;
+		else
+			return false;
+	}
+	return false;
+}
+
+static bool has_bpf_types(const struct btf *btf, const struct btf_type *func)
+{
+	const struct btf_type *proto = btf__type_by_id(btf, func->type);
+	unsigned int i;
+
+	if (is_bpf_type(btf, proto->type))
+		return true;
+	for (i = 0; i < btf_vlen(proto); i++)
+		if (is_bpf_type(btf, btf_params(proto)[i].type))
+			return true;
+	return false;
+}
+
+static bool excluded_by_name(const char *name)
+{
+	static const char *const names[] = {
+		"copy_from_kernel_nofault",
+		"copy_to_kernel_nofault",
+		"aarch64_insn_read",
+		"aarch64_insn_write",
+		"aarch64_insn_patch_text_nosync",
+		"tracepoint_probe_unregister",
+	};
+	unsigned int i;
+
+	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+		if (!strcmp(name, names[i]))
+			return true;
+	return false;
+}
+
+/* bpf_*() and __bpf_*() */
+static bool excluded_by_prefix(const char *name, bool vmlinux)
+{
+	return vmlinux && !strncmp(name + strspn(name, "_"), "bpf_", 4);
+}
+
+/* Find kfuncs and helpers */
+static bool *find_bpf_funcs(const struct btf *btf)
+{
+	const struct btf *base = btf__base_btf(btf);
+	__u32 id, nr_types = btf__type_cnt(btf);
+	bool *funcs = calloc(nr_types, sizeof(*funcs));
+
+	for (id = base ? btf__type_cnt(base) : 1; funcs && id < nr_types; id++) {
+		const struct btf_type *t = btf__type_by_id(btf, id);
+		const char *name = btf__name_by_offset(btf, t->name_off);
+
+		if (btf_is_decl_tag(t) && !strcmp(name, "bpf_kfunc"))
+			funcs[t->type] = true;
+		if (btf_is_typedef(t) && !strncmp(name, "btf_", 4) && strncmp(name, "btf_trace_", 10)) {
+			int func = btf__find_by_name_kind(btf, name + 4, BTF_KIND_FUNC);
+
+			if (func > 0)
+				funcs[func] = true;
+		}
+	}
+	return funcs;
+}
+
 /*
  * The codes of include/linux/errno.h, 512 and up, never reach user space. They,
  * -EAGAIN, -EMSGSIZE and -EINPROGRESS tell the caller to retry, to go on or to
@@ -188,12 +266,46 @@ static void set_protos(struct scan *scan, const struct image *img, const struct 
 	}
 }
 
-int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
+/*
+ * Mark the functions of IMG which are in PATH, the output of nm. The line of a
+ * symbol is "<address> <type> <name>". The other lines have fewer words.
+ */
+static bool *read_denied(const struct image *img, const char *path)
+{
+	bool *denied = calloc(img->nr_funcs, sizeof(*denied));
+	FILE *f = fopen(path, "r");
+	char line[1024], name[1024];
+
+	if (!denied || !f) {
+		fprintf(stderr, "FAILED: --fmodret_deny: cannot read %s\n", path);
+		free(denied);
+		denied = NULL;
+	}
+	while (denied && fgets(line, sizeof(line), f)) {
+		const struct image_func *func = NULL;
+
+		if (sscanf(line, "%*s %*s %1023s", name) == 1)
+			func = image_func(img, name);
+		if (func)
+			denied[func - img->funcs] = true;
+	}
+	if (denied && !feof(f)) {
+		fprintf(stderr, "FAILED: --fmodret_deny: cannot read %s\n", path);
+		free(denied);
+		denied = NULL;
+	}
+	if (f)
+		fclose(f);
+	return denied;
+}
+
+int fmodret_tag(Elf *elf, struct btf *btf, const char *deny_path, int verbose)
 {
 	size_t nr_funcs = 0, nr_scanned = 0, nr_undecodable = 0, nr_tags = 0;
 	const struct btf *base = btf__base_btf(btf);
 	__u32 id, nr_types = btf__type_cnt(btf);
 	struct scan *scan = NULL;
+	bool *bpf_funcs = NULL, *denied = NULL;
 	struct image img;
 	char counts[200];
 	int err;
@@ -206,6 +318,15 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 	if (!scan)
 		goto out;
 	set_protos(scan, &img, btf);
+	err = -ENOMEM;
+	bpf_funcs = find_bpf_funcs(btf);
+	if (!bpf_funcs)
+		goto out;
+	if (deny_path) {
+		denied = read_denied(&img, deny_path);
+		if (!denied)
+			goto out;
+	}
 
 	for (id = base ? btf__type_cnt(base) : 1, err = 0; id < nr_types && err >= 0; id++) {
 		const struct btf_type *t = btf__type_by_id(btf, id);
@@ -220,10 +341,23 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		size = int_return_size(btf, t);
 		if ((size != 4 && size != 8) || !fits_trampoline(btf, t))
 			continue;
+		/* Skip functions which take or return BPF objects */
+		if (has_bpf_types(btf, t))
+			continue;
+		/* Skip kfuncs and helpers which escaped the previous check */
+		if (bpf_funcs[id])
+			continue;
 		/* Init code is gone before a program can attach */
 		name = btf__name_by_offset(btf, t->name_off);
 		func = image_func(&img, name);
 		if (!func || !strcmp(func->section, ".init.text"))
+			continue;
+		if (excluded_by_name(name))
+			continue;
+		if (excluded_by_prefix(name, !base))
+			continue;
+		/* Skip the code of kernel/bpf and of the JIT */
+		if (denied && denied[func - img.funcs])
 			continue;
 		nr_scanned++;
 		err = scan_func(scan, func, &values);
@@ -257,6 +391,8 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		printf("  FMODRET %s\n", counts);
 	}
 out:
+	free(denied);
+	free(bpf_funcs);
 	scan_close(scan);
 	image_close(&img);
 	return err < 0 ? err : 0;

@@ -2104,6 +2104,7 @@ int main(int argc, const char **argv)
 	bool fatal_warnings = false;
 	bool resolve_btfids = true;
 	bool fmodret_scan = false;
+	const char *fmodret_deny = NULL;
 	char out_path[PATH_MAX];
 
 	struct option btfid_options[] = {
@@ -2121,6 +2122,8 @@ int main(int argc, const char **argv)
 			    "extract location BTF into a .BTF.inline file"),
 		OPT_BOOLEAN(0, "fmodret_scan", &fmodret_scan,
 			    "tag the functions which return errors as fmod_ret targets"),
+		OPT_STRING(0, "fmodret_deny", &fmodret_deny, "file",
+			   "output of nm with the functions which get no tag"),
 		OPT_CALLBACK(0, "btf_link", &btf_links, "section:module:btf-file",
 			     "patch a BTF link with --patch_btfids", parse_btf_link),
 		OPT_STRING(0, "patch_btfids", &btfids_path, "file",
@@ -2182,7 +2185,7 @@ int main(int argc, const char **argv)
 	if (btf2btf(&obj))
 		goto out;
 
-	if (fmodret_scan && fmodret_tag(obj.efile.elf, obj.btf, verbose))
+	if (fmodret_scan && fmodret_tag(obj.efile.elf, obj.btf, fmodret_deny, verbose))
 		goto out;
 
 	if (finalize_btf(&obj))

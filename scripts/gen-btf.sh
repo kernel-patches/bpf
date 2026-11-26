@@ -75,8 +75,17 @@ gen_btf_data()
 		--btf_encode_detached=${btf1}		\
 		"${ELF_FILE}"
 
+	# The code of BPF itself is not a target of fmod_ret
+	fmodret_deny=
+	if [ -z "${BTF_BASE}" ] && is_enabled CONFIG_BPF_FMODRET_SCAN; then
+		fmodret_deny="${ELF_FILE}.fmodret_deny"
+		${NM} --defined-only ${objtree}/kernel/bpf/built-in.a	\
+			${objtree}/arch/${SRCARCH}/net/built-in.a > ${fmodret_deny}
+	fi
+
 	${RESOLVE_BTFIDS} ${RESOLVE_BTFIDS_FLAGS}	\
 		${BTF_BASE:+--btf_base ${BTF_BASE}}	\
+		${fmodret_deny:+--fmodret_deny ${fmodret_deny}}	\
 		${inline}				\
 		--btf ${btf1} "${ELF_FILE}"
 }
@@ -148,6 +157,7 @@ cleanup()
 	rm -f "${ELF_FILE}.BTF"
 	rm -f "${ELF_FILE}.BTF.inline"
 	rm -f "${ELF_FILE}.BTF.inline.link"
+	rm -f "${ELF_FILE}.fmodret_deny"
 	if [ "${BTFGEN_MODE}" = "module" ]; then
 		rm -f "${ELF_FILE}.BTF.base"
 		rm -f "${ELF_FILE}.BTF_ids"
