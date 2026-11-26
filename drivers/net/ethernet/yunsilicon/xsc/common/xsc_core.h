@@ -279,6 +279,15 @@ void xsc_irq_event_register(struct xsc_core_device *xdev,
 			    void (*handler)(void *xdev));
 void xsc_irq_event_unregister(struct xsc_core_device *xdev);
 
+void xsc_core_fill_page_frag_array(struct xsc_frag_buf *buf,
+				   __be64 *pas, unsigned int npages);
+int xsc_core_frag_buf_alloc_node(struct xsc_core_device *xdev,
+				 unsigned long size,
+				 struct xsc_frag_buf *buf,
+				 int node);
+void xsc_core_frag_buf_free(struct xsc_core_device *xdev,
+			    struct xsc_frag_buf *buf);
+
 static inline void *xsc_buf_offset(struct xsc_buf *buf, unsigned long offset)
 {
 	if (likely(buf->nbufs == 1))
