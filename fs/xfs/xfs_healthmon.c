@@ -1061,7 +1061,7 @@ xfs_healthmon_validate(
 		return false;
 	if (hmo->format != XFS_HEALTH_MONITOR_FMT_V0)
 		return false;
-	if (memchr_inv(&hmo->pad, 0, sizeof(hmo->pad)))
+	if (memchr_inv(hmo->pad, 0, sizeof(hmo->pad)))
 		return false;
 	return true;
 }
