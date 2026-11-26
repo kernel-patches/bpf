@@ -96,8 +96,9 @@ static const char *drm_writeback_fence_get_driver_name(struct dma_fence *fence)
 {
 	struct drm_writeback_connector *wb_connector =
 		fence_to_wb_connector(fence);
+	struct drm_connector *connector = drm_writeback_to_connector(wb_connector);
 
-	return wb_connector->base.dev->driver->name;
+	return connector->dev->driver->name;
 }
 
 static const char *
@@ -177,7 +178,7 @@ static int __drm_writeback_connector_init(struct drm_device *dev,
 					  struct drm_encoder *enc, const u32 *formats,
 					  int n_formats)
 {
-	struct drm_connector *connector = &wb_connector->base;
+	struct drm_connector *connector = drm_writeback_to_connector(wb_connector);
 	struct drm_mode_config *config = &dev->mode_config;
 	struct drm_property_blob *blob;
 	int ret = create_writeback_properties(dev);
@@ -255,7 +256,7 @@ int drm_writeback_connector_init(struct drm_device *dev,
 				 struct drm_encoder *enc,
 				 const u32 *formats, int n_formats)
 {
-	struct drm_connector *connector = &wb_connector->base;
+	struct drm_connector *connector = drm_writeback_to_connector(wb_connector);
 	int ret;
 
 	ret = drm_connector_init(dev, connector, con_funcs,
@@ -285,7 +286,7 @@ EXPORT_SYMBOL(drm_writeback_connector_init);
 void drm_writeback_connector_cleanup(struct drm_connector *connector)
 {
 	struct drm_writeback_connector *wb_connector =
-		drm_connector_to_writeback(connector);
+		&connector->writeback;
 	struct drm_writeback_job *pos, *n;
 	unsigned long flags;
 	LIST_HEAD(jobs);
@@ -333,7 +334,7 @@ int drmm_writeback_connector_init(struct drm_device *dev,
 				  struct drm_encoder *enc,
 				  const u32 *formats, int n_formats)
 {
-	struct drm_connector *connector = &wb_connector->base;
+	struct drm_connector *connector = drm_writeback_to_connector(wb_connector);
 	int ret;
 
 	ret = drmm_connector_init(dev, connector, con_funcs,
@@ -357,7 +358,7 @@ int drm_writeback_set_fb(struct drm_connector_state *conn_state,
 			return -ENOMEM;
 
 		conn_state->writeback_job->connector =
-			drm_connector_to_writeback(conn_state->connector);
+			&conn_state->connector->writeback;
 	}
 
 	drm_framebuffer_assign(&conn_state->writeback_job->fb, fb);
@@ -366,13 +367,14 @@ int drm_writeback_set_fb(struct drm_connector_state *conn_state,
 
 int drm_writeback_prepare_job(struct drm_writeback_job *job)
 {
-	struct drm_writeback_connector *connector = job->connector;
+	struct drm_writeback_connector *wb_connector = job->connector;
+	struct drm_connector *connector = drm_writeback_to_connector(wb_connector);
 	const struct drm_connector_helper_funcs *funcs =
-		connector->base.helper_private;
+		connector->helper_private;
 	int ret;
 
 	if (funcs->prepare_writeback_job) {
-		ret = funcs->prepare_writeback_job(connector, job);
+		ret = funcs->prepare_writeback_job(wb_connector, job);
 		if (ret < 0)
 			return ret;
 	}
@@ -418,12 +420,13 @@ EXPORT_SYMBOL(drm_writeback_queue_job);
 
 void drm_writeback_cleanup_job(struct drm_writeback_job *job)
 {
-	struct drm_writeback_connector *connector = job->connector;
+	struct drm_writeback_connector *wb_connector = job->connector;
+	struct drm_connector *connector	= drm_writeback_to_connector(wb_connector);
 	const struct drm_connector_helper_funcs *funcs =
-		connector->base.helper_private;
+		connector->helper_private;
 
 	if (job->prepared && funcs->cleanup_writeback_job)
-		funcs->cleanup_writeback_job(connector, job);
+		funcs->cleanup_writeback_job(wb_connector, job);
 
 	if (job->fb)
 		drm_framebuffer_put(job->fb);
@@ -505,8 +508,9 @@ struct dma_fence *
 drm_writeback_get_out_fence(struct drm_writeback_connector *wb_connector)
 {
 	struct dma_fence *fence;
+	struct drm_connector *connector = drm_writeback_to_connector(wb_connector);
 
-	if (WARN_ON(wb_connector->base.connector_type !=
+	if (WARN_ON(connector->connector_type !=
 		    DRM_MODE_CONNECTOR_WRITEBACK))
 		return NULL;
 

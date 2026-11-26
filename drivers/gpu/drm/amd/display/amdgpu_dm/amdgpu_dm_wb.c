@@ -260,9 +260,9 @@ int amdgpu_dm_wb_connector_init(struct amdgpu_display_manager *dm,
 	if (res)
 		return res;
 
-	drm_connector_helper_add(&wbcon->base.base, &amdgpu_dm_wb_conn_helper_funcs);
+	drm_connector_helper_add(&wbcon->base, &amdgpu_dm_wb_conn_helper_funcs);
 
-	res = drm_writeback_connector_init(&dm->adev->ddev, &wbcon->base,
+	res = drm_writeback_connector_init(&dm->adev->ddev, &wbcon->base.writeback,
 					   &amdgpu_dm_wb_connector_funcs,
 					   &wbcon->encoder,
 					   amdgpu_dm_wb_formats,
@@ -275,7 +275,7 @@ int amdgpu_dm_wb_connector_init(struct amdgpu_display_manager *dm,
 	 * Some of the properties below require access to state, like bpc.
 	 * Allocate some default initial connector state with our reset helper.
 	 */
-	connector = &wbcon->base.base;
+	connector = &wbcon->base;
 	if (connector->funcs->atomic_create_state) {
 		struct drm_connector_state *conn_state;
 

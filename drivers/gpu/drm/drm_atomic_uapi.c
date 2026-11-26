@@ -1520,7 +1520,7 @@ static int prepare_signaling(struct drm_device *dev,
 		f[*num_fences].out_fence_ptr = fence_ptr;
 		*fence_state = f;
 
-		wb_conn = drm_connector_to_writeback(conn);
+		wb_conn = &conn->writeback;
 		fence = drm_writeback_get_out_fence(wb_conn);
 		if (!fence)
 			return -ENOMEM;
