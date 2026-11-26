@@ -207,7 +207,8 @@ static __naked __noinline __used int recurse(void)
 
 SEC("tc")
 __description("barrier: a speculative state holds more in a recursion")
-__success SPECULATES __success_unpriv
+__success SPECULATES
+__failure_unpriv __msg_unpriv("recursive recurse() is allowed only to CAP_PERFMON")
 __naked void recursion(void)
 {
 	ASM(START
@@ -237,12 +238,8 @@ static __naked __noinline __used int recurse_in_frames(void)
 
 SEC("tc")
 __description("barrier: at the call of a recursion in the frames of the callers")
-__success SPECULATES __success_unpriv
-#ifdef SPEC_V1
-__xlated_unpriv("r1 += -1")
-__xlated_unpriv("nospec")
-__xlated_unpriv("call pc-")
-#endif
+__success SPECULATES
+__failure_unpriv __msg_unpriv("recursive recurse_in_frames() is allowed only to CAP_PERFMON")
 __naked void recursion_in_frames(void)
 {
 	ASM("call bpf_rcu_read_lock;"
