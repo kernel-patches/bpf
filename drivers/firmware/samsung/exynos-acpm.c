@@ -817,8 +817,8 @@ static struct acpm_handle *acpm_get_by_node(struct device *dev,
 		dev_err(&pdev->dev,
 			"Failed to create device link to consumer %s.\n",
 			dev_name(dev));
-		platform_device_put(pdev);
 		module_put(pdev->dev.driver->owner);
+		platform_device_put(pdev);
 		return ERR_PTR(-EINVAL);
 	}
 
