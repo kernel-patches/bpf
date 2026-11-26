@@ -750,6 +750,21 @@ static void kcm_push(struct kcm_sock *kcm)
 		kcm_write_msgs(kcm);
 }
 
+static unsigned int kcm_skb_frags_len(const struct sk_buff *skb)
+{
+	const struct sk_buff *frag;
+	unsigned int len = 0;
+	int i;
+
+	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++)
+		len += skb_frag_size(&skb_shinfo(skb)->frags[i]);
+
+	skb_walk_frags(skb, frag)
+		len += kcm_skb_frags_len(frag);
+
+	return len;
+}
+
 static int kcm_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 {
 	struct sock *sk = sock->sk;
@@ -771,10 +786,23 @@ static int kcm_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 		goto out_error;
 
 	if (kcm->seq_skb) {
+		unsigned int queued;
+		size_t sndbuf = READ_ONCE(sk->sk_sndbuf);
+
 		/* Previously opened message */
 		head = kcm->seq_skb;
 		skb = kcm_tx_msg(head)->last_skb;
+		queued = kcm_skb_frags_len(head);
+		if (queued > sndbuf || msg_data_left(msg) > sndbuf - queued) {
+			err = -EMSGSIZE;
+			goto out_error;
+		}
 		goto start;
+	}
+	/* A message larger than sndbuf can never be completed. */
+	if (msg_data_left(msg) > sk->sk_sndbuf) {
+		err = -EMSGSIZE;
+		goto out_error;
 	}
 
 	/* Call the sk_stream functions to manage the sndbuf mem. */
@@ -811,6 +839,10 @@ start:
 		bool merge = true;
 		int i = skb_shinfo(skb)->nr_frags;
 		struct page_frag *pfrag = sk_page_frag(sk);
+		int space = sk_stream_wspace(sk);
+
+		if (space <= 0)
+			goto wait_for_memory;
 
 		if (!sk_page_frag_refill(sk, pfrag))
 			goto wait_for_memory;
@@ -838,7 +870,7 @@ start:
 		}
 
 		if (msg->msg_flags & MSG_SPLICE_PAGES) {
-			copy = msg_data_left(msg);
+			copy = min_t(size_t, msg_data_left(msg), space);
 			if (!sk_wmem_schedule(sk, copy))
 				goto wait_for_memory;
 
@@ -857,8 +889,9 @@ start:
 			if (head != skb)
 				head->truesize += copy;
 		} else {
-			copy = min_t(int, msg_data_left(msg),
+			copy = min_t(size_t, msg_data_left(msg),
 				     pfrag->size - pfrag->offset);
+			copy = min_t(size_t, copy, space);
 			if (!sk_wmem_schedule(sk, copy))
 				goto wait_for_memory;
 
@@ -964,6 +997,12 @@ out_error:
 		if (head != kcm->seq_skb)
 			kfree_skb(head);
 	} else {
+		if (head) {
+			int queued = kcm_skb_frags_len(head);
+
+			sk_wmem_queued_add(sk, -queued);
+			sk_mem_uncharge(sk, queued);
+		}
 		kfree_skb(head);
 		kcm->seq_skb = NULL;
 	}
