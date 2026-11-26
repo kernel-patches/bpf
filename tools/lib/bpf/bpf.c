@@ -1287,6 +1287,8 @@ int bpf_btf_get_fd_by_id_opts(__u32 id,
 	attr.btf_id = id;
 	attr.open_flags = OPTS_GET(opts, open_flags, 0);
 	attr.fd_by_id_token_fd = OPTS_GET(opts, token_fd, 0);
+	if (attr.fd_by_id_token_fd)
+		attr.open_flags |= BPF_F_TOKEN_FD;
 
 	fd = sys_bpf_fd(BPF_BTF_GET_FD_BY_ID, &attr, attr_sz);
 	return libbpf_err_errno(fd);
