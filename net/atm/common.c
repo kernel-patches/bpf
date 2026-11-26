@@ -184,7 +184,7 @@ static void vcc_destroy_socket(struct sock *sk)
 		kfree_skb(skb);
 	}
 
-	if (vcc->dev && vcc->dev->ops->owner) {
+	if (vcc->dev) {
 		module_put(vcc->dev->ops->owner);
 		atm_dev_put(vcc->dev);
 	}
