@@ -796,7 +796,7 @@ int parse_sec_desc(const struct mnt_idmap *idmap, struct smb_ntsd *pntsd,
 	if (sd->dacl == KSMBD_ACL_ABSENT) {
 		ksmbd_debug(SMB, "DACL_PRESENT in DACL type is not set\n");
 		*psd = no_free_ptr(sd);
-		return rc;
+		return 0;
 	}
 
 	/* The stored SD keeps only the Control bits set below and no SACL */
