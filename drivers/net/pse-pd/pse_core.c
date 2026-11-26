@@ -1291,9 +1291,6 @@ static int pse_set_config_isr(struct pse_controller_dev *pcdev, int id,
 {
 	int ret = 0;
 
-	if (notifs & PSE_BUDGET_EVAL_STRAT_DYNAMIC)
-		return 0;
-
 	if ((notifs & ETHTOOL_C33_PSE_EVENT_DISCONNECTION) &&
 	    ((notifs & ETHTOOL_C33_PSE_EVENT_DETECTION) ||
 	     (notifs & ETHTOOL_C33_PSE_EVENT_CLASSIFICATION))) {
