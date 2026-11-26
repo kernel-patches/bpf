@@ -888,6 +888,11 @@ enum xe_ras_recovery_action xe_ras_process_errors(struct xe_device *xe)
 			case XE_RAS_COMP_DEVICE_MEMORY:
 				action = handle_device_memory_errors(xe, arr);
 				break;
+			case XE_RAS_COMP_FABRIC:
+				xe_log_comp(xe, ras_sev_to_cper_sev(severity), FABRIC,
+					    &arr->counter, sizeof(arr->counter),
+					    "error detected\n");
+				fallthrough;
 			default:
 				/* For any other component, reset */
 				action = XE_RAS_RECOVERY_ACTION_RESET;
