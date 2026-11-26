@@ -52,7 +52,8 @@ static void nft_exthdr_ipv6_eval(const struct nft_expr *expr,
 	unsigned int offset = 0;
 	int err;
 
-	if (pkt->skb->protocol != htons(ETH_P_IPV6))
+	if (pkt->skb->protocol != htons(ETH_P_IPV6) ||
+	    !pskb_network_may_pull(pkt->skb, sizeof(struct ipv6hdr)))
 		goto err;
 
 	err = ipv6_find_hdr(pkt->skb, &offset, priv->type, NULL, NULL);
