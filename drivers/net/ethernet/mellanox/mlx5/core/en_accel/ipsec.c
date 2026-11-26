@@ -42,6 +42,7 @@
 #include "ipsec.h"
 #include "ipsec_rxtx.h"
 #include "en_rep.h"
+#include "lib/eq.h"
 
 #define MLX5_IPSEC_RESCHED msecs_to_jiffies(1000)
 #define MLX5E_IPSEC_TUNNEL_SA XA_MARK_1
@@ -869,6 +870,8 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 	if (err)
 		goto err_hw_ctx;
 
+	INIT_WORK(&sa_entry->event_work, mlx5e_ipsec_handle_event);
+
 	/* We use *_bh() variant because xfrm_timer_handler(), which runs
 	 * in softirq context, can reach our state delete logic and we need
 	 * xa_erase_bh() there.
@@ -944,6 +947,9 @@ static void mlx5e_xfrm_free_state(struct net_device *dev, struct xfrm_state *x)
 	if (x->xso.flags & XFRM_DEV_OFFLOAD_FLAG_ACQ)
 		goto sa_entry_free;
 
+	mlx5_eq_synchronize_async_irq(ipsec->mdev);
+	cancel_work_sync(&sa_entry->event_work);
+
 	if (sa_entry->work)
 		cancel_work_sync(&sa_entry->work->work);
 
@@ -1002,10 +1008,13 @@ static int mlx5e_ipsec_netevent_event(struct notifier_block *nb,
 
 void mlx5e_ipsec_init(struct mlx5e_priv *priv)
 {
+	u32 caps = mlx5_ipsec_device_caps(priv->mdev);
+	bool pkt_offload = caps & MLX5_IPSEC_CAP_PACKET_OFFLOAD;
+	bool tunnel = caps & MLX5_IPSEC_CAP_TUNNEL;
 	struct mlx5e_ipsec *ipsec;
 	int ret = -ENOMEM;
 
-	if (!mlx5_ipsec_device_caps(priv->mdev)) {
+	if (!caps) {
 		netdev_dbg(priv->netdev, "Not an IPSec offload device\n");
 		return;
 	}
@@ -1022,18 +1031,22 @@ void mlx5e_ipsec_init(struct mlx5e_priv *priv)
 	if (!ipsec->wq)
 		goto err_wq;
 
-	if (mlx5_ipsec_device_caps(priv->mdev) &
-	    MLX5_IPSEC_CAP_PACKET_OFFLOAD) {
+	if (pkt_offload) {
 		ret = mlx5e_ipsec_aso_init(ipsec);
 		if (ret)
 			goto err_aso;
+
+		ipsec->nb.notifier_call = mlx5e_ipsec_event;
+		ret = mlx5_notifier_register(priv->mdev, &ipsec->nb);
+		if (ret)
+			goto clear_aso;
 	}
 
-	if (mlx5_ipsec_device_caps(priv->mdev) & MLX5_IPSEC_CAP_TUNNEL) {
+	if (tunnel) {
 		ipsec->netevent_nb.notifier_call = mlx5e_ipsec_netevent_event;
 		ret = register_netevent_notifier(&ipsec->netevent_nb);
 		if (ret)
-			goto clear_aso;
+			goto err_notifier;
 	}
 
 	ipsec->is_uplink_rep = mlx5e_is_uplink_rep(priv);
@@ -1047,10 +1060,13 @@ void mlx5e_ipsec_init(struct mlx5e_priv *priv)
 	return;
 
 err_fs_init:
-	if (mlx5_ipsec_device_caps(priv->mdev) & MLX5_IPSEC_CAP_TUNNEL)
+	if (tunnel)
 		unregister_netevent_notifier(&ipsec->netevent_nb);
+err_notifier:
+	if (pkt_offload)
+		mlx5_notifier_unregister(priv->mdev, &ipsec->nb);
 clear_aso:
-	if (mlx5_ipsec_device_caps(priv->mdev) & MLX5_IPSEC_CAP_PACKET_OFFLOAD)
+	if (pkt_offload)
 		mlx5e_ipsec_aso_cleanup(ipsec);
 err_aso:
 	destroy_workqueue(ipsec->wq);
@@ -1073,8 +1089,10 @@ void mlx5e_ipsec_cleanup(struct mlx5e_priv *priv)
 		ipsec->netevent_nb.notifier_call = NULL;
 	}
 	if (ipsec->aso)
-		mlx5e_ipsec_aso_cleanup(ipsec);
+		mlx5_notifier_unregister(ipsec->mdev, &ipsec->nb);
 	destroy_workqueue(ipsec->wq);
+	if (ipsec->aso)
+		mlx5e_ipsec_aso_cleanup(ipsec);
 	kfree(ipsec);
 	priv->ipsec = NULL;
 }

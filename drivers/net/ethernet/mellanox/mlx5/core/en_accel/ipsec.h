@@ -37,6 +37,7 @@
 #include <linux/mlx5/device.h>
 #include <net/xfrm.h>
 #include <linux/idr.h>
+#include <linux/workqueue.h>
 #include "lib/aso.h"
 #include "lib/devcom.h"
 
@@ -286,6 +287,7 @@ struct mlx5e_ipsec_sa_entry {
 	struct mlx5e_ipsec_rule ipsec_rule;
 	struct mlx5e_ipsec_work *work;
 	struct mlx5e_ipsec_dwork *dwork;
+	struct work_struct event_work;
 	struct mlx5e_ipsec_limits limits;
 	u8 ctx[MLX5_ST_SZ_BYTES(ipsec_aso)];
 };
@@ -332,6 +334,9 @@ void mlx5_accel_esp_modify_xfrm(struct mlx5e_ipsec_sa_entry *sa_entry,
 
 int mlx5e_ipsec_aso_init(struct mlx5e_ipsec *ipsec);
 void mlx5e_ipsec_aso_cleanup(struct mlx5e_ipsec *ipsec);
+void mlx5e_ipsec_handle_event(struct work_struct *work);
+int mlx5e_ipsec_event(struct notifier_block *nb, unsigned long event,
+		      void *data);
 
 int mlx5e_ipsec_aso_query(struct mlx5e_ipsec_sa_entry *sa_entry,
 			  struct mlx5_wqe_aso_ctrl_seg *data);
