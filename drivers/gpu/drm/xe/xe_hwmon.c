@@ -831,7 +831,8 @@ static umode_t xe_hwmon_attributes_visible(struct kobject *kobj,
 	struct xe_mmio *mmio = xe_root_tile_mmio(hwmon->xe);
 
 	if (hwmon->xe->info.has_mbx_power_limits) {
-		xe_hwmon_pcode_read_power_limit(hwmon, power_attr, channel, &uval);
+		uval = power_attr == PL1_HWMON_ATTR ? hwmon->pl1_on_boot[channel] :
+						      hwmon->pl2_on_boot[channel];
 	} else if (power_attr != PL2_HWMON_ATTR) {
 		rapl_limit = xe_hwmon_get_reg(hwmon, REG_PKG_RAPL_LIMIT, channel);
 		if (xe_reg_is_valid(rapl_limit))
@@ -1432,7 +1433,8 @@ xe_hwmon_power_is_visible(struct xe_hwmon *hwmon, u32 attr, int channel)
 	case hwmon_power_max:
 	case hwmon_power_cap:
 		if (hwmon->xe->info.has_mbx_power_limits) {
-			xe_hwmon_pcode_read_power_limit(hwmon, attr, channel, &uval);
+			uval = attr == hwmon_power_max ? hwmon->pl1_on_boot[channel] :
+						   hwmon->pl2_on_boot[channel];
 		} else if (attr != PL2_HWMON_ATTR) {
 			reg = xe_hwmon_get_reg(hwmon, REG_PKG_RAPL_LIMIT, channel);
 			if (xe_reg_is_valid(reg))
@@ -1464,7 +1466,8 @@ xe_hwmon_power_is_visible(struct xe_hwmon *hwmon, u32 attr, int channel)
 		break;
 	case hwmon_power_label:
 		if (hwmon->xe->info.has_mbx_power_limits) {
-			xe_hwmon_pcode_read_power_limit(hwmon, attr, channel, &uval);
+			uval = (hwmon->pl1_on_boot[channel] | hwmon->pl2_on_boot[channel]) &
+			       PWR_LIM_EN;
 		} else {
 			reg = xe_hwmon_get_reg(hwmon, REG_PKG_POWER_SKU, channel);
 			if (xe_reg_is_valid(reg))
@@ -1823,6 +1826,10 @@ xe_hwmon_get_preregistration_info(struct xe_hwmon *hwmon)
 	struct xe_reg pkg_power_sku_unit;
 
 	if (hwmon->xe->info.has_mbx_power_limits) {
+		/* Mailbox units are fixed; set them even if the limit reads below fail. */
+		hwmon->scl_shift_power = PWR_UNIT;
+		hwmon->scl_shift_energy = ENERGY_UNIT;
+		hwmon->scl_shift_time = TIME_UNIT;
 		/* Check if GPU firmware support mailbox power limits commands. */
 		if (xe_hwmon_pcode_read_power_limit(hwmon, PL1_HWMON_ATTR, CHANNEL_CARD,
 						    &hwmon->pl1_on_boot[CHANNEL_CARD]) |
@@ -1839,9 +1846,6 @@ xe_hwmon_get_preregistration_info(struct xe_hwmon *hwmon)
 			/* Write default limits to read from pcode from now on. */
 			if (xe_hwmon_pcode_set_default_power_limits(hwmon))
 				drm_warn(&hwmon->xe->drm, "Failed to set default power limits\n");
-			hwmon->scl_shift_power = PWR_UNIT;
-			hwmon->scl_shift_energy = ENERGY_UNIT;
-			hwmon->scl_shift_time = TIME_UNIT;
 		}
 	} else {
 		drm_info(&hwmon->xe->drm, "Using register for power limits\n");
