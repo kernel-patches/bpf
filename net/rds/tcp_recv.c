@@ -210,7 +210,27 @@ static int rds_tcp_data_recv(read_descriptor_t *desc, struct sk_buff *skb,
 					be32_to_cpu(tinc->ti_inc.i_hdr.h_len);
 				tinc->ti_inc.i_rx_lat_trace[RDS_MSG_RX_START] =
 					local_clock();
+				/*
+				 * The payload is queued on tinc until the
+				 * whole message has arrived, so a peer must
+				 * not announce more than a sender is allowed
+				 * to send.
+				 */
+				if (tc->t_tinc_data_rem > RDS_MAX_MSG_SIZE)
+					rds_conn_path_drop(cp, false);
 			}
+		}
+
+		/*
+		 * After an oversized header the connection is being dropped:
+		 * consume and discard the rest of the stream until it is shut
+		 * down, so that the receive queue drains and the shutdown is
+		 * not held up.
+		 */
+		if (!tc->t_tinc_hdr_rem &&
+		    tc->t_tinc_data_rem > RDS_MAX_MSG_SIZE) {
+			left = 0;
+			break;
 		}
 
 		if (left && tc->t_tinc_data_rem) {
