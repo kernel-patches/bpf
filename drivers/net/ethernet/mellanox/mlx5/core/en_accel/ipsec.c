@@ -368,10 +368,10 @@ neigh:
 	n = ipv4_neigh_lookup(netdev, pkey);
 	if (!n) {
 		n = ipv4_neigh_create(netdev, pkey);
+		attrs->drop = true;
 		if (IS_ERR(n))
 			return;
 		neigh_event_send(n, NULL);
-		attrs->drop = true;
 	} else {
 		neigh_ha_snapshot(addr, n, netdev);
 		ether_addr_copy(dst, addr);
