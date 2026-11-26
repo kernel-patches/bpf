@@ -216,13 +216,20 @@ struct mlx5e_ipsec_drop {
 	struct mlx5_fc *fc;
 };
 
+enum {
+	MLX5_IPSEC_FC_RULE,
+	MLX5_IPSEC_FC_REPLAY,
+	MLX5_IPSEC_FC_AUTH,
+	MLX5_IPSEC_FC_TRAILER,
+	MLX5_IPSEC_FC_NUM,
+};
+
 struct mlx5e_ipsec_rule {
 	struct mlx5_flow_handle *rule;
 	struct mlx5_flow_handle *status_pass;
 	struct mlx5_flow_handle *sa_sel;
 	struct mlx5_modify_hdr *modify_hdr;
 	struct mlx5_pkt_reformat *pkt_reformat;
-	struct mlx5_fc *fc;
 	struct mlx5e_ipsec_drop replay;
 	struct mlx5e_ipsec_drop auth;
 	struct mlx5e_ipsec_drop trailer;
@@ -295,6 +302,7 @@ struct mlx5e_ipsec_sa_entry {
 	u32 ipsec_obj_id;
 	u32 enc_key_id;
 	struct mlx5e_ipsec_rule ipsec_rule;
+	struct mlx5_fc *fcs[MLX5_IPSEC_FC_NUM];
 	struct mlx5e_ipsec_work *work;
 	struct mlx5e_ipsec_dwork *dwork;
 	struct work_struct event_work;
@@ -329,6 +337,8 @@ void mlx5e_accel_ipsec_fs_cleanup(struct mlx5e_ipsec *ipsec);
 int mlx5e_accel_ipsec_fs_init(struct mlx5e_ipsec *ipsec, struct mlx5_devcom_comp_dev **devcom);
 int mlx5e_accel_ipsec_fs_add_rule(struct mlx5e_ipsec_sa_entry *sa_entry);
 void mlx5e_accel_ipsec_fs_del_rule(struct mlx5e_ipsec_sa_entry *sa_entry);
+int mlx5e_accel_ipsec_fs_alloc_counters(struct mlx5e_ipsec_sa_entry *sa_entry);
+void mlx5e_accel_ipsec_fs_free_counters(struct mlx5e_ipsec_sa_entry *sa_entry);
 int mlx5e_accel_ipsec_fs_add_pol(struct mlx5e_ipsec_pol_entry *pol_entry);
 void mlx5e_accel_ipsec_fs_del_pol(struct mlx5e_ipsec_pol_entry *pol_entry);
 void mlx5e_accel_ipsec_fs_modify(struct mlx5e_ipsec_sa_entry *sa_entry);

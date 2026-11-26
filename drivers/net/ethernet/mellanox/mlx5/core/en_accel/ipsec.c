@@ -900,11 +900,15 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 	if (err)
 		goto release_dwork;
 
-	err = mlx5e_accel_ipsec_fs_add_rule(sa_entry);
+	err = mlx5e_accel_ipsec_fs_alloc_counters(sa_entry);
 	if (err)
 		goto err_hw_ctx;
 
 	INIT_WORK(&sa_entry->event_work, mlx5e_ipsec_handle_event);
+
+	err = mlx5e_accel_ipsec_fs_add_rule(sa_entry);
+	if (err)
+		goto err_counters;
 
 	/* We use *_bh() variant because xfrm_timer_handler(), which runs
 	 * in softirq context, can reach our state delete logic and we need
@@ -938,6 +942,8 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 
 err_add_rule:
 	mlx5e_accel_ipsec_fs_del_rule(sa_entry);
+err_counters:
+	mlx5e_accel_ipsec_fs_free_counters(sa_entry);
 err_hw_ctx:
 	mlx5_ipsec_free_sa_ctx(sa_entry);
 release_dwork:
@@ -991,6 +997,7 @@ static void mlx5e_xfrm_free_state(struct net_device *dev, struct xfrm_state *x)
 		cancel_delayed_work_sync(&sa_entry->dwork->dwork);
 
 	mlx5e_accel_ipsec_fs_del_rule(sa_entry);
+	mlx5e_accel_ipsec_fs_free_counters(sa_entry);
 	mlx5_ipsec_free_sa_ctx(sa_entry);
 	kfree(sa_entry->dwork);
 	if (sa_entry->work)
@@ -1151,8 +1158,8 @@ static void mlx5e_xfrm_advance_esn_state(struct xfrm_state *x)
 static void mlx5e_xfrm_update_stats(struct xfrm_state *x)
 {
 	struct mlx5e_ipsec_sa_entry *sa_entry = to_ipsec_sa_entry(x);
-	struct mlx5e_ipsec_rule *ipsec_rule = &sa_entry->ipsec_rule;
 	struct net *net = dev_net(x->xso.dev);
+	struct mlx5_fc **fcs = sa_entry->fcs;
 	u64 trailer_packets = 0, trailer_bytes = 0;
 	u64 replay_packets = 0, replay_bytes = 0;
 	u64 auth_packets = 0, auth_bytes = 0;
@@ -1168,12 +1175,12 @@ static void mlx5e_xfrm_update_stats(struct xfrm_state *x)
 		return;
 
 	if (sa_entry->attrs.dir == XFRM_DEV_OFFLOAD_IN) {
-		mlx5_fc_query_cached(ipsec_rule->auth.fc, &auth_bytes,
+		mlx5_fc_query_cached(fcs[MLX5_IPSEC_FC_AUTH], &auth_bytes,
 				     &auth_packets, &lastuse);
 		x->stats.integrity_failed += auth_packets;
 		XFRM_ADD_STATS(net, LINUX_MIB_XFRMINSTATEPROTOERROR, auth_packets);
 
-		mlx5_fc_query_cached(ipsec_rule->trailer.fc, &trailer_bytes,
+		mlx5_fc_query_cached(fcs[MLX5_IPSEC_FC_TRAILER], &trailer_bytes,
 				     &trailer_packets, &lastuse);
 		XFRM_ADD_STATS(net, LINUX_MIB_XFRMINHDRERROR, trailer_packets);
 	}
@@ -1182,13 +1189,14 @@ static void mlx5e_xfrm_update_stats(struct xfrm_state *x)
 		return;
 
 	if (sa_entry->attrs.dir == XFRM_DEV_OFFLOAD_IN) {
-		mlx5_fc_query_cached(ipsec_rule->replay.fc, &replay_bytes,
+		mlx5_fc_query_cached(fcs[MLX5_IPSEC_FC_REPLAY], &replay_bytes,
 				     &replay_packets, &lastuse);
 		x->stats.replay += replay_packets;
 		XFRM_ADD_STATS(net, LINUX_MIB_XFRMINSTATESEQERROR, replay_packets);
 	}
 
-	mlx5_fc_query_cached(ipsec_rule->fc, &bytes, &packets, &lastuse);
+	mlx5_fc_query_cached(fcs[MLX5_IPSEC_FC_RULE], &bytes, &packets,
+			     &lastuse);
 	success_packets = packets - auth_packets - trailer_packets - replay_packets;
 	x->curlft.packets += success_packets;
 	/* NIC counts all bytes passed through flow steering and doesn't have
