@@ -6017,6 +6017,10 @@ static bool is_btf_mod_allowed(const struct bpf_object *obj, const char *name)
 
 static int load_module_btfs(struct bpf_object *obj)
 {
+	DECLARE_LIBBPF_OPTS(bpf_get_next_id_opts, next_opts,
+			    .token_fd = obj->token_fd);
+	DECLARE_LIBBPF_OPTS(bpf_get_fd_by_id_opts, fd_opts,
+			    .token_fd = obj->token_fd);
 	struct bpf_btf_info info;
 	struct module_btf *mod_btf;
 	struct btf *btf;
@@ -6041,7 +6045,13 @@ static int load_module_btfs(struct bpf_object *obj)
 		return 0;
 
 	while (true) {
-		err = bpf_btf_get_next_id(id, &id);
+		err = bpf_btf_get_next_id_opts(id, &id, &next_opts);
+		if (err && errno == EINVAL && next_opts.token_fd) {
+			pr_debug("retrying module BTF load without token fd\n");
+			next_opts.token_fd = 0;
+			fd_opts.token_fd = 0;
+			err = bpf_btf_get_next_id_opts(id, &id, &next_opts);
+		}
 		if (err && errno == ENOENT)
 			return 0;
 		if (err && errno == EPERM) {
@@ -6054,10 +6064,14 @@ static int load_module_btfs(struct bpf_object *obj)
 			return err;
 		}
 
-		fd = bpf_btf_get_fd_by_id(id);
+		fd = bpf_btf_get_fd_by_id_opts(id, &fd_opts);
 		if (fd < 0) {
 			if (errno == ENOENT)
 				continue; /* expected race: BTF was unloaded */
+			if (errno == EPERM) {
+				pr_debug("skipping module BTFs loading, missing privileges\n");
+				return 0;
+			}
 			err = -errno;
 			pr_warn("failed to get BTF object #%u FD: %s\n", id, errstr(err));
 			return err;
