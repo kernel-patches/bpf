@@ -274,6 +274,8 @@
 #define FUNC_REG_ARG_CNT 6
 #elif defined(__TARGET_ARCH_riscv) || defined(__riscv__)
 #define FUNC_REG_ARG_CNT 8
+#elif defined(__TARGET_ARCH_loongarch) || defined(__loongarch__)
+#define FUNC_REG_ARG_CNT 8
 #else
 /* default to 5 for others */
 #define FUNC_REG_ARG_CNT 5
