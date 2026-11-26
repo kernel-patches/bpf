@@ -371,10 +371,10 @@ impl<T: Driver> Adapter<T> {
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn suspend_callback(phydev: *mut bindings::phy_device) -> c_int {
         from_result(|| {
-            // SAFETY: The C core code ensures that the accessors on
-            // `Device` are okay to call even though `phy_device->lock`
-            // might not be held.
-            let dev = unsafe { Device::from_raw_mut(phydev) };
+            // SAFETY: `phydev` is valid for the duration of the callback. `phy_suspend()` does not
+            // take `phy_device->lock`, and `phy_state_machine()` calls it right after dropping the
+            // lock, so this gets a `&Device`.
+            let dev = unsafe { Device::from_raw(phydev) };
             T::suspend(dev)?;
             Ok(0)
         })
@@ -439,10 +439,10 @@ impl<T: Driver> Adapter<T> {
         regnum: u16,
     ) -> i32 {
         from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
-            let dev = unsafe { Device::from_raw_mut(phydev) };
+            // SAFETY: `phydev` is valid for the duration of the callback. PHYLIB calls this with
+            // the MDIO bus lock held but not necessarily `phy_device->lock`, so this gets a
+            // `&Device`.
+            let dev = unsafe { Device::from_raw(phydev) };
             // CAST: the C side verifies devnum < 32.
             let ret = T::read_mmd(dev, devnum as u8, regnum)?;
             Ok(ret.into())
@@ -459,10 +459,10 @@ impl<T: Driver> Adapter<T> {
         val: u16,
     ) -> i32 {
         from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
-            let dev = unsafe { Device::from_raw_mut(phydev) };
+            // SAFETY: `phydev` is valid for the duration of the callback. PHYLIB calls this with
+            // the MDIO bus lock held but not necessarily `phy_device->lock`, so this gets a
+            // `&Device`.
+            let dev = unsafe { Device::from_raw(phydev) };
             T::write_mmd(dev, devnum as u8, regnum, val)?;
             Ok(0)
         })
@@ -617,7 +617,7 @@ pub trait Driver {
     }
 
     /// Suspends the hardware, saving state if needed.
-    fn suspend(_dev: &mut Device) -> Result {
+    fn suspend(_dev: &Device) -> Result {
         build_error!(VTABLE_DEFAULT_ERROR)
     }
 
@@ -627,12 +627,18 @@ pub trait Driver {
     }
 
     /// Overrides the default MMD read function for reading a MMD register.
-    fn read_mmd(_dev: &mut Device, _devnum: u8, _regnum: u16) -> Result<u16> {
+    ///
+    /// PHYLIB calls this with the MDIO bus lock held, so calling [`Device::read`] or
+    /// [`Device::write`] here deadlocks.
+    fn read_mmd(_dev: &Device, _devnum: u8, _regnum: u16) -> Result<u16> {
         build_error!(VTABLE_DEFAULT_ERROR)
     }
 
     /// Overrides the default MMD write function for writing a MMD register.
-    fn write_mmd(_dev: &mut Device, _devnum: u8, _regnum: u16, _val: u16) -> Result {
+    ///
+    /// PHYLIB calls this with the MDIO bus lock held, so calling [`Device::read`] or
+    /// [`Device::write`] here deadlocks.
+    fn write_mmd(_dev: &Device, _devnum: u8, _regnum: u16, _val: u16) -> Result {
         build_error!(VTABLE_DEFAULT_ERROR)
     }
 
