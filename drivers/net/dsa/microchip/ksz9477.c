@@ -2109,6 +2109,7 @@ static int ksz9477_connect_tag_protocol(struct dsa_switch *ds,
 
 	tagger_data = ksz_tagger_data(ds);
 	tagger_data->xmit_work_fn = ksz_port_deferred_xmit;
+	ksz_tagger_set_link_local_to_cpu(ds);
 
 	return 0;
 }
