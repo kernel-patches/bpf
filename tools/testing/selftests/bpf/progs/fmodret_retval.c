@@ -176,13 +176,20 @@ int BPF_PROG(not_a_target, int value, int ret)
 	return 0;
 }
 
+SEC("fmod_ret/do_epoll_create")
+__success
+int BPF_PROG(tag_in_vmlinux, int flags, int ret)
+{
+	return 0;
+}
+
 /*
- * vmlinux has a bpf_dummy_reg() of the same type, so the two share the FUNC of
- * vmlinux. That one returns an error and has a tag. This one returns only 0.
+ * The do_epoll_create() of bpf_testmod has the type of the one of vmlinux, so
+ * the two share the FUNC of vmlinux. This one returns only 0.
  */
-SEC("fmod_ret/bpf_testmod:bpf_dummy_reg")
-__failure __msg("bpf_dummy_reg() is not modifiable")
-int BPF_PROG(tag_of_vmlinux, void *kdata, struct bpf_link *link, int ret)
+SEC("fmod_ret/bpf_testmod:do_epoll_create")
+__failure __msg("do_epoll_create() is not modifiable")
+int BPF_PROG(tag_of_vmlinux, int flags, int ret)
 {
 	return 0;
 }

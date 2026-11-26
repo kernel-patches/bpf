@@ -159,3 +159,9 @@ static __used noinline __init int bpf_testmod_retval_init(int value)
 {
 	return value ? -EINVAL : -ENOMEM;
 }
+
+/* vmlinux has a do_epoll_create() of this type, which returns errors */
+static __used noinline int do_epoll_create(int flags)
+{
+	return 0;
+}
