@@ -113,6 +113,7 @@ static inline bool mpol_equal(struct mempolicy *a, struct mempolicy *b)
 struct shared_policy {
 	struct rb_root root;
 	rwlock_t lock;
+	unsigned int nr_nodes;
 };
 struct sp_node {
 	struct rb_node nd;
@@ -172,11 +173,6 @@ extern bool vma_migratable(struct vm_area_struct *vma);
 int mpol_misplaced(struct folio *folio, struct vm_fault *vmf,
 					unsigned long addr);
 extern void mpol_put_task_policy(struct task_struct *);
-
-static inline bool mpol_is_preferred_many(struct mempolicy *pol)
-{
-	return  (pol->mode == MPOL_PREFERRED_MANY);
-}
 
 extern bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone);
 
@@ -296,11 +292,6 @@ static inline int mpol_misplaced(struct folio *folio,
 
 static inline void mpol_put_task_policy(struct task_struct *task)
 {
-}
-
-static inline bool mpol_is_preferred_many(struct mempolicy *pol)
-{
-	return  false;
 }
 
 #endif /* CONFIG_NUMA */
