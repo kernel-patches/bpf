@@ -134,7 +134,7 @@ static int fq_pie_qdisc_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	struct fq_pie_sched_data *q = qdisc_priv(sch);
 	struct fq_pie_flow *sel_flow;
 	int ret;
-	u8 memory_limited = false;
+	bool memory_limited;
 	u8 enqueue = false;
 	u32 pkt_len;
 	u32 idx;
@@ -152,7 +152,8 @@ static int fq_pie_qdisc_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	sel_flow = &q->flows[idx];
 	/* Checks whether adding a new packet would exceed memory limit */
 	get_pie_cb(skb)->mem_usage = skb->truesize;
-	memory_limited = q->memory_usage > q->memory_limit + skb->truesize;
+	memory_limited = skb->truesize > q->memory_limit ||
+		q->memory_usage > q->memory_limit - skb->truesize;
 
 	/* Checks if the qdisc is full */
 	if (unlikely(qdisc_qlen(sch) >= sch->limit)) {
@@ -160,6 +161,7 @@ static int fq_pie_qdisc_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		goto out;
 	} else if (unlikely(memory_limited)) {
 		q->overmemory++;
+		goto out;
 	}
 
 	reason = QDISC_DROP_CONGESTED;
