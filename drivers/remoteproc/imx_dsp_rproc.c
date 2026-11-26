@@ -108,8 +108,9 @@ enum imx_dsp_rp_mbox_messages {
 
 /**
  * struct imx_dsp_rproc - DSP remote processor state
- * @regmap: regmap handler
  * @run_stall: reset control handle used for Run/Stall operation
+ * @soft_rst: reset control handle used for DSP core reset
+ * @dbg_rst: reset control handle used for DSP debug logic
  * @rproc: rproc handler
  * @dsp_dcfg: device configuration pointer
  * @clks: clocks needed by this device
@@ -125,8 +126,9 @@ enum imx_dsp_rp_mbox_messages {
  * @flags: control flags
  */
 struct imx_dsp_rproc {
-	struct regmap				*regmap;
 	struct reset_control			*run_stall;
+	struct reset_control			*soft_rst;
+	struct reset_control			*dbg_rst;
 	struct rproc				*rproc;
 	const struct imx_dsp_rproc_dcfg		*dsp_dcfg;
 	struct clk_bulk_data			clks[DSP_RPROC_CLK_MAX];
@@ -243,20 +245,15 @@ static int imx8ulp_dsp_reset(struct imx_dsp_rproc *priv)
 	struct arm_smccc_res res;
 
 	/* Put DSP into reset and stall */
-	regmap_update_bits(priv->regmap, IMX8ULP_SIM_LPAV_REG_SYSCTRL0,
-			   IMX8ULP_SYSCTRL0_DSP_RST, IMX8ULP_SYSCTRL0_DSP_RST);
-	regmap_update_bits(priv->regmap, IMX8ULP_SIM_LPAV_REG_SYSCTRL0,
-			   IMX8ULP_SYSCTRL0_DSP_STALL,
-			   IMX8ULP_SYSCTRL0_DSP_STALL);
+	reset_control_assert(priv->soft_rst);
+	reset_control_assert(priv->run_stall);
 
 	/* Configure resources of DSP through TFA */
 	arm_smccc_smc(IMX8ULP_SIP_HIFI_XRDC, 0, 0, 0, 0, 0, 0, 0, &res);
 
 	/* Take the DSP out of reset and keep stalled for FW loading */
-	regmap_update_bits(priv->regmap, IMX8ULP_SIM_LPAV_REG_SYSCTRL0,
-			   IMX8ULP_SYSCTRL0_DSP_RST, 0);
-	regmap_update_bits(priv->regmap, IMX8ULP_SIM_LPAV_REG_SYSCTRL0,
-			   IMX8ULP_SYSCTRL0_DSP_DBG_RST, 0);
+	reset_control_deassert(priv->soft_rst);
+	reset_control_deassert(priv->dbg_rst);
 
 	return 0;
 }
@@ -338,14 +335,6 @@ static int imx_dsp_rproc_handle_rsc(struct rproc *rproc, u32 rsc_type,
 	return RSC_HANDLED;
 }
 
-static int imx_dsp_rproc_mmio_start(struct rproc *rproc)
-{
-	struct imx_dsp_rproc *priv = rproc->priv;
-	const struct imx_rproc_dcfg *dcfg = priv->dsp_dcfg->dcfg;
-
-	return regmap_update_bits(priv->regmap, dcfg->src_reg, dcfg->src_mask, dcfg->src_start);
-}
-
 static int imx_dsp_rproc_reset_ctrl_start(struct rproc *rproc)
 {
 	struct imx_dsp_rproc *priv = rproc->priv;
@@ -389,14 +378,6 @@ static int imx_dsp_rproc_start(struct rproc *rproc)
 		return imx_dsp_rproc_ready(rproc);
 
 	return 0;
-}
-
-static int imx_dsp_rproc_mmio_stop(struct rproc *rproc)
-{
-	struct imx_dsp_rproc *priv = rproc->priv;
-	const struct imx_rproc_dcfg *dcfg = priv->dsp_dcfg->dcfg;
-
-	return regmap_update_bits(priv->regmap, dcfg->src_reg, dcfg->src_mask, dcfg->src_stop);
 }
 
 static int imx_dsp_rproc_reset_ctrl_stop(struct rproc *rproc)
@@ -864,97 +845,41 @@ static int imx_dsp_rproc_memset(void *addr, u8 value, size_t size)
 	return 0;
 }
 
-/*
- * imx_dsp_rproc_elf_load_segments() - load firmware segments to memory
- * @rproc: remote processor which will be booted using these fw segments
- * @fw: the ELF firmware image
- *
- * This function loads the firmware segments to memory, where the remote
- * processor expects them.
- *
- * Return: 0 on success and an appropriate error code otherwise
- */
-static int imx_dsp_rproc_elf_load_segments(struct rproc *rproc, const struct firmware *fw)
+static int imx_dsp_rproc_memcpy_tova(struct rproc *rproc, u64 da, const void *src,
+				     size_t filesz, size_t memsz)
 {
 	struct device *dev = &rproc->dev;
-	const void *ehdr, *phdr;
-	int i, ret = 0;
-	u16 phnum;
-	const u8 *elf_data = fw->data;
-	u8 class = fw_elf_get_class(fw);
-	u32 elf_phdr_get_size = elf_size_of_phdr(class);
+	void *ptr;
+	int ret;
 
-	ehdr = elf_data;
-	phnum = elf_hdr_get_e_phnum(class, ehdr);
-	phdr = elf_data + elf_hdr_get_e_phoff(class, ehdr);
+	/* grab the kernel address for this device address */
+	ptr = rproc_da_to_va(rproc, da, memsz, NULL);
+	if (!ptr) {
+		dev_err(dev, "bad phdr da 0x%llx mem 0x%zx\n", da, memsz);
+		return -EINVAL;
+	}
 
-	/* go through the available ELF segments */
-	for (i = 0; i < phnum; i++, phdr += elf_phdr_get_size) {
-		u64 da = elf_phdr_get_p_paddr(class, phdr);
-		u64 memsz = elf_phdr_get_p_memsz(class, phdr);
-		u64 filesz = elf_phdr_get_p_filesz(class, phdr);
-		u64 offset = elf_phdr_get_p_offset(class, phdr);
-		u32 type = elf_phdr_get_p_type(class, phdr);
-		void *ptr;
-
-		if (type != PT_LOAD || !memsz)
-			continue;
-
-		dev_dbg(dev, "phdr: type %d da 0x%llx memsz 0x%llx filesz 0x%llx\n",
-			type, da, memsz, filesz);
-
-		if (filesz > memsz) {
-			dev_err(dev, "bad phdr filesz 0x%llx memsz 0x%llx\n",
-				filesz, memsz);
-			ret = -EINVAL;
-			break;
-		}
-
-		if (offset + filesz > fw->size) {
-			dev_err(dev, "truncated fw: need 0x%llx avail 0x%zx\n",
-				offset + filesz, fw->size);
-			ret = -EINVAL;
-			break;
-		}
-
-		if (!rproc_u64_fit_in_size_t(memsz)) {
-			dev_err(dev, "size (%llx) does not fit in size_t type\n",
-				memsz);
-			ret = -EOVERFLOW;
-			break;
-		}
-
-		/* grab the kernel address for this device address */
-		ptr = rproc_da_to_va(rproc, da, memsz, NULL);
-		if (!ptr) {
-			dev_err(dev, "bad phdr da 0x%llx mem 0x%llx\n", da,
-				memsz);
-			ret = -EINVAL;
-			break;
-		}
-
-		/* put the segment where the remote processor expects it */
-		if (filesz) {
-			ret = imx_dsp_rproc_memcpy(ptr, elf_data + offset, filesz);
-			if (ret) {
-				dev_err(dev, "memory copy failed for da 0x%llx memsz 0x%llx\n",
-					da, memsz);
-				break;
-			}
-		}
-
-		/* zero out remaining memory for this segment */
-		if (memsz > filesz) {
-			ret = imx_dsp_rproc_memset(ptr + filesz, 0, memsz - filesz);
-			if (ret) {
-				dev_err(dev, "memset failed for da 0x%llx memsz 0x%llx\n",
-					da, memsz);
-				break;
-			}
+	/* put the segment where the remote processor expects it */
+	if (filesz) {
+		ret = imx_dsp_rproc_memcpy(ptr, src, filesz);
+		if (ret) {
+			dev_err(dev, "memory copy failed for da 0x%llx memsz 0x%zx\n",
+				da, memsz);
+			return ret;
 		}
 	}
 
-	return ret;
+	/* zero out remaining memory for this segment */
+	if (memsz > filesz) {
+		ret = imx_dsp_rproc_memset(ptr + filesz, 0, memsz - filesz);
+		if (ret) {
+			dev_err(dev, "memset failed for da 0x%llx memsz 0x%zx\n",
+				da, memsz);
+			return ret;
+		}
+	}
+
+	return 0;
 }
 
 static int imx_dsp_rproc_parse_fw(struct rproc *rproc, const struct firmware *fw)
@@ -969,7 +894,6 @@ static int imx_dsp_rproc_load(struct rproc *rproc, const struct firmware *fw)
 	struct imx_dsp_rproc *priv = rproc->priv;
 	const struct imx_dsp_rproc_dcfg *dsp_dcfg = priv->dsp_dcfg;
 	struct rproc_mem_entry *carveout;
-	int ret;
 
 	/* Reset DSP if needed */
 	if (dsp_dcfg->reset)
@@ -985,11 +909,7 @@ static int imx_dsp_rproc_load(struct rproc *rproc, const struct firmware *fw)
 		}
 	}
 
-	ret = imx_dsp_rproc_elf_load_segments(rproc, fw);
-	if (ret)
-		return ret;
-
-	return 0;
+	return rproc_elf_load_segments(rproc, fw);
 }
 
 static const struct rproc_ops imx_dsp_rproc_ops = {
@@ -998,6 +918,7 @@ static const struct rproc_ops imx_dsp_rproc_ops = {
 	.start		= imx_dsp_rproc_start,
 	.stop		= imx_dsp_rproc_stop,
 	.kick		= imx_dsp_rproc_kick,
+	.memcpy_tova	= imx_dsp_rproc_memcpy_tova,
 	.load		= imx_dsp_rproc_load,
 	.parse_fw	= imx_dsp_rproc_parse_fw,
 	.handle_rsc	= imx_dsp_rproc_handle_rsc,
@@ -1024,23 +945,6 @@ static int imx_dsp_attach_pm_domains(struct imx_dsp_rproc *priv)
 	return devm_pm_domain_attach_list(dev, NULL, &priv->pd_list);
 }
 
-static int imx_dsp_rproc_mmio_detect_mode(struct rproc *rproc)
-{
-	struct imx_dsp_rproc *priv = rproc->priv;
-	struct device *dev = rproc->dev.parent;
-	struct regmap *regmap;
-
-	regmap = syscon_regmap_lookup_by_phandle(dev->of_node, "fsl,dsp-ctrl");
-	if (IS_ERR(regmap)) {
-		dev_err(dev, "failed to find syscon\n");
-		return PTR_ERR(regmap);
-	}
-
-	priv->regmap = regmap;
-
-	return 0;
-}
-
 static int imx_dsp_rproc_reset_ctrl_detect_mode(struct rproc *rproc)
 {
 	struct imx_dsp_rproc *priv = rproc->priv;
@@ -1050,6 +954,18 @@ static int imx_dsp_rproc_reset_ctrl_detect_mode(struct rproc *rproc)
 	if (IS_ERR(priv->run_stall)) {
 		dev_err(dev, "Failed to get DSP runstall reset control\n");
 		return PTR_ERR(priv->run_stall);
+	}
+
+	priv->soft_rst = devm_reset_control_get_optional_exclusive(dev, "softreset");
+	if (IS_ERR(priv->soft_rst)) {
+		dev_err(dev, "Failed to get DSP soft reset control\n");
+		return PTR_ERR(priv->soft_rst);
+	}
+
+	priv->dbg_rst = devm_reset_control_get_optional_exclusive(dev, "dbgreset");
+	if (IS_ERR(priv->dbg_rst)) {
+		dev_err(dev, "Failed to get DSP debug reset control\n");
+		return PTR_ERR(priv->dbg_rst);
 	}
 
 	return 0;
@@ -1316,12 +1232,6 @@ static const struct dev_pm_ops imx_dsp_rproc_pm_ops = {
 	RUNTIME_PM_OPS(imx_dsp_runtime_suspend, imx_dsp_runtime_resume, NULL)
 };
 
-static const struct imx_rproc_plat_ops imx_dsp_rproc_ops_mmio = {
-	.start		= imx_dsp_rproc_mmio_start,
-	.stop		= imx_dsp_rproc_mmio_stop,
-	.detect_mode	= imx_dsp_rproc_mmio_detect_mode,
-};
-
 static const struct imx_rproc_plat_ops imx_dsp_rproc_ops_reset_ctrl = {
 	.start		= imx_dsp_rproc_reset_ctrl_start,
 	.stop		= imx_dsp_rproc_reset_ctrl_stop,
@@ -1348,13 +1258,9 @@ static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8mp = {
 
 /* Specific configuration for i.MX8ULP */
 static const struct imx_rproc_dcfg dsp_rproc_cfg_imx8ulp = {
-	.src_reg	= IMX8ULP_SIM_LPAV_REG_SYSCTRL0,
-	.src_mask	= IMX8ULP_SYSCTRL0_DSP_STALL,
-	.src_start	= 0,
-	.src_stop	= IMX8ULP_SYSCTRL0_DSP_STALL,
 	.att		= imx_dsp_rproc_att_imx8ulp,
 	.att_size	= ARRAY_SIZE(imx_dsp_rproc_att_imx8ulp),
-	.ops		= &imx_dsp_rproc_ops_mmio,
+	.ops		= &imx_dsp_rproc_ops_reset_ctrl,
 };
 
 static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8ulp = {
