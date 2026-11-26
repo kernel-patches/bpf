@@ -1710,7 +1710,6 @@ static int ksz9477_setup(struct dsa_switch *ds)
 	struct ksz_device *dev = ds->priv;
 	u16 storm_mask, storm_rate;
 	struct dsa_port *dp;
-	struct ksz_port *p;
 	const u16 *regs;
 	int ret;
 
@@ -1792,13 +1791,15 @@ static int ksz9477_setup(struct dsa_switch *ds)
 	if (ret < 0)
 		return ret;
 
-	/* Start with learning disabled on standalone user ports, and enabled
-	 * on the CPU port. In lack of other finer mechanisms, learning on the
-	 * CPU port will avoid flooding bridge local addresses on the network
-	 * in some cases.
+	/* Ask DSA to add the addresses that the bridge learns on ports
+	 * outside the switch as static entries on the CPU port. The CPU
+	 * port itself does not learn: when the bridge forwards a frame in
+	 * software between two ports of the switch, the switch would learn
+	 * the sender on the CPU port. p->learning is never set for the CPU
+	 * port, so ksz_port_stp_state_set() disables learning when DSA sets
+	 * the port to forwarding.
 	 */
-	p = &dev->ports[dev->cpu_port];
-	p->learning = true;
+	ds->assisted_learning_on_cpu_port = true;
 
 	if (dev->irq > 0) {
 		ret = ksz_girq_setup(dev);
