@@ -320,11 +320,13 @@ void __reset_page_owner(struct page *page, unsigned short order)
 	depot_stack_handle_t alloc_handle;
 	struct page_owner *page_owner;
 	u64 free_ts_nsec = local_clock();
+	bool allocated;
 
 	page_ext = page_ext_get(page);
 	if (unlikely(!page_ext))
 		return;
 
+	allocated = test_bit(PAGE_EXT_OWNER_ALLOCATED, &page_ext->flags);
 	page_owner = get_page_owner(page_ext);
 	alloc_handle = page_owner->handle;
 	page_ext_put(page_ext);
@@ -339,8 +341,15 @@ void __reset_page_owner(struct page *page, unsigned short order)
 	__update_page_owner_free_handle(page, handle, order, current->pid,
 					current->tgid, free_ts_nsec);
 
-	if (alloc_handle != early_handle)
+	if (allocated && alloc_handle != early_handle) {
 		/*
+		 * Not every page that gets here is still accounted as
+		 * allocated: a hwpoisoned page that is later unpoisoned is
+		 * freed twice, and the first free already cleared
+		 * PAGE_EXT_OWNER_ALLOCATED and dropped the count. Only
+		 * decrement the allocation stack's count if the page was
+		 * still marked as allocated.
+		 *
 		 * early_handle is being set as a handle for all those
 		 * early allocated pages. See init_pages_in_zone().
 		 * Since their refcount is not being incremented because
@@ -348,6 +357,7 @@ void __reset_page_owner(struct page *page, unsigned short order)
 		 * their refcount either.
 		 */
 		dec_stack_record_count(alloc_handle, 1 << order);
+	}
 }
 
 noinline void __set_page_owner(struct page *page, unsigned short order,
