@@ -861,3 +861,43 @@ Description:
 		degradations due to underlying physical CPU contention.
 
 		See Documentation/scheduler/sched-paravirt.rst for more details.
+
+What:		/sys/devices/system/cpu/cpuX/thermal_throttle/package_interrupt_owner
+Date:		November 2026
+Contact:	Linux power management list <linux-pm@vger.kernel.org>
+Description:
+		(RW) Boolean. On CPUs supporting the directed package-level
+		thermal interrupt, a single CPU per package is programmed to
+		receive it. This attribute reports and controls whether cpuX is
+		that CPU.
+
+		Reading returns 1 if cpuX currently owns the package thermal
+		interrupt, 0 otherwise. The owner is per package: at most one
+		CPU of a package reads 1, and every CPU of the package reads 0
+		while the package has no owner. A package has no owner until one
+		is programmed, and none if the hardware does not acknowledge
+		one. On Intel processors, a package without an owner broadcasts
+		the thermal interrupt to all of its CPUs. If such a failure
+		happens while the kernel boots, the attribute does not exist on
+		any CPU.
+
+		Writing 1 (also 'y' or 'on') migrates the interrupt to cpuX and
+		pins it there, overriding automatic selection. The request is
+		honored even if cpuX is nohz_full-isolated; a warning is logged
+		in that case, since a directed interrupt disturbs the isolated
+		CPU. The write fails if the hardware does not acknowledge the
+		new owner.
+
+		Writing 0 (also 'n' or 'off') releases a pin on cpuX and returns
+		the package to automatic selection, which prefers CPUs that are
+		not nohz_full-isolated. If cpuX is nohz_full-isolated and such a
+		preferred CPU of the package is online, the interrupt moves
+		there, provided the hardware acknowledges the new owner.
+		Otherwise cpuX remains the owner and keeps reading 1. Writing 0
+		to a CPU that is not pinned has no effect.
+
+		The pin survives offlining. While a pinned CPU is offline this
+		attribute does not exist for it, and automatic selection hands
+		the interrupt to another CPU of the package, which reads 1 in
+		the meantime. The interrupt returns to the pinned CPU as soon as
+		it comes back online.

@@ -14,6 +14,11 @@
  * Credits: Adapted from Zwane Mwaikambo's original code in mce_intel.c.
  *          Inspired by Ross Biro's and Al Borchers' counter code.
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
+#include <linux/sched/isolation.h>
+#include <linux/sched/signal.h>
 #include <linux/syscore_ops.h>
 #include <linux/interrupt.h>
 #include <linux/notifier.h>
@@ -23,6 +28,7 @@
 #include <linux/export.h>
 #include <linux/delay.h>
 #include <linux/types.h>
+#include <linux/mutex.h>
 #include <linux/init.h>
 #include <linux/smp.h>
 #include <linux/sysfs.h>
@@ -474,6 +480,613 @@ static int __init int_pln_enable_setup(char *s)
 __setup("int_pln_enable", int_pln_enable_setup);
 
 #ifdef CONFIG_SYSFS
+static int dpti_wait_for_ack(void)
+{
+	unsigned int count = 15000;
+	u64 msr_val;
+
+	/*
+	 * Hardware acknowledges the directed interrupt setup in 10ms or less.
+	 * Wait 15ms to be safe.
+	 */
+	do {
+		rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS, msr_val);
+		udelay(1);
+	} while (!(msr_val & PACKAGE_THERM_STATUS_DPTI_ACK) && --count);
+
+	if (!count)
+		return -ETIMEDOUT;
+
+	thermal_clear_package_intr_status(PACKAGE_LEVEL,
+					  PACKAGE_THERM_STATUS_DPTI_ACK);
+
+	return 0;
+}
+
+static void dpti_config_this_cpu(bool enable)
+{
+	u64 msr_val;
+
+	rdmsrq(MSR_IA32_THERM_INTERRUPT, msr_val);
+
+	if (enable)
+		msr_val |= THERM_INT_DPTI_ENABLE;
+	else
+		msr_val &= ~THERM_INT_DPTI_ENABLE;
+
+	wrmsrq(MSR_IA32_THERM_INTERRUPT, msr_val);
+}
+
+static void dpti_clear_ipi(void *unused)
+{
+	dpti_config_this_cpu(false);
+}
+
+static void dpti_clear_on_cpu(unsigned int cpu)
+{
+	smp_call_function_single(cpu, dpti_clear_ipi, NULL, true);
+}
+
+/* The unused argument matches the smp_call_on_cpu() callback signature. */
+static int dpti_program_this_cpu(void *unused)
+{
+	int ret;
+
+	thermal_clear_package_intr_status(PACKAGE_LEVEL,
+					  PACKAGE_THERM_STATUS_DPTI_ACK);
+
+	dpti_config_this_cpu(true);
+	ret = dpti_wait_for_ack();
+	if (!ret)
+		return 0;
+
+	/* Undo the enable on failure, leaving the package as it was before. */
+	dpti_config_this_cpu(false);
+
+	return ret;
+}
+
+/*
+ * MSR_IA32_PACKAGE_THERM_STATUS is package-scoped, so the acknowledgment must
+ * be polled on the same package. Run a worker bound to @cpu: it cannot be
+ * migrated and may wait for the acknowledgment for as long as 15ms.
+ */
+static int dpti_program_on_cpu(unsigned int cpu)
+{
+	lockdep_assert_cpus_held();
+
+	return smp_call_on_cpu(cpu, dpti_program_this_cpu, NULL, false);
+}
+
+/**
+ * struct dpti_pkg - Per-package DPTI state
+ * @owner:	CPU currently programmed to receive the package-level
+ *		interrupt, or nr_cpu_ids when the package has no owner.
+ * @pin:	CPU the user requested as the owner, or nr_cpu_ids for
+ *		automatic selection. A pinned CPU overrides the automatic
+ *		selection whenever it is online.
+ */
+struct dpti_pkg {
+	unsigned int owner;
+	unsigned int pin;
+};
+
+/*
+ * Serializes updates to dpti_pkgs[] and dpti_shut_down. To avoid deadlock, a
+ * path that needs both this mutex and the CPU hotplug lock always takes the
+ * hotplug lock first.
+ */
+static DEFINE_MUTEX(dpti_mutex);
+
+static struct dpti_pkg *dpti_pkgs;
+
+/*
+ * Set under dpti_mutex by the syscore shutdown callback before it disables
+ * DPTI, so that no owner update enables it again on the way to kexec.
+ */
+static bool dpti_shut_down;
+
+/*
+ * Cleared once the hotplug callbacks are registered: at least one CPU
+ * attempted the setup by then, and the hardware is assumed sane from that
+ * point on.
+ */
+static bool dpti_in_boot __ro_after_init = true;
+
+static bool dpti_supported(void)
+{
+	if (!boot_cpu_has(X86_FEATURE_DPTI))
+		return false;
+
+	if (!dpti_pkgs)
+		return false;
+
+	return true;
+}
+
+/* @pkg_id may be NULL for a caller that only validates @cpu. */
+static int dpti_lookup_pkg_id(unsigned int cpu, u16 *pkg_id)
+{
+	u16 id;
+
+	if (!dpti_supported())
+		return -ENODEV;
+
+	id = topology_logical_package_id(cpu);
+	if (id >= topology_max_packages())
+		return -ENODEV;
+
+	if (pkg_id)
+		*pkg_id = id;
+
+	return 0;
+}
+
+/* For callers already past dpti_lookup_pkg_id(). */
+static struct dpti_pkg *dpti_pkg_of_cpu_nocheck(unsigned int cpu)
+{
+	return &dpti_pkgs[topology_logical_package_id(cpu)];
+}
+
+/*
+ * Reads dpti_pkgs[] without dpti_mutex: the syscore callers run with
+ * interrupts disabled on the only online CPU.
+ */
+static bool dpti_cpu_is_owner(unsigned int cpu)
+{
+	u16 pkg_id;
+
+	if (dpti_lookup_pkg_id(cpu, &pkg_id))
+		return false;
+
+	return dpti_pkgs[pkg_id].owner == cpu;
+}
+
+/*
+ * Must be called with cpu_hotplug_lock held to prevent CPUs from going offline
+ * while iterating through packages and interrupts must be enabled to avoid
+ * deadlocks in SMP function calls. The syscore shutdown callback also calls
+ * this function, but runs with CPU hotplug disabled (and interrupts enabled).
+ */
+static void dpti_clear_all(void)
+{
+	int i;
+
+	if (!dpti_supported())
+		return;
+
+	guard(mutex)(&dpti_mutex);
+
+	/*
+	 * No need to reset the owners: callers free dpti_pkgs[] or have shut
+	 * DPTI down.
+	 */
+	for (i = 0; i < topology_max_packages(); i++) {
+		unsigned int owner = dpti_pkgs[i].owner;
+
+		if (owner == nr_cpu_ids)
+			continue;
+
+		dpti_clear_on_cpu(owner);
+	}
+}
+
+/**
+ * enum dpti_rank - How suitable a CPU is as a DPTI owner
+ * @DPTI_RANK_NONE:		No eligible CPU.
+ * @DPTI_RANK_ISOLATED:		nohz_full-isolated (last resort).
+ * @DPTI_RANK_HOUSEKEEPING:	Not isolated (ideal automatic choice).
+ * @DPTI_RANK_PINNED:		Explicitly requested by the user; overrides any
+ *				automatic choice.
+ *
+ * Higher is better; the selection picks the highest-ranked online CPU in the
+ * package.
+ */
+enum dpti_rank {
+	DPTI_RANK_NONE,
+	DPTI_RANK_ISOLATED,
+	DPTI_RANK_HOUSEKEEPING,
+	DPTI_RANK_PINNED,
+};
+
+static enum dpti_rank dpti_cpu_rank(unsigned int cpu)
+{
+	/*
+	 * Prefer a HK_TYPE_KERNEL_NOISE CPU to avoid disturbing nohz_full
+	 * isolated CPUs. The mask is boot-static. No locking needed.
+	 */
+	if (housekeeping_cpu(cpu, HK_TYPE_KERNEL_NOISE))
+		return DPTI_RANK_HOUSEKEEPING;
+
+	return DPTI_RANK_ISOLATED;
+}
+
+/*
+ * Select the owner of the package-level thermal interrupt for @pkg_cpu's
+ * package. @skip is excluded from the selection (e.g., if it is going offline).
+ * @rank receives the rank of the selected CPU.
+ *
+ * A user-pinned CPU takes precedence whenever it is online; otherwise the best
+ * ranked CPU in the package is chosen.
+ */
+static unsigned int dpti_select_cpu(unsigned int pkg_cpu, unsigned int skip,
+				    enum dpti_rank *rank)
+{
+	const struct cpumask *pkg_mask = topology_core_cpumask(pkg_cpu);
+	enum dpti_rank best_rank = DPTI_RANK_NONE;
+	unsigned int cpu, pin, best = nr_cpu_ids;
+
+	lockdep_assert_cpus_held();
+	lockdep_assert_held(&dpti_mutex);
+
+	/*
+	 * Choose the user-pinned CPU if available: it is online and not going
+	 * offline (as indicated by @skip).
+	 */
+	pin = dpti_pkg_of_cpu_nocheck(pkg_cpu)->pin;
+	if (pin < nr_cpu_ids && pin != skip &&
+	    cpumask_test_cpu(pin, pkg_mask)) {
+		*rank = DPTI_RANK_PINNED;
+		return pin;
+	}
+
+	for_each_cpu(cpu, pkg_mask) {
+		enum dpti_rank cpu_rank;
+
+		if (cpu == skip)
+			continue;
+
+		cpu_rank = dpti_cpu_rank(cpu);
+		if (cpu_rank > best_rank) {
+			best_rank = cpu_rank;
+			best = cpu;
+			/*
+			 * Nothing outranks a housekeeping CPU in automatic
+			 * selection.
+			 */
+			if (best_rank == DPTI_RANK_HOUSEKEEPING)
+				break;
+		}
+	}
+
+	*rank = best_rank;
+
+	return best;
+}
+
+static void dpti_warn_if_isolated(unsigned int cpu, enum dpti_rank rank)
+{
+	if (rank == DPTI_RANK_ISOLATED)
+		pr_warn_once("Package %u thermal interrupt directed to nohz_full-isolated CPU%u; no housekeeping CPU available\n",
+			     topology_logical_package_id(cpu), cpu);
+}
+
+static void dpti_warn_if_pinned_isolated(unsigned int cpu)
+{
+	if (dpti_cpu_rank(cpu) == DPTI_RANK_ISOLATED)
+		pr_warn_ratelimited("Package %u thermal interrupt pinned to nohz_full-isolated CPU%u\n",
+				    topology_logical_package_id(cpu), cpu);
+}
+
+/*
+ * Reselect the owner for @cpu's package and migrate to it, but only on a
+ * strict rank improvement.
+ */
+static int dpti_update_owner(unsigned int cpu)
+{
+	struct dpti_pkg *pkg = dpti_pkg_of_cpu_nocheck(cpu);
+	enum dpti_rank new_rank, old_rank;
+	unsigned int new_cpu, old_cpu;
+	int ret;
+
+	lockdep_assert_held(&dpti_mutex);
+
+	if (dpti_shut_down)
+		return 0;
+
+	old_cpu = pkg->owner;
+	new_cpu = dpti_select_cpu(cpu, nr_cpu_ids, &new_rank);
+	if (new_cpu == old_cpu)
+		return 0;
+
+	old_rank = DPTI_RANK_NONE;
+	if (old_cpu < nr_cpu_ids)
+		old_rank = dpti_cpu_rank(old_cpu);
+	if (new_rank <= old_rank)
+		return 0;
+
+	ret = dpti_program_on_cpu(new_cpu);
+	if (ret) {
+		if (old_cpu < nr_cpu_ids)
+			pr_warn_once("Failed to redirect package thermal interrupt from CPU%u to CPU%u; keeping CPU%u\n",
+				     old_cpu, new_cpu, old_cpu);
+		return ret;
+	}
+
+	if (old_cpu < nr_cpu_ids)
+		dpti_clear_on_cpu(old_cpu);
+
+	pkg->owner = new_cpu;
+	dpti_warn_if_isolated(new_cpu, new_rank);
+
+	return 0;
+}
+
+static int dpti_online(unsigned int cpu)
+{
+	int ret;
+
+	if (!dpti_supported())
+		return 0;
+
+	/*
+	 * Validate @cpu's package id on behalf of dpti_update_owner(), which
+	 * indexes dpti_pkgs[] based on @cpu.
+	 */
+	ret = dpti_lookup_pkg_id(cpu, NULL);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&dpti_mutex);
+
+	/*
+	 * A CPU coming online may be a better owner than the one currently
+	 * programmed. If the hardware does not acknowledge it, the current
+	 * owner keeps the interrupt: a valid outcome, already reported.
+	 */
+	ret = dpti_update_owner(cpu);
+	if (ret && dpti_pkg_of_cpu_nocheck(cpu)->owner < nr_cpu_ids)
+		return 0;
+
+	return ret;
+}
+
+static void dpti_offline(unsigned int cpu)
+{
+	enum dpti_rank new_rank;
+	unsigned int new_cpu;
+	u16 pkg_id;
+
+	if (dpti_lookup_pkg_id(cpu, &pkg_id))
+		return;
+
+	guard(mutex)(&dpti_mutex);
+
+	if (dpti_shut_down)
+		return;
+
+	/* Not the owner of the directed interrupt. */
+	if (dpti_pkgs[pkg_id].owner != cpu)
+		return;
+
+	/*
+	 * The package-level interrupt must remain directed after this CPU goes
+	 * offline.
+	 */
+	new_cpu = dpti_select_cpu(cpu, cpu, &new_rank);
+
+	/*
+	 * dpti_program_on_cpu() undoes a setup that the hardware does not
+	 * acknowledge on @new_cpu. With @cpu cleared below, no CPU is then
+	 * configured to receive the package-level interrupt: all CPUs in the
+	 * package receive it.
+	 */
+	if (new_cpu < nr_cpu_ids && dpti_program_on_cpu(new_cpu)) {
+		pr_warn_once("Failed to redirect package thermal interrupt from CPU%u to CPU%u; reverting to broadcast\n",
+			     cpu, new_cpu);
+
+		new_cpu = nr_cpu_ids;
+		new_rank = DPTI_RANK_NONE;
+	}
+
+	/*
+	 * Clear the directed interrupt on @cpu. Hardware acknowledgment can be
+	 * ignored since @cpu is going offline.
+	 */
+	dpti_config_this_cpu(false);
+
+	dpti_pkgs[pkg_id].owner = new_cpu;
+	dpti_warn_if_isolated(new_cpu, new_rank);
+}
+
+/*
+ * The DPTI owner is a per-package property, but it is exposed through the
+ * existing per-CPU thermal_throttle sysfs group.
+ *
+ * Reading reports whether @cpu is the owner programmed in hardware, not
+ * whether it is pinned. A released pin therefore still reads 1 until the
+ * placement changes, and while a pinned CPU is offline the remaining CPUs
+ * report the automatically chosen fallback.
+ */
+static ssize_t package_interrupt_owner_show(struct device *dev,
+					    struct device_attribute *attr,
+					    char *buf)
+{
+	unsigned int cpu = dev->id;
+	bool is_owner;
+	u16 pkg_id;
+	int ret;
+
+	ret = dpti_lookup_pkg_id(cpu, &pkg_id);
+	if (ret)
+		return ret;
+
+	scoped_guard(mutex, &dpti_mutex)
+		is_owner = dpti_pkgs[pkg_id].owner == cpu;
+
+	return sysfs_emit(buf, "%u\n", is_owner);
+}
+
+static int dpti_pin_owner(unsigned int cpu)
+{
+	struct dpti_pkg *pkg = dpti_pkg_of_cpu_nocheck(cpu);
+	unsigned int old_pin;
+	int ret;
+
+	guard(mutex)(&dpti_mutex);
+
+	/* The pin outranks every automatic choice, so it always migrates. */
+	old_pin = pkg->pin;
+	pkg->pin = cpu;
+
+	/*
+	 * A failed write must not change policy or get silently retried on the
+	 * next hotplug event.
+	 */
+	ret = dpti_update_owner(cpu);
+	if (ret)
+		pkg->pin = old_pin;
+	else
+		dpti_warn_if_pinned_isolated(cpu);
+
+	return ret;
+}
+
+static void dpti_unpin_owner(unsigned int cpu)
+{
+	struct dpti_pkg *pkg = dpti_pkg_of_cpu_nocheck(cpu);
+
+	guard(mutex)(&dpti_mutex);
+
+	if (pkg->pin != cpu)
+		return;
+
+	pkg->pin = nr_cpu_ids;
+
+	/*
+	 * Without the pin, a housekeeping CPU of the package outranks an
+	 * isolated owner. Migrate rather than wait for a re-evaluation that may
+	 * never come. A hardware acknowledgment failure leaves the interrupt in
+	 * place, which is still a valid outcome of releasing a pin.
+	 */
+	dpti_update_owner(cpu);
+}
+
+static ssize_t package_interrupt_owner_store(struct device *dev,
+					     struct device_attribute *attr,
+					     const char *buf, size_t count)
+{
+	unsigned int cpu = dev->id;
+	bool want_pin;
+	int ret;
+
+	ret = dpti_lookup_pkg_id(cpu, NULL);
+	if (ret)
+		return ret;
+
+	ret = kstrtobool(buf, &want_pin);
+	if (ret)
+		return ret;
+
+	/*
+	 * The selection reads the package's online CPUs; the programming runs
+	 * remotely on the CPU it picks. Both need the CPU hotplug lock, which
+	 * this write cannot block on: offlining @cpu holds it while
+	 * sysfs_remove_group() waits for this write to release its reference on
+	 * the attribute. Restart the syscall instead, which drops that
+	 * reference and lets the offline proceed. Avoid busy looping with a 5ms
+	 * sleep between tries. lock_device_hotplug_sysfs() follows the same
+	 * approach.
+	 */
+	if (!cpus_read_trylock()) {
+		msleep(5);
+		return restart_syscall();
+	}
+
+	if (want_pin)
+		ret = dpti_pin_owner(cpu);
+	else
+		dpti_unpin_owner(cpu);
+
+	cpus_read_unlock();
+
+	return ret ? ret : count;
+}
+static DEVICE_ATTR_RW(package_interrupt_owner);
+
+/*
+ * CPU0 may own the directed interrupt, but the CPU hotplug callbacks are not
+ * called for CPU0 during suspend and resume.
+ */
+static void dpti_syscore_resume(void *data)
+{
+	if (!dpti_cpu_is_owner(0))
+		return;
+
+	if (!dpti_program_this_cpu(NULL))
+		return;
+
+	/*
+	 * Let another CPU take over via CPU hotplug. No lock is needed here:
+	 * only CPU0 is online and interrupts are disabled.
+	 */
+	dpti_pkg_of_cpu_nocheck(0)->owner = nr_cpu_ids;
+}
+
+static int dpti_syscore_suspend(void *data)
+{
+	if (dpti_cpu_is_owner(0))
+		dpti_config_this_cpu(false);
+
+	return 0;
+}
+
+static void dpti_syscore_shutdown(void *data)
+{
+	scoped_guard(mutex, &dpti_mutex)
+		dpti_shut_down = true;
+
+	dpti_clear_all();
+}
+
+static const struct syscore_ops dpti_syscore_ops = {
+	.resume = dpti_syscore_resume,
+	.suspend = dpti_syscore_suspend,
+	.shutdown = dpti_syscore_shutdown,
+};
+
+static struct syscore dpti_syscore = {
+	.ops = &dpti_syscore_ops,
+};
+
+static __init void dpti_init(void)
+{
+	int i;
+
+	if (!boot_cpu_has(X86_FEATURE_DPTI))
+		return;
+
+	dpti_pkgs = kmalloc_objs(*dpti_pkgs, topology_max_packages());
+	if (!dpti_pkgs)
+		return;
+
+	for (i = 0; i < topology_max_packages(); i++) {
+		dpti_pkgs[i].owner = nr_cpu_ids;
+		dpti_pkgs[i].pin = nr_cpu_ids;
+	}
+
+	register_syscore(&dpti_syscore);
+}
+
+static void dpti_cleanup(void)
+{
+	unsigned int cpu;
+
+	if (!dpti_supported())
+		return;
+
+	/* The attribute must not outlive the per-package state. */
+	for_each_online_cpu(cpu)
+		sysfs_remove_file_from_group(&get_cpu_device(cpu)->kobj,
+					     &dev_attr_package_interrupt_owner.attr,
+					     thermal_attr_group.name);
+
+	unregister_syscore(&dpti_syscore);
+	dpti_clear_all();
+	kfree(dpti_pkgs);
+	dpti_pkgs = NULL;
+}
+
 /* Add/Remove thermal_throttle interface for CPU device: */
 static int thermal_throttle_add_dev(struct device *dev, unsigned int cpu)
 {
@@ -483,6 +1096,14 @@ static int thermal_throttle_add_dev(struct device *dev, unsigned int cpu)
 	err = sysfs_create_group(&dev->kobj, &thermal_attr_group);
 	if (err)
 		return err;
+
+	if (dpti_supported()) {
+		err = sysfs_add_file_to_group(&dev->kobj,
+					      &dev_attr_package_interrupt_owner.attr,
+					      thermal_attr_group.name);
+		if (err)
+			goto del_group;
+	}
 
 	if (cpu_has(c, X86_FEATURE_PLN) && int_pln_enable) {
 		err = sysfs_add_file_to_group(&dev->kobj,
@@ -533,253 +1154,6 @@ static void thermal_throttle_remove_dev(struct device *dev)
 	sysfs_remove_group(&dev->kobj, &thermal_attr_group);
 }
 
-static int check_directed_thermal_pkg_intr_ack(void)
-{
-	unsigned int count = 15000;
-	u64 msr_val;
-
-	/*
-	 * Hardware acknowledges the directed interrupt setup in 10ms or less.
-	 * Wait 15ms to be safe.
-	 */
-	do {
-		rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS, msr_val);
-		udelay(1);
-	} while (!(msr_val & PACKAGE_THERM_STATUS_DPTI_ACK) && --count);
-
-	if (!count)
-		return -ETIMEDOUT;
-
-	thermal_clear_package_intr_status(PACKAGE_LEVEL,
-					  PACKAGE_THERM_STATUS_DPTI_ACK);
-
-	return 0;
-}
-
-static void config_directed_thermal_pkg_intr(void *info)
-{
-	bool enable = *((bool *)info);
-	u64 msr_val;
-
-	rdmsrq(MSR_IA32_THERM_INTERRUPT, msr_val);
-
-	if (enable)
-		msr_val |= THERM_INT_DPTI_ENABLE;
-	else
-		msr_val &= ~THERM_INT_DPTI_ENABLE;
-
-	wrmsrq(MSR_IA32_THERM_INTERRUPT, msr_val);
-}
-
-/*
- * Accessed from CPU hotplug callbacks and from code that runs while CPU
- * hotplug is inactive: the init and cleanup paths as well as syscore callbacks.
- * No extra locking needed.
- */
-static unsigned int *directed_intr_handler_cpus;
-
-static bool directed_thermal_pkg_intr_supported(void)
-{
-	if (!boot_cpu_has(X86_FEATURE_DPTI))
-		return false;
-
-	if (!directed_intr_handler_cpus)
-		return false;
-
-	return true;
-}
-
-/*
- * Must be called with cpu_hotplug_lock held to prevent CPUs from going offline
- * while iterating through packages and interrupts must be enabled to avoid
- * deadlocks in SMP function calls. The syscore shutdown callback also calls
- * this function, but runs with CPU hotplug disabled (and interrupts enabled).
- */
-static void disable_directed_thermal_pkg_intr_all(void)
-{
-	bool enable = false;
-	int i;
-
-	if (!directed_thermal_pkg_intr_supported())
-		return;
-
-	for (i = 0; i < topology_max_packages(); i++) {
-		if (directed_intr_handler_cpus[i] == nr_cpu_ids)
-			continue;
-
-		smp_call_function_single(directed_intr_handler_cpus[i],
-					 config_directed_thermal_pkg_intr,
-					 &enable, true);
-	}
-}
-
-static int enable_directed_thermal_pkg_intr(unsigned int cpu)
-{
-	bool enable = true;
-	u16 pkg_id;
-
-	if (!directed_thermal_pkg_intr_supported())
-		return 0;
-
-	pkg_id = topology_logical_package_id(cpu);
-	if (pkg_id >= topology_max_packages())
-		return -EINVAL;
-
-	/* Another CPU in this package already handles the directed interrupt. */
-	if (directed_intr_handler_cpus[pkg_id] != nr_cpu_ids)
-		return 0;
-
-	thermal_clear_package_intr_status(PACKAGE_LEVEL,
-					  PACKAGE_THERM_STATUS_DPTI_ACK);
-
-	config_directed_thermal_pkg_intr(&enable);
-	if (!check_directed_thermal_pkg_intr_ack()) {
-		directed_intr_handler_cpus[pkg_id] = cpu;
-		return 0;
-	}
-
-	/*
-	 * A failure indicates faulty hardware. Roll back completely so that
-	 * no other CPU tries. This is especially important during boot as all
-	 * CPUs may come online and would otherwise keep trying.
-	 */
-	enable = false;
-	config_directed_thermal_pkg_intr(&enable);
-
-	return -ETIMEDOUT;
-}
-
-static void disable_directed_thermal_pkg_intr(unsigned int cpu)
-{
-	unsigned int new_cpu;
-	bool enable;
-	u16 pkg_id;
-
-	if (!directed_thermal_pkg_intr_supported())
-		return;
-
-	pkg_id = topology_logical_package_id(cpu);
-	if (pkg_id >= topology_max_packages())
-		return;
-
-	/* Not the CPU handling the directed interrupt. */
-	if (directed_intr_handler_cpus[pkg_id] != cpu)
-		return;
-
-	/*
-	 * The package-level interrupt must remain directed after this CPU goes
-	 * offline.
-	 */
-	new_cpu = cpumask_any_but(topology_core_cpumask(cpu), cpu);
-	if (new_cpu < nr_cpu_ids) {
-		enable = true;
-		thermal_clear_package_intr_status(PACKAGE_LEVEL,
-						  PACKAGE_THERM_STATUS_DPTI_ACK);
-
-		/*
-		 * We are here via CPU hotplug. Since we are holding the
-		 * cpu_hotplug_lock, @new_cpu cannot go offline and interrupts
-		 * are enabled, so the SMP function call is safe.
-		 *
-		 * The syscore suspend callback runs with interrupts disabled,
-		 * but it does not reach this path because all the secondary
-		 * CPUs are offline.
-		 */
-		smp_call_function_single(new_cpu, config_directed_thermal_pkg_intr,
-					 &enable, true);
-	}
-
-	/*
-	 * If hardware does not acknowledge the directed interrupt setup on
-	 * @new_cpu, disable the redirection. Since no other CPU is configured
-	 * to receive the package-level interrupt, all CPUs in the package will
-	 * receive it.
-	 */
-	enable = false;
-	if (new_cpu < nr_cpu_ids && check_directed_thermal_pkg_intr_ack()) {
-		smp_call_function_single(new_cpu, config_directed_thermal_pkg_intr,
-					 &enable, true);
-
-		pr_warn_once("Failed to redirect package thermal interrupt from CPU%u to CPU%u; reverting to broadcast.\n",
-			     cpu, new_cpu);
-
-		new_cpu = nr_cpu_ids;
-	}
-
-	/*
-	 * Clear the directed interrupt on @cpu. Hardware acknowledgment can be
-	 * ignored since @cpu is going offline.
-	 */
-	config_directed_thermal_pkg_intr(&enable);
-
-	directed_intr_handler_cpus[pkg_id] = (new_cpu < nr_cpu_ids) ? new_cpu : nr_cpu_ids;
-}
-
-/*
- * CPU0 may be handling the directed interrupt, but the CPU hotplug callbacks
- * are not called for CPU0 during suspend and resume.
- */
-static void directed_pkg_intr_syscore_resume(void *data)
-{
-	/*
-	 * We can't do anything to handle errors. If direction fails for CPU0,
-	 * another CPU will take over or disable direction entirely during CPU
-	 * hotplug.
-	 */
-	enable_directed_thermal_pkg_intr(0);
-}
-
-static int directed_pkg_intr_syscore_suspend(void *data)
-{
-	disable_directed_thermal_pkg_intr(0);
-
-	return 0;
-}
-
-static void directed_pkg_intr_syscore_shutdown(void *data)
-{
-	disable_directed_thermal_pkg_intr_all();
-}
-
-static const struct syscore_ops directed_pkg_intr_pm_ops = {
-	.resume = directed_pkg_intr_syscore_resume,
-	.suspend = directed_pkg_intr_syscore_suspend,
-	.shutdown = directed_pkg_intr_syscore_shutdown,
-};
-
-static struct syscore directed_pkg_intr_pm = {
-	.ops = &directed_pkg_intr_pm_ops,
-};
-
-static __init void init_directed_pkg_intr(void)
-{
-	int i;
-
-	if (!boot_cpu_has(X86_FEATURE_DPTI))
-		return;
-
-	directed_intr_handler_cpus = kmalloc_objs(*directed_intr_handler_cpus,
-						  topology_max_packages());
-	if (!directed_intr_handler_cpus)
-		return;
-
-	for (i = 0; i < topology_max_packages(); i++)
-		directed_intr_handler_cpus[i] = nr_cpu_ids;
-
-	register_syscore(&directed_pkg_intr_pm);
-}
-
-static void cleanup_directed_pkg_thermal_intr(void)
-{
-	if (!directed_thermal_pkg_intr_supported())
-		return;
-
-	unregister_syscore(&directed_pkg_intr_pm);
-	disable_directed_thermal_pkg_intr_all();
-	kfree(directed_intr_handler_cpus);
-	directed_intr_handler_cpus = NULL;
-}
-
 /* Get notified when a cpu comes on/off. Be hotplug friendly. */
 static int thermal_throttle_online(unsigned int cpu)
 {
@@ -805,9 +1179,17 @@ static int thermal_throttle_online(unsigned int cpu)
 	 */
 	intel_hfi_online(cpu);
 
-	if (enable_directed_thermal_pkg_intr(cpu)) {
-		pr_info_once("Failed to direct package thermal interrupts. All CPUs will receive it.\n");
-		cleanup_directed_pkg_thermal_intr();
+	if (dpti_online(cpu)) {
+		pr_warn_once("Failed to direct the thermal interrupt of package %u; reverting to broadcast on %s\n",
+			     topology_logical_package_id(cpu),
+			     dpti_in_boot ? "all packages" : "this package");
+
+		/*
+		 * A failure during boot indicates faulty hardware, so no other
+		 * CPU should try.
+		 */
+		if (dpti_in_boot)
+			dpti_cleanup();
 	}
 
 	/* Unmask the thermal vector after the above workqueues are initialized. */
@@ -827,7 +1209,7 @@ static int thermal_throttle_offline(unsigned int cpu)
 	l = apic_read(APIC_LVTTHMR);
 	apic_write(APIC_LVTTHMR, l | APIC_LVT_MASKED);
 
-	disable_directed_thermal_pkg_intr(cpu);
+	dpti_offline(cpu);
 
 	intel_hfi_offline(cpu);
 
@@ -848,17 +1230,28 @@ static __init int thermal_throttle_init_device(void)
 	if (!atomic_read(&therm_throt_en))
 		return 0;
 
-	init_directed_pkg_intr();
+	dpti_init();
 
 	intel_hfi_init();
 
-	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "x86/therm:online",
-				thermal_throttle_online,
-				thermal_throttle_offline);
-	if (ret >= 0)
-		return 0;
+	/*
+	 * A CPU coming online before dpti_in_boot is cleared would treat a DPTI
+	 * failure as faulty hardware and tear DPTI down. Hold the CPU hotplug
+	 * lock across the registration and the clear, so that the flag changes
+	 * only while no CPU can come online.
+	 */
+	guard(cpus_read_lock)();
 
-	cleanup_directed_pkg_thermal_intr();
+	ret = cpuhp_setup_state_cpuslocked(CPUHP_AP_ONLINE_DYN,
+					   "x86/therm:online",
+					   thermal_throttle_online,
+					   thermal_throttle_offline);
+	if (ret >= 0) {
+		dpti_in_boot = false;
+		return 0;
+	}
+
+	dpti_cleanup();
 
 	return ret;
 }
