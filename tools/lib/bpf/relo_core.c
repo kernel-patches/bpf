@@ -861,12 +861,22 @@ static int bpf_core_calc_type_relo(const struct bpf_core_relo *relo,
 	return 0;
 }
 
+static __u64 bpf_core_enum_val(const struct btf_type *t, int idx)
+{
+	const struct btf_enum *e;
+
+	if (btf_is_enum(t)) {
+		e = btf_enum(t) + idx;
+		return BTF_INFO_KFLAG(t->info) ? (__s64)e->val : (__u32)e->val;
+	}
+	return btf_enum64_value(btf_enum64(t) + idx);
+}
+
 static int bpf_core_calc_enumval_relo(const struct bpf_core_relo *relo,
 				      const struct bpf_core_spec *spec,
 				      __u64 *val)
 {
 	const struct btf_type *t;
-	const struct btf_enum *e;
 
 	switch (relo->kind) {
 	case BPF_CORE_ENUMVAL_EXISTS:
@@ -876,18 +886,78 @@ static int bpf_core_calc_enumval_relo(const struct bpf_core_relo *relo,
 		if (!spec)
 			return -EUCLEAN; /* request instruction poisoning */
 		t = btf_type_by_id(spec->btf, spec->spec[0].type_id);
-		if (btf_is_enum(t)) {
-			e = btf_enum(t) + spec->spec[0].idx;
-			*val = BTF_INFO_KFLAG(t->info) ? (__s64)e->val : (__u32)e->val;
-		} else {
-			*val = btf_enum64_value(btf_enum64(t) + spec->spec[0].idx);
-		}
+		*val = bpf_core_enum_val(t, spec->spec[0].idx);
 		break;
 	default:
 		return -EOPNOTSUPP;
 	}
 
 	return 0;
+}
+
+static bool bpf_core_enum_val_fits_int(__u64 val, bool val_signed)
+{
+	return val_signed ? (__s64)val == (__s32)val : val <= INT_MAX;
+}
+
+/*
+ * As in C, the enumerators of an enum have type int if all values of the enum
+ * fit in int, even for a 1-byte enum made with the packed or mode(byte)
+ * attribute, and otherwise the type of the enum, which is then 4 or 8 bytes.
+ */
+static bool bpf_core_enum_fits_int(const struct btf_type *t)
+{
+	bool is_signed = BTF_INFO_KFLAG(t->info);
+	int i, n = btf_vlen(t);
+
+	for (i = 0; i < n; i++) {
+		if (!bpf_core_enum_val_fits_int(bpf_core_enum_val(t, i), is_signed))
+			return false;
+	}
+	return true;
+}
+
+/*
+ * Check whether the target value of an ENUMVAL_VALUE relocation fits in the
+ * type of the local enumerator. The compiler may convert the relocated 64-bit
+ * value to that type, e.g., for an enumerator of an enum with the
+ * preserve_access_index attribute. A target value out of the range of that
+ * type then becomes a different value, e.g., 0x100000000 becomes 0 for an int
+ * enumerator, and the program uses it without any error.
+ */
+static int bpf_core_check_enumval_range(const char *prog_name, int relo_idx,
+					const struct bpf_core_spec *local_spec,
+					const struct bpf_core_spec *targ_spec,
+					__u64 targ_val)
+{
+	const struct btf_type *local_t, *targ_t;
+	bool local_signed, targ_signed, fits;
+	const char *type;
+
+	local_t = btf_type_by_id(local_spec->btf, local_spec->spec[0].type_id);
+	targ_t = btf_type_by_id(targ_spec->btf, targ_spec->spec[0].type_id);
+	local_signed = BTF_INFO_KFLAG(local_t->info);
+	targ_signed = BTF_INFO_KFLAG(targ_t->info);
+
+	if (bpf_core_enum_fits_int(local_t)) {
+		type = "int";
+		fits = bpf_core_enum_val_fits_int(targ_val, targ_signed);
+	} else if (local_t->size == 4) {
+		type = "unsigned int";
+		/* a negative value is sign-extended, so it is also too big */
+		fits = targ_val <= UINT_MAX;
+	} else {
+		/* the 64-bit value is used as is, only its sign may change */
+		type = local_signed ? "long" : "unsigned long";
+		fits = local_signed == targ_signed || (__s64)targ_val >= 0;
+	}
+	if (fits)
+		return 0;
+
+	pr_warn("prog '%s': relo #%d: enumerator '%s' value 0x%llx does not fit in %s type of local enumerator\n",
+		prog_name, relo_idx, targ_spec->spec[0].name,
+		(unsigned long long)targ_val, type);
+	return -EUCLEAN; /* request instruction poisoning */
 }
 
 /* Calculate original and target relocation values, given local and target
@@ -965,6 +1035,10 @@ static int bpf_core_calc_relo(const char *prog_name,
 	} else if (core_relo_is_enumval_based(relo->kind)) {
 		err = bpf_core_calc_enumval_relo(relo, local_spec, &res->orig_val);
 		err = err ?: bpf_core_calc_enumval_relo(relo, targ_spec, &res->new_val);
+		if (!err && relo->kind == BPF_CORE_ENUMVAL_VALUE)
+			err = bpf_core_check_enumval_range(prog_name, relo_idx,
+							   local_spec, targ_spec,
+							   res->new_val);
 	}
 
 done:
