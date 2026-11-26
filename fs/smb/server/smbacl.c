@@ -1008,11 +1008,11 @@ int smb_inherit_dacl(struct ksmbd_conn *conn,
 			flags = 0;
 		}
 
-		if (!compare_sids(&creator_owner, parent_aces->sid)) {
+		if (smb_sid_equal(&creator_owner, parent_aces->sid)) {
 			creator = &creator_owner;
 			id_to_sid(uid, SIDOWNER, &owner_sid);
 			psid = &owner_sid;
-		} else if (!compare_sids(&creator_group, parent_aces->sid)) {
+		} else if (smb_sid_equal(&creator_group, parent_aces->sid)) {
 			creator = &creator_group;
 			id_to_sid(gid, SIDUNIX_GROUP, &group_sid);
 			psid = &group_sid;
