@@ -7,6 +7,8 @@
 
 #include "common/xsc_cmd.h"
 #include "common/xsc_core.h"
+#include "eq.h"
+#include "pci_irq.h"
 
 static const struct pci_device_id xsc_pci_id_table[] = {
 	{ PCI_DEVICE(XSC_PCI_VENDOR_ID, XSC_MC_PF_DEV_ID) },
@@ -160,6 +162,12 @@ static int xsc_pci_init(struct xsc_core_device *xdev,
 		goto err_cmd_cleanup;
 	}
 
+	err = xsc_irq_eq_create(xdev);
+	if (err) {
+		pci_err(pdev, "failed to create irq/eq: err=%d\n", err);
+		goto err_cmd_cleanup;
+	}
+
 	return 0;
 
 err_cmd_cleanup:
@@ -179,6 +187,7 @@ static void xsc_pci_fini(struct xsc_core_device *xdev)
 {
 	struct pci_dev *pdev = xdev->pdev;
 
+	xsc_irq_eq_destroy(xdev);
 	xsc_cmd_cleanup(xdev);
 	pci_iounmap(pdev, xdev->bar);
 	pci_clear_master(pdev);
