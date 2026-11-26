@@ -5742,7 +5742,7 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	/* check if bpf_xdp_adjust_tail was used */
 	off = xdp->data_end - orig_data_end;
 	if (off != 0) {
-		skb_set_tail_pointer(skb, xdp->data_end - xdp->data);
+		skb_set_tail_pointer(skb, xdp->data_end - xdp->data - mac_len);
 		skb->len += off; /* positive on grow, negative on shrink */
 	}
 
