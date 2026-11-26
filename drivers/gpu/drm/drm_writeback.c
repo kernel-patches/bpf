@@ -226,9 +226,9 @@ static int __drm_writeback_connector_init(struct drm_device *dev,
  * drm_writeback_connector_init - Initialize a writeback connector
  *
  * @dev: DRM device
- * @wb_connector: Writeback connector to initialize
- * @enc: handle to the already initialized drm encoder
+ * @connector: DRM connector which contains the writeback connector to initialize
  * @con_funcs: Connector funcs vtable
+ * @enc: handle to the already initialized drm encoder
  * @formats: Array of supported pixel formats for the writeback engine
  * @n_formats: Length of the formats array
  *
@@ -251,12 +251,12 @@ static int __drm_writeback_connector_init(struct drm_device *dev,
  * Returns: 0 on success, or a negative error code
  */
 int drm_writeback_connector_init(struct drm_device *dev,
-				 struct drm_writeback_connector *wb_connector,
+				 struct drm_connector *connector,
 				 const struct drm_connector_funcs *con_funcs,
 				 struct drm_encoder *enc,
 				 const u32 *formats, int n_formats)
 {
-	struct drm_connector *connector = drm_writeback_to_connector(wb_connector);
+	struct drm_writeback_connector *wb_connector = &connector->writeback;
 	int ret;
 
 	ret = drm_connector_init(dev, connector, con_funcs,
@@ -312,7 +312,7 @@ void drm_writeback_connector_cleanup(struct drm_connector *connector)
  * drmm_writeback_connector_init - Initialize a writeback connector
  *
  * @dev: DRM device
- * @wb_connector: Writeback connector to initialize
+ * @connector: DRM connector which contains the writeback connector to initialize
  * @con_funcs: Connector funcs vtable
  * @enc: Encoder to connect this writeback connector
  * @formats: Array of supported pixel formats for the writeback engine
@@ -329,12 +329,12 @@ void drm_writeback_connector_cleanup(struct drm_connector *connector)
  * Returns: 0 on success, or a negative error code
  */
 int drmm_writeback_connector_init(struct drm_device *dev,
-				  struct drm_writeback_connector *wb_connector,
+				  struct drm_connector *connector,
 				  const struct drm_connector_funcs *con_funcs,
 				  struct drm_encoder *enc,
 				  const u32 *formats, int n_formats)
 {
-	struct drm_connector *connector = drm_writeback_to_connector(wb_connector);
+	struct drm_writeback_connector *wb_connector = &connector->writeback;
 	int ret;
 
 	ret = drmm_connector_init(dev, connector, con_funcs,

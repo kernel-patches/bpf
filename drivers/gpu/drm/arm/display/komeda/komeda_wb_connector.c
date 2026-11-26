@@ -145,7 +145,6 @@ static int komeda_wb_connector_add(struct komeda_kms_dev *kms,
 {
 	struct komeda_dev *mdev = kms->base.dev_private;
 	struct komeda_wb_connector *kwb_conn;
-	struct drm_writeback_connector *wb_conn;
 	struct drm_display_info *info;
 	struct drm_encoder *encoder;
 	struct drm_encoder *wb_encoder;
@@ -163,8 +162,6 @@ static int komeda_wb_connector_add(struct komeda_kms_dev *kms,
 		return -ENOMEM;
 
 	kwb_conn->wb_layer = kcrtc->master->wb_layer;
-
-	wb_conn = &kwb_conn->base.writeback;
 
 	formats = komeda_get_layer_fourcc_list(&mdev->fmt_tbl,
 					       kwb_conn->wb_layer->layer_type,
@@ -186,7 +183,7 @@ static int komeda_wb_connector_add(struct komeda_kms_dev *kms,
 		return err;
 	}
 
-	err = drm_writeback_connector_init(&kms->base, wb_conn,
+	err = drm_writeback_connector_init(&kms->base, &kwb_conn->base,
 					   &komeda_wb_connector_funcs,
 					   wb_encoder,
 					   formats, n_formats);

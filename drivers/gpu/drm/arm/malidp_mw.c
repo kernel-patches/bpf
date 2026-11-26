@@ -239,7 +239,7 @@ int malidp_mw_connector_init(struct drm_device *drm)
 		return ret;
 	}
 
-	ret = drm_writeback_connector_init(drm, &malidp->mw_connector.writeback,
+	ret = drm_writeback_connector_init(drm, &malidp->mw_connector,
 					   &malidp_mw_connector_funcs,
 					   &malidp->mw_encoder,
 					   formats, n_formats);

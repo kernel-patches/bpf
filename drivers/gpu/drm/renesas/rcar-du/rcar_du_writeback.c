@@ -204,7 +204,7 @@ static const u32 writeback_formats[] = {
 int rcar_du_writeback_init(struct rcar_du_device *rcdu,
 			   struct rcar_du_crtc *rcrtc)
 {
-	struct drm_writeback_connector *wb_conn = &rcrtc->wb_connector.writeback;
+	struct drm_connector *connector = &rcrtc->wb_connector;
 	struct drm_encoder *encoder = &rcrtc->encoder;
 	int ret;
 
@@ -216,9 +216,9 @@ int rcar_du_writeback_init(struct rcar_du_device *rcdu,
 	if (ret)
 		return ret;
 
-	drm_connector_helper_add(&rcrtc->wb_connector,
+	drm_connector_helper_add(connector,
 				 &rcar_du_wb_conn_helper_funcs);
-	ret = drm_writeback_connector_init(&rcdu->ddev, wb_conn,
+	ret = drm_writeback_connector_init(&rcdu->ddev, connector,
 					   &rcar_du_wb_conn_funcs,
 					   encoder,
 					   writeback_formats,

@@ -262,7 +262,7 @@ int amdgpu_dm_wb_connector_init(struct amdgpu_display_manager *dm,
 
 	drm_connector_helper_add(&wbcon->base, &amdgpu_dm_wb_conn_helper_funcs);
 
-	res = drm_writeback_connector_init(&dm->adev->ddev, &wbcon->base.writeback,
+	res = drm_writeback_connector_init(&dm->adev->ddev, &wbcon->base,
 					   &amdgpu_dm_wb_connector_funcs,
 					   &wbcon->encoder,
 					   amdgpu_dm_wb_formats,
