@@ -2045,7 +2045,6 @@ static int rx_add_rule(struct mlx5e_ipsec_sa_entry *sa_entry)
 	struct mlx5_accel_esp_xfrm_attrs *attrs = &sa_entry->attrs;
 	struct mlx5_core_dev *mdev = mlx5e_ipsec_sa2dev(sa_entry);
 	struct mlx5e_ipsec *ipsec = sa_entry->ipsec;
-	struct mlx5_flow_destination dest[2];
 	struct mlx5_flow_act flow_act = {};
 	struct mlx5_flow_handle *rule;
 	struct mlx5_flow_spec *spec;
@@ -2103,17 +2102,24 @@ static int rx_add_rule(struct mlx5e_ipsec_sa_entry *sa_entry)
 	flow_act.crypto.type = MLX5_FLOW_CONTEXT_ENCRYPT_DECRYPT_TYPE_IPSEC;
 	flow_act.crypto.obj_id = sa_entry->ipsec_obj_id;
 	flow_act.flags |= FLOW_ACT_NO_APPEND;
-	flow_act.action |= MLX5_FLOW_CONTEXT_ACTION_CRYPTO_DECRYPT |
-			   MLX5_FLOW_CONTEXT_ACTION_COUNT;
-	if (attrs->drop)
+	/* Keep decrypting packets even when dropped, to allow ESN state
+	 * updates.
+	 */
+	flow_act.action |= MLX5_FLOW_CONTEXT_ACTION_CRYPTO_DECRYPT;
+	if (attrs->drop) {
 		flow_act.action |= MLX5_FLOW_CONTEXT_ACTION_DROP;
-	else
-		flow_act.action |= MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
-	dest[0].type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
-	dest[0].ft = rx->ft.status;
-	dest[1].type = MLX5_FLOW_DESTINATION_TYPE_COUNTER;
-	dest[1].counter = counter;
-	rule = mlx5_add_flow_rules(rx->ft.sa, spec, &flow_act, dest, 2);
+		rule = mlx5_add_flow_rules(rx->ft.sa, spec, &flow_act, NULL, 0);
+	} else {
+		struct mlx5_flow_destination dest[2];
+
+		flow_act.action |= MLX5_FLOW_CONTEXT_ACTION_FWD_DEST |
+				   MLX5_FLOW_CONTEXT_ACTION_COUNT;
+		dest[0].type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
+		dest[0].ft = rx->ft.status;
+		dest[1].type = MLX5_FLOW_DESTINATION_TYPE_COUNTER;
+		dest[1].counter = counter;
+		rule = mlx5_add_flow_rules(rx->ft.sa, spec, &flow_act, dest, 2);
+	}
 	if (IS_ERR(rule)) {
 		err = PTR_ERR(rule);
 		mlx5_core_err(mdev, "fail to add RX ipsec rule err=%d\n", err);
