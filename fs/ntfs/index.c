@@ -1434,6 +1434,7 @@ retry:
 		icx->idx_ni->data_size = ix_root_size;
 		icx->idx_ni->initialized_size = ix_root_size;
 		icx->idx_ni->allocated_size = (ix_root_size + 7) & ~7;
+		i_size_write(VFS_I(icx->idx_ni), ix_root_size);
 	}
 
 	ntfs_ir_nill(ir);
@@ -1455,6 +1456,7 @@ retry:
 		icx->idx_ni->data_size = ix_root_size;
 		icx->idx_ni->initialized_size = ix_root_size;
 		icx->idx_ni->allocated_size = (ix_root_size + 7) & ~7;
+		i_size_write(VFS_I(icx->idx_ni), ix_root_size);
 	}
 	ntfs_ie_set_vcn(ie, new_ib_vcn);
 	goto err_out;
