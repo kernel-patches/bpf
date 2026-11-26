@@ -800,6 +800,13 @@ int ksz9477_fdb_add(struct dsa_switch *ds, int port,
 	/* read ALU entry */
 	ksz9477_read_table(dev, alu_table);
 
+	/* The ALU table holds learned and static entries. If the entry is
+	 * not static (learned, or none found), clear its port map, so that
+	 * the static entry lists only this port.
+	 */
+	if (!(alu_table[0] & ALU_V_STATIC_VALID))
+		alu_table[1] &= ~ALU_V_PORT_MAP;
+
 	/* update ALU entry */
 	alu_table[0] = ALU_V_STATIC_VALID;
 	alu_table[1] |= BIT(port);
