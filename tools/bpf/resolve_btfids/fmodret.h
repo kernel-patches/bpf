@@ -6,7 +6,7 @@
 
 struct btf;
 
-/* Tag the functions of ELF which return errors in BTF */
-int fmodret_tag(Elf *elf, struct btf *btf, int verbose);
+/* Tag the functions of ELF which return errors in BTF, but not those in DENY_PATH */
+int fmodret_tag(Elf *elf, struct btf *btf, const char *deny_path, int verbose);
 
 #endif
