@@ -481,8 +481,12 @@ static void tap_sock_write_space(struct sock *sk)
 static void tap_sock_destruct(struct sock *sk)
 {
 	struct tap_queue *q = container_of(sk, struct tap_queue, sk);
+	struct sk_buff *skb;
 
-	ptr_ring_cleanup(&q->ring, __skb_array_destroy_skb);
+	/* The ring has no other user left: no need for consumer_lock. */
+	while ((skb = __ptr_ring_consume(&q->ring)))
+		kfree_skb(skb);
+	ptr_ring_cleanup(&q->ring, NULL);
 }
 
 static int tap_open(struct inode *inode, struct file *file)
