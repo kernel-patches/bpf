@@ -5477,6 +5477,7 @@ enum {
 	CG_ARENA_SP	= BIT(5), /* subprogs that get to r12 */
 	CG_CB		= BIT(6),
 	CG_GLOBAL	= BIT(7),
+	CG_THROW	= BIT(8), /* subprogs that get to bpf_throw() */
 };
 
 #define for_each_marked_subprog(cg, s, mark) \
@@ -5520,10 +5521,13 @@ static int build_call_graph(struct bpf_verifier_env *env, struct bpf_call_graph 
 				(si[s].is_async_cb ? CG_IN_ASYNC_CB : 0) |
 				(bpf_call_graph_recursive(cg, s) ? CG_IN_RECURSION : 0) |
 				(si[s].has_tail_call ? CG_TAIL_CALL : 0) |
+				(si[s].throws ? CG_THROW : 0) |
 				(si[s].uses_arena_sp ? CG_ARENA_SP : 0) |
 				(bpf_subprog_is_global(env, s) ? CG_GLOBAL : 0);
 	bpf_call_graph_mark_callees(cg, CG_IN_CB | CG_IN_ASYNC_CB | CG_IN_RECURSION);
-	bpf_call_graph_mark_callers(cg, CG_TAIL_CALL, 0);
+	bpf_call_graph_mark_callers(cg, CG_TAIL_CALL | CG_THROW, 0);
+	for_each_marked_subprog(cg, s, CG_THROW)
+		si[s].throws = true;
 	return 0;
 }
 
@@ -16068,6 +16072,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return -ENOTSUPP;
 		}
 		env->seen_exception = true;
+		env->subprog_info[cur_func(env)->subprogno].throws = true;
 
 		/* In the case of the default callback, the cookie value passed
 		 * to bpf_throw becomes the return value of the program.
@@ -24412,6 +24417,12 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		if (tgt_can_unwind && !prog_extension &&
 		    prog->expected_attach_type != BPF_TRACE_FENTRY) {
 			bpf_log(log, "Only fentry can attach to %s, which can unwind\n", tname);
+			return -EINVAL;
+		}
+		/* bpf_throw() would have to skip the trampoline that called the target */
+		if (subprog && aux->func && aux->func[subprog]->aux->might_throw &&
+		    !prog_extension && prog->expected_attach_type != BPF_TRACE_FENTRY) {
+			bpf_log(log, "Only fentry can attach to %s, which can throw\n", tname);
 			return -EINVAL;
 		}
 		/* What it takes of the stack is not counted, see bpf_insert_recursion_checks() */
