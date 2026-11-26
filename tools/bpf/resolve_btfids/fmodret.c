@@ -87,6 +87,24 @@ static bool has_bpf_types(const struct btf *btf, const struct btf_type *func)
 	return false;
 }
 
+static bool excluded_by_name(const char *name)
+{
+	static const char *const names[] = {
+		"copy_from_kernel_nofault",
+		"copy_to_kernel_nofault",
+		"aarch64_insn_read",
+		"aarch64_insn_write",
+		"aarch64_insn_patch_text_nosync",
+		"tracepoint_probe_unregister",
+	};
+	unsigned int i;
+
+	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+		if (!strcmp(name, names[i]))
+			return true;
+	return false;
+}
+
 /* Find kfuncs and helpers */
 static bool *find_bpf_funcs(const struct btf *btf)
 {
@@ -289,6 +307,8 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 		name = btf__name_by_offset(btf, t->name_off);
 		func = image_func(&img, name);
 		if (!func || !strcmp(func->section, ".init.text"))
+			continue;
+		if (excluded_by_name(name))
 			continue;
 		nr_scanned++;
 		err = scan_func(scan, func, &values);
