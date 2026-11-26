@@ -1577,6 +1577,7 @@ static void ipip6_tunnel_setup(struct net_device *dev)
 	dev->max_mtu		= IP6_MAX_MTU - t_hlen;
 	dev->flags		= IFF_NOARP;
 	netif_keep_dst(dev);
+	netif_set_tso_max_size(dev, GSO_MAX_SIZE);
 	dev->addr_len		= 4;
 	dev->lltx		= true;
 	dev->features		|= SIT_FEATURES;
