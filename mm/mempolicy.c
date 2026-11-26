@@ -106,6 +106,7 @@
 #include <linux/rmap.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
+#include <linux/sysctl.h>
 #include <linux/ctype.h>
 #include <linux/mm_inline.h>
 #include <linux/mmu_notifier.h>
@@ -129,6 +130,28 @@
 
 static struct kmem_cache *policy_cache;
 static struct kmem_cache *sn_cache;
+
+static int sysctl_max_shared_policy_count __read_mostly = 1024;
+
+#ifdef CONFIG_SYSCTL
+static const struct ctl_table mempolicy_sysctls[] = {
+	{
+		.procname	= "max_shared_policy_count",
+		.data		= &sysctl_max_shared_policy_count,
+		.maxlen		= sizeof(sysctl_max_shared_policy_count),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ONE,
+	},
+};
+
+static int __init mempolicy_sysctl_init(void)
+{
+	register_sysctl_init("vm", mempolicy_sysctls);
+	return 0;
+}
+subsys_initcall(mempolicy_sysctl_init);
+#endif
 
 /* Highest zone. An specific allocation for a zone below that is not
    policied. */
@@ -3023,6 +3046,7 @@ static void sp_insert(struct shared_policy *sp, struct sp_node *new)
 	}
 	rb_link_node(&new->nd, parent, p);
 	rb_insert_color(&new->nd, &sp->root);
+	sp->nr_nodes++;
 }
 
 /* Find shared policy intersecting idx */
@@ -3182,6 +3206,7 @@ void mpol_put_task_policy(struct task_struct *task)
 static void sp_delete(struct shared_policy *sp, struct sp_node *n)
 {
 	rb_erase(&n->nd, &sp->root);
+	sp->nr_nodes--;
 	sp_free(n);
 }
 
@@ -3214,6 +3239,30 @@ static struct sp_node *sp_alloc(unsigned long start, unsigned long end,
 	return n;
 }
 
+static int sp_check_node_limit(struct shared_policy *sp, struct sp_node *n,
+			       pgoff_t start, pgoff_t end, bool new)
+{
+	unsigned long new_nodes = new ? 1 : 0;
+
+	if (n && n->start < start) {
+		/*
+		 * Splitting adds one node for the old policy. Otherwise,
+		 * check the successor.
+		 */
+		if (n->end > end)
+			new_nodes++;
+		else
+			n = rb_entry_safe(rb_next(&n->nd), struct sp_node, nd);
+	}
+	/* Without a new node, or with a whole node removed, the count cannot grow. */
+	if (!new_nodes || (n && n->end <= end))
+		return 0;
+
+	if (sp->nr_nodes + new_nodes > READ_ONCE(sysctl_max_shared_policy_count))
+		return -ENOMEM;
+	return 0;
+}
+
 /* Replace a policy range. */
 static int shared_policy_replace(struct shared_policy *sp, pgoff_t start,
 				 pgoff_t end, struct sp_node *new)
@@ -3225,7 +3274,31 @@ static int shared_policy_replace(struct shared_policy *sp, pgoff_t start,
 
 restart:
 	write_lock(&sp->lock);
+	if (new) {
+		/* Try to merge ranges with same policies. */
+		if (start) {
+			n = sp_lookup(sp, start - 1, start);
+			if (n && mpol_equal(n->policy, new->policy)) {
+				new->start = n->start;
+				start = new->start;
+			}
+		}
+		if (end != ULONG_MAX) {
+			n = sp_lookup(sp, end, end + 1);
+			if (n && mpol_equal(n->policy, new->policy)) {
+				new->end = n->end;
+				end = new->end;
+			}
+		}
+	}
 	n = sp_lookup(sp, start, end);
+
+	ret = sp_check_node_limit(sp, n, start, end, new);
+	if (ret) {
+		write_unlock(&sp->lock);
+		goto err_out;
+	}
+
 	/* Take care of old policies in the same range. */
 	while (n && n->start < end) {
 		struct rb_node *next = rb_next(&n->nd);
@@ -3297,6 +3370,7 @@ void mpol_shared_policy_init(struct shared_policy *sp, struct mempolicy *mpol)
 
 	sp->root = RB_ROOT;		/* empty tree == default mempolicy */
 	rwlock_init(&sp->lock);
+	sp->nr_nodes = 0;
 
 	if (mpol) {
 		struct sp_node *sn;

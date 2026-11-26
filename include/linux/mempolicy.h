@@ -113,6 +113,7 @@ static inline bool mpol_equal(struct mempolicy *a, struct mempolicy *b)
 struct shared_policy {
 	struct rb_root root;
 	rwlock_t lock;
+	unsigned int nr_nodes;
 };
 struct sp_node {
 	struct rb_node nd;
