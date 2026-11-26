@@ -48,9 +48,26 @@ static void ksz_disconnect(struct dsa_switch *ds)
 {
 	struct ksz_tagger_private *priv = ds->tagger_data;
 
-	kthread_destroy_worker(priv->xmit_worker);
+	/* Tags without deferred xmit have no worker */
+	if (priv->xmit_worker)
+		kthread_destroy_worker(priv->xmit_worker);
+
 	kfree(priv);
 	ds->tagger_data = NULL;
+}
+
+/* Allocate the tagger data, without a deferred xmit worker */
+static int ksz8795_connect(struct dsa_switch *ds)
+{
+	struct ksz_tagger_private *priv;
+
+	priv = kzalloc_obj(*priv);
+	if (!priv)
+		return -ENOMEM;
+
+	ds->tagger_data = priv;
+
+	return 0;
 }
 
 static int ksz_connect(struct dsa_switch *ds)
@@ -81,6 +98,19 @@ static int ksz_connect(struct dsa_switch *ds)
 	return 0;
 }
 
+static bool ksz_link_local_trapped(struct net_device *user, const u8 *addr)
+{
+	struct ksz_tagger_data *tagger_data;
+
+	if (!is_link_local_ether_addr(addr))
+		return false;
+
+	tagger_data = ksz_tagger_data(dsa_user_to_port(user)->ds);
+
+	/* is_link_local_ether_addr() limits addr[5] to 0x00..0x0f */
+	return tagger_data->link_local_to_cpu & BIT(addr[5]);
+}
+
 static struct sk_buff *ksz_common_rcv(struct sk_buff *skb,
 				      struct net_device *dev,
 				      unsigned int port, unsigned int len)
@@ -96,7 +126,13 @@ static struct sk_buff *ksz_common_rcv(struct sk_buff *skb,
 		return NULL;
 	}
 
-	dsa_default_offload_fwd_mark(skb);
+	/* The switch driver reports which link-local groups the switch sends
+	 * to the CPU only. The switch did not forward frames to these groups,
+	 * so do not mark them, and let the bridge apply its own rules
+	 * (group_fwd_mask, STP state).
+	 */
+	if (!ksz_link_local_trapped(skb->dev, eth_hdr(skb)->h_dest))
+		dsa_default_offload_fwd_mark(skb);
 
 	return skb;
 }
@@ -360,6 +396,8 @@ static const struct dsa_device_ops ksz8795_netdev_ops = {
 	.proto	= DSA_TAG_PROTO_KSZ8795,
 	.xmit	= ksz8795_xmit,
 	.rcv	= ksz8795_rcv,
+	.connect = ksz8795_connect,
+	.disconnect = ksz_disconnect,
 	.needed_tailroom = KSZ_INGRESS_TAG_LEN,
 };
 
