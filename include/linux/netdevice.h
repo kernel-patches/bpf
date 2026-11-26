@@ -3800,6 +3800,20 @@ static inline void netif_tx_wake_all_queues(struct net_device *dev)
 
 static __always_inline void netif_tx_stop_queue(struct netdev_queue *dev_queue)
 {
+	/* A queue already stopped by the driver keeps the trans_start of
+	 * the stop that set DRV_XOFF, so repeated stops from a driver hang
+	 * check do not postpone dev_watchdog(). Neither the stamp nor the
+	 * bit is written: a wake racing with this call leaves the queue
+	 * running, as if it came after the stop.
+	 */
+	if (test_bit(__QUEUE_STATE_DRV_XOFF, &dev_queue->state)) {
+		/* Full barrier, as given by set_bit() followed by
+		 * smp_mb__after_atomic(), see netif_txq_try_stop()
+		 */
+		smp_mb();
+		return;
+	}
+
 	/* Paired with READ_ONCE() from dev_watchdog() */
 	WRITE_ONCE(dev_queue->trans_start, jiffies);
 
