@@ -872,8 +872,9 @@ static const struct hwmon_channel_info hwmon_temp_info = {
 static const struct hwmon_channel_info * const hwmon_info[] = {
 	&hwmon_temp_info,
 	HWMON_CHANNEL_INFO(power, HWMON_P_MAX | HWMON_P_RATED_MAX | HWMON_P_LABEL | HWMON_P_CRIT |
-			   HWMON_P_CAP,
-			   HWMON_P_MAX | HWMON_P_RATED_MAX | HWMON_P_LABEL | HWMON_P_CAP),
+			   HWMON_P_CAP | HWMON_P_CAP_MAX,
+			   HWMON_P_MAX | HWMON_P_RATED_MAX | HWMON_P_LABEL | HWMON_P_CAP |
+			   HWMON_P_CAP_MAX),
 	HWMON_CHANNEL_INFO(curr, HWMON_C_LABEL, HWMON_C_CRIT | HWMON_C_LABEL),
 	HWMON_CHANNEL_INFO(in, HWMON_I_INPUT | HWMON_I_LABEL, HWMON_I_INPUT | HWMON_I_LABEL),
 	HWMON_CHANNEL_INFO(energy, HWMON_E_INPUT | HWMON_E_LABEL, HWMON_E_INPUT | HWMON_E_LABEL),
@@ -1430,6 +1431,8 @@ xe_hwmon_power_is_visible(struct xe_hwmon *hwmon, u32 attr, int channel)
 	struct xe_mmio *mmio = xe_root_tile_mmio(hwmon->xe);
 
 	switch (attr) {
+	case hwmon_power_cap_max:
+		return hwmon->pl2_on_boot[channel] ? 0444 : 0;
 	case hwmon_power_max:
 	case hwmon_power_cap:
 		if (hwmon->xe->info.has_mbx_power_limits) {
@@ -1495,6 +1498,10 @@ static int
 xe_hwmon_power_read(struct xe_hwmon *hwmon, u32 attr, int channel, long *val)
 {
 	switch (attr) {
+	case hwmon_power_cap_max:
+		*val = mul_u32_u32(REG_FIELD_GET(PWR_LIM_VAL, hwmon->pl2_on_boot[channel]),
+				   SF_POWER) >> hwmon->scl_shift_power;
+		return 0;
 	case hwmon_power_max:
 	case hwmon_power_cap:
 		return xe_hwmon_power_max_read(hwmon, attr, channel, val);

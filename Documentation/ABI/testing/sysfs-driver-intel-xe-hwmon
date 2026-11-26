@@ -296,6 +296,31 @@ Description:	RW. Package burst (PL2) power limit in microwatts.
 
 		Only supported for particular Intel Xe graphics platforms.
 
+What:		/sys/bus/pci/drivers/xe/.../hwmon/hwmon<i>/power1_cap_max
+Date:		November 2026
+KernelVersion:	7.5
+Contact:	intel-xe@lists.freedesktop.org
+Description:	RO. Card default burst (PL2) power limit in microwatts.
+
+		This is the firmware-provided default limit and the maximum
+		value accepted for power1_cap. Writes exceeding this limit
+		will be clamped.
+
+		Only supported for particular Intel Xe graphics platforms where
+		PL2 is enabled.
+
+What:		/sys/bus/pci/drivers/xe/.../hwmon/hwmon<i>/power2_cap_max
+Date:		November 2026
+KernelVersion:	7.5
+Contact:	intel-xe@lists.freedesktop.org
+Description:	RO. Package default burst (PL2) power limit in microwatts.
+
+		This is the firmware-provided default limit and the maximum
+		value accepted for power2_cap.
+
+		Only supported for particular Intel Xe graphics platforms where
+		PL2 is enabled.
+
 What:		/sys/bus/pci/drivers/xe/.../hwmon/hwmon<i>/power1_cap_interval
 Date:		May 2025
 KernelVersion:	6.15
