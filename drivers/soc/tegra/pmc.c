@@ -1525,8 +1525,11 @@ static int tegra_powergate_init(struct tegra_pmc *pmc,
 	for_each_child_of_node_scoped(np, child) {
 		err = tegra_powergate_add(pmc, child);
 		if (err < 0)
-			break;
+			goto put;
+	}
 
+	/* A parent powergate may come after its subdomains in DT order. */
+	for_each_child_of_node_scoped(np, child) {
 		if (of_parse_phandle_with_args(child, "power-domains",
 					       "#power-domain-cells",
 					       0, &parent_args))
@@ -1541,6 +1544,7 @@ static int tegra_powergate_init(struct tegra_pmc *pmc,
 			break;
 	}
 
+put:
 	of_node_put(np);
 
 	return err;
@@ -1564,12 +1568,27 @@ static void tegra_powergate_remove(struct generic_pm_domain *genpd)
 
 static void tegra_powergate_remove_all(struct device_node *parent)
 {
+	struct of_phandle_args child_args, parent_args;
 	struct generic_pm_domain *genpd;
 	struct device_node *np, *child;
 
 	np = of_get_child_by_name(parent, "powergates");
 	if (!np)
 		return;
+
+	/* A parent powergate cannot be removed while it has subdomains. */
+	for_each_child_of_node(np, child) {
+		if (of_parse_phandle_with_args(child, "power-domains",
+					       "#power-domain-cells",
+					       0, &parent_args))
+			continue;
+
+		child_args.np = child;
+		child_args.args_count = 0;
+
+		of_genpd_remove_subdomain(&parent_args, &child_args);
+		of_node_put(parent_args.np);
+	}
 
 	for_each_child_of_node(np, child) {
 		of_genpd_del_provider(child);
