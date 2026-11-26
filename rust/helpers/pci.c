@@ -7,6 +7,11 @@ __rust_helper u16 rust_helper_pci_dev_id(struct pci_dev *dev)
 	return PCI_DEVID(dev->bus->number, dev->devfn);
 }
 
+__rust_helper int rust_helper_pci_domain_nr(struct pci_bus *bus)
+{
+	return pci_domain_nr(bus);
+}
+
 __rust_helper resource_size_t
 rust_helper_pci_resource_start(struct pci_dev *pdev, int bar)
 {
@@ -41,6 +46,27 @@ __rust_helper u32 rust_helper_pci_ext_cap_next(u32 header)
 }
 
 #ifndef CONFIG_PCI_IOV
+__rust_helper int rust_helper_pci_iov_vf_id(struct pci_dev *pdev)
+{
+	return pci_iov_vf_id(pdev);
+}
+
+__rust_helper int rust_helper_pci_enable_sriov(struct pci_dev *pdev,
+					       int nr_virtfn)
+{
+	return pci_enable_sriov(pdev, nr_virtfn);
+}
+
+__rust_helper void rust_helper_pci_disable_sriov(struct pci_dev *pdev)
+{
+	pci_disable_sriov(pdev);
+}
+
+__rust_helper int rust_helper_pci_num_vf(struct pci_dev *pdev)
+{
+	return pci_num_vf(pdev);
+}
+
 __rust_helper unsigned int
 rust_helper_pci_sriov_get_totalvfs(struct pci_dev *pdev)
 {
