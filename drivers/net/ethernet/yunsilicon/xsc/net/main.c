@@ -12,6 +12,7 @@
 #include "common/xsc_cmd.h"
 #include "xsc_eth_common.h"
 #include "xsc_eth.h"
+#include "xsc_eth_txrx.h"
 
 static void xsc_eth_build_nic_params(struct xsc_adapter *adapter)
 {
@@ -410,6 +411,7 @@ static void xsc_eth_close_qp_sq(struct xsc_channel *c, struct xsc_sq *psq)
 		return;
 	}
 
+	xsc_free_tx_wqe(c->adapter->dev, psq);
 	xsc_free_qp_sq(psq);
 }
 
@@ -952,6 +954,7 @@ static int xsc_eth_set_hw_mtu(struct xsc_core_device *xdev,
 static const struct net_device_ops xsc_netdev_ops = {
 	.ndo_open		= xsc_eth_open,
 	.ndo_stop		= xsc_eth_close,
+	.ndo_start_xmit		= xsc_eth_xmit,
 };
 
 static void xsc_eth_build_nic_netdev(struct xsc_adapter *adapter)
