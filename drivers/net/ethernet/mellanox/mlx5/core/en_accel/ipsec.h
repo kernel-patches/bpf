@@ -119,6 +119,14 @@ struct mlx5_accel_esp_xfrm_attrs {
 		u8 dmac[ETH_ALEN];
 		__be16 dport;
 	};
+	struct {
+		/* Neighbour tables are per netns, so matching the table
+		 * also keeps neighbours of other namespaces out.
+		 */
+		const struct neigh_table *tbl;
+		int ifindex;
+		u8 key[sizeof(struct in6_addr)];
+	} nh;
 };
 
 enum mlx5_ipsec_cap {
