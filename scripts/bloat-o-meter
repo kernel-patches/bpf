@@ -9,10 +9,32 @@
 
 import sys, os, re, argparse
 from signal import signal, SIGPIPE, SIG_DFL
+from argparse import RawTextHelpFormatter
 
 signal(SIGPIPE, SIG_DFL)
 
-parser = argparse.ArgumentParser(description="Simple script used to compare the symbol sizes of 2 object files")
+description = \
+"""
+Simple script used to compare the symbol sizes of 2 object files
+
+fields:
+  add/remove:   number of symbols added in the new file / removed from the old file.
+  grow/shrink:  number of symbols in both files that had a size increase / decrease.
+  up/down:      size of symbols added plus size increase / removed plus size decrease.
+  (change):     difference between up and down sizes.
+
+  Symbol lines: symbol name, old size, new size, and size delta;
+                '-' means symbol added/removed;
+                '0' delta symbols not included.
+
+  Before:       size of all symbols in old file.
+  After:        size of all symbols in new file.
+  chg:          percent change.
+
+  Symbols in both files with the same size are only counted in Before/After/chg.
+"""
+
+parser = argparse.ArgumentParser(description=description, formatter_class=RawTextHelpFormatter)
 group = parser.add_mutually_exclusive_group()
 group.add_argument('-c', help='categorize output based on symbol type', action='store_true')
 group.add_argument('-d', help='Show delta of Data Section', action='store_true')
