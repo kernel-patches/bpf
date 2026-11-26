@@ -397,7 +397,7 @@ struct param_s {
 } __packed;
 
 /**
- * struct param_s: send rpmsg parameter
+ * struct param_r: send rpmsg parameter
  *
  * @audioindex: audio instance index
  * @resp: response value
