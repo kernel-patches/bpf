@@ -7,6 +7,7 @@
 
 #include "common/xsc_cmd.h"
 #include "common/xsc_core.h"
+#include "adev.h"
 #include "cq.h"
 #include "eq.h"
 #include "pci_irq.h"
@@ -173,8 +174,16 @@ static int xsc_pci_init(struct xsc_core_device *xdev,
 		goto err_cmd_cleanup;
 	}
 
+	err = xsc_adev_init(xdev);
+	if (err) {
+		pci_err(pdev, "xsc_adev_init failed: err=%d\n", err);
+		goto err_irq_eq_destroy;
+	}
+
 	return 0;
 
+err_irq_eq_destroy:
+	xsc_irq_eq_destroy(xdev);
 err_cmd_cleanup:
 	xsc_cmd_cleanup(xdev);
 err_io_unmap:
@@ -192,6 +201,7 @@ static void xsc_pci_fini(struct xsc_core_device *xdev)
 {
 	struct pci_dev *pdev = xdev->pdev;
 
+	xsc_adev_uninit(xdev);
 	xsc_irq_eq_destroy(xdev);
 	xsc_cmd_cleanup(xdev);
 	pci_iounmap(pdev, xdev->bar);

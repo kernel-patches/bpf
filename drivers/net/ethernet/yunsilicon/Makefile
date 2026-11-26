@@ -6,3 +6,4 @@
 #
 
 obj-$(CONFIG_YUNSILICON_XSC_PCI) += xsc/pci/
+obj-$(CONFIG_YUNSILICON_XSC_ETH) += xsc/net/

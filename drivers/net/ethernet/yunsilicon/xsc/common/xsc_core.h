@@ -7,6 +7,7 @@
 #define __XSC_CORE_H
 
 #include <linux/pci.h>
+#include <linux/auxiliary_bus.h>
 #include <linux/bitfield.h>
 #include <linux/completion.h>
 #include <linux/interrupt.h>
@@ -31,6 +32,8 @@
 #define XSC_PAGE_SHIFT_4K		12
 #define XSC_PAGE_SIZE_4K		(_AC(1, UL) << XSC_PAGE_SHIFT_4K)
 
+#define XSC_INVALID_LKEY		0x100
+
 struct xsc_caps {
 	u32		max_cqes;
 	u32		send_ds_num;
@@ -47,6 +50,25 @@ enum {
 	XSC_MAX_IRQ_NAME	= 32
 };
 
+/* adev */
+#define XSC_PCI_DRV_NAME "xsc_pci"
+#define XSC_ETH_ADEV_NAME "eth"
+
+enum {
+	XSC_QUEUE_TYPE_RAW		= 2,
+	XSC_QUEUE_TYPE_RAW_TSO		= 6,
+};
+
+enum xsc_adev_idx {
+	XSC_ADEV_IDX_ETH,
+	XSC_ADEV_IDX_MAX,
+};
+
+struct xsc_adev {
+	struct auxiliary_device	adev;
+	struct xsc_core_device	*xdev;
+};
+
 /* alloc */
 struct xsc_buf_list {
 	void			*buf;
@@ -61,6 +83,54 @@ struct xsc_buf {
 	unsigned long		page_shift;
 	unsigned long		size;
 };
+
+struct xsc_frag_buf {
+	struct xsc_buf_list	*frags;
+	unsigned long		npages;
+	unsigned long		size;
+	u8			page_shift;
+};
+
+struct xsc_frag_buf_ctrl {
+	struct xsc_buf_list	*frags;
+	u32			sz_m1;
+	u16			frag_sz_m1;
+	u16			strides_offset;
+	u8			log_sz;
+	u8			log_stride;
+	u8			log_frag_strides;
+};
+
+/* wqe */
+struct xsc_send_wqe_ctrl_seg {
+	__le32		data0;
+	__le32		msg_len;
+	__le32		data2;
+	__le32		data3;
+};
+
+struct xsc_wqe_data_seg {
+	__le32		data0;
+	__le32		mkey;
+	__le64		va;
+};
+
+#define XSC_WQE_DATA_SEG_DATA0_SEG_LEN_MASK	GENMASK(31, 1)
+
+/* cqe */
+struct xsc_cqe {
+	__le32		data0;
+	__le32		imm_data;
+	__le32		msg_len;
+	__le32		vni;
+	__le64		data2;
+	u8		placeholder2;
+	u8		rsv3;
+	__le16		rsv[1];
+	__le32		data1;
+};
+
+#define XSC_CQE_DATA1_OWNER			BIT(31)
 
 /* eq */
 struct xsc_eq {
@@ -136,6 +206,9 @@ struct xsc_cmd;
 struct xsc_core_device {
 	struct pci_dev		*pdev;
 	struct device		*device;
+	int			adev_id;
+	struct xsc_adev		**xsc_adev_list;
+	void			*eth_priv;
 
 	/* async event plumbing, owned by the PCI layer */
 	struct work_struct	event_work;
