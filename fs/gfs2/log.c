@@ -908,6 +908,7 @@ void gfs2_write_log_header(struct gfs2_sbd *sdp, struct gfs2_jdesc *jd,
 	gfs2_log_write(sdp, jd, page, sb->s_blocksize, 0, dblock,
 		       REQ_OP_WRITE | op_flags);
 	gfs2_log_submit_write(&jd->jd_log_bio);
+	log_flush_wait(sdp);
 }
 
 /**
@@ -935,7 +936,6 @@ static void log_write_header(struct gfs2_sbd *sdp, u32 flags)
 			      sdp->sd_log_flush_tail, sdp->sd_log_flush_head,
 			      flags, op_flags);
 	gfs2_log_incr_head(sdp);
-	log_flush_wait(sdp);
 	log_pull_tail(sdp);
 	gfs2_log_update_head(sdp);
 }
