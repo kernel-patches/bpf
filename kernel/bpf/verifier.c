@@ -12708,10 +12708,26 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	return 0;
 }
 
+static bool st_ops_returns_ptr(const struct bpf_prog *prog)
+{
+	const struct bpf_prog_aux *aux = prog->aux;
+
+	return prog->type == BPF_PROG_TYPE_STRUCT_OPS &&
+	       btf_type_resolve_ptr(aux->attach_btf, aux->attach_func_proto->type, NULL);
+}
+
+/* What leaves frame 0 gets to the caller of the program */
+static bool returns_to_kernel(const struct bpf_verifier_state *state)
+{
+	const struct bpf_func_state *frame = state->frame[0];
+
+	return !frame->in_async_callback_fn &&
+	       (!state->callers_unknown || frame->in_exception_callback_fn);
+}
+
 static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exit)
 {
 	struct bpf_verifier_state *state = env->cur_state;
-	enum bpf_prog_type type = resolve_prog_type(env->prog);
 	struct bpf_reg_state *reg = reg_state(env, BPF_REG_0);
 	bool refs_lingering = false;
 	int i;
@@ -12725,8 +12741,9 @@ static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exi
 		/* Allow struct_ops programs to return a referenced kptr back to
 		 * kernel. Type checks are performed later in check_return_code.
 		 */
-		if (type == BPF_PROG_TYPE_STRUCT_OPS && !exception_exit &&
-		    reg->id == state->refs[i].id)
+		if (!exception_exit && reg->id == state->refs[i].id &&
+		    env->prog->insnsi[env->insn_idx].code == (BPF_JMP | BPF_EXIT) &&
+		    st_ops_returns_ptr(env->prog) && returns_to_kernel(state))
 			continue;
 		verbose(env, "Unreleased reference id=%d alloc_insn=%d\n",
 			state->refs[i].id, state->refs[i].insn_idx);
@@ -13463,6 +13480,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		 */
 		if (env->fmodret_retvals) {
 			verbose(env, "tail calls are not allowed in fmod_ret programs with restricted return values\n");
+			return -EINVAL;
+		}
+		/* It can return a reference. The caller of a subprog takes r0 for a scalar. */
+		if (st_ops_returns_ptr(env->prog) &&
+		    (env->cur_state->curframe || !returns_to_kernel(env->cur_state))) {
+			verbose(env, "tail_call in a subprog would lead to reference leak\n");
 			return -EINVAL;
 		}
 		if (env->cur_state->curframe) {
