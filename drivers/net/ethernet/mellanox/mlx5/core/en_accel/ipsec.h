@@ -172,6 +172,8 @@ struct mlx5e_ipsec_work {
 };
 
 struct mlx5e_ipsec_netevent_data {
+	/* Protects addr shared by the notifier and workqueue. */
+	spinlock_t lock;
 	u8 addr[ETH_ALEN];
 };
 

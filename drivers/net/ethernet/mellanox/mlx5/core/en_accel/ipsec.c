@@ -701,15 +701,20 @@ static void mlx5e_ipsec_handle_netdev_event(struct work_struct *_work)
 	struct mlx5e_ipsec_sa_entry *sa_entry = work->sa_entry;
 	struct mlx5e_ipsec_netevent_data *data = work->data;
 	struct mlx5_accel_esp_xfrm_attrs *attrs;
+	u8 addr[ETH_ALEN] __aligned(2);
 
 	attrs = &sa_entry->attrs;
 
+	spin_lock_bh(&data->lock);
+	ether_addr_copy(addr, data->addr);
+	spin_unlock_bh(&data->lock);
+
 	switch (attrs->dir) {
 	case XFRM_DEV_OFFLOAD_IN:
-		ether_addr_copy(attrs->smac, data->addr);
+		ether_addr_copy(attrs->smac, addr);
 		break;
 	case XFRM_DEV_OFFLOAD_OUT:
-		ether_addr_copy(attrs->dmac, data->addr);
+		ether_addr_copy(attrs->dmac, addr);
 		break;
 	default:
 		WARN_ON_ONCE(true);
@@ -720,6 +725,7 @@ static void mlx5e_ipsec_handle_netdev_event(struct work_struct *_work)
 
 static int mlx5_ipsec_create_work(struct mlx5e_ipsec_sa_entry *sa_entry)
 {
+	struct mlx5e_ipsec_netevent_data *ndata;
 	struct xfrm_state *x = sa_entry->x;
 	struct mlx5e_ipsec_work *work;
 	void *data = NULL;
@@ -754,6 +760,8 @@ static int mlx5_ipsec_create_work(struct mlx5e_ipsec_sa_entry *sa_entry)
 		if (!data)
 			goto free_work;
 
+		ndata = data;
+		spin_lock_init(&ndata->lock);
 		INIT_WORK(&work->work, mlx5e_ipsec_handle_netdev_event);
 		break;
 	default:
@@ -1023,7 +1031,9 @@ static int mlx5e_ipsec_netevent_event(struct notifier_block *nb,
 
 		data = sa_entry->work->data;
 
+		spin_lock_bh(&data->lock);
 		neigh_ha_snapshot(data->addr, n, sa_entry->dev);
+		spin_unlock_bh(&data->lock);
 		queue_work(ipsec->wq, &sa_entry->work->work);
 	}
 
