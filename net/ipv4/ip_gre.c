@@ -1066,6 +1066,7 @@ static void ipgre_tunnel_setup(struct net_device *dev)
 {
 	dev->netdev_ops		= &ipgre_netdev_ops;
 	dev->type		= ARPHRD_IPGRE;
+	netif_set_tso_max_size(dev, GSO_MAX_SIZE);
 	ip_tunnel_setup(dev, ipgre_net_id);
 }
 
@@ -1453,6 +1454,7 @@ static void ipgre_tap_setup(struct net_device *dev)
 	dev->netdev_ops	= &gre_tap_netdev_ops;
 	dev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	dev->priv_flags	|= IFF_LIVE_ADDR_CHANGE;
+	netif_set_tso_max_size(dev, GSO_MAX_SIZE);
 	ip_tunnel_setup(dev, gre_tap_net_id);
 }
 
