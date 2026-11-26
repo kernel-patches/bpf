@@ -147,9 +147,8 @@ static void memcg_uncharge_kmem(struct mem_cgroup *memcg, unsigned int nr_pages)
 		memcg_uncharge(memcg, nr_pages);
 }
 
-static void obj_cgroup_release(struct percpu_ref *ref)
+static void __obj_cgroup_release(struct obj_cgroup *objcg)
 {
-	struct obj_cgroup *objcg = container_of(ref, struct obj_cgroup, refcnt);
 	unsigned int nr_bytes;
 	unsigned int nr_pages;
 	unsigned long flags;
@@ -190,8 +189,30 @@ static void obj_cgroup_release(struct percpu_ref *ref)
 	list_del(&objcg->list);
 	spin_unlock_irqrestore(&objcg_lock, flags);
 
-	percpu_ref_exit(ref);
+	percpu_ref_exit(&objcg->refcnt);
 	kfree_rcu(objcg, rcu);
+}
+
+static LLIST_HEAD(objcg_release_llist);
+
+static void objcg_release_workfn(struct irq_work *work)
+{
+	struct llist_node *head = llist_del_all(&objcg_release_llist);
+	struct obj_cgroup *objcg, *tmp;
+
+	llist_for_each_entry_safe(objcg, tmp, head, release_node)
+		__obj_cgroup_release(objcg);
+}
+
+static DEFINE_IRQ_WORK(objcg_release_work, objcg_release_workfn);
+
+static void obj_cgroup_release(struct percpu_ref *ref)
+{
+	struct obj_cgroup *objcg = container_of(ref, struct obj_cgroup, refcnt);
+
+	/* The last put may come from a context that cannot take spinlocks */
+	if (llist_add(&objcg->release_node, &objcg_release_llist))
+		irq_work_queue(&objcg_release_work);
 }
 
 static struct obj_cgroup *obj_cgroup_alloc(void)
