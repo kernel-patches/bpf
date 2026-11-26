@@ -24151,8 +24151,12 @@ btf_attach_func_proto(struct bpf_verifier_log *log, struct btf *btf, u32 func_id
 	int implicit;
 
 	func = btf_type_by_id(btf, func_id);
-	if (!func || !btf_type_is_func(func))
+	if (!func)
 		return NULL;
+	if (!btf_type_is_func(func)) {
+		bpf_log(log, "Type of id %u is not function.\n", func_id);
+		return NULL;
+	}
 	name = btf_name_by_offset(btf, func->name_off);
 
 	/*
@@ -24346,7 +24350,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 		if (bpf_prog_is_dev_bound(prog->aux) &&
 		    !bpf_prog_dev_bound_match(prog, tgt_prog)) {
-			bpf_log(log, "Target program bound device mismatch");
+			bpf_log(log, "Target program bound device mismatch\n");
 			return -EINVAL;
 		}
 
@@ -24606,8 +24610,10 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 		if ((prog->aux->saved_dst_prog_type || prog->aux->saved_dst_attach_type) &&
 		    (!tgt_prog || prog->aux->saved_dst_prog_type != tgt_prog->type ||
-		     prog->aux->saved_dst_attach_type != tgt_prog->expected_attach_type))
+		     prog->aux->saved_dst_attach_type != tgt_prog->expected_attach_type)) {
+			bpf_log(log, "Target differs in type from the target at load time\n");
 			return -EINVAL;
+		}
 
 		if (tgt_prog && conservative) {
 			/*
@@ -24905,7 +24911,8 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	return 0;
 }
 
-int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 btf_id,
+int bpf_check_attach_btf_id_multi(struct bpf_verifier_log *log, struct btf *btf,
+				  struct bpf_prog *prog, u32 btf_id,
 				  struct bpf_attach_target_info *tgt_info)
 {
 	const struct btf_type *t;
@@ -24919,28 +24926,40 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 	/* Check noreturn attachment. */
 	if ((prog->expected_attach_type == BPF_TRACE_FEXIT_MULTI ||
 	     prog->expected_attach_type == BPF_TRACE_FSESSION_MULTI) &&
-	     btf_id_set_contains(&noreturn_deny, btf_id))
+	     btf_id_set_contains(&noreturn_deny, btf_id)) {
+		bpf_log(log,
+			"Cannot attach fexit/fsession_multi prog to noreturn btf id %u.\n",
+			btf_id);
 		return -EINVAL;
+	}
 	/* Check denied attachment. */
-	if (btf_id_set_contains(&btf_id_deny, btf_id))
+	if (btf_id_set_contains(&btf_id_deny, btf_id)) {
+		bpf_log(log, "Cannot attach to denylist btf id %u.\n", btf_id);
 		return -EINVAL;
+	}
 
 	/* Check and get function target data. */
 	t = btf_type_by_id(btf, btf_id);
-	if (!t)
+	if (!t) {
+		bpf_log(log, "Cannot resolve type of btf id %u.\n", btf_id);
 		return -EINVAL;
+	}
 	tname = btf_name_by_offset(btf, t->name_off);
 	if (!tname)
 		return -EINVAL;
-	t = btf_attach_func_proto(NULL, btf, btf_id);
+	t = btf_attach_func_proto(log, btf, btf_id);
 	if (!t || !btf_type_is_func_proto(t))
 		return -EINVAL;
-	err = btf_distill_func_proto(NULL, btf, t, tname, &tgt_info->fmodel);
+	err = btf_distill_func_proto(log, btf, t, tname, &tgt_info->fmodel);
 	if (err < 0)
 		return err;
 	if (tgt_info->fmodel.ret_size > 8 &&
-	    attach_uses_trampoline_retval(prog->expected_attach_type))
+	    attach_uses_trampoline_retval(prog->expected_attach_type)) {
+		bpf_log(log,
+			"Attach to target %u:%s with a >8 byte return value is not supported for this attach type.\n",
+			btf_id, tname);
 		return -EOPNOTSUPP;
+	}
 	if (btf_is_module(btf)) {
 		/* The bpf program already holds reference to module. */
 		if (WARN_ON_ONCE(!prog->aux->mod))
@@ -24949,14 +24968,22 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 	} else {
 		addr = kallsyms_lookup_name(tname);
 	}
-	if (!addr || !ftrace_location(addr))
+	if (!addr) {
+		bpf_log(log, "Cannot resolve address of target %u:%s.\n", btf_id, tname);
 		return -ENOENT;
+	}
+	if (!ftrace_location(addr)) {
+		bpf_log(log, "Target %u:%s is not ftrace attachable.\n", btf_id, tname);
+		return -ENOENT;
+	}
 
 	/* Check sleepable program attachment. */
 	if (prog->sleepable) {
 		err = btf_id_allow_sleepable(btf_id, addr, prog, btf);
-		if (err)
+		if (err) {
+			bpf_log(log, "Target %u:%s is not sleepable.\n", btf_id, tname);
 			return err;
+		}
 	}
 	tgt_info->tgt_addr = addr;
 	return 0;
