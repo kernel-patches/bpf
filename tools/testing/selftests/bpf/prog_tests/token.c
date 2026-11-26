@@ -26,6 +26,7 @@
 #include "token_kallsyms.skel.h"
 #include "token_lsm.skel.h"
 #include "priv_freplace_prog.skel.h"
+#include "priv_module.skel.h"
 
 static inline int sys_mount(const char *dev_name, const char *dir_name,
 			    const char *type, unsigned long flags,
@@ -1099,6 +1100,34 @@ cleanup:
 	return err;
 }
 
+static int userns_obj_priv_fentry_module(int mnt_fd, struct token_lsm *lsm_skel)
+{
+	LIBBPF_OPTS(bpf_object_open_opts, opts);
+	struct priv_module *skel = NULL;
+	char buf[256];
+	int err;
+
+	/* use bpf_token_path to provide BPF FS path */
+	snprintf(buf, sizeof(buf), "/proc/self/fd/%d", mnt_fd);
+	opts.bpf_token_path = buf;
+	skel = priv_module__open_opts(&opts);
+	if (!ASSERT_OK_PTR(skel, "priv_module__open_opts"))
+		return -EINVAL;
+
+	err = priv_module__load(skel);
+	if (!ASSERT_OK(err, "priv_module__load"))
+		goto out;
+
+	err = priv_module__attach(skel);
+	if (!ASSERT_OK(err, "priv_module__attach"))
+		goto out;
+
+out:
+	priv_module__destroy(skel);
+	return err;
+}
+
+
 #define bit(n) (1ULL << (n))
 
 static int userns_bpf_token_info(int mnt_fd, struct token_lsm *lsm_skel)
@@ -1194,6 +1223,14 @@ void serial_test_token(void)
 			.attachs = ~0ULL,
 		};
 		subtest_userns(&opts, userns_obj_priv_freplace_prog_fail);
+	}
+	if (test__start_subtest("obj_priv_fentry_module")) {
+		struct bpffs_opts opts = {
+			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_PROG_LOAD) | bit(BPF_BTF_GET_FD_BY_ID) | bit(BPF_BTF_GET_NEXT_ID),
+			.progs = bit(BPF_PROG_TYPE_TRACING),
+			.attachs = ~0ULL,
+		};
+		subtest_userns(&opts, userns_obj_priv_fentry_module);
 	}
 	if (test__start_subtest("obj_priv_btf_fail")) {
 		struct bpffs_opts opts = {
