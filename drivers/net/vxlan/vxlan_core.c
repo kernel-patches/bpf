@@ -2551,10 +2551,10 @@ void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 			if (cfg->df == VXLAN_DF_SET) {
 				df = htons(IP_DF);
 			} else if (cfg->df == VXLAN_DF_INHERIT) {
-				struct ethhdr *eth = eth_hdr(skb);
+				__be16 inner_proto = skb_protocol(skb, true);
 
-				if (ntohs(eth->h_proto) == ETH_P_IPV6 ||
-				    (ntohs(eth->h_proto) == ETH_P_IP &&
+				if (inner_proto == htons(ETH_P_IPV6) ||
+				    (inner_proto == htons(ETH_P_IP) &&
 				     old_iph->frag_off & htons(IP_DF)))
 					df = htons(IP_DF);
 			}
