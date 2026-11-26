@@ -232,6 +232,10 @@ static bool cs35l56_common_volatile_reg(unsigned int reg)
 	case CS35L56_DACPCM2_INPUT:		   /* owned by firmware */
 	case CS35L56_DSP1RX1_INPUT:		   /* owned by firmware */
 	case CS35L56_DSP1RX2_INPUT:		   /* owned by firmware */
+	case CS35L56_SWIRE_DP3_CH1_INPUT:	   /* owned by firmware */
+	case CS35L56_SWIRE_DP3_CH2_INPUT:	   /* owned by firmware */
+	case CS35L56_SWIRE_DP3_CH3_INPUT:	   /* owned by firmware */
+	case CS35L56_SWIRE_DP3_CH4_INPUT:	   /* owned by firmware */
 	case CS35L56_IRQ1_STATUS:
 	case CS35L56_IRQ1_EINT_1 ... CS35L56_IRQ1_EINT_8:
 	case CS35L56_IRQ1_EINT_18:

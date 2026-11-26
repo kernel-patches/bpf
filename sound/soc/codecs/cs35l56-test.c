@@ -280,6 +280,7 @@ static void cs35l56_test_create_mock_device_registers(struct kunit *test)
 
 	cs35l56_test_fill_register_range(test, &cs35l56_test_asp_config_registers_range, 0);
 	cs35l56_test_fill_register_range(test, &cs35l56_test_asp_mixer_registers_range, 0);
+	cs35l56_test_fill_register_range(test, &cs35l56_test_sdw_mux_registers_range, 0);
 }
 
 /*
