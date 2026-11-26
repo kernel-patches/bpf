@@ -275,6 +275,11 @@ static void mlx5e_take_tmp_flow(struct mlx5e_tc_flow *flow,
 				struct list_head *flow_list,
 				int index)
 {
+	/* Detaching the flow also takes encap_tbl_lock. */
+	wait_for_completion(&flow->init_done);
+	if (flow_flag_test(flow, PARSE_FAILED))
+		return;
+
 	if (IS_ERR(mlx5e_flow_get(flow))) {
 		/* Flow is being deleted concurrently. Wait for it to be
 		 * unoffloaded from hardware, otherwise deleting encap will
@@ -283,7 +288,6 @@ static void mlx5e_take_tmp_flow(struct mlx5e_tc_flow *flow,
 		wait_for_completion(&flow->del_hw_done);
 		return;
 	}
-	wait_for_completion(&flow->init_done);
 
 	flow->tmp_entry_index = index;
 	list_add(&flow->tmp_list, flow_list);

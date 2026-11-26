@@ -31,6 +31,7 @@ enum {
 	MLX5E_TC_FLOW_FLAG_SAMPLE                = MLX5E_TC_FLOW_BASE + 10,
 	MLX5E_TC_FLOW_FLAG_USE_ACT_STATS         = MLX5E_TC_FLOW_BASE + 11,
 	MLX5E_TC_FLOW_FLAG_PEER                  = MLX5E_TC_FLOW_BASE + 12,
+	MLX5E_TC_FLOW_FLAG_PARSE_FAILED          = MLX5E_TC_FLOW_BASE + 13,
 };
 
 struct mlx5e_tc_flow_parse_attr {

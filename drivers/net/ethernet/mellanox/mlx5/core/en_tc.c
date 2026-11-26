@@ -3780,6 +3780,31 @@ free_flow_post_acts(struct mlx5e_tc_flow *flow)
 	}
 }
 
+static void abort_flow_post_acts(struct mlx5e_tc_flow *flow)
+{
+	struct mlx5e_post_act *post_act = get_post_action(flow->priv);
+	struct mlx5_flow_attr *attr;
+
+	if (flow_flag_test(flow, PARSE_FAILED))
+		return;
+
+	/* Remove hardware rules before an update can free their encap headers. */
+	list_for_each_entry(attr, &flow->attrs, list) {
+		if (list_is_last(&attr->list, &flow->attrs))
+			break;
+		if (!attr->post_act_handle)
+			continue;
+
+		mlx5e_tc_post_act_del(post_act, attr->post_act_handle);
+		attr->post_act_handle = NULL;
+	}
+
+	/* Wake updates before detaching encaps under encap_tbl_lock. */
+	flow_flag_set(flow, PARSE_FAILED);
+	complete_all(&flow->init_done);
+	free_flow_post_acts(flow);
+}
+
 int
 mlx5e_tc_offload_flow_post_acts(struct mlx5e_tc_flow *flow)
 {
@@ -3884,7 +3909,7 @@ out:
 	return 0;
 
 out_free:
-	free_flow_post_acts(flow);
+	abort_flow_post_acts(flow);
 	return err;
 }
 
@@ -4620,8 +4645,10 @@ __mlx5e_add_fdb_flow(struct mlx5e_priv *priv,
 		goto err_free;
 
 	err = parse_tc_fdb_actions(priv, &rule->action, flow, extack);
-	if (err)
+	if (err) {
+		abort_flow_post_acts(flow);
 		goto err_free;
+	}
 
 	err = mlx5e_tc_add_fdb_flow(priv, flow, extack);
 	complete_all(&flow->init_done);
