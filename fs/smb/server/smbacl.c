@@ -1047,7 +1047,11 @@ int smb_inherit_dacl(struct ksmbd_conn *conn,
 		if (rc)
 			goto free_aces_base;
 
-		ksmbd_vfs_set_sd_xattr(conn, idmap, path, pntsd, pntsd_size);
+		/*
+		 * If the filesystem refuses this SD, the caller tries the SD
+		 * built from the inode, which may fit.
+		 */
+		rc = ksmbd_vfs_set_sd_xattr(conn, idmap, path, pntsd, pntsd_size);
 		kvfree(pntsd);
 	}
 free_aces_base:
