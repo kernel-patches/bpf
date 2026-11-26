@@ -365,9 +365,15 @@ static void mlx5e_ipsec_init_macs(struct mlx5e_ipsec_sa_entry *sa_entry,
 	return;
 
 neigh:
-	n = ipv4_neigh_lookup(netdev, pkey);
+	if (addrs->family == AF_INET)
+		n = ipv4_neigh_lookup(netdev, pkey);
+	else
+		n = ipv6_neigh_lookup(netdev, pkey);
 	if (!n) {
-		n = ipv4_neigh_create(netdev, pkey);
+		if (addrs->family == AF_INET)
+			n = ipv4_neigh_create(netdev, pkey);
+		else
+			n = ipv6_neigh_create(netdev, pkey);
 		attrs->drop = true;
 		if (IS_ERR(n))
 			return;
