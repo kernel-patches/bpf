@@ -310,12 +310,17 @@ static int balloon_page_migrate(struct page *newpage, struct page *page,
 			adjust_managed_page_count(page, 1);
 			adjust_managed_page_count(newpage, -1);
 		}
+		if (page_pgdat(page) != page_pgdat(newpage)) {
+			dec_node_page_state(page, NR_BALLOON_PAGES);
+			inc_node_page_state(newpage, NR_BALLOON_PAGES);
+		}
 	} else {
 		/* Old page was deflated but new page not inflated. */
 		__count_vm_event(BALLOON_DEFLATE);
 
 		if (b_dev_info->adjust_managed_page_count)
 			adjust_managed_page_count(page, 1);
+		dec_node_page_state(page, NR_BALLOON_PAGES);
 	}
 
 	b_dev_info->isolated_pages--;
