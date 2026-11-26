@@ -299,7 +299,7 @@ void mlx5_accel_esp_modify_xfrm(struct mlx5e_ipsec_sa_entry *sa_entry,
 	if (err)
 		return;
 
-	memcpy(&sa_entry->attrs, attrs, sizeof(sa_entry->attrs));
+	sa_entry->attrs.replay_esn = attrs->replay_esn;
 }
 
 static void mlx5e_ipsec_aso_update(struct mlx5e_ipsec_sa_entry *sa_entry,
