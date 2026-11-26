@@ -158,7 +158,7 @@ static int madvise_update_vma(vm_flags_t new_flags,
 	bool set_new_anon_name = madv_behavior->behavior == __MADV_SET_ANON_VMA_NAME;
 	VMA_ITERATOR(vmi, madv_behavior->mm, range->start);
 
-	if (vma_flags_same_mask(&vma->flags, new_vma_flags) &&
+	if (vma_flags_same_pair(&vma->flags, &new_vma_flags) &&
 	    (!set_new_anon_name ||
 	     anon_vma_name_eq(anon_vma_name(vma), anon_name)))
 		return 0;
@@ -177,7 +177,10 @@ static int madvise_update_vma(vm_flags_t new_flags,
 
 	/* vm_flags is protected by the mmap_lock held in write mode. */
 	vma_start_write(vma);
-	vma->flags = new_vma_flags;
+	if (set_new_anon_name)
+		return replace_anon_vma_name(vma, anon_name);
+
+	vma_overwrite_flags(vma, new_vma_flags);
 	/*
 	 * If the vma become good for khugepaged to scan,
 	 * register it here without waiting a page fault that
@@ -185,9 +188,6 @@ static int madvise_update_vma(vm_flags_t new_flags,
 	 */
 	if (vma_flags_test(&new_vma_flags, VMA_HUGEPAGE_BIT))
 		khugepaged_enter_vma(vma, vma_flags_to_legacy(new_vma_flags));
-
-	if (set_new_anon_name)
-		return replace_anon_vma_name(vma, anon_name);
 
 	return 0;
 }
@@ -661,6 +661,38 @@ static long madvise_pageout(struct madvise_behavior *madv_behavior)
 	return 0;
 }
 
+bool madvise_free_try_prepare_folio(struct folio *folio, int nr_mappings)
+{
+	if (!folio_test_swapcache(folio) && !folio_test_dirty(folio))
+		return true;
+
+	if (folio_mapcount(folio) != nr_mappings || !folio_trylock(folio))
+		return false;
+
+	/*
+	 * KSM folios can gain new mappings at any time, so we must
+	 * not clear their dirty flag.
+	 */
+	if (folio_test_ksm(folio))
+		goto unlock;
+
+	/*
+	 * Check under the folio lock that the folio is exclusive: we own all
+	 * mappings, and there are no references from swap entries.
+	 */
+	if (folio_mapcount(folio) != nr_mappings)
+		goto unlock;
+	if (folio_test_swapcache(folio) && !folio_free_swap(folio))
+		goto unlock;
+
+	folio_clear_dirty(folio);
+	folio_unlock(folio);
+	return true;
+unlock:
+	folio_unlock(folio);
+	return false;
+}
+
 static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 				unsigned long end, struct mm_walk *walk)
 
@@ -753,28 +785,8 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 			}
 		}
 
-		if (folio_test_swapcache(folio) || folio_test_dirty(folio)) {
-			if (!folio_trylock(folio))
-				continue;
-			/*
-			 * If we have a large folio at this point, we know it is
-			 * fully mapped so if its mapcount is the same as its
-			 * number of pages, it must be exclusive.
-			 */
-			if (folio_mapcount(folio) != folio_nr_pages(folio)) {
-				folio_unlock(folio);
-				continue;
-			}
-
-			if (folio_test_swapcache(folio) &&
-			    !folio_free_swap(folio)) {
-				folio_unlock(folio);
-				continue;
-			}
-
-			folio_clear_dirty(folio);
-			folio_unlock(folio);
-		}
+		if (!madvise_free_try_prepare_folio(folio, folio_nr_pages(folio)))
+			continue;
 
 		if (pte_young(ptent) || pte_dirty(ptent)) {
 			clear_young_dirty_ptes(vma, addr, pte, nr, cydp_flags);

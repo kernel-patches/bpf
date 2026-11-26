@@ -551,9 +551,13 @@ static inline bool anon_vma_name_eq(struct anon_vma_name *anon_name1,
 
 void pfnmap_track_ctx_release(struct kref *ref);
 
-static inline void init_tlb_flush_pending(struct mm_struct *mm)
+static inline void mm_init_tlb_flush(struct mm_struct *mm)
 {
 	atomic_set(&mm->tlb_flush_pending, 0);
+#ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
+	atomic_set(&mm->tlb_flush_batch_pending, 0);
+	atomic_set(&mm->tlb_flush_batch_flushed, 0);
+#endif
 }
 
 static inline void inc_tlb_flush_pending(struct mm_struct *mm)
