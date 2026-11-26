@@ -1665,6 +1665,12 @@ static int check_extent_item(struct extent_buffer *leaf,
 	if (is_tree_block && key->type != BTRFS_METADATA_ITEM_KEY) {
 		struct btrfs_tree_block_info *info;
 
+		if (unlikely(ptr + sizeof(*info) > end)) {
+			extent_err(leaf, slot,
+				   "tree block info overflows extent item, ptr %lu info size %zu end %lu",
+				   ptr, sizeof(*info), end);
+			return -EUCLEAN;
+		}
 		info = (struct btrfs_tree_block_info *)ptr;
 		if (unlikely(btrfs_tree_block_level(leaf, info) >= BTRFS_MAX_LEVEL)) {
 			extent_err(leaf, slot,
