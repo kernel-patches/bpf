@@ -396,6 +396,7 @@ struct vfs_ns_cap_data {
  * - Loading BPF Type Format (BTF) data
  * - Retrieve xlated and JITed code of BPF programs
  * - Use bpf_spin_lock() helper
+ * - Iterating over loaded programs, maps, links and BTF object IDs.
  *
  * CAP_PERFMON relaxes the verifier checks further:
  * - BPF progs can use of pointer-to-integer conversions
@@ -405,8 +406,8 @@ struct vfs_ns_cap_data {
  *
  * CAP_SYS_ADMIN is required to use bpf_probe_write_user.
  *
- * CAP_SYS_ADMIN is required to iterate system wide loaded
- * programs, maps, links, BTFs and convert their IDs to file descriptors.
+ * CAP_SYS_ADMIN is required to convert the IDs of loaded
+ * programs, maps, links, BTFs to file descriptors.
  *
  * CAP_PERFMON and CAP_BPF are required to load tracing programs.
  * CAP_NET_ADMIN and CAP_BPF are required to load networking programs.
