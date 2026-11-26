@@ -812,7 +812,8 @@ static void ovs_fragment(struct net *net, struct vport *vport,
 		skb->network_header = skb->inner_network_header;
 	}
 
-	if (skb_network_offset(skb) > MAX_L2_LEN) {
+	if (skb_network_offset(skb) > MAX_L2_LEN ||
+	    skb_network_offset(skb) < 0) {
 		OVS_NLERR(1, "L2 header too long to fragment");
 		reason = OVS_DROP_FRAG_L2_TOO_LONG;
 		goto err;
