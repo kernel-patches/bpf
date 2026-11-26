@@ -268,7 +268,7 @@ static int choke_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	}
 
 	/* Admit new packet */
-	if (sch->q.qlen < q->limit) {
+	if (sch->q.qlen < q->limit && choke_len(q) < q->tab_mask) {
 		q->tab[q->tail] = skb;
 		q->tail = (q->tail + 1) & q->tab_mask;
 		qdisc_qlen_inc(sch);
