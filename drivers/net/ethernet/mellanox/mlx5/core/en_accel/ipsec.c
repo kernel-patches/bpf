@@ -1014,7 +1014,7 @@ void mlx5e_ipsec_init(struct mlx5e_priv *priv)
 	if (!ipsec)
 		return;
 
-	xa_init_flags(&ipsec->sadb, XA_FLAGS_ALLOC);
+	xa_init_flags(&ipsec->sadb, XA_FLAGS_ALLOC | XA_FLAGS_LOCK_BH);
 	ipsec->mdev = priv->mdev;
 	init_completion(&ipsec->comp);
 	ipsec->wq = alloc_workqueue("mlx5e_ipsec: %s", WQ_UNBOUND, 0,
