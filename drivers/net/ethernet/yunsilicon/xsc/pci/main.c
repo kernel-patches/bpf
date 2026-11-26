@@ -29,6 +29,63 @@ static int xsc_set_dma_caps(struct pci_dev *pdev)
 	return err;
 }
 
+static int xsc_cmd_query_hca_cap(struct xsc_core_device *xdev,
+				 struct xsc_caps *caps)
+{
+	struct xsc_cmd_query_hca_cap_mbox_out *out;
+	struct xsc_cmd_query_hca_cap_mbox_in in;
+	int err;
+
+	out = kzalloc_obj(*out, GFP_KERNEL);
+	if (!out)
+		return -ENOMEM;
+
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = cpu_to_be16(XSC_CMD_OP_QUERY_HCA_CAP);
+	in.cpu_num = cpu_to_be16(num_online_cpus());
+
+	err = xsc_cmd_exec(xdev, &in, sizeof(in), out, sizeof(*out));
+	if (err)
+		goto err_free;
+
+	xdev->glb_func_id = be32_to_cpu(out->hca_cap.glb_func_id);
+
+	caps->max_cqes = 1 << out->hca_cap.log_max_cq_sz;
+	caps->send_ds_num = out->hca_cap.send_seg_num;
+	caps->recv_ds_num = out->hca_cap.recv_seg_num;
+
+	caps->nic_caps = (caps->nic_caps & ~XSC_CAP_MAC_PORT_MASK) |
+			 FIELD_PREP(XSC_CAP_MAC_PORT_MASK,
+				    out->hca_cap.mac_port & 0xff);
+	xdev->mac_port = FIELD_GET(XSC_CAP_MAC_PORT_MASK, caps->nic_caps);
+
+	caps->msix_base = be16_to_cpu(out->hca_cap.msix_base);
+	caps->msix_num = be16_to_cpu(out->hca_cap.msix_num);
+
+	caps->log_max_qp_depth = out->hca_cap.log_max_qp_depth & 0xff;
+
+	xdev->pcie_no = out->hca_cap.pcie_no;
+	xdev->pf_id = out->hca_cap.pf_id;
+
+	kfree(out);
+	return 0;
+err_free:
+	kfree(out);
+	return err;
+}
+
+static int xsc_reset_function_resource(struct xsc_core_device *xdev)
+{
+	struct xsc_function_reset_mbox_out out;
+	struct xsc_function_reset_mbox_in in;
+
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = cpu_to_be16(XSC_CMD_OP_FUNCTION_RESET);
+	in.glb_func_id = cpu_to_be16(xdev->glb_func_id);
+
+	return xsc_cmd_exec(xdev, &in, sizeof(in), &out, sizeof(out));
+}
+
 static int xsc_pci_init(struct xsc_core_device *xdev,
 			const struct pci_device_id *id)
 {
@@ -86,6 +143,19 @@ static int xsc_pci_init(struct xsc_core_device *xdev,
 	err = xsc_cmd_version_check(xdev);
 	if (err) {
 		pci_err(pdev, "failed to check command queue version: err=%d\n",
+			err);
+		goto err_cmd_cleanup;
+	}
+
+	err = xsc_cmd_query_hca_cap(xdev, &xdev->caps);
+	if (err) {
+		pci_err(pdev, "failed to query hca caps: err=%d\n", err);
+		goto err_cmd_cleanup;
+	}
+
+	err = xsc_reset_function_resource(xdev);
+	if (err) {
+		pci_err(pdev, "failed to reset function resource: err=%d\n",
 			err);
 		goto err_cmd_cleanup;
 	}

@@ -24,6 +24,18 @@
 #define XSC_PAGE_SHIFT_4K		12
 #define XSC_PAGE_SIZE_4K		(_AC(1, UL) << XSC_PAGE_SHIFT_4K)
 
+struct xsc_caps {
+	u32		max_cqes;
+	u32		send_ds_num;
+	u32		recv_ds_num;
+	u8		log_max_qp_depth;
+	u16		msix_base;
+	u16		msix_num;
+	u32		nic_caps;
+};
+
+#define XSC_CAP_MAC_PORT_MASK			GENMASK(15, 8)
+
 struct xsc_cmd;
 
 struct xsc_core_device {
@@ -33,6 +45,12 @@ struct xsc_core_device {
 	void __iomem		*bar;
 	int			bar_num;
 
+	u8			mac_port;
+	u8			pcie_no;
+	u8			pf_id;
+	u16			glb_func_id;
+
+	struct xsc_caps		caps;
 	struct xsc_cmd		*cmd;
 };
 
