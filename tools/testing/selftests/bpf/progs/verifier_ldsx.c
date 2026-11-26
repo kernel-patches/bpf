@@ -299,6 +299,19 @@ __jited("add	t2, a0, s7")
 __jited("lh	s4, 0x18(t2)")
 __jited("add	t2, a0, s7")
 __jited("lb	s4, 0x20(t2)")
+__arch_loongarch
+__jited("add.d	$t2, $a5, $s6")
+__jited("ld.w	$s2, $t2, 16")
+__jited("add.d	$t2, $a5, $s6")
+__jited("ld.h	$s2, $t2, 24")
+__jited("add.d	$t2, $a5, $s6")
+__jited("ld.b	$s2, $t2, 32")
+__jited("add.d	$t2, $a0, $s6")
+__jited("ld.w	$s3, $t2, 16")
+__jited("add.d	$t2, $a0, $s6")
+__jited("ld.h	$s3, $t2, 24")
+__jited("add.d	$t2, $a0, $s6")
+__jited("ld.b	$s3, $t2, 32")
 __naked void arena_ldsx_disasm(void *ctx)
 {
 	asm volatile (
@@ -331,6 +344,7 @@ __success __retval(0)
 __arch_x86_64
 __arch_arm64
 __arch_riscv64
+__arch_loongarch
 __naked void arena_ldsx_exception(void *ctx)
 {
 	asm volatile (
@@ -353,6 +367,7 @@ __success __retval(-1)
 __arch_x86_64
 __arch_arm64
 __arch_riscv64
+__arch_loongarch
 __naked void arena_ldsx_s8(void *ctx)
 {
 	asm volatile (
@@ -385,6 +400,7 @@ __success __retval(-1)
 __arch_x86_64
 __arch_arm64
 __arch_riscv64
+__arch_loongarch
 __naked void arena_ldsx_s16(void *ctx)
 {
 	asm volatile (
@@ -417,6 +433,7 @@ __success __retval(-1)
 __arch_x86_64
 __arch_arm64
 __arch_riscv64
+__arch_loongarch
 __naked void arena_ldsx_s32(void *ctx)
 {
 	asm volatile (
