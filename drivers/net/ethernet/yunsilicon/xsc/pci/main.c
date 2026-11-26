@@ -7,8 +7,10 @@
 
 #include "common/xsc_cmd.h"
 #include "common/xsc_core.h"
+#include "cq.h"
 #include "eq.h"
 #include "pci_irq.h"
+#include "qp.h"
 
 static const struct pci_device_id xsc_pci_id_table[] = {
 	{ PCI_DEVICE(XSC_PCI_VENDOR_ID, XSC_MC_PF_DEV_ID) },
@@ -161,6 +163,9 @@ static int xsc_pci_init(struct xsc_core_device *xdev,
 			err);
 		goto err_cmd_cleanup;
 	}
+
+	xsc_init_cq_table(xdev);
+	xsc_init_qp_table(xdev);
 
 	err = xsc_irq_eq_create(xdev);
 	if (err) {

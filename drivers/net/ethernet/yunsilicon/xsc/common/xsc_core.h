@@ -8,9 +8,13 @@
 
 #include <linux/pci.h>
 #include <linux/bitfield.h>
+#include <linux/completion.h>
 #include <linux/interrupt.h>
 #include <linux/list.h>
+#include <linux/radix-tree.h>
 #include <linux/workqueue.h>
+
+#include "common/xsc_cmd.h"
 
 #define XSC_PCI_VENDOR_ID		0x1f67
 
@@ -84,6 +88,49 @@ struct xsc_irq_info {
 	char			name[XSC_MAX_IRQ_NAME];
 };
 
+enum xsc_event {
+	XSC_EVENT_TYPE_COMP			= 0x0,
+	XSC_EVENT_TYPE_CQ_ERROR			= 0x04,
+	XSC_EVENT_TYPE_WQ_CATAS_ERROR		= 0x05,
+	XSC_EVENT_TYPE_INTERNAL_ERROR		= 0x08,
+	XSC_EVENT_TYPE_WQ_INVAL_REQ_ERROR	= 0x10,
+	XSC_EVENT_TYPE_WQ_ACCESS_ERROR		= 0x11,
+};
+
+/* qp */
+struct xsc_core_qp {
+	void			(*event)(struct xsc_core_qp *qp, int type);
+	u32			qpn;
+	atomic_t		refcount;
+	struct completion	free;
+	u16			eth_queue_type;
+};
+
+struct xsc_qp_table {
+	/* protect radix tree */
+	spinlock_t		lock;
+	struct radix_tree_root	tree;
+};
+
+/* cq */
+struct xsc_core_cq {
+	u32			cqn;
+	struct xsc_core_device	*xdev;
+	atomic_t		refcount;
+	struct completion	free;
+	unsigned int		vector;
+	unsigned int		irqn;
+	void			(*comp)(struct xsc_core_cq *cq);
+	void			(*event)(struct xsc_core_cq *cq,
+					 enum xsc_event);
+};
+
+struct xsc_cq_table {
+	/* protect radix tree */
+	spinlock_t		lock;
+	struct radix_tree_root	tree;
+};
+
 struct xsc_cmd;
 
 struct xsc_core_device {
@@ -107,6 +154,8 @@ struct xsc_core_device {
 	struct xsc_caps		caps;
 	struct xsc_cmd		*cmd;
 	struct xsc_eq_table	eq_table;
+	struct xsc_qp_table	qp_table;
+	struct xsc_cq_table	cq_table;
 	struct xsc_irq_info	*irq_info;
 };
 
@@ -127,6 +176,26 @@ void xsc_clear_cmdq_err_status(struct xsc_core_device *xdev, u32 status);
 
 int xsc_core_vector2eqn(struct xsc_core_device *xdev, int vector, u32 *eqn,
 			unsigned int *irqn);
+
+/* cq/qp resource */
+int xsc_core_create_resource_common(struct xsc_core_device *xdev,
+				    struct xsc_core_qp *qp);
+void xsc_core_destroy_resource_common(struct xsc_core_device *xdev,
+				      struct xsc_core_qp *qp);
+int xsc_core_eth_create_qp(struct xsc_core_device *xdev,
+			   struct xsc_create_qp_mbox_in *in,
+			   int insize, u32 *p_qpn);
+int xsc_core_eth_modify_qp_status(struct xsc_core_device *xdev,
+				  u32 qpn, u16 status);
+int xsc_core_eth_destroy_qp(struct xsc_core_device *xdev, u32 qpn);
+int xsc_core_eth_modify_raw_qp(struct xsc_core_device *xdev,
+			       struct xsc_modify_raw_qp_mbox_in *in);
+int xsc_core_eth_create_cq(struct xsc_core_device *xdev,
+			   struct xsc_core_cq *xcq,
+			   struct xsc_create_cq_mbox_in *in,
+			   int insize);
+int xsc_core_eth_destroy_cq(struct xsc_core_device *xdev,
+			    struct xsc_core_cq *xcq);
 
 /*
  * Link event callback registration. The events are dispatched from the PCI

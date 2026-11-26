@@ -12,7 +12,9 @@
 #include "common/xsc_cmd.h"
 #include "common/xsc_core.h"
 #include "alloc.h"
+#include "cq.h"
 #include "eq.h"
+#include "qp.h"
 
 enum {
 	XSC_EQE_SIZE		= sizeof(struct xsc_eqe),
@@ -52,8 +54,63 @@ static void eq_update_ci(struct xsc_eq *eq, int arm)
 	xsc_update_eq_ci(eq->dev, eq->eqn, eq->cons_index, arm);
 }
 
+static void xsc_cq_completion(struct xsc_core_device *xdev, u32 cqn)
+{
+	struct xsc_cq_table *table = &xdev->cq_table;
+	struct xsc_core_cq *cq;
+
+	rcu_read_lock();
+	cq = radix_tree_lookup(&table->tree, cqn);
+	if (likely(cq))
+		atomic_inc(&cq->refcount);
+	rcu_read_unlock();
+
+	if (!cq) {
+		pci_err(xdev->pdev, "Completion event for bogus CQ, cqn=%d\n",
+			cqn);
+		return;
+	}
+
+	if (!cq->comp)
+		pci_err(xdev->pdev, "cq->comp is NULL\n");
+	else
+		cq->comp(cq);
+
+	if (atomic_dec_and_test(&cq->refcount))
+		complete(&cq->free);
+}
+
+static void xsc_eq_cq_event(struct xsc_core_device *xdev,
+			    u32 cqn, int event_type)
+{
+	struct xsc_cq_table *table = &xdev->cq_table;
+	struct xsc_core_cq *cq;
+
+	spin_lock(&table->lock);
+	cq = radix_tree_lookup(&table->tree, cqn);
+	if (likely(cq))
+		atomic_inc(&cq->refcount);
+	spin_unlock(&table->lock);
+
+	if (unlikely(!cq)) {
+		pci_err(xdev->pdev, "Async event for bogus CQ, cqn=%d\n",
+			cqn);
+		return;
+	}
+
+	if (cq->event)
+		cq->event(cq, event_type);
+	else
+		pci_err(xdev->pdev, "cq->event is NULL, cqn=%d\n", cq->cqn);
+
+	if (atomic_dec_and_test(&cq->refcount))
+		complete(&cq->free);
+}
+
 static int xsc_eq_int(struct xsc_eq *eq)
 {
+	struct xsc_core_device *xdev = eq->dev;
+	u32 cqn, qpn, queue_id;
 	struct xsc_eqe *eqe;
 	int eqes_found = 0;
 	int set_ci = 0;
@@ -63,6 +120,32 @@ static int xsc_eq_int(struct xsc_eq *eq)
 		 * checked the ownership bit.
 		 */
 		rmb();
+		switch (eqe->type) {
+		case XSC_EVENT_TYPE_COMP:
+		case XSC_EVENT_TYPE_INTERNAL_ERROR:
+			queue_id = FIELD_GET(XSC_EQE_QUEUE_ID_MASK,
+					     le16_to_cpu(eqe->queue_id_data));
+			cqn = queue_id;
+			xsc_cq_completion(xdev, cqn);
+			break;
+
+		case XSC_EVENT_TYPE_CQ_ERROR:
+			queue_id = FIELD_GET(XSC_EQE_QUEUE_ID_MASK,
+					     le16_to_cpu(eqe->queue_id_data));
+			cqn = queue_id;
+			xsc_eq_cq_event(xdev, cqn, eqe->type);
+			break;
+		case XSC_EVENT_TYPE_WQ_CATAS_ERROR:
+		case XSC_EVENT_TYPE_WQ_INVAL_REQ_ERROR:
+		case XSC_EVENT_TYPE_WQ_ACCESS_ERROR:
+			queue_id = FIELD_GET(XSC_EQE_QUEUE_ID_MASK,
+					     le16_to_cpu(eqe->queue_id_data));
+			qpn = queue_id;
+			xsc_qp_event(xdev, qpn, eqe->type);
+			break;
+		default:
+			break;
+		}
 
 		++eq->cons_index;
 		eqes_found = 1;
