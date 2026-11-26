@@ -560,7 +560,11 @@ static int rpm_idle(struct device *dev, int rpmflags)
 
  out:
 	trace_rpm_return_int(dev, _THIS_IP_, retval);
-	return retval ? retval : rpm_suspend(dev, rpmflags | RPM_AUTO);
+	if (retval)
+		return retval;
+
+	pm_runtime_mark_last_busy(dev);
+	return rpm_suspend(dev, rpmflags | RPM_AUTO);
 }
 
 /**

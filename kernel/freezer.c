@@ -166,7 +166,7 @@ bool freeze_task(struct task_struct *p)
 	unsigned long flags;
 
 	spin_lock_irqsave(&freezer_lock, flags);
-	if (!freezing(p) || frozen(p) || __freeze_task(p)) {
+	if (frozen(p) || !freezing(p) || __freeze_task(p)) {
 		spin_unlock_irqrestore(&freezer_lock, flags);
 		return false;
 	}
