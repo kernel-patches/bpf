@@ -3874,6 +3874,10 @@ static void idpf_mac_filter_async_handler(void *ctx,
 	if (!status || status == -ETIMEDOUT)
 		return;
 
+	/* vports are freed during removal, before this work is cancelled */
+	if (test_bit(IDPF_REMOVE_IN_PROG, adapter->flags))
+		return;
+
 	ma_list = buff->iov_base;
 	/* make sure at least struct is there */
 	if (buff->iov_len < sizeof(*ma_list))
@@ -3889,7 +3893,7 @@ static void idpf_mac_filter_async_handler(void *ctx,
 	if (!vport)
 		goto invalid_payload;
 
-	vport_config = adapter->vport_config[le32_to_cpu(ma_list->vport_id)];
+	vport_config = adapter->vport_config[vport->idx];
 	ma_list_head = &vport_config->user_config.mac_filter_list;
 
 	/* We can't do much to reconcile bad filters at this point, however we
@@ -3899,8 +3903,11 @@ static void idpf_mac_filter_async_handler(void *ctx,
 	spin_lock_bh(&vport_config->mac_filter_list_lock);
 	list_for_each_entry_safe(f, tmp, ma_list_head, list)
 		for (i = 0; i < num_entries; i++)
-			if (ether_addr_equal(mac_addr[i].addr, f->macaddr))
+			if (ether_addr_equal(mac_addr[i].addr, f->macaddr)) {
 				list_del(&f->list);
+				kfree(f);
+				break;
+			}
 	spin_unlock_bh(&vport_config->mac_filter_list_lock);
 	dev_err_ratelimited(&adapter->pdev->dev, "Received error %d on sending MAC filter request\n",
 			    status);
