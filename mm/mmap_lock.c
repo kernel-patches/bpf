@@ -300,17 +300,16 @@ err:
 err_unstable:
 	/*
 	 * If vma got attached to another mm from under us, that mm is not
-	 * stable and can be freed in the narrow window after vma->vm_refcnt
+	 * stable and can be reused in the narrow window after vma->vm_refcnt
 	 * is dropped and before rcuwait_wake_up(mm) is called. Grab it before
 	 * releasing vma->vm_refcnt.
 	 */
-	other_mm = vma->vm_mm; /* use a copy as vma can be freed after we drop vm_refcnt */
+	other_mm = vma->vm_mm; /* use a copy as vma can be reused after we drop vm_refcnt */
 
-	/* __mmdrop() is a heavy operation, do it after dropping RCU lock. */
-	rcu_read_unlock();
 	mmgrab(other_mm);
 	vma_refcount_put(vma);
-	mmdrop(other_mm);
+	mmdrop_async(other_mm);
+	rcu_read_unlock();
 
 	return NULL;
 }
@@ -559,6 +558,22 @@ void __mm_reset_vma_seqcounts(struct mm_struct *mm)
 		WRITE_ONCE(vma->vm_lock_seq, 0);
 }
 EXPORT_SYMBOL(__mm_reset_vma_seqcounts);
+
+static void mmdrop_async_fn(struct work_struct *work)
+{
+	struct mm_struct *mm;
+
+	mm = container_of(work, struct mm_struct, async_put_work);
+	__mmdrop(mm);
+}
+
+void mmdrop_async(struct mm_struct *mm)
+{
+	if (unlikely(atomic_dec_and_test(&mm->mm_count))) {
+		INIT_WORK(&mm->async_put_work, mmdrop_async_fn);
+		schedule_work(&mm->async_put_work);
+	}
+}
 
 #ifdef CONFIG_LOCK_MM_AND_FIND_VMA
 #include <linux/extable.h>

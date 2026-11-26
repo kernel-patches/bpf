@@ -4789,7 +4789,8 @@ static inline bool can_do_cachestat(struct file *f)
  * The `flags` argument is unused for now, but is included for future
  * extensibility. User should pass 0 (i.e no flag specified).
  *
- * Currently, hugetlbfs is not supported.
+ * Currently, hugetlbfs is not supported.  DAX mappings have no page
+ * cache, so cachestat() always reports all zeros for them.
  *
  * Because the status of a page can change after cachestat() checks it
  * but before it returns to the application, the returned values may
@@ -4834,7 +4835,10 @@ SYSCALL_DEFINE4(cachestat, unsigned int, fd,
 		csr.len == 0 ? ULONG_MAX : (csr.off + csr.len - 1) >> PAGE_SHIFT;
 	memset(&cs, 0, sizeof(struct cachestat));
 	mapping = fd_file(f)->f_mapping;
-	filemap_cachestat(mapping, first_index, last_index, &cs);
+
+	/* DAX mappings have no page cache; report all zeros. */
+	if (!dax_mapping(mapping))
+		filemap_cachestat(mapping, first_index, last_index, &cs);
 
 	if (copy_to_user(cstat, &cs, sizeof(struct cachestat)))
 		return -EFAULT;
