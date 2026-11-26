@@ -797,7 +797,7 @@ static int userns_obj_priv_prog(int mnt_fd, struct token_lsm *lsm_skel)
 }
 
 static int userns_obj_priv_freplace_setup(int mnt_fd, struct priv_freplace_prog **fr_skel,
-					  struct priv_prog **skel, int *tgt_fd)
+					  struct priv_prog **skel, int *tgt_fd, bool fr_token)
 {
 	LIBBPF_OPTS(bpf_object_open_opts, opts);
 	int err;
@@ -813,6 +813,8 @@ static int userns_obj_priv_freplace_setup(int mnt_fd, struct priv_freplace_prog 
 	if (!ASSERT_OK(err, "priv_prog__load"))
 		return -EINVAL;
 
+	if (!fr_token)
+		opts.bpf_token_path = "";
 	*fr_skel = priv_freplace_prog__open_opts(&opts);
 	if (!ASSERT_OK_PTR(*skel, "priv_freplace_prog__open_opts"))
 		return -EINVAL;
@@ -830,7 +832,7 @@ static int userns_obj_priv_freplace_prog(int mnt_fd, struct token_lsm *lsm_skel)
 	struct priv_prog *skel = NULL;
 	int err, tgt_fd;
 
-	err = userns_obj_priv_freplace_setup(mnt_fd, &fr_skel, &skel, &tgt_fd);
+	err = userns_obj_priv_freplace_setup(mnt_fd, &fr_skel, &skel, &tgt_fd, true);
 	if (!ASSERT_OK(err, "setup"))
 		goto out;
 
@@ -858,7 +860,7 @@ static int userns_obj_priv_freplace_prog_fail(int mnt_fd, struct token_lsm *lsm_
 	struct priv_prog *skel = NULL;
 	int err, tgt_fd;
 
-	err = userns_obj_priv_freplace_setup(mnt_fd, &fr_skel, &skel, &tgt_fd);
+	err = userns_obj_priv_freplace_setup(mnt_fd, &fr_skel, &skel, &tgt_fd, false);
 	if (!ASSERT_OK(err, "setup"))
 		goto out;
 
