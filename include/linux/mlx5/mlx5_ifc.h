@@ -800,7 +800,9 @@ struct mlx5_ifc_fte_match_set_misc5_bits {
 };
 
 struct mlx5_ifc_fte_match_set_misc6_bits {
-	u8         reserved_at_0[0x1a];
+	u8         reserved_at_0[0x8];
+	u8         psp_hdr_ext_len[0x8];
+	u8         reserved_at_10[0xa];
 	u8         psp_version[0x4];
 	u8         reserved_at_1e[0x2];
 
