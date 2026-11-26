@@ -370,6 +370,38 @@ static noinline void check_xa_shrink(struct xarray *xa)
 	}
 }
 
+static noinline void check_xa_root_offset(struct xarray *xa)
+{
+	DEFINE_XARRAY(tmp);
+	struct xa_node *node;
+
+	/* Free two nodes with non-zero offsets so the slab can reuse them */
+	xa_store_index(&tmp, 0, GFP_KERNEL);
+	xa_store_index(&tmp, 5UL << XA_CHUNK_SHIFT, GFP_KERNEL);
+	xa_store_index(&tmp, 6UL << XA_CHUNK_SHIFT, GFP_KERNEL);
+	xa_store_index(&tmp, 7UL << XA_CHUNK_SHIFT, GFP_KERNEL);
+	xa_erase_index(&tmp, 5UL << XA_CHUNK_SHIFT);
+	xa_erase_index(&tmp, 6UL << XA_CHUNK_SHIFT);
+	rcu_barrier();
+
+	/* A root created by xas_create() must have offset 0 */
+	XA_BUG_ON(xa, xa_store_index(xa, 1, GFP_KERNEL));
+	rcu_read_lock();
+	node = xa_to_node(xa_head(xa));
+	XA_BUG_ON(xa, node->offset != 0);
+	rcu_read_unlock();
+
+	/* And so must a root created by xas_expand() */
+	XA_BUG_ON(xa, xa_store_index(xa, XA_CHUNK_SIZE, GFP_KERNEL));
+	rcu_read_lock();
+	node = xa_to_node(xa_head(xa));
+	XA_BUG_ON(xa, node->offset != 0);
+	rcu_read_unlock();
+
+	xa_destroy(xa);
+	xa_destroy(&tmp);
+}
+
 static noinline void check_insert(struct xarray *xa)
 {
 	unsigned long i;
@@ -1834,6 +1866,34 @@ static noinline void check_create_range_5(struct xarray *xa,
 	xa_destroy(xa);
 }
 
+#ifdef CONFIG_XARRAY_MULTI
+static noinline void check_create_range_spare(struct xarray *xa)
+{
+	XA_STATE_ORDER(xas, xa, 0, XA_CHUNK_SHIFT);
+	bool spare_left;
+
+	XA_BUG_ON(xa, !xa_empty(xa));
+
+	/* Model a failed allocation followed by a successful xas_nomem(). */
+	xas_set_err(&xas, -ENOMEM);
+	XA_BUG_ON(xa, !xas_nomem(&xas, GFP_KERNEL));
+
+	/* Model another user populating the tree before the retry. */
+	xa_insert_index(xa, 0);
+	xa_insert_index(xa, 1);
+
+	xas_lock(&xas);
+	xas_create_range(&xas);
+	xas_unlock(&xas);
+
+	XA_BUG_ON(xa, xas_error(&xas));
+	spare_left = xas.xa_alloc != NULL;
+	xas_destroy(&xas);
+	XA_BUG_ON(xa, spare_left);
+	xa_destroy(xa);
+}
+#endif
+
 static noinline void check_create_range(struct xarray *xa)
 {
 	unsigned int order;
@@ -1867,6 +1927,9 @@ static noinline void check_create_range(struct xarray *xa)
 	}
 
 	check_create_range_3();
+#ifdef CONFIG_XARRAY_MULTI
+	check_create_range_spare(xa);
+#endif
 }
 
 static noinline void __check_store_range(struct xarray *xa, unsigned long first,
@@ -2305,6 +2368,7 @@ static int xarray_checks(void)
 	check_xa_load(&array);
 	check_xa_mark(&array);
 	check_xa_shrink(&array);
+	check_xa_root_offset(&array);
 	check_xas_erase(&array);
 	check_insert(&array);
 	check_cmpxchg(&array);

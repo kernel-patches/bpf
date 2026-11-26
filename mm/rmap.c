@@ -48,8 +48,9 @@
  * hugetlbfs PageHuge() take locks in this order:
  *   hugetlb_fault_mutex (hugetlbfs specific page fault mutex)
  *     vma_lock (hugetlb specific lock for pmd_sharing)
- *       mapping->i_mmap_rwsem (also used for hugetlb pmd sharing)
- *         folio_lock
+ *       mapping->invalidate_lock (when allocating page cache folios)
+ *         mapping->i_mmap_rwsem (also used for hugetlb pmd sharing)
+ *           folio_lock
  */
 
 #include <linux/mm.h>

@@ -265,7 +265,6 @@ static int __init dummy_numa_init(void)
 		return ret;
 	}
 
-	numa_off = true;
 	return 0;
 }
 
@@ -305,6 +304,7 @@ void __init arch_numa_init(void)
 	}
 
 	numa_init(dummy_numa_init);
+	numa_off = true;
 }
 
 #ifdef CONFIG_NUMA_EMU

@@ -146,7 +146,7 @@ int __vma_start_write(struct vm_area_struct *vma, int state)
 
 	err = __vma_start_exclude_readers(&ves);
 	if (err) {
-		WARN_ON_ONCE(ves.detached);
+		VM_WARN_ON_ONCE(ves.detached);
 		return err;
 	}
 
@@ -161,7 +161,7 @@ int __vma_start_write(struct vm_area_struct *vma, int state)
 	if (ves.exclusive) {
 		__vma_end_exclude_readers(&ves);
 		/* VMA should remain attached. */
-		WARN_ON_ONCE(ves.detached);
+		VM_WARN_ON_ONCE(ves.detached);
 	}
 
 	return 0;
@@ -193,7 +193,7 @@ void __vma_exclude_readers_for_detach(struct vm_area_struct *vma)
 		__vma_end_exclude_readers(&ves);
 	}
 	/* If an error arose but we were detached anyway, we don't care. */
-	WARN_ON_ONCE(!ves.detached);
+	VM_WARN_ON_ONCE(!ves.detached);
 }
 
 /* Do the VMA, mm seqcounts indicate the VMA is write locked? */
@@ -651,7 +651,7 @@ struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
 	 * Well, dang. We might still be successful, but only
 	 * if we can extend a vma to do so.
 	 */
-	if (!vma || !(vma->vm_flags & VM_GROWSDOWN)) {
+	if (!vma || !vma_test(vma, VMA_GROWSDOWN_BIT)) {
 		mmap_read_unlock(mm);
 		return NULL;
 	}
@@ -674,7 +674,7 @@ struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
 			goto fail;
 		if (vma->vm_start <= addr)
 			goto success;
-		if (!(vma->vm_flags & VM_GROWSDOWN))
+		if (!vma_test(vma, VMA_GROWSDOWN_BIT))
 			goto fail;
 	}
 

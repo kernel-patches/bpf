@@ -75,12 +75,14 @@ static inline void __mmap_lock_trace_released(struct mm_struct *mm, bool write)
 
 static inline void mmap_assert_locked(const struct mm_struct *mm)
 {
-	rwsem_assert_held(&mm->mmap_lock);
+	if (IS_ENABLED(CONFIG_DEBUG_VM) || IS_ENABLED(CONFIG_LOCKDEP))
+		rwsem_assert_held(&mm->mmap_lock);
 }
 
 static inline void mmap_assert_write_locked(const struct mm_struct *mm)
 {
-	rwsem_assert_held_write(&mm->mmap_lock);
+	if (IS_ENABLED(CONFIG_DEBUG_VM) || IS_ENABLED(CONFIG_LOCKDEP))
+		rwsem_assert_held_write(&mm->mmap_lock);
 }
 
 #ifdef CONFIG_LOCKDEP
@@ -352,9 +354,14 @@ int vma_start_write_killable(struct vm_area_struct *vma)
 /**
  * vma_assert_write_locked() - assert that @vma holds a VMA write lock.
  * @vma: The VMA to assert.
+ *
+ * Assert only if CONFIG_DEBUG_VM is set.
  */
 static inline void vma_assert_write_locked(const struct vm_area_struct *vma)
 {
+	if (!IS_ENABLED(CONFIG_DEBUG_VM))
+		return;
+
 	if (!IS_ENABLED(CONFIG_MMU)) {
 		mmap_assert_write_locked(vma->vm_mm);
 		return;
@@ -367,10 +374,15 @@ static inline void vma_assert_write_locked(const struct vm_area_struct *vma)
  * vma_assert_locked() - assert that @vma holds either a VMA read or a VMA write
  * lock and is not detached.
  * @vma: The VMA to assert.
+ *
+ * Assert only if CONFIG_DEBUG_VM is set.
  */
 static inline void vma_assert_locked(const struct vm_area_struct *vma)
 {
 	unsigned int refcnt;
+
+	if (!IS_ENABLED(CONFIG_DEBUG_VM))
+		return;
 
 	if (!IS_ENABLED(CONFIG_MMU)) {
 		mmap_assert_locked(vma->vm_mm);
@@ -408,6 +420,11 @@ static inline void vma_assert_locked(const struct vm_area_struct *vma)
 	vma_assert_write_locked(vma);
 }
 
+static inline bool vma_is_attached(const struct vm_area_struct *vma)
+{
+	return refcount_read(&vma->vm_refcnt);
+}
+
 /**
  * vma_assert_stabilised() - assert that this VMA cannot be changed from
  * underneath us either by having a VMA or mmap lock held.
@@ -418,9 +435,18 @@ static inline void vma_assert_locked(const struct vm_area_struct *vma)
  *
  * With lockdep disabled we may sometimes race with other threads acquiring the
  * mmap read lock simultaneous with our VMA read lock.
+ *
+ * Assert only if CONFIG_DEBUG_VM is set.
  */
 static inline void vma_assert_stabilised(const struct vm_area_struct *vma)
 {
+	if (!IS_ENABLED(CONFIG_DEBUG_VM))
+		return;
+
+	/* Detached VMAs are trivially stabilised. */
+	if (!vma_is_attached(vma))
+		return;
+
 	/*
 	 * If another thread owns an mmap lock, it may go away at any time, and
 	 * thus is no guarantee of stability.
@@ -454,11 +480,6 @@ static inline void vma_assert_stabilised(const struct vm_area_struct *vma)
 	vma_assert_locked(vma);
 }
 
-static inline bool vma_is_attached(const struct vm_area_struct *vma)
-{
-	return refcount_read(&vma->vm_refcnt);
-}
-
 /*
  * WARNING: to avoid racing with vma_mark_attached()/vma_mark_detached(), these
  * assertions should be made either under mmap_write_lock or when the object
@@ -469,12 +490,12 @@ static inline void vma_assert_attached(struct vm_area_struct *vma)
 	if (!IS_ENABLED(CONFIG_MMU))
 		return;
 
-	WARN_ON_ONCE(!vma_is_attached(vma));
+	VM_WARN_ON_ONCE(!vma_is_attached(vma));
 }
 
 static inline void vma_assert_detached(struct vm_area_struct *vma)
 {
-	WARN_ON_ONCE(vma_is_attached(vma));
+	VM_WARN_ON_ONCE(vma_is_attached(vma));
 }
 
 static inline void vma_mark_attached(struct vm_area_struct *vma)
@@ -538,6 +559,9 @@ struct vm_area_struct *lock_next_vma(struct vma_rcu_iter *rvmi,
 
 static inline void vma_assert_can_modify(struct vm_area_struct *vma)
 {
+	if (!IS_ENABLED(CONFIG_DEBUG_VM))
+		return;
+
 	if (vma_is_attached(vma))
 		vma_assert_write_locked(vma);
 }

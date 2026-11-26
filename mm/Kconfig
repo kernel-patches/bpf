@@ -130,15 +130,6 @@ menu "Zsmalloc allocator options"
 
 comment "Zsmalloc is a common backend allocator for zswap & zram"
 
-config ZSMALLOC_STAT
-	bool "Export zsmalloc statistics"
-	select DEBUG_FS
-	help
-	  This option enables code in the zsmalloc to collect various
-	  statistics about what's happening in zsmalloc and exports that
-	  information to userspace via debugfs.
-	  If unsure, say N.
-
 config ZSMALLOC_CHAIN_SIZE
 	int "Maximum number of physical pages per-zspage"
 	default 8
@@ -1355,6 +1346,7 @@ config ANON_VMA_NAME
 
 config HAVE_ARCH_USERFAULTFD_WP
 	bool
+	depends on 64BIT
 	help
 	  Arch has userfaultfd write protection support
 
@@ -1485,6 +1477,18 @@ config LAZY_MMU_MODE_KUNIT_TEST
 	  Enable this option to check that the lazy MMU mode interface behaves
 	  as expected. Only tests for the generic interface are included (not
 	  architecture-specific behaviours).
+
+	  If unsure, say N.
+
+config VMSTAT_KUNIT_TEST
+	tristate "KUnit test for VM statistics" if !KUNIT_ALL_TESTS
+	depends on VM_EVENT_COUNTERS
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  Enable this option to test and benchmark the performance of VM
+	  statistics updates (zone page state and VM event counters), which
+	  are used frequently in hot memory management code paths.
 
 	  If unsure, say N.
 

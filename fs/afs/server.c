@@ -229,6 +229,7 @@ struct afs_server *afs_lookup_server(struct afs_cell *cell, struct key *key,
 		alist = afs_vl_lookup_addrs(server, key);
 		if (IS_ERR(alist)) {
 			ret = PTR_ERR(alist);
+			alist = NULL;
 			goto create_failed;
 		}
 

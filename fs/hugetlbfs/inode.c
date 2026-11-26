@@ -157,7 +157,8 @@ static int hugetlbfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 		goto out;
 
 	ret = 0;
-	if (vma_test(vma, VMA_WRITE_BIT) && inode->i_size < len)
+	if (vma_test(vma, VMA_WRITE_BIT) && inode->i_size < len &&
+	    !(HUGETLBFS_I(inode)->seals & F_SEAL_GROW))
 		i_size_write(inode, len);
 out:
 	inode_unlock(inode);
@@ -546,10 +547,9 @@ static void remove_inode_single_folio(struct hstate *h, struct inode *inode,
  * truncation is indicated by end of range being LLONG_MAX
  *	In this case, we first scan the range and release found pages.
  *	After releasing pages, hugetlb_unreserve_pages cleans up region/reserve
- *	maps and global counts.  Page faults can race with truncation.
- *	During faults, hugetlb_no_page() checks i_size before page allocation,
- *	and again after obtaining page table lock.  It will 'back out'
- *	allocations in the truncated range.
+ *	maps and global counts.  hugetlb_vmtruncate() updates i_size under
+ *	invalidate_lock to synchronize with new page cache allocations from
+ *	page faults, uffd, etc.
  * hole punch is indicated if end is not LLONG_MAX
  *	In the hole punch case we scan the range and release found pages.
  *	Only when releasing a page is the associated region/reserve map
@@ -623,7 +623,15 @@ static void hugetlb_vmtruncate(struct inode *inode, loff_t offset)
 	BUG_ON(offset & ~huge_page_mask(h));
 	pgoff = offset >> PAGE_SHIFT;
 
+	filemap_invalidate_lock(mapping);
 	i_size_write(inode, offset);
+	/*
+	 * The size check now prevents new page-cache allocations in the
+	 * truncated range. Existing folios and reservations are cleaned up
+	 * below.
+	 */
+	filemap_invalidate_unlock(mapping);
+
 	i_mmap_lock_write(mapping);
 	if (mapping_mapped(mapping))
 		hugetlb_vmdelete_list(mapping, pgoff, 0, ZAP_FLAG_DROP_MARKER);
@@ -1133,6 +1141,8 @@ static int hugetlbfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 				- sbinfo->spool->used_hpages;
 			buf->f_bavail = buf->f_bfree = free_pages;
 			spin_unlock_irq(&sbinfo->spool->lock);
+		}
+		if (sbinfo->spool || sbinfo->max_inodes >= 0) {
 			buf->f_files = sbinfo->max_inodes;
 			buf->f_ffree = sbinfo->free_inodes;
 		}
