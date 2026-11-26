@@ -35,6 +35,7 @@ use core::{
 mod cap;
 mod id;
 mod io;
+mod iov;
 mod irq;
 
 pub use self::cap::{
@@ -56,6 +57,12 @@ pub use self::io::{
     DevresBar,
     Extended,
     Normal, //
+};
+pub use self::iov::{
+    SriovDisable,
+    SriovEnable,
+    SriovEnabled,
+    VfRegistration, //
 };
 pub use self::irq::{
     IrqType,
@@ -86,12 +93,24 @@ unsafe impl<T: Driver> driver::RegistrationOps for Adapter<T> {
         name: &'static CStr,
         module: &'static ThisModule,
     ) -> Result {
+        const_assert!(
+            T::HAS_SRIOV_ENABLE == T::HAS_SRIOV_DISABLE,
+            "PCI drivers must implement both sriov_enable and sriov_disable"
+        );
+
         // SAFETY: It's safe to set the fields of `struct pci_driver` on initialization.
         unsafe {
             (*pdrv.get()).name = name.as_char_ptr();
             (*pdrv.get()).probe = Some(Self::probe_callback);
             (*pdrv.get()).remove = Some(Self::remove_callback);
             (*pdrv.get()).id_table = T::ID_TABLE.as_ptr();
+            (*pdrv.get()).driver_managed_dma = T::DRIVER_MANAGED_DMA.is_some();
+            if T::HAS_ERROR_DETECTED || T::HAS_RESET_PREPARE || T::HAS_RESET_DONE {
+                (*pdrv.get()).err_handler = &Self::ERROR_HANDLERS;
+            }
+            if T::HAS_SRIOV_ENABLE {
+                (*pdrv.get()).sriov_configure = Some(Self::sriov_configure_callback);
+            }
         }
 
         // SAFETY: `pdrv` is guaranteed to be a valid `DriverType`.
@@ -147,7 +166,96 @@ impl<T: Driver> Adapter<T> {
         let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
 
         T::unbind(pdev, data);
+
+        // SAFETY: The driver's unbind callback has returned, and no callbacks retain a borrow.
+        let data = unsafe { pdev.as_ref().drvdata_obtain::<T::Data<'_>>() };
+
+        // Drop the private data here, ahead of `driver::Registration::post_unbind_callback()`,
+        // which would otherwise drop it after `pci_device_remove()` returns. `drvdata_obtain()`
+        // has cleared the driver data pointer, so that callback finds nothing left to drop.
+        //
+        // This is a special case for VFIO-PCI: `vfio_pci_core_unregister_device()` must be
+        // called from `pci_device_remove()`. In general, private data must not rely on being
+        // dropped from the bus remove callback; any point after the driver's remove callback and
+        // before `devres_release_all()` in `device_unbind_cleanup()` is sufficient.
+        drop(data);
     }
+
+    extern "C" fn reset_prepare_callback(pdev: *mut bindings::pci_dev) {
+        // SAFETY: The PCI core only ever calls the reset_prepare callback with a valid pointer to
+        // a `struct pci_dev`, while holding the device lock.
+        //
+        // INVARIANT: `pdev` is valid for the duration of `reset_prepare_callback()`.
+        let pdev = unsafe { &*pdev.cast::<Device<device::CoreInternal<'_>>>() };
+
+        // SAFETY: The PCI core only calls this callback for a device bound to this driver. The
+        // device lock excludes `probe_callback()` and `remove_callback()`, so the stored pointer
+        // has type `T::Data<'_>` and remains valid throughout this callback.
+        let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
+
+        T::reset_prepare(pdev, data);
+    }
+
+    extern "C" fn reset_done_callback(pdev: *mut bindings::pci_dev) {
+        // SAFETY: The PCI core only ever calls the reset_done callback with a valid pointer to a
+        // `struct pci_dev`, while holding the device lock.
+        //
+        // INVARIANT: `pdev` is valid for the duration of `reset_done_callback()`.
+        let pdev = unsafe { &*pdev.cast::<Device<device::CoreInternal<'_>>>() };
+
+        // SAFETY: The PCI core only calls this callback for a device bound to this driver. The
+        // device lock excludes `probe_callback()` and `remove_callback()`, so the stored pointer
+        // has type `T::Data<'_>` and remains valid throughout this callback.
+        let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
+
+        T::reset_done(pdev, data);
+    }
+
+    extern "C" fn error_detected_callback(
+        pdev: *mut bindings::pci_dev,
+        state: bindings::pci_channel_state_t,
+    ) -> bindings::pci_ers_result_t {
+        // SAFETY: PCI error recovery only ever calls the error_detected callback with a valid
+        // pointer to a `struct pci_dev`. AER (`report_error_detected()`) and EEH hold the device
+        // lock while calling it.
+        //
+        // INVARIANT: `pdev` is valid for the duration of `error_detected_callback()`.
+        let pdev = unsafe { &*pdev.cast::<Device<device::CoreInternal<'_>>>() };
+
+        // SAFETY: PCI error recovery only calls this callback for a device bound to this driver.
+        // The device lock excludes `probe_callback()` and `remove_callback()`, so the stored
+        // pointer has type `T::Data<'_>` and remains valid throughout this callback.
+        let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
+
+        let Some(state) = ChannelState::from_raw(state) else {
+            // PCI error recovery only reports the states `ChannelState` represents.
+            return ErsResult::None.as_raw();
+        };
+
+        T::error_detected(pdev, data, state).as_raw()
+    }
+
+    const ERROR_HANDLERS: bindings::pci_error_handlers = bindings::pci_error_handlers {
+        error_detected: if T::HAS_ERROR_DETECTED {
+            Some(Self::error_detected_callback)
+        } else {
+            None
+        },
+        mmio_enabled: None,
+        slot_reset: None,
+        reset_prepare: if T::HAS_RESET_PREPARE {
+            Some(Self::reset_prepare_callback)
+        } else {
+            None
+        },
+        reset_done: if T::HAS_RESET_DONE {
+            Some(Self::reset_done_callback)
+        } else {
+            None
+        },
+        resume: None,
+        cor_error_detected: None,
+    };
 }
 
 /// Declares a kernel module that exposes a single PCI driver.
@@ -179,6 +287,21 @@ pub struct DeviceId(bindings::pci_device_id);
 
 impl DeviceId {
     const PCI_ANY_ID: u32 = !0;
+
+    /// Create a new `pci::DeviceId` for a VFIO driver from a vendor and device ID.
+    ///
+    /// The ID matches every device with this vendor and device ID, whatever its class. Matching
+    /// through this entry requires `driver_override` to select the driver. The module alias
+    /// generated for the ID has the `vfio_pci:` prefix, which lets userspace find the VFIO driver
+    /// for a device.
+    ///
+    /// Equivalent to C's `PCI_DRIVER_OVERRIDE_DEVICE_VFIO` macro.
+    #[inline]
+    pub const fn from_id_vfio_override(vendor: Vendor, device: u32) -> Self {
+        let mut id = Self::from_id(vendor, device);
+        id.0.override_only = bindings::PCI_ID_F_VFIO_DRIVER_OVERRIDE;
+        id
+    }
 
     /// Equivalent to C's `PCI_DEVICE` macro.
     ///
@@ -249,6 +372,73 @@ unsafe impl RawDeviceIdIndex for DeviceId {
     const DRIVER_DATA_OFFSET: usize = core::mem::offset_of!(bindings::pci_device_id, driver_data);
 }
 
+/// Marker for a driver that manages DMA ownership of its devices by itself.
+///
+/// The driver core does not claim the default DMA domain for the devices of such a driver. See
+/// [`Driver::DRIVER_MANAGED_DMA`].
+pub struct DriverManagedDma<D: ?Sized>(PhantomData<fn() -> *mut D>);
+
+impl<D: ?Sized> DriverManagedDma<D> {
+    /// Declares that driver `D` manages DMA ownership of its devices by itself.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that devices bound to `D` are not used for DMA allocations or
+    /// mappings through the kernel DMA API, directly or through helpers.
+    pub const unsafe fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+/// The state of the I/O channel to a device, as reported by PCI error recovery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelState {
+    /// The I/O channel remains operational.
+    Normal,
+    /// I/O to the device is blocked.
+    Frozen,
+    /// The device has permanently failed.
+    PermanentFailure,
+}
+
+impl ChannelState {
+    fn from_raw(state: bindings::pci_channel_state_t) -> Option<Self> {
+        match state {
+            bindings::pci_channel_io_normal => Some(Self::Normal),
+            bindings::pci_channel_io_frozen => Some(Self::Frozen),
+            bindings::pci_channel_io_perm_failure => Some(Self::PermanentFailure),
+            _ => None,
+        }
+    }
+}
+
+/// The result a driver reports to PCI error recovery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErsResult {
+    /// The driver has no result to report.
+    None,
+    /// The driver can recover without a slot reset.
+    CanRecover,
+    /// The driver needs the slot to be reset.
+    NeedReset,
+    /// The device has failed completely and cannot be recovered.
+    Disconnect,
+    /// The driver has fully recovered and the device is operational.
+    Recovered,
+}
+
+impl ErsResult {
+    fn as_raw(self) -> bindings::pci_ers_result_t {
+        match self {
+            Self::None => bindings::pci_ers_result_PCI_ERS_RESULT_NONE,
+            Self::CanRecover => bindings::pci_ers_result_PCI_ERS_RESULT_CAN_RECOVER,
+            Self::NeedReset => bindings::pci_ers_result_PCI_ERS_RESULT_NEED_RESET,
+            Self::Disconnect => bindings::pci_ers_result_PCI_ERS_RESULT_DISCONNECT,
+            Self::Recovered => bindings::pci_ers_result_PCI_ERS_RESULT_RECOVERED,
+        }
+    }
+}
+
 /// `IdTable` type for PCI.
 pub type IdTable<T> = &'static dyn kernel::device_id::IdTable<DeviceId, T>;
 
@@ -280,6 +470,7 @@ macro_rules! pci_device_table {
 ///     ]
 /// );
 ///
+/// #[vtable]
 /// impl pci::Driver for MyDriver {
 ///     type IdInfo = ();
 ///     type Data<'bound> = Self;
@@ -295,6 +486,7 @@ macro_rules! pci_device_table {
 ///```
 /// Drivers must implement this trait in order to get a PCI driver registered. Please refer to the
 /// `Adapter` documentation for an example.
+#[vtable]
 pub trait Driver {
     /// The type holding information about each device id supported by the driver.
     // TODO: Use `associated_type_defaults` once stabilized:
@@ -309,6 +501,10 @@ pub trait Driver {
 
     /// The table of device ids supported by the driver.
     const ID_TABLE: IdTable<Self::IdInfo>;
+
+    /// Set if the driver manages DMA ownership of its devices by itself, instead of using the
+    /// default DMA domain. Construct with [`DriverManagedDma::new`].
+    const DRIVER_MANAGED_DMA: Option<DriverManagedDma<Self>> = None;
 
     /// PCI driver probe.
     ///
@@ -332,6 +528,101 @@ pub trait Driver {
     fn unbind<'bound>(dev: &'bound Device<device::Core<'_>>, this: Pin<&Self::Data<'bound>>) {
         let _ = (dev, this);
     }
+
+    /// Called before a PCI reset, with the device lock held.
+    #[optional]
+    fn reset_prepare<'bound>(_dev: &Device<device::Core<'_>>, _this: Pin<&Self::Data<'bound>>);
+
+    /// Called after a PCI reset attempt, with the device lock held.
+    #[optional]
+    fn reset_done<'bound>(_dev: &Device<device::Core<'_>>, _this: Pin<&Self::Data<'bound>>);
+
+    /// Handle a PCI error and return the PCI recovery result, with the device lock held.
+    #[optional]
+    fn error_detected<'bound>(
+        _dev: &Device<device::Core<'_>>,
+        _this: Pin<&Self::Data<'bound>>,
+        _state: ChannelState,
+    ) -> ErsResult;
+
+    /// Enables Single Root I/O Virtualization (SR-IOV) for a PF.
+    ///
+    /// This callback is only invoked when `CONFIG_PCI_IOV` is enabled.
+    ///
+    /// Called when userspace writes a nonzero VF count to `sriov_numvfs`. The token carries the
+    /// requested count and permission to enable VFs on this PF. Return the guard obtained from
+    /// [`SriovEnable::enable()`] after completing setup; dropping it rolls back the enable.
+    ///
+    /// The PF must own a [`VfRegistration`] before enabling VFs. That registration disables
+    /// SR-IOV when the driver data is destroyed, while resources needed by VF drivers remain live.
+    /// Implement this callback and [`Self::sriov_disable()`] together, or implement neither.
+    ///
+    /// See [PCI Express I/O Virtualization].
+    ///
+    /// [PCI Express I/O Virtualization]: https://docs.kernel.org/PCI/pci-iov-howto.html
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kernel::{
+    /// #     device::Core,
+    /// #     pci,
+    /// #     prelude::*, //
+    /// # };
+    /// # struct Data;
+    /// fn sriov_enable<'a>(
+    ///     _dev: &'a pci::Device<Core<'_>>,
+    ///     _data: Pin<&Data>,
+    ///     token: pci::SriovEnable<'a>,
+    /// ) -> Result<pci::SriovEnabled<'a>> {
+    ///     let num_vfs = token.num_vfs();
+    ///     let enabled = token.enable(num_vfs)?;
+    ///     // Complete any additional setup before returning the guard.
+    ///     Ok(enabled)
+    /// }
+    /// ```
+    #[optional]
+    fn sriov_enable<'a>(
+        _dev: &'a Device<device::Core<'_>>,
+        _data: Pin<&Self::Data<'a>>,
+        _token: SriovEnable<'a>,
+    ) -> Result<SriovEnabled<'a>>;
+
+    /// Disables all VFs of a PF in response to a userspace request.
+    ///
+    /// This callback is only invoked when `CONFIG_PCI_IOV` is enabled.
+    ///
+    /// Called when userspace writes zero to `sriov_numvfs`. Call [`SriovDisable::disable()`]
+    /// while resources used by VF drivers are still available. Returning an error before calling
+    /// it leaves the VFs enabled. Returning success requires that all VFs have been disabled.
+    ///
+    /// This callback is not invoked during PF unbind; [`VfRegistration`] owns that teardown.
+    /// Implement this callback and [`Self::sriov_enable()`] together, or implement neither.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kernel::{
+    /// #     device::Core,
+    /// #     pci,
+    /// #     prelude::*, //
+    /// # };
+    /// # struct Data;
+    /// fn sriov_disable<'a>(
+    ///     _dev: &'a pci::Device<Core<'_>>,
+    ///     _data: Pin<&Data>,
+    ///     token: pci::SriovDisable<'a>,
+    /// ) -> Result {
+    ///     token.disable();
+    ///     Ok(())
+    /// }
+    /// ```
+    #[optional]
+    fn sriov_disable<'a>(
+        _dev: &'a Device<device::Core<'_>>,
+        _data: Pin<&Self::Data<'a>>,
+        _token: SriovDisable<'a>,
+    ) -> Result;
 }
 
 /// The PCI device representation.
@@ -358,6 +649,13 @@ impl<Ctx: device::DeviceContext> Device<Ctx> {
 }
 
 impl Device {
+    /// Returns `true` if this device is a Virtual Function (VF).
+    #[inline]
+    pub fn is_virtfn(&self) -> bool {
+        // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
+        unsafe { (*self.as_raw()).is_virtfn() != 0 }
+    }
+
     /// Returns the PCI vendor ID as [`Vendor`].
     ///
     /// # Examples
@@ -465,6 +763,24 @@ impl Device {
     pub fn pci_class(&self) -> Class {
         // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
         Class::from_raw(unsafe { (*self.as_raw()).class })
+    }
+}
+
+impl Device<device::Bound> {
+    /// Returns the PCI domain number of the bus that this device is on.
+    #[inline]
+    pub fn domain_nr(&self) -> u32 {
+        // SAFETY: `self.as_raw()` points to a valid `struct pci_dev`, which holds a reference
+        // to its bus. The bound context keeps the host controller data used by
+        // `pci_domain_nr()` alive.
+        let domain_nr = unsafe { bindings::pci_domain_nr((*self.as_raw()).bus) };
+
+        debug_assert!(domain_nr >= 0);
+
+        // CAST: `pci_domain_nr()` returns an `int`, but a registered bus never has a negative
+        // domain. A negative value here is a kernel bug rather than a condition for a caller to
+        // handle.
+        domain_nr as u32
     }
 }
 
