@@ -70,7 +70,8 @@ struct bpf_dtab_netdev {
 	struct bpf_prog *xdp_prog;
 	struct rcu_head rcu;
 	unsigned int idx;
-	struct bpf_devmap_val val;
+	/* The verifier assumes that map values are 8-byte aligned */
+	struct bpf_devmap_val val __aligned(8);
 };
 
 struct bpf_dtab {
