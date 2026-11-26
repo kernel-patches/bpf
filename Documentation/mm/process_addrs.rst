@@ -418,10 +418,10 @@ ordering of locks within memory management code:
 
   inode->i_rwsem        (while writing or truncating, not reading or faulting)
     mm->mmap_lock
-      mapping->invalidate_lock (in filemap_fault)
-        folio_lock
-          hugetlbfs_i_mmap_rwsem_key (in huge_pmd_share, see hugetlbfs below)
-            vma_start_write
+      vma_start_write[_killable]
+        mapping->invalidate_lock (in filemap_fault)
+          folio_lock
+            hugetlbfs_i_mmap_rwsem_key (in huge_pmd_share, see hugetlbfs below)
               mapping->i_mmap_rwsem
                 anon_vma->rwsem
                   mm->page_table_lock or pte_lock
