@@ -2847,8 +2847,11 @@ void mlx5e_accel_ipsec_fs_modify(struct mlx5e_ipsec_sa_entry *sa_entry)
 	if (err)
 		return;
 
-	mlx5e_accel_ipsec_fs_del_rule(sa_entry);
-	memcpy(sa_entry, &sa_entry_shadow, sizeof(*sa_entry));
+	spin_lock_bh(&sa_entry->x->lock);
+	swap(sa_entry->ipsec_rule, sa_entry_shadow.ipsec_rule);
+	spin_unlock_bh(&sa_entry->x->lock);
+
+	mlx5e_accel_ipsec_fs_del_rule(&sa_entry_shadow);
 }
 
 int mlx5e_ipsec_fs_tunnel_allowed(struct mlx5e_ipsec_sa_entry *sa_entry)

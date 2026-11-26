@@ -215,6 +215,7 @@ struct mlx5e_ipsec_rule {
 	struct mlx5e_ipsec_drop replay;
 	struct mlx5e_ipsec_drop auth;
 	struct mlx5e_ipsec_drop trailer;
+	u32 rx_mapped_id;
 };
 
 struct mlx5e_ipsec_miss {
@@ -286,7 +287,6 @@ struct mlx5e_ipsec_sa_entry {
 	struct mlx5e_ipsec_work *work;
 	struct mlx5e_ipsec_dwork *dwork;
 	struct mlx5e_ipsec_limits limits;
-	u32 rx_mapped_id;
 	u8 ctx[MLX5_ST_SZ_BYTES(ipsec_aso)];
 };
 
