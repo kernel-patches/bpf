@@ -2,7 +2,7 @@
 /* Copyright (c) 2019 Facebook */
 #include <test_progs.h>
 #include <linux/bpf.h>
-#include "test_pe_preserve_elems.skel.h"
+#include "test_perf_event_helpers.skel.h"
 
 static int duration;
 
@@ -51,16 +51,16 @@ static void test_one_map(struct bpf_map *map, struct bpf_program *prog,
 	}
 }
 
-void test_pe_preserve_elems(void)
+void test_perf_event_helpers(void)
 {
-	struct test_pe_preserve_elems *skel;
+	struct test_perf_event_helpers *skel;
 
-	skel = test_pe_preserve_elems__open_and_load();
-	if (CHECK(!skel, "skel_open", "failed to open skeleton\n"))
+	skel = test_perf_event_helpers__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "failed to open skeleton\n"))
 		return;
 
 	test_one_map(skel->maps.array_1, skel->progs.read_array_1, false);
 	test_one_map(skel->maps.array_2, skel->progs.read_array_2, true);
 
-	test_pe_preserve_elems__destroy(skel);
+	test_perf_event_helpers__destroy(skel);
 }
