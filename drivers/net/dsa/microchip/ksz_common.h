@@ -243,6 +243,8 @@ struct ksz_device {
 	u16 mirror_rx;
 	u16 mirror_tx;
 	u16 port_mask;
+	/* link-local groups sent to the CPU only, bit X: 01:80:C2:00:00:0X */
+	u16 link_local_to_cpu;
 	struct mutex lock_irq;		/* IRQ Access */
 	struct ksz_irq girq;
 	struct ksz_ptp_data ptp_data;

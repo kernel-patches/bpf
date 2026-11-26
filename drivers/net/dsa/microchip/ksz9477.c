@@ -768,6 +768,27 @@ int ksz9477_port_vlan_del(struct dsa_switch *ds, int port,
 	return 0;
 }
 
+/* True if @addr is a link-local group that the switch sends to the CPU only.
+ * An FDB or MDB entry for such a group would override the trap.
+ */
+static bool ksz9477_link_local_is_trapped(struct ksz_device *dev,
+					  const unsigned char *addr)
+{
+	/* is_link_local_ether_addr() limits addr[5] to 0x00..0x0f */
+	return is_link_local_ether_addr(addr) &&
+	       dev->link_local_to_cpu & BIT(addr[5]);
+}
+
+/* Return -EOPNOTSUPP on a user port, so that the bridge keeps the entry in
+ * software and does not mark it offloaded. Return 0 on the CPU and DSA ports
+ * and write nothing: the bridge adds its host entries there, and they must
+ * not fail.
+ */
+static int ksz9477_link_local_entry_err(struct dsa_switch *ds, int port)
+{
+	return dsa_is_user_port(ds, port) ? -EOPNOTSUPP : 0;
+}
+
 int ksz9477_fdb_add(struct dsa_switch *ds, int port,
 		    const unsigned char *addr, u16 vid, struct dsa_db db)
 {
@@ -775,6 +796,9 @@ int ksz9477_fdb_add(struct dsa_switch *ds, int port,
 	u32 alu_table[4];
 	u32 data;
 	int ret = 0;
+
+	if (ksz9477_link_local_is_trapped(dev, addr))
+		return ksz9477_link_local_entry_err(ds, port);
 
 	mutex_lock(&dev->alu_mutex);
 
@@ -839,6 +863,10 @@ int ksz9477_fdb_del(struct dsa_switch *ds, int port,
 	u32 alu_table[4];
 	u32 data;
 	int ret = 0;
+
+	/* never written, see ksz9477_link_local_entry_err() */
+	if (ksz9477_link_local_is_trapped(dev, addr))
+		return 0;
 
 	mutex_lock(&dev->alu_mutex);
 
@@ -989,6 +1017,9 @@ int ksz9477_mdb_add(struct dsa_switch *ds, int port,
 	u32 mac_hi, mac_lo;
 	int err = 0;
 
+	if (ksz9477_link_local_is_trapped(dev, mdb->addr))
+		return ksz9477_link_local_entry_err(ds, port);
+
 	shifts = dev->info->shifts;
 	masks = dev->info->masks;
 
@@ -1068,6 +1099,10 @@ int ksz9477_mdb_del(struct dsa_switch *ds, int port,
 	int ret = 0;
 	int index;
 	u32 data;
+
+	/* never written, see ksz9477_link_local_entry_err() */
+	if (ksz9477_link_local_is_trapped(dev, mdb->addr))
+		return 0;
 
 	shifts = dev->info->shifts;
 	masks = dev->info->masks;
@@ -1554,8 +1589,21 @@ static void ksz9477_config_cpu_port(struct dsa_switch *ds)
 
 static u8 reserved_mcast_map[RESV_MCAST_CNT] = { 0, 1, 3, 16, 32, 33, 2, 17 };
 
+/* Index: group number in the datasheet's Reserved Multicast Address Table,
+ * the same index as reserved_mcast_map. Value: the link-local addresses the
+ * group covers, bit X for 01:80:C2:00:00:0X. The other groups cover
+ * addresses above :0F.
+ */
+static const u16 ksz9477_resv_mcast_link_local[RESV_MCAST_CNT] = {
+	[0] = BIT(0),			/* STP BPDUs */
+	[1] = BIT(1),			/* MAC control (e.g. PAUSE), dropped */
+	[2] = BIT(3),			/* 802.1X (EAPOL) */
+	[6] = BIT(2) | GENMASK(15, 4),	/* LACP, LLDP and others */
+};
+
 int ksz9477_enable_stp_addr(struct ksz_device *dev)
 {
+	u16 link_local_to_cpu = 0;
 	u8 i, ports, update;
 	const u32 *masks;
 	bool override;
@@ -1621,6 +1669,14 @@ int ksz9477_enable_stp_addr(struct ksz_device *dev)
 			update = ports;
 			break;
 		}
+
+		/* Record the link-local addresses of group i if the switch
+		 * sends it to the CPU only. Group 1 keeps its drop default and
+		 * does not match.
+		 */
+		if (update == BIT(dev->cpu_port))
+			link_local_to_cpu |= ksz9477_resv_mcast_link_local[i];
+
 		if (update != ports || override) {
 			data &= ~dev->port_mask;
 			data |= update;
@@ -1649,6 +1705,8 @@ int ksz9477_enable_stp_addr(struct ksz_device *dev)
 				return ret;
 		}
 	}
+
+	dev->link_local_to_cpu = link_local_to_cpu;
 
 	return 0;
 }
