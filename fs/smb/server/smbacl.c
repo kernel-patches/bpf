@@ -1193,8 +1193,8 @@ int smb_check_perm_dacl(struct ksmbd_conn *conn, const struct path *path,
 		     ace->type == ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE) &&
 		    !(ace->flags & INHERIT_ONLY_ACE))
 			obj_deny = true;
-		/* ksmbd evaluates no object ACE, so one matches no one */
-		if (ace->obj_len)
+		/* An object ACE or a SID with no sub-authority matches no one */
+		if (ace->obj_len || !ace->sid->num_subauth)
 			continue;
 
 		if (!compare_sids(&sid_owner_rights, ace->sid)) {
@@ -1277,7 +1277,7 @@ int smb_check_perm_dacl(struct ksmbd_conn *conn, const struct path *path,
 
 	for (i = 0; i < sd->num_aces; i++) {
 		ace = &sd->aces[i];
-		if (ace->obj_len)
+		if (ace->obj_len || !ace->sid->num_subauth)
 			continue;
 		if (!compare_sids(&sid, ace->sid) ||
 		    !compare_sids(&sid_unix_NFS_mode, ace->sid)) {
