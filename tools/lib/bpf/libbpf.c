@@ -9281,6 +9281,7 @@ static struct bpf_object *bpf_object_open(const char *path, const void *obj_buf,
 	err = err ? : bpf_object__init_maps(obj, opts);
 	err = err ? : bpf_object_init_progs(obj, opts);
 	err = err ? : bpf_object__collect_relos(obj);
+	err = err ? : bpf_object_prepare_token(obj);
 	if (err)
 		goto out;
 
@@ -9873,7 +9874,6 @@ static int bpf_object_prepare(struct bpf_object *obj, const char *target_btf_pat
 	}
 
 	err = bpf_object_check_gen_loader(obj);
-	err = err ? : bpf_object_prepare_token(obj);
 	err = err ? : bpf_object__probe_loading(obj);
 	err = err ? : bpf_object__load_vmlinux_btf(obj, false);
 	err = err ? : bpf_object__resolve_externs(obj, obj->kconfig);
