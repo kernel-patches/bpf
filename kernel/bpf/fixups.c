@@ -715,6 +715,13 @@ int bpf_insert_recursion_checks(struct bpf_verifier_env *env)
 	for (s = 1; s < env->subprog_cnt; s++) {
 		if (!si[s].recursive)
 			continue;
+		/* The depth at which the check stops it tells the low bits of r10. */
+		if (!env->allow_ptr_leaks && env->insn_aux_data[si[s].start].seen) {
+			verbose(env,
+				"recursive %s() is allowed only to CAP_PERFMON and CAP_SYS_ADMIN\n",
+				bpf_subprog_name(env, s));
+			return -EPERM;
+		}
 		n = 0;
 		/* The exit drops the frame in the stack in arena. Take it before the check. */
 		if (is_arena_sp_adj(&env->prog->insnsi[si[s].start])) {
