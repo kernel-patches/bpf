@@ -24,12 +24,16 @@
 #define XSC_PAGE_SHIFT_4K		12
 #define XSC_PAGE_SIZE_4K		(_AC(1, UL) << XSC_PAGE_SHIFT_4K)
 
+struct xsc_cmd;
+
 struct xsc_core_device {
 	struct pci_dev		*pdev;
 	struct device		*device;
 
 	void __iomem		*bar;
 	int			bar_num;
+
+	struct xsc_cmd		*cmd;
 };
 
 void xsc_update_tx_db(struct xsc_core_device *xdev, u32 sqn, u32 next_pid);

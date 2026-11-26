@@ -5,6 +5,7 @@
 
 #include <linux/slab.h>
 
+#include "common/xsc_cmd.h"
 #include "common/xsc_core.h"
 
 static const struct pci_device_id xsc_pci_id_table[] = {
@@ -75,8 +76,24 @@ static int xsc_pci_init(struct xsc_core_device *xdev,
 	xdev->bar_num = bar_num;
 	xdev->bar = bar_base;
 
+	err = xsc_cmd_init(xdev);
+	if (err) {
+		pci_err(pdev, "failed to initialize command interface: err=%d\n",
+			err);
+		goto err_io_unmap;
+	}
+
+	err = xsc_cmd_version_check(xdev);
+	if (err) {
+		pci_err(pdev, "failed to check command queue version: err=%d\n",
+			err);
+		goto err_cmd_cleanup;
+	}
+
 	return 0;
 
+err_cmd_cleanup:
+	xsc_cmd_cleanup(xdev);
 err_io_unmap:
 	pci_iounmap(pdev, bar_base);
 err_clr_master:
@@ -92,6 +109,7 @@ static void xsc_pci_fini(struct xsc_core_device *xdev)
 {
 	struct pci_dev *pdev = xdev->pdev;
 
+	xsc_cmd_cleanup(xdev);
 	pci_iounmap(pdev, xdev->bar);
 	pci_clear_master(pdev);
 	pci_release_region(pdev, xdev->bar_num);
