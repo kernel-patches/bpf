@@ -972,6 +972,10 @@ static const struct core_reloc_test_case test_cases[] = {
 		.byte_val1 = 0x11,
 		.byte_val2 = 0x100,
 	}),
+	ENUMVAL_ERR_CASE(enumval___err_too_big),
+	ENUMVAL_ERR_CASE(enumval___err_too_small),
+	ENUMVAL_ERR_CASE(enumval___err_int),
+	ENUMVAL_ERR_CASE(enumval___err_uint),
 
 	/* 64bit enumerator value existence and value relocations */
 	ENUM64VAL_CASE(enum64val, {
@@ -1011,6 +1015,7 @@ static const struct core_reloc_test_case test_cases[] = {
 		.signed_val2 = -222,
 	}),
 	ENUM64VAL_ERR_CASE(enum64val___err_missing),
+	ENUM64VAL_ERR_CASE(enum64val___err_sign),
 };
 
 struct data {

@@ -1409,6 +1409,62 @@ struct core_reloc_enumval___byte_unpacked {
 	enum named_byte_enum___byte_unpacked f3;
 };
 
+/* second enum value out of the range of the local int enumerator, as the
+ * target enum is 8 bytes, should fail
+ */
+enum named_enum___err_too_big {
+	NAMED_ENUM_VAL1___err_too_big = 1,
+	NAMED_ENUM_VAL2___err_too_big = 0x200000000ULL,
+	NAMED_ENUM_VAL3___err_too_big = 3,
+};
+
+struct core_reloc_enumval___err_too_big {
+	enum named_enum___err_too_big f1;
+	anon_enum f2;
+};
+
+/* second enum value out of the range of the local int enumerator, as the
+ * target enum is signed and 8 bytes, should fail
+ */
+enum named_enum___err_too_small {
+	NAMED_ENUM_VAL1___err_too_small = 1,
+	NAMED_ENUM_VAL2___err_too_small = -0x100000000LL,
+	NAMED_ENUM_VAL3___err_too_small = 3,
+};
+
+struct core_reloc_enumval___err_too_small {
+	enum named_enum___err_too_small f1;
+	anon_enum f2;
+};
+
+/* second enum value out of the range of the local int enumerator, as the
+ * target enum is unsigned, should fail
+ */
+enum named_enum___err_int {
+	NAMED_ENUM_VAL1___err_int = 1,
+	NAMED_ENUM_VAL2___err_int = 0x80000000,
+	NAMED_ENUM_VAL3___err_int = 3,
+};
+
+struct core_reloc_enumval___err_int {
+	enum named_enum___err_int f1;
+	anon_enum f2;
+};
+
+/* first unsigned enum value out of the range of the local unsigned int
+ * enumerator, as the target enum is 8 bytes, should fail
+ */
+enum named_uint_enum___err_uint {
+	UINT_ENUM_VAL1___err_uint = 0x100000000ULL,
+	UINT_ENUM_VAL2___err_uint = 0xffffffff,
+};
+
+struct core_reloc_enumval___err_uint {
+	enum named_enum f1;
+	anon_enum f2;
+	enum named_uint_enum___err_uint f3;
+};
+
 enum named_unsigned_enum64___err_missing {
 	UNSIGNED_ENUM64_VAL1___err_missing = 0x1ffffffffULL,
 	UNSIGNED_ENUM64_VAL3___err_missing = 0x3ffffffffULL,
@@ -1422,4 +1478,18 @@ enum named_signed_enum64___err_missing {
 struct core_reloc_enum64val___err_missing {
 	enum named_unsigned_enum64___err_missing f1;
 	enum named_signed_enum64___err_missing f2;
+};
+
+/* first signed enum value out of the range of the local long enumerator, as
+ * the target enum is unsigned, should fail
+ */
+enum named_signed_enum64___err_sign {
+	SIGNED_ENUM64_VAL1___err_sign = 0x8000000000000000ULL,
+	SIGNED_ENUM64_VAL2___err_sign = 2,
+	SIGNED_ENUM64_VAL3___err_sign = 3,
+};
+
+struct core_reloc_enum64val___err_sign {
+	enum named_unsigned_enum64 f1;
+	enum named_signed_enum64___err_sign f2;
 };
