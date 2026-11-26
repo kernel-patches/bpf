@@ -99,7 +99,8 @@ __weak int test_buddy_alloc_free(void)
 {
 	const int iters = 800;
 	void __arena *mem;
-	int ret, i;
+	int ret;
+	u32 i;
 
 	ret = buddy_init(&buddy);
 	if (ret)
