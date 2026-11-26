@@ -96,7 +96,7 @@ xfs_refcount_lookup_eq(
 {
 	trace_xfs_refcount_lookup(cur,
 			xfs_refcount_encode_startblock(bno, domain),
-			XFS_LOOKUP_LE);
+			XFS_LOOKUP_EQ);
 	cur->bc_rec.rc.rc_startblock = bno;
 	cur->bc_rec.rc.rc_blockcount = 0;
 	cur->bc_rec.rc.rc_domain = domain;
