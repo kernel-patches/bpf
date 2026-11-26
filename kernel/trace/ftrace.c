@@ -26,6 +26,7 @@
 #include <linux/uaccess.h>
 #include <linux/bsearch.h>
 #include <linux/module.h>
+#include <linux/module_symbol.h>
 #include <linux/ftrace.h>
 #include <linux/sysctl.h>
 #include <linux/slab.h>
@@ -8035,8 +8036,129 @@ void ftrace_release_mod(struct module *mod)
 	}
 }
 
+#ifdef FTRACE_MCOUNT_MAX_OFFSET
+/*
+ * ftrace_module_enable() validates every record with test_for_valid_rec(),
+ * which walks the whole symbol table of a module for each address in it, so a
+ * large module loads in quadratic time.  Search a sorted copy of the symbol
+ * addresses instead, the way get_symbol_pos() searches the kallsyms table.
+ * The array is an accelerator only; records it cannot resolve are tested the
+ * old way, so the verdict does not change.
+ */
+struct ftrace_mod_syms {
+	unsigned int	nr;
+	unsigned long	addr[];	/* sorted, @nr entries */
+};
+
+static int ftrace_mod_syms_cmp(const void *a, const void *b)
+{
+	unsigned long va = *(const unsigned long *)a;
+	unsigned long vb = *(const unsigned long *)b;
+
+	return (va > vb) - (va < vb);
+}
+
+static struct ftrace_mod_syms *ftrace_mod_syms_alloc(struct module *mod)
+{
+	struct mod_kallsyms *kallsyms;
+	struct ftrace_mod_syms *syms;
+	unsigned int i, nr = 0;
+
+	/*
+	 * mod->kallsyms stays valid until do_init_module() replaces it later
+	 * in this thread, so no RCU read-side section is needed.
+	 */
+	kallsyms = rcu_dereference_raw(mod->kallsyms);
+
+	if (!kallsyms || kallsyms->num_symtab < 2)
+		return NULL;
+
+	syms = kvmalloc(struct_size(syms, addr, kallsyms->num_symtab),
+			GFP_KERNEL);
+	if (!syms)
+		return NULL;
+
+	/* The symbols find_kallsyms_symbol() would consider. */
+	for (i = 1; i < kallsyms->num_symtab; i++) {
+		const Elf_Sym *sym = &kallsyms->symtab[i];
+		const char *name = kallsyms->strtab + sym->st_name;
+
+		if (sym->st_shndx == SHN_UNDEF || !*name ||
+		    is_ignored_kernel_symbol(name))
+			continue;
+
+		syms->addr[nr++] = kallsyms_symbol_value(sym);
+	}
+	syms->nr = nr;
+
+	if (nr > 1)
+		sort(syms->addr, nr, sizeof(syms->addr[0]), ftrace_mod_syms_cmp,
+		     NULL);
+
+	return syms;
+}
+
+/* The verdict test_for_valid_rec() would give, without walking the table. */
+static bool ftrace_mod_rec_is_valid(struct module *mod,
+				    const struct ftrace_mod_syms *syms,
+				    struct dyn_ftrace *rec)
+{
+	unsigned long base, best;
+	unsigned int lo, hi;
+
+	if (!syms)
+		return test_for_valid_rec(rec) != 0;
+
+	/* A record is in executable memory; anything else kallsyms answers. */
+	if (within_module_mem_type(rec->ip, mod, MOD_TEXT))
+		base = (unsigned long)mod->mem[MOD_TEXT].base;
+	else if (within_module_mem_type(rec->ip, mod, MOD_INIT_TEXT))
+		base = (unsigned long)mod->mem[MOD_INIT_TEXT].base;
+	else
+		return test_for_valid_rec(rec) != 0;
+
+	/* The closest address at or below @rec->ip, if there is one. */
+	best = 0;
+	for (lo = 0, hi = syms->nr; lo < hi; ) {
+		unsigned int mid = lo + (hi - lo) / 2;
+
+		if (syms->addr[mid] <= rec->ip)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	if (lo)
+		best = syms->addr[lo - 1];
+
+	/*
+	 * No symbol, or only ones below @base: let kallsyms_lookup() answer,
+	 * as it also looks in the BPF and ftrace trampoline tables.
+	 */
+	if (best < base)
+		return test_for_valid_rec(rec) != 0;
+
+	return rec->ip - best <= FTRACE_MCOUNT_MAX_OFFSET;
+}
+#else
+struct ftrace_mod_syms;
+
+static inline struct ftrace_mod_syms *ftrace_mod_syms_alloc(struct module *mod)
+{
+	return NULL;
+}
+
+static inline bool ftrace_mod_rec_is_valid(struct module *mod,
+					   const struct ftrace_mod_syms *syms,
+					   struct dyn_ftrace *rec)
+{
+	return test_for_valid_rec(rec) != 0;
+}
+#endif /* FTRACE_MCOUNT_MAX_OFFSET */
+
 void ftrace_module_enable(struct module *mod)
 {
+	struct ftrace_mod_syms *syms __free(kvfree) =
+		ftrace_disabled ? NULL : ftrace_mod_syms_alloc(mod);
 	struct dyn_ftrace *rec;
 	struct ftrace_page *pg;
 
@@ -8075,7 +8197,7 @@ void ftrace_module_enable(struct module *mod)
 		cond_resched();
 
 		/* Weak functions should still be ignored */
-		if (!test_for_valid_rec(rec)) {
+		if (!ftrace_mod_rec_is_valid(mod, syms, rec)) {
 			/* Clear all other flags. Should not be enabled anyway */
 			rec->flags = FTRACE_FL_DISABLED;
 			continue;

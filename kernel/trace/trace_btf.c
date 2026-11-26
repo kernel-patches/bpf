@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/btf.h>
+#include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/kallsyms.h>
@@ -213,6 +214,12 @@ void btf_trim_retval(unsigned long func, unsigned long *retval, bool *print_retv
 		*retval &= GENMASK(msb, 0);
 		if (signed_type && !hex)
 			*retval = sign_extend64(*retval, msb);
+		break;
+	case BTF_KIND_PTR:
+		if (!hex && IS_ERR_VALUE(*retval))
+			*fmt = RETVAL_FMT_DEC;
+		else
+			*fmt = RETVAL_FMT_HEX;
 		break;
 	default:
 		*fmt = RETVAL_FMT_HEX;
