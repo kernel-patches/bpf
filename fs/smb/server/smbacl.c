@@ -376,6 +376,12 @@ void free_acl_state(struct posix_acl_state *state)
 	kfree(state->groups);
 }
 
+/* Whether two SIDs are the same SID */
+static bool smb_sid_equal(const struct smb_sid *a, const struct smb_sid *b)
+{
+	return a->num_subauth == b->num_subauth && !compare_sids(a, b);
+}
+
 static int parse_dacl(const struct mnt_idmap *idmap,
 		      struct ksmbd_sd *sd,
 		      const struct smb_sid *pownersid,
@@ -423,13 +429,13 @@ static int parse_dacl(const struct mnt_idmap *idmap,
 			continue;
 
 		if (ace->type == ACCESS_ALLOWED &&
-		    ace->sid->num_subauth >= 3 &&
+		    ace->sid->num_subauth == 3 &&
 		    !(compare_sids(ace->sid, &sid_unix_NFS_mode))) {
 			fattr->cf_mode =
 				le32_to_cpu(ace->sid->sub_auth[2]);
 			fattr->cf_posix_mode = true;
 			nfs_mode_found = true;
-		} else if (!compare_sids(ace->sid, pownersid)) {
+		} else if (pownersid && smb_sid_equal(ace->sid, pownersid)) {
 			acl_mode = access_flags_to_mode(fattr,
 							cpu_to_le32(ace->mask),
 							ace->type);
@@ -440,7 +446,7 @@ static int parse_dacl(const struct mnt_idmap *idmap,
 				mode |= acl_mode;
 			}
 			owner_found = true;
-		} else if (!compare_sids(ace->sid, pgrpsid) ||
+		} else if ((pgrpsid && smb_sid_equal(ace->sid, pgrpsid)) ||
 			   ace->sid->sub_auth[ace->sid->num_subauth - 1] ==
 			    DOMAIN_USER_RID_LE) {
 			acl_mode = access_flags_to_mode(fattr,
@@ -452,7 +458,7 @@ static int parse_dacl(const struct mnt_idmap *idmap,
 				mode |= acl_mode;
 			}
 			group_found = true;
-		} else if (!compare_sids(ace->sid, &sid_everyone)) {
+		} else if (smb_sid_equal(ace->sid, &sid_everyone)) {
 			acl_mode = access_flags_to_mode(fattr,
 							cpu_to_le32(ace->mask),
 							ace->type);
@@ -462,11 +468,11 @@ static int parse_dacl(const struct mnt_idmap *idmap,
 				mode |= acl_mode;
 			}
 			others_found = true;
-		} else if (!compare_sids(ace->sid, &creator_owner)) {
+		} else if (smb_sid_equal(ace->sid, &creator_owner)) {
 			continue;
-		} else if (!compare_sids(ace->sid, &creator_group)) {
+		} else if (smb_sid_equal(ace->sid, &creator_group)) {
 			continue;
-		} else if (!compare_sids(ace->sid, &sid_authusers)) {
+		} else if (smb_sid_equal(ace->sid, &sid_authusers)) {
 			continue;
 		} else {
 			struct smb_fattr temp_fattr;
@@ -1081,12 +1087,6 @@ static bool smb_sid_in_group(const struct smb_sid *sid)
 	 * mounts.
 	 */
 	return in_group_p(make_kgid(&init_user_ns, gid));
-}
-
-/* Whether two SIDs are the same SID */
-static bool smb_sid_equal(const struct smb_sid *a, const struct smb_sid *b)
-{
-	return a->num_subauth == b->num_subauth && !compare_sids(a, b);
 }
 
 /*
