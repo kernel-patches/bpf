@@ -1181,6 +1181,7 @@ struct bpf_subprog_info {
 	s16 fastcall_stack_off;
 	bool has_tail_call: 1;
 	bool might_throw: 1;
+	bool throws: 1; /* as the main pass found it, callx included */
 	bool can_unwind: 1; /* has unwind_exit */
 	bool recursive: 1; /* on a cycle of the call graph */
 	bool in_recursion: 1; /* recursive, or a recursive subprog gets to it */
