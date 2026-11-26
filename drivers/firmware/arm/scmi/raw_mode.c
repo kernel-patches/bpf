@@ -574,6 +574,7 @@ static int scmi_xfer_raw_get_init(struct scmi_raw_mode_info *raw, void *buf,
 	xfer->hdr.status = SCMI_SUCCESS;
 	xfer->tx.len = tx_size;
 	xfer->rx.len = raw->desc->max_msg_size;
+	xfer->expected_rx_len = 0;
 	/* Clear the whole TX buffer */
 	memset(xfer->tx.buf, 0x00, raw->desc->max_msg_size);
 	if (xfer->tx.len)

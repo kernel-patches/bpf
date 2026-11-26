@@ -78,7 +78,7 @@ struct psci_0_1_function_ids get_psci_0_1_function_ids(void)
 
 static u32 psci_cpu_suspend_feature;
 static bool psci_system_reset2_supported;
-static bool psci_system_off2_hibernate_supported;
+static bool __maybe_unused psci_system_off2_hibernate_supported;
 
 static inline bool psci_has_ext_power_state(void)
 {
