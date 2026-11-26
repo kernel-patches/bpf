@@ -3556,14 +3556,15 @@ static int __rhtab_map_lookup_and_delete_batch(struct bpf_map *map,
 
 	rcu_read_unlock();
 
-	if (total == 0) {
+	if (IS_ERR(elem)) {
+		ret = PTR_ERR(elem);
+		if (ret == -ENOENT)
+			ret = -EAGAIN;
+	} else if (!has_next_cursor) {
 		ret = -ENOENT;
-		goto free;
 	}
-
-	/* No more elements after this batch. */
-	if (!has_next_cursor)
-		ret = -ENOENT;
+	if (!total)
+		goto free;
 
 	if (copy_to_user(ukeys, keys, (size_t)total * key_size) ||
 	    copy_to_user(uvalues, values, (size_t)total * value_size) ||
