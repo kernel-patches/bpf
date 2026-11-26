@@ -206,7 +206,9 @@
 #define CAP_BPF			39
 
 /* Convenience macro for use with 'asm volatile' blocks */
+#ifndef __naked
 #define __naked __attribute__((naked))
+#endif
 #define __clobber_all "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "memory"
 #define __clobber_common "r0", "r1", "r2", "r3", "r4", "r5", "memory"
 #define __imm(name) [name]"i"(name)
@@ -231,6 +233,7 @@
 #define __used __attribute__((used))
 #endif
 
+#ifndef SYS_PREFIX
 #if defined(__TARGET_ARCH_x86)
 #define SYSCALL_WRAPPER 1
 #define SYS_PREFIX "__x64_"
@@ -250,6 +253,7 @@
 #define SYSCALL_WRAPPER 0
 #define SYS_PREFIX "__se_"
 #endif
+#endif /* SYS_PREFIX */
 
 /* How many arguments are passed to function in register */
 #if defined(__TARGET_ARCH_x86) || defined(__x86_64__)
