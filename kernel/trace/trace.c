@@ -9754,33 +9754,44 @@ __init static int backup_instance_area(const char *backup,
 	return 0;
 }
 
-__init static void enable_instances(void)
-{
-	struct trace_array *tr;
-	bool memmap_area = false;
-	char *curr_str;
+struct boot_instance {
 	char *name;
-	char *str;
+	char *flag_delim;
+	char *addr_delim;
+	char *backup;
+	char *events;
+};
+
+__init static int parse_boot_instance_info(struct boot_instance *boot_instances,
+					   int nr_instances)
+{
+	char *flag_delim;
+	char *addr_delim;
+	char *backup;
+	char *events;
+	char *name;
 	char *tok;
+	char *str;
+	int idx;
+	int nr = 0;
+	int i;
 
 	/* A tab is always appended */
 	boot_instance_info[boot_instance_index - 1] = '\0';
 	str = boot_instance_info;
 
-	while ((curr_str = strsep(&str, "\t"))) {
-		phys_addr_t start = 0;
-		phys_addr_t size = 0;
-		unsigned long addr = 0;
-		bool traceprintk = false;
-		bool traceoff = false;
-		char *flag_delim;
-		char *addr_delim;
-		char *rname __free(kfree) = NULL;
-		char *backup;
+	while ((events = strsep(&str, "\t"))) {
+		if (!*events)
+			continue;
 
-		tok = strsep(&curr_str, ",");
+		tok = strsep(&events, ",");
 
 		name = strsep(&tok, "=");
+		if (!*name) {
+			pr_warn("Tracing: Empty boot instance name\n");
+			continue;
+		}
+
 		backup = tok;
 
 		flag_delim = strchr(name, '^');
@@ -9792,20 +9803,84 @@ __init static void enable_instances(void)
 		if (flag_delim)
 			*flag_delim++ = '\0';
 
-		if (trace_array_find(name)) {
-			pr_warn("Tracing: Instance %s already exists\n", name);
-			continue;
+		for (idx = 0; idx < nr; idx++) {
+			/* Override by the last defined instance */
+			if (!strcmp(name, boot_instances[idx].name))
+				break;
 		}
 
 		if (backup) {
-			if (backup_instance_area(backup, &addr, &size) < 0)
+			/* Check if the backup source instance exists */
+			for (i = 0; i < idx; i++) {
+				if (!strcmp(backup, boot_instances[i].name))
+					break;
+			}
+			if (i == idx) {
+				pr_warn("Tracing: Backup source instance %s is not found for %s\n",
+					backup, name);
+				continue;
+			}
+		}
+
+		if (WARN_ON(idx >= nr_instances))
+			break;
+
+		boot_instances[idx].name = name;
+		boot_instances[idx].flag_delim = flag_delim;
+		boot_instances[idx].addr_delim = addr_delim;
+		boot_instances[idx].backup = backup;
+		boot_instances[idx].events = events;
+		if (idx == nr)
+			nr++;
+	}
+
+	return nr;
+}
+
+__init static void enable_instances(void)
+{
+	struct boot_instance *boot_instances __free(kfree) = NULL;
+	struct boot_instance *bi;
+	struct trace_array *tr;
+	int nr_instances = 1;
+	char *tok;
+
+	if (!boot_instance_index)
+		return;
+
+	for (char *p = boot_instance_info; *p; p++) {
+		if (*p == '\t')
+			nr_instances++;
+	}
+
+	/* Parse the instance name to check the overlap */
+	boot_instances = kmalloc_array(nr_instances,
+				       sizeof(*boot_instances), GFP_KERNEL);
+	if (!boot_instances)
+		return;
+
+	nr_instances = parse_boot_instance_info(boot_instances, nr_instances);
+
+	for (int i = 0; i < nr_instances; i++) {
+		char *rname __free(kfree) = NULL;
+		phys_addr_t start = 0;
+		phys_addr_t size = 0;
+		unsigned long addr = 0;
+		bool traceprintk = false;
+		bool traceoff = false;
+		bool memmap_area = false;
+
+		bi = &boot_instances[i];
+
+		if (bi->backup) {
+			if (backup_instance_area(bi->backup, &addr, &size) < 0)
 				continue;
 		}
 
-		if (flag_delim) {
+		if (bi->flag_delim) {
 			char *flag;
 
-			while ((flag = strsep(&flag_delim, "^"))) {
+			while ((flag = strsep(&bi->flag_delim, "^"))) {
 				if (strcmp(flag, "traceoff") == 0) {
 					traceoff = true;
 				} else if ((strcmp(flag, "printk") == 0) ||
@@ -9814,35 +9889,35 @@ __init static void enable_instances(void)
 					traceprintk = true;
 				} else {
 					pr_info("Tracing: Invalid instance flag '%s' for %s\n",
-						flag, name);
+						flag, bi->name);
 				}
 			}
 		}
 
-		tok = addr_delim;
+		tok = bi->addr_delim;
 		if (tok && isdigit(*tok)) {
 			start = memparse(tok, &tok);
 			if (!start) {
 				pr_warn("Tracing: Invalid boot instance address for %s\n",
-					name);
+					bi->name);
 				continue;
 			}
 			if (*tok != ':') {
-				pr_warn("Tracing: No size specified for instance %s\n", name);
+				pr_warn("Tracing: No size specified for instance %s\n", bi->name);
 				continue;
 			}
 			tok++;
 			size = memparse(tok, &tok);
 			if (!size) {
 				pr_warn("Tracing: Invalid boot instance size for %s\n",
-					name);
+					bi->name);
 				continue;
 			}
 			memmap_area = true;
 		} else if (tok) {
 			if (!reserve_mem_find_by_name(tok, &start, &size)) {
 				start = 0;
-				pr_warn("Failed to map boot instance %s to %s\n", name, tok);
+				pr_warn("Failed to map boot instance %s to %s\n", bi->name, tok);
 				continue;
 			}
 			rname = kstrdup(tok, GFP_KERNEL);
@@ -9865,20 +9940,20 @@ __init static void enable_instances(void)
 				addr = (unsigned long)phys_to_virt(start);
 			if (addr) {
 				pr_info("Tracing: mapped boot instance %s at physical memory %pa of size 0x%lx\n",
-					name, &start, (unsigned long)size);
+					bi->name, &start, (unsigned long)size);
 			} else {
-				pr_warn("Tracing: Failed to map boot instance %s\n", name);
+				pr_warn("Tracing: Failed to map boot instance %s\n", bi->name);
 				continue;
 			}
 		} else {
 			/* Only non mapped buffers have snapshot buffers */
-			do_allocate_snapshot(name);
+			do_allocate_snapshot(bi->name);
 		}
 
-		tr = trace_array_create_systems(name, NULL, addr, size);
+		tr = trace_array_create_systems(bi->name, NULL, addr, size);
 		if (IS_ERR(tr)) {
-			pr_warn("Tracing: Failed to create instance buffer '%s' (%ld)\n", name,
-				PTR_ERR(tr));
+			pr_warn("Tracing: Failed to create instance buffer '%s' (%ld)\n",
+				bi->name, PTR_ERR(tr));
 			continue;
 		}
 
@@ -9899,12 +9974,12 @@ __init static void enable_instances(void)
 		/*
 		 * Backup buffers can be freed but need vfree().
 		 */
-		if (backup) {
+		if (bi->backup) {
 			tr->flags |= TRACE_ARRAY_FL_VMALLOC | TRACE_ARRAY_FL_RDONLY;
 			trace_array_start_autoremove();
 		}
 
-		if (start || backup) {
+		if (start || bi->backup) {
 			tr->flags |= TRACE_ARRAY_FL_BOOT | TRACE_ARRAY_FL_LAST_BOOT;
 			tr->range_name = no_free_ptr(rname);
 		}
@@ -9913,11 +9988,12 @@ __init static void enable_instances(void)
 		 * Save the events to start and enabled them after all boot instances
 		 * have been created.
 		 */
-		tr->boot_events = curr_str;
+		tr->boot_events = bi->events;
 	}
 
 	/* Enable the events after all boot instances have been created */
 	list_for_each_entry(tr, &ftrace_trace_arrays, list) {
+		char *curr_str;
 
 		if (!tr->boot_events || !(*tr->boot_events)) {
 			tr->boot_events = NULL;

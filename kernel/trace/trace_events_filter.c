@@ -514,6 +514,8 @@ predicate_parse(const char *str, int nr_parens, int nr_preds,
 		switch (*next) {
 		case '(':					/* #2 */
 			if (top - op_stack >= nr_parens - 1) {
+				parse_error(pe, FILT_ERR_TOO_MANY_OPEN,
+					    next - str);
 				ret = -EINVAL;
 				goto out_free;
 			}
@@ -637,6 +639,7 @@ predicate_parse(const char *str, int nr_parens, int nr_preds,
 		prog[i].when_to_branch = invert;
 		/* Make sure the program always moves forward */
 		if (WARN_ON(prog[i].target <= i)) {
+			parse_error(pe, FILT_ERR_INVALID_FILTER, 0);
 			ret = -EINVAL;
 			goto out_free;
 		}
@@ -1713,8 +1716,10 @@ static int parse_pred(const char *str, void *data,
 
 	len = i - s;
 
-	if (!len)
-		return -1;
+	if (!len) {
+		parse_error(pe, FILT_ERR_INVALID_FILTER, pos + i);
+		return -EINVAL;
+	}
 
 	field_name = kmemdup_nul(str + s, len, GFP_KERNEL);
 	if (!field_name)
@@ -1860,22 +1865,39 @@ static int parse_pred(const char *str, void *data,
 		 * Quotes are not required, but if they exist then we need
 		 * to read them till we hit a matching one.
 		 */
-		if (str[i] == '\'' || str[i] == '"')
-			q = str[i];
-		else
+		if (str[i] == '\'' || str[i] == '"') {
+			q = str[i++];
+			s = i;
+		} else {
 			q = 0;
+		}
 
-		for (i++; str[i]; i++) {
+		for (; str[i]; i++) {
 			if (q && str[i] == q)
 				break;
-			if (!q && (str[i] == ')' || str[i] == '&' ||
-				   str[i] == '|'))
-				break;
+			if (!q) {
+				if (str[i] == ')' || str[i] == '&' ||
+				    str[i] == '|')
+					break;
+				if (str[i] == '(' || str[i] == '\'' ||
+				    str[i] == '"') {
+					parse_error(pe, FILT_ERR_INVALID_VALUE,
+						    pos + i);
+					goto err_free;
+				}
+			}
 		}
-		/* Skip quotes */
-		if (q)
-			s++;
+		if (q && !str[i]) {
+			parse_error(pe, FILT_ERR_MISSING_QUOTE, pos + i);
+			goto err_free;
+		}
 		len = i - s;
+		if (q)
+			i++;
+		if (!q && !len) {
+			parse_error(pe, FILT_ERR_INVALID_VALUE, pos + i);
+			goto err_free;
+		}
 		if (len >= MAX_FILTER_STR_VAL) {
 			parse_error(pe, FILT_ERR_OPERAND_TOO_LONG, pos + i);
 			goto err_free;
@@ -2004,6 +2026,10 @@ static int parse_pred(const char *str, void *data,
 				pred->fn_num = FILTER_PRED_FN_8_CPUMASK;
 				break;
 			}
+		}
+		if (pred->fn_num == FILTER_PRED_FN_NOP) {
+			parse_error(pe, FILT_ERR_INVALID_OP, pos + i);
+			goto err_free;
 		}
 
 	/* This is either a string, or an integer */
@@ -2158,6 +2184,10 @@ static int parse_pred(const char *str, void *data,
 		else {
 			pred->fn_num = select_comparison_fn(pred->op, field->size,
 							    field->is_signed);
+			if (pred->fn_num == FILTER_PRED_FN_NOP) {
+				parse_error(pe, FILT_ERR_INVALID_OP, pos + i);
+				goto err_free;
+			}
 			if (pred->op == OP_NE)
 				pred->not = 1;
 		}
@@ -2317,8 +2347,10 @@ static int process_preds(struct trace_event_call *call,
 		return ret;
 	}
 
-	if (!nr_preds)
+	if (!nr_preds) {
+		parse_error(pe, FILT_ERR_NO_FILTER, 0);
 		return -EINVAL;
+	}
 
 	prog = predicate_parse(filter_string, nr_parens, nr_preds,
 			       parse_pred, call, pe);
@@ -2421,6 +2453,30 @@ static int process_system_preds(struct trace_subsystem_dir *dir,
 	return ret;
 }
 
+/*
+ * Check that the rest of the input after the first newline contains no
+ * non-whitespace characters, and convert the newline to '\0'.
+ */
+static int filter_check_newline(char *str)
+{
+	char *nl, *p;
+
+	if (!str)
+		return 0;
+
+	nl = strchr(str, '\n');
+	if (!nl)
+		return 0;
+
+	for (p = nl + 1; *p; p++) {
+		if (!isspace(*p))
+			return -EINVAL;
+	}
+
+	*nl = '\0';
+	return 0;
+}
+
 static int create_filter_start(char *filter_string, bool set_str,
 			       struct filter_parse_error **pse,
 			       struct event_filter **filterp)
@@ -2431,6 +2487,10 @@ static int create_filter_start(char *filter_string, bool set_str,
 
 	if (WARN_ON_ONCE(*pse || *filterp))
 		return -EINVAL;
+
+	err = filter_check_newline(filter_string);
+	if (err)
+		return err;
 
 	filter = kzalloc_obj(*filter);
 	if (filter && set_str) {
@@ -2550,6 +2610,10 @@ int apply_event_filter(struct trace_event_file *file, char *filter_string)
 	if (file->flags & EVENT_FILE_FL_FREED)
 		return -ENODEV;
 
+	err = filter_check_newline(filter_string);
+	if (err)
+		return err;
+
 	if (!strcmp(strstrip(filter_string), "0")) {
 		filter_disable(file);
 		filter = event_filter(file);
@@ -2603,6 +2667,10 @@ int apply_subsystem_event_filter(struct trace_subsystem_dir *dir,
 	/* Make sure the system still has events */
 	if (!dir->nr_events)
 		return -ENODEV;
+
+	err = filter_check_newline(filter_string);
+	if (err)
+		return err;
 
 	if (!strcmp(strstrip(filter_string), "0")) {
 		filter_free_subsystem_preds(dir, tr);
