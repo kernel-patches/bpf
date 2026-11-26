@@ -4891,7 +4891,7 @@ dm_set_writeback(struct amdgpu_display_manager *dm,
 	dc_stream_add_writeback(dm->dc, crtc_state->stream, wb_info);
 
 	acrtc->wb_conn = wb_conn;
-	drm_writeback_queue_job(wb_conn, new_con_state);
+	drm_writeback_queue_job(connector, new_con_state);
 
 	/*
 	 * Writeback completion is detected in the CRTC vblank IRQ
