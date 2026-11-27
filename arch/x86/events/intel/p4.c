@@ -1033,7 +1033,7 @@ static int p4_pmu_set_period(struct perf_event *event)
 
 static int p4_pmu_handle_irq(struct pt_regs *regs)
 {
-	struct perf_sample_data data;
+	struct perf_sample_data data __uninitialized; /* optimization */
 	struct cpu_hw_events *cpuc;
 	struct perf_event *event;
 	struct hw_perf_event *hwc;

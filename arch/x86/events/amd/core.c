@@ -954,7 +954,7 @@ static int amd_pmu_v2_handle_irq(struct pt_regs *regs)
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 	static atomic64_t status_warned = ATOMIC64_INIT(0);
 	u64 reserved, status, mask, new_bits, prev_bits;
-	struct perf_sample_data data;
+	struct perf_sample_data data __uninitialized; /* optimization */
 	struct hw_perf_event *hwc;
 	struct perf_event *event;
 	int handled = 0, idx;

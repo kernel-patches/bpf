@@ -351,7 +351,7 @@ static void zhaoxin_pmu_enable_event(struct perf_event *event)
  */
 static int zhaoxin_pmu_handle_irq(struct pt_regs *regs)
 {
-	struct perf_sample_data data;
+	struct perf_sample_data data __uninitialized; /* optimization */
 	struct cpu_hw_events *cpuc;
 	int handled = 0;
 	u64 status;
