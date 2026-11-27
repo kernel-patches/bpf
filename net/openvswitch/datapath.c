@@ -1712,6 +1712,38 @@ static struct datapath *lookup_datapath(struct net *net,
 	return dp ? dp : ERR_PTR(-ENODEV);
 }
 
+/* Called with ovs_mutex, which every writer holds. The store is a single
+ * WRITE_ONCE() because the field is read without a lock from the packet path;
+ * this helper reads it with READ_ONCE() for the same reason. Readers that
+ * still use a plain load -- ovs_dp_process_packet(), output_userspace() and
+ * ovs_vport_get_upcall_portids() -- read the u32 once and test one bit, so
+ * they are not marked here. The store happens before the reference is taken
+ * or dropped, the order ovs_dp_change() used.
+ */
+static void ovs_dp_set_user_features(struct datapath *dp, u32 features)
+{
+	u32 previous = READ_ONCE(dp->user_features);
+	bool was = previous & OVS_DP_F_TC_RECIRC_SHARING;
+	bool now = features & OVS_DP_F_TC_RECIRC_SHARING;
+
+	WRITE_ONCE(dp->user_features, features);
+
+	if (now && !was)
+		tc_skb_ext_tc_enable();
+	else if (!now && was)
+		tc_skb_ext_tc_disable();
+}
+
+/* Give up the reference for the recirc bit without touching the other bits, so
+ * an upcall that is reading them keeps seeing what it saw.
+ */
+static void ovs_dp_clear_recirc_sharing(struct datapath *dp)
+{
+	u32 features = READ_ONCE(dp->user_features);
+
+	ovs_dp_set_user_features(dp, features & ~OVS_DP_F_TC_RECIRC_SHARING);
+}
+
 static void ovs_dp_reset_user_features(struct sk_buff *skb,
 				       struct genl_info *info)
 {
@@ -1724,7 +1756,7 @@ static void ovs_dp_reset_user_features(struct sk_buff *skb,
 
 	pr_warn("%s: Dropping previously announced user features\n",
 		ovs_dp_name(dp));
-	dp->user_features = 0;
+	ovs_dp_set_user_features(dp, 0);
 }
 
 static int ovs_dp_set_upcall_portids(struct datapath *dp,
@@ -1781,7 +1813,7 @@ u32 ovs_dp_get_upcall_portid(const struct datapath *dp, uint32_t cpu_id)
 
 static int ovs_dp_change(struct datapath *dp, struct nlattr *a[])
 {
-	u32 user_features = 0, old_features = dp->user_features;
+	u32 user_features = 0;
 	int err;
 
 	if (a[OVS_DP_ATTR_USER_FEATURES]) {
@@ -1809,9 +1841,7 @@ static int ovs_dp_change(struct datapath *dp, struct nlattr *a[])
 			return err;
 	}
 
-	dp->user_features = user_features;
-
-	if (dp->user_features & OVS_DP_F_DISPATCH_UPCALL_PER_CPU &&
+	if (user_features & OVS_DP_F_DISPATCH_UPCALL_PER_CPU &&
 	    a[OVS_DP_ATTR_PER_CPU_PIDS]) {
 		/* Upcall Netlink Port IDs have been updated */
 		err = ovs_dp_set_upcall_portids(dp,
@@ -1820,12 +1850,7 @@ static int ovs_dp_change(struct datapath *dp, struct nlattr *a[])
 			return err;
 	}
 
-	if ((dp->user_features & OVS_DP_F_TC_RECIRC_SHARING) &&
-	    !(old_features & OVS_DP_F_TC_RECIRC_SHARING))
-		tc_skb_ext_tc_enable();
-	else if (!(dp->user_features & OVS_DP_F_TC_RECIRC_SHARING) &&
-		 (old_features & OVS_DP_F_TC_RECIRC_SHARING))
-		tc_skb_ext_tc_disable();
+	ovs_dp_set_user_features(dp, user_features);
 
 	return 0;
 }
@@ -1947,6 +1972,8 @@ static int ovs_dp_cmd_new(struct sk_buff *skb, struct genl_info *info)
 err_destroy_portids:
 	kfree(rcu_dereference_raw(dp->upcall_portids));
 err_unlock_and_destroy_meters:
+	/* The datapath is freed here and never reaches __dp_destroy(). */
+	ovs_dp_clear_recirc_sharing(dp);
 	ovs_unlock();
 	ovs_meters_exit(dp);
 err_destroy_ports:
@@ -1969,8 +1996,11 @@ static void __dp_destroy(struct datapath *dp)
 	struct flow_table *table = &dp->table;
 	int i;
 
-	if (dp->user_features & OVS_DP_F_TC_RECIRC_SHARING)
-		tc_skb_ext_tc_disable();
+	/* Only the recirc bit goes here. The datapath is still on the list and
+	 * its ports are still attached, so an upcall can be reading the other
+	 * bits from the receive path while this runs.
+	 */
+	ovs_dp_clear_recirc_sharing(dp);
 
 	for (i = 0; i < DP_VPORT_HASH_BUCKETS; i++) {
 		struct vport *vport;
