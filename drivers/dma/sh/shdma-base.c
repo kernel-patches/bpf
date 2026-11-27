@@ -20,7 +20,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 
-#include "../dmaengine.h"
+#include "shdma.h"
 
 /* DMA descriptor control */
 enum shdma_desc_status {

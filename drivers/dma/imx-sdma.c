@@ -710,20 +710,11 @@ static int sdma_config_ownership(struct sdma_channel *sdmac,
 	mcu = readl_relaxed(sdma->regs + SDMA_H_HOSTOVR);
 	dsp = readl_relaxed(sdma->regs + SDMA_H_DSPOVR);
 
-	if (dsp_override)
-		__clear_bit(channel, &dsp);
-	else
-		__set_bit(channel, &dsp);
+	__assign_bit(channel, &dsp, !dsp_override);
 
-	if (event_override)
-		__clear_bit(channel, &evt);
-	else
-		__set_bit(channel, &evt);
+	__assign_bit(channel, &evt, !event_override);
 
-	if (mcu_override)
-		__clear_bit(channel, &mcu);
-	else
-		__set_bit(channel, &mcu);
+	__assign_bit(channel, &mcu, !mcu_override);
 
 	writel_relaxed(evt, sdma->regs + SDMA_H_EVTOVR);
 	writel_relaxed(mcu, sdma->regs + SDMA_H_HOSTOVR);
