@@ -47,6 +47,16 @@ static const struct clk_ops mtk_pllfh_ops = {
 	.set_rate	= mtk_fhctl_set_rate,
 };
 
+const struct clk_ops mtk_pllfh_setclr_ops = {
+	.is_prepared	= mtk_pll_is_prepared,
+	.prepare	= mtk_pll_prepare_setclr,
+	.unprepare	= mtk_pll_unprepare_setclr,
+	.recalc_rate	= mtk_pll_recalc_rate,
+	.determine_rate = mtk_pll_determine_rate,
+	.set_rate	= mtk_fhctl_set_rate,
+};
+EXPORT_SYMBOL_GPL(mtk_pllfh_setclr_ops);
+
 static struct mtk_pllfh_data *get_pllfh_by_id(struct mtk_pllfh_data *pllfhs,
 					      int num_fhs, int pll_id)
 {
@@ -59,8 +69,9 @@ static struct mtk_pllfh_data *get_pllfh_by_id(struct mtk_pllfh_data *pllfhs,
 	return NULL;
 }
 
-void fhctl_parse_dt(const u8 *compatible_node, struct mtk_pllfh_data *pllfhs,
-		    int num_fhs)
+static void fhctl_parse_dt(const u8 *compatible_node,
+			   struct mtk_pllfh_data *pllfhs,
+			   int num_fhs)
 {
 	void __iomem *base;
 	struct device_node *node;
@@ -111,7 +122,6 @@ err:
 	iounmap(base);
 	goto out_node_put;
 }
-EXPORT_SYMBOL_GPL(fhctl_parse_dt);
 
 static int pllfh_init(struct mtk_fh *fh, struct mtk_pllfh_data *pllfh_data)
 {
@@ -153,6 +163,8 @@ static struct clk_hw *
 mtk_clk_register_pllfh(struct device *dev, const struct mtk_pll_data *pll_data,
 		       struct mtk_pllfh_data *pllfh_data, void __iomem *base)
 {
+	const struct clk_ops *pllfh_ops = pllfh_data->data.ops ?
+					  pllfh_data->data.ops : &mtk_pllfh_ops;
 	struct clk_hw *hw;
 	struct mtk_fh *fh;
 	int ret;
@@ -169,8 +181,7 @@ mtk_clk_register_pllfh(struct device *dev, const struct mtk_pll_data *pll_data,
 
 	fh->clk_pll.dev = dev;
 
-	hw = mtk_clk_register_pll_ops(&fh->clk_pll, pll_data, base,
-				      &mtk_pllfh_ops);
+	hw = mtk_clk_register_pll_ops(&fh->clk_pll, pll_data, base, pllfh_ops);
 
 	if (IS_ERR(hw))
 		goto out;
@@ -233,6 +244,14 @@ static void mtk_clk_cleanup_pllfhs(void __iomem *iomem_base,
 		clk_data->hws[pll->id] = ERR_PTR(-ENOENT);
 	}
 
+	for (i = 0; i < num_fhs; i++) {
+		struct mtk_pllfh_data *pllfh = &pllfhs[i];
+
+		pllfh->state.fh_enable = 0;
+		pllfh->state.ssc_rate = 0;
+		pllfh->state.base = NULL;
+	}
+
 	if (fhctl_base)
 		iounmap(fhctl_base);
 
@@ -241,7 +260,7 @@ static void mtk_clk_cleanup_pllfhs(void __iomem *iomem_base,
 }
 
 
-int mtk_clk_register_pllfhs(struct device *dev,
+int mtk_clk_register_pllfhs(struct device *dev, const u8 *fhctl_node,
 			    const struct mtk_pll_data *plls, int num_plls,
 			    struct mtk_pllfh_data *pllfhs, int num_fhs,
 			    struct clk_hw_onecell_data *clk_data)
@@ -249,6 +268,8 @@ int mtk_clk_register_pllfhs(struct device *dev,
 	void __iomem *base, *fhctl_base = NULL;
 	int i;
 	struct clk_hw *hw;
+
+	fhctl_parse_dt(fhctl_node, pllfhs, num_fhs);
 
 	base = of_iomap(dev->of_node, 0);
 	if (!base) {

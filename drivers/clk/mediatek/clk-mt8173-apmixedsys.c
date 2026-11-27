@@ -100,7 +100,7 @@ enum fh_pll_id {
 			.fh_id = _fhid,					\
 			.fh_ver = FHCTL_PLLFH_V1,			\
 			.fhx_offset = _offset,				\
-			.dds_mask = GENMASK(21, 0),			\
+			.dds_mask = GENMASK(20, 0),			\
 			.slope0_value = 0x6003c97,			\
 			.slope1_value = 0x6003c97,			\
 			.sfstrx_en = BIT(2),				\
@@ -156,9 +156,8 @@ static int clk_mt8173_apmixed_probe(struct platform_device *pdev)
 		goto unmap_io;
 	}
 
-	fhctl_parse_dt(fhctl_node, pllfhs, ARRAY_SIZE(pllfhs));
-	r = mtk_clk_register_pllfhs(dev, plls, ARRAY_SIZE(plls), pllfhs,
-				    ARRAY_SIZE(pllfhs), clk_data);
+	r = mtk_clk_register_pllfhs(dev, fhctl_node, plls, ARRAY_SIZE(plls),
+				    pllfhs, ARRAY_SIZE(pllfhs), clk_data);
 	if (r)
 		goto free_clk_data;
 
@@ -178,6 +177,8 @@ static int clk_mt8173_apmixed_probe(struct platform_device *pdev)
 	r = of_clk_add_hw_provider(dev->of_node, of_clk_hw_onecell_get, clk_data);
 	if (r)
 		goto unregister_ref2usb;
+
+	platform_set_drvdata(pdev, clk_data);
 
 	return 0;
 
