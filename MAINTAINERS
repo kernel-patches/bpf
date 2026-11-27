@@ -31049,12 +31049,6 @@ F:	Documentation/userspace-api/netlink/intro-specs.rst
 F:	Documentation/userspace-api/netlink/specs.rst
 F:	tools/net/ynl/
 
-YEALINK PHONE DRIVER
-M:	Henk Vergonet <Henk.Vergonet@gmail.com>
-S:	Maintained
-F:	Documentation/input/devices/yealink.rst
-F:	drivers/input/misc/yealink.*
-
 ZD1211RW WIRELESS DRIVER
 L:	linux-wireless@vger.kernel.org
 S:	Orphan

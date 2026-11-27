@@ -65,7 +65,6 @@ struct tsc2007 {
 	struct i2c_client	*client;
 
 	struct touchscreen_properties prop;
-	u16			model;
 	u16			x_plate_ohms;
 	u16			max_rt;
 	unsigned long		poll_period; /* in jiffies */
@@ -79,9 +78,7 @@ struct tsc2007 {
 	wait_queue_head_t	wait;
 	bool			stopped;
 
-	int			(*get_pendown_state)(struct device *);
-	void			(*clear_penirq)(void);
-
+	/* Serializes I2C transfers between the ISR and IIO reads */
 	struct mutex		mlock;
 };
 

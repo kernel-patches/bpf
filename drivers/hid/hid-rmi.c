@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/pm.h>
 #include <linux/slab.h>
+#include <linux/unaligned.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
 #include <linux/rmi.h>
@@ -37,14 +38,6 @@
 #define RMI_DEVICE_HAS_PHYS_BUTTONS	BIT(1)
 #define RMI_DEVICE_OUTPUT_SET_REPORT	BIT(2)
 
-/*
- * retrieve the ctrl registers
- * the ctrl register has a size of 20 but a fw bug split it into 16 + 4,
- * and there is no way to know if the first 20 bytes are here or not.
- * We use only the first 12 bytes, so get only them.
- */
-#define RMI_F11_CTRL_REG_COUNT		12
-
 enum rmi_mode_type {
 	RMI_MODE_OFF			= 0,
 	RMI_MODE_ATTN_REPORTS		= 1,
@@ -60,8 +53,8 @@ enum rmi_mode_type {
  *
  * @wait: Used for waiting for read data
  *
- * @writeReport: output buffer when writing RMI registers
- * @readReport: input buffer when reading RMI registers
+ * @tx_buf: output buffer when writing RMI registers
+ * @rx_buf: input buffer when reading RMI registers
  *
  * @input_report_size: size of an input report (advertised by HID)
  * @output_report_size: size of an output report (advertised by HID)
@@ -77,14 +70,14 @@ enum rmi_mode_type {
  * @rmi_irq: the irq that will be used to generate events to rmi-core
  */
 struct rmi_data {
-	struct mutex page_mutex;
+	struct mutex page_mutex; /* locks current virtual page */
 	int page;
 	struct rmi_transport_dev xport;
 
 	wait_queue_head_t wait;
 
-	u8 *writeReport;
-	u8 *readReport;
+	u8 *tx_buf;
+	u8 *rx_buf;
 
 	u32 input_report_size;
 	u32 output_report_size;
@@ -102,7 +95,35 @@ struct rmi_data {
 
 #define RMI_PAGE(addr) (((addr) >> 8) & 0xff)
 
-static int rmi_write_report(struct hid_device *hdev, u8 *report, int len);
+static int rmi_write_report(struct hid_device *hdev, u8 *report, int len)
+{
+	struct rmi_data *data = hid_get_drvdata(hdev);
+	int error;
+
+	if (data->device_flags & RMI_DEVICE_OUTPUT_SET_REPORT) {
+		/*
+		 * Talk to device by using SET_REPORT requests instead.
+		 */
+		error = hid_hw_raw_request(hdev, report[0], report,
+					   len, HID_OUTPUT_REPORT,
+					   HID_REQ_SET_REPORT);
+	} else {
+		error = hid_hw_output_report(hdev, report, len);
+	}
+
+	if (error < 0) {
+		hid_err(hdev, "failed to write hid report (%d)\n", error);
+		return error;
+	}
+
+	if (error != len) {
+		hid_err(hdev, "short write to hid device (%d < %d)\n",
+			error, len);
+		return -EIO;
+	}
+
+	return 0;
+}
 
 /**
  * rmi_set_page - Set RMI page
@@ -121,19 +142,18 @@ static int rmi_write_report(struct hid_device *hdev, u8 *report, int len);
 static int rmi_set_page(struct hid_device *hdev, u8 page)
 {
 	struct rmi_data *data = hid_get_drvdata(hdev);
-	int retval;
+	int error;
 
-	data->writeReport[0] = RMI_WRITE_REPORT_ID;
-	data->writeReport[1] = 1;
-	data->writeReport[2] = 0xFF;
-	data->writeReport[4] = page;
+	data->tx_buf[0] = RMI_WRITE_REPORT_ID;
+	data->tx_buf[1] = 1;
+	put_unaligned_le16(0x00ff, &data->tx_buf[2]);
+	data->tx_buf[4] = page;
 
-	retval = rmi_write_report(hdev, data->writeReport,
-			data->output_report_size);
-	if (retval != data->output_report_size) {
-		dev_err(&hdev->dev,
-			"%s: set page failed: %d.", __func__, retval);
-		return retval;
+	error = rmi_write_report(hdev, data->tx_buf,
+				 data->output_report_size);
+	if (error) {
+		hid_err(hdev, "%s: set page failed: %d\n", __func__, error);
+		return error;
 	}
 
 	data->page = page;
@@ -142,191 +162,155 @@ static int rmi_set_page(struct hid_device *hdev, u8 page)
 
 static int rmi_set_mode(struct hid_device *hdev, u8 mode)
 {
-	int ret;
 	const u8 txbuf[2] = {RMI_SET_RMI_MODE_REPORT_ID, mode};
-	u8 *buf;
+	int error;
 
-	buf = kmemdup(txbuf, sizeof(txbuf), GFP_KERNEL);
+	u8 *buf __free(kfree) = kmemdup(txbuf, sizeof(txbuf), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
-	ret = hid_hw_raw_request(hdev, RMI_SET_RMI_MODE_REPORT_ID, buf,
-			sizeof(txbuf), HID_FEATURE_REPORT, HID_REQ_SET_REPORT);
-	kfree(buf);
-	if (ret < 0) {
-		dev_err(&hdev->dev, "unable to set rmi mode to %d (%d)\n", mode,
-			ret);
-		return ret;
+	error = hid_hw_raw_request(hdev, RMI_SET_RMI_MODE_REPORT_ID, buf,
+				   sizeof(txbuf), HID_FEATURE_REPORT,
+				   HID_REQ_SET_REPORT);
+	if (error < 0) {
+		hid_err(hdev, "unable to set rmi mode to %d (%d)\n", mode,
+			error);
+		return error;
 	}
 
 	return 0;
 }
 
-static int rmi_write_report(struct hid_device *hdev, u8 *report, int len)
-{
-	struct rmi_data *data = hid_get_drvdata(hdev);
-	int ret;
-
-	if (data->device_flags & RMI_DEVICE_OUTPUT_SET_REPORT) {
-		/*
-		 * Talk to device by using SET_REPORT requests instead.
-		 */
-		ret = hid_hw_raw_request(hdev, report[0], report,
-				len, HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
-	} else {
-		ret = hid_hw_output_report(hdev, (void *)report, len);
-	}
-
-	if (ret < 0) {
-		dev_err(&hdev->dev, "failed to write hid report (%d)\n", ret);
-		return ret;
-	}
-
-	return ret;
-}
-
 static int rmi_hid_read_block(struct rmi_transport_dev *xport, u16 addr,
-		void *buf, size_t len)
+			      void *buf, size_t len)
 {
 	struct rmi_data *data = container_of(xport, struct rmi_data, xport);
 	struct hid_device *hdev = data->hdev;
-	int ret;
-	int bytes_read;
-	int bytes_needed;
+	size_t bytes_read;
+	size_t bytes_needed;
+	size_t read_input_count;
 	int retries;
-	int read_input_count;
+	int error;
 
-	mutex_lock(&data->page_mutex);
+	if (len > U16_MAX)
+		return -EINVAL;
+
+	guard(mutex)(&data->page_mutex);
 
 	if (RMI_PAGE(addr) != data->page) {
-		ret = rmi_set_page(hdev, RMI_PAGE(addr));
-		if (ret < 0)
-			goto exit;
+		error = rmi_set_page(hdev, RMI_PAGE(addr));
+		if (error)
+			return error;
 	}
 
 	for (retries = 5; retries > 0; retries--) {
-		data->writeReport[0] = RMI_READ_ADDR_REPORT_ID;
-		data->writeReport[1] = 0; /* old 1 byte read count */
-		data->writeReport[2] = addr & 0xFF;
-		data->writeReport[3] = (addr >> 8) & 0xFF;
-		data->writeReport[4] = len  & 0xFF;
-		data->writeReport[5] = (len >> 8) & 0xFF;
+		data->tx_buf[0] = RMI_READ_ADDR_REPORT_ID;
+		data->tx_buf[1] = 0; /* old 1 byte read count */
+		put_unaligned_le16(addr, &data->tx_buf[2]);
+		put_unaligned_le16(len, &data->tx_buf[4]);
 
 		set_bit(RMI_READ_REQUEST_PENDING, &data->flags);
 
-		ret = rmi_write_report(hdev, data->writeReport,
-						data->output_report_size);
-		if (ret != data->output_report_size) {
-			dev_err(&hdev->dev,
-				"failed to write request output report (%d)\n",
-				ret);
-			goto exit;
+		error = rmi_write_report(hdev, data->tx_buf,
+					 data->output_report_size);
+		if (error) {
+			hid_err(hdev, "failed to write request output report (%d)\n",
+				error);
+			break;
 		}
 
 		bytes_read = 0;
 		bytes_needed = len;
 		while (bytes_read < len) {
 			if (!wait_event_timeout(data->wait,
-				test_bit(RMI_READ_DATA_PENDING, &data->flags),
-					msecs_to_jiffies(1000))) {
+						test_bit(RMI_READ_DATA_PENDING,
+							 &data->flags),
+						msecs_to_jiffies(1000))) {
 				hid_warn(hdev, "%s: timeout elapsed\n",
 					 __func__);
-				ret = -EAGAIN;
+				error = -EAGAIN;
 				break;
 			}
 
-			read_input_count = min_t(int, data->readReport[1],
-						 data->input_report_size - 2);
-			if (!read_input_count) {
-				/*
-				 * A zero length reply advances neither
-				 * bytes_read nor bytes_needed, and because a
-				 * reply did arrive the wait above does not
-				 * time out either, so a device answering 0
-				 * forever would spin here indefinitely with
-				 * page_mutex held.
-				 */
-				hid_warn(hdev, "%s: zero-length read reply\n",
-					 __func__);
+			read_input_count = data->rx_buf[1];
+			if (read_input_count == 0 ||
+			    read_input_count > data->input_report_size - 2) {
 				clear_bit(RMI_READ_DATA_PENDING, &data->flags);
-				ret = -EIO;
+				error = -EPROTO;
 				break;
 			}
-			memcpy(buf + bytes_read, &data->readReport[2],
-				min(read_input_count, bytes_needed));
+
+			memcpy(buf + bytes_read, &data->rx_buf[2],
+			       min(read_input_count, bytes_needed));
 
 			bytes_read += read_input_count;
 			bytes_needed -= read_input_count;
 			clear_bit(RMI_READ_DATA_PENDING, &data->flags);
 		}
 
-		if (ret >= 0) {
-			ret = 0;
+		if (!error)
 			break;
-		}
 	}
 
-exit:
 	clear_bit(RMI_READ_REQUEST_PENDING, &data->flags);
-	mutex_unlock(&data->page_mutex);
-	return ret;
+	return error;
 }
 
 static int rmi_hid_write_block(struct rmi_transport_dev *xport, u16 addr,
-		const void *buf, size_t len)
+			       const void *buf, size_t len)
 {
 	struct rmi_data *data = container_of(xport, struct rmi_data, xport);
 	struct hid_device *hdev = data->hdev;
-	int ret;
+	int error;
 
-	mutex_lock(&data->page_mutex);
+	if (len > data->output_report_size - 4 || len > U8_MAX)
+		return -EINVAL;
+
+	guard(mutex)(&data->page_mutex);
 
 	if (RMI_PAGE(addr) != data->page) {
-		ret = rmi_set_page(hdev, RMI_PAGE(addr));
-		if (ret < 0)
-			goto exit;
+		error = rmi_set_page(hdev, RMI_PAGE(addr));
+		if (error)
+			return error;
 	}
 
-	if (len + 4 > data->output_report_size) {
-		ret = -EINVAL;
-		goto exit;
-	}
+	data->tx_buf[0] = RMI_WRITE_REPORT_ID;
+	data->tx_buf[1] = len;
+	put_unaligned_le16(addr, &data->tx_buf[2]);
+	memcpy(&data->tx_buf[4], buf, len);
 
-	data->writeReport[0] = RMI_WRITE_REPORT_ID;
-	data->writeReport[1] = len;
-	data->writeReport[2] = addr & 0xFF;
-	data->writeReport[3] = (addr >> 8) & 0xFF;
-	memcpy(&data->writeReport[4], buf, len);
-
-	ret = rmi_write_report(hdev, data->writeReport,
-					data->output_report_size);
-	if (ret < 0) {
-		dev_err(&hdev->dev,
+	error = rmi_write_report(hdev, data->tx_buf,
+				 data->output_report_size);
+	if (error) {
+		hid_err(hdev,
 			"failed to write request output report (%d)\n",
-			ret);
-		goto exit;
+			error);
+		return error;
 	}
-	ret = 0;
 
-exit:
-	mutex_unlock(&data->page_mutex);
-	return ret;
+	return 0;
 }
 
 static int rmi_reset_attn_mode(struct hid_device *hdev)
 {
 	struct rmi_data *data = hid_get_drvdata(hdev);
 	struct rmi_device *rmi_dev = data->xport.rmi_dev;
-	int ret;
+	int error;
 
-	ret = rmi_set_mode(hdev, RMI_MODE_ATTN_REPORTS);
-	if (ret)
-		return ret;
+	error = rmi_set_mode(hdev, RMI_MODE_ATTN_REPORTS);
+	if (error)
+		return error;
+
+	scoped_guard(mutex, &data->page_mutex) {
+		error = rmi_set_page(hdev, 0);
+		if (error)
+			return error;
+	}
 
 	if (test_bit(RMI_STARTED, &data->flags))
-		ret = rmi_dev->driver->reset_handler(rmi_dev);
+		error = rmi_dev->driver->reset_handler(rmi_dev);
 
-	return ret;
+	return error;
 }
 
 static void rmi_reset_work(struct work_struct *work)
@@ -336,44 +320,6 @@ static void rmi_reset_work(struct work_struct *work)
 
 	/* switch the device to RMI if we receive a generic mouse report */
 	rmi_reset_attn_mode(hdata->hdev);
-}
-
-static int rmi_input_event(struct hid_device *hdev, u8 *data, int size)
-{
-	struct rmi_data *hdata = hid_get_drvdata(hdev);
-	struct rmi_device *rmi_dev = hdata->xport.rmi_dev;
-	unsigned long flags;
-
-	if (!(test_bit(RMI_STARTED, &hdata->flags)))
-		return 0;
-
-	pm_wakeup_event(hdev->dev.parent, 0);
-
-	local_irq_save(flags);
-
-	rmi_set_attn_data(rmi_dev, data[1], &data[2], size - 2);
-
-	generic_handle_irq(hdata->rmi_irq);
-
-	local_irq_restore(flags);
-
-	return 1;
-}
-
-static int rmi_read_data_event(struct hid_device *hdev, u8 *data, int size)
-{
-	struct rmi_data *hdata = hid_get_drvdata(hdev);
-
-	if (!test_bit(RMI_READ_REQUEST_PENDING, &hdata->flags)) {
-		hid_dbg(hdev, "no read request pending\n");
-		return 0;
-	}
-
-	memcpy(hdata->readReport, data, min((u32)size, hdata->input_report_size));
-	set_bit(RMI_READ_DATA_PENDING, &hdata->flags);
-	wake_up(&hdata->wait);
-
-	return 1;
 }
 
 static int rmi_check_sanity(struct hid_device *hdev, u8 *data, int size)
@@ -392,15 +338,57 @@ static int rmi_check_sanity(struct hid_device *hdev, u8 *data, int size)
 	return valid_size;
 }
 
+static int rmi_input_event(struct hid_device *hdev, u8 *data, int size)
+{
+	struct rmi_data *hdata = hid_get_drvdata(hdev);
+	struct rmi_device *rmi_dev = hdata->xport.rmi_dev;
+
+	if (!(test_bit(RMI_STARTED, &hdata->flags)))
+		return 0;
+
+	size = rmi_check_sanity(hdev, data, size);
+	if (size < 2)
+		return 0;
+
+	pm_wakeup_event(hdev->dev.parent, 0);
+
+	rmi_set_attn_data(rmi_dev, data[1], &data[2], size - 2);
+
+	generic_handle_irq_safe(hdata->rmi_irq);
+
+	return 1;
+}
+
+static int rmi_read_data_event(struct hid_device *hdev, u8 *data, int size)
+{
+	struct rmi_data *hdata = hid_get_drvdata(hdev);
+	size_t copy_size;
+
+	if (!test_bit(RMI_READ_REQUEST_PENDING, &hdata->flags)) {
+		hid_dbg(hdev, "no read request pending\n");
+		return 0;
+	}
+
+	copy_size = min_t(size_t, size, hdata->input_report_size);
+	if (copy_size < 3 || data[1] == 0 || data[1] > copy_size - 2)
+		hdata->rx_buf[1] = 0;
+	else
+		memcpy(hdata->rx_buf, data, copy_size);
+
+	set_bit(RMI_READ_DATA_PENDING, &hdata->flags);
+	wake_up(&hdata->wait);
+
+	return 1;
+}
+
 static int rmi_raw_event(struct hid_device *hdev,
-		struct hid_report *report, u8 *data, int size)
+			 struct hid_report *report, u8 *data, int size)
 {
 	struct rmi_data *hdata = hid_get_drvdata(hdev);
 
 	if (!(hdata->device_flags & RMI_DEVICE))
 		return 0;
 
-	size = rmi_check_sanity(hdev, data, size);
 	if (size < 2)
 		return 0;
 
@@ -412,24 +400,23 @@ static int rmi_raw_event(struct hid_device *hdev,
 	default:
 		return 1;
 	}
-
-	return 0;
 }
 
 static int rmi_event(struct hid_device *hdev, struct hid_field *field,
-			struct hid_usage *usage, __s32 value)
+		     struct hid_usage *usage, __s32 value)
 {
 	struct rmi_data *data = hid_get_drvdata(hdev);
 
 	if ((data->device_flags & RMI_DEVICE) &&
+	    test_bit(RMI_STARTED, &data->flags) &&
 	    (field->application == HID_GD_POINTER ||
-	    field->application == HID_GD_MOUSE)) {
+	     field->application == HID_GD_MOUSE)) {
 		if (data->device_flags & RMI_DEVICE_HAS_PHYS_BUTTONS) {
 			if ((usage->hid & HID_USAGE_PAGE) == HID_UP_BUTTON)
 				return 0;
 
-			if ((usage->hid == HID_GD_X || usage->hid == HID_GD_Y)
-			    && !value)
+			if ((usage->hid == HID_GD_X || usage->hid == HID_GD_Y) &&
+			    !value)
 				return 1;
 		}
 
@@ -461,15 +448,18 @@ static int rmi_suspend(struct hid_device *hdev, pm_message_t message)
 {
 	struct rmi_data *data = hid_get_drvdata(hdev);
 	struct rmi_device *rmi_dev = data->xport.rmi_dev;
-	int ret;
+	int error;
 
-	if (!(data->device_flags & RMI_DEVICE))
+	if (!test_bit(RMI_STARTED, &data->flags))
 		return 0;
 
-	ret = rmi_driver_suspend(rmi_dev, false);
-	if (ret) {
-		hid_warn(hdev, "Failed to suspend device: %d\n", ret);
-		return ret;
+	disable_work_sync(&data->reset_work);
+
+	error = rmi_driver_suspend(rmi_dev, false);
+	if (error) {
+		hid_warn(hdev, "Failed to suspend device: %d\n", error);
+		enable_work(&data->reset_work);
+		return error;
 	}
 
 	return 0;
@@ -479,29 +469,33 @@ static int rmi_post_resume(struct hid_device *hdev)
 {
 	struct rmi_data *data = hid_get_drvdata(hdev);
 	struct rmi_device *rmi_dev = data->xport.rmi_dev;
-	int ret;
+	int error;
+	int err;
 
-	if (!(data->device_flags & RMI_DEVICE))
+	if (!test_bit(RMI_STARTED, &data->flags))
 		return 0;
 
 	/* Make sure the HID device is ready to receive events */
-	ret = hid_hw_open(hdev);
-	if (ret)
-		return ret;
-
-	ret = rmi_reset_attn_mode(hdev);
-	if (ret)
+	error = hid_hw_open(hdev);
+	if (error)
 		goto out;
 
-	ret = rmi_driver_resume(rmi_dev, false);
-	if (ret) {
-		hid_warn(hdev, "Failed to resume device: %d\n", ret);
-		goto out;
+	error = rmi_reset_attn_mode(hdev);
+	if (error)
+		hid_warn(hdev, "Failed to reset attention mode: %d\n", error);
+
+	err = rmi_driver_resume(rmi_dev, false);
+	if (err) {
+		hid_warn(hdev, "Failed to resume device: %d\n", err);
+		if (!error)
+			error = err;
 	}
 
-out:
 	hid_hw_close(hdev);
-	return ret;
+
+out:
+	enable_work(&data->reset_work);
+	return error;
 }
 
 static int rmi_hid_reset(struct rmi_transport_dev *xport, u16 reset_addr)
@@ -516,7 +510,7 @@ static int rmi_input_configured(struct hid_device *hdev, struct hid_input *hi)
 {
 	struct rmi_data *data = hid_get_drvdata(hdev);
 	struct input_dev *input = hi->input;
-	int ret = 0;
+	int error = 0;
 
 	if (!(data->device_flags & RMI_DEVICE))
 		return 0;
@@ -524,28 +518,28 @@ static int rmi_input_configured(struct hid_device *hdev, struct hid_input *hi)
 	data->xport.input = input;
 
 	hid_dbg(hdev, "Opening low level driver\n");
-	ret = hid_hw_open(hdev);
-	if (ret)
-		return ret;
+	error = hid_hw_open(hdev);
+	if (error)
+		return error;
 
 	/* Allow incoming hid reports */
 	hid_device_io_start(hdev);
 
-	ret = rmi_set_mode(hdev, RMI_MODE_ATTN_REPORTS);
-	if (ret < 0) {
-		dev_err(&hdev->dev, "failed to set rmi mode\n");
+	error = rmi_set_mode(hdev, RMI_MODE_ATTN_REPORTS);
+	if (error) {
+		hid_err(hdev, "failed to set rmi mode\n");
 		goto exit;
 	}
 
-	ret = rmi_set_page(hdev, 0);
-	if (ret < 0) {
-		dev_err(&hdev->dev, "failed to set page select to 0.\n");
+	error = rmi_set_page(hdev, 0);
+	if (error) {
+		hid_err(hdev, "failed to set page select to 0\n");
 		goto exit;
 	}
 
-	ret = rmi_register_transport_device(&data->xport);
-	if (ret < 0) {
-		dev_err(&hdev->dev, "failed to register transport driver\n");
+	error = rmi_register_transport_device(&data->xport);
+	if (error) {
+		hid_err(hdev, "failed to register transport driver\n");
 		goto exit;
 	}
 
@@ -554,18 +548,19 @@ static int rmi_input_configured(struct hid_device *hdev, struct hid_input *hi)
 exit:
 	hid_device_io_stop(hdev);
 	hid_hw_close(hdev);
-	return ret;
+	return error;
 }
 
 static int rmi_input_mapping(struct hid_device *hdev,
-		struct hid_input *hi, struct hid_field *field,
-		struct hid_usage *usage, unsigned long **bit, int *max)
+			     struct hid_input *hi, struct hid_field *field,
+			     struct hid_usage *usage, unsigned long **bit,
+			     int *max)
 {
 	struct rmi_data *data = hid_get_drvdata(hdev);
 
 	/*
 	 * we want to make HID ignore the advertised HID collection
-	 * for RMI deivces
+	 * for RMI devices
 	 */
 	if (data->device_flags & RMI_DEVICE) {
 		if ((data->device_flags & RMI_DEVICE_HAS_PHYS_BUTTONS) &&
@@ -578,15 +573,17 @@ static int rmi_input_mapping(struct hid_device *hdev,
 	return 0;
 }
 
-static int rmi_check_valid_report_id(struct hid_device *hdev, unsigned type,
-		unsigned id, struct hid_report **report)
+static int rmi_check_valid_report_id(struct hid_device *hdev,
+				     unsigned int type, unsigned int id,
+				     struct hid_report **report)
 {
 	int i;
 
 	*report = hdev->report_enum[type].report_id_hash[id];
 	if (*report) {
 		for (i = 0; i < (*report)->maxfield; i++) {
-			unsigned app = (*report)->field[i]->application;
+			unsigned int app = (*report)->field[i]->application;
+
 			if ((app & HID_USAGE_PAGE) >= HID_UP_MSVENDOR)
 				return 1;
 		}
@@ -595,7 +592,7 @@ static int rmi_check_valid_report_id(struct hid_device *hdev, unsigned type,
 	return 0;
 }
 
-static struct rmi_device_platform_data rmi_hid_pdata = {
+static const struct rmi_device_platform_data rmi_hid_pdata = {
 	.sensor_pdata = {
 		.sensor_type = rmi_sensor_touchpad,
 		.axis_align.flip_y = true,
@@ -640,16 +637,16 @@ static const struct irq_domain_ops rmi_irq_ops = {
 static int rmi_setup_irq_domain(struct hid_device *hdev)
 {
 	struct rmi_data *hdata = hid_get_drvdata(hdev);
-	int ret;
+	int error;
 
 	hdata->domain = irq_domain_create_linear(hdev->dev.fwnode, 1,
 						 &rmi_irq_ops, hdata);
 	if (!hdata->domain)
 		return -ENOMEM;
 
-	ret = devm_add_action_or_reset(&hdev->dev, &rmi_irq_teardown, hdata);
-	if (ret)
-		return ret;
+	error = devm_add_action_or_reset(&hdev->dev, &rmi_irq_teardown, hdata);
+	if (error)
+		return error;
 
 	hdata->rmi_irq = irq_create_mapping(hdata->domain, 0);
 	if (hdata->rmi_irq <= 0) {
@@ -662,14 +659,14 @@ static int rmi_setup_irq_domain(struct hid_device *hdev)
 
 static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
-	struct rmi_data *data = NULL;
-	int ret;
+	struct rmi_data *data;
+	int error;
 	size_t alloc_size;
 	struct hid_report *input_report;
 	struct hid_report *output_report;
 	struct hid_report *feature_report;
 
-	data = devm_kzalloc_obj(&hdev->dev, struct rmi_data);
+	data = devm_kzalloc_obj(&hdev->dev, *data);
 	if (!data)
 		return -ENOMEM;
 
@@ -681,43 +678,50 @@ static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	hdev->quirks |= HID_QUIRK_NO_INIT_REPORTS;
 	hdev->quirks |= HID_QUIRK_NO_INPUT_SYNC;
 
-	ret = hid_parse(hdev);
-	if (ret) {
+	error = hid_parse(hdev);
+	if (error) {
 		hid_err(hdev, "parse failed\n");
-		return ret;
+		return error;
 	}
 
 	/*
 	 * RMI_DEVICE can only mean "this probe validated the RMI reports and
-	 * allocated writeReport": every bail-out to start below skips that
+	 * allocated tx_buf": every bail-out to start below skips that
 	 * allocation, and device_flags left carrying RMI_DEVICE from
 	 * driver_data would send rmi_input_configured() into rmi_set_page()
-	 * with writeReport still NULL.  A bind through the new_id sysfs
+	 * with tx_buf still NULL.  A bind through the new_id sysfs
 	 * attribute can supply driver_data with the bit set, so do not let
 	 * driver_data grant it.
 	 */
 	data->device_flags = id->driver_data & ~RMI_DEVICE;
 
 	/*
-	 * Check for the RMI specific report ids. If they are misisng
+	 * Check for the RMI specific report ids. If they are missing
 	 * simply return and let the events be processed by hid-input
 	 */
 	if (!rmi_check_valid_report_id(hdev, HID_FEATURE_REPORT,
-	    RMI_SET_RMI_MODE_REPORT_ID, &feature_report)) {
+				       RMI_SET_RMI_MODE_REPORT_ID,
+				       &feature_report)) {
 		hid_dbg(hdev, "device does not have set mode feature report\n");
 		goto start;
 	}
 
 	if (!rmi_check_valid_report_id(hdev, HID_INPUT_REPORT,
-	    RMI_ATTN_REPORT_ID, &input_report)) {
+				       RMI_ATTN_REPORT_ID, &input_report)) {
 		hid_dbg(hdev, "device does not have attention input report\n");
+		goto start;
+	}
+
+	if (!rmi_check_valid_report_id(hdev, HID_INPUT_REPORT,
+				       RMI_READ_DATA_REPORT_ID, &input_report)) {
+		hid_dbg(hdev, "device does not have read data input report\n");
 		goto start;
 	}
 
 	data->input_report_size = hid_report_len(input_report);
 
 	if (!rmi_check_valid_report_id(hdev, HID_OUTPUT_REPORT,
-	    RMI_WRITE_REPORT_ID, &output_report)) {
+				       RMI_WRITE_REPORT_ID, &output_report)) {
 		hid_dbg(hdev,
 			"device does not have rmi write output report\n");
 		goto start;
@@ -725,52 +729,45 @@ static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	data->output_report_size = hid_report_len(output_report);
 
-	/*
-	 * The write reports built by this driver occupy 6 bytes and the read
-	 * handshake looks at the first 3 bytes of an input report, so refuse
-	 * to drive a device whose reports cannot hold them.
-	 */
-	if (data->output_report_size < 6 || data->input_report_size < 3) {
-		hid_err(hdev, "rmi reports too small (out=%u in=%u)\n",
-			data->output_report_size, data->input_report_size);
-		goto start;
+	if (data->input_report_size < 3 || data->output_report_size < 6) {
+		hid_err(hdev, "invalid report sizes (in %u, out %u)\n",
+			data->input_report_size, data->output_report_size);
+		return -EINVAL;
 	}
 
 	data->device_flags |= RMI_DEVICE;
 	alloc_size = data->output_report_size + data->input_report_size;
 
-	data->writeReport = devm_kzalloc(&hdev->dev, alloc_size, GFP_KERNEL);
-	if (!data->writeReport) {
-		hid_err(hdev, "failed to allocate buffer for HID reports\n");
+	data->tx_buf = devm_kzalloc(&hdev->dev, alloc_size, GFP_KERNEL);
+	if (!data->tx_buf)
 		return -ENOMEM;
-	}
 
-	data->readReport = data->writeReport + data->output_report_size;
+	data->rx_buf = data->tx_buf + data->output_report_size;
 
 	init_waitqueue_head(&data->wait);
 
 	mutex_init(&data->page_mutex);
 
-	ret = rmi_setup_irq_domain(hdev);
-	if (ret) {
+	error = rmi_setup_irq_domain(hdev);
+	if (error) {
 		hid_err(hdev, "failed to allocate IRQ domain\n");
-		return ret;
+		return error;
 	}
-
-	if (data->device_flags & RMI_DEVICE_HAS_PHYS_BUTTONS)
-		rmi_hid_pdata.gpio_data.disable = true;
 
 	data->xport.dev = hdev->dev.parent;
 	data->xport.pdata = rmi_hid_pdata;
 	data->xport.pdata.irq = data->rmi_irq;
+	if (data->device_flags & RMI_DEVICE_HAS_PHYS_BUTTONS)
+		data->xport.pdata.gpio_data.disable = true;
+
 	data->xport.proto_name = "hid";
 	data->xport.ops = &hid_rmi_ops;
 
 start:
-	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
-	if (ret) {
+	error = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
+	if (error) {
 		hid_err(hdev, "hw start failed\n");
-		return ret;
+		return error;
 	}
 
 	return 0;
@@ -780,10 +777,8 @@ static void rmi_remove(struct hid_device *hdev)
 {
 	struct rmi_data *hdata = hid_get_drvdata(hdev);
 
-	if ((hdata->device_flags & RMI_DEVICE)
-	    && test_bit(RMI_STARTED, &hdata->flags)) {
-		clear_bit(RMI_STARTED, &hdata->flags);
-		cancel_work_sync(&hdata->reset_work);
+	if (test_and_clear_bit(RMI_STARTED, &hdata->flags)) {
+		disable_work_sync(&hdata->reset_work);
 		rmi_unregister_transport_device(&hdata->xport);
 	}
 

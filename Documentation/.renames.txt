@@ -275,7 +275,6 @@ input/rotary-encoder input/devices/rotary-encoder
 input/sentelic input/devices/sentelic
 input/walkera0701 input/devices/walkera0701
 input/xpad input/devices/xpad
-input/yealink input/devices/yealink
 interconnect/interconnect driver-api/interconnect
 ioctl/botching-up-ioctls process/botching-up-ioctls
 ioctl/cdrom userspace-api/ioctl/cdrom

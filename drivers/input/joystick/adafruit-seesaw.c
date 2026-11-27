@@ -107,6 +107,8 @@ static int seesaw_register_read(struct i2c_client *client, u16 reg, void *buf,
 			   ARRAY_SIZE(message_buf));
 	if (ret < 0)
 		return ret;
+	if (ret != ARRAY_SIZE(message_buf))
+		return -EIO;
 
 	return 0;
 }
