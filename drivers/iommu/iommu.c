@@ -3087,13 +3087,15 @@ int iommu_fwspec_init(struct device *dev, struct fwnode_handle *iommu_fwnode)
 	if (fwspec)
 		return iommu->ops == iommu_fwspec_ops(fwspec) ? 0 : -EINVAL;
 
-	if (!dev_iommu_get(dev))
-		return -ENOMEM;
-
 	/* Preallocate for the overwhelmingly common case of 1 ID */
 	fwspec = kzalloc_flex(*fwspec, ids, 1);
 	if (!fwspec)
 		return -ENOMEM;
+
+	if (!dev_iommu_get(dev)) {
+		kfree(fwspec);
+		return -ENOMEM;
+	}
 
 	fwnode_handle_get(iommu_fwnode);
 	fwspec->iommu_fwnode = iommu_fwnode;
