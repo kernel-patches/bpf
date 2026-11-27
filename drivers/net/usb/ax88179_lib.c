@@ -356,10 +356,12 @@ void ax88179_set_multicast(struct net_device *net)
 
 	data = dev->driver_priv;
 
-	rxctl = (AX_RX_CTL_START | AX_RX_CTL_AB | AX_RX_CTL_DROPCRCERR);
+	rxctl = (AX_RX_CTL_START | AX_RX_CTL_AB);
 	if (data->ip_align)
 		rxctl |= AX_RX_CTL_IPE;
-
+	if (net->features & (NETIF_F_RXFCS | NETIF_F_RXALL) ||
+	    data->chip_version != AX_VERSION_AX88179A)
+		rxctl |= AX_RX_CTL_DROPCRCERR;
 	if (net->flags & IFF_PROMISC) {
 		rxctl |= AX_RX_CTL_PRO;
 	} else if (net->flags & IFF_ALLMULTI ||
