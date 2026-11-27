@@ -1782,9 +1782,13 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 
 	timeout_ext = tmpl ? nf_ct_timeout_find(tmpl) : NULL;
 
-	if (timeout_ext)
-		nf_ct_timeout_ext_add(ct, rcu_dereference(timeout_ext->timeout),
-				      GFP_ATOMIC);
+	if (timeout_ext) {
+		struct nf_ct_timeout *timeout;
+
+		timeout = rcu_dereference(timeout_ext->timeout);
+		if (timeout && timeout->l4proto->l4proto == nf_ct_protonum(ct))
+			nf_ct_timeout_ext_add(ct, timeout, GFP_ATOMIC);
+	}
 
 	nf_ct_acct_ext_add(ct, GFP_ATOMIC);
 	nf_ct_tstamp_ext_add(ct, GFP_ATOMIC);
