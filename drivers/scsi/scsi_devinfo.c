@@ -681,10 +681,15 @@ static ssize_t proc_scsi_devinfo_write(struct file *file,
 				       char *buffer,
 				       size_t length, loff_t *ppos)
 {
+	int ret;
+
 	if (length == PAGE_SIZE && buffer[PAGE_SIZE-1])
 		return -EINVAL;
 
-	scsi_dev_info_list_add_str(buffer);
+	ret = scsi_dev_info_list_add_str(buffer);
+	if (ret)
+		err = ret;
+
 	return length;
 }
 
