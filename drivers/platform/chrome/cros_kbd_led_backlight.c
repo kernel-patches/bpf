@@ -47,14 +47,14 @@ struct keyboard_led_drvdata {
 
 #ifdef CONFIG_ACPI
 
-/* Keyboard LED ACPI Device must be defined in firmware */
-#define ACPI_KEYBOARD_BACKLIGHT_DEVICE	"\\_SB.KBLT"
-#define ACPI_KEYBOARD_BACKLIGHT_READ	ACPI_KEYBOARD_BACKLIGHT_DEVICE ".KBQC"
-#define ACPI_KEYBOARD_BACKLIGHT_WRITE	ACPI_KEYBOARD_BACKLIGHT_DEVICE ".KBCM"
+/* Keyboard LED ACPI methods on the matched GOOG0002 device */
+#define ACPI_KEYBOARD_BACKLIGHT_READ	"KBQC"
+#define ACPI_KEYBOARD_BACKLIGHT_WRITE	"KBCM"
 
 static void keyboard_led_set_brightness_acpi(struct led_classdev *cdev,
 					     enum led_brightness brightness)
 {
+	acpi_handle handle = ACPI_HANDLE(cdev->dev->parent);
 	union acpi_object param;
 	struct acpi_object_list input;
 	acpi_status status;
@@ -64,7 +64,7 @@ static void keyboard_led_set_brightness_acpi(struct led_classdev *cdev,
 	input.count = 1;
 	input.pointer = &param;
 
-	status = acpi_evaluate_object(NULL, ACPI_KEYBOARD_BACKLIGHT_WRITE,
+	status = acpi_evaluate_object(handle, ACPI_KEYBOARD_BACKLIGHT_WRITE,
 				      &input, NULL);
 	if (ACPI_FAILURE(status))
 		dev_err(cdev->dev, "Error setting keyboard LED value: %d\n",
@@ -74,10 +74,11 @@ static void keyboard_led_set_brightness_acpi(struct led_classdev *cdev,
 static enum led_brightness
 keyboard_led_get_brightness_acpi(struct led_classdev *cdev)
 {
+	acpi_handle handle = ACPI_HANDLE(cdev->dev->parent);
 	unsigned long long brightness;
 	acpi_status status;
 
-	status = acpi_evaluate_integer(NULL, ACPI_KEYBOARD_BACKLIGHT_READ,
+	status = acpi_evaluate_integer(handle, ACPI_KEYBOARD_BACKLIGHT_READ,
 				       NULL, &brightness);
 	if (ACPI_FAILURE(status)) {
 		dev_err(cdev->dev, "Error getting keyboard LED value: %d\n",
@@ -92,16 +93,15 @@ static int keyboard_led_init_acpi(struct platform_device *pdev,
 				  struct keyboard_led *keyboard_led)
 {
 	acpi_handle handle;
-	acpi_status status;
 
-	/* Look for the keyboard LED ACPI Device */
-	status = acpi_get_handle(ACPI_ROOT_OBJECT,
-				 ACPI_KEYBOARD_BACKLIGHT_DEVICE,
-				 &handle);
-	if (ACPI_FAILURE(status)) {
-		dev_err(&pdev->dev, "Unable to find ACPI device %s: %d\n",
-			ACPI_KEYBOARD_BACKLIGHT_DEVICE, status);
-		return -ENXIO;
+	handle = ACPI_HANDLE(&pdev->dev);
+	if (!handle)
+		return -ENODEV;
+
+	if (!acpi_has_method(handle, ACPI_KEYBOARD_BACKLIGHT_READ) ||
+	    !acpi_has_method(handle, ACPI_KEYBOARD_BACKLIGHT_WRITE)) {
+		dev_err(&pdev->dev, "Missing keyboard LED ACPI methods\n");
+		return -ENODEV;
 	}
 
 	return 0;
