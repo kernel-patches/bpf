@@ -657,9 +657,15 @@ static struct extent_map *defrag_get_extent(struct btrfs_inode *inode,
 	    key.offset == start)
 		goto iterate;
 
-	/* We didn't find a perfect match, needs to go one slot back */
+	/*
+	 * We didn't find a perfect match, go one slot back if the previous item
+	 * is an EXTENT_DATA of our inode, as it may cover @start.
+	 *
+	 * Note the item at the current slot can belong to the next inode, in
+	 * which case we still need to check the previous one.
+	 */
 	if (path.slots[0] > 0) {
-		btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
+		btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0] - 1);
 		if (key.objectid == ino && key.type == BTRFS_EXTENT_DATA_KEY)
 			path.slots[0]--;
 	}
@@ -674,17 +680,20 @@ iterate:
 
 		btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
 
-		/*
-		 * We may go one slot back to INODE_REF/XATTR item, then
-		 * need to go forward until we reach an EXTENT_DATA.
-		 * But we should still has the correct ino as key.objectid.
-		 */
-		if (WARN_ON(key.objectid < ino) || key.type < BTRFS_EXTENT_DATA_KEY)
+		if (WARN_ON(key.objectid < ino))
 			goto next;
 
 		/* It's beyond our target range, definitely not extent found */
 		if (key.objectid > ino || key.type > BTRFS_EXTENT_DATA_KEY)
 			goto not_found;
+
+		/*
+		 * We may go one slot back to INODE_REF/XATTR item, then
+		 * need to go forward until we reach an EXTENT_DATA.
+		 * But we should still has the correct ino as key.objectid.
+		 */
+		if (key.type < BTRFS_EXTENT_DATA_KEY)
+			goto next;
 
 		/*
 		 *	|	|<- File extent ->|

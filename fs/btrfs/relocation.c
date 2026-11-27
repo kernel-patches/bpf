@@ -1760,7 +1760,7 @@ out:
 
 	if (ret == 0) {
 		ret = insert_dirty_subvol(trans, rc, root);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 	}
 
@@ -2834,7 +2834,7 @@ static noinline_for_stack int prealloc_file_extent_cluster(struct reloc_control 
 		num_bytes = end + 1 - start;
 		ret = btrfs_prealloc_file_range(&inode->vfs_inode, 0, start,
 						num_bytes, num_bytes,
-						end + 1, &alloc_hint);
+						end + 1, &alloc_hint, true);
 		cur_offset = end + 1;
 		btrfs_unlock_extent(&inode->io_tree, start, end, &cached_state);
 		if (ret)
@@ -3834,7 +3834,7 @@ static void delete_orphan_inode(struct btrfs_trans_handle *trans,
 	}
 	ret = btrfs_del_item(trans, root, path);
 out:
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 }
 
@@ -4345,8 +4345,10 @@ static int move_existing_remap(struct btrfs_fs_info *fs_info,
 	}
 
 	ret = copy_remapped_data(fs_info, new_addr, dest_addr, dest_length);
-	if (unlikely(ret))
+	if (unlikely(ret)) {
+		btrfs_release_path(path);
 		goto end;
+	}
 
 	/* Change data of old remap entry. */
 	leaf = path->nodes[0];
@@ -4661,6 +4663,8 @@ static int create_remap_tree_entries(struct btrfs_trans_handle *trans,
 	btrfs_release_path(path);
 
 	mutex_unlock(&bg->free_space_lock);
+	if (ret < 0)
+		goto out;
 
 	max_entries = extent_count + 2;
 	entries = kmalloc_objs(*entries, max_entries, GFP_NOFS);
@@ -5155,26 +5159,26 @@ static int do_remap_reloc_trans(struct btrfs_fs_info *fs_info,
 
 	if (bg_needs_free_space) {
 		ret = btrfs_add_block_group_free_space(trans, dest_bg);
-		if (ret) {
+		if (unlikely(ret)) {
 			btrfs_abort_transaction(trans, ret);
 			goto fail;
 		}
 	}
 
 	ret = copy_remapped_data(fs_info, start, new_addr, length);
-	if (ret) {
+	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		goto fail;
 	}
 
 	ret = btrfs_remove_from_free_space_tree(trans, new_addr, length);
-	if (ret) {
+	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		goto fail;
 	}
 
 	ret = add_remap_entry(trans, path, src_bg, start, new_addr, length);
-	if (ret) {
+	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		goto fail;
 	}
@@ -5534,7 +5538,10 @@ int btrfs_relocate_block_group(struct btrfs_fs_info *fs_info, u64 group_start,
 	btrfs_wait_ordered_roots(fs_info, U64_MAX, rc->block_group);
 
 	ret = btrfs_zone_finish(rc->block_group);
-	WARN_ON(ret && ret != -EAGAIN);
+	if (ret && ret != -EAGAIN)
+		btrfs_warn(fs_info,
+			   "zoned: failed to finish zones of block group %llu before relocation: %d",
+			   rc->block_group->start, ret);
 
 	if (should_relocate_using_remap_tree(bg)) {
 		if (bg->remap_bytes != 0) {

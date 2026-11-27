@@ -260,7 +260,7 @@ int btrfs_setxattr_trans(struct inode *inode, const char *name,
 	inode_inc_iversion(inode);
 	inode_set_ctime_current(inode);
 	ret = btrfs_update_inode(trans, BTRFS_I(inode));
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 out:
 	if (start_trans)
@@ -446,7 +446,7 @@ static int btrfs_xattr_handler_set_prop(const struct xattr_handler *handler,
 		inode_inc_iversion(inode);
 		inode_set_ctime_current(inode);
 		ret = btrfs_update_inode(trans, BTRFS_I(inode));
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 	}
 
