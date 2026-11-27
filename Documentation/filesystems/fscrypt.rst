@@ -736,7 +736,7 @@ FS_IOC_SET_ENCRYPTION_POLICY can fail with the following errors:
   feature flag enabled using ``tune2fs -O encrypt`` or ``mkfs.ext4 -O
   encrypt``.)
 - ``EPERM``: this directory may not be encrypted, e.g. because it is
-  the root directory of an ext4 filesystem
+  the root directory of an ext4 filesystem or is immutable or append-only
 - ``EROFS``: the filesystem is readonly
 
 Getting an encryption policy

@@ -515,14 +515,11 @@ static void init_dent_inode(struct inode *dir, struct inode *inode,
 void f2fs_do_make_empty_dir(struct inode *inode, struct inode *parent,
 					struct f2fs_dentry_ptr *d)
 {
-	struct fscrypt_str dot = FSTR_INIT(".", 1);
-	struct fscrypt_str dotdot = FSTR_INIT("..", 2);
-
 	/* update dirent of "." */
-	f2fs_update_dentry(inode->i_ino, inode->i_mode, d, &dot, 0, 0);
+	f2fs_update_dentry(inode->i_ino, inode->i_mode, d, &FSTR("."), 0, 0);
 
 	/* update dirent of ".." */
-	f2fs_update_dentry(parent->i_ino, parent->i_mode, d, &dotdot, 0, 1);
+	f2fs_update_dentry(parent->i_ino, parent->i_mode, d, &FSTR(".."), 0, 1);
 }
 
 static int make_empty_dir(struct inode *inode,
