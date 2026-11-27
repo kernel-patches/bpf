@@ -131,11 +131,10 @@ static unsigned int ixp4xx_mmio_data_xfer(struct ata_queued_cmd *qc,
 	struct ata_port *ap = qc->dev->link->ap;
 	void __iomem *mmio = ap->ioaddr.data_addr;
 	struct ixp4xx_pata *ixpp = ap->host->private_data;
-	unsigned long flags;
 
 	ata_dev_dbg(adev, "%s %d bytes\n", (rw == READ) ? "READ" : "WRITE",
 		    buflen);
-	spin_lock_irqsave(ap->lock, flags);
+	lockdep_assert_held(ap->lock);
 
 	/* set the expansion bus in 16bit mode and restore
 	 * 8 bit mode after the transaction.
@@ -168,8 +167,6 @@ static unsigned int ixp4xx_mmio_data_xfer(struct ata_queued_cmd *qc,
 
 	ixp4xx_set_8bit_timing(ixpp, adev->pio_mode);
 	udelay(5);
-
-	spin_unlock_irqrestore(ap->lock, flags);
 
 	return words << 1;
 }
