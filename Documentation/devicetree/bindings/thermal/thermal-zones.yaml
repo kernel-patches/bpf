@@ -101,7 +101,7 @@ patternProperties:
           thermal zone.
 
       coefficients:
-        $ref: /schemas/types.yaml#/definitions/uint32-array
+        $ref: /schemas/types.yaml#/definitions/int32-array
         description:
           An array of integers containing the coefficients of a linear equation
           that binds all the sensors listed in this thermal zone.
