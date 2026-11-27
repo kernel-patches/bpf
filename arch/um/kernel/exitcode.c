@@ -31,24 +31,13 @@ static int exitcode_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int exitcode_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, exitcode_proc_show, NULL);
-}
-
 static ssize_t exitcode_proc_write(struct file *file,
-		const char __user *buffer, size_t count, loff_t *pos)
+		char *buffer, size_t count, loff_t *pos)
 {
-	char *end, buf[sizeof("nnnnn\0")];
-	size_t size;
+	char *end;
 	int tmp;
 
-	size = min(count, sizeof(buf) - 1);
-	if (copy_from_user(buf, buffer, size))
-		return -EFAULT;
-	buf[size] = '\0';
-
-	tmp = simple_strtol(buf, &end, 0);
+	tmp = simple_strtol(buffer, &end, 0);
 	if ((*end != '\0') && !isspace(*end))
 		return -EINVAL;
 
@@ -57,11 +46,8 @@ static ssize_t exitcode_proc_write(struct file *file,
 }
 
 static const struct proc_ops exitcode_proc_ops = {
-	.proc_open	= exitcode_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
-	.proc_write	= exitcode_proc_write,
+	.proc_show	= exitcode_proc_show,
+	.proc_write_buf	= exitcode_proc_write,
 };
 
 static int make_proc_exitcode(void)

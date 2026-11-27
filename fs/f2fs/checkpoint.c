@@ -264,6 +264,7 @@ static struct f2fs_cached_block *__get_meta_cache(struct f2fs_sb_info *sbi,
 		.op_flags = REQ_META | REQ_PRIO,
 		.old_blkaddr = index,
 		.new_blkaddr = index,
+		.folio_blkcnt = 1,
 		.encrypted_page = NULL,
 		.is_por = !is_meta ? 1 : 0,
 		.is_cache = 1,
@@ -462,6 +463,7 @@ int f2fs_ra_meta_caches(struct f2fs_sb_info *sbi, block_t start,
 		.type = META,
 		.op = REQ_OP_READ,
 		.op_flags = sync ? (REQ_META | REQ_PRIO) : REQ_RAHEAD,
+		.folio_blkcnt = 1,
 		.encrypted_page = NULL,
 		.in_list = 0,
 		.is_por = (type == META_POR) ? 1 : 0,
@@ -958,12 +960,13 @@ static int recover_orphan_inode(struct f2fs_sb_info *sbi, nid_t ino)
 
 	inode = f2fs_iget_retry(sbi->sb, ino);
 	if (IS_ERR(inode)) {
-		/*
-		 * there should be a bug that we can't find the entry
-		 * to orphan inode.
-		 */
-		f2fs_bug_on(sbi, PTR_ERR(inode) == -ENOENT);
-		return PTR_ERR(inode);
+		if (PTR_ERR(inode) != -ENOENT)
+			return PTR_ERR(inode);
+		/* The orphan area lists an inode that does not exist. */
+		f2fs_err(sbi, "orphan inode %u does not exist", ino);
+		set_sbi_flag(sbi, SBI_NEED_FSCK);
+		f2fs_handle_error(sbi, ERROR_INCONSISTENT_ORPHAN);
+		return -EFSCORRUPTED;
 	}
 
 	err = f2fs_dquot_initialize(inode);
@@ -1314,7 +1317,7 @@ static void __remove_dirty_inode(struct inode *inode, enum inode_type type)
 {
 	int flag = (type == DIR_INODE) ? FI_DIRTY_DIR : FI_DIRTY_FILE;
 
-	if (get_dirty_pages(inode) || !is_inode_flag_set(inode, flag))
+	if (get_dirty_blocks(inode) || !is_inode_flag_set(inode, flag))
 		return;
 
 	list_del_init(&F2FS_I(inode)->dirty_list);
@@ -1324,18 +1327,18 @@ static void __remove_dirty_inode(struct inode *inode, enum inode_type type)
 
 void f2fs_update_dirty_folio(struct inode *inode, struct folio *folio)
 {
-	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-	enum inode_type type = S_ISDIR(inode->i_mode) ? DIR_INODE : FILE_INODE;
-
 	if (!S_ISDIR(inode->i_mode) && !S_ISREG(inode->i_mode) &&
 			!S_ISLNK(inode->i_mode))
 		return;
 
-	spin_lock(&sbi->inode_lock[type]);
-	if (type != FILE_INODE || test_opt(sbi, DATA_FLUSH))
-		__add_dirty_inode(inode, type);
-	inode_inc_dirty_pages(inode);
-	spin_unlock(&sbi->inode_lock[type]);
+	/*
+	 * The dirty blocks of a folio with a folio state are accounted when
+	 * their dirty bits are set. Without it, every block of the folio is
+	 * dirty.
+	 */
+	if (!f2fs_folio_has_ffs(folio))
+		f2fs_account_dirty_blocks(inode,
+			f2fs_blocks_per_folio(F2FS_I_SB(inode), folio));
 
 	folio_set_f2fs_reference(folio);
 }
@@ -1354,6 +1357,33 @@ void f2fs_remove_dirty_inode(struct inode *inode)
 
 	spin_lock(&sbi->inode_lock[type]);
 	__remove_dirty_inode(inode, type);
+	spin_unlock(&sbi->inode_lock[type]);
+}
+
+/*
+ * Account @nr dirty blocks (negative when they are cleaned) for @inode.
+ */
+void f2fs_account_dirty_blocks(struct inode *inode, int nr)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	enum inode_type type = S_ISDIR(inode->i_mode) ? DIR_INODE : FILE_INODE;
+
+	if (!nr)
+		return;
+
+	if (!S_ISDIR(inode->i_mode) && !S_ISREG(inode->i_mode) &&
+			!S_ISLNK(inode->i_mode))
+		return;
+
+	if (nr < 0) {
+		inode_sub_dirty_blocks(inode, -nr);
+		return;
+	}
+
+	spin_lock(&sbi->inode_lock[type]);
+	if (type != FILE_INODE || test_opt(sbi, DATA_FLUSH))
+		__add_dirty_inode(inode, type);
+	inode_add_dirty_blocks(inode, nr);
 	spin_unlock(&sbi->inode_lock[type]);
 }
 

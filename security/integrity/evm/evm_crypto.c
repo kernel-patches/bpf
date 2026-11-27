@@ -231,7 +231,7 @@ static int evm_calc_hmac_or_hash(struct dentry *dentry,
 				 uint8_t type, struct evm_digest *data,
 				 struct evm_iint_cache *iint)
 {
-	struct inode *inode = d_inode(d_real(dentry, D_REAL_METADATA));
+	struct inode *inode = d_real_metadata_inode(dentry);
 	struct xattr_list *xattr;
 	struct shash_desc *desc;
 	size_t xattr_size = 0;
@@ -240,6 +240,9 @@ static int evm_calc_hmac_or_hash(struct dentry *dentry,
 	int size, user_space_size;
 	bool ima_present = false;
 	u64 i_version = 0;
+
+	if (IS_ERR(inode))
+		return PTR_ERR(inode);
 
 	if (!(inode->i_opflags & IOP_XATTR) ||
 	    inode->i_sb->s_user_ns != &init_user_ns)

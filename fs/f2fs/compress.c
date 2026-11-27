@@ -57,14 +57,15 @@ struct f2fs_compress_ops {
 	bool (*is_level_valid)(int level);
 };
 
-static unsigned int offset_in_cluster(struct compress_ctx *cc, pgoff_t index)
+static unsigned int offset_in_cluster(struct compress_ctx *cc, pgoff_t lblk)
 {
-	return index & (cc->cluster_size - 1);
+	return (lblk & (cc->cluster_size - 1)) >>
+		F2FS_LOG_BLKS_PER_PAGE(F2FS_I_SB(cc->inode));
 }
 
-static pgoff_t cluster_idx(struct compress_ctx *cc, pgoff_t index)
+static pgoff_t cluster_idx(struct compress_ctx *cc, pgoff_t lblk)
 {
-	return index >> cc->log_cluster_size;
+	return lblk >> cc->log_cluster_size;
 }
 
 static pgoff_t start_idx_of_cluster(struct compress_ctx *cc)
@@ -77,6 +78,8 @@ bool f2fs_is_compressed_page(struct folio *folio)
 	if (!folio->private)
 		return false;
 	if (folio_test_f2fs_nonpointer(folio))
+		return false;
+	if (f2fs_folio_has_ffs(folio))
 		return false;
 
 	f2fs_bug_on(F2FS_F_SB(folio),
@@ -112,7 +115,9 @@ static void f2fs_drop_rpages(struct compress_ctx *cc, int len, bool unlock)
 
 static void f2fs_put_rpages(struct compress_ctx *cc)
 {
-	f2fs_drop_rpages(cc, cc->cluster_size, false);
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
+
+	f2fs_drop_rpages(cc, cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi), false);
 }
 
 static void f2fs_unlock_rpages(struct compress_ctx *cc, int len)
@@ -123,9 +128,11 @@ static void f2fs_unlock_rpages(struct compress_ctx *cc, int len)
 static void f2fs_put_rpages_wbc(struct compress_ctx *cc,
 		struct writeback_control *wbc, bool redirty, bool unlock)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
+	unsigned int nr_folios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
 	unsigned int i;
 
-	for (i = 0; i < cc->cluster_size; i++) {
+	for (i = 0; i < nr_folios; i++) {
 		if (!cc->rpages[i])
 			continue;
 		if (redirty)
@@ -156,22 +163,24 @@ void f2fs_destroy_compress_ctx(struct compress_ctx *cc, bool reuse)
 	cc->rpages = NULL;
 	cc->nr_rpages = 0;
 	cc->nr_cpages = 0;
-	cc->valid_nr_cpages = 0;
+	cc->valid_nr_cblocks = 0;
 	if (!reuse)
 		cc->cluster_idx = NULL_CLUSTER;
 }
 
 void f2fs_compress_ctx_add_page(struct compress_ctx *cc, struct folio *folio)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
 	unsigned int cluster_ofs;
+	pgoff_t lblk = f2fs_folio_lblk(sbi, folio);
 
-	if (!f2fs_cluster_can_merge_page(cc, folio->index))
-		f2fs_bug_on(F2FS_I_SB(cc->inode), 1);
+	if (!f2fs_cluster_can_merge_block(cc, lblk))
+		f2fs_bug_on(sbi, 1);
 
-	cluster_ofs = offset_in_cluster(cc, folio->index);
+	cluster_ofs = offset_in_cluster(cc, lblk);
 	cc->rpages[cluster_ofs] = folio_page(folio, 0);
 	cc->nr_rpages++;
-	cc->cluster_idx = cluster_idx(cc, folio->index);
+	cc->cluster_idx = cluster_idx(cc, lblk);
 }
 
 #ifdef CONFIG_F2FS_FS_LZO
@@ -182,7 +191,7 @@ static int lzo_init_compress_ctx(struct compress_ctx *cc)
 	if (!cc->private)
 		return -ENOMEM;
 
-	cc->clen = lzo1x_worst_compress(PAGE_SIZE << cc->log_cluster_size);
+	cc->clen = lzo1x_worst_compress(F2FS_BLKSIZE(F2FS_I_SB(cc->inode)) << cc->log_cluster_size);
 	return 0;
 }
 
@@ -218,10 +227,11 @@ static int lzo_decompress_pages(struct decompress_io_ctx *dic)
 		return -EIO;
 	}
 
-	if (dic->rlen != PAGE_SIZE << dic->log_cluster_size) {
+	if (dic->rlen != F2FS_BLKSIZE(dic->sbi) << dic->log_cluster_size) {
 		f2fs_err_ratelimited(dic->sbi,
 				"lzo invalid rlen:%zu, expected:%lu",
-				dic->rlen, PAGE_SIZE << dic->log_cluster_size);
+				dic->rlen, (unsigned long)F2FS_BLKSIZE(dic->sbi) <<
+						dic->log_cluster_size);
 		return -EIO;
 	}
 	return 0;
@@ -254,7 +264,7 @@ static int lz4_init_compress_ctx(struct compress_ctx *cc)
 	 * adapt worst compress case, because lz4 compressor can handle
 	 * output budget properly.
 	 */
-	cc->clen = cc->rlen - PAGE_SIZE - COMPRESS_HEADER_SIZE;
+	cc->clen = cc->rlen - F2FS_BLKSIZE(F2FS_I_SB(cc->inode)) - COMPRESS_HEADER_SIZE;
 	return 0;
 }
 
@@ -298,10 +308,11 @@ static int lz4_decompress_pages(struct decompress_io_ctx *dic)
 		return -EIO;
 	}
 
-	if (ret != PAGE_SIZE << dic->log_cluster_size) {
+	if (ret != F2FS_BLKSIZE(dic->sbi) << dic->log_cluster_size) {
 		f2fs_err_ratelimited(dic->sbi,
 				"lz4 invalid ret:%d, expected:%lu",
-				ret, PAGE_SIZE << dic->log_cluster_size);
+				ret, (unsigned long)F2FS_BLKSIZE(dic->sbi) <<
+						dic->log_cluster_size);
 		return -EIO;
 	}
 	return 0;
@@ -356,7 +367,7 @@ static int zstd_init_compress_ctx(struct compress_ctx *cc)
 	cc->private = workspace;
 	cc->private2 = stream;
 
-	cc->clen = cc->rlen - PAGE_SIZE - COMPRESS_HEADER_SIZE;
+	cc->clen = cc->rlen - F2FS_BLKSIZE(F2FS_I_SB(cc->inode)) - COMPRESS_HEADER_SIZE;
 	return 0;
 }
 
@@ -373,7 +384,7 @@ static int zstd_compress_pages(struct compress_ctx *cc)
 	zstd_in_buffer inbuf;
 	zstd_out_buffer outbuf;
 	int src_size = cc->rlen;
-	int dst_size = src_size - PAGE_SIZE - COMPRESS_HEADER_SIZE;
+	int dst_size = src_size - F2FS_BLKSIZE(F2FS_I_SB(cc->inode)) - COMPRESS_HEADER_SIZE;
 	int ret;
 
 	inbuf.pos = 0;
@@ -417,7 +428,7 @@ static int zstd_init_decompress_ctx(struct decompress_io_ctx *dic)
 	void *workspace;
 	unsigned int workspace_size;
 	unsigned int max_window_size =
-			MAX_COMPRESS_WINDOW_SIZE(dic->log_cluster_size);
+			MAX_COMPRESS_WINDOW_SIZE(dic->sbi, dic->log_cluster_size);
 
 	workspace_size = zstd_dstream_workspace_bound(max_window_size);
 
@@ -473,7 +484,7 @@ static int zstd_decompress_pages(struct decompress_io_ctx *dic)
 		f2fs_err_ratelimited(dic->sbi,
 				"%s ZSTD invalid rlen:%zu, expected:%lu",
 				__func__, dic->rlen,
-				PAGE_SIZE << dic->log_cluster_size);
+				(unsigned long)F2FS_BLKSIZE(dic->sbi) << dic->log_cluster_size);
 		return -EIO;
 	}
 
@@ -548,6 +559,10 @@ bool f2fs_is_compress_backend_ready(struct inode *inode)
 {
 	if (!f2fs_compressed_file(inode))
 		return true;
+	/* A cluster smaller than a page is not supported */
+	if (F2FS_I(inode)->i_log_cluster_size <
+			F2FS_LOG_BLKS_PER_PAGE(F2FS_I_SB(inode)))
+		return false;
 	return f2fs_cops[F2FS_I(inode)->i_compress_algorithm];
 }
 
@@ -617,13 +632,23 @@ static void *f2fs_vmap(struct page **pages, unsigned int count)
 	return buf;
 }
 
+static void f2fs_vunmap(void *vaddr, unsigned int count)
+{
+	if (!vaddr)
+		return;
+	vm_unmap_ram((void *)((unsigned long)vaddr & PAGE_MASK), count);
+}
+
 static int f2fs_compress_pages(struct compress_ctx *cc)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
 	struct f2fs_inode_info *fi = F2FS_I(cc->inode);
 	const struct f2fs_compress_ops *cops =
 				f2fs_cops[fi->i_compress_algorithm];
-	unsigned int max_len, new_nr_cpages;
+	unsigned int max_len, new_cblocks;
+	unsigned int nr_rfolios, needed_folios;
+	unsigned int cbuf_blk_ofs = f2fs_has_subpage_blocks(sbi) ? 1 : 0;
+	void *cbuf_vaddr;
 	u32 chksum = 0;
 	int i, ret;
 
@@ -636,9 +661,12 @@ static int f2fs_compress_pages(struct compress_ctx *cc)
 			goto out;
 	}
 
+	nr_rfolios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
+
 	max_len = COMPRESS_HEADER_SIZE + cc->clen;
-	cc->nr_cpages = DIV_ROUND_UP(max_len, PAGE_SIZE);
-	cc->valid_nr_cpages = cc->nr_cpages;
+	cc->valid_nr_cblocks = F2FS_BLK_ALIGN(sbi, max_len);
+	cc->nr_cpages = DIV_ROUND_UP(cbuf_blk_ofs + cc->valid_nr_cblocks,
+					F2FS_BLKS_PER_PAGE(sbi));
 
 	cc->cpages = page_array_alloc(sbi, cc->nr_cpages);
 	if (!cc->cpages) {
@@ -649,23 +677,24 @@ static int f2fs_compress_pages(struct compress_ctx *cc)
 	for (i = 0; i < cc->nr_cpages; i++)
 		cc->cpages[i] = f2fs_compress_alloc_page();
 
-	cc->rbuf = f2fs_vmap(cc->rpages, cc->cluster_size);
+	cc->rbuf = f2fs_vmap(cc->rpages, nr_rfolios);
 	if (!cc->rbuf) {
 		ret = -ENOMEM;
 		goto out_free_cpages;
 	}
 
-	cc->cbuf = f2fs_vmap(cc->cpages, cc->nr_cpages);
-	if (!cc->cbuf) {
+	cbuf_vaddr = f2fs_vmap(cc->cpages, cc->nr_cpages);
+	if (!cbuf_vaddr) {
 		ret = -ENOMEM;
 		goto out_vunmap_rbuf;
 	}
+	cc->cbuf = cbuf_vaddr + F2FS_BLK_TO_BYTES(sbi, cbuf_blk_ofs);
 
 	ret = cops->compress_pages(cc);
 	if (ret)
 		goto out_vunmap_cbuf;
 
-	max_len = PAGE_SIZE * (cc->cluster_size - 1) - COMPRESS_HEADER_SIZE;
+	max_len = F2FS_BLK_TO_BYTES(sbi, cc->cluster_size - 1) - COMPRESS_HEADER_SIZE;
 
 	if (cc->clen > max_len) {
 		ret = -EAGAIN;
@@ -681,17 +710,19 @@ static int f2fs_compress_pages(struct compress_ctx *cc)
 	for (i = 0; i < COMPRESS_DATA_RESERVED_SIZE; i++)
 		cc->cbuf->reserved[i] = cpu_to_le32(0);
 
-	new_nr_cpages = DIV_ROUND_UP(cc->clen + COMPRESS_HEADER_SIZE, PAGE_SIZE);
+	new_cblocks = F2FS_BLK_ALIGN(sbi, cc->clen + COMPRESS_HEADER_SIZE);
 
-	/* zero out any unused part of the last page */
+	/* zero out any unused part of the last block */
 	memset(&cc->cbuf->cdata[cc->clen], 0,
-			(new_nr_cpages * PAGE_SIZE) -
+			F2FS_BLK_TO_BYTES(sbi, new_cblocks) -
 			(cc->clen + COMPRESS_HEADER_SIZE));
 
-	vm_unmap_ram(cc->cbuf, cc->nr_cpages);
-	vm_unmap_ram(cc->rbuf, cc->cluster_size);
+	f2fs_vunmap(cc->cbuf, cc->nr_cpages);
+	f2fs_vunmap(cc->rbuf, nr_rfolios);
 
-	for (i = new_nr_cpages; i < cc->nr_cpages; i++) {
+	needed_folios = DIV_ROUND_UP(cbuf_blk_ofs + new_cblocks,
+					F2FS_BLKS_PER_PAGE(sbi));
+	for (i = needed_folios; i < cc->nr_cpages; i++) {
 		f2fs_compress_free_page(cc->cpages[i]);
 		cc->cpages[i] = NULL;
 	}
@@ -699,16 +730,16 @@ static int f2fs_compress_pages(struct compress_ctx *cc)
 	if (cops->destroy_compress_ctx)
 		cops->destroy_compress_ctx(cc);
 
-	cc->valid_nr_cpages = new_nr_cpages;
+	cc->valid_nr_cblocks = new_cblocks;
 
 	trace_f2fs_compress_pages_end(cc->inode, cc->cluster_idx,
 							cc->clen, ret);
 	return 0;
 
 out_vunmap_cbuf:
-	vm_unmap_ram(cc->cbuf, cc->nr_cpages);
+	f2fs_vunmap(cc->cbuf, cc->nr_cpages);
 out_vunmap_rbuf:
-	vm_unmap_ram(cc->rbuf, cc->cluster_size);
+	f2fs_vunmap(cc->rbuf, nr_rfolios);
 out_free_cpages:
 	for (i = 0; i < cc->nr_cpages; i++) {
 		if (cc->cpages[i])
@@ -737,7 +768,7 @@ void f2fs_decompress_cluster(struct decompress_io_ctx *dic, bool in_task)
 	const struct f2fs_compress_ops *cops =
 			f2fs_cops[fi->i_compress_algorithm];
 	bool bypass_callback = false;
-	int ret;
+	int i, ret;
 
 	trace_f2fs_decompress_pages_start(dic->inode, dic->cluster_idx,
 				dic->cluster_size, fi->i_compress_algorithm);
@@ -754,9 +785,9 @@ void f2fs_decompress_cluster(struct decompress_io_ctx *dic, bool in_task)
 	}
 
 	dic->clen = le32_to_cpu(dic->cbuf->clen);
-	dic->rlen = PAGE_SIZE << dic->log_cluster_size;
+	dic->rlen = F2FS_BLKSIZE(sbi) << dic->log_cluster_size;
 
-	if (dic->clen > PAGE_SIZE * dic->nr_cpages - COMPRESS_HEADER_SIZE) {
+	if (dic->clen > F2FS_BLK_TO_BYTES(sbi, dic->valid_nr_cblocks) - COMPRESS_HEADER_SIZE) {
 		ret = -EFSCORRUPTED;
 
 		/* Avoid f2fs_commit_super in irq context */
@@ -783,6 +814,31 @@ void f2fs_decompress_cluster(struct decompress_io_ctx *dic, bool in_task)
 		}
 	}
 
+	/*
+	 * Folios with f2fs_folio_state were decompressed into bounce pages.
+	 * Copy only the blocks that are not uptodate, so that newer data in
+	 * the uptodate (possibly dirty) blocks is kept.
+	 */
+	for (i = 0; !ret && i < dic->nr_rpages; i++) {
+		struct page *rpage = dic->rpages[i];
+		struct folio *folio;
+		pgoff_t lblk;
+		unsigned int b;
+
+		if (!rpage || dic->tpages[i] == rpage)
+			continue;
+
+		folio = page_folio(rpage);
+		lblk = f2fs_folio_lblk(sbi, folio);
+		for (b = 0; b < f2fs_blocks_per_folio(sbi, folio); b++) {
+			size_t off = F2FS_BLK_TO_BYTES(sbi, b);
+
+			if (!f2fs_ffs_test_blk_uptodate(folio, lblk + b))
+				memcpy_page(rpage, off, dic->tpages[i], off,
+					    F2FS_BLKSIZE(sbi));
+		}
+	}
+
 out_release:
 	f2fs_release_decomp_mem(dic, bypass_callback, false);
 
@@ -792,8 +848,8 @@ out_end_io:
 	f2fs_decompress_end_io(dic, ret, in_task);
 }
 
-static void f2fs_cache_compressed_page(struct f2fs_sb_info *sbi,
-		struct folio *folio, nid_t ino, block_t blkaddr);
+static void f2fs_cache_compressed_block(struct f2fs_sb_info *sbi,
+		struct folio *folio, size_t offset, nid_t ino, block_t blkaddr);
 
 /*
  * This is called when a page of a compressed cluster has been read from disk
@@ -801,29 +857,35 @@ static void f2fs_cache_compressed_page(struct f2fs_sb_info *sbi,
  * page being waited on in the cluster, and if so, it decompresses the cluster
  * (or in the case of a failure, cleans up without actually decompressing).
  */
-void f2fs_end_read_compressed_page(struct folio *folio, bool failed,
-		block_t blkaddr, bool in_task)
+void f2fs_end_read_compressed_page(struct folio *folio, size_t offset,
+		bool failed, block_t blkaddr, unsigned int nr_blocks,
+		bool in_task)
 {
 	struct decompress_io_ctx *dic = folio->private;
 	struct f2fs_sb_info *sbi = dic->sbi;
+	int i;
 
-	dec_cache_count(sbi, F2FS_RD_DATA);
+	sub_cache_counts(sbi, F2FS_RD_DATA, nr_blocks);
 
 	if (failed)
 		WRITE_ONCE(dic->failed, true);
-	else if (blkaddr && in_task)
-		f2fs_cache_compressed_page(sbi, folio,
-					dic->inode->i_ino, blkaddr);
+	else if (blkaddr && in_task) {
+		for (i = 0; i < nr_blocks; i++)
+			f2fs_cache_compressed_block(sbi, folio,
+					offset + F2FS_BLK_TO_BYTES(sbi, i),
+					dic->inode->i_ino,
+					blkaddr + i);
+	}
 
-	if (atomic_dec_and_test(&dic->remaining_pages))
+	if (atomic_sub_and_test(nr_blocks, &dic->remaining_blocks))
 		f2fs_decompress_cluster(dic, in_task);
 }
 
-static bool is_page_in_cluster(struct compress_ctx *cc, pgoff_t index)
+static bool is_block_in_cluster(struct compress_ctx *cc, pgoff_t lblk)
 {
 	if (cc->cluster_idx == NULL_CLUSTER)
 		return true;
-	return cc->cluster_idx == cluster_idx(cc, index);
+	return cc->cluster_idx == cluster_idx(cc, lblk);
 }
 
 bool f2fs_cluster_is_empty(struct compress_ctx *cc)
@@ -833,19 +895,40 @@ bool f2fs_cluster_is_empty(struct compress_ctx *cc)
 
 static bool f2fs_cluster_is_full(struct compress_ctx *cc)
 {
-	return cc->cluster_size == cc->nr_rpages;
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
+	unsigned int nr_folios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
+	int i;
+
+	if (cc->nr_rpages != nr_folios)
+		return false;
+
+	/* PG_dirty is cleared for writeback; without ffs it covered every block */
+	for (i = 0; i < nr_folios; i++) {
+		struct folio *folio = page_folio(cc->rpages[i]);
+		unsigned int nr_blocks = f2fs_blocks_per_folio(sbi, folio);
+		unsigned int start, count;
+
+		if (f2fs_folio_has_ffs(folio) &&
+		    (!f2fs_ffs_dirty_blk_range(folio, 0, nr_blocks,
+					       &start, &count) ||
+		     count != nr_blocks))
+			return false;
+	}
+	return true;
 }
 
-bool f2fs_cluster_can_merge_page(struct compress_ctx *cc, pgoff_t index)
+bool f2fs_cluster_can_merge_block(struct compress_ctx *cc, pgoff_t lblk)
 {
 	if (f2fs_cluster_is_empty(cc))
 		return true;
-	return is_page_in_cluster(cc, index);
+	return is_block_in_cluster(cc, lblk);
 }
 
 bool f2fs_all_cluster_page_ready(struct compress_ctx *cc, struct page **pages,
 				int index, int nr_pages, bool uptodate)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
+	unsigned int nr_folios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
 	unsigned long pgidx = page_folio(pages[index])->index;
 	int i = uptodate ? 0 : 1;
 
@@ -853,13 +936,13 @@ bool f2fs_all_cluster_page_ready(struct compress_ctx *cc, struct page **pages,
 	 * when uptodate set to true, try to check all pages in cluster is
 	 * uptodate or not.
 	 */
-	if (uptodate && (pgidx % cc->cluster_size))
+	if (uptodate && (pgidx % nr_folios))
 		return false;
 
-	if (nr_pages - index < cc->cluster_size)
+	if (nr_pages - index < nr_folios)
 		return false;
 
-	for (; i < cc->cluster_size; i++) {
+	for (; i < nr_folios; i++) {
 		struct folio *folio = page_folio(pages[index + i]);
 
 		if (folio->index != pgidx + i)
@@ -873,17 +956,19 @@ bool f2fs_all_cluster_page_ready(struct compress_ctx *cc, struct page **pages,
 
 static bool cluster_has_invalid_data(struct compress_ctx *cc)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
 	loff_t i_size = i_size_read(cc->inode);
-	unsigned nr_pages = DIV_ROUND_UP(i_size, PAGE_SIZE);
+	unsigned int nr_folios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
 	int i;
 
-	for (i = 0; i < cc->cluster_size; i++) {
+	for (i = 0; i < nr_folios; i++) {
 		struct page *page = cc->rpages[i];
 
-		f2fs_bug_on(F2FS_I_SB(cc->inode), !page);
+		f2fs_bug_on(sbi, !page);
 
-		/* beyond EOF */
-		if (page_folio(page)->index >= nr_pages)
+		/* any block beyond EOF */
+		if (folio_pos(page_folio(page)) +
+		    folio_size(page_folio(page)) - F2FS_BLKSIZE(sbi) >= i_size)
 			return true;
 	}
 	return false;
@@ -1010,17 +1095,17 @@ static int f2fs_decompressed_blocks(struct inode *inode,
 }
 
 /* return whether cluster is compressed one or not */
-int f2fs_is_compressed_cluster(struct inode *inode, pgoff_t index)
+int f2fs_is_compressed_cluster(struct inode *inode, pgoff_t lblk)
 {
 	return __f2fs_cluster_blocks(inode,
-		index >> F2FS_I(inode)->i_log_cluster_size,
+		lblk >> F2FS_I(inode)->i_log_cluster_size,
 		CLUSTER_IS_COMPR);
 }
 
 /* return whether cluster contains non raw blocks or not */
-bool f2fs_is_sparse_cluster(struct inode *inode, pgoff_t index)
+bool f2fs_is_sparse_cluster(struct inode *inode, pgoff_t lblk)
 {
-	unsigned int cluster_idx = index >> F2FS_I(inode)->i_log_cluster_size;
+	unsigned int cluster_idx = lblk >> F2FS_I(inode)->i_log_cluster_size;
 
 	return f2fs_decompressed_blocks(inode, cluster_idx) !=
 		F2FS_I(inode)->i_cluster_size;
@@ -1041,34 +1126,65 @@ static bool cluster_may_compress(struct compress_ctx *cc)
 
 static void set_cluster_writeback(struct compress_ctx *cc)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
+	unsigned int nr_folios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
 	int i;
 
-	for (i = 0; i < cc->cluster_size; i++) {
-		if (cc->rpages[i])
-			set_page_writeback(cc->rpages[i]);
+	for (i = 0; i < nr_folios; i++) {
+		struct folio *folio;
+
+		if (!cc->rpages[i])
+			continue;
+
+		folio = page_folio(cc->rpages[i]);
+		set_page_writeback(cc->rpages[i]);
+		/*
+		 * Attach a folio state before the I/O, as the raw write path
+		 * does, so that the write completion, which does not hold the
+		 * folio lock, never detaches the page private flags kept in
+		 * folio->private. Without it, the cleared PG_dirty covered
+		 * every block, so mark them dirty.
+		 */
+		if (f2fs_is_multiblock_folio(sbi, folio) &&
+		    !f2fs_folio_has_ffs(folio)) {
+			f2fs_ffs_mark_subrange_dirty(folio, 0, folio_size(folio));
+			/* It was accounted as a whole, now its dirty bits are. */
+			f2fs_account_dirty_blocks(cc->inode,
+				-(int)f2fs_blocks_per_folio(sbi, folio));
+		}
 	}
 }
 
 static void cancel_cluster_writeback(struct compress_ctx *cc,
-			struct compress_io_ctx *cic, int submitted)
+			struct compress_io_ctx *cic, int failed_blk)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
+	unsigned int nr_folios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
 	int i;
 
 	/* Wait for submitted IOs. */
-	if (submitted > 1) {
+	if (failed_blk > 1) {
 		f2fs_submit_merged_write(F2FS_I_SB(cc->inode), DATA);
-		while (atomic_read(&cic->pending_pages) !=
-					(cc->valid_nr_cpages - submitted + 1))
+		while (atomic_read(&cic->pending_blocks) !=
+					(cc->valid_nr_cblocks - failed_blk + 1))
 			f2fs_io_schedule_timeout(DEFAULT_SCHEDULE_TIMEOUT);
 	}
 
 	/* Cancel writeback and stay locked. */
-	for (i = 0; i < cc->cluster_size; i++) {
+	for (i = 0; i < nr_folios; i++) {
 		struct folio *folio = page_folio(cc->rpages[i]);
+		unsigned int last_blk_in_folio =
+			((i + 1) << F2FS_LOG_BLKS_PER_PAGE(sbi)) - 1;
 
-		if (i < submitted) {
-			inode_inc_dirty_pages(cc->inode);
+		if (last_blk_in_folio < failed_blk) {
 			folio_lock(folio);
+			/* f2fs_write_compressed_pages() cleared its dirty blocks */
+			if (f2fs_folio_has_ffs(folio))
+				f2fs_ffs_mark_subrange_dirty(folio, 0,
+							folio_size(folio));
+			else
+				f2fs_account_dirty_blocks(cc->inode,
+					f2fs_blocks_per_folio(sbi, folio));
 		}
 		folio_clear_f2fs_gcing(folio);
 		if (folio_test_writeback(folio))
@@ -1078,21 +1194,28 @@ static void cancel_cluster_writeback(struct compress_ctx *cc,
 
 static void set_cluster_dirty(struct compress_ctx *cc)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
+	unsigned int nr_folios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
 	int i;
 
-	for (i = 0; i < cc->cluster_size; i++) {
+	for (i = 0; i < nr_folios; i++) {
 		struct folio *folio;
 
 		if (!cc->rpages[i])
 			continue;
 		folio = page_folio(cc->rpages[i]);
-		folio_mark_dirty(folio);
+		/*
+		 * The whole cluster is rewritten. This also attaches a folio
+		 * state to a multi-block folio before it is dirtied.
+		 */
+		f2fs_ffs_mark_subrange_dirty(folio, 0, folio_size(folio));
+		f2fs_folio_mark_dirty(folio);
 		folio_set_f2fs_gcing(folio);
 	}
 }
 
 static int prepare_compress_overwrite(struct compress_ctx *cc,
-		struct page **pagep, pgoff_t index, void **fsdata)
+		struct page **pagep, pgoff_t lblk, void **fsdata)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
 	struct address_space *mapping = cc->inode->i_mapping;
@@ -1111,9 +1234,13 @@ retry:
 	if (ret)
 		return ret;
 
+	unsigned int nr_folios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
+
 	/* keep folio reference to avoid page reclaim */
-	for (i = 0; i < cc->cluster_size; i++) {
-		folio = f2fs_filemap_get_folio(mapping, start_idx + i,
+	for (i = 0; i < nr_folios; i++) {
+		pgoff_t f_index = f2fs_lblk_to_folio_index(sbi, start_idx) + i;
+
+		folio = f2fs_filemap_get_folio(mapping, f_index,
 				fgp_flag, GFP_NOFS);
 		if (IS_ERR(folio)) {
 			ret = PTR_ERR(folio);
@@ -1143,10 +1270,12 @@ retry:
 			goto out;
 	}
 
-	for (i = 0; i < cc->cluster_size; i++) {
+	for (i = 0; i < nr_folios; i++) {
+		pgoff_t f_index = f2fs_lblk_to_folio_index(sbi, start_idx) + i;
+
 		f2fs_bug_on(sbi, cc->rpages[i]);
 
-		folio = filemap_lock_folio(mapping, start_idx + i);
+		folio = filemap_lock_folio(mapping, f_index);
 		if (IS_ERR(folio)) {
 			/* folio could be truncated */
 			goto release_and_retry;
@@ -1167,7 +1296,7 @@ release_and_retry:
 
 	if (likely(!ret)) {
 		*fsdata = cc->rpages;
-		*pagep = cc->rpages[offset_in_cluster(cc, index)];
+		*pagep = cc->rpages[offset_in_cluster(cc, lblk)];
 		return cc->cluster_size;
 	}
 
@@ -1180,23 +1309,23 @@ out:
 }
 
 int f2fs_prepare_compress_overwrite(struct inode *inode,
-		struct page **pagep, pgoff_t index, void **fsdata)
+		struct page **pagep, pgoff_t lblk, void **fsdata)
 {
 	struct compress_ctx cc = {
 		.inode = inode,
 		.log_cluster_size = F2FS_I(inode)->i_log_cluster_size,
 		.cluster_size = F2FS_I(inode)->i_cluster_size,
-		.cluster_idx = index >> F2FS_I(inode)->i_log_cluster_size,
+		.cluster_idx = lblk >> F2FS_I(inode)->i_log_cluster_size,
 		.rpages = NULL,
 		.nr_rpages = 0,
 		.vi = NULL, /* can't write to fsverity files */
 	};
 
-	return prepare_compress_overwrite(&cc, pagep, index, fsdata);
+	return prepare_compress_overwrite(&cc, pagep, lblk, fsdata);
 }
 
 bool f2fs_compress_write_end(struct inode *inode, void *fsdata,
-					pgoff_t index, unsigned copied)
+					pgoff_t lblk, unsigned int copied)
 
 {
 	struct compress_ctx cc = {
@@ -1206,7 +1335,7 @@ bool f2fs_compress_write_end(struct inode *inode, void *fsdata,
 		.rpages = fsdata,
 	};
 	struct folio *folio = page_folio(cc.rpages[0]);
-	bool first_index = (index == folio->index);
+	bool first_index = (lblk == f2fs_folio_lblk(F2FS_I_SB(inode), folio));
 
 	if (copied)
 		set_cluster_dirty(&cc);
@@ -1219,12 +1348,15 @@ bool f2fs_compress_write_end(struct inode *inode, void *fsdata,
 
 int f2fs_truncate_partial_cluster(struct inode *inode, u64 from, bool lock)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	void *fsdata = NULL;
 	struct page *pagep;
 	struct page **rpages;
 	int log_cluster_size = F2FS_I(inode)->i_log_cluster_size;
-	pgoff_t start_idx = from >> (PAGE_SHIFT + log_cluster_size) <<
+	pgoff_t start_idx = (from >> (sbi->log_blocksize + log_cluster_size)) <<
 							log_cluster_size;
+	unsigned int nr_folios = (1 << log_cluster_size) >>
+					F2FS_LOG_BLKS_PER_PAGE(sbi);
 	int i;
 	int err;
 
@@ -1248,9 +1380,9 @@ repeat:
 
 	rpages = fsdata;
 
-	for (i = (1 << log_cluster_size) - 1; i >= 0; i--) {
+	for (i = nr_folios - 1; i >= 0; i--) {
 		struct folio *folio = page_folio(rpages[i]);
-		loff_t start = (loff_t)folio->index << PAGE_SHIFT;
+		loff_t start = folio_pos(folio);
 		loff_t offset = from > start ? from - start : 0;
 
 		folio_zero_segment(folio, offset, folio_size(folio));
@@ -1262,14 +1394,31 @@ repeat:
 	f2fs_compress_write_end(inode, fsdata, start_idx, true);
 
 	err = filemap_write_and_wait_range(inode->i_mapping,
-			round_down(from, 1 << log_cluster_size << PAGE_SHIFT),
+			round_down(from, 1 << log_cluster_size << sbi->log_blocksize),
 			LLONG_MAX);
 	if (err)
 		return err;
 
 	truncate_pagecache(inode, from);
 
-	return f2fs_do_truncate_blocks(inode, round_up(from, PAGE_SIZE), lock);
+	return f2fs_do_truncate_blocks(inode, round_up(from, F2FS_BLKSIZE(sbi)),
+				       lock);
+}
+
+/*
+ * Page cache index tagged on the @i-th bounce page of a cluster.  With
+ * subpage blocks, compressed block k is kept at block offset k of the
+ * cluster, so the first bounce page also covers the unused slot of the
+ * COMPRESS_ADDR block and the bounce pages map 1:1 to the folios of the
+ * cluster.  Otherwise there is no bounce page for COMPRESS_ADDR and page
+ * i holds block i + 1.
+ */
+static pgoff_t f2fs_cpage_index(struct f2fs_sb_info *sbi, pgoff_t start_idx,
+				unsigned int i)
+{
+	if (f2fs_has_subpage_blocks(sbi))
+		return f2fs_lblk_to_folio_index(sbi, start_idx) + i;
+	return start_idx + 1 + i;
 }
 
 static int f2fs_write_compressed_pages(struct compress_ctx *cc,
@@ -1288,6 +1437,7 @@ static int f2fs_write_compressed_pages(struct compress_ctx *cc,
 		.op_flags = wbc_to_write_flags(wbc),
 		.old_blkaddr = NEW_ADDR,
 		.folio = NULL,
+		.folio_blkcnt = 1,
 		.encrypted_page = NULL,
 		.compressed_page = NULL,
 		.io_type = io_type,
@@ -1298,8 +1448,9 @@ static int f2fs_write_compressed_pages(struct compress_ctx *cc,
 	struct node_info ni;
 	struct compress_io_ctx *cic;
 	struct f2fs_lock_context lc;
+	unsigned int nr_rfolios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
 	pgoff_t start_idx = start_idx_of_cluster(cc);
-	unsigned int last_index = cc->cluster_size - 1;
+	unsigned int blk_idx, c_folio_idx, c_folio_ofs;
 	loff_t psize;
 	int i, err;
 	bool quota_inode = IS_NOQUOTA(inode);
@@ -1333,10 +1484,10 @@ static int f2fs_write_compressed_pages(struct compress_ctx *cc,
 			goto out_put_dnode;
 	}
 
-	folio = page_folio(cc->rpages[last_index]);
+	folio = page_folio(cc->rpages[nr_rfolios - 1]);
 	psize = folio_next_pos(folio);
 
-	err = f2fs_get_node_info(fio.sbi, dn.nid, &ni, false);
+	err = f2fs_get_node_info(sbi, dn.nid, &ni, false);
 	if (err)
 		goto out_put_dnode;
 
@@ -1348,18 +1499,25 @@ static int f2fs_write_compressed_pages(struct compress_ctx *cc,
 
 	cic->magic = F2FS_COMPRESSED_PAGE_MAGIC;
 	cic->inode = inode;
-	atomic_set(&cic->pending_pages, cc->valid_nr_cpages);
-	cic->rpages = page_array_alloc(sbi, cc->cluster_size);
+	atomic_set(&cic->pending_blocks, cc->valid_nr_cblocks);
+	cic->rpages = page_array_alloc(sbi, nr_rfolios);
 	if (!cic->rpages)
 		goto out_put_cic;
 
-	cic->nr_rpages = cc->cluster_size;
+	cic->nr_rpages = nr_rfolios;
+	cic->cpages = cc->cpages;
+	cic->nr_cpages = cc->nr_cpages;
+	cc->cpages = NULL;
 
-	for (i = 0; i < cc->valid_nr_cpages; i++) {
-		f2fs_set_compressed_page(cc->cpages[i], inode,
-				page_folio(cc->rpages[i + 1])->index, cic);
-		fio.compressed_page = cc->cpages[i];
+	for (i = 0; i < cic->nr_cpages; i++) {
+		if (!cic->cpages[i])
+			break;
 
+		f2fs_set_compressed_page(cic->cpages[i], inode,
+				f2fs_cpage_index(sbi, start_idx, i), cic);
+	}
+
+	for (i = 0; i < cc->valid_nr_cblocks; i++) {
 		fio.old_blkaddr = data_blkaddr(dn.inode, dn.node_entry,
 						dn.ofs_in_node + i + 1);
 
@@ -1369,14 +1527,15 @@ static int f2fs_write_compressed_pages(struct compress_ctx *cc,
 
 	set_cluster_writeback(cc);
 
-	for (i = 0; i < cc->cluster_size; i++)
+	for (i = 0; i < nr_rfolios; i++)
 		cic->rpages[i] = cc->rpages[i];
 
 	for (i = 0; i < cc->cluster_size; i++, dn.ofs_in_node++) {
 		block_t blkaddr;
+		unsigned int r_idx = i >> F2FS_LOG_BLKS_PER_PAGE(sbi);
 
 		blkaddr = f2fs_data_blkaddr(&dn);
-		fio.folio = page_folio(cc->rpages[i]);
+		fio.folio = page_folio(cc->rpages[r_idx]);
 		fio.old_blkaddr = blkaddr;
 
 		/* cluster header */
@@ -1392,7 +1551,7 @@ static int f2fs_write_compressed_pages(struct compress_ctx *cc,
 		if (fio.compr_blocks && __is_valid_data_blkaddr(blkaddr))
 			fio.compr_blocks++;
 
-		if (i > cc->valid_nr_cpages) {
+		if (i > cc->valid_nr_cblocks) {
 			if (__is_valid_data_blkaddr(blkaddr)) {
 				f2fs_invalidate_blocks(sbi, blkaddr, 1);
 				f2fs_update_data_blkaddr(&dn, NEW_ADDR);
@@ -1402,9 +1561,13 @@ static int f2fs_write_compressed_pages(struct compress_ctx *cc,
 
 		f2fs_bug_on(fio.sbi, blkaddr == NULL_ADDR);
 
-		fio.compressed_page = cc->cpages[i - 1];
+		blk_idx = f2fs_has_subpage_blocks(sbi) ? i : (i - 1);
+		c_folio_idx = blk_idx >> F2FS_LOG_BLKS_PER_PAGE(sbi);
+		c_folio_ofs = blk_idx % F2FS_BLKS_PER_PAGE(sbi);
 
-		cc->cpages[i - 1] = NULL;
+		fio.compressed_page = cic->cpages[c_folio_idx];
+		fio.folio_offset = c_folio_ofs;
+
 		fio.submitted = 0;
 		f2fs_outplace_write_data(&dn, &fio);
 		if (unlikely(!fio.submitted)) {
@@ -1414,14 +1577,19 @@ static int f2fs_write_compressed_pages(struct compress_ctx *cc,
 		}
 		(*submitted)++;
 unlock_continue:
-		inode_dec_dirty_pages(cc->inode);
-		folio_unlock(fio.folio);
+		if ((i + 1) % F2FS_BLKS_PER_PAGE(sbi) == 0) {
+			f2fs_folio_clear_dirty_blocks(fio.folio, true);
+			folio_unlock(fio.folio);
+		}
 	}
+
+	/* count pages like the raw write path */
+	*submitted = DIV_ROUND_UP(*submitted, F2FS_BLKS_PER_PAGE(sbi));
 
 	if (fio.compr_blocks)
 		f2fs_i_compr_blocks_update(inode, fio.compr_blocks - 1, false);
-	f2fs_i_compr_blocks_update(inode, cc->valid_nr_cpages, true);
-	add_compr_block_stat(inode, cc->valid_nr_cpages);
+	f2fs_i_compr_blocks_update(inode, cc->valid_nr_cblocks, true);
+	add_compr_block_stat(inode, cc->valid_nr_cblocks);
 
 	set_inode_flag(cc->inode, FI_APPEND_WRITE);
 
@@ -1437,13 +1605,18 @@ unlock_continue:
 	spin_unlock(&fi->i_size_lock);
 
 	f2fs_put_rpages(cc);
-	page_array_free(sbi, cc->cpages, cc->nr_cpages);
-	cc->cpages = NULL;
 	f2fs_destroy_compress_ctx(cc, false);
 	return 0;
 
 out_free_page_array:
-	page_array_free(sbi, cic->rpages, cc->cluster_size);
+	page_array_free(sbi, cic->rpages, nr_rfolios);
+
+	for (i = 0; i < cic->nr_cpages; i++) {
+		if (!cic->cpages[i])
+			continue;
+		f2fs_compress_free_page(cic->cpages[i]);
+	}
+	page_array_free(sbi, cic->cpages, cic->nr_cpages);
 out_put_cic:
 	kmem_cache_free(cic_entry_slab, cic);
 out_put_dnode:
@@ -1454,18 +1627,21 @@ out_unlock_op:
 	else
 		f2fs_unlock_op(sbi, &lc);
 out_free:
-	for (i = 0; i < cc->valid_nr_cpages; i++) {
-		f2fs_compress_free_page(cc->cpages[i]);
-		cc->cpages[i] = NULL;
+	if (cc->cpages) {
+		for (i = 0; i < cc->nr_cpages; i++) {
+			if (!cc->cpages[i])
+				continue;
+			f2fs_compress_free_page(cc->cpages[i]);
+		}
+		page_array_free(sbi, cc->cpages, cc->nr_cpages);
+		cc->cpages = NULL;
 	}
-	page_array_free(sbi, cc->cpages, cc->nr_cpages);
-	cc->cpages = NULL;
 	return -EAGAIN;
 }
 
-void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio)
+void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio,
+				unsigned int nr_blocks)
 {
-	struct page *page = &folio->page;
 	struct f2fs_sb_info *sbi = bio->bi_private;
 	struct compress_io_ctx *cic = folio->private;
 	enum count_type type = WB_DATA_TYPE(folio, true);
@@ -1474,12 +1650,16 @@ void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio)
 	if (unlikely(bio->bi_status != BLK_STS_OK))
 		mapping_set_error(cic->inode->i_mapping, -EIO);
 
-	f2fs_compress_free_page(page);
-
-	if (atomic_dec_return(&cic->pending_pages)) {
-		dec_cache_count(sbi, type);
+	if (!atomic_sub_and_test(nr_blocks, &cic->pending_blocks)) {
+		sub_cache_counts(sbi, type, nr_blocks);
 		return;
 	}
+
+	for (i = 0; i < cic->nr_cpages; i++) {
+		if (cic->cpages[i])
+			f2fs_compress_free_page(cic->cpages[i]);
+	}
+	page_array_free(sbi, cic->cpages, cic->nr_cpages);
 
 	for (i = 0; i < cic->nr_rpages; i++) {
 		struct folio *rfolio;
@@ -1494,12 +1674,12 @@ void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio)
 	kmem_cache_free(cic_entry_slab, cic);
 
 	/*
-	 * Make sure dec_cache_count() is the last access to sbi.
+	 * Make sure sub_cache_counts() is the last access to sbi.
 	 * Once it drops the F2FS_WB_CP_DATA counter to zero, the
 	 * unmount thread can proceed to destroy sbi and
 	 * sbi->page_array_slab.
 	 */
-	dec_cache_count(sbi, type);
+	sub_cache_counts(sbi, type, nr_blocks);
 }
 
 static int f2fs_write_raw_pages(struct compress_ctx *cc,
@@ -1512,10 +1692,12 @@ static int f2fs_write_raw_pages(struct compress_ctx *cc,
 	struct f2fs_lock_context lc;
 	int submitted, compr_blocks, i;
 	int ret = 0;
+	unsigned int nr_folios = cc->cluster_size >>
+					F2FS_LOG_BLKS_PER_PAGE(sbi);
 
 	compr_blocks = f2fs_compressed_blocks(cc);
 
-	for (i = 0; i < cc->cluster_size; i++) {
+	for (i = 0; i < nr_folios; i++) {
 		if (!cc->rpages[i])
 			continue;
 
@@ -1530,7 +1712,7 @@ static int f2fs_write_raw_pages(struct compress_ctx *cc,
 	if (compr_blocks > 0)
 		f2fs_lock_op(sbi, &lc);
 
-	for (i = 0; i < cc->cluster_size; i++) {
+	for (i = 0; i < nr_folios; i++) {
 		struct folio *folio;
 
 		if (!cc->rpages[i])
@@ -1590,6 +1772,34 @@ out:
 	return ret;
 }
 
+/*
+ * A compressed cluster is rewritten as a whole, as set_cluster_dirty() does.
+ * With subpage blocks, a dirty folio can have only some of its blocks dirty
+ * (e.g. defragment), so dirty the rest before trying to compress.
+ */
+static void dirty_partial_compressed_cluster(struct compress_ctx *cc)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
+	unsigned int nr_folios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
+	int i;
+
+	if (cc->nr_rpages != nr_folios || f2fs_cluster_is_full(cc))
+		return;
+	for (i = 0; i < nr_folios; i++)
+		if (!folio_test_uptodate(page_folio(cc->rpages[i])))
+			return;
+	if (f2fs_compressed_blocks(cc) <= 0)
+		return;
+	for (i = 0; i < nr_folios; i++) {
+		struct folio *folio = page_folio(cc->rpages[i]);
+
+		/* A folio without a folio state is dirty as a whole. */
+		if (f2fs_folio_has_ffs(folio))
+			f2fs_ffs_mark_subrange_dirty(folio, 0,
+						     folio_size(folio));
+	}
+}
+
 int f2fs_write_multi_pages(struct compress_ctx *cc,
 					int *submitted,
 					struct writeback_control *wbc,
@@ -1598,6 +1808,8 @@ int f2fs_write_multi_pages(struct compress_ctx *cc,
 	int err;
 
 	*submitted = 0;
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(cc->inode)))
+		dirty_partial_compressed_cluster(cc);
 	if (cluster_may_compress(cc)) {
 		err = f2fs_compress_pages(cc);
 		if (err == -EAGAIN) {
@@ -1634,17 +1846,27 @@ static int f2fs_prepare_decomp_mem(struct decompress_io_ctx *dic,
 		bool pre_alloc)
 {
 	const struct f2fs_compress_ops *cops = f2fs_cops[dic->compress_algorithm];
+	unsigned int nr_rfolios = dic->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(dic->sbi);
+	unsigned int cbuf_blk_ofs = f2fs_has_subpage_blocks(dic->sbi) ? 1 : 0;
+	void *cbuf_vaddr;
 	int i;
 
 	if (!allow_memalloc_for_decomp(dic->sbi, pre_alloc))
 		return 0;
 
-	dic->tpages = page_array_alloc(dic->sbi, dic->cluster_size);
+	dic->tpages = page_array_alloc(dic->sbi, nr_rfolios);
 	if (!dic->tpages)
 		return -ENOMEM;
 
-	for (i = 0; i < dic->cluster_size; i++) {
-		if (dic->rpages[i]) {
+	for (i = 0; i < nr_rfolios; i++) {
+		/*
+		 * A folio with f2fs_folio_state may have uptodate blocks newer
+		 * than the on-disk cluster (e.g., dirty blocks left after a
+		 * partial truncate). Decompress it into a bounce page instead,
+		 * see f2fs_decompress_cluster().
+		 */
+		if (dic->rpages[i] &&
+		    !f2fs_folio_has_ffs(page_folio(dic->rpages[i]))) {
 			dic->tpages[i] = dic->rpages[i];
 			continue;
 		}
@@ -1652,13 +1874,15 @@ static int f2fs_prepare_decomp_mem(struct decompress_io_ctx *dic,
 		dic->tpages[i] = f2fs_compress_alloc_page();
 	}
 
-	dic->rbuf = f2fs_vmap(dic->tpages, dic->cluster_size);
+	dic->rbuf = f2fs_vmap(dic->tpages, nr_rfolios);
 	if (!dic->rbuf)
 		return -ENOMEM;
 
-	dic->cbuf = f2fs_vmap(dic->cpages, dic->nr_cpages);
-	if (!dic->cbuf)
+	cbuf_vaddr = f2fs_vmap(dic->cpages, dic->nr_cpages);
+	if (!cbuf_vaddr)
 		return -ENOMEM;
+
+	dic->cbuf = cbuf_vaddr + F2FS_BLK_TO_BYTES(dic->sbi, cbuf_blk_ofs);
 
 	if (cops->init_decompress_ctx)
 		return cops->init_decompress_ctx(dic);
@@ -1670,6 +1894,7 @@ static void f2fs_release_decomp_mem(struct decompress_io_ctx *dic,
 		bool bypass_destroy_callback, bool pre_alloc)
 {
 	const struct f2fs_compress_ops *cops = f2fs_cops[dic->compress_algorithm];
+	unsigned int nr_rfolios = dic->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(dic->sbi);
 
 	if (!allow_memalloc_for_decomp(dic->sbi, pre_alloc))
 		return;
@@ -1677,11 +1902,15 @@ static void f2fs_release_decomp_mem(struct decompress_io_ctx *dic,
 	if (!bypass_destroy_callback && cops->destroy_decompress_ctx)
 		cops->destroy_decompress_ctx(dic);
 
-	if (dic->cbuf)
-		vm_unmap_ram(dic->cbuf, dic->nr_cpages);
+	if (dic->cbuf) {
+		f2fs_vunmap(dic->cbuf, dic->nr_cpages);
+		dic->cbuf = NULL;
+	}
 
-	if (dic->rbuf)
-		vm_unmap_ram(dic->rbuf, dic->cluster_size);
+	if (dic->rbuf) {
+		f2fs_vunmap(dic->rbuf, nr_rfolios);
+		dic->rbuf = NULL;
+	}
 }
 
 static void f2fs_free_dic(struct decompress_io_ctx *dic,
@@ -1692,13 +1921,17 @@ struct decompress_io_ctx *f2fs_alloc_dic(struct compress_ctx *cc)
 	struct decompress_io_ctx *dic;
 	pgoff_t start_idx = start_idx_of_cluster(cc);
 	struct f2fs_sb_info *sbi = F2FS_I_SB(cc->inode);
+	unsigned int nr_rfolios = cc->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
+	unsigned int cbuf_blk_ofs = f2fs_has_subpage_blocks(sbi) ? 1 : 0;
+	unsigned int nr_cpages = DIV_ROUND_UP(cbuf_blk_ofs + cc->valid_nr_cblocks,
+					F2FS_BLKS_PER_PAGE(sbi));
 	int i, ret;
 
 	dic = f2fs_kmem_cache_alloc(dic_entry_slab, GFP_F2FS_ZERO, false, sbi);
 	if (!dic)
 		return ERR_PTR(-ENOMEM);
 
-	dic->rpages = page_array_alloc(sbi, cc->cluster_size);
+	dic->rpages = page_array_alloc(sbi, nr_rfolios);
 	if (!dic->rpages) {
 		kmem_cache_free(dic_entry_slab, dic);
 		return ERR_PTR(-ENOMEM);
@@ -1708,31 +1941,32 @@ struct decompress_io_ctx *f2fs_alloc_dic(struct compress_ctx *cc)
 	dic->inode = cc->inode;
 	dic->sbi = sbi;
 	dic->compress_algorithm = F2FS_I(cc->inode)->i_compress_algorithm;
-	atomic_set(&dic->remaining_pages, cc->nr_cpages);
+	atomic_set(&dic->remaining_blocks, cc->valid_nr_cblocks);
 	dic->cluster_idx = cc->cluster_idx;
 	dic->cluster_size = cc->cluster_size;
 	dic->log_cluster_size = cc->log_cluster_size;
-	dic->nr_cpages = cc->nr_cpages;
+	dic->valid_nr_cblocks = cc->valid_nr_cblocks;
+	dic->nr_cpages = nr_cpages;
 	refcount_set(&dic->refcnt, 1);
 	dic->failed = false;
 	dic->vi = cc->vi;
 
-	for (i = 0; i < dic->cluster_size; i++)
+	for (i = 0; i < nr_rfolios; i++)
 		dic->rpages[i] = cc->rpages[i];
-	dic->nr_rpages = cc->cluster_size;
+	dic->nr_rpages = nr_rfolios;
 
-	dic->cpages = page_array_alloc(sbi, dic->nr_cpages);
+	dic->cpages = page_array_alloc(sbi, nr_cpages);
 	if (!dic->cpages) {
 		ret = -ENOMEM;
 		goto out_free;
 	}
 
-	for (i = 0; i < dic->nr_cpages; i++) {
+	for (i = 0; i < nr_cpages; i++) {
 		struct page *page;
 
 		page = f2fs_compress_alloc_page();
 		f2fs_set_compressed_page(page, cc->inode,
-					start_idx + i + 1, dic);
+				f2fs_cpage_index(sbi, start_idx, i), dic);
 		dic->cpages[i] = page;
 	}
 
@@ -1753,18 +1987,19 @@ static void f2fs_free_dic(struct decompress_io_ctx *dic,
 	int i;
 	/* use sbi in dic to avoid UFA of dic->inode*/
 	struct f2fs_sb_info *sbi = dic->sbi;
+	unsigned int nr_rfolios = dic->cluster_size >> F2FS_LOG_BLKS_PER_PAGE(sbi);
 
 	f2fs_release_decomp_mem(dic, bypass_destroy_callback, true);
 
 	if (dic->tpages) {
-		for (i = 0; i < dic->cluster_size; i++) {
-			if (dic->rpages[i])
+		for (i = 0; i < nr_rfolios; i++) {
+			if (dic->tpages[i] == dic->rpages[i])
 				continue;
 			if (!dic->tpages[i])
 				continue;
 			f2fs_compress_free_page(dic->tpages[i]);
 		}
-		page_array_free(sbi, dic->tpages, dic->cluster_size);
+		page_array_free(sbi, dic->tpages, nr_rfolios);
 	}
 
 	if (dic->cpages) {
@@ -1807,15 +2042,19 @@ static void f2fs_verify_cluster(struct work_struct *work)
 	int i;
 
 	/* Verify, update, and unlock the decompressed pages. */
-	for (i = 0; i < dic->cluster_size; i++) {
+	for (i = 0; i < dic->nr_rpages; i++) {
 		struct page *rpage = dic->rpages[i];
 		struct folio *rfolio;
 
 		if (!rpage)
 			continue;
 		rfolio = page_folio(rpage);
-		if (fsverity_verify_folio(dic->vi, rfolio))
+		if (fsverity_verify_folio(dic->vi, rfolio)) {
+			if (f2fs_is_multiblock_folio(dic->sbi, rfolio))
+				f2fs_ffs_mark_subrange_uptodate(rfolio, 0,
+							folio_size(rfolio));
 			folio_mark_uptodate(rfolio);
+		}
 		folio_unlock(rfolio);
 	}
 
@@ -1844,16 +2083,20 @@ void f2fs_decompress_end_io(struct decompress_io_ctx *dic, bool failed,
 	}
 
 	/* Update and unlock the cluster's pagecache pages. */
-	for (i = 0; i < dic->cluster_size; i++) {
+	for (i = 0; i < dic->nr_rpages; i++) {
 		struct page *rpage = dic->rpages[i];
 
 		if (!rpage)
 			continue;
 
-		if (failed)
+		if (failed) {
 			ClearPageUptodate(rpage);
-		else
+		} else {
+			if (f2fs_is_multiblock_folio(dic->sbi, page_folio(rpage)))
+				f2fs_ffs_mark_subrange_uptodate(page_folio(rpage), 0,
+								folio_size(page_folio(rpage)));
 			SetPageUptodate(rpage);
+		}
 		unlock_page(rpage);
 	}
 
@@ -1911,8 +2154,8 @@ void f2fs_invalidate_compress_pages_range(struct f2fs_sb_info *sbi,
 	f2fs_drop_cache_range(COMPRESS_CACHE(sbi), blkaddr, len, false);
 }
 
-static void f2fs_cache_compressed_page(struct f2fs_sb_info *sbi,
-		struct folio *folio, nid_t ino, block_t blkaddr)
+static void f2fs_cache_compressed_block(struct f2fs_sb_info *sbi,
+		struct folio *folio, size_t offset, nid_t ino, block_t blkaddr)
 {
 	struct f2fs_cached_block *entry;
 
@@ -1956,13 +2199,14 @@ static void f2fs_cache_compressed_page(struct f2fs_sb_info *sbi,
 	}
 
 	entry->ino = ino;
-	memcpy(cache_address(entry), folio_address(folio), sbi->blocksize);
+	memcpy(cache_address(entry), folio_address(folio) + offset,
+							sbi->blocksize);
 	f2fs_cache_set_uptodate(entry);
 	f2fs_put_cache(entry, true);
 }
 
-bool f2fs_load_compressed_folio(struct f2fs_sb_info *sbi, struct folio *folio,
-								block_t blkaddr)
+bool f2fs_load_compressed_block(struct f2fs_sb_info *sbi, struct folio *folio,
+				size_t offset, block_t blkaddr)
 {
 	struct f2fs_cached_block *entry;
 	bool hitted = false;
@@ -1977,8 +2221,8 @@ bool f2fs_load_compressed_folio(struct f2fs_sb_info *sbi, struct folio *folio,
 		if (f2fs_is_compress_cache(entry) &&
 				f2fs_cache_test_uptodate(entry)) {
 			atomic_inc(&sbi->compress_page_hit);
-			memcpy(folio_address(folio),
-				cache_address(entry), folio_size(folio));
+			memcpy(folio_address(folio) + offset,
+				cache_address(entry), sbi->blocksize);
 			hitted = true;
 		}
 		f2fs_put_cache(entry, true);

@@ -679,7 +679,9 @@ DEFINE_STATEID_EVENT(layout_get_lookup_fail);
 DEFINE_STATEID_EVENT(layout_commit_lookup_fail);
 DEFINE_STATEID_EVENT(layout_return_lookup_fail);
 DEFINE_STATEID_EVENT(layout_recall);
+DEFINE_STATEID_EVENT(layout_recall_empty);
 DEFINE_STATEID_EVENT(layout_recall_done);
+DEFINE_STATEID_EVENT(layout_recall_new_seqid);
 DEFINE_STATEID_EVENT(layout_recall_fail);
 DEFINE_STATEID_EVENT(layout_recall_release);
 
@@ -2290,25 +2292,6 @@ TRACE_EVENT(nfsd_ctl_time,
 	),
 	TP_printk("file=%s time=%d",
 		__get_str(name), __entry->time
-	)
-);
-
-TRACE_EVENT(nfsd_ctl_recoverydir,
-	TP_PROTO(
-		const struct net *net,
-		const char *recdir
-	),
-	TP_ARGS(net, recdir),
-	TP_STRUCT__entry(
-		__field(unsigned int, netns_ino)
-		__string(recdir, recdir)
-	),
-	TP_fast_assign(
-		__entry->netns_ino = net->ns.inum;
-		__assign_str(recdir);
-	),
-	TP_printk("recdir=%s",
-		__get_str(recdir)
 	)
 );
 

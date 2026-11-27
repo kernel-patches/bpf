@@ -3,6 +3,10 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <fcntl.h>
+#include <sched.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
+#include <sys/xattr.h>
 #include <test_progs.h>
 #include "uprobe_multi.skel.h"
 #include "uprobe_multi_bench.skel.h"
@@ -572,6 +576,141 @@ static void test_attach_api_fails(void)
 cleanup:
 	if (link_fd >= 0)
 		close(link_fd);
+	uprobe_multi__destroy(skel);
+}
+
+enum ovl_no_data_stage {
+	OVL_NO_DATA_SETUP,
+	OVL_NO_DATA_MOUNT,
+	OVL_NO_DATA_ATTACH,
+};
+
+struct ovl_no_data_result {
+	enum ovl_no_data_stage stage;
+	int err;
+};
+
+/*
+ * Runs in a child in its own mount namespace. Create an overlayfs with a
+ * metacopy file whose redirect into a data-only layer points at nothing
+ * and try to attach to it.
+ */
+static void ovl_no_data_child(int prog_fd, const char *dir, int wfd)
+{
+	struct ovl_no_data_result res = { .stage = OVL_NO_DATA_SETUP };
+	LIBBPF_OPTS(bpf_link_create_opts, opts);
+	char path[PATH_MAX], data[PATH_MAX * 2 + 32];
+	unsigned long offset = 0;
+	int fd;
+
+	if (unshare(CLONE_NEWNS) ||
+	    mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) ||
+	    mount("tmpfs", dir, "tmpfs", 0, NULL))
+		goto out_errno;
+
+	snprintf(path, sizeof(path), "%s/lower", dir);
+	if (mkdir(path, 0755))
+		goto out_errno;
+	snprintf(path, sizeof(path), "%s/data", dir);
+	if (mkdir(path, 0755))
+		goto out_errno;
+	snprintf(path, sizeof(path), "%s/merged", dir);
+	if (mkdir(path, 0755))
+		goto out_errno;
+
+	snprintf(path, sizeof(path), "%s/lower/f", dir);
+	fd = open(path, O_CREAT | O_WRONLY, 0755);
+	if (fd < 0)
+		goto out_errno;
+	close(fd);
+	if (setxattr(path, "trusted.overlay.metacopy", "", 0, 0) ||
+	    setxattr(path, "trusted.overlay.redirect", "/missing",
+		     strlen("/missing"), 0))
+		goto out_errno;
+
+	res.stage = OVL_NO_DATA_MOUNT;
+	snprintf(data, sizeof(data), "lowerdir=%s/lower::%s/data", dir, dir);
+	snprintf(path, sizeof(path), "%s/merged", dir);
+	if (mount("overlay", path, "overlay", 0, data))
+		goto out_errno;
+
+	res.stage = OVL_NO_DATA_ATTACH;
+	snprintf(path, sizeof(path), "%s/merged/f", dir);
+	opts.uprobe_multi.path = path;
+	opts.uprobe_multi.offsets = &offset;
+	opts.uprobe_multi.cnt = 1;
+	res.err = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
+	if (res.err >= 0)
+		close(res.err);
+	goto out;
+
+out_errno:
+	res.err = -errno;
+out:
+	if (write(wfd, &res, sizeof(res)) != sizeof(res))
+		_exit(1);
+	_exit(0);
+}
+
+/*
+ * The data of a metacopy file in an overlayfs data-only layer is looked up
+ * lazily. If it can't be found attaching must fail with the error from the
+ * lookup.
+ */
+static void test_attach_api_fails_ovl_no_data(void)
+{
+	struct ovl_no_data_result res = {};
+	char dir[] = "/tmp/uprobe_multi_ovl.XXXXXX";
+	struct uprobe_multi *skel = NULL;
+	int pipefd[2] = { -1, -1 };
+	int status, prog_fd;
+	ssize_t n;
+	pid_t pid;
+
+	skel = uprobe_multi__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_multi__open_and_load"))
+		return;
+	prog_fd = bpf_program__fd(skel->progs.uprobe_extra);
+
+	if (!ASSERT_OK_PTR(mkdtemp(dir), "mkdtemp"))
+		goto cleanup;
+	if (!ASSERT_OK(pipe(pipefd), "pipe"))
+		goto cleanup_dir;
+
+	pid = fork();
+	if (!ASSERT_GE(pid, 0, "fork"))
+		goto cleanup_pipe;
+	if (pid == 0) {
+		close(pipefd[0]);
+		ovl_no_data_child(prog_fd, dir, pipefd[1]);
+	}
+
+	close(pipefd[1]);
+	pipefd[1] = -1;
+	n = read(pipefd[0], &res, sizeof(res));
+	if (!ASSERT_EQ(waitpid(pid, &status, 0), pid, "waitpid"))
+		goto cleanup_pipe;
+	if (!ASSERT_EQ(n, sizeof(res), "read result"))
+		goto cleanup_pipe;
+
+	if (res.stage == OVL_NO_DATA_MOUNT) {
+		printf("%s:SKIP: overlayfs with data-only layers not available (%d)\n",
+		       __func__, res.err);
+		test__skip();
+		goto cleanup_pipe;
+	}
+	if (!ASSERT_EQ(res.stage, OVL_NO_DATA_ATTACH, "setup"))
+		goto cleanup_pipe;
+	ASSERT_EQ(res.err, -ENOENT, "link_create");
+
+cleanup_pipe:
+	if (pipefd[0] >= 0)
+		close(pipefd[0]);
+	if (pipefd[1] >= 0)
+		close(pipefd[1]);
+cleanup_dir:
+	rmdir(dir);
+cleanup:
 	uprobe_multi__destroy(skel);
 }
 
@@ -1452,6 +1591,8 @@ void test_uprobe_multi_test(void)
 		test_bench_attach_usdt();
 	if (test__start_subtest("attach_api_fails"))
 		test_attach_api_fails();
+	if (test__start_subtest("attach_api_fails_ovl_no_data"))
+		test_attach_api_fails_ovl_no_data();
 	if (test__start_subtest("attach_uprobe_fails"))
 		test_attach_uprobe_fails();
 	if (test__start_subtest("consumers"))

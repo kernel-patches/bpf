@@ -1588,6 +1588,8 @@ static int btrfs_load_block_group_raid0(struct btrfs_block_group *bg,
 					u64 last_alloc)
 {
 	struct btrfs_fs_info *fs_info = bg->fs_info;
+	const u32 stripe_len = map->stripe_len;
+	const u8 stripe_shift = map->stripe_shift;
 	u64 stripe_nr = 0, stripe_offset = 0;
 	u64 prev_offset = 0;
 	u32 stripe_index = 0;
@@ -1611,18 +1613,18 @@ static int btrfs_load_block_group_raid0(struct btrfs_block_group *bg,
 		    zone_info[i].alloc_offset == WP_CONVENTIONAL)
 			continue;
 
-		stripe_nr = zone_info[i].alloc_offset >> BTRFS_STRIPE_LEN_SHIFT;
-		stripe_offset = zone_info[i].alloc_offset & BTRFS_STRIPE_LEN_MASK;
+		stripe_nr = zone_info[i].alloc_offset >> stripe_shift;
+		stripe_offset = zone_info[i].alloc_offset & (stripe_len - 1);
 		if (stripe_offset == 0 && stripe_nr > 0) {
 			stripe_nr--;
-			stripe_offset = BTRFS_STRIPE_LEN;
+			stripe_offset = stripe_len;
 		}
-		alloc = ((stripe_nr * map->num_stripes + i) << BTRFS_STRIPE_LEN_SHIFT) +
+		alloc = ((stripe_nr * map->num_stripes + i) << stripe_shift) +
 			stripe_offset;
 		last_alloc = max(last_alloc, alloc);
 
 		/* Partially written stripe found. It should be last. */
-		if (zone_info[i].alloc_offset & BTRFS_STRIPE_LEN_MASK)
+		if (!IS_ALIGNED(zone_info[i].alloc_offset, stripe_len))
 			break;
 	}
 	stripe_nr = 0;
@@ -1631,8 +1633,8 @@ static int btrfs_load_block_group_raid0(struct btrfs_block_group *bg,
 	if (last_alloc) {
 		u32 factor = map->num_stripes;
 
-		stripe_nr = last_alloc >> BTRFS_STRIPE_LEN_SHIFT;
-		stripe_offset = last_alloc & BTRFS_STRIPE_LEN_MASK;
+		stripe_nr = last_alloc >> stripe_shift;
+		stripe_offset = last_alloc & (stripe_len - 1);
 		stripe_nr = div_u64_rem(stripe_nr, factor, &stripe_index);
 	}
 
@@ -1642,10 +1644,11 @@ static int btrfs_load_block_group_raid0(struct btrfs_block_group *bg,
 
 		if (zone_info[i].alloc_offset == WP_CONVENTIONAL) {
 			has_conventional = true;
-			zone_info[i].alloc_offset = btrfs_stripe_nr_to_offset(stripe_nr);
+			zone_info[i].alloc_offset =
+				btrfs_stripe_nr_to_offset(stripe_nr, stripe_len);
 
 			if (stripe_index > i)
-				zone_info[i].alloc_offset += BTRFS_STRIPE_LEN;
+				zone_info[i].alloc_offset += stripe_len;
 			else if (stripe_index == i)
 				zone_info[i].alloc_offset += stripe_offset;
 		}
@@ -1660,7 +1663,8 @@ static int btrfs_load_block_group_raid0(struct btrfs_block_group *bg,
 			}
 
 			if (unlikely(has_partial &&
-				     (zone_info[i].alloc_offset & BTRFS_STRIPE_LEN_MASK))) {
+				     !IS_ALIGNED(zone_info[i].alloc_offset,
+						 stripe_len))) {
 				btrfs_err(fs_info,
 				"zoned: multiple partial written stripe found in block group %llu",
 					  bg->start);
@@ -1669,7 +1673,7 @@ static int btrfs_load_block_group_raid0(struct btrfs_block_group *bg,
 		}
 		prev_offset = zone_info[i].alloc_offset;
 
-		if ((zone_info[i].alloc_offset & BTRFS_STRIPE_LEN_MASK) != 0)
+		if (!IS_ALIGNED(zone_info[i].alloc_offset, stripe_len))
 			has_partial = true;
 
 		if (test_bit(0, active) != test_bit(i, active)) {
@@ -1685,7 +1689,7 @@ static int btrfs_load_block_group_raid0(struct btrfs_block_group *bg,
 
 	/* Check if all devices stay in the same stripe row. */
 	if (unlikely(zone_info[0].alloc_offset -
-		     zone_info[map->num_stripes - 1].alloc_offset > BTRFS_STRIPE_LEN)) {
+		     zone_info[map->num_stripes - 1].alloc_offset > stripe_len)) {
 		btrfs_err(fs_info, "zoned: stripe gap too large in block group %llu", bg->start);
 		return -EIO;
 	}
@@ -1709,6 +1713,8 @@ static int btrfs_load_block_group_raid10(struct btrfs_block_group *bg,
 	u64 AUTO_KFREE(raid0_allocs);
 	u64 stripe_nr = 0, stripe_offset = 0;
 	u32 stripe_index = 0;
+	const u32 stripe_len = map->stripe_len;
+	const u8 stripe_shift = map->stripe_shift;
 	bool has_partial = false, has_conventional = false;
 	u64 prev_offset = 0;
 
@@ -1756,16 +1762,16 @@ static int btrfs_load_block_group_raid10(struct btrfs_block_group *bg,
 			return -EIO;
 		}
 
-		stripe_nr = alloc >> BTRFS_STRIPE_LEN_SHIFT;
-		stripe_offset = alloc & BTRFS_STRIPE_LEN_MASK;
+		stripe_nr = alloc >> stripe_shift;
+		stripe_offset = alloc & (stripe_len - 1);
 		if (stripe_offset == 0 && stripe_nr > 0) {
 			stripe_nr--;
-			stripe_offset = BTRFS_STRIPE_LEN;
+			stripe_offset = stripe_len;
 		}
 
 		alloc = ((stripe_nr * (map->num_stripes / map->sub_stripes) +
-			  (i / map->sub_stripes)) <<
-			 BTRFS_STRIPE_LEN_SHIFT) + stripe_offset;
+			  (i / map->sub_stripes)) << stripe_shift) +
+			stripe_offset;
 		last_alloc = max(last_alloc, alloc);
 	}
 	stripe_nr = 0;
@@ -1774,8 +1780,8 @@ static int btrfs_load_block_group_raid10(struct btrfs_block_group *bg,
 	if (last_alloc) {
 		u32 factor = map->num_stripes / map->sub_stripes;
 
-		stripe_nr = last_alloc >> BTRFS_STRIPE_LEN_SHIFT;
-		stripe_offset = last_alloc & BTRFS_STRIPE_LEN_MASK;
+		stripe_nr = last_alloc >> stripe_shift;
+		stripe_offset = last_alloc & (stripe_len - 1);
 		stripe_nr = div_u64_rem(stripe_nr, factor, &stripe_index);
 	}
 
@@ -1784,10 +1790,11 @@ static int btrfs_load_block_group_raid10(struct btrfs_block_group *bg,
 
 		if (raid0_allocs[idx] == WP_CONVENTIONAL) {
 			has_conventional = true;
-			raid0_allocs[idx] = btrfs_stripe_nr_to_offset(stripe_nr);
+			raid0_allocs[idx] = btrfs_stripe_nr_to_offset(stripe_nr,
+								      stripe_len);
 
 			if (stripe_index > idx)
-				raid0_allocs[idx] += BTRFS_STRIPE_LEN;
+				raid0_allocs[idx] += stripe_len;
 			else if (stripe_index == idx)
 				raid0_allocs[idx] += stripe_offset;
 		}
@@ -1803,7 +1810,8 @@ static int btrfs_load_block_group_raid10(struct btrfs_block_group *bg,
 				}
 
 				if (unlikely(has_partial &&
-					     (raid0_allocs[idx] & BTRFS_STRIPE_LEN_MASK))) {
+					     !IS_ALIGNED(raid0_allocs[idx],
+							 stripe_len))) {
 					btrfs_err(fs_info,
 					"zoned: multiple partial written stripe found in block group %llu",
 						  bg->start);
@@ -1812,7 +1820,7 @@ static int btrfs_load_block_group_raid10(struct btrfs_block_group *bg,
 			}
 			prev_offset = raid0_allocs[idx];
 
-			if ((raid0_allocs[idx] & BTRFS_STRIPE_LEN_MASK) != 0)
+			if (!IS_ALIGNED(raid0_allocs[idx], stripe_len))
 				has_partial = true;
 		}
 
@@ -1835,7 +1843,7 @@ static int btrfs_load_block_group_raid10(struct btrfs_block_group *bg,
 
 	/* Check if all devices stay in the same stripe row. */
 	if (unlikely(zone_info[0].alloc_offset -
-		     zone_info[map->num_stripes - 1].alloc_offset > BTRFS_STRIPE_LEN)) {
+		     zone_info[map->num_stripes - 1].alloc_offset > stripe_len)) {
 		btrfs_err(fs_info, "zoned: stripe gap too large in block group %llu",
 			  bg->start);
 		return -EIO;
@@ -2457,12 +2465,13 @@ bool btrfs_zone_activate(struct btrfs_block_group *block_group)
 		if (zinfo->max_active_zones == 0)
 			continue;
 
-		if (is_data)
-			reserved = zinfo->reserved_active_zones;
 		/*
-		 * For the data block group, leave active zones for one
-		 * metadata block group and one system block group.
+		 * For the data block group, leave the active zones reserved
+		 * for metadata, tree-log and system block groups. A negative
+		 * reservation holds nothing back, see btrfs_can_activate_zone().
 		 */
+		if (is_data)
+			reserved = max(zinfo->reserved_active_zones, 0);
 		if (atomic_read(&zinfo->active_zones_left) <= reserved) {
 			ret = false;
 			goto out_unlock;
@@ -2525,14 +2534,12 @@ static void wait_eb_writebacks(struct btrfs_block_group *block_group)
 static int call_zone_finish(struct btrfs_block_group *block_group,
 			    struct btrfs_io_stripe *stripe)
 {
+	struct btrfs_fs_info *fs_info = block_group->fs_info;
 	struct btrfs_device *device = stripe->dev;
 	const u64 physical = stripe->physical;
 	struct btrfs_zoned_device_info *zinfo = device->zone_info;
 	bool cleared;
 	int ret;
-
-	if (!device->bdev)
-		return 0;
 
 	if (zinfo->max_active_zones == 0)
 		return 0;
@@ -2550,9 +2557,11 @@ static int call_zone_finish(struct btrfs_block_group *block_group,
 			return ret;
 	}
 
+	spin_lock(&fs_info->zone_active_bgs_lock);
 	cleared = btrfs_dev_clear_active_zone(device, physical);
 	if (!(block_group->flags & BTRFS_BLOCK_GROUP_DATA) && cleared)
 		zinfo->reserved_active_zones++;
+	spin_unlock(&fs_info->zone_active_bgs_lock);
 
 	return 0;
 }
@@ -2564,6 +2573,9 @@ static int do_zone_finish(struct btrfs_block_group *block_group, bool fully_writ
 	const bool is_metadata = (block_group->flags &
 			(BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM));
 	struct btrfs_dev_replace *dev_replace = &fs_info->dev_replace;
+	enum btrfs_raid_types index;
+	bool zones_full;
+	int failed = 0;
 	int ret = 0;
 	int i;
 
@@ -2630,6 +2642,13 @@ static int do_zone_finish(struct btrfs_block_group *block_group, bool fully_writ
 	}
 
 	clear_bit(BLOCK_GROUP_FLAG_ZONE_IS_ACTIVE, &block_group->runtime_flags);
+	/*
+	 * If the block group is allocated up to the zone capacity,
+	 * everything is written and the zones should be full already. A
+	 * truncated or failed write at the end is not detected here. That
+	 * would need a zone report from every device.
+	 */
+	zones_full = (block_group->alloc_offset == block_group->zone_capacity);
 	block_group->alloc_offset = block_group->zone_capacity;
 	if (block_group->flags & (BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM))
 		block_group->meta_write_pointer = block_group->start +
@@ -2642,11 +2661,40 @@ static int do_zone_finish(struct btrfs_block_group *block_group, bool fully_writ
 	down_read(&dev_replace->rwsem);
 	map = block_group->physical_map;
 	for (i = 0; i < map->num_stripes; i++) {
-		ret = call_zone_finish(block_group, &map->stripes[i]);
-		if (ret)
-			break;
+		struct btrfs_io_stripe *stripe = &map->stripes[i];
+		int err;
+
+		if (!stripe->dev->bdev) {
+			failed++;
+			continue;
+		}
+
+		err = call_zone_finish(block_group, stripe);
+		if (err) {
+			btrfs_warn(fs_info,
+		"zoned: failed to finish zone at physical %llu on devid %llu: %d",
+				   stripe->physical, stripe->dev->devid, err);
+			failed++;
+			ret = err;
+			/*
+			 * Do not finish more zones of a partly written block
+			 * group. They would end at a different write pointer
+			 * than the failed one.
+			 */
+			if (!zones_full)
+				break;
+		}
 	}
 	up_read(&dev_replace->rwsem);
+
+	/*
+	 * Zones that are already full do not change with a failed finish.
+	 * Like a write, fail only if more devices failed than the profile
+	 * tolerates. A missing device counts toward the limit.
+	 */
+	index = btrfs_bg_flags_to_raid_index(map->type);
+	if (zones_full && failed <= btrfs_raid_array[index].tolerated_failures)
+		ret = 0;
 
 	if (!ret && !fully_written)
 		btrfs_dec_block_group_ro(block_group);
@@ -2670,6 +2718,43 @@ int btrfs_zone_finish(struct btrfs_block_group *block_group)
 		return 0;
 
 	return do_zone_finish(block_group, false);
+}
+
+/*
+ * Finish the zones of a block group emptied by relocation, before removing it.
+ *
+ * btrfs_relocate_block_group() tries this before relocating, but gets -EAGAIN
+ * while tree blocks allocated in the block group are not written yet, and for
+ * the data relocation block group. If the block group is then removed with its
+ * zones still active, it stays on fs_info->zone_active_bgs and, for metadata
+ * and system, its share of reserved_active_zones is never given back. After a
+ * few balances the reservation is negative and data writeback fails with
+ * -ENOSPC.
+ *
+ * Here nothing is left to write: the block group is read-only and empty,
+ * relocation waited for its reservations and ordered extents, and
+ * relocate_block_group() committed the transaction. So only wait for extent
+ * buffer writeback and finish it as fully written. do_zone_finish(bg, false)
+ * would take it read-only again, which for a system block group can allocate
+ * a system chunk under ro_block_group_mutex and finish another block group to
+ * activate it, taking the mutex again.
+ */
+void btrfs_zone_finish_relocated(struct btrfs_block_group *block_group)
+{
+	struct btrfs_fs_info *fs_info = block_group->fs_info;
+	int ret;
+
+	if (!btrfs_is_zoned(fs_info))
+		return;
+
+	if (block_group->flags & (BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM))
+		wait_eb_writebacks(block_group);
+
+	ret = do_zone_finish(block_group, true);
+	if (ret)
+		btrfs_warn(fs_info,
+			   "failed to finish zones of relocated block group %llu: %d",
+			   block_group->start, ret);
 }
 
 bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, u64 flags)
@@ -2699,8 +2784,14 @@ bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, u64 flags)
 			break;
 		}
 
+		/*
+		 * A negative reservation holds nothing back. Do not count it
+		 * as free zones: the check below would pass with no active
+		 * zone left, and the caller would allocate a chunk it cannot
+		 * activate instead of finishing a zone, then fail with -ENOSPC.
+		 */
 		if (flags & BTRFS_BLOCK_GROUP_DATA)
-			reserved = zinfo->reserved_active_zones;
+			reserved = max(zinfo->reserved_active_zones, 0);
 
 		switch (flags & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
 		case 0: /* single */
@@ -2731,7 +2822,7 @@ int btrfs_zone_finish_endio(struct btrfs_fs_info *fs_info, u64 logical, u64 leng
 {
 	struct btrfs_block_group *block_group;
 	u64 min_alloc_bytes;
-	int ret = 0;
+	int ret;
 
 	if (!btrfs_is_zoned(fs_info))
 		return 0;
@@ -2751,11 +2842,18 @@ int btrfs_zone_finish_endio(struct btrfs_fs_info *fs_info, u64 logical, u64 leng
 	    block_group->start + block_group->zone_capacity)
 		goto out;
 
+	/*
+	 * The data of the ordered extent is written. A failure to finish the
+	 * zones does not change that, so only report it.
+	 */
 	ret = do_zone_finish(block_group, true);
+	if (ret)
+		btrfs_warn(fs_info, "zoned: failed to finish zones of block group %llu: %d",
+			   block_group->start, ret);
 
 out:
 	btrfs_put_block_group(block_group);
-	return ret;
+	return 0;
 }
 
 static void btrfs_zone_finish_endio_workfn(struct work_struct *work)
@@ -2862,7 +2960,7 @@ again:
 			if (reloc_sinfo->block_group_kobjs[index] == NULL)
 				btrfs_sysfs_add_block_group_type(bg);
 
-			btrfs_add_bg_to_space_info(fs_info, bg);
+			btrfs_add_bg_to_space_info(bg);
 		}
 
 		fs_info->data_reloc_bg = bg->start;
@@ -3107,8 +3205,20 @@ void btrfs_check_active_zone_reservation(struct btrfs_fs_info *fs_info)
 		      (BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM)))
 			continue;
 
-		for (int i = 0; i < map->num_stripes; i++)
-			map->stripes[i].dev->zone_info->reserved_active_zones--;
+		for (int i = 0; i < map->num_stripes; i++) {
+			struct btrfs_device *device = map->stripes[i].dev;
+			struct btrfs_zoned_device_info *zinfo = device->zone_info;
+			u64 physical = map->stripes[i].physical;
+
+			/* A missing device has no zone_info. */
+			if (!device->bdev)
+				continue;
+
+			if (!test_bit(physical >> zinfo->zone_size_shift, zinfo->active_zones))
+				continue;
+
+			zinfo->reserved_active_zones--;
+		}
 	}
 	spin_unlock(&fs_info->zone_active_bgs_lock);
 }

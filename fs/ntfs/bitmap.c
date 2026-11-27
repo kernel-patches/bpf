@@ -36,8 +36,7 @@ int ntfs_bitmap_check_used(struct ntfs_volume *vol, s64 start, s64 count,
 		return -EROFS;
 
 	while (count) {
-		folio = read_mapping_folio(mapping,
-					   start >> (PAGE_SHIFT + 3), NULL);
+		folio = ntfs_read_metadata_folio(mapping, start >> (PAGE_SHIFT + 3));
 		if (IS_ERR(folio))
 			return PTR_ERR(folio);
 
@@ -203,7 +202,7 @@ int __ntfs_bitmap_set_bits_in_run(struct inode *vi, const s64 start_bit,
 
 	/* Get the page containing the first bit (@start_bit). */
 	mapping = vi->i_mapping;
-	folio = read_mapping_folio(mapping, index, NULL);
+	folio = ntfs_read_metadata_folio(mapping, index);
 	if (IS_ERR(folio)) {
 		if (!is_rollback)
 			ntfs_error(vi->i_sb,
@@ -267,7 +266,7 @@ int __ntfs_bitmap_set_bits_in_run(struct inode *vi, const s64 start_bit,
 		folio_unlock(folio);
 		kunmap_local(kaddr);
 		folio_put(folio);
-		folio = read_mapping_folio(mapping, ++index, NULL);
+		folio = ntfs_read_metadata_folio(mapping, ++index);
 		if (IS_ERR(folio)) {
 			ntfs_error(vi->i_sb,
 				   "Failed to map subsequent page (error %li), aborting.",

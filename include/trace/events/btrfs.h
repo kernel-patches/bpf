@@ -336,7 +336,7 @@ DEFINE_EVENT(btrfs__inode, btrfs_inode_evict,
 		{ EXTENT_MAP_INLINE,	"INLINE"	})
 
 #define show_map_type(type)			\
-	type, (type >= EXTENT_MAP_LAST_BYTE) ? "-" :  __show_map_type(type)
+	type, (type >= EXTENT_MAP_LAST_BYTE) ? __show_map_type(type) : "-"
 
 #define show_map_flags(flag)						\
 	__print_flags(flag, "|",					\

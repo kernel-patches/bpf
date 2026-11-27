@@ -137,6 +137,15 @@ TAS_BUFFER_FNS(Pinned, pinned)
 BUFFER_FNS(Escaped, escaped)
 TAS_BUFFER_FNS(Escaped, escaped)
 
+/**
+ * struct gfs2_bufdata
+ *
+ * Bufdata objects normally remain attached to their corresponding buffer head
+ * (bd->bd_bh == bh; bh->b_private == bd), but when they are turned into
+ * revokes, they are detached from bh and from their transaction and put onto
+ * the sd_log_revokes list.
+ */
+
 struct gfs2_bufdata {
 	struct buffer_head *bd_bh;
 	struct gfs2_glock *bd_gl;
@@ -330,6 +339,12 @@ enum {
 	GLF_CANCELING			= 21,
 };
 
+/**
+ * struct gfs2_glock
+ * @gl_bufdata_count: The number of bufdata objects that refer to this glock.
+ * Bufdata objects refer to glocks via transactions (struct gfs_trans) and via
+ * the sd_log_revokes list.
+ */
 struct gfs2_glock {
 	unsigned long gl_flags;		/* GLF_... */
 	struct lm_lockname gl_name;
@@ -356,6 +371,7 @@ struct gfs2_glock {
 
 	struct list_head gl_dead;
 	struct list_head gl_ail_list;
+	atomic_t gl_bufdata_count;
 	atomic_t gl_ail_count;
 	atomic_t gl_revokes;
 	struct delayed_work gl_work;
@@ -475,6 +491,16 @@ enum {
 	TR_ONSTACK = 3,
 };
 
+/**
+ * struct gfs2_trans
+ *
+ * Uncommitted transactions refer to bufdata objects via the tr_buf and
+ * tr_databuf lists.  Committed transactions refer to bufdata objects via
+ * tr_ail1_list and tr_ail2_list.  A bufdata object cannot be both on tr_buf
+ * and tr_databuf, and it cannot be both on tr_ail1_list and tr_ail2_list at
+ * the same time.  It can be part of an uncommitted and a committed transaction
+ * at the same time, though.
+ */
 struct gfs2_trans {
 	unsigned long tr_ip;
 

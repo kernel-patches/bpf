@@ -33,8 +33,9 @@ static int read_block_bitmap(struct super_block *sb,
 			     unsigned long bitmap_nr)
 {
 	struct buffer_head *bh = NULL;
-	int i;
-	int max_bits, off, count;
+	char *bmp;
+	unsigned int i, start_blk, end_blk, bmp_start;
+	int max_bits;
 	struct kernel_lb_addr loc;
 
 	loc.logicalBlockNum = bitmap->s_extPosition;
@@ -45,27 +46,34 @@ static int read_block_bitmap(struct super_block *sb,
 	if (!bh)
 		return -EIO;
 
-	/* Check consistency of Space Bitmap buffer. */
+	/* Check bitmap blocks are marked as used in the bitmap */
 	max_bits = sb->s_blocksize * 8;
+	bmp = bh->b_data;
+	/* Skip header in the first bitmap block */
 	if (!bitmap_nr) {
-		off = sizeof(struct spaceBitmapDesc) << 3;
-		count = min(max_bits - off, bitmap->s_nr_groups);
+		bmp += sizeof(struct spaceBitmapDesc);
+		max_bits -= sizeof(struct spaceBitmapDesc) * 8;
+		bmp_start = 0;
 	} else {
-		/*
-		 * Rough check if bitmap number is too big to have any bitmap
- 		 * blocks reserved.
-		 */
-		if (bitmap_nr >
-		    (bitmap->s_nr_groups >> (sb->s_blocksize_bits + 3)) + 2)
-			return 0;
-		off = 0;
-		count = bitmap->s_nr_groups - bitmap_nr * max_bits +
-				(sizeof(struct spaceBitmapDesc) << 3);
-		count = min(count, max_bits);
+		bmp_start = bitmap_nr * max_bits -
+				sizeof(struct spaceBitmapDesc) * 8;
 	}
+	start_blk = bitmap->s_extPosition;
+	end_blk = start_blk + bitmap->s_nr_groups;
+	/* No overlap? */
+	if (end_blk <= bmp_start)
+		return 0;
+	if (start_blk < bmp_start)
+		start_blk = 0;
+	else
+		start_blk -= bmp_start;
+	if (end_blk > bmp_start + max_bits)
+		end_blk = max_bits;
+	else
+		end_blk -= bmp_start;
 
-	for (i = 0; i < count; i++)
-		if (udf_test_bit(i + off, bh->b_data)) {
+	for (i = start_blk; i < end_blk; i++)
+		if (udf_test_bit(i, bmp)) {
 			bitmap->s_block_bitmap[bitmap_nr] =
 							ERR_PTR(-EFSCORRUPTED);
 			brelse(bh);

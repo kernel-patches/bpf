@@ -370,10 +370,10 @@ static int __init proc_filesystems_init(void)
 {
 	struct proc_dir_entry *pde;
 
-	pde = proc_create_single("filesystems", 0, NULL, filesystems_proc_show);
+	pde = proc_create_single_permanent("filesystems", 0, NULL,
+					   filesystems_proc_show);
 	if (!pde)
 		return -ENOMEM;
-	proc_make_permanent(pde);
 	return 0;
 }
 module_init(proc_filesystems_init);

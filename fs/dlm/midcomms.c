@@ -652,6 +652,14 @@ static int dlm_opts_check_msglen(const union dlm_packet *p, uint16_t msglen,
 		return -1;
 	}
 
+	p = (const union dlm_packet *)((const unsigned char *)p->opts.o_opts +
+				       le16_to_cpu(p->opts.o_optlen));
+	if (le16_to_cpu(p->header.h_length) > len) {
+		log_print("inner msg too large: %u > %d, will skip this message from node %d",
+			  le16_to_cpu(p->header.h_length), len, nodeid);
+		return -1;
+	}
+
 	return 0;
 }
 

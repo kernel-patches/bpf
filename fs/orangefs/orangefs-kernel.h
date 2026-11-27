@@ -226,6 +226,11 @@ struct orangefs_cached_xattr {
 	unsigned long timeout;
 };
 
+/*
+ * One dirty byte range on a folio. The folio may be a 2 MiB hugepage,
+ * so pos/len are not limited to PAGE_SIZE. A folio has only one range;
+ * a non-contiguous write launders the recorded range first.
+ */
 struct orangefs_write_range {
 	loff_t pos;
 	size_t len;

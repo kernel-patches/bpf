@@ -16,6 +16,7 @@
 #include <linux/uidgid.h>
 #include <linux/workqueue.h>
 #include <linux/errseq.h>
+#include <linux/fs.h>
 
 #include "layout.h"
 
@@ -92,6 +93,7 @@
  * @sparse_compression_unit: Size of compression/sparse unit in clusters.
  * @lcn_empty_bits_per_page: Number of empty bits per page in the LCN bitmap.
  * @precalc_work: Work structure for background pre-calculation tasks.
+ * @error_work: Marks the volume dirty on disk after an error made it read-only.
  * @preallocated_size: reallocation size (in bytes).
  */
 struct ntfs_volume {
@@ -166,6 +168,7 @@ struct ntfs_volume {
 	u8 sparse_compression_unit;
 	unsigned int *lcn_empty_bits_per_page;
 	struct work_struct precalc_work;
+	struct work_struct error_work;
 	loff_t preallocated_size;
 };
 
@@ -261,6 +264,16 @@ DEFINE_NVOL_BIT_OPS(NativeSymlinkRel)
 DEFINE_NVOL_BIT_OPS(SymlinkNative)
 DEFINE_NVOL_BIT_OPS(MftBootstrap)
 DEFINE_NVOL_BIT_OPS(StreamsWindows)
+
+/* -EIO after a shutdown, -EROFS after an error with errors=remount-ro */
+static inline int ntfs_emergency_state(struct ntfs_volume *vol)
+{
+	if (unlikely(NVolShutdown(vol)))
+		return -EIO;
+	if (unlikely(sb_emergency_ro(vol->sb)))
+		return -EROFS;
+	return 0;
+}
 
 static inline void ntfs_inc_free_clusters(struct ntfs_volume *vol, s64 nr)
 {

@@ -1440,6 +1440,8 @@ static noinline int cow_file_range(struct btrfs_inode *inode,
 	return ret;
 
 out_unlock:
+	mapping_set_error(inode->vfs_inode.i_mapping, ret);
+
 	/*
 	 * Now, we have three regions to clean up:
 	 *
@@ -1461,9 +1463,6 @@ out_unlock:
 	if (orig_start < start) {
 		clear_bits = EXTENT_LOCKED | EXTENT_DELALLOC;
 		page_ops = PAGE_UNLOCK | PAGE_START_WRITEBACK | PAGE_END_WRITEBACK;
-
-		if (!locked_folio)
-			mapping_set_error(inode->vfs_inode.i_mapping, ret);
 
 		btrfs_cleanup_ordered_extents(inode, orig_start, start - orig_start);
 		extent_clear_unlock_delalloc(inode, orig_start, start - 1,
@@ -4607,7 +4606,7 @@ static int btrfs_unlink_subvol(struct btrfs_trans_handle *trans,
 	inode_inc_iversion(&dir->vfs_inode);
 	inode_set_mtime_to_ts(&dir->vfs_inode, inode_set_ctime_current(&dir->vfs_inode));
 	ret = btrfs_update_inode_fallback(trans, dir);
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 out:
 	fscrypt_free_filename(&fname);
@@ -4624,7 +4623,6 @@ static noinline int may_destroy_subvol(struct btrfs_root *root)
 	BTRFS_PATH_AUTO_FREE(path);
 	struct btrfs_dir_item *di;
 	struct btrfs_key key;
-	struct fscrypt_str name = FSTR_INIT("default", 7);
 	u64 dir_id;
 	int ret;
 
@@ -4635,7 +4633,7 @@ static noinline int may_destroy_subvol(struct btrfs_root *root)
 	/* Make sure this root isn't set as the default subvol */
 	dir_id = btrfs_super_root_dir(fs_info->super_copy);
 	di = btrfs_lookup_dir_item(NULL, fs_info->tree_root, path,
-				   dir_id, &name, 0);
+				   dir_id, &FSTR("default"), 0);
 	if (!IS_ERR_OR_NULL(di)) {
 		btrfs_dir_item_key_to_cpu(path->nodes[0], di, &key);
 		if (key.objectid == btrfs_root_id(root)) {
@@ -5047,6 +5045,22 @@ int btrfs_truncate_block(struct btrfs_inode *inode, u64 offset, u64 start, u64 e
 	if (!need_truncate_head && !need_truncate_tail)
 		goto out;
 
+	/*
+	 * Before zeroing the tail or head of the block, wait for any async
+	 * direct IO writes in progress to complete, otherwise if they complete
+	 * after we dirty the folio, they will trigger a warning when trying to
+	 * invalidate the page cache and call errseq_set() on the mapping (which
+	 * makes the next fsync fail with -EIO), because the folio is dirty:
+	 *
+	 * iomap_dio_complete()
+	 *    kiocb_invalidate_post_direct_write()
+	 *       invalidate_inode_pages2_range()
+	 *       dio_warn_stale_pagecache()
+	 *          --> calls errseq_set() making next fsync fail
+	 *          --> triggers warning
+	 */
+	inode_dio_wait(&inode->vfs_inode);
+
 	block_start = round_down(offset, blocksize);
 	block_end = block_start + blocksize - 1;
 
@@ -5213,7 +5227,7 @@ static int maybe_insert_hole(struct btrfs_inode *inode, u64 offset, u64 len)
 	}
 
 	ret = btrfs_insert_hole_extent(trans, root, btrfs_ino(inode), offset, len);
-	if (ret) {
+	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 	} else {
 		btrfs_update_inode_bytes(inode, 0, drop_args.bytes_found);
@@ -5418,7 +5432,7 @@ static int btrfs_setattr(const struct mnt_idmap *idmap, struct dentry *dentry,
 	struct btrfs_root *root = BTRFS_I(inode)->root;
 	int ret;
 
-	if (btrfs_root_readonly(root))
+	if (btrfs_root_readonly(root) || btrfs_fs_rdonly(root->fs_info))
 		return -EROFS;
 
 	ret = setattr_prepare(idmap, dentry, attr);
@@ -6051,7 +6065,7 @@ struct inode *btrfs_lookup_dentry(struct inode *dir, struct dentry *dentry)
 			return ERR_CAST(inode);
 
 		down_read(&fs_info->cleanup_work_sem);
-		if (!sb_rdonly(inode->vfs_inode.i_sb))
+		if (!btrfs_fs_rdonly(fs_info))
 			ret = btrfs_orphan_cleanup(sub_root);
 		up_read(&fs_info->cleanup_work_sem);
 		if (ret) {
@@ -6414,7 +6428,7 @@ static int btrfs_update_time(struct inode *inode, enum fs_update_time type,
 	struct btrfs_root *root = BTRFS_I(inode)->root;
 	int dirty;
 
-	if (btrfs_root_readonly(root))
+	if (btrfs_root_readonly(root) || btrfs_fs_rdonly(root->fs_info))
 		return -EROFS;
 	if (flags & IOCB_NOWAIT)
 		return -EAGAIN;
@@ -6826,7 +6840,7 @@ int btrfs_create_new_inode(struct btrfs_trans_handle *trans,
 			if (ret)
 				goto discard;
 			ret = btrfs_update_inode(trans, BTRFS_I(inode));
-			if (ret) {
+			if (unlikely(ret)) {
 				btrfs_abort_transaction(trans, ret);
 				goto discard;
 			}
@@ -6910,7 +6924,7 @@ int btrfs_add_link(struct btrfs_trans_handle *trans,
 	update_time_after_link_or_unlink(parent_inode);
 
 	ret = btrfs_update_inode(trans, parent_inode);
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 	return ret;
 
@@ -6921,13 +6935,13 @@ fail_dir_item:
 
 		ret2 = btrfs_del_root_ref(trans, key.objectid, btrfs_root_id(root),
 					  parent_ino, &local_index, name);
-		if (ret2)
+		if (unlikely(ret2))
 			btrfs_abort_transaction(trans, ret2);
 	} else if (add_backref) {
 		int ret2;
 
 		ret2 = btrfs_del_inode_ref(trans, root, name, ino, parent_ino, NULL);
-		if (ret2)
+		if (unlikely(ret2))
 			btrfs_abort_transaction(trans, ret2);
 	}
 
@@ -9102,7 +9116,7 @@ out_inode:
 static struct btrfs_trans_handle *insert_prealloc_file_extent(
 				       struct btrfs_inode *inode,
 				       struct btrfs_key *ins,
-				       u64 file_offset)
+				       u64 file_offset, bool update_times)
 {
 	struct btrfs_file_extent_item stack_fi;
 	struct btrfs_replace_extent_info extent_info;
@@ -9134,7 +9148,6 @@ static struct btrfs_trans_handle *insert_prealloc_file_extent(
 	extent_info.file_offset = file_offset;
 	extent_info.extent_buf = (char *)&stack_fi;
 	extent_info.is_new_extent = true;
-	extent_info.update_times = true;
 	extent_info.qgroup_reserved = qgroup_released;
 	extent_info.insertions = 0;
 
@@ -9146,7 +9159,7 @@ static struct btrfs_trans_handle *insert_prealloc_file_extent(
 
 	ret = btrfs_replace_file_extents(inode, path, file_offset,
 				     file_offset + len - 1, &extent_info,
-				     &trans);
+				     update_times, &trans);
 	btrfs_free_path(path);
 	if (ret)
 		goto free_qgroup;
@@ -9168,7 +9181,8 @@ free_qgroup:
 
 int btrfs_prealloc_file_range(struct inode *inode, int mode,
 			      u64 start, u64 num_bytes, u64 min_size,
-			      loff_t actual_len, u64 *alloc_hint)
+			      loff_t actual_len, u64 *alloc_hint,
+			      bool update_times)
 {
 	struct btrfs_fs_info *fs_info = inode_to_fs_info(inode);
 	struct btrfs_trans_handle *trans;
@@ -9209,7 +9223,7 @@ int btrfs_prealloc_file_range(struct inode *inode, int mode,
 
 		last_alloc = ins.offset;
 		trans = insert_prealloc_file_extent(BTRFS_I(inode), &ins,
-						    cur_offset);
+						    cur_offset, update_times);
 		/*
 		 * Now that we inserted the prealloc extent we can finally
 		 * decrement the number of reservations in the block group.
@@ -9249,7 +9263,8 @@ next:
 		*alloc_hint = ins.objectid + ins.offset;
 
 		inode_inc_iversion(inode);
-		inode_set_ctime_current(inode);
+		if (update_times)
+			inode_set_ctime_current(inode);
 		BTRFS_I(inode)->flags |= BTRFS_INODE_PREALLOC;
 		if (!(mode & FALLOC_FL_KEEP_SIZE) &&
 		    (actual_len > inode->i_size) &&
@@ -9279,7 +9294,7 @@ next:
 			range_end = round_up(i_size, fs_info->sectorsize);
 			ret = btrfs_inode_set_file_extent_range(BTRFS_I(inode),
 					range_start, range_end - range_start);
-			if (ret) {
+			if (unlikely(ret)) {
 				btrfs_abort_transaction(trans, ret);
 				btrfs_end_transaction(trans);
 				break;
@@ -9318,7 +9333,7 @@ static int btrfs_permission(const struct mnt_idmap *idmap,
 
 	if (mask & MAY_WRITE &&
 	    (S_ISREG(mode) || S_ISDIR(mode) || S_ISLNK(mode))) {
-		if (btrfs_root_readonly(root))
+		if (btrfs_root_readonly(root) || btrfs_fs_rdonly(root->fs_info))
 			return -EROFS;
 		if (BTRFS_I(inode)->flags & BTRFS_INODE_READONLY)
 			return -EACCES;

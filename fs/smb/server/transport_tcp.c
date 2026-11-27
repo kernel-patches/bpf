@@ -4,8 +4,11 @@
  *   Copyright (C) 2018 Samsung Electronics Co., Ltd.
  */
 
+#include <linux/bvec.h>
 #include <linux/freezer.h>
+#include <linux/page_frag_cache.h>
 #include <linux/uio.h>
+#include <linux/vmalloc.h>
 
 #include "smb_common.h"
 #include "server.h"
@@ -34,9 +37,15 @@ struct tcp_tx {
 	struct list_head		list;
 	size_t			len;
 	size_t			offset;
+	size_t			charge;
 	unsigned long		deadline;
 	int			msg_flags;
-	u8			data[];
+	unsigned short		nr_vecs;
+	unsigned short		header_len;
+	union {
+		DECLARE_FLEX_ARRAY(u8, data);
+		DECLARE_FLEX_ARRAY(struct bio_vec, bvec);
+	};
 };
 
 struct tcp_transport {
@@ -46,6 +55,7 @@ struct tcp_transport {
 	unsigned int			nr_iov;
 	/* Serializes queue access and socket writes. Never taken by callbacks. */
 	struct mutex			tx_lock;
+	struct page_frag_cache		tx_frag_cache;
 	struct list_head		tx_queue;
 	struct delayed_work		tx_work;
 	size_t				tx_queued;
@@ -91,6 +101,7 @@ static struct tcp_transport *alloc_transport(struct socket *client_sk)
 		return NULL;
 	t->sock = client_sk;
 	mutex_init(&t->tx_lock);
+	page_frag_cache_init(&t->tx_frag_cache);
 	INIT_LIST_HEAD(&t->tx_queue);
 	INIT_DELAYED_WORK(&t->tx_work, ksmbd_tcp_tx_work);
 
@@ -142,6 +153,7 @@ static void ksmbd_tcp_free_transport(struct ksmbd_transport *kt)
 
 	ksmbd_tcp_stop_tx(t);
 	sock_release(t->sock);
+	page_frag_cache_drain(&t->tx_frag_cache);
 	kfree(t->iov);
 	kfree(t);
 }
@@ -474,12 +486,104 @@ static int ksmbd_tcp_read(struct ksmbd_transport *t, char *buf,
 	return ksmbd_tcp_readv(TCP_TRANS(t), &iov, 1, to_read, max_retries);
 }
 
-static bool ksmbd_tcp_tx_has_space(struct tcp_transport *t, size_t size)
+static bool ksmbd_tcp_tx_has_space(struct tcp_transport *t, size_t pdu_size,
+				   size_t charge)
 {
-	size_t limit = max_t(size_t, READ_ONCE(t->sock->sk->sk_sndbuf), size);
+	size_t limit = max_t(size_t, READ_ONCE(t->sock->sk->sk_sndbuf), pdu_size);
 
 	/* Allow one large response, but bound the retained response buffers. */
-	return READ_ONCE(t->tx_queued) <= limit - size;
+	return charge <= limit && READ_ONCE(t->tx_queued) <= limit - charge;
+}
+
+static void *ksmbd_tcp_tx_header(struct tcp_tx *msg)
+{
+	return msg->bvec + msg->nr_vecs;
+}
+
+static void ksmbd_tcp_free_tx(struct tcp_tx *msg)
+{
+	unsigned int i;
+
+	for (i = 0; i < msg->nr_vecs; i++)
+		folio_put(bvec_folio(&msg->bvec[i]));
+	kvfree(msg);
+}
+
+static struct tcp_tx *ksmbd_tcp_alloc_read_tx(struct tcp_transport *t,
+					      const struct ksmbd_transport_write *tx,
+					      size_t offset)
+{
+	struct kvec payload = tx->iov[2];
+	size_t remaining = tx->size - offset;
+	size_t payload_left = min(remaining, payload.iov_len);
+	size_t header_left = remaining - payload_left;
+	size_t charge = header_left;
+	struct tcp_tx *msg;
+	struct iov_iter iter;
+	unsigned int i, max_vecs;
+	unsigned short nr = 0;
+	bool vmapped;
+
+	if (payload_left < PAGE_SIZE)
+		return NULL;
+	payload.iov_base += payload.iov_len - payload_left;
+	payload.iov_len = payload_left;
+	vmapped = is_vmalloc_addr(payload.iov_base);
+	if (vmapped) {
+		max_vecs = DIV_ROUND_UP(offset_in_page(payload.iov_base) + payload_left,
+					PAGE_SIZE);
+		if (max_vecs > USHRT_MAX)
+			return NULL;
+	} else {
+		struct folio *folio = virt_to_folio(payload.iov_base);
+
+		/* A small unsent tail must not keep a much larger folio alive. */
+		charge += folio_size(folio);
+		if (get_order(payload_left) < folio_order(folio) ||
+		    !ksmbd_tcp_tx_has_space(t, tx->size, charge))
+			return NULL;
+		max_vecs = 1;
+	}
+
+	/* The unsent header follows the payload vectors in the queue entry. */
+	msg = kvmalloc(size_add(struct_size(msg, bvec, max_vecs), header_left),
+		       KSMBD_DEFAULT_GFP);
+	if (!msg)
+		return NULL;
+	if (vmapped) {
+		iov_iter_kvec(&iter, ITER_SOURCE, &payload, 1, payload_left);
+		if (iov_iter_extract_bvecs(&iter, msg->bvec, payload_left, &nr,
+					   max_vecs, 0, 0) != payload_left)
+			goto fail;
+		for (i = 0; i < nr; i++) {
+			struct folio *folio = bvec_folio(&msg->bvec[i]);
+
+			if (get_order(msg->bvec[i].bv_len) < folio_order(folio))
+				goto fail;
+			charge += folio_size(folio);
+		}
+		if (!ksmbd_tcp_tx_has_space(t, tx->size, charge))
+			goto fail;
+	} else {
+		bvec_set_virt(&msg->bvec[0], payload.iov_base, payload_left);
+		nr = 1;
+	}
+
+	msg->nr_vecs = nr;
+	if (header_left) {
+		iov_iter_kvec(&iter, ITER_SOURCE, tx->iov, 2, tx->size - tx->iov[2].iov_len);
+		iov_iter_advance(&iter, offset);
+		if (!copy_from_iter_full(ksmbd_tcp_tx_header(msg), header_left, &iter))
+			goto fail;
+	}
+	for (i = 0; i < nr; i++)
+		folio_get(bvec_folio(&msg->bvec[i]));
+	msg->header_len = header_left;
+	msg->charge = charge;
+	return msg;
+fail:
+	kvfree(msg);
+	return NULL;
 }
 
 static struct tcp_tx *ksmbd_tcp_alloc_tx(const struct ksmbd_transport_write *tx,
@@ -499,9 +603,9 @@ static struct tcp_tx *ksmbd_tcp_alloc_tx(const struct ksmbd_transport_write *tx,
 		kvfree(msg);
 		return NULL;
 	}
-	msg->len = remaining;
-	msg->offset = 0;
-	msg->msg_flags = tx->msg_flags;
+	msg->nr_vecs = 0;
+	msg->header_len = 0;
+	msg->charge = remaining;
 	return msg;
 }
 
@@ -511,7 +615,7 @@ static void ksmbd_tcp_purge_tx(struct tcp_transport *t)
 
 	list_for_each_entry_safe(msg, next, &t->tx_queue, list) {
 		list_del(&msg->list);
-		kvfree(msg);
+		ksmbd_tcp_free_tx(msg);
 	}
 	WRITE_ONCE(t->tx_queued, 0);
 }
@@ -520,6 +624,33 @@ static bool ksmbd_tcp_send_retry(int ret)
 {
 	return ret == -EAGAIN || ret == -EINTR || ret == -ERESTARTSYS ||
 		ret == -ENOMEM;
+}
+
+static int ksmbd_tcp_send_queued(struct tcp_transport *t, struct tcp_tx *msg)
+{
+	struct msghdr hdr = {
+		.msg_flags = MSG_NOSIGNAL | MSG_DONTWAIT | msg->msg_flags,
+	};
+	size_t offset = msg->offset;
+	struct kvec iov;
+
+	if (!msg->nr_vecs) {
+		iov.iov_base = msg->data;
+		iov.iov_len = msg->len;
+	} else if (offset < msg->header_len) {
+		iov.iov_base = ksmbd_tcp_tx_header(msg);
+		iov.iov_len = msg->header_len;
+		hdr.msg_flags = (hdr.msg_flags & ~MSG_EOR) | MSG_MORE;
+	} else {
+		hdr.msg_flags |= MSG_SPLICE_PAGES;
+		iov_iter_bvec(&hdr.msg_iter, ITER_SOURCE, msg->bvec, msg->nr_vecs,
+			      msg->len - msg->header_len);
+		iov_iter_advance(&hdr.msg_iter, offset - msg->header_len);
+		return sock_sendmsg(t->sock, &hdr);
+	}
+	iov_iter_kvec(&hdr.msg_iter, ITER_SOURCE, &iov, 1, iov.iov_len);
+	iov_iter_advance(&hdr.msg_iter, offset);
+	return sock_sendmsg(t->sock, &hdr);
 }
 
 static void ksmbd_tcp_tx_work(struct work_struct *work)
@@ -534,13 +665,6 @@ static void ksmbd_tcp_tx_work(struct work_struct *work)
 	mutex_lock(&t->tx_lock);
 	while (!READ_ONCE(t->tx_stopped) && !list_empty(&t->tx_queue) && budget--) {
 		struct tcp_tx *msg = list_first_entry(&t->tx_queue, struct tcp_tx, list);
-		struct msghdr hdr = {
-			.msg_flags = MSG_NOSIGNAL | MSG_DONTWAIT | msg->msg_flags,
-		};
-		struct kvec iov = {
-			.iov_base = msg->data + msg->offset,
-			.iov_len = msg->len - msg->offset,
-		};
 
 		/* MSG_DONTWAIT bypasses sk_sndtimeo, including for retained PDUs. */
 		if (time_after_eq(jiffies, msg->deadline)) {
@@ -548,16 +672,18 @@ static void ksmbd_tcp_tx_work(struct work_struct *work)
 			failed = true;
 			break;
 		}
-		ret = kernel_sendmsg(t->sock, &hdr, &iov, 1, iov.iov_len);
+		ret = ksmbd_tcp_send_queued(t, msg);
 		if (ret > 0) {
 			msg->offset += ret;
 			t->tx_sent += ret;
 			if (msg->offset == msg->len) {
-				WRITE_ONCE(t->tx_queued, t->tx_queued - msg->len);
+				WRITE_ONCE(t->tx_queued, t->tx_queued - msg->charge);
 				list_del(&msg->list);
-				kvfree(msg);
+				ksmbd_tcp_free_tx(msg);
 				continue;
 			}
+			if (msg->offset == msg->header_len)
+				continue;
 		} else if (!ksmbd_tcp_send_retry(ret)) {
 			WRITE_ONCE(t->tx_stopped, true);
 			failed = true;
@@ -613,14 +739,54 @@ static void ksmbd_tcp_stop_tx(struct tcp_transport *t)
 	wake_up_all(&t->transport.conn->req_running_q);
 }
 
+static int ksmbd_tcp_send(struct tcp_transport *t,
+			  const struct ksmbd_transport_write *tx)
+{
+	struct msghdr hdr = {
+		.msg_flags = MSG_NOSIGNAL | MSG_DONTWAIT | tx->msg_flags,
+	};
+	struct kvec *iov = tx->iov;
+	struct kvec vec[2];
+	void *header;
+	size_t len;
+	int ret;
+
+	if (!tx->splice_read)
+		goto copy;
+
+	len = iov[0].iov_len + iov[1].iov_len;
+	header = page_frag_alloc(&t->tx_frag_cache, len, GFP_NOWAIT);
+	if (!header)
+		goto copy;
+
+	/*
+	 * Copy the length prefix and SMB header into a fragment
+	 * TCP can retain. The READ payload is already spliceable.
+	 */
+	memcpy(header, iov[0].iov_base, iov[0].iov_len);
+	memcpy(header + iov[0].iov_len, iov[1].iov_base, iov[1].iov_len);
+	vec[0].iov_base = header;
+	vec[0].iov_len = len;
+	vec[1] = iov[2];
+	hdr.msg_flags |= MSG_SPLICE_PAGES;
+	ret = kernel_sendmsg(t->sock, &hdr, vec, ARRAY_SIZE(vec), tx->size);
+	page_frag_free(header);
+	return ret;
+
+copy:
+	return kernel_sendmsg(t->sock, &hdr, iov, tx->iov_cnt, tx->size);
+}
+
+bool ksmbd_transport_is_tcp(struct ksmbd_transport *t)
+{
+	return t->ops == &ksmbd_tcp_transport_ops;
+}
+
 static int ksmbd_tcp_writev(struct ksmbd_transport *t,
 			    const struct ksmbd_transport_write *tx)
 {
 	struct tcp_transport *tt = TCP_TRANS(t);
 	struct sock *sk = tt->sock->sk;
-	struct msghdr hdr = {
-		.msg_flags = MSG_NOSIGNAL | MSG_DONTWAIT | tx->msg_flags,
-	};
 	struct tcp_tx *msg;
 	unsigned long deadline = jiffies + KSMBD_TCP_SEND_TIMEOUT;
 	long timeout;
@@ -638,7 +804,7 @@ static int ksmbd_tcp_writev(struct ksmbd_transport *t,
 			mutex_unlock(&tt->tx_lock);
 			return -EPIPE;
 		}
-		if (ksmbd_tcp_tx_has_space(tt, tx->size))
+		if (ksmbd_tcp_tx_has_space(tt, tx->size, tx->size))
 			break;
 		mutex_unlock(&tt->tx_lock);
 		if (tx->msg_flags & MSG_DONTWAIT)
@@ -649,7 +815,7 @@ static int ksmbd_tcp_writev(struct ksmbd_transport *t,
 					READ_ONCE(tt->tx_stopped) ||
 					ksmbd_conn_exiting(t->conn) ||
 					ksmbd_conn_releasing(t->conn) ||
-					ksmbd_tcp_tx_has_space(tt, tx->size),
+					ksmbd_tcp_tx_has_space(tt, tx->size, tx->size),
 					timeout)) {
 			/* A queued PDU may already have a prefix in the socket. */
 			ksmbd_conn_abort(t->conn);
@@ -659,7 +825,7 @@ static int ksmbd_tcp_writev(struct ksmbd_transport *t,
 
 	/* Avoid an extra copy when the socket accepts the whole PDU at once. */
 	if (list_empty(&tt->tx_queue)) {
-		sent = kernel_sendmsg(tt->sock, &hdr, tx->iov, tx->iov_cnt, tx->size);
+		sent = ksmbd_tcp_send(tt, tx);
 		if (sent > 0) {
 			tt->tx_sent += sent;
 			if (sent == tx->size)
@@ -675,7 +841,9 @@ static int ksmbd_tcp_writev(struct ksmbd_transport *t,
 	}
 
 	/* The request buffers can be freed as soon as writev returns. */
-	msg = ksmbd_tcp_alloc_tx(tx, sent);
+	msg = tx->splice_read ? ksmbd_tcp_alloc_read_tx(tt, tx, sent) : NULL;
+	if (!msg)
+		msg = ksmbd_tcp_alloc_tx(tx, sent);
 	if (!msg) {
 		if (sent)
 			WRITE_ONCE(tt->tx_stopped, true);
@@ -684,9 +852,12 @@ static int ksmbd_tcp_writev(struct ksmbd_transport *t,
 			ksmbd_conn_abort(t->conn);
 		return -ENOMEM;
 	}
+	msg->len = tx->size - sent;
+	msg->offset = 0;
+	msg->msg_flags = tx->msg_flags;
 	msg->deadline = deadline;
 	list_add_tail(&msg->list, &tt->tx_queue);
-	WRITE_ONCE(tt->tx_queued, tt->tx_queued + msg->len);
+	WRITE_ONCE(tt->tx_queued, tt->tx_queued + msg->charge);
 	queue_delayed_work(system_dfl_wq, &tt->tx_work, 0);
 
 accepted:

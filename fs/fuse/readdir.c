@@ -36,7 +36,7 @@ static void fuse_add_dirent_to_cache(struct file *file,
 	size_t reclen = FUSE_DIRENT_SIZE(dirent);
 	pgoff_t index;
 	struct folio *folio;
-	loff_t size;
+	loff_t size, cache_pos;
 	u64 version;
 	unsigned int offset;
 	size_t folio_offset;
@@ -57,12 +57,14 @@ static void fuse_add_dirent_to_cache(struct file *file,
 	version = fi->rdc.version;
 	size = fi->rdc.size;
 	offset = offset_in_page(size);
-	index = size >> PAGE_SHIFT;
 	/* Dirent doesn't fit in current page?  Jump to next page. */
 	if (offset + reclen > PAGE_SIZE) {
-		index++;
+		cache_pos = PAGE_ALIGN(size);
 		offset = 0;
+	} else {
+		cache_pos = size;
 	}
+	index = cache_pos >> PAGE_SHIFT;
 	spin_unlock(&fi->rdc.lock);
 
 	if (offset)
@@ -78,7 +80,7 @@ static void fuse_add_dirent_to_cache(struct file *file,
 	    WARN_ON(fi->rdc.pos != pos))
 		goto unlock;
 
-	folio_offset = offset_in_folio(folio, (index << PAGE_SHIFT) + offset);
+	folio_offset = offset_in_folio(folio, cache_pos);
 	if (!offset) {
 		folio_fill_tail(folio, folio_offset, (const char *)dirent,
 				reclen);
@@ -87,7 +89,7 @@ static void fuse_add_dirent_to_cache(struct file *file,
 		memcpy_to_folio(folio, folio_offset, (const char *)dirent,
 				reclen);
 	}
-	fi->rdc.size = (index << PAGE_SHIFT) + offset + reclen;
+	fi->rdc.size = cache_pos + reclen;
 	fi->rdc.pos = dirent->off;
 unlock:
 	spin_unlock(&fi->rdc.lock);
@@ -340,17 +342,23 @@ static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
 	return 0;
 }
 
-static struct page **fuse_readdir_alloc_buf(struct fuse_args_pages *ap, size_t *bufsize)
+static struct page **fuse_readdir_alloc_buf(struct fuse_args_pages *ap, size_t *bufsize,
+					    size_t minsize)
 {
 	unsigned int i, nr_alloc, nr_pages = DIV_ROUND_UP(*bufsize, PAGE_SIZE);
+	unsigned int nr_min = DIV_ROUND_UP(minsize, PAGE_SIZE);
 	struct page **pages = kzalloc_objs(*pages, nr_pages);
 
 	if (!pages)
 		return NULL;
 
 	nr_alloc = alloc_pages_bulk(GFP_KERNEL, nr_pages, pages);
-	if (!nr_alloc)
-		goto free_array;
+	/* The bulk allocator may stop early, but the largest entry must fit. */
+	for (; nr_alloc < nr_min; nr_alloc++) {
+		pages[nr_alloc] = alloc_page(GFP_KERNEL);
+		if (!pages[nr_alloc])
+			goto release_pages;
+	}
 
 	if (nr_alloc < nr_pages) {
 		nr_pages = nr_alloc;
@@ -371,8 +379,7 @@ static struct page **fuse_readdir_alloc_buf(struct fuse_args_pages *ap, size_t *
 	return pages;
 
 release_pages:
-	release_pages(pages, nr_pages);
-free_array:
+	release_pages(pages, nr_alloc);
 	kfree(pages);
 	return NULL;
 }
@@ -387,10 +394,13 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 	struct fuse_io_args ia = {};
 	struct fuse_args_pages *ap = &ia.ap;
 	void *buf;
-	size_t bufsize = clamp((unsigned int) ctx->count, PAGE_SIZE, fc->max_pages << PAGE_SHIFT);
+	/* Room for the largest entry the server may send, a direntplus. */
+	size_t minsize = max(PAGE_SIZE,
+			     FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS + fc->name_max));
+	size_t bufsize = clamp((unsigned int) ctx->count, minsize, fc->max_pages << PAGE_SHIFT);
 	u64 attr_version = 0, evict_ctr = 0;
 	bool locked;
-	struct page **pages = fuse_readdir_alloc_buf(ap, &bufsize);
+	struct page **pages = fuse_readdir_alloc_buf(ap, &bufsize, minsize);
 
 	if (!pages)
 		return -ENOMEM;

@@ -55,9 +55,14 @@
 int ntfs_file_open(struct inode *vi, struct file *filp)
 {
 	struct ntfs_inode *ni = NTFS_I(vi);
+	int err;
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	if (filp->f_mode & FMODE_WRITE)
+		err = ntfs_emergency_state(ni->vol);
+	else
+		err = NVolShutdown(ni->vol) ? -EIO : 0;
+	if (err)
+		return err;
 
 	if (sizeof(unsigned long) < 8) {
 		if (i_size_read(vi) > MAX_LFS_FILESIZE)
@@ -210,8 +215,9 @@ int ntfs_fileattr_set(const struct mnt_idmap *idmap, struct dentry *dentry,
 	bool forced_immutable;
 	int err;
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	err = ntfs_emergency_state(ni->vol);
+	if (err)
+		return err;
 
 	if (fileattr_has_fsx(fa))
 		return -EOPNOTSUPP;
@@ -230,6 +236,10 @@ int ntfs_fileattr_set(const struct mnt_idmap *idmap, struct dentry *dentry,
 		allowed |= FS_CASEFOLD_FL;
 	if (fa->flags & ~allowed)
 		return -EOPNOTSUPP;
+
+	/* File flag updates would modify $Extend metadata. */
+	if (ni->mft_no == FILE_Extend || NInoExtendSys(ni))
+		return -EPERM;
 
 	forced_immutable = ntfs_is_forced_immutable(vi);
 	if (!(fa->flags & FS_IMMUTABLE_FL) && forced_immutable)
@@ -305,8 +315,9 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 
 	ntfs_debug("Entering for inode 0x%llx.", ni->mft_no);
 
-	if (NVolShutdown(vol))
-		return -EIO;
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
 
 	err = file_write_and_wait_range(filp, start, end);
 	if (err)
@@ -323,22 +334,18 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 		ret = __ntfs_write_inode(vi, 1);
 	write_inode_now(vi, !datasync);
 
-	/*
-	 * file_write_and_wait_range() already flushed this stream mapping.
-	 * A stream fsync does not need to flush sibling attribute mappings.
-	 */
-	if (stream)
-		goto sync_volume;
-
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx)
-		return -ENOMEM;
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 
 	mutex_lock_nested(&ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL_CHILD);
 	while (!(err = ntfs_attr_lookup(AT_UNUSED, NULL, 0, 0, 0, NULL, 0, ctx))) {
 		if (ctx->attr->type == AT_FILE_NAME) {
 			struct file_name_attr *fn = (struct file_name_attr *)((u8 *)ctx->attr +
 					le16_to_cpu(ctx->attr->data.resident.value_offset));
+
+			if (MREF_LE(fn->parent_directory) == ni->mft_no)
+				continue;
 
 			parent_vi = ntfs_iget(vi->i_sb, MREF_LE(fn->parent_directory));
 			if (IS_ERR(parent_vi))
@@ -409,7 +416,6 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 	if (err && !ret)
 		ret = err;
 
-sync_volume:
 	write_inode_now(vol->mftbmp_ino, 1);
 	down_write(&vol->lcnbmp_lock);
 	write_inode_now(vol->lcnbmp_ino, 1);
@@ -459,8 +465,11 @@ int ntfs_setattr_size(struct inode *vi, struct iattr *attr)
 	int err;
 	loff_t old_size = vi->i_size;
 
-	if (stream && NVolShutdown(ni->vol))
-		return -EIO;
+	if (stream) {
+		err = ntfs_emergency_state(ni->vol);
+		if (err)
+			return err;
+	}
 
 	if (NInoCompressed(ni) || NInoEncrypted(ni) || NInoWofCompressed(ni)) {
 		ntfs_warning(
@@ -544,8 +553,9 @@ int ntfs_setattr(const struct mnt_idmap *idmap, struct dentry *dentry,
 	struct ntfs_inode *ni = NTFS_I(vi);
 	struct ntfs_volume *vol = ni->vol;
 
-	if (NVolShutdown(vol))
-		return -EIO;
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
 
 	err = setattr_prepare(idmap, dentry, attr);
 	if (err)
@@ -810,7 +820,7 @@ static ssize_t ntfs_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		ret2 = filemap_write_and_wait_range(iocb->ki_filp->f_mapping,
 				offset, end);
 		if (ret2) {
-			ret = -EIO;
+			ret = ret2;
 			goto out;
 		}
 		invalidate_mapping_pages(iocb->ki_filp->f_mapping,
@@ -860,15 +870,16 @@ ssize_t ntfs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	int err;
 	loff_t old_data_size, old_init_size;
 
-	if (NVolShutdown(vol))
-		return -EIO;
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
 
 	if (NInoWofCompressed(ni))
 		return -EOPNOTSUPP;
 
 	if (NInoEncrypted(ni)) {
-		ntfs_error(vi->i_sb, "Writing for %s files is not supported yet",
-			   NInoCompressed(ni) ? "Compressed" : "Encrypted");
+		ntfs_warning(vi->i_sb, "Writing for %s files is not supported yet",
+			     NInoCompressed(ni) ? "Compressed" : "Encrypted");
 		return -EOPNOTSUPP;
 	}
 
@@ -1037,9 +1048,15 @@ int ntfs_file_mmap_prepare(struct vm_area_desc *desc)
 {
 	struct file *file = desc->file;
 	struct inode *inode = file_inode(file);
+	struct ntfs_volume *vol = NTFS_SB(file->f_mapping->host->i_sb);
+	int ret;
 
-	if (NVolShutdown(NTFS_SB(file->f_mapping->host->i_sb)))
-		return -EIO;
+	if (file->f_mode & FMODE_WRITE)
+		ret = ntfs_emergency_state(vol);
+	else
+		ret = NVolShutdown(vol) ? -EIO : 0;
+	if (ret)
+		return ret;
 
 	if (NInoCompressed(NTFS_I(inode)) || NInoWofCompressed(NTFS_I(inode)))
 		return -EOPNOTSUPP;
@@ -1165,7 +1182,9 @@ static int ntfs_ioctl_set_volume_label(struct file *filp, unsigned long arg)
 	if (ret)
 		goto out;
 
-	ret = ntfs_write_volume_label(vol, label);
+	ret = ntfs_emergency_state(vol);
+	if (!ret)
+		ret = ntfs_write_volume_label(vol, label);
 	mnt_drop_write_file(filp);
 out:
 	kfree(label);
@@ -1181,6 +1200,11 @@ static int ntfs_ioctl_fitrim(struct ntfs_volume *vol, unsigned long arg)
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
+
+	/* Don't trust $Bitmap after an error. */
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
 
 	dev = vol->sb->s_bdev;
 	if (!bdev_max_discard_sectors(dev))
@@ -1478,6 +1502,10 @@ long ntfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	if (mode & ~(NTFS_FALLOC_FL_SUPPORTED))
 		return -EOPNOTSUPP;
 
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
+
 	if (NInoCompressed(ni) || NInoEncrypted(ni) || NInoWofCompressed(ni))
 		return -EOPNOTSUPP;
 
@@ -1585,7 +1613,7 @@ const struct inode_operations ntfs_file_inode_ops = {
 	.fileattr_get	= ntfs_fileattr_get,
 	.fileattr_set	= ntfs_fileattr_set,
 	.listxattr	= ntfs_listxattr,
-	.get_acl	= ntfs_get_acl,
+	.get_inode_acl	= ntfs_get_acl,
 	.set_acl	= ntfs_set_acl,
 	.fiemap		= ntfs_fiemap,
 };
@@ -1605,7 +1633,7 @@ const struct inode_operations ntfs_special_inode_operations = {
 	.listxattr	= ntfs_listxattr,
 	.fileattr_get	= ntfs_fileattr_get,
 	.fileattr_set	= ntfs_fileattr_set,
-	.get_acl	= ntfs_get_acl,
+	.get_inode_acl	= ntfs_get_acl,
 	.set_acl	= ntfs_set_acl,
 };
 
