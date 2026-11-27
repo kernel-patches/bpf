@@ -20,7 +20,7 @@
  * @size:     Size of the buffer needed for the pool
  * @elements: Number of buffers to allocate
  *
- * Returns the actual number of buffers allocated.
+ * Return: the actual number of buffers allocated.
  */
 static int cvm_oct_fill_hw_skbuff(int pool, int size, int elements)
 {
@@ -76,7 +76,7 @@ static void cvm_oct_free_hw_skbuff(struct platform_device *pdev,
  * @size:     Size of each buffer in the pool
  * @elements: Number of buffers to allocate
  *
- * Returns the actual number of buffers allocated.
+ * Return: the actual number of buffers allocated.
  */
 static int cvm_oct_fill_hw_memory(struct platform_device *pdev, int pool, int size,
 				  int elements)

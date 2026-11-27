@@ -30,9 +30,9 @@ About the kernel module parameter of driver:
 		insmod ./sm750fb.ko g_option="noaccel:1280x1024@60:otherparm:etc..."
 
 	2) if you put 800x600 into the parameter without bpp and
-		refresh rate, kernel driver will defaulty use 16bpp and 60hz
+		refresh rate, kernel driver will default to using 16bpp and 60hz
 
 Important:
 	if you have vesafb enabled in your config then /dev/fb0 will be created by vesafb
 	and this driver will use fb1, fb2. In that case, you need to configure your X-server
-	to use fb1. Another simple althernative is to disable vesafb from your config.
+	to use fb1. Another simple alternative is to disable vesafb from your config.

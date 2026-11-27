@@ -80,7 +80,7 @@ static int gbphy_dev_uevent(const struct device *dev, struct kobj_uevent_env *en
 	const struct gb_module *module = intf->module;
 	const struct gb_host_device *hd = intf->hd;
 
-	if (add_uevent_var(env, "BUS=%u", hd->bus_id))
+	if (add_uevent_var(env, "BUS=%d", hd->bus_id))
 		return -ENOMEM;
 	if (add_uevent_var(env, "MODULE=%u", module->module_id))
 		return -ENOMEM;

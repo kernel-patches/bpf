@@ -358,14 +358,14 @@ unsigned int sm750_calc_pll_value(unsigned int request_orig,
 	return ret;
 }
 
-unsigned int sm750_format_pll_reg(struct pll_value *p_PLL)
+unsigned int sm750_format_pll_reg(struct pll_value *pll)
 {
 #ifndef VALIDATION_CHIP
-	unsigned int POD = p_PLL->POD;
+	unsigned int POD = pll->POD;
 #endif
-	unsigned int OD = p_PLL->OD;
-	unsigned int M = p_PLL->M;
-	unsigned int N = p_PLL->N;
+	unsigned int OD = pll->OD;
+	unsigned int M = pll->M;
+	unsigned int N = pll->N;
 
 	/*
 	 * Note that all PLL's have the same format. Here, we just use
