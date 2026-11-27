@@ -521,8 +521,7 @@ impl<T> HrTimer<T> {
     /// # Safety
     ///
     /// - `self_ptr` must point to a valid `Self`.
-    /// - The caller must either have exclusive access to the data pointed at by `self_ptr`, or be
-    ///   within the context of the timer callback.
+    /// - The caller must have exclusive access to the data pointed at by `self_ptr`.
     #[inline]
     unsafe fn raw_forward(self_ptr: *mut Self, now: HrTimerInstant<T>, interval: Delta) -> u64
     where
@@ -569,29 +568,6 @@ impl<T> HrTimer<T> {
         T: HasHrTimer<T>,
     {
         self.forward(HrTimerInstant::<T>::now(), interval)
-    }
-
-    /// Return the time expiry for this [`HrTimer`].
-    ///
-    /// This value should only be used as a snapshot, as the actual expiry time could change after
-    /// this function is called.
-    pub fn expires(&self) -> HrTimerInstant<T>
-    where
-        T: HasHrTimer<T>,
-    {
-        // SAFETY: `self` is an immutable reference and thus always points to a valid `HrTimer`.
-        let c_timer_ptr = unsafe { HrTimer::raw_get(self) };
-
-        // SAFETY:
-        // - Timers cannot have negative ktime_t values as their expiration time.
-        // - There's no actual locking here, a racy read is fine and expected
-        unsafe {
-            Instant::from_ktime(
-                // This `read_volatile` is intended to correspond to a READ_ONCE call.
-                // FIXME(read_once): Replace with `read_once` when available on the Rust side.
-                core::ptr::read_volatile(&raw const ((*c_timer_ptr).node.expires)),
-            )
-        }
     }
 }
 
@@ -904,7 +880,7 @@ pub trait HrTimerMode: private::Sealed {
     /// The C representation of hrtimer mode.
     const C_MODE: bindings::hrtimer_mode;
 
-    /// Type representing the clock source.
+    /// The clock to be used by the timer.
     type Clock: ClockId;
 
     /// Type representing the expiration specification (absolute or relative time).
@@ -1060,13 +1036,25 @@ impl<'a, T: HasHrTimer<T>> HrTimerCallbackContext<'a, T> {
 
     /// Conditionally forward the timer.
     ///
-    /// This function is identical to [`HrTimer::forward()`] except that it may only be used from
-    /// within the context of a [`HrTimer`] callback.
+    /// This function does the same as [`HrTimer::forward()`], but it may only be used from within
+    /// the context of a [`HrTimer`] callback, and it is safe against a concurrent start operation.
+    /// If the timer was started by a concurrent start operation, the expiry is not changed, this
+    /// function returns 0, and the expiry set by the start operation is used.
     pub fn forward(&mut self, now: HrTimerInstant<T>, interval: Delta) -> u64 {
+        // SAFETY: By our type invariants, `self.0` always points to a valid `HrTimer<T>`.
+        let c_timer_ptr = unsafe { HrTimer::<T>::raw_get(self.0.as_ptr()) };
+
         // SAFETY:
-        // - We are guaranteed to be within the context of a timer callback by our type invariants
-        // - By our type invariants, `self.0` always points to a valid `HrTimer<T>`
-        unsafe { HrTimer::<T>::raw_forward(self.0.as_ptr(), now, interval) }
+        // - `c_timer_ptr` is initialized and valid.
+        // - By our type invariants, we are within the context of the timer callback, as
+        //   `hrtimer_forward_safe_from_callback()` requires.
+        unsafe {
+            bindings::hrtimer_forward_safe_from_callback(
+                c_timer_ptr,
+                now.as_nanos(),
+                interval.as_nanos(),
+            )
+        }
     }
 
     /// Conditionally forward the timer.
