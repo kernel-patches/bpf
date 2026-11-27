@@ -353,7 +353,7 @@ static int __init rcar_sysc_pd_init(void)
 	const struct rcar_sysc_info *info;
 	const struct of_device_id *match;
 	struct rcar_pm_domains *domains;
-	struct device_node *np;
+	struct device_node *np, *cpg_np;
 	void __iomem *base;
 	unsigned int i;
 	int error;
@@ -370,8 +370,9 @@ static int __init rcar_sysc_pd_init(void)
 			goto out_put;
 	}
 
-	has_cpg_mstp = of_find_compatible_node(NULL, NULL,
-					       "renesas,cpg-mstp-clocks");
+	cpg_np = of_find_compatible_node(NULL, NULL, "renesas,cpg-mstp-clocks");
+	has_cpg_mstp = cpg_np;
+	of_node_put(cpg_np);
 
 	base = of_iomap(np, 0);
 	if (!base) {

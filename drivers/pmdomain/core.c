@@ -2463,13 +2463,19 @@ free:
 
 static void genpd_free_data(struct generic_pm_domain *genpd)
 {
+	/* Pending device link removals still reference genpd->dev. */
+	device_link_wait_removal();
+
 	put_device(&genpd->dev);
 	if (genpd->device_id != -ENXIO)
 		ida_free(&genpd_ida, genpd->device_id);
 	if (genpd_is_cpu_domain(genpd))
 		free_cpumask_var(genpd->cpus);
-	if (genpd->free_states)
+	if (genpd->free_states) {
 		genpd->free_states(genpd->states, genpd->state_count);
+		genpd->states = NULL;
+		genpd->state_count = 0;
+	}
 	kfree(genpd->gd);
 }
 
