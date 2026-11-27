@@ -20,14 +20,6 @@ static void ice_eswitch_resync_uplink(struct ice_vsi *uplink_vsi)
 
 	while (test_and_set_bit(ICE_CFG_BUSY, uplink_vsi->state))
 		usleep_range(1000, 2000);
-
-	/* VLAN changes during the session may have added these */
-	ice_fltr_clear_vlan_vsi_promisc(&pf->hw, uplink_vsi,
-					ICE_MCAST_VLAN_PROMISC_BITS);
-	ice_fltr_clear_vsi_promisc(&pf->hw, uplink_vsi->idx,
-				   ICE_MCAST_PROMISC_BITS, 0);
-	uplink_vsi->current_netdev_flags &= ~IFF_ALLMULTI;
-
 	clear_bit(ICE_VSI_ESWITCH_UPLINK, uplink_vsi->state);
 	set_bit(ICE_VSI_PROMISC_CHANGED, uplink_vsi->state);
 	set_bit(ICE_VSI_UMAC_FLTR_CHANGED, uplink_vsi->state);
