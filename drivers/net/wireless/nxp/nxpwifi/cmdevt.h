@@ -92,6 +92,7 @@ void nxpwifi_process_tx_pause_event(struct nxpwifi_private *priv,
 void nxpwifi_bt_coex_wlan_param_update_event(struct nxpwifi_private *priv,
 					     struct sk_buff *event_skb);
 int nxpwifi_mgmt_frame_reg(struct nxpwifi_private *priv, u32 mask);
+int nxpwifi_set_p2p_mode(struct nxpwifi_private *priv, u16 mode, bool sync);
 int nxpwifi_set_uap_sys_cfg(struct nxpwifi_private *priv,
 			    struct nxpwifi_uap_bss_param *cfg);
 int nxpwifi_set_rts(struct nxpwifi_private *priv, u32 rts_thr);

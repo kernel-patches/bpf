@@ -25,6 +25,14 @@
 #define rtw89_for_each_active_rtwvif(rtwdev, rtwvif) \
 	list_for_each_entry(rtwvif, &(rtwdev)->hal.entity_mgnt.active_list, mgnt_entry)
 
+static inline bool rtw89_no_active_rtwvif(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_hal *hal = &rtwdev->hal;
+	struct rtw89_entity_mgnt *mgnt = &hal->entity_mgnt;
+
+	return list_empty(&mgnt->active_list);
+}
+
 /* Before adding rtwvif to list, we need to check if it already exist, beacase
  * in some case such as SER L2 happen during WoWLAN flow, calling reconfig
  * twice cause the list to be added twice.

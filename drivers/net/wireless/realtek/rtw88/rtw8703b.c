@@ -563,12 +563,12 @@ static void try_mac_from_devicetree(struct rtw_dev *rtwdev)
 	}
 }
 
-static int rtw8703b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static int rtw8703b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
 	int ret;
 
-	ret = rtw8723x_read_efuse(rtwdev, log_map);
+	ret = rtw8723x_read_efuse(rtwdev, log_map, phy_map);
 	if (ret != 0)
 		return ret;
 
@@ -959,7 +959,7 @@ static void query_phy_status_ofdm(struct rtw_dev *rtwdev, u8 *phy_raw,
 	val_s8 = phy_status->path_agc[RF_PATH_A].gain & 0x3F;
 	pkt_stat->rx_power[RF_PATH_A] = (val_s8 * 2) - 110;
 	pkt_stat->rssi = rtw_phy_rf_power_2_rssi(pkt_stat->rx_power, 1);
-	pkt_stat->rx_snr[RF_PATH_A] = (s8)(phy_status->path_rxsnr[RF_PATH_A] / 2);
+	pkt_stat->rx_snr[RF_PATH_A] = phy_status->path_rxsnr[RF_PATH_A];
 
 	/* signal power reported by HW */
 	val_s8 = phy_status->cck_sig_qual_ofdm_pwdb_all >> 1;

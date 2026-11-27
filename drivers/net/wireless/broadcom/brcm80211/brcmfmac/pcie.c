@@ -801,9 +801,49 @@ static void brcmf_pcie_attach(struct brcmf_pciedev_info *devinfo)
 }
 
 
+/* ChipCommon chipcontrol bit selecting the discrete FEM control pin mode */
+#define BRCMF_CC_CHIPCTL_4360_DISCRETE_FEMCTRL_MODE	BIT(4)
+
+/* On the Apple boards below, 5 GHz on the BCM43602 only works with the
+ * discrete FEM control pin mode selected in the ChipCommon chipcontrol
+ * register. The bit is set after a reboot, but a power-on reset of the chip
+ * (e.g. over S3) clears it and the firmware does not set it again. Restore
+ * it before the firmware is started. Other Apple boards may not use this
+ * mode (a MacBookPro11,5 boots with the bit clear), so they are left alone.
+ */
+static void brcmf_pcie_43602_apple_femctrl(struct brcmf_pciedev_info *devinfo)
+{
+	const struct pci_dev *pdev = devinfo->pdev;
+	u32 val;
+
+	if (pdev->subsystem_vendor != PCI_VENDOR_ID_APPLE)
+		return;
+
+	switch (pdev->subsystem_device) {
+	case 0x0157:	/* MacBookPro14,2, possibly others */
+	case 0x015a:	/* MacBookPro13,3 */
+	case 0x0173:	/* MacBookPro14,3 */
+		break;
+	default:
+		return;
+	}
+
+	brcmf_pcie_select_core(devinfo, BCMA_CORE_CHIPCOMMON);
+	val = READCC32(devinfo, chipcontrol);
+	if (val & BRCMF_CC_CHIPCTL_4360_DISCRETE_FEMCTRL_MODE)
+		return;
+
+	brcmf_dbg(PCIE, "chipcontrol 0x%08x, setting discrete FEM control mode\n",
+		  val);
+	WRITECC32(devinfo, chipcontrol,
+		  val | BRCMF_CC_CHIPCTL_4360_DISCRETE_FEMCTRL_MODE);
+}
+
 static int brcmf_pcie_enter_download_state(struct brcmf_pciedev_info *devinfo)
 {
 	if (devinfo->ci->chip == BRCM_CC_43602_CHIP_ID) {
+		brcmf_pcie_43602_apple_femctrl(devinfo);
+
 		brcmf_pcie_select_core(devinfo, BCMA_CORE_ARM_CR4);
 		brcmf_pcie_write_reg32(devinfo, BRCMF_PCIE_ARMCR4REG_BANKIDX,
 				       5);
@@ -2626,39 +2666,54 @@ brcmf_pcie_prepare_fw_request(struct brcmf_pciedev_info *devinfo)
 	fwreq->domain_nr = pci_domain_nr(devinfo->pdev->bus) + 1;
 	fwreq->bus_nr = devinfo->pdev->bus->number;
 
-	/* Apple platforms with fancy firmware/NVRAM selection */
+	/* Apple platforms with fancy firmware/NVRAM selection.
+	 * Antenna SKU is not advertised by ACPI in iMacPro1,1,
+	 * iMac19,1 and iMac19,2. Since they use BCM4364/3, and
+	 * the firmware for that chip doesn't depend on antenna-sku,
+	 * make its check optional on that chip.
+	 */
 	if (devinfo->settings->board_type &&
-	    devinfo->settings->antenna_sku &&
+	    (devinfo->settings->antenna_sku ||
+	     (devinfo->ci->chip == BRCM_CC_4364_CHIP_ID &&
+	      devinfo->ci->chiprev == 3)) &&
 	    devinfo->otp.valid) {
 		const struct brcmf_otp_params *otp = &devinfo->otp;
 		struct device *dev = &devinfo->pdev->dev;
 		const char **bt = fwreq->board_types;
+		int i = 0;
+		int j;
 
 		brcmf_dbg(PCIE, "Apple board: %s\n",
 			  devinfo->settings->board_type);
 
 		/* Example: apple,shikoku-RASP-m-6.11-X3 */
-		bt[0] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s-%s-%s-%s",
-				       devinfo->settings->board_type,
-				       otp->module, otp->vendor, otp->version,
-				       devinfo->settings->antenna_sku);
-		bt[1] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s-%s-%s",
-				       devinfo->settings->board_type,
-				       otp->module, otp->vendor, otp->version);
-		bt[2] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s-%s",
-				       devinfo->settings->board_type,
-				       otp->module, otp->vendor);
-		bt[3] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s",
-				       devinfo->settings->board_type,
-				       otp->module);
-		bt[4] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s",
-				       devinfo->settings->board_type,
-				       devinfo->settings->antenna_sku);
-		bt[5] = devinfo->settings->board_type;
+		if (devinfo->settings->antenna_sku)
+			bt[i++] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s-%s-%s-%s",
+						 devinfo->settings->board_type,
+						 otp->module, otp->vendor, otp->version,
+						 devinfo->settings->antenna_sku);
+		else
+			brcmf_dbg(PCIE, "Antenna SKU not found\n");
+		bt[i++] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s-%s-%s",
+					 devinfo->settings->board_type,
+					 otp->module, otp->vendor, otp->version);
+		bt[i++] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s-%s",
+					 devinfo->settings->board_type,
+					 otp->module, otp->vendor);
+		bt[i++] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s",
+					 devinfo->settings->board_type,
+					 otp->module);
+		if (devinfo->settings->antenna_sku)
+			bt[i++] = devm_kasprintf(dev, GFP_KERNEL, "%s-%s",
+						 devinfo->settings->board_type,
+						 devinfo->settings->antenna_sku);
+		bt[i++] = devinfo->settings->board_type;
 
-		if (!bt[0] || !bt[1] || !bt[2] || !bt[3] || !bt[4]) {
-			kfree(fwreq);
-			return NULL;
+		for (j = 0; j < i - 1; j++) {
+			if (!bt[j]) {
+				kfree(fwreq);
+				return NULL;
+			}
 		}
 	} else {
 		brcmf_dbg(PCIE, "Board: %s\n", devinfo->settings->board_type);

@@ -1470,10 +1470,7 @@ static void rtw89_fw_release_pno_pkt_list(struct rtw89_dev *rtwdev,
 	struct rtw89_pktofld_info *info, *tmp;
 	u8 idx, wildcard_pkt_id;
 
-	for (idx = NL80211_BAND_2GHZ; idx < NUM_NL80211_BANDS; idx++) {
-		if (!(rtwdev->chip->support_bands & BIT(idx)))
-			continue;
-
+	for_each_set_bit(idx, rtwdev->supported_bands, NUM_NL80211_BANDS) {
 		wildcard_pkt_id = scan_info->wildcard_pkt_id[idx];
 		if (wildcard_pkt_id != RTW89_SCANOFLD_PKT_NONE)
 			rtw89_fw_h2c_del_pkt_offload(rtwdev, wildcard_pkt_id);

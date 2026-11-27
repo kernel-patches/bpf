@@ -722,6 +722,7 @@ struct rtl8xxxu_fileops rtl8192cu_fops = {
 	.rx_agg_buf_size = 16000,
 	.tx_desc_size = sizeof(struct rtl8xxxu_txdesc32),
 	.rx_desc_size = sizeof(struct rtl8xxxu_rxdesc16),
+	.has_c2hevt_tx_report = 1,
 	.supports_ap = 1,
 	.hw_feature_report = 0,
 	.max_macid_num = 32,

@@ -117,6 +117,7 @@ static ssize_t aqm_write(struct file *file,
 {
 	struct ieee80211_local *local = file->private_data;
 	char buf[100];
+	u32 quantum;
 
 	if (count >= sizeof(buf))
 		return -EINVAL;
@@ -133,8 +134,12 @@ static ssize_t aqm_write(struct file *file,
 		return count;
 	else if (sscanf(buf, "fq_memory_limit %u", &local->fq.memory_limit) == 1)
 		return count;
-	else if (sscanf(buf, "fq_quantum %u", &local->fq.quantum) == 1)
+	else if (sscanf(buf, "fq_quantum %u", &quantum) == 1) {
+		if (!quantum || quantum > INT_MAX)
+			return -EINVAL;
+		local->fq.quantum = quantum;
 		return count;
+	}
 
 	return -EINVAL;
 }

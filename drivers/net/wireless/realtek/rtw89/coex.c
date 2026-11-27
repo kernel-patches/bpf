@@ -978,6 +978,7 @@ enum btc_reason_and_action {
 	BTC_RSN_NTFY_SPECIFIC_PACKET,
 	BTC_RSN_NTFY_POWEROFF,
 	BTC_RSN_NTFY_ROLE_INFO,
+	BTC_RSN_NTFY_GENERIC,
 	BTC_RSN_CMD_SET_COEX,
 	BTC_RSN_ACT1_WORK,
 	BTC_RSN_BT_DEVINFO_WORK,
@@ -10528,6 +10529,67 @@ void rtw89_btc_ntfy_wl_sta(struct rtw89_dev *rtwdev)
 		btc->dm.cnt_dm[BTC_DCNT_WL_STA_LAST] =
 		btc->dm.cnt_notify[BTC_NCNT_WL_STA];
 	}
+}
+
+void rtw89_btc_ntfy_mrcx_info(struct rtw89_dev *rtwdev,
+			      enum rtw89_mlo_coex_mode mode,
+			      u8 act_hwb_map, u8 bt_slot_rsp)
+{
+	struct rtw89_btc *btc = &rtwdev->btc;
+	struct rtw89_btc_wl_info *wl = &btc->cx.wl;
+	struct rtw89_btc_wl_role_info *wl_rinfo = &wl->role_info;
+	struct rtw89_btc_wl_mlo_info *mlo_info = &wl->mlo_info;
+	bool link_mode_chg;
+	u8 link_mode;
+
+	rtw89_debug(rtwdev, RTW89_DBG_BTC,
+		    "[BTC], %s(): mode=%d, act_hwb_map=0x%x, bt_slot_rsp=%d\n",
+		    __func__, mode, act_hwb_map, bt_slot_rsp);
+	btc->dm.cnt_notify[BTC_NCNT_GENERIC]++;
+
+	mlo_info->mrcx_mode = mode;
+	mlo_info->mrcx_act_hwb_map = act_hwb_map;
+	mlo_info->mrcx_bt_slot_rsp = bt_slot_rsp;
+
+	if (wl_rinfo->link_mode[RTW89_MAC_0] != BTC_WLINK_DB_MCC &&
+	    wl_rinfo->link_mode[RTW89_MAC_1] != BTC_WLINK_DB_MCC)
+		return;
+
+	link_mode_chg = true;
+
+	/* the driver may change link mode to relieve band-switch effort */
+	switch (mode) {
+	case RTW89_MRCX_1CH_WB_H0:
+	case RTW89_MRCX_1CH_WB_H1:
+	case RTW89_MRCX_TDMRA_2CH_WB_WB:
+		link_mode = BTC_WLINK_STA;
+		break;
+	case RTW89_MRCX_TDMRA_1CH_W_B:
+		/*
+		 * both WL ports share one 2.4 GHz channel (W), BT
+		 * time-shares the remaining slots (B); treat as SCC.
+		 */
+		link_mode = BTC_WLINK_SCC;
+		break;
+	case RTW89_MRCX_TDMRA_2CH_W_W_B:
+		link_mode = BTC_WLINK_SB_MCC;
+		break;
+	default:
+		link_mode_chg = false;
+		break;
+	}
+
+	wl->link_mode_chg = link_mode_chg;
+
+	if (link_mode_chg) {
+		if (act_hwb_map & BIT(RTW89_MAC_0))
+			wl_rinfo->link_mode[RTW89_MAC_0] = link_mode;
+
+		if (act_hwb_map & BIT(RTW89_MAC_1))
+			wl_rinfo->link_mode[RTW89_MAC_1] = link_mode;
+	}
+
+	_run_coex(rtwdev, BTC_RSN_NTFY_GENERIC);
 }
 
 static u8 rtw89_btc_c2h_get_index_by_ver(struct rtw89_dev *rtwdev, u8 func)

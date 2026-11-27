@@ -41,8 +41,9 @@ static inline void rtw89_enter_ips_by_hwflags(struct rtw89_dev *rtwdev)
 {
 	struct ieee80211_hw *hw = rtwdev->hw;
 
-	/* prevent entering IPS after ROC, but it is scanning */
-	if (rtwdev->scanning)
+	/* prevent entering IPS after ROC, but it is scanning or regd learning */
+	if (rtwdev->scanning ||
+	    test_bit(RTW89_FLAG_REGD_LEARNING, rtwdev->flags))
 		return;
 
 	if (hw->conf.flags & IEEE80211_CONF_IDLE)

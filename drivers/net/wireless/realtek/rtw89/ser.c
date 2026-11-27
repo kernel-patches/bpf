@@ -726,6 +726,7 @@ static void ser_l2_reset_st_pre_hdl(struct rtw89_ser *ser)
 bottom:
 	rtw89_ser_cd_free(rtwdev, buf, !!ret);
 
+	rtw89_regd_learn_deinit(rtwdev, true);
 	ser_reset_mac_binding(rtwdev);
 	rtw89_core_stop(rtwdev);
 	rtw89_entity_init(rtwdev);

@@ -38,7 +38,7 @@ static void rtw8822bs_efuse_parsing(struct rtw_efuse *efuse,
 	ether_addr_copy(efuse->addr, map->s.mac_addr);
 }
 
-static int rtw8822b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static int rtw8822b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
 	struct rtw8822b_efuse *map;
@@ -1565,6 +1565,12 @@ static void rtw8822b_adaptivity(struct rtw_dev *rtwdev)
 	if (dm_info->edcca_mode == RTW_EDCCA_NORMAL) {
 		l2h = max_t(s8, igi + EDCCA_IGI_L2H_DIFF, EDCCA_TH_L2H_LB);
 		h2l = l2h - EDCCA_L2H_H2L_DIFF_NORMAL;
+	} else if (rtwdev->regd.dfs_region == NL80211_DFS_ETSI &&
+		   rtwdev->hal.current_band_type == RTW_BAND_2G) {
+		/* follow the normal threshold, capped for EN 300 328 */
+		l2h = max_t(s8, igi + EDCCA_IGI_L2H_DIFF, EDCCA_TH_L2H_LB);
+		l2h = min_t(s8, l2h, RTW8822B_EDCCA_ETSI_2G);
+		h2l = l2h - EDCCA_L2H_H2L_DIFF;
 	} else {
 		l2h = min_t(s8, igi, dm_info->l2h_th_ini);
 		h2l = l2h - EDCCA_L2H_H2L_DIFF;

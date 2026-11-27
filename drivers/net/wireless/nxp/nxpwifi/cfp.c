@@ -398,7 +398,8 @@ u32 nxpwifi_get_supported_rates(struct nxpwifi_private *priv, u8 *rates)
 
 	bands = nxpwifi_convert_config_bands(adapter->fw_bands);
 
-	if (priv->bss_mode == NL80211_IFTYPE_STATION) {
+	if (priv->bss_mode == NL80211_IFTYPE_STATION ||
+	    priv->bss_mode == NL80211_IFTYPE_P2P_CLIENT) {
 		if (bands == BAND_B) {
 			/* B only */
 			nxpwifi_dbg(adapter, INFO, "info: infra band=%d\t"

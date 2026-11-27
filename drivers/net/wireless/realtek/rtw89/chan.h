@@ -97,6 +97,7 @@ enum rtw89_chanctx_pause_reasons {
 	RTW89_CHANCTX_PAUSE_REASON_HW_SCAN,
 	RTW89_CHANCTX_PAUSE_REASON_ROC,
 	RTW89_CHANCTX_PAUSE_REASON_GC_BCN_LOSS,
+	RTW89_CHANCTX_PAUSE_REASON_REGD_LEARN,
 };
 
 struct rtw89_chanctx_pause_parm {
@@ -171,7 +172,7 @@ void rtw89_config_entity_chandef(struct rtw89_dev *rtwdev,
 void rtw89_config_roc_chandef(struct rtw89_dev *rtwdev,
 			      struct rtw89_vif_link *rtwvif_link,
 			      const struct cfg80211_chan_def *chandef);
-void rtw89_entity_init(struct rtw89_dev *rtwdev);
+int rtw89_entity_init(struct rtw89_dev *rtwdev);
 enum rtw89_entity_mode rtw89_entity_recalc(struct rtw89_dev *rtwdev);
 bool rtw89_entity_check_hw(struct rtw89_dev *rtwdev, enum rtw89_phy_idx phy_idx);
 void rtw89_entity_force_hw(struct rtw89_dev *rtwdev, enum rtw89_phy_idx phy_idx);

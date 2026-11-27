@@ -126,7 +126,7 @@ static void rtw8814a_init_hwcap(struct rtw_dev *rtwdev)
 		efuse->hw_cap.ant_num, efuse->hw_cap.nss);
 }
 
-static int rtw8814a_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static int rtw8814a_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
 	struct rtw8814a_efuse *map;

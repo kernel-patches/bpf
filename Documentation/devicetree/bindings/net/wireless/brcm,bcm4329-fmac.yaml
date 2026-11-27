@@ -61,6 +61,13 @@ properties:
     description: SDIO function number for the device (for most cases
       this will be 1) or PCI device identifier.
 
+  local-mac-address:
+    description:
+      The factory-assigned MAC address, as six bytes in network byte order.
+      The bootloader may supply this from persistent board data when the
+      address is not programmed into the chip or the NVRAM configuration
+      contains a shared template address.
+
   interrupts:
     maxItems: 1
     description: Out-of-band (OOB) IRQ line for waking up the host
@@ -157,6 +164,7 @@ examples:
       wifi@1 {
         compatible = "brcm,bcm4334-fmac", "brcm,bcm4329-fmac";
         reg = <1>;
+        local-mac-address = [00 11 22 33 44 55];
         interrupt-parent = <&gpio>;
         interrupts = <24 IRQ_TYPE_EDGE_FALLING>;
         interrupt-names = "host-wake";

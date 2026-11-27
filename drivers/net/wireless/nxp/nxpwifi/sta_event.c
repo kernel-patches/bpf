@@ -638,7 +638,8 @@ void nxpwifi_reset_connect_state(struct nxpwifi_private *priv, u16 reason_code,
 		    "info: successfully disconnected from %pM: reason code %d\n",
 		    priv->cfg_bssid, reason_code);
 
-	if (priv->bss_mode == NL80211_IFTYPE_STATION) {
+	if (priv->bss_mode == NL80211_IFTYPE_STATION ||
+	    priv->bss_mode == NL80211_IFTYPE_P2P_CLIENT) {
 		if (adapter->host_mlme_link_lost)
 			nxpwifi_host_mlme_disconnect(adapter->priv_link_lost,
 						     reason_code, NULL);
