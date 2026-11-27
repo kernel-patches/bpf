@@ -5686,12 +5686,25 @@ static int bond_xdp_xmit(struct net_device *bond_dev,
 		struct xdp_frame *frame = frames[nxmit];
 		struct xdp_frame *frames1[] = {frame};
 		struct net_device *slave_dev;
+		xdp_features_t feats;
 		struct xdp_buff xdp;
 
 		xdp_convert_frame_to_buff(frame, &xdp);
 
 		slave_dev = bond_xdp_get_xmit_slave(bond_dev, &xdp);
 		if (!slave_dev) {
+			err = -ENXIO;
+			break;
+		}
+
+		/* The slave can be selected before bond_xdp_set_features()
+		 * republishes the bond's xdp_features, so apply the
+		 * __xdp_enqueue() contract to the slave itself.
+		 */
+		feats = READ_ONCE(slave_dev->xdp_features);
+		if (unlikely(!(feats & NETDEV_XDP_ACT_NDO_XMIT) ||
+			     (!(feats & NETDEV_XDP_ACT_NDO_XMIT_SG) &&
+			      xdp_frame_has_frags(frame)))) {
 			err = -ENXIO;
 			break;
 		}
