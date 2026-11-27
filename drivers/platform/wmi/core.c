@@ -1598,9 +1598,6 @@ static int __init acpi_wmi_init(void)
 {
 	int error;
 
-	if (acpi_disabled)
-		return -ENODEV;
-
 	error = class_register(&wmi_bus_class);
 	if (error)
 		return error;
@@ -1608,6 +1605,9 @@ static int __init acpi_wmi_init(void)
 	error = bus_register(&wmi_bus_type);
 	if (error)
 		goto err_unreg_class;
+
+	if (acpi_disabled)
+		return 0;
 
 	error = platform_driver_register(&acpi_wmi_driver);
 	if (error) {
@@ -1628,7 +1628,8 @@ err_unreg_class:
 
 static void __exit acpi_wmi_exit(void)
 {
-	platform_driver_unregister(&acpi_wmi_driver);
+	if (!acpi_disabled)
+		platform_driver_unregister(&acpi_wmi_driver);
 	bus_unregister(&wmi_bus_type);
 	class_unregister(&wmi_bus_class);
 }

@@ -13748,7 +13748,7 @@ S:	Supported
 F:	drivers/counter/intel-qep.c
 
 INTEL SCU DRIVERS
-M:	Mika Westerberg <mika.westerberg@linux.intel.com>
+M:	Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
 S:	Maintained
 F:	drivers/platform/x86/intel_scu_*
 F:	include/linux/platform_data/x86/intel_scu_ipc.h
