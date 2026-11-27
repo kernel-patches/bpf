@@ -85,6 +85,10 @@
 #define PGID_AGGR			64
 #define PGID_SRC			80
 
+/* General purpose PGIDs. PGID 57 is reserved for a later blackhole PGID. */
+#define PGID_GP_START			NUM_PHYS_PORTS
+#define PGID_GP_END			(PGID_AGGR - 7)
+
 /* Reserved PGIDs. */
 #define PGID_CPU			(PGID_AGGR - 6)
 #define PGID_UC				(PGID_AGGR - 5)
@@ -197,6 +201,14 @@ struct lan9645x {
 	/* lock forwarding configuration and vlan table */
 	struct mutex fwd_domain_lock;
 	struct mutex mact_lock; /* serialize mac table register access */
+
+	/* Multicast Forwarding Database */
+	struct list_head mdb_entries;
+	DECLARE_BITMAP(mdb_pgids, PGID_GP_END);
+	/* lock for mdb_entries and mdb_pgids. Must be taken before mact_lock
+	 * if both are taken.
+	 */
+	struct mutex mdb_lock;
 
 	int num_port_dis;
 
@@ -381,5 +393,13 @@ int lan9645x_mac_init(struct lan9645x *lan9645x);
 void lan9645x_mac_deinit(struct lan9645x *lan9645x);
 int lan9645x_mact_dsa_dump(struct lan9645x *lan9645x, int port,
 			   dsa_fdb_dump_cb_t *cb, void *data);
+
+/* Multicast Database lan9645x_mdb.c */
+int lan9645x_mdb_add(struct lan9645x *lan9645x, int chip_port,
+		     const unsigned char addr[ETH_ALEN], u16 vid);
+void lan9645x_mdb_del(struct lan9645x *lan9645x, int chip_port,
+		      const unsigned char addr[ETH_ALEN], u16 vid);
+void lan9645x_mdb_init(struct lan9645x *lan9645x);
+void lan9645x_mdb_deinit(struct lan9645x *lan9645x);
 
 #endif /* __LAN9645X_MAIN_H__ */
