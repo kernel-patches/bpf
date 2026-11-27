@@ -20,15 +20,8 @@
 		timebase-frequency = <3000000>;
 
 		c910_0: cpu@0 {
-			compatible = "thead,c910", "riscv";
 			device_type = "cpu";
-			riscv,isa = "rv64imafdc";
-			riscv,isa-base = "rv64i";
-			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
+			compatible = "thead,c910", "riscv";
 			reg = <0>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
@@ -38,6 +31,13 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache>;
 			mmu-type = "riscv,sv39";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
+					       "ziccrse", "zicntr", "zicsr",
+					       "zifencei", "zihpm", "zfh",
+					       "xtheadvector";
+			thead,vlenb = <16>;
 
 			cpu0_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -47,15 +47,8 @@
 		};
 
 		c910_1: cpu@1 {
-			compatible = "thead,c910", "riscv";
 			device_type = "cpu";
-			riscv,isa = "rv64imafdc";
-			riscv,isa-base = "rv64i";
-			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
+			compatible = "thead,c910", "riscv";
 			reg = <1>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
@@ -65,6 +58,13 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache>;
 			mmu-type = "riscv,sv39";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
+					       "ziccrse", "zicntr", "zicsr",
+					       "zifencei", "zihpm", "zfh",
+					       "xtheadvector";
+			thead,vlenb = <16>;
 
 			cpu1_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -74,15 +74,8 @@
 		};
 
 		c910_2: cpu@2 {
-			compatible = "thead,c910", "riscv";
 			device_type = "cpu";
-			riscv,isa = "rv64imafdc";
-			riscv,isa-base = "rv64i";
-			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
+			compatible = "thead,c910", "riscv";
 			reg = <2>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
@@ -92,6 +85,13 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache>;
 			mmu-type = "riscv,sv39";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
+					       "ziccrse", "zicntr", "zicsr",
+					       "zifencei", "zihpm", "zfh",
+					       "xtheadvector";
+			thead,vlenb = <16>;
 
 			cpu2_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -101,15 +101,8 @@
 		};
 
 		c910_3: cpu@3 {
-			compatible = "thead,c910", "riscv";
 			device_type = "cpu";
-			riscv,isa = "rv64imafdc";
-			riscv,isa-base = "rv64i";
-			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
+			compatible = "thead,c910", "riscv";
 			reg = <3>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
@@ -119,6 +112,13 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache>;
 			mmu-type = "riscv,sv39";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
+					       "ziccrse", "zicntr", "zicsr",
+					       "zifencei", "zihpm", "zfh",
+					       "xtheadvector";
+			thead,vlenb = <16>;
 
 			cpu3_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -261,11 +261,11 @@
 
 	soc {
 		compatible = "simple-bus";
+		ranges;
 		interrupt-parent = <&plic>;
 		#address-cells = <2>;
 		#size-cells = <2>;
 		dma-noncoherent;
-		ranges;
 
 		plic: interrupt-controller@ffd8000000 {
 			compatible = "thead,th1520-plic", "thead,c900-plic";
@@ -302,6 +302,7 @@
 			clocks = <&clk CLK_SPI>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+
 			status = "disabled";
 		};
 
@@ -313,6 +314,7 @@
 			clock-names = "baudclk", "apb_pclk";
 			reg-shift = <2>;
 			reg-io-width = <4>;
+
 			status = "disabled";
 		};
 
@@ -330,6 +332,7 @@
 			snps,multicast-filter-bins = <64>;
 			snps,perfect-filter-entries = <32>;
 			snps,axi-config = <&stmmac_axi_config>;
+
 			status = "disabled";
 
 			mdio1: mdio {
@@ -353,6 +356,7 @@
 			snps,multicast-filter-bins = <64>;
 			snps,perfect-filter-entries = <32>;
 			snps,axi-config = <&stmmac_axi_config>;
+
 			status = "disabled";
 
 			mdio0: mdio {
@@ -368,6 +372,7 @@
 			interrupts = <62 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&clk CLK_EMMC_SDIO>;
 			clock-names = "core";
+
 			status = "disabled";
 		};
 
@@ -377,6 +382,7 @@
 			interrupts = <64 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&clk CLK_EMMC_SDIO>;
 			clock-names = "core";
+
 			status = "disabled";
 		};
 
@@ -386,6 +392,7 @@
 			interrupts = <71 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&clk CLK_EMMC_SDIO>;
 			clock-names = "core";
+
 			status = "disabled";
 		};
 
@@ -397,6 +404,7 @@
 			clock-names = "baudclk", "apb_pclk";
 			reg-shift = <2>;
 			reg-io-width = <4>;
+
 			status = "disabled";
 		};
 
@@ -408,6 +416,7 @@
 			clock-names = "baudclk", "apb_pclk";
 			reg-shift = <2>;
 			reg-io-width = <4>;
+
 			status = "disabled";
 		};
 
@@ -418,6 +427,7 @@
 			clocks = <&clk CLK_I2C0>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+
 			status = "disabled";
 		};
 
@@ -428,6 +438,7 @@
 			clocks = <&clk CLK_I2C1>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+
 			status = "disabled";
 		};
 
@@ -438,6 +449,7 @@
 			clocks = <&clk CLK_I2C4>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+
 			status = "disabled";
 		};
 
@@ -451,11 +463,11 @@
 
 			gpio2: gpio-controller@0 {
 				compatible = "snps,dw-apb-gpio-port";
+				reg = <0>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				ngpios = <32>;
 				gpio-ranges = <&padctrl0_apsys 0 0 32>;
-				reg = <0>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
 				interrupts = <58 IRQ_TYPE_LEVEL_HIGH>;
@@ -472,11 +484,11 @@
 
 			gpio3: gpio-controller@0 {
 				compatible = "snps,dw-apb-gpio-port";
+				reg = <0>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				ngpios = <23>;
 				gpio-ranges = <&padctrl0_apsys 0 32 23>;
-				reg = <0>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
 				interrupts = <59 IRQ_TYPE_LEVEL_HIGH>;
@@ -500,11 +512,11 @@
 
 			gpio0: gpio-controller@0 {
 				compatible = "snps,dw-apb-gpio-port";
+				reg = <0>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				ngpios = <32>;
 				gpio-ranges = <&padctrl1_apsys 0 0 32>;
-				reg = <0>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
 				interrupts = <56 IRQ_TYPE_LEVEL_HIGH>;
@@ -521,11 +533,11 @@
 
 			gpio1: gpio-controller@0 {
 				compatible = "snps,dw-apb-gpio-port";
+				reg = <0>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				ngpios = <31>;
 				gpio-ranges = <&padctrl1_apsys 0 32 31>;
-				reg = <0>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
 				interrupts = <57 IRQ_TYPE_LEVEL_HIGH>;
@@ -546,6 +558,7 @@
 			clocks = <&clk CLK_I2C2>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+
 			status = "disabled";
 		};
 
@@ -557,6 +570,7 @@
 			clock-names = "baudclk", "apb_pclk";
 			reg-shift = <2>;
 			reg-io-width = <4>;
+
 			status = "disabled";
 		};
 
@@ -567,6 +581,7 @@
 			clocks = <&clk CLK_I2C3>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+
 			status = "disabled";
 		};
 
@@ -648,6 +663,7 @@
 			resets = <&rst TH1520_RESET_ID_HDMI>,
 				 <&rst TH1520_RESET_ID_HDMI_APB>;
 			reset-names = "main", "apb";
+
 			status = "disabled";
 
 			ports {
@@ -682,6 +698,7 @@
 				 <&rst TH1520_RESET_ID_DPU_AXI>,
 				 <&rst TH1520_RESET_ID_DPU_AHB>;
 			reset-names = "core", "axi", "ahb";
+
 			status = "disabled";
 
 			ports {
@@ -714,6 +731,7 @@
 			snps,dma-masters = <1>;
 			snps,data-width = <4>;
 			snps,axi-max-burst-len = <16>;
+
 			status = "disabled";
 		};
 
@@ -723,6 +741,7 @@
 			clocks = <&clk CLK_PERI_APB_PCLK>;
 			clock-names = "timer";
 			interrupts = <16 IRQ_TYPE_LEVEL_HIGH>;
+
 			status = "disabled";
 		};
 
@@ -732,6 +751,7 @@
 			clocks = <&clk CLK_PERI_APB_PCLK>;
 			clock-names = "timer";
 			interrupts = <17 IRQ_TYPE_LEVEL_HIGH>;
+
 			status = "disabled";
 		};
 
@@ -741,6 +761,7 @@
 			clocks = <&clk CLK_PERI_APB_PCLK>;
 			clock-names = "timer";
 			interrupts = <18 IRQ_TYPE_LEVEL_HIGH>;
+
 			status = "disabled";
 		};
 
@@ -750,6 +771,7 @@
 			clocks = <&clk CLK_PERI_APB_PCLK>;
 			clock-names = "timer";
 			interrupts = <19 IRQ_TYPE_LEVEL_HIGH>;
+
 			status = "disabled";
 		};
 
@@ -761,6 +783,7 @@
 			clock-names = "baudclk", "apb_pclk";
 			reg-shift = <2>;
 			reg-io-width = <4>;
+
 			status = "disabled";
 		};
 
@@ -772,6 +795,7 @@
 			clock-names = "baudclk", "apb_pclk";
 			reg-shift = <2>;
 			reg-io-width = <4>;
+
 			status = "disabled";
 		};
 
@@ -782,6 +806,7 @@
 			clocks = <&clk CLK_I2C5>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+
 			status = "disabled";
 		};
 
@@ -791,6 +816,7 @@
 			clocks = <&clk CLK_PERI_APB_PCLK>;
 			clock-names = "timer";
 			interrupts = <20 IRQ_TYPE_LEVEL_HIGH>;
+
 			status = "disabled";
 		};
 
@@ -800,6 +826,7 @@
 			clocks = <&clk CLK_PERI_APB_PCLK>;
 			clock-names = "timer";
 			interrupts = <21 IRQ_TYPE_LEVEL_HIGH>;
+
 			status = "disabled";
 		};
 
@@ -809,6 +836,7 @@
 			clocks = <&clk CLK_PERI_APB_PCLK>;
 			clock-names = "timer";
 			interrupts = <22 IRQ_TYPE_LEVEL_HIGH>;
+
 			status = "disabled";
 		};
 
@@ -818,6 +846,7 @@
 			clocks = <&clk CLK_PERI_APB_PCLK>;
 			clock-names = "timer";
 			interrupts = <23 IRQ_TYPE_LEVEL_HIGH>;
+
 			status = "disabled";
 		};
 
@@ -845,11 +874,11 @@
 
 			aogpio: gpio-controller@0 {
 				compatible = "snps,dw-apb-gpio-port";
+				reg = <0>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				ngpios = <16>;
 				gpio-ranges = <&padctrl_aosys 0 9 16>;
-				reg = <0>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
 				interrupts = <76 IRQ_TYPE_LEVEL_HIGH>;
@@ -860,6 +889,7 @@
 			compatible = "thead,th1520-reset-ao";
 			reg = <0xff 0xfff44000 0x0 0x2000>;
 			#reset-cells = <1>;
+
 			status = "reserved";
 		};
 
@@ -893,11 +923,11 @@
 
 			gpio4: gpio-controller@0 {
 				compatible = "snps,dw-apb-gpio-port";
+				reg = <0>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				ngpios = <23>;
 				gpio-ranges = <&padctrl_aosys 0 25 22>, <&padctrl_aosys 22 7 1>;
-				reg = <0>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
 				interrupts = <55 IRQ_TYPE_LEVEL_HIGH>;

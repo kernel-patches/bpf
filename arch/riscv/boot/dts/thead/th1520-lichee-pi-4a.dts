@@ -41,10 +41,13 @@
 		};
 	};
 
-	wifi_pwrseq: wifi-pwrseq {
-		compatible = "mmc-pwrseq-simple";
-		reset-gpios = <&ioexp2 4 GPIO_ACTIVE_LOW>;
-		post-power-on-delay-ms = <200>;
+	fan: pwm-fan {
+		compatible = "pwm-fan";
+		pinctrl-0 = <&fan_pins>;
+		pinctrl-names = "default";
+		#cooling-cells = <2>;
+		pwms = <&pwm 1 10000000 0>;
+		cooling-levels = <0 66 196 255>;
 	};
 
 	thermal-zones {
@@ -52,6 +55,23 @@
 			polling-delay = <1000>;
 			polling-delay-passive = <1000>;
 			thermal-sensors = <&pvt 0>;
+
+			cooling-maps {
+				map-active-0 {
+					cooling-device = <&fan 1 1>;
+					trip = <&fan_config0>;
+				};
+
+				map-active-1 {
+					cooling-device = <&fan 2 2>;
+					trip = <&fan_config1>;
+				};
+
+				map-active-2 {
+					cooling-device = <&fan 3 3>;
+					trip = <&fan_config2>;
+				};
+			};
 
 			trips {
 				fan_config0: fan-trip0 {
@@ -72,35 +92,14 @@
 					type = "active";
 				};
 			};
-
-			cooling-maps {
-				map-active-0 {
-					cooling-device = <&fan 1 1>;
-					trip = <&fan_config0>;
-				};
-
-				map-active-1 {
-					cooling-device = <&fan 2 2>;
-					trip = <&fan_config1>;
-				};
-
-				map-active-2 {
-					cooling-device = <&fan 3 3>;
-					trip = <&fan_config2>;
-				};
-			};
 		};
 	};
 
-	fan: pwm-fan {
-		pinctrl-names = "default";
-		pinctrl-0 = <&fan_pins>;
-		compatible = "pwm-fan";
-		#cooling-cells = <2>;
-		pwms = <&pwm 1 10000000 0>;
-		cooling-levels = <0 66 196 255>;
+	wifi_pwrseq: wifi-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		reset-gpios = <&ioexp2 4 GPIO_ACTIVE_LOW>;
+		post-power-on-delay-ms = <200>;
 	};
-
 };
 
 &dpu {
@@ -119,8 +118,9 @@
 
 &i2c0 {
 	clock-frequency = <400000>;
-	pinctrl-names = "default";
 	pinctrl-0 = <&i2c0_pins>;
+	pinctrl-names = "default";
+
 	status = "okay";
 
 	ioexp1: gpio@18 {
@@ -136,8 +136,9 @@
 
 &i2c1 {
 	clock-frequency = <400000>;
-	pinctrl-names = "default";
 	pinctrl-0 = <&i2c1_pins>;
+	pinctrl-names = "default";
+
 	status = "okay";
 
 	ioexp2: gpio@18 {
@@ -158,8 +159,9 @@
 
 &i2c3 {
 	clock-frequency = <400000>;
-	pinctrl-names = "default";
 	pinctrl-0 = <&i2c3_pins>;
+	pinctrl-names = "default";
+
 	status = "okay";
 
 	ioexp3: gpio@18 {
@@ -204,16 +206,6 @@
 	};
 
 	uart0_pins: uart0-0 {
-		tx-pins {
-			pins = "UART0_TXD";
-			function = "uart";
-			bias-disable;
-			drive-strength = <3>;
-			input-disable;
-			input-schmitt-disable;
-			slew-rate = <0>;
-		};
-
 		rx-pins {
 			pins = "UART0_RXD";
 			function = "uart";
@@ -221,6 +213,16 @@
 			drive-strength = <1>;
 			input-enable;
 			input-schmitt-enable;
+			slew-rate = <0>;
+		};
+
+		tx-pins {
+			pins = "UART0_TXD";
+			function = "uart";
+			bias-disable;
+			drive-strength = <3>;
+			input-disable;
+			input-schmitt-disable;
 			slew-rate = <0>;
 		};
 	};
@@ -261,11 +263,13 @@
 	keep-power-in-suspend;
 	mmc-pwrseq = <&wifi_pwrseq>;
 	non-removable;
+
 	status = "okay";
 };
 
 &uart0 {
-	pinctrl-names = "default";
 	pinctrl-0 = <&uart0_pins>;
+	pinctrl-names = "default";
+
 	status = "okay";
 };
