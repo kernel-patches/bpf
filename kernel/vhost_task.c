@@ -6,6 +6,7 @@
 #include <linux/completion.h>
 #include <linux/sched/task.h>
 #include <linux/sched/vhost_task.h>
+#include <linux/resume_user_mode.h>
 #include <linux/sched/signal.h>
 
 enum vhost_task_flags {
@@ -30,6 +31,14 @@ static int vhost_task_fn(void *data)
 
 	for (;;) {
 		bool did_work;
+
+		/*
+		 * We never return to user mode, so TWA_RESUME task_work and
+		 * memory.high/blkcg throttling would otherwise never run. Run
+		 * them here, where no locks are held, like io-wq workers do.
+		 */
+		if (test_thread_flag(TIF_NOTIFY_RESUME))
+			resume_user_mode_work(NULL);
 
 		if (signal_pending(current)) {
 			struct ksignal ksig;
