@@ -418,6 +418,7 @@ struct ptp_ocp {
 	u32			ts_window_adjust;
 	u64			fw_cap;
 	struct ptp_ocp_signal	signal[OCP_SIGNAL_NUM];
+	struct mutex		sma_lock; /* serializes routing and connector state */
 	struct ptp_ocp_sma_connector sma[OCP_SMA_NUM];
 	const struct ocp_sma_op *sma_op;
 	struct dpll_device *dpll;
@@ -3385,6 +3386,7 @@ ptp_ocp_sma_show(struct ptp_ocp *bp, int sma_nr, char *buf,
 	const struct ocp_selector * const *tbl;
 	u32 val;
 
+	guard(mutex)(&bp->sma_lock);
 	tbl = bp->sma_op->tbl;
 	val = ptp_ocp_sma_get(bp, sma_nr) & SMA_SELECT_MASK;
 
@@ -3434,6 +3436,7 @@ ptp_ocp_sma_store_val(struct ptp_ocp *bp, int val, enum ptp_ocp_sma_mode mode, i
 {
 	struct ptp_ocp_sma_connector *sma = &bp->sma[sma_nr - 1];
 
+	lockdep_assert_held(&bp->sma_lock);
 	if (sma->fixed_dir && (mode != sma->mode || val & SMA_DISABLE))
 		return -EOPNOTSUPP;
 
@@ -3474,6 +3477,7 @@ ptp_ocp_sma_store(struct ptp_ocp *bp, const char *buf, int sma_nr)
 	enum ptp_ocp_sma_mode mode;
 	int val;
 
+	guard(mutex)(&bp->sma_lock);
 	mode = sma->mode;
 	val = sma_parse_inputs(bp->sma_op->tbl, buf, &mode);
 	if (val < 0)
@@ -5839,7 +5843,9 @@ static int ptp_ocp_dpll_direction_get(const struct dpll_pin *pin,
 				      struct netlink_ext_ack *extack)
 {
 	struct ptp_ocp_sma_connector *sma = pin_priv;
+	struct ptp_ocp *bp = priv;
 
+	guard(mutex)(&bp->sma_lock);
 	*direction = sma->mode == SMA_MODE_IN ?
 				  DPLL_PIN_DIRECTION_INPUT :
 				  DPLL_PIN_DIRECTION_OUTPUT;
@@ -5858,6 +5864,7 @@ static int ptp_ocp_dpll_direction_set(const struct dpll_pin *pin,
 	enum ptp_ocp_sma_mode mode;
 	int sma_nr = (sma - bp->sma);
 
+	guard(mutex)(&bp->sma_lock);
 	if (sma->fixed_dir)
 		return -EOPNOTSUPP;
 	mode = direction == DPLL_PIN_DIRECTION_INPUT ?
@@ -5874,16 +5881,39 @@ static int ptp_ocp_dpll_frequency_set(const struct dpll_pin *pin,
 	struct ptp_ocp_sma_connector *sma = pin_priv;
 	struct ptp_ocp *bp = dpll_priv;
 	const struct ocp_selector *tbl;
+	u32 val, aux = 0;
 	int sma_nr = (sma - bp->sma);
-	int i;
+	int i, j;
 
+	guard(mutex)(&bp->sma_lock);
 	if (sma->fixed_fcn)
 		return -EOPNOTSUPP;
 
 	tbl = bp->sma_op->tbl[sma->mode];
-	for (i = 0; tbl[i].name; i++)
-		if (tbl[i].frequency == frequency)
-			return ptp_ocp_sma_store_val(bp, i, sma->mode, sma_nr + 1);
+	for (i = 0; tbl[i].name; i++) {
+		if (tbl[i].frequency != frequency)
+			continue;
+
+		if (sma->mode == SMA_MODE_IN) {
+			val = bp->sma_op->get(bp, sma_nr + 1) & SMA_SELECT_MASK;
+			if (sma->disabled)
+				val = 0;
+
+			for (j = 0; tbl[j].name; j++) {
+				if (!tbl[j].frequency && (val & tbl[j].value))
+					aux |= tbl[j].value;
+			}
+
+			/* Some boards encode 10 MHz as an empty selector. */
+			if (!tbl[i].value && aux) {
+				NL_SET_ERR_MSG(extack,
+					       "10 MHz cannot coexist with the current SMA routes");
+				return -EBUSY;
+			}
+		}
+		return ptp_ocp_sma_store_val(bp, tbl[i].value | aux,
+					     sma->mode, sma_nr + 1);
+	}
 	return -EINVAL;
 }
 
@@ -5900,7 +5930,9 @@ static int ptp_ocp_dpll_frequency_get(const struct dpll_pin *pin,
 	u32 val;
 	int i;
 
+	guard(mutex)(&bp->sma_lock);
 	val = bp->sma_op->get(bp, sma_nr + 1);
+	val &= SMA_SELECT_MASK;
 	tbl = bp->sma_op->tbl[sma->mode];
 	for (i = 0; tbl[i].name; i++)
 		if (val == tbl[i].value) {
@@ -5908,7 +5940,28 @@ static int ptp_ocp_dpll_frequency_get(const struct dpll_pin *pin,
 			return 0;
 		}
 
-	return -EINVAL;
+	if (sma->mode == SMA_MODE_OUT)
+		return -EINVAL;
+
+	/* Inputs can feed several destinations, including timestampers. */
+	*frequency = 0;
+	for (i = 0; tbl[i].name; i++) {
+		if (!(val & tbl[i].value))
+			continue;
+		val &= ~tbl[i].value;
+		if (!tbl[i].frequency)
+			continue;
+		if (*frequency && *frequency != tbl[i].frequency) {
+			*frequency = 0;
+			return 0;
+		}
+		*frequency = tbl[i].frequency;
+	}
+	/* Unknown destinations do not establish a frequency either. */
+	if (val)
+		*frequency = 0;
+
+	return 0;
 }
 
 static const struct dpll_device_ops dpll_ops = {
@@ -5982,6 +6035,7 @@ ptp_ocp_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	 * ptp_ocp_register_resources(), so this sentinel cannot overwrite an
 	 * adapter number the i2c notifier stores during registration.
 	 */
+	mutex_init(&bp->sma_lock);
 	mutex_init(&bp->cpld_lock);
 	spin_lock_init(&bp->cpld_adap_lock);
 	bp->cpld_i2c_adap_nr = -1;
