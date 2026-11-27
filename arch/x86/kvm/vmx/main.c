@@ -909,7 +909,7 @@ static void handle_nm_fault_irqoff(struct kvm_vcpu *vcpu)
 	 * the #NM exception.
 	 */
 	if (is_xfd_nm_fault(vcpu))
-		rdmsrq(MSR_IA32_XFD_ERR, vcpu->arch.guest_fpu.xfd_err);
+		vcpu->arch.guest_fpu.xfd_err = rdmsrq(MSR_IA32_XFD_ERR);
 }
 
 static void handle_exception_irqoff(struct kvm_vcpu *vcpu, u32 intr_info)

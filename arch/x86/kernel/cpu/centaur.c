@@ -30,7 +30,7 @@ static void init_c3(struct cpuinfo_x86 *c)
 
 		/* enable ACE unit, if present and disabled */
 		if ((tmp & (ACE_PRESENT | ACE_ENABLED)) == ACE_PRESENT) {
-			rdmsrq(MSR_VIA_FCR, msr);
+			msr = rdmsrq(MSR_VIA_FCR);
 			/* enable ACE unit */
 			wrmsrq(MSR_VIA_FCR, msr | ACE_FCR);
 			pr_info("CPU: Enabled ACE h/w crypto\n");
@@ -38,7 +38,7 @@ static void init_c3(struct cpuinfo_x86 *c)
 
 		/* enable RNG unit, if present and disabled */
 		if ((tmp & (RNG_PRESENT | RNG_ENABLED)) == RNG_PRESENT) {
-			rdmsrq(MSR_VIA_RNG, msr);
+			msr = rdmsrq(MSR_VIA_RNG);
 			/* enable RNG unit */
 			wrmsrq(MSR_VIA_RNG, msr | RNG_ENABLE);
 			pr_info("CPU: Enabled h/w RNG\n");
@@ -52,7 +52,7 @@ static void init_c3(struct cpuinfo_x86 *c)
 #ifdef CONFIG_X86_32
 	/* Cyrix III family needs CX8 & PGE explicitly enabled. */
 	if (c->x86_model >= 6 && c->x86_model <= 13) {
-		rdmsrq(MSR_VIA_FCR, msr);
+		msr = rdmsrq(MSR_VIA_FCR);
 		wrmsrq(MSR_VIA_FCR, msr | (1 << 1 | 1 << 7));
 		set_cpu_cap(c, X86_FEATURE_CX8);
 	}
@@ -169,7 +169,7 @@ static void init_centaur(struct cpuinfo_x86 *c)
 			name = "??";
 		}
 
-		rdmsrq(MSR_IDT_FCR1, val.q);
+		val.q = rdmsrq(MSR_IDT_FCR1);
 		newlo = (val.l | fcr_set) & (~fcr_clr);
 
 		if (newlo != val.l) {

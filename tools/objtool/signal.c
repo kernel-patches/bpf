@@ -9,10 +9,15 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/resource.h>
+#include <sys/auxv.h>
 #include <string.h>
 
 #include <objtool/objtool.h>
 #include <objtool/warn.h>
+
+#ifndef AT_MINSIGSTKSZ
+#define AT_MINSIGSTKSZ	51
+#endif
 
 static unsigned long stack_limit;
 
@@ -101,17 +106,20 @@ int init_signal_handler(void)
 {
 	int signals[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT};
 	struct sigaction sa;
+	size_t stack_size;
 	stack_t ss;
 
 	if (read_stack_limit())
 		return -1;
 
-	ss.ss_sp = malloc(SIGSTKSZ);
+	stack_size = getauxval(AT_MINSIGSTKSZ) + SIGSTKSZ;
+
+	ss.ss_sp = malloc(stack_size);
 	if (!ss.ss_sp) {
 		ERROR_GLIBC("malloc");
 		return -1;
 	}
-	ss.ss_size = SIGSTKSZ;
+	ss.ss_size = stack_size;
 	ss.ss_flags = 0;
 
 	if (sigaltstack(&ss, NULL) == -1) {

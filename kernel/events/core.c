@@ -1300,7 +1300,7 @@ static enum hrtimer_restart perf_mux_hrtimer_handler(struct hrtimer *hr)
 	return rotations ? HRTIMER_RESTART : HRTIMER_NORESTART;
 }
 
-static void __perf_mux_hrtimer_init(struct perf_cpu_pmu_context *cpc, int cpu)
+static void __perf_mux_hrtimer_init(struct perf_cpu_pmu_context *cpc)
 {
 	struct hrtimer *timer = &cpc->hrtimer;
 	struct pmu *pmu = cpc->epc.pmu;
@@ -1324,15 +1324,13 @@ static void __perf_mux_hrtimer_init(struct perf_cpu_pmu_context *cpc, int cpu)
 static int perf_mux_hrtimer_restart(struct perf_cpu_pmu_context *cpc)
 {
 	struct hrtimer *timer = &cpc->hrtimer;
-	unsigned long flags;
 
-	raw_spin_lock_irqsave(&cpc->hrtimer_lock, flags);
+	guard(raw_spinlock_irqsave)(&cpc->hrtimer_lock);
 	if (!cpc->hrtimer_active) {
 		cpc->hrtimer_active = 1;
 		hrtimer_forward_now(timer, cpc->hrtimer_interval);
 		hrtimer_start_expires(timer, HRTIMER_MODE_ABS_PINNED_HARD);
 	}
-	raw_spin_unlock_irqrestore(&cpc->hrtimer_lock, flags);
 
 	return 0;
 }
@@ -9137,7 +9135,7 @@ perf_event_read_event(struct perf_event *event,
 			struct task_struct *task)
 {
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	struct perf_read_event read_event = {
 		.pid = perf_event_pid(event, task),
 		.tid = perf_event_tid(event, task),
@@ -9404,7 +9402,7 @@ static void perf_event_task_output(struct perf_event *event,
 {
 	struct perf_task_event *task_event = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data	sample;
+	struct perf_sample_data	sample __uninitialized; /* optimization */
 	struct task_struct *task = task_event->task;
 	int ret;
 
@@ -9548,7 +9546,7 @@ static void perf_event_comm_output(struct perf_event *event,
 {
 	struct perf_comm_event *comm_event = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	int ret;
 
 	if (!perf_event_comm_match(event))
@@ -9639,7 +9637,7 @@ static void perf_event_namespaces_output(struct perf_event *event,
 {
 	struct perf_namespaces_event *namespaces_event = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	int ret;
 
 	if (!perf_event_namespaces_match(event))
@@ -9762,7 +9760,7 @@ static void perf_event_cgroup_output(struct perf_event *event, void *data)
 {
 	struct perf_cgroup_event *cgroup_event = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	int ret;
 	u16 size = sizeof(cgroup_event->event_id) + cgroup_event->path_size;
 
@@ -9873,7 +9871,7 @@ static void perf_event_mmap_output(struct perf_event *event,
 {
 	struct perf_mmap_event *mmap_event = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	int size = sizeof(mmap_event->event_id) + mmap_event->file_size;
 	u32 type = PERF_RECORD_MMAP;
 	u16 misc = PERF_RECORD_MISC_USER;
@@ -10169,7 +10167,7 @@ void perf_event_aux_event(struct perf_event *event, unsigned long head,
 			  unsigned long size, u64 flags)
 {
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	struct perf_aux_event {
 		struct perf_event_header	header;
 		u64				offset;
@@ -10202,7 +10200,7 @@ void perf_event_aux_event(struct perf_event *event, unsigned long head,
 void perf_log_lost_samples(struct perf_event *event, u64 lost)
 {
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	int ret;
 
 	struct {
@@ -10254,7 +10252,7 @@ static void perf_event_switch_output(struct perf_event *event, void *data)
 {
 	struct perf_switch_event *se = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	u32 type;
 	u16 misc;
 	u16 size;
@@ -10321,7 +10319,7 @@ static void perf_event_switch(struct task_struct *task,
 static void perf_log_throttle(struct perf_event *event, int enable)
 {
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	int ret;
 
 	struct {
@@ -10377,7 +10375,7 @@ static void perf_event_ksymbol_output(struct perf_event *event, void *data)
 {
 	struct perf_ksymbol_event *ksymbol_event = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	int ret;
 	u16 size = sizeof(ksymbol_event->event_id) + ksymbol_event->name_len;
 
@@ -10464,7 +10462,7 @@ static void perf_event_bpf_output(struct perf_event *event, void *data)
 {
 	struct perf_bpf_event *bpf_event = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	int ret;
 
 	if (!perf_event_bpf_match(event))
@@ -10554,7 +10552,7 @@ static void perf_callchain_deferred_output(struct perf_event *event, void *data)
 {
 	struct perf_callchain_deferred_event *deferred_event = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	u64 nr = deferred_event->trace->nr;
 	u16 size, id_size, max_payload;
 	int ret;
@@ -10629,7 +10627,7 @@ static void perf_event_text_poke_output(struct perf_event *event, void *data)
 {
 	struct perf_text_poke_event *text_poke_event = data;
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	u16 size = sizeof(text_poke_event->event_id) + text_poke_event->tot + text_poke_event->pad;
 	u64 padding = 0;
 	int ret;
@@ -10700,7 +10698,7 @@ EXPORT_SYMBOL_GPL(perf_event_itrace_started);
 static void perf_log_itrace_start(struct perf_event *event)
 {
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	struct perf_aux_event {
 		struct perf_event_header        header;
 		u32				pid;
@@ -10735,7 +10733,7 @@ static void perf_log_itrace_start(struct perf_event *event)
 void perf_report_aux_output_id(struct perf_event *event, u64 hw_id)
 {
 	struct perf_output_handle handle;
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	struct perf_aux_event {
 		struct perf_event_header        header;
 		u64				hw_id;
@@ -11242,7 +11240,7 @@ static void do_perf_sw_event(enum perf_type_id type, u32 event_id,
 				    u64 nr, struct pt_regs *regs, u64 addr)
 {
 	struct swevent_htable *swhash = this_cpu_ptr(&swevent_htable);
-	struct perf_sample_data data;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	struct perf_event *event;
 	struct hlist_head *head;
 
@@ -11253,8 +11251,8 @@ static void do_perf_sw_event(enum perf_type_id type, u32 event_id,
 
 	hlist_for_each_entry_rcu(event, head, hlist_entry) {
 		if (perf_swevent_match(event, type, event_id, regs)) {
-			perf_sample_data_init(&data, addr, 0);
-			perf_swevent_event(event, nr, &data, regs);
+			perf_sample_data_init(&sample, addr, 0);
+			perf_swevent_event(event, nr, &sample, regs);
 		}
 	}
 end:
@@ -11636,7 +11634,7 @@ void perf_tp_event(u16 event_type, u64 count, void *record, int entry_size,
 		   struct pt_regs *regs, struct hlist_head *head, int rctx,
 		   struct task_struct *task)
 {
-	struct perf_sample_data data;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	struct perf_event *event;
 
 	/*
@@ -11657,15 +11655,15 @@ void perf_tp_event(u16 event_type, u64 count, void *record, int entry_size,
 		if (perf_tp_event_match(event, &raw, regs)) {
 			/*
 			 * Here use the same on-stack perf_sample_data,
-			 * some members in data are event-specific and
+			 * some members in sample are event-specific and
 			 * need to be re-computed for different sweveents.
-			 * Re-initialize data->sample_flags safely to avoid
+			 * Re-initialize sample->sample_flags safely to avoid
 			 * the problem that next event skips preparing data
-			 * because data->sample_flags is set.
+			 * because sample->sample_flags is set.
 			 */
-			perf_sample_data_init(&data, 0, 0);
-			perf_sample_save_raw_data(&data, event, &raw);
-			perf_swevent_event(event, count, &data, regs);
+			perf_sample_data_init(&sample, 0, 0);
+			perf_sample_save_raw_data(&sample, event, &raw);
+			perf_swevent_event(event, count, &sample, regs);
 		}
 	}
 
@@ -11682,7 +11680,7 @@ void perf_tp_event(u16 event_type, u64 count, void *record, int entry_size,
 			goto unlock;
 
 		raw_spin_lock(&ctx->lock);
-		perf_tp_event_target_task(count, record, regs, &data, &raw, ctx);
+		perf_tp_event_target_task(count, record, regs, &sample, &raw, ctx);
 		raw_spin_unlock(&ctx->lock);
 unlock:
 		rcu_read_unlock();
@@ -11991,7 +11989,7 @@ void perf_event_free_bpf_prog(struct perf_event *event)
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
 void perf_bp_event(struct perf_event *bp, void *data)
 {
-	struct perf_sample_data sample;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	struct pt_regs *regs = data;
 
 	/*
@@ -12445,7 +12443,7 @@ static int perf_event_set_filter(struct perf_event *event, void __user *arg)
 static enum hrtimer_restart perf_swevent_hrtimer(struct hrtimer *hrtimer)
 {
 	enum hrtimer_restart ret = HRTIMER_RESTART;
-	struct perf_sample_data data;
+	struct perf_sample_data sample __uninitialized; /* optimization */
 	struct pt_regs *regs;
 	struct perf_event *event;
 	u64 period;
@@ -12458,12 +12456,12 @@ static enum hrtimer_restart perf_swevent_hrtimer(struct hrtimer *hrtimer)
 
 	event->pmu->read(event);
 
-	perf_sample_data_init(&data, 0, event->hw.last_period);
+	perf_sample_data_init(&sample, 0, event->hw.last_period);
 	regs = get_irq_regs();
 
 	if (regs && !perf_exclude_event(event, regs)) {
 		if (!(event->attr.exclude_idle && is_idle_task(current)))
-			if (perf_event_overflow(event, &data, regs))
+			if (perf_event_overflow(event, &sample, regs))
 				ret = HRTIMER_NORESTART;
 	}
 
@@ -13069,7 +13067,7 @@ int perf_pmu_register(struct pmu *_pmu, const char *name, int type)
 
 		*per_cpu_ptr(pmu->cpu_pmu_context, cpu) = cpc;
 		__perf_init_event_pmu_context(&cpc->epc, pmu);
-		__perf_mux_hrtimer_init(cpc, cpu);
+		__perf_mux_hrtimer_init(cpc);
 	}
 
 	if (pmu_bus_running && !pmu->dev) {
@@ -13317,7 +13315,6 @@ static int perf_try_init_event(struct pmu *pmu, struct perf_event *event)
 	if (pmu->scope != PERF_PMU_SCOPE_NONE && event->cpu >= 0) {
 		const struct cpumask *cpumask;
 		struct cpumask *pmu_cpumask;
-		int cpu;
 
 		cpumask = perf_scope_cpu_topology_cpumask(pmu->scope, event->cpu);
 		pmu_cpumask = perf_scope_cpumask(pmu->scope);
@@ -13326,8 +13323,7 @@ static int perf_try_init_event(struct pmu *pmu, struct perf_event *event)
 		if (!pmu_cpumask || !cpumask)
 			goto err_destroy;
 
-		cpu = cpumask_any_and(pmu_cpumask, cpumask);
-		if (cpu >= nr_cpu_ids)
+		if (!cpumask_intersects(pmu_cpumask, cpumask))
 			goto err_destroy;
 
 		event->event_caps |= PERF_EV_CAP_READ_SCOPE;
@@ -15492,8 +15488,7 @@ static void perf_event_setup_cpumask(unsigned int cpu)
 		if (WARN_ON_ONCE(!pmu_cpumask || !cpumask))
 			continue;
 
-		if (!cpumask_empty(cpumask) &&
-		    cpumask_any_and(pmu_cpumask, cpumask) >= nr_cpu_ids)
+		if (!cpumask_empty(cpumask) && !cpumask_intersects(pmu_cpumask, cpumask))
 			cpumask_set_cpu(cpu, pmu_cpumask);
 	}
 end:

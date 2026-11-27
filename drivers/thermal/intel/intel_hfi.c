@@ -286,7 +286,7 @@ void intel_hfi_process_event(__u64 pkg_therm_status_msr_val)
 	if (!raw_spin_trylock(&hfi_instance->event_lock))
 		return;
 
-	rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS, msr);
+	msr = rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS);
 	hfi = msr & PACKAGE_THERM_STATUS_HFI_UPDATED;
 	if (!hfi) {
 		raw_spin_unlock(&hfi_instance->event_lock);
@@ -358,7 +358,7 @@ static void hfi_enable(void)
 {
 	u64 msr_val;
 
-	rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
+	msr_val = rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG);
 	msr_val |= HW_FEEDBACK_CONFIG_HFI_ENABLE_BIT;
 	wrmsrq(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
 }
@@ -379,7 +379,7 @@ static void hfi_disable(void)
 	u64 msr_val;
 	int i;
 
-	rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
+	msr_val = rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG);
 	msr_val &= ~HW_FEEDBACK_CONFIG_HFI_ENABLE_BIT;
 	wrmsrq(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
 
@@ -390,7 +390,7 @@ static void hfi_disable(void)
 	 * memory.
 	 */
 	for (i = 0; i < 2000; i++) {
-		rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS, msr_val);
+		msr_val = rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS);
 		if (msr_val & PACKAGE_THERM_STATUS_HFI_UPDATED)
 			break;
 
@@ -404,7 +404,7 @@ static bool hfi_disable_if_enabled(void)
 {
 	u64 msr_val;
 
-	rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
+	msr_val = rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG);
 	if (!(msr_val & HW_FEEDBACK_CONFIG_HFI_ENABLE_BIT))
 		return false;
 

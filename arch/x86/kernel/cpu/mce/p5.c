@@ -26,8 +26,8 @@ noinstr void pentium_machine_check(struct pt_regs *regs)
 	u64 addr, type;
 
 	instrumentation_begin();
-	rdmsrq(MSR_IA32_P5_MC_ADDR, addr);
-	rdmsrq(MSR_IA32_P5_MC_TYPE, type);
+	addr = rdmsrq(MSR_IA32_P5_MC_ADDR);
+	type = rdmsrq(MSR_IA32_P5_MC_TYPE);
 
 	pr_emerg("CPU#%d: Machine Check Exception:  0x%8X (type 0x%8X).\n",
 		 smp_processor_id(), (u32)addr, (u32)type);
@@ -55,8 +55,8 @@ void intel_p5_mcheck_init(struct cpuinfo_x86 *c)
 		return;
 
 	/* Read registers before enabling: */
-	rdmsrq(MSR_IA32_P5_MC_ADDR, q);
-	rdmsrq(MSR_IA32_P5_MC_TYPE, q);
+	q = rdmsrq(MSR_IA32_P5_MC_ADDR);
+	q = rdmsrq(MSR_IA32_P5_MC_TYPE);
 	pr_info("Intel old style machine check architecture supported.\n");
 
 	/* Enable MCE: */

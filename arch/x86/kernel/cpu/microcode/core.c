@@ -94,13 +94,13 @@ struct early_load_data early_data;
  */
 static bool amd_check_current_patch_level(void)
 {
-	u32 lvl, dummy, i;
+	u32 lvl, i;
 	u32 *levels;
 
 	if (x86_cpuid_vendor() != X86_VENDOR_AMD)
 		return false;
 
-	native_rdmsr(MSR_AMD64_PATCH_LEVEL, lvl, dummy);
+	lvl = native_rdmsrq(MSR_AMD64_PATCH_LEVEL);
 
 	levels = final_levels;
 

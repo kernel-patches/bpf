@@ -571,7 +571,7 @@ void __init mtrr_bp_init(void)
 	if (mtrr_enabled()) {
 		/* Get the number of variable MTRR ranges. */
 		if (mtrr_if == &generic_mtrr_ops)
-			rdmsrq(MSR_MTRRcap, config);
+			config = rdmsrq(MSR_MTRRcap);
 		else
 			config = mtrr_if->var_regs;
 		num_var_ranges = config & MTRR_CAP_VCNT;

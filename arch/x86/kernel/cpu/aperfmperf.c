@@ -41,8 +41,8 @@ static void init_counter_refs(void *data)
 {
 	u64 aperf, mperf;
 
-	rdmsrq(MSR_IA32_APERF, aperf);
-	rdmsrq(MSR_IA32_MPERF, mperf);
+	aperf = rdmsrq(MSR_IA32_APERF);
+	mperf = rdmsrq(MSR_IA32_MPERF);
 
 	this_cpu_write(cpu_samples.aperf, aperf);
 	this_cpu_write(cpu_samples.mperf, mperf);
@@ -479,8 +479,8 @@ void arch_scale_freq_tick(void)
 	if (!cpu_feature_enabled(X86_FEATURE_APERFMPERF))
 		return;
 
-	rdmsrq(MSR_IA32_APERF, aperf);
-	rdmsrq(MSR_IA32_MPERF, mperf);
+	aperf = rdmsrq(MSR_IA32_APERF);
+	mperf = rdmsrq(MSR_IA32_MPERF);
 	acnt = aperf - s->aperf;
 	mcnt = mperf - s->mperf;
 

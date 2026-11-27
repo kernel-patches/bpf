@@ -173,7 +173,7 @@ static void snp_enable(void *arg)
 	if (!cc_platform_has(CC_ATTR_HOST_SEV_SNP))
 		return;
 
-	rdmsrq(MSR_AMD64_SYSCFG, val);
+	val = rdmsrq(MSR_AMD64_SYSCFG);
 
 	val |= MSR_AMD64_SYSCFG_SNP_EN;
 	val |= MSR_AMD64_SYSCFG_SNP_VMPL_EN;
@@ -277,7 +277,7 @@ static void clear_rmp(void)
 		return;
 
 	/* Clearing the RMP while SNP is enabled will cause an exception */
-	rdmsrq(MSR_AMD64_SYSCFG, val);
+	val = rdmsrq(MSR_AMD64_SYSCFG);
 	if (WARN_ON_ONCE(val & MSR_AMD64_SYSCFG_SNP_EN))
 		return;
 
@@ -361,7 +361,7 @@ static void __init free_rmp_segment_table(void)
 		kfree(desc);
 	}
 
-	free_page((unsigned long)rmp_segment_table);
+	kfree(rmp_segment_table);
 
 	rmp_segment_table = NULL;
 }
@@ -369,13 +369,9 @@ static void __init free_rmp_segment_table(void)
 /* Allocate the table used to index into the RMP segments */
 static bool __init alloc_rmp_segment_table(void)
 {
-	struct page *page;
-
-	page = alloc_page(__GFP_ZERO);
-	if (!page)
+	rmp_segment_table = kzalloc(RST_SIZE, GFP_KERNEL);
+	if (!rmp_segment_table)
 		return false;
-
-	rmp_segment_table = page_address(page);
 
 	return true;
 }
@@ -542,7 +538,7 @@ int snp_prepare(void)
 	 * Check if SEV-SNP is already enabled, this can happen in case of
 	 * kexec boot.
 	 */
-	rdmsrq(MSR_AMD64_SYSCFG, val);
+	val = rdmsrq(MSR_AMD64_SYSCFG);
 	if (val & MSR_AMD64_SYSCFG_SNP_EN)
 		return 0;
 
@@ -582,7 +578,7 @@ void snp_shutdown(void)
 {
 	u64 syscfg;
 
-	rdmsrq(MSR_AMD64_SYSCFG, syscfg);
+	syscfg = rdmsrq(MSR_AMD64_SYSCFG);
 	if (syscfg & MSR_AMD64_SYSCFG_SNP_EN)
 		return;
 
@@ -681,7 +677,7 @@ void snp_enable_rmpopt(void)
 	 * Per-CPU RMPOPT tables cover at most 2 TB.  Program each core's
 	 * RMPOPT_BASE with the start of RAM to optimize up to 2 TB.
 	 */
-	rdmsrq(MSR_AMD64_RMPOPT_BASE, base);
+	base = rdmsrq(MSR_AMD64_RMPOPT_BASE);
 	if (!(base & MSR_AMD64_RMPOPT_ENABLE))
 		for_each_cpu(cpu, cpu_primary_thread_mask)
 			wrmsrq_on_cpu(cpu, MSR_AMD64_RMPOPT_BASE,
@@ -715,7 +711,7 @@ int __init snp_rmptable_init(void)
 	 * SnpEn set across shutdown), in which case snp_prepare() bails without
 	 * disabling CPU hotplug, so disable it here.
 	 */
-	rdmsrq(MSR_AMD64_SYSCFG, val);
+	val = rdmsrq(MSR_AMD64_SYSCFG);
 	if (val & MSR_AMD64_SYSCFG_SNP_EN)
 		cpu_hotplug_disable();
 
@@ -743,8 +739,8 @@ static bool probe_contiguous_rmptable_info(void)
 {
 	u64 rmp_sz, rmp_base, rmp_end;
 
-	rdmsrq(MSR_AMD64_RMP_BASE, rmp_base);
-	rdmsrq(MSR_AMD64_RMP_END, rmp_end);
+	rmp_base = rdmsrq(MSR_AMD64_RMP_BASE);
+	rmp_end = rdmsrq(MSR_AMD64_RMP_END);
 
 	if (!(rmp_base & RMP_ADDR_MASK) || !(rmp_end & RMP_ADDR_MASK)) {
 		pr_err("Memory for the RMP table has not been reserved by BIOS\n");
@@ -777,13 +773,13 @@ static bool probe_segmented_rmptable_info(void)
 	unsigned int eax, ebx, segment_shift, segment_shift_min, segment_shift_max;
 	u64 rmp_base, rmp_end;
 
-	rdmsrq(MSR_AMD64_RMP_BASE, rmp_base);
+	rmp_base = rdmsrq(MSR_AMD64_RMP_BASE);
 	if (!(rmp_base & RMP_ADDR_MASK)) {
 		pr_err("Memory for the RMP table has not been reserved by BIOS\n");
 		return false;
 	}
 
-	rdmsrq(MSR_AMD64_RMP_END, rmp_end);
+	rmp_end = rdmsrq(MSR_AMD64_RMP_END);
 	WARN_ONCE(rmp_end & RMP_ADDR_MASK,
 		  "Segmented RMP enabled but RMP_END MSR is non-zero\n");
 
@@ -819,7 +815,7 @@ static bool probe_segmented_rmptable_info(void)
 bool snp_probe_rmptable_info(void)
 {
 	if (cpu_feature_enabled(X86_FEATURE_SEGMENTED_RMP)) {
-		rdmsrq(MSR_AMD64_RMP_CFG, rmp_cfg);
+		rmp_cfg = rdmsrq(MSR_AMD64_RMP_CFG);
 		if (rmp_cfg & MSR_AMD64_SEG_RMP_ENABLED)
 			return probe_segmented_rmptable_info();
 	}

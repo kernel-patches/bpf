@@ -303,7 +303,7 @@ static void get_therm_status(int level, bool *proc_hot, u8 *temp)
 	else
 		msr = MSR_IA32_PACKAGE_THERM_STATUS;
 
-	rdmsrq(msr, msr_val);
+	msr_val = rdmsrq(msr);
 	if (msr_val & THERM_STATUS_PROCHOT_LOG)
 		*proc_hot = true;
 	else
@@ -490,7 +490,7 @@ static int dpti_wait_for_ack(void)
 	 * Wait 15ms to be safe.
 	 */
 	do {
-		rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS, msr_val);
+		msr_val = rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS);
 		udelay(1);
 	} while (!(msr_val & PACKAGE_THERM_STATUS_DPTI_ACK) && --count);
 
@@ -507,7 +507,7 @@ static void dpti_config_this_cpu(bool enable)
 {
 	u64 msr_val;
 
-	rdmsrq(MSR_IA32_THERM_INTERRUPT, msr_val);
+	msr_val = rdmsrq(MSR_IA32_THERM_INTERRUPT);
 
 	if (enable)
 		msr_val |= THERM_INT_DPTI_ENABLE;
@@ -1323,7 +1323,7 @@ void intel_thermal_interrupt(void)
 	if (cpu_feature_enabled(X86_FEATURE_HWP))
 		notify_hwp_interrupt();
 
-	rdmsrq(MSR_IA32_THERM_STATUS, msr_val);
+	msr_val = rdmsrq(MSR_IA32_THERM_STATUS);
 
 	/* Check for violation of core thermal thresholds*/
 	notify_thresholds(msr_val);
@@ -1338,7 +1338,7 @@ void intel_thermal_interrupt(void)
 					CORE_LEVEL);
 
 	if (this_cpu_has(X86_FEATURE_PTS)) {
-		rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS, msr_val);
+		msr_val = rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS);
 		/* check violations of package thermal thresholds */
 		notify_package_thresholds(msr_val);
 		therm_throt_process(msr_val & PACKAGE_THERM_STATUS_PROCHOT,
@@ -1396,7 +1396,7 @@ void intel_init_thermal(struct cpuinfo_x86 *c)
 	 * be some SMM goo which handles it, so we can't even put a handler
 	 * since it might be delivered via SMI already:
 	 */
-	rdmsrq(MSR_IA32_MISC_ENABLE, val.q);
+	val.q = rdmsrq(MSR_IA32_MISC_ENABLE);
 
 	val.h = lvtthmr_init;
 	/*
@@ -1422,7 +1422,7 @@ void intel_init_thermal(struct cpuinfo_x86 *c)
 	/* early Pentium M models use different method for enabling TM2 */
 	if (cpu_has(c, X86_FEATURE_TM2)) {
 		if (c->x86 == 6 && (c->x86_model == 9 || c->x86_model == 13)) {
-			rdmsrq(MSR_THERM2_CTL, val.q);
+			val.q = rdmsrq(MSR_THERM2_CTL);
 			if (val.l & MSR_THERM2_CTL_TM_SELECT)
 				tm2 = 1;
 		} else if (val.l & MSR_IA32_MISC_ENABLE_TM2)
@@ -1436,7 +1436,7 @@ void intel_init_thermal(struct cpuinfo_x86 *c)
 	thermal_intr_init_core_clear_mask();
 	thermal_intr_init_pkg_clear_mask();
 
-	rdmsrq(MSR_IA32_THERM_INTERRUPT, val.q);
+	val.q = rdmsrq(MSR_IA32_THERM_INTERRUPT);
 	if (cpu_has(c, X86_FEATURE_PLN) && !int_pln_enable) {
 		val.l |= THERM_INT_LOW_ENABLE | THERM_INT_HIGH_ENABLE;
 		val.l &= ~THERM_INT_PLN_ENABLE;
@@ -1448,7 +1448,7 @@ void intel_init_thermal(struct cpuinfo_x86 *c)
 	wrmsrq(MSR_IA32_THERM_INTERRUPT, val.q);
 
 	if (cpu_has(c, X86_FEATURE_PTS)) {
-		rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT, val.q);
+		val.q = rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT);
 		if (cpu_has(c, X86_FEATURE_PLN) && !int_pln_enable) {
 			val.l |= PACKAGE_THERM_INT_LOW_ENABLE |
 				 PACKAGE_THERM_INT_HIGH_ENABLE;
@@ -1463,13 +1463,13 @@ void intel_init_thermal(struct cpuinfo_x86 *c)
 		wrmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT, val.q);
 
 		if (cpu_has(c, X86_FEATURE_HFI)) {
-			rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT, val.q);
+			val.q = rdmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT);
 			wrmsrq(MSR_IA32_PACKAGE_THERM_INTERRUPT,
 			       val.q | PACKAGE_THERM_INT_HFI_ENABLE);
 		}
 	}
 
-	rdmsrq(MSR_IA32_MISC_ENABLE, val.q);
+	val.q = rdmsrq(MSR_IA32_MISC_ENABLE);
 	wrmsrq(MSR_IA32_MISC_ENABLE, val.q | MSR_IA32_MISC_ENABLE_TM1);
 
 	pr_info_once("CPU0: Thermal monitoring enabled (%s)\n",

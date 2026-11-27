@@ -140,7 +140,7 @@ static void parse_fam10h_node_id(struct topo_scan *tscan)
 	if (!boot_cpu_has(X86_FEATURE_NODEID_MSR))
 		return;
 
-	rdmsrq(MSR_FAM10H_NODE_ID, nid.msr);
+	nid.msr = rdmsrq(MSR_FAM10H_NODE_ID);
 	store_node(tscan, nid.nodes_per_pkg + 1, nid.node_id);
 	tscan->c->topo.llc_id = nid.node_id;
 }
@@ -168,7 +168,7 @@ static void topoext_fixup(struct topo_scan *tscan)
 			MSR_AMD64_CPUID_EXT_FEAT_TOPOEXT_BIT) <= 0)
 		return;
 
-	rdmsrq(MSR_AMD64_CPUID_EXT_FEAT, msrval);
+	msrval = rdmsrq(MSR_AMD64_CPUID_EXT_FEAT);
 	if (msrval & MSR_AMD64_CPUID_EXT_FEAT_TOPOEXT) {
 		set_cpu_cap(c, X86_FEATURE_TOPOEXT);
 		pr_info_once(FW_INFO "CPU: Re-enabling disabled Topology Extensions Support.\n");

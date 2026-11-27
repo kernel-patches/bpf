@@ -511,7 +511,7 @@ perf_ibs_event_update(struct perf_ibs *perf_ibs, struct perf_event *event,
 	 * prev count manually on overflow.
 	 */
 	while (!perf_event_try_update(event, count, 64)) {
-		rdmsrq(event->hw.config_base, *config);
+		*config = rdmsrq(event->hw.config_base);
 		count = perf_ibs->get_count(*config);
 	}
 }
@@ -591,17 +591,17 @@ static void perf_ibs_start(struct perf_event *event, int flags)
 		 *  o Set VAL bit            CTL2[Dis] = 1
 		 *  o Raise NMI --.        o ...
 		 *                 \       o ->start()
-		 *                  \        wrmsr(IBS_{FETCH|OP}_CTL, new value);
+		 *                  \        wrmsrq(IBS_{FETCH|OP}_CTL, new value);
 		 *                   \       (wrmsr clears the VAL bit)
 		 *                    `--> o Receives delayed NMI
 		 *                           (Unknown NMI since VAL bit is cleared)
 		 *
 		 * Handle this with induced delay.
 		 */
-		rdmsrq(hwc->config_base, ctl);
+		ctl = rdmsrq(hwc->config_base);
 		while ((ctl & perf_ibs->valid_mask) && delay--) {
 			udelay(1);
-			rdmsrq(hwc->config_base, ctl);
+			ctl = rdmsrq(hwc->config_base);
 		}
 	} else {
 		/*
@@ -636,7 +636,7 @@ static void perf_ibs_stop_dis(struct perf_event *event, int flags)
 
 	set_bit(IBS_STOPPING, pcpu->state);
 
-	rdmsrq(hwc->extra_reg.reg, ctl2);
+	ctl2 = rdmsrq(hwc->extra_reg.reg);
 	if (ctl2 & perf_ibs->disable_mask)
 		goto reset_state;
 
@@ -648,7 +648,7 @@ static void perf_ibs_stop_dis(struct perf_event *event, int flags)
 	if (hwc->state & PERF_HES_UPTODATE)
 		goto reset_state;
 
-	rdmsrq(hwc->config_base, config);
+	config = rdmsrq(hwc->config_base);
 
 	config &= ~perf_ibs->valid_mask;
 
@@ -685,7 +685,7 @@ static void perf_ibs_stop(struct perf_event *event, int flags)
 	if (!stopping && (hwc->state & PERF_HES_UPTODATE))
 		return;
 
-	rdmsrq(hwc->config_base, config);
+	config = rdmsrq(hwc->config_base);
 
 	if (stopping) {
 		/*
@@ -1483,7 +1483,7 @@ static int perf_ibs_handle_irq(struct perf_ibs *perf_ibs, struct pt_regs *iregs)
 	struct cpu_perf_ibs *pcpu = this_cpu_ptr(perf_ibs->pcpu);
 	struct perf_event *event = pcpu->event;
 	struct hw_perf_event *hwc;
-	struct perf_sample_data data;
+	struct perf_sample_data data __uninitialized; /* optimization */
 	struct perf_raw_record raw;
 	struct pt_regs regs;
 	struct perf_ibs_data ibs_data;
@@ -1502,10 +1502,10 @@ static int perf_ibs_handle_irq(struct perf_ibs *perf_ibs, struct pt_regs *iregs)
 		 *     ...                       <-- NMI (race 2)
 		 * }
 		 */
-		rdmsrq(perf_ibs->msr2, ctl2);
+		ctl2 = rdmsrq(perf_ibs->msr2);
 		if (test_bit(IBS_STOPPING, pcpu->state) /* race 1 */ ||
 		    (ctl2 & perf_ibs->disable_mask) /* race 2 */) {
-			rdmsrq(perf_ibs->msr, ctl);
+			ctl = rdmsrq(perf_ibs->msr);
 			if (ctl & perf_ibs->valid_mask) {
 				ctl &= ~(perf_ibs->enable_mask |
 					 perf_ibs->valid_mask);
@@ -1536,7 +1536,7 @@ fail:
 	hwc = &event->hw;
 	msr = hwc->config_base;
 	buf = ibs_data.regs;
-	rdmsrq(msr, *buf);
+	*buf = rdmsrq(msr);
 	if (!(*buf++ & perf_ibs->valid_mask))
 		goto fail;
 
@@ -1554,7 +1554,7 @@ fail:
 	offset_max = perf_ibs_get_offset_max(perf_ibs, event, check_rip);
 
 	do {
-		rdmsrq(msr + offset, *buf++);
+		*buf++ = rdmsrq(msr + offset);
 		size++;
 		offset = find_next_bit(perf_ibs->offset_mask,
 				       perf_ibs->offset_max,
@@ -1596,17 +1596,17 @@ fail:
 	if (event->attr.sample_type & PERF_SAMPLE_RAW) {
 		if (perf_ibs == &perf_ibs_op) {
 			if (ibs_caps & IBS_CAPS_BRNTRGT) {
-				rdmsrq(MSR_AMD64_IBSBRTARGET, *buf++);
+				*buf++ = rdmsrq(MSR_AMD64_IBSBRTARGET);
 				br_target_idx = size;
 				size++;
 			}
 			if (ibs_caps & IBS_CAPS_OPDATA4) {
-				rdmsrq(MSR_AMD64_IBSOPDATA4, *buf++);
+				*buf++ = rdmsrq(MSR_AMD64_IBSOPDATA4);
 				size++;
 			}
 		}
 		if (perf_ibs == &perf_ibs_fetch && (ibs_caps & IBS_CAPS_FETCHCTLEXTD)) {
-			rdmsrq(MSR_AMD64_ICIBSEXTDCTL, *buf++);
+			*buf++ = rdmsrq(MSR_AMD64_ICIBSEXTDCTL);
 			size++;
 		}
 	}
@@ -1917,7 +1917,7 @@ static inline int ibs_eilvt_valid(void)
 
 	preempt_disable();
 
-	rdmsrq(MSR_AMD64_IBSCTL, val);
+	val = rdmsrq(MSR_AMD64_IBSCTL);
 	offset = val & IBSCTL_LVT_OFFSET_MASK;
 
 	if (!(val & IBSCTL_LVT_OFFSET_VALID)) {
@@ -1988,13 +1988,13 @@ static void force_ibs_eilvt_setup(void)
 
 	preempt_disable();
 	/* find the next free available EILVT entry, skip offset 0 */
-	for (offset = 1; offset < APIC_EILVT_NR_MAX; offset++) {
+	for (offset = 1; offset < APIC_EILVT_NR_AMD_10H; offset++) {
 		if (get_eilvt(offset))
 			break;
 	}
 	preempt_enable();
 
-	if (offset == APIC_EILVT_NR_MAX) {
+	if (offset == APIC_EILVT_NR_AMD_10H) {
 		pr_debug("No EILVT entry available\n");
 		return;
 	}
@@ -2032,7 +2032,7 @@ static inline int get_ibs_lvt_offset(void)
 {
 	u64 val;
 
-	rdmsrq(MSR_AMD64_IBSCTL, val);
+	val = rdmsrq(MSR_AMD64_IBSCTL);
 	if (!(val & IBSCTL_LVT_OFFSET_VALID))
 		return -EINVAL;
 
