@@ -427,6 +427,9 @@ static void mtk_eint_irq_handler(struct irq_desc *desc)
 
 int mtk_eint_do_suspend(struct mtk_eint *eint)
 {
+	if (!eint)
+		return 0;
+
 	mtk_eint_chip_write_mask(eint, eint->wake_mask);
 
 	return 0;
@@ -435,6 +438,9 @@ EXPORT_SYMBOL_GPL(mtk_eint_do_suspend);
 
 int mtk_eint_do_resume(struct mtk_eint *eint)
 {
+	if (!eint)
+		return 0;
+
 	mtk_eint_chip_write_mask(eint, eint->cur_mask);
 
 	return 0;
