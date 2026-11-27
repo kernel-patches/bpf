@@ -221,18 +221,26 @@ static inline void fanotify_info_set_file_fh(struct fanotify_info *info,
 static inline void fanotify_info_copy_name(struct fanotify_info *info,
 					   const struct qstr *name)
 {
+	char *dst;
+
 	if (WARN_ON_ONCE(info->name2_len > 0))
 		return;
 
 	info->name_len = name->len;
-	strscpy(fanotify_info_name(info), name->name, name->len + 1);
+	dst = fanotify_info_name(info);
+	memcpy(dst, name->name, name->len);
+	dst[name->len] = '\0';
 }
 
 static inline void fanotify_info_copy_name2(struct fanotify_info *info,
 					    const struct qstr *name)
 {
+	char *dst;
+
 	info->name2_len = name->len;
-	strscpy(fanotify_info_name2(info), name->name, name->len + 1);
+	dst = fanotify_info_name2(info);
+	memcpy(dst, name->name, name->len);
+	dst[name->len] = '\0';
 }
 
 /*

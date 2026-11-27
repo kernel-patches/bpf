@@ -89,13 +89,15 @@ static void ext2_msg_fc(struct fs_context *fc, const char *prefix,
 
 	if (fc->purpose == FS_CONTEXT_FOR_RECONFIGURE) {
 		s_id = fc->root->d_sb->s_id;
-	} else {
+	} else if (fc->source) {
 		/* get last path component of source */
 		s_id = strrchr(fc->source, '/');
 		if (s_id)
 			s_id++;
 		else
 			s_id = fc->source;
+	} else {
+		s_id = "unknown";
 	}
 	va_start(args, fmt);
 
@@ -1010,6 +1012,7 @@ static int ext2_fill_super(struct super_block *sb, struct fs_context *fc)
 	sb->s_max_links = EXT2_LINK_MAX;
 	sb->s_time_min = S32_MIN;
 	sb->s_time_max = S32_MAX;
+	super_set_uuid(sb, es->s_uuid, sizeof(es->s_uuid));
 
 	if (le32_to_cpu(es->s_rev_level) == EXT2_GOOD_OLD_REV) {
 		sbi->s_inode_size = EXT2_GOOD_OLD_INODE_SIZE;
@@ -1017,6 +1020,11 @@ static int ext2_fill_super(struct super_block *sb, struct fs_context *fc)
 	} else {
 		sbi->s_inode_size = le16_to_cpu(es->s_inode_size);
 		sbi->s_first_ino = le32_to_cpu(es->s_first_ino);
+		if (sbi->s_first_ino < EXT2_GOOD_OLD_FIRST_INO) {
+			ext2_msg(sb, KERN_ERR, "error: invalid first ino: %u",
+				 le32_to_cpu(es->s_first_ino));
+			goto failed_mount;
+		}
 		if ((sbi->s_inode_size < EXT2_GOOD_OLD_INODE_SIZE) ||
 		    !is_power_of_2(sbi->s_inode_size) ||
 		    (sbi->s_inode_size > blocksize)) {
