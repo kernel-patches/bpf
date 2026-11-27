@@ -354,6 +354,13 @@ ice_eswitch_mode_set(struct devlink *devlink, u16 mode,
 		return -EOPNOTSUPP;
 	}
 
+	/* subfunction ports have representors too */
+	if (!xa_empty(&pf->eswitch.reprs)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Remove all subfunction ports before changing eswitch mode");
+		return -EOPNOTSUPP;
+	}
+
 	switch (mode) {
 	case DEVLINK_ESWITCH_MODE_LEGACY:
 		dev_info(ice_pf_to_dev(pf), "PF %d changed eswitch mode to legacy",
