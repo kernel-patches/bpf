@@ -5571,7 +5571,6 @@ static void its_node_destroy(struct its_node *its)
 
 static int __init its_of_probe(struct device_node *node)
 {
-	struct device_node *np;
 	struct resource res;
 	int err;
 
@@ -5581,8 +5580,8 @@ static int __init its_of_probe(struct device_node *node)
 	 * reset, don't even try to go any further, as this could
 	 * result in something even worse.
 	 */
-	for (np = of_find_matching_node(node, its_device_id); np;
-	     np = of_find_matching_node(np, its_device_id)) {
+	for (struct device_node *np __free(device_node) = of_find_matching_node(node, its_device_id);
+	     np; np = of_find_matching_node(np, its_device_id)) {
 		if (!of_device_is_available(np) ||
 		    !of_property_read_bool(np, "msi-controller") ||
 		    of_address_to_resource(np, 0, &res))
@@ -5593,8 +5592,8 @@ static int __init its_of_probe(struct device_node *node)
 			return err;
 	}
 
-	for (np = of_find_matching_node(node, its_device_id); np;
-	     np = of_find_matching_node(np, its_device_id)) {
+	for (struct device_node *np __free(device_node) = of_find_matching_node(node, its_device_id);
+	     np; np = of_find_matching_node(np, its_device_id)) {
 		struct its_node *its;
 
 		if (!of_device_is_available(np))
