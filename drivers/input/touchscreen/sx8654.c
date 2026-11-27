@@ -42,6 +42,7 @@
 #define I2C_REG_IRQMASK			0x22
 #define I2C_REG_IRQSRC			0x23
 #define I2C_REG_SOFTRESET		0x3f
+#define I2C_REG_SX8650_SOFTRESET		0x1f
 
 #define I2C_REG_SX8650_STAT		0x05
 #define SX8650_STAT_CONVIRQ		BIT(7)
@@ -86,6 +87,7 @@
 #define CH_Y				0x01
 
 struct sx865x_data {
+	u8 reg_softreset;
 	u8 cmd_manual;
 	u8 chan_mask;
 	bool has_irq_penrelease;
@@ -128,8 +130,7 @@ static irqreturn_t sx8650_irq(int irq, void *handle)
 {
 	struct sx8654 *ts = handle;
 	struct device *dev = &ts->client->dev;
-	int len, i;
-	u8 stat;
+	int len, i, stat;
 	u16 x, y;
 	u16 ch;
 	u16 chdata;
@@ -139,6 +140,9 @@ static irqreturn_t sx8650_irq(int irq, void *handle)
 
 	stat = i2c_smbus_read_byte_data(ts->client, CMD_READ_REGISTER
 						    | I2C_REG_SX8650_STAT);
+
+	if (stat < 0)
+		return IRQ_HANDLED;
 
 	if (!(stat & SX8650_STAT_CONVIRQ)) {
 		dev_dbg(dev, "%s ignore stat [0x%02x]", __func__, stat);
@@ -244,7 +248,8 @@ static int sx8654_reset(struct sx8654 *ts)
 		gpiod_set_value_cansleep(ts->gpio_reset, 0);
 	} else {
 		dev_dbg(&ts->client->dev, "NRST unavailable, try softreset\n");
-		err = i2c_smbus_write_byte_data(ts->client, I2C_REG_SOFTRESET,
+		err = i2c_smbus_write_byte_data(ts->client,
+						ts->data->reg_softreset,
 						SOFTRESET_VALUE);
 		if (err)
 			return err;
@@ -413,6 +418,7 @@ static int sx8654_probe(struct i2c_client *client)
 }
 
 static const struct sx865x_data sx8650_data = {
+	.reg_softreset		= I2C_REG_SX8650_SOFTRESET,
 	.cmd_manual		= 0xb0,
 	.has_irq_penrelease	= false,
 	.has_reg_irqmask	= false,
@@ -421,6 +427,7 @@ static const struct sx865x_data sx8650_data = {
 };
 
 static const struct sx865x_data sx8654_data = {
+	.reg_softreset		= I2C_REG_SOFTRESET,
 	.cmd_manual		= 0xc0,
 	.has_irq_penrelease	= true,
 	.has_reg_irqmask	= true,
