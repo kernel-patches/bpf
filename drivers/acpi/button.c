@@ -60,12 +60,12 @@ MODULE_DESCRIPTION("ACPI Button Driver");
 MODULE_LICENSE("GPL");
 
 static const struct acpi_device_id button_device_ids[] = {
-	{ACPI_BUTTON_HID_LID, ACPI_BUTTON_TYPE_LID},
-	{ACPI_BUTTON_HID_SLEEP, ACPI_BUTTON_TYPE_SLEEP},
-	{ACPI_BUTTON_HID_SLEEPF, ACPI_BUTTON_TYPE_SLEEP},
-	{ACPI_BUTTON_HID_POWER, ACPI_BUTTON_TYPE_POWER},
-	{ACPI_BUTTON_HID_POWERF, ACPI_BUTTON_TYPE_POWER},
-	{"", 0},
+	{ .id = ACPI_BUTTON_HID_LID, .driver_data = ACPI_BUTTON_TYPE_LID },
+	{ .id = ACPI_BUTTON_HID_SLEEP, .driver_data = ACPI_BUTTON_TYPE_SLEEP },
+	{ .id = ACPI_BUTTON_HID_SLEEPF, .driver_data = ACPI_BUTTON_TYPE_SLEEP },
+	{ .id = ACPI_BUTTON_HID_POWER, .driver_data = ACPI_BUTTON_TYPE_POWER },
+	{ .id = ACPI_BUTTON_HID_POWERF, .driver_data = ACPI_BUTTON_TYPE_POWER },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, button_device_ids);
 
@@ -167,7 +167,7 @@ static const struct dmi_system_id dmi_lid_quirks[] = {
 		},
 		.driver_data = (void *)(long)ACPI_BUTTON_LID_INIT_OPEN,
 	},
-	{}
+	{ }
 };
 
 static int acpi_button_probe(struct platform_device *pdev);
@@ -822,23 +822,12 @@ static int __init acpi_button_init(void)
 			lid_init_state = ACPI_BUTTON_LID_INIT_METHOD;
 	}
 
-	/*
-	 * Modules such as nouveau.ko and i915.ko have a link time dependency
-	 * on acpi_lid_open(), and would therefore not be loadable on ACPI
-	 * capable kernels booted in non-ACPI mode if the return value of
-	 * platform_driver_register() is returned from here with ACPI disabled
-	 * when this driver is built as a module.
-	 */
-	if (acpi_disabled)
-		return 0;
-
 	return platform_driver_register(&acpi_button_driver);
 }
 
 static void __exit acpi_button_exit(void)
 {
-	if (!acpi_disabled)
-		platform_driver_unregister(&acpi_button_driver);
+	platform_driver_unregister(&acpi_button_driver);
 }
 
 module_init(acpi_button_init);

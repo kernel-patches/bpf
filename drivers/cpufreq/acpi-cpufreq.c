@@ -210,8 +210,8 @@ static unsigned extract_io(struct cpufreq_policy *policy, u32 value)
 static unsigned extract_msr(struct cpufreq_policy *policy, u32 msr)
 {
 	struct acpi_cpufreq_data *data = policy->driver_data;
-	struct cpufreq_frequency_table *pos;
 	struct acpi_processor_performance *perf;
+	unsigned int i;
 
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
 		msr &= AMD_MSR_RANGE;
@@ -222,9 +222,9 @@ static unsigned extract_msr(struct cpufreq_policy *policy, u32 msr)
 
 	perf = to_perf_data(data);
 
-	cpufreq_for_each_entry(pos, policy->freq_table)
-		if (msr == perf->states[pos->driver_data].status)
-			return pos->frequency;
+	for (i = 0; i < perf->state_count; i++)
+		if (msr == perf->states[i].status)
+			return perf->states[i].core_frequency * 1000;
 	return policy->freq_table[0].frequency;
 }
 
@@ -353,6 +353,7 @@ static u32 get_cur_val(const struct cpumask *mask, struct acpi_cpufreq_data *dat
 
 static unsigned int get_cur_freq_on_cpu(unsigned int cpu)
 {
+	struct acpi_processor_performance *perf;
 	struct acpi_cpufreq_data *data;
 	struct cpufreq_policy *policy;
 	unsigned int freq;
@@ -368,7 +369,9 @@ static unsigned int get_cur_freq_on_cpu(unsigned int cpu)
 	if (unlikely(!data || !policy->freq_table))
 		return 0;
 
-	cached_freq = policy->freq_table[to_perf_data(data)->state].frequency;
+	perf = to_perf_data(data);
+	cached_freq = perf->states[perf->state].core_frequency * 1000;
+
 	freq = extract_freq(policy, get_cur_val(cpumask_of(cpu), data));
 	if (freq != cached_freq) {
 		/*

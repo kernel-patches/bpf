@@ -986,7 +986,7 @@ static const struct dmi_system_id video_detect_dmi_table[] = {
 		DMI_MATCH(DMI_PRODUCT_NAME, "Mipad2"),
 		},
 	},
-	{ },
+	{ }
 };
 
 static bool google_cros_ec_present(void)

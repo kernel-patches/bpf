@@ -23,55 +23,56 @@
 
 #include "internal.h"
 
-static LIST_HEAD(bus_type_list);
-static DECLARE_RWSEM(bus_type_sem);
+static LIST_HEAD(dev_type_list);
+static DECLARE_RWSEM(dev_type_sem);
 
 #define PHYSICAL_NODE_STRING "physical_node"
 #define PHYSICAL_NODE_NAME_SIZE (sizeof(PHYSICAL_NODE_STRING) + 10)
 
-int register_acpi_bus_type(struct acpi_bus_type *type)
+void register_acpi_dev_type(struct acpi_dev_type *type)
 {
-	if (acpi_disabled)
-		return -ENODEV;
-	if (type && type->match && type->find_companion) {
-		down_write(&bus_type_sem);
-		list_add_tail(&type->list, &bus_type_list);
-		up_write(&bus_type_sem);
-		pr_info("bus type %s registered\n", type->name);
-		return 0;
-	}
-	return -ENODEV;
-}
-EXPORT_SYMBOL_GPL(register_acpi_bus_type);
+	if (acpi_disabled || !type)
+		return;
 
-int unregister_acpi_bus_type(struct acpi_bus_type *type)
-{
-	if (acpi_disabled)
-		return 0;
-	if (type) {
-		down_write(&bus_type_sem);
-		list_del_init(&type->list);
-		up_write(&bus_type_sem);
-		pr_info("bus type %s unregistered\n", type->name);
-		return 0;
-	}
-	return -ENODEV;
+	INIT_LIST_HEAD(&type->list);
+
+	if (!type->dev_type || !type->find_companion)
+		return;
+
+	guard(rwsem_write)(&dev_type_sem);
+
+	list_add_tail(&type->list, &dev_type_list);
+
+	pr_info("Device type %s added to lookup list\n", type->dev_type->name);
 }
-EXPORT_SYMBOL_GPL(unregister_acpi_bus_type);
+EXPORT_SYMBOL_GPL(register_acpi_dev_type);
+
+void unregister_acpi_dev_type(struct acpi_dev_type *type)
+{
+	if (acpi_disabled || !type || !type->dev_type || !type->find_companion)
+		return;
+
+	guard(rwsem_write)(&dev_type_sem);
+
+	list_del(&type->list);
+
+	pr_info("Device type %s removed from lookup list\n", type->dev_type->name);
+}
+EXPORT_SYMBOL_GPL(unregister_acpi_dev_type);
 
 static struct acpi_device *acpi_companion_lookup(struct device *dev)
 {
-	struct acpi_bus_type *type;
+	struct acpi_dev_type *type;
 
 	if (!dev->type)
 		return NULL;
 
-	guard(rwsem_read)(&bus_type_sem);
+	guard(rwsem_read)(&dev_type_sem);
 
-	list_for_each_entry(type, &bus_type_list, list) {
+	list_for_each_entry(type, &dev_type_list, list) {
 		struct acpi_device *adev;
 
-		if (!type->match(dev))
+		if (type->dev_type != dev->type)
 			continue;
 
 		adev = type->find_companion(dev);

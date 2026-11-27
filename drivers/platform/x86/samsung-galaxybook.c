@@ -549,7 +549,8 @@ static int galaxybook_battery_threshold_init(struct samsung_galaxybook *galaxybo
 	galaxybook->battery_hook.remove_battery = galaxybook_battery_remove;
 	galaxybook->battery_hook.name = "Samsung Galaxy Book Battery Extension";
 
-	return devm_battery_hook_register(&galaxybook->platform->dev, &galaxybook->battery_hook);
+	return devm_acpi_battery_hook_register(&galaxybook->platform->dev,
+					       &galaxybook->battery_hook);
 }
 
 /*

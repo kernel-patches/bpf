@@ -309,7 +309,7 @@ static int teo_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		      bool *stop_tick)
 {
 	struct teo_cpu *cpu_data = this_cpu_ptr(&teo_cpus);
-	s64 latency_req = cpuidle_governor_latency_req(dev->cpu);
+	s64 latency_req = dev->latency_req;
 	ktime_t delta_tick = TICK_NSEC / 2;
 	unsigned int idx_intercept_sum = 0;
 	unsigned int intercept_sum = 0;

@@ -83,8 +83,15 @@ static struct tz_regex *configuration_tz_match(const char *expr,
 
 static int configuration_default_init(struct configuration *config)
 {
-	config->tz_regex = realloc(config->tz_regex, sizeof(*config->tz_regex) *
-				   (config->nr_tz_regex + 1));
+	struct tz_regex *tmp;
+
+	tmp = realloc(config->tz_regex, sizeof(*config->tz_regex) *
+		      (config->nr_tz_regex + 1));
+	if (!tmp) {
+		ERROR("Failed to allocate memory for thermal zone regex\n");
+		return -1;
+	}
+	config->tz_regex = tmp;
 
 	if (regcomp(&config->tz_regex[config->nr_tz_regex].regex, ".*",
 		    REG_NOSUB | REG_EXTENDED)) {
@@ -135,6 +142,7 @@ static int configuration_init(const char *path, struct configuration *config)
 	INFO("Found %d thermal zone(s) regular expression\n", length);
 
 	for (i = 0; i < length; i++) {
+		struct tz_regex *tmp;
 
 		config_setting_t *node;
 		const char *name;
@@ -156,8 +164,13 @@ static int configuration_init(const char *path, struct configuration *config)
 			return -1;
 		}
 
-		config->tz_regex = realloc(config->tz_regex, sizeof(*config->tz_regex) *
-					(config->nr_tz_regex + 1));
+		tmp = realloc(config->tz_regex, sizeof(*config->tz_regex) *
+			      (config->nr_tz_regex + 1));
+		if (!tmp) {
+			ERROR("Failed to allocate memory for thermal zone regex\n");
+			return -1;
+		}
+		config->tz_regex = tmp;
 
 		if (regcomp(&config->tz_regex[config->nr_tz_regex].regex, name,
 			    REG_NOSUB | REG_EXTENDED)) {

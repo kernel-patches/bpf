@@ -72,6 +72,16 @@ enum {
 #define HIBERNATION_MAX (__HIBERNATION_AFTER_LAST-1)
 #define HIBERNATION_FIRST (HIBERNATION_INVALID + 1)
 
+static const char * const hibernation_modes[] = {
+	[HIBERNATION_PLATFORM]	= "platform",
+	[HIBERNATION_SHUTDOWN]	= "shutdown",
+	[HIBERNATION_REBOOT]	= "reboot",
+#ifdef CONFIG_SUSPEND
+	[HIBERNATION_SUSPEND]	= "suspend",
+#endif
+	[HIBERNATION_TEST_RESUME]	= "test_resume",
+};
+
 static int hibernation_mode = HIBERNATION_SHUTDOWN;
 
 bool freezer_test_done;
@@ -800,7 +810,8 @@ int hibernate(void)
 		goto Unlock;
 	}
 
-	pr_info("hibernation entry\n");
+	pr_info("hibernation entry (%s)\n",
+		hibernation_modes[hibernation_mode]);
 	pm_prepare_console();
 	error = pm_notifier_call_chain_robust(PM_HIBERNATION_PREPARE, PM_POST_HIBERNATION);
 	if (error)
@@ -1135,17 +1146,6 @@ static int __init software_resume_initcall(void)
 	return software_resume();
 }
 late_initcall_sync(software_resume_initcall);
-
-
-static const char * const hibernation_modes[] = {
-	[HIBERNATION_PLATFORM]	= "platform",
-	[HIBERNATION_SHUTDOWN]	= "shutdown",
-	[HIBERNATION_REBOOT]	= "reboot",
-#ifdef CONFIG_SUSPEND
-	[HIBERNATION_SUSPEND]	= "suspend",
-#endif
-	[HIBERNATION_TEST_RESUME]	= "test_resume",
-};
 
 /*
  * /sys/power/disk - Control hibernation mode.

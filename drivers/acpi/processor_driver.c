@@ -36,15 +36,16 @@ MODULE_LICENSE("GPL");
 static int acpi_processor_stop(struct device *dev);
 
 static const struct acpi_device_id processor_device_ids[] = {
-	{ACPI_PROCESSOR_OBJECT_HID, 0},
-	{ACPI_PROCESSOR_DEVICE_HID, 0},
-	{"", 0},
+	{ .id = ACPI_PROCESSOR_OBJECT_HID },
+	{ .id = ACPI_PROCESSOR_DEVICE_HID },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, processor_device_ids);
 
 static struct device_driver acpi_processor_driver = {
 	.name = "processor",
 	.bus = &cpu_subsys,
+	.suppress_bind_attrs = true,
 	.acpi_match_table = processor_device_ids,
 	.remove = acpi_processor_stop,
 };
@@ -233,12 +234,6 @@ static struct notifier_block acpi_processor_notifier_block = {
 void __weak acpi_processor_init_invariance_cppc(void)
 { }
 
-/*
- * We keep the driver loaded even when ACPI is not running.
- * This is needed for the powernow-k8 driver, that works even without
- * ACPI, but needs symbols from this driver
- */
-static enum cpuhp_state hp_online;
 static int __init acpi_processor_driver_init(void)
 {
 	int result = 0;
@@ -263,7 +258,6 @@ static int __init acpi_processor_driver_init(void)
 				   acpi_soft_cpu_online, NULL);
 	if (result < 0)
 		goto err;
-	hp_online = result;
 	cpuhp_setup_state_nocalls(CPUHP_ACPI_CPUDRV_DEAD, "acpi/cpu-drv:dead",
 				  NULL, acpi_soft_cpu_dead);
 
@@ -294,24 +288,6 @@ unregister_idle_drv:
 	return result;
 }
 
-static void __exit acpi_processor_driver_exit(void)
-{
-	if (acpi_disabled)
-		return;
-
-	if (acpi_processor_cpufreq_init) {
-		cpufreq_unregister_notifier(&acpi_processor_notifier_block,
-					    CPUFREQ_POLICY_NOTIFIER);
-		acpi_processor_cpufreq_init = false;
-	}
-
-	cpuhp_remove_state_nocalls(hp_online);
-	cpuhp_remove_state_nocalls(CPUHP_ACPI_CPUDRV_DEAD);
-	driver_unregister(&acpi_processor_driver);
-	acpi_processor_unregister_idle_driver();
-}
-
 module_init(acpi_processor_driver_init);
-module_exit(acpi_processor_driver_exit);
 
 MODULE_ALIAS("processor");

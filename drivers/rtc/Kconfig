@@ -1264,9 +1264,14 @@ config RTC_DRV_DA9063
 config RTC_DRV_EFI
 	tristate "EFI RTC"
 	depends on EFI && !X86
+	depends on ACPI_TAD || !ACPI_TAD
 	help
 	  If you say yes here you will get support for the EFI
 	  Real Time Clock.
+
+	  On ACPI systems, the ACPI Time and Alarm Device (TAD) driver
+	  is used instead of this one if the TAD can drive the RTC (assuming
+	  it's enabled).
 
 	  This driver can also be built as a module. If so, the module
 	  will be called rtc-efi.

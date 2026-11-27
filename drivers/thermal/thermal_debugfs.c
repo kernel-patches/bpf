@@ -322,14 +322,11 @@ static int cdev_tt_seq_show(struct seq_file *s, void *v)
 		seq_puts(s, "Transition\tOccurrences\n");
 
 	list_for_each_entry(entry, &transitions[i], node) {
-		/*
-		 * Assuming maximum cdev states is 1024, the longer
-		 * string for a transition would be "1024->1024\0"
-		 */
-		char buffer[11];
+		char buffer[sizeof("65535->65535")];
+		u32 transition = entry->id;
 
-		snprintf(buffer, ARRAY_SIZE(buffer), "%d->%d",
-			 entry->id >> 16, entry->id & 0xFFFF);
+		snprintf(buffer, sizeof(buffer), "%u->%u",
+			 transition >> 16, transition & 0xffff);
 
 		seq_printf(s, "%-10s\t%-10llu\n", buffer, entry->count);
 	}

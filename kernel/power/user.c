@@ -87,6 +87,9 @@ static int snapshot_open(struct inode *inode, struct file *filp)
 		error = pm_notifier_call_chain_robust(PM_RESTORE_PREPARE, PM_POST_RESTORE);
 		if (!error) {
 			error = create_basic_memory_bitmaps();
+			if (error)
+				pm_notifier_call_chain(PM_POST_RESTORE);
+
 			data->free_bitmaps = !error;
 		}
 	}
@@ -154,7 +157,7 @@ static ssize_t snapshot_read(struct file *filp, char __user *buf,
 		if (res <= 0)
 			goto Unlock;
 	} else {
-		res = PAGE_SIZE - pg_offp;
+		res = PAGE_SIZE;
 	}
 
 	res = simple_read_from_buffer(buf, count, &pg_offp,

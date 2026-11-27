@@ -1806,9 +1806,9 @@ ec_parse_io_ports(struct acpi_resource *resource, void *context)
 }
 
 static const struct acpi_device_id ec_device_ids[] = {
-	{"PNP0C09", 0},
-	{ACPI_ECDT_HID, 0},
-	{"", 0},
+	{ .id = "PNP0C09" },
+	{ .id = ACPI_ECDT_HID },
+	{ }
 };
 
 /*
@@ -2009,6 +2009,16 @@ static const struct dmi_system_id ec_dmi_table[] __initconst = {
 	},
 	{
 		/*
+		 * Lenovo Yoga S740-14IIL
+		 */
+		.callback = ec_honor_dsdt_gpe,
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo Yoga S740-14IIL"),
+		},
+	},
+	{
+		/*
 		 * Samsung hardware
 		 * https://bugzilla.kernel.org/show_bug.cgi?id=44161
 		 */
@@ -2017,7 +2027,7 @@ static const struct dmi_system_id ec_dmi_table[] __initconst = {
 			DMI_MATCH(DMI_SYS_VENDOR, "SAMSUNG ELECTRONICS CO., LTD."),
 		},
 	},
-	{}
+	{ }
 };
 
 void __init acpi_ec_ecdt_probe(void)

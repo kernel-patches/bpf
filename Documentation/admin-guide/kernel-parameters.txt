@@ -1018,6 +1018,32 @@ Kernel parameters
 			Format:
 			<first_slot>,<last_slot>,<port>,<enum_bit>[,<debug>]
 
+	cppc_cpufreq.auto_sel_mode=
+			[ACPI,CPU_FREQ] Enable ACPI CPPC autonomous performance
+			selection on all CPUs at boot. In autonomous mode, the
+			platform selects the performance level within the CPPC
+			Minimum and Maximum Performance limits. The driver sets
+			these limits from scaling_min_freq and scaling_max_freq.
+			The Energy Performance Preference (EPP) hint guides the
+			platform toward performance (0x00) or energy efficiency
+			(0xff).
+			Requires the ACPI CPPC Autonomous Selection Enable
+			register. EPP is set only if the platform implements it.
+			Format: <string>
+			  performance:
+				  enable autonomous selection, set EPP to 0x00
+			  balance_performance:
+				  enable autonomous selection, set EPP to 0x80
+			  balance_power:
+				  enable autonomous selection, set EPP to 0xc0
+			  power:
+				  enable autonomous selection, set EPP to 0xff
+			  default_epp:
+				  enable autonomous selection, keep firmware EPP
+			  disabled:
+				  keep the firmware configuration (default)
+			An unrecognized value is ignored with a warning.
+
 	cpuidle.off=1	[CPU_IDLE]
 			disable the cpuidle sub-system
 

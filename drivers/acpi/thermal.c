@@ -925,8 +925,8 @@ static const struct dev_pm_ops acpi_thermal_pm_ops = {
 #endif /* CONFIG_PM_SLEEP */
 
 static const struct acpi_device_id  thermal_device_ids[] = {
-	{ACPI_THERMAL_HID, 0},
-	{"", 0},
+	{ .id = ACPI_THERMAL_HID },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, thermal_device_ids);
 
@@ -1014,7 +1014,7 @@ static const struct dmi_system_id thermal_dmi_table[] __initconst = {
 		DMI_MATCH(DMI_BOARD_NAME, "7ZX"),
 		},
 	},
-	{}
+	{ }
 };
 
 static int __init acpi_thermal_init(void)

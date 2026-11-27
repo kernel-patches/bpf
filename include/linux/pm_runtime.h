@@ -288,11 +288,11 @@ static inline int pm_schedule_suspend(struct device *dev, unsigned int delay)
 }
 static inline int pm_runtime_get_if_in_use(struct device *dev)
 {
-	return -EINVAL;
+	return 1;
 }
 static inline int pm_runtime_get_if_active(struct device *dev)
 {
-	return -EINVAL;
+	return 1;
 }
 static inline int __pm_runtime_set_status(struct device *dev,
 					    unsigned int status) { return 0; }
@@ -588,30 +588,6 @@ static inline void pm_runtime_put(struct device *dev)
 }
 
 /**
- * __pm_runtime_put_autosuspend - Drop device usage counter and queue autosuspend if 0.
- * @dev: Target device.
- *
- * Decrement the runtime PM usage counter of @dev and if it turns out to be
- * equal to 0, queue up a work item for @dev like in pm_request_autosuspend().
- *
- * Return:
- * * %1: Success. Usage counter dropped to zero, but device was already suspended.
- * * %0: Success.
- * * %-EINVAL: Runtime PM error.
- * * %-EACCES: Runtime PM disabled.
- * * %-EAGAIN: Runtime PM usage counter became non-zero or Runtime PM status
- *   change ongoing.
- * * %-EBUSY: Runtime PM child_count non-zero.
- * * %-EPERM: Device PM QoS resume latency 0.
- * * %-EINPROGRESS: Suspend already in progress.
- * * %-ENOSYS: %CONFIG_PM not enabled.
- */
-static inline int __pm_runtime_put_autosuspend(struct device *dev)
-{
-	return __pm_runtime_suspend(dev, RPM_GET_PUT | RPM_ASYNC | RPM_AUTO);
-}
-
-/**
  * pm_runtime_put_autosuspend - Update the last access time, drop usage counter
  * and request autosuspend.
  * @dev: Target device.
@@ -635,7 +611,7 @@ static inline int __pm_runtime_put_autosuspend(struct device *dev)
 static inline int pm_runtime_put_autosuspend(struct device *dev)
 {
 	pm_runtime_mark_last_busy(dev);
-	return __pm_runtime_put_autosuspend(dev);
+	return __pm_runtime_suspend(dev, RPM_GET_PUT | RPM_ASYNC | RPM_AUTO);
 }
 
 DEFINE_GUARD(pm_runtime_noresume, struct device *,

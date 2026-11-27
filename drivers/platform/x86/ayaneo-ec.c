@@ -500,7 +500,7 @@ static int ayaneo_ec_probe(struct platform_device *pdev)
 		data->battery_hook.add_battery = ayaneo_add_battery;
 		data->battery_hook.remove_battery = ayaneo_remove_battery;
 		data->battery_hook.name = "Ayaneo Battery";
-		ret = devm_battery_hook_register(&pdev->dev, &data->battery_hook);
+		ret = devm_acpi_battery_hook_register(&pdev->dev, &data->battery_hook);
 		if (ret)
 			return ret;
 	}

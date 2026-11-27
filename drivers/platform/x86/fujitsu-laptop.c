@@ -267,7 +267,7 @@ static int fujitsu_battery_charge_control_add(struct device *dev)
 		return -ENODEV;
 
 	priv->charge_control_supported = true;
-	battery_hook_register(&battery_hook);
+	acpi_battery_hook_register(&battery_hook);
 
 	return 0;
 }
@@ -277,7 +277,7 @@ static void fujitsu_battery_charge_control_remove(struct device *dev)
 	struct fujitsu_laptop *priv = dev_get_drvdata(dev);
 
 	if (priv->charge_control_supported)
-		battery_hook_unregister(&battery_hook);
+		acpi_battery_hook_unregister(&battery_hook);
 }
 
 /* Hardware access for LCD brightness control */
