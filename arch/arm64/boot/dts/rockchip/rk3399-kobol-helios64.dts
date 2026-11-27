@@ -429,6 +429,80 @@
 	status = "okay";
 };
 
+/* Line names follow the Helios64 Rev1.2 schematic */
+&gpio0 {
+	gpio-line-names =
+		/* GPIO0 A0-A7 */
+		"RTC_CLK0_SOC", "SDMMC0_PWR_H", "VCC12V_DCIN_GOOD", "USR1_SWITCH#",
+		"NETW_ACT_LED_ON", "PWR_KEY_L", "PWR_LED_OFF", "SDMMC0_DET_L",
+		/* GPIO0 B0-B5 */
+		"LAN_WAKE#", "EXP16_INT#", "PMIC_INT#", "USB3_ACT_LED_ON",
+		"SYS_GRN_LED_ON", "SYS_RED_LED_ON";
+};
+
+&gpio1 {
+	gpio-line-names =
+		/* GPIO1 A0-A7 */
+		"HDD_A_ON", "HDD_B_ON", "TYPEC0_CC_INT_L", "VCC5V0_TYPEC0_EN",
+		"USB_MUX_HS", "PMIC_SLEEP_H", "OTP_OUT_H", "SOC_SO",
+		/* GPIO1 B0-B7 */
+		"SOC_SI", "SOC_CK", "SOC_CE#", "I2C4_SDA_TYPEC",
+		"I2C4_SCL_TYPEC", "USB_MUX_OE", "GPU_SLEEP_H", "I2C0_SDA_PMIC",
+		/* GPIO1 C0-C7 */
+		"I2C0_SCL_PMIC", "CPU_SLEEP_B_H", "SOC_WP#", "LOG_DVS_PWM",
+		"I2C8_SDA", "I2C8_SCL", "USB3_EN", "USB3LAN_PWR",
+		/* GPIO1 D0 */
+		"PCIE_PWR";
+};
+
+&gpio2 {
+	gpio-line-names =
+		/* GPIO2 A0-A7 */
+		"I2C2_SDA_TEMP_EXP", "I2C2_SCL_TEMP_EXP", "SATA_ERR0", "SATA_ERR1",
+		"SATA_ERR2", "SATA_ERR3", "SATA_ERR4", "I2C7_SDA",
+		/* GPIO2 B0-B7 */
+		"I2C7_SCL", "SPI2_RXD", "SPI2_TXD", "SPI2_CLK",
+		"SPI2_CSN0", "", "", "",
+		/* GPIO2 C0-C7 */
+		"UART0_RX", "UART0_TX", "", "",
+		"SATA_SO_LV", "SATA_SI_LV", "SATA_CK_LV", "SATA_CE#_LV",
+		/* GPIO2 D0-D4 */
+		"SATA_WP#_LV", "PCIE_CLKREQ_L", "", "CHARGER_STATUS#",
+		"PCIE_PERST_L";
+};
+
+&gpio3 {
+	gpio-line-names =
+		/* GPIO3 A0-A7 */
+		"RGMII_TXD2", "RGMII_TXD3", "RGMII_RXD2", "RGMII_RXD3",
+		"RGMII_TXD0", "RGMII_TXD1", "RGMII_RXD0", "RGMII_RXD1",
+		/* GPIO3 B0-B7 */
+		"GMAC_MDC", "RGMII_RXCTL", "", "GMAC_CLK",
+		"RGMII_TXCTL", "GMAC_MDIO", "RGMII_RXC", "GPHY_RST#",
+		/* GPIO3 C0-C7 */
+		"", "RGMII_TXC", "", "",
+		"", "", "", "",
+		/* GPIO3 D0-D7 */
+		"", "", "", "",
+		"", "", "ERR1_B", "ERR1_A";
+};
+
+&gpio4 {
+	gpio-line-names =
+		/* GPIO4 A0-A7 */
+		"", "ERR0_B", "", "",
+		"", "ERR0_A", "", "",
+		/* GPIO4 B0-B7 */
+		"SDMMC0_D0", "SDMMC0_D1", "SDMMC0_D2", "SDMMC0_D3",
+		"SDMMC0_CLKOUT", "SDMMC0_CMD", "", "",
+		/* GPIO4 C0-C7 */
+		"", "", "FAN1_PWM", "UART2DBG_RX",
+		"UART2DBG_TX", "FAN1_SENSE", "FAN2_PWM", "FAN2_SENSE",
+		/* GPIO4 D0-D6 */
+		"SATA_SPI_FLSH", "AUTO_ON_EN_D", "AUTO_ON_EN_CLK", "BUZZER_ON",
+		"SATA_ACT_LED", "BOARD_REV_ID0", "BOARD_REV_ID1";
+};
+
 &gpu {
 	mali-supply = <&vdd_gpu>;
 	status = "okay";
