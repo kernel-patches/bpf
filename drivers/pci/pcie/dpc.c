@@ -102,17 +102,7 @@ static bool dpc_completed(struct pci_dev *pdev)
  */
 bool pci_dpc_recovered(struct pci_dev *pdev)
 {
-	struct pci_host_bridge *host;
-
 	if (!pdev->dpc_cap)
-		return false;
-
-	/*
-	 * Synchronization between hotplug and DPC is not supported
-	 * if DPC is owned by firmware and EDR is not enabled.
-	 */
-	host = pci_find_host_bridge(pdev->bus);
-	if (!host->native_dpc && !IS_ENABLED(CONFIG_PCIE_EDR))
 		return false;
 
 	/*
@@ -238,19 +228,35 @@ static int dpc_get_aer_uncorrect_severity(struct pci_dev *dev,
 {
 	int pos = dev->aer_cap;
 	u32 status, mask, sev;
+	u16 devsta;
 
-	pci_read_config_dword(dev, pos + PCI_ERR_UNCOR_STATUS, &status);
-	pci_read_config_dword(dev, pos + PCI_ERR_UNCOR_MASK, &mask);
-	status &= ~mask;
-	if (!status)
-		return 0;
+	/*
+	 * Infer severity from AER Extended Capability if present, else from
+	 * Device Status register.  The latter cannot be used on AER-capable
+	 * ports because it also logs masked errors (PCIe r7.1 sec 7.5.3.5).
+	 */
+	if (pos) {
+		pci_read_config_dword(dev, pos + PCI_ERR_UNCOR_STATUS, &status);
+		pci_read_config_dword(dev, pos + PCI_ERR_UNCOR_MASK, &mask);
+		status &= ~mask;
+		if (!status)
+			return 0;
 
-	pci_read_config_dword(dev, pos + PCI_ERR_UNCOR_SEVER, &sev);
-	status &= sev;
-	if (status)
-		info->severity = AER_FATAL;
-	else
-		info->severity = AER_NONFATAL;
+		pci_read_config_dword(dev, pos + PCI_ERR_UNCOR_SEVER, &sev);
+		status &= sev;
+		if (status)
+			info->severity = AER_FATAL;
+		else
+			info->severity = AER_NONFATAL;
+	} else {
+		pcie_capability_read_word(dev, PCI_EXP_DEVSTA, &devsta);
+		if (devsta & PCI_EXP_DEVSTA_FED)
+			info->severity = AER_FATAL;
+		else if (devsta & PCI_EXP_DEVSTA_NFED)
+			info->severity = AER_NONFATAL;
+		else
+			return 0;
+	}
 
 	info->level = KERN_ERR;
 
@@ -351,6 +357,9 @@ static bool dpc_is_surprise_removal(struct pci_dev *pdev)
 	u16 status;
 
 	if (!pdev->is_hotplug_bridge)
+		return false;
+
+	if (!pdev->aer_cap)
 		return false;
 
 	if (pci_read_config_word(pdev, pdev->aer_cap + PCI_ERR_UNCOR_STATUS,
@@ -476,9 +485,6 @@ static int dpc_probe(struct pcie_device *dev)
 	struct device *device = &dev->device;
 	int status;
 	u16 cap;
-
-	if (!pcie_aer_is_native(pdev) && !pcie_ports_dpc_native)
-		return -ENOTSUPP;
 
 	status = devm_request_threaded_irq(device, dev->irq, dpc_irq,
 					   dpc_handler, IRQF_SHARED,

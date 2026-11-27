@@ -515,9 +515,11 @@ static u32 calculate_control(void)
 	 * Per the Downstream Port Containment Related Enhancements ECN to
 	 * the PCI Firmware Spec, r3.2, sec 4.5.1, table 4-5,
 	 * OSC_PCI_EXPRESS_DPC_CONTROL indicates the OS supports both DPC
-	 * and EDR.
+	 * and EDR.  PCI Firmware r3.3, sec 4.5.2.4, also requires the OS to
+	 * request AER control along with DPC control.
 	 */
-	if (IS_ENABLED(CONFIG_PCIE_DPC) && IS_ENABLED(CONFIG_PCIE_EDR))
+	if (IS_ENABLED(CONFIG_PCIE_DPC) && IS_ENABLED(CONFIG_PCIE_EDR) &&
+	    (control & OSC_PCI_EXPRESS_AER_CONTROL))
 		control |= OSC_PCI_EXPRESS_DPC_CONTROL;
 
 	return control;
@@ -1051,6 +1053,19 @@ struct pci_bus *acpi_pci_root_create(struct acpi_pci_root *root,
 
 	ctrl = root->osc_control_set;
 	ext_ctrl = root->osc_ext_control_set;
+
+	/*
+	 * Firmware that predates the _OSC DPC control bit grants AER but
+	 * masks DPC.  Link DPC control to AER control, as PCIe r7.0 sec
+	 * 6.2.11 recommends.
+	 */
+	if (IS_ENABLED(CONFIG_PCIE_DPC) &&
+	    (ctrl & OSC_PCI_EXPRESS_AER_CONTROL) &&
+	    !(ctrl & OSC_PCI_EXPRESS_DPC_CONTROL)) {
+		decode_osc_control(root, "OS assuming control (AER granted) of",
+				   OSC_PCI_EXPRESS_DPC_CONTROL);
+		ctrl |= OSC_PCI_EXPRESS_DPC_CONTROL;
+	}
 
 	/*
 	 * If the user specified "pcie_ports=native", use the PCIe port

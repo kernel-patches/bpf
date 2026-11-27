@@ -21,6 +21,10 @@
 #include "portdrv.h"
 #include "../pci.h"
 
+#define PCI_EXP_DEVSTA_UNC_MASK	(PCI_EXP_DEVSTA_NFED | \
+				 PCI_EXP_DEVSTA_FED | \
+				 PCI_EXP_DEVSTA_URD)
+
 static pci_ers_result_t merge_result(enum pci_ers_result orig,
 				  enum pci_ers_result new)
 {
@@ -274,7 +278,8 @@ pci_ers_result_t pcie_do_recovery(struct pci_dev *dev,
 	 * signaling device may not even be visible to the OS.
 	 */
 	if (host->native_aer) {
-		pcie_clear_device_status(dev);
+		pcie_capability_write_word(dev, PCI_EXP_DEVSTA,
+					   PCI_EXP_DEVSTA_UNC_MASK);
 		pci_aer_clear_nonfatal_status(dev);
 	}
 
@@ -284,6 +289,13 @@ pci_ers_result_t pcie_do_recovery(struct pci_dev *dev,
 	return status;
 
 failed:
+	if (host->native_aer) {
+		pcie_capability_write_word(dev, PCI_EXP_DEVSTA,
+					   PCI_EXP_DEVSTA_UNC_MASK);
+		pci_aer_clear_nonfatal_status(dev);
+		pci_aer_clear_fatal_status(dev);
+	}
+
 	pci_walk_bridge(bridge, pci_pm_runtime_put, NULL);
 
 	pci_walk_bridge(bridge, report_perm_failure_detected, NULL);
