@@ -128,6 +128,11 @@ static const char * const index_to_string[] = {
 	"CONV5",
 };
 
+static const char * const rzn1_reset_ids[] = {
+	"rst_ts",
+	"rst_miic",
+};
+
 static struct modctrl_match rzt2h_modctrl_match_table[] = {
 	{0x0, {ETHSS_GMAC0_PORT, ETHSS_ETHSW_PORT0, ETHSS_ETHSW_PORT1,
 	       ETHSS_ETHSW_PORT2, ETHSS_GMAC1_PORT}},
@@ -855,6 +860,8 @@ static struct miic_of_data rzn1_miic_of_data = {
 	.miic_port_start = 1,
 	.miic_port_last = 5,
 	.sw_mode_mask = GENMASK(4, 0),
+	.reset_ids = rzn1_reset_ids,
+	.reset_count = ARRAY_SIZE(rzn1_reset_ids),
 	.init_unlock_lock_regs = true,
 	.miic_write = miic_reg_writel_unlocked,
 	.type = MIIC_TYPE_RZN1,
