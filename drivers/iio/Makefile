@@ -44,6 +44,9 @@ obj-y += potentiostat/
 obj-y += pressure/
 obj-y += proximity/
 obj-y += resolver/
+obj-y += sensorhubs/
 obj-y += temperature/
 obj-y += test/
 obj-y += trigger/
+
+subdir-ccflags-y += $(CFLAGS_CONTEXT_ANALYSIS)

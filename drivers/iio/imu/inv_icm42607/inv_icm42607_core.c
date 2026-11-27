@@ -18,10 +18,257 @@
 #include <linux/time.h>
 #include <linux/timekeeping.h>
 #include <linux/types.h>
+#include <linux/unaligned.h>
 
 #include <asm/byteorder.h>
 
 #include "inv_icm42607.h"
+
+static int inv_icm42607_mclk_get(struct regmap *map, bool *idle_set)
+{
+	unsigned int val;
+	int ret, ret2;
+
+	*idle_set = false;
+
+	ret = regmap_test_bits(map, INV_ICM42607_REG_MCLK_RDY,
+			       INV_ICM42607_MCLK_RDY_BIT);
+	if (ret < 0)
+		return ret;
+	if (ret)
+		return 0;
+
+	/*
+	 * Clock isn't running: we're either in Sleep mode or in Accel LP mode
+	 * running on WUOSC. Force the RC oscillator on via IDLE and wait for
+	 * MCLK_RDY. Datasheet gives 10us (accel startup) to 200us (accel
+	 * transition from OFF) for this to complete.
+	 */
+	ret = regmap_set_bits(map, INV_ICM42607_REG_PWR_MGMT0,
+			      INV_ICM42607_PWR_MGMT0_IDLE);
+	if (ret)
+		return ret;
+
+	*idle_set = true;
+
+	ret = regmap_read_poll_timeout(map, INV_ICM42607_REG_MCLK_RDY, val,
+				       val & INV_ICM42607_MCLK_RDY_BIT, 10, 200);
+	if (ret) {
+		ret2 = regmap_clear_bits(map, INV_ICM42607_REG_PWR_MGMT0,
+					 INV_ICM42607_PWR_MGMT0_IDLE);
+		if (ret2)
+			dev_dbg(regmap_get_device(map),
+				"failed to clear IDLE after MCLK timeout: %d\n", ret2);
+		else
+			*idle_set = false;
+	}
+
+	return ret;
+}
+
+static int inv_icm42607_mclk_put(struct regmap *map, bool idle_set)
+{
+	if (!idle_set)
+		return 0;
+
+	return regmap_clear_bits(map, INV_ICM42607_REG_PWR_MGMT0, INV_ICM42607_PWR_MGMT0_IDLE);
+}
+
+/* Only compute the BLK_SEL value, the device is not accessed. */
+static int inv_icm42607_reg_to_blk_sel(unsigned int reg, u8 *blk_sel)
+{
+	u8 bank = FIELD_GET(INV_ICM42607_REG_BANK_MASK, reg);
+
+	switch (bank) {
+	case INV_ICM42607_MREG1:
+		*blk_sel = INV_ICM42607_MREG1_BLK_SEL;
+		return 0;
+	case INV_ICM42607_MREG2:
+	case INV_ICM42607_MREG3:
+		*blk_sel = bank;
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+/*
+ * The internal clock must be running before starting an MREG access, then the
+ * bank is selected in BLK_SEL_R or BLK_SEL_W (datasheet section 13).
+ */
+static int inv_icm42607_switch_to_mreg(struct regmap *map, unsigned int reg,
+				       unsigned int blk_sel_reg, bool *idle_set)
+{
+	u8 blk_sel;
+	int ret;
+
+	ret = inv_icm42607_reg_to_blk_sel(reg, &blk_sel);
+	if (ret)
+		return ret;
+
+	ret = inv_icm42607_mclk_get(map, idle_set);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(map, blk_sel_reg, blk_sel);
+	if (ret) {
+		inv_icm42607_mclk_put(map, *idle_set);
+		return ret;
+	}
+
+	return 0;
+}
+
+/*
+ * BLK_SEL must be restored to 0 after entering MREG bank (datasheet section 13) do it
+ * while the internal clock is still forced on.
+ */
+static int inv_icm42607_switch_from_mreg(struct regmap *map,
+					 unsigned int blk_sel_reg, bool idle_set)
+{
+	int ret;
+
+	ret = regmap_write(map, blk_sel_reg, 0);
+	if (ret) {
+		inv_icm42607_mclk_put(map, idle_set);
+		return ret;
+	}
+
+	return inv_icm42607_mclk_put(map, idle_set);
+}
+
+static int inv_icm42607_mreg_read(struct regmap *map, unsigned int reg,
+				  u8 *data, size_t count)
+{
+	unsigned int val;
+	bool idle_set;
+	int ret;
+
+	/* MREG access is one byte per transaction, no burst support. */
+	if (count != 1)
+		return -EINVAL;
+
+	ret = inv_icm42607_switch_to_mreg(map, reg, INV_ICM42607_REG_BLK_SEL_R,
+					  &idle_set);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(map, INV_ICM42607_REG_MADDR_R,
+			   FIELD_GET(INV_ICM42607_REG_ADDR_MASK, reg));
+	if (ret)
+		goto err_switch_from_mreg;
+
+	fsleep(INV_ICM42607_MREG_ACCESS_DELAY_US);
+
+	ret = regmap_read(map, INV_ICM42607_REG_M_R, &val);
+	if (ret)
+		goto err_switch_from_mreg;
+
+	fsleep(INV_ICM42607_MREG_ACCESS_DELAY_US);
+
+	ret = inv_icm42607_switch_from_mreg(map, INV_ICM42607_REG_BLK_SEL_R,
+					    idle_set);
+	if (ret)
+		return ret;
+
+	*data = val;
+
+	return 0;
+
+err_switch_from_mreg:
+	/* The access may have been started, respect the access delay. */
+	fsleep(INV_ICM42607_MREG_ACCESS_DELAY_US);
+	inv_icm42607_switch_from_mreg(map, INV_ICM42607_REG_BLK_SEL_R, idle_set);
+
+	return ret;
+}
+
+static int inv_icm42607_mreg_write(struct regmap *map, unsigned int reg,
+				   const u8 *data, size_t count)
+{
+	bool idle_set;
+	int ret;
+
+	/* MREG access is one byte per transaction, no burst support. */
+	if (count != 1)
+		return -EINVAL;
+
+	ret = inv_icm42607_switch_to_mreg(map, reg, INV_ICM42607_REG_BLK_SEL_W,
+					  &idle_set);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(map, INV_ICM42607_REG_MADDR_W,
+			   FIELD_GET(INV_ICM42607_REG_ADDR_MASK, reg));
+	if (ret)
+		goto err_switch_from_mreg;
+
+	ret = regmap_write(map, INV_ICM42607_REG_M_W, *data);
+	if (ret)
+		goto err_switch_from_mreg;
+
+	fsleep(INV_ICM42607_MREG_ACCESS_DELAY_US);
+
+	return inv_icm42607_switch_from_mreg(map, INV_ICM42607_REG_BLK_SEL_W,
+					     idle_set);
+
+err_switch_from_mreg:
+	/* The access may have been started, respect the access delay. */
+	fsleep(INV_ICM42607_MREG_ACCESS_DELAY_US);
+	inv_icm42607_switch_from_mreg(map, INV_ICM42607_REG_BLK_SEL_W, idle_set);
+
+	return ret;
+}
+
+static int inv_icm42607_read(void *context, const void *reg_buf, size_t reg_size,
+			     void *val_buf, size_t val_size)
+{
+	u16 reg = get_unaligned_be16(reg_buf);
+	struct regmap *map = context;
+
+	if (FIELD_GET(INV_ICM42607_REG_BANK_MASK, reg) != INV_ICM42607_BANK0)
+		return inv_icm42607_mreg_read(map, reg, val_buf, val_size);
+
+	return regmap_bulk_read(map, FIELD_GET(INV_ICM42607_REG_ADDR_MASK, reg),
+				val_buf, val_size);
+}
+
+static int inv_icm42607_write(void *context, const void *data, size_t count)
+{
+	unsigned int reg = get_unaligned_be16(data);
+	struct regmap *map = context;
+	const u8 *d = data;
+
+	if (FIELD_GET(INV_ICM42607_REG_BANK_MASK, reg) != INV_ICM42607_BANK0)
+		return inv_icm42607_mreg_write(map, reg, d + 2, count - 2);
+
+	return regmap_bulk_write(map, FIELD_GET(INV_ICM42607_REG_ADDR_MASK, reg),
+				 d + 2, count - 2);
+}
+
+static const struct regmap_bus inv_icm42607_regmap_bus = {
+	.read = inv_icm42607_read,
+	.write = inv_icm42607_write,
+};
+
+static bool inv_icm42607_is_volatile_reg(struct device *dev, unsigned int reg)
+{
+	switch (reg) {
+	case INV_ICM42607_REG_MCLK_RDY:
+	case INV_ICM42607_REG_SIGNAL_PATH_RESET:
+	case INV_ICM42607_REG_TEMP_DATA1 ... INV_ICM42607_REG_APEX_DATA5:
+	/* PWR_MGMT0 IDLE bit is toggled behind the cache during MREG access. */
+	case INV_ICM42607_REG_PWR_MGMT0:
+	case INV_ICM42607_REG_APEX_CONFIG0:
+	case INV_ICM42607_REG_FIFO_LOST_PKT0 ... INV_ICM42607_REG_APEX_DATA3:
+	case INV_ICM42607_REG_INT_STATUS_DRDY:
+	case INV_ICM42607_REG_INT_STATUS ... INV_ICM42607_REG_FIFO_DATA:
+	case INV_ICM42607_REG_BLK_SEL_W ... INV_ICM42607_REG_M_R:
+		return true;
+	}
+
+	return false;
+}
 
 static bool inv_icm42607_is_readable_reg(struct device *dev, unsigned int reg)
 {
@@ -31,6 +278,7 @@ static bool inv_icm42607_is_readable_reg(struct device *dev, unsigned int reg)
 	case INV_ICM42607_REG_APEX_DATA4 ... INV_ICM42607_REG_INTF_CONFIG1:
 	case INV_ICM42607_REG_INT_STATUS_DRDY ... INV_ICM42607_REG_FIFO_DATA:
 	case INV_ICM42607_REG_WHOAMI:
+	case INV_ICM42607_REG_OFFSET_USER0 ... INV_ICM42607_REG_OFFSET_USER8:
 		return true;
 	}
 
@@ -43,40 +291,42 @@ static bool inv_icm42607_is_writeable_reg(struct device *dev, unsigned int reg)
 	case INV_ICM42607_REG_DEVICE_CONFIG ... INV_ICM42607_REG_INT_CONFIG:
 	case INV_ICM42607_REG_PWR_MGMT0 ... INV_ICM42607_REG_INT_SOURCE4:
 	case INV_ICM42607_REG_INTF_CONFIG0 ... INV_ICM42607_REG_INTF_CONFIG1:
+	case INV_ICM42607_REG_OFFSET_USER0 ... INV_ICM42607_REG_OFFSET_USER8:
 		return true;
 	}
 
 	return false;
 }
 
-static bool inv_icm42607_is_volatile_reg(struct device *dev, unsigned int reg)
-{
-	switch (reg) {
-	case INV_ICM42607_REG_MCLK_RDY:
-	case INV_ICM42607_REG_SIGNAL_PATH_RESET:
-	case INV_ICM42607_REG_TEMP_DATA1 ... INV_ICM42607_REG_APEX_DATA5:
-	case INV_ICM42607_REG_APEX_CONFIG0:
-	case INV_ICM42607_REG_FIFO_LOST_PKT0 ... INV_ICM42607_REG_APEX_DATA3:
-	case INV_ICM42607_REG_INT_STATUS_DRDY:
-	case INV_ICM42607_REG_INT_STATUS ... INV_ICM42607_REG_FIFO_DATA:
-		return true;
-	}
-
-	return false;
-}
-
-const struct regmap_config inv_icm42607_regmap_config = {
-	.reg_bits = 8,
+static const struct regmap_config inv_icm42607_virt_regmap_config = {
+	.name = "banks",
+	.reg_bits = 16,
 	.val_bits = 8,
+	.use_single_write = true,
 	.writeable_reg = inv_icm42607_is_writeable_reg,
 	.readable_reg = inv_icm42607_is_readable_reg,
 	.volatile_reg = inv_icm42607_is_volatile_reg,
-	.max_register = INV_ICM42607_REG_WHOAMI,
+	.max_register = INV_ICM42607_REG_ZG_ST_DATA,
 	.cache_type = REGCACHE_MAPLE,
+};
+
+/* regmap configuration for the transport regmap used by both I2C and SPI */
+const struct regmap_config inv_icm42607_regmap_config = {
+	.reg_bits = 8,
+	.val_bits = 8,
 };
 EXPORT_SYMBOL_NS_GPL(inv_icm42607_regmap_config, "IIO_ICM42607");
 
 /* chip initial default configuration */
+static const struct inv_icm42607_conf inv_icm42370_default_conf = {
+	.accel = {
+		.mode = INV_ICM42607_SENSOR_MODE_OFF,
+		.fs = INV_ICM42607_ACCEL_FS_4G,
+		.odr = INV_ICM42607_ODR_100HZ,
+		.filter = INV_ICM42607_FILTER_BW_25HZ,
+	},
+};
+
 static const struct inv_icm42607_conf inv_icm42607_default_conf = {
 	.gyro = {
 		.mode = INV_ICM42607_SENSOR_MODE_OFF,
@@ -92,10 +342,18 @@ static const struct inv_icm42607_conf inv_icm42607_default_conf = {
 	},
 };
 
+const struct inv_icm42607_hw inv_icm42370p_hw_data = {
+	.whoami = INV_ICM42370P_WHOAMI,
+	.name = "icm42370p",
+	.conf = &inv_icm42370_default_conf,
+};
+EXPORT_SYMBOL_NS_GPL(inv_icm42370p_hw_data, "IIO_ICM42607");
+
 const struct inv_icm42607_hw inv_icm42607_hw_data = {
 	.whoami = INV_ICM42607_WHOAMI,
 	.name = "icm42607",
 	.conf = &inv_icm42607_default_conf,
+	.has_gyro = true,
 };
 EXPORT_SYMBOL_NS_GPL(inv_icm42607_hw_data, "IIO_ICM42607");
 
@@ -103,6 +361,7 @@ const struct inv_icm42607_hw inv_icm42607p_hw_data = {
 	.whoami = INV_ICM42607P_WHOAMI,
 	.name = "icm42607p",
 	.conf = &inv_icm42607_default_conf,
+	.has_gyro = true,
 };
 EXPORT_SYMBOL_NS_GPL(inv_icm42607p_hw_data, "IIO_ICM42607");
 
@@ -160,7 +419,11 @@ int inv_icm42607_get_pwr_mgmt0(struct inv_icm42607_state *st,
 	if (ret)
 		return ret;
 
-	*gyro = FIELD_GET(INV_ICM42607_PWR_MGMT0_GYRO_MODE_MASK, val);
+	if (st->hw->has_gyro)
+		*gyro = FIELD_GET(INV_ICM42607_PWR_MGMT0_GYRO_MODE_MASK, val);
+	else
+		*gyro = INV_ICM42607_SENSOR_MODE_OFF;
+
 	*accel = FIELD_GET(INV_ICM42607_PWR_MGMT0_ACCEL_MODE_MASK, val);
 
 	return 0;
@@ -190,7 +453,7 @@ static int inv_icm42607_set_pwr_mgmt0(struct inv_icm42607_state *st,
 	 * wait if it hasn't. In case some platforms don't respond well to a
 	 * sleep of 0, make sure the fsleep duration is > 0.
 	 */
-	if (!gyro && oldgyro) {
+	if (gyro == INV_ICM42607_SENSOR_MODE_OFF && oldgyro != gyro) {
 		disable_wait = clamp(ktime_us_delta(st->conf.gyro_stop, ktime_get()),
 				     0, INV_ICM42607_GYRO_STOP_TIME_US);
 
@@ -217,12 +480,14 @@ static int inv_icm42607_set_pwr_mgmt0(struct inv_icm42607_state *st,
 	 */
 	sleepval_us = 0;
 	odr_us = 0;
-	if (accel && !oldaccel) {
+	if (accel != INV_ICM42607_SENSOR_MODE_OFF &&
+	    oldaccel == INV_ICM42607_SENSOR_MODE_OFF) {
 		sleepval_us = max(sleepval_us, INV_ICM42607_ACCEL_STARTUP_TIME_US);
 		odr_us = max(odr_us, inv_icm42607_odr_to_period_us(st->conf.accel.odr));
 	}
 
-	if (gyro && !oldgyro) {
+	if (gyro != INV_ICM42607_SENSOR_MODE_OFF &&
+	    oldgyro == INV_ICM42607_SENSOR_MODE_OFF) {
 		sleepval_us = max(sleepval_us, INV_ICM42607_GYRO_STARTUP_TIME_US);
 		odr_us = max(odr_us, inv_icm42607_odr_to_period_us(st->conf.gyro.odr));
 		/* Track the earliest we can turn off the gyroscope. */
@@ -241,6 +506,16 @@ static int inv_icm42607_set_pwr_mgmt0(struct inv_icm42607_state *st,
 		fsleep(sleepval_us);
 
 	return 0;
+}
+
+static int inv_icm42607_set_sensor_modes(struct inv_icm42607_state *st,
+					 enum inv_icm42607_sensor_mode gyro,
+					 enum inv_icm42607_sensor_mode accel)
+{
+	if (st->hw->has_gyro)
+		return inv_icm42607_set_pwr_mgmt0(st, gyro, accel);
+
+	return inv_icm42607_set_pwr_mgmt0(st, INV_ICM42607_SENSOR_MODE_OFF, accel);
 }
 
 /*
@@ -339,9 +614,9 @@ int inv_icm42607_set_sensor_conf(struct inv_icm42607_state *st,
 
 	switch (chan_type) {
 	case IIO_ACCEL:
-		return inv_icm42607_set_pwr_mgmt0(st, gyro_mode, conf->mode);
+		return inv_icm42607_set_sensor_modes(st, gyro_mode, conf->mode);
 	case IIO_ANGL_VEL:
-		return inv_icm42607_set_pwr_mgmt0(st, conf->mode, accel_mode);
+		return inv_icm42607_set_sensor_modes(st, conf->mode, accel_mode);
 	default:
 		return -EINVAL;
 	}
@@ -417,29 +692,37 @@ static int inv_icm42607_set_init_conf(struct inv_icm42607_state *st,
 	unsigned int val;
 	int ret;
 
-	val = FIELD_PREP(INV_ICM42607_PWR_MGMT0_GYRO_MODE_MASK, conf->gyro.mode);
-	val |= FIELD_PREP(INV_ICM42607_PWR_MGMT0_ACCEL_MODE_MASK, conf->accel.mode);
+	if (st->hw->has_gyro)
+		val = FIELD_PREP(INV_ICM42607_PWR_MGMT0_GYRO_MODE_MASK, conf->gyro.mode) |
+		      FIELD_PREP(INV_ICM42607_PWR_MGMT0_ACCEL_MODE_MASK, conf->accel.mode);
+	else
+		val = FIELD_PREP(INV_ICM42607_PWR_MGMT0_ACCEL_MODE_MASK, conf->accel.mode);
+
 	ret = regmap_write(st->map, INV_ICM42607_REG_PWR_MGMT0, val);
 	if (ret)
 		return ret;
 
-	val = FIELD_PREP(INV_ICM42607_GYRO_CONFIG0_FS_SEL_MASK, conf->gyro.fs);
-	val |= FIELD_PREP(INV_ICM42607_GYRO_CONFIG0_ODR_MASK, conf->gyro.odr);
-	ret = regmap_write(st->map, INV_ICM42607_REG_GYRO_CONFIG0, val);
-	if (ret)
-		return ret;
+	if (st->hw->has_gyro) {
+		val = FIELD_PREP(INV_ICM42607_GYRO_CONFIG0_ODR_MASK, conf->gyro.odr) |
+		      FIELD_PREP(INV_ICM42607_GYRO_CONFIG0_FS_SEL_MASK, conf->gyro.fs);
+		ret = regmap_write(st->map, INV_ICM42607_REG_GYRO_CONFIG0, val);
+		if (ret)
+			return ret;
+	}
 
-	val = FIELD_PREP(INV_ICM42607_ACCEL_CONFIG0_FS_SEL_MASK, conf->accel.fs);
-	val |= FIELD_PREP(INV_ICM42607_ACCEL_CONFIG0_ODR_MASK, conf->accel.odr);
+	val = FIELD_PREP(INV_ICM42607_ACCEL_CONFIG0_FS_SEL_MASK, conf->accel.fs) |
+	      FIELD_PREP(INV_ICM42607_ACCEL_CONFIG0_ODR_MASK, conf->accel.odr);
 	ret = regmap_write(st->map, INV_ICM42607_REG_ACCEL_CONFIG0, val);
 	if (ret)
 		return ret;
 
-	val = FIELD_PREP(INV_ICM42607_GYRO_CONFIG1_FILTER_MASK, conf->gyro.filter);
-	ret = regmap_update_bits(st->map, INV_ICM42607_REG_GYRO_CONFIG1,
-				 INV_ICM42607_GYRO_CONFIG1_FILTER_MASK, val);
-	if (ret)
-		return ret;
+	if (st->hw->has_gyro) {
+		val = FIELD_PREP(INV_ICM42607_GYRO_CONFIG1_FILTER_MASK, conf->gyro.filter);
+		ret = regmap_update_bits(st->map, INV_ICM42607_REG_GYRO_CONFIG1,
+					 INV_ICM42607_GYRO_CONFIG1_FILTER_MASK, val);
+		if (ret)
+			return ret;
+	}
 
 	val = FIELD_PREP(INV_ICM42607_ACCEL_CONFIG1_FILTER_MASK, conf->accel.filter);
 	ret = regmap_update_bits(st->map, INV_ICM42607_REG_ACCEL_CONFIG1,
@@ -547,8 +830,8 @@ static int inv_icm42607_sensors_off(struct inv_icm42607_state *st)
 	st->conf.gyro.mode = INV_ICM42607_SENSOR_MODE_OFF;
 	st->conf.accel.mode = INV_ICM42607_SENSOR_MODE_OFF;
 
-	ret = inv_icm42607_set_pwr_mgmt0(st, st->conf.gyro.mode,
-					 st->conf.accel.mode);
+	ret = inv_icm42607_set_sensor_modes(st, st->conf.gyro.mode,
+					    st->conf.accel.mode);
 	if (ret)
 		dev_err(dev, "Unable to turn off sensors\n");
 
@@ -578,7 +861,14 @@ int inv_icm42607_core_probe(struct regmap *regmap,
 {
 	struct device *dev = regmap_get_device(regmap);
 	struct inv_icm42607_state *st;
+	struct regmap *regmap_custom;
 	int ret;
+
+	regmap_custom = devm_regmap_init(dev, &inv_icm42607_regmap_bus, regmap,
+					 &inv_icm42607_virt_regmap_config);
+	if (IS_ERR(regmap_custom))
+		return dev_err_probe(dev, PTR_ERR(regmap_custom),
+				     "Failed to register regmap\n");
 
 	st = devm_kzalloc_obj(dev, *st);
 	if (!st)
@@ -591,7 +881,7 @@ int inv_icm42607_core_probe(struct regmap *regmap,
 		return ret;
 
 	st->hw = hw;
-	st->map = regmap;
+	st->map = regmap_custom;
 
 	ret = iio_read_mount_matrix(dev, &st->orientation);
 	if (ret)
@@ -636,15 +926,20 @@ int inv_icm42607_core_probe(struct regmap *regmap,
 	pm_runtime_set_autosuspend_delay(dev, INV_ICM42607_SUSPEND_DELAY_MS);
 	pm_runtime_use_autosuspend(dev);
 
-	/* Initialize IIO device for Accel */
+	/*
+	 * Invensense, ICM42607 and ICM42607P both have accelerometer
+	 * and gyroscope functionality. Whereas, Invensense, ICM42370P
+	 * has only accelerometer.
+	 */
 	st->indio_accel = inv_icm42607_accel_init(st);
 	if (IS_ERR(st->indio_accel))
 		return PTR_ERR(st->indio_accel);
 
-	/* Initialize IIO device for Gyro */
-	st->indio_gyro = inv_icm42607_gyro_init(st);
-	if (IS_ERR(st->indio_gyro))
-		return PTR_ERR(st->indio_gyro);
+	if (st->hw->has_gyro) {
+		st->indio_gyro = inv_icm42607_gyro_init(st);
+		if (IS_ERR(st->indio_gyro))
+			return PTR_ERR(st->indio_gyro);
+	}
 
 	return 0;
 }

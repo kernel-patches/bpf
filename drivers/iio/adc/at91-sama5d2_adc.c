@@ -1240,8 +1240,7 @@ static int at91_adc_dma_start(struct iio_dev *indio_dev)
 		return -EBUSY;
 	}
 
-	desc->callback = at91_dma_buffer_done;
-	desc->callback_param = indio_dev;
+	dmaengine_desc_set_callback(desc, at91_dma_buffer_done, NULL, indio_dev);
 
 	cookie = dmaengine_submit(desc);
 	ret = dma_submit_error(cookie);
@@ -1712,7 +1711,7 @@ static irqreturn_t at91_adc_interrupt(int irq, void *private)
 		   (status & AT91_SAMA5D2_IER_DRDY)) {
 		/* triggered buffer without DMA */
 		disable_irq_nosync(irq);
-		iio_trigger_poll(indio->trig);
+		iio_trigger_poll(st->trig);
 	} else if (iio_buffer_enabled(indio) && st->dma_st.dma_chan) {
 		/* triggered buffer with DMA - should not happen */
 		disable_irq_nosync(irq);
@@ -2469,7 +2468,6 @@ err_pm_disable:
 	pm_runtime_put_noidle(st->dev);
 	pm_runtime_disable(st->dev);
 	pm_runtime_set_suspended(st->dev);
-	pm_runtime_dont_use_autosuspend(st->dev);
 	clk_disable_unprepare(st->per_clk);
 vref_disable:
 	regulator_disable(st->vref);
@@ -2490,7 +2488,6 @@ static void at91_adc_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(st->dev);
 	pm_runtime_set_suspended(st->dev);
-	pm_runtime_dont_use_autosuspend(st->dev);
 	clk_disable_unprepare(st->per_clk);
 
 	regulator_disable(st->vref);

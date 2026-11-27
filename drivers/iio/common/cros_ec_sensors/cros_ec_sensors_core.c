@@ -149,9 +149,8 @@ static ssize_t cros_ec_sensor_get_report_latency(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	return sprintf(buf, "%d.%06u\n",
-		       latency / 1000,
-		       (latency % 1000) * 1000);
+	return sysfs_emit(buf, "%d.%06u\n",
+			  latency / 1000, (latency % 1000) * 1000);
 }
 
 static IIO_DEVICE_ATTR(hwfifo_timeout, 0644,
@@ -165,7 +164,7 @@ static ssize_t hwfifo_watermark_max_show(struct device *dev,
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct cros_ec_sensors_core_state *st = iio_priv(indio_dev);
 
-	return sprintf(buf, "%d\n", st->fifo_max_event_count);
+	return sysfs_emit(buf, "%d\n", st->fifo_max_event_count);
 }
 
 static IIO_DEVICE_ATTR_RO(hwfifo_watermark_max, 0);
@@ -181,9 +180,8 @@ int cros_ec_sensors_push_data(struct iio_dev *indio_dev,
 			      s64 timestamp)
 {
 	struct cros_ec_sensors_core_state *st = iio_priv(indio_dev);
-	s16 *out;
+	unsigned int i, j;
 	s64 delta;
-	unsigned int i;
 
 	/*
 	 * Ignore samples if the buffer is not set: it is needed if the ODR is
@@ -192,19 +190,17 @@ int cros_ec_sensors_push_data(struct iio_dev *indio_dev,
 	if (!iio_device_try_claim_buffer_mode(indio_dev))
 		return 0;
 
-	out = (s16 *)st->samples;
-	iio_for_each_active_channel(indio_dev, i) {
-		*out = data[i];
-		out++;
-	}
+	j = 0;
+	iio_for_each_active_channel(indio_dev, i)
+		st->scan.channels[j++] = data[i];
 
 	if (iio_device_get_clock(indio_dev) != CLOCK_BOOTTIME)
 		delta = iio_get_time_ns(indio_dev) - cros_ec_get_time_ns();
 	else
 		delta = 0;
 
-	iio_push_to_buffers_with_timestamp(indio_dev, st->samples,
-					   timestamp + delta);
+	iio_push_to_buffers_with_ts(indio_dev, &st->scan, sizeof(st->scan),
+				    timestamp + delta);
 
 	iio_device_release_buffer_mode(indio_dev);
 	return 0;
@@ -461,7 +457,7 @@ static ssize_t cros_ec_sensors_id(struct iio_dev *indio_dev,
 {
 	struct cros_ec_sensors_core_state *st = iio_priv(indio_dev);
 
-	return snprintf(buf, PAGE_SIZE, "%d\n", st->param.info.sensor_num);
+	return sysfs_emit(buf, "%d\n", st->param.info.sensor_num);
 }
 
 const struct iio_chan_spec_ext_info cros_ec_sensors_ext_info[] = {
@@ -714,17 +710,17 @@ irqreturn_t cros_ec_sensors_capture(int irq, void *p)
 	mutex_lock(&st->cmd_lock);
 
 	/* Clear capture data. */
-	memset(st->samples, 0, indio_dev->scan_bytes);
+	memset(&st->scan, 0, sizeof(st->scan));
 
 	/* Read data based on which channels are enabled in scan mask. */
 	ret = st->read_ec_sensors_data(indio_dev,
 				       *(indio_dev->active_scan_mask),
-				       (s16 *)st->samples);
+				       st->scan.channels);
 	if (ret < 0)
 		goto done;
 
-	iio_push_to_buffers_with_timestamp(indio_dev, st->samples,
-					   iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_ts(indio_dev, &st->scan, sizeof(st->scan),
+				    iio_get_time_ns(indio_dev));
 
 done:
 	/*

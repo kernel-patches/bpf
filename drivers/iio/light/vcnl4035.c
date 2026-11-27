@@ -118,8 +118,8 @@ static irqreturn_t vcnl4035_trigger_consumer_handler(int irq, void *p)
 	}
 
 	buffer.als_data = val;
-	iio_push_to_buffers_with_timestamp(indio_dev, &buffer,
-					   iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_ts(indio_dev, &buffer, sizeof(buffer),
+				    iio_get_time_ns(indio_dev));
 
 fail_read:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -607,7 +607,6 @@ static void vcnl4035_remove(struct i2c_client *client)
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	int ret;
 
-	pm_runtime_dont_use_autosuspend(&client->dev);
 	pm_runtime_disable(&client->dev);
 	iio_device_unregister(indio_dev);
 	pm_runtime_set_suspended(&client->dev);
