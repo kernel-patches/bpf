@@ -465,11 +465,12 @@ void shstk_free(struct task_struct *tsk)
 
 	/*
 	 * shstk->base is NULL for CLONE_VFORK child tasks, and so is
-	 * normal. But size = 0 on a shstk->base is not normal and
-	 * indicated an attempt to free the thread shadow stack twice.
-	 * Warn about it.
+	 * normal. size = 0 on a shstk->base means that the thread
+	 * shadow stack has been freed already. That happens when an
+	 * exec fails after it released the old mm as the task then
+	 * exits with the old mm and gets here a second time.
 	 */
-	if (WARN_ON(!shstk->size))
+	if (!shstk->size)
 		return;
 
 	unmap_shadow_stack(shstk->base, shstk->size);
