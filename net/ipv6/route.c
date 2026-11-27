@@ -249,9 +249,16 @@ static struct neighbour *ip6_dst_neigh_lookup(const struct dst_entry *dst,
 					      const void *daddr)
 {
 	const struct rt6_info *rt = dst_rt6_info(dst);
+	struct net_device *dev;
+	struct neighbour *n;
 
-	return __ip6_dst_neigh_lookup(rt6_nexthop(rt, &in6addr_any),
-				      dst_dev(dst), skb, daddr);
+	rcu_read_lock();
+	dev = dst_dev_rcu(dst);
+	n = __ip6_dst_neigh_lookup(rt6_nexthop(rt, &in6addr_any),
+				   dev, skb, daddr);
+	rcu_read_unlock();
+
+	return n;
 }
 
 static void ip6_confirm_neigh(const struct dst_entry *dst, const void *daddr)
