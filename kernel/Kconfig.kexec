@@ -2,6 +2,9 @@
 
 menu "Kexec and crash features"
 
+config ARCH_HAS_GENERIC_CRASHKERNEL_RESERVATION
+	bool
+
 config CRASH_RESERVE
 	bool
 
@@ -21,6 +24,9 @@ config HAVE_IMA_KEXEC_OF
 	bool
 	select HAVE_IMA_KEXEC
 
+config ARCH_SUPPORTS_KEXEC
+	bool
+
 config KEXEC
 	bool "Enable kexec system call"
 	depends on ARCH_SUPPORTS_KEXEC
@@ -39,6 +45,15 @@ config KEXEC
 	  interface is strongly in flux, so no good recommendation can be
 	  made.
 
+config ARCH_SUPPORTS_KEXEC_FILE
+	bool
+
+config ARCH_SUPPORTS_KEXEC_PURGATORY
+	bool
+
+config ARCH_SUPPORTS_KEXEC_HANDOVER
+	bool
+
 config KEXEC_FILE
 	bool "Enable kexec file based system call"
 	depends on ARCH_SUPPORTS_KEXEC_FILE
@@ -49,6 +64,9 @@ config KEXEC_FILE
 	  file based and takes file descriptors as system call argument
 	  for kernel and initramfs as opposed to list of segments as
 	  accepted by kexec system call.
+
+config ARCH_SUPPORTS_KEXEC_SIG
+	bool
 
 config KEXEC_SIG
 	bool "Verify kernel signature during kexec_file_load() syscall"
@@ -64,6 +82,9 @@ config KEXEC_SIG
 	  verification for the corresponding kernel image type being
 	  loaded in order for this to work.
 
+config ARCH_SUPPORTS_KEXEC_SIG_FORCE
+	bool
+
 config KEXEC_SIG_FORCE
 	bool "Require a valid signature in kexec_file_load() syscall"
 	depends on ARCH_SUPPORTS_KEXEC_SIG_FORCE
@@ -71,6 +92,12 @@ config KEXEC_SIG_FORCE
 	help
 	  This option makes kernel signature verification mandatory for
 	  the kexec_file_load() syscall.
+
+config ARCH_SUPPORTS_KEXEC_IMAGE_VERIFY_SIG
+	bool
+
+config ARCH_DEFAULT_KEXEC_IMAGE_VERIFY_SIG
+	bool
 
 config KEXEC_IMAGE_VERIFY_SIG
 	bool "Enable Image signature verification support (ARM)"
@@ -81,6 +108,9 @@ config KEXEC_IMAGE_VERIFY_SIG
 	help
 	  Enable Image signature verification support.
 
+config ARCH_SUPPORTS_KEXEC_BZIMAGE_VERIFY_SIG
+	bool
+
 config KEXEC_BZIMAGE_VERIFY_SIG
 	bool "Enable bzImage signature verification support"
 	depends on ARCH_SUPPORTS_KEXEC_BZIMAGE_VERIFY_SIG
@@ -90,6 +120,9 @@ config KEXEC_BZIMAGE_VERIFY_SIG
 	help
 	  Enable bzImage signature verification support.
 
+config ARCH_SUPPORTS_KEXEC_JUMP
+	bool
+
 config KEXEC_JUMP
 	bool "kexec jump"
 	depends on ARCH_SUPPORTS_KEXEC_JUMP
@@ -97,6 +130,12 @@ config KEXEC_JUMP
 	help
 	  Jump between original kernel and kexeced kernel and invoke
 	  code in physical address mode via KEXEC
+
+config ARCH_SUPPORTS_CRASH_DUMP
+	bool
+
+config ARCH_DEFAULT_CRASH_DUMP
+	bool
 
 config CRASH_DUMP
 	bool "kernel crash dumps"
@@ -147,6 +186,9 @@ config CRASH_DUMP_KUNIT_TEST
 	  also prevent any regression.
 
 	  If unsure, say N.
+
+config ARCH_SUPPORTS_CRASH_HOTPLUG
+	bool
 
 config CRASH_HOTPLUG
 	bool "Update the crash elfcorehdr on system configuration changes"

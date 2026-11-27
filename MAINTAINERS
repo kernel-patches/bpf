@@ -14481,12 +14481,18 @@ M:	Pratyush Yadav <pratyush@kernel.org>
 L:	kexec@lists.infradead.org
 S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/liveupdate/linux.git
+F:	Documentation/ABI/obsolete/sysfs-kernel-kexec-kdump
+F:	Documentation/ABI/testing/sysfs-kernel-kexec-kdump
+F:	Documentation/ABI/testing/sysfs-kernel-vmcoreinfo
 F:	Documentation/admin-guide/kdump/
 F:	fs/proc/vmcore.c
 F:	include/linux/crash_core.h
 F:	include/linux/crash_dump.h
+F:	include/linux/crash_reserve.h
+F:	include/linux/vmcore_info.h
 F:	include/uapi/linux/vmcore.h
 F:	kernel/crash_*.c
+F:	kernel/vmcore_info.c
 
 KEENE FM RADIO TRANSMITTER DRIVER
 M:	Hans Verkuil <hverkuil@kernel.org>
@@ -14830,9 +14836,14 @@ M:	Pratyush Yadav <pratyush@kernel.org>
 L:	kexec@lists.infradead.org
 W:	http://kernel.org/pub/linux/utils/kernel/kexec/
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/liveupdate/linux.git
+F:	drivers/of/kexec.c
 F:	include/linux/kexec.h
+F:	include/linux/purgatory.h
 F:	include/uapi/linux/kexec.h
+F:	kernel/Kconfig.kexec
+F:	kernel/irq/kexec.c
 F:	kernel/kexec*
+F:	tools/testing/selftests/kexec/
 
 KEXEC HANDOVER (KHO)
 M:	Mike Rapoport <rppt@kernel.org>
@@ -14845,11 +14856,14 @@ S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/liveupdate/linux.git
 F:	Documentation/admin-guide/mm/kho.rst
 F:	Documentation/core-api/kho/*
+F:	drivers/of/kexec.c
 F:	include/asm-generic/kexec_handover.h
 F:	include/linux/kexec_handover.h
 F:	include/linux/kho/
 F:	include/linux/kho_block.h
+F:	include/linux/kho_radix_tree.h
 F:	kernel/liveupdate/kexec_handover*
+F:	kernel/liveupdate/kho_block.c
 F:	lib/test_kho.c
 F:	tools/testing/selftests/kho/
 

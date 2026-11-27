@@ -271,12 +271,10 @@ void __init arch_mm_preinit(void)
 {
 
 	/*
-	 * Reserve large chunks of memory for use by CMA for kdump, fadump, KVM
-	 * and hugetlb. These must be called after pageblock_order is
-	 * initialised.
+	 * Reserve large chunks of memory for use by CMA for fadump and KVM.
+	 * These must be called after pageblock_order is initialised.
 	 */
 	fadump_cma_init();
-	kdump_cma_reserve();
 	kvm_cma_reserve();
 
 	/*
