@@ -2711,6 +2711,12 @@ static void spi_nor_no_sfdp_init_params(struct spi_nor *nor)
 		spi_nor_set_read_settings(&params->reads[SNOR_CMD_READ_8_8_8_DTR],
 					  0, 20, SPINOR_OP_READ_FAST,
 					  SNOR_PROTO_8_8_8_DTR);
+		/*
+		 * The default SR2 read opcode(35h) is not usable in
+		 * 8D-8D-8D mode; drop it so spi_nor_init() does not issue an
+		 * unsupported command.
+		 */
+		params->opcodes.read_sr2 = 0;
 	}
 
 	if (no_sfdp_flags & SPI_NOR_OCTAL_DTR_PP) {
