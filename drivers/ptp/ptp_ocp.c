@@ -300,6 +300,11 @@ static struct dpll_pin_frequency ptp_ocp_sma_freq[] = {
 	DPLL_PIN_FREQUENCY_DCF77,
 };
 
+static struct dpll_pin_frequency ptp_ocp_art_sma_freq[] = {
+	DPLL_PIN_FREQUENCY_1PPS,
+	DPLL_PIN_FREQUENCY_10MHZ,
+};
+
 struct ptp_ocp_sma_connector {
 	enum	ptp_ocp_sma_mode mode;
 	bool	fixed_fcn;
@@ -1387,7 +1392,7 @@ static const struct ocp_selector ptp_ocp_sma_out[] = {
 
 static const struct ocp_selector ptp_ocp_art_sma_in[] = {
 	{ .name = "PPS1",	.value = 0x0001,  .frequency = 1 },
-	{ .name = "10Mhz",	.value = 0x0008,  .frequency = 1000000 },
+	{ .name = "10Mhz",	.value = 0x0008,  .frequency = 10000000 },
 	{ }
 };
 
@@ -3141,8 +3146,8 @@ ptp_ocp_art_sma_init(struct ptp_ocp *bp)
 		.board_label = NULL,
 		.type = DPLL_PIN_TYPE_EXT,
 		.capabilities = 0,
-		.freq_supported_num = ARRAY_SIZE(ptp_ocp_sma_freq),
-		.freq_supported = ptp_ocp_sma_freq,
+		.freq_supported_num = ARRAY_SIZE(ptp_ocp_art_sma_freq),
+		.freq_supported = ptp_ocp_art_sma_freq,
 
 	};
 	u32 reg;
