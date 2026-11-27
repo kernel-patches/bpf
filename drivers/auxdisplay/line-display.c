@@ -149,20 +149,7 @@ static void linedisp_scroll(struct timer_list *t)
 	mod_timer(&linedisp->timer, jiffies + linedisp->scroll_rate);
 }
 
-/**
- * linedisp_display() - set the message to be displayed
- * @linedisp: pointer to the private data structure
- * @msg: the message to display
- * @count: length of msg, or -1
- *
- * Display a new message @msg on the display. @msg can be longer than the
- * number of characters the display can display, in which case it will begin
- * scrolling across the display.
- *
- * Return: 0 on success, -ENOMEM on memory allocation failure
- */
-static int linedisp_display(struct linedisp *linedisp, const char *msg,
-			    ssize_t count)
+static int linedisp_set_message(struct linedisp *linedisp, const char *msg, ssize_t count)
 {
 	char *new_msg;
 
@@ -181,8 +168,7 @@ static int linedisp_display(struct linedisp *linedisp, const char *msg,
 		kfree(linedisp->message);
 		linedisp->message = NULL;
 		linedisp->message_len = 0;
-		memset(linedisp->buf, ' ', linedisp->num_chars);
-		linedisp->ops->update(linedisp);
+
 		return 0;
 	}
 
@@ -196,7 +182,16 @@ static int linedisp_display(struct linedisp *linedisp, const char *msg,
 	linedisp->message_len = count;
 	linedisp->scroll_pos = 0;
 
-	if (should_scroll(linedisp)) {
+	return 0;
+}
+
+static void linedisp_update(struct linedisp *linedisp)
+{
+	if (!linedisp->message_len) {
+		/* clear the display */
+		memset(linedisp->buf, ' ', linedisp->num_chars);
+		linedisp->ops->update(linedisp);
+	} else if (should_scroll(linedisp)) {
 		/* display scrolling message */
 		linedisp_scroll(&linedisp->timer);
 	} else {
@@ -206,6 +201,29 @@ static int linedisp_display(struct linedisp *linedisp, const char *msg,
 		       umin(linedisp->num_chars, linedisp->message_len));
 		linedisp->ops->update(linedisp);
 	}
+}
+
+/**
+ * linedisp_display() - set the message to be displayed
+ * @linedisp: pointer to the private data structure
+ * @msg: the message to display
+ * @count: length of msg, or -1
+ *
+ * Display a new message @msg on the display. @msg can be longer than the
+ * number of characters the display can display, in which case it will begin
+ * scrolling across the display.
+ *
+ * Return: 0 on success, -ENOMEM on memory allocation failure
+ */
+static int linedisp_display(struct linedisp *linedisp, const char *msg, ssize_t count)
+{
+	int err;
+
+	err = linedisp_set_message(linedisp, msg, count);
+	if (err)
+		return err;
+
+	linedisp_update(linedisp);
 
 	return 0;
 }
@@ -461,8 +479,7 @@ int linedisp_attach(struct linedisp *linedisp, struct device *dev,
 	if (err)
 		goto out_del_timer;
 
-	/* display a default message */
-	err = linedisp_display(linedisp, LINEDISP_INIT_TEXT, -1);
+	err = linedisp_set_message(linedisp, LINEDISP_INIT_TEXT, -1);
 	if (err)
 		goto out_del_attach;
 
@@ -470,6 +487,9 @@ int linedisp_attach(struct linedisp *linedisp, struct device *dev,
 	err = device_add_groups(dev, linedisp_groups);
 	if (err)
 		goto out_del_attach;
+
+	/* display the prepared default message */
+	linedisp_update(linedisp);
 
 	return 0;
 
@@ -557,14 +577,16 @@ int linedisp_register(struct linedisp *linedisp, struct device *parent,
 	if (err)
 		goto out_del_timer;
 
-	/* display a default message */
-	err = linedisp_display(linedisp, LINEDISP_INIT_TEXT, -1);
+	err = linedisp_set_message(linedisp, LINEDISP_INIT_TEXT, -1);
 	if (err)
 		goto out_del_attach;
 
 	err = device_add(&linedisp->dev);
 	if (err)
 		goto out_del_attach;
+
+	/* display the prepared default message */
+	linedisp_update(linedisp);
 
 	return 0;
 
