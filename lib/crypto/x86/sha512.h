@@ -16,7 +16,7 @@ DEFINE_STATIC_CALL(sha512_blocks_x86, sha512_blocks_generic);
 			 size_t nblocks)                                   \
 	{                                                                  \
 		if (likely(irq_fpu_usable())) {                            \
-			kernel_fpu_begin();                                \
+			kernel_fpu_begin_mask(0);                          \
 			asm_fn(state, data, nblocks);                      \
 			kernel_fpu_end();                                  \
 		} else {                                                   \
@@ -25,7 +25,6 @@ DEFINE_STATIC_CALL(sha512_blocks_x86, sha512_blocks_generic);
 	}
 
 DEFINE_X86_SHA512_FN(sha512_blocks_ssse3, sha512_transform_ssse3);
-DEFINE_X86_SHA512_FN(sha512_blocks_avx, sha512_transform_avx);
 DEFINE_X86_SHA512_FN(sha512_blocks_avx2, sha512_transform_rorx);
 
 static void sha512_blocks(struct sha512_block_state *state,
@@ -37,15 +36,8 @@ static void sha512_blocks(struct sha512_block_state *state,
 #define sha512_mod_init_arch sha512_mod_init_arch
 static void sha512_mod_init_arch(void)
 {
-	if (boot_cpu_has(X86_FEATURE_AVX)) {
-		if (boot_cpu_has(X86_FEATURE_AVX2) &&
-		    boot_cpu_has(X86_FEATURE_BMI2))
-			static_call_update(sha512_blocks_x86,
-					   sha512_blocks_avx2);
-		else
-			static_call_update(sha512_blocks_x86,
-					   sha512_blocks_avx);
-	} else if (boot_cpu_has(X86_FEATURE_SSSE3)) {
+	if (boot_cpu_has(X86_FEATURE_AVX2) && boot_cpu_has(X86_FEATURE_BMI2))
+		static_call_update(sha512_blocks_x86, sha512_blocks_avx2);
+	else if (boot_cpu_has(X86_FEATURE_SSSE3))
 		static_call_update(sha512_blocks_x86, sha512_blocks_ssse3);
-	}
 }

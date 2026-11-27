@@ -111,11 +111,11 @@ SYM_FUNC_START_LOCAL(chacha_permute)
 	RET
 SYM_FUNC_END(chacha_permute)
 
-SYM_FUNC_START(chacha_block_xor_ssse3)
+SYM_FUNC_START(chacha_0to1blocks_ssse3)
 	# %rdi: Input state matrix, s
-	# %rsi: up to 1 data block output, o
-	# %rdx: up to 1 data block input, i
-	# %rcx: input/output length in bytes
+	# %rsi: output data, o
+	# %rdx: input data, i
+	# %rcx: input/output data length in bytes: 0 to 1 blocks inclusive
 	# %r8d: nrounds
 	FRAME_BEGIN
 
@@ -197,7 +197,7 @@ SYM_FUNC_START(chacha_block_xor_ssse3)
 	lea		-8(%r10),%rsp
 	jmp		.Ldone
 
-SYM_FUNC_END(chacha_block_xor_ssse3)
+SYM_FUNC_END(chacha_0to1blocks_ssse3)
 
 SYM_FUNC_START(hchacha_block_ssse3)
 	# %rdi: Input state matrix, s
@@ -220,14 +220,14 @@ SYM_FUNC_START(hchacha_block_ssse3)
 	RET
 SYM_FUNC_END(hchacha_block_ssse3)
 
-SYM_FUNC_START(chacha_4block_xor_ssse3)
+SYM_FUNC_START(chacha_1to4blocks_ssse3)
 	# %rdi: Input state matrix, s
-	# %rsi: up to 4 data blocks output, o
-	# %rdx: up to 4 data blocks input, i
-	# %rcx: input/output length in bytes
+	# %rsi: output data, o
+	# %rdx: input data, i
+	# %rcx: input/output data length in bytes: 1 to 4 blocks inclusive
 	# %r8d: nrounds
 
-	# This function encrypts four consecutive ChaCha blocks by loading the
+	# This function encrypts four consecutive ChaCha blocks by loading
 	# the state matrix in SSE registers four times. As we need some scratch
 	# registers, we save the first four registers on the stack. The
 	# algorithm performs each operation on the corresponding word of each
@@ -242,7 +242,7 @@ SYM_FUNC_START(chacha_4block_xor_ssse3)
 	and		$~63,%rsp
 	mov		%rcx,%rax
 
-	# x0..15[0-3] = s0..3[0..3]
+	# x0..15[0-3] = s[0..15]
 	movq		0x00(%rdi),%xmm1
 	pshufd		$0x00,%xmm1,%xmm0
 	pshufd		$0x55,%xmm1,%xmm1
@@ -500,8 +500,8 @@ SYM_FUNC_START(chacha_4block_xor_ssse3)
 	sub		$2,%r8d
 	jnz		.Ldoubleround4
 
-	# x0[0-3] += s0[0]
-	# x1[0-3] += s0[1]
+	# x0[0-3] += s[0]
+	# x1[0-3] += s[1]
 	movq		0x00(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
@@ -509,8 +509,8 @@ SYM_FUNC_START(chacha_4block_xor_ssse3)
 	movdqa		%xmm2,0x00(%rsp)
 	paddd		0x10(%rsp),%xmm3
 	movdqa		%xmm3,0x10(%rsp)
-	# x2[0-3] += s0[2]
-	# x3[0-3] += s0[3]
+	# x2[0-3] += s[2]
+	# x3[0-3] += s[3]
 	movq		0x08(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
@@ -519,45 +519,45 @@ SYM_FUNC_START(chacha_4block_xor_ssse3)
 	paddd		0x30(%rsp),%xmm3
 	movdqa		%xmm3,0x30(%rsp)
 
-	# x4[0-3] += s1[0]
-	# x5[0-3] += s1[1]
+	# x4[0-3] += s[4]
+	# x5[0-3] += s[5]
 	movq		0x10(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm4
 	paddd		%xmm3,%xmm5
-	# x6[0-3] += s1[2]
-	# x7[0-3] += s1[3]
+	# x6[0-3] += s[6]
+	# x7[0-3] += s[7]
 	movq		0x18(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm6
 	paddd		%xmm3,%xmm7
 
-	# x8[0-3] += s2[0]
-	# x9[0-3] += s2[1]
+	# x8[0-3] += s[8]
+	# x9[0-3] += s[9]
 	movq		0x20(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm8
 	paddd		%xmm3,%xmm9
-	# x10[0-3] += s2[2]
-	# x11[0-3] += s2[3]
+	# x10[0-3] += s[10]
+	# x11[0-3] += s[11]
 	movq		0x28(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm10
 	paddd		%xmm3,%xmm11
 
-	# x12[0-3] += s3[0]
-	# x13[0-3] += s3[1]
+	# x12[0-3] += s[12]
+	# x13[0-3] += s[13]
 	movq		0x30(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm12
 	paddd		%xmm3,%xmm13
-	# x14[0-3] += s3[2]
-	# x15[0-3] += s3[3]
+	# x14[0-3] += s[14]
+	# x15[0-3] += s[15]
 	movq		0x38(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
@@ -647,35 +647,24 @@ SYM_FUNC_START(chacha_4block_xor_ssse3)
 	punpckhqdq	%xmm15,%xmm0
 	movdqa		%xmm0,%xmm15
 
-	# xor with corresponding input, write to output
-	movdqa		0x00(%rsp),%xmm0
-	cmp		$0x10,%rax
-	jl		.Lxorpart4
-	movdqu		0x00(%rdx),%xmm1
-	pxor		%xmm1,%xmm0
+	# XOR the first data block with the generated keystream.
+	movdqu		0x00(%rdx),%xmm0
+	pxor		0x00(%rsp),%xmm0
 	movdqu		%xmm0,0x00(%rsi)
 
-	movdqu		%xmm4,%xmm0
-	cmp		$0x20,%rax
-	jl		.Lxorpart4
 	movdqu		0x10(%rdx),%xmm1
-	pxor		%xmm1,%xmm0
-	movdqu		%xmm0,0x10(%rsi)
+	pxor		%xmm1,%xmm4
+	movdqu		%xmm4,0x10(%rsi)
 
-	movdqu		%xmm8,%xmm0
-	cmp		$0x30,%rax
-	jl		.Lxorpart4
 	movdqu		0x20(%rdx),%xmm1
-	pxor		%xmm1,%xmm0
-	movdqu		%xmm0,0x20(%rsi)
+	pxor		%xmm1,%xmm8
+	movdqu		%xmm8,0x20(%rsi)
 
-	movdqu		%xmm12,%xmm0
-	cmp		$0x40,%rax
-	jl		.Lxorpart4
 	movdqu		0x30(%rdx),%xmm1
-	pxor		%xmm1,%xmm0
-	movdqu		%xmm0,0x30(%rsi)
+	pxor		%xmm1,%xmm12
+	movdqu		%xmm12,0x30(%rsi)
 
+	# XOR up to 3 additional data blocks with the generated keystream.
 	movdqa		0x20(%rsp),%xmm0
 	cmp		$0x50,%rax
 	jl		.Lxorpart4
@@ -788,4 +777,4 @@ SYM_FUNC_START(chacha_4block_xor_ssse3)
 
 	jmp		.Ldone4
 
-SYM_FUNC_END(chacha_4block_xor_ssse3)
+SYM_FUNC_END(chacha_1to4blocks_ssse3)

@@ -14,35 +14,20 @@
 
 static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_aes_opcodes);
 
-EXPORT_SYMBOL_GPL(aes_sparc64_key_expand);
-EXPORT_SYMBOL_GPL(aes_sparc64_load_encrypt_keys_128);
-EXPORT_SYMBOL_GPL(aes_sparc64_load_encrypt_keys_192);
-EXPORT_SYMBOL_GPL(aes_sparc64_load_encrypt_keys_256);
-EXPORT_SYMBOL_GPL(aes_sparc64_load_decrypt_keys_128);
-EXPORT_SYMBOL_GPL(aes_sparc64_load_decrypt_keys_192);
-EXPORT_SYMBOL_GPL(aes_sparc64_load_decrypt_keys_256);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_encrypt_128);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_encrypt_192);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_encrypt_256);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_decrypt_128);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_decrypt_192);
-EXPORT_SYMBOL_GPL(aes_sparc64_ecb_decrypt_256);
-EXPORT_SYMBOL_GPL(aes_sparc64_cbc_encrypt_128);
-EXPORT_SYMBOL_GPL(aes_sparc64_cbc_encrypt_192);
-EXPORT_SYMBOL_GPL(aes_sparc64_cbc_encrypt_256);
-EXPORT_SYMBOL_GPL(aes_sparc64_cbc_decrypt_128);
-EXPORT_SYMBOL_GPL(aes_sparc64_cbc_decrypt_192);
-EXPORT_SYMBOL_GPL(aes_sparc64_cbc_decrypt_256);
-EXPORT_SYMBOL_GPL(aes_sparc64_ctr_crypt_128);
-EXPORT_SYMBOL_GPL(aes_sparc64_ctr_crypt_192);
-EXPORT_SYMBOL_GPL(aes_sparc64_ctr_crypt_256);
-
+void aes_sparc64_key_expand(const u32 *in_key, u64 *output_key,
+			    unsigned int key_len);
 void aes_sparc64_encrypt_128(const u64 *key, const u32 *input, u32 *output);
 void aes_sparc64_encrypt_192(const u64 *key, const u32 *input, u32 *output);
 void aes_sparc64_encrypt_256(const u64 *key, const u32 *input, u32 *output);
 void aes_sparc64_decrypt_128(const u64 *key, const u32 *input, u32 *output);
 void aes_sparc64_decrypt_192(const u64 *key, const u32 *input, u32 *output);
 void aes_sparc64_decrypt_256(const u64 *key, const u32 *input, u32 *output);
+void aes_sparc64_load_encrypt_keys_128(const u64 *key);
+void aes_sparc64_load_encrypt_keys_192(const u64 *key);
+void aes_sparc64_load_encrypt_keys_256(const u64 *key);
+void aes_sparc64_load_decrypt_keys_128(const u64 *key);
+void aes_sparc64_load_decrypt_keys_192(const u64 *key);
+void aes_sparc64_load_decrypt_keys_256(const u64 *key);
 
 static void aes_preparekey_arch(union aes_enckey_arch *k,
 				union aes_invkey_arch *inv_k,
@@ -133,6 +118,301 @@ static void aes_decrypt_arch(const struct aes_key *key,
 	}
 }
 
+static __always_inline void aes_sparc64_load_round_keys(aes_encrypt_arg key_arg,
+							bool enc)
+{
+	const struct aes_enckey *key = key_arg.enc_key;
+	const u64 *rk = key->k.sparc_rndkeys;
+
+	if (enc) {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_load_encrypt_keys_128(rk);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_load_encrypt_keys_192(rk);
+		else
+			aes_sparc64_load_encrypt_keys_256(rk);
+	} else {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_load_decrypt_keys_128(rk);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_load_decrypt_keys_192(rk);
+		else
+			aes_sparc64_load_decrypt_keys_256(rk);
+	}
+}
+
+/*
+ * Size of the on-stack bounce buffer used when src or dst is not 8-byte aligned
+ * (required by the SPARC64 AES assembly).  8 AES blocks (128 bytes) keeps stack
+ * usage small while remaining below 192 bytes, the lowest threshold at which
+ * any SPARC64 memcpy() implementation (U3memcpy) unconditionally enters VIS/FPU
+ * code and would clobber the round keys loaded in %f8-%f62 and clear %fprs.
+ * (NG4memcpy and M7memcpy on real crypto-capable CPUs check FPRS_FEF and fall
+ * back to integer copies, but QEMU may emulate older CPUs with +crypto.)
+ */
+#define MISALIGNED_CHUNK_SIZE (8 * AES_BLOCK_SIZE)
+
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_ECB)
+void aes_sparc64_ecb_encrypt_128(const u64 *key, const u64 *input, u64 *output,
+				 size_t len);
+void aes_sparc64_ecb_encrypt_192(const u64 *key, const u64 *input, u64 *output,
+				 size_t len);
+void aes_sparc64_ecb_encrypt_256(const u64 *key, const u64 *input, u64 *output,
+				 size_t len);
+void aes_sparc64_ecb_decrypt_128(const u64 *key_end, const u64 *input,
+				 u64 *output, size_t len);
+void aes_sparc64_ecb_decrypt_192(const u64 *key_end, const u64 *input,
+				 u64 *output, size_t len);
+void aes_sparc64_ecb_decrypt_256(const u64 *key_end, const u64 *input,
+				 u64 *output, size_t len);
+
+static __always_inline void aes_sparc64_ecb_crypt(const struct aes_enckey *key,
+						  const u64 *in, u64 *out,
+						  size_t len, bool enc)
+{
+	const u64 *rk = key->k.sparc_rndkeys;
+	const u64 *rk_end = &rk[2 * (key->nrounds + 1)];
+
+	if (enc) {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_ecb_encrypt_128(rk, in, out, len);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_ecb_encrypt_192(rk, in, out, len);
+		else
+			aes_sparc64_ecb_encrypt_256(rk, in, out, len);
+	} else {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_ecb_decrypt_128(rk_end, in, out, len);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_ecb_decrypt_192(rk_end, in, out, len);
+		else
+			aes_sparc64_ecb_decrypt_256(rk_end, in, out, len);
+	}
+}
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+static __always_inline bool aes_ecb_crypt_sparc64(u8 *dst, const u8 *src,
+						  size_t len,
+						  aes_encrypt_arg key_arg,
+						  bool enc)
+{
+	const struct aes_enckey *key = key_arg.enc_key;
+
+	if (!static_branch_likely(&have_aes_opcodes))
+		return false;
+
+	aes_sparc64_load_round_keys(key, enc);
+
+	if (IS_ALIGNED((uintptr_t)src | (uintptr_t)dst, 8)) {
+		aes_sparc64_ecb_crypt(key, (const u64 *)src, (u64 *)dst, len,
+				      enc);
+	} else {
+		u64 tmp[MISALIGNED_CHUNK_SIZE / sizeof(u64)];
+
+		do {
+			size_t n = min(len, sizeof(tmp));
+
+			memcpy(tmp, src, n);
+			aes_sparc64_ecb_crypt(key, tmp, tmp, n, enc);
+			memcpy(dst, tmp, n);
+			src += n;
+			dst += n;
+			len -= n;
+		} while (len);
+		memzero_explicit(tmp, sizeof(tmp));
+	}
+	fprs_write(0);
+	return true;
+}
+
+#define aes_ecb_encrypt_arch aes_ecb_encrypt_arch
+static bool aes_ecb_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 const struct aes_enckey *key)
+{
+	return aes_ecb_crypt_sparc64(dst, src, len, key, true);
+}
+
+#define aes_ecb_decrypt_arch aes_ecb_decrypt_arch
+static bool aes_ecb_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 const struct aes_key *key)
+{
+	return aes_ecb_crypt_sparc64(dst, src, len, key, false);
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_ECB */
+
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CBC)
+void aes_sparc64_cbc_encrypt_128(const u64 *key, const u64 *input, u64 *output,
+				 size_t len, u64 iv[2]);
+void aes_sparc64_cbc_encrypt_192(const u64 *key, const u64 *input, u64 *output,
+				 size_t len, u64 iv[2]);
+void aes_sparc64_cbc_encrypt_256(const u64 *key, const u64 *input, u64 *output,
+				 size_t len, u64 iv[2]);
+void aes_sparc64_cbc_decrypt_128(const u64 *key_end, const u64 *input,
+				 u64 *output, size_t len, u64 iv[2]);
+void aes_sparc64_cbc_decrypt_192(const u64 *key_end, const u64 *input,
+				 u64 *output, size_t len, u64 iv[2]);
+void aes_sparc64_cbc_decrypt_256(const u64 *key_end, const u64 *input,
+				 u64 *output, size_t len, u64 iv[2]);
+
+static __always_inline void aes_sparc64_cbc_crypt(const struct aes_enckey *key,
+						  const u64 *in, u64 *out,
+						  size_t len, u64 iv[2],
+						  bool enc)
+{
+	const u64 *rk = key->k.sparc_rndkeys;
+	const u64 *rk_end = &rk[2 * (key->nrounds + 1)];
+
+	if (enc) {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_cbc_encrypt_128(rk, in, out, len, iv);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_cbc_encrypt_192(rk, in, out, len, iv);
+		else
+			aes_sparc64_cbc_encrypt_256(rk, in, out, len, iv);
+	} else {
+		if (key->len == AES_KEYSIZE_128)
+			aes_sparc64_cbc_decrypt_128(rk_end, in, out, len, iv);
+		else if (key->len == AES_KEYSIZE_192)
+			aes_sparc64_cbc_decrypt_192(rk_end, in, out, len, iv);
+		else
+			aes_sparc64_cbc_decrypt_256(rk_end, in, out, len, iv);
+	}
+}
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+static __always_inline bool
+aes_cbc_crypt_sparc64(u8 *dst, const u8 *src, size_t len, u8 iv[AES_BLOCK_SIZE],
+		      aes_encrypt_arg key_arg, bool enc)
+{
+	const struct aes_enckey *key = key_arg.enc_key;
+	u64 aligned_iv[2];
+
+	if (!static_branch_likely(&have_aes_opcodes))
+		return false;
+
+	memcpy(aligned_iv, iv, sizeof(aligned_iv));
+
+	aes_sparc64_load_round_keys(key, enc);
+
+	if (IS_ALIGNED((uintptr_t)src | (uintptr_t)dst, 8)) {
+		aes_sparc64_cbc_crypt(key, (const u64 *)src, (u64 *)dst, len,
+				      aligned_iv, enc);
+	} else {
+		u64 tmp[MISALIGNED_CHUNK_SIZE / sizeof(u64)];
+
+		do {
+			size_t n = min(len, sizeof(tmp));
+
+			memcpy(tmp, src, n);
+			aes_sparc64_cbc_crypt(key, tmp, tmp, n, aligned_iv,
+					      enc);
+			memcpy(dst, tmp, n);
+			src += n;
+			dst += n;
+			len -= n;
+		} while (len);
+		memzero_explicit(tmp, sizeof(tmp));
+	}
+	fprs_write(0);
+	memcpy(iv, aligned_iv, sizeof(aligned_iv));
+	return true;
+}
+
+#define aes_cbc_encrypt_arch aes_cbc_encrypt_arch
+static bool aes_cbc_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 iv[AES_BLOCK_SIZE],
+				 const struct aes_enckey *key)
+{
+	return aes_cbc_crypt_sparc64(dst, src, len, iv, key, true);
+}
+
+#define aes_cbc_decrypt_arch aes_cbc_decrypt_arch
+static bool aes_cbc_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 iv[AES_BLOCK_SIZE],
+				 const struct aes_key *key)
+{
+	return aes_cbc_crypt_sparc64(dst, src, len, iv, key, false);
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_CBC */
+
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CTR)
+void aes_sparc64_ctr_crypt_128(const u64 *key, const u64 *input, u64 *output,
+			       size_t len, u64 iv[2]);
+void aes_sparc64_ctr_crypt_192(const u64 *key, const u64 *input, u64 *output,
+			       size_t len, u64 iv[2]);
+void aes_sparc64_ctr_crypt_256(const u64 *key, const u64 *input, u64 *output,
+			       size_t len, u64 iv[2]);
+
+static __always_inline void aes_sparc64_ctr_crypt(const struct aes_enckey *key,
+						  const u64 *in, u64 *out,
+						  size_t len, u64 ctr[2])
+{
+	const u64 *rk = key->k.sparc_rndkeys;
+
+	if (key->len == AES_KEYSIZE_128)
+		aes_sparc64_ctr_crypt_128(rk, in, out, len, ctr);
+	else if (key->len == AES_KEYSIZE_192)
+		aes_sparc64_ctr_crypt_192(rk, in, out, len, ctr);
+	else
+		aes_sparc64_ctr_crypt_256(rk, in, out, len, ctr);
+}
+
+/* len may be any value here. */
+#define aes_ctr_arch aes_ctr_arch
+static bool aes_ctr_arch(u8 *dst, const u8 *src, size_t len,
+			 u8 ctr[AES_BLOCK_SIZE], const struct aes_enckey *key)
+{
+	u64 aligned_ctr[2];
+
+	if (!static_branch_likely(&have_aes_opcodes))
+		return false;
+
+	if (unlikely(len == 0))
+		return true;
+
+	memcpy(aligned_ctr, ctr, sizeof(aligned_ctr));
+	aes_sparc64_load_round_keys(key, /* enc= */ true);
+	if (IS_ALIGNED((uintptr_t)src | (uintptr_t)dst, 8)) {
+		size_t blocks_len = round_down(len, AES_BLOCK_SIZE);
+
+		if (blocks_len)
+			aes_sparc64_ctr_crypt(key, (const u64 *)src, (u64 *)dst,
+					      blocks_len, aligned_ctr);
+		len -= blocks_len;
+		if (len) {
+			u64 tmp[2] = {};
+
+			memcpy(tmp, src + blocks_len, len);
+			aes_sparc64_ctr_crypt(key, tmp, tmp, AES_BLOCK_SIZE,
+					      aligned_ctr);
+			memcpy(dst + blocks_len, tmp, len);
+			memzero_explicit(tmp, sizeof(tmp));
+		}
+	} else {
+		u64 tmp[MISALIGNED_CHUNK_SIZE / sizeof(u64)];
+
+		do {
+			size_t n = min(len, sizeof(tmp));
+			size_t blocks_len = round_up(n, AES_BLOCK_SIZE);
+
+			if (unlikely(n < blocks_len))
+				memset((u8 *)tmp + n, 0, blocks_len - n);
+			memcpy(tmp, src, n);
+			aes_sparc64_ctr_crypt(key, tmp, tmp, blocks_len,
+					      aligned_ctr);
+			memcpy(dst, tmp, n);
+			src += n;
+			dst += n;
+			len -= n;
+		} while (len);
+		memzero_explicit(tmp, sizeof(tmp));
+	}
+	fprs_write(0);
+	memcpy(ctr, aligned_ctr, sizeof(aligned_ctr));
+	return true;
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_CTR */
+
 #if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_XTS)
 void aes_sparc64_xts_encrypt_128(const u64 *key, const u64 *input, u64 *output,
 				 size_t len, u64 tweak[2]);
@@ -167,22 +447,17 @@ aes_xts_crypt_sparc64(u8 *dst, const u8 *src, size_t len,
 	else
 		aes_encrypt_arch(&key->tweak_key, (u8 *)t, tweak);
 
-	if (k->len == AES_KEYSIZE_128) {
-		if (enc) {
-			aes_sparc64_load_encrypt_keys_128(rk);
+	aes_sparc64_load_round_keys(k, enc);
+	if (enc) {
+		if (k->len == AES_KEYSIZE_128)
 			aes_sparc64_xts_encrypt_128(rk, in, out, len, t);
-		} else {
-			aes_sparc64_load_decrypt_keys_128(rk);
-			aes_sparc64_xts_decrypt_128(rk_end, in, out, len, t);
-		}
-	} else {
-		if (enc) {
-			aes_sparc64_load_encrypt_keys_256(rk);
+		else
 			aes_sparc64_xts_encrypt_256(rk, in, out, len, t);
-		} else {
-			aes_sparc64_load_decrypt_keys_256(rk);
+	} else {
+		if (k->len == AES_KEYSIZE_128)
+			aes_sparc64_xts_decrypt_128(rk_end, in, out, len, t);
+		else
 			aes_sparc64_xts_decrypt_256(rk_end, in, out, len, t);
-		}
 	}
 	fprs_write(0);
 
@@ -221,4 +496,5 @@ static void aes_mod_init_arch(void)
 		return;
 
 	static_branch_enable(&have_aes_opcodes);
+	pr_info("Using sparc64 aes opcodes optimized AES implementation\n");
 }
