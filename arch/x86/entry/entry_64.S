@@ -937,7 +937,7 @@ SYM_CODE_START(paranoid_entry)
 	IBRS_ENTER save_reg=%r15
 	UNTRAIN_RET_FROM_CALL
 
-	HANDLE_INTR_SAFERET 8(%rsp)
+	FIXUP_INTR_SAFERET %rsp
 
 	RET
 SYM_CODE_END(paranoid_entry)
@@ -1044,7 +1044,7 @@ SYM_CODE_START(error_entry)
 
 	VALIDATE_UNRET_END
 
-	HANDLE_INTR_SAFERET 8(%rsp)
+	FIXUP_INTR_SAFERET %rsp
 
 	cmpq	$.Lgs_change, RIP+8(%rsp)
 	jne	.Lerror_entry_done_lfence
@@ -1205,6 +1205,9 @@ SYM_CODE_START(asm_exc_nmi)
 	jmp	swapgs_restore_regs_and_return_to_usermode
 
 .Lnmi_from_kernel:
+	/* Repair the source frame before inspecting or copying it. */
+	FIXUP_NMI_INTR_SAFERET %rsp
+
 	/*
 	 * Here's what our stack frame will look like:
 	 * +---------------------------------------------------------+

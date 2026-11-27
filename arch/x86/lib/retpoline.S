@@ -210,13 +210,13 @@ SYM_CODE_START_NOALIGN(srso_alias_safe_ret)
 
 	/*
 	 * Tell objtool that those are not function pointers referenced by
-	 * __HANDLE_INTR_SAFERET(). Below too.
+	 * FIXUP_[NMI_]INTR_SAFERET(). Below too.
 	 */
 	ANNOTATE_NOENDBR
 
 	/*
 	 * Safe-RET sequence. If you need to change it, adjust
-	 * handle_interrupted_saferet() too.
+	 * FIXUP_[NMI_]INTR_SAFERET() too.
 	 */
 	lea 8(%_ASM_SP), %_ASM_SP
 	UNWIND_HINT_FUNC
@@ -261,7 +261,7 @@ SYM_CODE_START_LOCAL_NOALIGN(srso_untrain_ret)
 SYM_INNER_LABEL(srso_safe_ret, SYM_L_GLOBAL)
 	/*
 	 * Safe-RET sequence. If you need to change it, adjust
-	 * handle_interrupted_saferet() too.
+	 * FIXUP_[NMI_]INTR_SAFERET() too.
 	 */
 	lea 8(%_ASM_SP), %_ASM_SP
 	ret
