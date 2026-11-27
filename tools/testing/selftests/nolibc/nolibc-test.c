@@ -50,6 +50,7 @@
 #include <alloca.h>
 
 #pragma GCC diagnostic ignored "-Wmissing-prototypes"
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 #include "nolibc-test-linkage.h"
 
@@ -98,10 +99,6 @@ static const int is_glibc =
 #undef strlcpy
 #define strlcat(d, s, l) 0
 #define strlcpy(d, s, l) 0
-
-/* readdir_r() is likely to be marked deprecated */
-#undef readdir_r
-#define readdir_r(dir, dirent, result) ((errno = EINVAL), -1)
 
 #define _syscall(...) 0
 #endif
@@ -857,6 +854,45 @@ static int test_dirent(void)
 		return 1;
 
 	return 0;
+}
+
+int test_dirfd(void)
+{
+	struct dirent dirent, *result;
+	int ret = 0, fd;
+	struct stat st;
+	DIR *dir;
+
+	fd = open("/", O_RDONLY | O_DIRECTORY);
+	if (fd < 0)
+		return __LINE__;
+
+	dir = fdopendir(fd);
+	if (!dir) {
+		close(fd);
+		return __LINE__;
+	}
+
+	/* Check that dirfd() gives the same fd as open() */
+	if (dirfd(dir) != fd) {
+		ret = __LINE__;
+		goto out;
+	}
+
+	/* Get the name of a child of dir */
+	if (readdir_r(dir, &dirent, &result) != 0 || !result) {
+		ret = __LINE__;
+		goto out;
+	}
+
+	/* stat the child relative to dir */
+	if (fstatat(dirfd(dir), dirent.d_name, &st, AT_SYMLINK_NOFOLLOW) != 0)
+		ret = __LINE__;
+
+out:
+	closedir(dir);
+
+	return ret;
 }
 
 int test_getcwd(void)
@@ -1763,7 +1799,8 @@ int run_syscall(int min, int max)
 		CASE_TEST(ftruncate);         EXPECT_SYSZR(1, test_ftruncate()); break;
 		CASE_TEST(getdents64_root);   EXPECT_SYSNE(1, test_getdents64("/"), -1); break;
 		CASE_TEST(getdents64_null);   EXPECT_SYSER(1, test_getdents64("/dev/null"), -1, ENOTDIR); break;
-		CASE_TEST(directories);       EXPECT_SYSZR(is_nolibc && proc, test_dirent()); break;
+		CASE_TEST(directories);       EXPECT_SYSZR(proc, test_dirent()); break;
+		CASE_TEST(dirfd);             EXPECT_SYSZR(has_working_64bit_syscall_arg, test_dirfd()); break;
 		CASE_TEST(getrandom);         EXPECT_SYSZR(1, test_getrandom()); break;
 		CASE_TEST(gettimeofday_tv);   EXPECT_SYSZR(1, gettimeofday(&tv, NULL)); break;
 		CASE_TEST(gettimeofday_tv_tz);EXPECT_SYSZR(1, gettimeofday(&tv, &tz)); break;
@@ -1991,8 +2028,10 @@ int run_stdlib(int min, int max)
 		CASE_TEST(setncmp_blah_blah6); EXPECT_NE(1, strncmp("blah", "blah6", 6), 0); break;
 		CASE_TEST(strchr_foobar_o);    EXPECT_STREQ(1, strchr("foobar", 'o'), "oobar"); break;
 		CASE_TEST(strchr_foobar_z);    EXPECT_STRZR(1, strchr("foobar", 'z')); break;
+		CASE_TEST(strchr_foobar_nul);  EXPECT_STREQ(1, strchr("foobar", '\0'), ""); break;
 		CASE_TEST(strrchr_foobar_o);   EXPECT_STREQ(1, strrchr("foobar", 'o'), "obar"); break;
 		CASE_TEST(strrchr_foobar_z);   EXPECT_STRZR(1, strrchr("foobar", 'z')); break;
+		CASE_TEST(strrchr_foobar_nul); EXPECT_STREQ(1, strrchr("foobar", '\0'), ""); break;
 		CASE_TEST(strlcat_0);          EXPECT_STRBUFEQ(is_nolibc, strlcat(buf, "bar", 0), buf, 3, "test"); break;
 		CASE_TEST(strlcat_1);          EXPECT_STRBUFEQ(is_nolibc, strlcat(buf, "bar", 1), buf, 4, "test"); break;
 		CASE_TEST(strlcat_5);          EXPECT_STRBUFEQ(is_nolibc, strlcat(buf, "bar", 5), buf, 7, "test"); break;
@@ -2007,6 +2046,7 @@ int run_stdlib(int min, int max)
 		CASE_TEST(strstr_foobar_foo);  EXPECT_STREQ(1, strstr("foobar", "foo"), "foobar"); break;
 		CASE_TEST(strstr_foobar_bar);  EXPECT_STREQ(1, strstr("foobar", "bar"), "bar"); break;
 		CASE_TEST(strstr_foobar_baz);  EXPECT_PTREQ(1, strstr("foobar", "baz"), NULL); break;
+		CASE_TEST(strstr_foobar_empty);EXPECT_STREQ(1, strstr("foo", ""), "foo"); break;
 		CASE_TEST(memcmp_20_20);       EXPECT_EQ(1, memcmp("aaa\x20", "aaa\x20", 4), 0); break;
 		CASE_TEST(memcmp_20_60);       EXPECT_LT(1, memcmp("aaa\x20", "aaa\x60", 4), 0); break;
 		CASE_TEST(memcmp_60_20);       EXPECT_GT(1, memcmp("aaa\x60", "aaa\x20", 4), 0); break;
@@ -2057,6 +2097,12 @@ int run_stdlib(int min, int max)
 		CASE_TEST(limit_ptrdiff_min);       EXPECT_EQ(1, PTRDIFF_MIN, sizeof(long) == 8 ? (ptrdiff_t) 0x8000000000000000LL  : (ptrdiff_t) 0x80000000); break;
 		CASE_TEST(limit_ptrdiff_max);       EXPECT_EQ(1, PTRDIFF_MAX, sizeof(long) == 8 ? (ptrdiff_t) 0x7fffffffffffffffLL  : (ptrdiff_t) 0x7fffffff); break;
 		CASE_TEST(limit_size_max);          EXPECT_EQ(1, SIZE_MAX,    sizeof(long) == 8 ? (size_t)    0xffffffffffffffffULL : (size_t)    0xffffffffU); break;
+		CASE_TEST(atoi_simple);             EXPECT_EQ(1, atoi("35"), 35); break;
+		CASE_TEST(atoi_negative);           EXPECT_EQ(1, atoi("-35"), -35); break;
+		CASE_TEST(atoi_positive);           EXPECT_EQ(1, atoi("+35"), 35); break;
+		CASE_TEST(atoi_space);              EXPECT_EQ(1, atoi(" \t\n35"), 35); break;
+		CASE_TEST(atoi_space_negative);     EXPECT_EQ(1, atoi(" -35"), -35); break;
+		CASE_TEST(atol_space_positive);     EXPECT_EQ(1, atol(" +35"), 35L); break;
 		CASE_TEST(strtol_simple);           EXPECT_STRTOX(1, strtol, "35", 10, 35, -1, 0); break;
 		CASE_TEST(strtol_positive);         EXPECT_STRTOX(1, strtol, "+35", 10, 35, -1, 0); break;
 		CASE_TEST(strtol_negative);         EXPECT_STRTOX(1, strtol, "-35", 10, -35, -1, 0); break;
