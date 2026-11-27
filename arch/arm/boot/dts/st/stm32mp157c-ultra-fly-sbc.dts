@@ -1058,7 +1058,7 @@
 		status = "okay";
 	};
 
-	timer@16 {
+	timer@10 {
 		status = "okay";
 	};
 };

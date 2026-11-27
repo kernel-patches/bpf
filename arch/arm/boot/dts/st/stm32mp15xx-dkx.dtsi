@@ -747,7 +747,7 @@
 		pinctrl-names = "default", "sleep";
 		status = "okay";
 	};
-	timer@11 {
+	timer@b {
 		status = "okay";
 	};
 };

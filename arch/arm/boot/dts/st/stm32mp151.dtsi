@@ -632,7 +632,7 @@
 
 				timer@1 {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <1>;
+					reg = <0x1>;
 					status = "disabled";
 				};
 
@@ -669,7 +669,7 @@
 
 				timer@2 {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <2>;
+					reg = <0x2>;
 					status = "disabled";
 				};
 
@@ -704,7 +704,7 @@
 
 				timer@3 {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <3>;
+					reg = <0x3>;
 					status = "disabled";
 				};
 
@@ -741,7 +741,7 @@
 
 				timer@4 {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <4>;
+					reg = <0x4>;
 					status = "disabled";
 				};
 
@@ -772,7 +772,7 @@
 
 				timer@5 {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <5>;
+					reg = <0x5>;
 					status = "disabled";
 				};
 			};
@@ -798,7 +798,7 @@
 
 				timer@6 {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <6>;
+					reg = <0x6>;
 					status = "disabled";
 				};
 			};
@@ -826,9 +826,9 @@
 					status = "disabled";
 				};
 
-				timer@11 {
+				timer@b {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <11>;
+					reg = <0xb>;
 					status = "disabled";
 				};
 			};
@@ -856,9 +856,9 @@
 					status = "disabled";
 				};
 
-				timer@12 {
+				timer@c {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <12>;
+					reg = <0xc>;
 					status = "disabled";
 				};
 			};
@@ -886,9 +886,9 @@
 					status = "disabled";
 				};
 
-				timer@13 {
+				timer@d {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <13>;
+					reg = <0xd>;
 					status = "disabled";
 				};
 			};
@@ -913,7 +913,7 @@
 
 				trigger@0 {
 					compatible = "st,stm32-lptimer-trigger";
-					reg = <0>;
+					reg = <0x0>;
 					status = "disabled";
 				};
 
@@ -1216,7 +1216,7 @@
 
 				timer@0 {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <0>;
+					reg = <0x0>;
 					status = "disabled";
 				};
 
@@ -1258,7 +1258,7 @@
 
 				timer@7 {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <7>;
+					reg = <0x7>;
 					status = "disabled";
 				};
 
@@ -1351,9 +1351,9 @@
 					status = "disabled";
 				};
 
-				timer@14 {
+				timer@e {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <14>;
+					reg = <0xe>;
 					status = "disabled";
 				};
 			};
@@ -1384,9 +1384,9 @@
 					status = "disabled";
 				};
 
-				timer@15 {
+				timer@f {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <15>;
+					reg = <0xf>;
 					status = "disabled";
 				};
 			};
@@ -1417,9 +1417,9 @@
 					status = "disabled";
 				};
 
-				timer@16 {
+				timer@10 {
 					compatible = "st,stm32h7-timer-trigger";
-					reg = <16>;
+					reg = <0x10>;
 					status = "disabled";
 				};
 			};
@@ -1775,7 +1775,7 @@
 
 				trigger@1 {
 					compatible = "st,stm32-lptimer-trigger";
-					reg = <1>;
+					reg = <0x1>;
 					status = "disabled";
 				};
 
@@ -1805,7 +1805,7 @@
 
 				trigger@2 {
 					compatible = "st,stm32-lptimer-trigger";
-					reg = <2>;
+					reg = <0x2>;
 					status = "disabled";
 				};
 			};
