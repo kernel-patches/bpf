@@ -71,6 +71,7 @@ static void lan9645x_teardown(struct dsa_switch *ds)
 {
 	struct lan9645x *lan9645x = ds->priv;
 
+	lan9645x_mac_deinit(lan9645x);
 	mutex_destroy(&lan9645x->fwd_domain_lock);
 	lan9645x_npi_port_deinit(lan9645x, lan9645x->npi);
 }
@@ -162,6 +163,9 @@ static int lan9645x_setup(struct dsa_switch *ds)
 
 	mutex_init(&lan9645x->fwd_domain_lock);
 	err = lan9645x_vlan_init(lan9645x);
+	if (err)
+		goto err_mutex;
+	err = lan9645x_mac_init(lan9645x);
 	if (err)
 		goto err_mutex;
 
@@ -287,6 +291,8 @@ static int lan9645x_setup(struct dsa_switch *ds)
 	       ANA_PGID(PGID_BC));
 
 	ds->mtu_enforcement_ingress = true;
+	ds->assisted_learning_on_cpu_port = true;
+	ds->fdb_isolation = true;
 
 	dev_info(lan9645x->dev,
 		 "SKU features: max_ports=%d\n",
@@ -361,6 +367,112 @@ static int lan9645x_port_vlan_del(struct dsa_switch *ds, int port,
 	return err;
 }
 
+static void lan9645x_port_fast_age(struct dsa_switch *ds, int port)
+{
+	int err;
+
+	err = lan9645x_mact_flush(ds->priv, port);
+	if (err)
+		dev_err(ds->dev, "Flushing MAC table on port %d returned %pe\n",
+			port, ERR_PTR(err));
+}
+
+static int lan9645x_fdb_dump(struct dsa_switch *ds, int port,
+			     dsa_fdb_dump_cb_t *cb, void *data)
+{
+	return lan9645x_mact_dsa_dump(ds->priv, port, cb, data);
+}
+
+static u16 lan9645x_fdb_vid(u16 vid, const struct dsa_db *db)
+{
+	if (vid)
+		return vid;
+
+	return lan9645x_vlan_unaware_pvid(db->type == DSA_DB_BRIDGE ?
+					  db->bridge.num : 0);
+}
+
+static bool lan9645x_db_equal(const struct dsa_db *a, const struct dsa_db *b)
+{
+	if (a->type != b->type)
+		return false;
+
+	switch (a->type) {
+	case DSA_DB_PORT:
+		return a->dp == b->dp;
+	case DSA_DB_LAG:
+		return a->lag.dev == b->lag.dev;
+	case DSA_DB_BRIDGE:
+		return a->bridge.num == b->bridge.num;
+	}
+
+	return false;
+}
+
+/* All host addresses point at the CPU, so host addresses of different
+ * databases with the same address and hardware VID are one MAC table
+ * entry. DSA only counts references within one database, so keep the
+ * entry while another database still uses it. dsa_fdb_present_in_other_db()
+ * compares the VID given by the bridge, not the hardware VID. VID 0 is
+ * installed in a different reserved VID for each VLAN-unaware bridge, so
+ * it would merge their host addresses. It also only compares databases of
+ * the same type, which misses a VLAN upper of a port and a bridge in the
+ * same VLAN.
+ */
+static bool lan9645x_host_addr_shared(struct dsa_port *dp,
+				      const struct list_head *addrs,
+				      const unsigned char *addr, u16 vid,
+				      const struct dsa_db *db)
+{
+	u16 hw_vid = lan9645x_fdb_vid(vid, db);
+	struct dsa_mac_addr *a;
+
+	lockdep_assert_held(&dp->addr_lists_lock);
+
+	list_for_each_entry(a, addrs, list) {
+		if (ether_addr_equal(a->addr, addr) &&
+		    !lan9645x_db_equal(&a->db, db) &&
+		    lan9645x_fdb_vid(a->vid, &a->db) == hw_vid)
+			return true;
+	}
+
+	return false;
+}
+
+static int lan9645x_fdb_add(struct dsa_switch *ds, int port,
+			    const unsigned char *addr, u16 vid,
+			    struct dsa_db db)
+{
+	struct dsa_port *dp = dsa_to_port(ds, port);
+	struct lan9645x *lan9645x = ds->priv;
+	int dest;
+
+	if (dsa_port_is_cpu(dp) &&
+	    lan9645x_host_addr_shared(dp, &dp->fdbs, addr, vid, &db))
+		return 0;
+
+	dest = dsa_port_is_cpu(dp) ? PGID_CPU : port;
+
+	return lan9645x_mact_learn(lan9645x, dest, addr,
+				   lan9645x_fdb_vid(vid, &db),
+				   ENTRYTYPE_LOCKED, false);
+}
+
+static int lan9645x_fdb_del(struct dsa_switch *ds, int port,
+			    const unsigned char *addr, u16 vid,
+			    struct dsa_db db)
+{
+	struct dsa_port *dp = dsa_to_port(ds, port);
+	struct lan9645x *lan9645x = ds->priv;
+
+	if (dsa_port_is_cpu(dp) &&
+	    lan9645x_host_addr_shared(dp, &dp->fdbs, addr, vid, &db))
+		return 0;
+
+	return lan9645x_mact_forget(lan9645x, addr, lan9645x_fdb_vid(vid, &db),
+				    ENTRYTYPE_LOCKED);
+}
+
 static const struct dsa_switch_ops lan9645x_switch_ops = {
 	.get_tag_protocol		= lan9645x_get_tag_protocol,
 
@@ -379,6 +491,12 @@ static const struct dsa_switch_ops lan9645x_switch_ops = {
 	.port_vlan_filtering		= lan9645x_port_vlan_filtering,
 	.port_vlan_add			= lan9645x_port_vlan_add,
 	.port_vlan_del			= lan9645x_port_vlan_del,
+
+	/* MAC table integration */
+	.port_fast_age			= lan9645x_port_fast_age,
+	.port_fdb_dump			= lan9645x_fdb_dump,
+	.port_fdb_add			= lan9645x_fdb_add,
+	.port_fdb_del			= lan9645x_fdb_del,
 };
 
 static int lan9645x_request_target_regmaps(struct lan9645x *lan9645x)

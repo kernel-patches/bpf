@@ -170,6 +170,19 @@ struct lan9645x_vlan {
 	    untagged: 9; /* ports 0-8 */
 };
 
+/* MAC table entry types.
+ * ENTRYTYPE_NORMAL is subject to aging.
+ * ENTRYTYPE_LOCKED is not subject to aging.
+ * ENTRYTYPE_MACV4 is not subject to aging. For IPv4 multicast.
+ * ENTRYTYPE_MACV6 is not subject to aging. For IPv6 multicast.
+ */
+enum macaccess_entry_type {
+	ENTRYTYPE_NORMAL = 0,
+	ENTRYTYPE_LOCKED,
+	ENTRYTYPE_MACV4,
+	ENTRYTYPE_MACV6,
+};
+
 struct lan9645x {
 	struct device *dev;
 	struct dsa_switch *ds;
@@ -183,6 +196,7 @@ struct lan9645x {
 
 	/* lock forwarding configuration and vlan table */
 	struct mutex fwd_domain_lock;
+	struct mutex mact_lock; /* serialize mac table register access */
 
 	int num_port_dis;
 
@@ -277,6 +291,21 @@ static inline u32 lan_rel_addr(enum lan9645x_target t, int tinst, int tcnt,
 			      rcnt, rwidth);
 }
 
+static inline u32 lan_rd(struct lan9645x *lan9645x, enum lan9645x_target t,
+			 int tinst, int tcnt, int gbase, int ginst,
+			 int gcnt, int gwidth, int raddr, int rinst,
+			 int rcnt, int rwidth)
+{
+	u32 addr, val = 0;
+
+	addr = lan_rel_addr(t, tinst, tcnt, gbase, ginst, gcnt, gwidth,
+			    raddr, rinst, rcnt, rwidth);
+
+	WARN_ON_ONCE(regmap_read(lan_tgt2rmap(lan9645x, t, tinst), addr, &val));
+
+	return val;
+}
+
 static inline struct regmap *lan_rmap(struct lan9645x *lan9645x,
 				      enum lan9645x_target t, int tinst,
 				      int tcnt, int gbase, int ginst,
@@ -339,5 +368,18 @@ int lan9645x_vlan_port_add_vlan(struct lan9645x_port *p, u16 vid, bool pvid,
 				struct netlink_ext_ack *extack);
 int lan9645x_vlan_port_del_vlan(struct lan9645x_port *p, u16 vid);
 void lan9645x_vlan_set_hostmode(struct lan9645x_port *p);
+
+/* MAC table: lan9645x_mac.c */
+int lan9645x_mact_flush(struct lan9645x *lan9645x, int port);
+int lan9645x_mact_learn(struct lan9645x *lan9645x, int port,
+			const unsigned char mac[ETH_ALEN], unsigned int vid,
+			enum macaccess_entry_type type, bool cpu_copy);
+int lan9645x_mact_forget(struct lan9645x *lan9645x,
+			 const unsigned char mac[ETH_ALEN], unsigned int vid,
+			 enum macaccess_entry_type type);
+int lan9645x_mac_init(struct lan9645x *lan9645x);
+void lan9645x_mac_deinit(struct lan9645x *lan9645x);
+int lan9645x_mact_dsa_dump(struct lan9645x *lan9645x, int port,
+			   dsa_fdb_dump_cb_t *cb, void *data);
 
 #endif /* __LAN9645X_MAIN_H__ */
