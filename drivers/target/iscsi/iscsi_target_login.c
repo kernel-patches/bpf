@@ -250,6 +250,7 @@ static int iscsi_login_zero_tsih_s1(
 
 	timer_setup(&sess->time2retain_timer,
 		    iscsit_handle_time2retain_timeout, 0);
+	INIT_WORK(&sess->time2retain_work, iscsit_time2retain_work);
 
 	ret = ida_alloc(&sess_ida, GFP_KERNEL);
 	if (ret < 0) {

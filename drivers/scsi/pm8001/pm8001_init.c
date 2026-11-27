@@ -104,8 +104,9 @@ static void pm8001_map_queues(struct Scsi_Host *shost)
 	struct pm8001_hba_info *pm8001_ha = sha->lldd_ha;
 	struct blk_mq_queue_map *qmap = &shost->tag_set.map[HCTX_TYPE_DEFAULT];
 
-	if (pm8001_ha->number_of_intr > 1) {
-		blk_mq_map_hw_queues(qmap, &pm8001_ha->pdev->dev, 1);
+	if (pm8001_ha->number_of_intr > PM8001_PRE_VECTORS) {
+		blk_mq_map_hw_queues(qmap, &pm8001_ha->pdev->dev,
+				     PM8001_PRE_VECTORS);
 		return;
 	}
 
@@ -977,10 +978,11 @@ static u32 pm8001_setup_msix(struct pm8001_hba_info *pm8001_ha)
 		 * include in the affinity spreading.
 		 */
 		struct irq_affinity desc = {
-			.pre_vectors = 1,
+			.pre_vectors = PM8001_PRE_VECTORS,
 		};
 		rc = pci_alloc_irq_vectors_affinity(
-				pm8001_ha->pdev, 2, PM8001_MAX_MSIX_VEC,
+				pm8001_ha->pdev, PM8001_PRE_VECTORS + 1,
+				PM8001_MAX_MSIX_VEC,
 				PCI_IRQ_MSIX | PCI_IRQ_AFFINITY, &desc);
 	}
 
@@ -1183,8 +1185,9 @@ static int pm8001_pci_probe(struct pci_dev *pdev,
 
 	PM8001_CHIP_DISP->chip_post_init(pm8001_ha);
 
-	if (pm8001_ha->number_of_intr > 1) {
-		shost->nr_hw_queues = pm8001_ha->number_of_intr - 1;
+	if (pm8001_ha->number_of_intr > PM8001_PRE_VECTORS) {
+		shost->nr_hw_queues = pm8001_ha->number_of_intr -
+				      PM8001_PRE_VECTORS;
 		/*
 		 * For now, ensure we're not sent too many commands by setting
 		 * host_tagset. This is also required if we start using request

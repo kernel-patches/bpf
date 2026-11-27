@@ -178,6 +178,7 @@ enum port_type {
 #define	PM8001_MAX_INB_NUM	 64
 #define	PM8001_MAX_OUTB_NUM	 64
 #define	PM8001_CAN_QUEUE	 508	/* SCSI Queue depth */
+#define	PM8001_PRE_VECTORS	 1	/* non-affinitized housekeeping vector */
 
 /* Inbound/Outbound queue size */
 #define IOMB_SIZE_SPC		64

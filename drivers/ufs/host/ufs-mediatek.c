@@ -541,6 +541,16 @@ static int ufs_mtk_mphy_power_on(struct ufs_hba *hba, bool on)
 		if (ufs_mtk_is_va09_supported(hba)) {
 			ufs_mtk_va09_pwr_ctrl(res, 0);
 			ret = regulator_disable(host->reg_va09);
+			if (ret) {
+				/*
+				 * The va09 regulator stays enabled, so
+				 * bring the M-PHY back up to keep the
+				 * software state in sync with the
+				 * hardware.
+				 */
+				ufs_mtk_va09_pwr_ctrl(res, 1);
+				phy_power_on(mphy);
+			}
 		}
 	}
 out:
@@ -691,7 +701,7 @@ static void ufs_mtk_init_va09_pwr_ctrl(struct ufs_hba *hba)
 {
 	struct ufs_mtk_host *host = ufshcd_get_variant(hba);
 
-	host->reg_va09 = regulator_get(hba->dev, "va09");
+	host->reg_va09 = devm_regulator_get(hba->dev, "va09");
 	if (IS_ERR(host->reg_va09))
 		dev_info(hba->dev, "failed to get va09");
 	else
@@ -1328,6 +1338,14 @@ out_variant_clear:
 	ufshcd_set_variant(hba, NULL);
 out:
 	return err;
+}
+
+static void ufs_mtk_exit(struct ufs_hba *hba)
+{
+	struct ufs_mtk_host *host = ufshcd_get_variant(hba);
+
+	if (host)
+		ufs_mtk_mphy_power_on(hba, false);
 }
 
 static int ufs_mtk_negotiate_pwr_mode(struct ufs_hba *hba,
@@ -2352,6 +2370,7 @@ static void ufs_mtk_config_scsi_dev(struct scsi_device *sdev)
 static const struct ufs_hba_variant_ops ufs_hba_mtk_vops = {
 	.name                = "mediatek.ufshci",
 	.init                = ufs_mtk_init,
+	.exit                = ufs_mtk_exit,
 	.get_ufs_hci_version = ufs_mtk_get_ufs_hci_version,
 	.setup_clocks        = ufs_mtk_setup_clocks,
 	.hce_enable_notify   = ufs_mtk_hce_enable_notify,
