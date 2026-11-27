@@ -1597,6 +1597,8 @@ static void iio_buffer_dmabuf_release(struct kref *ref)
 
 	buffer->access->detach_dmabuf(buffer, priv->block);
 
+	iio_buffer_put(buffer);
+
 	dma_buf_detach(attach->dmabuf, attach);
 	dma_buf_put(dmabuf);
 	kfree(priv);
@@ -1741,7 +1743,13 @@ static int iio_buffer_attach_dmabuf(struct iio_dev_buffer_pair *ib,
 	}
 
 	kref_init(&priv->ref);
-	priv->buffer = buffer;
+	/*
+	 * Hold a reference for the asynchronous dmabuf completion path
+	 * (iio_buffer_cleanup() -> iio_buffer_dmabuf_put() may run from a
+	 * work item after the device has been unbound); released in
+	 * iio_buffer_dmabuf_release().
+	 */
+	priv->buffer = iio_buffer_get(buffer);
 	priv->attach = attach;
 	attach->importer_priv = priv;
 
@@ -1789,6 +1797,7 @@ err_dmabuf_detach:
 err_dmabuf_put:
 	dma_buf_put(dmabuf);
 err_free_priv:
+	iio_buffer_put(priv->buffer);
 	kfree(priv);
 
 	return err;
@@ -1931,9 +1940,14 @@ static int iio_buffer_enqueue_dmabuf(struct iio_dev_buffer_pair *ib,
 	if (ret)
 		goto err_queue_unlock;
 
+	/*
+	 * The reservation object takes a reference of its own, and drops it as
+	 * soon as a later fence of this attachment takes the place of this
+	 * one. The initial reference stays with the block, which points to the
+	 * fence until iio_buffer_cleanup() has run.
+	 */
 	dma_resv_add_fence(dmabuf->resv, &fence->base,
 			   dma_to_ram ? DMA_RESV_USAGE_WRITE : DMA_RESV_USAGE_READ);
-	dma_fence_put(&fence->base);
 	dma_resv_unlock(dmabuf->resv);
 
 	cookie = dma_fence_begin_signalling();
@@ -1989,18 +2003,12 @@ void iio_buffer_signal_dmabuf_done(struct dma_fence *fence, int ret)
 		container_of(fence, struct iio_dma_fence, base);
 	bool cookie = dma_fence_begin_signalling();
 
-	/*
-	 * Get a reference to the fence, so that it's not freed as soon as
-	 * it's signaled.
-	 */
-	dma_fence_get(fence);
-
 	fence->error = ret;
 	dma_fence_signal(fence);
 	dma_fence_end_signalling(cookie);
 
 	/*
-	 * The fence will be unref'd in iio_buffer_cleanup.
+	 * The reference of the block will be dropped in iio_buffer_cleanup.
 	 * It can't be done here, as the unref functions might try to lock the
 	 * resv object, which can deadlock.
 	 */
@@ -2464,10 +2472,8 @@ int iio_push_to_buffers_with_ts_unaligned(struct iio_dev *indio_dev,
 	if (iio_dev_opaque->bounce_buffer_size !=  indio_dev->scan_bytes) {
 		void *bb;
 
-		bb = devm_krealloc(&indio_dev->dev,
-				   iio_dev_opaque->bounce_buffer,
-				   indio_dev->scan_bytes,
-				   GFP_KERNEL | __GFP_ZERO);
+		bb = krealloc(iio_dev_opaque->bounce_buffer,
+			      indio_dev->scan_bytes, GFP_KERNEL | __GFP_ZERO);
 		if (!bb)
 			return -ENOMEM;
 		iio_dev_opaque->bounce_buffer = bb;

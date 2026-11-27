@@ -35,7 +35,19 @@ struct iio_loop_info {
 	struct task_struct *task;
 };
 
+static void iio_loop_release(struct config_item *item)
+{
+	struct iio_sw_trigger *swt = to_iio_sw_trigger(item);
+
+	kfree(container_of(swt, struct iio_loop_info, swt));
+}
+
+static const struct configfs_item_operations iio_loop_item_ops = {
+	.release = iio_loop_release,
+};
+
 static const struct config_item_type iio_loop_type = {
+	.ct_item_ops = &iio_loop_item_ops,
 	.ct_owner = THIS_MODULE,
 };
 
@@ -111,13 +123,8 @@ err_free_trig_info:
 
 static int iio_trig_loop_remove(struct iio_sw_trigger *swt)
 {
-	struct iio_loop_info *trig_info;
-
-	trig_info = iio_trigger_get_drvdata(swt->trigger);
-
 	iio_trigger_unregister(swt->trigger);
 	iio_trigger_free(swt->trigger);
-	kfree(trig_info);
 
 	return 0;
 }

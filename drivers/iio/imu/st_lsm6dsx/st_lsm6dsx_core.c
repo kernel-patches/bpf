@@ -434,6 +434,7 @@ static const struct st_lsm6dsx_settings st_lsm6dsx_sensor_settings[] = {
 				.addr = 0x09,
 				.mask = GENMASK(5, 3),
 			},
+			.ts_sensitivity = 25000,
 		},
 		.event_settings = {
 			.sources = {
@@ -601,6 +602,7 @@ static const struct st_lsm6dsx_settings st_lsm6dsx_sensor_settings[] = {
 				.addr = 0x09,
 				.mask = GENMASK(5, 3),
 			},
+			.ts_sensitivity = 25000,
 		},
 		.event_settings = {
 			.sources = {
@@ -802,6 +804,7 @@ static const struct st_lsm6dsx_settings st_lsm6dsx_sensor_settings[] = {
 				.addr = 0x09,
 				.mask = GENMASK(5, 3),
 			},
+			.ts_sensitivity = 25000,
 		},
 		.shub_settings = {
 			.page_mux = {

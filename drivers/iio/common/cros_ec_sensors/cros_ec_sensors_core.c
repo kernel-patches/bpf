@@ -213,14 +213,11 @@ EXPORT_SYMBOL_GPL(cros_ec_sensors_push_data);
 
 static void cros_ec_sensors_core_clean(void *arg)
 {
-	struct platform_device *pdev = (struct platform_device *)arg;
-	struct cros_ec_sensorhub *sensor_hub =
-		dev_get_drvdata(pdev->dev.parent);
-	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
-	struct cros_ec_sensors_core_state *st = iio_priv(indio_dev);
-	u8 sensor_num = st->param.info.sensor_num;
+	struct device *dev = arg;
+	struct cros_ec_sensorhub *sensor_hub = dev_get_drvdata(dev->parent);
+	struct cros_ec_sensor_platform *pdata = dev_get_platdata(dev);
 
-	cros_ec_sensorhub_unregister_push_data(sensor_hub, sensor_num);
+	cros_ec_sensorhub_unregister_push_data(sensor_hub, pdata->sensor_num);
 }
 
 /**
@@ -372,7 +369,6 @@ int cros_ec_sensors_core_register(struct device *dev,
 {
 	struct cros_ec_sensor_platform *sensor_platform = dev_get_platdata(dev);
 	struct cros_ec_sensorhub *sensor_hub = dev_get_drvdata(dev->parent);
-	struct platform_device *pdev = to_platform_device(dev);
 	struct cros_ec_dev *ec = sensor_hub->ec;
 	int ret;
 
@@ -391,7 +387,7 @@ int cros_ec_sensors_core_register(struct device *dev,
 		return ret;
 
 	return devm_add_action_or_reset(
-			dev, cros_ec_sensors_core_clean, pdev);
+			dev, cros_ec_sensors_core_clean, dev);
 }
 EXPORT_SYMBOL_GPL(cros_ec_sensors_core_register);
 
