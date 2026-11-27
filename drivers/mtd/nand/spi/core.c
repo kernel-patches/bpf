@@ -1984,7 +1984,7 @@ static int spinand_init(struct spinand_device *spinand)
 	spinand_cont_read_init(spinand);
 	ret = spinand_randomizer_init(spinand);
 	if (ret)
-		goto err_cleanup_nanddev;
+		goto err_cleanup_ecc_engine;
 
 	mtd->_read_oob = spinand_mtd_read;
 	mtd->_write_oob = spinand_mtd_write;

@@ -691,7 +691,7 @@ static int ebu_nand_probe(struct platform_device *pdev)
 	/* Scan to find existence of the device */
 	ret = nand_scan(&ebu_host->chip, 1);
 	if (ret)
-		goto err_cleanup_dma;
+		goto err_disable_nand;
 
 	ret = mtd_device_register(mtd, NULL, 0);
 	if (ret)
@@ -701,6 +701,8 @@ static int ebu_nand_probe(struct platform_device *pdev)
 
 err_clean_nand:
 	nand_cleanup(&ebu_host->chip);
+err_disable_nand:
+	ebu_nand_disable(&ebu_host->chip);
 err_cleanup_dma:
 	ebu_dma_cleanup(ebu_host);
 err_of_node_put:
