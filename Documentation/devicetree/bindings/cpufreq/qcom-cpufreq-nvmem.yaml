@@ -25,21 +25,29 @@ select:
     compatible:
       contains:
         enum:
-          - qcom,apq8064
-          - qcom,apq8096
-          - qcom,ipq5332
-          - qcom,ipq6018
-          - qcom,ipq8064
-          - qcom,ipq8074
-          - qcom,ipq9574
-          - qcom,msm8909
-          - qcom,msm8939
-          - qcom,msm8960
-          - qcom,msm8974
-          - qcom,msm8996
           - qcom,qcs404
   required:
     - compatible
+
+properties:
+  cpus:
+    type: object
+
+    patternProperties:
+      '^cpu@[0-9a-f]+$':
+        type: object
+
+        properties:
+          power-domains:
+            maxItems: 1
+
+          power-domain-names:
+            items:
+              - const: cpr
+
+        required:
+          - power-domains
+          - power-domain-names
 
 patternProperties:
   '^opp-table(-[a-z0-9]+)?$':
@@ -48,10 +56,13 @@ patternProperties:
           properties:
             compatible:
               enum:
-                - operating-points-v2-krait-cpu
                 - operating-points-v2-kryo-cpu
         then:
           $ref: /schemas/opp/opp-v2-kryo-cpu.yaml#
+          patternProperties:
+            '^opp-?[0-9]+$':
+              required:
+                - required-opps
 
       - if:
           properties:
@@ -61,47 +72,6 @@ patternProperties:
           $ref: /schemas/opp/opp-v2-qcom-level.yaml#
 
     unevaluatedProperties: false
-
-allOf:
-  - if:
-      properties:
-        compatible:
-          contains:
-            enum:
-              - qcom,qcs404
-
-    then:
-      properties:
-        cpus:
-          type: object
-
-          patternProperties:
-            '^cpu@[0-9a-f]+$':
-              type: object
-
-              properties:
-                power-domains:
-                  maxItems: 1
-
-                power-domain-names:
-                  items:
-                    - const: cpr
-
-              required:
-                - power-domains
-                - power-domain-names
-
-      patternProperties:
-        '^opp-table(-[a-z0-9]+)?$':
-          if:
-            properties:
-              compatible:
-                const: operating-points-v2-kryo-cpu
-          then:
-            patternProperties:
-              '^opp-?[0-9]+$':
-                required:
-                  - required-opps
 
 additionalProperties: true
 

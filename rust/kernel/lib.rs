@@ -29,6 +29,9 @@
 // To be determined.
 #![feature(used_with_arg)]
 //
+// For documentation purpose only.
+#![feature(doc_notable_trait)]
+//
 // `feature(file_with_nul)` is stable since Rust 1.92.0. Before Rust 1.89.0, it did not exist, so
 // enable it conditionally.
 #![cfg_attr(CONFIG_RUSTC_HAS_FILE_WITH_NUL, feature(file_with_nul))]
@@ -96,6 +99,8 @@ pub mod iommu;
 pub mod iov;
 pub mod irq;
 pub mod jump_label;
+#[cfg(CONFIG_RUST_KCSAN_KUNIT_TEST)]
+mod kcsan_test;
 #[cfg(CONFIG_KUNIT)]
 pub mod kunit;
 pub mod list;
@@ -126,6 +131,8 @@ pub mod ratelimit;
 pub mod rbtree;
 pub mod regulator;
 pub mod revocable;
+#[cfg(CONFIG_XARRAY_RUST)]
+pub mod rxarray;
 pub mod safety;
 pub mod scatterlist;
 pub mod security;
@@ -179,11 +186,50 @@ impl ModuleMetadata for LocalModule {
 }
 
 #[cfg(not(testlib))]
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+#[inline]
+fn bug_on_panic(info: &core::panic::PanicInfo<'_>) -> ! {
     pr_emerg!("{}\n", info);
     // SAFETY: FFI call.
     unsafe { bindings::BUG() };
+}
+
+#[cfg(all(not(testlib), not(CONFIG_KUNIT = "y")))]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    bug_on_panic(info);
+}
+
+#[cfg(all(not(testlib), CONFIG_KUNIT = "y"))]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    // SAFETY: This function is safe to call even if CONFIG_KUNIT=n. If a null pointer is returned,
+    // the panic is handled same as if CONFIG_KUNIT=n.
+    let kunit_test = unsafe { ::bindings::kunit_get_current_test() };
+    if kunit_test.is_null() {
+        bug_on_panic(info);
+    } else {
+        // SAFETY: We are in the else branch of kunit_test.is_null() condition, meaning that
+        // `::bindings::kunit_get_current_test()` returned a kunit struct successfully.
+        let test_attributes = unsafe { (*kunit_test).attr };
+        if test_attributes.is_null() {
+            use crate::str::CStrExt as _;
+            // SAFETY: Test name should be set by KUnit framework at this stage.
+            let test_str = unsafe { str::CStr::from_char_ptr((*kunit_test).name.cast()) };
+            pr_emerg!("Test case {} has no attributes\n", test_str);
+            bug_on_panic(info);
+        }
+        // SAFETY: We already tested that test_attributes.is_null() is false, meaning that it is
+        // safe to retrieve its attributes.
+        else if unsafe { (*test_attributes).rust_should_panic } {
+            // SAFETY: We are in the else branch of kunit_test.is_null() condition, meaning that
+            // `::bindings::kunit_get_current_test()` returned a kunit struct successfully.
+            unsafe {
+                bindings::__kunit_abort(kunit_test);
+            };
+        } else {
+            bug_on_panic(info);
+        }
+    }
 }
 
 /// Produces a pointer to an object from a pointer to one of its fields.

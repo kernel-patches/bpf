@@ -111,7 +111,6 @@ static void pxa2xx_flash_remove(struct platform_device *dev)
 	kfree(info);
 }
 
-#ifdef CONFIG_PM
 static void pxa2xx_flash_shutdown(struct platform_device *dev)
 {
 	struct pxa2xx_flash_info *info = platform_get_drvdata(dev);
@@ -119,9 +118,6 @@ static void pxa2xx_flash_shutdown(struct platform_device *dev)
 	if (info && mtd_suspend(info->mtd) == 0)
 		mtd_resume(info->mtd);
 }
-#else
-#define pxa2xx_flash_shutdown NULL
-#endif
 
 static struct platform_driver pxa2xx_flash_driver = {
 	.driver = {

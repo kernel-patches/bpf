@@ -1116,6 +1116,21 @@ static void alc269vb_fixup_aspire_e1_coef(struct hda_codec *codec,
 		alc_update_coef_idx(codec, 0x0d, 0x6000, 0x6000);
 }
 
+/*
+ * After a warm reboot from Windows, bit 4 of COEF 0x66 is left set, which
+ * mutes the internal speaker, and bit 10 of COEF 0x1b is left clear, which
+ * distorts the output. Restore both at init and resume.
+ */
+static void alc294_fixup_asus_spk_coefs(struct hda_codec *codec,
+					const struct hda_fixup *fix,
+					int action)
+{
+	if (action != HDA_FIXUP_ACT_INIT)
+		return;
+	alc_update_coef_idx(codec, 0x66, 1 << 4, 0);
+	alc_update_coef_idx(codec, 0x1b, 0, 1 << 10);
+}
+
 static void alc269_fixup_pcm_44k(struct hda_codec *codec,
 				 const struct hda_fixup *fix, int action)
 {
@@ -1460,6 +1475,17 @@ static void alc245_fixup_minisforum_jack_detect(struct hda_codec *codec,
 	if (action == HDA_FIXUP_ACT_INIT)
 		/* Clear Reset HP JD while preserving the other coefficient bits. */
 		alc_update_coef_idx(codec, 0x4a, BIT(15), 0);
+}
+
+static void alc245_fixup_acer_hp_jd_reset(struct hda_codec *codec,
+					  const struct hda_fixup *fix,
+					  int action)
+{
+	if (action == HDA_FIXUP_ACT_INIT) {
+		/* Pulse Reset HP JD */
+		alc_update_coef_idx(codec, 0x4a, BIT(15), BIT(15));
+		alc_update_coef_idx(codec, 0x4a, BIT(15), 0);
+	}
 }
 
 /* turn on/off mic-mute LED per capture hook via VREF change */
@@ -1907,6 +1933,69 @@ static void alc298_fixup_alc1316_amp(struct hda_codec *codec,
 		alc_write_coef_idx(codec, 0x25, init_seq[i][1]);
 		alc_write_coef_idx(codec, 0x26, 0xb031);
 	}
+}
+
+/*
+ * The ONEXPLAYER X1 i drives its speakers through a Realtek smart amplifier at
+ * I2C address 0x10, reached over the ALC245 coefficient tunnel. The firmware
+ * leaves the amplifier unconfigured, so the speakers stay silent. The register
+ * writes below replay what the Windows driver does at initialization.
+ *
+ * Tunnel layout: coefficient 0x24 selects the amplifier, 0x25 and 0x26 carry
+ * the high and low halves of the register address, 0x28 the value, and 0x29
+ * commits. Bit 5 of the commit word is a self-clearing go bit; a write takes
+ * about 200 us.
+ */
+static void alc245_onexplayer_amp_write(struct hda_codec *codec, u32 reg, u8 val)
+{
+	int i;
+
+	alc_write_coef_idx(codec, 0x24, 0x0010);
+	alc_write_coef_idx(codec, 0x25, reg >> 16);
+	alc_write_coef_idx(codec, 0x26, reg & 0xffff);
+	alc_write_coef_idx(codec, 0x27, 0x0000);
+	alc_write_coef_idx(codec, 0x28, val);
+	alc_write_coef_idx(codec, 0x29, 0xb023);
+
+	for (i = 0; i < 10; i++) {
+		if (!(alc_read_coef_idx(codec, 0x29) & 0x0020))
+			return;
+		usleep_range(100, 200);
+	}
+	codec_warn(codec, "amp write timeout, reg 0x%x\n", reg);
+}
+
+static void alc245_fixup_onexplayer_amp(struct hda_codec *codec,
+					const struct hda_fixup *fix, int action)
+{
+	static const struct {
+		u32 reg;
+		u8 val;
+	} init_seq[] = {
+		{ 0xf10a, 0x09 }, { 0xf104, 0xf6 }, { 0xf105, 0x22 },
+		{ 0xf10b, 0x2c }, { 0xf10b, 0x7c }, { 0xc000, 0x01 },
+		{ 0xf20d, 0x00 }, { 0xf212, 0x3e }, { 0xc001, 0x02 },
+		{ 0xc003, 0x22 }, { 0xc004, 0x44 }, { 0xc005, 0x44 },
+		{ 0xc007, 0x64 }, { 0xc00e, 0xe7 }, { 0xf223, 0x7f },
+		{ 0xf224, 0xdb }, { 0xf225, 0xee }, { 0xf226, 0x3f },
+		{ 0xf227, 0x0f }, { 0xf21a, 0x78 }, { 0xf242, 0x3c },
+		{ 0xc120, 0x40 }, { 0xc125, 0x03 }, { 0xc321, 0x0b },
+		{ 0xc200, 0xd8 }, { 0xc201, 0x27 }, { 0xc202, 0x0f },
+		{ 0xc400, 0x0e }, { 0xc401, 0x43 }, { 0xc402, 0xe0 },
+		{ 0xc403, 0x00 }, { 0xc404, 0x4c }, { 0xc406, 0x40 },
+		{ 0xc407, 0x02 }, { 0xc408, 0x3f }, { 0xc300, 0x01 },
+		{ 0x41001888, 0x00 }, { 0xc121, 0x0b }, { 0xf102, 0x00 },
+		{ 0xf103, 0x00 }, { 0xf104, 0xf5 }, { 0xf105, 0x23 },
+		{ 0xf109, 0x00 }, { 0xf10a, 0x0b }, { 0xf10b, 0x4c },
+		{ 0xf10b, 0x5c },
+	};
+	int i;
+
+	if (action != HDA_FIXUP_ACT_INIT)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(init_seq); i++)
+		alc245_onexplayer_amp_write(codec, init_seq[i].reg, init_seq[i].val);
 }
 
 static void alc298_fixup_samsung_amp(struct hda_codec *codec,
@@ -4391,6 +4480,7 @@ enum {
 	ALC294_FIXUP_ASUS_ALLY_VERBS,
 	ALC294_FIXUP_ASUS_HPE,
 	ALC294_FIXUP_ASUS_COEF_1B,
+	ALC294_FIXUP_ASUS_SPK_COEFS,
 	ALC294_FIXUP_ASUS_GX502_HP,
 	ALC294_FIXUP_ASUS_GX502_PINS,
 	ALC294_FIXUP_ASUS_GX502_VERBS,
@@ -4554,6 +4644,7 @@ enum {
 	ALC233_FIXUP_LENOVO_GPIO2_MIC_HOTKEY,
 	ALC245_FIXUP_BASS_HP_DAC,
 	ALC245_FIXUP_ACER_MICMUTE_LED,
+	ALC245_FIXUP_ACER_HP_JD_RESET,
 	ALC245_FIXUP_CS35L41_I2C_2_MUTE_LED,
 	ALC245_FIXUP_CS35L41_I2C_2_MUTE_MICMUTE_LED,
 	ALC256_FIXUP_HONOR_MRB_XXX_M1020_AUDIO,
@@ -4572,6 +4663,7 @@ enum {
 	ALC256_FIXUP_ASUS_SPEAKER_COEFS,
 	ALC245_FIXUP_MINISFORUM_V3_MIC_NO_PRESENCE,
 	ALC287_FIXUP_TAS2781_I2C_DAC,
+	ALC245_FIXUP_ONEXPLAYER_AMP,
 };
 
 /* A special fixup for Lenovo C940 and Yoga Duet 7;
@@ -6282,6 +6374,10 @@ static const struct hda_fixup alc269_fixups[] = {
 		.chained = true,
 		.chain_id = ALC289_FIXUP_ASUS_GA401,
 	},
+	[ALC294_FIXUP_ASUS_SPK_COEFS] = {
+		.type = HDA_FIXUP_FUNC,
+		.v.func = alc294_fixup_asus_spk_coefs,
+	},
 	[ALC285_FIXUP_HP_GPIO_LED] = {
 		.type = HDA_FIXUP_FUNC,
 		.v.func = alc285_fixup_hp_gpio_led,
@@ -6464,7 +6560,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x1e, 0x411111f0 },
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC269_FIXUP_CZC_TMI] = {
 		.type = HDA_FIXUP_PINS,
@@ -6482,7 +6577,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x20, 0x8000ffff },
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC269_FIXUP_CZC_L101] = {
 		.type = HDA_FIXUP_PINS,
@@ -6500,7 +6594,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x1e, 0x411111f0 },
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC269_FIXUP_LEMOTE_A1802] = {
 		.type = HDA_FIXUP_PINS,
@@ -6518,7 +6611,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x21, 0x03214020 },
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC269_FIXUP_LEMOTE_A190X] = {
 		.type = HDA_FIXUP_PINS,
@@ -6530,7 +6622,6 @@ static const struct hda_fixup alc269_fixups[] = {
 			{ 0x1b, 0x0201401f }, /* front lineout */
 			{ }
 		},
-		.chain_id = ALC269_FIXUP_DMIC,
 	},
 	[ALC256_FIXUP_INTEL_NUC8_RUGGED] = {
 		.type = HDA_FIXUP_PINS,
@@ -7392,6 +7483,12 @@ static const struct hda_fixup alc269_fixups[] = {
 		.chained = true,
 		.chain_id = ALC2XX_FIXUP_HEADSET_MIC,
 	},
+	[ALC245_FIXUP_ACER_HP_JD_RESET] = {
+		.type = HDA_FIXUP_FUNC,
+		.v.func = alc245_fixup_acer_hp_jd_reset,
+		.chained = true,
+		.chain_id = ALC245_FIXUP_ACER_MICMUTE_LED,
+	},
 	[ALC245_FIXUP_CS35L41_I2C_2_MUTE_LED] = {
 		.type = HDA_FIXUP_FUNC,
 		.v.func = alc245_fixup_hp_mute_led_coefbit,
@@ -7510,6 +7607,10 @@ static const struct hda_fixup alc269_fixups[] = {
 		.chained = true,
 		.chain_id = ALC245_FIXUP_BASS_HP_DAC
 	},
+	[ALC245_FIXUP_ONEXPLAYER_AMP] = {
+		.type = HDA_FIXUP_FUNC,
+		.v.func = alc245_fixup_onexplayer_amp,
+	},
 };
 
 static const struct hda_quirk alc269_fixup_tbl[] = {
@@ -7576,7 +7677,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x1025, 0x166c, "Acer Predator PH16-71", ALC2XX_FIXUP_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1025, 0x1679, "Acer Nitro 16 AN16-41", ALC2XX_FIXUP_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1025, 0x169a, "Acer Swift SFG16", ALC256_FIXUP_ACER_SFG16_MICMUTE_LED),
-	SND_PCI_QUIRK(0x1025, 0x170f, "Acer Predator PHN16-71", ALC2XX_FIXUP_HEADSET_MIC),
+	SND_PCI_QUIRK(0x1025, 0x170f, "Acer Predator PHN16-71", ALC245_FIXUP_ACER_HP_JD_RESET),
 	SND_PCI_QUIRK(0x1025, 0x171e, "Acer Nitro ANV15-51", ALC245_FIXUP_ACER_MICMUTE_LED),
 	SND_PCI_QUIRK(0x1025, 0x172c, "Acer Nitro ANV16-41", ALC2XX_FIXUP_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1025, 0x1731, "Acer Predator PHN16-72", ALC245_FIXUP_ACER_MICMUTE_LED),
@@ -7789,6 +7890,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x103c, 0x86c1, "HP Laptop 15-da3001TU", ALC236_FIXUP_HP_MUTE_LED_COEFBIT2),
 	SND_PCI_QUIRK(0x103c, 0x86c7, "HP Envy AiO 32", ALC274_FIXUP_HP_ENVY_GPIO),
 	SND_PCI_QUIRK(0x103c, 0x86c8, "HP Laptop 14s-dr1xxx", ALC236_FIXUP_HP_MUTE_LED_COEFBIT2),
+	SND_PCI_QUIRK(0x103c, 0x86e2, "HP Pavilion 15-cs3xxx", ALC269_FIXUP_HP_MUTE_LED_MIC3),
 	SND_PCI_QUIRK(0x103c, 0x86e7, "HP Spectre x360 15-eb0xxx", ALC285_FIXUP_HP_SPECTRE_X360_EB1),
 	SND_PCI_QUIRK(0x103c, 0x863e, "HP Spectre x360 15-df1xxx", ALC285_FIXUP_HP_SPECTRE_X360_DF1),
 	SND_PCI_QUIRK(0x103c, 0x86e8, "HP Spectre x360 15-eb0xxx", ALC285_FIXUP_HP_SPECTRE_X360_EB1),
@@ -7869,6 +7971,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x103c, 0x8902, "HP OMEN 16", ALC285_FIXUP_HP_MUTE_LED),
 	SND_PCI_QUIRK(0x103c, 0x890e, "HP 255 G8 Notebook PC", ALC236_FIXUP_HP_MUTE_LED_COEFBIT2),
 	SND_PCI_QUIRK(0x103c, 0x8919, "HP Pavilion Aero Laptop 13-be0xxx", ALC287_FIXUP_HP_GPIO_LED),
+	SND_PCI_QUIRK(0x103c, 0x891e, "HP Spectre x360 2-in-1 Laptop 16-f2xxx", ALC245_FIXUP_HP_SPECTRE_X360_EU0XXX),
 	SND_PCI_QUIRK(0x103c, 0x896d, "HP ZBook Firefly 16 G9", ALC245_FIXUP_CS35L41_SPI_2_HP_GPIO_LED),
 	SND_PCI_QUIRK(0x103c, 0x896e, "HP EliteBook x360 830 G9", ALC245_FIXUP_CS35L41_SPI_2_HP_GPIO_LED),
 	SND_PCI_QUIRK(0x103c, 0x8971, "HP EliteBook 830 G9", ALC245_FIXUP_CS35L41_SPI_2_HP_GPIO_LED),
@@ -7912,7 +8015,8 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x103c, 0x8a26, "HP Victus 16-d1xxx (MB 8A26)", ALC245_FIXUP_HP_MUTE_LED_COEFBIT),
 	SND_PCI_QUIRK(0x103c, 0x8a28, "HP Envy 13", ALC287_FIXUP_CS35L41_I2C_2),
 	SND_PCI_QUIRK(0x103c, 0x8a29, "HP Envy 15", ALC287_FIXUP_CS35L41_I2C_2),
-	SND_PCI_QUIRK(0x103c, 0x8a2a, "HP Envy 15", ALC287_FIXUP_CS35L41_I2C_2),
+	SND_PCI_QUIRK(0x103c, 0x8a2a, "HP ENVY x360 2-in-1 Laptop 15-ew0xxx",
+		      ALC287_FIXUP_CS35L41_I2C_2_HP_MUTE_LEDS),
 	SND_PCI_QUIRK(0x103c, 0x8a2b, "HP Envy 15", ALC287_FIXUP_CS35L41_I2C_2),
 	SND_PCI_QUIRK(0x103c, 0x8a2c, "HP Envy 16", ALC287_FIXUP_CS35L41_I2C_2),
 	SND_PCI_QUIRK(0x103c, 0x8a2d, "HP Envy 16", ALC287_FIXUP_CS35L41_I2C_2),
@@ -8145,7 +8249,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x103c, 0x8ee4, "HP Bantie A6U", ALC236_FIXUP_HP_MUTE_LED_MICMUTE_GPIO),
 	SND_PCI_QUIRK(0x103c, 0x8ee5, "HP Bantie A6U", ALC236_FIXUP_HP_MUTE_LED_MICMUTE_GPIO),
 	SND_PCI_QUIRK(0x103c, 0x8ee7, "HP Abe A6U", ALC236_FIXUP_HP_MUTE_LED_MICMUTE_GPIO),
-	SND_PCI_QUIRK(0x103c, 0x8f07, "HP Agusta G7KX", ALC287_FIXUP_CS35L41_I2C_2),
+	SND_PCI_QUIRK(0x103c, 0x8f07, "HP OmniBook 7 Laptop 14-hg0xxx", ALC287_FIXUP_CS35L41_I2C_2_HP_MUTE_LEDS),
 	SND_PCI_QUIRK(0x103c, 0x8f0c, "HP ZBook X G2i 16W", ALC236_FIXUP_HP_GPIO_LED),
 	SND_PCI_QUIRK(0x103c, 0x8f0e, "HP ZBook X G2i 16W", ALC236_FIXUP_HP_GPIO_LED),
 	SND_PCI_QUIRK(0x103c, 0x8f2d, "HP Auster 14", ALC287_FIXUP_CS35L41_I2C_2),
@@ -8239,6 +8343,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x1043, 0x18d3, "ASUS UM3504DA", ALC287_FIXUP_CS35L41_I2C_2),
 	SND_PCI_QUIRK(0x1043, 0x18f1, "Asus FX505DT", ALC256_FIXUP_ASUS_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1043, 0x194e, "ASUS UX563FD", ALC294_FIXUP_ASUS_HPE),
+	SND_PCI_QUIRK(0x1043, 0x1961, "ASUS VivoBook X509UA", ALC256_FIXUP_ASUS_MIC_NO_PRESENCE),
 	SND_PCI_QUIRK(0x1043, 0x1970, "ASUS UX550VE", ALC289_FIXUP_ASUS_GA401),
 	SND_PCI_QUIRK(0x1043, 0x197e, "ASUS VivoBook X509DAP", ALC256_FIXUP_ASUS_MIC_NO_PRESENCE),
 	SND_PCI_QUIRK(0x1043, 0x1982, "ASUS B1400CEPE", ALC256_FIXUP_ASUS_HPE),
@@ -8250,13 +8355,14 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x1043, 0x1a83, "ASUS UM5302LA", ALC287_FIXUP_CS35L41_I2C_2),
 	SND_PCI_QUIRK(0x1043, 0x1a8e, "ASUS G712LWS", ALC294_FIXUP_LENOVO_MIC_LOCATION),
 	SND_PCI_QUIRK(0x1043, 0x1a8f, "ASUS UX582ZS", ALC245_FIXUP_CS35L41_SPI_2),
+	SND_PCI_QUIRK(0x1043, 0x1b02, "ASUS ExpertBook B7402FEA", ALC294_FIXUP_ASUS_SPK_COEFS),
 	SND_PCI_QUIRK(0x1043, 0x1b11, "ASUS UX431DA", ALC294_FIXUP_ASUS_COEF_1B),
 	SND_PCI_QUIRK(0x1043, 0x1b13, "ASUS U41SV/GA403U", ALC285_FIXUP_ASUS_GA403U_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1043, 0x1b93, "ASUS G614JVR/JIR", ALC245_FIXUP_CS35L41_SPI_2),
 	SND_PCI_QUIRK(0x1043, 0x1bbd, "ASUS Z550MA", ALC255_FIXUP_ASUS_MIC_NO_PRESENCE),
 	SND_PCI_QUIRK(0x1043, 0x1c03, "ASUS UM3406HA", ALC294_FIXUP_ASUS_I2C_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1043, 0x1c23, "Asus X55U", ALC269_FIXUP_LIMIT_INT_MIC_BOOST),
-	SND_PCI_QUIRK(0x1043, 0x1c33, "ASUS UX5304MA", ALC245_FIXUP_CS35L41_SPI_2),
+	SND_PCI_QUIRK(0x1043, 0x1c33, "ASUS UX5304MA", ALC294_FIXUP_ASUS_SPI_HEADSET_MIC),
 	SND_PCI_QUIRK(0x1043, 0x1c43, "ASUS UX8406MA", ALC245_FIXUP_CS35L41_SPI_2),
 	SND_PCI_QUIRK(0x1043, 0x1c62, "ASUS GU603", ALC289_FIXUP_ASUS_GA401),
 	SND_PCI_QUIRK(0x1043, 0x1c63, "ASUS GU605M", ALC285_FIXUP_ASUS_GU605_SPI_SPEAKER2_TO_DAC1),
@@ -8353,7 +8459,6 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x10cf, 0x1757, "Lifebook E752", ALC269_FIXUP_LIFEBOOK_HP_PIN),
 	SND_PCI_QUIRK(0x10cf, 0x1845, "Lifebook U904", ALC269_FIXUP_LIFEBOOK_EXTMIC),
 	SND_PCI_QUIRK(0x10ec, 0x10f2, "Intel Reference board", ALC700_FIXUP_INTEL_REFERENCE),
-	SND_PCI_QUIRK(0x10ec, 0x111e, "Higole F9B", ALC290_FIXUP_MONO_SPEAKERS),
 	SND_PCI_QUIRK(0x10ec, 0x118c, "Medion EE4254 MD62100", ALC256_FIXUP_MEDION_HEADSET_NO_PRESENCE),
 	SND_PCI_QUIRK(0x10ec, 0x119e, "Positivo SU C1400", ALC269_FIXUP_ASPIRE_HEADSET_MIC),
 	SND_PCI_QUIRK(0x10ec, 0x11bc, "VAIO VJFE-IL", ALC269_FIXUP_LIMIT_INT_MIC_BOOST),
@@ -8582,6 +8687,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x17aa, 0x3834, "Lenovo IdeaPad Slim 9i 14ITL5", ALC287_FIXUP_YOGA7_14ITL_SPEAKERS),
 	SND_PCI_QUIRK(0x17aa, 0x383d, "Legion Y9000X 2019", ALC285_FIXUP_LEGION_Y9000X_SPEAKERS),
 	/* Legion 16IRX9H shares PCI SSID 17aa:3842 with Thinkpad X G2 below */
+	HDA_CODEC_QUIRK(0x17aa, 0x38cb, "Lenovo Legion 16IRX9H", ALC287_FIXUP_TAS2781_I2C),
 	HDA_CODEC_QUIRK(0x17aa, 0x38cd, "Lenovo Legion 16IRX9H", ALC287_FIXUP_TAS2781_I2C),
 	SND_PCI_QUIRK(0x17aa, 0x3842, "ThinkBook X G2 IAH", ALC287_FIXUP_MG_RTKC_CSAMP_CS35L41_I2C_4_THINKPAD),
 	/* IdeaPad Pro 5 14IAH10 shares PCI SSID 17aa:3843 with Yoga Book 9i;
@@ -8798,6 +8904,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x1f4c, 0xe001, "Minisforum V3 (SE)",
 		      ALC245_FIXUP_MINISFORUM_V3_MIC_NO_PRESENCE),
 	SND_PCI_QUIRK(0x1f66, 0x0105, "Ayaneo Portable Game Player", ALC287_FIXUP_CS35L41_I2C_2),
+	SND_PCI_QUIRK(0x1f75, 0x1602, "ONEXPLAYER X1 i", ALC245_FIXUP_ONEXPLAYER_AMP),
 	SND_PCI_QUIRK(0x2014, 0x800a, "Positivo ARN50", ALC269_FIXUP_LIMIT_INT_MIC_BOOST),
 	SND_PCI_QUIRK(0x2039, 0x0001, "Inspur S14-G1", ALC295_FIXUP_CHROME_BOOK),
 	SND_PCI_QUIRK(0x2145, 0x0001, "Star Labs StarFighter", ALC233_FIXUP_STARLABS_STARFIGHTER),
@@ -8816,6 +8923,7 @@ static const struct hda_quirk alc269_fixup_tbl[] = {
 	SND_PCI_QUIRK(0x2782, 0xa128, "Positivo N15RPE-S", ALC269_FIXUP_LIMIT_INT_MIC_BOOST),
 	SND_PCI_QUIRK(0x2782, 0xa212, "Lunnen Ground 14", ALC269VC_FIXUP_LUNNEN_GROUND_14),
 	SND_PCI_QUIRK(0x2782, 0xa248, "COLORFUL L1 Plus", ALC233_FIXUP_MEDION_MTL_SPK),
+	SND_PCI_QUIRK(0x2782, 0xa24a, "Infinix BL51A7H", ALC233_FIXUP_MEDION_MTL_SPK),
 	SND_PCI_QUIRK(0x7017, 0x2014, "Star Labs StarFighter", ALC233_FIXUP_STARLABS_STARFIGHTER),
 	SND_PCI_QUIRK(0x8086, 0x2073, "Intel NUC 8 Hades Canyon",
 		      ALC700_FIXUP_INTEL_HADES_CANYON),

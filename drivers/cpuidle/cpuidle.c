@@ -39,6 +39,7 @@ LIST_HEAD(cpuidle_detected_devices);
 static int enabled_devices;
 static int off __read_mostly;
 static int initialized __read_mostly;
+static bool paused;	/* Protected by cpuidle_lock */
 
 int cpuidle_disabled(void)
 {
@@ -131,12 +132,15 @@ void cpuidle_use_deepest_state(u64 latency_limit_ns)
  * @dev: cpuidle device for the given CPU.
  * @latency_limit_ns: Idle state exit latency limit
  *
+ * Save the limit for miss accounting on the subsequent idle entry.
+ *
  * Return: the index of the deepest available idle state.
  */
 int cpuidle_find_deepest_state(struct cpuidle_driver *drv,
 			       struct cpuidle_device *dev,
 			       u64 latency_limit_ns)
 {
+	dev->latency_req = min_t(u64, latency_limit_ns, S64_MAX);
 	return find_deepest_state(drv, dev, latency_limit_ns, 0, false);
 }
 
@@ -222,6 +226,7 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 
 	struct cpuidle_state *target_state = &drv->states[index];
 	bool broadcast = !!(target_state->flags & CPUIDLE_FLAG_TIMER_STOP);
+	bool broadcast_failed = false;
 	ktime_t time_start, time_end;
 
 	instrumentation_begin();
@@ -232,6 +237,7 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 	 * CPU as a broadcast timer, this call may fail if it is not available.
 	 */
 	if (broadcast && tick_broadcast_enter()) {
+		broadcast_failed = true;
 		index = find_deepest_state(drv, dev, target_state->exit_latency_ns,
 					   CPUIDLE_FLAG_TIMER_STOP, false);
 
@@ -306,6 +312,13 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 		dev->states_usage[entered_state].time_ns += diff;
 		dev->states_usage[entered_state].usage++;
 
+		/*
+		 * The broadcast constraint forced a shallower state, do not
+		 * account for it as a cpu_idle_miss.
+		 */
+		if (broadcast_failed)
+			goto out;
+
 		if (diff < drv->states[entered_state].target_residency_ns) {
 			for (i = entered_state - 1; i >= 0; i--) {
 				if (dev->states_usage[i].disable)
@@ -318,7 +331,8 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 			}
 		} else if (diff > delay) {
 			for (i = entered_state + 1; i < drv->state_count; i++) {
-				if (dev->states_usage[i].disable)
+				if (dev->states_usage[i].disable ||
+				    drv->states[i].exit_latency_ns > dev->latency_req)
 					continue;
 
 				/*
@@ -338,6 +352,7 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 		dev->states_usage[index].rejected++;
 	}
 
+out:
 	instrumentation_end();
 
 	return entered_state;
@@ -359,6 +374,8 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 int cpuidle_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		   bool *stop_tick)
 {
+	/* Use the same constraint for state selection and miss accounting. */
+	dev->latency_req = cpuidle_governor_latency_req(dev->cpu);
 	return cpuidle_curr_governor->select(drv, dev, stop_tick);
 }
 
@@ -465,7 +482,12 @@ __cpuidle u64 cpuidle_poll_time(struct cpuidle_driver *drv,
  */
 void cpuidle_install_idle_handler(void)
 {
-	if (enabled_devices) {
+	/*
+	 * Do not reinstall the idle handler while cpuidle is paused for a
+	 * system transition, even if a nested cpuidle_resume_and_unlock()
+	 * (e.g. from the ACPI processor CPU online callback) asks for it.
+	 */
+	if (enabled_devices && !paused) {
 		/* Make sure all changes finished before we switch to new idle */
 		smp_wmb();
 		initialized = 1;
@@ -515,6 +537,7 @@ EXPORT_SYMBOL_GPL(cpuidle_resume_and_unlock);
 void cpuidle_pause(void)
 {
 	mutex_lock(&cpuidle_lock);
+	paused = true;
 	cpuidle_uninstall_idle_handler();
 	mutex_unlock(&cpuidle_lock);
 }
@@ -523,6 +546,7 @@ void cpuidle_pause(void)
 void cpuidle_resume(void)
 {
 	mutex_lock(&cpuidle_lock);
+	paused = false;
 	cpuidle_install_idle_handler();
 	mutex_unlock(&cpuidle_lock);
 }

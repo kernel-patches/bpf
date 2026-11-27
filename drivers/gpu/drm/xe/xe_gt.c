@@ -12,7 +12,6 @@
 #include <drm/drm_managed.h>
 #include <uapi/drm/xe_drm.h>
 
-#include <generated/xe_device_wa_oob.h>
 #include <generated/xe_wa_oob.h>
 
 #include "instructions/xe_alu_commands.h"
@@ -68,7 +67,7 @@
 #include "xe_uc_fw.h"
 #include "xe_vm.h"
 #include "xe_wa.h"
-#include "xe_wopcm.h"
+#include "xe_wedge.h"
 
 #define GRDOM_RESET_TIMEOUT_MS	5
 
@@ -395,6 +394,7 @@ int xe_gt_record_default_lrcs(struct xe_gt *gt)
 
 	for_each_hw_engine(hwe, gt, id) {
 		struct xe_exec_queue *q, *nop_q;
+		u32 q_id, nop_id = 0;
 		void *default_lrc;
 
 		if (gt->default_lrc[hwe->class])
@@ -416,6 +416,7 @@ int xe_gt_record_default_lrcs(struct xe_gt *gt)
 				  hwe->name, q);
 			return err;
 		}
+		q_id = q->guc->id;
 
 		/* Prime golden LRC with known good state */
 		err = emit_wa_job(gt, q);
@@ -433,6 +434,7 @@ int xe_gt_record_default_lrcs(struct xe_gt *gt)
 				  hwe->name, nop_q);
 			goto put_exec_queue;
 		}
+		nop_id = nop_q->guc->id;
 
 		/* Switch to different LRC */
 		err = emit_nop_job(gt, nop_q);
@@ -454,38 +456,19 @@ put_exec_queue:
 		xe_exec_queue_put(q);
 		if (err)
 			break;
+
+		/* No LRC GGTT range may be freed while the next engine is recorded */
+		err = xe_guc_submit_wait_id_released(&gt->uc.guc, q_id);
+		if (!err)
+			err = xe_guc_submit_wait_id_released(&gt->uc.guc, nop_id);
+		if (err) {
+			xe_gt_err(gt, "hwe %s: context teardown timed out (%pe)\n",
+				  hwe->name, ERR_PTR(err));
+			break;
+		}
 	}
 
 	return err;
-}
-
-static void wa_14026539277(struct xe_gt *gt)
-{
-	struct xe_device *xe = gt_to_xe(gt);
-	u32 val;
-
-	/*
-	 * FIXME: We currently can't use FUNC(xe_rtp_match_not_sriov_vf) in the
-	 * rules for Wa_14026539277 due to xe_wa_process_device_oob() being
-	 * called before xe_sriov_probe_early(); and we can't move the call to
-	 * the former to happen after the latter because MMIO read functions
-	 * already depend on a device OOB workaround.  This needs to be fixed by
-	 * allowing workaround checks to happen at different stages of driver
-	 * initialization.
-	 */
-	if (IS_SRIOV_VF(xe))
-		return;
-
-	if (!XE_DEVICE_WA(xe, 14026539277))
-		return;
-
-	if (!xe_gt_is_main_type(gt))
-		return;
-
-	val = xe_gt_mcr_unicast_read_any(gt, L2COMPUTESIDECTRL);
-	val &= ~CECTRL;
-	val |= CECTRL_CENODATA_ALWAYS;
-	xe_gt_mcr_multicast_write(gt, L2COMPUTESIDECTRL, val);
 }
 
 int xe_gt_init_early(struct xe_gt *gt)
@@ -620,15 +603,6 @@ static int gt_init_with_gt_forcewake(struct xe_gt *gt)
 			CFEG_WMTP_DISABLE);
 	else
 		gt->info.has_wmtp_disabled = 0;
-
-	/*
-	 * Wa_14026539277 can't be implemented as a regular GT workaround (i.e.
-	 * as an entry in gt_was[]) for two reasons: it is actually a device
-	 * workaround that happens to involve programming a GT register; and it
-	 * needs to be applied early to avoid getting the hardware in a bad
-	 * state before we have a chance to do the necessary programming.
-	 */
-	wa_14026539277(gt);
 
 	return 0;
 }
@@ -901,10 +875,6 @@ static int do_gt_restart(struct xe_gt *gt)
 	xe_gt_mcr_set_implicit_defaults(gt);
 	xe_reg_sr_apply_mmio(&gt->reg_sr, gt);
 
-	err = xe_wopcm_init(&gt->uc.wopcm);
-	if (err)
-		return err;
-
 	for_each_hw_engine(hwe, gt, id)
 		xe_hw_engine_enable_ring(hwe);
 
@@ -942,13 +912,55 @@ static int do_gt_restart(struct xe_gt *gt)
 	return 0;
 }
 
+/**
+ * xe_gt_flr_prepare() - Prepare GT for FLR
+ * @gt: the GT object
+ *
+ * Prepare all GT uCs for FLR.
+ */
+void xe_gt_flr_prepare(struct xe_gt *gt)
+{
+	xe_gt_sanitize(gt);
+
+	if (xe_gt_is_main_type(gt)) {
+		struct xe_tile *tile = gt_to_tile(gt);
+
+		xe_migrate_flr_prepare(tile->migrate);
+	}
+
+	xe_uc_flr_prepare(&gt->uc);
+	xe_pagefault_reset(gt_to_xe(gt), gt);
+	xe_tlb_inval_reset(&gt->tlb_inval);
+}
+
+/**
+ * xe_gt_reinit() - Re-initialize GT after FLR
+ * @gt: the GT object
+ *
+ * Returns: 0 on success, negative error code otherwise.
+ */
+int xe_gt_reinit(struct xe_gt *gt)
+{
+	int err;
+
+	if (xe_gt_is_main_type(gt)) {
+		struct xe_tile *tile = gt_to_tile(gt);
+
+		err = xe_migrate_reinit(tile->migrate);
+		if (err)
+			return err;
+	}
+
+	return xe_uc_reinit(&gt->uc);
+}
+
 static void gt_reset_worker(struct work_struct *w)
 {
 	struct xe_gt *gt = container_of(w, typeof(*gt), reset.worker);
 	unsigned int fw_ref;
 	int err;
 
-	if (xe_device_wedged(gt_to_xe(gt)))
+	if (xe_wedged(gt_to_xe(gt)))
 		goto err_pm_put;
 
 	if (xe_device_is_in_reset(gt_to_xe(gt)))
@@ -1007,8 +1019,7 @@ err_out:
 
 err_fail:
 	xe_log_err_fatal(gt, GT, err, "reset failed\n");
-	xe_device_declare_wedged(gt_to_xe(gt),
-				 DRM_WEDGE_RECOVERY_REBIND | DRM_WEDGE_RECOVERY_BUS_RESET);
+	xe_wedge_declare(gt_to_xe(gt), DRM_WEDGE_RECOVERY_REBIND | DRM_WEDGE_RECOVERY_BUS_RESET);
 err_pm_put:
 	xe_pm_runtime_put(gt_to_xe(gt));
 }
@@ -1089,6 +1100,19 @@ int xe_gt_sanitize_freq(struct xe_gt *gt)
 		ret = xe_guc_pc_restore_stashed_freq(&gt->uc.guc.pc);
 
 	return ret;
+}
+
+/**
+ * xe_gt_resume_early() - Early init for GT resume
+ * @gt: the GT object
+ *
+ * Handles GT related init before GT restart after a suspend cycle.
+ */
+void xe_gt_resume_early(struct xe_gt *gt)
+{
+	xe_gt_idle_disable_c6(gt);
+
+	xe_uc_resume_early(&gt->uc);
 }
 
 int xe_gt_resume(struct xe_gt *gt)
@@ -1215,19 +1239,19 @@ static void gt_wedge_worker(struct work_struct *w)
 {
 	struct xe_gt *gt = container_of(w, typeof(*gt), wedge.worker);
 
-	xe_uc_declare_wedged(&gt->uc);
+	xe_uc_wedge_declare(&gt->uc);
 	xe_tlb_inval_reset(&gt->tlb_inval);
 	xe_pm_runtime_put(gt_to_xe(gt));
 }
 
 /**
- * xe_gt_declare_wedged() - Declare GT wedged
+ * xe_gt_wedge_declare() - Declare GT wedged
  * @gt: the GT object
  *
  * Wedge the GT which stops all submission, saves desired debug state, and
  * cleans up anything which could timeout.
  */
-void xe_gt_declare_wedged(struct xe_gt *gt)
+void xe_gt_wedge_declare(struct xe_gt *gt)
 {
 	struct xe_device *xe = gt_to_xe(gt);
 

@@ -1447,7 +1447,8 @@ static int sof_sdw_add_dai_link(struct snd_soc_card *card,
 	struct intel_mc_ctx *intel_ctx = (struct intel_mc_ctx *)ctx->private;
 
 	/* Ignore the HDMI PCM link if iDisp is not present */
-	if (strstr(link->stream_name, "HDMI") && !intel_ctx->hdmi.idisp_codec)
+	if (strstr(link->stream_name, "HDMI") && !link->no_pcm &&
+	    !link->capture_only && !intel_ctx->hdmi.idisp_codec)
 		link->ignore = true;
 
 	return 0;

@@ -20,6 +20,7 @@ properties:
       - mediatek,mt6795-fhctl
       - mediatek,mt8173-fhctl
       - mediatek,mt8186-fhctl
+      - mediatek,mt8189-fhctl
       - mediatek,mt8192-fhctl
       - mediatek,mt8195-fhctl
 

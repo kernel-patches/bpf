@@ -391,7 +391,7 @@ config KIRKWOOD_THERMAL
 
 config DOVE_THERMAL
 	tristate "Temperature sensor on Marvell Dove SoCs"
-	depends on ARCH_DOVE || MACH_DOVE || COMPILE_TEST
+	depends on MACH_DOVE || COMPILE_TEST
 	depends on HAS_IOMEM
 	depends on OF
 	help

@@ -115,13 +115,27 @@ void arch__fix_tev_from_maps(struct perf_probe_event *pev,
 }
 
 #ifdef HAVE_LIBELF_SUPPORT
+struct post_process_probe_trace_events_args {
+	struct perf_probe_event *pev;
+	struct probe_trace_event *tev;
+	struct map *map;
+};
+
+static int post_process_probe_trace_events_cb(struct symbol *sym, void *data)
+{
+	struct post_process_probe_trace_events_args *args = data;
+
+	if (map__unmap_ip(args->map, sym->start) == args->tev->point.address) {
+		arch__fix_tev_from_maps(args->pev, args->tev, args->map, sym);
+		return 1;
+	}
+	return 0;
+}
+
 void arch__post_process_probe_trace_events(struct perf_probe_event *pev,
 					   int ntevs)
 {
-	struct probe_trace_event *tev;
 	struct map *map;
-	struct symbol *sym = NULL;
-	struct rb_node *tmp;
 	int i = 0;
 
 	map = get_target_map(pev->target, pev->nsi, pev->uprobes);
@@ -129,13 +143,13 @@ void arch__post_process_probe_trace_events(struct perf_probe_event *pev,
 		return;
 
 	for (i = 0; i < ntevs; i++) {
-		tev = &pev->tevs[i];
-		map__for_each_symbol(map, sym, tmp) {
-			if (map__unmap_ip(map, sym->start) == tev->point.address) {
-				arch__fix_tev_from_maps(pev, tev, map, sym);
-				break;
-			}
-		}
+		struct post_process_probe_trace_events_args args = {
+			.pev = pev,
+			.tev = &pev->tevs[i],
+			.map = map,
+		};
+
+		map__for_each_symbol(map, post_process_probe_trace_events_cb, &args);
 	}
 }
 #endif /* HAVE_LIBELF_SUPPORT */

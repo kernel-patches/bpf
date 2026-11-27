@@ -102,8 +102,6 @@ static inline void omap5_realtime_timer_init(void)
 }
 #endif
 
-void omap2420_init_early(void);
-void omap2430_init_early(void);
 void omap3430_init_early(void);
 void omap3630_init_early(void);
 void am33xx_init_early(void);
@@ -126,14 +124,6 @@ void dra7xx_init_late(void);
 void omap_soc_device_init(void);
 #else
 static inline void omap_soc_device_init(void)
-{
-}
-#endif
-
-#if defined(CONFIG_SOC_OMAP2420) || defined(CONFIG_SOC_OMAP2430)
-void omap2xxx_restart(enum reboot_mode mode, const char *cmd);
-#else
-static inline void omap2xxx_restart(enum reboot_mode mode, const char *cmd)
 {
 }
 #endif
@@ -183,8 +173,6 @@ static inline void omap_barrier_reserve_memblock(void)
 /* This gets called from mach-omap2/io.c, do not call this */
 void __init omap2_set_globals_tap(u32 class, void __iomem *tap);
 
-void __init omap242x_map_io(void);
-void __init omap243x_map_io(void);
 void __init omap3_map_io(void);
 void __init am33xx_map_io(void);
 void __init omap4_map_io(void);

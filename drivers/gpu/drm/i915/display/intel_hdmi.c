@@ -198,7 +198,7 @@ hsw_dip_data_reg(struct intel_display *display,
 		return GLK_TVIDEO_DIP_DRM_DATA(display, cpu_transcoder, i);
 	default:
 		MISSING_CASE(type);
-		return INVALID_MMIO_REG;
+		return INTEL_REG_INVALID;
 	}
 }
 
@@ -535,25 +535,36 @@ void hsw_write_infoframe(struct intel_encoder *encoder,
 	val &= ~hsw_infoframe_enable(type);
 	intel_de_write(display, ctl_reg, val);
 
-	for (i = 0; i < len; i += 4) {
+	/* Program the payload first, the header (dword 0) is written last. */
+	for (i = 4; i < len; i += 4)
 		intel_de_write(display,
 			       hsw_dip_data_reg(display, cpu_transcoder, type, i >> 2),
-			       *data);
-		data++;
-	}
+			       data[i >> 2]);
 	/* Write every possible data byte to force correct ECC calculation. */
 	for (; i < data_size; i += 4)
 		intel_de_write(display,
 			       hsw_dip_data_reg(display, cpu_transcoder, type, i >> 2),
 			       0);
 
+	/*
+	 * Packets double buffered in the transcoder clock domain are clock
+	 * crossed on the write of the header, so it has to come after the
+	 * payload. Packets double buffered in the core display clock domain
+	 * have no ordering requirement, so use the same order for all of them.
+	 */
+	intel_de_write(display,
+		       hsw_dip_data_reg(display, cpu_transcoder, type, 0),
+		       data[0]);
+
 	/* Wa_14013475917 */
 	if (!(IS_DISPLAY_VER(display, 13, 14) && crtc_state->has_psr &&
 	      !crtc_state->has_panel_replay && type == DP_SDP_VSC))
 		val |= hsw_infoframe_enable(type);
 
-	if (type == DP_SDP_VSC)
+	if (type == DP_SDP_VSC) {
+		val &= ~VSC_SELECT_MASK;
 		val |= VSC_DIP_HW_DATA_SW_HEA;
+	}
 
 	intel_de_write(display, ctl_reg, val);
 	intel_de_posting_read(display, ctl_reg);
@@ -1561,8 +1572,8 @@ int intel_hdmi_hdcp_toggle_signalling(struct intel_digital_port *dig_port,
 					 cpu_transcoder, enable,
 					 TRANS_DDI_HDCP_SIGNALLING);
 	if (ret) {
-		drm_err(display->drm, "%s HDCP signalling failed (%d)\n",
-			enable ? "Enable" : "Disable", ret);
+		drm_err(display->drm, "HDCP signalling %s failed (%pe)\n",
+			str_enable_disable(enable), ERR_PTR(ret));
 		return ret;
 	}
 

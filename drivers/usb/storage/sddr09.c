@@ -838,7 +838,7 @@ sddr09_find_unused_pba(struct sddr09_card_info *info, unsigned int lba) {
 			return zonestart+i;
 		}
 	}
-	for (i = 0; i <= lastpba; i++) {
+	for (i = 0; i <= lastpba && i < end; i++) {
 		if (info->pba_to_lba[zonestart+i] == UNDEF) {
 			lastpba = i;
 			return zonestart+i;

@@ -216,6 +216,11 @@ autoconf_fail:
 	return 0;
 }
 
+static void loopback_unbind(struct usb_configuration *c, struct usb_function *f)
+{
+	usb_free_all_descriptors(f);
+}
+
 static void lb_free_func(struct usb_function *f)
 {
 	struct f_lb_opts *opts;
@@ -226,7 +231,6 @@ static void lb_free_func(struct usb_function *f)
 	opts->refcnt--;
 	mutex_unlock(&opts->lock);
 
-	usb_free_all_descriptors(f);
 	kfree(func_to_loop(f));
 }
 
@@ -442,6 +446,7 @@ static struct usb_function *loopback_alloc(struct usb_function_instance *fi)
 
 	loop->function.name = "loopback";
 	loop->function.bind = loopback_bind;
+	loop->function.unbind = loopback_unbind;
 	loop->function.set_alt = loopback_set_alt;
 	loop->function.disable = loopback_disable;
 	loop->function.strings = loopback_strings;
@@ -544,7 +549,7 @@ end:
 
 CONFIGFS_ATTR(f_lb_opts_, bulk_buflen);
 
-static struct configfs_attribute *lb_attrs[] = {
+static const struct configfs_attribute *const lb_attrs[] = {
 	&f_lb_opts_attr_qlen,
 	&f_lb_opts_attr_bulk_buflen,
 	NULL,
@@ -552,7 +557,7 @@ static struct configfs_attribute *lb_attrs[] = {
 
 static const struct config_item_type lb_func_type = {
 	.ct_item_ops    = &lb_item_ops,
-	.ct_attrs	= lb_attrs,
+	.ct_attrs_const	= lb_attrs,
 	.ct_owner       = THIS_MODULE,
 };
 

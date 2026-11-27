@@ -1733,6 +1733,8 @@ static struct rockchip_clk_branch rk3576_clk_branches[] __initdata = {
 			RK3576_CLKGATE_CON(59), 5, GFLAGS),
 };
 
+static struct rockchip_clk_provider *rk3576_early_ctx;
+
 static void __init rk3576_clk_init(struct device_node *np)
 {
 	struct rockchip_clk_provider *ctx;
@@ -1802,11 +1804,9 @@ static void __init rk3576_clk_init(struct device_node *np)
 	rockchip_clk_register_branches(ctx, rk3576_clk_branches,
 				       ARRAY_SIZE(rk3576_clk_branches));
 
-	rk3576_rst_init(np, reg_base);
-
-	rockchip_register_restart_notifier(ctx, RK3576_GLB_SRST_FST, NULL);
-
 	rockchip_clk_of_add_provider(np, ctx);
+
+	rk3576_early_ctx = ctx;
 
 	return;
 
@@ -1817,35 +1817,27 @@ err_unmap:
 	return;
 }
 
-CLK_OF_DECLARE(rk3576_cru, "rockchip,rk3576-cru", rk3576_clk_init);
-
-struct clk_rk3576_inits {
-	void (*inits)(struct device_node *np);
-};
-
-static const struct clk_rk3576_inits clk_rk3576_cru_init = {
-	.inits = rk3576_clk_init,
-};
+CLK_OF_DECLARE_DRIVER(rk3576_cru, "rockchip,rk3576-cru", rk3576_clk_init);
 
 static const struct of_device_id clk_rk3576_match_table[] = {
 	{
 		.compatible = "rockchip,rk3576-cru",
-		.data = &clk_rk3576_cru_init,
 	},
 	{ }
 };
 
 static int clk_rk3576_probe(struct platform_device *pdev)
 {
-	const struct clk_rk3576_inits *init_data;
+	struct rockchip_clk_provider *ctx = rk3576_early_ctx;
 	struct device *dev = &pdev->dev;
+	struct device_node *np = dev->of_node;
 
-	init_data = device_get_match_data(dev);
-	if (!init_data)
-		return -EINVAL;
+	if (!ctx)
+		return -ENODEV;
 
-	if (init_data->inits)
-		init_data->inits(dev->of_node);
+	rk3576_rst_init(np, ctx->reg_base);
+
+	rockchip_register_restart_notifier(ctx, RK3576_GLB_SRST_FST, NULL);
 
 	return 0;
 }
@@ -1858,4 +1850,9 @@ static struct platform_driver clk_rk3576_driver = {
 		.suppress_bind_attrs = true,
 	},
 };
-builtin_platform_driver_probe(clk_rk3576_driver, clk_rk3576_probe);
+
+static int __init rockchip_clk_rk3576_drv_register(void)
+{
+	return platform_driver_register(&clk_rk3576_driver);
+}
+core_initcall(rockchip_clk_rk3576_drv_register);

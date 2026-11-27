@@ -110,29 +110,4 @@ static inline void sysfb_set_efifb_fwnode(const struct screen_info *si,
 
 #endif /* CONFIG_EFI */
 
-#ifdef CONFIG_SYSFB_SIMPLEFB
-
-bool sysfb_parse_mode(const struct screen_info *si,
-		      struct simplefb_platform_data *mode);
-struct platform_device *sysfb_create_simplefb(const struct screen_info *si,
-					      const struct simplefb_platform_data *mode,
-					      struct device *parent);
-
-#else /* CONFIG_SYSFB_SIMPLEFB */
-
-static inline bool sysfb_parse_mode(const struct screen_info *si,
-				    struct simplefb_platform_data *mode)
-{
-	return false;
-}
-
-static inline struct platform_device *sysfb_create_simplefb(const struct screen_info *si,
-							    const struct simplefb_platform_data *mode,
-							    struct device *parent)
-{
-	return ERR_PTR(-EINVAL);
-}
-
-#endif /* CONFIG_SYSFB_SIMPLEFB */
-
 #endif /* _LINUX_SYSFB_H */

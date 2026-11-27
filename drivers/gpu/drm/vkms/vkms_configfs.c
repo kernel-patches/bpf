@@ -296,7 +296,7 @@ static ssize_t plane_type_show(struct config_item *item, char *page)
 	scoped_guard(mutex, &plane->dev->lock)
 		type = vkms_config_plane_get_type(plane->config);
 
-	return sprintf(page, "%u", type);
+	return sprintf(page, "%u\n", type);
 }
 
 static ssize_t plane_type_store(struct config_item *item, const char *page,
@@ -529,7 +529,7 @@ static ssize_t connector_status_show(struct config_item *item, char *page)
 	scoped_guard(mutex, &connector->dev->lock)
 		status = vkms_config_connector_get_status(connector->config);
 
-	return sprintf(page, "%u", status);
+	return sprintf(page, "%u\n", status);
 }
 
 static ssize_t connector_status_store(struct config_item *item,

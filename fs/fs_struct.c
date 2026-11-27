@@ -10,6 +10,50 @@
 #include "internal.h"
 #include "mount.h"
 
+/**
+ * get_task_root - acquire a reference to the task's root path
+ * @task: The task.
+ * @root: The task's root path.
+ *
+ * Returns 0 if the task has a root path, or -ENOENT if it does not. The
+ * caller must release the path through path_put() on success.
+ */
+int get_task_root(struct task_struct *task, struct path *root)
+{
+	int ret = -ENOENT;
+
+	task_lock(task);
+	if (task->real_fs) {
+		get_fs_root(task->real_fs, root);
+		ret = 0;
+	}
+	task_unlock(task);
+
+	return ret;
+}
+
+/**
+ * get_task_pwd - acquire a reference to the task's working directory
+ * @task: The task.
+ * @pwd: The task's working directory.
+ *
+ * Returns 0 if the task has a working directory, or -ENOENT if it does not.
+ * The caller must release the path through path_put() on success.
+ */
+int get_task_pwd(struct task_struct *task, struct path *pwd)
+{
+	int ret = -ENOENT;
+
+	task_lock(task);
+	if (task->real_fs) {
+		get_fs_pwd(task->real_fs, pwd);
+		ret = 0;
+	}
+	task_unlock(task);
+
+	return ret;
+}
+
 /*
  * Replace the fs->{rootmnt,root} with {mnt,dentry}. Put the old values.
  * It can block.
@@ -53,6 +97,21 @@ static inline int replace_path(struct path *p, const struct path *old, const str
 	return 1;
 }
 
+static inline int replace_fs_paths(struct fs_struct *fs,
+				   const struct path *old_root,
+				   const struct path *new_root)
+{
+	int hits = 0;
+
+	write_seqlock(&fs->seq);
+	hits += replace_path(&fs->root, old_root, new_root);
+	hits += replace_path(&fs->pwd, old_root, new_root);
+	for (int i = 0; i < hits; i++)
+		path_get(new_root);
+	write_sequnlock(&fs->seq);
+	return hits;
+}
+
 void chroot_fs_refs(const struct path *old_root, const struct path *new_root)
 {
 	struct task_struct *g, *p;
@@ -66,20 +125,15 @@ void chroot_fs_refs(const struct path *old_root, const struct path *new_root)
 
 		task_lock(p);
 		fs = p->real_fs;
-		if (fs) {
-			int hits = 0;
-			write_seqlock(&fs->seq);
-			hits += replace_path(&fs->root, old_root, new_root);
-			hits += replace_path(&fs->pwd, old_root, new_root);
-			while (hits--) {
-				count++;
-				path_get(new_root);
-			}
-			write_sequnlock(&fs->seq);
-		}
+		if (fs)
+			count += replace_fs_paths(fs, old_root, new_root);
 		task_unlock(p);
 	}
 	read_unlock(&tasklist_lock);
+
+	/* Kernel lookups and usermodehelpers use it even if no task shares it. */
+	count += replace_fs_paths(userspace_init_fs, old_root, new_root);
+
 	while (count--)
 		path_put(old_root);
 }
@@ -155,46 +209,24 @@ int unshare_fs_struct(void)
 EXPORT_SYMBOL_GPL(unshare_fs_struct);
 
 /*
- * PID 1 may choose to stop sharing fs_struct state with us.
- * Either via unshare(CLONE_FS) or unshare(CLONE_NEWNS). Of
- * course, PID 1 could have chosen to create arbitrary process
- * trees that all share fs_struct state via CLONE_FS. This is a
- * strong statement: We only care about PID 1 aka the thread-group
- * leader so subthread's fs_struct state doesn't matter.
+ * PID 1 may stop sharing userspace_init_fs via unshare(CLONE_FS) or
+ * unshare(CLONE_NEWNS) which implies CLONE_FS. That doesn't mean it's
+ * done with it. Android's init unshares to create a second mount
+ * namespace and setns()s right back while its threads keep sharing
+ * userspace_init_fs.
  *
- * PID 1 unsharing fs_struct state is a bug. PID 1 relies on
- * various kthreads to be able to perform work based on its
- * fs_struct state. Breaking that contract sucks for both sides.
- * So just don't bother with extra work for this. No sane init
- * system should ever do this.
- *
- * On older kernels if PID 1 unshared its filesystem state with us the
- * kernel simply used the stale fs_struct state implicitly pinning
- * anything that PID 1 had last used. Even if PID 1 might've moved on to
- * some completely different fs_struct state and might've even unmounted
- * the old root.
- *
- * This has hilarious consequences: Think continuing to dump coredump
- * state into an implicitly pinned directory somewhere. Calling random
- * binaries in the old rootfs via usermodehelpers.
- *
- * Be aggressive about this: We simply reject operating on stale
- * fs_struct state by reverting to nullfs. Every kworker that does
- * lookups after this point will fail. Every usermodehelper call will
- * fail. Tough luck but let's be kind and emit a warning to userspace.
+ * So never change userspace_init_fs behind userspace's back. Kthreads
+ * and usermodehelpers keep using what PID 1 left behind, just like
+ * they kept using init_fs before PID 1 got its own fs_struct.
  */
 static inline void validate_fs_switch(struct fs_struct *old_fs)
 {
-	might_sleep();
-
 	if (likely(current->pid != 1))
 		return;
 	/* @old_fs may be dangling but for comparison it's fine */
 	if (old_fs != userspace_init_fs)
 		return;
-	pr_warn("VFS: Pid 1 stopped sharing filesystem state\n");
-	set_fs_root(userspace_init_fs, &init_fs.root);
-	set_fs_pwd(userspace_init_fs, &init_fs.root);
+	pr_info("VFS: Pid 1 stopped sharing filesystem state\n");
 }
 
 struct fs_struct *switch_fs_struct(struct fs_struct *new_fs)

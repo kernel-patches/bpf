@@ -257,4 +257,38 @@ bool snd_soc_acpi_sdw_link_slaves_found(struct device *dev,
 					const struct snd_soc_acpi_link_adr *link,
 					struct sdw_peripherals *peripherals);
 
+enum snd_soc_acpi_tplg_device_id {
+	SND_SOC_ACPI_TPLG_DEVICE_SDCA_JACK,
+	SND_SOC_ACPI_TPLG_DEVICE_SDCA_AMP,
+	SND_SOC_ACPI_TPLG_DEVICE_SDCA_MIC,
+	SND_SOC_ACPI_TPLG_DEVICE_PCH_DMIC,
+	SND_SOC_ACPI_TPLG_DEVICE_HDMI,
+	SND_SOC_ACPI_TPLG_DEVICE_SSP_JACK,
+	SND_SOC_ACPI_TPLG_DEVICE_SSP_AMP,
+	SND_SOC_ACPI_TPLG_DEVICE_SSP_BT,
+	SND_SOC_ACPI_TPLG_DEVICE_SSP_HDMI_IN,
+	SND_SOC_ACPI_TPLG_DEVICE_LOOPBACK_VIRTUAL,
+	SND_SOC_ACPI_TPLG_DEVICE_ACP_SDW_JACK,
+	SND_SOC_ACPI_TPLG_DEVICE_ACP_SDW_AMP,
+	SND_SOC_ACPI_TPLG_DEVICE_ACP_SDW_MIC,
+	SND_SOC_ACPI_TPLG_DEVICE_ACP_DMIC,
+	SND_SOC_ACPI_TPLG_DEVICE_MAX
+};
+
+/*
+ * Minimum size, including the trailing NUL, of the buffer that
+ * snd_soc_acpi_sof_get_platform_name() fills from a
+ * "sof-<platform>-...tplg" topology file name. The "sof-%7[^-]"
+ * conversion can write up to seven characters plus a NUL terminator,
+ * so callers must provide a buffer of at least this size.
+ */
+#define SND_SOC_ACPI_SOF_PLATFORM_NAME_MAX 8
+
+int snd_soc_acpi_sof_get_platform_name(struct device *dev,
+				       const struct snd_soc_acpi_mach *mach, char *platform);
+char *snd_soc_acpi_sof_get_tplg_filename(struct device *dev, const char *prefix,
+					 const char *platform, const char *tplg_dev_name,
+					 int dai_link_id,
+					 enum snd_soc_acpi_tplg_device_id tplg_dev);
+
 #endif

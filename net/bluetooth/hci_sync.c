@@ -501,7 +501,8 @@ static void cancel_adv_timeout(struct hci_dev *hdev)
 int hci_clear_adv_instance_sync(struct hci_dev *hdev, struct sock *sk,
 				u8 instance, bool force)
 {
-	struct adv_info *adv_instance, *n, *next_instance = NULL;
+	struct adv_info *adv_instance, *n;
+	u8 next_instance = 0;
 	int err;
 	u8 rem_inst;
 
@@ -509,12 +510,20 @@ int hci_clear_adv_instance_sync(struct hci_dev *hdev, struct sock *sk,
 	if (!instance || hdev->cur_adv_instance == instance)
 		cancel_adv_timeout(hdev);
 
+	/* This is safe as long as there is no command send while the
+	 * lock is held.
+	 */
+	hci_dev_lock(hdev);
+
 	/* Get the next instance to advertise BEFORE we remove
 	 * the current one. This can be the same instance again
 	 * if there is only one instance.
 	 */
-	if (instance && hdev->cur_adv_instance == instance)
-		next_instance = hci_get_next_instance(hdev, instance);
+	if (instance && hdev->cur_adv_instance == instance) {
+		adv_instance = hci_get_next_instance(hdev, instance);
+		if (adv_instance)
+			next_instance = adv_instance->instance;
+	}
 
 	if (instance == 0x00) {
 		list_for_each_entry_safe(adv_instance, n, &hdev->adv_instances,
@@ -533,9 +542,8 @@ int hci_clear_adv_instance_sync(struct hci_dev *hdev, struct sock *sk,
 		if (force || (adv_instance && adv_instance->timeout &&
 			      !adv_instance->remaining_time)) {
 			/* Don't advertise a removed instance. */
-			if (next_instance &&
-			    next_instance->instance == instance)
-				next_instance = NULL;
+			if (next_instance == instance)
+				next_instance = 0;
 
 			err = hci_remove_adv_instance(hdev, instance);
 			if (!err)
@@ -543,12 +551,13 @@ int hci_clear_adv_instance_sync(struct hci_dev *hdev, struct sock *sk,
 		}
 	}
 
+	hci_dev_unlock(hdev);
+
 	if (!hdev_is_powered(hdev) || hci_dev_test_flag(hdev, HCI_ADVERTISING))
 		return 0;
 
 	if (next_instance && !ext_adv_capable(hdev))
-		return hci_schedule_adv_instance_sync(hdev,
-						      next_instance->instance,
+		return hci_schedule_adv_instance_sync(hdev, next_instance,
 						      false);
 
 	return 0;
@@ -674,6 +683,7 @@ static void _hci_cmd_sync_cancel_entry(struct hci_dev *hdev,
 
 void hci_cmd_sync_clear(struct hci_dev *hdev)
 {
+	LIST_HEAD(cancel_list);
 	struct hci_cmd_sync_work_entry *entry, *tmp;
 
 	/* cmd_work is disabled, the pending request can only time out */
@@ -681,10 +691,13 @@ void hci_cmd_sync_clear(struct hci_dev *hdev)
 	cancel_work_sync(&hdev->cmd_sync_work);
 	cancel_work_sync(&hdev->reenable_adv_work);
 
+	/* Run destroy callbacks without holding cmd_sync_work_lock. */
 	mutex_lock(&hdev->cmd_sync_work_lock);
-	list_for_each_entry_safe(entry, tmp, &hdev->cmd_sync_work_list, list)
-		_hci_cmd_sync_cancel_entry(hdev, entry, -ECANCELED);
+	list_splice_init(&hdev->cmd_sync_work_list, &cancel_list);
 	mutex_unlock(&hdev->cmd_sync_work_lock);
+
+	list_for_each_entry_safe(entry, tmp, &cancel_list, list)
+		_hci_cmd_sync_cancel_entry(hdev, entry, -ECANCELED);
 }
 
 void hci_cmd_sync_cancel(struct hci_dev *hdev, int err)
@@ -1226,16 +1239,26 @@ static int hci_disable_ext_adv_instance_sync(struct hci_dev *hdev, u8 instance)
 	struct hci_cp_ext_adv_set *set;
 	u8 data[sizeof(*cp) + sizeof(*set) * 1];
 	u8 size;
-	struct adv_info *adv = NULL;
+	u8 handle = instance;
 
 	/* If request specifies an instance that doesn't exist, fail */
 	if (instance > 0) {
+		struct adv_info *adv;
+		bool enabled = false;
+
+		hci_dev_lock(hdev);
 		adv = hci_find_adv_instance(hdev, instance);
+		if (adv) {
+			enabled = adv->enabled;
+			handle = adv->handle;
+		}
+		hci_dev_unlock(hdev);
+
 		if (!adv)
 			return -EINVAL;
 
 		/* If not enabled there is nothing to do */
-		if (!adv->enabled)
+		if (!enabled)
 			return 0;
 	}
 
@@ -1248,7 +1271,7 @@ static int hci_disable_ext_adv_instance_sync(struct hci_dev *hdev, u8 instance)
 	cp->num_of_sets = !!instance;
 	cp->enable = 0x00;
 
-	set->handle = adv ? adv->handle : instance;
+	set->handle = handle;
 
 	size = sizeof(*cp) + sizeof(*set) * cp->num_of_sets;
 
@@ -1419,13 +1442,20 @@ static int hci_set_ext_adv_data_sync(struct hci_dev *hdev, u8 instance)
 }
 
 static int hci_set_adv_data_sync(struct hci_dev *hdev, u8 instance)
+	__context_unsafe(/* conditional locking */)
 {
 	struct hci_cp_le_set_adv_data cp;
 	u8 len;
 
 	memset(&cp, 0, sizeof(cp));
 
+	if (instance)
+		hci_dev_lock(hdev);
+
 	len = eir_create_adv_data(hdev, instance, cp.data, sizeof(cp.data));
+
+	if (instance)
+		hci_dev_unlock(hdev);
 
 	/* There's nothing to do if the data hasn't changed */
 	if (hdev->adv_data_len == len &&
@@ -1493,10 +1523,12 @@ int hci_setup_ext_adv_instance_sync(struct hci_dev *hdev, u8 instance)
 	flags = hci_adv_instance_flags(hdev, instance);
 
 	/* If the "connectable" instance flag was not set, then choose between
-	 * ADV_IND and ADV_NONCONN_IND based on the global connectable setting.
+	 * ADV_IND and ADV_NONCONN_IND based on the global connectable setting,
+	 * unless the instance carries periodic advertising, which can only be
+	 * enabled on a non-connectable advertising set.
 	 */
 	connectable = (flags & MGMT_ADV_FLAG_CONNECTABLE) ||
-		      mgmt_get_connectable(hdev);
+		      (mgmt_get_connectable(hdev) && !(adv && adv->periodic));
 
 	if (!is_advertising_allowed(hdev, connectable)) {
 		if (instance)
@@ -1715,17 +1747,33 @@ int hci_enable_ext_advertising_sync(struct hci_dev *hdev, u8 instance)
 	struct hci_cp_le_set_ext_adv_enable *cp;
 	struct hci_cp_ext_adv_set *set;
 	u8 data[sizeof(*cp) + sizeof(*set) * 1];
-	struct adv_info *adv;
+	u8 handle = instance;
+	u32 duration = 0;
 
 	if (instance > 0) {
+		struct adv_info *adv;
+
+		hci_dev_lock(hdev);
 		adv = hci_find_adv_instance(hdev, instance);
-		if (!adv)
+		if (!adv) {
+			hci_dev_unlock(hdev);
 			return -EINVAL;
+		}
 		/* If already enabled there is nothing to do */
-		if (adv->enabled)
+		if (adv->enabled) {
+			hci_dev_unlock(hdev);
 			return 0;
-	} else {
-		adv = NULL;
+		}
+
+		handle = adv->handle;
+
+		/* Set duration per instance since controller is
+		 * responsible for scheduling it.
+		 */
+		if (adv->timeout)
+			duration = adv->mesh ? adv->timeout :
+					       adv->timeout * MSEC_PER_SEC;
+		hci_dev_unlock(hdev);
 	}
 
 	cp = (void *)data;
@@ -1738,18 +1786,10 @@ int hci_enable_ext_advertising_sync(struct hci_dev *hdev, u8 instance)
 
 	memset(set, 0, sizeof(*set));
 
-	set->handle = adv ? adv->handle : instance;
+	set->handle = handle;
 
-	/* Set duration per instance since controller is responsible for
-	 * scheduling it.
-	 */
-	if (adv && adv->timeout) {
-		u16 duration = adv->mesh ? adv->timeout :
-					   adv->timeout * MSEC_PER_SEC;
-
-		/* Time = N * 10 ms */
-		set->duration = cpu_to_le16(duration / 10);
-	}
+	/* Time = N * 10 ms */
+	set->duration = cpu_to_le16(min_t(u32, duration / 10, U16_MAX));
 
 	/* Track which instance owns the advertising set since the handle
 	 * alone is ambiguous when instances share handle 0x00, see
@@ -1781,20 +1821,57 @@ int hci_start_ext_adv_sync(struct hci_dev *hdev, u8 instance)
 int hci_disable_per_advertising_sync(struct hci_dev *hdev, u8 instance)
 {
 	struct hci_cp_le_set_per_adv_enable cp;
-	struct adv_info *adv = NULL;
+	struct adv_info *adv;
+	bool enabled;
+	u8 handle = instance;
+	int err;
 
 	/* If periodic advertising already disabled there is nothing to do. */
+	hci_dev_lock(hdev);
 	adv = hci_find_adv_instance(hdev, instance);
-	if (!adv || !adv->periodic_enabled)
+	enabled = adv && adv->periodic_enabled;
+	if (adv)
+		handle = adv->handle;
+	hci_dev_unlock(hdev);
+	if (!enabled)
 		return 0;
 
 	memset(&cp, 0, sizeof(cp));
 
 	cp.enable = 0x00;
-	cp.handle = instance;
+	cp.handle = handle;
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_PER_ADV_ENABLE,
-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	err = __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_PER_ADV_ENABLE,
+				    sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	if (err || handle == instance)
+		return err;
+
+	/* Handle 0 is shared with global advertising, so the completion
+	 * cannot identify the software instance from the command alone.
+	 */
+	hci_dev_lock(hdev);
+	adv = hci_find_adv_instance(hdev, instance);
+	if (adv)
+		adv->periodic_enabled = false;
+	hci_dev_unlock(hdev);
+
+	return 0;
+}
+
+/* Map a management instance number to its controller handle. */
+static u8 hci_adv_instance_handle(struct hci_dev *hdev, u8 instance)
+	__must_not_hold(&hdev->lock)
+{
+	struct adv_info *adv;
+	u8 handle = instance;
+
+	hci_dev_lock(hdev);
+	adv = hci_find_adv_instance(hdev, instance);
+	if (adv)
+		handle = adv->handle;
+	hci_dev_unlock(hdev);
+
+	return handle;
 }
 
 static int hci_set_per_adv_params_sync(struct hci_dev *hdev, u8 instance,
@@ -1810,7 +1887,7 @@ static int hci_set_per_adv_params_sync(struct hci_dev *hdev, u8 instance,
 	if (!max_interval)
 		max_interval = DISCOV_LE_PER_ADV_INT_MAX;
 
-	cp.handle = instance;
+	cp.handle = hci_adv_instance_handle(hdev, instance);
 	cp.min_interval = cpu_to_le16(min_interval);
 	cp.max_interval = cpu_to_le16(max_interval);
 	cp.periodic_properties = 0x0000;
@@ -1854,44 +1931,76 @@ static int hci_set_per_adv_data_sync(struct hci_dev *hdev, u8 instance)
 static int hci_enable_per_advertising_sync(struct hci_dev *hdev, u8 instance)
 {
 	struct hci_cp_le_set_per_adv_enable cp;
-	struct adv_info *adv = NULL;
+	struct adv_info *adv;
+	bool enabled;
+	u8 handle = instance;
+	int err;
 
 	/* If periodic advertising already enabled there is nothing to do. */
+	hci_dev_lock(hdev);
 	adv = hci_find_adv_instance(hdev, instance);
-	if (adv && adv->periodic_enabled)
+	enabled = adv && adv->periodic_enabled;
+	if (adv)
+		handle = adv->handle;
+	hci_dev_unlock(hdev);
+	if (enabled)
 		return 0;
 
 	memset(&cp, 0, sizeof(cp));
 
 	cp.enable = 0x01;
-	cp.handle = instance;
+	cp.handle = handle;
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_PER_ADV_ENABLE,
-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	err = __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_PER_ADV_ENABLE,
+				    sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	if (err || handle == instance)
+		return err;
+
+	/* Handle 0 is shared with global advertising, so the completion
+	 * cannot identify the software instance from the command alone.
+	 */
+	hci_dev_lock(hdev);
+	adv = hci_find_adv_instance(hdev, instance);
+	if (adv)
+		adv->periodic_enabled = true;
+	hci_dev_unlock(hdev);
+
+	return 0;
 }
 
 /* Checks if periodic advertising data contains a Basic Announcement and if it
  * does generates a Broadcast ID and add Broadcast Announcement.
  */
-static int hci_adv_bcast_annoucement(struct hci_dev *hdev, struct adv_info *adv)
+static int hci_adv_bcast_annoucement(struct hci_dev *hdev, u8 instance)
 {
+	struct adv_info *adv;
 	u8 bid[3];
 	u8 ad[HCI_MAX_EXT_AD_LENGTH];
 	u8 len;
+	int err = 0;
 
-	/* Skip if NULL adv as instance 0x00 is used for general purpose
+	/* Skip if instance 0x00 as it is used for general purpose
 	 * advertising so it cannot used for the likes of Broadcast Announcement
 	 * as it can be overwritten at any point.
 	 */
-	if (!adv)
+	if (!instance)
 		return 0;
+
+	hci_dev_lock(hdev);
+
+	/* The instance may have been removed while waiting for the
+	 * controller, in which case there is nothing to announce.
+	 */
+	adv = hci_find_adv_instance(hdev, instance);
+	if (!adv)
+		goto unlock;
 
 	/* Check if PA data doesn't contains a Basic Audio Announcement then
 	 * there is nothing to do.
 	 */
 	if (!eir_get_service_data(adv->per_adv_data, adv->per_adv_data_len,
 				  0x1851, NULL))
-		return 0;
+		goto unlock;
 
 	/* Check if advertising data already has a Broadcast Announcement since
 	 * the process may want to control the Broadcast ID directly and in that
@@ -1899,34 +2008,44 @@ static int hci_adv_bcast_annoucement(struct hci_dev *hdev, struct adv_info *adv)
 	 */
 	if (eir_get_service_data(adv->adv_data, adv->adv_data_len, 0x1852,
 				 NULL))
-		return 0;
+		goto unlock;
 
 	/* Generate Broadcast ID */
 	get_random_bytes(bid, sizeof(bid));
 	len = eir_append_service_data(ad, 0, 0x1852, bid, sizeof(bid));
 	if (adv->adv_data_len > sizeof(ad) - len) {
 		bt_dev_err(hdev, "No room for Broadcast Announcement");
-		return -EINVAL;
+		err = -EINVAL;
+		goto unlock;
 	}
 
 	memcpy(ad + len, adv->adv_data, adv->adv_data_len);
-	hci_set_adv_instance_data(hdev, adv->instance, len + adv->adv_data_len,
+	hci_set_adv_instance_data(hdev, instance, len + adv->adv_data_len,
 				  ad, 0, NULL);
 
-	return hci_update_adv_data_sync(hdev, adv->instance);
+	hci_dev_unlock(hdev);
+
+	return hci_update_adv_data_sync(hdev, instance);
+
+unlock:
+	hci_dev_unlock(hdev);
+	return err;
 }
 
 int hci_start_per_adv_sync(struct hci_dev *hdev, u8 instance, u8 sid,
 			   u8 data_len, u8 *data, u32 flags, u16 min_interval,
 			   u16 max_interval, u16 sync_interval)
 {
-	struct adv_info *adv = NULL;
+	struct adv_info *adv;
+	u8 bcast_instance = 0;
 	int err;
 	bool added = false;
 
 	hci_disable_per_advertising_sync(hdev, instance);
 
 	if (instance) {
+		hci_dev_lock(hdev);
+
 		adv = hci_find_adv_instance(hdev, instance);
 		if (adv) {
 			if (sid != HCI_SID_INVALID && adv->sid != sid) {
@@ -1935,6 +2054,7 @@ int hci_start_per_adv_sync(struct hci_dev *hdev, u8 instance, u8 sid,
 				 */
 				adv = hci_find_adv_sid(hdev, sid);
 				if (!adv) {
+					hci_dev_unlock(hdev);
 					bt_dev_err(hdev,
 						   "Unable to find adv_info");
 					return -EINVAL;
@@ -1953,11 +2073,17 @@ int hci_start_per_adv_sync(struct hci_dev *hdev, u8 instance, u8 sid,
 						   data_len, data,
 						   sync_interval,
 						   sync_interval);
-			if (IS_ERR(adv))
+			if (IS_ERR(adv)) {
+				hci_dev_unlock(hdev);
 				return PTR_ERR(adv);
+			}
 			adv->pending = false;
 			added = true;
 		}
+
+		bcast_instance = adv->instance;
+
+		hci_dev_unlock(hdev);
 	}
 
 	/* Start advertising */
@@ -1965,7 +2091,7 @@ int hci_start_per_adv_sync(struct hci_dev *hdev, u8 instance, u8 sid,
 	if (err < 0)
 		goto fail;
 
-	err = hci_adv_bcast_annoucement(hdev, adv);
+	err = hci_adv_bcast_annoucement(hdev, bcast_instance);
 	if (err < 0)
 		goto fail;
 
@@ -1985,8 +2111,11 @@ int hci_start_per_adv_sync(struct hci_dev *hdev, u8 instance, u8 sid,
 	return 0;
 
 fail:
-	if (added)
+	if (added) {
+		hci_dev_lock(hdev);
 		hci_remove_adv_instance(hdev, instance);
+		hci_dev_unlock(hdev);
+	}
 
 	return err;
 }
@@ -2016,6 +2145,7 @@ int hci_enable_advertising_sync(struct hci_dev *hdev)
 	u8 own_addr_type, enable = 0x01;
 	bool connectable;
 	u16 adv_min_interval, adv_max_interval;
+	bool scannable;
 	u32 flags;
 	u8 status;
 
@@ -2023,8 +2153,25 @@ int hci_enable_advertising_sync(struct hci_dev *hdev)
 		return hci_enable_ext_advertising_sync(hdev,
 						       hdev->cur_adv_instance);
 
+	/* Snapshot the instance under hdev->lock since it may be removed
+	 * while waiting for the commands below to complete.
+	 */
+	hci_dev_lock(hdev);
+
 	flags = hci_adv_instance_flags(hdev, hdev->cur_adv_instance);
+	scannable = hci_adv_instance_is_scannable(hdev,
+						  hdev->cur_adv_instance);
+
 	adv_instance = hci_find_adv_instance(hdev, hdev->cur_adv_instance);
+	if (adv_instance) {
+		adv_min_interval = adv_instance->min_interval;
+		adv_max_interval = adv_instance->max_interval;
+	} else {
+		adv_min_interval = hdev->le_adv_min_interval;
+		adv_max_interval = hdev->le_adv_max_interval;
+	}
+
+	hci_dev_unlock(hdev);
 
 	/* If the "connectable" instance flag was not set, then choose between
 	 * ADV_IND and ADV_NONCONN_IND based on the global connectable setting.
@@ -2058,18 +2205,10 @@ int hci_enable_advertising_sync(struct hci_dev *hdev)
 
 	memset(&cp, 0, sizeof(cp));
 
-	if (adv_instance) {
-		adv_min_interval = adv_instance->min_interval;
-		adv_max_interval = adv_instance->max_interval;
-	} else {
-		adv_min_interval = hdev->le_adv_min_interval;
-		adv_max_interval = hdev->le_adv_max_interval;
-	}
-
 	if (connectable) {
 		cp.type = LE_ADV_IND;
 	} else {
-		if (hci_adv_instance_is_scannable(hdev, hdev->cur_adv_instance))
+		if (scannable)
 			cp.type = LE_ADV_SCAN_IND;
 		else
 			cp.type = LE_ADV_NONCONN_IND;
@@ -2181,8 +2320,13 @@ int hci_le_terminate_big_sync(struct hci_dev *hdev, u8 handle, u8 reason)
 	cp.handle = handle;
 	cp.reason = reason;
 
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_TERM_BIG,
-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+	/* Wait for HCI_LE_Terminate_BIG_Complete, so the periodic advertising
+	 * of the BIG is not disabled while the BIG is still being terminated.
+	 */
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_TERM_BIG,
+					sizeof(cp), &cp,
+					HCI_EVT_LE_TERM_BIG_COMPLETE,
+					HCI_CMD_TIMEOUT, NULL);
 }
 
 int hci_schedule_adv_instance_sync(struct hci_dev *hdev, u8 instance,
@@ -2197,9 +2341,13 @@ int hci_schedule_adv_instance_sync(struct hci_dev *hdev, u8 instance,
 	if (hdev->adv_instance_timeout)
 		return -EBUSY;
 
+	hci_dev_lock(hdev);
+
 	adv = hci_find_adv_instance(hdev, instance);
-	if (!adv)
+	if (!adv) {
+		hci_dev_unlock(hdev);
 		return -ENOENT;
+	}
 
 	/* A zero timeout means unlimited advertising. As long as there is
 	 * only one instance, duration should be ignored. We still set a timeout
@@ -2228,6 +2376,8 @@ int hci_schedule_adv_instance_sync(struct hci_dev *hdev, u8 instance,
 				   adv->mesh ? msecs_to_jiffies(timeout) :
 					       secs_to_jiffies(timeout));
 	}
+
+	hci_dev_unlock(hdev);
 
 	/* If we're just re-scheduling the same instance again then do not
 	 * execute any HCI commands. This happens when a single instance is
@@ -2326,7 +2476,7 @@ static int hci_remove_adv_sync(struct hci_dev *hdev, u8 instance,
 int hci_remove_advertising_sync(struct hci_dev *hdev, struct sock *sk,
 				u8 instance, bool force)
 {
-	struct adv_info *next = NULL;
+	u8 next_instance = 0;
 	int err;
 
 	/* Cancel any timeout concerning the removed instance(s). */
@@ -2337,20 +2487,34 @@ int hci_remove_advertising_sync(struct hci_dev *hdev, struct sock *sk,
 	 * the current one. This can be the same instance again
 	 * if there is only one instance.
 	 */
-	if (hdev->cur_adv_instance == instance)
+	if (hdev->cur_adv_instance == instance) {
+		struct adv_info *next;
+
+		hci_dev_lock(hdev);
 		next = hci_get_next_instance(hdev, instance);
+		if (next)
+			next_instance = next->instance;
+		hci_dev_unlock(hdev);
+	}
 
 	if (!instance) {
 		err = hci_clear_adv_sync(hdev, sk, force);
 		if (err)
 			return err;
 	} else {
-		struct adv_info *adv = hci_find_adv_instance(hdev, instance);
+		struct adv_info *adv;
+		bool remove;
 
-		if (force || (adv && adv->timeout && !adv->remaining_time)) {
+		hci_dev_lock(hdev);
+		adv = hci_find_adv_instance(hdev, instance);
+		remove = force ||
+			 (adv && adv->timeout && !adv->remaining_time);
+		hci_dev_unlock(hdev);
+
+		if (remove) {
 			/* Don't advertise a removed instance. */
-			if (next && next->instance == instance)
-				next = NULL;
+			if (next_instance == instance)
+				next_instance = 0;
 
 			err = hci_remove_adv_sync(hdev, instance, sk);
 			if (err)
@@ -2361,8 +2525,8 @@ int hci_remove_advertising_sync(struct hci_dev *hdev, struct sock *sk,
 	if (!hdev_is_powered(hdev) || hci_dev_test_flag(hdev, HCI_ADVERTISING))
 		return 0;
 
-	if (next && !ext_adv_capable(hdev))
-		hci_schedule_adv_instance_sync(hdev, next->instance, false);
+	if (next_instance && !ext_adv_capable(hdev))
+		hci_schedule_adv_instance_sync(hdev, next_instance, false);
 
 	return 0;
 }
@@ -2827,10 +2991,28 @@ static int hci_pause_advertising_sync(struct hci_dev *hdev)
 	return 0;
 }
 
+/* Copy the instance identifiers in list order under hdev->lock.
+ * There are at most U8_MAX instances, with identifiers 1..U8_MAX.
+ * Callers can then wait for commands without retaining list pointers.
+ */
+static size_t adv_instance_list_copy(struct hci_dev *hdev, u8 *ids)
+{
+	struct adv_info *adv;
+	size_t n = 0;
+
+	hci_dev_lock(hdev);
+
+	list_for_each_entry(adv, &hdev->adv_instances, list)
+		ids[n++] = adv->instance;
+
+	hci_dev_unlock(hdev);
+
+	return n;
+}
+
 /* This function enables all user advertising instances */
 static int hci_resume_advertising_sync(struct hci_dev *hdev)
 {
-	struct adv_info *adv, *tmp;
 	int err = 0;
 
 	/* If advertising has not been paused there is nothing  to do. */
@@ -2847,15 +3029,20 @@ static int hci_resume_advertising_sync(struct hci_dev *hdev)
 	bt_dev_dbg(hdev, "Resuming advertising instances");
 
 	if (ext_adv_capable(hdev)) {
+		u8 ids[U8_MAX];
+		size_t i, n;
+
+		n = adv_instance_list_copy(hdev, ids);
+
 		/* Call for each tracked instance to be re-enabled */
-		list_for_each_entry_safe(adv, tmp, &hdev->adv_instances, list) {
+		for (i = 0; i < n; i++) {
 			err = hci_enable_ext_advertising_sync(hdev,
-							      adv->instance);
+							      ids[i]);
 			if (!err)
 				continue;
 
 			/* If the instance cannot be resumed remove it */
-			hci_remove_ext_adv_instance_sync(hdev, adv->instance,
+			hci_remove_ext_adv_instance_sync(hdev, ids[i],
 							 NULL);
 		}
 
@@ -3040,6 +3227,7 @@ static u8 hci_update_accept_list_sync(struct hci_dev *hdev)
 	struct conn_params *params;
 	u8 num_entries = 0;
 	bool pend_conn, pend_report;
+	bool resolve = true;
 	u8 filter_policy;
 	size_t i, n;
 	int err;
@@ -3081,6 +3269,16 @@ static u8 hci_update_accept_list_sync(struct hci_dev *hdev)
 			pa.addr_type = conn->dst_type;
 
 			rcu_read_unlock();
+
+			/* With address resolution enabled, a controller may
+			 * drop the advertising reports of an RPA it has no IRK
+			 * for instead of matching the address as it is against
+			 * the accept list. The SID the PA sync waits for then
+			 * never arrives. Match a broadcaster without an IRK by
+			 * the address it advertises from.
+			 */
+			resolve = !hci_bdaddr_is_rpa(&pa.addr, pa.addr_type) ||
+				  hci_find_irk_by_rpa(hdev, &pa.addr);
 
 			/* Clear first since there could be addresses left
 			 * behind.
@@ -3207,9 +3405,12 @@ done:
 	filter_policy = err ? 0x00 : 0x01;
 
 	/* Enable address resolution when LL Privacy is enabled. */
-	err = hci_le_set_addr_resolution_enable_sync(hdev, 0x01);
-	if (err)
-		bt_dev_err(hdev, "Unable to enable LL privacy: %d", err);
+	if (resolve) {
+		err = hci_le_set_addr_resolution_enable_sync(hdev, 0x01);
+		if (err)
+			bt_dev_err(hdev, "Unable to enable LL privacy: %d",
+				   err);
+	}
 
 	/* Resume advertising if it was paused */
 	if (ll_privacy_capable(hdev))
@@ -3265,7 +3466,7 @@ static int hci_le_set_ext_scan_param_sync(struct hci_dev *hdev, u8 type,
 			conn = hci_conn_hash_lookup_ba(hdev, PA_LINK,
 						       &bdaddr);
 			if (conn) {
-				struct bt_iso_qos *qos = &conn->iso_qos;
+				struct bt_iso_qos_ext *qos = &conn->iso_qos;
 
 				if (qos->bcast.in.phys & BT_ISO_PHY_1M ||
 				    qos->bcast.in.phys & BT_ISO_PHY_2M) {
@@ -3680,7 +3881,8 @@ int hci_write_le_host_supported_sync(struct hci_dev *hdev, u8 le, u8 simul)
 
 static int hci_powered_update_adv_sync(struct hci_dev *hdev)
 {
-	struct adv_info *adv, *tmp;
+	u8 ids[U8_MAX];
+	size_t i, n;
 	int err;
 
 	if (!hci_dev_test_flag(hdev, HCI_LE_ENABLED))
@@ -3716,9 +3918,11 @@ static int hci_powered_update_adv_sync(struct hci_dev *hdev)
 			hci_enable_advertising_sync(hdev);
 	}
 
+	n = adv_instance_list_copy(hdev, ids);
+
 	/* Call for each tracked instance to be scheduled */
-	list_for_each_entry_safe(adv, tmp, &hdev->adv_instances, list)
-		hci_schedule_adv_instance_sync(hdev, adv->instance, true);
+	for (i = 0; i < n; i++)
+		hci_schedule_adv_instance_sync(hdev, ids[i], true);
 
 	return 0;
 }
@@ -3733,6 +3937,20 @@ static int hci_write_auth_enable_sync(struct hci_dev *hdev)
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_WRITE_AUTH_ENABLE,
 				     sizeof(link_sec), &link_sec,
+				     HCI_CMD_TIMEOUT);
+}
+
+int hci_write_page_timeout_sync(struct hci_dev *hdev)
+{
+	__le16 timeout;
+
+	if (!hdev->def_page_timeout || !lmp_bredr_capable(hdev))
+		return 0;
+
+	timeout = cpu_to_le16(hdev->def_page_timeout);
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_WRITE_PG_TIMEOUT,
+				     sizeof(timeout), &timeout,
 				     HCI_CMD_TIMEOUT);
 }
 
@@ -3876,7 +4094,9 @@ int hci_powered_update_sync(struct hci_dev *hdev)
 	 * registration is required so that LE SMP can clearly decide if
 	 * the public address or static address is used.
 	 */
+	hci_dev_lock(hdev);
 	smp_register(hdev);
+	hci_dev_unlock(hdev);
 
 	err = hci_write_ssp_mode_sync(hdev, 0x01);
 	if (err)
@@ -4341,6 +4561,8 @@ static const struct hci_init_stage hci_init2[] = {
 	HCI_INIT(hci_read_local_ext_features_1_sync),
 	/* HCI_OP_WRITE_AUTH_ENABLE */
 	HCI_INIT(hci_write_auth_enable_sync),
+	/* HCI_OP_WRITE_PG_TIMEOUT */
+	HCI_INIT(hci_write_page_timeout_sync),
 	{}
 };
 
@@ -4795,6 +5017,23 @@ static int hci_le_set_event_mask_sync(struct hci_dev *hdev)
 	if (le_sci_capable(hdev))
 		events[6] |= 0x40;	/* LE Connection Rate Change event */
 
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4, Part E,
+	 * Section 4.8.2:
+	 *
+	 * If an event has more than one version and the event is
+	 * generated, then the Controller shall use the latest version that
+	 * is both supported and enabled ("unmasked") in the relevant event
+	 * mask.
+	 *
+	 * So with these unmasked the older versions aren't reported.
+	 */
+	if (hdt_capable(hdev)) {
+		if (cis_capable(hdev))
+			events[7] |= BIT(1);	/* LE CIS Established v3 */
+		if (bis_capable(hdev))
+			events[7] |= BIT(2);	/* LE Create BIG Complete v2 */
+	}
+
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_EVENT_MASK,
 				     sizeof(events), events, HCI_CMD_TIMEOUT);
 }
@@ -4872,14 +5111,51 @@ static int hci_le_set_rpa_timeout_sync(struct hci_dev *hdev)
 				     HCI_CMD_TIMEOUT);
 }
 
+/* Read LE Maximum Data Length V2 */
+static int hci_le_read_max_data_len_v2_sync(struct hci_dev *hdev, u8 phy)
+{
+	struct hci_cp_le_read_max_data_len_v2 cp;
+
+	memset(&cp, 0, sizeof(cp));
+	cp.phy = phy;
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_MAX_DATA_LEN_V2,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
 /* Read LE Maximum Data Length */
 static int hci_le_read_max_data_len_sync(struct hci_dev *hdev)
 {
 	if (!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT))
 		return 0;
 
+	/* Check if HDT PHY and HCI_OP_LE_READ_MAX_DATA_LEN_V2 are supported */
+	if (hdt_capable(hdev) && hdev->commands[50] & BIT(5)) {
+		int err;
+
+		/* Read max data length for non-hdt PHYs (use 0x01 for LE 1M) */
+		err = hci_le_read_max_data_len_v2_sync(hdev, 0x01);
+		if (err)
+			return err;
+
+		/* Read max data length for HDT (0x05) */
+		return hci_le_read_max_data_len_v2_sync(hdev, 0x05);
+	}
+
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_MAX_DATA_LEN, 0, NULL,
 				     HCI_CMD_TIMEOUT);
+}
+
+/* Read LE Suggested Default Data Length V2 */
+static int hci_le_read_def_data_len_v2_sync(struct hci_dev *hdev, u8 phys)
+{
+	struct hci_cp_le_read_def_data_len_v2 cp;
+
+	memset(&cp, 0, sizeof(cp));
+	cp.phys = phys;
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_DEF_DATA_LEN_V2,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
 }
 
 /* Read LE Suggested Default Data Length */
@@ -4887,6 +5163,18 @@ static int hci_le_read_def_data_len_sync(struct hci_dev *hdev)
 {
 	if (!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT))
 		return 0;
+
+	if (hdt_capable(hdev) && hdev->commands[50] & BIT(6)) {
+		int err;
+
+		/* All GFSK PHYs */
+		err = hci_le_read_def_data_len_v2_sync(hdev, 0x00);
+		if (err)
+			return err;
+
+		/* HDT PHY */
+		return hci_le_read_def_data_len_v2_sync(hdev, 0x01);
+	}
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_DEF_DATA_LEN, 0, NULL,
 				     HCI_CMD_TIMEOUT);
@@ -5055,6 +5343,16 @@ static int hci_le_set_def_rate_sync(struct hci_dev *hdev)
 /* Set Host Features, each feature needs to be sent separately since
  * HCI_OP_LE_SET_HOST_FEATURE doesn't support setting all of them at once.
  */
+int hci_le_set_eks_oppt_sync(struct hci_dev *hdev)
+{
+	if (!eks_capable(hdev))
+		return 0;
+
+	/* Opportunistic Encryption (Host Support) */
+	return hci_le_set_host_feature_sync(hdev, 90,
+					    hdev->eks_oppt ? 0x01 : 0x00);
+}
+
 static int hci_le_set_host_features_sync(struct hci_dev *hdev)
 {
 	int err = 0;
@@ -5075,11 +5373,14 @@ static int hci_le_set_host_features_sync(struct hci_dev *hdev)
 			return err;
 	}
 
-	if (le_sci_capable(hdev))
+	if (le_sci_capable(hdev)) {
 		/* Shorter Connection Intervals (Host Support) */
 		err = hci_le_set_host_feature_sync(hdev, 73, 0x01);
+		if (err)
+			return err;
+	}
 
-	return err;
+	return hci_le_set_eks_oppt_sync(hdev);
 }
 
 /* LE Controller init stage 3 command sequence */
@@ -5199,6 +5500,13 @@ static int hci_set_event_mask_page_2_sync(struct hci_dev *hdev)
 		changed = true;
 	}
 
+	if (eks_capable(hdev)) {
+		/* EKS events */
+		events[3] |= BIT(2);	/* Encrytion Change v3 */
+		events[3] |= BIT(3);	/* Encrytion Key Refresh Complete v2 */
+		changed = true;
+	}
+
 	/* Some Broadcom based controllers indicate support for Set Event
 	 * Mask Page 2 command, but then actually do not support it. Since
 	 * the default value is all bits set to zero, the command is only
@@ -5311,6 +5619,41 @@ static const struct hci_init_stage hci_init4[] = {
 	{}
 };
 
+/* Write Suggested Default Data Length V2 */
+static int hci_le_write_def_data_len_v2_sync(struct hci_dev *hdev, u8 phys)
+{
+	struct hci_cp_le_write_def_data_len_v2 cp;
+
+	switch (phys) {
+	case 0x00:
+		/* If already set to max skip */
+		if (hdev->le_def_tx_len == hdev->le_max_tx_len &&
+		    hdev->le_def_tx_time == hdev->le_max_tx_time)
+			return 0;
+
+		memset(&cp, 0, sizeof(cp));
+		/* All GFSK PHYs */
+		cp.tx_len = cpu_to_le16(hdev->le_max_tx_len);
+		cp.tx_time = cpu_to_le16(hdev->le_max_tx_time);
+		break;
+	case 0x01:
+		/* If already set to max skip */
+		if (hdev->hdt_def_tx_len == hdev->hdt_max_tx_len &&
+		    hdev->hdt_def_tx_time == hdev->hdt_max_tx_time)
+			return 0;
+
+		memset(&cp, 0, sizeof(cp));
+		/* HDT PHY */
+		cp.phys = 0x01;
+		cp.tx_len = cpu_to_le16(hdev->hdt_max_tx_len);
+		cp.tx_time = cpu_to_le16(hdev->hdt_max_tx_time);
+		break;
+	}
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_WRITE_DEF_DATA_LEN_V2,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
 /* Set Suggested Default Data Length to maximum if supported */
 static int hci_le_set_write_def_data_len_sync(struct hci_dev *hdev)
 {
@@ -5319,12 +5662,74 @@ static int hci_le_set_write_def_data_len_sync(struct hci_dev *hdev)
 	if (!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT))
 		return 0;
 
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 6, Part B,
+	 * Section 4.5.10, Table 4.11: Valid ranges for data PDU length
+	 * management parameters on the GFSK PHYs, at most 251 octets and
+	 * 17040 microseconds, so clamp what the controller reports to them.
+	 */
+	if (hdev->le_max_tx_len > 0x00fb)
+		hdev->le_max_tx_len = 0x00fb;
+
+	if (hdev->le_max_tx_time > 0x4290)
+		hdev->le_max_tx_time = 0x4290;
+
+	/* If controller is HDT check if it support V2 then use it */
+	if (hdt_capable(hdev) && hdev->commands[50] & BIT(7)) {
+		int err;
+
+		/* All GFSK PHYs */
+		err = hci_le_write_def_data_len_v2_sync(hdev, 0x00);
+		if (err)
+			return err;
+
+		return hci_le_write_def_data_len_v2_sync(hdev, 0x01);
+	}
+
+	/* If already set to max skip */
+	if (hdev->le_def_tx_len == hdev->le_max_tx_len &&
+	    hdev->le_def_tx_time == hdev->le_max_tx_time)
+		return 0;
+
 	memset(&cp, 0, sizeof(cp));
+
 	cp.tx_len = cpu_to_le16(hdev->le_max_tx_len);
 	cp.tx_time = cpu_to_le16(hdev->le_max_tx_time);
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_WRITE_DEF_DATA_LEN,
 				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
+/* HDT rates the controller supports in each direction.
+ *
+ * BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 6, Part A, Section 1:
+ *
+ * If the LE HDT PHY is supported, then HDT2, HDT3, and HDT4 shall be
+ * supported. HDT6 and HDT7.5 are optional
+ */
+static u16 hci_hdt_tx_rates(struct hci_dev *hdev)
+{
+	u16 rates = HCI_HDT_RATE_2M | HCI_HDT_RATE_3M | HCI_HDT_RATE_4M;
+
+	if (hdt_6_tx_capable(hdev))
+		rates |= HCI_HDT_RATE_6M;
+
+	if (hdt_7_5_tx_capable(hdev))
+		rates |= HCI_HDT_RATE_7_5M;
+
+	return rates;
+}
+
+static u16 hci_hdt_rx_rates(struct hci_dev *hdev)
+{
+	u16 rates = HCI_HDT_RATE_2M | HCI_HDT_RATE_3M | HCI_HDT_RATE_4M;
+
+	if (hdt_6_rx_capable(hdev))
+		rates |= HCI_HDT_RATE_6M;
+
+	if (hdt_7_5_rx_capable(hdev))
+		rates |= HCI_HDT_RATE_7_5M;
+
+	return rates;
 }
 
 /* Set Default PHY parameters if command is supported, enables all supported
@@ -5360,7 +5765,62 @@ static int hci_le_set_default_phy_sync(struct hci_dev *hdev)
 		cp.rx_phys |= HCI_LE_SET_PHY_CODED;
 	}
 
+	/* Enables HDT PHY if supported */
+	if (hdt_capable(hdev)) {
+		cp.tx_phys |= HCI_LE_SET_PHY_HDT;
+		cp.rx_phys |= HCI_LE_SET_PHY_HDT;
+	}
+
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_DEFAULT_PHY,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
+int hci_le_set_hdt_params_sync(struct hci_dev *hdev)
+{
+	struct hci_cp_le_set_hdt_default_params cp;
+	u16 rates;
+	u8 format;
+
+	/* Only send if controller supports HDT and the command */
+	if (!hdt_capable(hdev) || !(hdev->commands[52] & BIT(1)))
+		return 0;
+
+	/* Mask out rates not supported by the controller */
+	rates = hdev->hdt_def_rates & hci_hdt_tx_rates(hdev);
+
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 6, Part A,
+	 * Section 1:
+	 *
+	 * If the LE HDT PHY is supported, then HDT2, HDT3, and HDT4 shall be
+	 * supported.
+	 *
+	 * So if none of the preferred rates is supported, such as when none
+	 * is preferred, prefer all the ones that are rather than sending
+	 * none, which the controller would reject.
+	 */
+	if (!rates)
+		rates = hci_hdt_tx_rates(hdev);
+
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4, Part E,
+	 * Section 7.8.160:
+	 *
+	 * LE Set HDT Parameters Test fails with Command Disallowed when
+	 * "Packet_Format equals 0x2 and HDT Packet Format 1 is not
+	 * supported."
+	 *
+	 * So don't prefer a packet format the controller doesn't support,
+	 * 0x00 being any supported one, as it would reject it the same way.
+	 */
+	format = hdev->hdt_def_format;
+	if (format == 0x02 && !hdt_pf1_capable(hdev))
+		format = 0x00;
+
+	memset(&cp, 0, sizeof(cp));
+	cp.mic_len = hdev->hdt_def_mic_len;
+	cp.format = format;
+	cp.rates = cpu_to_le16(rates);
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_HDT_DEFAULT_PARAMS,
 				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
 }
 
@@ -5369,6 +5829,8 @@ static const struct hci_init_stage le_init4[] = {
 	HCI_INIT(hci_le_set_write_def_data_len_sync),
 	/* HCI_OP_LE_SET_DEFAULT_PHY */
 	HCI_INIT(hci_le_set_default_phy_sync),
+	/* HCI_OP_LE_SET_HDT_DEFAULT_PARAMS */
+	HCI_INIT(hci_le_set_hdt_params_sync),
 	{}
 };
 
@@ -5692,7 +6154,9 @@ int hci_dev_open_sync(struct hci_dev *hdev)
 	if (!ret) {
 		hci_dev_hold(hdev);
 		hci_dev_set_flag(hdev, HCI_RPA_EXPIRED);
+		hci_dev_lock(hdev);
 		hci_adv_instances_set_rpa_expired(hdev, true);
+		hci_dev_unlock(hdev);
 		set_bit(HCI_UP, &hdev->flags);
 		hci_sock_dev_event(hdev, HCI_DEV_UP);
 		hci_leds_update_powered(hdev, true);
@@ -5836,8 +6300,10 @@ int hci_dev_close_sync(struct hci_dev *hdev)
 
 		cancel_delayed_work_sync(&hdev->rpa_expired);
 
+		hci_dev_lock(hdev);
 		list_for_each_entry(adv_instance, &hdev->adv_instances, list)
 			cancel_delayed_work_sync(&adv_instance->rpa_expired_cb);
+		hci_dev_unlock(hdev);
 	}
 
 	/* A delayed work whose timer was armed before close would queue
@@ -5866,6 +6332,11 @@ int hci_dev_close_sync(struct hci_dev *hdev)
 	hci_discovery_set_state(hdev, DISCOVERY_STOPPED);
 
 	auto_off = hci_dev_test_and_clear_flag(hdev, HCI_AUTO_OFF);
+
+	/* Nothing is going to send the mesh transmissions left, whether or not
+	 * mgmt is told about the controller being powered off.
+	 */
+	mgmt_mesh_flush(hdev);
 
 	if (!auto_off && !hci_dev_test_flag(hdev, HCI_USER_CHANNEL) &&
 	    hci_dev_test_flag(hdev, HCI_MGMT))
@@ -7348,10 +7819,15 @@ done:
 	if (!aux_num_cis)
 		return 0;
 
-	/* Wait for HCI_LE_CIS_Established */
+	/* Wait for HCI_LE_CIS_Established, which HDT capable controllers
+	 * report with the v3 event since it is the one unmasked, see
+	 * hci_le_set_event_mask_sync().
+	 */
 	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_CREATE_CIS,
 					struct_size(cmd, cis, cmd->num_cis),
-					cmd, HCI_EVT_LE_CIS_ESTABLISHED,
+					cmd, hdt_capable(hdev) ?
+					HCI_EVT_LE_CIS_ESTABLISHED_V3 :
+					HCI_EVT_LE_CIS_ESTABLISHED,
 					timeout, NULL);
 }
 
@@ -7847,7 +8323,7 @@ done:
 }
 
 static int hci_le_past_params_sync(struct hci_dev *hdev, struct hci_conn *conn,
-				   u16 acl_handle, struct bt_iso_qos *qos)
+				   u16 acl_handle, struct bt_iso_qos_ext *qos)
 {
 	struct hci_cp_le_past_params cp;
 	int err;
@@ -7881,7 +8357,7 @@ static int hci_le_pa_create_sync(struct hci_dev *hdev, void *data)
 {
 	struct hci_cp_le_pa_create_sync cp;
 	struct hci_conn *conn = data, *le;
-	struct bt_iso_qos *qos = &conn->iso_qos;
+	struct bt_iso_qos_ext *qos = &conn->iso_qos;
 	int err;
 
 	if (!hci_conn_valid(hdev, conn))
@@ -8022,7 +8498,7 @@ static int hci_le_big_create_sync(struct hci_dev *hdev, void *data)
 	DEFINE_FLEX(struct hci_cp_le_big_create_sync, cp, bis, num_bis,
 		    HCI_MAX_ISO_BIS);
 	struct hci_conn *conn = data;
-	struct bt_iso_qos *qos = &conn->iso_qos;
+	struct bt_iso_qos_ext *qos = &conn->iso_qos;
 	int err;
 
 	if (!hci_conn_valid(hdev, conn))
@@ -8097,6 +8573,7 @@ static int hci_le_past_set_info_sync(struct hci_dev *hdev, void *data)
 {
 	struct past_data *past = data;
 	struct hci_cp_le_past_set_info cp;
+	struct adv_info *adv;
 
 	hci_dev_lock(hdev);
 
@@ -8109,6 +8586,9 @@ static int hci_le_past_set_info_sync(struct hci_dev *hdev, void *data)
 	memset(&cp, 0, sizeof(cp));
 	cp.handle = cpu_to_le16(past->le->handle);
 	cp.adv_handle = past->conn->iso_qos.bcast.bis;
+	adv = hci_find_adv_instance(hdev, cp.adv_handle);
+	if (adv)
+		cp.adv_handle = adv->handle;
 
 	hci_dev_unlock(hdev);
 
@@ -8320,7 +8800,7 @@ static int hci_le_set_phy_sync(struct hci_dev *hdev, void *data)
 					HCI_CMD_TIMEOUT, NULL);
 }
 
-int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys)
+int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys, u16 phy_opts)
 {
 	struct hci_dev *hdev = conn->hdev;
 	struct hci_cp_le_set_phy *cp;
@@ -8334,11 +8814,553 @@ int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys)
 	cp->handle = cpu_to_le16(conn->handle);
 	cp->tx_phys = tx_phys;
 	cp->rx_phys = rx_phys;
+	cp->phy_opts = cpu_to_le16(phy_opts);
 
 	err = hci_cmd_sync_queue_once(hdev, hci_le_set_phy_sync, cp,
 				      le_phy_update_complete);
 	if (err)
 		kfree(cp);
+
+	return (err == -EEXIST) ? 0 : err;
+}
+
+/* LE Set CIG Params v2 */
+static int hci_le_set_cig_params_v2_sync(struct hci_dev *hdev, u8 cig_id)
+{
+	DEFINE_FLEX(struct hci_cp_le_set_cig_params_v2, pdu, cis, num_cis,
+		    HCI_LE_CIG_PARAMS_V2_MAX_CIS);
+	struct hci_conn *conn;
+	struct bt_iso_qos_ext *qos;
+	u8 aux_num_cis = 0;
+	u8 cis_id;
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_cig(hdev, cig_id);
+	if (!conn) {
+		hci_dev_unlock(hdev);
+		return 0;
+	}
+
+	qos = &conn->iso_qos;
+	pdu->cig_id = cig_id;
+	hci_cpu_to_le24(qos->ucast.out.interval, pdu->c_interval);
+	hci_cpu_to_le24(qos->ucast.in.interval, pdu->p_interval);
+	pdu->sca = qos->ucast.sca;
+	pdu->packing = qos->ucast.packing;
+	pdu->framing = qos->ucast.framing;
+	pdu->c_latency = cpu_to_le16(qos->ucast.out.latency);
+	pdu->p_latency = cpu_to_le16(qos->ucast.in.latency);
+
+	/* Reprogram all CIS(s) with the same CIG, valid range are:
+	 * num_cis: 0x00 to 0x1F
+	 * cis_id: 0x00 to 0xEF
+	 */
+	for (cis_id = 0x00; cis_id < 0xf0 &&
+	     aux_num_cis < pdu->num_cis; cis_id++) {
+		struct hci_cis_params_v2 *cis;
+
+		conn = hci_conn_hash_lookup_cis(hdev, NULL, 0, cig_id, cis_id);
+		if (!conn)
+			continue;
+
+		qos = &conn->iso_qos;
+
+		cis = &pdu->cis[aux_num_cis++];
+		cis->cis_id = cis_id;
+		cis->c_sdu  = cpu_to_le16(conn->iso_qos.ucast.out.sdu);
+		cis->p_sdu  = cpu_to_le16(conn->iso_qos.ucast.in.sdu);
+		cis->c_phys = qos->ucast.out.phys ? qos->ucast.out.phys :
+			      qos->ucast.in.phys;
+		cis->p_phys = qos->ucast.in.phys ? qos->ucast.in.phys :
+			      qos->ucast.out.phys;
+		cis->c_rtn  = qos->ucast.out.rtn;
+		cis->p_rtn  = qos->ucast.in.rtn;
+		cis->mic_len = conn->req_mic_len ? conn->req_mic_len :
+			       hdev->hdt_def_mic_len;
+
+		/* Use the rates of each direction, or all the HDT rates the
+		 * controller supports if none were set.
+		 */
+		if (cis->c_phys & HCI_LE_SET_PHY_HDT)
+			cis->c_hdt_rates = cpu_to_le16(qos->ucast.out.rates ? :
+						       hci_hdt_tx_rates(hdev));
+
+		if (cis->p_phys & HCI_LE_SET_PHY_HDT)
+			cis->p_hdt_rates = cpu_to_le16(qos->ucast.in.rates ? :
+						       hci_hdt_rx_rates(hdev));
+	}
+	pdu->num_cis = aux_num_cis;
+
+	hci_dev_unlock(hdev);
+
+	if (!pdu->num_cis)
+		return 0;
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_CIG_PARAMS_V2,
+				     struct_size(pdu, cis, pdu->num_cis),
+				     pdu, HCI_CMD_TIMEOUT);
+}
+
+/* LE Set CIG Params */
+int hci_le_set_cig_params_sync(struct hci_dev *hdev, u8 cig_id)
+{
+	DEFINE_FLEX(struct hci_cp_le_set_cig_params, pdu, cis, num_cis, 0x1f);
+	struct hci_conn *conn;
+	struct bt_iso_qos_ext *qos;
+	u8 aux_num_cis = 0;
+	u8 cis_id;
+
+	if (le_set_cig_params_v2_capable(hdev))
+		return hci_le_set_cig_params_v2_sync(hdev, cig_id);
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_cig(hdev, cig_id);
+	if (!conn) {
+		hci_dev_unlock(hdev);
+		return 0;
+	}
+
+	qos = &conn->iso_qos;
+	pdu->cig_id = cig_id;
+	hci_cpu_to_le24(qos->ucast.out.interval, pdu->c_interval);
+	hci_cpu_to_le24(qos->ucast.in.interval, pdu->p_interval);
+	pdu->sca = qos->ucast.sca;
+	pdu->packing = qos->ucast.packing;
+	pdu->framing = qos->ucast.framing;
+	pdu->c_latency = cpu_to_le16(qos->ucast.out.latency);
+	pdu->p_latency = cpu_to_le16(qos->ucast.in.latency);
+
+	/* Reprogram all CIS(s) with the same CIG, valid range are:
+	 * num_cis: 0x00 to 0x1F
+	 * cis_id: 0x00 to 0xEF
+	 */
+	for (cis_id = 0x00; cis_id < 0xf0 &&
+	     aux_num_cis < pdu->num_cis; cis_id++) {
+		struct hci_cis_params *cis;
+
+		conn = hci_conn_hash_lookup_cis(hdev, NULL, 0, cig_id, cis_id);
+		if (!conn)
+			continue;
+
+		qos = &conn->iso_qos;
+
+		cis = &pdu->cis[aux_num_cis++];
+		cis->cis_id = cis_id;
+		cis->c_sdu  = cpu_to_le16(conn->iso_qos.ucast.out.sdu);
+		cis->p_sdu  = cpu_to_le16(conn->iso_qos.ucast.in.sdu);
+		cis->c_phys = qos->ucast.out.phys ? qos->ucast.out.phys :
+			      qos->ucast.in.phys;
+		cis->p_phys = qos->ucast.in.phys ? qos->ucast.in.phys :
+			      qos->ucast.out.phys;
+		cis->c_rtn  = qos->ucast.out.rtn;
+		cis->p_rtn  = qos->ucast.in.rtn;
+	}
+	pdu->num_cis = aux_num_cis;
+
+	hci_dev_unlock(hdev);
+
+	if (!pdu->num_cis)
+		return 0;
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_CIG_PARAMS,
+				     struct_size(pdu, cis, pdu->num_cis),
+				     pdu, HCI_CMD_TIMEOUT);
+}
+
+static int hci_le_create_big_v2_sync(struct hci_conn *conn,
+				     struct bt_iso_qos_ext *qos, u8 num_bis)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_le_create_big_v2 cp;
+
+	memset(&cp, 0, sizeof(cp));
+	cp.handle = qos->bcast.big;
+	cp.adv_handle = qos->bcast.bis;
+	cp.num_bis  = num_bis;
+	hci_cpu_to_le24(qos->bcast.out.interval, cp.bis.sdu_interval);
+	cp.bis.sdu = cpu_to_le16(qos->bcast.out.sdu);
+	cp.bis.latency = cpu_to_le16(qos->bcast.out.latency);
+	cp.bis.rtn = qos->bcast.out.rtn;
+	cp.bis.phys = qos->bcast.out.phys;
+	cp.bis.packing = qos->bcast.packing;
+	cp.bis.framing = qos->bcast.framing;
+	cp.bis.encryption = qos->bcast.encryption;
+	memcpy(cp.bis.bcode, qos->bcast.bcode, sizeof(cp.bis.bcode));
+	cp.bis.mic_len = conn->req_mic_len ? conn->req_mic_len :
+			 hdev->hdt_def_mic_len;
+
+	/* Use the rates set, or all the HDT rates the controller supports if
+	 * none were set.
+	 */
+	if (cp.bis.phys & HCI_LE_SET_PHY_HDT)
+		cp.bis.hdt_rates = cpu_to_le16(qos->bcast.out.rates ? :
+					       hci_hdt_tx_rates(hdev));
+
+	/* Wait for LE BIG Complete, so that the cleanup of BISes closed
+	 * meanwhile terminates the BIG before removing its advertising set.
+	 * An HDT capable controller reports it with LE Create BIG Complete v2,
+	 * which hci_le_set_event_mask_sync() unmasks for it.
+	 */
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_CREATE_BIG_V2,
+					sizeof(cp), &cp,
+					HCI_EVT_LE_CREATE_BIG_COMPLETE_V2,
+					conn->conn_timeout, NULL);
+}
+
+int hci_le_create_big_sync(struct hci_conn *conn, struct bt_iso_qos_ext *qos,
+			   u8 num_bis)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_le_create_big cp;
+
+	if (hdt_capable(hdev) && hdev->commands[51] & BIT(3))
+		return hci_le_create_big_v2_sync(conn, qos, num_bis);
+
+	memset(&cp, 0, sizeof(cp));
+	cp.handle = qos->bcast.big;
+	cp.adv_handle = qos->bcast.bis;
+	cp.num_bis  = num_bis;
+	hci_cpu_to_le24(qos->bcast.out.interval, cp.bis.sdu_interval);
+	cp.bis.sdu = cpu_to_le16(qos->bcast.out.sdu);
+	cp.bis.latency =  cpu_to_le16(qos->bcast.out.latency);
+	cp.bis.rtn  = qos->bcast.out.rtn;
+	cp.bis.phys = qos->bcast.out.phys;
+	cp.bis.packing = qos->bcast.packing;
+	cp.bis.framing = qos->bcast.framing;
+	cp.bis.encryption = qos->bcast.encryption;
+	memcpy(cp.bis.bcode, qos->bcast.bcode, sizeof(cp.bis.bcode));
+
+	/* Wait for LE BIG Complete, so that the cleanup of BISes closed
+	 * meanwhile terminates the BIG before removing its advertising set.
+	 * An HDT capable controller reports it with LE Create BIG Complete v2
+	 * even here, since that is the one unmasked.
+	 */
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_CREATE_BIG,
+					sizeof(cp), &cp, hdt_capable(hdev) ?
+					HCI_EVT_LE_CREATE_BIG_COMPLETE_V2 :
+					HCI_EVT_LE_CREATE_BIG_COMPLETE,
+					conn->conn_timeout, NULL);
+}
+
+static void le_enable_encrypt_complete(struct hci_dev *hdev, void *data, int err)
+{
+	bt_dev_dbg(hdev, "err %d", err);
+
+	/* The command carries the key */
+	kfree_sensitive(data);
+}
+
+/* A command that failed without a Command Status, such as one that couldn't
+ * be sent, leaves the encryption pending, so disconnect as a Command Status
+ * error does. If one was received it has already cleared the pending
+ * encryption and disconnected.
+ */
+static void le_enable_encrypt_failed(struct hci_dev *hdev, __le16 handle)
+{
+	struct hci_conn *conn;
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, le16_to_cpu(handle));
+	if (conn && test_and_clear_bit(HCI_CONN_ENCRYPT_PEND, conn->flags) &&
+	    conn->state == BT_CONNECTED)
+		conn = hci_conn_get(conn);
+	else
+		conn = NULL;
+
+	hci_dev_unlock(hdev);
+
+	if (!conn)
+		return;
+
+	hci_abort_conn_sync(hdev, conn, HCI_ERROR_AUTH_FAILURE);
+	hci_conn_put(conn);
+}
+
+static int hci_le_enable_encrypt_v2_send(struct hci_dev *hdev,
+					 struct hci_cp_le_enable_encrypt_v2 *cp)
+{
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_ENABLE_ENCRYPT_V2,
+				     sizeof(*cp), cp, HCI_CMD_TIMEOUT);
+}
+
+static int hci_le_enable_encrypt_v2_sync(struct hci_dev *hdev, void *data)
+{
+	struct hci_cp_le_enable_encrypt_v2 *cp = data;
+	struct hci_conn *conn;
+	int err;
+
+	/* Use the MIC length requested by the time the command is sent, as
+	 * channels may still raise it after it was queued, or the default one
+	 * if unset.
+	 */
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, le16_to_cpu(cp->handle));
+	if (conn)
+		cp->mic_len = conn->req_mic_len ? conn->req_mic_len :
+						  hdev->hdt_def_mic_len;
+
+	hci_dev_unlock(hdev);
+
+	err = hci_le_enable_encrypt_v2_send(hdev, cp);
+	if (err)
+		le_enable_encrypt_failed(hdev, cp->handle);
+
+	return err;
+}
+
+static int hci_le_enable_encrypt_v2(struct hci_conn *conn, __le16 ediv,
+				    __le64 rand, __u8 ltk[16], __u8 key_size)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_le_enable_encrypt_v2 *cp;
+	int err;
+
+	bt_dev_dbg(hdev, "hcon %p", conn);
+
+	cp = kzalloc_obj(*cp);
+	if (!cp)
+		return -ENOMEM;
+
+	cp->handle = cpu_to_le16(conn->handle);
+	cp->rand = rand;
+	cp->ediv = ediv;
+	/* The key is zero padded when shorter than 16 octets */
+	if (ltk) {
+		memcpy(cp->ltk, ltk, key_size);
+		cp->encryption = 0x00; /* Use LTK provided in LTK field */
+	} else {
+		cp->encryption = 0x01; /* Use opportunistic with EKS */
+	}
+
+	err = hci_cmd_sync_queue_once(hdev, hci_le_enable_encrypt_v2_sync, cp,
+				      le_enable_encrypt_complete);
+	if (err)
+		kfree_sensitive(cp);
+
+	return err;
+}
+
+static int hci_le_enable_encrypt_sync(struct hci_dev *hdev, void *data)
+{
+	struct hci_cp_le_start_enc *cp = data;
+	int err;
+
+	err = __hci_cmd_sync_status(hdev, HCI_OP_LE_START_ENC, sizeof(*cp), cp,
+				    HCI_CMD_TIMEOUT);
+	if (err)
+		le_enable_encrypt_failed(hdev, cp->handle);
+
+	return err;
+}
+
+int hci_le_enable_encrypt(struct hci_conn *conn, __le16 ediv, __le64 rand,
+			  __u8 ltk[16], __u8 key_size)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_le_start_enc *cp;
+	int err;
+
+	/* Check if EKS and HCI_OP_LE_ENABLE_ENCRYPT_V2 are supported */
+	if (eks_capable(hdev) && (hdev->commands[50] & BIT(4)))
+		return hci_le_enable_encrypt_v2(conn, ediv, rand, ltk,
+						key_size);
+
+	bt_dev_dbg(hdev, "hcon %p", conn);
+
+	/* The key is zero padded when shorter than 16 octets */
+	cp = kzalloc_obj(*cp);
+	if (!cp)
+		return -ENOMEM;
+
+	cp->handle = cpu_to_le16(conn->handle);
+	cp->rand = rand;
+	cp->ediv = ediv;
+	memcpy(cp->ltk, ltk, key_size);
+
+	err = hci_cmd_sync_queue_once(hdev, hci_le_enable_encrypt_sync, cp,
+				      le_enable_encrypt_complete);
+	if (err)
+		kfree_sensitive(cp);
+
+	return err;
+}
+
+/* The opportunistic encryption is queued when the connection is set up, so
+ * by the time it runs the connection may be gone, already encrypted, have
+ * SMP encryption pending or SMP pairing in progress, so check again right
+ * before sending the command and leave the link to SMP in those cases.
+ *
+ * HCI_CONN_OPP_ENCRYPT, without HCI_CONN_ENCRYPT, marks the request in
+ * flight. HCI_CONN_ENCRYPT_PEND is not used for it, so SMP is not blocked
+ * by it: SMP pairing over a link being encrypted works, and the encryption
+ * started by SMP afterwards replaces the opportunistic key.
+ */
+static int hci_le_eks_oppt_encrypt_sync(struct hci_dev *hdev, void *data)
+{
+	struct hci_cp_le_enable_encrypt_v2 *cp = data;
+	struct hci_conn *conn;
+	int err;
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, le16_to_cpu(cp->handle));
+	if (!conn || conn->state != BT_CONNECTED ||
+	    test_bit(HCI_CONN_ENCRYPT, conn->flags) ||
+	    test_bit(HCI_CONN_ENCRYPT_PEND, conn->flags))
+		goto unlock;
+
+	/* conn->hdev is hdev, whose lock is held */
+	lockdep_assert_held(&conn->hdev->lock);
+
+	if (smp_pairing_in_progress(conn)) {
+		bt_dev_dbg(hdev, "SMP in progress, skipping hcon %p", conn);
+		goto unlock;
+	}
+
+	if (test_and_set_bit(HCI_CONN_OPP_ENCRYPT, conn->flags))
+		goto unlock;
+
+	/* Use the MIC length requested by now, or the default one if unset */
+	cp->mic_len = conn->req_mic_len ? conn->req_mic_len :
+					  hdev->hdt_def_mic_len;
+
+	bt_dev_dbg(hdev, "starting EKS opportunistic encryption hcon %p", conn);
+
+	hci_dev_unlock(hdev);
+
+	/* Sent without the failure handling of encryption started by SMP,
+	 * which isn't pending for it and must not be disconnected for it.
+	 */
+	err = hci_le_enable_encrypt_v2_send(hdev, cp);
+	if (!err)
+		return 0;
+
+	/* No result will come for a command that was not sent or failed */
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, le16_to_cpu(cp->handle));
+	if (conn && !test_bit(HCI_CONN_ENCRYPT, conn->flags))
+		clear_bit(HCI_CONN_OPP_ENCRYPT, conn->flags);
+
+	hci_dev_unlock(hdev);
+
+	return err;
+
+unlock:
+	hci_dev_unlock(hdev);
+	return 0;
+}
+
+int hci_le_eks_oppt_encrypt(struct hci_conn *conn)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_le_enable_encrypt_v2 *cp;
+	int err;
+
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4, Part E,
+	 * Section 7.8.24: "This command shall only be used when the local
+	 * device's role is Central."
+	 */
+	if (conn->role != HCI_ROLE_MASTER)
+		return -EINVAL;
+
+	/* Check hdev config */
+	if (!hdev->eks_oppt)
+		return -EOPNOTSUPP;
+
+	/* Remote must support opportunistic encryption */
+	if (!eks_oppt_capable(conn))
+		return -EOPNOTSUPP;
+
+	/* Must support EKS and the encrypt_v2 command */
+	if (!eks_capable(hdev) || !(hdev->commands[50] & BIT(4)))
+		return -EOPNOTSUPP;
+
+	/* Don't encrypt if already encrypted or pending */
+	if (test_bit(HCI_CONN_ENCRYPT, conn->flags) ||
+	    test_bit(HCI_CONN_ENCRYPT_PEND, conn->flags) ||
+	    test_bit(HCI_CONN_OPP_ENCRYPT, conn->flags))
+		return -EALREADY;
+
+	/* Skip if we have an LTK for this peer (use normal encryption) */
+	if (hci_find_ltk(hdev, &conn->dst, conn->dst_type, conn->role))
+		return -EEXIST;
+
+	bt_dev_dbg(hdev, "queueing EKS opportunistic encryption hcon %p", conn);
+
+	cp = kzalloc_obj(*cp);
+	if (!cp)
+		return -ENOMEM;
+
+	cp->handle = cpu_to_le16(conn->handle);
+	cp->encryption = 0x01; /* Opportunistic with EKS */
+
+	err = hci_cmd_sync_queue_once(hdev, hci_le_eks_oppt_encrypt_sync, cp,
+				      le_enable_encrypt_complete);
+	if (err)
+		kfree(cp);
+
+	return err;
+}
+
+static void le_set_data_len_complete(struct hci_dev *hdev, void *data, int err)
+{
+	struct hci_conn *conn = data;
+
+	bt_dev_dbg(hdev, "err %d", err);
+	if (err && err != -ECANCELED && err != -ENODEV)
+		bt_dev_warn(hdev, "Failed to set LE data length (%d)", err);
+	hci_conn_put(conn);
+}
+
+static int hci_le_set_data_len_sync(struct hci_dev *hdev, void *data)
+{
+	struct hci_conn *conn = data;
+	struct hci_cp_le_set_data_len cp;
+
+	hci_dev_lock(hdev);
+
+	if (!hci_conn_valid(hdev, conn) || conn->type != LE_LINK ||
+	    conn->role != HCI_ROLE_MASTER ||
+	    (conn->state != BT_CONNECTED && conn->state != BT_CONFIG)) {
+		hci_dev_unlock(hdev);
+		return -ECANCELED;
+	}
+
+	/* Use the current suggested defaults, including later host changes. */
+	if (!hci_test_quirk(hdev, HCI_QUIRK_NEEDS_LE_SET_DATA_LEN) ||
+	    !(hdev->commands[33] & BIT(6)) ||
+	    !(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT) ||
+	    !(conn->le_features[0] & HCI_LE_DATA_LEN_EXT) ||
+	    hdev->le_def_tx_len <= 27) {
+		hci_dev_unlock(hdev);
+		return 0;
+	}
+
+	cp.handle = cpu_to_le16(conn->handle);
+	cp.tx_len = cpu_to_le16(hdev->le_def_tx_len);
+	cp.tx_time = cpu_to_le16(hdev->le_def_tx_time);
+
+	hci_dev_unlock(hdev);
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_DATA_LEN,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
+int hci_le_set_data_len(struct hci_conn *conn)
+{
+	struct hci_dev *hdev = conn->hdev;
+	int err;
+
+	err = hci_cmd_sync_queue_once(hdev, hci_le_set_data_len_sync,
+				      hci_conn_get(conn),
+				      le_set_data_len_complete);
+	if (err)
+		hci_conn_put(conn);
 
 	return (err == -EEXIST) ? 0 : err;
 }

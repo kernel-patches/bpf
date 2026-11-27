@@ -808,6 +808,9 @@ static enum dc_pixel_format convert_pixel_format_to_dalsurface(
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
 		dal_pixel_format = PIXEL_FORMAT_ARGB8888;
 		break;
+	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+		dal_pixel_format = PIXEL_FORMAT_ARGB8888;
+		break;
 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
 		dal_pixel_format = PIXEL_FORMAT_ARGB2101010;
 		break;
@@ -1241,9 +1244,15 @@ static void calculate_recout(struct pipe_ctx *pipe_ctx)
 		pipe_ctx->plane_res.scl_data.recout = shift_rec(
 				&overlapping_area,
 				-odm_slice_src.x, -odm_slice_src.y);
-		adjust_recout_for_visual_confirm(
-				&pipe_ctx->plane_res.scl_data.recout,
-				pipe_ctx);
+		/* Non-SPL path: shrinking the recout here, before the viewport is
+		 * derived from it, shrinks the viewport too (legacy behavior). To keep
+		 * the HW viewport full, skip this and shrink the recout for HW only at
+		 * the tail of resource_build_scaling_params.
+		 */
+		if (!pipe_ctx->stream->ctx->dc->debug.visual_confirm_full_viewport)
+			adjust_recout_for_visual_confirm(
+					&pipe_ctx->plane_res.scl_data.recout,
+					pipe_ctx);
 	} else {
 		/* if there is no overlap, zero recout */
 		memset(&pipe_ctx->plane_res.scl_data.recout, 0,
@@ -1557,25 +1566,6 @@ void resource_build_test_pattern_params(struct resource_context *res_ctx,
 	}
 }
 
-enum upsp_mode resource_is_upsp_required(enum surface_pixel_format format,
-		enum dc_scaling_linearity scaling_linearity)
-{
-	bool scaling_in_linear = (scaling_linearity == DC_SCALING_LINEARITY_LINEAR);
-	bool is_420_format = (format >= SURFACE_PIXEL_FORMAT_VIDEO_BEGIN &&
-			format <= SURFACE_PIXEL_FORMAT_VIDEO_420_10bpc_YCrCb);
-	bool is_422_format = (format > SURFACE_PIXEL_FORMAT_VIDEO_420_10bpc_YCrCb &&
-			format < SURFACE_PIXEL_FORMAT_SUBSAMPLE_END);
-
-	/* UPSP (chroma upsampling) is only needed when subsampled YUV is scaled in
-	 * linear space.
-	 */
-	if (scaling_in_linear && is_420_format)
-		return UPSP_HORIZONTAL_VERTICAL_UPSAMPLING;
-	if (scaling_in_linear && is_422_format)
-		return UPSP_HORIZONTAL_UPSAMPLING_ONLY;
-	return UPSP_BYPASS;
-}
-
 bool resource_build_scaling_params(struct pipe_ctx *pipe_ctx)
 {
 	const struct dc_plane_state *plane_state = pipe_ctx->plane_state;
@@ -1621,14 +1611,26 @@ bool resource_build_scaling_params(struct pipe_ctx *pipe_ctx)
 			pipe_ctx->plane_res.scl_data.lb_params.depth = LB_PIXEL_DEPTH_30BPP;
 
 		pipe_ctx->plane_res.scl_data.lb_params.alpha_en = plane_state->per_pixel_alpha;
-		pipe_ctx->plane_res.scl_data.upsp = resource_is_upsp_required(plane_state->format, plane_state->scaling_linearity);
+		pipe_ctx->plane_res.scl_data.upsp = resource_is_upsp_required((bool)plane_state->ctx->dc->caps.color.dpp.upsp_pre_scaler, plane_state->format, plane_state->scaling_linearity);
 
 		// Convert pipe_ctx to respective input params for SPL
 		translate_SPL_in_params_from_pipe_ctx(pipe_ctx, spl_in);
-		/* Pass visual confirm debug information */
-		calculate_adjust_recout_for_visual_confirm(pipe_ctx,
-			&spl_in->debug.visual_confirm_base_offset,
-			&spl_in->debug.visual_confirm_dpp_offset);
+		/* Pass visual confirm debug information. These offsets are SPL inputs:
+		 * SPL subtracts them from the recout and then derives the viewport from
+		 * that shrunk recout, so the viewport shrinks together with the recout.
+		 */
+		if (pipe_ctx->stream->ctx->dc->debug.visual_confirm_full_viewport) {
+			/* pass 0 so SPL keeps both recout and viewport full; the recout is
+			 * shrunk for HW only at the tail of this function
+			 */
+			spl_in->debug.visual_confirm_base_offset = 0;
+			spl_in->debug.visual_confirm_dpp_offset = 0;
+		} else {
+			/* legacy: let SPL shrink both the recout and the viewport */
+			calculate_adjust_recout_for_visual_confirm(pipe_ctx,
+				&spl_in->debug.visual_confirm_base_offset,
+				&spl_in->debug.visual_confirm_dpp_offset);
+		}
 		// Set SPL output parameters to dscl_prog_data to be used for hw registers
 		spl_out->dscl_prog_data = resource_get_dscl_prog_data(pipe_ctx);
 		// Calculate scaler parameters from SPL
@@ -1742,6 +1744,29 @@ bool resource_build_scaling_params(struct pipe_ctx *pipe_ctx)
 #ifdef CONFIG_DRM_AMD_DC_FP
 	}
 #endif
+	/* Common tail for both paths (legacy and SPL): the viewport has now been derived from the
+	 * full recout, so shrink the recout for HW only. This runs only when
+	 * keeping the viewport full; the legacy paths above already shrank the
+	 * recout before the viewport was computed.
+	 */
+	if (pipe_ctx->stream->ctx->dc->debug.visual_confirm_full_viewport) {
+		/* A zero-area recout is the disabled-pipe sentinel (no overlap with this
+		 * ODM slice); only shrink a recout that actually draws, else the height
+		 * offset drives it negative and the pipe no longer reads as disabled.
+		 */
+		if (pipe_ctx->plane_res.scl_data.recout.width > 0 &&
+				pipe_ctx->plane_res.scl_data.recout.height > 0)
+			adjust_recout_for_visual_confirm(
+					&pipe_ctx->plane_res.scl_data.recout, pipe_ctx);
+		/* SPL programs the HW recout from dscl_prog_data, not scl_data.recout */
+		if (pipe_ctx->stream->ctx->dc->config.use_spl &&
+				!pipe_ctx->stream->ctx->dc->debug.disable_spl &&
+				pipe_ctx->plane_res.scl_data.dscl_prog_data.recout.width > 0 &&
+				pipe_ctx->plane_res.scl_data.dscl_prog_data.recout.height > 0)
+			adjust_recout_for_visual_confirm((struct rect *)
+					&pipe_ctx->plane_res.scl_data.dscl_prog_data.recout,
+					pipe_ctx);
+	}
 	DC_LOG_SCALER("%s pipe %d:\nViewport: height:%d width:%d x:%d y:%d  Recout: height:%d width:%d x:%d y:%d  HACTIVE:%d VACTIVE:%d\n"
 			"src_rect: height:%d width:%d x:%d y:%d  dst_rect: height:%d width:%d x:%d y:%d  clip_rect: height:%d width:%d x:%d y:%d\n",
 			__func__,
@@ -2150,6 +2175,38 @@ int resource_get_dpp_pipes_for_opp_head(const struct pipe_ctx *opp_head,
 		pipe = pipe->bottom_pipe;
 	}
 	return i;
+}
+
+int resource_get_opp_heads_for_stream(const struct dc_stream_state *stream,
+		struct resource_context *res_ctx,
+		struct pipe_ctx *opp_heads[MAX_PIPES])
+{
+	struct pipe_ctx *otg_master = resource_get_otg_master_for_stream(
+			res_ctx, stream);
+
+	if (!otg_master)
+		return 0;
+	return resource_get_opp_heads_for_otg_master(otg_master, res_ctx,
+			opp_heads);
+}
+
+int resource_get_dpp_pipes_for_stream(const struct dc_stream_state *stream,
+		struct resource_context *res_ctx,
+		struct pipe_ctx *dpp_pipes[MAX_PIPES])
+{
+	struct pipe_ctx *opp_heads[MAX_PIPES];
+	struct pipe_ctx *slice_pipes[MAX_PIPES];
+	int opp_head_count = resource_get_opp_heads_for_stream(stream, res_ctx,
+			opp_heads);
+	int i, j, slice_count, count = 0;
+
+	for (i = 0; i < opp_head_count; i++) {
+		slice_count = resource_get_dpp_pipes_for_opp_head(opp_heads[i],
+				res_ctx, slice_pipes);
+		for (j = 0; j < slice_count && count < MAX_PIPES; j++)
+			dpp_pipes[count++] = slice_pipes[j];
+	}
+	return count;
 }
 
 int resource_get_dpp_pipes_for_plane(const struct dc_plane_state *plane,
@@ -4581,33 +4638,53 @@ enum dc_status resource_validate_probe_set(struct dc *dc,
 		return DC_NOT_SUPPORTED;
 
 	for (i = 0; i < probe_count; i++) {
-		switch (probes[i].type) {
+		const struct dc_probe_state *probe = &probes[i];
+		bool supports_polling = false;
+		bool supports_stream = false;
+
+		switch (probe->type) {
 		/* These global probes support a one-frame measurement and reset. */
 		case DC_PROBE_PEAK_MEM_BW:
 		case DC_PROBE_PEAK_MEM_BW_STRESSED:
 		case DC_PROBE_AVG_MEM_BW:
 		case DC_PROBE_MEM_LATENCY:
 		case DC_PROBE_PREFETCH_DATA_SIZE:
-			if (probes[i].scope.type != DC_PROBE_SCOPE_GLOBAL)
-				return DC_NOT_SUPPORTED;
-			if (probes[i].target_state != DC_PROBE_NOT_MEASURING &&
-					probes[i].target_state != DC_PROBE_MEASURED)
+			break;
+		/* The urgent counters additionally support polling, and a stream scope. */
+		case DC_PROBE_URGENT_ASSERTION_COUNT:
+		case DC_PROBE_URGENT_REQUEST_COUNT:
+			supports_polling = true;
+			supports_stream = true;
+			break;
+		default:
+			return DC_NOT_SUPPORTED;
+		}
+
+		if (probe->scope.type != DC_PROBE_SCOPE_GLOBAL
+				&& !(probe->scope.type == DC_PROBE_SCOPE_STREAM && supports_stream))
+			return DC_NOT_SUPPORTED;
+
+		switch (probe->target_state) {
+		case DC_PROBE_NOT_MEASURING:
+			/* A release names the probe by its type only, so it has no stream. */
+			if (probe->scope.type != DC_PROBE_SCOPE_GLOBAL)
 				return DC_NOT_SUPPORTED;
 			break;
-		/* The global urgent assertion counter additionally supports polling. */
-		case DC_PROBE_URGENT_ASSERTION_COUNT:
-			if (probes[i].scope.type != DC_PROBE_SCOPE_GLOBAL)
+		case DC_PROBE_MEASURING:
+			/* Polling cannot be limited to a window, a counter only stops when it is reset. */
+			if (!supports_polling || dc_probe_scope_is_windowed(&probe->scope))
 				return DC_NOT_SUPPORTED;
-			if (probes[i].target_state != DC_PROBE_NOT_MEASURING &&
-					probes[i].target_state != DC_PROBE_MEASURING &&
-					probes[i].target_state != DC_PROBE_MEASURED)
+			break;
+		case DC_PROBE_MEASURED:
+			/* A window must end on a line. Without lines, one whole frame is measured. */
+			if (dc_probe_scope_is_windowed(&probe->scope) && probe->scope.u.stream.end_line == 0)
 				return DC_NOT_SUPPORTED;
 			break;
 		default:
 			return DC_NOT_SUPPORTED;
 		}
 
-		if (probes[i].type == DC_PROBE_PEAK_MEM_BW_STRESSED &&
+		if (probe->type == DC_PROBE_PEAK_MEM_BW_STRESSED &&
 				!dc->res_pool->lsdma_scratch.buffer)
 			return DC_NO_DRAM_BUFFER_RESOURCE;
 	}
@@ -5831,6 +5908,7 @@ unsigned int resource_pixel_format_to_bpp(enum surface_pixel_format format)
 		return 16;
 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
+	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS:

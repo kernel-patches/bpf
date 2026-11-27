@@ -3,6 +3,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
+#include <linux/hash.h>
 #include <linux/sort.h>
 
 #include "diagnostics.h"
@@ -51,47 +52,6 @@ enum {
 	BRANCH = 2,
 };
 
-static void mark_subprog_changes_pkt_data(struct bpf_verifier_env *env, int off)
-{
-	struct bpf_subprog_info *subprog;
-
-	subprog = bpf_find_containing_subprog(env, off);
-	subprog->changes_pkt_data = true;
-}
-
-static void mark_subprog_might_sleep(struct bpf_verifier_env *env, int off)
-{
-	struct bpf_subprog_info *subprog;
-
-	subprog = bpf_find_containing_subprog(env, off);
-	subprog->might_sleep = true;
-}
-
-static void mark_subprog_might_throw(struct bpf_verifier_env *env, int off)
-{
-	struct bpf_subprog_info *subprog;
-
-	subprog = bpf_find_containing_subprog(env, off);
-	subprog->might_throw = true;
-}
-
-/* 't' is an index of a call-site.
- * 'w' is a callee entry point.
- * Eventually this function would be called when env->cfg.insn_state[w] == EXPLORED.
- * Rely on DFS traversal order and absence of recursive calls to guarantee that
- * callee's effect marks would be correct at that moment.
- */
-static void merge_callee_effects(struct bpf_verifier_env *env, int t, int w)
-{
-	struct bpf_subprog_info *caller, *callee;
-
-	caller = bpf_find_containing_subprog(env, t);
-	callee = bpf_find_containing_subprog(env, w);
-	caller->changes_pkt_data |= callee->changes_pkt_data;
-	caller->might_sleep |= callee->might_sleep;
-	caller->might_throw |= callee->might_throw;
-}
-
 enum {
 	DONE_EXPLORING = 0,
 	KEEP_EXPLORING = 1,
@@ -123,12 +83,8 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 		return -EINVAL;
 	}
 
-	if (e == BRANCH) {
-		/* mark branch target for state pruning */
-		mark_prune_point(env, w);
-		mark_jmp_point(env, w);
+	if (e == BRANCH)
 		mark_jump_target(env, w);
-	}
 
 	if (insn_state[w] == 0) {
 		/* tree-edge */
@@ -165,24 +121,13 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 				bool visit_callee)
 {
 	int ret, insn_sz;
-	int w;
 
 	insn_sz = bpf_is_ldimm64(&insns[t]) ? 2 : 1;
 	ret = push_insn(t, t + insn_sz, FALLTHROUGH, env);
 	if (ret)
 		return ret;
 
-	mark_prune_point(env, t + insn_sz);
-	/* when we exit from subprog, we need to record non-linear history */
-	mark_jmp_point(env, t + insn_sz);
-
-	if (visit_callee) {
-		w = t + insns[t].imm + 1;
-		mark_prune_point(env, t);
-		merge_callee_effects(env, t, w);
-		ret = push_insn(t, w, BRANCH, env);
-	}
-	return ret;
+	return visit_callee ? push_insn(t, t + insns[t].imm + 1, BRANCH, env) : 0;
 }
 
 struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem)
@@ -190,7 +135,7 @@ struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem)
 	size_t new_size = sizeof(struct bpf_iarray) + n_elem * sizeof(old->items[0]);
 	struct bpf_iarray *new;
 
-	new = kvrealloc(old, new_size, GFP_KERNEL_ACCOUNT);
+	new = kvrealloc(old, new_size, BPF_VERIFIER_GFP);
 	if (!new) {
 		/* this is what callers always want, so simplify the call site */
 		kvfree(old);
@@ -199,6 +144,172 @@ struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem)
 
 	new->cnt = n_elem;
 	return new;
+}
+
+static struct bpf_index_slot *index_slot(const struct bpf_index *index, u64 key)
+{
+	u32 i = hash_64(key, index->bits);
+
+	while (index->slots[i].next_val && index->slots[i].key != key)
+		i = (i + 1) & (BIT(index->bits) - 1);
+	return &index->slots[i];
+}
+
+/* Returns the value of 'key', -1 if there is none */
+int bpf_index_find(const struct bpf_index *index, u64 key)
+{
+	return index->cnt ? index_slot(index, key)->next_val - 1 : -1;
+}
+
+/* 'key' is new. At most a half of the slots is taken. */
+int bpf_index_add(struct bpf_index *index, u64 key, u32 val)
+{
+	struct bpf_index old = *index;
+	u32 i;
+
+	if (2 * old.cnt >= BIT(old.bits) - 1) {
+		index->slots = kvcalloc(BIT(old.bits + 2), sizeof(*old.slots), BPF_VERIFIER_GFP);
+		if (!index->slots) {
+			index->slots = old.slots;
+			return -ENOMEM;
+		}
+		index->bits += 2;
+		for (i = 0; old.cnt && i < BIT(old.bits); i++)
+			if (old.slots[i].next_val)
+				*index_slot(index, old.slots[i].key) = old.slots[i];
+		kvfree(old.slots);
+	}
+	*index_slot(index, key) = (struct bpf_index_slot){ key, val + 1 };
+	index->cnt++;
+	return 0;
+}
+
+int bpf_call_graph_init(struct bpf_call_graph *cg, u32 cnt)
+{
+	*cg = (struct bpf_call_graph){ .cnt = cnt };
+	/* the last 4 parts are for bpf_call_graph_sort() */
+	cg->first = kvcalloc(8 * (size_t)cnt + 1, sizeof(u32), BPF_VERIFIER_GFP);
+	cg->marks = kvcalloc(cnt, sizeof(u16), BPF_VERIFIER_GFP);
+	if (!cg->first || !cg->marks)
+		return -ENOMEM;
+	cg->postorder = cg->first + cnt + 1;
+	cg->order = cg->postorder + cnt;
+	cg->cycle = cg->order + cnt;
+	return 0;
+}
+
+void bpf_call_graph_free(struct bpf_call_graph *cg)
+{
+	kvfree(cg->first);
+	kvfree(cg->callee);
+	kvfree(cg->marks);
+}
+
+/* Callers come in increasing order */
+int bpf_call_graph_add(struct bpf_call_graph *cg, u32 caller, u32 callee)
+{
+	if (WARN_ON_ONCE(callee >= cg->cnt))
+		return -EFAULT;
+	if (!bpf_table_next(cg->callee, cg->edge_cnt))
+		return -ENOMEM;
+	while (cg->next <= caller)
+		cg->first[cg->next++] = cg->edge_cnt;
+	cg->callee[cg->edge_cnt++] = callee;
+	return 0;
+}
+
+/*
+ * Tarjan's algorithm. Calls of the nodes that have a mark in 'skip' do not count.
+ *
+ *   main -> f1 -> f2 -> f3      postorder:  f3 f2 f1 main
+ *           ^     |             order:      f3 f2 f1 main    callees first, a cycle in a row
+ *           +-----+             cycle:      0  1  1  3       where the cycle starts in 'order'
+ */
+void bpf_call_graph_sort(struct bpf_call_graph *cg, u16 skip)
+{
+	u32 cnt = cg->cnt, *low = cg->cycle + cnt, *edge = low + cnt, *path = edge + cnt;
+	u32 *open = path + cnt, depth = 0, top = 0, num = 0, done = 0, post = 0, i, s, j;
+
+	while (cg->next <= cnt)
+		cg->first[cg->next++] = cg->edge_cnt;
+	/* low: 0 - not visited, U32_MAX - is in 'order' */
+	memset(low, 0, cnt * sizeof(*low));
+	for (i = 0; i < cnt; i++) {
+		if (!low[i])
+			path[depth++] = i;
+		while (depth) {
+			s = path[depth - 1];
+			if (!low[s]) {
+				/* until the node is in 'order': its number */
+				low[s] = cg->cycle[s] = ++num;
+				edge[s] = cg->first[s];
+				open[top++] = s;
+			}
+			if (edge[s] < cg->first[s + 1]) {
+				j = cg->callee[edge[s]];
+				if (cg->marks[j] & skip) {
+					edge[s]++;
+				} else if (!low[j]) {
+					path[depth++] = j;
+				} else {
+					low[s] = min(low[s], low[j]);
+					edge[s]++;
+				}
+				continue;
+			}
+			depth--;
+			cg->postorder[post++] = s;
+			if (low[s] != cg->cycle[s])
+				continue;
+			for (j = done; low[s] != U32_MAX; done++) {
+				cg->order[done] = open[--top];
+				cg->cycle[open[top]] = j;
+				low[open[top]] = U32_MAX;
+			}
+		}
+	}
+}
+
+bool bpf_call_graph_recursive(const struct bpf_call_graph *cg, u32 s)
+{
+	u32 j;
+
+	bpf_for_each_callee(cg, s, j)
+		if (cg->cycle[j] == cg->cycle[s])
+			return true;
+	return false;
+}
+
+/* What a node has of 'mask', all nodes that it gets to have */
+void bpf_call_graph_mark_callees(struct bpf_call_graph *cg, u16 mask)
+{
+	u32 start, end, i, j;
+	u16 m;
+
+	for (end = cg->cnt; end; end = start) {
+		start = cg->cycle[cg->order[end - 1]];
+		for (i = start, m = 0; i < end; i++)
+			m |= cg->marks[cg->order[i]] & mask;
+		for (i = start; i < end; i++)
+			bpf_for_each_callee(cg, cg->order[i], j)
+				cg->marks[j] |= m;
+	}
+}
+
+/* What a node has of 'mask', all nodes that get to it have. 'skip' is that of the sort. */
+void bpf_call_graph_mark_callers(struct bpf_call_graph *cg, u16 mask, u16 skip)
+{
+	u32 start, end, j;
+	u16 m;
+
+	for (start = 0; start < cg->cnt; start = end) {
+		for (end = start, m = 0; end < cg->cnt && cg->cycle[cg->order[end]] == start; end++)
+			bpf_for_each_callee(cg, cg->order[end], j)
+				if (!(cg->marks[j] & skip))
+					m |= cg->marks[j] & mask;
+		for (j = start; j < end; j++)
+			cg->marks[cg->order[j]] |= m;
+	}
 }
 
 static int copy_insn_array(struct bpf_map *map, u32 start, u32 end, u32 *items)
@@ -329,13 +440,14 @@ static int __compute_subprog_jts(struct bpf_verifier_env *env)
 		}
 
 		old_cnt = subprog->jt ? subprog->jt->cnt : 0;
-		jt = bpf_iarray_realloc(subprog->jt, old_cnt + jt_cur->cnt);
+		jt = bpf_iarray_realloc(subprog->jt, roundup_pow_of_two(old_cnt + jt_cur->cnt));
 		if (!jt) {
 			subprog->jt = NULL;
 			kvfree(jt_cur);
 			return -ENOMEM;
 		}
 		memcpy(jt->items + old_cnt, jt_cur->items, jt_cur->cnt << 2);
+		jt->cnt = old_cnt + jt_cur->cnt;
 		subprog->jt = jt;
 
 		kvfree(jt_cur);
@@ -366,7 +478,7 @@ void bpf_free_subprog_jts(struct bpf_verifier_env *env)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(env->subprog_info); i++) {
+	for (i = 0; i < env->subprog_cnt; i++) {
 		kvfree(env->subprog_info[i].jt);
 		env->subprog_info[i].jt = NULL;
 	}
@@ -439,14 +551,12 @@ static int visit_gotox_insn(int t, struct bpf_verifier_env *env)
 		return -E2BIG;
 	}
 
-	mark_prune_point(env, t);
 	for (i = 0; i < jt->cnt; i++) {
 		w = jt->items[i];
 		if (verifier_bug_if(w < 0 || w >= env->prog->len, env,
 				    "indirect jump from insn %d to %d out of range", t, w))
 			return -EFAULT;
 
-		mark_jmp_point(env, w);
 		mark_jump_target(env, w);
 
 		/* EXPLORED || DISCOVERED */
@@ -464,74 +574,63 @@ static int visit_gotox_insn(int t, struct bpf_verifier_env *env)
 	return keep_exploring ? KEEP_EXPLORING : DONE_EXPLORING;
 }
 
-/*
- * Return pointers to functions in the read-only map that ld_imm64 instruction
- * 't' loads the address of, or of its value, if there are any.
- */
-static struct bpf_func_ptr *insn_func_ptrs(struct bpf_verifier_env *env, int t, u32 *cnt)
-{
-	struct bpf_insn *insn = &env->prog->insnsi[t];
-
-	*cnt = 0;
-	if (!env->func_ptr_cnt || !bpf_is_ldimm64(insn))
-		return NULL;
-	if (insn->src_reg != BPF_PSEUDO_MAP_VALUE &&
-	    insn->src_reg != BPF_PSEUDO_MAP_IDX_VALUE &&
-	    insn->src_reg != BPF_PSEUDO_MAP_FD &&
-	    insn->src_reg != BPF_PSEUDO_MAP_IDX)
-		return NULL;
-
-	return bpf_map_func_ptrs(env, env->used_maps[env->insn_aux_data[t].map_index], cnt);
-}
+enum {
+	CHANGES_PKT_DATA = BIT(0),
+	MIGHT_SLEEP	 = BIT(1),
+	MIGHT_THROW	 = BIT(2),
+};
 
 /*
- * ld_imm64 that loads the address of a map that has pointers to functions
- * is similar to ld_imm64 with BPF_PSEUDO_FUNC that loads the address of one
- * function: any of them may be read from the map and called via callx later.
- * Treat it as a call of all of them.
+ * A subprog does what its callees do. The load of the address of a function counts as a call.
+ * So does the load of the address of a map with pointers to functions:
+ *
+ *   f1: r1 = map ll  --+
+ *                      +--> node of the map --> all functions in the map
+ *   f2: r1 = map ll  --+
  */
-static int visit_func_ptrs_insn(int t, struct bpf_verifier_env *env,
-				struct bpf_func_ptr *ptrs, u32 cnt)
+static int merge_callee_effects(struct bpf_verifier_env *env)
 {
-	int *insn_stack = env->cfg.insn_stack;
-	int *insn_state = env->cfg.insn_state;
-	int ret, w;
-	u32 i;
+	struct bpf_subprog_info *si = env->subprog_info;
+	struct bpf_insn *insn = env->prog->insnsi;
+	u32 cnt = env->subprog_cnt, n, s, t;
+	struct bpf_call_graph cg;
+	struct bpf_func_ptr *ptr;
+	int err;
 
-	ret = push_insn(t, t + 2, FALLTHROUGH, env);
-	if (ret)
-		return ret;
-
-	/*
-	 * Explore one function at a time like push_insn() does, so that
-	 * DISCOVERED function is a caller of 't' and not the one that waits in
-	 * insn_stack[], which merge_callee_effects() relies on.
-	 */
-	for (i = 0; i < cnt; i++) {
-		w = ptrs[i].xlated_off;
-		if (insn_state[w])
-			continue;
-
-		if (env->cfg.cur_stack >= env->prog->len)
-			return -E2BIG;
-
-		insn_stack[env->cfg.cur_stack++] = w;
-		insn_state[w] = DISCOVERED;
-		return KEEP_EXPLORING;
+	err = bpf_call_graph_init(&cg, cnt + env->used_map_cnt);
+	for (s = 0; s < cnt && !err; s++) {
+		cg.marks[s] = (si[s].changes_pkt_data ? CHANGES_PKT_DATA : 0) |
+			      (si[s].might_sleep ? MIGHT_SLEEP : 0) |
+			      (si[s].might_throw ? MIGHT_THROW : 0);
+		for (t = si[s].start; t < si[s + 1].start && !err; t++) {
+			if (bpf_pseudo_call(&insn[t]) || bpf_pseudo_func(&insn[t]))
+				err = bpf_call_graph_add(&cg, s, bpf_find_subprog(env,
+							 t + insn[t].imm + 1));
+			else if (bpf_is_ldimm64(&insn[t]) && insn[t].src_reg &&
+				 insn[t].src_reg != BPF_PSEUDO_BTF_ID)
+				err = bpf_call_graph_add(&cg, s,
+							 cnt + env->insn_aux_data[t].map_index);
+		}
 	}
-
-	/* all functions are explored, their effects are known */
-	mark_prune_point(env, t);
-	for (i = 0; i < cnt; i++) {
-		w = ptrs[i].xlated_off;
-		merge_callee_effects(env, t, w);
-
-		/* the same marks as push_insn() leaves on a branch target */
-		mark_prune_point(env, w);
-		mark_jmp_point(env, w);
-		mark_jump_target(env, w);
+	for (s = 0; s < env->used_map_cnt; s++) {
+		ptr = bpf_map_func_ptrs(env, env->used_maps[s], &n);
+		for (; n-- && !err; ptr++)
+			err = bpf_must_abort() ? -EINTR :
+			      bpf_call_graph_add(&cg, cnt + s,
+						 bpf_find_subprog(env, ptr->xlated_off));
 	}
-	return DONE_EXPLORING;
+	if (err)
+		goto out;
+	bpf_call_graph_sort(&cg, 0);
+	bpf_call_graph_mark_callers(&cg, U16_MAX, 0);
+	for (s = 0; s < cnt; s++) {
+		si[s].changes_pkt_data = cg.marks[s] & CHANGES_PKT_DATA;
+		si[s].might_sleep = cg.marks[s] & MIGHT_SLEEP;
+		si[s].might_throw = cg.marks[s] & MIGHT_THROW;
+	}
+out:
+	bpf_call_graph_free(&cg);
+	return err;
 }
 
 /* Visits the instruction at index t and returns one of the following:
@@ -542,16 +641,11 @@ static int visit_func_ptrs_insn(int t, struct bpf_verifier_env *env,
 static int visit_insn(int t, struct bpf_verifier_env *env)
 {
 	struct bpf_insn *insns = env->prog->insnsi, *insn = &insns[t];
-	struct bpf_func_ptr *ptrs;
+	struct bpf_subprog_info *sub;
 	int ret, off, insn_sz;
-	u32 cnt;
 
 	if (bpf_pseudo_func(insn))
 		return visit_func_call_insn(t, insns, env, true);
-
-	ptrs = insn_func_ptrs(env, t, &cnt);
-	if (ptrs)
-		return visit_func_ptrs_insn(t, env, ptrs, cnt);
 
 	/* All non-branch instructions have a single fall-through edge. */
 	if (BPF_CLASS(insn->code) != BPF_JMP &&
@@ -565,28 +659,14 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		return DONE_EXPLORING;
 
 	case BPF_CALL:
-		if (bpf_is_async_callback_calling_insn(insn))
-			/* Mark this call insn as a prune point to trigger
-			 * is_state_visited() check before call itself is
-			 * processed by __check_func_call(). Otherwise new
-			 * async state will be pushed for further exploration.
-			 */
-			mark_prune_point(env, t);
 		/* For functions that invoke callbacks it is not known how many times
 		 * callback would be called. Verifier models callback calling functions
 		 * by repeatedly visiting callback bodies and returning to origin call
 		 * instruction.
-		 * In order to stop such iteration verifier needs to identify when a
-		 * state identical some state from a previous iteration is reached.
-		 * Check below forces creation of checkpoint before callback calling
-		 * instruction to allow search for such identical states.
 		 */
-		if (bpf_is_sync_callback_calling_insn(insn)) {
+		if (bpf_is_sync_callback_calling_insn(insn))
 			mark_calls_callback(env, t);
-			mark_force_checkpoint(env, t);
-			mark_prune_point(env, t);
-			mark_jmp_point(env, t);
-		}
+		sub = bpf_find_containing_subprog(env, t);
 		if (bpf_helper_call(insn)) {
 			const struct bpf_func_proto *fp;
 
@@ -597,41 +677,26 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 			 * elimination.
 			 */
 			if (ret == 0 && fp->might_sleep)
-				mark_subprog_might_sleep(env, t);
+				sub->might_sleep = true;
 			/* nobody knows yet whether the dynptr is that of an skb */
 			if (bpf_helper_changes_pkt_data(insn->imm) ||
 			    insn->imm == BPF_FUNC_dynptr_write)
-				mark_subprog_changes_pkt_data(env, t);
+				sub->changes_pkt_data = true;
 		} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			struct bpf_call_arg_meta meta;
 
 			ret = bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta);
-			if (ret == 0 && bpf_is_iter_next_kfunc(&meta)) {
-				mark_prune_point(env, t);
-				/* Checking and saving state checkpoints at iter_next() call
-				 * is crucial for fast convergence of open-coded iterator loop
-				 * logic, so we need to force it. If we don't do that,
-				 * is_state_visited() might skip saving a checkpoint, causing
-				 * unnecessarily long sequence of not checkpointed
-				 * instructions and jumps, leading to exhaustion of jump
-				 * history buffer, and potentially other undesired outcomes.
-				 * It is expected that with correct open-coded iterators
-				 * convergence will happen quickly, so we don't run a risk of
-				 * exhausting memory.
-				 */
-				mark_force_checkpoint(env, t);
-			}
 			/* Same as helpers, if called in a non-sleepable context
 			 * program will be rejected anyway, so we should end up
 			 * with precise sleepable marks on subprogs, except for
 			 * dead code elimination.
 			 */
 			if (ret == 0 && bpf_is_kfunc_sleepable(&meta))
-				mark_subprog_might_sleep(env, t);
+				sub->might_sleep = true;
 			if (ret == 0 && bpf_is_kfunc_pkt_changing(&meta))
-				mark_subprog_changes_pkt_data(env, t);
+				sub->changes_pkt_data = true;
 			if (ret == 0 && bpf_is_throw_kfunc(insn))
-				mark_subprog_might_throw(env, t);
+				sub->might_throw = true;
 		}
 		return visit_func_call_insn(t, insns, env, insn->src_reg == BPF_PSEUDO_CALL);
 
@@ -649,18 +714,12 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		if (ret)
 			return ret;
 
-		mark_prune_point(env, t + off + 1);
-		mark_jmp_point(env, t + off + 1);
 		mark_jump_target(env, t + off + 1);
 
 		return ret;
 
 	default:
 		/* conditional jump with two edges */
-		mark_prune_point(env, t);
-		if (bpf_is_may_goto_insn(insn))
-			mark_force_checkpoint(env, t);
-
 		ret = push_insn(t, t + 1, FALLTHROUGH, env);
 		if (ret)
 			return ret;
@@ -676,33 +735,31 @@ int bpf_check_cfg(struct bpf_verifier_env *env)
 {
 	int insn_cnt = env->prog->len;
 	int *insn_stack, *insn_state;
-	int ex_insn_beg, i, ret = 0;
+	int i, root, ret = 0;
+	u32 ptr = 0;
 
 	insn_state = env->cfg.insn_state = kvzalloc_objs(int, insn_cnt,
-							 GFP_KERNEL_ACCOUNT);
+							 BPF_VERIFIER_GFP);
 	if (!insn_state)
 		return -ENOMEM;
 
 	insn_stack = env->cfg.insn_stack = kvzalloc_objs(int, insn_cnt,
-							 GFP_KERNEL_ACCOUNT);
+							 BPF_VERIFIER_GFP);
 	if (!insn_stack) {
 		kvfree(insn_state);
 		return -ENOMEM;
 	}
 
-	ex_insn_beg = env->exception_callback_subprog
-		      ? env->subprog_info[env->exception_callback_subprog].start
-		      : 0;
-
-	insn_state[0] = DISCOVERED; /* mark 1st insn as discovered */
-	insn_stack[0] = 0; /* 0 is the first instruction */
+	root = 0; /* 0 is the first instruction */
+walk_cfg:
+	insn_state[root] = DISCOVERED;
+	insn_stack[0] = root;
 	env->cfg.cur_stack = 1;
 
-walk_cfg:
 	while (env->cfg.cur_stack > 0) {
 		int t = insn_stack[env->cfg.cur_stack - 1];
 
-		ret = visit_insn(t, env);
+		ret = bpf_must_abort() ? -EINTR : visit_insn(t, env);
 		switch (ret) {
 		case DONE_EXPLORING:
 			insn_state[t] = EXPLORED;
@@ -725,11 +782,16 @@ walk_cfg:
 		goto err_free;
 	}
 
-	if (ex_insn_beg && insn_state[ex_insn_beg] != EXPLORED) {
-		insn_state[ex_insn_beg] = DISCOVERED;
-		insn_stack[0] = ex_insn_beg;
-		env->cfg.cur_stack = 1;
+	root = env->subprog_info[env->exception_callback_subprog].start;
+	if (insn_state[root] != EXPLORED)
 		goto walk_cfg;
+
+	/* callx can call what the maps point to */
+	while (ptr < env->func_ptr_cnt) {
+		root = env->func_ptrs[ptr++].xlated_off;
+		mark_jump_target(env, root);
+		if (insn_state[root] != EXPLORED)
+			goto walk_cfg;
 	}
 
 	for (i = 0; i < insn_cnt; i++) {
@@ -758,7 +820,8 @@ walk_cfg:
 			i++; /* skip second half of ldimm64 */
 		}
 	}
-	ret = 0; /* cfg looks good */
+	/* cfg looks good */
+	ret = merge_callee_effects(env);
 	env->prog->aux->changes_pkt_data = env->subprog_info[0].changes_pkt_data;
 	env->prog->aux->might_sleep = env->subprog_info[0].might_sleep;
 
@@ -786,10 +849,10 @@ int bpf_compute_postorder(struct bpf_verifier_env *env)
 	struct dfs_state *state = NULL;
 	struct bpf_iarray *succ = NULL;
 
-	postorder_nums = kvzalloc_objs(int, env->prog->len, GFP_KERNEL_ACCOUNT);
-	postorder = kvzalloc_objs(int, env->prog->len, GFP_KERNEL_ACCOUNT);
-	stack = kvzalloc_objs(int, env->prog->len, GFP_KERNEL_ACCOUNT);
-	state = kvzalloc_objs(struct dfs_state, env->prog->len, GFP_KERNEL_ACCOUNT);
+	postorder_nums = kvzalloc_objs(int, env->prog->len, BPF_VERIFIER_GFP);
+	postorder = kvzalloc_objs(int, env->prog->len, BPF_VERIFIER_GFP);
+	stack = kvzalloc_objs(int, env->prog->len, BPF_VERIFIER_GFP);
+	state = kvzalloc_objs(struct dfs_state, env->prog->len, BPF_VERIFIER_GFP);
 	if (!postorder_nums || !postorder || !stack || !state) {
 		kvfree(postorder_nums);
 		kvfree(postorder);
@@ -832,202 +895,4 @@ int bpf_compute_postorder(struct bpf_verifier_env *env)
 	kvfree(stack);
 	kvfree(state);
 	return 0;
-}
-
-/*
- * Compute strongly connected components (SCCs) on the CFG.
- * Assign an SCC number to each instruction, recorded in env->insn_aux[*].scc.
- * If instruction is a sole member of its SCC and there are no self edges,
- * assign it SCC number of zero.
- * Uses a non-recursive adaptation of Tarjan's algorithm for SCC computation.
- */
-int bpf_compute_scc(struct bpf_verifier_env *env)
-{
-	const u32 NOT_ON_STACK = U32_MAX;
-
-	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	const u32 insn_cnt = env->prog->len;
-	int stack_sz, dfs_sz, err = 0;
-	u32 *stack, *pre, *low, *dfs, *dfs_pos;
-	u32 i, j, t, w;
-	u32 next_preorder_num;
-	u32 next_scc_id;
-	bool assign_scc;
-	struct bpf_iarray *succ;
-
-	next_preorder_num = 1;
-	next_scc_id = 1;
-	/*
-	 * - 'stack' accumulates vertices in DFS order, see invariant comment below;
-	 * - 'pre[t] == p' => preorder number of vertex 't' is 'p';
-	 * - 'low[t] == n' => smallest preorder number of the vertex reachable from 't' is 'n';
-	 * - 'dfs' DFS traversal stack, used to emulate explicit recursion;
-	 * - 'dfs_pos[k] == j' => the frame 'dfs[k]' resumes visiting its
-	 *   successors at index 'j'.
-	 */
-	stack = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL_ACCOUNT);
-	pre = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL_ACCOUNT);
-	low = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL_ACCOUNT);
-	dfs = kvzalloc_objs(*dfs, insn_cnt, GFP_KERNEL_ACCOUNT);
-	dfs_pos = kvzalloc_objs(*dfs_pos, insn_cnt, GFP_KERNEL_ACCOUNT);
-	if (!stack || !pre || !low || !dfs || !dfs_pos) {
-		err = -ENOMEM;
-		goto exit;
-	}
-	/*
-	 * References:
-	 * [1] R. Tarjan "Depth-First Search and Linear Graph Algorithms"
-	 * [2] D. J. Pearce "A Space-Efficient Algorithm for Finding Strongly Connected Components"
-	 *
-	 * The algorithm maintains the following invariant:
-	 * - suppose there is a path 'u' ~> 'v', such that 'pre[v] < pre[u]';
-	 * - then, vertex 'u' remains on stack while vertex 'v' is on stack.
-	 *
-	 * Consequently:
-	 * - If 'low[v] < pre[v]', there is a path from 'v' to some vertex 'u',
-	 *   such that 'pre[u] == low[v]'; vertex 'u' is currently on the stack,
-	 *   and thus there is an SCC (loop) containing both 'u' and 'v'.
-	 * - If 'low[v] == pre[v]', loops containing 'v' have been explored,
-	 *   and 'v' can be considered the root of some SCC.
-	 *
-	 * Here is a pseudo-code for an explicitly recursive version of the algorithm:
-	 *
-	 *    NOT_ON_STACK = insn_cnt + 1
-	 *    pre = [0] * insn_cnt
-	 *    low = [0] * insn_cnt
-	 *    scc = [0] * insn_cnt
-	 *    stack = []
-	 *
-	 *    next_preorder_num = 1
-	 *    next_scc_id = 1
-	 *
-	 *    def recur(w):
-	 *        nonlocal next_preorder_num
-	 *        nonlocal next_scc_id
-	 *
-	 *        pre[w] = next_preorder_num
-	 *        low[w] = next_preorder_num
-	 *        next_preorder_num += 1
-	 *        stack.append(w)
-	 *        for s in successors(w):
-	 *            # Note: for classic algorithm the block below should look as:
-	 *            #
-	 *            # if pre[s] == 0:
-	 *            #     recur(s)
-	 *            #     low[w] = min(low[w], low[s])
-	 *            # elif low[s] != NOT_ON_STACK:
-	 *            #     low[w] = min(low[w], pre[s])
-	 *            #
-	 *            # But replacing both 'min' instructions with 'low[w] = min(low[w], low[s])'
-	 *            # does not break the invariant and makes iterative version of the algorithm
-	 *            # simpler. See 'Algorithm #3' from [2].
-	 *
-	 *            # 's' not yet visited
-	 *            if pre[s] == 0:
-	 *                recur(s)
-	 *            # if 's' is on stack, pick lowest reachable preorder number from it;
-	 *            # if 's' is not on stack 'low[s] == NOT_ON_STACK > low[w]',
-	 *            # so 'min' would be a noop.
-	 *            low[w] = min(low[w], low[s])
-	 *
-	 *        if low[w] == pre[w]:
-	 *            # 'w' is the root of an SCC, pop all vertices
-	 *            # below 'w' on stack and assign same SCC to them.
-	 *            while True:
-	 *                t = stack.pop()
-	 *                low[t] = NOT_ON_STACK
-	 *                scc[t] = next_scc_id
-	 *                if t == w:
-	 *                    break
-	 *            next_scc_id += 1
-	 *
-	 *    for i in range(0, insn_cnt):
-	 *        if pre[i] == 0:
-	 *            recur(i)
-	 *
-	 * Below implementation replaces explicit recursion with array 'dfs'.
-	 */
-	for (i = 0; i < insn_cnt; i++) {
-		if (pre[i])
-			continue;
-		stack_sz = 0;
-		dfs_sz = 1;
-		dfs[0] = i;
-		dfs_pos[0] = 0;
-dfs_continue:
-		while (dfs_sz) {
-			w = dfs[dfs_sz - 1];
-			if (pre[w] == 0) {
-				low[w] = next_preorder_num;
-				pre[w] = next_preorder_num;
-				next_preorder_num++;
-				stack[stack_sz++] = w;
-			}
-			/* Visit remaining 'w' successors */
-			succ = bpf_insn_successors(env, w);
-			for (j = dfs_pos[dfs_sz - 1]; j < succ->cnt; ++j) {
-				if (pre[succ->items[j]]) {
-					low[w] = min(low[w], low[succ->items[j]]);
-				} else {
-					/*
-					 * Once DFS for succ->items[j] is complete,
-					 * pre[succ->items[j]] is non-zero, hence
-					 * resuming at 'j' allows to follow the
-					 * low[w] = min(...) update branch above.
-					 */
-					dfs_pos[dfs_sz - 1] = j;
-					dfs_pos[dfs_sz] = 0;
-					dfs[dfs_sz] = succ->items[j];
-					dfs_sz++;
-					goto dfs_continue;
-				}
-			}
-			/*
-			 * Preserve the invariant: if some vertex above in the stack
-			 * is reachable from 'w', keep 'w' on the stack.
-			 */
-			if (low[w] < pre[w]) {
-				dfs_sz--;
-				goto dfs_continue;
-			}
-			/*
-			 * Assign SCC number only if component has two or more elements,
-			 * or if component has a self reference, or if instruction is a
-			 * callback calling function (implicit loop).
-			 */
-			assign_scc = stack[stack_sz - 1] != w;	/* two or more elements? */
-			for (j = 0; j < succ->cnt; ++j) {	/* self reference? */
-				if (succ->items[j] == w) {
-					assign_scc = true;
-					break;
-				}
-			}
-			if (bpf_calls_callback(env, w)) /* implicit loop? */
-				assign_scc = true;
-			/* Pop component elements from stack */
-			do {
-				t = stack[--stack_sz];
-				low[t] = NOT_ON_STACK;
-				if (assign_scc)
-					aux[t].scc = next_scc_id;
-			} while (t != w);
-			if (assign_scc)
-				next_scc_id++;
-			dfs_sz--;
-		}
-	}
-	env->scc_info = kvzalloc_objs(*env->scc_info, next_scc_id,
-				      GFP_KERNEL_ACCOUNT);
-	if (!env->scc_info) {
-		err = -ENOMEM;
-		goto exit;
-	}
-	env->scc_cnt = next_scc_id;
-exit:
-	kvfree(stack);
-	kvfree(pre);
-	kvfree(low);
-	kvfree(dfs);
-	kvfree(dfs_pos);
-	return err;
 }

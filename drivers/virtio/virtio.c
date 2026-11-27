@@ -381,8 +381,6 @@ static void virtio_dev_remove(struct device *_d)
 
 	/* Acknowledge the device's existence again. */
 	virtio_add_status(dev, VIRTIO_CONFIG_S_ACKNOWLEDGE);
-
-	of_node_put(dev->dev.of_node);
 }
 
 /*
@@ -604,10 +602,12 @@ EXPORT_SYMBOL_GPL(is_virtio_device);
 
 void unregister_virtio_device(struct virtio_device *dev)
 {
+	struct device_node *np = dev->dev.of_node;
 	int index = dev->index; /* save for after device release */
 
 	virtio_debug_device_exit(dev);
 	device_unregister(&dev->dev);
+	of_node_put(np);
 	ida_free(&virtio_index_ida, index);
 }
 EXPORT_SYMBOL_GPL(unregister_virtio_device);

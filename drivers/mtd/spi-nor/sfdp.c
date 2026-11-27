@@ -1343,6 +1343,17 @@ static int spi_nor_parse_profile1(struct spi_nor *nor,
 	 */
 	nor->params->hwcaps.mask |= SNOR_HWCAPS_PP_8_8_8_DTR;
 
+	/*
+	 * The xSPI Profile 1.0 table does not describe a Read Configuration
+	 * Register (RDCR, 35h) instruction, and the single-byte RDCR default
+	 * is not usable in 8D-8D-8D mode. Drop the SR2 read opcode for these
+	 * octal-capable flashes so spi_nor_read_sr1_and_sr2() degrades to an
+	 * SR1-only read and spi_nor_init() does not issue an unsupported
+	 * command that the flash never answers. A manufacturer driver that
+	 * actually needs SR2 can install its own opcode in a later fixup.
+	 */
+	nor->params->opcodes.read_sr2 = 0;
+
 out:
 	kfree(dwords);
 	return ret;

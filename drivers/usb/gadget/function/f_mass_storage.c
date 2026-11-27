@@ -3283,7 +3283,7 @@ static ssize_t fsg_lun_opts_forced_eject_store(struct config_item *item,
 
 CONFIGFS_ATTR_WO(fsg_lun_opts_, forced_eject);
 
-static struct configfs_attribute *fsg_lun_attrs[] = {
+static const struct configfs_attribute *const fsg_lun_attrs[] = {
 	&fsg_lun_opts_attr_file,
 	&fsg_lun_opts_attr_ro,
 	&fsg_lun_opts_attr_removable,
@@ -3296,7 +3296,7 @@ static struct configfs_attribute *fsg_lun_attrs[] = {
 
 static const struct config_item_type fsg_lun_type = {
 	.ct_item_ops	= &fsg_lun_item_ops,
-	.ct_attrs	= fsg_lun_attrs,
+	.ct_attrs_const	= fsg_lun_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -3475,7 +3475,7 @@ end:
 CONFIGFS_ATTR(fsg_opts_, num_buffers);
 #endif
 
-static struct configfs_attribute *fsg_attrs[] = {
+static const struct configfs_attribute *const fsg_attrs[] = {
 	&fsg_opts_attr_stall,
 #ifdef CONFIG_USB_GADGET_DEBUG_FILES
 	&fsg_opts_attr_num_buffers,
@@ -3491,7 +3491,7 @@ static const struct configfs_group_operations fsg_group_ops = {
 static const struct config_item_type fsg_func_type = {
 	.ct_item_ops	= &fsg_item_ops,
 	.ct_group_ops	= &fsg_group_ops,
-	.ct_attrs	= fsg_attrs,
+	.ct_attrs_const	= fsg_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

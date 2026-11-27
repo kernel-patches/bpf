@@ -59,7 +59,7 @@
  * has been removed.
  *
  * version 0.6.0
- * Rewrite of this driver: The Emulation of the rs232 protocoll
+ * Rewrite of this driver: The Emulation of the rs232 protocol
  * has been removed from the driver. A special executeCommand function
  * for this driver is included to gphoto.
  * The driver supports two kind of communication to bulk endpoints.

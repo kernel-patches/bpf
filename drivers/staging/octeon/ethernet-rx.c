@@ -41,6 +41,7 @@ static atomic_t oct_rx_ready = ATOMIC_INIT(0);
  *
  * The interrupt occurs whenever the POW has packets in our group.
  *
+ * Return: Always returns %IRQ_HANDLED.
  */
 static irqreturn_t cvm_oct_do_interrupt(int irq, void *napi_id)
 {
@@ -55,7 +56,7 @@ static irqreturn_t cvm_oct_do_interrupt(int irq, void *napi_id)
  * cvm_oct_check_rcv_error - process receive errors
  * @work: Work queue entry pointing to the packet.
  *
- * Returns Non-zero if the packet can be dropped, zero otherwise.
+ * Return: Non-zero if the packet can be dropped, zero otherwise.
  */
 static inline int cvm_oct_check_rcv_error(struct cvmx_wqe *work)
 {
@@ -404,7 +405,7 @@ static int cvm_oct_poll(struct oct_rx_group *rx_group, int budget)
  * @napi: The NAPI instance.
  * @budget: Maximum number of packets to receive.
  *
- * Returns the number of packets processed.
+ * Return: the number of packets processed.
  */
 static int cvm_oct_napi_poll(struct napi_struct *napi, int budget)
 {

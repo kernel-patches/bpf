@@ -73,6 +73,31 @@ static __maybe_unused void rand_bytes(u8 *out, size_t len)
 		out[i] = rand32();
 }
 
+/*
+ * Allocate a KUnit-managed slab buffer of length @size bytes and initialize it
+ * with random data.
+ */
+static __maybe_unused void *alloc_rand_buf(struct kunit *test, size_t size)
+{
+	void *buf = alloc_buf(test, size);
+
+	rand_bytes(buf, size);
+	return buf;
+}
+
+/*
+ * Allocate a KUnit-managed guarded buffer of length @size bytes (> 0) and
+ * initialize it with random data.
+ */
+static __maybe_unused void *alloc_guarded_rand_buf(struct kunit *test,
+						   size_t size)
+{
+	void *buf = alloc_guarded_buf(test, size);
+
+	rand_bytes(buf, size);
+	return buf;
+}
+
 static __maybe_unused void rand_bytes_seeded_from_len(u8 *out, size_t len)
 {
 	random_seed = len;

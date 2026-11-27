@@ -318,6 +318,7 @@ int snd_hda_codec_device_new(struct hda_bus *bus, struct snd_card *card,
 int snd_hda_codec_configure(struct hda_codec *codec);
 int snd_hda_codec_update_widgets(struct hda_codec *codec);
 void snd_hda_codec_register(struct hda_codec *codec);
+int snd_hda_card_register(struct hda_bus *bus);
 void snd_hda_codec_unregister(struct hda_codec *codec);
 void snd_hda_codec_cleanup_for_unbind(struct hda_codec *codec);
 
@@ -478,7 +479,6 @@ int snd_hda_attach_pcm_stream(struct hda_bus *_bus, struct hda_codec *codec,
 /*
  * Misc
  */
-void snd_hda_get_codec_name(struct hda_codec *codec, char *name, int namelen);
 void snd_hda_codec_set_power_to_all(struct hda_codec *codec, hda_nid_t fg,
 				    unsigned int power_state);
 

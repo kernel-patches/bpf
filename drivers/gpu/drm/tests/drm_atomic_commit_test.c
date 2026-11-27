@@ -51,9 +51,9 @@ static const struct drm_encoder_helper_funcs drm_atomic_test_encoder_funcs = {
 };
 
 static const struct drm_connector_funcs dummy_connector_funcs = {
+	.atomic_create_state	= drm_atomic_helper_connector_create_state,
 	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
 	.atomic_duplicate_state	= drm_atomic_helper_connector_duplicate_state,
-	.reset			= drm_atomic_helper_connector_reset,
 };
 
 static int drm_atomic_test_dummy_get_modes(struct drm_connector *connector)
@@ -134,7 +134,8 @@ drm_atomic_test_init_drm_components(struct kunit *test, bool has_connectors)
 	}
 
 done:
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
 
 	return priv;
 }

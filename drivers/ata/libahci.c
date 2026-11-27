@@ -1033,11 +1033,16 @@ static void ahci_sw_activity(struct ata_link *link)
 {
 	struct ata_port *ap = link->ap;
 	struct ahci_port_priv *pp = ap->private_data;
-	struct ahci_em_priv *emp = &pp->em_priv[link->pmp];
+	struct ahci_em_priv *emp;
 
 	if (!(link->flags & ATA_LFLAG_SW_ACTIVITY))
 		return;
 
+	/* The PMP control port (SATA_PMP_CTRL_PORT) has no EM slot */
+	if (link->pmp >= EM_MAX_SLOTS)
+		return;
+
+	emp = &pp->em_priv[link->pmp];
 	emp->activity++;
 	if (!timer_pending(&emp->timer))
 		mod_timer(&emp->timer, jiffies + msecs_to_jiffies(10));
@@ -2486,8 +2491,21 @@ static void ahci_handle_s2idle(struct ata_port *ap)
 
 static int ahci_port_suspend(struct ata_port *ap, pm_message_t mesg)
 {
+	struct ahci_port_priv *pp = ap->private_data;
 	const char *emsg = NULL;
-	int rc;
+	int rc, i;
+
+	/*
+	 * Stop the SW activity blink timers, so that they cannot fire while
+	 * the port is suspended. ahci_init_sw_activity() sets them up again
+	 * on resume.
+	 */
+	for (i = 0; i < EM_MAX_SLOTS; i++) {
+		struct ahci_em_priv *emp = &pp->em_priv[i];
+
+		if (emp->timer.function)
+			timer_delete_sync(&emp->timer);
+	}
 
 	rc = ahci_deinit_port(ap, &emsg);
 	if (rc == 0)
@@ -2605,8 +2623,23 @@ static void ahci_port_stop(struct ata_port *ap)
 {
 	const char *emsg = NULL;
 	struct ahci_host_priv *hpriv = ap->host->private_data;
+	struct ahci_port_priv *pp = ap->private_data;
 	void __iomem *host_mmio = hpriv->mmio;
+	struct ahci_em_priv *emp;
 	int rc;
+	int i;
+
+	/*
+	 * Stop the SW activity blink timers before devres frees pp, skipping
+	 * the slots that ahci_init_sw_activity() never set up.  Iterate all
+	 * em_priv slots rather than the current links, so a timer armed on a
+	 * fan-out link whose PMP was detached before port stop is not missed.
+	 */
+	for (i = 0; i < EM_MAX_SLOTS; i++) {
+		emp = &pp->em_priv[i];
+		if (emp->timer.function)
+			timer_shutdown_sync(&emp->timer);
+	}
 
 	/* de-initialize port */
 	rc = ahci_deinit_port(ap, &emsg);

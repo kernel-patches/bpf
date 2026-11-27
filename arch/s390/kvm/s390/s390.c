@@ -1242,11 +1242,11 @@ static int kvm_s390_vm_start_migration(struct kvm *kvm)
  * Must be called with kvm->slots_arch_lock to avoid races with ourselves,
  * kvm_s390_vm_start_migration() and kvm_s390_get_cmma_bits().
  */
-int kvm_s390_vm_stop_migration(struct kvm *kvm)
+void kvm_s390_vm_stop_migration(struct kvm *kvm)
 {
 	/* migration mode already disabled */
 	if (!kvm->arch.migration_mode)
-		return 0;
+		return;
 	/*
 	 * Unset the flag and propagate to all vCPUs. From now on the cmma_d
 	 * bit will not be touched on any PGSTE.
@@ -1255,7 +1255,7 @@ int kvm_s390_vm_stop_migration(struct kvm *kvm)
 	 */
 	WRITE_ONCE(kvm->arch.migration_mode, 0);
 	if (!kvm->arch.use_cmma)
-		return 0;
+		return;
 
 	kvm_s390_sync_request_broadcast(kvm, KVM_REQ_STOP_MIGRATION);
 	/* Clear cmma_d on all existing PGSTEs and set cmma_dirty_pages to 0. */
@@ -1266,7 +1266,6 @@ int kvm_s390_vm_stop_migration(struct kvm *kvm)
 	 * cmma_dirty_pages is 0, and all existing PGSTEs have their cmma_d bit
 	 * set to 0.
 	 */
-	return 0;
 }
 
 static int kvm_s390_vm_set_migration(struct kvm *kvm,
@@ -1282,7 +1281,8 @@ static int kvm_s390_vm_set_migration(struct kvm *kvm,
 		res = kvm_s390_vm_start_migration(kvm);
 		break;
 	case KVM_S390_VM_MIGRATION_STOP:
-		res = kvm_s390_vm_stop_migration(kvm);
+		kvm_s390_vm_stop_migration(kvm);
+		res = 0;
 		break;
 	default:
 		break;
@@ -2522,12 +2522,7 @@ static int kvm_s390_pv_dmp(struct kvm *kvm, struct kvm_pv_cmd *cmd,
 		if (!kvm->arch.pv.dumping)
 			break;
 
-		/*
-		 * gaddr is an output parameter since we might stop
-		 * early. As dmp will be copied back in our caller, we
-		 * don't need to do it ourselves.
-		 */
-		r = kvm_s390_pv_dump_stor_state(kvm, result_buff, &dmp.gaddr, dmp.buff_len,
+		r = kvm_s390_pv_dump_stor_state(kvm, result_buff, dmp.gaddr, dmp.buff_len,
 						&cmd->rc, &cmd->rrc);
 		break;
 	}
@@ -3920,13 +3915,6 @@ bool kvm_arch_no_poll(struct kvm_vcpu *vcpu)
 		return true;
 	}
 	return false;
-}
-
-int kvm_arch_vcpu_should_kick(struct kvm_vcpu *vcpu)
-{
-	/* kvm common code refers to this, but never calls it */
-	BUG();
-	return 0;
 }
 
 static int kvm_arch_vcpu_ioctl_get_one_reg(struct kvm_vcpu *vcpu,

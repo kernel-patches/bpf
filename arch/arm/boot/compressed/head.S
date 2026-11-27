@@ -64,16 +64,9 @@
 		busyuart \tmp, \rb
 		.endm
 
-#if defined(CONFIG_ARCH_SA1100)
-		.macro	loadsp, rb, tmp1, tmp2
-		mov	\rb, #0x80000000	@ physical base address
-		add	\rb, \rb, #0x00010000	@ Ser1
-		.endm
-#else
 		.macro	loadsp,	rb, tmp1, tmp2
 		addruart \rb, \tmp1, \tmp2
 		.endm
-#endif
 #endif
 #endif
 
@@ -1450,7 +1443,8 @@ __enter_kernel_from_hyp:
 		b	__enter_kernel
 
 ENTRY(efi_enter_kernel)
-		mov	r4, r0			@ preserve image base
+		ldr	r4, [r0]		@ preserve image base
+		add	r4, r4, r0
 		mov	r8, r1			@ preserve DT pointer
 
 		adr_l	r0, call_cache_fn

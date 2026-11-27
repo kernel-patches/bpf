@@ -14,6 +14,7 @@
 #include <linux/err.h>
 #include <linux/firmware.h>
 #include <linux/gpio/consumer.h>
+#include <linux/interrupt.h>
 #include <linux/jiffies.h>
 #include <linux/mfd/core.h>
 #include <linux/mfd/cs42l43.h>
@@ -402,6 +403,7 @@ bool cs42l43_readable_register(struct device *dev, unsigned int reg)
 	case CS42L43_BLOCK_EN:
 	case CS42L43_SHUTTER_CONTROL:
 	case CS42L43B_MCU_SW_REV ... CS42L43B_MCU_RAM_MAX:
+	case CS42L43B_LOAD_DET_SEL:
 		return true; // registers present on all variants
 	case CS42L43_MCU_SW_REV ... CS42L43B_MCU_SW_REV - 1:
 	case CS42L43B_MCU_RAM_MAX + 1 ... CS42L43_MCU_RAM_MAX:
@@ -425,6 +427,7 @@ bool cs42l43_precious_register(struct device *dev, unsigned int reg)
 	case CS42L43_RX_DATA:
 	case CS42L43_DECIM_INT ... CS42L43_HPOUT_INT:
 	case CS42L43_MCU_SW_REV ... CS42L43_MCU_RAM_MAX:
+	case CS42L43B_LOAD_DET_SEL:
 		return true;
 	default:
 		return false;

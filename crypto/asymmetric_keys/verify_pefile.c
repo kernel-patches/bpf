@@ -151,6 +151,11 @@ static int pefile_strip_sig_wrapper(const void *pebuf,
 			ctx->sig_len, wrapper.length);
 		return -ELIBBAD;
 	}
+	if (wrapper.length < sizeof(wrapper)) {
+		pr_warn("Signature wrapper too small (%x < %zx)\n",
+			wrapper.length, sizeof(wrapper));
+		return -ELIBBAD;
+	}
 	if (wrapper.revision != WIN_CERT_REVISION_2_0) {
 		pr_warn("Signature is not revision 2.0\n");
 		return -ENOTSUPP;

@@ -43,6 +43,7 @@ enum {
 	INTEL_TLV_OTP_BDADDR,
 	INTEL_TLV_UNLOCKED_STATE,
 	INTEL_TLV_GIT_SHA1,
+	INTEL_TLV_FIPS_STS = 0x3b,
 	INTEL_TLV_UNLOCK_POLICY = 0x3c,
 	INTEL_TLV_PLATFORM_ID = 0x3d,
 	INTEL_TLV_FW_ID = 0x50
@@ -70,6 +71,7 @@ struct intel_tlv {
 /* CNVR */
 #define BTINTEL_CNVR_FMP2		0x910
 #define BTINTEL_CNVR_WHP2		0xA10	/* Whale Peak2 - Panther Lake */
+#define BTINTEL_CNVR_PEP		0xA30   /* Pelican Peak2 / Pelican Peak STC */
 
 #define BTINTEL_IMG_BOOTLOADER		0x01	/* Bootloader image */
 #define BTINTEL_IMG_IML			0x02	/* Intermediate image */
@@ -85,6 +87,12 @@ struct intel_tlv {
 #define BTINTEL_HWID_SCP2	0x20	/* Scorpius Peak2 - Nova Lake */
 #define BTINTEL_HWID_SCP2F	0x21	/* Scorpius Peak2-F - Nova Lake */
 #define BTINTEL_HWID_BZRIW	0x22	/* BlazarIW - Wildcat Lake */
+
+#define BTINTEL_BPMO_NUM_MODULATIONS	16
+
+#define BTINTEL_DDC_ID_SAR_BPMO_ENABLE		0x0359
+#define BTINTEL_DDC_ID_SAR_BPMO_CHAIN_A		0x035A
+#define BTINTEL_DDC_ID_SAR_BPMO_CHAIN_B		0x035B
 
 extern const guid_t btintel_guid_dsm;
 
@@ -112,6 +120,7 @@ struct intel_version_tlv {
 	bdaddr_t otp_bd_addr;
 	u8	unlock_policy;
 	u8	platform_id[6];
+	u8	crc_sts, sec_sts, patch_sts;
 };
 
 struct intel_version {
@@ -257,6 +266,7 @@ enum {
 	INTEL_ROM_LEGACY_NO_WBS_SUPPORT,
 	INTEL_ACPI_RESET_ACTIVE,
 	INTEL_WAIT_FOR_D0,
+	INTEL_UNLOCKER_LOADED,
 
 	__INTEL_NUM_FLAGS,
 };
@@ -331,6 +341,8 @@ int btintel_shutdown_combined(struct hci_dev *hdev);
 void btintel_hw_error(struct hci_dev *hdev, u8 code);
 void btintel_print_fseq_info(struct hci_dev *hdev);
 int btintel_acpi_reset_method(struct hci_dev *hdev);
+int btintel_check_fips_status(struct hci_dev *hdev,
+			      struct intel_version_tlv *ver);
 #else
 
 static inline int btintel_check_bdaddr(struct hci_dev *hdev)
@@ -467,5 +479,11 @@ static inline void btintel_print_fseq_info(struct hci_dev *hdev)
 static inline int btintel_acpi_reset_method(struct hci_dev *hdev)
 {
 	return -ENODEV;
+}
+
+static inline int btintel_check_fips_status(struct hci_dev *hdev,
+					    struct intel_version_tlv *ver)
+{
+	return -EOPNOTSUPP;
 }
 #endif

@@ -30,7 +30,7 @@
  * directly from connected receivers.
  */
 
-#include "link_dpms.h"
+#include "link_dpms_v1.h"
 #include "link_detection.h"
 #include "link_hwss.h"
 #include "protocols/link_edp_panel_control.h"
@@ -1006,6 +1006,32 @@ static bool should_verify_link_capability_destructively(struct dc_link *link,
 static void verify_link_capability(struct dc_link *link,
 		enum dc_detect_reason reason)
 {
+	/* The FRL force flags are only fully recomputed on the destructive path
+	 * (hdmi_frl_verify_link_cap), so re-derive the sink driven part on every
+	 * detect. Without this a sink can either inherit flags from a previously
+	 * connected monitor, or stay cleared when a patched monitor is detected
+	 * through one of the non destructive paths (FRL already in use,
+	 * skip_frl_pre_training on an active link, or skip_detection_link_training).
+	 * Setting them is additive so SCDC test request results survive, and the
+	 * destructive path overwrites all of them anyway.
+	 */
+	if (link->link_enc &&
+			link->link_enc->features.flags.bits.IS_HDMI_FRL_CAPABLE &&
+			link->local_sink &&
+			link->local_sink->edid_caps.max_frl_rate != 0) {
+		if (link->local_sink->edid_caps.panel_patch.force_frl)
+			link->frl_flags.force_frl_always = true;
+
+		if (link->local_sink->edid_caps.panel_patch.hdmi_comp_auto) {
+			link->frl_flags.force_frl_max = true;
+			link->frl_flags.force_frl_dsc = true;
+		}
+	} else {
+		link->frl_flags.force_frl_always = false;
+		link->frl_flags.force_frl_max = false;
+		link->frl_flags.force_frl_dsc = false;
+	}
+
 	if (should_verify_link_capability_destructively(link, reason))
 		verify_link_capability_destructive(link, reason);
 	else
@@ -1127,11 +1153,16 @@ static bool detect_link_and_local_sink(struct dc_link *link,
 		(!link->dc->config.allow_edp_hotplug_detection)) &&
 		link->local_sink) {
 		// need to re-write OUI and brightness in resume case
-		if (link->connector_signal == SIGNAL_TYPE_EDP &&
-			(link->dpcd_sink_ext_caps.bits.oled == 1)) {
-			dpcd_set_source_specific_data(link);
-			msleep(post_oui_delay);
-			set_default_brightness_aux(link);
+		if (link->connector_signal == SIGNAL_TYPE_EDP) {
+			if (!link->dc->config.edp_no_power_sequencing)
+				link->dc->hwss.edp_power_control(link, true);
+			link->dc->hwss.edp_wait_for_hpd_ready(link, true);
+
+			if (link->dpcd_sink_ext_caps.bits.oled == 1) {
+				dpcd_set_source_specific_data(link);
+				msleep(post_oui_delay);
+				set_default_brightness_aux(link);
+			}
 		}
 
 		return true;

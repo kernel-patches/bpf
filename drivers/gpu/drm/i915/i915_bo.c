@@ -150,7 +150,7 @@ static u32 i915_bo_fbdev_pitch_align(u32 stride)
 	return ALIGN(stride, 64);
 }
 
-bool i915_bo_fbdev_prefer_stolen(struct drm_i915_private *i915, unsigned int size)
+static bool i915_bo_fbdev_prefer_stolen(struct drm_i915_private *i915, unsigned int size)
 {
 	/* Skip stolen on MTL as Wa_22018444074 mitigation. */
 	if (IS_METEORLAKE(i915))
@@ -162,6 +162,17 @@ bool i915_bo_fbdev_prefer_stolen(struct drm_i915_private *i915, unsigned int siz
 	 * features.
 	 */
 	return i915->dsm.usable_size >= size * 2;
+}
+
+static struct drm_gem_object *i915_bo_fbdev_bios_fb_takeover(struct drm_gem_object *obj)
+{
+	struct drm_i915_private *i915 = to_i915(obj->dev);
+
+	if (HAS_LMEM(i915) ||
+	    i915_bo_fbdev_prefer_stolen(i915, obj->size))
+		return obj;
+
+	return ERR_PTR(-EIO);
 }
 
 static struct drm_gem_object *i915_bo_fbdev_create(struct drm_device *drm, int size)
@@ -262,6 +273,7 @@ const struct intel_display_bo_interface i915_display_bo_interface = {
 	.framebuffer_fini = i915_bo_framebuffer_fini,
 	.framebuffer_lookup = i915_bo_framebuffer_lookup,
 #if IS_ENABLED(CONFIG_DRM_FBDEV_EMULATION)
+	.fbdev_bios_fb_takeover = i915_bo_fbdev_bios_fb_takeover,
 	.fbdev_create = i915_bo_fbdev_create,
 	.fbdev_destroy = i915_bo_fbdev_destroy,
 	.fbdev_fill_info = i915_bo_fbdev_fill_info,

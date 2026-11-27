@@ -4,7 +4,7 @@
 
 #include <uapi/asm/setup.h>
 
-#define COMMAND_LINE_SIZE 2048
+#define COMMAND_LINE_SIZE CONFIG_COMMAND_LINE_SIZE
 
 #include <linux/linkage.h>
 #include <asm/page_types.h>
@@ -42,7 +42,6 @@ static inline void vsmp_init(void) { }
 
 struct pt_regs;
 
-void setup_bios_corruption_check(void);
 void early_platform_quirks(void);
 
 extern unsigned long saved_video_mode;

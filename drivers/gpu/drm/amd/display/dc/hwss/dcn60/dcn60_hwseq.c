@@ -48,7 +48,6 @@
 	hws->regs->reg
 #define DC_LOGGER \
 	dc->ctx->logger
-
 #undef FN
 #define FN(reg_name, field_name) \
 	hws->shifts->field_name, hws->masks->field_name
@@ -413,9 +412,7 @@ enum dc_status dcn60_apply_single_controller_ctx_to_hw(
 			dc_is_virtual_signal(pipe_ctx->stream->signal)))
 			dc->link_srv->set_dsc_enable(pipe_ctx, true);
 	}
-	if (!stream->dpms_off &&
-	    !(link->connector_signal == SIGNAL_TYPE_EDP &&
-	      link->forced_psr_active))
+	if (!stream->dpms_off)
 		dc->link_srv->set_dpms_on(context, pipe_ctx);
 
 	/* DCN3.1 FPGA Workaround
@@ -969,26 +966,137 @@ void dcn60_update_cursor_offload_pipe(struct dmub_srv *dmub, uint32_t stream_idx
 }
 
 /**
+ * dcn60_get_otg_master_pipe - Resolve the OTG master pipe of a stream.
+ * @context:   committed dc state to resolve streams from
+ * @stream_id: stream_id of the stream to look for
+ *
+ * Returns the OTG master pipe driving the stream, or NULL when the stream is
+ * not in the committed state.
+ */
+static struct pipe_ctx *dcn60_get_otg_master_pipe(
+		struct dc_state *context,
+		uint32_t stream_id)
+{
+	struct dc_stream_state *stream;
+
+	if (!context)
+		return NULL;
+
+	stream = dc_state_get_stream_from_id(context, stream_id);
+	if (!stream)
+		return NULL;
+
+	return resource_get_otg_master_for_stream(&context->res_ctx, stream);
+}
+
+/**
  * dcn60_get_ref_tg_for_hubbub_probe - Resolve the OTG master for hubbub probing.
  * @context: committed dc state to resolve streams from
+ * @probe:   probe to resolve the OTG master for
  *
  * All probe types gate their measurement window to frame edges of the OTG
- * master of stream 0. Returns NULL when no active stream is present.
+ * master of the probe's stream, or of stream 0 when the probe has no stream.
+ * Returns NULL when that stream is not active.
  */
 static struct timing_generator *dcn60_get_ref_tg_for_hubbub_probe(
-		struct dc_state *context)
+		struct dc_state *context,
+		const struct dc_probe_state *probe)
 {
 	struct pipe_ctx *otg_pipe;
 
 	if (!context || !context->stream_count)
 		return NULL;
 
-	otg_pipe = resource_get_otg_master_for_stream(&context->res_ctx,
-			context->streams[0]);
+	if (probe->scope.type == DC_PROBE_SCOPE_STREAM)
+		otg_pipe = dcn60_get_otg_master_pipe(context, probe->scope.u.stream.stream_id);
+	else
+		otg_pipe = resource_get_otg_master_for_stream(&context->res_ctx,
+				context->streams[0]);
 	if (!otg_pipe)
 		return NULL;
 
 	return otg_pipe->stream_res.tg;
+}
+
+/**
+ * dcn60_build_urgent_window_sequence - Build the BLS sequence for one urgent window.
+ * @dc:        DC structure
+ * @context:   Committed dc state to resolve streams from
+ * @probe:     Urgent probe state scoped to a window of a stream
+ * @status:    Result sink for the sequence
+ * @seq_state: Sequence to append steps to
+ *
+ * Measures one window between the start and end lines of the probe scope, as a one
+ * shot. The perfmon counter is armed at the start line and stopped at the end line.
+ * A zero start line is the vblank start of the stream, which the OTG programs at
+ * v_total - v_front_porch. The waits approach each line from below and are
+ * wrap-aware, so they self-sync to a fresh edge and support a window that crosses
+ * the v_total wrap. Arming takes longer than a line, so a window that is already
+ * over when the end line is waited on is missed, and its status is not valid
+ * instead of a whole frame being measured. For the urgent assertion count, HUBP is
+ * sampled once after the counter has been read, so the sample does not disturb the
+ * window. No steps are added when prerequisites are not met.
+ */
+static void dcn60_build_urgent_window_sequence(
+		struct dc *dc,
+		struct dc_state *context,
+		const struct dc_probe_state *probe,
+		struct dc_probe_status *status,
+		struct block_sequence_state *seq_state)
+{
+	struct hubbub *hubbub = dc->res_pool->hubbub;
+	uint32_t refclk_mhz = dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000;
+	struct pipe_ctx *otg_pipe = dcn60_get_otg_master_pipe(context,
+			probe->scope.u.stream.stream_id);
+	struct timing_generator *ref_tg = otg_pipe ? otg_pipe->stream_res.tg : NULL;
+	struct hubp *ref_hubp = otg_pipe ? otg_pipe->plane_res.hubp : NULL;
+	unsigned int start_line = probe->scope.u.stream.start_line;
+	unsigned int end_line = probe->scope.u.stream.end_line;
+	struct dc_probe_urgent_assertion *assertion = &status->u.urgent_assertion;
+
+	status->valid = false;
+
+	if (probe->target_state != DC_PROBE_MEASURED || !ref_tg)
+		return;
+
+	if (!start_line)
+		start_line = otg_pipe->stream->timing.v_total - otg_pipe->stream->timing.v_front_porch;
+
+	if (probe->type == DC_PROBE_URGENT_REQUEST_COUNT) {
+		if (!hubbub->funcs->perfmon.start_measuring_urgent_request_count ||
+				!hubbub->funcs->perfmon.get_urgent_request_count)
+			return;
+
+		status->valid = true;
+		hwss_add_hubbub_perfmon_reset(seq_state, hubbub);
+		hwss_add_tg_wait_for_position(seq_state, ref_tg, start_line, 0, NULL);
+		hwss_add_hubbub_perfmon_start_urgent_request_count(seq_state, hubbub);
+		hwss_add_tg_wait_for_position(seq_state, ref_tg, end_line, start_line,
+				&status->valid);
+		hwss_add_hubbub_perfmon_get_urgent_request_count(seq_state, hubbub,
+				&status->u.urgent_request_count);
+		return;
+	}
+
+	if (probe->type != DC_PROBE_URGENT_ASSERTION_COUNT ||
+			!hubbub->funcs->perfmon.start_measuring_urgent_assertion_count ||
+			!hubbub->funcs->perfmon.get_urgent_assertion_count)
+		return;
+
+	assertion->outstanding.raw = 0;
+	status->valid = true;
+
+	hwss_add_tg_wait_for_position(seq_state, ref_tg, start_line, 0, NULL);
+	hwss_add_hubbub_perfmon_reset(seq_state, hubbub);
+	hwss_add_hubbub_perfmon_start_urgent_assertion_count(seq_state, hubbub);
+	hwss_add_tg_wait_for_position(seq_state, ref_tg, end_line, start_line,
+				&status->valid);
+	hwss_add_hubbub_perfmon_get_urgent_assertion_count(seq_state, hubbub,
+			refclk_mhz, &assertion->count,
+			&assertion->deassertion_count);
+	if (ref_hubp)
+		hwss_add_hubp_get_outstanding_req(seq_state, ref_hubp,
+				&assertion->outstanding.raw);
 }
 
 /**
@@ -1013,9 +1121,10 @@ static void dcn60_build_hubbub_perfmon_sequence(
 {
 	struct hubbub *hubbub = dc->res_pool->hubbub;
 	uint32_t refclk_mhz = dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000;
-	struct timing_generator *ref_tg = dcn60_get_ref_tg_for_hubbub_probe(context);
+	struct timing_generator *ref_tg = dcn60_get_ref_tg_for_hubbub_probe(context, probe);
 	struct block_sequence_state seq_state = { .steps = block_sequence, .num_steps = num_steps };
-	bool was_measuring = status->measuring;
+	/* The running counter can only be reused by a probe of the same type. */
+	bool continuing = status->measuring && status->type == probe->type;
 
 	if (!hubbub || !hubbub->funcs || !hubbub->funcs->perfmon.reset)
 		return;
@@ -1025,20 +1134,49 @@ static void dcn60_build_hubbub_perfmon_sequence(
 		return;
 	}
 
+	if (dc_probe_scope_is_windowed(&probe->scope)) {
+		dcn60_build_urgent_window_sequence(dc, context, probe, status, &seq_state);
+		return;
+	}
+
+	/*
+	 * Polling starts the counter once, then every poll reads the running counter
+	 * without stopping it. Switching to a different probe type resets the counter
+	 * and programs the new configuration first.
+	 */
 	if (probe->target_state == DC_PROBE_MEASURING) {
-		if (probe->type != DC_PROBE_URGENT_ASSERTION_COUNT ||
-				!hubbub->funcs->perfmon.start_measuring_urgent_assertion_count ||
-				!hubbub->funcs->perfmon.get_urgent_assertion_count)
+		switch (probe->type) {
+		case DC_PROBE_URGENT_ASSERTION_COUNT:
+			if (!hubbub->funcs->perfmon.start_measuring_urgent_assertion_count ||
+					!hubbub->funcs->perfmon.get_urgent_assertion_count)
+				return;
+
+			if (!continuing) {
+				hwss_add_hubbub_perfmon_reset(&seq_state, hubbub);
+				hwss_add_hubbub_perfmon_start_urgent_assertion_count(&seq_state, hubbub);
+			}
+
+			hwss_add_hubbub_perfmon_get_urgent_assertion_count(&seq_state, hubbub,
+					refclk_mhz, &status->u.urgent_assertion.count, NULL);
 			return;
 
-		if (!was_measuring) {
-			hwss_add_hubbub_perfmon_reset(&seq_state, hubbub);
-			hwss_add_hubbub_perfmon_start_urgent_assertion_count(&seq_state, hubbub);
-		}
+		case DC_PROBE_URGENT_REQUEST_COUNT:
+			if (!hubbub->funcs->perfmon.start_measuring_urgent_request_count ||
+					!hubbub->funcs->perfmon.get_urgent_request_count)
+				return;
 
-		hwss_add_hubbub_perfmon_get_urgent_assertion_count(&seq_state, hubbub,
-				refclk_mhz, &status->u.urgent_assertion_count);
-		return;
+			if (!continuing) {
+				hwss_add_hubbub_perfmon_reset(&seq_state, hubbub);
+				hwss_add_hubbub_perfmon_start_urgent_request_count(&seq_state, hubbub);
+			}
+
+			hwss_add_hubbub_perfmon_get_urgent_request_count(&seq_state, hubbub,
+					&status->u.urgent_request_count);
+			return;
+
+		default:
+			return;
+		}
 	}
 
 	if (probe->target_state != DC_PROBE_MEASURED || !ref_tg)
@@ -1126,7 +1264,22 @@ static void dcn60_build_hubbub_perfmon_sequence(
 		hwss_add_tg_wait_for_state(&seq_state, ref_tg, CRTC_STATE_VACTIVE);
 		hwss_add_tg_wait_for_state(&seq_state, ref_tg, CRTC_STATE_VBLANK);
 		hwss_add_hubbub_perfmon_get_urgent_assertion_count(&seq_state, hubbub,
-				refclk_mhz, &status->u.urgent_assertion_count);
+				refclk_mhz, &status->u.urgent_assertion.count, NULL);
+		return;
+
+	case DC_PROBE_URGENT_REQUEST_COUNT:
+		if (!hubbub->funcs->perfmon.start_measuring_urgent_request_count ||
+				!hubbub->funcs->perfmon.get_urgent_request_count)
+			return;
+
+		hwss_add_hubbub_perfmon_reset(&seq_state, hubbub);
+		hwss_add_tg_wait_for_state(&seq_state, ref_tg, CRTC_STATE_VACTIVE);
+		hwss_add_tg_wait_for_state(&seq_state, ref_tg, CRTC_STATE_VBLANK);
+		hwss_add_hubbub_perfmon_start_urgent_request_count(&seq_state, hubbub);
+		hwss_add_tg_wait_for_state(&seq_state, ref_tg, CRTC_STATE_VACTIVE);
+		hwss_add_tg_wait_for_state(&seq_state, ref_tg, CRTC_STATE_VBLANK);
+		hwss_add_hubbub_perfmon_get_urgent_request_count(&seq_state, hubbub,
+				&status->u.urgent_request_count);
 		return;
 
 	case DC_PROBE_PREFETCH_DATA_SIZE:
@@ -1145,7 +1298,9 @@ static void dcn60_build_hubbub_perfmon_sequence(
 		return;
 
 	case DC_PROBE_URGENT_RAMP_LATENCY:
-		/* Requires caller-supplied window params not available in probe model. */
+		/* Window params are available in dc_probe_scope, but the ramp latency measurement
+		 * is not implemented.
+		 */
 		return;
 
 	default:
@@ -1154,9 +1309,30 @@ static void dcn60_build_hubbub_perfmon_sequence(
 }
 
 /**
+ * dcn60_decode_outstanding_req - Decode the HUBP outstanding request status.
+ * @outstanding: raw holds HUBP_OUTSTANDING_* and HUBP_NOT_IN_BLANK bits on entry,
+ *               and the decoded bits on return
+ */
+static void dcn60_decode_outstanding_req(union dc_probe_outstanding_req *outstanding)
+{
+	uint32_t hw_status = outstanding->raw;
+
+	outstanding->raw = 0;
+	outstanding->bits.any = !!(hw_status & HUBP_OUTSTANDING_ANY);
+	outstanding->bits.data = !!(hw_status & HUBP_OUTSTANDING_DRQ);
+	outstanding->bits.chunk_meta_trans = !!(hw_status & HUBP_OUTSTANDING_CRQ_TRQ);
+	outstanding->bits.not_in_blank = !!(hw_status & HUBP_NOT_IN_BLANK);
+}
+
+/**
  * dcn60_update_probe_status - Set the valid flag on a latched probe result.
  * @status: result sink whose u was written by the GET BLS step during execute
  * @probe: current probe state used to determine measurement type and validity
+ *
+ * TODO: the status has no single owner. The builders read the previous status
+ * (measuring), pass pointers into it as the execute output sinks (u, and valid
+ * for a window), and this function then rebuilds it. Build into a scratch result
+ * instead, keep the previous status read-only, and finalize the status once here.
  */
 static void dcn60_update_probe_status(
 		struct dc_probe_status *status,
@@ -1173,6 +1349,17 @@ static void dcn60_update_probe_status(
 	status->measuring = probe->target_state == DC_PROBE_MEASURING;
 	status->u = result.u;
 
+	if (probe->type == DC_PROBE_URGENT_ASSERTION_COUNT) {
+		struct dc_probe_urgent_assertion *assertion = &status->u.urgent_assertion;
+
+		if (dc_probe_scope_is_windowed(&probe->scope)) {
+			dcn60_decode_outstanding_req(&assertion->outstanding);
+		} else {
+			assertion->deassertion_count = 0;
+			assertion->outstanding.raw = 0;
+		}
+	}
+
 	switch (probe->type) {
 	case DC_PROBE_PEAK_MEM_BW:
 	case DC_PROBE_PEAK_MEM_BW_STRESSED:
@@ -1183,12 +1370,17 @@ static void dcn60_update_probe_status(
 	case DC_PROBE_MEM_LATENCY:
 	case DC_PROBE_URGENT_ASSERTION_COUNT:
 	case DC_PROBE_PREFETCH_DATA_SIZE:
+	case DC_PROBE_URGENT_REQUEST_COUNT:
 		status->valid = true;
 		break;
 	default:
 		status->valid = false;
 		break;
 	}
+
+	/* A window is valid only if its sequence was built and the end line was not missed. */
+	if (probe->target_state == DC_PROBE_MEASURED && dc_probe_scope_is_windowed(&probe->scope))
+		status->valid = result.valid;
 }
 
 /**
@@ -1206,6 +1398,7 @@ static bool is_probe_measurement_type_for_hubbub(enum dc_probe_type type)
 	case DC_PROBE_URGENT_ASSERTION_COUNT:
 	case DC_PROBE_PREFETCH_DATA_SIZE:
 	case DC_PROBE_URGENT_RAMP_LATENCY:
+	case DC_PROBE_URGENT_REQUEST_COUNT:
 		return true;
 	default:
 		return false;
@@ -1242,8 +1435,16 @@ void dcn60_program_perfmon(struct dc *dc, struct dc_state *context)
 
 	hwss_execute_sequence(dc, context->block_sequence, context->block_sequence_steps);
 
-	for (i = 0; i < context->probe_count; i++)
+	for (i = 0; i < context->probe_count; i++) {
 		dcn60_update_probe_status(&context->probe_status[i], &context->probes[i]);
+
+		/* A stream that is not in the committed state has nothing to measure. */
+		if (context->probes[i].scope.type == DC_PROBE_SCOPE_STREAM
+				&& context->probes[i].target_state != DC_PROBE_NOT_MEASURING
+				&& !dcn60_get_otg_master_pipe(context,
+						context->probes[i].scope.u.stream.stream_id))
+			context->probe_status[i].valid = false;
+	}
 }
 
 static bool dcn60_has_active_memory_request(const struct dc *dc)
@@ -1332,5 +1533,14 @@ bool dcn60_apply_idle_power_optimizations(struct dc *dc, bool enable)
 		clk_mgr->funcs->set_idle_power_optimizations(clk_mgr, allow_idle);
 	}
 
+	return true;
+}
+
+bool dcn60_dsc_pg_status(struct dce_hwseq *hws, unsigned int dsc_inst)
+{
+	(void)hws;
+	(void)dsc_inst;
+
+	/* DCN6.0 has no DSC power-gate domain, so the DSC is always ungated. */
 	return true;
 }

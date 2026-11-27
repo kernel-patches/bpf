@@ -6,13 +6,11 @@
 #include <drm/drm_print.h>
 #include <drm/intel/display_parent_interface.h>
 
-#include "display/intel_crtc.h"
 #include "display/intel_display_types.h"
 #include "display/intel_fb.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
 
-#include "i915_bo.h"
 #include "i915_drv.h"
 #include "i915_initial_plane.h"
 
@@ -101,19 +99,6 @@ initial_plane_vma(struct drm_i915_private *i915,
 	size = round_up(plane_config->base + plane_config->size,
 			mem->min_page_size);
 	size -= base;
-
-	/*
-	 * If the FB is too big, just don't use it since fbdev is not very
-	 * important and we should probably use that space with FBC or other
-	 * features.
-	 */
-	if (IS_ENABLED(CONFIG_DRM_FBDEV_EMULATION) &&
-	    IS_ENABLED(CONFIG_FRAMEBUFFER_CONSOLE) &&
-	    mem == i915->mm.stolen_region &&
-	    !i915_bo_fbdev_prefer_stolen(i915, size)) {
-		drm_dbg_kms(&i915->drm, "Initial FB size exceeds half of stolen, discarding\n");
-		return NULL;
-	}
 
 	obj = i915_gem_object_create_region_at(mem, phys_base, size,
 					       I915_BO_ALLOC_USER |

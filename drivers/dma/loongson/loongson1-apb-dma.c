@@ -441,21 +441,26 @@ static enum dma_status ls1x_dma_tx_status(struct dma_chan *dchan,
 
 			/* locate the current lli */
 			next_phys = chan->curr_lli->hw[LS1X_DMADESC_NEXT];
-			list_for_each_entry(lli, &desc->lli_list, node)
-				if (lli->hw[LS1X_DMADESC_NEXT] == next_phys)
-					break;
+			list_for_each_entry(lli, &desc->lli_list, node) {
+				if (lli->hw[LS1X_DMADESC_NEXT] != next_phys)
+					continue;
 
-			dev_dbg(dmaengine_chan_dev(dchan), "current lli_phys=%pad",
-				&lli->phys);
+				dev_dbg(dmaengine_chan_dev(dchan), "current lli_phys=%pad\n",
+					&lli->phys);
 
-			/* count the residues */
-			list_for_each_entry_from(lli, &desc->lli_list, node)
-				bytes += lli->hw[LS1X_DMADESC_LENGTH] *
-					 chan->bus_width;
+				/* count the residues */
+				list_for_each_entry_from(lli, &desc->lli_list, node)
+					bytes += lli->hw[LS1X_DMADESC_LENGTH] *
+						 chan->bus_width;
+
+				dma_set_residue(state, bytes);
+				return status;
+			}
+
+			dev_warn(dmaengine_chan_dev(dchan),
+				 "unable to locate current lli.\n");
 		}
 	}
-
-	dma_set_residue(state, bytes);
 
 	return status;
 }

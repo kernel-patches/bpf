@@ -275,10 +275,13 @@ static int xfrm4_beet_encap_add(struct xfrm_state *x, struct sk_buff *skb)
  */
 static int xfrm4_tunnel_encap_add(struct xfrm_state *x, struct sk_buff *skb)
 {
-	bool small_ipv6 = (skb->protocol == htons(ETH_P_IPV6)) && (skb->len <= IPV6_MIN_MTU);
 	struct dst_entry *dst = skb_dst(skb);
 	struct iphdr *top_iph;
+	bool small_ipv6;
 	int flags;
+
+	small_ipv6 = (dst->ops->family == AF_INET6) &&
+		     (skb->len <= IPV6_MIN_MTU);
 
 	if (!skb->inner_protocol) {
 		skb_set_inner_network_header(skb, skb_network_offset(skb));

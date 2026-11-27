@@ -5,6 +5,7 @@
 
 #include <linux/bitmap.h>
 
+#include <drm/drm_drv.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 #include <drm/drm_ras.h>
@@ -12,9 +13,32 @@
 #include "xe_device_types.h"
 #include "xe_drm_ras.h"
 #include "xe_ras.h"
+#include "xe_wedge.h"
 
 static const char * const error_components[] = DRM_XE_RAS_ERROR_COMPONENT_NAMES;
 static const char * const error_severity[] = DRM_XE_RAS_ERROR_SEVERITY_NAMES;
+
+static int drm_ras_counter_get(struct xe_device *xe, struct xe_drm_ras_counter *info,
+			       u32 error_id, int *idx)
+{
+	if (xe_wedged(xe) && !xe_wedge_mode_is_no_reset(xe))
+		return -ECANCELED;
+
+	if (!info || !info[error_id].name)
+		return -ENOENT;
+
+	/* Must be last */
+	if (!drm_dev_enter(&xe->drm, idx))
+		return -ENODEV;
+
+	return 0;
+}
+
+static void drm_ras_counter_put(int idx)
+{
+	/* Pair with drm_ras_counter_get() */
+	drm_dev_exit(idx);
+}
 
 static bool drm_ras_counter_is_valid(u32 severity, u32 component)
 {
@@ -31,40 +55,47 @@ static int query_error_counter(struct xe_device *xe,
 			       enum drm_xe_ras_error_severity severity,
 			       u32 error_id, const char **name, u32 *val)
 {
-	struct xe_drm_ras *ras = &xe->ras;
+	struct xe_drm_ras *ras = &xe->ras.nl_data;
 	struct xe_drm_ras_counter *info = ras->info[severity];
+	int idx, ret;
 
-	if (!info || !info[error_id].name)
-		return -ENOENT;
-
-	*name = info[error_id].name;
+	ret = drm_ras_counter_get(xe, info, error_id, &idx);
+	if (ret)
+		return ret;
 
 	/* Fetch counter from system controller if supported */
 	if (xe->info.has_sysctrl)
-		return xe_ras_get_counter(xe, severity, error_id, val);
+		ret = xe_ras_get_counter(xe, severity, error_id, val);
+	else
+		*val = atomic_read(&info[error_id].counter);
 
-	*val = atomic_read(&info[error_id].counter);
+	if (!ret)
+		*name = info[error_id].name;
 
-	return 0;
+	drm_ras_counter_put(idx);
+	return ret;
 }
 
 static int clear_error_counter(struct xe_device *xe,
 			       enum drm_xe_ras_error_severity severity,
 			       u32 error_id)
 {
-	struct xe_drm_ras *ras = &xe->ras;
+	struct xe_drm_ras *ras = &xe->ras.nl_data;
 	struct xe_drm_ras_counter *info = ras->info[severity];
+	int idx, ret;
 
-	if (!info || !info[error_id].name)
-		return -ENOENT;
+	ret = drm_ras_counter_get(xe, info, error_id, &idx);
+	if (ret)
+		return ret;
 
 	/* Clear counter from system controller if supported */
 	if (xe->info.has_sysctrl)
-		return xe_ras_clear_counter(xe, severity, error_id);
+		ret = xe_ras_clear_counter(xe, severity, error_id);
+	else
+		atomic_set(&info[error_id].counter, 0);
 
-	atomic_set(&info[error_id].counter, 0);
-
-	return 0;
+	drm_ras_counter_put(idx);
+	return ret;
 }
 
 static int query_uncorrectable_error_counter(struct drm_ras_node *ep, u32 error_id,
@@ -101,32 +132,43 @@ static int query_correctable_error_threshold(struct drm_ras_node *ep, u32 error_
 					     const char **name, u32 *threshold)
 {
 	struct xe_device *xe = ep->priv;
-	struct xe_drm_ras *ras = &xe->ras;
+	struct xe_drm_ras *ras = &xe->ras.nl_data;
 	struct xe_drm_ras_counter *info = ras->info[DRM_XE_RAS_ERR_SEV_CORRECTABLE];
-
-	if (!info || !info[error_id].name)
-		return -ENOENT;
+	int idx, ret;
 
 	if (!xe->info.has_sysctrl)
 		return -EOPNOTSUPP;
 
-	*name = info[error_id].name;
-	return xe_ras_get_threshold(xe, DRM_XE_RAS_ERR_SEV_CORRECTABLE, error_id, threshold);
+	ret = drm_ras_counter_get(xe, info, error_id, &idx);
+	if (ret)
+		return ret;
+
+	ret = xe_ras_get_threshold(xe, DRM_XE_RAS_ERR_SEV_CORRECTABLE, error_id, threshold);
+	if (!ret)
+		*name = info[error_id].name;
+
+	drm_ras_counter_put(idx);
+	return ret;
 }
 
 static int set_correctable_error_threshold(struct drm_ras_node *ep, u32 error_id, u32 threshold)
 {
 	struct xe_device *xe = ep->priv;
-	struct xe_drm_ras *ras = &xe->ras;
+	struct xe_drm_ras *ras = &xe->ras.nl_data;
 	struct xe_drm_ras_counter *info = ras->info[DRM_XE_RAS_ERR_SEV_CORRECTABLE];
-
-	if (!info || !info[error_id].name)
-		return -ENOENT;
+	int idx, ret;
 
 	if (!xe->info.has_sysctrl)
 		return -EOPNOTSUPP;
 
-	return xe_ras_set_threshold(xe, DRM_XE_RAS_ERR_SEV_CORRECTABLE, error_id, threshold);
+	ret = drm_ras_counter_get(xe, info, error_id, &idx);
+	if (ret)
+		return ret;
+
+	ret = xe_ras_set_threshold(xe, DRM_XE_RAS_ERR_SEV_CORRECTABLE, error_id, threshold);
+
+	drm_ras_counter_put(idx);
+	return ret;
 }
 
 static struct xe_drm_ras_counter *allocate_and_copy_counters(struct xe_device *xe)
@@ -153,7 +195,7 @@ static int assign_node_params(struct xe_device *xe, struct drm_ras_node *node,
 			      const enum drm_xe_ras_error_severity severity)
 {
 	struct pci_dev *pdev = to_pci_dev(xe->drm.dev);
-	struct xe_drm_ras *ras = &xe->ras;
+	struct xe_drm_ras *ras = &xe->ras.nl_data;
 	const char *device_name;
 
 	device_name = kasprintf(GFP_KERNEL, "%04x:%02x:%02x.%d",
@@ -201,7 +243,7 @@ static void cleanup_node(struct drm_device *drm, void *node)
 
 static int register_nodes(struct xe_device *xe)
 {
-	struct xe_drm_ras *ras = &xe->ras;
+	struct xe_drm_ras *ras = &xe->ras.nl_data;
 	struct drm_ras_node *node;
 	int i, ret;
 
@@ -241,10 +283,10 @@ null_info:
  */
 void xe_drm_ras_event(struct xe_device *xe, u32 component, u32 severity, u32 value)
 {
-	struct xe_drm_ras *ras = &xe->ras;
+	struct xe_drm_ras *ras = &xe->ras.nl_data;
 	struct xe_drm_ras_counter *info;
 	struct drm_ras_node *node;
-	int ret;
+	int idx, ret;
 
 	/* Event is supported only if drm-ras is enabled */
 	if (!xe->info.has_drm_ras)
@@ -256,13 +298,16 @@ void xe_drm_ras_event(struct xe_device *xe, u32 component, u32 severity, u32 val
 	node = &ras->node[severity];
 	info = ras->info[severity];
 
-	if (!info || !info[component].name)
+	ret = drm_ras_counter_get(xe, info, component, &idx);
+	if (ret)
 		return;
 
 	ret = drm_ras_nl_error_event(node, component, info[component].name, value);
 	if (ret)
 		drm_err_ratelimited(&xe->drm, "drm-ras error-event failed: %d for %s %s\n", ret,
 				    info[component].name, error_severity[severity]);
+
+	drm_ras_counter_put(idx);
 }
 
 /**
@@ -275,7 +320,7 @@ void xe_drm_ras_event(struct xe_device *xe, u32 component, u32 severity, u32 val
  */
 int xe_drm_ras_init(struct xe_device *xe)
 {
-	struct xe_drm_ras *ras = &xe->ras;
+	struct xe_drm_ras *ras = &xe->ras.nl_data;
 	struct drm_ras_node *node;
 	int err;
 

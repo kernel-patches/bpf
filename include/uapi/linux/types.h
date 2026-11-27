@@ -4,7 +4,7 @@
 
 #include <asm/types.h>
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #ifndef	__KERNEL__
 #ifndef __EXPORTED_HEADERS__
 #warning "Attempt to use kernel headers from user space, see https://kernelnewbies.org/KernelHeaders"
@@ -59,5 +59,5 @@ typedef __u32 __bitwise __wsum;
 
 typedef unsigned __bitwise __poll_t;
 
-#endif /*  __ASSEMBLY__ */
+#endif /*  __ASSEMBLER__ */
 #endif /* _UAPI_LINUX_TYPES_H */

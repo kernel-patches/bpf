@@ -692,7 +692,7 @@ static void smb_shared_mode_error(int error, struct ksmbd_file *prev_fp,
 {
 	ksmbd_debug(SMB, "%s\n", shared_mode_errors[error]);
 	ksmbd_debug(SMB, "Current mode: 0x%x Desired mode: 0x%x\n",
-		    prev_fp->saccess, curr_fp->daccess);
+		    le32_to_cpu(prev_fp->saccess), le32_to_cpu(curr_fp->daccess));
 }
 
 /*

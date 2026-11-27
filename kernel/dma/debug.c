@@ -536,39 +536,6 @@ static void active_cacheline_remove(struct dma_debug_entry *entry)
 }
 
 /*
- * Dump mappings entries on kernel space for debugging purposes
- */
-void debug_dma_dump_mappings(struct device *dev)
-{
-	int idx;
-	phys_addr_t cln;
-
-	for (idx = 0; idx < HASH_SIZE; idx++) {
-		struct hash_bucket *bucket = &dma_entry_hash[idx];
-		struct dma_debug_entry *entry;
-		unsigned long flags;
-
-		spin_lock_irqsave(&bucket->lock, flags);
-		list_for_each_entry(entry, &bucket->list, list) {
-			if (!dev || dev == entry->dev) {
-				cln = to_cacheline_number(entry);
-				dev_info(entry->dev,
-					 "%s idx %d P=%pa D=%llx L=%llx cln=%pa %s %s attrs=0x%lx\n",
-					 type2name[entry->type], idx,
-					 &entry->paddr, entry->dev_addr,
-					 entry->size, &cln,
-					 dir2name[entry->direction],
-					 maperr2str[entry->map_err_type],
-					 entry->attrs);
-			}
-		}
-		spin_unlock_irqrestore(&bucket->lock, flags);
-
-		cond_resched();
-	}
-}
-
-/*
  * Dump mappings entries on user space via debugfs
  */
 static int dump_show(struct seq_file *seq, void *v)
@@ -839,7 +806,12 @@ static const struct file_operations filter_fops = {
 
 static int __init dma_debug_fs_init(void)
 {
-	struct dentry *dentry = debugfs_create_dir("dma-api", NULL);
+	struct dentry *dentry;
+
+	if (!dma_debug_initialized)
+		return 0;
+
+	dentry = debugfs_create_dir("dma-api", NULL);
 
 	debugfs_create_bool("disabled", 0444, dentry, &global_disable);
 	debugfs_create_u32("error_count", 0444, dentry, &error_count);
@@ -1034,8 +1006,8 @@ static void check_unmap(struct dma_debug_entry *ref)
 		err_printk(ref->dev, entry, "device driver frees "
 			   "DMA memory with different CPU address "
 			   "[device address=0x%016llx] [size=%llu bytes] "
-			   "[cpu alloc address=0x%pa] "
-			   "[cpu free address=0x%pa]",
+			   "[cpu alloc address=%pa] "
+			   "[cpu free address=%pa]",
 			   ref->dev_addr, ref->size,
 			   &entry->paddr,
 			   &ref->paddr);

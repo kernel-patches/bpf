@@ -285,7 +285,7 @@ EXPORT_SYMBOL_GPL(usb_decode_interval);
  *
  * In dts a usb controller associates with phy devices.  The function gets
  * the string from property 'dr_mode' of the controller associated with the
- * given phy device node, and returns the correspondig enum usb_dr_mode.
+ * given phy device node, and returns the corresponding enum usb_dr_mode.
  */
 enum usb_dr_mode of_usb_get_dr_mode_by_phy(struct device_node *np, int arg0)
 {

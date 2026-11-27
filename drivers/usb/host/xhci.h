@@ -461,7 +461,7 @@ struct xhci_ep_ctx {
 #define EP_STATE_ERROR		4
 #define GET_EP_CTX_STATE(ctx)	(le32_to_cpu((ctx)->ep_info) & EP_STATE_MASK)
 
-/* Mult - Max number of burtst within an interval, in EP companion desc. */
+/* Mult - Max number of burst within an interval, in EP companion desc. */
 #define EP_MULT(p)		(((p) & 0x3) << 8)
 #define CTX_TO_EP_MULT(p)	(((p) >> 8) & 0x3)
 /* bits 10:14 are Max Primary Streams */

@@ -17,6 +17,8 @@ void klp_free_patch_async(struct klp_patch *patch);
 void klp_free_replaced_patches_async(struct klp_patch *new_patch);
 void klp_unpatch_replaced_patches(struct klp_patch *new_patch);
 void klp_discard_nops(struct klp_patch *new_patch);
+struct klp_func *klp_find_func(struct klp_object *obj, struct klp_func *func);
+bool klp_patch_replaces(struct klp_patch *new_patch, struct klp_patch *old_patch);
 
 static inline bool klp_is_object_loaded(struct klp_object *obj)
 {

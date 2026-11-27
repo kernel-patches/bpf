@@ -614,18 +614,11 @@ static void ufshcd_print_tr(struct ufs_hba *hba, struct scsi_cmnd *cmd,
 		dev_err(hba->dev, "UPIU[%d] - complete time %lld us\n", tag,
 			div_u64(lrbp->compl_time_stamp_local_clock, 1000));
 	}
-	dev_err(hba->dev,
-		"UPIU[%d] - Transfer Request Descriptor phys@0x%llx\n",
-		tag, (u64)lrbp->utrd_dma_addr);
 
 	ufshcd_hex_dump("UPIU TRD: ", lrbp->utr_descriptor_ptr,
 			sizeof(struct utp_transfer_req_desc));
-	dev_err(hba->dev, "UPIU[%d] - Request UPIU phys@0x%llx\n", tag,
-		(u64)lrbp->ucd_req_dma_addr);
 	ufshcd_hex_dump("UPIU REQ: ", lrbp->ucd_req_ptr,
 			sizeof(struct utp_upiu_req));
-	dev_err(hba->dev, "UPIU[%d] - Response UPIU phys@0x%llx\n", tag,
-		(u64)lrbp->ucd_rsp_dma_addr);
 	ufshcd_hex_dump("UPIU RSP: ", lrbp->ucd_rsp_ptr,
 			sizeof(struct utp_upiu_rsp));
 
@@ -634,10 +627,7 @@ static void ufshcd_print_tr(struct ufs_hba *hba, struct scsi_cmnd *cmd,
 	if (hba->quirks & UFSHCD_QUIRK_PRDT_BYTE_GRAN)
 		prdt_length /= ufshcd_sg_entry_size(hba);
 
-	dev_err(hba->dev,
-		"UPIU[%d] - PRDT - %d entries  phys@0x%llx\n",
-		tag, prdt_length,
-		(u64)lrbp->ucd_prdt_dma_addr);
+	dev_err(hba->dev, "UPIU[%d] - PRDT - %d entries\n", tag, prdt_length);
 
 	if (pr_prdt)
 		ufshcd_hex_dump("UPIU PRDT: ", lrbp->ucd_prdt_ptr,
@@ -2985,17 +2975,13 @@ static void ufshcd_init_lrb(struct ufs_hba *hba, struct scsi_cmnd *cmd)
 {
 	const int i = scsi_cmd_to_rq(cmd)->tag;
 	struct utp_transfer_req_desc *utrdlp = hba->utrdl_base_addr;
-	u16 response_offset = le16_to_cpu(utrdlp[i].response_upiu_offset);
-	u16 prdt_offset = le16_to_cpu(utrdlp[i].prd_table_offset);
 	struct ufshcd_lrb *lrb = scsi_cmd_priv(cmd);
 	u8 *command_upiu, *response_upiu, *prd_table;
-	dma_addr_t cmd_desc_element_addr;
 
 	/* The reserved tag uses a dedicated UCD outside the pool. */
 	if (unlikely(blk_mq_is_reserved_rq(scsi_cmd_to_rq(cmd)))) {
 		struct utp_devman_cmd_desc *cmd_descp = hba->devman_ucd_base_addr;
 
-		cmd_desc_element_addr = hba->devman_ucd_dma_addr;
 		command_upiu = cmd_descp->command_upiu;
 		response_upiu = cmd_descp->response_upiu;
 		prd_table = cmd_descp->prd_table;
@@ -3007,22 +2993,15 @@ static void ufshcd_init_lrb(struct ufs_hba *hba, struct scsi_cmnd *cmd)
 		WARN_ON_ONCE(slot < 0);
 		cmd_descp = (void *)hba->ucdl_base_addr + slot * ufshcd_get_ucd_size(hba);
 
-		cmd_desc_element_addr =
-			hba->ucdl_dma_addr + slot * ufshcd_get_ucd_size(hba);
 		command_upiu = cmd_descp->command_upiu;
 		response_upiu = cmd_descp->response_upiu;
 		prd_table = cmd_descp->prd_table;
 	}
 
 	lrb->utr_descriptor_ptr = utrdlp + i;
-	lrb->utrd_dma_addr =
-		hba->utrdl_dma_addr + i * sizeof(struct utp_transfer_req_desc);
 	lrb->ucd_req_ptr = (struct utp_upiu_req *)command_upiu;
-	lrb->ucd_req_dma_addr = cmd_desc_element_addr;
 	lrb->ucd_rsp_ptr = (struct utp_upiu_rsp *)response_upiu;
-	lrb->ucd_rsp_dma_addr = cmd_desc_element_addr + response_offset;
 	lrb->ucd_prdt_ptr = (struct ufshcd_sg_entry *)prd_table;
-	lrb->ucd_prdt_dma_addr = cmd_desc_element_addr + prdt_offset;
 }
 
 static void __ufshcd_setup_cmd(struct ufs_hba *hba, struct scsi_cmnd *cmd,
@@ -4697,10 +4676,20 @@ EXPORT_SYMBOL_GPL(ufshcd_uic_change_pwr_mode);
 
 int ufshcd_link_recovery(struct ufs_hba *hba)
 {
+	u32 saved_err, saved_uic_err;
 	int ret;
 	unsigned long flags;
 
 	spin_lock_irqsave(&hba->host->host_lock, flags);
+	/*
+	 * The errors saved so far are handled by this full reset, so cache and
+	 * clear them first, in case new errors are generated during recovery.
+	 */
+	saved_err = hba->saved_err;
+	saved_uic_err = hba->saved_uic_err;
+	hba->saved_err = 0;
+	hba->saved_uic_err = 0;
+	hba->force_reset = false;
 	hba->ufshcd_state = UFSHCD_STATE_RESET;
 	ufshcd_set_eh_in_progress(hba);
 	spin_unlock_irqrestore(&hba->host->host_lock, flags);
@@ -4711,8 +4700,11 @@ int ufshcd_link_recovery(struct ufs_hba *hba)
 	ret = ufshcd_host_reset_and_restore(hba);
 
 	spin_lock_irqsave(&hba->host->host_lock, flags);
-	if (ret)
+	if (ret) {
 		hba->ufshcd_state = UFSHCD_STATE_ERROR;
+		hba->saved_err |= saved_err;
+		hba->saved_uic_err |= saved_uic_err;
+	}
 	ufshcd_clear_eh_in_progress(hba);
 	spin_unlock_irqrestore(&hba->host->host_lock, flags);
 
@@ -7052,6 +7044,23 @@ out:
 	return ret != 0;
 }
 
+/*
+ * Whether a runtime PM callback of the WLUN runs __ufshcd_wl_suspend() or
+ * __ufshcd_wl_resume().
+ */
+static bool ufshcd_in_wl_rpm_callback(struct ufs_hba *hba)
+{
+#ifdef CONFIG_PM
+	enum rpm_status status =
+		READ_ONCE(hba->ufs_device_wlun->sdev_gendev.power.runtime_status);
+
+	return READ_ONCE(hba->pm_op_in_progress) &&
+	       (status == RPM_SUSPENDING || status == RPM_RESUMING);
+#else
+	return false;
+#endif
+}
+
 /**
  * ufshcd_err_handler - handle UFS errors that require s/w attention
  * @work: pointer to work structure
@@ -7081,9 +7090,14 @@ static void ufshcd_err_handler(struct work_struct *work)
 		 * runtime resume. This avoids potential deadlocks that could
 		 * happen if we tried to resume the device while a PM operation
 		 * is already in progress.
+		 *
+		 * Do this only while the PM callbacks run for a runtime PM
+		 * operation. The system PM and poweroff callbacks hold
+		 * host_sem, and shutting_down makes the regular path below
+		 * stop, so it does not reset the link concurrently with them.
 		 */
 		ufshcd_rpm_get_noresume(hba);
-		if (hba->pm_op_in_progress) {
+		if (ufshcd_in_wl_rpm_callback(hba)) {
 			ufshcd_link_recovery(hba);
 			ufshcd_rpm_put(hba);
 			return;
@@ -10096,9 +10110,6 @@ static int ufshcd_hba_init(struct ufs_hba *hba)
 	if (err)
 		goto out_disable_vreg;
 
-	ufs_debugfs_hba_init(hba);
-	ufs_fault_inject_hba_init(hba);
-
 	hba->is_powered = true;
 	goto out;
 
@@ -10120,7 +10131,6 @@ static void ufshcd_hba_exit(struct ufs_hba *hba)
 		ufshcd_exit_clk_gating(hba);
 		if (hba->eh_wq)
 			destroy_workqueue(hba->eh_wq);
-		ufs_debugfs_hba_exit(hba);
 		ufshcd_vops_exit(hba);
 		ufshcd_setup_vreg(hba, false);
 		ufshcd_setup_clocks(hba, false);
@@ -10387,7 +10397,7 @@ static int __ufshcd_wl_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	enum ufs_dev_pwr_mode req_dev_pwr_mode;
 	enum uic_link_state req_link_state;
 
-	hba->pm_op_in_progress = true;
+	WRITE_ONCE(hba->pm_op_in_progress, true);
 	if (pm_op != UFS_SHUTDOWN_PM) {
 		pm_lvl = pm_op == UFS_RUNTIME_PM ?
 			 hba->rpm_lvl : hba->spm_lvl;
@@ -10560,7 +10570,7 @@ out:
 		hba->clk_gating.is_suspended = false;
 		ufshcd_release(hba);
 	}
-	hba->pm_op_in_progress = false;
+	WRITE_ONCE(hba->pm_op_in_progress, false);
 	return ret;
 }
 
@@ -10570,7 +10580,7 @@ static int __ufshcd_wl_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	int ret;
 	enum uic_link_state old_link_state = hba->uic_link_state;
 
-	hba->pm_op_in_progress = true;
+	WRITE_ONCE(hba->pm_op_in_progress, true);
 
 	/*
 	 * Call vendor specific resume callback. As these callbacks may access
@@ -10667,7 +10677,7 @@ out:
 		hba->clk_gating.is_suspended = false;
 		ufshcd_release(hba);
 	}
-	hba->pm_op_in_progress = false;
+	WRITE_ONCE(hba->pm_op_in_progress, false);
 	return ret;
 }
 
@@ -10713,7 +10723,7 @@ static int ufshcd_wl_runtime_resume(struct device *dev)
 #endif
 
 #ifdef CONFIG_PM_SLEEP
-static int ufshcd_wl_suspend(struct device *dev)
+static int ufshcd_wl_system_suspend(struct device *dev, enum ufs_pm_op pm_op)
 {
 	struct scsi_device *sdev = to_scsi_device(dev);
 	struct ufs_hba *hba;
@@ -10726,10 +10736,13 @@ static int ufshcd_wl_suspend(struct device *dev)
 	if (pm_runtime_suspended(dev))
 		goto out;
 
-	ret = __ufshcd_wl_suspend(hba, UFS_SYSTEM_PM);
+	ret = __ufshcd_wl_suspend(hba, pm_op);
 	if (ret) {
 		dev_err(&sdev->sdev_gendev, "%s failed: %d\n", __func__,  ret);
 		up(&hba->host_sem);
+		/* __ufshcd_wl_suspend() can return a positive status for UFS_SHUTDOWN_PM. */
+		if (ret > 0)
+			ret = -EBUSY;
 	}
 
 out:
@@ -10740,6 +10753,11 @@ out:
 		hba->curr_dev_pwr_mode, hba->uic_link_state);
 
 	return ret;
+}
+
+static int ufshcd_wl_suspend(struct device *dev)
+{
+	return ufshcd_wl_system_suspend(dev, UFS_SYSTEM_PM);
 }
 
 static int ufshcd_wl_resume(struct device *dev)
@@ -11006,6 +11024,7 @@ void ufshcd_remove(struct ufs_hba *hba)
 	ufs_bsg_remove(hba);
 	ufs_rpmb_remove(hba);
 	ufs_sysfs_remove_nodes(hba->dev);
+	ufs_debugfs_hba_exit(hba);
 	cancel_delayed_work_sync(&hba->ufs_rtc_update_work);
 	blk_mq_destroy_queue(hba->tmf_queue);
 	blk_put_queue(hba->tmf_queue);
@@ -11352,6 +11371,7 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 	}
 	INIT_WORK(&hba->eh_work, ufshcd_err_handler);
 	INIT_WORK(&hba->eeh_work, ufshcd_exception_event_handler);
+	ufs_debugfs_ee_init(hba);
 
 	sema_init(&hba->host_sem, 1);
 
@@ -11483,6 +11503,8 @@ initialized:
 	ufs_sysfs_add_nodes(hba->dev);
 	hba->dme_qos_sysfs_handle = sysfs_get_dirent(hba->dev->kobj.sd,
 						     "dme_qos_notification");
+	ufs_debugfs_hba_init(hba);
+	ufs_fault_inject_hba_init(hba);
 	async_schedule(ufshcd_async_scan, hba);
 
 	device_enable_async_suspend(dev);
@@ -11571,11 +11593,7 @@ EXPORT_SYMBOL_GPL(ufshcd_suspend_prepare);
 #ifdef CONFIG_PM_SLEEP
 static int ufshcd_wl_poweroff(struct device *dev)
 {
-	struct scsi_device *sdev = to_scsi_device(dev);
-	struct ufs_hba *hba = shost_priv(sdev->host);
-
-	__ufshcd_wl_suspend(hba, UFS_SHUTDOWN_PM);
-	return 0;
+	return ufshcd_wl_system_suspend(dev, UFS_SHUTDOWN_PM);
 }
 #endif
 

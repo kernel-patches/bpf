@@ -55,7 +55,10 @@ config SND_PCSP
 	  If you don't have a sound card in your computer, you can include a
 	  driver for the PC speaker which allows it to act like a primitive
 	  sound card.
-	  This driver also replaces the pcspkr driver for beeps.
+	  This driver also replaces the pcspkr driver for beeps. If the
+	  pcspkr driver (INPUT_PCSPKR) is enabled too, only pcspkr is loaded
+	  automatically. To use this driver instead, prevent pcspkr from
+	  loading, and load this driver explicitly.
 
 	  You can compile this as a module which will be called snd-pcsp.
 

@@ -26,7 +26,6 @@
 #define _I915_REG_H_
 
 #include "i915_reg_defs.h"
-#include "display/intel_display_reg_defs.h"
 
 /**
  * DOC: The i915 register macro definition style guide
@@ -116,6 +115,8 @@
  *  #define GEN8_BAR                    _MMIO(0xb888)
  */
 
+#define __VLV_DISPLAY_BASE		0x180000
+
 #define GU_CNTL				_MMIO(0x101010)
 #define   LMEM_INIT			REG_BIT(7)
 #define   DRIVERFLR			REG_BIT(31)
@@ -152,7 +153,7 @@
 /*
  * IOSF sideband
  */
-#define VLV_IOSF_DOORBELL_REQ			_MMIO(VLV_DISPLAY_BASE + 0x2100)
+#define VLV_IOSF_DOORBELL_REQ			_MMIO(__VLV_DISPLAY_BASE + 0x2100)
 #define   IOSF_DEVFN_SHIFT			24
 #define   IOSF_OPCODE_SHIFT			16
 #define   IOSF_PORT_SHIFT			8
@@ -174,8 +175,8 @@
 #define   CHV_IOSF_PORT_GPIO_SE			0x48
 #define   CHV_IOSF_PORT_GPIO_E			0xa8
 #define   CHV_IOSF_PORT_GPIO_SW			0xb2
-#define VLV_IOSF_DATA				_MMIO(VLV_DISPLAY_BASE + 0x2104)
-#define VLV_IOSF_ADDR				_MMIO(VLV_DISPLAY_BASE + 0x2108)
+#define VLV_IOSF_DATA				_MMIO(__VLV_DISPLAY_BASE + 0x2104)
+#define VLV_IOSF_ADDR				_MMIO(__VLV_DISPLAY_BASE + 0x2108)
 
 /* DPIO registers */
 #define DPIO_DEVFN			0
@@ -325,16 +326,8 @@
 #define GEN7_MEDIA_MAX_REQ_COUNT	_MMIO(0x4070)
 #define GEN7_GFX_MAX_REQ_COUNT		_MMIO(0x4074)
 
-#define FPGA_DBG		_MMIO(0x42300)
-#define   FPGA_DBG_RM_NOCLAIM	REG_BIT(31)
-
-#define CLAIM_ER		_MMIO(VLV_DISPLAY_BASE + 0x2028)
-#define   CLAIM_ER_CLR		REG_BIT(31)
-#define   CLAIM_ER_OVERFLOW	REG_BIT(16)
-#define   CLAIM_ER_CTR_MASK	REG_GENMASK(15, 0)
-
-#define VLV_GU_CTL0	_MMIO(VLV_DISPLAY_BASE + 0x2030)
-#define VLV_GU_CTL1	_MMIO(VLV_DISPLAY_BASE + 0x2034)
+#define VLV_GU_CTL0	_MMIO(__VLV_DISPLAY_BASE + 0x2030)
+#define VLV_GU_CTL1	_MMIO(__VLV_DISPLAY_BASE + 0x2034)
 #define GEN2_IER	_MMIO(0x20a0)
 #define GEN2_IIR	_MMIO(0x20a4)
 #define GEN2_IMR	_MMIO(0x20a8)
@@ -344,10 +337,10 @@
 					      GEN2_IER, \
 					      GEN2_IIR)
 
-#define VLV_GUNIT_CLOCK_GATE	_MMIO(VLV_DISPLAY_BASE + 0x2060)
+#define VLV_GUNIT_CLOCK_GATE	_MMIO(__VLV_DISPLAY_BASE + 0x2060)
 #define   GINT_DIS		(1 << 22)
 #define   GCFG_DIS		(1 << 8)
-#define VLV_GUNIT_CLOCK_GATE2	_MMIO(VLV_DISPLAY_BASE + 0x2064)
+#define VLV_GUNIT_CLOCK_GATE2	_MMIO(__VLV_DISPLAY_BASE + 0x2064)
 
 #define EIR		_MMIO(0x20b0)
 #define EMR		_MMIO(0x20b4)
@@ -616,7 +609,7 @@
 #define VLV_CLK_CTL2			_MMIO(0x101104)
 #define   CLK_CTL2_CZCOUNT_30NS_SHIFT	28
 
-#define VLV_DPFLIPSTAT				_MMIO(VLV_DISPLAY_BASE + 0x70028)
+#define VLV_DPFLIPSTAT				_MMIO(__VLV_DISPLAY_BASE + 0x70028)
 #define   PIPEB_LINE_COMPARE_INT_EN			REG_BIT(29)
 #define   PIPEB_HLINE_INT_EN			REG_BIT(28)
 #define   PIPEB_VBLANK_INT_EN			REG_BIT(27)
@@ -681,9 +674,28 @@
 						      GEN8_PCU_IER, \
 						      GEN8_PCU_IIR)
 
+#define GEN11_GU_MISC_ISR	_MMIO(0x444f0)
+#define GEN11_GU_MISC_IMR	_MMIO(0x444f4)
+#define GEN11_GU_MISC_IIR	_MMIO(0x444f8)
+#define GEN11_GU_MISC_IER	_MMIO(0x444fc)
+#define   GEN11_GU_MISC_GSE	REG_BIT(27)
+
+#define GEN11_GU_MISC_IRQ_REGS		I915_IRQ_REGS(GEN11_GU_MISC_IMR, \
+						      GEN11_GU_MISC_IER, \
+						      GEN11_GU_MISC_IIR)
+
 #define DG1_MSTR_TILE_INTR		_MMIO(0x190008)
 #define   DG1_MSTR_IRQ			REG_BIT(31)
 #define   DG1_MSTR_TILE(t)		REG_BIT(t)
+
+#define GEN11_GFX_MSTR_IRQ		_MMIO(0x190010)
+#define   GEN11_MASTER_IRQ		REG_BIT(31)
+#define   GEN11_PCU_IRQ			REG_BIT(30)
+#define   GEN11_GU_MISC_IRQ		REG_BIT(29)
+#define   GEN11_DISPLAY_IRQ		REG_BIT(16)
+#define   GEN11_GT_DW_IRQ(x)		REG_BIT(x)
+#define   GEN11_GT_DW1_IRQ		REG_BIT(1)
+#define   GEN11_GT_DW0_IRQ		REG_BIT(0)
 
 #define IVB_CHICKEN3		_MMIO(0x4200c)
 #define   CHICKEN3_DGMG_REQ_OUT_FIX_DISABLE	REG_BIT(5)

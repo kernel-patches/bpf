@@ -730,7 +730,7 @@ void __switch_to_xtra(struct task_struct *prev_p, struct task_struct *next_p)
 	    arch_has_block_step()) {
 		unsigned long debugctl, msk;
 
-		rdmsrq(MSR_IA32_DEBUGCTLMSR, debugctl);
+		debugctl = rdmsrq(MSR_IA32_DEBUGCTLMSR);
 		debugctl &= ~DEBUGCTLMSR_BTF;
 		msk = tifn & _TIF_BLOCKSTEP;
 		debugctl |= (msk >> TIF_BLOCKSTEP) << DEBUGCTLMSR_BTF_SHIFT;
@@ -980,7 +980,7 @@ void __init arch_post_acpi_subsys_init(void)
 	 * the machine is affected K8_INTP_C1E_ACTIVE_MASK bits are set in
 	 * MSR_K8_INT_PENDING_MSG.
 	 */
-	rdmsrq(MSR_K8_INT_PENDING_MSG, val);
+	val = rdmsrq(MSR_K8_INT_PENDING_MSG);
 	if (!(val & K8_INTP_C1E_ACTIVE_MASK))
 		return;
 

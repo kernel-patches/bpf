@@ -2446,13 +2446,13 @@ static void __init dell_battery_init(struct device *dev)
 	battery_supported_modes = battery_get_supported_modes();
 
 	if (battery_supported_modes != 0)
-		battery_hook_register(&dell_battery_hook);
+		acpi_battery_hook_register(&dell_battery_hook);
 }
 
 static void dell_battery_exit(void)
 {
 	if (battery_supported_modes != 0)
-		battery_hook_unregister(&dell_battery_hook);
+		acpi_battery_hook_unregister(&dell_battery_hook);
 }
 
 static int __init dell_init(void)

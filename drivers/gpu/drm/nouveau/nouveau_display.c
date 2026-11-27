@@ -719,7 +719,9 @@ nouveau_display_create(struct drm_device *dev)
 	if (ret)
 		goto disp_create_err;
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		goto vblank_err;
 
 	if (dev->mode_config.num_crtc) {
 		ret = drm_vblank_init(dev, dev->mode_config.num_crtc);

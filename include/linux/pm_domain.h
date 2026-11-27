@@ -304,7 +304,6 @@ struct generic_pm_domain_data {
 	unsigned int opp_token;
 	bool hw_mode;
 	bool rpm_always_on;
-	void *data;
 };
 
 #ifdef CONFIG_PM_GENERIC_DOMAINS

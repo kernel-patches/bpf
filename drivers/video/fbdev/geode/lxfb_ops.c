@@ -124,19 +124,19 @@ static const struct {
 
 static void lx_set_dotpll(u32 pllval)
 {
-	u32 dotpll_lo, dotpll_hi;
+	struct msr dotpll;
 	int i;
 
-	rdmsr(MSR_GLCP_DOTPLL, dotpll_lo, dotpll_hi);
+	dotpll.q = rdmsrq(MSR_GLCP_DOTPLL);
 
-	if ((dotpll_lo & MSR_GLCP_DOTPLL_LOCK) && (dotpll_hi == pllval))
+	if ((dotpll.l & MSR_GLCP_DOTPLL_LOCK) && (dotpll.h == pllval))
 		return;
 
-	dotpll_hi = pllval;
-	dotpll_lo &= ~(MSR_GLCP_DOTPLL_BYPASS | MSR_GLCP_DOTPLL_HALFPIX);
-	dotpll_lo |= MSR_GLCP_DOTPLL_DOTRESET;
+	dotpll.h = pllval;
+	dotpll.l &= ~(MSR_GLCP_DOTPLL_BYPASS | MSR_GLCP_DOTPLL_HALFPIX);
+	dotpll.l |= MSR_GLCP_DOTPLL_DOTRESET;
 
-	wrmsr(MSR_GLCP_DOTPLL, dotpll_lo, dotpll_hi);
+	wrmsrq(MSR_GLCP_DOTPLL, dotpll.q);
 
 	/* Wait 100us for the PLL to lock */
 
@@ -145,15 +145,15 @@ static void lx_set_dotpll(u32 pllval)
 	/* Now, loop for the lock bit */
 
 	for (i = 0; i < 1000; i++) {
-		rdmsr(MSR_GLCP_DOTPLL, dotpll_lo, dotpll_hi);
-		if (dotpll_lo & MSR_GLCP_DOTPLL_LOCK)
+		dotpll.q = rdmsrq(MSR_GLCP_DOTPLL);
+		if (dotpll.l & MSR_GLCP_DOTPLL_LOCK)
 			break;
 	}
 
 	/* Clear the reset bit */
 
-	dotpll_lo &= ~MSR_GLCP_DOTPLL_DOTRESET;
-	wrmsr(MSR_GLCP_DOTPLL, dotpll_lo, dotpll_hi);
+	dotpll.l &= ~MSR_GLCP_DOTPLL_DOTRESET;
+	wrmsrq(MSR_GLCP_DOTPLL, dotpll.q);
 }
 
 /* Set the clock based on the frequency specified by the current mode */
@@ -268,7 +268,7 @@ static void lx_graphics_enable(struct fb_info *info)
 		config |= VP_DCFG_CRT_VSYNC_POL;
 
 	if (par->output & OUTPUT_PANEL) {
-		u32 msrlo, msrhi;
+		struct msr val;
 
 		write_fp(par, FP_PT1, 0);
 		temp = FP_PT2_SCRC;
@@ -282,10 +282,10 @@ static void lx_graphics_enable(struct fb_info *info)
 		write_fp(par, FP_PT2, temp);
 		write_fp(par, FP_DFC, FP_DFC_BC);
 
-		msrlo = MSR_LX_MSR_PADSEL_TFT_SEL_LOW;
-		msrhi = MSR_LX_MSR_PADSEL_TFT_SEL_HIGH;
+		val.l = MSR_LX_MSR_PADSEL_TFT_SEL_LOW;
+		val.h = MSR_LX_MSR_PADSEL_TFT_SEL_HIGH;
 
-		wrmsr(MSR_LX_MSR_PADSEL, msrlo, msrhi);
+		wrmsrq(MSR_LX_MSR_PADSEL, val.q);
 	}
 
 	if (par->output & OUTPUT_CRT) {
@@ -313,15 +313,15 @@ unsigned int lx_framebuffer_size(void)
 	unsigned int val;
 
 	if (!cs5535_has_vsa2()) {
-		uint32_t hi, lo;
+		struct msr msr;
 
 		/* The number of pages is (PMAX - PMIN)+1 */
-		rdmsr(MSR_GLIU_P2D_RO0, lo, hi);
+		msr.q = rdmsrq(MSR_GLIU_P2D_RO0);
 
 		/* PMAX */
-		val = ((hi & 0xff) << 12) | ((lo & 0xfff00000) >> 20);
+		val = ((msr.h & 0xff) << 12) | ((msr.l & 0xfff00000) >> 20);
 		/* PMIN */
-		val -= (lo & 0x000fffff);
+		val -= (msr.l & 0x000fffff);
 		val += 1;
 
 		/* The page size is 4k */
@@ -359,7 +359,7 @@ void lx_set_mode(struct fb_info *info)
 
 	/* Set output mode */
 
-	rdmsrq(MSR_LX_GLD_MSR_CONFIG, msrval);
+	msrval = rdmsrq(MSR_LX_GLD_MSR_CONFIG);
 	msrval &= ~MSR_LX_GLD_MSR_CONFIG_FMT;
 
 	if (par->output & OUTPUT_PANEL) {
@@ -420,7 +420,7 @@ void lx_set_mode(struct fb_info *info)
 
 	/* Set default watermark values */
 
-	rdmsrq(MSR_LX_SPARE_MSR, msrval);
+	msrval = rdmsrq(MSR_LX_SPARE_MSR);
 
 	msrval &= ~(MSR_LX_SPARE_MSR_DIS_CFIFO_HGO
 			| MSR_LX_SPARE_MSR_VFIFO_ARB_SEL
@@ -592,10 +592,10 @@ static void lx_save_regs(struct lxfb_par *par)
 	} while ((i & GP_BLT_STATUS_PB) || !(i & GP_BLT_STATUS_CE));
 
 	/* save MSRs */
-	rdmsrq(MSR_LX_MSR_PADSEL, par->msr.padsel);
-	rdmsrq(MSR_GLCP_DOTPLL, par->msr.dotpll);
-	rdmsrq(MSR_LX_GLD_MSR_CONFIG, par->msr.dfglcfg);
-	rdmsrq(MSR_LX_SPARE_MSR, par->msr.dcspare);
+	par->msr.padsel = rdmsrq(MSR_LX_MSR_PADSEL);
+	par->msr.dotpll = rdmsrq(MSR_GLCP_DOTPLL);
+	par->msr.dfglcfg = rdmsrq(MSR_LX_GLD_MSR_CONFIG);
+	par->msr.dcspare = rdmsrq(MSR_LX_SPARE_MSR);
 
 	write_dc(par, DC_UNLOCK, DC_UNLOCK_UNLOCK);
 

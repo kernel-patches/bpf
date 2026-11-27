@@ -20,6 +20,7 @@
 #include "xe_gt_printk.h"
 #include "xe_mmio.h"
 #include "xe_sriov.h"
+#include "xe_tile.h"
 #include "xe_ttm_stolen_mgr.h"
 #include "xe_vram.h"
 #include "xe_wa.h"
@@ -38,34 +39,12 @@ bool xe_ttm_stolen_cpu_access_needs_ggtt(struct xe_device *xe)
 	return GRAPHICS_VERx100(xe) < 1270 && !IS_DGFX(xe);
 }
 
-static u32 get_wopcm_size(struct xe_device *xe)
-{
-	u32 wopcm_size;
-	u64 val;
-
-	val = xe_mmio_read64_2x32(xe_root_tile_mmio(xe), STOLEN_RESERVED);
-	val = REG_FIELD_GET64(WOPCM_SIZE_MASK, val);
-
-	switch (val) {
-	case 0x5 ... 0x6:
-		val--;
-		fallthrough;
-	case 0x0 ... 0x3:
-		wopcm_size = (1U << val) * SZ_1M;
-		break;
-	default:
-		WARN(1, "Missing case wopcm_size=%llx\n", val);
-		wopcm_size = 0;
-	}
-
-	return wopcm_size;
-}
-
 static u64 detect_lmembar_dgfx(struct xe_device *xe, struct xe_ttm_stolen_mgr *mgr)
 {
-	struct xe_vram_region *tile_vram = xe_device_get_root_tile(xe)->mem.vram;
+	struct xe_tile *root_tile = xe_device_get_root_tile(xe);
+	struct xe_vram_region *tile_vram = root_tile->mem.vram;
 	resource_size_t tile_io_start = xe_vram_region_io_start(tile_vram);
-	struct xe_mmio *mmio = xe_root_tile_mmio(xe);
+	struct xe_mmio *mmio = &root_tile->mmio;
 	struct pci_dev *pdev = to_pci_dev(xe->drm.dev);
 	u64 stolen_size, wopcm_size;
 	u64 tile_offset;
@@ -79,8 +58,14 @@ static u64 detect_lmembar_dgfx(struct xe_device *xe, struct xe_ttm_stolen_mgr *m
 	if (drm_WARN_ON(&xe->drm, tile_size < mgr->stolen_base))
 		return 0;
 
-	/* Carve out the top of DSM as it contains the reserved WOPCM region */
-	wopcm_size = get_wopcm_size(xe);
+	/*
+	 * Carve out the top of DSM as it contains the reserved WOPCM region.
+	 * Note that the WOPCM region is per-tile, but the code below only looks
+	 * at the root tile values for both stolen and WOPCM; this works because
+	 * on PVC there is no driver-usable stolen, so stolen_size is 0 for
+	 * both tiles, but if that changes we'll need to rework this.
+	 */
+	wopcm_size = xe_tile_wopcm_size(root_tile);
 	if (drm_WARN_ON(&xe->drm, !wopcm_size))
 		return 0;
 
@@ -105,11 +90,12 @@ static u64 detect_lmembar_dgfx(struct xe_device *xe, struct xe_ttm_stolen_mgr *m
 static u32 detect_lmembar_integrated(struct xe_device *xe, struct xe_ttm_stolen_mgr *mgr)
 {
 	struct pci_dev *pdev = to_pci_dev(xe->drm.dev);
-	struct xe_gt *media_gt = xe_device_get_root_tile(xe)->media_gt;
+	struct xe_tile *root_tile = xe_device_get_root_tile(xe);
+	struct xe_gt *media_gt = root_tile->media_gt;
 	u32 stolen_size, wopcm_size;
 	u32 ggc, gms;
 
-	ggc = xe_mmio_read32(xe_root_tile_mmio(xe), GGC);
+	ggc = xe_mmio_read32(&root_tile->mmio, GGC);
 
 	/*
 	 * Check GGMS: it should be fixed 0x3 (8MB), which corresponds to the
@@ -141,8 +127,13 @@ static u32 detect_lmembar_integrated(struct xe_device *xe, struct xe_ttm_stolen_
 		return 0;
 	}
 
-	/* Carve out the top of DSM as it contains the reserved WOPCM region */
-	wopcm_size = get_wopcm_size(xe);
+	/*
+	 * Carve out the top of DSM as it contains the reserved WOPCM region. We
+	 * assume only the root tile is present, so we don't need to worry about
+	 * the WOPCM size for the remote tiles.
+	 */
+	xe_assert(xe, xe->info.tile_count == 1);
+	wopcm_size = xe_tile_wopcm_size(root_tile);
 	if (drm_WARN_ON(&xe->drm, !wopcm_size))
 		return 0;
 

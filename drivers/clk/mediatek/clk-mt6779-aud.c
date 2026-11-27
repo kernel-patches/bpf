@@ -33,6 +33,7 @@ static const struct mtk_gate_regs audio1_cg_regs = {
 		&mtk_clk_gate_ops_no_setclr)
 
 static const struct mtk_gate audio_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "aud_dummy"),
 	/* AUDIO0 */
 	GATE_AUDIO0(CLK_AUD_AFE, "aud_afe", "audio_sel", 2),
 	GATE_AUDIO0(CLK_AUD_22M, "aud_22m", "aud_eng1_sel", 8),

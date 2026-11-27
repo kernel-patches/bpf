@@ -55,10 +55,7 @@ static const struct seq_operations devinfo_ops = {
 
 static int __init proc_devices_init(void)
 {
-	struct proc_dir_entry *pde;
-
-	pde = proc_create_seq("devices", 0, NULL, &devinfo_ops);
-	pde_make_permanent(pde);
+	proc_create_seq_permanent("devices", 0, NULL, &devinfo_ops);
 	return 0;
 }
 fs_initcall(proc_devices_init);

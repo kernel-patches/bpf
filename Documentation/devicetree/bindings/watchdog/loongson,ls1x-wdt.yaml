@@ -14,10 +14,15 @@ allOf:
 
 properties:
   compatible:
-    enum:
-      - loongson,ls1b-wdt
-      - loongson,ls1c-wdt
-      - loongson,ls2k0300-wdt
+    oneOf:
+      - enum:
+          - loongson,ls1b-wdt
+          - loongson,ls1c-wdt
+          - loongson,ls2k0300-wdt
+      - items:
+          - enum:
+              - loongson,ls7a-wdt
+          - const: loongson,ls2k0300-wdt
 
   reg:
     maxItems: 1

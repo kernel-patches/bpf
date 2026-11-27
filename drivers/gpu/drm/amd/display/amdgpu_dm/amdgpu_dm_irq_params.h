@@ -36,6 +36,8 @@ struct dm_irq_params {
 	int active_planes;
 	bool allow_sr_entry;
 	struct mod_freesync_config freesync_config;
+	bool vblank_irq_desired;
+	bool vblank_irq_programmed;
 
 #ifdef CONFIG_DEBUG_FS
 	enum amdgpu_dm_pipe_crc_source crc_src;

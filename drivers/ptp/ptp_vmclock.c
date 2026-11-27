@@ -17,6 +17,7 @@
 #include <linux/io.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
+#include <linux/kref.h>
 #include <linux/miscdevice.h>
 #include <linux/mm.h>
 #include <linux/module.h>
@@ -51,6 +52,8 @@ struct vmclock_state {
 	enum clocksource_ids cs_id, sys_cs_id;
 	int index;
 	char *name;
+	struct kref kref;
+	bool removed;
 };
 
 #define VMCLOCK_MAX_WAIT ms_to_ktime(100)
@@ -364,27 +367,29 @@ struct vmclock_file_state {
 	atomic_t seq;
 };
 
-static int vmclock_miscdev_mmap(struct file *fp, struct vm_area_struct *vma)
+static int vmclock_miscdev_mmap_prepare(struct vm_area_desc *desc)
 {
-	struct vmclock_file_state *fst = fp->private_data;
+	struct vmclock_file_state *fst = desc->file->private_data;
 	struct vmclock_state *st = fst->st;
 
-	if ((vma->vm_flags & (VM_READ|VM_WRITE)) != VM_READ)
+	if (READ_ONCE(st->removed))
+		return -ENODEV;
+
+	if (!vma_desc_test(desc, VMA_READ_BIT) ||
+	    vma_desc_test(desc, VMA_WRITE_BIT))
 		return -EROFS;
 
 	/*
 	 * Restrict the read-only mapping so it cannot be upgraded to
 	 * writable later with mprotect().
 	 */
-	vm_flags_clear(vma, VM_MAYWRITE);
+	vma_desc_clear_flags(desc, VMA_MAYWRITE_BIT);
 
-	if (vma->vm_end - vma->vm_start != PAGE_SIZE || vma->vm_pgoff)
+	if (vma_desc_size(desc) != PAGE_SIZE || desc->pgoff)
 		return -EINVAL;
 
-	if (io_remap_pfn_range(vma, vma->vm_start,
-			       st->res.start >> PAGE_SHIFT, PAGE_SIZE,
-			       vma->vm_page_prot))
-		return -EAGAIN;
+	mmap_action_ioremap_full(desc, st->res.start >> PAGE_SHIFT);
+	desc->action.error_override = -EAGAIN;
 
 	return 0;
 }
@@ -397,6 +402,9 @@ static ssize_t vmclock_miscdev_read(struct file *fp, char __user *buf,
 	struct vmclock_state *st = fst->st;
 	uint32_t seq, old_seq;
 	size_t max_count;
+
+	if (READ_ONCE(st->removed))
+		return -ENODEV;
 
 	if (*ppos >= PAGE_SIZE)
 		return 0;
@@ -450,6 +458,10 @@ static __poll_t vmclock_miscdev_poll(struct file *fp, poll_table *wait)
 
 	poll_wait(fp, &st->disrupt_wait, wait);
 
+	/* After poll_wait(), so vmclock_remove()'s wake-up is not missed */
+	if (READ_ONCE(st->removed))
+		return EPOLLHUP | EPOLLERR;
+
 	seq = le32_to_cpu(st->clk->seq_count);
 	if (atomic_read(&fst->seq) != seq)
 		return POLLIN | POLLRDNORM;
@@ -466,6 +478,12 @@ static int vmclock_miscdev_open(struct inode *inode, struct file *fp)
 	if (!fst)
 		return -ENOMEM;
 
+	/*
+	 * misc_open() calls this with misc_mtx held, and vmclock_remove()
+	 * calls misc_deregister(), which takes misc_mtx, before the device's
+	 * own reference is dropped.
+	 */
+	kref_get(&st->kref);
 	fst->st = st;
 	atomic_set(&fst->seq, 0);
 
@@ -474,9 +492,22 @@ static int vmclock_miscdev_open(struct inode *inode, struct file *fp)
 	return 0;
 }
 
+static void vmclock_free(struct kref *kref)
+{
+	struct vmclock_state *st =
+		container_of(kref, struct vmclock_state, kref);
+
+	if (st->clk)
+		memunmap(st->clk);
+	kfree(st);
+}
+
 static int vmclock_miscdev_release(struct inode *inode, struct file *fp)
 {
-	kfree(fp->private_data);
+	struct vmclock_file_state *fst = fp->private_data;
+
+	kref_put(&fst->st->kref, vmclock_free);
+	kfree(fst);
 	return 0;
 }
 
@@ -484,7 +515,7 @@ static const struct file_operations vmclock_miscdev_fops = {
 	.owner = THIS_MODULE,
 	.open = vmclock_miscdev_open,
 	.release = vmclock_miscdev_release,
-	.mmap = vmclock_miscdev_mmap,
+	.mmap_prepare = vmclock_miscdev_mmap_prepare,
 	.read = vmclock_miscdev_read,
 	.poll = vmclock_miscdev_poll,
 };
@@ -649,7 +680,18 @@ static void vmclock_remove(void *data)
 	if (st->miscdev.minor != MISC_DYNAMIC_MINOR)
 		misc_deregister(&st->miscdev);
 
+	/* Files still open now fail, and a poll() in progress returns */
+	WRITE_ONCE(st->removed, true);
+	wake_up_interruptible_all(&st->disrupt_wait);
+
 	dev->driver_data = NULL;
+}
+
+static void vmclock_put(void *data)
+{
+	struct vmclock_state *st = data;
+
+	kref_put(&st->kref, vmclock_free);
 }
 
 static void vmclock_put_idx(void *data)
@@ -665,9 +707,15 @@ static int vmclock_probe(struct platform_device *pdev)
 	struct vmclock_state *st;
 	int ret;
 
-	st = devm_kzalloc_obj(dev, *st);
+	/* Open files can outlive the device, so st is not devm memory */
+	st = kzalloc_obj(*st);
 	if (!st)
 		return -ENOMEM;
+	kref_init(&st->kref);
+
+	ret = devm_add_action_or_reset(dev, vmclock_put, st);
+	if (ret)
+		return ret;
 
 #if IS_ENABLED(CONFIG_ACPI)
 	if (has_acpi_companion(dev))
@@ -686,13 +734,11 @@ static int vmclock_probe(struct platform_device *pdev)
 			 resource_size(&st->res));
 		return -EINVAL;
 	}
-	st->clk = devm_memremap(dev, st->res.start, resource_size(&st->res),
-				MEMREMAP_WB | MEMREMAP_DEC);
-	if (IS_ERR(st->clk)) {
-		ret = PTR_ERR(st->clk);
+	st->clk = memremap(st->res.start, resource_size(&st->res),
+			   MEMREMAP_WB | MEMREMAP_DEC);
+	if (!st->clk) {
 		dev_info(dev, "failed to map shared memory\n");
-		st->clk = NULL;
-		return ret;
+		return -ENXIO;
 	}
 
 	if (le32_to_cpu(st->clk->magic) != VMCLOCK_MAGIC ||

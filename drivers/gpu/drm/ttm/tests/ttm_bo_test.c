@@ -450,7 +450,7 @@ static void ttm_bo_fini_shared_resv(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, fence);
 
 	spin_lock_init(&fence_lock);
-	dma_fence_init(fence, &mock_fence_ops, &fence_lock, 0, 0);
+	dma_fence_init(fence, &mock_fence_ops, &fence_lock, 0, 0, 0);
 
 	dma_resv_lock(external_resv, NULL);
 	dma_resv_reserve_fences(external_resv, 1);

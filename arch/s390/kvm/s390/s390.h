@@ -316,7 +316,7 @@ int kvm_s390_pv_unpack(struct kvm *kvm, unsigned long addr, unsigned long size,
 int kvm_s390_pv_set_cpu_state(struct kvm_vcpu *vcpu, u8 state);
 int kvm_s390_pv_dump_cpu(struct kvm_vcpu *vcpu, void *buff, u16 *rc, u16 *rrc);
 int kvm_s390_pv_dump_stor_state(struct kvm *kvm, void __user *buff_user,
-				u64 *gaddr, u64 buff_user_len, u16 *rc, u16 *rrc);
+				u64 gaddr, u64 buff_user_len, u16 *rc, u16 *rrc);
 int kvm_s390_pv_dump_complete(struct kvm *kvm, void __user *buff_user,
 			      u16 *rc, u16 *rrc);
 int kvm_s390_pv_destroy_page(struct kvm *kvm, unsigned long gaddr);
@@ -474,7 +474,7 @@ int __kvm_s390_mprotect_many(struct gmap *gmap, gpa_t gpa, u8 npages, unsigned i
 
 bool kvm_arch_setup_async_pf(struct kvm_vcpu *vcpu);
 void kvm_s390_update_cmma_dirty(struct kvm *kvm, const struct kvm_memory_slot *old);
-int kvm_s390_vm_stop_migration(struct kvm *kvm);
+void kvm_s390_vm_stop_migration(struct kvm *kvm);
 
 
 /* implemented in diag.c */

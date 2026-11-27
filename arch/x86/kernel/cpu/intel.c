@@ -159,7 +159,7 @@ static void detect_tme_early(struct cpuinfo_x86 *c)
 	u64 tme_activate;
 	int keyid_bits;
 
-	rdmsrq(MSR_IA32_TME_ACTIVATE, tme_activate);
+	tme_activate = rdmsrq(MSR_IA32_TME_ACTIVATE);
 
 	if (!TME_ACTIVATE_LOCKED(tme_activate) || !TME_ACTIVATE_ENABLED(tme_activate)) {
 		pr_info_once("x86/tme: not enabled by BIOS\n");
@@ -214,7 +214,7 @@ static u32 intel_cpuid_vfm(void)
 
 u32 intel_get_platform_id(void)
 {
-	unsigned int val[2];
+	u64 val;
 
 	if (x86_hypervisor_present)
 		return 0;
@@ -229,9 +229,9 @@ u32 intel_get_platform_id(void)
 		return 0;
 
 	/* get processor flags from MSR 0x17 */
-	native_rdmsr(MSR_IA32_PLATFORM_ID, val[0], val[1]);
+	val = native_rdmsrq(MSR_IA32_PLATFORM_ID);
 
-	return (val[1] >> 18) & 7;
+	return (val >> 50) & 7;
 }
 
 static void early_init_intel(struct cpuinfo_x86 *c)
@@ -335,7 +335,7 @@ static void early_init_intel(struct cpuinfo_x86 *c)
 	 * string flag and enhanced fast string capabilities accordingly.
 	 */
 	if (c->x86_vfm >= INTEL_PENTIUM_M_DOTHAN) {
-		rdmsrq(MSR_IA32_MISC_ENABLE, misc_enable);
+		misc_enable = rdmsrq(MSR_IA32_MISC_ENABLE);
 		if (misc_enable & MSR_IA32_MISC_ENABLE_FAST_STRING) {
 			/* X86_FEATURE_ERMS is set based on CPUID */
 			set_cpu_cap(c, X86_FEATURE_REP_GOOD);
@@ -579,7 +579,7 @@ static void init_intel(struct cpuinfo_x86 *c)
 	if (boot_cpu_has(X86_FEATURE_DS)) {
 		u64 l;
 
-		rdmsrq(MSR_IA32_MISC_ENABLE, l);
+		l = rdmsrq(MSR_IA32_MISC_ENABLE);
 		if (!(l & MSR_IA32_MISC_ENABLE_BTS_UNAVAIL))
 			set_cpu_cap(c, X86_FEATURE_BTS);
 		if (!(l & MSR_IA32_MISC_ENABLE_PEBS_UNAVAIL))

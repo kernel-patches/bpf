@@ -188,8 +188,32 @@ int amdgpu_xcp_init(struct amdgpu_xcp_mgr *xcp_mgr, int num_xcps, int mode)
 	return 0;
 }
 
+static int amdgpu_xcp_run_px_switch(struct amdgpu_device *adev, bool post)
+{
+	struct amdgpu_ip_block *ip_block;
+	int (*px_switch)(struct amdgpu_ip_block *ip_block);
+	int i, ret;
+
+	for (i = 0; i < adev->num_ip_blocks; i++) {
+		ip_block = &adev->ip_blocks[i];
+		if (!ip_block->version || !ip_block->version->funcs)
+			continue;
+
+		px_switch = post ? ip_block->version->funcs->post_px_switch :
+				   ip_block->version->funcs->pre_px_switch;
+		if (!px_switch)
+			continue;
+
+		ret = px_switch(ip_block);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int __amdgpu_xcp_switch_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr,
-					      int mode)
+					      int mode, u32 flags)
 {
 	int ret, curr_mode, num_xcps = 0;
 
@@ -199,10 +223,15 @@ static int __amdgpu_xcp_switch_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr,
 	mutex_lock(&xcp_mgr->xcp_lock);
 
 	curr_mode = xcp_mgr->mode;
+	if (amdgpu_in_reset(xcp_mgr->adev) || xcp_mgr->adev->in_suspend ||
+	    curr_mode == AMDGPU_UNKNOWN_COMPUTE_PARTITION_MODE)
+		flags &= ~AMDGPU_XCP_OPS_IP;
+
 	/* State set to transient mode */
 	xcp_mgr->mode = AMDGPU_XCP_MODE_TRANS;
 
-	ret = xcp_mgr->funcs->switch_partition_mode(xcp_mgr, mode, &num_xcps);
+	ret = xcp_mgr->funcs->switch_partition_mode(xcp_mgr, mode, &num_xcps,
+						    flags);
 
 	if (ret) {
 		/* Failed, get whatever mode it's at now */
@@ -211,6 +240,19 @@ static int __amdgpu_xcp_switch_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr,
 				xcp_mgr, AMDGPU_XCP_FL_LOCKED);
 		else
 			xcp_mgr->mode = curr_mode;
+
+		/*
+		 * pre_px_switch may have stopped an IP. Each post_px_switch
+		 * decides what to bring back for the mode settled above.
+		 */
+		if (flags & AMDGPU_XCP_OPS_IP) {
+			int px_ret = amdgpu_xcp_run_px_switch(xcp_mgr->adev, true);
+
+			if (px_ret)
+				dev_err(xcp_mgr->adev->dev,
+					"Failed to restore IP state after partition switch failure: %d\n",
+					px_ret);
+		}
 
 		goto out;
 	}
@@ -229,7 +271,8 @@ int amdgpu_xcp_switch_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr, int mode)
 	if (xcp_mgr->mode == mode)
 		return 0;
 
-	return __amdgpu_xcp_switch_partition_mode(xcp_mgr, mode);
+	return __amdgpu_xcp_switch_partition_mode(xcp_mgr, mode,
+						  AMDGPU_XCP_OPS_IP);
 }
 
 int amdgpu_xcp_restore_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr)
@@ -237,7 +280,7 @@ int amdgpu_xcp_restore_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr)
 	if (!xcp_mgr || xcp_mgr->mode == AMDGPU_XCP_MODE_NONE)
 		return 0;
 
-	return __amdgpu_xcp_switch_partition_mode(xcp_mgr, xcp_mgr->mode);
+	return __amdgpu_xcp_switch_partition_mode(xcp_mgr, xcp_mgr->mode, 0);
 }
 
 static bool __amdgpu_xcp_is_cached_mode_valid(struct amdgpu_xcp_mgr *xcp_mgr)
@@ -413,7 +456,6 @@ int amdgpu_xcp_dev_register(struct amdgpu_device *adev,
 
 void amdgpu_xcp_dev_unplug(struct amdgpu_device *adev)
 {
-	struct drm_device *p_ddev;
 	int i;
 
 	if (!adev->xcp_mgr)
@@ -423,12 +465,39 @@ void amdgpu_xcp_dev_unplug(struct amdgpu_device *adev)
 		if (!adev->xcp_mgr->xcp[i].ddev)
 			break;
 
-		p_ddev = adev->xcp_mgr->xcp[i].ddev;
-		drm_dev_unplug(p_ddev);
-		p_ddev->render->dev = adev->xcp_mgr->xcp[i].rdev;
-		p_ddev->primary->dev = adev->xcp_mgr->xcp[i].pdev;
-		p_ddev->driver =  adev->xcp_mgr->xcp[i].driver;
-		p_ddev->vma_offset_manager = adev->xcp_mgr->xcp[i].vma_offset_manager;
+		drm_dev_unplug(adev->xcp_mgr->xcp[i].ddev);
+	}
+}
+
+void amdgpu_xcp_dev_fini(struct amdgpu_device *adev)
+{
+	struct amdgpu_xcp *xcp;
+	struct drm_device *p_ddev;
+	int i;
+
+	if (!adev->xcp_mgr)
+		return;
+
+	for (i = 1; i < MAX_XCP; i++) {
+		xcp = &adev->xcp_mgr->xcp[i];
+		if (!xcp->ddev)
+			break;
+
+		p_ddev = xcp->ddev;
+
+		/* Unregister devices on paths that did not unplug them earlier. */
+		if (p_ddev->registered)
+			drm_dev_unplug(p_ddev);
+
+		/*
+		 * All XCP minor files have been released, so it is now safe to
+		 * restore the partition device and free it.
+		 */
+		p_ddev->render->dev = xcp->rdev;
+		p_ddev->primary->dev = xcp->pdev;
+		p_ddev->driver = xcp->driver;
+		p_ddev->vma_offset_manager = xcp->vma_offset_manager;
+		xcp->ddev = NULL;
 		amdgpu_xcp_drm_dev_free(p_ddev);
 	}
 }
@@ -695,27 +764,52 @@ void amdgpu_xcp_update_supported_modes(struct amdgpu_xcp_mgr *xcp_mgr)
 
 int amdgpu_xcp_pre_partition_switch(struct amdgpu_xcp_mgr *xcp_mgr, u32 flags)
 {
+	struct amdgpu_device *adev = xcp_mgr->adev;
 	int ret = 0;
 
 	/* TODO:
 	 * Stop user queues and threads, and make sure GPU is empty of work.
 	 */
 
-	if (flags & AMDGPU_XCP_OPS_KFD)
-		ret = amdgpu_amdkfd_prepare_partition_switch(xcp_mgr->adev);
+	if (flags & AMDGPU_XCP_OPS_KFD) {
+		ret = amdgpu_amdkfd_prepare_partition_switch(adev);
+		if (ret)
+			return ret;
+	}
 
-	return ret;
+	/*
+	 * IP-specific prep while the old partition is still programmed.
+	 * enable_mes_kiq and similar checks belong in the IP callback.
+	 */
+	if (flags & AMDGPU_XCP_OPS_IP) {
+		ret = amdgpu_xcp_run_px_switch(adev, false);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 int amdgpu_xcp_post_partition_switch(struct amdgpu_xcp_mgr *xcp_mgr, u32 flags)
 {
+	struct amdgpu_device *adev = xcp_mgr->adev;
 	int ret = 0;
 
+	/*
+	 * The new partition mode is already committed. Let each IP
+	 * program itself before KFD recreates queues.
+	 */
+	if (flags & AMDGPU_XCP_OPS_IP) {
+		ret = amdgpu_xcp_run_px_switch(adev, true);
+		if (ret)
+			return ret;
+	}
+
 	if (flags & AMDGPU_XCP_OPS_KFD) {
-		amdgpu_amdkfd_device_probe(xcp_mgr->adev);
-		amdgpu_amdkfd_device_init(xcp_mgr->adev);
+		amdgpu_amdkfd_device_probe(adev);
+		amdgpu_amdkfd_device_init(adev);
 		/* If KFD init failed, return failure */
-		if (!xcp_mgr->adev->kfd.init_complete)
+		if (!adev->kfd.init_complete)
 			ret = -EIO;
 	}
 
@@ -797,6 +891,16 @@ static const struct sysfs_ops xcp_cfg_res_sysfs_ops = {
 };
 
 static const struct kobj_type xcp_cfg_res_sysfs_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): xcp_res->kobj
+	 * is embedded in struct amdgpu_xcp_cfg, freed by parent xcp_cfg->kobj's
+	 * xcp_cfg_sysfs_release(). While an added child pins xcp_cfg->kobj
+	 * until kobject_cleanup() finishes, if kobject_init_and_add() fails in
+	 * amdgpu_xcp_cfg_sysfs_init() no parent reference is held and
+	 * kfree(xcp_cfg) can race with delayed cleanup under
+	 * CONFIG_DEBUG_KOBJECT_RELEASE.
+	 */
+	.release = NULL,
 	.sysfs_ops = &xcp_cfg_res_sysfs_ops,
 	.default_groups = xcp_cfg_res_sysfs_groups,
 };
@@ -1061,6 +1165,13 @@ static const struct attribute_group amdgpu_xcp_attrs_group = {
 };
 
 static const struct kobj_type xcp_sysfs_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): xcp->kobj is
+	 * embedded in adev->xcp_mgr; amdgpu_xcp_sysfs_entries_fini() calls
+	 * kobject_put() and amdgpu_device_fini_sw() later calls
+	 * kfree(adev->xcp_mgr) without waiting for final kobject cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &kobj_sysfs_ops,
 };
 

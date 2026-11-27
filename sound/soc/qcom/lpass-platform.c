@@ -1281,7 +1281,7 @@ int asoc_qcom_lpass_platform_register(struct platform_device *pdev)
 
 	drvdata->lpaif_irq = platform_get_irq_byname(pdev, "lpass-irq-lpaif");
 	if (drvdata->lpaif_irq < 0)
-		return -ENODEV;
+		return drvdata->lpaif_irq;
 
 	/* ensure audio hardware is disabled */
 	ret = regmap_write(drvdata->lpaif_map,
@@ -1322,7 +1322,7 @@ int asoc_qcom_lpass_platform_register(struct platform_device *pdev)
 		}
 		drvdata->rxtxif_irq = platform_get_irq_byname(pdev, "lpass-irq-rxtxif");
 		if (drvdata->rxtxif_irq < 0)
-			return -ENODEV;
+			return drvdata->rxtxif_irq;
 
 		ret = devm_request_irq(&pdev->dev, drvdata->rxtxif_irq,
 				lpass_platform_rxtxif_irq, 0, "lpass-irq-rxtxif", drvdata);
@@ -1341,7 +1341,7 @@ int asoc_qcom_lpass_platform_register(struct platform_device *pdev)
 
 		drvdata->vaif_irq = platform_get_irq_byname(pdev, "lpass-irq-vaif");
 		if (drvdata->vaif_irq < 0)
-			return -ENODEV;
+			return drvdata->vaif_irq;
 
 		ret = devm_request_irq(&pdev->dev, drvdata->vaif_irq,
 				lpass_platform_vaif_irq, 0, "lpass-irq-vaif", drvdata);
@@ -1362,7 +1362,7 @@ int asoc_qcom_lpass_platform_register(struct platform_device *pdev)
 	if (drvdata->hdmi_port_enable) {
 		drvdata->hdmiif_irq = platform_get_irq_byname(pdev, "lpass-irq-hdmi");
 		if (drvdata->hdmiif_irq < 0)
-			return -ENODEV;
+			return drvdata->hdmiif_irq;
 
 		ret = devm_request_irq(&pdev->dev, drvdata->hdmiif_irq,
 				lpass_platform_hdmiif_irq, 0, "lpass-irq-hdmi", drvdata);

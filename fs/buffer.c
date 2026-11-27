@@ -25,6 +25,7 @@
 #include <linux/fs.h>
 #include <linux/iomap.h>
 #include <linux/mm.h>
+#include <linux/swap.h>
 #include <linux/percpu.h>
 #include <linux/slab.h>
 #include <linux/capability.h>
@@ -1449,7 +1450,7 @@ bool has_bh_in_lru(int cpu, void *dummy)
 	int i;
 	
 	for (i = 0; i < BH_LRU_SIZE; i++) {
-		if (b->bhs[i])
+		if (data_race(b->bhs[i]))
 			return true;
 	}
 

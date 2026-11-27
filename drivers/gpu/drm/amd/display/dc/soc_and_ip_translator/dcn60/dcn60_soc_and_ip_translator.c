@@ -65,6 +65,19 @@ static void dcn60_update_soc_bb_with_values_from_dmub(struct dml2_soc_bb *soc_bb
 	if (dmub_bb_params->g7_temperature_read_blackout_ns > 0)
 		soc_bb->power_management_parameters.g7_temperature_read_blackout_us =
 				(double) dmub_bb_params->g7_temperature_read_blackout_ns / 1000.0;
+	if (dmub_bb_params->fraction_of_urgent_bandwidth_nominal_target > 0)
+		soc_bb->fraction_of_urgent_bandwidth_nominal_target =
+				(double) dmub_bb_params->fraction_of_urgent_bandwidth_nominal_target / 1000.0;
+	if (dmub_bb_params->fraction_of_urgent_bandwidth_flip_target > 0)
+		soc_bb->fraction_of_urgent_bandwidth_flip_target =
+				(double) dmub_bb_params->fraction_of_urgent_bandwidth_flip_target / 1000.0;
+	if (dmub_bb_params->max_outstanding_reqs > 0)
+		soc_bb->max_outstanding_reqs = dmub_bb_params->max_outstanding_reqs;
+	if (dmub_bb_params->return_bus_width_bytes > 0)
+		soc_bb->return_bus_width_bytes = dmub_bb_params->return_bus_width_bytes;
+	if (dmub_bb_params->alternate_dram_carveout_size_mb > 0)
+		soc_bb->power_management_parameters.alternate_dram_carveout_size_mb =
+				dmub_bb_params->alternate_dram_carveout_size_mb;
 
 	/* populate alt-channel info */
 	for (i = 0; i < 2; i++) {
@@ -141,9 +154,90 @@ static void dcn60_get_soc_bb(struct dml2_soc_bb *soc_bb, const struct dc *dc, co
 
 }
 
-static void dcn60_get_ip_caps(struct dml2_ip_capabilities *ip_caps)
+static void dcn60_update_ip_caps_with_values_from_dmub(struct dml2_ip_capabilities *ip_caps,
+		const struct dml2_configuration_options *config)
+{
+	const struct dmub_soc_bb_params *dmub_ip =
+			(const struct dmub_soc_bb_params *)config->bb_from_dmub;
+
+	if (dmub_ip == NULL)
+		return;
+
+	//only update if value is provided
+	if (dmub_ip->pipe_count > 0)
+		ip_caps->pipe_count = dmub_ip->pipe_count;
+	if (dmub_ip->otg_count > 0)
+		ip_caps->otg_count = dmub_ip->otg_count;
+	if (dmub_ip->num_dsc > 0)
+		ip_caps->num_dsc = dmub_ip->num_dsc;
+	if (dmub_ip->TDLUT_33cube_count > 0)
+		ip_caps->TDLUT_33cube_count = dmub_ip->TDLUT_33cube_count;
+	if (dmub_ip->max_num_dp2p0_streams > 0)
+		ip_caps->max_num_dp2p0_streams = dmub_ip->max_num_dp2p0_streams;
+	if (dmub_ip->max_num_hdmi_frl_outputs > 0)
+		ip_caps->max_num_hdmi_frl_outputs = dmub_ip->max_num_hdmi_frl_outputs;
+	if (dmub_ip->max_num_dp2p0_outputs > 0)
+		ip_caps->max_num_dp2p0_outputs = dmub_ip->max_num_dp2p0_outputs;
+	if (dmub_ip->rob_buffer_size_kbytes > 0)
+		ip_caps->rob_buffer_size_kbytes = dmub_ip->rob_buffer_size_kbytes;
+	if (dmub_ip->config_return_buffer_size_in_kbytes > 0)
+		ip_caps->config_return_buffer_size_in_kbytes =
+				dmub_ip->config_return_buffer_size_in_kbytes;
+	if (dmub_ip->config_return_buffer_segment_size_in_kbytes > 0)
+		ip_caps->config_return_buffer_segment_size_in_kbytes =
+				dmub_ip->config_return_buffer_segment_size_in_kbytes;
+	if (dmub_ip->meta_fifo_size_in_kentries > 0)
+		ip_caps->meta_fifo_size_in_kentries = dmub_ip->meta_fifo_size_in_kentries;
+	if (dmub_ip->compressed_buffer_segment_size_in_kbytes > 0)
+		ip_caps->compressed_buffer_segment_size_in_kbytes =
+				dmub_ip->compressed_buffer_segment_size_in_kbytes;
+	if (dmub_ip->cursor_buffer_size > 0)
+		ip_caps->cursor_buffer_size = dmub_ip->cursor_buffer_size;
+	if (dmub_ip->max_flip_time_us > 0)
+		ip_caps->max_flip_time_us = dmub_ip->max_flip_time_us;
+	if (dmub_ip->max_flip_time_lines > 0)
+		ip_caps->max_flip_time_lines = dmub_ip->max_flip_time_lines;
+	/* 0 is a valid hostvm_mode */
+	ip_caps->hostvm_mode = dmub_ip->hostvm_mode;
+	if (dmub_ip->max_vactive_det_fill_delay_us > 0)
+		ip_caps->max_vactive_det_fill_delay_us = dmub_ip->max_vactive_det_fill_delay_us;
+	if (dmub_ip->ppt_max_allow_delay_us > 0)
+		ip_caps->ppt_max_allow_delay_us = dmub_ip->ppt_max_allow_delay_us;
+	if (dmub_ip->temp_read_max_allow_delay_us > 0)
+		ip_caps->temp_read_max_allow_delay_us = dmub_ip->temp_read_max_allow_delay_us;
+	if (dmub_ip->vblank_nom_default_us > 0)
+		ip_caps->vblank_nom_default_us = dmub_ip->vblank_nom_default_us;
+
+	if (dmub_ip->fams2_max_allow_delay_us > 0)
+		ip_caps->fams2.max_allow_delay_us = dmub_ip->fams2_max_allow_delay_us;
+	if (dmub_ip->fams2_scheduling_delay_us > 0)
+		ip_caps->fams2.scheduling_delay_us = dmub_ip->fams2_scheduling_delay_us;
+	if (dmub_ip->fams2_vertical_interrupt_ack_delay_us > 0)
+		ip_caps->fams2.vertical_interrupt_ack_delay_us =
+				dmub_ip->fams2_vertical_interrupt_ack_delay_us;
+	if (dmub_ip->fams2_allow_programming_delay_us > 0)
+		ip_caps->fams2.allow_programming_delay_us = dmub_ip->fams2_allow_programming_delay_us;
+	if (dmub_ip->fams2_min_allow_width_us > 0)
+		ip_caps->fams2.min_allow_width_us = dmub_ip->fams2_min_allow_width_us;
+	if (dmub_ip->fams2_subvp_df_throttle_delay_us > 0)
+		ip_caps->fams2.subvp_df_throttle_delay_us = dmub_ip->fams2_subvp_df_throttle_delay_us;
+	if (dmub_ip->fams2_subvp_programming_delay_us > 0)
+		ip_caps->fams2.subvp_programming_delay_us = dmub_ip->fams2_subvp_programming_delay_us;
+	if (dmub_ip->fams2_drr_programming_delay_us > 0)
+		ip_caps->fams2.drr_programming_delay_us = dmub_ip->fams2_drr_programming_delay_us;
+	if (dmub_ip->fams2_lock_timeout_us > 0)
+		ip_caps->fams2.lock_timeout_us = dmub_ip->fams2_lock_timeout_us;
+	if (dmub_ip->fams2_recovery_timeout_us > 0)
+		ip_caps->fams2.recovery_timeout_us = dmub_ip->fams2_recovery_timeout_us;
+	if (dmub_ip->fams2_flip_programming_delay_us > 0)
+		ip_caps->fams2.flip_programming_delay_us = dmub_ip->fams2_flip_programming_delay_us;
+}
+
+static void dcn60_get_ip_caps(struct dml2_ip_capabilities *ip_caps,
+		const struct dml2_configuration_options *config)
 {
 	dcn6_test_initialize_ip_caps(ip_caps);
+	dcn60_update_ip_caps_with_values_from_dmub(ip_caps, config);
 }
 
 static struct soc_and_ip_translator_funcs dcn60_translator_funcs = {

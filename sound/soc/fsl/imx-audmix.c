@@ -10,6 +10,7 @@
  * https://www.gnu.org/copyleft/gpl.html
  */
 
+#include <linux/device/devres.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
 #include <linux/clk.h>
@@ -123,6 +124,11 @@ static const char *name[][3] = {
 	{"SAI-Playback", "SAI-Playback", "AUDMIX-Capture-0"},
 };
 
+static void imx_audmix_put_node(void *data)
+{
+	of_node_put(data);
+}
+
 static int imx_audmix_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -205,6 +211,11 @@ static int imx_audmix_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev, "of_parse_phandle_with_args failed\n");
 			return ret;
 		}
+
+		ret = devm_add_action_or_reset(&pdev->dev, imx_audmix_put_node,
+					       args.np);
+		if (ret)
+			return ret;
 
 		cpu_pdev = of_find_device_by_node(args.np);
 		if (!cpu_pdev) {

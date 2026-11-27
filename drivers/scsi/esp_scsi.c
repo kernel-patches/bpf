@@ -388,6 +388,7 @@ static void esp_map_dma(struct esp *esp, struct scsi_cmnd *cmd)
 
 		scsi_for_each_sg(cmd, s, spriv->num_sg, i) {
 			s->dma_address = (uintptr_t)sg_virt(s);
+			sg_dma_len(s) = s->length;
 			total += sg_dma_len(s);
 		}
 	} else {
@@ -907,8 +908,11 @@ static void esp_cmd_is_done(struct esp *esp, struct esp_cmd_entry *ent,
 	esp_free_lun_tag(ent, dev->hostdata);
 	cmd->result = 0;
 	set_host_byte(cmd, host_byte);
-	if (host_byte == DID_OK)
+	if (host_byte == DID_OK) {
 		set_status_byte(cmd, ent->status);
+		if (cmd->sc_data_direction != DMA_NONE)
+			scsi_set_resid(cmd, ESP_CMD_PRIV(cmd)->tot_residue);
+	}
 
 	if (ent->eh_done) {
 		complete(ent->eh_done);

@@ -95,12 +95,12 @@ static void pinconf_generic_dump_one(struct pinctrl_dev *pctldev,
 		seq_puts(s, item->display);
 		/* Print unit if available */
 		if (item->has_arg) {
-			u32 val = pinconf_to_config_argument(config);
+			unsigned long val = pinconf_to_config_argument(config);
 
 			if (item->format)
-				seq_printf(s, " (%u %s)", val, item->format);
+				seq_printf(s, " (%lu %s)", val, item->format);
 			else
-				seq_printf(s, " (0x%x)", val);
+				seq_printf(s, " (0x%lx)", val);
 
 			if (item->values && item->num_values) {
 				if (val < item->num_values)
@@ -152,7 +152,7 @@ void pinconf_generic_dump_config(struct pinctrl_dev *pctldev,
 	for (i = 0; i < ARRAY_SIZE(conf_items); i++) {
 		if (pinconf_to_config_param(config) != conf_items[i].param)
 			continue;
-		seq_printf(s, "%s: 0x%x", conf_items[i].display,
+		seq_printf(s, "%s: 0x%lx", conf_items[i].display,
 			   pinconf_to_config_argument(config));
 	}
 
@@ -164,7 +164,7 @@ void pinconf_generic_dump_config(struct pinctrl_dev *pctldev,
 		if (pinconf_to_config_param(config) !=
 		    pctldev->desc->custom_conf_items[i].param)
 			continue;
-		seq_printf(s, "%s: 0x%x",
+		seq_printf(s, "%s: 0x%lx",
 				pctldev->desc->custom_conf_items[i].display,
 				pinconf_to_config_argument(config));
 	}
@@ -266,6 +266,12 @@ static int parse_fw_cfg(struct fwnode_handle *fwnode,
 				       fwnode, par->property);
 				return -EINVAL;
 			}
+		}
+
+		if (val & ~PIN_CONF_ARG_MASK) {
+			pr_err("%pfw: value %#x for %s does not fit in the pinconf argument\n",
+			       fwnode, val, par->property);
+			return -EINVAL;
 		}
 
 		pr_debug("found %s with value %u\n", par->property, val);

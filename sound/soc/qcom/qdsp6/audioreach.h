@@ -1047,7 +1047,6 @@ int audioreach_compr_set_param(struct q6apm_graph *graph,
 int audioreach_setup_push_pull(struct q6apm_graph *graph, phys_addr_t bphys,
 				phys_addr_t pphys, uint32_t mem_map_handle,
 				uint32_t pos_buf_mem_map_handle, uint32_t size);
-int audioreach_map_memory_position_buffer(struct q6apm_graph *graph, unsigned int dir);
 
 int audioreach_shmem_register_event(struct q6apm_graph *graph, int bytes, int num_levels);
 #endif /* __AUDIOREACH_H__ */

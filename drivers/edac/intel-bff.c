@@ -252,13 +252,13 @@ static int __init bff_init(void)
 
 	if (!cpu_feature_enabled(X86_FEATURE_MCA))
 		return -ENODEV;
-	rdmsrq(MSR_IA32_MCG_CAP, mcg_cap);
+	mcg_cap = rdmsrq(MSR_IA32_MCG_CAP);
 	if (!(mcg_cap & MCG_TES_P))
 		return -ENODEV;
 
 	if (!cpu_feature_enabled(X86_FEATURE_CORE_CAPABILITIES))
 		return -ENODEV;
-	rdmsrq(MSR_IA32_CORE_CAPS, core_caps);
+	core_caps = rdmsrq(MSR_IA32_CORE_CAPS);
 	if (!(core_caps & MSR_IA32_CORE_CAPS_BFF_RESET))
 		return -ENODEV;
 

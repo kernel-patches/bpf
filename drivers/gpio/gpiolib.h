@@ -137,7 +137,7 @@ struct gpio_array {
 	struct gpio_device	*gdev;
 	unsigned long		*get_mask;
 	unsigned long		*set_mask;
-	unsigned long		invert_mask[];
+	unsigned long		*invert_mask;
 };
 
 #define for_each_gpio_desc(gc, desc)					\

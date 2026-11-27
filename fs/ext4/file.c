@@ -68,8 +68,9 @@ static bool ext4_should_use_dio(struct kiocb *iocb, struct iov_iter *iter)
 
 static ssize_t ext4_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = file_inode(file);
 	ssize_t ret;
-	struct inode *inode = file_inode(iocb->ki_filp);
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
 		if (!inode_trylock_shared(inode))
@@ -96,7 +97,8 @@ static ssize_t ext4_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		ret = iomap_dio_rw(iocb, to, ext4_iomap_next, NULL, 0, NULL, 0);
 	inode_unlock_shared(inode);
 
-	file_accessed(iocb->ki_filp);
+	/* The kiocb may be gone once the read was queued. */
+	file_accessed(file);
 	return ret;
 }
 
@@ -352,6 +354,14 @@ static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
 	struct inode *inode = file_inode(iocb->ki_filp);
 
 	if (iocb->ki_flags & IOCB_NOWAIT)
+		return -EOPNOTSUPP;
+
+	/*
+	 * Buffered I/O provides no torn-write protection. The direct I/O path
+	 * falls back here for inodes that can't do direct I/O at all, so an
+	 * atomic write must be rejected rather than silently done non-atomically.
+	 */
+	if (iocb->ki_flags & IOCB_ATOMIC)
 		return -EOPNOTSUPP;
 
 	inode_lock(inode);
@@ -689,11 +699,12 @@ out:
 		loff_t endbyte;
 
 		/*
-		 * There is no support for atomic writes on buffered-io yet,
-		 * we should never fallback to buffered-io for DIO atomic
-		 * writes.
+		 * Buffered I/O provides no torn-write protection, so never
+		 * finish an atomic write through the page cache. iomap must
+		 * not return a short atomic write, so treat one as a bug.
 		 */
-		WARN_ON_ONCE(iocb->ki_flags & IOCB_ATOMIC);
+		if (WARN_ON_ONCE(iocb->ki_flags & IOCB_ATOMIC))
+			return -EIO;
 
 		offset = iocb->ki_pos;
 		err = ext4_buffered_write_iter(iocb, from);
@@ -802,10 +813,6 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		if (len < EXT4_SB(inode->i_sb)->s_awu_min ||
 		    len > EXT4_SB(inode->i_sb)->s_awu_max)
 			return -EINVAL;
-
-		ret = generic_atomic_write_valid(iocb, from);
-		if (ret)
-			return ret;
 	}
 
 	if (iocb->ki_flags & IOCB_DIRECT)

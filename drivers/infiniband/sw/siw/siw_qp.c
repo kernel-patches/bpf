@@ -869,6 +869,12 @@ static int siw_activate_tx_from_sq(struct siw_qp *qp)
 		rv = -EINVAL;
 		goto out;
 	}
+	/* No opcode from FETCH_AND_ADD up is valid on a user SQ */
+	if (!rdma_is_kernel_res(&qp->base_qp.res) &&
+	    wqe->sqe.opcode >= SIW_OP_FETCH_AND_ADD) {
+		rv = -EINVAL;
+		goto out;
+	}
 	if (wqe->sqe.flags & SIW_WQE_INLINE) {
 		if (wqe->sqe.opcode != SIW_OP_SEND &&
 		    wqe->sqe.opcode != SIW_OP_WRITE) {

@@ -329,6 +329,9 @@ static int axp20x_pek_suspend(struct device *dev)
 {
 	struct axp20x_pek *axp20x_pek = dev_get_drvdata(dev);
 
+	if (!axp20x_pek->input)
+		return 0;
+
 	/*
 	 * As nested threaded IRQs are not automatically disabled during
 	 * suspend, we must explicitly disable non-wakeup IRQs.
@@ -347,6 +350,9 @@ static int axp20x_pek_suspend(struct device *dev)
 static int axp20x_pek_resume(struct device *dev)
 {
 	struct axp20x_pek *axp20x_pek = dev_get_drvdata(dev);
+
+	if (!axp20x_pek->input)
+		return 0;
 
 	if (device_may_wakeup(dev)) {
 		disable_irq_wake(axp20x_pek->irq_dbf);

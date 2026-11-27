@@ -11,7 +11,7 @@
 #include <uapi/asm-generic/int-ll64.h>
 
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 typedef __s8  s8;
 typedef __u8  u8;
@@ -31,7 +31,7 @@ typedef __u64 u64;
 #define S64_C(x) x ## LL
 #define U64_C(x) x ## ULL
 
-#else /* __ASSEMBLY__ */
+#else /* __ASSEMBLER__ */
 
 #define S8_C(x)  x
 #define U8_C(x)  x
@@ -42,6 +42,6 @@ typedef __u64 u64;
 #define S64_C(x) x
 #define U64_C(x) x
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif /* _ASM_GENERIC_INT_LL64_H */

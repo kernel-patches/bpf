@@ -14,15 +14,25 @@ properties:
     const: airoha,an7581-afe
 
   reg:
-    maxItems: 1
+    items:
+      - description: base AFE register
+      - description: secondary IRQ option register
 
   interrupts:
     maxItems: 1
+
+  resets:
+    maxItems: 1
+
+  '#sound-dai-cells':
+    const: 0
 
 required:
   - compatible
   - reg
   - interrupts
+  - resets
+  - '#sound-dai-cells'
 
 additionalProperties: false
 
@@ -30,12 +40,17 @@ examples:
   - |
     #include <dt-bindings/interrupt-controller/arm-gic.h>
     #include <dt-bindings/interrupt-controller/irq.h>
+    #include <dt-bindings/reset/airoha,en7581-reset.h>
 
     afe@1fbe2200 {
         compatible = "airoha,an7581-afe";
-        reg = <0x1fbe2200 0x9000>;
+        reg = <0x1fbe2200 0x100>,
+              <0x1fbe2f00 0x100>;
 
         interrupts = <GIC_SPI 48 IRQ_TYPE_LEVEL_HIGH>;
+        resets = <&scuclk EN7581_I2S_RST>;
+
+        #sound-dai-cells = <0>;
     };
 
 ...

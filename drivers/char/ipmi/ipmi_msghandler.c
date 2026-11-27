@@ -1339,6 +1339,45 @@ int ipmi_get_smi_info(int if_num, struct ipmi_smi_info *data)
 }
 EXPORT_SYMBOL(ipmi_get_smi_info);
 
+static void move_user_xmit_msgs(struct list_head *from, struct list_head *to,
+				struct ipmi_user *user)
+{
+	struct ipmi_smi_msg *msg, *msg2;
+
+	list_for_each_entry_safe(msg, msg2, from, link) {
+		if (msg->recv_msg && msg->recv_msg->user == user)
+			list_move_tail(&msg->link, to);
+	}
+}
+
+/*
+ * Free the requests of a user that are still waiting to be handed to the
+ * lower layer.  Once the user is destroyed, nobody can receive their
+ * responses.  If the BMC is slow or does not answer, they could otherwise
+ * stay queued for a long time, each one keeping the user and its own
+ * messages allocated.  A request that was already handed to the lower
+ * layer (intf->curr_msg) is not on these lists and is left alone.
+ */
+static void remove_user_xmit_msgs(struct ipmi_smi *intf,
+				  struct ipmi_user *user)
+{
+	int run_to_completion = READ_ONCE(intf->run_to_completion);
+	struct ipmi_smi_msg *msg, *msg2;
+	unsigned long flags = 0;
+	LIST_HEAD(msgs);
+
+	ipmi_lock_xmit_msgs(intf, run_to_completion, &flags);
+	move_user_xmit_msgs(&intf->hp_xmit_msgs, &msgs, user);
+	move_user_xmit_msgs(&intf->xmit_msgs, &msgs, user);
+	ipmi_unlock_xmit_msgs(intf, run_to_completion, &flags);
+
+	list_for_each_entry_safe(msg, msg2, &msgs, link) {
+		list_del(&msg->link);
+		ipmi_free_recv_msg(msg->recv_msg);
+		ipmi_free_smi_msg(msg);
+	}
+}
+
 /* Must be called with intf->users_mutex held. */
 static void _ipmi_destroy_user(struct ipmi_user *user)
 {
@@ -1374,6 +1413,8 @@ static void _ipmi_destroy_user(struct ipmi_user *user)
 		}
 	}
 	mutex_unlock(&intf->seq_lock);
+
+	remove_user_xmit_msgs(intf, user);
 
 	/*
 	 * Remove the user from the command receiver's table.  First

@@ -2124,8 +2124,10 @@ out:
 	return copied;
 
 do_error:
-	if (copied)
+	if (copied) {
+		__mptcp_push_pending(sk, msg->msg_flags);
 		goto out;
+	}
 
 	copied = sk_stream_error(sk, msg->msg_flags, ret);
 	goto out;
@@ -2184,7 +2186,8 @@ static int __mptcp_recvmsg_mskq(struct sock *sk, struct msghdr *msg,
 			}
 		}
 
-		if (MPTCP_SKB_CB(skb)->has_rxtstamp) {
+		if (MPTCP_SKB_CB(skb)->has_rxtstamp &&
+		    tcp_want_rx_tstamp_cmsg(sk)) {
 			tcp_update_recv_tstamps(skb, tss);
 			*cmsg_flags |= MPTCP_CMSG_TS;
 		}

@@ -601,6 +601,9 @@ static void smu_restore_dpm_user_profile(struct smu_context *smu)
 			ret = smu->ppt_funcs->restore_user_od_settings(smu);
 			if (ret)
 				dev_err(smu->adev->dev, "Failed to upload customized OD settings\n");
+			else if (smu_od_uclk_changed(smu))
+				/* DC read the stock UCLK levels in its init_hw */
+				amdgpu_dm_update_memclk_states(smu->adev);
 		}
 	}
 
@@ -883,8 +886,24 @@ static int smu_early_init(struct amdgpu_ip_block *ip_block)
 
 	r = smu_set_funcs(adev);
 	if (r)
-		return r;
-	return smu_init_microcode(smu);
+		goto free_smu;
+
+	smu_feature_init(smu, SMU_FEATURE_NUM_DEFAULT);
+
+	r = smu_init_microcode(smu);
+	if (r) {
+		smu_fini_microcode(smu);
+		goto free_smu;
+	}
+
+	return 0;
+
+free_smu:
+	adev->powerplay.pp_handle = NULL;
+	adev->powerplay.pp_funcs = NULL;
+	kfree(smu);
+
+	return r;
 }
 
 static int smu_set_default_dpm_table(struct smu_context *smu)
@@ -1240,7 +1259,7 @@ static int smu_smc_table_sw_init(struct smu_context *smu)
 	ret = smu_init_power(smu);
 	if (ret) {
 		dev_err(smu->adev->dev, "Failed to init smu_init_power!\n");
-		return ret;
+		goto fini_tables;
 	}
 
 	/*
@@ -1248,21 +1267,35 @@ static int smu_smc_table_sw_init(struct smu_context *smu)
 	 */
 	ret = smu_init_fb_allocations(smu);
 	if (ret)
-		return ret;
+		goto fini_power;
 
 	ret = smu_alloc_memory_pool(smu);
 	if (ret)
-		return ret;
+		goto free_memory_pool;
 
 	ret = smu_alloc_dummy_read_table(smu);
 	if (ret)
-		return ret;
+		goto free_dummy_read_table;
 
 	ret = smu_i2c_init(smu);
 	if (ret)
-		return ret;
+		goto fini_i2c;
 
 	return 0;
+
+fini_i2c:
+	smu_i2c_fini(smu);
+free_dummy_read_table:
+	smu_free_dummy_read_table(smu);
+free_memory_pool:
+	smu_free_memory_pool(smu);
+	smu_fini_fb_allocations(smu);
+fini_power:
+	smu_fini_power(smu);
+fini_tables:
+	smu_fini_smc_tables(smu);
+
+	return ret;
 }
 
 static int smu_smc_table_sw_fini(struct smu_context *smu)
@@ -1417,7 +1450,6 @@ static int smu_sw_init(struct amdgpu_ip_block *ip_block)
 	int i, ret;
 
 	smu->pool_size = adev->pm.smu_prv_buffer_size;
-	smu_feature_init(smu, SMU_FEATURE_NUM_DEFAULT);
 
 	INIT_WORK(&smu->throttling_logging_work, smu_throttling_logging_work_fn);
 	INIT_WORK(&smu->interrupt_work, smu_interrupt_work_fn);
@@ -2505,33 +2537,7 @@ static int
 smu_reapply_power_state_dynamic(struct smu_context *smu,
 				enum amd_dpm_forced_level level)
 {
-	struct smu_dpm_context *smu_dpm_ctx = &smu->smu_dpm;
-	int ret;
-
-	ret = smu_apply_clocks_adjust_rules(smu);
-	if (ret) {
-		dev_err(smu->adev->dev, "Failed to apply clocks adjust rules!");
-		return ret;
-	}
-
-	ret = smu_asic_set_performance_level(smu, level);
-	if (ret) {
-		if (ret == -EOPNOTSUPP)
-			dev_info(smu->adev->dev, "set performance level %d not supported",
-				 level);
-		else
-			dev_err(smu->adev->dev, "Failed to set performance level %d",
-				level);
-		return ret;
-	}
-
-	smu_dpm_ctx->dpm_level = level;
-
-	if (smu_dpm_ctx->dpm_level == AMD_DPM_FORCED_LEVEL_MANUAL ||
-	    smu_dpm_ctx->dpm_level == AMD_DPM_FORCED_LEVEL_PERF_DETERMINISM)
-		return 0;
-
-	return smu_bump_power_profile_mode(smu, NULL, 0);
+	return smu_adjust_power_state_dynamic(smu, level, true, true);
 }
 
 static int smu_handle_task(struct smu_context *smu,
@@ -2696,20 +2702,19 @@ smu_reapply_performance_level(void *handle,
 	if (!smu->is_apu && !smu_dpm_ctx->dpm_context)
 		return -EINVAL;
 
+	if (smu_dpm_ctx->dpm_level != level)
+		return -EINVAL;
+
 	switch (level) {
 	case AMD_DPM_FORCED_LEVEL_PROFILE_STANDARD:
 	case AMD_DPM_FORCED_LEVEL_PROFILE_MIN_SCLK:
 	case AMD_DPM_FORCED_LEVEL_PROFILE_MIN_MCLK:
 	case AMD_DPM_FORCED_LEVEL_PROFILE_PEAK:
+		smu_enter_umd_pstate(smu);
 		break;
 	default:
-		return -EINVAL;
+		break;
 	}
-
-	if (smu_dpm_ctx->dpm_level != level)
-		return -EINVAL;
-
-	smu_enter_umd_pstate(smu);
 
 	return smu_reapply_power_state_dynamic(smu, level);
 }
@@ -3661,6 +3666,22 @@ static int smu_baco_set_state(void *handle, int state)
 				(state)?"enter":"exit");
 
 	return ret;
+}
+
+/**
+ * smu_od_uclk_changed - test and clear the "UCLK OD changed" flag
+ * @smu: smu context
+ *
+ * The ASIC code sets the flag when an overdrive commit or restore changed the
+ * UCLK DPM levels, so that callers can tell DC to re-read them.
+ */
+bool smu_od_uclk_changed(struct smu_context *smu)
+{
+	bool changed = smu->smu_table.od_uclk_changed;
+
+	smu->smu_table.od_uclk_changed = false;
+
+	return changed;
 }
 
 bool smu_mode1_reset_is_support(struct smu_context *smu)

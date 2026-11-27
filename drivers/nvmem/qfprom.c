@@ -124,6 +124,18 @@ static const struct qfprom_soc_compatible_data sc7280_qfprom = {
 	.nkeepout = ARRAY_SIZE(sc7280_qfprom_keepout)
 };
 
+static const struct nvmem_keepout sm8350_qfprom_keepout[] = {
+	{.start = 0x0, .end = 0x120},
+	{.start = 0x128, .end = 0x148},
+	{.start = 0x640, .end = 0x8e0},
+	{.start = 0x2110, .end = 0x2170}
+};
+
+static const struct qfprom_soc_compatible_data sm8350_qfprom = {
+	.keepout = sm8350_qfprom_keepout,
+	.nkeepout = ARRAY_SIZE(sm8350_qfprom_keepout)
+};
+
 /**
  * qfprom_disable_fuse_blowing() - Undo enabling of fuse blowing.
  * @priv: Our driver data.
@@ -460,6 +472,7 @@ static const struct of_device_id qfprom_of_match[] = {
 	{ .compatible = "qcom,qfprom",},
 	{ .compatible = "qcom,sc7180-qfprom", .data = &sc7180_qfprom},
 	{ .compatible = "qcom,sc7280-qfprom", .data = &sc7280_qfprom},
+	{ .compatible = "qcom,sm8350-qfprom", .data = &sm8350_qfprom},
 	{/* sentinel */},
 };
 MODULE_DEVICE_TABLE(of, qfprom_of_match);

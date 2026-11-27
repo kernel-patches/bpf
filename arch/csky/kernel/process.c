@@ -5,6 +5,7 @@
 #include <linux/sched.h>
 #include <linux/sched/task_stack.h>
 #include <linux/sched/debug.h>
+#include <linux/cpu.h>
 #include <linux/delay.h>
 #include <linux/kallsyms.h>
 #include <linux/uaccess.h>

@@ -12,7 +12,6 @@
 #include "xe_sriov.h"
 #include "xe_sriov_printk.h"
 #include "xe_tile_sriov_vf.h"
-#include "xe_wopcm.h"
 
 /**
  * DOC: GGTT nodes shifting during VF post-migration recovery

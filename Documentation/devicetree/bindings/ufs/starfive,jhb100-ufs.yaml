@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/ufs/starfive,jhb100-ufs.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: StarFive Universal Flash Storage (UFS) Controller
+
+maintainers:
+  - Minda Chen <minda.chen@starfivetech.com>
+
+allOf:
+  - $ref: ufs-common.yaml
+
+properties:
+  compatible:
+    const: starfive,jhb100-ufs
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    items:
+      - const: main
+
+  resets:
+    items:
+      - description: UFS main reset
+      - description: UFS PHY reset
+
+  reset-names:
+    items:
+      - const: main
+      - const: phy
+
+  interrupts:
+    maxItems: 1
+
+  starfive,syscon:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      The phandle to the StarFive JHB100 SoC Peripheral-1 syscon
+      register block.
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - clock-names
+  - resets
+  - reset-names
+  - interrupts
+  - starfive,syscon
+  - operating-points-v2
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    ufs@11b10000 {
+        compatible = "starfive,jhb100-ufs";
+        reg = <0x11b10000 0x20000>;
+        interrupts = <105>;
+        clocks = <&syscrg 4>;
+        clock-names = "main";
+        resets = <&syscrg 10>,
+                 <&syscrg 7>;
+        reset-names = "main", "phy";
+        starfive,syscon = <&syscon>;
+        operating-points-v2 = <&ufs_opp_table>;
+
+        ufs_opp_table: opp-table {
+            compatible = "operating-points-v2";
+            opp-100000000 {
+                opp-hz = /bits/ 64 <100000000>;
+            };
+        };
+    };

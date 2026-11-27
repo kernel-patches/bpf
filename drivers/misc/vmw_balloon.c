@@ -1005,6 +1005,8 @@ static void vmballoon_enqueue_page_list(struct vmballoon *b,
 
 		list_for_each_entry(page, pages, lru) {
 			vmballoon_mark_page_offline(page, VMW_BALLOON_2M_PAGE);
+			mod_node_page_state(page_pgdat(page), NR_BALLOON_PAGES,
+					    1 << VMW_BALLOON_2M_ORDER);
 		}
 
 		list_splice_init(pages, &b->huge_pages);
@@ -1049,6 +1051,8 @@ static void vmballoon_dequeue_page_list(struct vmballoon *b,
 	spin_lock(&b->huge_pages_lock);
 	list_for_each_entry_safe(page, tmp, &b->huge_pages, lru) {
 		vmballoon_mark_page_online(page, VMW_BALLOON_2M_PAGE);
+		mod_node_page_state(page_pgdat(page), NR_BALLOON_PAGES,
+				    -(1 << VMW_BALLOON_2M_ORDER));
 
 		list_move(&page->lru, pages);
 		if (++i == n_req_pages)

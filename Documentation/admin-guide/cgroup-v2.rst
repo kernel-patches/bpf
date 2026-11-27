@@ -2771,6 +2771,7 @@ Cpuset Interface Files
 	and excluded from the unbound workqueues.  Tasks placed in such
 	a partition with multiple CPUs should be carefully distributed
 	and bound to each of the individual CPUs for optimal performance.
+	The boot CPU (CPU 0) cannot be used in an isolated partition.
 
 	A partition root ("root" or "isolated") can be in one of the
 	two possible states - valid or invalid.  An invalid partition

@@ -124,16 +124,36 @@ s32 mgb4_i2c_mask_byte(struct mgb4_i2c_client *client, u16 reg, u8 mask, u8 val)
 }
 
 int mgb4_i2c_configure(struct mgb4_i2c_client *client,
-		       const struct mgb4_i2c_kv *values, size_t count)
+		       const struct mgb4_i2c_key *keys,
+		       const u8 *values,
+		       size_t count)
 {
 	size_t i;
 	s32 res;
 
 	for (i = 0; i < count; i++) {
-		res = mgb4_i2c_mask_byte(client, values[i].reg, values[i].mask,
-					 values[i].val);
+		res = mgb4_i2c_mask_byte(client, keys[i].reg, keys[i].mask,
+					 values[i]);
 		if (res < 0)
 			return res;
+	}
+
+	return 0;
+}
+
+int mgb4_i2c_store(struct mgb4_i2c_client *client,
+		   const struct mgb4_i2c_key *keys,
+		   u8 *values,
+		   size_t count)
+{
+	size_t i;
+	s32 res;
+
+	for (i = 0; i < count; i++) {
+		res = mgb4_i2c_read_byte(client, keys[i].reg);
+		if (res < 0)
+			return res;
+		values[i] = (u8)res;
 	}
 
 	return 0;

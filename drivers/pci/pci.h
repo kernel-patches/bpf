@@ -2,10 +2,12 @@
 #ifndef DRIVERS_PCI_H
 #define DRIVERS_PCI_H
 
+#include <kunit/visibility.h>
 #include <linux/bug.h>
 #include <linux/align.h>
 #include <linux/bitfield.h>
 #include <linux/pci.h>
+#include <linux/pci-p2pdma.h>
 #include <trace/events/pci.h>
 
 struct pcie_tlp_log;
@@ -871,6 +873,9 @@ static inline bool pci_dev_binding_disallowed(struct pci_dev *dev)
  * @id: Value from register PCI_ERR_ROOT_ERR_SRC
  * @severity: AER severity, 0-UNCOR Non-fatal, 1-UNCOR fatal, 2-COR
  * @root_ratelimit_print: Flag to log or not log the root's error. 0=NotLog/1=Log
+ * @id_valid: Whether @id is a valid value.  Some Root Ports report an invalid
+ *	Error Source ID, necessitating a search for the error-signaling device
+ *	in the hierarchy below the Root Port.
  * @multi_error_valid: If multiple errors are reported
  * @first_error: First reported error
  * @__pad2: Padding for alignment
@@ -893,7 +898,8 @@ struct aer_err_info {
 
 	unsigned int severity:2;
 	unsigned int root_ratelimit_print:1;
-	unsigned int __pad1:4;
+	unsigned int __pad1:3;
+	unsigned int id_valid:1;
 	unsigned int multi_error_valid:1;
 
 	unsigned int first_error:5;
@@ -955,6 +961,7 @@ void pcie_link_rcec(struct pci_dev *rcec);
 void pcie_walk_rcec(struct pci_dev *rcec,
 		    int (*cb)(struct pci_dev *, void *),
 		    void *userdata);
+bool pci_rcec_associated(struct pci_dev *rcec, u16 id);
 #else
 static inline void pci_rcec_init(struct pci_dev *dev) { }
 static inline void pci_rcec_exit(struct pci_dev *dev) { }
@@ -1099,17 +1106,83 @@ resource_size_t pci_min_window_alignment(struct pci_bus *bus,
 
 void pci_acs_init(struct pci_dev *dev);
 void pci_enable_acs(struct pci_dev *dev);
+
+/**
+ * enum pci_p2pdma_tlp_flags - Properties of the TLPs a client will issue
+ *
+ * These describe the traffic rather than the topology, and select which ACS
+ * controls apply along the peer-to-peer path. A value of 0 means strictly
+ * ordered Requests carrying an Untranslated address.
+ *
+ * @PCI_P2PDMA_TLP_TRANSLATED: Requests carry an ATS Translated address. PCIe
+ *	r7.0 sec 6.12.3 routes those to the peer regardless of ACS P2P Request
+ *	Redirect and ACS P2P Egress Control wherever ACS Direct Translated P2P
+ *	is enabled.
+ * @PCI_P2PDMA_TLP_RELAXED_CPL: Non-Posted Requests carry the Relaxed
+ *	Ordering attribute, and PCIe r7.0 sec 2.2.9.1 requires the Completer to
+ *	return it in their Completions. Sec 6.12.1.1 never redirects those, so
+ *	ACS P2P Completion Redirect does not gate the path.
+ */
+enum pci_p2pdma_tlp_flags {
+	PCI_P2PDMA_TLP_TRANSLATED	= 1 << 0,
+	PCI_P2PDMA_TLP_RELAXED_CPL	= 1 << 1,
+};
+
+/* Every combination of the flags above selects one routing class. */
+#define PCI_P2PDMA_TLP_CLASSES \
+	((PCI_P2PDMA_TLP_TRANSLATED | PCI_P2PDMA_TLP_RELAXED_CPL) + 1)
+
+enum pci_acs_p2pdma_state {
+	PCI_ACS_P2PDMA_NOT_SUPPORTED,
+	PCI_ACS_P2PDMA_DIRECT,
+	PCI_ACS_P2PDMA_REDIRECT,
+	PCI_ACS_P2PDMA_BLOCKED,
+};
+
+#if IS_ENABLED(CONFIG_KUNIT)
+bool pci_acs_flags_enabled(struct pci_dev *pdev, u16 acs_flags);
+enum pci_acs_p2pdma_state pci_acs_p2pdma_request(u16 ctrl,
+						unsigned int tlp_flags);
+enum pci_acs_p2pdma_state pci_acs_p2pdma_completion(u16 ctrl,
+						    unsigned int tlp_flags);
+unsigned long pci_p2pdma_map_types_pack(const enum pci_p2pdma_map_type *type);
+enum pci_p2pdma_map_type pci_p2pdma_map_types_unpack(unsigned long val,
+						     unsigned int tlp_flags);
+enum pci_p2pdma_map_type calc_map_type_and_dist(struct pci_dev *provider,
+						struct pci_dev *client,
+						int *dist,
+						unsigned int tlp_flags,
+						bool verbose);
+unsigned int pci_p2pdma_client_tlp_flags(struct pci_dev *client,
+					 unsigned int tlp_flags);
+enum pci_p2pdma_map_type
+pci_p2pdma_client_map_type(struct pci_dev *provider, struct pci_dev *client,
+			   bool per_mapping, unsigned int tlp_flags,
+			   enum pci_p2pdma_map_type type);
+#endif
+
 #ifdef CONFIG_PCI_QUIRKS
+int pci_dev_specific_read_acs_ctrl(struct pci_dev *dev, u16 *ctrl);
 int pci_dev_specific_acs_enabled(struct pci_dev *dev, u16 acs_flags);
+bool pci_need_dev_specific_enable_acs(struct pci_dev *dev);
 int pci_dev_specific_enable_acs(struct pci_dev *dev);
 int pci_dev_specific_disable_acs_redir(struct pci_dev *dev);
 void pci_disable_broken_acs_cap(struct pci_dev *pdev);
 int pcie_failed_link_retrain(struct pci_dev *dev);
 #else
+static inline int pci_dev_specific_read_acs_ctrl(struct pci_dev *dev, u16 *ctrl)
+{
+	return -ENOTTY;
+}
+
 static inline int pci_dev_specific_acs_enabled(struct pci_dev *dev,
 					       u16 acs_flags)
 {
 	return -ENOTTY;
+}
+static inline bool pci_need_dev_specific_enable_acs(struct pci_dev *dev)
+{
+	return false;
 }
 static inline int pci_dev_specific_enable_acs(struct pci_dev *dev)
 {

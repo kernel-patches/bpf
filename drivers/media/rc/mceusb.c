@@ -1843,9 +1843,9 @@ static void mceusb_dev_disconnect(struct usb_interface *intf)
 	if (!ir)
 		return;
 
-	ir->usbdev = NULL;
 	cancel_work_sync(&ir->kevent);
 	rc_unregister_device(ir->rc);
+	ir->usbdev = NULL;
 	usb_kill_urb(ir->urb_in);
 	usb_free_urb(ir->urb_in);
 	usb_free_coherent(dev, ir->len_in, ir->buf_in, ir->dma_in);

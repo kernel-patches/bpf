@@ -85,9 +85,6 @@ int xe_display_init_early(struct xe_device *xe)
 	if (!xe->info.probe_display)
 		return 0;
 
-	/* Fake uncore lock */
-	spin_lock_init(&xe->uncore.lock);
-
 	intel_display_driver_early_probe(display);
 
 	intel_display_device_info_runtime_init(display);
@@ -170,8 +167,6 @@ void xe_display_shutdown(struct xe_device *xe)
 	intel_display_driver_shutdown(display);
 
 	intel_opregion_suspend(display, PCI_D3cold);
-
-	intel_dmc_suspend(display);
 }
 
 void xe_display_shutdown_late(struct xe_device *xe)
@@ -197,7 +192,24 @@ void xe_display_irq_handler(struct xe_device *xe, u32 master_ctl)
 		intel_display_irq_handler(display, NULL);
 }
 
-void xe_display_irq_enable(struct xe_device *xe, u32 gu_misc_iir)
+u32 xe_display_gse_irq_bit(struct xe_device *xe)
+{
+	struct intel_display *display = xe->display;
+
+	if (!xe->info.probe_display)
+		return 0;
+
+	if (!intel_display_device_present(display))
+		return 0;
+
+	/*
+	 * ASLE backlight operations are reported via GUnit GSE interrupts
+	 * on the root tile.
+	 */
+	return GU_MISC_GSE;
+}
+
+void xe_display_gse_irq_handler(struct xe_device *xe, u32 gu_misc_iir)
 {
 	struct intel_display *display = xe->display;
 
@@ -205,7 +217,7 @@ void xe_display_irq_enable(struct xe_device *xe, u32 gu_misc_iir)
 		return;
 
 	if (gu_misc_iir & GU_MISC_GSE)
-		intel_opregion_asle_intr(display);
+		intel_display_gse_irq_handler(display);
 }
 
 void xe_display_irq_reset(struct xe_device *xe)
@@ -248,8 +260,6 @@ void xe_display_pm_suspend(struct xe_device *xe)
 	intel_display_driver_pm_suspend(display);
 
 	intel_opregion_suspend(display, s2idle ? PCI_D1 : PCI_D3cold);
-
-	intel_dmc_suspend(display);
 }
 
 void xe_display_pm_suspend_late(struct xe_device *xe)

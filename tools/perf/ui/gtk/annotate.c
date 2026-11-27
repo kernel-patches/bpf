@@ -44,6 +44,8 @@ static int perf_gtk__get_percent(char *buf, size_t size, struct symbol *sym,
 		return 0;
 
 	notes = symbol__annotation(sym);
+	if (!notes || !notes->src)
+		return 0;
 	symhist = annotation__histogram(notes, evsel);
 	entry = annotated_source__hist_entry(notes->src, evsel, dl->al.offset);
 	if (entry)
@@ -116,6 +118,8 @@ static int perf_gtk__annotate_symbol(GtkWidget *window, struct map_symbol *ms,
 	char s[512];
 
 	notes = symbol__annotation(sym);
+	if (!notes || !notes->src)
+		return 0;
 
 	for (i = 0; i < MAX_ANN_COLS; i++) {
 		col_types[i] = G_TYPE_STRING;

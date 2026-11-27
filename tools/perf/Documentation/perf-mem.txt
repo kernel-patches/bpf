@@ -34,6 +34,9 @@ be sampled.
 
 On AMD this use IBS Op PMU to sample load-store operations.
 
+On Alpha this uses ProfileMe, on the EV67 and later, to sample all
+instructions. Loads and stores report whether they hit or missed the DTB.
+
 COMMON OPTIONS
 --------------
 -f::

@@ -50,6 +50,7 @@ int cx231xx_ir_init(struct cx231xx *dev)
 {
 	struct i2c_board_info info;
 	u8 ir_i2c_bus;
+	int ret;
 
 	dev_dbg(dev->dev, "%s\n", __func__);
 
@@ -90,6 +91,13 @@ int cx231xx_ir_init(struct cx231xx *dev)
 		ir_i2c_bus, info.addr);
 	dev->ir_i2c_client = i2c_new_client_device(
 		cx231xx_get_i2c_adap(dev, ir_i2c_bus), &info);
+	if (IS_ERR(dev->ir_i2c_client)) {
+		ret = PTR_ERR(dev->ir_i2c_client);
+		rc_free_device(dev->init_data.rc_dev);
+		dev->init_data.rc_dev = NULL;
+		dev->ir_i2c_client = NULL;
+		return ret;
+	}
 
 	return 0;
 }

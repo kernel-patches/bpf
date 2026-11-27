@@ -299,45 +299,6 @@ void aes_p8_xts_encrypt(const u8 *in, u8 *out, size_t len,
 void aes_p8_xts_decrypt(const u8 *in, u8 *out, size_t len,
 			const struct p8_aes_key *key1,
 			const struct p8_aes_key *key2, u8 *iv);
-#elif defined(CONFIG_SPARC64)
-void aes_sparc64_key_expand(const u32 *in_key, u64 *output_key,
-			    unsigned int key_len);
-void aes_sparc64_load_encrypt_keys_128(const u64 *key);
-void aes_sparc64_load_encrypt_keys_192(const u64 *key);
-void aes_sparc64_load_encrypt_keys_256(const u64 *key);
-void aes_sparc64_load_decrypt_keys_128(const u64 *key);
-void aes_sparc64_load_decrypt_keys_192(const u64 *key);
-void aes_sparc64_load_decrypt_keys_256(const u64 *key);
-void aes_sparc64_ecb_encrypt_128(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_encrypt_192(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_encrypt_256(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_decrypt_128(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_decrypt_192(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_ecb_decrypt_256(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len);
-void aes_sparc64_cbc_encrypt_128(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len, u64 *iv);
-void aes_sparc64_cbc_encrypt_192(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len, u64 *iv);
-void aes_sparc64_cbc_encrypt_256(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len, u64 *iv);
-void aes_sparc64_cbc_decrypt_128(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len, u64 *iv);
-void aes_sparc64_cbc_decrypt_192(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len, u64 *iv);
-void aes_sparc64_cbc_decrypt_256(const u64 *key, const u64 *input, u64 *output,
-				 unsigned int len, u64 *iv);
-void aes_sparc64_ctr_crypt_128(const u64 *key, const u64 *input, u64 *output,
-			       unsigned int len, u64 *iv);
-void aes_sparc64_ctr_crypt_192(const u64 *key, const u64 *input, u64 *output,
-			       unsigned int len, u64 *iv);
-void aes_sparc64_ctr_crypt_256(const u64 *key, const u64 *input, u64 *output,
-			       unsigned int len, u64 *iv);
 #endif
 
 /**

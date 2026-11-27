@@ -479,12 +479,18 @@ err_db:
 static void qp_destroy(struct mlx5_vdpa_net *ndev, struct mlx5_vdpa_qp *vqp)
 {
 	u32 in[MLX5_ST_SZ_DW(destroy_qp_in)] = {};
+	int err;
 
 	MLX5_SET(destroy_qp_in, in, opcode, MLX5_CMD_OP_DESTROY_QP);
 	MLX5_SET(destroy_qp_in, in, qpn, vqp->mqp.qpn);
 	MLX5_SET(destroy_qp_in, in, uid, ndev->mvdev.res.uid);
-	if (mlx5_cmd_exec_in(ndev->mvdev.mdev, destroy_qp, in))
-		mlx5_vdpa_warn(&ndev->mvdev, "destroy qp 0x%x\n", vqp->mqp.qpn);
+	err = mlx5_cmd_exec_in(ndev->mvdev.mdev, destroy_qp, in);
+	if (err) {
+		/* The QP still owns its buffers */
+		mlx5_vdpa_warn(&ndev->mvdev, "destroy %s qp 0x%x failed: %d\n",
+			       vqp->fw ? "fw" : "sw", vqp->mqp.qpn, err);
+		return;
+	}
 	if (!vqp->fw) {
 		mlx5_db_free(ndev->mvdev.mdev, &vqp->db);
 		rq_buf_free(ndev, vqp);

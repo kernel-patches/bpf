@@ -434,6 +434,7 @@ static const struct st_lsm6dsx_settings st_lsm6dsx_sensor_settings[] = {
 				.addr = 0x09,
 				.mask = GENMASK(5, 3),
 			},
+			.ts_sensitivity = 25000,
 		},
 		.event_settings = {
 			.sources = {
@@ -601,6 +602,7 @@ static const struct st_lsm6dsx_settings st_lsm6dsx_sensor_settings[] = {
 				.addr = 0x09,
 				.mask = GENMASK(5, 3),
 			},
+			.ts_sensitivity = 25000,
 		},
 		.event_settings = {
 			.sources = {
@@ -802,6 +804,7 @@ static const struct st_lsm6dsx_settings st_lsm6dsx_sensor_settings[] = {
 				.addr = 0x09,
 				.mask = GENMASK(5, 3),
 			},
+			.ts_sensitivity = 25000,
 		},
 		.shub_settings = {
 			.page_mux = {
@@ -2798,8 +2801,9 @@ static irqreturn_t st_lsm6dsx_sw_trigger_handler_thread(int irq,
 				       hw->scan[sensor->id].channels,
 				       sizeof(hw->scan[sensor->id].channels));
 
-	iio_push_to_buffers_with_timestamp(iio_dev, &hw->scan[sensor->id],
-					   iio_get_time_ns(iio_dev));
+	iio_push_to_buffers_with_ts(iio_dev, &hw->scan[sensor->id],
+				    sizeof(hw->scan[sensor->id]),
+				    iio_get_time_ns(iio_dev));
 	iio_trigger_notify_done(iio_dev->trig);
 
 	return IRQ_HANDLED;

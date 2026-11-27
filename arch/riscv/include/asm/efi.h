@@ -43,8 +43,6 @@ static inline unsigned long efi_get_kimg_min_align(void)
 void arch_efi_call_virt_setup(void);
 void arch_efi_call_virt_teardown(void);
 
-unsigned long stext_offset(void);
-
 void efi_icache_sync(unsigned long start, unsigned long end);
 
 #endif /* _ASM_EFI_H */

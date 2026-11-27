@@ -208,10 +208,7 @@ static int sunxi_musb_host_notifier(struct notifier_block *nb,
 {
 	struct sunxi_glue *glue = container_of(nb, struct sunxi_glue, host_nb);
 
-	if (event)
-		set_bit(SUNXI_MUSB_FL_HOSTMODE, &glue->flags);
-	else
-		clear_bit(SUNXI_MUSB_FL_HOSTMODE, &glue->flags);
+	assign_bit(SUNXI_MUSB_FL_HOSTMODE, &glue->flags, event);
 
 	set_bit(SUNXI_MUSB_FL_HOSTMODE_PEND, &glue->flags);
 	schedule_work(&glue->work);

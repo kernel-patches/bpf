@@ -518,11 +518,8 @@ int ohci_hub_status_data(struct usb_hcd *hcd, char *buf)
 		}
 	}
 
-	if (ohci_root_hub_state_changes(ohci, changed,
-			any_connected, rhsc_status))
-		set_bit(HCD_FLAG_POLL_RH, &hcd->flags);
-	else
-		clear_bit(HCD_FLAG_POLL_RH, &hcd->flags);
+	assign_bit(HCD_FLAG_POLL_RH, &hcd->flags,
+		   ohci_root_hub_state_changes(ohci, changed, any_connected, rhsc_status));
 
 
 done:

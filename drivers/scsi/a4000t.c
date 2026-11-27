@@ -97,13 +97,14 @@ static int __init amiga_a4000t_scsi_probe(struct platform_device *pdev)
 static void __exit amiga_a4000t_scsi_remove(struct platform_device *pdev)
 {
 	struct Scsi_Host *host = platform_get_drvdata(pdev);
-	struct NCR_700_Host_Parameters *hostdata = shost_priv(host);
+	struct NCR_700_Host_Parameters *hostdata =
+		(struct NCR_700_Host_Parameters *)host->hostdata[0];
 	struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 
 	scsi_remove_host(host);
+	free_irq(host->irq, host);
 	NCR_700_release(host);
 	kfree(hostdata);
-	free_irq(host->irq, host);
 	release_mem_region(res->start, resource_size(res));
 }
 

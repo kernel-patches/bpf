@@ -48,6 +48,8 @@ extern void octeon_user_io_init(void);
 extern void octeon_init_cvmcount(void);
 extern void octeon_setup_delays(void);
 extern void octeon_io_clk_delay(unsigned long);
+void __init octeon_fill_mac_addresses(void);
+void octeon_wdt_nmi_stage3(u64 reg[32]);
 
 #define OCTEON_ARGV_MAX_ARGS	64
 #define OCTEON_SERIAL_LEN	20
@@ -298,6 +300,7 @@ static inline void octeon_npi_write32(uint64_t address, uint32_t val)
 
 #ifdef CONFIG_SMP
 void octeon_setup_smp(void);
+void octeon_send_ipi_single(int cpu, unsigned int action);
 #else
 static inline void octeon_setup_smp(void) {}
 #endif

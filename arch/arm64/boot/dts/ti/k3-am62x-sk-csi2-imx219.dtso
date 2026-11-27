@@ -8,6 +8,7 @@
 /plugin/;
 
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/media/video-interface-devices.h>
 
 &{/} {
 	clk_imx219_fixed: imx219-xclk {
@@ -72,6 +73,7 @@
 				VDDL-supply = <&reg_1p2v>;
 
 				reset-gpios = <&exp1 13 GPIO_ACTIVE_HIGH>;
+				orientation = <MEDIA_ORIENTATION_EXTERNAL>;
 
 				port {
 					csi2_cam0: endpoint {

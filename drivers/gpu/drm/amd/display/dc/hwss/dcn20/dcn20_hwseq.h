@@ -107,12 +107,15 @@ void dcn20_enable_power_gating_plane(
 	bool enable);
 void dcn20_dpp_pg_control(
 		struct dce_hwseq *hws,
-		unsigned int dpp_inst,
-		bool power_on);
+		struct dpp *dpp,
+		bool power_on,
+		bool disable_power_gate);
 void dcn20_hubp_pg_control(
 		struct dce_hwseq *hws,
 		unsigned int hubp_inst,
-		bool power_on);
+		bool power_on,
+		bool disable_power_gate,
+		bool ignore_pg);
 void dcn20_program_triple_buffer(
 	struct hubp *hubp,
 	bool enable_triple_buffer);

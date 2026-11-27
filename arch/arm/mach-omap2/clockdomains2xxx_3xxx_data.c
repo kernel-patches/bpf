@@ -8,15 +8,13 @@
  * Paul Walmsley, Jouni Högander
  *
  * This file contains clockdomains and clockdomain wakeup/sleep
- * dependencies for the OMAP2/3 chips.  Some notes:
+ * dependencies for the OMAP3 chips.  Some notes:
  *
  * A useful validation rule for struct clockdomain: Any clockdomain
  * referenced by a wkdep_srcs or sleepdep_srcs array must have a
  * dep_bit assigned.  So wkdep_srcs/sleepdep_srcs are really just
  * software-controllable dependencies.  Non-software-controllable
  * dependencies do exist, but they are not encoded below (yet).
- *
- * 24xx does not support programmable sleep dependencies (SLEEPDEP)
  *
  * The overly-specific dep_bit names are due to a bit name collision
  * with CM_FCLKEN_{DSP,IVA2}.  The DSP/IVA2 PM_WKDEP and CM_SLEEPDEP shift
@@ -39,10 +37,8 @@
 #include "clockdomain.h"
 #include "prm2xxx_3xxx.h"
 #include "cm2xxx_3xxx.h"
-#include "cm-regbits-24xx.h"
 #include "cm-regbits-34xx.h"
 #include "cm-regbits-44xx.h"
-#include "prm-regbits-24xx.h"
 #include "prm-regbits-34xx.h"
 
 /*
@@ -54,29 +50,8 @@
 
 /* Wakeup dependency source arrays */
 
-/* 2xxx-specific possible dependencies */
-
-/* 2xxx PM_WKDEP_GFX: CORE, MPU, WKUP */
-struct clkdm_dep gfx_24xx_wkdeps[] = {
-	{ .clkdm_name = "core_l3_clkdm" },
-	{ .clkdm_name = "core_l4_clkdm" },
-	{ .clkdm_name = "mpu_clkdm" },
-	{ .clkdm_name = "wkup_clkdm" },
-	{ NULL },
-};
-
-/* 2xxx PM_WKDEP_DSP: CORE, MPU, WKUP */
-struct clkdm_dep dsp_24xx_wkdeps[] = {
-	{ .clkdm_name = "core_l3_clkdm" },
-	{ .clkdm_name = "core_l4_clkdm" },
-	{ .clkdm_name = "mpu_clkdm" },
-	{ .clkdm_name = "wkup_clkdm" },
-	{ NULL },
-};
-
-
 /*
- * OMAP2/3-common clockdomains
+ * OMAP3-common clockdomains
  *
  * Even though the 2420 has a single PRCM module from the
  * interconnect's perspective, internally it does appear to have

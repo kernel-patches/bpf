@@ -298,8 +298,8 @@ static void sun50i_table_flush(struct sun50i_iommu_domain *sun50i_domain,
 	dma_sync_single_for_device(iommu->dev, dma, size, DMA_TO_DEVICE);
 }
 
-static void sun50i_iommu_zap_iova(struct sun50i_iommu *iommu,
-				  unsigned long iova)
+static int sun50i_iommu_zap_iova(struct sun50i_iommu *iommu,
+				 unsigned long iova)
 {
 	u32 reg;
 	int ret;
@@ -313,10 +313,12 @@ static void sun50i_iommu_zap_iova(struct sun50i_iommu *iommu,
 					reg, !reg, 1, 2000);
 	if (ret)
 		dev_warn(iommu->dev, "TLB invalidation timed out!\n");
+
+	return ret;
 }
 
-static void sun50i_iommu_zap_ptw_cache(struct sun50i_iommu *iommu,
-				       unsigned long iova)
+static int sun50i_iommu_zap_ptw_cache(struct sun50i_iommu *iommu,
+				      unsigned long iova)
 {
 	u32 reg;
 	int ret;
@@ -329,29 +331,36 @@ static void sun50i_iommu_zap_ptw_cache(struct sun50i_iommu *iommu,
 					reg, !reg, 1, 2000);
 	if (ret)
 		dev_warn(iommu->dev, "PTW cache invalidation timed out!\n");
+
+	return ret;
 }
 
-static void sun50i_iommu_zap_range(struct sun50i_iommu *iommu,
-				   unsigned long iova, size_t size)
+static int sun50i_iommu_zap_range(struct sun50i_iommu *iommu,
+				  unsigned long iova, size_t size)
 {
+	int ret;
+
 	assert_spin_locked(&iommu->iommu_lock);
 
 	iommu_write(iommu, IOMMU_AUTO_GATING_REG, 0);
 
-	sun50i_iommu_zap_iova(iommu, iova);
-	sun50i_iommu_zap_iova(iommu, iova + SPAGE_SIZE);
+	/* Issue all invalidations even if one of them times out. */
+	ret = sun50i_iommu_zap_iova(iommu, iova);
+	ret = sun50i_iommu_zap_iova(iommu, iova + SPAGE_SIZE) ?: ret;
 	if (size > SPAGE_SIZE) {
-		sun50i_iommu_zap_iova(iommu, iova + size);
-		sun50i_iommu_zap_iova(iommu, iova + size + SPAGE_SIZE);
+		ret = sun50i_iommu_zap_iova(iommu, iova + size) ?: ret;
+		ret = sun50i_iommu_zap_iova(iommu, iova + size + SPAGE_SIZE) ?: ret;
 	}
-	sun50i_iommu_zap_ptw_cache(iommu, iova);
-	sun50i_iommu_zap_ptw_cache(iommu, iova + SZ_1M);
+	ret = sun50i_iommu_zap_ptw_cache(iommu, iova) ?: ret;
+	ret = sun50i_iommu_zap_ptw_cache(iommu, iova + SZ_1M) ?: ret;
 	if (size > SZ_1M) {
-		sun50i_iommu_zap_ptw_cache(iommu, iova + size);
-		sun50i_iommu_zap_ptw_cache(iommu, iova + size + SZ_1M);
+		ret = sun50i_iommu_zap_ptw_cache(iommu, iova + size) ?: ret;
+		ret = sun50i_iommu_zap_ptw_cache(iommu, iova + size + SZ_1M) ?: ret;
 	}
 
 	iommu_write(iommu, IOMMU_AUTO_GATING_REG, IOMMU_AUTO_GATING_ENABLE);
+
+	return ret;
 }
 
 static int sun50i_iommu_flush_all_tlb(struct sun50i_iommu *iommu)
@@ -409,12 +418,13 @@ static int sun50i_iommu_iotlb_sync_map(struct iommu_domain *domain,
 	struct sun50i_iommu_domain *sun50i_domain = to_sun50i_domain(domain);
 	struct sun50i_iommu *iommu = sun50i_domain->iommu;
 	unsigned long flags;
+	int ret;
 
 	spin_lock_irqsave(&iommu->iommu_lock, flags);
-	sun50i_iommu_zap_range(iommu, iova, size);
+	ret = sun50i_iommu_zap_range(iommu, iova, size);
 	spin_unlock_irqrestore(&iommu->iommu_lock, flags);
 
-	return 0;
+	return ret;
 }
 
 static void sun50i_iommu_iotlb_sync(struct iommu_domain *domain,

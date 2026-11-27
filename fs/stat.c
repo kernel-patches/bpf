@@ -103,7 +103,8 @@ void generic_fillattr(const struct mnt_idmap *idmap, u32 request_mask,
 	}
 
 	stat->blksize = i_blocksize(inode);
-	stat->blocks = inode->i_blocks;
+	/* The block count is a snapshot and may race with space accounting. */
+	stat->blocks = data_race(inode->i_blocks);
 
 	if ((request_mask & STATX_CHANGE_COOKIE) && IS_I_VERSION(inode)) {
 		stat->result_mask |= STATX_CHANGE_COOKIE;
@@ -206,9 +207,13 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
 	if (IS_VERITY(inode))
 		stat->attributes |= STATX_ATTR_VERITY;
 
+	if (is_mgtime(inode))
+		stat->attributes |= STATX_ATTR_MULTIGRAIN_TIMESTAMP;
+
 	stat->attributes_mask |= (STATX_ATTR_AUTOMOUNT |
 				  STATX_ATTR_DAX |
-				  STATX_ATTR_VERITY);
+				  STATX_ATTR_VERITY |
+				  STATX_ATTR_MULTIGRAIN_TIMESTAMP);
 
 	idmap = mnt_idmap(path->mnt);
 	if (inode->i_op->getattr) {
@@ -322,6 +327,11 @@ static int vfs_statx_fd(int fd, int flags, struct kstat *stat,
 			  u32 request_mask)
 {
 	CLASS(fd_raw, f)(fd);
+
+	if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
+		      AT_EMPTY_PATH | AT_STATX_SYNC_TYPE))
+		return -EINVAL;
+
 	if (fd_empty(f))
 		return -EBADF;
 	return vfs_statx_path(&fd_file(f)->f_path, flags, stat, request_mask);
@@ -371,8 +381,12 @@ int vfs_fstatat(int dfd, const char __user *filename,
 {
 	CLASS(filename_maybe_null, name)(filename, flags);
 
-	if (!name && dfd >= 0)
+	if (!name && dfd >= 0) {
+		if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
+			      AT_EMPTY_PATH | AT_STATX_SYNC_TYPE))
+			return -EINVAL;
 		return vfs_fstat(dfd, stat);
+	}
 
 	return vfs_statx(dfd, name, flags | AT_NO_AUTOMOUNT,
 			 stat, STATX_BASIC_STATS);

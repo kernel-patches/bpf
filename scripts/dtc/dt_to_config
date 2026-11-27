@@ -116,13 +116,12 @@ $num_pr_flags = $pr_flag_pos_config_test_fail + 1;
        'hardcoded_no_driver'                   => ['no_config'],
 
        # drivers/usb/host/ehci-ppc-of.c
-       # drivers/usb/host/ehci-xilinx-of.c
-       #  are included from:
+       #  is included from:
        #    drivers/usb/host/ehci-hcd.c
        #  thus the search of Makefile for the included .c files is incorrect
        # ehci-hcd.c wraps the includes with ifdef CONFIG_USB_EHCI_HCD_..._OF
        #
-       # similar model for ohci-hcd.c (but no ohci-xilinx-of.c)
+       # similar model for ohci-hcd.c
        #
        # similarly, uhci-hcd.c includes uhci-platform.c
 
@@ -130,9 +129,6 @@ $num_pr_flags = $pr_flag_pos_config_test_fail + 1;
                                                    'CONFIG_USB_EHCI_HCD_PPC_OF'],
        'drivers/usb/host/ohci-ppc-of.c'        => ['CONFIG_USB_OHCI_HCD',
                                                    'CONFIG_USB_OHCI_HCD_PPC_OF'],
-
-       'drivers/usb/host/ehci-xilinx-of.c'     => ['CONFIG_USB_EHCI_HCD',
-                                                   'CONFIG_USB_EHCI_HCD_XILINX'],
 
        'drivers/usb/host/uhci-platform.c'      => ['CONFIG_USB_UHCI_HCD',
                                                    'CONFIG_USB_UHCI_PLATFORM'],

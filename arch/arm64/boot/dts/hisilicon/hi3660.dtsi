@@ -334,6 +334,65 @@
 					  IRQ_TYPE_LEVEL_LOW)>;
 	};
 
+	crg_rst: crg_rst_controller {
+		compatible = "hisilicon,hi3660-reset";
+		#reset-cells = <2>;
+		hisi,rst-syscon = <&crg_ctrl>;
+	};
+
+	iomcu_rst: reset {
+		compatible = "hisilicon,hi3660-reset";
+		hisi,rst-syscon = <&iomcu>;
+		#reset-cells = <2>;
+	};
+
+	thermal-zones {
+		cls0: cls0-thermal {
+			polling-delay = <1000>;
+			polling-delay-passive = <100>;
+			sustainable-power = <4500>;
+
+			/* sensor ID */
+			thermal-sensors = <&tsensor 1>;
+
+			trips {
+				threshold: trip-point0 {
+					temperature = <65000>;
+					hysteresis = <1000>;
+					type = "passive";
+				};
+
+				target: trip-point1 {
+					temperature = <75000>;
+					hysteresis = <1000>;
+					type = "passive";
+				};
+			};
+
+			cooling-maps {
+				map0 {
+					trip = <&target>;
+					contribution = <1024>;
+					cooling-device =
+						<&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+						<&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+						<&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+						<&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+
+				map1 {
+					trip = <&target>;
+					contribution = <512>;
+					cooling-device =
+						<&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+						<&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+						<&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+						<&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+			};
+		};
+	};
+
 	soc {
 		compatible = "simple-bus";
 		#address-cells = <2>;
@@ -345,13 +404,6 @@
 			reg = <0x0 0xfff35000 0x0 0x1000>;
 			#clock-cells = <1>;
 		};
-
-		crg_rst: crg_rst_controller {
-			compatible = "hisilicon,hi3660-reset";
-			#reset-cells = <2>;
-			hisi,rst-syscon = <&crg_ctrl>;
-		};
-
 
 		pctrl: pctrl@e8a09000 {
 			compatible = "hisilicon,hi3660-pctrl", "syscon";
@@ -376,12 +428,6 @@
 			reg = <0x0 0xffd7e000 0x0 0x1000>;
 			#clock-cells = <1>;
 
-		};
-
-		iomcu_rst: reset {
-			compatible = "hisilicon,hi3660-reset";
-			hisi,rst-syscon = <&iomcu>;
-			#reset-cells = <2>;
 		};
 
 		mailbox: mailbox@e896b000 {
@@ -558,7 +604,7 @@
 			status = "disabled";
 		};
 
-		dma0: dma@fdf30000 {
+		dma0: dma-controller@fdf30000 {
 			compatible = "hisilicon,k3-dma-1.0";
 			reg = <0x0 0xfdf30000 0x0 0x1000>;
 			#dma-cells = <1>;
@@ -1113,51 +1159,6 @@
 			reg = <0x0 0xfff30000 0x0 0x1000>;
 			interrupts = <GIC_SPI 145 IRQ_TYPE_LEVEL_HIGH>;
 			#thermal-sensor-cells = <1>;
-		};
-
-		thermal-zones {
-
-			cls0: cls0-thermal {
-				polling-delay = <1000>;
-				polling-delay-passive = <100>;
-				sustainable-power = <4500>;
-
-				/* sensor ID */
-				thermal-sensors = <&tsensor 1>;
-
-				trips {
-					threshold: trip-point0 {
-						temperature = <65000>;
-						hysteresis = <1000>;
-						type = "passive";
-					};
-
-					target: trip-point1 {
-						temperature = <75000>;
-						hysteresis = <1000>;
-						type = "passive";
-					};
-				};
-
-				cooling-maps {
-					map0 {
-						trip = <&target>;
-						contribution = <1024>;
-						cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
-								 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
-								 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
-								 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
-					};
-					map1 {
-						trip = <&target>;
-						contribution = <512>;
-						cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
-								 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
-								 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
-								 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
-					};
-				};
-			};
 		};
 
 		usb3_otg_bc: usb3_otg_bc@ff200000 {

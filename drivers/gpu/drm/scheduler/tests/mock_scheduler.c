@@ -173,7 +173,7 @@ static struct dma_fence *mock_sched_run_job(struct drm_sched_job *sched_job)
 		       &drm_mock_sched_hw_fence_ops,
 		       &sched->lock,
 		       sched->hw_timeline.context,
-		       atomic_inc_return(&sched->hw_timeline.next_seqno));
+		       atomic_inc_return(&sched->hw_timeline.next_seqno), 0);
 
 	dma_fence_get(&job->hw_fence); /* Reference for the job_list */
 

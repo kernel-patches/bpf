@@ -193,7 +193,6 @@ struct sun8i_layer_cfg {
  * @de_type: sun8i_mixer_type enum representing the display engine generation.
  * @mod_rate: module clock rate that needs to be set in order to have
  *	a functional block.
- * @map: channel map for DE variants processing YUV separately (DE33)
  */
 
 struct sun8i_mixer_cfg {
@@ -202,7 +201,6 @@ struct sun8i_mixer_cfg {
 	int			ui_num;
 	unsigned int		de_type;
 	unsigned long		mod_rate;
-	unsigned int		map[6];
 };
 
 struct sun8i_mixer {
@@ -216,7 +214,7 @@ struct sun8i_mixer {
 	struct clk			*mod_clk;
 
 	struct regmap			*top_regs;
-	struct regmap			*disp_regs;
+	struct device			*planes_dev;
 };
 
 enum {
@@ -250,13 +248,6 @@ static inline u32
 sun8i_blender_base(struct sun8i_mixer *mixer)
 {
 	return mixer->cfg->de_type == SUN8I_MIXER_DE3 ? DE3_BLD_BASE : DE2_BLD_BASE;
-}
-
-static inline struct regmap *
-sun8i_blender_regmap(struct sun8i_mixer *mixer)
-{
-	return mixer->cfg->de_type == SUN8I_MIXER_DE33 ?
-		mixer->disp_regs : mixer->engine.regs;
 }
 
 static inline u32

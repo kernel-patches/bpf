@@ -9,6 +9,8 @@
 #include <soc/fsl/phy-fsl-lynx.h>
 
 #define LYNX_NUM_PLL				2
+/* Enough for a retimer with a generic PHY per direction */
+#define LYNX_MAX_RETIMERS			2
 #define LYNX_QUIRK_HAS_HARDCODED_USXGMII	BIT(0)
 
 struct lynx_priv;
@@ -33,6 +35,8 @@ struct lynx_pll {
 struct lynx_lane {
 	struct lynx_priv *priv;
 	struct phy *phy;
+	struct phy *retimer[LYNX_MAX_RETIMERS];
+	int num_retimers;
 	bool powered_up;
 	bool init;
 	unsigned int id;
@@ -65,6 +69,14 @@ struct lynx_priv {
 	bool big_endian;
 	struct lynx_pll pll[LYNX_NUM_PLL];
 	struct lynx_lane *lane;
+
+	/* PHY ops defined by the driver - either Lynx10G or Lynx28G */
+	const struct phy_ops *drv_ops;
+	/* Lynx core ops which take care of any possible downstream retimer
+	 * PHYs as well as calling the driver callbacks. Cannot be const
+	 * because the .owner field needs to be copied from the drv_ops.
+	 */
+	struct phy_ops phy_ops;
 
 	struct delayed_work cdr_check;
 };
@@ -111,7 +123,7 @@ static inline void lynx_rmw(struct lynx_priv *priv, unsigned long off, u32 val,
 	lynx_read((pll)->priv, reg((pll)->id))
 
 int lynx_probe(struct platform_device *pdev, const struct lynx_info *info,
-	       const struct phy_ops *phy_ops);
+	       const struct phy_ops *drv_ops);
 void lynx_remove(struct platform_device *pdev);
 
 const char *lynx_lane_mode_str(enum lynx_lane_mode lane_mode);

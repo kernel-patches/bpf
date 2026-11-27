@@ -527,20 +527,12 @@ static void verbose_unum(struct bpf_verifier_env *env, u64 num)
 		verbose(env, "%#llx", num);
 }
 
-void bpf_verbose_snum(struct bpf_verifier_env *env, s64 num)
+static void verbose_snum(struct bpf_verifier_env *env, s64 num)
 {
 	if (is_snum_decimal(num))
 		verbose(env, "%lld", num);
 	else
 		verbose(env, "%#llx", num);
-}
-
-void bpf_verbose_snum32(struct bpf_verifier_env *env, s32 num)
-{
-	if (is_snum_decimal(num))
-		verbose(env, "%d", num);
-	else
-		verbose(env, "%#x", (u32)num);
 }
 
 int tnum_strn(char *str, size_t size, struct tnum a)
@@ -617,7 +609,7 @@ static void print_scalar_ranges(struct bpf_verifier_env *env,
 		}
 
 		if (m1->name[0] == 's')
-			bpf_verbose_snum(env, m1->val);
+			verbose_snum(env, m1->val);
 		else
 			verbose_unum(env, m1->val);
 	}
@@ -637,10 +629,8 @@ static void print_reg_state(struct bpf_verifier_env *env,
 	const char *sep = "";
 
 	t = reg->type;
-	if (t == SCALAR_VALUE && reg->precise)
-		verbose(env, "P");
 	if (t == SCALAR_VALUE && tnum_is_const(reg->var_off)) {
-		bpf_verbose_snum(env, reg->var_off.value);
+		verbose_snum(env, reg->var_off.value);
 		return;
 	}
 
@@ -651,7 +641,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		if (state->frameno != reg->frameno)
 			verbose(env, "[%d]", reg->frameno);
 		if (tnum_is_const(reg->var_off)) {
-			bpf_verbose_snum(env, reg->var_off.value + reg->delta);
+			verbose_snum(env, reg->var_off.value);
 			return;
 		}
 	}
@@ -659,13 +649,13 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		verbose(env, "%s", btf_type_name(reg->btf, reg->btf_id));
 	verbose(env, "(");
 	if (reg->id)
-		verbose_a("id=%d", reg->id & ~BPF_ADD_CONST);
-	if (reg->id & BPF_ADD_CONST)
-		verbose(env, "%+d", reg->delta);
+		verbose_a("id=%d", reg->id);
 	if (reg->parent_id)
 		verbose_a("parent_id=%d", reg->parent_id);
 	if (type_is_non_owning_ref(reg->type))
 		verbose_a("%s", "non_own_ref");
+	if (t == PTR_TO_FUNC && reg->func_set)
+		verbose_a("one_of=%d", env->func_sets[reg->func_set - 1]->cnt);
 	if (type_is_map_ptr(t)) {
 		if (reg->map_ptr->name[0])
 			verbose_a("map=%s", reg->map_ptr->name);
@@ -673,13 +663,11 @@ static void print_reg_state(struct bpf_verifier_env *env,
 			  reg->map_ptr->key_size,
 			  reg->map_ptr->value_size);
 	}
-	if (t != SCALAR_VALUE && reg->delta) {
-		verbose_a("off=");
-		bpf_verbose_snum(env, reg->delta);
-	}
 	if (type_is_pkt_pointer(t)) {
 		verbose_a("r=");
 		verbose_unum(env, reg->range);
+		if (pkt_min_len(reg) && pkt_min_len(reg) != reg->range)
+			verbose_a("min_len=%d", pkt_min_len(reg));
 	}
 	if (base_type(t) == PTR_TO_MEM) {
 		verbose_a("sz=");
@@ -693,7 +681,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		/* a pointer register with fixed offset */
 		if (reg->var_off.value) {
 			verbose_a("imm=");
-			bpf_verbose_snum(env, reg->var_off.value);
+			verbose_snum(env, reg->var_off.value);
 		}
 	} else {
 		print_scalar_ranges(env, reg, &sep);
@@ -714,7 +702,7 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 {
 	const struct bpf_func_state *state = vstate->frame[frameno];
 	const struct bpf_reg_state *reg;
-	int i;
+	int i, first;
 
 	if (state->frameno)
 		verbose(env, " frame%d:", state->frameno);
@@ -763,7 +751,8 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 			break;
 		case STACK_DYNPTR:
 			/* skip to main dynptr slot */
-			i += BPF_DYNPTR_NR_SLOTS - 1;
+			if (!reg->dynptr.first_slot)
+				i += BPF_DYNPTR_NR_SLOTS - 1;
 			reg = &bpf_stack_slot(state, i)->spilled_ptr;
 
 			verbose(env, " fp%d", (-i - 1) * BPF_REG_SIZE);
@@ -779,11 +768,10 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 			if (!reg->id)
 				continue;
 
-			verbose(env, " fp%d=iter_%s(id=%d,state=%s,depth=%u)",
+			verbose(env, " fp%d=iter_%s(id=%d,state=%s)",
 				(-i - 1) * BPF_REG_SIZE,
 				iter_type_str(reg->iter.btf, reg->iter.btf_id),
-				reg->id, iter_state_str(reg->iter.state),
-				reg->iter.depth);
+				reg->id, iter_state_str(reg->iter.state));
 			break;
 		case STACK_MISC:
 		case STACK_ZERO:
@@ -802,11 +790,23 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 		verbose(env, " cb");
 	if (state->in_async_callback_fn)
 		verbose(env, " async_cb");
+	/* The innermost loop. Level 2 has all loops, once for each block. */
+	first = print_all && (env->log.level & BPF_LOG_LEVEL2) ? 0 :
+		max(state->loop_stack_cnt, 1U) - 1;
+	/* the peeled trips */
+	for (i = first; i < state->loop_stack_cnt; i++)
+		if (state->loop_stack[i].peeled)
+			verbose(env, " iter(%d)=%u", state->loop_stack[i].loop->header,
+				state->loop_stack[i].trip);
 	if (state->loop_stack_cnt) {
 		verbose(env, " loop_stack=");
-		for (i = 0; i < state->loop_stack_cnt; i++)
-			verbose(env, "%s%d", i ? "," : "", state->loop_stack[i].loop_id);
+		for (i = first; i < state->loop_stack_cnt; i++)
+			verbose(env, "%s%d", i > first ? "," : "",
+				state->loop_stack[i].loop->header);
 	}
+	/* one table for all frames */
+	if (print_all && frameno == vstate->curframe)
+		bpf_equations_print(env, vstate);
 	verbose(env, "\n");
 	if (!print_all)
 		mark_verifier_state_clean(env);

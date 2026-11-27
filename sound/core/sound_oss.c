@@ -41,6 +41,27 @@ void *snd_lookup_oss_minor_data(unsigned int minor, int type)
 }
 EXPORT_SYMBOL(snd_lookup_oss_minor_data);
 
+/* Like snd_lookup_minor_data_file(), for OSS minors */
+void *snd_lookup_oss_minor_data_file(unsigned int minor, int type,
+				     struct file *file)
+{
+	struct snd_minor *mreg;
+	int err;
+
+	if (minor >= ARRAY_SIZE(snd_oss_minors))
+		return NULL;
+	guard(mutex)(&sound_oss_mutex);
+	mreg = snd_oss_minors[minor];
+	if (!mreg || mreg->type != type || !mreg->private_data ||
+	    !mreg->card_ptr)
+		return NULL;
+	err = snd_card_file_add_data(mreg->card_ptr, file, mreg->private_data);
+	if (err < 0)
+		return ERR_PTR(err);
+	return mreg->private_data;
+}
+EXPORT_SYMBOL(snd_lookup_oss_minor_data_file);
+
 static int snd_oss_kernel_minor(int type, struct snd_card *card, int dev)
 {
 	int minor;
@@ -153,24 +174,25 @@ int snd_unregister_oss_device(int type, struct snd_card *card, int dev)
 		return 0;
 	if (minor < 0)
 		return minor;
-	guard(mutex)(&sound_oss_mutex);
-	mptr = snd_oss_minors[minor];
-	if (mptr == NULL)
-		return -ENOENT;
-	switch (SNDRV_MINOR_OSS_DEVICE(minor)) {
-	case SNDRV_MINOR_OSS_PCM:
-		track2 = SNDRV_MINOR_OSS(cidx, SNDRV_MINOR_OSS_AUDIO);
-		break;
-	case SNDRV_MINOR_OSS_MIDI:
-		track2 = SNDRV_MINOR_OSS(cidx, SNDRV_MINOR_OSS_DMMIDI);
-		break;
-	case SNDRV_MINOR_OSS_MIDI1:
-		track2 = SNDRV_MINOR_OSS(cidx, SNDRV_MINOR_OSS_DMMIDI1);
-		break;
+	scoped_guard(mutex, &sound_oss_mutex) {
+		mptr = snd_oss_minors[minor];
+		if (mptr == NULL)
+			return -ENOENT;
+		switch (SNDRV_MINOR_OSS_DEVICE(minor)) {
+		case SNDRV_MINOR_OSS_PCM:
+			track2 = SNDRV_MINOR_OSS(cidx, SNDRV_MINOR_OSS_AUDIO);
+			break;
+		case SNDRV_MINOR_OSS_MIDI:
+			track2 = SNDRV_MINOR_OSS(cidx, SNDRV_MINOR_OSS_DMMIDI);
+			break;
+		case SNDRV_MINOR_OSS_MIDI1:
+			track2 = SNDRV_MINOR_OSS(cidx, SNDRV_MINOR_OSS_DMMIDI1);
+			break;
+		}
+		if (track2 >= 0)
+			snd_oss_minors[track2] = NULL;
+		snd_oss_minors[minor] = NULL;
 	}
-	if (track2 >= 0)
-		snd_oss_minors[track2] = NULL;
-	snd_oss_minors[minor] = NULL;
 
 	/* call unregister_sound_special() outside sound_oss_mutex;
 	 * otherwise may deadlock, as it can trigger the release of a card

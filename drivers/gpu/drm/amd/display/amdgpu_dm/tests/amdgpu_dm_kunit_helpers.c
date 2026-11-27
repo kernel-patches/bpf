@@ -95,6 +95,8 @@ struct amdgpu_display_manager *dm_kunit_alloc_dm(struct kunit *test)
 
 	dm->dc = dc;
 	dc->current_state = state;
+	/* Guards otg_sw_counter[]; amdgpu_dm_init() is bypassed here. */
+	spin_lock_init(&dm->sw_counter_lock);
 
 	return dm;
 }
@@ -182,7 +184,7 @@ struct drm_device *dm_kunit_alloc_drm_with_connector_list(struct kunit *test)
 	struct drm_device *dev;
 
 	dev = kunit_kzalloc(test, sizeof(*dev), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, dev);
+	KUNIT_ASSERT_NOT_NULL(test, dev);
 
 	INIT_LIST_HEAD(&dev->mode_config.connector_list);
 	spin_lock_init(&dev->mode_config.connector_list_lock);

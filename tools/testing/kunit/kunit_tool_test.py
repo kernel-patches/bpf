@@ -991,6 +991,24 @@ class KUnitMainTest(unittest.TestCase):
 				     kunit.KunitExecRequest(None, None, None, False, False, '.kunit', 300, 'suite*', '', None, None, 'suite', False, False, False))
 		self.assertEqual(got, want)
 
+	def test_list_tests_executor_error(self):
+		self.linux_source_mock.run_kernel.return_value = [
+			'[    0.100000] kunit executor: attribute not found: nosuchattr=1',
+			'[    0.100000] kunit executor: error filtering suites: -22']
+
+		with self.assertRaises(SystemExit) as e:
+			kunit.main(['exec', '--list_tests'])
+		self.assertEqual(e.exception.code, 1)
+		self.print_mock.assert_any_call(StrContains('attribute not found: nosuchattr=1'))
+
+	def test_list_tests_no_output(self):
+		self.linux_source_mock.run_kernel.return_value = []
+
+		with self.assertRaises(SystemExit) as e:
+			kunit.main(['exec', '--list_suites'])
+		self.assertEqual(e.exception.code, 1)
+		self.print_mock.assert_any_call(StrContains('Could not find any KTAP output'))
+
 	@mock.patch.object(kunit, '_list_tests')
 	def test_run_isolated_by_suite(self, mock_tests):
 		mock_tests.return_value = ['suite.test1', 'suite.test2', 'suite2.test1']

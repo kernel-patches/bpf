@@ -550,6 +550,17 @@ config I2C_CPM
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-cpm.
 
+config I2C_CS75XX
+	tristate "Cortina Systems CS75xx I2C controller"
+	depends on OF
+	depends on HAS_IOMEM
+	help
+	  Say yes here to support the I2C ("Bi-Wire") controller of the
+	  Cortina Systems CS75xx SoCs.
+
+	  This driver can also be built as a module. If so, the module
+	  will be called i2c-cs75xx.
+
 config I2C_DAVINCI
 	tristate "DaVinci I2C driver"
 	depends on ARCH_DAVINCI || ARCH_KEYSTONE || COMPILE_TEST
@@ -1272,7 +1283,7 @@ config I2C_UNIPHIER_F
 
 config I2C_VERSATILE
 	tristate "ARM Versatile/Realview I2C bus support"
-	depends on ARCH_MPS2 || ARCH_VERSATILE || ARCH_REALVIEW || ARCH_VEXPRESS || COMPILE_TEST
+	depends on ARCH_VERSATILE || ARCH_REALVIEW || ARCH_VEXPRESS || COMPILE_TEST
 	select I2C_ALGOBIT
 	help
 	  Say yes if you want to support the I2C serial bus on ARMs Versatile

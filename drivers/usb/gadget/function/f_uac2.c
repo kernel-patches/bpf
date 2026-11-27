@@ -50,8 +50,17 @@
 #define UNFLW_CTRL	8
 #define OVFLW_CTRL	10
 
-#define EPIN_EN(_opts) ((_opts)->p_chmask != 0)
-#define EPOUT_EN(_opts) ((_opts)->c_chmask != 0)
+static unsigned int uac2_num_channels(bool is_playback,
+				      const struct f_uac2_opts *opts)
+{
+	u8 channels = is_playback ? opts->p_channels : opts->c_channels;
+	u32 chmask = is_playback ? opts->p_chmask : opts->c_chmask;
+
+	return channels ? channels : num_channels(chmask);
+}
+
+#define EPIN_EN(_opts) (uac2_num_channels(true, (_opts)) != 0)
+#define EPOUT_EN(_opts) (uac2_num_channels(false, (_opts)) != 0)
 #define FUIN_EN(_opts) (EPIN_EN(_opts) \
 				&& ((_opts)->p_mute_present \
 				|| (_opts)->p_volume_present))
@@ -206,7 +215,7 @@ static struct uac2_input_terminal_descriptor io_in_it_desc = {
 	.bmControls = cpu_to_le16(CONTROL_RDWR << COPY_CTRL),
 };
 
-/* Ouput Terminal for USB_IN */
+/* Output Terminal for USB_IN */
 static struct uac2_output_terminal_descriptor usb_in_ot_desc = {
 	.bLength = sizeof usb_in_ot_desc,
 	.bDescriptorType = USB_DT_CS_INTERFACE,
@@ -220,7 +229,7 @@ static struct uac2_output_terminal_descriptor usb_in_ot_desc = {
 	.bmControls = cpu_to_le16(CONTROL_RDWR << COPY_CTRL),
 };
 
-/* Ouput Terminal for I/O-Out */
+/* Output Terminal for I/O-Out */
 static struct uac2_output_terminal_descriptor io_out_ot_desc = {
 	.bLength = sizeof io_out_ot_desc,
 	.bDescriptorType = USB_DT_CS_INTERFACE,
@@ -668,18 +677,19 @@ static int get_max_srate(const int *srates)
 	return max_srate;
 }
 
-static int get_max_bw_for_bint(const struct f_uac2_opts *uac2_opts,
+static u32 get_max_bw_for_bint(const struct f_uac2_opts *uac2_opts,
 	u8 bint, unsigned int factor, bool is_playback)
 {
-	int chmask, srate, ssize;
-	u16 max_size_bw;
+	unsigned int channels;
+	int srate, ssize;
+	u32 max_size_bw;
 
 	if (is_playback) {
-		chmask = uac2_opts->p_chmask;
+		channels = uac2_num_channels(true, uac2_opts);
 		srate = get_max_srate(uac2_opts->p_srates);
 		ssize = uac2_opts->p_ssize;
 	} else {
-		chmask = uac2_opts->c_chmask;
+		channels = uac2_num_channels(false, uac2_opts);
 		srate = get_max_srate(uac2_opts->c_srates);
 		ssize = uac2_opts->c_ssize;
 	}
@@ -689,11 +699,11 @@ static int get_max_bw_for_bint(const struct f_uac2_opts *uac2_opts,
 		// Win10 requires max packet size + 1 frame
 		srate = srate * (1000 + uac2_opts->fb_max) / 1000;
 		// updated srate is always bigger, therefore DIV_ROUND_UP always yields +1
-		max_size_bw = num_channels(chmask) * ssize *
+		max_size_bw = channels * ssize *
 			(DIV_ROUND_UP(srate, factor / (1 << (bint - 1))));
 	} else {
 		// adding 1 frame provision for Win10
-		max_size_bw = num_channels(chmask) * ssize *
+		max_size_bw = channels * ssize *
 			(DIV_ROUND_UP(srate, factor / (1 << (bint - 1))) + 1);
 	}
 	return max_size_bw;
@@ -703,7 +713,8 @@ static int set_ep_max_packet_size_bint(struct device *dev, const struct f_uac2_o
 	struct usb_endpoint_descriptor *ep_desc,
 	enum usb_device_speed speed, bool is_playback)
 {
-	u16 max_size_bw, max_size_ep;
+	u32 max_size_bw;
+	u16 max_size_ep;
 	u8 bint, opts_bint;
 	char *dir;
 
@@ -728,11 +739,11 @@ static int set_ep_max_packet_size_bint(struct device *dev, const struct f_uac2_o
 			bint = opts_bint;
 			max_size_bw = get_max_bw_for_bint(uac2_opts, bint, 8000, is_playback);
 		} else {
-			/* checking bInterval from 4 to 1 whether the required bandwidth fits */
-			for (bint = 4; bint > 0; --bint) {
+			/* select the largest bInterval that fits, or 1 if none fit */
+			for (bint = 4; ; --bint) {
 				max_size_bw = get_max_bw_for_bint(
 					uac2_opts, bint, 8000, is_playback);
-				if (max_size_bw <= max_size_ep)
+				if (max_size_bw <= max_size_ep || bint == 1)
 					break;
 			}
 		}
@@ -749,11 +760,11 @@ static int set_ep_max_packet_size_bint(struct device *dev, const struct f_uac2_o
 
 	if (max_size_bw <= max_size_ep)
 		dev_dbg(dev,
-			"%s %s: Would use wMaxPacketSize %d and bInterval %d\n",
+			"%s %s: Would use wMaxPacketSize %u and bInterval %d\n",
 			speed_names[speed], dir, max_size_bw, bint);
 	else {
 		dev_warn(dev,
-			"%s %s: Req. wMaxPacketSize %d at bInterval %d > max ISOC %d, may drop data!\n",
+			"%s %s: Req. wMaxPacketSize %u at bInterval %d > max ISOC %d, may drop data!\n",
 			speed_names[speed], dir, max_size_bw, bint, max_size_ep);
 		max_size_bw = max_size_ep;
 	}
@@ -764,10 +775,9 @@ static int set_ep_max_packet_size_bint(struct device *dev, const struct f_uac2_o
 	return 0;
 }
 
-static struct uac2_feature_unit_descriptor *build_fu_desc(int chmask)
+static struct uac2_feature_unit_descriptor *build_fu_desc(unsigned int channels)
 {
 	struct uac2_feature_unit_descriptor *fu_desc;
-	int channels = num_channels(chmask);
 	int fu_desc_size = UAC2_DT_FEATURE_UNIT_SIZE(channels);
 
 	fu_desc = kzalloc(fu_desc_size, GFP_KERNEL);
@@ -976,13 +986,27 @@ static int afunc_validate_opts(struct g_audio *agdev, struct device *dev)
 {
 	struct f_uac2_opts *opts = g_audio_to_uac2_opts(agdev);
 	const char *msg = NULL;
+	unsigned int p_channels = uac2_num_channels(true, opts);
+	unsigned int c_channels = uac2_num_channels(false, opts);
 
-	if (!opts->p_chmask && !opts->c_chmask)
-		msg = "no playback and capture channels";
-	else if (opts->p_chmask & ~UAC2_CHANNEL_MASK)
+	if (opts->p_chmask & ~UAC2_CHANNEL_MASK)
 		msg = "unsupported playback channels mask";
 	else if (opts->c_chmask & ~UAC2_CHANNEL_MASK)
 		msg = "unsupported capture channels mask";
+	else if (!p_channels && !c_channels)
+		msg = "no playback and capture channels";
+	else if (opts->p_channels && opts->p_chmask &&
+		 opts->p_channels != num_channels(opts->p_chmask))
+		msg = "playback channel count does not match channel mask";
+	else if (opts->c_channels && opts->c_chmask &&
+		 opts->c_channels != num_channels(opts->c_chmask))
+		msg = "capture channel count does not match channel mask";
+	else if (FUIN_EN(opts) &&
+		 UAC2_DT_FEATURE_UNIT_SIZE(p_channels) > U8_MAX)
+		msg = "too many playback channels for feature unit descriptor";
+	else if (FUOUT_EN(opts) &&
+		 UAC2_DT_FEATURE_UNIT_SIZE(c_channels) > U8_MAX)
+		msg = "too many capture channels for feature unit descriptor";
 	else if ((opts->p_ssize < 1) || (opts->p_ssize > 4))
 		msg = "incorrect playback sample size";
 	else if ((opts->c_ssize < 1) || (opts->c_ssize > 4))
@@ -1059,12 +1083,16 @@ afunc_bind(struct usb_configuration *cfg, struct usb_function *fn)
 		return PTR_ERR(us);
 
 	if (FUOUT_EN(uac2_opts)) {
-		out_feature_unit_desc = build_fu_desc(uac2_opts->c_chmask);
+		unsigned int c_channels = uac2_num_channels(false, uac2_opts);
+
+		out_feature_unit_desc = build_fu_desc(c_channels);
 		if (!out_feature_unit_desc)
 			return -ENOMEM;
 	}
 	if (FUIN_EN(uac2_opts)) {
-		in_feature_unit_desc = build_fu_desc(uac2_opts->p_chmask);
+		unsigned int p_channels = uac2_num_channels(true, uac2_opts);
+
+		in_feature_unit_desc = build_fu_desc(p_channels);
 		if (!in_feature_unit_desc) {
 			ret = -ENOMEM;
 			goto err_free_fu;
@@ -1099,13 +1127,13 @@ afunc_bind(struct usb_configuration *cfg, struct usb_function *fn)
 
 
 	/* Initialize the configurable parameters */
-	usb_out_it_desc.bNrChannels = num_channels(uac2_opts->c_chmask);
+	usb_out_it_desc.bNrChannels = uac2_num_channels(false, uac2_opts);
 	usb_out_it_desc.bmChannelConfig = cpu_to_le32(uac2_opts->c_chmask);
-	io_in_it_desc.bNrChannels = num_channels(uac2_opts->p_chmask);
+	io_in_it_desc.bNrChannels = uac2_num_channels(true, uac2_opts);
 	io_in_it_desc.bmChannelConfig = cpu_to_le32(uac2_opts->p_chmask);
-	as_out_hdr_desc.bNrChannels = num_channels(uac2_opts->c_chmask);
+	as_out_hdr_desc.bNrChannels = uac2_num_channels(false, uac2_opts);
 	as_out_hdr_desc.bmChannelConfig = cpu_to_le32(uac2_opts->c_chmask);
-	as_in_hdr_desc.bNrChannels = num_channels(uac2_opts->p_chmask);
+	as_in_hdr_desc.bNrChannels = uac2_num_channels(true, uac2_opts);
 	as_in_hdr_desc.bmChannelConfig = cpu_to_le32(uac2_opts->p_chmask);
 	as_out_fmt1_desc.bSubslotSize = uac2_opts->c_ssize;
 	as_out_fmt1_desc.bBitResolution = uac2_opts->c_ssize * 8;
@@ -1307,7 +1335,7 @@ afunc_bind(struct usb_configuration *cfg, struct usb_function *fn)
 
 	agdev->gadget = gadget;
 
-	agdev->params.p_chmask = uac2_opts->p_chmask;
+	agdev->params.p_channels = uac2_num_channels(true, uac2_opts);
 	memcpy(agdev->params.p_srates, uac2_opts->p_srates,
 			sizeof(agdev->params.p_srates));
 	agdev->params.p_ssize = uac2_opts->p_ssize;
@@ -1319,7 +1347,7 @@ afunc_bind(struct usb_configuration *cfg, struct usb_function *fn)
 		agdev->params.p_fu.volume_max = uac2_opts->p_volume_max;
 		agdev->params.p_fu.volume_res = uac2_opts->p_volume_res;
 	}
-	agdev->params.c_chmask = uac2_opts->c_chmask;
+	agdev->params.c_channels = uac2_num_channels(false, uac2_opts);
 	memcpy(agdev->params.c_srates, uac2_opts->c_srates,
 			sizeof(agdev->params.c_srates));
 	agdev->params.c_ssize = uac2_opts->c_ssize;
@@ -2089,10 +2117,12 @@ end:									\
 CONFIGFS_ATTR(f_uac2_opts_, name)
 
 UAC2_ATTRIBUTE(u32, p_chmask);
+UAC2_ATTRIBUTE(u8, p_channels);
 UAC2_RATE_ATTRIBUTE(p_srate);
 UAC2_ATTRIBUTE(u32, p_ssize);
 UAC2_ATTRIBUTE(u8, p_hs_bint);
 UAC2_ATTRIBUTE(u32, c_chmask);
+UAC2_ATTRIBUTE(u8, c_channels);
 UAC2_RATE_ATTRIBUTE(c_srate);
 UAC2_ATTRIBUTE_SYNC(c_sync);
 UAC2_ATTRIBUTE(u32, c_ssize);
@@ -2130,12 +2160,14 @@ UAC2_ATTRIBUTE(s16, p_terminal_type);
 UAC2_ATTRIBUTE(s16, c_terminal_type);
 
 
-static struct configfs_attribute *f_uac2_attrs[] = {
+static const struct configfs_attribute *const f_uac2_attrs[] = {
 	&f_uac2_opts_attr_p_chmask,
+	&f_uac2_opts_attr_p_channels,
 	&f_uac2_opts_attr_p_srate,
 	&f_uac2_opts_attr_p_ssize,
 	&f_uac2_opts_attr_p_hs_bint,
 	&f_uac2_opts_attr_c_chmask,
+	&f_uac2_opts_attr_c_channels,
 	&f_uac2_opts_attr_c_srate,
 	&f_uac2_opts_attr_c_ssize,
 	&f_uac2_opts_attr_c_hs_bint,
@@ -2178,7 +2210,7 @@ static struct configfs_attribute *f_uac2_attrs[] = {
 
 static const struct config_item_type f_uac2_func_type = {
 	.ct_item_ops	= &f_uac2_item_ops,
-	.ct_attrs	= f_uac2_attrs,
+	.ct_attrs_const	= f_uac2_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -2205,10 +2237,12 @@ static struct usb_function_instance *afunc_alloc_inst(void)
 				    &f_uac2_func_type);
 
 	opts->p_chmask = UAC2_DEF_PCHMASK;
+	opts->p_channels = UAC2_DEF_PCHANNELS;
 	opts->p_srates[0] = UAC2_DEF_PSRATE;
 	opts->p_ssize = UAC2_DEF_PSSIZE;
 	opts->p_hs_bint = UAC2_DEF_PHSBINT;
 	opts->c_chmask = UAC2_DEF_CCHMASK;
+	opts->c_channels = UAC2_DEF_CCHANNELS;
 	opts->c_srates[0] = UAC2_DEF_CSRATE;
 	opts->c_ssize = UAC2_DEF_CSSIZE;
 	opts->c_hs_bint = UAC2_DEF_CHSBINT;

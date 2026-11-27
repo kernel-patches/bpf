@@ -75,7 +75,7 @@ $defs:
                 ddr_bist_fail, ddr_bist_start, ddr_bist_stop, ddr_pxi,
                 edp0_hot, edp0_lcd, edp1_lcd, egpio, eusb0_ac_en, eusb1_ac_en,
                 eusb2_ac_en, eusb3_ac_en, eusb5_ac_en, eusb6_ac_en, gcc_gp1,
-                gcc_gp2, gcc_gp3, host2wlan_sol, i2c0_s_scl, i2c0_s_sda,
+                gcc_gp2, gcc_gp3, gp_mn, host2wlan_sol, i2c0_s_scl, i2c0_s_sda,
                 i2s0_data, i2s0_sck, i2s0_ws, i2s1_data, i2s1_sck, i2s1_ws,
                 ibi_i3c, jitter_bist, mdp_vsync_out, mdp_vsync_e, mdp_vsync_p,
                 mdp_vsync_s, pcie3a_clk, pcie3a_rst_n, pcie3b_clk,

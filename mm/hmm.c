@@ -355,7 +355,8 @@ static int hmm_vma_handle_absent_pmd(struct mm_walk *walk, unsigned long start,
 	    range->dev_private_owner) {
 		unsigned long cpu_flags = HMM_PFN_VALID |
 			hmm_pfn_flags_order(PMD_SHIFT - PAGE_SHIFT);
-		unsigned long pfn = softleaf_to_pfn(entry);
+		unsigned long pfn = softleaf_to_pfn(entry) +
+			((start & ~PMD_MASK) >> PAGE_SHIFT);
 		unsigned long i;
 
 		if (softleaf_is_device_private_write(entry))
@@ -595,8 +596,9 @@ static int hmm_vma_walk_test(unsigned long start, unsigned long end,
 	struct hmm_range *range = hmm_vma_walk->range;
 	struct vm_area_struct *vma = walk->vma;
 
-	if (!(vma->vm_flags & (VM_IO | VM_PFNMAP)) &&
-	    vma->vm_flags & VM_READ)
+	if (!vma_test_any(vma, VMA_IO_BIT, VMA_PFNMAP_BIT) &&
+	    !vma_test_single_mask(vma, VMA_SHADOW_STACK) &&
+	    vma_test(vma, VMA_READ_BIT))
 		return 0;
 
 	/*
@@ -606,6 +608,8 @@ static int hmm_vma_walk_test(unsigned long start, unsigned long end,
 	 * If the vma does not allow read access, then assume that it does not
 	 * allow write access either. HMM does not support architectures that
 	 * allow write without read.
+	 *
+	 * Devices must not gain ordinary write access to shadow stacks.
 	 *
 	 * If a fault is requested for an unsupported range then it is a hard
 	 * failure.
@@ -659,7 +663,7 @@ static int hmm_do_fault(struct mm_struct *mm,
 		return -EFAULT;
 
 	if (required_fault & HMM_NEED_WRITE_FAULT) {
-		if (!(vma->vm_flags & VM_WRITE))
+		if (!vma_test(vma, VMA_WRITE_BIT))
 			return -EPERM;
 		fault_flags |= FAULT_FLAG_WRITE;
 	}

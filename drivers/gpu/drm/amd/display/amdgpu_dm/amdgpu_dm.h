@@ -65,9 +65,9 @@ enum amd_vsdb_panel_type {
  */
 #define AMDGPU_DM_MAX_HDMI_HPD_DEBOUNCE_MS 5000
 /*
-#include "include/amdgpu_dal_power_if.h"
-#include "amdgpu_dm_irq.h"
-*/
+ * #include "include/amdgpu_dal_power_if.h"
+ * #include "amdgpu_dm_irq.h"
+ */
 
 #include "irq_types.h"
 #include "signal_types.h"
@@ -320,6 +320,28 @@ struct hpd_rx_irq_offload_work {
 };
 
 /**
+ * struct dm_otg_sw_counter - Per-OTG sw vblank counter state
+ * @frozen: Frozen vblank counter snapshot, valid while
+ *	    dm->use_sw_vblank_counter is set.
+ * @offset: Offset applied to the live hw vblank counter to keep it
+ *	    continuous across a freeze/resume cycle.
+ * @vblank_start: Frozen scanout vblank start position, valid while
+ *		  dm->use_sw_vblank_counter is set.
+ * @vblank_end: Frozen scanout vblank end position, valid while
+ *		dm->use_sw_vblank_counter is set.
+ *
+ * Indexed by otg_inst rather than by CRTC, so a value survives a CRTC's
+ * stream being reassigned to a different OTG. Guarded by
+ * dm->sw_counter_lock.
+ */
+struct dm_otg_sw_counter {
+	u32 frozen;
+	u32 offset;
+	u32 vblank_start;
+	u32 vblank_end;
+};
+
+/**
  * struct amdgpu_display_manager - Central amdgpu display manager device
  *
  * @dc: Display Core control structure
@@ -349,7 +371,7 @@ struct hpd_rx_irq_offload_work {
  * @disable_hpd_irq: disables all HPD and HPD RX interrupt handling in the
  *		     driver when true
  * @dmub_aux_transfer_done: struct completion used to indicate when DMUB
- * 			    transfers are done
+ *			    transfers are done
  * @delayed_hpd_wq: work queue used to delay DMUB HPD work
  */
 struct amdgpu_display_manager {
@@ -466,6 +488,30 @@ struct amdgpu_display_manager {
 	 * sequences.
 	 */
 	struct mutex dc_lock;
+
+	/**
+	 * @sw_counter_lock
+	 *
+	 * Guards sw_vblank counter.
+	 */
+	spinlock_t sw_counter_lock;
+
+	/**
+	 * @use_sw_vblank_counter
+	 *
+	 * use sw vblank counter instead of hw vblank counter. Can only be set
+	 * under dc_lock and sw_counter_lock.
+	 * Set implies active_vblank_irq_count == 0.
+	 */
+	bool use_sw_vblank_counter;
+
+	/**
+	 * @otg_sw_counter:
+	 *
+	 * Per-OTG sw vblank counter state, indexed by otg_inst. Guarded by
+	 * sw_counter_lock. See &struct dm_otg_sw_counter.
+	 */
+	struct dm_otg_sw_counter otg_sw_counter[AMDGPU_MAX_CRTCS];
 
 	/**
 	 * @dmub_lock:
@@ -825,6 +871,12 @@ struct amdgpu_hdmi_vsdb_info {
 	bool replay_mode;
 };
 
+enum amdgpu_dm_vrr_override {
+	AMDGPU_DM_VRR_OVERRIDE_AUTO,
+	AMDGPU_DM_VRR_OVERRIDE_FORCE_HDMI_VRR,
+	AMDGPU_DM_VRR_OVERRIDE_DISABLE_VRR,
+};
+
 struct amdgpu_dm_connector {
 
 	struct drm_connector base;
@@ -833,8 +885,10 @@ struct amdgpu_dm_connector {
 
 	struct cec_notifier *notifier;
 
-	/* we need to mind the EDID between detect
-	   and get modes due to analog/digital/tvencoder */
+	/*
+	 * we need to mind the EDID between detect
+	 * and get modes due to analog/digital/tvencoder
+	 */
 	const struct drm_edid *drm_edid;
 
 	/* shared with amdgpu */
@@ -843,8 +897,10 @@ struct amdgpu_dm_connector {
 	/* number of modes generated from EDID at 'dc_sink' */
 	int num_modes;
 
-	/* The 'old' sink - before an HPD.
-	 * The 'current' sink is in dc_link->sink. */
+	/*
+	 * The 'old' sink - before an HPD.
+	 * The 'current' sink is in dc_link->sink.
+	 */
 	struct dc_sink *dc_sink;
 	struct dc_link *dc_link;
 
@@ -880,7 +936,7 @@ struct amdgpu_dm_connector {
 	 * @max_vfreq: Maximum frequency supported by the display in Hz. This
 	 * value is set to zero when there is no FreeSync support.
 	 */
-	int max_vfreq ;
+	int max_vfreq;
 
 	/* Audio instance - protected by audio_lock. */
 	int audio_inst;
@@ -911,6 +967,7 @@ struct amdgpu_dm_connector {
 	/* Adaptive Sync */
 	bool pack_sdp_v1_3;
 	enum adaptive_sync_type as_type;
+	enum amdgpu_dm_vrr_override vrr_override;
 	struct amdgpu_hdmi_vsdb_info vsdb_info;
 
 	/* HDMI HPD debounce support */
@@ -934,7 +991,8 @@ static inline void amdgpu_dm_set_mst_status(uint8_t *status,
 #define to_amdgpu_dm_connector(x) container_of(x, struct amdgpu_dm_connector, base)
 
 struct amdgpu_dm_wb_connector {
-	struct drm_writeback_connector base;
+	struct drm_connector base;
+	struct drm_encoder encoder;
 	struct dc_link *link;
 };
 
@@ -1160,6 +1218,9 @@ bool amdgpu_dm_execute_fused_io(
 int amdgpu_dm_process_dmub_set_config_sync(struct dc_context *ctx, unsigned int link_index,
 					struct set_config_cmd_payload *payload, enum set_config_status *operation_result);
 
+void amdgpu_dm_sw_counter_freeze(struct amdgpu_display_manager *dm);
+void amdgpu_dm_sw_counter_resume(struct amdgpu_display_manager *dm);
+
 int dm_atomic_get_state(struct drm_atomic_commit *state,
 			struct dm_atomic_state **dm_state);
 
@@ -1174,6 +1235,12 @@ void dm_free_gpu_mem(struct amdgpu_device *adev,
 						  void *addr);
 
 bool amdgpu_dm_is_headless(struct amdgpu_device *adev);
+
+#if defined(CONFIG_DRM_AMD_DC)
+void amdgpu_dm_update_memclk_states(struct amdgpu_device *adev);
+#else
+static inline void amdgpu_dm_update_memclk_states(struct amdgpu_device *adev) {}
+#endif
 
 bool amdgpu_dm_crtc_complete_writeback(struct amdgpu_crtc *acrtc);
 
@@ -1266,6 +1333,9 @@ int dm_update_plane_state(struct dc *dc,
 			  bool enable,
 			  bool *lock_and_validation_needed,
 			  bool *is_top_most_overlay);
+void dm_plane_inherit_flip_time(struct dc_plane_state *dc_plane_state,
+				struct drm_plane_state *old_plane_state,
+				struct drm_plane_state *new_plane_state);
 int amdgpu_dm_atomic_check(struct drm_device *dev,
 			   struct drm_atomic_commit *state);
 void amdgpu_dm_mod_power_update_streams(struct drm_atomic_commit *state,
@@ -1330,9 +1400,12 @@ struct dc_plane_address;
 struct dc_plane_cap;
 struct dc_plane_info;
 struct dsc_mst_fairness_vars;
+struct mod_power_init_params;
 
 void mmhub_read_system_context(struct amdgpu_device *adev,
 			       struct dc_phy_addr_space_config *pa_config);
+void amdgpu_dm_fill_power_nits_range(const struct amdgpu_dm_backlight_caps *caps,
+				     struct mod_power_init_params *init_data);
 int amdgpu_dm_init_power_module(struct amdgpu_display_manager *dm);
 void dm_gpureset_toggle_interrupts(struct amdgpu_device *adev, struct dc_state *state, bool enable);
 enum dc_status amdgpu_dm_commit_zero_streams(struct dc *dc);

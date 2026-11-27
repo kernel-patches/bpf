@@ -216,7 +216,7 @@ static void nhmex_uncore_msr_disable_box(struct intel_uncore_box *box)
 	u64 config;
 
 	if (msr) {
-		rdmsrq(msr, config);
+		config = rdmsrq(msr);
 		config &= ~((1ULL << uncore_num_counters(box)) - 1);
 		/* WBox has a fixed counter */
 		if (uncore_msr_fixed_ctl(box))
@@ -231,7 +231,7 @@ static void nhmex_uncore_msr_enable_box(struct intel_uncore_box *box)
 	u64 config;
 
 	if (msr) {
-		rdmsrq(msr, config);
+		config = rdmsrq(msr);
 		config |= (1ULL << uncore_num_counters(box)) - 1;
 		/* WBox has a fixed counter */
 		if (uncore_msr_fixed_ctl(box))

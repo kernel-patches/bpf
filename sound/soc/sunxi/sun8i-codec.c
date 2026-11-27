@@ -259,6 +259,7 @@ static int sun8i_codec_runtime_resume(struct device *dev)
 	ret = regcache_sync(scodec->regmap);
 	if (ret) {
 		dev_err(dev, "Failed to sync regmap cache\n");
+		clk_disable_unprepare(scodec->clk_bus);
 		return ret;
 	}
 

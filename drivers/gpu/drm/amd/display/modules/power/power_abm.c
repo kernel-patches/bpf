@@ -374,6 +374,22 @@ static unsigned int backlight_pwm_to_millipercent_legacy(
 	if (core_power == NULL)
 		return 0;
 
+	/* Inverse of the LUT bypass in backlight_millipercent_to_pwm_legacy() */
+	if (core_power->bl_prop[inst].use_linear_backlight_curve) {
+		const struct pwr_backlight_properties *bl_prop = &core_power->bl_prop[inst];
+
+		if (pwm <= bl_prop->min_backlight_pwm)
+			return 0;
+
+		if (pwm >= bl_prop->max_backlight_pwm)
+			return BACKLIGHT_MILLIPERCENT_MAX;
+
+		return (unsigned int)div_u64(
+				(unsigned long long)(pwm - bl_prop->min_backlight_pwm) *
+				BACKLIGHT_MILLIPERCENT_MAX + bl_prop->backlight_range / 2,
+				bl_prop->backlight_range);
+	}
+
 	if (!core_power->bl_prop[inst].backlight_caps_valid)
 		return 0;
 
@@ -409,34 +425,23 @@ static unsigned int backlight_pwm_to_millipercent_legacy(
 			break;
 	}
 
-	/* In this case, exact match is not found. Check if mid/min/max
-	 * value is actually closer.
-	 */
+	/* No exact match, so on a sorted LUT lut[max] < pwm < lut[min] */
 	if (max < min) {
-		unsigned int min_delta;
-		unsigned int mid_delta;
-		unsigned int max_delta;
+		unsigned int lower = core_power->bl_prop[inst].backlight_lut[max];
+		unsigned int upper = core_power->bl_prop[inst].backlight_lut[min];
+		unsigned long long span, den;
 
-		min_delta = (core_power->bl_prop[inst].backlight_lut[min] > pwm) ?
-				core_power->bl_prop[inst].backlight_lut[min] - pwm :
-				pwm - core_power->bl_prop[inst].backlight_lut[min];
+		if (pwm <= lower || pwm >= upper)
+			return BACKLIGHT_MILLIPERCENT_MAX * mid / max_index;
 
-		mid_delta = (core_power->bl_prop[inst].backlight_lut[mid] > pwm) ?
-				core_power->bl_prop[inst].backlight_lut[mid] - pwm :
-				pwm - core_power->bl_prop[inst].backlight_lut[mid];
+		span = upper - lower;
+		den = span * max_index;
 
-		max_delta = (core_power->bl_prop[inst].backlight_lut[max] > pwm) ?
-				core_power->bl_prop[inst].backlight_lut[max] - pwm :
-				pwm - core_power->bl_prop[inst].backlight_lut[max];
-
-		if ((min_delta < mid_delta) && (min_delta < max_delta))
-			mid = min;
-
-		if ((max_delta < mid_delta) && (max_delta < min_delta))
-			mid = max;
+		/* LUT entries fit in 16 bits, so this stays far below 2^64 */
+		return (unsigned int)div64_u64((max * span + pwm - lower) *
+					       BACKLIGHT_MILLIPERCENT_MAX + den / 2, den);
 	}
 
-	/* No interpolation, just take closest index */
 	millipercent = BACKLIGHT_MILLIPERCENT_MAX * mid / max_index;
 
 	return millipercent;
@@ -524,12 +529,15 @@ static unsigned int backlight_millipercent_to_pwm_legacy(
 {
 	unsigned int pwm = (unsigned int)-1;
 	unsigned int index = 0;
+	unsigned int lower, upper;
+	unsigned long long scaled;
+	unsigned int remainder;
 
 	if (core_power == NULL)
 		return 0;
 
 	// Bypass the brightness mapping LUT
-	if (core_power->bl_prop->use_linear_backlight_curve) {
+	if (core_power->bl_prop[inst].use_linear_backlight_curve) {
 		pwm = core_power->bl_prop[inst].min_backlight_pwm +
 			(unsigned int) div_u64((unsigned long long) millipercent *
 			core_power->bl_prop[inst].backlight_range,
@@ -541,17 +549,33 @@ static unsigned int backlight_millipercent_to_pwm_legacy(
 		return pwm;
 	}
 
-	if (millipercent >= (100 * 1000))
+	if (millipercent >= BACKLIGHT_MILLIPERCENT_MAX)
 		return core_power->bl_prop[inst].backlight_lut[core_power->bl_prop[inst].num_backlight_levels - 1];
 
-	/* This will give the floor index. */
-	index = ((core_power->bl_prop[inst].num_backlight_levels - 1) *
-						millipercent) / 100000;
 	/* Null check otherwise eDP doesn't lightup when connected to DP1 */
 	if (core_power->bl_prop[inst].backlight_lut == NULL)
 		return pwm;
 
-	pwm = core_power->bl_prop[inst].backlight_lut[index];
+	if (core_power->bl_prop[inst].num_backlight_levels < 2)
+		return pwm;
+
+	/*
+	 * Interpolate between the two LUT entries around millipercent.
+	 * backlight_lut has num_backlight_levels entries, and millipercent is
+	 * below BACKLIGHT_MILLIPERCENT_MAX here, so index + 1 stays within it
+	 */
+	scaled = (unsigned long long)(core_power->bl_prop[inst].num_backlight_levels - 1) *
+		 millipercent;
+	index = (unsigned int)div_u64_rem(scaled, BACKLIGHT_MILLIPERCENT_MAX, &remainder);
+	lower = core_power->bl_prop[inst].backlight_lut[index];
+	upper = core_power->bl_prop[inst].backlight_lut[index + 1];
+
+	if (upper <= lower)
+		return lower;
+
+	pwm = lower + (unsigned int)div_u64((unsigned long long)(upper - lower) * remainder +
+					    BACKLIGHT_MILLIPERCENT_MAX / 2,
+					    BACKLIGHT_MILLIPERCENT_MAX);
 
 	return pwm;
 }
@@ -1147,6 +1171,71 @@ bool mod_power_set_backlight_percent(struct mod_power *mod_power,
 
 	return set_backlight(core_power, stream,
 			&backlight_level_params, panel_inst);
+}
+
+/* AMD AUX takes nits only when the panel's AUX backlight control is on,
+ * which DC turns on for OLED and for HDR. Otherwise the panel follows PWM.
+ */
+static bool backlight_takes_nits(const struct dc_link *link, bool is_hdr)
+{
+	switch (link->backlight_control_type) {
+	case BACKLIGHT_CONTROL_VESA_AUX:
+		return true;
+	case BACKLIGHT_CONTROL_AMD_AUX:
+		return link->dpcd_sink_ext_caps.bits.oled || is_hdr;
+	default:
+		return false;
+	}
+}
+
+/* Sets the brightness as a percentage, whatever the backlight control type.
+ * When the panel takes nits, the percentage maps linearly to
+ * [min_brightness_millinits, max_brightness_millinits] with
+ * aux_brightness_mask ORed in. Otherwise it maps to PWM through the
+ * backlight LUT.
+ */
+bool mod_power_set_brightness(struct mod_power *mod_power,
+		struct dc_stream_state *stream,
+		unsigned int backlight_millipercent,
+		unsigned int transition_time_millisec,
+		unsigned int aux_brightness_mask,
+		bool is_hdr)
+{
+	struct core_power *core_power = NULL;
+	const struct dc_link *link = NULL;
+	unsigned int backlight_millinit;
+	unsigned int panel_inst = 0;
+
+	if (mod_power == NULL || stream == NULL)
+		return false;
+
+	core_power = MOD_POWER_TO_CORE(mod_power);
+	link = dc_stream_get_link(stream);
+
+	if (!dc_get_edp_link_panel_inst(core_power->dc, link, &panel_inst))
+		return false;
+
+	if (backlight_millipercent > BACKLIGHT_MILLIPERCENT_MAX)
+		backlight_millipercent = BACKLIGHT_MILLIPERCENT_MAX;
+
+	core_power->bl_state[panel_inst].isHDR = is_hdr;
+
+	if (!backlight_takes_nits(link, is_hdr))
+		return mod_power_set_backlight_percent(mod_power, stream,
+				backlight_millipercent, transition_time_millisec, is_hdr);
+
+	backlight_millinit = backlight_millipercent_to_millinit_legacy(
+			core_power, backlight_millipercent, panel_inst) |
+			aux_brightness_mask;
+
+	if (!mod_power_set_backlight_nits(mod_power, stream, backlight_millinit,
+			transition_time_millisec, false, is_hdr))
+		return false;
+
+	/* mod_power_set_backlight_nits() caches the percent read back from nits */
+	core_power->bl_state[panel_inst].backlight_millipercent = backlight_millipercent;
+
+	return true;
 }
 
 void mod_power_update_backlight(struct mod_power *mod_power,

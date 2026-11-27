@@ -31,7 +31,7 @@
  * the structure is naturally 32-bit aligned.
  */
 struct virtio_rpmsg_config {
-	u8 version;
+	__virtio16 version;
 	__virtio16 size;
 	/* The tx/rx individual buffer size (if VIRTIO_RPMSG_F_BUFSZ) */
 	__virtio32 txbuf_size;

@@ -539,8 +539,7 @@ static int stm32_hash_xmit_dma(struct stm32_hash_dev *hdev,
 	}
 
 	reinit_completion(&hdev->dma_completion);
-	in_desc->callback = stm32_hash_dma_callback;
-	in_desc->callback_param = hdev;
+	dmaengine_desc_set_callback(in_desc, stm32_hash_dma_callback, NULL, hdev);
 
 	hdev->flags |= HASH_FLAGS_DMA_ACTIVE;
 

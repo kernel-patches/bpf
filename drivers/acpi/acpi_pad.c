@@ -438,8 +438,8 @@ static void acpi_pad_remove(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id pad_device_ids[] = {
-	{"ACPI000C", 0},
-	{"", 0},
+	{ .id = "ACPI000C" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, pad_device_ids);
 

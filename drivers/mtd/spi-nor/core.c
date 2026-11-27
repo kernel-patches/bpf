@@ -98,13 +98,7 @@ void spi_nor_spimem_setup_op(const struct spi_nor *nor,
 		op->data.buswidth = spi_nor_get_protocol_data_nbits(proto);
 
 	if (spi_nor_protocol_is_dtr(proto)) {
-		/*
-		 * SPIMEM supports mixed DTR modes, but right now we can only
-		 * have all phases either DTR or STR. IOW, SPIMEM can have
-		 * something like 4S-4D-4D, but SPI NOR can't. So, set all 4
-		 * phases to either DTR or STR.
-		 */
-		op->cmd.dtr = true;
+		/* we only support 1S-nD-nD or 8D-8D-8D */
 		op->addr.dtr = true;
 		op->dummy.dtr = true;
 		op->data.dtr = true;
@@ -112,13 +106,16 @@ void spi_nor_spimem_setup_op(const struct spi_nor *nor,
 		/* 2 bytes per clock cycle in DTR mode. */
 		op->dummy.nbytes *= 2;
 
-		ext = spi_nor_get_cmd_ext(nor, op);
-		op->cmd.opcode = (op->cmd.opcode << 8) | ext;
-		op->cmd.nbytes = 2;
-	}
+		if (proto == SNOR_PROTO_8_8_8_DTR) {
+			op->cmd.dtr = true;
+			ext = spi_nor_get_cmd_ext(nor, op);
+			op->cmd.opcode = (op->cmd.opcode << 8) | ext;
+			op->cmd.nbytes = 2;
 
-	if (proto == SNOR_PROTO_8_8_8_DTR && params->flags & SNOR_F_SWAP16)
-		op->data.swap16 = true;
+			if (params->flags & SNOR_F_SWAP16)
+				op->data.swap16 = true;
+		}
+	}
 }
 
 /**
@@ -653,6 +650,8 @@ static int spi_nor_wait_till_ready_with_timeout(struct spi_nor *nor,
 	deadline = jiffies + timeout_jiffies;
 
 	while (!timeout) {
+		cond_resched();
+
 		if (time_after_eq(jiffies, deadline))
 			timeout = 1;
 
@@ -661,8 +660,6 @@ static int spi_nor_wait_till_ready_with_timeout(struct spi_nor *nor,
 			return ret;
 		if (ret)
 			return 0;
-
-		cond_resched();
 	}
 
 	dev_dbg(nor->dev, "flash operation timed out\n");
@@ -2711,6 +2708,12 @@ static void spi_nor_no_sfdp_init_params(struct spi_nor *nor)
 		spi_nor_set_read_settings(&params->reads[SNOR_CMD_READ_8_8_8_DTR],
 					  0, 20, SPINOR_OP_READ_FAST,
 					  SNOR_PROTO_8_8_8_DTR);
+		/*
+		 * The default SR2 read opcode(35h) is not usable in
+		 * 8D-8D-8D mode; drop it so spi_nor_init() does not issue an
+		 * unsupported command.
+		 */
+		params->opcodes.read_sr2 = 0;
 	}
 
 	if (no_sfdp_flags & SPI_NOR_OCTAL_DTR_PP) {

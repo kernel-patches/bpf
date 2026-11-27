@@ -244,7 +244,9 @@ static int imx_drm_bind(struct device *dev)
 	if (ret)
 		goto err_kms;
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		goto err_poll_fini;
 
 	/*
 	 * All components are now initialised, so setup the fb helper.

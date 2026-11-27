@@ -24,6 +24,23 @@ struct nfs4_layout {
 
 static struct kmem_cache *nfs4_layout_cache;
 static struct kmem_cache *nfs4_layout_stateid_cache;
+static struct workqueue_struct *nfsd4_fence_wq;
+
+/* Copies: the fence script can outlive the client and the layout stateid */
+struct nfsd4_fence_args {
+	char			addr[INET6_ADDRSTRLEN];
+	char			s_id[sizeof_field(struct super_block, s_id)];
+};
+
+/* A fence script that the fence worker runs and waits for */
+struct nfsd4_fence_script {
+	struct work_struct	work;
+	refcount_t		ref;
+	bool			done;
+	struct nfsd4_fence_args	args;
+};
+
+#define NFSD4_FENCE_SCRIPT_POLL	(HZ / 10)
 
 static const struct nfsd4_callback_ops nfsd4_cb_layout_ops;
 static const struct lease_manager_operations nfsd4_layouts_lm_ops;
@@ -153,11 +170,66 @@ void nfsd4_close_layout(struct nfs4_layout_stateid *ls)
 	spin_unlock(&ls->ls_stid.sc_file->fi_lock);
 
 	if (fl) {
-		if (!nfsd4_layout_ops[ls->ls_layout_type]->disable_recalls)
+		if (!nfsd4_layout_ops[ls->ls_layout_type]->disable_recalls) {
 			kernel_setlease(fl->nf_file, F_UNLCK, NULL,
 					(void **)&ls);
+			/*
+			 * For nfsd_break_layouts(). No barrier needed: its
+			 * waiter rechecks under flc_lock, which removing the
+			 * lease took.
+			 */
+			wake_up_var(file_inode(fl->nf_file));
+		}
 		nfsd_file_put(fl);
 	}
+}
+
+/**
+ * nfsd4_layout_holders - Report which clients hold layout leases on a file
+ * @inode: file whose layout leases are checked
+ *
+ * Context: Takes the flc_lock of @inode.
+ *
+ * Return: a mask of NFSD_LAYOUTS_OWN if the client of the current request
+ * holds a layout lease on @inode, NFSD_LAYOUTS_OTHER if another client
+ * holds one, and NFSD_LAYOUTS_IDLE if a lease of another client is not
+ * being broken yet.
+ */
+unsigned int nfsd4_layout_holders(struct inode *inode)
+{
+	struct file_lock_context *ctx = locks_inode_context(inode);
+	struct nfs4_client *clp = NULL;
+	unsigned int holders = 0;
+	struct svc_rqst *rqstp;
+	struct file_lease *fl;
+
+	if (!ctx || list_empty_careful(&ctx->flc_lease))
+		return 0;
+	/* Without a compound, as for NFSv3, every layout is another client's */
+	rqstp = nfsd_current_rqst();
+	if (nfsd_v4client(rqstp)) {
+		struct nfsd_thread_local_info *ntli = rqstp->rq_private;
+
+		clp = *ntli->ntli_lease_breaker;
+	}
+
+	spin_lock(&ctx->flc_lock);
+	for_each_file_lock(fl, &ctx->flc_lease) {
+		struct nfs4_layout_stateid *ls = fl->c.flc_owner;
+
+		if (fl->fl_lmops != &nfsd4_layouts_lm_ops)
+			continue;
+		if (clp && ls->ls_stid.sc_client == clp) {
+			holders |= NFSD_LAYOUTS_OWN;
+			continue;
+		}
+		holders |= NFSD_LAYOUTS_OTHER;
+		if (!(fl->c.flc_flags &
+		      (FL_UNLOCK_PENDING | FL_DOWNGRADE_PENDING)))
+			holders |= NFSD_LAYOUTS_IDLE;
+	}
+	spin_unlock(&ctx->flc_lock);
+	return holders;
 }
 
 static void
@@ -168,13 +240,6 @@ nfsd4_free_layout_stateid(struct nfs4_stid *stid)
 	struct nfs4_file *fp = ls->ls_stid.sc_file;
 
 	trace_nfsd_layoutstate_free(&ls->ls_stid.sc_stateid);
-
-	spin_lock(&ls->ls_lock);
-	if (delayed_work_pending(&ls->ls_fence_work)) {
-		spin_unlock(&ls->ls_lock);
-		cancel_delayed_work_sync(&ls->ls_fence_work);
-	} else
-		spin_unlock(&ls->ls_lock);
 
 	spin_lock(&clp->cl_lock);
 	list_del_init(&ls->ls_perclnt);
@@ -246,6 +311,7 @@ nfsd4_alloc_layout_stateid(struct nfsd4_compound_state *cstate,
 	spin_lock_init(&ls->ls_lock);
 	INIT_LIST_HEAD(&ls->ls_layouts);
 	mutex_init(&ls->ls_mutex);
+	mutex_init(&ls->ls_fence_mutex);
 	ls->ls_layout_type = layout_type;
 	nfsd4_init_cb(&ls->ls_recall, clp, &nfsd4_cb_layout_ops,
 			NFSPROC4_CLNT_CB_LAYOUT);
@@ -263,8 +329,10 @@ nfsd4_alloc_layout_stateid(struct nfsd4_compound_state *cstate,
 		return NULL;
 	}
 
+	ls->ls_recall_start = 0;
 	ls->ls_fenced = false;
 	ls->ls_fence_inflight = false;
+	ls->ls_fence_stopped = false;
 	ls->ls_fence_delay = 0;
 	INIT_DELAYED_WORK(&ls->ls_fence_work, nfsd4_layout_fence_worker);
 
@@ -295,6 +363,7 @@ nfsd4_preprocess_layout_stateid(struct svc_rqst *rqstp,
 	struct nfs4_stid *stid;
 	unsigned short typemask = SC_TYPE_LAYOUT;
 	__be32 status;
+	bool after;
 
 	if (create)
 		typemask |= (SC_TYPE_OPEN | SC_TYPE_LOCK | SC_TYPE_DELEG);
@@ -317,17 +386,32 @@ nfsd4_preprocess_layout_stateid(struct svc_rqst *rqstp,
 		status = nfserr_jukebox;
 		if (!ls)
 			goto out;
+		stid = &ls->ls_stid;
 		mutex_lock(&ls->ls_mutex);
 	} else {
 		ls = container_of(stid, struct nfs4_layout_stateid, ls_stid);
 
 		status = nfserr_bad_stateid;
 		mutex_lock(&ls->ls_mutex);
-		if (nfsd4_stateid_generation_after(stateid, &stid->sc_stateid))
+		/* The recall's ->done bumps the seqid under sc_lock alone. */
+		spin_lock(&stid->sc_lock);
+		after = nfsd4_stateid_generation_after(stateid,
+						       &stid->sc_stateid);
+		spin_unlock(&stid->sc_lock);
+		if (after)
 			goto out_unlock_stid;
 		if (layout_type != ls->ls_layout_type)
 			goto out_unlock_stid;
 	}
+
+	/* Revocation can close the stateid before ls_mutex is taken. */
+	spin_lock(&stid->sc_client->cl_lock);
+	if (stid->sc_status & SC_STATUS_CLOSED) {
+		spin_unlock(&stid->sc_client->cl_lock);
+		status = nfserr_bad_stateid;
+		goto out_unlock_stid;
+	}
+	spin_unlock(&stid->sc_client->cl_lock);
 
 	*lsp = ls;
 	return 0;
@@ -341,14 +425,15 @@ out:
 }
 
 static void
-nfsd4_recall_file_layout(struct nfs4_layout_stateid *ls)
+nfsd4_recall_file_layout_locked(struct nfs4_layout_stateid *ls)
 {
-	spin_lock(&ls->ls_lock);
+	lockdep_assert_held(&ls->ls_lock);
+
 	if (ls->ls_recalled)
-		goto out_unlock;
+		return;
 
 	if (list_empty(&ls->ls_layouts))
-		goto out_unlock;
+		return;
 
 	ls->ls_recalled = true;
 	atomic_inc(&ls->ls_stid.sc_file->fi_lo_recalls);
@@ -358,7 +443,32 @@ nfsd4_recall_file_layout(struct nfs4_layout_stateid *ls)
 		refcount_inc(&ls->ls_stid.sc_count);
 		nfsd4_run_cb(&ls->ls_recall);
 	}
-out_unlock:
+}
+
+static void
+nfsd4_recall_file_layout(struct nfs4_layout_stateid *ls)
+{
+	spin_lock(&ls->ls_lock);
+	nfsd4_recall_file_layout_locked(ls);
+	spin_unlock(&ls->ls_lock);
+}
+
+/*
+ * A layout stateid with no layouts belongs to a LAYOUTGET in progress
+ * and already holds the lease. Mark the stateid recalled so that
+ * nfsd4_insert_layout() fails the LAYOUTGET and the lease is released.
+ */
+static void
+nfsd4_break_file_layout(struct nfs4_layout_stateid *ls)
+{
+	spin_lock(&ls->ls_lock);
+	if (!ls->ls_recalled && list_empty(&ls->ls_layouts)) {
+		ls->ls_recalled = true;
+		atomic_inc(&ls->ls_stid.sc_file->fi_lo_recalls);
+		trace_nfsd_layout_recall_empty(&ls->ls_stid.sc_stateid);
+	} else {
+		nfsd4_recall_file_layout_locked(ls);
+	}
 	spin_unlock(&ls->ls_lock);
 }
 
@@ -437,6 +547,10 @@ nfsd4_insert_layout(struct nfsd4_layoutget *lgp, struct nfs4_layout_stateid *ls)
 	if (nfserr)
 		goto out;
 	spin_lock(&ls->ls_lock);
+	if (ls->ls_recalled) {
+		nfserr = nfserr_recallconflict;
+		goto out_unlock_ls;
+	}
 	list_for_each_entry(lp, &ls->ls_layouts, lo_perstate) {
 		if (layouts_try_merge(&lp->lo_seg, seg))
 			goto done;
@@ -455,6 +569,10 @@ nfsd4_insert_layout(struct nfsd4_layoutget *lgp, struct nfs4_layout_stateid *ls)
 	if (nfserr)
 		goto out;
 	spin_lock(&ls->ls_lock);
+	if (ls->ls_recalled) {
+		nfserr = nfserr_recallconflict;
+		goto out_unlock_ls;
+	}
 	list_for_each_entry(lp, &ls->ls_layouts, lo_perstate) {
 		if (layouts_try_merge(&lp->lo_seg, seg))
 			goto done;
@@ -465,6 +583,7 @@ nfsd4_insert_layout(struct nfsd4_layoutget *lgp, struct nfs4_layout_stateid *ls)
 	new = NULL;
 done:
 	nfs4_inc_and_copy_stateid(&lgp->lg_sid, &ls->ls_stid);
+out_unlock_ls:
 	spin_unlock(&ls->ls_lock);
 out:
 	spin_unlock(&fp->fi_lock);
@@ -542,11 +661,17 @@ nfsd4_return_file_layouts(struct svc_rqst *rqstp,
 			nfs4_inc_and_copy_stateid(&lrp->lr_sid, &ls->ls_stid);
 		lrp->lrs_present = true;
 	} else {
-		trace_nfsd_layoutstate_unhash(&ls->ls_stid.sc_stateid);
-		ls->ls_stid.sc_status |= SC_STATUS_CLOSED;
 		lrp->lrs_present = false;
 	}
 	spin_unlock(&ls->ls_lock);
+
+	if (!lrp->lrs_present) {
+		/* ls_mutex prevents a LAYOUTGET from adding another segment. */
+		spin_lock(&ls->ls_stid.sc_client->cl_lock);
+		ls->ls_stid.sc_status |= SC_STATUS_CLOSED;
+		spin_unlock(&ls->ls_stid.sc_client->cl_lock);
+		trace_nfsd_layoutstate_unhash(&ls->ls_stid.sc_stateid);
+	}
 
 	mutex_unlock(&ls->ls_mutex);
 	nfs4_put_stid(&ls->ls_stid);
@@ -599,16 +724,49 @@ nfsd4_return_all_layouts(struct nfs4_layout_stateid *ls,
 	spin_unlock(&ls->ls_lock);
 }
 
+void nfsd4_return_revoked_layout(struct nfs4_layout_stateid *ls)
+{
+	LIST_HEAD(reaplist);
+
+	/* Wait out any LAYOUTGET that passed the CLOSED check. */
+	mutex_lock(&ls->ls_mutex);
+	nfsd4_return_all_layouts(ls, &reaplist);
+	mutex_unlock(&ls->ls_mutex);
+	nfsd4_free_layouts(&reaplist);
+}
+
 void
 nfsd4_return_all_client_layouts(struct nfs4_client *clp)
 {
-	struct nfs4_layout_stateid *ls, *n;
+	struct nfs4_layout_stateid *ls;
 	LIST_HEAD(reaplist);
 
-	spin_lock(&clp->cl_lock);
-	list_for_each_entry_safe(ls, n, &clp->cl_lo_states, ls_perclnt)
+	/*
+	 * A fence worker dereferences sc_client and clp->net.  Drain every
+	 * worker before client or per-net state can be released.  Take a
+	 * temporary stateid reference because stopping a worker can sleep.
+	 */
+	for (;;) {
+		spin_lock(&clp->cl_lock);
+		ls = list_first_entry_or_null(&clp->cl_lo_states,
+					      struct nfs4_layout_stateid,
+					      ls_perclnt);
+		if (!ls) {
+			spin_unlock(&clp->cl_lock);
+			break;
+		}
+		if (!refcount_inc_not_zero(&ls->ls_stid.sc_count)) {
+			spin_unlock(&clp->cl_lock);
+			cond_resched();
+			continue;
+		}
+		list_del_init(&ls->ls_perclnt);
+		spin_unlock(&clp->cl_lock);
+
+		nfsd4_stop_layout_fence(ls);
 		nfsd4_return_all_layouts(ls, &reaplist);
-	spin_unlock(&clp->cl_lock);
+		nfs4_put_stid(&ls->ls_stid);
+	}
 
 	nfsd4_free_layouts(&reaplist);
 }
@@ -630,10 +788,8 @@ nfsd4_return_all_file_layouts(struct nfs4_client *clp, struct nfs4_file *fp)
 }
 
 static void
-nfsd4_cb_layout_fail(struct nfs4_layout_stateid *ls, struct nfsd_file *file)
+nfsd4_run_fence_script(char *addr_str, char *s_id)
 {
-	struct nfs4_client *clp = ls->ls_stid.sc_client;
-	char addr_str[INET6_ADDRSTRLEN];
 	static char const nfsd_recall_failed[] = "/sbin/nfsd-recall-failed";
 	static char *envp[] = {
 		"HOME=/",
@@ -644,15 +800,13 @@ nfsd4_cb_layout_fail(struct nfs4_layout_stateid *ls, struct nfsd_file *file)
 	char *argv[8];
 	int error;
 
-	rpc_ntop((struct sockaddr *)&clp->cl_addr, addr_str, sizeof(addr_str));
-
 	printk(KERN_WARNING
 		"nfsd: client %s failed to respond to layout recall. "
 		"  Fencing..\n", addr_str);
 
 	argv[0] = (char *)nfsd_recall_failed;
 	argv[1] = addr_str;
-	argv[2] = file->nf_file->f_path.mnt->mnt_sb->s_id;
+	argv[2] = s_id;
 	argv[3] = NULL;
 
 	error = call_usermodehelper(nfsd_recall_failed, argv, envp,
@@ -661,6 +815,64 @@ nfsd4_cb_layout_fail(struct nfs4_layout_stateid *ls, struct nfsd_file *file)
 		printk(KERN_ERR "nfsd: fence failed for client %s: %d!\n",
 			addr_str, error);
 	}
+}
+
+static void
+nfsd4_fence_args_init(struct nfsd4_fence_args *args,
+		      struct nfs4_layout_stateid *ls, struct nfsd_file *nf)
+{
+	struct nfs4_client *clp = ls->ls_stid.sc_client;
+
+	rpc_ntop((struct sockaddr *)&clp->cl_addr, args->addr,
+		 sizeof(args->addr));
+	strscpy(args->s_id, nf->nf_file->f_path.mnt->mnt_sb->s_id);
+}
+
+/* Synchronous: the caller drops the layouts once the script returns */
+static void
+nfsd4_cb_layout_fail(struct nfs4_layout_stateid *ls, struct nfsd_file *file)
+{
+	struct nfsd4_fence_args args;
+
+	nfsd4_fence_args_init(&args, ls, file);
+	nfsd4_run_fence_script(args.addr, args.s_id);
+}
+
+static void nfsd4_fence_script_put(struct nfsd4_fence_script *fs)
+{
+	if (refcount_dec_and_test(&fs->ref))
+		kfree(fs);
+}
+
+static void nfsd4_fence_script_work(struct work_struct *work)
+{
+	struct nfsd4_fence_script *fs =
+		container_of(work, struct nfsd4_fence_script, work);
+
+	nfsd4_run_fence_script(fs->args.addr, fs->args.s_id);
+	/* Pairs with the smp_load_acquire() in nfsd4_layout_fence_worker() */
+	smp_store_release(&fs->done, true);
+	nfsd4_fence_script_put(fs);
+}
+
+/*
+ * The fence worker cannot wait for the script: tearing down the client
+ * waits for the fence worker, and the script can be what tears the
+ * client down, through /proc/fs/nfsd/clients/<clid>/ctl.
+ */
+static struct nfsd4_fence_script *
+nfsd4_start_fence_script(struct nfs4_layout_stateid *ls, struct nfsd_file *nf)
+{
+	struct nfsd4_fence_script *fs;
+
+	fs = kzalloc_obj(*fs);
+	if (!fs)
+		return NULL;
+	refcount_set(&fs->ref, 2);
+	nfsd4_fence_args_init(&fs->args, ls, nf);
+	INIT_WORK(&fs->work, nfsd4_fence_script_work);
+	queue_work(nfsd4_fence_wq, &fs->work);
+	return fs;
 }
 
 static bool
@@ -672,7 +884,18 @@ nfsd4_cb_layout_prepare(struct nfsd4_callback *cb)
 	mutex_lock(&ls->ls_mutex);
 	nfs4_inc_and_copy_stateid(&ls->ls_recall_sid, &ls->ls_stid);
 	mutex_unlock(&ls->ls_mutex);
+	ls->ls_recall_accepted = false;
 	return true;
+}
+
+static bool nfsd4_layout_fenced(struct nfs4_layout_stateid *ls)
+{
+	bool fenced;
+
+	spin_lock(&ls->ls_lock);
+	fenced = ls->ls_fenced;
+	spin_unlock(&ls->ls_lock);
+	return fenced;
 }
 
 static int
@@ -687,8 +910,25 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
 
 	trace_nfsd_cb_layout_done(&ls->ls_stid.sc_stateid, task);
 	switch (task->tk_status) {
-	case 0:
+	case -NFS4ERR_OLD_STATEID:
+		/*
+		 * The poll reuses the recall's seqid, against RFC 8881
+		 * section 12.5.3, so a client returning its layouts answers
+		 * NFS4ERR_OLD_STATEID too. A client that has not taken the
+		 * recall up is past that seqid, e.g. after a LAYOUTRETURN,
+		 * and gets a new one. ls_mutex could block rpciod, so the bump
+		 * relies on sc_lock.
+		 */
+		if (!ls->ls_recall_accepted) {
+			nfs4_inc_and_copy_stateid(&ls->ls_recall_sid,
+						  &ls->ls_stid);
+			trace_nfsd_layout_recall_new_seqid(&ls->ls_recall_sid);
+		}
+		fallthrough;
 	case -NFS4ERR_DELAY:
+	case 0:
+		if (!task->tk_status)
+			ls->ls_recall_accepted = true;
 		/*
 		 * Anything left? If not, then call it done. Note that we don't
 		 * take the spinlock since this is an optimization and nothing
@@ -696,14 +936,29 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
 		 */
 		if (list_empty(&ls->ls_layouts))
 			return 1;
+		/*
+		 * The fence worker of a lease break is done: revoke the
+		 * layouts (RFC 8881 section 12.5.6), before one lease period
+		 * (section 12.5.5) when fs.lease-break-time is shorter.
+		 */
+		if (nfsd4_layout_fenced(ls)) {
+			trace_nfsd_layout_recall_fail(&ls->ls_stid.sc_stateid);
+			return 1;
+		}
 
 		/* Poll the client until it's done with the layout */
-		now = ktime_get();
+		now = ktime_get_boottime();
 		nn = net_generic(ls->ls_stid.sc_client->net, nfsd_net_id);
 
-		/* Client gets 2 lease periods to return it */
-		cutoff = ktime_add_ns(task->tk_start,
-					 (u64)nn->nfsd4_lease * NSEC_PER_SEC * 2);
+		/*
+		 * Client gets 2 lease periods to return it, counted from its
+		 * first answer. task->tk_start is reset each time the RPC task
+		 * is restarted, so it cannot anchor the limit.
+		 */
+		if (!ls->ls_recall_start)
+			ls->ls_recall_start = now;
+		cutoff = ktime_add_ns(ls->ls_recall_start,
+				      (u64)nn->nfsd4_lease * NSEC_PER_SEC * 2);
 
 		if (ktime_before(now, cutoff)) {
 			rpc_delay(task, HZ/100); /* 10 mili-seconds */
@@ -712,9 +967,20 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
 		fallthrough;
 	default:
 		/*
+		 * Nothing to fence for once the layouts are gone: a
+		 * LAYOUTRETURN can return the last one while the recall is
+		 * still out.
+		 */
+		if (list_empty(&ls->ls_layouts)) {
+			trace_nfsd_layout_recall_done(&ls->ls_stid.sc_stateid);
+			return 1;
+		}
+		/*
 		 * Unknown error or non-responding client, we'll need to fence.
 		 */
 		trace_nfsd_layout_recall_fail(&ls->ls_stid.sc_stateid);
+		if (nfsd4_layout_fenced(ls))
+			return 1;
 		rcu_read_lock();
 		fl = nfsd_file_get(ls->ls_file);
 		rcu_read_unlock();
@@ -762,7 +1028,7 @@ nfsd4_layout_lm_break(struct file_lease *fl)
 	 * Enforce break lease timeout to prevent NFSD
 	 * thread from hanging in __break_lease.
 	 */
-	nfsd4_recall_file_layout(fl->c.flc_owner);
+	nfsd4_break_file_layout(fl->c.flc_owner);
 	return false;
 }
 
@@ -792,30 +1058,80 @@ nfsd4_layout_lm_open_conflict(struct file *filp, int arg)
 	return 0;
 }
 
-static void
-nfsd4_layout_fence_worker(struct work_struct *work)
+static void nfsd4_layout_fence_done(struct nfs4_layout_stateid *ls)
+{
+	struct nfsd4_fence_script *fs = ls->ls_fence_script;
+
+	/* The script runs on; nothing waits for it any more */
+	ls->ls_fence_script = NULL;
+	if (fs)
+		nfsd4_fence_script_put(fs);
+
+	/* Unlock the lease so that tasks waiting on it can proceed. */
+	nfsd4_close_layout(ls);
+
+	spin_lock(&ls->ls_lock);
+	ls->ls_fenced = true;
+	ls->ls_fence_inflight = false;
+	spin_unlock(&ls->ls_lock);
+	nfs4_put_stid(&ls->ls_stid);
+}
+
+void nfsd4_stop_layout_fence(struct nfs4_layout_stateid *ls)
+{
+	/* Serialize teardown callers which can arrive through different paths. */
+	mutex_lock(&ls->ls_fence_mutex);
+	spin_lock(&ls->ls_lock);
+	if (ls->ls_fence_stopped) {
+		spin_unlock(&ls->ls_lock);
+		mutex_unlock(&ls->ls_fence_mutex);
+		return;
+	}
+	ls->ls_fence_stopped = true;
+	spin_unlock(&ls->ls_lock);
+
+	/*
+	 * The worker clears ls_fence_inflight before its final nfs4_put_stid().
+	 * Always wait for it, even if that flag is already clear.  New work
+	 * cannot be queued after ls_fence_stopped is set under ls_lock.
+	 * If pending work was canceled, release its stateid reference here.
+	 */
+	if (cancel_delayed_work_sync(&ls->ls_fence_work))
+		nfsd4_layout_fence_done(ls);
+
+	spin_lock(&ls->ls_lock);
+	WARN_ON_ONCE(ls->ls_fence_inflight);
+	spin_unlock(&ls->ls_lock);
+	mutex_unlock(&ls->ls_fence_mutex);
+}
+
+static unsigned int nfsd4_fence_backoff(struct nfs4_layout_stateid *ls)
+{
+	lockdep_assert_held(&ls->ls_lock);
+	if (!ls->ls_fence_delay)
+		ls->ls_fence_delay = HZ;
+	else
+		ls->ls_fence_delay = min(ls->ls_fence_delay << 1,
+					 MAX_FENCE_DELAY);
+	return ls->ls_fence_delay;
+}
+
+static void nfsd4_layout_fence_worker(struct work_struct *work)
 {
 	struct delayed_work *dwork = to_delayed_work(work);
 	struct nfs4_layout_stateid *ls = container_of(dwork,
 			struct nfs4_layout_stateid, ls_fence_work);
+	const struct nfsd4_layout_ops *ops;
 	struct nfsd_file *nf;
 	struct block_device *bdev;
 	struct nfs4_client *clp;
 	struct nfsd_net *nn;
 
 	spin_lock(&ls->ls_lock);
-	if (list_empty(&ls->ls_layouts)) {
+	if (ls->ls_fence_stopped || list_empty(&ls->ls_layouts)) {
 		spin_unlock(&ls->ls_lock);
 dispose:
-		cancel_delayed_work(&ls->ls_fence_work);
-		/* unlock the lease so that tasks waiting on it can proceed */
-		nfsd4_close_layout(ls);
-
-		ls->ls_fenced = true;
-		spin_lock(&ls->ls_lock);
-		ls->ls_fence_inflight = false;
-		spin_unlock(&ls->ls_lock);
-		nfs4_put_stid(&ls->ls_stid);
+		nfsd4_layout_fence_done(ls);
 		return;
 	}
 	spin_unlock(&ls->ls_lock);
@@ -829,7 +1145,32 @@ dispose:
 	clp = ls->ls_stid.sc_client;
 	nn = net_generic(clp->net, nfsd_net_id);
 	bdev = nf->nf_file->f_path.mnt->mnt_sb->s_bdev;
-	if (nfsd4_layout_ops[ls->ls_layout_type]->fence_client(ls, nf)) {
+	ops = nfsd4_layout_ops[ls->ls_layout_type];
+	if (!ops->fence_client) {
+		struct nfsd4_fence_script *fs = ls->ls_fence_script;
+
+		/* No fence op: hold the lease until the script is done */
+		if (!fs) {
+			fs = nfsd4_start_fence_script(ls, nf);
+			ls->ls_fence_script = fs;
+		}
+		nfsd_file_put(nf);
+		/* Pairs with nfsd4_fence_script_work() */
+		if (fs && smp_load_acquire(&fs->done))
+			goto dispose;
+		spin_lock(&ls->ls_lock);
+		if (ls->ls_fence_stopped) {
+			spin_unlock(&ls->ls_lock);
+			goto dispose;
+		}
+		/* A failed allocation backs off like a failed fence */
+		mod_delayed_work(system_dfl_wq, &ls->ls_fence_work,
+				 fs ? NFSD4_FENCE_SCRIPT_POLL :
+				      nfsd4_fence_backoff(ls));
+		spin_unlock(&ls->ls_lock);
+		return;
+	}
+	if (ops->fence_client(ls, nf)) {
 		/* fenced ok */
 		nfsd_file_put(nf);
 		pr_warn("%s: FENCED client[%pISpc] clid[%d] to device[%s]\n",
@@ -862,20 +1203,23 @@ dispose:
 	 *    clid: is the unique client identifier displayed in
 	 *          the warning message above.
 	 */
-	if (!ls->ls_fence_delay)
-		ls->ls_fence_delay = HZ;
-	else
-		ls->ls_fence_delay = min(ls->ls_fence_delay << 1,
-					 MAX_FENCE_DELAY);
-	mod_delayed_work(system_dfl_wq, &ls->ls_fence_work, ls->ls_fence_delay);
+	spin_lock(&ls->ls_lock);
+	if (ls->ls_fence_stopped || list_empty(&ls->ls_layouts)) {
+		spin_unlock(&ls->ls_lock);
+		goto dispose;
+	}
+	mod_delayed_work(system_dfl_wq, &ls->ls_fence_work,
+			 nfsd4_fence_backoff(ls));
+	spin_unlock(&ls->ls_lock);
 }
 
 /**
  * nfsd4_layout_lm_breaker_timedout - The layout recall has timed out.
  * @fl: file to check
  *
- * If the layout type supports a fence operation, schedule a worker to
- * fence the client from accessing the block device.
+ * Schedule a worker to fence the client from accessing the block device.
+ * If the layout type has no fence operation, the worker runs the fence
+ * script instead.
  *
  * This function runs under the protection of the spin_lock flc_lock.
  * At this time, the file_lease associated with the layout stateid is
@@ -897,9 +1241,6 @@ nfsd4_layout_lm_breaker_timedout(struct file_lease *fl)
 {
 	struct nfs4_layout_stateid *ls = fl->c.flc_owner;
 
-	if ((!nfsd4_layout_ops[ls->ls_layout_type]->fence_client) ||
-			ls->ls_fenced)
-		return true;
 	/*
 	 * Make sure layout has not been returned yet before
 	 * taking a reference count on the layout stateid. The
@@ -910,6 +1251,10 @@ nfsd4_layout_lm_breaker_timedout(struct file_lease *fl)
 	 * fresh schedule that takes an extra unmatched reference.
 	 */
 	spin_lock(&ls->ls_lock);
+	if (ls->ls_fenced || ls->ls_fence_stopped) {
+		spin_unlock(&ls->ls_lock);
+		return true;
+	}
 	if (ls->ls_fence_inflight) {
 		spin_unlock(&ls->ls_lock);
 		return false;
@@ -920,9 +1265,8 @@ nfsd4_layout_lm_breaker_timedout(struct file_lease *fl)
 		return true;
 	}
 	ls->ls_fence_inflight = true;
-	spin_unlock(&ls->ls_lock);
-
 	mod_delayed_work(system_dfl_wq, &ls->ls_fence_work, 0);
+	spin_unlock(&ls->ls_lock);
 	return false;
 }
 
@@ -950,6 +1294,13 @@ nfsd4_init_pnfs(void)
 		kmem_cache_destroy(nfs4_layout_cache);
 		return -ENOMEM;
 	}
+
+	nfsd4_fence_wq = alloc_workqueue("nfsd4_fence", WQ_UNBOUND, 0);
+	if (!nfsd4_fence_wq) {
+		kmem_cache_destroy(nfs4_layout_stateid_cache);
+		kmem_cache_destroy(nfs4_layout_cache);
+		return -ENOMEM;
+	}
 	return 0;
 }
 
@@ -958,6 +1309,7 @@ nfsd4_exit_pnfs(void)
 {
 	int i;
 
+	destroy_workqueue(nfsd4_fence_wq);
 	kmem_cache_destroy(nfs4_layout_cache);
 	kmem_cache_destroy(nfs4_layout_stateid_cache);
 

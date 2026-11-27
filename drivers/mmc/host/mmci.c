@@ -278,6 +278,7 @@ static struct variant_data variant_stm32_sdmmc = {
 	.busy_detect		= true,
 	.busy_detect_flag	= MCI_STM32_BUSYD0,
 	.busy_detect_mask	= MCI_STM32_BUSYD0ENDMASK,
+	.reset_on_resume	= true,
 	.init			= sdmmc_variant_init,
 };
 
@@ -307,6 +308,7 @@ static struct variant_data variant_stm32_sdmmcv2 = {
 	.busy_detect		= true,
 	.busy_detect_flag	= MCI_STM32_BUSYD0,
 	.busy_detect_mask	= MCI_STM32_BUSYD0ENDMASK,
+	.reset_on_resume	= true,
 	.init			= sdmmc_variant_init,
 };
 
@@ -336,6 +338,7 @@ static struct variant_data variant_stm32_sdmmcv3 = {
 	.busy_detect		= true,
 	.busy_detect_flag	= MCI_STM32_BUSYD0,
 	.busy_detect_mask	= MCI_STM32_BUSYD0ENDMASK,
+	.reset_on_resume	= true,
 	.init			= sdmmc_variant_init,
 };
 
@@ -893,14 +896,14 @@ int mmci_dmae_setup(struct mmci_host *host)
 	 * the parameters of the DMA engine device.
 	 */
 	if (dmae->tx_channel) {
-		struct device *dev = dmae->tx_channel->device->dev;
+		struct device *dev = dmaengine_get_dma_device(dmae->tx_channel);
 		unsigned int max_seg_size = dma_get_max_seg_size(dev);
 
 		if (max_seg_size < host->mmc->max_seg_size)
 			host->mmc->max_seg_size = max_seg_size;
 	}
 	if (dmae->rx_channel) {
-		struct device *dev = dmae->rx_channel->device->dev;
+		struct device *dev = dmaengine_get_dma_device(dmae->rx_channel);
 		unsigned int max_seg_size = dma_get_max_seg_size(dev);
 
 		if (max_seg_size < host->mmc->max_seg_size)
@@ -940,7 +943,7 @@ static void mmci_dma_unmap(struct mmci_host *host, struct mmc_data *data)
 	else
 		chan = dmae->tx_channel;
 
-	dma_unmap_sg(chan->device->dev, data->sg, data->sg_len,
+	dma_unmap_sg(dmaengine_get_dma_device(chan), data->sg, data->sg_len,
 		     mmc_get_dma_dir(data));
 }
 
@@ -1023,7 +1026,7 @@ static int _mmci_dmae_prep_data(struct mmci_host *host, struct mmc_data *data,
 		.device_fc = variant->dma_flow_controller,
 	};
 	struct dma_chan *chan;
-	struct dma_device *device;
+	struct device *dma_dev;
 	struct dma_async_tx_descriptor *desc;
 	int nr_sg;
 	unsigned long flags = DMA_CTRL_ACK;
@@ -1056,8 +1059,8 @@ static int _mmci_dmae_prep_data(struct mmci_host *host, struct mmc_data *data,
 	if (host->variant->dma_power_of_2 && !is_power_of_2(data->blksz))
 		return -EINVAL;
 
-	device = chan->device;
-	nr_sg = dma_map_sg(device->dev, data->sg, data->sg_len,
+	dma_dev = dmaengine_get_dma_device(chan);
+	nr_sg = dma_map_sg(dma_dev, data->sg, data->sg_len,
 			   mmc_get_dma_dir(data));
 	if (nr_sg == 0)
 		return -EINVAL;
@@ -1077,7 +1080,7 @@ static int _mmci_dmae_prep_data(struct mmci_host *host, struct mmc_data *data,
 	return 0;
 
  unmap_exit:
-	dma_unmap_sg(device->dev, data->sg, data->sg_len,
+	dma_unmap_sg(dma_dev, data->sg, data->sg_len,
 		     mmc_get_dma_dir(data));
 	return -ENOMEM;
 }
@@ -2586,8 +2589,63 @@ static int mmci_runtime_resume(struct device *dev)
 	return 0;
 }
 
+static int mmci_reset_on_resume(struct mmci_host *host)
+{
+	struct device *dev = mmc_dev(host->mmc);
+	unsigned long flags;
+	int ret;
+
+	if (!host->variant->reset_on_resume || !host->rst ||
+	    host->mmc->ios.power_mode != MMC_POWER_OFF)
+		return 0;
+
+	ret = clk_prepare_enable(host->clk);
+	if (ret) {
+		dev_err(dev, "failed to enable clock: %d\n", ret);
+		return ret;
+	}
+
+	ret = reset_control_assert(host->rst);
+	if (ret) {
+		dev_err(dev, "failed to assert reset: %d\n", ret);
+		goto out;
+	}
+
+	udelay(2);
+
+	ret = reset_control_deassert(host->rst);
+	if (ret) {
+		dev_err(dev, "failed to deassert reset: %d\n", ret);
+		goto out;
+	}
+
+	spin_lock_irqsave(&host->lock, flags);
+	writel(host->clk_reg, host->base + MMCICLOCK);
+	writel(host->datactrl_reg, host->base + MMCIDATACTRL);
+	writel(host->pwr_reg, host->base + MMCIPOWER);
+	mmci_reg_delay(host);
+	spin_unlock_irqrestore(&host->lock, flags);
+
+out:
+	clk_disable_unprepare(host->clk);
+
+	return ret;
+}
+
+static int mmci_resume_noirq(struct device *dev)
+{
+	struct amba_device *adev = to_amba_device(dev);
+	struct mmc_host *mmc = amba_get_drvdata(adev);
+
+	if (!mmc)
+		return 0;
+
+	return mmci_reset_on_resume(mmc_priv(mmc));
+}
+
 static const struct dev_pm_ops mmci_dev_pm_ops = {
 	SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
+	NOIRQ_SYSTEM_SLEEP_PM_OPS(NULL, mmci_resume_noirq)
 	RUNTIME_PM_OPS(mmci_runtime_suspend, mmci_runtime_resume, NULL)
 };
 

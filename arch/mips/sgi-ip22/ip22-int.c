@@ -30,8 +30,6 @@ static char lc1msk_to_irqnr[256];
 static char lc2msk_to_irqnr[256];
 static char lc3msk_to_irqnr[256];
 
-extern int ip22_eisa_init(void);
-
 static void enable_local0_irq(struct irq_data *d)
 {
 	/* don't allow mappable interrupt to be enabled from setup_irq,

@@ -78,7 +78,6 @@ static const struct icvs_device_quirk cvs_quirk_table[] = {
 		 */
 	{ 0x06CB, 0x0701, ICVS_SKIP_FW_RESET |
 			  ICVS_HOST_SENSOR_PWR_CTRL |
-			  ICVS_HOST_PRIV_CTRL |
 			  ICVS_FW_BUF_SIZE_256 |
 			  ICVS_FW_HEADER_SIZE_256
 	},	/* Synaptics SVP7xxx */
@@ -961,10 +960,10 @@ static const struct dev_pm_ops __maybe_unused cvs_pm_ops = {
 };
 
 static const struct acpi_device_id intel_cvs_acpi_match[] = {
-	{ "INTC10DE" }, /* LNL */
-	{ "INTC10E0" }, /* ARL */
-	{ "INTC10E1" }, /* PTL */
-	{ "INTC10FA" }, /* NVL */
+	{ .id = "INTC10DE" }, /* LNL */
+	{ .id = "INTC10E0" }, /* ARL */
+	{ .id = "INTC10E1" }, /* PTL */
+	{ .id = "INTC10FA" }, /* NVL */
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, intel_cvs_acpi_match);

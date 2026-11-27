@@ -3,6 +3,7 @@
  * Copyright (C) 2013 Linaro Ltd;  <roy.franz@linaro.org>
  */
 #include <linux/efi.h>
+#include <linux/sysfb.h>
 #include <asm/efi.h>
 
 #include "efistub.h"
@@ -76,25 +77,76 @@ void efi_handle_post_ebs_state(void)
 		      &efi_entry_state->sctlr_after_ebs);
 }
 
+static efi_guid_t primary_display_guid = LINUX_EFI_PRIMARY_DISPLAY_TABLE_GUID;
+
+struct sysfb_display_info *
+alloc_primary_display(const struct efi_image_info *image_info)
+{
+	struct sysfb_display_info *dpy;
+	efi_status_t status;
+
+	/*
+	 * Unlike on other architectures, where we can directly fill out the
+	 * sysfb_primary_display structure in the loaded kernel image, we need
+	 * to allocate a buffer to hold its contents while we hand over to the
+	 * kernel proper from the decompressor.
+	 */
+	status = efi_bs_call(allocate_pool, EFI_ACPI_RECLAIM_MEMORY,
+			     sizeof(*dpy), (void **)&dpy);
+
+	if (status != EFI_SUCCESS)
+		return NULL;
+
+	memset(dpy, 0, sizeof(*dpy));
+
+	status = efi_bs_call(install_configuration_table,
+			     &primary_display_guid, dpy);
+	if (status == EFI_SUCCESS)
+		return dpy;
+
+	efi_bs_call(free_pool, dpy);
+	return NULL;
+}
+
+void free_primary_display(struct sysfb_display_info *dpy)
+{
+       if (!dpy)
+               return;
+
+       efi_bs_call(install_configuration_table, &primary_display_guid, NULL);
+       efi_bs_call(free_pool, dpy);
+}
+
+/* last unaligned u32 in the image carries the uncompressed size */
+extern u32 input_data_end[] __aligned(1);
+
+/* entry #3 in the zimage magic table carries the kernel's BSS size */
+extern u32 zimage_magic_table[] asm("_table_start");
+
+struct efi_image_info efistub_image_info = {};
+
 efi_status_t handle_kernel_image(unsigned long *image_addr,
 				 unsigned long *image_size,
-				 unsigned long *reserve_addr,
-				 unsigned long *reserve_size,
 				 efi_loaded_image_t *image,
-				 efi_handle_t image_handle)
+				 efi_handle_t image_handle,
+				 const struct efi_image_info **image_info)
 {
-	const int slack = TEXT_OFFSET - 5 * PAGE_SIZE;
-	int alloc_size = MAX_UNCOMP_KERNEL_SIZE + EFI_PHYS_ALIGN;
+	unsigned long kernel_memsize = input_data_end[-1] + zimage_magic_table[3];
+	const int pgdir_size = (4 + IS_ENABLED(CONFIG_ARM_LPAE)) * PAGE_SIZE;
+	int alloc_size = pgdir_size + ALIGN(kernel_memsize, EFI_PAGE_SIZE);
+	const int slack = TEXT_OFFSET - pgdir_size;
+	const unsigned long margin = max(EFI_PHYS_ALIGN, slack);
 	unsigned long alloc_base, kernel_base;
 	efi_status_t status;
 
 	/*
 	 * Allocate space for the decompressed kernel as low as possible.
-	 * The region should be 16 MiB aligned, but the first 'slack' bytes
+	 * The region should be 2 MiB aligned, but the first 'slack' bytes
 	 * are not used by Linux, so we allow those to be occupied by the
 	 * firmware.
 	 */
-	status = efi_low_alloc_above(alloc_size, EFI_PAGE_SIZE, &alloc_base, 0x0);
+	status = efi_low_alloc_above(alloc_size + margin, EFI_PAGE_SIZE,
+				     &alloc_base, 0x0);
 	if (status != EFI_SUCCESS) {
 		efi_err("Unable to allocate memory for uncompressed kernel.\n");
 		return status;
@@ -103,7 +155,7 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 	if ((alloc_base % EFI_PHYS_ALIGN) > slack) {
 		/*
 		 * More than 'slack' bytes are already occupied at the base of
-		 * the allocation, so we need to advance to the next 16 MiB block.
+		 * the allocation, so we need to advance to the next 2 MiB block.
 		 */
 		kernel_base = round_up(alloc_base, EFI_PHYS_ALIGN);
 		efi_info("Free memory starts at 0x%lx, setting kernel_base to 0x%lx\n",
@@ -112,23 +164,17 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 		kernel_base = round_down(alloc_base, EFI_PHYS_ALIGN);
 	}
 
-	*reserve_addr = kernel_base + slack;
-	*reserve_size = MAX_UNCOMP_KERNEL_SIZE;
+	efistub_image_info._text_offset =
+		kernel_base + TEXT_OFFSET - (u32)&efistub_image_info;
+
+	kernel_base += slack;
 
 	/* now free the parts that we will not use */
-	if (*reserve_addr > alloc_base) {
-		efi_bs_call(free_pages, alloc_base,
-			    (*reserve_addr - alloc_base) / EFI_PAGE_SIZE);
-		alloc_size -= *reserve_addr - alloc_base;
-	}
-	efi_bs_call(free_pages, *reserve_addr + MAX_UNCOMP_KERNEL_SIZE,
-		    (alloc_size - MAX_UNCOMP_KERNEL_SIZE) / EFI_PAGE_SIZE);
+	efi_free(kernel_base - alloc_base, alloc_base);	/* no-op if 0 */
+	efi_free(alloc_base + margin - kernel_base, kernel_base + alloc_size);
 
-	*image_addr = kernel_base + TEXT_OFFSET;
-	*image_size = 0;
-
-	efi_debug("image addr == 0x%lx, reserve_addr == 0x%lx\n",
-		  *image_addr, *reserve_addr);
+	*image_addr = kernel_base;
+	*image_size = alloc_size;
 
 	return EFI_SUCCESS;
 }

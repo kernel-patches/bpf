@@ -34,6 +34,7 @@ struct drm_gem_object *intel_bo_framebuffer_lookup(struct intel_display *display
 						   const struct drm_mode_fb_cmd2 *user_mode_cmd);
 
 u32 intel_bo_fbdev_pitch_align(struct intel_display *display, u32 stride);
+struct drm_gem_object *intel_bo_fbdev_bios_fb_takeover(struct drm_gem_object *obj);
 struct drm_gem_object *intel_bo_fbdev_create(struct intel_display *display, int size);
 void intel_bo_fbdev_destroy(struct drm_gem_object *obj);
 int intel_bo_fbdev_fill_info(struct drm_gem_object *obj, struct fb_info *info,

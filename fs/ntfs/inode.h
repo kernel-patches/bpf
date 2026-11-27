@@ -182,6 +182,7 @@ struct ntfs_inode {
  * NI_HasEA			ntfs inode has EA attribute.
  * NI_RunlistDirty		runlist need to be updated.
  * NI_StreamUnlinked		Named stream is unlinked but still open.
+ * NI_ExtendSys			Inode is a system file in $Extend.
  */
 enum {
 	NI_Dirty,
@@ -204,6 +205,7 @@ enum {
 	NI_HasEA,
 	NI_RunlistDirty,
 	NI_StreamUnlinked,
+	NI_ExtendSys,
 };
 
 /*
@@ -265,6 +267,7 @@ NINO_FNS(BeingDeleted)
 NINO_FNS(HasEA)
 NINO_FNS(RunlistDirty)
 NINO_FNS(StreamUnlinked)
+NINO_FNS(ExtendSys)
 
 /*
  * The full structure containing a ntfs_inode and a vfs struct inode. Used for
@@ -326,6 +329,8 @@ struct ntfs_attr {
 int ntfs_test_inode(struct inode *vi, void *data);
 int ntfs_test_inode_rcu(struct inode *vi, void *data);
 struct inode *ntfs_iget(struct super_block *sb, u64 mft_no);
+struct inode *ntfs_attr_ilookup(struct inode *base_vi, __le32 type,
+		__le16 *name, u32 name_len);
 struct inode *ntfs_attr_iget(struct inode *base_vi, __le32 type,
 		__le16 *name, u32 name_len);
 struct inode *ntfs_index_iget(struct inode *base_vi, __le16 *name,

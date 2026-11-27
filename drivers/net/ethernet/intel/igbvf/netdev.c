@@ -12,7 +12,6 @@
 #include <linux/mii.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
-#include <linux/pagemap.h>
 #include <linux/pci.h>
 #include <linux/prefetch.h>
 #include <linux/sctp.h>
@@ -2901,8 +2900,8 @@ static void igbvf_remove(struct pci_dev *pdev)
 	set_bit(__IGBVF_DOWN, &adapter->state);
 	timer_delete_sync(&adapter->watchdog_timer);
 
-	cancel_work_sync(&adapter->reset_task);
-	cancel_work_sync(&adapter->watchdog_task);
+	disable_work_sync(&adapter->watchdog_task);
+	disable_work_sync(&adapter->reset_task);
 
 	unregister_netdev(netdev);
 

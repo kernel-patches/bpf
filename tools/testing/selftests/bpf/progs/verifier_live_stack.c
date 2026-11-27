@@ -368,7 +368,6 @@ static __used __naked void arg_track_join_convergence_subprog(void)
 }
 
 SEC("socket")
-__flag(BPF_F_TEST_STATE_FREQ)
 __log_level(2)
 /* fp0-8 consumed at insn 9, dead by insn 11. stack_def at insn 4 kills slots 0,1. */
 __msg("4: (7b) *(u64 *)(r10 -8) = r0        ; def: fp0-8")
@@ -380,9 +379,9 @@ __msg("10: (b7) r0 = 0{{$}}")
 __msg("11: (05) goto pc+0{{$}}")
 __msg("12: (95) exit")
 /*
- * Checkpoint at goto +0 fires because fp0-8 is dead → state pruning.
+ * fp0-8 is dead after goto +0, so one state stands for both.
  */
-__msg("12: safe")
+__msg("from 11 to 12: pruned")
 __naked void caller_stack_pruning(void)
 {
 	asm volatile (
@@ -497,7 +496,6 @@ struct {
 
 SEC("socket")
 __failure __msg("invalid read from stack R2 off=-4096 size=8")
-__flag(BPF_F_TEST_STATE_FREQ)
 __naked unsigned long caller_stack_write_tail_call(void)
 {
         asm volatile (
@@ -855,7 +853,7 @@ static __used __naked void maybe_clobber_key(void)
 
 /*
  * Demonstrate that subprog arg spill/reload breaks arg tracking,
- * inflating caller stack liveness and preventing state pruning.
+ * inflating caller stack liveness and keeping states apart.
  *
  * modifier2(fp-24) has two paths: one writes a scalar to *(r1+8)
  * = caller fp-16, the other leaves it as zero.  After modifier2
@@ -871,16 +869,15 @@ static __used __naked void maybe_clobber_key(void)
  * the reader never touches it.
  *
  * Result: at modifier2's return point two states with different
- * fp-16 values cannot be pruned.
+ * fp-16 values are kept apart.
  *
- * With correct (or old dynamic) liveness fp-16 is dead at that
- * point and the states prune → "6: safe" appears in the log.
+ * With correct liveness fp-16 is dead at that point and one state is
+ * within the other one.
  */
 SEC("socket")
-__flag(BPF_F_TEST_STATE_FREQ)
 __log_level(2)
 __success
-__msg("6: safe")
+__msg("from 16 to 6: pruned")
 __naked void spill_reload_inflates_stack_liveness(void)
 {
 	asm volatile (
@@ -982,9 +979,9 @@ void __kfunc_btf_root(void)
  */
 SEC("socket")
 __success __log_level(2)
-__msg(" 6: (85) call bpf_iter_num_new{{.*}}          ; def: fp0-24 may_def: fp0-24{{$}}")
-__msg(" 9: (85) call bpf_iter_num_next{{.*}}         ; use: fp0-24 may_def: fp0-24{{$}}")
-__msg("14: (85) call bpf_iter_num_destroy{{.*}}      ; use: fp0-24 may_def: fp0-24{{$}}")
+__msg(" 6: (85) call bpf_iter_num_new{{.*}}; def: fp0-24 may_def: fp0-24{{$}}")
+__msg(" 9: (85) call bpf_iter_num_next{{.*}}; use: fp0-24 may_def: fp0-24{{$}}")
+__msg("14: (85) call bpf_iter_num_destroy{{.*}}; use: fp0-24 may_def: fp0-24{{$}}")
 __naked void kfunc_iter_stack_liveness(void)
 {
 	asm volatile (
@@ -1366,32 +1363,176 @@ __naked void half_spi_clean_preserves_stack_zero(void)
  * conditional block with helper call and temporary stack spill,
  * spill dead after merge.
  *
- * Path A (fall-through): spill r6 to fp-8 across helper call
- * Path B (branch taken): skip the block entirely
- * At merge (insn 6): fp-8 is dead (never read after merge)
+ * Path A (branch taken, verified first): spill r6 to fp-8 across helper call
+ * Path B (fall-through): skip the block entirely
+ * At merge (insn 7): fp-8 is dead (never read after merge)
  *
  * Static liveness marks fp-8 dead at merge. clean_verifier_state()
  * converts path A's STACK_SPILL to STACK_INVALID. Path B has
- * STACK_INVALID. stacksafe() matches -> path B pruned -> "6: safe".
+ * STACK_INVALID. stacksafe() matches -> one state stands for both paths.
  */
 SEC("socket")
-__flag(BPF_F_TEST_STATE_FREQ)
 __success
 __log_level(2)
-__msg("6: safe")
+__msg("from 3 to 7: pruned")
 __naked void dead_spill_at_merge_enables_pruning(void)
 {
 	asm volatile (
 	"call %[bpf_get_prandom_u32];"
 	"r6 = 7;"
-	"if r0 != 0 goto l_skip%=;"
+	"if r0 == 0 goto l_spill%=;"
+	"goto l_skip%=;"
+"l_spill%=:"
 	/* conditional block: spill, call, reload */
 	"*(u64 *)(r10 - 8) = r6;"
 	"call %[bpf_get_prandom_u32];"
 	"r6 = *(u64 *)(r10 - 8);"
 "l_skip%=:"
-	/* fp-8 dead. Path B pruned here -> "6: safe" */
+	/* fp-8 dead. The states of both paths are the same here */
 	"r0 = r6;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Two paths meet at insn 10. fp-8 holds a pointer to fp-16 on one of them and a pointer to fp-24
+ * on the other one: no join. r6 is in [0, 15].
+ */
+#define SPILL_ONE_OF_TWO_PTRS			\
+	"call %[bpf_get_prandom_u32];"		\
+	"r6 = r0;"				\
+	"r6 &= 15;"				\
+	"*(u64 *)(r10 - 16) = r6;"		\
+	"r7 = r10;"				\
+	"r7 += -16;"				\
+	"*(u64 *)(r10 - 8) = r7;"		\
+	"if r0 & 16 goto +2;"			\
+	"r7 += -8;"				\
+	"*(u64 *)(r10 - 8) = r7;"
+
+/* Liveness doesn't know the offset of the load. A byte doesn't tell the pointers apart. */
+SEC("socket")
+__success
+__log_level(2)
+__msg("from 9 to 10: pruned")
+__naked void byte_load_in_subprog_keeps_no_spilled_ptr(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r1 = r10;"
+	"r1 += -16;"
+	"r2 = r6;"
+	"call load_byte;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+static __used __naked void load_byte(void)
+{
+	asm volatile (
+	"r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0);"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The bytes of a pointer that was replaced are not known: r0 is in [0, 255]. */
+SEC("socket")
+__failure
+__msg("invalid variable-offset read from stack R1")
+__naked void byte_of_replaced_ptr_is_unknown(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r6 &= 7;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"r1 += r6;"
+	"r0 = *(u8 *)(r1 + 0);"
+	"r1 = r10;"
+	"r1 += -1;"
+	"r1 += r0;"
+	"r0 = *(u8 *)(r1 + 0);"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* A helper reads memory. Without CAP_PERFMON it must not find a pointer there. */
+SEC("socket")
+__success
+__log_level(2)
+__msg("from 9 to 10: pruned")
+__failure_unpriv
+__msg_unpriv("invalid read from stack R3 off -8+0 size 8")
+__naked void helper_keeps_no_spilled_ptr(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r1 = %[map] ll;"
+	"r2 = r10;"
+	"r2 += -16;"
+	"r3 = r10;"
+	"r3 += -8;"
+	"r4 = 0;"
+	"call %[bpf_map_update_elem];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm(bpf_map_update_elem),
+	  __imm_addr(map)
+	: __clobber_all);
+}
+
+#ifdef CAN_USE_CALLX
+static __used __naked void load_ptr(void)
+{
+	asm volatile (
+	"r1 = *(u64 *)(r1 + 0);"
+	"r0 = *(u64 *)(r1 + 0);"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* Liveness doesn't know the callee, which fills the pointer. */
+SEC("socket")
+__success
+__load_if_JITed()
+__naked void callx_keeps_spilled_ptr(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r1 = r10;"
+	"r1 += -8;"
+	"r2 = %[load_ptr] ll;"
+	"callx r2;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_addr(load_ptr)
+	: __clobber_all);
+}
+#endif /* CAN_USE_CALLX */
+
+/* Only the main pass knows the offset of the load. The pointer was replaced at insn 10. */
+SEC("socket")
+__success
+__failure_unpriv __msg_unpriv("invalid size of register fill")
+__naked void short_load_at_lost_offset_keeps_no_spilled_ptr(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r2 = 8;"
+	"r1 = r10;"
+	"r1 += -16;"
+	"r1 += r2;"
+	"r0 = *(u32 *)(r1 + 0);"
 	"exit;"
 	:
 	: __imm(bpf_get_prandom_u32)
@@ -2846,7 +2987,7 @@ __naked void merge_preserves_may_write(void)
 	"if r0 == 0 goto 1f;"
 	/* chain A: r2 = map value (ARG_NONE, not stack) */
 	"r1 = r10;"
-	"r1 += -16;"				/* unused fp anchor */
+	"r1 += -16;"				/* fp anchor */
 	"r2 = r0;"
 	"call mvs_mid;"
 	/* chain B: r2 = caller stack slot fp-8 */
@@ -2874,6 +3015,7 @@ static __used __naked void mvs_leaf(void)
 {
 	asm volatile (
 	"*(u64 *)(r2 + 0) = 42;"
+	"r0 = r1;"				/* a register that is not read is no argument */
 	"r0 = 0;"
 	"exit;"
 	::: __clobber_all);
@@ -3138,6 +3280,66 @@ static __used __naked void imprecise_fill_cross_frame(void)
 	"r1 = *(u64 *)(r1 + 0);"
 	/* read caller's fp-8 through loaded pointer, should mark fp0-8 live */
 	"r0 = *(u64 *)(r1 + 0);"
+	"r0 = 0;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * fill_older_frame_3() loads through a pointer to the stack of frame 1 or of frame 2. Both slots
+ * hold a pointer to fp-8 of frame 0: the store is a may_def of that slot at the call in frame 0.
+ */
+SEC("socket")
+__log_level(2)
+__success
+__msg("3: (85) call pc+2{{ +}}; may_def: fp0-8..-{{[0-9]+}}")
+__naked void imprecise_parent_fill_loses_older_frame(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"call fill_older_frame_1;"
+	"r0 = *(u64 *)(r10 - 8);"
+	"exit;"
+	::: __clobber_all);
+}
+
+static __used __naked void fill_older_frame_1(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = r1;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"call fill_older_frame_2;"
+	"exit;"
+	::: __clobber_all);
+}
+
+static __used __naked void fill_older_frame_2(void)
+{
+	asm volatile (
+	"r2 = *(u64 *)(r1 + 0);"
+	"*(u64 *)(r10 - 8) = r2;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"call fill_older_frame_3;"
+	"exit;"
+	::: __clobber_all);
+}
+
+static __used __naked void fill_older_frame_3(void)
+{
+	asm volatile (
+	"r6 = r1;"
+	"r7 = r2;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 0 goto +1;"
+	"r6 = r7;"
+	/* ARG_IMPRECISE{mask=BIT(1)|BIT(2)} */
+	"r1 = *(u64 *)(r6 + 0);"
+	"*(u64 *)(r1 + 0) = 7;"
 	"r0 = 0;"
 	"exit;"
 	:: __imm(bpf_get_prandom_u32)

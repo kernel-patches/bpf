@@ -572,8 +572,10 @@ static int add_tracepoint_multi_sys(struct parse_events_state *parse_state,
 		ret = tp_pmu__for_each_tp_sys(&args, add_tracepoint_multi_sys_cb);
 	}
 	if (args.found == 0) {
-		tracepoint_error(err, ENOENT, sys_glob, evt_glob, loc->first_column);
-		return -ENOENT;
+		if (!ret)
+			ret = -ENOENT;
+		tracepoint_error(err, ret, sys_glob, evt_glob, loc->first_column);
+		return ret;
 	}
 	return ret;
 }
@@ -595,6 +597,27 @@ size_t default_breakpoint_len(void)
 	return 4;
 #else
 	return sizeof(long);
+#endif
+}
+
+/*
+ * Default length for data breakpoints when the user did not specify one.
+ *
+ * Most architectures treat the length as a byte range that is compared
+ * against the address of the access, so 4 bytes is a reasonable default
+ * that matches most accesses.  RISC-V debug triggers (Sdtrig mcontrol6)
+ * encode the width of the access in the trigger instead, and a trigger
+ * only fires when the access has exactly that width.  This holds for
+ * both RV32 and RV64.  With a fixed default, an access of a different
+ * width silently never matches, so pass 0 on RISC-V, which the kernel
+ * translates to "match any size".
+ */
+size_t default_data_breakpoint_len(void)
+{
+#if defined(__riscv)
+	return 0;
+#else
+	return HW_BREAKPOINT_LEN_4;
 #endif
 }
 
@@ -658,7 +681,7 @@ int parse_events_add_breakpoint(struct parse_events_state *parse_state,
 		if (attr.bp_type == HW_BREAKPOINT_X)
 			len = default_breakpoint_len();
 		else
-			len = HW_BREAKPOINT_LEN_4;
+			len = default_data_breakpoint_len();
 	}
 
 	attr.bp_len = len;
@@ -1539,8 +1562,10 @@ static int parse_events_add_pmu(struct parse_events_state *parse_state,
 	if (const_parsed_terms) {
 		int ret = parse_events_terms__copy(const_parsed_terms, &parsed_terms);
 
-		if (ret)
+		if (ret) {
+			parse_events_terms__exit(&parsed_terms);
 			return ret;
+		}
 	}
 	fix_raw(&parsed_terms, pmu);
 
@@ -1642,8 +1667,10 @@ int parse_events_multi_pmu_add(struct parse_events_state *parse_state,
 	if (const_parsed_terms) {
 		int ret = parse_events_terms__copy(const_parsed_terms, &parsed_terms);
 
-		if (ret)
+		if (ret) {
+			parse_events_terms__exit(&parsed_terms);
 			return ret;
+		}
 	}
 
 	config = strdup(event_name);

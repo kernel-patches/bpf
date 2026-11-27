@@ -2705,9 +2705,12 @@ static const char *dev_uevent_name(const struct kobject *kobj)
  * risky as driver pointer is transitioning to NULL, so READ_ONCE() should
  * be used to make sure we are dealing with the same pointer, and to
  * ensure that driver structure is not going to disappear from under us
- * we take bus' drivers klist lock. The assumption that only registered
- * driver can be bound to a device, and to unregister a driver bus code
- * will take the same lock.
+ * we take the bus' drivers klist lock. During driver unregistration,
+ * bus_remove_driver() acquires and releases this lock after detaching
+ * all devices and clearing their driver pointers. This waits for readers
+ * that observed the old pointer to finish accessing the driver name
+ * before the driver can be freed. Readers acquiring the lock afterward
+ * cannot observe the removed driver.
  */
 static void dev_driver_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
@@ -3011,12 +3014,13 @@ static int device_add_attrs(struct device *dev)
 		error = device_add_group(dev,
 			&dev_attr_physical_location_group);
 		if (error)
-			goto err_remove_dev_removable;
+			goto err_free_physical_location;
 	}
 
 	return 0;
 
- err_remove_dev_removable:
+ err_free_physical_location:
+	kfree(dev->physical_location);
 	device_remove_file(dev, &dev_attr_removable);
  err_remove_dev_waiting_for_supplier:
 	device_remove_file(dev, &dev_attr_waiting_for_supplier);
@@ -5211,7 +5215,7 @@ int dev_warn_probe(const struct device *dev, int err, const char *fmt, ...)
 }
 EXPORT_SYMBOL_GPL(dev_warn_probe);
 
-static inline bool fwnode_is_primary(struct fwnode_handle *fwnode)
+bool fwnode_is_primary(struct fwnode_handle *fwnode)
 {
 	return fwnode && !IS_ERR(fwnode->secondary);
 }

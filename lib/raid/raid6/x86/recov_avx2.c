@@ -43,7 +43,7 @@ static void raid6_2data_recov_avx2(int disks, size_t bytes, int faila,
 	qmul  = raid6_vgfmul[raid6_gfinv[raid6_gfexp[faila] ^
 		raid6_gfexp[failb]]];
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	/* ymm0 = x0f[16] */
 	asm volatile("vpbroadcastb %0, %%ymm7" : : "m" (x0f));
@@ -205,7 +205,7 @@ static void raid6_datap_recov_avx2(int disks, size_t bytes, int faila,
 	/* Now, pick the proper data tables */
 	qmul  = raid6_vgfmul[raid6_gfinv[raid6_gfexp[faila]]];
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("vpbroadcastb %0, %%ymm7" : : "m" (x0f));
 

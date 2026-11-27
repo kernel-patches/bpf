@@ -176,6 +176,54 @@
         "Unit": "cpu_core"
     },
     {
+        "BriefDescription": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HIT",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0x2A",
+        "EventName": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HIT",
+        "MSRIndex": "0x3E0,0x3E1,0x3E2,0x3E3",
+        "MSRValue": "0xED000400000001",
+        "PublicDescription": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HIT Available PDIST counters: 0",
+        "SampleAfterValue": "100003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HIT.SNP_HIT_NO_FWD",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0x2A",
+        "EventName": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HIT.SNP_HIT_NO_FWD",
+        "MSRIndex": "0x3E0,0x3E1,0x3E2,0x3E3",
+        "MSRValue": "0x4D000400000001",
+        "PublicDescription": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HIT.SNP_HIT_NO_FWD Available PDIST counters: 0",
+        "SampleAfterValue": "100003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HITESF",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0x2A",
+        "EventName": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HITESF",
+        "MSRIndex": "0x3E0,0x3E1,0x3E2,0x3E3",
+        "MSRValue": "0xE5000400000001",
+        "PublicDescription": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HITESF Available PDIST counters: 0",
+        "SampleAfterValue": "100003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HITM",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0x2A",
+        "EventName": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HITM",
+        "MSRIndex": "0x3E0,0x3E1,0x3E2,0x3E3",
+        "MSRValue": "0xE9000400000001",
+        "PublicDescription": "OMR.DEMAND_DATA_RD.L3_SAME_CBB.HITM Available PDIST counters: 0",
+        "SampleAfterValue": "100003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
         "BriefDescription": "OMR.DEMAND_DATA_RD.MEM_REGION_0",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0x2A",
@@ -195,6 +243,42 @@
         "MSRIndex": "0x3E0,0x3E1,0x3E2,0x3E3",
         "MSRValue": "0xF5020000000001",
         "PublicDescription": "OMR.DEMAND_DATA_RD.MEM_REGION_1 Available PDIST counters: 0",
+        "SampleAfterValue": "100003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "OMR.DEMAND_RFO.ANY_RESPONSE",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0x2A",
+        "EventName": "OMR.DEMAND_RFO.ANY_RESPONSE",
+        "MSRIndex": "0x3E0,0x3E1,0x3E2,0x3E3",
+        "MSRValue": "0x4000000000000002",
+        "PublicDescription": "OMR.DEMAND_RFO.ANY_RESPONSE Available PDIST counters: 0",
+        "SampleAfterValue": "100003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "OMR.DEMAND_RFO.L3_SAME_CBB.HITM",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0x2A",
+        "EventName": "OMR.DEMAND_RFO.L3_SAME_CBB.HITM",
+        "MSRIndex": "0x3E0,0x3E1,0x3E2,0x3E3",
+        "MSRValue": "0xE9000400000002",
+        "PublicDescription": "OMR.DEMAND_RFO.L3_SAME_CBB.HITM Available PDIST counters: 0",
+        "SampleAfterValue": "100003",
+        "UMask": "0x1",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "OMR.MODIFIED_WRITE.ANY_RESPONSE",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0x2A",
+        "EventName": "OMR.MODIFIED_WRITE.ANY_RESPONSE",
+        "MSRIndex": "0x3E0,0x3E1,0x3E2,0x3E3",
+        "MSRValue": "0x4000000000000808",
+        "PublicDescription": "OMR.MODIFIED_WRITE.ANY_RESPONSE Available PDIST counters: 0",
         "SampleAfterValue": "100003",
         "UMask": "0x1",
         "Unit": "cpu_core"

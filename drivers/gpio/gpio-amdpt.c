@@ -35,7 +35,7 @@ static int pt_gpio_request(struct gpio_chip *gc, unsigned offset)
 	struct pt_gpio_chip *pt_gpio = gpiochip_get_data(gc);
 	u32 using_pins;
 
-	dev_dbg(gc->parent, "pt_gpio_request offset=%x\n", offset);
+	dev_dbg(gc->parent, "%s offset=%x\n", __func__, offset);
 
 	guard(gpio_generic_lock_irqsave)(gen_gc);
 
@@ -63,7 +63,7 @@ static void pt_gpio_free(struct gpio_chip *gc, unsigned offset)
 	using_pins &= ~BIT(offset);
 	writel(using_pins, pt_gpio->reg_base + PT_SYNC_REG);
 
-	dev_dbg(gc->parent, "pt_gpio_free offset=%x\n", offset);
+	dev_dbg(gc->parent, "%s offset=%x\n", __func__, offset);
 }
 
 static int pt_gpio_probe(struct platform_device *pdev)
@@ -125,10 +125,10 @@ static int pt_gpio_probe(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id pt_gpio_acpi_match[] = {
-	{ "AMDF030", PT_TOTAL_GPIO },
-	{ "AMDIF030", PT_TOTAL_GPIO },
-	{ "AMDIF031", PT_TOTAL_GPIO_EX },
-	{ },
+	{ .id = "AMDF030", .driver_data = PT_TOTAL_GPIO },
+	{ .id = "AMDIF030", .driver_data = PT_TOTAL_GPIO },
+	{ .id = "AMDIF031", .driver_data = PT_TOTAL_GPIO_EX },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, pt_gpio_acpi_match);
 

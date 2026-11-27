@@ -78,7 +78,7 @@ $defs:
                 atest_usb, cam_mclk, cci_async, cci_i2c, cci_timer, copy_gp,
                 copy_phase, cri_trng, dbg_out_clk, ddr_bist, ddr_pxi, dp_hot,
                 edp_hot, edp_lcd, emac_gcc, emac_phy_intr, forced_usb, gcc_gp,
-                gp_pdm, gps_tx, hs0_mi2s, hs1_mi2s, jitter_bist, ldo_en,
+                gp_mn, gp_pdm, gps_tx, hs0_mi2s, hs1_mi2s, jitter_bist, ldo_en,
                 ldo_update, m_voc, mclk1, mclk2, mdp_vsync, mdp_vsync0_out,
                 mdp_vsync1_out, mdp_vsync2_out, mdp_vsync3_out, mdp_vsync4_out,
                 mdp_vsync5_out, mi2s_1, mss_lte, nav_pps_in, nav_pps_out,

@@ -21,9 +21,14 @@
 #include <linux/seq_buf.h>
 #include <linux/xarray.h>
 
+#include <asm/cpu_device_id.h>
+
+#include "pci.h"
+
 struct pci_p2pdma {
 	struct gen_pool *pool;
 	bool p2pmem_published;
+	bool ats_per_mapping;
 	struct xarray map_types;
 	struct p2pdma_provider mem[PCI_STD_NUM_BARS];
 };
@@ -491,25 +496,304 @@ static struct pci_dev *find_parent_pci_dev(struct device *dev)
 }
 
 /*
- * Check if a PCI bridge has its ACS redirection bits set to redirect P2P
- * TLPs upstream via ACS. Returns 1 if the packets will be redirected
- * upstream, 0 otherwise.
+ * Some ports send peer-to-peer traffic upstream without a standard ACS
+ * capability, such as Zhaoxin Root and Switch Downstream Ports. Their
+ * device-specific ACS quirks say so. Report whether @pdev's quirk says that
+ * @flag is in effect.
+ *
+ * Only ask bridges. The quirks for multi-function endpoints only say that
+ * their functions do not talk to each other directly, which says nothing
+ * about their traffic to other devices. Skip bridges on a root bus too. They
+ * never decide whether two peers connect directly, and for them the AMD
+ * southbridge quirk calls acpi_get_table(), which may sleep. DMA mapping may
+ * call this code where sleeping is not allowed.
  */
-static int pci_bridge_has_acs_redir(struct pci_dev *pdev)
+static bool pci_acs_p2pdma_quirk(struct pci_dev *pdev, u16 flag)
 {
-	int pos;
-	u16 ctrl;
+	if (!pci_is_bridge(pdev) || pci_is_root_bus(pdev->bus))
+		return false;
+
+	return pci_dev_specific_acs_enabled(pdev, flag) > 0;
+}
+
+/*
+ * Add the Request and Completion Redirect that @pdev's quirk reports to its
+ * ACS Control value. Only ever add them: a quirk that covers every device of
+ * a vendor says "no" for the ones it does not know, and that must not hide
+ * their own ACS controls. What a quirk says about other controls only means
+ * that the control does not apply, so ignore it.
+ */
+static u16 pci_acs_p2pdma_quirk_redirect(struct pci_dev *pdev, u16 ctrl)
+{
+	if (pci_acs_p2pdma_quirk(pdev, PCI_ACS_RR))
+		ctrl |= PCI_ACS_RR;
+	if (pci_acs_p2pdma_quirk(pdev, PCI_ACS_CR))
+		ctrl |= PCI_ACS_CR;
+
+	return ctrl;
+}
+
+/*
+ * Decide how a peer-to-peer Request at an ACS-capable ingress port routes,
+ * from that port's ACS Control register and the Request's Address Type.
+ *
+ * Linux does not read the Egress Control Vector, so Egress Control is treated
+ * conservatively as a redirect. Per PCIe r7.0 Table 6-11 the outcomes it
+ * selects are a direct route and an ACS Violation, and neither one lets peer
+ * bus addressing be assumed.
+ */
+VISIBLE_IF_KUNIT enum pci_acs_p2pdma_state
+pci_acs_p2pdma_request(u16 ctrl, unsigned int tlp_flags)
+{
+	if (tlp_flags & PCI_P2PDMA_TLP_TRANSLATED) {
+		/*
+		 * PCIe r7.0 sec 6.12.1.1: Translation Blocking makes every
+		 * Upstream Memory Request whose Address Type is not
+		 * Untranslated an ACS Violation, taking precedence over the
+		 * P2P controls. Sec 7.7.12.5: Direct Translated P2P "is
+		 * ignored if ACS Translation Blocking Enable is 1b".
+		 */
+		if (ctrl & PCI_ACS_TB)
+			return PCI_ACS_P2PDMA_BLOCKED;
+
+		/*
+		 * PCIe r7.0 sec 6.12.3: ACS Direct Translated P2P routes a
+		 * Request carrying a Translated address to the peer "without
+		 * redirection, regardless of ACS P2P Request Redirect and ACS
+		 * P2P Egress Control settings".
+		 */
+		if (ctrl & PCI_ACS_DT)
+			return PCI_ACS_P2PDMA_DIRECT;
+	}
+
+	return ctrl & (PCI_ACS_RR | PCI_ACS_EC) ?
+		PCI_ACS_P2PDMA_REDIRECT : PCI_ACS_P2PDMA_DIRECT;
+}
+EXPORT_SYMBOL_IF_KUNIT(pci_acs_p2pdma_request);
+
+/*
+ * Decide how a peer-to-peer Completion at an ACS-capable ingress port routes.
+ * PCIe r7.0 sec 6.12.1.1: no ACS control other than P2P Completion Redirect
+ * affects a Completion, and that one leaves Completions carrying the Relaxed
+ * Ordering attribute alone.
+ */
+VISIBLE_IF_KUNIT enum pci_acs_p2pdma_state
+pci_acs_p2pdma_completion(u16 ctrl, unsigned int tlp_flags)
+{
+	if (tlp_flags & PCI_P2PDMA_TLP_RELAXED_CPL)
+		return PCI_ACS_P2PDMA_DIRECT;
+
+	return ctrl & PCI_ACS_CR ? PCI_ACS_P2PDMA_REDIRECT :
+				   PCI_ACS_P2PDMA_DIRECT;
+}
+EXPORT_SYMBOL_IF_KUNIT(pci_acs_p2pdma_completion);
+
+static const char *pci_acs_p2pdma_state_name(enum pci_acs_p2pdma_state state)
+{
+	switch (state) {
+	case PCI_ACS_P2PDMA_DIRECT:
+		return "direct";
+	case PCI_ACS_P2PDMA_REDIRECT:
+		return "redirect";
+	case PCI_ACS_P2PDMA_BLOCKED:
+		return "blocked";
+	case PCI_ACS_P2PDMA_NOT_SUPPORTED:
+		return "not-supported";
+	}
+
+	return "invalid";
+}
+
+static const char *pci_p2pdma_map_type_name(enum pci_p2pdma_map_type type)
+{
+	switch (type) {
+	case PCI_P2PDMA_MAP_UNKNOWN:
+		return "unknown";
+	case PCI_P2PDMA_MAP_NONE:
+		return "none";
+	case PCI_P2PDMA_MAP_NOT_SUPPORTED:
+		return "not-supported";
+	case PCI_P2PDMA_MAP_BUS_ADDR:
+		return "bus-address";
+	case PCI_P2PDMA_MAP_THRU_HOST_BRIDGE:
+		return "through-host-bridge";
+	}
+
+	return "invalid";
+}
+
+/*
+ * Read @pdev's ACS Control register, with Request and Completion Redirect
+ * taken from its ACS quirk if it has one. A device with neither has no
+ * peer-to-peer controls at all. Whether functions can route internally is
+ * checked separately. Returns false when the register cannot be read, or
+ * reads as all ones, which is what a device that does not answer returns;
+ * @ctrl is then meaningless.
+ */
+static bool pci_acs_p2pdma_ctrl(struct pci_dev *pdev, const char *what,
+				u16 *ctrl, bool verbose)
+{
+	int pos, ret;
 
 	pos = pdev->acs_cap;
-	if (!pos)
-		return 0;
+	if (!pos) {
+		if (verbose)
+			pci_dbg(pdev,
+				"P2PDMA ACS: %s has no ACS capability\n", what);
+		*ctrl = pci_acs_p2pdma_quirk_redirect(pdev, 0);
+		return true;
+	}
 
-	pci_read_config_word(pdev, pos + PCI_ACS_CTRL, &ctrl);
+	ret = pci_dev_specific_read_acs_ctrl(pdev, ctrl);
+	if (ret == -ENOTTY)
+		ret = pci_read_config_word(pdev, pos + PCI_ACS_CTRL, ctrl);
+	if (ret || PCI_POSSIBLE_ERROR(*ctrl)) {
+		if (verbose)
+			pci_dbg(pdev,
+				"P2PDMA ACS: %s ACS Control read failed: cap=%#x status=%#x value=%#06x\n",
+				 what, pos, ret, *ctrl);
+		return false;
+	}
 
-	if (ctrl & (PCI_ACS_RR | PCI_ACS_CR | PCI_ACS_EC))
-		return 1;
+	*ctrl = pci_acs_p2pdma_quirk_redirect(pdev, *ctrl);
+	if (verbose) {
+		pci_dbg(pdev,
+			 "P2PDMA ACS: %s cap=%#x caps=%#06x ctrl=%#06x\n",
+			 what, pos, pdev->acs_capabilities, *ctrl);
+		pci_dbg(pdev,
+			 "P2PDMA ACS: control bits SV=%u TB=%u RR=%u CR=%u UF=%u EC=%u DT=%u\n",
+			 !!(*ctrl & PCI_ACS_SV), !!(*ctrl & PCI_ACS_TB),
+			 !!(*ctrl & PCI_ACS_RR), !!(*ctrl & PCI_ACS_CR),
+			 !!(*ctrl & PCI_ACS_UF), !!(*ctrl & PCI_ACS_EC),
+			 !!(*ctrl & PCI_ACS_DT));
+	}
 
-	return 0;
+	return true;
+}
+
+static bool pci_acs_p2pdma_downstream_port(struct pci_dev *pdev)
+{
+	return pci_is_pcie(pdev) &&
+		(pci_pcie_type(pdev) == PCI_EXP_TYPE_ROOT_PORT ||
+		 pci_pcie_type(pdev) == PCI_EXP_TYPE_DOWNSTREAM);
+}
+
+/*
+ * Only use this for functions sharing a PCIe link. An absent RR or CR
+ * capability means that the corresponding internal peer route does not
+ * exist, rather than that a programmable redirect is disabled. Likewise,
+ * SR-IOV functions that support internal peer traffic must implement ACS.
+ * Use each VF's own capability, not its PF's.
+ */
+static bool pci_acs_p2pdma_no_internal_route(struct pci_dev *pdev, u16 flag)
+{
+	if (pci_dev_specific_acs_enabled(pdev, flag) > 0)
+		return true;
+
+	if (pdev->acs_cap)
+		return !(pdev->acs_capabilities & flag);
+
+	return pdev->is_physfn || pdev->is_virtfn;
+}
+
+/*
+ * Traffic redirected above the divergence has the same ingress and egress
+ * at every shared Downstream Port. ACS Upstream Forwarding must carry it
+ * toward the host instead of back down that link. Missing UF support does
+ * not establish a forwarding route, even though it satisfies an isolation
+ * query. Report unreadable controls separately from missing forwarding.
+ */
+static struct pci_dev *
+pci_acs_p2pdma_no_upstream_forwarding(struct pci_dev *common,
+				    struct pci_dev **unreadable, bool verbose)
+{
+	struct pci_dev *pdev;
+	u16 ctrl;
+
+	for (pdev = common; pdev; pdev = pci_upstream_bridge(pdev)) {
+		if (!pci_acs_p2pdma_downstream_port(pdev))
+			continue;
+
+		if (!pci_acs_p2pdma_ctrl(pdev, "upstream forwarding", &ctrl,
+					 verbose)) {
+			*unreadable = pdev;
+			return NULL;
+		}
+
+		/*
+		 * Include Root Ports here. The PCIe port type check excludes
+		 * the legacy AMD southbridge quirk, which may sleep.
+		 */
+		if (pci_dev_specific_acs_enabled(pdev, PCI_ACS_UF) > 0)
+			continue;
+
+		if (!(pdev->acs_cap && pdev->acs_capabilities & ctrl & PCI_ACS_UF))
+			return pdev;
+	}
+
+	return NULL;
+}
+
+static void pci_p2pdma_log_path(const char *name, struct pci_dev *start,
+				struct pci_dev *common)
+{
+	struct pci_dev *pdev, *upstream;
+	int hop = 0, type;
+
+	for (pdev = start; pdev; pdev = upstream, hop++) {
+		upstream = pci_upstream_bridge(pdev);
+		type = pci_is_pcie(pdev) ? pci_pcie_type(pdev) : -1;
+		pci_dbg(pdev,
+			 "P2PDMA ACS: %s path hop=%d common=%u pcie=%u type=%d class=%#08x vendor=%04x device=%04x upstream=%s\n",
+			 name, hop, pdev == common, pci_is_pcie(pdev), type,
+			 pdev->class, pdev->vendor, pdev->device,
+			 upstream ? pci_name(upstream) : "<none>");
+
+		/* Cached state only: the routing logs the ACS Control it reads. */
+		if (pdev->acs_cap)
+			pci_dbg(pdev, "P2PDMA ACS: ACS cap=%#x caps=%#06x\n",
+				 pdev->acs_cap, pdev->acs_capabilities);
+		else
+			pci_dbg(pdev, "P2PDMA ACS: ACS capability absent\n");
+	}
+}
+
+/*
+ * Report whether any port between @client and @common rejects Translated
+ * addresses. If @common is NULL, every port up to the host bridge is walked.
+ * A port whose ACS Control cannot be read counts as blocking, which withdraws
+ * only the Translated classes because an Untranslated Request is routed by the
+ * redirect controls instead.
+ */
+static bool pci_p2pdma_path_blocks_translation(struct pci_dev *client,
+					       struct pci_dev *common,
+					       bool verbose)
+{
+	struct pci_dev *pdev;
+	u16 ctrl;
+
+	/*
+	 * @common is @client itself when the provider is the client or sits
+	 * below it. The Request never travels upstream then, so no port sees
+	 * it and none can reject its Address Type.
+	 */
+	if (client == common)
+		return false;
+
+	for (pdev = pci_upstream_bridge(client); pdev && pdev != common;
+	     pdev = pci_upstream_bridge(pdev)) {
+		if (!pci_acs_p2pdma_ctrl(pdev, "path hop", &ctrl, verbose))
+			return true;
+
+		if (ctrl & PCI_ACS_TB) {
+			if (verbose)
+				pci_dbg(pdev,
+					"P2PDMA ACS: Translation Blocking rejects Translated Requests on this path\n");
+			return true;
+		}
+	}
+
+	return false;
 }
 
 static void seq_buf_print_bus_devfn(struct seq_buf *buf, struct pci_dev *pdev)
@@ -520,18 +804,256 @@ static void seq_buf_print_bus_devfn(struct seq_buf *buf, struct pci_dev *pdev)
 	seq_buf_printf(buf, "%s;", pci_name(pdev));
 }
 
+/*
+ * Sort a port that redirects into @acs_list, the ports to suggest for
+ * pci=disable_acs_redir=, or @quirk_list. That parameter only clears the ACS
+ * Control register, so it cannot undo a redirect that a device quirk reports.
+ */
+static void pci_p2pdma_list_redir(struct seq_buf *acs_list,
+				  struct seq_buf *quirk_list,
+				  struct pci_dev *pdev)
+{
+	if (pci_acs_p2pdma_quirk(pdev, PCI_ACS_RR) ||
+	    pci_acs_p2pdma_quirk(pdev, PCI_ACS_CR))
+		seq_buf_print_bus_devfn(quirk_list, pdev);
+	else
+		seq_buf_print_bus_devfn(acs_list, pdev);
+}
+
+/* Drop the final semicolon. Returns false if no port was listed. */
+static bool pci_p2pdma_end_list(struct seq_buf *list)
+{
+	if (!seq_buf_used(list))
+		return false;
+
+	if (!seq_buf_has_overflowed(list))
+		list->buffer[list->len - 1] = '\0';
+	return true;
+}
+
+static void pci_p2pdma_warn_redir(struct pci_dev *client,
+				  struct pci_dev *provider,
+				  struct seq_buf *acs_list,
+				  struct seq_buf *quirk_list)
+{
+	pci_warn(client,
+		 "ACS redirect is set between the client and provider (%s)\n",
+		 pci_name(provider));
+	if (pci_p2pdma_end_list(quirk_list))
+		pci_warn(client,
+			 "hardware redirects peer-to-peer traffic at %s, which no kernel parameter changes\n",
+			 seq_buf_str(quirk_list));
+	if (pci_p2pdma_end_list(acs_list))
+		pci_warn(client,
+			 "to disable ACS controls for this path, add the kernel parameter: pci=disable_acs_redir=%s\n",
+			 seq_buf_str(acs_list));
+}
+
+/*
+ * What the topology walk found out about one provider/client path. Producing
+ * this costs a walk and config reads, none of which depends on the TLP being
+ * routed.
+ *
+ * @req_ctrl:	ACS Control of the Requester-side divergence port. That is the
+ *		first port at which a Request can route toward the peer rather
+ *		than upstream, so it is where the Request controls apply.
+ * @cpl_ctrl:	ACS Control of the Completer-side divergence port, likewise for
+ *		the Completions travelling back.
+ * @cpl_quirk:	A device quirk reports Completion Redirect at that port.
+ * @req_upstream: The Requester has no internal route to its sibling.
+ * @cpl_upstream: The Completer has no internal route to its sibling.
+ * @tb_on_path:	A port below the divergence blocks Translated addresses.
+ *		Every route out of @client passes those, so none carries them.
+ * @tb_above_divergence: A port at or above the divergence blocks Translated
+ *		addresses. Only a Request continuing to the host bridge passes
+ *		those, so a direct route is still open to them.
+ * @no_common_bridge: The two paths share no upstream bridge, so no direct
+ *		route exists for ACS to gate.
+ * @unreadable:	First port whose ACS Control could not be read, if any.
+ * @uf_blocked:	First shared port without usable Upstream Forwarding, if any.
+ * @uf_unreadable: Shared port whose forwarding control could not be read.
+ */
+struct pci_p2pdma_acs_path {
+	u16 req_ctrl;
+	u16 cpl_ctrl;
+	bool cpl_quirk;
+	bool req_upstream;
+	bool cpl_upstream;
+	bool tb_on_path;
+	bool tb_above_divergence;
+	bool no_common_bridge;
+	struct pci_dev *unreadable;
+	struct pci_dev *uf_blocked;
+	struct pci_dev *uf_unreadable;
+};
+
+/*
+ * ACS Translation Blocking is not a routing control, so unlike the redirect
+ * controls it is not decided at the divergence alone. PCIe r7.0 sec 6.12.1.1
+ * has every Downstream Port check the Address Type of each Upstream Memory
+ * Request it receives, ahead of "any applicable ACS P2P control mechanisms".
+ * A port below the divergence cannot redirect the Request anywhere it was not
+ * already going, but it can still reject a Translated address.
+ */
+static enum pci_acs_p2pdma_state
+pci_p2pdma_request_state(const struct pci_p2pdma_acs_path *path,
+			 unsigned int tlp_flags)
+{
+	if (tlp_flags & PCI_P2PDMA_TLP_TRANSLATED && path->tb_on_path)
+		return PCI_ACS_P2PDMA_BLOCKED;
+
+	if (path->req_upstream)
+		return PCI_ACS_P2PDMA_REDIRECT;
+
+	return pci_acs_p2pdma_request(path->req_ctrl, tlp_flags);
+}
+
+/*
+ * ACS P2P Completion Redirect leaves Relaxed Ordering Completions alone. A
+ * device quirk that reports Completion Redirect does not promise that, so
+ * treat every Completion through that port as redirected.
+ */
+static enum pci_acs_p2pdma_state
+pci_p2pdma_completion_state(const struct pci_p2pdma_acs_path *path,
+			    unsigned int tlp_flags)
+{
+	if (path->cpl_quirk || path->cpl_upstream)
+		return PCI_ACS_P2PDMA_REDIRECT;
+
+	return pci_acs_p2pdma_completion(path->cpl_ctrl, tlp_flags);
+}
+
+/*
+ * Combine both directions into a mapping type. Only a path that routes the
+ * Request and the Completions it generates directly can be programmed with
+ * the peer's bus addresses.
+ */
+static enum pci_p2pdma_map_type
+pci_p2pdma_route(const struct pci_p2pdma_acs_path *path,
+		 unsigned int tlp_flags)
+{
+	enum pci_acs_p2pdma_state req;
+
+	if (path->unreadable)
+		return PCI_P2PDMA_MAP_NOT_SUPPORTED;
+
+	req = pci_p2pdma_request_state(path, tlp_flags);
+
+	/*
+	 * Translation Blocking rejects the Address Type rather than the
+	 * target, so a blocked Request stays blocked however it is addressed.
+	 * No host bridge fallback keeps a Translated address working; the
+	 * caller has to issue a different kind of Request instead.
+	 */
+	if (req == PCI_ACS_P2PDMA_BLOCKED)
+		return PCI_P2PDMA_MAP_NOT_SUPPORTED;
+
+	if (!path->no_common_bridge && req == PCI_ACS_P2PDMA_DIRECT &&
+	    pci_p2pdma_completion_state(path, tlp_flags) ==
+		    PCI_ACS_P2PDMA_DIRECT)
+		return PCI_P2PDMA_MAP_BUS_ADDR;
+
+	if (path->uf_blocked || path->uf_unreadable)
+		return PCI_P2PDMA_MAP_NOT_SUPPORTED;
+
+	/*
+	 * A Request that turns around at the divergence never reaches the
+	 * ports above it, but one that keeps climbing to the host bridge
+	 * does, so that route has to clear their Translation Blocking too.
+	 */
+	if (tlp_flags & PCI_P2PDMA_TLP_TRANSLATED && path->tb_above_divergence)
+		return PCI_P2PDMA_MAP_NOT_SUPPORTED;
+
+	return PCI_P2PDMA_MAP_THRU_HOST_BRIDGE;
+}
+
+/*
+ * Name the ports that keep this path off a direct route, so that the admin
+ * can hand them to pci=disable_acs_redir=. That parameter clears the
+ * redirect controls, which decide the default class, so that is the class
+ * this reports on.
+ */
+static void pci_p2pdma_warn_path(struct pci_dev *client,
+				 struct pci_dev *provider,
+				 const struct pci_p2pdma_acs_path *path,
+				 struct pci_dev *a_child,
+				 struct pci_dev *b_child)
+{
+	struct seq_buf acs_list, quirk_list;
+	char buf[128], quirk_buf[64];
+
+	if (path->unreadable) {
+		pci_warn(client,
+			 "ACS Control is unreadable for provider %s at %s\n",
+			 pci_name(provider), pci_name(path->unreadable));
+		return;
+	}
+
+	if (path->uf_unreadable) {
+		pci_warn(client,
+			 "ACS Control is unreadable for provider %s at %s\n",
+			 pci_name(provider), pci_name(path->uf_unreadable));
+	} else if (path->uf_blocked) {
+		pci_warn(client,
+			 "cannot forward peer-to-peer DMA for provider %s upstream at %s\n",
+			 pci_name(provider), pci_name(path->uf_blocked));
+	}
+
+	if (path->req_upstream || path->cpl_upstream) {
+		pci_warn(client,
+			 "peer-to-peer DMA with provider %s requires the host bridge; no internal route between functions\n",
+			 pci_name(provider));
+		return;
+	}
+
+	seq_buf_init(&acs_list, buf, sizeof(buf));
+	seq_buf_init(&quirk_list, quirk_buf, sizeof(quirk_buf));
+	if (pci_acs_p2pdma_completion(path->cpl_ctrl, 0) !=
+	    PCI_ACS_P2PDMA_DIRECT)
+		pci_p2pdma_list_redir(&acs_list, &quirk_list, a_child);
+	if (pci_acs_p2pdma_request(path->req_ctrl, 0) != PCI_ACS_P2PDMA_DIRECT)
+		pci_p2pdma_list_redir(&acs_list, &quirk_list, b_child);
+
+	if (seq_buf_used(&acs_list) || seq_buf_used(&quirk_list))
+		pci_p2pdma_warn_redir(client, provider, &acs_list, &quirk_list);
+}
+
+#ifdef CONFIG_X86
+/* Intel Xeon CPUs whose host bridges support p2pdma */
+static const struct x86_cpu_id p2pdma_intel_cpu_ids[] = {
+	X86_MATCH_VFM(INTEL_SKYLAKE_X, NULL),
+	X86_MATCH_VFM(INTEL_ICELAKE_X, NULL),
+	X86_MATCH_VFM(INTEL_ICELAKE_D, NULL),
+	X86_MATCH_VFM(INTEL_SAPPHIRERAPIDS_X, NULL),
+	X86_MATCH_VFM(INTEL_EMERALDRAPIDS_X, NULL),
+	X86_MATCH_VFM(INTEL_GRANITERAPIDS_X, NULL),
+	X86_MATCH_VFM(INTEL_GRANITERAPIDS_D, NULL),
+	X86_MATCH_VFM(INTEL_ATOM_CRESTMONT_X, NULL),
+	X86_MATCH_VFM(INTEL_ATOM_DARKMONT_X, NULL),
+	X86_MATCH_VFM(INTEL_DIAMONDRAPIDS_X, NULL),
+	{}
+};
+
 static bool cpu_supports_p2pdma(void)
 {
-#ifdef CONFIG_X86
 	struct cpuinfo_x86 *c = &cpu_data(0);
 
 	/* Any AMD CPU whose family ID is Zen or newer supports p2pdma */
 	if (c->x86_vendor == X86_VENDOR_AMD && c->x86 >= 0x17)
 		return true;
-#endif
+
+	/* Listed Intel Xeon CPUs support p2pdma */
+	if (x86_match_cpu(p2pdma_intel_cpu_ids))
+		return true;
 
 	return false;
 }
+#else /* !CONFIG_X86 */
+static bool cpu_supports_p2pdma(void)
+{
+	return false;
+}
+#endif /* CONFIG_X86 */
 
 static const struct pci_p2pdma_whitelist_entry {
 	unsigned short vendor;
@@ -680,14 +1202,42 @@ static unsigned long map_types_idx(struct pci_dev *client)
 }
 
 /*
+ * One cache entry holds the routing of every TLP class, four bits each,
+ * indexed by the &enum pci_p2pdma_tlp_flags combination that selects it. An
+ * absent entry reads back as PCI_P2PDMA_MAP_UNKNOWN in every class.
+ */
+static_assert(PCI_P2PDMA_MAP_THRU_HOST_BRIDGE < 16);
+
+VISIBLE_IF_KUNIT unsigned long
+pci_p2pdma_map_types_pack(const enum pci_p2pdma_map_type *type)
+{
+	unsigned long val = 0;
+	unsigned int flags;
+
+	for (flags = 0; flags < PCI_P2PDMA_TLP_CLASSES; flags++)
+		val |= (unsigned long)type[flags] << (flags * 4);
+
+	return val;
+}
+EXPORT_SYMBOL_IF_KUNIT(pci_p2pdma_map_types_pack);
+
+VISIBLE_IF_KUNIT enum pci_p2pdma_map_type
+pci_p2pdma_map_types_unpack(unsigned long val, unsigned int tlp_flags)
+{
+	return (val >> (tlp_flags * 4)) & 0xf;
+}
+EXPORT_SYMBOL_IF_KUNIT(pci_p2pdma_map_types_unpack);
+
+/*
  * Calculate the P2PDMA mapping type and distance between two PCI devices.
  *
  * If the two devices are the same PCI function, return
  * PCI_P2PDMA_MAP_BUS_ADDR and a distance of 0.
  *
- * If they are two functions of the same device, return
- * PCI_P2PDMA_MAP_BUS_ADDR and a distance of 2 (one hop up to the bridge,
- * then one hop back down to another function of the same device).
+ * If they are two functions of the same device, return a distance of 2.
+ * A bus address requires an internal route between the functions. Otherwise,
+ * Upstream Forwarding must carry the traffic through their shared ports
+ * toward a supported host bridge.
  *
  * In the case where two devices are connected to the same PCIe switch,
  * return a distance of 4. This corresponds to the following PCI tree:
@@ -704,10 +1254,21 @@ static unsigned long map_types_idx(struct pci_dev *client)
  * then to Device B. The mapping type returned depends on the ACS
  * redirection setting of the ports along the path.
  *
- * If ACS redirect is set on any port in the path, traffic between the
- * devices will go through the host bridge, so return
- * PCI_P2PDMA_MAP_THRU_HOST_BRIDGE; otherwise return
- * PCI_P2PDMA_MAP_BUS_ADDR.
+ * The client is the Requester and the provider the Completer. At the path
+ * divergence, check Request Redirect, Egress Control and Direct Translated
+ * P2P on the Requester-side port, and Completion Redirect for read
+ * Completions on the Completer-side port. Translation Blocking is checked on
+ * every port the Request passes instead, because it rejects a Request rather
+ * than routing it.
+ *
+ * Those controls apply to different TLPs, so every class named by &enum
+ * pci_p2pdma_tlp_flags is decided from the one walk and cached together;
+ * @tlp_flags selects which one is returned.
+ *
+ * If ACS redirects traffic at either divergence port, return
+ * PCI_P2PDMA_MAP_THRU_HOST_BRIDGE. If the ACS Control register cannot be
+ * read, or Translation Blocking rejects the class being asked about, return
+ * PCI_P2PDMA_MAP_NOT_SUPPORTED. Otherwise, return PCI_P2PDMA_MAP_BUS_ADDR.
  *
  * Any two devices that have a data path that goes through the host bridge
  * will consult a whitelist. If the host bridge is in the whitelist, return
@@ -715,20 +1276,29 @@ static unsigned long map_types_idx(struct pci_dev *client)
  * ports per above. If the device is not in the whitelist, return
  * PCI_P2PDMA_MAP_NOT_SUPPORTED.
  */
-static enum pci_p2pdma_map_type
+VISIBLE_IF_KUNIT enum pci_p2pdma_map_type
 calc_map_type_and_dist(struct pci_dev *provider, struct pci_dev *client,
-		int *dist, bool verbose)
+		int *dist, unsigned int tlp_flags, bool verbose)
 {
-	enum pci_p2pdma_map_type map_type = PCI_P2PDMA_MAP_THRU_HOST_BRIDGE;
+	enum pci_p2pdma_map_type map_type[PCI_P2PDMA_TLP_CLASSES];
 	struct pci_dev *a = provider, *b = client, *bb;
+	struct pci_dev *a_child = NULL, *b_child = NULL;
+	struct pci_host_bridge *provider_host, *client_host;
+	struct pci_p2pdma_acs_path path = {};
 	struct pci_p2pdma *p2pdma;
-	struct seq_buf acs_list;
-	int acs_cnt = 0;
+	bool cpu_p2pdma, host_whitelisted = false;
+	bool cache_store = false;
+	bool host_fallback = false;
+	unsigned int flags;
 	int dist_a = 0;
 	int dist_b = 0;
-	char buf[128];
+	void *old;
 
-	seq_buf_init(&acs_list, buf, sizeof(buf));
+	if (verbose)
+		pci_dbg(client,
+			"P2PDMA ACS: begin provider=%s client=%s cache-index=%#lx\n",
+			 pci_name(provider), pci_name(client),
+			 map_types_idx(client));
 
 	/*
 	 * Note, we don't need to take references to devices returned by
@@ -737,77 +1307,245 @@ calc_map_type_and_dist(struct pci_dev *provider, struct pci_dev *client,
 	 */
 	while (a) {
 		dist_b = 0;
-
-		if (pci_bridge_has_acs_redir(a)) {
-			seq_buf_print_bus_devfn(&acs_list, a);
-			acs_cnt++;
-		}
-
+		b_child = NULL;
 		bb = b;
 
 		while (bb) {
 			if (a == bb)
-				goto check_b_path_acs;
+				goto check_paths_acs;
 
+			b_child = bb;
 			bb = pci_upstream_bridge(bb);
 			dist_b++;
 		}
 
+		a_child = a;
 		a = pci_upstream_bridge(a);
 		dist_a++;
 	}
 
+	/*
+	 * The paths share no upstream bridge, so there is no direct path for
+	 * ACS to gate: PCI_P2PDMA_MAP_BUS_ADDR is not reachable here and the
+	 * request can only get to the peer through the host bridge.
+	 */
 	*dist = dist_a + dist_b;
+	if (verbose) {
+		pci_dbg(client,
+			"P2PDMA ACS: no common upstream bridge provider-distance=%d client-distance=%d total=%d\n",
+			 dist_a, dist_b, *dist);
+		pci_p2pdma_log_path("provider", provider, NULL);
+		pci_p2pdma_log_path("client", client, NULL);
+	}
+	path.no_common_bridge = true;
+	path.tb_on_path = pci_p2pdma_path_blocks_translation(client, NULL,
+							     verbose);
+	for (flags = 0; flags < PCI_P2PDMA_TLP_CLASSES; flags++)
+		map_type[flags] = pci_p2pdma_route(&path, flags);
 	goto map_through_host_bridge;
 
-check_b_path_acs:
-	bb = b;
-
-	while (bb) {
-		if (a == bb)
-			break;
-
-		if (pci_bridge_has_acs_redir(bb)) {
-			seq_buf_print_bus_devfn(&acs_list, bb);
-			acs_cnt++;
-		}
-
-		bb = pci_upstream_bridge(bb);
-	}
-
+check_paths_acs:
 	*dist = dist_a + dist_b;
-
-	if (!acs_cnt) {
-		map_type = PCI_P2PDMA_MAP_BUS_ADDR;
-		goto done;
-	}
-
 	if (verbose) {
-		/* Drop the final semicolon; the list is not empty here */
-		if (!seq_buf_has_overflowed(&acs_list))
-			acs_list.buffer[acs_list.len - 1] = '\0';
-		pci_warn(client, "ACS redirect is set between the client and provider (%s)\n",
-			 pci_name(provider));
-		pci_warn(client, "to disable ACS redirect for this path, add the kernel parameter: pci=disable_acs_redir=%s\n",
-			 seq_buf_str(&acs_list));
+		pci_dbg(client,
+			"P2PDMA ACS: common=%s provider-divergence=%s client-divergence=%s provider-distance=%d client-distance=%d total=%d\n",
+			 pci_name(a),
+			 a_child ? pci_name(a_child) : "<none>",
+			 b_child ? pci_name(b_child) : "<none>",
+			 dist_a, dist_b, *dist);
+		pci_p2pdma_log_path("provider", provider, a);
+		pci_p2pdma_log_path("client", client, a);
 	}
+
+	/*
+	 * ACS P2P routing controls apply where a TLP can route toward the peer
+	 * or upstream. Below that divergence, its only route toward the other
+	 * branch is upstream, so redirect controls do not affect the path.
+	 */
+	if (a_child && b_child) {
+		if (!pci_acs_p2pdma_ctrl(a_child, "completion", &path.cpl_ctrl,
+					 verbose))
+			path.unreadable = a_child;
+		path.cpl_quirk = pci_acs_p2pdma_quirk(a_child, PCI_ACS_CR);
+		if (!pci_acs_p2pdma_ctrl(b_child, "request", &path.req_ctrl,
+					 verbose) && !path.unreadable)
+			path.unreadable = b_child;
+		/*
+		 * Two children of one Downstream or Root Port share a link.
+		 * Use topology rather than slot numbers or the multifunction
+		 * bit, since ARI functions and VFs need not share those.
+		 */
+		if (pci_acs_p2pdma_downstream_port(a)) {
+			path.req_upstream =
+				pci_acs_p2pdma_no_internal_route(b_child, PCI_ACS_RR);
+			path.cpl_upstream =
+				pci_acs_p2pdma_no_internal_route(a_child, PCI_ACS_CR);
+		}
+		if (verbose && !path.unreadable)
+			pci_dbg(client,
+				"P2PDMA ACS: class=strict request=%s at %s completion=%s at %s\n",
+				 pci_acs_p2pdma_state_name(
+					 pci_p2pdma_request_state(&path, 0)),
+				 pci_name(b_child),
+				 pci_acs_p2pdma_state_name(
+					 pci_p2pdma_completion_state(&path, 0)),
+				 pci_name(a_child));
+	} else if (verbose) {
+		pci_dbg(client,
+			"P2PDMA ACS: peer divergence is incomplete; no ACS peer-routing controls evaluated\n");
+	}
+
+	path.tb_on_path = pci_p2pdma_path_blocks_translation(client, a,
+							     verbose);
+	if (b_child)
+		path.tb_above_divergence =
+			pci_p2pdma_path_blocks_translation(b_child, NULL,
+							   verbose);
+
+	/* Shared ports need forwarding only for classes using the host bridge. */
+	for (flags = 0; flags < PCI_P2PDMA_TLP_CLASSES; flags++) {
+		if (pci_p2pdma_route(&path, flags) !=
+		    PCI_P2PDMA_MAP_THRU_HOST_BRIDGE)
+			continue;
+		path.uf_blocked = pci_acs_p2pdma_no_upstream_forwarding(a,
+						&path.uf_unreadable, verbose);
+		break;
+	}
+
+	/*
+	 * The walk and the config reads above serve every class; only the
+	 * decision below depends on the kind of TLP being routed.
+	 */
+	for (flags = 0; flags < PCI_P2PDMA_TLP_CLASSES; flags++) {
+		map_type[flags] = pci_p2pdma_route(&path, flags);
+		if (map_type[flags] == PCI_P2PDMA_MAP_THRU_HOST_BRIDGE)
+			host_fallback = true;
+	}
+
+	if (verbose && map_type[0] != PCI_P2PDMA_MAP_BUS_ADDR)
+		pci_p2pdma_warn_path(client, provider, &path, a_child,
+				     b_child);
+
+	/*
+	 * Nothing needs the host bridge: the classes that did not get a direct
+	 * route have no fallback that would use it.
+	 */
+	if (!host_fallback)
+		goto done;
 
 map_through_host_bridge:
-	if (!cpu_supports_p2pdma() &&
-	    !host_bridge_whitelist(provider, client, verbose)) {
+	cpu_p2pdma = cpu_supports_p2pdma();
+	if (!cpu_p2pdma)
+		host_whitelisted = host_bridge_whitelist(provider, client,
+							  verbose);
+
+	if (verbose) {
+		provider_host = pci_find_host_bridge(provider->bus);
+		client_host = pci_find_host_bridge(client->bus);
+		pci_dbg(client,
+			"P2PDMA ACS: host fallback cpu-support=%u whitelist=%s provider-host=%s client-host=%s same-host=%u\n",
+			 cpu_p2pdma,
+			 cpu_p2pdma ? "not-consulted" :
+					(host_whitelisted ? "yes" : "no"),
+			 provider_host ? dev_name(&provider_host->dev) : "<none>",
+			 client_host ? dev_name(&client_host->dev) : "<none>",
+			 provider_host && provider_host == client_host);
+	}
+
+	if (!cpu_p2pdma && !host_whitelisted) {
 		if (verbose)
 			pci_warn(client, "cannot be used for peer-to-peer DMA as the client and provider (%s) do not share an upstream bridge or whitelisted host bridge\n",
 				 pci_name(provider));
-		map_type = PCI_P2PDMA_MAP_NOT_SUPPORTED;
+		for (flags = 0; flags < PCI_P2PDMA_TLP_CLASSES; flags++)
+			if (map_type[flags] == PCI_P2PDMA_MAP_THRU_HOST_BRIDGE)
+				map_type[flags] = PCI_P2PDMA_MAP_NOT_SUPPORTED;
 	}
 done:
 	rcu_read_lock();
 	p2pdma = rcu_dereference(provider->p2pdma);
-	if (p2pdma)
-		xa_store(&p2pdma->map_types, map_types_idx(client),
-			 xa_mk_value(map_type), GFP_ATOMIC);
+	if (p2pdma) {
+		old = xa_store(&p2pdma->map_types, map_types_idx(client),
+			       xa_mk_value(pci_p2pdma_map_types_pack(map_type)),
+			       GFP_ATOMIC);
+		cache_store = !xa_is_err(old);
+	}
 	rcu_read_unlock();
-	return map_type;
+	if (verbose) {
+		pci_dbg(client,
+			"P2PDMA ACS: final provider=%s result=%s(%d) tlp-flags=%#x distance=%d unreadable=%s cache-store=%u index=%#lx\n",
+			 pci_name(provider),
+			 pci_p2pdma_map_type_name(map_type[tlp_flags]),
+			 map_type[tlp_flags], tlp_flags, *dist,
+			 path.unreadable ? pci_name(path.unreadable) : "<none>",
+			 cache_store, map_types_idx(client));
+		pci_dbg(client,
+			"P2PDMA ACS: classes strict=%s relaxed=%s translated=%s translated+relaxed=%s\n",
+			 pci_p2pdma_map_type_name(map_type[0]),
+			 pci_p2pdma_map_type_name(
+				 map_type[PCI_P2PDMA_TLP_RELAXED_CPL]),
+			 pci_p2pdma_map_type_name(
+				 map_type[PCI_P2PDMA_TLP_TRANSLATED]),
+			 pci_p2pdma_map_type_name(
+				 map_type[PCI_P2PDMA_TLP_TRANSLATED |
+					  PCI_P2PDMA_TLP_RELAXED_CPL]));
+	}
+	return map_type[tlp_flags];
+}
+EXPORT_SYMBOL_IF_KUNIT(calc_map_type_and_dist);
+
+VISIBLE_IF_KUNIT unsigned int
+pci_p2pdma_client_tlp_flags(struct pci_dev *client, unsigned int tlp_flags)
+{
+	if (client->ats_enabled)
+		return tlp_flags | PCI_P2PDMA_TLP_TRANSLATED;
+
+	return tlp_flags & ~PCI_P2PDMA_TLP_TRANSLATED;
+}
+EXPORT_SYMBOL_IF_KUNIT(pci_p2pdma_client_tlp_flags);
+
+/*
+ * A client that translates every address it is handed cannot be handed a bus
+ * address, which it would translate as though it were an IOVA. Its Translated
+ * Requests may still route directly, but a Request it issues without a
+ * translation carries the IOVA to the host bridge, so that route has to work
+ * as well.
+ *
+ * Take the Address Type from @tlp_flags rather than reading the ATS Enable
+ * bit again, so the policy and the class it applies to always agree.
+ */
+VISIBLE_IF_KUNIT enum pci_p2pdma_map_type
+pci_p2pdma_client_map_type(struct pci_dev *provider, struct pci_dev *client,
+			   bool per_mapping, unsigned int tlp_flags,
+			   enum pci_p2pdma_map_type type)
+{
+	if (per_mapping || !(tlp_flags & PCI_P2PDMA_TLP_TRANSLATED) ||
+	    type != PCI_P2PDMA_MAP_BUS_ADDR)
+		return type;
+
+	pci_dbg(client,
+		"P2PDMA ACS: provider=%s bus address withheld; ATS is enabled for the whole client\n",
+		 pci_name(provider));
+
+	if (cpu_supports_p2pdma() ||
+	    host_bridge_whitelist(provider, client, false))
+		return PCI_P2PDMA_MAP_THRU_HOST_BRIDGE;
+
+	return PCI_P2PDMA_MAP_NOT_SUPPORTED;
+}
+EXPORT_SYMBOL_IF_KUNIT(pci_p2pdma_client_map_type);
+
+/* Whether the driver of @client called pcim_p2pdma_set_ats_per_mapping(). */
+static bool pci_p2pdma_client_per_mapping(struct pci_dev *client)
+{
+	struct pci_p2pdma *p2pdma;
+	bool per_mapping;
+
+	rcu_read_lock();
+	p2pdma = rcu_dereference(client->p2pdma);
+	per_mapping = p2pdma && p2pdma->ats_per_mapping;
+	rcu_read_unlock();
+
+	return per_mapping;
 }
 
 /**
@@ -825,15 +1563,19 @@ done:
  *
  * "compatible" means the provider and the clients are either all behind
  * the same PCI root port or the host bridges connected to each of the devices
- * are listed in the 'pci_p2pdma_whitelist'.
+ * are listed in the 'pci_p2pdma_whitelist'. Each client is judged the way
+ * pci_p2pdma_map_type() maps it, so one with ATS enabled for the whole device
+ * also needs a host bridge that supports peer-to-peer DMA.
  */
 int pci_p2pdma_distance_many(struct pci_dev *provider, struct device **clients,
 			     int num_clients, bool verbose)
 {
-	enum pci_p2pdma_map_type map;
+	enum pci_p2pdma_map_type map, type;
 	bool not_supported = false;
 	struct pci_dev *pci_client;
+	unsigned int tlp_flags;
 	int total_dist = 0;
+	bool per_mapping;
 	int i, distance;
 
 	if (num_clients == 0)
@@ -848,8 +1590,18 @@ int pci_p2pdma_distance_many(struct pci_dev *provider, struct device **clients,
 			return -1;
 		}
 
-		map = calc_map_type_and_dist(provider, pci_client, &distance,
-					     verbose);
+		per_mapping = pci_p2pdma_client_per_mapping(pci_client);
+		tlp_flags = per_mapping ? 0 :
+			    pci_p2pdma_client_tlp_flags(pci_client, 0);
+		type = calc_map_type_and_dist(provider, pci_client, &distance,
+					      tlp_flags, verbose);
+		map = pci_p2pdma_client_map_type(provider, pci_client,
+						 per_mapping, tlp_flags, type);
+		if (verbose && map != type &&
+		    map == PCI_P2PDMA_MAP_NOT_SUPPORTED)
+			pci_warn(pci_client,
+				 "cannot be used for peer-to-peer DMA with %s: ATS is enabled for the whole device and the host bridge is not whitelisted\n",
+				 pci_name(provider));
 
 		pci_dev_put(pci_client);
 
@@ -1114,44 +1866,121 @@ void pci_p2pmem_publish(struct pci_dev *pdev, bool publish)
 EXPORT_SYMBOL_GPL(pci_p2pmem_publish);
 
 /**
- * pci_p2pdma_map_type - Determine the mapping type for P2PDMA transfers
+ * pcim_p2pdma_set_ats_per_mapping - Declare per-mapping ATS for a client
+ * @pdev: PCI device that initiates peer-to-peer DMA
+ *
+ * Declare that @pdev issues Translated Requests only for the DMA mappings its
+ * driver sets up to use ATS, rather than for any address once ATS is enabled.
+ * P2PDMA then routes this client's Requests with the Address Type each query
+ * asks about, rather than the one its ATS Enable bit implies.
+ *
+ * Call it once pcim_p2pdma_init() has succeeded. Without P2PDMA state the
+ * declaration is dropped and the ATS Enable bit keeps deciding.
+ */
+void pcim_p2pdma_set_ats_per_mapping(struct pci_dev *pdev)
+{
+	struct pci_p2pdma *p2p;
+
+	p2p = rcu_dereference_protected(pdev->p2pdma, 1);
+	if (!p2p)
+		/*
+		 * ats_per_mapping is a performance optimization,
+		 * if pcim_p2pdma_init() didn't set pdev->p2pdma pointer
+		 * for some reason, let's simply use ATS global settings.
+		 */
+		return;
+
+	p2p->ats_per_mapping = true;
+}
+EXPORT_SYMBOL_GPL(pcim_p2pdma_set_ats_per_mapping);
+
+/**
+ * pci_p2pdma_map_type_tlp - Determine the mapping type for P2PDMA transfers
  * @provider: P2PDMA provider structure
- * @dev: Target device for the transfer
+ * @dev: Client device that initiates the transfer
+ * @tlp_flags: &enum pci_p2pdma_tlp_flags describing the TLPs @dev will issue
  *
  * Determines how peer-to-peer DMA transfers should be mapped between
- * the provider and the target device. The mapping type indicates whether
+ * the provider and the client device. The mapping type indicates whether
  * the transfer can be done directly through PCI switches or must go
  * through the host bridge.
+ *
+ * ACS routes a peer-to-peer transaction by the attributes its TLPs carry, so
+ * the answer depends on @tlp_flags. A caller that passes flags its traffic
+ * does not match gets a mapping the fabric will not deliver.
+ *
+ * Only a client whose driver called pcim_p2pdma_set_ats_per_mapping() takes
+ * the Address Type from @tlp_flags. For any other client its ATS Enable bit
+ * decides, and a client that translates every address it is handed never gets
+ * %PCI_P2PDMA_MAP_BUS_ADDR.
  */
-enum pci_p2pdma_map_type pci_p2pdma_map_type(struct p2pdma_provider *provider,
-					     struct device *dev)
+static enum pci_p2pdma_map_type
+pci_p2pdma_map_type_tlp(struct p2pdma_provider *provider, struct device *dev,
+			unsigned int tlp_flags)
 {
-	enum pci_p2pdma_map_type type = PCI_P2PDMA_MAP_NOT_SUPPORTED;
 	struct pci_dev *pdev = to_pci_dev(provider->owner);
-	struct pci_dev *client;
+	unsigned long cache_index, cached = 0;
+	enum pci_p2pdma_map_type type;
 	struct pci_p2pdma *p2pdma;
+	struct pci_dev *client;
+	bool provider_state;
+	bool per_mapping;
 	int dist;
 
-	if (!pdev->p2pdma)
+	if (!pdev->p2pdma) {
+		pci_dbg(pdev,
+			"P2PDMA ACS: map lookup rejected; provider state is absent\n");
 		return PCI_P2PDMA_MAP_NOT_SUPPORTED;
+	}
 
-	if (!dev_is_pci(dev))
+	if (!dev_is_pci(dev)) {
+		dev_dbg(dev,
+			"P2PDMA ACS: provider=%s map lookup rejected; client is not PCI\n",
+			 pci_name(pdev));
 		return PCI_P2PDMA_MAP_NOT_SUPPORTED;
+	}
 
 	client = to_pci_dev(dev);
+	cache_index = map_types_idx(client);
+	per_mapping = pci_p2pdma_client_per_mapping(client);
+	if (!per_mapping)
+		tlp_flags = pci_p2pdma_client_tlp_flags(client, tlp_flags);
 
 	rcu_read_lock();
 	p2pdma = rcu_dereference(pdev->p2pdma);
 
 	if (p2pdma)
-		type = xa_to_value(xa_load(&p2pdma->map_types,
-					   map_types_idx(client)));
+		cached = xa_to_value(xa_load(&p2pdma->map_types,
+					     cache_index));
+	provider_state = !!p2pdma;
 	rcu_read_unlock();
+	type = pci_p2pdma_map_types_unpack(cached, tlp_flags);
+	pci_dbg(client,
+		 "P2PDMA ACS: map lookup provider=%s index=%#lx tlp-flags=%#x cached=%s(%d) provider-state=%u\n",
+		 pci_name(pdev), cache_index, tlp_flags,
+		 pci_p2pdma_map_type_name(type), type, provider_state);
 
 	if (type == PCI_P2PDMA_MAP_UNKNOWN)
-		return calc_map_type_and_dist(pdev, client, &dist, true);
+		type = calc_map_type_and_dist(pdev, client, &dist, tlp_flags,
+					      true);
 
-	return type;
+	return pci_p2pdma_client_map_type(pdev, client, per_mapping, tlp_flags,
+					  type);
+}
+
+/**
+ * pci_p2pdma_map_type - Determine the mapping type for P2PDMA transfers
+ * @provider: P2PDMA provider structure
+ * @dev: Client device that initiates the transfer
+ *
+ * Same as pci_p2pdma_map_type_tlp() for a client issuing strictly ordered
+ * Requests. Their Address Type is Untranslated unless the client enables ATS
+ * for the whole device.
+ */
+enum pci_p2pdma_map_type pci_p2pdma_map_type(struct p2pdma_provider *provider,
+					     struct device *dev)
+{
+	return pci_p2pdma_map_type_tlp(provider, dev, 0);
 }
 
 void __pci_p2pdma_update_state(struct pci_p2pdma_map_state *state,

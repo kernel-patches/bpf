@@ -26,8 +26,6 @@ struct mode_parameter {
 
 	/* Refresh timing. */
 	unsigned long pixel_clock;
-	unsigned long horizontal_frequency;
-	unsigned long vertical_frequency;
 
 	/* Clock Phase. This clock phase only applies to Panel. */
 	enum spolarity clock_phase_polarity;

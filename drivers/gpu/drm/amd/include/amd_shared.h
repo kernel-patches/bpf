@@ -446,6 +446,9 @@ enum amd_dpm_forced_level;
  * @get_clockgating_state: get current clockgating status
  * @dump_ip_state: dump the IP state of the ASIC during a gpu hang
  * @print_ip_state: print the IP state in devcoredump for each IP of the ASIC
+ * @pre_px_switch: IP-specific prep before a compute partition switch - Optional
+ * @post_px_switch: IP-specific programming after a compute partition switch,
+ *                  or after a failed switch - Optional
  *
  * These hooks provide an interface for controlling the operational state
  * of IP blocks. After acquiring a list of IP blocks for the GPU in use,
@@ -476,6 +479,8 @@ struct amd_ip_funcs {
 	void (*get_clockgating_state)(struct amdgpu_ip_block *ip_block, u64 *flags);
 	void (*dump_ip_state)(struct amdgpu_ip_block *ip_block);
 	void (*print_ip_state)(struct amdgpu_ip_block *ip_block, struct drm_printer *p);
+	int (*pre_px_switch)(struct amdgpu_ip_block *ip_block);
+	int (*post_px_switch)(struct amdgpu_ip_block *ip_block);
 };
 
 

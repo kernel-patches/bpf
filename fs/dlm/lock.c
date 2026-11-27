@@ -826,8 +826,12 @@ static int find_rsb_dir(struct dlm_ls *ls, const void *name, int len,
 
 	if (from_local && (r->res_master_nodeid != our_nodeid)) {
 		/* Because we have held no locks on this rsb,
-		   res_master_nodeid could have become stale. */
-		rsb_set_flag(r, RSB_MASTER_UNCERTAIN);
+		 * res_master_nodeid could have become stale.  If no master
+		 * was ever set, there is nothing to confirm and set_master()
+		 * must resolve it as for a new rsb.
+		 */
+		if (r->res_master_nodeid)
+			rsb_set_flag(r, RSB_MASTER_UNCERTAIN);
 		r->res_first_lkid = 0;
 	}
 
@@ -1488,10 +1492,38 @@ void free_inactive_rsb(struct dlm_rsb *r)
 /* Attaching/detaching lkb's from rsb's is for rsb reference counting.
    The rsb must exist as long as any lkb's for it do. */
 
-static void attach_lkb(struct dlm_rsb *r, struct dlm_lkb *lkb)
+/*
+ * An lkb is only put into ls_lkbxa here, once it has an rsb, so
+ * find_lkb() never returns an lkb without one.  The lkb_id is assigned
+ * here too; dlm_debug_add_lkb() presets the one it wants.
+ */
+static int attach_lkb(struct dlm_rsb *r, struct dlm_lkb *lkb)
 {
+	struct dlm_ls *ls = r->res_ls;
+	struct xa_limit limit = XA_LIMIT(1, U32_MAX);
+	int rv;
+
+	if (lkb->lkb_id)
+		limit = XA_LIMIT(lkb->lkb_id, lkb->lkb_id);
+
 	hold_rsb(r);
 	lkb->lkb_resource = r;
+
+	write_lock_bh(&ls->ls_lkbxa_lock);
+	rv = xa_alloc(&ls->ls_lkbxa, &lkb->lkb_id, lkb, limit, GFP_ATOMIC);
+	write_unlock_bh(&ls->ls_lkbxa_lock);
+
+	if (rv < 0) {
+		log_error(ls, "%s xa error %d", __func__, rv);
+		/* the caller still holds its own rsb reference */
+		lkb->lkb_resource = NULL;
+		put_rsb(r);
+		/* don't let __put_lkb() erase another lkb's id */
+		lkb->lkb_id = 0;
+		return rv;
+	}
+
+	return 0;
 }
 
 static void detach_lkb(struct dlm_lkb *lkb)
@@ -1502,15 +1534,9 @@ static void detach_lkb(struct dlm_lkb *lkb)
 	}
 }
 
-static int _create_lkb(struct dlm_ls *ls, struct dlm_lkb **lkb_ret,
-		       unsigned long start, unsigned long end)
+static int create_lkb(struct dlm_ls *ls, struct dlm_lkb **lkb_ret)
 {
-	struct xa_limit limit;
 	struct dlm_lkb *lkb;
-	int rv;
-
-	limit.max = end;
-	limit.min = start;
 
 	lkb = dlm_allocate_lkb();
 	if (!lkb)
@@ -1525,23 +1551,8 @@ static int _create_lkb(struct dlm_ls *ls, struct dlm_lkb **lkb_ret,
 	INIT_LIST_HEAD(&lkb->lkb_ownqueue);
 	INIT_LIST_HEAD(&lkb->lkb_rsb_lookup);
 
-	write_lock_bh(&ls->ls_lkbxa_lock);
-	rv = xa_alloc(&ls->ls_lkbxa, &lkb->lkb_id, lkb, limit, GFP_ATOMIC);
-	write_unlock_bh(&ls->ls_lkbxa_lock);
-
-	if (rv < 0) {
-		log_error(ls, "create_lkb xa error %d", rv);
-		dlm_free_lkb(lkb);
-		return rv;
-	}
-
 	*lkb_ret = lkb;
 	return 0;
-}
-
-static int create_lkb(struct dlm_ls *ls, struct dlm_lkb **lkb_ret)
-{
-	return _create_lkb(ls, lkb_ret, 1, ULONG_MAX);
 }
 
 static int find_lkb(struct dlm_ls *ls, uint32_t lkid, struct dlm_lkb **lkb_ret)
@@ -3294,7 +3305,12 @@ static int request_lock(struct dlm_ls *ls, struct dlm_lkb *lkb,
 
 	lock_rsb(r);
 
-	attach_lkb(r, lkb);
+	error = attach_lkb(r, lkb);
+	if (error) {
+		unlock_rsb(r);
+		put_rsb(r);
+		return error;
+	}
 	lkb->lkb_lksb->sb_lkid = lkb->lkb_id;
 
 	error = _request_lock(r, lkb);
@@ -4038,7 +4054,14 @@ static int receive_request(struct dlm_ls *ls, const struct dlm_message *ms)
 		}
 	}
 
-	attach_lkb(r, lkb);
+	error = attach_lkb(r, lkb);
+	if (error) {
+		unlock_rsb(r);
+		put_rsb(r);
+		__put_lkb(ls, lkb);
+		goto fail;
+	}
+
 	error = do_request(r, lkb);
 	send_request_reply(r, lkb, error);
 	do_request_effects(r, lkb, error);
@@ -5642,7 +5665,12 @@ int dlm_recover_master_copy(struct dlm_ls *ls, const struct dlm_rcom *rc,
 		goto out_unlock;
 	}
 
-	attach_lkb(r, lkb);
+	error = attach_lkb(r, lkb);
+	if (error) {
+		__put_lkb(ls, lkb);
+		goto out_unlock;
+	}
+
 	add_lkb(r, lkb, rl->rl_status);
 	ls->ls_recover_locks_in++;
 
@@ -6300,11 +6328,13 @@ int dlm_debug_add_lkb(struct dlm_ls *ls, uint32_t lkb_id, char *name, int len,
 	if (!lksb)
 		return -ENOMEM;
 
-	error = _create_lkb(ls, &lkb, lkb_id, lkb_id + 1);
+	error = create_lkb(ls, &lkb);
 	if (error) {
 		kfree(lksb);
 		return error;
 	}
+
+	lkb->lkb_id = lkb_id;
 
 	dlm_set_dflags_val(lkb, lkb_dflags);
 	lkb->lkb_nodeid = lkb_nodeid;
@@ -6321,7 +6351,15 @@ int dlm_debug_add_lkb(struct dlm_ls *ls, uint32_t lkb_id, char *name, int len,
 	}
 
 	lock_rsb(r);
-	attach_lkb(r, lkb);
+	error = attach_lkb(r, lkb);
+	if (error) {
+		unlock_rsb(r);
+		put_rsb(r);
+		kfree(lksb);
+		__put_lkb(ls, lkb);
+		return error;
+	}
+
 	add_lkb(r, lkb, lkb_status);
 	unlock_rsb(r);
 	put_rsb(r);

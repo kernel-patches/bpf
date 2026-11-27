@@ -238,8 +238,8 @@ bool pcl_alloc_write(struct svc_rdma_recv_ctxt *rctxt,
  * before comparing against @inline_len or the Call chunk length.
  *
  * Rejects frames where a Read chunk's inline-body offset exceeds
- * the bound, where adjacent Read chunks overlap, or where any
- * single chunk length exceeds the page budget.
+ * the bound, where adjacent Read chunks overlap, or where Read bytes,
+ * plus inline bytes when they share the page array, exceed its budget.
  *
  * Return values:
  *       %true: Read chunk positions and lengths are valid
@@ -269,8 +269,9 @@ bool pcl_check_read_chunk_positions(struct svc_rdma_recv_ctxt *rctxt,
 	pcl_for_each_chunk(chunk, &rctxt->rc_read_pcl) {
 		if (chunk->ch_position - total_read > bound)
 			return false;
-		if (chunk->ch_length > max_len)
+		if (chunk->ch_length > max_len - total_read)
 			return false;
+		total_read += chunk->ch_length;
 
 		next = pcl_next_chunk(&rctxt->rc_read_pcl, chunk);
 		if (!next)
@@ -278,8 +279,11 @@ bool pcl_check_read_chunk_positions(struct svc_rdma_recv_ctxt *rctxt,
 
 		if (chunk->ch_position + chunk->ch_length > next->ch_position)
 			return false;
-		total_read += chunk->ch_length;
 	}
+	if (pcl_is_empty(&rctxt->rc_call_pcl) &&
+	    rctxt->rc_read_pcl.cl_count > 1 &&
+	    inline_len > max_len - total_read)
+		return false;
 
 	return true;
 }

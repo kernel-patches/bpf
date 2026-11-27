@@ -68,12 +68,15 @@ struct webusb_url_descriptor {
 } __packed;
 
 /*
- * Buffer size to hold the longest URL that can be in an URL descriptor
+ * Length of the longest URL that can be in an URL descriptor
  *
  * The descriptor can be U8_MAX  bytes long.
  * WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH bytes are used for a header.
  * Since the longest prefix that might be stripped is "https://", we may accommodate an additional
  * 8 bytes.
+ *
+ * Note that this is a string length and not a buffer size: a buffer holding such
+ * a URL needs one more byte for the NUL terminator.
  */
 #define WEBUSB_URL_RAW_MAX_LENGTH (U8_MAX - WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH + 8)
 

@@ -101,7 +101,7 @@ static void dcn6_mp_calculate_pixel_delivery_times(struct dml2_core_calculate_mp
 	//Display Pipeline Delivery Time in Prefetch, Groups
 	get_calcs(ctx)->calculate_pixel_delivery_times(
 			display_cfg,
-			inputs->NoOfDPP,
+			inputs->effective_number_of_dpp,
 			display_cfg->num_planes,
 			inputs->VRatioPrefetchY,
 			inputs->VRatioPrefetchC,
@@ -110,7 +110,9 @@ static void dcn6_mp_calculate_pixel_delivery_times(struct dml2_core_calculate_mp
 			inputs->PSCL_THROUGHPUT,
 			inputs->PSCL_THROUGHPUT_CHROMA,
 			inputs->Dppclk,
-			inputs->DCFCLKDeepSleep,
+		// It is unnecessary and circular to use dcfclk_deepsleep here because dcfclk_deepsleep is derived from the line transferr time
+		// dcfclk is a better value here
+			inputs->Dcfclk,
 			inputs->BytePerPixelY,
 			inputs->BytePerPixelC,
 			inputs->req_per_swath_ub_l,
@@ -401,7 +403,7 @@ static void dcn6_mp_calculate_stutter_efficiency(struct dml2_core_calculate_mp_c
 	p->Z8StutterEnterPlusExitWatermark = inputs->Watermark.Z8StutterEnterPlusExitWatermark;
 	p->ProgressiveToInterlaceUnitInOPP = ip->ptoi_supported;
 	p->MinTTUVBlank = inputs->MinTTUVBlank;
-	p->DPPPerSurface = inputs->NoOfDPP;
+	p->DPPPerSurface = inputs->effective_number_of_dpp;
 	p->DETBufferSizeY = inputs->DETBufferSizeY;
 	p->BytePerPixelY = inputs->BytePerPixelY;
 	p->BytePerPixelDETY = inputs->BytePerPixelInDETY;
@@ -517,26 +519,10 @@ static void dcn6_mp_calculate_dcfclk_deep_sleep_hysteresis(struct dml2_core_calc
 		struct dml2_core_internal_mode_program *states)
 {
 	const struct dml2_core_ip_params *ip = ctx->ip;
-	const struct dml2_utm_soc_bb *soc_bb = ctx->soc_bb;
-	struct dml2_core_internal_mode_program *inputs = states;
 	struct dml2_core_internal_mode_program *outputs = states;
-	const struct dml2_sop_table *sop_table = &soc_bb->sop_table;
-	struct dml2_soc_operating_point max_sop;
-	double min_return_latency_in_DCFCLK_cycles = 0;
-	const long min_return_uclk_cycles = 83;
-	const long min_return_fclk_cycles = 75;
 
-	sop_table->get_max_sop(sop_table, &max_sop);
-	min_return_latency_in_DCFCLK_cycles =
-			(min_return_uclk_cycles / (max_sop.uclk_khz / 1000.0)
-					+ min_return_fclk_cycles / (max_sop.fclk_khz / 1000.0))
-			* inputs->Dcfclk;
-
-	outputs->min_return_latency_in_dcfclk = (unsigned int)min_return_latency_in_DCFCLK_cycles;
-	outputs->dcfclk_deep_sleep_hysteresis = (unsigned int)math_max2(
-			32,
-			(double)ip->pixel_chunk_size_kbytes * 1024 * 3 / 4 / 64
-					- min_return_latency_in_DCFCLK_cycles);
+	outputs->min_return_latency_in_dcfclk = 0;
+	outputs->dcfclk_deep_sleep_hysteresis = (unsigned int)math_max2(32, (double)ip->pixel_chunk_size_kbytes * 1024 * 3 / 4 / 64);
 }
 
 void dcn6_calculate_mode_programming(struct dml2_core_calculate_mp_context *ctx,
@@ -555,8 +541,6 @@ void dcn6_calculate_mode_programming(struct dml2_core_calculate_mp_context *ctx,
 	dcn6_mp_calculate_meta_and_pte_times(ctx, states);
 
 	dcn6_mp_calculate_vm_group_and_request_times(ctx, states);
-
-	dcn6_mp_calculate_vstartup_adjustment(ctx, states);
 
 	dcn6_mp_calculate_max_bandwidth_used(ctx, states);
 
@@ -700,8 +684,8 @@ static void dcn6_populate_fams2_programming(const struct dml2_core_internal_disp
 	base_programming->config.bits.is_drr = stream_descriptor->timing.drr_config.enabled;
 
 	/* from meta */
-	base_programming->otg_vline_time_ns =
-		(unsigned int)(stream_pstate_meta->otg_vline_time_us * 1000.0);
+	base_programming->otg_vline_time_ps =
+		(unsigned int)(stream_pstate_meta->otg_vline_time_us * 1000000.0);
 	base_programming->scheduling_delay_otg_vlines = (uint8_t)stream_pstate_meta->scheduling_delay_otg_vlines;
 	base_programming->contention_delay_otg_vlines = (uint8_t)stream_pstate_meta->contention_delay_otg_vlines;
 	base_programming->vline_int_ack_delay_otg_vlines = (uint8_t)stream_pstate_meta->vertical_interrupt_ack_delay_otg_vlines;
@@ -721,6 +705,7 @@ static void dcn6_populate_fams2_programming(const struct dml2_core_internal_disp
 			break;
 		}
 	}
+	base_programming->config.bits.imm_restore_drr = true; // enable immediate restore unconditionally for DCN6
 
 	switch (pstate_method) {
 	case dml2_pstate_method_vactive:
@@ -1094,6 +1079,7 @@ void dcn6_mp_initialize_from_solution(struct dml2_core_internal_mode_program *ou
 		outputs->immediate_flip_required = outputs->immediate_flip_required
 				|| plane->immediate_flip;
 		outputs->NoOfDPP[k] = plane_support_info->dpps_used;
+		outputs->effective_number_of_dpp[k] = outputs->NoOfDPP[k];
 		outputs->dsc_enable[k] = stream_support_info->dsc_enable;
 		outputs->num_dsc_slices[k] = stream_support_info->num_dsc_slices;
 	}
@@ -1391,6 +1377,7 @@ enum dml2_status dml2_core_dcn6_funcs_populate_programming(struct dml2_core_inst
 	dcn6_mp_initialize_from_solution(&mode_lib->mp, solution, core->utm_soc_bb);
 	dcn6_mp_build_calculate_mp_context(calc_mp_ctx, core, solution);
 	dcn6_calculate_mode_programming(calc_mp_ctx, &mode_lib->mp);
+	dcn6_mp_calculate_vstartup_adjustment(calc_mp_ctx, &mode_lib->mp);
 	dcn6_populate_mode_programming(calc_mp_ctx, programming, &mode_lib->scratch, mode_lib, solution, core->utm_soc_bb);
 
 	DML_LOG_DEBUG("%s exit\n", __func__);

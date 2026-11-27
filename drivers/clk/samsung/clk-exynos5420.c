@@ -1419,6 +1419,7 @@ static const struct samsung_pll_rate_table exynos5420_pll2550x_24mhz_tbl[] __ini
 	PLL_35XX_RATE(24 * MHZ, 400000000,  200, 3, 2),
 	PLL_35XX_RATE(24 * MHZ, 300000000,  200, 2, 3),
 	PLL_35XX_RATE(24 * MHZ, 200000000,  200, 3, 3),
+	{ /* sentinel */ }
 };
 
 static const struct samsung_pll_rate_table exynos5422_bpll_rate_table[] = {
@@ -1430,6 +1431,7 @@ static const struct samsung_pll_rate_table exynos5422_bpll_rate_table[] = {
 	PLL_35XX_RATE(24 * MHZ, 275000000, 275, 3, 3),
 	PLL_35XX_RATE(24 * MHZ, 206000000, 206, 3, 3),
 	PLL_35XX_RATE(24 * MHZ, 165000000, 110, 2, 3),
+	{ /* sentinel */ }
 };
 
 static const struct samsung_pll_rate_table exynos5420_epll_24mhz_tbl[] = {
@@ -1448,6 +1450,7 @@ static const struct samsung_pll_rate_table exynos5420_epll_24mhz_tbl[] = {
 	PLL_36XX_RATE(24 * MHZ,  49152000U, 197, 3, 5, -25690),
 	PLL_36XX_RATE(24 * MHZ,  45158401U, 90, 3, 4, 20762),
 	PLL_36XX_RATE(24 * MHZ,  32768001U, 131, 3, 5, 4719),
+	{ /* sentinel */ }
 };
 
 static const struct samsung_pll_rate_table exynos5420_vpll_24mhz_tbl[] = {
@@ -1459,6 +1462,7 @@ static const struct samsung_pll_rate_table exynos5420_vpll_24mhz_tbl[] = {
 	PLL_35XX_RATE(24 * MHZ, 266000000U,  266, 3, 3),
 	PLL_35XX_RATE(24 * MHZ, 177000000U,  118, 2, 3),
 	PLL_35XX_RATE(24 * MHZ, 100000000U,  200, 3, 4),
+	{ /* sentinel */ }
 };
 
 static struct samsung_pll_clock exynos5x_plls[nr_plls] __initdata = {

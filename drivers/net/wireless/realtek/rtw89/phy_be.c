@@ -74,6 +74,8 @@ static const struct rtw89_ccx_regs rtw89_ccx_regs_be = {
 	.nhm_en_mask = B_NHM_EN_MSK,
 	.nhm_method = R_NHM_TH9,
 	.nhm_pwr_method_msk = B_NHM_PWDB_METHOD_MSK,
+	.nhm_filter = 0,
+	.nhm_filter_mask = 0,
 	.edcca_clm_rdy = R_CLM_EDCCA_RDY_V1,
 	.edcca_clm_rdy_mask = B_CLM_EDCCA_RDY,
 	.edcca_clm_cnt = R_CLM_EDCCA_RESULT_V1,
@@ -137,6 +139,17 @@ static const struct rtw89_ccx_regs rtw89_ccx_regs_be_v1 = {
 	.ifs_total_addr = R_IFS_TOTAL_BE4,
 	.ifs_cnt_done_mask = B_IFS_CNT_DONE_BE4,
 	.ifs_total_mask = B_IFS_TOTAL_BE4,
+	.nhm = R_NHM_BE4,
+	.nhm_ready = B_NHM_READY_BE_MSK,
+	.nhm_config = R_NHM_CFG_BE4,
+	.nhm_period_mask = B_NHM_PERIOD_MSK,
+	.nhm_unit_mask = B_NHM_COUNTER_MSK,
+	.nhm_include_cca_mask = B_NHM_INCLUDE_CCA_MSK,
+	.nhm_en_mask = B_NHM_EN_MSK,
+	.nhm_method = R_NHM_TH9_BE4,
+	.nhm_pwr_method_msk = B_NHM_PWDB_METHOD_MSK,
+	.nhm_filter = R_NHM_FILTER_BE4,
+	.nhm_filter_mask = B_NHM_RSSI_TH_EN_BE4 | B_NHM_NAV_EN_BE4,
 	.edcca_clm_rdy = R_CLM_EDCCA_RDY_BE4,
 	.edcca_clm_rdy_mask = B_CLM_EDCCA_RDY,
 	.edcca_clm_cnt = R_CLM_EDCCA_RESULT_BE4,
@@ -557,6 +570,71 @@ void rtw89_phy_bb_wrap_pwr_by_macid_init(struct rtw89_dev *rtwdev)
 		cr = base_macid_lmt + macid_idx;
 		rtw89_write_bb_wrap_flush(rtwdev, cr, 0);
 	}
+}
+
+int rtw89_phy_bb_wrap_dtp_en(struct rtw89_dev *rtwdev,
+			     enum rtw89_phy_idx phy_idx, bool en)
+{
+	u32 addr, val;
+	int ret;
+
+	ret = rtw89_mac_txpwr_write32_mask(rtwdev, phy_idx,
+					   R_BE_PWR_MACID_CTRL_BE4,
+					   B_BE_PWR_BY_MACID_EN_BE4, en);
+	if (!rtw89_debug_is_enabled(rtwdev, RTW89_DBG_TXPWR))
+		return ret;
+
+	addr = rtw89_mac_reg_by_idx(rtwdev, R_BE_PWR_MACID_CTRL_BE4, phy_idx);
+	if (ret) {
+		rtw89_debug(rtwdev, RTW89_DBG_TXPWR,
+			    "BB wrap phy %u en=%d addr=0x%x write failed: %d\n",
+			    phy_idx, en, addr, ret);
+		return ret;
+	}
+
+	val = rtw89_read32(rtwdev, addr);
+	rtw89_debug(rtwdev, RTW89_DBG_TXPWR,
+		    "BB wrap phy %u en=%d addr=0x%x readback=0x%08x (en=%d)\n",
+		    phy_idx, en, addr, val, !!(val & B_BE_PWR_BY_MACID_EN_BE4));
+
+	return 0;
+}
+
+void rtw89_phy_bb_wrap_dtp_set_pwr_ctrl(struct rtw89_dev *rtwdev, u8 mac_id,
+					bool en, s8 dbm)
+{
+	const struct rtw89_bb_wrap_regs *bb_wrap = rtwdev->chip->phy_def->bb_wrap;
+	u32 addr, val, old, readback;
+	u8 pwr;
+
+	if (mac_id >= rtwdev->chip->support_macid_num) {
+		rtw89_debug(rtwdev, RTW89_DBG_TXPWR,
+			    "BB wrap invalid macid %u\n", mac_id);
+		return;
+	}
+
+	addr = bb_wrap->pwr_macid_lmt + mac_id * 4;
+	val = rtw89_read32(rtwdev, addr);
+	old = val;
+	pwr = en ? clamp_t(s8, dbm, -64, 63) * 2 : 0; /* S(8,1) */
+	val = u32_replace_bits(val, pwr, B_BE_PWR_MACID_LMT0);
+	val = u32_replace_bits(val, pwr, B_BE_PWR_MACID_LMT1);
+	if (en)
+		val |= B_BE_PWR_MACID_LMT0_EN | B_BE_PWR_MACID_LMT1_EN;
+	else
+		val &= ~(B_BE_PWR_MACID_LMT0_EN | B_BE_PWR_MACID_LMT1_EN);
+
+	rtw89_write_bb_wrap_flush(rtwdev, addr, val);
+	if (!rtw89_debug_is_enabled(rtwdev, RTW89_DBG_TXPWR))
+		return;
+
+	readback = rtw89_read32(rtwdev, addr);
+	rtw89_debug(rtwdev, RTW89_DBG_TXPWR,
+		    "BB wrap macid %u en=%d dbm=%d raw=%u addr=0x%x\n",
+		    mac_id, en, dbm, pwr, addr);
+	rtw89_debug(rtwdev, RTW89_DBG_TXPWR,
+		    "BB wrap macid %u old=0x%08x write=0x%08x readback=0x%08x\n",
+		    mac_id, old, val, readback);
 }
 
 static

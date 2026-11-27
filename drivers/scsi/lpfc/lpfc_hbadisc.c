@@ -840,12 +840,21 @@ lpfc_work_list_done(struct lpfc_hba *phba)
 	while (!list_empty(&phba->work_list)) {
 		list_remove_head((&phba->work_list), evtp, typeof(*evtp),
 				 evt_listp);
+		/*
+		 * The ELS retry event can be requeued by lpfc_els_retry_delay()
+		 * as soon as hbalock is dropped. Consume the payload within the
+		 * hbalock to prevent reuse or double-put.
+		 */
+		if (evtp->evt == LPFC_EVT_ELS_RETRY) {
+			ndlp = (struct lpfc_nodelist *)(evtp->evt_arg1);
+			evtp->evt_arg1 = NULL;
+		}
 		spin_unlock_irq(&phba->hbalock);
 		hba_pci_err = test_bit(HBA_PCI_ERR, &phba->bit_flags);
 		free_evt = 1;
 		switch (evtp->evt) {
 		case LPFC_EVT_ELS_RETRY:
-			ndlp = (struct lpfc_nodelist *) (evtp->evt_arg1);
+			/* ndlp was already captured under hbalock */
 			if (!hba_pci_err) {
 				lpfc_els_retry_delay_handler(ndlp);
 				free_evt = 0; /* evt is part of ndlp */

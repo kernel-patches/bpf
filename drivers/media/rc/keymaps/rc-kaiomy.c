@@ -60,7 +60,7 @@ static struct rc_map_table kaiomy[] = {
 static struct rc_map_list kaiomy_map = {
 	.map = {
 		.scan     = kaiomy,
-		.size     = ARRAY_SIZE(kaiomy),
+		.entries  = ARRAY_SIZE(kaiomy),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_KAIOMY,
 	}

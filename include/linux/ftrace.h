@@ -8,6 +8,8 @@
 #define _LINUX_FTRACE_H
 
 #include <linux/trace_recursion.h>
+#include <linux/trace_controls.h>
+#include <linux/trace_printk.h>
 #include <linux/trace_clock.h>
 #include <linux/jump_label.h>
 #include <linux/kallsyms.h>
@@ -270,7 +272,7 @@ ftrace_regs_get_kernel_stack_nth(struct ftrace_regs *fregs, unsigned int nth)
 	stackp = (unsigned long *)ftrace_regs_get_stack_pointer(fregs);
 	if (((unsigned long)(stackp + nth) & ~(THREAD_SIZE - 1)) ==
 	    ((unsigned long)stackp & ~(THREAD_SIZE - 1)))
-		return *(stackp + nth);
+		return READ_ONCE_NOCHECK(*(stackp + nth));
 
 	return 0;
 }

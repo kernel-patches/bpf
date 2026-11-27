@@ -2,6 +2,10 @@
 #ifndef __ASM_GENERIC_CODETAG_LDS_H
 #define __ASM_GENERIC_CODETAG_LDS_H
 
+#include <linux/compiler_types.h>
+
+#define ALLOC_TAG_SECTION_NAME	__alloc_tags
+
 #ifdef CONFIG_MEM_ALLOC_PROFILING
 #define IF_MEM_ALLOC_PROFILING(...) __VA_ARGS__
 #else
@@ -10,15 +14,15 @@
 
 #define SECTION_WITH_BOUNDARIES(_name)	\
 	. = ALIGN(8);			\
-	__start_##_name = .;		\
+	__PASTE(__start_, _name) = .;	\
 	KEEP(*(_name))			\
-	__stop_##_name = .;
+	__PASTE(__stop_, _name) = .;
 
 #define CODETAG_SECTIONS()		\
-	IF_MEM_ALLOC_PROFILING(SECTION_WITH_BOUNDARIES(alloc_tags))
+	IF_MEM_ALLOC_PROFILING(SECTION_WITH_BOUNDARIES(ALLOC_TAG_SECTION_NAME))
 
 #define MOD_SEPARATE_CODETAG_SECTION(_name)	\
-	.codetag.##_name 0 : {			\
+	.codetag._name 0 : {			\
 		SECTION_WITH_BOUNDARIES(_name)	\
 	}
 
@@ -28,6 +32,6 @@
  * unload them individually once unused.
  */
 #define MOD_SEPARATE_CODETAG_SECTIONS()		\
-	IF_MEM_ALLOC_PROFILING(MOD_SEPARATE_CODETAG_SECTION(alloc_tags))
+	IF_MEM_ALLOC_PROFILING(MOD_SEPARATE_CODETAG_SECTION(ALLOC_TAG_SECTION_NAME))
 
 #endif /* __ASM_GENERIC_CODETAG_LDS_H */

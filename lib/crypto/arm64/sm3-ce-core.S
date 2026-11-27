@@ -8,44 +8,19 @@
 #include <linux/linkage.h>
 #include <asm/assembler.h>
 
-	.irp		b, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
-	.set		.Lv\b\().4s, \b
-	.endr
-
-	.macro		sm3partw1, rd, rn, rm
-	.inst		0xce60c000 | .L\rd | (.L\rn << 5) | (.L\rm << 16)
-	.endm
-
-	.macro		sm3partw2, rd, rn, rm
-	.inst		0xce60c400 | .L\rd | (.L\rn << 5) | (.L\rm << 16)
-	.endm
-
-	.macro		sm3ss1, rd, rn, rm, ra
-	.inst		0xce400000 | .L\rd | (.L\rn << 5) | (.L\ra << 10) | (.L\rm << 16)
-	.endm
-
-	.macro		sm3tt1a, rd, rn, rm, imm2
-	.inst		0xce408000 | .L\rd | (.L\rn << 5) | ((\imm2) << 12) | (.L\rm << 16)
-	.endm
-
-	.macro		sm3tt1b, rd, rn, rm, imm2
-	.inst		0xce408400 | .L\rd | (.L\rn << 5) | ((\imm2) << 12) | (.L\rm << 16)
-	.endm
-
-	.macro		sm3tt2a, rd, rn, rm, imm2
-	.inst		0xce408800 | .L\rd | (.L\rn << 5) | ((\imm2) << 12) | (.L\rm << 16)
-	.endm
-
-	.macro		sm3tt2b, rd, rn, rm, imm2
-	.inst		0xce408c00 | .L\rd | (.L\rn << 5) | ((\imm2) << 12) | (.L\rm << 16)
-	.endm
+	/*
+	 * The assemblers group the sm3 and sm4 instructions under the sm4
+	 * feature.  So we need to request sm4, despite this file being sm3.
+	 * In binutils 2.40 and earlier, armv8.2-a or later is also required.
+	 */
+	.arch		armv8.2-a+sm4
 
 	.macro		round, ab, s0, t0, t1, i
 	sm3ss1		v5.4s, v8.4s, \t0\().4s, v9.4s
 	shl		\t1\().4s, \t0\().4s, #1
 	sri		\t1\().4s, \t0\().4s, #31
-	sm3tt1\ab	v8.4s, v5.4s, v10.4s, \i
-	sm3tt2\ab	v9.4s, v5.4s, \s0\().4s, \i
+	sm3tt1\ab	v8.4s, v5.4s, v10.s[\i]
+	sm3tt2\ab	v9.4s, v5.4s, \s0\().s[\i]
 	.endm
 
 	.macro		qround, ab, s0, s1, s2, s3, s4

@@ -8,10 +8,18 @@
 #include <uapi/linux/sched.h>
 #include <uapi/linux/nsfs.h>
 
+enum ns_common_flags_t {
+	/* Kernel-internal namespace. The LSM namespace hooks never see it. */
+	NS_COMMON_KERNEL	= (1 << 0),
+};
+
 bool is_current_namespace(struct ns_common *ns);
 int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_operations *ops,
-		     int inum, u64 ns_id);
+		     int inum, u64 ns_id, enum ns_common_flags_t flags);
 void __ns_common_free(struct ns_common *ns);
+#ifdef CONFIG_SECURITY
+int ns_common_init_security(void);
+#endif
 struct ns_common *__must_check ns_owner(struct ns_common *ns);
 
 static __always_inline bool is_ns_init_inum(const struct ns_common *ns)
@@ -47,13 +55,14 @@ static __always_inline bool is_ns_init_id(const struct ns_common *ns)
 			 ns_common_type(__ns),				\
 			 to_ns_operations(__ns),			\
 			 (((__ns) == ns_init_ns(__ns)) ? ns_init_inum(__ns) : 0), \
-			 (((__ns) == ns_init_ns(__ns)) ? ns_init_id(__ns) : 0))
+			 (((__ns) == ns_init_ns(__ns)) ? ns_init_id(__ns) : 0), \
+			 0)
 
-#define ns_common_init_inum(__ns, __inum)        \
-	__ns_common_init(to_ns_common(__ns),     \
-			 ns_common_type(__ns),   \
-			 to_ns_operations(__ns), \
-			 __inum, 0)
+#define ns_common_init_inum(__ns, __inum, __flags) \
+	__ns_common_init(to_ns_common(__ns),       \
+			 ns_common_type(__ns),     \
+			 to_ns_operations(__ns),   \
+			 __inum, 0, __flags)
 
 #define ns_common_free(__ns) __ns_common_free(to_ns_common((__ns)))
 

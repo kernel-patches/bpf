@@ -39,7 +39,7 @@
 #define KGDB_COMPILED_BREAK	0xe7ffdeff
 #define CACHE_FLUSH_IS_SAFE	1
 
-#ifndef	__ASSEMBLY__
+#ifndef	__ASSEMBLER__
 
 static inline void arch_kgdb_breakpoint(void)
 {
@@ -49,7 +49,7 @@ static inline void arch_kgdb_breakpoint(void)
 extern void kgdb_handle_bus_error(void);
 extern int kgdb_fault_expected;
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 /*
  * From Kevin Hilman:

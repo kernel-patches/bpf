@@ -135,7 +135,7 @@ struct rtw8723x_common {
 
 	/* common functions */
 	void (*lck)(struct rtw_dev *rtwdev);
-	int (*read_efuse)(struct rtw_dev *rtwdev, u8 *log_map);
+	int (*read_efuse)(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map);
 	int (*mac_init)(struct rtw_dev *rtwdev);
 	int (*mac_postinit)(struct rtw_dev *rtwdev);
 	void (*cfg_ldo25)(struct rtw_dev *rtwdev, bool enable);
@@ -434,9 +434,10 @@ static inline void rtw8723x_lck(struct rtw_dev *rtwdev)
 	rtw8723x_common.lck(rtwdev);
 }
 
-static inline int rtw8723x_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static inline
+int rtw8723x_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
-	return rtw8723x_common.read_efuse(rtwdev, log_map);
+	return rtw8723x_common.read_efuse(rtwdev, log_map, phy_map);
 }
 
 static inline int rtw8723x_mac_init(struct rtw_dev *rtwdev)

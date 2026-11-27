@@ -950,7 +950,7 @@ static irqreturn_t cd321x_interrupt(int irq, void *data)
 		if (!tps->data->read_data_status(tps))
 			goto err_unlock;
 
-	/* Can be called uncondtionally since it will check for any changes itself */
+	/* Can be called unconditionally since it will check for any changes itself */
 	cd321x_connect(tps, status);
 
 err_unlock:

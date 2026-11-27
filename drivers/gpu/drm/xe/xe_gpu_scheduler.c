@@ -3,7 +3,10 @@
  * Copyright © 2023 Intel Corporation
  */
 
+#include "xe_assert.h"
+#include "xe_exec_queue_types.h"
 #include "xe_gpu_scheduler.h"
+#include "xe_guc_exec_queue_types.h"
 
 static void xe_sched_process_msg_queue(struct xe_gpu_scheduler *sched)
 {
@@ -77,11 +80,25 @@ int xe_sched_init(struct xe_gpu_scheduler *sched,
 	};
 
 	sched->ops = xe_ops;
+	sched->timeout = timeout;
 	spin_lock_init(&sched->msg_lock);
 	INIT_LIST_HEAD(&sched->msgs);
 	INIT_WORK(&sched->work_process_msg, xe_sched_process_msg_work);
 
 	return drm_sched_init(&sched->base, &args);
+}
+
+void xe_sched_reinit(struct xe_gpu_scheduler *sched)
+{
+	struct xe_guc_exec_queue *ge = container_of(sched, struct xe_guc_exec_queue, sched);
+
+	xe_gt_assert(ge->q->gt, drm_sched_is_stopped(&sched->base));
+
+	/*
+	 * TODO: Implement drm_sched_reinit() instead of requiring the
+	 * driver to restore individual fields.
+	 */
+	sched->base.timeout = sched->timeout;
 }
 
 void xe_sched_fini(struct xe_gpu_scheduler *sched)

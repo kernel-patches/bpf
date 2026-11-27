@@ -53,21 +53,27 @@ static void asrc_read_last_fifo(struct fsl_asrc_pair *pair, void *dma_vaddr, u32
 {
 	struct fsl_asrc *asrc = pair->asrc;
 	enum asrc_pair_index index = pair->index;
-	u32 i, reg, size, t_size = 0, width;
+	u32 i, reg, size, t_size = 0, width, sample_bytes, frame_bytes;
 	u32 *reg32 = NULL;
 	u16 *reg16 = NULL;
 	u8  *reg24 = NULL;
 
 	width = snd_pcm_format_physical_width(pair->sample_format[OUT]);
-	if (width == 32)
+	if (width == 32) {
 		reg32 = dma_vaddr + *length;
-	else if (width == 16)
+		sample_bytes = 4;
+	} else if (width == 16) {
 		reg16 = dma_vaddr + *length;
-	else
+		sample_bytes = 2;
+	} else {
 		reg24 = dma_vaddr + *length;
+		sample_bytes = 3;
+	}
+
+	frame_bytes = pair->channels * sample_bytes;
 retry:
 	size = asrc->get_output_fifo_size(pair);
-	if (size + *length > ASRC_M2M_BUFFER_SIZE)
+	if (*length + (t_size + size) * frame_bytes > ASRC_M2M_BUFFER_SIZE)
 		goto end;
 
 	for (i = 0; i < size * pair->channels; i++) {
@@ -89,12 +95,7 @@ retry:
 		goto retry;
 end:
 	/* Update payload length */
-	if (reg32)
-		*length += t_size * pair->channels * 4;
-	else if (reg16)
-		*length += t_size * pair->channels * 2;
-	else
-		*length += t_size * pair->channels * 3;
+	*length += t_size * frame_bytes;
 }
 
 /* config dma channel */
@@ -176,8 +177,7 @@ static int asrc_dmaconfig(struct fsl_asrc_pair *pair,
 		return -EINVAL;
 	}
 
-	pair->desc[dir]->callback = ASRC_xPUT_DMA_CALLBACK(dir);
-	pair->desc[dir]->callback_param = pair;
+	dmaengine_desc_set_callback(pair->desc[dir], ASRC_xPUT_DMA_CALLBACK(dir), NULL, pair);
 
 	return 0;
 }
@@ -258,12 +258,12 @@ static int asrc_m2m_device_run(struct fsl_asrc_pair *pair, struct snd_compr_task
 
 	/* Submit DMA request */
 	dmaengine_submit(pair->desc[IN]);
-	dma_async_issue_pending(pair->desc[IN]->chan);
+	dma_async_issue_pending(pair->dma_chan[IN]);
 	if (out_dma_len > 0) {
 		if (asrc->start_before_dma && asrc->m2m_output_ready)
 			asrc->m2m_output_ready(pair);
 		dmaengine_submit(pair->desc[OUT]);
-		dma_async_issue_pending(pair->desc[OUT]->chan);
+		dma_async_issue_pending(pair->dma_chan[OUT]);
 	}
 
 	if (!asrc->start_before_dma)
@@ -469,6 +469,10 @@ static int fsl_asrc_m2m_comp_task_create(struct snd_compr_stream *stream,
 	struct dma_chan *tmp_chan;
 	int ret;
 
+	/* All tasks share the pair and DMA channels: one task at a time */
+	if (pair->dma_chan[IN])
+		return -EBUSY;
+
 	exp_info_in.ops = &fsl_asrc_m2m_dma_buf_ops;
 	exp_info_in.size = ASRC_M2M_BUFFER_SIZE;
 	exp_info_in.flags = O_RDWR;
@@ -525,6 +529,7 @@ static int fsl_asrc_m2m_comp_task_create(struct snd_compr_stream *stream,
 
 err_dma_channel_out:
 	dma_release_channel(pair->dma_chan[IN]);
+	pair->dma_chan[IN] = NULL;
 err_dma_channel_in:
 	if (asrc->m2m_unprepare)
 		asrc->m2m_unprepare(pair);
@@ -569,6 +574,8 @@ static int fsl_asrc_m2m_comp_task_free(struct snd_compr_stream *stream,
 		dma_release_channel(pair->dma_chan[IN]);
 	if (pair->dma_chan[OUT])
 		dma_release_channel(pair->dma_chan[OUT]);
+	pair->dma_chan[IN] = NULL;
+	pair->dma_chan[OUT] = NULL;
 
 	return 0;
 }

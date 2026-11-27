@@ -78,6 +78,14 @@ int s390_kvm_mmu_prepare_memory_region(struct kvm *kvm,
 			return -EINVAL;
 		if (!asce_contains_gfn(kvm->arch.gmap->asce, new->base_gfn + new->npages - 1))
 			return -EINVAL;
+
+		/*
+		 * Must be allocated before migration mode is stopped below:
+		 * kvm_s390_vm_stop_migration() is not rolled back on failure.
+		 */
+		mc = kvm_s390_new_mmu_cache();
+		if (!mc)
+			return -ENOMEM;
 	}
 
 	if (kvm_s390_is_migration_mode(kvm)) {
@@ -91,18 +99,12 @@ int s390_kvm_mmu_prepare_memory_region(struct kvm *kvm,
 		 */
 		if (change != KVM_MR_DELETE &&
 		    !(new->flags & KVM_MEM_LOG_DIRTY_PAGES))
-			WARN(kvm_s390_vm_stop_migration(kvm),
-			     "Failed to stop migration mode");
+			kvm_s390_vm_stop_migration(kvm);
 	}
 
 	if (change == KVM_MR_FLAGS_ONLY)
 		return 0;
-	if (change != KVM_MR_DELETE) {
-		/* Enough capacity to add a new memslot */
-		mc = kvm_s390_new_mmu_cache();
-		if (!mc)
-			return -ENOMEM;
-	}
+
 	scoped_guard(write_lock, &kvm->mmu_lock) {
 		kvm_s390_update_cmma_dirty(kvm, old);
 		if (change == KVM_MR_DELETE || change == KVM_MR_MOVE)

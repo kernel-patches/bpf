@@ -520,7 +520,6 @@ struct snd_gf1_mem_block *snd_gf1_mem_alloc(struct snd_gf1_mem * alloc, int owne
 				       char *name, int size, int w_16,
 				       int align, unsigned int *share_id);
 int snd_gf1_mem_free(struct snd_gf1_mem * alloc, unsigned int address);
-int snd_gf1_mem_free_owner(struct snd_gf1_mem * alloc, int owner);
 int snd_gf1_mem_init(struct snd_gus_card * gus);
 int snd_gf1_mem_done(struct snd_gus_card * gus);
 
@@ -594,7 +593,7 @@ void snd_gf1_uart_resume(struct snd_gus_card *gus);
 /* gus_dram.c */
 int snd_gus_dram_write(struct snd_gus_card *gus, char __user *ptr,
 		       unsigned int addr, unsigned int size);
-int snd_gus_dram_read(struct snd_gus_card *gus, char __user *ptr,
+int snd_gus_dram_read(struct snd_gus_card *gus, char *ptr,
 		      unsigned int addr, unsigned int size, int rom);
 
 /* gus_timer.c */

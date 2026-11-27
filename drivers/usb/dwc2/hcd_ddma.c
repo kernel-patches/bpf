@@ -415,7 +415,7 @@ static u16 dwc2_calc_starting_frame(struct dwc2_hsotg *hsotg,
 	 * Current frame is 1, scheduled frame is 3. Since HC always fetches
 	 * the descriptor corresponding to curr_frame+1, the descriptor
 	 * corresponding to frame 2 will be fetched. If the number of
-	 * descriptors is max=64 (or greather) the list will be fully programmed
+	 * descriptors is max=64 (or greater) the list will be fully programmed
 	 * with Active descriptors and it is possible case (rare) that the
 	 * latest descriptor(considering rollback) corresponding to frame 2 will
 	 * be serviced first. HS case is more probable because, in fact, up to

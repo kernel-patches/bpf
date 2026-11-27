@@ -236,7 +236,7 @@ static struct hlist_head *get_reminfo_hash_bucket(struct sockaddr_storage *,
 
 void iwpm_add_remote_info(struct iwpm_remote_info *rem_info)
 {
-	struct hlist_head *hash_bucket_head;
+	struct hlist_head *hash_bucket_head = NULL;
 	unsigned long flags;
 
 	spin_lock_irqsave(&iwpm_reminfo_lock, flags);
@@ -248,6 +248,9 @@ void iwpm_add_remote_info(struct iwpm_remote_info *rem_info)
 			hlist_add_head(&rem_info->hlist_node, hash_bucket_head);
 	}
 	spin_unlock_irqrestore(&iwpm_reminfo_lock, flags);
+
+	if (!hash_bucket_head)
+		kfree(rem_info);
 }
 
 /**

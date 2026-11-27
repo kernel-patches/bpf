@@ -12,6 +12,12 @@
 
 #include <uapi/drm/drm_ras.h>
 
+int drm_ras_nl_pre_telemetry(const struct genl_split_ops *ops,
+			     struct sk_buff *skb, struct genl_info *info);
+void
+drm_ras_nl_post_telemetry(const struct genl_split_ops *ops,
+			  struct sk_buff *skb, struct genl_info *info);
+
 int drm_ras_nl_list_nodes_dumpit(struct sk_buff *skb,
 				 struct netlink_callback *cb);
 int drm_ras_nl_get_error_counter_doit(struct sk_buff *skb,
@@ -24,6 +30,10 @@ int drm_ras_nl_get_error_threshold_doit(struct sk_buff *skb,
 					struct genl_info *info);
 int drm_ras_nl_set_error_threshold_doit(struct sk_buff *skb,
 					struct genl_info *info);
+int drm_ras_nl_telemetry_get_doit(struct sk_buff *skb, struct genl_info *info);
+int drm_ras_nl_telemetry_set_doit(struct sk_buff *skb, struct genl_info *info);
+int drm_ras_nl_telemetry_list_fields_dumpit(struct sk_buff *skb,
+					    struct netlink_callback *cb);
 
 enum {
 	DRM_RAS_NLGRP_ERROR_REPORT,

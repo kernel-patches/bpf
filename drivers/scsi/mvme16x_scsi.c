@@ -60,6 +60,7 @@ static int mvme16x_probe(struct platform_device *dev)
 	hostdata->base = (void __iomem *)0xfff47000UL;
 	hostdata->clock = 50;	/* XXX - depends on the CPU clock! */
 	hostdata->chip710 = 1;
+	hostdata->burst_length = 8;
 	hostdata->dmode_extra = DMODE_FC2;
 	hostdata->dcntl_extra = EA_710;
 	hostdata->ctest7_extra = CTEST7_TT1;
@@ -106,7 +107,8 @@ static int mvme16x_probe(struct platform_device *dev)
 static void mvme16x_device_remove(struct platform_device *dev)
 {
 	struct Scsi_Host *host = platform_get_drvdata(dev);
-	struct NCR_700_Host_Parameters *hostdata = shost_priv(host);
+	struct NCR_700_Host_Parameters *hostdata =
+		(struct NCR_700_Host_Parameters *)host->hostdata[0];
 
 	/* Disable scsi chip ints */
 	{

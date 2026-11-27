@@ -32,9 +32,9 @@ static int etm_readl_cslocked(struct etm_drvdata *drvdata, u32 off,
 	int ret;
 	struct etm_readl_cslocked_arg arg;
 
-	ret = pm_runtime_get_sync(drvdata->csdev->dev.parent);
+	ret = pm_runtime_resume_and_get(drvdata->csdev->dev.parent);
 	if (ret < 0)
-		goto out;
+		return ret;
 
 	arg.drvdata = drvdata;
 	arg.off = off;
@@ -43,7 +43,6 @@ static int etm_readl_cslocked(struct etm_drvdata *drvdata, u32 off,
 	ret = smp_call_function_single(drvdata->cpu,
 				       etm_readl_cslocked_smp_call,
 				       (void *)&arg, 1);
-out:
 	pm_runtime_put(drvdata->csdev->dev.parent);
 	return ret;
 }
@@ -1013,6 +1012,11 @@ static ssize_t seq_curr_state_store(struct device *dev,
 
 	if (val > ETM_SEQ_STATE_MAX_VAL)
 		return -EINVAL;
+
+	guard(spinlock)(&drvdata->spinlock);
+	if (IS_ERR_OR_NULL(drvdata->csdev) ||
+	    coresight_get_mode(drvdata->csdev) == CS_MODE_SYSFS)
+		return -EBUSY;
 
 	sysfs_config->seq_curr_state = val;
 

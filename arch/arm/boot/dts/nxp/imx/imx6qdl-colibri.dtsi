@@ -16,6 +16,8 @@
 		mmc1 = &usdhc1; /* MMC/SD Slot */
 		/delete-property/ mmc2;
 		/delete-property/ mmc3;
+		spi0 = &ecspi4;
+		/delete-property/ spi3;
 	};
 
 	backlight: backlight {

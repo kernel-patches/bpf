@@ -158,9 +158,8 @@ static int qcom_usb_vbus_regulator_probe(struct platform_device *pdev)
 	}
 
 	/* Disable HW logic for VBUS enable */
-	regmap_update_bits(regmap, base + data->otg_cfg, data->otg_en_src_cfg, 0);
-
-	return 0;
+	return regmap_update_bits(regmap, base + data->otg_cfg,
+				  data->otg_en_src_cfg, 0);
 }
 
 static const struct of_device_id qcom_usb_vbus_regulator_match[] = {

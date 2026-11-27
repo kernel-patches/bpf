@@ -446,9 +446,10 @@ __naked void reference_tracking_release_reference_twice(void)
 	r6 = r0;					\
 	if r0 == 0 goto l0_%=;				\
 	call %[bpf_sk_release];				\
-l0_%=:	r1 = r6;					\
+l0_%=:	if r6 == 0 goto l1_%=;				\
+	r1 = r6;					\
 	call %[bpf_sk_release];				\
-	exit;						\
+l1_%=:	exit;						\
 "	:
 	: __imm(bpf_sk_lookup_tcp),
 	  __imm(bpf_sk_release),
@@ -585,8 +586,10 @@ __naked void reference_in_subprog_and_outside(void)
 "	r1 = r0;	/* unchecked reference */	\
 	r6 = r0;					\
 	call reference_in_subprog_and_outside__1;	\
+	if r6 == 0 goto l0_%=;				\
 	r1 = r6;					\
 	call %[bpf_sk_release];				\
+l0_%=:	r0 = 0;						\
 	exit;						\
 "	:
 	: __imm(bpf_sk_lookup_tcp),

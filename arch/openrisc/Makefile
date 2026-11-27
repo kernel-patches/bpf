@@ -18,7 +18,6 @@
 KBUILD_DEFCONFIG := or1ksim_defconfig
 
 OBJCOPYFLAGS    := -O binary -R .note -R .comment -S
-LIBGCC 		:= $(shell $(CC) $(KBUILD_CFLAGS) -print-libgcc-file-name)
 
 KBUILD_CFLAGS	+= -pipe -ffixed-r10 -D__linux__
 KBUILD_CFLAGS	+= -msfimm -mshftimm
@@ -54,8 +53,6 @@ endif
 ifeq ($(CONFIG_OPENRISC_HAVE_INST_SEXT),y)
 	KBUILD_CFLAGS += $(call cc-option,-msext)
 endif
-
-libs-y		+= $(LIBGCC)
 
 PHONY += vmlinux.bin
 

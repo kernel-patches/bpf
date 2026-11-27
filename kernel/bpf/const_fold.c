@@ -65,6 +65,13 @@ static void const_reg_xfer(struct bpf_verifier_env *env, struct const_arg_info *
 		ci_out[insn->dst_reg] = unknown;
 		return;
 	}
+	/* r12 is outside of it too */
+	if (is_arena_sp_adj(insn) || is_arena_sp_st(insn))
+		return;
+	if (is_arena_sp_mov(insn) || is_arena_sp_ldx(insn)) {
+		ci_out[insn->dst_reg] = unknown;
+		return;
+	}
 
 	switch (class) {
 	case BPF_ALU:
@@ -207,6 +214,9 @@ process_call:
 			ci_out[r] = unknown;
 		break;
 	}
+	/* do_check() has only a range for a far offset */
+	if (ci_is_map_value(dst) && abs((s64)dst->val) >= BPF_MAX_VAR_OFF)
+		*dst = unknown;
 }
 
 /* Join function: merge output state into a successor's input state. */
@@ -243,10 +253,11 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 	struct const_arg_info ci_out[MAX_BPF_REG];
 	struct bpf_iarray *succ;
 	bool changed;
-	int i, r;
+	int i, r, t, err;
 
 	/* kvzalloc zeroes memory, so all entries start as CONST_ARG_UNVISITED (0) */
-	ci_in = kvzalloc_objs(*ci_in, insn_cnt, GFP_KERNEL_ACCOUNT);
+	env->mem += insn_cnt * sizeof(*ci_in);
+	ci_in = kvzalloc_objs(*ci_in, insn_cnt, BPF_VERIFIER_GFP);
 	if (!ci_in)
 		return -ENOMEM;
 
@@ -256,9 +267,24 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 
 		for (r = 0; r < MAX_BPF_REG; r++)
 			ci_in[start][r] = unknown;
+		/*
+		 * The subprog gets there from where it is out of budget too, see
+		 * push_unwind_exit(). That is not an edge of the graph.
+		 */
+		for (r = 0; r < MAX_BPF_REG && env->subprog_info[i].bail_insn >= 0; r++)
+			ci_in[env->subprog_info[i].bail_insn][r] = unknown;
+	}
+	/* The same from the head of a loop to where the loop is left, once the loops are known. */
+	for (i = 0; i < insn_cnt; i++) {
+		t = bpf_head_guard_target(env, i);
+		for (r = 0; r < MAX_BPF_REG && t >= 0; r++)
+			ci_in[t][r] = unknown;
 	}
 
 redo:
+	err = bpf_add_cost_and_check(env, env->cfg.cur_postorder * 2ULL, BPF_COST_XREG);
+	if (err)
+		goto out;
 	changed = false;
 	for (i = env->cfg.cur_postorder - 1; i >= 0; i--) {
 		int idx = env->cfg.insn_postorder[i];
@@ -276,7 +302,7 @@ redo:
 	if (changed)
 		goto redo;
 
-	/* Save computed constants into insn_aux[] if they fit into 32-bit */
+	/* Save computed constants into insn_aux[]: the value if it fits into 32-bit */
 	for (i = 0; i < insn_cnt; i++) {
 		u16 mask = 0, map_mask = 0, subprog_mask = 0;
 		struct bpf_insn_aux_data *aux = &insn_aux[i];
@@ -311,9 +337,10 @@ redo:
 		aux->const_reg_map_mask = map_mask;
 		aux->const_reg_subprog_mask = subprog_mask;
 	}
-
+out:
+	env->mem -= insn_cnt * sizeof(*ci_in);
 	kvfree(ci_in);
-	return 0;
+	return err;
 }
 
 static int eval_const_branch(u8 opcode, u64 dst_val, u64 src_val)

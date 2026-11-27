@@ -7,7 +7,7 @@ Conselhos de depuração a partir do espaço de usuário
 Este documento fornece uma breve visão geral das ferramentas mais comuns
 para depurar o kernel Linux a partir do espaço de usuário.
 Para conselhos de depuração voltados a desenvolvedores de drivers, veja
-:doc:`aqui </process/debugging/driver_development_debugging_guide>`.
+:doc:`aqui <driver_development_debugging_guide>`.
 Para conselhos gerais de depuração, veja o :doc:`documento de conselhos
 gerais <index>`.
 
@@ -95,7 +95,7 @@ Para a documentação completa do Ftrace, veja :doc:`/trace/ftrace`
 Você também pode rastrear eventos específicos :ref:`usando o rastreamento
 de eventos <trace/events:2. using event tracing>`, que pode ser definido
 conforme descrito aqui: :ref:`Criando um tracepoint customizado do Ftrace
-<process/debugging/driver_development_debugging_guide:ftrace>`.
+<translations/pt_BR/process/debugging/driver_development_debugging_guide:ftrace>`.
 
 Para a documentação completa do rastreamento de eventos do Ftrace, veja
 :doc:`/trace/events`

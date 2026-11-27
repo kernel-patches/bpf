@@ -33,6 +33,7 @@
 #include <sound/tlv.h>
 #include <sound/tas2x20-tlv.h>
 #include <sound/tas2563-tlv.h>
+#include <sound/tas2573-reg.h>
 #include <sound/tas2781-tlv.h>
 #include <sound/tas5825-tlv.h>
 #include <linux/unaligned.h>
@@ -1543,106 +1544,73 @@ static int create_tas2781_cali_start_ktrl(struct tasdevice_priv
 	return 0;
 }
 
-static int tas2573_re_get(struct snd_kcontrol *kcontrol,
-	struct snd_ctl_elem_value *ucontrol)
+/*
+ * Common helper: shared by all controls that read a group of registers and
+ * pack the results into a report.
+ */
+static int tas2573_status_get_common(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol, const struct tasdev_reg_map *map)
 {
 	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
 	struct tasdevice_priv *priv = snd_soc_component_get_drvdata(comp);
 	unsigned char *dst = ucontrol->value.bytes.data;
 	struct soc_bytes_ext *bytes_ext =
-		(struct soc_bytes_ext *) kcontrol->private_value;
+		(struct soc_bytes_ext *)kcontrol->private_value;
+	unsigned int j, k, val;
 	unsigned int i = 0;
-	unsigned int j;
 	int rc;
 
-	guard(mutex)(&priv->codec_lock);
+	/* Report header: max size and 'r' marker */
 	dst[i++] = bytes_ext->max;
 	dst[i++] = 'r';
 
-	dst[i++] = TASDEVICE_BOOK_ID(TAS2573_RE_OUT);
-	dst[i++] = TASDEVICE_PAGE_ID(TAS2573_RE_OUT);
-	dst[i++] = TASDEVICE_PAGE_REG(TAS2573_RE_OUT);
-
+	/* Emit book/page/reg triplets for every register in the map */
+	for (j = 0; j < map->nregs; j++) {
+		dst[i++] = TASDEVICE_BOOK_ID(map->regs[j]);
+		dst[i++] = TASDEVICE_PAGE_ID(map->regs[j]);
+		dst[i++] = TASDEVICE_PAGE_REG(map->regs[j]);
+	}
 	dst[i++] = 'D';
 
+	guard(mutex)(&priv->codec_lock);
+
+	/*
+	 * Read each channel: first register via single read, the rest
+	 * via bulk read (4 bytes each).
+	 */
 	for (j = 0; j < priv->ndev; j++) {
 		dst[i++] = j;
+		dst[i++] = 0;
+		dst[i++] = 0;
+		dst[i++] = 0;
 
-		rc = tasdevice_dev_bulk_read(priv, j, TAS2573_RE_OUT,
-			&dst[i], 4);
+		rc = tasdevice_dev_read(priv, j, map->regs[0], &val);
 		if (rc < 0)
-			dev_err(priv->dev, "chn %d bulk_rd err = %d\n", j, rc);
+			dev_err(priv->dev,
+				"chn %d %s[0] rd err = %d\n",
+				j, map->tag, rc);
+		else
+			dst[i++] = val;
 
-		i += 4;
+		for (k = 1; k < map->nregs; k++, i += 4) {
+			rc = tasdevice_dev_bulk_read(priv, j, map->regs[k],
+						     &dst[i], 4);
+			if (rc < 0)
+				dev_err(priv->dev,
+					"chn %d %s[%u] bulk_rd err = %d\n",
+					j, map->tag, k, rc);
+		}
 	}
 
 	return 0;
 }
 
+/* Calibration status control */
 static int tas2573_calib_status_get(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
-	struct tasdevice_priv *priv = snd_soc_component_get_drvdata(comp);
-	unsigned char *dst = ucontrol->value.bytes.data;
-	struct soc_bytes_ext *bytes_ext =
-		(struct soc_bytes_ext *) kcontrol->private_value;
-	unsigned int fct_status_regs[] = {
-		TAS2573_FCT_INT_LATCH,
-		TAS2573_FCT_STATUS_CTRL,
-		TAS2573_FCT_STATUS_BINNING,
-		TAS2573_SILENCE_DETECTED,
-		TAS2573_OPEN_CIRCUIT,
-		TAS2573_SHORTCKT,
-		TAS2573_FCT_OUTPUT_R0,
-		TAS2573_FCT_OUTPUT_R0_LOW,
-		TAS2573_FCT_OUTPUT_INV_R0,
-		TAS2573_FCT_OUTPUT_POWERTOT,
-		TAS2573_FCT_OUTPUT_F0,
-		TAS2573_RE_OUT,
-	};
-	unsigned int j, k, val;
-	unsigned int i = 0;
-	int rc;
-
-	guard(mutex)(&priv->codec_lock);
-	dst[i++] = bytes_ext->max;
-	dst[i++] = 'r';
-
-	for (j = 0; j < ARRAY_SIZE(fct_status_regs); j++) {
-		dst[i++] = TASDEVICE_BOOK_ID(fct_status_regs[j]);
-		dst[i++] = TASDEVICE_PAGE_ID(fct_status_regs[j]);
-		dst[i++] = TASDEVICE_PAGE_REG(fct_status_regs[j]);
-	}
-	dst[i++] = 'D';
-
-	for (j = 0; j < priv->ndev; j++) {
-		dst[i++] = j;
-		dst[i++] = 0;
-		dst[i++] = 0;
-		dst[i++] = 0;
-
-		rc = tasdevice_dev_read(priv, j, fct_status_regs[0], &val);
-		if (rc < 0)
-			dev_err(priv->dev,
-				"chn %d fct_status_regs[0] rd err = %d\n",
-				j, rc);
-		else
-			dst[i++] = val;
-
-		for (k = 1; k < ARRAY_SIZE(fct_status_regs); k++, i += 4) {
-			rc = tasdevice_dev_bulk_read(priv, j,
-				fct_status_regs[k], &dst[i], 4);
-			if (rc < 0) {
-				dev_err(priv->dev,
-					"chn %d regs[%u] bulk_rd err = %d\n",
-					j, k, rc);
-			}
-		}
-
-	}
-
-	return 0;
+	return tas2573_status_get_common(kcontrol, ucontrol,
+					 &calib_status_map);
 }
 
 static int create_tas2573_cali_status_ktrl(struct tasdevice_priv
@@ -1670,7 +1638,8 @@ static int create_tas2573_cali_status_ktrl(struct tasdevice_priv
 	 *		Sine gain for Device #i (48 bytes)
 	 *	}
 	 */
-	ext_cali_start->max = 39 + priv->ndev * 49;
+	ext_cali_start->max = calib_status_map.nregs * 3 + 3 +
+		priv->ndev * (calib_status_map.nregs * 4 + 1);
 	cali_ctrl->name = cali_start_name;
 	cali_ctrl->iface = SNDRV_CTL_ELEM_IFACE_MIXER;
 	cali_ctrl->info = snd_soc_bytes_info_ext;
@@ -1681,37 +1650,48 @@ static int create_tas2573_cali_status_ktrl(struct tasdevice_priv
 	return 0;
 }
 
-static int create_tas2573_cali_re_ktrl(struct tasdevice_priv
+/* Realtime sp data control */
+static int tas2573_rt_get(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	return tas2573_status_get_common(kcontrol, ucontrol,
+					 &tas2573_rt_data_map);
+}
+
+static int create_tas2573_rt_spk_data_ktrl(struct tasdevice_priv
 	*priv, struct snd_kcontrol_new *cali_ctrl)
 {
 	struct soc_bytes_ext *ext_cali_start;
 	char *cali_start_name;
 
-	ext_cali_start = devm_kzalloc_obj(priv->dev, *ext_cali_start);
+	ext_cali_start = devm_kzalloc(priv->dev,
+		sizeof(*ext_cali_start), GFP_KERNEL);
 	if (!ext_cali_start)
 		return -ENOMEM;
 
 	cali_start_name = devm_kstrdup(priv->dev,
-		"Real-time Speaker Impedance", GFP_KERNEL);
+		"Real-time Speaker Protection Data", GFP_KERNEL);
 	if (!cali_start_name)
 		return -ENOMEM;
 	/*
-	 * package structure for tas2573 real-time spk impedance:
+	 * package structure for tas2573 real-time spk protection data:
 	 *	Pkg len (1 byte)
 	 *	Reg id (1 byte, constant 'r')
-	 *	book, page, register for fct status (total 3 bytes)
+	 *	7 groups of book, page, register for real-time spk_data
+	 *		(21 bytes)
 	 *	Data Start Flag (1 byte, constant 'D')
 	 *	for (i = 0; i < Device-Sum; i++) {
 	 *		Device #i index_info (1 byte)
-	 *		Sine gain for Device #i (4 bytes)
+	 *		real-time spk data for Device #i (28 bytes)
 	 *	}
 	 */
-	ext_cali_start->max = 6 + priv->ndev * 5;
+	ext_cali_start->max = tas2573_rt_data_map.nregs * 3 + 3 +
+		priv->ndev * (tas2573_rt_data_map.nregs * 4 + 1);
 	cali_ctrl->name = cali_start_name;
 	cali_ctrl->iface = SNDRV_CTL_ELEM_IFACE_MIXER;
 	cali_ctrl->info = snd_soc_bytes_info_ext;
 	cali_ctrl->put = NULL;
-	cali_ctrl->get = tas2573_re_get;
+	cali_ctrl->get = tas2573_rt_get;
 	cali_ctrl->private_value = (unsigned long)ext_cali_start;
 
 	return 0;
@@ -1868,7 +1848,7 @@ static int tasdevice_create_cali_ctrls(struct tasdevice_priv *priv)
 		if (rc != 0)
 			return rc;
 		i++;
-		rc = create_tas2573_cali_re_ktrl(priv, &cali_ctrls[i]);
+		rc = create_tas2573_rt_spk_data_ktrl(priv, &cali_ctrls[i]);
 		if (rc != 0)
 			return rc;
 		i++;

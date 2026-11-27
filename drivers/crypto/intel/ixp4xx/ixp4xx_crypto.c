@@ -635,6 +635,7 @@ static int init_tfm_ablk(struct crypto_skcipher *tfm)
 	struct crypto_tfm *ctfm = crypto_skcipher_tfm(tfm);
 	struct ixp_ctx *ctx = crypto_tfm_ctx(ctfm);
 	const char *name = crypto_tfm_alg_name(ctfm);
+	int ret;
 
 	ctx->fallback_tfm = crypto_alloc_skcipher(name, 0, CRYPTO_ALG_NEED_FALLBACK);
 	if (IS_ERR(ctx->fallback_tfm)) {
@@ -649,7 +650,11 @@ static int init_tfm_ablk(struct crypto_skcipher *tfm)
 		 );
 
 	crypto_skcipher_set_reqsize(tfm, sizeof(struct ablk_ctx) + crypto_skcipher_reqsize(ctx->fallback_tfm));
-	return init_tfm(crypto_skcipher_tfm(tfm));
+	ret = init_tfm(crypto_skcipher_tfm(tfm));
+	if (ret)
+		crypto_free_skcipher(ctx->fallback_tfm);
+
+	return ret;
 }
 
 static int init_tfm_aead(struct crypto_aead *tfm)

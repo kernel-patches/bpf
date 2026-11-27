@@ -2741,13 +2741,12 @@ static inline void snd_cs46xx_remove_gameport(struct snd_cs46xx *chip) { }
 
 static ssize_t snd_cs46xx_io_read(struct snd_info_entry *entry,
 				  void *file_private_data,
-				  struct file *file, char __user *buf,
+				  struct file *file, char *buf,
 				  size_t count, loff_t pos)
 {
 	struct snd_cs46xx_region *region = entry->private_data;
 	
-	if (copy_to_user_fromio(buf, region->remap_addr + pos, count))
-		return -EFAULT;
+	memcpy_fromio(buf, region->remap_addr + pos, count);
 	return count;
 }
 
@@ -2764,7 +2763,7 @@ static int snd_cs46xx_proc_init(struct snd_card *card, struct snd_cs46xx *chip)
 		struct snd_cs46xx_region *region = &chip->region.idx[idx];
 		if (! snd_card_proc_new(card, region->name, &entry)) {
 			entry->content = SNDRV_INFO_CONTENT_DATA;
-			entry->private_data = chip;
+			entry->private_data = region;
 			entry->c.ops = &snd_cs46xx_proc_io_ops;
 			entry->size = region->size;
 			entry->mode = S_IFREG | 0400;

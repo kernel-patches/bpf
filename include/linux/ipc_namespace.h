@@ -4,6 +4,7 @@
 
 #include <linux/err.h>
 #include <linux/idr.h>
+#include <linux/mutex.h>
 #include <linux/rwsem.h>
 #include <linux/notifier.h>
 #include <linux/nsproxy.h>
@@ -31,6 +32,8 @@ struct ipc_ids {
 struct ipc_namespace {
 	struct ipc_ids	ids[3];
 
+	/* Serialize kernel.sem writers. */
+	struct mutex	sem_ctls_mutex;
 	int		sem_ctls[4];
 	int		used_sems;
 

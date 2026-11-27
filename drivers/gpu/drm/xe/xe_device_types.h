@@ -7,11 +7,13 @@
 #define _XE_DEVICE_TYPES_H_
 
 #include <linux/pci.h>
+#include <linux/workqueue.h>
 
 #include <drm/drm_device.h>
 #include <drm/drm_file.h>
 #include <drm/ttm/ttm_device.h>
 
+#include "xe_cper_types.h"
 #include "xe_devcoredump_types.h"
 #include "xe_drm_ras_types.h"
 #include "xe_heci_gsc.h"
@@ -21,6 +23,7 @@
 #include "xe_platform_types.h"
 #include "xe_pmu_types.h"
 #include "xe_pt_types.h"
+#include "xe_ras_types.h"
 #include "xe_sriov_pf_types.h"
 #include "xe_sriov_types.h"
 #include "xe_sriov_vf_types.h"
@@ -30,6 +33,7 @@
 #include "xe_sysctrl_types.h"
 #include "xe_tile_types.h"
 #include "xe_validation.h"
+#include "xe_wedge_types.h"
 
 #if IS_ENABLED(CONFIG_DRM_XE_DEBUG)
 #define TEST_VM_OPS_ERROR
@@ -46,22 +50,6 @@ struct xe_pat_ops;
 struct xe_pxp;
 struct xe_ttm_stolen_mgr;
 struct xe_vram_region;
-
-/**
- * enum xe_wedged_mode - possible wedged modes
- * @XE_WEDGED_MODE_NEVER: Device will never be declared wedged.
- * @XE_WEDGED_MODE_UPON_CRITICAL_ERROR: Device will be declared wedged only
- *	when critical error occurs like GT reset failure or firmware failure.
- *	This is the default mode.
- * @XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET: Device will be declared wedged on
- *	any hang. In this mode, engine resets are disabled to avoid automatic
- *	recovery attempts. This mode is primarily intended for debugging hangs.
- */
-enum xe_wedged_mode {
-	XE_WEDGED_MODE_NEVER = 0,
-	XE_WEDGED_MODE_UPON_CRITICAL_ERROR = 1,
-	XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET = 2,
-};
 
 #ifdef CONFIG_DRM_XE_DEBUG_PAGE_SIZE
 /**
@@ -164,6 +152,8 @@ struct xe_device {
 		u8 vm_max_level;
 		/** @info.va_bits: Maximum bits of a virtual address */
 		u8 va_bits;
+		/** @info.late_bind_mask: Indicates supported late binding firmwares */
+		u8 late_bind_mask;
 
 		/*
 		 * Keep all flags below alphabetically sorted
@@ -185,6 +175,8 @@ struct xe_device {
 		u8 has_drm_ras:1;
 		/** @info.has_fan_control: Device supports fan control */
 		u8 has_fan_control:1;
+		/** @info.has_fixed_vram_channels: Device has fixed VRAM temperature channels */
+		u8 has_fixed_vram_channels:1;
 		/** @info.has_flat_ccs: Whether flat CCS metadata is used */
 		u8 has_flat_ccs:1;
 		/** @info.has_gsc_nvm: Device has gsc non-volatile memory */
@@ -195,8 +187,6 @@ struct xe_device {
 		u8 has_heci_gscfi:1;
 		/** @info.has_i2c: Device has I2C controller */
 		u8 has_i2c:1;
-		/** @info.has_late_bind: Device has firmware late binding support */
-		u8 has_late_bind:1;
 		/** @info.has_llc: Device has a shared CPU+GPU last level cache */
 		u8 has_llc:1;
 		/** @info.has_mbx_power_limits: Device has support to manage power limits using
@@ -248,6 +238,8 @@ struct xe_device {
 		 * state the firmware or bootloader left it in.
 		 */
 		u8 probe_display:1;
+		/** @info.require_force_probe: platform requires force_probe */
+		u8 require_force_probe:1;
 		/** @info.skip_guc_pc: Skip GuC based PM feature init */
 		u8 skip_guc_pc:1;
 		/** @info.skip_pcode: skip access to PCODE uC */
@@ -384,7 +376,10 @@ struct xe_device {
 	/** @preempt_fence_wq: used to serialize preempt fences */
 	struct workqueue_struct *preempt_fence_wq;
 
-	/** @ordered_wq: used to serialize compute mode resume */
+	/** @rebind_wq: used to run compute mode rebind work on device node */
+	struct workqueue_struct *rebind_wq;
+
+	/** @ordered_wq: used to serialize ordered work */
 	struct workqueue_struct *ordered_wq;
 
 	/** @unordered_wq: used to serialize unordered work */
@@ -446,6 +441,14 @@ struct xe_device {
 		u16 idx[__XE_CACHE_LEVEL_COUNT];
 	} pat;
 
+	/**
+	 * @userptr_repin_timeout_ms: Overall time in milliseconds a userptr
+	 * repin is retried before failing with -EBUSY. Zero means retry
+	 * indefinitely. Accessed with READ_ONCE() / WRITE_ONCE() and tunable
+	 * through sysfs.
+	 */
+	u32 userptr_repin_timeout_ms;
+
 	/** @d3cold: Encapsulate d3cold related stuff */
 	struct {
 		/** @d3cold.capable: Indicates if root port is d3cold capable */
@@ -494,6 +497,16 @@ struct xe_device {
 	struct {
 		/** @pmt.lock: protect access for telemetry data */
 		struct mutex lock;
+		/** @pmt.base_offset: device specific base offset */
+		u64 base_offset;
+		/** @pmt.work: support late-bind probe */
+		struct delayed_work work;
+		/** @pmt.retry_count: late-bind probe retry */
+		u32 retry_count;
+		/** @pmt.punit_guid_cache: cache of the PUNIT GUID */
+		u32 punit_guid_cache;
+		/** @pmt.survivability_mode: cache of survivability mode state */
+		bool survivability_mode;
 	} pmt;
 
 	/** @soc_remapper: SoC remapper object */
@@ -546,6 +559,9 @@ struct xe_device {
 	/** @pxp: Encapsulate Protected Xe Path support */
 	struct xe_pxp *pxp;
 
+	/** @flr_prepared: Prepared for function-reset */
+	bool flr_prepared;
+
 	/** @needs_flr_on_fini: requests function-reset on fini */
 	bool needs_flr_on_fini;
 
@@ -553,18 +569,7 @@ struct xe_device {
 	atomic_t in_reset;
 
 	/** @wedged: Struct to control Wedged States and mode */
-	struct {
-		/** @wedged.flag: Xe device faced a critical error and is now blocked. */
-		atomic_t flag;
-		/** @wedged.mode: Mode controlled by kernel parameter and debugfs */
-		enum xe_wedged_mode mode;
-		/** @wedged.method: Recovery method to be sent in the drm device wedged uevent */
-		unsigned long method;
-		/** @wedged.inconsistent_reset: Inconsistent reset policy state between GTs */
-		bool inconsistent_reset;
-		/** @wedged.work: Worker to defer non-atomic calls */
-		struct work_struct work;
-	} wedged;
+	struct xe_wedge wedged;
 
 	/** @devres_group: devres group */
 	void *devres_group;
@@ -580,8 +585,17 @@ struct xe_device {
 	/** @pmu: performance monitoring unit */
 	struct xe_pmu pmu;
 
-	/** @ras: RAS structure for device */
-	struct xe_drm_ras ras;
+	/** @ras: RAS (Reliability, Availability, Serviceability) structures */
+	struct {
+		/** @ras.nl_data: drm-ras netlink data */
+		struct xe_drm_ras nl_data;
+
+		/** @ras.state: RAS device and firmware state */
+		struct xe_ras_state state;
+	} ras;
+
+	/** @cper: CPER state */
+	struct xe_cper cper;
 
 	/** @i2c: I2C host controller */
 	struct xe_i2c *i2c;
@@ -645,7 +659,6 @@ struct xe_device {
 	 */
 
 	struct intel_uncore {
-		spinlock_t lock;
 	} uncore;
 #endif
 };

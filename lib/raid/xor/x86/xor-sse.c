@@ -432,7 +432,7 @@ DO_XOR_BLOCKS(sse_inner, xor_sse_2, xor_sse_3, xor_sse_4, xor_sse_5);
 static void xor_gen_sse(void *dest, void **srcs, unsigned int src_cnt,
 			unsigned int bytes)
 {
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 	xor_gen_sse_inner(dest, srcs, src_cnt, bytes);
 	kernel_fpu_end();
 }
@@ -448,7 +448,7 @@ DO_XOR_BLOCKS(sse_pf64_inner, xor_sse_2_pf64, xor_sse_3_pf64, xor_sse_4_pf64,
 static void xor_gen_sse_pf64(void *dest, void **srcs, unsigned int src_cnt,
 			unsigned int bytes)
 {
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 	xor_gen_sse_pf64_inner(dest, srcs, src_cnt, bytes);
 	kernel_fpu_end();
 }

@@ -301,6 +301,129 @@ class CToMan(unittest.TestCase):
         self.assertEqual(result, expected)
 
 
+class ManFilterTail(unittest.TestCase):
+    """
+    Symbols dropped by the output filters must not leave a man page tail.
+    """
+
+    source = dedent("""
+        /**
+         * foo - First function
+         * @a: an argument
+         */
+        int foo(int a) { return 0; };
+
+        /**
+         * bar - Second function
+         * @b: an argument
+         */
+        int bar(int b) { return 0; };
+    """)
+
+    def setUp(self):
+        config = MockKdocConfig()
+        kernel_doc = KernelDoc(config, "mock.c", CTransforms())
+
+        with patch('builtins.open', new_callable=mock_open,
+                   read_data=self.source):
+            _, self.entries = kernel_doc.parse_kdoc()
+
+        self.out_style = ManFormat()
+        self.out_style.set_config(config)
+
+    def run_filter(self, **kwargs):
+        args = {"export": False, "internal": False, "symbol": None,
+                "nosymbol": None, "function_table": set(),
+                "enable_lineno": False, "no_doc_sections": False}
+        args.update(kwargs)
+
+        self.out_style.set_filter(**args)
+
+        return self.out_style.output_symbols("mock.c", self.entries)
+
+    def test_symbol_filter(self):
+        """Only the selected symbol gets a page, with a single tail."""
+        result = self.run_filter(symbol=["foo"], function_table={"foo"})
+
+        self.assertEqual(result.count(".TH "), 1)
+        self.assertEqual(result.count('.SH "SEE ALSO"'), 1)
+
+    def test_all_filtered_out(self):
+        """No exported symbols: no output at all."""
+        self.assertEqual(self.run_filter(export=True), "")
+
+
+class OutputFilterWarnings(unittest.TestCase):
+    """
+    The output step shows the warnings of the symbols it outputs, once.
+    """
+
+    source = dedent("""
+        /**
+         * foo - First function
+         */
+        int foo(int a) { return 0; };
+
+        /**
+         * bar - Second function
+         * @b: an argument
+         */
+        int bar(int b) { return 0; };
+    """)
+
+    def setUp(self):
+        self.config = MockKdocConfig()
+        kernel_doc = KernelDoc(self.config, "mock.c", CTransforms())
+
+        with patch('builtins.open', new_callable=mock_open,
+                   read_data=self.source):
+            with patch.object(self.config, 'warning'):
+                _, self.entries = kernel_doc.parse_kdoc()
+
+        self.out_style = ManFormat()
+        self.out_style.set_config(self.config)
+
+    def run_filter(self, **kwargs):
+        args = {"export": False, "internal": False, "symbol": None,
+                "nosymbol": None, "function_table": set(),
+                "enable_lineno": False, "no_doc_sections": False}
+        args.update(kwargs)
+
+        self.out_style.set_filter(**args)
+
+        with patch.object(self.config, 'warning') as warning:
+            self.out_style.output_symbols("mock.c", self.entries)
+
+        return [call.args[0] for call in warning.call_args_list]
+
+    def test_all_symbols(self):
+        """Without a filter, the warning of foo is shown."""
+        warnings = self.run_filter()
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("'a' not described in 'foo'", warnings[0])
+
+    def test_selected_symbol(self):
+        """The warning of a symbol selected by name is shown."""
+        warnings = self.run_filter(symbol=["foo"], function_table={"foo"})
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("'a' not described in 'foo'", warnings[0])
+
+    def test_exported_symbol(self):
+        """The warning of an exported symbol is shown."""
+        warnings = self.run_filter(export=True, function_table={"foo"})
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("'a' not described in 'foo'", warnings[0])
+
+    def test_other_symbol(self):
+        """The warning of a symbol that is not selected is not shown."""
+        warnings = self.run_filter(symbol=["bar"], function_table={"bar"})
+
+        self.assertEqual(warnings, [])
+
+
 class CToRest(unittest.TestCase):
     out_style = RestFormat()
     config = MockKdocConfig()
@@ -443,6 +566,61 @@ class TestContextLockStruct(GenerateKdocItem):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0].name, "debugfs_cancellation")
         self.assertEqual(entries[0].warnings, [])
+
+class TestUnusedWarnings(GenerateKdocItem):
+    """
+    Test that the parser itself only emits warnings of discarded entries.
+    """
+
+    def parse(self, source):
+        """
+        Parse source, returning the entries and the warnings emitted.
+        """
+        kernel_doc = KernelDoc(self.config, "test.c", self.xforms)
+
+        with patch('builtins.open', new_callable=mock_open,
+                   read_data=dedent(source)):
+            with patch.object(self.config, 'warning') as warning:
+                _, entries = kernel_doc.parse_kdoc()
+
+        return entries, [call.args[0] for call in warning.call_args_list]
+
+    def test_stored_entry(self):
+        """
+        Warnings of a stored entry are left for the output step, which
+        applies the symbol filters, so they must not be emitted here.
+        """
+        source = """
+            /**
+             * func - Do nothing
+             */
+            int func(int arg) { return 0; }
+        """
+
+        entries, emitted = self.parse(source)
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(len(entries[0].warnings), 1)
+        self.assertIn("'arg' not described", entries[0].warnings[0])
+        self.assertEqual(emitted, [])
+
+    def test_discarded_entry(self):
+        """
+        Warnings of an entry that is never stored are emitted once.
+        """
+        source = """
+            /**
+             * to_user_ptr - cast a u64 to a user space pointer
+             * @x: the u64 to convert
+             */
+            #define u64_to_user_ptr(x) ((void __user *)(uintptr_t)(x))
+        """
+
+        entries, emitted = self.parse(source)
+
+        self.assertEqual(entries, [])
+        self.assertEqual(len(emitted), 1)
+        self.assertIn("expecting prototype for to_user_ptr()", emitted[0])
 
 #
 # Class and logic to create dynamic tests from YAML

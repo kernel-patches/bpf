@@ -57,6 +57,8 @@ static int rtw_ops_start(struct ieee80211_hw *hw)
 
 	mutex_lock(&rtwdev->mutex);
 	ret = rtw_core_start(rtwdev);
+	if (ret)
+		clear_bit(RTW_FLAG_RESTARTING, rtwdev->flags);
 	mutex_unlock(&rtwdev->mutex);
 
 	return ret;
@@ -67,6 +69,7 @@ static void rtw_ops_stop(struct ieee80211_hw *hw, bool suspend)
 	struct rtw_dev *rtwdev = hw->priv;
 
 	mutex_lock(&rtwdev->mutex);
+	clear_bit(RTW_FLAG_RESTARTING, rtwdev->flags);
 	rtw_core_stop(rtwdev);
 	mutex_unlock(&rtwdev->mutex);
 }
@@ -432,6 +435,11 @@ static void rtw_ops_bss_info_changed(struct ieee80211_hw *hw,
 	if (changed & BSS_CHANGED_BEACON_INT) {
 		if (ieee80211_vif_type_p2p(vif) == NL80211_IFTYPE_STATION)
 			coex_stat->wl_beacon_interval = conf->beacon_int;
+		else if ((vif->type == NL80211_IFTYPE_AP ||
+			  vif->type == NL80211_IFTYPE_ADHOC) &&
+			 rtwvif->port == RTW_PORT_0)
+			rtw_write16(rtwdev, REG_MBSSID_BCN_SPACE,
+				    conf->beacon_int);
 	}
 
 	if (changed & BSS_CHANGED_BEACON) {
@@ -598,20 +606,20 @@ static int rtw_ops_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 
 	rtw_leave_lps_deep(rtwdev);
 
-	if (key->flags & IEEE80211_KEY_FLAG_PAIRWISE) {
-		hw_key_idx = rtw_sec_get_free_cam(sec);
-	} else {
-		/* multiple interfaces? */
-		hw_key_idx = key->keyidx;
-	}
-
-	if (hw_key_idx >= sec->total_cam_num) {
-		ret = -ENOSPC;
-		goto out;
-	}
-
 	switch (cmd) {
 	case SET_KEY:
+		if (key->flags & IEEE80211_KEY_FLAG_PAIRWISE) {
+			hw_key_idx = rtw_sec_get_free_cam(sec);
+		} else {
+			/* multiple interfaces? */
+			hw_key_idx = key->keyidx;
+		}
+
+		if (hw_key_idx >= sec->total_cam_num) {
+			ret = -ENOSPC;
+			goto out;
+		}
+
 		/* need sw generated IV */
 		key->flags |= IEEE80211_KEY_FLAG_GENERATE_IV;
 		key->hw_key_idx = hw_key_idx;

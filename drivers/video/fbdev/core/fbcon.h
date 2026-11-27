@@ -75,8 +75,7 @@ struct fbcon_bitops {
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
 struct fbcon_rotated {
 	font_data_t *fontdata;       /* source font */
-	u8 *buf;                     /* rotated glyphs */
-	size_t bufsize;
+	font_data_t *buf;            /* rotated font */
 	int buf_rotate;              /* rotation of buf */
 	unsigned int buf_width;      /* geometry of source font */
 	unsigned int buf_height;
@@ -99,7 +98,7 @@ struct fbcon_par {
 	bool   initialized;
 	bool   cursor_blink_on;
 	int    rotate;
-	char  *cursor_data;
+	unsigned char *cursor_data;
 #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
 	struct fbcon_rotated rotated;
 #endif

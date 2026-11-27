@@ -136,8 +136,6 @@ required:
   - interrupts
   - interrupt-controller
   - "#interrupt-cells"
-  - "#address-cells"
-  - "#size-cells"
 
 additionalProperties: false
 

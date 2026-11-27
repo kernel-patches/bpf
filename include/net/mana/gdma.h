@@ -56,6 +56,11 @@ enum gdma_work_request_flags {
 	GDMA_WR_OOB_IN_SGL		= BIT(0),
 	GDMA_WR_PAD_BY_SGE0		= BIT(1),
 	GDMA_WR_IB_SGL			= BIT(2),
+	GDMA_WR_CHECK_SN                = BIT(3),
+	GDMA_WR_CHECK_RSN               = BIT(4),
+	GDMA_WR_FENCE                   = BIT(5),
+	GDMA_WR_FENCE_EXTENDED          = BIT(6),
+	GDMA_WR_GENERATION_1            = BIT(7),
 };
 
 enum gdma_eqe_type {
@@ -220,8 +225,8 @@ struct gdma_wqe_request {
 		struct ib_sge *ib_sgl;
 	};
 	u32 num_sge;
-
-	u32 inline_oob_size;
+	u16 wqe_size_in_bu;
+	u16 inline_oob_size;
 	const void *inline_oob_data;
 
 	u32 flags;
@@ -459,6 +464,8 @@ struct gdma_context;
  *	allocate their whole pool up front leave this NULL.
  * @msix_free: Release a vector obtained from @msix_alloc_at. Only needed
  *	by buses that implement @msix_alloc_at.
+ * @setup_dyn_affinity: Place a vector obtained from @msix_alloc_at on a
+ *	CPU. Only needed by buses that implement @msix_alloc_at.
  * @msix_vec_count: Return the number of entries in the device MSI-X table,
  *	used to clamp the vector count the core asks for. Buses that cannot
  *	report a table size leave this NULL and the clamp is skipped.
@@ -481,6 +488,8 @@ struct gdma_bus_ops {
 	int (*msix_virq)(struct gdma_context *gc, int msi);
 	int (*msix_alloc_at)(struct gdma_context *gc, int *msi);
 	void (*msix_free)(struct gdma_context *gc, int msi, int irq);
+	int (*setup_dyn_affinity)(struct gdma_context *gc, unsigned int irq,
+				  unsigned int msix_index);
 	int (*msix_vec_count)(struct gdma_context *gc);
 	int (*setup_hwc_irqs)(struct gdma_context *gc);
 	int (*setup_remaining_irqs)(struct gdma_context *gc);
@@ -615,7 +624,9 @@ void mana_gd_ring_dim(struct gdma_queue *cq, u32 mod_usec, bool mod_usec_vld,
 bool mana_gd_detach_cq(struct gdma_context *gc, struct gdma_queue *queue);
 
 struct gdma_wqe {
-	u32 reserved	:24;
+	u32 num_pad_sge :5;
+	u32 generation1 :1;
+	u32 reserved    :18;
 	u32 last_vbytes	:8;
 
 	union {
@@ -625,9 +636,13 @@ struct gdma_wqe {
 			u32 num_sge		:8;
 			u32 inline_oob_size_div4:3;
 			u32 client_oob_in_sgl	:1;
-			u32 reserved1		:4;
+			u32 check_rsn		:1;
+			u32 fence		:1;
+			u32 fence_extended	:1;
+			u32 reserved1		:1;
 			u32 client_data_unit	:14;
-			u32 reserved2		:2;
+			u32 check_sn		:1;
+			u32 reserved2		:1;
 		};
 	};
 }; /* HW DATA */
@@ -670,6 +685,8 @@ struct gdma_cqe {
 #define SET_ARM_BIT 1
 
 #define GDMA_EQE_OWNER_BITS 3
+
+#define MANA_PSN_CLIENT_OFFSET 0x8
 
 union gdma_eqe_info {
 	u32 as_uint32;
@@ -776,6 +793,9 @@ enum {
 /* Driver supports handling throttled EQEs */
 #define GDMA_DRV_CAP_FLAG_1_THROTTLED_EVENT_QUEUE BIT_ULL(32)
 
+/* Enforce min 1 usec, 1 frames for Interrupt Moderation */
+#define GDMA_DRV_CAP_FLAG_1_SET_MIN_INTR_MOD_VALUE BIT_ULL(33)
+
 /* Capabilities in the PCI-only group below rely on dynamic MSI-X allocation
  * and on the servicing and reset paths reached through
  * mana_schedule_serv_work(). Transports that provide neither leave
@@ -801,7 +821,8 @@ enum {
 	 GDMA_DRV_CAP_FLAG_1_EQ_MSI_UNSHARE_MULTI_VPORT | \
 	 GDMA_DRV_CAP_FLAG_1_DYN_INTERRUPT_MODERATION | \
 	 GDMA_DRV_CAP_FLAG_1_NON_CONTIGUOUS_BUFFERS | \
-	 GDMA_DRV_CAP_FLAG_1_THROTTLED_EVENT_QUEUE)
+	 GDMA_DRV_CAP_FLAG_1_THROTTLED_EVENT_QUEUE | \
+	 GDMA_DRV_CAP_FLAG_1_SET_MIN_INTR_MOD_VALUE)
 
 #define GDMA_DRV_CAP_FLAGS2 0
 
@@ -955,6 +976,8 @@ enum gdma_mr_access_flags {
 	GDMA_ACCESS_FLAG_REMOTE_WRITE = BIT_ULL(3),
 	GDMA_ACCESS_FLAG_REMOTE_ATOMIC = BIT_ULL(4),
 	GDMA_ACCESS_FLAG_BIND_MW = BIT_ULL(5),
+	GDMA_ACCESS_FLAG_INVALIDATE = BIT_ULL(6),
+	GDMA_ACCESS_FLAG_FMR = BIT_ULL(7),
 };
 
 /* GDMA_CREATE_DMA_REGION */
@@ -1007,6 +1030,7 @@ struct gdma_destroy_dma_region_req {
 
 enum gdma_pd_flags {
 	GDMA_PD_FLAG_ALLOW_GPA_MR = BIT(0),
+	GDMA_PD_FLAG_ALLOW_FMR_MR = BIT(1),
 	GDMA_PD_FLAG_SHORT_PDN = BIT(2),
 };
 
@@ -1043,6 +1067,11 @@ enum gdma_mr_type {
 	 * address that is set up in the MST
 	 */
 	GDMA_MR_TYPE_GVA = 2,
+	/* Fast Memory - MRs are initially put in the free state,
+	 * and the specified number of PTEs are reserved for future fast
+	 * memory registrations
+	 */
+	GDMA_MR_TYPE_FMR = 3,
 	/* Guest zero-based address MRs */
 	GDMA_MR_TYPE_ZBVA = 4,
 	/* Device address MRs */
@@ -1072,6 +1101,9 @@ struct gdma_create_mr_params {
 			u64 length;
 			enum gdma_mr_access_flags access_flags;
 		} da;
+		struct {
+			u32 rsvd_pte_count;
+		} fmr;
 	};
 };
 
@@ -1096,6 +1128,10 @@ struct gdma_create_mr_request {
 			u64 offset;
 			enum gdma_mr_access_flags access_flags;
 		} __packed da;
+		struct {
+			u32 page_size;
+			u32 rsvd_pte_count;
+		} __packed fmr;
 	} __packed;
 	u32 reserved_2;
 	union {

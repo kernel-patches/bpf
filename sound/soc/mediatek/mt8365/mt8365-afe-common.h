@@ -443,6 +443,4 @@ int mt8365_dai_dmic_register(struct mtk_base_afe *afe);
 
 int mt8365_dai_pcm_register(struct mtk_base_afe *afe);
 
-int mt8365_dai_tdm_register(struct mtk_base_afe *afe);
-
 #endif

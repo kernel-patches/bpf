@@ -5,7 +5,6 @@
  */
 
 #include "opl4_local.h"
-#include <linux/vmalloc.h>
 #include <linux/export.h>
 #include <sound/info.h>
 
@@ -33,42 +32,24 @@ static int snd_opl4_mem_proc_release(struct snd_info_entry *entry,
 
 static ssize_t snd_opl4_mem_proc_read(struct snd_info_entry *entry,
 				      void *file_private_data,
-				      struct file *file, char __user *_buf,
+				      struct file *file, char *buf,
 				      size_t count, loff_t pos)
 {
 	struct snd_opl4 *opl4 = entry->private_data;
-	char* buf;
 
-	buf = vmalloc(count);
-	if (!buf)
-		return -ENOMEM;
 	snd_opl4_read_memory(opl4, buf, pos, count);
-	if (copy_to_user(_buf, buf, count)) {
-		vfree(buf);
-		return -EFAULT;
-	}
-	vfree(buf);
 	return count;
 }
 
 static ssize_t snd_opl4_mem_proc_write(struct snd_info_entry *entry,
 				       void *file_private_data,
 				       struct file *file,
-				       const char __user *_buf,
+				       const char *buf,
 				       size_t count, loff_t pos)
 {
 	struct snd_opl4 *opl4 = entry->private_data;
-	char *buf;
 
-	buf = vmalloc(count);
-	if (!buf)
-		return -ENOMEM;
-	if (copy_from_user(buf, _buf, count)) {
-		vfree(buf);
-		return -EFAULT;
-	}
 	snd_opl4_write_memory(opl4, buf, pos, count);
-	vfree(buf);
 	return count;
 }
 

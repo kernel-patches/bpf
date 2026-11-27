@@ -12,6 +12,7 @@
 #include <linux/soundwire/sdw.h>
 #include <linux/soundwire/sdw_type.h>
 #include <linux/soundwire/sdw_registers.h>
+#include <linux/unaligned.h>
 #include <sound/soc.h>
 #include "../../../drivers/soundwire/bus.h"
 
@@ -84,6 +85,11 @@
 #define RT1320_SDCA_RATE_96000HZ		0x0b
 #define RT1320_SDCA_RATE_192000HZ		0x0d
 
+/* DSP FW info */
+#define RT1320_AFX_HDR_SIZE			64
+#define RT1320_AFX_HDR_INFO_OFFSET		0x20
+#define RT1321_AFX1_ADDR			0x3fc2a300
+
 enum {
 	RT1320_AIF1,
 	RT1320_AIF2,
@@ -109,6 +115,7 @@ enum rt1321_version_id {
 #define RT1320_VAB_MCU_PATCH "realtek/rt1320/rt1320-patch-code-vab.bin"
 #define RT1320_VC_MCU_PATCH "realtek/rt1320/rt1320-patch-code-vc.bin"
 #define RT1321_VA_MCU_PATCH "realtek/rt1320/rt1321-patch-code-va.bin"
+#define RT1321_VA2_MCU_PATCH "realtek/rt1320/rt1321-patch-code-va2.bin"
 
 #define RT1320_FW_PARAM_ADDR 0x3fc2ab80
 #define RT1320_CMD_ID 0x3fc2ab81
@@ -119,6 +126,9 @@ enum rt1321_version_id {
 #define RT1321_CMD_ID 0x3fc2d301
 #define RT1321_CMD_PARAM_ADDR 0x3fc2d310
 #define RT1321_DSPFW_STATUS_ADDR 0x3fc2dfc4
+
+/* moudleid + commandtype + reserved1 + commandlength */
+#define RT1320_FW_CMD_HDR_SIZE 8
 
 /* FW parameter id 6, 7 */
 struct rt1320_datafixpoint {
@@ -168,6 +178,11 @@ enum rt1320_power_state {
 	RT1320_K_R0_STATE = 0x1b,
 };
 
+/* polling of RT1320_POWER_STATE */
+#define RT1320_PS_RETRY			200
+#define RT1320_PS_SLEEP_US		1000
+#define RT1321_VA2_PS_SLEEP_US		10000
+
 enum rt1320_rw_type {
 	RT1320_BRA_WRITE = 0,
 	RT1320_BRA_READ = 1,
@@ -207,6 +222,8 @@ struct rt1320_sdw_priv {
 	bool rae_update_done;
 	struct work_struct load_dspfw_work;
 	struct sdw_bpt_msg bra_msg;
+	unsigned short l_adv_gain, r_adv_gain;
+	bool comp_mode_en;
 };
 
 #endif /* __RT1320_SDW_H__ */

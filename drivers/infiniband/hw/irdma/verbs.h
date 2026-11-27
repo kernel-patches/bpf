@@ -129,6 +129,7 @@ struct irdma_srq {
 	struct irdma_dma_mem kmem;
 	u64 *srq_wrid_mem;
 	refcount_t refcnt;
+	struct completion free_srq;
 	spinlock_t lock; /* for poll srq */
 	struct irdma_pbl *iwpbl;
 	struct irdma_sge *sg_list;

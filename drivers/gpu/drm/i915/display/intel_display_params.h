@@ -51,6 +51,7 @@ struct drm_printer;
 	param(bool, psr_safest_params, false, 0400) \
 	param(bool, enable_psr2_sel_fetch, true, 0400) \
 	param(int, enable_dmc_wl, -1, 0400) \
+	param(int, mmio_debug, -IS_ENABLED(CONFIG_DRM_I915_DEBUG_MMIO), 0600) \
 	/*
 	 * Debugfs-only knob (per-device): no matching module_param is registered
 	 * in intel_display_params.c on purpose. Runtime-toggle via debugfs.

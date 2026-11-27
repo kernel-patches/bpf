@@ -387,7 +387,7 @@ static void dm_test_wb_atomic_check_invalid_format(struct kunit *test)
 static const struct drm_connector_funcs dm_wb_test_connector_funcs = {
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 };
 
 /**
@@ -486,6 +486,10 @@ static void dm_test_wb_connector_init_success(struct kunit *test)
 	struct dc *dc;
 	int ret;
 
+	/* Must be allocated before adev to prevent use-after-free on cleanup */
+	wbcon = kunit_kzalloc(test, sizeof(*wbcon), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, wbcon);
+
 	adev = dm_kunit_alloc_adev(test);
 	adev->mode_info.num_crtc = 1;
 	dm = &adev->dm;
@@ -500,18 +504,15 @@ static void dm_test_wb_connector_init_success(struct kunit *test)
 	dc->links[0] = link;
 	dm->dc = dc;
 
-	wbcon = kunit_kzalloc(test, sizeof(*wbcon), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_NULL(test, wbcon);
-
 	ret = amdgpu_dm_wb_connector_init(dm, wbcon, 0);
 
 	KUNIT_EXPECT_EQ(test, ret, 0);
 	KUNIT_EXPECT_PTR_EQ(test, wbcon->link, link);
-	KUNIT_EXPECT_TRUE(test, wbcon->base.base.funcs != NULL);
-	KUNIT_EXPECT_TRUE(test, wbcon->base.base.helper_private != NULL);
-	KUNIT_EXPECT_TRUE(test, wbcon->base.base.state != NULL);
-	KUNIT_EXPECT_TRUE(test, wbcon->base.encoder.funcs != NULL);
-	KUNIT_EXPECT_EQ(test, wbcon->base.encoder.possible_crtcs, 0x1);
+	KUNIT_EXPECT_TRUE(test, wbcon->base.funcs != NULL);
+	KUNIT_EXPECT_TRUE(test, wbcon->base.helper_private != NULL);
+	KUNIT_EXPECT_TRUE(test, wbcon->base.state != NULL);
+	KUNIT_EXPECT_NOT_NULL(test, wbcon->encoder.funcs);
+	KUNIT_EXPECT_EQ(test, wbcon->encoder.possible_crtcs, 0x1);
 }
 
 /* Tests for amdgpu_dm_wb_prepare_job / amdgpu_dm_wb_cleanup_job */

@@ -972,8 +972,8 @@ probe_error_v4l2_ctrl_handler_free:
 }
 
 static const struct acpi_device_id ov9734_acpi_ids[] = {
-	{ "OVTI9734", },
-	{}
+	{ .id = "OVTI9734" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, ov9734_acpi_ids);
@@ -990,6 +990,6 @@ static struct i2c_driver ov9734_i2c_driver = {
 module_i2c_driver(ov9734_i2c_driver);
 
 MODULE_AUTHOR("Qiu, Tianshu <tian.shu.qiu@intel.com>");
-MODULE_AUTHOR("Bingbu Cao <bingbu.cao@intel.com>");
+MODULE_AUTHOR("Bingbu Cao <bingbu.cao@amd.com>");
 MODULE_DESCRIPTION("OmniVision OV9734 sensor driver");
 MODULE_LICENSE("GPL v2");

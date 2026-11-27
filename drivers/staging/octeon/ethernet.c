@@ -183,7 +183,7 @@ static void cvm_oct_configure_common_hw(struct platform_device *pdev)
  *
  * @work_queue_entry: Work queue entry to free
  *
- * Returns Zero on success, Negative on failure.
+ * Return: Zero on success, Negative on failure.
  */
 int cvm_oct_free_work(void *work_queue_entry)
 {
@@ -211,7 +211,7 @@ EXPORT_SYMBOL(cvm_oct_free_work);
  * cvm_oct_common_get_stats - get the low level ethernet statistics
  * @dev:    Device to get the statistics from
  *
- * Returns Pointer to the statistics
+ * Return: Pointer to the statistics
  */
 static struct net_device_stats *cvm_oct_common_get_stats(struct net_device *dev)
 {
@@ -247,7 +247,7 @@ static struct net_device_stats *cvm_oct_common_get_stats(struct net_device *dev)
  * @dev:     Device to change
  * @new_mtu: The new MTU
  *
- * Returns Zero on success
+ * Return: Zero on success
  */
 static int cvm_oct_common_change_mtu(struct net_device *dev, int new_mtu)
 {
@@ -401,7 +401,7 @@ static int cvm_oct_set_mac_filter(struct net_device *dev)
  * @dev:    The device in question.
  * @addr:   Socket address.
  *
- * Returns Zero on success
+ * Return: Zero on success
  */
 static int cvm_oct_common_set_mac_address(struct net_device *dev, void *addr)
 {
@@ -416,7 +416,7 @@ static int cvm_oct_common_set_mac_address(struct net_device *dev, void *addr)
  * cvm_oct_common_init - per network device initialization
  * @dev:    Device to initialize
  *
- * Returns Zero on success
+ * Return: Zero on success
  */
 int cvm_oct_common_init(struct net_device *dev)
 {

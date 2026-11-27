@@ -897,6 +897,8 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 		       stream != SNDRV_PCM_STREAM_CAPTURE))
 		return -EINVAL;
 	*rsubstream = NULL;
+	if (pcm->disconnected)
+		return -ENODEV;
 	pstr = &pcm->streams[stream];
 	if (pstr->substream == NULL || pstr->substream_count == 0)
 		return -ENODEV;
@@ -1082,16 +1084,26 @@ static int snd_pcm_dev_register(struct snd_device *device)
 		err = snd_register_device(devtype, pcm->card, pcm->device,
 					  &snd_pcm_f_ops[cidx], pcm,
 					  pcm->streams[cidx].dev);
-		if (err < 0) {
-			list_del_init(&pcm->list);
-			return err;
-		}
+		if (err < 0)
+			goto error;
 
 		for (substream = pcm->streams[cidx].substream; substream; substream = substream->next)
 			snd_pcm_timer_init(substream);
 	}
 
 	pcm_call_notify(pcm, n_register);
+	return 0;
+
+error:
+	while (--cidx >= 0) {
+		if (!pcm->streams[cidx].substream)
+			continue;
+		snd_unregister_device(pcm->streams[cidx].dev);
+		for (substream = pcm->streams[cidx].substream; substream;
+		     substream = substream->next)
+			snd_pcm_timer_done(substream);
+	}
+	list_del_init(&pcm->list);
 	return err;
 }
 
@@ -1103,6 +1115,7 @@ static int snd_pcm_dev_disconnect(struct snd_device *device)
 
 	guard(mutex)(&register_mutex);
 	scoped_guard(mutex, &pcm->open_mutex) {
+		pcm->disconnected = true;
 		wake_up(&pcm->open_wait);
 		list_del_init(&pcm->list);
 

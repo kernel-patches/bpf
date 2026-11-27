@@ -23,13 +23,13 @@
  * Rotation 270 degrees
  */
 
-static void ccw_update_attr(u8 *dst, u8 *src, int attribute,
-				  struct vc_data *vc)
+static void ccw_update_attr(unsigned char *dst, const unsigned char *src, int attribute,
+			    struct vc_data *vc)
 {
 	int i, j, offset = (vc->vc_font.height < 10) ? 1 : 2;
 	int width = font_glyph_pitch(vc->vc_font.height);
 	int mod = vc->vc_font.height % 8;
-	u8 c, msk = ~(0xff << offset), msk1 = 0;
+	unsigned char c, msk = ~(0xff << offset), msk1 = 0;
 
 	if (mod)
 		msk <<= (8 - mod);
@@ -97,16 +97,23 @@ static void ccw_clear(struct vc_data *vc, struct fb_info *info, int sy,
 
 static inline void ccw_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 				    const u16 *s, u32 attr, u32 cnt,
-				    u32 d_pitch, u32 s_pitch, u32 cellsize,
-				    struct fb_image *image, u8 *buf, u8 *dst)
+				    u32 d_pitch, u32 s_width, u32 s_vpitch,
+				    struct fb_image *image,
+				    unsigned char *buf, u8 *dst)
 {
 	struct fbcon_par *par = info->fbcon_par;
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
 	u32 idx = font_glyph_pitch(vc->vc_font.height);
-	u8 *src;
+	const unsigned char *src;
 
 	while (cnt--) {
-		src = par->rotated.buf + (scr_readw(s--) & charmask) * cellsize;
+		src = font_data_glyph_buf(par->rotated.buf, s_width, s_vpitch,
+					  scr_readw(s--) & charmask);
+		if (!src) {
+			src = font_data_glyph_buf(par->rotated.buf, s_width, s_vpitch, '\0');
+			if (!src)
+				goto next_char;
+		}
 
 		if (attr) {
 			ccw_update_attr(buf, src, attr, vc);
@@ -119,7 +126,7 @@ static inline void ccw_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 		else
 			fb_pad_aligned_buffer(dst, d_pitch, src, idx,
 					      vc->vc_font.width);
-
+next_char:
 		dst += d_pitch * vc->vc_font.width;
 	}
 
@@ -132,15 +139,17 @@ static void ccw_putcs(struct vc_data *vc, struct fb_info *info,
 {
 	struct fb_image image;
 	struct fbcon_par *par = info->fbcon_par;
-	u32 width = font_glyph_pitch(vc->vc_font.height);
-	u32 cellsize = width * vc->vc_font.width;
+	u32 width = vc->vc_font.height;
+	u32 vpitch = vc->vc_font.width;
+	u32 cellsize = font_glyph_size(width, vpitch);
 	u32 maxcnt = info->pixmap.size/cellsize;
 	u32 scan_align = info->pixmap.scan_align - 1;
 	u32 buf_align = info->pixmap.buf_align - 1;
 	u32 cnt, pitch, size;
 	u32 attribute = get_attribute(info, scr_readw(s));
-	u8 *dst, *buf = NULL;
+	unsigned char *buf = NULL;
 	u32 vyres = GETVYRES(par->p, info);
+	u8 *dst;
 
 	if (!par->rotated.buf)
 		return;
@@ -174,7 +183,7 @@ static void ccw_putcs(struct vc_data *vc, struct fb_info *info,
 		dst = fb_get_buffer_offset(info, &info->pixmap, size);
 		image.data = dst;
 		ccw_putcs_aligned(vc, info, s, attribute, cnt, pitch,
-				 width, cellsize, &image, buf, dst);
+				 width, vpitch, &image, buf, dst);
 		image.dy += image.height;
 		count -= cnt;
 		s -= cnt;
@@ -224,12 +233,14 @@ static void ccw_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	struct fb_cursor cursor;
 	struct fbcon_par *par = info->fbcon_par;
 	unsigned short charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
-	int w = font_glyph_pitch(vc->vc_font.height);
+	int width = vc->vc_font.height;
+	int vpitch = vc->vc_font.width;
+	int cellsize = font_glyph_size(width, vpitch);
 	int c;
 	int y = real_y(par->p, vc->state.y);
 	int attribute, use_sw = vc->vc_cursor_type & CUR_SW;
 	int err = 1, dx, dy;
-	char *src;
+	const unsigned char *src;
 	u32 vyres = GETVYRES(par->p, info);
 
 	if (!par->rotated.buf)
@@ -239,18 +250,23 @@ static void ccw_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 
  	c = scr_readw((u16 *) vc->vc_pos);
 	attribute = get_attribute(info, c);
-	src = par->rotated.buf + ((c & charmask) * (w * vc->vc_font.width));
+	src = font_data_glyph_buf(par->rotated.buf, width, vpitch, c & charmask);
+	if (!src) {
+		src = font_data_glyph_buf(par->rotated.buf, width, vpitch, '\0');
+		if (!src)
+			return;
+	}
 
-	if (par->cursor_state.image.data != src ||
+	if (par->cursor_state.image.data != (const char *)src ||
 	    par->cursor_reset) {
-		par->cursor_state.image.data = src;
+		par->cursor_state.image.data = (const char *)src;
 		cursor.set |= FB_CUR_SETIMAGE;
 	}
 
 	if (attribute) {
-		u8 *dst;
+		unsigned char *dst;
 
-		dst = kmalloc_array(w, vc->vc_font.width, GFP_ATOMIC);
+		dst = kmalloc(cellsize, GFP_ATOMIC);
 		if (!dst)
 			return;
 		kfree(par->cursor_data);
@@ -302,7 +318,7 @@ static void ccw_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 		if (!tmp)
 			return;
 
-		mask = kmalloc_array(vc->vc_font.width, w, GFP_ATOMIC);
+		mask = kmalloc(cellsize, GFP_ATOMIC);
 		if (!mask) {
 			kfree(tmp);
 			return;

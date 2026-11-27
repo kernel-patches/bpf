@@ -5,13 +5,8 @@
 
 #define FB_ACCEL_SMI 0xab
 
-#define MHZ(x) ((x) * 1000000)
-
 #define DEFAULT_SM750_CHIP_CLOCK	290
 #define DEFAULT_SM750LE_CHIP_CLOCK	333
-#ifndef SM750LE_REVISION_ID
-#define SM750LE_REVISION_ID ((unsigned char)0xfe)
-#endif
 
 enum sm750_pnltype {
 	SM750_24TFT = 0,	/* 24bit tft */
@@ -97,14 +92,6 @@ struct sm750_dev {
 	enum sm750_pnltype pnltype;
 	enum sm750_dataflow dataflow;
 	int nocrt;
-
-	/*
-	 * 0: no hardware cursor
-	 * 1: primary crtc hw cursor enabled,
-	 * 2: secondary crtc hw cursor enabled
-	 * 3: both ctrc hw cursor enabled
-	 */
-	int hw_cursor;
 };
 
 struct lynx_cursor {
@@ -125,7 +112,6 @@ struct lynx_cursor {
 struct lynxfb_crtc {
 	unsigned char __iomem *v_cursor; /* virtual address of cursor */
 	unsigned char __iomem *v_screen; /* virtual address of on_screen */
-	int o_cursor; /* cursor address offset in vidmem */
 	int o_screen; /* onscreen address offset in vidmem */
 	int channel;/* which channel this crtc stands for*/
 	resource_size_t vidmem_size;/* this view's video memory max size */
@@ -141,7 +127,6 @@ struct lynxfb_crtc {
 };
 
 struct lynxfb_output {
-	int dpms;
 	int paths;
 	/*
 	 * which paths(s) this output stands for,for sm750:

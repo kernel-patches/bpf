@@ -159,10 +159,12 @@ static int psci_cpuidle_domain_probe(struct platform_device *pdev)
 	if (ret)
 		goto remove_pd;
 
-	/* let's try to enable OSI. */
-	ret = psci_set_osi_mode(use_osi);
-	if (ret)
-		goto remove_pd;
+	if (use_osi) {
+		/* let's try to enable OSI. */
+		ret = psci_set_osi_mode(true);
+		if (ret)
+			goto remove_pd;
+	}
 
 	pr_info("Initialized CPU PM domain topology using %s mode\n",
 		use_osi ? "OSI" : "PC");
@@ -172,8 +174,7 @@ remove_pd:
 	dt_idle_pd_remove_topology(np);
 	psci_pd_remove();
 exit:
-	pr_err("failed to create CPU PM domains ret=%d\n", ret);
-	return ret;
+	return dev_err_probe(&pdev->dev, ret, "failed to create CPU PM domains\n");
 }
 
 static struct platform_driver psci_cpuidle_domain_driver = {

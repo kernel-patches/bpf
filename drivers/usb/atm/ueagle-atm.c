@@ -2189,7 +2189,7 @@ static void uea_stop(struct uea_softc *sc)
 	release_firmware(sc->dsp_firm);
 }
 
-/* syfs interface */
+/* sysfs interface */
 static struct uea_softc *dev_to_uea(struct device *dev)
 {
 	struct usb_interface *intf;

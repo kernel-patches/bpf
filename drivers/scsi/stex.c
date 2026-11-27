@@ -1489,47 +1489,80 @@ static const struct scsi_host_template driver_template = {
 
 static const struct pci_device_id stex_pci_tbl[] = {
 	/* st_shasta */
-	{ 0x105a, 0x8350, PCI_ANY_ID, PCI_ANY_ID, 0, 0,
-		st_shasta }, /* SuperTrak EX8350/8300/16350/16300 */
-	{ 0x105a, 0xc350, PCI_ANY_ID, PCI_ANY_ID, 0, 0,
-		st_shasta }, /* SuperTrak EX12350 */
-	{ 0x105a, 0x4302, PCI_ANY_ID, PCI_ANY_ID, 0, 0,
-		st_shasta }, /* SuperTrak EX4350 */
-	{ 0x105a, 0xe350, PCI_ANY_ID, PCI_ANY_ID, 0, 0,
-		st_shasta }, /* SuperTrak EX24350 */
-
+	{
+		/* SuperTrak EX8350/8300/16350/16300 */
+		PCI_DEVICE(0x105a, 0x8350),
+		.driver_data = st_shasta,
+	}, {
+		/* SuperTrak EX12350 */
+		PCI_DEVICE(0x105a, 0xc350),
+		.driver_data = st_shasta,
+	}, {
+		/* SuperTrak EX4350 */
+		PCI_DEVICE(0x105a, 0x4302),
+		.driver_data = st_shasta,
+	}, {
+		/* SuperTrak EX24350 */
+		PCI_DEVICE(0x105a, 0xe350),
+		.driver_data = st_shasta,
+	},
 	/* st_vsc */
-	{ 0x105a, 0x7250, PCI_ANY_ID, PCI_ANY_ID, 0, 0, st_vsc },
+	{
+		PCI_DEVICE(0x105a, 0x7250),
+		.driver_data = st_vsc,
+	},
 
 	/* st_yosemite */
-	{ 0x105a, 0x8650, 0x105a, PCI_ANY_ID, 0, 0, st_yosemite },
+	{
+		PCI_DEVICE_SUB(0x105a, 0x8650, 0x105a, PCI_ANY_ID),
+		.driver_data = st_yosemite,
+	},
 
 	/* st_seq */
-	{ 0x105a, 0x3360, PCI_ANY_ID, PCI_ANY_ID, 0, 0, st_seq },
+	{
+		PCI_DEVICE(0x105a, 0x3360),
+		.driver_data = st_seq,
+	},
 
 	/* st_yel */
-	{ 0x105a, 0x8650, 0x1033, PCI_ANY_ID, 0, 0, st_yel },
-	{ 0x105a, 0x8760, PCI_ANY_ID, PCI_ANY_ID, 0, 0, st_yel },
+	{
+		PCI_DEVICE_SUB(0x105a, 0x8650, 0x1033, PCI_ANY_ID),
+		.driver_data = st_yel,
+	}, {
+		PCI_DEVICE(0x105a, 0x8760),
+		.driver_data = st_yel,
+	},
 
-	/* st_P3, pluto */
-	{ PCI_VENDOR_ID_PROMISE, 0x8870, PCI_VENDOR_ID_PROMISE,
-		0x8870, 0, 0, st_P3 },
-	/* st_P3, p3 */
-	{ PCI_VENDOR_ID_PROMISE, 0x8870, PCI_VENDOR_ID_PROMISE,
-		0x4300, 0, 0, st_P3 },
+	{
+		/* st_P3, pluto */
+		PCI_VDEVICE_SUB(PROMISE, 0x8870, PCI_VENDOR_ID_PROMISE, 0x8870),
+		.driver_data = st_P3,
+	}, {
+		/* st_P3, p3 */
+		PCI_VDEVICE_SUB(PROMISE, 0x8870, PCI_VENDOR_ID_PROMISE, 0x4300),
+		.driver_data = st_P3,
+	}, {
+		/* st_P3, SymplyStor4E */
+		PCI_VDEVICE_SUB(PROMISE, 0x8871, PCI_VENDOR_ID_PROMISE, 0x4311),
+		.driver_data = st_P3,
+	}, {
+		/* st_P3, SymplyStor8E */
+		PCI_VDEVICE_SUB(PROMISE, 0x8871, PCI_VENDOR_ID_PROMISE, 0x4312),
+		.driver_data = st_P3,
+	},
 
-	/* st_P3, SymplyStor4E */
-	{ PCI_VENDOR_ID_PROMISE, 0x8871, PCI_VENDOR_ID_PROMISE,
-		0x4311, 0, 0, st_P3 },
-	/* st_P3, SymplyStor8E */
-	{ PCI_VENDOR_ID_PROMISE, 0x8871, PCI_VENDOR_ID_PROMISE,
-		0x4312, 0, 0, st_P3 },
 	/* st_P3, SymplyStor4 */
-	{ PCI_VENDOR_ID_PROMISE, 0x8871, PCI_VENDOR_ID_PROMISE,
-		0x4321, 0, 0, st_P3 },
+	{
+		PCI_VDEVICE_SUB(PROMISE, 0x8871, PCI_VENDOR_ID_PROMISE, 0x4321),
+		.driver_data = st_P3,
+	},
+
 	/* st_P3, SymplyStor8 */
-	{ PCI_VENDOR_ID_PROMISE, 0x8871, PCI_VENDOR_ID_PROMISE,
-		0x4322, 0, 0, st_P3 },
+	{
+		PCI_VDEVICE_SUB(PROMISE, 0x8871, PCI_VENDOR_ID_PROMISE, 0x4322),
+		.driver_data = st_P3,
+	},
+
 	{ }	/* terminate list */
 };
 

@@ -8,8 +8,14 @@ config PINCTRL_S32CC
 	select REGMAP_MMIO
 
 config PINCTRL_S32G2
+	bool "NXP S32G2 pinctrl driver" if COMPILE_TEST
 	depends on ARCH_S32 && OF
-	bool "NXP S32G2 pinctrl driver"
+	default ARCH_S32
 	select PINCTRL_S32CC
 	help
-	  Say Y here to enable the pinctrl driver for NXP S32G2 family SoCs
+	  Enable the SIUL2 pin controller driver for NXP S32G2 family SoCs.
+
+	  This controller provides the pin muxing and configuration needed by
+	  peripherals on the S32G274A-EVB, S32G274A-RDB2 and S32G399A-RDB3
+	  boards, so every S32G defconfig build requires it to reach rootfs.
+	  It is therefore enabled by default on ARCH_S32.

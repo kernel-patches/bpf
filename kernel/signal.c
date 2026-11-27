@@ -792,10 +792,7 @@ static bool kill_ok_by_cred(struct task_struct *t)
 	const struct cred *cred = current_cred();
 	const struct cred *tcred = __task_cred(t);
 
-	return uid_eq(cred->euid, tcred->suid) ||
-	       uid_eq(cred->euid, tcred->uid) ||
-	       uid_eq(cred->uid, tcred->suid) ||
-	       uid_eq(cred->uid, tcred->uid) ||
+	return cred_ids_allow_signal(cred, tcred) ||
 	       ns_capable(tcred->user_ns, CAP_KILL);
 }
 
@@ -991,7 +988,8 @@ static void complete_signal(int sig, struct task_struct *p, enum pid_type type)
 		 */
 		t = signal->curr_target;
 		while (!wants_signal(sig, t)) {
-			t = next_thread(t);
+			t = list_next_entry_circular(t, &signal->thread_head,
+							thread_node);
 			if (t == signal->curr_target)
 				/*
 				 * No thread needs to be woken.
@@ -1531,10 +1529,7 @@ static inline bool kill_as_cred_perm(const struct cred *cred,
 {
 	const struct cred *pcred = __task_cred(target);
 
-	return uid_eq(cred->euid, pcred->suid) ||
-	       uid_eq(cred->euid, pcred->uid) ||
-	       uid_eq(cred->uid, pcred->suid) ||
-	       uid_eq(cred->uid, pcred->uid);
+	return cred_ids_allow_signal(cred, pcred);
 }
 
 /*

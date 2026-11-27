@@ -2,6 +2,7 @@
 
 #include <linux/highmem.h>
 #include <linux/genalloc.h>
+#include <asm/tcm.h>
 #include <asm/tlbflush.h>
 #include <asm/fixmap.h>
 

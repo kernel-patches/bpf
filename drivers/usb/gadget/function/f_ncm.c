@@ -612,7 +612,7 @@ static void ncm_notify(struct f_ncm *ncm)
 	 *
 	 * If ncm_notify() is called before the second (CONNECT)
 	 * notification is sent, then it will reset to send the SPEED
-	 * notificaion again (and again, and again), but it's not a problem
+	 * notification again (and again, and again), but it's not a problem
 	 */
 	ncm->notify_state = NCM_NOTIFY_SPEED;
 	ncm_do_notify(ncm);
@@ -921,10 +921,6 @@ static int ncm_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 				return PTR_ERR(net);
 			ncm->netdev = net;
 		}
-
-		spin_lock(&ncm->lock);
-		ncm_notify(ncm);
-		spin_unlock(&ncm->lock);
 	} else
 		goto fail;
 
@@ -1132,10 +1128,14 @@ err:
 
 	if (skb)
 		dev_kfree_skb_any(skb);
-	if (ncm->skb_tx_data)
+	if (ncm->skb_tx_data) {
 		dev_kfree_skb_any(ncm->skb_tx_data);
-	if (ncm->skb_tx_ndp)
+		ncm->skb_tx_data = NULL;
+	}
+	if (ncm->skb_tx_ndp) {
 		dev_kfree_skb_any(ncm->skb_tx_ndp);
+		ncm->skb_tx_ndp = NULL;
+	}
 
 	return NULL;
 }
@@ -1180,6 +1180,7 @@ static int ncm_unwrap_ntb(struct gether *port,
 	unsigned	dg_len, dg_len2;
 	unsigned	ndp_len;
 	unsigned	block_len;
+	unsigned int	ndp_count, next_ndp_index;
 	struct sk_buff	*skb2;
 	int		ret = -EINVAL;
 	unsigned	ntb_max = le32_to_cpu(ntb_parameters.dwNtbOutMaxSize);
@@ -1229,6 +1230,30 @@ parse_ntb:
 	}
 
 	ndp_index = get_ncm(&tmp, opts->ndp_index);
+	next_ndp_index = ndp_index;
+	ndp_count = 0;
+
+	/* Validate the NDP chain before allocating datagram skbs. */
+	while (next_ndp_index) {
+		if (next_ndp_index % 4 ||
+		    next_ndp_index < opts->nth_size ||
+		    next_ndp_index > block_len - opts->ndp_size) {
+			INFO(port->func.config->cdev, "Bad index: %#X\n",
+			     next_ndp_index);
+			goto err;
+		}
+
+		/* More aligned offsets than fit in the NTB imply a cycle. */
+		if (++ndp_count > block_len / 4) {
+			INFO(port->func.config->cdev, "NDP chain cycle\n");
+			goto err;
+		}
+
+		tmp = (__le16 *)(ntb_ptr + next_ndp_index);
+		tmp += 3; /* skip the signature and length */
+		tmp += opts->reserved1;
+		next_ndp_index = get_ncm(&tmp, opts->next_ndp_index);
+	}
 
 	/* Run through all the NDP's in the NTB */
 	do {
@@ -1654,7 +1679,7 @@ out:
 
 CONFIGFS_ATTR(ncm_opts_, max_segment_size);
 
-static struct configfs_attribute *ncm_attrs[] = {
+static const struct configfs_attribute *const ncm_attrs[] = {
 	&ncm_opts_attr_dev_addr,
 	&ncm_opts_attr_host_addr,
 	&ncm_opts_attr_qmult,
@@ -1665,7 +1690,7 @@ static struct configfs_attribute *ncm_attrs[] = {
 
 static const struct config_item_type ncm_func_type = {
 	.ct_item_ops	= &ncm_item_ops,
-	.ct_attrs	= ncm_attrs,
+	.ct_attrs_const	= ncm_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -1746,6 +1771,7 @@ static void ncm_unbind(struct usb_configuration *c, struct usb_function *f)
 	hrtimer_cancel(&ncm->task_timer);
 
 	kfree(f->os_desc_table);
+	f->os_desc_table = NULL;
 	f->os_desc_n = 0;
 
 	ncm_string_defs[0].id = 0;

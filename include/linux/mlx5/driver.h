@@ -596,8 +596,6 @@ struct mlx5_priv {
 	struct mlx5_debugfs_entries dbg;
 
 	/* start: alloc stuff */
-	/* protect buffer allocation according to numa node */
-	struct mutex            alloc_mutex;
 	int                     numa_node;
 
 	struct mlx5_frag_buf_node_pools **frag_buf_node_pools;
@@ -695,6 +693,12 @@ enum mlx5_sw_icm_type {
 	MLX5_SW_ICM_TYPE_HEADER_MODIFY,
 	MLX5_SW_ICM_TYPE_HEADER_MODIFY_PATTERN,
 	MLX5_SW_ICM_TYPE_SW_ENCAP,
+};
+
+enum mlx5_mkey_order {
+	MLX5_MKEY_ORDER_STRICT,
+	MLX5_MKEY_ORDER_RELAXED,
+	MLX5_MKEY_ORDER_UNORDERED,
 };
 
 #define MLX5_MAX_RESERVED_GIDS 8
@@ -1041,6 +1045,8 @@ void mlx5_trigger_health_work(struct mlx5_core_dev *dev);
 int mlx5_frag_buf_alloc_node(struct mlx5_core_dev *dev, int size,
 			     struct mlx5_frag_buf *buf, int node);
 void mlx5_frag_buf_free(struct mlx5_core_dev *dev, struct mlx5_frag_buf *buf);
+void mlx5_core_mkey_set_ordering(struct mlx5_core_dev *dev, void *mkc,
+				 enum mlx5_mkey_order order);
 int mlx5_core_create_mkey(struct mlx5_core_dev *dev, u32 *mkey, u32 *in,
 			  int inlen);
 int mlx5_core_destroy_mkey(struct mlx5_core_dev *dev, u32 mkey);
@@ -1270,6 +1276,15 @@ static inline int mlx5_lag_is_lacp_owner(struct mlx5_core_dev *dev)
 		    MLX5_CAP_GEN(dev, lag_master);
 }
 
+static inline bool mlx5_virt_lag_is_supported(const struct mlx5_core_dev *dev)
+{
+	if (!MLX5_CAP_GEN(dev, multi_uplink_eswitch) ||
+	    !MLX5_CAP_GEN(dev, lag_master) ||
+	    MLX5_CAP_GEN(dev, num_lag_ports) >= 2)
+		return false;
+	return true;
+}
+
 static inline u16 mlx5_core_max_ec_vfs(const struct mlx5_core_dev *dev)
 {
 	return dev->priv.sriov.max_ec_vfs;
@@ -1399,7 +1414,7 @@ static inline struct net *mlx5_core_net(struct mlx5_core_dev *dev)
 	return devlink_net(priv_to_devlink(dev));
 }
 
-#define MLX5_SW_IMAGE_GUID_MAX_BYTES 9
+#define MLX5_SW_IMAGE_GUID_MAX_BYTES 11
 
 static inline bool mlx5_data_direct_supported(struct mlx5_core_dev *mdev)
 {

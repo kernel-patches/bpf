@@ -30,6 +30,7 @@
 #include "dc_state.h"
 #include "dc_plane.h"
 #include "dc_probe.h"
+#include "dc_memory_pool.h"
 #include "grph_object_defs.h"
 #include "logger_types.h"
 #include "hdcp_msg_types.h"
@@ -68,7 +69,7 @@ struct dcn_dsc_reg_state;
 struct dcn_optc_reg_state;
 struct dcn_dccg_reg_state;
 
-#define DC_VER "3.2.401"
+#define DC_VER "3.2.408"
 
 /**
  * MAX_SURFACES - representative of the upper bound of surfaces that can be piped to a single CRTC
@@ -555,6 +556,7 @@ struct dc_update_descriptor {
 struct dc;
 struct dc_plane_state;
 struct dc_state;
+struct link_dpms_ctx;
 
 struct dc_cap_funcs {
 	bool (*get_dcc_compression_cap)(const struct dc *dc,
@@ -635,6 +637,16 @@ struct dc_config {
 	struct spl_sharpness_range dcn_sharpness_range;
 	struct spl_sharpness_range dcn_override_sharpness_range;
 	bool no_native422_support;
+
+	// Pre-allocate dc_state buffers at dc_construct time so that a commit can
+	// run on a code path where allocation is not permitted.
+	bool preallocate_scratch_state;
+
+	// Build commits into the pre-allocated buffers instead of allocating.
+	// Set by the DM around a commit that runs where allocation is not
+	// permitted; requires preallocate_scratch_state.
+	bool use_preallocated_state;
+	bool enable_dpms_v2;
 };
 
 enum visual_confirm {
@@ -811,9 +823,6 @@ struct dc_clocks {
 	int idle_fclk_khz;
 	int subvp_prefetch_dramclk_khz;
 	int subvp_prefetch_fclk_khz;
-	/* deprecated: use _KBps variants — will be removed after DML update */
-	unsigned int utm_urgent_bandwidth_lb_Kbps;
-	unsigned int utm_nominal_bandwidth_lb_Kbps;
 	unsigned int utm_urgent_bandwidth_lb_KBps;
 	unsigned int utm_nominal_bandwidth_lb_KBps;
 	unsigned int utm_latency_ub_index;
@@ -1104,6 +1113,12 @@ struct dc_debug_options {
 	 */
 	enum pipe_split_policy pipe_split_policy;
 	bool force_single_disp_pipe_split;
+	/*
+	 * @force_mpc_combine: Override the DML2.1 per-plane MPC combine
+	 * decision. 0 = auto (default), 1 = force single DPP (no MPC combine),
+	 * 2 = force 2:1 MPC combine.
+	 */
+	uint8_t force_mpc_combine;
 	bool voltage_align_fclk;
 	bool disable_min_fclk;
 
@@ -1188,6 +1203,7 @@ struct dc_debug_options {
 	bool enable_dmcub_surface_flip;
 	bool usbc_combo_phy_reset_wa;
 	bool force_fva;
+	bool force_dpg_on_flip;
 	int max_frl_rate;
 	unsigned int  force_frl_rate;
 	bool ignore_ffe;
@@ -1320,21 +1336,24 @@ struct dc_debug_options {
 	unsigned int urgent_watermark_override;
 	bool enable_block_sequence_programming;
 	uint32_t custom_psp_footer_size;
+	uint32_t dmcub_fw_load_type;
 	bool disable_deferred_minimal_transitions;
 	unsigned int num_fast_flips_to_steady_state_override;
 	bool enable_dmu_recovery;
 	unsigned int force_vmin_threshold;
 	bool enable_otg_frame_sync_pwa;
 	unsigned int min_deep_sleep_dcfclk_khz;
-	unsigned int force_odm2to1_for_edp_pixclk_mhz;
 	bool enable_replay_esd_recovery;
 	uint8_t iommu_mismatch_temp_wka;
 	bool disable_dynamic_expansion_for_test_pattern;
 	bool psr_phy_force_phy_power_down_up_level_2;
+	bool dmub_send_az_pme_restore;
 	uint32_t dml21_custom_derate_num_dpms;
 	uint32_t dml21_custom_derate_at_dpm[DML2_MAX_NUM_DPM_LVL];
 	bool override_utm_client_qc_profile;
 	uint8_t utm_client_qc_profiles[4];
+	/* keep HW viewport unchanged by shrinking only recout for visual confirm */
+	bool visual_confirm_full_viewport;
 };
 
 
@@ -1395,6 +1414,7 @@ struct dc_init_data {
 	uint32_t *clk_reg_offsets;
 	void *bb_from_dmub;
 	enum dc2_selection dc2_selection;
+	enum dc2_init_method dc2_init_method;
 };
 
 struct dc_callback_init {
@@ -1913,6 +1933,7 @@ struct dc_scratch_space {
 	void *priv;
 
 	struct ddc_service *ddc;
+	struct link_dpms_ctx *dpms_ctx;
 
 	enum dp_panel_mode panel_mode;
 	bool panel_mode_initialized;
@@ -2021,13 +2042,19 @@ struct dc {
 	struct link_service *link_srv;
 
 	struct dc_state *current_state;
+	/**
+	 * @scratch_dc_context: Pre-allocated states for the no-allocation update
+	 * path, created only when dc_config.preallocate_scratch_state is set.
+	 * Two are kept because the commit path installs the new context as
+	 * @current_state, so a single buffer would alias it and self-copy.
+	 */
+	struct dc_state *scratch_dc_context[2];
 	struct resource_pool *res_pool;
 
 	/**
 	 * @update_scratch_pool: Per-commit scratch buffers for dc_update_state.
 	 */
-	struct dc_update_scratch_space *update_scratch_pool[MAX_STREAMS + 1];
-	bool update_scratch_in_use[MAX_STREAMS + 1];
+	struct dc_memory_pool *update_scratch_pool;  // MAX_STREAMS + 1
 
 	struct clk_mgr *clk_mgr;
 
@@ -2203,6 +2230,44 @@ struct dc_probe_latencies {
 };
 
 /**
+ * union dc_probe_outstanding_req - HUBP requests outstanding after an OTG window.
+ *
+ * @bits.any:              a request is outstanding in HUBP.
+ * @bits.data:             a data request is outstanding.
+ * @bits.chunk_meta_trans: a chunk, meta or translation request is outstanding.
+ * @bits.not_in_blank:     HUBP has not finished requesting for the frame.
+ * @raw:                   DC internal, holds the HW status while the probe sequence
+ *                         executes and is decoded into @bits afterwards.
+ */
+union dc_probe_outstanding_req {
+	struct {
+		uint32_t any              : 1;
+		uint32_t data             : 1;
+		uint32_t chunk_meta_trans : 1;
+		uint32_t not_in_blank     : 1;
+		uint32_t reserved         : 28;
+	} bits;
+	uint32_t raw;
+};
+
+/**
+ * struct dc_probe_urgent_assertion - result of an urgent assertion count probe.
+ *
+ * The fields after @count are only filled for a window of a stream scope, and
+ * are zero otherwise.
+ *
+ * @count:             number of urgent assertion events.
+ * @deassertion_count: number of falling edges of the urgent signal.
+ * @outstanding:       HUBP requests outstanding, sampled once after the
+ *                     window counter was read.
+ */
+struct dc_probe_urgent_assertion {
+	uint32_t count;
+	uint32_t deassertion_count;
+	union dc_probe_outstanding_req outstanding;
+};
+
+/**
  * struct dc_probe_status - results for a probe.
  * @valid: true if a measurement was latched.
  * @measuring: true if the hardware counter is currently running.
@@ -2210,7 +2275,10 @@ struct dc_probe_latencies {
  * @u.bandwidth_mbps:         peak BW in Mbps (DC_PROBE_PEAK_MEM_BW).
  * @u.latency:                min/max/avg memory latency in ns (DC_PROBE_MEM_LATENCY),
  *                            stored as struct dc_probe_latencies.
- * @u.urgent_assertion_count: number of urgent assertion events (DC_PROBE_URGENT_ASSERTION_COUNT).
+ * @u.urgent_assertion:       urgent assertion events and outstanding requests
+ *                            (DC_PROBE_URGENT_ASSERTION_COUNT).
+ * @u.urgent_request_count:   number of urgent requests in the window
+ *                            (DC_PROBE_URGENT_REQUEST_COUNT).
  * @u.prefetch_data_size:     total prefetch data in bytes (DC_PROBE_PREFETCH_DATA_SIZE).
  */
 struct dc_probe_status {
@@ -2220,7 +2288,8 @@ struct dc_probe_status {
 	union {
 		uint32_t bandwidth_mbps;
 		struct dc_probe_latencies latency;
-		uint32_t urgent_assertion_count;
+		struct dc_probe_urgent_assertion urgent_assertion;
+		uint32_t urgent_request_count;
 		uint32_t prefetch_data_size;
 	} u;
 };
@@ -2420,14 +2489,6 @@ struct dc_plane_state *dc_get_surface_for_mpcc(struct dc *dc,
 
 
 uint32_t dc_get_opp_for_plane(struct dc *dc, struct dc_plane_state *plane);
-bool dc_set_fva_vrr_adjust(struct dc *dc,
-	struct dc_stream_state *stream,
-	struct fva_adj *fva_adj,
-	struct dc_crtc_timing_adjust *vrr_adj);
-
-int dc_get_hw_max_fva_factor(struct dc *dc,
-		struct dc_stream_state *stream,
-		unsigned int max_pixel_clock);
 
 void dc_set_vstartup_start(struct dc *dc,
 		struct dc_stream_state *stream);
@@ -3242,6 +3303,8 @@ void dc_unlock_memory_clock_frequency(struct dc *dc);
 /* set min memory clock to the min required for current mode, max to maxDPM */
 void dc_lock_memory_clock_frequency(struct dc *dc);
 
+unsigned int dc_refresh_memclk_states(struct dc *dc);
+
 /* set soft max for memclk, to be used for AC/DC switching clock limitations */
 void dc_enable_dcmode_clk_limit(struct dc *dc, bool enable);
 
@@ -3880,7 +3943,7 @@ unsigned int dc_override_memory_bandwidth_request(
 		struct dc *dc,
 		unsigned int bw_mbps);
 
-/**
+/*
  * Panel Polarity Control
  */
 void dc_link_set_panel_polarity_enable(struct dc_link *link, bool enable);

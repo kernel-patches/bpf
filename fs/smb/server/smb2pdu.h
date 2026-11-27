@@ -140,10 +140,10 @@ struct create_aapl_rsp {
 
 #define DURABLE_HANDLE_MAX_TIMEOUT	300000
 
-struct create_alloc_size_req {
-	struct create_context_hdr ccontext;
-	__u8   Name[8];
-	__le64 AllocationSize;
+/* See MS-SMB2 2.2.13.2.4, the data of a DHnC create context */
+struct durable_reconnect_context {
+	__u64 PersistentFileId;
+	__u64 VolatileFileId;
 } __packed;
 
 struct create_durable_rsp {
@@ -337,18 +337,6 @@ struct smb2_ea_info {
 	char name[];
 	/* optionally followed by value */
 } __packed; /* level 15 Query */
-
-struct create_ea_buf_req {
-	struct create_context_hdr ccontext;
-	__u8   Name[8];
-	struct smb2_ea_info ea;
-} __packed;
-
-struct create_sd_buf_req {
-	struct create_context_hdr ccontext;
-	__u8   Name[8];
-	struct smb_ntsd ntsd;
-} __packed;
 
 /* See POSIX-FSCC 2.2.1 */
 struct smb2_posix_info {

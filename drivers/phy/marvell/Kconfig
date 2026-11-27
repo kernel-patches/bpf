@@ -77,7 +77,7 @@ config PHY_MVEBU_CP110_UTMI
 
 config PHY_MVEBU_SATA
 	def_bool y
-	depends on ARCH_DOVE || MACH_DOVE || MACH_KIRKWOOD
+	depends on MACH_DOVE || MACH_KIRKWOOD
 	depends on OF
 	select GENERIC_PHY
 

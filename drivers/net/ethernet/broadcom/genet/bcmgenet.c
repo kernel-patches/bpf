@@ -2030,7 +2030,7 @@ static int bcmgenet_tx_poll(struct napi_struct *napi, int budget)
 
 	spin_lock(&ring->lock);
 	__bcmgenet_tx_reclaim(ring->priv->dev, ring);
-	if (ring->free_bds > (MAX_SKB_FRAGS + 1)) {
+	if (ring->free_bds > ring->stop_thld) {
 		txq = netdev_get_tx_queue(ring->priv->dev, ring->index);
 		netif_tx_wake_queue(txq);
 	}
@@ -2143,6 +2143,22 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	nr_frags = skb_shinfo(skb)->nr_frags;
 
+	/* The check below would always refuse this frame */
+	if (unlikely(nr_frags + 1 >= ring->size)) {
+		skb = skb_share_check(skb, GFP_ATOMIC);
+		if (skb && skb_linearize(skb)) {
+			dev_kfree_skb_any(skb);
+			skb = NULL;
+		}
+		if (!skb) {
+			spin_lock(&ring->lock);
+			BCMGENET_STATS64_INC((&ring->stats64), dropped);
+			ret = NETDEV_TX_OK;
+			goto out;
+		}
+		nr_frags = 0;
+	}
+
 	spin_lock(&ring->lock);
 	if (ring->free_bds <= (nr_frags + 1)) {
 		if (!netif_tx_queue_stopped(txq))
@@ -2235,14 +2251,14 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	netdev_tx_sent_queue(txq, GENET_CB(skb)->bytes_sent);
 
-	if (ring->free_bds <= (MAX_SKB_FRAGS + 1))
+	if (ring->free_bds <= ring->stop_thld)
 		netif_tx_stop_queue(txq);
 
+out:
+	/* A dropped frame can end an xmit_more batch */
 	if (!netdev_xmit_more() || netif_xmit_stopped(txq))
-		/* Packets are ready, update producer index */
 		bcmgenet_tdma_ring_writel(priv, ring->index,
 					  ring->prod_index, TDMA_PROD_INDEX);
-out:
 	spin_unlock(&ring->lock);
 
 	return ret;
@@ -2486,8 +2502,8 @@ next:
 		bcmgenet_rdma_ring_writel(priv, ring->index, ring->c_index, RDMA_CONS_INDEX);
 	}
 
-	ring->dim.bytes = bytes_processed;
-	ring->dim.packets = rxpktprocessed;
+	ring->dim.bytes += bytes_processed;
+	ring->dim.packets += rxpktprocessed;
 
 	return rxpktprocessed;
 }
@@ -2502,14 +2518,15 @@ static int bcmgenet_rx_poll(struct napi_struct *napi, int budget)
 
 	work_done = bcmgenet_desc_rx(ring, budget);
 
-	if (work_done < budget && napi_complete_done(napi, work_done))
-		bcmgenet_rx_ring_int_enable(ring);
-
+	/* net_dim() can queue work, so run it while NAPI is still owned */
 	if (ring->dim.use_dim) {
 		dim_update_sample(ring->dim.event_ctr, ring->dim.packets,
 				  ring->dim.bytes, &dim_sample);
 		net_dim(&ring->dim.dim, &dim_sample);
 	}
+
+	if (work_done < budget && napi_complete_done(napi, work_done))
+		bcmgenet_rx_ring_int_enable(ring);
 
 	return work_done;
 }
@@ -2702,8 +2719,11 @@ static void bcmgenet_init_dim(struct bcmgenet_rx_ring *ring,
 {
 	struct bcmgenet_net_dim *dim = &ring->dim;
 
+	memset(&dim->dim, 0, sizeof(dim->dim));
 	INIT_WORK(&dim->dim.work, cb);
 	dim->dim.mode = DIM_CQ_PERIOD_MODE_START_FROM_EQE;
+	/* Match the profile bcmgenet_init_rx_coalesce() programs */
+	dim->dim.profile_ix = NET_DIM_DEF_PROFILE_EQE;
 	dim->event_ctr = 0;
 	dim->packets = 0;
 	dim->bytes = 0;
@@ -2742,6 +2762,8 @@ static void bcmgenet_init_tx_ring(struct bcmgenet_priv *priv,
 	ring->index = index;
 	ring->cbs = priv->tx_cbs + start_ptr;
 	ring->size = size;
+	/* An empty ring must be able to wake the queue */
+	ring->stop_thld = min_t(unsigned int, MAX_SKB_FRAGS + 1, size - 1);
 	ring->clean_ptr = start_ptr;
 	ring->c_index = 0;
 	ring->free_bds = size;
@@ -2822,6 +2844,8 @@ static int bcmgenet_init_rx_ring(struct bcmgenet_priv *priv,
 	ring->read_ptr = start_ptr;
 	ring->cb_ptr = start_ptr;
 	ring->end_ptr = end_ptr - 1;
+	/* Zeroing RDMA_PROD_INDEX below also clears the discard counter */
+	ring->old_discards = 0;
 
 	ret = bcmgenet_rx_ring_create_pool(priv, ring);
 	if (ret)
@@ -3014,7 +3038,8 @@ static void bcmgenet_disable_rx_napi(struct bcmgenet_priv *priv)
 	for (i = 0; i <= priv->hw_params->rx_queues; ++i) {
 		ring = &priv->rx_rings[i];
 		napi_disable(&ring->napi);
-		cancel_work_sync(&ring->dim.dim.work);
+		/* Cancelling would leave DIM stuck in DIM_APPLY_NEW_PROFILE */
+		flush_work(&ring->dim.dim.work);
 	}
 }
 

@@ -311,14 +311,14 @@ pub struct UniqueRefGpuVm<T: DriverGpuVm>(ARef<GpuVm<T>>);
 impl<T: DriverGpuVm> UniqueRefGpuVm<T> {
     /// Access the data owned by this `UniqueRefGpuVm` immutably.
     #[inline]
-    pub fn data_ref(&self) -> &T {
+    pub fn data(&self) -> &T {
         // SAFETY: By the type invariants we may access `data`.
         unsafe { &*self.0.data.get() }
     }
 
     /// Access the data owned by this `UniqueRefGpuVm` mutably.
     #[inline]
-    pub fn data(&mut self) -> &mut T {
+    pub fn data_mut(&mut self) -> &mut T {
         // SAFETY: By the type invariants we may access `data`.
         unsafe { &mut *self.0.data.get() }
     }

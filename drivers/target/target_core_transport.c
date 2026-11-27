@@ -419,7 +419,7 @@ void __transport_register_session(
 			memset(&buf[0], 0, PR_REG_ISID_LEN);
 			se_tpg->se_tpg_tfo->sess_get_initiator_sid(se_sess,
 					&buf[0], PR_REG_ISID_LEN);
-			se_sess->sess_bin_isid = get_unaligned_be64(&buf[0]);
+			se_sess->sess_bin_isid = target_isid_to_bin(buf);
 		}
 
 		spin_lock_irqsave(&se_nacl->nacl_sess_lock, flags);
@@ -1633,23 +1633,16 @@ static int __target_submit(struct se_cmd *cmd)
 	core_alua_check_nonop_delay(cmd);
 
 	if (cmd->t_data_nents != 0) {
-		/*
-		 * This is primarily a hack for udev and tcm loop which sends
-		 * INQUIRYs with a single page and expects the data to be
-		 * cleared.
-		 */
+		/* Control CDB handlers may leave response bytes untouched. */
 		if (!(cmd->se_cmd_flags & SCF_SCSI_DATA_CDB) &&
 		    cmd->data_direction == DMA_FROM_DEVICE) {
-			struct scatterlist *sgl = cmd->t_data_sg;
-			unsigned char *buf = NULL;
+			struct scatterlist *sg;
+			unsigned int i;
 
-			BUG_ON(!sgl);
+			BUG_ON(!cmd->t_data_sg);
 
-			buf = kmap_local_page(sg_page(sgl));
-			if (buf) {
-				memset(buf + sgl->offset, 0, sgl->length);
-				kunmap_local(buf);
-			}
+			for_each_sg(cmd->t_data_sg, sg, cmd->t_data_nents, i)
+				sg_zero_buffer(sg, 1, sg->length, 0);
 		}
 	}
 

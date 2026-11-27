@@ -7,12 +7,12 @@
  *	Adrian McMenamin, 2008 - 2009
  */
 
+#include <linux/bits.h>
 #include <linux/kernel.h>
-#include <linux/slab.h>
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/timer.h>
+#include <linux/jiffies.h>
 #include <linux/maple.h>
 
 MODULE_AUTHOR("Adrian McMenamin <adrian@mcmen.demon.co.uk>");
@@ -21,7 +21,6 @@ MODULE_LICENSE("GPL");
 
 struct dc_pad {
 	struct input_dev *dev;
-	struct maple_device *mdev;
 };
 
 static void dc_pad_callback(struct mapleq *mq)
@@ -35,22 +34,22 @@ static void dc_pad_callback(struct mapleq *mq)
 	buttons = ~le16_to_cpup((__le16 *)(res + 8));
 
 	input_report_abs(dev, ABS_HAT0Y,
-		(buttons & 0x0010 ? -1 : 0) + (buttons & 0x0020 ? 1 : 0));
+			 !!(buttons & BIT(5)) - !!(buttons & BIT(4)));
 	input_report_abs(dev, ABS_HAT0X,
-		(buttons & 0x0040 ? -1 : 0) + (buttons & 0x0080 ? 1 : 0));
+			 !!(buttons & BIT(7)) - !!(buttons & BIT(6)));
 	input_report_abs(dev, ABS_HAT1Y,
-		(buttons & 0x1000 ? -1 : 0) + (buttons & 0x2000 ? 1 : 0));
+			 !!(buttons & BIT(13)) - !!(buttons & BIT(12)));
 	input_report_abs(dev, ABS_HAT1X,
-		(buttons & 0x4000 ? -1 : 0) + (buttons & 0x8000 ? 1 : 0));
+			 !!(buttons & BIT(15)) - !!(buttons & BIT(14)));
 
-	input_report_key(dev, BTN_C,      buttons & 0x0001);
-	input_report_key(dev, BTN_B,      buttons & 0x0002);
-	input_report_key(dev, BTN_A,      buttons & 0x0004);
-	input_report_key(dev, BTN_START,  buttons & 0x0008);
-	input_report_key(dev, BTN_Z,      buttons & 0x0100);
-	input_report_key(dev, BTN_Y,      buttons & 0x0200);
-	input_report_key(dev, BTN_X,      buttons & 0x0400);
-	input_report_key(dev, BTN_SELECT, buttons & 0x0800);
+	input_report_key(dev, BTN_C,      buttons & BIT(0));
+	input_report_key(dev, BTN_B,      buttons & BIT(1));
+	input_report_key(dev, BTN_A,      buttons & BIT(2));
+	input_report_key(dev, BTN_START,  buttons & BIT(3));
+	input_report_key(dev, BTN_Z,      buttons & BIT(8));
+	input_report_key(dev, BTN_Y,      buttons & BIT(9));
+	input_report_key(dev, BTN_X,      buttons & BIT(10));
+	input_report_key(dev, BTN_SELECT, buttons & BIT(11));
 
 	input_report_abs(dev, ABS_GAS,    res[10]);
 	input_report_abs(dev, ABS_BRAKE,  res[11]);
@@ -64,19 +63,19 @@ static void dc_pad_callback(struct mapleq *mq)
 
 static int dc_pad_open(struct input_dev *dev)
 {
-	struct dc_pad *pad = dev_get_platdata(&dev->dev);
+	struct maple_device *mdev = input_get_drvdata(dev);
 
-	maple_getcond_callback(pad->mdev, dc_pad_callback, HZ/20,
-		MAPLE_FUNC_CONTROLLER);
+	maple_getcond_callback(mdev, dc_pad_callback, HZ / 20,
+			       MAPLE_FUNC_CONTROLLER);
 
 	return 0;
 }
 
 static void dc_pad_close(struct input_dev *dev)
 {
-	struct dc_pad *pad = dev_get_platdata(&dev->dev);
+	struct maple_device *mdev = input_get_drvdata(dev);
 
-	maple_getcond_callback(pad->mdev, NULL, 0, MAPLE_FUNC_CONTROLLER);
+	maple_getcond_callback(mdev, NULL, 0, MAPLE_FUNC_CONTROLLER);
 }
 
 /* allow the controller to be used */
@@ -102,17 +101,18 @@ static int probe_maple_controller(struct device *dev)
 	struct input_dev *idev;
 	unsigned long data = be32_to_cpu(mdev->devinfo.function_data[0]);
 
-	pad = kzalloc_obj(*pad);
-	idev = input_allocate_device();
-	if (!pad || !idev) {
-		error = -ENOMEM;
-		goto fail;
-	}
+	pad = devm_kzalloc(&mdev->dev, sizeof(*pad), GFP_KERNEL);
+	if (!pad)
+		return -ENOMEM;
+
+	idev = devm_input_allocate_device(&mdev->dev);
+	if (!idev)
+		return -ENOMEM;
 
 	pad->dev = idev;
-	pad->mdev = mdev;
 
 	maple_set_drvdata(mdev, pad);
+	input_set_drvdata(idev, mdev);
 
 	idev->open = dc_pad_open;
 	idev->close = dc_pad_close;
@@ -131,29 +131,12 @@ static int probe_maple_controller(struct device *dev)
 	if (idev->keybit[BIT_WORD(BTN_JOYSTICK)])
 		idev->evbit[0] |= BIT_MASK(EV_KEY);
 
-	idev->dev.platform_data = pad;
-	idev->dev.parent = &mdev->dev;
 	idev->name = mdev->product_name;
 	idev->id.bustype = BUS_HOST;
 
 	error = input_register_device(idev);
 	if (error)
-		goto fail;
-	return 0;
-
-fail:
-	input_free_device(idev);
-	kfree(pad);
-	return error;
-}
-
-static int remove_maple_controller(struct device *dev)
-{
-	struct maple_device *mdev = to_maple_dev(dev);
-	struct dc_pad *pad = maple_get_drvdata(mdev);
-
-	input_unregister_device(pad->dev);
-	kfree(pad);
+		return error;
 
 	return 0;
 }
@@ -163,7 +146,6 @@ static struct maple_driver dc_pad_driver = {
 	.drv = {
 		.name	= "Dreamcast_controller",
 		.probe	= probe_maple_controller,
-		.remove	= remove_maple_controller,
 	},
 };
 

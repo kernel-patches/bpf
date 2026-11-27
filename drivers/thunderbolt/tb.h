@@ -314,6 +314,7 @@ struct tb_port {
  * @can_offline: Does the port have necessary platform support to move
  *		 it into offline mode and back
  * @offline: The port is currently in offline mode
+ * @component_added: The port was added to the component framework
  * @margining: Pointer to margining structure if enabled
  */
 struct usb4_port {
@@ -321,6 +322,7 @@ struct usb4_port {
 	struct tb_port *port;
 	bool can_offline;
 	bool offline;
+	bool component_added;
 #ifdef CONFIG_USB4_DEBUGFS_MARGINING
 	struct tb_margining *margining;
 #endif
@@ -1520,7 +1522,7 @@ bool tb_acpi_may_tunnel_dp(void);
 bool tb_acpi_may_tunnel_pcie(void);
 bool tb_acpi_is_xdomain_allowed(void);
 
-int tb_acpi_init(void);
+void tb_acpi_init(void);
 void tb_acpi_exit(void);
 int tb_acpi_power_on_retimers(struct tb_port *port);
 int tb_acpi_power_off_retimers(struct tb_port *port);
@@ -1533,7 +1535,7 @@ static inline bool tb_acpi_may_tunnel_dp(void) { return true; }
 static inline bool tb_acpi_may_tunnel_pcie(void) { return true; }
 static inline bool tb_acpi_is_xdomain_allowed(void) { return true; }
 
-static inline int tb_acpi_init(void) { return 0; }
+static inline void tb_acpi_init(void) { }
 static inline void tb_acpi_exit(void) { }
 static inline int tb_acpi_power_on_retimers(struct tb_port *port) { return 0; }
 static inline int tb_acpi_power_off_retimers(struct tb_port *port) { return 0; }

@@ -125,24 +125,27 @@ static void pf_finish_vfs_enabling(struct xe_device *xe)
 	xe_sriov_pf_disarm_guard(xe, &xe->sriov.pf.guard_vfs_enabling, false, NULL);
 }
 
-static int pf_enable_vfs(struct xe_device *xe, int num_vfs)
+static void pf_enable_vfs_revert(struct xe_device *xe)
 {
-	struct pci_dev *pdev = to_pci_dev(xe->drm.dev);
-	int total_vfs = xe_sriov_pf_get_totalvfs(xe);
-	int err;
+	pf_resize_vf_vram_bar(xe, xe->sriov.pf.device_total_vfs);
 
-	xe_assert(xe, IS_SRIOV_PF(xe));
-	xe_assert(xe, num_vfs > 0);
-	xe_assert(xe, num_vfs <= total_vfs);
-	xe_sriov_dbg(xe, "enabling %u VF%s\n", num_vfs, str_plural(num_vfs));
+	/* Release additional PM reference obtained in pf_enable_vfs_prepare() */
+	xe_pm_runtime_put(xe);
+
+	pf_finish_vfs_enabling(xe);
+}
+
+static int pf_enable_vfs_prepare(struct xe_device *xe)
+{
+	int err;
 
 	err = xe_sriov_pf_wait_ready(xe);
 	if (err)
-		goto out;
+		return err;
 
 	err = pf_prepare_vfs_enabling(xe);
 	if (err)
-		goto out;
+		return err;
 
 	/*
 	 * We must hold additional reference to the runtime PM to keep PF in D0
@@ -151,40 +154,71 @@ static int pf_enable_vfs(struct xe_device *xe, int num_vfs)
 	 * With PF being in D0 state, all VFs will also behave as in D0 state.
 	 * This will also keep GuC alive with all VFs' configurations.
 	 *
-	 * We will release this additional PM reference in pf_disable_vfs().
+	 * We will release this additional PM reference in pf_enable_vfs_revert().
 	 */
 	xe_pm_runtime_get_noresume(xe);
 
-	err = xe_sriov_pf_provision_vfs(xe, num_vfs);
-	if (err < 0)
-		goto failed;
+	return 0;
+}
+
+static int pf_enable_vfs_commit(struct xe_device *xe, int num_vfs)
+{
+	struct pci_dev *pdev = to_pci_dev(xe->drm.dev);
+	int err;
+
+	xe_assert(xe, IS_SRIOV_PF(xe));
+	xe_assert(xe, num_vfs > 0);
+	xe_assert(xe, num_vfs <= xe_sriov_pf_get_totalvfs(xe));
 
 	pf_resize_vf_vram_bar(xe, num_vfs);
 
 	err = pci_enable_sriov(pdev, num_vfs);
 	if (err < 0)
-		goto failed;
+		return err;
 
 	pf_link_vfs(xe, num_vfs);
-
-	xe_sriov_info(xe, "Enabled %u of %u VF%s\n",
-		      num_vfs, total_vfs, str_plural(total_vfs));
 
 	xe_sriov_pf_sysfs_link_vfs(xe, num_vfs);
 
 	pf_engine_activity_stats(xe, num_vfs, true);
 
 	return num_vfs;
+}
 
-failed:
-	pf_resize_vf_vram_bar(xe, xe->sriov.pf.device_total_vfs);
+static int pf_enable_vfs(struct xe_device *xe, int num_vfs)
+{
+	int total_vfs = xe_sriov_pf_get_totalvfs(xe);
+	int ret;
+
+	xe_assert(xe, IS_SRIOV_PF(xe));
+	xe_assert(xe, num_vfs > 0);
+	xe_assert(xe, num_vfs <= total_vfs);
+	xe_sriov_dbg(xe, "enabling %u VF%s\n", num_vfs, str_plural(num_vfs));
+
+	ret = pf_enable_vfs_prepare(xe);
+	if (ret < 0)
+		goto failed;
+
+	ret = xe_sriov_pf_provision_vfs(xe, num_vfs);
+	if (ret < 0)
+		goto revert;
+
+	ret = pf_enable_vfs_commit(xe, num_vfs);
+	if (ret < 0)
+		goto revert;
+
+	xe_sriov_info(xe, "Enabled %u of %u VF%s\n",
+		      num_vfs, total_vfs, str_plural(total_vfs));
+	return num_vfs;
+
+revert:
+	xe_sriov_pf_reprovision_default(xe);
 	xe_sriov_pf_unprovision_vfs(xe, num_vfs);
-	xe_pm_runtime_put(xe);
-	pf_finish_vfs_enabling(xe);
-out:
+	pf_enable_vfs_revert(xe);
+failed:
 	xe_sriov_notice(xe, "Failed to enable %u VF%s (%pe)\n",
-			num_vfs, str_plural(num_vfs), ERR_PTR(err));
-	return err;
+			num_vfs, str_plural(num_vfs), ERR_PTR(ret));
+	return ret;
 }
 
 static int pf_disable_vfs(struct xe_device *xe)
@@ -205,18 +239,13 @@ static int pf_disable_vfs(struct xe_device *xe)
 
 	pci_disable_sriov(pdev);
 
-	pf_resize_vf_vram_bar(xe, xe->sriov.pf.device_total_vfs);
-
 	xe_sriov_pf_reprovision_default(xe);
 
 	pf_reset_vfs(xe, num_vfs);
 
 	xe_sriov_pf_unprovision_vfs(xe, num_vfs);
 
-	/* not needed anymore - see pf_enable_vfs() */
-	xe_pm_runtime_put(xe);
-
-	pf_finish_vfs_enabling(xe);
+	pf_enable_vfs_revert(xe);
 
 	xe_sriov_info(xe, "Disabled %u VF%s\n", num_vfs, str_plural(num_vfs));
 	return 0;

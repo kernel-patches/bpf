@@ -29,6 +29,9 @@
 #define TC9563_PORT_L0S_DELAY		0x82496c
 #define TC9563_PORT_L1_DELAY		0x824970
 
+#define TC9563_K_EQUTUNING_033_028	0x824a10
+#define TC9563_EQ_FINE_TUNING_ITER	1
+
 #define TC9563_EMBEDDED_ETH_DELAY	0x8200d8
 #define TC9563_ETH_L1_DELAY_MASK	GENMASK(27, 18)
 #define TC9563_ETH_L1_DELAY_VALUE(x)	FIELD_PREP(TC9563_ETH_L1_DELAY_MASK, x)
@@ -346,6 +349,20 @@ static int tc9563_pwrctrl_set_nfts(struct tc9563_pwrctrl *tc9563,
 				      ARRAY_SIZE(nfts_seq));
 }
 
+static int tc9563_pwrctrl_set_eq_fine_tuning(struct tc9563_pwrctrl *tc9563)
+{
+	int ret;
+
+	ret = regmap_write(tc9563->regmap, TC9563_PORT_SELECT,
+			   BIT(TC9563_USP) | BIT(TC9563_DSP1) |
+			   BIT(TC9563_DSP2));
+	if (ret)
+		return ret;
+
+	return regmap_write(tc9563->regmap, TC9563_K_EQUTUNING_033_028,
+			    TC9563_EQ_FINE_TUNING_ITER);
+}
+
 static int tc9563_pwrctrl_assert_deassert_reset(struct tc9563_pwrctrl *tc9563,
 						bool deassert)
 {
@@ -556,6 +573,12 @@ static int tc9563_pwrctrl_power_on(struct pci_pwrctrl *pwrctrl)
 	ret = tc9563_pwrctrl_assert_deassert_reset(tc9563, false);
 	if (ret)
 		goto power_off;
+
+	ret = tc9563_pwrctrl_set_eq_fine_tuning(tc9563);
+	if (ret) {
+		dev_err(dev, "Failed to enable 8 GT/s EQ fine-tuning\n");
+		goto power_off;
+	}
 
 	for (i = 0; i < TC9563_MAX; i++) {
 		cfg = &tc9563->cfg[i];

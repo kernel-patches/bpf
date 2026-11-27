@@ -57,9 +57,23 @@ patternProperties:
       "#phy-cells":
         const: 0
 
+      phys:
+        description:
+          PHYs on the signal path between the lane and the connector, such as a
+          signal retimer. A retimer can be modeled with a PHY device per
+          channel / direction.
+
+      phy-names:
+        description:
+          Optional names for the entries of "phys", for example to tell the
+          channels of a retimer apart.
+
     required:
       - reg
       - "#phy-cells"
+
+    dependencies:
+      phy-names: [ phys ]
 
     additionalProperties: false
 
@@ -119,6 +133,8 @@ examples:
         phy@0 {
           reg = <0>;
           #phy-cells = <0>;
+          phys = <&retimer 0>, <&retimer 1>;
+          phy-names = "tx", "rx";
         };
 
         phy@1 {
@@ -135,5 +151,16 @@ examples:
           reg = <3>;
           #phy-cells = <0>;
         };
+      };
+    };
+
+    i2c {
+      #address-cells = <1>;
+      #size-cells = <0>;
+
+      retimer: retimer@18 {
+        compatible = "ti,ds125df111";
+        reg = <0x18>;
+        #phy-cells = <1>;
       };
     };

@@ -1444,6 +1444,7 @@ static uint32_t dcn3_get_pix_clk_dividers(
 		struct pll_settings *pll_settings)
 {
 	unsigned long long actual_pix_clk_100Hz = pix_clk_params ? pix_clk_params->requested_pix_clk_100hz : 0;
+	const struct pixel_rate_range_table_entry *e;
 	struct dce110_clk_src *clk_src = TO_DCE110_CLK_SRC(cs);
 
 	if (pix_clk_params == NULL || pll_settings == NULL
@@ -1454,6 +1455,30 @@ static uint32_t dcn3_get_pix_clk_dividers(
 	}
 
 	memset(pll_settings, 0, sizeof(*pll_settings));
+	e = look_up_in_video_optimized_rate_tlb(pix_clk_params->requested_pix_clk_100hz / 10);
+
+	if (e) {
+		switch (e->target_pixel_rate_khz) {
+		//Do not modify (no need) for *1.001 rates
+		case 27000:
+		case 54000:
+		case 108000:
+			break;
+
+		default:
+			//Should override pll_settings->actual_pix_clk_100hz here when entry found in table to
+			//increase Pixel clock precision for one digit (in KHz units -> 100Hz unit that VBIOS
+			//accepts) for refresh rates like 59.94 / 29.97 Hz etc.
+			actual_pix_clk_100Hz = e->target_pixel_rate_khz;
+			actual_pix_clk_100Hz *= 10;
+			actual_pix_clk_100Hz *= e->mult_factor;
+			actual_pix_clk_100Hz = div_u64(actual_pix_clk_100Hz, e->div_factor);
+			pll_settings->actual_pix_clk_100hz = (unsigned int) actual_pix_clk_100Hz;
+			//Loop back so Audio will get same precisison for Audio DTO for Audio Wall clock
+			pix_clk_params->requested_pix_clk_100hz = (unsigned int) actual_pix_clk_100Hz;
+			break;
+		}
+	}
 	/* Adjust for HDMI Type A deep color */
 	if (pix_clk_params->signal_type == SIGNAL_TYPE_HDMI_TYPE_A) {
 		switch (pix_clk_params->color_depth) {

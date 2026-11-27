@@ -5,6 +5,8 @@
  * Copyright 2011-2024 NXP
  */
 
+#include <linux/hex.h>
+
 #include "cfg.h"
 #include "util.h"
 #include "fw.h"
@@ -144,7 +146,11 @@ nxpwifi_ret_sta_get_hw_spec(struct nxpwifi_private *priv,
 				break;
 			case TLV_TYPE_MAX_CONN:
 				max_conn = (struct hw_spec_max_conn *)tlv;
+				adapter->max_p2p_conn = max_conn->max_p2p_conn;
 				adapter->max_sta_conn = max_conn->max_sta_conn;
+				nxpwifi_dbg(adapter, INFO,
+					    "max p2p connections: %u\n",
+					    adapter->max_p2p_conn);
 				nxpwifi_dbg(adapter, INFO,
 					    "max sta connections: %u\n",
 					    adapter->max_sta_conn);
@@ -1391,9 +1397,11 @@ nxpwifi_ret_sta_mem_access(struct nxpwifi_private *priv,
 	return 0;
 }
 
-static u32 nxpwifi_parse_cal_cfg(u8 *src, size_t len, u8 *dst)
+static u32 nxpwifi_parse_cal_cfg(const char *src, size_t len, u8 *dst,
+				 size_t dst_size)
 {
-	u8 *s = src, *d = dst;
+	const char *s = src;
+	u8 *d = dst;
 
 	while (s - src < len) {
 		if (*s && (isspace(*s) || *s == '\t')) {
@@ -1401,7 +1409,8 @@ static u32 nxpwifi_parse_cal_cfg(u8 *src, size_t len, u8 *dst)
 			continue;
 		}
 		if (isxdigit(*s)) {
-			if (kstrtou8(s, 16, d))
+			if (d - dst >= dst_size || src + len - s < 2 ||
+			    hex2bin(d, s, 1))
 				return 0;
 			d++;
 			s += 2;
@@ -1420,20 +1429,28 @@ nxpwifi_cmd_sta_cfg_data(struct nxpwifi_private *priv,
 			 u16 cmd_action, u32 cmd_type)
 {
 	struct nxpwifi_adapter *adapter = priv->adapter;
+	struct host_cmd_ds_802_11_cfg_data *pcfg_data = &cmd->params.cfg_data;
 	u32 len;
-	u8 *data = (u8 *)cmd + S_DS_GEN;
 
-	if (adapter->cal_data->data && adapter->cal_data->size > 0) {
-		len = nxpwifi_parse_cal_cfg((u8 *)adapter->cal_data->data,
-					    adapter->cal_data->size, data);
-		nxpwifi_dbg(adapter, INFO,
-			    "download cfg_data from config file\n");
-	} else {
+	if (!adapter->cal_data || !adapter->cal_data->data ||
+	    !adapter->cal_data->size)
 		return -EINVAL;
-	}
+
+	len = nxpwifi_parse_cal_cfg((const char *)adapter->cal_data->data,
+				    adapter->cal_data->size, pcfg_data->data,
+				    NXPWIFI_SIZE_OF_CMD_BUFFER - S_DS_GEN -
+				    sizeof(*pcfg_data));
+	if (!len)
+		return -EINVAL;
+
+	pcfg_data->action = cpu_to_le16(cmd_action);
+	pcfg_data->type = cpu_to_le16(NXPWIFI_CFG_TYPE_CAL);
+	pcfg_data->data_len = cpu_to_le16(len);
+	nxpwifi_dbg(adapter, INFO,
+		    "download cfg_data from config file\n");
 
 	cmd->command = cpu_to_le16(HOST_CMD_CFG_DATA);
-	cmd->size = cpu_to_le16(S_DS_GEN + len);
+	cmd->size = cpu_to_le16(S_DS_GEN + sizeof(*pcfg_data) + len);
 
 	return 0;
 }
@@ -2379,6 +2396,21 @@ nxpwifi_ret_sta_802_11_hs_cfg(struct nxpwifi_private *priv,
 }
 
 static int
+nxpwifi_cmd_sta_p2p_mode_cfg(struct nxpwifi_private *priv,
+			     struct host_cmd_ds_command *cmd,
+			     u16 cmd_no, void *data_buf,
+			     u16 cmd_action, u32 cmd_type)
+{
+	cmd->command = cpu_to_le16(cmd_no);
+	cmd->params.mode_cfg.action = cpu_to_le16(cmd_action);
+	cmd->params.mode_cfg.mode = cpu_to_le16(get_unaligned((u16 *)data_buf));
+	cmd->size = cpu_to_le16(sizeof(struct host_cmd_ds_p2p_mode_cfg) +
+				S_DS_GEN);
+
+	return 0;
+}
+
+static int
 nxpwifi_cmd_sta_set_bss_mode(struct nxpwifi_private *priv,
 			     struct host_cmd_ds_command *cmd,
 			     u16 cmd_no, void *data_buf,
@@ -3160,6 +3192,9 @@ static const struct nxpwifi_cmd_entry cmd_table_sta[] = {
 	{.cmd_no = HOST_CMD_802_11_HS_CFG_ENH,
 	.prepare_cmd = nxpwifi_cmd_sta_802_11_hs_cfg,
 	.cmd_resp = nxpwifi_ret_sta_802_11_hs_cfg},
+	{.cmd_no = HOST_CMD_P2P_MODE_CFG,
+	.prepare_cmd = nxpwifi_cmd_sta_p2p_mode_cfg,
+	.cmd_resp = NULL},
 	{.cmd_no = HOST_CMD_CAU_REG_ACCESS,
 	.prepare_cmd = nxpwifi_cmd_sta_reg_access,
 	.cmd_resp = nxpwifi_ret_sta_reg_access},

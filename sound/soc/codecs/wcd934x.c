@@ -1702,7 +1702,6 @@ static int wcd934x_slim_set_hw_params(struct wcd934x_codec *wcd,
 	/* Configure slave interface device */
 	list_for_each_entry(ch, slim_ch_list, list) {
 		cfg->ch_count++;
-		payload |= 1 << ch->shift;
 		cfg->port_mask |= BIT(ch->port);
 	}
 
@@ -1712,6 +1711,14 @@ static int wcd934x_slim_set_hw_params(struct wcd934x_codec *wcd,
 
 	i = 0;
 	list_for_each_entry(ch, slim_ch_list, list) {
+		/*
+		 * Each port carries its own channel mask.  Accumulating the bits
+		 * across the whole list and writing the sum into every port would
+		 * enable the other channels on a port that only gets one of them
+		 * allocated on the bus; the codec then overruns the port's TX FIFO
+		 * ("overflow error on TX port N").
+		 */
+		payload = BIT(ch->shift);
 		cfg->chs[i++] = ch->ch_num;
 		if (direction == SNDRV_PCM_STREAM_PLAYBACK) {
 			/* write to interface device */
@@ -5625,6 +5632,28 @@ static const struct snd_soc_dapm_widget wcd934x_dapm_widgets[] = {
 };
 
 static const struct snd_soc_dapm_route wcd934x_audio_map[] = {
+	/*
+	 * The ADC/DMIC front ends cannot produce a single sample without the
+	 * codec sysclk: MCLK also gates the analog bias generator and the
+	 * decimator clocks (see __wcd934x_cdc_mclk_enable()).  Upstream only
+	 * ever wired MCLK into the graph from the board file, as
+	 * "RX_BIAS" -> "MCLK", i.e. from the playback side.  A board that can
+	 * only record (or that plays through another amp, like polaris) then
+	 * runs a capture stream with an unclocked codec and reads digital
+	 * silence.  Express the dependency where it belongs, on the capture
+	 * front ends, so no board has to remember it.
+	 */
+	{"ADC1", NULL, "MCLK"},
+	{"ADC2", NULL, "MCLK"},
+	{"ADC3", NULL, "MCLK"},
+	{"ADC4", NULL, "MCLK"},
+	{"DMIC0", NULL, "MCLK"},
+	{"DMIC1", NULL, "MCLK"},
+	{"DMIC2", NULL, "MCLK"},
+	{"DMIC3", NULL, "MCLK"},
+	{"DMIC4", NULL, "MCLK"},
+	{"DMIC5", NULL, "MCLK"},
+
 	/* RX0-RX7 */
 	WCD934X_SLIM_RX_AIF_PATH(0),
 	WCD934X_SLIM_RX_AIF_PATH(1),

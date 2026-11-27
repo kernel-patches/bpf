@@ -2338,6 +2338,18 @@ struct rtw89_h2c_wow_payload_cam_update {
 	__le32 w8;
 } __packed;
 
+struct rtw89_h2c_lps_adv_parm {
+	__le32 w0;
+	__le32 w1;
+} __packed;
+
+#define RTW89_H2C_PS_ADV_PARM_W0_MACID GENMASK(7, 0)
+#define RTW89_H2C_PS_ADV_PARM_W0_TRX_TIMEOUT_TIME_SET GENMASK(9, 8)
+#define RTW89_H2C_PS_ADV_PARM_W0_EN_SMART_PS_DTIM_RX BIT(10)
+#define RTW89_H2C_PS_ADV_PARM_W0_EN_TRX_EXT_MODE BIT(11)
+#define RTW89_H2C_PS_ADV_PARM_W1_TRX_TIMEOUT_TIME_VAL GENMASK(7, 0)
+#define RTW89_H2C_PS_ADV_PARM_W1_EXTNUM GENMASK(15, 8)
+
 #define RTW89_H2C_WOW_PLD_CAM_UPD_W0_R_W BIT(0)
 #define RTW89_H2C_WOW_PLD_CAM_UPD_W0_IDX GENMASK(7, 1)
 #define RTW89_H2C_WOW_PLD_CAM_UPD_WKFM0 GENMASK(31, 0)
@@ -4000,6 +4012,7 @@ struct rtw89_fw_c2h_attr {
 	u8 class;
 	u8 func;
 	u16 len;
+	u8 ignore: 1;
 	u8 is_scan_event: 1;
 	u8 scan_seq: 2;
 };
@@ -4178,6 +4191,22 @@ struct rtw89_c2h_scanofld {
 #define RTW89_C2H_SCANOFLD_W7_REPORT_TSF GENMASK(31, 0)
 #define RTW89_C2H_SCANOFLD_W8_PERIOD_V1 GENMASK(15, 0)
 #define RTW89_C2H_SCANOFLD_W8_EXPECT_PERIOD_V1 GENMASK(31, 16)
+
+struct rtw89_c2h_regd_learn {
+	struct rtw89_c2h_hdr hdr;
+	__le32 w2;
+} __packed;
+
+#define RTW89_C2H_REGD_LEARN_W2_STATUS GENMASK(7, 0)
+#define RTW89_C2H_REGD_LEARN_W2_COUNTRY_0 GENMASK(15, 8)
+#define RTW89_C2H_REGD_LEARN_W2_COUNTRY_1 GENMASK(23, 16)
+
+enum rtw89_c2h_regd_learn_status {
+	RTW89_C2H_REGD_LEARN_NONE = 0,
+	RTW89_C2H_REGD_LEARN_LEARNED = 1,
+	RTW89_C2H_REGD_LEARN_VERIFIED = 2,
+	RTW89_C2H_REGD_LEARN_ABORT = 3,
+};
 
 #define RTW89_GET_MAC_C2H_MCC_RCV_ACK_GROUP(c2h) \
 	le32_get_bits(*((const __le32 *)(c2h) + 2), GENMASK(1, 0))
@@ -4800,6 +4829,7 @@ enum rtw89_ps_h2c_func {
 	H2C_FUNC_MAC_LPS_PARM		= 0x0,
 	H2C_FUNC_P2P_ACT		= 0x1,
 	H2C_FUNC_IPS_CFG		= 0x3,
+	H2C_FUNC_MAC_PS_ADVANCE_PARM	= 0x4,
 	H2C_FUNC_PS_POWER_LEVEL		= 0x7,
 	H2C_FUNC_TBTT_TUNING		= 0xA,
 
@@ -4856,9 +4886,18 @@ enum rtw89_fw_ofld_h2c_func {
 	H2C_FUNC_MAC_MACID_PAUSE_SLEEP	= 0x28,
 	H2C_FUNC_SCANOFLD_BE		= 0x2c,
 	H2C_FUNC_TRX_PROTECT		= 0x34,
+	H2C_FUNC_REGD_LEARN		= 0x53,
 
 	NUM_OF_RTW89_FW_OFLD_H2C_FUNC,
 };
+
+struct rtw89_h2c_regd_learn {
+	__le32 w0;
+} __packed;
+
+#define RTW89_H2C_REGD_LEARN_W0_COUNTRY_0	GENMASK(7, 0)
+#define RTW89_H2C_REGD_LEARN_W0_COUNTRY_1	GENMASK(15, 8)
+#define RTW89_H2C_REGD_LEARN_W0_ABORT		BIT(16)
 
 #define RTW89_FW_OFLD_WAIT_COND(tag, func) \
 	((tag) * NUM_OF_RTW89_FW_OFLD_H2C_FUNC + (func))
@@ -4867,6 +4906,8 @@ enum rtw89_fw_ofld_h2c_func {
 	RTW89_FW_OFLD_WAIT_COND(RTW89_PKT_OFLD_WAIT_TAG(pkt_id, pkt_op), \
 				H2C_FUNC_PACKET_OFLD)
 #define RTW89_FW_OFLD_WAIT_COND_TRX_PROTECT RTW89_FW_OFLD_WAIT_COND(0, H2C_FUNC_TRX_PROTECT)
+#define RTW89_FW_OFLD_WAIT_COND_REGD_LEARN_ABORT \
+	RTW89_FW_OFLD_WAIT_COND(1, H2C_FUNC_REGD_LEARN)
 
 #define RTW89_SCANOFLD_WAIT_COND_ADD_CH RTW89_FW_OFLD_WAIT_COND(0, H2C_FUNC_ADD_SCANOFLD_CH)
 
@@ -5636,6 +5677,8 @@ int rtw89_fw_h2c_init_ba_cam_users(struct rtw89_dev *rtwdev, u8 users,
 
 int rtw89_fw_h2c_lps_parm(struct rtw89_dev *rtwdev,
 			  struct rtw89_lps_parm *lps_param);
+int rtw89_fw_h2c_lps_adv_param(struct rtw89_dev *rtwdev,
+			       struct rtw89_vif_link *rtwvif_link);
 int rtw89_fw_h2c_lps_ch_info(struct rtw89_dev *rtwdev, struct rtw89_vif *rtwvif);
 int rtw89_fw_h2c_lps_ml_cmn_info(struct rtw89_dev *rtwdev,
 				 struct rtw89_vif *rtwvif);
@@ -5684,6 +5727,7 @@ int rtw89_hw_scan_append_wildcard_probe_req(struct rtw89_dev *rtwdev,
 					    const u8 *mac_addr, bool wowlan);
 void rtw89_hw_scan_calc_req_ssid(struct rtw89_dev *rtwdev,
 				 struct rtw89_vif_link *rtwvif_link, bool wowlan);
+int rtw89_fw_h2c_regd_learn(struct rtw89_dev *rtwdev, const char *dflt);
 int rtw89_fw_h2c_trigger_cpu_exception(struct rtw89_dev *rtwdev);
 int rtw89_fw_h2c_pkt_drop(struct rtw89_dev *rtwdev,
 			  const struct rtw89_pkt_drop_params *params);

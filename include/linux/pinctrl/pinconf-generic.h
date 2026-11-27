@@ -172,27 +172,30 @@ enum pin_config_param {
 /*
  * Helpful configuration macro to be used in tables etc.
  */
-#define PIN_CONF_PACKED(p, a) ((a << 8) | ((unsigned long) p & 0xffUL))
+#define PIN_CONF_PACKED(p, a) \
+	(((unsigned long) a << 8) | ((unsigned long) p & 0xffUL))
 
 /*
  * The following inlines stuffs a configuration parameter and data value
  * into and out of an unsigned long argument, as used by the generic pin config
  * system. We put the parameter in the lower 8 bits and the argument in the
- * upper 24 bits.
+ * upper BITS_PER_LONG - 8 bits.
  */
+
+#define PIN_CONF_ARG_MASK	(~0UL >> 8)
 
 static inline enum pin_config_param pinconf_to_config_param(unsigned long config)
 {
 	return (enum pin_config_param) (config & 0xffUL);
 }
 
-static inline u32 pinconf_to_config_argument(unsigned long config)
+static inline unsigned long pinconf_to_config_argument(unsigned long config)
 {
-	return (u32) ((config >> 8) & 0xffffffUL);
+	return (config >> 8) & PIN_CONF_ARG_MASK;
 }
 
 static inline unsigned long pinconf_to_config_packed(enum pin_config_param param,
-						     u32 argument)
+						     unsigned long argument)
 {
 	return PIN_CONF_PACKED(param, argument);
 }

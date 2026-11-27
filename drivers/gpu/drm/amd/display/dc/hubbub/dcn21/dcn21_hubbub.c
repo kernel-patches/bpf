@@ -575,6 +575,7 @@ bool hubbub21_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower)
 {
 	struct dcn20_hubbub *hubbub1 = TO_DCN20_HUBBUB(hubbub);
@@ -610,7 +611,7 @@ bool hubbub21_program_watermarks(
 	REG_UPDATE(DCHUBBUB_ARB_HOSTVM_CNTL,
 			DCHUBBUB_ARB_MAX_QOS_COMMIT_THRESHOLD, 0xF);
 
-	hubbub1_allow_self_refresh_control(hubbub, !hubbub->ctx->dc->debug.disable_stutter);
+	hubbub1_allow_self_refresh_control(hubbub, !policy.disable_stutter);
 
 	return wm_pending;
 }

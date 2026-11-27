@@ -103,6 +103,7 @@ static int mlx5_data_direct_set_dma_caps(struct pci_dev *pdev)
 	}
 
 	dma_set_max_seg_size(&pdev->dev, SZ_2G);
+	dma_set_seg_boundary(&pdev->dev, ULONG_MAX);
 	return 0;
 }
 
@@ -145,13 +146,13 @@ static int mlx5_data_direct_create_resources(struct mlx5_core_dev *mdev)
 	mdev->data_direct->pdn = pdn;
 
 	/* create another mkey with RO support */
-	if (MLX5_CAP_GEN(mdev, relaxed_ordering_write)) {
-		MLX5_SET(mkc, mkc, relaxed_ordering_write, 1);
+	if (MLX5_CAP_GEN(mdev, mkc_order_write_after_write_ro)) {
+		MLX5_SET(mkc, mkc, order_write_after_write, 1);
 		ro_supp = true;
 	}
 
-	if (MLX5_CAP_GEN(mdev, relaxed_ordering_read)) {
-		MLX5_SET(mkc, mkc, relaxed_ordering_read, 1);
+	if (MLX5_CAP_GEN(mdev, pci_relaxed_ordered_read)) {
+		MLX5_SET(mkc, mkc, pci_relaxed_ordered_read, 1);
 		ro_supp = true;
 	}
 

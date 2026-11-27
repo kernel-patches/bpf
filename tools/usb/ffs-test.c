@@ -232,7 +232,7 @@ static size_t descs_to_legacy(void **legacy, const void *descriptors_v2)
 			const struct usb_functionfs_descs_head_v2 header;
 			const __le32 counts[];
 		} __attribute__((packed)) *const in = descriptors_v2;
-		const __le32 *counts = in->counts;
+		const unsigned char *counts = (const void *)in->counts;
 		__u32 flags;
 
 		if (le32_to_cpu(in->header.magic) !=
@@ -252,9 +252,9 @@ static size_t descs_to_legacy(void **legacy, const void *descriptors_v2)
 				break;			\
 			if (length < 4)			\
 				return 0;		\
-			ret = le32_to_cpu(*counts);	\
+			ret = get_unaligned_le32(counts); \
 			length -= 4;			\
-			++counts;			\
+			counts += 4;			\
 		} while (0)
 
 		GET_NEXT_COUNT_IF_FLAG(fs_count, FUNCTIONFS_HAS_FS_DESC);
@@ -473,7 +473,7 @@ static void join_thread(struct thread *t)
 {
 	int ret = pthread_join(t->id, NULL);
 
-	if (ret < 0)
+	if (ret)
 		err("%s: joining thread", t->filename);
 	else
 		debug("%s: joined\n", t->filename);
@@ -527,7 +527,6 @@ empty_out_buf(struct thread *ignore, const void *buf, size_t nbytes)
 {
 	const __u8 *p;
 	__u8 expected;
-	ssize_t ret;
 	size_t len;
 
 	(void)ignore;
@@ -549,9 +548,9 @@ empty_out_buf(struct thread *ignore, const void *buf, size_t nbytes)
 		break;
 
 	case PAT_PIPE:
-		ret = fwrite(buf, nbytes, 1, stdout);
-		if (ret > 0)
-			fflush(stdout);
+		if (fwrite(buf, nbytes, 1, stdout) != 1 || fflush(stdout))
+			return -1;
+		len = nbytes;
 		break;
 
 invalid:

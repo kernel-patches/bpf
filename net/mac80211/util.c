@@ -398,9 +398,9 @@ out:
 }
 
 static void
-__releases(&local->queue_stop_reason_lock)
-__acquires(&local->queue_stop_reason_lock)
 _ieee80211_wake_txqs(struct ieee80211_local *local, unsigned long *flags)
+	__releases(&local->queue_stop_reason_lock)
+	__acquires(&local->queue_stop_reason_lock)
 {
 	struct ieee80211_sub_if_data *sdata;
 	int n_acs = IEEE80211_NUM_ACS;
@@ -444,14 +444,13 @@ void ieee80211_wake_txqs(struct tasklet_struct *t)
 	spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
 }
 
-static void __ieee80211_wake_queue(struct ieee80211_hw *hw, int queue,
+static void __ieee80211_wake_queue(struct ieee80211_local *local, int queue,
 				   enum queue_stop_reason reason,
 				   bool refcounted,
 				   unsigned long *flags)
+	__must_hold(&local->queue_stop_reason_lock)
 {
-	struct ieee80211_local *local = hw_to_local(hw);
-
-	if (WARN_ON(queue >= hw->queues))
+	if (WARN_ON(queue >= local->hw.queues))
 		return;
 
 	if (!test_bit(reason, &local->queue_stop_reasons[queue]))
@@ -499,7 +498,7 @@ void ieee80211_wake_queue_by_reason(struct ieee80211_hw *hw, int queue,
 	unsigned long flags;
 
 	spin_lock_irqsave(&local->queue_stop_reason_lock, flags);
-	__ieee80211_wake_queue(hw, queue, reason, refcounted, &flags);
+	__ieee80211_wake_queue(local, queue, reason, refcounted, &flags);
 	spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
 }
 
@@ -568,7 +567,7 @@ void ieee80211_add_pending_skb(struct ieee80211_local *local,
 	__ieee80211_stop_queue(hw, queue, IEEE80211_QUEUE_STOP_REASON_SKB_ADD,
 			       false);
 	__skb_queue_tail(&local->pending[queue], skb);
-	__ieee80211_wake_queue(hw, queue, IEEE80211_QUEUE_STOP_REASON_SKB_ADD,
+	__ieee80211_wake_queue(local, queue, IEEE80211_QUEUE_STOP_REASON_SKB_ADD,
 			       false, &flags);
 	spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
 }
@@ -600,7 +599,7 @@ void ieee80211_add_pending_skbs(struct ieee80211_local *local,
 	}
 
 	for (i = 0; i < hw->queues; i++)
-		__ieee80211_wake_queue(hw, i,
+		__ieee80211_wake_queue(local, i,
 			IEEE80211_QUEUE_STOP_REASON_SKB_ADD,
 			false, &flags);
 	spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
@@ -660,7 +659,7 @@ void ieee80211_wake_queues_by_reason(struct ieee80211_hw *hw,
 	spin_lock_irqsave(&local->queue_stop_reason_lock, flags);
 
 	for_each_set_bit(i, &queues, hw->queues)
-		__ieee80211_wake_queue(hw, i, reason, refcounted, &flags);
+		__ieee80211_wake_queue(local, i, reason, refcounted, &flags);
 
 	spin_unlock_irqrestore(&local->queue_stop_reason_lock, flags);
 }
@@ -904,7 +903,7 @@ __ieee80211_iterate_stations(struct ieee80211_hw *hw,
 	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (prev)
-		sta = container_of(prev, struct sta_info, sta);
+		sta = sta_from_pub(prev);
 
 	sta = list_prepare_entry(sta, &local->sta_list, list);
 	list_for_each_entry_continue(sta, &local->sta_list, list) {
@@ -1748,6 +1747,30 @@ static void ieee80211_assign_chanctx(struct ieee80211_local *local,
 	}
 }
 
+static void ieee80211_reconfig_monitors(struct ieee80211_local *local)
+{
+	struct ieee80211_sub_if_data *sdata;
+
+	lockdep_assert_wiphy(local->hw.wiphy);
+
+	list_for_each_entry(sdata, &local->interfaces, list) {
+		struct ieee80211_chan_req chanreq = sdata->vif.bss_conf.chanreq;
+
+		if (sdata->vif.type != NL80211_IFTYPE_MONITOR ||
+		    !chanreq.oper.chan ||
+		    rcu_access_pointer(sdata->deflink.conf->chanctx_conf))
+			continue;
+
+		if (!ieee80211_link_use_channel(&sdata->deflink, &chanreq,
+						IEEE80211_CHANCTX_SHARED))
+			continue;
+
+		sdata_info(sdata, "failed to restore monitor channel\n");
+		memset(&sdata->vif.bss_conf.chanreq, 0,
+		       sizeof(sdata->vif.bss_conf.chanreq));
+	}
+}
+
 static void ieee80211_reconfig_stations(struct ieee80211_sub_if_data *sdata)
 {
 	struct ieee80211_local *local = sdata->local;
@@ -1773,7 +1796,7 @@ static int
 ieee80211_reconfig_nan_offload_de(struct ieee80211_sub_if_data *sdata)
 {
 	struct cfg80211_nan_func *func, **funcs;
-	int res, id, i = 0;
+	int res = 0, id, i = 0;
 
 	funcs = kzalloc_objs(*funcs, sdata->local->hw.max_nan_de_entries + 1);
 	if (!funcs)
@@ -1800,7 +1823,7 @@ ieee80211_reconfig_nan_offload_de(struct ieee80211_sub_if_data *sdata)
 	}
 
 	kfree(funcs);
-	return res;
+	return 0;
 }
 
 static int ieee80211_reconfig_nan(struct ieee80211_sub_if_data *sdata)
@@ -2381,6 +2404,8 @@ int ieee80211_reconfig(struct ieee80211_local *local)
 	if (local->virt_monitors > 0 &&
 	    local->virt_monitors == local->open_count)
 		ieee80211_add_virtual_monitor(local, NULL);
+
+	ieee80211_reconfig_monitors(local);
 
 	if (!suspended)
 		return 0;

@@ -63,6 +63,7 @@ static void *pdsfc_info(struct fwctl_uctx *uctx, size_t *length)
 		return ERR_PTR(-ENOMEM);
 
 	info->uctx_caps = pdsfc_uctx->uctx_caps;
+	*length = sizeof(*info);
 
 	return info;
 }

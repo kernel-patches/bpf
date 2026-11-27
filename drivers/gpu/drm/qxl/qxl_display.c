@@ -1141,7 +1141,7 @@ static const struct drm_connector_funcs qxl_connector_funcs = {
 	.detect = qxl_conn_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = qxl_conn_destroy,
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -1310,10 +1310,17 @@ int qxl_modeset_init(struct qxl_device *qdev)
 
 	ret = drm_vblank_init(&qdev->ddev, qxl_num_crtc);
 	if (ret)
-		return ret;
+		goto destroy_monitors_object;
 
-	drm_mode_config_reset(&qdev->ddev);
+	ret = drm_mode_config_create_initial_state(&qdev->ddev);
+	if (ret)
+		goto destroy_monitors_object;
+
 	return 0;
+
+destroy_monitors_object:
+	qxl_destroy_monitors_object(qdev);
+	return ret;
 }
 
 void qxl_modeset_fini(struct qxl_device *qdev)

@@ -52,8 +52,8 @@ static void event_update(struct perf_event *event)
 
 	prev_pwr_acc = hwc->pwr_acc;
 	prev_ptsc = hwc->ptsc;
-	rdmsrq(MSR_F15H_CU_PWR_ACCUMULATOR, new_pwr_acc);
-	rdmsrq(MSR_F15H_PTSC, new_ptsc);
+	new_pwr_acc = rdmsrq(MSR_F15H_CU_PWR_ACCUMULATOR);
+	new_ptsc = rdmsrq(MSR_F15H_PTSC);
 
 	/*
 	 * Calculate the CU power consumption over a time period, the unit of
@@ -79,8 +79,8 @@ static void __pmu_event_start(struct perf_event *event)
 
 	event->hw.state = 0;
 
-	rdmsrq(MSR_F15H_PTSC, event->hw.ptsc);
-	rdmsrq(MSR_F15H_CU_PWR_ACCUMULATOR, event->hw.pwr_acc);
+	event->hw.ptsc = rdmsrq(MSR_F15H_PTSC);
+	event->hw.pwr_acc = rdmsrq(MSR_F15H_CU_PWR_ACCUMULATOR);
 }
 
 static void pmu_event_start(struct perf_event *event, int mode)

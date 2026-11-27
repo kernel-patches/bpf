@@ -59,6 +59,7 @@
 #include <linux/profile.h>
 #include <linux/psi.h>
 #include <linux/rcuwait_api.h>
+#include <linux/hazptr.h>
 #include <linux/rseq.h>
 #include <linux/sched/wake_q.h>
 #include <linux/scs.h>
@@ -196,12 +197,13 @@ __read_mostly int scheduler_running;
 DEFINE_STATIC_KEY_FALSE(__sched_core_enabled);
 
 /* kernel prio, less is more */
-static inline int __task_prio(const struct task_struct *p)
+static inline int __task_prio(const struct task_struct *p,
+			      const struct sched_dl_entity *dl_server)
 {
 	if (p->sched_class == &stop_sched_class) /* trumps deadline */
 		return -2;
 
-	if (p->dl_server)
+	if (dl_server)
 		return -1; /* deadline */
 
 	if (rt_or_dl_prio(p->prio))
@@ -223,12 +225,19 @@ static inline int __task_prio(const struct task_struct *p)
  * ge(a,b) := !l(a,b)
  */
 
-/* real prio, less is less */
-static inline bool prio_less(const struct task_struct *a,
-			     const struct task_struct *b, bool in_fi)
+/*
+ * real prio, less is less
+ *
+ * @a_dl_server and @b_dl_server are the DL servers @a and @b run on
+ * behalf of, if any.
+ */
+static inline bool __prio_less(const struct task_struct *a,
+			       const struct sched_dl_entity *a_dl_server,
+			       const struct task_struct *b,
+			       const struct sched_dl_entity *b_dl_server,
+			       bool in_fi)
 {
-
-	int pa = __task_prio(a), pb = __task_prio(b);
+	int pa = __task_prio(a, a_dl_server), pb = __task_prio(b, b_dl_server);
 
 	if (-pa < -pb)
 		return true;
@@ -239,18 +248,13 @@ static inline bool prio_less(const struct task_struct *a,
 	if (pa == -1) { /* dl_prio() doesn't work because of stop_class above */
 		const struct sched_dl_entity *a_dl, *b_dl;
 
-		a_dl = &a->dl;
 		/*
-		 * Since,'a' and 'b' can be CFS tasks served by DL server,
+		 * Since 'a' and 'b' can be tasks served by a DL server,
 		 * __task_prio() can return -1 (for DL) even for those. In that
 		 * case, get to the dl_server's DL entity.
 		 */
-		if (a->dl_server)
-			a_dl = a->dl_server;
-
-		b_dl = &b->dl;
-		if (b->dl_server)
-			b_dl = b->dl_server;
+		a_dl = a_dl_server ?: &a->dl;
+		b_dl = b_dl_server ?: &b->dl;
 
 		return !dl_time_before(a_dl->deadline, b_dl->deadline);
 	}
@@ -264,6 +268,12 @@ static inline bool prio_less(const struct task_struct *a,
 #endif
 
 	return false;
+}
+
+static inline bool prio_less(const struct task_struct *a,
+			     const struct task_struct *b, bool in_fi)
+{
+	return __prio_less(a, a->dl_server, b, b->dl_server, in_fi);
 }
 
 static inline bool __sched_core_less(const struct task_struct *a,
@@ -329,6 +339,15 @@ void sched_core_dequeue(struct rq *rq, struct task_struct *p, int flags)
 	}
 
 	/*
+	 * @p left this rq, so it can no longer be the pick a sibling made.
+	 * This also avoids forced idle accounting charging it once it is gone.
+	 */
+	if (rq->core_pick == p) {
+		rq->core_pick = NULL;
+		rq->core_dl_server = NULL;
+	}
+
+	/*
 	 * Migrating the last task off the cpu, with the cpu in forced idle
 	 * state. Reschedule to create an accounting edge for forced idle,
 	 * and re-examine whether the core is still in forced idle state.
@@ -336,6 +355,15 @@ void sched_core_dequeue(struct rq *rq, struct task_struct *p, int flags)
 	if (!(flags & DEQUEUE_SAVE) && rq->nr_running == 1 &&
 	    rq->core->core_forceidle_count && rq->curr == rq->idle)
 		resched_curr(rq);
+}
+
+/*
+ * An idle CPU with an empty runqueue must still call pick_next_task() while
+ * the core is forced idle. Only that pick ends or re-examines the forced idle.
+ */
+static inline bool sched_core_idle_needs_pick(struct rq *rq)
+{
+	return sched_core_enabled(rq) && rq->core->core_forceidle_count;
 }
 
 static int sched_task_is_throttled(struct task_struct *p, int cpu)
@@ -541,6 +569,7 @@ void sched_core_put(void)
 static inline void sched_core_enqueue(struct rq *rq, struct task_struct *p) { }
 static inline void
 sched_core_dequeue(struct rq *rq, struct task_struct *p, int flags) { }
+static inline bool sched_core_idle_needs_pick(struct rq *rq) { return false; }
 
 #endif /* !CONFIG_SCHED_CORE */
 
@@ -4606,6 +4635,19 @@ struct task_struct *cpu_curr_snapshot(int cpu)
 }
 
 /**
+ * cpu_curr_snapshot_rcu - Return the task currently running on CPU
+ * @cpu: CPU to query
+ *
+ * The caller must be within an RCU read-side critical section.
+ *
+ * Return: Pointer to task_struct of task running on @cpu.
+ */
+struct task_struct *cpu_curr_snapshot_rcu(int cpu)
+{
+	return rcu_dereference_all(cpu_curr(cpu));
+}
+
+/**
  * wake_up_process - Wake up a specific process
  * @p: The process to be woken up.
  *
@@ -5017,6 +5059,7 @@ void wake_up_new_task(struct task_struct *p)
 	struct rq_flags rf;
 	struct rq *rq;
 	int wake_flags = WF_FORK;
+	int en_flags = ENQUEUE_NOCLOCK | ENQUEUE_INITIAL;
 
 	raw_spin_lock_irqsave(&p->pi_lock, rf.flags);
 	WRITE_ONCE(p->__state, TASK_RUNNING);
@@ -5030,11 +5073,13 @@ void wake_up_new_task(struct task_struct *p)
 	 */
 	p->recent_used_cpu = task_cpu(p);
 	__set_task_cpu(p, select_task_rq(p, task_cpu(p), &wake_flags));
+	if (wake_flags & WF_RQ_SELECTED)
+		en_flags |= ENQUEUE_RQ_SELECTED;
 	rq = __task_rq_lock(p, &rf);
 	update_rq_clock(rq);
 	post_init_entity_util_avg(p);
 
-	activate_task(rq, p, ENQUEUE_NOCLOCK | ENQUEUE_INITIAL);
+	activate_task(rq, p, en_flags);
 	trace_sched_wakeup_new(p);
 	wakeup_preempt(rq, p, wake_flags);
 	if (p->sched_class->task_woken) {
@@ -6297,6 +6342,7 @@ pick_next_task(struct rq *rq, struct rq_flags *rf)
 	__must_hold(__rq_lockp(rq))
 {
 	struct task_struct *next, *p, *max;
+	struct sched_dl_entity *max_dl_server;
 	bool fi_before = false;
 	bool core_clock_updated = (rq == rq->core);
 	unsigned long cookie;
@@ -6410,6 +6456,7 @@ restart:
 	 * Tie-break prio towards the current CPU
 	 */
 	max = NULL;
+	max_dl_server = NULL;
 	for_each_core_cpu_wrap(i, rq) {
 		rq_i = cpu_rq(i);
 
@@ -6433,8 +6480,16 @@ restart:
 		rq_i->core_pick = p;
 		rq_i->core_dl_server = rq_i->dl_server;
 
-		if (!max || prio_less(max, p, fi_before))
+		/*
+		 * p->dl_server is only set once @p runs; rank a pick that
+		 * came through a DL server by that server.
+		 */
+		if (!max || __prio_less(max, max_dl_server,
+					p, rq_i->dl_server,
+					fi_before)) {
 			max = p;
+			max_dl_server = rq_i->dl_server;
+		}
 	}
 
 	cookie = rq->core->core_cookie = max->core_cookie;
@@ -6453,10 +6508,15 @@ restart:
 				p = sched_core_find(rq_i, cookie);
 			if (!p)
 				p = idle_sched_class.pick_task(rq_i, rf);
+
+			/*
+			 * Neither a core tree pick nor idle comes through a
+			 * DL server; drop the one the replaced pick left.
+			 */
+			rq_i->core_dl_server = rq_i->dl_server = NULL;
 		}
 
 		rq_i->core_pick = p;
-		rq_i->core_dl_server = NULL;
 
 		if (p == rq_i->idle) {
 			if (rq_i->nr_running) {
@@ -7237,6 +7297,7 @@ static void __sched notrace __schedule(int sched_mode)
 	local_irq_disable();
 	rcu_note_context_switch(preempt);
 	migrate_disable_switch(rq, prev);
+	hazptr_note_context_switch();
 
 	/*
 	 * Make sure that signal_pending_state()->signal_pending() below
@@ -7276,8 +7337,13 @@ static void __sched notrace __schedule(int sched_mode)
 	 */
 	prev_state = READ_ONCE(prev->__state);
 	if (sched_mode == SM_IDLE) {
-		/* SCX must consult the BPF scheduler to tell if rq is empty */
-		if (!rq->nr_running && !scx_enabled()) {
+		/*
+		 * SCX must consult the BPF scheduler to tell if rq is empty,
+		 * and core scheduling may need pick_next_task() to end forced
+		 * idle.
+		 */
+		if (!rq->nr_running && !scx_enabled() &&
+		    !sched_core_idle_needs_pick(rq)) {
 			next = prev;
 			rq->next_class = &idle_sched_class;
 			goto picked;
@@ -8546,8 +8612,10 @@ void set_rq_online(struct rq *rq)
 {
 	if (!rq->online) {
 		const struct sched_class *class;
+		struct root_domain *rd;
 
-		cpumask_set_cpu(rq->cpu, rq->rd->online);
+		rd = rcu_dereference_root_domain(rq->rd);
+		cpumask_set_cpu(rq->cpu, rd->online);
 		rq->online = 1;
 
 		for_each_class(class) {
@@ -8560,6 +8628,7 @@ void set_rq_online(struct rq *rq)
 void set_rq_offline(struct rq *rq)
 {
 	if (rq->online) {
+		struct root_domain *rd = rcu_dereference_root_domain(rq->rd);
 		const struct sched_class *class;
 
 		update_rq_clock(rq);
@@ -8568,18 +8637,20 @@ void set_rq_offline(struct rq *rq)
 				class->rq_offline(rq);
 		}
 
-		cpumask_clear_cpu(rq->cpu, rq->rd->online);
+		cpumask_clear_cpu(rq->cpu, rd->online);
 		rq->online = 0;
 	}
 }
 
 static inline void sched_set_rq_online(struct rq *rq, int cpu)
 {
+	struct root_domain *rd;
 	struct rq_flags rf;
 
 	rq_lock_irqsave(rq, &rf);
-	if (rq->rd) {
-		BUG_ON(!cpumask_test_cpu(cpu, rq->rd->span));
+	rd = rcu_dereference_root_domain(rq->rd);
+	if (rd) {
+		BUG_ON(!cpumask_test_cpu(cpu, rd->span));
 		set_rq_online(rq);
 	}
 	rq_unlock_irqrestore(rq, &rf);
@@ -8587,11 +8658,13 @@ static inline void sched_set_rq_online(struct rq *rq, int cpu)
 
 static inline void sched_set_rq_offline(struct rq *rq, int cpu)
 {
+	struct root_domain *rd;
 	struct rq_flags rf;
 
 	rq_lock_irqsave(rq, &rf);
-	if (rq->rd) {
-		BUG_ON(!cpumask_test_cpu(cpu, rq->rd->span));
+	rd = rcu_dereference_root_domain(rq->rd);
+	if (rd) {
+		BUG_ON(!cpumask_test_cpu(cpu, rd->span));
 		set_rq_offline(rq);
 	}
 	rq_unlock_irqrestore(rq, &rf);
@@ -9013,8 +9086,8 @@ void __init sched_init(void)
 #endif
 		rq->next_class = &idle_sched_class;
 
-		rq->sd = NULL;
-		rq->rd = NULL;
+		RCU_INIT_POINTER(rq->sd, NULL);
+		RCU_INIT_POINTER(rq->rd, NULL);
 		rq->cpu_capacity = SCHED_CAPACITY_SCALE;
 		rq->balance_callback = &balance_push_callback;
 		rq->active_balance = 0;
@@ -11325,7 +11398,8 @@ static int sched_non_preferred_cpu_push_stop(void *arg)
 		rq->npc_push_work_pending = false;
 		update_rq_clock(rq);
 
-		if (task_rq(p) == rq && task_on_rq_queued(p)) {
+		if (task_rq(p) == rq && task_on_rq_queued(p) &&
+		    !is_migration_disabled(p)) {
 			struct rq *dest_rq = __migrate_task(rq, &rf, p, cpu);
 
 			if (rq != dest_rq)
@@ -11366,6 +11440,11 @@ void sched_push_current_non_preferred_cpu(struct rq *rq)
 		if (rq->npc_push_work_pending)
 			return;
 
+		/*
+		 * Racy: is_migration_disabled() isn't stable in IRQ
+		 * context and can race with migrate_disable(). The stopper
+		 * should recheck it.
+		 */
 		if (is_migration_disabled(push_task))
 			return;
 

@@ -111,11 +111,10 @@ void *memchr(const void *s, int c, size_t len)
 static __attribute__((unused))
 char *strchr(const char *s, int c)
 {
-	while (*s) {
+	do {
 		if (*s == (char)c)
 			return (char *)s;
-		s++;
-	}
+	} while (*s++);
 	return NULL;
 }
 
@@ -299,11 +298,10 @@ char *strrchr(const char *s, int c)
 {
 	const char *ret = NULL;
 
-	while (*s) {
+	do {
 		if (*s == (char)c)
 			ret = s;
-		s++;
-	}
+	} while (*s++);
 	return (char *)ret;
 }
 
@@ -314,7 +312,7 @@ char *strstr(const char *haystack, const char *needle)
 
 	len_needle = strlen(needle);
 	if (!len_needle)
-		return NULL;
+		return (char *)haystack;
 
 	len_haystack = strlen(haystack);
 	while (len_haystack >= len_needle) {

@@ -275,7 +275,7 @@ static void ehci_quiesce (struct ehci_hcd *ehci)
 {
 	u32	temp;
 
-	if (ehci->rh_state != EHCI_RH_RUNNING)
+	if (ehci->rh_state < EHCI_RH_RUNNING)
 		return;
 
 	/* wait for any schedule enables/disables to take effect */
@@ -359,6 +359,7 @@ static void ehci_silence_controller(struct ehci_hcd *ehci)
 static void ehci_shutdown(struct usb_hcd *hcd)
 {
 	struct ehci_hcd	*ehci = hcd_to_ehci(hcd);
+	bool		was_running;
 
 	/**
 	 * Protect the system from crashing at system shutdown in cases where
@@ -370,10 +371,18 @@ static void ehci_shutdown(struct usb_hcd *hcd)
 		return;
 
 	spin_lock_irq(&ehci->lock);
+	was_running = ehci->rh_state == EHCI_RH_RUNNING;
 	ehci->shutdown = true;
 	ehci->rh_state = EHCI_RH_STOPPING;
 	ehci->enabled_hrtimer_events = 0;
 	spin_unlock_irq(&ehci->lock);
+
+	/*
+	 * Turn off the schedules before halting. rh_state is STOPPING now,
+	 * so they cannot be re-enabled.
+	 */
+	if (was_running)
+		ehci_quiesce(ehci);
 
 	ehci_silence_controller(ehci);
 
@@ -1331,10 +1340,6 @@ MODULE_LICENSE ("GPL");
 #include "ehci-ppc-of.c"
 #endif
 
-#ifdef CONFIG_XPS_USB_HCD_XILINX
-#include "ehci-xilinx-of.c"
-#endif
-
 #ifdef CONFIG_SPARC_LEON
 #include "ehci-grlib.c"
 #endif
@@ -1345,9 +1350,6 @@ static struct platform_driver * const platform_drivers[] = {
 #endif
 #ifdef CONFIG_USB_EHCI_HCD_PPC_OF
 	&ehci_hcd_ppc_of_driver,
-#endif
-#ifdef CONFIG_XPS_USB_HCD_XILINX
-	&ehci_hcd_xilinx_of_driver,
 #endif
 #ifdef CONFIG_SPARC_LEON
 	&ehci_grlib_driver,

@@ -161,6 +161,7 @@ static DEFINE_PER_CPU(struct hfi_cpu_info, hfi_cpu_info) = { .index = -1 };
 
 static int max_hfi_instances;
 static int hfi_clients_nr;
+static bool hfi_shutdown_done;
 static struct hfi_instance *hfi_instances;
 
 static struct hfi_features hfi_features;
@@ -285,7 +286,7 @@ void intel_hfi_process_event(__u64 pkg_therm_status_msr_val)
 	if (!raw_spin_trylock(&hfi_instance->event_lock))
 		return;
 
-	rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS, msr);
+	msr = rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS);
 	hfi = msr & PACKAGE_THERM_STATUS_HFI_UPDATED;
 	if (!hfi) {
 		raw_spin_unlock(&hfi_instance->event_lock);
@@ -357,7 +358,7 @@ static void hfi_enable(void)
 {
 	u64 msr_val;
 
-	rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
+	msr_val = rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG);
 	msr_val |= HW_FEEDBACK_CONFIG_HFI_ENABLE_BIT;
 	wrmsrq(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
 }
@@ -378,7 +379,7 @@ static void hfi_disable(void)
 	u64 msr_val;
 	int i;
 
-	rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
+	msr_val = rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG);
 	msr_val &= ~HW_FEEDBACK_CONFIG_HFI_ENABLE_BIT;
 	wrmsrq(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
 
@@ -389,13 +390,26 @@ static void hfi_disable(void)
 	 * memory.
 	 */
 	for (i = 0; i < 2000; i++) {
-		rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS, msr_val);
+		msr_val = rdmsrq(MSR_IA32_PACKAGE_THERM_STATUS);
 		if (msr_val & PACKAGE_THERM_STATUS_HFI_UPDATED)
 			break;
 
 		udelay(1);
 		cpu_relax();
 	}
+}
+
+/* Caller must hold hfi_instance_lock. */
+static bool hfi_disable_if_enabled(void)
+{
+	u64 msr_val;
+
+	msr_val = rdmsrq(MSR_IA32_HW_FEEDBACK_CONFIG);
+	if (!(msr_val & HW_FEEDBACK_CONFIG_HFI_ENABLE_BIT))
+		return false;
+
+	hfi_disable();
+	return true;
 }
 
 /**
@@ -483,7 +497,8 @@ enable:
 	 * Enable this HFI instance if this is its first online CPU and
 	 * there are user-space clients of thermal events.
 	 */
-	if (cpumask_weight(hfi_instance->cpus) == 1 && hfi_clients_nr > 0) {
+	if (cpumask_weight(hfi_instance->cpus) == 1 && hfi_clients_nr > 0 &&
+	    !hfi_shutdown_done) {
 		hfi_set_hw_table(hfi_instance);
 		hfi_enable();
 	}
@@ -593,6 +608,11 @@ static void hfi_disable_instance(void *ptr)
 	hfi_disable();
 }
 
+static void hfi_shutdown_instance(void *ptr)
+{
+	hfi_disable_if_enabled();
+}
+
 static void hfi_syscore_resume(void *data)
 {
 	/* This code runs only on the boot CPU. */
@@ -612,9 +632,35 @@ static int hfi_syscore_suspend(void *data)
 	return 0;
 }
 
+static void hfi_syscore_shutdown(void *data)
+{
+	struct hfi_instance *hfi_instance;
+	int i;
+
+	/*
+	 * Hardware keeps writing to the HFI table after a kexec, into memory
+	 * that the next kernel owns. Disable HFI in every package, and keep it
+	 * disabled: user space runs until machine_shutdown() stops the other
+	 * CPUs, and kexec enables CPU hotplug again, so a new thermal netlink
+	 * client or a CPU coming online could otherwise enable it.
+	 */
+	mutex_lock(&hfi_instance_lock);
+	hfi_shutdown_done = true;
+	for (i = 0; i < max_hfi_instances; i++) {
+		hfi_instance = &hfi_instances[i];
+		if (cpumask_empty(hfi_instance->cpus))
+			continue;
+
+		smp_call_function_single(cpumask_any(hfi_instance->cpus),
+					 hfi_shutdown_instance, hfi_instance, true);
+	}
+	mutex_unlock(&hfi_instance_lock);
+}
+
 static const struct syscore_ops hfi_pm_ops = {
 	.resume = hfi_syscore_resume,
 	.suspend = hfi_syscore_suspend,
+	.shutdown = hfi_syscore_shutdown,
 };
 
 static struct syscore hfi_pm = {
@@ -649,7 +695,7 @@ static int hfi_thermal_notify(struct notifier_block *nb, unsigned long state,
 		break;
 	}
 
-	if (!func)
+	if (!func || hfi_shutdown_done)
 		goto out;
 
 	for (i = 0; i < max_hfi_instances; i++) {

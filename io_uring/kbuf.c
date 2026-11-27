@@ -66,7 +66,7 @@ bool io_kbuf_commit(struct io_kiocb *req,
 	if (unlikely(!(req->flags & REQ_F_BUFFERS_COMMIT)))
 		return true;
 
-	req->flags &= ~REQ_F_BUFFERS_COMMIT;
+	io_req_clear_flags(req, REQ_F_BUFFERS_COMMIT);
 
 	if (unlikely(len < 0))
 		return true;
@@ -101,7 +101,7 @@ void io_kbuf_drop_legacy(struct io_kiocb *req)
 {
 	if (WARN_ON_ONCE(!(req->flags & REQ_F_BUFFER_SELECTED)))
 		return;
-	req->flags &= ~REQ_F_BUFFER_SELECTED;
+	io_req_clear_flags(req, REQ_F_BUFFER_SELECTED);
 	kfree(req->kbuf);
 	req->kbuf = NULL;
 }
@@ -126,7 +126,7 @@ bool io_kbuf_recycle_legacy(struct io_kiocb *req, unsigned issue_flags)
 	} else {
 		kfree(buf);
 	}
-	req->flags &= ~REQ_F_BUFFER_SELECTED;
+	io_req_clear_flags(req, REQ_F_BUFFER_SELECTED);
 	req->kbuf = NULL;
 
 	io_ring_submit_unlock(ctx, issue_flags);
@@ -137,6 +137,7 @@ static void __user *io_provided_buffer_select(struct io_kiocb *req, size_t *len,
 					      struct io_buffer_list *bl)
 {
 	if (!list_empty(&bl->buf_list)) {
+		io_req_flags_t flags = REQ_F_BUFFER_SELECTED;
 		struct io_buffer *kbuf;
 
 		kbuf = list_first_entry(&bl->buf_list, struct io_buffer, list);
@@ -145,8 +146,8 @@ static void __user *io_provided_buffer_select(struct io_kiocb *req, size_t *len,
 		if (*len == 0 || *len > kbuf->len)
 			*len = kbuf->len;
 		if (list_empty(&bl->buf_list))
-			req->flags |= REQ_F_BL_EMPTY;
-		req->flags |= REQ_F_BUFFER_SELECTED;
+			flags |= REQ_F_BL_EMPTY;
+		io_req_set_flags(req, flags);
 		req->kbuf = kbuf;
 		req->buf_index = kbuf->bid;
 		return u64_to_user_ptr(kbuf->addr);
@@ -205,7 +206,7 @@ static struct io_br_sel io_ring_buffer_select(struct io_kiocb *req, size_t *len,
 		return sel;
 
 	if ((__u16)(head + 1) == tail)
-		req->flags |= REQ_F_BL_EMPTY;
+		io_req_set_flags(req, REQ_F_BL_EMPTY);
 
 	buf = io_ring_head_to_buf(br, head, bl->mask);
 	buf_len = READ_ONCE(buf->len);
@@ -216,13 +217,13 @@ static struct io_br_sel io_ring_buffer_select(struct io_kiocb *req, size_t *len,
 		sel.addr = NULL;
 		return sel;
 	}
-	req->flags |= REQ_F_BUFFER_RING | REQ_F_BUFFERS_COMMIT;
+	io_req_set_flags(req, REQ_F_BUFFER_RING | REQ_F_BUFFERS_COMMIT);
 	req->buf_index = READ_ONCE(buf->bid);
 	sel.buf_list = bl;
 
 	if (io_should_commit(req, issue_flags)) {
 		if (!io_kbuf_commit(req, sel.buf_list, *len, 1))
-			req->flags |= REQ_F_BUF_MORE;
+			io_req_set_flags(req, REQ_F_BUF_MORE);
 		sel.buf_list = NULL;
 	}
 	return sel;
@@ -255,6 +256,7 @@ static int io_ring_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 				struct io_buffer_list *bl)
 {
 	struct io_uring_buf_ring *br = bl->buf_ring;
+	io_req_flags_t flags = REQ_F_BUFFER_RING;
 	struct iovec *org_iovs = arg->iovs;
 	struct iovec *iov = arg->iovs;
 	int nr_iovs = arg->nr_iovs;
@@ -338,9 +340,9 @@ static int io_ring_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 		kfree(org_iovs);
 
 	if (head == tail)
-		req->flags |= REQ_F_BL_EMPTY;
+		flags |= REQ_F_BL_EMPTY;
 
-	req->flags |= REQ_F_BUFFER_RING;
+	io_req_set_flags(req, flags);
 	return iov - arg->iovs;
 }
 
@@ -365,9 +367,10 @@ int io_buffers_select(struct io_kiocb *req, struct buf_sel_arg *arg,
 		 * committed them, they cannot be put back in the queue.
 		 */
 		if (ret > 0) {
-			req->flags |= REQ_F_BUFFERS_COMMIT | REQ_F_BL_NO_RECYCLE;
+			io_req_set_flags(req, REQ_F_BUFFERS_COMMIT |
+					      REQ_F_BL_NO_RECYCLE);
 			if (!io_kbuf_commit(req, sel->buf_list, arg->out_len, ret))
-				req->flags |= REQ_F_BUF_MORE;
+				io_req_set_flags(req, REQ_F_BUF_MORE);
 		}
 	} else {
 		arg->out_len = arg->max_len;
@@ -397,7 +400,7 @@ int io_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 	if (bl->flags & IOBL_BUF_RING) {
 		ret = io_ring_buffers_peek(req, arg, bl);
 		if (ret > 0)
-			req->flags |= REQ_F_BUFFERS_COMMIT;
+			io_req_set_flags(req, REQ_F_BUFFERS_COMMIT);
 		sel->buf_list = bl;
 		return ret;
 	}
@@ -417,7 +420,7 @@ static inline bool __io_put_kbuf_ring(struct io_kiocb *req,
 	if (ret && (req->flags & REQ_F_BUF_MORE))
 		ret = false;
 
-	req->flags &= ~(REQ_F_BUFFER_RING | REQ_F_BUF_MORE);
+	io_req_clear_flags(req, REQ_F_BUFFER_RING | REQ_F_BUF_MORE);
 	return ret;
 }
 
@@ -427,6 +430,9 @@ unsigned int __io_put_kbufs(struct io_kiocb *req, struct io_buffer_list *bl,
 	unsigned int ret;
 
 	ret = IORING_CQE_F_BUFFER | (req->buf_index << IORING_CQE_BUFFER_SHIFT);
+
+	/* only covers the buffer(s) being put, not a later selection */
+	req->flags &= ~REQ_F_BL_NO_RECYCLE;
 
 	if (unlikely(!(req->flags & REQ_F_BUFFER_RING))) {
 		io_kbuf_drop_legacy(req);
@@ -624,8 +630,6 @@ int io_manage_buffers_legacy(struct io_kiocb *req, unsigned int issue_flags)
 	ret = __io_manage_buffers_legacy(req, bl);
 	io_ring_submit_unlock(ctx, issue_flags);
 
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

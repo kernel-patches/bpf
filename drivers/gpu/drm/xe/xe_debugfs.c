@@ -5,12 +5,15 @@
 
 #include "xe_debugfs.h"
 
+#include <linux/array_size.h>
 #include <linux/bits.h>
 #include <linux/debugfs.h>
 #include <linux/fault-inject.h>
 #include <linux/string_helpers.h>
 
 #include <drm/drm_debugfs.h>
+#include <drm/drm_file.h>
+#include <drm/drm_print.h>
 
 #include "regs/xe_pmt.h"
 #include "xe_bo.h"
@@ -18,23 +21,23 @@
 #include "xe_force_wake.h"
 #include "xe_gt.h"
 #include "xe_gt_debugfs.h"
-#include "xe_gt_printk.h"
-#include "xe_guc_ads.h"
 #include "xe_hw_engine.h"
-#include "xe_mmio.h"
 #include "xe_pagefault.h"
 #include "xe_pcode.h"
 #include "xe_pm.h"
+#include "xe_printk.h"
 #include "xe_psmi.h"
 #include "xe_pxp_debugfs.h"
 #include "xe_sriov.h"
 #include "xe_sriov_pf_debugfs.h"
 #include "xe_sriov_vf.h"
 #include "xe_step.h"
+#include "xe_sysctrl_debugfs.h"
 #include "xe_tile_debugfs.h"
 #include "xe_ttm_vram_mgr.h"
 #include "xe_vsec.h"
 #include "xe_wa.h"
+#include "xe_wedge.h"
 
 #ifdef CONFIG_DRM_XE_DEBUG
 #include "xe_bo_evict.h"
@@ -146,15 +149,20 @@ static void xe_fault_inject_debugfs_register(struct xe_device *xe,
 	}
 }
 
-static void read_residency_counter(struct xe_device *xe, struct xe_mmio *mmio,
-				   u32 offset, const char *name, struct drm_printer *p)
+static void read_residency_counter(struct xe_device *xe, u32 offset, const char *name,
+				   struct drm_printer *p)
 {
 	u64 residency = 0;
+	u32 guid;
 	int ret;
 
-	ret = xe_pmt_telem_read(xe->drm.dev,
-				xe_mmio_read32(mmio, PUNIT_TELEMETRY_GUID),
-				&residency, offset, sizeof(residency));
+	ret = xe_vsec_get_guid(xe, &guid);
+	if (ret) {
+		drm_warn(&xe->drm, "PMT device is not available: %d\n", ret);
+		return;
+	}
+
+	ret = xe_pmt_telem_read(xe->drm.dev, guid, &residency, offset, sizeof(residency));
 	if (ret != sizeof(residency)) {
 		drm_warn(&xe->drm, "%s counter failed to read, ret %d\n", name, ret);
 		return;
@@ -293,13 +301,12 @@ static int pcode_info(struct seq_file *m, void *data)
 static int dgfx_pkg_residencies_show(struct seq_file *m, void *data)
 {
 	struct xe_device *xe;
-	struct xe_mmio *mmio;
 	struct drm_printer p;
 
 	xe = node_to_xe(m->private);
 	p = drm_seq_file_printer(m);
 	guard(xe_pm_runtime)(xe);
-	mmio = xe_root_tile_mmio(xe);
+
 	static const struct {
 		u32 offset;
 		const char *name;
@@ -313,7 +320,7 @@ static int dgfx_pkg_residencies_show(struct seq_file *m, void *data)
 	};
 
 	for (int i = 0; i < ARRAY_SIZE(residencies); i++)
-		read_residency_counter(xe, mmio, residencies[i].offset, residencies[i].name, &p);
+		read_residency_counter(xe, residencies[i].offset, residencies[i].name, &p);
 
 	return 0;
 }
@@ -321,13 +328,11 @@ static int dgfx_pkg_residencies_show(struct seq_file *m, void *data)
 static int dgfx_pcie_link_residencies_show(struct seq_file *m, void *data)
 {
 	struct xe_device *xe;
-	struct xe_mmio *mmio;
 	struct drm_printer p;
 
 	xe = node_to_xe(m->private);
 	p = drm_seq_file_printer(m);
 	guard(xe_pm_runtime)(xe);
-	mmio = xe_root_tile_mmio(xe);
 
 	static const struct {
 		u32 offset;
@@ -339,7 +344,7 @@ static int dgfx_pcie_link_residencies_show(struct seq_file *m, void *data)
 	};
 
 	for (int i = 0; i < ARRAY_SIZE(residencies); i++)
-		read_residency_counter(xe, mmio, residencies[i].offset, residencies[i].name, &p);
+		read_residency_counter(xe, residencies[i].offset, residencies[i].name, &p);
 
 	return 0;
 }
@@ -423,58 +428,6 @@ static ssize_t wedged_mode_show(struct file *f, char __user *ubuf,
 	return simple_read_from_buffer(ubuf, size, pos, buf, len);
 }
 
-static int __wedged_mode_set_reset_policy(struct xe_gt *gt, enum xe_wedged_mode mode)
-{
-	bool enable_engine_reset;
-	int ret;
-
-	enable_engine_reset = (mode != XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET);
-	ret = xe_guc_ads_scheduler_policy_toggle_reset(&gt->uc.guc.ads,
-						       enable_engine_reset);
-	if (ret)
-		xe_gt_err(gt, "Failed to update GuC ADS scheduler policy (%pe)\n", ERR_PTR(ret));
-
-	return ret;
-}
-
-static int wedged_mode_set_reset_policy(struct xe_device *xe, enum xe_wedged_mode mode)
-{
-	struct xe_gt *gt;
-	int ret;
-	u8 id;
-
-	guard(xe_pm_runtime)(xe);
-	for_each_gt(gt, xe, id) {
-		ret = __wedged_mode_set_reset_policy(gt, mode);
-		if (ret) {
-			if (id > 0) {
-				xe->wedged.inconsistent_reset = true;
-				drm_err(&xe->drm, "Inconsistent reset policy state between GTs\n");
-			}
-			return ret;
-		}
-	}
-
-	xe->wedged.inconsistent_reset = false;
-
-	return 0;
-}
-
-static bool wedged_mode_needs_policy_update(struct xe_device *xe, enum xe_wedged_mode mode)
-{
-	if (xe->wedged.inconsistent_reset)
-		return true;
-
-	if (xe->wedged.mode == mode)
-		return false;
-
-	if (xe->wedged.mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET ||
-	    mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET)
-		return true;
-
-	return false;
-}
-
 static ssize_t wedged_mode_set(struct file *f, const char __user *ubuf,
 			       size_t size, loff_t *pos)
 {
@@ -486,17 +439,9 @@ static ssize_t wedged_mode_set(struct file *f, const char __user *ubuf,
 	if (ret)
 		return ret;
 
-	ret = xe_device_validate_wedged_mode(xe, wedged_mode);
+	ret = xe_wedge_set_mode(xe, wedged_mode);
 	if (ret)
 		return ret;
-
-	if (wedged_mode_needs_policy_update(xe, wedged_mode)) {
-		ret = wedged_mode_set_reset_policy(xe, wedged_mode);
-		if (ret)
-			return ret;
-	}
-
-	xe->wedged.mode = wedged_mode;
 
 	return size;
 }
@@ -759,23 +704,22 @@ void xe_debugfs_register(struct xe_device *xe)
 				 ARRAY_SIZE(debugfs_list),
 				 root, minor);
 
-	if (xe->info.platform == XE_BATTLEMAGE && !IS_SRIOV_VF(xe)) {
-		drm_debugfs_create_files(debugfs_residencies,
-					 ARRAY_SIZE(debugfs_residencies),
-					 root, minor);
-	}
-
 	/*
-	 * Pcode version read from PMT is currently only supported on CRI and BMG platforms in PF
-	 * mode, as both platforms support the necessary telemetry read mechanism and have a fixed
-	 * PUNIT_VERSION_OFFSET.
+	 * Residencies and Pcode version read from PMT is currently only supported on CRI and BMG
+	 * platforms in PF mode.  Both platforms support the necessary telemetry read mechanism
+	 * and have a fixed offsets for the required data.
 	 * Attempting this access on other platforms must be verified before enabling support.
 	 */
 	if (!IS_SRIOV_VF(xe) &&
-	    (xe->info.platform == XE_CRESCENTISLAND || xe->info.platform == XE_BATTLEMAGE))
+	    (xe->info.platform == XE_CRESCENTISLAND || xe->info.platform == XE_BATTLEMAGE)) {
+		drm_debugfs_create_files(debugfs_residencies,
+					 ARRAY_SIZE(debugfs_residencies),
+					 root, minor);
+
 		drm_debugfs_create_files(pcode_info_debugfs,
 					 ARRAY_SIZE(pcode_info_debugfs),
 					 root, minor);
+	}
 
 	debugfs_create_file("forcewake_all", 0400, root, xe,
 			    &forcewake_all_fops);
@@ -836,8 +780,166 @@ void xe_debugfs_register(struct xe_device *xe)
 
 	xe_fault_inject_debugfs_register(xe, root);
 
+	if (xe->info.has_sysctrl)
+		xe_sysctrl_debugfs_register(&xe->sc, root);
+
 	if (IS_SRIOV_PF(xe))
 		xe_sriov_pf_debugfs_register(xe, root);
 	else if (IS_SRIOV_VF(xe))
 		xe_sriov_vf_debugfs_register(xe, root);
+}
+
+/*
+ * Per-client "bo_numa" file: Report the NUMA node distribution of the
+ * system pages backing a single bo.
+ *
+ * The file implements a request-response protocol: write() takes a GEM
+ * handle, valid for the client, and takes a snapshot of the bo's page
+ * distribution under the bo's dma_resv lock. Subsequent read()s return
+ * that snapshot. Once the snapshot has been completely read, it is
+ * discarded and a new handle may be written. Until then, writes return
+ * -EBUSY, so that a pending snapshot is never replaced before it is
+ * consumed.
+ *
+ * See xe_bo_print_numa_info() for the snapshot contents.
+ */
+struct bo_numa_snapshot {
+	/* Serializes reads and writes on the open file. */
+	struct mutex lock;
+	/* The pending formatted snapshot, or NULL if none. */
+	char *buf;
+	/* Length of the formatted snapshot. */
+	size_t len;
+};
+
+static int bo_numa_open(struct inode *inode, struct file *f)
+{
+	struct bo_numa_snapshot *snap;
+
+	snap = kzalloc_obj(*snap, GFP_KERNEL_ACCOUNT);
+	if (!snap)
+		return -ENOMEM;
+
+	mutex_init(&snap->lock);
+	f->private_data = snap;
+
+	return nonseekable_open(inode, f);
+}
+
+static int bo_numa_release(struct inode *inode, struct file *f)
+{
+	struct bo_numa_snapshot *snap = f->private_data;
+
+	kvfree(snap->buf);
+	mutex_destroy(&snap->lock);
+	kfree(snap);
+
+	return 0;
+}
+
+static ssize_t bo_numa_read(struct file *f, char __user *ubuf, size_t size,
+			    loff_t *pos)
+{
+	struct bo_numa_snapshot *snap = f->private_data;
+	ssize_t ret = 0;
+
+	mutex_lock(&snap->lock);
+	if (snap->buf) {
+		ret = simple_read_from_buffer(ubuf, size, pos, snap->buf,
+					      snap->len);
+		if (*pos >= snap->len) {
+			kvfree(snap->buf);
+			snap->buf = NULL;
+		}
+	}
+	mutex_unlock(&snap->lock);
+
+	return ret;
+}
+
+static ssize_t bo_numa_write(struct file *f, const char __user *ubuf,
+			     size_t size, loff_t *pos)
+{
+	struct drm_file *file = file_inode(f)->i_private;
+	struct bo_numa_snapshot *snap = f->private_data;
+	struct drm_print_iterator iter;
+	struct drm_printer p;
+	size_t bufsize = PAGE_SIZE / 2;
+	char *buf = NULL;
+	u32 handle;
+	int ret;
+
+	ret = kstrtou32_from_user(ubuf, size, 0, &handle);
+	if (ret)
+		return ret;
+
+	ret = mutex_lock_interruptible(&snap->lock);
+	if (ret)
+		return ret;
+
+	if (snap->buf) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
+	/*
+	 * Retry with a larger buffer until the snapshot fits. The coredump
+	 * printer is used as a generic bounded buffer printer, and reports
+	 * when its buffer is full.
+	 */
+	do {
+		kvfree(buf);
+		bufsize *= 2;
+		buf = kvzalloc(bufsize, GFP_KERNEL_ACCOUNT);
+		if (!buf) {
+			ret = -ENOMEM;
+			goto out_unlock;
+		}
+
+		iter = (struct drm_print_iterator) {
+			.data = buf,
+			.remain = bufsize,
+		};
+		p = drm_coredump_printer(&iter);
+		ret = xe_bo_print_numa_info(file, handle, &p);
+		if (ret)
+			goto out_free;
+	} while (drm_coredump_printer_is_full(&p));
+
+	snap->buf = buf;
+	snap->len = bufsize - iter.remain;
+	*pos = 0;
+	buf = NULL;
+
+out_free:
+	kvfree(buf);
+out_unlock:
+	mutex_unlock(&snap->lock);
+
+	return ret ?: size;
+}
+
+static const struct file_operations bo_numa_fops = {
+	.owner = THIS_MODULE,
+	.open = bo_numa_open,
+	.release = bo_numa_release,
+	.read = bo_numa_read,
+	.write = bo_numa_write,
+};
+
+/**
+ * xe_debugfs_client_add() - Add xe-specific per-client debugfs files
+ * @file: The drm_file of the client.
+ *
+ * Populate the drm core per-client debugfs directory with xe-specific
+ * files. The files are removed by the drm core together with the
+ * directory when @file is released.
+ */
+void xe_debugfs_client_add(struct drm_file *file)
+{
+	if (IS_ERR_OR_NULL(file->debugfs_client))
+		return;
+
+	debugfs_create_file("bo_numa", 0600, file->debugfs_client, file,
+			    &bo_numa_fops);
 }

@@ -196,4 +196,5 @@ const struct pvr_fw_defs pvr_fw_defs_mips = {
 	.irq_pending = pvr_mips_irq_pending,
 	.irq_clear = pvr_mips_irq_clear,
 	.has_fixed_data_addr = true,
+	.multi_dm_thread_assoc = false,
 };

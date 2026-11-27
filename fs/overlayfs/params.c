@@ -347,7 +347,8 @@ static int ovl_mount_dir_check(struct fs_context *fc, const struct path *path,
 	 * as the mount attributes could change.
 	 */
 	if (upper) {
-		if (path->dentry->d_flags & DCACHE_OP_REAL)
+		if ((path->dentry->d_flags & DCACHE_OP_REAL) ||
+		    (path->dentry->d_sb->s_iflags & SB_I_PSEUDO))
 			return invalfc(fc, "filesystem on %s not supported as upperdir", name);
 		if (__mnt_is_readonly(path->mnt))
 			return invalfc(fc, "filesystem on %s is read-only", name);
@@ -860,6 +861,26 @@ out_err:
 
 }
 
+/*
+ * ovl_permission() and ovl_dentry_revalidate_common() run in rcu pathwalk
+ * mode and read ->layers[].mnt, ->fs and ->creator_cred through the
+ * superblock, so those go only after a grace period. The mounts themselves
+ * are rcu-freed by kern_unmount_array().
+ */
+static void ovl_free_fs_rcu(struct rcu_head *head)
+{
+	struct ovl_fs *ofs = container_of(head, struct ovl_fs, rcu);
+
+	kfree(ofs->layers);
+	kfree(ofs->fs);
+	kfree(ofs->config.lowerdirs);
+	kfree(ofs->config.upperdir);
+	kfree(ofs->config.workdir);
+	if (ofs->creator_cred)
+		put_cred(ofs->creator_cred);
+	kfree(ofs);
+}
+
 void ovl_free_fs(struct ovl_fs *ofs)
 {
 	struct vfsmount **mounts;
@@ -880,17 +901,10 @@ void ovl_free_fs(struct ovl_fs *ofs)
 		mounts[i] = ofs->layers[i].mnt;
 	}
 	kern_unmount_array(mounts, ofs->numlayer);
-	kfree(ofs->layers);
 	for (i = 0; i < ofs->numfs; i++)
 		free_anon_bdev(ofs->fs[i].pseudo_dev);
-	kfree(ofs->fs);
 
-	kfree(ofs->config.lowerdirs);
-	kfree(ofs->config.upperdir);
-	kfree(ofs->config.workdir);
-	if (ofs->creator_cred)
-		put_cred(ofs->creator_cred);
-	kfree(ofs);
+	call_rcu(&ofs->rcu, ovl_free_fs_rcu);
 }
 
 int ovl_fs_params_verify(const struct ovl_fs_context *ctx,
@@ -936,14 +950,12 @@ int ovl_fs_params_verify(const struct ovl_fs_context *ctx,
 		config->redirect_mode = follow_mode;
 
 	/*
-	 * This is to make the logic below simpler.  It doesn't make any other
-	 * difference, since redirect_dir=on is only used for upper.
+	 * metacopy -> redirect_dir dependency.
+	 * metacopy needs to create redirects in upper and to follow redirects
+	 * in a non-upper mount.
 	 */
-	if (!config->upperdir && config->redirect_mode == OVL_REDIRECT_FOLLOW)
-		config->redirect_mode = OVL_REDIRECT_ON;
-
-	/* metacopy -> redirect_dir dependency */
-	if (config->metacopy && config->redirect_mode != OVL_REDIRECT_ON) {
+	if (config->metacopy && config->redirect_mode != OVL_REDIRECT_ON &&
+	    (config->upperdir || config->redirect_mode != OVL_REDIRECT_FOLLOW)) {
 		if (set.metacopy && set.redirect) {
 			pr_err("conflicting options: metacopy=on,redirect_dir=%s\n",
 			       ovl_redirect_mode_name(redirect_opt));
@@ -959,7 +971,9 @@ int ovl_fs_params_verify(const struct ovl_fs_context *ctx,
 			config->metacopy = false;
 		} else {
 			/* Automatically enable redirect otherwise. */
-			config->redirect_mode = OVL_REDIRECT_ON;
+			config->redirect_mode = config->upperdir ?
+						OVL_REDIRECT_ON :
+						OVL_REDIRECT_FOLLOW;
 		}
 	}
 

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <errno.h>
+#include <stdlib.h>
+#include <linux/kernel.h>
 #include "threads.h"
 #include "machine.h"
 #include "thread.h"
@@ -21,6 +24,7 @@ static bool key_equal(long key1, long key2, void *ctx __maybe_unused)
 }
 
 void threads__init(struct threads *threads)
+	__context_unsafe(/* initialization */)
 {
 	for (int i = 0; i < THREADS__TABLE_SIZE; i++) {
 		struct threads_table_entry *table = &threads->table[i];
@@ -32,6 +36,7 @@ void threads__init(struct threads *threads)
 }
 
 void threads__exit(struct threads *threads)
+	__context_unsafe(/* teardown */)
 {
 	threads__remove_all_threads(threads);
 	for (int i = 0; i < THREADS__TABLE_SIZE; i++) {
@@ -63,6 +68,7 @@ size_t threads__nr(struct threads *threads)
  */
 static struct thread *__threads_table_entry__get_last_match(struct threads_table_entry *table,
 							    pid_t tid)
+	__must_hold_shared(&table->lock)
 {
 	struct thread *th, *res = NULL;
 
@@ -76,6 +82,7 @@ static struct thread *__threads_table_entry__get_last_match(struct threads_table
 
 static void __threads_table_entry__set_last_match(struct threads_table_entry *table,
 						  struct thread *th)
+	__must_hold(&table->lock)
 {
 	thread__put(table->last_match);
 	table->last_match = thread__get(th);
@@ -171,20 +178,38 @@ int threads__for_each_thread(struct threads *threads,
 {
 	for (int i = 0; i < THREADS__TABLE_SIZE; i++) {
 		struct threads_table_entry *table = &threads->table[i];
+		struct thread *stack_threads[32];
+		struct thread **shard_threads = stack_threads;
 		struct hashmap_entry *cur;
-		size_t bkt;
+		size_t bkt, cnt, idx = 0;
+		int rc = 0;
 
 		down_read(&table->lock);
-		hashmap__for_each_entry(&table->shard, cur, bkt) {
-			int rc = fn((struct thread *)cur->pvalue, data);
-
-			if (rc != 0) {
+		cnt = hashmap__size(&table->shard);
+		if (cnt == 0) {
+			up_read(&table->lock);
+			continue;
+		}
+		if (cnt > ARRAY_SIZE(stack_threads)) {
+			shard_threads = malloc(cnt * sizeof(*shard_threads));
+			if (!shard_threads) {
 				up_read(&table->lock);
-				return rc;
+				return -ENOMEM;
 			}
 		}
+		hashmap__for_each_entry(&table->shard, cur, bkt)
+			shard_threads[idx++] = thread__get((struct thread *)cur->pvalue);
 		up_read(&table->lock);
+
+		for (size_t j = 0; j < idx; j++) {
+			if (rc == 0)
+				rc = fn(shard_threads[j], data);
+			thread__put(shard_threads[j]);
+		}
+		if (shard_threads != stack_threads)
+			free(shard_threads);
+		if (rc != 0)
+			return rc;
 	}
 	return 0;
-
 }

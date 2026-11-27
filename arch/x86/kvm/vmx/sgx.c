@@ -64,7 +64,7 @@ static void sgx_handle_emulation_failure(struct kvm_vcpu *vcpu, u64 addr,
 static int sgx_read_hva(struct kvm_vcpu *vcpu, unsigned long hva, void *data,
 			unsigned int size)
 {
-	if (__copy_from_user(data, (void __user *)hva, size)) {
+	if (kvm_copy_from_user(vcpu->kvm, data, (void __user *)hva, size)) {
 		sgx_handle_emulation_failure(vcpu, hva, size);
 		return -EFAULT;
 	}
@@ -420,9 +420,9 @@ void setup_default_sgx_lepubkeyhash(void)
 		sgx_pubkey_hash[3] = 0xd4f8c05909f9bb3bULL;
 	} else {
 		/* MSR_IA32_SGXLEPUBKEYHASH0 is read above */
-		rdmsrq(MSR_IA32_SGXLEPUBKEYHASH1, sgx_pubkey_hash[1]);
-		rdmsrq(MSR_IA32_SGXLEPUBKEYHASH2, sgx_pubkey_hash[2]);
-		rdmsrq(MSR_IA32_SGXLEPUBKEYHASH3, sgx_pubkey_hash[3]);
+		sgx_pubkey_hash[1] = rdmsrq(MSR_IA32_SGXLEPUBKEYHASH1);
+		sgx_pubkey_hash[2] = rdmsrq(MSR_IA32_SGXLEPUBKEYHASH2);
+		sgx_pubkey_hash[3] = rdmsrq(MSR_IA32_SGXLEPUBKEYHASH3);
 	}
 }
 

@@ -926,6 +926,15 @@ static bool perf_pmu__match_wildcard(const char *pmu_name, const char *tok)
 	bool has_underscore = false;
 	size_t tok_len = strlen(tok);
 
+	if (strstarts(pmu_name, "nvidia_")) {
+		/* NVIDIA PMU with a non-ABI suffix of nvidia_..._[0-9]+_rc_[0-9]+. */
+		const char *rc = strstr(pmu_name, "_rc_");
+
+		if (rc && isdigit(rc[-1]) && tok_len == pmu_name_len_no_suffix(pmu_name) &&
+		    !strncmp(pmu_name, tok, tok_len))
+			return true;
+	}
+
 	/* Check start of pmu_name for equality. */
 	if (strncmp(pmu_name, tok, tok_len))
 		return false;

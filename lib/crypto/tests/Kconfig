@@ -1,5 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+config CRYPTO_LIB_AES_CBC_KUNIT_TEST
+	tristate "KUnit tests for AES-CBC and AES-CBC-CTS" if !KUNIT_ALL_TESTS
+	depends on KUNIT && CRYPTO_LIB_AES_CBC
+	default KUNIT_ALL_TESTS
+	select CRYPTO_LIB_BENCHMARK_VISIBLE
+	# This test uses BLAKE2s, but that's always built-in.
+	help
+	  KUnit tests for the AES-CBC and AES-CBC-CTS encryption modes.
+
 config CRYPTO_LIB_AES_CBC_MACS_KUNIT_TEST
 	tristate "KUnit tests for AES-CMAC, AES-XCBC-MAC, and AES-CBC-MAC" if !KUNIT_ALL_TESTS
 	depends on KUNIT && CRYPTO_LIB_AES_CBC_MACS
@@ -18,6 +27,24 @@ config CRYPTO_LIB_AES_CCM_KUNIT_TEST
 	help
 	  KUnit tests for the AES-CCM authenticated encryption algorithm.
 
+config CRYPTO_LIB_AES_CTR_KUNIT_TEST
+	tristate "KUnit tests for AES-CTR and AES-XCTR" if !KUNIT_ALL_TESTS
+	depends on KUNIT && CRYPTO_LIB_AES_CTR
+	default KUNIT_ALL_TESTS
+	select CRYPTO_LIB_BENCHMARK_VISIBLE
+	# This test uses BLAKE2s, but that's always built-in.
+	help
+	  KUnit tests for the AES-CTR and AES-XCTR stream ciphers.
+
+config CRYPTO_LIB_AES_ECB_KUNIT_TEST
+	tristate "KUnit tests for AES-ECB" if !KUNIT_ALL_TESTS
+	depends on KUNIT && CRYPTO_LIB_AES_ECB
+	default KUNIT_ALL_TESTS
+	select CRYPTO_LIB_BENCHMARK_VISIBLE
+	# This test uses BLAKE2s, but that's always built-in.
+	help
+	  KUnit tests for the AES-ECB encryption mode.
+
 config CRYPTO_LIB_AES_GCM_KUNIT_TEST
 	tristate "KUnit tests for AES-GCM" if !KUNIT_ALL_TESTS
 	depends on KUNIT && CRYPTO_LIB_AES_GCM
@@ -26,6 +53,15 @@ config CRYPTO_LIB_AES_GCM_KUNIT_TEST
 	# This test uses BLAKE2s, but that's always built-in.
 	help
 	  KUnit tests for the AES-GCM authenticated encryption algorithm.
+
+config CRYPTO_LIB_AES_XTS_KUNIT_TEST
+	tristate "KUnit tests for AES-XTS" if !KUNIT_ALL_TESTS
+	depends on KUNIT && CRYPTO_LIB_AES_XTS
+	default KUNIT_ALL_TESTS
+	select CRYPTO_LIB_BENCHMARK_VISIBLE
+	# This test uses BLAKE2s, but that's always built-in.
+	help
+	  KUnit tests for the AES-XTS encryption mode.
 
 config CRYPTO_LIB_BLAKE2B_KUNIT_TEST
 	tristate "KUnit tests for BLAKE2b" if !KUNIT_ALL_TESTS
@@ -44,6 +80,14 @@ config CRYPTO_LIB_BLAKE2S_KUNIT_TEST
 	# exist; the BLAKE2s code is always built-in for the /dev/random driver.
 	help
 	  KUnit tests for the BLAKE2s cryptographic hash function.
+
+config CRYPTO_LIB_CHACHA_KUNIT_TEST
+	tristate "KUnit tests for ChaCha" if !KUNIT_ALL_TESTS
+	depends on KUNIT && CRYPTO_LIB_CHACHA
+	default KUNIT_ALL_TESTS
+	select CRYPTO_LIB_BENCHMARK_VISIBLE
+	help
+	  KUnit tests for the ChaCha stream cipher.
 
 config CRYPTO_LIB_CHACHA20POLY1305_KUNIT_TEST
 	tristate "KUnit tests for ChaCha20Poly1305" if !KUNIT_ALL_TESTS

@@ -596,7 +596,7 @@ static int axi_dac_set_sample_rate(struct iio_backend *back, unsigned int chan,
 		if (ret)
 			return ret;
 
-		ret = __axi_dac_frequency_set(st, chan, sample_rate, tone, freq);
+		ret = __axi_dac_frequency_set(st, chan, sample_rate, freq, tone);
 		if (ret)
 			return ret;
 	}

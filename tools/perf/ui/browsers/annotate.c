@@ -155,17 +155,26 @@ static void annotate_browser__write(struct ui_browser *browser, void *entry, int
 
 static int is_fused(struct annotate_browser *ab, struct disasm_line *cursor)
 {
-	struct disasm_line *pos = list_prev_entry(cursor, al.node);
+	struct annotation *notes = browser__annotation(&ab->b);
+	struct list_head *node = cursor->al.node.prev;
+	struct disasm_line *pos;
 	const char *name;
 	int diff = 1;
 
-	while (pos && pos->al.offset == -1) {
-		pos = list_prev_entry(pos, al.node);
+	/*
+	 * backwalk to the nearest neighbour instruction till the list head
+	 * instructions/non-insn are ordered from head to tail
+	 * head is not a annotate_line/disasm_line
+	 */
+	for (; node != &notes->src->source; node = node->prev) {
+		pos = list_entry(node, struct disasm_line, al.node);
+		if (pos->al.offset != -1)
+			break;
 		if (!annotate_opts.hide_src_code)
 			diff++;
 	}
 
-	if (!pos)
+	if (node == &notes->src->source)
 		return 0;
 
 	if (ins__is_lock(&pos->ins))
@@ -597,6 +606,11 @@ static bool annotate_browser__callq(struct annotate_browser *browser,
 	}
 
 	notes = symbol__annotation(dl->ops.target.sym);
+	if (!notes) {
+		ui__warning("Not enough memory for annotating '%s' symbol!\n",
+			    dl->ops.target.sym->name);
+		return true;
+	}
 	annotation__lock(notes);
 
 	if (!symbol__hists(dl->ops.target.sym, evlist__nr_entries(evsel->evlist))) {
@@ -1174,7 +1188,7 @@ int __hist_entry__tui_annotate(struct hist_entry *he, struct map_symbol *ms,
 			       struct hist_browser_timer *hbt, u64 al_addr)
 {
 	struct symbol *sym = ms->sym;
-	struct annotation *notes = symbol__annotation(sym);
+	struct annotation *notes;
 	struct annotate_browser browser = {
 		.b = {
 			.refresh = annotate_browser__refresh,
@@ -1190,7 +1204,7 @@ int __hist_entry__tui_annotate(struct hist_entry *he, struct map_symbol *ms,
 	};
 	struct dso *dso;
 	int ret = -1, err;
-	int not_annotated = list_empty(&notes->src->source);
+	int not_annotated;
 
 	if (sym == NULL)
 		return -1;
@@ -1198,6 +1212,13 @@ int __hist_entry__tui_annotate(struct hist_entry *he, struct map_symbol *ms,
 	dso = map__dso(ms->map);
 	if (dso__annotate_warned(dso))
 		return -1;
+
+	notes = symbol__annotation(sym);
+	if (!notes) {
+		annotate_browser__symbol_annotate_error(&browser, ENOMEM);
+		return -1;
+	}
+	not_annotated = !notes->src || list_empty(&notes->src->source);
 
 	if (not_annotated || !symbol__is_annotate2(sym)) {
 		err = symbol__annotate2(ms, evsel, &browser.arch);

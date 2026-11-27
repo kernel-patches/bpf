@@ -169,7 +169,7 @@ static void cppi41_trans_done(struct cppi41_dma_channel *cppi41_channel)
 
 		dma_desc->callback_result = cppi41_dma_callback;
 		dma_desc->callback_param = &cppi41_channel->channel;
-		cppi41_channel->cookie = dma_desc->tx_submit(dma_desc);
+		cppi41_channel->cookie = dmaengine_submit(dma_desc);
 		trace_musb_cppi41_cont(cppi41_channel);
 		dma_async_issue_pending(dc);
 
@@ -469,7 +469,7 @@ static bool cppi41_configure_channel(struct dma_channel *channel,
 
 	dma_desc->callback_result = cppi41_dma_callback;
 	dma_desc->callback_param = channel;
-	cppi41_channel->cookie = dma_desc->tx_submit(dma_desc);
+	cppi41_channel->cookie = dmaengine_submit(dma_desc);
 	cppi41_channel->channel.rx_packet_done = false;
 
 	trace_musb_cppi41_config(cppi41_channel);

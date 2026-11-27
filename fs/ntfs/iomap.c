@@ -94,8 +94,9 @@ static int ntfs_read_iomap_begin_resident(struct inode *inode, loff_t offset, lo
 	mutex_lock(&base_ni->mrec_lock);
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out;
 	}
 
@@ -667,8 +668,9 @@ static int ntfs_write_iomap_begin_resident(struct inode *inode, loff_t offset,
 	char *kattr;
 
 	ctx = ntfs_attr_get_search_ctx(mrec_ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out;
 	}
 
@@ -727,9 +729,11 @@ static int __ntfs_write_iomap_begin(struct inode *inode, loff_t offset,
 {
 	struct ntfs_inode *ni = NTFS_I(inode);
 	struct ntfs_inode *mrec_ni;
+	int err;
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	err = ntfs_emergency_state(ni->vol);
+	if (err)
+		return err;
 
 	if (!NInoNonResident(ni)) {
 		mrec_ni = ntfs_inode_is_named_stream(ni) ?

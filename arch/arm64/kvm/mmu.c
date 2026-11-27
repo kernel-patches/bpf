@@ -176,7 +176,7 @@ static int kvm_mmu_split_huge_pages(struct kvm *kvm, phys_addr_t addr,
 
 static bool memslot_is_logging(struct kvm_memory_slot *memslot)
 {
-	return memslot->dirty_bitmap && !(memslot->flags & KVM_MEM_READONLY);
+	return kvm_slot_dirty_track_enabled(memslot) && !(memslot->flags & KVM_MEM_READONLY);
 }
 
 static int pkvm_flush_remote_tlbs(struct kvm *kvm)
@@ -1008,11 +1008,13 @@ static void stage2_destroy_range(struct kvm_pgtable *pgt, phys_addr_t addr,
 				   phys_addr_t end)
 {
 	u64 next;
+	s64 ret;
 
 	do {
 		next = stage2_range_addr_end(addr, end);
-		KVM_PGT_FN(kvm_pgtable_stage2_destroy_range)(pgt, addr,
-							     next - addr);
+		ret = KVM_PGT_FN(kvm_pgtable_stage2_destroy_range)(pgt, addr, next - addr);
+		if (!WARN_ON(ret < 0))
+			next = min_t(u64, ret, end);
 		if (next != end)
 			cond_resched();
 	} while (addr = next, addr != end);
@@ -1553,36 +1555,42 @@ static bool fault_supports_stage2_huge_mapping(const struct kvm_s2_fault_desc *s
  * Returns the size of the mapping.
  */
 static long
-transparent_hugepage_adjust(const struct kvm_s2_fault_desc *s2fd, kvm_pfn_t *pfnp, gfn_t *gfnp)
+transparent_hugepage_adjust(const struct kvm_s2_fault_desc *s2fd,
+			    const struct kvm_s2_fault_vma_info *s2vi, kvm_pfn_t *pfnp, gfn_t *gfnp)
 {
 	struct kvm *kvm = s2fd->vcpu->kvm;
-	kvm_pfn_t pfn = *pfnp;
-	gfn_t gfn = *gfnp;
+	int sz;
 
 	/*
 	 * Make sure the adjustment is done only for THP pages. Also make
 	 * sure that the HVA and IPA are sufficiently aligned and that the
 	 * block map is contained within the memslot.
 	 */
-	if (fault_supports_stage2_huge_mapping(s2fd, PMD_SIZE)) {
-		int sz = get_user_mapping_size(kvm, s2fd->hva);
+	if (!fault_supports_stage2_huge_mapping(s2fd, PMD_SIZE))
+		return PAGE_SIZE;
 
-		if (sz < 0)
-			return sz;
+	/*
+	 * If the allocated folio isn't at least PMD_SIZE, there is no way a
+	 * stage-1 PMD level was installed.
+	 */
+	if (s2vi->page && !folio_test_pmd_mappable(page_folio(s2vi->page)))
+		return PAGE_SIZE;
 
-		if (sz < PMD_SIZE)
-			return PAGE_SIZE;
+	/*
+	 * Even though the folio size is big enough, the stage-1 mapping might
+	 * have been split. Verify it.
+	 */
+	sz = get_user_mapping_size(kvm, s2fd->hva);
+	if (sz < 0)
+		return sz;
 
-		gfn &= ~(PTRS_PER_PMD - 1);
-		*gfnp = gfn;
-		pfn &= ~(PTRS_PER_PMD - 1);
-		*pfnp = pfn;
+	if (sz < PMD_SIZE)
+		return PAGE_SIZE;
 
-		return PMD_SIZE;
-	}
+	*gfnp = ALIGN_DOWN(*gfnp, PMD_SIZE >> PAGE_SHIFT);
+	*pfnp = ALIGN_DOWN(*pfnp, PMD_SIZE >> PAGE_SHIFT);
 
-	/* Use page mapping if we cannot use block mapping. */
-	return PAGE_SIZE;
+	return PMD_SIZE;
 }
 
 static int get_vma_page_shift(struct vm_area_struct *vma)
@@ -1617,10 +1625,9 @@ static void sanitise_mte_tags(struct kvm *kvm, kvm_pfn_t pfn,
 	}
 
 	if (folio_test_hugetlb(folio)) {
-		/* Hugetlb has MTE flags set on head page only */
+		/* A hugetlb folio is marked tagged as a whole, so clear every page */
 		if (folio_try_hugetlb_mte_tagging(folio)) {
-			for (i = 0; i < nr_pages; i++, page++)
-				mte_clear_page_tags(page_address(page));
+			mte_clear_folio_tags(folio);
 			folio_set_hugetlb_mte_tagged(folio);
 		}
 		return;
@@ -2129,7 +2136,7 @@ static int kvm_s2_fault_compute_prot(const struct kvm_s2_fault_desc *s2fd,
 	if (s2fd->nested)
 		*prot = adjust_nested_exec_perms(kvm, s2fd->nested, *prot);
 
-	if (!kvm_s2_fault_is_perm(s2fd) && !s2vi->map_non_cacheable && kvm_has_mte(kvm)) {
+	if (!s2vi->map_non_cacheable && kvm_has_mte(kvm)) {
 		/* Check the VMM hasn't introduced a new disallowed VMA */
 		if (!s2vi->mte_allowed)
 			return -EFAULT;
@@ -2186,7 +2193,7 @@ static int kvm_s2_fault_map(const struct kvm_s2_fault_desc *s2fd,
 		if (perm_fault_granule > PAGE_SIZE) {
 			mapping_size = perm_fault_granule;
 		} else {
-			mapping_size = transparent_hugepage_adjust(s2fd, &pfn, &gfn);
+			mapping_size = transparent_hugepage_adjust(s2fd, s2vi, &pfn, &gfn);
 			if (mapping_size < 0) {
 				ret = mapping_size;
 				goto out_unlock;
@@ -2194,9 +2201,6 @@ static int kvm_s2_fault_map(const struct kvm_s2_fault_desc *s2fd,
 		}
 		canonical_ipa = ALIGN_DOWN(canonical_ipa, mapping_size);
 	}
-
-	if (!perm_fault_granule && !s2vi->map_non_cacheable && kvm_has_mte(kvm))
-		sanitise_mte_tags(kvm, pfn, mapping_size);
 
 	/*
 	 * Under the premise of getting a FSC_PERM fault, we just need to relax
@@ -2212,6 +2216,9 @@ static int kvm_s2_fault_map(const struct kvm_s2_fault_desc *s2fd,
 		ret = KVM_PGT_FN(kvm_pgtable_stage2_relax_perms)(pgt, gfn_to_gpa(gfn),
 								 prot, flags);
 	} else {
+		if (!s2vi->map_non_cacheable && kvm_has_mte(kvm))
+			sanitise_mte_tags(kvm, pfn, mapping_size);
+
 		ret = KVM_PGT_FN(kvm_pgtable_stage2_map)(pgt, gfn_to_gpa(gfn), mapping_size,
 							 __pfn_to_phys(pfn), prot,
 							 memcache, flags);
@@ -2232,11 +2239,7 @@ out_unlock:
 	kvm_fault_unlock(kvm);
 	kfree(mapping);
 
-	/*
-	 * Mark the page dirty only if the fault is handled successfully,
-	 * making sure we adjust the canonical IPA if the mapping size has
-	 * been updated (via a THP upgrade, for example).
-	 */
+	/* Mark the page dirty only if the fault is handled successfully. */
 	if (writable && !ret)
 		mark_page_dirty_in_slot(kvm, s2fd->memslot,
 					gpa_to_gfn(canonical_ipa));

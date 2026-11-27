@@ -113,7 +113,7 @@
 #define KVM_REQ_HV_RESET		KVM_ARCH_REQ(20)
 #define KVM_REQ_HV_EXIT			KVM_ARCH_REQ(21)
 #define KVM_REQ_HV_STIMER		KVM_ARCH_REQ(22)
-#define KVM_REQ_LOAD_EOI_EXITMAP	KVM_ARCH_REQ(23)
+/*#define FREE!!!  USE ME!!!		KVM_ARCH_REQ(23) */
 #define KVM_REQ_GET_NESTED_STATE_PAGES	KVM_ARCH_REQ(24)
 #define KVM_REQ_APICV_UPDATE \
 	KVM_ARCH_REQ_FLAGS(25, KVM_REQUEST_WAIT | KVM_REQUEST_NO_WAKEUP)
@@ -260,8 +260,6 @@ struct kvm_x86_pmu_event_filter;
 struct kvm_caps {
 	/* control of guest tsc rate supported? */
 	bool has_tsc_control;
-	/* maximum supported tsc_khz for guests */
-	u32  max_guest_tsc_khz;
 	/* number of bits of the fractional part of the TSC scaling ratio */
 	u8   tsc_scaling_ratio_frac_bits;
 	/* maximum allowed value of TSC scaling ratio */
@@ -737,7 +735,6 @@ struct kvm_vcpu_arch {
 	u64 host_debugctl;
 	u64 apic_base;
 	struct kvm_lapic *apic;    /* kernel irqchip context */
-	bool load_eoi_exitmap_pending;
 	DECLARE_BITMAP(ioapic_handled_vectors, 256);
 	unsigned long apic_attention;
 	int32_t apic_arb_prio;
@@ -1874,16 +1871,6 @@ enum kvm_intr_type {
 #endif
 
 #define kvm_arch_has_readonly_mem(kvm) (!(kvm)->arch.has_protected_state)
-
-#ifdef CONFIG_X86_64
-static inline unsigned long read_msr(unsigned long msr)
-{
-	u64 value;
-
-	rdmsrq(msr, value);
-	return value;
-}
-#endif
 
 #define HF_GUEST_MASK		(1 << 0) /* VCPU is in guest-mode */
 

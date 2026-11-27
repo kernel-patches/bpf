@@ -7,11 +7,10 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/slab.h>
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/timer.h>
+#include <linux/jiffies.h>
 #include <linux/maple.h>
 
 /* Very simple mutex to ensure proper cleanup */
@@ -26,8 +25,7 @@ MODULE_LICENSE("GPL");
 struct dc_kbd {
 	struct input_dev *dev;
 	unsigned short keycode[NR_SCANCODES];
-	unsigned char new[8];
-	unsigned char old[8];
+	u8 old[8];
 };
 
 static const unsigned short dc_kbd_keycode[NR_SCANCODES] = {
@@ -51,7 +49,7 @@ static const unsigned short dc_kbd_keycode[NR_SCANCODES] = {
 	KEY_F23, KEY_F24, KEY_OPEN, KEY_HELP, KEY_PROPS, KEY_FRONT, KEY_STOP,
 	KEY_AGAIN, KEY_UNDO, KEY_CUT, KEY_COPY, KEY_PASTE, KEY_FIND, KEY_MUTE,
 	KEY_VOLUMEUP, KEY_VOLUMEDOWN, KEY_RESERVED, KEY_RESERVED, KEY_RESERVED,
-	KEY_KPCOMMA, KEY_RESERVED, KEY_RO, KEY_KATAKANAHIRAGANA , KEY_YEN,
+	KEY_KPCOMMA, KEY_RESERVED, KEY_RO, KEY_KATAKANAHIRAGANA, KEY_YEN,
 	KEY_HENKAN, KEY_MUHENKAN, KEY_KPJPCOMMA, KEY_RESERVED, KEY_RESERVED,
 	KEY_RESERVED, KEY_HANGEUL, KEY_HANJA, KEY_KATAKANA, KEY_HIRAGANA,
 	KEY_ZENKAKUHANKAKU, KEY_RESERVED, KEY_RESERVED, KEY_RESERVED,
@@ -78,7 +76,7 @@ static const unsigned short dc_kbd_keycode[NR_SCANCODES] = {
 	KEY_CALC, KEY_RESERVED, KEY_RESERVED, KEY_RESERVED, KEY_RESERVED
 };
 
-static void dc_scan_kbd(struct dc_kbd *kbd)
+static void dc_scan_kbd(struct dc_kbd *kbd, const u8 *new)
 {
 	struct input_dev *dev = kbd->dev;
 	void *ptr;
@@ -89,54 +87,54 @@ static void dc_scan_kbd(struct dc_kbd *kbd)
 		code = i + 224;
 		keycode = kbd->keycode[code];
 		input_event(dev, EV_MSC, MSC_SCAN, code);
-		input_report_key(dev, keycode, (kbd->new[0] >> i) & 1);
+		input_report_key(dev, keycode, (new[0] >> i) & 1);
 	}
 
 	for (i = 2; i < 8; i++) {
-		ptr = memchr(kbd->new + 2, kbd->old[i], 6);
+		ptr = memchr(new + 2, kbd->old[i], 6);
 		code = kbd->old[i];
-		if (code > 3 && ptr == NULL) {
+		if (code > 3 && !ptr) {
 			keycode = kbd->keycode[code];
 			if (keycode) {
 				input_event(dev, EV_MSC, MSC_SCAN, code);
 				input_report_key(dev, keycode, 0);
-			} else
+			} else {
 				dev_dbg(&dev->dev,
 					"Unknown key (scancode %#x) released.",
 					code);
+			}
 		}
-		ptr = memchr(kbd->old + 2, kbd->new[i], 6);
-		code = kbd->new[i];
+		ptr = memchr(kbd->old + 2, new[i], 6);
+		code = new[i];
 		if (code > 3 && !ptr) {
 			keycode = kbd->keycode[code];
 			if (keycode) {
 				input_event(dev, EV_MSC, MSC_SCAN, code);
 				input_report_key(dev, keycode, 1);
-			} else
+			} else {
 				dev_dbg(&dev->dev,
 					"Unknown key (scancode %#x) pressed.",
 					code);
+			}
 		}
 	}
 	input_sync(dev);
-	memcpy(kbd->old, kbd->new, 8);
+	memcpy(kbd->old, new, 8);
 }
 
 static void dc_kbd_callback(struct mapleq *mq)
 {
 	struct maple_device *mapledev = mq->dev;
 	struct dc_kbd *kbd = maple_get_drvdata(mapledev);
-	unsigned long *buf = (unsigned long *)(mq->recvbuf->buf);
+	unsigned long *buf = mq->recvbuf->buf;
 
 	/*
 	 * We should always get the lock because the only
 	 * time it may be locked is if the driver is in the cleanup phase.
 	 */
 	scoped_guard(mutex_try, &maple_keyb_mutex) {
-		if (buf[1] == mapledev->function) {
-			memcpy(kbd->new, buf + 2, 8);
-			dc_scan_kbd(kbd);
-		}
+		if (buf[1] == mapledev->function)
+			dc_scan_kbd(kbd, mq->recvbuf->buf + 8);
 	}
 }
 
@@ -167,17 +165,13 @@ static int probe_maple_kbd(struct device *dev)
 
 	mdev = to_maple_dev(dev);
 
-	kbd = kzalloc_obj(*kbd);
-	if (!kbd) {
-		error = -ENOMEM;
-		goto fail;
-	}
+	kbd = devm_kzalloc(&mdev->dev, sizeof(*kbd), GFP_KERNEL);
+	if (!kbd)
+		return -ENOMEM;
 
-	idev = input_allocate_device();
-	if (!idev) {
-		error = -ENOMEM;
-		goto fail_idev_alloc;
-	}
+	idev = devm_input_allocate_device(&mdev->dev);
+	if (!idev)
+		return -ENOMEM;
 
 	kbd->dev = idev;
 	memcpy(kbd->keycode, dc_kbd_keycode, sizeof(kbd->keycode));
@@ -191,7 +185,6 @@ static int probe_maple_kbd(struct device *dev)
 	idev->keycodesize = sizeof(unsigned short);
 	idev->keycodemax = ARRAY_SIZE(kbd->keycode);
 	idev->id.bustype = BUS_HOST;
-	idev->dev.parent = &mdev->dev;
 	idev->open = dc_kbd_open;
 	idev->close = dc_kbd_close;
 
@@ -203,15 +196,9 @@ static int probe_maple_kbd(struct device *dev)
 
 	error = input_register_device(idev);
 	if (error)
-		goto fail_register;
-	return error;
+		return error;
 
-fail_register:
-	input_free_device(idev);
-fail_idev_alloc:
-	kfree(kbd);
-fail:
-	return error;
+	return 0;
 }
 
 static int remove_maple_kbd(struct device *dev)
@@ -222,7 +209,6 @@ static int remove_maple_kbd(struct device *dev)
 	guard(mutex)(&maple_keyb_mutex);
 
 	input_unregister_device(kbd->dev);
-	kfree(kbd);
 
 	return 0;
 }

@@ -18,5 +18,6 @@ int uvcg_video_enable(struct uvc_video *video);
 int uvcg_video_disable(struct uvc_video *video);
 
 int uvcg_video_init(struct uvc_video *video, struct uvc_device *uvc);
+void uvcg_video_deinit(struct uvc_video *video);
 
 #endif /* __UVC_VIDEO_H__ */

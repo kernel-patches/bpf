@@ -21,8 +21,8 @@
 #define ACPI_MEMORY_DEVICE_HID			"PNP0C80"
 
 static const struct acpi_device_id memory_device_ids[] = {
-	{ACPI_MEMORY_DEVICE_HID, 0},
-	{"", 0},
+	{ .id = ACPI_MEMORY_DEVICE_HID },
+	{ }
 };
 
 #ifdef CONFIG_ACPI_HOTPLUG_MEMORY

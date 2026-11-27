@@ -2,7 +2,7 @@
 #ifndef _LINUX_VIRTIO_PCI_LEGACY_H
 #define _LINUX_VIRTIO_PCI_LEGACY_H
 
-#include "linux/mod_devicetable.h"
+#include <linux/device-id/virtio.h>
 #include <linux/pci.h>
 #include <linux/virtio_pci.h>
 

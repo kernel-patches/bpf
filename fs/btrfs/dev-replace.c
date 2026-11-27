@@ -117,8 +117,8 @@ no_valid_dev_replace_entry_found:
 		dev_replace->cursor_right = 0;
 		dev_replace->srcdev = NULL;
 		dev_replace->tgtdev = NULL;
-		dev_replace->is_valid = 0;
-		dev_replace->item_needs_writeback = 0;
+		dev_replace->is_valid = false;
+		dev_replace->item_needs_writeback = false;
 		return 0;
 	}
 	slot = path->slots[0];
@@ -147,9 +147,9 @@ no_valid_dev_replace_entry_found:
 	dev_replace->committed_cursor_left = dev_replace->cursor_left;
 	dev_replace->cursor_left_last_write_of_item = dev_replace->cursor_left;
 	dev_replace->cursor_right = btrfs_dev_replace_cursor_right(eb, ptr);
-	dev_replace->is_valid = 1;
+	dev_replace->is_valid = true;
 
-	dev_replace->item_needs_writeback = 0;
+	dev_replace->item_needs_writeback = false;
 	switch (dev_replace->replace_state) {
 	case BTRFS_IOCTL_DEV_REPLACE_STATE_NEVER_STARTED:
 	case BTRFS_IOCTL_DEV_REPLACE_STATE_FINISHED:
@@ -249,7 +249,7 @@ static int btrfs_init_dev_replace_tgtdev(struct btrfs_fs_info *fs_info,
 	}
 
 	/* Unfreezable for the whole replace; see btrfs_dev_replace_start(). */
-	bdev_file = btrfs_open_device_deny_freeze(device_path, fs_info->sb);
+	bdev_file = btrfs_open_device_deny_freeze(fs_info, device_path);
 	if (IS_ERR(bdev_file)) {
 		btrfs_err(fs_info, "target device %s is invalid!", device_path);
 		return PTR_ERR(bdev_file);
@@ -311,8 +311,7 @@ static int btrfs_init_dev_replace_tgtdev(struct btrfs_fs_info *fs_info,
 	set_bit(BTRFS_DEV_STATE_REPLACE_TGT, &device->dev_state);
 	/* Check the comment in btrfs_init_new_device() for the reason. */
 	atomic_inc(&device->dev_stats_ccnt);
-	device->dev_stats_valid = 1;
-	set_blocksize(bdev_file, BTRFS_BDEV_BLOCKSIZE);
+	device->dev_stats_valid = true;
 	device->fs_devices = fs_devices;
 
 	ret = btrfs_get_dev_zone_info(device, false);
@@ -320,7 +319,7 @@ static int btrfs_init_dev_replace_tgtdev(struct btrfs_fs_info *fs_info,
 		goto error;
 
 	mutex_lock(&fs_devices->device_list_mutex);
-	list_add(&device->dev_list, &fs_devices->devices);
+	list_add_rcu(&device->dev_list, &fs_devices->devices);
 	fs_devices->num_devices++;
 	fs_devices->open_devices++;
 	mutex_unlock(&fs_devices->device_list_mutex);
@@ -436,7 +435,7 @@ int btrfs_run_dev_replace(struct btrfs_trans_handle *trans)
 		dev_replace->cursor_left_last_write_of_item);
 	btrfs_set_dev_replace_cursor_right(eb, ptr,
 		dev_replace->cursor_right);
-	dev_replace->item_needs_writeback = 0;
+	dev_replace->item_needs_writeback = false;
 	up_write(&dev_replace->rwsem);
 
 	return ret;
@@ -678,8 +677,8 @@ static int btrfs_dev_replace_start(struct btrfs_fs_info *fs_info,
 	dev_replace->committed_cursor_left = 0;
 	dev_replace->cursor_left_last_write_of_item = 0;
 	dev_replace->cursor_right = 0;
-	dev_replace->is_valid = 1;
-	dev_replace->item_needs_writeback = 1;
+	dev_replace->is_valid = true;
+	dev_replace->item_needs_writeback = true;
 	atomic64_set(&dev_replace->num_write_errors, 0);
 	atomic64_set(&dev_replace->num_uncorrectable_read_errors, 0);
 	up_write(&dev_replace->rwsem);
@@ -947,7 +946,7 @@ static int btrfs_dev_replace_finishing(struct btrfs_fs_info *fs_info,
 	dev_replace->tgtdev = NULL;
 	dev_replace->srcdev = NULL;
 	dev_replace->time_stopped = ktime_get_real_seconds();
-	dev_replace->item_needs_writeback = 1;
+	dev_replace->item_needs_writeback = true;
 
 	/*
 	 * Update allocation state in the new device and replace the old device
@@ -1115,7 +1114,7 @@ int btrfs_dev_replace_cancel(struct btrfs_fs_info *fs_info)
 	int result;
 	int ret;
 
-	if (sb_rdonly(fs_info->sb))
+	if (btrfs_fs_rdonly(fs_info))
 		return -EROFS;
 
 	mutex_lock(&dev_replace->lock_finishing_cancel_unmount);
@@ -1159,7 +1158,7 @@ int btrfs_dev_replace_cancel(struct btrfs_fs_info *fs_info)
 		dev_replace->replace_state =
 				BTRFS_IOCTL_DEV_REPLACE_STATE_CANCELED;
 		dev_replace->time_stopped = ktime_get_real_seconds();
-		dev_replace->item_needs_writeback = 1;
+		dev_replace->item_needs_writeback = true;
 
 		up_write(&dev_replace->rwsem);
 
@@ -1209,7 +1208,7 @@ void btrfs_dev_replace_suspend_for_unmount(struct btrfs_fs_info *fs_info)
 		dev_replace->replace_state =
 			BTRFS_IOCTL_DEV_REPLACE_STATE_SUSPENDED;
 		dev_replace->time_stopped = ktime_get_real_seconds();
-		dev_replace->item_needs_writeback = 1;
+		dev_replace->item_needs_writeback = true;
 		btrfs_info(fs_info, "suspending dev_replace for unmount");
 		/* Reopened freezable next mount; resume re-denies. */
 		if (dev_replace->srcdev && dev_replace->srcdev->bdev)

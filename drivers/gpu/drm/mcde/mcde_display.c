@@ -7,7 +7,7 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/dma-buf.h>
-#include <linux/regulator/consumer.h>
+#include <linux/pm_runtime.h>
 #include <linux/media-bus-format.h>
 
 #include <drm/drm_atomic_helper.h>
@@ -1187,15 +1187,14 @@ static void mcde_crtc_helper_atomic_enable(struct drm_crtc *crtc,
 	int ret;
 
 	/* This powers up the entire MCDE block and the DSI hardware */
-	ret = regulator_enable(mcde->epod);
+	ret = pm_runtime_resume_and_get(mcde->dev);
 	if (ret) {
-		dev_err(drm->dev, "can't re-enable EPOD regulator\n");
+		dev_err(drm->dev, "can't enable MCDE power domain\n");
 		return;
 	}
 
 	dev_info(drm->dev, "enable MCDE, %d x %d format %p4cc\n",
 		 mode->hdisplay, mode->vdisplay, &format);
-
 
 	/* Clear any pending interrupts */
 	mcde_display_disable_irqs(mcde);
@@ -1347,9 +1346,9 @@ static void mcde_crtc_helper_atomic_disable(struct drm_crtc *crtc,
 		spin_unlock_irq(&crtc->dev->event_lock);
 	}
 
-	ret = regulator_disable(mcde->epod);
-	if (ret)
-		dev_err(drm->dev, "can't disable EPOD regulator\n");
+	ret = pm_runtime_put_sync_suspend(mcde->dev);
+	if (ret < 0)
+		dev_err(drm->dev, "can't disable MCDE power domain\n");
 	/* Make sure we are powered down (before we may power up again) */
 	usleep_range(50000, 70000);
 

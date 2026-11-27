@@ -12,29 +12,8 @@
 #include <linux/linkage.h>
 #include <asm/assembler.h>
 
-	.irp	b,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
-	.set	.Lv\b\().2d, \b
-	.set	.Lv\b\().16b, \b
-	.endr
-
-	/*
-	 * ARMv8.2 Crypto Extensions instructions
-	 */
-	.macro	eor3, rd, rn, rm, ra
-	.inst	0xce000000 | .L\rd | (.L\rn << 5) | (.L\ra << 10) | (.L\rm << 16)
-	.endm
-
-	.macro	rax1, rd, rn, rm
-	.inst	0xce608c00 | .L\rd | (.L\rn << 5) | (.L\rm << 16)
-	.endm
-
-	.macro	bcax, rd, rn, rm, ra
-	.inst	0xce200000 | .L\rd | (.L\rn << 5) | (.L\ra << 10) | (.L\rm << 16)
-	.endm
-
-	.macro	xar, rd, rn, rm, imm6
-	.inst	0xce800000 | .L\rd | (.L\rn << 5) | ((\imm6) << 10) | (.L\rm << 16)
-	.endm
+	/* In binutils 2.40 and earlier, sha3 depends on armv8.2-a or later. */
+	.arch		armv8.2-a+sha3
 
 	/*
 	 * void sha3_ce_transform(struct sha3_state *state, const u8 *data,
@@ -125,30 +104,30 @@ SYM_FUNC_START(sha3_ce_transform)
 	rax1	v27.2d, v27.2d, v29.2d	// bc[3]
 
 	eor	 v0.16b,  v0.16b, v30.16b
-	xar	 v29.2d,   v1.2d,  v25.2d, (64 - 1)
-	xar	  v1.2d,   v6.2d,  v25.2d, (64 - 44)
-	xar	  v6.2d,   v9.2d,  v28.2d, (64 - 20)
-	xar	  v9.2d,  v22.2d,  v26.2d, (64 - 61)
-	xar	 v22.2d,  v14.2d,  v28.2d, (64 - 39)
-	xar	 v14.2d,  v20.2d,  v30.2d, (64 - 18)
-	xar	 v31.2d,   v2.2d,  v26.2d, (64 - 62)
-	xar	  v2.2d,  v12.2d,  v26.2d, (64 - 43)
-	xar	 v12.2d,  v13.2d,  v27.2d, (64 - 25)
-	xar	 v13.2d,  v19.2d,  v28.2d, (64 - 8)
-	xar	 v19.2d,  v23.2d,  v27.2d, (64 - 56)
-	xar	 v23.2d,  v15.2d,  v30.2d, (64 - 41)
-	xar	 v15.2d,   v4.2d,  v28.2d, (64 - 27)
-	xar	 v28.2d,  v24.2d,  v28.2d, (64 - 14)
-	xar	 v24.2d,  v21.2d,  v25.2d, (64 - 2)
-	xar	  v8.2d,   v8.2d,  v27.2d, (64 - 55)
-	xar	  v4.2d,  v16.2d,  v25.2d, (64 - 45)
-	xar	 v16.2d,   v5.2d,  v30.2d, (64 - 36)
-	xar	  v5.2d,   v3.2d,  v27.2d, (64 - 28)
-	xar	 v27.2d,  v18.2d,  v27.2d, (64 - 21)
-	xar	  v3.2d,  v17.2d,  v26.2d, (64 - 15)
-	xar	 v25.2d,  v11.2d,  v25.2d, (64 - 10)
-	xar	 v26.2d,   v7.2d,  v26.2d, (64 - 6)
-	xar	 v30.2d,  v10.2d,  v30.2d, (64 - 3)
+	xar	 v29.2d,   v1.2d,  v25.2d, #64 - 1
+	xar	  v1.2d,   v6.2d,  v25.2d, #64 - 44
+	xar	  v6.2d,   v9.2d,  v28.2d, #64 - 20
+	xar	  v9.2d,  v22.2d,  v26.2d, #64 - 61
+	xar	 v22.2d,  v14.2d,  v28.2d, #64 - 39
+	xar	 v14.2d,  v20.2d,  v30.2d, #64 - 18
+	xar	 v31.2d,   v2.2d,  v26.2d, #64 - 62
+	xar	  v2.2d,  v12.2d,  v26.2d, #64 - 43
+	xar	 v12.2d,  v13.2d,  v27.2d, #64 - 25
+	xar	 v13.2d,  v19.2d,  v28.2d, #64 - 8
+	xar	 v19.2d,  v23.2d,  v27.2d, #64 - 56
+	xar	 v23.2d,  v15.2d,  v30.2d, #64 - 41
+	xar	 v15.2d,   v4.2d,  v28.2d, #64 - 27
+	xar	 v28.2d,  v24.2d,  v28.2d, #64 - 14
+	xar	 v24.2d,  v21.2d,  v25.2d, #64 - 2
+	xar	  v8.2d,   v8.2d,  v27.2d, #64 - 55
+	xar	  v4.2d,  v16.2d,  v25.2d, #64 - 45
+	xar	 v16.2d,   v5.2d,  v30.2d, #64 - 36
+	xar	  v5.2d,   v3.2d,  v27.2d, #64 - 28
+	xar	 v27.2d,  v18.2d,  v27.2d, #64 - 21
+	xar	  v3.2d,  v17.2d,  v26.2d, #64 - 15
+	xar	 v25.2d,  v11.2d,  v25.2d, #64 - 10
+	xar	 v26.2d,   v7.2d,  v26.2d, #64 - 6
+	xar	 v30.2d,  v10.2d,  v30.2d, #64 - 3
 
 	bcax	v20.16b, v31.16b, v22.16b,  v8.16b
 	bcax	v21.16b,  v8.16b, v23.16b, v22.16b

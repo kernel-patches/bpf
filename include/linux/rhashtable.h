@@ -65,12 +65,11 @@ struct rhash_lock_head {};
  * struct bucket_table - Table of hash buckets
  * @size: Number of hash buckets
  * @nest: Number of bits of first-level nested table.
- * @rehash: Current bucket being rehashed
  * @hash_rnd: Random seed to fold into hash
  * @walkers: List of active walkers
  * @rcu: RCU structure for freeing the table
  * @future_tbl: Table under construction during rehashing
- * @ntbl: Nested table used when out of memory.
+ * @dep_map: Lockdep tracking map
  * @buckets: size * hash buckets
  */
 struct bucket_table {
@@ -482,7 +481,7 @@ static inline void rht_assign_unlock(struct bucket_table *tbl,
  * rht_for_each_entry_safe - safely iterate over hash chain of given type
  * @tpos:	the type * to use as a loop cursor.
  * @pos:	the &struct rhash_head to use as a loop cursor.
- * @next:	the &struct rhash_head to use as next in loop cursor.
+ * @_next:	the &struct rhash_head to use as next in loop cursor.
  * @tbl:	the &struct bucket_table
  * @hash:	the hash value / bucket index
  * @member:	name of the &struct rhash_head within the hashable struct.
@@ -490,13 +489,13 @@ static inline void rht_assign_unlock(struct bucket_table *tbl,
  * This hash chain list-traversal primitive allows for the looped code to
  * remove the loop cursor from the list.
  */
-#define rht_for_each_entry_safe(tpos, pos, next, tbl, hash, member)	      \
+#define rht_for_each_entry_safe(tpos, pos, _next, tbl, hash, member)	      \
 	for (pos = rht_ptr(rht_bucket(tbl, hash), tbl, hash),		      \
-	     next = !rht_is_a_nulls(pos) ?				      \
+	     _next = !rht_is_a_nulls(pos) ?				      \
 		       rht_dereference_bucket(pos->next, tbl, hash) : NULL;   \
 	     (!rht_is_a_nulls(pos)) && rht_entry(tpos, pos, member);	      \
-	     pos = next,						      \
-	     next = !rht_is_a_nulls(pos) ?				      \
+	     pos = _next,						      \
+	     _next = !rht_is_a_nulls(pos) ?				      \
 		       rht_dereference_bucket(pos->next, tbl, hash) : NULL)
 
 /**

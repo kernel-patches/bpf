@@ -513,7 +513,7 @@
 		reg = <0x5c>;
 	};
 
-	fan-controller@5e{
+	fan-controller@5e {
 		compatible = "maxim,max31790";
 		reg = <0x5e>;
 	};

@@ -130,7 +130,9 @@ int vs_drm_initialize(struct vs_dc *dc, struct platform_device *pdev)
 	/* Enable connectors polling */
 	drm_kms_helper_poll_init(drm);
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		goto err_fini_poll;
 
 	ret = drm_dev_register(drm, 0);
 	if (ret)

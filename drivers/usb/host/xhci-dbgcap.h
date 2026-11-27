@@ -78,7 +78,7 @@ struct dbc_str_descs {
 
 /*
  * NULL terminated UTF-8 strings used to create UTF-16 strings
- * (with maxiumum USB_MAX_STRING_LEN 2 byte characters).
+ * (with maximum USB_MAX_STRING_LEN 2 byte characters).
  */
 struct dbc_str {
 	char	manufacturer[USB_MAX_STRING_LEN+1];

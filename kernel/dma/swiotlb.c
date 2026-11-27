@@ -926,7 +926,7 @@ static void swiotlb_dyn_free_work(struct work_struct *work)
 static void swiotlb_schedule_dyn_free(struct io_tlb_pool *pool)
 {
 	INIT_RCU_WORK(&pool->dyn_free, swiotlb_dyn_free_work);
-	queue_rcu_work(system_wq, &pool->dyn_free);
+	queue_rcu_work(system_percpu_wq, &pool->dyn_free);
 }
 
 /**
@@ -1969,7 +1969,7 @@ struct page *swiotlb_alloc(struct device *dev, size_t size, unsigned long attrs)
 
 	tlb_addr = slot_addr(pool->start, index);
 	if (unlikely(!PAGE_ALIGNED(tlb_addr))) {
-		dev_WARN_ONCE(dev, 1, "Cannot allocate pages from non page-aligned swiotlb addr 0x%pa.\n",
+		dev_WARN_ONCE(dev, 1, "Cannot allocate pages from non page-aligned swiotlb addr %pa.\n",
 			      &tlb_addr);
 		swiotlb_release_slots(dev, tlb_addr, pool);
 		return NULL;
@@ -2042,7 +2042,7 @@ static int rmem_swiotlb_device_init(struct reserved_mem *rmem,
 			return -ENOMEM;
 		pool = &mem->defpool;
 
-		pool->slots = kzalloc_objs(*pool->slots, nslabs);
+		pool->slots = kvzalloc_objs(*pool->slots, nslabs);
 		if (!pool->slots) {
 			kfree(mem);
 			return -ENOMEM;
@@ -2050,7 +2050,7 @@ static int rmem_swiotlb_device_init(struct reserved_mem *rmem,
 
 		pool->areas = kzalloc_objs(*pool->areas, nareas);
 		if (!pool->areas) {
-			kfree(pool->slots);
+			kvfree(pool->slots);
 			kfree(mem);
 			return -ENOMEM;
 		}
@@ -2067,7 +2067,7 @@ static int rmem_swiotlb_device_init(struct reserved_mem *rmem,
 			if (ret) {
 				dev_err(dev, "Failed to decrypt restricted DMA pool\n");
 				kfree(pool->areas);
-				kfree(pool->slots);
+				kvfree(pool->slots);
 				kfree(mem);
 				return ret;
 			}

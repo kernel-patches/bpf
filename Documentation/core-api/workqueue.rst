@@ -178,7 +178,7 @@ resources, scheduled and executed.
   queueing CPU's softirq context in the queueing order.
 
   All BH workqueues must have 0 ``max_active`` and ``WQ_HIGHPRI`` is the
-  only allowed additional flag.
+  only allowed additional flag. ``WQ_PERCPU`` is implied.
 
   BH work items cannot sleep. All other features such as delayed queueing,
   flushing and canceling are supported.
@@ -190,6 +190,9 @@ resources, scheduled and executed.
   This flag is the complement of ``WQ_UNBOUND``.
 
 ``WQ_UNBOUND``
+  Workqueues without ``WQ_PERCPU`` are unbound by default, except for
+  ``WQ_BH`` workqueues, which are always per-CPU.
+
   Work items queued to an unbound wq are served by the special
   worker-pools which host workers which are not bound to any
   specific CPU.  This makes the wq behave as a simple execution
@@ -224,6 +227,13 @@ resources, scheduled and executed.
   Note that normal and highpri worker-pools don't interact with
   each other.  Each maintains its separate pool of workers and
   implements concurrency management among its workers.
+
+``WQ_RT``
+  Real-time priority workqueues must be created as unbound. Their worker threads
+  use the FIFO scheduling policy with the lowest applicable priority.
+
+  To be used sparingly for use cases such as the real-time GPU rendering
+  contexts accessible to privileged clients.
 
 ``WQ_CPU_INTENSIVE``
   Work items of a CPU intensive wq do not contribute to the
@@ -368,9 +378,9 @@ Guidelines
   wq and potentially lead to deadlock. It should utilize its own
   dedicated workqueue rather than the system wq.
 
-* Unless work items are expected to consume a huge amount of CPU
-  cycles, using a bound wq is usually beneficial due to the increased
-  level of locality in wq operations and work item execution.
+* Use ``WQ_PERCPU`` only if work items benefit from the increased level
+  of locality in wq operations and work item execution. Otherwise, the
+  default unbound wq is usually the better choice.
 
 
 Affinity Scopes
@@ -769,6 +779,8 @@ The work item's function should be trivially visible in the stack
 trace.
 
 
+.. _workqueue_non_reentrance:
+
 Non-reentrance Conditions
 =========================
 
@@ -784,7 +796,10 @@ executed by at most one worker system-wide at any given time.
 
 Note that requeuing the work item (to the same queue) in the self function
 doesn't break these conditions, so it's safe to do. Otherwise, caution is
-required when breaking the conditions inside a work function.
+required when breaking the conditions inside a work function; in particular,
+flush_work(), cancel_work_sync(), and disable_work_sync() only track the last
+queued instance and may return while an earlier execution on another workqueue
+is still running.
 
 
 Kernel Inline Documentations Reference

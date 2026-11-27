@@ -227,42 +227,29 @@ static unsigned int calculate_tile_aligned_size(unsigned int copy_width, unsigne
   * *******************************************************************************************************************************************************
   * calculate_max_mem_size_per_plane_per_dpp: Calculate (loose) upper bound for total number of bytes reserved in memory for the copy given number of swaths
   *
-  * - The copy width / height is the min of the vp_width/height and maximum number of pixels that can fit across an ODM slice
-  *     - This is to account for recout positions that cross the ODM seam but are "mostly" within the same ODM slice
+  * - The copy width / height is the min of the vp_width/height and the per-pipe swath width
+  *     - This is to account for recout positions that cross the ODM / MPC split but are "mostly" within the same pipe
   *
   * *******************************************************************************************************************************************************
   */
 static unsigned int calculate_max_mem_size_per_plane_per_dpp(const struct dml2_core_calcs_calculate_alternate_params *p, unsigned int plane_idx, unsigned int copy_swaths, bool chroma)
 {
 	bool vertical_access = p->display_cfg->plane_descriptors[plane_idx].composition.rotation_angle == dml2_rotation_90 || p->display_cfg->plane_descriptors[plane_idx].composition.rotation_angle == dml2_rotation_270;
-	unsigned int h_active = p->display_cfg->stream_descriptors[p->display_cfg->plane_descriptors[plane_idx].stream_index].timing.h_active;
-	double h_ratio = chroma ? p->display_cfg->plane_descriptors[plane_idx].composition.scaler_info.plane1.h_ratio : p->display_cfg->plane_descriptors[plane_idx].composition.scaler_info.plane0.h_ratio;
 	unsigned int copy_src_lines = copy_swaths * (chroma ? p->SwathHeightC[plane_idx] : p->SwathHeightY[plane_idx]);
 	unsigned int vp_width = chroma ? p->display_cfg->plane_descriptors[plane_idx].composition.viewport.plane1.width : p->display_cfg->plane_descriptors[plane_idx].composition.viewport.plane0.width;
 	unsigned int vp_height = chroma ? p->display_cfg->plane_descriptors[plane_idx].composition.viewport.plane1.height : p->display_cfg->plane_descriptors[plane_idx].composition.viewport.plane0.height;
 	unsigned int tile_width = chroma ? p->MacroTileWidthC[plane_idx] : p->MacroTileWidthY[plane_idx];
 	unsigned int tile_height = chroma ? p->MacroTileHeightC[plane_idx] : p->MacroTileHeightY[plane_idx];
 	unsigned int byte_per_pixel = chroma ? p->BytePerPixelC[plane_idx] : p->BytePerPixelY[plane_idx];
+	unsigned int swath_width = chroma ? p->SwathWidthC[plane_idx] : p->SwathWidthY[plane_idx];
 	unsigned int copy_width;
 	unsigned int copy_height;
-	unsigned int odm_combine_factor;
-	double odm_slice_pixels;
-
-	if (p->ODMMode[plane_idx] == dml2_odm_mode_combine_4to1)
-		odm_combine_factor = 4;
-	else if (p->ODMMode[plane_idx] == dml2_odm_mode_combine_3to1)
-		odm_combine_factor = 3;
-	else if (p->ODMMode[plane_idx] == dml2_odm_mode_combine_2to1)
-		odm_combine_factor = 2;
-	else
-		odm_combine_factor = 1;
-
-	odm_slice_pixels = (double)h_active / odm_combine_factor * h_ratio + (odm_combine_factor == 3 ? 2 : 0);
 
 	/* Unaligned copy region dimensions (in pixels / lines) prior to tile alignment.
-	 * Also divide vp_widht/height by NoOfDPP for MPC combine scenarios (i.e., MPC split within an ODM slice). */
-	copy_width = vertical_access ? copy_src_lines : (unsigned int)math_ceil(math_min2(odm_slice_pixels, vp_width / p->NoOfDPP[plane_idx]));
-	copy_height = vertical_access ? (unsigned int)math_ceil(math_min2(odm_slice_pixels, vp_height / p->NoOfDPP[plane_idx])) : copy_src_lines;
+	 * No need to divide vp width/height by NoOfDPP. The entire viewport could be within a single pipe if less than the swath width
+	 * (e.g., multi-plane scenario with ODM combine). */
+	copy_width = vertical_access ? copy_src_lines : (unsigned int)math_min2((double)swath_width, (double)vp_width);
+	copy_height = vertical_access ? (unsigned int)math_min2((double)swath_width, (double)vp_height) : copy_src_lines;
 
 	return calculate_tile_aligned_size(copy_width, copy_height, tile_width, tile_height, byte_per_pixel);
 }
@@ -1040,9 +1027,9 @@ static void dcn6_rq_dlg_get_dlg_reg(
 			if (disp_dlg_regs->refcyc_per_pte_group_nom_c >= (unsigned int)math_pow(2, 23))
 				disp_dlg_regs->refcyc_per_pte_group_nom_c = (unsigned int)(math_pow(2, 23) - 1);
 		}
-		DML_ASSERT(disp_dlg_regs->refcyc_per_pte_group_vblank_l < (unsigned int)math_pow(2, 13));
+		DML_ASSERT(disp_dlg_regs->refcyc_per_pte_group_vblank_l < (unsigned int)math_pow(2, 23));
 		if (l->dual_plane) {
-			DML_ASSERT(disp_dlg_regs->refcyc_per_pte_group_vblank_c < (unsigned int)math_pow(2, 13));
+			DML_ASSERT(disp_dlg_regs->refcyc_per_pte_group_vblank_c < (unsigned int)math_pow(2, 23));
 		}
 
 		DML_ASSERT(disp_dlg_regs->refcyc_per_line_delivery_pre_l < (unsigned int)math_pow(2, 13));
@@ -1059,6 +1046,7 @@ static void dcn6_rq_dlg_get_dlg_reg(
 static void dcn6_rq_dlg_get_wm_regs(const struct dml2_display_cfg *display_cfg, const struct dml2_core_internal_display_mode_lib *mode_lib, const struct dml2_utm_soc_bb *utm_soc_bb, struct dml2_dchub_watermark_regs *wm_regs)
 {
 	double refclk_freq_in_mhz = (display_cfg->overrides.hw.dlg_ref_clk_mhz > 0) ? (double)display_cfg->overrides.hw.dlg_ref_clk_mhz : utm_soc_bb->dchub_refclk_mhz;
+	unsigned int u0_10_fixed_point_scale = 1U << 10;
 
 	wm_regs->fclk_pstate = (int unsigned)(mode_lib->mp.Watermark.FCLKChangeWatermark * refclk_freq_in_mhz);
 	wm_regs->sr_enter = (int unsigned)(mode_lib->mp.Watermark.StutterEnterPlusExitWatermark * refclk_freq_in_mhz);
@@ -1074,8 +1062,8 @@ static void dcn6_rq_dlg_get_wm_regs(const struct dml2_display_cfg *display_cfg, 
 	wm_regs->usr = (int unsigned)(mode_lib->mp.Watermark.USRRetrainingWatermark * refclk_freq_in_mhz);
 	wm_regs->refcyc_per_trip_to_mem = (unsigned int)(mode_lib->mp.UrgentLatency * refclk_freq_in_mhz);
 	wm_regs->refcyc_per_meta_trip_to_mem = (unsigned int)(mode_lib->mp.MetaTripToMemory * refclk_freq_in_mhz);
-	wm_regs->frac_urg_bw_flip = (unsigned int)(mode_lib->mp.FractionOfUrgentBandwidthImmediateFlip * 1000);
-	wm_regs->frac_urg_bw_nom = (unsigned int)(mode_lib->mp.FractionOfUrgentBandwidth * 1000);
+	wm_regs->frac_urg_bw_flip = (unsigned int)math_min2(math_ceil(mode_lib->mp.FractionOfUrgentBandwidthImmediateFlip * u0_10_fixed_point_scale), u0_10_fixed_point_scale - 1);
+	wm_regs->frac_urg_bw_nom = (unsigned int)math_min2(math_ceil(mode_lib->mp.FractionOfUrgentBandwidth * u0_10_fixed_point_scale), u0_10_fixed_point_scale - 1);
 }
 
 void dcn6_get_pipe_regs(const struct dml2_display_cfg *display_cfg,
@@ -1752,8 +1740,9 @@ void dcn6_calculate_pstate_schedule_windows(
 		det_fill_delay_otg_vlines = (int)(math_ceil(det_fill_delay_us[k] / otg_vline_time_us[k]));
 		reserved_vblank_otg_vlines = (int)(math_ceil(reserved_vblank_us[k] / otg_vline_time_us[k]));
 
-		allow_start_otg_vlines = v_blank_end[k] + det_fill_delay_otg_vlines;
-		allow_end_otg_vlines = v_blank_start[k] - (blackout_otg_vlines - reserved_vblank_otg_vlines);
+		/* for vactive only, make relative to vblank end */
+		allow_start_otg_vlines = det_fill_delay_otg_vlines;
+		allow_end_otg_vlines = v_blank_start[k] - v_blank_end[k] - (blackout_otg_vlines - reserved_vblank_otg_vlines);
 
 		/* Convert them back to time since the start of a frame */
 		allow_start_us[k] = allow_start_otg_vlines * otg_vline_time_us[k];

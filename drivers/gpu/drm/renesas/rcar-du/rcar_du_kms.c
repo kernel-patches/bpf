@@ -1002,7 +1002,9 @@ int rcar_du_modeset_init(struct rcar_du_device *rcdu)
 	dpad0_sources = rcdu->info->routes[RCAR_DU_OUTPUT_DPAD0].possible_crtcs;
 	rcdu->dpad0_source = ffs(dpad0_sources) - 1;
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ret;
 
 	drm_kms_helper_poll_init(dev);
 

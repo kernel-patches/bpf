@@ -121,7 +121,7 @@ static int longhaul_get_cpu_mult(void)
 	unsigned long invalue = 0;
 	u64 val;
 
-	rdmsrq(MSR_IA32_EBL_CR_POWERON, val);
+	val = rdmsrq(MSR_IA32_EBL_CR_POWERON);
 	invalue = (val & (1<<22|1<<23|1<<24|1<<25))>>22;
 	if (longhaul_version == TYPE_LONGHAUL_V2 ||
 	    longhaul_version == TYPE_POWERSAVER) {
@@ -137,7 +137,7 @@ static void do_longhaul1(unsigned int mults_index)
 {
 	union msr_bcr2 bcr2;
 
-	rdmsrq(MSR_VIA_BCR2, bcr2.val);
+	bcr2.val = rdmsrq(MSR_VIA_BCR2);
 	/* Enable software clock multiplier */
 	bcr2.bits.ESOFTBF = 1;
 	bcr2.bits.CLOCKMUL = mults_index & 0xff;
@@ -152,7 +152,7 @@ static void do_longhaul1(unsigned int mults_index)
 
 	/* Disable software clock multiplier */
 	local_irq_disable();
-	rdmsrq(MSR_VIA_BCR2, bcr2.val);
+	bcr2.val = rdmsrq(MSR_VIA_BCR2);
 	bcr2.bits.ESOFTBF = 0;
 	wrmsrq(MSR_VIA_BCR2, bcr2.val);
 }
@@ -165,7 +165,7 @@ static void do_powersaver(int cx_address, unsigned int mults_index,
 	union msr_longhaul longhaul;
 	u32 t;
 
-	rdmsrq(MSR_VIA_LONGHAUL, longhaul.val);
+	longhaul.val = rdmsrq(MSR_VIA_LONGHAUL);
 	/* Setup new frequency */
 	if (!revid_errata)
 		longhaul.bits.RevisionKey = longhaul.bits.RevisionID;
@@ -534,7 +534,7 @@ static void longhaul_setup_voltagescaling(void)
 	unsigned int j, speed, pos, kHz_step, numvscales;
 	int min_vid_speed;
 
-	rdmsrq(MSR_VIA_LONGHAUL, longhaul.val);
+	longhaul.val = rdmsrq(MSR_VIA_LONGHAUL);
 	if (!(longhaul.bits.RevisionID & 1)) {
 		pr_info("Voltage scaling not supported by CPU\n");
 		return;
@@ -836,7 +836,7 @@ static int longhaul_cpu_init(struct cpufreq_policy *policy)
 	}
 	/* Check Longhaul ver. 2 */
 	if (longhaul_version == TYPE_LONGHAUL_V2) {
-		rdmsrq(MSR_VIA_LONGHAUL, val);
+		val = rdmsrq(MSR_VIA_LONGHAUL);
 		if (val == 0)
 			/* Looks like MSR isn't present */
 			longhaul_version = TYPE_LONGHAUL_V1;

@@ -243,10 +243,10 @@ static u8 get_via_model_d_vrm(void)
 		"C7-M", "C7", "Eden", "C7-D"
 	};
 
-	rdmsrq(0x198, msr);
+	msr = rdmsrq(0x198);
 	vid = (msr >> 32) & 0xff;
 
-	rdmsrq(0x1154, msr);
+	msr = rdmsrq(0x1154);
 	brand = ((msr >> 4) ^ (msr >> 2)) & 0x03;
 
 	if (vid > 0x3f) {

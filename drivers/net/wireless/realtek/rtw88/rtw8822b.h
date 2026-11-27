@@ -151,6 +151,8 @@ _rtw_write32s_mask(struct rtw_dev *rtwdev, u32 addr, u32 mask, u32 data)
 
 #define RTW8822B_EDCCA_MAX	0x7f
 #define RTW8822B_EDCCA_SRC_DEF	1
+/* nominally -60 dBm: 3 dB below the EN 300 328 level at 20 dBm e.i.r.p. */
+#define RTW8822B_EDCCA_ETSI_2G	50
 #define REG_HTSTFWT	0x800
 #define REG_RXCCAMSK	0x814
 #define REG_L1WT	0x83c

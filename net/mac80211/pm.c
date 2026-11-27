@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Portions
- * Copyright (C) 2020-2021, 2023-2024 Intel Corporation
+ * Copyright (C) 2020-2021, 2023-2024, 2026 Intel Corporation
  */
 #include <net/mac80211.h>
 #include <net/rtnetlink.h>
@@ -38,6 +38,8 @@ int __ieee80211_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan,
 	ieee80211_roc_purge(local, NULL);
 
 	ieee80211_del_virtual_monitor(local);
+
+	sta_info_destroy_flush(local);
 
 	if (ieee80211_hw_check(hw, AMPDU_AGGREGATION) &&
 	    !(wowlan && wowlan->any)) {
@@ -151,8 +153,12 @@ int __ieee80211_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan,
 			continue;
 		switch (sdata->vif.type) {
 		case NL80211_IFTYPE_AP_VLAN:
-		case NL80211_IFTYPE_MONITOR:
 			continue;
+		case NL80211_IFTYPE_MONITOR:
+			ieee80211_link_release_channel(&sdata->deflink);
+			if (!ieee80211_hw_check(hw, NO_VIRTUAL_MONITOR))
+				continue;
+			break;
 		case NL80211_IFTYPE_STATION:
 			ieee80211_mgd_quiesce(sdata);
 			break;
@@ -160,8 +166,6 @@ int __ieee80211_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan,
 			break;
 		}
 
-		wiphy_delayed_work_flush(local->hw.wiphy,
-					 &sdata->dec_tailroom_needed_wk);
 		drv_remove_interface(local, sdata);
 	}
 

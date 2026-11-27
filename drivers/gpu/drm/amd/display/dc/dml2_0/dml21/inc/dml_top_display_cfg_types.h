@@ -289,6 +289,7 @@ struct dml2_timing_cfg {
 		bool disallowed;
 		bool drr_active_variable;
 		bool drr_active_fixed;
+		bool drr_active_idle_static_screen;
 	} drr_config;
 	unsigned long vblank_nom;
 };

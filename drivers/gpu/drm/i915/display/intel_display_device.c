@@ -571,7 +571,6 @@ static const struct platform_desc hsw_desc = {
 	.info = &(const struct intel_display_device_info) {
 		.has_ddi = 1,
 		.has_dp_mst = 1,
-		.has_fpga_dbg = 1,
 		.has_hotplug = 1,
 		.has_psr = 1,
 		.has_psr_hw_tracking = 1,
@@ -624,7 +623,6 @@ static const struct platform_desc bdw_desc = {
 	.info = &(const struct intel_display_device_info) {
 		.has_ddi = 1,
 		.has_dp_mst = 1,
-		.has_fpga_dbg = 1,
 		.has_hotplug = 1,
 		.has_psr = 1,
 		.has_psr_hw_tracking = 1,
@@ -665,7 +663,6 @@ static const struct intel_display_device_info skl_display = {
 	.dbuf.slice_mask = BIT(DBUF_S1),
 	.has_ddi = 1,
 	.has_dp_mst = 1,
-	.has_fpga_dbg = 1,
 	.has_hotplug = 1,
 	.has_ipc = 1,
 	.has_psr = 1,
@@ -815,7 +812,6 @@ static const struct platform_desc cml_desc = {
 	.dbuf.slice_mask = BIT(DBUF_S1), \
 	.has_dp_mst = 1, \
 	.has_ddi = 1, \
-	.has_fpga_dbg = 1, \
 	.has_hotplug = 1, \
 	.has_ipc = 1, \
 	.has_psr = 1, \
@@ -874,7 +870,6 @@ static const struct platform_desc glk_desc = {
 	.dbuf.slice_mask = BIT(DBUF_S1) | BIT(DBUF_S2), \
 	.has_ddi = 1, \
 	.has_dp_mst = 1, \
-	.has_fpga_dbg = 1, \
 	.has_hotplug = 1, \
 	.has_ipc = 1, \
 	.has_psr = 1, \
@@ -965,7 +960,6 @@ static const struct platform_desc ehl_desc = {
 	.has_ddi = 1, \
 	.has_dp_mst = 1, \
 	.has_dsb = 1, \
-	.has_fpga_dbg = 1, \
 	.has_hotplug = 1, \
 	.has_ipc = 1, \
 	.has_psr = 1, \
@@ -1133,7 +1127,6 @@ static const struct platform_desc adl_s_desc = {
 	.has_ddi = 1,								\
 	.has_dp_mst = 1,							\
 	.has_dsb = 1,								\
-	.has_fpga_dbg = 1,							\
 	.has_hotplug = 1,							\
 	.has_ipc = 1,								\
 	.has_psr = 1,								\
@@ -1313,7 +1306,6 @@ static const struct platform_desc dg2_desc = {
 	.has_ddi = 1,								\
 	.has_dp_mst = 1,							\
 	.has_dsb = 1,								\
-	.has_fpga_dbg = 1,							\
 	.has_hotplug = 1,							\
 	.has_ipc = 1,								\
 	.has_psr = 1,								\
@@ -1966,6 +1958,16 @@ display_fused_off:
 
 void intel_display_device_info_runtime_init(struct intel_display *display)
 {
+	/*
+	 * intel_de_init() must be called even with !HAS_DISPLAY
+	 * because eg. IVB DE_MASTER_IRQ_CONTROL lives in the display.
+	 *
+	 * TODO end of intel_display_device_probe() would be a more
+	 * logical place, but at the moment i915 calls that super
+	 * early when things aren't fully set up yet.
+	 */
+	intel_de_init(display);
+
 	if (HAS_DISPLAY(display))
 		__intel_display_device_info_runtime_init(display);
 

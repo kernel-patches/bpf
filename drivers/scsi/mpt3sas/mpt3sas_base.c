@@ -3264,11 +3264,8 @@ _base_assign_reply_queues(struct MPT3SAS_ADAPTER *ioc)
 				goto fall_back;
 			}
 
-			for_each_cpu_and(cpu, mask, cpu_online_mask) {
-				if (cpu >= ioc->cpu_msix_table_sz)
-					break;
+			for_each_cpu(cpu, mask)
 				ioc->cpu_msix_table[cpu] = reply_q->msix_index;
-			}
 		}
 		return;
 	}
@@ -8409,15 +8406,18 @@ int
 mpt3sas_base_attach(struct MPT3SAS_ADAPTER *ioc)
 {
 	int r, i, rc;
-	int cpu_id, last_cpu_id = 0;
 
 	dinitprintk(ioc, ioc_info(ioc, "%s\n", __func__));
 
 	/* setup cpu_msix_table */
 	ioc->cpu_count = num_online_cpus();
-	for_each_online_cpu(cpu_id)
-		last_cpu_id = cpu_id;
-	ioc->cpu_msix_table_sz = last_cpu_id + 1;
+	/*
+	 * Allocate an entry for every possible CPU, because
+	 * _base_get_msix_index() indexes the table with
+	 * raw_smp_processor_id(), which can be a CPU brought online after
+	 * the adapter was attached.
+	 */
+	ioc->cpu_msix_table_sz = nr_cpu_ids;
 	ioc->cpu_msix_table = kzalloc(ioc->cpu_msix_table_sz, GFP_KERNEL);
 	ioc->reply_queue_count = 1;
 	if (!ioc->cpu_msix_table) {

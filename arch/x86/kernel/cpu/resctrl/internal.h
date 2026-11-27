@@ -40,7 +40,7 @@ struct arch_mbm_state {
 	u64	prev_msr;
 };
 
-/* Setting bit 0 in L3_QOS_EXT_CFG enables the ABMC feature. */
+/* Setting bit 0 in MSR_AMD64_L3_QOS_EXT_CFG enables the ABMC feature. */
 #define ABMC_ENABLE_BIT			0
 
 /*
@@ -49,7 +49,7 @@ struct arch_mbm_state {
 #define ABMC_EXTENDED_EVT_ID		BIT(31)
 #define ABMC_EVT_ID			BIT(0)
 
-/* Setting bit 1 in MSR_IA32_L3_QOS_EXT_CFG enables the SDCIAE feature. */
+/* Setting bit 1 in MSR_AMD64_L3_QOS_EXT_CFG enables the SDCIAE feature. */
 #define SDCIAE_ENABLE_BIT		1
 
 /**
@@ -125,6 +125,9 @@ struct msr_param {
  * @mon_scale:		cqm counter * mon_scale = occupancy in bytes
  * @mbm_width:		Monitor width, to detect and correct for overflow.
  * @cdp_enabled:	CDP state of this resource
+ * @qos_cfg_has_cpu_scope:	Only for the L2 and L3 resources: true if
+ *				MSR_IA32_L{2,3}_QOS_CFG has CPU scope, false if
+ *				the scope matches the associated cache.
  * @mbm_cntr_assign_enabled:	ABMC feature is enabled
  * @sdciae_enabled:	SDCIAE feature (backing "io_alloc") is enabled.
  *
@@ -140,6 +143,7 @@ struct rdt_hw_resource {
 	unsigned int		mon_scale;
 	unsigned int		mbm_width;
 	bool			cdp_enabled;
+	bool			qos_cfg_has_cpu_scope;
 	bool			mbm_cntr_assign_enabled;
 	bool			sdciae_enabled;
 };
@@ -187,7 +191,7 @@ union cpuid_0x10_x_edx {
 };
 
 /*
- * ABMC counters are configured by writing to MSR_IA32_L3_QOS_ABMC_CFG.
+ * ABMC counters are configured by writing to MSR_AMD64_L3_QOS_ABMC_CFG.
  *
  * @bw_type		: Event configuration that represents the memory
  *			  transactions being tracked by the @cntr_id.

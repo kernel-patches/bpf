@@ -502,21 +502,15 @@ struct qla_boards {
 	int fw_index;		/* index into qla1280_fw_tbl for firmware */
 };
 
-/* NOTE: the last argument in each entry is used to index ql1280_board_tbl */
+/* NOTE: the driver_data argument in each entry is used to index ql1280_board_tbl */
 static const struct pci_device_id qla1280_pci_tbl[] = {
-	{PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP12160,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-	{PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP1020,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1},
-	{PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP1080,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 2},
-	{PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP1240,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 3},
-	{PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP1280,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 4},
-	{PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP10160,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 5},
-	{0,}
+	{ PCI_VDEVICE(QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP12160), .driver_data = 0 },
+	{ PCI_VDEVICE(QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP1020), .driver_data = 1 },
+	{ PCI_VDEVICE(QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP1080), .driver_data = 2 },
+	{ PCI_VDEVICE(QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP1240), .driver_data = 3 },
+	{ PCI_VDEVICE(QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP1280), .driver_data = 4 },
+	{ PCI_VDEVICE(QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP10160), .driver_data = 5 },
+	{ }
 };
 MODULE_DEVICE_TABLE(pci, qla1280_pci_tbl);
 

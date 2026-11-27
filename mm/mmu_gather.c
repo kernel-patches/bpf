@@ -15,6 +15,8 @@
 
 #include <asm/tlb.h>
 
+#include "internal.h"
+
 #ifndef CONFIG_MMU_GATHER_NO_GATHER
 
 static bool tlb_next_batch(struct mmu_gather *tlb)
@@ -49,7 +51,6 @@ static bool tlb_next_batch(struct mmu_gather *tlb)
 	return true;
 }
 
-#ifdef CONFIG_SMP
 static void tlb_flush_rmap_batch(struct mmu_gather_batch *batch, struct vm_area_struct *vma)
 {
 	struct encoded_page **pages = batch->encoded_pages;
@@ -59,14 +60,19 @@ static void tlb_flush_rmap_batch(struct mmu_gather_batch *batch, struct vm_area_
 
 		if (encoded_page_flags(enc) & ENCODED_PAGE_BIT_DELAY_RMAP) {
 			struct page *page = encoded_page_ptr(enc);
+			struct folio *folio = page_folio(page);
 			unsigned int nr_pages = 1;
 
 			if (unlikely(encoded_page_flags(enc) &
 				     ENCODED_PAGE_BIT_NR_PAGES_NEXT))
 				nr_pages = encoded_nr_pages(pages[++i]);
 
-			folio_remove_rmap_ptes(page_folio(page), page, nr_pages,
-					       vma);
+			if (folio_test_hugetlb(folio)) {
+				hugetlb_remove_rmap(folio);
+				hugetlb_folio_restore_rsv_on_unmap(vma, folio);
+			} else {
+				folio_remove_rmap_ptes(folio, page, nr_pages, vma);
+			}
 		}
 	}
 }
@@ -91,7 +97,6 @@ void tlb_flush_rmaps(struct mmu_gather *tlb, struct vm_area_struct *vma)
 		tlb_flush_rmap_batch(tlb->active, vma);
 	tlb->delayed_rmap = 0;
 }
-#endif
 
 /*
  * We might end up freeing a lot of pages. Reschedule on a regular
@@ -171,6 +176,8 @@ static bool __tlb_remove_folio_pages_size(struct mmu_gather *tlb,
 	struct mmu_gather_batch *batch;
 
 	VM_BUG_ON(!tlb->end);
+	if (delay_rmap)
+		tlb->delayed_rmap = 1;
 
 #ifdef CONFIG_MMU_GATHER_PAGE_SIZE
 	VM_WARN_ON(tlb->page_size != page_size);
@@ -213,9 +220,10 @@ bool __tlb_remove_folio_pages(struct mmu_gather *tlb, struct page *page,
 					     PAGE_SIZE);
 }
 
-bool __tlb_remove_page_size(struct mmu_gather *tlb, struct page *page, int page_size)
+bool __tlb_remove_page_size(struct mmu_gather *tlb, struct page *page,
+		int page_size, bool delay_rmap)
 {
-	return __tlb_remove_folio_pages_size(tlb, page, 1, false, page_size);
+	return __tlb_remove_folio_pages_size(tlb, page, 1, delay_rmap, page_size);
 }
 
 #endif /* MMU_GATHER_NO_GATHER */

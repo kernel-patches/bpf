@@ -55,7 +55,7 @@ static struct rc_map_table hisi_tv_demo_keymap[] = {
 static struct rc_map_list hisi_tv_demo_map = {
 	.map = {
 		.scan	  = hisi_tv_demo_keymap,
-		.size	  = ARRAY_SIZE(hisi_tv_demo_keymap),
+		.entries  = ARRAY_SIZE(hisi_tv_demo_keymap),
 		.rc_proto = RC_PROTO_NEC,
 		.name	  = RC_MAP_HISI_TV_DEMO,
 	}

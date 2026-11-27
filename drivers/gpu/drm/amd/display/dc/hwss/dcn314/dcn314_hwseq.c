@@ -465,14 +465,18 @@ void dcn314_resync_fifo_dccg_dio(struct dce_hwseq *hws, struct dc *dc, struct dc
 	}
 }
 
+bool dcn314_is_dpp_root_clock_control_supported(bool root_clock_optimization_dpp, bool clock_on)
+{
+	(void)clock_on;
+	return root_clock_optimization_dpp;
+}
+
 void dcn314_dpp_root_clock_control(struct dce_hwseq *hws, unsigned int dpp_inst, bool clock_on)
 {
-	if (!hws->ctx->dc->debug.root_clock_optimization.bits.dpp)
-		return;
-
 	if (hws->ctx->dc->res_pool->dccg->funcs->dpp_root_clock_control)
 		hws->ctx->dc->res_pool->dccg->funcs->dpp_root_clock_control(
-			hws->ctx->dc->res_pool->dccg, dpp_inst, clock_on);
+			hws->ctx->dc->res_pool->dccg, dpp_inst, clock_on,
+			hws->ctx->dc->debug.root_clock_optimization.bits.dpp);
 }
 
 static void apply_symclk_on_tx_off_wa(struct dc_link *link)
@@ -527,11 +531,9 @@ void dcn314_disable_link_output(struct dc_link *link,
 		link->dc->hwss.edp_backlight_control(link, false);
 	else if (dmcu != NULL && dmcu->funcs->lock_phy)
 		dmcu->funcs->lock_phy(dmcu);
-	if (!(signal == SIGNAL_TYPE_EDP &&
-		link->forced_psr_active)) {
-		link_hwss->disable_link_output(link, link_res, signal);
-		link->phy_state.symclk_state = SYMCLK_OFF_TX_OFF;
-	}
+
+	link_hwss->disable_link_output(link, link_res, signal);
+	link->phy_state.symclk_state = SYMCLK_OFF_TX_OFF;
 	/*
 	 * Add the logic to extract BOTH power up and power down sequences
 	 * from enable/disable link output and only call edp panel control
@@ -548,28 +550,29 @@ void dcn314_disable_link_output(struct dc_link *link,
  * dcn314_dpp_pg_control - DPP power gate control.
  *
  * @hws: dce_hwseq reference.
- * @dpp_inst: DPP instance reference.
+ * @dpp: DPP instance reference.
  * @power_on: true if we want to enable power gate, false otherwise.
+ * @disable_power_gate: true if DPP power gating is disabled by debug policy.
  *
  * Enable or disable power gate in the specific DPP instance.
  * If power gating is disabled, will force disable cursor in the DPP instance.
  */
 void dcn314_dpp_pg_control(
 		struct dce_hwseq *hws,
-		unsigned int dpp_inst,
-		bool power_on)
+		struct dpp *dpp,
+		bool power_on,
+		bool disable_power_gate)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? 0 : 2;
 
 
-	if (hws->ctx->dc->debug.disable_dpp_power_gate) {
+	if (disable_power_gate) {
 		/* Workaround for DCN314 with disabled power gating */
 		if (!power_on) {
 
 			/* Force disable cursor if power gating is disabled */
-			struct dpp *dpp = hws->ctx->dc->res_pool->dpps[dpp_inst];
-			if (dpp && dpp->funcs->dpp_force_disable_cursor)
+			if (dpp->funcs->dpp_force_disable_cursor)
 				dpp->funcs->dpp_force_disable_cursor(dpp);
 		}
 		return;
@@ -577,7 +580,7 @@ void dcn314_dpp_pg_control(
 	if (REG(DOMAIN1_PG_CONFIG) == 0)
 		return;
 
-	switch (dpp_inst) {
+	switch (dpp->inst) {
 	case 0: /* DPP0 */
 		REG_UPDATE(DOMAIN1_PG_CONFIG,
 				DOMAIN1_POWER_GATE, power_gate);

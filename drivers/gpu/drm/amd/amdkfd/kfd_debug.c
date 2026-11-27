@@ -143,7 +143,9 @@ bool kfd_dbg_ev_raise(uint64_t event_mask,
 							exception_data,
 							exception_data_size,
 							GFP_KERNEL);
-					if (!pdd->vm_fault_exc_data)
+					if (pdd->vm_fault_exc_data)
+						pdd->vm_fault_exc_data_size = exception_data_size;
+					else
 						pr_debug("Failed to allocate exception data memory");
 				} else {
 					pr_debug("Debugger exception data not saved\n");
@@ -350,31 +352,21 @@ int kfd_dbg_set_mes_debug_mode(struct kfd_process_device *pdd, bool sq_trap_en)
 {
 	uint32_t spi_dbg_cntl = pdd->spi_dbg_override | pdd->spi_dbg_launch_mode;
 	uint32_t flags = pdd->process->dbg_flags;
-	struct amdgpu_device *adev = pdd->dev->adev;
 	int r;
 
 	if (!kfd_dbg_is_per_vmid_supported(pdd->dev))
 		return 0;
 
-	if (!pdd->proc_ctx_cpu_ptr) {
-		r = amdgpu_amdkfd_alloc_kernel_mem(adev,
-			AMDGPU_MES_PROC_CTX_SIZE,
-			AMDGPU_GEM_DOMAIN_GTT,
-			&pdd->proc_ctx_bo,
-			&pdd->proc_ctx_gpu_addr,
-			&pdd->proc_ctx_cpu_ptr,
-			false);
-		if (r) {
-			dev_err(adev->dev,
-			"failed to allocate process context bo\n");
-			return r;
-		}
-		memset(pdd->proc_ctx_cpu_ptr, 0, AMDGPU_MES_PROC_CTX_SIZE);
-	}
+	r = kfd_process_device_alloc_proc_ctx(pdd);
+	if (r)
+		return r;
 
 	return amdgpu_mes_set_shader_debugger(pdd->dev->adev,
-					pdd->proc_ctx_gpu_addr, spi_dbg_cntl,
-					pdd->watch_points, flags, sq_trap_en,
+					pdd->proc_ctx_gpu_addr,
+					pdd->proc_ctx_array_index, spi_dbg_cntl,
+					pdd->watch_points,
+					pdd->watch_addresses,
+					flags, sq_trap_en,
 					ffs(pdd->dev->xcc_mask) - 1);
 }
 
@@ -449,6 +441,7 @@ int kfd_dbg_trap_clear_dev_address_watch(struct kfd_process_device *pdd,
 	pdd->watch_points[watch_id] = pdd->dev->kfd2kgd->clear_address_watch(
 							pdd->dev->adev,
 							watch_id);
+	pdd->watch_addresses[watch_id] = 0;
 	amdgpu_gfx_off_ctrl(pdd->dev->adev, true);
 
 	if (!pdd->dev->kfd->shared_resources.enable_mes)
@@ -485,6 +478,7 @@ int kfd_dbg_trap_set_dev_address_watch(struct kfd_process_device *pdd,
 	}
 
 	amdgpu_gfx_off_ctrl(pdd->dev->adev, false);
+	pdd->watch_addresses[*watch_id] = watch_address;
 	for_each_inst(xcc_id, xcc_mask)
 		pdd->watch_points[*watch_id] = pdd->dev->kfd2kgd->set_address_watch(
 				pdd->dev->adev,
@@ -655,7 +649,8 @@ void kfd_dbg_trap_deactivate(struct kfd_process *target, bool unwind, int unwind
 	kfd_dbg_set_workaround(target, false);
 }
 
-static void kfd_dbg_clean_exception_status(struct kfd_process *target)
+static void kfd_dbg_clean_exception_status(struct kfd_process *target,
+					   bool drain_irqs)
 {
 	struct process_queue_manager *pqm;
 	struct process_queue_node *pqn;
@@ -664,7 +659,8 @@ static void kfd_dbg_clean_exception_status(struct kfd_process *target)
 	for (i = 0; i < target->n_pdds; i++) {
 		struct kfd_process_device *pdd = target->pdds[i];
 
-		kfd_process_drain_interrupts(pdd);
+		if (drain_irqs)
+			kfd_process_drain_interrupts(pdd);
 
 		pdd->exception_status = 0;
 	}
@@ -680,7 +676,7 @@ static void kfd_dbg_clean_exception_status(struct kfd_process *target)
 	target->exception_status = 0;
 }
 
-int kfd_dbg_trap_disable(struct kfd_process *target)
+int kfd_dbg_trap_disable(struct kfd_process *target, bool drain_irqs)
 {
 	if (!target->debug_trap_enabled)
 		return 0;
@@ -704,7 +700,7 @@ int kfd_dbg_trap_disable(struct kfd_process *target)
 	}
 
 	target->debug_trap_enabled = false;
-	kfd_dbg_clean_exception_status(target);
+	kfd_dbg_clean_exception_status(target, drain_irqs);
 	kfd_unref_process(target);
 
 	return 0;
@@ -785,8 +781,8 @@ unwind_err:
 	return r;
 }
 
-int kfd_dbg_trap_enable(struct kfd_process *target, uint32_t fd,
-			void __user *runtime_info, uint32_t *runtime_size)
+int kfd_dbg_trap_enable(struct kfd_process *target, struct kfd_process *debugger,
+			uint32_t fd, void __user *runtime_info, uint32_t *runtime_size)
 {
 	struct file *f;
 	uint32_t copy_size;
@@ -827,8 +823,10 @@ int kfd_dbg_trap_enable(struct kfd_process *target, uint32_t fd,
 	kref_get(&target->ref);
 	target->debug_trap_enabled = true;
 
-	if (target->debugger_process)
-		atomic_inc(&target->debugger_process->debugged_process_count);
+	if (target != debugger) {
+		target->debugger_process = debugger;
+		atomic_inc(&debugger->debugged_process_count);
+	}
 
 	if (copy_to_user(runtime_info, (void *)&target->runtime_info, copy_size)) {
 		kfd_dbg_trap_deactivate(target, false, 0);
@@ -836,6 +834,7 @@ int kfd_dbg_trap_enable(struct kfd_process *target, uint32_t fd,
 		target->dbg_ev_file = NULL;
 		if (target->debugger_process)
 			atomic_dec(&target->debugger_process->debugged_process_count);
+		target->debugger_process = NULL;
 		target->debug_trap_enabled = false;
 		kfd_unref_process(target);
 		r = -EFAULT;

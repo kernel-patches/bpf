@@ -153,6 +153,7 @@ static int exynos_pd_probe(struct platform_device *pdev)
 		else
 			pr_info("%pOF has as child subdomain: %pOF.\n",
 				parent.np, child.np);
+		of_node_put(parent.np);
 	}
 
 	pm_runtime_enable(dev);

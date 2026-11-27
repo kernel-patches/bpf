@@ -665,6 +665,19 @@ config PINCTRL_UPBOARD
 	  To compile this driver as a module, choose M here: the module
 	  will be called pinctrl-upboard.
 
+config PINCTRL_ZHIHE_A210
+	tristate "Pinctrl driver for the Zhihe A210 SoC"
+	depends on OF && (ARCH_ZHIHE || COMPILE_TEST)
+	select GENERIC_PINMUX_FUNCTIONS
+	select GENERIC_PINCONF
+	select PINMUX
+	help
+	  This selects the pinctrl driver for the Zhihe A210 RISC-V SoC.
+
+	  It provides pin multiplexing and configuration support for
+	  the A210 AON, PERI1 and PERI2 pad controllers. Say Y if you
+	  are building a kernel for the Zhihe A210 platform.
+
 config PINCTRL_ZYNQ
 	bool "Pinctrl driver for Xilinx Zynq"
 	depends on ARCH_ZYNQ || COMPILE_TEST

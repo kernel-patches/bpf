@@ -259,8 +259,7 @@ static int tiadc_start_dma(struct iio_dev *indio_dev)
 	if (!desc)
 		return -EBUSY;
 
-	desc->callback = tiadc_dma_rx_complete;
-	desc->callback_param = indio_dev;
+	dmaengine_desc_set_callback(desc, tiadc_dma_rx_complete, NULL, indio_dev);
 
 	dma->cookie = dmaengine_submit(desc);
 
@@ -635,7 +634,7 @@ static int tiadc_probe(struct platform_device *pdev)
 
 	adc_dev = iio_priv(indio_dev);
 
-	adc_dev->mfd_tscadc = ti_tscadc_dev_get(pdev);
+	adc_dev->mfd_tscadc = dev_get_drvdata(pdev->dev.parent);
 	tiadc_parse_dt(pdev, adc_dev);
 
 	indio_dev->name = dev_name(&pdev->dev);

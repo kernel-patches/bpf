@@ -97,7 +97,7 @@ static inline int __cpupri_find(struct cpupri *cp, struct task_struct *p,
 	if (skip)
 		return 0;
 
-	if (cpumask_any_and(&p->cpus_mask, vec->mask) >= nr_cpu_ids)
+	if (!cpumask_intersects(&p->cpus_mask, vec->mask))
 		return 0;
 
 	if (lowest_mask) {

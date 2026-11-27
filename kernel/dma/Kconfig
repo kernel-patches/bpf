@@ -298,4 +298,4 @@ config DMA_MAP_BENCHMARK
 	  Provides /sys/kernel/debug/dma_map_benchmark that helps with testing
 	  performance of dma_(un)map_page.
 
-	  See tools/testing/selftests/dma/dma_map_benchmark.c
+	  See tools/dma/dma_map_benchmark.c

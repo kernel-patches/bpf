@@ -10,7 +10,7 @@
 
 #define VALID_DMA_MR_FLAGS (IB_ACCESS_LOCAL_WRITE)
 
-static enum gdma_mr_access_flags
+enum gdma_mr_access_flags
 mana_ib_verbs_to_gdma_access_flags(int access_flags)
 {
 	enum gdma_mr_access_flags flags = GDMA_ACCESS_FLAG_LOCAL_READ;
@@ -54,6 +54,11 @@ static int mana_ib_gd_create_mr(struct mana_ib_dev *dev, struct mana_ib_mr *mr,
 		req.gva.dma_region_handle = mr_params->gva.dma_region_handle;
 		req.gva.virtual_address = mr_params->gva.virtual_address;
 		req.gva.access_flags = mr_params->gva.access_flags;
+		break;
+	case GDMA_MR_TYPE_FMR:
+		/* page_size is deprecated field and must be 0. */
+		req.fmr.page_size = 0;
+		req.fmr.rsvd_pte_count = mr_params->fmr.rsvd_pte_count;
 		break;
 	case GDMA_MR_TYPE_ZBVA:
 		req.zbva.dma_region_handle = mr_params->zbva.dma_region_handle;
@@ -294,6 +299,77 @@ err_free:
 	return ERR_PTR(err);
 }
 
+struct ib_mr *mana_ib_alloc_mr(struct ib_pd *ibpd, enum ib_mr_type mr_type,
+			       u32 max_num_sg)
+{
+	struct mana_ib_pd *pd = container_of(ibpd, struct mana_ib_pd, ibpd);
+	struct gdma_create_mr_params mr_params = {};
+	struct gdma_context *gc;
+	struct mana_ib_dev *dev;
+	struct mana_ib_mr *mr;
+	int err;
+
+	dev = container_of(ibpd->device, struct mana_ib_dev, ib_dev);
+	gc = mdev_to_gc(dev);
+
+	if (mr_type != IB_MR_TYPE_MEM_REG)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	mr = kzalloc_obj(*mr);
+	if (!mr)
+		return ERR_PTR(-ENOMEM);
+
+	mr->fmr.max_ptes = max_num_sg;
+	mr->fmr.size = mana_ib_fmr_buf_sz(max_num_sg);
+	mr->fmr.ptes = dma_alloc_coherent(gc->dev, mr->fmr.size, &mr->fmr.dma_handle,
+					  GFP_KERNEL);
+	if (!mr->fmr.ptes) {
+		err = -ENOMEM;
+		goto err_free;
+	}
+
+	mr_params.pd_handle = pd->pd_handle;
+	mr_params.mr_type = GDMA_MR_TYPE_FMR;
+	mr_params.fmr.rsvd_pte_count = max_num_sg;
+
+	err = mana_ib_gd_create_mr(dev, mr, &mr_params);
+	if (err)
+		goto err_dma;
+
+	return &mr->ibmr;
+
+err_dma:
+	dma_free_coherent(gc->dev, mr->fmr.size, mr->fmr.ptes,
+			  mr->fmr.dma_handle);
+
+err_free:
+	kfree(mr);
+	return ERR_PTR(err);
+}
+
+static int mana_ib_set_page(struct ib_mr *ibmr, u64 addr)
+{
+	struct mana_ib_mr *mr = container_of(ibmr, struct mana_ib_mr, ibmr);
+
+	if (mr->fmr.pte_count >= mr->fmr.max_ptes)
+		return -ENOMEM;
+
+	mr->fmr.ptes[mr->fmr.pte_count] = addr | MANA_PTE_VALID_MASK;
+	mr->fmr.pte_count++;
+
+	return 0;
+}
+
+int mana_ib_map_mr_sg(struct ib_mr *ibmr, struct scatterlist *sg, int sg_nents,
+		      unsigned int *sg_offset)
+{
+	struct mana_ib_mr *mr = container_of(ibmr, struct mana_ib_mr, ibmr);
+
+	mr->fmr.pte_count = 0;
+
+	return ib_sg_to_pages(ibmr, sg, sg_nents, sg_offset, mana_ib_set_page);
+}
+
 static int mana_ib_gd_create_mw(struct mana_ib_dev *dev, struct mana_ib_pd *pd, struct ib_mw *ibmw)
 {
 	struct mana_ib_mw *mw = container_of(ibmw, struct mana_ib_mw, ibmw);
@@ -352,6 +428,7 @@ int mana_ib_dereg_mr(struct ib_mr *ibmr, struct ib_udata *udata)
 {
 	struct mana_ib_mr *mr = container_of(ibmr, struct mana_ib_mr, ibmr);
 	struct ib_device *ibdev = ibmr->device;
+	struct gdma_context *gc;
 	struct mana_ib_dev *dev;
 	int err;
 
@@ -360,10 +437,15 @@ int mana_ib_dereg_mr(struct ib_mr *ibmr, struct ib_udata *udata)
 		return err;
 
 	dev = container_of(ibdev, struct mana_ib_dev, ib_dev);
+	gc = mdev_to_gc(dev);
 
 	err = mana_ib_gd_destroy_mr(dev, mr->mr_handle);
 	if (err)
 		return err;
+
+	if (mr->fmr.ptes)
+		dma_free_coherent(gc->dev, mr->fmr.size, mr->fmr.ptes,
+				  mr->fmr.dma_handle);
 
 	if (mr->umem)
 		ib_umem_release(mr->umem);

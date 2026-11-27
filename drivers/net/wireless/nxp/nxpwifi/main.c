@@ -945,7 +945,10 @@ int nxpwifi_set_mac_address(struct nxpwifi_private *priv,
 
 		mac_addr = old_mac_addr;
 
-		if (priv->adapter->priv[0] != priv) {
+		if (priv->bss_type == NXPWIFI_BSS_TYPE_P2P) {
+			mac_addr |= BIT_ULL(NXPWIFI_MAC_LOCAL_ADMIN_BIT);
+			mac_addr += priv->bss_num;
+		} else if (priv->adapter->priv[0] != priv) {
 			/* Set mac address based on bss_type/bss_num */
 			mac_addr ^= BIT_ULL(priv->bss_type + 8);
 			mac_addr += priv->bss_num;

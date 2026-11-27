@@ -239,15 +239,15 @@ DECLARE_EVENT_CLASS(udc_log_req,
 	),
 	TP_fast_assign(
 		__assign_str(name);
-		__entry->length = req->length;
-		__entry->actual = req->actual;
-		__entry->num_sgs = req->num_sgs;
-		__entry->num_mapped_sgs = req->num_mapped_sgs;
-		__entry->stream_id = req->stream_id;
-		__entry->no_interrupt = req->no_interrupt;
-		__entry->zero = req->zero;
-		__entry->short_not_ok = req->short_not_ok;
-		__entry->status = req->status;
+		__entry->length = req ? req->length : 0;
+		__entry->actual = req ? req->actual : 0;
+		__entry->num_sgs = req ? req->num_sgs : 0;
+		__entry->num_mapped_sgs = req ? req->num_mapped_sgs : 0;
+		__entry->stream_id = req ? req->stream_id : 0;
+		__entry->no_interrupt = req ? req->no_interrupt : 0;
+		__entry->zero = req ? req->zero : 0;
+		__entry->short_not_ok = req ? req->short_not_ok : 0;
+		__entry->status = req ? req->status : 0;
 		__entry->ret = ret;
 		__entry->req = req;
 	),

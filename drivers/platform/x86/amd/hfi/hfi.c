@@ -224,8 +224,8 @@ static int amd_hfi_alloc_class_data(struct platform_device *pdev)
 	int idx;
 
 	nr_class_id = cpuid_eax(AMD_HETERO_CPUID_27);
-	if (nr_class_id > 255) {
-		dev_err(dev, "number of supported classes too large: %d\n",
+	if (!nr_class_id || nr_class_id > 255) {
+		dev_err(dev, "invalid number of supported classes: %u\n",
 			nr_class_id);
 		return -EINVAL;
 	}

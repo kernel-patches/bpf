@@ -468,23 +468,6 @@ static struct attribute *m24lr_ctl_dev_attrs[] = {
 	NULL,
 };
 
-static const struct m24lr_chip *m24lr_get_chip(struct device *dev)
-{
-	const struct m24lr_chip *ret;
-	const struct i2c_device_id *id;
-
-	id = i2c_match_id(m24lr_ids, to_i2c_client(dev));
-
-	if (dev->of_node && of_match_device(m24lr_of_match, dev))
-		ret = of_device_get_match_data(dev);
-	else if (id)
-		ret = (void *)id->driver_data;
-	else
-		ret = acpi_device_get_match_data(dev);
-
-	return ret;
-}
-
 static int m24lr_probe(struct i2c_client *client)
 {
 	struct regmap_config eeprom_regmap_conf = {0};
@@ -502,7 +485,7 @@ static int m24lr_probe(struct i2c_client *client)
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
 		return -EOPNOTSUPP;
 
-	chip = m24lr_get_chip(dev);
+	chip = i2c_get_match_data(client);
 	if (!chip)
 		return -ENODEV;
 

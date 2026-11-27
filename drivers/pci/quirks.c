@@ -5132,6 +5132,21 @@ static bool pci_quirk_intel_spt_pch_acs_match(struct pci_dev *dev)
 
 #define INTEL_SPT_ACS_CTRL (PCI_ACS_CAP + 4)
 
+int pci_dev_specific_read_acs_ctrl(struct pci_dev *dev, u16 *ctrl)
+{
+	u32 val = ~0;
+	int ret;
+
+	if (dev->vendor != PCI_VENDOR_ID_INTEL || !dev->acs_cap ||
+	    !pci_quirk_intel_spt_pch_acs_match(dev))
+		return -ENOTTY;
+
+	ret = pci_read_config_dword(dev, dev->acs_cap + INTEL_SPT_ACS_CTRL,
+				   &val);
+	*ctrl = val;
+	return ret;
+}
+
 static int pci_quirk_intel_spt_pch_acs(struct pci_dev *dev, u16 acs_flags)
 {
 	int pos;
@@ -5145,10 +5160,14 @@ static int pci_quirk_intel_spt_pch_acs(struct pci_dev *dev, u16 acs_flags)
 		return -ENOTTY;
 
 	/* see pci_acs_flags_enabled() */
-	pci_read_config_dword(dev, pos + PCI_ACS_CAP, &cap);
+	if (pci_read_config_dword(dev, pos + PCI_ACS_CAP, &cap) ||
+	    PCI_POSSIBLE_ERROR(cap))
+		return 0;
 	acs_flags &= (cap | PCI_ACS_EC);
 
-	pci_read_config_dword(dev, pos + INTEL_SPT_ACS_CTRL, &ctrl);
+	if (pci_read_config_dword(dev, pos + INTEL_SPT_ACS_CTRL, &ctrl) ||
+	    PCI_POSSIBLE_ERROR(ctrl))
+		return 0;
 
 	return pci_acs_ctrl_enabled(acs_flags, ctrl);
 }
@@ -5215,12 +5234,16 @@ static int pci_quirk_loongson_acs(struct pci_dev *dev, u16 acs_flags)
  * SFxxx 1G NICs(em).
  * RP1000/RP2000 10G NICs(sp).
  * FF5xxx 40G/25G/10G NICs(aml).
+ * FF6xxx 100G/25G/10G NICs(am).
  */
 static int  pci_quirk_wangxun_nic_acs(struct pci_dev *dev, u16 acs_flags)
 {
 	switch (dev->device) {
 	case 0x0100 ... 0x010F: /* EM */
 	case 0x1001: case 0x2001: /* SP */
+	case 0x4010: case 0x4012: case 0x4014: /* AM 10G */
+	case 0x4025: case 0x4125: case 0x4325: case 0x4425: /* AM 25G */
+	case 0x4101: case 0x4103: case 0x4105: case 0x4107: /* AM 100G */
 	case 0x5010: case 0x5025: case 0x5040: /* AML */
 	case 0x5110: case 0x5125: case 0x5140: /* AML */
 		return pci_acs_ctrl_enabled(acs_flags,
@@ -5530,9 +5553,6 @@ static void pci_quirk_enable_intel_rp_mpc_acs(struct pci_dev *dev)
  */
 static int pci_quirk_enable_intel_pch_acs(struct pci_dev *dev)
 {
-	if (!pci_quirk_intel_pch_acs_match(dev))
-		return -ENOTTY;
-
 	if (pci_quirk_enable_intel_lpc_acs(dev)) {
 		pci_warn(dev, "Failed to enable Intel PCH ACS quirk\n");
 		return 0;
@@ -5551,9 +5571,6 @@ static int pci_quirk_enable_intel_spt_pch_acs(struct pci_dev *dev)
 {
 	int pos;
 	u32 cap, ctrl;
-
-	if (!pci_quirk_intel_spt_pch_acs_match(dev))
-		return -ENOTTY;
 
 	pos = dev->acs_cap;
 	if (!pos)
@@ -5582,9 +5599,6 @@ static int pci_quirk_disable_intel_spt_pch_acs_redir(struct pci_dev *dev)
 	int pos;
 	u32 cap, ctrl;
 
-	if (!pci_quirk_intel_spt_pch_acs_match(dev))
-		return -ENOTTY;
-
 	pos = dev->acs_cap;
 	if (!pos)
 		return -ENOTTY;
@@ -5604,56 +5618,63 @@ static int pci_quirk_disable_intel_spt_pch_acs_redir(struct pci_dev *dev)
 static const struct pci_dev_acs_ops {
 	u16 vendor;
 	u16 device;
+	bool (*match)(struct pci_dev *dev);
 	int (*enable_acs)(struct pci_dev *dev);
 	int (*disable_acs_redir)(struct pci_dev *dev);
 } pci_dev_acs_ops[] = {
 	{ PCI_VENDOR_ID_INTEL, PCI_ANY_ID,
+	    .match = pci_quirk_intel_pch_acs_match,
 	    .enable_acs = pci_quirk_enable_intel_pch_acs,
 	},
 	{ PCI_VENDOR_ID_INTEL, PCI_ANY_ID,
+	    .match = pci_quirk_intel_spt_pch_acs_match,
 	    .enable_acs = pci_quirk_enable_intel_spt_pch_acs,
 	    .disable_acs_redir = pci_quirk_disable_intel_spt_pch_acs_redir,
 	},
 };
 
-int pci_dev_specific_enable_acs(struct pci_dev *dev)
+static const struct pci_dev_acs_ops *pci_dev_acs_ops_get(struct pci_dev *dev)
 {
 	const struct pci_dev_acs_ops *p;
-	int i, ret;
+	int i;
 
 	for (i = 0; i < ARRAY_SIZE(pci_dev_acs_ops); i++) {
 		p = &pci_dev_acs_ops[i];
 		if ((p->vendor == dev->vendor ||
 		     p->vendor == (u16)PCI_ANY_ID) &&
 		    (p->device == dev->device ||
-		     p->device == (u16)PCI_ANY_ID) &&
-		    p->enable_acs) {
-			ret = p->enable_acs(dev);
-			if (ret >= 0)
-				return ret;
+		     p->device == (u16)PCI_ANY_ID)) {
+			if (!p->match || p->match(dev))
+				return p;
 		}
 	}
+
+	return NULL;
+}
+
+bool pci_need_dev_specific_enable_acs(struct pci_dev *dev)
+{
+	const struct pci_dev_acs_ops *p = pci_dev_acs_ops_get(dev);
+
+	return p && p->enable_acs;
+}
+
+int pci_dev_specific_enable_acs(struct pci_dev *dev)
+{
+	const struct pci_dev_acs_ops *p = pci_dev_acs_ops_get(dev);
+
+	if (p && p->enable_acs)
+		return p->enable_acs(dev);
 
 	return -ENOTTY;
 }
 
 int pci_dev_specific_disable_acs_redir(struct pci_dev *dev)
 {
-	const struct pci_dev_acs_ops *p;
-	int i, ret;
+	const struct pci_dev_acs_ops *p = pci_dev_acs_ops_get(dev);
 
-	for (i = 0; i < ARRAY_SIZE(pci_dev_acs_ops); i++) {
-		p = &pci_dev_acs_ops[i];
-		if ((p->vendor == dev->vendor ||
-		     p->vendor == (u16)PCI_ANY_ID) &&
-		    (p->device == dev->device ||
-		     p->device == (u16)PCI_ANY_ID) &&
-		    p->disable_acs_redir) {
-			ret = p->disable_acs_redir(dev);
-			if (ret >= 0)
-				return ret;
-		}
-	}
+	if (p && p->disable_acs_redir)
+		return p->disable_acs_redir(dev);
 
 	return -ENOTTY;
 }
@@ -6251,6 +6272,22 @@ SWITCHTEC_QUIRK(0x5568);  /* PAXA 68XG5 */
 SWITCHTEC_QUIRK(0x5552);  /* PAXA 52XG5 */
 SWITCHTEC_QUIRK(0x5536);  /* PAXA 36XG5 */
 SWITCHTEC_QUIRK(0x5528);  /* PAXA 28XG5 */
+SWITCHTEC_QUIRK(0x6060);  /* PFXs 160XG6 */
+SWITCHTEC_QUIRK(0x6044);  /* PFXs 144XG6 */
+SWITCHTEC_QUIRK(0x6064);  /* PFXs 64XG6 */
+SWITCHTEC_QUIRK(0x6048);  /* PFXs 48XG6 */
+SWITCHTEC_QUIRK(0x6160);  /* PSXs 160XG6 */
+SWITCHTEC_QUIRK(0x6144);  /* PSXs 144XG6 */
+SWITCHTEC_QUIRK(0x6164);  /* PSXs 64XG6 */
+SWITCHTEC_QUIRK(0x6148);  /* PSXs 48XG6 */
+SWITCHTEC_QUIRK(0x6260);  /* PFX 160XG6 */
+SWITCHTEC_QUIRK(0x6244);  /* PFX 144XG6 */
+SWITCHTEC_QUIRK(0x6264);  /* PFX 64XG6 */
+SWITCHTEC_QUIRK(0x6248);  /* PFX 48XG6 */
+SWITCHTEC_QUIRK(0x6360);  /* PSX 160XG6 */
+SWITCHTEC_QUIRK(0x6344);  /* PSX 144XG6 */
+SWITCHTEC_QUIRK(0x6364);  /* PSX 64XG6 */
+SWITCHTEC_QUIRK(0x6348);  /* PSX 48XG6 */
 
 #define SWITCHTEC_PCI100X_QUIRK(vid) \
 	DECLARE_PCI_FIXUP_CLASS_FINAL(PCI_VENDOR_ID_EFAR, vid, \
@@ -6564,6 +6601,8 @@ DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_XILINX, 0x5021, of_pci_make_dev_node);
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_REDHAT, 0x0005, of_pci_make_dev_node);
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_EFAR, 0x9660, of_pci_make_dev_node);
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_TOSHIBA, 0x0220, of_pci_make_dev_node);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_PHILIPS, 0xe101, of_pci_make_dev_node);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_PHILIPS, 0xe110, of_pci_make_dev_node);
 
 /*
  * Devices known to require a longer delay before first config space access

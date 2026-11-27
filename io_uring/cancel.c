@@ -247,7 +247,7 @@ int io_async_cancel(struct io_kiocb *req, unsigned int issue_flags)
 	if (cd.flags & IORING_ASYNC_CANCEL_FD) {
 		if (req->flags & REQ_F_FIXED_FILE ||
 		    cd.flags & IORING_ASYNC_CANCEL_FD_FIXED) {
-			req->flags |= REQ_F_FIXED_FILE;
+			io_req_set_flags(req, REQ_F_FIXED_FILE);
 			req->file = io_file_get_fixed(req, cancel->fd,
 							issue_flags);
 		} else {
@@ -262,8 +262,6 @@ int io_async_cancel(struct io_kiocb *req, unsigned int issue_flags)
 
 	ret = __io_async_cancel(&cd, tctx, issue_flags);
 done:
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -438,6 +436,7 @@ static bool io_match_linked(struct io_kiocb *head)
 bool io_match_task_safe(struct io_kiocb *head, struct io_uring_task *tctx,
 			bool cancel_all)
 {
+	struct io_ring_ctx *ctx = head->ctx;
 	bool matched;
 
 	if (tctx && head->tctx != tctx)
@@ -445,16 +444,13 @@ bool io_match_task_safe(struct io_kiocb *head, struct io_uring_task *tctx,
 	if (cancel_all)
 		return true;
 
-	if (head->flags & REQ_F_LINK_TIMEOUT) {
-		struct io_ring_ctx *ctx = head->ctx;
-
-		/* protect against races with linked timeouts */
-		raw_spin_lock_irq(&ctx->timeout_lock);
-		matched = io_match_linked(head);
-		raw_spin_unlock_irq(&ctx->timeout_lock);
-	} else {
-		matched = io_match_linked(head);
-	}
+	/*
+	 * Protect against races with linked timeouts. REQ_F_LINK_TIMEOUT can't
+	 * tell if there is one: an io-wq worker may set it during the walk.
+	 */
+	raw_spin_lock_irq(&ctx->timeout_lock);
+	matched = io_match_linked(head);
+	raw_spin_unlock_irq(&ctx->timeout_lock);
 	return matched;
 }
 

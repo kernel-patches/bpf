@@ -181,6 +181,7 @@ int adf_ae_init(struct adf_accel_dev *accel_dev)
 {
 	struct adf_fw_loader_data *loader_data;
 	struct adf_hw_device_data *hw_device = accel_dev->hw_device;
+	int ret;
 
 	if (!hw_device->fw_name)
 		return 0;
@@ -190,30 +191,35 @@ int adf_ae_init(struct adf_accel_dev *accel_dev)
 		return -ENOMEM;
 
 	accel_dev->fw_loader = loader_data;
-	if (qat_hal_init(accel_dev)) {
+	ret = qat_hal_init(accel_dev);
+	if (ret) {
 		dev_err(&GET_DEV(accel_dev), "Failed to init the AEs\n");
-		kfree(loader_data);
-		return -EFAULT;
+		goto err_free_loader_data;
 	}
-	if (adf_ae_reset(accel_dev, 0)) {
+	ret = adf_ae_reset(accel_dev, 0);
+	if (ret) {
 		dev_err(&GET_DEV(accel_dev), "Failed to reset the AEs\n");
-		qat_hal_deinit(loader_data->fw_loader);
-		kfree(loader_data);
-		return -EFAULT;
+		goto err_hal_deinit;
 	}
 	return 0;
+
+err_hal_deinit:
+	qat_hal_deinit(loader_data->fw_loader);
+err_free_loader_data:
+	kfree(loader_data);
+	accel_dev->fw_loader = NULL;
+	return ret;
 }
 
-int adf_ae_shutdown(struct adf_accel_dev *accel_dev)
+void adf_ae_shutdown(struct adf_accel_dev *accel_dev)
 {
 	struct adf_fw_loader_data *loader_data = accel_dev->fw_loader;
 	struct adf_hw_device_data *hw_device = accel_dev->hw_device;
 
 	if (!hw_device->fw_name)
-		return 0;
+		return;
 
 	qat_hal_deinit(loader_data->fw_loader);
 	kfree(accel_dev->fw_loader);
 	accel_dev->fw_loader = NULL;
-	return 0;
 }

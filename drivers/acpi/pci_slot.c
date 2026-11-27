@@ -178,7 +178,7 @@ static const struct dmi_system_id acpi_pci_slot_dmi_table[] __initconst = {
 		DMI_MATCH(DMI_BIOS_VERSION, "PRIMEQUEST"),
 		},
 	},
-	{}
+	{ }
 };
 
 void __init acpi_pci_slot_init(void)

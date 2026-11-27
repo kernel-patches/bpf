@@ -529,14 +529,13 @@ static int snd_cx25821_hw_params(struct snd_pcm_substream *substream,
 
 	ret = cx25821_alsa_dma_map(chip);
 	if (ret < 0)
-		goto error;
+		goto error_free;
 
 	ret = cx25821_risc_databuffer_audio(chip->pci, &buf->risc, buf->sglist,
 			chip->period_size, chip->num_periods, 1);
 	if (ret < 0) {
 		pr_info("DEBUG: ERROR after cx25821_risc_databuffer_audio()\n");
-		cx25821_alsa_dma_unmap(chip);
-		goto error;
+		goto err_unmap;
 	}
 
 	/* Loop back to start of program */
@@ -550,6 +549,10 @@ static int snd_cx25821_hw_params(struct snd_pcm_substream *substream,
 
 	return 0;
 
+err_unmap:
+	cx25821_alsa_dma_unmap(chip);
+error_free:
+	cx25821_alsa_dma_free(buf);
 error:
 	chip->buf = NULL;
 	kfree(buf);

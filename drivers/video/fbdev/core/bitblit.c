@@ -23,12 +23,13 @@
 /*
  * Accelerated handlers.
  */
-static void update_attr(u8 *dst, const u8 *src, int attribute, struct vc_data *vc)
+static void update_attr(unsigned char *dst, const unsigned char *src, int attribute,
+			struct vc_data *vc)
 {
 	int i, offset = (vc->vc_font.height < 10) ? 1 : 2;
 	int width = DIV_ROUND_UP(vc->vc_font.width, 8);
 	unsigned int cellsize = vc->vc_font.height * width;
-	u8 c;
+	unsigned char c;
 
 	offset = cellsize - (offset * width);
 	for (i = 0; i < cellsize; i++) {
@@ -75,20 +76,25 @@ static void bit_clear(struct vc_data *vc, struct fb_info *info, int sy,
 
 static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 				     const u16 *s, u32 attr, u32 cnt,
-				     u32 d_pitch, u32 s_pitch, u32 cellsize,
-				     struct fb_image *image, u8 *buf, u8 *dst)
+				     u32 d_pitch, u32 s_width, u32 s_vpitch,
+				     struct fb_image *image,
+				     unsigned char *buf, u8 *dst)
 {
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
-	unsigned int charcnt = vc->vc_font.charcount;
 	u32 idx = vc->vc_font.width >> 3;
-	const u8 *src;
+	font_data_t *fd = (font_data_t *)vc->vc_font.data; /* upcast to font_data_t */
+	u32 s_pitch = font_glyph_pitch(s_width);
+	const unsigned char *src;
 
 	while (cnt--) {
 		u16 ch = scr_readw(s++) & charmask;
 
-		if (ch >= charcnt)
-			ch = 0;
-		src = vc->vc_font.data + (unsigned int)ch * cellsize;
+		src = font_data_glyph_buf(fd, s_width, s_vpitch, ch);
+		if (!src) {
+			src = font_data_glyph_buf(fd, s_width, s_vpitch, '\0');
+			if (!src)
+				goto next_char;
+		}
 
 		if (attr) {
 			update_attr(buf, src, attr, vc);
@@ -101,7 +107,7 @@ static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 		else
 			fb_pad_aligned_buffer(dst, d_pitch, src, idx,
 					      image->height);
-
+next_char:
 		dst += s_pitch;
 	}
 
@@ -111,23 +117,27 @@ static inline void bit_putcs_aligned(struct vc_data *vc, struct fb_info *info,
 static inline void bit_putcs_unaligned(struct vc_data *vc,
 				       struct fb_info *info, const u16 *s,
 				       u32 attr, u32 cnt, u32 d_pitch,
-				       u32 s_pitch, u32 cellsize,
-				       struct fb_image *image, u8 *buf,
-				       u8 *dst)
+				       u32 s_width, u32 s_vpitch,
+				       struct fb_image *image,
+				       unsigned char *buf, u8 *dst)
 {
 	u16 charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
-	unsigned int charcnt = vc->vc_font.charcount;
 	u32 shift_low = 0, mod = vc->vc_font.width % 8;
 	u32 shift_high = 8;
 	u32 idx = vc->vc_font.width >> 3;
-	const u8 *src;
+	font_data_t *fd = (font_data_t *)vc->vc_font.data; /* upcast to font_data_t */
+	u32 s_pitch = font_glyph_pitch(s_width);
+	const unsigned char *src;
 
 	while (cnt--) {
 		u16 ch = scr_readw(s++) & charmask;
 
-		if (ch >= charcnt)
-			ch = 0;
-		src = vc->vc_font.data + (unsigned int)ch * cellsize;
+		src = font_data_glyph_buf(fd, s_width, s_vpitch, ch);
+		if (!src) {
+			src = font_data_glyph_buf(fd, s_width, s_vpitch, '\0');
+			if (!src)
+				goto next_char;
+		}
 
 		if (attr) {
 			update_attr(buf, src, attr, vc);
@@ -137,6 +147,7 @@ static inline void bit_putcs_unaligned(struct vc_data *vc,
 		fb_pad_unaligned_buffer(dst, d_pitch, src, idx,
 					image->height, shift_high,
 					shift_low, mod);
+next_char:
 		shift_low += mod;
 		dst += (shift_low >= 8) ? s_pitch : s_pitch - 1;
 		shift_low &= 7;
@@ -154,14 +165,16 @@ static void bit_putcs(struct vc_data *vc, struct fb_info *info,
 	struct fbcon_par *par = info->fbcon_par;
 	struct fb_image image;
 	u32 vyres = GETVYRES(par->p, info);
-	u32 width = DIV_ROUND_UP(vc->vc_font.width, 8);
-	u32 cellsize = width * vc->vc_font.height;
+	u32 width = vc->vc_font.width;
+	u32 vpitch = vc->vc_font.height;
+	u32 cellsize = font_glyph_size(width, vpitch);
 	u32 maxcnt = info->pixmap.size/cellsize;
 	u32 scan_align = info->pixmap.scan_align - 1;
 	u32 buf_align = info->pixmap.buf_align - 1;
 	u32 mod = vc->vc_font.width % 8, cnt, pitch, size;
 	u32 attribute = get_attribute(info, scr_readw(s));
-	u8 *dst, *buf = NULL;
+	unsigned char *buf = NULL;
+	u8 *dst;
 
 	image.fg_color = fg;
 	image.bg_color = bg;
@@ -209,10 +222,10 @@ static void bit_putcs(struct vc_data *vc, struct fb_info *info,
 
 		if (!mod)
 			bit_putcs_aligned(vc, info, s, attribute, cnt, pitch,
-					  width, cellsize, &image, buf, dst);
+					  width, vpitch, &image, buf, dst);
 		else
 			bit_putcs_unaligned(vc, info, s, attribute, cnt,
-					    pitch, width, cellsize, &image,
+					    pitch, width, vpitch, &image,
 					    buf, dst);
 
 		image.dx += cnt * vc->vc_font.width;
@@ -265,11 +278,15 @@ static void bit_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	struct fb_cursor cursor;
 	struct fbcon_par *par = info->fbcon_par;
 	unsigned short charmask = vc->vc_hi_font_mask ? 0x1ff : 0xff;
-	int w = DIV_ROUND_UP(vc->vc_font.width, 8), c;
+	int width = vc->vc_font.width;
+	int vpitch = vc->vc_font.height;
+	int cellsize = font_glyph_size(width, vpitch);
+	font_data_t *fd = (font_data_t *)vc->vc_font.data; /* upcast to font_data_t */
+	int c;
 	int y = real_y(par->p, vc->state.y);
 	int attribute, use_sw = vc->vc_cursor_type & CUR_SW;
 	int err = 1;
-	const u8 *src;
+	const unsigned char *src;
 
 	cursor.set = 0;
 
@@ -280,21 +297,23 @@ static void bit_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 	attribute = get_attribute(info, c);
 	c &= charmask;
 
-	/* Clamp to font size, same as bit_putcs_aligned() */
-	if (c >= vc->vc_font.charcount)
-		c = 0;
-	src = vc->vc_font.data + (c * (w * vc->vc_font.height));
+	src = font_data_glyph_buf(fd, width, vpitch, c);
+	if (!src) {
+		src = font_data_glyph_buf(fd, width, vpitch, '\0');
+		if (!src)
+			return;
+	}
 
 	if (par->cursor_state.image.data != (const char *)src ||
 	    par->cursor_reset) {
-		par->cursor_state.image.data = src;
+		par->cursor_state.image.data = (const char *)src;
 		cursor.set |= FB_CUR_SETIMAGE;
 	}
 
 	if (attribute) {
-		u8 *dst;
+		unsigned char *dst;
 
-		dst = kmalloc_array(w, vc->vc_font.height, GFP_ATOMIC);
+		dst = kmalloc(cellsize, GFP_ATOMIC);
 		if (!dst)
 			return;
 		kfree(par->cursor_data);

@@ -22,6 +22,7 @@
 #include <linux/sched/stat.h>
 #include <linux/sched/nohz.h>
 #include <linux/sched/loadavg.h>
+#include <linux/sched/isolation.h>
 #include <linux/module.h>
 #include <linux/irq_work.h>
 #include <linux/posix-timers.h>
@@ -269,7 +270,7 @@ static void tick_sched_do_timer(struct tick_sched *ts, ktime_t now)
 	}
 
 	if (tick_sched_flag_test(ts, TS_FLAG_INIDLE))
-		ts->got_idle_tick = 1;
+		WRITE_ONCE_THIS_CPU(ts->got_idle_tick, 1);
 }
 
 static void tick_sched_handle(struct tick_sched *ts, struct pt_regs *regs)
@@ -683,6 +684,11 @@ void __init tick_nohz_init(void)
 			pr_warn("NO_HZ: Clearing %d from nohz_full range "
 				"for timekeeping\n", cpu);
 			cpumask_clear_cpu(cpu, tick_nohz_full_mask);
+			housekeeping_set_cpu(cpu, HK_TYPE_KERNEL_NOISE);
+			if (cpumask_empty(tick_nohz_full_mask)) {
+				tick_nohz_full_running = false;
+				return;
+			}
 		}
 	}
 
@@ -1264,8 +1270,8 @@ bool tick_nohz_idle_got_tick(void)
 {
 	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
 
-	if (ts->got_idle_tick) {
-		ts->got_idle_tick = 0;
+	if (READ_ONCE_THIS_CPU(ts->got_idle_tick)) {
+		WRITE_ONCE_THIS_CPU(ts->got_idle_tick, 0);
 		return true;
 	}
 	return false;
@@ -1499,13 +1505,11 @@ void tick_irq_enter(void)
 	tick_nohz_irq_enter();
 }
 
-static int sched_skew_tick;
+static bool sched_skew_tick __ro_after_init;
 
 static int __init skew_tick(char *str)
 {
-	get_option(&str, &sched_skew_tick);
-
-	return 0;
+	return kstrtobool(str, &sched_skew_tick);
 }
 early_param("skew_tick", skew_tick);
 

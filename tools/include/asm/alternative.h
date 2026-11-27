@@ -3,7 +3,7 @@
 #define _TOOLS_ASM_ALTERNATIVE_ASM_H
 
 #if defined(__s390x__)
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 .macro ALTERNATIVE oldinstr, newinstr, feature
 	\oldinstr
 .endm

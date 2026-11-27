@@ -18,6 +18,10 @@ static const struct snd_soc_dapm_route sn624x_spk_map[] = {
 	{ "Speaker", NULL, "sn624x SPK" },
 };
 
+static const struct snd_soc_dapm_route sn624x_spk_map_bare[] = {
+	{ "Speaker", NULL, "SPK" },
+};
+
 /* Structure to map codec names to respective route arrays and sizes */
 struct codec_route_map {
 	const char *codec_name;
@@ -45,16 +49,30 @@ int asoc_sdw_senary_sdca_spk_rtd_init(struct snd_soc_pcm_runtime *rtd, struct sn
 	struct snd_soc_dapm_context *dapm = snd_soc_card_to_dapm(card);
 	int ret;
 
-	/* Match by DAI name prefix (e.g. sn624x-sdca-aif2). */
 	const struct codec_route_map *route_map = get_codec_route_map(dai->name);
+	const struct snd_soc_dapm_route *routes;
+	size_t nroutes;
 
 	if (!route_map) {
 		dev_err(rtd->dev, "failed to get codec name and route map\n");
 		return -EINVAL;
 	}
 
-	/* Add routes */
-	ret = snd_soc_dapm_add_routes(dapm, route_map->route_map, route_map->route_size);
+	/*
+	 * No name_prefix means the codec widgets were created as "SPK",
+	 * not "sn624x SPK". DAI name is still sn624x-sdca-aif2.
+	 */
+	if (!dai->component->name_prefix) {
+		dev_warn(rtd->dev, "sn624x spk: component %s has no name_prefix\n",
+			 dai->component->name);
+		routes = sn624x_spk_map_bare;
+		nroutes = ARRAY_SIZE(sn624x_spk_map_bare);
+	} else {
+		routes = route_map->route_map;
+		nroutes = route_map->route_size;
+	}
+
+	ret = snd_soc_dapm_add_routes(dapm, routes, nroutes);
 	if (ret)
 		dev_err(rtd->dev, "failed to add rt sdca spk map: %d\n", ret);
 

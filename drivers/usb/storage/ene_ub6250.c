@@ -24,6 +24,9 @@
 
 #define DRV_NAME "ums_eneub6250"
 
+/* Timeout for each transfer of the probe-time card-type query, in jiffies. */
+#define ENE_PROBE_TIMEOUT (10 * HZ)
+
 MODULE_DESCRIPTION("Driver for ENE UB6250 reader");
 MODULE_LICENSE("GPL");
 MODULE_IMPORT_NS("USB_STORAGE");
@@ -33,6 +36,8 @@ MODULE_FIRMWARE(SD_RW_FIRMWARE);
 MODULE_FIRMWARE(MS_INIT_FIRMWARE);
 MODULE_FIRMWARE(MSP_RW_FIRMWARE);
 MODULE_FIRMWARE(MS_RW_FIRMWARE);
+
+static int ene_ub6250_init(struct us_data *us);
 
 /*
  * The table of devices
@@ -470,7 +475,7 @@ struct ene_ub6250_info {
 	u32		bl_num;
 	int		SrbStatus;
 
-	/*------Power Managerment ---------------*/
+	/*------Power Management ---------------*/
 	bool		Power_IsResum;
 };
 
@@ -487,7 +492,12 @@ static void ene_ub6250_info_destructor(void *extra)
 	kfree(info->bbuf);
 }
 
-static int ene_send_scsi_cmd(struct us_data *us, u8 fDir, void *buf, int use_sg)
+/*
+ * Send an ENE SCSI command.  @timeout bounds the wait for each transfer of
+ * the transaction, in jiffies; zero means no limit.
+ */
+static int ene_send_scsi_cmd_timeout(struct us_data *us, u8 fdir, void *buf,
+				     int use_sg, unsigned int timeout)
 {
 	struct bulk_cb_wrap *bcb = (struct bulk_cb_wrap *) us->iobuf;
 	struct bulk_cs_wrap *bcs = (struct bulk_cs_wrap *) us->iobuf;
@@ -499,27 +509,33 @@ static int ene_send_scsi_cmd(struct us_data *us, u8 fDir, void *buf, int use_sg)
 
 	/* usb_stor_dbg(us, "transport --- ene_send_scsi_cmd\n"); */
 	/* send cmd to out endpoint */
-	result = usb_stor_bulk_transfer_buf(us, us->send_bulk_pipe,
-					    bcb, US_BULK_CB_WRAP_LEN, NULL);
+	result = usb_stor_bulk_transfer_buf_timeout(us, us->send_bulk_pipe,
+						    bcb, US_BULK_CB_WRAP_LEN,
+						    NULL, timeout);
 	if (result != USB_STOR_XFER_GOOD) {
 		usb_stor_dbg(us, "send cmd to out endpoint fail ---\n");
 		return USB_STOR_TRANSPORT_ERROR;
 	}
 
 	if (buf) {
-		unsigned int pipe = fDir;
+		unsigned int pipe;
 
-		if (fDir  == FDIR_READ)
+		if (fdir == FDIR_READ)
 			pipe = us->recv_bulk_pipe;
 		else
 			pipe = us->send_bulk_pipe;
 
 		/* Bulk */
 		if (use_sg) {
+			/*
+			 * Scatter-gather transfers belong to SCSI commands,
+			 * whose timeout and abort machinery bound the wait.
+			 */
 			result = usb_stor_bulk_srb(us, pipe, us->srb);
 		} else {
-			result = usb_stor_bulk_transfer_sg(us, pipe, buf,
-						transfer_length, 0, &partial);
+			result = usb_stor_bulk_transfer_buf_timeout(us, pipe,
+								    buf, transfer_length,
+								    &partial, timeout);
 		}
 		if (result != USB_STOR_XFER_GOOD) {
 			usb_stor_dbg(us, "data transfer fail ---\n");
@@ -528,20 +544,25 @@ static int ene_send_scsi_cmd(struct us_data *us, u8 fDir, void *buf, int use_sg)
 	}
 
 	/* Get CSW for device status */
-	result = usb_stor_bulk_transfer_buf(us, us->recv_bulk_pipe, bcs,
-					    US_BULK_CS_WRAP_LEN, &cswlen);
+	result = usb_stor_bulk_transfer_buf_timeout(us, us->recv_bulk_pipe,
+						    bcs, US_BULK_CS_WRAP_LEN,
+						    &cswlen, timeout);
 
 	if (result == USB_STOR_XFER_SHORT && cswlen == 0) {
 		usb_stor_dbg(us, "Received 0-length CSW; retrying...\n");
-		result = usb_stor_bulk_transfer_buf(us, us->recv_bulk_pipe,
-					    bcs, US_BULK_CS_WRAP_LEN, &cswlen);
+		result = usb_stor_bulk_transfer_buf_timeout(us,
+							    us->recv_bulk_pipe, bcs,
+							    US_BULK_CS_WRAP_LEN,
+							    &cswlen, timeout);
 	}
 
 	if (result == USB_STOR_XFER_STALLED) {
 		/* get the status again */
 		usb_stor_dbg(us, "Attempting to get CSW (2nd try)...\n");
-		result = usb_stor_bulk_transfer_buf(us, us->recv_bulk_pipe,
-						bcs, US_BULK_CS_WRAP_LEN, NULL);
+		result = usb_stor_bulk_transfer_buf_timeout(us,
+							    us->recv_bulk_pipe, bcs,
+							    US_BULK_CS_WRAP_LEN, NULL,
+							    timeout);
 	}
 
 	if (result != USB_STOR_XFER_GOOD)
@@ -565,6 +586,15 @@ static int ene_send_scsi_cmd(struct us_data *us, u8 fDir, void *buf, int use_sg)
 		return USB_STOR_TRANSPORT_ERROR;
 
 	return USB_STOR_TRANSPORT_GOOD;
+}
+
+/*
+ * Unbounded variant for the command path: a SCSI command's timeout and
+ * abort machinery terminate the transfer if the device stops responding.
+ */
+static int ene_send_scsi_cmd(struct us_data *us, u8 fdir, void *buf, int use_sg)
+{
+	return ene_send_scsi_cmd_timeout(us, fdir, buf, use_sg, 0);
 }
 
 static int do_scsi_request_sense(struct us_data *us, struct scsi_cmnd *srb)
@@ -1062,7 +1092,6 @@ exit:
 
 	kfree(PageBuffer);
 
-	result = 0;
 	return result;
 }
 
@@ -1209,9 +1238,9 @@ static int ms_read_eraseblock(struct us_data *us, u32 PhyBlockAddr)
 
 static int ms_lib_check_disableblock(struct us_data *us, u16 PhyBlock)
 {
-	unsigned char *PageBuf = NULL;
+	__be16 *PageBuf = NULL;
 	u16 result = MS_STATUS_SUCCESS;
-	u16 blk, index = 0;
+	u16 blk, index;
 	struct ms_lib_type_extdat extdat;
 	struct ene_ub6250_info *info = (struct ene_ub6250_info *) us->extra;
 
@@ -1222,7 +1251,7 @@ static int ms_lib_check_disableblock(struct us_data *us, u16 PhyBlock)
 	}
 
 	ms_read_readpage(us, PhyBlock, 1, (u32 *)PageBuf, &extdat);
-	do {
+	for (index = 0; index < MS_BYTES_PER_PAGE / sizeof(*PageBuf); index++) {
 		blk = be16_to_cpu(PageBuf[index]);
 		if (blk == MS_LB_NOT_USED)
 			break;
@@ -1230,8 +1259,7 @@ static int ms_lib_check_disableblock(struct us_data *us, u16 PhyBlock)
 			result = MS_ERROR_FLASH_READ;
 			break;
 		}
-		index++;
-	} while (1);
+	}
 
 exit:
 	kfree(PageBuf);
@@ -1804,7 +1832,8 @@ static int ms_scsi_write(struct us_data *us, struct scsi_cmnd *srb)
 				goto exit;
 			}
 
-			info->MS_Lib.Phy2LogMap[oldphy] = MS_LB_NOT_USED_ERASED;
+			if (oldphy < info->MS_Lib.NumberOfPhyBlock)
+				info->MS_Lib.Phy2LogMap[oldphy] = MS_LB_NOT_USED_ERASED;
 			ms_lib_force_setlogical_pair(us, PhyBlockAddr, newphy);
 
 			blen -= len;
@@ -1824,7 +1853,8 @@ exit:
  * ENE MS Card
  */
 
-static int ene_get_card_type(struct us_data *us, u16 index, void *buf)
+static int ene_get_card_type(struct us_data *us, u16 index, void *buf,
+			     unsigned int timeout)
 {
 	struct bulk_cb_wrap *bcb = (struct bulk_cb_wrap *) us->iobuf;
 	int result;
@@ -1837,7 +1867,7 @@ static int ene_get_card_type(struct us_data *us, u16 index, void *buf)
 	bcb->CDB[2]			= (unsigned char)(index>>8);
 	bcb->CDB[3]			= (unsigned char)index;
 
-	result = ene_send_scsi_cmd(us, FDIR_READ, buf, 0);
+	result = ene_send_scsi_cmd_timeout(us, FDIR_READ, buf, 0, timeout);
 	return result;
 }
 
@@ -2108,8 +2138,9 @@ static int ene_ms_init(struct us_data *us)
 			MSP_BlockSize      = (bbuf[6] << 8) | bbuf[7];
 			MSP_UserAreaBlocks = (bbuf[10] << 8) | bbuf[11];
 			info->MSP_TotalBlock = MSP_BlockSize * MSP_UserAreaBlocks;
-		} else {
-			ms_card_init(us); /* Card is MS (to ms.c)*/
+		} else if (ms_card_init(us)) { /* Card is MS (to ms.c)*/
+			info->MS_Status &= ~MS_Ready;
+			return USB_STOR_TRANSPORT_ERROR;
 		}
 		usb_stor_dbg(us, "MS Init Code OK !!\n");
 	} else {
@@ -2191,7 +2222,7 @@ static int ene_init(struct us_data *us)
 	struct ene_ub6250_info *info = (struct ene_ub6250_info *)(us->extra);
 	u8 *bbuf = info->bbuf;
 
-	result = ene_get_card_type(us, REG_CARD_STATUS, bbuf);
+	result = ene_get_card_type(us, REG_CARD_STATUS, bbuf, 0);
 	if (result != USB_STOR_XFER_GOOD)
 		return USB_STOR_TRANSPORT_ERROR;
 
@@ -2319,13 +2350,35 @@ static int ene_transport(struct scsi_cmnd *srb, struct us_data *us)
 
 static struct scsi_host_template ene_ub6250_host_template;
 
+/*
+ * Probe-time card-type query.  It runs from usb_stor_acquire_resources(),
+ * before the usb-storage control thread and the SCSI scan work exist, so
+ * nothing else can be using us->current_urb.  Give every transfer a
+ * timeout: there is no SCSI command whose timeout or abort handling could
+ * end the wait, and a timeout at any stage fails the whole query.
+ */
+static int ene_ub6250_init(struct us_data *us)
+{
+	struct ene_ub6250_info *info = (struct ene_ub6250_info *)us->extra;
+	int result;
+
+	result = ene_get_card_type(us, REG_CARD_STATUS, info->bbuf,
+				   ENE_PROBE_TIMEOUT);
+	if (result != USB_STOR_XFER_GOOD)
+		return -EIO;
+
+	if (!(info->bbuf[0] & 0x01))
+		pr_info("ums_eneub6250: SM cards are not supported\n");
+
+	return 0;
+}
+
 static int ene_ub6250_probe(struct usb_interface *intf,
 			 const struct usb_device_id *id)
 {
-	int result;
-	u8  misc_reg03;
 	struct us_data *us;
 	struct ene_ub6250_info *info;
+	int result;
 
 	result = usb_stor_probe1(&us, intf, id,
 		   (id - ene_ub6250_usb_ids) + ene_ub6250_unusual_dev_list,
@@ -2352,26 +2405,7 @@ static int ene_ub6250_probe(struct usb_interface *intf,
 	us->transport_reset = usb_stor_Bulk_reset;
 	us->max_lun = 0;
 
-	result = usb_stor_probe2(us);
-	if (result)
-		return result;
-
-	/* probe card type */
-	mutex_lock(&us->dev_mutex);
-	result = ene_get_card_type(us, REG_CARD_STATUS, info->bbuf);
-	mutex_unlock(&us->dev_mutex);
-	if (result != USB_STOR_XFER_GOOD) {
-		usb_stor_disconnect(intf);
-		return USB_STOR_TRANSPORT_ERROR;
-	}
-
-	misc_reg03 = info->bbuf[0];
-	if (!(misc_reg03 & 0x01)) {
-		pr_info("ums_eneub6250: This driver only supports SD/MS cards. "
-			"It does not support SM cards.\n");
-	}
-
-	return result;
+	return usb_stor_probe2(us);
 }
 
 

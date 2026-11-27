@@ -281,6 +281,38 @@ static void zynqmp_gqspi_selecttarget(struct zynqmp_qspi *instanceptr,
 }
 
 /**
+ * zynqmp_qspi_disable_hw - Clear and mask all interrupts, stop the controller
+ * @xqspi:	Pointer to the zynqmp_qspi structure
+ *
+ * Acknowledges any pending GQSPI and DMA status, masks every interrupt source
+ * and disables the controller. Used when (re)initialising the hardware and
+ * when handing the system over on reboot, poweroff or kexec.
+ */
+static void zynqmp_qspi_disable_hw(struct zynqmp_qspi *xqspi)
+{
+	/* Select the GQSPI mode */
+	zynqmp_gqspi_write(xqspi, GQSPI_SEL_OFST, GQSPI_SEL_MASK);
+	/* Clear and disable interrupts */
+	zynqmp_gqspi_write(xqspi, GQSPI_ISR_OFST,
+			   zynqmp_gqspi_read(xqspi, GQSPI_ISR_OFST) |
+			   GQSPI_ISR_WR_TO_CLR_MASK);
+	/* Clear the DMA STS */
+	zynqmp_gqspi_write(xqspi, GQSPI_QSPIDMA_DST_I_STS_OFST,
+			   zynqmp_gqspi_read(xqspi,
+					     GQSPI_QSPIDMA_DST_I_STS_OFST));
+	zynqmp_gqspi_write(xqspi, GQSPI_QSPIDMA_DST_STS_OFST,
+			   zynqmp_gqspi_read(xqspi,
+					     GQSPI_QSPIDMA_DST_STS_OFST) |
+					     GQSPI_QSPIDMA_DST_STS_WTC);
+	zynqmp_gqspi_write(xqspi, GQSPI_IDR_OFST, GQSPI_IDR_ALL_MASK);
+	zynqmp_gqspi_write(xqspi,
+			   GQSPI_QSPIDMA_DST_I_DIS_OFST,
+			   GQSPI_QSPIDMA_DST_INTR_ALL_MASK);
+	/* Disable the GQSPI */
+	zynqmp_gqspi_write(xqspi, GQSPI_EN_OFST, 0x0);
+}
+
+/**
  * zynqmp_qspi_set_tapdelay:   To configure qspi tap delays
  * @xqspi:             Pointer to the zynqmp_qspi structure
  * @baudrateval:       Buadrate to configure
@@ -355,26 +387,8 @@ static void zynqmp_qspi_init_hw(struct zynqmp_qspi *xqspi)
 	u32 config_reg, baud_rate_val = 0;
 	ulong clk_rate;
 
-	/* Select the GQSPI mode */
-	zynqmp_gqspi_write(xqspi, GQSPI_SEL_OFST, GQSPI_SEL_MASK);
-	/* Clear and disable interrupts */
-	zynqmp_gqspi_write(xqspi, GQSPI_ISR_OFST,
-			   zynqmp_gqspi_read(xqspi, GQSPI_ISR_OFST) |
-			   GQSPI_ISR_WR_TO_CLR_MASK);
-	/* Clear the DMA STS */
-	zynqmp_gqspi_write(xqspi, GQSPI_QSPIDMA_DST_I_STS_OFST,
-			   zynqmp_gqspi_read(xqspi,
-					     GQSPI_QSPIDMA_DST_I_STS_OFST));
-	zynqmp_gqspi_write(xqspi, GQSPI_QSPIDMA_DST_STS_OFST,
-			   zynqmp_gqspi_read(xqspi,
-					     GQSPI_QSPIDMA_DST_STS_OFST) |
-					     GQSPI_QSPIDMA_DST_STS_WTC);
-	zynqmp_gqspi_write(xqspi, GQSPI_IDR_OFST, GQSPI_IDR_ALL_MASK);
-	zynqmp_gqspi_write(xqspi,
-			   GQSPI_QSPIDMA_DST_I_DIS_OFST,
-			   GQSPI_QSPIDMA_DST_INTR_ALL_MASK);
-	/* Disable the GQSPI */
-	zynqmp_gqspi_write(xqspi, GQSPI_EN_OFST, 0x0);
+	zynqmp_qspi_disable_hw(xqspi);
+
 	config_reg = zynqmp_gqspi_read(xqspi, GQSPI_CONFIG_OFST);
 	config_reg &= ~GQSPI_CFG_MODE_EN_MASK;
 	/* Manual start */
@@ -624,11 +638,12 @@ static void zynqmp_qspi_filltxfifo(struct zynqmp_qspi *xqspi, int size)
 			xqspi->bytes_to_transfer -= 4;
 			count += 4;
 		} else {
+			intermediate = 0xFFFFFFFF;
 			memcpy(&intermediate, xqspi->txbuf,
 			       xqspi->bytes_to_transfer);
 			xqspi->txbuf += xqspi->bytes_to_transfer;
-			xqspi->bytes_to_transfer = 0;
 			count += xqspi->bytes_to_transfer;
+			xqspi->bytes_to_transfer = 0;
 		}
 		zynqmp_gqspi_write(xqspi, GQSPI_TXD_OFST, intermediate);
 	}
@@ -796,9 +811,10 @@ static void zynqmp_process_dma_irq(struct zynqmp_qspi *xqspi)
  * @irq:	IRQ number
  * @dev_id:	Pointer to the xqspi structure
  *
- * This function handles TX empty only.
+ * This function handles TX empty, and RXNEMPTY in IO mode.
  * On TX empty interrupt this function reads the received data from RX FIFO
  * and fills the TX FIFO if there is any data remaining to be transferred.
+ * On RXNEMPTY in IO mode, read up to GQSPI_RX_FIFO_FILL bytes from the RX FIFO.
  *
  * Return:	IRQ_HANDLED when interrupt is handled
  *		IRQ_NONE otherwise.
@@ -826,11 +842,14 @@ static irqreturn_t zynqmp_qspi_irq(int irq, void *dev_id)
 	if (mask & GQSPI_ISR_TXNOT_FULL_MASK)
 		zynqmp_qspi_filltxfifo(xqspi, GQSPI_TX_FIFO_FILL);
 
-	if (dma_status & GQSPI_QSPIDMA_DST_I_STS_DONE_MASK)
+	if (dma_status & GQSPI_QSPIDMA_DST_I_STS_DONE_MASK) {
 		zynqmp_process_dma_irq(xqspi);
-	else if (!(mask & GQSPI_IER_RXEMPTY_MASK) &&
-			(mask & GQSPI_IER_GENFIFOEMPTY_MASK))
+	} else if ((mask & GQSPI_IER_RXNEMPTY_MASK) ||
+		   (!(mask & GQSPI_IER_RXEMPTY_MASK) &&
+		    (mask & GQSPI_IER_GENFIFOEMPTY_MASK))) {
+		/* Drain on RXNEMPTY for IO-mode transfers > GQSPI_RX_FIFO_FILL. */
 		zynqmp_qspi_readrxfifo(xqspi, GQSPI_RX_FIFO_FILL);
+	}
 
 	if (xqspi->bytes_to_receive == 0 && xqspi->bytes_to_transfer == 0 &&
 	    ((status & GQSPI_IRQ_MASK) == GQSPI_IRQ_MASK)) {
@@ -853,7 +872,8 @@ static int zynqmp_qspi_setuprxdma(struct zynqmp_qspi *xqspi)
 	u64 dma_align =  (u64)(uintptr_t)xqspi->rxbuf;
 
 	if (xqspi->bytes_to_receive < 8 ||
-	    ((dma_align & GQSPI_DMA_UNALIGN) != 0x0)) {
+	    ((dma_align & GQSPI_DMA_UNALIGN) != 0x0) ||
+	    !IS_ALIGNED(dma_align, dma_get_cache_alignment())) {
 		/* Setting to IO mode */
 		zynqmp_qspi_disable_dma(xqspi);
 		xqspi->dma_rx_bytes = 0;
@@ -1335,7 +1355,6 @@ static int zynqmp_qspi_probe(struct platform_device *pdev)
 
 clk_dis_all:
 	pm_runtime_disable(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
 	clk_disable_unprepare(xqspi->refclk);
@@ -1358,15 +1377,27 @@ clk_dis_pclk:
 static void zynqmp_qspi_remove(struct platform_device *pdev)
 {
 	struct zynqmp_qspi *xqspi = platform_get_drvdata(pdev);
+	int ret;
 
-	pm_runtime_get_sync(&pdev->dev);
+	ret = pm_runtime_get_sync(&pdev->dev);
 
 	spi_unregister_controller(xqspi->ctlr);
 
-	zynqmp_gqspi_write(xqspi, GQSPI_EN_OFST, 0x0);
+	/*
+	 * Mask at the interrupt controller, same reasoning as
+	 * zynqmp_qspi_shutdown(). Placed before the ret >= 0 check so it
+	 * also covers the branch where disable_hw() is skipped.
+	 */
+	disable_irq(xqspi->irq);
+
+	if (ret >= 0)
+		zynqmp_qspi_disable_hw(xqspi);
+	else
+		dev_warn(&pdev->dev,
+			 "failed to resume device, skip hw disable (%d)\n",
+			 ret);
 
 	pm_runtime_disable(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
 	clk_disable_unprepare(xqspi->refclk);

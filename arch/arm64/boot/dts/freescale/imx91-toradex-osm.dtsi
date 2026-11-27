@@ -72,7 +72,7 @@
 	};
 
 	/* OSM GPIO_A_0 */
-	pinctrl_gpio_a0:  gpio2io0grp {
+	pinctrl_gpio_a0: gpio2io0grp {
 		fsl,pins = <MX91_PAD_GPIO_IO00__GPIO2_IO0	0x139e>; /* OSM D17 */
 	};
 
@@ -122,7 +122,7 @@
 	};
 
 	/* OSM GPIO_A_7 */
-	pinctrl_gpio_a7:  gpio4io15grp {
+	pinctrl_gpio_a7: gpio4io15grp {
 		fsl,pins = <MX91_PAD_ENET2_MDIO__GPIO4_IO15	0x139e>; /* OSM L17 */
 	};
 

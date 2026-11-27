@@ -747,6 +747,7 @@ int nxpwifi_deauthenticate(struct nxpwifi_private *priv, u8 *mac)
 
 	switch (priv->bss_mode) {
 	case NL80211_IFTYPE_STATION:
+	case NL80211_IFTYPE_P2P_CLIENT:
 		ret = nxpwifi_deauthenticate_infra(priv, mac);
 		if (ret)
 			cfg80211_disconnected(priv->netdev, 0, NULL, 0,

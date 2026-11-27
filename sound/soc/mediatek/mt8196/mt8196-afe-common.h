@@ -186,6 +186,7 @@ struct clk;
 struct mtk_base_afe;
 
 struct mt8196_afe_private {
+	int irq_id;
 	struct clk **clk;
 	/* dai */
 	void *dai_priv[MT8196_DAI_NUM];
@@ -199,7 +200,5 @@ struct mt8196_afe_private {
 int mt8196_dai_adda_register(struct mtk_base_afe *afe);
 int mt8196_dai_i2s_register(struct mtk_base_afe *afe);
 int mt8196_dai_tdm_register(struct mtk_base_afe *afe);
-int mt8196_dai_set_priv(struct mtk_base_afe *afe, int id,
-			int priv_size, const void *priv_data);
 
 #endif

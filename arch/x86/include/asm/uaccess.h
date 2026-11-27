@@ -248,6 +248,44 @@ do {									\
 		     : [umem] "m" (__m(addr))				\
 		     : : label)
 
+#define __try_cmpxchg_user_asm(itype, ltype, _ptr, _pold, _new, label)	({ \
+	bool success;							\
+	__typeof__(_ptr) _old = (__typeof__(_ptr))(_pold);		\
+	__typeof__(*(_ptr)) __old = *_old;				\
+	__typeof__(*(_ptr)) __new = (_new);				\
+	asm_goto_output("\n"						\
+		     "1: " LOCK_PREFIX "cmpxchg"itype" %[new], %[ptr]\n"\
+		     _ASM_EXTABLE_UA(1b, %l[label])			\
+		     : "=@ccz" (success),				\
+		       [ptr] "+m" (*_ptr),				\
+		       [old] "+a" (__old)				\
+		     : [new] ltype (__new)				\
+		     : "memory"						\
+		     : label);						\
+	if (unlikely(!success))						\
+		*_old = __old;						\
+	likely(success);					})
+
+#ifdef CONFIG_X86_32
+#define __try_cmpxchg64_user_asm(_ptr, _pold, _new, label)	({	\
+	bool success;							\
+	__typeof__(_ptr) _old = (__typeof__(_ptr))(_pold);		\
+	__typeof__(*(_ptr)) __old = *_old;				\
+	__typeof__(*(_ptr)) __new = (_new);				\
+	asm_goto_output("\n"						\
+		     "1: " LOCK_PREFIX "cmpxchg8b %[ptr]\n"		\
+		     _ASM_EXTABLE_UA(1b, %l[label])			\
+		     : "=@ccz" (success),				\
+		       "+A" (__old),					\
+		       [ptr] "+m" (*_ptr)				\
+		     : "b" ((u32)__new),				\
+		       "c" ((u32)((u64)__new >> 32))			\
+		     : "memory"						\
+		     : label);						\
+	if (unlikely(!success))						\
+		*_old = __old;						\
+	likely(success);					})
+#endif // CONFIG_X86_32
 #else // !CONFIG_CC_HAS_ASM_GOTO_OUTPUT
 
 #ifdef CONFIG_X86_32
@@ -313,48 +351,6 @@ do {									\
 		     : [umem] "m" (__m(addr)),				\
 		       "0" (err))
 
-#endif // CONFIG_CC_HAS_ASM_GOTO_OUTPUT
-
-#ifdef CONFIG_CC_HAS_ASM_GOTO_TIED_OUTPUT
-#define __try_cmpxchg_user_asm(itype, ltype, _ptr, _pold, _new, label)	({ \
-	bool success;							\
-	__typeof__(_ptr) _old = (__typeof__(_ptr))(_pold);		\
-	__typeof__(*(_ptr)) __old = *_old;				\
-	__typeof__(*(_ptr)) __new = (_new);				\
-	asm_goto_output("\n"						\
-		     "1: " LOCK_PREFIX "cmpxchg"itype" %[new], %[ptr]\n"\
-		     _ASM_EXTABLE_UA(1b, %l[label])			\
-		     : "=@ccz" (success),				\
-		       [ptr] "+m" (*_ptr),				\
-		       [old] "+a" (__old)				\
-		     : [new] ltype (__new)				\
-		     : "memory"						\
-		     : label);						\
-	if (unlikely(!success))						\
-		*_old = __old;						\
-	likely(success);					})
-
-#ifdef CONFIG_X86_32
-#define __try_cmpxchg64_user_asm(_ptr, _pold, _new, label)	({	\
-	bool success;							\
-	__typeof__(_ptr) _old = (__typeof__(_ptr))(_pold);		\
-	__typeof__(*(_ptr)) __old = *_old;				\
-	__typeof__(*(_ptr)) __new = (_new);				\
-	asm_goto_output("\n"						\
-		     "1: " LOCK_PREFIX "cmpxchg8b %[ptr]\n"		\
-		     _ASM_EXTABLE_UA(1b, %l[label])			\
-		     : "=@ccz" (success),				\
-		       "+A" (__old),					\
-		       [ptr] "+m" (*_ptr)				\
-		     : "b" ((u32)__new),				\
-		       "c" ((u32)((u64)__new >> 32))			\
-		     : "memory"						\
-		     : label);						\
-	if (unlikely(!success))						\
-		*_old = __old;						\
-	likely(success);					})
-#endif // CONFIG_X86_32
-#else  // !CONFIG_CC_HAS_ASM_GOTO_TIED_OUTPUT
 #define __try_cmpxchg_user_asm(itype, ltype, _ptr, _pold, _new, label)	({ \
 	int __err = 0;							\
 	bool success;							\
@@ -410,7 +406,7 @@ do {									\
 		*_old = __old;						\
 	likely(__result);					})
 #endif // CONFIG_X86_32
-#endif // CONFIG_CC_HAS_ASM_GOTO_TIED_OUTPUT
+#endif // CONFIG_CC_HAS_ASM_GOTO_OUTPUT
 
 /* FIXME: this hack is definitely wrong -AK */
 struct __large_struct { unsigned long buf[100]; };
@@ -539,6 +535,29 @@ _label:									\
 	__uaccess_end();						\
 	__ret;								\
 							})
+
+/* set_bit() on a byte of user memory; returns -EFAULT on fault. */
+#define set_bit_user(nr, addr)					\
+({									\
+	__label__ efault;						\
+	int __err = -EFAULT;						\
+	u8 __user *__p = (addr);					\
+	scoped_user_rw_access(__p, efault) {				\
+		__err = 0;						\
+		asm volatile("\n"					\
+			     "1: " LOCK_PREFIX "orb %[mask], %[ptr]\n"	\
+			     "2:\n"					\
+			     _ASM_EXTABLE_TYPE_REG(1b, 2b,			\
+						   EX_TYPE_EFAULT_REG,	\
+						   %[errout])		\
+			     : [errout] "+r" (__err),			\
+			       [ptr] "+m" (*__p)			\
+			     : [mask] "q" ((unsigned char)BIT(nr))	\
+			     : "memory", "cc");				\
+	}								\
+efault:									\
+	__err;								\
+})
 
 /*
  * We want the unsafe accessors to always be inlined and use

@@ -111,7 +111,6 @@ static void csi_chan_update_blank_intervals(struct tegra_csi_channel *csi_chan,
 	if (index >= 0) {
 		csi_chan->h_blank = frmrate[index].h_blank;
 		csi_chan->v_blank = frmrate[index].v_blank;
-		csi_chan->framerate = frmrate[index].framerate;
 	}
 }
 
@@ -178,6 +177,9 @@ static int csi_set_format(struct v4l2_subdev *subdev,
 	struct v4l2_mbus_framefmt *format = &fmt->format;
 	const struct v4l2_frmsize_discrete *sizes;
 	unsigned int i;
+	const struct tpg_framerate *frmrate;
+	struct v4l2_fract *interval;
+	int index;
 
 	if (!IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
 		return -ENOIOCTLCMD;
@@ -199,6 +201,16 @@ static int csi_set_format(struct v4l2_subdev *subdev,
 	format->code = tegra_csi_tpg_fmts[i].code;
 	format->field = V4L2_FIELD_NONE;
 
+	/* keep the frame interval in sync with the format */
+	frmrate = csi_chan->csi->soc->tpg_frmrate_table;
+	index = csi_get_frmrate_table_index(csi_chan->csi, format->code,
+					    format->width, format->height);
+	if (index >= 0) {
+		interval = v4l2_subdev_state_get_interval(sd_state, fmt->pad);
+		interval->numerator = 1;
+		interval->denominator = frmrate[index].framerate;
+	}
+
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY)
 		return 0;
 
@@ -217,20 +229,53 @@ static int tegra_csi_get_frame_interval(struct v4l2_subdev *subdev,
 					struct v4l2_subdev_state *sd_state,
 					struct v4l2_subdev_frame_interval *vfi)
 {
-	struct tegra_csi_channel *csi_chan = to_csi_chan(subdev);
-
 	if (!IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
 		return -ENOIOCTLCMD;
 
-	/*
-	 * FIXME: Implement support for V4L2_SUBDEV_FORMAT_TRY, using the V4L2
-	 * subdev active state API.
-	 */
-	if (vfi->which != V4L2_SUBDEV_FORMAT_ACTIVE)
+	if (vfi->pad >= subdev->entity.num_pads)
 		return -EINVAL;
 
-	vfi->interval.numerator = 1;
-	vfi->interval.denominator = csi_chan->framerate;
+	vfi->interval = *v4l2_subdev_state_get_interval(sd_state, vfi->pad);
+
+	return 0;
+}
+
+static int tegra_csi_set_frame_interval(struct v4l2_subdev *subdev,
+					struct v4l2_subdev_state *sd_state,
+					struct v4l2_subdev_frame_interval *vfi)
+{
+	if (!IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
+		return -ENOIOCTLCMD;
+
+	if (vfi->pad >= subdev->entity.num_pads)
+		return -EINVAL;
+
+	*v4l2_subdev_state_get_interval(sd_state, vfi->pad) = vfi->interval;
+
+	return 0;
+}
+
+static int csi_init_state(struct v4l2_subdev *sd,
+			  struct v4l2_subdev_state *state)
+{
+	struct tegra_csi_channel *csi_chan = to_csi_chan(sd);
+	const struct tpg_framerate *frmrate;
+	struct v4l2_fract *interval;
+	unsigned int i;
+	int index;
+
+	frmrate = csi_chan->csi->soc->tpg_frmrate_table;
+	index = csi_get_frmrate_table_index(csi_chan->csi,
+					    csi_chan->format.code,
+					    csi_chan->format.width,
+					    csi_chan->format.height);
+
+	for (i = 0; i < sd->entity.num_pads; i++) {
+		interval = v4l2_subdev_state_get_interval(state, i);
+		interval->numerator = 1;
+		interval->denominator =
+			index >= 0 ? frmrate[index].framerate : 0;
+	}
 
 	return 0;
 }
@@ -438,12 +483,16 @@ static const struct v4l2_subdev_pad_ops tegra_csi_pad_ops = {
 	.get_fmt		= csi_get_format,
 	.set_fmt		= csi_set_format,
 	.get_frame_interval	= tegra_csi_get_frame_interval,
-	.set_frame_interval	= tegra_csi_get_frame_interval,
+	.set_frame_interval	= tegra_csi_set_frame_interval,
 };
 
 static const struct v4l2_subdev_ops tegra_csi_ops = {
 	.video  = &tegra_csi_video_ops,
 	.pad    = &tegra_csi_pad_ops,
+};
+
+static const struct v4l2_subdev_internal_ops tegra_csi_internal_ops = {
+	.init_state = csi_init_state,
 };
 
 struct v4l2_subdev *tegra_channel_get_remote_csi_subdev(struct tegra_vi_channel *chan)
@@ -642,6 +691,16 @@ static int tegra_csi_channel_init(struct tegra_csi_channel *chan)
 		return ret;
 	}
 
+	subdev->internal_ops = &tegra_csi_internal_ops;
+	ret = v4l2_subdev_init_finalize(subdev);
+	if (ret < 0) {
+		dev_err(csi->dev,
+			"failed to initialize subdev state: %d\n", ret);
+		media_entity_cleanup(&subdev->entity);
+		subdev->dev = NULL;
+		return ret;
+	}
+
 	if (!IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG)) {
 		ret = v4l2_async_register_subdev(subdev);
 		if (ret < 0) {
@@ -696,6 +755,7 @@ static void tegra_csi_channels_cleanup(struct tegra_csi *csi)
 		if (subdev->dev) {
 			if (!IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
 				v4l2_async_unregister_subdev(subdev);
+			v4l2_subdev_cleanup(subdev);
 			media_entity_cleanup(&subdev->entity);
 		}
 
@@ -810,10 +870,8 @@ static int tegra_csi_probe(struct platform_device *pdev)
 		csi->clks[i].id = csi->soc->clk_names[i];
 
 	ret = devm_clk_bulk_get(&pdev->dev, csi->soc->num_clks, csi->clks);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to get the clocks: %d\n", ret);
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "failed to get the clocks\n");
 
 	csi->vdd = devm_regulator_get(&pdev->dev, "avdd-dsi-csi");
 	if (IS_ERR(csi->vdd))

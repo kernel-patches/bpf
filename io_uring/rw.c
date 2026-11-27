@@ -89,7 +89,7 @@ static int io_import_vec(int ddir, struct io_kiocb *req,
 	if (unlikely(ret < 0))
 		return ret;
 	if (iov) {
-		req->flags |= REQ_F_NEED_CLEANUP;
+		io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 		io_vec_reset_iovec(&io->vec, iov, io->iter.nr_segs);
 	}
 	return 0;
@@ -180,7 +180,7 @@ static void io_req_rw_cleanup(struct io_kiocb *req, unsigned int issue_flags)
 	 * should be fixed separately, and then this check could be killed.
 	 */
 	if (!(req->flags & (REQ_F_REISSUE | REQ_F_REFCOUNT))) {
-		req->flags &= ~REQ_F_NEED_CLEANUP;
+		io_req_clear_flags(req, REQ_F_NEED_CLEANUP);
 		if (!io_rw_recycle(req, issue_flags)) {
 			struct io_async_rw *rw = req->async_data;
 
@@ -194,11 +194,11 @@ static int io_rw_alloc_async(struct io_kiocb *req)
 	struct io_ring_ctx *ctx = req->ctx;
 	struct io_async_rw *rw;
 
-	rw = io_uring_alloc_async_data(&ctx->rw_cache, req);
-	if (!rw)
+	if (!io_uring_alloc_cached_async_data(&ctx->rw_cache, req))
 		return -ENOMEM;
+	rw = req->async_data;
 	if (rw->vec.iovec)
-		req->flags |= REQ_F_NEED_CLEANUP;
+		io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 	rw->bytes_done = 0;
 	return 0;
 }
@@ -239,7 +239,7 @@ static int io_prep_rw_pi(struct io_kiocb *req, struct io_rw *rw, int ddir,
 			  pi_attr.len, &io->meta.iter);
 	if (unlikely(ret < 0))
 		return ret;
-	req->flags |= REQ_F_HAS_METADATA;
+	io_req_set_flags(req, REQ_F_HAS_METADATA);
 	io_meta_save_state(io);
 	return ret;
 }
@@ -396,7 +396,7 @@ static int io_rw_import_reg_vec(struct io_kiocb *req,
 	if (unlikely(ret))
 		return ret;
 	iov_iter_save_state(&io->iter, &io->iter_state);
-	req->flags &= ~REQ_F_IMPORT_BUFFER;
+	io_req_clear_flags(req, REQ_F_IMPORT_BUFFER);
 	return 0;
 }
 
@@ -450,7 +450,7 @@ int io_read_mshot_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	if (rw->addr || rw->len)
 		return -EINVAL;
 
-	req->flags |= REQ_F_APOLL_MULTISHOT;
+	io_req_set_flags(req, REQ_F_APOLL_MULTISHOT);
 	return 0;
 }
 
@@ -471,7 +471,7 @@ static inline loff_t *io_kiocb_update_pos(struct io_kiocb *req)
 		return &rw->kiocb.ki_pos;
 
 	if (!(req->file->f_mode & FMODE_STREAM)) {
-		req->flags |= REQ_F_CUR_POS;
+		io_req_set_flags(req, REQ_F_CUR_POS);
 		rw->kiocb.ki_pos = req->file->f_pos;
 		return &rw->kiocb.ki_pos;
 	}
@@ -544,7 +544,7 @@ static void __io_complete_rw_common(struct io_kiocb *req, long res)
 	if (res == req->cqe.res)
 		return;
 	if ((res == -EOPNOTSUPP || res == -EAGAIN) && io_rw_should_reissue(req)) {
-		req->flags |= REQ_F_REISSUE | REQ_F_BL_NO_RECYCLE;
+		io_req_set_flags(req, REQ_F_REISSUE | REQ_F_BL_NO_RECYCLE);
 	} else {
 		req_set_fail(req);
 		req->cqe.res = res;
@@ -605,7 +605,7 @@ static void io_complete_rw_iopoll(struct kiocb *kiocb, long res)
 		io_req_end_write(req);
 
 	if (res == -EAGAIN && io_rw_should_reissue(req))
-		req->flags |= REQ_F_REISSUE | REQ_F_BL_NO_RECYCLE;
+		io_req_set_flags(req, REQ_F_REISSUE | REQ_F_BL_NO_RECYCLE);
 	else if (unlikely(final_res != req->cqe.res)) {
 		req_set_fail(req);
 		req->cqe.res = final_res;
@@ -844,7 +844,7 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode, int rw_type)
 		return -EBADF;
 
 	if (!(req->flags & REQ_F_FIXED_FILE))
-		req->flags |= io_file_get_flags(file);
+		io_req_set_flags(req, io_file_get_flags(file));
 
 	kiocb->ki_flags = file->f_iocb_flags;
 	ret = kiocb_set_rw_flags(kiocb, rw->flags, rw_type);
@@ -858,19 +858,19 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode, int rw_type)
 	 */
 	if (kiocb->ki_flags & IOCB_NOWAIT ||
 	    ((file->f_flags & O_NONBLOCK && !(req->flags & REQ_F_SUPPORT_NOWAIT))))
-		req->flags |= REQ_F_NOWAIT;
+		io_req_set_flags(req, REQ_F_NOWAIT);
 
 	if (ctx->flags & IORING_SETUP_IOPOLL) {
 		if (!(kiocb->ki_flags & IOCB_DIRECT) || !file->f_op->iopoll)
 			return -EOPNOTSUPP;
-		req->flags |= REQ_F_IOPOLL;
+		io_req_set_flags(req, REQ_F_IOPOLL);
 		kiocb->private = NULL;
 		kiocb->ki_flags |= IOCB_HIPRI;
 		req->iopoll_completed = 0;
 		req->cqe.flags = 0;
 		if (ctx->flags & IORING_SETUP_HYBRID_IOPOLL) {
 			/* make sure every req only blocks once*/
-			req->flags &= ~REQ_F_IOPOLL_STATE;
+			io_req_clear_flags(req, REQ_F_IOPOLL_STATE);
 			req->iopoll_start = ktime_get_ns();
 		}
 	} else {
@@ -1057,10 +1057,6 @@ int io_read_mshot(struct io_kiocb *req, unsigned int issue_flags)
 		return IOU_RETRY;
 	} else if (ret <= 0) {
 		io_kbuf_recycle(req, sel.buf_list, issue_flags);
-		if (ret < 0) {
-			ret = io_fixup_restart_res(ret);
-			req_set_fail(req);
-		}
 	} else if (!(req->flags & REQ_F_APOLL_MULTISHOT)) {
 		cflags = io_put_kbuf(req, ret, sel.buf_list);
 	} else {
@@ -1097,9 +1093,6 @@ int io_read_mshot(struct io_kiocb *req, unsigned int issue_flags)
 
 static bool io_kiocb_start_write(struct io_kiocb *req, struct kiocb *kiocb)
 {
-	struct inode *inode;
-	bool ret;
-
 	if (!(req->flags & REQ_F_ISREG))
 		return true;
 	if (!(kiocb->ki_flags & IOCB_NOWAIT)) {
@@ -1107,11 +1100,7 @@ static bool io_kiocb_start_write(struct io_kiocb *req, struct kiocb *kiocb)
 		return true;
 	}
 
-	inode = file_inode(kiocb->ki_filp);
-	ret = sb_start_write_trylock(inode->i_sb);
-	if (ret)
-		__sb_writers_release(inode->i_sb, SB_FREEZE_WRITE);
-	return ret;
+	return kiocb_start_write_trylock(kiocb);
 }
 
 int io_write(struct io_kiocb *req, unsigned int issue_flags)
@@ -1281,7 +1270,7 @@ static u64 io_hybrid_iopoll_delay(struct io_ring_ctx *ctx, struct io_kiocb *req)
 	sleep_time = ctx->hybrid_poll_time / 2;
 
 	kt = ktime_set(0, sleep_time);
-	req->flags |= REQ_F_IOPOLL_STATE;
+	io_req_set_flags(req, REQ_F_IOPOLL_STATE);
 
 	mode = HRTIMER_MODE_REL;
 	hrtimer_setup_sleeper_on_stack(&timer, CLOCK_MONOTONIC, mode);

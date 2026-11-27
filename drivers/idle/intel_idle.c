@@ -2128,35 +2128,35 @@ static void __init bxt_idle_state_table_update(void)
 	unsigned long long msr;
 	unsigned int usec;
 
-	rdmsrq(MSR_PKGC6_IRTL, msr);
+	msr = rdmsrq(MSR_PKGC6_IRTL);
 	usec = irtl_2_usec(msr);
 	if (usec) {
 		bxt_cstates[2].exit_latency = usec;
 		bxt_cstates[2].target_residency = usec;
 	}
 
-	rdmsrq(MSR_PKGC7_IRTL, msr);
+	msr = rdmsrq(MSR_PKGC7_IRTL);
 	usec = irtl_2_usec(msr);
 	if (usec) {
 		bxt_cstates[3].exit_latency = usec;
 		bxt_cstates[3].target_residency = usec;
 	}
 
-	rdmsrq(MSR_PKGC8_IRTL, msr);
+	msr = rdmsrq(MSR_PKGC8_IRTL);
 	usec = irtl_2_usec(msr);
 	if (usec) {
 		bxt_cstates[4].exit_latency = usec;
 		bxt_cstates[4].target_residency = usec;
 	}
 
-	rdmsrq(MSR_PKGC9_IRTL, msr);
+	msr = rdmsrq(MSR_PKGC9_IRTL);
 	usec = irtl_2_usec(msr);
 	if (usec) {
 		bxt_cstates[5].exit_latency = usec;
 		bxt_cstates[5].target_residency = usec;
 	}
 
-	rdmsrq(MSR_PKGC10_IRTL, msr);
+	msr = rdmsrq(MSR_PKGC10_IRTL);
 	usec = irtl_2_usec(msr);
 	if (usec) {
 		bxt_cstates[6].exit_latency = usec;
@@ -2184,7 +2184,7 @@ static void __init sklh_idle_state_table_update(void)
 	if ((mwait_substates & (0xF << 28)) == 0)
 		return;
 
-	rdmsrq(MSR_PKG_CST_CONFIG_CONTROL, msr);
+	msr = rdmsrq(MSR_PKG_CST_CONFIG_CONTROL);
 
 	/* PC10 is not enabled in PKG C-state limit */
 	if ((msr & 0xF) != 8)
@@ -2196,7 +2196,7 @@ static void __init sklh_idle_state_table_update(void)
 	/* if SGX is present */
 	if (ebx & (1 << 2)) {
 
-		rdmsrq(MSR_IA32_FEAT_CTL, msr);
+		msr = rdmsrq(MSR_IA32_FEAT_CTL);
 
 		/* if SGX is enabled */
 		if (msr & (1 << 18))
@@ -2216,7 +2216,7 @@ static bool __init skx_is_pc6_disabled(void)
 {
 	u64 msr;
 
-	rdmsrq(MSR_PKG_CST_CONFIG_CONTROL, msr);
+	msr = rdmsrq(MSR_PKG_CST_CONFIG_CONTROL);
 
 	/*
 	 * 000b: C0/C1 (no package C-state support)
@@ -2470,7 +2470,7 @@ static void auto_demotion_disable(void)
 {
 	unsigned long long msr_bits;
 
-	rdmsrq(MSR_PKG_CST_CONFIG_CONTROL, msr_bits);
+	msr_bits = rdmsrq(MSR_PKG_CST_CONFIG_CONTROL);
 	msr_bits &= ~auto_demotion_disable_flags;
 	wrmsrq(MSR_PKG_CST_CONFIG_CONTROL, msr_bits);
 }
@@ -2479,7 +2479,7 @@ static void c1e_promotion_enable(void)
 {
 	unsigned long long msr_bits;
 
-	rdmsrq(MSR_IA32_POWER_CTL, msr_bits);
+	msr_bits = rdmsrq(MSR_IA32_POWER_CTL);
 	msr_bits |= 0x2;
 	wrmsrq(MSR_IA32_POWER_CTL, msr_bits);
 }
@@ -2488,7 +2488,7 @@ static void c1e_promotion_disable(void)
 {
 	unsigned long long msr_bits;
 
-	rdmsrq(MSR_IA32_POWER_CTL, msr_bits);
+	msr_bits = rdmsrq(MSR_IA32_POWER_CTL);
 	msr_bits &= ~0x2;
 	wrmsrq(MSR_IA32_POWER_CTL, msr_bits);
 }
@@ -2557,7 +2557,7 @@ static void intel_c1_demotion_toggle(void *enable)
 {
 	unsigned long long msr_val;
 
-	rdmsrq(MSR_PKG_CST_CONFIG_CONTROL, msr_val);
+	msr_val = rdmsrq(MSR_PKG_CST_CONFIG_CONTROL);
 	/*
 	 * Enable/disable C1 undemotion along with C1 demotion, as this is the
 	 * most sensible configuration in general.
@@ -2597,7 +2597,7 @@ static ssize_t intel_c1_demotion_show(struct device *dev,
 	 * Read the MSR value for a CPU and assume it is the same for all CPUs. Any other
 	 * configuration would be a BIOS bug.
 	 */
-	rdmsrq(MSR_PKG_CST_CONFIG_CONTROL, msr_val);
+	msr_val = rdmsrq(MSR_PKG_CST_CONFIG_CONTROL);
 	return sysfs_emit(buf, "%d\n", !!(msr_val & NHM_C1_AUTO_DEMOTE));
 }
 static DEVICE_ATTR_RW(intel_c1_demotion);

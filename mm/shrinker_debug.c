@@ -84,6 +84,11 @@ static int shrinker_debugfs_count_show(struct seq_file *m, void *v)
 			ret = -EINTR;
 			break;
 		}
+
+		if (seq_has_overflowed(m)) {
+			mem_cgroup_iter_break(NULL, memcg);
+			break;
+		}
 	} while ((memcg = mem_cgroup_iter(NULL, memcg, NULL)) != NULL);
 
 	kfree(count_per_node);

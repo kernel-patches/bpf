@@ -7,6 +7,7 @@
 #include <linux/fs.h>
 #include <linux/filelock.h>
 #include <linux/mm.h>
+#include <linux/pagemap.h>
 #include <linux/backing-dev.h>
 #include <linux/hash.h>
 #include <linux/swap.h>
@@ -79,7 +80,7 @@ static long get_nr_inodes(void)
 	int i;
 	long sum = 0;
 	for_each_possible_cpu(i)
-		sum += per_cpu(nr_inodes, i);
+		sum += data_race(per_cpu(nr_inodes, i));
 	return sum < 0 ? 0 : sum;
 }
 

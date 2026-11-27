@@ -403,8 +403,20 @@ static void fuse_init_submount_lookup(struct fuse_submount_lookup *sl,
 	refcount_set(&sl->count, 1);
 }
 
+/*
+ * Address space operations for an inode backed by a passthrough extent map on
+ * a dax device.  Such an inode never uses the page cache: FOPEN_PASSTHROUGH is
+ * mandatory for a dax inode (see fuse_file_io_open()), so all I/O goes through
+ * the passthrough handlers and none of the generic page cache helpers can be
+ * reached.  That is why there's no ->read_folio here.
+ *
+ * ->direct_IO is never called for the same reason, but the pointer still needs
+ * to be non-NULL, because that's what do_dentry_open() and fcntl() look at to
+ * decide whether O_DIRECT is allowed on the file.
+ */
 static const struct address_space_operations fuse_dax_aops = {
 	.dirty_folio	= noop_dirty_folio,
+	.direct_IO	= noop_direct_IO,
 };
 
 static void fuse_init_inode(struct inode *inode, struct fuse_attr *attr,
@@ -451,6 +463,12 @@ static void fuse_init_inode(struct inode *inode, struct fuse_attr *attr,
 	 */
 	if (!fc->posix_acl)
 		inode->i_acl = inode->i_default_acl = ACL_DONT_CACHE;
+	/*
+	 * Whether the kernel or the server decides who may change POSIX ACLs
+	 * depends on default_permissions which FUSE_POSIX_ACL turns on during
+	 * FUSE_INIT. So fuse_set_acl() does the owner check, not the vfs.
+	 */
+	inode->i_opflags |= IOP_SET_ACL_OWNER_CHECK;
 }
 
 static int fuse_inode_eq(struct inode *inode, void *_nodeidp)
@@ -1674,6 +1692,7 @@ static void fuse_sb_defaults(struct super_block *sb)
 	sb->s_iflags |= SB_I_IMA_UNVERIFIABLE_SIGNATURE;
 	sb->s_iflags |= SB_I_NOIDMAP;
 	sb->s_iflags |= SB_I_NO_DATA_INTEGRITY;
+	sb->s_iflags |= SB_I_NO_ATOMIC_MKDIR;
 	if (sb->s_user_ns != &init_user_ns)
 		sb->s_iflags |= SB_I_UNTRUSTED_MOUNTER;
 	sb->s_flags &= ~(SB_NOSEC | SB_I_VERSION);

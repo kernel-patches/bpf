@@ -721,6 +721,12 @@ sbc_check_prot(struct se_device *dev, struct se_cmd *cmd, unsigned char protect,
 	if (sbc_set_prot_op_checks(protect, fabric_prot, pi_prot_type, is_write, cmd))
 		return TCM_INVALID_CDB_FIELD;
 
+	if (!sectors) {
+		cmd->prot_op = TARGET_PROT_NORMAL;
+		cmd->prot_checks = 0;
+		pi_prot_type = TARGET_DIF_TYPE0_PROT;
+	}
+
 	cmd->prot_type = pi_prot_type;
 	cmd->prot_length = dev->prot_length * sectors;
 

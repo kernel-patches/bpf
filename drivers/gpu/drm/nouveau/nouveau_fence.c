@@ -216,10 +216,10 @@ nouveau_fence_emit(struct nouveau_fence *fence)
 
 	if (priv->uevent)
 		dma_fence_init(&fence->base, &nouveau_fence_ops_uevent,
-			       &fctx->lock, fctx->context, ++fctx->sequence);
+			       &fctx->lock, fctx->context, ++fctx->sequence, 0);
 	else
 		dma_fence_init(&fence->base, &nouveau_fence_ops_legacy,
-			       &fctx->lock, fctx->context, ++fctx->sequence);
+			       &fctx->lock, fctx->context, ++fctx->sequence, 0);
 	kref_get(&fctx->fence_ref);
 
 	ret = fctx->emit(fence);

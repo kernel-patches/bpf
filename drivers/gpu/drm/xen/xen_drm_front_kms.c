@@ -451,7 +451,9 @@ int xen_drm_front_kms_init(struct xen_drm_front_drm_info *drm_info)
 		}
 	}
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ret;
 	drm_kms_helper_poll_init(dev);
 	return 0;
 }

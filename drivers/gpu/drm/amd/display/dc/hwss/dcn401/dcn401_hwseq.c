@@ -169,15 +169,11 @@ void dcn401_init_hw(struct dc *dc)
 	//}
 
 	// Set default OPTC memory power states
-	if (dc->debug.enable_mem_low_power.bits.optc) {
-		// Shutdown when unassigned and light sleep in VBLANK
-		REG_SET_2(ODM_MEM_PWR_CTRL3, 0, ODM_MEM_UNASSIGNED_PWR_MODE, 3, ODM_MEM_VBLANK_PWR_MODE, 1);
-	}
+	if (dc->debug.enable_mem_low_power.bits.optc)
+		dcn401_init_odm_mem_power(hws);
 
-	if (dc->debug.enable_mem_low_power.bits.vga) {
-		// Power down VGA memory
-		REG_UPDATE(MMHUBBUB_MEM_PWR_CNTL, VGA_MEM_PWR_FORCE, 1);
-	}
+	if (dc->debug.enable_mem_low_power.bits.vga)
+		dcn401_power_down_vga_mem(hws);
 
 	if (dc->ctx->dc_bios->fw_info_valid) {
 		res_pool->ref_clocks.xtalin_clock_inKhz =
@@ -367,7 +363,7 @@ void dcn401_init_hw(struct dc *dc)
 		if (dc->res_pool->dccg && dc->res_pool->dccg->funcs && dc->res_pool->dccg->funcs->allow_clock_gating)
 			dc->res_pool->dccg->funcs->allow_clock_gating(dc->res_pool->dccg, true);
 
-		REG_UPDATE(DCFCLK_CNTL, DCFCLK_GATE_DIS, 0);
+		dcn401_dcfclk_gating_control(hws, true);
 	}
 
 	dcn401_setup_hpo_hw_control(hws, true);
@@ -972,6 +968,22 @@ void dcn401_setup_hpo_hw_control(const struct dce_hwseq *hws, bool enable)
 	REG_UPDATE(HPO_TOP_HW_CONTROL, HPO_IO_EN, enable);
 }
 
+void dcn401_init_odm_mem_power(struct dce_hwseq *hws)
+{
+	// Shutdown when unassigned and light sleep in VBLANK
+	REG_SET_2(ODM_MEM_PWR_CTRL3, 0, ODM_MEM_UNASSIGNED_PWR_MODE, 3, ODM_MEM_VBLANK_PWR_MODE, 1);
+}
+
+void dcn401_power_down_vga_mem(struct dce_hwseq *hws)
+{
+	REG_UPDATE(MMHUBBUB_MEM_PWR_CNTL, VGA_MEM_PWR_FORCE, 1);
+}
+
+void dcn401_dcfclk_gating_control(struct dce_hwseq *hws, bool enable)
+{
+	REG_UPDATE(DCFCLK_CNTL, DCFCLK_GATE_DIS, !enable);
+}
+
 void adjust_hotspot_between_slices_for_2x_magnify(uint32_t cursor_width, struct dc_cursor_position *pos_cpy)
 {
 	if (cursor_width <= 128) {
@@ -1409,6 +1421,8 @@ void dcn401_prepare_bandwidth(struct dc *dc,
 	struct hubbub *hubbub = dc->res_pool->hubbub;
 	bool p_state_change_support = context->bw_ctx.bw.dcn.clk.p_state_change_support;
 	unsigned int compbuf_size = 0;
+	struct hubbub_program_watermarks_params wm;
+	struct hubbub_program_arbiter_params arb;
 
 	/* Any transition into P-State support should disable MCLK switching first to avoid hangs */
 	if (p_state_change_support) {
@@ -1434,26 +1448,35 @@ void dcn401_prepare_bandwidth(struct dc *dc,
 	 * For assigning optimized_required, use |= operator since we don't want
 	 * to clear the value if the optimize has not happened yet
 	 */
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub,
+			&context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, false);
 	dc->optimized_required |= hubbub->funcs->program_watermarks(hubbub,
-					&context->bw_ctx.bw.dcn.watermarks,
-					dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-					false);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 	/* update timeout thresholds */
 	if (hubbub->funcs->program_arbiter) {
-		dc->optimized_required |= hubbub->funcs->program_arbiter(hubbub, &context->bw_ctx.bw.dcn.arb_regs, false);
+		arb = hwss_prepare_hubbub_program_arbiter(hubbub,
+				&context->bw_ctx.bw.dcn.arb_regs, false);
+		dc->optimized_required |= hubbub->funcs->program_arbiter(hubbub,
+				arb.pstate_stall_threshold,
+				arb.allow_sdpif_rate_limit_when_cstate_req, arb.safe_to_lower);
 	}
 
 	/* decrease compbuf size */
 	if (hubbub->funcs->program_compbuf_segments) {
 		compbuf_size = context->bw_ctx.bw.dcn.arb_regs.compbuf_size;
-		dc->optimized_required |= (compbuf_size != dc->current_state->bw_ctx.bw.dcn.arb_regs.compbuf_size);
+		dc->optimized_required |= (compbuf_size !=
+				dc->current_state->bw_ctx.bw.dcn.arb_regs.compbuf_size);
 
 		hubbub->funcs->program_compbuf_segments(hubbub, compbuf_size, false);
 	}
 
 	if (dc->debug.fams2_config.bits.enable) {
+		struct dc_dmub_fams2_config_data fams2_data;
+
 		dcn401_dmub_hw_control_lock(dc, context, true);
-		dcn401_fams2_update_config(dc, context, false);
+		if (dcn401_fams2_build_update_config(dc, context, false, &fams2_data))
+			dc_dmub_srv_fams2_update_config(dc->ctx->dmub_srv, &fams2_data);
 		dcn401_dmub_hw_control_lock(dc, context, false);
 	}
 
@@ -1474,7 +1497,7 @@ void dcn401_prepare_bandwidth_sequence(struct dc *dc,
 
 	/* Any transition into P-State support should disable MCLK switching first to avoid hangs */
 	if (p_state_change_support) {
-		dc->optimized_required = true;
+		hwss_add_dc_set_optimized_required(seq_state, true);
 		context->bw_ctx.bw.dcn.clk.p_state_change_support = false;
 	}
 
@@ -1495,20 +1518,21 @@ void dcn401_prepare_bandwidth_sequence(struct dc *dc,
 					false);
 
 	if (hubbub->funcs->program_arbiter)
-		hwss_add_hubbub_program_arbiter(seq_state, dc, hubbub,
+		hwss_add_hubbub_program_arbiter(seq_state, hubbub,
 				&context->bw_ctx.bw.dcn.arb_regs, false);
 
 	if (hubbub->funcs->program_compbuf_segments) {
 		compbuf_size = context->bw_ctx.bw.dcn.arb_regs.compbuf_size;
-		dc->optimized_required |= (compbuf_size != dc->current_state->bw_ctx.bw.dcn.arb_regs.compbuf_size);
+		if (compbuf_size != dc->current_state->bw_ctx.bw.dcn.arb_regs.compbuf_size)
+			hwss_add_dc_set_optimized_required(seq_state, true);
 
 		hwss_add_hubbub_program_compbuf_segments(seq_state, hubbub, compbuf_size, false);
 	}
 
 	if (dc->debug.fams2_config.bits.enable) {
-		dcn401_dmub_hw_control_lock(dc, context, true);
-		dcn401_fams2_update_config(dc, context, false);
-		dcn401_dmub_hw_control_lock(dc, context, false);
+		hwss_add_dmub_hw_control_lock_fast(seq_state, dc, true);
+		hwss_add_dmub_fams2_update_config(seq_state, dc, context, false);
+		hwss_add_dmub_hw_control_lock_fast(seq_state, dc, false);
 	}
 
 	if (p_state_change_support != context->bw_ctx.bw.dcn.clk.p_state_change_support)
@@ -1521,22 +1545,31 @@ void dcn401_optimize_bandwidth(
 {
 	unsigned int i;
 	struct hubbub *hubbub = dc->res_pool->hubbub;
+	struct hubbub_program_watermarks_params wm;
+	struct hubbub_program_arbiter_params arb;
 
 	/* enable fams2 if needed */
 	if (dc->debug.fams2_config.bits.enable) {
+		struct dc_dmub_fams2_config_data fams2_data;
+
 		dcn401_dmub_hw_control_lock(dc, context, true);
-		dcn401_fams2_update_config(dc, context, true);
+		if (dcn401_fams2_build_update_config(dc, context, true, &fams2_data))
+			dc_dmub_srv_fams2_update_config(dc->ctx->dmub_srv, &fams2_data);
 		dcn401_dmub_hw_control_lock(dc, context, false);
 	}
 
 	/* program dchubbub watermarks */
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub,
+			&context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, true);
 	hubbub->funcs->program_watermarks(hubbub,
-					&context->bw_ctx.bw.dcn.watermarks,
-					dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-					true);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 	/* update timeout thresholds */
 	if (hubbub->funcs->program_arbiter) {
-		hubbub->funcs->program_arbiter(hubbub, &context->bw_ctx.bw.dcn.arb_regs, true);
+		arb = hwss_prepare_hubbub_program_arbiter(hubbub,
+				&context->bw_ctx.bw.dcn.arb_regs, true);
+		hubbub->funcs->program_arbiter(hubbub, arb.pstate_stall_threshold,
+				arb.allow_sdpif_rate_limit_when_cstate_req, arb.safe_to_lower);
 	}
 
 	if (dc->clk_mgr->dc_mode_softmax_enabled) {
@@ -1582,9 +1615,9 @@ void dcn401_optimize_bandwidth_sequence(struct dc *dc,
 
 	/* enable fams2 if needed */
 	if (dc->debug.fams2_config.bits.enable) {
-		dcn401_dmub_hw_control_lock(dc, context, true);
-		dcn401_fams2_update_config(dc, context, true);
-		dcn401_dmub_hw_control_lock(dc, context, false);
+		hwss_add_dmub_hw_control_lock_fast(seq_state, dc, true);
+		hwss_add_dmub_fams2_update_config(seq_state, dc, context, true);
+		hwss_add_dmub_hw_control_lock_fast(seq_state, dc, false);
 	}
 
 	hwss_add_hubbub_program_watermarks(seq_state, dc, hubbub,
@@ -1593,7 +1626,7 @@ void dcn401_optimize_bandwidth_sequence(struct dc *dc,
 					true);
 
 	if (hubbub->funcs->program_arbiter)
-		hwss_add_hubbub_program_arbiter(seq_state, dc, hubbub,
+		hwss_add_hubbub_program_arbiter(seq_state, hubbub,
 				&context->bw_ctx.bw.dcn.arb_regs, true);
 
 	if (dc->clk_mgr->dc_mode_softmax_enabled)
@@ -1641,20 +1674,34 @@ bool dcn401_is_dmub_hw_lock_supported(const struct dc *dc)
 	return dc && dc->ctx && dc->ctx->dmub_srv && dc->ctx->dmub_srv->dmub;
 }
 
-void dcn401_fams2_update_config(struct dc *dc, struct dc_state *context, bool enable)
+/* Returns false when there is nothing to send. */
+bool dcn401_fams2_build_update_config(struct dc *dc, struct dc_state *context, bool enable,
+		struct dc_dmub_fams2_config_data *data)
 {
-	bool fams2_info_required;
-	bool fams2_enabled;
-	bool fams2_legacy_no_fams2;
+	memset(data, 0, sizeof(*data));
 
 	if (!dc->ctx || !dc->ctx->dmub_srv || !dc->debug.fams2_config.bits.enable)
-		return;
+		return false;
 
-	fams2_enabled = context->bw_ctx.bw.dcn.fams2_global_config.features.bits.enable != 0u;
-	fams2_legacy_no_fams2 = context->bw_ctx.bw.dcn.fams2_global_config.features.bits.legacy_method_no_fams2 != 0u;
-	fams2_info_required = fams2_enabled || fams2_legacy_no_fams2;
+	data->fams_version_major = dc->debug.fams_version.major;
+	data->features = dc->debug.fams2_config;
+	data->imm_restore_drr = dc->debug.fams2_imm_restore_drr;
+	data->visual_confirm = dc->debug.visual_confirm == VISUAL_CONFIRM_FAMS2;
 
-	dc_dmub_srv_fams2_update_config(dc, context, enable && fams2_info_required);
+	if (context) {
+		const struct dmub_cmd_fams2_global_config *global =
+			&context->bw_ctx.bw.dcn.fams2_global_config;
+		bool fams2_info_required = global->features.bits.enable != 0u ||
+				global->features.bits.legacy_method_no_fams2 != 0u;
+
+		data->global = *global;
+		data->stream_base = context->bw_ctx.bw.dcn.fams2_stream_base_params;
+		data->stream_sub = context->bw_ctx.bw.dcn.fams2_stream_sub_params;
+		data->stream_sub_v2 = context->bw_ctx.bw.dcn.fams2_stream_sub_params_v2;
+		data->enable = enable && fams2_info_required;
+	}
+
+	return true;
 }
 
 static void update_dsc_for_odm_change(struct dc *dc, struct dc_state *context,
@@ -1781,7 +1828,8 @@ static void dcn401_add_dsc_sequence_for_odm_change(struct dc *dc, struct dc_stat
 	if (otg_master->stream_res.dsc && otg_master->stream->timing.flags.DSC) {
 		if (!hwss_add_dsc_sequence_for_stream(seq_state, otg_master,
 				otg_master->dsc_padding_params.dsc_hactive_padding, NULL)) {
-			ASSERT(false);
+			/* DSC sequence is deliberately skipped while the stream is dpms off */
+			ASSERT(otg_master->stream->dpms_off);
 			return;
 		}
 	} else if (otg_master->stream_res.dsc && !otg_master->stream->timing.flags.DSC) {
@@ -1903,9 +1951,11 @@ void dcn401_unblank_stream(struct pipe_ctx *pipe_ctx,
 
 void dcn401_hardware_release(struct dc *dc)
 {
+	struct dc_dmub_fams2_config_data fams2_data;
+
 	if (!dc->debug.disable_force_pstate_allow_on_hw_release) {
-		if (dc->ctx->dmub_srv && dc->debug.fams2_config.bits.enable)
-			dc_dmub_srv_fams2_update_config(dc, dc->current_state, false);
+		if (dcn401_fams2_build_update_config(dc, dc->current_state, false, &fams2_data))
+			dc_dmub_srv_fams2_update_config(dc->ctx->dmub_srv, &fams2_data);
 
 		/* If pstate unsupported, or still supported
 		* by firmware, force it supported by dcn
@@ -1926,8 +1976,8 @@ void dcn401_hardware_release(struct dc *dc)
 			dc->clk_mgr->funcs->update_clocks(dc->clk_mgr, dc->current_state, true);
 		}
 
-		if (dc->ctx->dmub_srv && dc->debug.fams2_config.bits.enable)
-			dc_dmub_srv_fams2_update_config(dc, dc->current_state, false);
+		if (dcn401_fams2_build_update_config(dc, dc->current_state, false, &fams2_data))
+			dc_dmub_srv_fams2_update_config(dc->ctx->dmub_srv, &fams2_data);
 	}
 }
 
@@ -2541,6 +2591,7 @@ void dcn401_program_front_end_for_ctx(
 	unsigned int i;
 	unsigned int prev_hubp_count = 0;
 	unsigned int hubp_count = 0;
+	unsigned int min_ttu_vblank = UINT_MAX;
 	struct dce_hwseq *hws = dc->hwseq;
 	struct pipe_ctx *pipe = NULL;
 
@@ -2573,17 +2624,31 @@ void dcn401_program_front_end_for_ctx(
 	}
 
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
+		pipe = &context->res_ctx.pipe_ctx[i];
+
 		if (dc->current_state->res_ctx.pipe_ctx[i].plane_state)
 			prev_hubp_count++;
-		if (context->res_ctx.pipe_ctx[i].plane_state)
+		if (pipe->plane_state) {
 			hubp_count++;
+			min_ttu_vblank = min(min_ttu_vblank,
+				pipe->hubp_regs.ttu_regs.min_ttu_vblank);
+		}
 	}
 
 	if (prev_hubp_count == 0 && hubp_count > 0) {
-		if (dc->res_pool->hubbub->funcs->force_pstate_change_control)
-			dc->res_pool->hubbub->funcs->force_pstate_change_control(
-				dc->res_pool->hubbub, true, false);
-		udelay(500);
+		struct hubbub *hubbub = dc->res_pool->hubbub;
+		unsigned int pstate_wm_a;
+
+		/* WM_A is only raised in prepare_bandwidth, so HW holds the max of old and new */
+		pstate_wm_a = max(context->bw_ctx.bw.dcn.watermarks.dcn4x.a.uclk_pstate,
+			dc->current_state->bw_ctx.bw.dcn.watermarks.dcn4x.a.uclk_pstate);
+
+		/* MIN_TTU_VBLANK and UCLK_PSTATE_CHANGE_WATERMARK_A are both in refclk cycles */
+		if (min_ttu_vblank < pstate_wm_a) {
+			if (hubbub->funcs->force_pstate_change_control)
+				hubbub->funcs->force_pstate_change_control(hubbub, true, false);
+			udelay(500);
+		}
 	}
 
 	/* Set pipe update flags and lock pipes */
@@ -2703,6 +2768,17 @@ void dcn401_program_front_end_for_ctx(
 				dc->current_state->stream_status[0].plane_count == 1 &&
 				context->stream_status[0].plane_count > 1) {
 			pipe->plane_res.hubp->funcs->hubp_wait_pipe_read_start(pipe->plane_res.hubp);
+		}
+	}
+
+	/* Debug (DM SystemDisplayEnable, driver disabled): force solid-color DPG
+	 * output last, after all normal pipe/OPP programming, so it isn't overwritten.
+	 */
+	if (dc->debug.force_dpg_on_flip && hws->funcs.blank_pixel_data) {
+		for (i = 0; i < dc->res_pool->pipe_count; i++) {
+			pipe = &context->res_ctx.pipe_ctx[i];
+			if (resource_is_pipe_type(pipe, OTG_MASTER))
+				hws->funcs.blank_pixel_data(dc, pipe, true);
 		}
 	}
 }
@@ -3115,10 +3191,11 @@ void dcn401_plane_atomic_power_down(struct dc *dc,
 	}
 
 	if (hws->funcs.dpp_pg_control)
-		hws->funcs.dpp_pg_control(hws, dpp->inst, false);
+		hws->funcs.dpp_pg_control(hws, dpp, false, dc->debug.disable_dpp_power_gate);
 
 	if (hws->funcs.hubp_pg_control)
-		hws->funcs.hubp_pg_control(hws, hubp->inst, false);
+		hws->funcs.hubp_pg_control(hws, hubp->inst, false,
+				dc->debug.disable_hubp_power_gate, dc->debug.ignore_pg);
 
 	hubp->funcs->hubp_reset(hubp);
 	dpp->funcs->dpp_reset(dpp);
@@ -3130,7 +3207,8 @@ void dcn401_plane_atomic_power_down(struct dc *dc,
 	DC_LOG_DEBUG(
 			"Power gated front end %d\n", hubp->inst);
 
-	if (hws->funcs.dpp_root_clock_control)
+	if (hws->funcs.dpp_root_clock_control &&
+	    hwss_is_dpp_root_clock_control_allowed(hws, false))
 		hws->funcs.dpp_root_clock_control(hws, dpp->inst, false);
 }
 
@@ -3184,26 +3262,41 @@ void dcn401_update_cursor_offload_pipe(struct dmub_srv *dmub, uint32_t stream_id
 	cs->offload_streams[stream_idx].payloads[payload_idx].pipe_mask |= (1u << pipe_idx);
 }
 
+bool dcn401_pg_needs_ip_request(const struct dc *dc)
+{
+	const struct dce_hwseq *hws = dc->hwseq;
+
+	/* The status step and the pair need both hooks. */
+	ASSERT(!hws->funcs.dc_ip_request_cntl == !hws->funcs.dc_ip_request_status);
+	if (!hws->funcs.dc_ip_request_cntl || !hws->funcs.dc_ip_request_status)
+		return false;
+
+	/* dcn32_hubp_pg_control, bound on DCN401, also honors ignore_pg. */
+	return (hws->funcs.dpp_pg_control && !dc->debug.disable_dpp_power_gate) ||
+		(hws->funcs.hubp_pg_control && !dc->debug.disable_hubp_power_gate &&
+		 !dc->debug.ignore_pg);
+}
+
 void dcn401_plane_atomic_power_down_sequence(struct dc *dc,
 		struct dpp *dpp,
 		struct hubp *hubp,
 		struct block_sequence_state *seq_state)
 {
 	struct dce_hwseq *hws = dc->hwseq;
-	uint32_t org_ip_request_cntl = 0;
+	bool ip_request = false;
 
-	/* Check and set DC_IP_REQUEST_CNTL if needed */
-	if (REG(DC_IP_REQUEST_CNTL)) {
-		REG_GET(DC_IP_REQUEST_CNTL, IP_REQUEST_EN, &org_ip_request_cntl);
-		if (org_ip_request_cntl == 0)
-			hwss_add_dc_ip_request_cntl(seq_state, dc, true);
-	}
+	if (dcn401_pg_needs_ip_request(dc))
+		ip_request = hwss_add_dc_ip_request_status(seq_state, hws);
+
+	if (ip_request)
+		hwss_add_dc_ip_request_cntl(seq_state, dc, true);
 
 	/* DPP power gating control */
-	hwss_add_dpp_pg_control(seq_state, hws, dpp->inst, false);
+	hwss_add_dpp_pg_control(seq_state, hws, dpp, false, dc->debug.disable_dpp_power_gate);
 
 	/* HUBP power gating control */
-	hwss_add_hubp_pg_control(seq_state, hws, hubp->inst, false);
+	hwss_add_hubp_pg_control(seq_state, hws, hubp->inst, false,
+			dc->debug.disable_hubp_power_gate, dc->debug.ignore_pg);
 
 	/* HUBP reset */
 	hwss_add_hubp_reset(seq_state, hubp);
@@ -3211,8 +3304,7 @@ void dcn401_plane_atomic_power_down_sequence(struct dc *dc,
 	/* DPP reset */
 	hwss_add_dpp_reset(seq_state, dpp);
 
-	/* Restore DC_IP_REQUEST_CNTL if it was originally 0 */
-	if (org_ip_request_cntl == 0 && REG(DC_IP_REQUEST_CNTL))
+	if (ip_request)
 		hwss_add_dc_ip_request_cntl(seq_state, dc, false);
 
 	DC_LOG_DEBUG("Power gated front end %d\n", hubp->inst);
@@ -3254,7 +3346,7 @@ void dcn401_plane_atomic_disconnect_sequence(struct dc *dc,
 	}
 
 	/* Step 3: Set optimized required flag */
-	hwss_add_dc_set_optimized_required(seq_state, dc, true);
+	hwss_add_dc_set_optimized_required(seq_state, true);
 
 	/* Step 4: Disconnect HUBP if function exists */
 	if (hubp->funcs->hubp_disconnect)
@@ -3574,12 +3666,10 @@ void dcn401_post_unlock_reset_opp_sequence(
 	if (dc->hwss.wait_for_mpcc_disconnect_sequence)
 		dc->hwss.wait_for_mpcc_disconnect_sequence(dc, dc->res_pool, opp_head, seq_state);
 
-	if (dsc) {
-		bool *is_ungated = NULL;
-		/* Check DSC power gate status */
-		if (dc->hwseq && dc->hwseq->funcs.dsc_pg_status)
-			hwss_add_dsc_pg_status(seq_state, dc->hwseq, dsc->inst, false);
-
+	/* Check DSC power gate status; the result is kept in dsc->pg_ungated and
+	 * gates the steps below at execute time.
+	 */
+	if (dsc && hwss_add_dsc_pg_status(seq_state, dc->hwseq, dsc)) {
 		/* Seamless update specific where we will postpone non
 		 * double buffered DSCCLK disable logic in post unlock
 		 * sequence after DSC is disconnected from OPP but not
@@ -3587,23 +3677,49 @@ void dcn401_post_unlock_reset_opp_sequence(
 		 */
 
 		/* DSC wait disconnect pending clear */
-		hwss_add_dsc_wait_disconnect_pending_clear(seq_state, dsc, is_ungated);
+		hwss_add_dsc_wait_disconnect_pending_clear(seq_state, dsc);
 
 		/* DSC disable */
-		hwss_add_dsc_disable(seq_state, dsc, is_ungated);
+		hwss_add_dsc_disable(seq_state, dsc);
 
 		/* Set reference DSCCLK */
-		if (dccg && dccg->funcs->set_ref_dscclk)
-			hwss_add_dccg_set_ref_dscclk(seq_state, dccg, dsc->inst, 0);
+		hwss_add_dccg_set_ref_dscclk(seq_state, dccg, dsc);
 	}
 }
 
-void dcn401_dc_ip_request_cntl(struct dc *dc, bool enable)
+/*
+ * Called in pairs after dcn401_dc_ip_request_status(). Writes nothing when
+ * IP_REQUEST_EN was already 1; the disable call clears that status.
+ */
+void dcn401_dc_ip_request_cntl(struct dce_hwseq *hws, bool enable)
 {
-	struct dce_hwseq *hws = dc->hwseq;
+	bool already_enabled;
+
+	if (!hws || !hws->ctx || !hws->regs || !hws->shifts || !hws->masks)
+		return;
+
+	already_enabled = hws->ip_request_already_enabled;
+
+	if (!enable)
+		hws->ip_request_already_enabled = false;
+
+	if (already_enabled || !REG(DC_IP_REQUEST_CNTL))
+		return;
+
+	REG_SET(DC_IP_REQUEST_CNTL, 0, IP_REQUEST_EN, enable ? 1 : 0);
+}
+
+void dcn401_dc_ip_request_status(struct dce_hwseq *hws)
+{
+	uint32_t ip_request_en = 0;
+
+	if (!hws || !hws->ctx || !hws->regs || !hws->shifts || !hws->masks)
+		return;
 
 	if (REG(DC_IP_REQUEST_CNTL))
-		REG_SET(DC_IP_REQUEST_CNTL, 0, IP_REQUEST_EN, enable ? 1 : 0);
+		REG_GET(DC_IP_REQUEST_CNTL, IP_REQUEST_EN, &ip_request_en);
+
+	hws->ip_request_already_enabled = ip_request_en != 0;
 }
 
 void dcn401_enable_plane_sequence(struct dc *dc, struct pipe_ctx *pipe_ctx,
@@ -3612,32 +3728,32 @@ void dcn401_enable_plane_sequence(struct dc *dc, struct pipe_ctx *pipe_ctx,
 {
 	(void)context;
 	struct dce_hwseq *hws = dc->hwseq;
-	uint32_t org_ip_request_cntl = 0;
+	bool ip_request = false;
 
 	if (!pipe_ctx->plane_res.dpp || !pipe_ctx->plane_res.hubp || !pipe_ctx->stream_res.opp)
 		return;
-
-	if (REG(DC_IP_REQUEST_CNTL))
-		REG_GET(DC_IP_REQUEST_CNTL, IP_REQUEST_EN, &org_ip_request_cntl);
 
 	/* Step 1: DPP root clock control - enable clock */
 	if (hws->funcs.dpp_root_clock_control)
 		hwss_add_dpp_root_clock_control(seq_state, hws, pipe_ctx->plane_res.dpp->inst, true);
 
 	/* Step 2: Enable DC IP request (if needed) */
-	if (hws->funcs.dc_ip_request_cntl)
+	if (dcn401_pg_needs_ip_request(dc))
+		ip_request = hwss_add_dc_ip_request_status(seq_state, hws);
+
+	if (ip_request)
 		hwss_add_dc_ip_request_cntl(seq_state, dc, true);
 
 	/* Step 3: DPP power gating control - power on */
-	if (REG(DC_IP_REQUEST_CNTL) && hws->funcs.dpp_pg_control)
-		hwss_add_dpp_pg_control(seq_state, hws, pipe_ctx->plane_res.dpp->inst, true);
+	hwss_add_dpp_pg_control(seq_state, hws, pipe_ctx->plane_res.dpp, true,
+			dc->debug.disable_dpp_power_gate);
 
 	/* Step 4: HUBP power gating control - power on */
-	if (REG(DC_IP_REQUEST_CNTL) && hws->funcs.hubp_pg_control)
-		hwss_add_hubp_pg_control(seq_state, hws, pipe_ctx->plane_res.hubp->inst, true);
+	hwss_add_hubp_pg_control(seq_state, hws, pipe_ctx->plane_res.hubp->inst, true,
+			dc->debug.disable_hubp_power_gate, dc->debug.ignore_pg);
 
-	/* Step 5: Disable DC IP request (restore state) */
-	if (org_ip_request_cntl == 0 && hws->funcs.dc_ip_request_cntl)
+	/* Step 5: Disable DC IP request */
+	if (ip_request)
 		hwss_add_dc_ip_request_cntl(seq_state, dc, false);
 
 	/* Step 6: HUBP clock control - enable DCFCLK */

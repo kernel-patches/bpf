@@ -173,7 +173,7 @@ static void xhci_mtk_set_frame_interval(struct xhci_hcd_mtk *mtk)
 
 /*
  * workaround: usb3.2 gen1 isoc rx hw issue
- * host send out unexpected ACK afer device fininsh a burst transfer with
+ * host send out unexpected ACK after device fininsh a burst transfer with
  * a short packet.
  */
 static void xhci_mtk_rxfifo_depth_set(struct xhci_hcd_mtk *mtk)

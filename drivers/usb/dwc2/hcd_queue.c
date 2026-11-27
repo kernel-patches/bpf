@@ -1006,7 +1006,7 @@ static void dwc2_uframe_unschedule(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh)
  * dwc2_pick_first_frame() - Choose 1st frame for qh that's already scheduled
  *
  * Takes a qh that has already been scheduled (which means we know we have the
- * bandwdith reserved for us) and set the next_active_frame and the
+ * bandwidth reserved for us) and set the next_active_frame and the
  * start_active_frame.
  *
  * This is expected to be called on qh's that weren't previously actively

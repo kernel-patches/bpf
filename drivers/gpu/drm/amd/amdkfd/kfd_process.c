@@ -512,7 +512,15 @@ static const struct sysfs_ops procfs_queue_ops = {
 	.show = kfd_procfs_queue_show,
 };
 
+static void kfd_procfs_queue_release(struct kobject *kobj)
+{
+	struct queue *q = container_of(kobj, struct queue, kobj);
+
+	kfree(q);
+}
+
 static const struct kobj_type procfs_queue_type = {
+	.release = kfd_procfs_queue_release,
 	.sysfs_ops = &procfs_queue_ops,
 	.default_groups = procfs_queue_groups,
 };
@@ -552,7 +560,6 @@ int kfd_procfs_add_queue(struct queue *q)
 	if (ret < 0) {
 		pr_warn("Creating proc/<pid>/queues/%u failed",
 			q->properties.queue_id);
-		kobject_put(&q->kobj);
 		return ret;
 	}
 
@@ -697,11 +704,10 @@ static void kfd_procfs_add_sysfs_files(struct kfd_process *p)
 
 void kfd_procfs_del_queue(struct queue *q)
 {
-	if (!q || !q->process->kobj)
+	if (!q || !q->process || !q->process->kobj || !q->kobj.state_in_sysfs)
 		return;
 
 	kobject_del(&q->kobj);
-	kobject_put(&q->kobj);
 }
 
 int kfd_process_create_wq(void)
@@ -950,7 +956,8 @@ static void kfd_process_free_id(struct kfd_process *process)
 {
 	struct kfd_process *primary_process;
 
-	if (process->context_id == KFD_CONTEXT_ID_PRIMARY)
+	if (process->context_id == KFD_CONTEXT_ID_PRIMARY ||
+	    process->context_id < KFD_CONTEXT_ID_MIN)
 		return;
 
 	primary_process = kfd_lookup_process_by_mm(process->lead_thread->mm);
@@ -1019,8 +1026,6 @@ struct kfd_process *kfd_create_process(struct task_struct *thread)
 		if (ret)
 			pr_warn("Failed to create debugfs entry for the kfd_process, ret = %d\n",
 				ret);
-
-		init_waitqueue_head(&process->wait_irq_drain);
 	}
 out:
 	mutex_unlock(&kfd_processes_mutex);
@@ -1178,12 +1183,67 @@ static void kfd_process_free_outstanding_kfd_bos(struct kfd_process *p)
 
 static void kfd_process_profiler_release(struct kfd_process *p, struct kfd_process_device *pdd)
 {
+	struct amdgpu_device *adev = pdd->dev->adev;
+	int puts = 0;
+
 	mutex_lock(&pdd->dev->kfd->profiler_lock);
 	if (pdd->dev->kfd->profiler_process == p) {
 		pdd->qpd.dqm->ops.set_perfcount(pdd->qpd.dqm, 0);
 		pdd->dev->kfd->profiler_process = NULL;
+		puts++;
+	}
+	if (pdd->perfmon_clk_req) {
+		pdd->perfmon_clk_req = false;
+		puts++;
 	}
 	mutex_unlock(&pdd->dev->kfd->profiler_lock);
+
+	/*
+	 * Nothing is held on the kfd_create_process() error path, which holds
+	 * kfd_processes_mutex and so must not wait for a reset.
+	 */
+	if (!puts)
+		return;
+
+	down_read(&adev->reset_domain->sem);
+	while (puts--)
+		amdgpu_gfx_perfmon_clk_override(adev, false);
+	up_read(&adev->reset_domain->sem);
+}
+
+/* Allocate the MES process context and, in RS64 mode, its slot together. */
+int kfd_process_device_alloc_proc_ctx(struct kfd_process_device *pdd)
+{
+	struct amdgpu_device *adev = pdd->dev->adev;
+	int r;
+
+	if (pdd->proc_ctx_cpu_ptr)
+		return 0;
+
+	r = amdgpu_amdkfd_alloc_kernel_mem(adev, AMDGPU_MES_PROC_CTX_SIZE,
+					   AMDGPU_GEM_DOMAIN_GTT,
+					   &pdd->proc_ctx_bo,
+					   &pdd->proc_ctx_gpu_addr,
+					   &pdd->proc_ctx_cpu_ptr, false);
+	if (r) {
+		dev_err(adev->dev, "failed to allocate process context bo\n");
+		return r;
+	}
+	memset(pdd->proc_ctx_cpu_ptr, 0, AMDGPU_MES_PROC_CTX_SIZE);
+
+	if (!adev->mes.use_rs64mem)
+		return 0;
+
+	r = amdgpu_mes_alloc_proc_ctx_index(&adev->mes,
+					    &pdd->proc_ctx_array_index);
+	if (r) {
+		dev_err(adev->dev, "failed to allocate process context index\n");
+		amdgpu_amdkfd_free_kernel_mem(adev, &pdd->proc_ctx_bo);
+		pdd->proc_ctx_gpu_addr = 0;
+		pdd->proc_ctx_cpu_ptr = NULL;
+	}
+
+	return r;
 }
 
 static void kfd_process_destroy_pdds(struct kfd_process *p)
@@ -1235,6 +1295,7 @@ static void kfd_process_destroy_pdds(struct kfd_process *p)
 		atomic_dec(&pdd->dev->kfd->kfd_processes_count);
 		mutex_destroy(&pdd->doorbell_mutex);
 
+		kfree(pdd->vm_fault_exc_data);
 		kfree(pdd);
 		p->pdds[i] = NULL;
 	}
@@ -1421,7 +1482,7 @@ void kfd_process_notifier_release_internal(struct kfd_process *p)
 	 * back on the MES list and, once proc_ctx_bo is freed, MES would fault
 	 * on the freed process context. Retiring the context last avoids this.
 	 */
-	kfd_dbg_trap_disable(p);
+	kfd_dbg_trap_disable(p, false);
 
 	if (atomic_read(&p->debugged_process_count) > 0) {
 		struct kfd_process *target;
@@ -1431,7 +1492,7 @@ void kfd_process_notifier_release_internal(struct kfd_process *p)
 		hash_for_each_rcu(kfd_processes_table, temp, target, kfd_processes) {
 			if (target->debugger_process && target->debugger_process == p) {
 				mutex_lock_nested(&target->mutex, 1);
-				kfd_dbg_trap_disable(target);
+				kfd_dbg_trap_disable(target, true);
 				mutex_unlock(&target->mutex);
 				if (atomic_read(&p->debugged_process_count) == 0)
 					break;
@@ -1536,7 +1597,12 @@ static int kfd_process_device_init_cwsr_dgpu(struct kfd_process_device *pdd)
 	if (!dev->kfd->cwsr_enabled || !iosys_map_is_null(&qpd->cwsr_map) || !qpd->cwsr_base)
 		return 0;
 
-	if (KFD_GC_VERSION(dev) >= IP_VERSION(9, 4, 2) && !dev->adev->apu_prefer_gtt)
+	if ((KFD_GC_VERSION(dev) == IP_VERSION(9, 4, 2) ||
+	     KFD_GC_VERSION(dev) == IP_VERSION(9, 4, 3) ||
+	     KFD_GC_VERSION(dev) == IP_VERSION(9, 4, 4) ||
+	     KFD_GC_VERSION(dev) == IP_VERSION(9, 5, 0) ||
+	     KFD_GC_VERSION(dev) == IP_VERSION(12, 1, 0)) &&
+	    !dev->adev->apu_prefer_gtt)
 		flags |= KFD_IOC_ALLOC_MEM_FLAGS_VRAM;
 	else
 		flags |= KFD_IOC_ALLOC_MEM_FLAGS_GTT;
@@ -1687,6 +1753,11 @@ struct kfd_process *create_process(const struct task_struct *thread, bool primar
 	mutex_init(&process->mutex);
 	process->mm = thread->mm;
 	process->lead_thread = thread->group_leader;
+	/*
+	 * Take the reference on the lead thread before the process can be
+	 * released through kfd_process_wq_release(), which drops it again.
+	 */
+	get_task_struct(process->lead_thread);
 	process->n_pdds = 0;
 	process->queues_paused = false;
 
@@ -1736,13 +1807,17 @@ struct kfd_process *create_process(const struct task_struct *thread, bool primar
 	 */
 	if (primary) {
 		process->context_id = KFD_CONTEXT_ID_PRIMARY;
+		/*
+		 * Must be initialized before the process can be given to
+		 * kfd_process_wq_release(), which destroys it.
+		 */
+		ida_init(&process->id_table);
 		mn = mmu_notifier_get(&kfd_process_mmu_notifier_ops, process->mm);
 		if (IS_ERR(mn)) {
 			err = PTR_ERR(mn);
 			goto err_register_notifier;
 		}
 		BUG_ON(mn != &process->mmu_notifier);
-		ida_init(&process->id_table);
 	}
 
 	err = kfd_process_alloc_id(process);
@@ -1752,17 +1827,46 @@ struct kfd_process *create_process(const struct task_struct *thread, bool primar
 	}
 
 	kfd_unref_process(process);
-	get_task_struct(process->lead_thread);
 
 	INIT_WORK(&process->debug_event_workarea, debug_event_write_work_handler);
 
 	return process;
 
 err_alloc_id:
-	kfd_process_free_id(process);
 err_register_notifier:
+	/*
+	 * The process is already in kfd_processes_table, so find_process()
+	 * may have handed it out with a reference taken on it.  Unlink it
+	 * and wait for the readers that are still walking the table before
+	 * dropping the references held here: afterwards no new reference
+	 * can be taken and the ones already taken keep the process alive.
+	 * The memory is then freed by kfd_process_wq_release() when the
+	 * last reference is dropped.
+	 */
 	hash_del_rcu(&process->kfd_processes);
-	svm_range_list_fini(process);
+	synchronize_srcu(&kfd_processes_srcu);
+
+	/*
+	 * kfd_process_wq_release() frees the memory, but it does not
+	 * destroy the queue manager: on the normal path that is done by
+	 * kfd_process_notifier_release_internal(), which neither of these
+	 * two error paths can reach, because no mmu notifier was
+	 * registered for the process.  The process is unlinked and no
+	 * reader can reach the pqm any more, so destroy it here, before
+	 * the references are dropped.
+	 */
+	pqm_uninit(&process->pqm);
+
+	/*
+	 * Drop the reference that keeps a failing free_notifier() from
+	 * starting kfd_process_wq_release() and the one taken by
+	 * kref_init().
+	 */
+	kfd_unref_process(process);
+	kfd_unref_process(process);
+
+	return ERR_PTR(err);
+
 err_init_svm_range_list:
 	kfd_process_free_outstanding_kfd_bos(process);
 	kfd_process_destroy_pdds(process);
@@ -1772,6 +1876,7 @@ err_process_pqm_init:
 	kfd_event_free_process(process);
 err_event_init:
 	mutex_destroy(&process->mutex);
+	put_task_struct(process->lead_thread);
 	kfree(process);
 err_alloc_process:
 	return ERR_PTR(err);
@@ -1913,6 +2018,39 @@ err_reserve_ib_mem:
 }
 
 /*
+ * Keep the device out of runtime suspend until the pdd is destroyed. Unlike
+ * kfd_bind_process_to_device(), this doesn't need a VM on the device.
+ *
+ * Assumes that the process lock is held.
+ */
+int kfd_process_device_runtime_get(struct kfd_process_device *pdd)
+{
+	struct device *dev = adev_to_drm(pdd->dev->adev)->dev;
+	int err;
+
+	/*
+	 * make sure that runtime_usage counter is incremented just once
+	 * per pdd
+	 */
+	if (pdd->runtime_inuse)
+		return 0;
+
+	/*
+	 * signal runtime-pm system to auto resume and prevent
+	 * further runtime suspend once device pdd is created until
+	 * pdd is destroyed.
+	 */
+	err = pm_runtime_get_sync(dev);
+	if (err < 0) {
+		pm_runtime_put_autosuspend(dev);
+		return err;
+	}
+	pdd->runtime_inuse = true;
+
+	return 0;
+}
+
+/*
  * Direct the IOMMU to bind the process (specifically the pasid->mm)
  * to the device.
  * Unbinding occurs when the process dies or the device is removed.
@@ -1934,24 +2072,9 @@ struct kfd_process_device *kfd_bind_process_to_device(struct kfd_node *dev,
 	if (!pdd->drm_priv)
 		return ERR_PTR(-ENODEV);
 
-	/*
-	 * signal runtime-pm system to auto resume and prevent
-	 * further runtime suspend once device pdd is created until
-	 * pdd is destroyed.
-	 */
-	if (!pdd->runtime_inuse) {
-		err = pm_runtime_get_sync(adev_to_drm(dev->adev)->dev);
-		if (err < 0) {
-			pm_runtime_put_autosuspend(adev_to_drm(dev->adev)->dev);
-			return ERR_PTR(err);
-		}
-	}
-
-	/*
-	 * make sure that runtime_usage counter is incremented just once
-	 * per pdd
-	 */
-	pdd->runtime_inuse = true;
+	err = kfd_process_device_runtime_get(pdd);
+	if (err)
+		return ERR_PTR(err);
 
 	return pdd;
 }
@@ -2315,17 +2438,14 @@ int kfd_resume_all_processes(void)
 	return ret;
 }
 
-/* assumes caller holds process lock. */
-int kfd_process_drain_interrupts(struct kfd_process_device *pdd)
+void kfd_process_drain_interrupts(struct kfd_process_device *pdd)
 {
 	uint32_t irq_drain_fence[8];
 	uint8_t node_id = 0;
-	int r = 0;
+	int r;
 
-	if (!KFD_IS_SOC15(pdd->dev))
-		return 0;
-
-	pdd->process->irq_drain_is_open = true;
+	if (!KFD_IS_SOC15(pdd->dev) || !pdd->drm_priv)
+		return;
 
 	memset(irq_drain_fence, 0, sizeof(irq_drain_fence));
 	irq_drain_fence[0] = (KFD_IRQ_FENCE_SOURCEID << 8) |
@@ -2344,32 +2464,12 @@ int kfd_process_drain_interrupts(struct kfd_process_device *pdd)
 	}
 
 	/* ensure stale irqs scheduled KFD interrupts and send drain fence. */
-	if (amdgpu_amdkfd_send_close_event_drain_irq(pdd->dev->adev,
-						     irq_drain_fence)) {
-		pdd->process->irq_drain_is_open = false;
-		return 0;
-	}
-
-	r = wait_event_interruptible(pdd->process->wait_irq_drain,
-				     !READ_ONCE(pdd->process->irq_drain_is_open));
+	r = amdgpu_pasid_drain_irq(pdd->dev->adev, pdd->pasid, irq_drain_fence,
+				   AMDGPU_FENCE_JIFFIES_TIMEOUT);
 	if (r)
-		pdd->process->irq_drain_is_open = false;
-
-	return r;
-}
-
-void kfd_process_close_interrupt_drain(unsigned int pasid)
-{
-	struct kfd_process *p;
-
-	p = kfd_lookup_process_by_pasid(pasid, NULL);
-
-	if (!p)
-		return;
-
-	WRITE_ONCE(p->irq_drain_is_open, false);
-	wake_up_all(&p->wait_irq_drain);
-	kfd_unref_process(p);
+		dev_warn_ratelimited(pdd->dev->adev->dev,
+				     "irq drain on pasid 0x%x did not complete (%d)\n",
+				     pdd->pasid, r);
 }
 
 struct send_exception_work_handler_workarea {

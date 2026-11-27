@@ -726,8 +726,8 @@ static void con_scroll(struct vc_data *vc, unsigned int top,
 		return;
 
 	vc_uniscr_scroll(vc, top, bottom, dir, nr);
-	if (con_is_visible(vc) &&
-			vc->vc_sw->con_scroll(vc, top, bottom, dir, nr))
+	if (con_should_update(vc) &&
+	    vc->vc_sw->con_scroll(vc, top, bottom, dir, nr))
 		return;
 
 	src = clear = (u16 *)(vc->vc_origin + vc->vc_size_row * top);
@@ -3488,7 +3488,8 @@ static void console_callback(struct work_struct *ignored)
 	if (scrollback_delta) {
 		struct vc_data *vc = vc_cons[fg_console].d;
 		clear_selection();
-		if (vc->vc_mode == KD_TEXT && vc->vc_sw->con_scrolldelta)
+		if (con_should_update(vc) && vc->vc_mode == KD_TEXT &&
+		    vc->vc_sw->con_scrolldelta)
 			vc->vc_sw->con_scrolldelta(vc, scrollback_delta);
 		scrollback_delta = 0;
 	}

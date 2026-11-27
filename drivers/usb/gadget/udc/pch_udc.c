@@ -53,7 +53,7 @@
 #define UDC_EPCTL_F			(1 << 1)
 #define UDC_EPCTL_S			(1 << 0)
 #define UDC_EPCTL_ET_SHIFT		4
-/* Mask patern */
+/* Mask pattern */
 #define UDC_EPCTL_ET_MASK		0x00000030
 /* Value for ET field */
 #define UDC_EPCTL_ET_CONTROL		0
@@ -73,7 +73,7 @@
 #define UDC_EPSTS_BNA			(1 << 7)
 #define UDC_EPSTS_IN			(1 << 6)
 #define UDC_EPSTS_OUT_SHIFT		4
-/* Mask patern */
+/* Mask pattern */
 #define UDC_EPSTS_OUT_MASK		0x00000030
 #define UDC_EPSTS_ALL_CLR_MASK		0x1F0006F0
 /* Value for OUT field */
@@ -110,7 +110,7 @@
 #define UDC_DEVSTS_ALT_SHIFT		8
 #define UDC_DEVSTS_INTF_SHIFT		4
 #define UDC_DEVSTS_CFG_SHIFT		0
-/* Mask patern */
+/* Mask pattern */
 #define UDC_DEVSTS_TS_MASK		0xfffc0000
 #define UDC_DEVSTS_ENUM_SPEED_MASK	0x00006000
 #define UDC_DEVSTS_ALT_MASK		0x00000f00
@@ -132,7 +132,7 @@
 #define UDC_DEVINT_ES			(1 << 2)
 #define UDC_DEVINT_SI			(1 << 1)
 #define UDC_DEVINT_SC			(1 << 0)
-/* Mask patern */
+/* Mask pattern */
 #define UDC_DEVINT_MSK			0x7f
 
 /* Endpoint irq register */
@@ -141,7 +141,7 @@
 #define UDC_EPINT_OUT_SHIFT		16
 #define UDC_EPINT_IN_EP0		(1 << 0)
 #define UDC_EPINT_OUT_EP0		(1 << 16)
-/* Mask patern */
+/* Mask pattern */
 #define UDC_EPINT_MSK_DISABLE_ALL	0xffffffff
 
 /* UDC_CSR_BUSY Status register */
@@ -162,7 +162,7 @@
 #define UDC_CSR_NE_INTF_SHIFT		11
 #define UDC_CSR_NE_ALT_SHIFT		15
 #define UDC_CSR_NE_MAX_PKT_SHIFT	19
-/* Mask patern */
+/* Mask pattern */
 #define UDC_CSR_NE_NUM_MASK		0x0000000f
 #define UDC_CSR_NE_DIR_MASK		0x00000010
 #define UDC_CSR_NE_TYPE_MASK		0x00000060
@@ -296,7 +296,7 @@ struct pch_udc_ep {
 };
 
 /**
- * struct pch_vbus_gpio_data - Structure holding GPIO informaton
+ * struct pch_vbus_gpio_data - Structure holding GPIO information
  *					for detecting VBUS
  * @port:		gpio descriptor for the VBUS GPIO
  * @intr:		gpio interrupt number
@@ -319,7 +319,7 @@ struct pch_vbus_gpio_data {
  * @ep:			array of endpoints
  * @lock:		protects all state
  * @stall:		stall requested
- * @prot_stall:		protcol stall requested
+ * @prot_stall:		protocol stall requested
  * @suspended:		driver in suspended state
  * @connected:		gadget driver associated
  * @vbus_session:	required vbus_session state
@@ -332,7 +332,7 @@ struct pch_vbus_gpio_data {
  * @base_addr:		for mapped device memory
  * @bar:		PCI BAR used for mapped device memory
  * @cfg_data:		current cfg, intf, and alt in use
- * @vbus_gpio:		GPIO informaton for detecting VBUS
+ * @vbus_gpio:		GPIO information for detecting VBUS
  */
 struct pch_udc_dev {
 	struct usb_gadget		gadget;
@@ -846,7 +846,7 @@ static inline u32 pch_udc_read_ep_interrupts(struct pch_udc_dev *dev)
 }
 
 /**
- * pch_udc_write_ep_interrupts() - Clear endpoint interupts
+ * pch_udc_write_ep_interrupts() - Clear endpoint interrupts
  * @dev:	Reference to structure of type pch_udc_regs
  * @val:	The value to be written to interrupt register
  */
@@ -1372,6 +1372,8 @@ static int pch_vbus_gpio_init(struct pch_udc_dev *dev)
 
 	dev->vbus_gpio.port = NULL;
 	dev->vbus_gpio.intr = 0;
+	INIT_WORK(&dev->vbus_gpio.irq_work_fall, pch_vbus_gpio_work_fall);
+	INIT_WORK(&dev->vbus_gpio.irq_work_rise, pch_vbus_gpio_work_rise);
 
 	/* Retrieve the GPIO line from the USB gadget device */
 	gpiod = devm_gpiod_get_optional(d, NULL, GPIOD_IN);
@@ -1380,7 +1382,6 @@ static int pch_vbus_gpio_init(struct pch_udc_dev *dev)
 	gpiod_set_consumer_name(gpiod, "pch_vbus");
 
 	dev->vbus_gpio.port = gpiod;
-	INIT_WORK(&dev->vbus_gpio.irq_work_fall, pch_vbus_gpio_work_fall);
 
 	irq_num = gpiod_to_irq(gpiod);
 	if (irq_num > 0) {
@@ -1389,8 +1390,6 @@ static int pch_vbus_gpio_init(struct pch_udc_dev *dev)
 			"vbus_detect", dev);
 		if (!err) {
 			dev->vbus_gpio.intr = irq_num;
-			INIT_WORK(&dev->vbus_gpio.irq_work_rise,
-				pch_vbus_gpio_work_rise);
 		} else {
 			pr_err("%s: can't request irq %d, err: %d\n",
 				__func__, irq_num, err);
@@ -2978,17 +2977,13 @@ static void pch_udc_shutdown(struct pci_dev *pdev)
 	pch_udc_set_disconnect(dev);
 }
 
-static void pch_udc_remove(struct pci_dev *pdev)
+static void pch_udc_cleanup(struct pch_udc_dev *dev)
 {
-	struct pch_udc_dev	*dev = pci_get_drvdata(pdev);
-
-	usb_del_gadget_udc(&dev->gadget);
-
-	/* gadget driver must not be registered */
-	if (dev->driver)
-		dev_err(&pdev->dev,
-			"%s: gadget driver still bound!!!\n", __func__);
 	/* dma pool cleanup */
+	if (dev->ep[UDC_EP0OUT_IDX].td_data)
+		dma_pool_free(dev->data_requests,
+			      dev->ep[UDC_EP0OUT_IDX].td_data,
+			      dev->ep[UDC_EP0OUT_IDX].td_data_phys);
 	dma_pool_destroy(dev->data_requests);
 
 	if (dev->stp_requests) {
@@ -2997,11 +2992,6 @@ static void pch_udc_remove(struct pci_dev *pdev)
 			dma_pool_free(dev->stp_requests,
 				dev->ep[UDC_EP0OUT_IDX].td_stp,
 				dev->ep[UDC_EP0OUT_IDX].td_stp_phys);
-		}
-		if (dev->ep[UDC_EP0OUT_IDX].td_data) {
-			dma_pool_free(dev->stp_requests,
-				dev->ep[UDC_EP0OUT_IDX].td_data,
-				dev->ep[UDC_EP0OUT_IDX].td_data_phys);
 		}
 		dma_pool_destroy(dev->stp_requests);
 	}
@@ -3013,6 +3003,23 @@ static void pch_udc_remove(struct pci_dev *pdev)
 	pch_vbus_gpio_free(dev);
 
 	pch_udc_exit(dev);
+}
+
+static void pch_udc_remove(struct pci_dev *pdev)
+{
+	struct pch_udc_dev	*dev = pci_get_drvdata(pdev);
+
+	disable_work_sync(&dev->vbus_gpio.irq_work_fall);
+	disable_work_sync(&dev->vbus_gpio.irq_work_rise);
+
+	usb_del_gadget_udc(&dev->gadget);
+
+	/* gadget driver must not be registered */
+	if (dev->driver)
+		dev_err(&pdev->dev,
+			"%s: gadget driver still bound!!!\n", __func__);
+
+	pch_udc_cleanup(dev);
 }
 
 static int __maybe_unused pch_udc_suspend(struct device *d)
@@ -3105,7 +3112,7 @@ static int pch_udc_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	return 0;
 
 finished:
-	pch_udc_remove(pdev);
+	pch_udc_cleanup(dev);
 	return retval;
 }
 

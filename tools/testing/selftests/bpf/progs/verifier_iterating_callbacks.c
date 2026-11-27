@@ -10,6 +10,20 @@ struct {
 } map SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 8);
+	__type(key, __u32);
+	__type(value, __u64);
+} percpu_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 8);
+	__type(key, __u32);
+	__type(value, __u64);
+} hash_map SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_USER_RINGBUF);
 	__uint(max_entries, 8);
 } ringbuf SEC(".maps");
@@ -45,7 +59,7 @@ SEC("?raw_tp")
 __failure __msg("R1 type=scalar expected=fp")
 int unsafe_on_2nd_iter(void *unused)
 {
-	char buf[4];
+	char buf[8];
 	struct buf_context loop_ctx = { .buf = buf };
 
 	bpf_loop(100, unsafe_on_2nd_iter_cb, &loop_ctx, 0);
@@ -94,7 +108,7 @@ static int loop_detection_cb(__u32 idx, struct num_context *ctx)
 }
 
 SEC("?raw_tp")
-__failure __msg("infinite loop detected")
+__failure __msg("loop at insn {{[0-9]+}} never exits")
 int loop_detection(void *unused)
 {
 	struct num_context loop_ctx = { .i = 0 };
@@ -246,10 +260,9 @@ int bpf_loop_iter_limit_nested(void *unused)
 	/* This makes 'c' zero, but neither clang nor verifier know it. */
 	c /= 10;
 	/* Make sure that verifier does not visit 'impossible' states:
-	 * enumerate all possible callback visit masks.
+	 * one more call of any of the callbacks gives more than that.
 	 */
-	if (a != 0 && a != 1 && a != 11 && a != 101 && a != 111 &&
-	    b != 0 && b != 1 && b != 11 && b != 101 && b != 111)
+	if (a > 111 || b > 111)
 		asm volatile ("r0 /= 0;" ::: "r0");
 	return 1000 * a + b + c;
 }
@@ -291,9 +304,66 @@ static __naked void iter_limit_bug_cb(void)
 	);
 }
 
+static __naked __noinline __used void set_flag_cb(void)
+{
+	asm volatile (
+	"r1 = 1;"
+	"*(u64 *)(r2 + 0) = r1;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all
+	);
+}
+
+/*
+ * bpf_loop() is the head of a loop whose iterations are looked at one by one, because of r1.
+ * The callback comes back to it in the same iteration, the last one included.
+ */
+SEC("socket")
+__failure __msg("frame pointer is read only")
+__naked void callback_returns_to_loop_head(void)
+{
+	asm volatile (
+	"r7 = 0;"
+	"r1 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r1 = 1;"
+	"r2 = %[set_flag_cb] ll;"
+	"r3 = r10;"
+	"r3 += -8;"
+	"r4 = 0;"
+	"1:"
+	"call %[bpf_loop];"
+	"r1 = *(u64 *)(r10 - 8);"
+	"if r1 == 0 goto 2f;"
+	"if r7 != 3 goto 2f;"
+	"r10 = 0;"
+	"2:"
+	"r7 += 1;"
+	"r1 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r1 = r7;"
+	"r2 = %[set_flag_cb] ll;"
+	"r3 = r10;"
+	"r3 += -8;"
+	"r4 = 0;"
+	"if r7 < 4 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(set_flag_cb),
+	  __imm(bpf_loop)
+	: __clobber_all
+	);
+}
+
+/*
+ * may_goto doesn't leave the loop, so it's not what stops it. The address is greater than 10:
+ * the loop spins until may_goto that the verifier adds ends the prog.
+ */
 int tmp_var;
 SEC("socket")
-__failure __msg("infinite loop detected at insn 2")
+__success __retval(0)
 __naked void jgt_imm64_and_may_goto(void)
 {
 	asm volatile ("			\
@@ -310,7 +380,7 @@ l0_%=:	.byte 0xe5; /* may_goto */	\
 }
 
 SEC("socket")
-__failure __msg("infinite loop detected at insn 1")
+__success __retval(0)
 __naked void may_goto_self(void)
 {
 	asm volatile ("			\
@@ -802,6 +872,83 @@ __naked void check_add_const_regsafe_off(void)
 	: __imm(bpf_ktime_get_ns),
 	  __imm_ptr(buf)
 	: __clobber_common);
+}
+
+struct key_ctx {
+	__u32 *key;
+};
+
+static long park_key_cb(struct bpf_map *map, __u32 *key, __u64 *value,
+			void *context)
+{
+	struct key_ctx *c = context;
+
+	c->key = key;
+	return 0;
+}
+
+/* bpf_for_each_array_elem() passes a key from its own stack frame. */
+SEC("?raw_tp")
+__failure __msg("invalid mem access 'scalar'")
+int array_park_map_key(void *ctx)
+{
+	struct key_ctx c = {};
+
+	bpf_for_each_map_elem(&map, park_key_cb, &c, 0);
+	if (c.key)
+		return *c.key;
+	return 0;
+}
+
+SEC("?raw_tp")
+__failure __msg("invalid mem access 'scalar'")
+int percpu_array_park_map_key(void *ctx)
+{
+	struct key_ctx c = {};
+
+	bpf_for_each_map_elem(&percpu_map, park_key_cb, &c, 0);
+	if (c.key)
+		return *c.key;
+	return 0;
+}
+
+/* A hash key points into the element, which outlives the callback. */
+SEC("?raw_tp")
+__success
+int hash_park_map_key(void *ctx)
+{
+	struct key_ctx c = {};
+
+	bpf_for_each_map_elem(&hash_map, park_key_cb, &c, 0);
+	if (c.key)
+		return *c.key;
+	return 0;
+}
+
+struct value_ctx {
+	__u64 *value;
+};
+
+static long park_value_cb(struct bpf_map *map, __u32 *key, __u64 *value,
+			  void *context)
+{
+	struct value_ctx *c = context;
+
+	c->value = value;
+	return 0;
+}
+
+/* Only the key is frame-scoped; the element lives until map teardown. */
+SEC("?raw_tp")
+__success
+int array_park_map_value(void *ctx)
+{
+	struct value_ctx c = {};
+
+	bpf_for_each_map_elem(&map, park_value_cb, &c, 0);
+	if (c.value)
+		return *c.value;
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";

@@ -1,10 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0
-dtb-$(CONFIG_ARCH_OMAP2) += \
-	omap2420-h4.dtb \
-	omap2420-n800.dtb \
-	omap2420-n810.dtb \
-	omap2420-n810-wimax.dtb \
-	omap2430-sdp.dtb
 dtb-$(CONFIG_ARCH_OMAP3) += \
 	am3517-craneboard.dtb \
 	am3517-evm.dtb \
@@ -97,6 +91,7 @@ dtb-$(CONFIG_SOC_AM33XX) += \
 	am335x-baltos-ir5221.dtb \
 	am335x-bone.dtb \
 	am335x-boneblack.dtb \
+	am335x-boneblack-revd.dtb \
 	am335x-boneblack-wireless.dtb \
 	am335x-boneblue.dtb \
 	am335x-bonegreen.dtb \
@@ -189,6 +184,7 @@ dtb-$(CONFIG_SOC_TI81XX) += \
 # Enable support for device-tree overlays
 DTC_FLAGS_am335x-bone += -@
 DTC_FLAGS_am335x-boneblack += -@
+DTC_FLAGS_am335x-boneblack-revd += -@
 DTC_FLAGS_am335x-boneblack-wireless += -@
 DTC_FLAGS_am335x-bonegreen += -@
 DTC_FLAGS_am335x-bonegreen-wireless += -@

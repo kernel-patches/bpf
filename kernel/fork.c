@@ -93,6 +93,7 @@
 #include <linux/compiler.h>
 #include <linux/sysctl.h>
 #include <linux/kcov.h>
+#include <linux/kcsan.h>
 #include <linux/livepatch.h>
 #include <linux/thread_info.h>
 #include <linux/kstack_erase.h>
@@ -744,22 +745,6 @@ void __mmdrop(struct mm_struct *mm)
 }
 EXPORT_SYMBOL_GPL(__mmdrop);
 
-static void mmdrop_async_fn(struct work_struct *work)
-{
-	struct mm_struct *mm;
-
-	mm = container_of(work, struct mm_struct, async_put_work);
-	__mmdrop(mm);
-}
-
-static void mmdrop_async(struct mm_struct *mm)
-{
-	if (unlikely(atomic_dec_and_test(&mm->mm_count))) {
-		INIT_WORK(&mm->async_put_work, mmdrop_async_fn);
-		schedule_work(&mm->async_put_work);
-	}
-}
-
 static inline void free_signal_struct(struct signal_struct *sig)
 {
 	taskstats_tgid_free(sig);
@@ -987,6 +972,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 
 	kcov_task_init(tsk);
 	kmsan_task_create(tsk);
+	kcsan_task_init(tsk);
 	kmap_local_fork(tsk);
 
 #ifdef CONFIG_FAULT_INJECTION
@@ -1109,7 +1095,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p)
 	mm_pasid_init(mm);
 	RCU_INIT_POINTER(mm->exe_file, NULL);
 	mmu_notifier_subscriptions_init(mm);
-	init_tlb_flush_pending(mm);
+	mm_init_tlb_flush(mm);
 #if defined(CONFIG_TRANSPARENT_HUGEPAGE) && !defined(CONFIG_SPLIT_PMD_PTLOCKS)
 	mm->pmd_huge_pte = NULL;
 #endif
@@ -1368,6 +1354,28 @@ struct file *get_task_exe_file(struct task_struct *task)
 		exe_file = get_mm_exe_file(mm);
 	task_unlock(task);
 	return exe_file;
+}
+
+/**
+ * get_task_exe_path - acquire a reference to the task's executable path
+ * @task: The task.
+ * @exe_path: The task's executable path.
+ *
+ * Returns 0 if the task has an executable path, or -ENOENT if it does not.
+ * On failure, @exe_path is left unchanged. The caller must release the path
+ * through path_put() on success.
+ */
+int get_task_exe_path(struct task_struct *task, struct path *exe_path)
+{
+	struct file *exe_file = get_task_exe_file(task);
+
+	if (!exe_file)
+		return -ENOENT;
+
+	*exe_path = exe_file->f_path;
+	path_get(exe_path);
+	fput(exe_file);
+	return 0;
 }
 
 /**
@@ -2155,9 +2163,6 @@ __latent_entropy struct task_struct *copy_process(
 	 * free the parent's ret_stack.
 	 */
 	ftrace_graph_init_task(p);
-	retval = copy_exec_state(clone_flags, p);
-	if (retval)
-		goto bad_fork_free;
 	p->flags &= ~PF_KTHREAD;
 	if (args->kthread)
 		p->flags |= PF_KTHREAD;
@@ -2185,6 +2190,13 @@ __latent_entropy struct task_struct *copy_process(
 #ifdef CONFIG_PROVE_LOCKING
 	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
 #endif
+	/*
+	 * First fallible op. Must run after rt_mutex_init_task(), so error
+	 * paths never see the parent's PI waiters.
+	 */
+	retval = copy_exec_state(clone_flags, p);
+	if (retval)
+		goto bad_fork_free;
 	retval = copy_creds(p, clone_flags);
 	if (retval < 0)
 		goto bad_fork_free;
@@ -2628,8 +2640,14 @@ bad_fork_cleanup_namespaces:
 bad_fork_cleanup_mm:
 	sched_cache_fork_cleanup(p);
 	if (p->mm) {
-		mm_clear_owner(p->mm, p);
-		mmput(p->mm);
+		struct mm_struct *mm = p->mm;
+
+		/* Perf events and BPF programs can still reach p. */
+		task_lock(p);
+		p->mm = NULL;
+		task_unlock(p);
+		mm_clear_owner(mm, p);
+		mmput(mm);
 	}
 bad_fork_cleanup_signal:
 	if (!(clone_flags & CLONE_THREAD))
@@ -2663,6 +2681,11 @@ bad_fork_cleanup_count:
 	exit_cred_namespaces(p);
 	exit_creds(p);
 bad_fork_free:
+	/*
+	 * If set, p->mm points at the parent's mm without a reference. Nobody
+	 * can access it concurrently anymore, but prevent later access.
+	 */
+	p->mm = NULL;
 	WRITE_ONCE(p->__state, TASK_DEAD);
 	exit_task_stack_account(p);
 	put_task_stack(p);

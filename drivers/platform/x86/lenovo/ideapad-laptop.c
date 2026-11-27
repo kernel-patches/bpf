@@ -14,9 +14,12 @@
 #include <linux/bitops.h>
 #include <linux/bug.h>
 #include <linux/cleanup.h>
+#include <linux/compiler.h>
+#include <linux/container_of.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/device.h>
+#include <linux/dev_printk.h>
 #include <linux/dmi.h>
 #include <linux/i8042.h>
 #include <linux/init.h>
@@ -26,11 +29,15 @@
 #include <linux/kernel.h>
 #include <linux/leds.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/platform_profile.h>
 #include <linux/power_supply.h>
+#include <linux/printk.h>
 #include <linux/rfkill.h>
 #include <linux/seq_file.h>
+#include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/string_choices.h>
 #include <linux/sysfs.h>
 #include <linux/types.h>
@@ -134,16 +141,39 @@ enum {
 };
 
 /*
- * These correspond to the number of supported states - 1
- * Future keyboard types may need a new system, if there's a collision
- * KBD_BL_TRISTATE_AUTO has no way to report or set the auto state
- * so it effectively has 3 states, but needs to handle 4
+ * The enumeration has two purposes:
+ *   - as an internal identifier for all known types of keyboard backlight
+ *   - as a mandatory parameter of the KBLC command
+ *
+ * For each type, the hardware brightness values are defined as follows:
+ * +--------------------------+----------+-----+------+------+
+ * |      Hardware brightness |        0 |   1 |    2 |    3 |
+ * | Type                     |          |     |      |      |
+ * +--------------------------+----------+-----+------+------+
+ * | KBD_BL_STANDARD          |      off |  on |  N/A |  N/A |
+ * +--------------------------+----------+-----+------+------+
+ * | KBD_BL_TRISTATE          |      off | low | high |  N/A |
+ * +--------------------------+----------+-----+------+------+
+ * | KBD_BL_TRISTATE_AUTO     |      off | low | high | auto |
+ * +--------------------------+----------+-----+------+------+
+ *
+ * We map LED classdev brightness for KBD_BL_TRISTATE_AUTO as follows:
+ * +--------------------------+----------+-----+------+
+ * |  LED classdev brightness |        0 |   1 |    2 |
+ * | Operation                |          |     |      |
+ * +--------------------------+----------+-----+------+
+ * | Read                     | off/auto | low | high |
+ * +--------------------------+----------+-----+------+
+ * | Write                    |      off | low | high |
+ * +--------------------------+----------+-----+------+
  */
 enum {
 	KBD_BL_STANDARD      = 1,
 	KBD_BL_TRISTATE      = 2,
 	KBD_BL_TRISTATE_AUTO = 3,
 };
+
+#define KBD_BL_AUTO_MODE_HW_BRIGHTNESS	3
 
 #define KBD_BL_QUERY_TYPE		0x1
 #define KBD_BL_TRISTATE_TYPE		0x5
@@ -200,16 +230,27 @@ struct ideapad_private {
 		bool ymc_ec_trigger       : 1;
 	} features;
 	struct {
-		bool initialized;
+		int initialized; /*  0: initializion pending/ongoing/failed
+				  * >0: initializion finished
+				  * <0: unregisteration ongoing/finished
+				  */
 		int type;
 		struct led_classdev led;
-		unsigned int last_brightness;
+		unsigned int last_hw_brightness;
+		struct mutex mutex; /* protects brightness tracking */
 	} kbd_bl;
 	struct {
 		bool initialized;
 		struct led_classdev led;
 		unsigned int last_brightness;
 	} fn_lock;
+	struct {
+		bool initialized;
+		bool active; /* true means touchpad is enabled */
+		struct input_handler handler;
+		struct input_dev *tp_dev;
+		spinlock_t lock;
+	} tp_switch;
 };
 
 static bool no_bt_rfkill;
@@ -234,7 +275,7 @@ MODULE_PARM_DESC(set_fn_lock_led,
 static bool ctrl_ps2_aux_port;
 module_param(ctrl_ps2_aux_port, bool, 0444);
 MODULE_PARM_DESC(ctrl_ps2_aux_port,
-		 "Enable driver based PS/2 aux port en-/dis-abling on touchpad on/off toggle. If you need this please report this to: platform-driver-x86@vger.kernel.org");
+		 "Enable driver based suppression of touchpad events on touchpad on/off toggle. If you need this please report this to: platform-driver-x86@vger.kernel.org");
 
 static bool touchpad_ctrl_via_ec;
 module_param(touchpad_ctrl_via_ec, bool, 0444);
@@ -1134,6 +1175,13 @@ static const struct dmi_system_id ideapad_dytc_v4_allow_table[] = {
 			DMI_MATCH(DMI_PRODUCT_VERSION, "IdeaPad 5 15ITL05")
 		}
 	},
+	{
+		/* V14 G2 ITL */
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_VERSION, "V14 G2 ITL")
+		}
+	},
 	{}
 };
 
@@ -1482,6 +1530,161 @@ static void ideapad_check_special_buttons(struct ideapad_private *priv)
 	}
 }
 
+struct ideapad_tpswitch_handle {
+	struct input_handle handle;
+	struct ideapad_private *priv;
+};
+
+#define to_tpswitch_handle(h) \
+	container_of(h, struct ideapad_tpswitch_handle, handle)
+
+static int ideapad_tpswitch_connect(struct input_handler *handler,
+				    struct input_dev *dev,
+				    const struct input_device_id *id)
+{
+	struct ideapad_private *priv =
+		container_of(handler, struct ideapad_private, tp_switch.handler);
+	struct ideapad_tpswitch_handle *h;
+	int error;
+
+	h = kzalloc_obj(*h);
+	if (!h)
+		return -ENOMEM;
+
+	h->priv = priv;
+	h->handle.dev = dev;
+	h->handle.handler = handler;
+	h->handle.name = "ideapad-tpswitch";
+
+	error = input_register_handle(&h->handle);
+	if (error)
+		goto err_free_handle;
+
+	/*
+	 * We need to open the input handle so the input core invokes our
+	 * filter, but since we mark our handler as passive observer, this
+	 * will not cause the underlying touchpad hardware to be started
+	 * if there are no other users.
+	 */
+	error = input_open_device(&h->handle);
+	if (error)
+		goto err_unregister_handle;
+
+	scoped_guard(spinlock_irq, &priv->tp_switch.lock)
+		priv->tp_switch.tp_dev = dev;
+
+	return 0;
+
+err_unregister_handle:
+	input_unregister_handle(&h->handle);
+err_free_handle:
+	kfree(h);
+	return error;
+}
+
+static void ideapad_tpswitch_disconnect(struct input_handle *handle)
+{
+	struct ideapad_tpswitch_handle *h = to_tpswitch_handle(handle);
+	struct ideapad_private *priv = h->priv;
+
+	scoped_guard(spinlock_irq, &priv->tp_switch.lock)
+		priv->tp_switch.tp_dev = NULL;
+
+	input_close_device(handle);
+	input_unregister_handle(handle);
+	kfree(h);
+}
+
+static bool ideapad_tpswitch_filter(struct input_handle *handle,
+				    unsigned int type, unsigned int code,
+				    int value)
+{
+	struct ideapad_tpswitch_handle *h = to_tpswitch_handle(handle);
+	struct ideapad_private *priv = h->priv;
+
+	if (READ_ONCE(priv->tp_switch.active))
+		return false;
+
+	/* Allow passing button release events, drop everything else */
+	return !(type == EV_KEY && value == 0) &&
+	       !(type == EV_SYN && code == SYN_REPORT);
+}
+
+static const struct input_device_id ideapad_tpswitch_ids[] = {
+	{
+		.flags = INPUT_DEVICE_ID_MATCH_BUS |
+				INPUT_DEVICE_ID_MATCH_VENDOR |
+				INPUT_DEVICE_ID_MATCH_EVBIT |
+				INPUT_DEVICE_ID_MATCH_KEYBIT |
+				INPUT_DEVICE_ID_MATCH_ABSBIT,
+		.bustype = BUS_I8042,
+		.vendor = 0x0002,
+		.evbit = { BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS) },
+		.keybit = { [BIT_WORD(BTN_TOOL_FINGER)] =
+				BIT_MASK(BTN_TOOL_FINGER) },
+		.absbit = { BIT_MASK(ABS_X) | BIT_MASK(ABS_Y) |
+				BIT_MASK(ABS_PRESSURE) |
+				BIT_MASK(ABS_TOOL_WIDTH) },
+	},
+	{ }
+};
+
+static int ideapad_tpswitch_init(struct ideapad_private *priv)
+{
+	int error;
+
+	if (!priv->features.ctrl_ps2_aux_port)
+		return 0;
+
+	spin_lock_init(&priv->tp_switch.lock);
+
+	priv->tp_switch.handler.name = "ideapad-tpswitch";
+	priv->tp_switch.handler.id_table = ideapad_tpswitch_ids;
+	priv->tp_switch.handler.filter = ideapad_tpswitch_filter;
+	priv->tp_switch.handler.connect = ideapad_tpswitch_connect;
+	priv->tp_switch.handler.disconnect = ideapad_tpswitch_disconnect;
+	priv->tp_switch.handler.passive_observer = true;
+
+	error = input_register_handler(&priv->tp_switch.handler);
+	if (error) {
+		dev_err(&priv->platform_device->dev,
+			"failed to register touchpad switch handler: %d",
+			error);
+		return error;
+	}
+
+	priv->tp_switch.initialized = true;
+	return 0;
+}
+
+static void ideapad_tpswitch_exit(struct ideapad_private *priv)
+{
+	if (priv->tp_switch.initialized) {
+		input_unregister_handler(&priv->tp_switch.handler);
+		priv->tp_switch.initialized = false;
+	}
+}
+
+static void ideapad_tpswitch_toggle(struct ideapad_private *priv, bool on)
+{
+	guard(spinlock_irq)(&priv->tp_switch.lock);
+
+	WRITE_ONCE(priv->tp_switch.active, on);
+	if (!on) {
+		struct input_dev *tp_dev = priv->tp_switch.tp_dev;
+		if (tp_dev) {
+			input_report_key(tp_dev, BTN_TOUCH, 0);
+			input_report_key(tp_dev, BTN_TOOL_FINGER, 0);
+			input_report_key(tp_dev, BTN_TOOL_DOUBLETAP, 0);
+			input_report_key(tp_dev, BTN_TOOL_TRIPLETAP, 0);
+			input_report_key(tp_dev, BTN_LEFT, 0);
+			input_report_key(tp_dev, BTN_RIGHT, 0);
+			input_report_key(tp_dev, BTN_MIDDLE, 0);
+			input_sync(tp_dev);
+		}
+	}
+}
+
 /*
  * backlight
  */
@@ -1612,7 +1815,24 @@ static int ideapad_kbd_bl_check_tristate(int type)
 	return (type == KBD_BL_TRISTATE) || (type == KBD_BL_TRISTATE_AUTO);
 }
 
-static int ideapad_kbd_bl_brightness_get(struct ideapad_private *priv)
+static int ideapad_kbd_bl_brightness_parse(struct ideapad_private *priv, unsigned int hw_brightness)
+{
+	/* Off, low or high */
+	if (hw_brightness <= priv->kbd_bl.led.max_brightness)
+		return hw_brightness;
+
+	/* Auto (controlled by EC according to ALS), report as off */
+	if (priv->kbd_bl.type == KBD_BL_TRISTATE_AUTO &&
+	    hw_brightness == KBD_BL_AUTO_MODE_HW_BRIGHTNESS)
+		return 0;
+
+	/* Unknown value */
+	dev_warn(&priv->platform_device->dev,
+		 "Unknown keyboard backlight value: %u", hw_brightness);
+	return -EINVAL;
+}
+
+static int ideapad_kbd_bl_hw_brightness_get(struct ideapad_private *priv)
 {
 	unsigned long value;
 	int err;
@@ -1626,21 +1846,7 @@ static int ideapad_kbd_bl_brightness_get(struct ideapad_private *priv)
 		if (err)
 			return err;
 
-		/* Convert returned value to brightness level */
-		value = FIELD_GET(KBD_BL_GET_BRIGHTNESS, value);
-
-		/* Off, low or high */
-		if (value <= priv->kbd_bl.led.max_brightness)
-			return value;
-
-		/* Auto, report as off */
-		if (value == priv->kbd_bl.led.max_brightness + 1)
-			return 0;
-
-		/* Unknown value */
-		dev_warn(&priv->platform_device->dev,
-			 "Unknown keyboard backlight value: %lu", value);
-		return -EINVAL;
+		return FIELD_GET(KBD_BL_GET_BRIGHTNESS, value);
 	}
 
 	err = eval_hals(priv->adev->handle, &value);
@@ -1650,6 +1856,16 @@ static int ideapad_kbd_bl_brightness_get(struct ideapad_private *priv)
 	return !!test_bit(HALS_KBD_BL_STATE_BIT, &value);
 }
 
+static int ideapad_kbd_bl_brightness_get(struct ideapad_private *priv)
+{
+	int hw_brightness = ideapad_kbd_bl_hw_brightness_get(priv);
+
+	if (hw_brightness < 0)
+		return hw_brightness;
+
+	return ideapad_kbd_bl_brightness_parse(priv, hw_brightness);
+}
+
 static enum led_brightness ideapad_kbd_bl_led_cdev_brightness_get(struct led_classdev *led_cdev)
 {
 	struct ideapad_private *priv = container_of(led_cdev, struct ideapad_private, kbd_bl.led);
@@ -1657,30 +1873,38 @@ static enum led_brightness ideapad_kbd_bl_led_cdev_brightness_get(struct led_cla
 	return ideapad_kbd_bl_brightness_get(priv);
 }
 
-static int ideapad_kbd_bl_brightness_set(struct ideapad_private *priv, unsigned int brightness)
+static int ideapad_kbd_bl_hw_brightness_set(struct ideapad_private *priv,
+					    unsigned int hw_brightness)
 {
-	int err;
 	unsigned long value;
 	int type = priv->kbd_bl.type;
+	int err;
+
+	guard(mutex)(&priv->kbd_bl.mutex);
 
 	if (ideapad_kbd_bl_check_tristate(type)) {
-		if (brightness > priv->kbd_bl.led.max_brightness)
-			return -EINVAL;
-
-		value = FIELD_PREP(KBD_BL_SET_BRIGHTNESS, brightness) |
+		value = FIELD_PREP(KBD_BL_SET_BRIGHTNESS, hw_brightness) |
 			FIELD_PREP(KBD_BL_COMMAND_TYPE, type) |
 			KBD_BL_COMMAND_SET;
 		err = exec_kblc(priv->adev->handle, value);
 	} else {
-		err = exec_sals(priv->adev->handle, brightness ? SALS_KBD_BL_ON : SALS_KBD_BL_OFF);
+		value = hw_brightness ? SALS_KBD_BL_ON : SALS_KBD_BL_OFF;
+		err = exec_sals(priv->adev->handle, value);
 	}
-
 	if (err)
 		return err;
 
-	priv->kbd_bl.last_brightness = brightness;
+	priv->kbd_bl.last_hw_brightness = hw_brightness;
 
 	return 0;
+}
+
+static int ideapad_kbd_bl_brightness_set(struct ideapad_private *priv, unsigned int brightness)
+{
+	if (brightness > priv->kbd_bl.led.max_brightness)
+		return -EINVAL;
+
+	return ideapad_kbd_bl_hw_brightness_set(priv, brightness);
 }
 
 static int ideapad_kbd_bl_led_cdev_brightness_set(struct led_classdev *led_cdev,
@@ -1688,68 +1912,168 @@ static int ideapad_kbd_bl_led_cdev_brightness_set(struct led_classdev *led_cdev,
 {
 	struct ideapad_private *priv = container_of(led_cdev, struct ideapad_private, kbd_bl.led);
 
+	/*
+	 * When unregistering: It must be the side effect of LED unregistration
+	 * when our private trigger is active. We've set LED_RETAIN_AT_SHUTDOWN
+	 * to retain led_cdev brightness level. To do the same for auto mode,
+	 * gate changes and return early.
+	 *
+	 * It's needless to gate changes when initializing, as there may be a
+	 * time margin between sysfs attribute creation and state change.
+	 */
+	if (unlikely(priv->kbd_bl.initialized < 0))
+		return 0;
+
 	return ideapad_kbd_bl_brightness_set(priv, brightness);
+}
+
+static int ideapad_kbd_bl_auto_trigger_activate(struct led_classdev *led_cdev)
+{
+	struct ideapad_private *priv = container_of(led_cdev, struct ideapad_private, kbd_bl.led);
+
+	return ideapad_kbd_bl_hw_brightness_set(priv, KBD_BL_AUTO_MODE_HW_BRIGHTNESS);
+}
+
+static bool ideapad_kbd_bl_auto_trigger_hw_offloaded(struct led_classdev *led_cdev)
+{
+	struct ideapad_private *priv = container_of(led_cdev, struct ideapad_private, kbd_bl.led);
+
+	guard(mutex)(&priv->kbd_bl.mutex);
+
+	return priv->kbd_bl.last_hw_brightness == KBD_BL_AUTO_MODE_HW_BRIGHTNESS;
+}
+
+static struct led_hw_trigger_type ideapad_kbd_bl_auto_trigger_type;
+
+static struct led_trigger ideapad_kbd_bl_auto_trigger = {
+	.name = "ideapad-auto",
+	.trigger_type = &ideapad_kbd_bl_auto_trigger_type,
+	.activate = ideapad_kbd_bl_auto_trigger_activate,
+	.hw_offloaded = ideapad_kbd_bl_auto_trigger_hw_offloaded,
+};
+
+static bool ideapad_kbd_bl_auto_trigger_registered;
+
+static void ideapad_kbd_bl_notify_hw_control(struct ideapad_private *priv,
+					     unsigned int hw_brightness)
+{
+	bool hw_control, last_hw_control;
+
+	if (!ideapad_kbd_bl_auto_trigger_registered || priv->kbd_bl.type != KBD_BL_TRISTATE_AUTO)
+		return;
+
+	hw_control = hw_brightness == KBD_BL_AUTO_MODE_HW_BRIGHTNESS;
+	last_hw_control = priv->kbd_bl.last_hw_brightness == KBD_BL_AUTO_MODE_HW_BRIGHTNESS;
+
+	if (hw_control != last_hw_control)
+		led_trigger_notify_hw_control_changed(&priv->kbd_bl.led, hw_control);
 }
 
 static void ideapad_kbd_bl_notify(struct ideapad_private *priv)
 {
-	int brightness;
+	int hw_brightness, brightness;
 
-	if (!priv->kbd_bl.initialized)
+	if (unlikely(priv->kbd_bl.initialized <= 0))
 		return;
 
-	brightness = ideapad_kbd_bl_brightness_get(priv);
+	guard(mutex)(&priv->kbd_bl.mutex);
+
+	hw_brightness = ideapad_kbd_bl_hw_brightness_get(priv);
+	if (hw_brightness < 0)
+		return;
+
+	brightness = ideapad_kbd_bl_brightness_parse(priv, hw_brightness);
 	if (brightness < 0)
+		return; /* Reject insane values early. */
+
+	if (priv->kbd_bl.last_hw_brightness == hw_brightness)
 		return;
 
-	if (brightness == priv->kbd_bl.last_brightness)
-		return;
+	ideapad_kbd_bl_notify_hw_control(priv, hw_brightness);
 
-	priv->kbd_bl.last_brightness = brightness;
+	priv->kbd_bl.last_hw_brightness = hw_brightness;
 
 	led_classdev_notify_brightness_hw_changed(&priv->kbd_bl.led, brightness);
 }
 
 static int ideapad_kbd_bl_init(struct ideapad_private *priv)
 {
-	int brightness, err;
+	int hw_brightness, err;
 
 	if (!priv->features.kbd_bl)
 		return -ENODEV;
 
-	if (WARN_ON(priv->kbd_bl.initialized))
+	if (WARN_ON(priv->kbd_bl.initialized > 0))
 		return -EEXIST;
 
-	if (ideapad_kbd_bl_check_tristate(priv->kbd_bl.type))
-		priv->kbd_bl.led.max_brightness = 2;
-	else
-		priv->kbd_bl.led.max_brightness = 1;
+	priv->kbd_bl.initialized = 0;
 
-	brightness = ideapad_kbd_bl_brightness_get(priv);
-	if (brightness < 0)
-		return brightness;
+	err = devm_mutex_init(&priv->platform_device->dev, &priv->kbd_bl.mutex);
+	if (err)
+		return err;
 
-	priv->kbd_bl.last_brightness = brightness;
+	hw_brightness = ideapad_kbd_bl_hw_brightness_get(priv);
+	if (hw_brightness < 0)
+		return hw_brightness;
+
+	priv->kbd_bl.last_hw_brightness = hw_brightness;
+
 	priv->kbd_bl.led.name                    = "platform::" LED_FUNCTION_KBD_BACKLIGHT;
 	priv->kbd_bl.led.brightness_get          = ideapad_kbd_bl_led_cdev_brightness_get;
 	priv->kbd_bl.led.brightness_set_blocking = ideapad_kbd_bl_led_cdev_brightness_set;
 	priv->kbd_bl.led.flags                   = LED_BRIGHT_HW_CHANGED | LED_RETAIN_AT_SHUTDOWN;
 
+	switch (priv->kbd_bl.type) {
+	case KBD_BL_TRISTATE_AUTO:
+		priv->kbd_bl.led.max_brightness = 2;
+
+		if (!ideapad_kbd_bl_auto_trigger_registered) {
+			dev_warn(&priv->platform_device->dev,
+				 "Cannot provide LED trigger %s for keyboard backlight\n",
+				 ideapad_kbd_bl_auto_trigger.name);
+			break;
+		}
+
+		priv->kbd_bl.led.flags |= LED_TRIG_HW_CHANGED;
+		priv->kbd_bl.led.trigger_type = &ideapad_kbd_bl_auto_trigger_type;
+		priv->kbd_bl.led.hw_control_trigger = ideapad_kbd_bl_auto_trigger.name;
+
+		/* Hardware remembers the last brightness level, including auto mode. */
+		if (hw_brightness == KBD_BL_AUTO_MODE_HW_BRIGHTNESS)
+			priv->kbd_bl.led.default_trigger = ideapad_kbd_bl_auto_trigger.name;
+
+		break;
+	case KBD_BL_TRISTATE:
+		priv->kbd_bl.led.max_brightness = 2;
+		break;
+	case KBD_BL_STANDARD:
+		priv->kbd_bl.led.max_brightness = 1;
+		break;
+	default:
+		/* This has already been validated by ideapad_check_features(). */
+		return -EINVAL;
+	}
+
+	/* Reject insane values. */
+	err = ideapad_kbd_bl_brightness_parse(priv, hw_brightness);
+	if (err < 0)
+		return err;
+
 	err = led_classdev_register(&priv->platform_device->dev, &priv->kbd_bl.led);
 	if (err)
 		return err;
 
-	priv->kbd_bl.initialized = true;
+	priv->kbd_bl.initialized = 1;
 
 	return 0;
 }
 
 static void ideapad_kbd_bl_exit(struct ideapad_private *priv)
 {
-	if (!priv->kbd_bl.initialized)
+	if (priv->kbd_bl.initialized <= 0)
 		return;
 
-	priv->kbd_bl.initialized = false;
+	priv->kbd_bl.initialized = -1;
 
 	led_classdev_unregister(&priv->kbd_bl.led);
 }
@@ -1819,7 +2143,6 @@ static void ideapad_fn_lock_led_exit(struct ideapad_private *priv)
 static void ideapad_sync_touchpad_state(struct ideapad_private *priv, bool send_events)
 {
 	unsigned long value;
-	unsigned char param;
 	int ret;
 
 	/* Without reading from EC touchpad LED doesn't switch state */
@@ -1830,12 +2153,11 @@ static void ideapad_sync_touchpad_state(struct ideapad_private *priv, bool send_
 
 	/*
 	 * Some IdeaPads don't really turn off touchpad - they only
-	 * switch the LED state. We (de)activate KBC AUX port to turn
-	 * touchpad off and on. We send KEY_TOUCHPAD_OFF and
-	 * KEY_TOUCHPAD_ON to not to get out of sync with LED
+	 * switch the LED state. On such devices we use an input filter to
+	 * suppress events from the touchpad.
 	 */
 	if (priv->features.ctrl_ps2_aux_port)
-		i8042_command(&param, value ? I8042_CMD_AUX_ENABLE : I8042_CMD_AUX_DISABLE);
+		ideapad_tpswitch_toggle(priv, value);
 
 	/*
 	 * On older models the EC controls the touchpad and toggles it on/off
@@ -2038,8 +2360,8 @@ static const struct dmi_system_id hw_rfkill_list[] = {
 /*
  * On some models the EC toggles the touchpad muted LED on touchpad toggle
  * hotkey presses, but the EC does not actually disable the touchpad itself.
- * On these models the driver needs to explicitly enable/disable the i8042
- * (PS/2) aux port.
+ * On these models the driver needs to explicitly suppress data coming from
+ * the touchpad.
  */
 static const struct dmi_system_id ctrl_ps2_aux_port_list[] = {
 	{
@@ -2052,17 +2374,13 @@ static const struct dmi_system_id ctrl_ps2_aux_port_list[] = {
 	{}
 };
 
-static int ideapad_psy_ext_set_prop(struct power_supply *psy,
-				    const struct power_supply_ext *ext,
-				    void *ext_data,
-				    enum power_supply_property psp,
-				    const union power_supply_propval *val)
+static int ideapad_set_charge_types(struct ideapad_private *priv,
+				    enum power_supply_charge_type charge_type)
 {
-	struct ideapad_private *priv = ext_data;
 	unsigned long op1, op2;
 	int err;
 
-	switch (val->intval) {
+	switch (charge_type) {
 	case POWER_SUPPLY_CHARGE_TYPE_FAST:
 		if (WARN_ON(!priv->features.rapid_charge))
 			return -EINVAL;
@@ -2094,22 +2412,19 @@ static int ideapad_psy_ext_set_prop(struct power_supply *psy,
 	return exec_sbmc(priv->adev->handle, op2);
 }
 
-static int ideapad_psy_ext_get_prop(struct power_supply *psy,
-				    const struct power_supply_ext *ext,
-				    void *ext_data,
-				    enum power_supply_property psp,
-				    union power_supply_propval *val)
+static int ideapad_psy_ext_set_prop(struct power_supply *psy, const struct power_supply_ext *ext,
+				    void *ext_data, enum power_supply_property psp,
+				    const union power_supply_propval *val)
 {
 	struct ideapad_private *priv = ext_data;
-	bool is_rapid_charge, is_conservation;
-	unsigned long result;
-	int err;
 
-	scoped_guard(mutex, &priv->gbmd_sbmc_mutex) {
-		err = eval_gbmd(priv->adev->handle, &result);
-		if (err)
-			return err;
-	}
+	return ideapad_set_charge_types(priv, val->intval);
+}
+
+static int ideapad_get_charge_types(struct ideapad_private *priv, unsigned long result,
+				    enum power_supply_charge_type *charge_type)
+{
+	bool is_rapid_charge, is_conservation;
 
 	is_rapid_charge = (priv->features.rapid_charge &&
 			   test_bit(GBMD_RAPID_CHARGE_STATE_BIT, &result));
@@ -2122,13 +2437,31 @@ static int ideapad_psy_ext_get_prop(struct power_supply *psy,
 	}
 
 	if (is_rapid_charge)
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_FAST;
+		*charge_type = POWER_SUPPLY_CHARGE_TYPE_FAST;
 	else if (is_conservation)
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_LONGLIFE;
+		*charge_type = POWER_SUPPLY_CHARGE_TYPE_LONGLIFE;
 	else
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_STANDARD;
+		*charge_type = POWER_SUPPLY_CHARGE_TYPE_STANDARD;
 
 	return 0;
+}
+
+static int ideapad_psy_ext_get_prop(struct power_supply *psy, const struct power_supply_ext *ext,
+				    void *ext_data, enum power_supply_property psp,
+				    union power_supply_propval *val)
+{
+	struct ideapad_private *priv = ext_data;
+	unsigned long result;
+	int err;
+
+	scoped_guard(mutex, &priv->gbmd_sbmc_mutex) {
+		err = eval_gbmd(priv->adev->handle, &result);
+		if (err)
+			return err;
+	}
+
+	return ideapad_get_charge_types(priv, result,
+					(enum power_supply_charge_type *)&val->intval);
 }
 
 static int ideapad_psy_prop_is_writeable(struct power_supply *psy,
@@ -2164,6 +2497,50 @@ DEFINE_IDEAPAD_POWER_SUPPLY_EXTENSION(ideapad_battery_ext_v2,
 				       BIT(POWER_SUPPLY_CHARGE_TYPE_FAST) |
 				       BIT(POWER_SUPPLY_CHARGE_TYPE_LONGLIFE))
 );
+
+static int ideapad_battery_check(struct ideapad_private *priv)
+{
+	enum power_supply_charge_type charge_type;
+	unsigned long val;
+	int ret;
+
+	/* Not acquiring gbmd_sbmc_mutex as race condition is impossible on init. */
+	ret = eval_gbmd(priv->adev->handle, &val);
+	if (ret)
+		return ret;
+
+	priv->features.conservation_mode = true;
+	priv->features.rapid_charge = test_bit(GBMD_RAPID_CHARGE_SUPPORTED_BIT, &val);
+
+	ret = priv->features.rapid_charge ? ideapad_get_charge_types(priv, val, &charge_type) : 0;
+	if (ret) {
+		/*
+		 * Some unfortunate combinations of BIOS and Lenovo utilities
+		 * (e.g., Legion Go 2 + Legion Space) may enable Rapid Charge
+		 * and Conservation Mode at the same time, which is very out of
+		 * sepc.
+		 *
+		 * If both are enabled during a previous Windows boot, we will
+		 * see both bits set.
+		 *
+		 * Conservation Mode should override Rapid Charge. Before a BIOS
+		 * update addresses this, enforce it by selecting [Long_Life].
+		 */
+		dev_notice(&priv->platform_device->dev,
+			   "selecting [Long_life] to fix unexpected charge_types\n");
+
+		ret = ideapad_set_charge_types(priv, POWER_SUPPLY_CHARGE_TYPE_LONGLIFE);
+		if (ret) {
+			dev_err(&priv->platform_device->dev,
+				"failed to fix unexpected charge_types: %d\n", ret);
+			return ret;
+		}
+
+		/* Best-effort only. No read back. */
+	}
+
+	return 0;
+}
 
 static int ideapad_battery_add(struct power_supply *battery, struct acpi_battery_hook *hook)
 {
@@ -2203,12 +2580,12 @@ static int ideapad_check_features(struct ideapad_private *priv)
 		priv->features.fan_mode = true;
 
 	if (acpi_has_method(handle, "GBMD") && acpi_has_method(handle, "SBMC")) {
-		/* Not acquiring gbmd_sbmc_mutex as race condition is impossible on init */
-		if (!eval_gbmd(handle, &val)) {
-			priv->features.conservation_mode = true;
-			priv->features.rapid_charge = test_bit(GBMD_RAPID_CHARGE_SUPPORTED_BIT,
-							       &val);
-
+		err = ideapad_battery_check(priv);
+		if (err) {
+			/* Continue with no battery hook or conservation_mode attribute. */
+			priv->features.conservation_mode = false;
+			priv->features.rapid_charge = false;
+		} else {
 			priv->battery_ext = priv->features.rapid_charge
 					    ? &ideapad_battery_ext_v2
 					    : &ideapad_battery_ext_v1;
@@ -2217,8 +2594,8 @@ static int ideapad_check_features(struct ideapad_private *priv)
 			priv->battery_hook.remove_battery = ideapad_battery_remove;
 			priv->battery_hook.name = "Ideapad Battery Extension";
 
-			err = devm_battery_hook_register(&priv->platform_device->dev,
-							 &priv->battery_hook);
+			err = devm_acpi_battery_hook_register(&priv->platform_device->dev,
+							      &priv->battery_hook);
 			if (err)
 				return err;
 		}
@@ -2422,6 +2799,10 @@ static int ideapad_acpi_add(struct platform_device *pdev)
 	if (err)
 		goto input_failed;
 
+	err = ideapad_tpswitch_init(priv);
+	if (err)
+		goto tpswitch_failed;
+
 	err = ideapad_kbd_bl_init(priv);
 	if (err) {
 		if (err != -ENODEV)
@@ -2498,6 +2879,9 @@ backlight_failed:
 
 	ideapad_fn_lock_led_exit(priv);
 	ideapad_kbd_bl_exit(priv);
+	ideapad_tpswitch_exit(priv);
+
+tpswitch_failed:
 	ideapad_input_exit(priv);
 
 input_failed:
@@ -2527,6 +2911,7 @@ static void ideapad_acpi_remove(struct platform_device *pdev)
 
 	ideapad_fn_lock_led_exit(priv);
 	ideapad_kbd_bl_exit(priv);
+	ideapad_tpswitch_exit(priv);
 	ideapad_input_exit(priv);
 	ideapad_debugfs_exit(priv);
 }
@@ -2568,17 +2953,30 @@ static int __init ideapad_laptop_init(void)
 {
 	int err;
 
-	err = ideapad_wmi_driver_register();
-	if (err)
-		return err;
-
-	err = platform_driver_register(&ideapad_acpi_driver);
+	err = led_trigger_register(&ideapad_kbd_bl_auto_trigger);
 	if (err) {
-		ideapad_wmi_driver_unregister();
-		return err;
+		pr_warn("Failed to register LED trigger %s: %d\n",
+			ideapad_kbd_bl_auto_trigger.name, err);
+	} else {
+		ideapad_kbd_bl_auto_trigger_registered = true;
 	}
 
+	err = ideapad_wmi_driver_register();
+	if (err)
+		goto err_ledtrig;
+
+	err = platform_driver_register(&ideapad_acpi_driver);
+	if (err)
+		goto err_wmi;
+
 	return 0;
+
+err_wmi:
+	ideapad_wmi_driver_unregister();
+err_ledtrig:
+	if (ideapad_kbd_bl_auto_trigger_registered)
+		led_trigger_unregister(&ideapad_kbd_bl_auto_trigger);
+	return err;
 }
 module_init(ideapad_laptop_init)
 
@@ -2586,6 +2984,9 @@ static void __exit ideapad_laptop_exit(void)
 {
 	platform_driver_unregister(&ideapad_acpi_driver);
 	ideapad_wmi_driver_unregister();
+
+	if (ideapad_kbd_bl_auto_trigger_registered)
+		led_trigger_unregister(&ideapad_kbd_bl_auto_trigger);
 }
 module_exit(ideapad_laptop_exit)
 

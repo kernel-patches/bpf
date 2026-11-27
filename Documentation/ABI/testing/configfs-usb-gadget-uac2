@@ -5,7 +5,14 @@ Description:
 		The attributes:
 
 		=====================	=======================================
-		c_chmask		capture channel mask
+		c_chmask		capture channel-location mask. The number of
+					capture channels is derived from the number of
+					set bits unless c_channels is specified.
+		c_channels		explicit capture channel count. A value of 0
+					derives the channel count from c_chmask. When
+					nonzero, c_chmask specifies channel locations
+					and may be 0. If both c_channels and c_chmask
+					are nonzero, the values must agree.
 		c_srate			list of capture sampling rates (comma-separated)
 		c_ssize			capture sample size (bytes)
 		c_hs_bint		capture bInterval for HS/SS (1-4: fixed, 0: auto)
@@ -20,7 +27,14 @@ Description:
 		c_volume_res		capture volume control resolution
 					(in 1/256 dB)
 		fb_max			maximum extra bandwidth in async mode
-		p_chmask		playback channel mask
+		p_chmask		playback channel-location mask. The number of
+					playback channels is derived from the number of
+					set bits unless p_channels is specified.
+		p_channels		explicit playback channel count. A value of 0
+					derives the channel count from p_chmask. When
+					nonzero, p_chmask specifies channel locations
+					and may be 0. If both p_channels and p_chmask
+					are nonzero, the values must agree.
 		p_srate			list of playback sampling rates (comma-separated)
 		p_ssize			playback sample size (bytes)
 		p_hs_bint		playback bInterval for HS/SS (1-4: fixed, 0: auto)

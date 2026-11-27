@@ -315,7 +315,7 @@ static int __maybe_unused same_tt(struct usb_device *dev1,
 static const unsigned char
 max_tt_usecs[] = { 125, 125, 125, 125, 125, 125, 30, 0 };
 
-/* carryover low/fullspeed bandwidth that crosses uframe boundries */
+/* carryover low/fullspeed bandwidth that crosses uframe boundaries */
 static inline void carryover_tt_bandwidth(unsigned short tt_usecs[8])
 {
 	int i;

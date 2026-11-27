@@ -205,7 +205,7 @@ static int xhci_rcar_resume_quirk(struct usb_hcd *hcd)
  *
  * And, since the firmware/internal CPU control the USBSTS.STS_HALT
  * and the process speed is down when the roothub port enters U3,
- * long delay for the handshake of STS_HALT is neeed in xhci_suspend()
+ * long delay for the handshake of STS_HALT is need in xhci_suspend()
  * by using the XHCI_SLOW_SUSPEND quirk.
  */
 static const struct xhci_plat_priv xhci_plat_renesas_rcar_gen2 = {

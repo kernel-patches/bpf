@@ -1093,9 +1093,7 @@ static int txpktctrl_init_be(struct rtw89_dev *rtwdev)
 
 static int mlo_init_be(struct rtw89_dev *rtwdev)
 {
-	const struct rtw89_chip_info *chip = rtwdev->chip;
 	u32 val32;
-	u32 reg;
 	int ret;
 
 	rtw89_io_pack(rtwdev);
@@ -1114,14 +1112,8 @@ static int mlo_init_be(struct rtw89_dev *rtwdev)
 	if (ret)
 		rtw89_err(rtwdev, "[MLO]%s: MLO init polling timeout\n", __func__);
 
-	if (chip->chip_id == RTL8922A)
-		reg = R_BE_SS_CTRL;
-	else
-		reg = R_BE_SS_CTRL_V1;
-
 	rtw89_io_pack(rtwdev);
 
-	rtw89_write32_set(rtwdev, reg, B_BE_MLO_HW_CHGLINK_EN);
 	rtw89_write32_set(rtwdev, R_BE_CMAC_SHARE_ACQCHK_CFG_0, B_BE_R_MACID_ACQ_CHK_EN);
 
 	rtw89_io_unpack(rtwdev);
@@ -2949,6 +2941,45 @@ static void rtw89_mac_bf_assoc_be(struct rtw89_dev *rtwdev,
 	}
 }
 
+static void rtw89_mac_mlo_link_cfg_be(struct rtw89_dev *rtwdev,
+				      struct rtw89_vif_link *rtwvif_link,
+				      bool enable)
+{
+	u32 reg, tx_en;
+
+	if (enable) {
+		rtw89_chip_cfg_hw_mlo(rtwdev);
+		rtw89_chip_resume_sch_tx(rtwdev, rtwvif_link->phy_idx,
+					 B_BE_CTN_TXEN_ALL_MASK);
+		rtw89_fw_h2c_mlo_link_cfg(rtwdev, rtwvif_link, enable);
+	} else {
+		rtw89_fw_h2c_mlo_link_cfg(rtwdev, rtwvif_link, enable);
+		rtw89_chip_stop_sch_tx(rtwdev, rtwvif_link->phy_idx, &tx_en,
+				       RTW89_SCH_TX_SEL_ALL);
+	}
+
+	if (rtwdev->chip->chip_id == RTL8922A)
+		reg = R_BE_SS_CTRL;
+	else
+		reg = R_BE_SS_CTRL_V1;
+
+	rtw89_write32_clr(rtwdev, reg, B_BE_MLO_HW_CHGLINK_EN);
+}
+
+static void rtw89_mac_init_drv_txen_be(struct rtw89_dev *rtwdev)
+{
+	u8 active_bands = rtw89_get_active_phy_bitmap(rtwdev);
+	u32 tx_en;
+	int i;
+
+	for (i = 0; i < RTW89_PHY_NUM; i++) {
+		if (active_bands & BIT(i))
+			rtw89_chip_resume_sch_tx(rtwdev, i, B_BE_CTN_TXEN_ALL_MASK);
+		else
+			rtw89_chip_stop_sch_tx(rtwdev, i, &tx_en, RTW89_SCH_TX_SEL_ALL);
+	}
+}
+
 static void dump_err_status_dispatcher_be(struct rtw89_dev *rtwdev)
 {
 	rtw89_info(rtwdev, "R_BE_DISP_HOST_IMR=0x%08x ",
@@ -3313,6 +3344,8 @@ const struct rtw89_mac_gen_def rtw89_mac_gen_be = {
 	.dle_func_en = dle_func_en_be,
 	.dle_clk_en = dle_clk_en_be,
 	.bf_assoc = rtw89_mac_bf_assoc_be,
+	.mlo_link_cfg = rtw89_mac_mlo_link_cfg_be,
+	.init_drv_txen = rtw89_mac_init_drv_txen_be,
 
 	.typ_fltr_opt = rtw89_mac_typ_fltr_opt_be,
 	.cfg_ppdu_status = rtw89_mac_cfg_ppdu_status_be,

@@ -465,9 +465,9 @@ out:
 }
 
 static const struct pci_device_id efct_pci_table[] = {
-	{PCI_DEVICE(EFCT_VENDOR_ID, EFCT_DEVICE_LANCER_G6), 0},
-	{PCI_DEVICE(EFCT_VENDOR_ID, EFCT_DEVICE_LANCER_G7), 0},
-	{}	/* terminate list */
+	{ PCI_DEVICE(EFCT_VENDOR_ID, EFCT_DEVICE_LANCER_G6) },
+	{ PCI_DEVICE(EFCT_VENDOR_ID, EFCT_DEVICE_LANCER_G7) },
+	{ }	/* terminate list */
 };
 
 static int

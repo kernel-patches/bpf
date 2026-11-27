@@ -358,8 +358,8 @@ hwrt_data_init_fw_structure(struct pvr_file *pvr_file,
 			    struct pvr_hwrt_data *hwrt_data)
 {
 	struct drm_pvr_create_hwrt_geom_data_args *geom_data_args = &args->geom_data_args;
+	struct rogue_fwif_rta_ctl *rta_ctl = &hwrt_data->data.rta_ctl;
 	struct pvr_device *pvr_dev = pvr_file->pvr_dev;
-	struct rogue_fwif_rta_ctl *rta_ctl;
 	int err;
 
 	pvr_fw_object_get_fw_addr(hwrt->common_fw_obj,
@@ -378,13 +378,9 @@ hwrt_data_init_fw_structure(struct pvr_file *pvr_file,
 	hwrt_data->data.macrotile_array_dev_addr = rt_data_args->macrotile_array_dev_addr;
 	hwrt_data->data.rgn_header_dev_addr = rt_data_args->region_header_dev_addr;
 
-	rta_ctl = &hwrt_data->data.rta_ctl;
-
-	rta_ctl->render_target_index = 0;
-	rta_ctl->active_render_targets = 0;
-	rta_ctl->valid_render_targets_fw_addr = 0;
-	rta_ctl->rta_num_partial_renders_fw_addr = 0;
-	rta_ctl->max_rts = args->layers;
+	*rta_ctl = (struct rogue_fwif_rta_ctl){
+		.max_rts = args->layers,
+	};
 
 	if (args->layers > 1) {
 		err = pvr_fw_object_create(pvr_dev, args->layers * SRTC_ENTRY_SIZE,

@@ -10,6 +10,30 @@
 #include <linux/hugetlb.h>
 #include <linux/hugetlb_cgroup.h>
 
+/**
+ * available_huge_pages - number of free huge pages not needed for reservations
+ * @h: huge page size state
+ *
+ * Global number of free huge pages that are not needed for existing
+ * reservations, available for allocations without reservations. Things like
+ * NUMA placement, cpusets, mempolicy and the usability of individual folios can
+ * further restrict allocation.
+ *
+ * Reservations of anon folios may be restored before their backing folios are
+ * actually freed, so the number of reserved pages can be bigger than the
+ * number of free pages. In such a scenario, the result is clamped to 0.
+ *
+ * Return: The number of free huge pages not needed for reservations.
+ */
+static inline unsigned long available_huge_pages(const struct hstate *h)
+{
+	lockdep_assert_held(&hugetlb_lock);
+
+	if (h->resv_huge_pages > h->free_huge_pages)
+		return 0;
+	return h->free_huge_pages - h->resv_huge_pages;
+}
+
 /*
  * Check if the hstate represents gigantic pages but gigantic page
  * runtime support is not available. This is a common condition used to

@@ -894,6 +894,7 @@ static bool should_skip_zero_counter(struct perf_stat_config *config,
 				     struct evsel *counter,
 				     const struct aggr_cpu_id *id)
 {
+	struct evsel *alias;
 	struct perf_cpu cpu;
 	unsigned int idx;
 
@@ -945,6 +946,25 @@ static bool should_skip_zero_counter(struct perf_stat_config *config,
 
 		if (aggr_cpu_id__equal(id, &own_id))
 			return false;
+	}
+
+	if (config->aggr_mode == AGGR_NONE || !counter->pmu || counter->pmu->is_core)
+		return true;
+
+	/*
+	 * A merged uncore counter also counts on the CPUs of the other PMU
+	 * instances merged into it, for example on another socket.
+	 */
+	evlist__for_each_entry(counter->evlist, alias) {
+		if (alias->first_wildcard_match != counter)
+			continue;
+
+		perf_cpu_map__for_each_cpu(cpu, idx, alias->core.cpus) {
+			struct aggr_cpu_id own_id = config->aggr_get_id(config, cpu);
+
+			if (aggr_cpu_id__equal(id, &own_id))
+				return false;
+		}
 	}
 	return true;
 }

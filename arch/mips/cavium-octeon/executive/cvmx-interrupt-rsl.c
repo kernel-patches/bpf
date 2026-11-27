@@ -39,8 +39,6 @@
 #define PRINT_ERROR(format, ...)
 #endif
 
-void __cvmx_interrupt_gmxx_rxx_int_en_enable(int index, int block);
-
 /**
  * Enable ASX error interrupts that exist on CN3XXX, CN50XX, and
  * CN58XX.

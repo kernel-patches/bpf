@@ -119,17 +119,14 @@ struct ublk_batch_fetch_cmd {
 
 struct ublk_uring_cmd_pdu {
 	/*
-	 * Store requests in same batch temporarily for queuing them to
-	 * daemon context.
+	 * For ublk_cmd_list_tw_cb(), a list of batched requests queued to
+	 * daemon context. For ublk_cmd_tw_cb(), a single request.
 	 *
 	 * It should have been stored to request payload, but we do want
 	 * to avoid extra pre-allocation, and uring_cmd payload is always
 	 * free for us
 	 */
-	union {
-		struct request *req;
-		struct request *req_list;
-	};
+	struct request *req;
 
 	/*
 	 * The following two are valid in this cmd whole lifetime, and
@@ -2118,7 +2115,7 @@ static void ublk_cmd_list_tw_cb(struct io_tw_req tw_req, io_tw_token_t tw)
 {
 	struct io_uring_cmd *cmd = io_uring_cmd_from_tw(tw_req);
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
-	struct request *rq = pdu->req_list;
+	struct request *rq = pdu->req;
 	struct request *next;
 
 	do {
@@ -2133,10 +2130,12 @@ static void ublk_queue_cmd_list(struct ublk_io *io, struct rq_list *l)
 {
 	struct io_uring_cmd *cmd = io->cmd;
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
+	io_req_tw_func_t tw_cb;
 
-	pdu->req_list = rq_list_peek(l);
+	tw_cb = l->head == l->tail ? ublk_cmd_tw_cb : ublk_cmd_list_tw_cb;
+	pdu->req = rq_list_peek(l);
 	rq_list_init(l);
-	io_uring_cmd_complete_in_task(cmd, ublk_cmd_list_tw_cb);
+	io_uring_cmd_complete_in_task(cmd, tw_cb);
 }
 
 static enum blk_eh_timer_return ublk_timeout(struct request *rq)
@@ -2804,14 +2803,33 @@ out:
 	ublk_put_disk(disk);
 }
 
+static void ublk_complete_cancelled_cmd(struct ublk_queue *ubq,
+					struct ublk_io *io,
+					unsigned int issue_flags)
+{
+	struct io_uring_cmd *cmd = NULL;
+	bool done;
+
+	spin_lock(&ubq->cancel_lock);
+	done = !!(io->flags & UBLK_IO_FLAG_CANCELED);
+	if (!done) {
+		io->flags |= UBLK_IO_FLAG_CANCELED;
+		/* dependency ordered against smp_wmb() in ublk_prep_cancel() */
+		cmd = READ_ONCE(io->cmd);
+		io->cmd = NULL;
+	}
+	spin_unlock(&ubq->cancel_lock);
+
+	if (!done && cmd)
+		io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT, issue_flags);
+}
+
 static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 		unsigned int issue_flags)
 {
 	struct ublk_io *io = &ubq->ios[tag];
 	struct ublk_device *ub = ubq->dev;
-	struct io_uring_cmd *cmd = NULL;
 	struct request *req;
-	bool done;
 
 	if (!(io->flags & UBLK_IO_FLAG_ACTIVE))
 		return;
@@ -2830,18 +2848,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	if (req && blk_mq_request_started(req) && req->tag == tag)
 		return;
 
-	spin_lock(&ubq->cancel_lock);
-	done = !!(io->flags & UBLK_IO_FLAG_CANCELED);
-	if (!done) {
-		io->flags |= UBLK_IO_FLAG_CANCELED;
-		/* dependency ordered against smp_wmb() in ublk_prep_cancel() */
-		cmd = READ_ONCE(io->cmd);
-		io->cmd = NULL;
-	}
-	spin_unlock(&ubq->cancel_lock);
-
-	if (!done && cmd)
-		io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT, issue_flags);
+	ublk_complete_cancelled_cmd(ubq, io, issue_flags);
 }
 
 /*
@@ -3572,6 +3579,10 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 			req->__sector = addr;
 		if (compl)
 			__ublk_complete_rq(req, io, ublk_dev_need_map_io(ub), NULL);
+
+		/* Quiesce may have scanned this slot before this command arrived. */
+		if (unlikely(READ_ONCE(ubq->canceling)))
+			ublk_complete_cancelled_cmd(ubq, io, issue_flags);
 		break;
 	}
 	case UBLK_IO_NEED_GET_DATA:

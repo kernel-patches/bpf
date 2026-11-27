@@ -6,7 +6,7 @@
 #include <drm/drm_fourcc.h>
 #include <drm/drm_print.h>
 
-#include "display/intel_display.h"
+#include "display/intel_fb.h"
 #include "gem/i915_gem_ioctls.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"

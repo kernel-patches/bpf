@@ -28,6 +28,7 @@
 #include <linux/init.h>
 #include <linux/initrd.h>
 #include <linux/memblock.h>
+#include <linux/overflow.h>
 #include <linux/acpi.h>
 #include <linux/bootconfig.h>
 #include <linux/console.h>
@@ -108,6 +109,7 @@
 #include <linux/time_namespace.h>
 #include <linux/unaligned.h>
 #include <linux/vdso_datastore.h>
+#include <linux/hazptr.h>
 #include <net/net_namespace.h>
 
 #include <asm/io.h>
@@ -268,7 +270,7 @@ early_param("loglevel", loglevel);
 #ifdef CONFIG_BLK_DEV_INITRD
 static void * __init get_boot_config_from_initrd(size_t *_size)
 {
-	u32 size, csum;
+	u32 size, raw_size, csum;
 	char *data;
 	u8 *hdr;
 	int i;
@@ -294,29 +296,42 @@ found:
 	if ((unsigned long)hdr < initrd_start)
 		return NULL;
 
-	size = get_unaligned_le32(hdr);
+	raw_size = get_unaligned_le32(hdr);
 	csum = get_unaligned_le32(hdr + 4);
 
+	if (raw_size > XBC_DATA_MAX_PADDED) {
+		pr_err("bootconfig size %u is greater than max size %d\n",
+			raw_size, XBC_DATA_MAX);
+		return NULL;
+	}
+
+	if (raw_size > ((unsigned long)hdr - initrd_start)) {
+		pr_err("bootconfig size %u is greater than initrd size %lu\n",
+			raw_size, initrd_end - initrd_start);
+		return NULL;
+	}
+
+	data = ((void *)hdr) - raw_size;
+
+	size = xbc_exclude_padding(data, raw_size);
 	if (size > XBC_DATA_MAX) {
 		pr_err("bootconfig size %u is greater than max size %d\n",
 			size, XBC_DATA_MAX);
 		return NULL;
 	}
 
-	if (size > ((unsigned long)hdr - initrd_start)) {
-		pr_err("bootconfig size %u is greater than initrd size %lu\n",
-			size, initrd_end - initrd_start);
-		return NULL;
-	}
-
-	data = ((void *)hdr) - size;
-
-	if (xbc_calc_checksum(data, size) != csum) {
+	if (xbc_calc_checksum(data, raw_size) != csum) {
 		pr_err("bootconfig checksum failed\n");
 		return NULL;
 	}
 
-	/* Remove bootconfig from initramfs/initrd */
+	/*
+	 * Remove bootconfig from initramfs/initrd. Since the initrd memory
+	 * (including the bootconfig) is freed with initrd_end, save the
+	 * original end to free the whole region later.
+	 */
+	if (!initrd_mem_end)
+		initrd_mem_end = initrd_end;
 	initrd_end = (unsigned long)data;
 	if (_size)
 		*_size = size;
@@ -576,7 +591,8 @@ static int __init unknown_bootoption(char *param, char *val,
 	 * 1. LILO/Grub pass "BOOT_IMAGE=...";
 	 * 2. kexec/kdump (kexec-tools) pass "kexec".
 	 */
-	const char *bootloader[] = { "BOOT_IMAGE=", "kexec", NULL };
+	static const char * const bootloader[] __initconst = { "BOOT_IMAGE=", "kexec" };
+	unsigned int i;
 
 	/* Handle params aliased to sysctls */
 	if (sysctl_is_alias(param))
@@ -585,7 +601,7 @@ static int __init unknown_bootoption(char *param, char *val,
 	repair_env_string(param, val);
 
 	/* Handle bootloader identifier */
-	for (int i = 0; bootloader[i]; i++) {
+	for (i = 0; i < ARRAY_SIZE(bootloader); i++) {
 		if (strstarts(param, bootloader[i]))
 			return 0;
 	}
@@ -603,7 +619,6 @@ static int __init unknown_bootoption(char *param, char *val,
 
 	if (val) {
 		/* Environment option */
-		unsigned int i;
 		for (i = 0; envp_init[i]; i++) {
 			if (!strncmp(param, envp_init[i], len+1))
 				break;
@@ -615,7 +630,6 @@ static int __init unknown_bootoption(char *param, char *val,
 		envp_init[i] = param;
 	} else {
 		/* Command line option */
-		unsigned int i;
 		for (i = 0; argv_init[i]; i++) {
 			if (i == MAX_INIT_ARGS) {
 				panic_later = "init";
@@ -1137,6 +1151,7 @@ void start_kernel(void)
 	workqueue_init_early();
 
 	rcu_init();
+	hazptr_init();
 	kvfree_rcu_init();
 
 	/* Trace events are available after this */
@@ -1275,7 +1290,7 @@ static void __init do_ctors(void)
 #ifdef CONFIG_KALLSYMS
 struct blacklist_entry {
 	struct list_head next;
-	char *buf;
+	char buf[];
 };
 
 static __initdata_or_module LIST_HEAD(blacklisted_initcalls);
@@ -1286,18 +1301,15 @@ static int __init initcall_blacklist(char *str)
 	struct blacklist_entry *entry;
 
 	/* str argument is a comma-separated list of functions */
-	do {
-		str_entry = strsep(&str, ",");
-		if (str_entry) {
-			pr_debug("blacklisting initcall %s\n", str_entry);
-			entry = memblock_alloc_or_panic(sizeof(*entry),
-					       SMP_CACHE_BYTES);
-			entry->buf = memblock_alloc_or_panic(strlen(str_entry) + 1,
-						    SMP_CACHE_BYTES);
-			strcpy(entry->buf, str_entry);
-			list_add(&entry->next, &blacklisted_initcalls);
-		}
-	} while (str_entry);
+	while ((str_entry = strsep(&str, ","))) {
+		size_t buf_size = strlen(str_entry) + 1;
+
+		pr_debug("blacklisting initcall %s\n", str_entry);
+		entry = memblock_alloc_or_panic(struct_size(entry, buf, buf_size),
+						SMP_CACHE_BYTES);
+		strscpy(entry->buf, str_entry, buf_size);
+		list_add(&entry->next, &blacklisted_initcalls);
+	}
 
 	return 1;
 }
@@ -1409,7 +1421,8 @@ static inline void do_trace_initcall_level(const char *level)
 int __init_or_module do_one_initcall(initcall_t fn)
 {
 	int count = preempt_count();
-	char msgbuf[64];
+	bool preempt_imbalanced;
+	bool irqs_left_disabled;
 	int ret;
 
 	if (initcall_blacklisted(fn))
@@ -1419,17 +1432,17 @@ int __init_or_module do_one_initcall(initcall_t fn)
 	ret = fn();
 	do_trace_initcall_finish(fn, ret);
 
-	msgbuf[0] = 0;
-
-	if (preempt_count() != count) {
-		sprintf(msgbuf, "preemption imbalance ");
+	preempt_imbalanced = preempt_count() != count;
+	if (preempt_imbalanced)
 		preempt_count_set(count);
-	}
-	if (irqs_disabled()) {
-		strlcat(msgbuf, "disabled interrupts ", sizeof(msgbuf));
+
+	irqs_left_disabled = irqs_disabled();
+	if (irqs_left_disabled)
 		local_irq_enable();
-	}
-	WARN(msgbuf[0], "initcall %pS returned with %s\n", fn, msgbuf);
+
+	WARN(preempt_imbalanced || irqs_left_disabled, "initcall %pS returned with %s%s\n", fn,
+	     preempt_imbalanced ? "preemption imbalance " : "",
+	     irqs_left_disabled ? "disabled interrupts " : "");
 
 	add_latent_entropy();
 	return ret;
@@ -1487,13 +1500,13 @@ static void __init do_initcalls(void)
 	size_t len = saved_command_line_len + 1;
 	char *command_line;
 
-	command_line = kzalloc(len, GFP_KERNEL);
+	command_line = kmalloc(len, GFP_KERNEL);
 	if (!command_line)
 		panic("%s: Failed to allocate %zu bytes\n", __func__, len);
 
 	for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++) {
 		/* Parser modifies command_line, restore it each time */
-		strcpy(command_line, saved_command_line);
+		strscpy(command_line, saved_command_line, len);
 		do_initcall_level(level, command_line);
 	}
 
@@ -1566,12 +1579,15 @@ static inline bool arch_parse_debug_rodata(char *str) { return false; }
 
 static int __init set_debug_rodata(char *str)
 {
+	if (!str)
+		return -EINVAL;
+
 	if (arch_parse_debug_rodata(str))
 		return 0;
 
-	if (str && !strcmp(str, "on"))
+	if (!strcmp(str, "on"))
 		rodata_enabled = true;
-	else if (str && !strcmp(str, "off"))
+	else if (!strcmp(str, "off"))
 		rodata_enabled = false;
 	else
 		pr_warn("Invalid option string for rodata: '%s'\n", str);

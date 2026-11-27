@@ -4005,7 +4005,7 @@ static int rs_start_reshape(struct raid_set *rs)
 
 	r = rs_setup_reshape(rs);
 	if (r)
-		return r;
+		goto clear_recovery_wait;
 
 	/*
 	 * Check any reshape constraints enforced by the personalility
@@ -4015,7 +4015,7 @@ static int rs_start_reshape(struct raid_set *rs)
 	r = pers->check_reshape(mddev);
 	if (r) {
 		rs->ti->error = "pers->check_reshape() failed";
-		return r;
+		goto clear_recovery_wait;
 	}
 
 	/*
@@ -4026,7 +4026,7 @@ static int rs_start_reshape(struct raid_set *rs)
 		r = pers->start_reshape(mddev);
 		if (r) {
 			rs->ti->error = "pers->start_reshape() failed";
-			return r;
+			goto clear_recovery_wait;
 		}
 	}
 
@@ -4038,6 +4038,10 @@ static int rs_start_reshape(struct raid_set *rs)
 	rs_update_sbs(rs);
 
 	return 0;
+
+clear_recovery_wait:
+	clear_bit(MD_RECOVERY_WAIT, &mddev->recovery);
+	return r;
 }
 
 static int raid_preresume(struct dm_target *ti)

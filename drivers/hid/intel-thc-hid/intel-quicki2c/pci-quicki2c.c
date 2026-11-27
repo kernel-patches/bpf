@@ -292,9 +292,12 @@ static int handle_input_report(struct quicki2c_device *qcdev)
 	int ret;
 
 	while (!rx_dma_finished) {
-		ret = thc_rxdma_read(qcdev->thc_hw, THC_RXDMA2,
-				     (u8 *)pkt, &report_len,
-				     &rx_dma_finished);
+		ret = thc_rxdma_read_safe(qcdev->thc_hw, THC_RXDMA2, (u8 *)pkt,
+					  HIDI2C_PACKET_LEN(qcdev->input_len), &report_len,
+					  &rx_dma_finished);
+		if (ret == -EMSGSIZE)
+			continue;
+
 		if (ret)
 			return ret;
 
@@ -652,6 +655,8 @@ static int quicki2c_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	const struct quicki2c_ddata *ddata = (const struct quicki2c_ddata *)id->driver_data;
 	struct quicki2c_device *qcdev;
+	bool dma_initialized = false;
+	bool irq_requested = false;
 	void __iomem *mem_addr;
 	int ret;
 
@@ -704,6 +709,7 @@ static int quicki2c_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 					qcdev);
 	if (ret)
 		goto dev_deinit;
+	irq_requested = true;
 
 	ret = quicki2c_get_device_descriptor(qcdev);
 	if (ret) {
@@ -722,6 +728,7 @@ static int quicki2c_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		dev_err(&pdev->dev, "Setup THC DMA failed, ret= %d\n", ret);
 		goto dev_deinit;
 	}
+	dma_initialized = true;
 
 	ret = thc_interrupt_quiesce(qcdev->thc_hw, false);
 	if (ret)
@@ -742,13 +749,13 @@ static int quicki2c_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	ret = quicki2c_get_report_descriptor(qcdev);
 	if (ret) {
 		dev_err(&pdev->dev, "Get report descriptor failed, ret = %d\n", ret);
-		goto dma_deinit;
+		goto dev_deinit;
 	}
 
 	ret = quicki2c_hid_probe(qcdev);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to register HID device, ret = %d\n", ret);
-		goto dma_deinit;
+		goto dev_deinit;
 	}
 
 	qcdev->state = QUICKI2C_ENABLED;
@@ -763,10 +770,20 @@ static int quicki2c_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	return 0;
 
-dma_deinit:
-	quicki2c_dma_deinit(qcdev);
 dev_deinit:
+	if (irq_requested) {
+		WRITE_ONCE(qcdev->recovery_disabled, true);
+		disable_irq(pdev->irq);
+	}
+
 	quicki2c_dev_deinit(qcdev);
+
+	if (irq_requested)
+		devm_free_irq(&pdev->dev, pdev->irq, qcdev);
+
+	if (dma_initialized)
+		quicki2c_dma_deinit(qcdev);
+
 disable_pci_device:
 	pci_clear_master(pdev);
 
@@ -788,9 +805,12 @@ static void quicki2c_remove(struct pci_dev *pdev)
 	if (!qcdev)
 		return;
 
-	quicki2c_hid_remove(qcdev);
-
+	WRITE_ONCE(qcdev->recovery_disabled, true);
+	disable_irq(pdev->irq);
 	quicki2c_dev_deinit(qcdev);
+	devm_free_irq(&pdev->dev, pdev->irq, qcdev);
+
+	quicki2c_hid_remove(qcdev);
 
 	quicki2c_dma_deinit(qcdev);
 
@@ -814,6 +834,9 @@ static void quicki2c_shutdown(struct pci_dev *pdev)
 	qcdev = pci_get_drvdata(pdev);
 	if (!qcdev)
 		return;
+
+	WRITE_ONCE(qcdev->recovery_disabled, true);
+	disable_irq(pdev->irq);
 
 	quicki2c_dev_deinit(qcdev);
 

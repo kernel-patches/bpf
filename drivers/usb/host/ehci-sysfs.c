@@ -48,10 +48,7 @@ static ssize_t companion_store(struct device *dev,
 	if (portnum <= 0 || portnum > HCS_N_PORTS(ehci->hcs_params))
 		return -ENOENT;
 	portnum--;
-	if (new_owner)
-		set_bit(portnum, &ehci->companion_ports);
-	else
-		clear_bit(portnum, &ehci->companion_ports);
+	assign_bit(portnum, &ehci->companion_ports, new_owner);
 	set_owner(ehci, portnum, new_owner);
 	return count;
 }

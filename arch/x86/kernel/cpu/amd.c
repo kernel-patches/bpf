@@ -160,7 +160,7 @@ static void init_amd_k6(struct cpuinfo_x86 *c)
 		if (mbytes > 508)
 			mbytes = 508;
 
-		rdmsrq(MSR_K6_WHCR, val.q);
+		val.q = rdmsrq(MSR_K6_WHCR);
 		if ((val.l & 0x0000FFFF) == 0) {
 			unsigned long flags;
 			val.l = (1 << 0) | ((mbytes / 4) << 1);
@@ -181,7 +181,7 @@ static void init_amd_k6(struct cpuinfo_x86 *c)
 		if (mbytes > 4092)
 			mbytes = 4092;
 
-		rdmsrq(MSR_K6_WHCR, val.q);
+		val.q = rdmsrq(MSR_K6_WHCR);
 		if ((val.l & 0xFFFF0000) == 0) {
 			unsigned long flags;
 			val.l = ((mbytes >> 2) << 22) | (1 << 16);
@@ -228,7 +228,7 @@ static void init_amd_k7(struct cpuinfo_x86 *c)
 	 * As per AMD technical note 27212 0.2
 	 */
 	if ((c->x86_model == 8 && c->x86_stepping >= 1) || (c->x86_model > 8)) {
-		rdmsrq(MSR_K7_CLK_CTL, val.q);
+		val.q = rdmsrq(MSR_K7_CLK_CTL);
 		if ((val.l & 0xfff00000) != 0x20000000) {
 			pr_info("CPU: CLK_CTL MSR was %x. Reprogramming to %x\n",
 				val.l, ((val.l & 0x000fffff) | 0x20000000));
@@ -434,7 +434,7 @@ static void bsp_init_amd(struct cpuinfo_x86 *c)
 		    (c->x86 == 0x10 && c->x86_model >= 0x2)) {
 			u64 val;
 
-			rdmsrq(MSR_K7_HWCR, val);
+			val = rdmsrq(MSR_K7_HWCR);
 			if (!(val & BIT(24)))
 				pr_warn(FW_BUG "TSC doesn't count with P0 frequency!\n");
 		}
@@ -588,7 +588,7 @@ static void early_detect_mem_encrypt(struct cpuinfo_x86 *c)
 	 */
 	if (cpu_has(c, X86_FEATURE_SME) || cpu_has(c, X86_FEATURE_SEV)) {
 		/* Check if memory encryption is enabled */
-		rdmsrq(MSR_AMD64_SYSCFG, msr);
+		msr = rdmsrq(MSR_AMD64_SYSCFG);
 		if (!(msr & MSR_AMD64_SYSCFG_MEM_ENCRYPT))
 			goto clear_all;
 
@@ -605,7 +605,7 @@ static void early_detect_mem_encrypt(struct cpuinfo_x86 *c)
 		if (!sme_me_mask)
 			setup_clear_cpu_cap(X86_FEATURE_SME);
 
-		rdmsrq(MSR_K7_HWCR, msr);
+		msr = rdmsrq(MSR_K7_HWCR);
 		if (!(msr & MSR_K7_HWCR_SMMLOCK))
 			goto clear_sev;
 
@@ -1120,7 +1120,7 @@ static void init_amd(struct cpuinfo_x86 *c)
 	init_amd_cacheinfo(c);
 
 	if (cpu_has(c, X86_FEATURE_SVM)) {
-		rdmsrq(MSR_VM_CR, vm_cr);
+		vm_cr = rdmsrq(MSR_VM_CR);
 		if (vm_cr & SVM_VM_CR_SVM_DIS_MASK) {
 			pr_notice_once("SVM disabled (by BIOS) in MSR_VM_CR\n");
 			clear_cpu_cap(c, X86_FEATURE_SVM);

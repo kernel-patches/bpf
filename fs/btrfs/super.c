@@ -911,7 +911,6 @@ static int get_default_subvol_objectid(struct btrfs_fs_info *fs_info, u64 *objec
 	struct btrfs_dir_item *di;
 	BTRFS_PATH_AUTO_FREE(path);
 	struct btrfs_key location;
-	struct fscrypt_str name = FSTR_INIT("default", 7);
 	u64 dir_id;
 
 	path = btrfs_alloc_path();
@@ -924,7 +923,7 @@ static int get_default_subvol_objectid(struct btrfs_fs_info *fs_info, u64 *objec
 	 * to mount.
 	 */
 	dir_id = btrfs_super_root_dir(fs_info->super_copy);
-	di = btrfs_lookup_dir_item(NULL, root, path, dir_id, &name, 0);
+	di = btrfs_lookup_dir_item(NULL, root, path, dir_id, &FSTR("default"), 0);
 	if (IS_ERR(di)) {
 		return PTR_ERR(di);
 	}
@@ -1286,7 +1285,7 @@ static int btrfs_remount_rw(struct btrfs_fs_info *fs_info)
 	if (unlikely(BTRFS_FS_ERROR(fs_info))) {
 		btrfs_err(fs_info,
 			  "remounting read-write after error is not allowed");
-		return -EINVAL;
+		return -EROFS;
 	}
 
 	if (fs_info->fs_devices->rw_devices == 0)
@@ -1348,9 +1347,11 @@ static int btrfs_remount_ro(struct btrfs_fs_info *fs_info)
 	 * Setting SB_RDONLY will put the cleaner thread to sleep at the next
 	 * loop if it's already active.  If it's already asleep, we'll leave
 	 * unused block groups on disk until we're mounted read-write again
-	 * unless we clean them up here.
+	 * unless we clean them up here. Not after an error though, that can't be
+	 * committed anymore and may still finish zones.
 	 */
-	btrfs_delete_unused_bgs(fs_info);
+	if (!BTRFS_FS_ERROR(fs_info))
+		btrfs_delete_unused_bgs(fs_info);
 
 	/*
 	 * The cleaner task could be already running before we set the flag
@@ -1384,6 +1385,10 @@ static int btrfs_remount_ro(struct btrfs_fs_info *fs_info)
 	 * the transaction and/or crash.
 	 */
 	btrfs_qgroup_wait_for_completion(fs_info, false);
+
+	/* Nothing can be committed after an error, don't fail the remount. */
+	if (unlikely(BTRFS_FS_ERROR(fs_info)))
+		return 0;
 
 	return btrfs_commit_super(fs_info);
 }
@@ -2240,7 +2245,7 @@ static int btrfs_control_open(struct inode *inode, struct file *file)
 static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 				unsigned long arg)
 {
-	struct btrfs_ioctl_vol_args *vol;
+	struct btrfs_ioctl_vol_args AUTO_KFREE(vol);
 	struct btrfs_device *device = NULL;
 	dev_t devt = 0;
 	int ret = -ENOTTY;
@@ -2248,12 +2253,28 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	vol = memdup_user((void __user *)arg, sizeof(*vol));
-	if (IS_ERR(vol))
-		return PTR_ERR(vol);
-	ret = btrfs_check_ioctl_vol_args_path(vol);
-	if (ret < 0)
-		goto out;
+	switch (cmd) {
+	case BTRFS_IOC_SCAN_DEV:
+	case BTRFS_IOC_FORGET_DEV:
+	case BTRFS_IOC_DEVICES_READY:
+		/*
+		 * Not all control ioctls take a struct btrfs_ioctl_vol_args as
+		 * argument, some may pass a smaller buffer and attempting to
+		 * read more may result in an unexpected -EFAULT if the memory
+		 * crosses an unmapped page. BTRFS_IOC_GET_SUPPORTED_FEATURES
+		 * expects a much smaller buffer for a short array of
+		 * struct btrfs_ioctl_feature_flags elements. So attempt a copy
+		 * of a struct btrfs_ioctl_vol_args only for the ioctls that
+		 * expect such an argument.
+		 */
+		vol = memdup_user((void __user *)arg, sizeof(*vol));
+		if (IS_ERR(vol))
+			return PTR_ERR(vol);
+		ret = btrfs_check_ioctl_vol_args_path(vol);
+		if (ret < 0)
+			return ret;
+		break;
+	}
 
 	switch (cmd) {
 	case BTRFS_IOC_SCAN_DEV:
@@ -2298,8 +2319,6 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 		break;
 	}
 
-out:
-	kfree(vol);
 	return ret;
 }
 
@@ -2308,6 +2327,9 @@ static int btrfs_freeze(struct super_block *sb)
 	struct btrfs_fs_info *fs_info = btrfs_sb(sb);
 
 	set_bit(BTRFS_FS_FROZEN, &fs_info->flags);
+	/* Nothing can be committed after an error. */
+	if (btrfs_fs_rdonly(fs_info))
+		return 0;
 	/*
 	 * We don't need a barrier here, we'll wait for any transaction that
 	 * could be in progress on other threads (and do delayed iputs that
@@ -2382,7 +2404,12 @@ static int btrfs_unfreeze(struct super_block *sb)
 	 *
 	 * And since the fs is frozen, no one can modify the fs yet, thus
 	 * we don't need to hold device_list_mutex.
+	 *
+	 * After an error the super blocks on disk may lag behind, skip it.
 	 */
+	if (btrfs_fs_rdonly(fs_info))
+		goto out;
+
 	list_for_each_entry(device, &fs_info->fs_devices->devices, dev_list) {
 		ret = check_dev_super(device);
 		if (ret < 0) {
@@ -2392,6 +2419,7 @@ static int btrfs_unfreeze(struct super_block *sb)
 			break;
 		}
 	}
+out:
 	clear_bit(BTRFS_FS_FROZEN, &fs_info->flags);
 
 	/*

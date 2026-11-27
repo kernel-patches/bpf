@@ -282,5 +282,4 @@ int rt712_sdca_io_init(struct device *dev, struct sdw_slave *slave);
 int rt712_sdca_init(struct device *dev, struct regmap *regmap,
 			struct regmap *mbq_regmap, struct sdw_slave *slave);
 
-int rt712_sdca_jack_detect(struct rt712_sdca_priv *rt712, bool *hp, bool *mic);
 #endif /* __RT712_H__ */

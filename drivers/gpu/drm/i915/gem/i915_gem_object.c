@@ -367,7 +367,7 @@ void __i915_gem_object_pages_fini(struct drm_i915_gem_object *obj)
 	atomic_set(&obj->mm.pages_pin_count, 0);
 
 	/*
-	 * dma_buf_unmap_attachment() requires reservation to be
+	 * dma_buf_unmap_sgt() requires reservation to be
 	 * locked. The imported GEM shouldn't share reservation lock
 	 * and ttm_bo_cleanup_memtype_use() shouldn't be invoked for
 	 * dma-buf, so it's safe to take the lock.

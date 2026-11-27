@@ -196,9 +196,10 @@ class VMAList:
     # instance to receive VMAs.
     def __init__(self, pid='self', stats=[]):
         self.vmas = []
-        with open(f'/proc/{pid}/smaps', 'r') as file:
+        with open(f'/proc/{pid}/smaps', 'r', newline='\n',
+                  errors='surrogateescape') as file:
             for line in file:
-                elements = line.split()
+                elements = line.rstrip('\n').split(maxsplit=5)
                 if '-' in elements[0]:
                     start, end = map(lambda x: int(x, 16), elements[0].split('-'))
                     major, minor = map(lambda x: int(x, 16), elements[3].split(':'))
@@ -263,8 +264,8 @@ def thp_parse(vma, kpageflags, ranges, indexes, vfns, pfns, anons, heads):
             if flags & KPF_COMPOUND_TAIL:
                 nr = index_end - int(folios[-1])
                 folios = folios[:-1]
-                index_end -= nr
                 stats['anon' if anons[index_end - 1] else 'file']['partial'] += nr
+                index_end -= nr
 
         # Account fully mapped THPs in the middle of the range.
         if len(folios):
@@ -295,7 +296,7 @@ def thp_parse(vma, kpageflags, ranges, indexes, vfns, pfns, anons, heads):
 
     def flatten_sub(type, subtype, stats):
         param = f"{type}-thp-pte-{subtype}-{{}}kB"
-        for od, nr in enumerate(stats[2:], 2):
+        for od, nr in enumerate(stats[1:], 1):
             rstats[param.format(odkb(od))] = {'type': type, 'value': nrkb(nr)}
 
     def flatten_type(type, stats):
@@ -363,12 +364,14 @@ def cont_parse(vma, order, ranges, anons, heads):
 def vma_print(vma, pid):
     # Prints a VMA instance in a format similar to smaps. The main difference is
     # that the pid is included as the first value.
+    name = vma.name.encode(sys.stdout.encoding, errors='backslashreplace')
+    name = name.decode(sys.stdout.encoding)
     print("{:010d}: {:016x}-{:016x} {}{}{}{} {:08x} {:02x}:{:02x} {:08x} {}"
         .format(
             pid, vma.start, vma.end,
             'r' if vma.read else '-', 'w' if vma.write else '-',
             'x' if vma.execute else '-', 'p' if vma.private else 's',
-            vma.pgoff, vma.major, vma.minor, vma.inode, vma.name
+            vma.pgoff, vma.major, vma.minor, vma.inode, name
         ))
 
 

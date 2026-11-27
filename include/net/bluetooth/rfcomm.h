@@ -290,6 +290,8 @@ struct rfcomm_conninfo {
 	__u8  dev_class[3];
 };
 
+int rfcomm_dlc_get_conninfo(struct rfcomm_dlc *d, struct rfcomm_conninfo *ci);
+
 #define RFCOMM_LM	0x03
 #define RFCOMM_LM_MASTER	0x0001
 #define RFCOMM_LM_AUTH		0x0002

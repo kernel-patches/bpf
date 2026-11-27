@@ -6,6 +6,9 @@
 #ifndef _XE_VM_H_
 #define _XE_VM_H_
 
+#include <linux/device.h>
+#include <linux/workqueue.h>
+
 #include "xe_assert.h"
 #include "xe_bo_types.h"
 #include "xe_macros.h"
@@ -259,7 +262,8 @@ int xe_vm_validate_protected(struct xe_vm *vm);
 static inline void xe_vm_queue_rebind_worker(struct xe_vm *vm)
 {
 	xe_assert(vm->xe, xe_vm_in_preempt_fence_mode(vm));
-	queue_work(vm->xe->ordered_wq, &vm->preempt.rebind_work);
+	queue_work_node(dev_to_node(vm->xe->drm.dev), vm->xe->rebind_wq,
+			&vm->preempt.rebind_work);
 }
 
 /**
@@ -282,7 +286,8 @@ static inline void xe_vm_reactivate_rebind(struct xe_vm *vm)
 int xe_vm_lock_vma(struct drm_exec *exec, struct xe_vma *vma);
 
 int xe_vm_validate_rebind(struct xe_vm *vm, struct drm_exec *exec,
-			  unsigned int num_fences);
+			  unsigned int num_fences,
+			  enum drm_gpuvm_exec_pass pass);
 
 void xe_vm_bump_lru(struct xe_vm *vm, struct drm_exec *exec);
 

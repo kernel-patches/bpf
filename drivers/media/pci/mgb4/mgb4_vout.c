@@ -43,11 +43,19 @@ static const struct i2c_board_info gmsl1_ser_info[] = {
 	{I2C_BOARD_INFO("serializer2", 0x22)},
 };
 
-static const struct mgb4_i2c_kv fpdl3_i2c[] = {
-	{0x05, 0xFF, 0x04}, {0x06, 0xFF, 0x01}, {0xC2, 0xFF, 0x80}
+static const struct mgb4_i2c_key fpdl3_i2c_keys[] = {
+	{0x05, 0xFF}, {0x06, 0xFF}, {0xC2, 0xFF}, {0x5B, 0x03},
+	{0x4F, 0x40}
 };
 
-static const struct mgb4_i2c_kv gmsl1_i2c[] = {
+static const u8 fpdl3_i2c_values[] = {
+	0x04, 0x01, 0x80, 0x00, 0x00
+};
+
+static const struct mgb4_i2c_key gmsl1_i2c_keys[] = {
+};
+
+static const u8 gmsl1_i2c_values[] = {
 };
 
 static const struct v4l2_dv_timings_cap video_timings_cap = {
@@ -646,18 +654,19 @@ static int ser_init(struct mgb4_vout_dev *voutdev, int id)
 	struct mgb4_i2c_client *ser = &voutdev->ser;
 	struct device *dev = &voutdev->mgbdev->pdev->dev;
 	const struct i2c_board_info *info = NULL;
-	const struct mgb4_i2c_kv *values = NULL;
-	size_t count = 0;
+	const u8 *values = NULL;
 	int rv;
 
 	if (MGB4_IS_FPDL3(voutdev->mgbdev)) {
 		info = &fpdl3_ser_info[id];
-		values = fpdl3_i2c;
-		count = ARRAY_SIZE(fpdl3_i2c);
+		voutdev->ser_regs = fpdl3_i2c_keys;
+		voutdev->ser_regs_size = ARRAY_SIZE(fpdl3_i2c_keys);
+		values = fpdl3_i2c_values;
 	} else if (MGB4_IS_GMSL1(voutdev->mgbdev)) {
 		info = &gmsl1_ser_info[id];
-		values = gmsl1_i2c;
-		count = ARRAY_SIZE(gmsl1_i2c);
+		voutdev->ser_regs = gmsl1_i2c_keys;
+		voutdev->ser_regs_size = ARRAY_SIZE(gmsl1_i2c_keys);
+		values = gmsl1_i2c_values;
 	}
 
 	if (!info)
@@ -668,9 +677,16 @@ static int ser_init(struct mgb4_vout_dev *voutdev, int id)
 		dev_err(dev, "failed to create serializer\n");
 		return rv;
 	}
-	rv = mgb4_i2c_configure(ser, values, count);
+	rv = mgb4_i2c_configure(ser, voutdev->ser_regs, values,
+				voutdev->ser_regs_size);
 	if (rv < 0) {
 		dev_err(dev, "failed to configure serializer\n");
+		goto err_i2c_dev;
+	}
+
+	voutdev->pm_ser = kzalloc(voutdev->ser_regs_size, GFP_KERNEL);
+	if (!voutdev->pm_ser) {
+		rv = -ENOMEM;
 		goto err_i2c_dev;
 	}
 
@@ -869,5 +885,62 @@ void mgb4_vout_free(struct mgb4_vout_dev *voutdev)
 	video_unregister_device(&voutdev->vdev);
 	v4l2_device_unregister(&voutdev->v4l2dev);
 
+	kfree(voutdev->pm_ser);
 	kfree(voutdev);
+}
+
+int mgb4_vout_suspend(struct mgb4_vout_dev *voutdev)
+{
+	struct device *dev = &voutdev->mgbdev->pdev->dev;
+	struct mgb4_regs *video = &voutdev->mgbdev->video;
+	const struct mgb4_vout_regs *regs = &voutdev->config->regs;
+	struct mgb4_vout_fpga_pm *fpga = &voutdev->pm_fpga;
+
+	int rv = mgb4_i2c_store(&voutdev->ser,
+				voutdev->ser_regs,
+				voutdev->pm_ser,
+				voutdev->ser_regs_size);
+	if (rv < 0)
+		dev_err(dev, "failed to store serializer configuration\n");
+
+	fpga->config = mgb4_read_reg(video, regs->config);
+	fpga->resolution = mgb4_read_reg(video, regs->resolution);
+	fpga->frame_limit = mgb4_read_reg(video, regs->frame_limit);
+	fpga->hsync = mgb4_read_reg(video, regs->hsync);
+	fpga->vsync = mgb4_read_reg(video, regs->vsync);
+	fpga->padding = mgb4_read_reg(video, regs->padding);
+	fpga->timer = mgb4_read_reg(video, regs->timer);
+
+	return rv;
+}
+
+int mgb4_vout_resume(struct mgb4_vout_dev *voutdev)
+{
+	struct device *dev = &voutdev->mgbdev->pdev->dev;
+	struct mgb4_regs *video = &voutdev->mgbdev->video;
+	const struct mgb4_vout_regs *regs = &voutdev->config->regs;
+	struct mgb4_vout_fpga_pm *fpga = &voutdev->pm_fpga;
+	u32 dp;
+
+	int rv = mgb4_i2c_configure(&voutdev->ser,
+				    voutdev->ser_regs,
+				    voutdev->pm_ser,
+				    voutdev->ser_regs_size);
+	if (rv < 0)
+		dev_err(dev, "failed to re-configure serializer\n");
+
+	mgb4_write_reg(video, regs->config, 0x00000001);
+	mgb4_write_reg(video, regs->resolution, fpga->resolution);
+	mgb4_write_reg(video, regs->frame_limit, fpga->frame_limit);
+	mgb4_write_reg(video, regs->hsync, fpga->hsync);
+	mgb4_write_reg(video, regs->vsync, fpga->vsync);
+	mgb4_write_reg(video, regs->padding, fpga->padding);
+	mgb4_write_reg(video, regs->timer, fpga->timer);
+
+	dp = (fpga->config & 0x10) >> 4;
+	mgb4_cmt_set_vout_freq(voutdev, voutdev->freq >> dp);
+
+	mgb4_write_reg(video, regs->config, fpga->config);
+
+	return rv;
 }

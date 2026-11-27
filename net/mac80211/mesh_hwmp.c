@@ -267,7 +267,8 @@ void ieee80211s_update_metric(struct ieee80211_local *local,
 	if (st->n_rates)
 		rinfo = sta->deflink.tx_stats.last_rate_info;
 	else
-		sta_set_rate_info_tx(sta, &sta->deflink.tx_stats.last_rate, &rinfo);
+		sta_set_rate_info_tx(&sta->deflink.tx_stats.last_rate,
+				     &rinfo, ieee80211_get_sband(sta->sdata));
 
 	ewma_mesh_tx_rate_avg_add(&sta->mesh->tx_rate_avg,
 				  cfg80211_calculate_bitrate(&rinfo));
@@ -453,6 +454,7 @@ static u32 hwmp_route_info_get(struct ieee80211_sub_if_data *sdata,
 					fresh_info = false;
 				}
 			}
+			__release(&mpath->state_lock);
 		} else {
 			mpath = mesh_path_add(sdata, orig_addr);
 			if (IS_ERR(mpath)) {
@@ -460,7 +462,9 @@ static u32 hwmp_route_info_get(struct ieee80211_sub_if_data *sdata,
 				return 0;
 			}
 			spin_lock_bh(&mpath->state_lock);
+			__release(&mpath->state_lock);
 		}
+		__acquire(&mpath->state_lock);
 
 		if (fresh_info) {
 			if (rcu_access_pointer(mpath->next_hop) != sta) {
@@ -505,6 +509,7 @@ static u32 hwmp_route_info_get(struct ieee80211_sub_if_data *sdata,
 				      !is_metric_better(last_hop_metric, mpath->metric) :
 				       last_hop_metric > mpath->metric))))
 				fresh_info = false;
+			__release(&mpath->state_lock);
 		} else {
 			mpath = mesh_path_add(sdata, ta);
 			if (IS_ERR(mpath)) {
@@ -512,7 +517,9 @@ static u32 hwmp_route_info_get(struct ieee80211_sub_if_data *sdata,
 				return 0;
 			}
 			spin_lock_bh(&mpath->state_lock);
+			__release(&mpath->state_lock);
 		}
+		__acquire(&mpath->state_lock);
 
 		if (fresh_info) {
 			if (rcu_access_pointer(mpath->next_hop) != sta) {
@@ -1153,6 +1160,7 @@ enddiscovery:
  */
 int mesh_nexthop_resolve(struct ieee80211_sub_if_data *sdata,
 			 struct sk_buff *skb)
+	__must_hold_shared(RCU)
 {
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *) skb->data;
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
@@ -1257,6 +1265,7 @@ void mesh_path_refresh(struct ieee80211_sub_if_data *sdata,
  */
 int mesh_nexthop_lookup(struct ieee80211_sub_if_data *sdata,
 			struct sk_buff *skb)
+	__must_hold_shared(RCU)
 {
 	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
 	struct mesh_path *mpath;

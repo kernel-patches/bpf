@@ -99,6 +99,12 @@ properties:
           - const: armsom,sige7
           - const: rockchip,rk3588
 
+      - description: ArmSoM Sige7s board
+        items:
+          - const: armsom,sige7s
+          - const: coolpi,pi-4b
+          - const: rockchip,rk3588s
+
       - description: ArmSoM LM7 SoM
         items:
           - enum:
@@ -119,6 +125,11 @@ properties:
               - asus,rk3566-tinker-board-3
               - asus,rk3566-tinker-board-3s
           - const: rockchip,rk3566
+
+      - description: Axelera Embedded 111c
+        items:
+          - const: axelera,embedded-111c
+          - const: rockchip,rk3588
 
       - description: Beelink A1
         items:
@@ -336,6 +347,13 @@ properties:
           - const: firefly,rk3568-roc-pc
           - const: rockchip,rk3568
 
+      - description: Forlinx FET3568-C SoM
+        items:
+          - enum:
+              - forlinx,ok3568-c
+          - const: forlinx,fet3568-c
+          - const: rockchip,rk3568
+
       - description: Forlinx FET3588-C SoM
         items:
           - enum:
@@ -355,6 +373,7 @@ properties:
       - description: FriendlyElec NanoPi RK3528 series boards
         items:
           - enum:
+              - friendlyarm,nanopi-neo3-plus
               - friendlyarm,nanopi-r28s
               - friendlyarm,nanopi-zero2
           - const: rockchip,rk3528
@@ -392,6 +411,7 @@ properties:
         items:
           - enum:
               - friendlyarm,nanopi-m6
+              - friendlyarm,nanopi-m6v2
               - friendlyarm,nanopi-r6c
               - friendlyarm,nanopi-r6s
           - const: rockchip,rk3588s
@@ -1380,6 +1400,11 @@ properties:
         items:
           - const: vicharak,axon
           - const: rockchip,rk3588
+
+      - description: Vicharak Axon Lite
+        items:
+          - const: vicharak,axon-lite
+          - const: rockchip,rk3576
 
       - description: Vicharak Vaaman
         items:

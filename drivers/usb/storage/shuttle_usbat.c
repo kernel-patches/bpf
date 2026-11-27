@@ -1038,6 +1038,8 @@ static int usbat_set_transport(struct us_data *us,
 		break;
 
 	case USBAT_DEV_FLASH:
+		/* The ATA sector size of these readers is fixed at 512 bytes */
+		info->ssize = 0x200;
 		us->transport = usbat_flash_transport;
 		break;
 	}
@@ -1325,10 +1327,15 @@ static int usbat_hp8200e_handle_read10(struct us_data *us,
 		len <<= 16;
 		len |= data[7+7];
 		usb_stor_dbg(us, "GPCMD_READ_CD: len %d\n", len);
-		srb->transfersize = scsi_bufflen(srb)/len;
+		srb->transfersize = len ? scsi_bufflen(srb) / len : 0;
 	}
 
-	if (!srb->transfersize)  {
+	/*
+	 * Passthrough requests set transfersize to the whole request size,
+	 * which can exceed the 64k-1 maximum read and leave no whole sector
+	 * to read per chunk.
+	 */
+	if (!srb->transfersize || srb->transfersize > 65535) {
 		srb->transfersize = 2048; /* A guess */
 		usb_stor_dbg(us, "transfersize 0, forcing %d\n",
 			     srb->transfersize);
@@ -1703,8 +1710,6 @@ static int usbat_flash_transport(struct scsi_cmnd * srb, struct us_data *us)
 		if (rc != USB_STOR_TRANSPORT_GOOD)
 			return rc;
 
-		/* hard coded 512 byte sectors as per ATA spec */
-		info->ssize = 0x200;
 		usb_stor_dbg(us, "READ_CAPACITY: %ld sectors, %ld bytes per sector\n",
 			     info->sectors, info->ssize);
 

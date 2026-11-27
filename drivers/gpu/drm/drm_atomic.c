@@ -433,6 +433,21 @@ void __drm_atomic_commit_free(struct kref *ref)
 }
 EXPORT_SYMBOL(__drm_atomic_commit_free);
 
+static void drm_atomic_commit_set_crtc_state(struct drm_atomic_commit *commit,
+					     struct drm_crtc *crtc,
+					     struct drm_crtc_state *crtc_state)
+{
+	int index = drm_crtc_index(crtc);
+
+	drm_modeset_lock_assert_held(&crtc->mutex);
+
+	commit->crtcs[index].state_to_destroy = crtc_state;
+	commit->crtcs[index].old_state = crtc->state;
+	commit->crtcs[index].new_state = crtc_state;
+	commit->crtcs[index].ptr = crtc;
+	crtc_state->state = commit;
+}
+
 /**
  * drm_atomic_get_crtc_state - get CRTC state
  * @state: global atomic state object
@@ -455,10 +470,10 @@ struct drm_crtc_state *
 drm_atomic_get_crtc_state(struct drm_atomic_commit *state,
 			  struct drm_crtc *crtc)
 {
-	int ret, index = drm_crtc_index(crtc);
+	int ret;
 	struct drm_crtc_state *crtc_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
 	drm_WARN_ON(state->dev, state->checked);
 
 	crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
@@ -473,11 +488,7 @@ drm_atomic_get_crtc_state(struct drm_atomic_commit *state,
 	if (!crtc_state)
 		return ERR_PTR(-ENOMEM);
 
-	state->crtcs[index].state_to_destroy = crtc_state;
-	state->crtcs[index].old_state = crtc->state;
-	state->crtcs[index].new_state = crtc_state;
-	state->crtcs[index].ptr = crtc;
-	crtc_state->state = state;
+	drm_atomic_commit_set_crtc_state(state, crtc, crtc_state);
 
 	drm_dbg_atomic(state->dev, "Added [CRTC:%d:%s] %p state to %p\n",
 		       crtc->base.id, crtc->name, crtc_state, state);
@@ -547,8 +558,8 @@ static int drm_atomic_crtc_check(const struct drm_crtc_state *old_crtc_state,
 	return 0;
 }
 
-static void drm_atomic_crtc_print_state(struct drm_printer *p,
-		const struct drm_crtc_state *state)
+void drm_atomic_crtc_print_state(struct drm_printer *p,
+				 const struct drm_crtc_state *state)
 {
 	struct drm_crtc *crtc = state->crtc;
 
@@ -619,6 +630,21 @@ static int drm_atomic_connector_check(struct drm_connector *connector,
 	return 0;
 }
 
+static void drm_atomic_commit_set_plane_state(struct drm_atomic_commit *commit,
+					      struct drm_plane *plane,
+					      struct drm_plane_state *plane_state)
+{
+	int index = drm_plane_index(plane);
+
+	drm_modeset_lock_assert_held(&plane->mutex);
+
+	commit->planes[index].state_to_destroy = plane_state;
+	commit->planes[index].old_state = plane->state;
+	commit->planes[index].new_state = plane_state;
+	commit->planes[index].ptr = plane;
+	plane_state->state = commit;
+}
+
 /**
  * drm_atomic_get_plane_state - get plane state
  * @state: global atomic state object
@@ -637,10 +663,10 @@ struct drm_plane_state *
 drm_atomic_get_plane_state(struct drm_atomic_commit *state,
 			  struct drm_plane *plane)
 {
-	int ret, index = drm_plane_index(plane);
+	int ret;
 	struct drm_plane_state *plane_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
 	drm_WARN_ON(state->dev, state->checked);
 
 	/* the legacy pointers should never be set */
@@ -660,11 +686,7 @@ drm_atomic_get_plane_state(struct drm_atomic_commit *state,
 	if (!plane_state)
 		return ERR_PTR(-ENOMEM);
 
-	state->planes[index].state_to_destroy = plane_state;
-	state->planes[index].ptr = plane;
-	state->planes[index].old_state = plane->state;
-	state->planes[index].new_state = plane_state;
-	plane_state->state = state;
+	drm_atomic_commit_set_plane_state(state, plane, plane_state);
 
 	drm_dbg_atomic(plane->dev, "Added [PLANE:%d:%s] %p state to %p\n",
 		       plane->base.id, plane->name, plane_state, state);
@@ -681,6 +703,21 @@ drm_atomic_get_plane_state(struct drm_atomic_commit *state,
 	return plane_state;
 }
 EXPORT_SYMBOL(drm_atomic_get_plane_state);
+
+static void drm_atomic_commit_set_colorop_state(struct drm_atomic_commit *commit,
+						struct drm_colorop *colorop,
+						struct drm_colorop_state *colorop_state)
+{
+	int index = drm_colorop_index(colorop);
+
+	drm_modeset_lock_assert_held(&colorop->plane->mutex);
+
+	commit->colorops[index].state_to_destroy = colorop_state;
+	commit->colorops[index].old_state = colorop->state;
+	commit->colorops[index].new_state = colorop_state;
+	commit->colorops[index].ptr = colorop;
+	colorop_state->state = commit;
+}
 
 /**
  * drm_atomic_get_colorop_state - get colorop state
@@ -701,10 +738,11 @@ struct drm_colorop_state *
 drm_atomic_get_colorop_state(struct drm_atomic_commit *state,
 			     struct drm_colorop *colorop)
 {
-	int ret, index = drm_colorop_index(colorop);
+	int ret;
 	struct drm_colorop_state *colorop_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
+	drm_WARN_ON(state->dev, state->checked);
 
 	colorop_state = drm_atomic_get_new_colorop_state(state, colorop);
 	if (colorop_state)
@@ -718,11 +756,7 @@ drm_atomic_get_colorop_state(struct drm_atomic_commit *state,
 	if (!colorop_state)
 		return ERR_PTR(-ENOMEM);
 
-	state->colorops[index].state_to_destroy = colorop_state;
-	state->colorops[index].ptr = colorop;
-	state->colorops[index].old_state = colorop->state;
-	state->colorops[index].new_state = colorop_state;
-	colorop_state->state = state;
+	drm_atomic_commit_set_colorop_state(state, colorop, colorop_state);
 
 	drm_dbg_atomic(colorop->dev, "Added [COLOROP:%d:%d] %p state to %p\n",
 		       colorop->base.id, colorop->type, colorop_state, state);
@@ -946,8 +980,8 @@ static void drm_atomic_colorop_print_state(struct drm_printer *p,
 	drm_printf_indent(p, 1, "next=%d\n", colorop->next ? colorop->next->base.id : 0);
 }
 
-static void drm_atomic_plane_print_state(struct drm_printer *p,
-		const struct drm_plane_state *state)
+void drm_atomic_plane_print_state(struct drm_printer *p,
+				  const struct drm_plane_state *state)
 {
 	struct drm_plane *plane = state->plane;
 	struct drm_rect src  = drm_plane_state_src(state);
@@ -1029,7 +1063,16 @@ int drm_atomic_private_obj_init(struct drm_device *dev,
 				const struct drm_private_state_funcs *funcs)
 {
 	struct drm_private_state *state;
+	int ret;
+
 	memset(obj, 0, sizeof(*obj));
+
+	/*
+	 * Keep the list node in a state drm_atomic_private_obj_fini()
+	 * can safely handle if we fail before adding it to the private
+	 * objects list.
+	 */
+	INIT_LIST_HEAD(&obj->head);
 
 	drm_modeset_lock_init(&obj->lock);
 
@@ -1038,12 +1081,19 @@ int drm_atomic_private_obj_init(struct drm_device *dev,
 	list_add_tail(&obj->head, &dev->mode_config.privobj_list);
 
 	state = obj->funcs->atomic_create_state(obj);
-	if (IS_ERR(state))
-		return PTR_ERR(state);
+	if (IS_ERR(state)) {
+		ret = PTR_ERR(state);
+		goto err_list_del;
+	}
 
 	obj->state = state;
 
 	return 0;
+
+err_list_del:
+	list_del_init(&obj->head);
+	drm_modeset_lock_fini(&obj->lock);
+	return ret;
 }
 EXPORT_SYMBOL(drm_atomic_private_obj_init);
 
@@ -1056,11 +1106,51 @@ EXPORT_SYMBOL(drm_atomic_private_obj_init);
 void
 drm_atomic_private_obj_fini(struct drm_private_obj *obj)
 {
-	list_del(&obj->head);
+	/*
+	 * Some callers ignore drm_atomic_private_obj_init() failures
+	 * and unconditionally register a teardown action that calls
+	 * this function. Use list_del_init() rather than list_del() so
+	 * that calling drm_atomic_private_obj_fini() twice, after both
+	 * a failed and a successful drm_atomic_private_obj_init(),
+	 * remains safe.
+	 */
+	if (list_empty(&obj->head))
+		return;
+
+	list_del_init(&obj->head);
 	obj->funcs->atomic_destroy_state(obj, obj->state);
 	drm_modeset_lock_fini(&obj->lock);
 }
 EXPORT_SYMBOL(drm_atomic_private_obj_fini);
+
+static int drm_atomic_commit_set_private_obj_state(struct drm_atomic_commit *commit,
+						   struct drm_private_obj *obj,
+						   struct drm_private_state *obj_state)
+{
+	struct __drm_private_objs_state *arr;
+	int index, num_objs;
+
+	drm_modeset_lock_assert_held(&obj->lock);
+
+	num_objs = commit->num_private_objs + 1;
+	arr = krealloc_array(commit->private_objs, num_objs,
+			     sizeof(*commit->private_objs), GFP_KERNEL | __GFP_ZERO);
+	if (!arr)
+		return -ENOMEM;
+
+	commit->private_objs = arr;
+	index = commit->num_private_objs;
+
+	commit->private_objs[index].state_to_destroy = obj_state;
+	commit->private_objs[index].old_state = obj->state;
+	commit->private_objs[index].new_state = obj_state;
+	commit->private_objs[index].ptr = obj;
+	obj_state->state = commit;
+
+	commit->num_private_objs = num_objs;
+
+	return 0;
+}
 
 /**
  * drm_atomic_get_private_obj_state - get private object state
@@ -1078,12 +1168,10 @@ struct drm_private_state *
 drm_atomic_get_private_obj_state(struct drm_atomic_commit *state,
 				 struct drm_private_obj *obj)
 {
-	int index, num_objs, ret;
-	size_t size;
-	struct __drm_private_objs_state *arr;
+	int ret;
 	struct drm_private_state *obj_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
 	drm_WARN_ON(state->dev, state->checked);
 
 	obj_state = drm_atomic_get_new_private_obj_state(state, obj);
@@ -1094,27 +1182,15 @@ drm_atomic_get_private_obj_state(struct drm_atomic_commit *state,
 	if (ret)
 		return ERR_PTR(ret);
 
-	num_objs = state->num_private_objs + 1;
-	size = sizeof(*state->private_objs) * num_objs;
-	arr = krealloc(state->private_objs, size, GFP_KERNEL);
-	if (!arr)
-		return ERR_PTR(-ENOMEM);
-
-	state->private_objs = arr;
-	index = state->num_private_objs;
-	memset(&state->private_objs[index], 0, sizeof(*state->private_objs));
-
 	obj_state = obj->funcs->atomic_duplicate_state(obj);
 	if (!obj_state)
 		return ERR_PTR(-ENOMEM);
 
-	state->private_objs[index].state_to_destroy = obj_state;
-	state->private_objs[index].old_state = obj->state;
-	state->private_objs[index].new_state = obj_state;
-	state->private_objs[index].ptr = obj;
-	obj_state->state = state;
-
-	state->num_private_objs = num_objs;
+	ret = drm_atomic_commit_set_private_obj_state(state, obj, obj_state);
+	if (ret) {
+		obj->funcs->atomic_destroy_state(obj, obj_state);
+		return ERR_PTR(ret);
+	}
 
 	drm_dbg_atomic(state->dev,
 		       "Added new private object %p state %p to %p\n",
@@ -1244,6 +1320,48 @@ drm_atomic_get_new_connector_for_encoder(const struct drm_atomic_commit *state,
 EXPORT_SYMBOL(drm_atomic_get_new_connector_for_encoder);
 
 /**
+ * drm_atomic_get_connector_for_encoder_locked - Get connector currently assigned to an encoder
+ * @encoder: The encoder to find the connector of
+ *
+ * This function finds and returns the connector currently assigned to
+ * an @encoder.
+ *
+ * It is similar to drm_atomic_get_connector_for_encoder(), but expects
+ * the caller to hold &drm_mode_config.connection_mutex. This is useful
+ * for callers that need to keep looking at the connector state once the
+ * connector has been found, since the connection mutex must be held for
+ * the whole sequence.
+ *
+ * Returns:
+ * The connector connected to @encoder, or an error pointer otherwise.
+ */
+struct drm_connector *
+drm_atomic_get_connector_for_encoder_locked(const struct drm_encoder *encoder)
+{
+	struct drm_connector_list_iter conn_iter;
+	struct drm_connector *out_connector = ERR_PTR(-EINVAL);
+	struct drm_connector *connector;
+	struct drm_device *dev = encoder->dev;
+
+	drm_modeset_lock_assert_held(&dev->mode_config.connection_mutex);
+
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_for_each_connector_iter(connector, &conn_iter) {
+		if (!connector->state)
+			continue;
+
+		if (encoder == connector->state->best_encoder) {
+			out_connector = connector;
+			break;
+		}
+	}
+	drm_connector_list_iter_end(&conn_iter);
+
+	return out_connector;
+}
+EXPORT_SYMBOL(drm_atomic_get_connector_for_encoder_locked);
+
+/**
  * drm_atomic_get_connector_for_encoder - Get connector currently assigned to an encoder
  * @encoder: The encoder to find the connector of
  * @ctx: Modeset locking context
@@ -1268,9 +1386,7 @@ struct drm_connector *
 drm_atomic_get_connector_for_encoder(const struct drm_encoder *encoder,
 				     struct drm_modeset_acquire_ctx *ctx)
 {
-	struct drm_connector_list_iter conn_iter;
-	struct drm_connector *out_connector = ERR_PTR(-EINVAL);
-	struct drm_connector *connector;
+	struct drm_connector *out_connector;
 	struct drm_device *dev = encoder->dev;
 	int ret;
 
@@ -1278,17 +1394,8 @@ drm_atomic_get_connector_for_encoder(const struct drm_encoder *encoder,
 	if (ret)
 		return ERR_PTR(ret);
 
-	drm_connector_list_iter_begin(dev, &conn_iter);
-	drm_for_each_connector_iter(connector, &conn_iter) {
-		if (!connector->state)
-			continue;
+	out_connector = drm_atomic_get_connector_for_encoder_locked(encoder);
 
-		if (encoder == connector->state->best_encoder) {
-			out_connector = connector;
-			break;
-		}
-	}
-	drm_connector_list_iter_end(&conn_iter);
 	drm_modeset_unlock(&dev->mode_config.connection_mutex);
 
 	return out_connector;
@@ -1356,6 +1463,38 @@ drm_atomic_get_new_crtc_for_encoder(struct drm_atomic_commit *state,
 }
 EXPORT_SYMBOL(drm_atomic_get_new_crtc_for_encoder);
 
+static int drm_atomic_commit_set_connector_state(struct drm_atomic_commit *commit,
+						 struct drm_connector *connector,
+						 struct drm_connector_state *connector_state)
+{
+	struct drm_mode_config *config = &connector->dev->mode_config;
+	int index = drm_connector_index(connector);
+
+	drm_modeset_lock_assert_held(&config->connection_mutex);
+
+	if (index >= commit->num_connector) {
+		struct __drm_connnectors_state *c;
+		int alloc = max(index + 1, config->num_connector);
+
+		c = krealloc_array(commit->connectors, alloc,
+				   sizeof(*commit->connectors), GFP_KERNEL | __GFP_ZERO);
+		if (!c)
+			return -ENOMEM;
+
+		commit->connectors = c;
+		commit->num_connector = alloc;
+	}
+
+	drm_connector_get(connector);
+	commit->connectors[index].state_to_destroy = connector_state;
+	commit->connectors[index].old_state = connector->state;
+	commit->connectors[index].new_state = connector_state;
+	commit->connectors[index].ptr = connector;
+	connector_state->state = commit;
+
+	return 0;
+}
+
 /**
  * drm_atomic_get_connector_state - get connector state
  * @state: global atomic state object
@@ -1374,34 +1513,16 @@ struct drm_connector_state *
 drm_atomic_get_connector_state(struct drm_atomic_commit *state,
 			  struct drm_connector *connector)
 {
-	int ret, index;
+	int ret;
 	struct drm_mode_config *config = &connector->dev->mode_config;
 	struct drm_connector_state *connector_state;
 
-	WARN_ON(!state->acquire_ctx);
+	drm_WARN_ON(state->dev, !state->acquire_ctx);
 	drm_WARN_ON(state->dev, state->checked);
 
 	ret = drm_modeset_lock(&config->connection_mutex, state->acquire_ctx);
 	if (ret)
 		return ERR_PTR(ret);
-
-	index = drm_connector_index(connector);
-
-	if (index >= state->num_connector) {
-		struct __drm_connnectors_state *c;
-		int alloc = max(index + 1, config->num_connector);
-
-		c = krealloc_array(state->connectors, alloc,
-				   sizeof(*state->connectors), GFP_KERNEL);
-		if (!c)
-			return ERR_PTR(-ENOMEM);
-
-		state->connectors = c;
-		memset(&state->connectors[state->num_connector], 0,
-		       sizeof(*state->connectors) * (alloc - state->num_connector));
-
-		state->num_connector = alloc;
-	}
 
 	connector_state = drm_atomic_get_new_connector_state(state, connector);
 	if (connector_state)
@@ -1411,12 +1532,11 @@ drm_atomic_get_connector_state(struct drm_atomic_commit *state,
 	if (!connector_state)
 		return ERR_PTR(-ENOMEM);
 
-	drm_connector_get(connector);
-	state->connectors[index].state_to_destroy = connector_state;
-	state->connectors[index].old_state = connector->state;
-	state->connectors[index].new_state = connector_state;
-	state->connectors[index].ptr = connector;
-	connector_state->state = state;
+	ret = drm_atomic_commit_set_connector_state(state, connector, connector_state);
+	if (ret) {
+		connector->funcs->atomic_destroy_state(connector, connector_state);
+		return ERR_PTR(ret);
+	}
 
 	drm_dbg_atomic(connector->dev, "Added [CONNECTOR:%d:%s] %p state to %p\n",
 			 connector->base.id, connector->name,
@@ -1435,8 +1555,8 @@ drm_atomic_get_connector_state(struct drm_atomic_commit *state,
 }
 EXPORT_SYMBOL(drm_atomic_get_connector_state);
 
-static void drm_atomic_connector_print_state(struct drm_printer *p,
-		const struct drm_connector_state *state)
+void drm_atomic_connector_print_state(struct drm_printer *p,
+				      const struct drm_connector_state *state)
 {
 	struct drm_connector *connector = state->connector;
 
@@ -2081,8 +2201,8 @@ commit:
 }
 EXPORT_SYMBOL(__drm_atomic_helper_set_config);
 
-static void drm_atomic_private_obj_print_state(struct drm_printer *p,
-					       const struct drm_private_state *state)
+void drm_atomic_private_obj_print_state(struct drm_printer *p,
+					const struct drm_private_state *state)
 {
 	struct drm_private_obj *obj = state->obj;
 

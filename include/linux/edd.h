@@ -23,7 +23,7 @@
 
 #include <uapi/linux/edd.h>
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 extern struct edd edd;
-#endif				/*!__ASSEMBLY__ */
+#endif				/*!__ASSEMBLER__ */
 #endif				/* _LINUX_EDD_H */

@@ -16,13 +16,99 @@
  */
 #include <linux/fsnotify.h>
 #include <linux/fs.h>
+#include <linux/fs_context.h>
 #include <linux/namei.h>
 #include <linux/workqueue.h>
 #include <linux/security.h>
 #include <linux/tracefs.h>
+#include <linux/magic.h>
 #include <linux/kref.h>
 #include <linux/delay.h>
 #include "internal.h"
+
+static struct vfsmount *eventfs_ro_mount;
+static int eventfs_ro_mount_count;
+
+static int eventfs_ro_fill_super(struct super_block *sb, struct fs_context *fc)
+{
+	struct inode *inode;
+	struct dentry *root;
+
+	sb->s_blocksize = PAGE_SIZE;
+	sb->s_blocksize_bits = PAGE_SHIFT;
+	sb->s_magic = EVENTFS_SUPER_MAGIC;
+	sb->s_op = &eventfs_ro_super_operations;
+	sb->s_time_gran = 1;
+	sb->s_flags |= SB_RDONLY;
+
+	inode = new_inode(sb);
+	if (!inode)
+		return -ENOMEM;
+
+	inode->i_ino = 1;
+	inode->i_mode = S_IFDIR | 0555;
+	simple_inode_init_ts(inode);
+	inode->i_op = &simple_dir_inode_operations;
+	inode->i_fop = &simple_dir_operations;
+
+	/*
+	 * All eventfs directories have i_nlink == 1
+	 * (See eventfs_create_events_dir)
+	 */
+
+	set_default_d_op(sb, &tracefs_dentry_operations);
+
+	root = d_make_root(inode);
+	if (!root)
+		return -ENOMEM;
+
+	sb->s_root = root;
+
+	return 0;
+}
+
+/* The eventfs_ro is always read-only */
+static int eventfs_ro_reconfigure(struct fs_context *fc)
+{
+	sync_filesystem(fc->root->d_sb);
+	fc->sb_flags |= SB_RDONLY;
+	return 0;
+}
+
+static int eventfs_ro_get_tree(struct fs_context *fc)
+{
+	return get_tree_single(fc, eventfs_ro_fill_super);
+}
+
+static const struct fs_context_operations eventfs_ro_context_ops = {
+	.get_tree	= eventfs_ro_get_tree,
+	.reconfigure	= eventfs_ro_reconfigure,
+};
+
+static int eventfs_ro_init_fs_context(struct fs_context *fc)
+{
+	fc->ops = &eventfs_ro_context_ops;
+	return 0;
+}
+
+struct file_system_type eventfs_ro_fs_type = {
+	.owner =	THIS_MODULE,
+	.name =		"eventfs",
+	.init_fs_context = eventfs_ro_init_fs_context,
+	.kill_sb =	kill_anon_super,
+};
+
+struct dentry *eventfs_ro_get_root(void)
+{
+	int error;
+
+	error = simple_pin_fs(&eventfs_ro_fs_type, &eventfs_ro_mount,
+			      &eventfs_ro_mount_count);
+	if (error)
+		return ERR_PTR(error);
+
+	return dget(eventfs_ro_mount->mnt_root);
+}
 
 /*
  * eventfs_mutex protects the eventfs_inode (ei) dentry. Any access
@@ -169,7 +255,11 @@ static inline struct eventfs_inode *get_ei(struct eventfs_inode *ei)
 static struct dentry *eventfs_root_lookup(struct inode *dir,
 					  struct dentry *dentry,
 					  unsigned int flags);
+static struct dentry *eventfs_root_lookup_ro(struct inode *dir,
+					     struct dentry *dentry,
+					     unsigned int flags);
 static int eventfs_iterate(struct file *file, struct dir_context *ctx);
+static int eventfs_ro_iterate(struct file *file, struct dir_context *ctx);
 
 static void update_attr(struct eventfs_attr *attr, struct iattr *iattr)
 {
@@ -247,6 +337,10 @@ static const struct inode_operations eventfs_dir_inode_operations = {
 	.setattr	= eventfs_set_attr,
 };
 
+static const struct inode_operations eventfs_ro_dir_inode_operations = {
+	.lookup		= eventfs_root_lookup_ro,
+};
+
 static const struct inode_operations eventfs_file_inode_operations = {
 	.setattr	= eventfs_set_attr,
 };
@@ -254,6 +348,12 @@ static const struct inode_operations eventfs_file_inode_operations = {
 static const struct file_operations eventfs_file_operations = {
 	.read		= generic_read_dir,
 	.iterate_shared	= eventfs_iterate,
+	.llseek		= generic_file_llseek,
+};
+
+static const struct file_operations eventfs_ro_file_operations = {
+	.read		= generic_read_dir,
+	.iterate_shared	= eventfs_ro_iterate,
 	.llseek		= generic_file_llseek,
 };
 
@@ -316,12 +416,17 @@ void eventfs_remount(struct tracefs_inode *ti, bool update_uid, bool update_gid)
 }
 
 static void update_inode_attr(struct inode *inode, umode_t mode,
-			      struct eventfs_attr *attr, struct eventfs_root_inode *rei)
+			      struct eventfs_attr *attr, struct eventfs_root_inode *rei,
+			      bool ro)
 {
+	inode->i_mode = mode;
+
+	/* The read-only version does not allow updates to owership or permissions */
+	if (ro)
+		return;
+
 	if (attr && attr->mode & EVENTFS_SAVE_MODE)
 		inode->i_mode = attr->mode & EVENTFS_MODE_MASK;
-	else
-		inode->i_mode = mode;
 
 	if (attr && attr->mode & EVENTFS_SAVE_UID)
 		inode->i_uid = attr->uid;
@@ -335,7 +440,7 @@ static void update_inode_attr(struct inode *inode, umode_t mode,
 }
 
 static struct inode *eventfs_get_inode(struct dentry *dentry, struct eventfs_attr *attr,
-				       umode_t mode,  struct eventfs_inode *ei)
+				       umode_t mode,  struct eventfs_inode *ei, bool ro)
 {
 	struct eventfs_root_inode *rei;
 	struct eventfs_inode *pei;
@@ -350,6 +455,9 @@ static struct inode *eventfs_get_inode(struct dentry *dentry, struct eventfs_att
 	ti->private = ei;
 	ti->flags |= TRACEFS_EVENT_INODE;
 
+	if (ro)
+		ti->flags |= TRACEFS_RO_EVENT_INODE;
+
 	/* Find the top dentry that holds the "events" directory */
 	do {
 		dentry = dentry->d_parent;
@@ -359,7 +467,7 @@ static struct inode *eventfs_get_inode(struct dentry *dentry, struct eventfs_att
 
 	rei = get_root_inode(pei);
 
-	update_inode_attr(inode, mode, attr, rei);
+	update_inode_attr(inode, mode, attr, rei, ro);
 
 	return inode;
 }
@@ -372,6 +480,7 @@ static struct inode *eventfs_get_inode(struct dentry *dentry, struct eventfs_att
  * @attr: saved attributes changed by user
  * @data: something that the caller will want to get to later on.
  * @fop: struct file_operations that should be used for this file.
+ * @ro: Denote if this lookup is for the read-only version.
  *
  * This function creates a dentry that represents a file in the eventsfs_inode
  * directory. The inode.i_private pointer will point to @data in the open()
@@ -382,7 +491,8 @@ static struct dentry *lookup_file(struct eventfs_inode *parent_ei,
 				  umode_t mode,
 				  struct eventfs_attr *attr,
 				  void *data,
-				  const struct file_operations *fop)
+				  const struct file_operations *fop,
+				  bool ro)
 {
 	struct inode *inode;
 
@@ -393,11 +503,13 @@ static struct dentry *lookup_file(struct eventfs_inode *parent_ei,
 		return ERR_PTR(-EIO);
 
 	/* Only directories have ti->private set to an ei, not files */
-	inode = eventfs_get_inode(dentry, attr, mode, NULL);
+	inode = eventfs_get_inode(dentry, attr, mode, NULL, ro);
 	if (unlikely(!inode))
 		return ERR_PTR(-ENOMEM);
 
-	inode->i_op = &eventfs_file_inode_operations;
+	/* Read only does not allow setting of attributes */
+	if (!ro)
+		inode->i_op = &eventfs_file_inode_operations;
 	inode->i_fop = fop;
 	inode->i_private = data;
 
@@ -415,22 +527,28 @@ static struct dentry *lookup_file(struct eventfs_inode *parent_ei,
  * @dentry: the directory to look up
  * @pei: Pointer to the parent eventfs_inode if available
  * @ei: the eventfs_inode that represents the directory to create
+ * @ro: boolean to denote if this lookup is for the read-only version
  *
  * This function will look up a dentry for a directory represented by
  * a eventfs_inode.
  */
 static struct dentry *lookup_dir_entry(struct dentry *dentry,
-	struct eventfs_inode *pei, struct eventfs_inode *ei)
+	struct eventfs_inode *pei, struct eventfs_inode *ei, bool ro)
 {
 	struct inode *inode;
 	umode_t mode = S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO;
 
-	inode = eventfs_get_inode(dentry, &ei->attr, mode, ei);
+	inode = eventfs_get_inode(dentry, &ei->attr, mode, ei, ro);
 	if (unlikely(!inode))
 		return ERR_PTR(-ENOMEM);
 
-	inode->i_op = &eventfs_dir_inode_operations;
-	inode->i_fop = &eventfs_file_operations;
+	if (ro) {
+		inode->i_op = &eventfs_ro_dir_inode_operations;
+		inode->i_fop = &eventfs_ro_file_operations;
+	} else {
+		inode->i_op = &eventfs_dir_inode_operations;
+		inode->i_fop = &eventfs_file_operations;
+	}
 
 	/* All directories will have the same inode number */
 	inode->i_ino = eventfs_dir_ino(ei);
@@ -501,6 +619,7 @@ void eventfs_d_release(struct dentry *dentry)
  * @mode: The mode of the file.
  * @data: The data to use to set the inode of the file with on open()
  * @fops: The fops of the file to be created.
+ * @ro: Denote if this lookup is for the read-only version
  *
  * This function creates a dentry for a file associated with an
  * eventfs_inode @ei. It uses the entry attributes specified by @idx,
@@ -514,14 +633,21 @@ static struct dentry *
 lookup_file_dentry(struct dentry *dentry,
 		   struct eventfs_inode *ei, int idx,
 		   umode_t mode, void *data,
-		   const struct file_operations *fops)
+		   const struct file_operations *fops, bool ro)
 {
 	struct eventfs_attr *attr = NULL;
 
-	if (ei->entry_attrs)
+	/*
+	 * Read-only files gives all users read access,
+	 * but also should make sure this is not writable.
+	 * Read-only also does not allow modified attributes.
+	 */
+	if (ro)
+		mode = (mode & ~0222) | 0444;
+	else if (ei->entry_attrs)
 		attr = &ei->entry_attrs[idx];
 
-	return lookup_file(ei, dentry, mode, attr, data, fops);
+	return lookup_file(ei, dentry, mode, attr, data, fops, ro);
 }
 
 /**
@@ -529,14 +655,16 @@ lookup_file_dentry(struct dentry *dentry,
  * @dir: in which a lookup is being done
  * @dentry: file/dir dentry
  * @flags: Just passed to simple_lookup()
+ * @ro: Denote if this is from a read-only eventfs
  *
  * Used to create dynamic file/dir with-in @dir, search with-in @ei
  * list, if @dentry found go ahead and create the file/dir
  */
 
-static struct dentry *eventfs_root_lookup(struct inode *dir,
-					  struct dentry *dentry,
-					  unsigned int flags)
+static struct dentry *__eventfs_root_lookup(struct inode *dir,
+					    struct dentry *dentry,
+					    unsigned int flags,
+					    bool ro)
 {
 	struct eventfs_inode *ei_child;
 	struct tracefs_inode *ti;
@@ -559,7 +687,7 @@ static struct dentry *eventfs_root_lookup(struct inode *dir,
 		/* A child is freed and removed from the list at the same time */
 		if (WARN_ON_ONCE(ei_child->is_freed))
 			return NULL;
-		return lookup_dir_entry(dentry, ei, ei_child);
+		return lookup_dir_entry(dentry, ei, ei_child, ro);
 	}
 
 	for (int i = 0; i < ei->nr_entries; i++) {
@@ -571,20 +699,37 @@ static struct dentry *eventfs_root_lookup(struct inode *dir,
 		if (strcmp(name, entry->name) != 0)
 			continue;
 
+		if (ro && !entry->read_only)
+			return NULL;
+
 		data = ei->data;
 		if (entry->callback(name, &mode, &data, &fops) <= 0)
 			return NULL;
 
-		return lookup_file_dentry(dentry, ei, i, mode, data, fops);
+		return lookup_file_dentry(dentry, ei, i, mode, data, fops, ro);
 
 	}
 	return NULL;
 }
 
+static struct dentry *eventfs_root_lookup(struct inode *dir,
+					  struct dentry *dentry,
+					  unsigned int flags)
+{
+	return __eventfs_root_lookup(dir, dentry, flags, false);
+}
+
+static struct dentry *eventfs_root_lookup_ro(struct inode *dir,
+					     struct dentry *dentry,
+					     unsigned int flags)
+{
+	return __eventfs_root_lookup(dir, dentry, flags, true);
+}
+
 /*
  * Walk the children of a eventfs_inode to fill in getdents().
  */
-static int eventfs_iterate(struct file *file, struct dir_context *ctx)
+static int __eventfs_iterate(struct file *file, struct dir_context *ctx, bool ro)
 {
 	const struct file_operations *fops;
 	struct inode *f_inode = file_inode(file);
@@ -629,6 +774,9 @@ static int eventfs_iterate(struct file *file, struct dir_context *ctx)
 
 		entry = &ei->entries[i];
 		name = entry->name;
+
+		if (ro && !entry->read_only)
+			continue;
 
 		/* If ei->is_freed then just bail here, nothing more to do */
 		scoped_guard(mutex, &eventfs_mutex) {
@@ -686,6 +834,16 @@ static int eventfs_iterate(struct file *file, struct dir_context *ctx)
 		}
 	}
 	return 1;
+}
+
+static int eventfs_iterate(struct file *file, struct dir_context *ctx)
+{
+	return __eventfs_iterate(file, ctx, false);
+}
+
+static int eventfs_ro_iterate(struct file *file, struct dir_context *ctx)
+{
+	return __eventfs_iterate(file, ctx, true);
 }
 
 /**
@@ -843,6 +1001,51 @@ struct eventfs_inode *eventfs_create_events_dir(const char *name, struct dentry 
 	cleanup_ei(ei);
 	tracefs_failed_creating(dentry);
 	return ERR_PTR(-ENOMEM);
+}
+
+/**
+ * eventfs_create_events_ro_copy - create a read-only events directory
+ * @ei: The eventfs_inode to use to create a read-only copy from
+ *
+ * This function configures the eventfs filesystem root as a read-only
+ * trace event directory using the existing eventfs_inode lazy-lookup
+ * infrastructure.
+ */
+int eventfs_create_events_ro_copy(struct eventfs_inode *ei)
+{
+	static struct dentry *dentry;
+	struct tracefs_inode *ti;
+	struct inode *inode;
+	int ret;
+
+	/* Can only be called once. */
+	if (dentry)
+		return -EBUSY;
+
+	/* Reference acquired but never freed */
+	dentry = eventfs_ro_get_root();
+	if (IS_ERR(dentry)) {
+		ret = PTR_ERR(dentry);
+		dentry = NULL;
+		return ret;
+	}
+
+	inode = d_inode(dentry);
+
+	ti = get_tracefs(inode);
+
+	/* This gets called at boot up, so it's safe to do here */
+	ti->flags |= TRACEFS_EVENT_INODE | TRACEFS_RO_EVENT_INODE;
+
+	ti->private = ei;
+
+	inode->i_op = &eventfs_ro_dir_inode_operations;
+	inode->i_fop = &eventfs_ro_file_operations;
+
+	/* This is never freed */
+	dentry->d_fsdata = get_ei(ei);
+
+	return 0;
 }
 
 /**

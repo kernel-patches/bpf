@@ -425,7 +425,7 @@ static unsigned long __find_kallsyms_symbol_value(struct module *mod, const char
 static unsigned long __module_kallsyms_lookup_name(const char *name)
 {
 	struct module *mod;
-	char *colon;
+	const char *colon;
 
 	colon = strnchr(name, MODULE_NAME_LEN, ':');
 	if (colon) {

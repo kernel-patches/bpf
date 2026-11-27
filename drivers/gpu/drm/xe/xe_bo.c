@@ -6,12 +6,14 @@
 #include "xe_bo.h"
 
 #include <linux/dma-buf.h>
+#include <linux/nodemask.h>
 #include <linux/nospec.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_dumb_buffers.h>
 #include <drm/drm_gem_ttm_helper.h>
 #include <drm/drm_managed.h>
+#include <drm/drm_print.h>
 #include <drm/ttm/ttm_backup.h>
 #include <drm/ttm/ttm_device.h>
 #include <drm/ttm/ttm_placement.h>
@@ -41,6 +43,7 @@
 #include "xe_ttm_stolen_mgr.h"
 #include "xe_vm.h"
 #include "xe_vram_types.h"
+#include "xe_wedge.h"
 
 const char *const xe_mem_type_to_name[TTM_NUM_MEM_TYPES]  = {
 	[XE_PL_SYSTEM] = "system",
@@ -456,9 +459,9 @@ static void xe_ttm_tt_account_add(struct xe_device *xe, struct ttm_tt *tt)
 	struct xe_ttm_tt *xe_tt = container_of(tt, struct xe_ttm_tt, ttm);
 
 	if (xe_tt->purgeable)
-		xe_shrinker_mod_pages(xe->mem.shrinker, 0, tt->num_pages);
+		xe_shrinker_mod_pages(xe->mem.shrinker, 0, tt->num_pages, 1);
 	else
-		xe_shrinker_mod_pages(xe->mem.shrinker, tt->num_pages, 0);
+		xe_shrinker_mod_pages(xe->mem.shrinker, tt->num_pages, 0, 1);
 }
 
 static void xe_ttm_tt_account_subtract(struct xe_device *xe, struct ttm_tt *tt)
@@ -466,9 +469,9 @@ static void xe_ttm_tt_account_subtract(struct xe_device *xe, struct ttm_tt *tt)
 	struct xe_ttm_tt *xe_tt = container_of(tt, struct xe_ttm_tt, ttm);
 
 	if (xe_tt->purgeable)
-		xe_shrinker_mod_pages(xe->mem.shrinker, 0, -(long)tt->num_pages);
+		xe_shrinker_mod_pages(xe->mem.shrinker, 0, -(long)tt->num_pages, -1);
 	else
-		xe_shrinker_mod_pages(xe->mem.shrinker, -(long)tt->num_pages, 0);
+		xe_shrinker_mod_pages(xe->mem.shrinker, -(long)tt->num_pages, 0, -1);
 }
 
 static bool xe_ttm_bo_is_imported(struct ttm_buffer_object *tbo)
@@ -869,7 +872,7 @@ static int xe_bo_move_dmabuf(struct ttm_buffer_object *ttm_bo,
 	    ttm_bo->sg) {
 		dma_resv_wait_timeout(ttm_bo->base.resv, DMA_RESV_USAGE_BOOKKEEP,
 				      false, MAX_SCHEDULE_TIMEOUT);
-		dma_buf_unmap_attachment(attach, ttm_bo->sg, DMA_BIDIRECTIONAL);
+		dma_buf_unmap_sgt(attach, ttm_bo->sg, DMA_BIDIRECTIONAL);
 		ttm_bo->sg = NULL;
 	}
 
@@ -877,11 +880,11 @@ static int xe_bo_move_dmabuf(struct ttm_buffer_object *ttm_bo,
 		goto out;
 
 	if (ttm_bo->sg) {
-		dma_buf_unmap_attachment(attach, ttm_bo->sg, DMA_BIDIRECTIONAL);
+		dma_buf_unmap_sgt(attach, ttm_bo->sg, DMA_BIDIRECTIONAL);
 		ttm_bo->sg = NULL;
 	}
 
-	sg = dma_buf_map_attachment(attach, DMA_BIDIRECTIONAL);
+	sg = dma_buf_map_sgt(attach, DMA_BIDIRECTIONAL);
 	if (IS_ERR(sg))
 		return PTR_ERR(sg);
 
@@ -984,12 +987,44 @@ static void xe_bo_set_purgeable_shrinker(struct xe_bo *bo,
 	if (!xe_tt->purgeable && new_state == XE_MADV_PURGEABLE_DONTNEED) {
 		xe_tt->purgeable = true;
 		/* Transfer pages from shrinkable to purgeable count */
-		xe_shrinker_mod_pages(xe->mem.shrinker, -tt_pages, tt_pages);
+		xe_shrinker_mod_pages(xe->mem.shrinker, -tt_pages, tt_pages, 0);
 	} else if (xe_tt->purgeable && new_state == XE_MADV_PURGEABLE_WILLNEED) {
 		xe_tt->purgeable = false;
 		/* Transfer pages from purgeable to shrinkable count */
-		xe_shrinker_mod_pages(xe->mem.shrinker, tt_pages, -tt_pages);
+		xe_shrinker_mod_pages(xe->mem.shrinker, tt_pages, -tt_pages, 0);
 	}
+}
+
+/*
+ * Change @bo's TTM LRU priority to @priority. @bo's dma-resv must be held.
+ *
+ * Private, user BOs of non-fault-mode VMs have bo->ttm.bulk_move set to their
+ * VM's LRU bulk-move range (see xe_bo_create_user()), which tracks a
+ * contiguous [first, last] run of resources per (mem_type, priority) bucket.
+ * Writing bo->ttm.priority while the BO is still attached to that range would
+ * leave the resource linked in the old priority's bucket while the bulk-move
+ * code looks it up under the new one, corrupting both buckets. Temporarily
+ * detaching the BO from its bulk-move range moves it with a plain, non-bulk
+ * LRU update instead, and reattaching afterwards re-inserts it into the new
+ * priority's bucket.
+ */
+static void xe_bo_update_ttm_priority(struct xe_bo *bo, int priority)
+{
+	struct ttm_lru_bulk_move *bulk = bo->ttm.bulk_move;
+
+	xe_bo_assert_held(bo);
+
+	if (bo->ttm.priority == priority)
+		return;
+
+	if (bulk)
+		ttm_bo_set_bulk_move(&bo->ttm, NULL);
+
+	bo->ttm.priority = priority;
+	ttm_bo_move_to_lru_tail_unlocked(&bo->ttm);
+
+	if (bulk)
+		ttm_bo_set_bulk_move(&bo->ttm, bulk);
 }
 
 /**
@@ -1001,6 +1036,10 @@ static void xe_bo_set_purgeable_shrinker(struct xe_bo *bo,
  * transitions. Once a BO is PURGED, it cannot transition to any other state.
  * Invalid transitions are caught with xe_assert(). Shrinker page accounting
  * is updated automatically.
+ *
+ * A WILLNEED -> DONTNEED transition also lowers the BO's TTM LRU priority to
+ * XE_BO_PRIORITY_LOW. Conversely, a DONTNEED -> WILLNEED transition restores
+ * XE_BO_PRIORITY_NORMAL.
  */
 void xe_bo_set_purgeable_state(struct xe_bo *bo,
 			       enum xe_madv_purgeable_state new_state)
@@ -1017,6 +1056,13 @@ void xe_bo_set_purgeable_state(struct xe_bo *bo,
 	/* Once purged, always purged - cannot transition out */
 	xe_assert(xe, !(bo->purgeable.state == XE_MADV_PURGEABLE_PURGED &&
 			new_state != XE_MADV_PURGEABLE_PURGED));
+
+	if (new_state == XE_MADV_PURGEABLE_DONTNEED &&
+	    bo->purgeable.state == XE_MADV_PURGEABLE_WILLNEED)
+		xe_bo_update_ttm_priority(bo, XE_BO_PRIORITY_LOW);
+	else if (new_state == XE_MADV_PURGEABLE_WILLNEED &&
+		 bo->purgeable.state == XE_MADV_PURGEABLE_DONTNEED)
+		xe_bo_update_ttm_priority(bo, XE_BO_PRIORITY_NORMAL);
 
 	bo->purgeable.state = new_state;
 	xe_bo_set_purgeable_shrinker(bo, new_state);
@@ -1750,9 +1796,9 @@ int xe_bo_dma_unmap_pinned(struct xe_bo *bo)
 		struct xe_ttm_tt *xe_tt = container_of(tt, typeof(*xe_tt), ttm);
 
 		if (ttm_bo->type == ttm_bo_type_sg && ttm_bo->sg) {
-			dma_buf_unmap_attachment(ttm_bo->base.import_attach,
-						 ttm_bo->sg,
-						 DMA_BIDIRECTIONAL);
+			dma_buf_unmap_sgt(ttm_bo->base.import_attach,
+					  ttm_bo->sg,
+					  DMA_BIDIRECTIONAL);
 			ttm_bo->sg = NULL;
 			xe_tt->sg = NULL;
 		} else if (xe_tt->sg) {
@@ -1867,8 +1913,8 @@ static void xe_ttm_bo_delete_mem_notify(struct ttm_buffer_object *ttm_bo)
 		struct xe_ttm_tt *xe_tt = container_of(ttm_bo->ttm,
 						       struct xe_ttm_tt, ttm);
 
-		dma_buf_unmap_attachment(ttm_bo->base.import_attach, ttm_bo->sg,
-					 DMA_BIDIRECTIONAL);
+		dma_buf_unmap_sgt(ttm_bo->base.import_attach, ttm_bo->sg,
+				  DMA_BIDIRECTIONAL);
 		ttm_bo->sg = NULL;
 		xe_tt->sg = NULL;
 	}
@@ -2203,7 +2249,7 @@ static vm_fault_t xe_bo_cpu_fault(struct vm_fault *vmf)
 	int err = 0;
 	int idx;
 
-	if (xe_device_wedged(xe) || !drm_dev_enter(&xe->drm, &idx))
+	if (xe_wedged(xe) || !drm_dev_enter(&xe->drm, &idx))
 		return ttm_bo_vm_dummy_page(vmf, vmf->vma->vm_page_prot);
 
 	ret = xe_bo_cpu_fault_fastpath(vmf, xe, bo, needs_rpm);
@@ -4203,6 +4249,117 @@ void xe_bo_runtime_pm_release_mmap_offset(struct xe_bo *bo)
 
 	list_del_init(&bo->vram_userfault_link);
 }
+
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+static void xe_bo_count_numa_pages(struct ttm_tt *tt, unsigned long *nodes)
+{
+	pgoff_t i;
+
+	for (i = 0; i < tt->num_pages; ++i)
+		nodes[page_to_nid(tt->pages[i])]++;
+}
+
+static void xe_bo_print_numa_info_locked(struct xe_bo *bo, unsigned long *nodes,
+					 struct drm_printer *p)
+{
+	struct ttm_resource *res = bo->ttm.resource;
+	struct ttm_tt *tt = bo->ttm.ttm;
+	unsigned long total = 0;
+	const char *name;
+	int nid;
+
+	xe_bo_assert_held(bo);
+
+	name = res ? xe_mem_type_to_name[res->mem_type] : NULL;
+	drm_printf(p, "size: %zu\n", xe_bo_size(bo));
+	if (name)
+		drm_printf(p, "placement: %s\n", name);
+	else if (res)
+		drm_printf(p, "placement: mem_type %u\n", res->mem_type);
+	else
+		drm_puts(p, "placement: none\n");
+
+	/* The pages of sg bos are owned by the exporter and not visible. */
+	if (bo->ttm.type == ttm_bo_type_sg) {
+		drm_puts(p, "pages: unknown (sg bo)\n");
+		return;
+	}
+
+	/*
+	 * Purging via xe_ttm_bo_purge() guts the bo without setting any
+	 * swapped or backed-up flag on the tt.
+	 */
+	if (xe_bo_is_purged(bo) || (tt && ttm_tt_is_swapped(tt))) {
+		drm_puts(p, "pages: swapped/purged\n");
+		return;
+	}
+
+	if (tt && !ttm_tt_is_populated(tt)) {
+		drm_puts(p, "pages: not populated\n");
+		return;
+	}
+
+	if (tt)
+		xe_bo_count_numa_pages(tt, nodes);
+
+	for_each_node(nid) {
+		if (!nodes[nid] && !node_online(nid))
+			continue;
+		drm_printf(p, "node%d: %lu\n", nid, nodes[nid]);
+		total += nodes[nid];
+	}
+
+	drm_printf(p, "total: %lu\n", total);
+}
+
+/**
+ * xe_bo_print_numa_info() - Print the NUMA node distribution of a bo
+ * @file: The drm_file of the client owning @handle.
+ * @handle: The GEM handle of the bo.
+ * @p: The drm_printer to print to.
+ *
+ * Print the size and placement of the bo and, for bos with
+ * driver-allocated system pages, the number of pages residing on each
+ * NUMA node. If the bo's pages are currently swapped out, backed up or
+ * purged by the shrinker, the bo is reported as swapped/purged, and if
+ * they are not populated, as not populated. For sg bos, typically
+ * imported dma-bufs, the backing pages are owned by the exporter and are
+ * reported as unknown. The information is gathered under the bo's
+ * dma_resv lock and thus represents a consistent snapshot.
+ *
+ * Return: 0 on success, -ENOENT if @handle doesn't refer to a bo,
+ * negative error code on other failures.
+ */
+int xe_bo_print_numa_info(struct drm_file *file, u32 handle,
+			  struct drm_printer *p)
+{
+	struct drm_gem_object *obj;
+	unsigned long *nodes;
+	int ret;
+
+	nodes = kcalloc(nr_node_ids, sizeof(*nodes), GFP_KERNEL_ACCOUNT);
+	if (!nodes)
+		return -ENOMEM;
+
+	obj = drm_gem_object_lookup(file, handle);
+	if (!obj) {
+		ret = -ENOENT;
+		goto out_free;
+	}
+
+	ret = dma_resv_lock_interruptible(obj->resv, NULL);
+	if (!ret) {
+		xe_bo_print_numa_info_locked(gem_to_xe_bo(obj), nodes, p);
+		dma_resv_unlock(obj->resv);
+	}
+
+	drm_gem_object_put(obj);
+out_free:
+	kfree(nodes);
+
+	return ret;
+}
+#endif
 
 #if IS_ENABLED(CONFIG_DRM_XE_KUNIT_TEST)
 #include "tests/xe_bo.c"

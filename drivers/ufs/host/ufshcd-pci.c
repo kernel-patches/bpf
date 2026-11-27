@@ -644,7 +644,7 @@ static int ufshcd_pci_suspend_prepare(struct device *dev)
 {
 	struct ufs_hba *hba = dev_get_drvdata(dev);
 
-	if (!strcmp(hba->vops->name, "intel-pci"))
+	if (hba->vops && !strcmp(hba->vops->name, "intel-pci"))
 		return ufs_intel_suspend_prepare(dev);
 
 	return ufshcd_suspend_prepare(dev);
@@ -654,7 +654,7 @@ static void ufshcd_pci_resume_complete(struct device *dev)
 {
 	struct ufs_hba *hba = dev_get_drvdata(dev);
 
-	if (!strcmp(hba->vops->name, "intel-pci")) {
+	if (hba->vops && !strcmp(hba->vops->name, "intel-pci")) {
 		ufs_intel_resume_complete(dev);
 		return;
 	}

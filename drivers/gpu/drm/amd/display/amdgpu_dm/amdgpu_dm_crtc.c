@@ -223,33 +223,6 @@ struct idle_workqueue *idle_create_workqueue(struct amdgpu_device *adev)
 }
 EXPORT_IF_KUNIT(idle_create_workqueue);
 
-STATIC_IFN_KUNIT void amdgpu_dm_crtc_vblank_control_worker(struct work_struct *work)
-{
-	struct vblank_control_work *vblank_work =
-		container_of(work, struct vblank_control_work, work);
-	struct amdgpu_display_manager *dm = vblank_work->dm;
-
-	mutex_lock(&dm->dc_lock);
-
-	if (vblank_work->enable) {
-		dm->active_vblank_irq_count++;
-		amdgpu_dm_ism_commit_event(&vblank_work->acrtc->ism,
-				DM_ISM_EVENT_EXIT_IDLE_REQUESTED);
-	} else {
-		if (dm->active_vblank_irq_count > 0)
-			dm->active_vblank_irq_count--;
-		amdgpu_dm_ism_commit_event(&vblank_work->acrtc->ism,
-				DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
-	}
-
-	mutex_unlock(&dm->dc_lock);
-
-	dc_stream_release(vblank_work->stream);
-
-	kfree(vblank_work);
-}
-EXPORT_IF_KUNIT(amdgpu_dm_crtc_vblank_control_worker);
-
 #if defined(CONFIG_DRM_AMD_SECURE_DISPLAY) || IS_ENABLED(CONFIG_DRM_AMD_DC_KUNIT_TEST)
 STATIC_IFN_KUNIT int amdgpu_dm_crtc_set_vline0_irq(struct drm_crtc *crtc, int irq_type,
 						   bool enable)
@@ -274,45 +247,20 @@ STATIC_IFN_KUNIT int amdgpu_dm_crtc_set_vline0_irq(struct drm_crtc *crtc, int ir
 EXPORT_IF_KUNIT(amdgpu_dm_crtc_set_vline0_irq);
 #endif
 
-static inline int amdgpu_dm_crtc_set_vblank(struct drm_crtc *crtc, bool enable)
+static int amdgpu_dm_program_vblank_irq(struct amdgpu_crtc *acrtc, bool enable)
 {
-	struct amdgpu_crtc *acrtc = to_amdgpu_crtc(crtc);
+	struct drm_crtc *crtc = &acrtc->base;
 	struct amdgpu_device *adev = drm_to_adev(crtc->dev);
-	struct dm_crtc_state *acrtc_state = to_dm_crtc_state(crtc->state);
 	struct amdgpu_display_manager *dm = &adev->dm;
-	struct vblank_control_work *work;
-	int irq_type;
+	struct dm_crtc_state *acrtc_state = to_dm_crtc_state(crtc->state);
 	int rc = 0;
+	int irq_type = amdgpu_display_crtc_idx_to_irq_type(adev, acrtc->crtc_id);
 
-	if (enable && !acrtc->base.enabled) {
-		drm_dbg_vbl(crtc->dev,
-				"Reject vblank enable on unconfigured CRTC %d (enabled=%d)\n",
-				acrtc->crtc_id, acrtc->base.enabled);
-		return -EINVAL;
-	}
-
-	irq_type = amdgpu_display_crtc_idx_to_irq_type(adev, acrtc->crtc_id);
-
-	if (enable && acrtc_state->stream) {
-		struct dc *dc = adev->dm.dc;
-		struct drm_vblank_crtc *vblank = drm_crtc_vblank_crtc(crtc);
-		struct psr_settings *psr = &acrtc_state->stream->link->psr_settings;
-		struct replay_settings *pr = &acrtc_state->stream->link->replay_settings;
-		bool sr_supported = (psr->psr_version != DC_PSR_VERSION_UNSUPPORTED) ||
-								pr->config.replay_supported;
-
-		/*
-		 * IPS & self-refresh feature can cause vblank counter resets between
-		 * vblank disable and enable.
-		 * It may cause system stuck due to waiting for the vblank counter.
-		 * Call this function to estimate missed vblanks by using timestamps and
-		 * update the vblank counter in DRM.
-		 */
-		if (dc->caps.ips_support &&
-			dc->config.disable_ips != DMUB_IPS_DISABLE_ALL &&
-			sr_supported && vblank->config.disable_immediate)
-			drm_crtc_vblank_restore(crtc);
-	}
+#if defined(CONFIG_DRM_AMD_SECURE_DISPLAY)
+	rc = amdgpu_dm_crtc_set_vline0_irq(crtc, irq_type, enable);
+	if (rc)
+		return rc;
+#endif
 
 	/*
 	 * On DCN, VUPDATE_NO_LOCK is the single OTG interrupt used to deliver
@@ -382,32 +330,153 @@ static inline int amdgpu_dm_crtc_set_vblank(struct drm_crtc *crtc, bool enable)
 			return rc;
 	}
 
-#if defined(CONFIG_DRM_AMD_SECURE_DISPLAY)
-	rc = amdgpu_dm_crtc_set_vline0_irq(crtc, irq_type, enable);
-	if (rc)
-		return rc;
-#endif
+	return 0;
+}
 
-	if (amdgpu_in_reset(adev))
+static int amdgpu_dm_sync_vblank_irq(struct amdgpu_crtc *acrtc, bool enable)
+{
+	struct amdgpu_display_manager *dm = &drm_to_adev(acrtc->base.dev)->dm;
+	int rc = 0;
+
+	lockdep_assert_held(&dm->ddev->vbl_lock);
+
+	if (enable == acrtc->dm_irq_params.vblank_irq_programmed)
 		return 0;
 
-	if (dm->vblank_control_workqueue) {
-		work = kzalloc_obj(*work, GFP_ATOMIC);
-		if (!work)
-			return -ENOMEM;
+	rc = amdgpu_dm_program_vblank_irq(acrtc, enable);
+	if (rc)
+		return rc;
 
-		INIT_WORK(&work->work, amdgpu_dm_crtc_vblank_control_worker);
-		work->dm = dm;
-		work->acrtc = acrtc;
-		work->enable = enable;
+	acrtc->dm_irq_params.vblank_irq_programmed = enable;
 
-		if (acrtc_state->stream) {
-			dc_stream_retain(acrtc_state->stream);
-			work->stream = acrtc_state->stream;
+	if (enable)
+		dm->active_vblank_irq_count++;
+	else if (!WARN_ON(!dm->active_vblank_irq_count))
+		dm->active_vblank_irq_count--;
+
+	return 0;
+}
+
+STATIC_IFN_KUNIT void amdgpu_dm_crtc_vblank_control_worker(struct work_struct *work)
+{
+	struct vblank_control_work *vblank_work =
+		container_of(work, struct vblank_control_work, work);
+	struct amdgpu_display_manager *dm = vblank_work->dm;
+	struct amdgpu_crtc *acrtc = vblank_work->acrtc;
+	bool program;
+
+	mutex_lock(&dm->dc_lock);
+
+	if (vblank_work->enable) {
+		amdgpu_dm_ism_commit_event(&vblank_work->acrtc->ism,
+				DM_ISM_EVENT_EXIT_IDLE_REQUESTED);
+	}
+
+	scoped_guard(spinlock_irqsave, &dm->sw_counter_lock) {
+		WARN_ON(!acrtc->dm_irq_params.vblank_irq_desired &&
+			acrtc->dm_irq_params.vblank_irq_programmed);
+		program = acrtc->dm_irq_params.vblank_irq_desired &&
+			  !acrtc->dm_irq_params.vblank_irq_programmed;
+	}
+
+	if (program) {
+		/*
+		 * The ISM has corner cases where an idle exit event
+		 * (EXIT_IDLE_REQUESTED, BEGIN_CURSOR_UPDATE) does not call
+		 * dc_allow_idle_optimizations(false). E.g. another CRTC's ISM
+		 * can do the release while this ISM is in FULL_POWER_RUNNING,
+		 * where EXIT commits nothing. Acquire and resume here until HW
+		 * ref counting resolves this.
+		 */
+		if (dm->use_sw_vblank_counter) {
+			dc_allow_idle_optimizations(dm->dc, false);
+			amdgpu_dm_sw_counter_resume(dm);
 		}
 
-		queue_work(dm->vblank_control_workqueue, &work->work);
+		scoped_guard(spinlock_irqsave, &dm->ddev->vbl_lock) {
+			if (acrtc->dm_irq_params.vblank_irq_desired &&
+			    !acrtc->dm_irq_params.vblank_irq_programmed)
+				WARN_ON(amdgpu_dm_sync_vblank_irq(acrtc, true));
+		}
 	}
+
+	if (!vblank_work->enable) {
+		amdgpu_dm_ism_commit_event(&vblank_work->acrtc->ism,
+				DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+	}
+
+	mutex_unlock(&dm->dc_lock);
+
+	dc_stream_release(vblank_work->stream);
+
+	kfree(vblank_work);
+}
+EXPORT_IF_KUNIT(amdgpu_dm_crtc_vblank_control_worker);
+
+static inline int amdgpu_dm_crtc_set_vblank(struct drm_crtc *crtc, bool enable)
+{
+	struct amdgpu_crtc *acrtc = to_amdgpu_crtc(crtc);
+	struct amdgpu_device *adev = drm_to_adev(crtc->dev);
+	struct dm_crtc_state *acrtc_state = to_dm_crtc_state(crtc->state);
+	struct amdgpu_display_manager *dm = &adev->dm;
+	struct vblank_control_work *work;
+	int rc = 0;
+
+	lockdep_assert_held(&crtc->dev->vbl_lock);
+
+	if (enable && !acrtc->base.enabled) {
+		drm_dbg_vbl(crtc->dev,
+				"Reject vblank enable on unconfigured CRTC %d (enabled=%d)\n",
+				acrtc->crtc_id, acrtc->base.enabled);
+		return -EINVAL;
+	}
+
+	work = kzalloc_obj(*work, GFP_ATOMIC);
+	if (!work && enable)
+		return -ENOMEM;
+
+	if (enable) {
+		if (acrtc_state->stream && dm->dc->caps.ips_support &&
+		    dm->dc->config.disable_ips != DMUB_IPS_DISABLE_ALL &&
+		    drm_crtc_vblank_crtc(crtc)->config.disable_immediate)
+			drm_crtc_vblank_restore(crtc);
+
+		acrtc->dm_irq_params.vblank_irq_desired = true;
+
+		scoped_guard(spinlock_irqsave, &dm->sw_counter_lock) {
+			if (!dm->use_sw_vblank_counter) {
+				rc = amdgpu_dm_sync_vblank_irq(acrtc, enable);
+				if (rc) {
+					acrtc->dm_irq_params.vblank_irq_desired = false;
+					kfree(work);
+					return rc;
+				}
+			}
+		}
+	} else {
+		acrtc->dm_irq_params.vblank_irq_desired = false;
+
+		scoped_guard(spinlock_irqsave, &dm->sw_counter_lock)
+			WARN_ON(dm->use_sw_vblank_counter &&
+				acrtc->dm_irq_params.vblank_irq_programmed);
+
+		amdgpu_dm_sync_vblank_irq(acrtc, enable);
+	}
+
+	if (!work)
+		return -ENOMEM;
+
+	INIT_WORK(&work->work, amdgpu_dm_crtc_vblank_control_worker);
+	work->dm = dm;
+	work->acrtc = acrtc;
+	work->enable = enable;
+
+	if (acrtc_state->stream) {
+		dc_stream_retain(acrtc_state->stream);
+		work->stream = acrtc_state->stream;
+	}
+
+	queue_work(dm->vblank_control_workqueue, &work->work);
 
 	return 0;
 }
@@ -777,11 +846,13 @@ int amdgpu_dm_crtc_init(struct amdgpu_display_manager *dm,
 	if (!cursor_plane)
 		goto fail;
 
-	cursor_plane->type = DRM_PLANE_TYPE_CURSOR;
-	res = amdgpu_dm_plane_init(dm, cursor_plane, 0, NULL);
-
 	acrtc = kzalloc_obj(struct amdgpu_crtc);
 	if (!acrtc)
+		goto fail;
+
+	cursor_plane->type = DRM_PLANE_TYPE_CURSOR;
+	res = amdgpu_dm_plane_init(dm, cursor_plane, 0, NULL);
+	if (res)
 		goto fail;
 
 	res = drm_crtc_init_with_planes(
@@ -792,7 +863,7 @@ int amdgpu_dm_crtc_init(struct amdgpu_display_manager *dm,
 			&amdgpu_dm_crtc_funcs, NULL);
 
 	if (res)
-		goto fail;
+		goto fail_crtc_init;
 
 	amdgpu_dm_ism_init(&acrtc->ism, &default_ism_config);
 
@@ -844,6 +915,8 @@ int amdgpu_dm_crtc_init(struct amdgpu_display_manager *dm,
 error_ism_fini:
 	amdgpu_dm_ism_flush(&acrtc->ism);
 	drm_crtc_cleanup(&acrtc->base);
+fail_crtc_init:
+	drm_plane_cleanup(cursor_plane);
 fail:
 	kfree(acrtc);
 	kfree(cursor_plane);

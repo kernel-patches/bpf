@@ -13,6 +13,7 @@ struct ksmbd_conn;
 struct ksmbd_session;
 struct ksmbd_tree_connect;
 struct ksmbd_file;
+struct folio;
 
 #define KSMBD_WORK_INLINE_IOVS	4
 
@@ -24,6 +25,7 @@ enum {
 
 struct aux_read {
 	void *buf;
+	struct folio *folio;
 	struct list_head entry;
 };
 
@@ -36,6 +38,13 @@ struct ksmbd_work {
 
 	/* Pointer to received SMB header */
 	void                            *request_buf;
+	/*
+	 * MessageId and Command of the request, set under conn->request_lock
+	 * once request_buf holds a plain SMB2 header, for smb2_cancel()
+	 */
+	__le64                          req_mid;
+	__le16                          req_cmd;
+	bool                            req_id_valid;
 	/* Response buffer */
 	void                            *response_buf;
 
@@ -86,6 +95,8 @@ struct ksmbd_work {
 	bool                            encrypted:1;
 	/* READ response should be wrapped in a compression transform. */
 	bool                            compress_response:1;
+	/* Standalone READ payload is backed by spliceable pages. */
+	bool                            splice_read:1;
 	/* Is this SYNC or ASYNC ksmbd_work */
 	bool                            asynchronous:1;
 	bool                            need_invalidate_rkey:1;
@@ -159,7 +170,9 @@ bool ksmbd_queue_work(struct ksmbd_work *work);
 void ksmbd_queue_io_work(struct work_struct *work);
 void ksmbd_queue_break_work(struct work_struct *work);
 int ksmbd_iov_pin_rsp_read(struct ksmbd_work *work, void *ib, int len,
-			   void *aux_buf, unsigned int aux_size);
+			   void *aux_buf, unsigned int aux_size,
+			   struct folio *folio);
+void ksmbd_free_read_buf(void *buf, struct folio *folio);
 int ksmbd_iov_pin_rsp(struct ksmbd_work *work, void *ib, int len);
 int allocate_interim_rsp_buf(struct ksmbd_work *work);
 #endif /* __KSMBD_WORK_H__ */

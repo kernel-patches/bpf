@@ -662,10 +662,6 @@ int drmm_connector_hdmi_init(struct drm_device *dev,
 			return PTR_ERR(state);
 
 		connector->state = state;
-	} else if (connector->funcs->reset) {
-		connector->funcs->reset(connector);
-		if (!connector->state)
-			return -ENOMEM;
 	}
 
 	drm_connector_attach_max_bpc_property(connector, 8, hdmi_funcs->max_bpc);
@@ -770,10 +766,6 @@ int drmm_connector_hdmi_ini2(struct drm_device *dev,
 			return PTR_ERR(state);
 
 		connector->state = state;
-	} else if (connector->funcs->reset) {
-		connector->funcs->reset(connector);
-		if (!connector->state)
-			return -ENOMEM;
 	}
 
 	drm_connector_attach_max_bpc_property(connector, 8, max_bpc);
@@ -928,6 +920,9 @@ void drm_connector_cleanup(struct drm_connector *connector)
 
 	if (connector->hdmi.scdc_work_initialized)
 		cancel_delayed_work_sync(&connector->hdmi.scdc_work);
+
+	if (connector->wb_initialized)
+		drm_writeback_connector_cleanup(connector);
 
 	platform_device_unregister(connector->hdmi_audio.codec_pdev);
 

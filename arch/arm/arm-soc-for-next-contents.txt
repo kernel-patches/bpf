@@ -1,0 +1,55 @@
+soc/arm
+	arm/boards
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/soc/soc tags/board-remove-for-7
+
+soc/dt
+	stefandoesinger/zx29-dts
+		https://gitlab.com/stefandoesinger/zx297520-kernel tags/zx29-dts-7.5
+	mmind/dt64
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v7.5-rockchip-dts64-1
+	geert/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v7.5-tag1
+	linusw/ux500/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-nomadik tags/ux500-pd-v7.5
+
+soc/drivers
+	linusw/sram-soc
+		git://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-nomadik tags/sram-soc-v7.5
+
+soc/defconfig
+	linusw/teo-arm64-cpuidle
+		git://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-integrator tags/soc-v7.5-teo-arm64-cpuidle
+	linusw/teo-arm-cpuidle
+		git://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-integrator tags/soc-v7.5-teo-arm-cpuidle
+	patch
+		ARM: multi_v7_defconfig: Enable ARM_SMC_WATCHDOG
+	linusw/u8500-defconfig
+		git://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-nomadik tags/u8500-defconfig-v7.5-soc
+	patch
+		arm64: defconfig: drop four symbols that no longer exist
+	geert/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v7.5-tag1
+
+soc/late
+
+arm/fixes
+	<no branch> (09fd63fe687ffa2d6594cd31d6fcf5fa7740a63c)
+		git://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/arm-fw-fixes-7.4
+	<no branch> (8ca80811c3ba01691b424f4fef4db8960955df4f)
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-fixes-for-v7.4-tag1
+	<no branch> (a6b33da67ef16a4bdf359d4e76870b1ba1a1360a)
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-fixes-7.4
+	<no branch> (acba37c2e2df26ad722d470777044fd21620834e)
+		https://git.kernel.org/pub/scm/linux/kernel/git/frank.li/linux tags/imx-fixes-7.4
+	<no branch> (f172beb64c26e2f4f3a1e7e92e6e710241a29c1e)
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-7.4/maintainers-fixes
+	<no branch> (1a509eca07176bc3363031c030d038ca9be9dfc0)
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-fixes-7.4
+	<no branch> (109d5fda6c07649d4bb9270fd99f5c75e3e49fde)
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-7.4/drivers-fixes
+
+soc/newsoc
+	newsoc/ambarella
+		Merge branch 'newsoc/ambarella' into soc/newsoc
+		contains ambarella/common
+

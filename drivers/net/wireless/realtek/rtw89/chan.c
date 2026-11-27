@@ -293,15 +293,20 @@ void rtw89_config_roc_chandef(struct rtw89_dev *rtwdev,
 	}
 }
 
-static void rtw89_config_default_chandef(struct rtw89_dev *rtwdev)
+static int rtw89_config_default_chandef(struct rtw89_dev *rtwdev)
 {
-	struct cfg80211_chan_def chandef = {0};
+	struct cfg80211_chan_def chandef = {};
+	int ret;
 
-	rtw89_get_default_chandef(&chandef);
+	ret = rtw89_get_default_chandef(rtwdev, &chandef);
+	if (ret)
+		return ret;
+
 	__rtw89_config_entity_chandef(rtwdev, RTW89_CHANCTX_0, &chandef);
+	return 0;
 }
 
-void rtw89_entity_init(struct rtw89_dev *rtwdev)
+int rtw89_entity_init(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_hal *hal = &rtwdev->hal;
 	struct rtw89_entity_mgnt *mgnt = &hal->entity_mgnt;
@@ -321,7 +326,7 @@ void rtw89_entity_init(struct rtw89_dev *rtwdev)
 
 	hal->entity_force_hw = RTW89_PHY_NUM;
 
-	rtw89_config_default_chandef(rtwdev);
+	return rtw89_config_default_chandef(rtwdev);
 }
 
 static bool rtw89_vif_is_active_role(struct rtw89_vif *rtwvif)

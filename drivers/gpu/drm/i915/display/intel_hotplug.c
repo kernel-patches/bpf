@@ -1309,8 +1309,8 @@ static ssize_t i915_hpd_short_storm_ctl_write(struct file *file,
 	else if (kstrtobool(tmp, &new_state) != 0)
 		return -EINVAL;
 
-	drm_dbg_kms(display->drm, "%sabling HPD short storm detection\n",
-		    new_state ? "En" : "Dis");
+	drm_dbg_kms(display->drm, "%s HPD short storm detection\n",
+		    str_enable_disable(new_state));
 
 	spin_lock_irq(&display->irq.lock);
 	hotplug->hpd_short_storm_enabled = new_state;

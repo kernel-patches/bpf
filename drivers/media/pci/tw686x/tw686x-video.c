@@ -1281,6 +1281,7 @@ int tw686x_video_init(struct tw686x_dev *dev)
 		err = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
 		if (err < 0) {
 			video_device_release(vdev);
+			vc->device = NULL;
 			goto error;
 		}
 		vc->num = vdev->num;

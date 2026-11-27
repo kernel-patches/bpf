@@ -808,7 +808,6 @@ static void enable_phantom_plane(struct dml2_context *ctx,
 		memcpy(&phantom_plane->tiling_info, &curr_pipe->plane_state->tiling_info,
 				sizeof(phantom_plane->tiling_info));
 		memcpy(&phantom_plane->dcc, &curr_pipe->plane_state->dcc, sizeof(phantom_plane->dcc));
-		//phantom_plane->tiling_info.gfx10compatible.compat_level = curr_pipe->plane_state->tiling_info.gfx10compatible.compat_level;
 		phantom_plane->format = curr_pipe->plane_state->format;
 		phantom_plane->rotation = curr_pipe->plane_state->rotation;
 		phantom_plane->visible = curr_pipe->plane_state->visible;

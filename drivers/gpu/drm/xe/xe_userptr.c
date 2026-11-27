@@ -74,6 +74,23 @@ static bool __xe_vma_userptr_lockdep(struct xe_userptr_vma *uvma)
 #define xe_vma_userptr_lockdep(uvma)
 #endif
 
+/**
+ * xe_vma_userptr_pin_pages() - Pin and map the pages of a userptr vma
+ * @uvma: The userptr vma.
+ *
+ * Pin the pages and set up the dma mappings. If the CPU mappings keep changing
+ * during the repin, drm_gpusvm_get_pages() eventually gives up with -EBUSY.
+ * That is converted to -EAGAIN until the overall repin timeout, measured from
+ * the first attempt since the last successful repin, expires. The caller is
+ * then expected to drop all locks and retry.
+ *
+ * Context: Either vm->lock held in write mode, or in read mode together with
+ * the vma's fault_lock.
+ *
+ * Return: 0 on success, -EAGAIN if the caller should retry with all locks
+ * dropped, -EBUSY if the overall timeout expired, or another negative error
+ * code on failure.
+ */
 int xe_vma_userptr_pin_pages(struct xe_userptr_vma *uvma)
 {
 	struct xe_vma *vma = &uvma->vma;
@@ -84,19 +101,35 @@ int xe_vma_userptr_pin_pages(struct xe_userptr_vma *uvma)
 		.device_private_page_owner = xe_svm_private_page_owner(vm, false),
 		.allow_mixed = true,
 	};
+	int err;
 
 	xe_vma_userptr_lockdep(uvma);
 	xe_assert(xe, xe_vma_is_userptr(vma));
 
-	if (vma->gpuva.flags & XE_VMA_DESTROYED)
+	if (vma->gpuva.flags & XE_VMA_DESTROYED) {
+		uvma->userptr.repin = (struct xe_userptr_repin){};
 		return 0;
+	}
 
-	return drm_gpusvm_get_pages(&vm->svm.gpusvm, &uvma->userptr.pages, 1,
-				    uvma->userptr.notifier.mm,
-				    &uvma->userptr.notifier,
-				    xe_vma_userptr(vma),
-				    xe_vma_userptr(vma) + xe_vma_size(vma),
-				    &ctx);
+	xe_userptr_repin_begin(&uvma->userptr.repin);
+
+	err = drm_gpusvm_get_pages(&vm->svm.gpusvm, &uvma->userptr.pages, 1,
+				   uvma->userptr.notifier.mm,
+				   &uvma->userptr.notifier,
+				   xe_vma_userptr(vma),
+				   xe_vma_userptr(vma) + xe_vma_size(vma),
+				   &ctx);
+	if (err == -EBUSY) {
+		u32 timeout_ms = READ_ONCE(xe->userptr_repin_timeout_ms);
+
+		if (xe_userptr_repin_should_retry(&uvma->userptr.repin,
+						  timeout_ms))
+			return -EAGAIN;
+	}
+
+	uvma->userptr.repin = (struct xe_userptr_repin){};
+
+	return err;
 }
 
 static struct mmu_interval_notifier_finish *

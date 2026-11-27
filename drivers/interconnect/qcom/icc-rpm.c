@@ -427,7 +427,7 @@ static int qcom_icc_set(struct icc_node *src, struct icc_node *dst)
 	if (ret)
 		return ret;
 
-	if (dst_qn) {
+	if (dst_qn && dst != src) {
 		ret = qcom_icc_rpm_set(dst_qn, dst_qn->sum_avg, qp->ignore_enxio);
 		if (ret)
 			return ret;

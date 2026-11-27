@@ -243,7 +243,7 @@ void xe_hw_fence_init(struct dma_fence *fence, struct xe_hw_fence_ctx *ctx,
 	INIT_LIST_HEAD(&hw_fence->irq_link);
 
 	dma_fence_init(fence, &xe_hw_fence_ops, &ctx->irq->lock,
-		       ctx->dma_fence_ctx, ctx->next_seqno++);
+		       ctx->dma_fence_ctx, ctx->next_seqno++, 0);
 
 	trace_xe_hw_fence_create(hw_fence);
 }

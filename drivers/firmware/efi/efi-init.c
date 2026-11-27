@@ -23,8 +23,6 @@
 
 #include <asm/efi.h>
 
-unsigned long __initdata primary_display_table = EFI_INVALID_TABLE_ADDR;
-
 static int __init is_memory(efi_memory_desc_t *md)
 {
 	if (md->attribute & (EFI_MEMORY_WB|EFI_MEMORY_WT|EFI_MEMORY_WC))
@@ -54,7 +52,7 @@ static phys_addr_t __init efi_to_phys(unsigned long addr)
 	return addr;
 }
 
-extern __weak const efi_config_table_type_t efi_arch_tables[];
+extern const efi_config_table_type_t efi_arch_tables[];
 
 /*
  * x86 defines its own instance of sysfb_primary_display and uses
@@ -67,25 +65,11 @@ EXPORT_SYMBOL_GPL(sysfb_primary_display);
 
 static void __init init_primary_display(void)
 {
-	struct sysfb_display_info *dpy;
+	struct screen_info *si = &sysfb_primary_display.screen;
 
-	if (primary_display_table != EFI_INVALID_TABLE_ADDR) {
-		dpy = early_memremap(primary_display_table, sizeof(*dpy));
-		if (!dpy) {
-			pr_err("Could not map primary_display config table\n");
-			return;
-		}
-		sysfb_primary_display = *dpy;
-		memset(dpy, 0, sizeof(*dpy));
-		early_memunmap(dpy, sizeof(*dpy));
-
-		if (memblock_is_map_memory(sysfb_primary_display.screen.lfb_base))
-			memblock_mark_nomap(sysfb_primary_display.screen.lfb_base,
-					    sysfb_primary_display.screen.lfb_size);
-
-		if (IS_ENABLED(CONFIG_EFI_EARLYCON))
-			efi_earlycon_reprobe();
-	}
+	if (si->orig_video_isVGA == VIDEO_TYPE_EFI &&
+	    memblock_is_map_memory(si->lfb_base))
+		memblock_mark_nomap(si->lfb_base, si->lfb_size);
 }
 
 static int __init uefi_init(u64 efi_system_table)
@@ -123,7 +107,8 @@ static int __init uefi_init(u64 efi_system_table)
 		goto out;
 	}
 	retval = efi_config_parse_tables(config_tables, systab->nr_tables,
-					 efi_arch_tables);
+					 IS_ENABLED(CONFIG_ARM) ? efi_arch_tables
+								: NULL);
 
 	early_memunmap(config_tables, table_size);
 out:

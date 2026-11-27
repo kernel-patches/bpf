@@ -643,7 +643,7 @@ void cdns3_check_ep0_interrupt_proceed(struct cdns3_device *priv_dev, int dir)
  * @desc: pointer to usb endpoint descriptor
  *
  * Function shouldn't be called by gadget driver,
- * endpoint 0 is allways active
+ * endpoint 0 is always active
  */
 static int cdns3_gadget_ep0_enable(struct usb_ep *ep,
 				   const struct usb_endpoint_descriptor *desc)
@@ -656,7 +656,7 @@ static int cdns3_gadget_ep0_enable(struct usb_ep *ep,
  * @ep: pointer to endpoint zero object
  *
  * Function shouldn't be called by gadget driver,
- * endpoint 0 is allways active
+ * endpoint 0 is always active
  */
 static int cdns3_gadget_ep0_disable(struct usb_ep *ep)
 {

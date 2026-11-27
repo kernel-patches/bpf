@@ -99,6 +99,12 @@ int nxpwifi_ret_11n_delba(struct nxpwifi_private *priv,
 	u16 del_ba_param_set = le16_to_cpu(del_ba->del_ba_param_set);
 
 	tid = del_ba_param_set >> DELBA_TID_POS;
+	if (tid >= MAX_NUM_TID) {
+		nxpwifi_dbg(priv->adapter, ERROR,
+			    "DELBA: invalid tid %d\n", tid);
+		return -EINVAL;
+	}
+
 	if (del_ba->del_result == BA_RESULT_SUCCESS) {
 		nxpwifi_del_ba_tbl(priv, tid, del_ba->peer_mac_addr,
 				   TYPE_DELBA_SENT,
@@ -143,6 +149,11 @@ int nxpwifi_ret_11n_addba_req(struct nxpwifi_private *priv,
 			& SSN_MASK);
 
 	tid = u16_get_bits(block_ack_param_set, IEEE80211_ADDBA_PARAM_TID_MASK);
+	if (tid >= MAX_NUM_TID) {
+		nxpwifi_dbg(priv->adapter, ERROR,
+			    "ADDBA RSP: invalid tid %d\n", tid);
+		return -EINVAL;
+	}
 
 	tid_down = nxpwifi_wmm_downgrade_tid(priv, tid);
 	ra_list = nxpwifi_wmm_get_ralist_node(priv, tid_down,
@@ -626,6 +637,11 @@ void nxpwifi_11n_delete_ba_stream(struct nxpwifi_private *priv, u8 *del_ba)
 	int tid;
 
 	tid = del_ba_param_set >> DELBA_TID_POS;
+	if (tid >= MAX_NUM_TID) {
+		nxpwifi_dbg(priv->adapter, ERROR,
+			    "DELBA event: invalid tid %d\n", tid);
+		return;
+	}
 
 	nxpwifi_del_ba_tbl(priv, tid, cmd_del_ba->peer_mac_addr,
 			   TYPE_DELBA_RECEIVE, INITIATOR_BIT(del_ba_param_set));
@@ -816,7 +832,8 @@ void nxpwifi_update_ampdu_txwinsize(struct nxpwifi_adapter *adapter)
 		priv = adapter->priv[i];
 		tx_win_size = priv->add_ba_param.tx_win_size;
 
-		if (priv->bss_type == NXPWIFI_BSS_TYPE_STA)
+		if (priv->bss_type == NXPWIFI_BSS_TYPE_STA ||
+		    priv->bss_type == NXPWIFI_BSS_TYPE_P2P)
 			priv->add_ba_param.tx_win_size =
 				NXPWIFI_STA_AMPDU_DEF_TXWINSIZE;
 

@@ -7,18 +7,19 @@
 #define _AMDXDNA_GEM_H_
 
 #include <drm/drm_gem_shmem_helper.h>
-#include <linux/hmm.h>
+#include <drm/drm_gpusvm.h>
 #include <linux/iova.h>
 #include "amdxdna_pci_drv.h"
 
 struct amdxdna_umap {
 	struct mmu_interval_notifier	notifier;
-	struct hmm_range		range;
+	struct drm_gpusvm_pages		pages;
+	unsigned long			start;
+	unsigned long			end;
+	bool				read_only;
 	struct amdxdna_gem_obj		*abo;
 	struct list_head		node;
 	struct kref			refcnt;
-	bool				invalid;
-	bool				unmapped;
 };
 
 struct amdxdna_mem {
@@ -26,10 +27,16 @@ struct amdxdna_mem {
 	u64				dma_addr;
 	size_t				size;
 	struct list_head		umap_list;
+	/*
+	 * True, if the pages of the user mappings have to be faulted in before
+	 * the device accesses them. A mapping which mmap() populated upfront,
+	 * which is a VM_PFNMAP one, must not be faulted in: hmm_range_fault()
+	 * rejects such a VMA.
+	 */
 	bool				map_invalid;
 	/*
 	 * Cache the first mmap uva as PASID addr, which can be accessed by driver
-	 * without taking notifier_lock.
+	 * without taking the gpusvm notifier lock.
 	 */
 	u64				uva;
 };
@@ -60,6 +67,7 @@ struct amdxdna_gem_obj {
 
 #define to_gobj(obj)    (&(obj)->base.base)
 #define is_import_bo(obj) ((obj)->attach)
+#define is_private_bo(obj) ((obj)->private_buffer)
 
 static inline struct amdxdna_gem_obj *to_xdna_obj(struct drm_gem_object *gobj)
 {
@@ -102,7 +110,9 @@ static inline u64 amdxdna_obj_dma_addr(struct amdxdna_gem_obj *abo)
 		abo->mem.dma_addr : amdxdna_gem_uva(abo);
 }
 
-void amdxdna_umap_put(struct amdxdna_umap *mapp);
+int amdxdna_gem_umap_populate(struct amdxdna_gem_obj *abo,
+			      unsigned long deadline);
+bool amdxdna_gem_umap_stale(struct amdxdna_gem_obj *abo);
 void amdxdna_gem_heap_free(struct amdxdna_client *client, struct amdxdna_gem_obj *abo);
 
 struct drm_gem_object *
@@ -112,10 +122,19 @@ amdxdna_gem_prime_import(struct drm_device *dev, struct dma_buf *dma_buf);
 struct amdxdna_gem_obj *
 amdxdna_drm_create_dev_bo(struct drm_device *dev,
 			  struct amdxdna_drm_create_bo *args, struct drm_file *filp);
+struct amdxdna_gem_obj *
+amdxdna_gem_create_obj(struct drm_device *dev, size_t size);
+void amdxdna_gem_destroy_obj(struct amdxdna_gem_obj *abo);
+void amdxdna_hmm_unreg_umaps(struct amdxdna_gem_obj *abo, bool force);
 
 int amdxdna_gem_pin_nolock(struct amdxdna_gem_obj *abo);
 int amdxdna_gem_pin(struct amdxdna_gem_obj *abo);
 void amdxdna_gem_unpin(struct amdxdna_gem_obj *abo);
+int amdxdna_gem_obj_open(struct drm_gem_object *gobj, struct drm_file *filp);
+void amdxdna_gem_obj_close(struct drm_gem_object *gobj, struct drm_file *filp);
+int amdxdna_hmm_register(struct amdxdna_gem_obj *abo, struct vm_area_struct *vma,
+			 size_t offset, size_t len);
+void amdxdna_mark_map_invalid(struct amdxdna_gem_obj *abo);
 
 int amdxdna_drm_create_bo_ioctl(struct drm_device *dev, void *data, struct drm_file *filp);
 int amdxdna_drm_get_bo_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp);

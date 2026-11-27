@@ -7,7 +7,7 @@
 #ifndef _ASMARM_TLBFLUSH_H
 #define _ASMARM_TLBFLUSH_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 # include <linux/mm_types.h>
 #endif
 
@@ -200,7 +200,7 @@
 #error Unknown TLB model
 #endif
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/sched.h>
 
@@ -641,7 +641,7 @@ static inline void update_mmu_cache_range(struct vm_fault *vmf,
 
 #elif defined(CONFIG_SMP)	/* !CONFIG_MMU */
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 static inline void local_flush_tlb_all(void)									{ }
 static inline void local_flush_tlb_mm(struct mm_struct *mm)							{ }
 static inline void local_flush_tlb_page(struct vm_area_struct *vma, unsigned long uaddr)			{ }
@@ -657,11 +657,11 @@ extern void flush_tlb_kernel_page(unsigned long kaddr);
 extern void flush_tlb_range(struct vm_area_struct *vma, unsigned long start, unsigned long end);
 extern void flush_tlb_kernel_range(unsigned long start, unsigned long end);
 extern void flush_bp_all(void);
-#endif	/* __ASSEMBLY__ */
+#endif	/* __ASSEMBLER__ */
 
 #endif
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #ifdef CONFIG_ARM_ERRATA_798181
 extern void erratum_a15_798181_init(void);
 #else

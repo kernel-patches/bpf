@@ -59,15 +59,26 @@ size_t symbol__fprintf_symname(const struct symbol *sym, FILE *fp)
 	return __symbol__fprintf_symname_offs(sym, NULL, false, false, fp);
 }
 
+struct fprintf_symbols_by_name_args {
+	FILE *fp;
+	size_t ret;
+};
+
+static int fprintf_symbols_by_name_cb(struct symbol *pos, void *data)
+{
+	struct fprintf_symbols_by_name_args *args = data;
+
+	args->ret += fprintf(args->fp, "%s\n", pos->name);
+	return 0;
+}
+
 size_t dso__fprintf_symbols_by_name(struct dso *dso,
 				    FILE *fp)
 {
-	size_t ret = 0;
+	struct fprintf_symbols_by_name_args args = {
+		.fp = fp,
+	};
 
-	for (size_t i = 0; i < dso__symbol_names_len(dso); i++) {
-		struct symbol *pos = dso__symbol_names(dso)[i];
-
-		ret += fprintf(fp, "%s\n", pos->name);
-	}
-	return ret;
+	dso__for_each_symbol_by_name(dso, fprintf_symbols_by_name_cb, &args);
+	return args.ret;
 }

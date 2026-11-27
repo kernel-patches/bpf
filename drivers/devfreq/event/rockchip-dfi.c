@@ -42,12 +42,19 @@
 #define DDRMON_CTRL_TIMER_CNT_EN	BIT(0)
 #define DDRMON_CTRL_LP5_BANK_MODE_MASK	GENMASK(8, 7)
 
-#define DDRMON_CH0_WR_NUM		0x20
-#define DDRMON_CH0_RD_NUM		0x24
-#define DDRMON_CH0_COUNT_NUM		0x28
-#define DDRMON_CH0_DFI_ACCESS_NUM	0x2c
-#define DDRMON_CH1_COUNT_NUM		0x3c
-#define DDRMON_CH1_DFI_ACCESS_NUM	0x40
+#define DDRMON_CTRL0	0x04
+#define DDRMON_CTRL0_EXT_TRIGGER_EN		BIT(6)
+#define DDRMON_CTRL0_DDR4			BIT(5)
+#define DDRMON_CTRL0_LPDDR4			BIT(4)
+#define DDRMON_CTRL0_HARDWARE_EN		BIT(3)
+#define DDRMON_CTRL0_LPDDR23			BIT(2)
+#define DDRMON_CTRL0_SOFTWARE_EN		BIT(1)
+#define DDRMON_CTRL0_TIMER_CNT_EN		BIT(0)
+#define DDRMON_CTRL0_HOT_RANK			GENMASK(8, 7)
+
+#define DDRMON_CTRL1	0x08
+#define DDRMON_CTRL1_LPDDR5			BIT(0)
+#define DDRMON_CTRL1_LP5_BANK_MODE_MASK		GENMASK(2, 1)
 
 #define PERF_EVENT_CYCLES		0x0
 #define PERF_EVENT_READ_BYTES		0x1
@@ -98,12 +105,11 @@ struct rockchip_dfi {
 	struct device *dev;
 	void __iomem *regs;
 	struct regmap *regmap_pmu;
-	struct clk *clk;
+	struct clk_bulk_data *clocks;
 	int usecount;
 	struct mutex mutex;
 	u32 ddr_type;
 	unsigned int channel_mask;
-	unsigned int max_channels;
 	enum cpuhp_state cpuhp_state;
 	struct hlist_node node;
 	struct pmu pmu;
@@ -112,17 +118,44 @@ struct rockchip_dfi {
 	int active_events;
 	int burst_len;
 	int buswidth[DMC_MAX_CHANNELS];
-	int ddrmon_stride;
-	bool ddrmon_ctrl_single;
 	u32 lp5_bank_mode;
 	bool lp5_ckr;	/* true if in 4:1 command-to-data clock ratio mode */
 	unsigned int count_multiplier;	/* number of data clocks per count */
+	const struct rockchip_dfi_variant *variant;
+};
+
+/**
+ * struct rockchip_dfi_variant
+ * @init: pointer to the variant-specific initialisation function
+ * @stride: address offset between the DDRMON per-channel instances
+ * @ctrl_single: whether only one DDRMON instance monitors multiple channels
+ * @max_channels: maximum number of memory channels for this SoC
+ * @clk_names: pointer to a constant array of constant clock name strings
+ * @num_clks: the number of elements in the @clk_names array
+ * @clocks_optional: whether not finding the clocks is non-fatal. Set if the
+ *                   DT binding for this variant didn't require clocks in the
+ *                   past, so that the driver remains compatible with old DTs.
+ * @reg_write_access: register offset for writes access
+ * @reg_read_access: register offset for read access
+ * @reg_access: register offset for read/write access
+ * @reg_clock_cycles: register offset for clock cycles
+ */
+struct rockchip_dfi_variant {
+	int (*init)(struct rockchip_dfi *dfi);
+	int stride;
+	bool ctrl_single;
+	unsigned int max_channels;
+	const char * const *clk_names;
+	unsigned int num_clks;
+	bool clocks_optional;
+	u8 reg_write_access;
+	u8 reg_read_access;
+	u8 reg_access;
+	u8 reg_clock_cycles;
 };
 
 static int rockchip_dfi_ddrtype_to_ctrl(struct rockchip_dfi *dfi, u32 *ctrl)
 {
-	u32 ddrmon_ver;
-
 	switch (dfi->ddr_type) {
 	case ROCKCHIP_DDRTYPE_LPDDR2:
 	case ROCKCHIP_DDRTYPE_LPDDR3:
@@ -137,26 +170,12 @@ static int rockchip_dfi_ddrtype_to_ctrl(struct rockchip_dfi *dfi, u32 *ctrl)
 			FIELD_PREP_WM16(DDRMON_CTRL_LPDDR5, 0);
 		break;
 	case ROCKCHIP_DDRTYPE_LPDDR5:
-		ddrmon_ver = readl_relaxed(dfi->regs);
-		if (ddrmon_ver < 0x40) {
-			*ctrl = FIELD_PREP_WM16(DDRMON_CTRL_LPDDR23, 0) |
-				FIELD_PREP_WM16(DDRMON_CTRL_LPDDR4, 0) |
-				FIELD_PREP_WM16(DDRMON_CTRL_LPDDR5, 1) |
-				FIELD_PREP_WM16(DDRMON_CTRL_LP5_BANK_MODE_MASK,
-						dfi->lp5_bank_mode);
-			break;
-		}
-
-		/*
-		 * As it is unknown whether the unpleasant special case
-		 * behaviour used by the vendor kernel is needed for any
-		 * shipping hardware, ask users to report if they have
-		 * some of that hardware.
-		 */
-		dev_err(&dfi->edev->dev,
-			"unsupported DDRMON version 0x%04X, please let linux-rockchip know!\n",
-			ddrmon_ver);
-		return -EOPNOTSUPP;
+		*ctrl = FIELD_PREP_WM16(DDRMON_CTRL_LPDDR23, 0) |
+			FIELD_PREP_WM16(DDRMON_CTRL_LPDDR4, 0) |
+			FIELD_PREP_WM16(DDRMON_CTRL_LPDDR5, 1) |
+			FIELD_PREP_WM16(DDRMON_CTRL_LP5_BANK_MODE_MASK,
+					dfi->lp5_bank_mode);
+		break;
 	default:
 		dev_err(&dfi->edev->dev, "unsupported memory type 0x%X\n",
 			dfi->ddr_type);
@@ -166,11 +185,43 @@ static int rockchip_dfi_ddrtype_to_ctrl(struct rockchip_dfi *dfi, u32 *ctrl)
 	return 0;
 }
 
+static int rockchip_dfi_v4_ddrtype_to_ctrl(struct rockchip_dfi *dfi, u32 *ctrl0, u32 *ctrl1)
+{
+	switch (dfi->ddr_type) {
+	case ROCKCHIP_DDRTYPE_LPDDR2:
+	case ROCKCHIP_DDRTYPE_LPDDR3:
+		*ctrl0 = FIELD_PREP_WM16(DDRMON_CTRL0_LPDDR23, 1) |
+			 FIELD_PREP_WM16(DDRMON_CTRL0_LPDDR4, 0);
+		*ctrl1 = FIELD_PREP_WM16(DDRMON_CTRL1_LPDDR5, 0);
+		break;
+	case ROCKCHIP_DDRTYPE_LPDDR4:
+	case ROCKCHIP_DDRTYPE_LPDDR4X:
+		*ctrl0 = FIELD_PREP_WM16(DDRMON_CTRL0_LPDDR23, 0) |
+			 FIELD_PREP_WM16(DDRMON_CTRL0_LPDDR4, 1);
+		*ctrl1 = FIELD_PREP_WM16(DDRMON_CTRL1_LPDDR5, 0);
+		break;
+	case ROCKCHIP_DDRTYPE_LPDDR5:
+		*ctrl0 = FIELD_PREP_WM16(DDRMON_CTRL0_LPDDR23, 0) |
+			 FIELD_PREP_WM16(DDRMON_CTRL0_LPDDR4, 0);
+		*ctrl1 = FIELD_PREP_WM16(DDRMON_CTRL1_LPDDR5, 1) |
+			 FIELD_PREP_WM16(DDRMON_CTRL1_LP5_BANK_MODE_MASK,
+					dfi->lp5_bank_mode);
+		break;
+	default:
+		dev_err(&dfi->edev->dev, "unsupported memory type 0x%X\n",
+			dfi->ddr_type);
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+
 static int rockchip_dfi_enable(struct rockchip_dfi *dfi)
 {
 	void __iomem *dfi_regs = dfi->regs;
+	u32 ctrl, ctrl1, ddrmon_ver;
 	int i, ret = 0;
-	u32 ctrl;
 
 	mutex_lock(&dfi->mutex);
 
@@ -178,17 +229,25 @@ static int rockchip_dfi_enable(struct rockchip_dfi *dfi)
 	if (dfi->usecount > 1)
 		goto out;
 
-	ret = clk_prepare_enable(dfi->clk);
+	ret = clk_bulk_prepare_enable(dfi->variant->num_clks, dfi->clocks);
 	if (ret) {
-		dev_err(&dfi->edev->dev, "failed to enable dfi clk: %d\n", ret);
+		dev_err(&dfi->edev->dev, "failed to enable dfi clocks: %pe\n",
+			ERR_PTR(ret));
 		goto out;
 	}
 
-	ret = rockchip_dfi_ddrtype_to_ctrl(dfi, &ctrl);
-	if (ret)
-		goto out;
+	ddrmon_ver = readl_relaxed(dfi->regs);
+	if (ddrmon_ver < 0x40)
+		ret = rockchip_dfi_ddrtype_to_ctrl(dfi, &ctrl);
+	else
+		ret = rockchip_dfi_v4_ddrtype_to_ctrl(dfi, &ctrl, &ctrl1);
 
-	for (i = 0; i < dfi->max_channels; i++) {
+	if (ret) {
+		clk_bulk_disable_unprepare(dfi->variant->num_clks, dfi->clocks);
+		goto out;
+	}
+
+	for (i = 0; i < dfi->variant->max_channels; i++) {
 
 		if (!(dfi->channel_mask & BIT(i)))
 			continue;
@@ -197,16 +256,20 @@ static int rockchip_dfi_enable(struct rockchip_dfi *dfi)
 		writel_relaxed(FIELD_PREP_WM16(DDRMON_CTRL_TIMER_CNT_EN, 0) |
 			       FIELD_PREP_WM16(DDRMON_CTRL_SOFTWARE_EN, 0) |
 			       FIELD_PREP_WM16(DDRMON_CTRL_HARDWARE_EN, 0),
-			       dfi_regs + i * dfi->ddrmon_stride + DDRMON_CTRL);
+			       dfi_regs + i * dfi->variant->stride + DDRMON_CTRL);
 
-		writel_relaxed(ctrl, dfi_regs + i * dfi->ddrmon_stride +
+		writel_relaxed(ctrl, dfi_regs + i * dfi->variant->stride +
 			       DDRMON_CTRL);
+
+		if (ddrmon_ver >= 0x40)
+			writel_relaxed(ctrl1, dfi_regs + i * dfi->variant->stride +
+				       DDRMON_CTRL1);
 
 		/* enable count, use software mode */
 		writel_relaxed(FIELD_PREP_WM16(DDRMON_CTRL_SOFTWARE_EN, 1),
-			       dfi_regs + i * dfi->ddrmon_stride + DDRMON_CTRL);
+			       dfi_regs + i * dfi->variant->stride + DDRMON_CTRL);
 
-		if (dfi->ddrmon_ctrl_single)
+		if (dfi->variant->ctrl_single)
 			break;
 	}
 out:
@@ -229,18 +292,18 @@ static void rockchip_dfi_disable(struct rockchip_dfi *dfi)
 	if (dfi->usecount > 0)
 		goto out;
 
-	for (i = 0; i < dfi->max_channels; i++) {
+	for (i = 0; i < dfi->variant->max_channels; i++) {
 		if (!(dfi->channel_mask & BIT(i)))
 			continue;
 
 		writel_relaxed(FIELD_PREP_WM16(DDRMON_CTRL_SOFTWARE_EN, 0),
-			       dfi_regs + i * dfi->ddrmon_stride + DDRMON_CTRL);
+			       dfi_regs + i * dfi->variant->stride + DDRMON_CTRL);
 
-		if (dfi->ddrmon_ctrl_single)
+		if (dfi->variant->ctrl_single)
 			break;
 	}
 
-	clk_disable_unprepare(dfi->clk);
+	clk_bulk_disable_unprepare(dfi->variant->num_clks, dfi->clocks);
 out:
 	mutex_unlock(&dfi->mutex);
 }
@@ -250,17 +313,17 @@ static void rockchip_dfi_read_counters(struct rockchip_dfi *dfi, struct dmc_coun
 	u32 i;
 	void __iomem *dfi_regs = dfi->regs;
 
-	for (i = 0; i < dfi->max_channels; i++) {
+	for (i = 0; i < dfi->variant->max_channels; i++) {
 		if (!(dfi->channel_mask & BIT(i)))
 			continue;
 		res->c[i].read_access = readl_relaxed(dfi_regs +
-				DDRMON_CH0_RD_NUM + i * dfi->ddrmon_stride);
+				dfi->variant->reg_read_access + i * dfi->variant->stride);
 		res->c[i].write_access = readl_relaxed(dfi_regs +
-				DDRMON_CH0_WR_NUM + i * dfi->ddrmon_stride);
+				dfi->variant->reg_write_access + i * dfi->variant->stride);
 		res->c[i].access = readl_relaxed(dfi_regs +
-				DDRMON_CH0_DFI_ACCESS_NUM + i * dfi->ddrmon_stride);
+				dfi->variant->reg_access + i * dfi->variant->stride);
 		res->c[i].clock_cycles = readl_relaxed(dfi_regs +
-				DDRMON_CH0_COUNT_NUM + i * dfi->ddrmon_stride);
+				dfi->variant->reg_clock_cycles + i * dfi->variant->stride);
 	}
 }
 
@@ -289,7 +352,7 @@ static int rockchip_dfi_get_event(struct devfreq_event_dev *edev,
 				  struct devfreq_event_data *edata)
 {
 	struct rockchip_dfi *dfi = devfreq_event_get_drvdata(edev);
-	struct dmc_count count;
+	struct dmc_count count = {};
 	struct dmc_count *last = &dfi->last_event_count;
 	u32 access = 0, clock_cycles = 0;
 	int i;
@@ -297,7 +360,7 @@ static int rockchip_dfi_get_event(struct devfreq_event_dev *edev,
 	rockchip_dfi_read_counters(dfi, &count);
 
 	/* We can only report one channel, so find the busiest one */
-	for (i = 0; i < dfi->max_channels; i++) {
+	for (i = 0; i < dfi->variant->max_channels; i++) {
 		u32 a, c;
 
 		if (!(dfi->channel_mask & BIT(i)))
@@ -336,7 +399,7 @@ static void rockchip_ddr_perf_counters_add(struct rockchip_dfi *dfi,
 	const struct dmc_count *last = &dfi->last_perf_count;
 	int i;
 
-	for (i = 0; i < dfi->max_channels; i++) {
+	for (i = 0; i < dfi->variant->max_channels; i++) {
 		res->c[i].read_access = dfi->total_count.c[i].read_access +
 			(u32)(now->c[i].read_access - last->c[i].read_access);
 		res->c[i].write_access = dfi->total_count.c[i].write_access +
@@ -460,7 +523,7 @@ static u64 rockchip_ddr_perf_event_get_count(struct perf_event *event)
 {
 	struct rockchip_dfi *dfi = container_of(event->pmu, struct rockchip_dfi, pmu);
 	int blen = dfi->burst_len;
-	struct dmc_count total, now;
+	struct dmc_count total = {}, now = {};
 	unsigned int seq;
 	u64 count = 0;
 	int i;
@@ -477,11 +540,11 @@ static u64 rockchip_ddr_perf_event_get_count(struct perf_event *event)
 		count = total.c[0].clock_cycles * dfi->count_multiplier;
 		break;
 	case PERF_EVENT_READ_BYTES:
-		for (i = 0; i < dfi->max_channels; i++)
+		for (i = 0; i < dfi->variant->max_channels; i++)
 			count += total.c[i].read_access * blen * dfi->buswidth[i];
 		break;
 	case PERF_EVENT_WRITE_BYTES:
-		for (i = 0; i < dfi->max_channels; i++)
+		for (i = 0; i < dfi->variant->max_channels; i++)
 			count += total.c[i].write_access * blen * dfi->buswidth[i];
 		break;
 	case PERF_EVENT_READ_BYTES0:
@@ -509,7 +572,7 @@ static u64 rockchip_ddr_perf_event_get_count(struct perf_event *event)
 		count = total.c[3].write_access * blen * dfi->buswidth[3];
 		break;
 	case PERF_EVENT_BYTES:
-		for (i = 0; i < dfi->max_channels; i++)
+		for (i = 0; i < dfi->variant->max_channels; i++)
 			count += total.c[i].access * blen * dfi->buswidth[i];
 		break;
 	}
@@ -575,7 +638,7 @@ static void rockchip_ddr_perf_event_del(struct perf_event *event, int flags)
 static enum hrtimer_restart rockchip_dfi_timer(struct hrtimer *timer)
 {
 	struct rockchip_dfi *dfi = container_of(timer, struct rockchip_dfi, timer);
-	struct dmc_count now, total;
+	struct dmc_count now = {}, total = {};
 
 	rockchip_dfi_read_counters(dfi, &now);
 
@@ -641,7 +704,7 @@ static int rockchip_ddr_perf_init(struct rockchip_dfi *dfi)
 	seqlock_init(&dfi->count_seqlock);
 
 	pmu->module = THIS_MODULE;
-	pmu->capabilities = PERF_PMU_CAP_NO_EXCLUDE;
+	pmu->capabilities = PERF_PMU_CAP_NO_EXCLUDE | PERF_PMU_CAP_NO_INTERRUPT;
 	pmu->task_ctx_nr = perf_invalid_context;
 	pmu->attr_groups = attr_groups;
 	pmu->event_init  = rockchip_ddr_perf_event_init;
@@ -716,23 +779,14 @@ static int rk3399_dfi_init(struct rockchip_dfi *dfi)
 	struct regmap *regmap_pmu = dfi->regmap_pmu;
 	u32 val;
 
-	dfi->clk = devm_clk_get(dfi->dev, "pclk_ddr_mon");
-	if (IS_ERR(dfi->clk))
-		return dev_err_probe(dfi->dev, PTR_ERR(dfi->clk),
-				     "Cannot get the clk pclk_ddr_mon\n");
-
 	/* get ddr type */
 	regmap_read(regmap_pmu, RK3399_PMUGRF_OS_REG2, &val);
 	dfi->ddr_type = FIELD_GET(RK3399_PMUGRF_OS_REG2_DDRTYPE, val);
 
 	dfi->channel_mask = GENMASK(1, 0);
-	dfi->max_channels = 2;
 
 	dfi->buswidth[0] = FIELD_GET(RK3399_PMUGRF_OS_REG2_BW_CH0, val) == 0 ? 4 : 2;
 	dfi->buswidth[1] = FIELD_GET(RK3399_PMUGRF_OS_REG2_BW_CH1, val) == 0 ? 4 : 2;
-
-	dfi->ddrmon_stride = 0x14;
-	dfi->ddrmon_ctrl_single = true;
 
 	return 0;
 };
@@ -756,12 +810,8 @@ static int rk3568_dfi_init(struct rockchip_dfi *dfi)
 		dfi->ddr_type |= FIELD_GET(RK3568_PMUGRF_OS_REG3_DRAMTYPE_INFO_V3, reg3) << 3;
 
 	dfi->channel_mask = BIT(0);
-	dfi->max_channels = 1;
 
 	dfi->buswidth[0] = FIELD_GET(RK3568_PMUGRF_OS_REG2_BW_CH0, reg2) == 0 ? 4 : 2;
-
-	dfi->ddrmon_stride = 0x0; /* not relevant, we only have a single channel on this SoC */
-	dfi->ddrmon_ctrl_single = true;
 
 	return 0;
 };
@@ -791,14 +841,12 @@ static int rk3588_dfi_init(struct rockchip_dfi *dfi)
 	dfi->buswidth[3] = FIELD_GET(RK3588_PMUGRF_OS_REG2_BW_CH1, reg4) == 0 ? 4 : 2;
 	dfi->channel_mask = FIELD_GET(RK3588_PMUGRF_OS_REG2_CH_INFO, reg2) |
 			    FIELD_GET(RK3588_PMUGRF_OS_REG2_CH_INFO, reg4) << 2;
-	dfi->max_channels = 4;
 
-	dfi->ddrmon_stride = 0x4000;
 	dfi->count_multiplier = 2;
 
 	if (dfi->ddr_type == ROCKCHIP_DDRTYPE_LPDDR5) {
 		regmap_read(regmap_pmu, RK3588_PMUGRF_OS_REG6, &reg6);
-		dfi->lp5_bank_mode = FIELD_GET(RK3588_PMUGRF_OS_REG6_LP5_BANK_MODE, reg6) << 7;
+		dfi->lp5_bank_mode = FIELD_GET(RK3588_PMUGRF_OS_REG6_LP5_BANK_MODE, reg6);
 		dfi->lp5_ckr = FIELD_GET(RK3588_PMUGRF_OS_REG6_LP5_CKR, reg6);
 		if (dfi->lp5_ckr)
 			dfi->count_multiplier *= 2;
@@ -807,10 +855,73 @@ static int rk3588_dfi_init(struct rockchip_dfi *dfi)
 	return 0;
 };
 
+static const char * const rk3399_clk_names[] = {
+	"pclk_ddr_mon",
+};
+
+static const char * const rk3576_clk_names[] = {
+	"pclk_ddr_mon_ch0", "pclk_ddr_mon_ch1",
+};
+
+static const char * const rk3588_clk_names[] = {
+	"pclk_ddr_mon_ch0", "pclk_ddr_mon_ch1", "pclk_ddr_mon_ch2",
+	"pclk_ddr_mon_ch3",
+};
+
+static const struct rockchip_dfi_variant rk3399_variant = {
+	.init = rk3399_dfi_init,
+	.stride = 0x14,
+	.ctrl_single = true,
+	.max_channels = 2,
+	.clk_names = rk3399_clk_names,
+	.num_clks = ARRAY_SIZE(rk3399_clk_names),
+	.reg_write_access = 0x20,
+	.reg_read_access = 0x24,
+	.reg_clock_cycles = 0x28,
+	.reg_access = 0x2c,
+};
+
+static const struct rockchip_dfi_variant rk3568_variant = {
+	.init = rk3568_dfi_init,
+	.stride = 0x0,
+	.ctrl_single = true,
+	.max_channels = 1,
+	.reg_write_access = 0x20,
+	.reg_read_access = 0x24,
+	.reg_clock_cycles = 0x28,
+	.reg_access = 0x2c,
+};
+
+static const struct rockchip_dfi_variant rk3576_variant = {
+	.init = rk3588_dfi_init,
+	.stride = 0x10000,
+	.max_channels = 2,
+	.clk_names = rk3576_clk_names,
+	.num_clks = ARRAY_SIZE(rk3576_clk_names),
+	.reg_write_access = 0x28,
+	.reg_read_access = 0x2c,
+	.reg_access = 0x34,
+	.reg_clock_cycles = 0x30,
+};
+
+static const struct rockchip_dfi_variant rk3588_variant = {
+	.init = rk3588_dfi_init,
+	.stride = 0x4000,
+	.max_channels = 4,
+	.clk_names = rk3588_clk_names,
+	.num_clks = ARRAY_SIZE(rk3588_clk_names),
+	.clocks_optional = true,
+	.reg_write_access = 0x20,
+	.reg_read_access = 0x24,
+	.reg_clock_cycles = 0x28,
+	.reg_access = 0x2c,
+};
+
 static const struct of_device_id rockchip_dfi_id_match[] = {
-	{ .compatible = "rockchip,rk3399-dfi", .data = rk3399_dfi_init },
-	{ .compatible = "rockchip,rk3568-dfi", .data = rk3568_dfi_init },
-	{ .compatible = "rockchip,rk3588-dfi", .data = rk3588_dfi_init },
+	{ .compatible = "rockchip,rk3399-dfi", .data = &rk3399_variant },
+	{ .compatible = "rockchip,rk3568-dfi", .data = &rk3568_variant },
+	{ .compatible = "rockchip,rk3576-dfi", .data = &rk3576_variant },
+	{ .compatible = "rockchip,rk3588-dfi", .data = &rk3588_variant },
 	{ },
 };
 
@@ -822,16 +933,16 @@ static int rockchip_dfi_probe(struct platform_device *pdev)
 	struct rockchip_dfi *dfi;
 	struct devfreq_event_desc *desc;
 	struct device_node *np = pdev->dev.of_node, *node;
-	int (*soc_init)(struct rockchip_dfi *dfi);
+	unsigned int i;
 	int ret;
-
-	soc_init = of_device_get_match_data(&pdev->dev);
-	if (!soc_init)
-		return -EINVAL;
 
 	dfi = devm_kzalloc_obj(dev, *dfi);
 	if (!dfi)
 		return -ENOMEM;
+
+	dfi->variant = of_device_get_match_data(dev);
+	if (!dfi->variant)
+		return -EINVAL;
 
 	dfi->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(dfi->regs))
@@ -854,7 +965,27 @@ static int rockchip_dfi_probe(struct platform_device *pdev)
 	desc->driver_data = dfi;
 	desc->name = np->name;
 
-	ret = soc_init(dfi);
+	if (dfi->variant->num_clks) {
+		/* NB: CCF is fine with us leaving this NULL if num_clks = 0 */
+		dfi->clocks = devm_kcalloc(dev, dfi->variant->num_clks,
+					   sizeof(*dfi->clocks), GFP_KERNEL);
+		if (!dfi->clocks)
+			return -ENOMEM;
+
+		for (i = 0; i < dfi->variant->num_clks; i++)
+			dfi->clocks[i].id = dfi->variant->clk_names[i];
+
+		if (dfi->variant->clocks_optional)
+			ret = devm_clk_bulk_get_optional(dev, dfi->variant->num_clks,
+							 dfi->clocks);
+		else
+			ret = devm_clk_bulk_get(dev, dfi->variant->num_clks,
+						dfi->clocks);
+		if (ret)
+			return dev_err_probe(dev, ret, "failed to get clocks\n");
+	}
+
+	ret = dfi->variant->init(dfi);
 	if (ret)
 		return ret;
 

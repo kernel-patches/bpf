@@ -4,7 +4,9 @@
  */
 
 #include <linux/device.h>
+#include <linux/jiffies.h>
 #include <linux/kobject.h>
+#include <linux/limits.h>
 #include <linux/pci.h>
 #include <linux/sysfs.h>
 
@@ -15,6 +17,7 @@
 #include "xe_pcode_api.h"
 #include "xe_pcode.h"
 #include "xe_pm.h"
+#include "xe_shrinker.h"
 
 /**
  * DOC: Xe device sysfs
@@ -31,6 +34,22 @@
  *
  * lb_voltage_regulator_version - Voltage regulator version provisioned by late
  * binding. Exposed only if supported by the device.
+ *
+ * shrinker_non_purgeable_seeks - Report/change the cost, relative to
+ * purgeable buffer objects, of recreating non-purgeable buffer objects
+ * reclaimed by the shrinker. Higher values reduce reclaim pressure on
+ * non-purgeable buffer objects. Valid values are 1 to 64. Defaults to
+ * CONFIG_DRM_XE_SHRINKER_NON_PURGEABLE_SEEKS.
+ *
+ * userptr_repin_timeout_ms - Report/change the overall time, in
+ * milliseconds, a userptr repin is retried, with all locks dropped between
+ * the attempts, when the CPU mappings keep changing during the repin. The
+ * time is measured from the first repin attempt after an invalidation. When
+ * it expires the repin fails with -EBUSY. Zero means retry indefinitely.
+ * Valid values are 0 to INT_MAX (capped by MAX_JIFFY_OFFSET). The value is
+ * read each time the timeout is checked, so a change takes effect
+ * immediately. Defaults to 10000 on single-node systems and 30000 on
+ * multi-node NUMA systems.
  */
 
 static ssize_t
@@ -294,10 +313,98 @@ static const struct attribute_group device_uid_attr_group = {
 	.attrs = device_uid_attrs,
 };
 
+static ssize_t
+shrinker_non_purgeable_seeks_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct xe_device *xe = pdev_to_xe_device(to_pci_dev(dev));
+
+	return sysfs_emit(buf, "%d\n",
+			  xe_shrinker_non_purgeable_seeks(xe->mem.shrinker));
+}
+
+static ssize_t
+shrinker_non_purgeable_seeks_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct xe_device *xe = pdev_to_xe_device(to_pci_dev(dev));
+	unsigned int seeks;
+	int ret;
+
+	ret = kstrtouint(buf, 0, &seeks);
+	if (ret)
+		return ret;
+
+	ret = xe_shrinker_set_non_purgeable_seeks(xe->mem.shrinker, seeks);
+
+	return ret ?: count;
+}
+
+static DEVICE_ATTR_RW(shrinker_non_purgeable_seeks);
+
+static struct attribute *shrinker_attrs[] = {
+	&dev_attr_shrinker_non_purgeable_seeks.attr,
+	NULL
+};
+
+static const struct attribute_group shrinker_attr_group = {
+	.attrs = shrinker_attrs,
+};
+
+static ssize_t
+userptr_repin_timeout_ms_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	struct xe_device *xe = pdev_to_xe_device(to_pci_dev(dev));
+
+	return sysfs_emit(buf, "%u\n", READ_ONCE(xe->userptr_repin_timeout_ms));
+}
+
+static ssize_t
+userptr_repin_timeout_ms_store(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct xe_device *xe = pdev_to_xe_device(to_pci_dev(dev));
+	u32 val;
+	int ret;
+
+	ret = kstrtou32(buf, 0, &val);
+	if (ret)
+		return ret;
+
+	if (val > INT_MAX || msecs_to_jiffies(val) >= MAX_JIFFY_OFFSET)
+		return -EINVAL;
+
+	WRITE_ONCE(xe->userptr_repin_timeout_ms, val);
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(userptr_repin_timeout_ms);
+
+static struct attribute *userptr_attrs[] = {
+	&dev_attr_userptr_repin_timeout_ms.attr,
+	NULL
+};
+
+static const struct attribute_group userptr_attr_group = {
+	.attrs = userptr_attrs,
+};
+
 int xe_device_sysfs_init(struct xe_device *xe)
 {
 	struct device *dev = xe->drm.dev;
 	int ret;
+
+	ret = devm_device_add_group(dev, &shrinker_attr_group);
+	if (ret)
+		return ret;
+
+	ret = devm_device_add_group(dev, &userptr_attr_group);
+	if (ret)
+		return ret;
 
 	if (xe->d3cold.capable) {
 		ret = devm_device_add_group(dev, &vram_attr_group);

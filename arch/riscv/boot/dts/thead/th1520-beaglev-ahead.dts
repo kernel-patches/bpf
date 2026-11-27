@@ -35,15 +35,21 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	memory@0 {
-		device_type = "memory";
-		reg = <0x0  0x00000000  0x1 0x00000000>;
+	hdmi-connector {
+		compatible = "hdmi-connector";
+		type = "d";
+
+		port {
+			hdmi_con_in: endpoint {
+				remote-endpoint = <&hdmi_out_con>;
+			};
+		};
 	};
 
 	leds {
-		pinctrl-names = "default";
-		pinctrl-0 = <&led_pins>;
 		compatible = "gpio-leds";
+		pinctrl-0 = <&led_pins>;
+		pinctrl-names = "default";
 
 		led-1 {
 			gpios = <&gpio4 8 GPIO_ACTIVE_HIGH>;
@@ -76,15 +82,9 @@
 		};
 	};
 
-	hdmi-connector {
-		compatible = "hdmi-connector";
-		type = "d";
-
-		port {
-			hdmi_con_in: endpoint {
-				remote-endpoint = <&hdmi_out_con>;
-			};
-		};
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0  0x00000000  0x1 0x00000000>;
 	};
 
 	wifi_pwrseq: wifi-pwrseq {
@@ -112,14 +112,16 @@
 	non-removable;
 	no-sdio;
 	no-sd;
+
 	status = "okay";
 };
 
 &gmac0 {
-	pinctrl-names = "default";
 	pinctrl-0 = <&gmac0_pins>;
+	pinctrl-names = "default";
 	phy-handle = <&phy0>;
 	phy-mode = "rgmii-id";
+
 	status = "okay";
 };
 
@@ -153,36 +155,6 @@
 
 &padctrl0_apsys {
 	gmac0_pins: gmac0-0 {
-		tx-pins {
-			pins = "GMAC0_TX_CLK",
-			       "GMAC0_TXEN",
-			       "GMAC0_TXD0",
-			       "GMAC0_TXD1",
-			       "GMAC0_TXD2",
-			       "GMAC0_TXD3";
-			function = "gmac0";
-			bias-disable;
-			drive-strength = <25>;
-			input-disable;
-			input-schmitt-disable;
-			slew-rate = <0>;
-		};
-
-		rx-pins {
-			pins = "GMAC0_RX_CLK",
-			       "GMAC0_RXDV",
-			       "GMAC0_RXD0",
-			       "GMAC0_RXD1",
-			       "GMAC0_RXD2",
-			       "GMAC0_RXD3";
-			function = "gmac0";
-			bias-disable;
-			drive-strength = <1>;
-			input-enable;
-			input-schmitt-disable;
-			slew-rate = <0>;
-		};
-
 		mdc-pins {
 			pins = "GMAC0_MDC";
 			function = "gmac0";
@@ -203,15 +175,6 @@
 			slew-rate = <0>;
 		};
 
-		phy-reset-pins {
-			pins = "GMAC0_COL"; /* GPIO3_21 */
-			bias-disable;
-			drive-strength = <3>;
-			input-disable;
-			input-schmitt-disable;
-			slew-rate = <0>;
-		};
-
 		phy-interrupt-pins {
 			pins = "GMAC0_CRS"; /* GPIO3_22 */
 			function = "gpio";
@@ -221,12 +184,9 @@
 			input-schmitt-enable;
 			slew-rate = <0>;
 		};
-	};
 
-	uart0_pins: uart0-0 {
-		tx-pins {
-			pins = "UART0_TXD";
-			function = "uart";
+		phy-reset-pins {
+			pins = "GMAC0_COL"; /* GPIO3_21 */
 			bias-disable;
 			drive-strength = <3>;
 			input-disable;
@@ -235,12 +195,54 @@
 		};
 
 		rx-pins {
+			pins = "GMAC0_RX_CLK",
+			       "GMAC0_RXDV",
+			       "GMAC0_RXD0",
+			       "GMAC0_RXD1",
+			       "GMAC0_RXD2",
+			       "GMAC0_RXD3";
+			function = "gmac0";
+			bias-disable;
+			drive-strength = <1>;
+			input-enable;
+			input-schmitt-disable;
+			slew-rate = <0>;
+		};
+
+		tx-pins {
+			pins = "GMAC0_TX_CLK",
+			       "GMAC0_TXEN",
+			       "GMAC0_TXD0",
+			       "GMAC0_TXD1",
+			       "GMAC0_TXD2",
+			       "GMAC0_TXD3";
+			function = "gmac0";
+			bias-disable;
+			drive-strength = <25>;
+			input-disable;
+			input-schmitt-disable;
+			slew-rate = <0>;
+		};
+	};
+
+	uart0_pins: uart0-0 {
+		rx-pins {
 			pins = "UART0_RXD";
 			function = "uart";
 			bias-pull-up;
 			drive-strength = <1>;
 			input-enable;
 			input-schmitt-enable;
+			slew-rate = <0>;
+		};
+
+		tx-pins {
+			pins = "UART0_TXD";
+			function = "uart";
+			bias-disable;
+			drive-strength = <3>;
+			input-disable;
+			input-schmitt-disable;
 			slew-rate = <0>;
 		};
 	};
@@ -271,19 +273,21 @@
 &sdio0 {
 	bus-width = <4>;
 	max-frequency = <198000000>;
+
 	status = "okay";
 };
 
 &sdio1 {
 	bus-width = <4>;
 	max-frequency = <198000000>;
-	pinctrl-names = "default";
 	pinctrl-0 = <&wifi_pins>;
+	pinctrl-names = "default";
 	#address-cells = <1>;
 	#size-cells = <0>;
 	non-removable;
 	keep-power-in-suspend;
 	mmc-pwrseq = <&wifi_pwrseq>;
+
 	status = "okay";
 
 	wifi@1 {
@@ -310,7 +314,8 @@
 };
 
 &uart0 {
-	pinctrl-names = "default";
 	pinctrl-0 = <&uart0_pins>;
+	pinctrl-names = "default";
+
 	status = "okay";
 };

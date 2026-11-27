@@ -350,10 +350,8 @@ static void ppc440spe_desc_init_dma01pq(struct ppc440spe_adma_desc_slot *desc,
 			 * of the transaction (src, dst, ...)
 			 */
 			iter->hw_next = NULL;
-			if (flags & DMA_PREP_INTERRUPT)
-				set_bit(PPC440SPE_DESC_INT, &iter->flags);
-			else
-				clear_bit(PPC440SPE_DESC_INT, &iter->flags);
+			assign_bit(PPC440SPE_DESC_INT, &iter->flags,
+				   flags & DMA_PREP_INTERRUPT);
 		}
 	}
 
@@ -508,10 +506,7 @@ static void ppc440spe_desc_init_memcpy(struct ppc440spe_adma_desc_slot *desc,
 	desc->src_cnt = 1;
 	desc->dst_cnt = 1;
 
-	if (flags & DMA_PREP_INTERRUPT)
-		set_bit(PPC440SPE_DESC_INT, &desc->flags);
-	else
-		clear_bit(PPC440SPE_DESC_INT, &desc->flags);
+	assign_bit(PPC440SPE_DESC_INT, &desc->flags, flags & DMA_PREP_INTERRUPT);
 
 	hw_desc->opc = DMA_CDB_OPC_MV_SG1_SG2;
 }
@@ -2136,10 +2131,8 @@ static struct ppc440spe_adma_desc_slot *ppc440spe_dma01_prep_mult(
 					chain_node);
 		memset(iter->hw_desc, 0, sizeof(struct dma_cdb));
 		iter->hw_next = NULL;
-		if (flags & DMA_PREP_INTERRUPT)
-			set_bit(PPC440SPE_DESC_INT, &iter->flags);
-		else
-			clear_bit(PPC440SPE_DESC_INT, &iter->flags);
+		assign_bit(PPC440SPE_DESC_INT, &iter->flags,
+			   flags & DMA_PREP_INTERRUPT);
 
 		hw_desc = iter->hw_desc;
 		hw_desc->opc = DMA_CDB_OPC_MV_SG1_SG2;
@@ -2221,10 +2214,8 @@ static struct ppc440spe_adma_desc_slot *ppc440spe_dma01_prep_sum_product(
 		iter->hw_next = list_entry(iter->chain_node.next,
 					   struct ppc440spe_adma_desc_slot,
 					   chain_node);
-		if (flags & DMA_PREP_INTERRUPT)
-			set_bit(PPC440SPE_DESC_INT, &iter->flags);
-		else
-			clear_bit(PPC440SPE_DESC_INT, &iter->flags);
+		assign_bit(PPC440SPE_DESC_INT, &iter->flags,
+			   flags & DMA_PREP_INTERRUPT);
 
 		hw_desc = iter->hw_desc;
 		hw_desc->opc = DMA_CDB_OPC_MV_SG1_SG2;
@@ -2246,10 +2237,8 @@ static struct ppc440spe_adma_desc_slot *ppc440spe_dma01_prep_sum_product(
 					chain_node);
 		memset(iter->hw_desc, 0, sizeof(struct dma_cdb));
 		iter->hw_next = NULL;
-		if (flags & DMA_PREP_INTERRUPT)
-			set_bit(PPC440SPE_DESC_INT, &iter->flags);
-		else
-			clear_bit(PPC440SPE_DESC_INT, &iter->flags);
+		assign_bit(PPC440SPE_DESC_INT, &iter->flags,
+			   flags & DMA_PREP_INTERRUPT);
 
 		hw_desc = iter->hw_desc;
 		hw_desc->opc = DMA_CDB_OPC_MV_SG1_SG2;

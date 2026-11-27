@@ -60,7 +60,7 @@ static struct rc_map_table x96max[] = {
 static struct rc_map_list x96max_map = {
 	.map = {
 		.scan     = x96max,
-		.size     = ARRAY_SIZE(x96max),
+		.entries  = ARRAY_SIZE(x96max),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_X96MAX,
 	}

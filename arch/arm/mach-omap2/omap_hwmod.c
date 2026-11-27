@@ -153,9 +153,7 @@
 #include "common.h"
 #include "clockdomain.h"
 #include "hdq1w.h"
-#include "mmc.h"
 #include "powerdomain.h"
-#include "cm2xxx.h"
 #include "cm3xxx.h"
 #include "cm33xx.h"
 #include "prm.h"
@@ -2329,8 +2327,10 @@ static int __init _init(struct omap_hwmod *oh, void *data)
 
 	r = _init_mpu_rt_base(oh, NULL, index, np);
 	if (r < 0) {
-		WARN(1, "omap_hwmod: %s: doesn't have mpu register target base\n",
-		     oh->name);
+		/* there might be a transition ongoing from hwmod to ti-sys */
+		if (np)
+			WARN(1, "omap_hwmod: %s: doesn't have mpu register target base\n",
+			     oh->name);
 		r = 0;
 		goto out_put_node;
 	}
@@ -3437,7 +3437,7 @@ static int omap_hwmod_allocate_module(struct device *dev, struct omap_hwmod *oh,
 		/*
 		 * Note that we assume interconnect interface clocks will be
 		 * managed by the interconnect driver for OCPIF_SWSUP_IDLE case
-		 * on omap24xx and omap3.
+		 * on omap3.
 		 */
 		oi->slave = oh;
 		oi->user = OCP_USER_MPU | OCP_USER_SDMA;
@@ -3469,10 +3469,6 @@ out_free_sysc:
 	return -ENOMEM;
 }
 
-static const struct omap_hwmod_reset omap24xx_reset_quirks[] = {
-	{ .match = "msdi", .len = 4, .reset = omap_msdi_reset, },
-};
-
 static const struct omap_hwmod_reset omap_reset_quirks[] = {
 	{ .match = "dss_core", .len = 8, .reset = omap_dss_reset, },
 	{ .match = "hdq1w", .len = 5, .reset = omap_hdq1w_reset, },
@@ -3503,11 +3499,6 @@ static void
 omap_hwmod_init_reset_quirks(struct device *dev, struct omap_hwmod *oh,
 			     const struct ti_sysc_module_data *data)
 {
-	if (soc_is_omap24xx())
-		omap_hwmod_init_reset_quirk(dev, oh, data,
-					    omap24xx_reset_quirks,
-					    ARRAY_SIZE(omap24xx_reset_quirks));
-
 	omap_hwmod_init_reset_quirk(dev, oh, data, omap_reset_quirks,
 				    ARRAY_SIZE(omap_reset_quirks));
 }
@@ -3914,12 +3905,7 @@ ohsps_unlock:
  */
 void __init omap_hwmod_init(void)
 {
-	if (cpu_is_omap24xx()) {
-		soc_ops.wait_target_ready = _omap2xxx_3xxx_wait_target_ready;
-		soc_ops.assert_hardreset = _omap2_assert_hardreset;
-		soc_ops.deassert_hardreset = _omap2_deassert_hardreset;
-		soc_ops.is_hardreset_asserted = _omap2_is_hardreset_asserted;
-	} else if (cpu_is_omap34xx()) {
+	if (cpu_is_omap34xx()) {
 		soc_ops.wait_target_ready = _omap2xxx_3xxx_wait_target_ready;
 		soc_ops.assert_hardreset = _omap2_assert_hardreset;
 		soc_ops.deassert_hardreset = _omap2_deassert_hardreset;

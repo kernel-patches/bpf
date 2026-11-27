@@ -163,8 +163,6 @@ extern int amdgpu_gart_size;
 extern int amdgpu_gtt_size;
 extern int amdgpu_moverate;
 extern int amdgpu_audio;
-extern int amdgpu_disp_priority;
-extern int amdgpu_hw_i2c;
 extern int amdgpu_pcie_gen2;
 extern int amdgpu_msi;
 extern char amdgpu_lockup_timeout[AMDGPU_MAX_TIMEOUT_PARAM_LENGTH];
@@ -182,7 +180,6 @@ extern int amdgpu_vm_fault_stop;
 extern int amdgpu_vm_debug;
 extern int amdgpu_vm_update_mode;
 extern int amdgpu_exp_hw_support;
-extern int amdgpu_dc;
 extern int amdgpu_sched_jobs;
 extern int amdgpu_sched_hw_submission;
 extern uint amdgpu_pcie_gen_cap;
@@ -213,7 +210,6 @@ extern u64 amdgpu_ras_mask;
 extern int amdgpu_bad_page_threshold;
 extern bool amdgpu_ignore_bad_page_threshold;
 extern struct amdgpu_watchdog_timer amdgpu_watchdog_timer;
-extern int amdgpu_async_gfx_ring;
 extern int amdgpu_mcbp;
 extern int amdgpu_discovery;
 extern int amdgpu_mes_log_enable;
@@ -426,6 +422,9 @@ struct amdgpu_fpriv {
 
 	/** GPU partition selection */
 	uint32_t		xcp_id;
+
+	/** Signaled when a KFD interrupt drain fence for this PASID is seen */
+	struct completion	irq_drain_done;
 };
 
 int amdgpu_file_to_fpriv(struct file *filp, struct amdgpu_fpriv **fpriv);
@@ -956,6 +955,7 @@ struct amdgpu_device {
 	bool                            debug_enable_ce_cs;
 	bool                            debug_hibernation_thaw_resume_gpu;
 	bool                            debug_disable_ip_block_soft_reset;
+	bool                            debug_disable_userptr_size_limit;
 
 	/* Protection for the following isolation structure */
 	struct mutex                    enforce_isolation_mutex;
@@ -1016,6 +1016,11 @@ static inline struct amdgpu_device *amdgpu_ttm_adev(struct ttm_device *bdev)
 	return container_of(bdev, struct amdgpu_device, mman.bdev);
 }
 
+static inline bool amdgpu_is_spm_passthrough(struct amdgpu_device *adev)
+{
+	return amdgpu_passthrough(adev) && !pci_resource_len(adev->pdev, 0);
+}
+
 static inline bool amdgpu_is_multi_aid(struct amdgpu_device *adev)
 {
 	return !!adev->aid_mask;
@@ -1036,8 +1041,6 @@ size_t amdgpu_device_aper_access(struct amdgpu_device *adev, loff_t pos,
 void amdgpu_device_vram_access(struct amdgpu_device *adev, loff_t pos,
 			       void *buf, size_t size, bool write);
 u32 amdgpu_device_get_rev_id(struct amdgpu_device *adev);
-bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
-				       enum amd_asic_type asic_type);
 bool amdgpu_device_has_dc_support(struct amdgpu_device *adev);
 
 void amdgpu_device_set_sriov_virtual_display(struct amdgpu_device *adev);
@@ -1049,6 +1052,8 @@ int amdgpu_do_asic_reset(struct list_head *device_list_handle,
 			 struct amdgpu_reset_context *reset_context);
 
 int amdgpu_device_reinit_after_reset(struct amdgpu_reset_context *reset_context);
+
+bool amdgpu_device_is_removable(struct amdgpu_device *adev);
 
 int emu_soc_asic_init(struct amdgpu_device *adev);
 

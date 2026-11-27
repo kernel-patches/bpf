@@ -581,14 +581,6 @@ static int ecm_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 			if (IS_ERR(net))
 				return PTR_ERR(net);
 		}
-
-		/* NOTE this can be a minor disagreement with the ECM spec,
-		 * which says speed notifications will "always" follow
-		 * connection notifications.  But we allow one connect to
-		 * follow another (if the first is in flight), and instead
-		 * just guarantee that a speed notification is always sent.
-		 */
-		ecm_notify(ecm);
 	} else
 		goto fail;
 
@@ -821,7 +813,7 @@ USB_ETHERNET_CONFIGFS_ITEM_ATTR_QMULT(ecm);
 /* f_ecm_opts_ifname */
 USB_ETHERNET_CONFIGFS_ITEM_ATTR_IFNAME(ecm);
 
-static struct configfs_attribute *ecm_attrs[] = {
+static const struct configfs_attribute *const ecm_attrs[] = {
 	&ecm_opts_attr_dev_addr,
 	&ecm_opts_attr_host_addr,
 	&ecm_opts_attr_qmult,
@@ -831,7 +823,7 @@ static struct configfs_attribute *ecm_attrs[] = {
 
 static const struct config_item_type ecm_func_type = {
 	.ct_item_ops	= &ecm_item_ops,
-	.ct_attrs	= ecm_attrs,
+	.ct_attrs_const	= ecm_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

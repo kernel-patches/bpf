@@ -197,7 +197,7 @@ static struct irq_chip bcm1480_irq_type = {
 #endif
 };
 
-void __init init_bcm1480_irqs(void)
+static void __init init_bcm1480_irqs(void)
 {
 	int i;
 
@@ -301,8 +301,6 @@ void __init arch_init_irq(void)
 	/* Enable necessary IPs, disable the rest */
 	change_c0_status(ST0_IM, imask);
 }
-
-extern void bcm1480_mailbox_interrupt(void);
 
 static inline void dispatch_ip2(void)
 {

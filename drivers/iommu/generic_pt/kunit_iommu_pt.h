@@ -427,6 +427,36 @@ static void test_mixed(struct kunit *test)
 	check_iova(test, start, oa, len);
 }
 
+/*
+ * Unmapping a range that holds no mappings must not record anything in
+ * the IOTLB gather. Otherwise iova + len - 1 underflows and the flush
+ * covers the whole domain, or widens a range that was already gathered.
+ */
+static void test_unmap_hole(struct kunit *test)
+{
+	struct kunit_iommu_priv *priv = test->priv;
+	struct iommu_iotlb_gather gather;
+
+	/* A hole at IOVA 0 must not turn the gather into [0, ULONG_MAX]. */
+	iommu_iotlb_gather_init(&gather);
+	KUNIT_ASSERT_EQ(
+		test,
+		iommu_unmap_fast(&priv->domain, 0, priv->smallest_pgsz, &gather),
+		0);
+	KUNIT_EXPECT_EQ(test, gather.start, ULONG_MAX);
+	KUNIT_EXPECT_EQ(test, gather.end, 0);
+
+	/* Neither may a hole at a non-zero IOVA widen the gather. */
+	iommu_iotlb_gather_init(&gather);
+	KUNIT_ASSERT_EQ(
+		test,
+		iommu_unmap_fast(&priv->domain, priv->smallest_pgsz,
+				 priv->smallest_pgsz, &gather),
+		0);
+	KUNIT_EXPECT_EQ(test, gather.start, ULONG_MAX);
+	KUNIT_EXPECT_EQ(test, gather.end, 0);
+}
+
 static struct kunit_case iommu_test_cases[] = {
 	KUNIT_CASE_FMT(test_increase_level),
 	KUNIT_CASE_FMT(test_map_simple),
@@ -435,6 +465,7 @@ static struct kunit_case iommu_test_cases[] = {
 	KUNIT_CASE_FMT(test_random_map),
 	KUNIT_CASE_FMT(test_pgsize_boundary),
 	KUNIT_CASE_FMT(test_mixed),
+	KUNIT_CASE_FMT(test_unmap_hole),
 	{},
 };
 
@@ -470,8 +501,10 @@ static void pt_kunit_iommu_exit(struct kunit *test)
 	 * Look for memory leaks, assumes kunit is running isolated and nothing
 	 * else is using secondary page tables.
 	 */
-	KUNIT_ASSERT_EQ(test, priv->orig_nr_secondary_pagetable,
-			global_node_page_state(NR_SECONDARY_PAGETABLE));
+	/* Per-CPU vmstat batching can cause false leak reports on SMP. */
+	if (!IS_ENABLED(CONFIG_SMP))
+		KUNIT_ASSERT_EQ(test, priv->orig_nr_secondary_pagetable,
+				global_node_page_state(NR_SECONDARY_PAGETABLE));
 	kunit_kfree(test, test->priv);
 }
 

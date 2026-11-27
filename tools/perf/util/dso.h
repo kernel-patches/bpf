@@ -13,6 +13,7 @@
 #include "build-id.h"
 #include "debuginfo.h"
 #include "mutex.h"
+#include "symbol.h"
 #include <internal/rc_check.h>
 
 struct machine;
@@ -153,6 +154,15 @@ enum dso_swap_type {
 	DSO_SWAP__YES,
 };
 
+enum dso_lazy_names {
+	/* No symbol has a lazy name. */
+	DSO_LAZY_NAMES__NONE,
+	/* Some symbol names are not loaded yet. */
+	DSO_LAZY_NAMES__PENDING,
+	/* All names were needed once, so later loads read names eagerly. */
+	DSO_LAZY_NAMES__EAGER,
+};
+
 enum dso_data_status {
 	DSO_DATA_STATUS_ERROR	= -1,
 	DSO_DATA_STATUS_UNKNOWN	= 0,
@@ -261,9 +271,6 @@ struct dso_cache {
 struct dso_data {
 	struct rb_root	 cache;
 	struct list_head open_entry;
-#ifdef REFCNT_CHECKING
-	struct dso	 *dso;
-#endif
 	int		 fd;
 	int		 status;
 	u32		 status_seen;
@@ -287,18 +294,12 @@ struct auxtrace_cache;
 DECLARE_RC_STRUCT(dso) {
 	struct mutex	 lock;
 	struct dsos	 *dsos;
-	struct rb_root_cached symbols;
-	struct symbol	 **symbol_names;
-	size_t		 symbol_names_len;
+	struct symbols	 symbols;
 	struct rb_root_cached inlined_nodes;
 	struct rb_root_cached srclines;
 	struct rb_root	 data_types;
 	struct rb_root	 global_vars;
 
-	struct {
-		u64		addr;
-		struct symbol	*symbol;
-	} last_find_result;
 	u64		 text_offset;
 	u64		 text_end;
 	const char	 *short_name;
@@ -351,13 +352,14 @@ DECLARE_RC_STRUCT(dso) {
 	u8		 is_64_bit:1;
 	u8		 bintype_searched:1;
 	u8		 debuginfo_searched:1;
-	bool		 sorted_by_name;
 	bool		 loaded;
+	/* Under the DSO lock. */
+	enum dso_lazy_names lazy_names;
 	u8		 rel;
 	char		 name[];
 };
 
-extern struct mutex _dso__data_open_lock;
+extern struct mutex dso__data_open_lock;
 extern const struct dso_id dso_id_empty;
 
 int dso_id__cmp(const struct dso_id *a, const struct dso_id *b);
@@ -365,11 +367,14 @@ int dso_id__cmp(const struct dso_id *a, const struct dso_id *b);
 /* dso__for_each_symbol - iterate over the symbols of given type
  *
  * @dso: the 'struct dso *' in which symbols are iterated
- * @pos: the 'struct symbol *' to use as a loop cursor
- * @n: the 'struct rb_node *' to use as a temporary storage
+ * @cb: callback function invoked for each symbol
+ * @data: opaque data pointer passed to @cb
  */
-#define dso__for_each_symbol(dso, pos, n)	\
-	symbols__for_each_entry(dso__symbols(dso), pos, n)
+#define dso__for_each_symbol(dso, cb, data)	\
+	symbols__visit(dso__named_symbols(dso), cb, data)
+
+#define dso__for_each_symbol_by_name(dso, cb, data)	\
+	symbols__visit_by_name(dso__named_symbols(dso), cb, data)
 
 static inline void *dso__a2l(const struct dso *dso)
 {
@@ -598,26 +603,6 @@ static inline void dso__set_kernel(struct dso *dso, enum dso_space_type kernel)
 	RC_CHK_ACCESS(dso)->kernel = kernel;
 }
 
-static inline u64 dso__last_find_result_addr(const struct dso *dso)
-{
-	return RC_CHK_ACCESS(dso)->last_find_result.addr;
-}
-
-static inline void dso__set_last_find_result_addr(struct dso *dso, u64 addr)
-{
-	RC_CHK_ACCESS(dso)->last_find_result.addr = addr;
-}
-
-static inline struct symbol *dso__last_find_result_symbol(const struct dso *dso)
-{
-	return RC_CHK_ACCESS(dso)->last_find_result.symbol;
-}
-
-static inline void dso__set_last_find_result_symbol(struct dso *dso, struct symbol *symbol)
-{
-	RC_CHK_ACCESS(dso)->last_find_result.symbol = symbol;
-}
-
 static inline enum dso_load_errno *dso__load_errno(struct dso *dso)
 {
 	return &RC_CHK_ACCESS(dso)->load_errno;
@@ -628,7 +613,18 @@ static inline void dso__set_loaded(struct dso *dso)
 	RC_CHK_ACCESS(dso)->loaded = true;
 }
 
+static inline enum dso_lazy_names dso__lazy_names(const struct dso *dso)
+{
+	return RC_CHK_ACCESS(dso)->lazy_names;
+}
+
+static inline void dso__set_lazy_names(struct dso *dso, enum dso_lazy_names lazy_names)
+{
+	RC_CHK_ACCESS(dso)->lazy_names = lazy_names;
+}
+
 static inline struct mutex *dso__lock(struct dso *dso)
+	__returns_ctx_lock(&RC_CHK_ACCESS(dso)->lock)
 {
 	return &RC_CHK_ACCESS(dso)->lock;
 }
@@ -730,29 +726,9 @@ static inline struct rb_root *dso__global_vars(struct dso *dso)
 	return &RC_CHK_ACCESS(dso)->global_vars;
 }
 
-static inline struct rb_root_cached *dso__symbols(struct dso *dso)
+static inline struct symbols *dso__symbols(struct dso *dso)
 {
 	return &RC_CHK_ACCESS(dso)->symbols;
-}
-
-static inline struct symbol **dso__symbol_names(struct dso *dso)
-{
-	return RC_CHK_ACCESS(dso)->symbol_names;
-}
-
-static inline void dso__set_symbol_names(struct dso *dso, struct symbol **names)
-{
-	RC_CHK_ACCESS(dso)->symbol_names = names;
-}
-
-static inline size_t dso__symbol_names_len(struct dso *dso)
-{
-	return RC_CHK_ACCESS(dso)->symbol_names_len;
-}
-
-static inline void dso__set_symbol_names_len(struct dso *dso, size_t len)
-{
-	RC_CHK_ACCESS(dso)->symbol_names_len = len;
 }
 
 static inline const char *dso__symsrc_filename(const struct dso *dso)
@@ -760,7 +736,7 @@ static inline const char *dso__symsrc_filename(const struct dso *dso)
 	return RC_CHK_ACCESS(dso)->symsrc_filename;
 }
 
-void dso__set_symsrc_filename(struct dso *dso, char *val) EXCLUSIVE_LOCKS_REQUIRED(dso__lock(dso));
+void dso__set_symsrc_filename(struct dso *dso, char *val) __must_hold(dso__lock(dso));
 
 static inline void dso__free_symsrc_filename(struct dso *dso)
 {
@@ -804,12 +780,13 @@ void dso__delete(struct dso *dso);
 int dso__cmp_id(struct dso *a, struct dso *b);
 void dso__set_short_name(struct dso *dso, const char *name, bool name_allocated);
 void dso__set_long_name(struct dso *dso, const char *name, bool name_allocated);
+bool dso__needs_improve_id(const struct dso *dso, const struct dso_id *id);
 void __dso__improve_id(struct dso *dso, const struct dso_id *id);
 
 int dso__name_len(const struct dso *dso);
 
 struct dso *dso__get(struct dso *dso);
-void dso__put(struct dso *dso) LOCKS_EXCLUDED(_dso__data_open_lock);
+void dso__put(struct dso *dso) __must_not_hold(&dso__data_open_lock);
 
 static inline void __dso__zput(struct dso **dso)
 {
@@ -823,14 +800,22 @@ bool dso__loaded(const struct dso *dso);
 
 static inline bool dso__has_symbols(const struct dso *dso)
 {
-	return !RB_EMPTY_ROOT(&RC_CHK_ACCESS(dso)->symbols.rb_root);
+	struct symbols *symbols = (struct symbols *)&RC_CHK_ACCESS(dso)->symbols;
+	bool res;
+
+	down_read(&symbols->lock);
+	res = symbols->cnt > 0;
+	up_read(&symbols->lock);
+	return res;
 }
 
 char *dso__filename_with_chroot(const struct dso *dso, const char *filename);
 
 bool dso__sorted_by_name(const struct dso *dso);
-void dso__set_sorted_by_name(struct dso *dso);
 void dso__sort_by_name(struct dso *dso);
+struct symbols *dso__named_symbols(struct dso *dso);
+void dso__load_symbol_names(struct dso *dso, struct symbol **syms, size_t nr)
+	__must_hold(dso__lock(dso));
 
 int dso__swap_init(struct dso *dso, unsigned char eidata);
 
@@ -919,9 +904,9 @@ void dso__set_module_info(struct dso *dso, struct kmod_path *m,
  * TODO
 */
 bool dso__data_get_fd(struct dso *dso, struct machine *machine, int *fd)
-	EXCLUSIVE_TRYLOCK_FUNCTION(true, _dso__data_open_lock);
-void dso__data_put_fd(struct dso *dso) UNLOCK_FUNCTION(_dso__data_open_lock);
-void dso__data_close(struct dso *dso) LOCKS_EXCLUDED(_dso__data_open_lock);
+	__cond_acquires(true, &dso__data_open_lock);
+void dso__data_put_fd(struct dso *dso) __releases(&dso__data_open_lock);
+void dso__data_close(struct dso *dso) __must_not_hold(&dso__data_open_lock);
 
 int dso__data_file_size(struct dso *dso, struct machine *machine);
 off_t dso__data_size(struct dso *dso, struct machine *machine);
@@ -952,8 +937,6 @@ ssize_t dso__data_write_cache_addr(struct dso *dso, struct map *map,
 struct map *dso__new_map(const char *name);
 struct dso *machine__findnew_kernel(struct machine *machine, const char *name,
 				    const char *short_name, int dso_type);
-
-void dso__reset_find_symbol_cache(struct dso *dso);
 
 size_t dso__fprintf_symbols_by_name(struct dso *dso, FILE *fp);
 size_t dso__fprintf(struct dso *dso, FILE *fp);
@@ -1019,6 +1002,22 @@ static inline bool dso__is_kallsyms(const struct dso *dso)
 		return true;
 
 	return is_guest_kallsyms_pid_name(name);
+}
+
+static inline bool dso__is_bpf_prog(const struct dso *dso)
+{
+	const char *name;
+
+	if (dso__binary_type(dso) == DSO_BINARY_TYPE__BPF_PROG_INFO)
+		return true;
+
+	/*
+	 * If PERF_RECORD_BPF_EVENT is not included, the dso will not have
+	 * type of DSO_BINARY_TYPE__BPF_PROG_INFO. In such cases, we can
+	 * guess the type based on name.
+	 */
+	name = dso__short_name(dso);
+	return name && !strncmp(name, "bpf_prog_", sizeof("bpf_prog_") - 1);
 }
 
 static inline enum dso_binary_type dso__dbginfo_type(const struct dso *dso)

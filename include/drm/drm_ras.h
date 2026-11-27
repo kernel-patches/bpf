@@ -6,9 +6,27 @@
 #ifndef __DRM_RAS_H__
 #define __DRM_RAS_H__
 
+#include <linux/completion.h>
+#include <linux/refcount.h>
 #include <linux/types.h>
 
 #include <uapi/drm/drm_ras.h>
+
+/**
+ * struct drm_ras_telemetry_field - A descriptor of a telemetry field.
+ */
+struct drm_ras_telemetry_field {
+	/** @name: The enum or macro name defined by the device uAPI. */
+	const char *name;
+	/** @value: The numerical value of the field. */
+	u64 value;
+	/**
+	 * @mode: Bitmask of supported access modes for this field, built
+	 * from enum drm_ras_telemetry_field_mode (DRM_RAS_TELEMETRY_FIELD_MODE_READ,
+	 * DRM_RAS_TELEMETRY_FIELD_MODE_WRITE).
+	 */
+	u32 mode;
+};
 
 /**
  * struct drm_ras_node - A DRM RAS Node
@@ -100,8 +118,88 @@ struct drm_ras_node {
 	 */
 	int (*set_error_threshold)(struct drm_ras_node *node, u32 error_id, u32 threshold);
 
+	/* Telemetry Related Callback and Variables */
+
+	/**
+	 * @telemetry_fields:
+	 *
+	 * A list of telemetry fields for a device, each with its supported
+	 * access modes encoded in its &drm_ras_telemetry_field.mode.
+	 * The list must be terminated by a NULL .name entry.
+	 */
+	const struct drm_ras_telemetry_field *telemetry_fields;
+
+	/**
+	 * @telemetry_pre:
+	 *
+	 * This callback is used to enforce any pre_doit conditions necessary
+	 * for telemetry. This is an optional callback for telemetry_node.
+	 *
+	 * Returns 0 on success, negative error code on failure.
+	 */
+	int (*telemetry_pre)(struct drm_ras_node *ep);
+
+	/**
+	 * @telemetry_get:
+	 *
+	 * This callback is used for a drm-ras telemetry node to read a
+	 * telemetry value. This is a mandatory callback for telemetry_node.
+	 *
+	 * The callback will read the desired device-specific field into
+	 * @value and update @status to a device-specific error code.
+	 *
+	 * The return value and @status report failures at two different
+	 * levels. The return value indicates whether the read could be
+	 * performed at all, e.g. an unsupported field or a driver/communication
+	 * failure talking to the device. @status instead reports an error the
+	 * device itself returned in response to an otherwise successfully
+	 * performed read. @value is only meaningful when this returns 0 and
+	 * @status is 0.
+	 *
+	 * Returns 0 if the read was performed, regardless of @status.
+	 * Returns a negative error code if the read could not be performed.
+	 */
+	int (*telemetry_get)(struct drm_ras_node *ep, u64 *field, s64 *value,
+			     s64 *status);
+
+	/**
+	 * @telemetry_set:
+	 *
+	 * This callback is used for a drm-ras telemetry node to write a
+	 * telemetry value. This is an optional callback for telemetry_node.
+	 *
+	 * The callback will write @value to the desired device-specific field
+	 * and update @status to a device-specific error code.
+	 *
+	 * The return value and @status report failures at two different
+	 * levels. The return value indicates whether the write could be
+	 * performed at all, e.g. an unsupported field or a driver/communication
+	 * failure talking to the device. @status instead reports an error the
+	 * device itself returned in response to an otherwise successfully
+	 * performed write.
+	 *
+	 * Returns 0 if the write was performed, regardless of @status.
+	 * Returns a negative error code if the write could not be performed.
+	 */
+	int (*telemetry_set)(struct drm_ras_node *ep, u64 *field, s64 *value,
+			     s64 *status);
+
 	/** @priv: Driver private data */
 	void *priv;
+
+	/* private: Internal drm_ras bookkeeping, drivers must not touch. */
+
+	/*
+	 * @ref: One reference is held while the node is registered in the
+	 * xarray; netlink handlers take an additional reference across their
+	 * use of the node. See drm_ras_node_get()/drm_ras_node_put().
+	 */
+	refcount_t ref;
+	/*
+	 * @unregistered: Completed when the last reference is dropped, so
+	 * drm_ras_node_unregister() can wait for in-flight handlers.
+	 */
+	struct completion unregistered;
 };
 
 struct drm_device;

@@ -12,6 +12,7 @@
 #include <linux/delay.h>
 #include <linux/reboot.h>
 #include <linux/ftrace.h>
+#include <linux/trace_controls.h>
 #include <linux/debug_locks.h>
 #include <linux/cpufeature.h>
 #include <asm/guarded_storage.h>
@@ -152,14 +153,17 @@ void crash_free_reserved_phys_range(unsigned long begin, unsigned long end)
 static void crash_protect_pages(int protect)
 {
 	unsigned long size;
+	int rc;
 
 	if (!crashk_res.end)
 		return;
 	size = resource_size(&crashk_res);
 	if (protect)
-		set_memory_ro(crashk_res.start, size >> PAGE_SHIFT);
+		rc = set_memory_ro(crashk_res.start, size >> PAGE_SHIFT);
 	else
-		set_memory_rw(crashk_res.start, size >> PAGE_SHIFT);
+		rc = set_memory_rw(crashk_res.start, size >> PAGE_SHIFT);
+	if (rc)
+		pr_warn("Failed to %sprotect crashkernel memory: %d\n",	protect ? "" : "un", rc);
 }
 
 void arch_kexec_protect_crashkres(void)

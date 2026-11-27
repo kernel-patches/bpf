@@ -303,6 +303,13 @@ static const struct dmi_system_id dmi_table[] = {
 	{
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "ONE-NETBOOK"),
+			DMI_EXACT_MATCH(DMI_BOARD_NAME, "ONEXPLAYER X2Mini"),
+		},
+		.driver_data = (void *)oxp_g1_i,
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "ONE-NETBOOK"),
 			DMI_EXACT_MATCH(DMI_BOARD_NAME, "ONEXPLAYER X2Mini PRO"),
 		},
 		.driver_data = (void *)oxp_fly,
@@ -1001,7 +1008,7 @@ static int oxp_platform_probe(struct platform_device *pdev)
 		return PTR_ERR(hwdev);
 
 	if (oxp_psy_ext_supported()) {
-		ret = devm_battery_hook_register(dev, &battery_hook);
+		ret = devm_acpi_battery_hook_register(dev, &battery_hook);
 		if (ret)
 			return ret;
 	}

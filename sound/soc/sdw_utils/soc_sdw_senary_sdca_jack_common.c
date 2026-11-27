@@ -57,6 +57,12 @@ static const struct snd_soc_dapm_route senary_sdca_jack_map[] = {
 	{ "sn624x MIC2", NULL, "Headset Mic" },
 };
 
+/* Widget names stay bare when codec_conf did not apply a name_prefix. */
+static const struct snd_soc_dapm_route senary_sdca_jack_map_bare[] = {
+	{ "Headphone", NULL, "HP" },
+	{ "MIC2", NULL, "Headset Mic" },
+};
+
 static struct snd_soc_jack_pin senary_sdca_jack_pins[] = {
 	{
 		.pin    = "Headphone",
@@ -68,10 +74,6 @@ static struct snd_soc_jack_pin senary_sdca_jack_pins[] = {
 	},
 };
 
-static const char * const need_sdca_suffix[] = {
-	"sn624x"
-};
-
 int asoc_sdw_senary_sdca_jack_rtd_init(struct snd_soc_pcm_runtime *rtd, struct snd_soc_dai *dai)
 {
 	struct snd_soc_card *card = rtd->card;
@@ -79,38 +81,41 @@ int asoc_sdw_senary_sdca_jack_rtd_init(struct snd_soc_pcm_runtime *rtd, struct s
 	struct asoc_sdw_mc_private *ctx = snd_soc_card_get_drvdata(card);
 	struct snd_soc_component *component;
 	struct snd_soc_jack *jack;
+	const struct snd_soc_dapm_route *routes = senary_sdca_jack_map;
+	const char *prefix;
+	int nroutes = ARRAY_SIZE(senary_sdca_jack_map);
 	int ret;
-	int i;
 
 	component = dai->component;
+	prefix = component->name_prefix;
+	/*
+	 * codec_conf should set name_prefix to "sn624x" before DAPM widgets
+	 * are created. If that match fails, name_prefix is NULL: strstr()
+	 * oopses, and the widgets keep the bare names from the codec driver.
+	 */
+	if (!prefix) {
+		dev_warn(card->dev,
+			 "sn624x jack: component %s has no name_prefix\n",
+			 component->name);
+		prefix = "sn624x";
+		routes = senary_sdca_jack_map_bare;
+		nroutes = ARRAY_SIZE(senary_sdca_jack_map_bare);
+	} else if (!strstr(prefix, "sn624x")) {
+		dev_err(card->dev, "%s is not supported\n", prefix);
+		return -EINVAL;
+	}
+
 	card->components = devm_kasprintf(card->dev, GFP_KERNEL,
-					  "%s hs:%s",
-					  card->components, component->name_prefix);
+					  "%s hs:%s-sdca",
+					  card->components, prefix);
 	if (!card->components)
 		return -ENOMEM;
 
-	for (i = 0; i < ARRAY_SIZE(need_sdca_suffix); i++) {
-		if (!strstr(component->name_prefix, need_sdca_suffix[i]))
-			continue;
-
-		card->components = devm_kasprintf(card->dev, GFP_KERNEL,
-						  "%s-sdca", card->components);
-		if (!card->components)
-			return -ENOMEM;
-
-		ret = snd_soc_dapm_add_routes(dapm, senary_sdca_jack_map,
-					      ARRAY_SIZE(senary_sdca_jack_map));
-		if (ret) {
-			dev_err(card->dev,
-				"senary sdca jack map addition failed: %d\n", ret);
-			return ret;
-		}
-		break;
-	}
-
-	if (i == ARRAY_SIZE(need_sdca_suffix)) {
-		dev_err(card->dev, "%s is not supported\n", component->name_prefix);
-		return -EINVAL;
+	ret = snd_soc_dapm_add_routes(dapm, routes, nroutes);
+	if (ret) {
+		dev_err(card->dev, "senary sdca jack map addition failed: %d\n",
+			ret);
+		return ret;
 	}
 
 	ret = snd_soc_card_jack_new_pins(rtd->card, "Headset Jack",

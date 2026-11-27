@@ -414,6 +414,7 @@ const struct snd_pcm_ops snd_line6_playback_ops = {
 	.hw_free = snd_line6_hw_free,
 	.prepare = snd_line6_prepare,
 	.trigger = snd_line6_trigger,
+	.sync_stop = snd_line6_sync_stop,
 	.pointer = snd_line6_pointer,
 };
 

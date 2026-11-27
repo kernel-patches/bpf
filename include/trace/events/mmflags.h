@@ -184,6 +184,12 @@ IF_HAVE_PG_ARCH_3(arch_3)
 #define IF_HAVE_VM_SOFTDIRTY(flag,name)
 #endif
 
+#ifdef CONFIG_HAVE_ARCH_USERFAULTFD_WP
+# define IF_HAVE_UFFD_WP(flag, name) {flag, name},
+#else
+# define IF_HAVE_UFFD_WP(flag, name)
+#endif
+
 #ifdef CONFIG_HAVE_ARCH_USERFAULTFD_MINOR
 # define IF_HAVE_UFFD_MINOR(flag, name) {flag, name},
 #else
@@ -247,7 +253,8 @@ IF_HAVE_PG_ARCH_3(arch_3)
 IF_HAVE_UFFD_MINOR(VM_UFFD_MINOR,	"uffd_minor"	)		\
 	{VM_PFNMAP,			"pfnmap"	},		\
 	{VM_MAYBE_GUARD,		"maybe_guard"	},		\
-	{VM_UFFD_WP,			"uffd_wp"	},		\
+	{VM_MAYBE_UFFD_POISON,		"maybe_uffd_poison"	},		\
+IF_HAVE_UFFD_WP(VM_UFFD_WP,		"uffd_wp")			\
 IF_HAVE_UFFD_RWP(VM_UFFD_RWP,		"uffd_rwp"	)		\
 	{VM_LOCKED,			"locked"	},		\
 	{VM_IO,				"io"		},		\

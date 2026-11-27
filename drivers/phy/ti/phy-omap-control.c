@@ -321,17 +321,7 @@ static struct platform_driver omap_control_phy_driver = {
 	},
 };
 
-static int __init omap_control_phy_init(void)
-{
-	return platform_driver_register(&omap_control_phy_driver);
-}
-subsys_initcall(omap_control_phy_init);
-
-static void __exit omap_control_phy_exit(void)
-{
-	platform_driver_unregister(&omap_control_phy_driver);
-}
-module_exit(omap_control_phy_exit);
+subsys_platform_driver(omap_control_phy_driver);
 
 MODULE_AUTHOR("Texas Instruments Inc.");
 MODULE_DESCRIPTION("OMAP Control Module PHY Driver");

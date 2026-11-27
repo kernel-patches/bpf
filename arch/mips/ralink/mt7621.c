@@ -65,7 +65,7 @@ static bool __init mt7621_addr_wraparound_test(phys_addr_t size)
 {
 	void __iomem *dm = (void __iomem *)KSEG1ADDR(&detect_magic);
 
-	if (CPHYSADDR(dm + size) >= MT7621_LOWMEM_MAX_SIZE)
+	if (CPHYSADDR(&detect_magic) + size >= MT7621_LOWMEM_MAX_SIZE)
 		return true;
 	__raw_writel(MT7621_MEM_TEST_PATTERN, dm);
 	if (__raw_readl(dm) != __raw_readl(dm + size))

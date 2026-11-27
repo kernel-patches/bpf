@@ -25,7 +25,7 @@
 
 #define NUM_OVERLAY_PLANES 8
 
-#define VKMS_LUT_SIZE 256
+#define VKMS_GAMMA_LUT_SIZE 256
 
 /**
  * struct vkms_frame_info - Structure to store the state of a frame
@@ -158,8 +158,17 @@ struct vkms_plane {
 	struct drm_plane base;
 };
 
+/**
+ * struct vkms_color_lut - Driver specific color LUT representation
+ * @x: LUT x-values, must be non-decreasing and may be non-uniformly spaced.
+ *     Only required for non-uniform LUTs.
+ * @y: LUT y-values.
+ * @lut_length: The LUT length.
+ * @channel_value2index_ratio: helper for uniform LUTs (no x-values).
+ */
 struct vkms_color_lut {
-	struct drm_color_lut *base;
+	u16 *x;
+	struct drm_color_lut *y;
 	size_t lut_length;
 	s64 channel_value2index_ratio;
 };
@@ -202,9 +211,8 @@ struct vkms_crtc_state {
  * struct vkms_output - Internal representation of all output components in VKMS
  *
  * @crtc: Base CRTC in DRM
- * @encoder: DRM encoder used for this output
- * @connector: DRM connector used for this output
- * @wb_connecter: DRM writeback connector used for this output
+ * @wb_connector: DRM writeback connector used for this output
+ * @wb_encoder: DRM encoder used for this output
  * @vblank_hrtimer: Timer used to trigger the vblank
  * @period_ns: vblank period, in nanoseconds, used to configure @vblank_hrtimer and to compute
  *	       vblank timestamps
@@ -217,7 +225,7 @@ struct vkms_crtc_state {
  */
 struct vkms_output {
 	struct drm_crtc crtc;
-	struct drm_writeback_connector wb_connector;
+	struct drm_connector wb_connector;
 	struct drm_encoder wb_encoder;
 	struct workqueue_struct *composer_workq;
 	spinlock_t lock;
@@ -234,9 +242,8 @@ struct vkms_config_plane;
 /**
  * struct vkms_device - Description of a VKMS device
  *
- * @drm - Base device in DRM
- * @faux_dev - Associated faux device
- * @output - Configuration and sub-components of the VKMS device
+ * @drm: Base device in DRM
+ * @faux_dev: Associated faux device
  * @config: Configuration used in this VKMS device
  */
 struct vkms_device {
@@ -250,16 +257,16 @@ struct vkms_device {
  */
 
 #define drm_crtc_to_vkms_output(target) \
-	container_of(target, struct vkms_output, crtc)
+	container_of_const(target, struct vkms_output, crtc)
 
 #define drm_device_to_vkms_device(target) \
-	container_of(target, struct vkms_device, drm)
+	container_of_const(target, struct vkms_device, drm)
 
 #define to_vkms_crtc_state(target)\
-	container_of(target, struct vkms_crtc_state, base)
+	container_of_const(target, struct vkms_crtc_state, base)
 
 #define to_vkms_plane_state(target)\
-	container_of(target, struct vkms_plane_state, base.base)
+	container_of_const(target, struct vkms_plane_state, base.base)
 
 /**
  * vkms_create() - Create a device from a configuration
@@ -284,7 +291,6 @@ void vkms_destroy(struct vkms_config *config);
 /**
  * vkms_crtc_init() - Initialize a CRTC for VKMS
  * @dev: DRM device associated with the VKMS buffer
- * @crtc: uninitialized CRTC device
  * @primary: primary plane to attach to the CRTC
  * @cursor: plane to attach to the CRTC
  */

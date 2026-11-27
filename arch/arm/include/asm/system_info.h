@@ -14,7 +14,7 @@
 #define CPU_ARCH_ARMv7		9
 #define CPU_ARCH_ARMv7M		10
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /* information about the system we're running on */
 extern unsigned int system_rev;
@@ -25,6 +25,6 @@ extern unsigned int mem_fclk_21285;
 
 extern int __pure cpu_architecture(void);
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 #endif /* __ASM_ARM_SYSTEM_INFO_H */

@@ -667,8 +667,18 @@ static const struct dev_pm_ops virtio_pci_pm_ops = {
 #endif
 
 
+/*
+ * The virtio-net function of the AMD Pensando DSC2-200 (Elba) DPU, as
+ * shipped by Oracle (subsystem 108e:1200), cannot DMA to arbitrary 64-bit
+ * bus addresses. Oracle advises limiting it to 48 bits.
+ */
+#define VIRTIO_PCI_QUIRK_DMA_48BIT	BIT(0)
+
 /* Qumranet donated their vendor ID for devices 0x1000 thru 0x10FF. */
 static const struct pci_device_id virtio_pci_id_table[] = {
+	{ PCI_DEVICE_SUB(PCI_VENDOR_ID_REDHAT_QUMRANET, 0x1041,
+			 PCI_VENDOR_ID_SUN, 0x1200),
+	  .driver_data = VIRTIO_PCI_QUIRK_DMA_48BIT },
 	{ PCI_DEVICE(PCI_VENDOR_ID_REDHAT_QUMRANET, PCI_ANY_ID) },
 	{ 0 }
 };
@@ -709,6 +719,9 @@ static int virtio_pci_probe(struct pci_dev *pci_dev,
 	rc = pci_enable_device(pci_dev);
 	if (rc)
 		goto err_enable_device;
+
+	if (id->driver_data & VIRTIO_PCI_QUIRK_DMA_48BIT)
+		vp_dev->mdev.dma_mask = DMA_BIT_MASK(48);
 
 	if (force_legacy) {
 		rc = virtio_pci_legacy_probe(vp_dev);

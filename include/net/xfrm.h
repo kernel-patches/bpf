@@ -2331,7 +2331,7 @@ struct xfrm_translator {
 			struct netlink_ext_ack *extack);
 
 	/* Translate 32-bit user_policy from sockptr */
-	int (*xlate_user_policy_sockptr)(u8 **pdata32, int optlen);
+	int (*xlate_user_policy_sockptr)(u8 **pdata32, int *optlen);
 
 	struct module *owner;
 };
@@ -2369,8 +2369,6 @@ static inline bool xfrm6_local_dontfrag(const struct sock *sk)
 
 #if (IS_BUILTIN(CONFIG_XFRM_INTERFACE) && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) || \
     (IS_MODULE(CONFIG_XFRM_INTERFACE) && IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES))
-
-extern struct metadata_dst __percpu *xfrm_bpf_md_dst;
 
 int register_xfrm_interface_bpf(void);
 

@@ -2434,7 +2434,7 @@ static int azx_probe_continue(struct azx *chip, bool free_on_error)
 		}
 	}
 
-	err = snd_card_register(chip->card);
+	err = snd_hda_card_register(&chip->bus);
 	if (err < 0)
 		goto out_free;
 
@@ -2452,6 +2452,9 @@ static int azx_probe_continue(struct azx *chip, bool free_on_error)
 	}
 
 out_free:
+	if (!hda->need_i915_power)
+		display_power(chip, false);
+
 	if (err < 0) {
 		if (hda->vga_switcheroo_registered)
 			dev_warn(&pci->dev, "GPU sound probed, but not operational: please add a quirk to driver_denylist\n");
@@ -2462,8 +2465,6 @@ out_free:
 		return err;
 	}
 
-	if (!hda->need_i915_power)
-		display_power(chip, false);
 	complete_all(&hda->probe_wait);
 	to_hda_bus(bus)->bus_probing = 0;
 	hda->probe_retry = 0;

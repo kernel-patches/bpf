@@ -50,9 +50,19 @@ static __always_inline void kvm_s390_update_cmma_dirty(struct kvm *kvm, const st
 }
 
 /* should never be called */
-static __always_inline int kvm_s390_vm_stop_migration(struct kvm *kvm)
+static __always_inline void kvm_s390_vm_stop_migration(struct kvm *kvm)
 {
-	return -EINVAL;
+}
+
+/* temporary stubs */
+static inline void kvm_vgic_put(struct kvm_vcpu *vcpu)
+{
+	/* Current state of the implementation: no in-kernel gic and no vhe -> noop */
+}
+
+static inline void kvm_vgic_load(struct kvm_vcpu *vcpu)
+{
+	/* Current state of the implementation: no in-kernel gic and no vhe -> noop */
 }
 
 #endif /* ARCH_S390_KVM_ARM64_H */

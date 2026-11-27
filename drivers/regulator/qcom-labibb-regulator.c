@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (c) 2020, The Linux Foundation. All rights reserved.
 
+#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of_irq.h>
 #include <linux/of.h>
@@ -96,6 +97,12 @@ struct labibb_regulator {
 	int				ocp_irq;
 	int				ocp_irq_count;
 	int				fatal_count;
+	bool				registered;
+	bool				ocp_requested;
+	bool				ocp_irq_done;
+	bool				shutting_down;
+	/* serialises the over-current request between set_ocp() and probe */
+	struct mutex			ocp_lock;
 };
 
 struct labibb_regulator_data {
@@ -307,12 +314,141 @@ end:
 	return IRQ_HANDLED;
 }
 
+/*
+ * Stop the recovery workers and release the over-current interrupt.  A
+ * devres action is used instead of ->remove() so that a probe which fails
+ * after the resources were set up goes through the same teardown: the
+ * driver core does not call ->remove() for a failed probe, but devres
+ * still releases what was registered.
+ *
+ * This is the only cleanup entry, and the over-current interrupt is
+ * requested without devres so that it can be released here: registering a
+ * second action from a path that runs under ocp_lock would also make
+ * devm_add_action_or_reset() run this function from under that lock on
+ * allocation failure.
+ */
+static void qcom_labibb_stop_works(void *data)
+{
+	struct labibb_regulator *vreg = data;
+	int irq = 0;
+
+	/*
+	 * Announce the shutdown before anything is drained: a set_ocp()
+	 * that runs from here on must not request the over-current
+	 * interrupt while devres is releasing the action that would stop
+	 * its worker.
+	 */
+	mutex_lock(&vreg->ocp_lock);
+	vreg->shutting_down = true;
+	mutex_unlock(&vreg->ocp_lock);
+
+	/*
+	 * Both recovery workers reschedule themselves, so a plain cancel
+	 * would leave them queued again: disable_delayed_work_sync() also
+	 * blocks the requeue.
+	 */
+	disable_delayed_work_sync(&vreg->sc_recovery_work);
+	if (vreg->ocp_irq > 0) {
+		disable_delayed_work_sync(&vreg->ocp_recovery_work);
+
+		/*
+		 * The over-current handler turns the source off before it
+		 * queues the worker, but a handler that was stopped above
+		 * may have done so after the worker was drained: leave the
+		 * source off now that nobody would turn it back on.
+		 */
+		qcom_labibb_ocp_hw_disable(vreg->rdev);
+
+		mutex_lock(&vreg->ocp_lock);
+		if (vreg->ocp_irq_done) {
+			vreg->ocp_irq_done = false;
+			irq = vreg->ocp_irq;
+		}
+		mutex_unlock(&vreg->ocp_lock);
+
+		/*
+		 * A stopped handler can also have left the interrupt
+		 * disabled with disable_irq_nosync(), while the recovery
+		 * worker - the only caller of enable_irq() - is gone.  The
+		 * depth is deliberately not unwound here: free_irq() shuts
+		 * the line down regardless of it, whereas an enable_irq()
+		 * racing with a handler that is still running would unmask
+		 * a line whose thread has not finished.
+		 *
+		 * free_irq() waits for a running handler, so it is called
+		 * without ocp_lock held.
+		 */
+		if (irq)
+			free_irq(irq, vreg);
+	}
+}
+
+/*
+ * Request the over-current interrupt once the regulator is registered.
+ * Requesting it from ->set_over_current_protection() is not possible: the
+ * regulator core calls that op from set_machine_constraints(), inside
+ * regulator_register(), and a devres node created there is released after
+ * the regulator itself.  The recovery worker would then still be runnable
+ * while vreg->rdev is already gone.
+ */
+static int qcom_labibb_setup_ocp_irq(struct labibb_regulator *vreg)
+{
+	u32 irq_flags = IRQF_ONESHOT;
+	int ret;
+
+	lockdep_assert_held(&vreg->ocp_lock);
+
+	if (vreg->shutting_down)
+		return -ESHUTDOWN;
+
+	if (!vreg->ocp_requested)
+		return 0;
+
+	if (!vreg->ocp_irq_done) {
+		/* IRQ polarities - LAB: trigger-low, IBB: trigger-high */
+		switch (vreg->type) {
+		case QCOM_LAB_TYPE:
+			irq_flags |= IRQF_TRIGGER_LOW;
+			break;
+		case QCOM_IBB_TYPE:
+			irq_flags |= IRQF_TRIGGER_HIGH;
+			break;
+		default:
+			return -EINVAL;
+		}
+
+		/*
+		 * The interrupt is owned and released by the cleanup
+		 * action, so its name has to outlive the interrupt:
+		 * devres would release a name allocated here before the
+		 * action runs, while vreg->desc.name is owned by the
+		 * driver data.
+		 */
+		ret = request_threaded_irq(vreg->ocp_irq, NULL,
+					   qcom_labibb_ocp_isr, irq_flags,
+					   vreg->desc.name, vreg);
+		if (ret)
+			return ret;
+
+		vreg->ocp_irq_done = true;
+	}
+
+	/*
+	 * Enable the hardware source only once a handler exists, and turn
+	 * it back off if that failed, so that a later attempt can retry
+	 * without leaving the source enabled on its own.
+	 */
+	ret = qcom_labibb_ocp_hw_enable(vreg->rdev);
+	if (ret)
+		qcom_labibb_ocp_hw_disable(vreg->rdev);
+
+	return ret;
+}
+
 static int qcom_labibb_set_ocp(struct regulator_dev *rdev, int lim,
 			       int severity, bool enable)
 {
 	struct labibb_regulator *vreg = rdev_get_drvdata(rdev);
-	char *ocp_irq_name;
-	u32 irq_flags = IRQF_ONESHOT;
 	int irq_trig_low, ret;
 
 	/*
@@ -326,23 +462,23 @@ static int qcom_labibb_set_ocp(struct regulator_dev *rdev, int lim,
 	if (vreg->ocp_irq <= 0)
 		return -EINVAL;
 
-	ocp_irq_name = devm_kasprintf(vreg->dev, GFP_KERNEL, "%s-over-current",
-				      vreg->desc.name);
-	if (!ocp_irq_name)
-		return -ENOMEM;
-
 	/* IRQ polarities - LAB: trigger-low, IBB: trigger-high */
 	switch (vreg->type) {
 	case QCOM_LAB_TYPE:
-		irq_flags |= IRQF_TRIGGER_LOW;
 		irq_trig_low = 1;
 		break;
 	case QCOM_IBB_TYPE:
-		irq_flags |= IRQF_TRIGGER_HIGH;
 		irq_trig_low = 0;
 		break;
 	default:
 		return -EINVAL;
+	}
+
+	mutex_lock(&vreg->ocp_lock);
+
+	if (vreg->shutting_down) {
+		ret = -ESHUTDOWN;
+		goto unlock;
 	}
 
 	/* Activate OCP HW level interrupt */
@@ -351,27 +487,33 @@ static int qcom_labibb_set_ocp(struct regulator_dev *rdev, int lim,
 				 LABIBB_INT_VREG_OK,
 				 LABIBB_INT_VREG_TYPE_LEVEL);
 	if (ret)
-		return ret;
+		goto unlock;
 
 	/* Set OCP interrupt polarity */
 	ret = regmap_update_bits(rdev->regmap,
 				 vreg->base + REG_LABIBB_INT_POLARITY_HIGH,
 				 LABIBB_INT_VREG_OK, !irq_trig_low);
 	if (ret)
-		return ret;
+		goto unlock;
 	ret = regmap_update_bits(rdev->regmap,
 				 vreg->base + REG_LABIBB_INT_POLARITY_LOW,
 				 LABIBB_INT_VREG_OK, irq_trig_low);
 	if (ret)
-		return ret;
+		goto unlock;
 
-	ret = qcom_labibb_ocp_hw_enable(rdev);
-	if (ret)
-		return ret;
+	vreg->ocp_requested = true;
 
-	return devm_request_threaded_irq(vreg->dev, vreg->ocp_irq, NULL,
-					 qcom_labibb_ocp_isr, irq_flags,
-					 ocp_irq_name, vreg);
+	/*
+	 * During regulator_register() there is no interrupt yet and no
+	 * cleanup action to pair with it; the probe finishes the job once
+	 * the regulator and its devres nodes exist.
+	 */
+	if (vreg->registered)
+		ret = qcom_labibb_setup_ocp_irq(vreg);
+
+unlock:
+	mutex_unlock(&vreg->ocp_lock);
+	return ret;
 }
 
 /**
@@ -836,6 +978,7 @@ static int qcom_labibb_regulator_probe(struct platform_device *pdev)
 		vreg->dev = dev;
 		vreg->base = reg_data->base;
 		vreg->type = reg_data->type;
+		mutex_init(&vreg->ocp_lock);
 		INIT_DELAYED_WORK(&vreg->sc_recovery_work,
 				  qcom_labibb_sc_recovery_worker);
 
@@ -882,6 +1025,23 @@ static int qcom_labibb_regulator_probe(struct platform_device *pdev)
 						IRQF_ONESHOT |
 						IRQF_TRIGGER_RISING,
 						sc_irq_name, vreg);
+		if (ret)
+			return ret;
+
+		ret = devm_add_action_or_reset(vreg->dev,
+					       qcom_labibb_stop_works, vreg);
+		if (ret)
+			return ret;
+
+		/*
+		 * Publish the registration only now: a concurrent
+		 * set_ocp() must not be able to request the over-current
+		 * interrupt before the action that stops its worker exists.
+		 */
+		mutex_lock(&vreg->ocp_lock);
+		vreg->registered = true;
+		ret = qcom_labibb_setup_ocp_irq(vreg);
+		mutex_unlock(&vreg->ocp_lock);
 		if (ret)
 			return ret;
 	}

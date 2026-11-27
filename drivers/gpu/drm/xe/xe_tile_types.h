@@ -84,6 +84,9 @@ struct xe_tile {
 		/** @mem.ggtt: Global graphics translation table */
 		struct xe_ggtt *ggtt;
 
+		/** @mem.wopcm_size: Size of the WOPCM for this tile */
+		u32 wopcm_size;
+
 		/**
 		 * @mem.kernel_bb_pool: Pool from which batchbuffers are allocated.
 		 *
@@ -118,8 +121,8 @@ struct xe_tile {
 	/** @memirq: Memory Based Interrupts. */
 	struct xe_memirq memirq;
 
-	/** @csc_hw_error_work: worker to report CSC HW errors */
-	struct work_struct csc_hw_error_work;
+	/** @hw_error_work: worker to handle HW errors */
+	struct work_struct hw_error_work;
 
 	/** @pcode: tile's PCODE */
 	struct {

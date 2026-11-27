@@ -118,6 +118,8 @@ struct omap2_mcspi_regs {
 
 struct omap2_mcspi {
 	struct completion	txdone;
+	/* serializes the DMAR/DMAW read-modify-write of the cached chconf */
+	spinlock_t		chconf_lock;
 	struct spi_controller	*ctlr;
 	/* Virtual base address of the controller */
 	void __iomem		*base;
@@ -205,8 +207,11 @@ static inline int mcspi_bytes_per_word(int word_len)
 static void omap2_mcspi_set_dma_req(const struct spi_device *spi,
 		int is_read, int enable)
 {
+	struct omap2_mcspi *mcspi = spi_controller_get_devdata(spi->controller);
+	unsigned long flags;
 	u32 l, rw;
 
+	spin_lock_irqsave(&mcspi->chconf_lock, flags);
 	l = mcspi_cached_chconf0(spi);
 
 	if (is_read) /* 1 is read, 0 write */
@@ -220,6 +225,7 @@ static void omap2_mcspi_set_dma_req(const struct spi_device *spi,
 		l &= ~rw;
 
 	mcspi_write_chconf0(spi, l);
+	spin_unlock_irqrestore(&mcspi->chconf_lock, flags);
 }
 
 static void omap2_mcspi_set_enable(const struct spi_device *spi, int enable)
@@ -436,8 +442,7 @@ static int omap2_mcspi_tx_dma(struct spi_device *spi,
 	if (!tx)
 		return -EIO;
 
-	tx->callback = omap2_mcspi_tx_callback;
-	tx->callback_param = spi;
+	dmaengine_desc_set_callback(tx, omap2_mcspi_tx_callback, NULL, spi);
 
 	return dma_submit_error(dmaengine_submit(tx));
 }
@@ -525,8 +530,7 @@ omap2_mcspi_rx_dma(struct spi_device *spi, struct spi_transfer *xfer,
 		goto out_free_sg;
 	}
 
-	tx->callback = omap2_mcspi_rx_callback;
-	tx->callback_param = spi;
+	dmaengine_desc_set_callback(tx, omap2_mcspi_rx_callback, NULL, spi);
 	ret = dma_submit_error(dmaengine_submit(tx));
 	if (ret)
 		goto out_free_sg;
@@ -1632,6 +1636,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev)
 	mcspi->base += regs_offset;
 
 	mcspi->dev = &pdev->dev;
+	spin_lock_init(&mcspi->chconf_lock);
 
 	INIT_LIST_HEAD(&mcspi->ctx.cs);
 

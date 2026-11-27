@@ -129,7 +129,9 @@ int dc_kms_init(struct dc_drm_device *dc_drm)
 		return ret;
 	}
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		return ret;
 
 	drm_kms_helper_poll_init(drm);
 

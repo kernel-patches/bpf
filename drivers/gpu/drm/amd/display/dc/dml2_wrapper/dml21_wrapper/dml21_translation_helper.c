@@ -40,6 +40,9 @@ static void dml21_populate_pmo_options(struct dml2_pmo_options *pmo_options,
 
 	pmo_options->force_mandatory_uclk_pstate_support = config->pmo.force_mandatory_uclk_pstate_support;
 	pmo_options->force_optional_uclk_pstate_support = in_dc->debug.force_optional_uclk_pstate_support;
+
+	// stutter
+	pmo_options->relax_stutter_constraint_for_drr = config->pmo.relax_stutter_constraint_for_drr;
 }
 
 static enum dml2_project_id dml21_dcn_revision_to_dml2_project_id(const struct dc *in_dc)
@@ -76,7 +79,7 @@ void dml21_populate_dml_init_params(struct dml2_initialize_instance_in_out *dml_
 
 	if (config->use_native_soc_bb_construction) {
 		in_dc->soc_and_ip_translator->translator_funcs->get_soc_bb(&dml_init->soc_bb, in_dc, config);
-		in_dc->soc_and_ip_translator->translator_funcs->get_ip_caps(&dml_init->ip_caps);
+		in_dc->soc_and_ip_translator->translator_funcs->get_ip_caps(&dml_init->ip_caps, config);
 	} else {
 		dml_init->soc_bb = config->external_socbb_ip_params->soc_bb;
 		dml_init->ip_caps = config->external_socbb_ip_params->ip_params;
@@ -167,6 +170,7 @@ static void populate_dml21_timing_config_from_stream_state(struct dml2_timing_cf
 	timing->drr_config.enabled = stream->ignore_msa_timing_param;
 	timing->drr_config.drr_active_variable = stream->vrr_active_variable;
 	timing->drr_config.drr_active_fixed = stream->vrr_active_fixed;
+	timing->drr_config.drr_active_idle_static_screen = stream->vrr_active_idle_static_screen;
 	timing->drr_config.disallowed = !stream->allow_freesync;
 
 	/* limit min refresh rate to DC cap */
@@ -828,6 +832,9 @@ static void populate_dml21_plane_config_from_plane_state(struct dml2_context *dm
 	plane->composition.rect_out_height_spans_vactive =
 		plane_state->dst_rect.height >= stream->src.height &&
 		stream->dst.height >= (int)stream->timing.v_addressable;
+
+	if (plane_state->ctx->dc->debug.force_mpc_combine)
+		plane->overrides.mpcc_combine_factor = plane_state->ctx->dc->debug.force_mpc_combine;
 }
 
 //TODO : Could be possibly moved to a common helper layer.
@@ -1027,8 +1034,16 @@ void dml21_copy_clocks_to_dc_state(struct dml2_context *in_ctx, struct dc_state 
 	context->bw_ctx.bw.dcn.clk.subvp_prefetch_dramclk_khz = in_ctx->v21.mode_programming.programming->min_clocks.dcn4x.svp_prefetch_no_throttle.uclk_khz;
 	context->bw_ctx.bw.dcn.clk.subvp_prefetch_fclk_khz = in_ctx->v21.mode_programming.programming->min_clocks.dcn4x.svp_prefetch_no_throttle.fclk_khz;
 	context->bw_ctx.bw.dcn.clk.utm_latency_ub_index = 0; /* TODO - derive from qos model */
-	context->bw_ctx.bw.dcn.clk.utm_nominal_bandwidth_lb_Kbps = (unsigned int) in_ctx->v21.mode_programming.programming->qos_bound.bandwidth_lb.dcn5.non_urgent_bandwidth_kbps;
-	context->bw_ctx.bw.dcn.clk.utm_urgent_bandwidth_lb_Kbps = (unsigned int) in_ctx->v21.mode_programming.programming->qos_bound.bandwidth_lb.dcn5.urgent_bandwidth_kbps;
+	context->bw_ctx.bw.dcn.clk.utm_nominal_bandwidth_lb_KBps = (unsigned int) in_ctx->v21.mode_programming.programming->qos_bound.bandwidth_lb.dcn5.non_urgent_bandwidth_kbps;
+	context->bw_ctx.bw.dcn.clk.utm_urgent_bandwidth_lb_KBps = (unsigned int) in_ctx->v21.mode_programming.programming->qos_bound.bandwidth_lb.dcn5.urgent_bandwidth_kbps;
+	/* DML latency upper bounds are in microseconds, the dc clocks fields are in nanoseconds. */
+	context->bw_ctx.bw.dcn.clk.utm_nominal_avg_latency_ub_ns = (unsigned int)(
+			in_ctx->v21.mode_programming.programming->qos_bound.latency_ub.dcn5.avg_req_latency_non_urg * 1000);
+	context->bw_ctx.bw.dcn.clk.utm_nominal_max_latency_ub_ns = (unsigned int)(
+			in_ctx->v21.mode_programming.programming->qos_bound.latency_ub.dcn5.max_req_latency_non_urg * 1000);
+	/* The average bandwidth DML calculated for the active state, converted from MBps to KBps. */
+	context->bw_ctx.bw.dcn.clk.required_avg_active_bandwidth_KBps = (unsigned int)(
+			in_ctx->v21.mode_programming.programming->informative.qos.avg_bw_required.sys_active.sdp_bw_mbps * 1000);
 	context->bw_ctx.bw.dcn.clk.stutter_efficiency.base_efficiency = (uint8_t)in_ctx->v21.mode_programming.programming->stutter.base_percent_efficiency;
 	context->bw_ctx.bw.dcn.clk.stutter_efficiency.low_power_efficiency = (uint8_t)in_ctx->v21.mode_programming.programming->stutter.low_power_percent_efficiency;
 	context->bw_ctx.bw.dcn.clk.stutter_efficiency.z8_stutter_efficiency = (uint8_t)in_ctx->v21.mode_programming.programming->informative.power_management.z8.stutter_efficiency;
@@ -1168,8 +1183,11 @@ void dml21_init_min_clocks_for_dc_state(struct dml2_context *in_ctx, struct dc_s
 	min_clocks->subvp_prefetch_fclk_khz = 0;
 	min_clocks->phyclk_khz = in_ctx->v21.dml_init.soc_bb.clk_table.phyclk.clk_values_khz[lowest_dpm_state_index];
 	min_clocks->utm_latency_ub_index = 0; /* TODO - derive from qos model */
-	min_clocks->utm_nominal_bandwidth_lb_Kbps = 0;
-	min_clocks->utm_urgent_bandwidth_lb_Kbps = 0;
+	min_clocks->utm_nominal_bandwidth_lb_KBps = 0;
+	min_clocks->utm_urgent_bandwidth_lb_KBps = 0;
+	min_clocks->utm_nominal_max_latency_ub_ns = 0;
+	min_clocks->utm_nominal_avg_latency_ub_ns = 0;
+	min_clocks->required_avg_active_bandwidth_KBps = 0;
 	min_clocks->stutter_efficiency.base_efficiency = 1;
 	min_clocks->stutter_efficiency.low_power_efficiency = 1;
 	min_clocks->stutter_efficiency.z8_stutter_efficiency = 1;

@@ -799,7 +799,7 @@ static int tcf_idr_delete_index(struct tcf_idrinfo *idrinfo, u32 index)
 
 int tcf_idr_create(struct tc_action_net *tn, u32 index, struct nlattr *est,
 		   struct tc_action **a, const struct tc_action_ops *ops,
-		   int bind, bool cpustats, u32 flags)
+		   int bind, u32 flags)
 {
 	struct tc_action *p = kzalloc(ops->size, GFP_KERNEL);
 	struct tcf_idrinfo *idrinfo = tn->idrinfo;
@@ -811,7 +811,7 @@ int tcf_idr_create(struct tc_action_net *tn, u32 index, struct nlattr *est,
 	if (bind)
 		atomic_set(&p->tcfa_bindcnt, 1);
 
-	if (cpustats) {
+	if (!(flags & TCA_ACT_FLAGS_NO_PERCPU_STATS)) {
 		p->cpu_bstats = netdev_alloc_pcpu_stats(struct gnet_stats_basic_sync);
 		if (!p->cpu_bstats)
 			goto err1;
@@ -854,17 +854,6 @@ err1:
 	return err;
 }
 EXPORT_SYMBOL(tcf_idr_create);
-
-int tcf_idr_create_from_flags(struct tc_action_net *tn, u32 index,
-			      struct nlattr *est, struct tc_action **a,
-			      const struct tc_action_ops *ops, int bind,
-			      u32 flags)
-{
-	/* Set cpustats according to actions flags. */
-	return tcf_idr_create(tn, index, est, a, ops, bind,
-			      !(flags & TCA_ACT_FLAGS_NO_PERCPU_STATS), flags);
-}
-EXPORT_SYMBOL(tcf_idr_create_from_flags);
 
 /* Cleanup idr index that was allocated but not initialized. */
 
@@ -1531,6 +1520,12 @@ int tcf_action_init(struct net *net, struct tcf_proto *tp, struct nlattr *nla,
 		ops[i - 1] = a_o;
 	}
 
+	/* New actions inherit these flags and init can skip software state */
+	if (tc_skip_sw(fl_flags))
+		flags |= TCA_ACT_FLAGS_SKIP_SW;
+	if (tc_skip_hw(fl_flags))
+		flags |= TCA_ACT_FLAGS_SKIP_HW;
+
 	for (i = 1; i <= TCA_ACT_MAX_PRIO && tb[i]; i++) {
 		act = tcf_action_init_1(net, tp, tb[i], est, ops[i - 1],
 					&init_res[i - 1], flags, extack);
@@ -1549,9 +1544,7 @@ int tcf_action_init(struct net *net, struct tcf_proto *tp, struct nlattr *nla,
 				/* Action is created by classifier and is not
 				 * standalone. Check that the user did not set
 				 * any action flags different than the
-				 * classifier flags, and inherit the flags from
-				 * the classifier for the compatibility case
-				 * where no flags were specified at all.
+				 * classifier flags.
 				 */
 				if ((tc_act_skip_sw(act->tcfa_flags) && !skip_sw) ||
 				    (tc_act_skip_hw(act->tcfa_flags) && !skip_hw)) {
@@ -1560,13 +1553,6 @@ int tcf_action_init(struct net *net, struct tcf_proto *tp, struct nlattr *nla,
 					err = -EINVAL;
 					goto err;
 				}
-				/* Other filters share an existing action */
-				if (init_res[i - 1] != ACT_P_CREATED)
-					continue;
-				if (skip_sw)
-					act->tcfa_flags |= TCA_ACT_FLAGS_SKIP_SW;
-				if (skip_hw)
-					act->tcfa_flags |= TCA_ACT_FLAGS_SKIP_HW;
 				continue;
 			}
 

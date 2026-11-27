@@ -1017,7 +1017,7 @@ static __init bool staging_available(void)
 	if (!(val & ARCH_CAP_MCU_ENUM))
 		return false;
 
-	rdmsrq(MSR_IA32_MCU_ENUMERATION, val);
+	val = rdmsrq(MSR_IA32_MCU_ENUMERATION);
 	return !!(val & MCU_STAGING);
 }
 

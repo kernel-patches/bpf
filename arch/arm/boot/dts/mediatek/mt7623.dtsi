@@ -1091,7 +1091,7 @@
 	key_pins_a: keys-alt-pins {
 		pins-keys {
 			pinmux = <MT7623_PIN_256_GPIO256_FUNC_GPIO256>,
-				 <MT7623_PIN_257_GPIO257_FUNC_GPIO257> ;
+				 <MT7623_PIN_257_GPIO257_FUNC_GPIO257>;
 			input-enable;
 		};
 	};

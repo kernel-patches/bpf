@@ -40,8 +40,6 @@
 
 struct backing_dev_info *mtd_bdi;
 
-#ifdef CONFIG_PM_SLEEP
-
 static int mtd_cls_suspend(struct device *dev)
 {
 	struct mtd_info *mtd = dev_get_drvdata(dev);
@@ -58,15 +56,11 @@ static int mtd_cls_resume(struct device *dev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(mtd_cls_pm_ops, mtd_cls_suspend, mtd_cls_resume);
-#define MTD_CLS_PM_OPS (&mtd_cls_pm_ops)
-#else
-#define MTD_CLS_PM_OPS NULL
-#endif
+static DEFINE_SIMPLE_DEV_PM_OPS(mtd_cls_pm_ops, mtd_cls_suspend, mtd_cls_resume);
 
 static struct class mtd_class = {
 	.name = "mtd",
-	.pm = MTD_CLS_PM_OPS,
+	.pm = pm_sleep_ptr(&mtd_cls_pm_ops),
 };
 
 static DEFINE_IDR(mtd_idr);
@@ -1676,6 +1670,10 @@ static int mtd_check_oob_ops(struct mtd_info *mtd, loff_t offs,
 	if (ops->ooblen) {
 		size_t maxooblen;
 
+		if (mtd_div_by_ws(offs, mtd) >=
+		    mtd_div_by_ws(mtd->size, mtd))
+			return -EINVAL;
+
 		if (ops->ooboffs >= mtd_oobavail(mtd, ops))
 			return -EINVAL;
 
@@ -1805,6 +1803,9 @@ int mtd_read_oob(struct mtd_info *mtd, loff_t from, struct mtd_oob_ops *ops)
 	if (ops->stats)
 		memset(ops->stats, 0, sizeof(*ops->stats));
 
+	if (!ops->len && !ops->ooblen)
+		return 0;
+
 	if (mtd->flags & MTD_SLC_ON_MLC_EMULATION)
 		ret_code = mtd_io_emulated_slc(mtd, from, true, ops);
 	else
@@ -1848,6 +1849,9 @@ int mtd_write_oob(struct mtd_info *mtd, loff_t to,
 	/* Check the validity of a potential fallback on mtd->_write */
 	if (!master->_write_oob && (!master->_write || ops->oobbuf))
 		return -EOPNOTSUPP;
+
+	if (!ops->len && !ops->ooblen)
+		return 0;
 
 	if (mtd->flags & MTD_SLC_ON_MLC_EMULATION)
 		return mtd_io_emulated_slc(mtd, to, false, ops);

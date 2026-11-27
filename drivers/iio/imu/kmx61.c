@@ -747,16 +747,15 @@ static int kmx61_set_power_state(struct kmx61_data *data, bool on, u8 device)
 		data->mag_ps = on;
 	}
 
-	if (on)
+	if (on) {
 		ret = pm_runtime_resume_and_get(&data->client->dev);
-	else
-		ret = pm_runtime_put_autosuspend(&data->client->dev);
-	if (ret < 0) {
-		dev_err(&data->client->dev,
-			"Failed: kmx61_set_power_state for %d, ret %d\n",
-			on, ret);
-
-		return ret;
+		if (ret < 0) {
+			dev_err(&data->client->dev,
+				"%s: failed to resume: %d\n", __func__, ret);
+			return ret;
+		}
+	} else {
+		pm_runtime_put_autosuspend(&data->client->dev);
 	}
 #endif
 	return 0;
@@ -801,15 +800,11 @@ static int kmx61_read_raw(struct iio_dev *indio_dev,
 			return ret;
 
 		ret = kmx61_read_measurement(data, base_reg, chan->scan_index);
-		if (ret < 0) {
-			kmx61_set_power_state(data, false, chan->address);
+		kmx61_set_power_state(data, false, chan->address);
+		if (ret < 0)
 			return ret;
-		}
 		*val = sign_extend32(ret >> chan->scan_type.shift,
 				     chan->scan_type.realbits - 1);
-		ret = kmx61_set_power_state(data, false, chan->address);
-		if (ret)
-			return ret;
 		return IIO_VAL_INT;
 	}
 	case IIO_CHAN_INFO_SCALE:
@@ -1393,7 +1388,6 @@ static int kmx61_probe(struct i2c_client *client)
 err_iio_unregister_acc:
 	iio_device_unregister(data->acc_indio_dev);
 err_pm_cleanup:
-	pm_runtime_dont_use_autosuspend(&client->dev);
 	pm_runtime_disable(&client->dev);
 err_buffer_cleanup_mag:
 	if (client->irq > 0)

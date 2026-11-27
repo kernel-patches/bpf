@@ -42,7 +42,7 @@ static struct rc_map_table msi_tvanywhere[] = {
 static struct rc_map_list msi_tvanywhere_map = {
 	.map = {
 		.scan     = msi_tvanywhere,
-		.size     = ARRAY_SIZE(msi_tvanywhere),
+		.entries  = ARRAY_SIZE(msi_tvanywhere),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_MSI_TVANYWHERE,
 	}

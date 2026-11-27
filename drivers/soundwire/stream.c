@@ -1026,14 +1026,18 @@ static int sdw_slave_port_alloc(struct sdw_slave *slave,
 				struct sdw_slave_runtime *s_rt,
 				unsigned int num_config)
 {
-	struct sdw_port_runtime *p_rt;
+	struct sdw_port_runtime *p_rt, *_p_rt;
 	int i;
 
 	/* Iterate for number of ports to perform initialization */
 	for (i = 0; i < num_config; i++) {
 		p_rt = sdw_port_alloc(&s_rt->port_list);
-		if (!p_rt)
+		if (!p_rt) {
+			list_for_each_entry_safe(p_rt, _p_rt,
+						 &s_rt->port_list, port_node)
+				sdw_port_free(p_rt);
 			return -ENOMEM;
+		}
 	}
 
 	return 0;
@@ -1049,16 +1053,16 @@ static int sdw_slave_port_is_valid_range(struct device *dev, int num)
 	return 0;
 }
 
-static int sdw_slave_port_config(struct sdw_slave *slave,
-				 struct sdw_slave_runtime *s_rt,
-				 const struct sdw_port_config *port_config,
-				 bool is_bpt_stream)
+static int sdw_slave_port_config_valid(struct sdw_slave *slave,
+				       struct sdw_slave_runtime *s_rt,
+				       const struct sdw_stream_config *stream_config,
+				       const struct sdw_port_config *port_config)
 {
+	bool is_bpt_stream = stream_config->type == SDW_STREAM_BPT;
 	struct sdw_port_runtime *p_rt;
 	int ret;
-	int i;
+	int i = 0;
 
-	i = 0;
 	list_for_each_entry(p_rt, &s_rt->port_list, port_node) {
 		if (!is_bpt_stream) {
 			ret = sdw_slave_port_is_valid_range(&slave->dev, port_config[i].num);
@@ -1069,18 +1073,32 @@ static int sdw_slave_port_config(struct sdw_slave *slave,
 			 * A port in the generic valid range may still be unsupported by
 			 * the Slave or unavailable for the requested stream direction.
 			 */
-			if (!sdw_get_slave_dpn_prop(slave, s_rt->direction,
+			if (!sdw_get_slave_dpn_prop(slave, stream_config->direction,
 						    port_config[i].num)) {
 				dev_err(&slave->dev,
 					"port %u not supported for %s\n",
 					port_config[i].num,
-					s_rt->direction == SDW_DATA_DIR_TX ? "TX" : "RX");
+					stream_config->direction == SDW_DATA_DIR_TX ?
+					"TX" : "RX");
 				return -EINVAL;
 			}
 		} else if (port_config[i].num) {
 			return -EINVAL;
 		}
+		i++;
+	}
 
+	return 0;
+}
+
+static int sdw_slave_port_config(struct sdw_slave_runtime *s_rt,
+				 const struct sdw_port_config *port_config)
+{
+	struct sdw_port_runtime *p_rt;
+	int ret;
+	int i = 0;
+
+	list_for_each_entry(p_rt, &s_rt->port_list, port_node) {
 		ret = sdw_port_config(p_rt, port_config, i);
 		if (ret < 0)
 			return ret;
@@ -1113,8 +1131,10 @@ static int sdw_master_port_alloc(struct sdw_master_runtime *m_rt,
 	/* Iterate for number of ports to perform initialization */
 	for (i = 0; i < num_ports; i++) {
 		p_rt = sdw_port_alloc(&m_rt->port_list);
-		if (!p_rt)
+		if (!p_rt) {
+			sdw_master_port_free(m_rt);
 			return -ENOMEM;
+		}
 	}
 
 	return 0;
@@ -1374,7 +1394,9 @@ static int sdw_config_stream(struct device *dev,
 		return -EINVAL;
 	}
 
-	if (stream->params.bps &&
+	/* PDM streams have no stream-wide bps; skip the match for them. */
+	if (stream_config->type != SDW_STREAM_PDM &&
+	    stream->params.bps &&
 	    stream->params.bps != stream_config->bps) {
 		dev_err(dev, "bps not matching, stream:%s\n", stream->name);
 		return -EINVAL;
@@ -2016,6 +2038,7 @@ int sdw_stream_add_master(struct sdw_bus *bus,
 			  struct sdw_stream_runtime *stream)
 {
 	struct sdw_master_runtime *m_rt;
+	bool alloc_master_port = false;
 	bool alloc_master_rt = false;
 	int ret;
 
@@ -2061,18 +2084,23 @@ int sdw_stream_add_master(struct sdw_bus *bus,
 		if (ret)
 			goto alloc_error;
 
-		stream->m_rt_count++;
+		if (sdw_master_port_allocated(m_rt)) {
+			alloc_master_port = true;
+			stream->m_rt_count++;
+		}
 	}
-
-	ret = sdw_master_rt_config(m_rt, stream_config);
-	if (ret < 0)
-		goto unlock;
 
 	ret = sdw_config_stream(bus->dev, stream, stream_config, false);
 	if (ret)
-		goto unlock;
+		goto alloc_error;
+
+	ret = sdw_master_rt_config(m_rt, stream_config);
+	if (ret < 0)
+		goto alloc_error;
 
 	ret = sdw_master_port_config(m_rt, port_config);
+	if (ret)
+		goto alloc_error;
 
 	goto unlock;
 
@@ -2080,6 +2108,10 @@ alloc_error:
 	/*
 	 * we only cleanup what was allocated in this routine
 	 */
+	if (alloc_master_port) {
+		sdw_master_port_free(m_rt);
+		stream->m_rt_count--;
+	}
 	if (alloc_master_rt)
 		sdw_master_rt_free(m_rt, stream);
 unlock:
@@ -2108,9 +2140,10 @@ int sdw_stream_remove_master(struct sdw_bus *bus,
 		if (m_rt->bus != bus)
 			continue;
 
+		if (sdw_master_port_allocated(m_rt))
+			stream->m_rt_count--;
 		sdw_master_port_free(m_rt);
 		sdw_master_rt_free(m_rt, stream);
-		stream->m_rt_count--;
 	}
 
 	if (list_empty(&stream->master_list))
@@ -2144,6 +2177,7 @@ int sdw_stream_add_slave(struct sdw_slave *slave,
 	struct sdw_slave_runtime *s_rt;
 	struct sdw_master_runtime *m_rt;
 	bool alloc_master_rt = false;
+	bool alloc_slave_port = false;
 	bool alloc_slave_rt = false;
 
 	int ret;
@@ -2194,24 +2228,30 @@ int sdw_stream_add_slave(struct sdw_slave *slave,
 		ret = sdw_slave_port_alloc(slave, s_rt, num_ports);
 		if (ret)
 			goto alloc_error;
+
+		alloc_slave_port = true;
 	}
 
-	ret =  sdw_master_rt_config(m_rt, stream_config);
+	ret = sdw_slave_port_config_valid(slave, s_rt, stream_config,
+					  port_config);
 	if (ret)
-		goto unlock;
-
-	ret = sdw_slave_rt_config(s_rt, stream_config);
-	if (ret)
-		goto unlock;
+		goto alloc_error;
 
 	ret = sdw_config_stream(&slave->dev, stream, stream_config, true);
 	if (ret)
-		goto unlock;
+		goto alloc_error;
 
-	ret = sdw_slave_port_config(slave, s_rt, port_config,
-				    stream->type == SDW_STREAM_BPT);
+	ret = sdw_master_rt_config(m_rt, stream_config);
 	if (ret)
-		goto unlock;
+		goto alloc_error;
+
+	ret = sdw_slave_rt_config(s_rt, stream_config);
+	if (ret)
+		goto alloc_error;
+
+	ret = sdw_slave_port_config(s_rt, port_config);
+	if (ret)
+		goto alloc_error;
 
 	/*
 	 * Change stream state to CONFIGURED on first Slave add.
@@ -2228,6 +2268,8 @@ alloc_error:
 	 * is intentional, the 'master_rt_free' will call sdw_slave_rt_free()
 	 * internally.
 	 */
+	if (alloc_slave_port)
+		sdw_slave_port_free(slave, stream);
 	if (alloc_master_rt)
 		sdw_master_rt_free(m_rt, stream);
 	else if (alloc_slave_rt)

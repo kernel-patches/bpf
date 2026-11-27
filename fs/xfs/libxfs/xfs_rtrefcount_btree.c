@@ -237,7 +237,8 @@ xfs_rtrefcountbt_broot_realloc(
 		 * realloc it and possibly move the node block pointers because
 		 * those are not butted up against the btree block header.
 		 */
-		old_numrecs = xfs_rtrefcountbt_maxrecs(mp, old_size, level);
+		old_numrecs = xfs_rtrefcountbt_maxrecs(mp, old_size,
+					level == 0);
 		broot = xfs_broot_realloc(ifp, new_size);
 		if (level > 0)
 			xfs_rtrefcountbt_move_ptrs(mp, broot, old_size,

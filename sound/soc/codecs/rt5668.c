@@ -45,6 +45,7 @@ struct rt5668_priv {
 	struct rt5668_platform_data pdata;
 	struct gpio_desc *ldo1_en;
 	struct regmap *regmap;
+	struct i2c_client *i2c;
 	struct snd_soc_jack *hs_jack;
 	struct regulator_bulk_data supplies[RT5668_NUM_SUPPLIES];
 	struct delayed_work jack_detect_work;
@@ -62,6 +63,9 @@ struct rt5668_priv {
 	int pll_out;
 
 	int jack_type;
+
+	bool irq_acquired;
+	bool irq_disabled;
 };
 
 static const struct reg_default rt5668_reg[] = {
@@ -2210,11 +2214,30 @@ static int rt5668_set_bias_level(struct snd_soc_component *component,
 	return 0;
 }
 
+static void rt5668_i2c_disable_irq_and_cancel_work(void *data)
+{
+	struct rt5668_priv *rt5668 = data;
+
+	if (rt5668->irq_acquired && !rt5668->irq_disabled) {
+		disable_irq(rt5668->i2c->irq);
+		rt5668->irq_disabled = true;
+	}
+	cancel_delayed_work_sync(&rt5668->jack_detect_work);
+	cancel_delayed_work_sync(&rt5668->jd_check_work);
+}
+
 static int rt5668_probe(struct snd_soc_component *component)
 {
 	struct rt5668_priv *rt5668 = snd_soc_component_get_drvdata(component);
 
 	rt5668->component = component;
+
+	regcache_sync(rt5668->regmap);
+
+	if (rt5668->irq_disabled) {
+		enable_irq(rt5668->i2c->irq);
+		rt5668->irq_disabled = false;
+	}
 
 	return 0;
 }
@@ -2223,7 +2246,17 @@ static void rt5668_remove(struct snd_soc_component *component)
 {
 	struct rt5668_priv *rt5668 = snd_soc_component_get_drvdata(component);
 
+	rt5668_i2c_disable_irq_and_cancel_work(rt5668);
+
+	if (rt5668->jack_type)
+		rt5668_headset_detect(component, 0);
+
+	rt5668->hs_jack = NULL;
+	rt5668->jack_type = 0;
+	rt5668->component = NULL;
+
 	rt5668_reset(rt5668->regmap);
+	regcache_mark_dirty(rt5668->regmap);
 }
 
 #ifdef CONFIG_PM
@@ -2489,6 +2522,8 @@ static int rt5668_i2c_probe(struct i2c_client *i2c)
 
 	rt5668_reset(rt5668->regmap);
 
+	mutex_init(&rt5668->calibrate_mutex);
+
 	rt5668_calibrate(rt5668);
 
 	regmap_write(rt5668->regmap, RT5668_DEPOP_1, 0x0000);
@@ -2546,16 +2581,22 @@ static int rt5668_i2c_probe(struct i2c_client *i2c)
 	INIT_DELAYED_WORK(&rt5668->jd_check_work,
 				rt5668_jd_check_handler);
 
-	mutex_init(&rt5668->calibrate_mutex);
-
 	if (i2c->irq) {
 		ret = devm_request_threaded_irq(&i2c->dev, i2c->irq, NULL,
 			rt5668_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING
 			| IRQF_ONESHOT, "rt5668", rt5668);
 		if (ret)
 			dev_err(&i2c->dev, "Failed to request IRQ: %d\n", ret);
-
+		else
+			rt5668->irq_acquired = true;
 	}
+
+	rt5668->i2c = i2c;
+	ret = devm_add_action_or_reset(&i2c->dev,
+				      rt5668_i2c_disable_irq_and_cancel_work,
+				      rt5668);
+	if (ret)
+		return ret;
 
 	return devm_snd_soc_register_component(&i2c->dev, &soc_component_dev_rt5668,
 			rt5668_dai, ARRAY_SIZE(rt5668_dai));
@@ -2564,6 +2605,8 @@ static int rt5668_i2c_probe(struct i2c_client *i2c)
 static void rt5668_i2c_shutdown(struct i2c_client *client)
 {
 	struct rt5668_priv *rt5668 = i2c_get_clientdata(client);
+
+	rt5668_i2c_disable_irq_and_cancel_work(rt5668);
 
 	rt5668_reset(rt5668->regmap);
 }

@@ -9,6 +9,7 @@
  *  Parts of this file are based on Atheros' 2.6.15/2.6.31 BSP
  */
 
+#include <linux/bitops.h>
 #include <linux/kernel.h>
 #include <linux/export.h>
 #include <linux/types.h>
@@ -53,21 +54,48 @@ void ath79_ddr_ctrl_init(void)
 }
 EXPORT_SYMBOL_GPL(ath79_ddr_ctrl_init);
 
-void ath79_ddr_wb_flush(u32 reg)
+static void __ath79_ddr_wb_flush(unsigned long chans)
 {
-	void __iomem *flush_reg = ath79_ddr_wb_flush_base + (reg * 4);
+	u32 __iomem *base = ath79_ddr_wb_flush_base;
+	unsigned int chan;
 
-	/* Flush the DDR write buffer. */
-	__raw_writel(0x1, flush_reg);
-	while (__raw_readl(flush_reg) & 0x1)
-		;
+	/*
+	 * Start every flush before waiting for any of them, so that the
+	 * write buffers drain in parallel instead of one after the other.
+	 */
+	for_each_set_bit(chan, &chans, 32)
+		__raw_writel(0x1, base + chan);
 
-	/* It must be run twice. */
-	__raw_writel(0x1, flush_reg);
-	while (__raw_readl(flush_reg) & 0x1)
-		;
+	for_each_set_bit(chan, &chans, 32) {
+		while (__raw_readl(base + chan) & 0x1)
+			;
+	}
 }
-EXPORT_SYMBOL_GPL(ath79_ddr_wb_flush);
+
+/**
+ * ath79_ddr_wb_flush - flush DDR write buffers
+ * @chans: mask of the write buffer channels to flush
+ *
+ * Every DMA master of the SoC (the Ethernet MACs, USB, PCIe, WMAC) writes
+ * to DDR through its own write buffer in the DDR controller. The buffer
+ * may still hold data when the device raises its interrupt, so it has to
+ * be flushed before the interrupt handler looks at the DMA'd memory.
+ * Setting bit 0 of the channel's flush register starts the flush, and the
+ * controller clears it once the buffer is empty.
+ */
+void ath79_ddr_wb_flush(unsigned long chans)
+{
+	/*
+	 * The AR7100 datasheet says to flush twice, after reading the
+	 * interrupt status of the device, to ensure that its descriptor
+	 * updates have reached memory before software reads them. It does
+	 * not say why a single flush is not enough. The datasheets of the
+	 * later SoCs drop the note, but nothing says the need went away, so
+	 * flush twice on all of them.
+	 */
+	__ath79_ddr_wb_flush(chans);
+	__ath79_ddr_wb_flush(chans);
+}
 
 void ath79_ddr_set_pci_windows(void)
 {

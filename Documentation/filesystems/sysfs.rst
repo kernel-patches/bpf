@@ -107,7 +107,7 @@ It also defines this helper for defining device attributes::
 
 For example, declaring::
 
-    static DEVICE_ATTR(foo, S_IWUSR | S_IRUGO, show_foo, store_foo);
+    static DEVICE_ATTR(foo, S_IWUSR | S_IRUGO, foo_show, foo_store);
 
 is equivalent to doing::
 
@@ -116,8 +116,8 @@ is equivalent to doing::
 		    .name = "foo",
 		    .mode = S_IWUSR | S_IRUGO,
 	    },
-	    .show = show_foo,
-	    .store = store_foo,
+	    .show = foo_show,
+	    .store = foo_store,
     };
 
 Note as stated in include/linux/sysfs.h "OTHER_WRITABLE?  Generally

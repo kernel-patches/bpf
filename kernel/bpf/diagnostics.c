@@ -114,7 +114,6 @@ enum bpf_diag_history_kind {
 	BPF_DIAG_HISTORY_BRANCH,
 	BPF_DIAG_HISTORY_MOD,
 	BPF_DIAG_HISTORY_REF_ACQUIRE,
-	BPF_DIAG_HISTORY_REF_RELEASE,
 	BPF_DIAG_HISTORY_CONTEXT,
 };
 
@@ -134,7 +133,7 @@ struct bpf_diag_history_event {
 			bool origin_valid;
 		} mod;
 		struct {
-			u32 ref_id;
+			u32 diag_id;
 		} ref;
 		struct {
 			u32 depth;
@@ -157,7 +156,7 @@ struct bpf_diag_history_opts {
 	u32 frameno;
 	int regno;
 	int stack_arg_slot;
-	u32 ref_id;
+	const struct bpf_reference_state *ref;
 	enum bpf_diag_context_kind ctx_kind;
 	u32 ctx_depth;
 };
@@ -220,6 +219,7 @@ struct bpf_diag {
 	struct list_head fmt_chunks;
 	struct bpf_diag_mod_scope mod;
 	u32 frame_id_gen;
+	u32 ref_id_gen;
 };
 
 bool bpf_diag_enabled(const struct bpf_verifier_env *env)
@@ -234,7 +234,7 @@ int bpf_diag_init(struct bpf_verifier_env *env)
 	if (!bpf_diag_enabled(env))
 		return 0;
 
-	env->diag = kzalloc_obj(struct bpf_diag, GFP_KERNEL_ACCOUNT);
+	env->diag = kzalloc_obj(struct bpf_diag, BPF_VERIFIER_GFP);
 	if (!env->diag)
 		return -ENOMEM;
 
@@ -255,7 +255,7 @@ static char *diag_fmt_alloc(struct bpf_verifier_env *env, size_t size)
 	size_t capacity, available;
 	char *buf;
 
-	if (!diag || !size || size > INT_MAX)
+	if (!diag || !bpf_diag_enabled(env) || !size || size > INT_MAX)
 		return NULL;
 
 	if (!list_empty(&diag->fmt_chunks)) {
@@ -266,7 +266,7 @@ static char *diag_fmt_alloc(struct bpf_verifier_env *env, size_t size)
 	}
 
 	capacity = max_t(size_t, BPF_DIAG_FMT_CHUNK_SIZE, size);
-	chunk = kmalloc_flex(*chunk, data, capacity, GFP_KERNEL_ACCOUNT);
+	chunk = kmalloc_flex(*chunk, data, capacity, BPF_VERIFIER_GFP);
 	if (!chunk)
 		return NULL;
 
@@ -372,7 +372,7 @@ static void diag_write(struct bpf_verifier_env *env, const char *fmt, ...)
 {
 	va_list args;
 
-	if (!bpf_diag_enabled(env))
+	if (!bpf_diag_enabled(env) || env->no_report)
 		return;
 
 	va_start(args, fmt);
@@ -394,9 +394,7 @@ static u32 log_pos(const struct bpf_diag_log *log, u32 idx)
 
 u64 bpf_diag_event_log_save(struct bpf_verifier_env *env)
 {
-	struct bpf_diag *diag = env->diag;
-
-	return diag ? log_end(&diag->log) : 0;
+	return env->diag ? log_end(&env->diag->log) : 0;
 }
 
 void bpf_diag_event_log_restore(struct bpf_verifier_env *env, u64 log_pos)
@@ -408,6 +406,8 @@ void bpf_diag_event_log_restore(struct bpf_verifier_env *env, u64 log_pos)
 	if (!diag)
 		return;
 
+	/* no text is in use between two blocks */
+	diag_fmt_restore(env, (struct diag_fmt_mark){});
 	log = &diag->log;
 	end_seq = log_end(log);
 	if (WARN_ON_ONCE(log_pos > end_seq))
@@ -463,7 +463,7 @@ static void diag_append_history(struct bpf_verifier_env *env,
 		goto rotate;
 
 	cap = min(log->cap ? log->cap * 2 : 64, max_events);
-	events = kvrealloc(log->events, array_size(cap, sizeof(*events)), GFP_KERNEL_ACCOUNT);
+	events = kvrealloc(log->events, array_size(cap, sizeof(*events)), BPF_VERIFIER_GFP);
 	if (!events) {
 		log->growth_failed = true;
 		goto rotate;
@@ -549,7 +549,7 @@ static void diag_vprint_indented(struct bpf_verifier_env *env, const char *fmt, 
 	if (!bpf_diag_enabled(env))
 		return;
 
-	buf = kvasprintf(GFP_KERNEL_ACCOUNT, fmt, args);
+	buf = kvasprintf(BPF_VERIFIER_GFP, fmt, args);
 	if (!buf) {
 		diag_write(env, "%s<failed to allocate diagnostic text>\n", BPF_DIAG_TEXT_INDENT);
 		return;
@@ -1357,10 +1357,6 @@ void bpf_diag_unreadable_reg(struct bpf_verifier_env *env, u32 insn_idx, int reg
 		diag_reason(
 			env, "R%d is not readable here. A previous operation invalidated this register, so the verifier cannot use it as an input.",
 			regno);
-	else if (log && !log->first_seq)
-		diag_reason(env,
-			    "R%d has never been initialized on this path, so the verifier cannot use it as an input.",
-			    regno);
 	else
 		diag_reason(
 			env, "R%d is not readable here. It may never have been initialized, or an earlier operation may have invalidated it.",
@@ -1375,8 +1371,6 @@ void bpf_diag_unreadable_reg(struct bpf_verifier_env *env, u32 insn_idx, int reg
 	if (invalidated)
 		diag_suggestion(
 			env, "Avoid using the register after it is invalidated, or initialize it again before this instruction.");
-	else if (log && !log->first_seq)
-		diag_suggestion(env, "Initialize R%d on every path before this instruction.", regno);
 	else
 		diag_suggestion(
 			env, "Initialize the register on every path, or initialize it again after any operation that invalidates it.");
@@ -1706,27 +1700,17 @@ void bpf_diag_record_scrub_stack(struct bpf_verifier_env *env,
 			reason, NULL, NULL, NULL);
 }
 
-static void diag_record_ref(struct bpf_verifier_env *env, u32 insn_idx, u8 kind, u32 ref_id)
+void bpf_diag_record_ref_acquire(struct bpf_verifier_env *env, struct bpf_reference_state *ref)
 {
 	struct bpf_diag_history_event event = {
-		.insn_idx = insn_idx,
-		.kind = kind,
-		.ref = {
-			.ref_id = ref_id,
-		},
+		.insn_idx = ref->insn_idx,
+		.kind = BPF_DIAG_HISTORY_REF_ACQUIRE,
 	};
 
+	if (!env->diag)
+		return;
+	event.ref.diag_id = ref->diag_id = ++env->diag->ref_id_gen;
 	diag_append_history(env, &event);
-}
-
-void bpf_diag_record_ref_acquire(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id)
-{
-	diag_record_ref(env, insn_idx, BPF_DIAG_HISTORY_REF_ACQUIRE, ref_id);
-}
-
-void bpf_diag_record_ref_release(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id)
-{
-	diag_record_ref(env, insn_idx, BPF_DIAG_HISTORY_REF_RELEASE, ref_id);
 }
 
 void bpf_diag_record_context(struct bpf_verifier_env *env, u32 insn_idx,
@@ -1877,7 +1861,7 @@ static int diag_history_start_idx(const struct bpf_diag_log *log,
 
 		event = &log->events[log_pos(log, i - 1)];
 		if (event->kind == BPF_DIAG_HISTORY_REF_ACQUIRE &&
-		    event->ref.ref_id == opts->ref_id)
+		    event->ref.diag_id == opts->ref->diag_id)
 			return i - 1;
 	}
 
@@ -1895,9 +1879,8 @@ static bool diag_history_event_visible(const struct bpf_diag_history_event *even
 	case BPF_DIAG_HISTORY_MOD:
 		return filter->lineage_valid && event->in_lineage;
 	case BPF_DIAG_HISTORY_REF_ACQUIRE:
-	case BPF_DIAG_HISTORY_REF_RELEASE:
 		return opts->scope == BPF_DIAG_HISTORY_SCOPE_REF &&
-		       event->ref.ref_id == opts->ref_id;
+		       event->ref.diag_id == opts->ref->diag_id;
 	case BPF_DIAG_HISTORY_CONTEXT:
 		return opts->scope == BPF_DIAG_HISTORY_SCOPE_CONTEXT &&
 		       event->ctx.kind == opts->ctx_kind;
@@ -2084,21 +2067,22 @@ void bpf_diag_irq(struct bpf_verifier_env *env, u32 insn_idx, const char *proble
 	diag_suggestion(env, "%s", suggestion);
 }
 
-void bpf_diag_leak(struct bpf_verifier_env *env, u32 ref_id, u32 alloc_insn, u32 fail_insn)
+void bpf_diag_leak(struct bpf_verifier_env *env, const struct bpf_reference_state *ref,
+		   u32 fail_insn)
 {
 	struct bpf_diag_history_opts opts = {
 		.scope = BPF_DIAG_HISTORY_SCOPE_REF,
-		.ref_id = ref_id,
+		.ref = ref,
 	};
 
 	bpf_diag_header(env, RESOURCE_LIFETIME_SAFETY, "unreleased resource");
 	diag_reason(
 		env, "Owned resource (id=%u) was acquired at instruction %u and still needs to be released before this exit path.",
-		ref_id, alloc_insn);
+		ref->id, ref->insn_idx);
 
 	diag_section(env, "At");
 	bpf_diag_source(env, fail_insn, "error",
-			"owned resource (id=%u) still needs release", ref_id);
+			"owned resource (id=%u) still needs release", ref->id);
 
 	diag_print_history(env, &opts);
 
@@ -2249,6 +2233,9 @@ static void diag_print_mod(struct bpf_verifier_env *env, const struct bpf_diag_h
 			 "call invalidated this outgoing stack argument" :
 			 "call invalidated this caller-saved register";
 		break;
+	case BPF_DIAG_MOD_RET_STACK_PTR:
+		reason = "the caller cannot read a returned pointer to the stack";
+		break;
 	case BPF_DIAG_MOD_WRITE:
 		if (target->kind == BPF_DIAG_MOD_TARGET_STACK_SLOT)
 			reason = "a later stack write overwrote this spilled value";
@@ -2269,16 +2256,6 @@ static void diag_print_mod(struct bpf_verifier_env *env, const struct bpf_diag_h
 
 	bpf_diag_source(env, event->insn_idx, label, "%s changed from %s to %s", target_desc,
 			old, new);
-}
-
-static void diag_print_ref_event(struct bpf_verifier_env *env,
-				 const struct bpf_diag_history_event *event)
-{
-	const char *label;
-
-	label = event->kind == BPF_DIAG_HISTORY_REF_ACQUIRE ? "acquired" : "released";
-	bpf_diag_source(env, event->insn_idx, label, "owned resource (id=%u)",
-			event->ref.ref_id);
 }
 
 static const char *diag_context_name(enum bpf_diag_context_kind kind)
@@ -2375,8 +2352,8 @@ static void diag_print_history(struct bpf_verifier_env *env,
 			diag_print_mod(env, event);
 			break;
 		case BPF_DIAG_HISTORY_REF_ACQUIRE:
-		case BPF_DIAG_HISTORY_REF_RELEASE:
-			diag_print_ref_event(env, event);
+			bpf_diag_source(env, event->insn_idx, "acquired", "owned resource (id=%u)",
+					opts->ref->id);
 			break;
 		case BPF_DIAG_HISTORY_CONTEXT:
 			diag_print_context_event(env, event);

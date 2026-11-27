@@ -208,7 +208,7 @@ static int hw_ep_prime(struct ci_hdrc *ci, int num, int dir, int is_ctrl)
 	if (is_ctrl && dir == RX && hw_read(ci, OP_ENDPTSETUPSTAT, BIT(num)))
 		return -EAGAIN;
 
-	/* status shoult be tested according with manual but it doesn't work */
+	/* status should be tested according with manual but it doesn't work */
 	return 0;
 }
 
@@ -224,20 +224,28 @@ static int hw_ep_prime(struct ci_hdrc *ci, int num, int dir, int is_ctrl)
  */
 static int hw_ep_set_halt(struct ci_hdrc *ci, int num, int dir, int value)
 {
+	enum ci_hw_regs reg = OP_ENDPTCTRL + num;
+	u32 mask_xs = (dir == TX) ? ENDPTCTRL_TXS : ENDPTCTRL_RXS;
+	u32 mask_xr = (dir == TX) ? ENDPTCTRL_TXR : ENDPTCTRL_RXR;
+	int retries = 1000;
+
 	if (value != 0 && value != 1)
 		return -EINVAL;
 
 	do {
-		enum ci_hw_regs reg = OP_ENDPTCTRL + num;
-		u32 mask_xs = (dir == TX) ? ENDPTCTRL_TXS : ENDPTCTRL_RXS;
-		u32 mask_xr = (dir == TX) ? ENDPTCTRL_TXR : ENDPTCTRL_RXR;
-
 		/* data toggle - reserved for EP0 but it's in ESS */
 		hw_write(ci, reg, mask_xs|mask_xr,
 			  value ? mask_xs : mask_xr);
-	} while (value != hw_ep_get_halt(ci, num, dir));
+		if (value == hw_ep_get_halt(ci, num, dir))
+			return 0;
+		udelay(1);
+	} while (--retries);
 
-	return 0;
+	dev_warn_ratelimited(ci->dev,
+			     "ep%d%s: halt=%d not taken, ENDPTCTRL 0x%08x ENDPTSETUPSTAT 0x%08x\n",
+			     num, dir == TX ? "in" : "out", value, hw_read(ci, reg, ~0),
+			     hw_read(ci, OP_ENDPTSETUPSTAT, ~0));
+	return -EBUSY;
 }
 
 /**
@@ -271,7 +279,7 @@ static int hw_test_and_clear_complete(struct ci_hdrc *ci, int n)
  *                                without interruption)
  * @ci: the controller
  *
- * This function returns active interrutps
+ * This function returns active interrupts
  */
 static u32 hw_test_and_clear_intr_active(struct ci_hdrc *ci)
 {
@@ -1242,7 +1250,7 @@ isr_setup_status_complete(struct usb_ep *ep, struct usb_request *req)
 }
 
 /**
- * isr_setup_status_phase: queues the status phase of a setup transation
+ * isr_setup_status_phase: queues the status phase of a setup transaction
  * @ci: ci struct
  *
  * This function returns an error code

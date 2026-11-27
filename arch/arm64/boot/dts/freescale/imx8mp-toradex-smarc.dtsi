@@ -20,6 +20,8 @@
 		serial1 = &uart4;
 		serial2 = &uart2;
 		serial3 = &uart3;
+		spi0 = &ecspi1;
+		spi1 = &ecspi2;
 	};
 
 	chosen {

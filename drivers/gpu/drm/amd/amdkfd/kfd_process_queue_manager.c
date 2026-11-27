@@ -96,6 +96,7 @@ void kfd_process_dequeue_from_device(struct kfd_process_device *pdd)
 	    down_read_trylock(&dev->adev->reset_domain->sem)) {
 		amdgpu_mes_flush_shader_debugger(dev->adev,
 						 pdd->proc_ctx_gpu_addr,
+						 pdd->proc_ctx_array_index,
 						 ffs(pdd->dev->xcc_mask) - 1);
 		up_read(&dev->adev->reset_domain->sem);
 	}
@@ -186,6 +187,13 @@ int pqm_init(struct process_queue_manager *pqm, struct kfd_process *p)
 	return 0;
 }
 
+static void pqm_free_mes_queue_res(struct kfd_node *dev, struct queue *q)
+{
+	amdgpu_mes_free_gang_ctx_index(&dev->adev->mes, q->gang_ctx_array_index);
+	amdgpu_amdkfd_free_kernel_mem(dev->adev, &q->gang_ctx_bo);
+	amdgpu_amdkfd_free_kernel_mem(dev->adev, (void **)&q->wptr_bo_gart);
+}
+
 static void pqm_clean_queue_resource(struct process_queue_manager *pqm,
 				     struct process_queue_node *pqn)
 {
@@ -210,11 +218,8 @@ static void pqm_clean_queue_resource(struct process_queue_manager *pqm,
 		pdd->qpd.num_gws = 0;
 	}
 
-	if (dev->kfd->shared_resources.enable_mes) {
-		amdgpu_mes_free_gang_ctx_index(&dev->adev->mes, pqn->q->gang_ctx_array_index);
-		amdgpu_amdkfd_free_kernel_mem(dev->adev, &pqn->q->gang_ctx_bo);
-		amdgpu_amdkfd_free_kernel_mem(dev->adev, (void **)&pqn->q->wptr_bo_gart);
-	}
+	if (dev->kfd->shared_resources.enable_mes)
+		pqm_free_mes_queue_res(dev, pqn->q);
 }
 
 void pqm_uninit(struct process_queue_manager *pqm)
@@ -269,7 +274,8 @@ static int init_user_queue(struct process_queue_manager *pqm,
 	if (dev->kfd->shared_resources.enable_mes) {
 		if (!q_properties->wptr_bo) {
 			pr_debug("Queue initialization with shared MES requires queue buffers to be initialized\n");
-			return -EINVAL;
+			retval = -EINVAL;
+			goto cleanup;
 		}
 
 		retval = amdgpu_amdkfd_alloc_kernel_mem(dev->adev,
@@ -290,7 +296,7 @@ static int init_user_queue(struct process_queue_manager *pqm,
 						&(*q)->gang_ctx_array_index);
 			if (retval) {
 				pr_err("failed to allocate gang context index slot\n");
-				goto cleanup;
+				goto free_gang_ctx_bo;
 			}
 		}
 		/* Starting with GFX11, wptr BOs must be mapped to GART for MES to determine work
@@ -299,7 +305,7 @@ static int init_user_queue(struct process_queue_manager *pqm,
 		if (dev->adev != amdgpu_ttm_adev(q_properties->wptr_bo->tbo.bdev)) {
 			pr_err("Queue memory allocated to wrong device\n");
 			retval = -EINVAL;
-			goto free_gang_ctx_bo;
+			goto free_gang_ctx_index;
 		}
 
 		retval = amdgpu_amdkfd_map_gtt_bo_to_gart(q_properties->wptr_bo,
@@ -307,15 +313,16 @@ static int init_user_queue(struct process_queue_manager *pqm,
 							  pqm->process->kgd_process_info);
 		if (retval) {
 			pr_err("Failed to map wptr bo to GART\n");
-			goto free_gang_ctx_bo;
+			goto free_gang_ctx_index;
 		}
 	}
 
 	pr_debug("PQM After init queue");
 	return 0;
 
-free_gang_ctx_bo:
+free_gang_ctx_index:
 	amdgpu_mes_free_gang_ctx_index(&dev->adev->mes, (*q)->gang_ctx_array_index);
+free_gang_ctx_bo:
 	amdgpu_amdkfd_free_kernel_mem(dev->adev, &(*q)->gang_ctx_bo);
 cleanup:
 	uninit_queue(*q);
@@ -386,30 +393,10 @@ int pqm_create_queue(struct process_queue_manager *pqm,
 		dev->dqm->ops.register_process(dev->dqm, &pdd->qpd);
 
 	/* Allocate proc_ctx_bo only if MES is enabled and this is the first queue */
-	if (!pdd->proc_ctx_cpu_ptr && dev->kfd->shared_resources.enable_mes) {
-		retval = amdgpu_amdkfd_alloc_kernel_mem(dev->adev,
-						     AMDGPU_MES_PROC_CTX_SIZE,
-						     AMDGPU_GEM_DOMAIN_GTT,
-						     &pdd->proc_ctx_bo,
-						     &pdd->proc_ctx_gpu_addr,
-						     &pdd->proc_ctx_cpu_ptr,
-						     false);
-		if (retval) {
-			dev_err(dev->adev->dev, "failed to allocate process context bo\n");
+	if (dev->kfd->shared_resources.enable_mes) {
+		retval = kfd_process_device_alloc_proc_ctx(pdd);
+		if (retval)
 			goto err_allocate_pqn;
-		}
-		memset(pdd->proc_ctx_cpu_ptr, 0, AMDGPU_MES_PROC_CTX_SIZE);
-		/* Bind one MES process context slot to the whole process
-		 * (per device); every queue of this process reuses it.
-		 */
-		if (dev->adev->mes.use_rs64mem) {
-			retval = amdgpu_mes_alloc_proc_ctx_index(&dev->adev->mes,
-						&pdd->proc_ctx_array_index);
-			if (retval) {
-				dev_err(dev->adev->dev, "failed to allocate process context index\n");
-				goto err_allocate_pqn;
-			}
-		}
 	}
 
 	pqn = kzalloc_obj(*pqn);
@@ -505,6 +492,8 @@ int pqm_create_queue(struct process_queue_manager *pqm,
 	return retval;
 
 err_create_queue:
+	if (q && dev->kfd->shared_resources.enable_mes)
+		pqm_free_mes_queue_res(dev, q);
 	uninit_queue(q);
 	if (kq)
 		kernel_queue_uninit(kq);
@@ -1041,7 +1030,8 @@ int kfd_criu_restore_queue(struct kfd_process *p,
 		goto exit;
 	}
 
-	if (q_data->mqd_size != mqd_size_from_queue_type(pdd->dev->dqm, q_data->type)) {
+	if (q_data->mqd_size != mqd_size_from_queue_type(pdd->dev->dqm, q_data->type) *
+			NUM_XCC(pdd->dev->xcc_mask)) {
 		ret = -EINVAL;
 		goto exit;
 	}

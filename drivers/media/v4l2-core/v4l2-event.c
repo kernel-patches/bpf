@@ -70,11 +70,14 @@ int v4l2_event_dequeue(struct v4l2_fh *fh, struct v4l2_event *event,
 
 	do {
 		ret = wait_event_interruptible(fh->wait,
-					       fh->navailable != 0);
+					       fh->navailable != 0 ||
+					       !video_is_registered(fh->vdev));
 		if (ret < 0)
 			break;
 
 		ret = __v4l2_event_dequeue(fh, event);
+		if (ret == -ENOENT && !video_is_registered(fh->vdev))
+			ret = -ENODEV;
 	} while (ret == -ENOENT);
 
 	if (fh->vdev->lock)

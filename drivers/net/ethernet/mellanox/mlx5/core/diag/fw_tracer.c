@@ -208,6 +208,8 @@ static int mlx5_fw_tracer_create_mkey(struct mlx5_fw_tracer *tracer)
 		 DIV_ROUND_UP(TRACER_BUFFER_PAGE_NUM, 2));
 	MLX5_SET64(mkc, mkc, start_addr, tracer->buff.dma);
 	MLX5_SET64(mkc, mkc, len, tracer->buff.size);
+	if (MLX5_CAP_GEN(dev, mkc_order_write_after_write_ro_only))
+		mlx5_core_mkey_set_ordering(dev, mkc, MLX5_MKEY_ORDER_RELAXED);
 	err = mlx5_core_create_mkey(dev, &tracer->buff.mkey, in, inlen);
 	if (err)
 		mlx5_core_warn(dev, "FWTracer: Failed to create mkey, %d\n", err);

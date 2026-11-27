@@ -336,8 +336,7 @@ static void deinterlace_issue_dma(struct deinterlace_ctx *ctx, int op,
 	}
 
 	if (do_callback) {
-		tx->callback = dma_callback;
-		tx->callback_param = ctx;
+		dmaengine_desc_set_callback(tx, dma_callback, NULL, ctx);
 	}
 
 	ctx->cookie = dmaengine_submit(tx);
@@ -925,7 +924,7 @@ static int deinterlace_probe(struct platform_device *pdev)
 	if (!pcdev->dma_chan)
 		return -ENODEV;
 
-	if (!dma_has_cap(DMA_INTERLEAVE, pcdev->dma_chan->device->cap_mask)) {
+	if (!dmaengine_has_cap(pcdev->dma_chan, DMA_INTERLEAVE)) {
 		dev_err(&pdev->dev, "DMA does not support INTERLEAVE\n");
 		ret = -ENODEV;
 		goto rel_dma;

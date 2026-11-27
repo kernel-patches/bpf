@@ -24,7 +24,7 @@ description: |
   must be set non-zero, but are otherwise optional as listed below.
 
 maintainers:
-  - Kees Cook <keescook@chromium.org>
+  - Kees Cook <kees@kernel.org>
 
 allOf:
   - $ref: reserved-memory.yaml

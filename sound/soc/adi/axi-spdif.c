@@ -199,17 +199,13 @@ static int axi_spdif_probe(struct platform_device *pdev)
 	if (IS_ERR(spdif->regmap))
 		return PTR_ERR(spdif->regmap);
 
-	spdif->clk = devm_clk_get(&pdev->dev, "axi");
+	spdif->clk = devm_clk_get_enabled(&pdev->dev, "axi");
 	if (IS_ERR(spdif->clk))
 		return PTR_ERR(spdif->clk);
 
 	spdif->clk_ref = devm_clk_get(&pdev->dev, "ref");
 	if (IS_ERR(spdif->clk_ref))
 		return PTR_ERR(spdif->clk_ref);
-
-	ret = clk_prepare_enable(spdif->clk);
-	if (ret)
-		return ret;
 
 	spdif->dma_data.addr = res->start + AXI_SPDIF_REG_TX_FIFO;
 	spdif->dma_data.addr_width = 4;
@@ -226,24 +222,13 @@ static int axi_spdif_probe(struct platform_device *pdev)
 	ret = devm_snd_soc_register_component(&pdev->dev, &axi_spdif_component,
 					 &axi_spdif_dai, 1);
 	if (ret)
-		goto err_clk_disable;
+		return ret;
 
 	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (ret)
-		goto err_clk_disable;
+		return ret;
 
 	return 0;
-
-err_clk_disable:
-	clk_disable_unprepare(spdif->clk);
-	return ret;
-}
-
-static void axi_spdif_dev_remove(struct platform_device *pdev)
-{
-	struct axi_spdif *spdif = platform_get_drvdata(pdev);
-
-	clk_disable_unprepare(spdif->clk);
 }
 
 static const struct of_device_id axi_spdif_of_match[] = {
@@ -258,7 +243,6 @@ static struct platform_driver axi_spdif_driver = {
 		.of_match_table = axi_spdif_of_match,
 	},
 	.probe = axi_spdif_probe,
-	.remove = axi_spdif_dev_remove,
 };
 module_platform_driver(axi_spdif_driver);
 

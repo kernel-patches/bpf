@@ -991,9 +991,9 @@ static const struct drm_encoder_funcs pixpaper_encoder_funcs = {
 };
 
 static const struct drm_connector_funcs pixpaper_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = drm_connector_cleanup,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -1118,7 +1118,9 @@ static int pixpaper_probe(struct spi_device *spi)
 				 &pixpaper_connector_helper_funcs);
 	drm_connector_attach_encoder(&panel->connector, &panel->encoder);
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		return ret;
 
 	ret = drm_dev_register(drm, 0);
 	if (ret)

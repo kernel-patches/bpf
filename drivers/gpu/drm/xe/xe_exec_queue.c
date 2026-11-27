@@ -29,6 +29,7 @@
 #include "xe_migrate.h"
 #include "xe_pm.h"
 #include "xe_trace.h"
+#include "xe_uc_fw.h"
 #include "xe_vm.h"
 #include "xe_pxp.h"
 
@@ -391,9 +392,8 @@ static void __xe_exec_queue_fini(struct xe_exec_queue *q)
 		xe_lrc_put(q->lrc[i]);
 }
 
-static int __xe_exec_queue_init(struct xe_exec_queue *q, u32 exec_queue_flags)
+static u32 xe_lrc_init_flags(struct xe_exec_queue *q, u32 exec_queue_flags)
 {
-	int i, err;
 	u32 flags = 0;
 
 	/*
@@ -415,6 +415,13 @@ static int __xe_exec_queue_init(struct xe_exec_queue *q, u32 exec_queue_flags)
 
 	if (q->flags & EXEC_QUEUE_FLAG_DISABLE_STATE_CACHE_PERF_FIX)
 		flags |= XE_LRC_DISABLE_STATE_CACHE_PERF_FIX;
+
+	return flags;
+}
+
+static int __xe_exec_queue_init(struct xe_exec_queue *q, u32 exec_queue_flags)
+{
+	int i, err;
 
 	err = q->ops->init(q);
 	if (err)
@@ -439,8 +446,8 @@ static int __xe_exec_queue_init(struct xe_exec_queue *q, u32 exec_queue_flags)
 
 			marker = xe_gt_sriov_vf_wait_valid_ggtt(q->gt);
 
-			lrc = xe_lrc_create(q->hwe, q->vm, q->replay_state,
-					    xe_lrc_ring_size(), q->msix_vec, flags);
+			lrc = xe_lrc_create(q->hwe, q->vm, q->replay_state, xe_lrc_ring_size(),
+					    q->msix_vec, xe_lrc_init_flags(q, exec_queue_flags));
 			if (IS_ERR(lrc)) {
 				err = PTR_ERR(lrc);
 				goto err_lrc;
@@ -460,6 +467,38 @@ static int __xe_exec_queue_init(struct xe_exec_queue *q, u32 exec_queue_flags)
 err_lrc:
 	__xe_exec_queue_fini(q);
 	return err;
+}
+
+/**
+ * xe_exec_queue_reinit() - Re-initialize exec queue
+ * @q: exec queue to re-initialize
+ *
+ * Returns: 0 on success, negative error code otherwise.
+ */
+int xe_exec_queue_reinit(struct xe_exec_queue *q)
+{
+	struct xe_gt *gt = q->gt;
+	int i, err;
+
+	/* TODO: Re-initialize GSC and PXP queues */
+	xe_gt_assert(gt, IS_DGFX(gt_to_xe(gt)));
+	xe_gt_assert(gt, !xe_uc_fw_is_loadable(&gt->uc.gsc.fw));
+	xe_gt_assert(gt, !xe_pxp_is_enabled(gt_to_xe(gt)->pxp));
+
+	/* Re-initialization only allowed for kernel queues */
+	xe_gt_assert(gt, q->flags & EXEC_QUEUE_FLAG_KERNEL);
+
+	/* Re-initialize submission backend */
+	q->ops->reinit_kernel(q);
+
+	for (i = 0; i < q->width; i++) {
+		err = xe_lrc_ctx_init(q->lrc[i], q->hwe, q->vm, q->replay_state,
+				      q->msix_vec, xe_lrc_init_flags(q, q->flags));
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 /**

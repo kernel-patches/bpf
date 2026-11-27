@@ -821,10 +821,18 @@ static int isys_runtime_pm_suspend(struct device *dev)
 	struct ipu6_device *isp = adev->isp;
 	int ret = 0;
 
-	isys->adev->auxdrv_data->fw_ops->close(isys);
+	/*
+	 * The ISYS may have been runtime resumed as the parent of the PSYS
+	 * before this driver was bound. isys_runtime_pm_resume() hasn't run
+	 * then, and there is no firmware to close.
+	 */
 	if (isys->fwctx) {
-		dev_warn(&isys->adev->auxdev.dev, "failed to close fw isys\n");
-		ret = -EIO;
+		isys->adev->auxdrv_data->fw_ops->close(isys);
+		if (isys->fwctx) {
+			dev_warn(&isys->adev->auxdev.dev,
+				 "failed to close fw isys\n");
+			ret = -EIO;
+		}
 	}
 
 	mutex_lock(&isys->mutex);
@@ -1107,7 +1115,7 @@ module_auxiliary_driver(isys_driver);
 
 MODULE_AUTHOR("Sakari Ailus <sakari.ailus@linux.intel.com>");
 MODULE_AUTHOR("Tianshu Qiu <tian.shu.qiu@intel.com>");
-MODULE_AUTHOR("Bingbu Cao <bingbu.cao@intel.com>");
+MODULE_AUTHOR("Bingbu Cao");
 MODULE_AUTHOR("Yunliang Ding <yunliang.ding@intel.com>");
 MODULE_AUTHOR("Hongju Wang");
 MODULE_LICENSE("GPL");

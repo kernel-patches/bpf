@@ -897,7 +897,7 @@ static int tasdevice_process_block(void *context, unsigned char *data,
 	unsigned char dev_idx, int sublocksize)
 {
 	struct tasdevice_priv *tas_priv = (struct tasdevice_priv *)context;
-	int subblk_offset, chn, chnend, rc;
+	int subblk_offset = 0, chn, chnend, rc;
 	unsigned char subblk_typ = data[1];
 	int blktyp = dev_idx & 0xC0;
 	int idx = dev_idx & 0x3F;

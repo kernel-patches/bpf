@@ -1329,6 +1329,10 @@ static void rcu_spawn_one_boost_kthread(struct rcu_node *rnp)
 	if (rnp->boost_kthread_task)
 		return;
 
+	// With no boost kthread, rcu_initiate_boost() never boosts.
+	if (IS_BUILTIN(CONFIG_RCU_TORTURE_TEST) && rcu_torture_boost_disable)
+		return;
+
 	t = kthread_create(rcu_boost_kthread, (void *)rnp,
 			   "rcub/%d", rnp_index);
 	if (WARN_ON_ONCE(IS_ERR(t)))

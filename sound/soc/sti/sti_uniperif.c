@@ -425,7 +425,7 @@ static int sti_uniperiph_cpu_dai_of(struct device_node *node,
 
 	uni->irq = platform_get_irq(priv->pdev, 0);
 	if (uni->irq < 0)
-		return -ENXIO;
+		return uni->irq;
 
 	uni->type = dev_data->type;
 

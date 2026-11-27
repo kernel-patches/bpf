@@ -18,7 +18,9 @@
  * in the structure.
  */
 
+#include <linux/trace_controls.h>
 #include <linux/trace_events.h>
+#include <linux/trace_printk.h>
 #include <linux/btf_ids.h>
 
 #ifndef TRACE_SYSTEM_VAR

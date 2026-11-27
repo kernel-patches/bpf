@@ -1149,3 +1149,31 @@ l0_%=:	r0 = *(u64 *)(r1 + 0);				\
 	: __imm_const(llong_min, LLONG_MIN)
 	: __clobber_all);
 }
+
+/* r6 is computed from r7, then r7 is tested: 0..200. The division is reached if r6 > @max. */
+#define OP_THEN_TEST(op, max)				\
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r7 = r0;					\
+	r6 = r0;					\
+	" op ";						\
+	if r7 > 200 goto l0_%=;				\
+	if r6 <= " #max " goto l0_%=;			\
+	r0 /= 0;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:						\
+	: __imm(bpf_ktime_get_ns)			\
+	: __clobber_all)
+
+#define TEST_OP(name, op, max, below)			\
+SEC("socket") __success					\
+__naked void name(void) { OP_THEN_TEST(op, max); }	\
+SEC("socket") __failure __msg("div by zero")		\
+__naked void name##_bad(void) { OP_THEN_TEST(op, below); }
+
+TEST_OP(rsh32_of_wide, "w6 >>= 2", 50, 49)
+TEST_OP(div32_of_wide, "w6 /= 5", 40, 39)
+TEST_OP(mod32_of_wide, "w6 %%= 1000", 200, 199)
+TEST_OP(rsh_by_0, "r6 >>= 0", 200, 199)
+TEST_OP(div_by_1, "r6 /= 1", 200, 199)

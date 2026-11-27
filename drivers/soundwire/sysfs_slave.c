@@ -161,9 +161,9 @@ static ssize_t words_show(struct device *dev,
 	int i;
 
 	for (i = 0; i < slave->prop.dp0_prop->num_words; i++)
-		size += sprintf(buf + size, "%d ",
-				slave->prop.dp0_prop->words[i]);
-	size += sprintf(buf + size, "\n");
+		size += sysfs_emit_at(buf, size, "%d ",
+				      slave->prop.dp0_prop->words[i]);
+	size += sysfs_emit_at(buf, size, "\n");
 
 	return size;
 }

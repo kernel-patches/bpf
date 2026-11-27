@@ -44,6 +44,7 @@
 	NET	Appropriate network support is enabled.
 	NFS	Appropriate NFS support is enabled.
 	NUMA	NUMA support is enabled.
+	NVME	NVMe support is enabled
 	OF	Devicetree is enabled.
 	PARISC	The PA-RISC architecture is enabled.
 	PCI	PCI bus support is enabled.
@@ -74,7 +75,6 @@
 	TPM	TPM drivers are enabled.
 	UMS	USB Mass Storage support is enabled.
 	USB	USB support is enabled.
-	NVME	NVMe support is enabled
 	USBHID	USB Human Interface Device support is enabled.
 	V4L	Video For Linux support is enabled.
 	VGA	The VGA console has been enabled.
@@ -564,6 +564,9 @@ Kernel parameters
 	arm64.nohaft	[ARM64] Unconditionally disable Hardware managed Access
 			Flag for Table descriptors support
 
+	arm64.nols64	[ARM64] Unconditionally disable 64-byte Load/Store
+			instructions support
+
 	arm64.nomops	[ARM64] Unconditionally disable Memory Copy and Memory
 			Set instructions support
 
@@ -1015,6 +1018,32 @@ Kernel parameters
 			Format:
 			<first_slot>,<last_slot>,<port>,<enum_bit>[,<debug>]
 
+	cppc_cpufreq.auto_sel_mode=
+			[ACPI,CPU_FREQ] Enable ACPI CPPC autonomous performance
+			selection on all CPUs at boot. In autonomous mode, the
+			platform selects the performance level within the CPPC
+			Minimum and Maximum Performance limits. The driver sets
+			these limits from scaling_min_freq and scaling_max_freq.
+			The Energy Performance Preference (EPP) hint guides the
+			platform toward performance (0x00) or energy efficiency
+			(0xff).
+			Requires the ACPI CPPC Autonomous Selection Enable
+			register. EPP is set only if the platform implements it.
+			Format: <string>
+			  performance:
+				  enable autonomous selection, set EPP to 0x00
+			  balance_performance:
+				  enable autonomous selection, set EPP to 0x80
+			  balance_power:
+				  enable autonomous selection, set EPP to 0xc0
+			  power:
+				  enable autonomous selection, set EPP to 0xff
+			  default_epp:
+				  enable autonomous selection, keep firmware EPP
+			  disabled:
+				  keep the firmware configuration (default)
+			An unrecognized value is ignored with a warning.
+
 	cpuidle.off=1	[CPU_IDLE]
 			disable the cpuidle sub-system
 
@@ -1100,7 +1129,21 @@ Kernel parameters
 			or memory reserved is below 4G.
 	crashkernel=size[KMG],cma
 			[KNL, X86, ARM64, RISCV, PPC] Reserve additional crash
-			kernel memory from CMA. This reservation is usable by
+			kernel memory from CMA. Existing hugetlb_cma memory is
+			used first, and dedicated CMA areas are reserved for any
+			remaining amount. For example:
+			  hugetlb_cma=6G crashkernel=256M crashkernel=2G,cma
+			reuses 2G without reserving more CMA, while:
+			  hugetlb_cma=2G crashkernel=256M crashkernel=4G,cma
+			reuses 2G and reserves another 2G of dedicated CMA.
+
+			Both kinds of area use the same limit of four physical
+			ranges. If the available memory or range slots cannot
+			cover the requested size, the kernel reports the
+			shortfall. Normal CMA alignment applies to dedicated
+			reservations.
+
+			The selected memory remains usable by
 			the first system's userspace memory and kernel movable
 			allocations (memory balloon, zswap). Pages allocated
 			from this memory range will not be included in the vmcore
@@ -1205,7 +1248,8 @@ Kernel parameters
 			        get a -EPERM as result when trying to register files
 				or directories within debugfs.
 				This is equivalent of the runtime functionality if
-				debugfs was not enabled in the kernel at all.
+				debugfs was not enabled in the kernel at all,
+				except that the latter returns -ENODEV.
 			Default value is set in build-time with a kernel configuration.
 
 	debugpat	[X86] Enable PAT debugging
@@ -1953,6 +1997,108 @@ Kernel parameters
 			are distributed across NUMA nodes.  Defaults on
 			for 64-bit NUMA, off otherwise.
 			Format: 0 | 1 (for off | on)
+
+	hazptrtorture.defer_modulus= [KNL]
+			Defer release of the hazard pointer on average
+			one out of the specified number of times.  Zero
+			disables.  Negative one defaults to 1,000 times
+			nr_cpu_ids, unless hazptr.kthread_do_pending_ms is
+			equal to zero, in which case it instead defaults
+			to zero (disabled).
+
+	hazptrtorture.irq_acquire= [KNL]
+			Acquire hazard pointers from an irq handler on average
+			one out of the specified number of times.  Zero
+			disables.  Negative one defaults to 1,000 times
+			nr_cpu_ids.
+
+	hazptrtorture.irq_release= [KNL]
+			Release hazard pointers from an irq handler on average
+			one out of the specified number of times.  Zero
+			disables.  Negative one defaults to 1,000 times
+			nr_cpu_ids.
+
+	hazptrtorture.kthread_do_pending_ms= [KNL]
+			Interval between cleanup of pending (deferred)
+			hazard-pointer releases in milliseconds.
+			Zero disables.	Negative one defaults to three
+			milliseconds, unless hazptr.kthread_do_pending_ms
+			is equal to zero, in which case it instead
+			defaults to zero (disabled).
+
+	hazptrtorture.nest_acquire= [KNL]
+			Acquire a second, nested hazard pointer on
+			average one out of the specified number of
+			reader acquisitions.  Zero disables.  Defaults
+			to two.
+
+	hazptrtorture.nreaders= [KNL]
+			Number of hazard-pointer reader kthreads, each
+			of which repeatedly acquires and releases hazard
+			pointers.  If the value is zero, one reader
+			is spawned.  If the value is less than zero,
+			the absolute value is multiplied by the number
+			of online CPUs at initialization time.
+
+	hazptrtorture.nwriters= [KNL]
+			Controls whether or not there is a writer.
+			There is at most one writer, so this value must
+			be zero or one.
+
+	hazptrtorture.onoff_holdoff= [KNL]
+			Set time (s) after boot for CPU-hotplug testing.
+
+	hazptrtorture.onoff_interval= [KNL]
+			Set time (jiffies) between CPU-hotplug operations,
+			or zero to disable CPU-hotplug testing.
+
+	hazptrtorture.preempt_duration= [KNL]
+			Set duration (in milliseconds) of preemptions
+			by a high-priority FIFO real-time task.  Set to
+			zero (the default) to disable.	The CPUs to
+			preempt are selected randomly from the set that
+			are online at a given point in time.  Races with
+			CPUs going offline are ignored, with that attempt
+			at preemption skipped.
+
+	hazptrtorture.preempt_interval= [KNL]
+			Set interval (in milliseconds, defaulting to one
+			second) between preemptions by a high-priority
+			FIFO real-time task.  This delay is mediated
+			by an hrtimer and is further fuzzed to avoid
+			inadvertent synchronizations.
+
+	hazptrtorture.reader_sleep_us= [KNL]
+			Set occassional read-side sleep time in
+			microseconds, defaulting to zero for disabled.
+
+	hazptrtorture.shuffle_interval= [KNL]
+			Set task-shuffle interval (seconds).  Shuffling
+			tasks allows some CPUs to go into dyntick-idle
+			mode during the hazptrtorture test.
+
+	hazptrtorture.shutdown_secs= [KNL]
+			Set time (s) after boot system shutdown.  This
+			is useful for hands-off automated testing.
+
+	hazptrtorture.stat_interval= [KNL]
+			Time (s) between statistics printk()s.
+
+	hazptrtorture.stutter= [KNL]
+			Time (s) to stutter testing, for example,
+			specifying three seconds (the default) causes
+			the test to run for three seconds, wait
+			for five seconds, and so on.  This tests the
+			hazard-pointers primitives' ability to transition
+			abruptly to and from idle.  Setting this to zero
+			disables stuttering.
+
+	hazptrtorture.torture_type= [KNL]
+			Specify the hazard-pointers implementation
+			to test.
+
+	hazptrtorture.verbose= [KNL]
+			Enable additional printk() statements.
 
 	hd=		[EIDE] (E)IDE hard drive subsystem geometry
 			Format: <cyl>,<head>,<sect>
@@ -2808,11 +2954,12 @@ Kernel parameters
 
 			  You can move a process onto or off an "isolated" CPU via
 			  the CPU affinity syscalls or cpuset.
-			  <cpu number> begins at 0 and the maximum value is
-			  "number of CPUs in system - 1".
+			  <cpu number> begins at 0 and the maximum value
+			  is "number of CPUs in system - 1". However boot
+			  CPU (cpu 0) cannot be domain isolated as it
+			  may cause problem with some kernel subsystems.
 
 			managed_irq
-
 			  Isolate from being targeted by managed interrupts
 			  which have an interrupt mask containing isolated
 			  CPUs. The affinity of managed interrupts is
@@ -2901,6 +3048,12 @@ Kernel parameters
 			report on every invalid memory access. Without this
 			parameter KASAN will print report only for the first
 			invalid access.
+
+	kcore=		[KNL,EARLY]
+			Enable or disable /proc/kcore on kernels built with
+			CONFIG_PROC_KCORE=y.
+			Format: <bool>
+			Default: on
 
 	keep_bootcon	[KNL,EARLY]
 			Do not unregister boot console at start. This is only
@@ -3997,29 +4150,6 @@ Kernel parameters
 			out, matching memory will be removed. Types are
 			specified as e820 types, e.g., 1 = RAM, 2 = reserved,
 			3 = ACPI, 12 = PRAM.
-
-	memory_corruption_check=0/1 [X86,EARLY]
-			Some BIOSes seem to corrupt the first 64k of
-			memory when doing things like suspend/resume.
-			Setting this option will scan the memory
-			looking for corruption.  Enabling this will
-			both detect corruption and prevent the kernel
-			from using the memory being corrupted.
-			However, it's intended as a diagnostic tool; if
-			repeatable BIOS-originated corruption always
-			affects the same memory, you can use memmap=
-			to prevent the kernel from using that memory.
-
-	memory_corruption_check_size=size [X86,EARLY]
-			By default it checks for corruption in the low
-			64k, making this memory unavailable for normal
-			use.  Use this parameter to scan for
-			corruption in more or less memory.
-
-	memory_corruption_check_period=seconds [X86,EARLY]
-			By default it checks for corruption every 60
-			seconds.  Use this parameter to check at some
-			other rate.  0 disables periodic checking.
 
 	memory_hotplug.memmap_on_memory
 			[KNL,X86,ARM] Boolean flag to enable this feature.
@@ -5129,7 +5259,11 @@ Kernel parameters
 				explicitly which ones they are.
 		assign-busses	[X86] Always assign all PCI bus
 				numbers ourselves, overriding
-				whatever the firmware may have done.
+				whatever the firmware may have done. Ignored
+				if the previous kernel preserved any PCI
+				device across a Live Update, since bus
+				numbers must not change while those devices
+				are doing DMA.
 		usepirqmask	[X86] Honor the possible IRQ mask stored
 				in the BIOS $PIR table. This is needed on
 				some systems with broken BIOSes, notably
@@ -5235,7 +5369,10 @@ Kernel parameters
 				off: Turn realloc off
 				on: Turn realloc on
 		realloc		same as realloc=on
-		noari		do not use PCIe ARI.
+		noari		do not use PCIe ARI. Bridges above devices
+				preserved across a Live Update keep the ARI
+				Forwarding Enable setting from the previous
+				kernel.
 		noats		[PCIE, Intel-IOMMU, AMD-IOMMU]
 				do not use PCIe ATS (and IOMMU device IOTLB).
 		pcie_scan_all	Scan all possible PCIe devices.  Otherwise we
@@ -5251,11 +5388,12 @@ Kernel parameters
 				Specify one or more PCI devices (in the format
 				specified above) separated by semicolons.
 				Each device specified will have the PCI ACS
-				redirect capabilities forced off which will
-				allow P2P traffic between devices through
-				bridges without forcing it upstream. Note:
-				this removes isolation between devices and
-				may put more devices in an IOMMU group.
+				P2P Request Redirect, Completion Redirect, and
+				Egress Control features forced off. This may
+				allow P2P traffic through bridges that would
+				otherwise be redirected upstream. Note: this
+				removes isolation between devices and may
+				cause affected devices to share an IOMMU group.
 		config_acs=
 				Format:
 				<ACS flags>@<pci_dev>[; ...]
@@ -5427,7 +5565,7 @@ Kernel parameters
 			execution priority.
 
 	ppc_strict_facility_enable
-			[PPC,ENABLE] This option catches any kernel floating point,
+			[PPC,EARLY] This option catches any kernel floating point,
 			Altivec, VSX and SPE outside of regions specifically
 			allowed (eg kernel_enable_fpu()/kernel_disable_fpu()).
 			There is some performance impact when enabling this.
@@ -5763,7 +5901,7 @@ Kernel parameters
 	rcutree.rcu_delay_page_cache_fill_msec= [KNL]
 			Set the page-cache refill delay (in milliseconds)
 			in response to low-memory conditions.  The range
-			of permitted values is in the range 0:100000.
+			of permitted values is in the range 1:100000.
 
 	rcutree.rcu_divisor= [KNL]
 			Set the shift-right count to use to compute
@@ -5963,6 +6101,15 @@ Kernel parameters
 			Additional write-side holdoff between grace
 			periods, but in jiffies.  The default of zero
 			says no holdoff.
+
+	rcutorture.boost_disable= [KNL]
+			Do not create the RCU priority-boost kthreads, so
+			that RCU priority boosting never happens.  This
+			is for testing that rcutorture detects broken
+			boosting, as in the BUSTED-BOOST scenario, and
+			should not be used otherwise.  It has an effect
+			only if rcutorture is built in, because the
+			kthreads are created during boot.
 
 	rcutorture.fqs_duration= [KNL]
 			Set duration of force_quiescent_state bursts
@@ -6282,6 +6429,13 @@ Kernel parameters
 
 	rcutorture.test_boost_interval= [KNL]
 			Interval (s) between each boost test.
+
+	rcutorture.test_boost_reader_ms= [KNL]
+			CPU time (ms) that each boost-test reader must
+			consume within the test_boost_duration interval.
+			The reader runs in an RCU read-side critical section
+			while a real-time CPU hog tries to starve it, so it
+			can finish in time only if it is priority boosted.
 
 	rcutorture.test_no_idle_hz= [KNL]
 			Test RCU's dyntick-idle handling.  See also the
@@ -7050,6 +7204,10 @@ Kernel parameters
 			NUMA kernel object placement which helps with slow
 			interconnects in NUMA systems.
 
+	slab_tiny=	[MM, EARLY]
+			Minimize the slab allocator memory footprint at the
+			expense of SMP scalability.
+
 	slram=		[HW,MTD]
 
 	smart2=		[HW]
@@ -7624,6 +7782,12 @@ Kernel parameters
 			Format: {ipi}
 			ipi: switch to IPI-based TLB flushing
 
+	toolong_nmi_panic= [X86]
+			Cause a panic upon return from an NMI handler
+			that took longer than the specified number
+			of milliseconds.  The default value of zero
+			suppresses these panics.
+
 	topology=	[S390,EARLY]
 			Format: {off | on}
 			Specify if the kernel should make use of the cpu
@@ -7828,6 +7992,13 @@ Kernel parameters
 			keeps the content of memory across reboots before relying on this option.
 
 			NB: Both the mapped address and size must be page aligned for the architecture.
+
+			Multiple trace_instance= options can be specified to
+			create multiple instances. If the same instance name is
+			specified more than once, the latter one will override
+			any earlier definitions for that instance. This allows
+			overriding an instance configuration that was defined
+			earlier on the command line or via bootconfig.
 
 			See also Documentation/trace/debugging.rst
 
@@ -8556,16 +8727,11 @@ Kernel parameters
 			The default is 4 times. 0 disables the warning.
 
 	workqueue.power_efficient
-			Per-cpu workqueues are generally preferred because
-			they show better performance thanks to cache
-			locality; unfortunately, per-cpu workqueues tend to
-			be more power hungry than unbound workqueues.
-
-			Enabling this makes the per-cpu workqueues which
-			were observed to contribute significantly to power
-			consumption unbound, leading to measurably lower
-			power usage at the cost of small performance
-			overhead.
+			Enabling workqueue.power_efficient kernel parameter makes
+			the per-cpu workqueues which were observed to contribute
+			significantly to power consumption unbound, leading to
+			measurably lower power usage at the cost of small
+			performance overhead.
 
 			The default value of this parameter is determined by
 			the config option CONFIG_WQ_POWER_EFFICIENT_DEFAULT.

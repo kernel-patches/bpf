@@ -697,11 +697,13 @@ static inline bool ovl_is_volatile(struct ovl_config *config)
 /*
  * To avoid regressions in existing setups with overlay lower offline changes,
  * we allow lower changes only if none of the new features are used.
+ * Data-only layers imply lower metacopy files, even without metacopy=on.
  */
 static inline bool ovl_allow_offline_changes(struct ovl_fs *ofs)
 {
 	return (!ofs->config.index && !ofs->config.metacopy &&
-		!ovl_redirect_dir(ofs) && !ovl_xino_warn(ofs));
+		!ofs->numdatalayer && !ovl_redirect_dir(ofs) &&
+		!ovl_xino_warn(ofs));
 }
 
 /* All layers on same fs? */

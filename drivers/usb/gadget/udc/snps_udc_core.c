@@ -82,7 +82,7 @@ static int stop_timer;
  * in the FIFO (important for not blocking control traffic).
  * The value of set_rde controls the corresponding timer.
  *
- * set_rde -1 == not used, means it is alloed to be set to 0 or 1
+ * set_rde -1 == not used, means it is allowed to be set to 0 or 1
  * set_rde  0 == do not touch RDE, do no start the RDE timer
  * set_rde  1 == timer function will look whether FIFO has data
  * set_rde  2 == set by timer function to enable RX DMA on next call
@@ -1213,7 +1213,7 @@ udc_queue(struct usb_ep *usbep, struct usb_request *usbreq, gfp_t gfp)
 				DBG(dev, "udc_queue(): pending bytes in "
 					"rxfifo after nyet\n");
 				/*
-				 * read pending bytes afer nyet:
+				 * read pending bytes after nyet:
 				 * referring to isr
 				 */
 				if (udc_rxfifo_read(ep, req)) {
@@ -1328,7 +1328,7 @@ udc_set_halt(struct usb_ep *usbep, int halt)
 		else {
 			/*
 			 * set STALL
-			 * rxfifo empty not taken into acount
+			 * rxfifo empty not taken into account
 			 */
 			tmp = readl(&ep->regs->ctl);
 			tmp |= AMD_BIT(UDC_EPCTL_S);

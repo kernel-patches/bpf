@@ -10,7 +10,7 @@
 #include "xe_device_types.h"
 #include "xe_pm.h"
 #include "xe_tile_sysfs.h"
-#include "xe_vram_freq.h"
+#include "xe_vram_config.h"
 
 static void xe_tile_sysfs_kobj_release(struct kobject *kobj)
 {
@@ -49,7 +49,7 @@ int xe_tile_sysfs_init(struct xe_tile *tile)
 
 	tile->sysfs = &kt->base;
 
-	err = xe_vram_freq_sysfs_init(tile);
+	err = xe_vram_config_sysfs_init(tile);
 	if (err)
 		goto err_object;
 

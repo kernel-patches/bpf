@@ -140,7 +140,7 @@
 #ifdef CONFIG_ARCH_IXP4XX /* FIXME: is this right?, datasheed says '2' */
 #define UDCCS_IO_ROF	(1 << 3)	/* Receive overflow */
 #endif
-#ifdef CONFIG_ARCH_PXA
+#ifdef CONFIG_PXA25x
 #define UDCCS_IO_ROF	(1 << 2)	/* Receive overflow */
 #endif
 #define UDCCS_IO_DME	(1 << 3)	/* DMA enable */
@@ -228,7 +228,7 @@ static const char ep0name [] = "ep0";
 #ifdef CONFIG_ARCH_IXP4XX
 
 /* cpu-specific register addresses are compiled in to this code */
-#ifdef CONFIG_ARCH_PXA
+#ifdef CONFIG_PXA25x
 #error "Can't configure both IXP and PXA"
 #endif
 
@@ -2230,7 +2230,7 @@ static struct pxa25x_udc memory = {
 
 #define CP15R0_VENDOR_MASK	0xffffe000
 
-#if	defined(CONFIG_ARCH_PXA)
+#if	defined(CONFIG_PXA25x)
 #define CP15R0_XSCALE_VALUE	0x69052000	/* intel/arm/xscale */
 
 #elif	defined(CONFIG_ARCH_IXP4XX)
@@ -2282,7 +2282,7 @@ static int pxa25x_udc_probe(struct platform_device *pdev)
 
 	/* trigger chiprev-specific logic */
 	switch (chiprev & CP15R0_PRODREV_MASK) {
-#if	defined(CONFIG_ARCH_PXA)
+#if	defined(CONFIG_PXA25x)
 	case PXA255_A0:
 		dev->has_cfr = 1;
 		break;

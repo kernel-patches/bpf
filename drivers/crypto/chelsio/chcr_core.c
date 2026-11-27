@@ -295,8 +295,10 @@ static void __exit chcr_crypto_exit(void)
 		kfree(u_ctx);
 	}
 	list_for_each_entry_safe(u_ctx, tmp, &drv_data.inact_dev, entry) {
-		adap = padap(&u_ctx->dev);
-		memset(&adap->chcr_stats, 0, sizeof(adap->chcr_stats));
+		if (u_ctx->dev.state != CHCR_DETACH) {
+			adap = padap(&u_ctx->dev);
+			memset(&adap->chcr_stats, 0, sizeof(adap->chcr_stats));
+		}
 		list_del(&u_ctx->entry);
 		kfree(u_ctx);
 	}

@@ -2,7 +2,11 @@
 /* Copyright (c) 2024 Meta Platforms, Inc. and affiliates. */
 
 #include "vmlinux.h"
+#include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+
+#include "build_id.h"
 
 struct bpf_stack_build_id stack_sleepable[128];
 int res_sleepable;
@@ -24,6 +28,54 @@ int uprobe_sleepable(struct pt_regs *ctx)
 {
 	res_sleepable = bpf_get_stack(ctx, stack_sleepable, sizeof(stack_sleepable),
 				      BPF_F_USER_STACK | BPF_F_USER_BUILD_ID);
+
+	return 0;
+}
+
+struct bpf_stack_build_id stack_rawtp_sleepable[128];
+int res_rawtp_sleepable;
+
+struct bpf_stack_build_id stack_rawtp_nofault[128];
+int res_rawtp_nofault;
+
+int target_syscall;
+
+static __always_inline bool is_target_syscall(struct pt_regs *regs, long id)
+{
+	return id == target_syscall &&
+	       (unsigned long)PT_REGS_PARM1_CORE_SYSCALL(regs) == TARGET_SYSCALL_ARG;
+}
+
+SEC("raw_tp/sys_enter")
+int BPF_PROG(rawtp_nofault, struct pt_regs *regs, long id)
+{
+	if (!is_target_syscall(regs, id))
+		return 0;
+
+	/* Record only the first hit, a later match must not overwrite it. */
+	if (res_rawtp_nofault)
+		return 0;
+
+	res_rawtp_nofault = bpf_get_stack(ctx, stack_rawtp_nofault,
+					  sizeof(stack_rawtp_nofault),
+					  BPF_F_USER_STACK | BPF_F_USER_BUILD_ID);
+
+	return 0;
+}
+
+SEC("raw_tp.s/sys_enter")
+int BPF_PROG(rawtp_sleepable, struct pt_regs *regs, long id)
+{
+	if (!is_target_syscall(regs, id))
+		return 0;
+
+	/* Record only the first hit, a later match must not overwrite it. */
+	if (res_rawtp_sleepable)
+		return 0;
+
+	res_rawtp_sleepable = bpf_get_stack(ctx, stack_rawtp_sleepable,
+					    sizeof(stack_rawtp_sleepable),
+					    BPF_F_USER_STACK | BPF_F_USER_BUILD_ID);
 
 	return 0;
 }

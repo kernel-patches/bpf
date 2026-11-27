@@ -1446,7 +1446,7 @@ int btrfs_quota_disable(struct btrfs_fs_info *fs_info)
 	ret = btrfs_free_tree_block(trans, btrfs_root_id(quota_root),
 				    quota_root->node, 0, 1);
 
-	if (ret < 0)
+	if (unlikely(ret < 0))
 		btrfs_abort_transaction(trans, ret);
 
 out:
@@ -1631,7 +1631,7 @@ int btrfs_add_qgroup_relation(struct btrfs_trans_handle *trans, u64 src, u64 dst
 		int ret2;
 
 		ret2 = del_qgroup_relation_item(trans, src, dst);
-		if (ret2 < 0)
+		if (unlikely(ret2 < 0))
 			btrfs_abort_transaction(trans, ret);
 		goto out;
 	}
@@ -3900,6 +3900,7 @@ static void btrfs_qgroup_rescan_worker(struct btrfs_work *work)
 	struct btrfs_path *path;
 	struct btrfs_trans_handle *trans = NULL;
 	int ret = 0;
+	bool cancelled = false;
 	bool stopped = false;
 	bool did_leaf_rescans = false;
 
@@ -3928,10 +3929,15 @@ static void btrfs_qgroup_rescan_worker(struct btrfs_work *work)
 		ret = qgroup_rescan_leaf(trans, path);
 		did_leaf_rescans = true;
 
-		if (ret > 0)
-			btrfs_commit_transaction(trans);
-		else
+		if (ret > 0) {
+			int commit_ret;
+
+			commit_ret = btrfs_commit_transaction(trans);
+			if (commit_ret < 0)
+				ret = commit_ret;
+		} else {
 			btrfs_end_transaction(trans);
+		}
 	}
 
 out:
@@ -3965,8 +3971,9 @@ out:
 	}
 
 	mutex_lock(&fs_info->qgroup_rescan_lock);
-	if (!stopped || test_bit(BTRFS_QGROUP_RUNTIME_BIT_CANCEL_RESCAN,
-				 &fs_info->qgroup_flags))
+	cancelled = stopped && test_bit(BTRFS_QGROUP_RUNTIME_BIT_CANCEL_RESCAN,
+		    &fs_info->qgroup_flags);
+	if (!stopped || cancelled)
 		clear_bit(BTRFS_QGROUP_STATUS_BIT_RESCAN, &fs_info->qgroup_flags);
 	if (trans) {
 		int ret2 = update_qgroup_status_item(trans);
@@ -3981,21 +3988,24 @@ out:
 	complete_all(&fs_info->qgroup_rescan_completion);
 	mutex_unlock(&fs_info->qgroup_rescan_lock);
 
-	if (!trans)
+	if (trans)
+		btrfs_end_transaction(trans);
+
+	if (ret < 0) {
+		btrfs_err(fs_info, "qgroup scan failed with %pe", ERR_PTR(ret));
 		return;
-
-	btrfs_end_transaction(trans);
-
+	}
+	if (cancelled) {
+		btrfs_info(fs_info, "qgroup scan cancelled");
+		return;
+	}
 	if (stopped) {
 		btrfs_info(fs_info, "qgroup scan paused");
-	} else if (test_bit(BTRFS_QGROUP_RUNTIME_BIT_CANCEL_RESCAN, &fs_info->qgroup_flags)) {
-		btrfs_info(fs_info, "qgroup scan cancelled");
-	} else if (ret >= 0) {
-		btrfs_info(fs_info, "qgroup scan completed%s",
-			ret > 0 ? " (inconsistency flag cleared)" : "");
-	} else {
-		btrfs_err(fs_info, "qgroup scan failed with %pe", ERR_PTR(ret));
+		return;
 	}
+
+	btrfs_info(fs_info, "qgroup scan completed%s",
+		   ret > 0 ? " (inconsistency flag cleared)" : "");
 }
 
 /*
@@ -4660,7 +4670,7 @@ static void qgroup_convert_meta(struct btrfs_fs_info *fs_info, u64 ref_root,
 
 		qgroup_rsv_release(fs_info, qgroup, num_bytes,
 				BTRFS_QGROUP_RSV_META_PREALLOC);
-		if (!sb_rdonly(fs_info->sb))
+		if (!btrfs_fs_rdonly(fs_info))
 			qgroup_rsv_add(fs_info, qgroup, num_bytes,
 				       BTRFS_QGROUP_RSV_META_PERTRANS);
 
@@ -4690,7 +4700,7 @@ void btrfs_qgroup_convert_reserved_meta(struct btrfs_root *root, int num_bytes)
 				      BTRFS_QGROUP_RSV_META_PREALLOC);
 	trace_btrfs_qgroup_meta_convert(root, num_bytes);
 	qgroup_convert_meta(fs_info, btrfs_root_id(root), num_bytes);
-	if (!sb_rdonly(fs_info->sb))
+	if (!btrfs_fs_rdonly(fs_info))
 		add_root_meta_rsv(root, num_bytes, BTRFS_QGROUP_RSV_META_PERTRANS);
 }
 

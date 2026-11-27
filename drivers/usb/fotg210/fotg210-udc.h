@@ -171,7 +171,7 @@
 #define FIFOMAP_EPNO(ep)	((ep) << ((ep) - 1) * 8)
 #define FIFOMAP_EPNOMSK(ep)	(0xF << ((ep) - 1) * 8)
 
-/* Device FIFO Confuguration Register (0x1AC) */
+/* Device FIFO Configuration Register (0x1AC) */
 #define FOTG210_FIFOCF		0x1AC
 #define FIFOCF_TYPE(type, fifo)	((type) << (fifo) * 8)
 #define FIFOCF_BLK_SIN(fifo)	(0x0 << (fifo) * 8 << 2)

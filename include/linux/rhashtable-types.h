@@ -88,6 +88,8 @@ struct rhashtable_lockdep_keys {
  * @mutex: Mutex to protect current/future table swapping
  * @lock: Spin lock to protect walker list
  * @nelems: Number of elements in table
+ * @alloc_tag: Allocation codetag and percpu counters
+ * @lockdep_key: Lockdep keys for each lock
  */
 struct rhashtable {
 	struct bucket_table __rcu	*tbl;
@@ -134,6 +136,7 @@ struct rhashtable_walker {
  * @walker: Associated rhashtable walker
  * @slot: Current slot
  * @skip: Number of entries to skip in slot
+ * @end_of_table: End of table walk has been reached
  */
 struct rhashtable_iter {
 	struct rhashtable *ht;
@@ -157,8 +160,8 @@ int __rhashtable_init_noprof(struct rhashtable *ht,
 
 /**
  * rhashtable_init - initialize a new hash table
- * @ht:		hash table to be initialized
- * @params:	configuration parameters
+ * @...:	variable args list: hash table to be initialized and
+ *              configuration parameters
  *
  * Initializes a new hash table based on the provided configuration
  * parameters. A table can be configured either with a variable or
@@ -211,8 +214,8 @@ int __rhltable_init_noprof(struct rhltable *hlt,
 
 /**
  * rhltable_init - initialize a new hash list table
- * @hlt:	hash list table to be initialized
- * @params:	configuration parameters
+ * @...:	variable args list: hash list table to be initialized and
+ *              configuration parameters
  *
  * Initializes a new hash list table.
  *

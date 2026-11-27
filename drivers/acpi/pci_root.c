@@ -41,8 +41,8 @@ static int acpi_pci_root_scan_dependent(struct acpi_device *adev)
 				| OSC_PCI_MSI_SUPPORT)
 
 static const struct acpi_device_id root_device_ids[] = {
-	{"PNP0A03", 0},
-	{"", 0},
+	{ .id = "PNP0A03" },
+	{ }
 };
 
 static struct acpi_scan_handler pci_root_handler = {
@@ -515,9 +515,11 @@ static u32 calculate_control(void)
 	 * Per the Downstream Port Containment Related Enhancements ECN to
 	 * the PCI Firmware Spec, r3.2, sec 4.5.1, table 4-5,
 	 * OSC_PCI_EXPRESS_DPC_CONTROL indicates the OS supports both DPC
-	 * and EDR.
+	 * and EDR.  PCI Firmware r3.3, sec 4.5.2.4, also requires the OS to
+	 * request AER control along with DPC control.
 	 */
-	if (IS_ENABLED(CONFIG_PCIE_DPC) && IS_ENABLED(CONFIG_PCIE_EDR))
+	if (IS_ENABLED(CONFIG_PCIE_DPC) && IS_ENABLED(CONFIG_PCIE_EDR) &&
+	    (control & OSC_PCI_EXPRESS_AER_CONTROL))
 		control |= OSC_PCI_EXPRESS_DPC_CONTROL;
 
 	return control;
@@ -563,9 +565,14 @@ static void negotiate_os_control(struct acpi_pci_root *root, int *no_aspm)
 	 * Apple always return failure on _OSC calls when _OSI("Darwin") has
 	 * been called successfully. We know the feature set supported by the
 	 * platform, so avoid calling _OSC at all
+	 *
+	 * Assume control of the same features that would have been requested,
+	 * PCIe PME included.  Leaving PME out disables the PME service for
+	 * every root port, and nothing takes over: a device that runtime
+	 * suspends asserts PME# and is never resumed.
 	 */
 	if (x86_apple_machine) {
-		root->osc_control_set = ~OSC_PCI_EXPRESS_PME_CONTROL;
+		root->osc_control_set = calculate_control();
 		decode_osc_control(root, "OS assumes control of",
 				   root->osc_control_set);
 		return;
@@ -1051,6 +1058,19 @@ struct pci_bus *acpi_pci_root_create(struct acpi_pci_root *root,
 
 	ctrl = root->osc_control_set;
 	ext_ctrl = root->osc_ext_control_set;
+
+	/*
+	 * Firmware that predates the _OSC DPC control bit grants AER but
+	 * masks DPC.  Link DPC control to AER control, as PCIe r7.0 sec
+	 * 6.2.11 recommends.
+	 */
+	if (IS_ENABLED(CONFIG_PCIE_DPC) &&
+	    (ctrl & OSC_PCI_EXPRESS_AER_CONTROL) &&
+	    !(ctrl & OSC_PCI_EXPRESS_DPC_CONTROL)) {
+		decode_osc_control(root, "OS assuming control (AER granted) of",
+				   OSC_PCI_EXPRESS_DPC_CONTROL);
+		ctrl |= OSC_PCI_EXPRESS_DPC_CONTROL;
+	}
 
 	/*
 	 * If the user specified "pcie_ports=native", use the PCIe port

@@ -617,8 +617,7 @@ void amdgpu_device_detect_runtime_pm_mode(struct amdgpu_device *adev)
 	int bamaco_support;
 
 	adev->pm.rpm_mode = AMDGPU_RUNPM_NONE;
-	if (pci_is_thunderbolt_attached(adev->pdev) ||
-	    dev_is_removable(&adev->pdev->dev)) {
+	if (amdgpu_device_is_removable(adev)) {
 		dev_info(adev->dev,
 			 "Runtime PM disabled for externally attached device\n");
 		return;
@@ -1286,6 +1285,16 @@ bool amdgpu_device_seamless_boot_supported(struct amdgpu_device *adev)
 	return amdgpu_ip_version(adev, DCE_HWIP, 0) >= IP_VERSION(3, 0, 0);
 }
 
+bool amdgpu_device_is_removable(struct amdgpu_device *adev)
+{
+	/* older TB systems don't set dev_is_removable so check both here */
+	if (dev_is_removable(adev->dev) ||
+	    pci_is_thunderbolt_attached(adev->pdev))
+		return true;
+
+	return false;
+}
+
 #if IS_ENABLED(CONFIG_X86)
 static const struct x86_cpu_id amdgpu_pcie_dynamic_switching_quirks[] = {
 	/*
@@ -1308,8 +1317,8 @@ static const struct x86_cpu_id amdgpu_pcie_dynamic_switching_quirks[] = {
 
 static bool amdgpu_device_pcie_dynamic_switching_supported(struct amdgpu_device *adev)
 {
-	/* eGPU change speeds based on USB4 fabric conditions */
-	if (dev_is_removable(adev->dev))
+	/* eGPU change speeds based on USB4/TB fabric conditions */
+	if (amdgpu_device_is_removable(adev))
 		return true;
 
 	/* Hosts have problems with dynamic speed switching */
@@ -1983,7 +1992,7 @@ static void amdgpu_device_init_pcie_links(struct amdgpu_device *adev)
 static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 {
 	struct amdgpu_ip_block *ip_block;
-	bool total, skip_bios, early_full_gpu_access = false;
+	bool total, skip_bios, early_full_gpu_access = false, full_access_held = false;
 	uint32_t bios_flags;
 	int i, r;
 
@@ -2000,12 +2009,13 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 		if (early_full_gpu_access) {
 			r = amdgpu_virt_request_full_gpu(adev, true);
 			if (r)
-				return r;
+				goto err_release_full_gpu;
+			full_access_held = true;
 		}
 
 		r = amdgpu_virt_init_critical_region(adev);
 		if (r)
-			return r;
+			goto err_release_full_gpu;
 	}
 
 	switch (adev->asic_type) {
@@ -2018,7 +2028,7 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 		adev->family = AMDGPU_FAMILY_SI;
 		r = si_set_ip_blocks(adev);
 		if (r)
-			return r;
+			goto err_release_full_gpu;
 		break;
 #endif
 #ifdef CONFIG_DRM_AMDGPU_CIK
@@ -2034,7 +2044,7 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 
 		r = cik_set_ip_blocks(adev);
 		if (r)
-			return r;
+			goto err_release_full_gpu;
 		break;
 #endif
 	case CHIP_TOPAZ:
@@ -2053,29 +2063,36 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 
 		r = vi_set_ip_blocks(adev);
 		if (r)
-			return r;
+			goto err_release_full_gpu;
 		break;
 	default:
 		r = amdgpu_discovery_set_ip_blocks(adev);
 		if (r) {
 			adev->num_ip_blocks = 0;
-			return r;
+			goto err_release_full_gpu;
 		}
 		break;
+	}
+
+	if (amdgpu_is_spm_passthrough(adev)) {
+		r = amdgpu_psp_disable_fb_carveout(adev);
+		if (r)
+			return r;
 	}
 
 	/* Check for IP version 9.4.3 with A0 hardware */
 	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 3) &&
 	    !amdgpu_device_get_rev_id(adev)) {
 		dev_err(adev->dev, "Unsupported A0 hardware\n");
-		return -ENODEV;	/* device unsupported - no device error */
+		r = -ENODEV;	/* device unsupported - no device error */
+		goto err_release_full_gpu;
 	}
 
 	if (amdgpu_has_atpx() &&
 	    (amdgpu_is_atpx_hybrid() ||
 	     amdgpu_has_atpx_dgpu_power_cntl()) &&
 	    ((adev->flags & AMD_IS_APU) == 0) &&
-	    !dev_is_removable(&adev->pdev->dev))
+	    !amdgpu_device_is_removable(adev))
 		adev->flags |= AMD_IS_PX;
 
 	if (!(adev->flags & AMD_IS_APU)) {
@@ -2133,7 +2150,7 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 		if (adev->ip_blocks[i].version->type == AMD_IP_BLOCK_TYPE_COMMON) {
 			r = amdgpu_device_parse_gpu_info_fw(adev);
 			if (r)
-				return r;
+				goto err_release_full_gpu;
 
 			bios_flags = amdgpu_device_get_vbios_flags(adev);
 			skip_bios = !!(bios_flags & AMDGPU_VBIOS_SKIP);
@@ -2141,8 +2158,10 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 			if (!skip_bios) {
 				bool optional =
 					!!(bios_flags & AMDGPU_VBIOS_OPTIONAL);
-				if (!amdgpu_get_bios(adev) && !optional)
-					return -EINVAL;
+				if (!amdgpu_get_bios(adev) && !optional) {
+					r = -EINVAL;
+					goto err_release_full_gpu;
+				}
 
 				if (optional && !adev->bios)
 					dev_info(
@@ -2158,7 +2177,7 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 							adev,
 							AMDGIM_ERROR_VF_ATOMBIOS_INIT_FAIL,
 							0, 0);
-						return r;
+						goto err_release_full_gpu;
 					}
 				}
 			}
@@ -2169,14 +2188,17 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 
 		}
 	}
-	if (!total)
-		return -ENODEV;
+	if (!total) {
+		r = -ENODEV;
+		goto err_release_full_gpu;
+	}
 
 	/* Request full GPU access only for the remaining SR-IOV init work. */
 	if (amdgpu_sriov_vf(adev) && !early_full_gpu_access) {
 		r = amdgpu_virt_request_full_gpu(adev, true);
 		if (r)
-			return r;
+			goto err_release_full_gpu;
+		full_access_held = true;
 	}
 
 	if (adev->gmc.xgmi.supported)
@@ -2194,6 +2216,24 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 	amdgpu_smu_early_init(adev);
 
 	return 0;
+
+err_release_full_gpu:
+	if (amdgpu_sriov_vf(adev)) {
+		/*
+		 * Release the access the host is waiting on so it finishes the
+		 * handshake instead of timing out and FLR'ing the VF.
+		 */
+		if (full_access_held)
+			amdgpu_virt_release_full_gpu(adev, true);
+
+		/*
+		 * Mark the VF inactive so the later fini path does not send a
+		 * request the host will never answer.
+		 */
+		amdgpu_virt_deactivate(adev);
+	}
+
+	return r;
 }
 
 static int amdgpu_device_ip_hw_init_phase1(struct amdgpu_device *adev)
@@ -2549,6 +2589,11 @@ static int amdgpu_device_ip_init(struct amdgpu_device *adev)
 	if (amdgpu_ip_member_of_hwini(adev, AMD_IP_BLOCK_TYPE_SDMA))
 		amdgpu_ttm_enable_buffer_funcs(adev);
 
+	/* KFD init flushes the GART TLB through SDMA on Navi 1x and waits
+	 * for it, so the fence interrupts must already be enabled.
+	 */
+	amdgpu_fence_driver_hw_init(adev);
+
 	/* Don't init kfd if whole hive need to be reset during init */
 	if (adev->init_lvl->level != AMDGPU_INIT_LEVEL_MINIMAL_XGMI) {
 		amdgpu_amdkfd_device_init(adev);
@@ -2784,10 +2829,11 @@ static int amdgpu_device_ip_late_init(struct amdgpu_device *adev)
 
 	amdgpu_device_set_cg_state(adev, AMD_CG_STATE_GATE);
 	amdgpu_device_set_pg_state(adev, AMD_PG_STATE_GATE);
+	amdgpu_gfx_perfmon_clk_restore(adev);
 
-	r = amdgpu_dpm_reapply_umd_profile(adev);
+	r = amdgpu_dpm_reapply_performance_level(adev);
 	if (r) {
-		dev_err(adev->dev, "Failed to restore UMD profile state: %d\n", r);
+		dev_err(adev->dev, "Failed to restore performance level: %d\n", r);
 		return r;
 	}
 
@@ -3498,8 +3544,8 @@ static void amdgpu_device_detect_sriov_bios(struct amdgpu_device *adev)
  * Check if there is DC (new modesetting infrastructre) support for an asic.
  * returns true if DC has support, false if not.
  */
-bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
-				       enum amd_asic_type asic_type)
+static bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
+					      enum amd_asic_type asic_type)
 {
 	switch (asic_type) {
 #ifdef CONFIG_DRM_AMDGPU_SI
@@ -3513,15 +3559,36 @@ bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
 	case CHIP_PITCAIRN:
 	case CHIP_VERDE:
 	case CHIP_OLAND:
-		return amdgpu_dc != 0 && IS_ENABLED(CONFIG_DRM_AMD_DC_SI);
+		if (!IS_ENABLED(CONFIG_DRM_AMD_DC_SI))
+			dev_warn_once(&pdev->dev,
+				      "Driver built without SI display support!\n");
+		return IS_ENABLED(CONFIG_DRM_AMD_DC_SI);
+	case CHIP_BONAIRE:
+	case CHIP_KAVERI:
+	case CHIP_KABINI:
+	case CHIP_HAWAII:
+	case CHIP_MULLINS:
+	case CHIP_TONGA:
+	case CHIP_FIJI:
+	case CHIP_CARRIZO:
+	case CHIP_STONEY:
+	case CHIP_POLARIS10:
+	case CHIP_POLARIS11:
+	case CHIP_POLARIS12:
+	case CHIP_VEGAM:
+	case CHIP_VEGA10:
+	case CHIP_VEGA12:
+	case CHIP_VEGA20:
+		if (!IS_ENABLED(CONFIG_DRM_AMD_DC_DCE))
+			dev_warn_once(&pdev->dev,
+				      "Driver built without DCE display support!\n");
+		return IS_ENABLED(CONFIG_DRM_AMD_DC_DCE);
 	default:
-		return amdgpu_dc != 0;
+		return true;
 #else
 	default:
-		if (amdgpu_dc > 0)
-			dev_info_once(
-				&pdev->dev,
-				"Display Core has been requested via kernel parameter but isn't supported by ASIC, ignoring\n");
+		dev_info_once(&pdev->dev,
+			      "Driver built without display support\n");
 		return false;
 #endif
 	}
@@ -3768,9 +3835,8 @@ static void amdgpu_device_sys_interface_fini(struct amdgpu_device *adev)
 static bool
 amdgpu_device_should_register_switcheroo(struct amdgpu_device *adev, bool px)
 {
-	return !pci_is_thunderbolt_attached(adev->pdev) &&
-	       (px || (!dev_is_removable(&adev->pdev->dev) &&
-		       apple_gmux_detect(NULL, NULL)));
+	return !amdgpu_device_is_removable(adev) &&
+		(px || apple_gmux_detect(NULL, NULL));
 }
 
 /**
@@ -3828,12 +3894,12 @@ int amdgpu_device_init(struct amdgpu_device *adev,
 	/* mutex initialization are all done here so we
 	 * can recall function without having locking issues
 	 */
-	mutex_init(&adev->firmware.mutex);
 	mutex_init(&adev->pm.mutex);
 	mutex_init(&adev->gfx.gpu_clock_mutex);
 	mutex_init(&adev->srbm_mutex);
 	mutex_init(&adev->gfx.pipe_reserve_mutex);
 	mutex_init(&adev->gfx.gfx_off_mutex);
+	mutex_init(&adev->gfx.perfmon_clk_mutex);
 	mutex_init(&adev->gfx.partition_mutex);
 	mutex_init(&adev->grbm_idx_mutex);
 	mutex_init(&adev->mn_lock);
@@ -4076,6 +4142,9 @@ int amdgpu_device_init(struct amdgpu_device *adev,
 				amdgpu_reset_method = AMD_RESET_METHOD_NONE;
 				r = amdgpu_asic_reset(adev);
 				amdgpu_reset_method = tmp;
+				/* Post again so that the PSP is ready before it is used */
+				if (!r)
+					adev->has_hw_reset = true;
 		}
 
 		if (r) {
@@ -4139,8 +4208,6 @@ fence_driver_init:
 		amdgpu_vf_error_put(adev, AMDGIM_ERROR_VF_AMDGPU_INIT_FAIL, 0, 0);
 		goto release_ras_con;
 	}
-
-	amdgpu_fence_driver_hw_init(adev);
 
 	dev_info(adev->dev,
 		"SE %d, SH per SE %d, CU per SH %d, active_cu_number %d\n",
@@ -4582,9 +4649,16 @@ int amdgpu_device_suspend(struct drm_device *dev, bool notify_clients)
 
 	amdgpu_ras_suspend(adev);
 
+	/* VKMS modeset state is saved here, never from the reset path */
+	if (adev->enable_virtual_display) {
+		r = drm_mode_config_helper_suspend(dev);
+		if (r)
+			goto unwind_smartshift;
+	}
+
 	r = amdgpu_device_ip_suspend_phase1(adev);
 	if (r)
-		goto unwind_smartshift;
+		goto unwind_vkms;
 
 	amdgpu_amdkfd_suspend(adev, !amdgpu_sriov_vf(adev) && !adev->in_runpm);
 	r = amdgpu_userq_suspend(adev);
@@ -4631,6 +4705,10 @@ unwind_ip_phase1:
 		dev_warn(adev->dev, "failed to re-initialize IPs phase1: %d\n", rec);
 		return r;
 	}
+
+unwind_vkms:
+	if (adev->enable_virtual_display)
+		drm_mode_config_helper_resume(dev);
 
 unwind_smartshift:
 	rec = amdgpu_acpi_smart_shift_update(adev, AMDGPU_SS_DEV_D0);
@@ -4729,6 +4807,12 @@ int amdgpu_device_resume(struct drm_device *dev, bool notify_clients)
 	if (r) {
 		dev_err(adev->dev, "amdgpu_device_ip_resume failed (%d).\n", r);
 		goto exit;
+	}
+
+	if (adev->enable_virtual_display) {
+		r = drm_mode_config_helper_resume(dev);
+		if (r)
+			goto exit;
 	}
 
 	r = amdgpu_amdkfd_resume(adev, !amdgpu_sriov_vf(adev) && !adev->in_runpm);
@@ -5226,8 +5310,6 @@ int amdgpu_device_reinit_after_reset(struct amdgpu_reset_context *reset_context)
 				if (r)
 					goto out;
 
-				drm_client_dev_resume(adev_to_drm(tmp_adev));
-
 				/*
 				 * The GPU enters bad state once faulty pages
 				 * by ECC has reached the threshold, and ras
@@ -5573,8 +5655,6 @@ static void amdgpu_device_halt_activities(struct amdgpu_device *adev,
 		 * And add them back after reset completed
 		 */
 		amdgpu_unregister_gpu_instance(tmp_adev);
-
-		drm_client_dev_suspend(adev_to_drm(tmp_adev));
 
 		/* disable ras on ALL IPs */
 		if (!need_emergency_restart && !amdgpu_reset_in_dpc(adev))

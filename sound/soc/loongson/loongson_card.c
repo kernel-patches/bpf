@@ -152,7 +152,7 @@ static int loongson_card_hw_params(struct snd_pcm_substream *substream,
 		return ret;
 	}
 
-	return snd_soc_runtime_set_dai_fmt(rtd, ls_card->cfg->fmt);
+	return 0;
 }
 
 static const struct snd_soc_ops loongson_ops = {
@@ -311,6 +311,16 @@ static int loongson_asoc_card_probe(struct platform_device *pdev)
 	card->owner = THIS_MODULE;
 	card->dai_link = loongson_dai_links;
 	card->num_links = ARRAY_SIZE(loongson_dai_links);
+
+	/*
+	 * The DAI format is fixed per board. Describe it in the DAI link so
+	 * that the ASoC core takes it into account when it auto-selects the
+	 * format from the DAIs' .auto_selectable_formats. Otherwise the
+	 * CLOCK_PROVIDER bits are lost and the codec is configured with a
+	 * format it cannot accept (e.g. es8328_set_dai_fmt() rejecting it).
+	 */
+	for (unsigned int i = 0; i < card->num_links; i++)
+		loongson_dai_links[i].dai_fmt = ls_priv->cfg->fmt;
 
 	if (ls_priv->cfg->add_dapm_widgets) {
 		card->dapm_widgets = loongson_asoc_dapm_widgets;

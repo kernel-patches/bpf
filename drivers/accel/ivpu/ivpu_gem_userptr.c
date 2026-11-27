@@ -19,18 +19,39 @@
 #include "ivpu_drv.h"
 #include "ivpu_gem.h"
 
+struct ivpu_userptr {
+	struct page **pages;
+	unsigned long nr_pages;
+};
+
 static struct sg_table *
 ivpu_gem_userptr_dmabuf_map(struct dma_buf_attachment *attachment,
 			    enum dma_data_direction direction)
 {
-	struct sg_table *sgt = attachment->dmabuf->priv;
+	struct ivpu_userptr *userptr = attachment->dmabuf->priv;
+	struct sg_table *sgt;
 	int ret;
+
+	sgt = kmalloc_obj(*sgt);
+	if (!sgt)
+		return ERR_PTR(-ENOMEM);
+
+	ret = sg_alloc_table_from_pages(sgt, userptr->pages, userptr->nr_pages, 0,
+					attachment->dmabuf->size, GFP_KERNEL);
+	if (ret)
+		goto free_sgt;
 
 	ret = dma_map_sgtable(attachment->dev, sgt, direction, DMA_ATTR_SKIP_CPU_SYNC);
 	if (ret)
-		return ERR_PTR(ret);
+		goto free_table;
 
 	return sgt;
+
+free_table:
+	sg_free_table(sgt);
+free_sgt:
+	kfree(sgt);
+	return ERR_PTR(ret);
 }
 
 static void ivpu_gem_userptr_dmabuf_unmap(struct dma_buf_attachment *attachment,
@@ -38,21 +59,17 @@ static void ivpu_gem_userptr_dmabuf_unmap(struct dma_buf_attachment *attachment,
 					  enum dma_data_direction direction)
 {
 	dma_unmap_sgtable(attachment->dev, sgt, direction, DMA_ATTR_SKIP_CPU_SYNC);
+	sg_free_table(sgt);
+	kfree(sgt);
 }
 
 static void ivpu_gem_userptr_dmabuf_release(struct dma_buf *dma_buf)
 {
-	struct sg_table *sgt = dma_buf->priv;
-	struct sg_page_iter page_iter;
-	struct page *page;
+	struct ivpu_userptr *userptr = dma_buf->priv;
 
-	for_each_sgtable_page(sgt, &page_iter, 0) {
-		page = sg_page_iter_page(&page_iter);
-		unpin_user_page(page);
-	}
-
-	sg_free_table(sgt);
-	kfree(sgt);
+	unpin_user_pages(userptr->pages, userptr->nr_pages);
+	kvfree(userptr->pages);
+	kfree(userptr);
 }
 
 static const struct dma_buf_ops ivpu_gem_userptr_dmabuf_ops = {
@@ -67,7 +84,7 @@ ivpu_create_userptr_dmabuf(struct ivpu_device *vdev, void __user *user_ptr,
 {
 	struct dma_buf_export_info exp_info = {};
 	struct dma_buf *dma_buf;
-	struct sg_table *sgt;
+	struct ivpu_userptr *userptr;
 	struct page **pages;
 	unsigned long nr_pages = size >> PAGE_SHIFT;
 	unsigned int gup_flags = FOLL_LONGTERM;
@@ -94,39 +111,33 @@ ivpu_create_userptr_dmabuf(struct ivpu_device *vdev, void __user *user_ptr,
 		goto unpin_pages;
 	}
 
-	sgt = kmalloc_obj(*sgt);
-	if (!sgt) {
+	userptr = kmalloc_obj(*userptr);
+	if (!userptr) {
 		ret = -ENOMEM;
 		goto unpin_pages;
 	}
 
-	ret = sg_alloc_table_from_pages(sgt, pages, nr_pages, 0, size, GFP_KERNEL);
-	if (ret) {
-		ivpu_dbg(vdev, IOCTL, "Failed to create sg table: %d\n", ret);
-		goto free_sgt;
-	}
+	userptr->pages = pages;
+	userptr->nr_pages = nr_pages;
 
 	exp_info.exp_name = "ivpu_userptr_dmabuf";
 	exp_info.owner = THIS_MODULE;
 	exp_info.ops = &ivpu_gem_userptr_dmabuf_ops;
 	exp_info.size = size;
 	exp_info.flags = O_RDWR | O_CLOEXEC;
-	exp_info.priv = sgt;
+	exp_info.priv = userptr;
 
 	dma_buf = dma_buf_export(&exp_info);
 	if (IS_ERR(dma_buf)) {
 		ret = PTR_ERR(dma_buf);
 		ivpu_dbg(vdev, IOCTL, "Failed to export userptr dma-buf: %d\n", ret);
-		goto free_sg_table;
+		goto free_userptr;
 	}
 
-	kvfree(pages);
 	return dma_buf;
 
-free_sg_table:
-	sg_free_table(sgt);
-free_sgt:
-	kfree(sgt);
+free_userptr:
+	kfree(userptr);
 unpin_pages:
 	for (i = 0; i < pinned; i++)
 		unpin_user_page(pages[i]);

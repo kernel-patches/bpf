@@ -100,8 +100,7 @@ static int am654_hbmc_dma_read(struct am654_hbmc_device_priv *priv, void *to,
 	}
 
 	reinit_completion(&priv->rx_dma_complete);
-	tx->callback = am654_hbmc_dma_callback;
-	tx->callback_param = priv;
+	dmaengine_desc_set_callback(tx, am654_hbmc_dma_callback, NULL, priv);
 	cookie = dmaengine_submit(tx);
 
 	ret = dma_submit_error(cookie);

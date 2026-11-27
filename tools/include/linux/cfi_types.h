@@ -5,7 +5,7 @@
 #ifndef _LINUX_CFI_TYPES_H
 #define _LINUX_CFI_TYPES_H
 
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 #include <linux/linkage.h>
 
 #ifdef CONFIG_CFI
@@ -41,7 +41,7 @@
 	SYM_TYPED_START(name, SYM_L_GLOBAL, SYM_A_ALIGN)
 #endif
 
-#else /* __ASSEMBLY__ */
+#else /* __ASSEMBLER__ */
 
 #ifdef CONFIG_CFI
 #define DEFINE_CFI_TYPE(name, func)						\
@@ -64,5 +64,5 @@
 	);
 #endif
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 #endif /* _LINUX_CFI_TYPES_H */

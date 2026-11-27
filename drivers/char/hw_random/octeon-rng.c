@@ -116,3 +116,4 @@ module_platform_driver(octeon_rng_driver);
 
 MODULE_AUTHOR("David Daney");
 MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("Cavium Octeon HW random number generator");

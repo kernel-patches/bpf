@@ -529,7 +529,7 @@ static u32 amd_ntb_peer_spad_read(struct ntb_dev *ntb, int pidx, int sidx)
 	u32 offset;
 
 	if (sidx < 0 || sidx >= ndev->spad_count)
-		return -EINVAL;
+		return 0;
 
 	offset = ndev->peer_spad + (sidx << 2);
 	return readl(mmio + AMD_SPAD_OFFSET + offset);

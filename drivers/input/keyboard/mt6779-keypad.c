@@ -73,6 +73,9 @@ static irqreturn_t mt6779_keypad_irq_handler(int irq, void *dev_id)
 		key = bit_nr / 32 * 16 + bit_nr % 32;
 		keypad->calc_row_col(key, &row, &col);
 
+		if (row >= keypad->n_rows || col >= keypad->n_cols)
+			continue;
+
 		scancode = MATRIX_SCAN_CODE(row, col, row_shift);
 		/* 1: not pressed, 0: pressed */
 		pressed = !test_bit(bit_nr, new_state);
@@ -195,6 +198,10 @@ static int mt6779_keypad_pdrv_probe(struct platform_device *pdev)
 
 	input_set_capability(keypad->input_dev, EV_MSC, MSC_SCAN);
 
+	keypad->clk = devm_clk_get_enabled(&pdev->dev, "kpd");
+	if (IS_ERR(keypad->clk))
+		return PTR_ERR(keypad->clk);
+
 	regmap_write(keypad->regmap, MTK_KPD_DEBOUNCE,
 		     (debounce * (1 << 5)) & MTK_KPD_DEBOUNCE_MASK);
 
@@ -207,10 +214,6 @@ static int mt6779_keypad_pdrv_probe(struct platform_device *pdev)
 			   MTK_KPD_SEL_ROWMASK(keypad->n_rows));
 	regmap_update_bits(keypad->regmap, MTK_KPD_SEL, MTK_KPD_SEL_COL,
 			   MTK_KPD_SEL_COLMASK(keypad->n_cols));
-
-	keypad->clk = devm_clk_get_enabled(&pdev->dev, "kpd");
-	if (IS_ERR(keypad->clk))
-		return PTR_ERR(keypad->clk);
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)

@@ -4,6 +4,8 @@
 #ifndef _INTEL_GMD_INTERRUPT_REGS_H_
 #define _INTEL_GMD_INTERRUPT_REGS_H_
 
+#define __VLV_DISPLAY_BASE		0x180000
+
 #define I915_PM_INTERRUPT				(1 << 31)
 #define I915_ISP_INTERRUPT				(1 << 22)
 #define I915_LPE_PIPE_B_INTERRUPT			(1 << 21)
@@ -58,35 +60,16 @@
 #define  GEN8_GT_BCS_IRQ		(1 << 1)
 #define  GEN8_GT_RCS_IRQ		(1 << 0)
 
-#define GEN11_GU_MISC_ISR	_MMIO(0x444f0)
-#define GEN11_GU_MISC_IMR	_MMIO(0x444f4)
-#define GEN11_GU_MISC_IIR	_MMIO(0x444f8)
-#define GEN11_GU_MISC_IER	_MMIO(0x444fc)
-#define  GEN11_GU_MISC_GSE	(1 << 27)
-
-#define GEN11_GU_MISC_IRQ_REGS		I915_IRQ_REGS(GEN11_GU_MISC_IMR, \
-						      GEN11_GU_MISC_IER, \
-						      GEN11_GU_MISC_IIR)
-
-#define GEN11_GFX_MSTR_IRQ		_MMIO(0x190010)
-#define  GEN11_MASTER_IRQ		(1 << 31)
-#define  GEN11_PCU_IRQ			(1 << 30)
-#define  GEN11_GU_MISC_IRQ		(1 << 29)
-#define  GEN11_DISPLAY_IRQ		(1 << 16)
-#define  GEN11_GT_DW_IRQ(x)		(1 << (x))
-#define  GEN11_GT_DW1_IRQ		(1 << 1)
-#define  GEN11_GT_DW0_IRQ		(1 << 0)
-
 #define SCPD0		_MMIO(0x209c) /* 915+ only */
 #define  SCPD_FBC_IGNORE_3D			(1 << 6)
 #define  CSTATE_RENDER_CLOCK_GATE_DISABLE	(1 << 5)
 
-#define VLV_IIR_RW	_MMIO(VLV_DISPLAY_BASE + 0x2084)
-#define VLV_IER		_MMIO(VLV_DISPLAY_BASE + 0x20a0)
-#define VLV_IIR		_MMIO(VLV_DISPLAY_BASE + 0x20a4)
-#define VLV_IMR		_MMIO(VLV_DISPLAY_BASE + 0x20a8)
-#define VLV_ISR		_MMIO(VLV_DISPLAY_BASE + 0x20ac)
-#define VLV_PCBR	_MMIO(VLV_DISPLAY_BASE + 0x2120)
+#define VLV_IIR_RW	_MMIO(__VLV_DISPLAY_BASE + 0x2084)
+#define VLV_IER		_MMIO(__VLV_DISPLAY_BASE + 0x20a0)
+#define VLV_IIR		_MMIO(__VLV_DISPLAY_BASE + 0x20a4)
+#define VLV_IMR		_MMIO(__VLV_DISPLAY_BASE + 0x20a8)
+#define VLV_ISR		_MMIO(__VLV_DISPLAY_BASE + 0x20ac)
+#define VLV_PCBR	_MMIO(__VLV_DISPLAY_BASE + 0x2120)
 #define VLV_PCBR_ADDR_SHIFT	12
 
 #endif

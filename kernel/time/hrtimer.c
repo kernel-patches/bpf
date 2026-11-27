@@ -1000,7 +1000,7 @@ void clock_was_set(unsigned int bases)
 				cpumask_set_cpu(cpu, mask);
 		}
 		scoped_guard(preempt)
-			smp_call_function_many(mask, retrigger_next_event, NULL, 1);
+			on_each_cpu_mask(mask, retrigger_next_event, NULL, 1);
 	}
 	free_cpumask_var(mask);
 
@@ -1120,6 +1120,36 @@ u64 hrtimer_forward(struct hrtimer *timer, ktime_t now, ktime_t interval)
 	return orun;
 }
 EXPORT_SYMBOL_GPL(hrtimer_forward);
+
+/**
+ * hrtimer_forward_safe_from_callback() - forward the timer expiry under the base lock
+ * @timer:	hrtimer to forward
+ * @now:	forward past this time
+ * @interval:	the interval to forward
+ *
+ * Variant of hrtimer_forward() which is safe against a concurrent
+ * hrtimer_start(). The expiry is updated with the base lock held. If the
+ * timer is already queued, the expiry is not changed.
+ *
+ * Context: Only from the callback function of @timer.
+ *
+ * Return: The number of overruns, or 0 if the expiry was not changed.
+ */
+u64 hrtimer_forward_safe_from_callback(struct hrtimer *timer, ktime_t now,
+				       ktime_t interval)
+{
+	unsigned long flags;
+	u64 orun = 0;
+
+	lock_hrtimer_base(timer, &flags);
+
+	if (!timer->is_queued)
+		orun = hrtimer_forward(timer, now, interval);
+
+	unlock_hrtimer_base(timer, &flags);
+	return orun;
+}
+EXPORT_SYMBOL_GPL(hrtimer_forward_safe_from_callback);
 
 /*
  * enqueue_hrtimer - internal function to (re)start a timer
@@ -2293,6 +2323,7 @@ void hrtimer_run_queues(void)
 	struct hrtimer_cpu_base *cpu_base = this_cpu_ptr(&hrtimer_bases);
 	unsigned long flags;
 	ktime_t now;
+	unsigned int seq;
 
 	if (hrtimer_hres_active(cpu_base))
 		return;
@@ -2310,7 +2341,10 @@ void hrtimer_run_queues(void)
 	}
 
 	raw_spin_lock_irqsave(&cpu_base->lock, flags);
+	seq = cpu_base->clock_was_set_seq;
 	now = hrtimer_update_base(cpu_base);
+	if (seq != cpu_base->clock_was_set_seq)
+		hrtimer_update_next_event(cpu_base);
 
 	if (!ktime_before(now, cpu_base->softirq_expires_next)) {
 		cpu_base->softirq_expires_next = KTIME_MAX;

@@ -30,7 +30,7 @@ static int read_mode = -1;
 static int sleep_time;
 static int write_byte_offset = -1;
 static int read_byte_offset = -1;
-static uint8_t write_value = -1;
+static unsigned long write_value = EC_SPACE_SIZE;
 
 void usage(char progname[], int exit_status)
 {
@@ -103,10 +103,9 @@ void parse_opts(int argc, char *argv[])
 				write_byte_offset, EC_SPACE_SIZE - 1);
 			usage(argv[0], EXIT_FAILURE);
 		}
-		if (write_value < 0 ||
-		    write_value >= 255) {
-			fprintf(stderr, "Wrong byte offset 0x%.2x, valid:"
-				"[0-0xff]\n", write_byte_offset);
+		if (write_value >= EC_SPACE_SIZE) {
+			fprintf(stderr, "Wrong byte value 0x%lx, valid: [0-0xff]\n",
+				write_value);
 			usage(argv[0], EXIT_FAILURE);
 		}
 	}

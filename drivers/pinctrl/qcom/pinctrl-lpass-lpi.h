@@ -11,6 +11,7 @@
 
 #include "../core.h"
 
+struct dev_pm_ops;
 struct platform_device;
 
 struct pinctrl_pin_desc;
@@ -144,5 +145,7 @@ struct lpi_pinctrl_variant_data {
 
 int lpi_pinctrl_probe(struct platform_device *pdev);
 void lpi_pinctrl_remove(struct platform_device *pdev);
+
+extern const struct dev_pm_ops lpi_pinctrl_pm_ops;
 
 #endif /*__PINCTRL_LPASS_LPI_H__*/

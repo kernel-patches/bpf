@@ -881,13 +881,8 @@ static int dispatch_proc_show(struct seq_file *m, void *v)
 	return ibm->read(m);
 }
 
-static int dispatch_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, dispatch_proc_show, pde_data(inode));
-}
-
 static ssize_t dispatch_proc_write(struct file *file,
-			const char __user *userbuf,
+			char *buf,
 			size_t count, loff_t *pos)
 {
 	struct ibm_struct *ibm = pde_data(file_inode(file));
@@ -895,14 +890,8 @@ static ssize_t dispatch_proc_write(struct file *file,
 
 	if (!ibm || !ibm->write)
 		return -EINVAL;
-	if (count > PAGE_SIZE - 1)
-		return -EINVAL;
 
-	char *kernbuf __free(kfree) = memdup_user_nul(userbuf, count);
-	if (IS_ERR(kernbuf))
-		return PTR_ERR(kernbuf);
-
-	ret = ibm->write(kernbuf);
+	ret = ibm->write(buf);
 	if (ret)
 		return ret;
 
@@ -910,11 +899,8 @@ static ssize_t dispatch_proc_write(struct file *file,
 }
 
 static const struct proc_ops dispatch_proc_ops = {
-	.proc_open	= dispatch_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
-	.proc_write	= dispatch_proc_write,
+	.proc_show	= dispatch_proc_show,
+	.proc_write_buf	= dispatch_proc_write,
 };
 
 /****************************************************************************
@@ -5608,15 +5594,20 @@ static const char * const tpacpi_led_names[TPACPI_LED_NUMLEDS] = {
 	"tpacpi::unknown_led3",
 	"tpacpi::thinkvantage",
 };
-#define TPACPI_SAFE_LEDS	0x1481U
+
+#define TPACPI_SAFE_LEDS		0x1481U
+
+#ifdef CONFIG_THINKPAD_ACPI_UNSAFE_LEDS
+#define TPACPI_UNRESTRICTED_LEDS	0xFFFFU
+#else
+#define TPACPI_UNRESTRICTED_LEDS	TPACPI_SAFE_LEDS
+#endif
+
+static unsigned int unrestricted_leds = TPACPI_UNRESTRICTED_LEDS;
 
 static inline bool tpacpi_is_led_restricted(const unsigned int led)
 {
-#ifdef CONFIG_THINKPAD_ACPI_UNSAFE_LEDS
-	return false;
-#else
-	return (1U & (TPACPI_SAFE_LEDS >> led)) == 0;
-#endif
+	return !(unrestricted_leds & BIT(led));
 }
 
 static int led_get_status(const unsigned int led)
@@ -5892,9 +5883,9 @@ static int __init led_init(struct ibm_init_struct *iibm)
 		}
 	}
 
-#ifdef CONFIG_THINKPAD_ACPI_UNSAFE_LEDS
-	pr_notice("warning: userspace override of important firmware LEDs is enabled\n");
-#endif
+	if (unrestricted_leds & ~TPACPI_SAFE_LEDS)
+		pr_notice("warning: userspace override of important firmware LEDs is enabled\n");
+
 	return 0;
 }
 
@@ -10077,13 +10068,13 @@ static int __init tpacpi_battery_init(struct ibm_init_struct *ibm)
 					battery_quirk_table,
 					ARRAY_SIZE(battery_quirk_table));
 
-	battery_hook_register(&battery_hook);
+	acpi_battery_hook_register(&battery_hook);
 	return 0;
 }
 
 static void tpacpi_battery_exit(void)
 {
-	battery_hook_unregister(&battery_hook);
+	acpi_battery_hook_unregister(&battery_hook);
 }
 
 static struct ibm_struct battery_driver_data = {
@@ -12237,6 +12228,10 @@ MODULE_PARM_DESC(uwb_state,
 
 module_param(profile_force, int, 0444);
 MODULE_PARM_DESC(profile_force, "Force profile mode. -1=off, 1=MMC, 2=PSC");
+
+module_param(unrestricted_leds, uint, 0444);
+MODULE_PARM_DESC(unrestricted_leds,
+		 "Bitmask. Set/clear a bit to enable/disable unrestricted access to an LED");
 
 static void thinkpad_acpi_module_exit(void)
 {

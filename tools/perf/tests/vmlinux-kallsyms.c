@@ -113,6 +113,7 @@ static bool is_ignored_symbol(const char *name, char type)
 struct test__vmlinux_matches_kallsyms_cb_args {
 	struct machine kallsyms;
 	struct map *vmlinux_map;
+	int err;
 	bool header_printed;
 };
 
@@ -185,16 +186,101 @@ static int test__vmlinux_matches_kallsyms_cb3(struct map *map, void *data)
 	return 0;
 }
 
+static int test__vmlinux_matches_kallsyms_sym_cb(struct symbol *sym, void *data)
+{
+	struct test__vmlinux_matches_kallsyms_cb_args *args = data;
+	/*
+	 * Step 4:
+	 *
+	 * kallsyms will be internally on demand sorted by name so that we can
+	 * find the reference relocation * symbol, i.e. the symbol we will use
+	 * to see if the running kernel was relocated by checking if it has the
+	 * same value in the vmlinux file we load.
+	 */
+	struct map *kallsyms_map = machine__kernel_map(&args->kallsyms);
+	struct symbol *pair, *first_pair;
+	u64 mem_start, mem_end;
+
+	if (sym->start == sym->end)
+		return 0;
+
+	mem_start = map__unmap_ip(args->vmlinux_map, sym->start);
+	mem_end = map__unmap_ip(args->vmlinux_map, sym->end);
+
+	first_pair = machine__find_kernel_symbol(&args->kallsyms, mem_start, NULL);
+	pair = first_pair;
+
+	if (pair && UM(pair->start) == mem_start) {
+next_pair:
+		if (arch__compare_symbol_names(sym->name, pair->name) == 0) {
+			/*
+			 * kallsyms don't have the symbol end, so we
+			 * set that by using the next symbol start - 1,
+			 * in some cases we get this up to a page
+			 * wrong, trace_kmalloc when I was developing
+			 * this code was one such example, 2106 bytes
+			 * off the real size. More than that and we
+			 * _really_ have a problem.
+			 */
+			s64 skew = mem_end - UM(pair->end);
+
+			if (llabs(skew) >= page_size) {
+				pr_debug("WARN: %#" PRIx64 ": diff end addr for %s v: %#"
+					 PRIx64 " k: %#" PRIx64 "\n",
+					 mem_start, sym->name, mem_end,
+					 UM(pair->end));
+			}
+
+			/*
+			 * Do not count this as a failure, because we
+			 * could really find a case where it's not
+			 * possible to get proper function end from
+			 * kallsyms.
+			 */
+			return 0;
+		}
+		pair = machine__find_kernel_symbol_by_name(&args->kallsyms,
+							   sym->name, NULL);
+		if (pair) {
+			if (UM(pair->start) == mem_start)
+				goto next_pair;
+
+			pr_debug("WARN: %#" PRIx64 ": diff name v: %s k: %s\n",
+				 mem_start, sym->name, pair->name);
+		} else {
+			pr_debug("WARN: %#" PRIx64 ": diff name v: %s k: %s\n",
+				 mem_start, sym->name, first_pair->name);
+		}
+
+		return 0;
+	}
+
+	if (mem_start == map__end(args->kallsyms.vmlinux_map)) {
+		/*
+		 * Ignore aliases to _etext, i.e. to the end of the kernel text area,
+		 * such as __indirect_thunk_end.
+		 */
+		return 0;
+	}
+	if (is_ignored_symbol(sym->name, symbol__type(sym))) {
+		/*
+		 * Ignore hidden symbols, see scripts/kallsyms.c for the details
+		 */
+		return 0;
+	}
+	pr_debug("ERR : %#" PRIx64 ": %s not on kallsyms\n",
+		 mem_start, sym->name);
+
+	args->err = -1;
+	return 0;
+}
+
 static int test__vmlinux_matches_kallsyms(struct test_suite *test __maybe_unused,
 					int subtest __maybe_unused)
 {
 	int err = TEST_FAIL;
-	struct rb_node *nd;
-	struct symbol *sym;
-	struct map *kallsyms_map;
 	struct machine vmlinux = { 0 };
 	struct maps *maps;
-	u64 mem_start, mem_end;
 	struct test__vmlinux_matches_kallsyms_cb_args args;
 
 	/*
@@ -241,16 +327,6 @@ static int test__vmlinux_matches_kallsyms(struct test_suite *test __maybe_unused
 	}
 
 	/*
-	 * Step 4:
-	 *
-	 * kallsyms will be internally on demand sorted by name so that we can
-	 * find the reference relocation * symbol, i.e. the symbol we will use
-	 * to see if the running kernel was relocated by checking if it has the
-	 * same value in the vmlinux file we load.
-	 */
-	kallsyms_map = machine__kernel_map(&args.kallsyms);
-
-	/*
 	 * Step 5:
 	 *
 	 * Now repeat step 2, this time for the vmlinux file we'll auto-locate.
@@ -279,7 +355,7 @@ static int test__vmlinux_matches_kallsyms(struct test_suite *test __maybe_unused
 		goto out;
 	}
 
-	err = 0;
+	args.err = 0;
 	/*
 	 * Step 7:
 	 *
@@ -287,79 +363,8 @@ static int test__vmlinux_matches_kallsyms(struct test_suite *test __maybe_unused
 	 * in the kallsyms dso. For the ones that are in both, check its names and
 	 * end addresses too.
 	 */
-	map__for_each_symbol(args.vmlinux_map, sym, nd) {
-		struct symbol *pair, *first_pair;
-
-		sym  = rb_entry(nd, struct symbol, rb_node);
-
-		if (sym->start == sym->end)
-			continue;
-
-		mem_start = map__unmap_ip(args.vmlinux_map, sym->start);
-		mem_end = map__unmap_ip(args.vmlinux_map, sym->end);
-
-		first_pair = machine__find_kernel_symbol(&args.kallsyms, mem_start, NULL);
-		pair = first_pair;
-
-		if (pair && UM(pair->start) == mem_start) {
-next_pair:
-			if (arch__compare_symbol_names(sym->name, pair->name) == 0) {
-				/*
-				 * kallsyms don't have the symbol end, so we
-				 * set that by using the next symbol start - 1,
-				 * in some cases we get this up to a page
-				 * wrong, trace_kmalloc when I was developing
-				 * this code was one such example, 2106 bytes
-				 * off the real size. More than that and we
-				 * _really_ have a problem.
-				 */
-				s64 skew = mem_end - UM(pair->end);
-				if (llabs(skew) >= page_size)
-					pr_debug("WARN: %#" PRIx64 ": diff end addr for %s v: %#" PRIx64 " k: %#" PRIx64 "\n",
-						 mem_start, sym->name, mem_end,
-						 UM(pair->end));
-
-				/*
-				 * Do not count this as a failure, because we
-				 * could really find a case where it's not
-				 * possible to get proper function end from
-				 * kallsyms.
-				 */
-				continue;
-			} else {
-				pair = machine__find_kernel_symbol_by_name(&args.kallsyms,
-									   sym->name, NULL);
-				if (pair) {
-					if (UM(pair->start) == mem_start)
-						goto next_pair;
-
-					pr_debug("WARN: %#" PRIx64 ": diff name v: %s k: %s\n",
-						 mem_start, sym->name, pair->name);
-				} else {
-					pr_debug("WARN: %#" PRIx64 ": diff name v: %s k: %s\n",
-						 mem_start, sym->name, first_pair->name);
-				}
-
-				continue;
-			}
-		} else if (mem_start == map__end(args.kallsyms.vmlinux_map)) {
-			/*
-			 * Ignore aliases to _etext, i.e. to the end of the kernel text area,
-			 * such as __indirect_thunk_end.
-			 */
-			continue;
-		} else if (is_ignored_symbol(sym->name, symbol__type(sym))) {
-			/*
-			 * Ignore hidden symbols, see scripts/kallsyms.c for the details
-			 */
-			continue;
-		} else {
-			pr_debug("ERR : %#" PRIx64 ": %s not on kallsyms\n",
-				 mem_start, sym->name);
-		}
-
-		err = -1;
-	}
+	map__for_each_symbol(args.vmlinux_map, test__vmlinux_matches_kallsyms_sym_cb, &args);
+	err = args.err;
 
 	if (verbose <= 0)
 		goto out;

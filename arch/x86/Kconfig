@@ -66,6 +66,7 @@ config X86
 	select ARCH_CLOCKSOURCE_INIT
 	select ARCH_CONFIGURES_CPU_MITIGATIONS
 	select ARCH_CORRECT_STACKTRACE_ON_KRETPROBE
+	select ARCH_DEFAULT_CRASH_DUMP
 	select ARCH_ENABLE_HUGEPAGE_MIGRATION if X86_64 && HUGETLB_PAGE && MIGRATION
 	select ARCH_ENABLE_MEMORY_HOTPLUG if X86_64
 	select ARCH_ENABLE_SPLIT_PMD_PTLOCK if (PGTABLE_LEVELS > 2) && (X86_64 || X86_PAE)
@@ -88,6 +89,7 @@ config X86
 	select ARCH_HAS_FAST_MULTIPLIER
 	select ARCH_HAS_FORTIFY_SOURCE
 	select ARCH_HAS_GCOV_PROFILE_ALL
+	select ARCH_HAS_GENERIC_CRASHKERNEL_RESERVATION	if CRASH_RESERVE
 	select ARCH_HAS_KCOV			if X86_64
 	select ARCH_HAS_KERNEL_FPU_SUPPORT
 	select ARCH_HAS_MEM_ENCRYPT
@@ -129,6 +131,16 @@ config X86
 	select ARCH_SUPPORTS_KMAP_LOCAL_FORCE_MAP	if NR_CPUS <= 4096
 	select ARCH_SUPPORTS_CFI		if X86_64
 	select ARCH_SUPPORTS_CMDLINE_FROM_BOOTCONFIG
+	select ARCH_SUPPORTS_CRASH_DUMP		if X86_64 || (X86_32 && HIGHMEM)
+	select ARCH_SUPPORTS_CRASH_HOTPLUG
+	select ARCH_SUPPORTS_KEXEC
+	select ARCH_SUPPORTS_KEXEC_BZIMAGE_VERIFY_SIG
+	select ARCH_SUPPORTS_KEXEC_FILE		if X86_64
+	select ARCH_SUPPORTS_KEXEC_HANDOVER	if X86_64
+	select ARCH_SUPPORTS_KEXEC_JUMP
+	select ARCH_SUPPORTS_KEXEC_PURGATORY
+	select ARCH_SUPPORTS_KEXEC_SIG
+	select ARCH_SUPPORTS_KEXEC_SIG_FORCE
 	select ARCH_USES_CFI_TRAPS		if X86_64 && CFI
 	select ARCH_SUPPORTS_LTO_CLANG
 	select ARCH_SUPPORTS_LTO_CLANG_THIN
@@ -140,6 +152,7 @@ config X86
 	select ARCH_USE_QUEUED_SPINLOCKS
 	select ARCH_USE_SYM_ANNOTATIONS
 	select ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
+	select ARCH_WANT_BPF_JIT_ALWAYS_ON	if X86_64
 	select ARCH_WANT_DEFAULT_BPF_JIT	if X86_64
 	select ARCH_WANTS_CLOCKSOURCE_READ_INLINE	if X86_64
 	select ARCH_WANTS_DYNAMIC_TASK_STRUCT
@@ -1602,36 +1615,6 @@ config X86_PMEM_LEGACY
 
 	  Say Y if unsure.
 
-config X86_CHECK_BIOS_CORRUPTION
-	bool "Check for low memory corruption"
-	help
-	  Periodically check for memory corruption in low memory, which
-	  is suspected to be caused by BIOS.  Even when enabled in the
-	  configuration, it is disabled at runtime.  Enable it by
-	  setting "memory_corruption_check=1" on the kernel command
-	  line.  By default it scans the low 64k of memory every 60
-	  seconds; see the memory_corruption_check_size and
-	  memory_corruption_check_period parameters in
-	  Documentation/admin-guide/kernel-parameters.rst to adjust this.
-
-	  When enabled with the default parameters, this option has
-	  almost no overhead, as it reserves a relatively small amount
-	  of memory and scans it infrequently.  It both detects corruption
-	  and prevents it from affecting the running system.
-
-	  It is, however, intended as a diagnostic tool; if repeatable
-	  BIOS-originated corruption always affects the same memory,
-	  you can use memmap= to prevent the kernel from using that
-	  memory.
-
-config X86_BOOTPARAM_MEMORY_CORRUPTION_CHECK
-	bool "Set the default setting of memory_corruption_check"
-	depends on X86_CHECK_BIOS_CORRUPTION
-	default y
-	help
-	  Set whether the default state of memory_corruption_check is
-	  on or off.
-
 config MTRR
 	def_bool y
 	prompt "MTRR (Memory Type Range Register) support" if EXPERT
@@ -1948,46 +1931,10 @@ config EFI_RUNTIME_MAP
 
 source "kernel/Kconfig.hz"
 
-config ARCH_SUPPORTS_KEXEC
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_FILE
-	def_bool X86_64
-
 config ARCH_SELECTS_KEXEC_FILE
 	def_bool y
 	depends on KEXEC_FILE
 	select HAVE_IMA_KEXEC if IMA
-
-config ARCH_SUPPORTS_KEXEC_PURGATORY
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_SIG
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_SIG_FORCE
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_BZIMAGE_VERIFY_SIG
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_JUMP
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_HANDOVER
-	def_bool X86_64
-
-config ARCH_SUPPORTS_CRASH_DUMP
-	def_bool X86_64 || (X86_32 && HIGHMEM)
-
-config ARCH_DEFAULT_CRASH_DUMP
-	def_bool y
-
-config ARCH_SUPPORTS_CRASH_HOTPLUG
-	def_bool y
-
-config ARCH_HAS_GENERIC_CRASHKERNEL_RESERVATION
-	def_bool CRASH_RESERVE
 
 config PHYSICAL_START
 	hex "Physical address where the kernel is loaded" if (EXPERT || CRASH_DUMP)

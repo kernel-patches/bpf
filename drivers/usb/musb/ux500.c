@@ -155,6 +155,7 @@ static int ux500_musb_init(struct musb *musb)
 	status = usb_register_notifier(musb->xceiv, &musb->nb);
 	if (status < 0) {
 		dev_dbg(musb->controller, "notification register failed\n");
+		usb_put_phy(musb->xceiv);
 		return status;
 	}
 

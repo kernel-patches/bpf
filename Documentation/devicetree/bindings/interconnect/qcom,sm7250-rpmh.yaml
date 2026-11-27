@@ -1,0 +1,176 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/interconnect/qcom,sm7250-rpmh.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Qualcomm RPMh Network-On-Chip Interconnect on SM7250
+
+maintainers:
+  - Ishu Brar <patches@brar.si>
+
+description: |
+  RPMh interconnect providers support system bandwidth requirements through
+  RPMh hardware accelerators known as Bus Clock Manager (BCM). The provider is
+  able to communicate with the BCM through the Resource State Coordinator (RSC)
+  associated with each execution environment. Provider nodes must point to at
+  least one RPMh device child node pertaining to their RSC and each provider
+  can map to multiple RPMh resources.
+
+  See also: include/dt-bindings/interconnect/qcom,sm7250-rpmh.h
+
+properties:
+  compatible:
+    enum:
+      - qcom,sm7250-aggre1-noc
+      - qcom,sm7250-aggre2-noc
+      - qcom,sm7250-config-noc
+      - qcom,sm7250-dc-noc
+      - qcom,sm7250-gem-noc
+      - qcom,sm7250-mmss-noc
+      - qcom,sm7250-npu-noc
+      - qcom,sm7250-system-noc
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    minItems: 1
+    maxItems: 2
+
+  interconnect:
+    type: object
+    description:
+      Interconnect provider without a register space of its own. The
+      compute-noc QoS registers are within the aggre2-noc register space.
+      The mc-virt and qup-virt providers are virtual and have no registers.
+
+    allOf:
+      - $ref: qcom,rpmh-common.yaml#
+
+    properties:
+      compatible:
+        enum:
+          - qcom,sm7250-compute-noc
+          - qcom,sm7250-mc-virt
+          - qcom,sm7250-qup-virt
+
+    required:
+      - compatible
+
+    unevaluatedProperties: false
+
+required:
+  - compatible
+  - reg
+
+allOf:
+  - $ref: qcom,rpmh-common.yaml#
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: qcom,sm7250-aggre1-noc
+    then:
+      properties:
+        clocks:
+          items:
+            - description: aggre UFS PHY AXI clock
+            - description: aggre USB3 PRIM AXI clock
+      required:
+        - clocks
+
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: qcom,sm7250-aggre2-noc
+    then:
+      properties:
+        clocks:
+          items:
+            - description: RPMH CC IPA clock
+        interconnect:
+          properties:
+            compatible:
+              const: qcom,sm7250-compute-noc
+      required:
+        - clocks
+
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: qcom,sm7250-gem-noc
+    then:
+      properties:
+        interconnect:
+          properties:
+            compatible:
+              const: qcom,sm7250-mc-virt
+
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: qcom,sm7250-system-noc
+    then:
+      properties:
+        interconnect:
+          properties:
+            compatible:
+              const: qcom,sm7250-qup-virt
+
+  - if:
+      properties:
+        compatible:
+          contains:
+            enum:
+              - qcom,sm7250-config-noc
+              - qcom,sm7250-dc-noc
+              - qcom,sm7250-gem-noc
+              - qcom,sm7250-mmss-noc
+              - qcom,sm7250-npu-noc
+              - qcom,sm7250-system-noc
+    then:
+      properties:
+        clocks: false
+
+  - if:
+      properties:
+        compatible:
+          contains:
+            enum:
+              - qcom,sm7250-aggre1-noc
+              - qcom,sm7250-config-noc
+              - qcom,sm7250-dc-noc
+              - qcom,sm7250-mmss-noc
+              - qcom,sm7250-npu-noc
+    then:
+      properties:
+        interconnect: false
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    interconnect@16e0000 {
+        compatible = "qcom,sm7250-aggre1-noc";
+        reg = <0x016e0000 0x15080>;
+        #interconnect-cells = <2>;
+        clocks = <&gcc 4>, <&gcc 5>;
+        qcom,bcm-voters = <&apps_bcm_voter>;
+    };
+
+    interconnect@1620000 {
+        compatible = "qcom,sm7250-system-noc";
+        reg = <0x01620000 0x19200>;
+        #interconnect-cells = <2>;
+        qcom,bcm-voters = <&apps_bcm_voter>;
+
+        interconnect {
+            compatible = "qcom,sm7250-qup-virt";
+            #interconnect-cells = <2>;
+            qcom,bcm-voters = <&apps_bcm_voter>;
+        };
+    };

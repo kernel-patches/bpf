@@ -6,6 +6,7 @@
 #include "xe_vm_madvise.h"
 
 #include <linux/nospec.h>
+#include <linux/sched/signal.h>
 #include <drm/xe_drm.h>
 
 #include "xe_bo.h"
@@ -13,6 +14,7 @@
 #include "xe_pt.h"
 #include "xe_svm.h"
 #include "xe_tlb_inval.h"
+#include "xe_userptr.h"
 #include "xe_vm.h"
 
 struct xe_vmas_in_madvise_range {
@@ -393,17 +395,13 @@ static bool madvise_args_are_sane(struct xe_device *xe, const struct drm_xe_madv
 		break;
 	case DRM_XE_MEM_RANGE_ATTR_PAT:
 	{
-		u16 pat_index, coh_mode;
+		u16 pat_index;
 
 		if (XE_IOCTL_DBG(xe, args->pat_index.val >= xe->pat.n_entries))
 			return false;
 
 		pat_index = array_index_nospec(args->pat_index.val, xe->pat.n_entries);
-		coh_mode = xe_pat_index_get_coh_mode(xe, pat_index);
-		if (XE_IOCTL_DBG(xe, !coh_mode))
-			return false;
-
-		if (XE_WARN_ON(coh_mode > XE_COH_2WAY))
+		if (XE_IOCTL_DBG(xe, !xe_pat_index_is_valid(xe, pat_index)))
 			return false;
 
 		if (XE_IOCTL_DBG(xe, args->pat_index.pad))
@@ -411,6 +409,10 @@ static bool madvise_args_are_sane(struct xe_device *xe, const struct drm_xe_madv
 
 		if (XE_IOCTL_DBG(xe, args->pat_index.reserved))
 			return false;
+
+		if (XE_IOCTL_DBG(xe, xe_pat_wa_14026539277_reserved(xe, pat_index)))
+			return false;
+
 		break;
 	}
 	case DRM_XE_VMA_ATTR_PURGEABLE_STATE:
@@ -592,11 +594,13 @@ int xe_vm_madvise_ioctl(struct drm_device *dev, void *data, struct drm_file *fil
 		.addr = xe_device_uncanonicalize_addr(xe, args->start),
 		.range = args->range,
 	};
+	struct xe_userptr_repin repin = {};
 	struct xe_madvise_details details;
 	u16 pat_index, coh_mode;
 	struct xe_vm *vm;
 	struct drm_exec exec;
 	int err, attr_type;
+	bool repin_again;
 	bool do_retained;
 
 	vm = xe_vm_lookup(xef, args->vm_id);
@@ -629,6 +633,8 @@ int xe_vm_madvise_ioctl(struct drm_device *dev, void *data, struct drm_file *fil
 
 	xe_svm_flush(vm);
 
+retry:
+	repin_again = false;
 	err = down_write_killable(&vm->lock);
 	if (err)
 		goto put_vm;
@@ -642,9 +648,12 @@ int xe_vm_madvise_ioctl(struct drm_device *dev, void *data, struct drm_file *fil
 	if (err)
 		goto unlock_vm;
 
+	xe_userptr_repin_begin(&repin);
 	err = xe_vm_alloc_madvise_vma(vm, madvise_range.addr, args->range);
-	if (err)
+	if (err) {
+		repin_again = err == -EAGAIN;
 		goto madv_fini;
+	}
 
 	err = get_vmas(vm, &madvise_range);
 	if (err || !madvise_range.num_vmas)
@@ -730,6 +739,18 @@ madv_fini:
 	xe_madvise_details_fini(&details);
 unlock_vm:
 	up_write(&vm->lock);
+	if (repin_again) {
+		u32 timeout_ms = READ_ONCE(xe->userptr_repin_timeout_ms);
+
+		if (xe_userptr_repin_should_retry(&repin, timeout_ms)) {
+			cond_resched();
+			if (!signal_pending(current))
+				goto retry;
+			err = -ERESTARTSYS;
+		} else {
+			err = -EBUSY;
+		}
+	}
 
 	/* Write retained value to user after releasing all locks */
 	if (!err && do_retained)

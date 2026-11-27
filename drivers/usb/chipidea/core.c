@@ -642,7 +642,7 @@ static enum ci_role ci_get_role(struct ci_hdrc *ci)
 		} else {
 			/*
 			 * If the controller is not OTG capable, but support
-			 * role switch, the defalt role is gadget, and the
+			 * role switch, the default role is gadget, and the
 			 * user can switch it through debugfs.
 			 */
 			role = CI_ROLE_GADGET;

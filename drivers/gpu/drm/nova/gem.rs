@@ -11,9 +11,9 @@ use kernel::{
     sync::aref::ARef,
 };
 
-use crate::{
-    driver::{NovaDevice, NovaDriver},
-    file::File,
+use crate::driver::{
+    NovaDevice,
+    NovaDriver, //
 };
 
 /// GEM Object inner driver data
@@ -43,7 +43,7 @@ impl NovaObject {
     /// Look up a GEM object handle for a `File` and return an `ObjectRef` for it.
     #[inline]
     pub(crate) fn lookup_handle(
-        file: &drm::File<File>,
+        file: &drm::File<NovaDriver>,
         handle: u32,
     ) -> Result<ARef<gem::Object<Self>>> {
         gem::Object::lookup_handle(file, handle)

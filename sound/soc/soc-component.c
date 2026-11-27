@@ -43,6 +43,12 @@ const char *snd_soc_component_name(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_name);
 
+const char *snd_soc_component_name_prefix(struct snd_soc_component *component)
+{
+	return component->name_prefix;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_name_prefix);
+
 void snd_soc_component_set_priv(struct snd_soc_component *component, void *priv)
 {
 	component->priv = priv;
@@ -55,17 +61,94 @@ void *snd_soc_component_to_priv(struct snd_soc_component *component)
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_to_priv);
 
+struct device *snd_soc_component_to_dev(struct snd_soc_component *component)
+{
+	return component->dev;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_dev);
+
 struct snd_soc_dapm_context *snd_soc_component_to_dapm(struct snd_soc_component *component)
 {
 	return component->dapm;
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_to_dapm);
 
+const struct snd_soc_component_driver *
+snd_soc_component_to_driver(struct snd_soc_component *component)
+{
+	return component->driver;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_driver);
+
+struct snd_soc_card *snd_soc_component_to_card(struct snd_soc_component *component)
+{
+	return component->card;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_card);
+
+struct dentry *snd_soc_component_to_debugfs_root(struct snd_soc_component *component)
+{
+	return component->debugfs_root;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_debugfs_root);
+
+struct regmap *snd_soc_component_to_regmap(struct snd_soc_component *component)
+{
+	return component->regmap;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_to_regmap);
+
 unsigned int snd_soc_component_active(struct snd_soc_component *component)
 {
 	return component->active;
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_active);
+
+void snd_soc_component_active_update(struct snd_soc_component *component, int action)
+{
+	component->active += action;
+}
+
+int snd_soc_component_num_dai(struct snd_soc_component *component)
+{
+	return component->num_dai;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_num_dai);
+
+void snd_soc_component_connect_dai(struct snd_soc_component *component, struct snd_soc_dai *dai)
+{
+	/* dai->list <-> component->dai_list */
+	list_add_tail(snd_soc_dai_to_list(dai), &component->dai_list);
+	component->num_dai++;
+}
+
+void snd_soc_component_device_link_del(struct snd_soc_component *component)
+{
+	if (component->card_device_link) {
+		device_link_del(component->card_device_link);
+		component->card_device_link = NULL;
+	}
+}
+
+int snd_soc_component_device_link_add(struct snd_soc_component *component)
+{
+	struct snd_soc_card *card = snd_soc_component_to_card(component);
+	struct device *card_dev = card->dev;
+	struct device *component_dev = snd_soc_component_to_dev(component);
+
+	if (card_dev == component_dev)
+		return 0;
+
+	component->card_device_link = device_link_add(card_dev, component_dev,
+						      DL_FLAG_STATELESS);
+	if (!component->card_device_link) {
+		dev_warn(card_dev, "Could not create device link to %s\n",
+			 dev_name(component_dev));
+		return -EINVAL;
+	}
+
+	return 0;
+}
 
 /*
  * We might want to check substream by using list.
@@ -386,7 +469,60 @@ int snd_soc_component_of_xlate_dai_name(struct snd_soc_component *component,
 	return -ENOTSUPP;
 }
 
-int snd_soc_component_regmap_val_bytes(struct snd_soc_component *component)
+#ifdef CONFIG_REGMAP
+
+/**
+ * snd_soc_component_regmap_init() - Initialize regmap instance for the
+ *                                   component
+ * @component: The component for which to initialize the regmap instance
+ * @regmap: The regmap instance that should be used by the component
+ *
+ * This function allows deferred assignment of the regmap instance that is
+ * associated with the component. Only use this if the regmap instance is not
+ * yet ready when the component is registered. The function must also be called
+ * before the first IO attempt of the component.
+ */
+void snd_soc_component_regmap_init(struct snd_soc_component *component,
+				   struct regmap *regmap)
+{
+	component->regmap = regmap;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regmap_init);
+
+/**
+ * snd_soc_component_regmap_exit() - De-initialize regmap instance for the
+ *                                   component
+ * @component: The component for which to de-initialize the regmap instance
+ *
+ * Calls regmap_exit() on the regmap instance associated to the component and
+ * removes the regmap instance from the component.
+ *
+ * This function should only be used if snd_soc_component_regmap_init() was used
+ * to initialize the regmap instance.
+ */
+void snd_soc_component_regmap_exit(struct snd_soc_component *component)
+{
+	regmap_exit(component->regmap);
+	component->regmap = NULL;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regmap_exit);
+
+int snd_soc_component_regmap_multi_reg_write_bypassed(struct snd_soc_component *component,
+						      const struct reg_sequence *regs,
+						      int num_regs)
+{
+	struct regmap *regmap = component->regmap;
+
+	if (!regmap)
+		return 0;
+
+	return regmap_multi_reg_write_bypassed(regmap, regs, num_regs);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regmap_multi_reg_write_bypassed);
+
+#endif
+
+int snd_soc_component_regmap_get_val_bytes(struct snd_soc_component *component)
 {
 	int val_bytes;
 
@@ -401,22 +537,7 @@ int snd_soc_component_regmap_val_bytes(struct snd_soc_component *component)
 
 	return val_bytes;
 }
-EXPORT_SYMBOL_GPL(snd_soc_component_regmap_val_bytes);
-
-/**
- * snd_soc_component_regmap_cache_sync() - Sync the register cache with the hardware
- * @component: COMPONENT to sync
- *
- * Note: This function will call regcache_sync()
- */
-int snd_soc_component_regmap_cache_sync(struct snd_soc_component *component)
-{
-	if (!component->regmap)
-		return 0;
-
-	return regcache_sync(component->regmap);
-}
-EXPORT_SYMBOL_GPL(snd_soc_component_regmap_cache_sync);
+EXPORT_SYMBOL_GPL(snd_soc_component_regmap_get_val_bytes);
 
 /**
  * snd_soc_component_regmap_async_complete() - Ensure asynchronous I/O has completed
@@ -432,45 +553,47 @@ void snd_soc_component_regmap_async_complete(struct snd_soc_component *component
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_regmap_async_complete);
 
-#ifdef CONFIG_REGMAP
-
 /**
- * snd_soc_component_init_regmap() - Initialize regmap instance for the
- *                                   component
- * @component: The component for which to initialize the regmap instance
- * @regmap: The regmap instance that should be used by the component
+ * snd_soc_component_regcache_sync() - Sync the register cache with the hardware
+ * @component: COMPONENT to sync
  *
- * This function allows deferred assignment of the regmap instance that is
- * associated with the component. Only use this if the regmap instance is not
- * yet ready when the component is registered. The function must also be called
- * before the first IO attempt of the component.
+ * Note: This function will call regcache_sync()
  */
-void snd_soc_component_init_regmap(struct snd_soc_component *component,
-				   struct regmap *regmap)
+int snd_soc_component_regcache_sync(struct snd_soc_component *component)
 {
-	component->regmap = regmap;
-}
-EXPORT_SYMBOL_GPL(snd_soc_component_init_regmap);
+	if (!component->regmap)
+		return 0;
 
-/**
- * snd_soc_component_exit_regmap() - De-initialize regmap instance for the
- *                                   component
- * @component: The component for which to de-initialize the regmap instance
- *
- * Calls regmap_exit() on the regmap instance associated to the component and
- * removes the regmap instance from the component.
- *
- * This function should only be used if snd_soc_component_init_regmap() was used
- * to initialize the regmap instance.
- */
-void snd_soc_component_exit_regmap(struct snd_soc_component *component)
+	return regcache_sync(component->regmap);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regcache_sync);
+
+void snd_soc_component_regcache_mark_dirty(struct snd_soc_component *component)
 {
-	regmap_exit(component->regmap);
-	component->regmap = NULL;
-}
-EXPORT_SYMBOL_GPL(snd_soc_component_exit_regmap);
+	struct regmap *regmap = component->regmap;
 
-#endif
+	if (regmap)
+		regcache_mark_dirty(regmap);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regcache_mark_dirty);
+
+void snd_soc_component_regcache_cache_only(struct snd_soc_component *component, bool enable)
+{
+	struct regmap *regmap = component->regmap;
+
+	if (regmap)
+		regcache_cache_only(regmap, enable);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regcache_cache_only);
+
+void snd_soc_component_regcache_cache_bypass(struct snd_soc_component *component, bool enable)
+{
+	struct regmap *regmap = component->regmap;
+
+	if (regmap)
+		regcache_cache_bypass(regmap, enable);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_regcache_cache_bypass);
 
 int snd_soc_component_compr_open(struct snd_soc_component *component,
 				 struct snd_compr_stream *cstream)
@@ -1553,3 +1676,300 @@ struct snd_soc_component *snd_soc_component_lookup_by_name(const char *component
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_lookup_by_name);
+
+/**
+ * snd_soc_unregister_dais - Unregister DAIs from the ASoC core
+ *
+ * @component: The component for which the DAIs should be unregistered
+ */
+static void snd_soc_unregister_dais(struct snd_soc_component *component)
+{
+	struct snd_soc_dai *dai, *_dai;
+
+	for_each_component_dais_safe(component, dai, _dai)
+		snd_soc_unregister_dai(dai);
+}
+
+/**
+ * snd_soc_register_dais - Register a DAI with the ASoC core
+ *
+ * @component: The component the DAIs are registered for
+ * @dai_drv: DAI driver to use for the DAIs
+ * @count: Number of DAIs
+ */
+static int snd_soc_register_dais(struct snd_soc_component *component,
+				 struct snd_soc_dai_driver *dai_drv,
+				 size_t count)
+{
+	struct snd_soc_dai *dai;
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < count; i++) {
+		dai = snd_soc_register_dai(component, dai_drv + i, count == 1 &&
+					   component->driver->legacy_dai_naming);
+		if (dai == NULL) {
+			ret = -ENOMEM;
+			goto err;
+		}
+	}
+
+	return 0;
+
+err:
+	snd_soc_unregister_dais(component);
+
+	return ret;
+}
+
+#define ENDIANNESS_MAP(name)						\
+	(SNDRV_PCM_FMTBIT_##name##LE | SNDRV_PCM_FMTBIT_##name##BE)
+static u64 endianness_format_map[] = {
+	ENDIANNESS_MAP(S16_),
+	ENDIANNESS_MAP(U16_),
+	ENDIANNESS_MAP(S24_),
+	ENDIANNESS_MAP(U24_),
+	ENDIANNESS_MAP(S32_),
+	ENDIANNESS_MAP(U32_),
+	ENDIANNESS_MAP(S24_3),
+	ENDIANNESS_MAP(U24_3),
+	ENDIANNESS_MAP(S20_3),
+	ENDIANNESS_MAP(U20_3),
+	ENDIANNESS_MAP(S18_3),
+	ENDIANNESS_MAP(U18_3),
+	ENDIANNESS_MAP(FLOAT_),
+	ENDIANNESS_MAP(FLOAT64_),
+	ENDIANNESS_MAP(IEC958_SUBFRAME_),
+};
+
+/*
+ * Fix up the DAI formats for endianness: codecs don't actually see
+ * the endianness of the data but we're using the CPU format
+ * definitions which do need to include endianness so we ensure that
+ * codec DAIs always have both big and little endian variants set.
+ */
+static void convert_endianness_formats(struct snd_soc_pcm_stream *stream)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(endianness_format_map); i++)
+		if (stream->formats & endianness_format_map[i])
+			stream->formats |= endianness_format_map[i];
+}
+
+struct snd_soc_component *snd_soc_component_new(struct device *dev, const char *name,
+						const struct snd_soc_component_driver *driver)
+{
+	struct snd_soc_component *component;
+
+	component = devm_kzalloc_obj(dev, *component);
+	if (!component)
+		return ERR_PTR(-ENOMEM);
+
+	component->dapm = snd_soc_dapm_alloc(dev);
+	if (!component->dapm)
+		return ERR_PTR(-ENOMEM);
+
+	if (!name) {
+		name = snd_soc_fmt_single_name(dev, NULL);
+		if (!name) {
+			dev_err(dev, "ASoC: Failed to allocate name\n");
+			return ERR_PTR(-ENOMEM);
+		}
+	}
+
+	component->dev = dev;
+	component->name = name;
+	component->driver = driver;
+
+	INIT_LIST_HEAD(&component->dai_list);
+	INIT_LIST_HEAD(&component->dobj_list);
+	INIT_LIST_HEAD(&component->card_list);
+	INIT_LIST_HEAD(&component->list);
+	INIT_LIST_HEAD(&component->card_aux_list);
+	mutex_init(&component->io_mutex);
+
+	return component;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_new);
+
+static void snd_soc_component_unregister_unlocked(struct snd_soc_component *component)
+{
+	struct snd_soc_card *card = component->card;
+
+	snd_soc_unregister_dais(component);
+
+	if (card)
+		snd_soc_card_unbind(card, true);
+
+	list_del(&component->list);
+}
+
+void snd_soc_component_unregister(struct snd_soc_component *component)
+{
+	guard(mutex)(&client_mutex);
+
+	snd_soc_component_unregister_unlocked(component);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_unregister);
+
+int snd_soc_component_register(struct snd_soc_component *component,
+			       struct snd_soc_dai_driver *dai_drv,
+			       int num_dai)
+{
+	int ret;
+	int i;
+	guard(mutex)(&client_mutex);
+
+	if (component->driver->endianness) {
+		for (i = 0; i < num_dai; i++) {
+			convert_endianness_formats(&dai_drv[i].playback);
+			convert_endianness_formats(&dai_drv[i].capture);
+		}
+	}
+
+	ret = snd_soc_register_dais(component, dai_drv, num_dai);
+	if (ret < 0) {
+		dev_err(component->dev, "ASoC: Failed to register DAIs: %d\n",
+			ret);
+		goto err_cleanup;
+	}
+
+	if (!component->driver->write && !component->driver->read) {
+		if (!component->regmap)
+			component->regmap = dev_get_regmap(component->dev,
+							   NULL);
+	}
+
+	/* see for_each_component */
+	list_add(&component->list, snd_soc_component_get_list_head());
+
+	snd_soc_card_rebind();
+
+err_cleanup:
+	if (ret < 0)
+		snd_soc_component_unregister_unlocked(component);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_register);
+
+int snd_soc_register_component(struct device *dev,
+			       const struct snd_soc_component_driver *component_driver,
+			       struct snd_soc_dai_driver *dai_drv,
+			       int num_dai)
+{
+	struct snd_soc_component *component;
+
+	component = snd_soc_component_new(dev, NULL, component_driver);
+	if (IS_ERR(component))
+		return PTR_ERR(component);
+
+	return snd_soc_component_register(component, dai_drv, num_dai);
+}
+EXPORT_SYMBOL_GPL(snd_soc_register_component);
+
+/**
+ * snd_soc_unregister_component - Unregister component using a given driver
+ * from the ASoC core
+ *
+ * @dev: The device to unregister
+ */
+void snd_soc_unregister_component(struct device *dev)
+{
+	guard(mutex)(&client_mutex);
+
+	while (1) {
+		struct snd_soc_component *component = snd_soc_lookup_component_nolocked(dev, NULL);
+
+		if (!component)
+			break;
+
+		snd_soc_component_unregister_unlocked(component);
+	}
+}
+EXPORT_SYMBOL_GPL(snd_soc_unregister_component);
+
+static void devm_component_release(struct device *dev, void *res)
+{
+	struct snd_soc_component **component = res;
+
+	snd_soc_component_unregister(*component);
+}
+
+/**
+ * devm_snd_soc_register_component - resource managed component registration
+ * @dev: Device used to manage component
+ * @cmpnt_drv: Component driver
+ * @dai_drv: DAI driver
+ * @num_dai: Number of DAIs to register
+ *
+ * Register a component with automatic unregistration when the device is
+ * unregistered.
+ */
+int devm_snd_soc_register_component(struct device *dev,
+				    const struct snd_soc_component_driver *cmpnt_drv,
+				    struct snd_soc_dai_driver *dai_drv, int num_dai)
+{
+	const struct snd_soc_component **ptr;
+	struct snd_soc_component *component;
+	int ret = -ENOMEM;
+
+	component = snd_soc_component_new(dev, NULL, cmpnt_drv);
+	if (IS_ERR(component))
+		goto err;
+
+	ptr = devres_alloc(devm_component_release, sizeof(*ptr), GFP_KERNEL);
+	if (!ptr)
+		goto free_component;
+
+	ret = snd_soc_component_register(component, dai_drv, num_dai);
+	if (ret < 0)
+		goto free_devres;
+
+	*ptr = component;
+	devres_add(dev, ptr);
+
+	return ret;
+
+free_devres:
+	devres_free(ptr);
+free_component:
+	devm_kfree(dev, component);
+err:
+	return ret;
+}
+EXPORT_SYMBOL_GPL(devm_snd_soc_register_component);
+
+/**
+ * snd_soc_component_of_simple_xlate_dai_name - Resolve a sound-dai phandle argument to a
+ *                             DAI name by searching the component DAI list.
+ * @component: ASoC component to search.
+ * @args:      Phandle arguments from the sound-dai property; args[0] is the
+ *             DAI ID.
+ * @dai_name:  Output pointer set to the matched DAI name on success.
+ *
+ * Return: 0 on success, -EINVAL if args_count != 1 or no match is found.
+ */
+int snd_soc_component_of_simple_xlate_dai_name(struct snd_soc_component *component,
+					       const struct of_phandle_args *args,
+					       const char **dai_name)
+{
+	struct snd_soc_dai *dai;
+	int id;
+
+	if (args->args_count != 1)
+		return -EINVAL;
+
+	id = args->args[0];
+
+	for_each_component_dais(component, dai) {
+		if (dai->driver->id == id) {
+			*dai_name = snd_soc_dai_name(dai);
+			return 0;
+		}
+	}
+
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_of_simple_xlate_dai_name);

@@ -1432,8 +1432,8 @@ static DEFINE_RUNTIME_DEV_PM_OPS(hi556_pm_ops, hi556_suspend, hi556_resume,
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id hi556_acpi_ids[] = {
-	{"INT3537"},
-	{}
+	{ .id = "INT3537" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, hi556_acpi_ids);

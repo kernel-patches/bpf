@@ -15,6 +15,7 @@
 #include <errno.h>
 #include "addr_location.h"
 #include "path.h"
+#include "rwsem.h"
 #include "symbol_conf.h"
 #include "spark.h"
 #include "util.h"
@@ -55,15 +56,7 @@ static inline bool is_livepatch_symbol(const char *str)
 	return strstarts(str, KLP_SYM_PREFIX);
 }
 
-/*
- * libelf 0.8.x and earlier do not support ELF_C_READ_MMAP;
- * for newer versions we can use mmap to reduce memory usage:
- */
-#ifdef ELF_C_READ_MMAP
-# define PERF_ELF_C_READ_MMAP ELF_C_READ_MMAP
-#else
-# define PERF_ELF_C_READ_MMAP ELF_C_READ
-#endif
+#define PERF_ELF_C_READ_MMAP ELF_C_READ_MMAP
 
 #ifdef HAVE_LIBELF_SUPPORT
 Elf_Scn *elf_section_by_name(Elf *elf, GElf_Ehdr *ep,
@@ -86,12 +79,18 @@ enum symbol_idle_kind {
 #define SYMBOL_FLAG_INLINED         (1 << 11)
 #define SYMBOL_FLAG_ANNOTATE2       (1 << 12)
 #define SYMBOL_FLAG_IFUNC_ALIAS     (1 << 13)
+#define SYMBOL_FLAG_LAZY_NAME       (1 << 14)
+#define SYMBOL_FLAG_NAME_ALLOCATED  (1 << 15)
 /**
- * A symtab entry. When allocated this may be preceded by an annotation (see
- * symbol__annotation) and/or a browser_index (see symbol__browser_index).
+ * A symtab entry.
+ *
+ * The DSO lookups such as dso__find_symbol() load a lazy name before
+ * returning the symbol, and the address lookups return NULL if it cannot
+ * be read. Code that walks dso__symbols() directly must use
+ * dso__named_symbols() or not read the name of a symbol with
+ * SYMBOL_FLAG_LAZY_NAME.
  */
 struct symbol {
-	struct rb_node	rb_node;
 	/** Range of symbol [start, end). */
 	u64		start;
 	u64		end;
@@ -100,12 +99,57 @@ struct symbol {
 	_Atomic uint16_t flags;
 	/** Architecture specific. Unused except on PPC where it holds st_other. */
 	u8		arch_sym;
-	/** The name of length namelen associated with the symbol. */
-	char		name[];
+	union {
+		/** The name of length namelen associated with the symbol. */
+		char	*name;
+		/** File offset of the name while SYMBOL_FLAG_LAZY_NAME is set. */
+		u64	name_off;
+	};
+};
+
+/**
+ * struct symbols - A locked collection of symbols stored in a sorted array.
+ */
+struct symbols {
+	/** @lock: Read/write semaphore synchronizing access to the arrays. */
+	struct rw_semaphore lock;
+	/**
+	 * @symbols: Dynamically allocated array of symbol pointers, sorted by
+	 * address range [start, end) when @sorted is true.
+	 */
+	struct symbol **symbols __guarded_by(&lock);
+	/**
+	 * @symbols_by_name: Optional dynamically allocated array of symbol
+	 * pointers sorted lexicographically by sym->name.
+	 */
+	struct symbol **symbols_by_name __guarded_by(&lock);
+	/** @cnt: Number of valid entries in @symbols. */
+	unsigned int cnt __guarded_by(&lock);
+	/** @allocated: Capacity (in entries) of the @symbols allocation. */
+	unsigned int allocated __guarded_by(&lock);
+	/** @num_by_name: Number of valid entries in @symbols_by_name. */
+	unsigned int num_by_name __guarded_by(&lock);
+	/**
+	 * @sorted_by_name: True when @symbols_by_name is populated and sorted
+	 * by name.
+	 */
+	bool sorted_by_name __guarded_by(&lock);
+	/** @sorted: True when @symbols is sorted by address range. */
+	bool sorted __guarded_by(&lock);
 };
 
 void symbol__delete(struct symbol *sym);
-void symbols__delete(struct rb_root_cached *symbols);
+void symbols__init(struct symbols *symbols);
+void symbols__exit(struct symbols *symbols);
+void symbols__delete(struct symbols *symbols);
+void symbols__sort_read_lock(struct symbols *symbols) __acquires_shared(&symbols->lock);
+
+/* Pairs with the release in symbol__set_loaded_name(). */
+static inline bool symbol__needs_lazy_name(const struct symbol *sym)
+{
+	return (atomic_load_explicit(&sym->flags, memory_order_acquire) &
+		SYMBOL_FLAG_LAZY_NAME) != 0;
+}
 
 static inline u8 symbol__type(const struct symbol *sym)
 {
@@ -150,16 +194,19 @@ void symbol__set_annotate2(struct symbol *sym, bool annotate2);
 void symbol__set_inlined(struct symbol *sym, bool inlined);
 void symbol__set_ifunc_alias(struct symbol *sym, bool ifunc_alias);
 
-/* symbols__for_each_entry - iterate over symbols (rb_root)
+/*
+ * symbols__visit - iterate over symbols calling @cb for each entry
  *
- * @symbols: the rb_root of symbols
- * @pos: the 'struct symbol *' to use as a loop cursor
- * @nd: the 'struct rb_node *' to use as a temporary storage
+ * @symbols: the 'struct symbols *' of symbols
+ * @cb: callback function invoked under @symbols->lock
+ * @data: opaque data pointer passed to @cb
  */
-#define symbols__for_each_entry(symbols, pos, nd)			\
-	for (nd = rb_first_cached(symbols);					\
-	     nd && (pos = rb_entry(nd, struct symbol, rb_node));	\
-	     nd = rb_next(nd))
+int symbols__visit(struct symbols *symbols,
+		   int (*cb)(struct symbol *sym, void *data),
+		   void *data);
+int symbols__visit_by_name(struct symbols *symbols,
+			   int (*cb)(struct symbol *sym, void *data),
+			   void *data);
 
 static inline size_t symbol__size(const struct symbol *sym)
 {
@@ -182,11 +229,6 @@ static inline int __symbol__join_symfs(char *bf, size_t size, const char *path)
 extern int vmlinux_path__nr_entries;
 extern char **vmlinux_path;
 
-static inline void *symbol__priv(struct symbol *sym)
-{
-	return ((void *)sym) - symbol_conf.priv_size;
-}
-
 struct ref_reloc_sym {
 	const char	*name;
 	u64		addr;
@@ -201,8 +243,8 @@ int __dso__load_kallsyms(struct dso *dso, const char *filename, struct map *map,
 			 bool no_kcore);
 int dso__load_kallsyms(struct dso *dso, const char *filename, struct map *map);
 
-void dso__insert_symbol(struct dso *dso,
-			struct symbol *sym);
+int dso__insert_symbol(struct dso *dso,
+		       struct symbol *sym);
 void dso__delete_symbol(struct dso *dso,
 			struct symbol *sym);
 
@@ -211,10 +253,6 @@ struct symbol *dso__find_symbol_nocache(struct dso *dso, u64 addr);
 
 struct symbol *dso__next_symbol_by_name(struct dso *dso, size_t *idx);
 struct symbol *dso__find_symbol_by_name(struct dso *dso, const char *name, size_t *idx);
-
-struct symbol *dso__first_symbol(struct dso *dso);
-struct symbol *dso__last_symbol(struct dso *dso);
-struct symbol *dso__next_symbol(struct symbol *sym);
 
 enum dso_type dso__type_fd(int fd);
 
@@ -233,6 +271,9 @@ void symbol__elf_init(void);
 int symbol__annotation_init(void);
 
 struct symbol *symbol__new(u64 start, u64 len, u8 binding, u8 type, const char *name);
+struct symbol *symbol__new_lazy(u64 start, u64 len, u8 binding, u8 type, u64 name_off);
+void symbol__set_loaded_name(struct symbol *sym, char *name);
+void symbol__set_unknown_name(struct symbol *sym);
 size_t __symbol__fprintf_symname_offs(const struct symbol *sym,
 				      const struct addr_location *al,
 				      bool unknown_as_addr,
@@ -263,13 +304,12 @@ int dso__load_bfd_symbols(struct dso *dso, const char *debugfile);
 int dso__load_sym(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 		  struct symsrc *runtime_ss, int kmodule);
 int dso__synthesize_plt_symbols(struct dso *dso, struct symsrc *ss);
-
 char *dso__demangle_sym(struct dso *dso, int kmodule, const char *elf_name);
 
-void __symbols__insert(struct rb_root_cached *symbols, struct symbol *sym);
-void symbols__insert(struct rb_root_cached *symbols, struct symbol *sym);
-void symbols__fixup_duplicate(struct rb_root_cached *symbols);
-void symbols__fixup_end(struct rb_root_cached *symbols, bool is_kallsyms);
+int symbols__insert(struct symbols *symbols, struct symbol *sym);
+struct symbol *symbols__find(struct symbols *symbols, u64 ip);
+void symbols__fixup_duplicate(struct symbols *symbols);
+void symbols__fixup_end(struct symbols *symbols, bool is_kallsyms);
 
 typedef int (*mapfn_t)(u64 start, u64 len, u64 pgoff, void *data);
 int file__read_maps(int fd, bool exe, mapfn_t mapfn, void *data,
@@ -309,6 +349,7 @@ int arch__compare_symbol_names(const char *namea, const char *nameb);
 int arch__compare_symbol_names_n(const char *namea, const char *nameb,
 				 unsigned int n);
 int arch__choose_best_symbol(struct symbol *syma, struct symbol *symb);
+bool symbol__choice_needs_names(const struct symbol *syma, const struct symbol *symb);
 
 enum symbol_tag_include {
 	SYMBOL_TAG_INCLUDE__NONE = 0,

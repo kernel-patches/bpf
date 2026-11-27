@@ -80,6 +80,21 @@ static const struct rhashtable_params ht_parms = {
 
 static struct rhashtable gl_hash_table;
 
+static const char *state2str(unsigned state)
+{
+	switch(state) {
+	case LM_ST_UNLOCKED:
+		return "UN";
+	case LM_ST_SHARED:
+		return "SH";
+	case LM_ST_DEFERRED:
+		return "DF";
+	case LM_ST_EXCLUSIVE:
+		return "EX";
+	}
+	return "??";
+}
+
 #define GLOCK_WAIT_TABLE_BITS 12
 #define GLOCK_WAIT_TABLE_SIZE (1 << GLOCK_WAIT_TABLE_BITS)
 static wait_queue_head_t glock_wait_table[GLOCK_WAIT_TABLE_SIZE] __cacheline_aligned;
@@ -164,12 +179,9 @@ void gfs2_glock_free_later(struct gfs2_glock *gl) {
 
 static void gfs2_free_dead_glocks(struct gfs2_sbd *sdp)
 {
-	struct list_head *list = &sdp->sd_dead_glocks;
+	struct gfs2_glock *gl, *tmp;
 
-	while(!list_empty(list)) {
-		struct gfs2_glock *gl;
-
-		gl = list_first_entry(list, struct gfs2_glock, gl_dead);
+	list_for_each_entry_safe(gl, tmp, &sdp->sd_dead_glocks, gl_dead) {
 		list_del(&gl->gl_dead);
 		__gfs2_glock_free(gl);
 	}
@@ -547,8 +559,10 @@ static void finish_xmote(struct gfs2_glock *gl, unsigned int ret)
 	/* Check for state != intended state */
 	if (unlikely(gl->gl_state != gl->gl_target)) {
 		struct gfs2_holder *gh = find_first_waiter(gl);
+		struct gfs2_sbd *sdp = glock_sbd(gl);
 
-		if (gh && !test_bit(GLF_DEMOTE_IN_PROGRESS, &gl->gl_flags)) {
+		if (gh && (!test_bit(GLF_DEMOTE_IN_PROGRESS, &gl->gl_flags) ||
+			   gfs2_withdrawn(sdp))) {
 			if (ret & LM_OUT_CANCELED) {
 				list_del_init(&gh->gh_list);
 				trace_gfs2_glock_queue(gh, 0);
@@ -578,10 +592,10 @@ static void finish_xmote(struct gfs2_glock *gl, unsigned int ret)
 			break;
 		default: /* Everything else */
 			fs_err(glock_sbd(gl),
-			       "glock %u:%llu requested=%u ret=%u\n",
+			       "glock %u:%llu requested=%s ret=%u\n",
 			       glock_type(gl), glock_number(gl),
-			       gl->gl_req, ret);
-			GLOCK_BUG_ON(gl, 1);
+			       state2str(gl->gl_req), ret);
+			gfs2_withdraw(sdp);
 		}
 		return;
 	}
@@ -2023,21 +2037,6 @@ void gfs2_wait_glocks(struct gfs2_sbd *sdp)
 	glock_hash_walk(dump_glock_func, sdp);
 	destroy_workqueue(sdp->sd_glock_wq);
 	sdp->sd_glock_wq = NULL;
-}
-
-static const char *state2str(unsigned state)
-{
-	switch(state) {
-	case LM_ST_UNLOCKED:
-		return "UN";
-	case LM_ST_SHARED:
-		return "SH";
-	case LM_ST_DEFERRED:
-		return "DF";
-	case LM_ST_EXCLUSIVE:
-		return "EX";
-	}
-	return "??";
 }
 
 static const char *hflags2str(char *buf, u16 flags, unsigned long iflags)

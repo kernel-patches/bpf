@@ -1522,7 +1522,7 @@
 				regulator-min-microvolt = <400000>;
 				regulator-max-microvolt = <1193750>;
 				regulator-enable-ramp-delay = <256>;
-				regulator-ramp-delay = <6250>;
+				regulator-ramp-delay = <4500>;
 				regulator-allowed-modes = <0 1 2>;
 			};
 		};
@@ -1624,6 +1624,10 @@
 			remote-endpoint = <&ethdr0_in>;
 		};
 	};
+};
+
+&watchdog {
+	mediatek,disable-extrst;
 };
 
 &xhci0 {

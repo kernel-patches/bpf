@@ -514,7 +514,7 @@ static void update_triggers(struct psi_group *group, u64 now,
 			if (t->of)
 				kernfs_notify(t->of->kn);
 			else
-				wake_up_interruptible(&t->event_wait);
+				proc_poll_notify(t->pde);
 		}
 		t->last_event_time = now;
 		/* Reset threshold breach flag once event got generated */
@@ -1327,6 +1327,9 @@ int psi_trigger_create_rtpoll_worker(struct psi_group *group)
 	return 0;
 }
 
+/* the /proc/pressure files, see psi_proc_init() */
+static struct proc_dir_entry *psi_proc_entry[NR_PSI_RESOURCES];
+
 struct psi_trigger *psi_trigger_create(struct psi_group *group, char *buf,
 				       enum psi_res res, struct file *file,
 				       struct kernfs_open_file *of,
@@ -1392,8 +1395,7 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group, char *buf,
 	t->event = 0;
 	t->last_event_time = 0;
 	t->of = of;
-	if (!of)
-		init_waitqueue_head(&t->event_wait);
+	t->pde = of ? NULL : psi_proc_entry[res];
 	t->pending_event = false;
 	t->aggregator = privileged ? PSI_POLL : PSI_AVGS;
 
@@ -1441,7 +1443,7 @@ void psi_trigger_destroy(struct psi_trigger *t)
 	if (t->of)
 		kernfs_notify(t->of->kn);
 	else
-		wake_up_interruptible(&t->event_wait);
+		proc_poll_notify(t->pde);
 
 	if (t->aggregator == PSI_AVGS) {
 		mutex_lock(&group->avgs_lock);
@@ -1495,8 +1497,7 @@ void psi_trigger_destroy(struct psi_trigger *t)
 	kfree(t);
 }
 
-__poll_t psi_trigger_poll(void **trigger_ptr,
-				struct file *file, poll_table *wait)
+__poll_t psi_trigger_poll(void **trigger_ptr, poll_table *wait)
 {
 	__poll_t ret = DEFAULT_POLLMASK;
 	struct psi_trigger *t;
@@ -1508,10 +1509,9 @@ __poll_t psi_trigger_poll(void **trigger_ptr,
 	if (!t)
 		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
 
+	/* a /proc/pressure file is polled on the queue procfs owns for it */
 	if (t->of)
 		kernfs_generic_poll(t->of, wait);
-	else
-		poll_wait(file, &t->event_wait, wait);
 
 	if (cmpxchg(&t->event, 1, 0) == 1)
 		ret |= EPOLLPRI;
@@ -1535,23 +1535,8 @@ static int psi_cpu_show(struct seq_file *m, void *v)
 	return psi_show(m, &psi_system, PSI_CPU);
 }
 
-static int psi_io_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, psi_io_show, NULL);
-}
-
-static int psi_memory_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, psi_memory_show, NULL);
-}
-
-static int psi_cpu_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, psi_cpu_show, NULL);
-}
-
-static ssize_t psi_write(struct file *file, const char __user *user_buf,
-			 size_t nbytes, enum psi_res res)
+static ssize_t psi_write(struct file *file, const char *kbuf, size_t nbytes,
+			 enum psi_res res)
 {
 	char buf[32];
 	size_t buf_size;
@@ -1566,11 +1551,9 @@ static ssize_t psi_write(struct file *file, const char __user *user_buf,
 	if (!nbytes)
 		return -EINVAL;
 
-	buf_size = min(nbytes, sizeof(buf));
-	if (copy_from_user(buf, user_buf, buf_size))
-		return -EFAULT;
-
-	buf[buf_size - 1] = '\0';
+	buf_size = min(nbytes, sizeof(buf) - 1);
+	memcpy(buf, kbuf, buf_size);
+	buf[buf_size] = '\0';
 
 	seq = file->private_data;
 
@@ -1605,29 +1588,29 @@ static ssize_t psi_write(struct file *file, const char __user *user_buf,
 	return nbytes;
 }
 
-static ssize_t psi_io_write(struct file *file, const char __user *user_buf,
-			    size_t nbytes, loff_t *ppos)
+static ssize_t psi_io_write(struct file *file, char *buf, size_t nbytes,
+			    loff_t *ppos)
 {
-	return psi_write(file, user_buf, nbytes, PSI_IO);
+	return psi_write(file, buf, nbytes, PSI_IO);
 }
 
-static ssize_t psi_memory_write(struct file *file, const char __user *user_buf,
-				size_t nbytes, loff_t *ppos)
+static ssize_t psi_memory_write(struct file *file, char *buf, size_t nbytes,
+				loff_t *ppos)
 {
-	return psi_write(file, user_buf, nbytes, PSI_MEM);
+	return psi_write(file, buf, nbytes, PSI_MEM);
 }
 
-static ssize_t psi_cpu_write(struct file *file, const char __user *user_buf,
-			     size_t nbytes, loff_t *ppos)
+static ssize_t psi_cpu_write(struct file *file, char *buf, size_t nbytes,
+			     loff_t *ppos)
 {
-	return psi_write(file, user_buf, nbytes, PSI_CPU);
+	return psi_write(file, buf, nbytes, PSI_CPU);
 }
 
-static __poll_t psi_fop_poll(struct file *file, poll_table *wait)
+static __poll_t psi_fop_poll(struct file *file)
 {
 	struct seq_file *seq = file->private_data;
 
-	return psi_trigger_poll(&seq->private, file, wait);
+	return psi_trigger_poll(&seq->private, NULL);
 }
 
 static int psi_fop_release(struct inode *inode, struct file *file)
@@ -1635,32 +1618,29 @@ static int psi_fop_release(struct inode *inode, struct file *file)
 	struct seq_file *seq = file->private_data;
 
 	psi_trigger_destroy(seq->private);
-	return single_release(inode, file);
+	return 0;
 }
 
 static const struct proc_ops psi_io_proc_ops = {
-	.proc_open	= psi_io_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_write	= psi_io_write,
+	.proc_flags	= PROC_ENTRY_PERMANENT,
+	.proc_show	= psi_io_show,
+	.proc_write_buf	= psi_io_write,
 	.proc_poll	= psi_fop_poll,
 	.proc_release	= psi_fop_release,
 };
 
 static const struct proc_ops psi_memory_proc_ops = {
-	.proc_open	= psi_memory_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_write	= psi_memory_write,
+	.proc_flags	= PROC_ENTRY_PERMANENT,
+	.proc_show	= psi_memory_show,
+	.proc_write_buf	= psi_memory_write,
 	.proc_poll	= psi_fop_poll,
 	.proc_release	= psi_fop_release,
 };
 
 static const struct proc_ops psi_cpu_proc_ops = {
-	.proc_open	= psi_cpu_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_write	= psi_cpu_write,
+	.proc_flags	= PROC_ENTRY_PERMANENT,
+	.proc_show	= psi_cpu_show,
+	.proc_write_buf	= psi_cpu_write,
 	.proc_poll	= psi_fop_poll,
 	.proc_release	= psi_fop_release,
 };
@@ -1671,22 +1651,16 @@ static int psi_irq_show(struct seq_file *m, void *v)
 	return psi_show(m, &psi_system, PSI_IRQ);
 }
 
-static int psi_irq_open(struct inode *inode, struct file *file)
+static ssize_t psi_irq_write(struct file *file, char *buf, size_t nbytes,
+			     loff_t *ppos)
 {
-	return single_open(file, psi_irq_show, NULL);
-}
-
-static ssize_t psi_irq_write(struct file *file, const char __user *user_buf,
-			     size_t nbytes, loff_t *ppos)
-{
-	return psi_write(file, user_buf, nbytes, PSI_IRQ);
+	return psi_write(file, buf, nbytes, PSI_IRQ);
 }
 
 static const struct proc_ops psi_irq_proc_ops = {
-	.proc_open	= psi_irq_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_write	= psi_irq_write,
+	.proc_flags	= PROC_ENTRY_PERMANENT,
+	.proc_show	= psi_irq_show,
+	.proc_write_buf	= psi_irq_write,
 	.proc_poll	= psi_fop_poll,
 	.proc_release	= psi_fop_release,
 };
@@ -1696,11 +1670,15 @@ static int __init psi_proc_init(void)
 {
 	if (psi_enable) {
 		proc_mkdir("pressure", NULL);
-		proc_create("pressure/io", 0666, NULL, &psi_io_proc_ops);
-		proc_create("pressure/memory", 0666, NULL, &psi_memory_proc_ops);
-		proc_create("pressure/cpu", 0666, NULL, &psi_cpu_proc_ops);
+		psi_proc_entry[PSI_IO] = proc_create("pressure/io", 0666, NULL,
+						     &psi_io_proc_ops);
+		psi_proc_entry[PSI_MEM] = proc_create("pressure/memory", 0666,
+						      NULL, &psi_memory_proc_ops);
+		psi_proc_entry[PSI_CPU] = proc_create("pressure/cpu", 0666, NULL,
+						      &psi_cpu_proc_ops);
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
-		proc_create("pressure/irq", 0666, NULL, &psi_irq_proc_ops);
+		psi_proc_entry[PSI_IRQ] = proc_create("pressure/irq", 0666, NULL,
+						      &psi_irq_proc_ops);
 #endif
 	}
 	return 0;

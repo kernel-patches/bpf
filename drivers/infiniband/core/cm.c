@@ -734,11 +734,12 @@ cm_insert_remote_id(struct cm_timewait_info *timewait_info)
 static struct cm_id_private *cm_find_remote_id(__be64 remote_ca_guid,
 					       __be32 remote_id)
 {
-	struct rb_node *node = cm.remote_id_table.rb_node;
+	struct rb_node *node;
 	struct cm_timewait_info *timewait_info;
 	struct cm_id_private *res = NULL;
 
 	spin_lock_irq(&cm.lock);
+	node = cm.remote_id_table.rb_node;
 	while (node) {
 		timewait_info = rb_entry(node, struct cm_timewait_info,
 					 remote_id_node);

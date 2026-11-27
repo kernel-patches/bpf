@@ -25,6 +25,7 @@ struct ltc2471_data {
 
 /* Reference voltage is 1.25V */
 #define LTC2471_VREF 1250
+#define LTC2473_DIFF_OFFSET (-32768)
 
 /* Read two bytes from the I2C bus to obtain the ADC result */
 static int ltc2471_get_value(struct i2c_client *client)
@@ -69,7 +70,7 @@ static int ltc2471_read_raw(struct iio_dev *indio_dev,
 
 	case IIO_CHAN_INFO_OFFSET:
 		/* Only differential chip has this property */
-		*val = -LTC2471_VREF;
+		*val = LTC2473_DIFF_OFFSET;
 		return IIO_VAL_INT;
 
 	default:

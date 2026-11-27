@@ -30,6 +30,11 @@
  */
 #define GET_REPORT_TIMEOUT_MS 2500
 
+/* Default bInterval values */
+#define HIDG_DEFAULT_FS_BINTERVAL 10
+#define HIDG_DEFAULT_HS_BINTERVAL 4
+#define HIDG_DEFAULT_SS_BINTERVAL 4
+
 static int major, minors;
 
 static const struct class hidg_class = {
@@ -62,8 +67,9 @@ struct f_hidg {
 	unsigned short			report_desc_length;
 	char				*report_desc;
 	unsigned short			report_length;
-	unsigned char			interval;
-	bool				interval_user_set;
+	unsigned char			interval_fs;
+	unsigned char			interval_hs;
+	unsigned char			interval_ss;
 
 	/*
 	 * use_out_ep - if true, the OUT Endpoint (interrupt out method)
@@ -94,8 +100,11 @@ struct f_hidg {
 
 	/* get report */
 	struct usb_request		*get_req;
-	struct usb_hidg_report		get_report;
+	void				*get_req_buf;
 	bool				get_report_returned;
+	/* Cancel pending work and distinguish requests across reconfiguration. */
+	bool				get_report_cancelled;
+	unsigned int			get_report_req_tag;
 	int				get_report_req_report_id;
 	int				get_report_req_report_length;
 	spinlock_t			get_report_spinlock;
@@ -121,7 +130,14 @@ static inline struct f_hidg *func_to_hidg(struct usb_function *f)
 static void hidg_release(struct device *dev)
 {
 	struct f_hidg *hidg = container_of(dev, struct f_hidg, dev);
+	struct report_entry *entry, *tmp;
 
+	list_for_each_entry_safe(entry, tmp, &hidg->report_list, node) {
+		list_del(&entry->node);
+		kfree(entry);
+	}
+
+	kfree(hidg->get_req_buf);
 	kfree(hidg->report_desc);
 	kfree(hidg->set_report_buf);
 	kfree(hidg);
@@ -562,10 +578,16 @@ static void get_report_workqueue_handler(struct work_struct *work)
 	struct usb_request		*req;
 	struct report_entry *ptr;
 	unsigned long	flags;
+	unsigned int	req_tag;
 
 	int status = 0;
 
 	spin_lock_irqsave(&hidg->get_report_spinlock, flags);
+	if (hidg->get_report_cancelled) {
+		spin_unlock_irqrestore(&hidg->get_report_spinlock, flags);
+		return;
+	}
+	req_tag = hidg->get_report_req_tag;
 	req = hidg->get_req;
 	if (!req) {
 		spin_unlock_irqrestore(&hidg->get_report_spinlock, flags);
@@ -581,7 +603,7 @@ static void get_report_workqueue_handler(struct work_struct *work)
 	ptr = f_hidg_search_for_report(hidg, hidg->get_report_req_report_id);
 	if (ptr && !ptr->report_data.userspace_req) {
 		/* Report exists in list and it is to be used for immediate response */
-		req->buf = ptr->report_data.data;
+		memcpy(req->buf, ptr->report_data.data, req->length);
 		status = usb_ep_queue(cdev->gadget->ep0, req, GFP_ATOMIC);
 		hidg->get_report_returned = true;
 		spin_unlock_irqrestore(&hidg->get_report_spinlock, flags);
@@ -598,6 +620,11 @@ static void get_report_workqueue_handler(struct work_struct *work)
 		status = wait_event_interruptible_timeout(hidg->get_queue, !GET_REPORT_COND,
 					msecs_to_jiffies(GET_REPORT_TIMEOUT_MS));
 		spin_lock_irqsave(&hidg->get_report_spinlock, flags);
+		if (hidg->get_report_cancelled ||
+		    req_tag != hidg->get_report_req_tag) {
+			spin_unlock_irqrestore(&hidg->get_report_spinlock, flags);
+			return;
+		}
 		req = hidg->get_req;
 		if (!req) {
 			spin_unlock_irqrestore(&hidg->get_report_spinlock, flags);
@@ -616,10 +643,9 @@ static void get_report_workqueue_handler(struct work_struct *work)
 			 * Either get an updated response just serviced by userspace
 			 * or send the latest response in the list
 			 */
-			req->buf = ptr->report_data.data;
+			memcpy(req->buf, ptr->report_data.data, req->length);
 		} else {
-			/* If there are no prevoiusly sent reports send empty report */
-			req->buf = hidg->get_report.data;
+			/* If there are no previously sent reports send empty report */
 			memset(req->buf, 0x0, req->length);
 		}
 
@@ -668,13 +694,7 @@ static int f_hidg_get_report(struct file *file, struct usb_hidg_report __user *b
 
 	if (ptr) {
 		/* Report already exists in list - update it */
-		if (copy_from_user(&ptr->report_data, buffer,
-				sizeof(struct usb_hidg_report))) {
-			spin_unlock_irqrestore(&hidg->get_report_spinlock, flags);
-			ERROR(cdev, "copy_from_user error\n");
-			kfree(entry);
-			return -EINVAL;
-		}
+		ptr->report_data = entry->report_data;
 		kfree(entry);
 	} else {
 		/* Report does not exist in list - add it */
@@ -864,6 +884,8 @@ static int hidg_setup(struct usb_function *f,
 		 * GET_REPORT the request was actually for.
 		 */
 		spin_lock_irqsave(&hidg->get_report_spinlock, flags);
+		hidg->get_report_cancelled = false;
+		hidg->get_report_req_tag++;
 		hidg->get_report_req_report_id = value & 0xff;
 		hidg->get_report_req_report_length = length;
 		spin_unlock_irqrestore(&hidg->get_report_spinlock, flags);
@@ -997,12 +1019,11 @@ static void hidg_disable(struct usb_function *f)
 	}
 
 	spin_lock_irqsave(&hidg->get_report_spinlock, flags);
-	if (!hidg->get_report_returned) {
-		usb_ep_free_request(f->config->cdev->gadget->ep0, hidg->get_req);
-		hidg->get_req = NULL;
-		hidg->get_report_returned = true;
-	}
+	hidg->get_report_cancelled = true;
+	hidg->get_report_req_tag++;
+	hidg->get_report_returned = true;
 	spin_unlock_irqrestore(&hidg->get_report_spinlock, flags);
+	wake_up(&hidg->get_queue);
 
 	spin_lock_irqsave(&hidg->read_spinlock, flags);
 	hidg->disabled = true;
@@ -1155,6 +1176,15 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 	if (!hidg->get_req)
 		return -ENOMEM;
 
+	/*
+	 * The GET_REPORT response is served from a dedicated buffer
+	 * (allocated in hidg_alloc()), not from the report_list
+	 * entries: userspace may update an entry while the controller
+	 * is still reading the previous response, which would corrupt
+	 * the data on the wire.
+	 */
+	hidg->get_req->buf = hidg->get_req_buf;
+
 	hidg->get_req->zero = 0;
 	hidg->get_req->complete = hidg_get_report_complete;
 	hidg->get_req->context = hidg;
@@ -1163,8 +1193,10 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 	/* maybe allocate device-global string IDs, and patch descriptors */
 	us = usb_gstrings_attach(c->cdev, ct_func_strings,
 				 ARRAY_SIZE(ct_func_string_defs));
-	if (IS_ERR(us))
-		return PTR_ERR(us);
+	if (IS_ERR(us)) {
+		status = PTR_ERR(us);
+		goto fail;
+	}
 	hidg_interface_desc.iInterface = us[CT_FUNC_HID_IDX].id;
 
 	/* allocate instance-specific interface IDs, and patch descriptors */
@@ -1204,16 +1236,10 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 	hidg_fs_in_ep_desc.wMaxPacketSize = cpu_to_le16(hidg->report_length);
 	hidg_ss_out_ep_desc.wMaxPacketSize = cpu_to_le16(hidg->report_length);
 
-	/* IN endpoints: FS default=10ms, HS default=4µ-frame; user override if set */
-	if (!hidg->interval_user_set) {
-		hidg_fs_in_ep_desc.bInterval = 10;
-		hidg_hs_in_ep_desc.bInterval = 4;
-		hidg_ss_in_ep_desc.bInterval = 4;
-	} else {
-		hidg_fs_in_ep_desc.bInterval = hidg->interval;
-		hidg_hs_in_ep_desc.bInterval = hidg->interval;
-		hidg_ss_in_ep_desc.bInterval = hidg->interval;
-	}
+	/* IN endpoints */
+	hidg_fs_in_ep_desc.bInterval = hidg->interval_fs;
+	hidg_hs_in_ep_desc.bInterval = hidg->interval_hs;
+	hidg_ss_in_ep_desc.bInterval = hidg->interval_ss;
 
 	hidg_ss_out_comp_desc.wBytesPerInterval =
 				cpu_to_le16(hidg->report_length);
@@ -1238,16 +1264,11 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 		hidg_fs_out_ep_desc.bEndpointAddress;
 
 	if (hidg->use_out_ep) {
-		/* OUT endpoints: same defaults (FS=10, HS=4) unless user set */
-		if (!hidg->interval_user_set) {
-			hidg_fs_out_ep_desc.bInterval = 10;
-			hidg_hs_out_ep_desc.bInterval = 4;
-			hidg_ss_out_ep_desc.bInterval = 4;
-		} else {
-			hidg_fs_out_ep_desc.bInterval = hidg->interval;
-			hidg_hs_out_ep_desc.bInterval = hidg->interval;
-			hidg_ss_out_ep_desc.bInterval = hidg->interval;
-		}
+		/* OUT endpoints */
+		hidg_fs_out_ep_desc.bInterval = hidg->interval_fs;
+		hidg_hs_out_ep_desc.bInterval = hidg->interval_hs;
+		hidg_ss_out_ep_desc.bInterval = hidg->interval_ss;
+
 		status = usb_assign_descriptors(f,
 			    hidg_fs_descriptors_intout,
 			    hidg_hs_descriptors_intout,
@@ -1334,14 +1355,16 @@ static const struct configfs_item_operations hidg_item_ops = {
 	.release	= hid_attr_release,
 };
 
-#define F_HID_OPT(name, prec, limit)					\
+#define F_HID_OPT_U(name, prec, limit)				\
 static ssize_t f_hid_opts_##name##_show(struct config_item *item, char *page)\
 {									\
 	struct f_hid_opts *opts = to_f_hid_opts(item);			\
 	int result;							\
+	u##prec val;							\
 									\
 	mutex_lock(&opts->lock);					\
-	result = sprintf(page, "%d\n", opts->name);			\
+	val = f_hid_opts_get_##name(opts);				\
+	result = sysfs_emit(page, "%d\n", val);				\
 	mutex_unlock(&opts->lock);					\
 									\
 	return result;							\
@@ -1368,7 +1391,7 @@ static ssize_t f_hid_opts_##name##_store(struct config_item *item,	\
 		ret = -EINVAL;						\
 		goto end;						\
 	}								\
-	opts->name = num;						\
+	f_hid_opts_set_##name(opts, num);				\
 	ret = len;							\
 									\
 end:									\
@@ -1378,10 +1401,39 @@ end:									\
 									\
 CONFIGFS_ATTR(f_hid_opts_, name)
 
+#define F_HID_OPT(name, prec, limit)					\
+static u##prec f_hid_opts_get_##name(const struct f_hid_opts *opts)	\
+{									\
+	return opts->name;						\
+}									\
+									\
+static void f_hid_opts_set_##name(struct f_hid_opts *opts, u##prec val)	\
+{									\
+	opts->name = val;						\
+}									\
+F_HID_OPT_U(name, prec, limit)
+
+static u8 f_hid_opts_get_interval(const struct f_hid_opts *opts)
+{
+	return opts->interval;
+}
+
+static void f_hid_opts_set_interval(struct f_hid_opts *opts, u8 val)
+{
+	opts->interval = val;
+	opts->interval_fs = val;
+	opts->interval_hs = val;
+	opts->interval_ss = val;
+}
+
 F_HID_OPT(subclass, 8, 255);
 F_HID_OPT(protocol, 8, 255);
 F_HID_OPT(no_out_endpoint, 8, 1);
 F_HID_OPT(report_length, 16, 65535);
+F_HID_OPT(interval_fs, 8, 255);
+F_HID_OPT(interval_hs, 8, 255);
+F_HID_OPT(interval_ss, 8, 255);
+F_HID_OPT_U(interval, 8, 255);
 
 static ssize_t f_hid_opts_report_desc_show(struct config_item *item, char *page)
 {
@@ -1428,68 +1480,24 @@ end:
 
 CONFIGFS_ATTR(f_hid_opts_, report_desc);
 
-static ssize_t f_hid_opts_interval_show(struct config_item *item, char *page)
-{
-	struct f_hid_opts *opts = to_f_hid_opts(item);
-	int result;
-
-	mutex_lock(&opts->lock);
-	result = sprintf(page, "%d\n", opts->interval);
-	mutex_unlock(&opts->lock);
-
-	return result;
-}
-
-static ssize_t f_hid_opts_interval_store(struct config_item *item,
-		const char *page, size_t len)
-{
-	struct f_hid_opts *opts = to_f_hid_opts(item);
-	int ret;
-	unsigned int tmp;
-
-	mutex_lock(&opts->lock);
-	if (opts->refcnt) {
-		ret = -EBUSY;
-		goto end;
-	}
-
-	/* parse into a wider type first */
-	ret = kstrtouint(page, 0, &tmp);
-	if (ret)
-		goto end;
-
-	/* range-check against unsigned char max */
-	if (tmp > 255) {
-		ret = -EINVAL;
-		goto end;
-	}
-
-	opts->interval = (unsigned char)tmp;
-	opts->interval_user_set = true;
-	ret = len;
-
-end:
-	mutex_unlock(&opts->lock);
-	return ret;
-}
-
-CONFIGFS_ATTR(f_hid_opts_, interval);
-
 static ssize_t f_hid_opts_dev_show(struct config_item *item, char *page)
 {
 	struct f_hid_opts *opts = to_f_hid_opts(item);
 
-	return sprintf(page, "%d:%d\n", major, opts->minor);
+	return sysfs_emit(page, "%d:%d\n", major, opts->minor);
 }
 
 CONFIGFS_ATTR_RO(f_hid_opts_, dev);
 
-static struct configfs_attribute *hid_attrs[] = {
+static const struct configfs_attribute *const hid_attrs[] = {
 	&f_hid_opts_attr_subclass,
 	&f_hid_opts_attr_protocol,
 	&f_hid_opts_attr_no_out_endpoint,
 	&f_hid_opts_attr_report_length,
 	&f_hid_opts_attr_interval,
+	&f_hid_opts_attr_interval_fs,
+	&f_hid_opts_attr_interval_hs,
+	&f_hid_opts_attr_interval_ss,
 	&f_hid_opts_attr_report_desc,
 	&f_hid_opts_attr_dev,
 	NULL,
@@ -1497,7 +1505,7 @@ static struct configfs_attribute *hid_attrs[] = {
 
 static const struct config_item_type hid_func_type = {
 	.ct_item_ops	= &hidg_item_ops,
-	.ct_attrs	= hid_attrs,
+	.ct_attrs_const	= hid_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -1537,8 +1545,10 @@ static struct usb_function_instance *hidg_alloc_inst(void)
 		return ERR_PTR(-ENOMEM);
 	mutex_init(&opts->lock);
 
-	opts->interval = 4;
-	opts->interval_user_set = false;
+	opts->interval = HIDG_DEFAULT_HS_BINTERVAL;
+	opts->interval_fs = HIDG_DEFAULT_FS_BINTERVAL;
+	opts->interval_hs = HIDG_DEFAULT_HS_BINTERVAL;
+	opts->interval_ss = HIDG_DEFAULT_SS_BINTERVAL;
 
 	opts->func_inst.free_func_inst = hidg_free_inst;
 	ret = &opts->func_inst;
@@ -1588,6 +1598,7 @@ static void hidg_unbind(struct usb_configuration *c, struct usb_function *f)
 
 	cdev_device_del(hidg->cdev, &hidg->dev);
 	destroy_workqueue(hidg->workqueue);
+	usb_ep_free_request(c->cdev->gadget->ep0, hidg->get_req);
 	usb_free_all_descriptors(f);
 }
 
@@ -1628,8 +1639,10 @@ static struct usb_function *hidg_alloc(struct usb_function_instance *fi)
 	hidg->bInterfaceProtocol = opts->protocol;
 	hidg->report_length = opts->report_length;
 	hidg->report_desc_length = opts->report_desc_length;
-	hidg->interval = opts->interval;
-	hidg->interval_user_set = opts->interval_user_set;
+	hidg->interval_fs = opts->interval_fs;
+	hidg->interval_hs = opts->interval_hs;
+	hidg->interval_ss = opts->interval_ss;
+
 	if (opts->report_desc) {
 		hidg->report_desc = kmemdup(opts->report_desc,
 					    opts->report_desc_length,
@@ -1640,6 +1653,18 @@ static struct usb_function *hidg_alloc(struct usb_function_instance *fi)
 		}
 	}
 	hidg->use_out_ep = !opts->no_out_endpoint;
+
+	/*
+	 * Dedicated buffer for GET_REPORT responses, allocated once for
+	 * the whole lifetime of this function instance: hidg_release()
+	 * is the only safe free point, as it runs after all USB
+	 * activity has ceased and all file references are gone.
+	 */
+	hidg->get_req_buf = kmalloc(MAX_REPORT_LENGTH, GFP_KERNEL);
+	if (!hidg->get_req_buf) {
+		ret = -ENOMEM;
+		goto err_put_device;
+	}
 
 	++opts->refcnt;
 	mutex_unlock(&opts->lock);

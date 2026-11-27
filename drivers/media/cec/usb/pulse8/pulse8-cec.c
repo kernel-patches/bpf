@@ -888,13 +888,23 @@ static int pulse8_connect(struct serio *serio, struct serio_driver *drv)
 	if (persistent_config && pulse8->autonomous) {
 		err = pulse8_apply_persistent_config(pulse8, &log_addrs, pa);
 		if (err)
-			goto close_serio;
+			goto unregister_adap;
 		pulse8->restoring_config = true;
 	}
 
 	schedule_delayed_work(&pulse8->ping_eeprom_work, PING_PERIOD);
 
 	return 0;
+
+unregister_adap:
+	/* the adapter is registered: tear down as pulse8_disconnect() does */
+	mutex_lock(&pulse8->lock);
+	pulse8->serio = NULL;
+	mutex_unlock(&pulse8->lock);
+	cec_unregister_adapter(pulse8->adap);
+	serio_set_drvdata(serio, NULL);
+	serio_close(serio);
+	return err;
 
 close_serio:
 	pulse8->serio = NULL;

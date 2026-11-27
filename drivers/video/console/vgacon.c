@@ -147,6 +147,7 @@ static void vgacon_scrolldelta(struct vc_data *c, int lines)
 	/* Turn scrollback off */
 	if (!lines) {
 		c->vc_visible_origin = c->vc_origin;
+		vga_set_mem_top(c);
 		return;
 	}
 
@@ -796,7 +797,7 @@ static bool vgacon_blank(struct vc_data *c, enum vesa_blank_mode blank,
 			vga_vesa_blank(&vgastate, blank);
 			vga_vesa_blanked = blank;
 		}
-		return false;
+		return !vga_palette_blanked;
 	}
 }
 

@@ -31,13 +31,12 @@
  */
 
 #include <linux/dma-mapping.h>
+#include <linux/highmem.h>
 #include <linux/iommu.h>
-#include <linux/pagemap.h>
 #include <linux/sched/task.h>
 #include <linux/sched/mm.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
-#include <linux/swap.h>
 #include <linux/dma-buf.h>
 #include <linux/sizes.h>
 #include <linux/module.h>
@@ -195,6 +194,7 @@ amdgpu_ttm_job_submit(struct amdgpu_device *adev, struct amdgpu_ttm_buffer_entit
  * @addr: resulting address inside the MC address space
  * @vm_needs_flush: out, set true if a GART window was programmed (VMID 0 flush
  *		    needed) or false for a direct address
+ * @readonly: true if the mapping should be created with non-writeable pages
  *
  * Setup one of the GART windows to access a specific piece of memory or return
  * the physical address for local memory.
@@ -307,7 +307,7 @@ static int amdgpu_ttm_map_buffer(struct amdgpu_ttm_buffer_entity *entity,
  * move and different for a BO to BO copy.
  *
  */
-__attribute__((nonnull))
+__nonnull_args()
 static int amdgpu_ttm_copy_mem_to_mem(struct amdgpu_device *adev,
 				      struct amdgpu_ttm_buffer_entity *entity,
 				      const struct amdgpu_copy_mem *src,
@@ -962,7 +962,7 @@ static int amdgpu_ttm_backend_bind(struct ttm_device *bdev,
 			struct sg_table *sgt;
 
 			attach = gtt->gobj->import_attach;
-			sgt = dma_buf_map_attachment(attach, DMA_BIDIRECTIONAL);
+			sgt = dma_buf_map_sgt(attach, DMA_BIDIRECTIONAL);
 			if (IS_ERR(sgt))
 				return PTR_ERR(sgt);
 
@@ -1083,7 +1083,7 @@ static void amdgpu_ttm_backend_unbind(struct ttm_device *bdev,
 		struct dma_buf_attachment *attach;
 
 		attach = gtt->gobj->import_attach;
-		dma_buf_unmap_attachment(attach, ttm->sg, DMA_BIDIRECTIONAL);
+		dma_buf_unmap_sgt(attach, ttm->sg, DMA_BIDIRECTIONAL);
 		ttm->sg = NULL;
 	}
 
@@ -2410,6 +2410,13 @@ void amdgpu_ttm_enable_buffer_funcs(struct amdgpu_device *adev)
 	sdma_ip_version = amdgpu_ip_version(adev, SDMA0_HWIP, 0);
 	if (sdma_ip_version == IP_VERSION(7, 0, 0) || sdma_ip_version == IP_VERSION(7, 0, 1))
 		num_move_entities = 1;
+	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 1) ||
+	    amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 2) ||
+	    amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 3) ||
+	    amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 4) ||
+	    amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 5, 0) ||
+	    amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(12, 1, 0))
+		num_clear_entities = 1;
 
 	adev->mman.clear_entities = kzalloc_objs(struct amdgpu_ttm_buffer_entity,
 						 num_clear_entities);
@@ -2711,6 +2718,8 @@ int amdgpu_ttm_clear_buffer(struct amdgpu_ttm_buffer_entity *entity,
 
 		amdgpu_res_next(&dst, cur_size);
 	}
+	r = 0;
+
 error:
 	mutex_unlock(&entity->lock);
 	*out_fence = fence;

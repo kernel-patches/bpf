@@ -112,7 +112,7 @@ static inline void k8_check_syscfg_dram_mod_en(void)
 	if (cc_platform_has(CC_ATTR_HOST_SEV_SNP))
 		return;
 
-	rdmsrq(MSR_AMD64_SYSCFG, val.q);
+	val.q = rdmsrq(MSR_AMD64_SYSCFG);
 	if (val.l & K8_MTRRFIXRANGE_DRAM_MODIFY) {
 		pr_err(FW_WARN "MTRR: CPU %u: SYSCFG[MtrrFixDramModEn]"
 		       " not cleared by BIOS, clearing this bit\n",
@@ -559,10 +559,10 @@ get_mtrr_var_range(unsigned int index, struct mtrr_var_range *vr)
 {
 	struct msr val;
 
-	rdmsrq(MTRRphysBase_MSR(index), val.q);
+	val.q = rdmsrq(MTRRphysBase_MSR(index));
 	vr->base_lo = val.l;
 	vr->base_hi = val.h;
-	rdmsrq(MTRRphysMask_MSR(index), val.q);
+	val.q = rdmsrq(MTRRphysMask_MSR(index));
 	vr->mask_lo = val.l;
 	vr->mask_hi = val.h;
 }
@@ -588,12 +588,12 @@ static void get_fixed_ranges(mtrr_type *frs)
 
 	k8_check_syscfg_dram_mod_en();
 
-	rdmsrq(MSR_MTRRfix64K_00000, p[0]);
+	p[0] = rdmsrq(MSR_MTRRfix64K_00000);
 
 	for (i = 0; i < 2; i++)
-		rdmsrq(MSR_MTRRfix16K_80000 + i, p[1 + i]);
+		p[1 + i] = rdmsrq(MSR_MTRRfix16K_80000 + i);
 	for (i = 0; i < 8; i++)
-		rdmsrq(MSR_MTRRfix4K_C0000 + i, p[3 + i]);
+		p[3 + i] = rdmsrq(MSR_MTRRfix4K_C0000 + i);
 }
 
 void mtrr_save_fixed_ranges(void *info)
@@ -700,7 +700,7 @@ bool __init get_mtrr_state(void)
 
 	vrs = mtrr_state.var_ranges;
 
-	rdmsrq(MSR_MTRRcap, q);
+	q = rdmsrq(MSR_MTRRcap);
 	mtrr_state.have_fixed = q & MTRR_CAP_FIX;
 
 	for (i = 0; i < num_var_ranges; i++)
@@ -708,13 +708,13 @@ bool __init get_mtrr_state(void)
 	if (mtrr_state.have_fixed)
 		get_fixed_ranges(mtrr_state.fixed_ranges);
 
-	rdmsrq(MSR_MTRRdefType, q);
+	q = rdmsrq(MSR_MTRRdefType);
 	mtrr_state.def_type = q & MTRR_DEF_TYPE_TYPE;
 	mtrr_state.enabled = (q & MTRR_DEF_TYPE_ENABLE) >> MTRR_STATE_SHIFT;
 
 	if (amd_special_default_mtrr()) {
 		/* TOP_MEM2 */
-		rdmsrq(MSR_K8_TOP_MEM2, mtrr_tom2);
+		mtrr_tom2 = rdmsrq(MSR_K8_TOP_MEM2);
 		mtrr_tom2 &= 0xffffff800000ULL;
 	}
 
@@ -770,7 +770,7 @@ static void set_fixed_range(int msr, bool *changed, unsigned int *msrwords)
 {
 	struct msr val;
 
-	rdmsrq(msr, val.q);
+	val.q = rdmsrq(msr);
 
 	if (val.l != msrwords[0] || val.h != msrwords[1]) {
 		mtrr_wrmsr(msr, msrwords[0], msrwords[1]);
@@ -818,7 +818,7 @@ static void generic_get_mtrr(unsigned int reg, unsigned long *base,
 	 */
 	get_cpu();
 
-	rdmsrq(MTRRphysMask_MSR(reg), mask);
+	mask = rdmsrq(MTRRphysMask_MSR(reg));
 
 	if (!(mask & MTRR_PHYSMASK_V)) {
 		/*  Invalid (i.e. free) range */
@@ -828,7 +828,7 @@ static void generic_get_mtrr(unsigned int reg, unsigned long *base,
 		goto out_put_cpu;
 	}
 
-	rdmsrq(MTRRphysBase_MSR(reg), base_msr);
+	base_msr = rdmsrq(MTRRphysBase_MSR(reg));
 
 	/* Work out the shifted address mask: */
 	tmp = mask & PAGE_MASK;
@@ -889,7 +889,7 @@ static bool set_mtrr_var_ranges(unsigned int index, struct mtrr_var_range *vr)
 	bool changed = false;
 	struct msr val;
 
-	rdmsrq(MTRRphysBase_MSR(index), val.q);
+	val.q = rdmsrq(MTRRphysBase_MSR(index));
 	if ((vr->base_lo & ~MTRR_PHYSBASE_RSVD) != (val.l & ~MTRR_PHYSBASE_RSVD)
 	    || (vr->base_hi & ~phys_hi_rsvd) != (val.h & ~phys_hi_rsvd)) {
 
@@ -897,7 +897,7 @@ static bool set_mtrr_var_ranges(unsigned int index, struct mtrr_var_range *vr)
 		changed = true;
 	}
 
-	rdmsrq(MTRRphysMask_MSR(index), val.q);
+	val.q = rdmsrq(MTRRphysMask_MSR(index));
 
 	if ((vr->mask_lo & ~MTRR_PHYSMASK_RSVD) != (val.l & ~MTRR_PHYSMASK_RSVD)
 	    || (vr->mask_hi & ~phys_hi_rsvd) != (val.h & ~phys_hi_rsvd)) {
@@ -952,7 +952,7 @@ void mtrr_disable(void)
 	struct msr val;
 
 	/* Save MTRR state */
-	rdmsrq(MSR_MTRRdefType, val.q);
+	val.q = rdmsrq(MSR_MTRRdefType);
 	deftype_lo = val.l;
 	deftype_hi = val.h;
 
@@ -1065,7 +1065,7 @@ static int generic_have_wrcomb(void)
 {
 	u64 config;
 
-	rdmsrq(MSR_MTRRcap, config);
+	config = rdmsrq(MSR_MTRRcap);
 	return config & MTRR_CAP_WC;
 }
 

@@ -241,13 +241,13 @@ int snd_hda_multi_out_analog_open(struct hda_codec *codec,
 				  struct hda_multi_out *mout,
 				  struct snd_pcm_substream *substream,
 				  struct hda_pcm_stream *hinfo);
-int snd_hda_multi_out_analog_prepare(struct hda_codec *codec,
-				     struct hda_multi_out *mout,
-				     unsigned int stream_tag,
-				     unsigned int format,
-				     struct snd_pcm_substream *substream);
-int snd_hda_multi_out_analog_cleanup(struct hda_codec *codec,
-				     struct hda_multi_out *mout);
+void snd_hda_multi_out_analog_prepare(struct hda_codec *codec,
+				      struct hda_multi_out *mout,
+				      unsigned int stream_tag,
+				      unsigned int format,
+				      struct snd_pcm_substream *substream);
+void snd_hda_multi_out_analog_cleanup(struct hda_codec *codec,
+				      struct hda_multi_out *mout);
 
 /*
  * generic proc interface
@@ -616,8 +616,6 @@ int snd_hda_get_int_hint(struct hda_codec *codec, const char *key, int *valp)
  * power-management
  */
 
-void snd_hda_schedule_power_save(struct hda_codec *codec);
-
 struct hda_amp_list {
 	hda_nid_t nid;
 	unsigned char dir;
@@ -708,7 +706,6 @@ void snd_hdmi_write_eld_info(struct hdmi_eld *eld,
 #endif
 
 #define SND_PRINT_CHANNEL_ALLOCATION_ADVISED_BUFSIZE 80
-void snd_print_channel_allocation(int spk_alloc, char *buf, int buflen);
 
 void snd_hda_codec_display_power(struct hda_codec *codec, bool enable);
 

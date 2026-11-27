@@ -24,11 +24,11 @@ static void early_init_transmeta(struct cpuinfo_x86 *c)
 
 static void init_transmeta(struct cpuinfo_x86 *c)
 {
-	u64 msr;
-	unsigned int max, dummy;
-	unsigned int cms_rev1, cms_rev2;
 	unsigned int cpu_rev, cpu_freq = 0, cpu_flags, new_cpu_rev;
+	unsigned int cms_rev1, cms_rev2;
+	unsigned int max, dummy;
 	char cpu_info[65];
+	u64 msr;
 
 	early_init_transmeta(c);
 
@@ -87,7 +87,7 @@ static void init_transmeta(struct cpuinfo_x86 *c)
 	}
 
 	/* Unhide possibly hidden capability flags */
-	rdmsrq(0x80860004, msr);
+	msr = rdmsrq(0x80860004);
 	wrmsrq(0x80860004, msr | ~0U);
 	cpuid_refresh_leaf(c, 0x1);
 	c->x86_capability[CPUID_1_EDX] = cpuid_edx(0x00000001);

@@ -14,6 +14,28 @@ maintainers:
 
 allOf:
   - $ref: dai-common.yaml#
+  - if:
+      properties:
+        xlnx,spdif-mode:
+          const: 1
+      required:
+        - xlnx,spdif-mode
+    then:
+      properties:
+        clock-names:
+          minItems: 2
+          items:
+            - const: aud_clk_i
+            - const: s_axi_aclk
+            - const: s_axis_aclk
+    else:
+      properties:
+        clock-names:
+          minItems: 2
+          items:
+            - const: aud_clk_i
+            - const: s_axi_aclk
+            - const: m_axis_aclk
 
 properties:
   compatible:
@@ -28,15 +50,15 @@ properties:
       - description: SPDIF audio interrupt
 
   clock-names:
-    items:
-      - const: aud_clk_i
-      - const: s_axi_aclk
+    minItems: 2
+    maxItems: 3
 
   clocks:
-    minItems: 1
+    minItems: 2
     items:
-      - description: input audio clock
-      - description: clock for the AXI data stream
+      - description: Audio clock input used at the SPDIF/AES3 interface
+      - description: AXI4-Lite clock
+      - description: AXI4-Stream clock
 
   xlnx,spdif-mode:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -49,8 +71,10 @@ properties:
 
   xlnx,aud_clk_i:
     $ref: /schemas/types.yaml#/definitions/uint32
+    deprecated: true
     description:
-      Input audio clock frequency. It affects the sampling rate.
+      Frequency of the audio clock input. Superseded by the rate of the
+      clock named aud_clk_i.
 
 required:
   - compatible
@@ -58,6 +82,7 @@ required:
   - interrupts
   - clock-names
   - clocks
+  - xlnx,spdif-mode
 
 additionalProperties: false
 
@@ -66,12 +91,21 @@ examples:
     spdif@80010000 {
       compatible = "xlnx,spdif-2.0";
       reg = <0x80010000 0x10000>;
-      clock-names = "aud_clk_i", "s_axi_aclk";
-      clocks = <&misc_clk_0>, <&clk 71>;
+      clock-names = "aud_clk_i", "s_axi_aclk", "s_axis_aclk";
+      clocks = <&misc_clk_0>, <&clk 71>, <&misc_clk_0>;
       interrupt-parent = <&gic>;
       interrupts = <0 91 4>;
       xlnx,spdif-mode = <1>;
-      xlnx,aud_clk_i = <49152913>;
+    };
+  - |
+    spdif@80090000 {
+      compatible = "xlnx,spdif-2.0";
+      reg = <0x80090000 0x10000>;
+      clock-names = "aud_clk_i", "s_axi_aclk", "m_axis_aclk";
+      clocks = <&misc_clk_0>, <&clk 71>, <&clk 71>;
+      interrupt-parent = <&gic>;
+      interrupts = <0 90 4>;
+      xlnx,spdif-mode = <0>;
     };
 
 ...

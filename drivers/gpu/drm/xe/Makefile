@@ -129,6 +129,7 @@ xe-y += xe_bb.o \
 	xe_survivability_mode.o \
 	xe_sync.o \
 	xe_sysctrl.o \
+	xe_sysctrl_debugfs.o \
 	xe_sysctrl_event.o \
 	xe_sysctrl_mailbox.o \
 	xe_tile.o \
@@ -149,11 +150,11 @@ xe-y += xe_bb.o \
 	xe_vm.o \
 	xe_vm_madvise.o \
 	xe_vram.o \
-	xe_vram_freq.o \
+	xe_vram_config.o \
 	xe_vsec.o \
 	xe_wa.o \
 	xe_wait_user_fence.o \
-	xe_wopcm.o
+	xe_wedge.o
 
 xe-$(CONFIG_I2C)	+= xe_i2c.o \
 			   xe_amc.o
@@ -166,6 +167,9 @@ xe-$(CONFIG_HWMON) += xe_hwmon.o
 
 xe-$(CONFIG_PERF_EVENTS) += xe_pmu.o
 xe-$(CONFIG_CONFIGFS_FS) += xe_configfs.o
+
+xe-$(CONFIG_UEFI_CPER) += xe_cper.o \
+			  xe_trace_cper.o
 
 # graphics virtualization (SR-IOV) support
 xe-y += \
@@ -262,6 +266,7 @@ xe-$(CONFIG_DRM_XE_DISPLAY) += \
 	i915-display/intel_de.o \
 	i915-display/intel_dip.o \
 	i915-display/intel_display.o \
+	i915-display/intel_display_clock_gating.o \
 	i915-display/intel_display_conversion.o \
 	i915-display/intel_display_device.o \
 	i915-display/intel_display_driver.o \

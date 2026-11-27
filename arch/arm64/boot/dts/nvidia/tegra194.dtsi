@@ -156,6 +156,9 @@
 			iommus = <&smmu TEGRA194_SID_EQOS>;
 			status = "disabled";
 
+			rx-fifo-depth = <36864>;
+			tx-fifo-depth = <36864>;
+
 			snps,write-requests = <1>;
 			snps,read-requests = <3>;
 			snps,burst-map = <0x7>;

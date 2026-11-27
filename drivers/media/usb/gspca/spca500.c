@@ -583,7 +583,8 @@ static int sd_init(struct gspca_dev *gspca_dev)
 	if (sd->subtype == LogitechClickSmart310)
 		spca500_clksmart310_init(gspca_dev);
 /*	else
-		spca500_initialise(gspca_dev); */
+ *	spca500_initialise(gspca_dev);
+ */
 	gspca_dbg(gspca_dev, D_STREAM, "SPCA500 init done\n");
 	return 0;
 }
@@ -673,7 +674,8 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	case CreativePCCam300:		/* Creative PC-CAM 300 640x480 CCD */
 	case IntelPocketPCCamera:	/* FIXME: Temporary fix for
 					 *	Intel Pocket PC Camera
-					 *	- NWG (Sat 29th March 2003) */
+					 *	- NWG (Sat 29th March 2003)
+					 */
 
 		/* do a full reset */
 		err = spca500_full_reset(gspca_dev);

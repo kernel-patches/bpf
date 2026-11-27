@@ -15,6 +15,7 @@
  */
 
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/irq.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
@@ -35,6 +36,7 @@
 #include "musb_core.h"
 
 static const struct of_device_id musb_dsps_of_match[];
+static int dsps_musb_set_mode(struct musb *musb, u8 mode);
 
 /*
  * DSPS musb wrapper register offset.
@@ -466,7 +468,16 @@ static int dsps_musb_init(struct musb *musb)
 	timer_setup(&musb->dev_timer, otg_timer, 0);
 
 	/* Reset the musb */
-	musb_writel(reg_base, wrp->control, (1 << wrp->reset));
+	musb_writel(reg_base, wrp->control, BIT(wrp->reset));
+	read_poll_timeout(musb_readl, val, !(val & BIT(wrp->reset)), 2, 5000,
+			  false, reg_base, wrp->control);
+	if (val & BIT(wrp->reset)) {
+		phy_power_off(musb->phy);
+		phy_exit(musb->phy);
+		return -ENODEV;
+	}
+
+	dsps_musb_set_mode(musb, musb->port_mode);
 
 	musb->isr = dsps_interrupt;
 
@@ -941,6 +952,17 @@ err:
 static void dsps_remove(struct platform_device *pdev)
 {
 	struct dsps_glue *glue = platform_get_drvdata(pdev);
+
+	/*
+	 * The VBUS interrupt handler re-arms musb->dev_timer via
+	 * dsps_mod_timer(); the IRQ is devm-managed and would only be
+	 * freed after this function returns, while the child teardown
+	 * below deletes the timer and frees the musb structure.  Free
+	 * the interrupt first so no VBUS event can re-arm the timer
+	 * past that point.
+	 */
+	if (glue->vbus_irq)
+		devm_free_irq(glue->dev, glue->vbus_irq, glue);
 
 	platform_device_unregister(glue->musb);
 

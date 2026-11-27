@@ -573,7 +573,7 @@ USB_ETHERNET_CONFIGFS_ITEM_ATTR_QMULT(eem);
 /* f_eem_opts_ifname */
 USB_ETHERNET_CONFIGFS_ITEM_ATTR_IFNAME(eem);
 
-static struct configfs_attribute *eem_attrs[] = {
+static const struct configfs_attribute *const eem_attrs[] = {
 	&eem_opts_attr_dev_addr,
 	&eem_opts_attr_host_addr,
 	&eem_opts_attr_qmult,
@@ -583,7 +583,7 @@ static struct configfs_attribute *eem_attrs[] = {
 
 static const struct config_item_type eem_func_type = {
 	.ct_item_ops	= &eem_item_ops,
-	.ct_attrs	= eem_attrs,
+	.ct_attrs_const	= eem_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

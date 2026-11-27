@@ -324,6 +324,7 @@ struct irdma_pci_f {
 	spinlock_t cqtable_lock; /*protect CQ table access*/
 	struct irdma_qp **qp_table;
 	struct irdma_cq **cq_table;
+	struct xarray srq_xa; /* SRQ ID to struct irdma_srq */
 	spinlock_t qh_list_lock; /* protect mc_qht_list */
 	struct mc_table_list mc_qht_list;
 	struct irdma_msix_vector *iw_msixtbl;
@@ -526,6 +527,7 @@ void irdma_cq_add_ref(struct ib_cq *ibcq);
 void irdma_cq_rem_ref(struct ib_cq *ibcq);
 void irdma_cq_wq_destroy(struct irdma_pci_f *rf, struct irdma_sc_cq *cq);
 void irdma_srq_event(struct irdma_sc_srq *srq);
+void irdma_srq_rem_ref(struct irdma_srq *iwsrq);
 void irdma_srq_wq_destroy(struct irdma_pci_f *rf, struct irdma_sc_srq *srq);
 void irdma_cleanup_pending_cqp_op(struct irdma_pci_f *rf);
 int irdma_get_timeout_threshold(struct irdma_sc_dev *dev);

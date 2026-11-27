@@ -1007,13 +1007,12 @@ static void r852_shutdown(struct pci_dev *pci_dev)
 {
 	struct r852_device *dev = pci_get_drvdata(pci_dev);
 
-	cancel_delayed_work_sync(&dev->card_detect_work);
+	disable_delayed_work_sync(&dev->card_detect_work);
 	r852_disable_irqs(dev);
 	synchronize_irq(dev->irq);
 	pci_disable_device(pci_dev);
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int r852_suspend(struct device *device)
 {
 	struct r852_device *dev = dev_get_drvdata(device);
@@ -1066,7 +1065,6 @@ static int r852_resume(struct device *device)
 	r852_update_card_detect(dev);
 	return 0;
 }
-#endif
 
 static const struct pci_device_id r852_pci_id_tbl[] = {
 
@@ -1076,7 +1074,7 @@ static const struct pci_device_id r852_pci_id_tbl[] = {
 
 MODULE_DEVICE_TABLE(pci, r852_pci_id_tbl);
 
-static SIMPLE_DEV_PM_OPS(r852_pm_ops, r852_suspend, r852_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(r852_pm_ops, r852_suspend, r852_resume);
 
 static struct pci_driver r852_pci_driver = {
 	.name		= DRV_NAME,
@@ -1084,7 +1082,7 @@ static struct pci_driver r852_pci_driver = {
 	.probe		= r852_probe,
 	.remove		= r852_remove,
 	.shutdown	= r852_shutdown,
-	.driver.pm	= &r852_pm_ops,
+	.driver.pm	= pm_sleep_ptr(&r852_pm_ops),
 };
 
 module_pci_driver(r852_pci_driver);

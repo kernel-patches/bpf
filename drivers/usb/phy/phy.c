@@ -202,7 +202,7 @@ static void __usb_phy_get_charger_type(struct usb_phy *usb_phy)
  * @state: the cable state
  * @data: private data
  *
- * Determin the charger type from extcon subsystem which also means the
+ * Determine the charger type from extcon subsystem which also means the
  * charger state has been chaned, then we should notify this event.
  */
 static int usb_phy_get_charger_type(struct notifier_block *nb,
@@ -534,10 +534,8 @@ struct  usb_phy *devm_usb_get_phy_by_node(struct device *dev,
 	unsigned long	flags;
 
 	ptr = devres_alloc(devm_usb_phy_release2, sizeof(*ptr), GFP_KERNEL);
-	if (!ptr) {
-		dev_dbg(dev, "failed to allocate memory for devres\n");
+	if (!ptr)
 		goto err0;
-	}
 
 	spin_lock_irqsave(&phy_lock, flags);
 

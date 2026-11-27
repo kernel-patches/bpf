@@ -18,6 +18,7 @@
 #include <linux/delay.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
+#include <linux/sched/signal.h>
 #include <linux/swap.h>
 
 #include <generated/xe_wa_oob.h>
@@ -31,6 +32,7 @@
 #include "xe_exec_queue.h"
 #include "xe_gt.h"
 #include "xe_migrate.h"
+#include "xe_module.h"
 #include "xe_pagefault.h"
 #include "xe_pat.h"
 #include "xe_pm.h"
@@ -43,6 +45,7 @@
 #include "xe_tile.h"
 #include "xe_tlb_inval.h"
 #include "xe_trace_bo.h"
+#include "xe_userptr.h"
 #include "xe_vm_madvise.h"
 #include "xe_wa.h"
 
@@ -365,7 +368,7 @@ static int xe_gpuvm_validate(struct drm_gpuvm_bo *vm_bo, struct drm_exec *exec)
 
 	/* Skip re-populating purged BOs, rebind maps scratch pages. */
 	if (xe_bo_is_purged(bo)) {
-		vm_bo->evicted = false;
+		drm_gpuvm_bo_evict(vm_bo, false);
 		return 0;
 	}
 
@@ -376,7 +379,7 @@ static int xe_gpuvm_validate(struct drm_gpuvm_bo *vm_bo, struct drm_exec *exec)
 	if (ret)
 		return ret;
 
-	vm_bo->evicted = false;
+	drm_gpuvm_bo_evict(vm_bo, false);
 	return 0;
 }
 
@@ -385,31 +388,59 @@ static int xe_gpuvm_validate(struct drm_gpuvm_bo *vm_bo, struct drm_exec *exec)
  * @vm: The vm for which we are rebinding.
  * @exec: The struct drm_exec with the locked GEM objects.
  * @num_fences: The number of fences to reserve for the operation, not
- * including rebinds and validations.
+ * including rebinds and validations. Zero reserves none, which is what the
+ * %DRM_GPUVM_EXEC_PASS_EARLY pass wants.
+ * @pass: The &enum drm_gpuvm_exec_pass @exec was locked for.
  *
  * Validates all evicted gem objects and rebinds their vmas. Note that
  * rebindings may cause evictions and hence the validation-rebind
  * sequence is rerun until there are no more objects to validate.
+ *
+ * In the %DRM_GPUVM_EXEC_PASS_EARLY pass only the validation is done, and
+ * only for the objects whose dma-resv @exec holds. The rest, along with the
+ * rebind and the fence reservation, is left to the
+ * %DRM_GPUVM_EXEC_PASS_LATE pass of the same transaction, which locks
+ * everything.
  *
  * Return: 0 on success, negative error code on error. In particular,
  * may return -EINTR or -ERESTARTSYS if interrupted, and -EDEADLK if
  * the drm_exec transaction needs to be restarted.
  */
 int xe_vm_validate_rebind(struct xe_vm *vm, struct drm_exec *exec,
-			  unsigned int num_fences)
+			  unsigned int num_fences,
+			  enum drm_gpuvm_exec_pass pass)
 {
 	struct drm_gem_object *obj;
 	int ret;
 
 	do {
-		ret = drm_gpuvm_validate(&vm->gpuvm, exec);
+		ret = drm_gpuvm_exec_pass_validate(&vm->gpuvm, exec, pass);
 		if (ret)
 			return ret;
+
+		/*
+		 * xe_vm_rebind() rebinds the whole rebind list in one go and
+		 * attaches a fence to the dma-resv of every BO on it, so it
+		 * needs all of them locked. The early pass deliberately does
+		 * not lock the resident ones, so leave the rebind to the late
+		 * pass, which holds everything.
+		 */
+		if (pass == DRM_GPUVM_EXEC_PASS_EARLY)
+			continue;
 
 		ret = xe_vm_rebind(vm, false);
 		if (ret)
 			return ret;
-	} while (!list_empty(&vm->gpuvm.evict.list));
+	} while (drm_gpuvm_exec_pass_has_evicted(&vm->gpuvm, pass));
+
+	/*
+	 * The early pass reserves nothing. It attaches no fence itself, and
+	 * the objects it locks are still locked in the late pass, whose own
+	 * reservation below walks every object the transaction has
+	 * accumulated and so covers them too.
+	 */
+	if (!num_fences)
+		return 0;
 
 	drm_exec_for_each_locked_object(exec, obj) {
 		ret = dma_resv_reserve_fences(obj->resv, num_fences);
@@ -481,7 +512,8 @@ static int xe_preempt_work_begin(struct drm_exec *exec, struct xe_vm *vm,
 	 * The fence reservation here is intended for the new preempt fences
 	 * we attach at the end of the rebind work.
 	 */
-	return xe_vm_validate_rebind(vm, exec, vm->preempt.num_exec_queues);
+	return xe_vm_validate_rebind(vm, exec, vm->preempt.num_exec_queues,
+				     DRM_GPUVM_EXEC_PASS_ALL);
 }
 
 static bool vm_suspend_rebind_worker(struct xe_vm *vm)
@@ -508,8 +540,33 @@ static bool vm_suspend_rebind_worker(struct xe_vm *vm)
  */
 void xe_vm_resume_rebind_worker(struct xe_vm *vm)
 {
-	queue_work(vm->xe->ordered_wq, &vm->preempt.rebind_work);
+	xe_vm_queue_rebind_worker(vm);
 }
+
+#if IS_ENABLED(CONFIG_DRM_XE_USERPTR_INVAL_INJECT)
+/*
+ * Force one retry per rebind sequence. The sequence spans requeues of the
+ * worker, so the state must live in the vm.
+ */
+static bool xe_vm_rebind_worker_inject_retry(struct xe_vm *vm)
+{
+	return !vm->preempt.inval_inject_tries++;
+}
+
+static void xe_vm_rebind_worker_reset_inject(struct xe_vm *vm)
+{
+	vm->preempt.inval_inject_tries = 0;
+}
+#else
+static bool xe_vm_rebind_worker_inject_retry(struct xe_vm *vm)
+{
+	return false;
+}
+
+static void xe_vm_rebind_worker_reset_inject(struct xe_vm *vm)
+{
+}
+#endif
 
 static void preempt_rebind_work_func(struct work_struct *w)
 {
@@ -520,7 +577,6 @@ static void preempt_rebind_work_func(struct work_struct *w)
 	LIST_HEAD(preempt_fences);
 	int err = 0;
 	long wait;
-	int __maybe_unused tries = 0;
 
 	xe_assert(vm->xe, xe_vm_in_preempt_fence_mode(vm));
 	trace_xe_vm_rebind_worker_enter(vm);
@@ -533,7 +589,6 @@ static void preempt_rebind_work_func(struct work_struct *w)
 		return;
 	}
 
-retry:
 	if (!try_wait_for_completion(&vm->xe->pm_block) && vm_suspend_rebind_worker(vm)) {
 		up_write(&vm->lock);
 		/* We don't actually block but don't make progress. */
@@ -583,19 +638,13 @@ retry:
 		goto out_unlock;
 	}
 
-#define retry_required(__tries, __vm) \
-	(IS_ENABLED(CONFIG_DRM_XE_USERPTR_INVAL_INJECT) ? \
-	(!(__tries)++ || __xe_vm_userptr_needs_repin(__vm)) : \
-	__xe_vm_userptr_needs_repin(__vm))
-
 	xe_svm_notifier_lock(vm);
-	if (retry_required(tries, vm)) {
+	if (xe_vm_rebind_worker_inject_retry(vm) ||
+	    __xe_vm_userptr_needs_repin(vm)) {
 		xe_svm_notifier_unlock(vm);
 		err = -EAGAIN;
 		goto out_unlock;
 	}
-
-#undef retry_required
 
 	xe_vm_bump_lru(vm, &exec);
 
@@ -611,19 +660,19 @@ out_unlock_outer:
 		trace_xe_vm_rebind_worker_retry(vm);
 
 		/*
-		 * We can't block in workers on a VF which supports migration
-		 * given this can block the VF post-migration workers from
-		 * getting scheduled.
+		 * Drop all locks and requeue rather than retrying in-line.
+		 * This avoids blocking other work items, such as VF
+		 * post-migration workers, and lets other users of the vm
+		 * lock make progress between attempts.
 		 */
-		if (IS_SRIOV_VF(vm->xe) &&
-		    xe_sriov_vf_migration_supported(vm->xe)) {
-			up_write(&vm->lock);
-			xe_vm_queue_rebind_worker(vm);
-			return;
-		}
-
-		goto retry;
+		up_write(&vm->lock);
+		free_preempt_fences(&preempt_fences);
+		xe_vm_queue_rebind_worker(vm);
+		trace_xe_vm_rebind_worker_exit(vm);
+		return;
 	}
+
+	xe_vm_rebind_worker_reset_inject(vm);
 
 	if (err) {
 		drm_warn(&vm->xe->drm, "VM worker error: %d\n", err);
@@ -1276,7 +1325,14 @@ static void vma_destroy_cb(struct dma_fence *fence,
 	struct xe_vma *vma = container_of(cb, struct xe_vma, destroy_cb);
 
 	INIT_WORK(&vma->destroy_work, vma_destroy_work_func);
-	queue_work(system_dfl_wq, &vma->destroy_work);
+
+	/*
+	 * The destroy work puts a vm reference which may put the last
+	 * device reference. Hence we can't queue this work on the device
+	 * destroy queue since that may deadlock. Use the module-wide
+	 * destroy queue.
+	 */
+	xe_destroy_wq_queue(&vma->destroy_work);
 }
 
 static void xe_vm_assert_write_mode_or_garbage_collector(struct xe_vm *vm)
@@ -2078,8 +2134,12 @@ static void xe_vm_free(struct drm_gpuvm *gpuvm)
 {
 	struct xe_vm *vm = container_of(gpuvm, struct xe_vm, gpuvm);
 
-	/* To destroy the VM we need to be able to sleep */
-	queue_work(system_dfl_wq, &vm->destroy_work);
+	/*
+	 * To destroy the VM we need to be able to sleep.
+	 * drm_gpuvm keeps at least one device reference at this
+	 * point so xe->destroy_wq must still be alive.
+	 */
+	queue_work(vm->xe->destroy_wq, &vm->destroy_work);
 }
 
 struct xe_vm *xe_vm_lookup(struct xe_file *xef, u32 id)
@@ -2358,6 +2418,26 @@ static void prep_vma_destroy(struct xe_vm *vm, struct xe_vma *vma,
 	xe_svm_notifier_unlock(vm);
 	if (post_commit)
 		xe_vm_remove_vma(vm, vma);
+}
+
+static void unprep_vma_destroy(struct xe_vm *vm, struct xe_vma *vma,
+			       bool post_commit)
+{
+	xe_svm_notifier_lock(vm);
+	vma->gpuva.flags &= ~XE_VMA_DESTROYED;
+	if (IS_ENABLED(CONFIG_DRM_GPUSVM) && !xe_vm_in_fault_mode(vm) &&
+	    xe_vma_is_userptr(vma) &&
+	    xe_vma_userptr_check_repin(to_userptr_vma(vma))) {
+		struct xe_userptr_vma *uvma = to_userptr_vma(vma);
+
+		spin_lock(&vm->userptr.invalidated_lock);
+		list_move_tail(&uvma->userptr.invalidate_link,
+			       &vm->userptr.invalidated);
+		spin_unlock(&vm->userptr.invalidated_lock);
+	}
+	xe_svm_notifier_unlock(vm);
+	if (post_commit)
+		xe_vm_insert_vma(vm, vma);
 }
 
 #undef ULL
@@ -2703,14 +2783,6 @@ static struct xe_vma *new_vma(struct xe_vm *vm, struct drm_gpuva_op_map *op,
 
 		if (xe_vma_is_userptr(vma)) {
 			err = xe_vma_userptr_pin_pages(to_userptr_vma(vma));
-			/*
-			 * -EBUSY has dedicated meaning that a user fence
-			 * attached to the VMA is busy, in practice
-			 * xe_vma_userptr_pin_pages can only fail with -EBUSY if
-			 * we are low on memory so convert this to -ENOMEM.
-			 */
-			if (err == -EBUSY)
-				err = -ENOMEM;
 		}
 	}
 	if (err) {
@@ -3052,13 +3124,8 @@ static void xe_vma_op_unwind(struct xe_vm *vm, struct xe_vma_op *op,
 
 		xe_vm_assert_write_mode_or_garbage_collector(vm);
 
-		if (vma) {
-			xe_svm_notifier_lock(vm);
-			vma->gpuva.flags &= ~XE_VMA_DESTROYED;
-			xe_svm_notifier_unlock(vm);
-			if (post_commit)
-				xe_vm_insert_vma(vm, vma);
-		}
+		if (vma)
+			unprep_vma_destroy(vm, vma, post_commit);
 		break;
 	}
 	case DRM_GPUVA_OP_REMAP:
@@ -3076,9 +3143,6 @@ static void xe_vma_op_unwind(struct xe_vm *vm, struct xe_vma_op *op,
 			xe_vma_destroy_unlocked(op->remap.next);
 		}
 		if (vma) {
-			xe_svm_notifier_lock(vm);
-			vma->gpuva.flags &= ~XE_VMA_DESTROYED;
-			xe_svm_notifier_unlock(vm);
 			if (post_commit) {
 				/*
 				 * Restore the old va range, in case of the
@@ -3090,8 +3154,8 @@ static void xe_vma_op_unwind(struct xe_vm *vm, struct xe_vma_op *op,
 					op->remap.old_start;
 				op->base.remap.unmap->va->va.range =
 					op->remap.old_range;
-				xe_vm_insert_vma(vm, vma);
 			}
+			unprep_vma_destroy(vm, vma, post_commit);
 		}
 		break;
 	}
@@ -3807,14 +3871,15 @@ static int vm_bind_ioctl_check_args(struct xe_device *xe, struct xe_vm *vm,
 
 		pat_index = array_index_nospec(pat_index, xe->pat.n_entries);
 		(*bind_ops)[i].pat_index = pat_index;
-		coh_mode = xe_pat_index_get_coh_mode(xe, pat_index);
-		comp_en = xe_pat_index_get_comp_en(xe, pat_index);
-		if (XE_IOCTL_DBG(xe, !coh_mode)) { /* hw reserved */
+		if (XE_IOCTL_DBG(xe, !xe_pat_index_is_valid(xe, pat_index))) {
 			err = -EINVAL;
 			goto free_bind_ops;
 		}
 
-		if (XE_WARN_ON(coh_mode > XE_COH_2WAY)) {
+		coh_mode = xe_pat_index_get_coh_mode(xe, pat_index);
+		comp_en = xe_pat_index_get_comp_en(xe, pat_index);
+
+		if (XE_IOCTL_DBG(xe, xe_pat_wa_14026539277_reserved(xe, pat_index))) {
 			err = -EINVAL;
 			goto free_bind_ops;
 		}
@@ -4013,11 +4078,13 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	struct drm_gpuva_ops **ops = NULL;
 	struct xe_vm *vm;
 	struct xe_exec_queue *q = NULL;
-	u32 num_syncs, num_ufence = 0;
+	u32 num_syncs, num_ufence;
 	struct xe_sync_entry *syncs = NULL;
 	struct drm_xe_vm_bind_op *bind_ops = NULL;
 	struct xe_vma_ops vops = { .flags = 0, };
+	struct xe_userptr_repin repin = {};
 	struct dma_fence *fence;
+	bool repin_again;
 	int err;
 	int i;
 
@@ -4050,6 +4117,9 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	/* Ensure all UNMAPs visible */
 	xe_svm_flush(vm);
 
+retry:
+	repin_again = false;
+	num_ufence = 0;
 	err = down_write_killable(&vm->lock);
 	if (err)
 		goto put_exec_queue;
@@ -4153,6 +4223,7 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	xe_vma_ops_init(&vops, vm, q, syncs, num_syncs);
 	if (args->num_binds > 1)
 		vops.flags |= XE_VMA_OPS_ARRAY_OF_BINDS;
+	xe_userptr_repin_begin(&repin);
 	for (i = 0; i < args->num_binds; ++i) {
 		u64 range = bind_ops[i].range;
 		u64 addr = bind_ops[i].addr;
@@ -4168,12 +4239,15 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 		if (IS_ERR(ops[i])) {
 			err = PTR_ERR(ops[i]);
 			ops[i] = NULL;
+			repin_again = err == -EAGAIN;
 			goto unwind_ops;
 		}
 
 		err = vm_bind_ioctl_ops_parse(vm, ops[i], &vops);
-		if (err)
+		if (err) {
+			repin_again = err == -EAGAIN;
 			goto unwind_ops;
+		}
 
 #ifdef TEST_VM_OPS_ERROR
 		if (flags & FORCE_OP_ERROR) {
@@ -4236,6 +4310,27 @@ release_vm_lock:
 		up_read(&vm->lock);
 	else
 		up_write(&vm->lock);
+	if (repin_again) {
+		/*
+		 * A userptr repin keeps failing due to concurrent CPU mapping
+		 * changes. New vmas are created on every attempt so the overall
+		 * timeout is tracked here. Retry with all locks dropped.
+		 */
+		u32 timeout_ms = READ_ONCE(vm->xe->userptr_repin_timeout_ms);
+
+		if (xe_userptr_repin_should_retry(&repin, timeout_ms)) {
+			bos = NULL;
+			ops = NULL;
+			syncs = NULL;
+			vops.flags = 0;
+			cond_resched();
+			if (!signal_pending(current))
+				goto retry;
+			err = -ERESTARTSYS;
+		} else {
+			err = -EBUSY;
+		}
+	}
 put_exec_queue:
 	if (q)
 		xe_exec_queue_put(q);

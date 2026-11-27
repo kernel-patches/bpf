@@ -2367,7 +2367,10 @@ static void ov8856_remove(struct i2c_client *client)
 	pm_runtime_disable(ov8856->dev);
 	mutex_destroy(&ov8856->mutex);
 
-	ov8856_power_off(ov8856->dev);
+	if (!pm_runtime_status_suspended(ov8856->dev)) {
+		ov8856_power_off(ov8856->dev);
+		pm_runtime_set_suspended(ov8856->dev);
+	}
 }
 
 static int ov8856_probe(struct i2c_client *client)
@@ -2423,22 +2426,26 @@ static int ov8856_probe(struct i2c_client *client)
 		goto probe_error_v4l2_ctrl_handler_free;
 	}
 
+	/* Set the device's state to active if it's in D0 state. */
+	if (full_power)
+		pm_runtime_set_active(ov8856->dev);
+	/* The sub-device can be used as soon as it is registered. */
+	pm_runtime_enable(ov8856->dev);
+
 	ret = v4l2_async_register_subdev_sensor(&ov8856->sd);
 	if (ret < 0) {
 		dev_err(ov8856->dev, "failed to register V4L2 subdev: %d",
 			ret);
-		goto probe_error_media_entity_cleanup;
+		goto probe_error_pm_runtime_disable;
 	}
 
-	/* Set the device's state to active if it's in D0 state. */
-	if (full_power)
-		pm_runtime_set_active(ov8856->dev);
-	pm_runtime_enable(ov8856->dev);
 	pm_runtime_idle(ov8856->dev);
 
 	return 0;
 
-probe_error_media_entity_cleanup:
+probe_error_pm_runtime_disable:
+	pm_runtime_disable(ov8856->dev);
+	pm_runtime_set_suspended(ov8856->dev);
 	media_entity_cleanup(&ov8856->sd.entity);
 
 probe_error_v4l2_ctrl_handler_free:
@@ -2457,8 +2464,8 @@ static const struct dev_pm_ops ov8856_pm_ops = {
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id ov8856_acpi_ids[] = {
-	{"OVTI8856"},
-	{}
+	{ .id = "OVTI8856" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, ov8856_acpi_ids);

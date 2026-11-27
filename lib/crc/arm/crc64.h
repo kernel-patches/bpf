@@ -13,10 +13,10 @@ u64 crc64_nvme_neon(u64 crc, const u8 *p, size_t len);
 
 static inline u64 crc64_nvme_arch(u64 crc, const u8 *p, size_t len)
 {
-	if (len >= 128 && static_branch_likely(&have_pmull) &&
+	if (static_branch_likely(&have_pmull) && len >= 128 &&
 	    likely(may_use_simd())) {
 		do {
-			size_t chunk = min_t(size_t, len & ~15, SZ_4K);
+			size_t chunk = (len < SZ_4K + 128) ? len : SZ_4K;
 
 			scoped_ksimd()
 				crc = crc64_nvme_neon(crc, p, chunk);

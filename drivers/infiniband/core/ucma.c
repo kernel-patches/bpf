@@ -1509,7 +1509,7 @@ static ssize_t ucma_process_join(struct ucma_file *file,
 {
 	struct rdma_ucm_create_id_resp resp;
 	struct ucma_context *ctx;
-	struct ucma_multicast *mc;
+	struct ucma_multicast *mc, *tmp;
 	struct sockaddr *addr;
 	int ret;
 	u8 join_state;
@@ -1543,23 +1543,25 @@ static ssize_t ucma_process_join(struct ucma_file *file,
 	mc->uid = cmd->uid;
 	memcpy(&mc->addr, addr, cmd->addr_size);
 
-	xa_lock(&multicast_table);
-	if (__xa_alloc(&multicast_table, &mc->id, NULL, xa_limit_32b,
+	mutex_lock(&ctx->mutex);
+	list_for_each_entry(tmp, &ctx->mc_list, list)
+		if (!memcmp(&tmp->addr, addr, cmd->addr_size)) {
+			ret = -EADDRINUSE;
+			goto err_free_mc;
+		}
+
+	if (xa_alloc(&multicast_table, &mc->id, NULL, xa_limit_32b,
 		     GFP_KERNEL)) {
 		ret = -ENOMEM;
 		goto err_free_mc;
 	}
 
 	list_add_tail(&mc->list, &ctx->mc_list);
-	xa_unlock(&multicast_table);
 
-	mutex_lock(&ctx->mutex);
 	ret = rdma_join_multicast(ctx->cm_id, (struct sockaddr *)&mc->addr,
 				  join_state, mc);
-	if (ret) {
-		mutex_unlock(&ctx->mutex);
+	if (ret)
 		goto err_xa_erase;
-	}
 
 	resp.id = mc->id;
 	if (copy_to_user(u64_to_user_ptr(cmd->response),
@@ -1567,24 +1569,22 @@ static ssize_t ucma_process_join(struct ucma_file *file,
 		ret = -EFAULT;
 		goto err_leave_multicast;
 	}
-	mutex_unlock(&ctx->mutex);
 
 	xa_store(&multicast_table, mc->id, mc, 0);
+	mutex_unlock(&ctx->mutex);
 
 	ucma_put_ctx(ctx);
 	return 0;
 
 err_leave_multicast:
 	rdma_leave_multicast(ctx->cm_id, (struct sockaddr *) &mc->addr);
-	mutex_unlock(&ctx->mutex);
 	ucma_cleanup_mc_events(mc);
 err_xa_erase:
-	xa_lock(&multicast_table);
 	list_del(&mc->list);
-	__xa_erase(&multicast_table, mc->id);
+	xa_erase(&multicast_table, mc->id);
 err_free_mc:
-	xa_unlock(&multicast_table);
 	kfree(mc);
+	mutex_unlock(&ctx->mutex);
 err_put_ctx:
 	ucma_put_ctx(ctx);
 	return ret;
@@ -1634,6 +1634,7 @@ static ssize_t ucma_leave_multicast(struct ucma_file *file,
 {
 	struct rdma_ucm_destroy_id cmd;
 	struct rdma_ucm_destroy_id_resp resp;
+	struct ucma_context *ctx;
 	struct ucma_multicast *mc;
 	int ret = 0;
 
@@ -1658,19 +1659,20 @@ static ssize_t ucma_leave_multicast(struct ucma_file *file,
 		goto out;
 	}
 
-	list_del(&mc->list);
+	ctx = mc->ctx;
 	__xa_erase(&multicast_table, mc->id);
 	xa_unlock(&multicast_table);
 
-	mutex_lock(&mc->ctx->mutex);
-	rdma_leave_multicast(mc->ctx->cm_id, (struct sockaddr *) &mc->addr);
-	mutex_unlock(&mc->ctx->mutex);
+	mutex_lock(&ctx->mutex);
+	list_del(&mc->list);
+	rdma_leave_multicast(ctx->cm_id, (struct sockaddr *)&mc->addr);
 
 	ucma_cleanup_mc_events(mc);
 
-	ucma_put_ctx(mc->ctx);
 	resp.events_reported = mc->events_reported;
 	kfree(mc);
+	mutex_unlock(&ctx->mutex);
+	ucma_put_ctx(ctx);
 
 	if (copy_to_user(u64_to_user_ptr(cmd.response),
 			 &resp, sizeof(resp)))

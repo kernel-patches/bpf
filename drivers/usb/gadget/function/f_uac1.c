@@ -1447,7 +1447,7 @@ static int f_audio_bind(struct usb_configuration *c, struct usb_function *f)
 
 	audio->out_ep_maxpsize = le16_to_cpu(as_out_ep_desc.wMaxPacketSize);
 	audio->in_ep_maxpsize = le16_to_cpu(as_in_ep_desc.wMaxPacketSize);
-	audio->params.c_chmask = audio_opts->c_chmask;
+	audio->params.c_channels = num_channels(audio_opts->c_chmask);
 	memcpy(audio->params.c_srates, audio_opts->c_srates,
 			sizeof(audio->params.c_srates));
 	audio->params.c_ssize = audio_opts->c_ssize;
@@ -1460,7 +1460,7 @@ static int f_audio_bind(struct usb_configuration *c, struct usb_function *f)
 		audio->params.p_fu.volume_max = audio_opts->p_volume_max;
 		audio->params.p_fu.volume_res = audio_opts->p_volume_res;
 	}
-	audio->params.p_chmask = audio_opts->p_chmask;
+	audio->params.p_channels = num_channels(audio_opts->p_chmask);
 	memcpy(audio->params.p_srates, audio_opts->p_srates,
 			sizeof(audio->params.p_srates));
 	audio->params.p_ssize = audio_opts->p_ssize;
@@ -1699,7 +1699,7 @@ UAC1_ATTRIBUTE_STRING(c_it_ch_name);
 UAC1_ATTRIBUTE_STRING(c_ot_name);
 UAC1_ATTRIBUTE_STRING(c_fu_vol_name);
 
-static struct configfs_attribute *f_uac1_attrs[] = {
+static const struct configfs_attribute *const f_uac1_attrs[] = {
 	&f_uac1_opts_attr_c_chmask,
 	&f_uac1_opts_attr_c_srate,
 	&f_uac1_opts_attr_c_ssize,
@@ -1737,7 +1737,7 @@ static struct configfs_attribute *f_uac1_attrs[] = {
 
 static const struct config_item_type f_uac1_func_type = {
 	.ct_item_ops	= &f_uac1_item_ops,
-	.ct_attrs	= f_uac1_attrs,
+	.ct_attrs_const	= f_uac1_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

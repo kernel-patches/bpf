@@ -129,6 +129,7 @@ bool hubbub21_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower);
 bool hubbub21_program_urgent_watermarks(
 		struct hubbub *hubbub,

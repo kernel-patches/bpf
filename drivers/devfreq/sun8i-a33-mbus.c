@@ -312,7 +312,7 @@ static int sun8i_a33_mbus_hw_init(struct device *dev,
 	return 0;
 }
 
-static int __maybe_unused sun8i_a33_mbus_suspend(struct device *dev)
+static int sun8i_a33_mbus_suspend(struct device *dev)
 {
 	struct sun8i_a33_mbus *priv = dev_get_drvdata(dev);
 
@@ -321,7 +321,7 @@ static int __maybe_unused sun8i_a33_mbus_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused sun8i_a33_mbus_resume(struct device *dev)
+static int sun8i_a33_mbus_resume(struct device *dev)
 {
 	struct sun8i_a33_mbus *priv = dev_get_drvdata(dev);
 
@@ -470,7 +470,7 @@ static const struct of_device_id sun8i_a33_mbus_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, sun8i_a33_mbus_of_match);
 
-static SIMPLE_DEV_PM_OPS(sun8i_a33_mbus_pm_ops,
+static DEFINE_SIMPLE_DEV_PM_OPS(sun8i_a33_mbus_pm_ops,
 			 sun8i_a33_mbus_suspend, sun8i_a33_mbus_resume);
 
 static struct platform_driver sun8i_a33_mbus_driver = {
@@ -479,7 +479,7 @@ static struct platform_driver sun8i_a33_mbus_driver = {
 	.driver	= {
 		.name		= "sun8i-a33-mbus",
 		.of_match_table	= sun8i_a33_mbus_of_match,
-		.pm		= pm_ptr(&sun8i_a33_mbus_pm_ops),
+		.pm		= pm_sleep_ptr(&sun8i_a33_mbus_pm_ops),
 	},
 };
 module_platform_driver(sun8i_a33_mbus_driver);

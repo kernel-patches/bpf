@@ -11,7 +11,7 @@
 #ifndef __ASM_GENERIC_BARRIER_H
 #define __ASM_GENERIC_BARRIER_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/compiler.h>
 #include <linux/kcsan-checks.h>
@@ -302,5 +302,5 @@ do {									\
 # define smp_mb__after_switch_mm()	smp_mb()
 #endif
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 #endif /* __ASM_GENERIC_BARRIER_H */

@@ -20,6 +20,9 @@ BUILD_LTO_INFO;
 
 MODULE_INFO(vermagic, VERMAGIC_STRING);
 
+/* modpost generates assembly so provide for debug info. */
+__weak __section(".discard.this_module") struct module __this_module;
+
 #ifdef CONFIG_MITIGATION_RETPOLINE
 MODULE_INFO(retpoline, "Y");
 #endif

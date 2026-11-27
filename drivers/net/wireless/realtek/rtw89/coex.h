@@ -314,6 +314,14 @@ enum btc_mlo_rf_combin {
 	BTC_MLO_RF_2_PLUS_2 = 3,
 };
 
+enum rtw89_mlo_coex_mode {
+	RTW89_MRCX_1CH_WB_H0,
+	RTW89_MRCX_1CH_WB_H1,
+	RTW89_MRCX_TDMRA_1CH_W_B,
+	RTW89_MRCX_TDMRA_2CH_WB_WB,
+	RTW89_MRCX_TDMRA_2CH_W_W_B,
+};
+
 void rtw89_btc_init(struct rtw89_dev *rtwdev);
 void rtw89_btc_ntfy_poweron(struct rtw89_dev *rtwdev);
 void rtw89_btc_ntfy_poweroff(struct rtw89_dev *rtwdev);
@@ -336,6 +344,9 @@ void rtw89_btc_ntfy_wl_rfk(struct rtw89_dev *rtwdev, u8 phy_map,
 			   enum btc_wl_rfk_type type,
 			   enum btc_wl_rfk_state state);
 void rtw89_btc_ntfy_wl_sta(struct rtw89_dev *rtwdev);
+void rtw89_btc_ntfy_mrcx_info(struct rtw89_dev *rtwdev,
+			      enum rtw89_mlo_coex_mode mode,
+			      u8 act_hwb_map, u8 bt_slot_rsp);
 void rtw89_btc_c2h_handle(struct rtw89_dev *rtwdev, struct sk_buff *skb,
 			  u32 len, u8 class, u8 func);
 ssize_t rtw89_btc_dump_info(struct rtw89_dev *rtwdev, char *buf, size_t bufsz);

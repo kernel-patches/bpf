@@ -921,12 +921,20 @@ static int fuse_create_open(const struct mnt_idmap *idmap, struct inode *dir,
 		err = finish_open(file, entry, fuse_finish_open);
 	}
 	if (err) {
-		fi = get_fuse_inode(inode);
-		fuse_sync_release(fi, ff, flags);
+		if (!(file->f_mode & FMODE_OPENED)) {
+			/*
+			 * Only release ff here if the file was not opened.  If
+			 * finish_open() failed after having set FMODE_OPENED, then the
+			 * VFS owns the file and will call fuse_release(), which
+			 * releases ff.
+			 */
+			fi = get_fuse_inode(inode);
+			fuse_sync_release(fi, ff, flags);
+		}
 	} else {
 		if (fm->fc->atomic_o_trunc && trunc)
 			truncate_pagecache(inode, 0);
-		else if (!(ff->open_flags & FOPEN_KEEP_CACHE))
+		else if (!(ff->open_flags & FOPEN_KEEP_CACHE) && !IS_DAX(inode))
 			invalidate_inode_pages2(inode->i_mapping);
 	}
 	return err;

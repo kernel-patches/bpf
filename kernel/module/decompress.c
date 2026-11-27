@@ -216,7 +216,7 @@ static ssize_t module_zstd_decompress(struct load_info *info,
 	ZSTD_DStream *dstream;
 	size_t ret;
 	size_t new_size = 0;
-	int retval;
+	ssize_t retval;
 
 	if (size < sizeof(signature) ||
 	    memcmp(buf, signature, sizeof(signature))) {
@@ -276,7 +276,7 @@ static ssize_t module_zstd_decompress(struct load_info *info,
 	} while (zstd_dec.pos == PAGE_SIZE && ret != 0);
 
 	if (retval) {
-		pr_err("ZSTD-decompression failed with status %d\n", retval);
+		pr_err("ZSTD-decompression failed with status %zd\n", retval);
 		retval = -EINVAL;
 		goto out;
 	}

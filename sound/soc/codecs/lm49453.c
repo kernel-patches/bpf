@@ -813,7 +813,7 @@ static const struct snd_soc_dapm_route lm49453_audio_map[] = {
 	{ "HPR Mixer", "DMIC1L Switch", "DMIC1 Left" },
 	{ "HPR Mixer", "DMIC1R Switch", "DMIC1 Right" },
 	{ "HPR Mixer", "DMIC2L Switch", "DMIC2 Left" },
-	{ "HPR Mixer", "DMIC2L Switch", "DMIC2 Right" },
+	{ "HPR Mixer", "DMIC2R Switch", "DMIC2 Right" },
 	{ "HPR Mixer", "Sidetone Switch", "Sidetone" },
 
 	{ "HPR DAC", NULL, "HPR Mixer" },

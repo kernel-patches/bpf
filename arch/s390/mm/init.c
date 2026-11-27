@@ -74,6 +74,7 @@ void __init arch_setup_zero_pages(void)
 {
 	unsigned long total_pages = memblock_estimated_nr_free_pages();
 	unsigned int order;
+	int rc;
 
 	/* Latest machines require a mapping granularity of 512KB */
 	order = 7;
@@ -86,7 +87,9 @@ void __init arch_setup_zero_pages(void)
 
 	zero_page_mask = ((PAGE_SIZE << order) - 1) & PAGE_MASK;
 
-	set_memory_ro(empty_zero_page, 1UL << order);
+	rc = set_memory_ro(empty_zero_page, 1UL << order);
+	if (rc)
+		panic("%s() failed, err = %d\n", __func__, rc);
 }
 
 void __init arch_zone_limits_init(unsigned long *max_zone_pfns)
@@ -107,10 +110,13 @@ void __init paging_init(void)
 void mark_rodata_ro(void)
 {
 	unsigned long size = __end_ro_after_init - __start_ro_after_init;
+	int rc;
 
 	if (cpu_has_nx())
 		system_ctl_set_bit(0, CR0_INSTRUCTION_EXEC_PROTECTION_BIT);
-	__set_memory_ro(__start_ro_after_init, __end_ro_after_init);
+	rc = __set_memory_ro(__start_ro_after_init, __end_ro_after_init);
+	if (rc)
+		panic("%s() failed, err = %d\n", __func__, rc);
 	pr_info("Write protected read-only-after-init data: %luk\n", size >> 10);
 }
 
@@ -293,13 +299,12 @@ int arch_add_memory(int nid, u64 start, u64 size,
 	return rc;
 }
 
-void arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap,
-			struct dev_pagemap *pgmap)
+void arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap)
 {
 	unsigned long start_pfn = start >> PAGE_SHIFT;
 	unsigned long nr_pages = size >> PAGE_SHIFT;
 
-	__remove_pages(start_pfn, nr_pages, altmap, pgmap);
+	__remove_pages(start_pfn, nr_pages, altmap);
 	vmem_remove_mapping(start, size);
 }
 #endif /* CONFIG_MEMORY_HOTPLUG */

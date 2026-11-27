@@ -223,12 +223,14 @@ static int __maybe_unused hda_dai_hw_free(struct snd_pcm_substream *substream,
 {
 	const struct hda_dai_widget_dma_ops *ops = hda_dai_get_ops(substream, cpu_dai);
 	struct hdac_ext_stream *hext_stream;
-	struct snd_sof_dev *sdev = dai_to_sdev(substream, cpu_dai);
+	struct snd_sof_dev *sdev;
 
 	if (!ops) {
 		dev_err(cpu_dai->dev, "DAI widget ops not set\n");
 		return -EINVAL;
 	}
+
+	sdev = dai_to_sdev(substream, cpu_dai);
 
 	hext_stream = ops->get_hext_stream(sdev, cpu_dai, substream);
 	if (!hext_stream)
@@ -246,13 +248,15 @@ static int __maybe_unused hda_dai_hw_params_data(struct snd_pcm_substream *subst
 	struct snd_soc_dapm_widget *w = snd_soc_dai_get_widget(dai, substream->stream);
 	const struct hda_dai_widget_dma_ops *ops = hda_dai_get_ops(substream, dai);
 	struct hdac_ext_stream *hext_stream;
-	struct snd_sof_dev *sdev = widget_to_sdev(w);
+	struct snd_sof_dev *sdev;
 	int ret;
 
 	if (!ops) {
-		dev_err(sdev->dev, "DAI widget ops not set\n");
+		dev_err(dai->dev, "DAI widget ops not set\n");
 		return -EINVAL;
 	}
+
+	sdev = widget_to_sdev(w);
 
 	hext_stream = ops->get_hext_stream(sdev, dai, substream);
 	if (hext_stream && hext_stream->link_prepared)

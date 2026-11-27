@@ -66,7 +66,7 @@ void tsc_verify_tsc_adjust(bool resume)
 
 	adj->nextcheck = jiffies + HZ;
 
-	rdmsrq(MSR_IA32_TSC_ADJUST, curval);
+	curval = rdmsrq(MSR_IA32_TSC_ADJUST);
 	if (adj->adjusted == curval)
 		return;
 
@@ -166,7 +166,7 @@ bool __init tsc_store_and_check_tsc_adjust(bool bootcpu)
 	if (check_tsc_unstable())
 		return false;
 
-	rdmsrq(MSR_IA32_TSC_ADJUST, bootval);
+	bootval = rdmsrq(MSR_IA32_TSC_ADJUST);
 	cur->bootval = bootval;
 	cur->nextcheck = jiffies + HZ;
 	tsc_sanitize_first_cpu(cur, bootval, smp_processor_id(), bootcpu);
@@ -188,7 +188,7 @@ bool tsc_store_and_check_tsc_adjust(bool bootcpu)
 	if (!boot_cpu_has(X86_FEATURE_TSC_ADJUST))
 		return false;
 
-	rdmsrq(MSR_IA32_TSC_ADJUST, bootval);
+	bootval = rdmsrq(MSR_IA32_TSC_ADJUST);
 	cur->bootval = bootval;
 	cur->nextcheck = jiffies + HZ;
 	cur->warned = false;

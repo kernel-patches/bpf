@@ -116,7 +116,7 @@ int bdc_dconfig_ep(struct bdc *bdc, struct bdc_ep *ep)
 	return bdc_submit_cmd(bdc, cmd_sc, 0, 0, 0);
 }
 
-/* Reinitalize the bdlist after config ep command */
+/* Reinitialize the bdlist after config ep command */
 static void ep_bd_list_reinit(struct bdc_ep *ep)
 {
 	struct bdc *bdc = ep->bdc;

@@ -37,6 +37,7 @@
 
 #include "gc/gc_12_1_0_offset.h"
 #include "gc/gc_12_1_0_sh_mask.h"
+#include "smuio/smuio_15_0_0_offset.h"
 #include "soc24_enum.h"
 #include "ivsrcid/gfx/irqsrcs_gfx_12_1_0.h"
 
@@ -210,6 +211,8 @@ static void gfx_v12_1_update_perf_clk(struct amdgpu_device *adev,
 				      bool enable);
 static void gfx_v12_1_xcc_update_perf_clk(struct amdgpu_device *adev,
 					 bool enable, int xcc_id);
+static bool gfx_v12_1_set_perfmon_clk_override(struct amdgpu_device *adev,
+					       int xcc_id, bool on);
 static int gfx_v12_1_init_cp_compute_microcode_bo(struct amdgpu_device *adev);
 static void gfx_v12_1_xcc_update_medium_grain_clock_gating(
 	struct amdgpu_device *adev, bool enable, int xcc_id, bool force);
@@ -746,6 +749,7 @@ static const struct amdgpu_gfx_funcs gfx_v12_1_gfx_funcs = {
 	.read_wave_vgprs = &gfx_v12_1_read_wave_vgprs,
 	.select_me_pipe_q = &gfx_v12_1_select_me_pipe_q,
 	.update_perfmon_mgcg = &gfx_v12_1_update_perf_clk,
+	.set_perfmon_clk_override = &gfx_v12_1_set_perfmon_clk_override,
 	.get_xccs_per_xcp = &gfx_v12_1_get_xccs_per_xcp,
 	.ih_node_to_logical_xcc = &gfx_v12_1_ih_to_xcc_inst,
 };
@@ -1514,9 +1518,8 @@ static u32 gfx_v12_1_get_sh_mem_config(struct amdgpu_device *adev)
 {
 	u32 sh_mem_config = DEFAULT_SH_MEM_CONFIG;
 
-	/* GC 12.1.0 A0 requires RETRY_DISABLE in SH_MEM_CONFIG. */
-	if (SOC_V1_0_DIE_REV_XCD(adev->rev_id) == 0)
-		sh_mem_config |= 1 << SH_MEM_CONFIG__RETRY_DISABLE__SHIFT;
+	/* XNACK cannot be enabled for GFX12.1 */
+	sh_mem_config |= 1 << SH_MEM_CONFIG__RETRY_DISABLE__SHIFT;
 
 	return sh_mem_config;
 }
@@ -1541,7 +1544,7 @@ static void gfx_v12_1_xcc_init_compute_vmid(struct amdgpu_device *adev,
 	sh_mem_config = gfx_v12_1_get_sh_mem_config(adev);
 
 	mutex_lock(&adev->srbm_mutex);
-	for (i = adev->vm_manager.first_kfd_vmid; i < AMDGPU_NUM_VMID; i++) {
+	for_each_uq_gfx_vmid(i, adev) {
 		soc_v1_0_grbm_select(adev, 0, 0, 0, i, GET_INST(GC, xcc_id));
 		/* CP and shaders */
 		WREG32_SOC15(GC, GET_INST(GC, xcc_id), regSH_MEM_CONFIG, sh_mem_config);
@@ -1563,14 +1566,12 @@ static void gfx_v12_1_xcc_init_compute_vmid(struct amdgpu_device *adev,
 
 static void gfx_v12_1_xcc_xnack_set_chicken_bits(struct amdgpu_device *adev, int xcc_id)
 {
-	/* NOTE: COMPRESSION_ENABLE is used a chicken bit to enable/disable xcc xnack */
+	/* NOTE: COMPRESSION_ENABLE is used as a chicken bit to enable/disable xcc xnack
+	 * Since xnack retry is disabled for GFX12.1, set it to 0 unconditionally
+	 */
 	mutex_lock(&adev->srbm_mutex);
-	if (!adev->gmc.noretry) {
-		WREG32_FIELD15_PREREG(GC, GET_INST(GC, xcc_id),
-				      TCP_PERFCOUNTER_FILTER, COMPRESSION_ENABLE, 0x1);
-	} else
-		WREG32_FIELD15_PREREG(GC, GET_INST(GC, xcc_id),
-				      TCP_PERFCOUNTER_FILTER, COMPRESSION_ENABLE, 0x0);
+	WREG32_FIELD15_PREREG(GC, GET_INST(GC, xcc_id),
+			      TCP_PERFCOUNTER_FILTER, COMPRESSION_ENABLE, 0x0);
 	mutex_unlock(&adev->srbm_mutex);
 }
 
@@ -1862,7 +1863,7 @@ static int gfx_v12_1_xcc_rlc_resume(struct amdgpu_device *adev,
 	int r;
 
 	/* init spm vmid with 0xf */
-	gfx_v12_1_update_spm_vmid(adev, xcc_id, NULL, 0xf);
+	gfx_v12_1_update_spm_vmid(adev, xcc_id, NULL, adev->vm_manager.spm_vmid);
 
 	if (adev->firmware.load_type == AMDGPU_FW_LOAD_PSP) {
 		gfx_v12_1_xcc_init_csb(adev, xcc_id);
@@ -2406,9 +2407,6 @@ static int gfx_v12_1_xcc_kcq_resume(struct amdgpu_device *adev,
 	struct amdgpu_ring *ring = NULL;
 	int r = 0, i;
 
-	if (!amdgpu_async_gfx_ring)
-		gfx_v12_1_xcc_cp_compute_enable(adev, true, xcc_id);
-
 	for (i = 0; i < adev->gfx.num_compute_rings; i++) {
 		ring = &adev->gfx.compute_ring[i + xcc_id * adev->gfx.num_compute_rings];
 
@@ -2815,9 +2813,34 @@ static int gfx_v12_1_wait_for_idle(struct amdgpu_ip_block *ip_block)
 	return -ETIMEDOUT;
 }
 
+static uint64_t gfx_v12_1_get_smuio_gpu_clock_counter(struct amdgpu_device *adev)
+{
+	uint64_t clock = 0;
+	uint32_t reg;
+
+	if (!down_read_trylock(&adev->reset_domain->sem))
+		return 0;
+	if (amdgpu_device_skip_hw_access(adev) ||
+	    !adev->mes.ring[0].sched.ready)
+		goto unlock_reset;
+
+	reg = SOC15_REG_OFFSET(SMUIO, 0, regGOLDEN_TSC_COUNT_UPPER);
+	if (amdgpu_mes_rreg64(adev, reg, 0, &clock))
+		goto unlock_reset;
+
+	clock = (clock << 32) | (clock >> 32);
+
+unlock_reset:
+	up_read(&adev->reset_domain->sem);
+	return clock;
+}
+
 static uint64_t gfx_v12_1_get_gpu_clock_counter(struct amdgpu_device *adev)
 {
 	uint64_t clock = 0;
+
+	if (amdgpu_sriov_vf(adev))
+		return gfx_v12_1_get_smuio_gpu_clock_counter(adev);
 
 	if (adev->smuio.funcs &&
 	    adev->smuio.funcs->get_gpu_clock_counter)
@@ -2924,6 +2947,9 @@ static void gfx_v12_1_update_spm_vmid(struct amdgpu_device *adev,
 {
 	u32 reg, data;
 
+	if (ring)
+		return;
+
 	reg = SOC15_REG_OFFSET(GC, GET_INST(GC, xcc_id), regRLC_SPM_MC_CNTL);
 	if (amdgpu_sriov_is_pp_one_vf(adev))
 		data = RREG32_NO_KIQ(reg);
@@ -2937,14 +2963,6 @@ static void gfx_v12_1_update_spm_vmid(struct amdgpu_device *adev,
 		WREG32_SOC15_NO_KIQ(GC, GET_INST(GC, xcc_id), regRLC_SPM_MC_CNTL, data);
 	else
 		WREG32_SOC15(GC, GET_INST(GC, xcc_id), regRLC_SPM_MC_CNTL, data);
-
-	if (ring
-	    && amdgpu_sriov_is_pp_one_vf(adev)
-	    && ((ring->funcs->type == AMDGPU_RING_TYPE_GFX)
-		|| (ring->funcs->type == AMDGPU_RING_TYPE_COMPUTE))) {
-		uint32_t reg = SOC15_REG_OFFSET(GC, GET_INST(GC, xcc_id), regRLC_SPM_MC_CNTL);
-		amdgpu_ring_emit_wreg(ring, reg, data);
-	}
 }
 
 static const struct amdgpu_rlc_funcs gfx_v12_1_rlc_funcs = {
@@ -3139,28 +3157,36 @@ static void gfx_v12_1_xcc_update_sram_fgcg(struct amdgpu_device *adev,
 		WREG32_SOC15(GC, GET_INST(GC, xcc_id), regRLC_CGTT_MGCG_OVERRIDE, data);
 }
 
-static void gfx_v12_1_xcc_update_perf_clk(struct amdgpu_device *adev,
-					  bool enable, int xcc_id)
+static bool gfx_v12_1_set_perfmon_clk_override(struct amdgpu_device *adev,
+					       int xcc_id, bool on)
 {
 	uint32_t def, data;
 
-	if (!(adev->cg_flags & AMD_CG_SUPPORT_GFX_PERF_CLK))
-		return;
-
 	def = data = RREG32_SOC15(GC, GET_INST(GC, xcc_id), regRLC_CGTT_MGCG_OVERRIDE);
 
-	if (enable)
-		data &= ~RLC_CGTT_MGCG_OVERRIDE__PERFMON_CLOCK_STATE_MASK;
-	else
+	if (on)
 		data |= RLC_CGTT_MGCG_OVERRIDE__PERFMON_CLOCK_STATE_MASK;
+	else
+		data &= ~RLC_CGTT_MGCG_OVERRIDE__PERFMON_CLOCK_STATE_MASK;
 
 	if (def != data)
 		WREG32_SOC15(GC, GET_INST(GC, xcc_id), regRLC_CGTT_MGCG_OVERRIDE, data);
+
+	return !!(def & RLC_CGTT_MGCG_OVERRIDE__PERFMON_CLOCK_STATE_MASK);
+}
+
+static void gfx_v12_1_xcc_update_perf_clk(struct amdgpu_device *adev,
+					  bool enable, int xcc_id)
+{
+	if (adev->cg_flags & AMD_CG_SUPPORT_GFX_PERF_CLK)
+		amdgpu_gfx_perfmon_clk_update(adev, xcc_id, !enable);
 }
 
 static int gfx_v12_1_xcc_update_gfx_clock_gating(struct amdgpu_device *adev,
 					     bool enable, int xcc_id)
 {
+	/* RLC_CGTT_MGCG_OVERRIDE is shared with the perfmon clock override */
+	mutex_lock(&adev->gfx.perfmon_clk_mutex);
 	amdgpu_gfx_rlc_enter_safe_mode(adev, xcc_id);
 
 	gfx_v12_1_xcc_update_coarse_grain_clock_gating(adev, enable, xcc_id);
@@ -3183,6 +3209,7 @@ static int gfx_v12_1_xcc_update_gfx_clock_gating(struct amdgpu_device *adev,
 		gfx_v12_1_xcc_enable_gui_idle_interrupt(adev, enable, xcc_id);
 
 	amdgpu_gfx_rlc_exit_safe_mode(adev, xcc_id);
+	mutex_unlock(&adev->gfx.perfmon_clk_mutex);
 
 	return 0;
 }
@@ -3499,6 +3526,25 @@ static int gfx_v12_1_eop_irq(struct amdgpu_device *adev,
 
 	DRM_DEBUG("IH: CP EOP\n");
 
+	if (((entry->ring_id & 0x0c) >> 2) == 3) {
+		u32 type = amdgpu_mes_ih_int_type(doorbell_offset);
+
+		switch (type) {
+		case AMDGPU_MES_IH_INT_TYPE_DBGMSG:
+			/*
+			 * MES firmware debug-extension ("mes_dbgext") messages are
+			 * delivered as an EOP interrupt from the MES scheduler pipe
+			 * (me 3).  Type is in context dword bits 31:26 (MES_DBGMSG = 7).
+			 */
+			if (adev->mes.dbgext_active)
+				amdgpu_mes_dbgext_notify(adev, doorbell_offset);
+			break;
+		default:
+			break;
+		}
+		return 0;
+	}
+
 	if (adev->enable_mes && doorbell_offset) {
 		amdgpu_userq_process_fence_irq(adev, doorbell_offset);
 	} else {
@@ -3715,6 +3761,58 @@ static void gfx_v12_1_emit_mem_sync(struct amdgpu_ring *ring)
 	amdgpu_ring_write(ring, gcr_cntl); /* GCR_CNTL */
 }
 
+/*
+ * A runtime partition switch does not pass through GFX hw_fini/hw_init.
+ * Stop the GFX compute path while the old partition is still programmed,
+ * then restore it after the new mode is committed.
+ */
+static int gfx_v12_1_pre_px_switch(struct amdgpu_ip_block *ip_block)
+{
+	struct amdgpu_device *adev = ip_block->adev;
+	int xcc_id, pipe, num_xcc = NUM_XCC(adev->gfx.xcc_mask);
+
+	if (!adev->enable_mes_kiq)
+		return 0;
+
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++) {
+		if (!adev->mes.ring[MES_PIPE_INST(xcc_id,
+						  AMDGPU_MES_SCHED_PIPE)].sched.ready)
+			return 0;
+	}
+
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++)
+		gfx_v12_1_xcc_fini(adev, xcc_id);
+
+	/*
+	 * MES firmware restarts with its read pointer at zero. Clear both
+	 * rings and their writeback pointers before bringing the GFX compute
+	 * path back up, otherwise firmware can replay stale packets.
+	 */
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++) {
+		for (pipe = 0; pipe < AMDGPU_MAX_MES_PIPES; pipe++)
+			amdgpu_ring_clear_ring_and_ptrs(
+				&adev->mes.ring[MES_PIPE_INST(xcc_id, pipe)]);
+	}
+
+	adev->gfx.px_switch_stopped = true;
+	return 0;
+}
+
+static int gfx_v12_1_post_px_switch(struct amdgpu_ip_block *ip_block)
+{
+	struct amdgpu_device *adev = ip_block->adev;
+	uint16_t xcc_mask;
+
+	if (!adev->enable_mes_kiq || !adev->gfx.px_switch_stopped)
+		return 0;
+
+	/* Cleared first so a failed resume is not run a second time. */
+	adev->gfx.px_switch_stopped = false;
+	xcc_mask = GENMASK(NUM_XCC(adev->gfx.xcc_mask) - 1, 0);
+
+	return gfx_v12_1_xcc_cp_resume(adev, xcc_mask);
+}
+
 static const struct amd_ip_funcs gfx_v12_1_ip_funcs = {
 	.name = "gfx_v12_1",
 	.early_init = gfx_v12_1_early_init,
@@ -3730,6 +3828,8 @@ static const struct amd_ip_funcs gfx_v12_1_ip_funcs = {
 	.get_clockgating_state = gfx_v12_1_get_clockgating_state,
 	.dump_ip_state = gfx_v12_1_ip_dump,
 	.print_ip_state = gfx_v12_1_ip_print,
+	.pre_px_switch = gfx_v12_1_pre_px_switch,
+	.post_px_switch = gfx_v12_1_post_px_switch,
 };
 
 static const struct amdgpu_ring_funcs gfx_v12_1_ring_funcs_compute = {

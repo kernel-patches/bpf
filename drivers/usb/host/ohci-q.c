@@ -137,7 +137,7 @@ static int balance (struct ohci_hcd *ohci, int interval, int load)
 /*-------------------------------------------------------------------------*/
 
 /* both iso and interrupt requests have periods; this routine puts them
- * into the schedule tree in the apppropriate place.  most iso devices use
+ * into the schedule tree in the appropriate place.  most iso devices use
  * 1msec periods, but that's not required.
  */
 static void periodic_link (struct ohci_hcd *ohci, struct ed *ed)

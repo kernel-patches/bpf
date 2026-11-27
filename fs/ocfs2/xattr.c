@@ -3867,10 +3867,11 @@ out:
  * ip_alloc_sem there adds a transaction -> ip_alloc_sem order that would
  * form a lockdep cycle with the ip_alloc_sem -> transaction order used
  * elsewhere, if not for this separate subclass.  The inode is unpublished
- * so the acquisition can never contend.
+ * so the acquisition can never contend.  It must not collide with the
+ * SINGLE_DEPTH_NESTING subclass ocfs2_remap_file_range() uses.
  */
 enum {
-	OCFS2_IP_ALLOC_SEM_UNPUBLISHED = 1,
+	OCFS2_IP_ALLOC_SEM_UNPUBLISHED = SINGLE_DEPTH_NESTING + 1,
 };
 
 /*
@@ -7881,6 +7882,9 @@ static int ocfs2_xattr_security_set(const struct xattr_handler *handler,
 				    const char *name, const void *value,
 				    size_t size, int flags)
 {
+	if (unlikely(ocfs2_emergency_state(OCFS2_SB(inode->i_sb))))
+		return -EROFS;
+
 	return ocfs2_xattr_set(inode, OCFS2_XATTR_INDEX_SECURITY,
 			       name, value, size, flags);
 }
@@ -8029,6 +8033,9 @@ static int ocfs2_xattr_trusted_set(const struct xattr_handler *handler,
 				   const char *name, const void *value,
 				   size_t size, int flags)
 {
+	if (unlikely(ocfs2_emergency_state(OCFS2_SB(inode->i_sb))))
+		return -EROFS;
+
 	return ocfs2_xattr_set(inode, OCFS2_XATTR_INDEX_TRUSTED,
 			       name, value, size, flags);
 }
@@ -8064,6 +8071,8 @@ static int ocfs2_xattr_user_set(const struct xattr_handler *handler,
 
 	if (osb->s_mount_opt & OCFS2_MOUNT_NOUSERXATTR)
 		return -EOPNOTSUPP;
+	if (unlikely(ocfs2_emergency_state(osb)))
+		return -EROFS;
 
 	return ocfs2_xattr_set(inode, OCFS2_XATTR_INDEX_USER,
 			       name, value, size, flags);

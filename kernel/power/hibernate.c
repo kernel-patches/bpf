@@ -72,6 +72,16 @@ enum {
 #define HIBERNATION_MAX (__HIBERNATION_AFTER_LAST-1)
 #define HIBERNATION_FIRST (HIBERNATION_INVALID + 1)
 
+static const char * const hibernation_modes[] = {
+	[HIBERNATION_PLATFORM]	= "platform",
+	[HIBERNATION_SHUTDOWN]	= "shutdown",
+	[HIBERNATION_REBOOT]	= "reboot",
+#ifdef CONFIG_SUSPEND
+	[HIBERNATION_SUSPEND]	= "suspend",
+#endif
+	[HIBERNATION_TEST_RESUME]	= "test_resume",
+};
+
 static int hibernation_mode = HIBERNATION_SHUTDOWN;
 
 bool freezer_test_done;
@@ -116,6 +126,7 @@ bool hibernation_available(void)
 	return nohibernate == 0 &&
 		!security_locked_down(LOCKDOWN_HIBERNATION) &&
 		!secretmem_active() && !cxl_mem_active() &&
+		!debug_pagealloc_enabled() &&
 		arch_hibernation_available();
 }
 
@@ -426,6 +437,11 @@ int hibernation_snapshot(int platform_mode)
 	error = freeze_kernel_threads();
 	if (error)
 		goto Cleanup;
+
+	if (!hibernation_available()) {
+		error = -EBUSY;
+		goto Thaw;
+	}
 
 	if (hibernation_test(TEST_FREEZER)) {
 
@@ -794,7 +810,8 @@ int hibernate(void)
 		goto Unlock;
 	}
 
-	pr_info("hibernation entry\n");
+	pr_info("hibernation entry (%s)\n",
+		hibernation_modes[hibernation_mode]);
 	pm_prepare_console();
 	error = pm_notifier_call_chain_robust(PM_HIBERNATION_PREPARE, PM_POST_HIBERNATION);
 	if (error)
@@ -1130,17 +1147,6 @@ static int __init software_resume_initcall(void)
 }
 late_initcall_sync(software_resume_initcall);
 
-
-static const char * const hibernation_modes[] = {
-	[HIBERNATION_PLATFORM]	= "platform",
-	[HIBERNATION_SHUTDOWN]	= "shutdown",
-	[HIBERNATION_REBOOT]	= "reboot",
-#ifdef CONFIG_SUSPEND
-	[HIBERNATION_SUSPEND]	= "suspend",
-#endif
-	[HIBERNATION_TEST_RESUME]	= "test_resume",
-};
-
 /*
  * /sys/power/disk - Control hibernation mode.
  *
@@ -1316,7 +1322,8 @@ static ssize_t resume_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return n;
 }
 
-power_attr(resume);
+static struct kobj_attribute resume_attr =
+	__ATTR_NO_SPLICE(resume, 0644, resume_show, resume_store);
 
 static ssize_t resume_offset_show(struct kobject *kobj,
 				  struct kobj_attribute *attr, char *buf)

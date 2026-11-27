@@ -22,7 +22,14 @@
 MODULE_AUTHOR("Stas Sergeev <stsp@users.sourceforge.net>");
 MODULE_DESCRIPTION("PC-Speaker driver");
 MODULE_LICENSE("GPL");
+/*
+ * The input driver pcspkr binds to the same platform device and has the same
+ * driver name, so only one of the two can be loaded. If pcspkr is available,
+ * let it handle the beeps, and leave loading this driver to the user.
+ */
+#if !IS_ENABLED(CONFIG_INPUT_PCSPKR)
 MODULE_ALIAS("platform:pcspkr");
+#endif
 
 static int index = SNDRV_DEFAULT_IDX1;	/* Index 0-MAX */
 static char *id = SNDRV_DEFAULT_STR1;	/* ID for this card */

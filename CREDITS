@@ -787,9 +787,8 @@ D: Assorted sched/mm titbits
 S: Oxfordshire, UK.
 
 N: Kees Cook
+E: kees@kernel.org
 E: kees@outflux.net
-E: kees@ubuntu.com
-E: keescook@chromium.org
 W: http://outflux.net/blog/
 P: 4096R/DC6DC026 A5C3 F68F 229D D60F 723E  6E13 8972 F4DF DC6D C026
 D: Various security things, bug fixes, and documentation.
@@ -3938,6 +3937,12 @@ D: Various janitorial patches
 D: mandocs and mandocs_install build targets
 S: (Email me and ask)
 S: Australia
+
+N: Lorenzo Stoakes
+E: ljs@kernel.org
+W: https://ljs.io
+D: THP co-maintainer
+S: UK
 
 N: Henrik Storner
 E: storner@image.dk

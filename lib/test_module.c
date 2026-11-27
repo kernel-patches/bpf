@@ -30,6 +30,6 @@ static void __exit test_module_exit(void)
 
 module_exit(test_module_exit);
 
-MODULE_AUTHOR("Kees Cook <keescook@chromium.org>");
+MODULE_AUTHOR("Kees Cook <kees@kernel.org>");
 MODULE_DESCRIPTION("module loading subsystem test module");
 MODULE_LICENSE("GPL");

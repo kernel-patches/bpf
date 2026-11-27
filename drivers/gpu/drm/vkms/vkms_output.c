@@ -115,7 +115,5 @@ int vkms_output_init(struct vkms_device *vkmsdev)
 		}
 	}
 
-	drm_mode_config_reset(dev);
-
-	return 0;
+	return drm_mode_config_create_initial_state(dev);
 }

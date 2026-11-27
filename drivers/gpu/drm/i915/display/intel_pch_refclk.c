@@ -36,91 +36,32 @@ static void lpt_fdi_reset_mphy(struct intel_display *display)
 /* WaMPhyProgramming:hsw */
 static void lpt_fdi_program_mphy(struct intel_display *display)
 {
-	u32 tmp;
-
 	lpt_fdi_reset_mphy(display);
 
-	tmp = intel_sbi_read(display, 0x8008, SBI_MPHY);
-	tmp &= ~(0xFF << 24);
-	tmp |= (0x12 << 24);
-	intel_sbi_write(display, 0x8008, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x2008, SBI_MPHY);
-	tmp |= (1 << 11);
-	intel_sbi_write(display, 0x2008, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x2108, SBI_MPHY);
-	tmp |= (1 << 11);
-	intel_sbi_write(display, 0x2108, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x206C, SBI_MPHY);
-	tmp |= (1 << 24) | (1 << 21) | (1 << 18);
-	intel_sbi_write(display, 0x206C, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x216C, SBI_MPHY);
-	tmp |= (1 << 24) | (1 << 21) | (1 << 18);
-	intel_sbi_write(display, 0x216C, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x2080, SBI_MPHY);
-	tmp &= ~(7 << 13);
-	tmp |= (5 << 13);
-	intel_sbi_write(display, 0x2080, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x2180, SBI_MPHY);
-	tmp &= ~(7 << 13);
-	tmp |= (5 << 13);
-	intel_sbi_write(display, 0x2180, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x208C, SBI_MPHY);
-	tmp &= ~0xFF;
-	tmp |= 0x1C;
-	intel_sbi_write(display, 0x208C, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x218C, SBI_MPHY);
-	tmp &= ~0xFF;
-	tmp |= 0x1C;
-	intel_sbi_write(display, 0x218C, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x2098, SBI_MPHY);
-	tmp &= ~(0xFF << 16);
-	tmp |= (0x1C << 16);
-	intel_sbi_write(display, 0x2098, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x2198, SBI_MPHY);
-	tmp &= ~(0xFF << 16);
-	tmp |= (0x1C << 16);
-	intel_sbi_write(display, 0x2198, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x20C4, SBI_MPHY);
-	tmp |= (1 << 27);
-	intel_sbi_write(display, 0x20C4, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x21C4, SBI_MPHY);
-	tmp |= (1 << 27);
-	intel_sbi_write(display, 0x21C4, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x20EC, SBI_MPHY);
-	tmp &= ~(0xF << 28);
-	tmp |= (4 << 28);
-	intel_sbi_write(display, 0x20EC, tmp, SBI_MPHY);
-
-	tmp = intel_sbi_read(display, 0x21EC, SBI_MPHY);
-	tmp &= ~(0xF << 28);
-	tmp |= (4 << 28);
-	intel_sbi_write(display, 0x21EC, tmp, SBI_MPHY);
+	intel_sbi_rmw(display, 0x8008, 0xFF << 24, 0x12 << 24, SBI_MPHY);
+	intel_sbi_rmw(display, 0x2008, 0, 1 << 11, SBI_MPHY);
+	intel_sbi_rmw(display, 0x2108, 0, 1 << 11, SBI_MPHY);
+	intel_sbi_rmw(display, 0x206C, 0, (1 << 24) | (1 << 21) | (1 << 18), SBI_MPHY);
+	intel_sbi_rmw(display, 0x216C, 0, (1 << 24) | (1 << 21) | (1 << 18), SBI_MPHY);
+	intel_sbi_rmw(display, 0x2080, 7 << 13, 5 << 13, SBI_MPHY);
+	intel_sbi_rmw(display, 0x2180, 7 << 13, 5 << 13, SBI_MPHY);
+	intel_sbi_rmw(display, 0x208C, 0xFF, 0x1C, SBI_MPHY);
+	intel_sbi_rmw(display, 0x218C, 0xFF, 0x1C, SBI_MPHY);
+	intel_sbi_rmw(display, 0x2098, 0xFF << 16, 0x1C << 16, SBI_MPHY);
+	intel_sbi_rmw(display, 0x2198, 0xFF << 16, 0x1C << 16, SBI_MPHY);
+	intel_sbi_rmw(display, 0x20C4, 0, 1 << 27, SBI_MPHY);
+	intel_sbi_rmw(display, 0x21C4, 0, 1 << 27, SBI_MPHY);
+	intel_sbi_rmw(display, 0x20EC, 0xF << 28, 4 << 28, SBI_MPHY);
+	intel_sbi_rmw(display, 0x21EC, 0xF << 28, 4 << 28, SBI_MPHY);
 }
 
 void lpt_disable_iclkip(struct intel_display *display)
 {
-	u32 temp;
-
 	intel_de_write(display, PIXCLK_GATE, PIXCLK_GATE_GATE);
 
 	intel_sbi_lock(display);
 
-	temp = intel_sbi_read(display, SBI_SSCCTL6, SBI_ICLK);
-	temp |= SBI_SSCCTL_DISABLE;
-	intel_sbi_write(display, SBI_SSCCTL6, temp, SBI_ICLK);
+	intel_sbi_rmw(display, SBI_SSCCTL6, 0, SBI_SSCCTL_DISABLE, SBI_ICLK);
 
 	intel_sbi_unlock(display);
 }
@@ -185,7 +126,6 @@ void lpt_program_iclkip(const struct intel_crtc_state *crtc_state)
 	struct intel_display *display = to_intel_display(crtc_state);
 	int clock = crtc_state->hw.adjusted_mode.crtc_clock;
 	struct iclkip_params p;
-	u32 temp;
 
 	lpt_disable_iclkip(display);
 
@@ -205,25 +145,23 @@ void lpt_program_iclkip(const struct intel_crtc_state *crtc_state)
 	intel_sbi_lock(display);
 
 	/* Program SSCDIVINTPHASE6 */
-	temp = intel_sbi_read(display, SBI_SSCDIVINTPHASE6, SBI_ICLK);
-	temp &= ~SBI_SSCDIVINTPHASE_DIVSEL_MASK;
-	temp |= SBI_SSCDIVINTPHASE_DIVSEL(p.divsel);
-	temp &= ~SBI_SSCDIVINTPHASE_INCVAL_MASK;
-	temp |= SBI_SSCDIVINTPHASE_INCVAL(p.phaseinc);
-	temp |= SBI_SSCDIVINTPHASE_DIR(p.phasedir);
-	temp |= SBI_SSCDIVINTPHASE_PROPAGATE;
-	intel_sbi_write(display, SBI_SSCDIVINTPHASE6, temp, SBI_ICLK);
+	intel_sbi_rmw(display, SBI_SSCDIVINTPHASE6,
+		      SBI_SSCDIVINTPHASE_DIVSEL_MASK |
+		      SBI_SSCDIVINTPHASE_INCVAL_MASK,
+		      SBI_SSCDIVINTPHASE_DIVSEL(p.divsel) |
+		      SBI_SSCDIVINTPHASE_INCVAL(p.phaseinc) |
+		      SBI_SSCDIVINTPHASE_DIR(p.phasedir) |
+		      SBI_SSCDIVINTPHASE_PROPAGATE,
+		      SBI_ICLK);
 
 	/* Program SSCAUXDIV */
-	temp = intel_sbi_read(display, SBI_SSCAUXDIV6, SBI_ICLK);
-	temp &= ~SBI_SSCAUXDIV_FINALDIV2SEL(1);
-	temp |= SBI_SSCAUXDIV_FINALDIV2SEL(p.auxdiv);
-	intel_sbi_write(display, SBI_SSCAUXDIV6, temp, SBI_ICLK);
+	intel_sbi_rmw(display, SBI_SSCAUXDIV6,
+		      SBI_SSCAUXDIV_FINALDIV2SEL(1),
+		      SBI_SSCAUXDIV_FINALDIV2SEL(p.auxdiv),
+		      SBI_ICLK);
 
 	/* Enable modulator and associated divider */
-	temp = intel_sbi_read(display, SBI_SSCCTL6, SBI_ICLK);
-	temp &= ~SBI_SSCCTL_DISABLE;
-	intel_sbi_write(display, SBI_SSCCTL6, temp, SBI_ICLK);
+	intel_sbi_rmw(display, SBI_SSCCTL6, SBI_SSCCTL_DISABLE, 0, SBI_ICLK);
 
 	intel_sbi_unlock(display);
 
@@ -277,7 +215,7 @@ int lpt_get_iclkip(struct intel_display *display)
 static void lpt_enable_clkout_dp(struct intel_display *display,
 				 bool with_spread, bool with_fdi)
 {
-	u32 reg, tmp;
+	u32 reg;
 
 	if (drm_WARN(display->drm, with_fdi && !with_spread,
 		     "FDI requires downspread\n"))
@@ -288,26 +226,19 @@ static void lpt_enable_clkout_dp(struct intel_display *display,
 
 	intel_sbi_lock(display);
 
-	tmp = intel_sbi_read(display, SBI_SSCCTL, SBI_ICLK);
-	tmp &= ~SBI_SSCCTL_DISABLE;
-	tmp |= SBI_SSCCTL_PATHALT;
-	intel_sbi_write(display, SBI_SSCCTL, tmp, SBI_ICLK);
+	intel_sbi_rmw(display, SBI_SSCCTL, SBI_SSCCTL_DISABLE, SBI_SSCCTL_PATHALT, SBI_ICLK);
 
 	udelay(24);
 
 	if (with_spread) {
-		tmp = intel_sbi_read(display, SBI_SSCCTL, SBI_ICLK);
-		tmp &= ~SBI_SSCCTL_PATHALT;
-		intel_sbi_write(display, SBI_SSCCTL, tmp, SBI_ICLK);
+		intel_sbi_rmw(display, SBI_SSCCTL, SBI_SSCCTL_PATHALT, 0, SBI_ICLK);
 
 		if (with_fdi)
 			lpt_fdi_program_mphy(display);
 	}
 
 	reg = HAS_PCH_LPT_LP(display) ? SBI_GEN0 : SBI_DBUFF0;
-	tmp = intel_sbi_read(display, reg, SBI_ICLK);
-	tmp |= SBI_GEN0_CFG_BUFFENABLE_DISABLE;
-	intel_sbi_write(display, reg, tmp, SBI_ICLK);
+	intel_sbi_rmw(display, reg, 0, SBI_GEN0_CFG_BUFFENABLE_DISABLE, SBI_ICLK);
 
 	intel_sbi_unlock(display);
 }
@@ -320,9 +251,7 @@ void lpt_disable_clkout_dp(struct intel_display *display)
 	intel_sbi_lock(display);
 
 	reg = HAS_PCH_LPT_LP(display) ? SBI_GEN0 : SBI_DBUFF0;
-	tmp = intel_sbi_read(display, reg, SBI_ICLK);
-	tmp &= ~SBI_GEN0_CFG_BUFFENABLE_DISABLE;
-	intel_sbi_write(display, reg, tmp, SBI_ICLK);
+	intel_sbi_rmw(display, reg, SBI_GEN0_CFG_BUFFENABLE_DISABLE, 0, SBI_ICLK);
 
 	tmp = intel_sbi_read(display, SBI_SSCCTL, SBI_ICLK);
 	if (!(tmp & SBI_SSCCTL_DISABLE)) {
@@ -389,10 +318,7 @@ static void lpt_bend_clkout_dp(struct intel_display *display, int steps)
 		tmp = 0x00000000;
 	intel_sbi_write(display, SBI_SSCDITHPHASE, tmp, SBI_ICLK);
 
-	tmp = intel_sbi_read(display, SBI_SSCDIVINTPHASE, SBI_ICLK);
-	tmp &= 0xffff0000;
-	tmp |= sscdivintphase[idx];
-	intel_sbi_write(display, SBI_SSCDIVINTPHASE, tmp, SBI_ICLK);
+	intel_sbi_rmw(display, SBI_SSCDIVINTPHASE, 0x0000ffff, sscdivintphase[idx], SBI_ICLK);
 
 	intel_sbi_unlock(display);
 }

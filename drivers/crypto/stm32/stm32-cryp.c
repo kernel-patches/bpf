@@ -982,8 +982,7 @@ static int stm32_cryp_header_dma_start(struct stm32_cryp *cryp)
 		return -EINVAL;
 	}
 
-	tx_in->callback_param = cryp;
-	tx_in->callback = stm32_cryp_header_dma_callback;
+	dmaengine_desc_set_callback(tx_in, stm32_cryp_header_dma_callback, NULL, cryp);
 
 	/* Advance scatterwalk to not DMA'ed data */
 	align_size = ALIGN_DOWN(cryp->header_in, cryp->hw_blocksize);
@@ -1034,8 +1033,7 @@ static int stm32_cryp_dma_start(struct stm32_cryp *cryp)
 	}
 
 	/* No callback necessary */
-	tx_in->callback_param = cryp;
-	tx_in->callback = NULL;
+	dmaengine_desc_set_callback(tx_in, NULL, NULL, cryp);
 
 	tx_out = dmaengine_prep_slave_sg(cryp->dma_lch_out, cryp->out_sg, cryp->out_sg_len,
 					 DMA_DEV_TO_MEM, DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
@@ -1045,8 +1043,7 @@ static int stm32_cryp_dma_start(struct stm32_cryp *cryp)
 	}
 
 	reinit_completion(&cryp->dma_completion);
-	tx_out->callback = stm32_cryp_dma_callback;
-	tx_out->callback_param = cryp;
+	dmaengine_desc_set_callback(tx_out, stm32_cryp_dma_callback, NULL, cryp);
 
 	/* Advance scatterwalk to not DMA'ed data */
 	align_size = ALIGN_DOWN(cryp->payload_in, cryp->hw_blocksize);

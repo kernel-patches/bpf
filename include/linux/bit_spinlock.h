@@ -17,7 +17,7 @@
  * static analysis can use.
  */
 context_lock_struct(__context_bitlock) { };
-#define __bitlock(bitnum, addr) (struct __context_bitlock *)(bitnum + (addr))
+#define __bitlock(bitnum, addr) ((struct __context_bitlock *)((bitnum) + (addr)))
 
 /*
  *  bit-based spin_lock()

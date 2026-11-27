@@ -64,30 +64,6 @@ static struct AEAD_KEY *aead_alloc_random_key(struct kunit *test,
 	return key;
 }
 
-/*
- * Allocate a KUnit-managed slab buffer of length @len bytes and initialize it
- * with random data.
- */
-static u8 *aead_alloc_random_data(struct kunit *test, size_t len)
-{
-	u8 *buf = alloc_buf(test, len);
-
-	rand_bytes(buf, len);
-	return buf;
-}
-
-/*
- * Allocate a KUnit-managed guarded buffer of length @len bytes and initialize
- * it with random data.
- */
-static u8 *aead_alloc_random_data_guarded(struct kunit *test, size_t len)
-{
-	u8 *buf = alloc_guarded_buf(test, len);
-
-	rand_bytes(buf, len);
-	return buf;
-}
-
 /* Process the given associated data using a random incremental strategy. */
 static size_t aead_auth_incrementally(struct AEAD_CTX *ctx, const u8 *ad,
 				      size_t ad_len)
@@ -257,15 +233,17 @@ aead_alloc_basic_validation_test_ctx(struct kunit *test)
 		alloc_buf(test, sizeof(*ctx));
 
 	memset(ctx, 0, sizeof(*ctx));
-	ctx->raw_key_buf_end =
-		aead_alloc_random_data_guarded(test, AEAD_MAX_KEY_LEN) +
-		AEAD_MAX_KEY_LEN;
-	ctx->nonce_buf_end =
-		aead_alloc_random_data_guarded(test, AEAD_MAX_NONCE_LEN) +
-		AEAD_MAX_NONCE_LEN;
-	ctx->tag_buf_end =
-		aead_alloc_random_data_guarded(test, AEAD_MAX_TAG_LEN) +
-		AEAD_MAX_TAG_LEN;
+	/*
+	 * Use a nonzero plaintext, so that the check that decryption clears
+	 * dst on authentication failure can actually fail.
+	 */
+	rand_bytes(ctx->pt, sizeof(ctx->pt));
+	ctx->raw_key_buf_end = alloc_guarded_rand_buf(test, AEAD_MAX_KEY_LEN) +
+			       AEAD_MAX_KEY_LEN;
+	ctx->nonce_buf_end = alloc_guarded_rand_buf(test, AEAD_MAX_NONCE_LEN) +
+			     AEAD_MAX_NONCE_LEN;
+	ctx->tag_buf_end = alloc_guarded_rand_buf(test, AEAD_MAX_TAG_LEN) +
+			   AEAD_MAX_TAG_LEN;
 
 	/*
 	 * A pointer to this buffer is passed when passing a length that is
@@ -514,9 +492,9 @@ static void test_aead_incremental_updates(struct kunit *test)
 	size_t tag_len;
 	struct AEAD_KEY *key = aead_alloc_random_key(test, &tag_len);
 	struct AEAD_CTX *ctx = alloc_buf(test, sizeof(*ctx));
-	u8 *pt = aead_alloc_random_data(test, max_data_len);
-	u8 *ad = aead_alloc_random_data(test, max_ad_len);
-	u8 *nonce = aead_alloc_random_data(test, nonce_len);
+	u8 *pt = alloc_rand_buf(test, max_data_len);
+	u8 *ad = alloc_rand_buf(test, max_ad_len);
+	u8 *nonce = alloc_rand_buf(test, nonce_len);
 	u8 *ct = alloc_buf(test, max_data_len);
 	u8 *ct2 = alloc_buf(test, max_data_len);
 	u8 *decrypted = alloc_buf(test, max_data_len);
@@ -579,11 +557,11 @@ static void test_aead_data_buffer_overruns(struct kunit *test)
 	const size_t nonce_len = AEAD_MAX_NONCE_LEN;
 	size_t tag_len;
 	struct AEAD_KEY *key = aead_alloc_random_key(test, &tag_len);
-	const u8 *nonce = aead_alloc_random_data(test, nonce_len);
-	const u8 *pt_end = aead_alloc_random_data_guarded(test, max_data_len) +
-			   max_data_len;
+	const u8 *nonce = alloc_rand_buf(test, nonce_len);
+	const u8 *pt_end =
+		alloc_guarded_rand_buf(test, max_data_len) + max_data_len;
 	const u8 *ad_end =
-		aead_alloc_random_data_guarded(test, max_ad_len) + max_ad_len;
+		alloc_guarded_rand_buf(test, max_ad_len) + max_ad_len;
 	u8 *ct_end = alloc_guarded_buf(test, max_data_len) + max_data_len;
 	u8 *decrypted_end =
 		alloc_guarded_buf(test, max_data_len) + max_data_len;
@@ -720,10 +698,10 @@ static void test_aead_inplace(struct kunit *test)
 	const size_t nonce_len = AEAD_MAX_NONCE_LEN;
 	size_t tag_len;
 	struct AEAD_KEY *key = aead_alloc_random_key(test, &tag_len);
-	u8 *data = aead_alloc_random_data(test, max_data_len + tag_len);
+	u8 *data = alloc_rand_buf(test, max_data_len + tag_len);
 	u8 *data2 = alloc_buf(test, max_data_len + tag_len);
-	u8 *ad = aead_alloc_random_data(test, max_ad_len);
-	const u8 *nonce = aead_alloc_random_data(test, nonce_len);
+	u8 *ad = alloc_rand_buf(test, max_ad_len);
+	const u8 *nonce = alloc_rand_buf(test, nonce_len);
 
 	for (int i = 0; i < 100; i++) {
 		size_t data_len = rand_length(max_data_len);
@@ -965,10 +943,10 @@ static void benchmark_aead(struct kunit *test)
 	if (!IS_ENABLED(CONFIG_CRYPTO_LIB_BENCHMARK))
 		kunit_skip(test, "not enabled");
 
-	raw_key = aead_alloc_random_data(test, key_len);
-	nonce = aead_alloc_random_data(test, nonce_len);
-	ad = aead_alloc_random_data(test, ad_len);
-	pt = aead_alloc_random_data(test, max_data_len);
+	raw_key = alloc_rand_buf(test, key_len);
+	nonce = alloc_rand_buf(test, nonce_len);
+	ad = alloc_rand_buf(test, ad_len);
+	pt = alloc_rand_buf(test, max_data_len);
 	ct = alloc_buf(test, max_data_len);
 	tag = alloc_buf(test, tag_len);
 

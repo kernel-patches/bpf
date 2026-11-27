@@ -162,7 +162,7 @@ amdgpu_vm_bo_lock_lists(struct amdgpu_vm_bo_base *vm_bo)
 		/* No extra locking needed, protected by the root PD resv lock */
 		amdgpu_vm_assert_locked(vm);
 
-		if (bo->tbo.type == ttm_bo_type_kernel)
+		if (amdgpu_bo_is_vm_bo(bo))
 			return &vm->kernel;
 
 		return &vm->always_valid;
@@ -230,7 +230,7 @@ static void amdgpu_vm_bo_needs_update(struct amdgpu_vm_bo_base *vm_bo)
 	 * idle state.
 	 */
 	lists = amdgpu_vm_bo_lock_lists(vm_bo);
-	if (bo && bo->tbo.type == ttm_bo_type_kernel && !bo->parent) {
+	if (bo == vm_bo->vm->root.bo) {
 		vm_bo->moved = false;
 		list_move(&vm_bo->vm_status, &lists->idle);
 	} else {
@@ -462,9 +462,13 @@ void amdgpu_vm_bo_base_init(struct amdgpu_vm_bo_base *base,
 int amdgpu_vm_lock_pd(struct amdgpu_vm *vm, struct drm_exec *exec,
 		      unsigned int num_fences)
 {
-	/* We need at least two fences for the VM PD/PT updates */
+	/*
+	 * One fence slot for clearing newly allocated PDs/PTs and PDE/PTE updates,
+	 * another fence slots for TLB invalidation fences, TTM_NUM_MOVE_FENCES
+	 * for validating PDs/PTs after eviction plus anything the caller requested.
+	 */
 	return drm_exec_prepare_obj(exec, &vm->root.bo->tbo.base,
-				    2 + num_fences);
+				    2 + TTM_NUM_MOVE_FENCES + num_fences);
 }
 
 /**
@@ -581,6 +585,41 @@ uint64_t amdgpu_vm_generation(struct amdgpu_device *adev, struct amdgpu_vm *vm)
 }
 
 /**
+ * amdgpu_vm_spm_update - bind the SPM VMID's page table base to @vm
+ *
+ * @adev: amdgpu device pointer
+ * @vm: vm to check against the SPM reservation
+ *
+ * The SPM VMID is fixed (adev->vm_manager.spm_vmid), so its page-table-base
+ * register must track whichever VM currently holds the reservation instead
+ * of being set per-job like a normal VMID. Bind it to @vm's real root PD
+ * address if @vm holds the reservation; otherwise do nothing, since @vm is
+ * not the one that could legitimately change the current binding.
+ *
+ * @vm's root PD must be locked by the caller.
+ */
+void amdgpu_vm_spm_update(struct amdgpu_device *adev, struct amdgpu_vm *vm)
+{
+	struct amdgpu_kq_vmid_mgr *id_mgr =
+		&adev->vm_manager.id_mgr[AMDGPU_GFXHUB(0)];
+	uint64_t pd_addr;
+
+	if (!adev->vm_manager.spm_vmid || !adev->gfxhub.funcs)
+		return;
+
+	mutex_lock(&id_mgr->lock);
+	if (vm->reserved_vmid[AMDGPU_GFXHUB(0)] !=
+	    &id_mgr->ids[adev->vm_manager.spm_vmid] || !amdgpu_vm_ready(vm)) {
+		mutex_unlock(&id_mgr->lock);
+		return;
+	}
+
+	pd_addr = amdgpu_gmc_pd_addr(vm->root.bo);
+	amdgpu_gmc_bind_vmid(adev, AMDGPU_GFXHUB(0), adev->vm_manager.spm_vmid, pd_addr);
+	mutex_unlock(&id_mgr->lock);
+}
+
+/**
  * amdgpu_vm_validate - validate evicted BOs tracked in the VM
  *
  * @adev: amdgpu device pointer
@@ -607,7 +646,6 @@ int amdgpu_vm_validate(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 
 	dma_resv_assert_held(vm->root.bo->tbo.base.resv);
 	if (vm->generation != new_vm_generation) {
-		vm->generation = new_vm_generation;
 		amdgpu_vm_bo_reset_state_machine(vm);
 		amdgpu_vm_fini_entities(vm);
 		r = amdgpu_vm_init_entities(adev, vm);
@@ -622,8 +660,17 @@ int amdgpu_vm_validate(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 
 		vm->update_funcs->map_table(to_amdgpu_bo_vm(bo_base->bo));
 		bo_base->moved = true;
+
+		if (vm->generation != new_vm_generation) {
+			r = amdgpu_vm_pt_clear(adev, vm, to_amdgpu_bo_vm(bo_base->bo), false);
+			if (r)
+				return r;
+		}
+
 		amdgpu_vm_bo_needs_update(bo_base);
 	}
+
+	vm->generation = new_vm_generation;
 
 	/*
 	 * As soon as all page tables are in place we can start updating them
@@ -778,14 +825,12 @@ bool amdgpu_vm_need_pipeline_sync(struct amdgpu_ring *ring,
  * @ring: ring to use for flush
  * @job:  related job
  * @need_pipe_sync: is pipe sync needed
- * @emit_spm_needed: does the caller need to emit spm
  * @emit_gds_needed: does the caller need to emit gds
  *
  * Emit a VM flush when it is necessary.
  */
 void amdgpu_vm_flush(struct amdgpu_ring *ring, struct amdgpu_job *job,
-		     bool *need_pipe_sync, bool *emit_spm_needed,
-		     bool *emit_gds_needed)
+		     bool *need_pipe_sync, bool *emit_gds_needed)
 {
 	struct amdgpu_device *adev = ring->adev;
 	struct amdgpu_isolation *isolation =
@@ -794,8 +839,6 @@ void amdgpu_vm_flush(struct amdgpu_ring *ring, struct amdgpu_job *job,
 	unsigned vmhub = ring->vm_hub;
 	struct amdgpu_kq_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
 	struct amdgpu_vmid *id = &id_mgr->ids[job->vmid];
-	bool spm_update_needed = adev->gfx.rlc.funcs->update_spm_vmid &&
-		job->spm_update_needed;
 	bool gds_switch_needed = ring->funcs->emit_gds_switch &&
 		job->gds_switch_needed;
 	bool vm_flush_needed = job->vm_needs_flush;
@@ -809,7 +852,6 @@ void amdgpu_vm_flush(struct amdgpu_ring *ring, struct amdgpu_job *job,
 		gds_switch_needed = true;
 		vm_flush_needed = true;
 		pasid_mapping_needed = true;
-		spm_update_needed = true;
 	}
 
 	mutex_lock(&id_mgr->lock);
@@ -819,7 +861,6 @@ void amdgpu_vm_flush(struct amdgpu_ring *ring, struct amdgpu_job *job,
 	mutex_unlock(&id_mgr->lock);
 
 	gds_switch_needed &= !!ring->funcs->emit_gds_switch;
-	spm_update_needed &= !!adev->gfx.rlc.funcs->update_spm_vmid;
 	vm_flush_needed &= !!ring->funcs->emit_vm_flush  &&
 			job->vm_pd_addr != AMDGPU_BO_INVALID_OFFSET;
 	pasid_mapping_needed &= adev->gmc.gmc_funcs->emit_pasid_mapping &&
@@ -832,10 +873,6 @@ void amdgpu_vm_flush(struct amdgpu_ring *ring, struct amdgpu_job *job,
 
 	emit_fence = vm_flush_needed || pasid_mapping_needed ||
 		cleaner_shader_needed;
-
-	*emit_spm_needed = spm_update_needed;
-	if (spm_update_needed && emit_fence)
-		*emit_spm_needed = false;
 
 	*emit_gds_needed = gds_switch_needed;
 	if (gds_switch_needed && emit_fence)
@@ -875,9 +912,6 @@ void amdgpu_vm_flush(struct amdgpu_ring *ring, struct amdgpu_job *job,
 
 	if (pasid_mapping_needed)
 		amdgpu_gmc_emit_pasid_mapping(ring, job->vmid, job->pasid);
-
-	if (spm_update_needed)
-		adev->gfx.rlc.funcs->update_spm_vmid(adev, ring->xcc_id, ring, job->vmid);
 
 	if (gds_switch_needed)
 		amdgpu_ring_emit_gds_switch(ring, job->vmid, job->gds_base,
@@ -1185,7 +1219,8 @@ int amdgpu_vm_update_range(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 	if (!unlocked && !dma_fence_is_signaled(vm->last_unlocked)) {
 		struct dma_fence *tmp = dma_fence_get_stub();
 
-		amdgpu_bo_fence(vm->root.bo, vm->last_unlocked, true);
+		dma_resv_add_fence(vm->root.bo->tbo.base.resv, vm->last_unlocked,
+				   DMA_RESV_USAGE_BOOKKEEP);
 		swap(vm->last_unlocked, tmp);
 		dma_fence_put(tmp);
 	}
@@ -1323,6 +1358,7 @@ int amdgpu_vm_bo_update(struct amdgpu_device *adev, struct amdgpu_bo_va *bo_va,
 		}
 	} else if (!bo) {
 		mem = NULL;
+		r = 0;
 
 		/* PRT map operations don't need to sync to anything. */
 
@@ -1810,7 +1846,6 @@ static void amdgpu_vm_bo_insert_map(struct amdgpu_device *adev,
 				    struct amdgpu_bo_va_mapping *mapping)
 {
 	struct amdgpu_vm *vm = bo_va->base.vm;
-	struct amdgpu_bo *bo = bo_va->base.bo;
 
 	mapping->bo_va = bo_va;
 	list_add(&mapping->list, &bo_va->invalids);
@@ -1819,7 +1854,8 @@ static void amdgpu_vm_bo_insert_map(struct amdgpu_device *adev,
 	if (mapping->flags & AMDGPU_VM_PAGE_PRT)
 		amdgpu_vm_prt_get(adev);
 
-	if (amdgpu_vm_is_bo_always_valid(vm, bo) && !bo_va->base.moved)
+	/* PRT mappings have no BO and are kept off the state lists */
+	if (bo_va->base.bo && !bo_va->base.moved)
 		amdgpu_vm_bo_needs_update(&bo_va->base);
 
 	trace_amdgpu_vm_bo_map(bo_va, mapping);
@@ -2108,12 +2144,6 @@ int amdgpu_vm_bo_clear_mappings(struct amdgpu_device *adev,
 	list_for_each_entry_safe(tmp, next, &removed, list) {
 		amdgpu_vm_it_remove(tmp, &vm->va);
 		list_del(&tmp->list);
-
-		if (tmp->start < saddr)
-		    tmp->start = saddr;
-		if (tmp->last > eaddr)
-		    tmp->last = eaddr;
-
 		tmp->bo_va = NULL;
 		list_add(&tmp->list, &vm->freed);
 		trace_amdgpu_vm_bo_unmap(NULL, tmp);
@@ -2695,7 +2725,7 @@ int amdgpu_vm_init(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 
 error_free_root:
 	amdgpu_vm_pt_free_root(adev, vm);
-	amdgpu_bo_unreserve(vm->root.bo);
+	amdgpu_bo_unreserve(root_bo);
 	amdgpu_bo_unref(&root_bo);
 
 error_free_delayed:
@@ -2840,6 +2870,10 @@ void amdgpu_vm_fini(struct amdgpu_device *adev, struct amdgpu_vm *vm)
 
 	root = amdgpu_bo_ref(vm->root.bo);
 	amdgpu_bo_reserve(root, true);
+	/* Wait for the jobs which might still use the reserved VMID */
+	if (vm->reserved_vmid[AMDGPU_GFXHUB(0)])
+		dma_resv_wait_timeout(root->tbo.base.resv, DMA_RESV_USAGE_READ,
+				      false, MAX_SCHEDULE_TIMEOUT);
 	dma_fence_wait(vm->last_unlocked, false);
 	dma_fence_put(vm->last_unlocked);
 	dma_fence_wait(vm->last_seq_flush, false);
@@ -2881,7 +2915,7 @@ void amdgpu_vm_fini(struct amdgpu_device *adev, struct amdgpu_vm *vm)
 	dma_fence_put(vm->last_update);
 
 	for (i = 0; i < AMDGPU_MAX_VMHUBS; i++) {
-		amdgpu_vmid_free_reserved(adev, vm, i);
+		amdgpu_vmid_free_spm(adev, vm, i);
 	}
 
 	ttm_lru_bulk_move_fini(&adev->mman.bdev, &vm->lru_bulk_move);
@@ -2980,12 +3014,30 @@ int amdgpu_vm_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 		return -EINVAL;
 
 	switch (args->in.op) {
-	case AMDGPU_VM_OP_RESERVE_VMID:
+	case AMDGPU_VM_OP_RESERVE_VMID: {
+		int r;
+
 		/* We only have requirement to reserve vmid from gfxhub */
-		return amdgpu_vmid_alloc_reserved(adev, vm, AMDGPU_GFXHUB(0));
-	case AMDGPU_VM_OP_UNRESERVE_VMID:
-		amdgpu_vmid_free_reserved(adev, vm, AMDGPU_GFXHUB(0));
+		r = amdgpu_vmid_alloc_spm(adev, vm, AMDGPU_GFXHUB(0));
+		if (!r && !amdgpu_bo_reserve(vm->root.bo, true)) {
+			amdgpu_vm_spm_update(adev, vm);
+			amdgpu_bo_unreserve(vm->root.bo);
+		}
+		return r;
+	}
+	case AMDGPU_VM_OP_UNRESERVE_VMID: {
+		struct amdgpu_bo *root = vm->root.bo;
+
+		amdgpu_bo_reserve(root, true);
+		/* Wait for the jobs which might still use the reserved VMID */
+		if (vm->reserved_vmid[AMDGPU_GFXHUB(0)])
+			dma_resv_wait_timeout(root->tbo.base.resv,
+					      DMA_RESV_USAGE_READ, false,
+					      MAX_SCHEDULE_TIMEOUT);
+		amdgpu_vmid_free_spm(adev, vm, AMDGPU_GFXHUB(0));
+		amdgpu_bo_unreserve(root);
 		break;
+	}
 	default:
 		return -EINVAL;
 	}
@@ -3103,7 +3155,7 @@ bool amdgpu_vm_handle_fault(struct amdgpu_device *adev, u32 pasid,
 		drm_exec_fini(&exec);
 
 		if (!svm_range_restore_pages(adev, pasid, vmid,
-					     node_id, addr >> PAGE_SHIFT, ts, write_fault))
+					     node_id, addr, ts, write_fault))
 			return true;
 
 		/* Re-acquire the VM lock, could be that the VM was freed in between. */

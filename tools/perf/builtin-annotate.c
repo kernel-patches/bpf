@@ -174,6 +174,10 @@ static void process_branch_stack(struct branch_stack *bs, struct addr_location *
 		prev = &bi[i].to;
 	}
 
+	for (i = 0; i < (int)bs->nr; i++) {
+		addr_map_symbol__exit(&bi[i].to);
+		addr_map_symbol__exit(&bi[i].from);
+	}
 	free(bi);
 }
 
@@ -254,17 +258,6 @@ static int add_sample(struct perf_sample *sample,
 	    (al->sym == NULL ||
 	     strcmp(ann->sym_hist_filter, al->sym->name) != 0)) {
 		/* We're only interested in a symbol named sym_hist_filter */
-		/*
-		 * FIXME: why isn't this done in the symbol_filter when loading
-		 * the DSO?
-		 */
-		if (al->sym != NULL) {
-			struct dso *dso = map__dso(al->map);
-
-			rb_erase_cached(&al->sym->rb_node, dso__symbols(dso));
-			symbol__delete(al->sym);
-			dso__reset_find_symbol_cache(dso);
-		}
 		return 0;
 	}
 
@@ -437,8 +430,11 @@ static void hists__find_annotations(struct hists *hists,
 				goto find_next;
 		}
 
+		if (!symbol__annotated(he->ms.sym))
+			goto find_next;
+
 		notes = symbol__annotation(he->ms.sym);
-		if (notes->src == NULL) {
+		if (!notes || notes->src == NULL) {
 find_next:
 			if (key == K_LEFT || key == '<')
 				nd = rb_prev(nd);
@@ -967,6 +963,7 @@ out_delete:
 #ifndef NDEBUG
 	perf_session__delete(annotate.session);
 #endif
+	block_ranges__exit();
 	annotation_options__exit();
 
 	return ret;

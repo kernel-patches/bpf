@@ -1322,8 +1322,7 @@ static ssize_t upload_register_store(struct device *dev,
 		goto free_tst;
 	}
 
-	fwl = firmware_upload_register(THIS_MODULE, dev, tst->name,
-				       &upload_test_ops, tst);
+	fwl = firmware_upload_register(dev, tst->name, &upload_test_ops, tst);
 	if (IS_ERR(fwl)) {
 		ret = PTR_ERR(fwl);
 		goto free_buf;
@@ -1567,6 +1566,6 @@ static void __exit test_firmware_exit(void)
 
 module_exit(test_firmware_exit);
 
-MODULE_AUTHOR("Kees Cook <keescook@chromium.org>");
+MODULE_AUTHOR("Kees Cook <kees@kernel.org>");
 MODULE_DESCRIPTION("interface to trigger and test firmware loading");
 MODULE_LICENSE("GPL");

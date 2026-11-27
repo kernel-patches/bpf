@@ -80,7 +80,7 @@ surrogate_pair:
 	/* convert SURROGATE_PAIR and IVS */
 	if (strcmp(cp->charset, "utf8"))
 		goto unknown;
-	len = utf16s_to_utf8s(from, 3, UTF16_LITTLE_ENDIAN, target, 6);
+	len = utf16s_to_utf8s(from, 3, UTF16_HOST_ENDIAN, target, 6);
 	if (len <= 0)
 		goto unknown;
 	return len;
@@ -404,7 +404,7 @@ int smbConvertToUTF16(__le16 *target, const char *source, int srclen,
 			} else
 				goto unknown;
 			ret  = utf8s_to_utf16s(source + i, charlen,
-					UTF16_LITTLE_ENDIAN,
+					UTF16_HOST_ENDIAN,
 					wchar_to, 6);
 			if (ret < 0)
 				goto unknown;

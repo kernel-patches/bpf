@@ -183,7 +183,7 @@ static int ohci_hcd_sa1111_probe(struct sa1111_dev *dev)
 
 	/*
 	 * We don't call dma_set_mask_and_coherent() here because the
-	 * DMA mask has already been appropraitely setup by the core
+	 * DMA mask has already been appropriately setup by the core
 	 * SA-1111 bus code (which includes bug workarounds.)
 	 */
 

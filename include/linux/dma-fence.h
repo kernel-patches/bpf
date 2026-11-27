@@ -103,6 +103,12 @@ struct dma_fence {
 	int error;
 };
 
+/** enum dma_fence_flag_bits - internal dma_fence flags
+ *
+ * These flags are all only for internal usage, except for
+ * @DMA_FENCE_FLAG_SEQNO64_BIT and the user bits beginning at
+ * @DMA_FENCE_FLAG_USER_BITS.
+ */
 enum dma_fence_flag_bits {
 	DMA_FENCE_FLAG_INITIALIZED_BIT,
 	DMA_FENCE_FLAG_INLINE_LOCK_BIT,
@@ -110,6 +116,7 @@ enum dma_fence_flag_bits {
 	DMA_FENCE_FLAG_SIGNALED_BIT,
 	DMA_FENCE_FLAG_TIMESTAMP_BIT,
 	DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT,
+
 	DMA_FENCE_FLAG_USER_BITS, /* must always be last member */
 };
 
@@ -279,11 +286,8 @@ struct dma_fence_ops {
 };
 
 void dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops,
-		    spinlock_t *lock, u64 context, u64 seqno);
-
-void dma_fence_init64(struct dma_fence *fence, const struct dma_fence_ops *ops,
-		      spinlock_t *lock, u64 context, u64 seqno);
-
+		    spinlock_t *lock, u64 context, u64 seqno,
+		    unsigned long flags);
 void dma_fence_release(struct kref *kref);
 void dma_fence_free(struct dma_fence *fence);
 void dma_fence_describe(struct dma_fence *fence, struct seq_file *seq);
@@ -487,16 +491,23 @@ const char __rcu *dma_fence_timeline_name(struct dma_fence *fence);
  * with the fence in any way. The user must, therefore, ensure through other
  * means that fences get signaled eventually.
  *
- * This function uses test_bit(), which is thread-safe. Naturally, this function
- * should be used opportunistically; a fence could get signaled at any moment
- * after the check is done.
+ * Naturally, this function should be used opportunistically; a fence could get
+ * signaled at any moment after the check is done.
+ *
+ * This function provides acquire ordering. This means that all stores
+ * preceding the signaling of a fence are visible in correct order to users of
+ * this function.
  *
  * Return: true if signaled, false otherwise.
  */
 static inline bool
 dma_fence_test_signaled_flag(struct dma_fence *fence)
 {
-	return test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags);
+	/*
+	 * The release counterpart is the test_and_set_bit() in
+	 * dma_fence_signal_timestamp_locked().
+	 */
+	return test_bit_acquire(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags);
 }
 
 /**
@@ -620,32 +631,6 @@ static inline bool dma_fence_is_later_or_same(struct dma_fence *f1,
 					      struct dma_fence *f2)
 {
 	return f1 == f2 || dma_fence_is_later(f1, f2);
-}
-
-/**
- * dma_fence_later - return the chronologically later fence
- * @f1:	the first fence from the same context
- * @f2:	the second fence from the same context
- *
- * Returns NULL if both fences are signaled, otherwise the fence that would be
- * signaled last. Both fences must be from the same context, since a seqno is
- * not re-used across contexts.
- */
-static inline struct dma_fence *dma_fence_later(struct dma_fence *f1,
-						struct dma_fence *f2)
-{
-	if (WARN_ON(f1->context != f2->context))
-		return NULL;
-
-	/*
-	 * Can't check just DMA_FENCE_FLAG_SIGNALED_BIT here, it may never
-	 * have been set if enable_signaling wasn't called, and enabling that
-	 * here is overkill.
-	 */
-	if (dma_fence_is_later(f1, f2))
-		return dma_fence_is_signaled(f1) ? NULL : f1;
-	else
-		return dma_fence_is_signaled(f2) ? NULL : f2;
 }
 
 /**

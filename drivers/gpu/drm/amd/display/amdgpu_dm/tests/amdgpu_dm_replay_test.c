@@ -47,6 +47,7 @@ static struct replay_test_ctx *alloc_replay_ctx(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, ctx->dm_state);
 
 	ctx->stream = dm_kunit_alloc_stream(test, ctx->link);
+	ctx->stream->dm_stream_context = ctx->aconnector;
 
 	/* Wire connector state so to_dm_connector_state() works */
 	ctx->aconnector->base.state = &ctx->dm_state->base;
@@ -377,6 +378,7 @@ static void dm_test_replay_link_setup_already_enabled(struct kunit *test)
 	struct replay_test_ctx *ctx = alloc_replay_ctx(test);
 	struct mod_vrr_params vrr_params = { 0 };
 
+	ctx->link->replay_settings.config.replay_cap_support = true;
 	ctx->link->replay_settings.config.replay_supported = true;
 	ctx->link->replay_settings.replay_feature_enabled = true;
 
@@ -396,6 +398,8 @@ static void dm_test_replay_link_setup_success(struct kunit *test)
 	struct replay_test_ctx *ctx = alloc_replay_ctx(test);
 	struct mod_vrr_params vrr_params = { 0 };
 
+	set_all_replay_caps(ctx);
+	ctx->link->replay_settings.config.replay_cap_support = true;
 	ctx->link->replay_settings.config.replay_supported = true;
 	ctx->link->replay_settings.config.replay_version = DC_FREESYNC_REPLAY;
 
@@ -423,6 +427,126 @@ static void dm_test_replay_link_setup_success(struct kunit *test)
 	KUNIT_EXPECT_EQ(test,
 			ctx->link->replay_settings.link_off_frame_count,
 			(uint32_t)4);
+}
+
+/*
+ * Helper: prepare a FreeSync Replay capable link with a 1125/2200 timing and
+ * the given max deviation line, so link off frame count is
+ * 2200 * max_deviation_line / (4 * 1125).
+ */
+static void setup_link_off_ctx(struct replay_test_ctx *ctx, uint16_t max_deviation_line)
+{
+	set_all_replay_caps(ctx);
+	ctx->link->replay_settings.config.replay_cap_support = true;
+	ctx->link->replay_settings.config.replay_supported = true;
+	ctx->link->replay_settings.config.replay_version = DC_FREESYNC_REPLAY;
+
+	ctx->stream->timing.v_total = 1125;
+	ctx->stream->timing.h_total = 2200;
+	ctx->stream->timing.pix_clk_100hz = 1485000;
+	ctx->link->dpcd_caps.pr_info.pixel_deviation_per_line = 4;
+	ctx->link->dpcd_caps.pr_info.max_deviation_line = max_deviation_line;
+}
+
+/**
+ * dm_test_replay_link_setup_link_off_below_good - Verify link off gate
+ * @test: KUnit test context
+ *
+ * When the link off frame count of the timing is below
+ * PR_LINK_OFF_FRAME_COUNT_GOOD, Replay must be disabled for this timing.
+ */
+static void dm_test_replay_link_setup_link_off_below_good(struct kunit *test)
+{
+	struct replay_test_ctx *ctx = alloc_replay_ctx(test);
+	struct mod_vrr_params vrr_params = { 0 };
+
+	/* 2200*3/(4*1125) = 1 */
+	setup_link_off_ctx(ctx, 3);
+
+	KUNIT_EXPECT_FALSE(test, amdgpu_dm_link_setup_replay(ctx->stream, &vrr_params));
+	KUNIT_EXPECT_EQ(test, ctx->link->replay_settings.link_off_frame_count, (uint32_t)1);
+	KUNIT_EXPECT_FALSE(test, ctx->link->replay_settings.config.replay_supported);
+}
+
+/**
+ * dm_test_replay_link_setup_link_off_at_good - Verify link off gate boundary
+ * @test: KUnit test context
+ *
+ * A link off frame count equal to PR_LINK_OFF_FRAME_COUNT_GOOD keeps Replay
+ * supported.
+ */
+static void dm_test_replay_link_setup_link_off_at_good(struct kunit *test)
+{
+	struct replay_test_ctx *ctx = alloc_replay_ctx(test);
+	struct mod_vrr_params vrr_params = { 0 };
+
+	/* 2200*5/(4*1125) = 2 */
+	setup_link_off_ctx(ctx, 5);
+
+	KUNIT_EXPECT_TRUE(test, amdgpu_dm_link_setup_replay(ctx->stream, &vrr_params));
+	KUNIT_EXPECT_EQ(test, ctx->link->replay_settings.link_off_frame_count, (uint32_t)2);
+	KUNIT_EXPECT_TRUE(test, ctx->link->replay_settings.config.replay_supported);
+}
+
+/**
+ * dm_test_replay_link_setup_link_off_restored - Verify Replay is restored
+ * @test: KUnit test context
+ *
+ * After a timing disabled Replay by the link off gate, a later timing with a
+ * sufficient link off frame count must make Replay supported again.
+ */
+static void dm_test_replay_link_setup_link_off_restored(struct kunit *test)
+{
+	struct replay_test_ctx *ctx = alloc_replay_ctx(test);
+	struct mod_vrr_params vrr_params = { 0 };
+
+	setup_link_off_ctx(ctx, 3);
+	KUNIT_EXPECT_FALSE(test, amdgpu_dm_link_setup_replay(ctx->stream, &vrr_params));
+	KUNIT_EXPECT_FALSE(test, ctx->link->replay_settings.config.replay_supported);
+
+	ctx->link->dpcd_caps.pr_info.max_deviation_line = 10;
+	KUNIT_EXPECT_TRUE(test, amdgpu_dm_link_setup_replay(ctx->stream, &vrr_params));
+	KUNIT_EXPECT_TRUE(test, ctx->link->replay_settings.config.replay_supported);
+}
+
+/**
+ * dm_test_replay_link_setup_disallowed_by_debugfs - Verify debugfs is honored
+ * @test: KUnit test context
+ *
+ * A sufficient link off frame count must not re-enable Replay while
+ * disallow_edp_enter_replay is set.
+ */
+static void dm_test_replay_link_setup_disallowed_by_debugfs(struct kunit *test)
+{
+	struct replay_test_ctx *ctx = alloc_replay_ctx(test);
+	struct mod_vrr_params vrr_params = { 0 };
+
+	setup_link_off_ctx(ctx, 10);
+	ctx->aconnector->disallow_edp_enter_replay = true;
+	ctx->link->replay_settings.config.replay_supported = false;
+
+	KUNIT_EXPECT_FALSE(test, amdgpu_dm_link_setup_replay(ctx->stream, &vrr_params));
+	KUNIT_EXPECT_FALSE(test, ctx->link->replay_settings.config.replay_supported);
+}
+
+/**
+ * dm_test_replay_link_setup_freesync_not_capable - Verify freesync is honored
+ * @test: KUnit test context
+ *
+ * A sufficient link off frame count must not re-enable Replay while the
+ * connector is not freesync capable.
+ */
+static void dm_test_replay_link_setup_freesync_not_capable(struct kunit *test)
+{
+	struct replay_test_ctx *ctx = alloc_replay_ctx(test);
+	struct mod_vrr_params vrr_params = { 0 };
+
+	setup_link_off_ctx(ctx, 10);
+	ctx->dm_state->freesync_capable = false;
+	ctx->link->replay_settings.config.replay_supported = false;
+
+	KUNIT_EXPECT_FALSE(test, amdgpu_dm_link_setup_replay(ctx->stream, &vrr_params));
+	KUNIT_EXPECT_FALSE(test, ctx->link->replay_settings.config.replay_supported);
 }
 
 /* Tests for amdgpu_dm_replay_set_event() */
@@ -604,6 +728,11 @@ static struct kunit_case dm_replay_test_cases[] = {
 	KUNIT_CASE(dm_test_replay_link_setup_not_supported),
 	KUNIT_CASE(dm_test_replay_link_setup_already_enabled),
 	KUNIT_CASE(dm_test_replay_link_setup_success),
+	KUNIT_CASE(dm_test_replay_link_setup_link_off_below_good),
+	KUNIT_CASE(dm_test_replay_link_setup_link_off_at_good),
+	KUNIT_CASE(dm_test_replay_link_setup_link_off_restored),
+	KUNIT_CASE(dm_test_replay_link_setup_disallowed_by_debugfs),
+	KUNIT_CASE(dm_test_replay_link_setup_freesync_not_capable),
 	/* amdgpu_dm_replay_set_event */
 	KUNIT_CASE(dm_test_replay_set_event_null_stream),
 	KUNIT_CASE(dm_test_replay_set_event_null_link),

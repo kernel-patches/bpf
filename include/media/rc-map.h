@@ -146,8 +146,8 @@ struct rc_map_table {
  * struct rc_map - represents a keycode map table
  *
  * @scan: pointer to struct &rc_map_table
- * @size: Max number of entries
- * @len: Number of entries that are in use
+ * @capacity: Number of entries @scan has room for
+ * @entries: Number of entries in @scan that are in use
  * @rc_proto: type of the remote controller protocol, as defined at
  *	     enum &rc_proto
  * @name: name of the key map table
@@ -155,8 +155,8 @@ struct rc_map_table {
  */
 struct rc_map {
 	struct rc_map_table	*scan;
-	unsigned int		size;
-	unsigned int		len;
+	unsigned int		capacity;
+	unsigned int		entries;
 	enum rc_proto		rc_proto;
 	const char		*name;
 	spinlock_t		lock;
@@ -289,6 +289,7 @@ struct rc_map *rc_map_get(const char *name);
 #define RC_MAP_MSI_TVANYWHERE_PLUS       "rc-msi-tvanywhere-plus"
 #define RC_MAP_MYGICA_UTV3               "rc-mygica-utv3"
 #define RC_MAP_NEBULA                    "rc-nebula"
+#define RC_MAP_NEC_RUWIDO_Z3_RC34        "rc-nec-ruwido-z3-rc34"
 #define RC_MAP_NEC_TERRATEC_CINERGY_XS   "rc-nec-terratec-cinergy-xs"
 #define RC_MAP_NORWOOD                   "rc-norwood"
 #define RC_MAP_NPGTECH                   "rc-npgtech"

@@ -510,6 +510,19 @@ static int enable_counters(void)
 	if (!target__enable_on_exec(&target)) {
 		if (!all_counters_use_bpf)
 			evlist__enable(evsel_list);
+	} else {
+		/*
+		 * Tool events are emulated in perf, so enable_on_exec above
+		 * does not start them.  Start them here rather than through
+		 * evsel__enable(), which also walks the members of a mixed
+		 * PMU group; those are not opened here and their core.fd can
+		 * be NULL.
+		 */
+		evlist__for_each_entry(evsel_list, evsel) {
+			if (evsel__is_tool(evsel) && evsel->supported &&
+			    !evsel__tool_pmu_enable(evsel))
+				evsel->disabled = false;
+		}
 	}
 	return 0;
 }

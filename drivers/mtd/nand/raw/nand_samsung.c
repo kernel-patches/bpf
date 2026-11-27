@@ -63,9 +63,9 @@ static void samsung_nand_decode_id(struct nand_chip *chip)
 
 		/* Get blocksize */
 		extid >>= 2;
-		memorg->pages_per_eraseblock = (128 * 1024) <<
-					       (((extid >> 1) & 0x04) |
-						(extid & 0x03)) /
+		memorg->pages_per_eraseblock = ((128 * 1024) <<
+						(((extid >> 1) & 0x04) |
+						 (extid & 0x03))) /
 					       memorg->pagesize;
 		mtd->erasesize = (128 * 1024) <<
 				 (((extid >> 1) & 0x04) | (extid & 0x03));

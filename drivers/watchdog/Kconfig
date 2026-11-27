@@ -267,7 +267,7 @@ config DA9062_WATCHDOG
 
 config GPIO_WATCHDOG
 	tristate "Watchdog device controlled through GPIO-line"
-	depends on GPIOLIB && (ACPI || OF)
+	depends on GPIOLIB
 	select WATCHDOG_CORE
 	help
 	  If you say yes here you get support for watchdog device
@@ -465,6 +465,21 @@ config ARM_SP805_WATCHDOG
 	  ARM Primecell SP805 Watchdog timer. This will reboot your system when
 	  the timeout is reached.
 
+config ARM_TWD_WATCHDOG
+	tristate "ARM TWD (MPCore private) Watchdog"
+	depends on HAVE_ARM_TWD || COMPILE_TEST
+	depends on HAS_IOMEM
+	select WATCHDOG_CORE
+	help
+	  Say Y here to include support for the private watchdog found next
+	  to the local (TWD) timer of every CPU in ARM11 MPCore, Cortex-A5
+	  and Cortex-A9 MPCore systems. The watchdog of CPU0 is used as the
+	  system watchdog. A watchdog left running by the bootloader is
+	  taken over.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called arm_twd_wdt.
+
 config ARM_SBSA_WATCHDOG
 	tristate "ARM SBSA Generic Watchdog"
 	depends on ARM64
@@ -614,16 +629,16 @@ config S3C2410_WATCHDOG
 	  be called s3c2410_wdt.
 
 config SA1100_WATCHDOG
-	tristate "SA1100/PXA2xx watchdog"
-	depends on ARCH_SA1100 || ARCH_PXA || COMPILE_TEST
+	tristate "PXA2xx watchdog"
+	depends on ARCH_PXA || COMPILE_TEST
 	help
-	  Watchdog timer embedded into SA11x0 and PXA2xx chips. This will
-	  reboot your system when timeout is reached.
+	  Watchdog timer embedded into PXA2xx chips. This will reboot your
+	  system when timeout is reached.
 
 	  NOTE: once enabled, this timer cannot be disabled.
 
-	  To compile this driver as a module, choose M here: the
-	  module will be called sa1100_wdt.
+	  To compile this driver as a module, choose M here: the module
+	  will be called sa1100_wdt.
 
 config DW_WATCHDOG
 	tristate "Synopsys DesignWare watchdog"
@@ -690,7 +705,7 @@ config K3_RTI_WATCHDOG
 
 config ORION_WATCHDOG
 	tristate "Orion watchdog"
-	depends on ARCH_ORION5X || ARCH_DOVE || MACH_DOVE || ARCH_MVEBU || COMPILE_TEST
+	depends on ARCH_ORION5X || MACH_DOVE || ARCH_MVEBU || COMPILE_TEST
 	depends on ARM
 	select WATCHDOG_CORE
 	help
@@ -1864,13 +1879,6 @@ config JZ4740_WDT
 	select MFD_SYSCON
 	help
 	  Hardware driver for the built-in watchdog timer on Ingenic jz4740 SoCs.
-
-config WDT_MTX1
-	tristate "MTX-1 Hardware Watchdog"
-	depends on MIPS_MTX1 || (MIPS && COMPILE_TEST)
-	help
-	  Hardware driver for the MTX-1 boards. This is a watchdog timer that
-	  will reboot the machine after a 100 seconds timer expired.
 
 config SIBYTE_WDOG
 	tristate "Sibyte SoC hardware watchdog"

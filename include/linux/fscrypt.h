@@ -50,6 +50,7 @@ struct fscrypt_name {
 };
 
 #define FSTR_INIT(n, l)		{ .name = n, .len = l }
+#define FSTR(n)			((struct fscrypt_str)FSTR_INIT(n, strlen(n)))
 #define FSTR_TO_QSTR(f)		QSTR_INIT((f)->name, (f)->len)
 #define fname_name(p)		((p)->disk_name.name)
 #define fname_len(p)		((p)->disk_name.len)
@@ -356,16 +357,6 @@ int fscrypt_decrypt_block_inplace(const struct inode *inode, struct page *page,
 				  unsigned int len, unsigned int offs,
 				  u64 lblk_num);
 
-static inline bool fscrypt_is_bounce_page(struct page *page)
-{
-	return page->mapping == NULL;
-}
-
-static inline struct page *fscrypt_pagecache_page(struct page *bounce_page)
-{
-	return (struct page *)page_private(bounce_page);
-}
-
 static inline bool fscrypt_is_bounce_folio(const struct folio *folio)
 {
 	return folio->mapping == NULL;
@@ -525,17 +516,6 @@ static inline int fscrypt_decrypt_block_inplace(const struct inode *inode,
 						unsigned int offs, u64 lblk_num)
 {
 	return -EOPNOTSUPP;
-}
-
-static inline bool fscrypt_is_bounce_page(struct page *page)
-{
-	return false;
-}
-
-static inline struct page *fscrypt_pagecache_page(struct page *bounce_page)
-{
-	WARN_ON_ONCE(1);
-	return ERR_PTR(-EINVAL);
 }
 
 static inline bool fscrypt_is_bounce_folio(const struct folio *folio)

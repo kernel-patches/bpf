@@ -732,6 +732,7 @@ f_audio_bind(struct usb_configuration *c, struct usb_function *f)
 	int			status;
 	struct usb_ep		*ep = NULL;
 	struct f_uac1_legacy_opts	*audio_opts;
+	bool			bound_here = false;
 
 	audio_opts = container_of(f->fi, struct f_uac1_legacy_opts, func_inst);
 	audio->card.gadget = c->cdev->gadget;
@@ -741,6 +742,7 @@ f_audio_bind(struct usb_configuration *c, struct usb_function *f)
 		if (status < 0)
 			return status;
 		audio_opts->bound = true;
+		bound_here = true;
 	}
 	us = usb_gstrings_attach(cdev, uac1_strings, ARRAY_SIZE(strings_uac1));
 	if (IS_ERR(us))
@@ -789,7 +791,11 @@ f_audio_bind(struct usb_configuration *c, struct usb_function *f)
 	return 0;
 
 fail:
-	gaudio_cleanup(&audio->card);
+	/* Only tear down the ALSA devices if this bind opened them; the */
+	if (bound_here) {
+		gaudio_cleanup(&audio->card);
+		audio_opts->bound = false;
+	}
 	return status;
 }
 
@@ -894,7 +900,7 @@ UAC1_INT_ATTRIBUTE(req_buf_size);
 UAC1_INT_ATTRIBUTE(req_count);
 UAC1_INT_ATTRIBUTE(audio_buf_size);
 
-static struct configfs_attribute *f_uac1_attrs[] = {
+static const struct configfs_attribute *const f_uac1_attrs[] = {
 	&f_uac1_opts_attr_req_buf_size,
 	&f_uac1_opts_attr_req_count,
 	&f_uac1_opts_attr_audio_buf_size,
@@ -903,7 +909,7 @@ static struct configfs_attribute *f_uac1_attrs[] = {
 
 static const struct config_item_type f_uac1_func_type = {
 	.ct_item_ops	= &f_uac1_item_ops,
-	.ct_attrs	= f_uac1_attrs,
+	.ct_attrs_const	= f_uac1_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

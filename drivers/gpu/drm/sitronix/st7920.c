@@ -653,9 +653,9 @@ static const struct drm_connector_helper_funcs st7920_connector_helper_funcs = {
 };
 
 static const struct drm_connector_funcs st7920_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = drm_connector_cleanup,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -784,9 +784,7 @@ static int st7920_init_modeset(struct st7920_device *st7920)
 		return ret;
 	}
 
-	drm_mode_config_reset(drm);
-
-	return 0;
+	return drm_mode_config_create_initial_state(drm);
 }
 
 static int st7920_probe(struct spi_device *spi)

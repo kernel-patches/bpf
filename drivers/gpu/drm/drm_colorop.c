@@ -648,6 +648,7 @@ drm_atomic_helper_colorop_create_state(struct drm_colorop *colorop)
 
 	return state;
 }
+EXPORT_SYMBOL(drm_atomic_helper_colorop_create_state);
 
 /**
  * __drm_colorop_reset - reset state on colorop

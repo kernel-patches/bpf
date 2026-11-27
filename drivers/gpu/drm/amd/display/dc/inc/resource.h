@@ -123,7 +123,8 @@ void resource_build_test_pattern_params(
 		struct resource_context *res_ctx,
 		struct pipe_ctx *pipe_ctx);
 
-enum upsp_mode resource_is_upsp_required(enum surface_pixel_format format,
+enum upsp_mode resource_is_upsp_required(bool upsp_pre_scaler,
+		enum surface_pixel_format format,
 		enum dc_scaling_linearity scaling_linearity);
 
 bool resource_build_scaling_params(struct pipe_ctx *pipe_ctx);
@@ -423,6 +424,24 @@ int resource_get_opp_heads_for_otg_master(const struct pipe_ctx *otg_master,
  * an OPP pipe, the function returns 0.
  */
 int resource_get_dpp_pipes_for_opp_head(const struct pipe_ctx *opp_head,
+		struct resource_context *res_ctx,
+		struct pipe_ctx *dpp_pipes[MAX_PIPES]);
+
+/*
+ * Get an array of OPP heads in opp_heads ordered with index low to high for
+ * the OTG master of stream in res_ctx.
+ * return - number of OPP heads in the array, 0 if stream has no OTG master.
+ */
+int resource_get_opp_heads_for_stream(const struct dc_stream_state *stream,
+		struct resource_context *res_ctx,
+		struct pipe_ctx *opp_heads[MAX_PIPES]);
+
+/*
+ * Get an array of DPP pipes in dpp_pipes for stream in res_ctx, ODM slice by
+ * slice, each slice top pipe first.
+ * return - number of DPP pipes in the array, 0 if stream has no OTG master.
+ */
+int resource_get_dpp_pipes_for_stream(const struct dc_stream_state *stream,
 		struct resource_context *res_ctx,
 		struct pipe_ctx *dpp_pipes[MAX_PIPES]);
 

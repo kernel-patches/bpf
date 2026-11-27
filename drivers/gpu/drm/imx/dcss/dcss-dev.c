@@ -70,45 +70,45 @@ static int dcss_submodules_init(struct dcss_dev *dcss)
 
 	ret = dcss_blkctl_init(dcss, base_addr + devtype->blkctl_ofs);
 	if (ret)
-		return ret;
+		goto err_clocks;
 
 	ret = dcss_ctxld_init(dcss, base_addr + devtype->ctxld_ofs);
 	if (ret)
-		goto ctxld_err;
+		goto err_clocks;
 
 	ret = dcss_dtg_init(dcss, base_addr + devtype->dtg_ofs);
 	if (ret)
-		goto dtg_err;
+		goto err_ctxld;
 
 	ret = dcss_ss_init(dcss, base_addr + devtype->ss_ofs);
 	if (ret)
-		goto ss_err;
+		goto err_dtg;
 
 	ret = dcss_dpr_init(dcss, base_addr + devtype->dpr_ofs);
 	if (ret)
-		goto dpr_err;
+		goto err_ss;
 
 	ret = dcss_scaler_init(dcss, base_addr + devtype->scaler_ofs);
 	if (ret)
-		goto scaler_err;
+		goto err_dpr;
 
 	dcss_clocks_disable(dcss);
 
 	return 0;
 
-scaler_err:
+err_dpr:
 	dcss_dpr_exit(dcss->dpr);
 
-dpr_err:
+err_ss:
 	dcss_ss_exit(dcss->ss);
 
-ss_err:
+err_dtg:
 	dcss_dtg_exit(dcss->dtg);
 
-dtg_err:
+err_ctxld:
 	dcss_ctxld_exit(dcss->ctxld);
 
-ctxld_err:
+err_clocks:
 	dcss_clocks_disable(dcss);
 
 	return ret;
@@ -253,7 +253,9 @@ static int dcss_dev_suspend(struct device *dev)
 	struct drm_device *ddev = dcss_drv_dev_to_drm(dev);
 	int ret;
 
-	drm_mode_config_helper_suspend(ddev);
+	ret = drm_mode_config_helper_suspend(ddev);
+	if (ret)
+		return ret;
 
 	if (pm_runtime_suspended(dev))
 		return 0;

@@ -10,13 +10,14 @@
  * Datasheet: http://www.maxim-ic.com/quick_view2.cfm/qv_pk/5456
  */
 
-#include <linux/module.h>
+#include <linux/bits.h>
 #include <linux/i2c.h>
-#include <linux/slab.h>
-#include <linux/interrupt.h>
-#include <linux/pm.h>
 #include <linux/input.h>
 #include <linux/input/matrix_keypad.h>
+#include <linux/interrupt.h>
+#include <linux/module.h>
+#include <linux/pm.h>
+#include <linux/slab.h>
 
 #define MAX7359_MAX_KEY_ROWS	8
 #define MAX7359_MAX_KEY_COLS	8
@@ -37,11 +38,11 @@
 /*
  * Configuration register bits
  */
-#define MAX7359_CFG_SLEEP	(1 << 7)
-#define MAX7359_CFG_INTERRUPT	(1 << 5)
-#define MAX7359_CFG_KEY_RELEASE	(1 << 3)
-#define MAX7359_CFG_WAKEUP	(1 << 1)
-#define MAX7359_CFG_TIMEOUT	(1 << 0)
+#define MAX7359_CFG_SLEEP	BIT(7)
+#define MAX7359_CFG_INTERRUPT	BIT(5)
+#define MAX7359_CFG_KEY_RELEASE	BIT(3)
+#define MAX7359_CFG_WAKEUP	BIT(1)
+#define MAX7359_CFG_TIMEOUT	BIT(0)
 
 /*
  * Autosleep register values (ms)
@@ -143,8 +144,8 @@ static void max7359_close(struct input_dev *dev)
 static void max7359_initialize(struct i2c_client *client)
 {
 	max7359_write_reg(client, MAX7359_REG_CONFIG,
-		MAX7359_CFG_KEY_RELEASE | /* Key release enable */
-		MAX7359_CFG_WAKEUP); /* Key press wakeup enable */
+			  MAX7359_CFG_KEY_RELEASE | /* Key release enable */
+			  MAX7359_CFG_WAKEUP); /* Key press wakeup enable */
 
 	/* Full key-scan functionality */
 	max7359_write_reg(client, MAX7359_REG_DEBOUNCE, 0x1F);
@@ -157,8 +158,6 @@ static void max7359_initialize(struct i2c_client *client)
 
 static int max7359_probe(struct i2c_client *client)
 {
-	const struct matrix_keymap_data *keymap_data =
-			dev_get_platdata(&client->dev);
 	struct max7359_keypad *keypad;
 	struct input_dev *input_dev;
 	int ret;
@@ -206,7 +205,7 @@ static int max7359_probe(struct i2c_client *client)
 	input_set_capability(input_dev, EV_MSC, MSC_SCAN);
 	input_set_drvdata(input_dev, keypad);
 
-	error = matrix_keypad_build_keymap(keymap_data, NULL,
+	error = matrix_keypad_build_keymap(NULL, NULL,
 					   MAX7359_MAX_KEY_ROWS,
 					   MAX7359_MAX_KEY_COLS,
 					   keypad->keycodes,

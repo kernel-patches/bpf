@@ -120,7 +120,8 @@ static int __init prom_memtype_classify(union linux_memtypes type)
 	return memtype_classify_arc(type);
 }
 
-void __weak __init prom_meminit(void)
+/* Platforms that detect RAM themselves pass add_ram = false. */
+void __init prom_mdesc_init(bool add_ram)
 {
 	struct linux_mdesc *p;
 
@@ -151,7 +152,8 @@ void __weak __init prom_meminit(void)
 		if (base < PHYS_OFFSET)
 			continue;
 
-		memblock_add(base, size);
+		if (add_ram)
+			memblock_add(base, size);
 
 		if (type == mem_reserved)
 			memblock_reserve(base, size);
@@ -167,6 +169,11 @@ void __weak __init prom_meminit(void)
 			nr_prom_mem++;
 		}
 	}
+}
+
+void __weak __init prom_meminit(void)
+{
+	prom_mdesc_init(true);
 }
 
 void __weak __init prom_cleanup(void)

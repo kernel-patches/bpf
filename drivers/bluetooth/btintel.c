@@ -29,6 +29,46 @@
 #define ECDSA_HEADER_LEN	320
 
 #define BTINTEL_EFI_DSBR	L"UefiCnvCommonDSBR"
+#define BTINTEL_EFI_BRDS	L"UefiCnvBtBRDS"
+#define BTINTEL_EFI_BPMO	L"UefiCnvBtBPMO"
+#define BTINTEL_EFI_BSSS	L"UefiCnvBtBSSS"
+#define BTINTEL_EFI_GLUI	L"UefiCnvCommonGLUI"
+
+static efi_guid_t btintel_efi_sar_guid =
+	EFI_GUID(0x42780dd5, 0x9a7d, 0x404c,
+		 0x80, 0xe4, 0x7f, 0x70, 0x94, 0x36, 0x03, 0x94);
+
+static efi_guid_t btintel_efi_glui_guid =
+	EFI_GUID(0x6c5bed75, 0x0ee8, 0x4d45,
+		 0x98, 0x0b, 0x4d, 0x81, 0x31, 0xba, 0x84, 0xb5);
+
+enum btintel_uefi_lock_status {
+	BTINTEL_UEFI_LOCK_UNLOCKED,
+	BTINTEL_UEFI_LOCK_LOCKED,
+	BTINTEL_UEFI_LOCK_TEST_MODE,
+	BTINTEL_UEFI_LOCK_UNKNOWN,
+};
+
+struct btintel_uefi_glui {
+	u8 revision;
+	u8 guid_lock_status;
+} __packed;
+
+/* BRDS and BSSS revision 2 use the same 19-byte UEFI layout. */
+struct btintel_uefi_sar {
+	u8 revision;
+	__le32 mode;
+	__le32 inc_power_mode;
+	u8 chain_a[5];
+	u8 chain_b[5];
+} __packed;
+
+struct btintel_bpmo {
+	u8	header;
+	__le32	mode;
+	u8	chain_a[BTINTEL_BPMO_NUM_MODULATIONS];
+	u8	chain_b[BTINTEL_BPMO_NUM_MODULATIONS];
+} __packed;
 
 enum {
 	DSM_SET_WDISABLE2_DELAY = 1,
@@ -485,10 +525,18 @@ int btintel_read_version(struct hci_dev *hdev, struct intel_version *ver)
 }
 EXPORT_SYMBOL_GPL(btintel_read_version);
 
+/* FIPS self-test status is only reported by ScP2 onwards, except BlazarIW */
+static bool btintel_fips_status_supported(u8 hw_variant)
+{
+	return hw_variant >= BTINTEL_HWID_SCP2 && hw_variant != BTINTEL_HWID_BZRIW;
+}
+
 int btintel_version_info_tlv(struct hci_dev *hdev,
 			     struct intel_version_tlv *version)
 {
 	const char *variant;
+	bool fips_status = false;
+	u8 hw_variant;
 
 	/* The hardware platform number has a fixed value of 0x37 and
 	 * for now only accept this single value.
@@ -505,7 +553,8 @@ int btintel_version_info_tlv(struct hci_dev *hdev,
 	 * This check has been put in place to ensure correct forward
 	 * compatibility options when newer hardware variants come along.
 	 */
-	switch (INTEL_HW_VARIANT(version->cnvi_bt)) {
+	hw_variant = INTEL_HW_VARIANT(version->cnvi_bt);
+	switch (hw_variant) {
 	case 0x17:	/* TyP */
 	case 0x18:	/* Slr */
 	case 0x19:	/* Slr-F */
@@ -521,9 +570,12 @@ int btintel_version_info_tlv(struct hci_dev *hdev,
 		break;
 	default:
 		bt_dev_err(hdev, "Unsupported Intel hardware variant (0x%x)",
-			   INTEL_HW_VARIANT(version->cnvi_bt));
+			   hw_variant);
 		return -EINVAL;
 	}
+
+	fips_status = btintel_fips_status_supported(hw_variant) &&
+		version->img_type == BTINTEL_IMG_BOOTLOADER;
 
 	switch (version->img_type) {
 	case BTINTEL_IMG_BOOTLOADER:
@@ -584,6 +636,9 @@ int btintel_version_info_tlv(struct hci_dev *hdev,
 
 	bt_dev_info(hdev, "Unlock policy: 0x%2.2x", version->unlock_policy);
 
+	if (fips_status)
+		bt_dev_info(hdev, "crc status: %u security status: %u patch status: %u",
+			    version->crc_sts, version->sec_sts, version->patch_sts);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(btintel_version_info_tlv);
@@ -612,6 +667,7 @@ static u8 btintel_version_tlv_min_len(u8 type)
 	case INTEL_TLV_UNLOCK_POLICY:
 		return sizeof(u8);
 	case INTEL_TLV_MIN_FW:
+	case INTEL_TLV_FIPS_STS:
 		return 3;
 	case INTEL_TLV_OTP_BDADDR:
 		return sizeof(bdaddr_t);
@@ -719,6 +775,11 @@ int btintel_parse_version_tlv(struct hci_dev *hdev,
 			break;
 		case INTEL_TLV_GIT_SHA1:
 			version->git_sha1 = get_unaligned_le32(tlv->val);
+			break;
+		case INTEL_TLV_FIPS_STS:
+			version->crc_sts = tlv->val[0];
+			version->sec_sts = tlv->val[1];
+			version->patch_sts = tlv->val[2];
 			break;
 		case INTEL_TLV_FW_ID:
 			snprintf(version->fw_id, sizeof(version->fw_id),
@@ -3071,6 +3132,123 @@ static union acpi_object *btintel_acpi_get_bt_pkg(union acpi_object *buffer)
 	return ERR_PTR(-ENOENT);
 }
 
+static int btintel_acpi_get_sar_lock_status(struct hci_dev *hdev, u8 *lock_status)
+{
+	union acpi_object *buffer = NULL, *pkg;
+	acpi_status status;
+	int i, ret = -ENOENT;
+
+	status = btintel_evaluate_acpi_method(hdev, "GLAI", &buffer, 2);
+	if (ACPI_FAILURE(status))
+		return ret;
+
+	if (buffer->package.elements[0].type != ACPI_TYPE_INTEGER ||
+	    buffer->package.elements[0].integer.value != 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	for (i = 1; i < buffer->package.count; i++) {
+		union acpi_object *domain;
+
+		pkg = &buffer->package.elements[i];
+		if (pkg->type != ACPI_TYPE_PACKAGE || pkg->package.count < 2)
+			continue;
+
+		domain = &pkg->package.elements[0];
+		if (domain->type != ACPI_TYPE_INTEGER ||
+		    domain->integer.value != BTINTEL_BT_DOMAIN)
+			continue;
+
+		pkg = &pkg->package.elements[1];
+		if (pkg->type != ACPI_TYPE_INTEGER ||
+		    pkg->integer.value > BTINTEL_UEFI_LOCK_TEST_MODE) {
+			ret = -EINVAL;
+			goto out;
+		}
+
+		*lock_status = pkg->integer.value;
+		ret = 0;
+		break;
+	}
+
+out:
+	kfree(buffer);
+	return ret;
+}
+
+#endif /* CONFIG_ACPI */
+
+static u8 btintel_uefi_get_sar_lock_status(struct hci_dev *hdev)
+{
+	struct btintel_uefi_glui glui;
+	unsigned long size = sizeof(glui);
+	efi_status_t status;
+	u8 lock_status = BTINTEL_UEFI_LOCK_UNKNOWN;
+
+	if (IS_ENABLED(CONFIG_EFI) &&
+	    efi_rt_services_supported(EFI_RT_SUPPORTED_GET_VARIABLE)) {
+		status = efi.get_variable(BTINTEL_EFI_GLUI,
+					  &btintel_efi_glui_guid, NULL,
+					  &size, &glui);
+		if (status == EFI_SUCCESS &&
+		    size == sizeof(glui) &&
+		    glui.revision == 0 &&
+		    glui.guid_lock_status <= BTINTEL_UEFI_LOCK_TEST_MODE)
+			lock_status = glui.guid_lock_status;
+	}
+
+	if (lock_status == BTINTEL_UEFI_LOCK_LOCKED ||
+	    lock_status == BTINTEL_UEFI_LOCK_TEST_MODE)
+		return lock_status;
+
+#ifdef CONFIG_ACPI
+	if (btintel_acpi_get_sar_lock_status(hdev, &lock_status))
+		bt_dev_dbg(hdev, "Unable to determine UEFI SAR table lock status");
+#endif
+
+	return lock_status;
+}
+
+static int btintel_uefi_check_sar_variable(struct hci_dev *hdev,
+					   efi_char16_t *name,
+					   struct btintel_uefi_sar *sar,
+					   u32 attributes, u8 lock_status)
+{
+	efi_status_t status;
+
+	if (lock_status == BTINTEL_UEFI_LOCK_LOCKED ||
+	    lock_status == BTINTEL_UEFI_LOCK_TEST_MODE)
+		return 0;
+
+	if (lock_status == BTINTEL_UEFI_LOCK_UNLOCKED) {
+		bt_dev_dbg(hdev, "UEFI SAR variable is not locked");
+		return -EOPNOTSUPP;
+	}
+
+	if (IS_ENABLED(CONFIG_X86) || IS_ENABLED(CONFIG_X86_64) ||
+	    IS_ENABLED(CONFIG_X86_32)) {
+		bt_dev_dbg(hdev, "UEFI SAR variable lock status is unknown");
+		return -EOPNOTSUPP;
+	}
+
+	if (!attributes || !IS_ENABLED(CONFIG_EFI) ||
+	    !efi_rt_services_supported(EFI_RT_SUPPORTED_SET_VARIABLE)) {
+		bt_dev_dbg(hdev, "Unable to verify UEFI SAR variable lock");
+		return -EOPNOTSUPP;
+	}
+
+	status = efi.set_variable(name, &btintel_efi_sar_guid, attributes,
+				  sizeof(*sar), sar);
+	if (status == EFI_WRITE_PROTECTED ||
+	    status == EFI_SECURITY_VIOLATION ||
+	    status == EFI_ACCESS_DENIED)
+		return 0;
+
+	bt_dev_dbg(hdev, "UEFI SAR variable is writable or its lock is unknown");
+	return -EOPNOTSUPP;
+}
+
 static int btintel_send_sar_ddc(struct hci_dev *hdev, struct btintel_cp_ddc_write *data, u8 len)
 {
 	struct sk_buff *skb;
@@ -3085,6 +3263,25 @@ static int btintel_send_sar_ddc(struct hci_dev *hdev, struct btintel_cp_ddc_writ
 	return 0;
 }
 
+/*
+ * btintel_send_sar_rev2_band - send DDC command for one Rev2 sub-band
+ *
+ * Each DDC 0x0311-0x0316 carries 2 bytes: [ChainA_value, ChainB_value].
+ * cmd->len = 4  (2 id + 2 data)
+ * HCI total  = 5 bytes (1 len + 4)
+ */
+static int btintel_send_sar_rev2_band(struct hci_dev *hdev,
+				      struct btintel_cp_ddc_write *cmd,
+				      u16 id, u8 chain_a, u8 chain_b)
+{
+	cmd->len = 4;
+	cmd->id = cpu_to_le16(id);
+	cmd->data[0] = chain_a;
+	cmd->data[1] = chain_b;
+	return btintel_send_sar_ddc(hdev, cmd, 5);
+}
+
+#ifdef CONFIG_ACPI
 static int btintel_send_edr(struct hci_dev *hdev, struct btintel_cp_ddc_write *cmd,
 			    int id, struct btintel_sar_inc_pwr *sar)
 {
@@ -3236,23 +3433,6 @@ static int btintel_set_mutual_sar(struct hci_dev *hdev, struct btintel_sar_inc_p
 
 	kfree_skb(skb);
 	return 0;
-}
-
-/* btintel_send_sar_rev2_band - send DDC command for one Rev2 sub-band
- *
- * Each DDC 0x0311-0x0316 carries 2 bytes: [ChainA_value, ChainB_value].
- * cmd->len = 4  (2 id + 2 data)
- * HCI total  = 5 bytes (1 len + 4)
- */
-static int btintel_send_sar_rev2_band(struct hci_dev *hdev,
-				      struct btintel_cp_ddc_write *cmd,
-				      u16 id, u8 chain_a, u8 chain_b)
-{
-	cmd->len = 4;
-	cmd->id = cpu_to_le16(id);
-	cmd->data[0] = chain_a;
-	cmd->data[1] = chain_b;
-	return btintel_send_sar_ddc(hdev, cmd, 5);
 }
 
 static int btintel_set_sar_rev2(struct hci_dev *hdev,
@@ -3522,9 +3702,235 @@ error:
 }
 #endif /* CONFIG_ACPI */
 
+static int btintel_uefi_read_sar(struct hci_dev *hdev, efi_char16_t *name,
+				 struct btintel_uefi_sar *sar, u32 *attributes)
+{
+	unsigned long size = sizeof(*sar);
+	efi_status_t status;
+
+	if (!IS_ENABLED(CONFIG_EFI) ||
+	    !efi_rt_services_supported(EFI_RT_SUPPORTED_GET_VARIABLE)) {
+		bt_dev_dbg(hdev, "UEFI runtime services unavailable for SAR");
+		return -EOPNOTSUPP;
+	}
+
+	status = efi.get_variable(name, &btintel_efi_sar_guid, attributes,
+				  &size, sar);
+	if (status == EFI_NOT_FOUND) {
+		bt_dev_dbg(hdev, "UEFI SAR variable not found");
+		return -ENOENT;
+	}
+	if (status == EFI_BUFFER_TOO_SMALL) {
+		bt_dev_dbg(hdev, "UEFI SAR variable has unsupported size");
+		return -EOPNOTSUPP;
+	}
+	if (status != EFI_SUCCESS) {
+		bt_dev_warn(hdev, "Failed to read UEFI SAR variable: 0x%lx",
+			    status);
+		return -EIO;
+	}
+
+	if (size != sizeof(*sar)) {
+		bt_dev_dbg(hdev, "Invalid UEFI SAR variable size: %lu", size);
+		return -EINVAL;
+	}
+	if (sar->revision != BTINTEL_SAR_REV2) {
+		bt_dev_dbg(hdev, "Unsupported UEFI SAR revision: %u",
+			   sar->revision);
+		return -EOPNOTSUPP;
+	}
+	if (!(le32_to_cpu(sar->mode) & BIT(0))) {
+		bt_dev_dbg(hdev, "UEFI SAR is disabled");
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+static int btintel_uefi_set_bpmo(struct hci_dev *hdev, u8 lock_status)
+{
+	u8 buffer[sizeof(struct btintel_cp_ddc_write) +
+		  BTINTEL_BPMO_NUM_MODULATIONS];
+	struct btintel_cp_ddc_write *cmd = (void *)buffer;
+	unsigned long size = sizeof(struct btintel_bpmo);
+	struct btintel_bpmo bpmo;
+	efi_status_t status;
+	int ret;
+
+	if (lock_status != BTINTEL_UEFI_LOCK_LOCKED &&
+	    lock_status != BTINTEL_UEFI_LOCK_TEST_MODE)
+		return -EOPNOTSUPP;
+
+	if (!IS_ENABLED(CONFIG_EFI) ||
+	    !efi_rt_services_supported(EFI_RT_SUPPORTED_GET_VARIABLE))
+		return -EOPNOTSUPP;
+
+	status = efi.get_variable(BTINTEL_EFI_BPMO, &btintel_efi_sar_guid, NULL,
+				  &size, &bpmo);
+	if (status == EFI_NOT_FOUND)
+		return -ENOENT;
+	if (status != EFI_SUCCESS) {
+		bt_dev_dbg(hdev, "Failed to read UEFI BPMO variable: 0x%lx",
+			   status);
+		return -EOPNOTSUPP;
+	}
+
+	if (size != sizeof(bpmo) || bpmo.header != 0) {
+		bt_dev_dbg(hdev, "Unsupported UEFI BPMO variable");
+		return -EOPNOTSUPP;
+	}
+	if (!(le32_to_cpu(bpmo.mode) & BIT(0))) {
+		bt_dev_dbg(hdev, "UEFI BPMO is disabled");
+		return -EOPNOTSUPP;
+	}
+
+	cmd->len = 3;
+	cmd->id = cpu_to_le16(BTINTEL_DDC_ID_SAR_BPMO_ENABLE);
+	cmd->data[0] = 0x01;
+	ret = btintel_send_sar_ddc(hdev, cmd, sizeof(*cmd) + 1);
+	if (ret)
+		return ret;
+
+	cmd->len = 2 + BTINTEL_BPMO_NUM_MODULATIONS;
+	cmd->id = cpu_to_le16(BTINTEL_DDC_ID_SAR_BPMO_CHAIN_A);
+	memcpy(cmd->data, bpmo.chain_a, BTINTEL_BPMO_NUM_MODULATIONS);
+	ret = btintel_send_sar_ddc(hdev, cmd, sizeof(buffer));
+	if (ret)
+		return ret;
+
+	cmd->id = cpu_to_le16(BTINTEL_DDC_ID_SAR_BPMO_CHAIN_B);
+	memcpy(cmd->data, bpmo.chain_b, BTINTEL_BPMO_NUM_MODULATIONS);
+	return btintel_send_sar_ddc(hdev, cmd, sizeof(buffer));
+}
+
+static int btintel_set_uefi_sar(struct hci_dev *hdev,
+				struct intel_version_tlv *ver)
+{
+	/* 5G8 and 5G9 share a limit but have separate DDC identifiers. */
+	static const struct {
+		u16 id;
+		u8 band;
+	} bands[] = {
+		{ 0x0311, 0 },
+		{ 0x0312, 1 },
+		{ 0x0313, 2 },
+		{ 0x0314, 2 },
+		{ 0x0315, 3 },
+		{ 0x0316, 4 },
+	};
+	u8 buffer[sizeof(struct btintel_cp_ddc_write) + 2];
+	struct btintel_cp_ddc_write *cmd = (void *)buffer;
+	struct btintel_uefi_sar sar;
+	struct sk_buff *skb;
+	u32 attributes;
+	u8 lock_status;
+	u8 enable = 1;
+	int ret, i;
+
+	lock_status = btintel_uefi_get_sar_lock_status(hdev);
+	if (lock_status == BTINTEL_UEFI_LOCK_UNLOCKED ||
+	    ((IS_ENABLED(CONFIG_X86) || IS_ENABLED(CONFIG_X86_64) ||
+	      IS_ENABLED(CONFIG_X86_32)) &&
+	     lock_status == BTINTEL_UEFI_LOCK_UNKNOWN)) {
+		bt_dev_dbg(hdev, "UEFI SAR tables are not trusted");
+		return -EOPNOTSUPP;
+	}
+
+	ret = btintel_uefi_read_sar(hdev, BTINTEL_EFI_BRDS, &sar,
+				    &attributes);
+	if (ret)
+		return ret;
+
+	ret = btintel_uefi_check_sar_variable(hdev, BTINTEL_EFI_BRDS, &sar,
+					      attributes, lock_status);
+	if (ret)
+		return ret;
+
+	/*
+	 * UEFI BRDS uses only the 2.4 GHz limits; BSSS supplies sub-band limits.
+	 * Firmware accepts this BRDS write regardless of the existing 0x019e
+	 * value, including a value previously set by the DDC configuration.
+	 */
+	ret = btintel_send_sar_rev2_band(hdev, cmd, 0x0311,
+					 sar.chain_a[0], sar.chain_b[0]);
+	if (ret)
+		goto complete;
+
+	/* Standalone limits require both BRDS and BSSS to be enabled. */
+	ret = btintel_uefi_read_sar(hdev, BTINTEL_EFI_BSSS, &sar,
+				    &attributes);
+	if (!ret) {
+		ret = btintel_uefi_check_sar_variable(hdev, BTINTEL_EFI_BSSS,
+						      &sar, attributes,
+						      lock_status);
+		if (ret)
+			goto complete;
+
+		cmd->len = 3;
+		/* UEFI BSSS requires 0x019e = 1; inc_power_mode is not used here. */
+		cmd->id = cpu_to_le16(0x019e);
+		cmd->data[0] = enable;
+		ret = btintel_send_sar_ddc(hdev, cmd, sizeof(*cmd) + 1);
+		if (ret)
+			goto complete;
+
+		/*
+		 * After writing 0x019e = 1, firmware interprets DDC 0x0311-0x0316
+		 * as BSSS limits.
+		 */
+		for (i = 0; i < ARRAY_SIZE(bands); i++) {
+			ret = btintel_send_sar_rev2_band(hdev, cmd, bands[i].id,
+							 sar.chain_a[bands[i].band],
+							 sar.chain_b[bands[i].band]);
+			if (ret)
+				goto complete;
+		}
+	} else if (ret != -ENOENT && ret != -EOPNOTSUPP) {
+		goto complete;
+	} else {
+		ret = 0;
+	}
+
+	if (INTEL_CNVX_TOP_TYPE(ver->cnvr_top) >= BTINTEL_CNVR_PEP) {
+		ret = btintel_uefi_set_bpmo(hdev, lock_status);
+		if (ret == -ENOENT || ret == -EOPNOTSUPP)
+			ret = 0;
+	}
+
+complete:
+	skb = __hci_cmd_sync(hdev, 0xfe25, sizeof(enable), &enable,
+			     HCI_CMD_TIMEOUT);
+	if (IS_ERR(skb)) {
+		if (ret)
+			bt_dev_warn(hdev,
+				    "UEFI SAR setup failed (%d), completion failed (%ld)",
+				    ret, PTR_ERR(skb));
+		else
+			bt_dev_warn(hdev, "Failed to complete UEFI SAR setup (%ld)",
+				    PTR_ERR(skb));
+
+		return ret ? ret : PTR_ERR(skb);
+	}
+
+	kfree_skb(skb);
+	return ret;
+}
+
 static int btintel_set_specific_absorption_rate(struct hci_dev *hdev,
 						struct intel_version_tlv *ver)
 {
+	u8 hw_variant = INTEL_HW_VARIANT(ver->cnvi_bt);
+
+	/* Supported SCP2+ platforms use this UEFI DDC map regardless of CNVr. */
+	if (hw_variant >= BTINTEL_HWID_SCP2 &&
+	    hw_variant != BTINTEL_HWID_BZRIW)
+		btintel_set_uefi_sar(hdev, ver);
+
+	/*
+	 * Platforms with UEFI BSSS do not provide ACPI BRDS. If UEFI BRDS is
+	 * available without BSSS, let the existing ACPI BRDS path run after
+	 * this path so its later write retains the existing precedence.
+	 */
 #ifdef CONFIG_ACPI
 	return btintel_acpi_set_sar(hdev, ver);
 #endif
@@ -3557,8 +3963,11 @@ static int btintel_try_load_unlocker(struct hci_dev *hdev,
 	if (err) {
 		bt_dev_err(hdev, "Failed to load intel/unlocker.sfi (%d)", err);
 		data->unlocker = false;
+		return err;
 	}
-	return err;
+
+	btintel_set_flag(hdev, INTEL_UNLOCKER_LOADED);
+	return 0;
 }
 
 int btintel_bootloader_setup_tlv(struct hci_dev *hdev,
@@ -3852,6 +4261,43 @@ void btintel_print_fseq_info(struct hci_dev *hdev)
 }
 EXPORT_SYMBOL_GPL(btintel_print_fseq_info);
 
+int btintel_check_fips_status(struct hci_dev *hdev,
+			      struct intel_version_tlv *ver)
+{
+	u8 hw_variant;
+
+	/* FIPS status is reported only in the bootloader image */
+	if (ver->img_type != BTINTEL_IMG_BOOTLOADER)
+		return 0;
+
+	hw_variant = INTEL_HW_VARIANT(ver->cnvi_bt);
+
+	if (!btintel_fips_status_supported(hw_variant))
+		return 0;
+
+	/* 0 -> Test not executed
+	 * 1 -> Test executed and it passed
+	 * any other value -> Test failed
+	 */
+	if (ver->crc_sts > 1) {
+		bt_dev_err(hdev, "crc test failed: %u", ver->crc_sts);
+		return -ENOEXEC;
+	}
+
+	if (ver->sec_sts > 1) {
+		bt_dev_err(hdev, "security test failed: %u", ver->sec_sts);
+		return -EAGAIN;
+	}
+
+	if (ver->patch_sts > 1) {
+		bt_dev_err(hdev, "patch test failed: %u", ver->patch_sts);
+		return -EAGAIN;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(btintel_check_fips_status);
+
 static int btintel_setup_combined(struct hci_dev *hdev)
 {
 	const u8 param[1] = { 0xFF };
@@ -4075,6 +4521,10 @@ static int btintel_setup_combined(struct hci_dev *hdev)
 	case 0x23:
 		/* Display version information of TLV type */
 		btintel_version_info_tlv(hdev, &ver_tlv);
+
+		err = btintel_check_fips_status(hdev, &ver_tlv);
+		if (err)
+			goto exit_error;
 
 		/* Apply the device specific HCI quirks for TLV based devices
 		 *

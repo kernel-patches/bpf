@@ -450,7 +450,7 @@ static const struct drm_connector_helper_funcs cirrus_connector_helper_funcs = {
 static const struct drm_connector_funcs cirrus_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = drm_connector_cleanup,
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -623,7 +623,9 @@ static int cirrus_pci_probe(struct pci_dev *pdev,
 	if (ret < 0)
 		return ret;
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ret;
 
 	pci_set_drvdata(pdev, dev);
 	ret = drm_dev_register(dev, 0);

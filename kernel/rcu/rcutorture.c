@@ -39,11 +39,11 @@
 #include <linux/srcu.h>
 #include <linux/slab.h>
 #include <linux/trace_clock.h>
+#include <linux/trace_controls.h>
 #include <asm/byteorder.h>
 #include <linux/torture.h>
 #include <linux/vmalloc.h>
 #include <linux/sched/debug.h>
-#include <linux/sched/sysctl.h>
 #include <linux/oom.h>
 #include <linux/tick.h>
 #include <linux/rcupdate_trace.h>
@@ -149,6 +149,7 @@ torture_param(int, test_boost, 1, "Test RCU prio boost: 0=no, 1=maybe, 2=yes.");
 torture_param(int, test_boost_duration, 4, "Duration of each boost test, seconds.");
 torture_param(int, test_boost_holdoff, 0, "Holdoff time from rcutorture start, seconds.");
 torture_param(int, test_boost_interval, 7, "Interval between boost tests, seconds.");
+torture_param(int, test_boost_reader_ms, 2000, "Boost-test reader CPU time, ms.");
 torture_param(int, test_nmis, 0, "End-test NMI tests, 0 to disable.");
 torture_param(bool, test_no_idle_hz, true, "Test support for tickless idle CPUs");
 torture_param(int, test_srcu_lockdep, 0, "Test specified SRCU deadlock scenario.");
@@ -157,6 +158,11 @@ torture_param(int, verbose, 1, "Enable verbose debugging printk()s");
 static char *torture_type = "rcu";
 module_param(torture_type, charp, 0444);
 MODULE_PARM_DESC(torture_type, "Type of RCU to torture (rcu, srcu, ...)");
+
+// Global because tree_plugin.h reads it during boot.
+bool rcu_torture_boost_disable;
+module_param_named(boost_disable, rcu_torture_boost_disable, bool, 0444);
+MODULE_PARM_DESC(boost_disable, "Do not create RCU boost kthreads, to test boost-failure detection.");
 
 static int nrealnocbers;
 static int nrealreaders;
@@ -333,6 +339,7 @@ static bool shutdown_time_arrived(void)
 }
 
 static unsigned long boost_starttime;	/* jiffies of next boost test start. */
+static unsigned long boost_claimed;	/* ->boost_starttime of claimed test. */
 static DEFINE_MUTEX(boost_mutex);	/* protect setting boost_starttime */
 					/*  and boost task create/destroy. */
 static atomic_t barrier_cbs_count;	/* Barrier callbacks registered. */
@@ -424,7 +431,6 @@ struct rcu_torture_ops {
 	void (*fqs)(void);
 	void (*stats)(void);
 	void (*gp_kthread_dbg)(void);
-	bool (*check_boost_failed)(unsigned long gp_state, int *cpup);
 	int (*stall_dur)(void);
 	void (*get_gp_data)(int *flags, unsigned long *gp_seq);
 	void (*gp_slow_register)(atomic_t *rgssp);
@@ -636,7 +642,6 @@ static struct rcu_torture_ops rcu_ops = {
 	.cb_barrier		= rcu_barrier,
 	.fqs			= rcu_force_quiescent_state,
 	.gp_kthread_dbg		= show_rcu_gp_kthreads,
-	.check_boost_failed	= rcu_check_boost_fail,
 	.stall_dur		= rcu_jiffies_till_stall_check,
 	.get_gp_data		= rcutorture_get_gp_data,
 	.gp_slow_register	= rcu_gp_slow_register,
@@ -1055,7 +1060,7 @@ static struct rcu_torture_ops srcud_ops = {
 /* As above, but broken due to inappropriate reader extension. */
 static struct rcu_torture_ops busted_srcud_ops = {
 	.ttype		= SRCU_FLAVOR,
-	.init		= srcu_torture_init,
+	.init		= srcud_torture_init,
 	.cleanup	= srcu_torture_cleanup,
 	.readlock	= srcu_torture_read_lock,
 	.read_delay	= rcu_read_delay,
@@ -1164,7 +1169,6 @@ static struct rcu_torture_ops trivial_preempt_ops = {
 	.readlock	= rcu_torture_read_lock_trivial_preempt,
 	.read_delay	= rcu_read_delay,  // just reuse rcu's version.
 	.readunlock	= rcu_torture_read_unlock_trivial_preempt,
-	.readlock_held	= torture_readlock_not_held,
 	.get_gp_seq	= rcu_no_completed,
 	.sync		= synchronize_rcu_trivial_preempt,
 	.exp_sync	= synchronize_rcu_trivial_preempt,
@@ -1314,6 +1318,7 @@ static struct rcu_torture_ops tasks_tracing_ops = {
 	.irq_capable	= 1,
 	.slow_gps	= 1,
 	.nmi_capable	= 1,
+	.debug_objects	= 1,
 	.name		= "tasks-tracing"
 };
 
@@ -1334,93 +1339,124 @@ static unsigned long rcutorture_seq_diff(unsigned long new, unsigned long old)
 }
 
 /*
- * RCU torture priority-boost testing.  Runs one real-time thread per
- * CPU for moderate bursts, repeatedly starting grace periods and waiting
- * for them to complete.  If a given grace period takes too long, we assume
- * that priority inversion has occurred.
+ * RCU torture priority-boost testing.  Each test interval, one CPU
+ * runs a normal-priority reader that spins inside an RCU read-side
+ * critical section until it has consumed test_boost_reader_ms of CPU
+ * time, while a SCHED_FIFO hog on the same CPU tries to starve it.  RT
+ * throttling is left enabled, so an unboosted reader gets only a few
+ * percent of the CPU, far too little to finish within test_boost_duration.
+ * If the reader finishes anyway, boosting lifted it above the hog.
+ *
+ * Only one CPU is tested per interval because RCU boosts the readers
+ * of a given rcu_node one at a time, so a second slow reader sharing the
+ * rcu_node would wait for the first one's whole CPU burn.
  */
 
-static int old_rt_runtime = -1;
+struct rcu_torture_boost_reader {
+	struct completion done;
+	bool in_cs;	// Reader is inside its RCU read-side critical section.
+	bool finished;	// Reader consumed all of its CPU time.
+	bool abort;	// Hog asks the reader to give up.
+	u64 ran_ns;	// CPU time consumed so far.
+};
 
-static void rcu_torture_disable_rt_throttle(void)
+// Reader CPU time so far, retrying to avoid torn 64-bit loads on 32-bit.
+static u64 rcu_torture_boost_runtime(void)
 {
-	/*
-	 * Disable RT throttling so that rcutorture's boost threads don't get
-	 * throttled. Only possible if rcutorture is built-in otherwise the
-	 * user should manually do this by setting the sched_rt_period_us and
-	 * sched_rt_runtime sysctls.
-	 */
-	if (!IS_BUILTIN(CONFIG_RCU_TORTURE_TEST) || old_rt_runtime != -1)
-		return;
+	u64 a, b;
 
-	old_rt_runtime = sysctl_sched_rt_runtime;
-	sysctl_sched_rt_runtime = -1;
+	do {
+		a = READ_ONCE(current->se.sum_exec_runtime);
+		b = READ_ONCE(current->se.sum_exec_runtime);
+	} while (a != b);
+	return a;
 }
 
-static void rcu_torture_enable_rt_throttle(void)
+static int rcu_torture_boost_reader(void *arg)
 {
-	if (!IS_BUILTIN(CONFIG_RCU_TORTURE_TEST) || old_rt_runtime == -1)
-		return;
+	struct rcu_torture_boost_reader *br = arg;
+	u64 goal = (u64)test_boost_reader_ms * NSEC_PER_MSEC;
+	u64 ran;
+	u64 start;
+	int idx;
 
-	sysctl_sched_rt_runtime = old_rt_runtime;
-	old_rt_runtime = -1;
+	idx = cur_ops->readlock();
+	start = rcu_torture_boost_runtime();
+	WRITE_ONCE(br->in_cs, true);
+	do {
+		cpu_relax();
+		ran = rcu_torture_boost_runtime() - start;
+		WRITE_ONCE(br->ran_ns, ran);
+	} while (ran < goal && !READ_ONCE(br->abort) && !torture_must_stop());
+	// Publish before unlocking: deboosting lets the hog preempt us at once.
+	WRITE_ONCE(br->finished, ran >= goal);
+	cur_ops->readunlock(idx);
+	kthread_complete_and_exit(&br->done, 0);
 }
 
-static bool rcu_torture_boost_failed(unsigned long gp_state, unsigned long *start)
+// Run one boost test on this CPU.
+static void rcu_torture_boost_once(void)
 {
-	int cpu;
 	static int dbg_done;
-	unsigned long end = jiffies;
-	bool gp_done;
-	unsigned long j;
-	static unsigned long last_persist;
-	unsigned long lp;
-	unsigned long mininterval = test_boost_duration * HZ - HZ / 2;
+	struct rcu_torture_boost_reader br = { };
+	unsigned long endtime;
+	unsigned long gp_state = 0;
+	unsigned long start;
+	struct task_struct *t;
+	bool stuttered = false;
 
-	if (end - *start > mininterval) {
-		// Recheck after checking time to avoid false positives.
-		smp_mb(); // Time check before grace-period check.
-		if (cur_ops->poll_gp_state(gp_state))
-			return false; // passed, though perhaps just barely
-		if (cur_ops->check_boost_failed && !cur_ops->check_boost_failed(gp_state, &cpu)) {
-			// At most one persisted message per boost test.
-			j = jiffies;
-			lp = READ_ONCE(last_persist);
-			if (time_after(j, lp + mininterval) &&
-			    cmpxchg(&last_persist, lp, j) == lp) {
-				if (cpu < 0)
-					pr_info("Boost inversion persisted: QS from all CPUs\n");
-				else
-					pr_info("Boost inversion persisted: No QS from CPU %d\n", cpu);
-			}
-			return false; // passed on a technicality
-		}
-		VERBOSE_TOROUT_STRING("rcu_torture_boost boosting failed");
-		n_rcu_torture_boost_failure++;
-		if (!xchg(&dbg_done, 1) && cur_ops->gp_kthread_dbg) {
-			pr_info("Boost inversion thread ->rt_priority %u gp_state %lu jiffies %lu\n",
-				current->rt_priority, gp_state, end - *start);
-			cur_ops->gp_kthread_dbg();
-			// Recheck after print to flag grace period ending during splat.
-			gp_done = cur_ops->poll_gp_state(gp_state);
-			pr_info("Boost inversion: GP %lu %s.\n", gp_state,
-				gp_done ? "ended already" : "still pending");
-
-		}
-
-		return true; // failed
-	} else if (cur_ops->check_boost_failed && !cur_ops->check_boost_failed(gp_state, NULL)) {
-		*start = jiffies;
+	init_completion(&br.done);
+	t = kthread_run_on_cpu(rcu_torture_boost_reader, &br, raw_smp_processor_id(),
+			       "rcu_torture_boost_rdr_%u");
+	if (IS_ERR(t)) {
+		n_rcu_torture_boost_ktrerror++;
+		return;
 	}
 
-	return false; // passed
+	// Wait for the reader to enter its critical section, then start
+	// a grace period that it will block.
+	start = jiffies;
+	while (!READ_ONCE(br.in_cs) && !torture_must_stop() &&
+	       time_before(jiffies, start + HZ))
+		schedule_timeout_uninterruptible(1);
+	if (!READ_ONCE(br.in_cs))
+		goto out;
+	gp_state = cur_ops->start_gp_poll();
+
+	// Hog the CPU until the reader finishes or the interval ends.
+	start = jiffies;
+	endtime = start + test_boost_duration * HZ;
+	while (!READ_ONCE(br.finished) && time_before(jiffies, endtime) &&
+	       !torture_must_stop()) {
+		if (stutter_wait("rcu_torture_boost")) {
+			sched_set_fifo_low(current);
+			stuttered = true;
+			break;
+		}
+		cpu_relax();
+	}
+
+	smp_mb(); // Time check before reader check.
+	if (!READ_ONCE(br.finished) && !stuttered && !torture_must_stop()) {
+		VERBOSE_TOROUT_STRING("rcu_torture_boost boosting failed");
+		n_rcu_torture_boost_failure++;
+		pr_info("Boost inversion: reader got only %llu of %d ms CPU in %lu jiffies, GP %s.\n",
+			div64_ul(READ_ONCE(br.ran_ns), NSEC_PER_MSEC), test_boost_reader_ms,
+			jiffies - start,
+			cur_ops->poll_gp_state(gp_state) ? "ended" : "still pending");
+		if (!xchg(&dbg_done, 1) && cur_ops->gp_kthread_dbg) {
+			pr_info("Boost inversion thread ->rt_priority %u gp_state %lu jiffies %lu\n",
+				current->rt_priority, gp_state, jiffies - start);
+			cur_ops->gp_kthread_dbg();
+		}
+	}
+out:
+	WRITE_ONCE(br.abort, true);
+	wait_for_completion(&br.done);
 }
 
 static int rcu_torture_boost(void *arg)
 {
-	unsigned long endtime;
-	unsigned long gp_state;
-	unsigned long gp_state_time;
 	unsigned long oldstarttime;
 	unsigned long booststarttime = get_torture_init_jiffies() + test_boost_holdoff * HZ;
 
@@ -1441,9 +1477,6 @@ static int rcu_torture_boost(void *arg)
 
 	/* Each pass through the following loop does one boost-test cycle. */
 	do {
-		bool failed = false; // Test failed already in this test interval
-		bool gp_initiated = false;
-
 		if (kthread_should_stop())
 			goto checkwait;
 
@@ -1457,33 +1490,9 @@ static int rcu_torture_boost(void *arg)
 				goto checkwait;
 		}
 
-		// Do one boost-test interval.
-		endtime = oldstarttime + test_boost_duration * HZ;
-		while (time_before(jiffies, endtime)) {
-			// Has current GP gone too long?
-			if (gp_initiated && !failed && !cur_ops->poll_gp_state(gp_state))
-				failed = rcu_torture_boost_failed(gp_state, &gp_state_time);
-			// If we don't have a grace period in flight, start one.
-			if (!gp_initiated || cur_ops->poll_gp_state(gp_state)) {
-				gp_state = cur_ops->start_gp_poll();
-				gp_initiated = true;
-				gp_state_time = jiffies;
-			}
-			if (stutter_wait("rcu_torture_boost")) {
-				sched_set_fifo_low(current);
-				// If the grace period already ended,
-				// we don't know when that happened, so
-				// start over.
-				if (cur_ops->poll_gp_state(gp_state))
-					gp_initiated = false;
-			}
-			if (torture_must_stop())
-				goto checkwait;
-		}
-
-		// In case the grace period extended beyond the end of the loop.
-		if (gp_initiated && !failed && !cur_ops->poll_gp_state(gp_state))
-			rcu_torture_boost_failed(gp_state, &gp_state_time);
+		// Do one boost-test interval, if no other CPU claimed it.
+		if (xchg(&boost_claimed, oldstarttime) != oldstarttime)
+			rcu_torture_boost_once();
 
 		/*
 		 * Set the start time of the next test interval.
@@ -3390,7 +3399,6 @@ static int rcutorture_booster_cleanup(unsigned int cpu)
 	mutex_lock(&boost_mutex);
 	t = boost_tasks[cpu];
 	boost_tasks[cpu] = NULL;
-	rcu_torture_enable_rt_throttle();
 	mutex_unlock(&boost_mutex);
 
 	/* This must be outside of the mutex, otherwise deadlock! */
@@ -3428,7 +3436,6 @@ static int rcutorture_booster_init(unsigned int cpu)
 
 	/* Don't allow time recalculation while creating a new task. */
 	mutex_lock(&boost_mutex);
-	rcu_torture_disable_rt_throttle();
 	VERBOSE_TOROUT_STRING("Creating rcu_torture_boost task");
 	boost_tasks[cpu] = kthread_run_on_cpu(rcu_torture_boost, NULL,
 					      cpu, "rcu_torture_boost_%u");
@@ -4007,9 +4014,8 @@ static int __init rcu_torture_fwd_prog_init(void)
 	} else if (fwd_progress < 0) {
 		fwd_progress = nr_cpu_ids;
 	}
-	if ((!cur_ops->sync && !cur_ops->call) ||
-	    (!cur_ops->cbflood_max && (!cur_ops->stall_dur || cur_ops->stall_dur() <= 0)) ||
-	    cur_ops == &rcu_busted_ops) {
+	if (!cur_ops->sync || ((!cur_ops->call || !cur_ops->cb_barrier || !cur_ops->cbflood_max) &&
+	    (!cur_ops->stall_dur || cur_ops->stall_dur() <= 0))) {
 		VERBOSE_TOROUT_STRING("rcu_torture_fwd_prog_init: Disabled, unsupported by RCU flavor under test");
 		fwd_progress = 0;
 		return 0;
@@ -5152,6 +5158,10 @@ rcu_torture_init(void)
 		test_boost_interval = 1;
 	if (test_boost_duration < 2)
 		test_boost_duration = 2;
+	if (test_boost_reader_ms < 1)
+		test_boost_reader_ms = 1;
+	if (test_boost_reader_ms > test_boost_duration * MSEC_PER_SEC)
+		test_boost_reader_ms = test_boost_duration * MSEC_PER_SEC;
 	if (rcu_torture_can_boost()) {
 
 		boost_starttime = jiffies + test_boost_interval * HZ;

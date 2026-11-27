@@ -10,7 +10,6 @@
 #include <linux/sched.h>
 #include <linux/node.h>
 #include <linux/fs.h>
-#include <linux/pagemap.h>
 #include <linux/atomic.h>
 #include <linux/page-flags.h>
 #include <uapi/linux/mempolicy.h>
@@ -129,7 +128,7 @@ union swap_header {
 		unsigned char	sws_uuid[16];
 		unsigned char	sws_volume[16];
 		__u32		padding[117];
-		__u32		badpages[1];
+		__u32		badpages[];
 	} info;
 };
 

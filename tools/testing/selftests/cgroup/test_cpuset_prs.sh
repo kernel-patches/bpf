@@ -110,8 +110,8 @@ echo "" > test/cpuset.cpus
 
 #
 # If nohz_full CPUs have been reserved at boot time, they should not include
-# CPUs 0-7 as that may fail some of the test cases. On the other hand if the
-# set of nohz_full CPUs includes all the CPUs except 0-7 in a single range
+# CPUs 1-7 as that may fail some of the test cases. On the other hand if the
+# set of nohz_full CPUs includes all the CPUs except 1-7 in a single range
 # <first>-<last>, we can run a special set of housekeeping CPUs exhaustion
 # tests to see if the cpuset code will reject them.
 #
@@ -123,14 +123,22 @@ NOHZ_FULL_CPUS=
 	NOHZ_FULL_CPUS=$(cat /sys/devices/system/cpu/nohz_full)
 LAST_PRESENT_CPU=$(cat /sys/devices/system/cpu/present | sed -e "s/.*[,-]//")
 [[ -n "$NOHZ_FULL_CPUS" ]] && {
-	FIRST_NOHZ_FULL_CPU=$(echo $NOHZ_FULL_CPUS | sed -e "s/[,-].*//")
-	LAST_NOHZ_FULL_CPU=$(echo $NOHZ_FULL_CPUS | sed -e "s/,.*//;s/.*[-]//")
+	if [[ $(expr $NOHZ_FULL_CPUS : "^0,") -gt 0 ]]
+	then
+		NOHZ_CPU0=1
+		NOHZ_CPUS=$(echo $NOHZ_FULL_CPUS | sed -e "s/^0,//")
+	else
+		NOHZ_CPUS=$NOHZ_FULL_CPUS
+	fi
+	FIRST_NOHZ_FULL_CPU=$(echo $NOHZ_CPUS | sed -e "s/[,-].*//")
+	LAST_NOHZ_FULL_CPU=$(echo $NOHZ_CPUS | sed -e "s/,.*//;s/.*[-]//")
 	echo "Boot nohz_full CPUs: $NOHZ_FULL_CPUS"
 }
 [[ -n "$FIRST_NOHZ_FULL_CPU" && "$FIRST_NOHZ_FULL_CPU" -le 7 ]] &&
 	skip_test "Boot NOHZ_FULL CPUs overlap CPUs to be tested!"
 
 [[ -n "$FIRST_NOHZ_FULL_CPU" && "$FIRST_NOHZ_FULL_CPU" = 8 &&
+   -n "$NOHZ_CPU0" &&
    "$LAST_NOHZ_FULL_CPU" = $LAST_PRESENT_CPU ]] && RUN_NOHZ_FULL_TESTS=1
 
 #
@@ -394,8 +402,8 @@ TEST_MATRIX=(
 	# Invalid to valid local partition direct transition tests
 	" C1-3:P2  X4:P2    .      .      .      .      .      .     0 A1:1-3|XA1:1-3|A2:1-3:XA2: A1:P2|A2:P-2 1-3"
 	" C1-3:P2  X4:P2    .      .      .    X3:P2    .      .     0 A1:1-2|XA1:1-3|A2:3:XA2:3 A1:P2|A2:P2 1-3"
-	" C0-3:P2    .      .    C4-6   C0-4     .      .      .     0 A1:0-4|B1:5-6 A1:P2|B1:P0"
-	" C0-3:P2    .      .    C4-6 C0-4:C0-3  .      .      .     0 A1:0-3|B1:4-6 A1:P2|B1:P0 0-3"
+	" C1-3:P2    .      .    C4-6   C1-4     .      .      .     0 A1:1-4|B1:5-6 A1:P2|B1:P0"
+	" C1-3:P2    .      .    C4-6 C1-4:C1-3  .      .      .     0 A1:1-3|B1:4-6 A1:P2|B1:P0 1-3"
 
 	# Local partition invalidation tests
 	" C0-3:X1-3:P2 C1-3:X2-3:P2 C2-3:X3:P2 \
@@ -506,6 +514,12 @@ TEST_MATRIX=(
 	"  CX1-4  CX2-4:P2  .    C5-6      .     .      .   P1:C3-6  0 A1:1|A2:2-4|B1:5-6 \
 								       A1:P0|A2:P2:B1:P-1 2-4"
 
+	# CPU 0 cannot be used in an isolated partition
+	"   C0-4     .      .      .       P2    .      .      .     0 A1:0-4 A1:P-2"
+	"  C0-4:P2   .      .      .      C0-2   .      .      .     0 A1:0-2 A1:P-2"
+	"  CX0-4  C0-2:P1   .      .       .     P2     .      .     0 A1:0-4|A2:0-2 A2:P-2"
+	"  CX0-4  C3-4:P2   .      .       .    C0-2    .      .     0 A1:0-4|A2:0-2 A2:P-2"
+
 	# When multiple partitions with conflicting cpuset.cpus are created, the
 	# latter created ones will only get what are left of the available exclusive
 	# CPUs.
@@ -525,8 +539,8 @@ TEST_MATRIX=(
 
 	# A middle isolated parent shrunk below coverage: the released CPUs of
 	# an invalidated child stay isolated as a higher ancestor still covers them.
-	" CX0-4:P2 CX2-4:P2 CX3-4:P2 .     .     X2     .      .     0 A1:0-1,3-4|A2:2|A3:2 \
-								       A1:P2|A2:P2|A3:P-2 0-4"
+	" CX1-4:P2 CX2-4:P2 CX3-4:P2 .     .     X2     .      .     0 A1:1,3-4|A2:2|A3:2 \
+								       A1:P2|A2:P2|A3:P-2 1-4"
 
 	# When an isolated partition child with root partition parent is invalidated,
 	# its effective xcpus will be removed from isolated_cpus.
@@ -618,20 +632,20 @@ ISOLCPUS_TEST_MATRIX=(
 	" CX1-2,I:X1,I:P1 . .      .     X1,2,I  .      .      .     0 A1:1-2,I|XA1:1-2,I A1:P-1 ."
 )
 
-# Test matrix to be run when boot time nohz_full CPUs cover all CPUs except CPUs 0-7
+# Test matrix to be run when boot time nohz_full CPUs cover all CPUs except CPUs 1-7
 # This also means that CPU 8 is available and is a nohz_full CPU.
 NOHZ_FULL_TEST_MATRIX=(
 	#  old-A1 old-A2 old-A3 old-B1 new-A1 new-A2 new-A3 new-B1 fail ECPUs Pstate ISOLCPUS
 	#  ------ ------ ------ ------ ------ ------ ------ ------ ---- ----- ------ --------
 	# Using all the nohz_full HK CPUs 0-7 in isolated partition is not allowed
-	" C0-7       .      .      .      P2     .      .      .     0 A1:0-7 A1:P-2 ."
-	" C2-7:P2    .      .      .     C0-4    .      .      .     0 A1:0-4 A1:P2 0-4"
-	" C1-7:P2 C5-7:P2   .      .       .     .      .    C0:P2   0 A1:1-4|A2:5-7|B1:0
-								       A1:P2|A2:P2|B1:P-2 1-7"
+	" C1-7       .      .      .      P2     .      .      .     0 A1:1-7 A1:P-2 ."
+	" C2-7:P2    .      .      .     C1-4    .      .      .     0 A1:1-4 A1:P2 1-4"
+	" C2-7:P2 C5-7:P2   .      .       .     .      .    C1:P2   0 A1:2-4|A2:5-7|B1:1
+								       A1:P2|A2:P2|B1:P-2 2-7"
 	# An isolated child partition cannot grow to take over the last
 	# housekeeping CPU when its parent expands the exclusive CPUs.
-	" C0-8:X1-8:P1 CX0-8:P2 .  .     X0-7    .      .      .     0 A1:0-7|A2:0-7 A1:P1|A2:P-2 ."
-	" C0-8:X0-6:P1 CX0-8:P2 .  .     X2-8    .      .      .     0 A1:|A2:2-8 A1:P1|A2:P2 2-8"
+	" C1-8:X2-8:P1 CX1-8:P2 .  .     X1-7    .      .      .     0 A1:1-7|A2:1-7 A1:P1|A2:P-2 ."
+	" C1-8:X0-6:P1 CX1-8:P2 .  .     X2-8    .      .      .     0 A1:|A2:2-8 A1:P1|A2:P2 2-8"
 )
 
 #

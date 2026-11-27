@@ -5,12 +5,17 @@
 
 #define _GNU_SOURCE
 
+#include <fcntl.h>
 #include <linux/types.h>
 #include <linux/mount.h>
 #include <sys/syscall.h>
 
 #ifndef STATX_MNT_ID_UNIQUE
 #define STATX_MNT_ID_UNIQUE 0x00004000U /* Want/got extended stx_mount_id */
+#endif
+
+#ifndef FD_INVALID
+#define FD_INVALID -10009
 #endif
 
 static inline int sys_fsopen(const char *fsname, unsigned int flags)
@@ -103,6 +108,13 @@ static inline int sys_move_mount(int from_dfd, const char *from_pathname,
 static inline int sys_open_tree(int dfd, const char *filename, unsigned int flags)
 {
 	return syscall(__NR_open_tree, dfd, filename, flags);
+}
+
+static inline int openat_o_mkdir(int dfd, const char *pathname,
+				 unsigned int flags, mode_t mode)
+{
+	return syscall(__NR_openat, dfd, pathname,
+		       flags | O_DIRECTORY | O_CREAT | O_EXCL, mode);
 }
 
 #endif

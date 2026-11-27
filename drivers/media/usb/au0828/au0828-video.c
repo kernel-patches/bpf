@@ -530,7 +530,7 @@ static inline int au0828_isoc_copy(struct au0828_dev *dev, struct urb *urb)
 				continue;
 		}
 
-		if (urb->iso_frame_desc[i].actual_length <= 0)
+		if (urb->iso_frame_desc[i].actual_length < 5)
 			continue;
 
 		if (urb->iso_frame_desc[i].actual_length >
@@ -598,6 +598,9 @@ static inline int au0828_isoc_copy(struct au0828_dev *dev, struct urb *urb)
 			vbi_dma_q->pos = 0;
 			dma_q->pos = 0;
 		}
+
+		if (len <= 0)
+			continue;
 
 		vbi_field_size = dev->vbi_width * dev->vbi_height * 2;
 		if (dev->vbi_read < vbi_field_size) {
@@ -1094,7 +1097,7 @@ static int au0828_v4l2_close(struct file *filp)
 			pr_info("Au0828 can't set alternate to 0!\n");
 	}
 end:
-	_vb2_fop_release(filp, NULL);
+	_vb2_fop_release(filp, vdev->queue->lock);
 	dev->users--;
 	mutex_unlock(&dev->lock);
 	return 0;

@@ -56,7 +56,7 @@ void log_flush_wait(struct gfs2_sbd *sdp);
 
 int gfs2_logd(void *data);
 void gfs2_add_revoke(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd);
-void gfs2_glock_remove_revoke(struct gfs2_glock *gl);
+void gfs2_glock_remove_revoke(struct gfs2_bufdata *bd);
 void gfs2_flush_revokes(struct gfs2_sbd *sdp);
 void gfs2_ail_drain(struct gfs2_sbd *sdp);
 

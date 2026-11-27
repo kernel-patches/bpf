@@ -348,7 +348,7 @@ static inline void adjust_tsc_offset_guest(struct kvm_vcpu *vcpu,
 static inline void adjust_tsc_offset_host(struct kvm_vcpu *vcpu, s64 adjustment)
 {
 	if (vcpu->arch.l1_tsc_scaling_ratio != kvm_caps.default_tsc_scaling_ratio)
-		WARN_ON(adjustment < 0);
+		WARN_ON_ONCE(adjustment < 0);
 	adjustment = kvm_scale_tsc((u64) adjustment,
 				   vcpu->arch.l1_tsc_scaling_ratio);
 	adjust_tsc_offset_guest(vcpu, adjustment);
@@ -410,6 +410,9 @@ int x86_emulate_instruction(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
  *
  * EMULTYPE_PF_WRITE - Set with EMULTYPE_PF when hardware reports a write access.
  *
+ * EMULTYPE_PF_GUEST_PAGE - Set with EMULTYPE_PF when hardware reports that the
+ *			    fault occurred while walking the guest's page tables.
+ *
  * EMULTYPE_COMPLETE_USER_EXIT - Set when the emulator should update interruptibility
  *				 state and inject single-step #DBs after skipping
  *				 an instruction (after completing userspace I/O).
@@ -449,6 +452,7 @@ int x86_emulate_instruction(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
 #define EMULTYPE_WRITE_PF_TO_SP	    (1 << 8)
 #define EMULTYPE_SKIP_SOFT_INT	    (1 << 9)
 #define EMULTYPE_PF_WRITE	    (1 << 10)
+#define EMULTYPE_PF_GUEST_PAGE	    (1 << 11)
 
 #define EMULTYPE_SET_SOFT_INT_VECTOR(v)	((u32)((v) & 0xff) << 16)
 #define EMULTYPE_GET_SOFT_INT_VECTOR(e)	(((e) >> 16) & 0xff)

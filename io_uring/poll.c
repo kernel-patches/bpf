@@ -448,9 +448,9 @@ static int io_poll_wake(struct wait_queue_entry *wait, unsigned mode, int sync,
 		if (mask && poll->events & EPOLLONESHOT) {
 			io_poll_remove_waitq(poll);
 			if (wqe_is_double(wait))
-				req->flags &= ~REQ_F_DOUBLE_POLL;
+				io_req_clear_flags(req, REQ_F_DOUBLE_POLL);
 			else
-				req->flags &= ~REQ_F_SINGLE_POLL;
+				io_req_clear_flags(req, REQ_F_SINGLE_POLL);
 		}
 		__io_poll_execute(req, mask, IOU_F_TWQ_IN_WAKE);
 	}
@@ -473,10 +473,12 @@ static bool io_poll_double_prepare(struct io_kiocb *req)
 	 * is not going to be run, so there are no races with it.
 	 */
 	if (head) {
+		io_req_flags_t flags = REQ_F_DOUBLE_POLL;
+
 		spin_lock_irq(&head->lock);
-		req->flags |= REQ_F_DOUBLE_POLL;
 		if (req->opcode == IORING_OP_POLL_ADD)
-			req->flags |= REQ_F_ASYNC_DATA;
+			flags |= REQ_F_ASYNC_DATA;
+		io_req_set_flags(req, flags);
 		spin_unlock_irq(&head->lock);
 	}
 	rcu_read_unlock();
@@ -526,7 +528,7 @@ static void __io_queue_proc(struct io_poll *poll, struct io_poll_table *pt,
 		*poll_ptr = poll;
 	} else {
 		/* fine to modify, there is no poll queued to race with us */
-		req->flags |= REQ_F_SINGLE_POLL;
+		io_req_set_flags(req, REQ_F_SINGLE_POLL);
 	}
 
 	pt->nr_entries++;
@@ -607,7 +609,7 @@ static int __io_arm_poll_handler(struct io_kiocb *req,
 	 * come in.
 	 */
 	if (poll->events & EPOLLEXCLUSIVE)
-		req->flags |= REQ_F_POLL_NO_LAZY;
+		io_req_set_flags(req, REQ_F_POLL_NO_LAZY);
 
 	mask = vfs_poll(req->file, &ipt->pt) & poll->events;
 
@@ -695,12 +697,15 @@ static struct async_poll *io_req_alloc_apoll(struct io_kiocb *req,
 		apoll = req->apoll;
 		kfree(apoll->double_poll);
 	} else {
-		if (!(issue_flags & IO_URING_F_UNLOCKED))
-			apoll = io_cache_alloc(&ctx->apoll_cache, GFP_ATOMIC);
-		else
+		if (!(issue_flags & IO_URING_F_UNLOCKED)) {
+			if (!io_cache_alloc(&ctx->apoll_cache, GFP_ATOMIC,
+					    (void **)&apoll))
+				return NULL;
+		} else {
 			apoll = kmalloc_obj(*apoll, GFP_ATOMIC);
-		if (!apoll)
-			return NULL;
+			if (!apoll)
+				return NULL;
+		}
 		apoll->poll.retries = APOLL_MAX_RETRY;
 	}
 	apoll->double_poll = NULL;
@@ -725,8 +730,8 @@ int io_arm_apoll(struct io_kiocb *req, unsigned issue_flags, __poll_t mask)
 	apoll = io_req_alloc_apoll(req, issue_flags);
 	if (!apoll)
 		return IO_APOLL_ABORTED;
-	req->flags &= ~(REQ_F_SINGLE_POLL | REQ_F_DOUBLE_POLL);
-	req->flags |= REQ_F_POLLED;
+	io_req_switch_flags(req, REQ_F_SINGLE_POLL | REQ_F_DOUBLE_POLL,
+			    REQ_F_POLLED);
 	ipt.pt._qproc = io_async_queue_proc;
 
 	ret = __io_arm_poll_handler(req, &apoll->poll, &ipt, mask, issue_flags);
@@ -982,7 +987,7 @@ int io_poll_add(struct io_kiocb *req, unsigned int issue_flags)
 	 */
 	if (req_has_async_data(req))
 		io_req_async_data_free(req);
-	req->flags &= ~(REQ_F_SINGLE_POLL | REQ_F_DOUBLE_POLL);
+	io_req_clear_flags(req, REQ_F_SINGLE_POLL | REQ_F_DOUBLE_POLL);
 
 	ret = __io_arm_poll_handler(req, poll, &ipt, poll->events, issue_flags);
 	if (ret > 0) {

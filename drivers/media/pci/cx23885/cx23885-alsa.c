@@ -388,14 +388,12 @@ static int snd_cx23885_hw_params(struct snd_pcm_substream *substream,
 
 	ret = cx23885_alsa_dma_map(chip);
 	if (ret < 0)
-		goto error;
+		goto error_free;
 
 	ret = cx23885_risc_databuffer(chip->pci, &buf->risc, buf->sglist,
 				   chip->period_size, chip->num_periods, 1);
-	if (ret < 0) {
-		cx23885_alsa_dma_unmap(chip);
-		goto error;
-	}
+	if (ret < 0)
+		goto error_unmap;
 
 	/* Loop back to start of program */
 	buf->risc.jmp[0] = cpu_to_le32(RISC_JUMP|RISC_IRQ1|RISC_CNT_INC);
@@ -408,6 +406,10 @@ static int snd_cx23885_hw_params(struct snd_pcm_substream *substream,
 
 	return 0;
 
+error_unmap:
+	cx23885_alsa_dma_unmap(chip);
+error_free:
+	cx23885_alsa_dma_free(buf);
 error:
 	kfree(buf);
 	chip->buf = NULL;

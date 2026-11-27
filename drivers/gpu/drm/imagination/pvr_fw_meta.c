@@ -4,10 +4,11 @@
 #include "pvr_device.h"
 #include "pvr_fw.h"
 #include "pvr_fw_info.h"
-#include "pvr_fw_meta.h"
 #include "pvr_gem.h"
+#define PVR_FW_META_INTERNAL_H_EXPLICIT_INCLUDE
+#include "pvr_fw_meta_internal.h"
+#undef PVR_FW_META_INTERNAL_H_EXPLICIT_INCLUDE
 #include "pvr_rogue_cr_defs.h"
-#include "pvr_rogue_meta.h"
 #include "pvr_vm.h"
 
 #include <linux/compiler.h>
@@ -32,7 +33,7 @@
  *  * 0 on success, or
  *  * Any error returned by pvr_cr_poll_reg32().
  */
-int
+static int
 pvr_meta_cr_read32(struct pvr_device *pvr_dev, u32 reg_addr, u32 *reg_value_out)
 {
 	int err;
@@ -48,9 +49,8 @@ pvr_meta_cr_read32(struct pvr_device *pvr_dev, u32 reg_addr, u32 *reg_value_out)
 		return err;
 
 	/* Issue a Read. */
-	pvr_cr_write32(pvr_dev, ROGUE_CR_META_SP_MSLVCTRL0,
-		       reg_addr | ROGUE_CR_META_SP_MSLVCTRL0_RD_EN);
-	(void)pvr_cr_read32(pvr_dev, ROGUE_CR_META_SP_MSLVCTRL0); /* Fence write. */
+	pvr_cr_write_fenced32(pvr_dev, ROGUE_CR_META_SP_MSLVCTRL0,
+			      reg_addr | ROGUE_CR_META_SP_MSLVCTRL0_RD_EN);
 
 	/* Wait for Slave Port to be Ready. */
 	err = pvr_cr_poll_reg32(pvr_dev, ROGUE_CR_META_SP_MSLVCTRL1,
@@ -90,7 +90,7 @@ pvr_meta_wrapper_init(struct pvr_device *pvr_dev)
 		<< ROGUE_CR_MTS_GARTEN_WRAPPER_CONFIG_FENCE_PC_BASE_SHIFT;
 
 	/* Set SLC DM=META. */
-	garten_config |= ((u64)ROGUE_FW_SEGMMU_META_BIFDM_ID)
+	garten_config |= ((u64)PVR_FW_SEGMMU_META_BIFDM_ID)
 			 << ROGUE_CR_MTS_GARTEN_WRAPPER_CONFIG_FENCE_DM_SHIFT;
 
 	pvr_cr_write64(pvr_dev, ROGUE_CR_MTS_GARTEN_WRAPPER_CONFIG, garten_config);
@@ -107,11 +107,11 @@ add_boot_arg(u32 **boot_conf, u32 param, u32 data)
 
 static int
 meta_ldr_cmd_loadmem(struct drm_device *drm_dev, const u8 *fw,
-		     struct rogue_meta_ldr_l1_data_blk *l1_data, u32 coremem_size, u8 *fw_code_ptr,
+		     struct pvr_meta_ldr_l1_data_blk *l1_data, u32 coremem_size, u8 *fw_code_ptr,
 		     u8 *fw_data_ptr, u8 *fw_core_code_ptr, u8 *fw_core_data_ptr, const u32 fw_size)
 {
-	struct rogue_meta_ldr_l2_data_blk *l2_block =
-		(struct rogue_meta_ldr_l2_data_blk *)(fw +
+	struct pvr_meta_ldr_l2_data_blk *l2_block =
+		(struct pvr_meta_ldr_l2_data_blk *)(fw +
 						      l1_data->cmd_data[1]);
 	struct pvr_device *pvr_dev = to_pvr_device(drm_dev);
 	u32 offset = l1_data->cmd_data[0];
@@ -130,8 +130,8 @@ meta_ldr_cmd_loadmem(struct drm_device *drm_dev, const u8 *fw,
 	    ((((u8 *)l2_block->block_data) + data_size) - fw) >= fw_size)
 		return -EINVAL;
 
-	if (!ROGUE_META_IS_COREMEM_CODE(offset, coremem_size) &&
-	    !ROGUE_META_IS_COREMEM_DATA(offset, coremem_size)) {
+	if (!PVR_META_IS_COREMEM_CODE(offset, coremem_size) &&
+	    !PVR_META_IS_COREMEM_DATA(offset, coremem_size)) {
 		/* Global range is aliased to local range */
 		offset &= ~META_MEM_GLOBAL_RANGE_BIT;
 	}
@@ -152,7 +152,7 @@ meta_ldr_cmd_loadmem(struct drm_device *drm_dev, const u8 *fw,
 
 static int
 meta_ldr_cmd_zeromem(struct drm_device *drm_dev,
-		     struct rogue_meta_ldr_l1_data_blk *l1_data, u32 coremem_size,
+		     struct pvr_meta_ldr_l1_data_blk *l1_data, u32 coremem_size,
 		     u8 *fw_code_ptr, u8 *fw_data_ptr, u8 *fw_core_code_ptr, u8 *fw_core_data_ptr)
 {
 	struct pvr_device *pvr_dev = to_pvr_device(drm_dev);
@@ -161,7 +161,7 @@ meta_ldr_cmd_zeromem(struct drm_device *drm_dev,
 	void *write_addr;
 	int err;
 
-	if (ROGUE_META_IS_COREMEM_DATA(offset, coremem_size)) {
+	if (PVR_META_IS_COREMEM_DATA(offset, coremem_size)) {
 		/* cannot zero coremem directly */
 		return 0;
 	}
@@ -185,13 +185,12 @@ meta_ldr_cmd_zeromem(struct drm_device *drm_dev,
 
 static int
 meta_ldr_cmd_config(struct drm_device *drm_dev, const u8 *fw,
-		    struct rogue_meta_ldr_l1_data_blk *l1_data,
+		    struct pvr_meta_ldr_l1_data_blk *l1_data,
 		    const u32 fw_size, u32 **boot_conf_ptr)
 {
-	struct rogue_meta_ldr_l2_data_blk *l2_block =
-		(struct rogue_meta_ldr_l2_data_blk *)(fw +
-						      l1_data->cmd_data[0]);
-	struct rogue_meta_ldr_cfg_blk *config_command;
+	struct pvr_meta_ldr_l2_data_blk *l2_block =
+		(struct pvr_meta_ldr_l2_data_blk *)(fw + l1_data->cmd_data[0]);
+	struct pvr_meta_ldr_cfg_blk *config_command;
 	u32 l2_block_size;
 	u32 curr_block_size = 0;
 	u32 *boot_conf = boot_conf_ptr ? *boot_conf_ptr : NULL;
@@ -201,14 +200,14 @@ meta_ldr_cmd_config(struct drm_device *drm_dev, const u8 *fw,
 		return -EINVAL;
 
 	l2_block_size = l2_block->length - 6 /* L2 Tag length and checksum */;
-	config_command = (struct rogue_meta_ldr_cfg_blk *)l2_block->block_data;
+	config_command = (struct pvr_meta_ldr_cfg_blk *)l2_block->block_data;
 
 	if (((u8 *)config_command - fw) >= fw_size ||
 	    ((((u8 *)config_command) + l2_block_size) - fw) >= fw_size)
 		return -EINVAL;
 
 	while (l2_block_size >= 12) {
-		if (config_command->type != ROGUE_META_LDR_CFG_WRITE)
+		if (config_command->type != PVR_META_LDR_CFG_WRITE)
 			return -EINVAL;
 
 		/*
@@ -226,7 +225,7 @@ meta_ldr_cmd_config(struct drm_device *drm_dev, const u8 *fw,
 
 		curr_block_size = 12;
 		l2_block_size -= curr_block_size;
-		config_command = (struct rogue_meta_ldr_cfg_blk
+		config_command = (struct pvr_meta_ldr_cfg_blk
 					  *)((uintptr_t)config_command +
 					     curr_block_size);
 	}
@@ -258,10 +257,10 @@ process_ldr_command_stream(struct pvr_device *pvr_dev, const u8 *fw, u8 *fw_code
 			   u8 *fw_core_data_ptr, u32 **boot_conf_ptr)
 {
 	struct drm_device *drm_dev = from_pvr_device(pvr_dev);
-	struct rogue_meta_ldr_block_hdr *ldr_header =
-		(struct rogue_meta_ldr_block_hdr *)fw;
-	struct rogue_meta_ldr_l1_data_blk *l1_data =
-		(struct rogue_meta_ldr_l1_data_blk *)(fw + ldr_header->sl_data);
+	struct pvr_meta_ldr_block_hdr *ldr_header =
+		(struct pvr_meta_ldr_block_hdr *)fw;
+	struct pvr_meta_ldr_l1_data_blk *l1_data =
+		(struct pvr_meta_ldr_l1_data_blk *)(fw + ldr_header->sl_data);
 	const u32 fw_size = pvr_dev->fw_dev.firmware->size;
 	int err;
 
@@ -279,13 +278,13 @@ process_ldr_command_stream(struct pvr_device *pvr_dev, const u8 *fw, u8 *fw_code
 		if (((u8 *)l1_data - fw) >= fw_size || ((u8 *)(l1_data + 1) - fw) >= fw_size)
 			return -EINVAL;
 
-		if (ROGUE_META_LDR_BLK_IS_COMMENT(l1_data->cmd)) {
+		if (PVR_META_LDR_BLK_IS_COMMENT(l1_data->cmd)) {
 			/* Don't process comment blocks */
 			goto next_block;
 		}
 
-		switch (l1_data->cmd & ROGUE_META_LDR_CMD_MASK)
-		case ROGUE_META_LDR_CMD_LOADMEM: {
+		switch (l1_data->cmd & PVR_META_LDR_CMD_MASK)
+		case PVR_META_LDR_CMD_LOADMEM: {
 			err = meta_ldr_cmd_loadmem(drm_dev, fw, l1_data,
 						   coremem_size,
 						   fw_code_ptr, fw_data_ptr,
@@ -295,11 +294,11 @@ process_ldr_command_stream(struct pvr_device *pvr_dev, const u8 *fw, u8 *fw_code
 				return err;
 			break;
 
-		case ROGUE_META_LDR_CMD_START_THREADS:
+		case PVR_META_LDR_CMD_START_THREADS:
 			/* Don't process this block */
 			break;
 
-		case ROGUE_META_LDR_CMD_ZEROMEM:
+		case PVR_META_LDR_CMD_ZEROMEM:
 			err = meta_ldr_cmd_zeromem(drm_dev, l1_data,
 						   coremem_size,
 						   fw_code_ptr, fw_data_ptr,
@@ -309,7 +308,7 @@ process_ldr_command_stream(struct pvr_device *pvr_dev, const u8 *fw, u8 *fw_code
 				return err;
 			break;
 
-		case ROGUE_META_LDR_CMD_CONFIG:
+		case PVR_META_LDR_CMD_CONFIG:
 			err = meta_ldr_cmd_config(drm_dev, fw, l1_data, fw_size,
 						  &boot_conf);
 			if (err)
@@ -324,8 +323,7 @@ next_block:
 		if (l1_data->next == 0xFFFFFFFF)
 			break;
 
-		l1_data = (struct rogue_meta_ldr_l1_data_blk *)(fw +
-								l1_data->next);
+		l1_data = (struct pvr_meta_ldr_l1_data_blk *)(fw + l1_data->next);
 	}
 
 	if (boot_conf_ptr)
@@ -343,12 +341,12 @@ configure_seg_id(u64 seg_out_addr, u32 seg_base, u32 seg_limit, u32 seg_id,
 	u32 *boot_conf = *boot_conf_ptr;
 
 	/* META segments have a minimum size. */
-	u32 limit_off = max(seg_limit, ROGUE_FW_SEGMMU_ALIGN);
+	u32 limit_off = max(seg_limit, PVR_FW_SEGMMU_ALIGN);
 
 	/* The limit is an offset, therefore off = size - 1. */
 	limit_off -= 1;
 
-	seg_base |= ROGUE_FW_SEGMMU_ALLTHRS_WRITEABLE;
+	seg_base |= PVR_FW_SEGMMU_ALLTHRS_WRITEABLE;
 
 	add_boot_arg(&boot_conf, META_CR_MMCU_SEGMENT_N_BASE(seg_id), seg_base);
 	add_boot_arg(&boot_conf, META_CR_MMCU_SEGMENT_N_LIMIT(seg_id), limit_off);
@@ -374,8 +372,8 @@ configure_seg_mmu(struct pvr_device *pvr_dev, u32 **boot_conf_ptr)
 	u64 seg_out_addr_top;
 
 	seg_out_addr_top =
-		ROGUE_FW_SEGMMU_OUTADDR_TOP_SLC(MMU_CONTEXT_MAPPING_FWPRIV,
-						ROGUE_FW_SEGMMU_META_BIFDM_ID);
+		PVR_FW_SEGMMU_OUTADDR_TOP_SLC(MMU_CONTEXT_MAPPING_FWPRIV,
+					      PVR_FW_SEGMMU_META_BIFDM_ID);
 
 	for (u32 i = 0; i < num_layout_entries; i++) {
 		/*
@@ -384,7 +382,7 @@ configure_seg_mmu(struct pvr_device *pvr_dev, u32 **boot_conf_ptr)
 		 * segment MMU. Only the FW data segment needs to be configured.
 		 */
 		if (layout_entries[i].type == FW_DATA) {
-			u32 seg_id = ROGUE_FW_SEGMMU_DATA_ID;
+			u32 seg_id = PVR_FW_SEGMMU_DATA_ID;
 			u64 seg_out_addr = get_fw_obj_gpu_addr(pvr_dev->fw_dev.mem.data_obj);
 
 			seg_out_addr += layout_entries[i].alloc_offset;
@@ -462,7 +460,7 @@ pvr_meta_fw_process(struct pvr_device *pvr_dev, const u8 *fw,
 	u32 *boot_conf;
 	int err;
 
-	boot_conf = ((u32 *)fw_code_ptr) + ROGUE_FW_BOOTLDR_CONF_OFFSET;
+	boot_conf = ((u32 *)fw_code_ptr) + PVR_FW_BOOTLDR_CONF_OFFSET;
 
 	/* Slave port and JTAG accesses are privileged. */
 	add_boot_arg(&boot_conf, META_CR_SYSC_JTAG_THREAD,
@@ -517,15 +515,15 @@ pvr_meta_fini(struct pvr_device *pvr_dev)
 static u32
 pvr_meta_get_fw_addr_with_offset(struct pvr_fw_object *fw_obj, u32 offset)
 {
-	u32 fw_addr = fw_obj->fw_addr_offset + offset + ROGUE_FW_SEGMMU_DATA_BASE_ADDRESS;
+	u32 fw_addr = fw_obj->fw_addr_offset + offset + PVR_FW_SEGMMU_DATA_BASE_ADDRESS;
 
 	/* META cacheability is determined by address. */
 	if (fw_obj->gem->flags & PVR_BO_FW_FLAGS_DEVICE_UNCACHED) {
-		fw_addr |= ROGUE_FW_SEGMMU_DATA_META_UNCACHED |
-			   ROGUE_FW_SEGMMU_DATA_VIVT_SLC_UNCACHED;
+		fw_addr |= PVR_FW_SEGMMU_DATA_META_UNCACHED |
+			   PVR_FW_SEGMMU_DATA_VIVT_SLC_UNCACHED;
 	} else {
-		fw_addr |= ROGUE_FW_SEGMMU_DATA_META_CACHED |
-			   ROGUE_FW_SEGMMU_DATA_VIVT_SLC_CACHED;
+		fw_addr |= PVR_FW_SEGMMU_DATA_META_CACHED |
+			   PVR_FW_SEGMMU_DATA_VIVT_SLC_CACHED;
 	}
 
 	return fw_addr;
@@ -563,6 +561,25 @@ pvr_meta_irq_clear(struct pvr_device *pvr_dev)
 		       ROGUE_CR_META_SP_MSLVIRQSTATUS_TRIGVECT2_CLRMSK);
 }
 
+static int
+pvr_meta_must_wait_fw_idle(struct pvr_device *pvr_dev, bool *wait)
+{
+	u32 reg_value;
+	int err;
+
+	err = pvr_meta_cr_read32(pvr_dev, META_CR_TxVECINT_BHALT, &reg_value);
+	if (err)
+		return err;
+
+	/*
+	 * Wait for Sidekick/Jones to signal IDLE including the Garten
+	 * Wrapper if there is no debugger attached (TxVECINT_BHALT = 0x0).
+	 */
+	*wait = !reg_value;
+
+	return 0;
+}
+
 const struct pvr_fw_defs pvr_fw_defs_meta = {
 	.init = pvr_meta_init,
 	.fini = pvr_meta_fini,
@@ -573,5 +590,7 @@ const struct pvr_fw_defs pvr_fw_defs_meta = {
 	.wrapper_init = pvr_meta_wrapper_init,
 	.irq_pending = pvr_meta_irq_pending,
 	.irq_clear = pvr_meta_irq_clear,
+	.must_wait_fw_idle = pvr_meta_must_wait_fw_idle,
 	.has_fixed_data_addr = false,
+	.multi_dm_thread_assoc = true,
 };

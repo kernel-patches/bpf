@@ -645,7 +645,7 @@ pvr_kccb_reserve_slot(struct pvr_device *pvr_dev, struct dma_fence *f)
 		dma_fence_init(&fence->base, &pvr_kccb_fence_ops,
 			       &pvr_dev->kccb.fence_ctx.lock,
 			       pvr_dev->kccb.fence_ctx.id,
-			       atomic_inc_return(&pvr_dev->kccb.fence_ctx.seqno));
+			       atomic_inc_return(&pvr_dev->kccb.fence_ctx.seqno), 0);
 		out_fence = dma_fence_get(&fence->base);
 		list_add_tail(&fence->node, &pvr_dev->kccb.waiters);
 	} else {

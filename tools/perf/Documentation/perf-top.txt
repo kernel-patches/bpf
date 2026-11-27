@@ -218,6 +218,16 @@ Default is to monitor all CPUS.
 
 	Default: /proc/sys/kernel/perf_event_max_stack when present, 127 otherwise.
 
+--lazy-load-symbols::
+	Read and demangle userspace ELF symbol names only when perf needs
+	them. By default, perf reads every symbol name from each binary
+	referenced by a sample. This option reduces memory use when samples
+	reference only a small fraction of a large binary's symbols. The
+	names are read from the binaries while perf top runs, so a binary
+	that is updated in the meantime can show wrong names. If a binary
+	cannot be opened when a name is needed, perf shows that symbol as
+	unknown.
+
 --ignore-callees=<regex>::
         Ignore callees of the function(s) matching the given regex.
         This has the effect of collecting the callers of each such

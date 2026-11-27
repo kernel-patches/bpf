@@ -11,6 +11,7 @@
 /plugin/;
 
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/media/video-interface-devices.h>
 #include "k3-pinctrl.h"
 
 &main_pmx0 {
@@ -106,6 +107,7 @@
 			pinctrl-0 = <&cam0_reset_pins_default>;
 
 			reset-gpios = <&main_gpio0 15 GPIO_ACTIVE_HIGH>;
+			orientation = <MEDIA_ORIENTATION_EXTERNAL>;
 
 			port {
 				csi2_cam0: endpoint {
@@ -138,6 +140,7 @@
 			pinctrl-0 = <&cam1_reset_pins_default>;
 
 			reset-gpios = <&main_gpio0 17 GPIO_ACTIVE_HIGH>;
+			orientation = <MEDIA_ORIENTATION_EXTERNAL>;
 
 			port {
 				csi2_cam1: endpoint {
@@ -175,6 +178,7 @@
 			pinctrl-0 = <&cam2_reset_pins_default>;
 
 			reset-gpios = <&main_gpio0 19 GPIO_ACTIVE_HIGH>;
+			orientation = <MEDIA_ORIENTATION_EXTERNAL>;
 
 			port {
 				csi2_cam2: endpoint {
@@ -207,6 +211,7 @@
 			pinctrl-0 = <&cam3_reset_pins_default>;
 
 			reset-gpios = <&main_gpio0 21 GPIO_ACTIVE_HIGH>;
+			orientation = <MEDIA_ORIENTATION_EXTERNAL>;
 
 			port {
 				csi2_cam3: endpoint {

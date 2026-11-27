@@ -21,8 +21,6 @@
 #include <linux/syscore_ops.h>
 #include <linux/io.h>
 #include <linux/irq.h>
-#include <linux/platform_data/i2c-pxa.h>
-#include <linux/platform_data/mmp_dma.h>
 #include <linux/soc/pxa/cpu.h>
 #include <linux/soc/pxa/smemc.h>
 
@@ -33,14 +31,12 @@
 #include "pxa27x.h"
 #include "reset.h"
 #include <linux/platform_data/pxa2xx_udc.h>
-#include <linux/platform_data/usb-ohci-pxa27x.h>
 #include <linux/platform_data/asoc-pxa.h>
 #include "pm.h"
 #include "addr-map.h"
 #include "smemc.h"
 
 #include "generic.h"
-#include "devices.h"
 #include <linux/clk-provider.h>
 #include <linux/clkdev.h>
 
@@ -272,90 +268,17 @@ void __init pxa27x_map_io(void)
 	pxa27x_get_clk_frequency_khz(1);
 }
 
-/*
- * device registration specific to PXA27x.
- */
-void __init pxa27x_set_i2c_power_info(struct i2c_pxa_platform_data *info)
-{
-	local_irq_disable();
-	PCFR |= PCFR_PI2CEN;
-	local_irq_enable();
-	pxa_register_device(&pxa27x_device_i2c_power, info);
-}
-
-static struct platform_device *devices[] __initdata = {
-	&pxa27x_device_gpio,
-	&pxa27x_device_udc,
-	&pxa_device_pmu,
-	&pxa_device_i2s,
-	&pxa_device_asoc_ssp1,
-	&pxa_device_asoc_ssp2,
-	&pxa_device_asoc_ssp3,
-	&pxa_device_asoc_platform,
-	&pxa_device_rtc,
-	&pxa27x_device_ssp1,
-	&pxa27x_device_ssp2,
-	&pxa27x_device_ssp3,
-	&pxa27x_device_pwm0,
-	&pxa27x_device_pwm1,
-};
-
-static const struct dma_slave_map pxa27x_slave_map[] = {
-	/* PXA25x, PXA27x and PXA3xx common entries */
-	{ "pxa2xx-ac97", "pcm_pcm_mic_mono", PDMA_FILTER_PARAM(LOWEST, 8) },
-	{ "pxa2xx-ac97", "pcm_pcm_aux_mono_in", PDMA_FILTER_PARAM(LOWEST, 9) },
-	{ "pxa2xx-ac97", "pcm_pcm_aux_mono_out",
-	  PDMA_FILTER_PARAM(LOWEST, 10) },
-	{ "pxa2xx-ac97", "pcm_pcm_stereo_in", PDMA_FILTER_PARAM(LOWEST, 11) },
-	{ "pxa2xx-ac97", "pcm_pcm_stereo_out", PDMA_FILTER_PARAM(LOWEST, 12) },
-	{ "pxa-ssp-dai.0", "rx", PDMA_FILTER_PARAM(LOWEST, 13) },
-	{ "pxa-ssp-dai.0", "tx", PDMA_FILTER_PARAM(LOWEST, 14) },
-	{ "pxa-ssp-dai.1", "rx", PDMA_FILTER_PARAM(LOWEST, 15) },
-	{ "pxa-ssp-dai.1", "tx", PDMA_FILTER_PARAM(LOWEST, 16) },
-	{ "pxa2xx-ir", "rx", PDMA_FILTER_PARAM(LOWEST, 17) },
-	{ "pxa2xx-ir", "tx", PDMA_FILTER_PARAM(LOWEST, 18) },
-	{ "pxa2xx-mci.0", "rx", PDMA_FILTER_PARAM(LOWEST, 21) },
-	{ "pxa2xx-mci.0", "tx", PDMA_FILTER_PARAM(LOWEST, 22) },
-	{ "pxa-ssp-dai.2", "rx", PDMA_FILTER_PARAM(LOWEST, 66) },
-	{ "pxa-ssp-dai.2", "tx", PDMA_FILTER_PARAM(LOWEST, 67) },
-
-	/* PXA27x specific map */
-	{ "pxa2xx-i2s", "rx", PDMA_FILTER_PARAM(LOWEST, 2) },
-	{ "pxa2xx-i2s", "tx", PDMA_FILTER_PARAM(LOWEST, 3) },
-	{ "pxa27x-camera.0", "CI_Y", PDMA_FILTER_PARAM(HIGHEST, 68) },
-	{ "pxa27x-camera.0", "CI_U", PDMA_FILTER_PARAM(HIGHEST, 69) },
-	{ "pxa27x-camera.0", "CI_V", PDMA_FILTER_PARAM(HIGHEST, 70) },
-};
-
-static struct mmp_dma_platdata pxa27x_dma_pdata = {
-	.dma_channels	= 32,
-	.nb_requestors	= 75,
-	.slave_map	= pxa27x_slave_map,
-	.slave_map_cnt	= ARRAY_SIZE(pxa27x_slave_map),
-};
-
 static int __init pxa27x_init(void)
 {
 	int ret = 0;
 
 	if (cpu_is_pxa27x()) {
-
 		pxa_register_wdt(RCSR);
 
 		pxa27x_init_pm();
 
 		register_syscore(&pxa_irq_syscore);
 		register_syscore(&pxa2xx_mfp_syscore);
-
-		if (!of_have_populated_dt()) {
-			software_node_register(&pxa2xx_gpiochip_node);
-			pxa27x_device_gpio.dev.fwnode = software_node_fwnode(
-								&pxa2xx_gpiochip_node);
-
-			pxa2xx_set_dmac_info(&pxa27x_dma_pdata);
-			ret = platform_add_devices(devices,
-						   ARRAY_SIZE(devices));
-		}
 	}
 
 	return ret;

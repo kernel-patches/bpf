@@ -15,6 +15,7 @@ properties:
     enum:
       - amlogic,g12a-usb2-phy
       - amlogic,a1-usb2-phy
+      - amlogic,s4-usb2-phy
 
   reg:
     maxItems: 1

@@ -713,7 +713,7 @@ void snd_soc_dai_active_update(struct snd_soc_dai *dai, int stream, int action)
 	dai->stream[stream].active	+= action;
 
 	/* see snd_soc_component_active() */
-	dai->component->active		+= action;
+	snd_soc_component_active_update(dai->component, action);
 }
 
 int snd_soc_dai_active(const struct snd_soc_dai *dai)
@@ -1265,8 +1265,7 @@ struct snd_soc_dai *snd_soc_dai_register(struct snd_soc_component *component,
 	dai->driver = dai_drv;
 
 	/* see for_each_component_dais */
-	list_add_tail(&dai->list, &component->dai_list);
-	component->num_dai++;
+	snd_soc_component_connect_dai(component, dai);
 
 	dev_dbg(dev, "ASoC: Registered DAI '%s'\n", dai->name);
 	return dai;

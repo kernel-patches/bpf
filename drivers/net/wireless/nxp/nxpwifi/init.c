@@ -263,6 +263,7 @@ static void nxpwifi_init_adapter(struct nxpwifi_adapter *adapter)
 	eth_broadcast_addr(adapter->perm_addr);
 	adapter->iface_limit.sta_intf = NXPWIFI_MAX_STA_NUM;
 	adapter->iface_limit.uap_intf = NXPWIFI_MAX_UAP_NUM;
+	adapter->iface_limit.p2p_intf = NXPWIFI_MAX_P2P_NUM;
 	adapter->active_scan_triggered = false;
 	timer_setup(&adapter->wakeup_timer, wakeup_timer_fn, 0);
 	adapter->devdump_len = 0;

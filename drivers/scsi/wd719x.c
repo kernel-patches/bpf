@@ -868,7 +868,14 @@ static int wd719x_board_found(struct Scsi_Host *sh)
 	return 0;
 
 fail_free_irq:
+	wd719x_writeb(wd, WD719X_PCI_MODE_SELECT, 0);
+	pci_clear_master(wd->pdev);
 	free_irq(wd->pdev->irq, wd);
+	if (wd->fw_virt) {
+		dma_free_coherent(&wd->pdev->dev, wd->fw_size, wd->fw_virt,
+				  wd->fw_phys);
+		wd->fw_virt = NULL;
+	}
 fail_free_hash:
 	dma_free_coherent(&wd->pdev->dev, WD719X_HASH_TABLE_SIZE, wd->hash_virt,
 			    wd->hash_phys);

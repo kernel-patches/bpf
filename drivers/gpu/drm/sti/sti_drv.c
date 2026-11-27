@@ -173,7 +173,6 @@ static void sti_cleanup(struct drm_device *ddev)
 	struct sti_private *private = ddev->dev_private;
 
 	drm_kms_helper_poll_fini(ddev);
-	drm_atomic_helper_shutdown(ddev);
 	drm_mode_config_cleanup(ddev);
 	component_unbind_all(ddev->dev, ddev);
 	dev_set_drvdata(ddev->dev, NULL);
@@ -198,11 +197,13 @@ static int sti_bind(struct device *dev)
 	if (ret)
 		goto err_cleanup;
 
-	ret = drm_dev_register(ddev, 0);
+	ret = drm_mode_config_create_initial_state(ddev);
 	if (ret)
 		goto err_cleanup;
 
-	drm_mode_config_reset(ddev);
+	ret = drm_dev_register(ddev, 0);
+	if (ret)
+		goto err_cleanup;
 
 	drm_client_setup(ddev, NULL);
 
@@ -220,6 +221,7 @@ static void sti_unbind(struct device *dev)
 	struct drm_device *ddev = dev_get_drvdata(dev);
 
 	drm_dev_unregister(ddev);
+	drm_atomic_helper_shutdown(ddev);
 	sti_cleanup(ddev);
 	drm_dev_put(ddev);
 }

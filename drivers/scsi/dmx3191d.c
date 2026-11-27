@@ -128,8 +128,10 @@ static void dmx3191d_remove_one(struct pci_dev *pdev)
 }
 
 static const struct pci_device_id dmx3191d_pci_tbl[] = {
-	{PCI_VENDOR_ID_DOMEX, PCI_DEVICE_ID_DOMEX_DMX3191D,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 4},
+	{
+		PCI_VDEVICE(DOMEX, PCI_DEVICE_ID_DOMEX_DMX3191D),
+		.driver_data = 4,
+	},
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, dmx3191d_pci_tbl);

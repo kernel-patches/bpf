@@ -85,6 +85,7 @@
 	pinctrl-2 = <&pinctrl_usdhc1_200mhz>;
 	bus-width = <8>;
 	non-removable;
+	bootph-pre-ram;
 	status = "okay";
 };
 
@@ -133,6 +134,7 @@
 			MX8MN_IOMUXC_SD1_DATA7_USDHC1_DATA7		0x0d0
 			MX8MN_IOMUXC_SD1_STROBE_USDHC1_STROBE		0x090
 		>;
+		bootph-pre-ram;
 	};
 
 	pinctrl_usdhc1_100mhz: usdhc1-100mhzgrp {

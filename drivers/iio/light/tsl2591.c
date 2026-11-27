@@ -466,23 +466,25 @@ static int tsl2591_set_als_gain_int_time(struct tsl2591_chip *chip)
 static int tsl2591_set_als_lower_threshold(struct tsl2591_chip *chip,
 					   u16 als_lower_threshold)
 {
-	struct tsl2591_als_settings als_settings = chip->als_settings;
 	struct i2c_client *client = chip->client;
 	u16 als_upper_threshold;
 	u8 als_lower_l;
 	u8 als_lower_h;
 	int ret;
 
-	chip->als_settings.als_lower_thresh = als_lower_threshold;
+	if (als_lower_threshold == TSL2591_ALS_MAX_VALUE)
+		return -EINVAL;
 
 	/*
 	 * Lower threshold should not be greater or equal to upper.
 	 * If this is the case, then assert upper threshold to new lower
 	 * threshold + 1 to avoid ordering issues when setting thresholds.
 	 */
-	if (als_lower_threshold >= als_settings.als_upper_thresh) {
+	if (als_lower_threshold >= chip->als_settings.als_upper_thresh) {
 		als_upper_threshold = als_lower_threshold + 1;
-		tsl2591_set_als_upper_threshold(chip, als_upper_threshold);
+		ret = tsl2591_set_als_upper_threshold(chip, als_upper_threshold);
+		if (ret)
+			return ret;
 	}
 
 	als_lower_l = als_lower_threshold;
@@ -504,32 +506,33 @@ static int tsl2591_set_als_lower_threshold(struct tsl2591_chip *chip,
 		return ret;
 	}
 
+	chip->als_settings.als_lower_thresh = als_lower_threshold;
+
 	return 0;
 }
 
 static int tsl2591_set_als_upper_threshold(struct tsl2591_chip *chip,
 					   u16 als_upper_threshold)
 {
-	struct tsl2591_als_settings als_settings = chip->als_settings;
 	struct i2c_client *client = chip->client;
 	u16 als_lower_threshold;
 	u8 als_upper_l;
 	u8 als_upper_h;
 	int ret;
 
-	if (als_upper_threshold > TSL2591_ALS_MAX_VALUE)
+	if (!als_upper_threshold)
 		return -EINVAL;
-
-	chip->als_settings.als_upper_thresh = als_upper_threshold;
 
 	/*
 	 * Upper threshold should not be less than lower. If this
 	 * is the case, then assert lower threshold to new upper
 	 * threshold - 1 to avoid ordering issues when setting thresholds.
 	 */
-	if (als_upper_threshold < als_settings.als_lower_thresh) {
+	if (als_upper_threshold < chip->als_settings.als_lower_thresh) {
 		als_lower_threshold = als_upper_threshold - 1;
-		tsl2591_set_als_lower_threshold(chip, als_lower_threshold);
+		ret = tsl2591_set_als_lower_threshold(chip, als_lower_threshold);
+		if (ret)
+			return ret;
 	}
 
 	als_upper_l = als_upper_threshold;
@@ -550,6 +553,8 @@ static int tsl2591_set_als_upper_threshold(struct tsl2591_chip *chip,
 		dev_err(&client->dev, "Failed to set als upper threshold\n");
 		return ret;
 	}
+
+	chip->als_settings.als_upper_thresh = als_upper_threshold;
 
 	return 0;
 }
@@ -1149,7 +1154,14 @@ static const struct of_device_id tsl2591_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, tsl2591_of_match);
 
+static const struct i2c_device_id tsl2591_id[] = {
+	{ .name = "tsl2591" },
+	{ }
+};
+MODULE_DEVICE_TABLE(i2c, tsl2591_id);
+
 static struct i2c_driver tsl2591_driver = {
+	.id_table = tsl2591_id,
 	.driver = {
 		.name = "tsl2591",
 		.pm = pm_ptr(&tsl2591_pm_ops),

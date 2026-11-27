@@ -11,7 +11,7 @@
 #define LINUX_NFSD_NFSERR_H
 
 #include <linux/sunrpc/xdrgen/nfs2.h>
-#include <linux/nfs3.h>
+#include <linux/sunrpc/xdrgen/nfs3.h>
 #include <linux/nfs4.h>
 
 /*

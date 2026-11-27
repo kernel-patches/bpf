@@ -361,13 +361,13 @@ struct bdc_ep {
 	/* endpoint bd list*/
 	struct bd_list bd_list;
 	/*
-	 * HW generates extra event for multi bd tranfers, this flag helps in
+	 * HW generates extra event for multi bd transfers, this flag helps in
 	 * ignoring the extra event
 	 */
 	bool ignore_next_sr;
 };
 
-/* bdc cmmand parameter structure */
+/* bdc command parameter structure */
 struct bdc_cmd_params {
 	u32	param2;
 	u32	param1;
@@ -414,7 +414,7 @@ struct bdc {
 	/* num of endpoints for a particular instantiation of IP */
 	unsigned int num_eps;
 	/*
-	 * Array of ep's, it uses the same index covention as bdc hw i.e.
+	 * Array of ep's, it uses the same index convention as bdc hw i.e.
 	 * 1 for ep0, 2 for 1out,3 for 1in ....
 	 */
 	struct bdc_ep		**bdc_ep_array;

@@ -10,6 +10,8 @@
 #include <linux/pci.h>
 #include <linux/sysfs.h>
 
+#include <drm/drm_drv.h>
+
 #include "xe_configfs.h"
 #include "xe_device.h"
 #include "xe_heci_gsc.h"
@@ -19,7 +21,9 @@
 #include "xe_nvm.h"
 #include "xe_pcode_api.h"
 #include "xe_printk.h"
+#include "xe_soc_remapper.h"
 #include "xe_vsec.h"
+#include "xe_wedge.h"
 
 /**
  * DOC: Survivability Mode
@@ -165,11 +169,9 @@ static void populate_survivability_info(struct xe_device *xe)
 			set_survivability_info(mmio, info, POSTCODE_TRACE_OVERFLOW);
 	}
 
-	/* Traverse the linked list of aux info registers */
+	/* Read all aux info registers */
 	if (reg_value & AUXINFO_SUPPORT) {
-		for (id = REG_FIELD_GET(AUXINFO_REG_OFFSET, reg_value);
-		     id >= AUX_INFO0 && id < MAX_SCRATCH_REG;
-		     id =  REG_FIELD_GET(AUXINFO_HISTORY_OFFSET, info[id]))
+		for (id = AUX_INFO0; id < MAX_SCRATCH_REG; id++)
 			set_survivability_info(mmio, info, id);
 	}
 }
@@ -351,6 +353,7 @@ static int enable_boot_survivability_mode(struct pci_dev *pdev)
 
 	xe_heci_gsc_init(xe);
 
+	xe_soc_remapper_init(xe);
 	xe_vsec_init(xe);
 
 	if (survivability->fdo_mode) {
@@ -434,11 +437,17 @@ void xe_survivability_mode_runtime_enable(struct xe_device *xe)
 {
 	struct xe_survivability *survivability = &xe->survivability;
 	struct pci_dev *pdev = to_pci_dev(xe->drm.dev);
+	int idx;
+
 
 	if (!IS_DGFX(xe) || IS_SRIOV_VF(xe) || xe->info.platform < XE_BATTLEMAGE) {
 		xe_log_err(xe, SURVIVABILITY, -EOPNOTSUPP, "Runtime Mode not supported!\n");
 		return;
 	}
+
+	/* Synchronize with unbind, do not enter runtime survivability mode during unbind */
+	if (!drm_dev_enter(&xe->drm, &idx))
+		return;
 
 	populate_survivability_info(xe);
 	create_survivability_sysfs(pdev);
@@ -446,11 +455,13 @@ void xe_survivability_mode_runtime_enable(struct xe_device *xe)
 	survivability->type = XE_SURVIVABILITY_TYPE_RUNTIME;
 	xe_log_err(xe, SURVIVABILITY, 0, "Runtime Mode enabled!\n");
 
-	xe_device_declare_wedged(xe, DRM_WEDGE_RECOVERY_VENDOR);
+	xe_wedge_declare(xe, DRM_WEDGE_RECOVERY_VENDOR);
 
 	xe_log_err(xe, SURVIVABILITY, 0, "Firmware flash required!\n");
 	xe_info(xe, "Please refer to the userspace documentation for more details how to flash the firmware on %s!\n",
 		xe->info.platform_name);
+
+	drm_dev_exit(idx);
 }
 
 /**

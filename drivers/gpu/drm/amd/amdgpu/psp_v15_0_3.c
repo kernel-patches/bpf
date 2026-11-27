@@ -220,11 +220,11 @@ static int psp_v15_0_3_ring_stop(struct psp_context *psp,
 
 	if (amdgpu_sriov_vf(adev)) {
 		/* Write the ring destroy command*/
-		WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_101, GFX_CTRL_CMD_ID_DESTROY_GPCOM_RING);
+		WREG32_SOC15(MP0, 0, regMPASP_SMN_C2PMSG_101, GFX_CTRL_CMD_ID_DESTROY_GPCOM_RING);
 		/* there might be handshake issue with hardware which needs delay */
 		mdelay(20);
 		/* Wait for response flag (bit 31) */
-		ret = psp_wait_for(psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_101),
+		ret = psp_wait_for(psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_SMN_C2PMSG_101),
 				   MBOX_TOS_RESP_FLAG, MBOX_TOS_RESP_MASK, 0);
 	} else {
 		/* Write the ring destroy command*/
@@ -257,19 +257,19 @@ static int psp_v15_0_3_ring_create(struct psp_context *psp,
 
 		/* Write low address of the ring to C2PMSG_102 */
 		psp_ring_reg = lower_32_bits(ring->ring_mem_mc_addr);
-		WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_102, psp_ring_reg);
+		WREG32_SOC15(MP0, 0, regMPASP_SMN_C2PMSG_102, psp_ring_reg);
 		/* Write high address of the ring to C2PMSG_103 */
 		psp_ring_reg = upper_32_bits(ring->ring_mem_mc_addr);
-		WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_103, psp_ring_reg);
+		WREG32_SOC15(MP0, 0, regMPASP_SMN_C2PMSG_103, psp_ring_reg);
 
 		/* Write the ring initialization command to C2PMSG_101 */
-		WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_101, GFX_CTRL_CMD_ID_INIT_GPCOM_RING);
+		WREG32_SOC15(MP0, 0, regMPASP_SMN_C2PMSG_101, GFX_CTRL_CMD_ID_INIT_GPCOM_RING);
 
 		/* there might be handshake issue with hardware which needs delay */
 		mdelay(20);
 
 		/* Wait for response flag (bit 31) in C2PMSG_101 */
-		ret = psp_wait_for(psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_101),
+		ret = psp_wait_for(psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_SMN_C2PMSG_101),
 				   MBOX_TOS_RESP_FLAG, MBOX_TOS_RESP_MASK, 0);
 
 	} else {
@@ -347,7 +347,7 @@ static uint32_t psp_v15_0_3_ring_get_wptr(struct psp_context *psp)
 	struct amdgpu_device *adev = psp->adev;
 
 	if (amdgpu_sriov_vf(adev))
-		data = RREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_102);
+		data = RREG32_SOC15(MP0, 0, regMPASP_SMN_C2PMSG_102);
 	else
 		data = RREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_67);
 
@@ -359,8 +359,8 @@ static void psp_v15_0_3_ring_set_wptr(struct psp_context *psp, uint32_t value)
 	struct amdgpu_device *adev = psp->adev;
 
 	if (amdgpu_sriov_vf(adev)) {
-		WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_102, value);
-		WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_101,
+		WREG32_SOC15(MP0, 0, regMPASP_SMN_C2PMSG_102, value);
+		WREG32_SOC15(MP0, 0, regMPASP_SMN_C2PMSG_101,
 			     GFX_CTRL_CMD_ID_CONSUME_CMD);
 	} else
 		WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_67, value);
@@ -602,7 +602,8 @@ static int psp_v15_0_3_exec_spi_cmd(struct psp_context *psp, int cmd)
 	/* Ring the doorbell */
 	WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_73, 1);
 
-	if (cmd == C2PMSG_CMD_SPI_UPDATE_FLASH_IMAGE)
+	if (cmd == C2PMSG_CMD_SPI_UPDATE_FLASH_IMAGE ||
+	    cmd == C2PMSG_CMD_SPI_GET_FLASH_IMAGE)
 		ret = psp_wait_for_spirom_update(psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_115),
 						 MBOX_READY_FLAG, MBOX_READY_MASK, PSP_SPIROM_UPDATE_TIMEOUT);
 	else
@@ -610,9 +611,6 @@ static int psp_v15_0_3_exec_spi_cmd(struct psp_context *psp, int cmd)
 			psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_115),
 			MBOX_READY_FLAG, MBOX_READY_MASK, 0);
 
-	ret = psp_wait_for(psp,
-			   SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_115),
-			   MBOX_READY_FLAG, MBOX_READY_MASK, 0);
 	if (ret) {
 		dev_err(adev->dev, "SPI cmd %x timed out, ret = %d", cmd, ret);
 		return ret;
@@ -626,6 +624,37 @@ static int psp_v15_0_3_exec_spi_cmd(struct psp_context *psp, int cmd)
 	}
 
 	return 0;
+}
+
+static int psp_v15_0_3_dump_spirom(struct psp_context *psp,
+				   uint64_t fw_pri_mc_addr)
+{
+	struct amdgpu_device *adev = psp->adev;
+	int ret;
+
+	/* Confirm PSP is ready to start */
+	ret = psp_wait_for(psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_115),
+			   MBOX_READY_FLAG, MBOX_READY_MASK, 0);
+	if (ret) {
+		dev_err(adev->dev, "PSP Not ready to start processing, ret = %d", ret);
+		return ret;
+	}
+
+	WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_116, lower_32_bits(fw_pri_mc_addr));
+
+	ret = psp_v15_0_3_exec_spi_cmd(psp, C2PMSG_CMD_SPI_GET_ROM_IMAGE_ADDR_LO);
+	if (ret)
+		return ret;
+
+	WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_116, upper_32_bits(fw_pri_mc_addr));
+
+	ret = psp_v15_0_3_exec_spi_cmd(psp, C2PMSG_CMD_SPI_GET_ROM_IMAGE_ADDR_HI);
+	if (ret)
+		return ret;
+
+	ret = psp_v15_0_3_exec_spi_cmd(psp, C2PMSG_CMD_SPI_GET_FLASH_IMAGE);
+
+	return ret;
 }
 
 static int psp_v15_0_3_update_spirom(struct psp_context *psp,
@@ -808,6 +837,7 @@ static int psp_v15_0_3_get_fw_type(struct amdgpu_firmware_info *ucode,
 
 static const struct psp_funcs psp_v15_0_3_funcs = {
 	.init_microcode = psp_v15_0_3_init_microcode,
+	.is_sos_alive = psp_v15_0_3_is_sos_alive,
 	.bootloader_load_kdb = psp_v15_0_3_bootloader_load_kdb,
 	.bootloader_load_spl = psp_v15_0_3_bootloader_load_spl,
 	.bootloader_load_sysdrv = psp_v15_0_3_bootloader_load_sysdrv,
@@ -826,6 +856,7 @@ static const struct psp_funcs psp_v15_0_3_funcs = {
 	.load_usbc_pd_fw = psp_v15_0_3_load_usbc_pd_fw,
 	.read_usbc_pd_fw = psp_v15_0_3_read_usbc_pd_fw,
 	.update_spirom = psp_v15_0_3_update_spirom,
+	.dump_spirom = psp_v15_0_3_dump_spirom,
 	.vbflash_stat = psp_v15_0_3_vbflash_status,
 	.get_fw_type = psp_v15_0_3_get_fw_type,
 };

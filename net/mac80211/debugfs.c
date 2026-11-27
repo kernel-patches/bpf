@@ -4,7 +4,7 @@
  *
  * Copyright 2007	Johannes Berg <johannes@sipsolutions.net>
  * Copyright 2013-2014  Intel Mobile Communications GmbH
- * Copyright (C) 2018 - 2019, 2021-2025 Intel Corporation
+ * Copyright (C) 2018 - 2019, 2021-2026 Intel Corporation
  */
 
 #include <linux/debugfs.h>
@@ -117,6 +117,7 @@ static ssize_t aqm_write(struct file *file,
 {
 	struct ieee80211_local *local = file->private_data;
 	char buf[100];
+	u32 quantum;
 
 	if (count >= sizeof(buf))
 		return -EINVAL;
@@ -133,8 +134,12 @@ static ssize_t aqm_write(struct file *file,
 		return count;
 	else if (sscanf(buf, "fq_memory_limit %u", &local->fq.memory_limit) == 1)
 		return count;
-	else if (sscanf(buf, "fq_quantum %u", &local->fq.quantum) == 1)
+	else if (sscanf(buf, "fq_quantum %u", &quantum) == 1) {
+		if (!quantum || quantum > INT_MAX)
+			return -EINVAL;
+		local->fq.quantum = quantum;
 		return count;
+	}
 
 	return -EINVAL;
 }
@@ -462,6 +467,7 @@ static const char *hw_flag_names[] = {
 	FLAG(HANDLES_QUIET_CSA),
 	FLAG(STRICT),
 	FLAG(SUPPORTS_NDP_BLOCKACK),
+	FLAG(PER_STA_AP_GTK),
 #undef FLAG
 };
 

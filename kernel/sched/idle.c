@@ -542,7 +542,7 @@ dequeue_task_idle(struct rq *rq, struct task_struct *p, int flags)
  * and everything must be accessed through the @rq and @curr passed in
  * parameters.
  */
-static void task_tick_idle(struct rq *rq, struct task_struct *curr, int queued)
+static void task_tick_idle(struct rq *rq, struct task_struct *curr, int hrtick)
 {
 	update_curr_idle(rq);
 }
@@ -572,6 +572,13 @@ static void update_curr_idle(struct rq *rq)
 		return;
 
 	se->exec_start = now;
+
+	/*
+	 * Forced idle was not time available to any class on this rq, so
+	 * don't let the deferred servers consume their runtime on it.
+	 */
+	if (forced_idle_rq(rq))
+		return;
 
 	dl_server_update_idle(&rq->fair_server, delta_exec);
 #ifdef CONFIG_SCHED_CLASS_EXT

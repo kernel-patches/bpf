@@ -928,7 +928,7 @@ int btrfs_repair_bbio_failure(struct btrfs_bio *bbio, const struct bvec_iter *or
 	 * The fs either mounted RO or hit critical errors, no need
 	 * to continue repairing.
 	 */
-	if (unlikely(sb_rdonly(fs_info->sb)))
+	if (unlikely(btrfs_fs_rdonly(fs_info)))
 		return 0;
 
 	if (btrfs_repair_one_zone(fs_info, logical))
@@ -951,7 +951,8 @@ int btrfs_repair_bbio_failure(struct btrfs_bio *bbio, const struct bvec_iter *or
 	}
 
 	repair_bio = bio_alloc(smap.dev->bdev, max(1, length >> PAGE_SHIFT),
-			       REQ_OP_WRITE | REQ_SYNC, GFP_NOFS);
+			       REQ_OP_WRITE | REQ_SYNC |
+			       (is_data_inode(inode) ? 0 : REQ_META), GFP_NOFS);
 	repair_bio->bi_iter.bi_sector = smap.physical >> SECTOR_SHIFT;
 	while (cur < length) {
 		struct page *page = bio_iter_page(&bbio->bio, iter);

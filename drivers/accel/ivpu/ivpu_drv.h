@@ -38,7 +38,8 @@
 /* SSID 1 is used by the VPU to represent reserved context */
 #define IVPU_RESERVED_CONTEXT_MMU_SSID 1
 #define IVPU_USER_CONTEXT_MIN_SSID     2
-#define IVPU_USER_CONTEXT_MAX_SSID     (IVPU_USER_CONTEXT_MIN_SSID + 128)
+#define IVPU_USER_CONTEXT_MAX_SSID     127
+#define IVPU_NON_ROOT_USER_MAX_CONTEXTS 64
 
 #define IVPU_MIN_DB 1
 #define IVPU_MAX_DB 255
@@ -54,8 +55,6 @@
 #define IVPU_PLATFORM_FPGA    3
 #define IVPU_PLATFORM_HSLE    4
 #define IVPU_PLATFORM_INVALID 8
-
-#define IVPU_SCHED_MODE_AUTO -1
 
 #define IVPU_DBG_REG	 BIT(0)
 #define IVPU_DBG_IRQ	 BIT(1)
@@ -223,7 +222,6 @@ struct ivpu_file_priv {
 extern int ivpu_dbg_mask;
 extern u8 ivpu_pll_min_ratio;
 extern u8 ivpu_pll_max_ratio;
-extern int ivpu_sched_mode;
 extern bool ivpu_disable_mmu_cont_pages;
 extern bool ivpu_force_snoop;
 
@@ -232,18 +230,20 @@ extern bool ivpu_force_snoop;
 #define IVPU_TEST_MODE_NULL_SUBMISSION    BIT(2)
 #define IVPU_TEST_MODE_FREQ_CHANGE_ENABLE BIT(3)
 #define IVPU_TEST_MODE_MIP_DISABLE        BIT(6)
+#define IVPU_TEST_MODE_HWS_DISABLE        BIT(7)
 #define IVPU_TEST_MODE_DISABLE_TIMEOUTS   BIT(8)
 #define IVPU_TEST_MODE_TURBO_ENABLE       BIT(9)
 #define IVPU_TEST_MODE_TURBO_DISABLE      BIT(10)
 #define IVPU_TEST_MODE_CLK_RELINQ_DISABLE BIT(11)
 #define IVPU_TEST_MODE_CLK_RELINQ_ENABLE  BIT(12)
 #define IVPU_TEST_MODE_D0I2_DISABLE       BIT(13)
+#define IVPU_TEST_MODE_PROF_FREQ_HIGH     BIT(14)
 extern int ivpu_test_mode;
 
 struct ivpu_file_priv *ivpu_file_priv_get(struct ivpu_file_priv *file_priv);
 void ivpu_file_priv_put(struct ivpu_file_priv **link);
 
-int ivpu_boot(struct ivpu_device *vdev);
+int ivpu_boot(struct ivpu_device *vdev, bool device_init);
 int ivpu_shutdown(struct ivpu_device *vdev);
 void ivpu_prepare_for_reset(struct ivpu_device *vdev);
 bool ivpu_is_capable(struct ivpu_device *vdev, u32 capability);

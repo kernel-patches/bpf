@@ -225,6 +225,35 @@ static const struct rtw89_rrsr_cfgs rtw8922d_rrsr_cfgs = {
 	.rsc = {R_BE_PTCL_RRSR1, B_BE_RSC_MASK, 2},
 };
 
+static const struct rtw89_reg_def rtw8922d_nhm_th[RTW89_NHM_TH_NUM] = {
+	{R_NHM_CFG_BE4, B_NHM_TH0_MSK},
+	{R_NHM_TH1_BE4, B_NHM_TH1_MSK},
+	{R_NHM_TH1_BE4, B_NHM_TH2_MSK},
+	{R_NHM_TH1_BE4, B_NHM_TH3_MSK},
+	{R_NHM_TH1_BE4, B_NHM_TH4_MSK},
+	{R_NHM_TH5_BE4, B_NHM_TH5_MSK},
+	{R_NHM_TH5_BE4, B_NHM_TH6_MSK},
+	{R_NHM_TH5_BE4, B_NHM_TH7_MSK},
+	{R_NHM_TH5_BE4, B_NHM_TH8_MSK},
+	{R_NHM_TH9_BE4, B_NHM_TH9_MSK},
+	{R_NHM_TH9_BE4, B_NHM_TH10_MSK},
+};
+
+static const struct rtw89_reg_def rtw8922d_nhm_rpt[RTW89_NHM_RPT_NUM] = {
+	{R_NHM_CNT0_BE4, B_NHM_CNT0_MSK},
+	{R_NHM_CNT0_BE4, B_NHM_CNT1_MSK},
+	{R_NHM_CNT2_BE4, B_NHM_CNT2_MSK},
+	{R_NHM_CNT2_BE4, B_NHM_CNT3_MSK},
+	{R_NHM_CNT4_BE4, B_NHM_CNT4_MSK},
+	{R_NHM_CNT4_BE4, B_NHM_CNT5_MSK},
+	{R_NHM_CNT6_BE4, B_NHM_CNT6_MSK},
+	{R_NHM_CNT6_BE4, B_NHM_CNT7_MSK},
+	{R_NHM_CNT8_BE4, B_NHM_CNT8_MSK},
+	{R_NHM_CNT8_BE4, B_NHM_CNT9_MSK},
+	{R_NHM_CNT10_BE4, B_NHM_CNT10_MSK},
+	{R_NHM_CNT10_BE4, B_NHM_CNT11_MSK},
+};
+
 static const struct rtw89_rfkill_regs rtw8922d_rfkill_regs = {
 	.pinmux = {R_BE_GPIO8_15_FUNC_SEL,
 		   B_BE_PINMUX_GPIO9_FUNC_SEL_MASK,
@@ -1015,8 +1044,8 @@ static void rtw8922d_vco_trim(struct rtw89_dev *rtwdev)
 
 #define THM_TRIM_POSITIVE_MASK BIT(6)
 #define THM_TRIM_MAGNITUDE_MASK GENMASK(5, 0)
-#define THM_TRIM_MAX (15)
-#define THM_TRIM_MIN (-15)
+#define THM_TRIM_MAX (16)
+#define THM_TRIM_MIN (-16)
 
 static void rtw8922d_phycap_parsing_thermal_trim(struct rtw89_dev *rtwdev,
 						 u8 *phycap_map)
@@ -1720,6 +1749,7 @@ static void rtw8922d_calc_rx_gain_normal_cck(struct rtw89_dev *rtwdev,
 	rx_gain_offset = -rtw8922d_get_rx_gain_by_chan(rtwdev, chan, path, true);
 	calc->cck_mean_gain_bias = (rx_gain_offset & 0x3) << 1;
 	calc->cck_rpl_ofst = (rx_gain_offset >> 2) + gain->cck_rpl_base[phy_idx];
+	calc->cck_efuse_bias = rx_gain_offset;
 }
 
 static void rtw8922d_set_rx_gain_normal_cck(struct rtw89_dev *rtwdev,
@@ -1731,12 +1761,8 @@ static void rtw8922d_set_rx_gain_normal_cck(struct rtw89_dev *rtwdev,
 
 	rtw8922d_calc_rx_gain_normal_cck(rtwdev, chan, path, phy_idx, &calc);
 
-	rtw89_phy_write32_idx(rtwdev, R_GAIN_BIAS_BE4, B_GAIN_BIAS_BW20_BE4,
-			      calc.cck_mean_gain_bias, phy_idx);
-	rtw89_phy_write32_idx(rtwdev, R_GAIN_BIAS_BE4, B_GAIN_BIAS_BW40_BE4,
-			      calc.cck_mean_gain_bias, phy_idx);
-	rtw89_phy_write32_idx(rtwdev, R_CCK_RPL_OFST_BE4, B_CCK_RPL_OFST_BE4,
-			      calc.cck_rpl_ofst, phy_idx);
+	rtw89_phy_write32_idx(rtwdev, R_GAIN_BIAS_BE4, B_EFUSE_BIAS_BE4,
+			      calc.cck_efuse_bias, phy_idx);
 }
 
 static void rtw8922d_calc_rx_gain_normal_ofdm(struct rtw89_dev *rtwdev,
@@ -1970,6 +1996,23 @@ static void rtw8922d_ctrl_bw(struct rtw89_dev *rtwdev, u8 pri_sb, u8 bw,
 		rtw89_phy_write32_idx(rtwdev, R_RXBW67_BE4, B_RXBW7_BE4, 0x5, phy_idx);
 		break;
 	}
+}
+
+static void rtw8922d_cfr_clip_th(struct rtw89_dev *rtwdev,
+				 const struct rtw89_chan *chan,
+				 enum rtw89_phy_idx phy_idx)
+{
+	static const u32 clip_th0[RTW89_BAND_NUM] = {0x8, 0x8, 0x8};
+	static const u32 clip_th1[RTW89_BAND_NUM] = {0x18, 0x14, 0x14};
+	static const u32 clip_th2[RTW89_BAND_NUM] = {0x8, 0x8, 0x8};
+	u8 band = chan->band_type;
+
+	rtw89_phy_write32_idx(rtwdev, R_TX_CFR_MANUAL_EN_BE4, B_TX_CFR_CLIP_TH0_BE4,
+			      clip_th0[band], phy_idx);
+	rtw89_phy_write32_idx(rtwdev, R_TX_CFR_MANUAL_EN_BE4, B_TX_CFR_CLIP_TH1_BE4,
+			      clip_th1[band], phy_idx);
+	rtw89_phy_write32_idx(rtwdev, R_TX_CFR_MANUAL_EN_BE4, B_TX_CFR_CLIP_TH2_BE4,
+			      clip_th2[band], phy_idx);
 }
 
 static const u16 spur_nbi_a[] = {6400};
@@ -2554,6 +2597,7 @@ static void rtw8922d_set_channel_bb(struct rtw89_dev *rtwdev,
 
 	rtw8922d_ctrl_ch(rtwdev, chan, phy_idx);
 	rtw8922d_ctrl_bw(rtwdev, pri_sb, chan->band_width, phy_idx);
+	rtw8922d_cfr_clip_th(rtwdev, chan, phy_idx);
 	rtw89_phy_bb_wrap_set_rfsi_bandedge_ch(rtwdev, chan, phy_idx);
 
 	if (cck_en)
@@ -2685,6 +2729,12 @@ static void __rtw8922d_rfk_init_late(struct rtw89_dev *rtwdev,
 		rtw89_phy_rfk_rxdck_and_wait(rtwdev, phy_idx, chan, false, 128);
 	if (phy_idx == RTW89_PHY_0)
 		rtw89_phy_rfk_dack_and_wait(rtwdev, phy_idx, chan, 58);
+}
+
+static void rtw8922d_cfg_hw_mlo(struct rtw89_dev *rtwdev)
+{
+	rtw8922d_ctrl_mlo(rtwdev, rtwdev->mlo_dbcc_mode, true);
+	rtw8922d_rfk_mlo_ctrl(rtwdev);
 }
 
 static void rtw8922d_rfk_init_late(struct rtw89_dev *rtwdev)
@@ -3668,6 +3718,7 @@ static const struct rtw89_chip_ops rtw8922d_chip_ops = {
 	.fem_setup		= NULL,
 	.data_setup		= rtw8922d_data_setup,
 	.rfe_gpio		= NULL,
+	.cfg_hw_mlo		= rtw8922d_cfg_hw_mlo,
 	.rfk_hw_init		= rtw8922d_rfk_hw_init,
 	.rfk_init		= rtw8922d_rfk_init,
 	.rfk_init_late		= rtw8922d_rfk_init_late,
@@ -3758,6 +3809,7 @@ const struct rtw89_chip_info rtw8922d_chip_info = {
 	.wde_qempty_mgq_grpsel	= 8,
 	.rf_base_addr		= {0x3e000, 0x3f000},
 	.thermal_th		= {0xac, 0xb4},
+	.dtp_thermal_th		= 0xa2,
 	.pwr_on_seq		= NULL,
 	.pwr_off_seq		= NULL,
 	.bb_table		= NULL,
@@ -3786,11 +3838,12 @@ const struct rtw89_chip_info rtw8922d_chip_info = {
 				  BIT(NL80211_CHAN_WIDTH_80) |
 				  BIT(NL80211_CHAN_WIDTH_160),
 	.support_unii4		= true,
-	.support_ant_gain	= false,
+	.support_ant_gain	= true,
 	.support_tas		= false,
 	.support_sar_by_ant	= true,
 	.support_noise		= false,
 	.support_fw_cmd_ofld	= false,
+	.support_low_latency_lps = false,
 	.ul_tb_waveform_ctrl	= false,
 	.ul_tb_pwr_diff		= false,
 	.rx_freq_from_ie	= false,
@@ -3859,8 +3912,8 @@ const struct rtw89_chip_info rtw8922d_chip_info = {
 	.cfo_hw_comp            = true,
 	.dcfo_comp		= NULL,
 	.dcfo_comp_sft		= 0,
-	.nhm_report		= NULL,
-	.nhm_th			= NULL,
+	.nhm_report		= &rtw8922d_nhm_rpt,
+	.nhm_th			= &rtw8922d_nhm_th,
 	.imr_info		= NULL,
 	.imr_dmac_table		= &rtw8922d_imr_dmac_table,
 	.imr_cmac_table		= &rtw8922d_imr_cmac_table,

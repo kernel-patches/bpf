@@ -9,6 +9,10 @@
 #include <linux/slab.h>
 #include <linux/livepatch.h>
 
+#ifdef KLP_OBSOLETES
+static unsigned int klp_obsoletes[] = { KLP_OBSOLETES };
+#endif
+
 static struct klp_patch *patch;
 
 static int __init livepatch_mod_init(void)
@@ -34,7 +38,7 @@ static int __init livepatch_mod_init(void)
 		goto err;
 	}
 
-	objs = kzalloc(sizeof(struct klp_object) * (nr_objs + 1),  GFP_KERNEL);
+	objs = kzalloc_objs(*objs, nr_objs + 1);
 	if (!objs) {
 		ret = -ENOMEM;
 		goto err_free_patch;
@@ -47,11 +51,9 @@ static int __init livepatch_mod_init(void)
 		struct klp_func *funcs = objs[i].funcs;
 		struct klp_object *obj = objs + i;
 
-		funcs = kzalloc(sizeof(struct klp_func) * (nr_funcs + 1), GFP_KERNEL);
+		funcs = kzalloc_objs(*funcs, nr_funcs + 1);
 		if (!funcs) {
 			ret = -ENOMEM;
-			for (int j = 0; j < i; j++)
-				kfree(objs[j].funcs);
 			goto err_free_objs;
 		}
 
@@ -72,15 +74,22 @@ static int __init livepatch_mod_init(void)
 
 	/* TODO patch->states */
 
-#ifdef KLP_NO_REPLACE
-	patch->replace = false;
-#else
-	patch->replace = true;
+#ifdef KLP_PROVIDES
+	patch->provides = KLP_PROVIDES;
+#endif
+#ifdef KLP_OBSOLETES
+	patch->obsoletes = klp_obsoletes;
+	patch->nr_obsoletes = ARRAY_SIZE(klp_obsoletes);
 #endif
 
-	return klp_enable_patch(patch);
+	ret = klp_enable_patch(patch);
+	if (ret)
+		goto err_free_objs;
+	return 0;
 
 err_free_objs:
+	for (int i = 0; i < nr_objs; i++)
+		kfree(objs[i].funcs);
 	kfree(objs);
 err_free_patch:
 	kfree(patch);

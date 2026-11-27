@@ -1258,6 +1258,18 @@ config SPI_TI_QSPI
 	  This device supports single, dual and quad read support, while
 	  it only supports single write mode.
 
+config SPI_TI_QSPI_KUNIT_TEST
+	bool "KUnit test for TI QSPI controller driver" if !KUNIT_ALL_TESTS
+	depends on KUNIT=y && SPI_TI_QSPI=y
+	default KUNIT_ALL_TESTS
+	help
+	  This option builds the KUnit test suite for the TI QSPI controller
+	  driver. It verifies that a transfer timeout finalizes the message
+	  with -ETIMEDOUT and writes QSPI_INVAL to end the frame. The test
+	  runs only where MMIO can be emulated (UML) and is skipped elsewhere.
+
+	  If unsure, say N.
+
 config SPI_TLE62X0
 	tristate "Infineon TLE62X0 (for power switching)"
 	depends on SYSFS
@@ -1395,6 +1407,19 @@ config SPI_DMA_KUNIT_TEST
 	  unwound, and check that the current DMA devices identify the owner of
 	  those mappings when the error is returned. They also cover a
 	  successful mapping and a message which requires no mapping.
+
+	  If unsure say N.
+
+config SPI_CORE_KUNIT_TEST
+	tristate "KUnit tests for SPI core message optimize state" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  Build KUnit tests for the SPI core message optimize state. The tests
+	  register a fake controller and check that spi_async() and spi_sync()
+	  undo the optimization of a message they fail to queue, that a
+	  message optimized by the peripheral driver is left alone, and that a
+	  successful transfer optimizes and unoptimizes exactly once.
 
 	  If unsure say N.
 

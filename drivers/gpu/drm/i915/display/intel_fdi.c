@@ -404,8 +404,7 @@ static void cpt_set_fdi_bc_bifurcation(struct intel_display *display, bool enabl
 	if (enable)
 		temp |= FDI_BC_BIFURCATION_SELECT;
 
-	drm_dbg_kms(display->drm, "%sabling fdi C rx\n",
-		    enable ? "en" : "dis");
+	drm_dbg_kms(display->drm, "%s FDI C RX\n", str_enable_disable(enable));
 	intel_de_write(display, SOUTH_CHICKEN1, temp);
 	intel_de_posting_read(display, SOUTH_CHICKEN1);
 }

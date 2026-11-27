@@ -123,8 +123,16 @@ config AD4130
 config AD4134
 	tristate "Analog Devices AD4134 ADC Driver"
 	depends on SPI
+	depends on PWM
 	select REGMAP_SPI
+	select SPI_OFFLOAD
+	select SPI_OFFLOAD_TRIGGER_PWM
 	select CRC8
+	select IIO_BUFFER
+	select IIO_BUFFER_DMA
+	select IIO_BUFFER_DMAENGINE
+	select IIO_TRIGGERED_BUFFER
+	select MULTIPLEXER
 	help
 	  Say yes here to build support for Analog Devices AD4134 SPI analog to
 	  digital converters (ADC).
@@ -347,11 +355,19 @@ config AD7380
 	  called ad7380.
 
 config AD7405
-	tristate "Analog Devices AD7405 ADC Driver"
+	tristate "Analog Devices AD7405 and similar isolated sigma-delta modulators driver"
 	depends on IIO_BACKEND
 	help
-	  Say yes here to build support for Analog Devices AD7405, ADUM7701,
-	  ADUM7702, ADUM7703 analog to digital converters (ADC).
+	  Say yes here to build support for Analog Devices isolated
+	  sigma-delta modulators:
+	  - AD7405
+	  - ADuM7701
+	  - ADuM7702
+	  - ADuM7703
+	  - ADuM7801
+	  - ADuM7802
+	  - ADuM7811
+	  - ADuM7812
 
 	  To compile this driver as a module, choose M here: the module will be
 	  called ad7405.
@@ -601,7 +617,9 @@ config ADE9000
 	  highly accurate, multiphase energy and power quality monitoring
 	  integrated circuits:
 	    - ADE9000
+	    - ADE9039
 	    - ADE9078
+	    - ADE9430
 
 	  The devices feature high-precision analog-to-digital converters
 	  and digital signal processing to compute RMS values, power factor,
@@ -880,6 +898,16 @@ config INGENIC_ADC
 
 	  This driver can also be built as a module. If so, the module will be
 	  called ingenic_adc.
+
+config INGENIC_X1600_ADC
+	tristate "Ingenic X1600 ADC driver"
+	depends on MIPS || COMPILE_TEST
+	help
+	  Say yes here to build support for the SAR ADC of the Ingenic X1600
+	  SoC and its four auxiliary channels.
+
+	  This driver can also be built as a module. If so, the module will be
+	  called ingenic-x1600-adc.
 
 config INTEL_DC_TI_ADC
 	tristate "Intel Bay Trail / Cherry Trail Dollar Cove TI ADC driver"
@@ -1272,6 +1300,17 @@ config MEDIATEK_MT6370_ADC
 	  This driver can also be built as a module. If so, the module
 	  will be called "mt6370-adc".
 
+config MEDIATEK_MT6397_AUXADC
+	tristate "MediaTek MT6397 PMIC AUXADC driver"
+	depends on MFD_MT6397
+	help
+	  Say yes here to enable support for MediaTek MT6397 PMIC Auxiliary ADC.
+	  This driver provides the battery voltage and battery temperature
+	  channels used by the fuel gauge on boards built around this PMIC.
+
+	  This driver can also be built as a module. If so, the module will be
+	  called mt6397-auxadc.
+
 config MEDIATEK_MT6577_AUXADC
 	tristate "MediaTek AUXADC driver"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
@@ -1587,14 +1626,18 @@ config RZN1_ADC
 	  module will be called rzn1-adc.
 
 config RZT2H_ADC
-	tristate "Renesas RZ/T2H / RZ/N2H ADC driver"
+	tristate "Renesas RZ/T2H / RZ/N2H (and similar SoCs) ADC driver"
 	depends on ARCH_RENESAS || COMPILE_TEST
 	select IIO_ADC_HELPER
 	select IIO_BUFFER
 	select IIO_KFIFO_BUF
+	select POWER_SEQUENCING
 	help
-	  Say yes here to build support for the ADC found in Renesas
-	  RZ/T2H / RZ/N2H SoCs.
+	  Say yes here to build support for the ADC found in Renesas SoCs:
+	  - RZ/N2H
+	  - RZ/T2H
+	  - RZ/V2H(P)
+	  - RZ/V2N
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called rzt2h_adc.
@@ -1878,7 +1921,7 @@ config TI_ADS112C04
 
 config TI_ADS112C14
 	tristate "Texas Instruments ADS112C14/ADS122C14"
-	depends on I2C
+	depends on I2C && GPIOLIB
 	select CRC8
 	select REGMAP
 	help
@@ -1899,6 +1942,20 @@ config TI_ADS124S08
 
 	  This driver can also be built as a module. If so, the module will be
 	  called ti-ads124s08.
+
+config TI_ADS1262
+	tristate "Texas Instruments ADS1262"
+	depends on SPI
+	select REGMAP
+	select REGULATOR
+	select IIO_BUFFER
+	select IIO_TRIGGERED_BUFFER
+	help
+	  If you say yes here you get support for Texas Instruments ADS1262 and
+	  ADS1263 ADC chips.
+
+	  This driver can also be built as a module. If so, the module will be
+	  called ti-ads1262.
 
 config TI_ADS1298
 	tristate "Texas Instruments ADS1298"
@@ -2015,6 +2072,18 @@ config TI_LMP92064
 
 	  This driver can also be built as a module. If so, the module will be called
 	  ti-lmp92064.
+
+config TI_TLA2528
+	tristate "Texas Instruments TLA2528 ADC driver"
+	depends on I2C
+	select REGMAP_I2C
+	select IIO_ADC_HELPER
+	help
+	  Say yes here to build support for Texas Instruments TLA2528
+	  12-Bit 8-Channel ADC.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called ti-tla2528.
 
 config TI_TLC4541
 	tristate "Texas Instruments TLC4541 ADC driver"

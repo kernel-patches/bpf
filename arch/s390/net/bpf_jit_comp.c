@@ -22,6 +22,7 @@
 #include <linux/init.h>
 #include <linux/bpf.h>
 #include <linux/cfi.h>
+#include <linux/memory.h>
 #include <linux/mm.h>
 #include <linux/kernel.h>
 #include <asm/cacheflush.h>
@@ -2467,9 +2468,9 @@ bool bpf_jit_supports_far_kfunc_call(void)
 	return true;
 }
 
-int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
-		       enum bpf_text_poke_type new_t, void *old_addr,
-		       void *new_addr)
+static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
+				enum bpf_text_poke_type new_t, void *old_addr,
+				void *new_addr)
 {
 	struct bpf_plt expected_plt, current_plt, new_plt, *plt;
 	struct {
@@ -2478,6 +2479,8 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	} __packed insn;
 	char *ret;
 	int err;
+
+	guard(mutex)(&text_mutex);
 
 	/* Verify the branch to be patched. */
 	err = copy_from_kernel_nofault(&insn, ip, sizeof(insn));
@@ -2512,10 +2515,20 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	/* Adjust the mask of the branch. */
 	insn.opc = 0xc004 | (new_addr ? 0xf0 : 0);
 	s390_kernel_write((char *)ip + 1, (char *)&insn.opc + 1, 1);
+	return 0;
+}
 
+int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
+		       enum bpf_text_poke_type new_t, void *old_addr,
+		       void *new_addr)
+{
+	int err;
+
+	err = __bpf_arch_text_poke(ip, old_t, new_t, old_addr, new_addr);
+	if (err)
+		return err;
 	/* Make the new code visible to the other CPUs. */
 	text_poke_sync_lock();
-
 	return 0;
 }
 
@@ -2551,8 +2564,6 @@ struct bpf_tramp_jit {
 	int r14_off;		/* Offset of saved %r14, has to be at the
 				 * bottom */
 	int do_fexit;		/* do_fexit: label */
-	int skip[BPF_MAX_TRAMP_LINKS];	/* skip: labels after each prog */
-	int nr_progs;
 };
 
 static void load_imm64(struct bpf_jit *jit, int dst_reg, u64 val)
@@ -2580,18 +2591,15 @@ static int invoke_bpf_prog(struct bpf_tramp_jit *tjit,
 			 offsetof(struct bpf_tramp_run_ctx, bpf_cookie);
 	struct bpf_prog *p = node->link->prog;
 	void *skip = jit->prg_buf + jit->prg;
-	int idx = tjit->nr_progs++;
+	int nop = jit->prg;
 	int patch;
-
-	if (idx >= ARRAY_SIZE(tjit->skip))
-		return -E2BIG;
 
 	/*
 	 * nop, patched to skip this prog when it is detached
 	 */
 
 	/* brcl 0,skip */
-	EMIT6_PCREL_RILC(0xc0040000, 0, tjit->skip[idx]);
+	EMIT6_PCREL_RILC(0xc0040000, 0, 0);
 
 	/*
 	 * run_ctx.cookie = node->cookie;
@@ -2653,7 +2661,8 @@ static int invoke_bpf_prog(struct bpf_tramp_jit *tjit,
 	EMIT6_PCREL_RILB_PTR(0xc0050000, REG_14, bpf_trampoline_exit(p));
 
 	/* skip: */
-	tjit->skip[idx] = jit->prg;
+	if (jit->prg_buf)
+		*(u32 *)&jit->prg_buf[nop + 2] = (jit->prg - nop) >> 1;
 	bpf_tramp_image_add_skip(im, p, skip, jit->prg_buf + jit->prg);
 
 	return 0;
@@ -2717,8 +2726,6 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	u64 func_meta;
 	int i, j;
 
-	/* The skip labels are taken from the previous pass. */
-	tjit->nr_progs = 0;
 	if (im)
 		im->nr_skips = 0;
 
@@ -3043,10 +3050,6 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image,
 	if (ret < 0)
 		return ret;
 	if (tjit.common.prg > (char *)image_end - (char *)image)
-		/*
-		 * Use the same error code as for exceeding
-		 * BPF_MAX_TRAMP_LINKS.
-		 */
 		return -E2BIG;
 
 	tjit.common.prg = 0;

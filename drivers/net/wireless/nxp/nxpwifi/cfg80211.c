@@ -15,6 +15,8 @@ static const struct ieee80211_iface_limit nxpwifi_ap_sta_limits[] = {
 	{
 		.max = NXPWIFI_MAX_BSS_NUM,
 		.types = BIT(NL80211_IFTYPE_STATION) |
+			 BIT(NL80211_IFTYPE_P2P_GO) |
+			 BIT(NL80211_IFTYPE_P2P_CLIENT) |
 			 BIT(NL80211_IFTYPE_AP) |
 			 BIT(NL80211_IFTYPE_MONITOR),
 	},
@@ -683,6 +685,44 @@ nxpwifi_cfg80211_set_wiphy_params(struct wiphy *wiphy, int radio_idx, u32 change
 	return ret;
 }
 
+/* Initialize P2P client mode. */
+static int
+nxpwifi_cfg80211_init_p2p_client(struct nxpwifi_private *priv)
+{
+	int ret;
+
+	ret = nxpwifi_cfg80211_deinit_p2p(priv);
+
+	if (ret)
+		return ret;
+
+	ret = nxpwifi_set_p2p_mode(priv, NXPWIFI_P2P_MODE_DEVICE, true);
+
+	if (ret)
+		return ret;
+
+	return nxpwifi_set_p2p_mode(priv, NXPWIFI_P2P_MODE_CLIENT, true);
+}
+
+/* Initialize P2P GO mode. */
+static int
+nxpwifi_cfg80211_init_p2p_go(struct nxpwifi_private *priv)
+{
+	int ret;
+
+	ret = nxpwifi_cfg80211_deinit_p2p(priv);
+
+	if (ret)
+		return ret;
+
+	ret = nxpwifi_set_p2p_mode(priv, NXPWIFI_P2P_MODE_DEVICE, true);
+
+	if (ret)
+		return ret;
+
+	return nxpwifi_set_p2p_mode(priv, NXPWIFI_P2P_MODE_GO, true);
+}
+
 static int nxpwifi_deinit_priv_params(struct nxpwifi_private *priv)
 {
 	struct nxpwifi_adapter *adapter = priv->adapter;
@@ -737,6 +777,12 @@ nxpwifi_init_new_priv_params(struct nxpwifi_private *priv,
 	case NL80211_IFTYPE_AP:
 		priv->bss_role = NXPWIFI_BSS_ROLE_UAP;
 		break;
+	case NL80211_IFTYPE_P2P_CLIENT:
+		priv->bss_role = NXPWIFI_BSS_ROLE_STA;
+		break;
+	case NL80211_IFTYPE_P2P_GO:
+		priv->bss_role = NXPWIFI_BSS_ROLE_UAP;
+		break;
 	default:
 		nxpwifi_dbg(adapter, ERROR,
 			    "%s: changing to %d not supported\n",
@@ -770,6 +816,10 @@ is_vif_type_change_allowed(struct nxpwifi_adapter *adapter,
 	switch (old_iftype) {
 	case NL80211_IFTYPE_STATION:
 		switch (new_iftype) {
+		case NL80211_IFTYPE_P2P_CLIENT:
+		case NL80211_IFTYPE_P2P_GO:
+			return adapter->curr_iface_comb.p2p_intf !=
+			       adapter->iface_limit.p2p_intf;
 		case NL80211_IFTYPE_AP:
 			return adapter->curr_iface_comb.uap_intf !=
 			       adapter->iface_limit.uap_intf;
@@ -782,6 +832,36 @@ is_vif_type_change_allowed(struct nxpwifi_adapter *adapter,
 		case NL80211_IFTYPE_STATION:
 			return adapter->curr_iface_comb.sta_intf !=
 			       adapter->iface_limit.sta_intf;
+		case NL80211_IFTYPE_P2P_CLIENT:
+		case NL80211_IFTYPE_P2P_GO:
+			return adapter->curr_iface_comb.p2p_intf !=
+			       adapter->iface_limit.p2p_intf;
+		default:
+			return false;
+		}
+
+	case NL80211_IFTYPE_P2P_CLIENT:
+		switch (new_iftype) {
+		case NL80211_IFTYPE_STATION:
+			return true;
+		case NL80211_IFTYPE_P2P_GO:
+			return true;
+		case NL80211_IFTYPE_AP:
+			return adapter->curr_iface_comb.uap_intf !=
+			       adapter->iface_limit.uap_intf;
+		default:
+			return false;
+		}
+
+	case NL80211_IFTYPE_P2P_GO:
+		switch (new_iftype) {
+		case NL80211_IFTYPE_STATION:
+			return true;
+		case NL80211_IFTYPE_P2P_CLIENT:
+			return true;
+		case NL80211_IFTYPE_AP:
+			return adapter->curr_iface_comb.uap_intf !=
+			       adapter->iface_limit.uap_intf;
 		default:
 			return false;
 		}
@@ -805,6 +885,10 @@ update_vif_type_counter(struct nxpwifi_adapter *adapter,
 		break;
 	case NL80211_IFTYPE_AP:
 		adapter->curr_iface_comb.uap_intf += change;
+		break;
+	case NL80211_IFTYPE_P2P_CLIENT:
+	case NL80211_IFTYPE_P2P_GO:
+		adapter->curr_iface_comb.p2p_intf += change;
 		break;
 	case NL80211_IFTYPE_MONITOR:
 		break;
@@ -901,6 +985,69 @@ done:
 	return ret;
 }
 
+static int
+nxpwifi_change_vif_to_p2p(struct net_device *dev,
+			  enum nl80211_iftype curr_iftype,
+			  enum nl80211_iftype type,
+			  struct vif_params *params)
+{
+	struct nxpwifi_private *priv;
+	struct nxpwifi_adapter *adapter;
+	int ret;
+
+	priv = nxpwifi_netdev_get_priv(dev);
+
+	if (!priv)
+		return -EINVAL;
+
+	adapter = priv->adapter;
+
+	nxpwifi_dbg(adapter, INFO,
+		    "%s: changing role to p2p\n", dev->name);
+
+	ret = nxpwifi_deinit_priv_params(priv);
+	if (ret)
+		goto done;
+
+	ret = nxpwifi_init_new_priv_params(priv, dev, type);
+	if (ret)
+		goto done;
+
+	switch (type) {
+	case NL80211_IFTYPE_P2P_CLIENT:
+		ret = nxpwifi_cfg80211_init_p2p_client(priv);
+		break;
+	case NL80211_IFTYPE_P2P_GO:
+		ret = nxpwifi_cfg80211_init_p2p_go(priv);
+		break;
+	default:
+		nxpwifi_dbg(adapter, ERROR,
+			    "%s: changing to %d not supported\n",
+			    dev->name, type);
+		ret = -EOPNOTSUPP;
+		break;
+	}
+	if (ret)
+		goto done;
+
+	ret = nxpwifi_set_bss_mode(priv);
+	if (ret)
+		goto done;
+
+	/* Commit the interface type change only once the firmware has
+	 * accepted the new P2P role, so a failure above leaves the
+	 * interface counters and iftype unchanged.
+	 */
+	update_vif_type_counter(adapter, curr_iftype, -1);
+	update_vif_type_counter(adapter, type, 1);
+	dev->ieee80211_ptr->iftype = type;
+
+	ret = nxpwifi_sta_init_cmd(priv, false, false);
+
+done:
+	return ret;
+}
+
 /* cfg80211 operation handler to change interface type. */
 static int
 nxpwifi_cfg80211_change_virtual_intf(struct wiphy *wiphy,
@@ -944,6 +1091,10 @@ nxpwifi_cfg80211_change_virtual_intf(struct wiphy *wiphy,
 		case NL80211_IFTYPE_AP:
 			return nxpwifi_change_vif_to_ap(dev, curr_iftype, type,
 							params);
+		case NL80211_IFTYPE_P2P_CLIENT:
+		case NL80211_IFTYPE_P2P_GO:
+			return nxpwifi_change_vif_to_p2p(dev, curr_iftype,
+							 type, params);
 		default:
 			goto errnotsupp;
 		}
@@ -953,6 +1104,46 @@ nxpwifi_cfg80211_change_virtual_intf(struct wiphy *wiphy,
 		case NL80211_IFTYPE_STATION:
 			return nxpwifi_change_vif_to_sta(dev, curr_iftype,
 							 type, params);
+		case NL80211_IFTYPE_P2P_CLIENT:
+		case NL80211_IFTYPE_P2P_GO:
+			return nxpwifi_change_vif_to_p2p(dev, curr_iftype,
+							 type, params);
+		default:
+			goto errnotsupp;
+		}
+
+	case NL80211_IFTYPE_P2P_CLIENT:
+		if (nxpwifi_cfg80211_deinit_p2p(priv))
+			return -EFAULT;
+
+		switch (type) {
+		case NL80211_IFTYPE_STATION:
+			return nxpwifi_change_vif_to_sta(dev, curr_iftype,
+							 type, params);
+		case NL80211_IFTYPE_P2P_GO:
+			return nxpwifi_change_vif_to_p2p(dev, curr_iftype,
+							 type, params);
+		case NL80211_IFTYPE_AP:
+			return nxpwifi_change_vif_to_ap(dev, curr_iftype, type,
+							params);
+		default:
+			goto errnotsupp;
+		}
+
+	case NL80211_IFTYPE_P2P_GO:
+		if (nxpwifi_cfg80211_deinit_p2p(priv))
+			return -EFAULT;
+
+		switch (type) {
+		case NL80211_IFTYPE_STATION:
+			return nxpwifi_change_vif_to_sta(dev, curr_iftype,
+							 type, params);
+		case NL80211_IFTYPE_P2P_CLIENT:
+			return nxpwifi_change_vif_to_p2p(dev, curr_iftype,
+							 type, params);
+		case NL80211_IFTYPE_AP:
+			return nxpwifi_change_vif_to_ap(dev, curr_iftype, type,
+							params);
 		default:
 			goto errnotsupp;
 		}
@@ -1392,6 +1583,22 @@ nxpwifi_mgmt_stypes[NUM_NL80211_IFTYPES] = {
 		      BIT(IEEE80211_STYPE_DEAUTH >> 4) |
 		      BIT(IEEE80211_STYPE_ACTION >> 4),
 	},
+	[NL80211_IFTYPE_P2P_CLIENT] = {
+		.tx = BIT(IEEE80211_STYPE_ACTION >> 4) |
+		      BIT(IEEE80211_STYPE_PROBE_RESP >> 4),
+		.rx = BIT(IEEE80211_STYPE_ACTION >> 4) |
+		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4),
+	},
+	[NL80211_IFTYPE_P2P_GO] = {
+		.tx = 0xffff,
+		.rx = BIT(IEEE80211_STYPE_AUTH >> 4) |
+		      BIT(IEEE80211_STYPE_ASSOC_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_REASSOC_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_DISASSOC >> 4) |
+		      BIT(IEEE80211_STYPE_ACTION >> 4) |
+		      BIT(IEEE80211_STYPE_DEAUTH >> 4) |
+		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4),
+	},
 };
 
 /*
@@ -1639,6 +1846,10 @@ static int nxpwifi_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev,
 	struct nxpwifi_private *priv = nxpwifi_netdev_get_priv(dev);
 	int ret;
 
+	wiphy_delayed_work_cancel(wiphy, &priv->dfs_chan_sw_work);
+	priv->uap_stop_tx = false;
+	kfree(priv->ap_update_info);
+	priv->ap_update_info = NULL;
 	nxpwifi_abort_cac(priv);
 
 	if (nxpwifi_del_mgmt_ies(priv))
@@ -2428,6 +2639,88 @@ struct wireless_dev *nxpwifi_add_virtual_intf(struct wiphy *wiphy,
 		priv->bss_mode = type;
 
 		break;
+	case NL80211_IFTYPE_P2P_CLIENT:
+		if (adapter->curr_iface_comb.p2p_intf ==
+		    adapter->iface_limit.p2p_intf) {
+			nxpwifi_dbg(adapter, ERROR,
+				    "cannot create multiple P2P ifaces\n");
+			return ERR_PTR(-EINVAL);
+		}
+
+		priv = nxpwifi_get_unused_priv_by_bss_type
+		       (adapter, NXPWIFI_BSS_TYPE_P2P);
+		if (!priv) {
+			nxpwifi_dbg(adapter, ERROR,
+				    "could not get free private struct\n");
+			return ERR_PTR(-EFAULT);
+		}
+
+		priv->wdev.wiphy = wiphy;
+		/* At start-up, wpa_supplicant tries to change the interface
+		 * to NL80211_IFTYPE_STATION if it is not managed mode.
+		 */
+		priv->wdev.iftype = NL80211_IFTYPE_P2P_CLIENT;
+		priv->bss_mode = NL80211_IFTYPE_P2P_CLIENT;
+
+		/* Setting bss_type to P2P tells firmware that this interface
+		 * is receiving P2P peers found during find phase and doing
+		 * action frame handshake.
+		 */
+		priv->bss_type = NXPWIFI_BSS_TYPE_P2P;
+
+		priv->frame_type = NXPWIFI_DATA_FRAME_TYPE_ETH_II;
+		priv->bss_priority = 0;
+		priv->bss_role = NXPWIFI_BSS_ROLE_STA;
+		priv->bss_started = 0;
+
+		if (nxpwifi_cfg80211_init_p2p_client(priv)) {
+			memset(&priv->wdev, 0, sizeof(priv->wdev));
+			priv->wdev.iftype = NL80211_IFTYPE_UNSPECIFIED;
+			return ERR_PTR(-EFAULT);
+		}
+
+		break;
+	case NL80211_IFTYPE_P2P_GO:
+		if (adapter->curr_iface_comb.p2p_intf ==
+		    adapter->iface_limit.p2p_intf) {
+			nxpwifi_dbg(adapter, ERROR,
+				    "cannot create multiple P2P ifaces\n");
+			return ERR_PTR(-EINVAL);
+		}
+
+		priv = nxpwifi_get_unused_priv_by_bss_type
+		       (adapter, NXPWIFI_BSS_TYPE_P2P);
+		if (!priv) {
+			nxpwifi_dbg(adapter, ERROR,
+				    "could not get free private struct\n");
+			return ERR_PTR(-EFAULT);
+		}
+
+		priv->wdev.wiphy = wiphy;
+		/* At start-up, wpa_supplicant tries to change the interface
+		 * to NL80211_IFTYPE_STATION if it is not managed mode.
+		 */
+		priv->wdev.iftype = NL80211_IFTYPE_P2P_GO;
+		priv->bss_mode = NL80211_IFTYPE_P2P_GO;
+
+		/* Setting bss_type to P2P tells firmware that this interface
+		 * is receiving P2P peers found during find phase and doing
+		 * action frame handshake.
+		 */
+		priv->bss_type = NXPWIFI_BSS_TYPE_P2P;
+
+		priv->frame_type = NXPWIFI_DATA_FRAME_TYPE_ETH_II;
+		priv->bss_priority = 0;
+		priv->bss_role = NXPWIFI_BSS_ROLE_UAP;
+		priv->bss_started = 0;
+
+		if (nxpwifi_cfg80211_init_p2p_go(priv)) {
+			memset(&priv->wdev, 0, sizeof(priv->wdev));
+			priv->wdev.iftype = NL80211_IFTYPE_UNSPECIFIED;
+			return ERR_PTR(-EFAULT);
+		}
+
+		break;
 	case NL80211_IFTYPE_MONITOR:
 		priv = nxpwifi_get_unused_priv_by_bss_type
 			(adapter, NXPWIFI_BSS_TYPE_UAP);
@@ -3066,6 +3359,52 @@ static int nxpwifi_cfg80211_set_coalesce(struct wiphy *wiphy,
 	return nxpwifi_coalesce_cfg(priv, &coalesce_cfg);
 }
 
+/* Keep only the beacon buffers consumed by nxpwifi_set_mgmt_ies(). */
+static struct cfg80211_ap_update *
+nxpwifi_dup_csa_update(const struct cfg80211_beacon_data *beacon)
+{
+	struct cfg80211_ap_update *update;
+	struct cfg80211_beacon_data *copy;
+	size_t len;
+	u8 *pos;
+
+	/* Each length comes from a bounded netlink attribute. */
+	len = beacon->tail_len + beacon->beacon_ies_len +
+	      beacon->proberesp_ies_len + beacon->assocresp_ies_len;
+
+	update = kzalloc(sizeof(*update) + len, GFP_KERNEL);
+	if (!update)
+		return NULL;
+
+	copy = &update->beacon;
+	pos = (u8 *)(update + 1);
+	if (beacon->tail_len) {
+		copy->tail = pos;
+		copy->tail_len = beacon->tail_len;
+		memcpy(pos, beacon->tail, beacon->tail_len);
+		pos += beacon->tail_len;
+	}
+	if (beacon->beacon_ies_len) {
+		copy->beacon_ies = pos;
+		copy->beacon_ies_len = beacon->beacon_ies_len;
+		memcpy(pos, beacon->beacon_ies, beacon->beacon_ies_len);
+		pos += beacon->beacon_ies_len;
+	}
+	if (beacon->proberesp_ies_len) {
+		copy->proberesp_ies = pos;
+		copy->proberesp_ies_len = beacon->proberesp_ies_len;
+		memcpy(pos, beacon->proberesp_ies, beacon->proberesp_ies_len);
+		pos += beacon->proberesp_ies_len;
+	}
+	if (beacon->assocresp_ies_len) {
+		copy->assocresp_ies = pos;
+		copy->assocresp_ies_len = beacon->assocresp_ies_len;
+		memcpy(pos, beacon->assocresp_ies, beacon->assocresp_ies_len);
+	}
+
+	return update;
+}
+
 static int
 nxpwifi_cfg80211_uap_add_station(struct nxpwifi_private *priv, const u8 *mac,
 				 struct station_parameters *params)
@@ -3099,8 +3438,12 @@ nxpwifi_cfg80211_channel_switch(struct wiphy *wiphy, struct net_device *dev,
 				struct cfg80211_csa_settings *params)
 {
 	struct nxpwifi_private *priv = nxpwifi_netdev_get_priv(dev);
+	struct cfg80211_ap_update *update;
 	int chsw_msec;
 	int ret;
+
+	if (priv->ap_update_info)
+		return -EBUSY;
 
 	if (priv->adapter->scan_processing) {
 		nxpwifi_dbg(priv->adapter, ERROR,
@@ -3115,11 +3458,9 @@ nxpwifi_cfg80211_channel_switch(struct wiphy *wiphy, struct net_device *dev,
 				       &priv->dfs_chandef))
 		return -EINVAL;
 
-	if (params->block_tx) {
-		netif_carrier_off(priv->netdev);
-		nxpwifi_stop_net_dev_queue(priv->netdev, priv->adapter);
-		priv->uap_stop_tx = true;
-	}
+	update = nxpwifi_dup_csa_update(&params->beacon_after);
+	if (!update)
+		return -ENOMEM;
 
 	ret = nxpwifi_del_mgmt_ies(priv);
 	if (ret)
@@ -3130,12 +3471,18 @@ nxpwifi_cfg80211_channel_switch(struct wiphy *wiphy, struct net_device *dev,
 	if (ret) {
 		nxpwifi_dbg(priv->adapter, ERROR,
 			    "%s: setting mgmt ies failed\n", __func__);
+		kfree(update);
 		goto done;
 	}
 
 	memcpy(&priv->dfs_chandef, &params->chandef, sizeof(priv->dfs_chandef));
-	memcpy(&priv->ap_update_info.beacon, &params->beacon_after,
-	       sizeof(priv->ap_update_info.beacon));
+	priv->ap_update_info = update;
+
+	if (params->block_tx) {
+		netif_carrier_off(priv->netdev);
+		nxpwifi_stop_net_dev_queue(priv->netdev, priv->adapter);
+		priv->uap_stop_tx = true;
+	}
 
 	chsw_msec = max(params->count * priv->bss_cfg.beacon_period, 100);
 
@@ -3338,7 +3685,8 @@ nxpwifi_cfg80211_authenticate(struct wiphy *wiphy,
 		return -EINVAL;
 	}
 
-	if (priv->wdev.iftype != NL80211_IFTYPE_STATION) {
+	if (priv->wdev.iftype != NL80211_IFTYPE_STATION &&
+	    priv->wdev.iftype != NL80211_IFTYPE_P2P_CLIENT) {
 		nxpwifi_dbg(adapter, ERROR,
 			    "Interface type is not correct (type %d)\n",
 			    priv->wdev.iftype);
@@ -3787,6 +4135,8 @@ int nxpwifi_register_cfg80211(struct nxpwifi_adapter *adapter)
 	wiphy->mgmt_stypes = nxpwifi_mgmt_stypes;
 	wiphy->max_remain_on_channel_duration = 5000;
 	wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) |
+				 BIT(NL80211_IFTYPE_P2P_CLIENT) |
+				 BIT(NL80211_IFTYPE_P2P_GO) |
 				 BIT(NL80211_IFTYPE_AP) |
 				 BIT(NL80211_IFTYPE_MONITOR);
 

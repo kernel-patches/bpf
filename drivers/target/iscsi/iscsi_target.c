@@ -4485,8 +4485,8 @@ int iscsit_close_session(struct iscsit_session *sess, bool can_sleep)
 
 	/*
 	 * If any other processes are accessing this session pointer we must
-	 * wait until they have completed.  If we are in an interrupt (the
-	 * time2retain handler) and contain and active session usage count we
+	 * wait until they have completed.  If we are the Time2Retain work
+	 * (can_sleep is false) and contain and active session usage count we
 	 * restart the timer and exit.
 	 */
 	if (iscsit_check_session_usage_count(sess, can_sleep)) {
@@ -4515,6 +4515,16 @@ int iscsit_close_session(struct iscsit_session *sess, bool can_sleep)
 	kfree(sess->sess_ops);
 	sess->sess_ops = NULL;
 	spin_unlock_bh(&se_tpg->session_lock);
+
+	/*
+	 * Neither the Time2Retain timer nor its work may outlive the session;
+	 * a work never runs twice at once, so this work finds a queued one.
+	 */
+	timer_delete_sync(&sess->time2retain_timer);
+	if (can_sleep)
+		cancel_work_sync(&sess->time2retain_work);
+	else
+		cancel_work(&sess->time2retain_work);
 
 	kfree(sess);
 	return 0;

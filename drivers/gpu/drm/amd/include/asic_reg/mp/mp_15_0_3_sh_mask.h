@@ -1618,6 +1618,15 @@
 
 
 // addressBlock: mp_SmuMpASP_SmnDec
+//MPASP_SMN_C2PMSG_101
+#define MPASP_SMN_C2PMSG_101__CONTENT__SHIFT                                                                  0x0
+#define MPASP_SMN_C2PMSG_101__CONTENT_MASK                                                                    0xFFFFFFFFL
+//MPASP_SMN_C2PMSG_102
+#define MPASP_SMN_C2PMSG_102__CONTENT__SHIFT                                                                  0x0
+#define MPASP_SMN_C2PMSG_102__CONTENT_MASK                                                                    0xFFFFFFFFL
+//MPASP_SMN_C2PMSG_103
+#define MPASP_SMN_C2PMSG_103__CONTENT__SHIFT                                                                  0x0
+#define MPASP_SMN_C2PMSG_103__CONTENT_MASK                                                                    0xFFFFFFFFL
 //MPASP_SMN_IH_CREDIT
 #define MPASP_SMN_IH_CREDIT__CREDIT_VALUE__SHIFT                                                              0x0
 #define MPASP_SMN_IH_CREDIT__CLIENT_ID__SHIFT                                                                 0x10

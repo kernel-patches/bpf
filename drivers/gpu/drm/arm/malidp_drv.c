@@ -856,7 +856,9 @@ static int malidp_bind(struct device *dev)
 	}
 	pm_runtime_put(dev);
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		goto register_fail;
 
 	drm_kms_helper_poll_init(drm);
 

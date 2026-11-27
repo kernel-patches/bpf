@@ -18,7 +18,7 @@
 
 static struct cpufreq_driver	longrun_driver;
 
-/**
+/*
  * longrun_{low,high}_freq is needed for the conversion of cpufreq kHz
  * values into per cent values. In TMTA microcode, the following is valid:
  * performance_pctg = (current_freq - low_freq)/(high_freq - low_freq)
@@ -37,14 +37,14 @@ static void longrun_get_policy(struct cpufreq_policy *policy)
 {
 	struct msr msr;
 
-	rdmsrq(MSR_TMTA_LONGRUN_FLAGS, msr.q);
+	msr.q = rdmsrq(MSR_TMTA_LONGRUN_FLAGS);
 	pr_debug("longrun flags are %x - %x\n", msr.l, msr.h);
 	if (msr.l & 0x01)
 		policy->policy = CPUFREQ_POLICY_PERFORMANCE;
 	else
 		policy->policy = CPUFREQ_POLICY_POWERSAVE;
 
-	rdmsrq(MSR_TMTA_LONGRUN_CTRL, msr.q);
+	msr.q = rdmsrq(MSR_TMTA_LONGRUN_CTRL);
 	pr_debug("longrun ctrl is %x - %x\n", msr.l, msr.h);
 	msr.l &= 0x0000007F;
 	msr.h &= 0x0000007F;
@@ -93,7 +93,7 @@ static int longrun_set_policy(struct cpufreq_policy *policy)
 		pctg_lo = pctg_hi;
 
 	/* performance or economy mode */
-	rdmsrq(MSR_TMTA_LONGRUN_FLAGS, msr.q);
+	msr.q = rdmsrq(MSR_TMTA_LONGRUN_FLAGS);
 	msr.l &= 0xFFFFFFFE;
 	switch (policy->policy) {
 	case CPUFREQ_POLICY_PERFORMANCE:
@@ -105,7 +105,7 @@ static int longrun_set_policy(struct cpufreq_policy *policy)
 	wrmsrq(MSR_TMTA_LONGRUN_FLAGS, msr.q);
 
 	/* lower and upper boundary */
-	rdmsrq(MSR_TMTA_LONGRUN_CTRL, msr.q);
+	msr.q = rdmsrq(MSR_TMTA_LONGRUN_CTRL);
 	msr.l &= 0xFFFFFF80;
 	msr.h &= 0xFFFFFF80;
 	msr.l |= pctg_lo;
@@ -117,7 +117,7 @@ static int longrun_set_policy(struct cpufreq_policy *policy)
 
 
 /**
- * longrun_verify_poliy - verifies a new CPUFreq policy
+ * longrun_verify_policy - verifies a new CPUFreq policy
  * @policy: the policy to verify
  *
  * Validates a new CPUFreq policy. This function has to be called with
@@ -177,16 +177,16 @@ static int longrun_determine_freqs(unsigned int *low_freq,
 		 * For maximum frequency, read out level zero.
 		 */
 		/* minimum */
-		rdmsrq(MSR_TMTA_LRTI_READOUT, msr.q);
+		msr.q = rdmsrq(MSR_TMTA_LRTI_READOUT);
 		msr.l = msr.h;
 		wrmsrq(MSR_TMTA_LRTI_READOUT, msr.q);
-		rdmsrq(MSR_TMTA_LRTI_VOLT_MHZ, msr.q);
+		msr.q = rdmsrq(MSR_TMTA_LRTI_VOLT_MHZ);
 		*low_freq = msr.l * 1000; /* to kHz */
 
 		/* maximum */
 		msr.l = 0;
 		wrmsrq(MSR_TMTA_LRTI_READOUT, msr.q);
-		rdmsrq(MSR_TMTA_LRTI_VOLT_MHZ, msr.q);
+		msr.q = rdmsrq(MSR_TMTA_LRTI_VOLT_MHZ);
 		*high_freq = msr.l * 1000; /* to kHz */
 
 		pr_debug("longrun table interface told %u - %u kHz\n",
@@ -203,7 +203,7 @@ static int longrun_determine_freqs(unsigned int *low_freq,
 	pr_debug("high frequency is %u kHz\n", *high_freq);
 
 	/* get current borders */
-	rdmsrq(MSR_TMTA_LONGRUN_CTRL, msr.q);
+	msr.q = rdmsrq(MSR_TMTA_LONGRUN_CTRL);
 	save.l = msr.l & 0x0000007F;
 	save.h = msr.h & 0x0000007F;
 

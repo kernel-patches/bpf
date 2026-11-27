@@ -330,6 +330,12 @@ enum dso_type dso__type_fd(int fd)
 	return DSO__TYPE_32BIT;
 }
 
+void dso__load_symbol_names(struct dso *dso __maybe_unused,
+			    struct symbol **syms __maybe_unused,
+			    size_t nr __maybe_unused)
+{
+}
+
 int dso__load_sym(struct dso *dso, struct map *map __maybe_unused,
 		  struct symsrc *ss,
 		  struct symsrc *runtime_ss __maybe_unused,

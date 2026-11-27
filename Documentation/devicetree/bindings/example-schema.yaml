@@ -202,8 +202,17 @@ properties:
       compatible:
         const: vendor,sub-device
 
+required:
+  - compatible
+  - reg
+  - interrupts
+  - interrupt-controller
+
 # Describe the relationship between different properties
-dependencies:
+# Properties might be required only if some other property is present.
+# dependentRequired is a shorter and preferred way to express this, instead of
+# "dependencies" and if:then: block.
+dependentRequired:
   # 'vendor,bool-property' is only allowed when 'vendor,string-array-property'
   # is present
   vendor,bool-property: [ 'vendor,string-array-property' ]
@@ -211,11 +220,14 @@ dependencies:
   # must be present or none of them.
   vendor,string-array-property: [ 'vendor,bool-property' ]
 
-required:
-  - compatible
-  - reg
-  - interrupts
-  - interrupt-controller
+# When given property is present, entire object must also validate against subschema.
+dependentSchemas:
+  vendor,bool-property:
+    # If vendor,bool-property is present, the vendor,int-property accepts smaller
+    # set of values
+    properties:
+      vendor,int-property:
+        enum: [2, 4, 6]
 
 # if/then schema can be used to handle conditions on a property affecting
 # another property. A typical case is a specific 'compatible' value changes the
@@ -238,15 +250,6 @@ allOf:
       # If otherwise the property is not allowed:
       properties:
         foo-supply: false
-  # Altering schema depending on presence of properties is usually done by
-  # dependencies (see above), however some adjustments might require if:
-  - if:
-      required:
-        - vendor,bool-property
-    then:
-      properties:
-        vendor,int-property:
-          enum: [2, 4, 6]
 
 # Ideally, the schema should have this line otherwise any other properties
 # present are allowed. There's a few common properties such as 'status' and

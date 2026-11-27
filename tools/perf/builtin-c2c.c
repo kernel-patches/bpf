@@ -164,6 +164,7 @@ static void c2c_he_free(void *he)
 	zfree(&c2c_he->nodeset);
 	zfree(&c2c_he->nodestr);
 	zfree(&c2c_he->node_stats);
+	zfree(&c2c_he->regionstr);
 	free(c2c_he);
 }
 
@@ -260,7 +261,7 @@ static void c2c_he__set_mem_region(struct c2c_hist_entry *c2c_he,
 
 	/* Update mem_region only if it really accesses memory */
 	if (mem_region >= PERF_MEM_REGION_MMIO)
-		c2c_he->mem_region = mem_region;
+		c2c_he->regionset |= BIT(mem_region);
 }
 
 static void compute_stats(struct c2c_hist_entry *c2c_he,
@@ -565,37 +566,12 @@ dcacheline_node_mem_region(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 {
 	int width = c2c_width(fmt, hpp, he->hists);
 	struct c2c_hist_entry *c2c_he;
-	unsigned int mem_region;
-	char buf[20];
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	mem_region = c2c_he->mem_region;
+	if (WARN_ON_ONCE(!c2c_he->regionstr))
+		return 0;
 
-	switch (mem_region) {
-	case PERF_MEM_REGION_NA:
-	case PERF_MEM_REGION_RSVD:
-		scnprintf(buf, sizeof(buf), "N/A");
-		break;
-	case PERF_MEM_REGION_MMIO:
-		scnprintf(buf, sizeof(buf), "MMIO");
-		break;
-	case PERF_MEM_REGION_MEM0:
-	case PERF_MEM_REGION_MEM1:
-	case PERF_MEM_REGION_MEM2:
-	case PERF_MEM_REGION_MEM3:
-	case PERF_MEM_REGION_MEM4:
-	case PERF_MEM_REGION_MEM5:
-	case PERF_MEM_REGION_MEM6:
-	case PERF_MEM_REGION_MEM7:
-		scnprintf(buf, sizeof(buf), "Mem-%d",
-			  mem_region - PERF_MEM_REGION_MEM0);
-		break;
-	default:
-		scnprintf(buf, sizeof(buf), "N/A");
-		break;
-	}
-
-	return scnprintf(hpp->buf, hpp->size, "%*s", width, buf);
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, c2c_he->regionstr);
 }
 
 static int offset_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
@@ -1419,11 +1395,11 @@ static struct c2c_dimension dim_dcacheline_node = {
 };
 
 static struct c2c_dimension dim_dcacheline_mem_region = {
-	.header		= HEADER_LOW("Region"),
+	.header		= HEADER_LOW("Range"),
 	.name		= "dcacheline_mem_region",
 	.cmp		= empty_cmp,
 	.entry		= dcacheline_node_mem_region,
-	.width		= 6,
+	.width		= 5,
 };
 
 static struct c2c_dimension dim_dcacheline_count = {
@@ -1450,6 +1426,14 @@ static struct c2c_dimension dim_offset_node = {
 	.cmp		= empty_cmp,
 	.entry		= dcacheline_node_entry,
 	.width		= 4,
+};
+
+static struct c2c_dimension dim_offset_mem_region = {
+	.header		= HEADER_LOW("Range"),
+	.name		= "offset_mem_region",
+	.cmp		= empty_cmp,
+	.entry		= dcacheline_node_mem_region,
+	.width		= 5,
 };
 
 static struct c2c_dimension dim_iaddr = {
@@ -1861,6 +1845,7 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_dcacheline_node,
 	&dim_dcacheline_count,
 	&dim_offset,
+	&dim_offset_mem_region,
 	&dim_offset_node,
 	&dim_iaddr,
 	&dim_tot_hitm,
@@ -2233,11 +2218,19 @@ static inline bool is_valid_hist_entry(struct hist_entry *he)
 	return has_record;
 }
 
+static inline bool c2c_he__is_main_hist(struct c2c_hist_entry *c2c_he)
+{
+	struct hists *hists = c2c_he->he.hists;
+
+	return hists &&
+	       container_of(hists, struct c2c_hists, hists) == &c2c.hists;
+}
+
 static void set_node_width(struct c2c_hist_entry *c2c_he, int len)
 {
 	struct c2c_dimension *dim;
 
-	dim = &c2c.hists == c2c_he->hists ?
+	dim = c2c_he__is_main_hist(c2c_he) ?
 	      &dim_dcacheline_node : &dim_offset_node;
 
 	if (len > dim->width)
@@ -2264,6 +2257,56 @@ static int set_nodestr(struct c2c_hist_entry *c2c_he)
 	return c2c_he->nodestr ? 0 : -ENOMEM;
 }
 
+#define PERF_MEM_REGION_MASK	\
+	GENMASK(PERF_MEM_REGION_MEM7, PERF_MEM_REGION_MEM0)
+#define PERF_MEM_REGION_NUM	\
+	(PERF_MEM_REGION_MEM7 - PERF_MEM_REGION_MEM0 + 1)
+
+static void set_mem_region_width(struct c2c_hist_entry *c2c_he, int len)
+{
+	struct c2c_dimension *dim;
+
+	dim = c2c_he__is_main_hist(c2c_he) ?
+	      &dim_dcacheline_mem_region : &dim_offset_mem_region;
+
+	if (len > dim->width)
+		dim->width = len;
+}
+
+static int set_mem_region_str(struct c2c_hist_entry *c2c_he)
+{
+	char buf[32];
+	int len = 0;
+
+	if (c2c_he->regionstr)
+		return 0;
+
+	if (!c2c_he->regionset) {
+		len = scnprintf(buf, sizeof(buf), "N/A");
+		goto out;
+	}
+
+	if (c2c_he->regionset & BIT(PERF_MEM_REGION_MMIO)) {
+		len = scnprintf(buf, sizeof(buf), "MMIO");
+		if (c2c_he->regionset & PERF_MEM_REGION_MASK)
+			len += scnprintf(buf + len, sizeof(buf) - len, ",");
+	}
+
+	if (c2c_he->regionset & PERF_MEM_REGION_MASK) {
+		unsigned long regionset =
+			c2c_he->regionset >> PERF_MEM_REGION_MEM0;
+
+		len += bitmap_scnprintf(&regionset, PERF_MEM_REGION_NUM,
+					buf + len, sizeof(buf) - len);
+	}
+
+out:
+	set_mem_region_width(c2c_he, len);
+	c2c_he->regionstr = strdup(buf);
+
+	return c2c_he->regionstr ? 0 : -ENOMEM;
+}
+
 static void calc_width(struct c2c_hist_entry *c2c_he)
 {
 	struct c2c_hists *c2c_hists;
@@ -2271,6 +2314,7 @@ static void calc_width(struct c2c_hist_entry *c2c_he)
 	c2c_hists = container_of(c2c_he->he.hists, struct c2c_hists, hists);
 	hists__calc_col_len(&c2c_hists->hists, &c2c_he->he);
 	set_nodestr(c2c_he);
+	set_mem_region_str(c2c_he);
 }
 
 static int filter_cb(struct hist_entry *he, void *arg __maybe_unused)
@@ -3005,13 +3049,24 @@ static int ui_quirks(void)
 		nodestr = chk_double_cl ? "Double-CL" : "CL";
 	}
 
+	/*
+	 * With the extra "Region" column, the zero line of the
+	 * dcacheline/offset header must span one more column.  Set
+	 * this after the TUI header assignment above, which would
+	 * otherwise overwrite the span with the default value.
+	 */
+	if (c2c.show_mem_region) {
+		dim_dcacheline.header.line[0].span = 3;
+		dim_offset.header.line[0].span = 3;
+	}
+
 	dim_percent_costly_snoop.header = percent_costly_snoop_header[c2c.display];
 
 	/* Fix the zero line for dcacheline column. */
 	buf = fill_line(chk_double_cl ? "Double-Cacheline" : "Cacheline",
 				dim_dcacheline.width +
 				(c2c.show_mem_region ?
-					dim_dcacheline_mem_region.width : 0) +
+				 dim_dcacheline_mem_region.width : 0) +
 				dim_dcacheline_node.width +
 				dim_dcacheline_count.width +
 				(c2c.show_mem_region ? 6 : 4));
@@ -3022,8 +3077,11 @@ static int ui_quirks(void)
 
 	/* Fix the zero line for offset column. */
 	buf = fill_line(nodestr, dim_offset.width +
+				 (c2c.show_mem_region ?
+				  dim_offset_mem_region.width : 0) +
 			         dim_offset_node.width +
-				 dim_dcacheline_count.width + 4);
+				 dim_dcacheline_count.width +
+				 (c2c.show_mem_region ? 6 : 4));
 	if (!buf)
 		return -ENOMEM;
 
@@ -3150,7 +3208,7 @@ static int build_cl_output(char *cl_sort, bool no_source)
 	}
 
 	if (asprintf(&c2c.cl_output,
-		"%s%s%s%s%s%s%s%s%s%s%s%s",
+		"%s%s%s%s%s%s%s%s%s%s%s%s%s",
 		c2c.use_stdio ? "cl_num_empty," : "",
 		c2c.display == DISPLAY_SNP_PEER ? "percent_rmt_peer,"
 						  "percent_lcl_peer," :
@@ -3158,7 +3216,9 @@ static int build_cl_output(char *cl_sort, bool no_source)
 						  "percent_lcl_hitm,",
 		"percent_stores_l1hit,"
 		"percent_stores_l1miss,"
-		"percent_stores_na,"
+		"percent_stores_na,",
+		c2c.show_mem_region ?
+		"offset,offset_mem_region,offset_node,dcacheline_count," :
 		"offset,offset_node,dcacheline_count,",
 		add_pid   ? "pid," : "",
 		add_tid   ? "tid," : "",
@@ -3348,6 +3408,8 @@ static int perf_c2c__report(int argc, const char **argv)
 		goto out;
 	}
 	env = perf_session__env(session);
+	c2c.show_mem_region = perf_header__has_feat(&session->header,
+						HEADER_MEMORY_RANGES);
 	/*
 	 * Use the 'tot' as default display type if user doesn't specify it;
 	 * since Arm64 platform doesn't support HITMs flag, use 'peer' as the
@@ -3412,20 +3474,6 @@ static int perf_c2c__report(int argc, const char **argv)
 
 		if (ret < 0)
 			goto out_mem2node;
-		/*
-		 * For searching by name on the "Browse map details".
-		 * providing it only in verbose mode not to bloat too
-		 * much struct symbol.
-		 */
-		if (verbose > 0) {
-			/*
-			 * XXX: Need to provide a less kludgy way to ask for
-			 * more space per symbol, the u32 is for the index on
-			 * the ui browser.
-			 * See symbol__browser_index.
-			 */
-			symbol_conf.priv_size += sizeof(u32);
-		}
 		annotation_config__init();
 	}
 
@@ -3445,11 +3493,6 @@ static int perf_c2c__report(int argc, const char **argv)
 		pr_err("failed to process sample\n");
 		goto out_mem2node;
 	}
-
-	c2c.show_mem_region = perf_header__has_feat(&session->header,
-						HEADER_MEMORY_RANGES);
-	if (c2c.show_mem_region)
-		dim_dcacheline.header.line[0].span = 3;
 
 	if (c2c.display != DISPLAY_SNP_PEER) {
 		if (asprintf(&output_str,

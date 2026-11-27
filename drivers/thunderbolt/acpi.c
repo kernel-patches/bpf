@@ -280,13 +280,9 @@ int tb_acpi_power_off_retimers(struct tb_port *port)
 	return tb_acpi_retimer_set_power(port, false);
 }
 
-static bool tb_acpi_bus_match(struct device *dev)
+static struct acpi_device *tb_acpi_switch_find_companion(struct device *dev)
 {
-	return tb_is_switch(dev) || tb_is_usb4_port_device(dev);
-}
-
-static struct acpi_device *tb_acpi_switch_find_companion(struct tb_switch *sw)
-{
+	struct tb_switch *sw = tb_to_switch(dev);
 	struct tb_switch *parent_sw = tb_switch_parent(sw);
 	struct acpi_device *adev = NULL;
 
@@ -314,36 +310,16 @@ static struct acpi_device *tb_acpi_switch_find_companion(struct tb_switch *sw)
 	return adev;
 }
 
-static struct acpi_device *tb_acpi_find_companion(struct device *dev)
+static struct acpi_device *tb_acpi_usb4_port_find_companion(struct device *dev)
 {
-	/*
-	 * The Thunderbolt/USB4 hierarchy looks like following:
-	 *
-	 * Device (NHI)
-	 *   Device (HR)		// Host router _ADR == 0
-	 *      Device (DFP0)		// Downstream port _ADR == lane 0 adapter
-	 *        Device (DR)		// Device router _ADR == 0
-	 *          Device (UFP)	// Upstream port _ADR == lane 0 adapter
-	 *      Device (DFP1)		// Downstream port _ADR == lane 0 adapter number
-	 *
-	 * At the moment we bind the host router to the corresponding
-	 * Linux device.
-	 */
-	if (tb_is_switch(dev))
-		return tb_acpi_switch_find_companion(tb_to_switch(dev));
-	if (tb_is_usb4_port_device(dev))
-		return acpi_find_child_by_adr(ACPI_COMPANION(dev->parent),
-					      tb_to_usb4_port_device(dev)->port->port);
-	return NULL;
+	return acpi_find_child_by_adr(ACPI_COMPANION(dev->parent),
+				      tb_to_usb4_port_device(dev)->port->port);
 }
 
-static void tb_acpi_setup(struct device *dev)
+static void tb_acpi_usb4_port_setup(struct device *dev)
 {
 	struct acpi_device *adev = ACPI_COMPANION(dev);
 	struct usb4_port *usb4 = tb_to_usb4_port_device(dev);
-
-	if (!adev || !usb4)
-		return;
 
 	if (acpi_check_dsm(adev->handle, &retimer_dsm_guid, 1,
 			   BIT(RETIMER_DSM_QUERY_ONLINE_STATE) |
@@ -351,19 +327,38 @@ static void tb_acpi_setup(struct device *dev)
 		usb4->can_offline = true;
 }
 
-static struct acpi_bus_type tb_acpi_bus = {
-	.name = "thunderbolt",
-	.match = tb_acpi_bus_match,
-	.find_companion = tb_acpi_find_companion,
-	.setup = tb_acpi_setup,
+/*
+ * The Thunderbolt/USB4 hierarchy looks like following:
+ *
+ * Device (NHI)
+ *   Device (HR)		// Host router _ADR == 0
+ *      Device (DFP0)		// Downstream port _ADR == lane 0 adapter
+ *        Device (DR)		// Device router _ADR == 0
+ *          Device (UFP)	// Upstream port _ADR == lane 0 adapter
+ *      Device (DFP1)		// Downstream port _ADR == lane 0 adapter number
+ *
+ * At the moment we bind the host router to the corresponding
+ * Linux device.
+ */
+static struct acpi_dev_type tb_switch_acpi_dev_type = {
+	.dev_type = &tb_switch_type,
+	.find_companion = tb_acpi_switch_find_companion,
 };
 
-int tb_acpi_init(void)
+static struct acpi_dev_type tb_usb4_port_acpi_dev_type = {
+	.dev_type = &usb4_port_device_type,
+	.find_companion = tb_acpi_usb4_port_find_companion,
+	.setup = tb_acpi_usb4_port_setup,
+};
+
+void tb_acpi_init(void)
 {
-	return register_acpi_bus_type(&tb_acpi_bus);
+	register_acpi_dev_type(&tb_switch_acpi_dev_type);
+	register_acpi_dev_type(&tb_usb4_port_acpi_dev_type);
 }
 
 void tb_acpi_exit(void)
 {
-	unregister_acpi_bus_type(&tb_acpi_bus);
+	unregister_acpi_dev_type(&tb_usb4_port_acpi_dev_type);
+	unregister_acpi_dev_type(&tb_switch_acpi_dev_type);
 }

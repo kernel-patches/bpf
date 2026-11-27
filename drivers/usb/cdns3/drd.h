@@ -160,11 +160,11 @@ struct cdns_otg_irq_regs {
  * Value of the strap pins for:
  * CDNS3:
  * 000 - no default configuration
- * 010 - Controller initiall configured as Host
+ * 010 - Controller initially configured as Host
  * 100 - Controller initially configured as Device
  * CDNSP:
  * 000 - No default configuration.
- * 010 - Controller initiall configured as Host.
+ * 010 - Controller initially configured as Host.
  * 100 - Controller initially configured as Device.
  */
 #define OTGSTS_STRAP(p)			(((p) & GENMASK(14, 12)) >> 12)

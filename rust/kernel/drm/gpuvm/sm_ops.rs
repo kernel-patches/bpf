@@ -381,7 +381,7 @@ impl<T: DriverGpuVm> GpuVm<T> {
         match p
             .sm_data
             .gpuvm
-            .data()
+            .data_mut()
             .sm_step_map(op, p.sm_data.user_context)
         {
             Ok(OpMapped { .. }) => 0,
@@ -402,7 +402,7 @@ impl<T: DriverGpuVm> GpuVm<T> {
             op: unsafe { &(*op).__bindgen_anon_1.unmap },
             _invariant: PhantomData,
         };
-        match p.gpuvm.data().sm_step_unmap(op, p.user_context) {
+        match p.gpuvm.data_mut().sm_step_unmap(op, p.user_context) {
             Ok(OpUnmapped { .. }) => 0,
             Err(err) => err.to_errno(),
         }
@@ -421,7 +421,7 @@ impl<T: DriverGpuVm> GpuVm<T> {
             op: unsafe { &(*op).__bindgen_anon_1.remap },
             _invariant: PhantomData,
         };
-        match p.gpuvm.data().sm_step_remap(op, p.user_context) {
+        match p.gpuvm.data_mut().sm_step_remap(op, p.user_context) {
             Ok(OpRemapped { .. }) => 0,
             Err(err) => err.to_errno(),
         }

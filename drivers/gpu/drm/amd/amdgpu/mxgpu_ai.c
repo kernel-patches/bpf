@@ -98,6 +98,16 @@ static int xgpu_ai_poll_ack(struct amdgpu_device *adev)
 	return -ETIME;
 }
 
+static void xgpu_ai_set_unrecov_err(struct amdgpu_device *adev)
+{
+	if (adev->virt.unrecov_err)
+		return;
+
+	adev->virt.unrecov_err = true;
+
+	dev_err(adev->dev, "VF is in an unrecoverable state. Runtime Services are halted.\n");
+}
+
 static int xgpu_ai_poll_msg(struct amdgpu_device *adev, enum idh_event event)
 {
 	int r, timeout = AI_MAILBOX_POLL_MSG_TIMEDOUT;
@@ -116,8 +126,9 @@ static int xgpu_ai_poll_msg(struct amdgpu_device *adev, enum idh_event event)
 	return -ETIME;
 }
 
-static void xgpu_ai_mailbox_trans_msg (struct amdgpu_device *adev,
-	      enum idh_request req, u32 data1, u32 data2, u32 data3) {
+static int xgpu_ai_mailbox_trans_msg (struct amdgpu_device *adev,
+	      enum idh_request req, u32 data1, u32 data2, u32 data3)
+{
 	u32 reg;
 	int r;
 	uint8_t trn;
@@ -158,6 +169,8 @@ static void xgpu_ai_mailbox_trans_msg (struct amdgpu_device *adev,
 		dev_err(adev->dev, "Doesn't get ack from pf, continue\n");
 
 	xgpu_ai_mailbox_set_valid(adev, false);
+
+	return r;
 }
 
 static int xgpu_ai_send_access_requests(struct amdgpu_device *adev,
@@ -345,7 +358,6 @@ static int xgpu_ai_mailbox_rcv_irq(struct amdgpu_device *adev,
 				   struct amdgpu_iv_entry *entry)
 {
 	enum idh_event event = xgpu_ai_mailbox_peek_msg(adev);
-	struct amdgpu_ras *ras = amdgpu_ras_get_context(adev);
 
 	switch (event) {
 	case IDH_RAS_BAD_PAGES_READY:
@@ -360,8 +372,8 @@ static int xgpu_ai_mailbox_rcv_irq(struct amdgpu_device *adev,
 		break;
 	case IDH_UNRECOV_ERR_NOTIFICATION:
 		xgpu_ai_mailbox_send_ack(adev);
-		ras->is_rma = true;
-		dev_err(adev->dev, "VF is in an unrecoverable state. Runtime Services are halted.\n");
+		xgpu_ai_set_unrecov_err(adev);
+
 		if (amdgpu_sriov_runtime(adev))
 			WARN_ONCE(!amdgpu_reset_domain_schedule(adev->reset_domain,
 					&adev->virt.flr_work),

@@ -1659,18 +1659,6 @@ struct drm_connector_funcs {
 	int (*dpms)(struct drm_connector *connector, int mode);
 
 	/**
-	 * @reset:
-	 *
-	 * Reset connector hardware and software state to off. This function isn't
-	 * called by the core directly, only through drm_mode_config_reset().
-	 * It's not a helper hook only for historical reasons.
-	 *
-	 * Atomic drivers can use drm_atomic_helper_connector_reset() to reset
-	 * atomic state using this hook.
-	 */
-	void (*reset)(struct drm_connector *connector);
-
-	/**
 	 * @detect:
 	 *
 	 * Check to see if anything is attached to the connector. The parameter
@@ -2283,6 +2271,61 @@ struct drm_connector_cec {
 };
 
 /**
+ * struct drm_writeback_connector - DRM writeback connector
+ */
+struct drm_writeback_connector {
+	/**
+	 * @pixel_formats_blob_ptr:
+	 *
+	 * DRM blob property data for the pixel formats list on writeback
+	 * connectors
+	 * See also drm_writeback_connector_init()
+	 */
+	struct drm_property_blob *pixel_formats_blob_ptr;
+
+	/** @job_lock: Protects job_queue */
+	spinlock_t job_lock;
+
+	/**
+	 * @job_queue:
+	 *
+	 * Holds a list of a connector's writeback jobs; the last item is the
+	 * most recent. The first item may be either waiting for the hardware
+	 * to begin writing, or currently being written.
+	 *
+	 * See also: drm_writeback_queue_job() and
+	 * drm_writeback_signal_completion()
+	 */
+	struct list_head job_queue;
+
+	/**
+	 * @fence_context:
+	 *
+	 * timeline context used for fence operations.
+	 */
+	unsigned int fence_context;
+	/**
+	 * @fence_lock:
+	 *
+	 * spinlock to protect the fences in the fence_context.
+	 */
+	spinlock_t fence_lock;
+	/**
+	 * @fence_seqno:
+	 *
+	 * Seqno variable used as monotonic counter for the fences
+	 * created on the connector's timeline.
+	 */
+	unsigned long fence_seqno;
+	/**
+	 * @timeline_name:
+	 *
+	 * The name of the connector's fence timeline.
+	 */
+	char timeline_name[32];
+};
+
+/**
  * struct drm_connector - central DRM connector control structure
  *
  * Each connector may be connected to one or more CRTCs, or may be clonable by
@@ -2701,9 +2744,26 @@ struct drm_connector {
 	struct llist_node free_node;
 
 	/**
-	 * @hdmi: HDMI-related variable and properties.
+	 * @wb_initialized:
+	 *
+	 * Set when @writeback has been initialized through
+	 * __drm_writeback_connector_init(). A plain &struct drm_connector may
+	 * be created with DRM_MODE_CONNECTOR_WRITEBACK without being a
+	 * writeback connector, so drm_connector_cleanup() keys the writeback
+	 * teardown off this flag rather than the connector type.
 	 */
-	struct drm_connector_hdmi hdmi;
+	bool wb_initialized;
+
+	union {
+		/**
+		 * @hdmi: HDMI-related variable and properties.
+		 */
+		struct drm_connector_hdmi hdmi;
+		/**
+		 * @writeback: Writeback related valriables.
+		 */
+		struct drm_writeback_connector writeback;
+	};
 
 	/**
 	 * @hdmi_audio: HDMI codec properties and non-DRM state.

@@ -252,13 +252,16 @@ int ubifs_xattr_set(struct inode *host, const char *name, const void *value,
 {
 	struct inode *inode;
 	struct ubifs_info *c = host->i_sb->s_fs_info;
-	struct fscrypt_name nm = { .disk_name = FSTR_INIT((char *)name, strlen(name))};
+	struct fscrypt_name nm = { .disk_name = FSTR((char *)name) };
 	struct ubifs_dent_node *xent;
 	union ubifs_key key;
 	int err;
 
 	if (check_lock)
 		ubifs_assert(c, inode_is_locked(host));
+
+	if (c->ro_error)
+		return -EROFS;
 
 	if (size > UBIFS_MAX_INO_DATA)
 		return -ERANGE;
@@ -315,7 +318,7 @@ ssize_t ubifs_xattr_get(struct inode *host, const char *name, void *buf,
 {
 	struct inode *inode;
 	struct ubifs_info *c = host->i_sb->s_fs_info;
-	struct fscrypt_name nm = { .disk_name = FSTR_INIT((char *)name, strlen(name))};
+	struct fscrypt_name nm = { .disk_name = FSTR((char *)name) };
 	struct ubifs_inode *ui;
 	struct ubifs_dent_node *xent;
 	union ubifs_key key;
@@ -557,12 +560,15 @@ static int ubifs_xattr_remove(struct inode *host, const char *name)
 {
 	struct inode *inode;
 	struct ubifs_info *c = host->i_sb->s_fs_info;
-	struct fscrypt_name nm = { .disk_name = FSTR_INIT((char *)name, strlen(name))};
+	struct fscrypt_name nm = { .disk_name = FSTR((char *)name) };
 	struct ubifs_dent_node *xent;
 	union ubifs_key key;
 	int err;
 
 	ubifs_assert(c, inode_is_locked(host));
+
+	if (c->ro_error)
+		return -EROFS;
 
 	if (fname_len(&nm) > UBIFS_MAX_NLEN)
 		return -ENAMETOOLONG;

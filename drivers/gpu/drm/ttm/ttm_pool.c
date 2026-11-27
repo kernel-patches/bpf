@@ -421,6 +421,7 @@ static void ttm_pool_type_fini(struct ttm_pool_type *pt)
 
 	list_lru_walk(&pt->pages, pool_move_to_dispose_list, &dispose, LONG_MAX);
 	ttm_pool_dispose_list(pt, &dispose);
+	list_lru_destroy(&pt->pages);
 }
 
 /* Return the pool_type to use for the given caching and order */
@@ -1485,11 +1486,9 @@ static inline u64 ttm_get_node_memory_size(int nid)
 /**
  * ttm_pool_mgr_init - Initialize globals
  *
- * @num_pages: default number of pages
- *
  * Initialize the global locks and lists for the MM shrinker.
  */
-int ttm_pool_mgr_init(unsigned long num_pages)
+int ttm_pool_mgr_init(void)
 {
 	unsigned int i;
 

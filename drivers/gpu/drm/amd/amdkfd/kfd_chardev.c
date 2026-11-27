@@ -3227,10 +3227,7 @@ static int kfd_ioctl_set_debug_trap(struct file *filep, struct kfd_process *p, v
 
 	switch (args->op) {
 	case KFD_IOC_DBG_TRAP_ENABLE:
-		if (target != p)
-			target->debugger_process = p;
-
-		r = kfd_dbg_trap_enable(target,
+		r = kfd_dbg_trap_enable(target, p,
 					args->enable.dbg_fd,
 					(void __user *)args->enable.rinfo_ptr,
 					&args->enable.rinfo_size);
@@ -3239,7 +3236,7 @@ static int kfd_ioctl_set_debug_trap(struct file *filep, struct kfd_process *p, v
 
 		break;
 	case KFD_IOC_DBG_TRAP_DISABLE:
-		r = kfd_dbg_trap_disable(target);
+		r = kfd_dbg_trap_disable(target, true);
 		break;
 	case KFD_IOC_DBG_TRAP_SEND_RUNTIME_EVENT:
 		r = kfd_dbg_send_exception_to_runtime(target,
@@ -3396,26 +3393,36 @@ static inline int profile_lock_device(struct kfd_process *p,
 	struct kfd_dev *kfd;
 	int status = -EINVAL;
 	struct amdgpu_ptl *ptl;
+	int r = 0;
 
 	if (!p)
 		return -EINVAL;
 
 	mutex_lock(&p->mutex);
 	pdd = kfd_process_device_data_by_id(p, gpu_id);
+	/* Runtime PM reference only: the caller may have no VM on this GPU yet */
+	if (pdd && op == 1)
+		r = kfd_process_device_runtime_get(pdd);
 	mutex_unlock(&p->mutex);
 
+	if (r)
+		return r;
 	if (!pdd || !pdd->dev || !pdd->dev->kfd)
 		return -EINVAL;
 
 	kfd = pdd->dev->kfd;
 	ptl = &pdd->dev->adev->psp.ptl;
 
+	/* Before profiler_lock, which reset takes in kfd_resume() */
+	down_read(&kfd->adev->reset_domain->sem);
 	mutex_lock(&kfd->profiler_lock);
 	if (op == 1) {
 		if (!kfd->profiler_process) {
 			kfd->profiler_process = p;
+			amdgpu_gfx_perfmon_clk_override(kfd->adev, true);
 			status = 0;
 			mutex_unlock(&kfd->profiler_lock);
+			up_read(&kfd->adev->reset_domain->sem);
 			if (ptl->hw_supported_state == AMDGPU_PTL_HW_SUPPORTED) {
 				status = kfd_ptl_disable_request(pdd, p);
 				if (status != 0)
@@ -3431,8 +3438,10 @@ static inline int profile_lock_device(struct kfd_process *p,
 		}
 	} else if (op == 0 && kfd->profiler_process == p) {
 		kfd->profiler_process = NULL;
+		amdgpu_gfx_perfmon_clk_override(kfd->adev, false);
 		status = 0;
 		mutex_unlock(&kfd->profiler_lock);
+		up_read(&kfd->adev->reset_domain->sem);
 
 		if (ptl->hw_supported_state == AMDGPU_PTL_HW_SUPPORTED) {
 			status = kfd_ptl_disable_release(pdd, p);
@@ -3444,8 +3453,50 @@ static inline int profile_lock_device(struct kfd_process *p,
 		return status;
 	}
 	mutex_unlock(&kfd->profiler_lock);
+	up_read(&kfd->adev->reset_domain->sem);
 
 	return status;
+}
+
+/*
+ * Take or drop this process's dispatch-mode perfmon clock hold. Taking it again
+ * is a no-op. Dropping returns -ENOENT without a hold, and for the device lock
+ * holder, whose lock == 0 must still unlock.
+ */
+static int kfd_profiler_perfmon_clk(struct kfd_process *p, uint32_t gpu_id,
+				    bool enable)
+{
+	struct kfd_process_device *pdd;
+	struct kfd_dev *kfd;
+	int r = 0;
+
+	mutex_lock(&p->mutex);
+	pdd = kfd_process_device_data_by_id(p, gpu_id);
+	/* Runtime PM reference only: the caller may have no VM on this GPU yet */
+	if (pdd && enable)
+		r = kfd_process_device_runtime_get(pdd);
+	mutex_unlock(&p->mutex);
+
+	if (r)
+		return r;
+	if (!pdd || !pdd->dev || !pdd->dev->kfd)
+		return -EINVAL;
+
+	kfd = pdd->dev->kfd;
+
+	/* Before profiler_lock, which reset takes in kfd_resume() */
+	down_read(&kfd->adev->reset_domain->sem);
+	mutex_lock(&kfd->profiler_lock);
+	if (!enable && (!pdd->perfmon_clk_req || kfd->profiler_process == p))
+		r = -ENOENT;
+	else if (pdd->perfmon_clk_req != enable)
+		r = amdgpu_gfx_perfmon_clk_override(kfd->adev, enable);
+	if (!r)
+		pdd->perfmon_clk_req = enable;
+	mutex_unlock(&kfd->profiler_lock);
+	up_read(&kfd->adev->reset_domain->sem);
+
+	return r;
 }
 
 static inline int kfd_profiler_pmc(struct kfd_process *p,
@@ -3454,6 +3505,16 @@ static inline int kfd_profiler_pmc(struct kfd_process *p,
 	struct kfd_process_device *pdd;
 	struct device_queue_manager *dqm;
 	int status;
+
+	if (!args->lock) {
+		/* Dispatch mode: perfmon clock only, no lock, no CAP_PERFMON needed */
+		if (args->perfcount_enable)
+			return kfd_profiler_perfmon_clk(p, args->gpu_id, true);
+
+		/* Drop a dispatch-mode hold if there is one, else unlock as before */
+		if (!kfd_profiler_perfmon_clk(p, args->gpu_id, false))
+			return 0;
+	}
 
 	/* Check if we have the correct permissions. */
 	if (!perfmon_capable())

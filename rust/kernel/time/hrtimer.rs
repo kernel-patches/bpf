@@ -71,6 +71,8 @@
 //! issue the `start` operation while the timer is in the **started** state. In
 //! this case the `start` operation is equivalent to the `restart` operation.
 //!
+//! A timer is **active** if it is either in the **started** or **running** states.
+//!
 //! # Examples
 //!
 //! ## Using an intrusive timer living in a [`Box`]
@@ -521,8 +523,7 @@ impl<T> HrTimer<T> {
     /// # Safety
     ///
     /// - `self_ptr` must point to a valid `Self`.
-    /// - The caller must either have exclusive access to the data pointed at by `self_ptr`, or be
-    ///   within the context of the timer callback.
+    /// - The caller must have exclusive access to the data pointed at by `self_ptr`.
     #[inline]
     unsafe fn raw_forward(self_ptr: *mut Self, now: HrTimerInstant<T>, interval: Delta) -> u64
     where
@@ -571,27 +572,66 @@ impl<T> HrTimer<T> {
         self.forward(HrTimerInstant::<T>::now(), interval)
     }
 
-    /// Return the time expiry for this [`HrTimer`].
+    /// Query the state of the timer.
     ///
-    /// This value should only be used as a snapshot, as the actual expiry time could change after
-    /// this function is called.
-    pub fn expires(&self) -> HrTimerInstant<T>
-    where
-        T: HasHrTimer<T>,
-    {
-        // SAFETY: `self` is an immutable reference and thus always points to a valid `HrTimer`.
-        let c_timer_ptr = unsafe { HrTimer::raw_get(self) };
-
-        // SAFETY:
-        // - Timers cannot have negative ktime_t values as their expiration time.
-        // - There's no actual locking here, a racy read is fine and expected
-        unsafe {
-            Instant::from_ktime(
-                // This `read_volatile` is intended to correspond to a READ_ONCE call.
-                // FIXME(read_once): Replace with `read_once` when available on the Rust side.
-                core::ptr::read_volatile(&raw const ((*c_timer_ptr).node.expires)),
-            )
-        }
+    /// Returns [`true`] if the timer is in the started or running states.
+    ///
+    /// This method synchronizes internally and does not require exclusive access to the timer.
+    ///
+    /// The returned value is a snapshot. A concurrent event can change the state of the timer
+    /// right after this method returns, so callers that need the state to be stable must serialize
+    /// against such events by other means.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kernel::{
+    /// #     impl_has_hr_timer,
+    /// #     prelude::*,
+    /// #     time::{
+    /// #         hrtimer::{
+    /// #             HasHrTimer, HrTimer, HrTimerCallback, HrTimerCallbackContext,
+    /// #             HrTimerRestart, RelativeMode,
+    /// #         },
+    /// #         Monotonic,
+    /// #     },
+    /// # };
+    /// # use pin_init::stack_pin_init;
+    /// #[pin_data]
+    /// struct ExampleTimer {
+    ///     #[pin]
+    ///     timer: HrTimer<Self>,
+    /// }
+    ///
+    /// impl ExampleTimer {
+    ///     fn new() -> impl PinInit<Self> {
+    ///         pin_init!(Self { timer <- HrTimer::new() })
+    ///     }
+    /// }
+    ///
+    /// impl HrTimerCallback for ExampleTimer {
+    ///     type Pointer<'a> = Pin<&'a Self>;
+    ///     fn run(_this: Pin<&Self>, _ctx: HrTimerCallbackContext<'_, Self>) -> HrTimerRestart {
+    ///         HrTimerRestart::NoRestart
+    ///     }
+    /// }
+    ///
+    /// impl_has_hr_timer! {
+    ///     impl HasHrTimer<Self> for ExampleTimer {
+    ///         mode: RelativeMode<Monotonic>, field: self.timer
+    ///     }
+    /// }
+    ///
+    /// stack_pin_init!(let has_timer = ExampleTimer::new());
+    /// assert!(!has_timer.timer.active());
+    /// # Ok::<(), kernel::error::Error>(())
+    /// ```
+    #[inline]
+    pub fn active(&self) -> bool {
+        // SAFETY: By type invariant, `self.timer` is valid. `hrtimer_active`
+        // synchronizes internally and is safe to call without exclusive
+        // access to the timer.
+        unsafe { bindings::hrtimer_active(self.timer.get()) }
     }
 }
 
@@ -904,7 +944,7 @@ pub trait HrTimerMode: private::Sealed {
     /// The C representation of hrtimer mode.
     const C_MODE: bindings::hrtimer_mode;
 
-    /// Type representing the clock source.
+    /// The clock to be used by the timer.
     type Clock: ClockId;
 
     /// Type representing the expiration specification (absolute or relative time).
@@ -1060,13 +1100,25 @@ impl<'a, T: HasHrTimer<T>> HrTimerCallbackContext<'a, T> {
 
     /// Conditionally forward the timer.
     ///
-    /// This function is identical to [`HrTimer::forward()`] except that it may only be used from
-    /// within the context of a [`HrTimer`] callback.
+    /// This function does the same as [`HrTimer::forward()`], but it may only be used from within
+    /// the context of a [`HrTimer`] callback, and it is safe against a concurrent start operation.
+    /// If the timer was started by a concurrent start operation, the expiry is not changed, this
+    /// function returns 0, and the expiry set by the start operation is used.
     pub fn forward(&mut self, now: HrTimerInstant<T>, interval: Delta) -> u64 {
+        // SAFETY: By our type invariants, `self.0` always points to a valid `HrTimer<T>`.
+        let c_timer_ptr = unsafe { HrTimer::<T>::raw_get(self.0.as_ptr()) };
+
         // SAFETY:
-        // - We are guaranteed to be within the context of a timer callback by our type invariants
-        // - By our type invariants, `self.0` always points to a valid `HrTimer<T>`
-        unsafe { HrTimer::<T>::raw_forward(self.0.as_ptr(), now, interval) }
+        // - `c_timer_ptr` is initialized and valid.
+        // - By our type invariants, we are within the context of the timer callback, as
+        //   `hrtimer_forward_safe_from_callback()` requires.
+        unsafe {
+            bindings::hrtimer_forward_safe_from_callback(
+                c_timer_ptr,
+                now.as_nanos(),
+                interval.as_nanos(),
+            )
+        }
     }
 
     /// Conditionally forward the timer.

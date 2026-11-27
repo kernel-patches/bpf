@@ -2972,11 +2972,7 @@ static void intel_tfa_pmu_enable_all(int added)
 
 static inline u64 intel_pmu_get_status(void)
 {
-	u64 status;
-
-	rdmsrq(MSR_CORE_PERF_GLOBAL_STATUS, status);
-
-	return status;
+	return rdmsrq(MSR_CORE_PERF_GLOBAL_STATUS);
 }
 
 static inline void intel_pmu_ack_status(u64 ack)
@@ -3533,7 +3529,7 @@ static void intel_pmu_enable_event_ext(struct perf_event *event)
 		else
 			new.thresh = ARCH_PEBS_THRESH_SINGLE;
 
-		rdmsrq(MSR_IA32_PEBS_INDEX, old.whole);
+		old.whole = rdmsrq(MSR_IA32_PEBS_INDEX);
 		if (new.thresh != old.thresh || !old.en) {
 			if (old.thresh == ARCH_PEBS_THRESH_MULTI && old.wr > 0) {
 				/*
@@ -3819,7 +3815,7 @@ static int x86_pmu_handle_guest_pebs(struct pt_regs *regs,
 
 static int handle_pmi_common(struct pt_regs *regs, u64 status)
 {
-	struct perf_sample_data data;
+	struct perf_sample_data data __uninitialized; /* optimization */
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 	int bit;
 	int handled = 0;
@@ -4776,6 +4772,16 @@ static int intel_pmu_bts_config(struct perf_event *event)
 
 		/* BTS is not allowed for precise events. */
 		if (attr->precise_ip)
+			return -EOPNOTSUPP;
+
+		/*
+		 * BTS samples are built from the BTS buffer when it is drained,
+		 * not from the registers of an interrupted context, and
+		 * intel_pmu_drain_bts_buffer() does not provide the registers in
+		 * the struct x86_perf_regs layout that extended register sampling
+		 * relies on.
+		 */
+		if (event_has_extended_regs(event) || event_has_simd_regs(event))
 			return -EOPNOTSUPP;
 
 		/* disallow bts if conflicting events are present */
@@ -6367,8 +6373,7 @@ static void intel_update_pmu_caps(struct pmu *pmu)
 		update_pmu_cap_from_perfmonext(pmu);
 
 	if (is_hybrid() && this_cpu_has(X86_FEATURE_PDCM)) {
-		rdmsrq(MSR_IA32_PERF_CAPABILITIES,
-		       hybrid(pmu, intel_cap).capabilities);
+		hybrid(pmu, intel_cap).capabilities = rdmsrq(MSR_IA32_PERF_CAPABILITIES);
 
 		/*
 		 * Restore perf_metrics on platforms with broken
@@ -6525,7 +6530,7 @@ static void intel_pmu_cpu_starting(int cpu)
 	if (!is_hybrid() && x86_pmu.intel_cap.perf_metrics) {
 		union perf_capabilities perf_cap;
 
-		rdmsrq(MSR_IA32_PERF_CAPABILITIES, perf_cap.capabilities);
+		perf_cap.capabilities = rdmsrq(MSR_IA32_PERF_CAPABILITIES);
 		if (!perf_cap.perf_metrics) {
 			x86_pmu.intel_cap.perf_metrics = 0;
 			x86_pmu.intel_ctrl &= ~GLOBAL_CTRL_EN_PERF_METRICS;
@@ -6968,7 +6973,7 @@ static bool check_msr(unsigned long msr, u64 mask)
 		return false;
 
 	/*
-	 * Quirk only affects validation in wrmsr(), so wrmsrq()'s value
+	 * Quirk only affects validation in wrmsrq(), so wrmsrq()'s value
 	 * should equal rdmsrq()'s even with the quirk.
 	 */
 	if (val_new != val_tmp)
@@ -8104,7 +8109,7 @@ __init int intel_pmu_init(void)
 	if (boot_cpu_has(X86_FEATURE_PDCM)) {
 		u64 capabilities;
 
-		rdmsrq(MSR_IA32_PERF_CAPABILITIES, capabilities);
+		capabilities = rdmsrq(MSR_IA32_PERF_CAPABILITIES);
 		x86_pmu.intel_cap.capabilities = capabilities;
 	}
 

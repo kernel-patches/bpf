@@ -1184,7 +1184,7 @@ int intel_pmu_drain_bts_buffer(void)
 	struct bts_record *at, *base, *top;
 	struct perf_output_handle handle;
 	struct perf_event_header header;
-	struct perf_sample_data data;
+	struct perf_sample_data data __uninitialized; /* optimization */
 	unsigned long skip = 0;
 	struct pt_regs regs;
 
@@ -1265,7 +1265,7 @@ unlock:
 void intel_pmu_drain_pebs_buffer(void)
 {
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
-	struct perf_sample_data data;
+	struct perf_sample_data data __uninitialized; /* optimization */
 
 	WARN_ON_ONCE(cpuc->enabled);
 
@@ -3356,7 +3356,7 @@ static int intel_pmu_drain_arch_pebs(struct pt_regs *iregs,
 	bool corrupted = false;
 	u64 mask;
 
-	rdmsrq(MSR_IA32_PEBS_INDEX, index.whole);
+	index.whole = rdmsrq(MSR_IA32_PEBS_INDEX);
 
 	if (unlikely(!index.wr)) {
 		intel_pmu_pebs_event_update_no_drain(cpuc, X86_PMC_IDX_MAX);

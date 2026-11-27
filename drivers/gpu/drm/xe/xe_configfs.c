@@ -85,6 +85,13 @@
  *
  * This attribute can only be set before binding to the device.
  *
+ * Force OCODE load:
+ * -----------------
+ *
+ * With CONFIG_DRM_XE_DEBUG enabled, force an OCODE load at probe and resume
+ * even if OCODE is already running. This attribute can only be set before
+ * binding.
+ *
  * Allowed GT types:
  * -----------------
  *
@@ -302,6 +309,7 @@ struct xe_config_group_device {
 		struct wa_bb ctx_restore_post_bb[XE_ENGINE_CLASS_MAX];
 		struct wa_bb ctx_restore_mid_bb[XE_ENGINE_CLASS_MAX];
 		bool survivability_mode;
+		bool force_ocode_load;
 		bool enable_psmi;
 		bool enable_multi_queue;
 		bool disable_vram_page_offline;
@@ -324,6 +332,7 @@ static const struct xe_config_device device_defaults = {
 	.engines_allowed = U64_MAX,
 	.migrate_ulls_period_ms = 5,
 	.survivability_mode = false,
+	.force_ocode_load = false,
 	.enable_psmi = false,
 	.enable_multi_queue = true,
 	.disable_vram_page_offline = false,
@@ -425,6 +434,32 @@ static ssize_t survivability_mode_store(struct config_item *item, const char *pa
 		return -EBUSY;
 
 	dev->config.survivability_mode = survivability_mode;
+
+	return len;
+}
+
+static ssize_t force_ocode_load_show(struct config_item *item, char *page)
+{
+	struct xe_config_device *dev = to_xe_config_device(item);
+
+	return sprintf(page, "%d\n", dev->force_ocode_load);
+}
+
+static ssize_t force_ocode_load_store(struct config_item *item, const char *page, size_t len)
+{
+	struct xe_config_group_device *dev = to_xe_config_group_device(item);
+	bool force_load;
+	int ret;
+
+	ret = kstrtobool(page, &force_load);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&dev->lock);
+	if (is_bound(dev))
+		return -EBUSY;
+
+	dev->config.force_ocode_load = force_load;
 
 	return len;
 }
@@ -946,6 +981,7 @@ CONFIGFS_ATTR(, disable_vram_page_offline);
 CONFIGFS_ATTR(, engines_allowed);
 CONFIGFS_ATTR(, gt_types_allowed);
 CONFIGFS_ATTR(, survivability_mode);
+CONFIGFS_ATTR(, force_ocode_load);
 
 static struct configfs_attribute *xe_config_device_attrs[] = {
 	&attr_ctx_restore_mid_bb,
@@ -957,6 +993,7 @@ static struct configfs_attribute *xe_config_device_attrs[] = {
 	&attr_engines_allowed,
 	&attr_gt_types_allowed,
 	&attr_survivability_mode,
+	&attr_force_ocode_load,
 	NULL,
 };
 
@@ -979,6 +1016,9 @@ static bool xe_config_device_is_visible(struct config_item *item,
 					const struct configfs_attribute *attr, int n)
 {
 	struct xe_config_group_device *dev = to_xe_config_group_device(item);
+
+	if (attr == &attr_force_ocode_load && !IS_ENABLED(CONFIG_DRM_XE_DEBUG))
+		return false;
 
 	if (attr == &attr_survivability_mode) {
 		if (!dev->desc->is_dgfx || dev->desc->platform < XE_BATTLEMAGE)
@@ -1240,6 +1280,7 @@ static void dump_custom_dev_config(struct pci_dev *pdev,
 	PRI_CUSTOM_ATTR("%d", enable_psmi);
 	PRI_CUSTOM_ATTR("%d", disable_vram_page_offline);
 	PRI_CUSTOM_ATTR("%d", survivability_mode);
+	PRI_CUSTOM_ATTR("%d", force_ocode_load);
 	PRI_CUSTOM_ATTR("%u", sriov.admin_only_pf);
 
 #undef PRI_CUSTOM_ATTR
@@ -1286,6 +1327,23 @@ bool xe_configfs_get_survivability_mode(struct pci_dev *pdev)
 	config_group_put(&dev->group);
 
 	return mode;
+}
+
+bool xe_configfs_get_force_ocode_load(struct pci_dev *pdev)
+{
+	struct xe_config_group_device *dev = find_xe_config_group_device(pdev);
+	bool force_load;
+
+	if (!dev || !IS_ENABLED(CONFIG_DRM_XE_DEBUG)) {
+		if (dev)
+			config_group_put(&dev->group);
+		return false;
+	}
+
+	force_load = dev->config.force_ocode_load;
+	config_group_put(&dev->group);
+
+	return force_load;
 }
 
 static u64 get_gt_types_allowed(struct pci_dev *pdev)

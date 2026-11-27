@@ -405,8 +405,7 @@ static inline int omap_nand_dma_transfer(struct nand_chip *chip,
 	if (!tx)
 		goto out_copy_unmap;
 
-	tx->callback = omap_nand_dma_callback;
-	tx->callback_param = &info->comp;
+	dmaengine_desc_set_callback(tx, omap_nand_dma_callback, NULL, &info->comp);
 	dmaengine_submit(tx);
 
 	init_completion(&info->comp);
@@ -417,9 +416,11 @@ static inline int omap_nand_dma_transfer(struct nand_chip *chip,
 	/*  configure and start prefetch transfer */
 	ret = omap_prefetch_enable(info->gpmc_cs,
 		PREFETCH_FIFOTHRESHOLD_MAX, 0x1, len, is_write, info);
-	if (ret)
+	if (ret) {
 		/* PFPW engine is busy, use cpu copy method */
+		dmaengine_terminate_sync(info->dma);
 		goto out_copy_unmap;
+	}
 
 	wait_for_completion(&info->comp);
 	tim = 0;
@@ -1669,6 +1670,11 @@ static const char * const nand_xfer_types[] = {
 	[NAND_OMAP_PREFETCH_IRQ] = "prefetch-irq",
 };
 
+static void omap_put_elm_node(void *data)
+{
+	of_node_put(data);
+}
+
 static int omap_get_dt_info(struct device *dev, struct omap_nand_info *info)
 {
 	struct device_node *child = dev->of_node;
@@ -1690,6 +1696,10 @@ static int omap_get_dt_info(struct device *dev, struct omap_nand_info *info)
 		if (!info->elm_of_node)
 			dev_dbg(dev, "ti,elm-id not in DT\n");
 	}
+
+	i = devm_add_action_or_reset(dev, omap_put_elm_node, info->elm_of_node);
+	if (i)
+		return i;
 
 	/* select ecc-scheme for NAND */
 	if (of_property_read_string(child, "ti,nand-ecc-opt", &s)) {

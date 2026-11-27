@@ -245,6 +245,13 @@ static struct attribute *usnic_ib_qpn_default_attrs[] = {
 ATTRIBUTE_GROUPS(usnic_ib_qpn_default);
 
 static struct kobj_type usnic_ib_qpn_type = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix):
+	 * usnic_ib_destroy_qp() calls kobject_put(&qp_grp->kobj) via
+	 * usnic_ib_sysfs_qpn_remove() and RDMA core immediately frees qp_grp
+	 * without waiting for final kobject cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &usnic_ib_qpn_sysfs_ops,
 	.default_groups = usnic_ib_qpn_default_groups,
 };

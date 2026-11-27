@@ -305,7 +305,7 @@ pvr_queue_fence_init(struct dma_fence *f,
 	INIT_WORK(&fence->release_work, pvr_queue_fence_release_work);
 	dma_fence_init(&fence->base, fence_ops,
 		       &fence_ctx->lock, fence_ctx->id,
-		       atomic_inc_return(&fence_ctx->seqno));
+		       atomic_inc_return(&fence_ctx->seqno), 0);
 }
 
 /**

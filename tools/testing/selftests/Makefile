@@ -85,6 +85,7 @@ TARGETS += mount_setattr
 TARGETS += move_mount_set_group
 TARGETS += mqueue
 TARGETS += mseal_system_mappings
+TARGETS += namespaces
 TARGETS += nci
 TARGETS += net
 TARGETS += net/af_unix
@@ -108,6 +109,7 @@ TARGETS += pidfd
 TARGETS += pid_namespace
 TARGETS += pipe
 TARGETS += power_supply
+TARGETS += powercap
 TARGETS += powerpc
 TARGETS += prctl
 TARGETS += proc
@@ -159,7 +161,7 @@ TARGETS_HOTPLUG = cpu-hotplug
 TARGETS_HOTPLUG += memory-hotplug
 
 # Networking tests want the net/lib target, include it automatically
-ifneq ($(filter net drivers/net drivers/net/hw,$(TARGETS)),)
+ifneq ($(filter net drivers/net drivers/net/hw drivers/net/perf,$(TARGETS)),)
 ifeq ($(filter net/lib,$(TARGETS)),)
 	INSTALL_DEP_TARGETS := net/lib
 endif

@@ -13,10 +13,18 @@ $(obj)/$(devicetable-offsets-file): $(obj)/devicetable-offsets.s FORCE
 
 targets += $(devicetable-offsets-file) devicetable-offsets.s
 
+module-offsets-file := module-offsets.h
+
+$(obj)/$(module-offsets-file): $(obj)/module-offsets.s FORCE
+	$(call filechk,offsets,__MODULE_OFFSETS_H__)
+
+targets += $(module-offsets-file) module-offsets.s
+
 # dependencies on generated files need to be listed explicitly
 
 $(obj)/modpost.o $(obj)/file2alias.o $(obj)/sumversion.o $(obj)/symsearch.o: $(obj)/elfconfig.h
 $(obj)/file2alias.o: $(obj)/$(devicetable-offsets-file)
+$(obj)/modpost.o: $(obj)/$(module-offsets-file)
 
 quiet_cmd_elfconfig = MKELF   $@
       cmd_elfconfig = $(obj)/mk_elfconfig < $< > $@

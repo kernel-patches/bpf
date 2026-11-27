@@ -134,7 +134,7 @@ static const struct dmi_system_id acpi_rev_dmi_table[] __initconst = {
 		},
 	},
 #endif
-	{}
+	{ }
 };
 
 #endif /* CONFIG_DMI */

@@ -1098,6 +1098,47 @@ static int mark_changed_functions(struct elfs *e)
 	return !changed ? 1 : 0;
 }
 
+static void mark_traceable_functions(struct elf *elf)
+{
+	struct section *sec;
+	struct reloc *reloc;
+
+	sec = find_section_by_name(elf, "__mcount_loc");
+	if (!sec || !sec->rsec)
+		return;
+
+	for_each_reloc(sec->rsec, reloc) {
+		struct symbol *func;
+
+		func = find_func_containing(reloc->sym->sec,
+					    reloc->sym->offset + reloc_addend(reloc));
+		if (func)
+			func->traceable = 1;
+	}
+}
+
+/*
+ * Livepatch redirects functions through their ftrace call sites, so a function
+ * without one can't be patched.
+ */
+static int validate_traceable_functions(struct elfs *e)
+{
+	struct symbol *patched_sym;
+	bool error = false;
+
+	mark_traceable_functions(e->orig);
+
+	for_each_sym(e->patched, patched_sym) {
+		if (!patched_sym->changed || patched_sym->twin->traceable)
+			continue;
+
+		ERROR("%s: no ftrace call site, can't patch", patched_sym->twin->name);
+		error = true;
+	}
+
+	return error ? -1 : 0;
+}
+
 static int clone_included_functions(struct elfs *e)
 {
 	struct symbol *patched_sym;
@@ -2259,6 +2300,9 @@ int cmd_klp_diff(int argc, const char **argv)
 		return -1;
 	if (ret > 0)
 		return 0;
+
+	if (validate_traceable_functions(&e))
+		return -1;
 
 	e.out = elf_create_file(&e.orig->ehdr, argv[2]);
 	if (!e.out)

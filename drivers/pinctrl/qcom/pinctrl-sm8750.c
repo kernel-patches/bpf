@@ -584,6 +584,7 @@ enum sm8750_functions {
 	msm_mux_gcc_gp3,
 	msm_mux_gnss_adc0,
 	msm_mux_gnss_adc1,
+	msm_mux_gp_mn,
 	msm_mux_i2chub0_se0,
 	msm_mux_i2chub0_se1,
 	msm_mux_i2chub0_se2,
@@ -873,6 +874,10 @@ static const char *const gnss_adc0_groups[] = {
 
 static const char *const gnss_adc1_groups[] = {
 	"gpio77", "gpio99",
+};
+
+static const char *const gp_mn_groups[] = {
+	"gpio53",
 };
 
 static const char *const i2chub0_se0_groups[] = {
@@ -1322,6 +1327,7 @@ static const struct pinfunction sm8750_functions[] = {
 	MSM_PIN_FUNCTION(gcc_gp3),
 	MSM_PIN_FUNCTION(gnss_adc0),
 	MSM_PIN_FUNCTION(gnss_adc1),
+	MSM_PIN_FUNCTION(gp_mn),
 	MSM_PIN_FUNCTION(i2chub0_se0),
 	MSM_PIN_FUNCTION(i2chub0_se1),
 	MSM_PIN_FUNCTION(i2chub0_se2),
@@ -1485,7 +1491,7 @@ static const struct msm_pingroup sm8750_groups[] = {
 	[50] = PINGROUP(50, qup1_se4, aoss_cti, sdc4_clk, _, _, _, _, _, _, _, _),
 	[51] = PINGROUP(51, qup1_se4, aoss_cti, sdc41, _, _, _, _, _, _, _, _),
 	[52] = PINGROUP(52, qup1_se5, qspi0, ddr_pxi2, _, _, _, _, _, _, _, _),
-	[53] = PINGROUP(53, qup1_se5, qspi1, _, ddr_pxi3, _, _, _, _, _, _, _),
+	[53] = PINGROUP(53, qup1_se5, qspi1, gp_mn, ddr_pxi3, _, _, _, _, _, _, _),
 	[54] = PINGROUP(54, qup1_se5, qspi_clk, uim1_data, ddr_pxi0, _, _, _, _, _, _, _),
 	[55] = PINGROUP(55, qup1_se5, qspi2, uim1_clk, ddr_pxi0, _, _, _, _, _, _, _),
 	[56] = PINGROUP(56, qup1_se6, qspi3, uim1_reset, _, _, _, _, _, _, _, _),

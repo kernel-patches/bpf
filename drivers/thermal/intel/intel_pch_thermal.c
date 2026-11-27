@@ -24,6 +24,7 @@
 #define PCH_THERMAL_DID_WPT	0x9CA4 /* Wildcat Point */
 #define PCH_THERMAL_DID_SKL	0x9D31 /* Skylake PCH */
 #define PCH_THERMAL_DID_SKL_H	0xA131 /* Skylake PCH 100 series */
+#define PCH_THERMAL_DID_KBL_H	0xA2B1 /* Kaby Lake PCH 200 series */
 #define PCH_THERMAL_DID_CNL	0x9Df9 /* CNL PCH */
 #define PCH_THERMAL_DID_CNL_H	0xA379 /* CNL-H PCH */
 #define PCH_THERMAL_DID_CNL_LP	0x02F9 /* CNL-LP PCH */
@@ -371,6 +372,8 @@ static const struct pci_device_id intel_pch_thermal_id[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCH_THERMAL_DID_SKL),
 		.driver_data = PCH_BOARD_SKL, },
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCH_THERMAL_DID_SKL_H),
+		.driver_data = PCH_BOARD_SKL, },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCH_THERMAL_DID_KBL_H),
 		.driver_data = PCH_BOARD_SKL, },
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCH_THERMAL_DID_CNL),
 		.driver_data = PCH_BOARD_CNL, },

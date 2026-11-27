@@ -148,10 +148,13 @@ impl<T: Driver> Adapter<T> {
         // INVARIANT: `idev` is valid for the duration of `probe_callback()`.
         let idev = unsafe { &*idev.cast::<I2cClient<device::CoreInternal<'_>>>() };
 
-        let info = Self::i2c_id_info(idev).or_else(|| {
-            // SAFETY: `idev` matched data is of type `Self::IdInfo`.
-            unsafe { <Self as driver::Adapter>::id_info(idev.as_ref()) }
-        });
+        // SAFETY: `idev` is a valid `struct i2c_client` bound to this driver, so
+        // `i2c_get_match_data()` may read `idev.dev.driver`.
+        let raw_info = unsafe { bindings::i2c_get_match_data(idev.as_raw()) };
+
+        // SAFETY: Non-NULL match data is either the OF/ACPI entry data or the `driver_data` of an
+        // I2C id entry. Both are built from `&'static Self::IdInfo` by this driver's tables.
+        let info = unsafe { raw_info.cast::<T::IdInfo>().as_ref() };
 
         from_result(|| {
             let data = T::probe(idev, info);
@@ -183,34 +186,6 @@ impl<T: Driver> Adapter<T> {
         let data = unsafe { idev.as_ref().drvdata_borrow::<T::Data<'_>>() };
 
         T::shutdown(idev, data);
-    }
-
-    /// The [`i2c::IdTable`] of the corresponding driver.
-    fn i2c_id_table() -> Option<IdTable<<Self as driver::Adapter>::IdInfo>> {
-        T::I2C_ID_TABLE
-    }
-
-    /// Returns the driver's private data from the matching entry in the [`i2c::IdTable`], if any.
-    ///
-    /// If this returns `None`, it means there is no match with an entry in the [`i2c::IdTable`].
-    fn i2c_id_info(dev: &I2cClient) -> Option<&'static <Self as driver::Adapter>::IdInfo> {
-        let table = Self::i2c_id_table()?;
-
-        // SAFETY:
-        // - `table` has static lifetime, hence it's valid for reads
-        // - `dev` is guaranteed to be valid while it's alive, and so is `dev.as_raw()`.
-        let raw_id = unsafe { bindings::i2c_match_id(table.as_ptr(), dev.as_raw()) };
-
-        if raw_id.is_null() {
-            return None;
-        }
-
-        // SAFETY: `DeviceId` is a `#[repr(transparent)` wrapper of `struct i2c_device_id` and
-        // does not add additional invariants, so it's safe to transmute.
-        let id = unsafe { &*raw_id.cast::<DeviceId>() };
-
-        // SAFETY: `id` comes from `table` which is of type `IdArray<_, Self::IdInfo>`.
-        Some(unsafe { id.info_unchecked::<T::IdInfo>() })
     }
 }
 
@@ -417,8 +392,22 @@ kernel::impl_device_context_into_aref!(I2cAdapter);
 unsafe impl AlwaysRefCounted for I2cAdapter {
     #[inline]
     fn inc_ref(&self) {
-        // SAFETY: The existence of a shared reference guarantees that the refcount is non-zero.
-        unsafe { bindings::i2c_get_adapter(self.index()) };
+        let adapter = self.as_raw();
+
+        // SAFETY:
+        // - By the `I2cAdapter` type invariant, `adapter` points to a valid
+        //   `struct i2c_adapter` whose device reference remains held for the
+        //   lifetime of `self`.
+        // - When module unloading is enabled, an existing reference to the
+        //   adapter's owner is also held, so `__module_get()` may acquire another
+        //   one. It also accepts a null owner for built-in adapters.
+        // - The existing device reference prevents `adapter->dev` from being
+        //   released, so `get_device()` may safely acquire another reference.
+        unsafe {
+            #[cfg(CONFIG_MODULE_UNLOAD)]
+            bindings::__module_get((*adapter).owner);
+            bindings::get_device(&raw mut (*adapter).dev);
+        }
     }
 
     #[inline]

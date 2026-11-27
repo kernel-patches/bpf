@@ -869,6 +869,11 @@ static bool __bnxt_tx_int(struct bnxt *bp, struct bnxt_tx_ring_info *txr,
 		cons = NEXT_TX(cons);
 		tx_pkts++;
 		tx_bytes += skb->len;
+		if (skb_is_gso(skb) && !tx_buf->is_sw_gso) {
+			txr->tx_hw_gso_packets++;
+			txr->tx_hw_gso_wire_packets +=
+				skb_shinfo(skb)->gso_segs;
+		}
 		tx_buf->skb = NULL;
 		tx_buf->is_ts_pkt = 0;
 
@@ -8618,6 +8623,43 @@ int bnxt_hwrm_set_coal(struct bnxt *bp)
 	return rc;
 }
 
+/* Program Rx coalescing of a single ring, e.g. after its completion ring
+ * was re-allocated in the FW, which resets the coalescing parameters.
+ */
+static int bnxt_hwrm_set_rx_ring_coal(struct bnxt *bp, struct bnxt_napi *bnapi)
+{
+	struct hwrm_ring_cmpl_ring_cfg_aggint_params_input *req;
+	int rc;
+
+	if (bp->flags & BNXT_FLAG_DIM)
+		return bnxt_hwrm_set_ring_coal(bp, bnapi);
+
+	rc = hwrm_req_init(bp, req, HWRM_RING_CMPL_RING_CFG_AGGINT_PARAMS);
+	if (rc)
+		return rc;
+
+	bnxt_hwrm_set_coal_params(bp, &bp->rx_coal, req);
+	return bnxt_hwrm_set_rx_coal(bp, bnapi, req);
+}
+
+/* Program Tx coalescing of the completion ring of a single Tx ring, e.g.
+ * after it was re-allocated in the FW.
+ */
+static int bnxt_hwrm_set_tx_ring_coal(struct bnxt *bp,
+				      struct bnxt_tx_ring_info *txr)
+{
+	struct hwrm_ring_cmpl_ring_cfg_aggint_params_input *req;
+	int rc;
+
+	rc = hwrm_req_init(bp, req, HWRM_RING_CMPL_RING_CFG_AGGINT_PARAMS);
+	if (rc)
+		return rc;
+
+	bnxt_hwrm_set_coal_params(bp, &bp->tx_coal, req);
+	req->ring_id = cpu_to_le16(bnxt_cp_ring_for_tx(bp, txr));
+	return hwrm_req_send(bp, req);
+}
+
 static void bnxt_hwrm_stat_ctx_free(struct bnxt *bp)
 {
 	struct hwrm_stat_ctx_clr_stats_input *req0 = NULL;
@@ -11838,6 +11880,11 @@ static int bnxt_tx_queue_start(struct bnxt *bp, int idx)
 		if (rc)
 			return rc;
 
+		rc = bnxt_hwrm_set_tx_ring_coal(bp, txr);
+		if (rc)
+			netdev_warn(bp->dev, "HWRM set coalescing failure rc: %d\n",
+				    rc);
+
 		rc = bnxt_hwrm_tx_ring_alloc(bp, txr, false);
 		if (rc)
 			return rc;
@@ -13820,6 +13867,17 @@ void bnxt_get_ring_drv_stats(struct bnxt *bp,
 
 	for (i = 0; i < bp->cp_nr_rings; i++)
 		bnxt_get_one_ring_drv_stats(bp, stats, &bp->bnapi[i]->cp_ring);
+
+	if (!bp->tx_ring)
+		return;
+
+	for (i = 0; i < bp->tx_nr_rings; i++) {
+		struct bnxt_tx_ring_info *txr = &bp->tx_ring[i];
+
+		stats->tx_total_hw_gso_packets += txr->tx_hw_gso_packets;
+		stats->tx_total_hw_gso_wire_packets +=
+			txr->tx_hw_gso_wire_packets;
+	}
 }
 
 static bool bnxt_mc_list_updated(struct bnxt *bp, u32 *rx_mask,
@@ -16350,15 +16408,15 @@ static void bnxt_get_queue_stats_tx(struct net_device *dev, int i,
 				    struct netdev_queue_stats_tx *stats)
 {
 	struct bnxt *bp = netdev_priv(dev);
-	struct bnxt_napi *bnapi;
+	struct bnxt_tx_ring_info *txr;
 	u64 *sw;
 
 	if (!bp->tx_ring)
 		return;
 
 	bnxt_sync_ring_stats(bp);
-	bnapi = bp->tx_ring[bp->tx_ring_map[i]].bnapi;
-	sw = bnapi->cp_ring.stats.sw_stats;
+	txr = &bp->tx_ring[bp->tx_ring_map[i]];
+	sw = txr->bnapi->cp_ring.stats.sw_stats;
 
 	stats->packets = 0;
 	stats->packets += BNXT_GET_RING_STATS64(sw, tx_ucast_pkts);
@@ -16369,6 +16427,9 @@ static void bnxt_get_queue_stats_tx(struct net_device *dev, int i,
 	stats->bytes += BNXT_GET_RING_STATS64(sw, tx_ucast_bytes);
 	stats->bytes += BNXT_GET_RING_STATS64(sw, tx_mcast_bytes);
 	stats->bytes += BNXT_GET_RING_STATS64(sw, tx_bcast_bytes);
+
+	stats->hw_gso_packets = txr->tx_hw_gso_packets;
+	stats->hw_gso_wire_packets = txr->tx_hw_gso_wire_packets;
 }
 
 static void bnxt_get_base_stats(struct net_device *dev,
@@ -16385,6 +16446,9 @@ static void bnxt_get_base_stats(struct net_device *dev,
 
 	tx->packets = bp->net_stats_prev.tx_packets;
 	tx->bytes = bp->net_stats_prev.tx_bytes;
+	tx->hw_gso_packets = bp->ring_drv_stats_prev.tx_total_hw_gso_packets;
+	tx->hw_gso_wire_packets =
+		bp->ring_drv_stats_prev.tx_total_hw_gso_wire_packets;
 }
 
 static const struct netdev_stat_ops bnxt_stat_ops = {
@@ -16643,6 +16707,11 @@ static int bnxt_queue_start(struct net_device *dev,
 		rc = bnxt_hwrm_cp_ring_alloc_p5(bp, rxr->rx_cpr);
 		if (rc)
 			goto err_reset;
+
+		rc = bnxt_hwrm_set_rx_ring_coal(bp, bnapi);
+		if (rc)
+			netdev_warn(bp->dev, "HWRM set coalescing failure rc: %d\n",
+				    rc);
 	}
 
 	rc = bnxt_hwrm_rx_agg_ring_alloc(bp, rxr);

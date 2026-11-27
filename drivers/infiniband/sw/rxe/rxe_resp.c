@@ -688,6 +688,9 @@ static struct resp_res *rxe_prepare_res(struct rxe_qp *qp,
 		res->flush.length = qp->resp.length;
 		res->flush.type = feth_plt(pkt);
 		res->flush.level = feth_sel(pkt);
+		res->first_psn = pkt->psn;
+		res->last_psn = pkt->psn;
+		res->cur_psn = pkt->psn;
 	}
 
 	return res;
@@ -1327,14 +1330,14 @@ static enum resp_states cleanup(struct rxe_qp *qp,
 	return RESPST_DONE;
 }
 
-static struct resp_res *find_resource(struct rxe_qp *qp, u32 psn)
+static struct resp_res *find_resource(struct rxe_qp *qp, u32 psn, int type)
 {
 	int i;
 
 	for (i = 0; i < qp->attr.max_dest_rd_atomic; i++) {
 		struct resp_res *res = &qp->resp.resources[i];
 
-		if (res->type == 0)
+		if (res->type != type)
 			continue;
 
 		if (psn_compare(psn, res->first_psn) >= 0 &&
@@ -1361,7 +1364,7 @@ static enum resp_states duplicate_request(struct rxe_qp *qp,
 		struct resp_res *res;
 
 		/* Find the operation in our list of responder resources. */
-		res = find_resource(qp, pkt->psn);
+		res = find_resource(qp, pkt->psn, RXE_FLUSH_MASK);
 		if (res) {
 			res->replay = 1;
 			res->cur_psn = pkt->psn;
@@ -1376,7 +1379,7 @@ static enum resp_states duplicate_request(struct rxe_qp *qp,
 	} else if (pkt->mask & RXE_READ_MASK) {
 		struct resp_res *res;
 
-		res = find_resource(qp, pkt->psn);
+		res = find_resource(qp, pkt->psn, RXE_READ_MASK);
 		if (!res) {
 			/* Resource not found. Class D error.  Drop the
 			 * request.
@@ -1423,7 +1426,8 @@ static enum resp_states duplicate_request(struct rxe_qp *qp,
 		struct resp_res *res;
 
 		/* Find the operation in our list of responder resources. */
-		res = find_resource(qp, pkt->psn);
+		res = find_resource(qp, pkt->psn, pkt->mask & RXE_ATOMIC_MASK ?
+				    RXE_ATOMIC_MASK : RXE_ATOMIC_WRITE_MASK);
 		if (res) {
 			res->replay = 1;
 			res->cur_psn = pkt->psn;

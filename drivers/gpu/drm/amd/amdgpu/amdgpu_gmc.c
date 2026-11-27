@@ -787,6 +787,30 @@ error_alloc:
 	dev_err(adev->dev, "Error flushing GPU TLB using the SDMA (%d)!\n", r);
 }
 
+/**
+ * amdgpu_gmc_bind_vmid - bind a VMID's page table base and flush its TLB
+ *
+ * @adev: amdgpu device pointer
+ * @vmhub: vmhub the VMID belongs to
+ * @vmid: VMID to bind
+ * @pd_addr: new page directory address, 0 to unbind to a faulting address
+ *
+ * For VMIDs that are bound directly to a VM's page table outside the
+ * normal per-job VM flush path, e.g. a dedicated out-of-pool VMID.
+ */
+void amdgpu_gmc_bind_vmid(struct amdgpu_device *adev, unsigned int vmhub,
+			  unsigned int vmid, uint64_t pd_addr)
+{
+	bool is_mmhub = AMDGPU_IS_MMHUB0(vmhub) || AMDGPU_IS_MMHUB1(vmhub);
+
+	if (is_mmhub)
+		adev->mmhub.funcs->setup_vm_pt_regs(adev, vmid, pd_addr);
+	else
+		adev->gfxhub.funcs->setup_vm_pt_regs(adev, vmid, pd_addr);
+
+	amdgpu_gmc_flush_gpu_tlb(adev, vmid, vmhub, TLB_FLUSH_LEGACY);
+}
+
 static void amdgpu_gmc_flush_pasid_regs(struct amdgpu_device *adev, u16 pasid,
 					u32 flush_type, bool all_hub,
 					u32 inst)
@@ -1127,6 +1151,13 @@ void amdgpu_gmc_noretry_set(struct amdgpu_device *adev)
 		gmc->noretry = 1;
 	else
 		gmc->noretry = (amdgpu_noretry == -1) ? noretry_default : amdgpu_noretry;
+
+	/* XNACK cannot be enabled on GFX12.1, so keep noretry=1 */
+	if (gc_ver == IP_VERSION(12, 1, 0)) {
+		if (amdgpu_noretry == 0)
+			dev_warn(adev->dev, "Unable to set noretry = 0 on GFX12.1. Keeping noretry = 1");
+		gmc->noretry = 1;
+	}
 }
 
 void amdgpu_gmc_set_vm_fault_masks(struct amdgpu_device *adev, int hub_type,

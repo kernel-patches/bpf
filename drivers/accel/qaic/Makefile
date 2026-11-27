@@ -13,6 +13,7 @@ qaic-y := \
 	qaic_ras.o \
 	qaic_ssr.o \
 	qaic_sysfs.o \
+	qaic_telemetry.o \
 	qaic_timesync.o \
 	sahara.o
 

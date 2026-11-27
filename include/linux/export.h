@@ -51,7 +51,7 @@
 
 #define __EXPORT_SYMBOL(sym, license, ns)	__GENKSYMS_EXPORT_SYMBOL(sym)
 
-#elif defined(__ASSEMBLY__)
+#elif defined(__ASSEMBLER__)
 
 #define __EXPORT_SYMBOL(sym, license, ns) \
 	___EXPORT_SYMBOL(sym, license, ns)

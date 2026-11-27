@@ -39,6 +39,7 @@
 *.lzo
 *.mod
 *.mod.c
+*.mod.S
 *.o
 *.o.*
 *.patch

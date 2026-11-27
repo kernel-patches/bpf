@@ -12,4 +12,5 @@ struct xe_device;
 
 void xe_hw_error_irq_handler(struct xe_tile *tile, const u32 master_ctl);
 void xe_hw_error_init(struct xe_device *xe);
+void xe_hw_error_work_disable(void *arg);
 #endif

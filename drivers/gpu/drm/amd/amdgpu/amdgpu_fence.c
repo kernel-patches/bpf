@@ -112,7 +112,7 @@ void amdgpu_fence_emit(struct amdgpu_ring *ring, struct amdgpu_fence *af,
 	seq = ++ring->fence_drv.sync_seq;
 	dma_fence_init(fence, &amdgpu_fence_ops,
 		       &ring->fence_drv.lock,
-		       adev->fence_context + ring->idx, seq);
+		       adev->fence_context + ring->idx, seq, 0);
 
 	amdgpu_ring_emit_fence(ring, ring->fence_drv.gpu_addr,
 			       seq, flags | AMDGPU_FENCE_FLAG_INT);
@@ -745,7 +745,8 @@ void amdgpu_ring_set_fence_errors_and_reemit(struct amdgpu_ring *ring,
 		return;
 	}
 	ring->reemit = true;
-	amdgpu_ring_alloc(ring, ring->ring_backup_entries_to_copy);
+	amdgpu_ring_alloc(ring, ring->ring_backup_entries_to_copy +
+			  (seq - last_seq) * ring->funcs->align_mask);
 	spin_lock_irqsave(&ring->fence_drv.lock, flags);
 	do {
 		last_seq++;
@@ -778,6 +779,10 @@ void amdgpu_ring_set_fence_errors_and_reemit(struct amdgpu_ring *ring,
 					amdgpu_ring_write(ring,
 							  ring->ring_backup[fence->backup_idx + i]);
 			}
+
+			/* A job fence ends a submission, pad it like commit did */
+			if (fence->skip_ib_dw_end_offset)
+				amdgpu_ring_pad_to_align(ring);
 		}
 		rcu_read_unlock();
 	} while (last_seq != seq);
@@ -897,39 +902,10 @@ static bool amdgpu_fence_enable_signaling(struct dma_fence *f)
 	return true;
 }
 
-/**
- * amdgpu_fence_free - free up the fence memory
- *
- * @rcu: RCU callback head
- *
- * Free up the fence memory after the RCU grace period.
- */
-static void amdgpu_fence_free(struct rcu_head *rcu)
-{
-	struct dma_fence *f = container_of(rcu, struct dma_fence, rcu);
-
-	/* free fence_slab if it's separated fence*/
-	kfree(to_amdgpu_fence(f));
-}
-
-/**
- * amdgpu_fence_release - callback that fence can be freed
- *
- * @f: fence
- *
- * This function is called when the reference count becomes zero.
- * It just RCU schedules freeing up the fence.
- */
-static void amdgpu_fence_release(struct dma_fence *f)
-{
-	call_rcu(&f->rcu, amdgpu_fence_free);
-}
-
 static const struct dma_fence_ops amdgpu_fence_ops = {
 	.get_driver_name = amdgpu_fence_get_driver_name,
 	.get_timeline_name = amdgpu_fence_get_timeline_name,
 	.enable_signaling = amdgpu_fence_enable_signaling,
-	.release = amdgpu_fence_release,
 };
 
 /*

@@ -1,0 +1,47 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# description: Test tracepoint strings from a module
+# requires: printk_formats
+
+string1=tracepoint_string_test_module_string_1
+string2=tracepoint_string_test_module_string_2
+event=events/sample-trace/foo_tracepoint_str
+
+rmmod trace-events-sample 2>/dev/null ||:
+if ! modprobe trace-events-sample; then
+    echo "No trace-events-sample module - please make CONFIG_SAMPLE_TRACE_EVENTS=m"
+    exit_unresolved
+fi
+trap 'rmmod trace-events-sample >/dev/null 2>&1 ||:' EXIT
+
+grep -Fq "$string1" printk_formats || exit_fail
+grep -Fq "$string2" printk_formats || exit_fail
+
+echo 1 > "$event/enable"
+echo 1 > tracing_on
+
+# The sample thread emits both strings once per second.
+attempts=100
+while [ "$attempts" -gt 0 ]; do
+    if grep -Fq "foo_tracepoint_str: str=$string1" trace &&
+       grep -Fq "foo_tracepoint_str: str=$string2" trace; then
+        break
+    fi
+    sleep 0.1
+    attempts=$((attempts - 1))
+done
+[ "$attempts" -gt 0 ] || exit_fail
+
+echo 0 > "$event/enable"
+rmmod trace-events-sample || exit_fail
+trap - EXIT
+
+for string in "$string1" "$string2"; do
+    if grep -Fq "$string" printk_formats; then
+        echo "Module string remains after unload: $string"
+        exit_fail
+    else
+        # grep returns 1 for no match; a read error must also fail the test.
+        [ "$?" -eq 1 ] || exit_fail
+    fi
+done

@@ -69,7 +69,9 @@ pub fn msecs_to_jiffies(msecs: Msecs) -> Jiffies {
 ///
 /// Implementers must ensure that `ktime_get()` returns a value in the inclusive range
 /// `0..=KTIME_MAX` (i.e., greater than or equal to 0 and less than or equal to
-/// `KTIME_MAX`, where `KTIME_MAX` equals `i64::MAX`).
+/// `KTIME_MAX`, where `KTIME_MAX` equals `i64::MAX`), and that `ktime_get_seconds()`
+/// returns a value in the inclusive range `0..=KTIME_SEC_MAX` (where `KTIME_SEC_MAX`
+/// equals `KTIME_MAX / NSEC_PER_SEC`).
 pub unsafe trait ClockId {
     /// The kernel clock ID associated with this clock.
     ///
@@ -80,6 +82,11 @@ pub unsafe trait ClockId {
     ///
     /// The function must return a value in the range `0..=KTIME_MAX`.
     fn ktime_get() -> bindings::ktime_t;
+
+    /// Get the current time from the clock in seconds.
+    ///
+    /// The function must return a value in the range `0..=KTIME_SEC_MAX`.
+    fn ktime_get_seconds() -> bindings::time64_t;
 }
 
 /// A monotonically increasing clock.
@@ -96,13 +103,18 @@ pub unsafe trait ClockId {
 pub struct Monotonic;
 
 // SAFETY: The kernel's `ktime_get()` is guaranteed to return a value
-// in `0..=KTIME_MAX`.
+// in `0..=KTIME_MAX`, and `ktime_get_seconds()` a value in `0..=KTIME_SEC_MAX`.
 unsafe impl ClockId for Monotonic {
     const ID: bindings::clockid_t = bindings::CLOCK_MONOTONIC as bindings::clockid_t;
 
     fn ktime_get() -> bindings::ktime_t {
         // SAFETY: It is always safe to call `ktime_get()` outside of NMI context.
         unsafe { bindings::ktime_get() }
+    }
+
+    fn ktime_get_seconds() -> bindings::time64_t {
+        // SAFETY: It is always safe to call `ktime_get_seconds()` outside of NMI context.
+        unsafe { bindings::ktime_get_seconds() }
     }
 }
 
@@ -123,13 +135,18 @@ unsafe impl ClockId for Monotonic {
 pub struct RealTime;
 
 // SAFETY: The kernel's `ktime_get_real()` is guaranteed to return a value
-// in `0..=KTIME_MAX`.
+// in `0..=KTIME_MAX`, and `ktime_get_real_seconds()` a value in `0..=KTIME_SEC_MAX`.
 unsafe impl ClockId for RealTime {
     const ID: bindings::clockid_t = bindings::CLOCK_REALTIME as bindings::clockid_t;
 
     fn ktime_get() -> bindings::ktime_t {
         // SAFETY: It is always safe to call `ktime_get_real()` outside of NMI context.
         unsafe { bindings::ktime_get_real() }
+    }
+
+    fn ktime_get_seconds() -> bindings::time64_t {
+        // SAFETY: It is always safe to call `ktime_get_real_seconds()` outside of NMI context.
+        unsafe { bindings::ktime_get_real_seconds() }
     }
 }
 
@@ -143,13 +160,18 @@ unsafe impl ClockId for RealTime {
 pub struct BootTime;
 
 // SAFETY: The kernel's `ktime_get_boottime()` is guaranteed to return a value
-// in `0..=KTIME_MAX`.
+// in `0..=KTIME_MAX`, and `ktime_get_boottime_seconds()` a value in `0..=KTIME_SEC_MAX`.
 unsafe impl ClockId for BootTime {
     const ID: bindings::clockid_t = bindings::CLOCK_BOOTTIME as bindings::clockid_t;
 
     fn ktime_get() -> bindings::ktime_t {
         // SAFETY: It is always safe to call `ktime_get_boottime()` outside of NMI context.
         unsafe { bindings::ktime_get_boottime() }
+    }
+
+    fn ktime_get_seconds() -> bindings::time64_t {
+        // SAFETY: It is always safe to call `ktime_get_boottime_seconds()` outside of NMI context.
+        unsafe { bindings::ktime_get_boottime_seconds() }
     }
 }
 
@@ -167,7 +189,7 @@ unsafe impl ClockId for BootTime {
 pub struct Tai;
 
 // SAFETY: The kernel's `ktime_get_clocktai()` is guaranteed to return a value
-// in `0..=KTIME_MAX`.
+// in `0..=KTIME_MAX`, and `ktime_get_clocktai_seconds()` a value in `0..=KTIME_SEC_MAX`.
 unsafe impl ClockId for Tai {
     const ID: bindings::clockid_t = bindings::CLOCK_TAI as bindings::clockid_t;
 
@@ -175,75 +197,69 @@ unsafe impl ClockId for Tai {
         // SAFETY: It is always safe to call `ktime_get_tai()` outside of NMI context.
         unsafe { bindings::ktime_get_clocktai() }
     }
+
+    fn ktime_get_seconds() -> bindings::time64_t {
+        // SAFETY: It is always safe to call `ktime_get_clocktai_seconds()` outside of NMI context.
+        unsafe { bindings::ktime_get_clocktai_seconds() }
+    }
 }
 
 /// A specific point in time.
 ///
+/// The time is read from the clock given by the type parameter `C` (see
+/// [`ClockId`]) and stored in the unit given by `U` (see [`InstantUnit`]); its
+/// value has type `U::Repr`. `U` defaults to [`Nsec`], so a plain
+/// [`Instant<C>`] is a point in time in nanoseconds.
+///
 /// # Invariants
 ///
-/// The `inner` value is in the range from 0 to `KTIME_MAX`.
+/// * For `U = Nsec`, the `inner` value is in the range from 0 to `KTIME_MAX`.
+/// * For `U = Sec`, the `inner` value is in the range from 0 to `KTIME_SEC_MAX`.
 #[repr(transparent)]
 #[derive(PartialEq, PartialOrd, Eq, Ord)]
-pub struct Instant<C: ClockId> {
-    inner: bindings::ktime_t,
+pub struct Instant<C: ClockId, U: InstantUnit = Nsec> {
+    inner: U::Repr,
     _c: PhantomData<C>,
 }
 
-impl<C: ClockId> Clone for Instant<C> {
+impl<C: ClockId, U: InstantUnit> Clone for Instant<C, U> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<C: ClockId> Copy for Instant<C> {}
+impl<C: ClockId, U: InstantUnit> Copy for Instant<C, U> {}
 
-impl<C: ClockId> Instant<C> {
-    /// Get the current time from the clock source.
+impl<C: ClockId, U: InstantUnit> Instant<C, U> {
+    /// Get the current time from the clock `C`.
     #[inline]
     pub fn now() -> Self {
-        // INVARIANT: The `ClockId::ktime_get()` function returns a value in the range
-        // from 0 to `KTIME_MAX`.
+        // INVARIANT: `InstantUnit` is sealed. `Nsec` calls `ClockId::ktime_get()`, which
+        // returns a value in the range from 0 to `KTIME_MAX`, and `Sec` calls
+        // `ClockId::ktime_get_seconds()`, which returns a value in the range from 0 to
+        // `KTIME_SEC_MAX`.
         Self {
-            inner: C::ktime_get(),
+            inner: U::now::<C>(),
             _c: PhantomData,
         }
     }
+}
 
+impl<C: ClockId> Instant<C, Nsec> {
     /// Return the amount of time elapsed since the [`Instant`].
     #[inline]
     pub fn elapsed(&self) -> Delta {
         Self::now() - *self
     }
 
+    /// Return the raw nanoseconds values since the epoch of clock `C`.
     #[inline]
-    pub(crate) fn as_nanos(&self) -> i64 {
+    pub fn as_nanos(&self) -> i64 {
         self.inner
-    }
-
-    /// Create an [`Instant`] from a `ktime_t` without checking if it is non-negative.
-    ///
-    /// # Panics
-    ///
-    /// On debug builds, this function will panic if `ktime` is not in the range from 0 to
-    /// `KTIME_MAX`.
-    ///
-    /// # Safety
-    ///
-    /// The caller promises that `ktime` is in the range from 0 to `KTIME_MAX`.
-    #[inline]
-    pub(crate) unsafe fn from_ktime(ktime: bindings::ktime_t) -> Self {
-        debug_assert!(ktime >= 0);
-
-        // INVARIANT: Our safety contract ensures that `ktime` is in the range from 0 to
-        // `KTIME_MAX`.
-        Self {
-            inner: ktime,
-            _c: PhantomData,
-        }
     }
 }
 
-impl<C: ClockId> ops::Sub for Instant<C> {
+impl<C: ClockId> ops::Sub for Instant<C, Nsec> {
     type Output = Delta;
 
     // By the type invariant, it never overflows.
@@ -255,7 +271,7 @@ impl<C: ClockId> ops::Sub for Instant<C> {
     }
 }
 
-impl<T: ClockId> ops::Add<Delta> for Instant<T> {
+impl<T: ClockId> ops::Add<Delta> for Instant<T, Nsec> {
     type Output = Self;
 
     #[inline]
@@ -275,7 +291,7 @@ impl<T: ClockId> ops::Add<Delta> for Instant<T> {
     }
 }
 
-impl<T: ClockId> ops::Sub<Delta> for Instant<T> {
+impl<T: ClockId> ops::Sub<Delta> for Instant<T, Nsec> {
     type Output = Self;
 
     #[inline]
@@ -295,10 +311,28 @@ impl<T: ClockId> ops::Sub<Delta> for Instant<T> {
     }
 }
 
+impl<C: ClockId> Instant<C, Sec> {
+    /// Return the number of whole seconds in the [`Instant`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kernel::time::{Instant, RealTime, Sec};
+    ///
+    /// let secs: i64 = Instant::<RealTime, Sec>::now().as_secs();
+    /// assert!(secs >= 0);
+    /// ```
+    #[inline]
+    pub fn as_secs(&self) -> i64 {
+        self.inner
+    }
+}
+
 mod private {
     pub trait Sealed {}
 
     impl Sealed for super::Nsec {}
+    impl Sealed for super::Sec {}
     impl Sealed for super::Jiffy {}
 }
 
@@ -323,6 +357,18 @@ impl TimeUnit for Nsec {
     const ZERO: Self::Repr = 0;
 }
 
+/// A time unit of seconds.
+///
+/// An [`Instant<C, Sec>`] stores its value as [`i64`] seconds. [`Sec`] does not
+/// implement the comparison traits, so two such instants cannot be compared.
+#[derive(Copy, Clone, Debug)]
+pub enum Sec {}
+
+impl TimeUnit for Sec {
+    type Repr = i64;
+    const ZERO: Self::Repr = 0;
+}
+
 /// A time unit of jiffies.
 ///
 /// A [`Delta<Jiffy>`] stores its value as [`isize`] jiffies and can represent
@@ -333,6 +379,26 @@ pub enum Jiffy {}
 impl TimeUnit for Jiffy {
     type Repr = isize;
     const ZERO: Self::Repr = 0;
+}
+
+/// A trait for time units that can be used with [`Instant`].
+pub trait InstantUnit: TimeUnit {
+    /// Return the current time of the clock `C` in this unit.
+    fn now<C: ClockId>() -> Self::Repr;
+}
+
+impl InstantUnit for Nsec {
+    #[inline]
+    fn now<C: ClockId>() -> i64 {
+        C::ktime_get()
+    }
+}
+
+impl InstantUnit for Sec {
+    #[inline]
+    fn now<C: ClockId>() -> i64 {
+        C::ktime_get_seconds()
+    }
 }
 
 /// A span of time.
@@ -443,8 +509,20 @@ impl ops::MulAssign<i64> for Delta {
 impl ops::Div for Delta {
     type Output = i64;
 
+    /// # Panics
+    ///
+    /// Panics if `rhs` is zero, or if `self` represents [`i64::MIN`] nanoseconds
+    /// and `rhs` represents `-1` nanosecond.
     #[inline]
     fn div(self, rhs: Self) -> Self::Output {
+        if rhs.value == 0 {
+            panic!("attempt to divide by zero");
+        }
+
+        if self.value == i64::MIN && rhs.value == -1 {
+            panic!("attempt to divide with overflow");
+        }
+
         #[cfg(CONFIG_64BIT)]
         {
             self.value / rhs.value
@@ -452,7 +530,7 @@ impl ops::Div for Delta {
 
         #[cfg(not(CONFIG_64BIT))]
         {
-            // SAFETY: This function is always safe to call regardless of the input values
+            // SAFETY: `rhs.value` is non-zero due to the check above.
             unsafe { bindings::div64_s64(self.value, rhs.value) }
         }
     }
@@ -470,6 +548,19 @@ impl Delta {
     /// The `micros` can range from -9_223_372_036_854_775 to 9_223_372_036_854_775.
     /// If `micros` is outside this range, `i64::MIN` is used for negative values,
     /// and `i64::MAX` is used for positive values due to saturation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kernel::time::Delta;
+    ///
+    /// assert_eq!(Delta::from_micros(1).as_nanos(), 1_000);
+    /// assert_eq!(Delta::from_micros(-1).as_nanos(), -1_000);
+    ///
+    /// // A value out of range saturates.
+    /// assert_eq!(Delta::from_micros(i64::MAX).as_nanos(), i64::MAX);
+    /// assert_eq!(Delta::from_micros(i64::MIN).as_nanos(), i64::MIN);
+    /// ```
     #[inline]
     pub const fn from_micros(micros: i64) -> Self {
         Self {
@@ -482,6 +573,19 @@ impl Delta {
     /// The `millis` can range from -9_223_372_036_854 to 9_223_372_036_854.
     /// If `millis` is outside this range, `i64::MIN` is used for negative values,
     /// and `i64::MAX` is used for positive values due to saturation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kernel::time::Delta;
+    ///
+    /// assert_eq!(Delta::from_millis(1).as_nanos(), 1_000_000);
+    /// assert_eq!(Delta::from_millis(-1).as_nanos(), -1_000_000);
+    ///
+    /// // A value out of range saturates.
+    /// assert_eq!(Delta::from_millis(i64::MAX).as_nanos(), i64::MAX);
+    /// assert_eq!(Delta::from_millis(i64::MIN).as_nanos(), i64::MIN);
+    /// ```
     #[inline]
     pub const fn from_millis(millis: i64) -> Self {
         Self {
@@ -494,6 +598,19 @@ impl Delta {
     /// The `secs` can range from -9_223_372_036 to 9_223_372_036.
     /// If `secs` is outside this range, `i64::MIN` is used for negative values,
     /// and `i64::MAX` is used for positive values due to saturation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kernel::time::Delta;
+    ///
+    /// assert_eq!(Delta::from_secs(1).as_nanos(), 1_000_000_000);
+    /// assert_eq!(Delta::from_secs(-1).as_nanos(), -1_000_000_000);
+    ///
+    /// // A value out of range saturates.
+    /// assert_eq!(Delta::from_secs(i64::MAX).as_nanos(), i64::MAX);
+    /// assert_eq!(Delta::from_secs(i64::MIN).as_nanos(), i64::MIN);
+    /// ```
     #[inline]
     pub const fn from_secs(secs: i64) -> Self {
         Self {
@@ -521,6 +638,18 @@ impl Delta {
 
     /// Return the smallest number of microseconds greater than or equal
     /// to the value in the [`Delta`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kernel::time::Delta;
+    ///
+    /// assert_eq!(Delta::from_nanos(1_000).as_micros_ceil(), 1);
+    ///
+    /// // A value between two whole microseconds is rounded towards positive infinity.
+    /// assert_eq!(Delta::from_nanos(1_001).as_micros_ceil(), 2);
+    /// assert_eq!(Delta::from_nanos(-1_001).as_micros_ceil(), -1);
+    /// ```
     #[inline]
     pub fn as_micros_ceil(self) -> i64 {
         // Only positive values need to be rounded up: truncating division already
@@ -546,6 +675,18 @@ impl Delta {
     }
 
     /// Return the number of milliseconds in the [`Delta`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kernel::time::Delta;
+    ///
+    /// assert_eq!(Delta::from_nanos(1_000_000).as_millis(), 1);
+    ///
+    /// // A value between two whole milliseconds is rounded towards zero.
+    /// assert_eq!(Delta::from_nanos(1_999_999).as_millis(), 1);
+    /// assert_eq!(Delta::from_nanos(-1_999_999).as_millis(), -1);
+    /// ```
     #[inline]
     pub fn as_millis(self) -> i64 {
         #[cfg(CONFIG_64BIT)]
@@ -562,6 +703,18 @@ impl Delta {
 
     /// Return the smallest number of milliseconds greater than or equal
     /// to the value in the [`Delta`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kernel::time::Delta;
+    ///
+    /// assert_eq!(Delta::from_nanos(1_000_000).as_millis_ceil(), 1);
+    ///
+    /// // A value between two whole milliseconds is rounded towards positive infinity.
+    /// assert_eq!(Delta::from_nanos(1_000_001).as_millis_ceil(), 2);
+    /// assert_eq!(Delta::from_nanos(-1_000_001).as_millis_ceil(), -1);
+    /// ```
     #[inline]
     pub fn as_millis_ceil(self) -> i64 {
         // Only positive values need to be rounded up: truncating division already
@@ -642,16 +795,35 @@ impl Delta {
         Delta::<Jiffy>::from_jiffies(jiffies)
     }
 
-    /// Return `self % dividend` where `dividend` is in nanoseconds.
+    /// Return `self % divisor` where `divisor` is in nanoseconds.
     ///
-    /// The kernel doesn't have any emulation for `s64 % s64` on 32 bit platforms, so this is
-    /// limited to 32 bit dividends.
+    /// # Panics
+    ///
+    /// Panics if `divisor` is zero, or if `self` represents [`i64::MIN`]
+    /// nanoseconds and `divisor` is `-1`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kernel::time::Delta;
+    ///
+    /// assert_eq!(Delta::from_nanos(10).rem_nanos(3).as_nanos(), 1);
+    /// assert_eq!(Delta::from_nanos(-10).rem_nanos(3).as_nanos(), -1);
+    /// ```
     #[inline]
-    pub fn rem_nanos(self, dividend: i32) -> Self {
+    pub fn rem_nanos(self, divisor: i32) -> Self {
+        if divisor == 0 {
+            panic!("attempt to calculate the remainder with a divisor of zero");
+        }
+
+        if self.value == i64::MIN && divisor == -1 {
+            panic!("attempt to calculate the remainder with overflow");
+        }
+
         #[cfg(CONFIG_64BIT)]
         {
             Self {
-                value: self.as_nanos() % i64::from(dividend),
+                value: self.as_nanos() % i64::from(divisor),
             }
         }
 
@@ -659,8 +831,9 @@ impl Delta {
         {
             let mut rem = 0;
 
-            // SAFETY: `rem` is in the stack, so we can always provide a valid pointer to it.
-            unsafe { bindings::div_s64_rem(self.as_nanos(), dividend, &mut rem) };
+            // SAFETY: `divisor` is non-zero due to the check above.
+            // `&mut rem` provides a valid, aligned, writable pointer for this call.
+            unsafe { bindings::div_s64_rem(self.as_nanos(), divisor, &mut rem) };
 
             Self {
                 value: i64::from(rem),
@@ -673,6 +846,69 @@ impl Delta {
 #[macros::kunit_tests(rust_kernel_time)]
 mod tests {
     use super::*;
+
+    // The largest values that `Delta::from_micros()`, `Delta::from_millis()` and
+    // `Delta::from_secs()` convert without saturation.
+    const MAX_MICROS: i64 = 9_223_372_036_854_775;
+    const MAX_MILLIS: i64 = 9_223_372_036_854;
+    const MAX_SECS: i64 = 9_223_372_036;
+
+    #[test]
+    fn from_micros_saturates() {
+        assert_eq!(
+            Delta::from_micros(MAX_MICROS).as_nanos(),
+            MAX_MICROS * NSEC_PER_USEC
+        );
+        assert_eq!(Delta::from_micros(MAX_MICROS + 1).as_nanos(), i64::MAX);
+
+        assert_eq!(
+            Delta::from_micros(-MAX_MICROS).as_nanos(),
+            -MAX_MICROS * NSEC_PER_USEC
+        );
+        assert_eq!(Delta::from_micros(-MAX_MICROS - 1).as_nanos(), i64::MIN);
+    }
+
+    #[test]
+    fn from_millis_saturates() {
+        assert_eq!(
+            Delta::from_millis(MAX_MILLIS).as_nanos(),
+            MAX_MILLIS * NSEC_PER_MSEC
+        );
+        assert_eq!(Delta::from_millis(MAX_MILLIS + 1).as_nanos(), i64::MAX);
+
+        assert_eq!(
+            Delta::from_millis(-MAX_MILLIS).as_nanos(),
+            -MAX_MILLIS * NSEC_PER_MSEC
+        );
+        assert_eq!(Delta::from_millis(-MAX_MILLIS - 1).as_nanos(), i64::MIN);
+    }
+
+    #[test]
+    fn from_secs_saturates() {
+        assert_eq!(
+            Delta::from_secs(MAX_SECS).as_nanos(),
+            MAX_SECS * NSEC_PER_SEC
+        );
+        assert_eq!(Delta::from_secs(MAX_SECS + 1).as_nanos(), i64::MAX);
+
+        assert_eq!(
+            Delta::from_secs(-MAX_SECS).as_nanos(),
+            -MAX_SECS * NSEC_PER_SEC
+        );
+        assert_eq!(Delta::from_secs(-MAX_SECS - 1).as_nanos(), i64::MIN);
+    }
+
+    #[test]
+    fn as_micros_ceil_handles_extremes() {
+        assert_eq!(Delta::from_nanos(i64::MAX).as_micros_ceil(), MAX_MICROS + 1);
+        assert_eq!(Delta::from_nanos(i64::MIN).as_micros_ceil(), -MAX_MICROS);
+    }
+
+    #[test]
+    fn as_millis_ceil_handles_extremes() {
+        assert_eq!(Delta::from_nanos(i64::MAX).as_millis_ceil(), MAX_MILLIS + 1);
+        assert_eq!(Delta::from_nanos(i64::MIN).as_millis_ceil(), -MAX_MILLIS);
+    }
 
     #[test]
     fn to_jiffies_timeout_converts() {

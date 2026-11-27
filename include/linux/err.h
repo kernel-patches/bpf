@@ -17,7 +17,7 @@
  */
 #define MAX_ERRNO	4095
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /**
  * IS_ERR_VALUE - Detect an error pointer.

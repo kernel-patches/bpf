@@ -196,9 +196,13 @@ static void apple_spi_set_cs(struct spi_device *device, bool is_high)
 static bool apple_spi_prep_transfer(struct apple_spi *spi, struct spi_transfer *t)
 {
 	u32 cr, fifo_threshold;
+	u32 speed_hz;
+
+	/* A device with max_speed_hz == 0 must not divide by zero */
+	speed_hz = max_t(u32, t->speed_hz, 1);
 
 	/* Calculate and program the clock rate */
-	cr = DIV_ROUND_UP(clk_get_rate(spi->clk), t->speed_hz);
+	cr = DIV_ROUND_UP(clk_get_rate(spi->clk), speed_hz);
 	reg_write(spi, APPLE_SPI_CLKDIV, min_t(u32, cr, APPLE_SPI_CLKDIV_MAX));
 
 	/* Update bits per word */

@@ -1006,7 +1006,7 @@ struct dwc2_hregs_backup {
  * @driver:             USB gadget driver
  * @dedicated_fifos:    Set if the hardware has dedicated IN-EP fifos.
  * @num_of_eps:         Number of available EPs (excluding EP0)
- * @debug_root:         Root directrory for debugfs.
+ * @debug_root:         Root directory for debugfs.
  * @ep0_reply:          Request used for ep0 reply.
  * @ep0_buff:           Buffer for EP0 reply data, if needed.
  * @ctrl_buff:          Buffer for EP0 control requests.
@@ -1108,6 +1108,7 @@ struct dwc2_hsotg {
 
 	/* DWC OTG HW Release versions */
 #define DWC2_CORE_REV_4_30a	0x4f54430a
+#define DWC2_CORE_REV_2_70a	0x4f54270a
 #define DWC2_CORE_REV_2_71a	0x4f54271a
 #define DWC2_CORE_REV_2_72a     0x4f54272a
 #define DWC2_CORE_REV_2_80a	0x4f54280a

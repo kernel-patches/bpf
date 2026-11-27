@@ -125,11 +125,37 @@ static const struct routing_scheme routing_def160xxx = {
 	.cnt = ARRAY_SIZE(routing_scheme160xxx),
 };
 
+/* HVR-1950: FM radio comes from the analog tuner, like television audio */
+static const struct routing_scheme_item routing_scheme75xxx[] = {
+	[PVR2_CVAL_INPUT_TV] = {
+		.vid = CX25840_COMPOSITE7,
+		.aud = CX25840_AUDIO8,
+	},
+	[PVR2_CVAL_INPUT_RADIO] = {
+		.vid = CX25840_COMPOSITE7,
+		.aud = CX25840_AUDIO8,
+	},
+	[PVR2_CVAL_INPUT_COMPOSITE] = {
+		.vid = CX25840_COMPOSITE3,
+		.aud = CX25840_AUDIO_SERIAL,
+	},
+	[PVR2_CVAL_INPUT_SVIDEO] = {
+		.vid = CX25840_SVIDEO1,
+		.aud = CX25840_AUDIO_SERIAL,
+	},
+};
+
+static const struct routing_scheme routing_def75xxx = {
+	.def = routing_scheme75xxx,
+	.cnt = ARRAY_SIZE(routing_scheme75xxx),
+};
+
 static const struct routing_scheme *routing_schemes[] = {
 	[PVR2_ROUTING_SCHEME_HAUPPAUGE] = &routing_def0,
 	[PVR2_ROUTING_SCHEME_GOTVIEW] = &routing_defgv,
 	[PVR2_ROUTING_SCHEME_AV400] = &routing_defav400,
 	[PVR2_ROUTING_SCHEME_HAUP160XXX] = &routing_def160xxx,
+	[PVR2_ROUTING_SCHEME_HAUP75XXX] = &routing_def75xxx,
 };
 
 void pvr2_cx25840_subdev_update(struct pvr2_hdw *hdw, struct v4l2_subdev *sd)

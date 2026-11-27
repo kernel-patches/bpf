@@ -191,6 +191,10 @@ static int xe_pagefault_handle_vma(struct xe_gt *gt, struct xe_vma *vma,
 			struct xe_userptr_vma *uvma = to_userptr_vma(vma);
 
 			err = xe_vma_userptr_pin_pages(uvma);
+			if (err == -EAGAIN) {
+				cond_resched();
+				continue;
+			}
 			if (err) {
 				xe_pagefault_set_error(pf, XE_PAGEFAULT_ERROR_VMA_USERPTR_PIN);
 				return err;
@@ -673,13 +677,6 @@ static void xe_pagefault_queue_work(struct work_struct *w)
 	 */
 	guard(xe_pm_runtime)(xe);
 
-	/*
-	 * A live VM holds a PM reference, but a torn-down VM does not.
-	 * Guard the entire worker loop to safely drain stale faults and
-	 * prevent autosuspends from desyncing batched CT flushes.
-	 */
-	guard(xe_pm_runtime)(xe);
-
 #define USM_QUEUE_MAX_RUNTIME_MS      20
 	threshold = jiffies + msecs_to_jiffies(USM_QUEUE_MAX_RUNTIME_MS);
 
@@ -807,7 +804,6 @@ static int xe_pagefault_queue_init(struct xe_device *xe,
 	drm_dbg(&xe->drm, "xe_pagefault_entry_size=%d, total_num_eus=%d, pf_queue->size=%u",
 		xe_pagefault_entry_size(), total_num_eus, pf_queue->size);
 
-	pf_queue->xe = xe;
 	spin_lock_init(&pf_queue->lock);
 
 	pf_queue->data = drmm_kzalloc(&xe->drm, pf_queue->size, GFP_KERNEL);

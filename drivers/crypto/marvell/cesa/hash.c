@@ -65,6 +65,7 @@ mv_cesa_ahash_dma_free_cache(struct mv_cesa_ahash_dma_req *req)
 
 	dma_pool_free(cesa_dev->dma->cache_pool, req->cache,
 		      req->cache_dma);
+	req->cache = NULL;
 }
 
 static int mv_cesa_ahash_dma_alloc_padding(struct mv_cesa_ahash_dma_req *req,
@@ -747,11 +748,10 @@ static int mv_cesa_ahash_dma_req_init(struct ahash_request *req)
 	return 0;
 
 err_free_tdma:
-	mv_cesa_dma_cleanup(basereq);
-	dma_unmap_sg(cesa_dev->dev, req->src, creq->src_nents, DMA_TO_DEVICE);
+	mv_cesa_ahash_dma_cleanup(req);
 
 err:
-	mv_cesa_ahash_last_cleanup(req);
+	mv_cesa_ahash_dma_last_cleanup(req);
 
 	return ret;
 }
@@ -796,8 +796,11 @@ static int mv_cesa_ahash_queue_req(struct ahash_request *req)
 
 	ret = mv_cesa_queue_req(&req->base, &creq->base);
 
-	if (mv_cesa_req_needs_cleanup(&req->base, ret))
+	if (mv_cesa_req_needs_cleanup(&req->base, ret)) {
+		if (creq->last_req)
+			mv_cesa_ahash_last_cleanup(req);
 		mv_cesa_ahash_cleanup(req);
+	}
 
 	return ret;
 }

@@ -998,10 +998,7 @@ static void fimc_capture_mark_jpeg_xfer(struct fimc_ctx *ctx,
 	ctx->scaler.enabled = !jpeg;
 	fimc_ctrls_activate(ctx, !jpeg);
 
-	if (jpeg)
-		set_bit(ST_CAPT_JPEG, &ctx->fimc_dev->state);
-	else
-		clear_bit(ST_CAPT_JPEG, &ctx->fimc_dev->state);
+	assign_bit(ST_CAPT_JPEG, &ctx->fimc_dev->state, jpeg);
 }
 
 static int __fimc_capture_set_format(struct fimc_dev *fimc,

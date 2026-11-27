@@ -89,7 +89,7 @@ static int pending_bit_stuck(void)
 {
 	u64 msr;
 
-	rdmsrq(MSR_FIDVID_STATUS, msr);
+	msr = rdmsrq(MSR_FIDVID_STATUS);
 	return msr & MSR_S_LO_CHANGE_PENDING ? 1 : 0;
 }
 
@@ -107,7 +107,7 @@ static int query_current_values_with_pending_wait(struct powernow_k8_data *data)
 			pr_debug("detected change pending stuck\n");
 			return 1;
 		}
-		rdmsrq(MSR_FIDVID_STATUS, msr.q);
+		msr.q = rdmsrq(MSR_FIDVID_STATUS);
 	} while (msr.l & MSR_S_LO_CHANGE_PENDING);
 
 	data->currvid = msr.h & MSR_S_HI_CURRENT_VID;
@@ -134,7 +134,7 @@ static void fidvid_msr_init(void)
 	struct msr msr;
 	u8 fid, vid;
 
-	rdmsrq(MSR_FIDVID_STATUS, msr.q);
+	msr.q = rdmsrq(MSR_FIDVID_STATUS);
 	vid = msr.h & MSR_S_HI_CURRENT_VID;
 	fid = msr.l & MSR_S_LO_CURRENT_FID;
 	msr.l = fid | (vid << MSR_C_LO_VID_SHIFT);
@@ -293,7 +293,7 @@ static int core_voltage_pre_transition(struct powernow_k8_data *data,
 	if ((savefid < LO_FID_TABLE_TOP) && (reqfid < LO_FID_TABLE_TOP))
 		rvomult = 2;
 	rvosteps *= rvomult;
-	rdmsrq(MSR_FIDVID_STATUS, msr.q);
+	msr.q = rdmsrq(MSR_FIDVID_STATUS);
 	maxvid = 0x1f & (msr.h >> 16);
 	pr_debug("ph1 maxvid=0x%x\n", maxvid);
 	if (reqvid < maxvid) /* lower numbers are higher voltages */

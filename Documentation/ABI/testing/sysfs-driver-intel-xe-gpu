@@ -8,3 +8,27 @@ Description:
 
 		This sysfs file is present only on supported Intel Xe platforms.
 		Accessible only to users with administrative privileges.
+
+What:		/sys/bus/pci/drivers/xe/.../tile<N>/memory/max_bw
+Date:		October 2026
+KernelVersion:	7.5
+Contact:	intel-xe@lists.freedesktop.org
+Description:
+		RO. Maximum achievable memory bandwidth reported by firmware, in
+		megabits per second (Mbps), as a decimal integer.
+		This is not a measurement of current memory bandwidth usage.
+
+		This sysfs file is present only on Crescent Island devices.
+		It is readable by all users.
+
+What:		/sys/bus/pci/drivers/xe/.../tile<N>/memory/max_freq
+Date:		October 2026
+KernelVersion:	7.5
+Contact:	intel-xe@lists.freedesktop.org
+Description:
+		RO. Maximum achievable memory frequency reported by firmware,
+		in MHz, as a decimal integer.
+		This is not the current memory frequency.
+
+		This sysfs file is present only on Crescent Island devices.
+		It is readable by all users.

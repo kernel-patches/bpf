@@ -24,7 +24,7 @@ enum hog_clock_type {
 struct cpu_hogger {
 	char *cgroup;
 	pid_t pid;
-	long usage;
+	s64 usage;
 };
 
 struct cpu_hog_func_param {
@@ -185,7 +185,7 @@ static int hog_cpus_timed(const char *cgroup, void *arg)
 static int test_cpucg_stats(const char *root)
 {
 	int ret = KSFT_FAIL;
-	long usage_usec, user_usec, system_usec;
+	s64 usage_usec, user_usec, system_usec;
 	long usage_seconds = 2;
 	long expected_usage_usec = usage_seconds * USEC_PER_SEC;
 	char *cpucg;
@@ -197,9 +197,9 @@ static int test_cpucg_stats(const char *root)
 	if (cg_create(cpucg))
 		goto cleanup;
 
-	usage_usec = cg_read_key_long(cpucg, "cpu.stat", "usage_usec");
-	user_usec = cg_read_key_long(cpucg, "cpu.stat", "user_usec");
-	system_usec = cg_read_key_long(cpucg, "cpu.stat", "system_usec");
+	usage_usec = cg_read_key_s64(cpucg, "cpu.stat", "usage_usec");
+	user_usec = cg_read_key_s64(cpucg, "cpu.stat", "user_usec");
+	system_usec = cg_read_key_s64(cpucg, "cpu.stat", "system_usec");
 	if (usage_usec != 0 || user_usec != 0 || system_usec != 0)
 		goto cleanup;
 
@@ -214,8 +214,8 @@ static int test_cpucg_stats(const char *root)
 	if (cg_run(cpucg, hog_cpus_timed, (void *)&param))
 		goto cleanup;
 
-	usage_usec = cg_read_key_long(cpucg, "cpu.stat", "usage_usec");
-	user_usec = cg_read_key_long(cpucg, "cpu.stat", "user_usec");
+	usage_usec = cg_read_key_s64(cpucg, "cpu.stat", "usage_usec");
+	user_usec = cg_read_key_s64(cpucg, "cpu.stat", "user_usec");
 	if (user_usec <= 0)
 		goto cleanup;
 
@@ -239,7 +239,7 @@ static int test_cpucg_nice(const char *root)
 {
 	int ret = KSFT_FAIL;
 	int status;
-	long user_usec, nice_usec;
+	s64 user_usec, nice_usec;
 	long usage_seconds = 2;
 	long expected_nice_usec = usage_seconds * USEC_PER_SEC;
 	char *cpucg;
@@ -252,8 +252,8 @@ static int test_cpucg_nice(const char *root)
 	if (cg_create(cpucg))
 		goto cleanup;
 
-	user_usec = cg_read_key_long(cpucg, "cpu.stat", "user_usec");
-	nice_usec = cg_read_key_long(cpucg, "cpu.stat", "nice_usec");
+	user_usec = cg_read_key_s64(cpucg, "cpu.stat", "user_usec");
+	nice_usec = cg_read_key_s64(cpucg, "cpu.stat", "nice_usec");
 	if (nice_usec == -1)
 		ret = KSFT_SKIP;
 	if (user_usec != 0 || nice_usec != 0)
@@ -289,8 +289,8 @@ static int test_cpucg_nice(const char *root)
 		if (!WIFEXITED(status))
 			goto cleanup;
 
-		user_usec = cg_read_key_long(cpucg, "cpu.stat", "user_usec");
-		nice_usec = cg_read_key_long(cpucg, "cpu.stat", "nice_usec");
+		user_usec = cg_read_key_s64(cpucg, "cpu.stat", "user_usec");
+		nice_usec = cg_read_key_s64(cpucg, "cpu.stat", "nice_usec");
 		if (user_usec <= 0)
 			goto cleanup;
 		if (!values_close_report(nice_usec, expected_nice_usec, 1))
@@ -357,8 +357,8 @@ run_cpucg_weight_test(
 	}
 
 	for (i = 0; i < ARRAY_SIZE(children); i++)
-		children[i].usage = cg_read_key_long(children[i].cgroup,
-				"cpu.stat", "usage_usec");
+		children[i].usage = cg_read_key_s64(children[i].cgroup,
+						    "cpu.stat", "usage_usec");
 
 	if (validate(children, ARRAY_SIZE(children)))
 		goto cleanup;
@@ -400,7 +400,7 @@ overprovision_validate(const struct cpu_hogger *children, int num_children)
 	int ret = KSFT_FAIL, i;
 
 	for (i = 0; i < num_children - 1; i++) {
-		long delta;
+		s64 delta;
 
 		if (children[i + 1].usage <= children[i].usage)
 			goto cleanup;
@@ -486,7 +486,7 @@ run_cpucg_nested_weight_test(const char *root, bool overprovisioned)
 	int ret = KSFT_FAIL, i;
 	char *parent = NULL, *child = NULL;
 	struct cpu_hogger leaf[3] = {};
-	long nested_leaf_usage, child_usage;
+	s64 nested_leaf_usage, child_usage;
 	int nprocs = get_nprocs();
 
 	if (!overprovisioned) {
@@ -567,8 +567,8 @@ run_cpucg_nested_weight_test(const char *root, bool overprovisioned)
 	}
 
 	for (i = 0; i < ARRAY_SIZE(leaf); i++) {
-		leaf[i].usage = cg_read_key_long(leaf[i].cgroup,
-				"cpu.stat", "usage_usec");
+		leaf[i].usage = cg_read_key_s64(leaf[i].cgroup, "cpu.stat",
+						"usage_usec");
 		if (leaf[i].usage <= 0)
 			goto cleanup;
 	}
@@ -581,7 +581,7 @@ run_cpucg_nested_weight_test(const char *root, bool overprovisioned)
 		goto cleanup;
 
 
-	child_usage = cg_read_key_long(child, "cpu.stat", "usage_usec");
+	child_usage = cg_read_key_s64(child, "cpu.stat", "usage_usec");
 	if (child_usage <= 0)
 		goto cleanup;
 	if (!values_close_report(child_usage, nested_leaf_usage, 1))
@@ -679,7 +679,8 @@ static int test_cpucg_max(const char *root)
 	long duration_seconds = 1;
 
 	long duration_usec;
-	long usage_usec, n_periods, remainder_usec, expected_usage_usec;
+	long n_periods, remainder_usec, expected_usage_usec;
+	s64 usage_usec;
 	char *cpucg;
 	char quota_buf[32];
 
@@ -708,7 +709,7 @@ static int test_cpucg_max(const char *root)
 	if (cg_run(cpucg, hog_cpus_timed, (void *)&param))
 		goto cleanup;
 
-	usage_usec = cg_read_key_long(cpucg, "cpu.stat", "usage_usec");
+	usage_usec = cg_read_key_s64(cpucg, "cpu.stat", "usage_usec");
 	if (usage_usec <= 0)
 		goto cleanup;
 
@@ -746,7 +747,8 @@ static int test_cpucg_max_nested(const char *root)
 	long duration_seconds = 1;
 
 	long duration_usec;
-	long usage_usec, n_periods, remainder_usec, expected_usage_usec;
+	long n_periods, remainder_usec, expected_usage_usec;
+	s64 usage_usec;
 	char *parent, *child;
 	char quota_buf[32];
 
@@ -782,7 +784,7 @@ static int test_cpucg_max_nested(const char *root)
 	if (cg_run(child, hog_cpus_timed, (void *)&param))
 		goto cleanup;
 
-	usage_usec = cg_read_key_long(child, "cpu.stat", "usage_usec");
+	usage_usec = cg_read_key_s64(child, "cpu.stat", "usage_usec");
 	if (usage_usec <= 0)
 		goto cleanup;
 
@@ -809,6 +811,76 @@ cleanup:
 	return ret;
 }
 
+static int test_cpucg_uclamp_parse(const char *root)
+{
+	static const struct {
+		char *input;
+		char *expected;	/* NULL if the write must fail */
+	} cases[] = {
+		{ "12.34", "12.34\n" },
+		{ "50", "50.00\n" },
+		{ "0.125", "0.13\n" },
+		{ "0.999", "1.00\n" },
+		{ "100.01", NULL },
+		{ "abc", NULL },
+		{ "0.5000000000000", "0.50\n" },
+		{ "0.123456789012", "0.12\n" },
+		{ "0.99999999999999999999", "1.00\n" },
+		{ "0.0000000000000000000000000000000000", "0.00\n" },
+	};
+	int ret = KSFT_FAIL;
+	char buf[64];
+	char *cpucg;
+	int i, err;
+
+	cpucg = cg_name(root, "cpucg_test");
+	if (!cpucg)
+		goto cleanup;
+
+	if (cg_create(cpucg))
+		goto cleanup;
+
+	if (cg_read(cpucg, "cpu.uclamp.min", buf, sizeof(buf))) {
+		ret = KSFT_SKIP;
+		goto cleanup;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		err = cg_write(cpucg, "cpu.uclamp.min", cases[i].input);
+
+		if (!cases[i].expected) {
+			if (!err) {
+				ksft_print_msg("%s was accepted\n", cases[i].input);
+				goto cleanup;
+			}
+			continue;
+		}
+
+		if (err) {
+			ksft_print_msg("%s was rejected: %s\n", cases[i].input,
+				       strerror(-err));
+			goto cleanup;
+		}
+
+		if (cg_read(cpucg, "cpu.uclamp.min", buf, sizeof(buf)))
+			goto cleanup;
+
+		if (strcmp(buf, cases[i].expected)) {
+			ksft_print_msg("%s reads back as %s", cases[i].input,
+				       buf);
+			goto cleanup;
+		}
+	}
+
+	ret = KSFT_PASS;
+
+cleanup:
+	cg_destroy(cpucg);
+	free(cpucg);
+
+	return ret;
+}
+
 #define T(x) { x, #x }
 struct cpucg_test {
 	int (*fn)(const char *root);
@@ -823,6 +895,7 @@ struct cpucg_test {
 	T(test_cpucg_nested_weight_underprovisioned),
 	T(test_cpucg_max),
 	T(test_cpucg_max_nested),
+	T(test_cpucg_uclamp_parse),
 };
 #undef T
 

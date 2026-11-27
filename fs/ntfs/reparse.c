@@ -787,7 +787,12 @@ static int ntfs_set_ntfs_reparse_data(struct ntfs_inode *ni, char *value, size_t
 		return -EINVAL;
 	xrni = xr->idx_ni;
 
-	if (!ntfs_attr_exist(ni, AT_REPARSE_POINT, AT_UNNAMED, 0)) {
+	err = ntfs_attr_exist(ni, AT_REPARSE_POINT, AT_UNNAMED, 0);
+	if (err < 0) {
+		ntfs_index_ctx_put(xr);
+		goto out;
+	}
+	if (!err) {
 		struct reparse_point rp = {0, };
 
 		/*

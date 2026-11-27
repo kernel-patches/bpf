@@ -600,7 +600,6 @@ err_out:
 	return err;
 }
 
-#ifdef CONFIG_PM
 static void physmap_flash_shutdown(struct platform_device *dev)
 {
 	struct physmap_flash_info *info = platform_get_drvdata(dev);
@@ -610,9 +609,6 @@ static void physmap_flash_shutdown(struct platform_device *dev)
 		if (mtd_suspend(info->mtds[i]) == 0)
 			mtd_resume(info->mtds[i]);
 }
-#else
-#define physmap_flash_shutdown NULL
-#endif
 
 static struct platform_driver physmap_flash_driver = {
 	.probe		= physmap_flash_probe,

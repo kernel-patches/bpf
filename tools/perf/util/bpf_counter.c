@@ -3,11 +3,13 @@
 /* Copyright (c) 2019 Facebook */
 
 #include <assert.h>
+#include <libgen.h>
 #include <limits.h>
 #include <unistd.h>
 #include <sys/file.h>
 #include <sys/resource.h>
 #include <sys/time.h>
+#include <sys/vfs.h>
 #include <linux/err.h>
 #include <linux/list.h>
 #include <linux/zalloc.h>
@@ -31,6 +33,10 @@
 #include "bpf_skel/bperf_u.h"
 #include "bpf_skel/bperf_leader.skel.h"
 #include "bpf_skel/bperf_follower.skel.h"
+
+#ifndef BPF_FS_MAGIC
+#define BPF_FS_MAGIC 0xcafe4a11
+#endif
 
 struct bpf_counter {
 	void *skel;
@@ -376,6 +382,24 @@ static bool bperf_attr_map_compatible(int attr_map_fd)
 		(map_info.value_size == sizeof(struct perf_event_attr_map_entry));
 }
 
+/* bpf_obj_pin() only works on bpffs: say so if that is why it failed. */
+static void bperf_pin_hint(struct target *target, const char *path)
+{
+	char buf[PATH_MAX];
+	struct statfs st;
+	const char *dir;
+
+	scnprintf(buf, sizeof(buf), "%s", path);
+	dir = dirname(buf);
+	if (statfs(dir, &st) || st.f_type == BPF_FS_MAGIC)
+		return;
+	if (target->attr_map)
+		pr_err("--bpf-attr-map: %s is not on bpffs\n", dir);
+	else
+		pr_err("bpffs is not mounted at %s, try 'mount -t bpf bpf %s' or use --bpf-attr-map\n",
+		       dir, dir);
+}
+
 static int bperf_lock_attr_map(struct target *target)
 {
 	char path[PATH_MAX];
@@ -393,30 +417,41 @@ static int bperf_lock_attr_map(struct target *target)
 					sizeof(struct perf_event_attr),
 					sizeof(struct perf_event_attr_map_entry),
 					ATTR_MAP_SIZE, NULL);
-		if (map_fd < 0)
+		if (map_fd < 0) {
+			pr_err("Failed to create perf_event_attr map: %m\n");
 			return -1;
+		}
 
 		err = bpf_obj_pin(map_fd, path);
 		if (err) {
 			/* someone pinned the map in parallel? */
 			close(map_fd);
 			map_fd = bpf_obj_get(path);
-			if (map_fd < 0)
+			if (map_fd < 0) {
+				/* report the pin error, not the bpf_obj_get() one */
+				errno = -err;
+				pr_err("Failed to pin perf_event_attr map at %s: %m\n", path);
+				bperf_pin_hint(target, path);
 				return -1;
+			}
 		}
 	} else {
 		map_fd = bpf_obj_get(path);
-		if (map_fd < 0)
+		if (map_fd < 0) {
+			pr_err("Failed to open perf_event_attr map at %s: %m\n", path);
 			return -1;
+		}
 	}
 
 	if (!bperf_attr_map_compatible(map_fd)) {
+		pr_err("%s is not a perf_event_attr map this perf can use\n", path);
 		close(map_fd);
 		return -1;
 
 	}
 	err = flock(map_fd, LOCK_EX);
 	if (err) {
+		pr_err("Failed to lock %s: %m\n", path);
 		close(map_fd);
 		return -1;
 	}
@@ -550,10 +585,8 @@ static int bperf__load(struct evsel *evsel, struct target *target)
 	 * map.
 	 */
 	attr_map_fd = bperf_lock_attr_map(target);
-	if (attr_map_fd < 0) {
-		pr_err("Failed to lock perf_event_attr map\n");
+	if (attr_map_fd < 0)
 		return -1;
-	}
 
 	err = bpf_map_lookup_elem(attr_map_fd, &evsel->core.attr, &entry);
 	if (err) {

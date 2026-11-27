@@ -858,7 +858,7 @@ static int usbf_epn_dma_in(struct usbf_ep *epn, struct usbf_req *req)
 		usbf_ep_reg_bitset(epn, USBF_REG_EPN_CONTROL, USBF_EPN_AUTO);
 
 		/* The end of DMA transfer at the USBF level needs to be handle
-		 * after the detection of the end of DMA transfer at the brige
+		 * after the detection of the end of DMA transfer at the bridge
 		 * level.
 		 * To force this sequence, EPN_IN_END_EN will be set by the
 		 * detection of the end of transfer at bridge level (ie. bridge
@@ -1075,7 +1075,7 @@ static void usbf_epn_dma_out_send_dma(struct usbf_ep *epn, dma_addr_t addr, u32 
 				USBF_EPN_SET_DMACNT(0));
 
 		/* The end of DMA transfer at the USBF level needs to be handled
-		 * after the detection of the end of DMA transfer at the brige
+		 * after the detection of the end of DMA transfer at the bridge
 		 * level.
 		 * To force this sequence, enabling the OUT_END interrupt will
 		 * be donee by the detection of the end of transfer at bridge

@@ -16,6 +16,7 @@
 #include "cros_ec_trace.h"
 
 #define EC_COMMAND_RETRIES	50
+#define EC_COMMAND_SEND_RETRIES	5
 #define RWSIG_CONTINUE_RETRIES	8
 #define RWSIG_CONTINUE_MAX_ERRORS_IN_ROW	3
 
@@ -116,6 +117,8 @@ static int cros_ec_xfer_command(struct cros_ec_device *ec_dev, struct cros_ec_co
 	int ret;
 	int (*xfer_fxn)(struct cros_ec_device *ec, struct cros_ec_command *msg);
 
+	msg->result = EC_RES_SUCCESS;
+
 	if (ec_dev->proto_version > 2)
 		xfer_fxn = ec_dev->pkt_xfer;
 	else
@@ -192,6 +195,9 @@ static int cros_ec_wait_until_complete(struct cros_ec_device *ec_dev,
 			orig_msg->command = orig_cmd;
 			orig_msg->outsize = orig_outsize;
 			orig_msg->version = orig_version;
+
+			if (ret == -EAGAIN)
+				continue;
 			return ret;
 		}
 	}
@@ -201,10 +207,19 @@ static int cros_ec_wait_until_complete(struct cros_ec_device *ec_dev,
 
 static int cros_ec_send_command(struct cros_ec_device *ec_dev, struct cros_ec_command *msg)
 {
-	int ret = cros_ec_xfer_command(ec_dev, msg);
+	int retry_count = EC_COMMAND_SEND_RETRIES;
+	int ret;
+
+retry:
+	ret = cros_ec_xfer_command(ec_dev, msg);
 
 	if (msg->result == EC_RES_IN_PROGRESS)
-		ret = cros_ec_wait_until_complete(ec_dev, msg);
+		return cros_ec_wait_until_complete(ec_dev, msg);
+
+	if (ret == -EAGAIN && retry_count--) {
+		usleep_range(10000, 11000);
+		goto retry;
+	}
 
 	return ret;
 }
@@ -370,7 +385,8 @@ static int cros_ec_get_proto_info(struct cros_ec_device *ec_dev, int devidx)
 {
 	struct cros_ec_command *msg;
 	struct ec_response_get_protocol_info *info;
-	int ret, mapped;
+	int ret, mapped, din_size, dout_size;
+	u8 *din, *dout;
 
 	ec_dev->proto_version = 3;
 	if (devidx > 0)
@@ -407,14 +423,27 @@ static int cros_ec_get_proto_info(struct cros_ec_device *ec_dev, int devidx)
 
 	switch (devidx) {
 	case CROS_EC_DEV_EC_INDEX:
+		ret = -ENOMEM;
+		din_size = info->max_response_packet_size + EC_MAX_RESPONSE_OVERHEAD;
+		din = devm_krealloc(ec_dev->dev, ec_dev->din, din_size, GFP_KERNEL);
+		if (!din)
+			goto exit;
+		ec_dev->din_size = din_size;
+		ec_dev->din = din;
+
+		dout_size = info->max_request_packet_size + EC_MAX_REQUEST_OVERHEAD;
+		dout = devm_krealloc(ec_dev->dev, ec_dev->dout, dout_size, GFP_KERNEL);
+		if (!dout)
+			goto exit;
+		ec_dev->dout_size = dout_size;
+		ec_dev->dout = dout;
+
 		ec_dev->max_request = info->max_request_packet_size -
 						sizeof(struct ec_host_request);
 		ec_dev->max_response = info->max_response_packet_size -
 						sizeof(struct ec_host_response);
 		ec_dev->proto_version = min(EC_HOST_REQUEST_VERSION,
 					    fls(info->protocol_versions) - 1);
-		ec_dev->din_size = info->max_response_packet_size + EC_MAX_RESPONSE_OVERHEAD;
-		ec_dev->dout_size = info->max_request_packet_size + EC_MAX_REQUEST_OVERHEAD;
 
 		dev_dbg(ec_dev->dev, "using proto v%u\n", ec_dev->proto_version);
 		break;
@@ -441,6 +470,7 @@ static int cros_ec_get_proto_info_legacy(struct cros_ec_device *ec_dev)
 	struct ec_params_hello *params;
 	struct ec_response_hello *response;
 	int ret, mapped;
+	u8 *din, *dout;
 
 	ec_dev->proto_version = 2;
 
@@ -482,12 +512,23 @@ static int cros_ec_get_proto_info_legacy(struct cros_ec_device *ec_dev)
 		goto exit;
 	}
 
+	ret = -ENOMEM;
+	din = devm_krealloc(ec_dev->dev, ec_dev->din, EC_PROTO2_MSG_BYTES, GFP_KERNEL);
+	if (!din)
+		goto exit;
+	ec_dev->din_size = EC_PROTO2_MSG_BYTES;
+	ec_dev->din = din;
+
+	dout = devm_krealloc(ec_dev->dev, ec_dev->dout, EC_PROTO2_MSG_BYTES, GFP_KERNEL);
+	if (!dout)
+		goto exit;
+	ec_dev->dout_size = EC_PROTO2_MSG_BYTES;
+	ec_dev->dout = dout;
+
 	ec_dev->max_request = EC_PROTO2_MAX_PARAM_SIZE;
 	ec_dev->max_response = EC_PROTO2_MAX_PARAM_SIZE;
 	ec_dev->max_passthru = 0;
 	ec_dev->pkt_xfer = NULL;
-	ec_dev->din_size = EC_PROTO2_MSG_BYTES;
-	ec_dev->dout_size = EC_PROTO2_MSG_BYTES;
 
 	dev_dbg(ec_dev->dev, "falling back to proto v2\n");
 	ret = 0;
@@ -537,6 +578,17 @@ static int cros_ec_get_host_command_version_mask(struct cros_ec_device *ec_dev, 
 
 	mapped = cros_ec_map_error(msg->result);
 	if (mapped) {
+		/*
+		 * EC returns EC_RES_INVALID_COMMAND if EC_CMD_GET_CMD_VERSIONS
+		 * isn't implemented.
+		 *
+		 * EC_CMD_GET_CMD_VERSIONS returns EC_RES_INVALID_PARAM if @cmd
+		 * isn't implemented.
+		 *
+		 * Return -EOPNOTSUPP to indicate "unsupported".
+		 */
+		if (mapped == -EINVAL)
+			mapped = -EOPNOTSUPP;
 		ret = mapped;
 		goto exit;
 	}
@@ -554,6 +606,24 @@ exit:
 	return ret;
 }
 
+static bool cros_ec_proto_can_fallback_to_v2(struct cros_ec_device *ec_dev,
+					     int ret)
+{
+	/* The EC does support v3. */
+	if (ec_dev->registered && ec_dev->pkt_xfer)
+		return false;
+
+	/* The transport doesn't support v2. */
+	if (!ec_dev->cmd_xfer)
+		return false;
+
+	/* The system or EC is encountering transient failures. */
+	if (ret == -ENOMEM || ret == -EAGAIN)
+		return false;
+
+	return true;
+}
+
 /**
  * cros_ec_query_all() -  Query the protocol version supported by the
  *         ChromeOS EC.
@@ -563,62 +633,52 @@ exit:
  */
 int cros_ec_query_all(struct cros_ec_device *ec_dev)
 {
-	struct device *dev = ec_dev->dev;
 	u32 ver_mask;
 	int ret;
 
-	/* First try sending with proto v3. */
-	if (!cros_ec_get_proto_info(ec_dev, CROS_EC_DEV_EC_INDEX)) {
-		/* Check for PD. */
-		cros_ec_get_proto_info(ec_dev, CROS_EC_DEV_PD_INDEX);
-	} else {
-		/* Try querying with a v2 hello message. */
-		ret = cros_ec_get_proto_info_legacy(ec_dev);
-		if (ret) {
-			/*
-			 * It's possible for a test to occur too early when
-			 * the EC isn't listening. If this happens, we'll
-			 * test later when the first command is run.
-			 */
-			ec_dev->proto_version = EC_PROTO_VERSION_UNKNOWN;
-			dev_dbg(ec_dev->dev, "EC query failed: %d\n", ret);
-			return ret;
+	if (ec_dev->pkt_xfer) {
+		/* First try sending with proto v3. */
+		ret = cros_ec_get_proto_info(ec_dev, CROS_EC_DEV_EC_INDEX);
+
+		if (!ret) {
+			/* Check for optional PD chip; ignore errors. */
+			cros_ec_get_proto_info(ec_dev, CROS_EC_DEV_PD_INDEX);
+		} else if (cros_ec_proto_can_fallback_to_v2(ec_dev, ret)) {
+			/* Fall back to querying with a v2 hello message. */
+			ret = cros_ec_get_proto_info_legacy(ec_dev);
 		}
+	} else {
+		/* pkt_xfer is NULL (v2-only EC); query with v2 directly. */
+		ret = cros_ec_get_proto_info_legacy(ec_dev);
 	}
-
-	devm_kfree(dev, ec_dev->din);
-	devm_kfree(dev, ec_dev->dout);
-
-	ec_dev->din = devm_kzalloc(dev, ec_dev->din_size, GFP_KERNEL);
-	if (!ec_dev->din) {
-		ret = -ENOMEM;
+	if (ret)
 		goto exit;
-	}
-
-	ec_dev->dout = devm_kzalloc(dev, ec_dev->dout_size, GFP_KERNEL);
-	if (!ec_dev->dout) {
-		devm_kfree(dev, ec_dev->din);
-		ret = -ENOMEM;
-		goto exit;
-	}
 
 	/* Probe if MKBP event is supported */
 	ret = cros_ec_get_host_command_version_mask(ec_dev, EC_CMD_GET_NEXT_EVENT, &ver_mask);
-	if (ret < 0 || ver_mask == 0) {
+	if (ret == -EOPNOTSUPP)
 		ec_dev->mkbp_event_supported = 0;
-	} else {
+	else if (ret)
+		goto exit;
+	else
 		ec_dev->mkbp_event_supported = fls(ver_mask);
-
+	if (ec_dev->mkbp_event_supported)
 		dev_dbg(ec_dev->dev, "MKBP support version %u\n", ec_dev->mkbp_event_supported - 1);
-	}
+	else
+		dev_dbg(ec_dev->dev, "MKBP unsupported\n");
 
 	/* Probe if host sleep v1 is supported for S0ix failure detection. */
 	ret = cros_ec_get_host_command_version_mask(ec_dev, EC_CMD_HOST_SLEEP_EVENT, &ver_mask);
-	ec_dev->host_sleep_v1 = (ret == 0 && (ver_mask & EC_VER_MASK(1)));
+	if (ret == -EOPNOTSUPP)
+		ec_dev->host_sleep_v1 = false;
+	else if (ret)
+		goto exit;
+	else
+		ec_dev->host_sleep_v1 = ver_mask & EC_VER_MASK(1);
 
 	/* Get host event wake mask. */
 	ret = cros_ec_get_host_event_wake_mask(ec_dev, &ec_dev->host_event_wake_mask);
-	if (ret < 0) {
+	if (ret == -EOPNOTSUPP) {
 		/*
 		 * If the EC doesn't support EC_CMD_HOST_EVENT_GET_WAKE_MASK,
 		 * use a reasonable default. Note that we ignore various
@@ -636,18 +696,19 @@ int cros_ec_query_all(struct cros_ec_device *ec_dev)
 			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY) |
 			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_PD_MCU) |
 			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY_STATUS));
-		/*
-		 * Old ECs may not support this command. Complain about all
-		 * other errors.
-		 */
-		if (ret != -EOPNOTSUPP)
-			dev_err(ec_dev->dev,
-				"failed to retrieve wake mask: %d\n", ret);
+	} else if (ret) {
+		dev_err(ec_dev->dev, "failed to retrieve wake mask: %d\n", ret);
+		goto exit;
 	}
 
-	ret = 0;
-
+	return 0;
 exit:
+	/*
+	 * Reset `proto_version` so the next transfer retries
+	 * cros_ec_query_all() once the EC is ready.
+	 */
+	ec_dev->proto_version = EC_PROTO_VERSION_UNKNOWN;
+	dev_dbg(ec_dev->dev, "EC query failed: %d\n", ret);
 	return ret;
 }
 EXPORT_SYMBOL(cros_ec_query_all);

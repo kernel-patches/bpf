@@ -814,6 +814,10 @@ retry:
 		if (vma_hpagesize != vma_kernel_pagesize(dst_vma))
 			goto out_unlock_vma;
 
+		/* The range may have been re-registered without WP meanwhile. */
+		if ((flags & MFILL_ATOMIC_WP) && !(dst_vma->vm_flags & VM_UFFD_WP))
+			goto out_unlock_vma;
+
 		/*
 		 * If memory mappings are changing because of non-cooperative
 		 * operation (e.g. mremap) running in parallel, bail out and
@@ -966,6 +970,9 @@ static __always_inline ssize_t mfill_atomic(struct userfaultfd_ctx *ctx,
 	err = mfill_get_vma(&state);
 	if (err)
 		goto out;
+
+	if (uffd_flags_mode_is(flags, MFILL_ATOMIC_POISON))
+		vma_set_atomic_flag(state.vma, VMA_MAYBE_UFFD_POISON_BIT);
 
 	/*
 	 * If this is a HUGETLB vma, pass off to appropriate routine
@@ -1403,6 +1410,7 @@ static int move_swap_pte(struct mm_struct *mm, struct vm_area_struct *dst_vma,
 	orig_src_pte = ptep_get_and_clear(mm, src_addr, src_pte);
 	if (pgtable_supports_soft_dirty())
 		orig_src_pte = pte_swp_mksoft_dirty(orig_src_pte);
+	orig_src_pte = pte_swp_clear_uffd(orig_src_pte);
 	/* Re-arm RWP on the moved swap entry if dst_vma is RWP-registered. */
 	if (userfaultfd_rwp(dst_vma))
 		orig_src_pte = pte_swp_mkuffd(orig_src_pte);
@@ -1556,6 +1564,7 @@ retry:
 		 */
 		if (!src_folio) {
 			struct folio *folio;
+			struct page *page;
 			bool locked;
 
 			/*
@@ -1569,12 +1578,19 @@ retry:
 				goto out;
 			}
 
-			folio = vm_normal_folio(src_vma, src_addr, orig_src_pte);
-			if (!folio || !PageAnonExclusive(&folio->page)) {
+			/*
+			 * PG_anon_exclusive is per page. The first page of a
+			 * large folio can be shared while the page mapped here
+			 * is still exclusive, so check the page being moved.
+			 */
+			page = vm_normal_page(src_vma, src_addr, orig_src_pte);
+			if (!page || !PageAnonExclusive(page)) {
 				spin_unlock(src_ptl);
 				ret = -EBUSY;
 				goto out;
 			}
+
+			folio = page_folio(page);
 
 			locked = folio_trylock(folio);
 			/*
@@ -2140,6 +2156,9 @@ static bool vma_can_userfault(struct vm_area_struct *vma, vm_flags_t vm_flags,
 	/* Only mm-backed memory can have its faults handled by userspace. */
 	if (!vma_is_mm_backed(vma))
 		return false;
+	/* DAX fault handlers do not support uffd-wp. */
+	if (vma_is_dax(vma))
+		return false;
 	/* Core mm may discard droppable memory at any time. */
 	if (vma_test_single_mask(vma, VMA_DROPPABLE))
 		return false;
@@ -2434,6 +2453,8 @@ struct userfaultfd_wait_queue {
 	struct uffd_msg msg;
 	wait_queue_entry_t wq;
 	struct userfaultfd_ctx *ctx;
+	/* UFFD_EVENT_FORK: the context created for the child */
+	struct userfaultfd_ctx *fork_ctx;
 	bool waken;
 };
 
@@ -3010,14 +3031,8 @@ static void userfaultfd_event_wait_completion(struct userfaultfd_ctx *ctx,
 			 * didn't.
 			 */
 			__remove_wait_queue(&ctx->event_wqh, &ewq->wq);
-			if (ewq->msg.event == UFFD_EVENT_FORK) {
-				struct userfaultfd_ctx *new;
-
-				new = (struct userfaultfd_ctx *)
-					(unsigned long)
-					ewq->msg.arg.reserved.reserved1;
-				release_new_ctx = new;
-			}
+			if (ewq->msg.event == UFFD_EVENT_FORK)
+				release_new_ctx = ewq->fork_ctx;
 			break;
 		}
 
@@ -3115,7 +3130,7 @@ static void dup_fctx(struct userfaultfd_fork_ctx *fctx)
 	msg_init(&ewq.msg);
 
 	ewq.msg.event = UFFD_EVENT_FORK;
-	ewq.msg.arg.reserved.reserved1 = (unsigned long)fctx->new;
+	ewq.fork_ctx = fctx->new;
 
 	userfaultfd_event_wait_completion(ctx, &ewq);
 }
@@ -3427,7 +3442,6 @@ static int resolve_userfault_fork(struct userfaultfd_ctx *new,
 	if (fd < 0)
 		return fd;
 
-	msg->arg.reserved.reserved1 = 0;
 	msg->arg.fork.ufd = fd;
 	return 0;
 }
@@ -3505,9 +3519,7 @@ static ssize_t userfaultfd_ctx_read(struct userfaultfd_ctx *ctx, int no_wait,
 			*msg = uwq->msg;
 
 			if (uwq->msg.event == UFFD_EVENT_FORK) {
-				fork_nctx = (struct userfaultfd_ctx *)
-					(unsigned long)
-					uwq->msg.arg.reserved.reserved1;
+				fork_nctx = uwq->fork_ctx;
 				list_move(&uwq->wq.entry, &fork_event);
 				/*
 				 * fork_nctx can be freed as soon as

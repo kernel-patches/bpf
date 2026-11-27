@@ -889,6 +889,9 @@ static const struct encoding_to_trap_config encoding_to_cgt[] __initconst = {
 	SR_TRAP(SYS_PMSCR_EL2,		CGT_HCR_NV),
 	SR_TRAP(SYS_MAIR_EL2,		CGT_HCR_NV),
 	SR_TRAP(SYS_AMAIR_EL2,		CGT_HCR_NV),
+	SR_TRAP(SYS_PIR_EL2,		CGT_HCR_NV),
+	SR_TRAP(SYS_PIRE0_EL2,		CGT_HCR_NV),
+	SR_TRAP(SYS_POR_EL2,		CGT_HCR_NV),
 	SR_TRAP(SYS_MPAMHCR_EL2,	CGT_HCR_NV),
 	SR_TRAP(SYS_MPAMVPMV_EL2,	CGT_HCR_NV),
 	SR_TRAP(SYS_MPAM2_EL2,		CGT_HCR_NV),
@@ -939,8 +942,10 @@ static const struct encoding_to_trap_config encoding_to_cgt[] __initconst = {
 		      sys_reg(3, 5, 14, 1, 0), CGT_HCR_NV),
 	SR_TRAP(SYS_CNTP_CTL_EL02,	CGT_CNTHCTL_EL1NVPCT),
 	SR_TRAP(SYS_CNTP_CVAL_EL02,	CGT_CNTHCTL_EL1NVPCT),
+	SR_TRAP(SYS_CNTP_TVAL_EL02,	CGT_HCR_NV),
 	SR_TRAP(SYS_CNTV_CTL_EL02,	CGT_CNTHCTL_EL1NVVCT),
 	SR_TRAP(SYS_CNTV_CVAL_EL02,	CGT_CNTHCTL_EL1NVVCT),
+	SR_TRAP(SYS_CNTV_TVAL_EL02,	CGT_HCR_NV),
 	SR_TRAP(OP_AT_S1E2R,		CGT_HCR_NV),
 	SR_TRAP(OP_AT_S1E2W,		CGT_HCR_NV),
 	SR_TRAP(OP_AT_S12E1R,		CGT_HCR_NV),
@@ -2429,7 +2434,7 @@ int __init populate_nv_trap_config(void)
 }
 
 int __init populate_sysreg_config(const struct sys_reg_desc *sr,
-				  unsigned int idx)
+				  unsigned int idx, bool needs_nv_trap)
 {
 	union trap_config tc;
 	u32 encoding;
@@ -2446,6 +2451,9 @@ int __init populate_sysreg_config(const struct sys_reg_desc *sr,
 
 	encoding = sys_reg(sr->Op0, sr->Op1, sr->CRn, sr->CRm, sr->Op2);
 	tc = get_trap_config(encoding);
+
+	if (needs_nv_trap && !tc.val)
+		kvm_err("sysreg %s has no NV trap configuration\n", sr->name);
 
 	if (tc.sri) {
 		kvm_err("sysreg %s (%d) duplicate entry (%d)\n",
@@ -2913,7 +2921,7 @@ static int kvm_inject_nested(struct kvm_vcpu *vcpu, u64 esr_el2,
 	 * Make sure the exception actually took place before we load
 	 * the new context.
 	 */
-	__kvm_adjust_pc(vcpu);
+	commit_pending_events(vcpu);
 
 	kvm_arch_vcpu_load(vcpu, smp_processor_id());
 	vcpu_clear_flag(vcpu, IN_NESTED_EXCEPTION);

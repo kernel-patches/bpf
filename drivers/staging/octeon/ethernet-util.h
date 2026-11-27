@@ -9,7 +9,7 @@
  * cvm_oct_get_buffer_ptr - convert packet data address to pointer
  * @packet_ptr: Packet data hardware address
  *
- * Returns Packet buffer pointer
+ * Return: Packet buffer pointer
  */
 static inline void *cvm_oct_get_buffer_ptr(union cvmx_buf_ptr packet_ptr)
 {
@@ -21,7 +21,7 @@ static inline void *cvm_oct_get_buffer_ptr(union cvmx_buf_ptr packet_ptr)
  * INTERFACE - convert IPD port to logical interface
  * @ipd_port: Port to check
  *
- * Returns Logical interface
+ * Return: Logical interface
  */
 static inline int INTERFACE(int ipd_port)
 {
@@ -39,7 +39,7 @@ static inline int INTERFACE(int ipd_port)
  * INDEX - convert IPD/PKO port number to the port's interface index
  * @ipd_port: Port to check
  *
- * Returns Index into interface port list
+ * Return: Index into interface port list
  */
 static inline int INDEX(int ipd_port)
 {

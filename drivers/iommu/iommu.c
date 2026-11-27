@@ -379,10 +379,14 @@ EXPORT_SYMBOL_GPL(iommu_device_register_bus);
 
 int iommu_mock_device_add(struct device *dev, struct iommu_device *iommu)
 {
+	bool dev_iommu_present;
 	int rc;
 
 	mutex_lock(&iommu_probe_device_lock);
+	dev_iommu_present = dev->iommu;
 	rc = iommu_fwspec_init(dev, iommu->fwnode);
+	if (rc && !dev_iommu_present && dev->iommu)
+		dev_iommu_free(dev);
 	mutex_unlock(&iommu_probe_device_lock);
 
 	if (rc)
@@ -3083,13 +3087,15 @@ int iommu_fwspec_init(struct device *dev, struct fwnode_handle *iommu_fwnode)
 	if (fwspec)
 		return iommu->ops == iommu_fwspec_ops(fwspec) ? 0 : -EINVAL;
 
-	if (!dev_iommu_get(dev))
-		return -ENOMEM;
-
 	/* Preallocate for the overwhelmingly common case of 1 ID */
 	fwspec = kzalloc_flex(*fwspec, ids, 1);
 	if (!fwspec)
 		return -ENOMEM;
+
+	if (!dev_iommu_get(dev)) {
+		kfree(fwspec);
+		return -ENOMEM;
+	}
 
 	fwnode_handle_get(iommu_fwnode);
 	fwspec->iommu_fwnode = iommu_fwnode;
@@ -3716,6 +3722,11 @@ EXPORT_SYMBOL_GPL(iommu_attach_device_pasid);
  * Caller should always provide a new handle to avoid race with the paths
  * that have lockless reference to handle if it intends to pass a valid handle.
  *
+ * The @domain must not be the domain currently attached to the @pasid. Such a
+ * same-domain replace would skip the driver callback that flushes all pending
+ * faults. That is a use-after-free hazard: any fault that still holds the old
+ * handle could dereference it after the caller frees it.
+ *
  * Return 0 on success, or an error.
  */
 int iommu_replace_device_pasid(struct iommu_domain *domain,
@@ -3751,8 +3762,13 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 	}
 
 	entry = iommu_make_pasid_array_entry(domain, handle);
-	curr = xa_cmpxchg(&group->pasid_array, pasid, NULL,
-			  XA_ZERO_ENTRY, GFP_KERNEL);
+	/*
+	 * iommu_attach_handle_get() runs without the group mutex, so unpublish
+	 * the old handle before the driver callback: a fault must not resolve
+	 * to either domain while the switch is in progress. This reserves the
+	 * slot too, so the store below cannot fail.
+	 */
+	curr = xa_store(&group->pasid_array, pasid, XA_ZERO_ENTRY, GFP_KERNEL);
 	if (xa_is_err(curr)) {
 		ret = xa_err(curr);
 		goto out_unlock;
@@ -3776,26 +3792,28 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 	if (curr == entry) {
 		WARN_ON(1);
 		ret = -EINVAL;
-		goto out_unlock;
+		goto out_store;
 	}
 
 	curr_domain = pasid_array_entry_to_domain(curr);
-	ret = 0;
-
-	if (curr_domain != domain) {
-		ret = __iommu_set_group_pasid(domain, group,
-					      pasid, curr_domain);
-		if (ret)
-			goto out_unlock;
+	/* Same as iommu_replace_group_handle(), reject a same-domain replace */
+	if (WARN_ON(curr_domain == domain)) {
+		entry = curr; /* restore the old handle */
+		ret = -EINVAL;
+		goto out_store;
 	}
 
+	ret = __iommu_set_group_pasid(domain, group, pasid, curr_domain);
+	if (ret)
+		entry = curr; /* restore the old handle */
+
+out_store:
 	/*
-	 * The above xa_cmpxchg() reserved the memory, and the
-	 * group->mutex is held, this cannot fail.
+	 * The xa_store() above reserved the memory, and the group->mutex
+	 * is held, this cannot fail.
 	 */
 	WARN_ON(xa_is_err(xa_store(&group->pasid_array,
 				   pasid, entry, GFP_KERNEL)));
-
 out_unlock:
 	mutex_unlock(&group->mutex);
 	return ret;
@@ -3818,8 +3836,12 @@ void iommu_detach_device_pasid(struct iommu_domain *domain, struct device *dev,
 	struct iommu_group *group = dev->iommu_group;
 
 	mutex_lock(&group->mutex);
-	__iommu_remove_group_pasid(group, pasid, domain);
+	/*
+	 * Unpublish the handle first, so it would not resolve to the detaching
+	 * domain once the driver is detaching it.
+	 */
 	xa_erase(&group->pasid_array, pasid);
+	__iommu_remove_group_pasid(group, pasid, domain);
 	mutex_unlock(&group->mutex);
 }
 EXPORT_SYMBOL_GPL(iommu_detach_device_pasid);
@@ -3951,8 +3973,12 @@ void iommu_detach_group_handle(struct iommu_domain *domain,
 			       struct iommu_group *group)
 {
 	mutex_lock(&group->mutex);
-	__iommu_group_set_core_domain(group);
+	/*
+	 * Unpublish the handle first, so it would not resolve to the detaching
+	 * domain once the driver is detaching it.
+	 */
 	xa_erase(&group->pasid_array, IOMMU_NO_PASID);
+	__iommu_group_set_core_domain(group);
 	mutex_unlock(&group->mutex);
 }
 EXPORT_SYMBOL_NS_GPL(iommu_detach_group_handle, "IOMMUFD_INTERNAL");
@@ -3972,35 +3998,53 @@ EXPORT_SYMBOL_NS_GPL(iommu_detach_group_handle, "IOMMUFD_INTERNAL");
  *
  * Caller should always provide a new handle to avoid race with the paths
  * that have lockless reference to handle.
+ *
+ * The @new_domain must not be the domain currently attached to the group. Such
+ * a same-domain replace would skip the driver callback that flushes all pending
+ * faults. That is a use-after-free hazard: any fault that still holds the old
+ * handle could dereference it after the caller frees it.
  */
 int iommu_replace_group_handle(struct iommu_group *group,
 			       struct iommu_domain *new_domain,
 			       struct iommu_attach_handle *handle)
 {
-	void *curr, *entry;
+	void *curr, *entry, *old;
 	int ret;
 
 	if (!new_domain || !handle)
 		return -EINVAL;
 
 	mutex_lock(&group->mutex);
-	entry = iommu_make_pasid_array_entry(new_domain, handle);
-	ret = xa_reserve(&group->pasid_array, IOMMU_NO_PASID, GFP_KERNEL);
-	if (ret)
+	/*
+	 * A same-domain replace would skip the driver callback that flushes all
+	 * pending faults. That is a use-after-free hazard: a fault that still
+	 * holds the old handle could dereference it after the caller frees it.
+	 */
+	if (WARN_ON(group->domain == new_domain)) {
+		ret = -EINVAL;
 		goto err_unlock;
+	}
+
+	entry = iommu_make_pasid_array_entry(new_domain, handle);
+	/*
+	 * iommu_attach_handle_get() runs without the group mutex, so unpublish
+	 * the old handle before the driver callback: a fault must not resolve
+	 * to either domain while the switch is in progress. This reserves the
+	 * slot too, so the store below cannot fail.
+	 */
+	old = xa_store(&group->pasid_array, IOMMU_NO_PASID, XA_ZERO_ENTRY,
+		       GFP_KERNEL);
+	if (xa_is_err(old)) {
+		ret = xa_err(old);
+		goto err_unlock;
+	}
 
 	ret = __iommu_group_set_domain(group, new_domain);
 	if (ret)
-		goto err_release;
+		entry = old; /* Restore the old handle */
 
 	curr = xa_store(&group->pasid_array, IOMMU_NO_PASID, entry, GFP_KERNEL);
 	WARN_ON(xa_is_err(curr));
-
-	mutex_unlock(&group->mutex);
-
-	return 0;
-err_release:
-	xa_release(&group->pasid_array, IOMMU_NO_PASID);
 err_unlock:
 	mutex_unlock(&group->mutex);
 	return ret;

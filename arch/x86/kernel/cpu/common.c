@@ -346,7 +346,7 @@ static void squash_the_stupid_serial_number(struct cpuinfo_x86 *c)
 
 	/* Disable processor serial number: */
 
-	rdmsrq(MSR_IA32_BBL_CR_CTL, val.q);
+	val.q = rdmsrq(MSR_IA32_BBL_CR_CTL);
 	val.l |= 0x200000;
 	wrmsrq(MSR_IA32_BBL_CR_CTL, val.q);
 
@@ -607,7 +607,7 @@ __noendbr u64 ibt_save(bool disable)
 	u64 msr = 0;
 
 	if (cpu_feature_enabled(X86_FEATURE_IBT)) {
-		rdmsrq(MSR_IA32_S_CET, msr);
+		msr = rdmsrq(MSR_IA32_S_CET);
 		if (disable)
 			wrmsrq(MSR_IA32_S_CET, msr & ~CET_ENDBR_EN);
 	}
@@ -620,7 +620,7 @@ __noendbr void ibt_restore(u64 save)
 	u64 msr;
 
 	if (cpu_feature_enabled(X86_FEATURE_IBT)) {
-		rdmsrq(MSR_IA32_S_CET, msr);
+		msr = rdmsrq(MSR_IA32_S_CET);
 		msr &= ~CET_ENDBR_EN;
 		msr |= (save & CET_ENDBR_EN);
 		wrmsrq(MSR_IA32_S_CET, msr);
@@ -1356,7 +1356,7 @@ u64 x86_read_arch_cap_msr(void)
 	u64 x86_arch_cap_msr = 0;
 
 	if (boot_cpu_has(X86_FEATURE_ARCH_CAPABILITIES))
-		rdmsrq(MSR_IA32_ARCH_CAPABILITIES, x86_arch_cap_msr);
+		x86_arch_cap_msr = rdmsrq(MSR_IA32_ARCH_CAPABILITIES);
 
 	return x86_arch_cap_msr;
 }
@@ -1391,8 +1391,8 @@ static bool __init vulnerable_to_rfds(u64 x86_arch_cap_msr)
 	 * both Core and Atom CPUs. Mark unaffected when Atom CPUs are not
 	 * present.
 	 */
-	if ((boot_cpu_data.x86_model == 0x97 ||
-	     boot_cpu_data.x86_model == 0xB7) &&
+	if ((boot_cpu_data.x86_vfm == INTEL_ALDERLAKE ||
+	     boot_cpu_data.x86_vfm == INTEL_RAPTORLAKE) &&
 	     boot_cpu_data.topo.intel_type != INTEL_CPU_TYPE_ATOM &&
 	     !boot_cpu_has(X86_FEATURE_HYBRID_CPU))
 		return false;
@@ -1948,10 +1948,10 @@ static bool detect_null_seg_behavior(void)
 	 */
 
 	unsigned long old_base, tmp;
-	rdmsrq(MSR_FS_BASE, old_base);
+	old_base = rdmsrq(MSR_FS_BASE);
 	wrmsrq(MSR_FS_BASE, 1);
 	loadsegment(fs, 0);
-	rdmsrq(MSR_FS_BASE, tmp);
+	tmp = rdmsrq(MSR_FS_BASE);
 	wrmsrq(MSR_FS_BASE, old_base);
 	return tmp == 0;
 }
@@ -2380,12 +2380,12 @@ static inline void setup_getcpu(int cpu)
 static inline void tss_setup_ist(struct tss_struct *tss)
 {
 	/* Set up the per-CPU TSS IST stacks */
-	tss->x86_tss.ist[IST_INDEX_DF] = __this_cpu_ist_top_va(DF);
-	tss->x86_tss.ist[IST_INDEX_NMI] = __this_cpu_ist_top_va(NMI);
-	tss->x86_tss.ist[IST_INDEX_DB] = __this_cpu_ist_top_va(DB);
-	tss->x86_tss.ist[IST_INDEX_MCE] = __this_cpu_ist_top_va(MCE);
+	tss->x86_tss.ist[IST_INDEX_DF]	= __this_cpu_ist_top_va(ESTACK_DF);
+	tss->x86_tss.ist[IST_INDEX_NMI]	= __this_cpu_ist_top_va(ESTACK_NMI);
+	tss->x86_tss.ist[IST_INDEX_DB]	= __this_cpu_ist_top_va(ESTACK_DB);
+	tss->x86_tss.ist[IST_INDEX_MCE]	= __this_cpu_ist_top_va(ESTACK_MCE);
 	/* Only mapped when SEV-ES is active */
-	tss->x86_tss.ist[IST_INDEX_VC] = __this_cpu_ist_top_va(VC);
+	tss->x86_tss.ist[IST_INDEX_VC]	= __this_cpu_ist_top_va(ESTACK_VC);
 }
 #else /* CONFIG_X86_64 */
 static inline void tss_setup_ist(struct tss_struct *tss) { }

@@ -300,7 +300,6 @@ bool scsi_cmd_allowed(unsigned char *cmd, bool open_for_write)
 	case GPCMD_VERIFY_10:
 	case VERIFY_16:
 	case REPORT_LUNS:
-	case SERVICE_ACTION_IN_16:
 	case RECEIVE_DIAGNOSTIC:
 	case MAINTENANCE_IN: /* also GPCMD_SEND_KEY, which is a write command */
 	case GPCMD_READ_BUFFER_CAPACITY:
@@ -330,6 +329,21 @@ bool scsi_cmd_allowed(unsigned char *cmd, bool open_for_write)
 	/* ZBC */
 	case ZBC_IN:
 		return true;
+	/*
+	 * The storage element depopulation commands share the opcode of the
+	 * read-only SERVICE ACTION IN(16) commands, but change the capacity
+	 * of the device and may destroy its data, so treat them as writing
+	 * commands.
+	 */
+	case SERVICE_ACTION_IN_16:
+		switch (cmd[1] & 0x1f) {
+		case SAI_REMOVE_ELEMENT_AND_TRUNCATE:
+		case SAI_RESTORE_ELEMENTS_AND_REBUILD:
+		case SAI_REMOVE_ELEMENT_AND_MODIFY_ZONES:
+			return open_for_write;
+		default:
+			return true;
+		}
 	/* Basic writing commands */
 	case WRITE_6:
 	case WRITE_10:

@@ -190,7 +190,7 @@ CVE分配
   SUSE		Jiri Kosina <jkosina@suse.cz>
 
   Amazon
-  Google	Kees Cook <keescook@chromium.org>
+  Google	Kees Cook <keescook@google.com>
   ============= ========================================================
 
 如果要将您的组织添加到专使名单中，请与硬件安全小组联系。被提名的专使必须完全

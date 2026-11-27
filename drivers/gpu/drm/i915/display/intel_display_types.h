@@ -63,6 +63,7 @@ struct intel_dp_link_training;
 struct intel_fbc;
 struct intel_global_objs_state;
 struct intel_hdcp_shim;
+struct intel_panel_bl_funcs;
 struct intel_panic;
 struct intel_tc_port;
 
@@ -303,17 +304,6 @@ struct intel_encoder {
 
 	/* VBT information for this encoder (may be NULL for older platforms) */
 	const struct intel_bios_encoder_data *devdata;
-};
-
-struct intel_panel_bl_funcs {
-	/* Connector and platform specific backlight functions */
-	int (*setup)(struct intel_connector *connector, enum pipe pipe);
-	u32 (*get)(struct intel_connector *connector, enum pipe pipe);
-	void (*set)(const struct drm_connector_state *conn_state, u32 level);
-	void (*disable)(const struct drm_connector_state *conn_state, u32 level);
-	void (*enable)(const struct intel_crtc_state *crtc_state,
-		       const struct drm_connector_state *conn_state, u32 level);
-	u32 (*hz_to_pwm)(struct intel_connector *connector, u32 hz);
 };
 
 /* in 100us units */
@@ -985,6 +975,8 @@ struct intel_link_m_n {
 	u32 data_n;
 	u32 link_m;
 	u32 link_n;
+	/* Wa_14021768792 for linkm/n ratio > 10 */
+	bool bypass_m_n_ratio_limit;
 };
 
 struct intel_csc_matrix {
@@ -1251,13 +1243,13 @@ struct intel_crtc_state {
 		u32 lvds_border_bits;
 	} gmch_pfit;
 
-	/* Panel fitter placement and size for Ironlake+ */
+	/* Panel fitter placement and size */
 	struct {
 		struct intel_casf casf;
 		struct drm_rect dst;
 		bool enabled;
 		bool force_thru;
-	} pch_pfit;
+	} pfit;
 
 	/* FDI configuration, only valid if has_pch_encoder is set. */
 	int fdi_lanes;
@@ -1408,8 +1400,12 @@ struct intel_crtc_state {
 
 	/* For DSB based pipe updates */
 	struct intel_dsb *dsb_color, *dsb_commit;
-	bool use_dsb;
-	bool use_flipq;
+
+	enum intel_commit_type {
+		INTEL_COMMIT_MMIO,
+		INTEL_COMMIT_DSB,
+		INTEL_COMMIT_FLIPQ,
+	} commit_type;
 
 	u32 psr2_man_track_ctl;
 
@@ -1798,6 +1794,7 @@ struct intel_psr {
 	bool enabled;
 	int pause_counter;
 	enum pipe pipe;
+	u8 pipe_mask;
 	enum transcoder transcoder;
 	bool active;
 	struct work_struct work;
@@ -1891,6 +1888,14 @@ struct intel_dp {
 	struct drm_dp_desc desc;
 	struct drm_dp_aux aux;
 	u32 aux_busy_last_status;
+
+	struct {
+		/* TODO: move the rest of the aux specific fields here */
+		/* we left the AUX engine busy and are waiting for it to recover */
+		bool left_busy;
+		u64 left_busy_since;
+	} dp_aux;
+
 	u8 train_set[4];
 
 	struct intel_pps pps;

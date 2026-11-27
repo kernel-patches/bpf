@@ -3,10 +3,8 @@
 
 #include "pvr_device.h"
 #include "pvr_fw.h"
-#include "pvr_fw_meta.h"
 #include "pvr_fw_startstop.h"
 #include "pvr_rogue_cr_defs.h"
-#include "pvr_rogue_meta.h"
 #include "pvr_vm.h"
 
 #include <linux/compiler.h>
@@ -110,9 +108,11 @@ rogue_slc_init(struct pvr_device *pvr_dev)
 int
 pvr_fw_start(struct pvr_device *pvr_dev)
 {
-	bool has_reset2 = PVR_HAS_FEATURE(pvr_dev, xe_tpu2);
 	u64 soft_reset_mask;
 	int err;
+
+	/* No Rogue cores should have this feature which requires additional reset steps. */
+	WARN_ON_ONCE(PVR_HAS_FEATURE(pvr_dev, s7_top_infrastructure));
 
 	if (PVR_HAS_FEATURE(pvr_dev, pbe2_in_xe))
 		soft_reset_mask = ROGUE_CR_SOFT_RESET__PBE2_XE__MASKFULL;
@@ -124,41 +124,21 @@ pvr_fw_start(struct pvr_device *pvr_dev)
 		 * Disable the default sys_bus_secure protection to perform
 		 * minimal setup.
 		 */
-		pvr_cr_write32(pvr_dev, ROGUE_CR_SYS_BUS_SECURE, 0);
-		(void)pvr_cr_read32(pvr_dev, ROGUE_CR_SYS_BUS_SECURE); /* Fence write */
+		pvr_cr_write_fenced32(pvr_dev, ROGUE_CR_SYS_BUS_SECURE, 0);
 	}
 
 	if (pvr_dev->fw_dev.processor_type == PVR_FW_PROCESSOR_TYPE_RISCV)
 		pvr_cr_write32(pvr_dev, ROGUE_CR_FWCORE_BOOT, 0);
 
 	/* Set Rogue in soft-reset. */
-	pvr_cr_write64(pvr_dev, ROGUE_CR_SOFT_RESET, soft_reset_mask);
-	if (has_reset2)
-		pvr_cr_write64(pvr_dev, ROGUE_CR_SOFT_RESET2, ROGUE_CR_SOFT_RESET2_MASKFULL);
-
-	/* Read soft-reset to fence previous write in order to clear the SOCIF pipeline. */
-	(void)pvr_cr_read64(pvr_dev, ROGUE_CR_SOFT_RESET);
-	if (has_reset2)
-		(void)pvr_cr_read64(pvr_dev, ROGUE_CR_SOFT_RESET2);
+	pvr_cr_write_fenced64(pvr_dev, ROGUE_CR_SOFT_RESET, soft_reset_mask);
 
 	/* Take Rascal and Dust out of reset. */
-	pvr_cr_write64(pvr_dev, ROGUE_CR_SOFT_RESET,
-		       soft_reset_mask ^ ROGUE_CR_SOFT_RESET_RASCALDUSTS_EN);
-	if (has_reset2)
-		pvr_cr_write64(pvr_dev, ROGUE_CR_SOFT_RESET2, 0);
-
-	(void)pvr_cr_read64(pvr_dev, ROGUE_CR_SOFT_RESET);
-	if (has_reset2)
-		(void)pvr_cr_read64(pvr_dev, ROGUE_CR_SOFT_RESET2);
+	pvr_cr_write_fenced64(pvr_dev, ROGUE_CR_SOFT_RESET,
+			      soft_reset_mask ^ ROGUE_CR_SOFT_RESET_RASCALDUSTS_EN);
 
 	/* Take everything out of reset but the FW processor. */
-	pvr_cr_write64(pvr_dev, ROGUE_CR_SOFT_RESET, ROGUE_CR_SOFT_RESET_GARTEN_EN);
-	if (has_reset2)
-		pvr_cr_write64(pvr_dev, ROGUE_CR_SOFT_RESET2, 0);
-
-	(void)pvr_cr_read64(pvr_dev, ROGUE_CR_SOFT_RESET);
-	if (has_reset2)
-		(void)pvr_cr_read64(pvr_dev, ROGUE_CR_SOFT_RESET2);
+	pvr_cr_write_fenced64(pvr_dev, ROGUE_CR_SOFT_RESET, ROGUE_CR_SOFT_RESET_GARTEN_EN);
 
 	err = rogue_slc_init(pvr_dev);
 	if (err)
@@ -178,8 +158,7 @@ pvr_fw_start(struct pvr_device *pvr_dev)
 	/* Need to wait for at least 16 cycles before taking the FW processor out of reset ... */
 	udelay(3);
 
-	pvr_cr_write64(pvr_dev, ROGUE_CR_SOFT_RESET, 0x0);
-	(void)pvr_cr_read64(pvr_dev, ROGUE_CR_SOFT_RESET);
+	pvr_cr_write_fenced64(pvr_dev, ROGUE_CR_SOFT_RESET, 0x0);
 
 	/* ... and afterwards. */
 	udelay(3);
@@ -199,6 +178,30 @@ err_reset:
 	return err;
 }
 
+static inline bool layout_is_mars(struct pvr_device *pvr_dev)
+{
+	u64 layout_mars_value = 0;
+
+	if (PVR_FEATURE_VALUE(pvr_dev, layout_mars, &layout_mars_value))
+		return false;
+
+	return layout_mars_value > 0;
+}
+
+static inline int must_wait_fw_idle_before_stop(struct pvr_device *pvr_dev)
+{
+	bool wait_fw_idle = true;
+	int err;
+
+	if (pvr_dev->fw_dev.defs->must_wait_fw_idle) {
+		err = pvr_dev->fw_dev.defs->must_wait_fw_idle(pvr_dev, &wait_fw_idle);
+		if (err)
+			return err;
+	}
+
+	return wait_fw_idle;
+}
+
 /**
  * pvr_fw_stop() - Stop FW processor
  * @pvr_dev: Target PowerVR device.
@@ -214,15 +217,9 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 				       ~(ROGUE_CR_SIDEKICK_IDLE_GARTEN_EN |
 					 ROGUE_CR_SIDEKICK_IDLE_SOCIF_EN |
 					 ROGUE_CR_SIDEKICK_IDLE_HOSTIF_EN);
-	bool skip_garten_idle = false;
-	u64 layout_mars_value = 0;
-	bool layout_mars = false;
-	bool meta_fw = pvr_dev->fw_dev.processor_type == PVR_FW_PROCESSOR_TYPE_META;
-	u32 reg_value;
-	int err;
 
-	if (PVR_FEATURE_VALUE(pvr_dev, layout_mars, &layout_mars_value) == 0)
-		layout_mars = layout_mars_value > 0;
+	bool layout_mars = layout_is_mars(pvr_dev);
+	int err;
 
 	/*
 	 * For cores with the LAYOUT_MARS feature, SIDEKICK and SLC would have been
@@ -250,7 +247,7 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 		       ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC_MASKFULL &
 		       ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC_DM_ASSOC_CLRMSK);
 
-	if (meta_fw) {
+	if (pvr_dev->fw_dev.defs->multi_dm_thread_assoc) {
 		pvr_cr_write32(pvr_dev, ROGUE_CR_MTS_INTCTX_THREAD1_DM_ASSOC,
 			       ROGUE_CR_MTS_INTCTX_THREAD1_DM_ASSOC_MASKFULL &
 			       ROGUE_CR_MTS_INTCTX_THREAD1_DM_ASSOC_DM_ASSOC_CLRMSK);
@@ -297,6 +294,8 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 	 * powered down by the FW.
 	 */
 	if (!layout_mars) {
+		int wait_fw_idle;
+
 		/* Wait for SLC to signal IDLE. */
 		err = pvr_cr_poll_reg32(pvr_dev, ROGUE_CR_SLC_IDLE,
 					ROGUE_CR_SLC_IDLE_MASKFULL,
@@ -309,24 +308,12 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 					sidekick_idle_mask, POLL_TIMEOUT_USEC);
 		if (err)
 			return err;
-	}
 
-	if (meta_fw) {
-		err = pvr_meta_cr_read32(pvr_dev, META_CR_TxVECINT_BHALT, &reg_value);
-		if (err)
-			return err;
+		wait_fw_idle = must_wait_fw_idle_before_stop(pvr_dev);
+		if (wait_fw_idle < 0)
+			return wait_fw_idle;
 
-		/*
-		 * Wait for Sidekick/Jones to signal IDLE including the Garten
-		 * Wrapper if there is no debugger attached (TxVECINT_BHALT =
-		 * 0x0).
-		 */
-		if (reg_value)
-			skip_garten_idle = true;
-	}
-
-	if (meta_fw || !layout_mars) {
-		if (!skip_garten_idle) {
+		if (wait_fw_idle) {
 			err = pvr_cr_poll_reg32(pvr_dev, ROGUE_CR_SIDEKICK_IDLE,
 						ROGUE_CR_SIDEKICK_IDLE_GARTEN_EN,
 						ROGUE_CR_SIDEKICK_IDLE_GARTEN_EN,
@@ -346,7 +333,6 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 					ROGUE_CR_MARS_IDLE_CPU_EN |
 					ROGUE_CR_MARS_IDLE_MH_SYSARB0_EN,
 					POLL_TIMEOUT_USEC);
-
 		if (err)
 			return err;
 	}

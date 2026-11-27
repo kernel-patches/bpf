@@ -8,7 +8,7 @@
 #ifndef _ASMARM_PGTABLE_NOMMU_H
 #define _ASMARM_PGTABLE_NOMMU_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/slab.h>
 #include <asm/processor.h>
@@ -84,6 +84,6 @@ extern unsigned int kobjsize(const void *objp);
 #define v6_user_fns	(0)
 #define xscale_mc_user_fns (0)
 
-#endif /*__ASSEMBLY__*/
+#endif /*__ASSEMBLER__*/
 
 #endif /* _ASMARM_PGTABLE_H */

@@ -506,14 +506,18 @@ bpf_trampoline_get_progs(const struct bpf_trampoline *tr, int *total, bool *ip_a
 	int kind;
 
 	*total = 0;
-	tnodes = kzalloc_objs(*tnodes, BPF_TRAMP_MAX);
+	for (kind = 0; kind < BPF_TRAMP_MAX; kind++)
+		*total += tr->progs_cnt[kind];
+
+	/* The arrays of nodes are behind the BPF_TRAMP_MAX headers */
+	tnodes = kzalloc(BPF_TRAMP_MAX * sizeof(*tnodes) + *total * sizeof(*nodes), GFP_KERNEL);
 	if (!tnodes)
 		return ERR_PTR(-ENOMEM);
+	nodes = (void *)&tnodes[BPF_TRAMP_MAX];
 
 	for (kind = 0; kind < BPF_TRAMP_MAX; kind++) {
 		tnodes[kind].nr_nodes = tr->progs_cnt[kind];
-		*total += tr->progs_cnt[kind];
-		nodes = tnodes[kind].nodes;
+		tnodes[kind].nodes = nodes;
 
 		hlist_for_each_entry(node, &tr->progs_hlist[kind], tramp_hlist) {
 			*ip_arg |= node->link->prog->call_get_func_ip;
@@ -768,7 +772,7 @@ again:
 		goto out;
 	}
 
-	if (size > PAGE_SIZE) {
+	if (size > BPF_TRAMP_IMAGE_MAX_SIZE) {
 		err = -E2BIG;
 		goto out;
 	}
@@ -889,22 +893,17 @@ static struct bpf_tramp_node *fsession_exit(struct bpf_tramp_node *node)
 }
 
 static int bpf_trampoline_add_prog(struct bpf_trampoline *tr,
-				   struct bpf_tramp_node *node,
-				   int cnt)
+				   struct bpf_tramp_node *node)
 {
 	enum bpf_tramp_prog_type kind;
 	struct bpf_tramp_node *node_existing, *fexit;
 	struct hlist_head *prog_list;
 
 	kind = bpf_attach_type_to_tramp(node->link->prog);
-	if (kind == BPF_TRAMP_FSESSION) {
+	if (kind == BPF_TRAMP_FSESSION)
 		prog_list = &tr->progs_hlist[BPF_TRAMP_FENTRY];
-		cnt++;
-	} else {
+	else
 		prog_list = &tr->progs_hlist[kind];
-	}
-	if (cnt >= BPF_MAX_TRAMP_LINKS)
-		return -E2BIG;
 	if (!hlist_unhashed(&node->tramp_hlist))
 		/* prog already linked */
 		return -EBUSY;
@@ -1031,7 +1030,7 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_node *node,
 		tr->extension_prog = node->link->prog;
 		return 0;
 	}
-	err = bpf_trampoline_add_prog(tr, node, cnt);
+	err = bpf_trampoline_add_prog(tr, node);
 	if (err)
 		return err;
 	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */, ops, data);
@@ -1724,7 +1723,8 @@ static void bpf_trampoline_multi_attach_rollback(struct bpf_trampoline *tr)
 	for_each_mnode_cnt(mnode, link, link->nodes_cnt)
 
 int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
-				struct bpf_tracing_multi_link *link)
+				struct bpf_tracing_multi_link *link,
+				struct bpf_verifier_log *log)
 {
 	struct bpf_tracing_multi_data *data = &link->data;
 	struct bpf_attach_target_info tgt_info = {};
@@ -1737,7 +1737,7 @@ int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
 	for_each_mnode(mnode, link) {
 		rollback_cnt = i;
 
-		err = bpf_check_attach_btf_id_multi(btf, prog, ids[i], &tgt_info);
+		err = bpf_check_attach_btf_id_multi(log, btf, prog, ids[i], &tgt_info);
 		if (err)
 			goto rollback_put;
 

@@ -1200,6 +1200,8 @@ static int gfx_v9_0_ring_test_ring(struct amdgpu_ring *ring)
 	int r;
 
 	WREG32(scratch, 0xCAFEDEAD);
+	/* Flush the posted write before the CP writes the test value. */
+	RREG32(scratch);
 	r = amdgpu_ring_alloc(ring, 3);
 	if (r)
 		return r;
@@ -2573,19 +2575,12 @@ static void gfx_v9_0_setup_rb(struct amdgpu_device *adev)
 }
 
 static void gfx_v9_0_debug_trap_config_init(struct amdgpu_device *adev,
-				uint32_t first_vmid,
-				uint32_t last_vmid)
+				uint32_t vmid_mask)
 {
 	uint32_t data;
-	uint32_t trap_config_vmid_mask = 0;
-	int i;
-
-	/* Calculate trap config vmid mask */
-	for (i = first_vmid; i < last_vmid; i++)
-		trap_config_vmid_mask |= (1 << i);
 
 	data = REG_SET_FIELD(0, SPI_GDBG_TRAP_CONFIG,
-			VMID_SEL, trap_config_vmid_mask);
+			VMID_SEL, vmid_mask);
 	data = REG_SET_FIELD(data, SPI_GDBG_TRAP_CONFIG,
 			TRAP_EN, 1);
 	WREG32(SOC15_REG_OFFSET(GC, 0, mmSPI_GDBG_TRAP_CONFIG), data);
@@ -2615,7 +2610,7 @@ static void gfx_v9_0_init_compute_vmid(struct amdgpu_device *adev)
 			SH_MEM_CONFIG__ALIGNMENT_MODE__SHIFT;
 
 	mutex_lock(&adev->srbm_mutex);
-	for (i = adev->vm_manager.first_kfd_vmid; i < AMDGPU_NUM_VMID; i++) {
+	for_each_uq_gfx_vmid(i, adev) {
 		soc15_grbm_select(adev, 0, 0, 0, i, 0);
 		/* CP and shaders */
 		WREG32_SOC15_RLC(GC, 0, mmSH_MEM_CONFIG, sh_mem_config);
@@ -2626,7 +2621,7 @@ static void gfx_v9_0_init_compute_vmid(struct amdgpu_device *adev)
 
 	/* Initialize all compute VMIDs to have no GDS, GWS, or OA
 	   access. These should be enabled by FW for target VMIDs. */
-	for (i = adev->vm_manager.first_kfd_vmid; i < AMDGPU_NUM_VMID; i++) {
+	for_each_uq_gfx_vmid(i, adev) {
 		WREG32_SOC15_OFFSET(GC, 0, mmGDS_VMID0_BASE, 2 * i, 0);
 		WREG32_SOC15_OFFSET(GC, 0, mmGDS_VMID0_SIZE, 2 * i, 0);
 		WREG32_SOC15_OFFSET(GC, 0, mmGDS_GWS_VMID0, i, 0);
@@ -3245,7 +3240,7 @@ static int gfx_v9_0_rlc_resume(struct amdgpu_device *adev)
 		break;
 	}
 
-	gfx_v9_0_update_spm_vmid_internal(adev, 0xf);
+	gfx_v9_0_update_spm_vmid_internal(adev, adev->vm_manager.spm_vmid);
 
 	adev->gfx.rlc.funcs->start(adev);
 
@@ -4081,39 +4076,79 @@ err_priv_inst:
 	return r;
 }
 
-static void gfx_v9_0_deactivate_kcq_hqd(struct amdgpu_device *adev)
+/* caller must hold srbm_mutex and have selected me/pipe/queue */
+static bool gfx_v9_0_deactivate_hqd(struct amdgpu_device *adev,
+				    u32 me, u32 pipe, u32 queue)
 {
-	amdgpu_gfx_rlc_enter_safe_mode(adev, 0);
-	for (int i = 0; i < adev->gfx.num_compute_rings; i++) {
-		u32 tmp;
-		struct amdgpu_ring *ring = &adev->gfx.compute_ring[i];
+	int j;
 
-		mutex_lock(&adev->srbm_mutex);
-		soc15_grbm_select(adev, ring->me, ring->pipe, ring->queue, 0, 0);
-		tmp = RREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE);
-		/* disable the queue if it's active */
-		if (tmp & CP_HQD_ACTIVE__ACTIVE_MASK) {
-			int j;
+	/* disable the queue if it's active */
+	if (!(RREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE) & CP_HQD_ACTIVE__ACTIVE_MASK))
+		return false;
 
-			WREG32_SOC15(GC, 0, mmCP_HQD_DEQUEUE_REQUEST, 1);
-			for (j = 0; j < adev->usec_timeout; j++) {
-				tmp = RREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE);
-				if (!(tmp & CP_HQD_ACTIVE__ACTIVE_MASK))
-					break;
-				udelay(1);
-			}
-			if (j == AMDGPU_MAX_USEC_TIMEOUT) {
-				DRM_DEBUG("comp_%u_%u_%u dequeue request failed.\n",
-							ring->me, ring->pipe, ring->queue);
-				/* Manual disable if dequeue request times out */
-				WREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE, 0);
-			}
-			WREG32_SOC15(GC, 0, mmCP_HQD_DEQUEUE_REQUEST, 0);
-		}
-		soc15_grbm_select(adev, 0, 0, 0, 0, 0);
-		mutex_unlock(&adev->srbm_mutex);
+	WREG32_SOC15(GC, 0, mmCP_HQD_DEQUEUE_REQUEST, 1);
+	for (j = 0; j < adev->usec_timeout; j++) {
+		if (!(RREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE) &
+		      CP_HQD_ACTIVE__ACTIVE_MASK))
+			break;
+		udelay(1);
 	}
+	if (j == adev->usec_timeout) {
+		dev_dbg(adev->dev, "comp_%u_%u_%u dequeue request failed.\n",
+			me, pipe, queue);
+		/* Manual disable if dequeue request times out */
+		WREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE, 0);
+	}
+	WREG32_SOC15(GC, 0, mmCP_HQD_DEQUEUE_REQUEST, 0);
+
+	return true;
+}
+
+/*
+ * MODE2 does not reset the CP HQD registers on gfx9 APUs. Besides the KCQs,
+ * the HQDs owned by KFD (HIQ and the user queues mapped by the HWS) also stay
+ * active, because KFD cannot unmap/destroy them while the reset domain is
+ * locked. After MODE2 the MEC then resumes with stale HQDs and the HWS no
+ * longer answers (qcm fence timeout on the next KFD queue). Deactivate every
+ * active HQD of all MECs except the KIQ, which is reprogrammed on resume.
+ */
+static void gfx_v9_0_deactivate_all_hqd(struct amdgpu_device *adev)
+{
+	struct amdgpu_ring *kiq_ring = &adev->gfx.kiq[0].ring;
+	u64 kiq_mqd_addr = kiq_ring->mqd_gpu_addr & ~0x3ULL;
+	u32 me, pipe, queue, n = 0;
+	u64 mqd_addr;
+
+	amdgpu_gfx_rlc_enter_safe_mode(adev, 0);
+	mutex_lock(&adev->srbm_mutex);
+	for (me = 1; me <= adev->gfx.mec.num_mec; me++) {
+		for (pipe = 0; pipe < adev->gfx.mec.num_pipe_per_mec; pipe++) {
+			for (queue = 0; queue < adev->gfx.mec.num_queue_per_pipe;
+			     queue++) {
+				if (me == kiq_ring->me && pipe == kiq_ring->pipe &&
+				    queue == kiq_ring->queue)
+					continue;
+				soc15_grbm_select(adev, me, pipe, queue, 0, 0);
+				/*
+				 * At least on Renoir the HQD registers of MEC2
+				 * pipes 2/3 read back as those of pipes 0/1, so
+				 * the KIQ shows up a second time. Skip it by its
+				 * MQD address instead of sending it a dequeue.
+				 */
+				mqd_addr = ((u64)RREG32_SOC15(GC, 0, mmCP_MQD_BASE_ADDR_HI) << 32) |
+					   RREG32_SOC15(GC, 0, mmCP_MQD_BASE_ADDR);
+				if (mqd_addr == kiq_mqd_addr)
+					continue;
+				if (gfx_v9_0_deactivate_hqd(adev, me, pipe, queue))
+					n++;
+			}
+		}
+	}
+	soc15_grbm_select(adev, 0, 0, 0, 0, 0);
+	mutex_unlock(&adev->srbm_mutex);
 	amdgpu_gfx_rlc_exit_safe_mode(adev, 0);
+
+	dev_dbg(adev->dev, "deactivated %u active compute HQDs before MODE2\n", n);
 }
 
 static int gfx_v9_0_hw_fini(struct amdgpu_ip_block *ip_block)
@@ -4141,8 +4176,8 @@ static int gfx_v9_0_hw_fini(struct amdgpu_ip_block *ip_block)
 	}
 
 	if ((adev->flags & AMD_IS_APU) && amdgpu_in_reset(adev) &&
-		amdgpu_asic_reset_method(adev) == AMD_RESET_METHOD_MODE2)
-		gfx_v9_0_deactivate_kcq_hqd(adev);
+	    amdgpu_asic_reset_method(adev) == AMD_RESET_METHOD_MODE2)
+		gfx_v9_0_deactivate_all_hqd(adev);
 
 	/* Use deinitialize sequence from CAIL when unbinding device from driver,
 	 * otherwise KIQ is hanging when binding back
@@ -4937,11 +4972,10 @@ static int gfx_v9_0_late_init(struct amdgpu_ip_block *ip_block)
 		return r;
 
 	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 2))
-		gfx_v9_4_2_debug_trap_config_init(adev,
-			adev->vm_manager.first_kfd_vmid, AMDGPU_NUM_VMID);
+		gfx_v9_4_2_debug_trap_config_init(adev);
 	else
 		gfx_v9_0_debug_trap_config_init(adev,
-			adev->vm_manager.first_kfd_vmid, AMDGPU_NUM_VMID);
+			adev->vm_manager.vmid_uq_mask_gfxhub);
 
 	return 0;
 }
@@ -5240,6 +5274,16 @@ static void gfx_v9_0_update_spm_vmid_internal(struct amdgpu_device *adev,
 static void gfx_v9_0_update_spm_vmid(struct amdgpu_device *adev, int xcc_id,
 		struct amdgpu_ring *ring, unsigned int vmid)
 {
+	if (ring) {
+		if ((ring->funcs->type == AMDGPU_RING_TYPE_GFX) ||
+		    (ring->funcs->type == AMDGPU_RING_TYPE_COMPUTE)) {
+			u32 reg = SOC15_REG_OFFSET(GC, 0, mmRLC_SPM_MC_CNTL);
+			u32 data = (vmid & RLC_SPM_MC_CNTL__RLC_SPM_VMID_MASK) << RLC_SPM_MC_CNTL__RLC_SPM_VMID__SHIFT;
+			amdgpu_ring_emit_wreg(ring, reg, data);
+		}
+		return;
+	}
+
 	amdgpu_gfx_off_ctrl(adev, false);
 
 	gfx_v9_0_update_spm_vmid_internal(adev, vmid);
@@ -7559,6 +7603,7 @@ static const struct amdgpu_ring_funcs gfx_v9_0_ring_funcs_gfx = {
 	.get_wptr = gfx_v9_0_ring_get_wptr_gfx,
 	.set_wptr = gfx_v9_0_ring_set_wptr_gfx,
 	.emit_frame_size = /* totally 242 maximum if 16 IBs */
+		5 + /* update_spm_vmid */
 		5 +  /* COND_EXEC */
 		13 +  /* PIPELINE_SYNC */
 		SOC15_FLUSH_GPU_TLB_NUM_WREG * 5 +
@@ -7615,6 +7660,7 @@ static const struct amdgpu_ring_funcs gfx_v9_0_sw_ring_funcs_gfx = {
 	.get_wptr = amdgpu_sw_ring_get_wptr_gfx,
 	.set_wptr = amdgpu_sw_ring_set_wptr_gfx,
 	.emit_frame_size = /* totally 242 maximum if 16 IBs */
+		5 + /* update_spm_vmid */
 		5 +  /* COND_EXEC */
 		13 +  /* PIPELINE_SYNC */
 		SOC15_FLUSH_GPU_TLB_NUM_WREG * 5 +
@@ -7674,6 +7720,7 @@ static const struct amdgpu_ring_funcs gfx_v9_0_ring_funcs_compute = {
 	.get_wptr = gfx_v9_0_ring_get_wptr_compute,
 	.set_wptr = gfx_v9_0_ring_set_wptr_compute,
 	.emit_frame_size =
+		5 + /* update_spm_vmid */
 		20 + /* gfx_v9_0_ring_emit_gds_switch */
 		7 + /* gfx_v9_0_ring_emit_hdp_flush */
 		5 + /* hdp invalidate */

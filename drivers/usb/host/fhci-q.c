@@ -208,7 +208,7 @@ void fhci_urb_complete_free(struct fhci_hcd *fhci, struct urb *urb)
 }
 
 /*
- * caculate transfer length/stats and update the urb
+ * calculate transfer length/stats and update the urb
  * Precondition: irqsafe(only for urb-?status locking)
  */
 void fhci_done_td(struct urb *urb, struct td *td)

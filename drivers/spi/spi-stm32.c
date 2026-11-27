@@ -1690,11 +1690,9 @@ static int stm32_spi_transfer_one_dma(struct stm32_spi *spi,
 
 	if (rx_dma_desc) {
 		if (rx_mdma_desc) {
-			rx_mdma_desc->callback = spi->cfg->dma_rx_cb;
-			rx_mdma_desc->callback_param = spi;
+			dmaengine_desc_set_callback(rx_mdma_desc, spi->cfg->dma_rx_cb, NULL, spi);
 		} else {
-			rx_dma_desc->callback = spi->cfg->dma_rx_cb;
-			rx_dma_desc->callback_param = spi;
+			dmaengine_desc_set_callback(rx_dma_desc, spi->cfg->dma_rx_cb, NULL, spi);
 		}
 
 		/* Enable Rx DMA request */
@@ -1719,8 +1717,7 @@ static int stm32_spi_transfer_one_dma(struct stm32_spi *spi,
 	if (tx_dma_desc) {
 		if (spi->cur_comm == SPI_SIMPLEX_TX ||
 		    spi->cur_comm == SPI_3WIRE_TX) {
-			tx_dma_desc->callback = spi->cfg->dma_tx_cb;
-			tx_dma_desc->callback_param = spi;
+			dmaengine_desc_set_callback(tx_dma_desc, spi->cfg->dma_tx_cb, NULL, spi);
 		}
 
 		if (dma_submit_error(dmaengine_submit(tx_dma_desc))) {
@@ -2544,7 +2541,6 @@ err_pm_disable:
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 
 	if (spi->mdma_rx)
 		dma_release_channel(spi->mdma_rx);
@@ -2574,7 +2570,6 @@ static void stm32_spi_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 
 	if (ctrl->dma_tx)
 		dma_release_channel(ctrl->dma_tx);

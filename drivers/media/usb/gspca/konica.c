@@ -40,20 +40,21 @@ struct sd {
 };
 
 
-/* .priv is what goes to register 8 for this mode, known working values:
-   0x00 -> 176x144, cropped
-   0x01 -> 176x144, cropped
-   0x02 -> 176x144, cropped
-   0x03 -> 176x144, cropped
-   0x04 -> 176x144, binned
-   0x05 -> 320x240
-   0x06 -> 320x240
-   0x07 -> 160x120, cropped
-   0x08 -> 160x120, cropped
-   0x09 -> 160x120, binned (note has 136 lines)
-   0x0a -> 160x120, binned (note has 136 lines)
-   0x0b -> 160x120, cropped
-*/
+/*
+ * .priv is what goes to register 8 for this mode, known working values:
+ * 0x00 -> 176x144, cropped
+ * 0x01 -> 176x144, cropped
+ * 0x02 -> 176x144, cropped
+ * 0x03 -> 176x144, cropped
+ * 0x04 -> 176x144, binned
+ * 0x05 -> 320x240
+ * 0x06 -> 320x240
+ * 0x07 -> 160x120, cropped
+ * 0x08 -> 160x120, cropped
+ * 0x09 -> 160x120, binned (note has 136 lines)
+ * 0x0a -> 160x120, binned (note has 136 lines)
+ * 0x0b -> 160x120, cropped
+ */
 static const struct v4l2_pix_format vga_mode[] = {
 	{160, 120, V4L2_PIX_FMT_KONICA420, V4L2_FIELD_NONE,
 		.bytesperline = 160,
@@ -173,6 +174,9 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	struct usb_host_interface *alt;
 	struct usb_interface *intf;
 
+	/* The previous stream's URBs have been destroyed. */
+	sd->last_data_urb = NULL;
+
 	intf = usb_ifnum_to_if(sd->gspca_dev.dev, sd->gspca_dev.iface);
 	alt = usb_altnum_to_altsetting(intf, sd->gspca_dev.alt);
 	if (!alt) {
@@ -240,13 +244,15 @@ static void sd_stopN(struct gspca_dev *gspca_dev)
 
 	konica_stream_off(gspca_dev);
 #if IS_ENABLED(CONFIG_INPUT)
-	/* Don't keep the button in the pressed state "forever" if it was
-	   pressed when streaming is stopped */
-	if (sd->snapshot_pressed) {
+	/*
+	 * Don't keep the button in the pressed state "forever" if it was
+	 * pressed when streaming is stopped
+	 */
+	if (sd->snapshot_pressed && gspca_dev->input_dev) {
 		input_report_key(gspca_dev->input_dev, KEY_CAMERA, 0);
 		input_sync(gspca_dev->input_dev);
-		sd->snapshot_pressed = 0;
 	}
+	sd->snapshot_pressed = 0;
 #endif
 }
 

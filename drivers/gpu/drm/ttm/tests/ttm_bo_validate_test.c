@@ -57,7 +57,7 @@ static struct dma_fence *alloc_mock_fence(struct kunit *test)
 	fence = kunit_kzalloc(test, sizeof(*fence), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, fence);
 
-	dma_fence_init(fence, &fence_ops, &fence_lock, 0, 0);
+	dma_fence_init(fence, &fence_ops, &fence_lock, 0, 0, 0);
 
 	return fence;
 }

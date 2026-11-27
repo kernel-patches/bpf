@@ -116,7 +116,7 @@ static void *vb2_vmalloc_get_userptr(struct vb2_buffer *vb, struct device *dev,
 	return buf;
 
 fail_map:
-	vb2_destroy_framevec(vec);
+	vb2_destroy_framevec(vec, false);
 fail_pfnvec_create:
 	kfree(buf);
 
@@ -127,25 +127,17 @@ static void vb2_vmalloc_put_userptr(void *buf_priv)
 {
 	struct vb2_vmalloc_buf *buf = buf_priv;
 	unsigned long vaddr = (unsigned long)buf->vaddr & PAGE_MASK;
-	unsigned int i;
-	struct page **pages;
 	unsigned int n_pages;
 
 	if (!buf->vec->is_pfns) {
 		n_pages = frame_vector_count(buf->vec);
 		if (vaddr)
 			vm_unmap_ram((void *)vaddr, n_pages);
-		if (buf->dma_dir == DMA_FROM_DEVICE ||
-		    buf->dma_dir == DMA_BIDIRECTIONAL) {
-			pages = frame_vector_pages(buf->vec);
-			if (!WARN_ON_ONCE(IS_ERR(pages)))
-				for (i = 0; i < n_pages; i++)
-					set_page_dirty_lock(pages[i]);
-		}
 	} else {
 		iounmap((__force void __iomem *)buf->vaddr);
 	}
-	vb2_destroy_framevec(buf->vec);
+	vb2_destroy_framevec(buf->vec, buf->dma_dir == DMA_FROM_DEVICE ||
+			     buf->dma_dir == DMA_BIDIRECTIONAL);
 	kfree(buf);
 }
 

@@ -266,6 +266,13 @@ static int ufs_sprd_n6_init(struct ufs_hba *hba)
 	return 0;
 }
 
+static void ufs_sprd_n6_exit(struct ufs_hba *hba)
+{
+	struct ufs_sprd_priv *priv = ufs_sprd_get_priv_data(hba);
+
+	regulator_disable(priv->vregi[SPRD_UFS_VDD_MPHY].vreg);
+}
+
 static int ufs_sprd_n6_phy_init(struct ufs_hba *hba)
 {
 	int ret = 0;
@@ -394,6 +401,7 @@ static struct ufs_sprd_priv n6_ufs = {
 	.ufs_hba_sprd_vops = {
 		.name = "sprd,ums9620-ufs",
 		.init = ufs_sprd_n6_init,
+		.exit = ufs_sprd_n6_exit,
 		.hce_enable_notify = sprd_ufs_n6_hce_enable_notify,
 		.pwr_change_notify = sprd_ufs_pwr_change_notify,
 		.hibern8_notify = sprd_ufs_n6_h8_notify,

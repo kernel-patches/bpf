@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <linux/sched.h>
 #include <sys/syscall.h>
+#include <sys/mman.h>
 
 #define MAX_PATH_LEN		128
 #define MAX_FILES		7
@@ -22,8 +23,6 @@
 #define __NR_close_range 436
 #endif
 #endif
-
-static int duration;
 
 static struct {
 	__u32 cnt;
@@ -55,48 +54,48 @@ static int trigger_fstat_events(pid_t pid)
 	int ret = -1;
 
 	/* unmountable pseudo-filesystems */
-	if (CHECK(pipe(pipefd) < 0, "trigger", "pipe failed\n"))
+	if (!ASSERT_OK(pipe(pipefd), "pipe"))
 		return ret;
 	/* unmountable pseudo-filesystems */
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (CHECK(sockfd < 0, "trigger", "socket failed\n"))
+	if (!ASSERT_OK_FD(sockfd, "socket"))
 		goto out_close;
 	/* mountable pseudo-filesystems */
 	procfd = open("/proc/self/comm", O_RDONLY);
-	if (CHECK(procfd < 0, "trigger", "open /proc/self/comm failed\n"))
+	if (!ASSERT_OK_FD(procfd, "open /proc/self/comm"))
 		goto out_close;
 	devfd = open("/dev/urandom", O_RDONLY);
-	if (CHECK(devfd < 0, "trigger", "open /dev/urandom failed\n"))
+	if (!ASSERT_OK_FD(devfd, "open /dev/urandom"))
 		goto out_close;
 	localfd = open("/tmp/d_path_loadgen.txt", O_CREAT | O_RDONLY, 0644);
-	if (CHECK(localfd < 0, "trigger", "open /tmp/d_path_loadgen.txt failed\n"))
+	if (!ASSERT_OK_FD(localfd, "open /tmp/d_path_loadgen.txt"))
 		goto out_close;
 	/* bpf_d_path will return path with (deleted) */
 	remove("/tmp/d_path_loadgen.txt");
 	indicatorfd = open("/tmp/", O_PATH);
-	if (CHECK(indicatorfd < 0, "trigger", "open /tmp/ failed\n"))
+	if (!ASSERT_OK_FD(indicatorfd, "open /tmp/"))
 		goto out_close;
 
 	ret = set_pathname(pipefd[0], pid);
-	if (CHECK(ret < 0, "trigger", "set_pathname failed for pipe[0]\n"))
+	if (!ASSERT_GE(ret, 0, "set_pathname for pipe[0]"))
 		goto out_close;
 	ret = set_pathname(pipefd[1], pid);
-	if (CHECK(ret < 0, "trigger", "set_pathname failed for pipe[1]\n"))
+	if (!ASSERT_GE(ret, 0, "set_pathname for pipe[1]"))
 		goto out_close;
 	ret = set_pathname(sockfd, pid);
-	if (CHECK(ret < 0, "trigger", "set_pathname failed for socket\n"))
+	if (!ASSERT_GE(ret, 0, "set_pathname for socket"))
 		goto out_close;
 	ret = set_pathname(procfd, pid);
-	if (CHECK(ret < 0, "trigger", "set_pathname failed for proc\n"))
+	if (!ASSERT_GE(ret, 0, "set_pathname for proc"))
 		goto out_close;
 	ret = set_pathname(devfd, pid);
-	if (CHECK(ret < 0, "trigger", "set_pathname failed for dev\n"))
+	if (!ASSERT_GE(ret, 0, "set_pathname for dev"))
 		goto out_close;
 	ret = set_pathname(localfd, pid);
-	if (CHECK(ret < 0, "trigger", "set_pathname failed for file\n"))
+	if (!ASSERT_GE(ret, 0, "set_pathname for file"))
 		goto out_close;
 	ret = set_pathname(indicatorfd, pid);
-	if (CHECK(ret < 0, "trigger", "set_pathname failed for dir\n"))
+	if (!ASSERT_GE(ret, 0, "set_pathname for dir"))
 		goto out_close;
 
 	/* triggers vfs_getattr */
@@ -128,11 +127,11 @@ static void attach_and_load(struct test_d_path **skel)
 	int err;
 
 	*skel = test_d_path__open_and_load();
-	if (CHECK(!*skel, "setup", "d_path skeleton failed\n"))
+	if (!ASSERT_OK_PTR(*skel, "d_path skeleton"))
 		goto cleanup;
 
 	err = test_d_path__attach(*skel);
-	if (CHECK(err, "setup", "attach failed: %d\n", err))
+	if (!ASSERT_OK(err, "attach"))
 		goto cleanup;
 
 	(*skel)->bss->my_pid = getpid();
@@ -159,36 +158,18 @@ static void test_d_path_basic(void)
 	if (err < 0)
 		goto cleanup;
 
-	if (CHECK(!bss->called_stat,
-		  "stat",
-		  "trampoline for security_inode_getattr was not called\n"))
+	if (!ASSERT_TRUE(bss->called_stat, "called_stat"))
 		goto cleanup;
 
-	if (CHECK(!bss->called_close,
-		  "close",
-		  "trampoline for filp_close_sync was not called\n"))
+	if (!ASSERT_TRUE(bss->called_close, "called_close"))
 		goto cleanup;
 
 	for (int i = 0; i < MAX_FILES; i++) {
-		CHECK(strncmp(src.paths[i], bss->paths_stat[i], MAX_PATH_LEN),
-		      "check",
-		      "failed to get stat path[%d]: %s vs %s\n",
-		      i, src.paths[i], bss->paths_stat[i]);
-		CHECK(strncmp(src.paths[i], bss->paths_close[i], MAX_PATH_LEN),
-		      "check",
-		      "failed to get close path[%d]: %s vs %s\n",
-		      i, src.paths[i], bss->paths_close[i]);
+		ASSERT_STRNEQ(bss->paths_stat[i], src.paths[i], MAX_PATH_LEN, "stat path");
+		ASSERT_STRNEQ(bss->paths_close[i], src.paths[i], MAX_PATH_LEN, "close path");
 		/* The d_path helper returns size plus NUL char, hence + 1 */
-		CHECK(bss->rets_stat[i] != strlen(bss->paths_stat[i]) + 1,
-		      "check",
-		      "failed to match stat return [%d]: %d vs %zd [%s]\n",
-		      i, bss->rets_stat[i], strlen(bss->paths_stat[i]) + 1,
-		      bss->paths_stat[i]);
-		CHECK(bss->rets_close[i] != strlen(bss->paths_stat[i]) + 1,
-		      "check",
-		      "failed to match stat return [%d]: %d vs %zd [%s]\n",
-		      i, bss->rets_close[i], strlen(bss->paths_close[i]) + 1,
-		      bss->paths_stat[i]);
+		ASSERT_EQ(bss->rets_stat[i], strlen(bss->paths_stat[i]) + 1, "stat return");
+		ASSERT_EQ(bss->rets_close[i], strlen(bss->paths_stat[i]) + 1, "close return");
 	}
 
 cleanup:
@@ -221,7 +202,6 @@ static void test_d_path_check_types(void)
 static void test_d_path_mem_access(void)
 {
 	int localfd = -1;
-	char path_template[] = "/dev/shm/d_path_loadgen.XXXXXX";
 	struct test_d_path__bss *bss;
 	struct test_d_path *skel;
 
@@ -231,16 +211,14 @@ static void test_d_path_mem_access(void)
 
 	bss = skel->bss;
 
-	localfd = mkstemp(path_template);
-	if (CHECK(localfd < 0, "trigger", "mkstemp failed\n"))
+	localfd = memfd_create("d_path_loadgen", 0);
+	if (!ASSERT_OK_FD(localfd, "memfd_create"))
 		goto cleanup;
 
-	if (CHECK(fallocate(localfd, 0, 0, 1024) < 0, "trigger", "fallocate failed\n"))
+	if (!ASSERT_OK(fallocate(localfd, 0, 0, 1024), "fallocate"))
 		goto cleanup;
-	remove(path_template);
 
-	if (CHECK(!bss->path_match_fallocate, "check",
-		  "failed to read fallocate path"))
+	if (!ASSERT_TRUE(bss->path_match_fallocate, "fallocate path"))
 		goto cleanup;
 
 cleanup:

@@ -31,7 +31,7 @@ static struct rc_map_table khadas[] = {
 static struct rc_map_list khadas_map = {
 	.map = {
 		.scan     = khadas,
-		.size     = ARRAY_SIZE(khadas),
+		.entries  = ARRAY_SIZE(khadas),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_KHADAS,
 	}

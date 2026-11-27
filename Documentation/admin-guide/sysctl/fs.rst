@@ -372,3 +372,10 @@ the set timeout elapses, then the connection to the fuse server will be aborted.
 Please note that the timeouts are not 100% precise (eg you may set 60 seconds but
 the timeout may kick in after 70 seconds). The upper margin of error for the
 timeout is roughly FUSE_TIMEOUT_TIMER_FREQ seconds.
+
+virtiofs does not use these timeouts.  The kernel does not offer
+``FUSE_REQUEST_TIMEOUT`` and does not arm the timer from either sysctl,
+because a timeout aborts the connection while the device still owns the
+request.  Writing ``default_request_timeout`` or ``max_request_timeout``
+has no effect on a virtiofs mount.  Both files remain writable because they
+still apply to other FUSE connections.

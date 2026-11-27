@@ -190,7 +190,9 @@ static int rockchip_drm_bind(struct device *dev)
 	if (ret)
 		goto err_iommu_cleanup;
 
-	drm_mode_config_reset(drm_dev);
+	ret = drm_mode_config_create_initial_state(drm_dev);
+	if (ret)
+		goto err_iommu_cleanup;
 
 	/* init kms poll for handling hpd */
 	drm_kms_helper_poll_init(drm_dev);

@@ -76,8 +76,7 @@ static int fsl_asrc_dma_prepare_and_submit(struct snd_pcm_substream *substream,
 		return -ENOMEM;
 	}
 
-	pair->desc[!dir]->callback = fsl_asrc_dma_complete;
-	pair->desc[!dir]->callback_param = substream;
+	dmaengine_desc_set_callback(pair->desc[!dir], fsl_asrc_dma_complete, NULL, substream);
 
 	dmaengine_submit(pair->desc[!dir]);
 
@@ -122,6 +121,19 @@ static int fsl_asrc_dma_trigger(struct snd_soc_component *component,
 	}
 
 	return 0;
+}
+
+static void fsl_asrc_dma_release_chans(struct fsl_asrc_pair *pair, u8 dir)
+{
+	if (pair->dma_chan[!dir])
+		dma_release_channel(pair->dma_chan[!dir]);
+
+	/* release dev_to_dev chan if we aren't reusing the Back-End one */
+	if (pair->dma_chan[dir] && pair->req_dma_chan)
+		dma_release_channel(pair->dma_chan[dir]);
+
+	pair->dma_chan[!dir] = NULL;
+	pair->dma_chan[dir] = NULL;
 }
 
 static int fsl_asrc_dma_hw_params(struct snd_soc_component *component,
@@ -190,6 +202,9 @@ static int fsl_asrc_dma_hw_params(struct snd_soc_component *component,
 	dma_params_fe->addr = asrc->paddr + asrc->get_fifo_addr(!dir, index);
 	dma_params_fe->maxburst = dma_params_be->maxburst;
 
+	/* hw_params() may be called again without hw_free() in between */
+	fsl_asrc_dma_release_chans(pair, dir);
+
 	tmp_chan = asrc->get_dma_channel(pair, !dir);
 	if (IS_ERR(tmp_chan)) {
 		dev_err(dev, "failed to request DMA channel\n");
@@ -251,7 +266,7 @@ static int fsl_asrc_dma_hw_params(struct snd_soc_component *component,
 
 		/* Get DMA request of Front-End */
 		tmp_chan = asrc->get_dma_channel(pair, dir);
-		if (!tmp_chan) {
+		if (IS_ERR(tmp_chan)) {
 			dma_release_channel(pair->dma_chan[!dir]);
 			pair->dma_chan[!dir] = NULL;
 			return -EINVAL;
@@ -262,7 +277,7 @@ static int fsl_asrc_dma_hw_params(struct snd_soc_component *component,
 		pair->dma_data.priority = tmp_data->priority;
 		dma_release_channel(tmp_chan);
 
-		of_dma_node = pair->dma_chan[!dir]->device->dev->of_node;
+		of_dma_node = dmaengine_get_provider_device(pair->dma_chan[!dir])->of_node;
 		pair->dma_chan[dir] =
 			__dma_request_channel(&mask, filter, &pair->dma_data,
 					      of_dma_node);
@@ -342,6 +357,7 @@ static int fsl_asrc_dma_hw_params(struct snd_soc_component *component,
 		dev_err(dev, "failed to config DMA channel for Back-End\n");
 		if (pair->req_dma_chan)
 			dma_release_channel(pair->dma_chan[dir]);
+		pair->dma_chan[dir] = NULL;
 		return ret;
 	}
 
@@ -356,15 +372,7 @@ static int fsl_asrc_dma_hw_free(struct snd_soc_component *component,
 	struct fsl_asrc_pair *pair = runtime->private_data;
 	u8 dir = tx ? OUT : IN;
 
-	if (pair->dma_chan[!dir])
-		dma_release_channel(pair->dma_chan[!dir]);
-
-	/* release dev_to_dev chan if we aren't reusing the Back-End one */
-	if (pair->dma_chan[dir] && pair->req_dma_chan)
-		dma_release_channel(pair->dma_chan[dir]);
-
-	pair->dma_chan[!dir] = NULL;
-	pair->dma_chan[dir] = NULL;
+	fsl_asrc_dma_release_chans(pair, dir);
 
 	return 0;
 }
@@ -527,7 +535,7 @@ static int fsl_asrc_dma_pcm_new(struct snd_soc_component *component,
 
 	ret = snd_pcm_set_fixed_buffer_all(pcm,
 					   SNDRV_DMA_TYPE_DEV,
-					   chan->device->dev,
+					   dmaengine_get_dma_device(chan),
 					   FSL_ASRC_DMABUF_SIZE);
 
 	dma_release_channel(chan);

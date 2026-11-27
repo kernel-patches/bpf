@@ -271,7 +271,7 @@ static void *vb2_dma_sg_get_userptr(struct vb2_buffer *vb, struct device *dev,
 userptr_fail_map:
 	sg_free_table(&buf->sg_table);
 userptr_fail_sgtable:
-	vb2_destroy_framevec(vec);
+	vb2_destroy_framevec(vec, false);
 userptr_fail_pfnvec:
 	kfree(buf);
 	return ERR_PTR(-ENOMEM);
@@ -285,7 +285,6 @@ static void vb2_dma_sg_put_userptr(void *buf_priv)
 {
 	struct vb2_dma_sg_buf *buf = buf_priv;
 	struct sg_table *sgt = &buf->sg_table;
-	int i = buf->num_pages;
 
 	dprintk(1, "%s: Releasing userspace buffer of %d pages\n",
 	       __func__, buf->num_pages);
@@ -293,11 +292,8 @@ static void vb2_dma_sg_put_userptr(void *buf_priv)
 	if (buf->vaddr)
 		vm_unmap_ram(buf->vaddr, buf->num_pages);
 	sg_free_table(buf->dma_sgt);
-	if (buf->dma_dir == DMA_FROM_DEVICE ||
-	    buf->dma_dir == DMA_BIDIRECTIONAL)
-		while (--i >= 0)
-			set_page_dirty_lock(buf->pages[i]);
-	vb2_destroy_framevec(buf->vec);
+	vb2_destroy_framevec(buf->vec, buf->dma_dir == DMA_FROM_DEVICE ||
+			     buf->dma_dir == DMA_BIDIRECTIONAL);
 	kfree(buf);
 }
 
@@ -565,7 +561,7 @@ static int vb2_dma_sg_map_dmabuf(void *mem_priv)
 	}
 
 	/* get the associated scatterlist for this buffer */
-	sgt = dma_buf_map_attachment_unlocked(buf->db_attach, buf->dma_dir);
+	sgt = dma_buf_map_sgt_unlocked(buf->db_attach, buf->dma_dir);
 	if (IS_ERR(sgt)) {
 		pr_err("Error getting dmabuf scatterlist\n");
 		return -EINVAL;
@@ -597,7 +593,7 @@ static void vb2_dma_sg_unmap_dmabuf(void *mem_priv)
 		dma_buf_vunmap_unlocked(buf->db_attach->dmabuf, &map);
 		buf->vaddr = NULL;
 	}
-	dma_buf_unmap_attachment_unlocked(buf->db_attach, sgt, buf->dma_dir);
+	dma_buf_unmap_sgt_unlocked(buf->db_attach, sgt, buf->dma_dir);
 
 	buf->dma_sgt = NULL;
 }

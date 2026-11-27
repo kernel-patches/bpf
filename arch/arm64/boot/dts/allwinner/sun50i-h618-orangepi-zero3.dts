@@ -103,3 +103,7 @@
 	vcc-ph-supply = <&reg_dldo1>;
 	vcc-pi-supply = <&reg_dldo1>;
 };
+
+&spi_flash {
+	vcc-supply = <&reg_dldo1>;
+};

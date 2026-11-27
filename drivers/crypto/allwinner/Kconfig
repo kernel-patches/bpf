@@ -39,6 +39,7 @@ config CRYPTO_DEV_SUN8I_CE
 	select CRYPTO_ENGINE
 	select CRYPTO_ECB
 	select CRYPTO_CBC
+	select CRYPTO_XTS
 	select CRYPTO_AES
 	select CRYPTO_DES
 	depends on CRYPTO_DEV_ALLWINNER

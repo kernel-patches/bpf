@@ -1053,11 +1053,11 @@ static void __soc_v1_0_update_available_partition_mode(struct amdgpu_xcp_mgr *xc
 }
 
 static int soc_v1_0_switch_partition_mode(struct amdgpu_xcp_mgr *xcp_mgr,
-					  int mode, int *num_xcps)
+					  int mode, int *num_xcps,
+					  u32 flags)
 {
 	int num_xcc_per_xcp, num_xcc, ret;
 	struct amdgpu_device *adev;
-	u32 flags = 0;
 
 	adev = xcp_mgr->adev;
 	num_xcc = NUM_XCC(adev->gfx.xcc_mask);

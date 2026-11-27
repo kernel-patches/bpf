@@ -341,7 +341,7 @@ static void __setup_APIC_LVTT(unsigned int clocks, int oneshot, int irqen)
  * necessarily a BIOS bug.
  */
 
-static atomic_t eilvt_offsets[APIC_EILVT_NR_MAX];
+static atomic_t *eilvt_offsets;
 
 static inline int eilvt_entry_is_changeable(unsigned int old, unsigned int new)
 {
@@ -354,7 +354,7 @@ static unsigned int reserve_eilvt_offset(int offset, unsigned int new)
 {
 	unsigned int rsvd, vector;
 
-	if (offset >= APIC_EILVT_NR_MAX)
+	if (!eilvt_offsets || offset >= apic->eilvt_regs_count)
 		return ~0;
 
 	rsvd = atomic_read(&eilvt_offsets[offset]);
@@ -409,6 +409,17 @@ int setup_APIC_eilvt(u8 offset, u8 vector, u8 msg_type, u8 mask)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(setup_APIC_eilvt);
+
+static __init void init_eilvt(void)
+{
+	if (cpu_feature_enabled(X86_FEATURE_EXTAPIC))
+		apic->eilvt_regs_count = APIC_EFEAT_XLC(apic_read(APIC_EFEAT));
+	else if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
+		apic->eilvt_regs_count = APIC_EILVT_NR_AMD_10H;
+
+	if (apic->eilvt_regs_count)
+		eilvt_offsets = kzalloc_objs(atomic_t, apic->eilvt_regs_count);
+}
 
 /*
  * Program the next event, relative to now
@@ -1193,7 +1204,7 @@ void disable_local_APIC(void)
 	if (enabled_via_apicbase) {
 		struct msr val;
 
-		rdmsrq(MSR_IA32_APICBASE, val.q);
+		val.q = rdmsrq(MSR_IA32_APICBASE);
 		val.l &= ~MSR_IA32_APICBASE_ENABLE;
 		wrmsrq(MSR_IA32_APICBASE, val.q);
 	}
@@ -1710,7 +1721,7 @@ static bool x2apic_hw_locked(void)
 
 	x86_arch_cap_msr = x86_read_arch_cap_msr();
 	if (x86_arch_cap_msr & ARCH_CAP_XAPIC_DISABLE) {
-		rdmsrq(MSR_IA32_XAPIC_DISABLE_STATUS, msr);
+		msr = rdmsrq(MSR_IA32_XAPIC_DISABLE_STATUS);
 		return (msr & LEGACY_XAPIC_DISABLED);
 	}
 	return false;
@@ -1723,7 +1734,7 @@ static void __x2apic_disable(void)
 	if (!boot_cpu_has(X86_FEATURE_APIC))
 		return;
 
-	rdmsrq(MSR_IA32_APICBASE, msr);
+	msr = rdmsrq(MSR_IA32_APICBASE);
 	if (!(msr & X2APIC_ENABLE))
 		return;
 	/* Disable xapic and x2apic first and then reenable xapic mode */
@@ -1736,7 +1747,7 @@ static void __x2apic_enable(void)
 {
 	u64 msr;
 
-	rdmsrq(MSR_IA32_APICBASE, msr);
+	msr = rdmsrq(MSR_IA32_APICBASE);
 	if (msr & X2APIC_ENABLE)
 		return;
 	wrmsrq(MSR_IA32_APICBASE, msr | X2APIC_ENABLE);
@@ -1869,7 +1880,7 @@ static __init void try_to_enable_x2apic(int remap_mode)
 	x2apic_enable();
 }
 
-void __init check_x2apic(void)
+static __init struct apic *check_x2apic(void)
 {
 	if (x2apic_enabled()) {
 		pr_info("x2apic: enabled by BIOS, switching to x2apic ops\n");
@@ -1879,15 +1890,21 @@ void __init check_x2apic(void)
 		else
 			x2apic_state = X2APIC_ON;
 		apic_read_boot_cpu_id(true);
+
+		/* Force the initial driver to X2APIC */
+		return &apic_x2apic_phys;
 	} else if (!boot_cpu_has(X86_FEATURE_X2APIC)) {
 		x2apic_state = X2APIC_DISABLED;
 	}
+
+	/* Keep the default driver */
+	return NULL;
 }
 #else /* CONFIG_X86_X2APIC */
-void __init check_x2apic(void)
+static __init struct apic *check_x2apic(void)
 {
 	if (!apic_is_x2apic_enabled())
-		return;
+		return NULL;
 	/*
 	 * Checkme: Can we simply turn off x2APIC here instead of disabling the APIC?
 	 */
@@ -1896,6 +1913,7 @@ void __init check_x2apic(void)
 
 	apic_is_disabled = true;
 	setup_clear_cpu_cap(X86_FEATURE_APIC);
+	return &apic_noop;
 }
 
 static inline void try_to_enable_x2apic(int remap_mode) { }
@@ -1976,7 +1994,7 @@ static bool __init apic_verify(unsigned long addr)
 
 	/* The BIOS may have set up the APIC at some other address */
 	if (boot_cpu_data.x86 >= 6) {
-		rdmsrq(MSR_IA32_APICBASE, val.q);
+		val.q = rdmsrq(MSR_IA32_APICBASE);
 		if (val.l & MSR_IA32_APICBASE_ENABLE)
 			addr = val.l & MSR_IA32_APICBASE_BASE;
 	}
@@ -1999,7 +2017,7 @@ bool __init apic_force_enable(unsigned long addr)
 	 * and AMD K7 (Model > 1) or later.
 	 */
 	if (boot_cpu_data.x86 >= 6) {
-		rdmsrq(MSR_IA32_APICBASE, val.q);
+		val.q = rdmsrq(MSR_IA32_APICBASE);
 		if (!(val.l & MSR_IA32_APICBASE_ENABLE)) {
 			pr_info("Local APIC disabled by BIOS -- reenabling.\n");
 			val.l &= ~MSR_IA32_APICBASE_BASE;
@@ -2064,10 +2082,22 @@ no_apic:
 }
 #endif
 
-/**
- * init_apic_mappings - initialize APIC mappings
- */
-void __init init_apic_mappings(void)
+void __init apic_early_init(void)
+{
+	struct apic *driver;
+
+	if (apic_is_disabled || acpi_mps_check()) {
+		apic_is_disabled = true;
+		setup_clear_cpu_cap(X86_FEATURE_APIC);
+		driver = &apic_noop;
+	} else {
+		driver = check_x2apic();
+	}
+
+	apic_install_default_driver(driver);
+}
+
+void __init apic_finalize_early_init(void)
 {
 	if (apic_validate_deadline_timer())
 		pr_info("TSC deadline timer available\n");
@@ -2345,6 +2375,7 @@ static void __init apic_bsp_setup(bool upmode)
 	if (upmode)
 		apic_bsp_up_setup();
 	setup_local_APIC();
+	init_eilvt();
 
 	enable_IO_APIC();
 	end_local_APIC_setup();
@@ -2476,7 +2507,7 @@ static void lapic_resume(void *data)
 		 * SMP! We'll need to do this as part of the CPU restore!
 		 */
 		if (boot_cpu_data.x86 >= 6) {
-			rdmsrq(MSR_IA32_APICBASE, val.q);
+			val.q = rdmsrq(MSR_IA32_APICBASE);
 			val.l &= ~MSR_IA32_APICBASE_BASE;
 			val.l |= MSR_IA32_APICBASE_ENABLE | mp_lapic_addr;
 			wrmsrq(MSR_IA32_APICBASE, val.q);

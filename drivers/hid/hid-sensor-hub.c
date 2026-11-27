@@ -4,12 +4,15 @@
  * Copyright (c) 2012, Intel Corporation.
  */
 
+#include <linux/cleanup.h>
 #include <linux/device.h>
+#include <linux/device/devres.h>
 #include <linux/hid.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/mfd/core.h>
 #include <linux/list.h>
+#include <linux/platform_device.h>
 #include <linux/hid-sensor-ids.h>
 #include <linux/hid-sensor-hub.h>
 #include "hid-ids.h"
@@ -173,7 +176,9 @@ int sensor_hub_remove_callback(struct hid_sensor_hub_device *hsdev,
 	struct sensor_hub_data *pdata = hid_get_drvdata(hsdev->hdev);
 	unsigned long flags;
 
-	spin_lock_irqsave(&pdata->dyn_callback_lock, flags);
+	/* Serialize callback removal with raw-event callback execution. */
+	spin_lock_irqsave(&pdata->lock, flags);
+	spin_lock(&pdata->dyn_callback_lock);
 	list_for_each_entry(callback, &pdata->dyn_callback_list, list)
 		if (callback->usage_id == usage_id &&
 						callback->hsdev == hsdev) {
@@ -181,11 +186,45 @@ int sensor_hub_remove_callback(struct hid_sensor_hub_device *hsdev,
 			kfree(callback);
 			break;
 		}
-	spin_unlock_irqrestore(&pdata->dyn_callback_lock, flags);
+	spin_unlock(&pdata->dyn_callback_lock);
+	spin_unlock_irqrestore(&pdata->lock, flags);
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(sensor_hub_remove_callback);
+
+DEFINE_FREE(devres_free, struct sensor_hub_cb_devres *, if (_T) devres_free(_T))
+
+static void devm_sensor_hub_remove_callback(struct device *dev, void *res)
+{
+	struct sensor_hub_cb_devres *dr = res;
+
+	sensor_hub_remove_callback(dr->hsdev, dr->usage_id);
+}
+
+int devm_sensor_hub_register_callback(struct device *dev,
+				      struct hid_sensor_hub_device *hsdev,
+				      u32 usage_id,
+				      struct hid_sensor_hub_callbacks *usage_callback)
+{
+	int ret;
+
+	struct sensor_hub_cb_devres *dr __free(devres_free) =
+		devres_alloc(devm_sensor_hub_remove_callback, sizeof(*dr), GFP_KERNEL);
+	if (!dr)
+		return -ENOMEM;
+
+	ret = sensor_hub_register_callback(hsdev, usage_id, usage_callback);
+	if (ret)
+		return ret;
+
+	dr->hsdev = hsdev;
+	dr->usage_id = usage_id;
+	devres_add(dev, no_free_ptr(dr));
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(devm_sensor_hub_register_callback);
 
 int sensor_hub_set_feature(struct hid_sensor_hub_device *hsdev, u32 report_id,
 			   u32 field_index, int buffer_size, void *buffer)
@@ -800,7 +839,14 @@ err_stop_hw:
 
 static int sensor_hub_finalize_pending_fn(struct device *dev, void *data)
 {
-	struct hid_sensor_hub_device *hsdev = dev->platform_data;
+	struct hid_sensor_hub_device *hsdev;
+
+	if (!dev_is_platform(dev))
+		return 0;
+
+	hsdev = to_platform_device(dev)->dev.platform_data;
+	if (!hsdev)
+		return 0;
 
 	if (hsdev->pending.status)
 		complete(&hsdev->pending.ready);
@@ -814,8 +860,6 @@ static void sensor_hub_remove(struct hid_device *hdev)
 	unsigned long flags;
 
 	hid_dbg(hdev, " hardware removed\n");
-	hid_hw_close(hdev);
-	hid_hw_stop(hdev);
 
 	spin_lock_irqsave(&data->lock, flags);
 	device_for_each_child(&hdev->dev, NULL,
@@ -823,6 +867,14 @@ static void sensor_hub_remove(struct hid_device *hdev)
 	spin_unlock_irqrestore(&data->lock, flags);
 
 	mfd_remove_devices(&hdev->dev);
+	/* Clients share one HID open; release it if references remain. */
+	mutex_lock(&data->mutex);
+	if (data->ref_cnt) {
+		data->ref_cnt = 0;
+		hid_hw_close(hdev);
+	}
+	mutex_unlock(&data->mutex);
+	hid_hw_stop(hdev);
 	mutex_destroy(&data->mutex);
 }
 

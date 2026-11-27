@@ -1396,6 +1396,7 @@ static void qat_uclo_ummap_auth_fw(struct icp_qat_fw_loader_handle *handle,
 		dram_desc.dram_size = ((struct icp_qat_auth_chunk *)
 				       (*desc))->chunk_size;
 		qat_uclo_simg_free(handle, &dram_desc);
+		*desc = NULL;
 	}
 }
 

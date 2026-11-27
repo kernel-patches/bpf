@@ -13,7 +13,6 @@
 #include <linux/platform_device.h>
 #include <linux/clk.h>
 #include <linux/of.h>
-#include <linux/regulator/consumer.h>
 #include <linux/reset.h>
 
 #include <sound/soc.h>
@@ -350,21 +349,13 @@ static int ux500_msp_dai_startup(struct snd_pcm_substream *substream,
 	dev_dbg(dai->dev, "%s: MSP %d (%s): Enter.\n", __func__, dai->id,
 		snd_pcm_stream_str(substream));
 
-	/* Enable regulator */
-	ret = regulator_enable(drvdata->reg_vape);
-	if (ret != 0) {
-		dev_err(drvdata->msp->dev,
-			"%s: Failed to enable regulator!\n", __func__);
-		return ret;
-	}
-
 	/* Prepare and enable clocks */
 	dev_dbg(dai->dev, "%s: Enabling MSP-clocks.\n", __func__);
 	ret = clk_prepare_enable(drvdata->pclk);
 	if (ret) {
 		dev_err(drvdata->msp->dev,
 			"%s: Failed to prepare/enable pclk!\n", __func__);
-		goto err_pclk;
+		return ret;
 	}
 
 	ret = clk_prepare_enable(drvdata->clk);
@@ -377,15 +368,12 @@ static int ux500_msp_dai_startup(struct snd_pcm_substream *substream,
 	return ret;
 err_clk:
 	clk_disable_unprepare(drvdata->pclk);
-err_pclk:
-	regulator_disable(drvdata->reg_vape);
 	return ret;
 }
 
 static void ux500_msp_dai_shutdown(struct snd_pcm_substream *substream,
 				struct snd_soc_dai *dai)
 {
-	int ret;
 	struct ux500_msp_i2s_drvdata *drvdata = dev_get_drvdata(dai->dev);
 	bool is_playback = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK);
 	unsigned int configured = is_playback ? PLAYBACK_CONFIGURED :
@@ -408,13 +396,6 @@ static void ux500_msp_dai_shutdown(struct snd_pcm_substream *substream,
 	/* Disable and unprepare clocks */
 	clk_disable_unprepare(drvdata->clk);
 	clk_disable_unprepare(drvdata->pclk);
-
-	/* Disable regulator */
-	ret = regulator_disable(drvdata->reg_vape);
-	if (ret < 0)
-		dev_err(dai->dev,
-			"%s: ERROR: Failed to disable regulator (%d)!\n",
-			__func__, ret);
 }
 
 static int ux500_msp_dai_prepare(struct snd_pcm_substream *substream,
@@ -695,14 +676,6 @@ static int ux500_msp_drv_probe(struct platform_device *pdev)
 	drvdata->rx_mask = 0x01;
 	drvdata->slot_width = 16;
 
-	drvdata->reg_vape = devm_regulator_get(&pdev->dev, "v-ape");
-	if (IS_ERR(drvdata->reg_vape)) {
-		ret = PTR_ERR(drvdata->reg_vape);
-		dev_err(&pdev->dev,
-			"%s: ERROR: Failed to get Vape supply (%d)!\n",
-			__func__, ret);
-		return ret;
-	}
 	drvdata->pclk = devm_clk_get(&pdev->dev, "apb_pclk");
 	if (IS_ERR(drvdata->pclk)) {
 		ret = PTR_ERR(drvdata->pclk);

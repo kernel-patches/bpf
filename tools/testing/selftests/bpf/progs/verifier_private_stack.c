@@ -8,7 +8,8 @@
 /* From include/linux/filter.h */
 #define MAX_BPF_STACK    512
 
-#if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64)
+#if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64) || \
+	(defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64)
 
 struct elem {
 	struct bpf_timer t;
@@ -22,7 +23,7 @@ struct {
 	__type(value, struct elem);
 } array SEC(".maps");
 
-SEC("kprobe")
+SEC("kprobe.multi")
 __description("Private stack, single prog")
 __success
 __arch_x86_64
@@ -42,6 +43,14 @@ __jited("	mov	x0, #0x2a")
 __jited("	str	x0, [x27]")
 __jited("...")
 __jited("	ldp	x25, x27, [sp], {{.*}}")
+__arch_riscv64
+__jited("	addi	sp, sp, -0x20")
+__jited("...")
+__jited("	sd	s5, 0x10(sp)")
+__jited("...")
+__jited("	sd	a0, -0x100(s5)")
+__jited("...")
+__jited("	ld	s5, 0x10(sp)")
 __naked void private_stack_single_prog(void)
 {
 	asm volatile ("			\
@@ -60,11 +69,89 @@ __jited("	subq	$0x8, %rsp")
 __arch_arm64
 __jited("	mov	x25, sp")
 __jited("	sub	sp, sp, #0x10")
+__arch_riscv64
+__jited("	addi	sp, sp, -0x30")
+__jited("...")
+__jited("	addi	s5, sp, 0x10")
 __naked void no_private_stack_nested(void)
 {
 	asm volatile ("			\
 	r1 = 42;			\
 	*(u64 *)(r10 - 8) = r1;		\
+	r0 = 0;				\
+	exit;				\
+"	::: __clobber_all);
+}
+
+#ifdef __BPF_FEATURE_STACK_ARGUMENT
+__used
+__naked static long subprog_6args(long a, long b, long c, long d, long e, long f)
+{
+	asm volatile ("			\
+	r0 = *(u64 *)(r11 + 8);		\
+	*(u64 *)(r10 - 64) = r0;	\
+	exit;				\
+"	::: __clobber_all);
+}
+
+/* x86-64 has one register for the private stack and for the sixth argument */
+SEC("raw_tp")
+__description("No private stack, stack arguments")
+__success
+__load_if_JITed()
+__arch_x86_64
+__log_level(4) __msg("stack depth max 144")
+__naked void no_private_stack_stack_args(void)
+{
+	asm volatile ("			\
+	r1 = 42;			\
+	*(u64 *)(r10 - 64) = r1;	\
+	*(u64 *)(r11 - 8) = r1;		\
+	call subprog_6args;		\
+	r0 = 0;				\
+	exit;				\
+"	::: __clobber_all);
+}
+#else
+SEC("raw_tp")
+__description("No private stack, stack arguments")
+__skip("stack_arg is not supported by compiler")
+__success
+int no_private_stack_stack_args(void)
+{
+	return 0;
+}
+#endif
+
+SEC("kprobe")
+__description("No private stack, untagged kprobe")
+__success
+__arch_x86_64
+__jited("	subq	$0x100, %rsp")
+__arch_arm64
+__jited("	sub	sp, sp, #0x100")
+__naked void no_private_stack_kprobe(void)
+{
+	asm volatile ("			\
+	r1 = 42;			\
+	*(u64 *)(r10 - 256) = r1;	\
+	r0 = 0;				\
+	exit;				\
+"	::: __clobber_all);
+}
+
+SEC("uprobe")
+__description("No private stack, uprobe")
+__success
+__arch_x86_64
+__jited("	subq	$0x100, %rsp")
+__arch_arm64
+__jited("	sub	sp, sp, #0x100")
+__naked void no_private_stack_uprobe(void)
+{
+	asm volatile ("			\
+	r1 = 42;			\
+	*(u64 *)(r10 - 256) = r1;	\
 	r0 = 0;				\
 	exit;				\
 "	::: __clobber_all);
@@ -83,7 +170,7 @@ __naked static void cumulative_stack_depth_subprog(void)
 	: __clobber_all);
 }
 
-SEC("kprobe")
+SEC("kprobe.multi")
 __description("Private stack, subtree > MAX_BPF_STACK")
 __success
 __log_level(4) __msg("stack depth max 512")
@@ -113,6 +200,14 @@ __jited("	str	x0, [x27]")
 __jited("	bl	{{.*}}")
 __jited("...")
 __jited("	ldp	x25, x27, [sp], {{.*}}")
+__arch_riscv64
+__jited("	addi	sp, sp, -0x20")
+__jited("...")
+__jited("	sd	s5, 0x8(sp)")
+__jited("...")
+__jited("	sd	a0, -0x200(s5)")
+__jited("...")
+__jited("	ld	s5, 0x8(sp)")
 __naked void private_stack_nested_1(void)
 {
 	asm volatile ("				\
@@ -183,6 +278,16 @@ __jited("	bl	0x{{.*}}")
 __jited("	mov	x8, x0")
 __jited("	mov	x8, #0x0")
 __jited("	ldp	x25, x27, [sp], {{.*}}")
+__arch_riscv64
+__jited("func #1")
+__jited("...")
+__jited("	addi	sp, sp, -0x20")
+__jited("...")
+__jited("	sd	s5, 0x8(sp)")
+__jited("...")
+__jited("	sd	a0, -0x200(s5)")
+__jited("...")
+__jited("	ld	s5, 0x8(sp)")
 __naked void private_stack_callback(void)
 {
 	asm volatile ("			\
@@ -212,6 +317,7 @@ __jited("	stp	x29, x30, [sp, #-0x10]!")
 __jited("	mov	x29, sp")
 __jited("	stp	xzr, x26, [sp, #-0x10]!")
 __jited("	mov	x26, sp")
+__jited("...")
 __jited("	stp	x19, x20, [sp, #-0x10]!")
 __jited("	stp	x21, x22, [sp, #-0x10]!")
 __jited("	stp	x23, x24, [sp, #-0x10]!")
@@ -412,6 +518,10 @@ __arch_arm64
 __jited("	mrs	x10, TPIDR_EL{{[0-1]}}")
 __jited("	add	x27, x27, x10")
 __jited("	add	x25, x27, {{.*}}")
+__arch_riscv64
+__jited("	addi	sp, sp, -0x20")
+__jited("...")
+__jited("	sd	s5, 0x8(sp)")
 int private_stack_async_callback_1(void)
 {
 	struct bpf_timer *arr_timer;
@@ -441,6 +551,10 @@ __arch_x86_64
 __jited("	subq	$0x100, %rsp")
 __arch_arm64
 __jited("	sub	sp, sp, #0x100")
+__arch_riscv64
+__jited("	addi	sp, sp, -0x120")
+__jited("...")
+__jited("	addi	s5, sp, 0x100")
 int private_stack_async_callback_2(void)
 {
 	struct bpf_timer *arr_timer;

@@ -124,7 +124,7 @@ class Forwarder:
             data += self.ep_in.read(size - len(data))
         logging.log(logging.TRACE, "c2s: writing")
         self._log_hexdump(data)
-        self.s.send(data)
+        self.s.sendall(data)
         logging.debug("c2s: forwarded %i bytes", size)
         self.stats["c2s packets"] += 1
         self.stats["c2s bytes"] += size

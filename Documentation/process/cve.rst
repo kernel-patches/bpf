@@ -119,3 +119,33 @@ assigned to all fixes for all issues, but sometimes we will fail to
 notice fixes, therefore assume that some changes without a CVE assigned
 might be relevant to take.
 
+Getting security fixes
+======================
+
+Fixes for security issues reach users the same way as every other
+fix: through the stable and longterm kernel releases listed at
+https://kernel.org/releases.html.  These are released frequently, each
+one tested as a whole by many community members.  The CVE assignment team
+announces these fixes on the linux-cve-announce mailing list,
+and only once a fix is in a stable kernel tree, so the fix is already
+available when its CVE is announced, and no vendor learns of a CVE before
+anyone else (except for the very rare case of :ref:`embargoed flaws
+<process/security-bugs:Disclosure and embargoed information>`,
+which do not include :ref:`AI-discovered flaws
+<process/security-bugs:What qualifies as a security bug>`).
+All of this is available to everyone, at no cost.
+
+The best response to a CVE, and the quickest way to receive its fix, is
+to run one of those kernels and keep updating it.  A kernel version
+that is no longer supported there only gets a fix after someone
+backports it, and that work is done outside the kernel community.
+
+If your kernel comes from a Linux distribution or another vendor,
+getting fixes into it is that vendor's responsibility.  The kernel
+developers and stable maintainers publish the fixes, but they do not
+integrate them into each vendor's kernel.  If fixes reach you later
+than you need them, raise it with your vendor, particularly if you pay
+them for support, since keeping your kernel up to date and secure is
+part of what that support provides.  If your vendor cannot keep up,
+some distributions follow the stable releases closely and ship their
+fixes promptly, also at no cost.

@@ -9,6 +9,7 @@
 #include "intel_fb.h"
 #include "xe_bo.h"
 #include "xe_display_bo.h"
+#include "xe_migrate.h"
 #include "xe_pxp.h"
 #include "xe_ttm_stolen_mgr.h"
 #include "xe_wa.h"
@@ -120,7 +121,7 @@ static u32 xe_display_bo_fbdev_pitch_align(u32 stride)
 	return ALIGN(stride, XE_PAGE_SIZE);
 }
 
-bool xe_display_bo_fbdev_prefer_stolen(struct xe_device *xe, unsigned int size)
+static bool xe_display_bo_fbdev_prefer_stolen(struct xe_device *xe, unsigned int size)
 {
 	struct ttm_resource_manager *stolen;
 
@@ -131,6 +132,14 @@ bool xe_display_bo_fbdev_prefer_stolen(struct xe_device *xe, unsigned int size)
 	if (IS_DGFX(xe))
 		return false;
 
+	/*
+	 * Avoid stolen memory when the media_gt exists,
+	 * because a lot of latency is added when media gt is in MC6
+	 */
+	if (xe_device_get_root_tile(xe)->media_gt)
+		return false;
+
+	/* machine hang when doing lots of LMEMBAR accesses */
 	if (XE_DEVICE_WA(xe, 22019338487_display))
 		return false;
 
@@ -140,6 +149,64 @@ bool xe_display_bo_fbdev_prefer_stolen(struct xe_device *xe, unsigned int size)
 	 * features.
 	 */
 	return stolen->size >= (size * 2) >> PAGE_SHIFT;
+}
+
+static struct drm_gem_object *xe_display_bo_fbdev_bios_fb_takeover(struct drm_gem_object *obj)
+{
+	struct xe_bo *orig_bo = gem_to_xe_bo(obj), *copy_bo;
+	struct xe_device *xe = xe_bo_device(orig_bo);
+	struct xe_validation_ctx ctx;
+	struct drm_exec exec;
+	int err;
+
+	if (IS_DGFX(xe) ||
+	    xe_display_bo_fbdev_prefer_stolen(xe, xe_bo_size(orig_bo)))
+		return obj;
+
+	copy_bo = xe_bo_create_pin_map_novm(xe, xe_device_get_root_tile(xe), xe_bo_size(orig_bo),
+					    ttm_bo_type_kernel,
+					    XE_BO_FLAG_FORCE_WC | XE_BO_FLAG_SYSTEM | XE_BO_FLAG_GGTT,
+					    false);
+	if (IS_ERR(copy_bo))
+		return ERR_CAST(copy_bo);
+
+	xe_validation_guard(&ctx, &xe->val, &exec, (struct xe_val_flags) {}, err) {
+		struct dma_fence *fence;
+
+		err = drm_exec_lock_obj(&exec, &orig_bo->ttm.base);
+		drm_exec_retry_on_contention(&exec);
+		if (err)
+			break;
+
+		err = drm_exec_lock_obj(&exec, &copy_bo->ttm.base);
+		drm_exec_retry_on_contention(&exec);
+		if (err)
+			break;
+
+		err = dma_resv_reserve_fences(orig_bo->ttm.base.resv, 1);
+		if (err)
+			break;
+
+		err = dma_resv_reserve_fences(copy_bo->ttm.base.resv, 1);
+		if (err)
+			break;
+
+		fence = xe_migrate_copy(xe_device_get_root_tile(xe)->migrate, orig_bo, copy_bo,
+					orig_bo->ttm.resource, copy_bo->ttm.resource, false);
+		if (IS_ERR(fence)) {
+			err = PTR_ERR(fence);
+			break;
+		}
+
+		dma_resv_add_fence(copy_bo->ttm.base.resv, fence, DMA_RESV_USAGE_KERNEL);
+		dma_resv_add_fence(orig_bo->ttm.base.resv, fence, DMA_RESV_USAGE_BOOKKEEP);
+		dma_fence_put(fence);
+
+		return &copy_bo->ttm.base;
+	}
+
+	xe_bo_unpin_map_no_vm(copy_bo);
+	return ERR_PTR(err);
 }
 
 static struct drm_gem_object *xe_display_bo_fbdev_create(struct drm_device *drm, int size)
@@ -204,6 +271,7 @@ const struct intel_display_bo_interface xe_display_bo_interface = {
 	.framebuffer_fini = xe_display_bo_framebuffer_fini,
 	.framebuffer_lookup = xe_display_bo_framebuffer_lookup,
 #if IS_ENABLED(CONFIG_DRM_FBDEV_EMULATION)
+	.fbdev_bios_fb_takeover = xe_display_bo_fbdev_bios_fb_takeover,
 	.fbdev_create = xe_display_bo_fbdev_create,
 	.fbdev_destroy = xe_display_bo_fbdev_destroy,
 	.fbdev_fill_info = xe_display_bo_fbdev_fill_info,

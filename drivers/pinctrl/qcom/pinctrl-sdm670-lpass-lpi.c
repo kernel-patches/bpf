@@ -7,8 +7,6 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
-#include <linux/pm_clock.h>
-#include <linux/pm_runtime.h>
 #include <linux/pinctrl/pinctrl.h>
 
 #include "pinctrl-lpass-lpi.h"
@@ -152,10 +150,6 @@ static const struct of_device_id sdm670_lpi_pinctrl_of_match[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sdm670_lpi_pinctrl_of_match);
-
-static const struct dev_pm_ops lpi_pinctrl_pm_ops = {
-	RUNTIME_PM_OPS(pm_clk_suspend, pm_clk_resume, NULL)
-};
 
 static struct platform_driver sdm670_lpi_pinctrl_driver = {
 	.driver = {

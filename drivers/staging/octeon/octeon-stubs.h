@@ -1323,11 +1323,6 @@ static inline void cvmx_pko_disable(void)
 static inline void cvmx_pko_shutdown(void)
 { }
 
-static inline int cvmx_pko_get_base_queue_per_core(int port, int core)
-{
-	return port;
-}
-
 static inline int cvmx_pko_get_base_queue(int port)
 {
 	return port;

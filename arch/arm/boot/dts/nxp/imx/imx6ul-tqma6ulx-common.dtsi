@@ -10,6 +10,10 @@
  * - TQMa6ULLx
  */
 
+&adc1 {
+	vref-supply = <&reg_sw2>;
+};
+
 &m24c64_50 {
 	vcc-supply = <&reg_sw2>;
 };

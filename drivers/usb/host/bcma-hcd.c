@@ -26,6 +26,7 @@
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
+#include <linux/regulator/consumer.h>
 #include <linux/usb/ehci_pdriver.h>
 #include <linux/usb/ohci_pdriver.h>
 
@@ -41,6 +42,7 @@ struct bcma_hcd_device {
 	struct platform_device *ehci_dev;
 	struct platform_device *ohci_dev;
 	struct gpio_desc *gpio_desc;
+	struct regulator *regulator;
 };
 
 /* Wait for bitmask in a register to get set or cleared.
@@ -280,14 +282,18 @@ static int bcma_hcd_usb20_ns_init(struct bcma_hcd_device *bcma_hcd)
 	return 0;
 }
 
-static void bcma_hci_platform_power_gpio(struct bcma_device *dev, bool val)
+static int bcma_hci_platform_power(struct bcma_device *dev, bool on)
 {
 	struct bcma_hcd_device *usb_dev = bcma_get_drvdata(dev);
+	int err = 0;
 
-	if (!usb_dev->gpio_desc)
-		return;
+	if (usb_dev->gpio_desc)
+		err = gpiod_set_value(usb_dev->gpio_desc, on);
+	if (err)
+		return err;
 
-	gpiod_set_value(usb_dev->gpio_desc, val);
+	return on ? regulator_enable(usb_dev->regulator) :
+		    regulator_disable(usb_dev->regulator);
 }
 
 static const struct usb_ehci_pdata ehci_pdata = {
@@ -396,8 +402,13 @@ static int bcma_hcd_probe(struct bcma_device *core)
 {
 	int err;
 	struct bcma_hcd_device *usb_dev;
+	struct bcma_device *usb3;
 
-	/* TODO: Probably need checks here; is the core connected? */
+	if (core->id.id == BCMA_CORE_NS_USB20) {
+		usb3 = bcma_find_core(core->bus, BCMA_CORE_NS_USB30);
+		if (usb3 && !bcma_get_drvdata(usb3))
+			return -EPROBE_DEFER;
+	}
 
 	usb_dev = devm_kzalloc_obj(&core->dev, struct bcma_hcd_device);
 	if (!usb_dev)
@@ -409,6 +420,11 @@ static int bcma_hcd_probe(struct bcma_device *core)
 	if (IS_ERR(usb_dev->gpio_desc))
 		return dev_err_probe(&core->dev, PTR_ERR(usb_dev->gpio_desc),
 				     "error obtaining VCC GPIO");
+
+	usb_dev->regulator = devm_regulator_get(&core->dev, "vbus");
+	if (IS_ERR(usb_dev->regulator))
+		return dev_err_probe(&core->dev, PTR_ERR(usb_dev->regulator),
+				     "error obtaining VBUS regulator");
 
 	switch (core->id.id) {
 	case BCMA_CORE_USB20_HOST:
@@ -431,6 +447,10 @@ static int bcma_hcd_probe(struct bcma_device *core)
 	if (err)
 		return err;
 
+	err = regulator_enable(usb_dev->regulator);
+	if (err)
+		return dev_err_probe(&core->dev, err, "error enabling VBUS");
+
 	bcma_set_drvdata(core, usb_dev);
 	return 0;
 }
@@ -446,12 +466,13 @@ static void bcma_hcd_remove(struct bcma_device *dev)
 	if (ehci_dev)
 		platform_device_unregister(ehci_dev);
 
+	bcma_hci_platform_power(dev, false);
 	bcma_core_disable(dev, 0);
 }
 
 static void bcma_hcd_shutdown(struct bcma_device *dev)
 {
-	bcma_hci_platform_power_gpio(dev, false);
+	bcma_hci_platform_power(dev, false);
 	bcma_core_disable(dev, 0);
 }
 
@@ -459,7 +480,11 @@ static void bcma_hcd_shutdown(struct bcma_device *dev)
 
 static int bcma_hcd_suspend(struct bcma_device *dev)
 {
-	bcma_hci_platform_power_gpio(dev, false);
+	int err;
+
+	err = bcma_hci_platform_power(dev, false);
+	if (err)
+		return err;
 	bcma_core_disable(dev, 0);
 
 	return 0;
@@ -467,7 +492,11 @@ static int bcma_hcd_suspend(struct bcma_device *dev)
 
 static int bcma_hcd_resume(struct bcma_device *dev)
 {
-	bcma_hci_platform_power_gpio(dev, true);
+	int err;
+
+	err = bcma_hci_platform_power(dev, true);
+	if (err)
+		return err;
 	bcma_core_enable(dev, 0);
 
 	return 0;

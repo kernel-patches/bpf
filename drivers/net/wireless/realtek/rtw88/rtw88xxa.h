@@ -140,7 +140,7 @@ struct rtw_jaguar_phy_status_rpt {
 #define RF18_BW_MASK		(BIT(11) | BIT(10))
 
 void rtw88xxa_efuse_grant(struct rtw_dev *rtwdev, bool on);
-int rtw88xxa_read_efuse(struct rtw_dev *rtwdev, u8 *log_map);
+int rtw88xxa_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map);
 void rtw88xxa_power_off(struct rtw_dev *rtwdev,
 			const struct rtw_pwr_seq_cmd *const *enter_lps_flow);
 int rtw88xxa_power_on(struct rtw_dev *rtwdev);

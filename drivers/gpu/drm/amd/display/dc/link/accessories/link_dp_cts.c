@@ -29,7 +29,7 @@
 #include "link/protocols/link_dp_phy.h"
 #include "link/protocols/link_dp_training_fixed_vs_pe_retimer.h"
 #include "link/protocols/link_dp_capability.h"
-#include "link/link_dpms.h"
+#include "link/link_dpms_v1.h"
 #include "resource.h"
 #include "dm_helpers.h"
 #include "dc_dmub_srv.h"
@@ -72,6 +72,7 @@ static void dp_retrain_link_dp_test(struct dc_link *link,
 	struct dc_stream_update stream_update = { 0 };
 	bool dpms_off = false;
 	bool needs_divider_update = false;
+	bool program_pix_clk = false;
 	bool was_hpo_acquired = resource_is_hpo_acquired(link->dc->current_state);
 	bool is_hpo_acquired;
 	uint8_t count;
@@ -80,6 +81,7 @@ static void dp_retrain_link_dp_test(struct dc_link *link,
 	struct dc_stream_state *streams_on_link[MAX_PIPES];
 	int num_streams_on_link = 0;
 	struct dc *dc = (struct dc *)link->dc;
+	struct dc_surface_update *srf_updates;
 
 	needs_divider_update = (link->dc->link_srv->dp_get_encoding_format(link_setting) !=
 		link->dc->link_srv->dp_get_encoding_format((const struct dc_link_settings *) &link->cur_link_settings))
@@ -90,57 +92,29 @@ static void dp_retrain_link_dp_test(struct dc_link *link,
 	link_get_master_pipes_with_dpms_on(link, state, &count, pipes);
 
 	for (i = 0; i < count; i++) {
-		link_set_dpms_off(pipes[i]);
+		link->dc->link_srv->set_dpms_off(pipes[i]);
 		pipes[i]->link_config.dp_link_settings = *link_setting;
 		update_dp_encoder_resources_for_test_harness(
 				link->dc,
 				state,
 				pipes[i]);
-
-		// Disable OTG and re-enable after updating clocks
-		pipes[i]->stream_res.tg->funcs->disable_crtc(pipes[i]->stream_res.tg);
 	}
 
 	if (needs_divider_update && link->dc->res_pool->funcs->update_dc_state_for_encoder_switch) {
 		link->dc->res_pool->funcs->update_dc_state_for_encoder_switch(link,
 				link_setting, count,
 				*pipes, &audio_output[0]);
-		for (i = 0; i < count; i++) {
-			pipes[i]->clock_source->funcs->program_pix_clk(
-					pipes[i]->clock_source,
-					&pipes[i]->stream_res.pix_clk_params,
-					link->dc->link_srv->dp_get_encoding_format(&pipes[i]->link_config.dp_link_settings),
-					&pipes[i]->pll_settings);
-
-			if (pipes[i]->stream_res.audio != NULL) {
-				const struct link_hwss *link_hwss = get_link_hwss(
-					link, &pipes[i]->link_res);
-
-				link_hwss->setup_audio_output(pipes[i], &audio_output[i],
-						pipes[i]->stream_res.audio->inst);
-
-				pipes[i]->stream_res.audio->funcs->az_configure(
-						pipes[i]->stream_res.audio,
-						pipes[i]->stream->signal,
-						&audio_output[i].crtc_info,
-						&pipes[i]->stream->audio_info,
-						&audio_output[i].dp_link_info);
-
-				if (link->dc->config.disable_hbr_audio_dp2 &&
-						pipes[i]->stream_res.audio->funcs->az_disable_hbr_audio &&
-						link->dc->link_srv->dp_is_128b_132b_signal(pipes[i]))
-					pipes[i]->stream_res.audio->funcs->az_disable_hbr_audio(pipes[i]->stream_res.audio);
-			}
-		}
+		program_pix_clk = true;
 	}
+
+	// Disable OTG, update clocks and re-enable OTG with its ODM configuration restored
+	hwss_restart_otg_for_dp_test_link_retrain(dc, state, pipes, count,
+			program_pix_clk, audio_output);
 
 	// Toggle on HPO I/O if necessary
 	is_hpo_acquired = resource_is_hpo_acquired(state);
 	if (was_hpo_acquired != is_hpo_acquired && link->dc->hwss.setup_hpo_hw_control)
 		link->dc->hwss.setup_hpo_hw_control(link->dc->hwseq, is_hpo_acquired);
-
-	for (i = 0; i < count; i++)
-		pipes[i]->stream_res.tg->funcs->enable_crtc(pipes[i]->stream_res.tg);
 
 	// Set DPMS on with stream update
 	// Cache all streams on current link since dc_update_planes_and_stream might kill current_state
@@ -151,13 +125,29 @@ static void dp_retrain_link_dp_test(struct dc_link *link,
 			streams_on_link[num_streams_on_link++] = state->streams[i];
 	}
 
+	srf_updates = kcalloc(MAX_SURFACES, sizeof(*srf_updates), GFP_KERNEL);
+
 	for (i = 0; i < num_streams_on_link; i++) {
 		if (streams_on_link[i] && streams_on_link[i]->link && streams_on_link[i]->link == link) {
+			struct dc_stream_status *stream_status = dc_stream_get_status(streams_on_link[i]);
+			int surface_count = 0;
+			int j;
+
+			if (srf_updates && stream_status) {
+				memset(srf_updates, 0, MAX_SURFACES * sizeof(*srf_updates));
+				for (j = 0; j < stream_status->plane_count; j++)
+					srf_updates[j].surface = stream_status->plane_states[j];
+				surface_count = stream_status->plane_count;
+			}
+
 			stream_update.stream = streams_on_link[i];
 			stream_update.dpms_off = &dpms_off;
-			dc_update_planes_and_stream(dc, NULL, 0, streams_on_link[i], &stream_update);
+			dc_update_planes_and_stream(dc, srf_updates, surface_count,
+					streams_on_link[i], &stream_update);
 		}
 	}
+
+	kfree(srf_updates);
 }
 
 static void dp_test_send_link_training(struct dc_link *link)

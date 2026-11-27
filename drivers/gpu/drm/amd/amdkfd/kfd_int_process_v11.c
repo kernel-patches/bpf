@@ -255,6 +255,16 @@ static void event_interrupt_poison_consumption_v11(struct kfd_node *dev,
 	amdgpu_amdkfd_ras_poison_consumption_handler(dev->adev, block, reset);
 }
 
+static inline u32 gc_vm_fault_client_id(struct kfd_node *dev)
+{
+	switch (KFD_GC_VERSION(dev)) {
+	case IP_VERSION(13, 0, 1):
+		return SOC_V2_0_IH_CLIENTID_GC_UTCL2;
+	default:
+		return SOC21_IH_CLIENTID_GFX;
+	}
+}
+
 static bool event_interrupt_isr_v11(struct kfd_node *dev,
 					const uint32_t *ih_ring_entry,
 					uint32_t *patched_ihre,
@@ -299,7 +309,7 @@ static bool event_interrupt_isr_v11(struct kfd_node *dev,
 		source_id == SOC21_INTSRC_SDMA_TRAP ||
 		KFD_IRQ_IS_FENCE(client_id, source_id) ||
 		(((client_id == SOC21_IH_CLIENTID_VMC) ||
-		 ((client_id == SOC21_IH_CLIENTID_GFX) &&
+		 ((client_id == gc_vm_fault_client_id(dev)) &&
 		  (source_id == UTCL2_1_0__SRCID__FAULT))) &&
 		  !amdgpu_no_queue_eviction_on_vm_fault);
 }
@@ -323,7 +333,7 @@ static void event_interrupt_wq_v11(struct kfd_node *dev,
 
 	/* VMC, UTCL2 */
 	if (client_id == SOC21_IH_CLIENTID_VMC ||
-	     ((client_id == SOC21_IH_CLIENTID_GFX) &&
+	     ((client_id == gc_vm_fault_client_id(dev)) &&
 	     (source_id == UTCL2_1_0__SRCID__FAULT))) {
 
 		info.vmid = vmid;
@@ -408,7 +418,7 @@ static void event_interrupt_wq_v11(struct kfd_node *dev,
 		}
 
 	} else if (KFD_IRQ_IS_FENCE(client_id, source_id)) {
-		kfd_process_close_interrupt_drain(pasid);
+		amdgpu_pasid_drain_irq_done(pasid);
 	}
 }
 

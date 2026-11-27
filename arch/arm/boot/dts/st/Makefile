@@ -94,25 +94,14 @@ stm32mp15xx-dhcom-picoitx-overlay-548-200-x2-mi0700s4t-6-dtbs := \
 	stm32mp15xx-dhcom-picoitx-overlay-548-200-x2-mi0700s4t-6.dtbo \
 
 stm32mp15xx-dhcom-picoitx-overlay-553-100-x2-tst043015cmhx-dtbs := \
-	stm32mp157c-dhcom-pdk2.dtb \
+	stm32mp157c-dhcom-picoitx.dtb \
 	stm32mp15xx-dhcom-picoitx-overlay-553-100-x2-tst043015cmhx.dtbo \
 
 stm32mp15xx-dhcom-picoitx-overlay-626-100-x2-ch101olhlwh-dtbs := \
-	stm32mp157c-dhcom-pdk2.dtb \
+	stm32mp157c-dhcom-picoitx.dtb \
 	stm32mp15xx-dhcom-picoitx-overlay-626-100-x2-ch101olhlwh.dtbo \
 
 dtb-$(CONFIG_ARCH_STM32) += \
-	stm32f429-disco.dtb \
-	stm32f469-disco.dtb \
-	stm32f746-disco.dtb \
-	stm32f769-disco.dtb \
-	stm32f769-disco-mb1166-reva09.dtb \
-	stm32429i-eval.dtb \
-	stm32746g-eval.dtb \
-	stm32h743i-eval.dtb \
-	stm32h743i-disco.dtb \
-	stm32h747i-disco.dtb \
-	stm32h750i-art-pi.dtb \
 	stm32mp133c-prihmb.dtb \
 	stm32mp135f-dhcor-dhsbc.dtb \
 	stm32mp13xx-dhcor-dhsbc-overlay-rb-tft32-v2.dtb \

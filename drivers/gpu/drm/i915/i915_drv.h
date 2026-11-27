@@ -185,7 +185,6 @@ struct drm_i915_private {
 	struct i915_dsm dsm;
 
 	struct intel_uncore uncore;
-	struct intel_uncore_mmio_debug mmio_debug;
 
 	struct i915_virtual_gpu vgpu;
 

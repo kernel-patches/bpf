@@ -69,7 +69,8 @@
 	};
 
 	reboot-mode-syscon@5f01000 {
-		compatible = "syscon", "simple-mfd";
+		compatible = "hisilicon,hi6220-reboot-mode",
+			     "syscon", "simple-mfd";
 		reg = <0x0 0x05f01000 0x0 0x00001000>;
 
 		reboot-mode {
@@ -299,7 +300,7 @@
 		port@1 {
 			reg = <1>;
 
-			dsi_out0: endpoint@0 {
+			dsi_out0: endpoint {
 				remote-endpoint = <&adv7533_in>;
 			};
 		};
@@ -504,6 +505,12 @@
 	adv7533: adv7533@39 {
 		compatible = "adi,adv7533";
 		reg = <0x39>;
+		avdd-supply = <&ldo15>;
+		dvdd-supply = <&ldo15>;
+		pvdd-supply = <&ldo15>;
+		a2vdd-supply = <&ldo15>;
+		v3p3-supply = <&reg_vdd_3v3>;
+		v1p2-supply = <&ldo22>;
 		interrupt-parent = <&gpio1>;
 		interrupts = <1 2>;
 		pd-gpios = <&gpio0 4 0>;

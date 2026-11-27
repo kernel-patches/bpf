@@ -74,7 +74,7 @@ static unsigned int pentium3_get_frequency(enum speedstep_processor processor)
 	int i = 0, j = 0;
 
 	/* read MSR 0x2a - we only need the low 32 bits */
-	rdmsrq(MSR_IA32_EBL_CR_POWERON, msr.q);
+	msr.q = rdmsrq(MSR_IA32_EBL_CR_POWERON);
 	pr_debug("P3 - MSR_IA32_EBL_CR_POWERON: 0x%x 0x%x\n", msr.l, msr.h);
 	msr_tmp = msr_lo = msr.l;
 
@@ -112,7 +112,7 @@ static unsigned int pentiumM_get_frequency(void)
 	struct msr msr;
 	u32 msr_tmp;
 
-	rdmsrq(MSR_IA32_EBL_CR_POWERON, msr.q);
+	msr.q = rdmsrq(MSR_IA32_EBL_CR_POWERON);
 	pr_debug("PM - MSR_IA32_EBL_CR_POWERON: 0x%x 0x%x\n", msr.l, msr.h);
 
 	/* see table B-2 of 24547212.pdf */
@@ -136,7 +136,7 @@ static unsigned int pentium_core_get_frequency(void)
 	u32 msr_tmp;
 	int ret;
 
-	rdmsrq(MSR_FSB_FREQ, msr.q);
+	msr.q = rdmsrq(MSR_FSB_FREQ);
 	/* see table B-2 of 25366920.pdf */
 	switch (msr.l & 0x07) {
 	case 5:
@@ -161,7 +161,7 @@ static unsigned int pentium_core_get_frequency(void)
 		pr_err("PCORE - MSR_FSB_FREQ undefined value\n");
 	}
 
-	rdmsrq(MSR_IA32_EBL_CR_POWERON, msr.q);
+	msr.q = rdmsrq(MSR_IA32_EBL_CR_POWERON);
 	pr_debug("PCORE - MSR_IA32_EBL_CR_POWERON: 0x%x 0x%x\n",
 			msr.l, msr.h);
 
@@ -191,7 +191,7 @@ static unsigned int pentium4_get_frequency(void)
 	if (c->x86_model < 2)
 		return cpu_khz;
 
-	rdmsrq(0x2c, msr.q);
+	msr.q = rdmsrq(0x2c);
 
 	pr_debug("P4 - MSR_EBC_FREQUENCY_ID: 0x%x 0x%x\n", msr.l, msr.h);
 
@@ -348,7 +348,7 @@ enum speedstep_processor speedstep_detect_processor(void)
 
 		/* all mobile PIII Coppermines have FSB 100 MHz
 		 * ==> sort out a few desktop PIIIs. */
-		rdmsrq(MSR_IA32_EBL_CR_POWERON, msr.q);
+		msr.q = rdmsrq(MSR_IA32_EBL_CR_POWERON);
 		pr_debug("Coppermine: MSR_IA32_EBL_CR_POWERON is 0x%x, 0x%x\n",
 				msr.l, msr.h);
 		msr.l &= 0x00c0000;
@@ -361,7 +361,7 @@ enum speedstep_processor speedstep_detect_processor(void)
 		 * it has SpeedStep technology if either
 		 * bit 56 or 57 is set
 		 */
-		rdmsrq(MSR_IA32_PLATFORM_ID, msr.q);
+		msr.q = rdmsrq(MSR_IA32_PLATFORM_ID);
 		pr_debug("Coppermine: MSR_IA32_PLATFORM ID is 0x%x, 0x%x\n",
 				msr.l, msr.h);
 		if ((msr.h & (1<<18)) &&

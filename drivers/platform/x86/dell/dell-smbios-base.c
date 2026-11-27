@@ -406,7 +406,12 @@ static void __init parse_da_table(const struct dmi_header *dm)
 	if (dm->length < 17)
 		return;
 
-	da_supported_commands = table->supportedCmds;
+	/*
+	 * Systems may expose several 0xDA structures, and not all of them
+	 * fill in supportedCmds, so accumulate rather than letting the last
+	 * one win.
+	 */
+	da_supported_commands |= table->supportedCmds;
 
 	new_da_tokens = krealloc(da_tokens, (da_num_tokens + tokens) *
 				 sizeof(struct calling_interface_token),

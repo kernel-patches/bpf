@@ -81,14 +81,38 @@ const char *__attribute_const__ iwcm_reject_msg(int reason)
 EXPORT_SYMBOL(iwcm_reject_msg);
 
 static struct rdma_nl_cbs iwcm_nl_cb_table[RDMA_NL_IWPM_NUM_OPS] = {
-	[RDMA_NL_IWPM_REG_PID] = {.dump = iwpm_register_pid_cb},
-	[RDMA_NL_IWPM_ADD_MAPPING] = {.dump = iwpm_add_mapping_cb},
-	[RDMA_NL_IWPM_QUERY_MAPPING] = {.dump = iwpm_add_and_query_mapping_cb},
-	[RDMA_NL_IWPM_REMOTE_INFO] = {.dump = iwpm_remote_info_cb},
-	[RDMA_NL_IWPM_HANDLE_ERR] = {.dump = iwpm_mapping_error_cb},
-	[RDMA_NL_IWPM_MAPINFO] = {.dump = iwpm_mapping_info_cb},
-	[RDMA_NL_IWPM_MAPINFO_NUM] = {.dump = iwpm_ack_mapping_info_cb},
-	[RDMA_NL_IWPM_HELLO] = {.dump = iwpm_hello_cb}
+	[RDMA_NL_IWPM_REG_PID] = {
+		.dump = iwpm_register_pid_cb,
+		.flags = RDMA_NL_ADMIN_PERM,
+	},
+	[RDMA_NL_IWPM_ADD_MAPPING] = {
+		.dump = iwpm_add_mapping_cb,
+		.flags = RDMA_NL_ADMIN_PERM,
+	},
+	[RDMA_NL_IWPM_QUERY_MAPPING] = {
+		.dump = iwpm_add_and_query_mapping_cb,
+		.flags = RDMA_NL_ADMIN_PERM,
+	},
+	[RDMA_NL_IWPM_REMOTE_INFO] = {
+		.dump = iwpm_remote_info_cb,
+		.flags = RDMA_NL_ADMIN_PERM,
+	},
+	[RDMA_NL_IWPM_HANDLE_ERR] = {
+		.dump = iwpm_mapping_error_cb,
+		.flags = RDMA_NL_ADMIN_PERM,
+	},
+	[RDMA_NL_IWPM_MAPINFO] = {
+		.dump = iwpm_mapping_info_cb,
+		.flags = RDMA_NL_ADMIN_PERM,
+	},
+	[RDMA_NL_IWPM_MAPINFO_NUM] = {
+		.dump = iwpm_ack_mapping_info_cb,
+		.flags = RDMA_NL_ADMIN_PERM,
+	},
+	[RDMA_NL_IWPM_HELLO] = {
+		.dump = iwpm_hello_cb,
+		.flags = RDMA_NL_ADMIN_PERM,
+	},
 };
 
 static struct workqueue_struct *iwcm_wq;

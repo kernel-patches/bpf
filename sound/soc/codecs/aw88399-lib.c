@@ -296,7 +296,7 @@ static int aw88399_dev_get_vcalk(struct aw88399 *aw88399, int16_t *vcalk)
 	else
 		vcalk_val = vcalkh_val | vcalkl_val;
 
-	if (vcalk_val & AW88399_EF_VSN_GESLP_SIGN_MASK)
+	if (vcalk_val & (~AW88399_EF_VSN_GESLP_SIGN_MASK))
 		vcalk_val = vcalk_val | AW88399_EF_VSN_GESLP_SIGN_NEG;
 	*vcalk = (int16_t)vcalk_val;
 
@@ -552,7 +552,7 @@ static void aw_dev_i2s_tx_enable(struct aw_device *aw_dev, bool flag)
 		ret = regmap_update_bits(aw_dev->regmap, AW88399_I2SCTRL3_REG,
 			~AW88399_I2STXEN_MASK, AW88399_I2STXEN_ENABLE_VALUE);
 	else
-		ret = regmap_update_bits(aw_dev->regmap, AW88399_I2SCFG1_REG,
+		ret = regmap_update_bits(aw_dev->regmap, AW88399_I2SCTRL3_REG,
 			~AW88399_I2STXEN_MASK, AW88399_I2STXEN_DISABLE_VALUE);
 
 	if (ret)
@@ -957,7 +957,7 @@ static int aw_dev_update_reg_container(struct aw88399 *aw88399,
 			else
 				aw_dev->dsp_cfg = AW88399_DEV_DSP_WORK;
 
-			reg_val &= (AW88399_HMUTE_MASK | AW88399_PWDN_MASK |
+			reg_val &= (AW88399_HMUTE_MASK & AW88399_PWDN_MASK &
 						AW88399_DSPBY_MASK);
 			reg_val |= (AW88399_HMUTE_ENABLE_VALUE | AW88399_PWDN_POWER_DOWN_VALUE |
 						AW88399_DSPBY_BYPASS_VALUE);

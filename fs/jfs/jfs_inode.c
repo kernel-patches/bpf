@@ -45,6 +45,9 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	struct jfs_inode_info *jfs_inode;
 	int rc;
 
+	if (sb_emergency_ro(sb))
+		return ERR_PTR(-EROFS);
+
 	inode = new_inode(sb);
 	if (!inode) {
 		jfs_warn("ialloc: new_inode returned NULL!");

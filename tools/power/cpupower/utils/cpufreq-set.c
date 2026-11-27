@@ -144,6 +144,7 @@ static unsigned long string_to_frequency(const char *str)
 static int do_new_policy(unsigned int cpu, struct cpufreq_policy *new_pol)
 {
 	struct cpufreq_policy *cur_pol = cpufreq_get_policy(cpu);
+	struct cpufreq_policy temp_pol;
 	int ret;
 
 	if (!cur_pol) {
@@ -152,15 +153,21 @@ static int do_new_policy(unsigned int cpu, struct cpufreq_policy *new_pol)
 	}
 
 	if (!new_pol->min)
-		new_pol->min = cur_pol->min;
+		temp_pol.min = cur_pol->min;
+	else
+		temp_pol.min = new_pol->min;
 
 	if (!new_pol->max)
-		new_pol->max = cur_pol->max;
+		temp_pol.max = cur_pol->max;
+	else
+		temp_pol.max = new_pol->max;
 
 	if (!new_pol->governor)
-		new_pol->governor = cur_pol->governor;
+		temp_pol.governor = cur_pol->governor;
+	else
+		temp_pol.governor = new_pol->governor;
 
-	ret = cpufreq_set_policy(cpu, new_pol);
+	ret = cpufreq_set_policy(cpu, &temp_pol);
 
 	cpufreq_put_policy(cur_pol);
 

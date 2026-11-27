@@ -34,7 +34,7 @@ static void raid6_avx5121_gen_syndrome(int disks, size_t bytes, void **ptrs)
 	p = dptr[z0+1];         /* XOR parity */
 	q = dptr[z0+2];         /* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("vmovdqa64 %0,%%zmm0\n\t"
 		     "vpxorq %%zmm1,%%zmm1,%%zmm1" /* Zero temp */
@@ -73,8 +73,7 @@ static void raid6_avx5121_gen_syndrome(int disks, size_t bytes, void **ptrs)
 			     "vpxorq %%zmm2,%%zmm2,%%zmm2\n\t"
 			     "vmovntdq %%zmm4,%1\n\t"
 			     "vpxorq %%zmm4,%%zmm4,%%zmm4"
-			     :
-			     : "m" (p[d]), "m" (q[d]));
+			     : "=m" (p[d]), "=m" (q[d]));
 	}
 
 	asm volatile("sfence" : : : "memory");
@@ -93,7 +92,7 @@ static void raid6_avx5121_xor_syndrome(int disks, int start, int stop,
 	p = dptr[disks-2];	/* XOR parity */
 	q = dptr[disks-1];	/* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("vmovdqa64 %0,%%zmm0"
 		     : : "m" (raid6_avx512_constants.x1d[0]));
@@ -133,11 +132,9 @@ static void raid6_avx5121_xor_syndrome(int disks, int start, int stop,
 		/* Don't use movntdq for r/w memory area < cache line */
 			     "vmovdqa64 %%zmm4,%0\n\t"
 			     "vmovdqa64 %%zmm2,%1"
-			     :
-			     : "m" (q[d]), "m" (p[d]));
+			     : "+m" (q[d]), "=m" (p[d]));
 	}
 
-	asm volatile("sfence" : : : "memory");
 	asm volatile("vzeroupper");
 	kernel_fpu_end();
 }
@@ -161,7 +158,7 @@ static void raid6_avx5122_gen_syndrome(int disks, size_t bytes, void **ptrs)
 	p = dptr[z0+1];         /* XOR parity */
 	q = dptr[z0+2];         /* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("vmovdqa64 %0,%%zmm0\n\t"
 		     "vpxorq %%zmm1,%%zmm1,%%zmm1" /* Zero temp */
@@ -204,9 +201,8 @@ static void raid6_avx5122_gen_syndrome(int disks, size_t bytes, void **ptrs)
 			     "vmovntdq %%zmm3,%1\n\t"
 			     "vmovntdq %%zmm4,%2\n\t"
 			     "vmovntdq %%zmm6,%3"
-			     :
-			     : "m" (p[d]), "m" (p[d+64]), "m" (q[d]),
-			       "m" (q[d+64]));
+			     : "=m" (p[d]), "=m" (p[d+64]), "=m" (q[d]),
+			       "=m" (q[d+64]));
 	}
 
 	asm volatile("sfence" : : : "memory");
@@ -225,7 +221,7 @@ static void raid6_avx5122_xor_syndrome(int disks, int start, int stop,
 	p = dptr[disks-2];	/* XOR parity */
 	q = dptr[disks-1];	/* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("vmovdqa64 %0,%%zmm0"
 		     : : "m" (raid6_avx512_constants.x1d[0]));
@@ -289,12 +285,10 @@ static void raid6_avx5122_xor_syndrome(int disks, int start, int stop,
 			     "vmovdqa64 %%zmm6,%1\n\t"
 			     "vmovdqa64 %%zmm2,%2\n\t"
 			     "vmovdqa64 %%zmm3,%3"
-			     :
-			     : "m" (q[d]), "m" (q[d+64]), "m" (p[d]),
-			       "m" (p[d+64]));
+			     : "+m" (q[d]), "+m" (q[d+64]), "=m" (p[d]),
+			       "=m" (p[d+64]));
 	}
 
-	asm volatile("sfence" : : : "memory");
 	asm volatile("vzeroupper");
 	kernel_fpu_end();
 }
@@ -320,7 +314,7 @@ static void raid6_avx5124_gen_syndrome(int disks, size_t bytes, void **ptrs)
 	p = dptr[z0+1];         /* XOR parity */
 	q = dptr[z0+2];         /* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("vmovdqa64 %0,%%zmm0\n\t"
 		     "vpxorq %%zmm1,%%zmm1,%%zmm1\n\t"       /* Zero temp */
@@ -393,10 +387,9 @@ static void raid6_avx5124_gen_syndrome(int disks, size_t bytes, void **ptrs)
 			     "vpxorq %%zmm12,%%zmm12,%%zmm12\n\t"
 			     "vmovntdq %%zmm14,%7\n\t"
 			     "vpxorq %%zmm14,%%zmm14,%%zmm14"
-			     :
-			     : "m" (p[d]), "m" (p[d+64]), "m" (p[d+128]),
-			       "m" (p[d+192]), "m" (q[d]), "m" (q[d+64]),
-			       "m" (q[d+128]), "m" (q[d+192]));
+			     : "=m" (p[d]), "=m" (p[d+64]), "=m" (p[d+128]),
+			       "=m" (p[d+192]), "=m" (q[d]), "=m" (q[d+64]),
+			       "=m" (q[d+128]), "=m" (q[d+192]));
 	}
 
 	asm volatile("sfence" : : : "memory");
@@ -415,7 +408,7 @@ static void raid6_avx5124_xor_syndrome(int disks, int start, int stop,
 	p = dptr[disks-2];	/* XOR parity */
 	q = dptr[disks-1];	/* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("vmovdqa64 %0,%%zmm0"
 		     :: "m" (raid6_avx512_constants.x1d[0]));
@@ -483,8 +476,8 @@ static void raid6_avx5124_xor_syndrome(int disks, int start, int stop,
 				       "m" (dptr[z][d+128]),
 				       "m" (dptr[z][d+192]));
 		}
-		asm volatile("prefetchnta %0\n\t"
-			     "prefetchnta %1\n\t"
+		asm volatile("prefetcht0 %0\n\t"
+			     "prefetcht0 %1\n\t"
 			     :
 			     : "m" (q[d]), "m" (q[d+128]));
 		/* P/Q left side optimization */
@@ -516,24 +509,22 @@ static void raid6_avx5124_xor_syndrome(int disks, int start, int stop,
 				     :
 				     : );
 		}
-		asm volatile("vmovntdq %%zmm2,%0\n\t"
-			     "vmovntdq %%zmm3,%1\n\t"
-			     "vmovntdq %%zmm10,%2\n\t"
-			     "vmovntdq %%zmm11,%3\n\t"
+		asm volatile("vmovdqa64 %%zmm2,%0\n\t"
+			     "vmovdqa64 %%zmm3,%1\n\t"
+			     "vmovdqa64 %%zmm10,%2\n\t"
+			     "vmovdqa64 %%zmm11,%3\n\t"
 			     "vpxorq %4,%%zmm4,%%zmm4\n\t"
 			     "vpxorq %5,%%zmm6,%%zmm6\n\t"
 			     "vpxorq %6,%%zmm12,%%zmm12\n\t"
 			     "vpxorq %7,%%zmm14,%%zmm14\n\t"
-			     "vmovntdq %%zmm4,%4\n\t"
-			     "vmovntdq %%zmm6,%5\n\t"
-			     "vmovntdq %%zmm12,%6\n\t"
-			     "vmovntdq %%zmm14,%7"
-			     :
-			     : "m" (p[d]),  "m" (p[d+64]), "m" (p[d+128]),
-			       "m" (p[d+192]), "m" (q[d]),  "m" (q[d+64]),
-			       "m" (q[d+128]), "m" (q[d+192]));
+			     "vmovdqa64 %%zmm4,%4\n\t"
+			     "vmovdqa64 %%zmm6,%5\n\t"
+			     "vmovdqa64 %%zmm12,%6\n\t"
+			     "vmovdqa64 %%zmm14,%7"
+			     : "=m" (p[d]), "=m" (p[d+64]), "=m" (p[d+128]),
+			       "=m" (p[d+192]), "+m" (q[d]), "+m" (q[d+64]),
+			       "+m" (q[d+128]), "+m" (q[d+192]));
 	}
-	asm volatile("sfence" : : : "memory");
 	asm volatile("vzeroupper");
 	kernel_fpu_end();
 }

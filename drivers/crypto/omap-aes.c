@@ -310,8 +310,7 @@ static int omap_aes_crypt_dma(struct omap_aes_dev *dd,
 	}
 
 	/* No callback necessary */
-	tx_in->callback_param = dd;
-	tx_in->callback = NULL;
+	dmaengine_desc_set_callback(tx_in, NULL, NULL, dd);
 
 	/* OUT */
 	if (out_sg_len) {
@@ -337,10 +336,9 @@ static int omap_aes_crypt_dma(struct omap_aes_dev *dd,
 	}
 
 	if (dd->flags & FLAGS_GCM)
-		cb_desc->callback = omap_aes_gcm_dma_out_callback;
+		dmaengine_desc_set_callback(cb_desc, omap_aes_gcm_dma_out_callback, NULL, dd);
 	else
-		cb_desc->callback = omap_aes_dma_out_callback;
-	cb_desc->callback_param = dd;
+		dmaengine_desc_set_callback(cb_desc, omap_aes_dma_out_callback, NULL, dd);
 
 
 	dmaengine_submit(tx_in);
@@ -1199,9 +1197,11 @@ static void omap_aes_remove(struct platform_device *pdev)
 
 	omap_aes_unregister_algs(dd->pdata);
 
-	crypto_engine_unregister_aeads(dd->pdata->aead_algs_info->algs_list,
-				       dd->pdata->aead_algs_info->registered);
-	dd->pdata->aead_algs_info->registered = 0;
+	if (dd->pdata->aead_algs_info) {
+		crypto_engine_unregister_aeads(dd->pdata->aead_algs_info->algs_list,
+					       dd->pdata->aead_algs_info->registered);
+		dd->pdata->aead_algs_info->registered = 0;
+	}
 
 	crypto_engine_exit(dd->engine);
 

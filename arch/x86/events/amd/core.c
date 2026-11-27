@@ -660,12 +660,8 @@ static __always_inline void amd_pmu_set_global_ctl(u64 ctl)
 
 static inline u64 amd_pmu_get_global_status(void)
 {
-	u64 status;
-
 	/* PerfCntrGlobalStatus is read-only */
-	rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS, status);
-
-	return status;
+	return rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS);
 }
 
 static inline void amd_pmu_ack_global_status(u64 status)
@@ -683,7 +679,7 @@ static bool amd_pmu_test_overflow_topbit(int idx)
 {
 	u64 counter;
 
-	rdmsrq(x86_pmu_event_addr(idx), counter);
+	counter = rdmsrq(x86_pmu_event_addr(idx));
 
 	return !(counter & BIT_ULL(x86_pmu.cntval_bits - 1));
 }
@@ -958,7 +954,7 @@ static int amd_pmu_v2_handle_irq(struct pt_regs *regs)
 	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
 	static atomic64_t status_warned = ATOMIC64_INIT(0);
 	u64 reserved, status, mask, new_bits, prev_bits;
-	struct perf_sample_data data;
+	struct perf_sample_data data __uninitialized; /* optimization */
 	struct hw_perf_event *hwc;
 	struct perf_event *event;
 	int handled = 0, idx;

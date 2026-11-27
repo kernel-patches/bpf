@@ -316,7 +316,7 @@ static int setup_sci_interrupt(struct platform_device *pdev)
 	u32 sts;
 	int r;
 
-	rdmsrq(0x51400020, msr);
+	msr = rdmsrq(0x51400020);
 	sci_irq = (msr >> 20) & 15;
 
 	if (sci_irq) {

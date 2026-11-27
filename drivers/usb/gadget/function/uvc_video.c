@@ -841,3 +841,18 @@ int uvcg_video_init(struct uvc_video *video, struct uvc_device *uvc)
 	return uvcg_queue_init(&video->queue, uvc->v4l2_dev.dev->parent,
 			V4L2_BUF_TYPE_VIDEO_OUTPUT, &video->mutex);
 }
+
+void uvcg_video_deinit(struct uvc_video *video)
+{
+	kthread_cancel_work_sync(&video->hw_submit);
+
+	if (!IS_ERR_OR_NULL(video->kworker)) {
+		kthread_destroy_worker(video->kworker);
+		video->kworker = NULL;
+	}
+
+	if (video->async_wq) {
+		destroy_workqueue(video->async_wq);
+		video->async_wq = NULL;
+	}
+}

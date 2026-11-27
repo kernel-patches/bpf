@@ -4,7 +4,9 @@
  */
 
 #include <linux/iopoll.h>
+#include <linux/string_choices.h>
 #include <linux/string_helpers.h>
+#include <linux/seq_file.h>
 
 #include <drm/drm_print.h>
 #include <drm/intel/intel_pcode_regs.h>
@@ -13,11 +15,11 @@
 #include "intel_alpm.h"
 #include "intel_backlight_regs.h"
 #include "intel_cdclk.h"
-#include "intel_clock_gating.h"
 #include "intel_combo_phy.h"
 #include "intel_crtc.h"
 #include "intel_de.h"
 #include "intel_display.h"
+#include "intel_display_clock_gating.h"
 #include "intel_display_power.h"
 #include "intel_display_power_map.h"
 #include "intel_display_power_well.h"
@@ -419,6 +421,11 @@ void intel_display_power_dc3co_update(struct intel_display *display, u32 trigger
 		return;
 
 	mutex_lock(&dc3co->lock);
+
+	if (dc3co->trigger != trigger)
+		drm_dbg_kms(display->drm, "DC3co allowed:%s trigger %#x -> %#x\n",
+			    str_yes_no(trigger), dc3co->trigger, trigger);
+
 	dc3co->trigger = trigger;
 	dc3co->allowed = !!trigger;
 	mutex_unlock(&dc3co->lock);
@@ -1597,7 +1604,7 @@ static void hsw_disable_pc8(struct intel_display *display)
 	intel_init_pch_refclk(display);
 
 	/* Many display registers don't survive PC8+ */
-	intel_clock_gating_init(display->drm);
+	intel_display_init_clock_gating(display);
 }
 
 static void intel_pch_reset_handshake(struct intel_display *display,

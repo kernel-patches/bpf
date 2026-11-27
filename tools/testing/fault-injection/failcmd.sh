@@ -196,7 +196,7 @@ while true; do
 		shift 2
 		;;
 	--cache-filter)
-		echo $2 > $FAULTATTR/cache_filter
+		echo $2 > $FAULTATTR/cache-filter
 		shift 2
 		;;
 	--ignore-gfp-highmem)

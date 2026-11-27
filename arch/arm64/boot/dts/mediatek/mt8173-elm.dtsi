@@ -171,7 +171,7 @@
 };
 
 &mfg_async {
-	domain-supply = <&da9211_vgpu_reg>;
+	domain-supply = <&da9212_vgpu_reg>;
 };
 
 &cec {
@@ -187,12 +187,12 @@
 };
 
 &cpu2 {
-	proc-supply = <&da9211_vcpu_reg>;
+	proc-supply = <&da9212_vcpu_reg>;
 	sram-supply = <&mt6397_vsramca7_reg>;
 };
 
 &cpu3 {
-	proc-supply = <&da9211_vcpu_reg>;
+	proc-supply = <&da9212_vcpu_reg>;
 	sram-supply = <&mt6397_vsramca7_reg>;
 };
 
@@ -307,16 +307,16 @@
 	clock-frequency = <1500000>;
 	status = "okay";
 
-	da9211: da9211@68 {
-		compatible = "dlg,da9211";
+	regulator@68 {
+		compatible = "dlg,da9212";
 		reg = <0x68>;
 		interrupts-extended = <&pio 15 IRQ_TYPE_LEVEL_LOW>;
 
 		regulators {
-			da9211_vcpu_reg: BUCKA {
-				regulator-name = "VBUCKA";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1310000>;
+			da9212_vcpu_reg: BUCKA {
+				regulator-name = "vdvfs1";
+				regulator-min-microvolt = < 720000>;
+				regulator-max-microvolt = <1130000>;
 				regulator-min-microamp = <2000000>;
 				regulator-max-microamp = <4400000>;
 				regulator-ramp-delay = <10000>;
@@ -325,10 +325,10 @@
 							   DA9211_BUCK_MODE_AUTO>;
 			};
 
-			da9211_vgpu_reg: BUCKB {
-				regulator-name = "VBUCKB";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1310000>;
+			da9212_vgpu_reg: BUCKB {
+				regulator-name = "vgpu";
+				regulator-min-microvolt = < 930000>;
+				regulator-max-microvolt = <1130000>;
 				regulator-min-microamp = <2000000>;
 				regulator-max-microamp = <3000000>;
 				regulator-ramp-delay = <10000>;
@@ -658,7 +658,7 @@
 	};
 
 	i2c1_pins_a: i2c1-pins {
-		pins-da9211 {
+		pins-da9212 {
 			pinmux = <MT8173_PIN_15_EINT15__FUNC_GPIO15>;
 			bias-pull-up;
 		};
@@ -948,8 +948,8 @@
 
 			mt6397_vpca15_reg: buck_vpca15 {
 				regulator-name = "vpca15";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-min-microvolt = < 725000>;
+				regulator-max-microvolt = <1125000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 				regulator-allowed-modes = <0 1>;
@@ -957,8 +957,8 @@
 
 			mt6397_vpca7_reg: buck_vpca7 {
 				regulator-name = "vpca7";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <1200000>;
 				regulator-ramp-delay = <12500>;
 				regulator-enable-ramp-delay = <115>;
 				regulator-always-on;
@@ -966,16 +966,16 @@
 
 			mt6397_vsramca15_reg: buck_vsramca15 {
 				regulator-name = "vsramca15";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-min-microvolt = < 931250>;
+				regulator-max-microvolt = <1150000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 			};
 
 			mt6397_vsramca7_reg: buck_vsramca7 {
 				regulator-name = "vsramca7";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-min-microvolt = < 931250>;
+				regulator-max-microvolt = <1150000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 			};
@@ -983,7 +983,7 @@
 			mt6397_vcore_reg: buck_vcore {
 				regulator-name = "vcore";
 				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-max-microvolt = <1125000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 			};
@@ -999,7 +999,7 @@
 			mt6397_vdrm_reg: buck_vdrm {
 				regulator-name = "vdrm";
 				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <1400000>;
+				regulator-max-microvolt = <1300000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 			};
@@ -1088,8 +1088,8 @@
 
 			mt6397_vgp5_reg: ldo_vgp5 {
 				regulator-name = "vgp5";
-				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <3000000>;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
 				regulator-enable-ramp-delay = <218>;
 			};
 

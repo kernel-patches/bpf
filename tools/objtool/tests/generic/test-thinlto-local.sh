@@ -15,11 +15,12 @@ find_thinlto_toolchain ||
 
 build_thinlto()		# $1 output object, $2 extra flags
 {
-	$THIN_CC -flto=thin -O2 -ffunction-sections -fdata-sections $2 \
+	$THIN_CC -flto=thin -O2 -ffunction-sections -fdata-sections $FTRACE_CFLAGS $2 \
 		-c "$FIXTURES_DIR/thinlto_local.c" -o "$workdir/tu_a.o" 2>/dev/null || return 1
-	$THIN_CC -flto=thin -O2 -ffunction-sections -fdata-sections $2 -DTU_B \
+	$THIN_CC -flto=thin -O2 -ffunction-sections -fdata-sections $FTRACE_CFLAGS $2 -DTU_B \
 		-c "$FIXTURES_DIR/thinlto_local.c" -o "$workdir/tu_b.o" 2>/dev/null || return 1
 	"$THIN_LD" -r "$workdir/tu_a.o" "$workdir/tu_b.o" -o "$1" 2>/dev/null || return 1
+	record_mcount "$1"
 }
 
 build_thinlto "$workdir/orig.o" "" ||

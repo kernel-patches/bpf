@@ -97,7 +97,7 @@ static int asn1_encode_oid_digit(unsigned char **_data, int *data_len, u32 oid)
 
 	/* quick case */
 	if (oid == 0) {
-		*data++ = 0x80;
+		*data++ = 0;
 		(*data_len)--;
 		goto out;
 	}

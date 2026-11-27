@@ -6,6 +6,7 @@
  * Copyright © 2002 Thomas Gleixner <gleixner@linutronix.de>
  * Copyright © 2000-2010 David Woodhouse <dwmw2@infradead.org>
  */
+#define pr_fmt(fmt) "mtd: " fmt
 
 #include <linux/module.h>
 #include <linux/types.h>
@@ -57,7 +58,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 	child = kzalloc_obj(*child);
 	name = kstrdup(part->name, GFP_KERNEL);
 	if (!name || !child) {
-		printk(KERN_ERR"memory allocation error while creating partitions for \"%s\"\n",
+		pr_err("memory allocation error while creating partitions for \"%s\"\n",
 		       parent->name);
 		kfree(name);
 		kfree(child);
@@ -102,7 +103,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 		remainder = do_div(tmp, wr_alignment);
 		if (remainder) {
 			child->part.offset += wr_alignment - remainder;
-			printk(KERN_NOTICE "Moving partition %d: "
+			pr_notice("Moving partition %d: "
 			       "0x%012llx -> 0x%012llx\n", partno,
 			       (unsigned long long)cur_offset,
 			       child->part.offset);
@@ -114,7 +115,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 			child->part.size = parent_size - child->part.offset -
 					   child->part.size;
 		} else {
-			printk(KERN_ERR "mtd partition \"%s\" doesn't have enough space: %#llx < %#llx, disabled\n",
+			pr_err("partition \"%s\" doesn't have enough space: %#llx < %#llx, disabled\n",
 				part->name, parent_size - child->part.offset,
 				child->part.size);
 			/* register to preserve ordering */
@@ -127,7 +128,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 	if (child->part.size == MTDPART_SIZ_FULL)
 		child->part.size = parent_size - child->part.offset;
 
-	printk(KERN_NOTICE "0x%012llx-0x%012llx : \"%s\"\n",
+	pr_notice("0x%012llx-0x%012llx : \"%s\"\n",
 	       child->part.offset, child->part.offset + child->part.size,
 	       child->name);
 
@@ -139,13 +140,13 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 
 		/* Initialize ->erasesize to make add_mtd_device() happy. */
 		child->erasesize = parent->erasesize;
-		printk(KERN_ERR"mtd: partition \"%s\" is out of reach -- disabled\n",
+		pr_err("partition \"%s\" is out of reach -- disabled\n",
 			part->name);
 		goto out_register;
 	}
 	if (child->part.offset + child->part.size > parent->size) {
 		child->part.size = parent_size - child->part.offset;
-		printk(KERN_WARNING"mtd: partition \"%s\" extends beyond the end of device \"%s\" -- size truncated to %#llx\n",
+		pr_warn("partition \"%s\" extends beyond the end of device \"%s\" -- size truncated to %#llx\n",
 			part->name, parent->name, child->part.size);
 	}
 
@@ -190,7 +191,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 		/* FIXME: Let it be writable if it is on a boundary of
 		 * _minor_ erase size though */
 		child->flags &= ~MTD_WRITEABLE;
-		printk(KERN_WARNING"mtd: partition \"%s\" doesn't start on an erase/write block boundary -- force read-only\n",
+		pr_warn("partition \"%s\" doesn't start on an erase/write block boundary -- force read-only\n",
 			part->name);
 	}
 
@@ -198,7 +199,7 @@ static struct mtd_info *allocate_partition(struct mtd_info *parent,
 	remainder = do_div(tmp, wr_alignment);
 	if ((child->flags & MTD_WRITEABLE) && remainder) {
 		child->flags &= ~MTD_WRITEABLE;
-		printk(KERN_WARNING"mtd: partition \"%s\" doesn't end on an erase/write block -- force read-only\n",
+		pr_warn("partition \"%s\" doesn't end on an erase/write block -- force read-only\n",
 			part->name);
 	}
 
@@ -241,8 +242,7 @@ static int mtd_add_partition_attrs(struct mtd_info *new)
 {
 	int ret = sysfs_create_files(&new->dev.kobj, mtd_partition_attrs);
 	if (ret)
-		printk(KERN_WARNING
-		       "mtd: failed to create partition attrs, err=%d\n", ret);
+		pr_warn("failed to create partition attrs, err=%d\n", ret);
 	return ret;
 }
 
@@ -409,7 +409,7 @@ int add_mtd_partitions(struct mtd_info *parent,
 	uint64_t cur_offset = 0;
 	int i, ret;
 
-	printk(KERN_NOTICE "Creating %d MTD partitions on \"%s\":\n",
+	pr_notice("Creating %d MTD partitions on \"%s\":\n",
 	       nbparts, parent->name);
 
 	for (i = 0; i < nbparts; i++) {

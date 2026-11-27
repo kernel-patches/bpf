@@ -598,6 +598,12 @@ uvc_copy_descriptors(struct uvc_device *uvc, enum usb_device_speed speed)
 	}
 
 	list_for_each_entry(xu, uvc->desc.extension_units, list) {
+		/* Mismatched bLength would overflow the buffer sized after it */
+		if (xu->desc.bLength !=
+		    UVC_DT_EXTENSION_UNIT_SIZE(xu->desc.bNrInPins,
+					       xu->desc.bControlSize))
+			return ERR_PTR(-EINVAL);
+
 		control_size += xu->desc.bLength;
 		bytes += xu->desc.bLength;
 		n_desc++;
@@ -769,22 +775,16 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	uvc_ss_streaming_ep.bEndpointAddress = uvc->video.ep->address;
 
 	/*
-	 * Hold opts->lock across both the XU string-descriptor fixup below and
-	 * the descriptor-copy block further down.  Without this, configfs
-	 * uvcg_extension_drop() (which takes opts->lock) can race with the
-	 * list_for_each_entry() walks here and inside uvc_copy_descriptors(),
-	 * leading to a UAF on a freed struct uvcg_extension.  See
-	 * drivers/usb/gadget/function/uvc_configfs.c::uvcg_extension_drop().
-	 */
-	mutex_lock(&opts->lock);
-
-	/*
 	 * XUs can have an arbitrary string descriptor describing them. If they
-	 * have one pick up the ID.
+	 * have one pick up the ID. Hold opts->lock here to avoid race with configfs
+	 * uvcg_extension_make() and uvcg_extension_drop().
 	 */
-	list_for_each_entry(xu, &opts->extension_units, list)
-		if (xu->string_descriptor_index)
-			xu->desc.iExtension = cdev->usb_strings[xu->string_descriptor_index].id;
+	scoped_guard(mutex, &opts->lock) {
+		list_for_each_entry(xu, &opts->extension_units, list)
+			if (xu->string_descriptor_index)
+				xu->desc.iExtension =
+					cdev->usb_strings[xu->string_descriptor_index].id;
+	}
 
 	/*
 	 * We attach the hard-coded defaults incase the user does not provide
@@ -795,7 +795,7 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 				 ARRAY_SIZE(uvc_en_us_strings));
 	if (IS_ERR(us)) {
 		ret = PTR_ERR(us);
-		goto error_unlock;
+		goto error;
 	}
 
 	uvc_iad.iFunction = opts->iad_index ? cdev->usb_strings[opts->iad_index].id :
@@ -809,49 +809,49 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 
 	/* Allocate interface IDs. */
 	if ((ret = usb_interface_id(c, f)) < 0)
-		goto error_unlock;
+		goto error;
 	uvc_iad.bFirstInterface = ret;
 	uvc_control_intf.bInterfaceNumber = ret;
 	uvc->control_intf = ret;
 	opts->control_interface = ret;
 
 	if ((ret = usb_interface_id(c, f)) < 0)
-		goto error_unlock;
+		goto error;
 	uvc_streaming_intf_alt0.bInterfaceNumber = ret;
 	uvc_streaming_intf_alt1.bInterfaceNumber = ret;
 	uvc->streaming_intf = ret;
 	opts->streaming_interface = ret;
 
 	/* Copy descriptors */
-	f->fs_descriptors = uvc_copy_descriptors(uvc, USB_SPEED_FULL);
-	if (IS_ERR(f->fs_descriptors)) {
-		ret = PTR_ERR(f->fs_descriptors);
-		f->fs_descriptors = NULL;
-		goto error_unlock;
-	}
+	scoped_guard(mutex, &opts->lock) {
+		f->fs_descriptors = uvc_copy_descriptors(uvc, USB_SPEED_FULL);
+		if (IS_ERR(f->fs_descriptors)) {
+			ret = PTR_ERR(f->fs_descriptors);
+			f->fs_descriptors = NULL;
+			goto error;
+		}
 
-	f->hs_descriptors = uvc_copy_descriptors(uvc, USB_SPEED_HIGH);
-	if (IS_ERR(f->hs_descriptors)) {
-		ret = PTR_ERR(f->hs_descriptors);
-		f->hs_descriptors = NULL;
-		goto error_unlock;
-	}
+		f->hs_descriptors = uvc_copy_descriptors(uvc, USB_SPEED_HIGH);
+		if (IS_ERR(f->hs_descriptors)) {
+			ret = PTR_ERR(f->hs_descriptors);
+			f->hs_descriptors = NULL;
+			goto error;
+		}
 
-	f->ss_descriptors = uvc_copy_descriptors(uvc, USB_SPEED_SUPER);
-	if (IS_ERR(f->ss_descriptors)) {
-		ret = PTR_ERR(f->ss_descriptors);
-		f->ss_descriptors = NULL;
-		goto error_unlock;
-	}
+		f->ss_descriptors = uvc_copy_descriptors(uvc, USB_SPEED_SUPER);
+		if (IS_ERR(f->ss_descriptors)) {
+			ret = PTR_ERR(f->ss_descriptors);
+			f->ss_descriptors = NULL;
+			goto error;
+		}
 
-	f->ssp_descriptors = uvc_copy_descriptors(uvc, USB_SPEED_SUPER_PLUS);
-	if (IS_ERR(f->ssp_descriptors)) {
-		ret = PTR_ERR(f->ssp_descriptors);
-		f->ssp_descriptors = NULL;
-		goto error_unlock;
+		f->ssp_descriptors = uvc_copy_descriptors(uvc, USB_SPEED_SUPER_PLUS);
+		if (IS_ERR(f->ssp_descriptors)) {
+			ret = PTR_ERR(f->ssp_descriptors);
+			f->ssp_descriptors = NULL;
+			goto error;
+		}
 	}
-
-	mutex_unlock(&opts->lock);
 
 	/* Preallocate control endpoint request. */
 	uvc->control_req = usb_ep_alloc_request(cdev->gadget->ep0, GFP_KERNEL);
@@ -884,9 +884,8 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 
 	return 0;
 
-error_unlock:
-	mutex_unlock(&opts->lock);
 v4l2_error:
+	uvcg_video_deinit(&uvc->video);
 	v4l2_device_unregister(&uvc->v4l2_dev);
 error:
 	if (uvc->control_req) {
@@ -1036,11 +1035,6 @@ static void uvc_function_unbind(struct usb_configuration *c,
 		connected = uvc->func_connected;
 	}
 
-	kthread_cancel_work_sync(&video->hw_submit);
-
-	if (video->async_wq)
-		destroy_workqueue(video->async_wq);
-
 	/*
 	 * If we know we're connected via v4l2, then there should be a cleanup
 	 * of the device from userspace either via UVC_EVENT_DISCONNECT or
@@ -1056,6 +1050,7 @@ static void uvc_function_unbind(struct usb_configuration *c,
 
 	device_remove_file(&uvc->vdev.dev, &dev_attr_function_name);
 	video_unregister_device(&uvc->vdev);
+	uvcg_video_deinit(video);
 	v4l2_device_unregister(&uvc->v4l2_dev);
 
 	scoped_guard(mutex, &uvc->lock)

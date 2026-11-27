@@ -116,9 +116,12 @@ Traps that have bitten before
   section entsize or annotations".  Their targets need real (global) symbols,
   or it reports "failed to convert reloc sym".
 * **Prefer letting objtool generate what objtool generates.**
-  ``.static_call_sites``, ``.mcount_loc``, ``.ibt_endbr_seal`` and ORC come
-  from its check pass.  Call ``run_objtool_check --mcount`` and let it build
-  them; a hand-written copy tests your reading of the format, not the format.
+  ``.static_call_sites``, ``.ibt_endbr_seal`` and ORC come from its check
+  pass.  Call ``run_objtool_check`` with the option for what you need and let
+  it build them; a hand-written copy tests your reading of the format, not the
+  format.
+* **Fixtures are built with ftrace.**  Objects not built with ``build_one``
+  need ``$FTRACE_CFLAGS`` and ``record_mcount`` too.
 
   Write one by hand only when the test needs a shape objtool will not produce,
   and say so in the fixture.  generic/fixtures/static_call.c does: objtool

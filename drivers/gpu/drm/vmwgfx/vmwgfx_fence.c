@@ -163,7 +163,7 @@ static int vmw_fence_obj_init(struct vmw_fence_manager *fman,
 	int ret = 0;
 
 	dma_fence_init(&fence->base, &vmw_fence_ops, &fman->lock,
-		       fman->ctx, seqno);
+		       fman->ctx, seqno, 0);
 	fence->destroy = destroy;
 
 	spin_lock(&fman->lock);

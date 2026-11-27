@@ -88,7 +88,7 @@ struct initchip_param {
 enum logical_chip_type sm750_get_chip_type(void);
 void sm750_set_chip_type(unsigned short dev_id, u8 rev_id);
 unsigned int sm750_calc_pll_value(unsigned int request, struct  pll_value *pll);
-unsigned int sm750_format_pll_reg(struct pll_value *p_PLL);
+unsigned int sm750_format_pll_reg(struct pll_value *pll);
 unsigned int ddk750_get_vm_size(void);
 int ddk750_init_hw(struct initchip_param *pinit_param);
 

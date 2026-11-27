@@ -199,17 +199,26 @@ static const struct drm_connector_helper_funcs dummy_connector_helper_funcs = {
 	.mode_valid	= drm_hdmi_connector_mode_valid,
 };
 
-static void dummy_hdmi_connector_reset(struct drm_connector *connector)
+static struct drm_connector_state *
+dummy_hdmi_connector_create_state(struct drm_connector *connector)
 {
-	drm_atomic_helper_connector_reset(connector);
-	__drm_atomic_helper_connector_hdmi_state_init(connector, connector->state);
+	struct drm_connector_state *connector_state;
+
+	connector_state = drm_atomic_helper_connector_create_state(connector);
+	if (IS_ERR(connector_state))
+		return connector_state;
+
+	__drm_atomic_helper_connector_hdmi_state_init(connector_state,
+						      connector);
+
+	return connector_state;
 }
 
 static const struct drm_connector_funcs dummy_connector_funcs = {
+	.atomic_create_state	= dummy_hdmi_connector_create_state,
 	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
 	.atomic_duplicate_state	= drm_atomic_helper_connector_duplicate_state,
 	.fill_modes		= drm_helper_probe_single_connector_modes,
-	.reset			= dummy_hdmi_connector_reset,
 };
 
 static void test_encoder_atomic_enable(struct drm_encoder *encoder,
@@ -288,7 +297,8 @@ __connector_hdmi_init(struct kunit *test,
 	drm_connector_helper_add(conn, &dummy_connector_helper_funcs);
 	drm_connector_attach_encoder(conn, enc);
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
 
 	if (edid_data && edid_len) {
 		ret = set_connector_edid(test, &priv->connector, edid_data, edid_len);

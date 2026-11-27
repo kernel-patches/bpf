@@ -173,7 +173,7 @@ static ssize_t torch_pin_store(struct device *dev,
 	ssize_t ret;
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
 	struct lm3642_chip_data *chip =
-	    container_of(led_cdev, struct lm3642_chip_data, cdev_indicator);
+	    container_of(led_cdev, struct lm3642_chip_data, cdev_torch);
 	unsigned int state;
 
 	ret = kstrtouint(buf, 10, &state);
@@ -219,7 +219,7 @@ static ssize_t strobe_pin_store(struct device *dev,
 	ssize_t ret;
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
 	struct lm3642_chip_data *chip =
-	    container_of(led_cdev, struct lm3642_chip_data, cdev_indicator);
+	    container_of(led_cdev, struct lm3642_chip_data, cdev_flash);
 	unsigned int state;
 
 	ret = kstrtouint(buf, 10, &state);

@@ -643,11 +643,16 @@ static int max98520_suspend(struct device *dev)
 static int max98520_resume(struct device *dev)
 {
 	struct max98520_priv *max98520 = dev_get_drvdata(dev);
+	int ret;
 
 	regcache_cache_only(max98520->regmap, false);
-	regmap_write(max98520->regmap, MAX98520_R2000_SW_RESET, 1);
-	regcache_sync(max98520->regmap);
-	return 0;
+	ret = regmap_write(max98520->regmap, MAX98520_R2000_SW_RESET, 1);
+	if (!ret)
+		ret = regcache_sync(max98520->regmap);
+	if (ret)
+		regcache_cache_only(max98520->regmap, true);
+
+	return ret;
 }
 
 static const struct dev_pm_ops max98520_pm = {

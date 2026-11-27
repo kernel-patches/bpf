@@ -198,18 +198,20 @@ void *rproc_da_to_va(struct rproc *rproc, u64 da, size_t len, bool *is_iomem)
 	}
 
 	list_for_each_entry(carveout, &rproc->carveouts, node) {
-		int offset = da - carveout->da;
+		u64 offset;
 
 		/*  Verify that carveout is allocated */
 		if (!carveout->va)
 			continue;
 
 		/* try next carveout if da is too small */
-		if (offset < 0)
+		if (da < carveout->da)
 			continue;
 
-		/* try next carveout if da is too large */
-		if (offset + len > carveout->len)
+		offset = da - carveout->da;
+
+		/* try next carveout if da or len is too large */
+		if (offset > carveout->len || len > carveout->len - offset)
 			continue;
 
 		ptr = carveout->va + offset;
@@ -837,14 +839,17 @@ static int rproc_handle_carveout(struct rproc *rproc,
 		return -EINVAL;
 	}
 
-	dev_dbg(dev, "carveout rsc: name: %s, da 0x%x, pa 0x%x, len 0x%x, flags 0x%x\n",
-		rsc->name, rsc->da, rsc->pa, rsc->len, rsc->flags);
+	dev_dbg(dev, "carveout rsc: name: %.*s, da 0x%x, pa 0x%x, len 0x%x, flags 0x%x\n",
+		(int)sizeof(rsc->name), rsc->name, rsc->da, rsc->pa, rsc->len,
+		rsc->flags);
 
 	/*
 	 * Check carveout rsc already part of a registered carveout,
 	 * Search by name, then check the da and length
 	 */
-	carveout = rproc_find_carveout_by_name(rproc, rsc->name);
+	carveout = rproc_find_carveout_by_name(rproc, "%.*s",
+					       (int)sizeof(rsc->name),
+					       rsc->name);
 
 	if (carveout) {
 		if (carveout->rsc_offset != FW_RSC_ADDR_ANY) {
@@ -866,7 +871,8 @@ static int rproc_handle_carveout(struct rproc *rproc,
 	/* Register carveout in list */
 	carveout = rproc_mem_entry_init(dev, NULL, 0, rsc->len, rsc->da,
 					rproc_alloc_carveout,
-					rproc_release_carveout, rsc->name);
+					rproc_release_carveout, "%.*s",
+					(int)sizeof(rsc->name), rsc->name);
 	if (!carveout) {
 		dev_err(dev, "Can't allocate memory entry structure\n");
 		return -ENOMEM;

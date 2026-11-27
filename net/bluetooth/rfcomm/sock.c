@@ -65,7 +65,8 @@ static void rfcomm_sk_data_ready(struct rfcomm_dlc *d, struct sk_buff *skb)
 static void rfcomm_sk_state_change(struct rfcomm_dlc *d, int err)
 	__must_hold(&d->lock)
 {
-	struct sock *sk = d->owner, *parent;
+	struct sock *sk = d->owner, *parent, *parent_ref = NULL;
+	bool kill;
 
 	if (!sk)
 		return;
@@ -82,6 +83,9 @@ static void rfcomm_sk_state_change(struct rfcomm_dlc *d, int err)
 	parent = bt_sk(sk)->parent;
 	if (parent) {
 		if (d->state == BT_CLOSED) {
+			/* Keep the listener alive across unlink. */
+			sock_hold(parent);
+			parent_ref = parent;
 			sock_set_flag(sk, SOCK_ZAPPED);
 			bt_accept_unlink(sk);
 		}
@@ -95,11 +99,14 @@ static void rfcomm_sk_state_change(struct rfcomm_dlc *d, int err)
 
 	release_sock(sk);
 
-	if (parent && sock_flag(sk, SOCK_ZAPPED)) {
-		/* We have to drop DLC lock here, otherwise
-		 * rfcomm_sock_destruct() will dead lock. */
+	kill = parent && sock_flag(sk, SOCK_ZAPPED);
+	if (kill || parent_ref) {
+		/* Socket destruction takes a DLC lock. */
 		rfcomm_dlc_unlock(d);
-		rfcomm_sock_kill(sk);
+		if (kill)
+			rfcomm_sock_kill(sk);
+		if (parent_ref)
+			sock_put(parent_ref);
 		rfcomm_dlc_lock(d);
 	}
 }
@@ -700,9 +707,16 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname,
 			break;
 		}
 
-		sec.level = BT_SECURITY_LOW;
+		/* mic_len was added at the end of struct bt_security, so
+		 * accept the shorter struct as well. RFCOMM ignores it.
+		 */
+		if (optlen < offsetofend(struct bt_security, key_size)) {
+			err = -EINVAL;
+			break;
+		}
 
-		err = copy_safe_from_sockptr(&sec, sizeof(sec), optval, optlen);
+		err = copy_struct_from_sockptr(&sec, sizeof(sec), optval,
+					       optlen);
 		if (err)
 			break;
 
@@ -741,9 +755,8 @@ static int rfcomm_sock_getsockopt_old(struct socket *sock, int optname,
 				      sockopt_t *sopt)
 {
 	struct sock *sk = sock->sk;
-	struct sock *l2cap_sk;
-	struct l2cap_conn *conn;
 	struct rfcomm_conninfo cinfo;
+	struct rfcomm_dlc *d;
 	int err = 0;
 	size_t len;
 	u32 opt;
@@ -786,20 +799,21 @@ static int rfcomm_sock_getsockopt_old(struct socket *sock, int optname,
 		break;
 
 	case RFCOMM_CONNINFO:
-		if ((sk->sk_state != BT_CONNECTED &&
-		     !(sk->sk_state == BT_CONNECT2 &&
-		       rfcomm_pi(sk)->dlc->defer_setup)) ||
-		    !rfcomm_pi(sk)->dlc->session) {
+		if (sk->sk_state != BT_CONNECTED &&
+		    !(sk->sk_state == BT_CONNECT2 &&
+		      rfcomm_pi(sk)->dlc->defer_setup)) {
 			err = -ENOTCONN;
 			break;
 		}
 
-		l2cap_sk = rfcomm_pi(sk)->dlc->session->sock->sk;
-		conn = l2cap_pi(l2cap_sk)->chan->conn;
-
-		memset(&cinfo, 0, sizeof(cinfo));
-		cinfo.hci_handle = conn->hcon->handle;
-		memcpy(cinfo.dev_class, conn->hcon->dev_class, 3);
+		d = rfcomm_pi(sk)->dlc;
+		rfcomm_dlc_hold(d);
+		release_sock(sk);
+		err = rfcomm_dlc_get_conninfo(d, &cinfo);
+		rfcomm_dlc_put(d);
+		lock_sock(sk);
+		if (err)
+			break;
 
 		len = min(len, sizeof(cinfo));
 		if (copy_to_iter(&cinfo, len, &sopt->iter_out) != len)
@@ -844,8 +858,8 @@ static int rfcomm_sock_getsockopt(struct socket *sock, int level, int optname,
 			break;
 		}
 
+		memset(&sec, 0, sizeof(sec));
 		sec.level = rfcomm_pi(sk)->sec_level;
-		sec.key_size = 0;
 
 		len = min(len, sizeof(sec));
 		if (copy_to_iter(&sec, len, &sopt->iter_out) != len)

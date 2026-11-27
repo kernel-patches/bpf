@@ -450,7 +450,7 @@
 		};
 
 		serdes_ctrl: sds_ctrl@c2200000 {
-			compatible = "syscon";
+			compatible = "hisilicon,hip06-serdes-ctrl", "syscon";
 			reg = <0 0xc2200000 0x0 0x80000>;
 		};
 

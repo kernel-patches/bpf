@@ -961,7 +961,6 @@ static void vf610_nfc_remove(struct platform_device *pdev)
 	nand_cleanup(chip);
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int vf610_nfc_suspend(struct device *dev)
 {
 	struct vf610_nfc *nfc = dev_get_drvdata(dev);
@@ -983,15 +982,14 @@ static int vf610_nfc_resume(struct device *dev)
 	vf610_nfc_init_controller(nfc);
 	return 0;
 }
-#endif
 
-static SIMPLE_DEV_PM_OPS(vf610_nfc_pm_ops, vf610_nfc_suspend, vf610_nfc_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(vf610_nfc_pm_ops, vf610_nfc_suspend, vf610_nfc_resume);
 
 static struct platform_driver vf610_nfc_driver = {
 	.driver		= {
 		.name	= DRV_NAME,
 		.of_match_table = vf610_nfc_dt_ids,
-		.pm	= &vf610_nfc_pm_ops,
+		.pm	= pm_sleep_ptr(&vf610_nfc_pm_ops),
 	},
 	.probe		= vf610_nfc_probe,
 	.remove		= vf610_nfc_remove,

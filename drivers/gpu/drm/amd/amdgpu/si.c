@@ -43,7 +43,6 @@
 #include "gfx_v6_0.h"
 #include "gmc_v6_0.h"
 #include "si_dma.h"
-#include "dce_v6_0.h"
 #include "si.h"
 #include "uvd_v3_1.h"
 #include "vce_v1_0.h"
@@ -2703,11 +2702,9 @@ int si_set_ip_blocks(struct amdgpu_device *adev)
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &amdgpu_vkms_ip_block);
 #if defined(CONFIG_DRM_AMD_DC) && defined(CONFIG_DRM_AMD_DC_SI)
-		else if (amdgpu_device_has_dc_support(adev))
+		else
 			amdgpu_device_ip_block_add(adev, &dm_ip_block);
 #endif
-		else
-			amdgpu_device_ip_block_add(adev, &dce_v6_0_ip_block);
 		amdgpu_device_ip_block_add(adev, &uvd_v3_1_ip_block);
 		amdgpu_device_ip_block_add(adev, &vce_v1_0_ip_block);
 		break;
@@ -2721,11 +2718,9 @@ int si_set_ip_blocks(struct amdgpu_device *adev)
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &amdgpu_vkms_ip_block);
 #if defined(CONFIG_DRM_AMD_DC) && defined(CONFIG_DRM_AMD_DC_SI)
-		else if (amdgpu_device_has_dc_support(adev))
+		else
 			amdgpu_device_ip_block_add(adev, &dm_ip_block);
 #endif
-		else
-			amdgpu_device_ip_block_add(adev, &dce_v6_4_ip_block);
 		amdgpu_device_ip_block_add(adev, &uvd_v3_1_ip_block);
 		break;
 	case CHIP_HAINAN:
