@@ -43,6 +43,7 @@
 #include <linux/ctype.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
+#include <linux/if_vlan.h>
 #include <linux/kstrtox.h>
 #include <linux/workqueue.h>
 #include <linux/mii.h>
@@ -1367,6 +1368,22 @@ cdc_ncm_fill_tx_frame(struct usbnet *dev, struct sk_buff *skb, __le32 sign)
 		if (index >= CDC_NCM_DPT_DATAGRAMS_MAX) {
 			ready2send = 1;
 			ctx->tx_reason_ndp_full++;	/* count reason for transmitting */
+			break;
+		}
+
+		/* Send now if another full size datagram would not fit.
+		 * Accepting one more would park it in tx_rem_skb after
+		 * this NTB has been handed to usbnet. If that NTB fills
+		 * the TX queue, usbnet stops the queue and drops the NTB
+		 * the timer builds for the parked datagram.
+		 */
+		if (!ctx->tx_rem_skb && n + 1 < ctx->tx_max_datagrams &&
+		    skb_out->len + ctx->tx_modulus + ctx->tx_remainder +
+		    READ_ONCE(dev->net->mtu) + cdc_ncm_eth_hlen(dev) +
+		    VLAN_HLEN + delayed_ndp_size > ctx->tx_curr_size) {
+			ready2send = 1;
+			ctx->tx_reason_ntb_full++;	/* count reason for transmitting */
+			n++;
 			break;
 		}
 	}
