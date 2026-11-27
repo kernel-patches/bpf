@@ -13,5 +13,10 @@
         "Unit": "iMC",
         "CountersNumFixed": "0",
         "CountersNumGeneric": "5"
+    },
+    {
+        "Unit": "CBOX",
+        "CountersNumFixed": "0",
+        "CountersNumGeneric": 2
     }
 ]

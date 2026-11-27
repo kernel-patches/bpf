@@ -622,6 +622,9 @@ static int ui_browser__color_config(const char *var, const char *value,
 
 void ui_browser__argv_seek(struct ui_browser *browser, off_t offset, int whence)
 {
+	if (browser->nr_entries == 0)
+		return;
+
 	switch (whence) {
 	case SEEK_SET:
 		browser->top = browser->entries;

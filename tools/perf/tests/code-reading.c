@@ -546,6 +546,11 @@ static int process_sample_event(struct machine *machine, struct evlist *evlist,
 		goto out;
 	}
 
+	if (!sample.ip) {
+		pr_debug("kernel may clear IP to 0 in invalid cases, skip it\n");
+		goto out;
+	}
+
 	thread = machine__findnew_thread(machine, sample.pid, sample.tid);
 	if (!thread) {
 		pr_debug("machine__findnew_thread failed\n");

@@ -4,21 +4,46 @@
  * Copyright (c) 2014, Intel Corporation.
  */
 
-#include <errno.h>
-#include <stdlib.h>
-
-#include "dso.h"
-#include "evsel.h"
-#include "machine.h"
-#include "thread.h"
-#include "comm.h"
-#include "symbol.h"
-#include "map.h"
-#include "event.h"
-#include "thread-stack.h"
-#include "callchain.h"
-#include "call-path.h"
 #include "db-export.h"
+
+#include <errno.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <linux/err.h>
+#include <linux/zalloc.h>
+
+#include "call-path.h"
+#include "callchain.h"
+#include "comm.h"
+#include "dso.h"
+#include "event.h"
+#include "evsel.h"
+#include "hashmap.h"
+#include "machine.h"
+#include "map.h"
+#include "map_symbol.h"
+#include "symbol.h"
+#include "thread-stack.h"
+#include "thread.h"
+
+static size_t dso_sym_hash(long key, void *ctx __maybe_unused)
+{
+	const struct dso_symbol *ds = (const struct dso_symbol *)key;
+	const void *dso_ptr = ds->dso ? RC_CHK_ACCESS(ds->dso) : NULL;
+
+	return (size_t)dso_ptr ^ (size_t)ds->sym;
+}
+
+static bool dso_sym_equal(long key1, long key2, void *ctx __maybe_unused)
+{
+	const struct dso_symbol *ds1 = (const struct dso_symbol *)key1;
+	const struct dso_symbol *ds2 = (const struct dso_symbol *)key2;
+
+	return ds1->sym == ds2->sym && RC_CHK_EQUAL(ds1->dso, ds2->dso);
+}
 
 int db_export__init(struct db_export *dbe)
 {
@@ -28,6 +53,26 @@ int db_export__init(struct db_export *dbe)
 
 void db_export__exit(struct db_export *dbe)
 {
+	if (dbe->sym_db_ids) {
+		struct hashmap_entry *entry;
+		size_t bkt;
+
+		hashmap__for_each_entry(dbe->sym_db_ids, entry, bkt) {
+			struct dso_symbol *key = (void *)entry->pkey;
+
+			dso_symbol__exit(key);
+			free(key);
+		}
+		hashmap__free(dbe->sym_db_ids);
+		dbe->sym_db_ids = NULL;
+	}
+	for (size_t i = 0; i < dbe->dsos_cnt; i++) {
+		dso__set_db_id(dbe->dsos[i], 0);
+		dso__put(dbe->dsos[i]);
+	}
+	zfree(&dbe->dsos);
+	dbe->dsos_cnt = 0;
+	dbe->dsos_alloc = 0;
 	call_return_processor__free(dbe->crp);
 	dbe->crp = NULL;
 }
@@ -148,6 +193,18 @@ int db_export__dso(struct db_export *dbe, struct dso *dso,
 	if (dso__db_id(dso))
 		return 0;
 
+	if (dbe->dsos_cnt == dbe->dsos_alloc) {
+		size_t new_alloc = dbe->dsos_alloc ? dbe->dsos_alloc * 2 : 16;
+		struct dso **new_dsos = realloc(dbe->dsos,
+						new_alloc * sizeof(*new_dsos));
+
+		if (!new_dsos)
+			return -ENOMEM;
+		dbe->dsos = new_dsos;
+		dbe->dsos_alloc = new_alloc;
+	}
+
+	dbe->dsos[dbe->dsos_cnt++] = dso__get(dso);
 	dso__set_db_id(dso, ++dbe->dso_last_db_id);
 
 	if (dbe->export_dso)
@@ -156,15 +213,60 @@ int db_export__dso(struct db_export *dbe, struct dso *dso,
 	return 0;
 }
 
+/*
+ * Return the database export ID assigned to (@dso, @sym) in @dbe->sym_db_ids,
+ * or 0 if @sym has not been exported yet.
+ */
+u64 db_export__symbol_db_id(struct db_export *dbe, struct dso *dso,
+			    struct symbol *sym)
+{
+	struct dso_symbol key = {
+		.dso = dso,
+		.sym = sym,
+	};
+	long db_id = 0;
+
+	if (sym && dbe->sym_db_ids)
+		hashmap__find(dbe->sym_db_ids, &key, &db_id);
+	return (u64)db_id;
+}
+
 int db_export__symbol(struct db_export *dbe, struct symbol *sym,
 		      struct dso *dso)
 {
-	u64 *sym_db_id = symbol__priv(sym);
+	struct dso_symbol src = {
+		.dso = dso,
+		.sym = sym,
+	};
+	struct dso_symbol *key;
+	long db_id;
 
-	if (*sym_db_id)
+	if (db_export__symbol_db_id(dbe, dso, sym))
 		return 0;
 
-	*sym_db_id = ++dbe->symbol_last_db_id;
+	if (!dbe->sym_db_ids) {
+		dbe->sym_db_ids =
+			hashmap__new(dso_sym_hash, dso_sym_equal, NULL);
+		if (IS_ERR(dbe->sym_db_ids)) {
+			int err = PTR_ERR(dbe->sym_db_ids);
+
+			dbe->sym_db_ids = NULL;
+			return err;
+		}
+	}
+
+	key = malloc(sizeof(*key));
+	if (!key)
+		return -ENOMEM;
+
+	dso_symbol__copy(key, &src);
+	db_id = dbe->symbol_last_db_id + 1;
+	if (hashmap__add(dbe->sym_db_ids, key, db_id)) {
+		dso_symbol__exit(key);
+		free(key);
+		return -ENOMEM;
+	}
+	dbe->symbol_last_db_id = db_id;
 
 	if (dbe->export_symbol)
 		return dbe->export_symbol(dbe, sym, dso);
@@ -187,17 +289,15 @@ static int db_ids_from_al(struct db_export *dbe, struct addr_location *al,
 
 		if (!al->sym) {
 			al->sym = symbol__new(al->addr, 0, 0, 0, "unknown");
-			if (al->sym)
-				dso__insert_symbol(dso, al->sym);
+			if (al->sym && dso__insert_symbol(dso, al->sym))
+				al->sym = NULL;
 		}
 
 		if (al->sym) {
-			u64 *db_id = symbol__priv(al->sym);
-
 			err = db_export__symbol(dbe, al->sym, dso);
 			if (err)
 				return err;
-			*sym_db_id = *db_id;
+			*sym_db_id = db_export__symbol_db_id(dbe, dso, al->sym);
 			*offset = al->addr - al->sym->start;
 		}
 	}
@@ -261,12 +361,18 @@ static struct call_path *call_path_from_sample(struct db_export *dbe,
 		db_ids_from_al(dbe, &al, &dso_db_id, &sym_db_id, &offset);
 
 		/* add node to the call path tree if it doesn't exist */
-		current = call_path__findnew(dbe->cpr, current,
-					     al.sym, node->ip,
-					     kernel_start);
+		{
+			struct dso_symbol ds = dso_symbol__from_al(&al);
+
+			current = call_path__findnew(dbe->cpr, current,
+						     &ds, node->ip,
+						     kernel_start);
+		}
 
 		callchain_cursor_advance(cursor);
 		addr_location__exit(&al);
+		if (!current)
+			break;
 	}
 
 	/* Reset the callchain order to its prior value. */

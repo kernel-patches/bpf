@@ -257,7 +257,8 @@ static int test__checkevent_breakpoint(struct evlist *evlist)
 	TEST_ASSERT_EVSEL("wrong bp_type",
 			  (HW_BREAKPOINT_R | HW_BREAKPOINT_W) == evsel->core.attr.bp_type,
 			  evsel);
-	TEST_ASSERT_EVSEL("wrong bp_len", HW_BREAKPOINT_LEN_4 == evsel->core.attr.bp_len, evsel);
+	TEST_ASSERT_EVSEL("wrong bp_len",
+			  default_data_breakpoint_len() == evsel->core.attr.bp_len, evsel);
 	return TEST_OK;
 }
 
@@ -282,7 +283,8 @@ static int test__checkevent_breakpoint_r(struct evlist *evlist)
 	TEST_ASSERT_EVSEL("wrong type", PERF_TYPE_BREAKPOINT == evsel->core.attr.type, evsel);
 	TEST_ASSERT_EVSEL("wrong config", 0 == evsel->core.attr.config, evsel);
 	TEST_ASSERT_EVSEL("wrong bp_type", HW_BREAKPOINT_R == evsel->core.attr.bp_type, evsel);
-	TEST_ASSERT_EVSEL("wrong bp_len", HW_BREAKPOINT_LEN_4 == evsel->core.attr.bp_len, evsel);
+	TEST_ASSERT_EVSEL("wrong bp_len",
+			  default_data_breakpoint_len() == evsel->core.attr.bp_len, evsel);
 	return TEST_OK;
 }
 
@@ -294,11 +296,12 @@ static int test__checkevent_breakpoint_w(struct evlist *evlist)
 	TEST_ASSERT_EVSEL("wrong type", PERF_TYPE_BREAKPOINT == evsel->core.attr.type, evsel);
 	TEST_ASSERT_EVSEL("wrong config", 0 == evsel->core.attr.config, evsel);
 	TEST_ASSERT_EVSEL("wrong bp_type", HW_BREAKPOINT_W == evsel->core.attr.bp_type, evsel);
-	TEST_ASSERT_EVSEL("wrong bp_len", HW_BREAKPOINT_LEN_4 == evsel->core.attr.bp_len, evsel);
+	TEST_ASSERT_EVSEL("wrong bp_len",
+			  default_data_breakpoint_len() == evsel->core.attr.bp_len, evsel);
 	return TEST_OK;
 }
 
-static int test__checkevent_breakpoint_rw(struct evlist *evlist)
+static int check_breakpoint_rw(struct evlist *evlist, u64 len)
 {
 	struct evsel *evsel = evlist__first(evlist);
 
@@ -308,8 +311,13 @@ static int test__checkevent_breakpoint_rw(struct evlist *evlist)
 	TEST_ASSERT_EVSEL("wrong bp_type",
 			  (HW_BREAKPOINT_R|HW_BREAKPOINT_W) == evsel->core.attr.bp_type,
 			  evsel);
-	TEST_ASSERT_EVSEL("wrong bp_len", HW_BREAKPOINT_LEN_4 == evsel->core.attr.bp_len, evsel);
+	TEST_ASSERT_EVSEL("wrong bp_len", len == evsel->core.attr.bp_len, evsel);
 	return TEST_OK;
+}
+
+static int test__checkevent_breakpoint_rw(struct evlist *evlist)
+{
+	return check_breakpoint_rw(evlist, default_data_breakpoint_len());
 }
 
 static int test__checkevent_tracepoint_modifier(struct evlist *evlist)
@@ -1708,7 +1716,7 @@ test__checkevent_breakpoint_len_rw_modifier(struct evlist *evlist)
 	TEST_ASSERT_EVSEL("wrong exclude_hv", evsel->core.attr.exclude_hv, evsel);
 	TEST_ASSERT_EVSEL("wrong precise_ip", !evsel->core.attr.precise_ip, evsel);
 
-	return test__checkevent_breakpoint_rw(evlist);
+	return check_breakpoint_rw(evlist, HW_BREAKPOINT_LEN_4);
 }
 
 static int test__checkevent_precise_max_modifier(struct evlist *evlist)

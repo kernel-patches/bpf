@@ -991,6 +991,7 @@ int perf_event__synthesize_thread_map(const struct perf_tool *tool,
 	union perf_event *comm_event, *mmap_event, *fork_event;
 	union perf_event *namespaces_event;
 	int err = -1, thread, j;
+	int synthesized = 0;
 
 	comm_event = malloc(sizeof(comm_event->comm) + machine->id_hdr_size);
 	if (comm_event == NULL)
@@ -1010,16 +1011,19 @@ int perf_event__synthesize_thread_map(const struct perf_tool *tool,
 	if (namespaces_event == NULL)
 		goto out_free_fork;
 
-	err = 0;
 	for (thread = 0; thread < threads->nr; ++thread) {
+		/*
+		 * We may race with exiting thread, so don't stop just because
+		 * one thread couldn't be synthesized.
+		 */
 		if (__event__synthesize_thread(comm_event, mmap_event,
 					       fork_event, namespaces_event,
 					       perf_thread_map__pid(threads, thread), 0,
 					       process, tool, machine,
-					       needs_mmap, mmap_data)) {
-			err = -1;
-			break;
-		}
+					       needs_mmap, mmap_data))
+			continue;
+
+		synthesized++;
 
 		/*
 		 * comm.pid is set to thread group id by
@@ -1037,17 +1041,19 @@ int perf_event__synthesize_thread_map(const struct perf_tool *tool,
 			}
 
 			/* if not, generate events for it */
-			if (need_leader &&
-			    __event__synthesize_thread(comm_event, mmap_event,
+			if (need_leader) {
+				__event__synthesize_thread(comm_event, mmap_event,
 						       fork_event, namespaces_event,
 						       comm_event->comm.pid, 0,
 						       process, tool, machine,
-						       needs_mmap, mmap_data)) {
-				err = -1;
-				break;
+						       needs_mmap, mmap_data);
 			}
 		}
 	}
+
+	if (synthesized)
+		err = 0;
+
 	free(namespaces_event);
 out_free_fork:
 	free(fork_event);

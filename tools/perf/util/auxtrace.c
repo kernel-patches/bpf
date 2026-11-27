@@ -29,6 +29,7 @@
 #include "config.h"
 #include "evlist.h"
 #include "dso.h"
+#include "dsos.h"
 #include "map.h"
 #include "pmu.h"
 #include "evsel.h"
@@ -2684,7 +2685,7 @@ static int addr_filter__resolve_kernel_syms(struct addr_filter *filt)
 	return 0;
 }
 
-static struct dso *load_dso(const char *name)
+static struct dso *load_dso(const char *name, struct dsos *dsos)
 {
 	struct map *map;
 	struct dso *dso;
@@ -2692,6 +2693,11 @@ static struct dso *load_dso(const char *name)
 	map = dso__new_map(name);
 	if (!map)
 		return NULL;
+
+	if (dsos__add(dsos, map__dso(map))) {
+		map__put(map);
+		return NULL;
+	}
 
 	if (map__load(map) < 0)
 		pr_err("File '%s' not found or has no symbols.\n", name);
@@ -2713,61 +2719,96 @@ static bool dso_sym_match(struct symbol *sym, const char *name, int *cnt,
 		idx < 0);
 }
 
+struct print_duplicate_syms_args {
+	const char *sym_name;
+	bool near;
+	int cnt;
+};
+
+static int print_duplicate_syms_cb(struct symbol *sym, void *data)
+{
+	struct print_duplicate_syms_args *args = data;
+
+	if (dso_sym_match(sym, args->sym_name, &args->cnt, -1)) {
+		pr_err("#%d\t0x%"PRIx64"\t%c\t%s\n",
+		       ++args->cnt, sym->start,
+		       symbol__binding(sym) == STB_GLOBAL ? 'g' :
+		       symbol__binding(sym) == STB_LOCAL  ? 'l' : 'w',
+		       sym->name);
+		args->near = true;
+	} else if (args->near) {
+		args->near = false;
+		pr_err("\t\twhich is near\t\t%s\n", sym->name);
+	}
+	return 0;
+}
+
 static void print_duplicate_syms(struct dso *dso, const char *sym_name)
 {
-	struct symbol *sym;
-	bool near = false;
-	int cnt = 0;
+	struct print_duplicate_syms_args args = {
+		.sym_name = sym_name,
+		.near = false,
+		.cnt = 0,
+	};
 
 	pr_err("Multiple symbols with name '%s'\n", sym_name);
 
-	sym = dso__first_symbol(dso);
-	while (sym) {
-		if (dso_sym_match(sym, sym_name, &cnt, -1)) {
-			pr_err("#%d\t0x%"PRIx64"\t%c\t%s\n",
-			       ++cnt, sym->start,
-			       symbol__binding(sym) == STB_GLOBAL ? 'g' :
-			       symbol__binding(sym) == STB_LOCAL  ? 'l' : 'w',
-			       sym->name);
-			near = true;
-		} else if (near) {
-			near = false;
-			pr_err("\t\twhich is near\t\t%s\n", sym->name);
-		}
-		sym = dso__next_symbol(sym);
-	}
+	dso__for_each_symbol(dso, print_duplicate_syms_cb, &args);
 
 	pr_err("Disambiguate symbol name by inserting #n after the name e.g. %s #2\n",
 	       sym_name);
 	pr_err("Or select a global symbol by inserting #0 or #g or #G\n");
 }
 
+struct find_dso_sym_args {
+	const char *sym_name;
+	u64 *start;
+	u64 *size;
+	int idx;
+	int cnt;
+	bool duplicate;
+};
+
+static int find_dso_sym_cb(struct symbol *sym, void *data)
+{
+	struct find_dso_sym_args *args = data;
+
+	if (*args->start) {
+		if (!*args->size)
+			*args->size = sym->start - *args->start;
+		if (args->idx > 0) {
+			if (*args->size)
+				return 1;
+		} else if (dso_sym_match(sym, args->sym_name, &args->cnt, args->idx)) {
+			args->duplicate = true;
+			return 1;
+		}
+	} else if (dso_sym_match(sym, args->sym_name, &args->cnt, args->idx)) {
+		*args->start = sym->start;
+		*args->size = sym->end - sym->start;
+	}
+	return 0;
+}
+
 static int find_dso_sym(struct dso *dso, const char *sym_name, u64 *start,
 			u64 *size, int idx)
 {
-	struct symbol *sym;
-	int cnt = 0;
+	struct find_dso_sym_args args = {
+		.sym_name = sym_name,
+		.start = start,
+		.size = size,
+		.idx = idx,
+		.cnt = 0,
+		.duplicate = false,
+	};
 
 	*start = 0;
 	*size = 0;
 
-	sym = dso__first_symbol(dso);
-	while (sym) {
-		if (*start) {
-			if (!*size)
-				*size = sym->start - *start;
-			if (idx > 0) {
-				if (*size)
-					return 0;
-			} else if (dso_sym_match(sym, sym_name, &cnt, idx)) {
-				print_duplicate_syms(dso, sym_name);
-				return -EINVAL;
-			}
-		} else if (dso_sym_match(sym, sym_name, &cnt, idx)) {
-			*start = sym->start;
-			*size = sym->end - sym->start;
-		}
-		sym = dso__next_symbol(sym);
+	dso__for_each_symbol(dso, find_dso_sym_cb, &args);
+	if (args.duplicate) {
+		print_duplicate_syms(dso, sym_name);
+		return -EINVAL;
 	}
 
 	if (!*start)
@@ -2794,6 +2835,7 @@ static int addr_filter__resolve_syms(struct addr_filter *filt)
 {
 	u64 start, size;
 	struct dso *dso;
+	struct dsos dsos;
 	int err = 0;
 
 	if (!filt->sym_from && !filt->sym_to)
@@ -2802,9 +2844,11 @@ static int addr_filter__resolve_syms(struct addr_filter *filt)
 	if (!filt->filename)
 		return addr_filter__resolve_kernel_syms(filt);
 
-	dso = load_dso(filt->filename);
+	dsos__init(&dsos);
+	dso = load_dso(filt->filename, &dsos);
 	if (!dso) {
 		pr_err("Failed to load symbols from: %s\n", filt->filename);
+		dsos__exit(&dsos);
 		return -EINVAL;
 	}
 
@@ -2831,13 +2875,14 @@ static int addr_filter__resolve_syms(struct addr_filter *filt)
 
 		err = check_end_after_start(filt, start, size);
 		if (err)
-			return err;
+			goto put_dso;
 
 		filt->size = start + size - filt->addr;
 	}
 
 put_dso:
 	dso__put(dso);
+	dsos__exit(&dsos);
 
 	return err;
 }

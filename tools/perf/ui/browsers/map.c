@@ -24,7 +24,7 @@ struct map_browser {
 
 static void map_browser__write(struct ui_browser *browser, void *nd, int row)
 {
-	struct symbol *sym = rb_entry(nd, struct symbol, rb_node);
+	struct symbol *sym = *(struct symbol **)nd;
 	struct map_browser *mb = container_of(browser, struct map_browser, b);
 	bool current_entry = ui_browser__is_current_entry(browser, row);
 	int width;
@@ -37,12 +37,6 @@ static void map_browser__write(struct ui_browser *browser, void *nd, int row)
 	width = browser->width - ((mb->addrlen * 2) + 4);
 	if (width > 0)
 		ui_browser__write_nstring(browser, sym->name, width);
-}
-
-/* FIXME uber-kludgy, see comment on cmd_report... */
-static u32 *symbol__browser_index(struct symbol *browser)
-{
-	return ((void *)browser) - sizeof(struct rb_node) - sizeof(u32);
 }
 
 static int map_browser__search(struct map_browser *browser)
@@ -62,10 +56,20 @@ static int map_browser__search(struct map_browser *browser)
 		sym = map__find_symbol_by_name(browser->map, target);
 
 	if (sym != NULL) {
-		u32 *idx = symbol__browser_index(sym);
+		struct symbol **entries = browser->b.entries;
 
-		browser->b.top = &sym->rb_node;
-		browser->b.index = browser->b.top_idx = *idx;
+		/*
+		 * Scan the map browser's symbol entries to find the matching
+		 * symbol and its display row index, then position the browser
+		 * cursor at that entry.
+		 */
+		for (u32 idx = 0; idx < browser->b.nr_entries; ++idx) {
+			if (entries[idx] == sym) {
+				browser->b.top = &entries[idx];
+				browser->b.index = browser->b.top_idx = idx;
+				break;
+			}
+		}
 	} else
 		ui_helpline__fpush("%s not found!", target);
 
@@ -77,8 +81,7 @@ static int map_browser__run(struct map_browser *browser)
 	int key;
 
 	if (ui_browser__show(&browser->b, dso__long_name(map__dso(browser->map)),
-			     "Press ESC to exit, %s / to search",
-			     verbose > 0 ? "" : "restart with -v to use") < 0)
+			     "Press ESC to exit, / to search") < 0)
 		return -1;
 
 	while (1) {
@@ -86,9 +89,8 @@ static int map_browser__run(struct map_browser *browser)
 
 		switch (key) {
 		case '/':
-			if (verbose > 0)
-				map_browser__search(browser);
-			/* fall thru */
+			map_browser__search(browser);
+			continue;
 		default:
 			ui_browser__warn_unhandled_hotkey(&browser->b, key, 0, NULL);
 			continue;
@@ -106,31 +108,48 @@ out:
 
 int map__browse(struct map *map)
 {
+	struct symbols *symbols = dso__named_symbols(map__dso(map));
 	struct map_browser mb = {
 		.b = {
-			.entries = dso__symbols(map__dso(map)),
-			.refresh = ui_browser__rb_tree_refresh,
-			.seek	 = ui_browser__rb_tree_seek,
+			.refresh = ui_browser__argv_refresh,
+			.seek	 = ui_browser__argv_seek,
 			.write	 = map_browser__write,
 		},
 		.map = map,
 	};
-	struct rb_node *nd;
+	struct symbol **entries = NULL;
+	unsigned int nr_entries = 0;
 	char tmp[BITS_PER_LONG / 4];
 	u64 maxaddr = 0;
+	int ret;
 
-	for (nd = rb_first(mb.b.entries); nd; nd = rb_next(nd)) {
-		struct symbol *pos = rb_entry(nd, struct symbol, rb_node);
+	/*
+	 * Snapshot the DSO's sorted symbol array under symbols->lock for use
+	 * with ui_browser__argv_refresh and ui_browser__argv_seek.
+	 */
+	symbols__sort_read_lock(symbols);
+	nr_entries = symbols->cnt;
+	if (nr_entries > 0) {
+		entries = malloc(nr_entries * sizeof(*entries));
+		if (entries) {
+			for (unsigned int idx = 0; idx < nr_entries; idx++) {
+				struct symbol *pos = symbols->symbols[idx];
 
-		if (maxaddr < pos->end)
-			maxaddr = pos->end;
-		if (verbose > 0) {
-			u32 *idx = symbol__browser_index(pos);
-			*idx = mb.b.nr_entries;
+				entries[idx] = pos;
+				if (maxaddr < pos->end)
+					maxaddr = pos->end;
+			}
+		} else {
+			nr_entries = 0;
 		}
-		++mb.b.nr_entries;
 	}
+	up_read(&symbols->lock);
+
+	mb.b.entries = entries;
+	mb.b.nr_entries = nr_entries;
 
 	mb.addrlen = snprintf(tmp, sizeof(tmp), "%" PRIx64, maxaddr);
-	return map_browser__run(&mb);
+	ret = map_browser__run(&mb);
+	free(entries);
+	return ret;
 }

@@ -1,0 +1,11 @@
+[
+    {
+        "BriefDescription": "Counts UCLK ungated cycles.",
+        "Counter": "0,1",
+        "EventCode": "0x2d",
+        "EventName": "UNC_CBO_SBO_UCLK_CYCLES.UNGATED",
+        "PerPkg": "1",
+        "UMask": "0x2",
+        "Unit": "CBOX"
+    }
+]

@@ -146,7 +146,10 @@ struct machine *setup_fake_machine(struct machines *machines)
 				goto out;
 			}
 
-			symbols__insert(dso__symbols(dso), sym);
+			if (symbols__insert(dso__symbols(dso), sym)) {
+				dso__put(dso);
+				goto out;
+			}
 		}
 
 		dso__put(dso);

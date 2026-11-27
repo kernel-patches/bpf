@@ -2463,14 +2463,18 @@ static int __cmd_inject(struct perf_inject *inject)
 #endif
 		}
 	} else if (inject->itrace_synth_opts.vm_time_correlation) {
+		bool ordered_events = inject->tool.ordered_events;
+		bool ordering_requires_timestamps =
+			inject->tool.ordering_requires_timestamps;
+
 		session->itrace_synth_opts = &inject->itrace_synth_opts;
-		memset(&inject->tool, 0, sizeof(inject->tool));
+		perf_tool__init(&inject->tool, ordered_events);
 		inject->tool.id_index	    = perf_event__process_id_index;
 		inject->tool.auxtrace_info  = perf_event__process_auxtrace_info;
 		inject->tool.auxtrace	    = perf_event__process_auxtrace;
 		inject->tool.auxtrace_error = perf_event__process_auxtrace_error;
-		inject->tool.ordered_events = true;
-		inject->tool.ordering_requires_timestamps = true;
+		inject->tool.ordering_requires_timestamps =
+			ordering_requires_timestamps;
 	} else if (inject->itrace_synth_opts.set) {
 		session->itrace_synth_opts = &inject->itrace_synth_opts;
 		inject->itrace_synth_opts.inject = true;
@@ -2483,8 +2487,6 @@ static int __cmd_inject(struct perf_inject *inject)
 		inject->tool.aux	    = perf_event__drop_aux;
 		inject->tool.itrace_start   = perf_event__drop_aux;
 		inject->tool.aux_output_hw_id = perf_event__drop_aux;
-		inject->tool.ordered_events = true;
-		inject->tool.ordering_requires_timestamps = true;
 		/* Allow space in the header for new attributes */
 		output_data_offset = roundup(8192 + session->header.data_offset, 4096);
 		if (inject->strip)
@@ -2515,12 +2517,6 @@ static int __cmd_inject(struct perf_inject *inject)
 		inject->tool.finished_round	= host__finished_round;
 		/* Keep track of which CPU a VCPU is runnng on */
 		inject->tool.context_switch	= host__context_switch;
-		/*
-		 * Must order events to be able to obey finished round
-		 * ordering.
-		 */
-		inject->tool.ordered_events	= true;
-		inject->tool.ordering_requires_timestamps = true;
 		/* Set up a separate session to process guest perf.data file */
 		ret = guest_session__start(gs, name, session->data->force);
 		if (ret) {
@@ -2537,8 +2533,6 @@ static int __cmd_inject(struct perf_inject *inject)
 		inject->tool.exit	= perf_event__repipe_exit;
 		inject->tool.mmap	= perf_event__repipe_mmap;
 		inject->tool.mmap2	= perf_event__repipe_mmap2;
-		inject->tool.ordered_events = true;
-		inject->tool.ordering_requires_timestamps = true;
 	}
 
 	if (!inject->itrace_synth_opts.set)
@@ -2817,6 +2811,10 @@ int cmd_inject(int argc, const char **argv)
 	data.path = inject.input_name;
 
 	ordered_events = inject.jit_mode || inject.sched_stat ||
+		inject.itrace_synth_opts.vm_time_correlation ||
+		inject.itrace_synth_opts.set ||
+		inject.guest_session.perf_data_file ||
+		inject.convert_callchain ||
 		inject.build_id_style == BID_RWS__INJECT_HEADER_LAZY ||
 		inject.build_id_style == BID_RWS__MMAP2_BUILDID_LAZY;
 	perf_tool__init(&inject.tool, ordered_events);
@@ -2863,6 +2861,21 @@ int cmd_inject(int argc, const char **argv)
 	inject.tool.schedstat_domain	= perf_event__repipe_op2_synth;
 	inject.tool.dont_split_sample_group = true;
 	inject.tool.merge_deferred_callchains = false;
+	if (inject.jit_mode ||
+	    inject.itrace_synth_opts.vm_time_correlation ||
+	    inject.itrace_synth_opts.set ||
+	    inject.guest_session.perf_data_file ||
+	    inject.convert_callchain ||
+	    inject.build_id_style == BID_RWS__INJECT_HEADER_LAZY ||
+	    inject.build_id_style == BID_RWS__MMAP2_BUILDID_LAZY) {
+		/*
+		 * to make sure the mmap records are ordered correctly
+		 * and so that the correct especially due to jitted code
+		 * mmaps. We cannot generate the buildid hit list and
+		 * inject the jit mmaps at the same time for now.
+		 */
+		inject.tool.ordering_requires_timestamps = true;
+	}
 	if (inject.aslr) {
 		tool = aslr_tool__new(&inject.tool);
 		if (!tool) {
@@ -2933,16 +2946,6 @@ int cmd_inject(int argc, const char **argv)
 		}
 	}
 
-	if (inject.build_id_style == BID_RWS__INJECT_HEADER_LAZY ||
-	    inject.build_id_style == BID_RWS__MMAP2_BUILDID_LAZY) {
-		/*
-		 * to make sure the mmap records are ordered correctly
-		 * and so that the correct especially due to jitted code
-		 * mmaps. We cannot generate the buildid hit list and
-		 * inject the jit mmaps at the same time for now.
-		 */
-		inject.tool.ordering_requires_timestamps = true;
-	}
 	if (inject.build_id_style != BID_RWS__NONE && known_build_ids != NULL) {
 		inject.known_build_ids =
 			perf_inject__parse_known_build_ids(known_build_ids);
@@ -2979,7 +2982,6 @@ int cmd_inject(int argc, const char **argv)
 	if (inject.jit_mode) {
 		inject.tool.mmap2	   = perf_event__repipe_mmap2;
 		inject.tool.mmap	   = perf_event__repipe_mmap;
-		inject.tool.ordering_requires_timestamps = true;
 		/*
 		 * JIT MMAP injection injects all MMAP events in one go, so it
 		 * does not obey finished_round semantics.

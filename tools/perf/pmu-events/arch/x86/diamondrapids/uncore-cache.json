@@ -1,0 +1,292 @@
+[
+    {
+        "BriefDescription": "LLC Lookup request that access cache and hit the LLC with the CRD opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x34",
+        "EventName": "UNC_CBO_CACHE_LOOKUP.HIT_CRD",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CACHE_LOOKUP.HIT_CRD",
+        "UMask": "0xc0a00f7",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "LLC Lookup request that access cache and hit the LLC with the CRD_Pref opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x34",
+        "EventName": "UNC_CBO_CACHE_LOOKUP.HIT_CRD_PREF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CACHE_LOOKUP.HIT_CRD_PREF",
+        "UMask": "0xc8a00f7",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "LLC Lookup request that access cache and hit the LLC with the DRd_Opt opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x34",
+        "EventName": "UNC_CBO_CACHE_LOOKUP.HIT_DRD_OPT",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CACHE_LOOKUP.HIT_DRD_OPT",
+        "UMask": "0xc2200f7",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "LLC Lookup request that access cache and hit the LLC with the DRd_Opt_Pref opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x34",
+        "EventName": "UNC_CBO_CACHE_LOOKUP.HIT_DRD_OPT_PREF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CACHE_LOOKUP.HIT_DRD_OPT_PREF",
+        "UMask": "0xca200f7",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "LLC Lookup request that access cache and hit the LLC with the LlcPrefCode opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x34",
+        "EventName": "UNC_CBO_CACHE_LOOKUP.HIT_LLCPREFCODE",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CACHE_LOOKUP.HIT_LLCPREFCODE",
+        "UMask": "0xcea00f7",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "LLC Lookup request that access cache and hit the LLC with the LlcPrefData opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x34",
+        "EventName": "UNC_CBO_CACHE_LOOKUP.HIT_LLCPREFDATA",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CACHE_LOOKUP.HIT_LLCPREFDATA",
+        "UMask": "0xed200f7",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "LLC Lookup request that access cache and hit the LLC with the LlcPrefRFO opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x34",
+        "EventName": "UNC_CBO_CACHE_LOOKUP.HIT_LLCPREFRFO",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CACHE_LOOKUP.HIT_LLCPREFRFO",
+        "UMask": "0xec200f7",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "LLC Lookup request that access cache and hit the LLC with the ReadForOwnership opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x34",
+        "EventName": "UNC_CBO_CACHE_LOOKUP.HIT_READFOROWNERSHIP",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CACHE_LOOKUP.HIT_READFOROWNERSHIP",
+        "UMask": "0xc0200f7",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "LLC Lookup request that access cache and hit the LLC with the RFO_Pref opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x34",
+        "EventName": "UNC_CBO_CACHE_LOOKUP.HIT_RFO_PREF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CACHE_LOOKUP.HIT_RFO_PREF",
+        "UMask": "0xc8200f7",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Increments once per CBO clock, runs at UCLK (2700Mhz default)",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x01",
+        "EventName": "UNC_CBO_CLOCKTICKS",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_CLOCKTICKS",
+        "UMask": "0x1",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Number of valid TOR entries in each cycle with the CLFlush opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.ALL_CLFLUSH",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.ALL_CLFLUSH",
+        "UMask": "0xcc20008",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Number of valid TOR entries in each cycle with the CLFlushOpt opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.ALL_CLFLUSHOPT",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.ALL_CLFLUSHOPT",
+        "UMask": "0xcd20008",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Number of valid TOR entries in each cycle with the SpecItoM opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.ALL_SPECITOM",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.ALL_SPECITOM",
+        "UMask": "0xe520008",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the CRD opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_CRD",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_CRD",
+        "UMask": "0xc0a0002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the CRd_Pref opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_CRD_PREF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_CRD_PREF",
+        "UMask": "0xc8a0002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the DrdPTE opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_DRDPTE",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_DRDPTE",
+        "UMask": "0xc320002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the DRd_Opt opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_DRD_OPT",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_DRD_OPT",
+        "UMask": "0xc220002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the DRd_Opt_Pref opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_DRD_OPT_PREF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_DRD_OPT_PREF",
+        "UMask": "0xca20002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the LlcPrefCode opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_LLCPREFCODE",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_LLCPREFCODE",
+        "UMask": "0xcea0002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the LlcPrefData opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_LLCPREFDATA",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_LLCPREFDATA",
+        "UMask": "0xed20002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the LlcPrefRFO opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_LLCPREFRFO",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_LLCPREFRFO",
+        "UMask": "0xec20002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the ReadForOwnership opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_READFOROWNERSHIP",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_READFOROWNERSHIP",
+        "UMask": "0xc020002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "All TOR Allocations which miss the cache and have the RFO_Pref opcode",
+        "Counter": "0,1,2,3",
+        "EventCode": "0x35",
+        "EventName": "UNC_CBO_TOR_ALLOCATION.MISS_RFO_PREF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_ALLOCATION.MISS_RFO_PREF",
+        "UMask": "0xc820002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Number of valid TOR entries in each cycle which miss the cache and have the DRd_Opt opcode",
+        "Counter": "0",
+        "EventCode": "0x36",
+        "EventName": "UNC_CBO_TOR_OCCUPANCY.MISS_DRD_OPT",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_OCCUPANCY.MISS_DRD_OPT",
+        "UMask": "0xc220002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Number of valid TOR entries in each cycle which miss the cache and have the DRd_Opt_Pref opcode",
+        "Counter": "0",
+        "EventCode": "0x36",
+        "EventName": "UNC_CBO_TOR_OCCUPANCY.MISS_DRD_OPT_PREF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_OCCUPANCY.MISS_DRD_OPT_PREF",
+        "UMask": "0xca20002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Number of valid TOR entries in each cycle which miss the cache and have the LlcPrefData opcode",
+        "Counter": "0",
+        "EventCode": "0x36",
+        "EventName": "UNC_CBO_TOR_OCCUPANCY.MISS_LLCPREFDATA",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_OCCUPANCY.MISS_LLCPREFDATA",
+        "UMask": "0xed20002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Number of valid TOR entries in each cycle which miss the cache and have the LlcPrefRFO opcode",
+        "Counter": "0",
+        "EventCode": "0x36",
+        "EventName": "UNC_CBO_TOR_OCCUPANCY.MISS_LLCPREFRFO",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_OCCUPANCY.MISS_LLCPREFRFO",
+        "UMask": "0xec20002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Number of valid TOR entries in each cycle which miss the cache and have the ReadForOwnership opcode",
+        "Counter": "0",
+        "EventCode": "0x36",
+        "EventName": "UNC_CBO_TOR_OCCUPANCY.MISS_READFOROWNERSHIP",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_OCCUPANCY.MISS_READFOROWNERSHIP",
+        "UMask": "0xc020002",
+        "Unit": "CBOX"
+    },
+    {
+        "BriefDescription": "Number of valid TOR entries in each cycle which miss the cache and have the RFO_Pref opcode",
+        "Counter": "0",
+        "EventCode": "0x36",
+        "EventName": "UNC_CBO_TOR_OCCUPANCY.MISS_RFO_PREF",
+        "PerPkg": "1",
+        "PublicDescription": "UNC_CBO_TOR_OCCUPANCY.MISS_RFO_PREF",
+        "UMask": "0xc820002",
+        "Unit": "CBOX"
+    }
+]

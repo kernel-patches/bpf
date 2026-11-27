@@ -83,6 +83,4 @@ int maps__merge_in(struct maps *kmaps, struct map *new_map);
 
 void maps__fixup_end(struct maps *maps);
 
-void maps__load_first(struct maps *maps);
-
 #endif // __PERF_MAPS_H

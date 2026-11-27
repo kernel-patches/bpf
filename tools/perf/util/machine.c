@@ -234,9 +234,11 @@ void machine__delete(struct machine *machine)
 }
 
 int machines__init(struct machines *machines, struct perf_session *session)
+	__context_unsafe(/* initialization */)
 {
 	int err = machine__init(&machines->host, "", HOST_KERNEL_ID);
 
+	init_rwsem(&machines->lock);
 	machines->session = session;
 	machines->host.machines = machines;
 	machines->guests = RB_ROOT_CACHED;
@@ -247,12 +249,13 @@ void machines__exit(struct machines *machines)
 {
 	machine__exit(&machines->host);
 	/* XXX exit guest */
+	exit_rwsem(&machines->lock);
 }
 
 struct machine *machines__add(struct machines *machines, pid_t pid,
 			      const char *root_dir)
 {
-	struct rb_node **p = &machines->guests.rb_root.rb_node;
+	struct rb_node **p;
 	struct rb_node *parent = NULL;
 	struct machine *pos, *machine = malloc(sizeof(*machine));
 	bool leftmost = true;
@@ -265,9 +268,17 @@ struct machine *machines__add(struct machines *machines, pid_t pid,
 		return NULL;
 	}
 
+	down_write(&machines->lock);
+	p = &machines->guests.rb_root.rb_node;
 	while (*p != NULL) {
 		parent = *p;
 		pos = rb_entry(parent, struct machine, rb_node);
+		if (pid == pos->pid) {
+			up_write(&machines->lock);
+			machine__exit(machine);
+			free(machine);
+			return pos;
+		}
 		if (pid < pos->pid)
 			p = &(*p)->rb_left;
 		else {
@@ -278,8 +289,8 @@ struct machine *machines__add(struct machines *machines, pid_t pid,
 
 	rb_link_node(&machine->rb_node, parent, p);
 	rb_insert_color_cached(&machine->rb_node, &machines->guests, leftmost);
-
 	machine->machines = machines;
+	up_write(&machines->lock);
 
 	return machine;
 }
@@ -290,16 +301,18 @@ void machines__set_comm_exec(struct machines *machines, bool comm_exec)
 
 	machines->host.comm_exec = comm_exec;
 
+	down_read(&machines->lock);
 	for (nd = rb_first_cached(&machines->guests); nd; nd = rb_next(nd)) {
 		struct machine *machine = rb_entry(nd, struct machine, rb_node);
 
 		machine->comm_exec = comm_exec;
 	}
+	up_read(&machines->lock);
 }
 
 struct machine *machines__find(struct machines *machines, pid_t pid)
 {
-	struct rb_node **p = &machines->guests.rb_root.rb_node;
+	struct rb_node **p;
 	struct rb_node *parent = NULL;
 	struct machine *machine;
 	struct machine *default_machine = NULL;
@@ -307,6 +320,8 @@ struct machine *machines__find(struct machines *machines, pid_t pid)
 	if (pid == HOST_KERNEL_ID)
 		return &machines->host;
 
+	down_read(&machines->lock);
+	p = &machines->guests.rb_root.rb_node;
 	while (*p != NULL) {
 		parent = *p;
 		machine = rb_entry(parent, struct machine, rb_node);
@@ -314,11 +329,14 @@ struct machine *machines__find(struct machines *machines, pid_t pid)
 			p = &(*p)->rb_left;
 		else if (pid > machine->pid)
 			p = &(*p)->rb_right;
-		else
+		else {
+			up_read(&machines->lock);
 			return machine;
+		}
 		if (!machine->pid)
 			default_machine = machine;
 	}
+	up_read(&machines->lock);
 
 	return default_machine;
 }
@@ -464,10 +482,12 @@ void machines__process_guests(struct machines *machines,
 {
 	struct rb_node *nd;
 
+	down_read(&machines->lock);
 	for (nd = rb_first_cached(&machines->guests); nd; nd = rb_next(nd)) {
 		struct machine *pos = rb_entry(nd, struct machine, rb_node);
 		process(pos, data);
 	}
+	up_read(&machines->lock);
 }
 
 void machines__set_id_hdr_size(struct machines *machines, u16 id_hdr_size)
@@ -477,11 +497,13 @@ void machines__set_id_hdr_size(struct machines *machines, u16 id_hdr_size)
 
 	machines->host.id_hdr_size = id_hdr_size;
 
+	down_read(&machines->lock);
 	for (node = rb_first_cached(&machines->guests); node;
 	     node = rb_next(node)) {
 		machine = rb_entry(node, struct machine, rb_node);
 		machine->id_hdr_size = id_hdr_size;
 	}
+	up_read(&machines->lock);
 
 	return;
 }
@@ -568,8 +590,9 @@ static struct thread *__machine__findnew_thread(struct machine *machine,
 			thread__put(th);
 			return NULL;
 		}
-	} else
+	} else if (th) {
 		machine__update_thread_pid(machine, th, pid);
+	}
 
 	return th;
 }
@@ -769,7 +792,15 @@ static int machine__process_ksymbol_register(struct machine *machine,
 			dso__set_binary_type(dso, DSO_BINARY_TYPE__OOL);
 			dso__data(dso)->file_size = event->ksymbol.len;
 			dso__set_loaded(dso);
+		} else if (event->ksymbol.ksym_type == PERF_RECORD_KSYMBOL_TYPE_BPF &&
+			   is_bpf_image(event->ksymbol.name)) {
+			dso__set_binary_type(dso, DSO_BINARY_TYPE__BPF_IMAGE);
+			dso__set_long_name(dso, "", false);
 		}
+
+		err = dsos__add(&machine->dsos, dso);
+		if (err)
+			goto out;
 
 		map__set_start(map, event->ksymbol.addr);
 		map__set_end(map, map__start(map) + event->ksymbol.len);
@@ -780,11 +811,6 @@ static int machine__process_ksymbol_register(struct machine *machine,
 		}
 
 		dso__set_loaded(dso);
-
-		if (is_bpf_image(event->ksymbol.name)) {
-			dso__set_binary_type(dso, DSO_BINARY_TYPE__BPF_IMAGE);
-			dso__set_long_name(dso, "", false);
-		}
 	} else {
 		dso = dso__get(map__dso(map));
 	}
@@ -796,7 +822,7 @@ static int machine__process_ksymbol_register(struct machine *machine,
 		err = -ENOMEM;
 		goto out;
 	}
-	dso__insert_symbol(dso, sym);
+	err = dso__insert_symbol(dso, sym);
 out:
 	map__put(map);
 	dso__put(dso);
@@ -933,10 +959,12 @@ size_t machines__fprintf_dsos(struct machines *machines, FILE *fp)
 	struct rb_node *nd;
 	size_t ret = dsos__fprintf(&machines->host.dsos, fp);
 
+	down_read(&machines->lock);
 	for (nd = rb_first_cached(&machines->guests); nd; nd = rb_next(nd)) {
 		struct machine *pos = rb_entry(nd, struct machine, rb_node);
 		ret += dsos__fprintf(&pos->dsos, fp);
 	}
+	up_read(&machines->lock);
 
 	return ret;
 }
@@ -953,10 +981,12 @@ size_t machines__fprintf_dsos_buildid(struct machines *machines, FILE *fp,
 	struct rb_node *nd;
 	size_t ret = machine__fprintf_dsos_buildid(&machines->host, fp, skip, parm);
 
+	down_read(&machines->lock);
 	for (nd = rb_first_cached(&machines->guests); nd; nd = rb_next(nd)) {
 		struct machine *pos = rb_entry(nd, struct machine, rb_node);
 		ret += machine__fprintf_dsos_buildid(pos, fp, skip, parm);
 	}
+	up_read(&machines->lock);
 	return ret;
 }
 
@@ -1095,27 +1125,33 @@ int machine__create_extra_kernel_map(struct machine *machine,
 	return err;
 }
 
-static u64 find_entry_trampoline(struct dso *dso)
+static int find_entry_trampoline_cb(struct symbol *sym, void *data)
 {
 	/* Duplicates are removed so lookup all aliases */
-	const char *syms[] = {
+	static const char * const syms[] = {
 		"_entry_trampoline",
 		"__entry_trampoline_start",
 		"entry_SYSCALL_64_trampoline",
 	};
-	struct symbol *sym = dso__first_symbol(dso);
-	unsigned int i;
+	u64 *addr = data;
 
-	for (; sym; sym = dso__next_symbol(sym)) {
-		if (symbol__binding(sym) != STB_GLOBAL)
-			continue;
-		for (i = 0; i < ARRAY_SIZE(syms); i++) {
-			if (!strcmp(sym->name, syms[i]))
-				return sym->start;
+	if (symbol__binding(sym) != STB_GLOBAL)
+		return 0;
+	for (unsigned int i = 0; i < ARRAY_SIZE(syms); i++) {
+		if (!strcmp(sym->name, syms[i])) {
+			*addr = sym->start;
+			return 1;
 		}
 	}
-
 	return 0;
+}
+
+static u64 find_entry_trampoline(struct dso *dso)
+{
+	u64 addr = 0;
+
+	dso__for_each_symbol(dso, find_entry_trampoline_cb, &addr);
+	return addr;
 }
 
 /*
@@ -1295,10 +1331,12 @@ int machines__create_guest_kernel_maps(struct machines *machines)
 
 void machines__destroy_kernel_maps(struct machines *machines)
 {
-	struct rb_node *next = rb_first_cached(&machines->guests);
+	struct rb_node *next;
 
 	machine__destroy_kernel_maps(&machines->host);
 
+	down_write(&machines->lock);
+	next = rb_first_cached(&machines->guests);
 	while (next) {
 		struct machine *pos = rb_entry(next, struct machine, rb_node);
 
@@ -1306,6 +1344,7 @@ void machines__destroy_kernel_maps(struct machines *machines)
 		rb_erase_cached(&pos->rb_node, &machines->guests);
 		machine__delete(pos);
 	}
+	up_write(&machines->lock);
 }
 
 int machines__create_kernel_maps(struct machines *machines, pid_t pid)
@@ -1548,19 +1587,6 @@ static int machine__create_modules(struct machine *machine)
 	return 0;
 }
 
-static void machine__set_kernel_mmap(struct machine *machine,
-				     u64 start, u64 end)
-{
-	map__set_start(machine->vmlinux_map, start);
-	map__set_end(machine->vmlinux_map, end);
-	/*
-	 * Be a bit paranoid here, some perf.data file came with
-	 * a zero sized synthesized MMAP event for the kernel.
-	 */
-	if (start == 0 && end == 0)
-		map__set_end(machine->vmlinux_map, ~0ULL);
-}
-
 struct kernel_mmap_mutation_ctx {
 	u64 start;
 	u64 end;
@@ -1572,6 +1598,10 @@ static int kernel_mmap_mutate_cb(struct map *map, void *data)
 
 	map__set_start(map, ctx->start);
 	map__set_end(map, ctx->end);
+	/*
+	 * Be a bit paranoid here, some perf.data file came with
+	 * a zero sized synthesized MMAP event for the kernel.
+	 */
 	if (ctx->start == 0 && ctx->end == 0)
 		map__set_end(map, ~0ULL);
 	return 0;
@@ -1636,8 +1666,10 @@ int machine__create_kernel_maps(struct machine *machine)
 							 machine__kernel_map(machine));
 
 		if (next) {
-			machine__set_kernel_mmap(machine, start, map__start(next));
+			ret = machine__update_kernel_mmap(machine, start, map__start(next));
 			map__put(next);
+			if (ret < 0)
+				goto out_put;
 		}
 	}
 
@@ -2207,7 +2239,7 @@ static int append_inlines(struct callchain_cursor *cursor, struct map_symbol *ms
 
 static int add_callchain_ip(struct thread *thread,
 			    struct callchain_cursor *cursor,
-			    struct symbol **parent,
+			    struct dso_symbol *parent,
 			    struct addr_location *root_al,
 			    u8 *cpumode,
 			    u64 ip,
@@ -2250,6 +2282,8 @@ static int add_callchain_ip(struct thread *thread,
 				 * Discard all.
 				 */
 				callchain_cursor_reset(cursor);
+				if (parent)
+					dso_symbol__exit(parent);
 				err = 1;
 				goto out;
 			}
@@ -2262,10 +2296,12 @@ static int add_callchain_ip(struct thread *thread,
 	}
 
 	if (al.sym != NULL) {
-		if (perf_hpp_list.parent && !*parent &&
-		    symbol__match_regex(al.sym, &parent_regex))
-			*parent = al.sym;
-		else if (have_ignore_callees && root_al &&
+		if (perf_hpp_list.parent && parent && !parent->sym &&
+		    symbol__match_regex(al.sym, &parent_regex)) {
+			struct dso_symbol ds = dso_symbol__from_al(&al);
+
+			dso_symbol__copy(parent, &ds);
+		} else if (have_ignore_callees && root_al &&
 		  symbol__match_regex(al.sym, &ignore_callees_regex)) {
 			/* Treat this symbol as the root,
 			   forgetting its callees. */
@@ -2389,7 +2425,7 @@ static int remove_loops(struct branch_entry *l, int nr,
 static int lbr_callchain_add_kernel_ip(struct thread *thread,
 				       struct callchain_cursor *cursor,
 				       struct perf_sample *sample,
-				       struct symbol **parent,
+				       struct dso_symbol *parent,
 				       struct addr_location *root_al,
 				       u64 branch_from,
 				       bool callee, int end,
@@ -2455,7 +2491,7 @@ static void save_lbr_cursor_node(struct thread *thread,
 static int lbr_callchain_add_lbr_ip(struct thread *thread,
 				    struct callchain_cursor *cursor,
 				    struct perf_sample *sample,
-				    struct symbol **parent,
+				    struct dso_symbol *parent,
 				    struct addr_location *root_al,
 				    u64 *branch_from,
 				    bool callee,
@@ -2723,7 +2759,7 @@ err:
 static int resolve_lbr_callchain_sample(struct thread *thread,
 					struct callchain_cursor *cursor,
 					struct perf_sample *sample,
-					struct symbol **parent,
+					struct dso_symbol *parent,
 					struct addr_location *root_al,
 					int max_stack,
 					unsigned int max_lbr,
@@ -2810,7 +2846,7 @@ error:
 
 static int find_prev_cpumode(struct ip_callchain *chain, struct thread *thread,
 			     struct callchain_cursor *cursor,
-			     struct symbol **parent,
+			     struct dso_symbol *parent,
 			     struct addr_location *root_al,
 			     u8 *cpumode, int ent, bool symbols)
 {
@@ -2841,7 +2877,7 @@ static u64 get_leaf_frame_caller(struct perf_sample *sample,
 static int thread__resolve_callchain_sample(struct thread *thread,
 					    struct callchain_cursor *cursor,
 					    struct perf_sample *sample,
-					    struct symbol **parent,
+					    struct dso_symbol *parent,
 					    struct addr_location *root_al,
 					    int max_stack,
 					    bool symbols)
@@ -3073,12 +3109,15 @@ static int thread__resolve_callchain_unwind(struct thread *thread,
 int __thread__resolve_callchain(struct thread *thread,
 				struct callchain_cursor *cursor,
 				struct perf_sample *sample,
-				struct symbol **parent,
+				struct dso_symbol *parent,
 				struct addr_location *root_al,
 				int max_stack,
 				bool symbols)
 {
 	int ret = 0;
+
+	if (parent)
+		dso_symbol__exit(parent);
 
 	if (cursor == NULL)
 		return -ENOMEM;
@@ -3091,7 +3130,7 @@ int __thread__resolve_callchain(struct thread *thread,
 						       parent, root_al,
 						       max_stack, symbols);
 		if (ret)
-			return ret;
+			goto out;
 		ret = thread__resolve_callchain_unwind(thread, cursor,
 						       sample,
 						       max_stack, symbols);
@@ -3100,13 +3139,16 @@ int __thread__resolve_callchain(struct thread *thread,
 						       sample,
 						       max_stack, symbols);
 		if (ret)
-			return ret;
+			goto out;
 		ret = thread__resolve_callchain_sample(thread, cursor,
 						       sample,
 						       parent, root_al,
 						       max_stack, symbols);
 	}
 
+out:
+	if (ret && parent)
+		dso_symbol__exit(parent);
 	return ret;
 }
 
@@ -3128,13 +3170,15 @@ int machines__for_each_thread(struct machines *machines,
 	if (rc != 0)
 		return rc;
 
+	down_read(&machines->lock);
 	for (nd = rb_first_cached(&machines->guests); nd; nd = rb_next(nd)) {
 		struct machine *machine = rb_entry(nd, struct machine, rb_node);
 
 		rc = machine__for_each_thread(machine, fn, priv);
 		if (rc != 0)
-			return rc;
+			break;
 	}
+	up_read(&machines->lock);
 	return rc;
 }
 
@@ -3324,22 +3368,25 @@ bool machine__is_lock_function(struct machine *machine, u64 addr)
 		struct map *kmap;
 		struct symbol *sym = machine__find_kernel_symbol_by_name(machine, "__sched_text_start", &kmap);
 
-		if (!sym) {
-			/* to avoid retry */
-			machine->sched.text_start = 1;
-			return false;
-		}
+		if (!sym)
+			goto fail;
 
 		machine->sched.text_start = map__unmap_ip(kmap, sym->start);
 
 		/* should not fail from here */
 		sym = machine__find_kernel_symbol_by_name(machine, "__sched_text_end", &kmap);
+		if (!sym)
+			goto fail;
 		machine->sched.text_end = map__unmap_ip(kmap, sym->start);
 
 		sym = machine__find_kernel_symbol_by_name(machine, "__lock_text_start", &kmap);
+		if (!sym)
+			goto fail;
 		machine->lock.text_start = map__unmap_ip(kmap, sym->start);
 
 		sym = machine__find_kernel_symbol_by_name(machine, "__lock_text_end", &kmap);
+		if (!sym)
+			goto fail;
 		machine->lock.text_end = map__unmap_ip(kmap, sym->start);
 
 		sym = machine__find_kernel_symbol_by_name(machine, "__traceiter_contention_begin", &kmap);
@@ -3379,6 +3426,11 @@ bool machine__is_lock_function(struct machine *machine, u64 addr)
 			return true;
 	}
 
+	return false;
+
+fail:
+	/* failed to get kernel symbols, to avoid retry */
+	machine->sched.text_start = 1;
 	return false;
 }
 

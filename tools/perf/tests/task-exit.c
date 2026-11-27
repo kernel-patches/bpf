@@ -9,13 +9,14 @@
 
 #include <errno.h>
 #include <signal.h>
+#include <unistd.h>
 #include <linux/string.h>
 #include <perf/cpumap.h>
 #include <perf/evlist.h>
 #include <perf/mmap.h>
 
-static int exited;
-static int nr_exit;
+static volatile sig_atomic_t exited;
+static volatile int nr_exit;
 
 static void sig_handler(int sig __maybe_unused)
 {
@@ -55,6 +56,8 @@ static int test__task_exit(struct test_suite *test __maybe_unused, int subtest _
 	struct mmap *md;
 	int retry_count = 0;
 
+	exited = 0;
+	nr_exit = 0;
 	signal(SIGCHLD, sig_handler);
 
 	evlist = evlist__new_dummy();
@@ -135,6 +138,8 @@ out_init:
 			err = -1;
 			goto out_put_evlist;
 		}
+		if (retry_count > 1)
+			usleep(1000);
 
 		goto retry;
 	}

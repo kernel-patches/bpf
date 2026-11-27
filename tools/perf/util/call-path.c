@@ -10,13 +10,21 @@
 #include <stdlib.h>
 
 #include "call-path.h"
+#include "dso.h"
 
 static void call_path__init(struct call_path *cp, struct call_path *parent,
-			    struct symbol *sym, u64 ip, bool in_kernel)
+			    const struct dso_symbol *ds, u64 ip, bool in_kernel)
 {
+	struct symbol *sym = ds ? ds->sym : NULL;
+
 	cp->parent = parent;
-	cp->sym = sym;
-	cp->ip = sym ? 0 : ip;
+	if (sym) {
+		dso_symbol__copy(&cp->ds, ds);
+		cp->ip = 0;
+	} else {
+		cp->ds = (struct dso_symbol){};
+		cp->ip = ip;
+	}
 	cp->db_id = 0;
 	cp->in_kernel = in_kernel;
 	RB_CLEAR_NODE(&cp->rb_node);
@@ -39,7 +47,13 @@ void call_path_root__free(struct call_path_root *cpr)
 {
 	struct call_path_block *pos, *n;
 
+	if (!cpr)
+		return;
+
+	dso_symbol__exit(&cpr->call_path.ds);
 	list_for_each_entry_safe(pos, n, &cpr->blocks, node) {
+		for (size_t i = 0; i < CALL_PATH_BLOCK_SIZE; i++)
+			dso_symbol__exit(&pos->cp[i].ds);
 		list_del_init(&pos->node);
 		free(pos);
 	}
@@ -48,7 +62,7 @@ void call_path_root__free(struct call_path_root *cpr)
 
 static struct call_path *call_path__new(struct call_path_root *cpr,
 					struct call_path *parent,
-					struct symbol *sym, u64 ip,
+					const struct dso_symbol *ds, u64 ip,
 					bool in_kernel)
 {
 	struct call_path_block *cpb;
@@ -69,17 +83,20 @@ static struct call_path *call_path__new(struct call_path_root *cpr,
 	n = cpr->next++ & CALL_PATH_BLOCK_MASK;
 	cp = &cpb->cp[n];
 
-	call_path__init(cp, parent, sym, ip, in_kernel);
+	call_path__init(cp, parent, ds, ip, in_kernel);
 
 	return cp;
 }
 
 struct call_path *call_path__findnew(struct call_path_root *cpr,
 				     struct call_path *parent,
-				     struct symbol *sym, u64 ip, u64 ks)
+				     const struct dso_symbol *ds,
+				     u64 ip, u64 ks)
 {
 	struct rb_node **p;
 	struct rb_node *node_parent = NULL;
+	struct symbol *sym = ds ? ds->sym : NULL;
+	const void *dso_ptr = (sym && ds->dso) ? RC_CHK_ACCESS(ds->dso) : NULL;
 	struct call_path *cp;
 	bool in_kernel = ip >= ks;
 
@@ -87,23 +104,28 @@ struct call_path *call_path__findnew(struct call_path_root *cpr,
 		ip = 0;
 
 	if (!parent)
-		return call_path__new(cpr, parent, sym, ip, in_kernel);
+		return call_path__new(cpr, parent, ds, ip, in_kernel);
 
 	p = &parent->children.rb_node;
 	while (*p != NULL) {
+		const void *cp_dso_ptr;
+
 		node_parent = *p;
 		cp = rb_entry(node_parent, struct call_path, rb_node);
+		cp_dso_ptr = cp->ds.dso ? RC_CHK_ACCESS(cp->ds.dso) : NULL;
 
-		if (cp->sym == sym && cp->ip == ip)
+		if (cp->ds.sym == sym && cp_dso_ptr == dso_ptr && cp->ip == ip)
 			return cp;
 
-		if (sym < cp->sym || (sym == cp->sym && ip < cp->ip))
+		if (sym < cp->ds.sym ||
+		    (sym == cp->ds.sym && dso_ptr < cp_dso_ptr) ||
+		    (sym == cp->ds.sym && dso_ptr == cp_dso_ptr && ip < cp->ip))
 			p = &(*p)->rb_left;
 		else
 			p = &(*p)->rb_right;
 	}
 
-	cp = call_path__new(cpr, parent, sym, ip, in_kernel);
+	cp = call_path__new(cpr, parent, ds, ip, in_kernel);
 	if (!cp)
 		return NULL;
 

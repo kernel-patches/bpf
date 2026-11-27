@@ -139,12 +139,6 @@ int perf_session__process_events(struct perf_session *session);
 int perf_session__queue_event(struct perf_session *s, union perf_event *event,
 			      u64 timestamp, u64 file_offset, const char *file_path);
 
-int perf_session__resolve_callchain(struct perf_session *session,
-				    struct evsel *evsel,
-				    struct thread *thread,
-				    struct ip_callchain *chain,
-				    struct symbol **parent);
-
 bool perf_session__has_traces(struct perf_session *session, const char *msg);
 bool perf_session__has_switch_events(struct perf_session *session);
 

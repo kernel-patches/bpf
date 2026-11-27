@@ -1,0 +1,764 @@
+[
+    {
+        "EventCode": "0x100000000",
+        "EventName": "UCF_CYCLES",
+        "BriefDescription": "Counts UCF cycles using the dedicated PMU cycle counter.",
+        "PublicDescription": "Counts UCF cycles using the PMU's dedicated cycle counter.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x1d",
+        "EventName": "UCF_BUS_CYCLES",
+        "BriefDescription": "Counts UCF cycles using a programmable event counter.",
+        "PublicDescription": "Counts UCF cycles using a programmable event counter. The count is identical to UCF_CYCLES. Source and destination filters are ignored.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x111",
+        "EventName": "UCF_SLC_ACCESS_RD",
+        "BriefDescription": "Counts read requests from a requester to the SLC.",
+        "PublicDescription": "Counts read requests from a requester to the SLC. A read is a request for which the completer returns data: dataless MakeReadUnique and snoop requests are not reads, and prefetches issued by the cores' L1/L2 caches count as reads rather than as prefetch requests. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x112",
+        "EventName": "UCF_SLC_ACCESS_WR",
+        "BriefDescription": "Counts write requests from a requester to the SLC.",
+        "PublicDescription": "Counts write requests from a requester to the SLC. A write is a request in which the requester sends data: dataless WriteEvictOrEvict is not a write, and CHI Write*Zero is a write because it eventually consumes DRAM bandwidth although it sends no data over the interface. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x183",
+        "EventName": "UCF_SLC_ACCESS_DATALESS",
+        "BriefDescription": "Counts CHI Dataless requests to the SLC.",
+        "PublicDescription": "Counts CHI Dataless requests to the SLC. Dataless MakeReadUnique and WriteEvictOrEvict requests are not counted. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x184",
+        "EventName": "UCF_SLC_ACCESS_ATOMIC",
+        "BriefDescription": "Counts CHI Atomic requests to the SLC.",
+        "PublicDescription": "Counts CHI Atomic requests to the SLC. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x113",
+        "EventName": "UCF_SLC_BYTES_RD",
+        "BriefDescription": "Counts bytes transferred by the read requests counted by UCF_SLC_ACCESS_RD.",
+        "PublicDescription": "Counts the bytes transferred by the read requests counted by UCF_SLC_ACCESS_RD, including read data sent by Direct Memory Transfer (DMT) or Direct Cache Transfer (DCT). For transfers of an odd number of bytes, the count is rounded to the nearest power of 2 greater than the bytes transferred. Because reads can be smaller than 64 bytes, the count may not equal UCF_SLC_ACCESS_RD times 64. Source and destination filters work as described for UCF_SLC_ACCESS_RD.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x114",
+        "EventName": "UCF_SLC_BYTES_WR",
+        "BriefDescription": "Counts bytes transferred by the write requests counted by UCF_SLC_ACCESS_WR.",
+        "PublicDescription": "Counts the bytes transferred by the write requests counted by UCF_SLC_ACCESS_WR, including write data sent by Direct Write Transfer (DWT). For transfers of an odd number of bytes, the count is rounded to the nearest power of 2. Data returned to the SLC by a requester's cache in response to a snoop is not counted. Because writes can be smaller than 64 bytes, the count may not equal UCF_SLC_ACCESS_WR times 64. Source and destination filters work as described for UCF_SLC_ACCESS_WR.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x119",
+        "EventName": "UCF_SLC_HIT_RD",
+        "BriefDescription": "Counts inbound read requests that hit in the SLC's L3 cache or in a peer requester cache.",
+        "PublicDescription": "Counts inbound read requests that hit in the SLC's L3 cache or in a peer requester cache, including one in a remote socket. Some hits are still refilled from memory (see UCF_SLC_REFILL_RD). Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x109",
+        "EventName": "UCF_SLC_REFILL_RD",
+        "BriefDescription": "Counts inbound read requests not supplied by the local socket's L1, L2 or L3 caches.",
+        "PublicDescription": "Counts inbound read requests not supplied by the local socket's L1, L2 or L3 caches. For remote-memory addresses, it also counts each Shared-to-Unique permission upgrade (dataless MakeReadUnique) of a cache line shared by requesters in different sockets. A refill is not the same as a miss: the SLC may fetch data from memory even when a requester cache holds clean data, and such accesses are hits that are still refilled. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x10a",
+        "EventName": "UCF_SLC_REFILL_WR",
+        "BriefDescription": "Counts inbound write requests not supplied by the local socket's L1, L2 or L3 caches.",
+        "PublicDescription": "Counts inbound write requests not supplied by the local socket's L1, L2 or L3 caches. A write refill occurs only for a partial write that needs the existing data; dataless write requests do not cause a refill and are not counted. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0xf0",
+        "EventName": "UCF_SLC_ALLOCATE",
+        "BriefDescription": "Counts read, write, atomic or prefetch accesses that allocate a line in the SLC's L3 cache.",
+        "PublicDescription": "Counts read, write, atomic or prefetch accesses that allocate a line in the SLC's L3 cache. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0xf3",
+        "EventName": "UCF_SLC_WB",
+        "BriefDescription": "Counts SLC eviction and coherence write-backs, and non-allocating write-backs from upstream clients.",
+        "PublicDescription": "Counts SLC write-backs: eviction write-backs, coherence write-backs, and non-allocating write-backs from upstream clients. Evictions include L3 cache and snoop filter evictions. A coherence write-back occurs when data is dirty in the L3 cache or another requester node cache, but a requesting agent needs clean data. A home SLC in another socket, or the GL2 of a connected local or remote GPU (the point of coherence for GPU memory), can evict a line and snoop this SLC. A data-bearing snoop response from this SLC is not counted by this event, though it uses this SLC's downstream bandwidth. For a home SLC eviction, the home SLC's events count the downstream write traffic it causes. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the initiator of the request that caused the write-back: local CPU, local non-CPU device or remote socket. This need not be the agent that produced or modified the data. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the memory written back: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x180",
+        "EventName": "UCF_LOCAL_SNOOP",
+        "BriefDescription": "Counts snoop requests sent by this SLC to local fully coherent requester nodes or to an SLC in another socket.",
+        "PublicDescription": "Counts snoop requests sent by this SLC to fully coherent requester nodes in the local socket or to an SLC in another socket, including an SLC that this SLC tracks as a sharing node. Invalidating, forwarding, and non-forwarding snoops are included. Each snoop request is counted separately, even when one transaction snoops several clients for the same cache line. Snoops generated for atomic requests or dataless requests are not counted. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the initiator of the request that caused the snoop: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x181",
+        "EventName": "UCF_EXT_SNP_ACCESS",
+        "BriefDescription": "Counts snoop requests that a home SLC or GL2 in another socket sends to this SLC.",
+        "PublicDescription": "Counts snoop requests that a home SLC or GL2 in another socket sends to this SLC. Snoops are counted whether or not the response carries data. Filters: every counted snoop matches src_rem and dst_rem, since it comes from a remote initiator for an address homed in another socket. An unset source or destination group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x182",
+        "EventName": "UCF_EXT_SNP_EVICT",
+        "BriefDescription": "Counts snoop requests from a home SLC or GL2 in another socket that invalidate an L3 cache or snoop filter entry in this SLC.",
+        "PublicDescription": "Counts snoop requests from a home SLC or GL2 in another socket that invalidate an L3 cache entry or snoop filter entry in this SLC. Snoops are counted whether or not the response carries data, so this event cannot give the number or volume of data-bearing snoop responses (see UCF_SLC_WB). Filters: every counted snoop matches src_rem and dst_rem, since it comes from a remote initiator for an address homed in another socket. An unset source or destination group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x121",
+        "EventName": "UCF_MEM_ACCESS_RD",
+        "BriefDescription": "Counts read requests from the SLC toward local CMEM, local GMEM, local CXL memory or remote memory.",
+        "PublicDescription": "Counts read requests from the SLC toward local CMEM, local GMEM, local CXL memory or remote memory. For remote memory it can overcount: it also increments for each Shared-to-Unique permission upgrade (dataless MakeReadUnique) of a cache line shared by requesters in different sockets. To count reads from remote sources without this overcount, count UCF_SLC_ACCESS_RD on the memory's home socket with src_rem, dst_loc_cmem, dst_loc_gmem and dst_loc_other set. Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x122",
+        "EventName": "UCF_MEM_ACCESS_WR",
+        "BriefDescription": "Counts write requests from the SLC toward local CMEM, local GMEM, local CXL memory or remote memory.",
+        "PublicDescription": "Counts write requests from the SLC toward local CMEM, local GMEM, local CXL memory or remote memory. It includes SLC write-backs, which are attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB). Filters: src_loc_cpu, src_loc_noncpu and src_rem select the request initiator: local CPU, local non-CPU device or remote socket. dst_loc_cmem, dst_loc_gmem, dst_loc_other and dst_rem select the memory type of the request address: local CMEM, local GMEM, local CXL memory or remote memory; local or remote is determined by the home socket of the address. An unset group counts all.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x123",
+        "EventName": "UCF_MEM_BYTES_RD",
+        "BriefDescription": "Counts bytes transferred by the read requests counted by UCF_MEM_ACCESS_RD.",
+        "PublicDescription": "Counts bytes transferred by the read requests counted by UCF_MEM_ACCESS_RD. Source and destination filters work as described for UCF_MEM_ACCESS_RD.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "EventCode": "0x124",
+        "EventName": "UCF_MEM_BYTES_WR",
+        "BriefDescription": "Counts bytes transferred by the write requests counted by UCF_MEM_ACCESS_WR.",
+        "PublicDescription": "Counts bytes transferred by the write requests counted by UCF_MEM_ACCESS_WR, including write-back data attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB). Source and destination filters work as described for UCF_MEM_ACCESS_WR.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_freq",
+        "MetricGroup": "UCF_Frequency",
+        "MetricConstraint": "NO_GROUP_EVENTS",
+        "MetricExpr": "(UCF_CYCLES / aggr_nr(UCF_CYCLES)) / 1e9 / duration_time",
+        "ScaleUnit": "1GHz",
+        "BriefDescription": "UCF clock frequency.",
+        "PublicDescription": "Average UCF clock frequency over the measurement interval.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_all_src_to_all_dst",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_All_Src_To_All_Dst",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_cpu=1,src_loc_noncpu=1,src_rem=1,dst_loc_cmem=1,dst_loc_gmem=1,dst_loc_other=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for requests from all sources to all destinations.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local CPUs, local non-CPU devices and remote sockets for local CMEM, local GMEM, local CXL memory and remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_all_src_to_all_dst",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_All_Src_To_All_Dst",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_cpu=1,src_loc_noncpu=1,src_rem=1,dst_loc_cmem=1,dst_loc_gmem=1,dst_loc_other=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for all memory destinations, for requests from all initiators.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local CMEM, local GMEM, local CXL memory and remote memory, for requests initiated by local CPUs, local non-CPU devices and remote sockets.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_all_src_to_all_dst",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_All_Src_To_All_Dst",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_cpu=1,src_loc_noncpu=1,src_rem=1,dst_loc_cmem=1,dst_loc_gmem=1,dst_loc_other=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for requests from all sources to all destinations.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local CPUs, local non-CPU devices and remote sockets for local CMEM, local GMEM, local CXL memory and remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_all_src_to_all_dst",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_All_Src_To_All_Dst",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_cpu=1,src_loc_noncpu=1,src_rem=1,dst_loc_cmem=1,dst_loc_gmem=1,dst_loc_other=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local and remote memory, for traffic from all initiators.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local CMEM, local GMEM, local CXL memory and remote memory, for traffic initiated by local CPUs, local non-CPU devices and remote sockets. Includes write-backs, attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB).",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_bandwidth_all_src_to_all_dst",
+        "MetricGroup": "UCF_BW_All_Src_To_All_Dst",
+        "MetricExpr": "ucf_avg_slc_rd_bandwidth_all_src_to_all_dst + ucf_avg_slc_wr_bandwidth_all_src_to_all_dst",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read and write bandwidth for requests from all sources to all destinations.",
+        "PublicDescription": "Average requester-to-SLC read and write bandwidth of requests from local CPUs, local non-CPU devices and remote sockets for local CMEM, local GMEM, local CXL memory and remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_bandwidth_all_src_to_all_dst",
+        "MetricGroup": "UCF_BW_All_Src_To_All_Dst",
+        "MetricExpr": "ucf_avg_mem_rd_bandwidth_all_src_to_all_dst + ucf_avg_mem_wr_bandwidth_all_src_to_all_dst",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read and write bandwidth for local and remote memory, for traffic from all initiators.",
+        "PublicDescription": "Average SLC-to-memory read and write bandwidth for local CMEM, local GMEM, local CXL memory and remote memory, for traffic initiated by local CPUs, local non-CPU devices and remote sockets. Writes include write-backs, attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB).",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_all_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_CMEM;UCF_BW_All_Src_To_Local_CMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_cpu=1,src_loc_noncpu=1,src_rem=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for requests from all sources to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local CPUs, local non-CPU devices and remote sockets for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_all_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_CMEM;UCF_BW_All_Src_To_Local_CMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_cpu=1,src_loc_noncpu=1,src_rem=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests from all initiators.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests initiated by local CPUs, local non-CPU devices and remote sockets.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_all_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_CMEM;UCF_BW_All_Src_To_Local_CMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_cpu=1,src_loc_noncpu=1,src_rem=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for requests from all sources to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local CPUs, local non-CPU devices and remote sockets for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_all_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_CMEM;UCF_BW_All_Src_To_Local_CMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_cpu=1,src_loc_noncpu=1,src_rem=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic from all initiators.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic initiated by local CPUs, local non-CPU devices and remote sockets. Includes write-backs, attributed as described for UCF_SLC_WB.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_bandwidth_all_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_All_Src_To_Local_CMEM",
+        "MetricExpr": "ucf_avg_slc_rd_bandwidth_all_src_to_local_cmem + ucf_avg_slc_wr_bandwidth_all_src_to_local_cmem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read and write bandwidth for requests from all sources to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC read and write bandwidth of requests from local CPUs, local non-CPU devices and remote sockets for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_bandwidth_all_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_All_Src_To_Local_CMEM",
+        "MetricExpr": "ucf_avg_mem_rd_bandwidth_all_src_to_local_cmem + ucf_avg_mem_wr_bandwidth_all_src_to_local_cmem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read and write bandwidth for local CMEM, for traffic from all initiators.",
+        "PublicDescription": "Average SLC-to-memory read and write bandwidth for local CMEM, for traffic initiated by local CPUs, local non-CPU devices and remote sockets. Writes include write-backs, attributed as described for UCF_SLC_WB.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_CMEM;UCF_BW_Local_Src_To_Local_CMEM",
+        "MetricExpr": "ucf_avg_slc_rd_bandwidth_local_cpu_to_local_cmem + ucf_avg_slc_rd_bandwidth_local_noncpu_to_local_cmem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local CPU and local non-CPU requests to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local CPUs and local non-CPU devices such as the GPU and PCIe devices for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_CMEM;UCF_BW_Local_Src_To_Local_CMEM",
+        "MetricExpr": "ucf_avg_mem_rd_bandwidth_local_cpu_to_local_cmem + ucf_avg_mem_rd_bandwidth_local_noncpu_to_local_cmem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests initiated by local CPUs and local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests initiated by local CPUs and local non-CPU devices such as the GPU and PCIe devices.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_CMEM;UCF_BW_Local_Src_To_Local_CMEM",
+        "MetricExpr": "ucf_avg_slc_wr_bandwidth_local_cpu_to_local_cmem + ucf_avg_slc_wr_bandwidth_local_noncpu_to_local_cmem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local CPU and local non-CPU requests to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local CPUs and local non-CPU devices such as the GPU and PCIe devices for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_src_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_CMEM;UCF_BW_Local_Src_To_Local_CMEM",
+        "MetricExpr": "ucf_avg_mem_wr_bandwidth_local_cpu_to_local_cmem + ucf_avg_mem_wr_bandwidth_local_noncpu_to_local_cmem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic initiated by local CPUs and local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic initiated by local CPUs and local non-CPU devices such as the GPU and PCIe devices. Includes write-backs, attributed as described for UCF_SLC_WB.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_src_to_remote_mem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Remote_Memory;UCF_BW_Local_Src_To_Remote_Memory",
+        "MetricExpr": "ucf_avg_slc_rd_bandwidth_local_cpu_to_remote_mem + ucf_avg_slc_rd_bandwidth_local_noncpu_to_remote_mem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local CPU and local non-CPU requests to remote memory addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local CPUs and local non-CPU devices such as the GPU and PCIe devices for remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_src_to_remote_mem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Remote_Memory;UCF_BW_Local_Src_To_Remote_Memory",
+        "MetricExpr": "ucf_avg_mem_rd_bandwidth_local_cpu_to_remote_mem + ucf_avg_mem_rd_bandwidth_local_noncpu_to_remote_mem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for remote memory, for requests initiated by local CPUs and local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for remote memory, for requests initiated by local CPUs and local non-CPU devices such as the GPU and PCIe devices.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_src_to_remote_mem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Remote_Memory;UCF_BW_Local_Src_To_Remote_Memory",
+        "MetricExpr": "ucf_avg_slc_wr_bandwidth_local_cpu_to_remote_mem + ucf_avg_slc_wr_bandwidth_local_noncpu_to_remote_mem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local CPU and local non-CPU requests to remote memory addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local CPUs and local non-CPU devices such as the GPU and PCIe devices for remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_src_to_remote_mem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Remote_Memory;UCF_BW_Local_Src_To_Remote_Memory",
+        "MetricExpr": "ucf_avg_mem_wr_bandwidth_local_cpu_to_remote_mem + ucf_avg_mem_wr_bandwidth_local_noncpu_to_remote_mem",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for remote memory, for traffic initiated by local CPUs and local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for remote memory, for traffic initiated by local CPUs and local non-CPU devices such as the GPU and PCIe devices. Includes write-backs, attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB).",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_cpu_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_CPU;UCF_BW_Local_CMEM;UCF_BW_Local_CPU_To_Local_CMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_cpu=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local CPU requests to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local CPUs for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_cpu_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_CPU;UCF_BW_Local_CMEM;UCF_BW_Local_CPU_To_Local_CMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_cpu=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests initiated by local CPUs.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests initiated by local CPUs.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_cpu_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_CPU;UCF_BW_Local_CMEM;UCF_BW_Local_CPU_To_Local_CMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_cpu=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local CPU requests to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local CPUs for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_cpu_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_CPU;UCF_BW_Local_CMEM;UCF_BW_Local_CPU_To_Local_CMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_cpu=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic initiated by local CPUs.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic initiated by local CPUs. Includes write-backs, attributed as described for UCF_SLC_WB.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_cpu_to_local_gmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_CPU;UCF_BW_Local_GMEM;UCF_BW_Local_CPU_To_Local_GMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_cpu=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local CPU requests to local GMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local CPUs for local GMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_cpu_to_local_gmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_CPU;UCF_BW_Local_GMEM;UCF_BW_Local_CPU_To_Local_GMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_cpu=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local GMEM, for requests initiated by local CPUs.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local GMEM, for requests initiated by local CPUs.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_cpu_to_local_gmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_CPU;UCF_BW_Local_GMEM;UCF_BW_Local_CPU_To_Local_GMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_cpu=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local CPU requests to local GMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local CPUs for local GMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_cpu_to_local_gmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_CPU;UCF_BW_Local_GMEM;UCF_BW_Local_CPU_To_Local_GMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_cpu=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local GMEM, for traffic initiated by local CPUs.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local GMEM, for traffic initiated by local CPUs. Includes write-backs, attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB).",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_cpu_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_CPU;UCF_BW_Local_CXLMEM;UCF_BW_Local_CPU_To_Local_CXLMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_cpu=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local CPU requests to local CXL memory addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local CPUs for local CXL memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_cpu_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_CPU;UCF_BW_Local_CXLMEM;UCF_BW_Local_CPU_To_Local_CXLMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_cpu=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local CXL memory, for requests initiated by local CPUs.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local CXL memory, for requests initiated by local CPUs.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_cpu_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_CPU;UCF_BW_Local_CXLMEM;UCF_BW_Local_CPU_To_Local_CXLMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_cpu=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local CPU requests to local CXL memory addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local CPUs for local CXL memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_cpu_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_CPU;UCF_BW_Local_CXLMEM;UCF_BW_Local_CPU_To_Local_CXLMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_cpu=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local CXL memory, for traffic initiated by local CPUs.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local CXL memory, for traffic initiated by local CPUs. Includes write-backs, attributed as described for UCF_SLC_WB.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_cpu_to_remote_mem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_CPU;UCF_BW_Remote_Memory;UCF_BW_Local_CPU_To_Remote_Memory",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_cpu=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local CPU requests to remote memory addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local CPUs for remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_cpu_to_remote_mem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_CPU;UCF_BW_Remote_Memory;UCF_BW_Local_CPU_To_Remote_Memory",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_cpu=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for remote memory, for requests initiated by local CPUs.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for remote memory, for requests initiated by local CPUs.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_cpu_to_remote_mem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_CPU;UCF_BW_Remote_Memory;UCF_BW_Local_CPU_To_Remote_Memory",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_cpu=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local CPU requests to remote memory addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local CPUs for remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_cpu_to_remote_mem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_CPU;UCF_BW_Remote_Memory;UCF_BW_Local_CPU_To_Remote_Memory",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_cpu=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for remote memory, for traffic initiated by local CPUs.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for remote memory, for traffic initiated by local CPUs. Includes write-backs, attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB).",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_noncpu_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_NonCPU;UCF_BW_Local_CMEM;UCF_BW_Local_NonCPU_To_Local_CMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_noncpu=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local non-CPU requests to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local non-CPU devices such as the GPU and PCIe devices for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_noncpu_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_NonCPU;UCF_BW_Local_CMEM;UCF_BW_Local_NonCPU_To_Local_CMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_noncpu=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests initiated by local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests initiated by local non-CPU devices such as the GPU and PCIe devices.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_noncpu_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_NonCPU;UCF_BW_Local_CMEM;UCF_BW_Local_NonCPU_To_Local_CMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_noncpu=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local non-CPU requests to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local non-CPU devices such as the GPU and PCIe devices for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_noncpu_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_NonCPU;UCF_BW_Local_CMEM;UCF_BW_Local_NonCPU_To_Local_CMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_noncpu=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic initiated by local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic initiated by local non-CPU devices such as the GPU and PCIe devices. Includes write-backs, attributed as described for UCF_SLC_WB.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_noncpu_to_local_gmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_NonCPU;UCF_BW_Local_GMEM;UCF_BW_Local_NonCPU_To_Local_GMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_noncpu=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local non-CPU requests to local GMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local non-CPU devices such as the GPU and PCIe devices for local GMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_noncpu_to_local_gmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_NonCPU;UCF_BW_Local_GMEM;UCF_BW_Local_NonCPU_To_Local_GMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_noncpu=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local GMEM, for requests initiated by local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local GMEM, for requests initiated by local non-CPU devices such as the GPU and PCIe devices.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_noncpu_to_local_gmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_NonCPU;UCF_BW_Local_GMEM;UCF_BW_Local_NonCPU_To_Local_GMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_noncpu=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local non-CPU requests to local GMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local non-CPU devices such as the GPU and PCIe devices for local GMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_noncpu_to_local_gmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_NonCPU;UCF_BW_Local_GMEM;UCF_BW_Local_NonCPU_To_Local_GMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_noncpu=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local GMEM, for traffic initiated by local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local GMEM, for traffic initiated by local non-CPU devices such as the GPU and PCIe devices. Includes write-backs, attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB).",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_noncpu_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_NonCPU;UCF_BW_Local_CXLMEM;UCF_BW_Local_NonCPU_To_Local_CXLMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_noncpu=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local non-CPU requests to local CXL memory addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local non-CPU devices such as the GPU and PCIe devices for local CXL memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_noncpu_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_NonCPU;UCF_BW_Local_CXLMEM;UCF_BW_Local_NonCPU_To_Local_CXLMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_noncpu=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local CXL memory, for requests initiated by local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local CXL memory, for requests initiated by local non-CPU devices such as the GPU and PCIe devices.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_noncpu_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_NonCPU;UCF_BW_Local_CXLMEM;UCF_BW_Local_NonCPU_To_Local_CXLMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_noncpu=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local non-CPU requests to local CXL memory addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local non-CPU devices such as the GPU and PCIe devices for local CXL memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_noncpu_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_NonCPU;UCF_BW_Local_CXLMEM;UCF_BW_Local_NonCPU_To_Local_CXLMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_noncpu=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local CXL memory, for traffic initiated by local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local CXL memory, for traffic initiated by local non-CPU devices such as the GPU and PCIe devices. Includes write-backs, attributed as described for UCF_SLC_WB.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_local_noncpu_to_remote_mem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Local_NonCPU;UCF_BW_Remote_Memory;UCF_BW_Local_NonCPU_To_Remote_Memory",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_loc_noncpu=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for local non-CPU requests to remote memory addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from local non-CPU devices such as the GPU and PCIe devices for remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_local_noncpu_to_remote_mem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Local_NonCPU;UCF_BW_Remote_Memory;UCF_BW_Local_NonCPU_To_Remote_Memory",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_loc_noncpu=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for remote memory, for requests initiated by local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for remote memory, for requests initiated by local non-CPU devices such as the GPU and PCIe devices.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_local_noncpu_to_remote_mem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Local_NonCPU;UCF_BW_Remote_Memory;UCF_BW_Local_NonCPU_To_Remote_Memory",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_loc_noncpu=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for local non-CPU requests to remote memory addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from local non-CPU devices such as the GPU and PCIe devices for remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_local_noncpu_to_remote_mem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Local_NonCPU;UCF_BW_Remote_Memory;UCF_BW_Local_NonCPU_To_Remote_Memory",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_loc_noncpu=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for remote memory, for traffic initiated by local non-CPU devices.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for remote memory, for traffic initiated by local non-CPU devices such as the GPU and PCIe devices. Includes write-backs, attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB).",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_remote_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Remote_Source;UCF_BW_Local_CMEM;UCF_BW_Remote_To_Local_CMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_rem=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for remote-socket requests to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from a remote socket for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_remote_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Remote_Source;UCF_BW_Local_CMEM;UCF_BW_Remote_To_Local_CMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_rem=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests initiated by a remote socket.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local CMEM, for requests initiated by a remote socket.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_remote_to_local_cmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Remote_Source;UCF_BW_Local_CMEM;UCF_BW_Remote_To_Local_CMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_rem=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for remote-socket requests to local CMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from a remote socket for local CMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_remote_to_local_cmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Remote_Source;UCF_BW_Local_CMEM;UCF_BW_Remote_To_Local_CMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_rem=1,dst_loc_cmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic initiated by a remote socket.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local CMEM, for traffic initiated by a remote socket. Includes write-backs, attributed as described for UCF_SLC_WB.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_remote_to_local_gmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Remote_Source;UCF_BW_Local_GMEM;UCF_BW_Remote_To_Local_GMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_rem=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for remote-socket requests to local GMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from a remote socket for local GMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_remote_to_local_gmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Remote_Source;UCF_BW_Local_GMEM;UCF_BW_Remote_To_Local_GMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_rem=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local GMEM, for requests initiated by a remote socket.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local GMEM, for requests initiated by a remote socket.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_remote_to_local_gmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Remote_Source;UCF_BW_Local_GMEM;UCF_BW_Remote_To_Local_GMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_rem=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for remote-socket requests to local GMEM addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from a remote socket for local GMEM addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_remote_to_local_gmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Remote_Source;UCF_BW_Local_GMEM;UCF_BW_Remote_To_Local_GMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_rem=1,dst_loc_gmem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local GMEM, for traffic initiated by a remote socket.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local GMEM, for traffic initiated by a remote socket. Includes write-backs, attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB).",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_remote_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Remote_Source;UCF_BW_Local_CXLMEM;UCF_BW_Remote_To_Local_CXLMEM",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_rem=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for remote-socket requests to local CXL memory addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from a remote socket for local CXL memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_remote_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Remote_Source;UCF_BW_Local_CXLMEM;UCF_BW_Remote_To_Local_CXLMEM",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_rem=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for local CXL memory, for requests initiated by a remote socket.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for local CXL memory, for requests initiated by a remote socket.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_remote_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Remote_Source;UCF_BW_Local_CXLMEM;UCF_BW_Remote_To_Local_CXLMEM",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_rem=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for remote-socket requests to local CXL memory addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from a remote socket for local CXL memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_remote_to_local_cxlmem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Remote_Source;UCF_BW_Local_CXLMEM;UCF_BW_Remote_To_Local_CXLMEM",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_rem=1,dst_loc_other=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for local CXL memory, for traffic initiated by a remote socket.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for local CXL memory, for traffic initiated by a remote socket. Includes write-backs, attributed as described for UCF_SLC_WB.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_rd_bandwidth_remote_to_remote_mem",
+        "MetricGroup": "UCF_BW_Upstream_RD;UCF_BW_Remote_Source;UCF_BW_Remote_Memory;UCF_BW_Remote_To_Remote_Memory",
+        "MetricExpr": "UCF_SLC_BYTES_RD@src_rem=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC read bandwidth for remote-socket requests to remote memory addresses.",
+        "PublicDescription": "Average requester-to-SLC read bandwidth of requests from a remote socket for remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_rd_bandwidth_remote_to_remote_mem",
+        "MetricGroup": "UCF_BW_Downstream_RD;UCF_BW_Remote_Source;UCF_BW_Remote_Memory;UCF_BW_Remote_To_Remote_Memory",
+        "MetricExpr": "UCF_MEM_BYTES_RD@src_rem=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory read bandwidth for remote memory, for requests initiated by a remote socket.",
+        "PublicDescription": "Average SLC-to-memory read bandwidth for remote memory, for requests initiated by a remote socket.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_slc_wr_bandwidth_remote_to_remote_mem",
+        "MetricGroup": "UCF_BW_Upstream_WR;UCF_BW_Remote_Source;UCF_BW_Remote_Memory;UCF_BW_Remote_To_Remote_Memory",
+        "MetricExpr": "UCF_SLC_BYTES_WR@src_rem=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average requester-to-SLC write bandwidth for remote-socket requests to remote memory addresses.",
+        "PublicDescription": "Average requester-to-SLC write bandwidth of requests from a remote socket for remote memory addresses.",
+        "Unit": "nvidia_ucf_pmu_"
+    },
+    {
+        "MetricName": "ucf_avg_mem_wr_bandwidth_remote_to_remote_mem",
+        "MetricGroup": "UCF_BW_Downstream_WR;UCF_BW_Remote_Source;UCF_BW_Remote_Memory;UCF_BW_Remote_To_Remote_Memory",
+        "MetricExpr": "UCF_MEM_BYTES_WR@src_rem=1,dst_rem=1@ / 1e6 / duration_time",
+        "ScaleUnit": "1MB/s",
+        "BriefDescription": "Average SLC-to-memory write bandwidth for remote memory, for traffic initiated by a remote socket.",
+        "PublicDescription": "Average SLC-to-memory write bandwidth for remote memory, for traffic initiated by a remote socket. Includes write-backs, attributed as described for UCF_SLC_WB. Data-bearing snoop responses to evictions by a home SLC in another socket or a connected GPU's GL2 are not counted (see UCF_SLC_WB).",
+        "Unit": "nvidia_ucf_pmu_"
+    }
+]

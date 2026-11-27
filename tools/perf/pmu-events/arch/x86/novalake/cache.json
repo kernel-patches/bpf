@@ -249,7 +249,7 @@
         "Unit": "cpu_core"
     },
     {
-        "BriefDescription": "L2_REQUEST.RFO_HIT_XSNP_HIT_FWD",
+        "BriefDescription": "L2_REQUEST.RFO_HIT_XSNP_HIT_FWD [This event is alias to L2_RQSTS.RFO_HIT_XSNP_HIT_FWD]",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0x24",
         "EventName": "L2_REQUEST.RFO_HIT_XSNP_HIT_FWD",
@@ -375,6 +375,15 @@
         "PublicDescription": "Counts the RFO (Read-for-Ownership) requests that hit L2 cache. [This event is alias to L2_REQUEST.RFO_HIT]",
         "SampleAfterValue": "200003",
         "UMask": "0x42",
+        "Unit": "cpu_core"
+    },
+    {
+        "BriefDescription": "L2_RQSTS.RFO_HIT_XSNP_HIT_FWD [This event is alias to L2_REQUEST.RFO_HIT_XSNP_HIT_FWD]",
+        "Counter": "0,1,2,3,4,5,6,7",
+        "EventCode": "0x24",
+        "EventName": "L2_RQSTS.RFO_HIT_XSNP_HIT_FWD",
+        "SampleAfterValue": "200003",
+        "UMask": "0x2002",
         "Unit": "cpu_core"
     },
     {
@@ -1174,7 +1183,7 @@
         "EventCode": "0x2c",
         "EventName": "SQ_MISC.BUS_LOCK",
         "PublicDescription": "Counts the more expensive bus lock needed to enforce cache coherency for certain memory accesses that need to be done atomically.  Can be created by issuing an atomic instruction (via the LOCK prefix) which causes a cache line split or accesses uncacheable memory.",
-        "SampleAfterValue": "100003",
+        "SampleAfterValue": "503",
         "UMask": "0x10",
         "Unit": "cpu_core"
     },

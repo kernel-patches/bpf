@@ -269,7 +269,6 @@
     "BriefDescription": "Memory controller data bus utilization.",
     "MetricExpr": "d_ratio(umc_data_slot_clks.all / 2, umc_mem_clk)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "100%"
   },
   {
@@ -277,7 +276,6 @@
     "BriefDescription": "Memory controller CAS command rate.",
     "MetricExpr": "d_ratio(umc_cas_cmd.all * 1000, umc_mem_clk)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1per_memclk"
   },
   {
@@ -285,7 +283,6 @@
     "BriefDescription": "Ratio of memory controller CAS commands for reads.",
     "MetricExpr": "d_ratio(umc_cas_cmd.rd, umc_cas_cmd.all)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "100%"
   },
   {
@@ -293,7 +290,6 @@
     "BriefDescription": "Ratio of memory controller CAS commands for writes.",
     "MetricExpr": "d_ratio(umc_cas_cmd.wr, umc_cas_cmd.all)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "100%"
   },
   {
@@ -301,7 +297,6 @@
     "BriefDescription": "Estimated memory read bandwidth.",
     "MetricExpr": "(umc_cas_cmd.rd * 64) / 1e6 / duration_time",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1MB/s"
   },
   {
@@ -309,7 +304,6 @@
     "BriefDescription": "Estimated memory write bandwidth.",
     "MetricExpr": "(umc_cas_cmd.wr * 64) / 1e6 / duration_time",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1MB/s"
   },
   {
@@ -317,7 +311,6 @@
     "BriefDescription": "Estimated combined memory bandwidth.",
     "MetricExpr": "(umc_cas_cmd.all * 64) / 1e6 / duration_time",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1MB/s"
   },
   {
@@ -325,7 +318,6 @@
     "BriefDescription": "Memory controller ACTIVATE command rate.",
     "MetricExpr": "d_ratio(umc_act_cmd.all * 1000, umc_mem_clk)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1per_memclk"
   },
   {
@@ -333,7 +325,104 @@
     "BriefDescription": "Memory controller PRECHARGE command rate.",
     "MetricExpr": "d_ratio(umc_pchg_cmd.all * 1000, umc_mem_clk)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1per_memclk"
+  },
+  {
+    "MetricName": "df_fclk",
+    "BriefDescription": "Average Fabric Clock (FCLK) frequency.",
+    "MetricExpr": "pie_general.fclk / aggr_nr(pie_general.fclk) / duration_time / 1e9",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "1GHz"
+  },
+  {
+    "MetricName": "df_dram_data_bw.rd_local",
+    "BriefDescription": "Local DRAM read data bandwidth.",
+    "MetricExpr": "(data_beats_cs_0.rd_local + data_beats_cs_1.rd_local + data_beats_cs_2.rd_local + data_beats_cs_3.rd_local + data_beats_cs_4.rd_local + data_beats_cs_5.rd_local + data_beats_cs_6.rd_local + data_beats_cs_7.rd_local + data_beats_cs_8.rd_local + data_beats_cs_9.rd_local + data_beats_cs_10.rd_local + data_beats_cs_11.rd_local + data_beats_cs_12.rd_local + data_beats_cs_13.rd_local + data_beats_cs_14.rd_local + data_beats_cs_15.rd_local) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_dram_data_bw.wr_local",
+    "BriefDescription": "Local DRAM write data bandwidth.",
+    "MetricExpr": "(data_beats_cs_0.wr_local + data_beats_cs_1.wr_local + data_beats_cs_2.wr_local + data_beats_cs_3.wr_local + data_beats_cs_4.wr_local + data_beats_cs_5.wr_local + data_beats_cs_6.wr_local + data_beats_cs_7.wr_local + data_beats_cs_8.wr_local + data_beats_cs_9.wr_local + data_beats_cs_10.wr_local + data_beats_cs_11.wr_local + data_beats_cs_12.wr_local + data_beats_cs_13.wr_local + data_beats_cs_14.wr_local + data_beats_cs_15.wr_local) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_dram_data_bw.rd_remote",
+    "BriefDescription": "Remote DRAM read data bandwidth.",
+    "MetricExpr": "(data_beats_cs_0.rd_remote + data_beats_cs_1.rd_remote + data_beats_cs_2.rd_remote + data_beats_cs_3.rd_remote + data_beats_cs_4.rd_remote + data_beats_cs_5.rd_remote + data_beats_cs_6.rd_remote + data_beats_cs_7.rd_remote + data_beats_cs_8.rd_remote + data_beats_cs_9.rd_remote + data_beats_cs_10.rd_remote + data_beats_cs_11.rd_remote + data_beats_cs_12.rd_remote + data_beats_cs_13.rd_remote + data_beats_cs_14.rd_remote + data_beats_cs_15.rd_remote) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_dram_data_bw.wr_remote",
+    "BriefDescription": "Remote DRAM write data bandwidth.",
+    "MetricExpr": "(data_beats_cs_0.wr_remote + data_beats_cs_1.wr_remote + data_beats_cs_2.wr_remote + data_beats_cs_3.wr_remote + data_beats_cs_4.wr_remote + data_beats_cs_5.wr_remote + data_beats_cs_6.wr_remote + data_beats_cs_7.wr_remote + data_beats_cs_8.wr_remote + data_beats_cs_9.wr_remote + data_beats_cs_10.wr_remote + data_beats_cs_11.wr_remote + data_beats_cs_12.wr_remote + data_beats_cs_13.wr_remote + data_beats_cs_14.wr_remote + data_beats_cs_15.wr_remote) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_cpu_data_bw.in_local",
+    "BriefDescription": "Local CPU inbound data bandwidth.",
+    "MetricExpr": "(data_beats_ccm_0.rd_local + data_beats_ccm_1.rd_local + data_beats_ccm_2.rd_local + data_beats_ccm_3.rd_local + data_beats_ccm_4.rd_local + data_beats_ccm_5.rd_local + data_beats_ccm_6.rd_local + data_beats_ccm_7.rd_local + data_beats_ccm_8.rd_local + data_beats_ccm_9.rd_local + data_beats_ccm_10.rd_local + data_beats_ccm_11.rd_local + data_beats_ccm_12.rd_local + data_beats_ccm_13.rd_local + data_beats_ccm_14.rd_local + data_beats_ccm_15.rd_local) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "3.2e-5MB/s"
+  },
+  {
+    "MetricName": "df_cpu_data_bw.out_local",
+    "BriefDescription": "Local CPU outbound data bandwidth.",
+    "MetricExpr": "(data_beats_ccm_0.wr_local + data_beats_ccm_1.wr_local + data_beats_ccm_2.wr_local + data_beats_ccm_3.wr_local + data_beats_ccm_4.wr_local + data_beats_ccm_5.wr_local + data_beats_ccm_6.wr_local + data_beats_ccm_7.wr_local + data_beats_ccm_8.wr_local + data_beats_ccm_9.wr_local + data_beats_ccm_10.wr_local + data_beats_ccm_11.wr_local + data_beats_ccm_12.wr_local + data_beats_ccm_13.wr_local + data_beats_ccm_14.wr_local + data_beats_ccm_15.wr_local) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_cpu_data_bw.in_remote",
+    "BriefDescription": "Remote CPU inbound data bandwidth.",
+    "MetricExpr": "(data_beats_ccm_0.rd_remote + data_beats_ccm_1.rd_remote + data_beats_ccm_2.rd_remote + data_beats_ccm_3.rd_remote + data_beats_ccm_4.rd_remote + data_beats_ccm_5.rd_remote + data_beats_ccm_6.rd_remote + data_beats_ccm_7.rd_remote + data_beats_ccm_8.rd_remote + data_beats_ccm_9.rd_remote + data_beats_ccm_10.rd_remote + data_beats_ccm_11.rd_remote + data_beats_ccm_12.rd_remote + data_beats_ccm_13.rd_remote + data_beats_ccm_14.rd_remote + data_beats_ccm_15.rd_remote) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "3.2e-5MB/s"
+  },
+  {
+    "MetricName": "df_cpu_data_bw.out_remote",
+    "BriefDescription": "Remote CPU outbound data bandwidth.",
+    "MetricExpr": "(data_beats_ccm_0.wr_remote + data_beats_ccm_1.wr_remote + data_beats_ccm_2.wr_remote + data_beats_ccm_3.wr_remote + data_beats_ccm_4.wr_remote + data_beats_ccm_5.wr_remote + data_beats_ccm_6.wr_remote + data_beats_ccm_7.wr_remote + data_beats_ccm_8.wr_remote + data_beats_ccm_9.wr_remote + data_beats_ccm_10.wr_remote + data_beats_ccm_11.wr_remote + data_beats_ccm_12.wr_remote + data_beats_ccm_13.wr_remote + data_beats_ccm_14.wr_remote + data_beats_ccm_15.wr_remote) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_io_data_bw.rd_local",
+    "BriefDescription": "Local I/O read data bandwidth.",
+    "MetricExpr": "(data_beats_iom_0.rd_local + data_beats_iom_1.rd_local + data_beats_iom_2.rd_local + data_beats_iom_3.rd_local) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_io_data_bw.wr_local",
+    "BriefDescription": "Local I/O write data bandwidth.",
+    "MetricExpr": "(data_beats_iom_0.wr_local + data_beats_iom_1.wr_local + data_beats_iom_2.wr_local + data_beats_iom_3.wr_local) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_io_data_bw.rd_remote",
+    "BriefDescription": "Remote I/O read data bandwidth.",
+    "MetricExpr": "(data_beats_iom_0.rd_remote + data_beats_iom_1.rd_remote + data_beats_iom_2.rd_remote + data_beats_iom_3.rd_remote) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_io_data_bw.wr_remote",
+    "BriefDescription": "Remote I/O write data bandwidth.",
+    "MetricExpr": "(data_beats_iom_0.wr_remote + data_beats_iom_1.wr_remote + data_beats_iom_2.wr_remote + data_beats_iom_3.wr_remote) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
+  },
+  {
+    "MetricName": "df_link_data_bw.out_local",
+    "BriefDescription": "Local inter-socket outbound data bandwidth.",
+    "MetricExpr": "(data_beats_link_0.out_local + data_beats_link_1.out_local + data_beats_link_2.out_local) / duration_time",
+    "MetricGroup": "data_fabric",
+    "ScaleUnit": "6.4e-5MB/s"
   }
 ]

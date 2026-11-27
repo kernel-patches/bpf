@@ -51,13 +51,13 @@ struct a2l_data {
 	asymbol **syms;
 };
 
-static bool perf_bfd_lock(void *bfd_mutex) NO_THREAD_SAFETY_ANALYSIS
+static bool perf_bfd_lock(void *bfd_mutex) __no_context_analysis
 {
 	mutex_lock(bfd_mutex);
 	return true;
 }
 
-static bool perf_bfd_unlock(void *bfd_mutex) NO_THREAD_SAFETY_ANALYSIS
+static bool perf_bfd_unlock(void *bfd_mutex) __no_context_analysis
 {
 	mutex_unlock(bfd_mutex);
 	return true;
@@ -453,7 +453,8 @@ int dso__load_bfd_symbols(struct dso *dso, const char *debugfile)
 		if (!symbol)
 			goto out_free;
 
-		symbols__insert(dso__symbols(dso), symbol);
+		if (symbols__insert(dso__symbols(dso), symbol))
+			goto out_free;
 	}
 #ifdef bfd_get_section
 #undef bfd_asymbol_section
@@ -462,6 +463,7 @@ int dso__load_bfd_symbols(struct dso *dso, const char *debugfile)
 	symbols__fixup_end(dso__symbols(dso), false);
 	symbols__fixup_duplicate(dso__symbols(dso));
 	dso__set_adjust_symbols(dso, true);
+	dso__set_is_64_bit(dso, bfd_arch_bits_per_address(abfd) == 64);
 
 	err = dso__has_symbols(dso);
 out_free:

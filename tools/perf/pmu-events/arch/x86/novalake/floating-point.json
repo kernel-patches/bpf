@@ -359,7 +359,7 @@
         "EventName": "FP_ARITH_OPS_RETIRED.SCALAR",
         "PublicDescription": "Number of SSE/AVX computational scalar single precision and double precision floating-point instructions retired; some instructions will count twice as noted below.  Each count represents 1 computational operation. Applies to SSE* and AVX* scalar single precision floating-point instructions: ADD SUB MUL DIV MIN MAX SQRT RSQRT RCP FM(N)ADD/SUB.  FM(N)ADD/SUB instructions count twice as they perform 2 calculations per element. The DAZ and FTZ flags in the MXCSR register need to be set when using these events.",
         "SampleAfterValue": "1000003",
-        "UMask": "0x3",
+        "UMask": "0x303",
         "Unit": "cpu_core"
     },
     {
@@ -389,7 +389,7 @@
         "EventName": "FP_ARITH_OPS_RETIRED.VECTOR",
         "PublicDescription": "Number of any Vector retired FP arithmetic instructions.  The DAZ and FTZ flags in the MXCSR register need to be set when using these events.",
         "SampleAfterValue": "1000003",
-        "UMask": "0x3c",
+        "UMask": "0x1cfc",
         "Unit": "cpu_core"
     },
     {

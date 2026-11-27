@@ -153,12 +153,14 @@ The record type is optional.
 
 The record is used to describe the unwinding information for a jitted function.
 
+The record must precede the corresponding JIT_CODE_LOAD record. It applies to the next JIT_CODE_LOAD record in the file.
+
 The record has the following fields following the fixed-size record header in order:
 
-uint64_t unwind_data_size   : the size in bytes of the unwinding data table at the end of the record
-uint64_t eh_frame_hdr_size  : the size in bytes of the DWARF EH Frame Header at the start of the unwinding data table at the end of the record
+uint64_t unwind_data_size   : the combined size in bytes of the EH Frame and EH Frame Header
+uint64_t eh_frame_hdr_size  : the size in bytes of the DWARF EH Frame Header at the end of the unwinding data table
 uint64_t mapped_size        : the size of the unwinding data mapped in memory
-const char unwinding_data[n]: an array of unwinding data, consisting of the EH Frame Header, followed by the actual EH Frame
+const char unwinding_data[n]: an array of unwinding data, consisting of the EH Frame, followed by the EH Frame Header
 
 
 The EH Frame header follows the Linux Standard Base (LSB) specification as described in the document at https://refspecs.linuxfoundation.org/LSB_1.3.0/gLSB/gLSB/ehframehdr.html
@@ -167,4 +169,4 @@ The EH Frame header follows the Linux Standard Base (LSB) specification as descr
 The EH Frame follows the LSB specification as described in the document at https://refspecs.linuxbase.org/LSB_3.0.0/LSB-PDA/LSB-PDA/ehframechpt.html
 
 
-NOTE: The mapped_size is generally either the same as unwind_data_size (if the unwinding data was mapped in memory by the running process) or zero (if the unwinding data is not mapped by the process). If the unwinding data was not mapped, then only the EH Frame Header will be read, which can be used to specify FP based unwinding for a function which does not have unwinding information.
+NOTE: The mapped_size is generally either the same as unwind_data_size (if the unwinding data was mapped in memory by the running process) or zero (if the unwinding data is not mapped by the process). If the unwinding data was not mapped, frame-pointer-based unwinding may still be possible, depending on the unwinding backend and whether the generated code maintains valid frame pointers.

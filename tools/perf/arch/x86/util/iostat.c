@@ -129,13 +129,13 @@ static int iio_root_ports_list_insert(struct iio_root_ports_list *list,
 	struct iio_root_port **tmp_buf;
 
 	if (list && rp) {
-		rp->idx = list->nr_entries++;
 		tmp_buf = realloc(list->rps,
-				  list->nr_entries * sizeof(*list->rps));
+				  (list->nr_entries + 1) * sizeof(*list->rps));
 		if (!tmp_buf) {
 			pr_err("Failed to realloc memory\n");
 			return -ENOMEM;
 		}
+		rp->idx = list->nr_entries++;
 		tmp_buf[rp->idx] = rp;
 		list->rps = tmp_buf;
 	}
@@ -233,9 +233,14 @@ static int iio_root_port_parse_str(u32 *domain, u8 *bus, char *str)
 	 * Valid bus range [0:ff]
 	 * Example: 0000:af, 0:3d, 01:7
 	 */
-	regcomp(&regex, "^([a-f0-9A-F]{1,}):([a-f0-9A-F]{1,2})", REG_EXTENDED);
+	ret = regcomp(&regex, "^([a-f0-9A-F]{1,4}):([a-f0-9A-F]{1,2})$",
+		      REG_EXTENDED);
+	if (ret)
+		return ret;
 	ret = regexec(&regex, str, 0, NULL, 0);
-	if (ret || sscanf(str, "%08x:%02hhx", domain, bus) != 2)
+	if (!ret && sscanf(str, "%04x:%02hhx", domain, bus) != 2)
+		ret = -EINVAL;
+	if (ret)
 		pr_warning("Unrecognized root port format: %s\n"
 			   "Please use the following format:\n"
 			   "\t [domain]:[bus]\n"
@@ -310,8 +315,10 @@ static int iostat_event_group(struct evlist *evl,
 	int metrics_count = iostat_metrics_count();
 	char *iostat_cmd = calloc(len_template, 1);
 
-	if (!iostat_cmd)
-		return -ENOMEM;
+	if (!iostat_cmd) {
+		ret = -ENOMEM;
+		goto err;
+	}
 
 	for (idx = 0; idx < list->nr_entries; idx++) {
 		sprintf(iostat_cmd, iostat_cmd_template,
@@ -434,20 +441,12 @@ void iostat_print_metric(struct perf_stat_config *config, struct evsel *evsel,
 			 struct perf_stat_output_ctx *out)
 {
 	double iostat_value = 0;
-	u64 prev_count_val = 0;
 	const char *iostat_metric = iostat_metric_by_idx(evsel->core.idx);
 	u8 die = ((struct iio_root_port *)evsel->priv)->die;
 	struct perf_counts_values *count = perf_counts(evsel->counts, die, 0);
 
 	if (count && count->run && count->ena) {
-		if (evsel->prev_raw_counts && !out->force_header) {
-			struct perf_counts_values *prev_count =
-				perf_counts(evsel->prev_raw_counts, die, 0);
-
-			prev_count_val = prev_count->val;
-			prev_count->val = count->val;
-		}
-		iostat_value = (count->val - prev_count_val) /
+		iostat_value = count->val /
 			       ((double) count->run / count->ena);
 	}
 	out->print_metric(config, out->ctx, METRIC_THRESHOLD_UNKNOWN, "%8.0f", iostat_metric,

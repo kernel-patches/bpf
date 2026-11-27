@@ -140,6 +140,12 @@ static int perf_top__parse_source(struct perf_top *top, struct hist_entry *he)
 	}
 
 	notes = symbol__annotation(sym);
+	if (!notes) {
+		pr_err("Not enough memory for annotating '%s' symbol!\n",
+		       sym->name);
+		sleep(1);
+		return err;
+	}
 	annotation__lock(notes);
 
 	if (!symbol__hists(sym, evlist__nr_entries(top->evlist))) {
@@ -201,7 +207,7 @@ static void perf_top__record_precise_ip(struct perf_top *top,
 					struct hist_entry *he,
 					struct perf_sample *sample,
 					u64 ip)
-	EXCLUSIVE_LOCKS_REQUIRED(he->hists->lock)
+	__must_hold(&he->hists->lock)
 {
 	struct annotation *notes;
 	struct symbol *sym = he->ms.sym;
@@ -213,13 +219,16 @@ static void perf_top__record_precise_ip(struct perf_top *top,
 		return;
 
 	notes = symbol__annotation(sym);
+	if (!notes) {
+		err = -ENOMEM;
+	} else {
+		if (!annotation__trylock(notes))
+			return;
 
-	if (!annotation__trylock(notes))
-		return;
+		err = hist_entry__inc_addr_samples(he, sample, ip);
 
-	err = hist_entry__inc_addr_samples(he, sample, ip);
-
-	annotation__unlock(notes);
+		annotation__unlock(notes);
+	}
 
 	if (unlikely(err)) {
 		/*
@@ -255,6 +264,8 @@ static void perf_top__show_details(struct perf_top *top)
 
 	symbol = he->ms.sym;
 	notes = symbol__annotation(symbol);
+	if (!notes)
+		return;
 
 	annotation__lock(notes);
 
@@ -730,7 +741,7 @@ repeat:
 static int hist_iter__top_callback(struct hist_entry_iter *iter,
 				   struct addr_location *al, bool single,
 				   void *arg)
-	EXCLUSIVE_LOCKS_REQUIRED(iter->he->hists->lock)
+	__must_hold(&iter->he->hists->lock)
 {
 	struct perf_top *top = arg;
 
@@ -1578,6 +1589,8 @@ int cmd_top(int argc, const char **argv)
 	OPT_INTEGER(0, "max-stack", &top.max_stack,
 		    "Set the maximum stack depth when parsing the callchain. "
 		    "Default: kernel.perf_event_max_stack or " __stringify(PERF_MAX_STACK_DEPTH)),
+	OPT_BOOLEAN(0, "lazy-load-symbols", &symbol_conf.lazy_load_symbols,
+		    "Read symbol names only when they are needed"),
 	OPT_CALLBACK(0, "ignore-callees", NULL, "regex",
 		   "ignore callees of these functions in call graphs",
 		   report_parse_ignore_callees_opt),

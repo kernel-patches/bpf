@@ -1302,7 +1302,7 @@ static void callchain__lbr_callstack_printf(struct perf_sample *sample)
 			break;
 	}
 
-	if ((i != kernel_callchain_nr) && lbr_stack->nr) {
+	if ((i != kernel_callchain_nr) && lbr_stack && lbr_stack->nr) {
 		u64 total_nr;
 		/*
 		 * LBR callstack can only get user call chain,
@@ -2773,7 +2773,7 @@ static const u32 perf_event__min_size[PERF_RECORD_HEADER_MAX] = {
 	[PERF_RECORD_HEADER_FEATURE]	  = sizeof(struct perf_record_header_feature),
 	[PERF_RECORD_COMPRESSED2]	  = sizeof(struct perf_record_compressed2),
 	[PERF_RECORD_BPF_METADATA]	  = sizeof(struct perf_record_bpf_metadata),
-	[PERF_RECORD_CALLCHAIN_DEFERRED]  = sizeof(struct perf_event_header) + sizeof(__u64),
+	[PERF_RECORD_CALLCHAIN_DEFERRED]  = sizeof(struct perf_record_callchain_deferred),
 	/*
 	 * SCHEDSTAT events have a version-dependent union after the
 	 * fixed header fields; the minimum is the base (pre-union)
@@ -3965,11 +3965,13 @@ size_t perf_session__fprintf(struct perf_session *session, FILE *fp)
 {
 	size_t ret = machine__fprintf(&session->machines.host, fp);
 
+	down_read(&session->machines.lock);
 	for (struct rb_node *nd = rb_first_cached(&session->machines.guests); nd; nd = rb_next(nd)) {
 		struct machine *pos = rb_entry(nd, struct machine, rb_node);
 
 		ret += machine__fprintf(pos, fp);
 	}
+	up_read(&session->machines.lock);
 	return ret;
 }
 
@@ -4181,16 +4183,18 @@ int perf_session__dsos_hit_all(struct perf_session *session)
 	if (err)
 		return err;
 
+	down_read(&session->machines.lock);
 	for (nd = rb_first_cached(&session->machines.guests); nd;
 	     nd = rb_next(nd)) {
 		struct machine *pos = rb_entry(nd, struct machine, rb_node);
 
 		err = machine__hit_all_dsos(pos);
 		if (err)
-			return err;
+			break;
 	}
+	up_read(&session->machines.lock);
 
-	return 0;
+	return err;
 }
 
 struct perf_env *perf_session__env(struct perf_session *session)
