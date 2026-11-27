@@ -3882,6 +3882,14 @@ static const struct enetc_drvdata enetc4_pf_data = {
 	.eth_ops = &enetc4_pf_ethtool_ops,
 };
 
+static const struct enetc_drvdata enetc4_6_pf_data = {
+	.sysclk_freq = ENETC_CLK_133M,
+	.tx_csum = true,
+	.max_frags = ENETC4_MAX_SKB_FRAGS,
+	.pmac_offset = ENETC4_PMAC_OFFSET,
+	.eth_ops = &enetc4_pf_ethtool_ops,
+};
+
 static const struct enetc_drvdata enetc4_ppm_data = {
 	.sysclk_freq = ENETC_CLK_333M,
 	.tx_csum = true,
@@ -3911,6 +3919,13 @@ static const struct enetc_drvdata enetc4_s32n79_ppm_data = {
 
 static const struct enetc_drvdata enetc4_s32n79_vf_data = {
 	.sysclk_freq = ENETC_CLK_500M,
+	.tx_csum = true,
+	.max_frags = ENETC4_MAX_SKB_FRAGS,
+	.eth_ops = &enetc_vf_ethtool_ops,
+};
+
+static const struct enetc_drvdata enetc4_6_vf_data = {
+	.sysclk_freq = ENETC_CLK_133M,
 	.tx_csum = true,
 	.max_frags = ENETC4_MAX_SKB_FRAGS,
 	.eth_ops = &enetc_vf_ethtool_ops,
@@ -3957,6 +3972,14 @@ static const struct enetc_platform_info enetc_info[] = {
 	{ .revision = ENETC_REV_4_4,
 	  .dev_id = NXP_ENETC_VF_DEV_ID,
 	  .data = &enetc4_s32n79_vf_data,
+	},
+	{ .revision = ENETC_REV_4_6,
+	  .dev_id = NXP_ENETC_PF_DEV_ID,
+	  .data = &enetc4_6_pf_data,
+	},
+	{ .revision = ENETC_REV_4_6,
+	  .dev_id = NXP_ENETC_VF_DEV_ID,
+	  .data = &enetc4_6_vf_data,
 	},
 };
 
