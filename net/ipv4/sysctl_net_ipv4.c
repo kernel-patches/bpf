@@ -903,6 +903,13 @@ static const struct ctl_table ipv4_net_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
 	},
+	{
+		.procname	= "tcp_l3mdev_exempt_ports",
+		.data		= &init_net.ipv4.sysctl_tcp_l3mdev_exempt_ports,
+		.maxlen		= 65536,
+		.mode		= 0644,
+		.proc_handler	= proc_do_large_bitmap,
+	},
 #endif
 	{
 		.procname	= "tcp_mtu_probing",
@@ -1709,10 +1716,21 @@ static __net_init int ipv4_sysctl_init_net(struct net *net)
 	if (!net->ipv4.sysctl_local_reserved_ports)
 		goto err_ports;
 
+#ifdef CONFIG_NET_L3_MASTER_DEV
+	net->ipv4.sysctl_tcp_l3mdev_exempt_ports =
+		kzalloc(65536 / 8, GFP_KERNEL);
+	if (!net->ipv4.sysctl_tcp_l3mdev_exempt_ports)
+		goto err_l3mdev_ports;
+#endif
+
 	proc_fib_multipath_hash_set_seed(net, 0);
 
 	return 0;
 
+#ifdef CONFIG_NET_L3_MASTER_DEV
+err_l3mdev_ports:
+	kfree(net->ipv4.sysctl_local_reserved_ports);
+#endif
 err_ports:
 	unregister_net_sysctl_table(net->ipv4.ipv4_hdr);
 err_reg:
@@ -1730,6 +1748,9 @@ static __net_exit void ipv4_sysctl_exit_net(struct net *net)
 	unregister_net_sysctl_table(net->ipv4.ipv4_hdr);
 	kfree(table);
 	kfree(net->ipv4.sysctl_local_reserved_ports);
+#ifdef CONFIG_NET_L3_MASTER_DEV
+	kfree(net->ipv4.sysctl_tcp_l3mdev_exempt_ports);
+#endif
 }
 
 static __net_initdata struct pernet_operations ipv4_sysctl_ops = {

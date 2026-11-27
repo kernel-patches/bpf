@@ -271,6 +271,9 @@ struct netns_ipv4 {
 
 #ifdef CONFIG_SYSCTL
 	unsigned long *sysctl_local_reserved_ports;
+#ifdef CONFIG_NET_L3_MASTER_DEV
+	unsigned long *sysctl_tcp_l3mdev_exempt_ports;
+#endif
 	int sysctl_ip_prot_sock;
 #endif
 
