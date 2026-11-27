@@ -2927,13 +2927,22 @@ ptp_ocp_sma_fb_init(struct ptp_ocp *bp)
 		for (i = 0; i < OCP_SMA_NUM; i++)
 			bp->sma[i].fixed_dir = true;
 	} else {
-		reg = ioread32(&bp->sma_map1->gpio1);
-		bp->sma[0].mode = reg & BIT(15) ? SMA_MODE_IN : SMA_MODE_OUT;
-		bp->sma[1].mode = reg & BIT(31) ? SMA_MODE_IN : SMA_MODE_OUT;
+		u32 inputs[] = { ioread32(&bp->sma_map1->gpio1),
+				 ioread32(&bp->sma_map2->gpio1) };
+		u32 outputs[] = { reg, ioread32(&bp->sma_map1->gpio2) };
 
-		reg = ioread32(&bp->sma_map1->gpio2);
-		bp->sma[2].mode = reg & BIT(15) ? SMA_MODE_OUT : SMA_MODE_IN;
-		bp->sma[3].mode = reg & BIT(31) ? SMA_MODE_OUT : SMA_MODE_IN;
+		for (i = 0; i < OCP_SMA_NUM; i++) {
+			u32 mask = SMA_ENABLE << (16 * (i & 1));
+			bool input = inputs[i / 2] & mask;
+			bool output = outputs[i / 2] & mask;
+
+			bp->sma[i].disabled = !input && !output;
+			/* If both are active, retain this connector's default. */
+			if (!output)
+				bp->sma[i].mode = SMA_MODE_IN;
+			else if (!input)
+				bp->sma[i].mode = SMA_MODE_OUT;
+		}
 	}
 }
 
