@@ -22,18 +22,14 @@ tprogs-y += lathist
 tprogs-y += offwaketime
 tprogs-y += spintest
 tprogs-y += map_perf_test
-tprogs-y += xdp_router_ipv4
 tprogs-y += trace_event
 tprogs-y += sampleip
 tprogs-y += tc_l2_redirect
 tprogs-y += lwt_len_hist
-tprogs-y += xdp_tx_iptunnel
 tprogs-y += test_map_in_map
 tprogs-y += per_socket_stats_example
 tprogs-y += syscall_tp
 tprogs-y += cpustat
-tprogs-y += xdp_adjust_tail
-tprogs-y += xdp_fwd
 tprogs-y += task_fd_query
 tprogs-y += ibumad
 tprogs-y += hbm
@@ -47,7 +43,6 @@ LIBBPF = $(LIBBPF_OUTPUT)/libbpf.a
 
 CGROUP_HELPERS := ../../tools/testing/selftests/bpf/cgroup_helpers.o
 TRACE_HELPERS := ../../tools/testing/selftests/bpf/trace_helpers.o
-XDP_SAMPLE := xdp_sample_user.o
 
 fds_example-objs := fds_example.o
 sockex1-objs := sockex1_user.o
@@ -67,18 +62,13 @@ trace_event-objs := trace_event_user.o $(TRACE_HELPERS)
 sampleip-objs := sampleip_user.o $(TRACE_HELPERS)
 tc_l2_redirect-objs := tc_l2_redirect_user.o
 lwt_len_hist-objs := lwt_len_hist_user.o
-xdp_tx_iptunnel-objs := xdp_tx_iptunnel_user.o
 test_map_in_map-objs := test_map_in_map_user.o
 per_socket_stats_example-objs := cookie_uid_helper_example.o
 syscall_tp-objs := syscall_tp_user.o
 cpustat-objs := cpustat_user.o
-xdp_adjust_tail-objs := xdp_adjust_tail_user.o
-xdp_fwd-objs := xdp_fwd_user.o
 task_fd_query-objs := task_fd_query_user.o $(TRACE_HELPERS)
 ibumad-objs := ibumad_user.o
 hbm-objs := hbm.o $(CGROUP_HELPERS)
-
-xdp_router_ipv4-objs := xdp_router_ipv4_user.o $(XDP_SAMPLE)
 
 # Tell kbuild to always build the programs
 always-y := $(tprogs-y)
@@ -101,7 +91,6 @@ always-y += parse_varlen.o parse_simple.o parse_ldabs.o
 always-y += trace_event_kern.o
 always-y += sampleip_kern.o
 always-y += lwt_len_hist.bpf.o
-always-y += xdp_tx_iptunnel_kern.o
 always-y += test_map_in_map.bpf.o
 always-y += tcp_synrto_kern.o
 always-y += tcp_rwnd_kern.o
@@ -112,11 +101,8 @@ always-y += tcp_clamp_kern.o
 always-y += tcp_basertt_kern.o
 always-y += tcp_tos_reflect_kern.o
 always-y += tcp_dumpstats_kern.o
-always-y += xdp2skb_meta_kern.o
 always-y += syscall_tp_kern.o
 always-y += cpustat_kern.o
-always-y += xdp_adjust_tail_kern.o
-always-y += xdp_fwd_kern.o
 always-y += task_fd_query_kern.o
 always-y += ibumad_kern.o
 always-y += hbm_out_kern.o
@@ -167,7 +153,6 @@ TPROGS_LDFLAGS := -L$(SYSROOT)/usr/lib
 endif
 
 TPROGS_LDLIBS			+= $(LIBBPF) -lelf -lz
-TPROGLDLIBS_xdp_router_ipv4	+= -lm -pthread
 TPROGLDLIBS_tracex4		+= -lrt
 TPROGLDLIBS_trace_output	+= -lrt
 TPROGLDLIBS_map_perf_test	+= -lrt
@@ -277,27 +262,15 @@ $(BPF_SAMPLES_PATH)/*.c: verify_target_bpf $(LIBBPF)
 $(src)/*.c: verify_target_bpf $(LIBBPF)
 
 libbpf_hdrs: $(LIBBPF)
-$(obj)/$(TRACE_HELPERS) $(obj)/$(CGROUP_HELPERS) $(obj)/$(XDP_SAMPLE): | libbpf_hdrs
+$(obj)/$(TRACE_HELPERS) $(obj)/$(CGROUP_HELPERS): | libbpf_hdrs
 
 .PHONY: libbpf_hdrs
-
-$(obj)/xdp_router_ipv4_user.o: $(obj)/xdp_router_ipv4.skel.h
 
 $(obj)/tracex5.bpf.o: $(obj)/syscall_nrs.h
 $(obj)/hbm_out_kern.o: $(src)/hbm.h $(src)/hbm_kern.h
 $(obj)/hbm.o: $(src)/hbm.h
 $(obj)/hbm_edt_kern.o: $(src)/hbm.h $(src)/hbm_kern.h
 
-# Override includes for xdp_sample_user.o because $(srctree)/usr/include in
-# TPROGS_CFLAGS causes conflicts
-XDP_SAMPLE_CFLAGS += -Wall -O2 \
-		     -I$(src)/../../tools/include \
-		     -I$(src)/../../tools/include/uapi \
-		     -I$(LIBBPF_INCLUDE) \
-		     -I$(src)/../../tools/testing/selftests/bpf
-
-$(obj)/$(XDP_SAMPLE): TPROGS_CFLAGS = $(XDP_SAMPLE_CFLAGS) $(TPROGS_USER_CFLAGS)
-$(obj)/$(XDP_SAMPLE): $(src)/xdp_sample_user.h $(src)/xdp_sample_shared.h
 # Override includes for trace_helpers.o because __must_check won't be defined
 # in our include path.
 $(obj)/$(TRACE_HELPERS): TPROGS_CFLAGS := $(TPROGS_CFLAGS) -D__must_check=
@@ -336,9 +309,7 @@ endef
 
 CLANG_SYS_INCLUDES = $(call get_sys_includes,$(CLANG))
 
-$(obj)/xdp_router_ipv4.bpf.o: $(obj)/xdp_sample.bpf.o
-
-$(obj)/%.bpf.o: $(src)/%.bpf.c $(obj)/vmlinux.h $(src)/xdp_sample.bpf.h $(src)/xdp_sample_shared.h
+$(obj)/%.bpf.o: $(src)/%.bpf.c $(obj)/vmlinux.h
 	@echo "  CLANG-BPF " $@
 	$(Q)$(CLANG) -g -O2 --target=bpf -D__TARGET_ARCH_$(SRCARCH) \
 		-fms-extensions -Wno-microsoft-anon-tag \
@@ -346,23 +317,6 @@ $(obj)/%.bpf.o: $(src)/%.bpf.c $(obj)/vmlinux.h $(src)/xdp_sample.bpf.h $(src)/x
 		-I$(srctree)/samples/bpf -I$(srctree)/tools/include \
 		-I$(LIBBPF_INCLUDE) $(CLANG_SYS_INCLUDES) \
 		-c $(filter %.bpf.c,$^) -o $@
-
-LINKED_SKELS := xdp_router_ipv4.skel.h
-clean-files += $(LINKED_SKELS)
-
-xdp_router_ipv4.skel.h-deps := xdp_router_ipv4.bpf.o xdp_sample.bpf.o
-
-LINKED_BPF_SRCS := $(patsubst %.bpf.o,%.bpf.c,$(foreach skel,$(LINKED_SKELS),$($(skel)-deps)))
-
-BPF_SRCS_LINKED := $(notdir $(wildcard $(src)/*.bpf.c))
-BPF_OBJS_LINKED := $(patsubst %.bpf.c,$(obj)/%.bpf.o, $(BPF_SRCS_LINKED))
-BPF_SKELS_LINKED := $(addprefix $(obj)/,$(LINKED_SKELS))
-
-$(BPF_SKELS_LINKED): $(BPF_OBJS_LINKED) $(BPFTOOL)
-	@echo "  BPF GEN-OBJ " $(@:.skel.h=)
-	$(Q)$(BPFTOOL) gen object $(@:.skel.h=.lbpf.o) $(addprefix $(obj)/,$($(@F)-deps))
-	@echo "  BPF GEN-SKEL" $(@:.skel.h=)
-	$(Q)$(BPFTOOL) gen skeleton $(@:.skel.h=.lbpf.o) name $(notdir $(@:.skel.h=)) > $@
 
 # asm/sysreg.h - inline assembly used by it is incompatible with llvm.
 # But, there is no easy way to fix it, so just exclude it since it is

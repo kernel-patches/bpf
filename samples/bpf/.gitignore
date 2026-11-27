@@ -36,10 +36,6 @@ tracex4
 tracex5
 tracex6
 tracex7
-xdp_adjust_tail
-xdp_fwd
-xdp_router_ipv4
-xdp_tx_iptunnel
 testfile.img
 hbm_out.log
 iperf.*
