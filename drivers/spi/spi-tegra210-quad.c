@@ -533,8 +533,7 @@ static int tegra_qspi_start_tx_dma(struct tegra_qspi *tqspi, struct spi_transfer
 		return -EIO;
 	}
 
-	tqspi->tx_dma_desc->callback = tegra_qspi_dma_complete;
-	tqspi->tx_dma_desc->callback_param = &tqspi->tx_dma_complete;
+	dmaengine_desc_set_callback(tqspi->tx_dma_desc, tegra_qspi_dma_complete, NULL, &tqspi->tx_dma_complete);
 	dmaengine_submit(tqspi->tx_dma_desc);
 	dma_async_issue_pending(tqspi->tx_dma_chan);
 
@@ -561,8 +560,7 @@ static int tegra_qspi_start_rx_dma(struct tegra_qspi *tqspi, struct spi_transfer
 		return -EIO;
 	}
 
-	tqspi->rx_dma_desc->callback = tegra_qspi_dma_complete;
-	tqspi->rx_dma_desc->callback_param = &tqspi->rx_dma_complete;
+	dmaengine_desc_set_callback(tqspi->rx_dma_desc, tegra_qspi_dma_complete, NULL, &tqspi->rx_dma_complete);
 	dmaengine_submit(tqspi->rx_dma_desc);
 	dma_async_issue_pending(tqspi->rx_dma_chan);
 
@@ -2217,7 +2215,6 @@ exit_free_irq:
 exit_destroy_wq:
 	destroy_workqueue(tqspi->wq);
 exit_pm_disable:
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_force_suspend(&pdev->dev);
 	tegra_qspi_deinit_dma(tqspi);
 	return ret;
@@ -2237,7 +2234,6 @@ static void tegra_qspi_remove(struct platform_device *pdev)
 	spi_unregister_controller(host);
 	free_irq(tqspi->irq, tqspi);
 	destroy_workqueue(tqspi->wq);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_force_suspend(&pdev->dev);
 	tegra_qspi_deinit_dma(tqspi);
 }

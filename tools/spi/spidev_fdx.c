@@ -15,7 +15,7 @@
 
 static int verbose;
 
-static void do_read(int fd, int len)
+static int do_read(int fd, int len)
 {
 	unsigned char	buf[32], *bp;
 	int		status;
@@ -30,11 +30,11 @@ static void do_read(int fd, int len)
 	status = read(fd, buf, len);
 	if (status < 0) {
 		perror("read");
-		return;
+		return -1;
 	}
 	if (status != len) {
 		fprintf(stderr, "short read\n");
-		return;
+		return -1;
 	}
 
 	printf("read(%2d, %2d): %02x %02x,", len, status,
@@ -44,9 +44,10 @@ static void do_read(int fd, int len)
 	while (status-- > 0)
 		printf(" %02x", *bp++);
 	printf("\n");
+	return 0;
 }
 
-static void do_msg(int fd, int len)
+static int do_msg(int fd, int len)
 {
 	struct spi_ioc_transfer	xfer[2];
 	unsigned char		buf[32], *bp;
@@ -68,39 +69,41 @@ static void do_msg(int fd, int len)
 	status = ioctl(fd, SPI_IOC_MESSAGE(2), xfer);
 	if (status < 0) {
 		perror("SPI_IOC_MESSAGE");
-		return;
+		return -1;
 	}
 
 	printf("response(%2d, %2d): ", len, status);
 	for (bp = buf; len; len--)
 		printf(" %02x", *bp++);
 	printf("\n");
+	return 0;
 }
 
-static void dumpstat(const char *name, int fd)
+static int dumpstat(const char *name, int fd)
 {
 	__u8	lsb, bits;
 	__u32	mode, speed;
 
 	if (ioctl(fd, SPI_IOC_RD_MODE32, &mode) < 0) {
 		perror("SPI rd_mode");
-		return;
+		return -1;
 	}
 	if (ioctl(fd, SPI_IOC_RD_LSB_FIRST, &lsb) < 0) {
 		perror("SPI rd_lsb_fist");
-		return;
+		return -1;
 	}
 	if (ioctl(fd, SPI_IOC_RD_BITS_PER_WORD, &bits) < 0) {
 		perror("SPI bits_per_word");
-		return;
+		return -1;
 	}
 	if (ioctl(fd, SPI_IOC_RD_MAX_SPEED_HZ, &speed) < 0) {
 		perror("SPI max_speed_hz");
-		return;
+		return -1;
 	}
 
 	printf("%s: spi mode 0x%x, %d bits %sper word, %u Hz max\n",
 		name, mode, bits, lsb ? "(lsb first) " : "", speed);
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -108,7 +111,7 @@ int main(int argc, char **argv)
 	int		c;
 	int		readcount = 0;
 	int		msglen = 0;
-	int		fd;
+	int		fd, ret;
 	const char	*name;
 
 	while ((c = getopt(argc, argv, "hm:r:v")) != EOF) {
@@ -146,14 +149,12 @@ usage:
 		return 1;
 	}
 
-	dumpstat(name, fd);
-
-	if (msglen)
-		do_msg(fd, msglen);
-
-	if (readcount)
-		do_read(fd, readcount);
+	ret = dumpstat(name, fd);
+	if (!ret && msglen)
+		ret = do_msg(fd, msglen);
+	if (!ret && readcount)
+		ret = do_read(fd, readcount);
 
 	close(fd);
-	return 0;
+	return ret ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -789,7 +789,6 @@ out_rel_pm:
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 
 	return status;
 }
@@ -806,7 +805,6 @@ static void orion_spi_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 }
 
 MODULE_ALIAS("platform:" DRIVER_NAME);
@@ -825,9 +823,19 @@ static int orion_spi_runtime_resume(struct device *dev)
 {
 	struct spi_controller *host = dev_get_drvdata(dev);
 	struct orion_spi *spi = spi_controller_get_devdata(host);
+	int ret;
 
-	clk_prepare_enable(spi->axi_clk);
-	return clk_prepare_enable(spi->clk);
+	ret = clk_prepare_enable(spi->axi_clk);
+	if (ret)
+		return ret;
+
+	ret = clk_prepare_enable(spi->clk);
+	if (ret) {
+		clk_disable_unprepare(spi->axi_clk);
+		return ret;
+	}
+
+	return 0;
 }
 
 static const struct dev_pm_ops orion_spi_pm_ops = {

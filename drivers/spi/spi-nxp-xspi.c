@@ -824,7 +824,7 @@ static int nxp_xspi_dma_init(struct device *dev, struct nxp_xspi *xspi)
 
 	xspi->dma_rx = rx;
 	init_completion(&xspi->dma_rx_c);
-	xspi->dma_copy_align = 1 << rx->device->copy_align;
+	xspi->dma_copy_align = 1 << dmaengine_get_copy_align(rx);
 
 	return 0;
 }
@@ -872,8 +872,7 @@ static int nxp_xspi_ahb_dma_read(struct nxp_xspi *xspi,
 		goto err_unmap_src;
 	}
 
-	desc->callback = nxp_xspi_dma_rx_callback;
-	desc->callback_param = xspi;
+	dmaengine_desc_set_callback(desc, nxp_xspi_dma_rx_callback, NULL, xspi);
 	reinit_completion(&xspi->dma_rx_c);
 	dmaengine_submit(desc);
 	dma_async_issue_pending(chan);

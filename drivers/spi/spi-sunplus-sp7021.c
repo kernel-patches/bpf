@@ -113,7 +113,6 @@ static int sp7021_spi_target_abort(struct spi_controller *ctlr)
 	struct sp7021_spi_ctlr *pspim = spi_controller_get_devdata(ctlr);
 
 	complete(&pspim->target_isr);
-	complete(&pspim->isr_done);
 	return 0;
 }
 
@@ -130,7 +129,7 @@ static int sp7021_spi_target_tx(struct spi_device *spi, struct spi_transfer *xfe
 	value = readl(pspim->s_base + SP7021_DATA_RDY_REG);
 	value |= SP7021_SLAVE_DATA_RDY;
 	writel(value, pspim->s_base + SP7021_DATA_RDY_REG);
-	if (wait_for_completion_interruptible(&pspim->isr_done)) {
+	if (wait_for_completion_interruptible(&pspim->target_isr)) {
 		dev_err(&spi->dev, "%s() wait_for_completion err\n", __func__);
 		return -EINTR;
 	}
@@ -142,12 +141,12 @@ static int sp7021_spi_target_rx(struct spi_device *spi, struct spi_transfer *xfe
 	struct sp7021_spi_ctlr *pspim = spi_controller_get_devdata(spi->controller);
 	u32 value;
 
-	reinit_completion(&pspim->isr_done);
+	reinit_completion(&pspim->target_isr);
 	value = SP7021_SLAVE_DMA_EN | FIELD_PREP(SP7021_SLAVE_DMA_CMD, 3);
 	writel(value, pspim->s_base + SP7021_SLAVE_DMA_CTRL_REG);
 	writel(xfer->len, pspim->s_base + SP7021_SLAVE_DMA_LENGTH_REG);
 	writel(xfer->rx_dma, pspim->s_base + SP7021_SLAVE_DMA_ADDR_REG);
-	if (wait_for_completion_interruptible(&pspim->isr_done)) {
+	if (wait_for_completion_interruptible(&pspim->target_isr)) {
 		dev_err(&spi->dev, "%s() wait_for_completion err\n", __func__);
 		return -EINTR;
 	}
@@ -393,11 +392,6 @@ static int sp7021_spi_target_transfer_one(struct spi_controller *ctlr, struct sp
 	return ret;
 }
 
-static void sp7021_spi_reset_control_assert(void *data)
-{
-	reset_control_assert(data);
-}
-
 static int sp7021_spi_controller_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -463,17 +457,10 @@ static int sp7021_spi_controller_probe(struct platform_device *pdev)
 	if (IS_ERR(pspim->spi_clk))
 		return dev_err_probe(dev, PTR_ERR(pspim->spi_clk), "clk get fail\n");
 
-	pspim->rstc = devm_reset_control_get_exclusive(dev, NULL);
+	pspim->rstc = devm_reset_control_get_exclusive_deasserted(dev, NULL);
 	if (IS_ERR(pspim->rstc))
-		return dev_err_probe(dev, PTR_ERR(pspim->rstc), "rst get fail\n");
-
-	ret = reset_control_deassert(pspim->rstc);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to deassert reset\n");
-
-	ret = devm_add_action_or_reset(dev, sp7021_spi_reset_control_assert, pspim->rstc);
-	if (ret)
-		return ret;
+		return dev_err_probe(dev, PTR_ERR(pspim->rstc),
+				     "failed to get and deassert reset\n");
 
 	ret = devm_request_irq(dev, pspim->m_irq, sp7021_spi_host_irq,
 			       IRQF_TRIGGER_RISING, pdev->name, pspim);
@@ -507,17 +494,27 @@ static int sp7021_spi_controller_suspend(struct device *dev)
 {
 	struct spi_controller *ctlr = dev_get_drvdata(dev);
 	struct sp7021_spi_ctlr *pspim = spi_controller_get_devdata(ctlr);
+	int ret;
 
-	return reset_control_assert(pspim->rstc);
+	ret = reset_control_assert(pspim->rstc);
+	clk_disable_unprepare(pspim->spi_clk);
+
+	return ret;
 }
 
 static int sp7021_spi_controller_resume(struct device *dev)
 {
 	struct spi_controller *ctlr = dev_get_drvdata(dev);
 	struct sp7021_spi_ctlr *pspim = spi_controller_get_devdata(ctlr);
+	int ret;
+
+	ret = clk_prepare_enable(pspim->spi_clk);
+	if (ret)
+		return ret;
 
 	reset_control_deassert(pspim->rstc);
-	return clk_prepare_enable(pspim->spi_clk);
+
+	return 0;
 }
 
 static int sp7021_spi_runtime_suspend(struct device *dev)

@@ -472,23 +472,37 @@ static int dw_spi_mmio_resume(struct device *dev)
 	struct dw_spi_mmio *dwsmmio = dev_get_drvdata(dev);
 	int ret;
 
-	clk_prepare_enable(dwsmmio->clk);
-	clk_prepare_enable(dwsmmio->pclk);
+	ret = clk_prepare_enable(dwsmmio->clk);
+	if (ret)
+		return ret;
 
-	reset_control_deassert(dwsmmio->rstc);
+	ret = clk_prepare_enable(dwsmmio->pclk);
+	if (ret)
+		goto err_clk;
+
+	ret = reset_control_deassert(dwsmmio->rstc);
+	if (ret)
+		goto err_pclk;
 
 	if (dwsmmio->platform_resume) {
 		ret = dwsmmio->platform_resume(dwsmmio);
-		if (ret) {
-			reset_control_assert(dwsmmio->rstc);
-
-			clk_disable_unprepare(dwsmmio->pclk);
-			clk_disable_unprepare(dwsmmio->clk);
-			return ret;
-		}
+		if (ret)
+			goto err_rst;
 	}
 
-	return dw_spi_resume_controller(&dwsmmio->dws);
+	ret = dw_spi_resume_controller(&dwsmmio->dws);
+	if (ret)
+		goto err_rst;
+
+	return 0;
+
+err_rst:
+	reset_control_assert(dwsmmio->rstc);
+err_pclk:
+	clk_disable_unprepare(dwsmmio->pclk);
+err_clk:
+	clk_disable_unprepare(dwsmmio->clk);
+	return ret;
 }
 
 static DEFINE_SIMPLE_DEV_PM_OPS(dw_spi_mmio_pm_ops,
