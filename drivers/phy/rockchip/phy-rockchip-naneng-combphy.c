@@ -189,6 +189,7 @@ struct rockchip_combphy_grfcfg {
 	struct combphy_reg pipe_xpcs_phy_ready;
 	struct combphy_reg pipe_pcie1l0_sel;
 	struct combphy_reg pipe_pcie1l1_sel;
+	struct combphy_reg pipe_sgmii_mac_sel;
 	struct combphy_reg u3otg0_port_en;
 	struct combphy_reg u3otg1_port_en;
 };
@@ -216,6 +217,8 @@ struct rockchip_combphy_priv {
 	bool enable_ssc;
 	bool ext_refclk;
 	struct clk *refclk;
+	bool sgmii_mac_sel_present;
+	u32 sgmii_mac_sel;
 };
 
 static void rockchip_combphy_updatel(struct rockchip_combphy_priv *priv,
@@ -356,6 +359,7 @@ static struct phy *rockchip_combphy_xlate(struct device *dev, const struct of_ph
 static int rockchip_combphy_parse_dt(struct device *dev, struct rockchip_combphy_priv *priv)
 {
 	int i;
+	int ret;
 
 	priv->num_clks = devm_clk_bulk_get_all(dev, &priv->clks);
 	if (priv->num_clks < 1)
@@ -389,6 +393,16 @@ static int rockchip_combphy_parse_dt(struct device *dev, struct rockchip_combphy
 	priv->enable_ssc = device_property_present(dev, "rockchip,enable-ssc");
 
 	priv->ext_refclk = device_property_present(dev, "rockchip,ext-refclk");
+
+	if (device_property_present(dev, "rockchip,sgmii-mac-sel")) {
+		ret = device_property_read_u32(dev, "rockchip,sgmii-mac-sel", &priv->sgmii_mac_sel);
+		if (ret) {
+			dev_err(dev, "failed to read sgmii-mac-sel property\n");
+			return ret;
+		}
+
+		priv->sgmii_mac_sel_present = true;
+	}
 
 	priv->phy_rst = devm_reset_control_get_exclusive(dev, "phy");
 	/* fallback to old behaviour */
@@ -820,11 +834,34 @@ static const struct rockchip_combphy_cfg rk3562_combphy_cfgs = {
 	.force_rxterm_det_rdy  = true,
 };
 
+static int rk3568_combphy_select_sgmii_mac(struct rockchip_combphy_priv *priv)
+{
+	const struct rockchip_combphy_grfcfg *cfg = priv->cfg->grfcfg;
+
+	if (!priv->sgmii_mac_sel_present)
+		return 0;
+
+	switch (priv->sgmii_mac_sel) {
+	case 0:
+		rockchip_combphy_param_write(priv->pipe_grf, &cfg->pipe_sgmii_mac_sel, false);
+		break;
+	case 1:
+		rockchip_combphy_param_write(priv->pipe_grf, &cfg->pipe_sgmii_mac_sel, true);
+		break;
+	default:
+		dev_err(priv->dev, "invalid sgmii-mac-sel value %u\n", priv->sgmii_mac_sel);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int rk3568_combphy_cfg(struct rockchip_combphy_priv *priv)
 {
 	const struct rockchip_combphy_grfcfg *cfg = priv->cfg->grfcfg;
 	unsigned long rate;
 	u32 val;
+	int ret;
 
 	switch (priv->type) {
 	case PHY_TYPE_PCIE:
@@ -890,6 +927,10 @@ static int rk3568_combphy_cfg(struct rockchip_combphy_priv *priv)
 		break;
 
 	case PHY_TYPE_SGMII:
+		ret = rk3568_combphy_select_sgmii_mac(priv);
+		if (ret)
+			return ret;
+
 		rockchip_combphy_param_write(priv->pipe_grf, &cfg->pipe_xpcs_phy_ready, true);
 		rockchip_combphy_param_write(priv->phy_grf, &cfg->pipe_phymode_sel, true);
 		rockchip_combphy_param_write(priv->phy_grf, &cfg->pipe_sel_qsgmii, true);
@@ -1001,6 +1042,7 @@ static const struct rockchip_combphy_grfcfg rk3568_combphy_grfcfgs = {
 	.con3_for_sata		= { 0x000c, 15, 0, 0x00, 0x4407 },
 	/* pipe-grf */
 	.pipe_con0_for_sata	= { 0x0000, 15, 0, 0x00, 0x2220 },
+	.pipe_sgmii_mac_sel	= { 0x0040, 1, 1, 0x00, 0x01 },
 	.pipe_xpcs_phy_ready	= { 0x0040, 2, 2, 0x00, 0x01 },
 	.u3otg0_port_en		= { 0x0104, 15, 0, 0x0181, 0x1100 },
 	.u3otg1_port_en		= { 0x0144, 15, 0, 0x0181, 0x1100 },
