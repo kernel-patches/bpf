@@ -257,16 +257,21 @@ static struct neighbour *ip6_dst_neigh_lookup(const struct dst_entry *dst,
 static void ip6_confirm_neigh(const struct dst_entry *dst, const void *daddr)
 {
 	const struct rt6_info *rt = dst_rt6_info(dst);
-	struct net_device *dev = dst_dev(dst);
+	struct net_device *dev;
+
+	rcu_read_lock();
+	dev = dst_dev_rcu(dst);
 
 	daddr = choose_neigh_daddr(rt6_nexthop(rt, &in6addr_any), NULL, daddr);
 	if (!daddr)
-		return;
+		goto out;
 	if (dev->flags & (IFF_NOARP | IFF_LOOPBACK))
-		return;
+		goto out;
 	if (ipv6_addr_is_multicast((const struct in6_addr *)daddr))
-		return;
+		goto out;
 	__ipv6_confirm_neigh(dev, daddr);
+out:
+	rcu_read_unlock();
 }
 
 static struct dst_ops ip6_dst_ops_template = {
