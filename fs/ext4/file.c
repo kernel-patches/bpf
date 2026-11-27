@@ -68,8 +68,9 @@ static bool ext4_should_use_dio(struct kiocb *iocb, struct iov_iter *iter)
 
 static ssize_t ext4_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = file_inode(file);
 	ssize_t ret;
-	struct inode *inode = file_inode(iocb->ki_filp);
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
 		if (!inode_trylock_shared(inode))
@@ -96,7 +97,8 @@ static ssize_t ext4_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		ret = iomap_dio_rw(iocb, to, ext4_iomap_next, NULL, 0, NULL, 0);
 	inode_unlock_shared(inode);
 
-	file_accessed(iocb->ki_filp);
+	/* The kiocb may be gone once the read was queued. */
+	file_accessed(file);
 	return ret;
 }
 

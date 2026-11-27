@@ -87,14 +87,14 @@ static int pipe_lock_cmp_fn(const struct lockdep_map *a,
 
 void pipe_lock(struct pipe_inode_info *pipe)
 {
-	if (pipe->files)
+	if (data_race(READ_ONCE(pipe->files)))
 		mutex_lock(&pipe->mutex);
 }
 EXPORT_SYMBOL(pipe_lock);
 
 void pipe_unlock(struct pipe_inode_info *pipe)
 {
-	if (pipe->files)
+	if (data_race(READ_ONCE(pipe->files)))
 		mutex_unlock(&pipe->mutex);
 }
 EXPORT_SYMBOL(pipe_unlock);

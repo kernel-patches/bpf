@@ -991,7 +991,8 @@ static void complete_signal(int sig, struct task_struct *p, enum pid_type type)
 		 */
 		t = signal->curr_target;
 		while (!wants_signal(sig, t)) {
-			t = next_thread(t);
+			t = list_next_entry_circular(t, &signal->thread_head,
+							thread_node);
 			if (t == signal->curr_target)
 				/*
 				 * No thread needs to be woken.

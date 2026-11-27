@@ -628,6 +628,8 @@ is_uncached_acl(struct posix_acl *acl)
 #define IOP_CACHED_LINK		0x0040
 #define IOP_FASTPERM_MAY_EXEC	0x0080
 #define IOP_FLCTX		0x0100
+/* ->set_acl() does the owner check itself */
+#define IOP_SET_ACL_OWNER_CHECK	0x0200
 
 /*
  * Inode state bits.  Protected by inode->i_lock

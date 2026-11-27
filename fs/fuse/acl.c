@@ -98,6 +98,15 @@ int fuse_set_acl(const struct mnt_idmap *idmap, struct dentry *dentry,
 	const char *name;
 	int ret;
 
+	/*
+	 * Without default_permissions the server does all permission
+	 * checking, including who may change POSIX ACLs. That's the same
+	 * thing fuse_do_setattr() does for chmod() and chown() by passing
+	 * ATTR_FORCE.
+	 */
+	if (fc->default_permissions && !inode_owner_or_capable(idmap, inode))
+		return -EPERM;
+
 	if (fuse_is_bad(inode))
 		return -EIO;
 

@@ -1315,6 +1315,8 @@ int nfs_get_tree_common(struct fs_context *fc)
 		error = nfs_get_cache_cookie(s, ctx);
 		if (error < 0)
 			goto error_splat_super;
+		if (!(server->flags & NFS_MOUNT_UNSHARED))
+			s->s_iflags |= SB_I_MULTIROOT;
 	}
 
 	error = nfs_get_root(s, fc);

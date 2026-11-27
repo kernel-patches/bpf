@@ -451,6 +451,12 @@ static void fuse_init_inode(struct inode *inode, struct fuse_attr *attr,
 	 */
 	if (!fc->posix_acl)
 		inode->i_acl = inode->i_default_acl = ACL_DONT_CACHE;
+	/*
+	 * Whether the kernel or the server decides who may change POSIX ACLs
+	 * depends on default_permissions which FUSE_POSIX_ACL turns on during
+	 * FUSE_INIT. So fuse_set_acl() does the owner check, not the vfs.
+	 */
+	inode->i_opflags |= IOP_SET_ACL_OWNER_CHECK;
 }
 
 static int fuse_inode_eq(struct inode *inode, void *_nodeidp)
