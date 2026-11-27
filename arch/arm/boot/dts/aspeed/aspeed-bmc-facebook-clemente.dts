@@ -673,25 +673,25 @@
 	};
 
 	// Module 0
-	fanctl0: fan-controller@20{
+	fanctl0: fan-controller@20 {
 		compatible = "maxim,max31790";
 		reg = <0x20>;
 	};
 
 	// Module 0
-	fanctl1: fan-controller@23{
+	fanctl1: fan-controller@23 {
 		compatible = "maxim,max31790";
 		reg = <0x23>;
 	};
 
 	// Module 1
-	fanctl2: fan-controller@2c{
+	fanctl2: fan-controller@2c {
 		compatible = "maxim,max31790";
 		reg = <0x2c>;
 	};
 
 	// Module 1
-	fanctl3: fan-controller@2f{
+	fanctl3: fan-controller@2f {
 		compatible = "maxim,max31790";
 		reg = <0x2f>;
 	};
