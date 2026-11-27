@@ -50,9 +50,9 @@
 #define SKL_ADSP_REG_HIPCIE		(SKL_ADSP_IPC_BASE + 0x0C)
 #define SKL_ADSP_REG_HIPCCTL		(SKL_ADSP_IPC_BASE + 0x10)
 
+#define SKL_ADSP_HIPCT_BUSY		BIT(31)
 #define SKL_ADSP_HIPCI_BUSY		BIT(31)
 #define SKL_ADSP_HIPCIE_DONE		BIT(30)
-#define SKL_ADSP_HIPCT_BUSY		BIT(31)
 
 /* CNL Intel HD Audio Inter-Processor Communication Registers */
 #define CNL_ADSP_IPC_BASE               0xC0

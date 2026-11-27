@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config SND_SOC_AN7581_PCM
+	tristate "PCM support for Airoha AN7581 chip"
+	depends on ARCH_AIROHA || COMPILE_TEST
+	select REGMAP_MMIO
+	help
+	  This adds PCM driver for Airoha AN7581 boards
+	  that can be used with other codecs.
+	  Select Y if you have such device.
+	  If unsure select "N".

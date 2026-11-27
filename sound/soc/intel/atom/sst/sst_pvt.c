@@ -255,14 +255,9 @@ out:
 	return ret;
 }
 
-int sst_pm_runtime_put(struct intel_sst_drv *sst_drv)
+void sst_pm_runtime_put(struct intel_sst_drv *sst_drv)
 {
-	int ret;
-
-	ret = pm_runtime_put_autosuspend(sst_drv->dev);
-	if (ret < 0)
-		return ret;
-	return 0;
+	pm_runtime_put_autosuspend(sst_drv->dev);
 }
 
 void sst_fill_header_mrfld(union ipc_header_mrfld *header,

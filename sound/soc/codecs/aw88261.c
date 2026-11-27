@@ -306,7 +306,7 @@ static int aw88261_dev_get_vcalk(struct aw_device *aw_dev, int16_t *vcalk)
 
 	reg_vcalk = (reg_vcalk >> AW88261_VCALK_SHIFT) & (reg_vcalkl >> AW88261_VCALKL_SHIFT);
 
-	if (reg_vcalk & AW88261_EF_VSN_GESLP_SIGN_MASK)
+	if (reg_vcalk & (~AW88261_EF_VSN_GESLP_SIGN_MASK))
 		reg_vcalk = reg_vcalk | (~AW88261_EF_VSN_GESLP_NEG);
 	*vcalk = (int16_t)reg_vcalk;
 

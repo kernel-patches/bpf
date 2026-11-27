@@ -2242,6 +2242,7 @@ static int da7213_i2c_probe(struct i2c_client *i2c)
 	if (ret < 0) {
 		dev_err(&i2c->dev, "Failed to register da7213 component: %d\n",
 			ret);
+		pm_runtime_disable(&i2c->dev);
 	}
 	return ret;
 }

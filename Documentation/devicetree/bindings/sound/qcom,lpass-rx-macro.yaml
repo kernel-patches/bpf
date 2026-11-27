@@ -20,8 +20,12 @@ properties:
           - qcom,sm8550-lpass-rx-macro
           - qcom,sc8280xp-lpass-rx-macro
       - items:
+          - const: qcom,sm8350-lpass-rx-macro
+          - const: qcom,sm8250-lpass-rx-macro
+      - items:
           - enum:
               - qcom,eliza-lpass-rx-macro
+              - qcom,glymur-lpass-rx-macro
               - qcom,kaanapali-lpass-rx-macro
               - qcom,sm8650-lpass-rx-macro
               - qcom,sm8750-lpass-rx-macro
@@ -103,10 +107,11 @@ allOf:
   - if:
       properties:
         compatible:
-          enum:
-            - qcom,sc8280xp-lpass-rx-macro
-            - qcom,sm8250-lpass-rx-macro
-            - qcom,sm8450-lpass-rx-macro
+          contains:
+            enum:
+              - qcom,sc8280xp-lpass-rx-macro
+              - qcom,sm8250-lpass-rx-macro
+              - qcom,sm8450-lpass-rx-macro
     then:
       properties:
         clocks:

@@ -8,6 +8,7 @@
 #include <kunit/device.h>
 #include <kunit/static_stub.h>
 #include <kunit/test.h>
+#include <linux/seq_buf.h>
 #include <linux/slab.h>
 #include "wm_adsp.h"
 
@@ -104,14 +105,15 @@ static void wm_adsp_fw_find_test_pick_file(struct kunit *test)
 	struct wm_adsp_fw_find_test *priv = test->priv;
 	const struct wm_adsp_fw_find_test_params *params = test->param_value;
 	struct wm_adsp *dsp = &priv->dsp;
+	struct seq_buf sb;
 	int i, ret;
 
 	/* Concatenate string of dir content for error messages */
+	seq_buf_init_append(&sb, priv->searched_fw_files,
+			    sizeof(priv->searched_fw_files));
 	for (i = 0; params->dir_files[i]; i++) {
-		strlcat(priv->searched_fw_files, params->dir_files[i],
-			sizeof(priv->searched_fw_files));
-		strlcat(priv->searched_fw_files, ";",
-			sizeof(priv->searched_fw_files));
+		seq_buf_puts(&sb, params->dir_files[i]);
+		seq_buf_puts(&sb, ";");
 	}
 
 	dsp->cs_dsp.name = params->dsp_name;
@@ -160,6 +162,7 @@ static int wm_adsp_fw_find_test_firmware_request_stub(const struct firmware **fi
 	struct kunit *test = kunit_get_current_test();
 	const struct wm_adsp_fw_find_test_params *params = test->param_value;
 	struct wm_adsp_fw_find_test *priv = test->priv;
+	struct seq_buf sb;
 
 	/*
 	 * Searches are accumulated as a single string of space-separated names.
@@ -168,10 +171,12 @@ static int wm_adsp_fw_find_test_firmware_request_stub(const struct firmware **fi
 	 * a simple KUNIT_EXPECT_STREQ(), which avoids the risk of bugs in a
 	 * more complex custom comparison.
 	 */
+	seq_buf_init_append(&sb, priv->searched_fw_files,
+			    sizeof(priv->searched_fw_files));
 	if (priv->searched_fw_files[0] != '\0')
-		strlcat(priv->searched_fw_files, " ", sizeof(priv->searched_fw_files));
+		seq_buf_puts(&sb, " ");
 
-	strlcat(priv->searched_fw_files, filename, sizeof(priv->searched_fw_files));
+	seq_buf_puts(&sb, filename);
 
 	/* Non-parameterized test? */
 	if (!params)

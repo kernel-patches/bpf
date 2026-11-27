@@ -40,6 +40,10 @@
 #define ASM_PARAM_ID_ENCDEC_ENC_CFG_BLK_V2	0x00010DA3
 #define ASM_SESSION_CMD_RUN_V2			0x00010DAA
 #define ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V2	0x00010DA5
+#define ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V4	0x0001320C
+#define ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V5	0x00013222
+/* ADSP ASM service API version at which the V5 PCM media format is supported */
+#define ADSP_ASM_API_VERSION_V2			2
 #define ASM_MEDIA_FMT_MP3			0x00010BE9
 #define ASM_MEDIA_FMT_FLAC			0x00010C16
 #define ASM_MEDIA_FMT_WMA_V9			0x00010DA8
@@ -96,6 +100,31 @@ struct asm_multi_channel_pcm_fmt_blk_v2 {
 	u32 sample_rate;
 	u16 is_signed;
 	u16 reserved;
+	u8 channel_mapping[PCM_MAX_NUM_CHANNEL];
+} __packed;
+
+/* Note: in V4 the channel map precedes endianness/mode (unlike V5) */
+struct asm_multi_channel_pcm_fmt_blk_v4 {
+	struct asm_data_cmd_media_fmt_update_v2 fmt_blk;
+	u16 num_channels;
+	u16 bits_per_sample;
+	u32 sample_rate;
+	u16 is_signed;
+	u16 sample_word_size;
+	u8 channel_mapping[PCM_MAX_NUM_CHANNEL];
+	u16 endianness;		/* 0: little endian */
+	u16 mode;		/* 0: default Q factors */
+} __packed;
+
+struct asm_multi_channel_pcm_fmt_blk_v5 {
+	struct asm_data_cmd_media_fmt_update_v2 fmt_blk;
+	u16 num_channels;
+	u16 bits_per_sample;
+	u32 sample_rate;
+	u16 is_signed;
+	u16 sample_word_size;
+	u16 endianness;		/* 0: little endian */
+	u16 mode;		/* 0: default Q factors */
 	u8 channel_mapping[PCM_MAX_NUM_CHANNEL];
 } __packed;
 
@@ -189,6 +218,33 @@ struct asm_multi_channel_pcm_enc_cfg_v2 {
 	uint16_t  is_signed;
 	uint16_t  reserved;
 	uint8_t   channel_mapping[8];
+} __packed;
+
+/* Note: in V4 the channel map precedes endianness/mode (unlike V5) */
+struct asm_multi_channel_pcm_enc_cfg_v4 {
+	struct asm_stream_cmd_set_encdec_param encdec;
+	struct asm_enc_cfg_blk_param_v2 encblk;
+	u16 num_channels;
+	u16 bits_per_sample;
+	u32 sample_rate;
+	u16 is_signed;
+	u16 sample_word_size;
+	u8 channel_mapping[PCM_MAX_NUM_CHANNEL];
+	u16 endianness;		/* 0: little endian */
+	u16 mode;		/* 0: default Q factors */
+} __packed;
+
+struct asm_multi_channel_pcm_enc_cfg_v5 {
+	struct asm_stream_cmd_set_encdec_param encdec;
+	struct asm_enc_cfg_blk_param_v2 encblk;
+	u16 num_channels;
+	u16 bits_per_sample;
+	u32 sample_rate;
+	u16 is_signed;
+	u16 sample_word_size;
+	u16 endianness;		/* 0: little endian */
+	u16 mode;		/* 0: default Q factors */
+	u8 channel_mapping[PCM_MAX_NUM_CHANNEL];
 } __packed;
 
 struct asm_data_cmd_read_v2 {
@@ -912,6 +968,19 @@ err:
 	return rc;
 }
 
+/*
+ * Both the V4 and V5 multichannel PCM media formats carry the sample word size
+ * needed to describe e.g. 24-bit samples held in a 32-bit word. V5 is only
+ * understood by newer ADSP firmware (ASM API version >= 2); everything else -
+ * including when the version query is unsupported and ainfo is left zeroed -
+ * uses V4, which the QDSP6 firmware has supported since its introduction. (The
+ * old V2 format, which lacks the word size, is no longer used for playback.)
+ */
+static bool q6asm_pcm_fmt_v5_supported(struct audio_client *ac)
+{
+	return ac->q6asm->ainfo.api_version >= ADSP_ASM_API_VERSION_V2;
+}
+
 /**
  * q6asm_open_write() - Open audio client for writing
  * @ac: audio client pointer
@@ -955,7 +1024,9 @@ int q6asm_open_write(struct audio_client *ac, uint32_t stream_id,
 		open->dec_fmt_id = ASM_MEDIA_FMT_MP3;
 		break;
 	case FORMAT_LINEAR_PCM:
-		open->dec_fmt_id = ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V2;
+		open->dec_fmt_id = q6asm_pcm_fmt_v5_supported(ac) ?
+			ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V5 :
+			ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V4;
 		break;
 	case SND_AUDIOCODEC_FLAC:
 		open->dec_fmt_id = ASM_MEDIA_FMT_FLAC;
@@ -1078,6 +1149,7 @@ EXPORT_SYMBOL_GPL(q6asm_run_nowait);
  * @channels: number of audio channels.
  * @channel_map: channel map pointer
  * @bits_per_sample: bits per sample
+ * @sample_word_size: size in bits of the word that holds a sample of a channel
  *
  * Return: Will be an negative value on error or zero on success
  */
@@ -1085,30 +1157,60 @@ int q6asm_media_format_block_multi_ch_pcm(struct audio_client *ac,
 					  uint32_t stream_id,
 					  uint32_t rate, uint32_t channels,
 					  u8 channel_map[PCM_MAX_NUM_CHANNEL],
-					  uint16_t bits_per_sample)
+					  uint16_t bits_per_sample,
+					  uint16_t sample_word_size)
 {
-	struct asm_multi_channel_pcm_fmt_blk_v2 *fmt;
+	bool use_v5 = q6asm_pcm_fmt_v5_supported(ac);
+	struct asm_multi_channel_pcm_fmt_blk_v5 *fmt_v5;
+	struct asm_multi_channel_pcm_fmt_blk_v4 *fmt_v4;
 	struct apr_pkt *pkt;
 	u8 *channel_mapping;
-	int pkt_size = APR_HDR_SIZE + sizeof(*fmt);
+	int pkt_size = APR_HDR_SIZE +
+		       (use_v5 ? sizeof(*fmt_v5) : sizeof(*fmt_v4));
 
 	void *p __free(kfree) = kzalloc(pkt_size, GFP_KERNEL);
 	if (!p)
 		return -ENOMEM;
 
 	pkt = p;
-	fmt = p + APR_HDR_SIZE;
 
 	q6asm_add_hdr(ac, &pkt->hdr, pkt_size, true, stream_id);
-
 	pkt->hdr.opcode = ASM_DATA_CMD_MEDIA_FMT_UPDATE_V2;
-	fmt->fmt_blk.fmt_blk_size = sizeof(*fmt) - sizeof(fmt->fmt_blk);
-	fmt->num_channels = channels;
-	fmt->bits_per_sample = bits_per_sample;
-	fmt->sample_rate = rate;
-	fmt->is_signed = 1;
 
-	channel_mapping = fmt->channel_mapping;
+	dev_dbg(ac->dev, "%s: fmt=%s rate=%u ch=%u bps=%u word=%u (asm api %u)\n",
+		__func__, use_v5 ? "V5" : "V4", rate, channels,
+		bits_per_sample, sample_word_size, ac->q6asm->ainfo.api_version);
+
+	/*
+	 * Leave mode=0 (default Q factors). Per the ADSP ABI the defaults
+	 * are Q15 for 16-bit, Q23 for 24-bit packed (word_size=24), and Q31
+	 * for 32-bit, which match every format we advertise to userspace.
+	 * The explicit override values (15/23/31) are not honoured by every
+	 * firmware; the default path is the safe choice.
+	 */
+	if (use_v5) {
+		fmt_v5 = p + APR_HDR_SIZE;
+		fmt_v5->fmt_blk.fmt_blk_size = sizeof(*fmt_v5) -
+					       sizeof(fmt_v5->fmt_blk);
+		fmt_v5->num_channels = channels;
+		fmt_v5->bits_per_sample = bits_per_sample;
+		fmt_v5->sample_rate = rate;
+		fmt_v5->is_signed = 1;
+		fmt_v5->sample_word_size = sample_word_size;
+		fmt_v5->mode = 0;	/* default Q-factor per bps/word_size */
+		channel_mapping = fmt_v5->channel_mapping;
+	} else {
+		fmt_v4 = p + APR_HDR_SIZE;
+		fmt_v4->fmt_blk.fmt_blk_size = sizeof(*fmt_v4) -
+					       sizeof(fmt_v4->fmt_blk);
+		fmt_v4->num_channels = channels;
+		fmt_v4->bits_per_sample = bits_per_sample;
+		fmt_v4->sample_rate = rate;
+		fmt_v4->is_signed = 1;
+		fmt_v4->sample_word_size = sample_word_size;
+		fmt_v4->mode = 0;	/* default Q-factor per bps/word_size */
+		channel_mapping = fmt_v4->channel_mapping;
+	}
 
 	if (channel_map) {
 		memcpy(channel_mapping, channel_map, PCM_MAX_NUM_CHANNEL);
@@ -1347,40 +1449,62 @@ EXPORT_SYMBOL_GPL(q6asm_stream_remove_trailing_silence);
  * @rate: audio sample rate
  * @channels: number of audio channels.
  * @bits_per_sample: bits per sample
+ * @sample_word_size: size in bits of the word that holds a sample of a channel
  *
  * Return: Will be an negative value on error or zero on success
  */
 int q6asm_enc_cfg_blk_pcm_format_support(struct audio_client *ac,
 					 uint32_t stream_id, uint32_t rate,
 					 uint32_t channels,
-					 uint16_t bits_per_sample)
+					 uint16_t bits_per_sample,
+					 uint16_t sample_word_size)
 {
-	struct asm_multi_channel_pcm_enc_cfg_v2  *enc_cfg;
+	bool use_v5 = q6asm_pcm_fmt_v5_supported(ac);
+	struct asm_multi_channel_pcm_enc_cfg_v5 *enc_v5;
+	struct asm_multi_channel_pcm_enc_cfg_v4 *enc_v4;
 	struct apr_pkt *pkt;
 	u8 *channel_mapping;
 	u32 frames_per_buf = 0;
-	int pkt_size = APR_HDR_SIZE + sizeof(*enc_cfg);
+	int pkt_size = APR_HDR_SIZE +
+		       (use_v5 ? sizeof(*enc_v5) : sizeof(*enc_v4));
 
 	void *p __free(kfree) = kzalloc(pkt_size, GFP_KERNEL);
 	if (!p)
 		return -ENOMEM;
 
 	pkt = p;
-	enc_cfg = p + APR_HDR_SIZE;
 	q6asm_add_hdr(ac, &pkt->hdr, pkt_size, true, stream_id);
-
 	pkt->hdr.opcode = ASM_STREAM_CMD_SET_ENCDEC_PARAM;
-	enc_cfg->encdec.param_id = ASM_PARAM_ID_ENCDEC_ENC_CFG_BLK_V2;
-	enc_cfg->encdec.param_size = sizeof(*enc_cfg) - sizeof(enc_cfg->encdec);
-	enc_cfg->encblk.frames_per_buf = frames_per_buf;
-	enc_cfg->encblk.enc_cfg_blk_size  = enc_cfg->encdec.param_size -
-					sizeof(struct asm_enc_cfg_blk_param_v2);
 
-	enc_cfg->num_channels = channels;
-	enc_cfg->bits_per_sample = bits_per_sample;
-	enc_cfg->sample_rate = rate;
-	enc_cfg->is_signed = 1;
-	channel_mapping = enc_cfg->channel_mapping;
+	if (use_v5) {
+		enc_v5 = p + APR_HDR_SIZE;
+		enc_v5->encdec.param_id = ASM_PARAM_ID_ENCDEC_ENC_CFG_BLK_V2;
+		enc_v5->encdec.param_size = sizeof(*enc_v5) -
+					    sizeof(enc_v5->encdec);
+		enc_v5->encblk.frames_per_buf = frames_per_buf;
+		enc_v5->encblk.enc_cfg_blk_size = enc_v5->encdec.param_size -
+						  sizeof(struct asm_enc_cfg_blk_param_v2);
+		enc_v5->num_channels = channels;
+		enc_v5->bits_per_sample = bits_per_sample;
+		enc_v5->sample_rate = rate;
+		enc_v5->is_signed = 1;
+		enc_v5->sample_word_size = sample_word_size;
+		channel_mapping = enc_v5->channel_mapping;
+	} else {
+		enc_v4 = p + APR_HDR_SIZE;
+		enc_v4->encdec.param_id = ASM_PARAM_ID_ENCDEC_ENC_CFG_BLK_V2;
+		enc_v4->encdec.param_size = sizeof(*enc_v4) -
+					    sizeof(enc_v4->encdec);
+		enc_v4->encblk.frames_per_buf = frames_per_buf;
+		enc_v4->encblk.enc_cfg_blk_size = enc_v4->encdec.param_size -
+						  sizeof(struct asm_enc_cfg_blk_param_v2);
+		enc_v4->num_channels = channels;
+		enc_v4->bits_per_sample = bits_per_sample;
+		enc_v4->sample_rate = rate;
+		enc_v4->is_signed = 1;
+		enc_v4->sample_word_size = sample_word_size;
+		channel_mapping = enc_v4->channel_mapping;
+	}
 
 	if (q6dsp_map_channels(channel_mapping, channels))
 		return -EINVAL;
@@ -1473,7 +1597,9 @@ static int __q6asm_open_read(struct audio_client *ac, uint32_t stream_id,
 	switch (format) {
 	case FORMAT_LINEAR_PCM:
 		open->mode_flags |= 0x00;
-		open->enc_cfg_id = ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V2;
+		open->enc_cfg_id = q6asm_pcm_fmt_v5_supported(ac) ?
+			ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V5 :
+			ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V4;
 		break;
 	default:
 		pr_err("Invalid format[%d]\n", format);

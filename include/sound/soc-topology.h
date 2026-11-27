@@ -30,6 +30,7 @@ struct snd_soc_dai_link;
 struct snd_soc_dai_driver;
 struct snd_soc_dai;
 struct snd_soc_dapm_route;
+struct device;
 
 /* dynamic object type */
 enum snd_soc_dobj_type {
@@ -181,6 +182,9 @@ int snd_soc_tplg_component_load(struct snd_soc_component *comp,
 	const struct snd_soc_tplg_ops *ops, const struct firmware *fw);
 int snd_soc_tplg_component_remove(struct snd_soc_component *comp);
 
+/* Check for presence of topology firmware files */
+bool snd_soc_tplg_files_exist(struct device *dev, const char *tplg_files);
+
 /* Binds event handlers to dynamic widgets */
 int snd_soc_tplg_widget_bind_event(struct snd_soc_dapm_widget *w,
 	const struct snd_soc_tplg_widget_events *events, int num_events,
@@ -191,6 +195,12 @@ int snd_soc_tplg_widget_bind_event(struct snd_soc_dapm_widget *w,
 static inline int snd_soc_tplg_component_remove(struct snd_soc_component *comp)
 {
 	return 0;
+}
+
+static inline bool snd_soc_tplg_files_exist(struct device *dev,
+					    const char *tplg_files)
+{
+	return false;
 }
 
 #endif

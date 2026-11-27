@@ -395,9 +395,5 @@ struct cs48l32_codec {
 
 int cs48l32_apply_patch(struct cs48l32 *cs48l32);
 int cs48l32_create_regmap(struct spi_device *spi, struct cs48l32 *cs48l32);
-int cs48l32_enable_asp1_pins(struct cs48l32_codec *cs48l32_codec);
-int cs48l32_enable_asp2_pins(struct cs48l32_codec *cs48l32_codec);
-int cs48l32_micvdd_voltage_index(u32 voltage);
-int cs48l32_micbias1_voltage_index(u32 voltage);
 
 #endif

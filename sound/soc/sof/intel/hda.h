@@ -757,7 +757,6 @@ int hda_dsp_ipc_get_mailbox_offset(struct snd_sof_dev *sdev);
 int hda_dsp_ipc_get_window_offset(struct snd_sof_dev *sdev, u32 id);
 
 irqreturn_t hda_dsp_ipc_irq_thread(int irq, void *context);
-int hda_dsp_ipc_cmd_done(struct snd_sof_dev *sdev, int dir);
 
 void hda_dsp_get_state(struct snd_sof_dev *sdev, const char *level);
 void hda_dsp_dump_ext_rom_status(struct snd_sof_dev *sdev, const char *level,

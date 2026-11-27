@@ -53,13 +53,14 @@ static void skl_set_hda_codec_autosuspend_delay(struct snd_soc_card *card)
 #define DMIC01_BE_ID		6
 #define DMIC16K_BE_ID		7
 #define BT_OFFLOAD_BE_ID	8
+#define HDMI_IN_BE_ID		13
 
 #define HDA_LINK_ORDER	SOF_LINK_ORDER(SOF_LINK_IDISP_HDMI,  \
 				       SOF_LINK_HDA,        \
 				       SOF_LINK_DMIC01,     \
 				       SOF_LINK_DMIC16K,    \
 				       SOF_LINK_BT_OFFLOAD, \
-				       SOF_LINK_NONE,       \
+				       SOF_LINK_HDMI_IN,    \
 				       SOF_LINK_NONE)
 
 #define HDA_LINK_IDS	SOF_LINK_ORDER(IDISP_HDMI_BE_ID,  \
@@ -67,7 +68,7 @@ static void skl_set_hda_codec_autosuspend_delay(struct snd_soc_card *card)
 				       DMIC01_BE_ID,     \
 				       DMIC16K_BE_ID,    \
 				       BT_OFFLOAD_BE_ID, \
-				       0,                \
+				       HDMI_IN_BE_ID,    \
 				       0)
 
 static unsigned long
@@ -91,7 +92,8 @@ static int skl_hda_add_dai_link(struct snd_soc_card *card,
 	struct sof_card_private *ctx = snd_soc_card_get_drvdata(card);
 
 	/* Ignore the HDMI PCM link if iDisp is not present */
-	if (strstr(link->stream_name, "HDMI") && !ctx->hdmi.idisp_codec)
+	if (strstr(link->stream_name, "HDMI") && !link->no_pcm &&
+	    !link->capture_only && !ctx->hdmi.idisp_codec)
 		link->ignore = true;
 
 	return 0;

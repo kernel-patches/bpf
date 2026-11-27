@@ -393,6 +393,7 @@ static int avs_dsp_do_send_msg(struct avs_dev *adev, struct avs_ipc_msg *request
 			       struct avs_ipc_msg *reply, int timeout, const char *name)
 {
 	struct avs_ipc *ipc = adev->ipc;
+	bool copy_reply = true;
 	int ret;
 
 	guard(mutex)(&ipc->msg_mutex);
@@ -413,10 +414,11 @@ static int avs_dsp_do_send_msg(struct avs_dev *adev, struct avs_ipc_msg *request
 			/* Same treatment as on exception, just stack_dump=0. */
 			avs_dsp_exception_caught(adev, &msg);
 		}
-		return ret;
+		copy_reply = false;
+	} else {
+		ret = ipc->rx.rsp.status;
 	}
 
-	ret = ipc->rx.rsp.status;
 	/*
 	 * If IPC channel is blocked e.g.: due to ongoing recovery,
 	 * -EPERM error code is expected and thus it's not an actual error.
@@ -430,7 +432,7 @@ static int avs_dsp_do_send_msg(struct avs_dev *adev, struct avs_ipc_msg *request
 		dev_err(adev->dev, "%s (0x%08x 0x%08x) failed: %d\n",
 			name, request->glb.primary, request->glb.ext.val, ret);
 
-	if (reply) {
+	if (copy_reply && reply) {
 		reply->header = ipc->rx.header;
 		reply->size = ipc->rx.size;
 		if (reply->data && ipc->rx.size)

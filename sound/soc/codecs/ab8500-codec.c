@@ -955,6 +955,12 @@ static DECLARE_TLV_DB_SCALE(dax_dig_gain_tlv, -6300, 100, 1);
 static DECLARE_TLV_DB_SCALE(hs_ear_dig_gain_tlv, -100, 100, 1);
 /* -1dB = Mute */
 
+/* AB8505 v1 handsfree output gain: -3 dB to 12 dB in 1 dB steps. */
+static DECLARE_TLV_DB_SCALE(ab8505_hf_v1_gain_tlv, -300, 100, 0);
+
+/* AB8505 v2 handsfree output gain: mute, then -3 dB to 20 dB. */
+static DECLARE_TLV_DB_SCALE(ab8505_hf_v2_gain_tlv, -400, 100, 1);
+
 static const DECLARE_TLV_DB_RANGE(hs_gain_tlv,
 	0, 3, TLV_DB_SCALE_ITEM(-3200, 400, 0),
 	4, 15, TLV_DB_SCALE_ITEM(-1800, 200, 0)
@@ -1519,6 +1525,18 @@ static struct snd_kcontrol_new ab8500_ctrls[] = {
 		AB8500_SIDFIRADR, AB8500_SIDFIRADR_FIRSIDSET, 0),
 };
 
+static const struct snd_kcontrol_new ab8505_v1_ctrls[] = {
+	SOC_DOUBLE_TLV("HF Digital Volume", AB8505_HFGAINCTRL_V1,
+		       AB8505_HFGAINCTRL_V1_HFL, AB8505_HFGAINCTRL_V1_HFR,
+		       AB8505_HFGAINCTRL_V1_MAX, 1, ab8505_hf_v1_gain_tlv),
+};
+
+static const struct snd_kcontrol_new ab8505_v2_ctrls[] = {
+	SOC_DOUBLE_R_TLV("HF Digital Volume",
+			 AB8505_HFLGAINCTRL_V2, AB8505_HFRGAINCTRL_V2,
+			 0, AB8505_HFGAINCTRL_V2_MAX, 1, ab8505_hf_v2_gain_tlv),
+};
+
 /*
  * Extended interface for codec-driver
  */
@@ -2079,6 +2097,18 @@ static int ab8500_codec_probe(struct snd_soc_component *component)
 		status = snd_soc_dapm_add_routes(dapm,
 						 ab8500_dmic_dapm_routes,
 						 ARRAY_SIZE(ab8500_dmic_dapm_routes));
+		if (status)
+			return status;
+	} else if (is_ab8505_1p0_or_earlier(ab8500)) {
+		status = snd_soc_add_component_controls(component,
+							ab8505_v1_ctrls,
+							ARRAY_SIZE(ab8505_v1_ctrls));
+		if (status)
+			return status;
+	} else if (is_ab8505(ab8500)) {
+		status = snd_soc_add_component_controls(component,
+							ab8505_v2_ctrls,
+							ARRAY_SIZE(ab8505_v2_ctrls));
 		if (status)
 			return status;
 	}

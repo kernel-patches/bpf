@@ -973,6 +973,7 @@ static const struct reg_default rockchip_i2s_tdm_reg_defaults[] = {
 	{0x08, 0x00001f1f},
 	{0x10, 0x001f0000},
 	{0x14, 0x01f00000},
+	{0x1c, 0x00000000},
 	{0x30, 0x00003eff},
 	{0x34, 0x00003eff},
 	{0x38, 0x00000707},
@@ -1418,13 +1419,18 @@ static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
 	if (i2s_tdm->soc_data && i2s_tdm->soc_data->init)
 		i2s_tdm->soc_data->init(&pdev->dev, res->start);
 
-	ret = devm_snd_soc_register_component(&pdev->dev,
-					      &rockchip_i2s_tdm_component,
-					      i2s_tdm->dai, 1);
+	/*
+	 * Register the PCM before the DAI: adding the DAI component can bind a
+	 * waiting card right away, and the card must find the PCM component
+	 * then or its DAI link ends up without one.
+	 */
+	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (ret)
 		goto err_suspend;
 
-	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
+	ret = devm_snd_soc_register_component(&pdev->dev,
+					      &rockchip_i2s_tdm_component,
+					      i2s_tdm->dai, 1);
 	if (ret)
 		goto err_suspend;
 

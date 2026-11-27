@@ -176,6 +176,9 @@ static int sn624x_uaj_ge35_apply_detected_mode(struct device *dev,
 	SDW_SDCA_CTL(SN624X_FUNC_NUM_MIC_ARRAY, SN624X_SDCA_ENT_ENTITY0, \
 		     SN624X_SDCA_CTL_FUNCTION_STATUS, 0)
 
+#define SN624X_REG_AMP_FUN_STATUS_CTL \
+	SDW_SDCA_CTL(SN624X_FUNC_NUM_SPEAKER_AMP, SN624X_SDCA_ENT_ENTITY0, \
+		     SN624X_SDCA_CTL_FUNCTION_STATUS, 0)
 /*
  * Write REQUESTED_PS then poll ACTUAL_PS with the shared SDCA helper
  * (sdca_asoc_pde_poll_actual_ps). Caller must not hand-roll ACTUAL_PS waits.
@@ -1055,6 +1058,49 @@ static int sn624x_dmic_apply_defaults(struct device *dev,
 	return sn624x_dmic_oem_fallback_init(dev, sn624x);
 }
 
+/*
+ * Return true only when ACPI DisCo is present and lists no MIC function.
+ * Without DisCo, return false so the legacy OEM fallback path still runs.
+ */
+static bool sn624x_sdca_disco_omits_mic(const struct sdw_slave *slave)
+{
+	int i;
+
+	if (!slave->sdca_data.interface_revision || !slave->sdca_data.num_functions)
+		return false;
+	for (i = 0; i < slave->sdca_data.num_functions; i++) {
+		const struct sdca_function_desc *desc = &slave->sdca_data.function[i];
+
+		if (desc->adr == SN624X_FUNC_NUM_MIC_ARRAY)
+			return false;
+		switch (desc->type) {
+		case SDCA_FUNCTION_TYPE_SMART_MIC:
+		case SDCA_FUNCTION_TYPE_SIMPLE_MIC:
+			return false;
+		default:
+			break;
+		}
+	}
+	return true;
+}
+
+static int sn624x_amp_apply_defaults(struct device *dev,
+				     struct sn624x_sdca_priv *sn624x)
+{
+	int ret;
+
+	if (!sn624x || !sn624x->regmap || !sn624x->slave)
+		return -ENODEV;
+	if (!sn624x->amp_func)
+		return 0;
+	ret = sn624x_write_sdca_init_table(dev, sn624x, sn624x->amp_func, "amp");
+	if (ret == -ENOENT)
+		return 0;
+	if (ret == 0)
+		usleep_range(1000, 1500);
+	return ret;
+}
+
 static int sn624x_sdca_jack_function_init(struct device *dev,
 					  struct sn624x_sdca_priv *sn624x)
 {
@@ -1088,10 +1134,17 @@ static int sn624x_sdca_jack_function_init(struct device *dev,
 static int sn624x_sdca_dmic_function_init(struct device *dev,
 					  struct sn624x_sdca_priv *sn624x)
 {
+	struct sdw_slave *slave = sn624x->slave;
 	unsigned int dmic_func_status;
 	const struct reg_sequence clear_status =
 		REG_SEQ0(SN624X_REG_DMIC_FUN_STATUS_CTL, 0x61);
 	int ret;
+
+	if (sn624x_sdca_disco_omits_mic(slave)) {
+		dev_dbg(dev,
+			"sn624x: ACPI DisCo has no MIC function, skip DMIC init\n");
+		return 0;
+	}
 
 	ret = regmap_read_bypassed(sn624x->regmap,
 				   SN624X_REG_DMIC_FUN_STATUS_CTL,
@@ -1104,6 +1157,39 @@ static int sn624x_sdca_dmic_function_init(struct device *dev,
 		return 0;
 
 	ret = sn624x_dmic_apply_defaults(dev, sn624x);
+	if (ret < 0)
+		return ret;
+	ret = regmap_multi_reg_write_bypassed(sn624x->regmap, &clear_status, 1);
+	if (ret < 0)
+		return ret;
+	usleep_range(1000, 1500);
+	return 0;
+}
+
+static int sn624x_sdca_amp_function_init(struct device *dev,
+					 struct sn624x_sdca_priv *sn624x)
+{
+	unsigned int amp_func_status;
+	const struct reg_sequence clear_status =
+		REG_SEQ0(SN624X_REG_AMP_FUN_STATUS_CTL, 0x61);
+	int ret;
+
+	if (!sn624x->amp_func)
+		return 0;
+	ret = regmap_read_bypassed(sn624x->regmap,
+				   SN624X_REG_AMP_FUN_STATUS_CTL,
+				   &amp_func_status);
+	if (ret < 0)
+		return ret;
+	if (!(amp_func_status & (SN624X_JACK_FUN_NEEDS_INIT |
+				 SN624X_JACK_FUN_HAS_BEEN_RESET))) {
+		if (!sn624x->amp_func->num_init_table)
+			return 0;
+		dev_dbg(dev,
+			"sn624x: amp FUN STATUS 0x%x, apply ACPI init table\n",
+			amp_func_status);
+	}
+	ret = sn624x_amp_apply_defaults(dev, sn624x);
 	if (ret < 0)
 		return ret;
 
@@ -1159,6 +1245,11 @@ static int sn624x_sdca_io_init(struct device *dev, struct sdw_slave *slave)
 	ret = sn624x_sdca_jack_function_init(dev, sn624x);
 	if (ret < 0) {
 		dev_err(dev, "sn624x: jack function init failed (%d)\n", ret);
+		goto err;
+	}
+	ret = sn624x_sdca_amp_function_init(dev, sn624x);
+	if (ret < 0) {
+		dev_err(dev, "sn624x: amp function init failed (%d)\n", ret);
 		goto err;
 	}
 
@@ -1253,8 +1344,9 @@ static int sn624x_sdca_read_prop(struct sdw_slave *slave)
 	prop->use_domain_irq = true;
 	prop->wake_capable = true;
 
-	prop->source_ports = BIT(SN624X_PORT_JACK_CAPTURE) |
-			     BIT(SN624X_PORT_DMIC_CAPTURE);
+	prop->source_ports = BIT(SN624X_PORT_JACK_CAPTURE);
+	if (!sn624x_sdca_disco_omits_mic(slave))
+		prop->source_ports |= BIT(SN624X_PORT_DMIC_CAPTURE);
 	prop->sink_ports = BIT(SN624X_PORT_JACK_PLAYBACK) |
 			   BIT(SN624X_PORT_SPEAKER_PLAYBACK);
 
@@ -1292,8 +1384,9 @@ static int sn624x_sdca_read_prop(struct sdw_slave *slave)
 	prop->simple_clk_stop_capable = true;
 	prop->lane_control_support = true;
 	SN624X_DBG(&slave->dev,
-		   "read_prop: src_ports=0x%x sink_ports=0x%x lane irq paging\n",
-		   prop->source_ports, prop->sink_ports);
+		   "read_prop: src_ports=0x%x sink_ports=0x%x disco_omits_mic=%d lane irq paging\n",
+		   prop->source_ports, prop->sink_ports,
+		   sn624x_sdca_disco_omits_mic(slave));
 
 	return 0;
 }
@@ -1736,11 +1829,9 @@ static int sn624x_sdca_sdw_probe(struct sdw_slave *slave,
 	regmap = devm_regmap_init_sdw_mbq_cfg(&slave->dev, slave,
 					      &sn624x_sdca_regmap,
 					      &sn624x_sdca_mbq_cfg);
-	if (IS_ERR(regmap)) {
-		dev_err(&slave->dev, "sn624x: devm_regmap_init_sdw_mbq_cfg failed (%ld)\n",
-			PTR_ERR(regmap));
-		return PTR_ERR(regmap);
-	}
+	if (IS_ERR(regmap))
+		return dev_err_probe(&slave->dev, PTR_ERR(regmap),
+				     "devm_regmap_init_sdw_mbq_cfg failed\n");
 
 	ret = sn624x_sdca_init(&slave->dev, regmap, slave);
 	if (ret < 0)

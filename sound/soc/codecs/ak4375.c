@@ -460,7 +460,14 @@ static int ak4375_runtime_resume(struct device *dev)
 	regcache_cache_only(ak4375->regmap, false);
 	regcache_mark_dirty(ak4375->regmap);
 
-	return regcache_sync(ak4375->regmap);
+	ret = regcache_sync(ak4375->regmap);
+	if (ret) {
+		regcache_cache_only(ak4375->regmap, true);
+		ak4375_power_off(ak4375);
+		return ret;
+	}
+
+	return 0;
 }
 
 static const struct snd_soc_component_driver soc_codec_dev_ak4375 = {
@@ -536,19 +543,19 @@ static int ak4375_i2c_probe(struct i2c_client *i2c)
 	regcache_cache_bypass(ak4375->regmap, true);
 
 	ret = regmap_read(ak4375->regmap, AK4375_15_AUDIO_IF_FORMAT, &deviceid);
+	regcache_cache_bypass(ak4375->regmap, false);
 	if (ret < 0) {
 		dev_err(ak4375->dev, "unable to read DEVICEID!\n");
-		return ret;
+		goto err_power_off;
 	}
-
-	regcache_cache_bypass(ak4375->regmap, false);
 
 	deviceid = (deviceid & DEVICEID_MASK) >> 5;
 
+	ret = -EINVAL;
 	switch (deviceid) {
 	case DEVICEID_AK4331:
 		dev_err(ak4375->dev, "found untested AK4331\n");
-		return -EINVAL;
+		goto err_power_off;
 	case DEVICEID_AK4375:
 		dev_dbg(ak4375->dev, "found AK4375\n");
 		break;
@@ -557,13 +564,13 @@ static int ak4375_i2c_probe(struct i2c_client *i2c)
 		break;
 	case DEVICEID_AK4376A:
 		dev_err(ak4375->dev, "found unsupported AK4376/A!\n");
-		return -EINVAL;
+		goto err_power_off;
 	case DEVICEID_AK4377:
 		dev_err(ak4375->dev, "found unsupported AK4377!\n");
-		return -EINVAL;
+		goto err_power_off;
 	default:
 		dev_err(ak4375->dev, "unrecognized DEVICEID!\n");
-		return -EINVAL;
+		goto err_power_off;
 	}
 
 	pm_runtime_set_active(ak4375->dev);
@@ -573,10 +580,17 @@ static int ak4375_i2c_probe(struct i2c_client *i2c)
 					      drvdata->dai_drv, 1);
 	if (ret < 0) {
 		dev_err(ak4375->dev, "Failed to register CODEC: %d\n", ret);
+		pm_runtime_disable(ak4375->dev);
+		ak4375_power_off(ak4375);
+		pm_runtime_set_suspended(ak4375->dev);
 		return ret;
 	}
 
 	return 0;
+
+err_power_off:
+	ak4375_power_off(ak4375);
+	return ret;
 }
 
 static void ak4375_i2c_remove(struct i2c_client *i2c)

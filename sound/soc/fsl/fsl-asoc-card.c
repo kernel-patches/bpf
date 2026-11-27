@@ -1378,6 +1378,8 @@ static int fsl_asoc_card_probe(struct platform_device *pdev)
 	}
 
 asrc_fail:
+	if (asrc_pdev)
+		put_device(&asrc_pdev->dev);
 	of_node_put(asrc_np);
 	of_node_put(codec_np[0]);
 	of_node_put(codec_np[1]);

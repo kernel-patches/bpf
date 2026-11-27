@@ -439,8 +439,6 @@ int sst_free_stream(struct intel_sst_drv *sst_drv_ctx, int str_id);
 int sst_start_stream(struct intel_sst_drv *sst_drv_ctx, int str_id);
 int sst_send_byte_stream_mrfld(struct intel_sst_drv *sst_drv_ctx,
 			struct snd_sst_bytes_v2 *bytes);
-int sst_set_stream_param(int str_id, struct snd_sst_params *str_param);
-int sst_set_metadata(int str_id, char *params);
 int sst_get_stream(struct intel_sst_drv *ctx,
 		struct snd_sst_params *str_param);
 int sst_drain_stream(struct intel_sst_drv *sst_drv_ctx,
@@ -453,9 +451,7 @@ int intel_sst_reset_dsp_mrfld(struct intel_sst_drv *sst_drv_ctx);
 void intel_sst_clear_intr_mrfld(struct intel_sst_drv *sst_drv_ctx);
 
 int sst_load_fw(struct intel_sst_drv *sst_drv_ctx);
-int sst_load_library(struct snd_sst_lib_download *lib, u8 ops);
 void sst_post_download_mrfld(struct intel_sst_drv *ctx);
-int sst_get_block_stream(struct intel_sst_drv *sst_drv_ctx);
 void sst_memcpy_free_resources(struct intel_sst_drv *sst_drv_ctx);
 
 int sst_wait_timeout(struct intel_sst_drv *sst_drv_ctx,
@@ -463,13 +459,9 @@ int sst_wait_timeout(struct intel_sst_drv *sst_drv_ctx,
 int sst_create_ipc_msg(struct ipc_post **arg, bool large);
 int free_stream_context(struct intel_sst_drv *ctx, unsigned int str_id);
 void sst_clean_stream(struct stream_info *stream);
-int intel_sst_register_compress(struct intel_sst_drv *sst);
-int intel_sst_remove_compress(struct intel_sst_drv *sst);
-int sst_send_sync_msg(int ipc, int str_id);
 int sst_get_num_channel(struct snd_sst_params *str_param);
 int sst_get_sfreq(struct snd_sst_params *str_param);
 int sst_alloc_stream_mrfld(struct intel_sst_drv *sst_drv_ctx, void *params);
-void sst_restore_fw_context(void);
 struct sst_block *sst_create_block(struct intel_sst_drv *ctx,
 				u32 msg_id, u32 drv_id);
 int sst_create_block_and_ipc_msg(struct ipc_post **arg, bool large,
@@ -478,9 +470,7 @@ int sst_create_block_and_ipc_msg(struct ipc_post **arg, bool large,
 int sst_free_block(struct intel_sst_drv *ctx, struct sst_block *freed);
 int sst_wake_up_block(struct intel_sst_drv *ctx, int result,
 		u32 drv_id, u32 ipc, void *data, u32 size);
-int sst_request_firmware_async(struct intel_sst_drv *ctx);
 int sst_driver_ops(struct intel_sst_drv *sst);
-struct sst_platform_info *sst_get_acpi_driver_data(const char *hid);
 void sst_firmware_load_cb(const struct firmware *fw, void *context);
 int sst_prepare_and_post_msg(struct intel_sst_drv *sst,
 		int task_id, int ipc_msg, int cmd_id, int pipe_id,
@@ -497,7 +487,7 @@ int get_stream_id_mrfld(struct intel_sst_drv *sst_drv_ctx,
 u32 relocate_imr_addr_mrfld(u32 base_addr);
 void sst_add_to_dispatch_list_and_post(struct intel_sst_drv *sst,
 					struct ipc_post *msg);
-int sst_pm_runtime_put(struct intel_sst_drv *sst_drv);
+void sst_pm_runtime_put(struct intel_sst_drv *sst_drv);
 int sst_shim_write(void __iomem *addr, int offset, int value);
 u32 sst_shim_read(void __iomem *addr, int offset);
 u64 sst_reg_read64(void __iomem *addr, int offset);

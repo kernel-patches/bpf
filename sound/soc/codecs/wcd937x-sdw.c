@@ -1003,6 +1003,8 @@ static int wcd9370_probe(struct sdw_slave *pdev,
 	if (wcd->is_tx) {
 		master_ch_mask_size = of_property_count_u8_elems(dev->of_node,
 								 "qcom,tx-channel-mapping");
+		master_ch_mask_size = min_t(int, master_ch_mask_size,
+					    ARRAY_SIZE(master_ch_mask));
 
 		if (master_ch_mask_size)
 			ret = of_property_read_u8_array(dev->of_node, "qcom,tx-channel-mapping",
@@ -1010,6 +1012,8 @@ static int wcd9370_probe(struct sdw_slave *pdev,
 	} else {
 		master_ch_mask_size = of_property_count_u8_elems(dev->of_node,
 								 "qcom,rx-channel-mapping");
+		master_ch_mask_size = min_t(int, master_ch_mask_size,
+					    ARRAY_SIZE(master_ch_mask));
 
 		if (master_ch_mask_size)
 			ret = of_property_read_u8_array(dev->of_node, "qcom,rx-channel-mapping",
@@ -1023,6 +1027,8 @@ static int wcd9370_probe(struct sdw_slave *pdev,
 		pdev->prop.source_ports = GENMASK(WCD937X_MAX_TX_SWR_PORTS, 0);
 		pdev->prop.src_dpn_prop = wcd937x_dpn_prop;
 		wcd->ch_info = &wcd937x_sdw_tx_ch_info[0];
+		master_ch_mask_size = min_t(int, master_ch_mask_size,
+					    ARRAY_SIZE(wcd937x_sdw_tx_ch_info));
 
 		for (i = 0; i < master_ch_mask_size; i++)
 			wcd->ch_info[i].master_ch_mask = WCD937X_SWRM_CH_MASK(master_ch_mask[i]);
@@ -1040,6 +1046,8 @@ static int wcd9370_probe(struct sdw_slave *pdev,
 		pdev->prop.sink_ports = GENMASK(WCD937X_MAX_SWR_PORTS - 1, 0);
 		pdev->prop.sink_dpn_prop = wcd937x_dpn_prop;
 		wcd->ch_info = &wcd937x_sdw_rx_ch_info[0];
+		master_ch_mask_size = min_t(int, master_ch_mask_size,
+					    ARRAY_SIZE(wcd937x_sdw_rx_ch_info));
 
 		for (i = 0; i < master_ch_mask_size; i++)
 			wcd->ch_info[i].master_ch_mask = WCD937X_SWRM_CH_MASK(master_ch_mask[i]);

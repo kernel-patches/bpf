@@ -211,7 +211,7 @@ static ssize_t sof_probes_dfs_points_read(struct file *file, char __user *to,
 	int remaining, offset;
 	size_t num_desc;
 	char *buf;
-	int i, ret, err;
+	int i, ret;
 
 	if (priv->extractor_stream_tag == SOF_PROBES_INVALID_NODE_ID) {
 		dev_warn(dev, "no extractor stream running\n");
@@ -258,9 +258,7 @@ static ssize_t sof_probes_dfs_points_read(struct file *file, char __user *to,
 	kfree(desc);
 
 pm_error:
-	err = pm_runtime_put_autosuspend(dev);
-	if (err < 0)
-		dev_err_ratelimited(dev, "debugfs read failed to idle %d\n", err);
+	pm_runtime_put_autosuspend(dev);
 
 exit:
 	kfree(buf);
@@ -294,7 +292,7 @@ sof_probes_dfs_points_write(struct file *file, const char __user *from,
 	struct sof_probe_point_desc *desc;
 	u32 num_elems, *array;
 	size_t bytes;
-	int ret, err;
+	int ret;
 
 	if (priv->extractor_stream_tag == SOF_PROBES_INVALID_NODE_ID) {
 		dev_warn(dev, "no extractor stream running\n");
@@ -327,9 +325,7 @@ sof_probes_dfs_points_write(struct file *file, const char __user *from,
 			ret = count;
 	}
 
-	err = pm_runtime_put_autosuspend(dev);
-	if (err < 0)
-		dev_err_ratelimited(dev, "debugfs write failed to idle %d\n", err);
+	pm_runtime_put_autosuspend(dev);
 exit:
 	kfree(array);
 	return ret;
@@ -360,7 +356,7 @@ sof_probes_dfs_points_remove_write(struct file *file, const char __user *from,
 	struct sof_probes_priv *priv = cdev->data;
 	const struct sof_probes_ipc_ops *ipc = priv->ipc_ops;
 	struct device *dev = &cdev->auxdev.dev;
-	int ret, err;
+	int ret;
 	u32 *array;
 
 	if (priv->extractor_stream_tag == SOF_PROBES_INVALID_NODE_ID) {
@@ -385,9 +381,7 @@ sof_probes_dfs_points_remove_write(struct file *file, const char __user *from,
 			ret = count;
 	}
 
-	err = pm_runtime_put_autosuspend(dev);
-	if (err < 0)
-		dev_err_ratelimited(dev, "debugfs write failed to idle %d\n", err);
+	pm_runtime_put_autosuspend(dev);
 exit:
 	kfree(array);
 	return ret;

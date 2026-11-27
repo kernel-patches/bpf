@@ -14,12 +14,28 @@ description:
   (set using one-wire pulse control). The mode configures the speaker-guard
   function (primarily the power limit for the amplifier).
 
+  The Awinic AW8155 also has its mode set by one-wire pulses on its control
+  pin. Its modes select the amplifier class, its gain and its power limit.
+
 allOf:
   - $ref: dai-common.yaml#
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: awinic,aw8155
+    then:
+      properties:
+        awinic,mode:
+          enum: [1, 2, 4]
 
 properties:
   compatible:
-    const: awinic,aw8738
+    oneOf:
+      - const: awinic,aw8738
+      - items:
+          - const: awinic,aw8155
+          - const: awinic,aw8738
 
   mode-gpios:
     description:

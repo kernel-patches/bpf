@@ -11,6 +11,7 @@
 #include <acpi/nhlt.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
+#include <sound/soc-dapm.h>
 #include "avs.h"
 #include "control.h"
 #include "path.h"
@@ -320,7 +321,9 @@ avs_nhlt_config_or_default(struct avs_dev *adev, struct avs_tplg_module *t)
 				       fmt->num_channels, fmt->sampling_freq, fmt->valid_bit_depth,
 				       fmt->bit_depth);
 	if (!fmtcfg) {
-		dev_warn(adev->dev, "Endpoint format configuration not found.\n");
+		dev_dbg(adev->dev, "%s endpoint format configuration %d/%d/%d/%d not found\n",
+			snd_pcm_direction_name(dir), fmt->num_channels,
+			fmt->valid_bit_depth, fmt->bit_depth, fmt->sampling_freq);
 		return ERR_PTR(-ENOENT);
 	}
 
@@ -1187,18 +1190,11 @@ err:
 
 static void avs_condpath_free(struct avs_dev *adev, struct avs_path *path)
 {
-	int ret;
-
 	list_del(&path->source_node);
 	list_del(&path->sink_node);
 
-	ret = avs_path_reset(path);
-	if (ret < 0)
-		dev_err(adev->dev, "reset condpath failed: %d\n", ret);
-
-	ret = avs_path_unbind(path);
-	if (ret < 0)
-		dev_err(adev->dev, "unbind condpath failed: %d\n", ret);
+	avs_path_reset(path);
+	avs_path_unbind(path);
 
 	avs_path_free_unlocked(path);
 }
@@ -1373,6 +1369,13 @@ static int avs_path_bind_prepare(struct avs_dev *adev,
 	return 0;
 }
 
+static const char *avs_path_name(struct avs_path *path)
+{
+	struct snd_soc_dapm_widget *w = path->template->owner->w;
+
+	return w ? w->name : "(condpath)";
+}
+
 int avs_path_bind(struct avs_path *path)
 {
 	struct avs_path_pipeline *ppl;
@@ -1397,7 +1400,8 @@ int avs_path_bind(struct avs_path *path)
 					   sink->instance_id, binding->sink_pin,
 					   binding->source_pin);
 			if (ret) {
-				dev_err(adev->dev, "bind path failed: %d\n", ret);
+				dev_err(adev->dev, "bind path %s failed: %d\n",
+					avs_path_name(path), ret);
 				return AVS_IPC_RET(ret);
 			}
 		}
@@ -1426,7 +1430,8 @@ int avs_path_unbind(struct avs_path *path)
 					     sink->instance_id, binding->sink_pin,
 					     binding->source_pin);
 			if (ret) {
-				dev_err(adev->dev, "unbind path failed: %d\n", ret);
+				dev_err(adev->dev, "unbind path %s failed: %d\n",
+					avs_path_name(path), ret);
 				return AVS_IPC_RET(ret);
 			}
 		}
@@ -1448,7 +1453,7 @@ int avs_path_reset(struct avs_path *path)
 		ret = avs_ipc_set_pipeline_state(adev, ppl->instance_id,
 						 AVS_PPL_STATE_RESET);
 		if (ret) {
-			dev_err(adev->dev, "reset path failed: %d\n", ret);
+			dev_err(adev->dev, "reset path %s failed: %d\n", avs_path_name(path), ret);
 			path->state = AVS_PPL_STATE_INVALID;
 			return AVS_IPC_RET(ret);
 		}
@@ -1507,7 +1512,7 @@ int avs_path_pause(struct avs_path *path)
 		ret = avs_ipc_set_pipeline_state(adev, ppl->instance_id,
 						 AVS_PPL_STATE_PAUSED);
 		if (ret) {
-			dev_err(adev->dev, "pause path failed: %d\n", ret);
+			dev_err(adev->dev, "pause path %s failed: %d\n", avs_path_name(path), ret);
 			path->state = AVS_PPL_STATE_INVALID;
 			return AVS_IPC_RET(ret);
 		}
@@ -1575,7 +1580,7 @@ int avs_path_run(struct avs_path *path, int trigger)
 		ret = avs_ipc_set_pipeline_state(adev, ppl->instance_id,
 						 AVS_PPL_STATE_RUNNING);
 		if (ret) {
-			dev_err(adev->dev, "run path failed: %d\n", ret);
+			dev_err(adev->dev, "run path %s failed: %d\n", avs_path_name(path), ret);
 			path->state = AVS_PPL_STATE_INVALID;
 			return AVS_IPC_RET(ret);
 		}

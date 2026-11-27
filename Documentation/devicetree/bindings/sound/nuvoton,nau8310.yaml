@@ -1,0 +1,186 @@
+# SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/sound/nuvoton,nau8310.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Nuvoton NAU83G10/20 Mono Class-D Amplifier with DSP
+
+description:
+  Mono Class-D Amplifier with DSP and I/V-sense.
+  This device supports I2C.
+
+maintainers:
+  - Neo Chang <YLCHANG2@nuvoton.com>
+
+properties:
+  compatible:
+    enum:
+      - nuvoton,nau8310
+      - nuvoton,nau8320
+
+  reg:
+    description: The I2C address is determined by the hardware pins.
+    enum: [0x10, 0x11, 0x40, 0x41]
+
+  "#sound-dai-cells":
+    const: 0
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    const: mclk
+
+  firmware-name:
+    items:
+      - description:
+          DSP core firmware.
+
+  nuvoton,vref-impedance-ohms:
+    description:
+      VREF Impedance Selection.
+    enum: [0, 25000, 125000, 2500]
+
+  nuvoton,dac-vref-microvolt:
+    description:
+      The DAC vref to be used in voltage. DAC reference voltage setting. Can
+      be used for minor tuning of the output level. Since the VDDA is range
+      between 1.62 to 1.98 voltage, the typical value for design is 1.8V. After
+      the minor tuning, the final microvolt are as the below.
+    enum: [1800000, 2700000, 2880000, 3060000]
+
+  nuvoton,sar-voltage-microvolt:
+    description:
+      SAR Gain Tracking Selection in microvolts.
+      Assuming the typical VDDA design value is 1.8V, the SAR voltage is
+      calculated by multiplying VDDA by the gain tracking ratio.
+    enum: [1800000, 1980000, 2160000, 2340000, 2520000, 2772000, 5616000]
+
+  nuvoton,sar-compare-time-ns:
+    description:
+      SAR compare time.
+    enum: [500, 1000, 2000, 4000]
+
+  nuvoton,sar-sampling-time-us:
+    description:
+      SAR sampling time.
+    enum: [2, 4, 8, 16]
+
+  nuvoton,clock-detection-disable:
+    type: boolean
+    description:
+      Disable the Clock Detection Module. By default, clock detection is enabled.
+      When clock detection is enabled, it will detect whether MCLK
+      and FS are within the range. MCLK range is from 2.048MHz to 24.576MHz.
+      FS range is from 8kHz to 96kHz. And also needs to detect the ratio
+      MCLK_SRC/LRCK of 256, 400 or 500, and needs to detect the BCLK
+      to make sure data is present. There needs to be at least 32 BCLK
+      cycles per Frame Sync.
+
+  nuvoton,clock-det-data:
+    type: boolean
+    description:
+      Clock detection non-zero samples configuration for power up signal.
+
+  nuvoton,boost-delay-ms:
+    description:
+      Boost Control Hold Timer in decrement (msec).
+    enum: [0, 1, 2, 4, 8, 16, 32, 64, 128]
+
+  nuvoton,boost-convert-mode:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Boost Converter operating mode.
+    enum:
+      - 0 # BOOST CONVERTER disabled
+      - 1 # BOOST CONVERTER enable gated by POWERUP signal
+      - 3 # BOOST CONVERTER enabled
+
+  nuvoton,boost-target-limit-microvolt:
+    description:
+      Boost Control Target Value Limit.
+      The step size is 190000uV (0.19V).
+    minimum: 0
+    maximum: 11970000
+
+  nuvoton,boost-target-margin-microvolt:
+    description:
+      Boost Margin Value between Boost Target Voltage and peak output level.
+      The step size is 190000uV (0.19V).
+    minimum: 0
+    maximum: 11970000
+
+  nuvoton,temp-compensation:
+    type: boolean
+    description:
+      Enable Temperature Compensation.
+
+  nuvoton,normal-iis-data:
+    type: boolean
+    description:
+      Enable Normal I2S Audio Data mode. The I2S interface
+      transmits only audio data without SAR ADC data.
+
+required:
+  - compatible
+  - reg
+  - firmware-name
+
+allOf:
+  - $ref: dai-common.yaml#
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: nuvoton,nau8320
+    then:
+      properties:
+        nuvoton,boost-delay-ms: false
+        nuvoton,boost-convert-mode: false
+        nuvoton,boost-target-limit-microvolt: false
+        nuvoton,boost-target-margin-microvolt: false
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        codec@10 {
+            compatible = "nuvoton,nau8310";
+            reg = <0x10>;
+            #sound-dai-cells = <0>;
+            firmware-name = "NAU83G10.kcs.bin";
+            nuvoton,vref-impedance-ohms = <125000>;
+            nuvoton,dac-vref-microvolt = <2700000>;
+            nuvoton,sar-voltage-microvolt = <1800000>;
+            nuvoton,sar-compare-time-ns = <1000>;
+            nuvoton,sar-sampling-time-us = <4>;
+            nuvoton,clock-detection-disable;
+            nuvoton,clock-det-data;
+            nuvoton,boost-delay-ms = <128>;
+            nuvoton,boost-convert-mode = <1>;
+            nuvoton,boost-target-limit-microvolt = <9500000>;
+            nuvoton,boost-target-margin-microvolt = <380000>;
+            nuvoton,temp-compensation;
+            nuvoton,normal-iis-data;
+        };
+
+        codec@11 {
+            compatible = "nuvoton,nau8320";
+            reg = <0x11>;
+            #sound-dai-cells = <0>;
+            firmware-name = "NAU83G20.kcs.bin";
+            nuvoton,vref-impedance-ohms = <125000>;
+            nuvoton,dac-vref-microvolt = <2700000>;
+            nuvoton,sar-voltage-microvolt = <1800000>;
+            nuvoton,sar-compare-time-ns = <1000>;
+            nuvoton,sar-sampling-time-us = <4>;
+            nuvoton,clock-detection-disable;
+            nuvoton,clock-det-data;
+            nuvoton,temp-compensation;
+            nuvoton,normal-iis-data;
+        };
+    };

@@ -389,6 +389,9 @@ static int dmaengine_pcm_request_chan_of(struct dmaengine_pcm *pcm,
 			name = dmaengine_pcm_dma_channel_names[i];
 		if (config->chan_names[i])
 			name = config->chan_names[i];
+		else if (config->dma_dev)
+			/* Default names refer to the dma_dev's own channels */
+			continue;
 		chan = dma_request_chan(dev, name);
 		if (IS_ERR(chan)) {
 			/*
@@ -511,11 +514,47 @@ void snd_dmaengine_pcm_unregister(struct device *dev)
 
 	pcm = snd_soc_component_to_priv(component);
 
-	snd_soc_unregister_component_by_driver(dev, component->driver);
+	snd_soc_component_unregister(component);
 	dmaengine_pcm_release_chan(pcm);
 	kfree(pcm);
 }
 EXPORT_SYMBOL_GPL(snd_dmaengine_pcm_unregister);
+
+static void devm_dmaengine_pcm_release(struct device *dev, void *res)
+{
+	snd_dmaengine_pcm_unregister(*(struct device **)res);
+}
+
+/**
+ * devm_snd_dmaengine_pcm_register - resource managed dmaengine PCM registration
+ * @dev: The parent device for the PCM device
+ * @config: Platform specific PCM configuration
+ * @flags: Platform specific quirks
+ *
+ * Register a dmaengine based PCM device with automatic unregistration when the
+ * device is unregistered.
+ */
+int devm_snd_dmaengine_pcm_register(struct device *dev,
+				const struct snd_dmaengine_pcm_config *config, unsigned int flags)
+{
+	struct device **ptr;
+	int ret;
+
+	ptr = devres_alloc(devm_dmaengine_pcm_release, sizeof(*ptr), GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+
+	ret = snd_dmaengine_pcm_register(dev, config, flags);
+	if (ret == 0) {
+		*ptr = dev;
+		devres_add(dev, ptr);
+	} else {
+		devres_free(ptr);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(devm_snd_dmaengine_pcm_register);
 
 MODULE_DESCRIPTION("ASoC helpers for generic PCM dmaengine API");
 MODULE_LICENSE("GPL");

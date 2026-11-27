@@ -4,10 +4,12 @@
 //
 // Copyright (c) 2013-15, Intel Corporation.
 
+#include <linux/device.h>
 #include <linux/export.h>
 #include <linux/module.h>
 #include <sound/soc-acpi.h>
 
+#if IS_ENABLED(CONFIG_ACPI)
 static bool snd_soc_acpi_id_present(struct snd_soc_acpi_mach *machine)
 {
 	const struct snd_soc_acpi_codecs *comp_ids = machine->comp_ids;
@@ -124,6 +126,7 @@ struct snd_soc_acpi_mach *snd_soc_acpi_codec_list(void *arg)
 	return mach;
 }
 EXPORT_SYMBOL_GPL(snd_soc_acpi_codec_list);
+#endif /* CONFIG_ACPI */
 
 #define SDW_CODEC_ADR_MASK(_adr) ((_adr) & (SDW_DISCO_LINK_ID_MASK | SDW_VERSION_MASK | \
 				  SDW_MFG_ID_MASK | SDW_PART_ID_MASK))
@@ -199,6 +202,58 @@ bool snd_soc_acpi_sdw_link_slaves_found(struct device *dev,
 	return true;
 }
 EXPORT_SYMBOL_GPL(snd_soc_acpi_sdw_link_slaves_found);
+
+int snd_soc_acpi_sof_get_platform_name(struct device *dev,
+				       const struct snd_soc_acpi_mach *mach, char *platform)
+{
+	int ret;
+
+	/* platform must hold at least SND_SOC_ACPI_SOF_PLATFORM_NAME_MAX bytes */
+	ret = sscanf(mach->sof_tplg_filename, "sof-%7[^-]-*.tplg", platform);
+	if (ret != 1) {
+		dev_err(dev, "Invalid platform name of tplg %s\n",
+			mach->sof_tplg_filename);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(snd_soc_acpi_sof_get_platform_name);
+
+char *snd_soc_acpi_sof_get_tplg_filename(struct device *dev, const char *prefix,
+					 const char *platform, const char *tplg_dev_name,
+					 int dai_link_id,
+					 enum snd_soc_acpi_tplg_device_id tplg_dev)
+{
+	char *filename = NULL;
+
+	/*
+	 * The tplg file naming rule is sof-<platform>-<function>-id<BE id number>.tplg
+	 * where <platform> is required for functions that depend on NHLT blobs (e.g. DMIC/SSP)
+	 * as the nhlt blob is platform dependent.
+	 */
+	switch (tplg_dev) {
+	case SND_SOC_ACPI_TPLG_DEVICE_PCH_DMIC:
+	case SND_SOC_ACPI_TPLG_DEVICE_SSP_JACK:
+	case SND_SOC_ACPI_TPLG_DEVICE_SSP_AMP:
+	case SND_SOC_ACPI_TPLG_DEVICE_SSP_BT:
+	case SND_SOC_ACPI_TPLG_DEVICE_SSP_HDMI_IN:
+	case SND_SOC_ACPI_TPLG_DEVICE_ACP_SDW_JACK:
+	case SND_SOC_ACPI_TPLG_DEVICE_ACP_SDW_AMP:
+	case SND_SOC_ACPI_TPLG_DEVICE_ACP_SDW_MIC:
+	case SND_SOC_ACPI_TPLG_DEVICE_ACP_DMIC:
+		filename = devm_kasprintf(dev, GFP_KERNEL, "%s/sof-%s-%s-id%d.tplg",
+					  prefix, platform, tplg_dev_name, dai_link_id);
+		break;
+	default:
+		filename = devm_kasprintf(dev, GFP_KERNEL, "%s/sof-%s-id%d.tplg",
+					  prefix, tplg_dev_name, dai_link_id);
+		break;
+	}
+
+	return filename;
+}
+EXPORT_SYMBOL_GPL(snd_soc_acpi_sof_get_tplg_filename);
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("ALSA SoC ACPI module");

@@ -123,6 +123,7 @@ struct mtkaif_param {
 struct clk;
 
 struct mt8195_afe_private {
+	int irq_id;
 	struct clk **clk;
 	struct clk_lookup **lookup;
 	struct regmap *topckgen;

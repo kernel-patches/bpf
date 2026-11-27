@@ -17,6 +17,7 @@
 #include <linux/math.h>
 #include <linux/random.h>
 #include <linux/regmap.h>
+#include <linux/seq_buf.h>
 
 #include "../cs_dsp.h"
 
@@ -2109,6 +2110,7 @@ static void bin_patch_name_and_info(struct kunit *test)
 	unsigned int reg_inc_per_word = cs_dsp_mock_reg_addr_inc_per_unpacked_word(priv);
 	u32 reg_val, payload_data;
 	char *infobuf;
+	struct seq_buf sb;
 	unsigned int alg_base_words, reg_addr;
 	struct firmware *fw;
 
@@ -2126,8 +2128,9 @@ static void bin_patch_name_and_info(struct kunit *test)
 	infobuf = kunit_kzalloc(test, 512, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, infobuf);
 
-	for (; strlcat(infobuf, "Waffle{Blah}\n", 512) < 512; )
-		;
+	seq_buf_init(&sb, infobuf, 512);
+	while (!seq_buf_has_overflowed(&sb))
+		seq_buf_puts(&sb, "Waffle{Blah}\n");
 
 	cs_dsp_mock_bin_add_info(priv->local->bin_builder, infobuf);
 

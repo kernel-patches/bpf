@@ -9,6 +9,7 @@
 #include <kunit/visibility.h>
 #include <linux/acpi.h>
 #include <linux/array_size.h>
+#include <linux/cleanup.h>
 #include <linux/completion.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
@@ -19,6 +20,7 @@
 #include <linux/math.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/overflow.h>
 #include <linux/pm.h>
 #include <linux/pm_runtime.h>
 #include <linux/property.h>
@@ -32,6 +34,7 @@
 #include <sound/cs-amp-lib.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
+#include <sound/sdca_function.h>
 #include <sound/sdw.h>
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
@@ -264,42 +267,6 @@ static const struct snd_kcontrol_new asp1_tx4_mux =
 	SOC_DAPM_ENUM_EXT("ASP1TX4 SRC", cs35l56_asp1tx4_enum,
 			  cs35l56_asp_tx_get, cs35l56_asp_tx_put);
 
-static SOC_VALUE_ENUM_SINGLE_DECL(cs35l56_sdw1tx1_enum,
-				CS35L56_SWIRE_DP3_CH1_INPUT,
-				0, CS35L56_SWIRETXn_SRC_MASK,
-				cs35l56_tx_input_texts,
-				cs35l56_tx_input_values);
-
-static const struct snd_kcontrol_new sdw1_tx1_mux =
-	SOC_DAPM_ENUM("SDW1TX1 SRC", cs35l56_sdw1tx1_enum);
-
-static SOC_VALUE_ENUM_SINGLE_DECL(cs35l56_sdw1tx2_enum,
-				CS35L56_SWIRE_DP3_CH2_INPUT,
-				0, CS35L56_SWIRETXn_SRC_MASK,
-				cs35l56_tx_input_texts,
-				cs35l56_tx_input_values);
-
-static const struct snd_kcontrol_new sdw1_tx2_mux =
-	SOC_DAPM_ENUM("SDW1TX2 SRC", cs35l56_sdw1tx2_enum);
-
-static SOC_VALUE_ENUM_SINGLE_DECL(cs35l56_sdw1tx3_enum,
-				CS35L56_SWIRE_DP3_CH3_INPUT,
-				0, CS35L56_SWIRETXn_SRC_MASK,
-				cs35l56_tx_input_texts,
-				cs35l56_tx_input_values);
-
-static const struct snd_kcontrol_new sdw1_tx3_mux =
-	SOC_DAPM_ENUM("SDW1TX3 SRC", cs35l56_sdw1tx3_enum);
-
-static SOC_VALUE_ENUM_SINGLE_DECL(cs35l56_sdw1tx4_enum,
-				CS35L56_SWIRE_DP3_CH4_INPUT,
-				0, CS35L56_SWIRETXn_SRC_MASK,
-				cs35l56_tx_input_texts,
-				cs35l56_tx_input_values);
-
-static const struct snd_kcontrol_new sdw1_tx4_mux =
-	SOC_DAPM_ENUM("SDW1TX4 SRC", cs35l56_sdw1tx4_enum);
-
 static int cs35l56_play_event(struct snd_soc_dapm_widget *w,
 			      struct snd_kcontrol *kcontrol, int event)
 {
@@ -404,11 +371,6 @@ static const struct snd_soc_dapm_widget cs35l56_dapm_widgets[] = {
 	SND_SOC_DAPM_MUX("ASP1 TX3 Source", SND_SOC_NOPM, 0, 0, &asp1_tx3_mux),
 	SND_SOC_DAPM_MUX("ASP1 TX4 Source", SND_SOC_NOPM, 0, 0, &asp1_tx4_mux),
 
-	SND_SOC_DAPM_MUX("SDW1 TX1 Source", SND_SOC_NOPM, 0, 0, &sdw1_tx1_mux),
-	SND_SOC_DAPM_MUX("SDW1 TX2 Source", SND_SOC_NOPM, 0, 0, &sdw1_tx2_mux),
-	SND_SOC_DAPM_MUX("SDW1 TX3 Source", SND_SOC_NOPM, 0, 0, &sdw1_tx3_mux),
-	SND_SOC_DAPM_MUX("SDW1 TX4 Source", SND_SOC_NOPM, 0, 0, &sdw1_tx4_mux),
-
 	SND_SOC_DAPM_SIGGEN("VMON ADC"),
 	SND_SOC_DAPM_SIGGEN("IMON ADC"),
 	SND_SOC_DAPM_SIGGEN("ERRVOL ADC"),
@@ -417,6 +379,7 @@ static const struct snd_soc_dapm_widget cs35l56_dapm_widgets[] = {
 	SND_SOC_DAPM_SIGGEN("VBSTMON ADC"),
 	SND_SOC_DAPM_SIGGEN("TEMPMON ADC"),
 	SND_SOC_DAPM_SIGGEN("OT25 Reference"),
+	SND_SOC_DAPM_SIGGEN("OT127 Source"),
 
 	SND_SOC_DAPM_INPUT("Calibrate"),
 };
@@ -473,14 +436,7 @@ static const struct snd_soc_dapm_route cs35l56_audio_map[] = {
 	{ "ASP1 Capture", NULL, "ASP1TX3" },
 	{ "ASP1 Capture", NULL, "ASP1TX4" },
 
-	CS35L56_SRC_ROUTE("SDW1 TX1")
-	CS35L56_SRC_ROUTE("SDW1 TX2")
-	CS35L56_SRC_ROUTE("SDW1 TX3")
-	CS35L56_SRC_ROUTE("SDW1 TX4")
-	{ "SDW1 Capture", NULL, "SDW1 TX1 Source" },
-	{ "SDW1 Capture", NULL, "SDW1 TX2 Source" },
-	{ "SDW1 Capture", NULL, "SDW1 TX3 Source" },
-	{ "SDW1 Capture", NULL, "SDW1 TX4 Source" },
+	{ "OT127", NULL, "OT127 Source" },
 
 	{ "OT25", NULL, "OT25 Reference" },
 };
@@ -899,10 +855,10 @@ static struct snd_soc_dai_driver cs35l56_dai[] = {
 		.ops = &cs35l56_sdw_dai_ops,
 	},
 	{
-		.name = "cs35l56-sdw1c",
+		.name = "cs35l56-ot127",
 		.id = 2,
 		.capture = {
-			.stream_name = "SDW1 Capture",
+			.stream_name = "OT127",
 			.channels_min = 1,
 			.channels_max = 4,
 			.rates = CS35L56_RATES,
@@ -1478,6 +1434,9 @@ VISIBLE_IF_KUNIT int cs35l56_set_fw_name(struct snd_soc_component *component)
 {
 	struct cs35l56_private *cs35l56 = snd_soc_component_get_drvdata(component);
 	unsigned short vendor, device;
+	char ssid[9] = "";
+	char fe[10] = "";
+	const char *separator = "";
 	int ret;
 
 	if ((cs35l56->speaker_id < 0) && cs35l56->base.num_onchip_spkid_gpios) {
@@ -1497,20 +1456,38 @@ VISIBLE_IF_KUNIT int cs35l56_set_fw_name(struct snd_soc_component *component)
 		cs35l56->speaker_id = ret;
 	}
 
-	if (!cs35l56->dsp.system_name &&
-	    (snd_soc_card_get_pci_ssid(component->card, &vendor, &device) == 0)) {
+	if (!cs35l56->dsp.system_name) {
+		if (cs35l56->feid < 0x8000) {
+			if (snd_soc_card_get_pci_ssid(component->card, &vendor, &device) == 0) {
+				snprintf(ssid, sizeof(ssid), "%04x%04x", vendor, device);
+				separator = "-";
+			} else if (cs35l56->feid) {
+				dev_err(cs35l56->base.dev, "SSID required but not available\n");
+
+				/* Don't return error: allow falling back to default firmware */
+				return 0;
+			} else {
+				return 0;
+			}
+		}
+
+		if (cs35l56->feid) {
+			snprintf(fe, sizeof(fe), "%sf%xv%x", separator,
+				 cs35l56->feid, cs35l56->fev);
+		}
+
 		/* Append a speaker qualifier if there is a speaker ID */
 		if (cs35l56->speaker_id >= 0) {
 			cs35l56->dsp.system_name = devm_kasprintf(cs35l56->base.dev,
 								  GFP_KERNEL,
-								  "%04x%04x-spkid%d",
-								  vendor, device,
+								  "%s%s-spkid%d",
+								  ssid, fe,
 								  cs35l56->speaker_id);
 		} else {
 			cs35l56->dsp.system_name = devm_kasprintf(cs35l56->base.dev,
 								  GFP_KERNEL,
-								  "%04x%04x",
-								  vendor, device);
+								  "%s%s",
+								  ssid, fe);
 		}
 		if (!cs35l56->dsp.system_name)
 			return -ENOMEM;
@@ -1961,31 +1938,128 @@ static int cs35l56_process_xu_onchip_speaker_id(struct cs35l56_private *cs35l56,
 	return 0;
 }
 
+static int cs35l56_read_subproperty_control_dc(struct cs35l56_private *cs35l56,
+					       struct fwnode_handle *node,
+					       const char *subname,
+					       int width)
+{
+	static const char * const control_dc_value_prop_name = "mipi-sdca-control-dc-value";
+	u8 val8 = 0;
+	u16 val16 = 0;
+	u32 val32;
+	int ret;
+
+	struct fwnode_handle *subnode __free(fwnode_handle) =
+		fwnode_get_named_child_node(node, subname);
+	if (!subnode)
+		return -EINVAL;
+
+	switch (width) {
+	case 8:
+		ret = fwnode_property_read_u8(subnode, control_dc_value_prop_name, &val8);
+		val32 = val8;
+		break;
+	case 16:
+		ret = fwnode_property_read_u16(subnode, control_dc_value_prop_name, &val16);
+		val32 = val16;
+		break;
+	default:
+		ret = fwnode_property_read_u32(subnode, control_dc_value_prop_name, &val32);
+		break;
+	}
+
+	if (ret == -EINVAL)
+		return ret;
+
+	if (ret < 0) {
+		dev_warn(cs35l56->base.dev, "Failed to get dc-value for %s: %d\n",
+			 subname, ret);
+		return ret;
+	}
+
+	/* None of the values we need are this big */
+	if (overflows_type(val32, int))
+		return -EINVAL;
+
+	return (int)val32;
+}
+
+static int cs35l56_process_feid_fev(struct cs35l56_private *cs35l56,
+				    struct fwnode_handle *node)
+{
+	int ret;
+
+	/* Either property overrides default of 0. This matches Windows behavior */
+	ret = cs35l56_read_subproperty_control_dc(cs35l56, node,
+						  "mipi-sdca-control-0x9-subproperties",
+						  16);
+	if (ret >= 0) {
+		cs35l56->feid = (u16)ret;
+		dev_dbg(cs35l56->base.dev, "FEID=%#x\n", cs35l56->feid);
+	} else if (ret != -EINVAL) {
+		return ret;
+	}
+
+	ret = cs35l56_read_subproperty_control_dc(cs35l56, node,
+						  "mipi-sdca-control-0xA-subproperties",
+						  8);
+	if (ret >= 0) {
+		cs35l56->fev = (u8)ret;
+		dev_dbg(cs35l56->base.dev, "FEV=%#x\n", cs35l56->fev);
+	} else if (ret != -EINVAL) {
+		return ret;
+	}
+
+	return 0;
+}
+
+static int cs35l56_process_disco_control5(struct cs35l56_private *cs35l56,
+					  struct fwnode_handle *node)
+{
+	int ret;
+
+	/*
+	 * Don't fail probe because of a malformed property.
+	 * It might be a property we are not interested in anyway.
+	 */
+	ret = cs35l56_read_subproperty_control_dc(cs35l56, node,
+						  "mipi-sdca-control-0x5-subproperties",
+						  32);
+	if (ret < 0)
+		return 0;
+
+	if (ret != SDCA_FUNCTION_TYPE_SMART_AMP)
+		return 0;
+
+	return cs35l56_process_feid_fev(cs35l56, node);
+}
+
 VISIBLE_IF_KUNIT int cs35l56_process_xu_properties(struct cs35l56_private *cs35l56)
 {
-	struct fwnode_handle *ext_node = NULL;
-	struct fwnode_handle *link;
 	int ret;
 
 	if (!cs35l56->sdw_peripheral)
 		return 0;
 
-	fwnode_for_each_child_node(dev_fwnode(cs35l56->base.dev), link) {
-		ext_node = fwnode_get_named_child_node(link,
-						       "mipi-sdca-function-expansion-subproperties");
-		if (ext_node) {
-			fwnode_handle_put(link);
-			break;
+	fwnode_for_each_child_node_scoped(dev_fwnode(cs35l56->base.dev), link) {
+		ret = cs35l56_process_disco_control5(cs35l56, link);
+		if (ret)
+			return ret;
+
+		if (!cs35l56->base.num_onchip_spkid_gpios) {
+			struct fwnode_handle *ext_node __free(fwnode_handle) =
+				fwnode_get_named_child_node(link,
+							    "mipi-sdca-function-expansion-subproperties");
+
+			if (ext_node) {
+				ret = cs35l56_process_xu_onchip_speaker_id(cs35l56, ext_node);
+				if (ret)
+					return ret;
+			}
 		}
 	}
 
-	if (!ext_node)
-		return 0;
-
-	ret = cs35l56_process_xu_onchip_speaker_id(cs35l56, ext_node);
-	fwnode_handle_put(ext_node);
-
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL_IF_KUNIT(cs35l56_process_xu_properties);
 

@@ -106,7 +106,8 @@ int q6asm_open_read(struct audio_client *ac, uint32_t stream_id,
 int q6asm_enc_cfg_blk_pcm_format_support(struct audio_client *ac,
 					 uint32_t stream_id, uint32_t rate,
 					 uint32_t channels,
-					 uint16_t bits_per_sample);
+					 uint16_t bits_per_sample,
+					 uint16_t sample_word_size);
 
 int q6asm_read(struct audio_client *ac, uint32_t stream_id);
 
@@ -114,7 +115,8 @@ int q6asm_media_format_block_multi_ch_pcm(struct audio_client *ac,
 					  uint32_t stream_id,
 					  uint32_t rate, uint32_t channels,
 					  u8 channel_map[PCM_MAX_NUM_CHANNEL],
-					  uint16_t bits_per_sample);
+					  uint16_t bits_per_sample,
+					  uint16_t sample_word_size);
 int q6asm_stream_media_format_block_flac(struct audio_client *ac,
 					 uint32_t stream_id,
 					 struct q6asm_flac_cfg *cfg);

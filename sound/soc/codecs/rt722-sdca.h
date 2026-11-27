@@ -275,5 +275,4 @@ int rt722_sdca_index_write(struct rt722_sdca_priv *rt722,
 int rt722_sdca_index_read(struct rt722_sdca_priv *rt722,
 		unsigned int nid, unsigned int reg, unsigned int *value);
 
-int rt722_sdca_jack_detect(struct rt722_sdca_priv *rt722, bool *hp, bool *mic);
 #endif /* __RT722_H__ */

@@ -272,14 +272,30 @@ struct snd_soc_component {
 	     snd_soc_dai_to_list(dai) != &(component)->dai_list;		\
 	     dai = _dai, _dai = snd_soc_dai_from_list(snd_soc_dai_to_list(_dai)->next))
 
+struct device *snd_soc_component_to_dev(struct snd_soc_component *component);
 struct snd_soc_dapm_context *snd_soc_component_to_dapm(struct snd_soc_component *component);
+const struct snd_soc_component_driver
+*snd_soc_component_to_driver(struct snd_soc_component *component);
+struct snd_soc_card *snd_soc_component_to_card(struct snd_soc_component *component);
+struct dentry *snd_soc_component_to_debugfs_root(struct snd_soc_component *component);
+struct regmap *snd_soc_component_to_regmap(struct snd_soc_component *component);
 struct snd_soc_component *snd_soc_component_new(struct device *dev, const char *name,
 						const struct snd_soc_component_driver *driver);
+void snd_soc_component_unregister(struct snd_soc_component *component);
 int snd_soc_component_register(struct snd_soc_component *component,
 			       struct snd_soc_dai_driver *dai_drv,
 			       int num_dai);
+int snd_soc_register_component(struct device *dev,
+			       const struct snd_soc_component_driver *component_driver,
+			       struct snd_soc_dai_driver *dai_drv, int num_dai);
+
+int devm_snd_soc_register_component(struct device *dev,
+				    const struct snd_soc_component_driver *component_driver,
+				    struct snd_soc_dai_driver *dai_drv, int num_dai);
+void snd_soc_unregister_component(struct device *dev);
 
 const char *snd_soc_component_name(struct snd_soc_component *component);
+const char *snd_soc_component_name_prefix(struct snd_soc_component *component);
 
 void snd_soc_component_set_priv(struct snd_soc_component *component, void *priv);
 void *snd_soc_component_to_priv(struct snd_soc_component *component);
@@ -333,14 +349,20 @@ int snd_soc_component_stream_event(struct snd_soc_component *component,
 int snd_soc_component_set_bias_level(struct snd_soc_component *component,
 				     enum snd_soc_bias_level level);
 
-int snd_soc_component_regmap_val_bytes(struct snd_soc_component *component);
-int snd_soc_component_regmap_cache_sync(struct snd_soc_component *component);
-void snd_soc_component_regmap_async_complete(struct snd_soc_component *component);
 #ifdef CONFIG_REGMAP
-void snd_soc_component_init_regmap(struct snd_soc_component *component,
+void snd_soc_component_regmap_init(struct snd_soc_component *component,
 				   struct regmap *regmap);
-void snd_soc_component_exit_regmap(struct snd_soc_component *component);
+void snd_soc_component_regmap_exit(struct snd_soc_component *component);
+int snd_soc_component_regmap_multi_reg_write_bypassed(struct snd_soc_component *component,
+						      const struct reg_sequence *regs,
+						      int num_regs);
 #endif
+int snd_soc_component_regmap_get_val_bytes(struct snd_soc_component *component);
+void snd_soc_component_regmap_async_complete(struct snd_soc_component *component);
+int snd_soc_component_regcache_sync(struct snd_soc_component *component);
+void snd_soc_component_regcache_mark_dirty(struct snd_soc_component *component);
+void snd_soc_component_regcache_cache_only(struct snd_soc_component *component, bool enable);
+void snd_soc_component_regcache_cache_bypass(struct snd_soc_component *component, bool enable);
 
 int snd_soc_component_fixup_controls(struct snd_soc_component *component);
 int snd_soc_component_add_controls(struct snd_soc_component *component,
@@ -371,6 +393,7 @@ static inline void *snd_soc_component_get_drvdata(struct snd_soc_component *c)
 }
 
 unsigned int snd_soc_component_active(struct snd_soc_component *component);
+int snd_soc_component_num_dai(struct snd_soc_component *component);
 
 /* component controls */
 struct snd_kcontrol *snd_soc_component_get_kcontrol(struct snd_soc_component *component,
@@ -392,6 +415,9 @@ int snd_soc_component_of_xlate_dai_id(struct snd_soc_component *component,
 int snd_soc_component_of_xlate_dai_name(struct snd_soc_component *component,
 					const struct of_phandle_args *args,
 					const char **dai_name);
+int snd_soc_component_of_simple_xlate_dai_name(struct snd_soc_component *component,
+					       const struct of_phandle_args *args,
+					       const char **dai_name);
 int snd_soc_component_compr_open(struct snd_soc_component *component,
 				 struct snd_compr_stream *cstream);
 void snd_soc_component_compr_free(struct snd_soc_component *component,
@@ -445,10 +471,14 @@ void snd_soc_pcm_component_delay(struct snd_pcm_substream *substream,
 				 snd_pcm_sframes_t *cpu_delay, snd_pcm_sframes_t *codec_delay);
 
 /* REMOVE ME */
-#define snd_soc_component_cache_sync			snd_soc_component_regmap_cache_sync
+#define snd_soc_component_init_regmap			snd_soc_component_regmap_init
+#define snd_soc_component_exit_regmap			snd_soc_component_regmap_exit
+#define snd_soc_component_cache_sync			snd_soc_component_regcache_sync
+#define snd_soc_component_regmap_val_bytes		snd_soc_component_regmap_get_val_bytes
 #define snd_soc_component_async_complete		snd_soc_component_regmap_async_complete
 #define snd_soc_lookup_component_nolocked		snd_soc_component_lookup_nolock
 #define snd_soc_lookup_component			snd_soc_component_lookup
 #define snd_soc_lookup_component_by_name		snd_soc_component_lookup_by_name
+#define snd_soc_of_xlate_dai_name			snd_soc_component_of_simple_xlate_dai_name
 
 #endif /* __SOC_COMPONENT_H */
