@@ -103,25 +103,31 @@ static void amd_stop_all_sensor_v2(struct amd_mp2_dev *privdata)
 	writel(cmd_base.ul, privdata->mmio + AMD_C2P_MSG0);
 }
 
-void amd_sfh_clear_intr_v2(struct amd_mp2_dev *privdata)
+bool amd_sfh_clear_intr_v2(struct amd_mp2_dev *privdata)
 {
 	if (readl(privdata->mmio + amd_get_p2c_val(privdata, 4))) {
 		writel(0, privdata->mmio + amd_get_p2c_val(privdata, 4));
 		writel(0xf, privdata->mmio + amd_get_p2c_val(privdata, 5));
+		return true;
 	}
+
+	return false;
 }
 
-void amd_sfh_clear_intr(struct amd_mp2_dev *privdata)
+bool amd_sfh_clear_intr(struct amd_mp2_dev *privdata)
 {
 	if (privdata->mp2_ops->clear_intr)
-		privdata->mp2_ops->clear_intr(privdata);
+		return privdata->mp2_ops->clear_intr(privdata);
+
+	return false;
 }
 
 static irqreturn_t amd_sfh_irq_handler(int irq, void *data)
 {
-	amd_sfh_clear_intr(data);
+	if (amd_sfh_clear_intr(data))
+		return IRQ_HANDLED;
 
-	return IRQ_HANDLED;
+	return IRQ_NONE;
 }
 
 int amd_sfh_irq_init_v2(struct amd_mp2_dev *privdata)
@@ -129,7 +135,7 @@ int amd_sfh_irq_init_v2(struct amd_mp2_dev *privdata)
 	pcim_intx(privdata->pdev, true);
 
 	return devm_request_irq(&privdata->pdev->dev, privdata->pdev->irq,
-				amd_sfh_irq_handler, 0, DRIVER_NAME, privdata);
+				amd_sfh_irq_handler, IRQF_SHARED, DRIVER_NAME, privdata);
 }
 
 static int amd_sfh_dis_sts_v2(struct amd_mp2_dev *privdata)
@@ -320,6 +326,13 @@ static const struct dmi_system_id dmi_sfh_table[] = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
 			DMI_MATCH(DMI_PRODUCT_NAME, "VivoBook_ASUSLaptop TP420UA_TM420UA"),
+		},
+	},
+	{
+		.callback = mp2_disable_intr,
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "VivoBook_ASUSLaptop TP420IA"),
 		},
 	},
 	{}

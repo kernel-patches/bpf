@@ -878,13 +878,14 @@ const __u8 uclogic_rdesc_ugee_v2_pen_template_arr[] = {
 	0x09, 0x42,         /*          Usage (Tip Switch),             */
 	0x09, 0x44,         /*          Usage (Barrel Switch),          */
 	0x09, 0x46,         /*          Usage (Tablet Pick),            */
+	0x09, 0x3c,         /*          Usage (Invert),                 */
 	0x75, 0x01,         /*          Report Size (1),                */
-	0x95, 0x03,         /*          Report Count (3),               */
+	0x95, 0x04,         /*          Report Count (4),               */
 	0x14,               /*          Logical Minimum (0),            */
 	0x25, 0x01,         /*          Logical Maximum (1),            */
 	0x81, 0x02,         /*          Input (Variable),               */
-	0x95, 0x02,         /*          Report Count (2),               */
-	0x81, 0x03,         /*          Input (Constant, Variable),     */
+	0x95, 0x01,         /*          Report Count (1),               */
+	0x81, 0x03,         /*          Input (Constant),               */
 	0x09, 0x32,         /*          Usage (In Range),               */
 	0x95, 0x01,         /*          Report Count (1),               */
 	0x81, 0x02,         /*          Input (Variable),               */

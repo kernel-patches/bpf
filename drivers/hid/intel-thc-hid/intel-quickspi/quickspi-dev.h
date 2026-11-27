@@ -55,6 +55,13 @@
 #define MAX_PACKET_SIZE_VALUE_LNL			256
 
 /*
+ * During HID-over-SPI transfers, THC DMA may also read bytes that aren’t
+ * part of the actual data, such as a placeholder byte used for timing
+ * control (8 clock cycles).
+ */
+#define QUICKSPI_DMA_EXTRA_BYTE				1
+
+/*
  * THC uses runtime auto suspend to dynamically switch between THC active LTR
  * and low power LTR to save CPU power.
  * Default value is 5000ms, that means if no touch event in this time, THC will

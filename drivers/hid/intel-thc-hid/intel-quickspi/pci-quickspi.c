@@ -324,8 +324,12 @@ static irqreturn_t quickspi_irq_thread_handler(int irq, void *dev_id)
 
 	if (int_mask & BIT(THC_RXDMA2_INT)) {
 		while (!read_finished) {
-			ret = thc_rxdma_read(qsdev->thc_hw, THC_RXDMA2, qsdev->input_buf,
-					     &input_len, &read_finished);
+			ret = thc_rxdma_read_safe(qsdev->thc_hw, THC_RXDMA2, qsdev->input_buf,
+						  HIDSPI_INPUT_BODY_SIZE(qsdev->input_len),
+						  &input_len, &read_finished);
+			if (ret == -EMSGSIZE)
+				continue;
+
 			if (ret) {
 				err_recover = 1;
 				goto end;
@@ -550,7 +554,7 @@ static int quickspi_alloc_report_buf(struct quickspi_device *qsdev)
 		return -ENOMEM;
 
 	max_input_len = max(le16_to_cpu(qsdev->dev_desc.rep_desc_len),
-			    le16_to_cpu(qsdev->dev_desc.max_input_len));
+			    le16_to_cpu(qsdev->dev_desc.max_input_len)) + QUICKSPI_DMA_EXTRA_BYTE;
 
 	qsdev->input_buf = devm_kzalloc(qsdev->dev,
 					HIDSPI_INPUT_BODY_SIZE(max_input_len), GFP_KERNEL);
@@ -560,7 +564,7 @@ static int quickspi_alloc_report_buf(struct quickspi_device *qsdev)
 	qsdev->input_len = max_input_len;
 
 	max_report_len = max(le16_to_cpu(qsdev->dev_desc.max_output_len),
-			     le16_to_cpu(qsdev->dev_desc.max_input_len));
+			     le16_to_cpu(qsdev->dev_desc.max_input_len)) + QUICKSPI_DMA_EXTRA_BYTE;
 
 	qsdev->report_buf = devm_kzalloc(qsdev->dev,
 					 HIDSPI_OUTPUT_REPORT_SIZE(max_report_len), GFP_KERNEL);
@@ -600,6 +604,8 @@ static int quickspi_probe(struct pci_dev *pdev,
 			  const struct pci_device_id *id)
 {
 	struct quickspi_device *qsdev;
+	bool dma_initialized = false;
+	bool irq_requested = false;
 	void __iomem *mem_addr;
 	int ret;
 
@@ -652,6 +658,7 @@ static int quickspi_probe(struct pci_dev *pdev,
 					qsdev);
 	if (ret)
 		goto dev_deinit;
+	irq_requested = true;
 
 	ret = reset_tic(qsdev);
 	if (ret) {
@@ -670,17 +677,18 @@ static int quickspi_probe(struct pci_dev *pdev,
 		dev_err(&pdev->dev, "Setup THC DMA failed, ret= %d\n", ret);
 		goto dev_deinit;
 	}
+	dma_initialized = true;
 
 	ret = quickspi_get_report_descriptor(qsdev);
 	if (ret) {
 		dev_err(&pdev->dev, "Get report descriptor failed, ret = %d\n", ret);
-		goto dma_deinit;
+		goto dev_deinit;
 	}
 
 	ret = quickspi_hid_probe(qsdev);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to register HID device, ret = %d\n", ret);
-		goto dma_deinit;
+		goto dev_deinit;
 	}
 
 	qsdev->state = QUICKSPI_ENABLED;
@@ -695,10 +703,20 @@ static int quickspi_probe(struct pci_dev *pdev,
 
 	return 0;
 
-dma_deinit:
-	quickspi_dma_deinit(qsdev);
 dev_deinit:
+	if (irq_requested) {
+		WRITE_ONCE(qsdev->recovery_disabled, true);
+		disable_irq(pdev->irq);
+	}
+
 	quickspi_dev_deinit(qsdev);
+
+	if (irq_requested)
+		devm_free_irq(&pdev->dev, pdev->irq, qsdev);
+
+	if (dma_initialized)
+		quickspi_dma_deinit(qsdev);
+
 disable_pci_device:
 	pci_clear_master(pdev);
 
@@ -721,9 +739,12 @@ static void quickspi_remove(struct pci_dev *pdev)
 	if (!qsdev)
 		return;
 
-	quickspi_hid_remove(qsdev);
-
+	WRITE_ONCE(qsdev->recovery_disabled, true);
+	disable_irq(pdev->irq);
 	quickspi_dev_deinit(qsdev);
+	devm_free_irq(&pdev->dev, pdev->irq, qsdev);
+
+	quickspi_hid_remove(qsdev);
 
 	quickspi_dma_deinit(qsdev);
 
@@ -749,6 +770,9 @@ static void quickspi_shutdown(struct pci_dev *pdev)
 	qsdev = pci_get_drvdata(pdev);
 	if (!qsdev)
 		return;
+
+	WRITE_ONCE(qsdev->recovery_disabled, true);
+	disable_irq(pdev->irq);
 
 	quickspi_dev_deinit(qsdev);
 
