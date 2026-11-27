@@ -1907,9 +1907,9 @@ int sdw_handle_slave_status(struct sdw_bus *bus,
 			mutex_unlock(&bus->bus_lock);
 			continue;
 		}
-		mutex_unlock(&bus->bus_lock);
 
 		slave = sdw_get_slave(bus, i);
+		mutex_unlock(&bus->bus_lock);
 		if (!slave)
 			continue;
 
@@ -1954,9 +1954,9 @@ int sdw_handle_slave_status(struct sdw_bus *bus,
 			mutex_unlock(&bus->bus_lock);
 			continue;
 		}
-		mutex_unlock(&bus->bus_lock);
 
 		slave = sdw_get_slave(bus, i);
+		mutex_unlock(&bus->bus_lock);
 		if (!slave)
 			continue;
 
@@ -2052,9 +2052,9 @@ void sdw_clear_slave_status(struct sdw_bus *bus, u32 request)
 			mutex_unlock(&bus->bus_lock);
 			continue;
 		}
-		mutex_unlock(&bus->bus_lock);
 
 		slave = sdw_get_slave(bus, i);
+		mutex_unlock(&bus->bus_lock);
 		if (!slave)
 			continue;
 
