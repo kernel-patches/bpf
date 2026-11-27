@@ -40,9 +40,12 @@
 #include "mgb4_trigger.h"
 #include "mgb4_core.h"
 
-#define MGB4_USER_IRQS  16
+#define MGB4_USER_IRQS   16
 #define MGB4_MGB4_BAR_ID 0
 #define MGB4_XDMA_BAR_ID 1
+
+#define XDMA_IRQ_SPI 14
+#define XDMA_IRQ_I2C 15
 
 #define DIGITEQ_VID 0x1ed8
 #define T100_DID    0x0101
@@ -168,8 +171,6 @@ static int init_spi(struct mgb4_dev *mgbdev, u32 devid)
 			.name	= "io-memory",
 		},
 		{
-			.start	= 14,
-			.end	= 14,
 			.flags	= IORESOURCE_IRQ,
 			.name	= "irq",
 		},
@@ -190,7 +191,7 @@ static int init_spi(struct mgb4_dev *mgbdev, u32 devid)
 
 	request_module("platform:xilinx_spi");
 
-	irq = xdma_get_user_irq(mgbdev->xdev, 14);
+	irq = xdma_get_user_irq(mgbdev->xdev, XDMA_IRQ_SPI);
 	xdma_enable_user_irq(mgbdev->xdev, irq);
 
 	spi_resources[0].parent = &pdev->resource[MGB4_MGB4_BAR_ID];
@@ -276,8 +277,6 @@ static int init_i2c(struct mgb4_dev *mgbdev)
 			.name	= "io-memory",
 		},
 		{
-			.start	= 15,
-			.end	= 15,
 			.flags	= IORESOURCE_IRQ,
 			.name	= "irq",
 		},
@@ -291,7 +290,7 @@ static int init_i2c(struct mgb4_dev *mgbdev)
 
 	request_module("platform:xiic-i2c");
 
-	irq = xdma_get_user_irq(mgbdev->xdev, 15);
+	irq = xdma_get_user_irq(mgbdev->xdev, XDMA_IRQ_I2C);
 	xdma_enable_user_irq(mgbdev->xdev, irq);
 
 	i2c_resources[0].parent = &pdev->resource[MGB4_MGB4_BAR_ID];
@@ -693,6 +692,48 @@ static void mgb4_remove(struct pci_dev *pdev)
 	kfree(mgbdev);
 }
 
+static int mgb4_suspend(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct mgb4_dev *mgbdev = pci_get_drvdata(pdev);
+	int i, rv = 0;
+
+	for (i = 0; i < MGB4_VIN_DEVICES; i++)
+		if (mgbdev->vin[i])
+			rv |= mgb4_vin_suspend(mgbdev->vin[i]);
+	for (i = 0; i < MGB4_VOUT_DEVICES; i++)
+		if (mgbdev->vout[i])
+			rv |= mgb4_vout_suspend(mgbdev->vout[i]);
+
+	xdma_disable_user_irq(mgbdev->xdev,
+			      xdma_get_user_irq(mgbdev->xdev, XDMA_IRQ_SPI));
+	xdma_disable_user_irq(mgbdev->xdev,
+			      xdma_get_user_irq(mgbdev->xdev, XDMA_IRQ_I2C));
+
+	return rv ? -EIO : 0;
+}
+
+static int mgb4_resume(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct mgb4_dev *mgbdev = pci_get_drvdata(pdev);
+	int i, rv = 0;
+
+	xdma_enable_user_irq(mgbdev->xdev,
+			     xdma_get_user_irq(mgbdev->xdev, XDMA_IRQ_SPI));
+	xdma_enable_user_irq(mgbdev->xdev,
+			     xdma_get_user_irq(mgbdev->xdev, XDMA_IRQ_I2C));
+
+	for (i = 0; i < MGB4_VIN_DEVICES; i++)
+		if (mgbdev->vin[i])
+			rv |= mgb4_vin_resume(mgbdev->vin[i]);
+	for (i = 0; i < MGB4_VOUT_DEVICES; i++)
+		if (mgbdev->vout[i])
+			rv |= mgb4_vout_resume(mgbdev->vout[i]);
+
+	return rv ? -EIO : 0;
+}
+
 static const struct pci_device_id mgb4_pci_ids[] = {
 	{ PCI_DEVICE(DIGITEQ_VID, T100_DID) },
 	{ PCI_DEVICE(DIGITEQ_VID, T200_DID) },
@@ -700,11 +741,14 @@ static const struct pci_device_id mgb4_pci_ids[] = {
 };
 MODULE_DEVICE_TABLE(pci, mgb4_pci_ids);
 
+static DEFINE_SIMPLE_DEV_PM_OPS(mgb4_pm_ops, mgb4_suspend, mgb4_resume);
+
 static struct pci_driver mgb4_pci_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = mgb4_pci_ids,
 	.probe = mgb4_probe,
 	.remove = mgb4_remove,
+	.driver.pm = pm_sleep_ptr(&mgb4_pm_ops),
 };
 
 module_pci_driver(mgb4_pci_driver);

@@ -1497,6 +1497,22 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/iio/light/ams,as73211.yaml
 F:	drivers/iio/light/as73211.c
 
+AMS MIRA016 DRIVER
+M:	Jacopo Mondi <jacopo.mondi@ideasonboard.com>
+M:	Philippe Baetens <philippebaetens@gmail.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/ams,mira016.yaml
+F:	drivers/media/i2c/mira016.c
+
+AMS MIRA220 DRIVER
+M:	Jacopo Mondi <jacopo.mondi@ideasonboard.com>
+M:	Philippe Baetens <philippebaetens@gmail.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/ams,mira220.yaml
+F:	drivers/media/i2c/mira220.c
+
 AMT (Automatic Multicast Tunneling)
 M:	Taehee Yoo <ap420073@gmail.com>
 L:	netdev@vger.kernel.org
@@ -13521,7 +13537,7 @@ F:	drivers/staging/media/ipu3/
 
 INTEL IPU6 INPUT SYSTEM DRIVER
 M:	Sakari Ailus <sakari.ailus@linux.intel.com>
-R:	Antti Laakso <antti.laakso@linux.intel.com>
+M:	Antti Laakso <antti.laakso@linux.intel.com>
 R:	"Sapre, Sarang" <sarang.sapre@intel.com>
 R:	Divyamani Tripathi <divyamani.tripathi@intel.com>
 R:	Manik Bajpai <manik.bajpai@intel.com>
@@ -21149,7 +21165,7 @@ S:	Maintained
 W:	https://linuxtv.org
 Q:	http://patchwork.linuxtv.org/project/linux-media/list/
 T:	git git://linuxtv.org/mhadli/v4l-dvb-davinci_devices.git
-F:	Documentation/devicetree/bindings/media/i2c/ovti,ov2659.txt
+F:	Documentation/devicetree/bindings/media/i2c/ovti,ov2659.yaml
 F:	drivers/media/i2c/ov2659.c
 F:	include/media/i2c/ov2659.h
 
@@ -26254,12 +26270,11 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/media/i2c/sony,imx576.yaml
 F:	drivers/media/i2c/imx576.c
 
-SONY IMX678 SENSOR DRIVER
-M:	Jai Luthra <jai.luthra@ideasonboard.com>
-L:	linux-media@vger.kernel.org
+SONY IMX908 SENSOR DRIVER
+M:	Lachlan Michael <lachlan.michael@sony.com>
 S:	Maintained
-F:	Documentation/devicetree/bindings/media/i2c/sony,imx678.yaml
-F:	drivers/media/i2c/imx678.c
+F:	Documentation/devicetree/bindings/media/i2c/sony,imx908.yaml
+F:	drivers/media/i2c/imx908.c
 
 SONY MEMORYSTICK SUBSYSTEM
 M:	Maxim Levitsky <maximlevitsky@gmail.com>
@@ -26270,6 +26285,13 @@ S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/ulfh/mmc.git
 F:	drivers/memstick/
 F:	include/linux/memstick.h
+
+SONY STARVIS 2 SENSOR DRIVER
+M:	Jai Luthra <jai.luthra@ideasonboard.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/sony,imx678.yaml
+F:	drivers/media/i2c/sony-starvis2.c
 
 SONY VAIO CONTROL DEVICE DRIVER
 M:	Mattia Dongili <malattia@linux.it>
@@ -29410,6 +29432,7 @@ F:	drivers/media/i2c/mt*
 F:	drivers/media/i2c/og*
 F:	drivers/media/i2c/ov*
 F:	drivers/media/i2c/s5*
+F:	drivers/media/i2c/sony-starvis*
 F:	drivers/media/i2c/vd55g1.c
 F:	drivers/media/i2c/vd56g3.c
 F:	drivers/media/i2c/vgxy61.c
@@ -29605,7 +29628,6 @@ S:	Maintained
 F:	drivers/media/platform/video-mux.c
 
 VIDEOBUF2 FRAMEWORK
-M:	Tomasz Figa <tfiga@chromium.org>
 M:	Marek Szyprowski <m.szyprowski@samsung.com>
 L:	linux-media@vger.kernel.org
 S:	Maintained

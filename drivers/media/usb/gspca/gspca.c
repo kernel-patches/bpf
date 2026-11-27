@@ -213,6 +213,8 @@ static void gspca_input_create_urb(struct gspca_dev *gspca_dev)
 
 	if (gspca_dev->sd_desc->int_pkt_scan)  {
 		intf = usb_ifnum_to_if(gspca_dev->dev, gspca_dev->iface);
+		if (!intf)
+			return;
 
 		ret = usb_find_int_in_endpoint(intf->cur_altsetting, &ep);
 		if (ret)
@@ -765,6 +767,8 @@ static int gspca_init_transfer(struct gspca_dev *gspca_dev)
 
 	/* do the specific subdriver stuff before endpoint selection */
 	intf = usb_ifnum_to_if(gspca_dev->dev, gspca_dev->iface);
+	if (!intf)
+		return -ENODEV;
 	gspca_dev->alt = gspca_dev->cam.bulk ? intf->num_altsetting : 0;
 	if (gspca_dev->sd_desc->isoc_init) {
 		ret = gspca_dev->sd_desc->isoc_init(gspca_dev);
@@ -840,11 +844,12 @@ static int gspca_init_transfer(struct gspca_dev *gspca_dev)
 			goto out;
 		}
 		v4l2_ctrl_handler_setup(gspca_dev->vdev.ctrl_handler);
-		gspca_dev->streaming = true;
 
 		/* some bulk transfers are started by the subdriver */
-		if (gspca_dev->cam.bulk && gspca_dev->cam.bulk_nurbs == 0)
+		if (gspca_dev->cam.bulk && gspca_dev->cam.bulk_nurbs == 0) {
+			gspca_dev->streaming = true;
 			break;
+		}
 
 		/* submit the URBs */
 		for (n = 0; n < MAX_NURBS; n++) {
@@ -855,12 +860,16 @@ static int gspca_init_transfer(struct gspca_dev *gspca_dev)
 			if (ret < 0)
 				break;
 		}
-		if (ret >= 0)
+		if (ret >= 0) {
+			gspca_dev->streaming = true;
 			break;			/* transfer is started */
+		}
 
 		/* something when wrong
 		 * stop the webcam and free the transfer resources */
 		gspca_stream_off(gspca_dev);
+		/* The retry or exit path creates its own input URB. */
+		gspca_input_destroy_urb(gspca_dev);
 		if (ret != -ENOSPC) {
 			pr_err("usb_submit_urb alt %d err %d\n",
 			       gspca_dev->alt, ret);

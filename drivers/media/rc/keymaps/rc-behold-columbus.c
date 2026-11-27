@@ -81,7 +81,7 @@ static struct rc_map_table behold_columbus[] = {
 static struct rc_map_list behold_columbus_map = {
 	.map = {
 		.scan     = behold_columbus,
-		.size     = ARRAY_SIZE(behold_columbus),
+		.entries  = ARRAY_SIZE(behold_columbus),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_BEHOLD_COLUMBUS,
 	}

@@ -50,7 +50,7 @@ static struct rc_map_table flydvb[] = {
 static struct rc_map_list flydvb_map = {
 	.map = {
 		.scan     = flydvb,
-		.size     = ARRAY_SIZE(flydvb),
+		.entries  = ARRAY_SIZE(flydvb),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_FLYDVB,
 	}

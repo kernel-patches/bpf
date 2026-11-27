@@ -1483,6 +1483,7 @@ vidtv_psi_pmt_create_sec_for_each_pat_entry(struct vidtv_psi_table_pat *pat,
 				i--;
 				vidtv_psi_pmt_table_destroy(pmt_secs[i]);
 			}
+			kfree(pmt_secs);
 			return NULL;
 		}
 		i++;

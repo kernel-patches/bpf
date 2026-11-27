@@ -57,6 +57,7 @@ struct pvr2_string_table {
 #define PVR2_ROUTING_SCHEME_ONAIR 2
 #define PVR2_ROUTING_SCHEME_AV400 3
 #define PVR2_ROUTING_SCHEME_HAUP160XXX 4
+#define PVR2_ROUTING_SCHEME_HAUP75XXX 5
 
 #define PVR2_DIGITAL_SCHEME_NONE 0
 #define PVR2_DIGITAL_SCHEME_HAUPPAUGE 1
@@ -164,6 +165,9 @@ struct pvr2_device_desc {
 	unsigned int flag_has_composite:1;     /* Has composite input */
 	unsigned int flag_has_svideo:1;        /* Has s-video input */
 	unsigned int flag_fx2_16kb:1;          /* 16KB FX2 firmware OK here */
+
+	/* FM radio reaches the cx2584x as a 5.5 MHz sound IF (TDA8295) */
+	unsigned int flag_radio_sif_5_5mhz:1;
 
 	/* If this driver is considered experimental, i.e. not all aspects
 	   are working correctly and/or it is untested, mark that fact

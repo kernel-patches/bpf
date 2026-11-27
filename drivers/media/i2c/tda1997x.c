@@ -1891,17 +1891,18 @@ static int tda1997x_set_edid(struct v4l2_subdev *sd, struct v4l2_edid *edid)
 
 	tda1997x_disable_edid(sd);
 
+	/* store state */
+	memset(state->edid.edid, 0, sizeof(state->edid.edid));
+	memcpy(state->edid.edid, edid->edid, edid->blocks * 128);
+	state->edid.blocks = edid->blocks;
+
 	/* write base EDID */
 	for (i = 0; i < 128; i++)
-		io_write(sd, REG_EDID_IN_BYTE0 + i, edid->edid[i]);
+		io_write(sd, REG_EDID_IN_BYTE0 + i, state->edid.edid[i]);
 
 	/* write CEA Extension */
 	for (i = 0; i < 128; i++)
-		io_write(sd, REG_EDID_IN_BYTE128 + i, edid->edid[i+128]);
-
-	/* store state */
-	memcpy(state->edid.edid, edid->edid, 256);
-	state->edid.blocks = edid->blocks;
+		io_write(sd, REG_EDID_IN_BYTE128 + i, state->edid.edid[i + 128]);
 
 	tda1997x_enable_edid(sd);
 
@@ -2776,7 +2777,7 @@ static int tda1997x_probe(struct i2c_client *client)
 					     &tda1997x_audio_dai, 1);
 		if (ret) {
 			dev_err(&client->dev, "register audio codec failed\n");
-			goto err_free_media;
+			goto err_unreg_subdev;
 		}
 		v4l_info(state->client, "registered audio codec\n");
 	}
@@ -2788,11 +2789,13 @@ static int tda1997x_probe(struct i2c_client *client)
 					KBUILD_MODNAME, state);
 	if (ret) {
 		v4l_err(client, "irq%d reg failed: %d\n", client->irq, ret);
-		goto err_free_media;
+		goto err_unreg_subdev;
 	}
 
 	return 0;
 
+err_unreg_subdev:
+	v4l2_async_unregister_subdev(sd);
 err_free_media:
 	media_entity_cleanup(&sd->entity);
 err_free_handler:

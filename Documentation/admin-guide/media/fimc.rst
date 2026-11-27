@@ -148,6 +148,7 @@ or retrieve the information from /dev/media? with help of the media-ctl tool:
 7. Build
 --------
 
-If the driver is built as a loadable kernel module (CONFIG_VIDEO_SAMSUNG_S5P_FIMC=m)
-two modules are created (in addition to the core v4l2 modules): s5p-fimc.ko and
-optional s5p-csis.ko (MIPI-CSI receiver subdev).
+If the FIMC driver is built as a loadable kernel module
+(CONFIG_VIDEO_S5P_FIMC=m), it is named s5p-fimc.ko.  The optional
+MIPI-CSIS receiver is controlled separately by CONFIG_VIDEO_S5P_MIPI_CSIS
+and is named s5p-csis.ko when built as a module.

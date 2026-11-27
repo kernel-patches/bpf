@@ -1402,6 +1402,7 @@ static int fimc_lite_create_capture_subdev(struct fimc_lite *fimc)
 						  NULL);
 	if (handler->error) {
 		media_entity_cleanup(&sd->entity);
+		v4l2_ctrl_handler_free(handler);
 		return handler->error;
 	}
 

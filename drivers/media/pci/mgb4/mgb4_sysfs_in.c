@@ -551,22 +551,29 @@ static ssize_t gmsl_mode_show(struct device *dev,
  * locking/queue check is not needed.
  */
 static ssize_t gmsl_mode_store(struct device *dev,
-			       struct device_attribute *attr, const char *buf,
+			       struct device_attribute *attr,
+			       const char *buf,
 			       size_t count)
 {
-	static const struct mgb4_i2c_kv G12[] = {
-		{0x01, 0x03, 0x03}, {0x300, 0x0C, 0x0C}, {0x03, 0xC0, 0xC0}};
-	static const struct mgb4_i2c_kv G6[] = {
-		{0x01, 0x03, 0x02}, {0x300, 0x0C, 0x08}, {0x03, 0xC0, 0x00}};
-	static const struct mgb4_i2c_kv G3[] = {
-		{0x01, 0x03, 0x01}, {0x300, 0x0C, 0x04}, {0x03, 0xC0, 0x00}};
-	static const struct mgb4_i2c_kv G1[] = {
-		{0x01, 0x03, 0x00}, {0x300, 0x0C, 0x00}, {0x03, 0xC0, 0x00}};
-	static const struct mgb4_i2c_kv reset[] = {
-		{0x10, 1U << 5, 1U << 5}, {0x300, 1U << 6, 1U << 6}};
+	static const struct mgb4_i2c_key G12_keys[] = {
+		{0x01, 0x03}, {0x300, 0x0C}, {0x03, 0xC0}};
+	static const u8 G12_values[] = {0x03, 0x0C, 0xC0};
+	static const struct mgb4_i2c_key G6_keys[] = {
+		{0x01, 0x03}, {0x300, 0x0C}, {0x03, 0xC0}};
+	static const u8 G6_values[] = {0x02, 0x08, 0x00};
+	static const struct mgb4_i2c_key G3_keys[] = {
+		{0x01, 0x03}, {0x300, 0x0C}, {0x03, 0xC0}};
+	static const u8 G3_values[] = {0x01, 0x04, 0x00};
+	static const struct mgb4_i2c_key G1_keys[] = {
+		{0x01, 0x03}, {0x300, 0x0C}, {0x03, 0xC0}};
+	static const u8 G1_values[] = {0x00, 0x00, 0x00};
+	static const struct mgb4_i2c_key reset_keys[] = {
+		{0x10, 1U << 5}, {0x300, 1U << 6}};
+	static const u8 reset_values[] = {1U << 5, 1U << 6};
 	struct video_device *vdev = to_video_device(dev);
 	struct mgb4_vin_dev *vindev = video_get_drvdata(vdev);
-	const struct mgb4_i2c_kv *values;
+	const struct mgb4_i2c_key *keys;
+	const u8 *values;
 	unsigned long val;
 	int ret;
 
@@ -576,24 +583,28 @@ static ssize_t gmsl_mode_store(struct device *dev,
 
 	switch (val) {
 	case 0: /* 12Gb/s */
-		values = G12;
+		keys = G12_keys;
+		values = G12_values;
 		break;
 	case 1: /* 6Gb/s */
-		values = G6;
+		keys = G6_keys;
+		values = G6_values;
 		break;
 	case 2: /* 3Gb/s */
-		values = G3;
+		keys = G3_keys;
+		values = G3_values;
 		break;
 	case 3: /* 1.5Gb/s */
-		values = G1;
+		keys = G1_keys;
+		values = G1_values;
 		break;
 	default:
 		return -EINVAL;
 	}
 
 	mutex_lock(&vindev->mgbdev->i2c_lock);
-	ret = mgb4_i2c_configure(&vindev->deser, values, 3);
-	ret |= mgb4_i2c_configure(&vindev->deser, reset, 2);
+	ret = mgb4_i2c_configure(&vindev->deser, keys, values, 3);
+	ret |= mgb4_i2c_configure(&vindev->deser, reset_keys, reset_values, 2);
 	mutex_unlock(&vindev->mgbdev->i2c_lock);
 	if (ret < 0)
 		return -EIO;
@@ -676,15 +687,19 @@ static ssize_t gmsl_fec_show(struct device *dev, struct device_attribute *attr,
 static ssize_t gmsl_fec_store(struct device *dev, struct device_attribute *attr,
 			      const char *buf, size_t count)
 {
+	static const struct mgb4_i2c_key enable_keys[] = {
+		{0x3E0, 0x07}, {0x308, 0x01}};
+	static const u8 enable_values[] = {0x07, 0x01};
+	static const struct mgb4_i2c_key disable_keys[] = {
+		{0x3E0, 0x07}, {0x308, 0x01}};
+	static const u8 disable_values[] = {0x00, 0x00};
+	static const struct mgb4_i2c_key reset_keys[] = {
+		{0x10, 1U << 5}, {0x300, 1U << 6}};
+	static const u8 reset_values[] = {1U << 5, 1U << 6};
 	struct video_device *vdev = to_video_device(dev);
 	struct mgb4_vin_dev *vindev = video_get_drvdata(vdev);
-	static const struct mgb4_i2c_kv enable[] = {
-		{0x3E0, 0x07, 0x07}, {0x308, 0x01, 0x01}};
-	static const struct mgb4_i2c_kv disable[] = {
-		{0x3E0, 0x07, 0x00}, {0x308, 0x01, 0x00}};
-	static const struct mgb4_i2c_kv reset[] = {
-		{0x10, 1U << 5, 1U << 5}, {0x300, 1U << 6, 1U << 6}};
-	const struct mgb4_i2c_kv *values;
+	const struct mgb4_i2c_key *keys;
+	const u8 *values;
 	unsigned long val;
 	int ret;
 
@@ -694,18 +709,20 @@ static ssize_t gmsl_fec_store(struct device *dev, struct device_attribute *attr,
 
 	switch (val) {
 	case 0: /* disabled */
-		values = disable;
+		keys = disable_keys;
+		values = disable_values;
 		break;
 	case 1: /* enabled */
-		values = enable;
+		keys = enable_keys;
+		values = enable_values;
 		break;
 	default:
 		return -EINVAL;
 	}
 
 	mutex_lock(&vindev->mgbdev->i2c_lock);
-	ret = mgb4_i2c_configure(&vindev->deser, values, 2);
-	ret |= mgb4_i2c_configure(&vindev->deser, reset, 2);
+	ret = mgb4_i2c_configure(&vindev->deser, keys, values, 2);
+	ret |= mgb4_i2c_configure(&vindev->deser, reset_keys, reset_values, 2);
 	mutex_unlock(&vindev->mgbdev->i2c_lock);
 	if (ret < 0)
 		return -EIO;

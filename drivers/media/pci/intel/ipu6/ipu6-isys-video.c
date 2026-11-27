@@ -109,23 +109,6 @@ const struct ipu6_isys_pixelformat ipu6_isys_pfmts[] = {
 	  IPU6_FW_ISYS_FRAME_FORMAT_RAW16, true },
 };
 
-static int video_open(struct file *file)
-{
-	struct ipu6_isys_video *av = video_drvdata(file);
-	struct ipu6_isys *isys = av->isys;
-	struct ipu6_bus_device *adev = isys->adev;
-
-	mutex_lock(&isys->mutex);
-	if (isys->need_reset) {
-		mutex_unlock(&isys->mutex);
-		dev_warn(&adev->auxdev.dev, "isys power cycle required\n");
-		return -EIO;
-	}
-	mutex_unlock(&isys->mutex);
-
-	return v4l2_fh_open(file);
-}
-
 const struct ipu6_isys_pixelformat *
 ipu6_isys_get_isys_format(u32 pixelformat, u32 type)
 {
@@ -538,6 +521,7 @@ int ipu6_isys_start_stream_firmware(struct ipu6_isys_stream *stream,
 				   capture);
 	if (ret < 0) {
 		dev_err(dev, "can't start streaming (%d)\n", ret);
+		ipu6_put_fw_msg_buf(stream->isys, msg);
 		goto out_stream_close;
 	}
 
@@ -560,25 +544,31 @@ int ipu6_isys_start_stream_firmware(struct ipu6_isys_stream *stream,
 out_stream_close:
 	reinit_completion(&stream->stream_close_completion);
 
+	scoped_guard(mutex, &stream->isys->mutex)
+		stream->isys->need_reset = true;
+
 	retout = fw_ops->stream_close(stream->isys, stream->stream_handle);
 	if (retout < 0) {
 		dev_dbg(dev, "can't close stream (%d)\n", retout);
-		return retout;
+		return ret;
 	}
 
 	tout = wait_for_completion_timeout(&stream->stream_close_completion,
 					   IPU6_FW_CALL_TIMEOUT_JIFFIES);
-	if (!tout)
+	if (!tout) {
 		dev_err(dev, "stream close time out\n");
-	else if (stream->error)
+		ret = -ETIMEDOUT;
+	} else if (stream->error) {
 		dev_err(dev, "stream close error: %d\n", stream->error);
-	else
+		ret = -EINVAL;
+	} else {
 		dev_dbg(dev, "stream close complete\n");
+	}
 
 	return ret;
 }
 
-void ipu6_isys_stop_stream_firmware(struct ipu6_isys_stream *stream)
+int ipu6_isys_stop_stream_firmware(struct ipu6_isys_stream *stream)
 {
 	struct ipu6_bus_device *adev = stream->asd->isys->adev;
 	const struct ipu6_fw_isys_ops *fw_ops = adev->auxdrv_data->fw_ops;
@@ -590,20 +580,30 @@ void ipu6_isys_stop_stream_firmware(struct ipu6_isys_stream *stream)
 	ret = fw_ops->stream_flush(stream->isys, stream->stream_handle);
 	if (ret < 0) {
 		dev_err(dev, "can't stop stream (%d)\n", ret);
-		return;
+		return -EBUSY;
 	}
 
 	tout = wait_for_completion_timeout(&stream->stream_stop_completion,
 					   IPU6_FW_CALL_TIMEOUT_JIFFIES);
-	if (!tout)
+	if (!tout) {
 		dev_warn(dev, "stream stop time out\n");
-	else if (stream->error)
+		ret = -ETIMEDOUT;
+	} else if (stream->error) {
 		dev_warn(dev, "stream stop error: %d\n", stream->error);
-	else
+		ret = -EINVAL;
+	} else {
 		dev_dbg(dev, "stop stream: complete\n");
+	}
+
+	if (ret) {
+		scoped_guard(mutex, &stream->isys->mutex)
+			stream->isys->need_reset = true;
+	}
+
+	return ret;
 }
 
-void ipu6_isys_close_stream_firmware(struct ipu6_isys_stream *stream)
+int ipu6_isys_close_stream_firmware(struct ipu6_isys_stream *stream)
 {
 	struct ipu6_bus_device *adev = stream->asd->isys->adev;
 	const struct ipu6_fw_isys_ops *fw_ops = adev->auxdrv_data->fw_ops;
@@ -616,22 +616,33 @@ void ipu6_isys_close_stream_firmware(struct ipu6_isys_stream *stream)
 	ret = fw_ops->stream_close(stream->isys, stream->stream_handle);
 	if (ret < 0) {
 		dev_err(dev, "can't close stream (%d)\n", ret);
-		return;
+		goto out_cleanup;
 	}
 
 	tout = wait_for_completion_timeout(&stream->stream_close_completion,
 					   IPU6_FW_CALL_TIMEOUT_JIFFIES);
-	if (!tout)
+	if (!tout) {
 		dev_warn(dev, "stream close time out\n");
-	else if (stream->error)
+		ret = -ETIMEDOUT;
+	} else if (stream->error) {
 		dev_warn(dev, "stream close error: %d\n", stream->error);
-	else
+		ret = -EINVAL;
+	} else {
 		dev_dbg(dev, "close stream: complete\n");
+	}
 
+out_cleanup:
 	scoped_guard(spinlock_irqsave, &stream->isys->streams_lock) {
 		stream->isys->streams_by_handle[stream->stream_handle] = NULL;
 		csi2->streams_by_vc[stream->vc] = NULL;
 	}
+
+	if (ret) {
+		scoped_guard(mutex, &stream->isys->mutex)
+			stream->isys->need_reset = true;
+	}
+
+	return ret;
 }
 
 struct ipu6_isys_stream *
@@ -809,7 +820,7 @@ static const struct v4l2_file_operations isys_fops = {
 	.poll = vb2_fop_poll,
 	.unlocked_ioctl = video_ioctl2,
 	.mmap = vb2_fop_mmap,
-	.open = video_open,
+	.open = v4l2_fh_open,
 	.release = vb2_fop_release,
 };
 

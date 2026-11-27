@@ -115,7 +115,7 @@ static struct rc_map_table imon_mce[] = {
 static struct rc_map_list imon_mce_map = {
 	.map = {
 		.scan     = imon_mce,
-		.size     = ARRAY_SIZE(imon_mce),
+		.entries  = ARRAY_SIZE(imon_mce),
 		/* its RC6, but w/a hardware decoder */
 		.rc_proto = RC_PROTO_RC6_MCE,
 		.name     = RC_MAP_IMON_MCE,

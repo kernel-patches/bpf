@@ -179,6 +179,7 @@ struct s2255_fw {
 	int		      fw_size;
 	struct urb	      *fw_urb;
 	atomic_t	      fw_state;
+	struct mutex	      fw_lock;	/* serializes firmware restarts */
 	void		      *pfw_data;
 	wait_queue_head_t     wait_fw;
 	const struct firmware *fw;
@@ -490,7 +491,9 @@ static void s2255_fwchunk_complete(struct urb *urb)
 	int len;
 
 	if (urb->status) {
-		dev_err(&udev->dev, "URB failed with status %d\n", urb->status);
+		if (urb->status != -ENOENT)
+			dev_err(&udev->dev, "URB failed with status %d\n",
+				urb->status);
 		atomic_set(&data->fw_state, S2255_FW_FAILED);
 		/* wake up anything waiting for the firmware */
 		wake_up(&data->wait_fw);
@@ -1502,6 +1505,7 @@ static void s2255_destroy(struct s2255_dev *dev)
 	}
 	release_firmware(dev->fw_data->fw);
 	kfree(dev->fw_data->pfw_data);
+	mutex_destroy(&dev->fw_data->fw_lock);
 	kfree(dev->fw_data);
 	/* reset the DSP so firmware can be reloaded next time */
 	s2255_reset_dsppower(dev);
@@ -2187,6 +2191,16 @@ static void s2255_stop_readpipe(struct s2255_dev *dev)
 
 static void s2255_fwload_start(struct s2255_dev *dev)
 {
+	mutex_lock(&dev->fw_data->fw_lock);
+	/*
+	 * A previous load attempt may still have a transfer in flight, e.g.
+	 * when s2255_open() timed out and the next open() restarts the load.
+	 * Serialize restart attempts and cancel it before rewriting the
+	 * shared URB.
+	 */
+	timer_delete_sync(&dev->timer);
+	usb_kill_urb(dev->fw_data->fw_urb);
+
 	s2255_reset_dsppower(dev);
 	dev->fw_data->fw_size = dev->fw_data->fw->size;
 	atomic_set(&dev->fw_data->fw_state, S2255_FW_NOTLOADED);
@@ -2199,6 +2213,7 @@ static void s2255_fwload_start(struct s2255_dev *dev)
 			  CHUNK_SIZE, s2255_fwchunk_complete,
 			  dev->fw_data);
 	mod_timer(&dev->timer, jiffies + HZ);
+	mutex_unlock(&dev->fw_data->fw_lock);
 }
 
 /* standard usb probe function */
@@ -2227,6 +2242,7 @@ static int s2255_probe(struct usb_interface *interface,
 	dev->fw_data = kzalloc_obj(struct s2255_fw);
 	if (!dev->fw_data)
 		goto err_fwdata1;
+	mutex_init(&dev->fw_data->fw_lock);
 	mutex_init(&dev->lock);
 	mutex_init(&dev->cmdlock);
 	/* grab usb_device and save it */

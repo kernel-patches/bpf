@@ -47,7 +47,7 @@ static struct rc_map_table siemens_gigaset_rc20[] = {
 static struct rc_map_list siemens_gigaset_rc20_map = {
 	.map = {
 		.scan     = siemens_gigaset_rc20,
-		.size     = ARRAY_SIZE(siemens_gigaset_rc20),
+		.entries  = ARRAY_SIZE(siemens_gigaset_rc20),
 		.rc_proto = RC_PROTO_RC5,
 		.name     = RC_MAP_SIEMENS_GIGASET_RC20,
 	}

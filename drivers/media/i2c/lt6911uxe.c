@@ -687,8 +687,8 @@ v4l2_ctrl_handler_free:
 }
 
 static const struct acpi_device_id lt6911uxe_acpi_ids[] = {
-	{ "INTC10C5" },
-	{}
+	{ .id = "INTC10C5" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, lt6911uxe_acpi_ids);
 

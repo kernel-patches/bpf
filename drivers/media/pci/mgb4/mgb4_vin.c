@@ -45,7 +45,7 @@ static const struct i2c_board_info fpdl3_deser_info[] = {
 	{I2C_BOARD_INFO("deserializer2", 0x36)},
 };
 
-static const struct i2c_board_info gmsl3_deser_info[] = {
+static const struct i2c_board_info gmsl3tp_deser_info[] = {
 	{I2C_BOARD_INFO("deserializer1", 0x4C)},
 	{I2C_BOARD_INFO("deserializer2", 0x2A)},
 };
@@ -60,26 +60,35 @@ static const struct i2c_board_info gmsl1_deser_info[] = {
 	{I2C_BOARD_INFO("deserializer2", 0x6C)},
 };
 
-static const struct mgb4_i2c_kv fpdl3_i2c[] = {
-	{0x06, 0xFF, 0x04}, {0x07, 0xFF, 0x01}, {0x45, 0xFF, 0xE8},
-	{0x49, 0xFF, 0x00}, {0x34, 0xFF, 0x00}, {0x23, 0xFF, 0x00}
+static const struct mgb4_i2c_key fpdl3_i2c_keys[] = {
+	{0x06, 0xFF}, {0x07, 0xFF}, {0x45, 0xFF}, {0x49, 0xFF},
+	{0x34, 0xFF}, {0x23, 0xFF}
 };
 
-static const struct mgb4_i2c_kv gmsl3_i2c[] = {
-	{0x01, 0x03, 0x03}, {0x300, 0x0C, 0x0C}, {0x03, 0xC0, 0xC0},
-	{0x1CE, 0x0E, 0x0E}, {0x11, 0x05, 0x00}, {0x05, 0xC0, 0x40},
-	{0x307, 0x0F, 0x00}, {0xA0, 0x03, 0x00}, {0x3E0, 0x07, 0x07},
-	{0x308, 0x01, 0x01}, {0x10, 0x20, 0x20}, {0x300, 0x40, 0x40}
+static const u8 fpdl3_i2c_values[] = {
+	0x04, 0x01, 0xE8, 0x00, 0x00, 0x00
 };
 
-static const struct mgb4_i2c_kv gmsl3c_i2c[] = {
-	{0x01, 0x03, 0x02}, {0x300, 0x0C, 0x08}, {0x03, 0xC0, 0x00},
-	{0x1CE, 0x0E, 0x0E}, {0x11, 0x05, 0x05}, {0x05, 0xC0, 0x40},
-	{0x307, 0x0F, 0x00}, {0xA0, 0x03, 0x00}, {0x3E0, 0x07, 0x00},
-	{0x308, 0x01, 0x00}, {0x10, 0x20, 0x20}, {0x300, 0x40, 0x40}
+static const struct mgb4_i2c_key gmsl3_i2c_keys[] = {
+	{0x01, 0x03}, {0x300, 0x0C}, {0x03, 0xC0}, {0x1CE, 0x0E},
+	{0x11, 0x05}, {0x05, 0xC0}, {0x307, 0x0F}, {0xA0, 0x03},
+	{0x3E0, 0x07}, {0x308, 0x01}, {0x10, 0x20}, {0x300, 0x40}
 };
 
-static const struct mgb4_i2c_kv gmsl1_i2c[] = {
+static const u8 gmsl3tp_i2c_values[] = {
+	0x03, 0x0C, 0xC0, 0x0E, 0x00, 0x40, 0x00, 0x00,
+	0x07, 0x01, 0x20, 0x40
+};
+
+static const u8 gmsl3c_i2c_values[] = {
+	0x02, 0x08, 0x00, 0x0E, 0x05, 0x40, 0x00, 0x00,
+	0x00, 0x00, 0x20, 0x40
+};
+
+static const struct mgb4_i2c_key gmsl1_i2c_keys[] = {
+};
+
+static const u8 gmsl1_i2c_values[] = {
 };
 
 static const struct v4l2_dv_timings_cap video_timings_cap = {
@@ -818,8 +827,7 @@ static irqreturn_t err_handler(int irq, void *ctx)
 static int deser_init(struct mgb4_vin_dev *vindev, int id)
 {
 	int rv, addr_size = 0;
-	size_t count = 0;
-	const struct mgb4_i2c_kv *values = NULL;
+	const u8 *values = NULL;
 	const struct i2c_board_info *info = NULL;
 	struct device *dev = &vindev->mgbdev->pdev->dev;
 
@@ -827,24 +835,28 @@ static int deser_init(struct mgb4_vin_dev *vindev, int id)
 		if (MGB4_IS_GMSL3C(vindev->mgbdev)) {
 			info = &gmsl3c_deser_info[id];
 			addr_size = 16;
-			values = gmsl3c_i2c;
-			count = ARRAY_SIZE(gmsl3c_i2c);
+			vindev->deser_regs = gmsl3_i2c_keys;
+			vindev->deser_regs_size = ARRAY_SIZE(gmsl3_i2c_keys);
+			values = gmsl3c_i2c_values;
 		} else {
-			info = &gmsl3_deser_info[id];
+			info = &gmsl3tp_deser_info[id];
 			addr_size = 16;
-			values = gmsl3_i2c;
-			count = ARRAY_SIZE(gmsl3_i2c);
+			vindev->deser_regs = gmsl3_i2c_keys;
+			vindev->deser_regs_size = ARRAY_SIZE(gmsl3_i2c_keys);
+			values = gmsl3tp_i2c_values;
 		}
 	} else if (MGB4_IS_FPDL3(vindev->mgbdev)) {
 		info = &fpdl3_deser_info[id];
 		addr_size = 8;
-		values = fpdl3_i2c;
-		count = ARRAY_SIZE(fpdl3_i2c);
+		vindev->deser_regs = fpdl3_i2c_keys;
+		vindev->deser_regs_size = ARRAY_SIZE(fpdl3_i2c_keys);
+		values = fpdl3_i2c_values;
 	} else if (MGB4_IS_GMSL1(vindev->mgbdev)) {
 		info = &gmsl1_deser_info[id];
 		addr_size = 8;
-		values = gmsl1_i2c;
-		count = ARRAY_SIZE(gmsl1_i2c);
+		vindev->deser_regs = gmsl1_i2c_keys;
+		vindev->deser_regs_size = ARRAY_SIZE(gmsl1_i2c_keys);
+		values = gmsl1_i2c_values;
 	} else {
 		return -EINVAL;
 	}
@@ -855,9 +867,16 @@ static int deser_init(struct mgb4_vin_dev *vindev, int id)
 		dev_err(dev, "failed to create deserializer\n");
 		return rv;
 	}
-	rv = mgb4_i2c_configure(&vindev->deser, values, count);
+	rv = mgb4_i2c_configure(&vindev->deser, vindev->deser_regs, values,
+				vindev->deser_regs_size);
 	if (rv < 0) {
 		dev_err(dev, "failed to configure deserializer\n");
+		goto err_i2c_dev;
+	}
+
+	vindev->pm_deser = kzalloc(vindev->deser_regs_size, GFP_KERNEL);
+	if (!vindev->pm_deser) {
+		rv = -ENOMEM;
 		goto err_i2c_dev;
 	}
 
@@ -1068,11 +1087,77 @@ void mgb4_vin_free(struct mgb4_vin_dev *vindev)
 	free_irq(vin_irq, vindev);
 	free_irq(err_irq, vindev);
 
+	cancel_work_sync(&vindev->err_work);
+
 	device_remove_groups(&vindev->vdev.dev, module_groups(vindev->mgbdev));
 
 	mgb4_i2c_free(&vindev->deser);
 	video_unregister_device(&vindev->vdev);
 	v4l2_device_unregister(&vindev->v4l2dev);
 
+	kfree(vindev->pm_deser);
 	kfree(vindev);
+}
+
+int mgb4_vin_suspend(struct mgb4_vin_dev *vindev)
+{
+	struct device *dev = &vindev->mgbdev->pdev->dev;
+	int err_irq = xdma_get_user_irq(vindev->mgbdev->xdev,
+					vindev->config->err_irq);
+	struct mgb4_regs *video = &vindev->mgbdev->video;
+	const struct mgb4_vin_regs *regs = &vindev->config->regs;
+	struct mgb4_vin_fpga_pm *fpga = &vindev->pm_fpga;
+
+	int rv = mgb4_i2c_store(&vindev->deser,
+				vindev->deser_regs,
+				vindev->pm_deser,
+				vindev->deser_regs_size);
+	if (rv)
+		dev_err(dev, "failed to store deserializer configuration\n");
+	else
+		xdma_disable_user_irq(vindev->mgbdev->xdev, err_irq);
+
+	fpga->config = mgb4_read_reg(video, regs->config);
+	fpga->resolution = mgb4_read_reg(video, regs->resolution);
+	fpga->frame_period = mgb4_read_reg(video, regs->frame_period);
+	fpga->sync = mgb4_read_reg(video, regs->sync);
+	fpga->pclk = mgb4_read_reg(video, regs->pclk);
+	fpga->hsync = mgb4_read_reg(video, regs->hsync);
+	fpga->vsync = mgb4_read_reg(video, regs->vsync);
+	fpga->padding = mgb4_read_reg(video, regs->padding);
+	fpga->timer = mgb4_read_reg(video, regs->timer);
+
+	return rv;
+}
+
+int mgb4_vin_resume(struct mgb4_vin_dev *vindev)
+{
+	struct device *dev = &vindev->mgbdev->pdev->dev;
+	int err_irq = xdma_get_user_irq(vindev->mgbdev->xdev,
+					vindev->config->err_irq);
+	struct mgb4_regs *video = &vindev->mgbdev->video;
+	const struct mgb4_vin_regs *regs = &vindev->config->regs;
+	struct mgb4_vin_fpga_pm *fpga = &vindev->pm_fpga;
+
+	int rv = mgb4_i2c_configure(&vindev->deser,
+				    vindev->deser_regs,
+				    vindev->pm_deser,
+				    vindev->deser_regs_size);
+	if (rv)
+		dev_err(dev, "failed to re-configure deserializer\n");
+
+	mgb4_write_reg(video, regs->config, 0x00000001);
+	mgb4_write_reg(video, regs->resolution, fpga->resolution);
+	mgb4_write_reg(video, regs->frame_period, fpga->frame_period);
+	mgb4_write_reg(video, regs->sync, fpga->sync);
+	mgb4_write_reg(video, regs->pclk, fpga->pclk);
+	mgb4_write_reg(video, regs->hsync, fpga->hsync);
+	mgb4_write_reg(video, regs->vsync, fpga->vsync);
+	mgb4_write_reg(video, regs->padding, fpga->padding);
+	mgb4_write_reg(video, regs->timer, fpga->timer);
+	mgb4_write_reg(video, regs->config, fpga->config);
+
+	xdma_enable_user_irq(vindev->mgbdev->xdev, err_irq);
+
+	return rv;
 }

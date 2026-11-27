@@ -2679,8 +2679,8 @@ static const struct of_device_id mt9m114_of_ids[] = {
 MODULE_DEVICE_TABLE(of, mt9m114_of_ids);
 
 static const struct acpi_device_id mt9m114_acpi_ids[] = {
-	{ "INT33F0", (kernel_ulong_t)&mt9m114_models_default },
-	{ /* sentinel */ }
+	{ .id = "INT33F0", .driver_data = (kernel_ulong_t)&mt9m114_models_default },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, mt9m114_acpi_ids);
 

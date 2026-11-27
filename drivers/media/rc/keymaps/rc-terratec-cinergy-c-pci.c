@@ -62,7 +62,7 @@ static struct rc_map_table terratec_cinergy_c_pci[] = {
 static struct rc_map_list terratec_cinergy_c_pci_map = {
 	.map = {
 		.scan     = terratec_cinergy_c_pci,
-		.size     = ARRAY_SIZE(terratec_cinergy_c_pci),
+		.entries  = ARRAY_SIZE(terratec_cinergy_c_pci),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_TERRATEC_CINERGY_C_PCI,
 	}

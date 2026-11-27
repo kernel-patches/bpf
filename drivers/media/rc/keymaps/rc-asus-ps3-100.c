@@ -63,7 +63,7 @@ static struct rc_map_table asus_ps3_100[] = {
 static struct rc_map_list asus_ps3_100_map = {
 .map = {
 	.scan     = asus_ps3_100,
-	.size     = ARRAY_SIZE(asus_ps3_100),
+	.entries  = ARRAY_SIZE(asus_ps3_100),
 	.rc_proto = RC_PROTO_RC5,
 	.name     = RC_MAP_ASUS_PS3_100,
 }

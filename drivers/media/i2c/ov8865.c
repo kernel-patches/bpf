@@ -2203,8 +2203,9 @@ static int ov8865_flip_horz_configure(struct ov8865_sensor *sensor, bool enable)
 	u8 bits = OV8865_FORMAT2_FLIP_HORZ_ISP_EN |
 		  OV8865_FORMAT2_FLIP_HORZ_SENSOR_EN;
 
+	/* HFLIP is inverted on this sensor: the FLIP_HORZ bits un-mirror the readout. */
 	return ov8865_update_bits(sensor, OV8865_FORMAT2_REG, bits,
-				  enable ? bits : 0);
+				  enable ? 0 : bits);
 }
 
 /* Test Pattern */
@@ -3130,7 +3131,7 @@ static const struct dev_pm_ops ov8865_pm_ops = {
 };
 
 static const struct acpi_device_id ov8865_acpi_match[] = {
-	{"INT347A"},
+	{ .id = "INT347A" },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, ov8865_acpi_match);

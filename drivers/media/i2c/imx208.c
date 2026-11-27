@@ -1044,8 +1044,8 @@ static void imx208_remove(struct i2c_client *client)
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id imx208_acpi_ids[] = {
-	{ "INT3478" },
-	{ /* sentinel */ }
+	{ .id = "INT3478" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, imx208_acpi_ids);

@@ -359,8 +359,10 @@ static void buf_queue(struct vb2_buffer *vb)
 	ipu6_isys_buffer_list_queue(&bl, IPU6_ISYS_BUFFER_LIST_FL_ACTIVE, 0);
 
 	ret = fw_ops->stream_capture(stream->isys, stream->stream_handle, msg);
-	if (ret < 0)
+	if (ret < 0) {
 		dev_err(dev, "send stream capture failed\n");
+		ipu6_put_fw_msg_buf(stream->isys, msg);
+	}
 
 out:
 	mutex_unlock(&stream->mutex);
@@ -420,9 +422,7 @@ static int ipu6_isys_link_fmt_validate(struct ipu6_isys_queue *aq)
 static void return_buffers(struct ipu6_isys_queue *aq,
 			   enum vb2_buffer_state state)
 {
-	struct ipu6_isys_video *av = ipu6_isys_queue_to_video(aq);
 	struct ipu6_isys_buffer *ib;
-	bool need_reset = false;
 	unsigned long flags;
 
 	spin_lock_irqsave(&aq->lock, flags);
@@ -458,18 +458,9 @@ static void return_buffers(struct ipu6_isys_queue *aq,
 		vb2_buffer_done(vb, state);
 
 		spin_lock_irqsave(&aq->lock, flags);
-		need_reset = true;
 	}
 
 	spin_unlock_irqrestore(&aq->lock, flags);
-
-	if (need_reset) {
-		mutex_lock(&av->isys->mutex);
-		av->isys->need_reset = true;
-		mutex_unlock(&av->isys->mutex);
-		dev_warn(&av->isys->adev->auxdev.dev,
-			 "buffer list not empty, needs isys reset\n");
-	}
 }
 
 static void ipu6_isys_stream_cleanup(struct ipu6_isys_video *av)
@@ -491,6 +482,13 @@ static int start_streaming(struct vb2_queue *q, unsigned int count)
 	dev_dbg(dev, "stream: %s: width %u, height %u, css pixelformat %u\n",
 		av->vdev.name, ipu6_isys_get_frame_width(av),
 		ipu6_isys_get_frame_height(av), pfmt->css_pixelformat);
+
+	scoped_guard(mutex, &av->isys->mutex) {
+		if (av->isys->need_reset) {
+			ret = -EIO;
+			goto out_return_buffers;
+		}
+	}
 
 	remote_pad = media_pad_remote_pad_unique(&av->pad);
 	if (IS_ERR(remote_pad)) {

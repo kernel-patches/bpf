@@ -241,6 +241,7 @@ static int fmr2_probe(struct fmr2 *fmr2, struct device *pdev, int io)
 
 	if (snd_tea575x_init(&fmr2->tea, THIS_MODULE)) {
 		printk(KERN_ERR "radio-sf16fmr2: Unable to detect TEA575x tuner\n");
+		v4l2_device_unregister(&fmr2->v4l2_dev);
 		release_region(fmr2->io, 2);
 		return -ENODEV;
 	}

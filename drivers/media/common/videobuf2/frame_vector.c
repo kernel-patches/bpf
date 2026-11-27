@@ -72,12 +72,13 @@ EXPORT_SYMBOL(get_vaddr_frames);
  * put_vaddr_frames() - drop references to pages if get_vaddr_frames() acquired
  *			them
  * @vec:	frame vector to put
+ * @dirty:	whether to mark the pages dirty first
  *
- * Drop references to pages if get_vaddr_frames() acquired them. We also
- * invalidate the frame vector so that it is prepared for the next call into
- * get_vaddr_frames().
+ * Drop references to pages if get_vaddr_frames() acquired them, marking them
+ * dirty first if @dirty is set. We also invalidate the frame vector so that it
+ * is prepared for the next call into get_vaddr_frames().
  */
-void put_vaddr_frames(struct frame_vector *vec)
+void put_vaddr_frames(struct frame_vector *vec, bool dirty)
 {
 	struct page **pages;
 
@@ -92,7 +93,7 @@ void put_vaddr_frames(struct frame_vector *vec)
 	if (WARN_ON(IS_ERR(pages)))
 		goto out;
 
-	unpin_user_pages(pages, vec->nr_frames);
+	unpin_user_pages_dirty_lock(pages, vec->nr_frames, dirty);
 	vec->got_ref = false;
 out:
 	vec->nr_frames = 0;

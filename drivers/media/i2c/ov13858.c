@@ -1806,8 +1806,8 @@ MODULE_DEVICE_TABLE(i2c, ov13858_id_table);
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id ov13858_acpi_ids[] = {
-	{"OVTID858"},
-	{ /* sentinel */ }
+	{ .id = "OVTID858" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, ov13858_acpi_ids);

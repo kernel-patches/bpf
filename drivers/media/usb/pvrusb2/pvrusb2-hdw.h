@@ -165,6 +165,9 @@ int pvr2_hdw_set_input_allowed(struct pvr2_hdw *,
 			       unsigned int change_mask,
 			       unsigned int change_val);
 
+/* Nonzero if the digital demod is held in reset while in analog mode */
+int pvr2_hdw_demod_reset_in_analog(struct pvr2_hdw *hdw);
+
 /* Return name for this driver instance */
 const char *pvr2_hdw_get_driver_name(struct pvr2_hdw *);
 

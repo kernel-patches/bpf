@@ -1758,7 +1758,7 @@ static int cx8802_dvb_probe(struct cx8802_driver *drv)
 
 	err = cx8802_alloc_frontends(dev);
 	if (err)
-		goto fail_core;
+		goto fail_free;
 
 	for (i = 1; i <= core->board.num_frontends; i++) {
 		struct vb2_queue *q;
@@ -1792,12 +1792,17 @@ static int cx8802_dvb_probe(struct cx8802_driver *drv)
 	}
 
 	err = dvb_register(dev);
-	if (err)
+	if (err) {
 		/* frontends/adapter de-allocated in dvb_register */
 		pr_err("dvb_register failed (err = %d)\n", err);
+		goto fail_free;
+	}
+
 	return err;
 fail_probe:
 	vb2_dvb_dealloc_frontends(&core->dvbdev->frontends);
+fail_free:
+	vp3054_i2c_remove(dev);
 fail_core:
 	return err;
 }

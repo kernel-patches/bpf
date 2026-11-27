@@ -577,8 +577,8 @@ fail_dmxdev:
 fail_dmx:
 	if (dvb->frontend[1])
 		dvb_unregister_frontend(dvb->frontend[1]);
-	dvb_unregister_frontend(dvb->frontend[0]);
 fail_frontend1:
+	dvb_unregister_frontend(dvb->frontend[0]);
 	if (dvb->frontend[1])
 		dvb_frontend_detach(dvb->frontend[1]);
 fail_frontend0:

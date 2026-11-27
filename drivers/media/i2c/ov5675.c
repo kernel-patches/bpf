@@ -1355,8 +1355,8 @@ static const struct dev_pm_ops ov5675_pm_ops = {
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id ov5675_acpi_ids[] = {
-	{"OVTI5675"},
-	{}
+	{ .id = "OVTI5675" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, ov5675_acpi_ids);

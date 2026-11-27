@@ -759,8 +759,8 @@ static DEFINE_RUNTIME_DEV_PM_OPS(gc0310_pm_ops,
 				 gc0310_power_off, gc0310_power_on, NULL);
 
 static const struct acpi_device_id gc0310_acpi_match[] = {
-	{"INT0310"},
-	{},
+	{ .id = "INT0310" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, gc0310_acpi_match);
 
