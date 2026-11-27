@@ -477,19 +477,25 @@ static struct neighbour *ipv4_dst_neigh_lookup(const struct dst_entry *dst,
 static void ipv4_confirm_neigh(const struct dst_entry *dst, const void *daddr)
 {
 	const struct rtable *rt = container_of(dst, struct rtable, dst);
-	struct net_device *dev = dst_dev(dst);
+	struct net_device *dev;
 	const __be32 *pkey = daddr;
+
+	rcu_read_lock();
+	dev = dst_dev_rcu(dst);
 
 	if (rt->rt_gw_family == AF_INET) {
 		pkey = (const __be32 *)&rt->rt_gw4;
 	} else if (IS_ENABLED(CONFIG_IPV6) && rt->rt_gw_family == AF_INET6) {
-		return __ipv6_confirm_neigh(dev, &rt->rt_gw6);
+		__ipv6_confirm_neigh(dev, &rt->rt_gw6);
+		goto out;
 	} else if (!daddr ||
 		 (rt->rt_flags &
 		  (RTCF_MULTICAST | RTCF_BROADCAST | RTCF_LOCAL))) {
-		return;
+		goto out;
 	}
 	__ipv4_confirm_neigh(dev, *(__force u32 *)pkey);
+out:
+	rcu_read_unlock();
 }
 
 /* Hash tables of size 2048..262144 depending on RAM size.
