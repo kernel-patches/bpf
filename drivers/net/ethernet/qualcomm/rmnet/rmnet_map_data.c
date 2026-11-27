@@ -686,7 +686,7 @@ void rmnet_map_update_ul_agg_config(struct rmnet_port *port, u32 size,
 	spin_lock_bh(&port->agg_lock);
 	port->egress_agg_params.bytes = size;
 	WRITE_ONCE(port->egress_agg_params.count, count);
-	port->egress_agg_params.time_nsec = time * NSEC_PER_USEC;
+	port->egress_agg_params.time_nsec = (u64)time * NSEC_PER_USEC;
 	spin_unlock_bh(&port->agg_lock);
 }
 
