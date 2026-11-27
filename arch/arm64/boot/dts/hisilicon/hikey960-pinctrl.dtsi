@@ -7,12 +7,12 @@
 #include <dt-bindings/pinctrl/hisi.h>
 
 / {
-	soc {
-		/* [IOMG_000, IOMG_123] */
-		range: gpio-range {
-			#pinctrl-single,gpio-range-cells = <3>;
-		};
+	/* [IOMG_000, IOMG_123] */
+	range: gpio-range {
+		#pinctrl-single,gpio-range-cells = <3>;
+	};
 
+	soc {
 		pmx0: pinmux@e896c000 {
 			compatible = "pinctrl-single";
 			reg = <0x0 0xe896c000 0x0 0x1f0>;

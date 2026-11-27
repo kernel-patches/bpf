@@ -214,7 +214,7 @@
 			};
 		};
 
-		pmx0: pinconf@8a21000 {
+		pmx0: pinctrl@8a21000 {
 			compatible = "pinconf-single";
 			reg = <0x8a21000 0x180>;
 			pinctrl-single,register-width = <32>;
@@ -510,7 +510,7 @@
 			#gpio-cells = <2>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
-			gpio-ranges = <&pmx0 0 64 7 &pmx0 71 1>;
+			gpio-ranges = <&pmx0 0 64 7 &pmx0 7 71 1>;
 			clocks = <&crg HISTB_APB_CLK>;
 			clock-names = "apb_pclk";
 			status = "disabled";

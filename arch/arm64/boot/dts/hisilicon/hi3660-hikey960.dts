@@ -56,7 +56,8 @@
 	};
 
 	reboot-mode-syscon@32100000 {
-		compatible = "syscon", "simple-mfd";
+		compatible = "hisilicon,hi3660-reboot-mode",
+			     "syscon", "simple-mfd";
 		reg = <0x0 0x32100000 0x0 0x00001000>;
 
 		reboot-mode {
@@ -189,6 +190,14 @@
 		/* WLAN card specific delay */
 		startup-delay-us = <70000>;
 		enable-active-high;
+	};
+
+	fixed_3v3: regulator-3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "fixed-3.3V";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
 	};
 
 	firmware {
@@ -570,6 +579,12 @@
 		status = "okay";
 		compatible = "adi,adv7533";
 		reg = <0x39>;
+		avdd-supply = <&ldo3>;
+		dvdd-supply = <&ldo3>;
+		pvdd-supply = <&ldo3>;
+		a2vdd-supply = <&ldo3>;
+		v3p3-supply = <&fixed_3v3>;
+		v1p2-supply = <&ldo3>;
 		adi,dsi-lanes = <4>;
 		ports {
 			#address-cells = <1>;
