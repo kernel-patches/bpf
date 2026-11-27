@@ -52,17 +52,26 @@ allocations before during boot up to the initialization of the page allocator.
 
 We guarantee that we always have such regions through the boot memory regions:
 On first boot KHO allocates several physically contiguous memory regions. Since
-after kexec these regions will be used by early memory allocations, there is a
-boot memory region per NUMA node plus a boot memory region to satisfy
-allocations requests that do not require particular NUMA node assignment. By
-default, size of the boot memory region is calculated based on amount of memory
-allocated during boot. The ``kho_bootmem`` kernel command line option may be
-used to explicitly define size of the boot memory regions. The boot memory
-regions are declared as CMA when page allocator is initialized so that their
-memory can be used during system lifetime. CMA gives us the guarantee that no
-handover pages land in that region, because handover pages must be at a static
-physical memory location and CMA enforces that only movable pages can be located
-inside.
+after kexec these regions will be used by early memory allocations, there are
+several types of such regions to ensure that all boot-time allocations work:
+
+* a low memory region for allocations below ``ARCH_LOW_ADDRESS_LIMIT``
+* a region per NUMA node
+* a global region for allocations that do not require a particular NUMA node
+
+Regions that would be empty are not allocated. For example, there is no low
+memory region when ``ARCH_LOW_ADDRESS_LIMIT`` covers all memory, and there is
+no global region when ``CONFIG_NUMA`` is disabled.
+
+By default, the size of the boot memory regions is calculated based on the
+amount of memory allocated during boot. The ``kho_bootmem`` kernel command line
+option may be used to explicitly define the size of the boot memory regions.
+
+The boot memory regions are declared as CMA when the page allocator is
+initialized so that their memory can be used during system lifetime. CMA gives
+us the guarantee that no handover pages land in that region, because handover
+pages must be at a static physical memory location and CMA enforces that only
+movable pages can be located inside.
 
 After KHO kexec, we ignore the ``kho_bootmem`` kernel command line option and
 instead reuse the exact same region that was originally allocated. This allows

@@ -14767,6 +14767,7 @@ W:	http://kernel.org/pub/linux/utils/kernel/kexec/
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/liveupdate/linux.git
 F:	include/linux/kexec.h
 F:	include/uapi/linux/kexec.h
+F:	kernel/Kconfig.kexec
 F:	kernel/kexec*
 
 KEXEC HANDOVER (KHO)

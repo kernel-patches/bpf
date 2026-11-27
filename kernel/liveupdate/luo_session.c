@@ -413,10 +413,8 @@ static long luo_session_ioctl(struct file *filep, unsigned int cmd,
 	int ret;
 
 	nr = _IOC_NR(cmd);
-	if (nr < LIVEUPDATE_CMD_SESSION_BASE || (nr - LIVEUPDATE_CMD_SESSION_BASE) >=
-	    ARRAY_SIZE(luo_session_ioctl_ops)) {
+	if ((nr - LIVEUPDATE_CMD_SESSION_BASE) >= ARRAY_SIZE(luo_session_ioctl_ops))
 		return -EINVAL;
-	}
 
 	ucmd.ubuffer = (void __user *)arg;
 	ret = get_user(ucmd.user_size, (u32 __user *)ucmd.ubuffer);
