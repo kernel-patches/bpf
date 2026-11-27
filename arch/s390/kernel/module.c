@@ -10,6 +10,7 @@
  *  based on i386 version
  *    Copyright (C) 2001 Rusty Russell.
  */
+#include <linux/text-patching.h>
 #include <linux/module.h>
 #include <linux/elf.h>
 #include <linux/vmalloc.h>
@@ -462,6 +463,7 @@ int apply_relocate_add(Elf_Shdr *sechdrs, const char *strtab,
 	if (!early)
 		write = s390_kernel_write;
 
+	guard(mutex)(&text_mutex);
 	return __apply_relocate_add(sechdrs, strtab, symindex, relsec, me,
 				    write);
 }
@@ -473,13 +475,18 @@ static int module_alloc_ftrace_hotpatch_trampolines(struct module *me,
 	char *start, *end;
 	int numpages;
 	size_t size;
+	int rc;
 
 	size = FTRACE_HOTPATCH_TRAMPOLINES_SIZE(s->sh_size);
 	numpages = DIV_ROUND_UP(size, PAGE_SIZE);
 	start = execmem_alloc(EXECMEM_FTRACE, numpages * PAGE_SIZE);
 	if (!start)
 		return -ENOMEM;
-	set_memory_rox((unsigned long)start, numpages);
+	rc = set_memory_rox((unsigned long)start, numpages);
+	if (rc) {
+		execmem_free(start);
+		return rc;
+	}
 	end = start + size;
 
 	me->arch.trampolines_start = (struct ftrace_hotpatch_trampoline *)start;

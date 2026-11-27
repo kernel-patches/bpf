@@ -40,7 +40,10 @@ void *alloc_insn_page(void)
 	page = execmem_alloc(EXECMEM_KPROBES, PAGE_SIZE);
 	if (!page)
 		return NULL;
-	set_memory_rox((unsigned long)page, 1);
+	if (set_memory_rox((unsigned long)page, 1)) {
+		execmem_free(page);
+		return NULL;
+	}
 	return page;
 }
 
@@ -148,7 +151,7 @@ static int swap_instruction(void *data)
 	u16 opc;
 
 	opc = args->arm_kprobe ? BREAKPOINT_INSTRUCTION : p->opcode;
-	s390_kernel_write(p->addr, &opc, sizeof(opc));
+	__s390_kernel_write(p->addr, &opc, sizeof(opc));
 	return 0;
 }
 NOKPROBE_SYMBOL(swap_instruction);
@@ -157,6 +160,7 @@ void arch_arm_kprobe(struct kprobe *p)
 {
 	struct swap_insn_args args = {.p = p, .arm_kprobe = 1};
 
+	lockdep_assert_held(&text_mutex);
 	if (cpu_has_seq_insn()) {
 		swap_instruction(&args);
 		text_poke_sync();
@@ -170,6 +174,7 @@ void arch_disarm_kprobe(struct kprobe *p)
 {
 	struct swap_insn_args args = {.p = p, .arm_kprobe = 0};
 
+	lockdep_assert_held(&text_mutex);
 	if (cpu_has_seq_insn()) {
 		swap_instruction(&args);
 		text_poke_sync();

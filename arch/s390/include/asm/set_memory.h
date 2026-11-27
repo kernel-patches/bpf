@@ -39,12 +39,12 @@ int __set_memory(unsigned long addr, unsigned long numpages, unsigned long flags
  * for areas larger than 8TB, which may happen at memory initialization.
  */
 #define __SET_MEMORY_FUNC(fname, flags)					\
-static inline int fname(unsigned long addr, int numpages)		\
+static inline int __must_check fname(unsigned long addr, int numpages)	\
 {									\
 	return __set_memory(addr, numpages, (flags));			\
 }									\
 									\
-static inline int __##fname(void *start, void *end)			\
+static inline int __must_check __##fname(void *start, void *end)	\
 {									\
 	unsigned long numpages;						\
 									\

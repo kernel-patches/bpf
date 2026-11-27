@@ -208,6 +208,8 @@ struct zpci_dev {
 	struct zpci_fmb *fmb;
 	u16		fmb_update;	/* update interval */
 	u16		fmb_length;
+	u8		statistics_on	: 1; /* desired FMB enablement */
+	u8		fmb_enabled	: 1; /* actual FMB enablement */
 
 	u8		version;
 	enum pci_bus_speed max_bus_speed;
@@ -349,8 +351,10 @@ int zpci_create_parent_msi_domain(struct zpci_bus *zbus);
 void zpci_remove_parent_msi_domain(struct zpci_bus *zbus);
 
 /* FMB */
-int zpci_fmb_enable_device(struct zpci_dev *);
-int zpci_fmb_disable_device(struct zpci_dev *);
+int zpci_fmb_request_on(struct zpci_dev *zdev);
+int zpci_fmb_request_off(struct zpci_dev *zdev);
+int zpci_fmb_enable(struct zpci_dev *zdev);
+int zpci_fmb_disable(struct zpci_dev *zdev);
 
 /* Debug */
 int zpci_debug_init(void);
