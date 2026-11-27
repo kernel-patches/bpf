@@ -295,7 +295,7 @@ check_uapi_files() {
 			"$total" "$ARCH"
 	fi
 
-	return "$failed"
+	return "$((failed != 0))"
 }
 
 # Check an individual file for UAPI compatibility

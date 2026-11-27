@@ -950,12 +950,7 @@ KBUILD_RUSTFLAGS += -Cdebug-assertions=$(if $(CONFIG_RUST_DEBUG_ASSERTIONS),y,n)
 KBUILD_RUSTFLAGS += -Coverflow-checks=$(if $(CONFIG_RUST_OVERFLOW_CHECKS),y,n)
 
 # Tell gcc to never replace conditional load with a non-conditional one
-ifdef CONFIG_CC_IS_GCC
-# gcc-10 renamed --param=allow-store-data-races=0 to
-# -fno-allow-store-data-races.
-KBUILD_CFLAGS	+= $(CONFIG_CC_OPT_ALLOW_STORE_DATA_RACES_PARAM)
 KBUILD_CFLAGS	+= $(CONFIG_CC_OPT_NO_ALLOW_STORE_DATA_RACES)
-endif
 
 ifdef CONFIG_READABLE_ASM
 # Disable optimizations that make assembler listings hard to read.
@@ -1405,7 +1400,7 @@ scripts: scripts_basic scripts_dtc
 # archprepare is used in arch Makefiles and when processed asm symlink,
 # version.h and scripts_basic is processed / created.
 
-PHONY += prepare archprepare
+PHONY += prepare archprepare modpost_prepare
 
 archprepare: outputmakefile archheaders archscripts scripts include/config/kernel.release \
 	asm-generic $(version_h) include/generated/utsrelease.h \
@@ -1413,8 +1408,10 @@ archprepare: outputmakefile archheaders archscripts scripts include/config/kerne
 	include/generated/rustc_cfg remove-stale-files
 
 prepare0: archprepare
+	$(Q)$(MAKE) $(build)=. prepare $(if $(single-build),,prepare_checks)
+
+modpost_prepare: prepare
 	$(Q)$(MAKE) $(build)=scripts/mod
-	$(Q)$(MAKE) $(build)=. prepare
 
 # All the preparing..
 prepare: prepare0
@@ -1635,10 +1632,6 @@ ifneq ($(wildcard $(bootconfig_O)),)
 	$(Q)$(MAKE) -sC $(srctree)/tools/bootconfig O=$(bootconfig_O) clean
 endif
 
-tools/: FORCE
-	$(Q)mkdir -p $(objtree)/tools
-	$(Q)$(MAKE) O=$(abspath $(objtree)) subdir=tools -C $(srctree)/tools/
-
 tools/%: FORCE
 	$(Q)mkdir -p $(objtree)/tools
 	$(Q)$(MAKE) O=$(abspath $(objtree)) subdir=tools -C $(srctree)/tools/ $*
@@ -1765,7 +1758,7 @@ endif
 modules: modules_prepare
 
 # Target to prepare building external modules
-modules_prepare: prepare
+modules_prepare: modpost_prepare
 	$(Q)$(MAKE) $(build)=scripts scripts/module.lds
 
 endif # CONFIG_MODULES
@@ -2189,7 +2182,8 @@ KBUILD_MODULES :=
 endif # CONFIG_MODULES
 
 PHONY += modpost
-modpost: $(if $(single-build),, $(if $(KBUILD_BUILTIN), vmlinux.o)) \
+modpost: $(if $(KBUILD_EXTMOD),,modpost_prepare) \
+	 $(if $(single-build),, $(if $(KBUILD_BUILTIN), vmlinux.o)) \
 	 $(if $(KBUILD_MODULES), modules_check)
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
 
@@ -2258,7 +2252,7 @@ clean: $(clean-dirs)
 		-o -name '*.dt.yaml' -o -name 'dtbs-list' \
 		-o -name '*.dwo' -o -name '*.lst' \
 		-o -name '*.su' -o -name '*.mod' \
-		-o -name '.*.d' -o -name '.*.tmp' -o -name '*.mod.c' \
+		-o -name '.*.d' -o -name '.*.tmp' -o -name '*.mod.c' -o -name '*.mod.S' \
 		-o -name '*.lex.c' -o -name '*.tab.[ch]' \
 		-o -name '*.asn1.[ch]' \
 		-o -name '*.symtypes' -o -name 'modules.order' \

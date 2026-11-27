@@ -582,9 +582,6 @@ struct module {
 	struct _ddebug_info dyndbg_info;
 #endif
 } ____cacheline_aligned __randomize_layout;
-#ifndef MODULE_ARCH_INIT
-#define MODULE_ARCH_INIT {}
-#endif
 
 #ifdef CONFIG_MODULES
 

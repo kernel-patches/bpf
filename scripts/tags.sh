@@ -14,8 +14,9 @@ fi
 
 # RCS_FIND_IGNORE has escaped ()s -- remove them.
 ignore="$(echo "$RCS_FIND_IGNORE" | sed 's|\\||g' )"
-# tags and cscope files should also ignore MODVERSION *.mod.c files
-ignore="$ignore ( -name *.mod.c ) -prune -o"
+# tags and cscope files should also ignore the modpost-generated *.mod.S files
+# and any *.mod.c left behind from before they were assembly
+ignore="$ignore ( -name *.mod.c -o -name *.mod.S ) -prune -o"
 
 # ignore arbitrary directories
 if [ -n "${IGNORE_DIRS}" ]; then
