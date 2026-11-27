@@ -45,6 +45,9 @@ static int ivpu_preemption_buffers_create(struct ivpu_device *vdev,
 		return -ENOMEM;
 	}
 
+	if (vdev->fw->secondary_preempt_buf_size == 0)
+		return 0;
+
 	cmdq->secondary_preempt_buf = ivpu_bo_create(vdev, &file_priv->ctx, &vdev->hw->ranges.dma,
 						     vdev->fw->secondary_preempt_buf_size,
 						     DRM_IVPU_BO_WC);
@@ -516,7 +519,7 @@ static struct dma_fence *ivpu_fence_create(struct ivpu_device *vdev)
 
 	fence->vdev = vdev;
 	spin_lock_init(&fence->lock);
-	dma_fence_init(&fence->base, &ivpu_fence_ops, &fence->lock, dma_fence_context_alloc(1), 1);
+	dma_fence_init(&fence->base, &ivpu_fence_ops, &fence->lock, dma_fence_context_alloc(1), 1, 0);
 
 	return &fence->base;
 }

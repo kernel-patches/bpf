@@ -269,7 +269,7 @@ struct vkms_config_plane *vkms_config_create_plane(struct vkms_config *config);
 void vkms_config_destroy_plane(struct vkms_config_plane *plane_cfg);
 
 /**
- * vkms_config_plane_type() - Return the plane type
+ * vkms_config_plane_get_type() - Return the plane type
  * @plane_cfg: Plane to get the type from
  */
 static inline enum drm_plane_type
@@ -373,7 +373,7 @@ vkms_config_crtc_set_writeback(struct vkms_config_crtc *crtc_cfg,
 /**
  * vkms_config_crtc_primary_plane() - Return the primary plane for a CRTC
  * @config: Configuration containing the CRTC
- * @crtc_config: Target CRTC
+ * @crtc_cfg: Target CRTC
  *
  * Note that, if multiple primary planes are found, the first one is returned.
  * In this case, the configuration will be invalid. See vkms_config_is_valid().
@@ -387,7 +387,7 @@ struct vkms_config_plane *vkms_config_crtc_primary_plane(const struct vkms_confi
 /**
  * vkms_config_crtc_cursor_plane() - Return the cursor plane for a CRTC
  * @config: Configuration containing the CRTC
- * @crtc_config: Target CRTC
+ * @crtc_cfg: Target CRTC
  *
  * Note that, if multiple cursor planes are found, the first one is returned.
  * In this case, the configuration will be invalid. See vkms_config_is_valid().

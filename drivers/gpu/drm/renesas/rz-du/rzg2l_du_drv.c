@@ -141,6 +141,27 @@ static const struct drm_driver rzg2l_du_driver = {
 };
 
 /* -----------------------------------------------------------------------------
+ * Power management
+ */
+
+static int rzg2l_du_pm_suspend(struct device *dev)
+{
+	struct rzg2l_du_device *rcdu = dev_get_drvdata(dev);
+
+	return drm_mode_config_helper_suspend(&rcdu->ddev);
+}
+
+static int rzg2l_du_pm_resume(struct device *dev)
+{
+	struct rzg2l_du_device *rcdu = dev_get_drvdata(dev);
+
+	return drm_mode_config_helper_resume(&rcdu->ddev);
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(rzg2l_du_pm_ops,
+				rzg2l_du_pm_suspend, rzg2l_du_pm_resume);
+
+/* -----------------------------------------------------------------------------
  * Platform driver
  */
 
@@ -227,6 +248,7 @@ static struct platform_driver rzg2l_du_platform_driver = {
 	.remove		= rzg2l_du_remove,
 	.shutdown	= rzg2l_du_shutdown,
 	.driver		= {
+		.pm	= pm_sleep_ptr(&rzg2l_du_pm_ops),
 		.name	= "rzg2l-du",
 		.of_match_table = rzg2l_du_of_table,
 	},

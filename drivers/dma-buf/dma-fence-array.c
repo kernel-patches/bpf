@@ -205,7 +205,7 @@ void dma_fence_array_init(struct dma_fence_array *array,
 	array->num_fences = num_fences;
 
 	dma_fence_init(&array->base, &dma_fence_array_ops, NULL, context,
-		       seqno);
+		       seqno, 0);
 	init_irq_work(&array->work, irq_dma_fence_array_work);
 
 	/*

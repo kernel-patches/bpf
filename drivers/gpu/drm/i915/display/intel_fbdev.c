@@ -263,6 +263,50 @@ err:
 
 }
 
+static struct intel_framebuffer *
+__intel_fbdev_fb_realloc(struct intel_display *display,
+			 const struct drm_framebuffer *orig_fb,
+			 struct drm_gem_object *obj)
+{
+	struct drm_framebuffer *new_fb;
+	struct drm_mode_fb_cmd2 mode_cmd = {
+		.flags = DRM_MODE_FB_MODIFIERS,
+		.width = orig_fb->width,
+		.height = orig_fb->height,
+		.pitches[0] = orig_fb->pitches[0],
+		.offsets[0] = orig_fb->offsets[0],
+		.pixel_format = orig_fb->format->format,
+		.modifier[0] = orig_fb->modifier,
+	};
+
+	new_fb = intel_framebuffer_create(obj, orig_fb->format, &mode_cmd);
+
+	if (IS_ERR(new_fb)) {
+		intel_bo_fbdev_destroy(obj);
+		return ERR_CAST(new_fb);
+	}
+
+	drm_gem_object_put(obj);
+	return to_intel_framebuffer(new_fb);
+}
+
+static struct intel_framebuffer *
+intel_fbdev_fb_takeover(struct intel_display *display,
+			struct intel_framebuffer *orig_fb)
+{
+	struct drm_gem_object *new_fb_obj;
+
+	new_fb_obj = intel_bo_fbdev_bios_fb_takeover(orig_fb->base.obj[0]);
+	if (IS_ERR(new_fb_obj))
+		return ERR_CAST(new_fb_obj);
+
+	if (orig_fb->base.obj[0] == new_fb_obj)
+		return orig_fb;
+
+	/* Different object, re-create an intel_framebuffer around it */
+	return __intel_fbdev_fb_realloc(display, &orig_fb->base, new_fb_obj);
+}
+
 static bool bios_fb_ok(const struct intel_framebuffer *fb,
 		       const struct drm_fb_helper_surface_size *sizes)
 {
@@ -306,12 +350,25 @@ int intel_fbdev_driver_fbdev_probe(struct drm_fb_helper *helper,
 
 	ifbdev->fb = NULL;
 
-	if (fb && !bios_fb_ok(fb, sizes)) {
+	wakeref = intel_display_rpm_get(display);
+
+	if (fb && bios_fb_ok(fb, sizes)) {
+		struct intel_framebuffer *bios_fb =
+			intel_fbdev_fb_takeover(display, fb);
+
+		if (IS_ERR(bios_fb)) {
+			drm_dbg_kms(display->drm, "Re-using BIOS fb failed (%pe).", bios_fb);
+			bios_fb = NULL;
+		}
+
+		if (fb != bios_fb) {
+			drm_framebuffer_put(&fb->base);
+			fb = bios_fb;
+		}
+	} else if (fb) {
 		drm_framebuffer_put(&fb->base);
 		fb = NULL;
 	}
-
-	wakeref = intel_display_rpm_get(display);
 
 	if (!fb || drm_WARN_ON(display->drm, !intel_fb_bo(&fb->base))) {
 		drm_dbg_kms(display->drm,

@@ -55,10 +55,6 @@ u8 ivpu_pll_max_ratio = U8_MAX;
 module_param_named(pll_max_ratio, ivpu_pll_max_ratio, byte, 0644);
 MODULE_PARM_DESC(pll_max_ratio, "Maximum PLL ratio used to set NPU frequency");
 
-int ivpu_sched_mode = IVPU_SCHED_MODE_AUTO;
-module_param_named(sched_mode, ivpu_sched_mode, int, 0444);
-MODULE_PARM_DESC(sched_mode, "Scheduler mode: -1 - Use default scheduler, 0 - Use OS scheduler (supported on 27XX - 50XX), 1 - Use HW scheduler");
-
 bool ivpu_disable_mmu_cont_pages;
 module_param_named(disable_mmu_cont_pages, ivpu_disable_mmu_cont_pages, bool, 0444);
 MODULE_PARM_DESC(disable_mmu_cont_pages, "Disable MMU contiguous pages optimization");
@@ -127,7 +123,7 @@ static struct ivpu_user_limits *ivpu_user_limits_alloc(struct ivpu_device *vdev,
 		limits->max_ctx_count = ivpu_get_context_count(vdev);
 		limits->max_db_count = ivpu_get_doorbell_count(vdev);
 	} else {
-		limits->max_ctx_count = ivpu_get_context_count(vdev) / 2;
+		limits->max_ctx_count = IVPU_NON_ROOT_USER_MAX_CONTEXTS;
 		limits->max_db_count = ivpu_get_doorbell_count(vdev) / 2;
 	}
 
@@ -506,11 +502,12 @@ static int ivpu_hw_sched_init(struct ivpu_device *vdev)
 /**
  * ivpu_boot() - Start VPU firmware
  * @vdev: VPU device
+ * @device_init: Indicates if this is the initial boot during device initialization
  *
  * This function is paired with ivpu_shutdown() but it doesn't power up the
  * VPU because power up has to be called very early in ivpu_probe().
  */
-int ivpu_boot(struct ivpu_device *vdev)
+int ivpu_boot(struct ivpu_device *vdev, bool device_init)
 {
 	int ret;
 
@@ -546,6 +543,12 @@ int ivpu_boot(struct ivpu_device *vdev)
 
 	if (ivpu_test_mode & IVPU_TEST_MODE_FW_TEST)
 		return 0;
+
+	if (device_init) {
+		ret = ivpu_fw_postboot_init(vdev);
+		if (ret)
+			goto err_disable_ipc;
+	}
 
 	if (!ivpu_fw_is_warm_boot(vdev)) {
 		ret = ivpu_pm_dct_init(vdev);
@@ -842,7 +845,7 @@ static int ivpu_dev_init(struct ivpu_device *vdev)
 
 	ivpu_pm_init(vdev);
 
-	ret = ivpu_boot(vdev);
+	ret = ivpu_boot(vdev, true);
 	if (ret)
 		goto err_ipc_fini;
 

@@ -437,7 +437,7 @@ i915_ttm_memcpy_work_arm(struct i915_ttm_memcpy_work *work,
 	int ret;
 
 	spin_lock_init(&work->lock);
-	dma_fence_init(&work->fence, &dma_fence_memcpy_ops, &work->lock, 0, 0);
+	dma_fence_init(&work->fence, &dma_fence_memcpy_ops, &work->lock, 0, 0, 0);
 	dma_fence_get(&work->fence);
 	ret = dma_fence_add_callback(dep, &work->cb, __memcpy_cb);
 	if (ret) {

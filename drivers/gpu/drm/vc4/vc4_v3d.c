@@ -157,7 +157,7 @@ static int bin_slot_try_alloc(struct vc4_dev *vc4)
 {
 	int slot;
 
-	guard(spinlock_irqsave)(&vc4->job_lock);
+	guard(spinlock_irqsave)(&vc4->bin_alloc_lock);
 
 	slot = ffs(~vc4->bin_alloc_used);
 	if (slot != 0) {
@@ -449,7 +449,7 @@ static int vc4_v3d_bind(struct device *dev, struct device *master, void *data)
 		return ret;
 	vc4->irq = ret;
 
-	ret = vc4_irq_install(drm, vc4->irq);
+	ret = vc4_irq_install(drm);
 	if (ret) {
 		drm_err(drm, "Failed to install IRQ handler\n");
 		return ret;

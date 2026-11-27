@@ -228,9 +228,7 @@ static int aspeed_gfx_load(struct drm_device *drm)
 		return ret;
 	}
 
-	drm_mode_config_reset(drm);
-
-	return 0;
+	return drm_mode_config_create_initial_state(drm);
 }
 
 static void aspeed_gfx_unload(struct drm_device *drm)

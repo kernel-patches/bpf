@@ -12,12 +12,15 @@
 #include "xe_gt_printk.h"
 #include "xe_gt_sriov_vf.h"
 #include "xe_guc.h"
+#include "xe_guc_ct.h"
 #include "xe_guc_pc.h"
 #include "xe_guc_rc.h"
 #include "xe_guc_engine_activity.h"
 #include "xe_guc_submit.h"
 #include "xe_huc.h"
 #include "xe_sriov.h"
+#include "xe_uc_fw.h"
+#include "xe_wedge.h"
 #include "xe_wopcm.h"
 
 static struct xe_gt *
@@ -278,6 +281,81 @@ again:
 		goto again;
 }
 
+static void uc_flr_prepare(struct work_struct *w)
+{
+	struct xe_uc_flr *flr = container_of(w, struct xe_uc_flr, work);
+	struct xe_uc *uc = flr->uc;
+
+	xe_gt_assert(uc_to_gt(uc), xe_wedged(uc_to_xe(uc)));
+
+	xe_uc_reset_prepare(uc);
+	xe_uc_stop(uc);
+	xe_guc_flr_prepare(&uc->guc);
+}
+
+static void uc_flr_sanitize(struct work_struct *w)
+{
+	struct xe_uc_flr *flr = container_of(w, struct xe_uc_flr, work);
+	struct xe_uc *uc = flr->uc;
+
+	/* TODO: Sanitize GSC firmware */
+	xe_gt_assert(uc_to_gt(uc), IS_DGFX(uc_to_xe(uc)));
+	xe_gt_assert(uc_to_gt(uc), !xe_uc_fw_is_loadable(&uc->gsc.fw));
+
+	xe_guc_submit_stop(&uc->guc);
+	xe_uc_sanitize(uc);
+}
+
+/**
+ * xe_uc_flr_prepare() - Prepare uCs for FLR
+ * @uc: The uC object
+ *
+ * Tear down pending work and stop all uCs.
+ */
+void xe_uc_flr_prepare(struct xe_uc *uc)
+{
+	struct xe_uc_flr flr = { .uc = uc };
+	struct xe_gt *gt = uc_to_gt(uc);
+
+	xe_uc_reset_prepare(uc);
+
+	/*
+	 * We'll be tearing down exec queues which signals the fences and frees the
+	 * jobs but all of that happens asynchronously, so make sure we don't disrupt
+	 * the scheduler while jobs are still in-flight.
+	 */
+	INIT_WORK_ONSTACK(&flr.work, uc_flr_prepare);
+	queue_work(gt->ordered_wq, &flr.work);
+	flush_work(&flr.work);
+	destroy_work_on_stack(&flr.work);
+
+	INIT_WORK_ONSTACK(&flr.work, uc_flr_sanitize);
+	queue_work(gt->ordered_wq, &flr.work);
+	flush_work(&flr.work);
+	destroy_work_on_stack(&flr.work);
+}
+
+/**
+ * xe_uc_reinit() - Re-initialize uCs after FLR
+ * @uc: The uC object
+ *
+ * Returns: 0 on success, negative error code otherwise.
+ */
+int xe_uc_reinit(struct xe_uc *uc)
+{
+	int ret;
+
+	ret = xe_guc_reinit(&uc->guc);
+	if (ret)
+		return ret;
+
+	ret = xe_huc_reinit(&uc->huc);
+	if (ret)
+		return ret;
+
+	return xe_gsc_reinit(&uc->gsc);
+}
+
 void xe_uc_suspend_prepare(struct xe_uc *uc)
 {
 	xe_gsc_wait_for_worker_completion(&uc->gsc);
@@ -295,6 +373,20 @@ int xe_uc_suspend(struct xe_uc *uc)
 	xe_uc_stop(uc);
 
 	return xe_guc_suspend(&uc->guc);
+}
+
+/**
+ * xe_uc_resume_early() - Early init for UC resume
+ * @uc: the UC object
+ *
+ * UC init before a GT restart during resume.
+ */
+void xe_uc_resume_early(struct xe_uc *uc)
+{
+	if (!xe_device_uc_enabled(uc_to_xe(uc)))
+		return;
+
+	xe_guc_resume_early(&uc->guc);
 }
 
 /**
@@ -326,15 +418,15 @@ void xe_uc_runtime_resume(struct xe_uc *uc)
 }
 
 /**
- * xe_uc_declare_wedged() - Declare UC wedged
+ * xe_uc_wedge_declare() - Declare UC wedged
  * @uc: the UC object
  *
  * Wedge the UC which stops all submission, saves desired debug state, and
  * cleans up anything which could timeout.
  */
-void xe_uc_declare_wedged(struct xe_uc *uc)
+void xe_uc_wedge_declare(struct xe_uc *uc)
 {
 	xe_gt_assert(uc_to_gt(uc), uc_to_xe(uc)->wedged.mode);
 
-	xe_guc_declare_wedged(&uc->guc);
+	xe_guc_wedge_declare(&uc->guc);
 }

@@ -61,7 +61,7 @@ static struct dma_fence *rocket_fence_create(struct rocket_core *core)
 		return ERR_PTR(-ENOMEM);
 
 	dma_fence_init(fence, &rocket_fence_ops, &core->fence_lock,
-		       core->fence_context, ++core->emit_seqno);
+		       core->fence_context, ++core->emit_seqno, 0);
 
 	return fence;
 }
@@ -215,7 +215,7 @@ static int rocket_job_push(struct rocket_job *job)
 	struct rocket_device *rdev = job->rdev;
 	struct drm_gem_object **bos;
 	struct ww_acquire_ctx acquire_ctx;
-	u32 bo_count;
+	int bo_count;
 	int ret = 0;
 
 	if (check_add_overflow(job->in_bo_count, job->out_bo_count, &bo_count))
@@ -231,18 +231,20 @@ static int rocket_job_push(struct rocket_job *job)
 	if (ret)
 		goto err;
 
+	ret = rocket_acquire_object_fences(job->in_bos, job->in_bo_count,
+					   &job->base, false);
+	if (ret)
+		goto err_unlock;
+
+	ret = rocket_acquire_object_fences(job->out_bos, job->out_bo_count,
+					   &job->base, true);
+	if (ret)
+		goto err_unlock;
+
 	scoped_guard(mutex, &rdev->sched_lock) {
 		drm_sched_job_arm(&job->base);
 
 		job->inference_done_fence = dma_fence_get(&job->base.s_fence->finished);
-
-		ret = rocket_acquire_object_fences(job->in_bos, job->in_bo_count, &job->base, false);
-		if (ret)
-			goto err_unlock;
-
-		ret = rocket_acquire_object_fences(job->out_bos, job->out_bo_count, &job->base, true);
-		if (ret)
-			goto err_unlock;
 
 		kref_get(&job->refcount); /* put by scheduler job completion */
 
@@ -521,10 +523,8 @@ int rocket_job_init(struct rocket_core *core)
 					rocket_job_irq_handler_thread,
 					IRQF_SHARED, dev_name(core->dev),
 					core);
-	if (ret) {
-		dev_err(core->dev, "failed to request job irq");
+	if (ret)
 		return ret;
-	}
 
 	core->reset.wq = alloc_ordered_workqueue("rocket-reset-%d", 0, core->index);
 	if (!core->reset.wq)
@@ -606,6 +606,11 @@ static int rocket_ioctl_submit_job(struct drm_device *dev, struct drm_file *file
 	int ret = 0;
 
 	if (job->task_count == 0)
+		return -EINVAL;
+
+	/* GEM lookup takes a signed object count. */
+	if (job->in_bo_handle_count > INT_MAX ||
+	    job->out_bo_handle_count > INT_MAX)
 		return -EINVAL;
 
 	rjob = kzalloc_obj(*rjob);
@@ -691,8 +696,11 @@ int rocket_ioctl_submit(struct drm_device *dev, void *data, struct drm_file *fil
 	}
 
 
-	for (i = 0; i < args->job_count; i++)
-		rocket_ioctl_submit_job(dev, file, &jobs[i]);
+	for (i = 0; i < args->job_count; i++) {
+		ret = rocket_ioctl_submit_job(dev, file, &jobs[i]);
+		if (ret)
+			goto exit;
+	}
 
 exit:
 	kvfree(jobs);

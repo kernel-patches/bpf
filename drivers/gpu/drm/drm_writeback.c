@@ -592,7 +592,7 @@ drm_writeback_get_out_fence(struct drm_writeback_connector *wb_connector)
 
 	dma_fence_init(fence, &drm_writeback_fence_ops,
 		       &wb_connector->fence_lock, wb_connector->fence_context,
-		       ++wb_connector->fence_seqno);
+		       ++wb_connector->fence_seqno, 0);
 
 	return fence;
 }

@@ -2756,6 +2756,7 @@ static int ips_residency_show(struct seq_file *m, void *unused)
 		seq_printf(m, "ISP query failed\n");
 	} else {
 		unsigned int pct, frac;
+
 		pct = info.residency_millipercent / 1000;
 		frac = info.residency_millipercent % 1000;
 
@@ -2995,64 +2996,6 @@ static ssize_t hdmi_cec_state_write(struct file *f, const char __user *buf,
 	return size;
 }
 
-/**
- * hdmi_automation_enable - Enable/Disable HDMI automation feature
- * @f: file structure.
- * @buf: userspace buffer. set to '1' to enable; '0' to disable automation feature.
- * @size: size of buffer from userpsace.
- * @pos: unused.
- *
- * Return size on success, error code on failure
- */
-static ssize_t hdmi_automation_enable(struct file *f, const char __user *buf,
-	size_t size, loff_t *pos)
-{
-	struct amdgpu_dm_connector *aconnector = file_inode(f)->i_private;
-	char *wr_buf = NULL;
-	const uint32_t wr_buf_size = 40;
-	int max_param_num = 1;
-	uint8_t param_nums = 0;
-	long param[2];
-	bool hdmi_comp_auto;
-
-	if (size == 0)
-		return -EINVAL;
-
-	wr_buf = kcalloc(wr_buf_size, sizeof(char), GFP_KERNEL);
-	if (!wr_buf)
-		return -ENOSPC;
-
-	if (parse_write_buffer_into_params(wr_buf, wr_buf_size,
-					   (long *)param, buf,
-					   max_param_num,
-					   &param_nums)) {
-		kfree(wr_buf);
-		return -EINVAL;
-	}
-
-	if (param_nums <= 0) {
-		kfree(wr_buf);
-		DRM_DEBUG_DRIVER("user data not be read\n");
-		return -EINVAL;
-	}
-
-	switch (param[0]) {
-	case 0:
-		hdmi_comp_auto = false;
-		break;
-	case 1:
-	default:
-		hdmi_comp_auto = true;
-		break;
-	}
-
-	/* Persist setting across sink re-detection/hotplug. */
-	aconnector->hdmi_comp_auto = hdmi_comp_auto;
-
-	kfree(wr_buf);
-	return size;
-}
-
 DEFINE_SHOW_ATTRIBUTE(dp_dsc_fec_support);
 DEFINE_SHOW_ATTRIBUTE(dmub_fw_state);
 DEFINE_SHOW_ATTRIBUTE(dmub_tracebuffer);
@@ -3171,11 +3114,34 @@ static const struct file_operations dp_mst_link_settings_debugfs_fops = {
 	.llseek = default_llseek
 };
 
-static const struct file_operations hdmi_automation_debugfs_fops = {
-	.owner = THIS_MODULE,
-	.write = hdmi_automation_enable,
-	.llseek = default_llseek
-};
+/* 0: EDID behavior, 1: force HDMI VRR, 2: disable VRR. */
+static int vrr_override_set(void *data, u64 val)
+{
+	struct amdgpu_dm_connector *connector = data;
+
+	if (val > AMDGPU_DM_VRR_OVERRIDE_DISABLE_VRR)
+		return -EINVAL;
+
+	if (connector->vrr_override == val)
+		return 0;
+
+	connector->vrr_override = val;
+	drm_kms_helper_connector_hotplug_event(&connector->base);
+
+	return 0;
+}
+
+static int vrr_override_get(void *data, u64 *val)
+{
+	struct amdgpu_dm_connector *connector = data;
+
+	*val = connector->vrr_override;
+
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(vrr_override_fops, vrr_override_get,
+			 vrr_override_set, "%llu\n");
 
 static const struct {
 	char *name;
@@ -3208,9 +3174,9 @@ static const struct {
 	char *name;
 	const struct file_operations *fops;
 } hdmi_debugfs_entries[] = {
+		{"vrr_override", &vrr_override_fops},
 		{"hdcp_sink_capability", &hdcp_sink_capability_fops},
-		{"hdmi_cec_state", &hdmi_cec_state_fops},
-		{"hdmi_automation", &hdmi_automation_debugfs_fops}
+		{"hdmi_cec_state", &hdmi_cec_state_fops}
 };
 
 /*
@@ -3558,14 +3524,20 @@ static int disallow_edp_enter_replay_set(void *data, u64 val)
 static int dmub_trace_mask_set(void *data, u64 val)
 {
 	struct amdgpu_device *adev = data;
-	struct dmub_srv *srv = adev->dm.dc->ctx->dmub_srv->dmub;
+	struct dc_dmub_srv *dc_dmub_srv;
+	struct dmub_srv *srv;
 	enum dmub_gpint_command cmd;
 	u64 mask = 0xffff;
 	u8 shift = 0;
 	u32 res;
 	int i;
 
-	if (!srv->fw_version)
+	if (!adev->dm.dc || !adev->dm.dc->ctx || !adev->dm.dc->ctx->dmub_srv)
+		return -EINVAL;
+
+	dc_dmub_srv = adev->dm.dc->ctx->dmub_srv;
+	srv = dc_dmub_srv->dmub;
+	if (!srv || !srv->fw_version)
 		return -EINVAL;
 
 	for (i = 0;  i < 4; i++) {
@@ -3602,13 +3574,19 @@ static int dmub_trace_mask_show(void *data, u64 *val)
 {
 	enum dmub_gpint_command cmd = DMUB_GPINT__GET_TRACE_BUFFER_MASK_WORD0;
 	struct amdgpu_device *adev = data;
-	struct dmub_srv *srv = adev->dm.dc->ctx->dmub_srv->dmub;
+	struct dc_dmub_srv *dc_dmub_srv;
+	struct dmub_srv *srv;
 	u8 shift = 0;
 	u64 raw = 0;
 	u64 res = 0;
 	int i = 0;
 
-	if (!srv->fw_version)
+	if (!adev->dm.dc || !adev->dm.dc->ctx || !adev->dm.dc->ctx->dmub_srv)
+		return -EINVAL;
+
+	dc_dmub_srv = adev->dm.dc->ctx->dmub_srv;
+	srv = dc_dmub_srv->dmub;
+	if (!srv || !srv->fw_version)
 		return -EINVAL;
 
 	while (i < 4) {
@@ -3975,6 +3953,8 @@ void connector_debugfs_init(struct amdgpu_dm_connector *connector)
 					    0644, dir, connector,
 					    hdmi_debugfs_entries[i].fops);
 		}
+
+		debugfs_create_bool("hdmi_automation", 0644, dir, &connector->hdmi_comp_auto);
 	}
 }
 

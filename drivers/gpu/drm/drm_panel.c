@@ -70,9 +70,9 @@ panel_bridge_connector_helper_funcs = {
 };
 
 static const struct drm_connector_funcs panel_bridge_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = drm_connector_cleanup,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -104,8 +104,18 @@ static int panel_bridge_attach(struct drm_bridge *bridge,
 	drm_connector_attach_encoder(connector, encoder);
 
 	if (bridge->dev->registered) {
-		if (connector->funcs->reset)
-			connector->funcs->reset(connector);
+		if (connector->funcs->atomic_create_state) {
+			struct drm_connector_state *conn_state;
+
+			conn_state = connector->funcs->atomic_create_state(connector);
+			if (IS_ERR(conn_state)) {
+				drm_connector_cleanup(connector);
+				return PTR_ERR(conn_state);
+			}
+
+			connector->state = conn_state;
+		}
+
 		drm_connector_register(connector);
 	}
 
@@ -1039,8 +1049,7 @@ EXPORT_SYMBOL(of_drm_find_panel);
  * return either the associated struct drm_panel or drm_bridge device.
  *
  * This function is deprecated and should not be used in new drivers. Use
- * of_drm_get_bridge_by_endpoint() instead when not looking for a panel, or
- * devm_drm_of_get_bridge() otherwise.
+ * of_drm_get_bridge_by_endpoint() instead.
  *
  * Returns zero if successful, or one of the standard error codes if it fails.
  */

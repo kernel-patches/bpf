@@ -126,7 +126,8 @@ bool dcn6_ms_check_scaler_support(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		plane = &display_cfg->plane_descriptors[k];
 		if (plane->composition.scaler_info.enabled == false
-				&& (dml2_core_utils_is_420(plane->pixel_format) || dml2_core_utils_is_422_planar(plane->pixel_format) || dml2_core_utils_is_422_packed(plane->pixel_format)
+			&& (((dml2_core_utils_is_420(plane->pixel_format) || dml2_core_utils_is_422_planar(plane->pixel_format)
+					|| dml2_core_utils_is_422_packed(plane->pixel_format)) && plane->composition.scaler_info.upsp_enabled == false)
 						|| plane->composition.scaler_info.plane0.h_ratio != 1.0
 						|| plane->composition.scaler_info.plane0.h_taps != 1.0
 						|| plane->composition.scaler_info.plane0.v_ratio != 1.0
@@ -1515,13 +1516,30 @@ bool dcn6_ms_check_dscclk_support(
 	const struct dml2_utm_soc_bb *soc_bb = ctx->soc_bb;
 
 	DML_LOG_FUNC_ENTER();
-	for (k = 0; k < display_cfg->num_planes; k++)
+	for (k = 0; k < display_cfg->num_planes; k++) {
 		if (inputs->required_dscclk_freq_mhz[k] > (double) soc_bb->max_dscclk_khz / 1000) {
 			outputs->support.DSCCLKRequiredMoreThanSupported = true;
 			DML_LOG_VERBOSE("DML::%s: k=%u, DSCCLKRequiredMoreThanSupported = %u\n",
 					__func__, k, outputs->support.DSCCLKRequiredMoreThanSupported);
 			break;
 		}
+
+		unsigned int num_dsc_units;
+
+		if (inputs->ODMMode[k] == dml2_odm_mode_combine_4to1)
+			num_dsc_units = 4;
+		else if (inputs->ODMMode[k] == dml2_odm_mode_combine_3to1)
+			num_dsc_units = 3;
+		else if (inputs->ODMMode[k] == dml2_odm_mode_combine_2to1)
+			num_dsc_units = 2;
+		else
+			num_dsc_units = 1;
+
+		if (inputs->required_dscclk_freq_mhz[k] > ((double)soc_bb->dprefclk_mhz / 5.0) &&
+				(inputs->support.NumberOfDSCSlices[k] / num_dsc_units) == 1) {
+			outputs->support.DSCCLKRequiredMoreThanSupported = true;
+		}
+	}
 
 	DML_LOG_DEBUG_BOOL(outputs->support.DSCCLKRequiredMoreThanSupported);
 	DML_LOG_FUNC_EXIT();

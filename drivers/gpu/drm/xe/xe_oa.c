@@ -1053,7 +1053,7 @@ static int xe_oa_emit_oa_config(struct xe_oa_stream *stream, struct xe_oa_config
 
 	/* Point of no return: initialize and set fence to signal */
 	spin_lock_init(&ofence->lock);
-	dma_fence_init(&ofence->base, &xe_oa_fence_ops, &ofence->lock, 0, 0);
+	dma_fence_init(&ofence->base, &xe_oa_fence_ops, &ofence->lock, 0, 0, 0);
 
 	for (i = 0; i < stream->num_syncs; i++) {
 		if (stream->syncs[i].flags & DRM_XE_SYNC_FLAG_SIGNAL)
@@ -1751,6 +1751,19 @@ static const struct file_operations xe_oa_fops = {
 	.mmap		= xe_oa_mmap,
 };
 
+static bool oag_has_tail_address_wrap(struct xe_oa_stream *stream)
+{
+	return GRAPHICS_VER(stream->oa->xe) >= 20 &&
+		stream->oa_unit->type == DRM_XE_OA_UNIT_TYPE_OAG;
+}
+
+static bool oam_has_tail_address_wrap(struct xe_oa_stream *stream)
+{
+	return MEDIA_VER(stream->oa->xe) >= 30 &&
+		(stream->oa_unit->type == DRM_XE_OA_UNIT_TYPE_OAM ||
+		 stream->oa_unit->type == DRM_XE_OA_UNIT_TYPE_OAM_SAG);
+}
+
 static int xe_oa_stream_init(struct xe_oa_stream *stream,
 			     struct xe_oa_open_param *param)
 {
@@ -1775,12 +1788,13 @@ static int xe_oa_stream_init(struct xe_oa_stream *stream,
 	stream->syncs = param->syncs;
 
 	/*
-	 * For Xe2+, when overrun mode is enabled, there are no partial reports at the end
-	 * of buffer, making the OA buffer effectively a non-power-of-2 size circular
-	 * buffer whose size, circ_size, is a multiple of the report size
+	 * For Xe2+ OAG and Xe3+ OAM, when overrun mode is enabled, there are no
+	 * partial reports at the end of buffer, making the OA buffer effectively a
+	 * non-power-of-2 size circular buffer whose size, circ_size, is
+	 * a multiple of the report size.
 	 */
-	if (GRAPHICS_VER(stream->oa->xe) >= 20 &&
-	    stream->oa_unit->type == DRM_XE_OA_UNIT_TYPE_OAG && stream->sample)
+	if (stream->sample &&
+	    (oag_has_tail_address_wrap(stream) || oam_has_tail_address_wrap(stream)))
 		stream->oa_buffer.circ_size =
 			param->oa_buffer_size -
 			param->oa_buffer_size % stream->oa_buffer.format->size;

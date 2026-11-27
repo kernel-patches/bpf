@@ -693,7 +693,7 @@ static int ras_eeprom_update_header(struct ras_eeprom_control *control)
 	record_count = ras_umc_get_saved_eeprom_count(ras_core);
 	/* Modify the header if it exceeds.
 	 */
-	if (record_count >= control->record_threshold_count) {
+	if (record_count > control->record_threshold_count) {
 		control->tbl_hdr.header = RAS_TABLE_HDR_BAD;
 		if (control->tbl_hdr.version >= RAS_TABLE_VER_V2_1) {
 			control->tbl_rai.rma_status = RAS_GPU_RETIRED__ECC_REACH_THRESHOLD;
@@ -1091,7 +1091,6 @@ static int ras_eeprom_sw_init(struct ras_core_context *ras_core,
 		return -ENOMEM;
 
 	mgr->ras_eeprom = control;
-	memset(control, 0, sizeof(*control));
 
 	control->mgr = mgr;
 	control->max_read_len = param->max_i2c_read_len;

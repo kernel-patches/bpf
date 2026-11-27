@@ -15,6 +15,7 @@
 #include "xe_gt.h"
 #include "xe_gt_mcr.h"
 #include "xe_lmtt.h"
+#include "xe_log.h"
 #include "xe_map.h"
 #include "xe_mert.h"
 #include "xe_mmio.h"
@@ -219,14 +220,8 @@ static void lmtt_setup_dir_ptr_gt(struct xe_gt *gt, u32 config)
 	struct xe_reg reg;
 	u32 val_read;
 
-	if (GRAPHICS_VER(xe) < 20) {
-		reg = LMEM_CFG;
-		xe_mmio_write32(&gt->mmio, reg, config);
-		return;
-	}
-
 	if (xe_gt_is_main_type(gt)) {
-		reg_mcr = XE2_LMEM_CFG_MCR;
+		reg_mcr = GRAPHICS_VER(xe) < 20 ? LMEM_CFG_MCR : XE2_LMEM_CFG_MCR;
 		xe_gt_mcr_multicast_write(gt, reg_mcr, config);
 		val_read = xe_gt_mcr_unicast_read_any(gt, reg_mcr);
 		xe_gt_assert_msg(gt, val_read == config, "LMEM_CFG_MCR: %#x != %#x\n",
@@ -334,14 +329,15 @@ void xe_lmtt_invalidate_hw(struct xe_lmtt *lmtt)
 
 	err = lmtt_invalidate_hw(lmtt);
 	if (err)
-		xe_tile_sriov_err(tile, "LMTT invalidation failed (%pe)",
-				  ERR_PTR(err));
+		xe_log_err(tile, LMTT, err, "%s invalidation failed.\n",
+			   xe_sriov_printk_prefix(xe));
 
 	if (xe_device_has_mert(xe) && xe_tile_is_root(tile)) {
 		err = xe_mert_invalidate_lmtt(xe);
 		if (err)
-			xe_tile_sriov_err(tile, "MERT LMTT invalidation failed (%pe)",
-					  ERR_PTR(err));
+			xe_log_err(tile, LMTT, err,
+				   "%s MERT invalidation failed.\n",
+				   xe_sriov_printk_prefix(xe));
 	}
 }
 

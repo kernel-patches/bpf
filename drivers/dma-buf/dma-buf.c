@@ -413,9 +413,8 @@ static __poll_t dma_buf_poll(struct file *file, poll_table *poll)
  * @buf:    [in]     A piece of userspace memory that contains the name of
  *                   the dma-buf.
  *
- * Returns 0 on success. If the dma-buf buffer is already attached to
- * devices, return -EBUSY.
- *
+ * Return: 0 on success, or a negative error code from strndup_user() on
+ * failure.
  */
 static long dma_buf_set_name(struct dma_buf *dmabuf, const char __user *buf)
 {
@@ -685,6 +684,14 @@ err_alloc_file:
  *
  * For the detailed semantics exporters are expected to implement see
  * &dma_buf_ops.
+ *
+ * It is explicitly forbidden for exporters to expose buffers they don't "own"
+ * as DMA-buf. This includes pages acquired by get_user_pages() or other import
+ * mechanism. Not following this rule can create numerous security problems.
+ *
+ * It is also strongly discouraged to expose the same backing store through
+ * multiple DMA-bufs at the same time. This eventually creates aliasing and
+ * cache coherency problems which are extremely hard to debug and fix.
  */
 
 /**

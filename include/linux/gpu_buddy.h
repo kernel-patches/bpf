@@ -141,7 +141,14 @@ struct gpu_buddy_block {
 	unsigned int subtree_max_alignment;
 	struct list_head tmp_link;
 	bool has_clear;
+	/*
+	 * Largest order of any FREE block in this block's buddy subtree, or
+	 * GPU_BUDDY_NO_FREE_ORDER if none. Protected by the driver lock.
+	 */
+	s8 subtree_max_free_order;
 };
+
+#define GPU_BUDDY_NO_FREE_ORDER (-1)
 
 /* Order-zero must be at least SZ_4K */
 #define GPU_BUDDY_MAX_ORDER (63 - 12)

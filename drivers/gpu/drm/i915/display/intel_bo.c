@@ -92,6 +92,13 @@ u32 intel_bo_fbdev_pitch_align(struct intel_display *display, u32 stride)
 	return display->parent->bo->fbdev_pitch_align(stride);
 }
 
+struct drm_gem_object *intel_bo_fbdev_bios_fb_takeover(struct drm_gem_object *obj)
+{
+	struct intel_display *display = to_intel_display(obj->dev);
+
+	return display->parent->bo->fbdev_bios_fb_takeover(obj);
+}
+
 struct drm_gem_object *intel_bo_fbdev_create(struct intel_display *display, int size)
 {
 	return display->parent->bo->fbdev_create(display->drm, size);

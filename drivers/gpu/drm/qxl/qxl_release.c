@@ -430,7 +430,7 @@ void qxl_release_fence_buffer_objects(struct qxl_release *release)
 	 * set the highest bits. This will break if we really allow exporting of dma-bufs.
 	 */
 	dma_fence_init(&release->base, &qxl_fence_ops, &qdev->release_lock,
-		       release->id | 0xf0000000, release->base.seqno);
+		       release->id | 0xf0000000, release->base.seqno, 0);
 	trace_dma_fence_emit(&release->base);
 
 	list_for_each_entry(entry, &release->bos, list) {

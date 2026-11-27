@@ -76,6 +76,17 @@ int xe_cpu_bind_init(struct xe_device *xe)
 }
 
 /**
+ * xe_cpu_bind_reinit() - Re-initialize a cpu_bind context
+ * @xe: &struct xe_device
+ *
+ * Return: 0 if successful, negative error code on failure
+ */
+int xe_cpu_bind_reinit(struct xe_device *xe)
+{
+	return xe_exec_queue_reinit(xe->cpu_bind->q);
+}
+
+/**
  * xe_cpu_bind_queue() - Get the bind queue from cpu_bind context.
  * @cpu_bind: The cpu bind context.
  *

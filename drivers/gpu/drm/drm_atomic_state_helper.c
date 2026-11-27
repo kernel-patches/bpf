@@ -413,49 +413,6 @@ __drm_atomic_helper_connector_state_init(struct drm_connector_state *conn_state,
 EXPORT_SYMBOL(__drm_atomic_helper_connector_state_init);
 
 /**
- * __drm_atomic_helper_connector_reset - reset state on connector
- * @connector: drm connector
- * @conn_state: connector state to assign
- *
- * Initializes the newly allocated @conn_state and assigns it to
- * the &drm_connector->state pointer of @connector, usually required when
- * initializing the drivers or when called from the &drm_connector_funcs.reset
- * hook.
- *
- * This is useful for drivers that subclass the connector state.
- */
-void
-__drm_atomic_helper_connector_reset(struct drm_connector *connector,
-				    struct drm_connector_state *conn_state)
-{
-	if (conn_state)
-		__drm_atomic_helper_connector_state_init(conn_state, connector);
-
-	connector->state = conn_state;
-}
-EXPORT_SYMBOL(__drm_atomic_helper_connector_reset);
-
-/**
- * drm_atomic_helper_connector_reset - default &drm_connector_funcs.reset hook for connectors
- * @connector: drm connector
- *
- * Resets the atomic state for @connector by freeing the state pointer (which
- * might be NULL, e.g. at driver load time) and allocating a new empty state
- * object.
- */
-void drm_atomic_helper_connector_reset(struct drm_connector *connector)
-{
-	struct drm_connector_state *conn_state = kzalloc_obj(*conn_state);
-
-	if (connector->state)
-		__drm_atomic_helper_connector_destroy_state(connector->state);
-
-	kfree(connector->state);
-	__drm_atomic_helper_connector_reset(connector, conn_state);
-}
-EXPORT_SYMBOL(drm_atomic_helper_connector_reset);
-
-/**
  * drm_atomic_helper_connector_create_state - default &drm_connector_funcs.atomic_create_state hook for connectors
  * @connector: connector object
  *
@@ -482,34 +439,36 @@ drm_atomic_helper_connector_create_state(struct drm_connector *connector)
 EXPORT_SYMBOL(drm_atomic_helper_connector_create_state);
 
 /**
- * drm_atomic_helper_connector_tv_margins_reset - Resets TV connector properties
+ * drm_atomic_helper_connector_tv_margins_state_init - Initializes TV connector properties
+ * @state: the DRM state object
  * @connector: DRM connector
  *
- * Resets the TV-related properties attached to a connector.
+ * Initializes the TV-related properties attached to a connector.
  */
-void drm_atomic_helper_connector_tv_margins_reset(struct drm_connector *connector)
+void drm_atomic_helper_connector_tv_margins_state_init(struct drm_connector_state *state,
+						       struct drm_connector *connector)
 {
 	struct drm_cmdline_mode *cmdline = &connector->cmdline_mode;
-	struct drm_connector_state *state = connector->state;
 
 	state->tv.margins.left = cmdline->tv_margins.left;
 	state->tv.margins.right = cmdline->tv_margins.right;
 	state->tv.margins.top = cmdline->tv_margins.top;
 	state->tv.margins.bottom = cmdline->tv_margins.bottom;
 }
-EXPORT_SYMBOL(drm_atomic_helper_connector_tv_margins_reset);
+EXPORT_SYMBOL(drm_atomic_helper_connector_tv_margins_state_init);
 
 /**
- * drm_atomic_helper_connector_tv_reset - Resets Analog TV connector properties
+ * drm_atomic_helper_connector_tv_state_init - Initializes Analog TV connector properties
+ * @state: the DRM state object
  * @connector: DRM connector
  *
- * Resets the analog TV properties attached to a connector
+ * Initializes the analog TV properties attached to a connector
  */
-void drm_atomic_helper_connector_tv_reset(struct drm_connector *connector)
+void drm_atomic_helper_connector_tv_state_init(struct drm_connector_state *state,
+					       struct drm_connector *connector)
 {
 	struct drm_device *dev = connector->dev;
 	struct drm_cmdline_mode *cmdline = &connector->cmdline_mode;
-	struct drm_connector_state *state = connector->state;
 	struct drm_property *prop;
 	uint64_t val;
 
@@ -570,9 +529,9 @@ void drm_atomic_helper_connector_tv_reset(struct drm_connector *connector)
 							   prop, &val))
 			state->tv.hue = val;
 
-	drm_atomic_helper_connector_tv_margins_reset(connector);
+	drm_atomic_helper_connector_tv_margins_state_init(state, connector);
 }
-EXPORT_SYMBOL(drm_atomic_helper_connector_tv_reset);
+EXPORT_SYMBOL(drm_atomic_helper_connector_tv_state_init);
 
 /**
  * drm_atomic_helper_connector_tv_check - Validate an analog TV connector state
