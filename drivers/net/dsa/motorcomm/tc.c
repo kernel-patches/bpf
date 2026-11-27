@@ -1064,11 +1064,35 @@ yt921x_acl_rule_ext_parse_flow_action(struct yt921x_acl_rule_ext *ruleext,
 			terminal = true;
 			break;
 		case FLOW_ACTION_REDIRECT: {
+			struct yt921x_port *pp = &priv->ports[port];
+			struct yt921x_port *to_pp;
 			struct dsa_port *to_dp;
+			struct dsa_port *dp;
 
 			to_dp = dsa_port_from_netdev(act->dev);
 			if (IS_ERR(to_dp) || to_dp->ds != &priv->ds) {
 				reason = "Redirect to non-local port";
+				goto fallback;
+			}
+
+			/* Port isolation takes after REDIR judgment, but
+			 * software may deliver such frames.
+			 *
+			 * Bridge membership changes may break existing REDIR
+			 * rules, but we cannot do anything here: driver can
+			 * neither reject such changes (port_bridge_leave() is
+			 * void), nor tell tc which one is invalidated.
+			 */
+			dp = dsa_to_port(&priv->ds, port);
+			if (!dsa_port_bridge_same(dp, to_dp)) {
+				reason = "Redirect to another bridge";
+				goto fallback;
+			}
+
+			to_pp = &priv->ports[to_dp->index];
+			if ((to_dp->index == port && !pp->hairpin) ||
+			    (pp->isolated && to_pp->isolated)) {
+				reason = "Redirect target is isolated";
 				goto fallback;
 			}
 
