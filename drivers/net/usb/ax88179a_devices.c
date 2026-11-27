@@ -717,10 +717,12 @@ static int ax88179a_mii_ioctl(struct net_device *net, struct ifreq *rq, int cmd)
 static int ax88179a_set_features(struct net_device *net, netdev_features_t features)
 {
 	struct usbnet *dev = netdev_priv(net);
+	struct ax88179_data *ax179_data;
 	netdev_features_t changed;
 	int ret;
 	u8 tmp;
 
+	ax179_data = dev->driver_priv;
 	changed = net->features ^ features;
 
 	ret = ax88179_set_features(net, features);
@@ -780,6 +782,18 @@ static int ax88179a_set_features(struct net_device *net, netdev_features_t featu
 		if (ret < 0)
 			return ret;
 	}
+
+	if (changed & (NETIF_F_RXFCS | NETIF_F_RXALL)) {
+		u16 rxctl = READ_ONCE(ax179_data->rxctl);
+
+		if (features & (NETIF_F_RXFCS | NETIF_F_RXALL))
+			rxctl |= AX_RX_CTL_DROPCRCERR;
+		else
+			rxctl &= ~AX_RX_CTL_DROPCRCERR;
+		WRITE_ONCE(ax179_data->rxctl, rxctl);
+		ax88179_write_u16(dev, AX_ACCESS_MAC, AX_RX_CTL, 2, rxctl);
+	}
+
 	return 0;
 }
 
@@ -852,8 +866,8 @@ static int ax88179a_bind(struct usbnet *dev, struct usb_interface *intf)
 		    ax179_data->fw_version[2], ax179_data->fw_version[3]);
 
 	/* The AX88279 requires both the AX_RX_CTL_IPE and AX_RX_CTL_DROPCRCERR
-	 * bits set in AX_RX_CTL for creating correct RX-URBs. AX_RX_CTL_DROPCRCERR
-	 * is anyway set for all chips, make sure AX_RX_CTL_IPE is set via ip_align.
+	 * bits set in AX_RX_CTL for creating correct RX-URBs. Make sure
+	 * AX_RX_CTL_IPE is set via ip_align.
 	 * Also configure eeprom access parameters.
 	 */
 	if (ax179_data->chip_version == AX_VERSION_AX88279) {
@@ -893,6 +907,11 @@ static int ax88179a_bind(struct usbnet *dev, struct usb_interface *intf)
 
 	dev->net->vlan_features = NETIF_F_SG | NETIF_F_IP_CSUM |
 				  NETIF_F_IPV6_CSUM | NETIF_F_RXCSUM | NETIF_F_TSO;
+
+	if (ax179_data->chip_version == AX_VERSION_AX88179A) {
+		dev->net->hw_features |= NETIF_F_RXFCS | NETIF_F_RXALL;
+		dev->net->vlan_features |= NETIF_F_RXFCS | NETIF_F_RXALL;
+	}
 
 	netif_set_tso_max_size(dev->net, 16384);
 
@@ -1039,8 +1058,13 @@ static int ax88179a_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 	pkt_end = 0;
 	while (pkt_cnt--) {
 		u64 pkt_desc = get_unaligned_le64(pkt_desc_ptr);
+		long features = dev->net->features;
 		u32 pkt_len_plus_padd;
+		u32 fcs_trailer = 0;
 		u32 pkt_len;
+
+		if (features & (NETIF_F_RXFCS | NETIF_F_RXALL))
+			fcs_trailer = ETH_FCS_LEN;
 
 		pkt_len = FIELD_GET(AX179A_RX_PD_LEN, pkt_desc);
 		pkt_len -= (ax179_data->ip_align ? 2 : 0);
@@ -1050,9 +1074,17 @@ static int ax88179a_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 		if (pkt_end > hdr_off || (pkt_cnt == 0 && pkt_end != hdr_off))
 			goto err;
 
-		if (pkt_desc & AX179A_RX_PD_DROP || !(pkt_desc & AX179A_RX_PD_RX_OK) ||
-		    pkt_len > (dev->hard_mtu + AX179A_RX_HW_PAD) || pkt_len < 2 + ETH_HLEN) {
+		if (((pkt_desc & AX179A_RX_PD_DROP || !(pkt_desc & AX179A_RX_PD_RX_OK)) &&
+		     !(features & NETIF_F_RXALL)) ||
+		    pkt_len > dev->hard_mtu + AX179A_RX_HW_PAD + fcs_trailer ||
+		    pkt_len < 2 + ETH_HLEN) {
 			skb_pull(skb, pkt_len_plus_padd);
+
+			if (pkt_desc & AX179A_RX_PD_DROP)
+				dev->net->stats.rx_dropped++;
+
+			if (!(pkt_desc & AX179A_RX_PD_RX_OK))
+				dev->net->stats.rx_crc_errors++;
 
 			/* Next RX Packet Descriptor */
 			pkt_desc_ptr++;
@@ -1216,12 +1248,14 @@ static int ax88179a_reset(struct usbnet *dev)
 	ax88179_write_u8(dev, AX_ACCESS_MAC, AX_TXCOE_CTL, 1, *tmp);
 
 	/* Configure RX control register => start operation */
-	rxctl = AX_RX_CTL_DROPCRCERR | AX_RX_CTL_START | AX_RX_CTL_AP |
-		AX_RX_CTL_AMALL | AX_RX_CTL_AB;
+	rxctl = AX_RX_CTL_START | AX_RX_CTL_AP | AX_RX_CTL_AMALL | AX_RX_CTL_AB;
 	if (ax179_data->ip_align)
 		rxctl |= AX_RX_CTL_IPE;
 	if (dev->net->flags & IFF_PROMISC)
 		rxctl |= AX_RX_CTL_PRO;
+	if (dev->net->features & (NETIF_F_RXFCS | NETIF_F_RXALL) ||
+	    ax179_data->chip_version == AX_VERSION_AX88279)
+		rxctl |= AX_RX_CTL_DROPCRCERR;
 	WRITE_ONCE(ax179_data->rxctl, rxctl);
 	ax88179_write_u16(dev, AX_ACCESS_MAC, AX_RX_CTL, 2, rxctl);
 
