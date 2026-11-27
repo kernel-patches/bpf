@@ -499,8 +499,9 @@ If a person has had the opportunity to comment on a patch, but has not
 provided such comments, you may optionally add a ``Cc:`` tag to the patch.
 This tag documents that potentially interested parties have been included in
 the discussion. Note, this is one of only three tags you might be able to use
-without explicit permission of the person named (see 'Tagging people requires
-permission' below for details).
+without explicit permission of the person named (see
+:ref:`Tagging people requires permission <tagging_people>` below for
+details).
 
 Co-developed-by: states that the patch was co-created by multiple developers;
 it is used to give attribution to co-authors (in addition to the author
@@ -548,7 +549,8 @@ followed by a Closes: tag pointing to the report, unless the report is not
 available on the web. The Link: tag can be used instead of Closes: if the patch
 fixes a part of the issue(s) being reported. Note, the Reported-by tag is one
 of only three tags you might be able to use without explicit permission of the
-person named (see 'Tagging people requires permission' below for details).
+person named (see :ref:`Tagging people requires permission <tagging_people>`
+below for details).
 
 A Tested-by: tag indicates that the patch has been successfully tested (in
 some environment) by the person named.  This tag informs maintainers that
@@ -588,6 +590,11 @@ serves to give credit to reviewers and to inform maintainers of the degree of
 review which has been done on the patch.  Reviewed-by: tags, when supplied by
 reviewers known to understand the subject area and to perform thorough reviews,
 will normally increase the likelihood of your patch getting into the kernel.
+If the reviewer checks only a piece of the patch, leaving the rest unreviewed,
+especially skipping the main concept of the patch, then more appropriate is
+an Acked-by tag or adding a "# subpart-name" marker after the Reviewed-by tag:
+
+	Reviewed-by: Driver X Reviewer <foo@example.org> # for Driver
 
 Both Tested-by and Reviewed-by tags, once received on mailing list from tester
 or reviewer, should be added by author to the applicable patches when sending
@@ -601,8 +608,9 @@ A Suggested-by: tag indicates that the patch idea is suggested by the person
 named and ensures credit to the person for the idea: if we diligently credit
 our idea reporters, they will, hopefully, be inspired to help us again in the
 future. Note, this is one of only three tags you might be able to use without
-explicit permission of the person named (see 'Tagging people requires
-permission' below for details).
+explicit permission of the person named (see
+:ref:`Tagging people requires permission <tagging_people>` below for
+details).
 
 A Fixes: tag indicates that the patch fixes a bug in a previous commit. It
 is used to make it easy to determine where an issue originated, which can help
@@ -610,6 +618,14 @@ review a bug fix. This tag also assists the stable kernel team in determining
 which stable kernel versions should receive your fix. This is the preferred
 method for indicating a bug fixed by the patch. See :ref:`describe_changes`
 for more details.
+
+Name the commit that introduced the bug. When using ``git blame`` to find it,
+do not settle on a commit that only moved the code. If a later commit exposed
+an older bug, add a Fixes: tag for that commit too. If the same bug was
+introduced separately by more than one commit, add a Fixes: tag for each. Do
+not add tags for commits that are only suspected. The Fixes: tags tell the
+stable team which trees need the fix: those that contain one of the tagged
+commits. Trees that contain none of them do not need it.
 
 Note: Attaching a Fixes: tag does not subvert the stable kernel rules
 process nor the requirement to Cc: stable@vger.kernel.org on all stable
@@ -824,8 +840,6 @@ lore.kernel.org archive link) is recommended to help reviewers::
 
 See more details on the proper patch format in the following
 references.
-
-.. _explicit_in_reply_to:
 
 Explicit In-Reply-To headers
 ----------------------------

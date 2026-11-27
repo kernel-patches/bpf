@@ -44,6 +44,7 @@
 	NET	Appropriate network support is enabled.
 	NFS	Appropriate NFS support is enabled.
 	NUMA	NUMA support is enabled.
+	NVME	NVMe support is enabled
 	OF	Devicetree is enabled.
 	PARISC	The PA-RISC architecture is enabled.
 	PCI	PCI bus support is enabled.
@@ -74,7 +75,6 @@
 	TPM	TPM drivers are enabled.
 	UMS	USB Mass Storage support is enabled.
 	USB	USB support is enabled.
-	NVME	NVMe support is enabled
 	USBHID	USB Human Interface Device support is enabled.
 	V4L	Video For Linux support is enabled.
 	VGA	The VGA console has been enabled.
@@ -5437,7 +5437,7 @@ Kernel parameters
 			execution priority.
 
 	ppc_strict_facility_enable
-			[PPC,ENABLE] This option catches any kernel floating point,
+			[PPC,EARLY] This option catches any kernel floating point,
 			Altivec, VSX and SPE outside of regions specifically
 			allowed (eg kernel_enable_fpu()/kernel_disable_fpu()).
 			There is some performance impact when enabling this.

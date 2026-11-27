@@ -29,7 +29,7 @@ A equipe lida apenas com o desenvolvimento de correções para problemas de
 segurança de hardware sob embargo. Relatos de bugs de segurança de software puro
 no kernel Linux não são tratados por esta equipe, e o autor do relato será
 orientado a contatar a equipe regular de segurança do kernel Linux
-(:ref:`Documentation/admin-guide/ <securitybugs>`) em vez disso.
+(:ref:`Documentation/admin-guide/ <pt_BR_securitybugs>`) em vez disso.
 
 A equipe pode ser contatada por e-mail em <hardware-security@kernel.org>. Esta
 é uma lista privada de oficiais de segurança que ajudarão você a coordenar uma
@@ -310,7 +310,7 @@ A lista atual de embaixadores:
   Red Hat       Josh Poimboeuf <jpoimboe@redhat.com>
   SUSE          Jiri Kosina <jkosina@suse.cz>
 
-  Google        Kees Cook <keescook@chromium.org>
+  Google        Kees Cook <keescook@google.com>
 
   LLVM          Nick Desaulniers <ndesaulniers@google.com>
   ============= ========================================================

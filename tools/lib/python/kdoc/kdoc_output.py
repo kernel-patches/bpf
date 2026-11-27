@@ -167,6 +167,7 @@ class OutputFormat:
 
         if self.out_mode in [self.OUTPUT_INCLUDE, self.OUTPUT_EXPORTED]:
             if name in self.function_table:
+                self.out_warnings(args)
                 return True
 
         if self.out_mode == self.OUTPUT_INTERNAL:
@@ -763,7 +764,10 @@ class ManFormat(OutputFormat):
         Add a tail at the end of man pages output.
         """
         super().msg(fname, name, args)
-        self.out_tail(fname, name, args)
+
+        # Symbols dropped by the output filters produce no page
+        if self.data:
+            self.out_tail(fname, name, args)
 
         return self.data
 

@@ -24,6 +24,20 @@ Core subsystems
    timers/index
    locking/index
 
+Bus and Communication interfaces
+--------------------------------
+
+.. toctree::
+   :maxdepth: 1
+
+   i2c/index
+   pcmcia/index
+   spi/index
+   w1/index
+   usb/index
+   PCI/index
+   peci/index
+
 Human interfaces
 ----------------
 
@@ -72,11 +86,7 @@ Other subsystems
    cpu-freq/index
    edac/index
    fpga/index
-   i2c/index
    iio/index
-   pcmcia/index
-   spi/index
-   w1/index
    watchdog/index
    virt/index
    hwmon/index
@@ -84,9 +94,6 @@ Other subsystems
    security/index
    crypto/index
    bpf/index
-   usb/index
-   PCI/index
    misc-devices/index
-   peci/index
    wmi/index
    tee/index

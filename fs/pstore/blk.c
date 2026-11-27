@@ -357,5 +357,5 @@ module_exit(pstore_blk_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("WeiXiong Liao <liaoweixiong@allwinnertech.com>");
-MODULE_AUTHOR("Kees Cook <keescook@chromium.org>");
+MODULE_AUTHOR("Kees Cook <kees@kernel.org>");
 MODULE_DESCRIPTION("pstore backend for block devices");

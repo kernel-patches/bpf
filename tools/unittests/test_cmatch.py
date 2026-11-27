@@ -324,7 +324,7 @@ class TestSubWithLocalXforms(TestCaseDiff):
         (CMatch('__guarded_by'), ' '),
         (CMatch('__pt_guarded_by'), ' '),
 
-        (CMatch('__cacheline_group_(begin|end)'), ''),
+        (CMatch('__cacheline_group_(begin|end)(_aligned)?'), ''),
 
         (CMatch('struct_group'), r'\2'),
         (CMatch('struct_group_attr'), r'\3'),

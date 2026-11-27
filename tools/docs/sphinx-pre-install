@@ -10,14 +10,15 @@
 # incompatible python versions.
 
 """
-Dependency checker for Sphinx documentation Kernel build.
+Check Sphinx installation and Linux kernel documentation build dependencies.
 
-This module provides tools to check for all required dependencies needed to
-build documentation using Sphinx, including system packages, Python modules
-and LaTeX packages for PDF generation.
+This module checks whether Sphinx is available and verifies dependencies
+needed to build Linux kernel documentation, including system packages,
+Python modules, and LaTeX packages for PDF generation.
 
-It detect packages for a subset of Linux distributions used by Kernel
-maintainers, showing hints and missing dependencies.
+It reports missing dependencies and provides distribution-specific
+installation hints for a subset of Linux distributions used by kernel
+maintainers.
 
 The main class SphinxDependencyChecker handles the dependency checking logic
 and provides recommendations for installing missing packages. It supports both
@@ -51,8 +52,8 @@ class DepManager:
     - PDF: dependencies needed by PDF builds.
 
     Each dependency can be mandatory or optional. Not installing an optional
-    dependency won't break the build, but will cause degradation at the
-    docs output.
+    dependency won't break the build, but will degrade the generated
+    documentation.
     """
 
     # Internal types of dependencies. Don't use them outside DepManager class.
@@ -148,7 +149,7 @@ class DepManager:
         """
         Clear dependencies without changing needed/optional.
 
-        This is an ackward way to have a separate section to recommend
+        This is an awkward way to have a separate section to recommend
         a package after system main dependencies.
 
         TODO: rework the logic to prevent needing it.
@@ -162,8 +163,8 @@ class DepManager:
         Update self.missing_pkg, using progs dict to convert from the
         agnostic package name to distro-specific one.
 
-        Returns an string with the packages to be installed, sorted and
-        with eventual duplicates removed.
+        Returns a string with the packages to be installed, sorted and
+        with duplicates removed.
         """
 
         self.missing_pkg = {}
@@ -232,7 +233,7 @@ class AncillaryMethods:
     @staticmethod
     def run(*args, **kwargs):
         """
-        Excecute a command, hiding its output by default.
+        Execute a command, hiding its output by default.
         Preserve compatibility with older Python versions.
         """
 
@@ -288,7 +289,7 @@ class MissingCheckers(AncillaryMethods):
 
     def check_missing_file(self, files, package, dtype):
         """
-        Does the file exists? If not, add it to missing dependencies.
+        Check whether any listed file exists; otherwise, record the missing package.
         """
         for f in files:
             if os.path.exists(f):
@@ -297,8 +298,7 @@ class MissingCheckers(AncillaryMethods):
 
     def check_program(self, prog, dtype):
         """
-        Does the program exists and it is at the PATH?
-        If not, add it to missing dependencies.
+        Check whether the program is in PATH; otherwise, record it as missing.
         """
         found = self.which(prog)
         if found:
@@ -310,8 +310,8 @@ class MissingCheckers(AncillaryMethods):
 
     def check_perl_module(self, prog, dtype):
         """
-        Does perl have a dependency? Is it available?
-        If not, add it to missing dependencies.
+        Check whether Perl and the specified module are available;
+        otherwise, record the missing dependency.
 
         Right now, we still need Perl for doc build, as it is required
         by some tools called at docs or kernel build time, like:
@@ -340,8 +340,8 @@ class MissingCheckers(AncillaryMethods):
 
     def check_python_module(self, module, is_optional=False):
         """
-        Does a python module exists outside venv? If not, add it to missing
-        dependencies.
+        Check whether the Python module is available; otherwise, record it
+        as missing.
         """
         if is_optional:
             dtype = DepManager.PYTHON_OPTIONAL
@@ -355,7 +355,7 @@ class MissingCheckers(AncillaryMethods):
 
     def check_rpm_missing(self, pkgs, dtype):
         """
-        Does a rpm package exists? If not, add it to missing dependencies.
+        Check whether each RPM package is installed; record any that are missing.
         """
         for prog in pkgs:
             try:
@@ -365,7 +365,7 @@ class MissingCheckers(AncillaryMethods):
 
     def check_pacman_missing(self, pkgs, dtype):
         """
-        Does a pacman package exists? If not, add it to missing dependencies.
+        Check whether each pacman package is installed; record any that are missing.
         """
         for prog in pkgs:
             try:
@@ -375,7 +375,7 @@ class MissingCheckers(AncillaryMethods):
 
     def check_missing_tex(self, is_optional=False):
         """
-        Does a LaTeX package exists? If not, add it to missing dependencies.
+        Check whether each LaTeX resource is available; record missing packages.
         """
         if is_optional:
             dtype = DepManager.PDF_OPTIONAL
@@ -511,7 +511,7 @@ class MissingCheckers(AncillaryMethods):
         methods are used here.
 
         By default, it will use lsb_release function. If not available, it will
-        fail back to reading the known different places where the distro name
+        fall back to reading the known locations where the distro name
         is stored.
 
         Several modern distros now have /etc/os-release, which usually have
@@ -1137,6 +1137,7 @@ class SphinxDependencyChecker(MissingCheckers):
             re.compile("Devuan"):                     self.give_debian_hints,
             re.compile("Kali"):                       self.give_debian_hints,
             re.compile("Mint"):                       self.give_debian_hints,
+            re.compile("Deepin"):                     self.give_debian_hints,
 
             re.compile("openSUSE"):                   self.give_opensuse_hints,
 
@@ -1154,7 +1155,7 @@ class SphinxDependencyChecker(MissingCheckers):
 
         #
         # Fall-back to generic hint code for other distros
-        # That's far from ideal, specially for LaTeX dependencies.
+        # That's far from ideal, especially for LaTeX dependencies.
         #
         progs = {"sphinx-build": "sphinx"}
         if self.pdf:
@@ -1183,8 +1184,8 @@ class SphinxDependencyChecker(MissingCheckers):
         Give a hint about how to activate an already-existing virtual
         environment containing sphinx-build.
 
-        Returns a tuble with (activate_cmd_path, sphinx_version) with
-        the newest available virtual env.
+        Returns (activate_cmd_path, sphinx_version) for a selected virtual
+        environment, or an empty activation path if none is selected.
         """
 
         cwd = os.getcwd()

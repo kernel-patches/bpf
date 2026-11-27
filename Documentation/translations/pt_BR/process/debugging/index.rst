@@ -11,10 +11,10 @@ Guias gerais
    :maxdepth: 1
 
    userspace_debugging_guide
+   driver_development_debugging_guide
 
 Todolist:
 
-*   driver_development_debugging_guide
 *   gdb-kernel-debugging
 *   kgdb
 
@@ -57,7 +57,7 @@ kernel?
 
 Nesse caso, sua gama de ferramentas disponíveis é muito maior. Você
 pode encontrar as ferramentas
-no :doc:`/process/debugging/driver_development_debugging_guide`.
+no :doc:`driver_development_debugging_guide`.
 
 A temporização é um fator?
 --------------------------

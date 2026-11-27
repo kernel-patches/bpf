@@ -79,11 +79,11 @@ Published books
 
       :Author: Lorenzo Stoakes
       :Publisher: No Starch Press
-      :Date: February 2025
-      :Pages: 1300
+      :Date: Spring 2027
+      :Pages: 1350
       :ISBN: 978-1718504462
       :Notes: Memory management. Full draft available as early access for
-              pre-order, full release scheduled for Fall 2025. See
+              pre-order, full release scheduled for Spring 2027. See
               https://nostarch.com/linux-memory-manager for further info.
 
     * Title: **Practical Linux System Administration: A Guide to Installation, Configuration, and Management, 1st Edition**
