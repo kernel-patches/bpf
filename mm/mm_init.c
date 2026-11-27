@@ -28,6 +28,7 @@
 #include <linux/swap.h>
 #include <linux/cma.h>
 #include <linux/crash_dump.h>
+#include <linux/crash_reserve.h>
 #include <linux/execmem.h>
 #include <linux/sizes.h>
 #include <linux/vmstat.h>
@@ -2688,6 +2689,7 @@ void __init mm_core_init_early(void)
 	free_area_init();
 
 	hugetlb_cma_reserve();
+	reserve_crashkernel_cma();
 	hugetlb_bootmem_alloc();
 
 	sparse_init();

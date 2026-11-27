@@ -20,6 +20,8 @@ config PARISC
 	select ARCH_NO_SG_CHAIN
 	select ARCH_SPLIT_ARG64 if !64BIT
 	select ARCH_SUPPORTS_HUGETLBFS if PA20
+	select ARCH_SUPPORTS_KEXEC
+	select ARCH_SUPPORTS_KEXEC_FILE
 	select ARCH_SUPPORTS_MEMORY_FAILURE
 	select ARCH_STACKWALK
 	select ARCH_HAS_CACHE_LINE_SIZE
@@ -372,12 +374,6 @@ config NR_CPUS
 	default "16"
 
 endmenu
-
-config ARCH_SUPPORTS_KEXEC
-	def_bool y
-
-config ARCH_SUPPORTS_KEXEC_FILE
-	def_bool y
 
 config ARCH_SELECTS_KEXEC_FILE
 	def_bool y
