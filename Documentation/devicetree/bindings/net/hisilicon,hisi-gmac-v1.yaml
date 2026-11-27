@@ -13,6 +13,22 @@ maintainers:
 allOf:
   - $ref: /schemas/net/ethernet-controller.yaml#
   - $ref: /schemas/net/mdio.yaml#
+  - if:
+      not:
+        required:
+          - fixed-link
+    then:
+      required:
+        - phy-handle
+  - if:
+      required:
+        - fixed-link
+    then:
+      not:
+        required:
+          - phy-handle
+      patternProperties:
+        '@[0-9a-f]+$': false
 
 properties:
   compatible:
@@ -58,7 +74,8 @@ properties:
     unevaluatedProperties: false
     description:
       Node containing PHY children. If this node is not present, then PHYs will
-      be direct children.
+      be direct children. With fixed-link, MDIO devices must be placed under the
+      mdio node.
 
   hisilicon,phy-reset-delays-us:
     description: Triplet of PHY reset delays in microseconds.
@@ -74,7 +91,6 @@ required:
   - clocks
   - clock-names
   - phy-mode
-  - phy-handle
 
 unevaluatedProperties: false
 
