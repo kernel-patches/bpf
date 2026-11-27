@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/display/imx/fsl,imx-fb-display.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Freescale i.MX framebuffer display
+
+maintainers:
+  - Fabio Estevam <festevam@gmail.com>
+
+description:
+  Legacy display nodes referenced by the display property of the i.MX
+  LCD controller describe the panel and its interface configuration.
+
+select:
+  required:
+    - fsl,pcr
+
+allOf:
+  - $ref: /schemas/display/panel/panel-common.yaml#
+
+properties:
+  model:
+    $ref: /schemas/types.yaml#/definitions/string
+    description: Display panel model name.
+
+  bits-per-pixel:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Number of bits per pixel in the framebuffer.
+
+  bus-width:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Number of data lines connected to the panel.
+
+  fsl,pcr:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: LCDC Panel Configuration Register value.
+
+  fsl,aus-mode:
+    type: boolean
+    description: Enable AUS mode on i.MX21 and later LCD controllers.
+
+required:
+  - bits-per-pixel
+  - display-timings
+  - fsl,pcr
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    display {
+        model = "Primeview-PD050VL1";
+        bits-per-pixel = <16>;
+        fsl,pcr = <0xf0c88080>;
+
+        display-timings {
+            native-mode = <&timing0>;
+
+            timing0: timing0 {
+                hactive = <640>;
+                vactive = <480>;
+                hback-porch = <112>;
+                hfront-porch = <36>;
+                hsync-len = <32>;
+                vback-porch = <33>;
+                vfront-porch = <33>;
+                vsync-len = <2>;
+                clock-frequency = <25000000>;
+            };
+        };
+    };
