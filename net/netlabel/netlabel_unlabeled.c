@@ -582,6 +582,8 @@ static void netlbl_unlhsh_condremove_iface(struct netlbl_unlhsh_iface *iface)
 #endif /* IPv6 */
 
 	spin_lock(&netlbl_unlhsh_lock);
+	if (!iface->valid)
+		goto unlhsh_condremove_failure;
 	netlbl_af4list_foreach_rcu(iter4, &iface->addr4_list)
 		goto unlhsh_condremove_failure;
 #if IS_ENABLED(CONFIG_IPV6)
