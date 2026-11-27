@@ -3028,7 +3028,9 @@ struct rtable *ip_route_output_flow(struct net *net, struct flowi4 *flp4,
 		return rt;
 
 	if (flp4->flowi4_proto) {
-		flp4->flowi4_oif = rt->dst.dev->ifindex;
+		rcu_read_lock();
+		flp4->flowi4_oif = dst_dev_rcu(&rt->dst)->ifindex;
+		rcu_read_unlock();
 		rt = dst_rtable(xfrm_lookup_route(net, &rt->dst,
 						  flowi4_to_flowi(flp4),
 						  sk, 0));
