@@ -131,10 +131,13 @@ static int as3668_dt_init(struct as3668 *as3668)
 static int as3668_probe(struct i2c_client *client)
 {
 	struct as3668 *as3668;
-	int err;
-	u8 chip_id;
+	int chip_id, err;
 
 	chip_id = i2c_smbus_read_byte_data(client, AS3668_CHIP_ID1_REG);
+	if (chip_id < 0)
+		return dev_err_probe(&client->dev, chip_id,
+				     "failed to read chip ID\n");
+
 	if (chip_id != AS3668_CHIP_ID)
 		return dev_err_probe(&client->dev, -ENODEV,
 				     "expected chip ID 0x%02x, got 0x%02x\n",

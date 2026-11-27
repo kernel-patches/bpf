@@ -2,6 +2,19 @@
 
 if LEDS_CLASS_MULTICOLOR
 
+config LEDS_ASUS_AURA_SCSI
+	tristate "ASUS Aura RGB LEDs on ROG external NVMe enclosures"
+	depends on SCSI && SCSI_DH
+	help
+	  Say Y here if you want to control the RGB LEDs of ASUS ROG
+	  external NVMe enclosures such as the ROG STRIX Arion. The LEDs
+	  sit behind an ENE controller on the drive's SCSI LUN and are
+	  programmed with vendor commands; each of the four LED zones is
+	  exposed as a multicolor LED class device.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called leds-asus-aura-scsi.
+
 config LEDS_GROUP_MULTICOLOR
 	tristate "LEDs group multi-color support"
 	depends on OF
@@ -20,7 +33,8 @@ config LEDS_KTD202X
 	select REGMAP_I2C
 	help
 	  This option enables support for the Kinetic KTD2026/KTD2027
-	  RGB/White LED driver found in different BQ mobile phones.
+	  RGB/White LED driver found in different BQ mobile phones, and
+	  for the compatible Etek ET6326.
 	  It is a 3 or 4 channel LED driver programmed via an I2C interface.
 
 	  To compile this driver as a module, choose M here: the module
