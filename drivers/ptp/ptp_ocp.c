@@ -5942,6 +5942,8 @@ static int ptp_ocp_dpll_frequency_get(const struct dpll_pin *pin,
 	guard(mutex)(&bp->sma_lock);
 	val = bp->sma_op->get(bp, sma_nr + 1);
 	val &= SMA_SELECT_MASK;
+	if (sma->mode == SMA_MODE_IN && sma->disabled)
+		val = SMA_DISABLE;
 	tbl = bp->sma_op->tbl[sma->mode];
 	for (i = 0; tbl[i].name; i++)
 		if (val == tbl[i].value) {
