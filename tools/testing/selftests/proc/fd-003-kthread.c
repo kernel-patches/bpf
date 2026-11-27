@@ -36,6 +36,7 @@
  *
  * Return /proc/$PID/fd descriptor if process is kernel thread.
  * Return -1 if a process is userspace process.
+ * Return -EACCES if run as non-root.
  */
 static int kernel_thread_fd(unsigned int pid)
 {
@@ -88,6 +89,8 @@ static int kernel_thread_fd(unsigned int pid)
 	fd = -1;
 	if (flags & PF_KHTREAD) {
 		fd = openat(dir_fd, "fd", O_RDONLY|O_DIRECTORY);
+		if (fd == -1 && errno == EACCES)
+			fd = -EACCES;
 	}
 	close(dir_fd);
 	return fd;
@@ -168,6 +171,8 @@ int main(void)
 		pid++;
 	}
 	/* EACCES if run as non-root. */
+	if (fd == -EACCES)
+		return 4;
 	if (pid >= 1024)
 		return 1;
 

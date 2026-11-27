@@ -3867,10 +3867,11 @@ out:
  * ip_alloc_sem there adds a transaction -> ip_alloc_sem order that would
  * form a lockdep cycle with the ip_alloc_sem -> transaction order used
  * elsewhere, if not for this separate subclass.  The inode is unpublished
- * so the acquisition can never contend.
+ * so the acquisition can never contend.  It must not collide with the
+ * SINGLE_DEPTH_NESTING subclass ocfs2_remap_file_range() uses.
  */
 enum {
-	OCFS2_IP_ALLOC_SEM_UNPUBLISHED = 1,
+	OCFS2_IP_ALLOC_SEM_UNPUBLISHED = SINGLE_DEPTH_NESTING + 1,
 };
 
 /*

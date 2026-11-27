@@ -462,6 +462,17 @@ out_mutex:
 	iput(main_bm_inode);
 
 out:
+	/*
+	 * The success path has already dropped the reference and cleared
+	 * the pointer, so this is a no-op there.  Every error exit after
+	 * the local allocator was enabled used to leak local_alloc_bh.
+	 */
+	if (osb->local_alloc_bh) {
+		brelse(osb->local_alloc_bh);
+		osb->local_alloc_bh = NULL;
+		osb->local_alloc_state = OCFS2_LA_UNUSED;
+	}
+
 	iput(local_alloc_inode);
 
 	kfree(alloc_copy);

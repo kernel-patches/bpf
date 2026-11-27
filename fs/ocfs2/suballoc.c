@@ -957,10 +957,16 @@ static int ocfs2_reserve_suballoc_bits(struct ocfs2_super *osb,
 		}
 		atomic_inc(&osb->alloc_stats.bg_extends);
 
-		/* You should never ask for this much metadata */
-		BUG_ON(bits_wanted >
-		       (le32_to_cpu(fe->id1.bitmap1.i_total)
-			- le32_to_cpu(fe->id1.bitmap1.i_used)));
+		/* Corrupt geometry can extend by a group with no usable bits. */
+		free_bits = le32_to_cpu(fe->id1.bitmap1.i_total) -
+			le32_to_cpu(fe->id1.bitmap1.i_used);
+		if (bits_wanted > free_bits) {
+			status = ocfs2_error(alloc_inode->i_sb,
+					     "Invalid chain allocator %llu: %u free bits after group extend, %u wanted\n",
+					     (unsigned long long)le64_to_cpu(fe->i_blkno),
+					     free_bits, bits_wanted);
+			goto bail;
+		}
 	}
 
 	get_bh(bh);

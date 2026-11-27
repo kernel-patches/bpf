@@ -402,7 +402,7 @@ copy_msqid_from_user(struct msqid64_ds *out, void __user *buf, int version)
  * NOTE: no locks must be held, the rwsem is taken inside this function.
  */
 static int msgctl_down(struct ipc_namespace *ns, int msqid, int cmd,
-			struct ipc64_perm *perm, int msg_qbytes)
+			struct ipc64_perm *perm, unsigned long msg_qbytes)
 {
 	struct kern_ipc_perm *ipcp;
 	struct msg_queue *msq;
@@ -504,12 +504,10 @@ static int msgctl_info(struct ipc_namespace *ns, int msqid,
 	max_idx = ipc_get_maxidx(&msg_ids(ns));
 	up_read(&msg_ids(ns).rwsem);
 	if (cmd == MSG_INFO) {
-		msginfo->msgmap = min_t(int,
-				     percpu_counter_sum(&ns->percpu_msg_hdrs),
-				     INT_MAX);
-		msginfo->msgtql = min_t(int,
-		                     percpu_counter_sum(&ns->percpu_msg_bytes),
-				     INT_MAX);
+		msginfo->msgmap = clamp(percpu_counter_sum(&ns->percpu_msg_hdrs),
+					0, INT_MAX);
+		msginfo->msgtql = clamp(percpu_counter_sum(&ns->percpu_msg_bytes),
+					0, INT_MAX);
 	} else {
 		msginfo->msgmap = MSGMAP;
 		msginfo->msgpool = MSGPOOL;
@@ -689,10 +687,17 @@ static int copy_compat_msqid_from_user(struct msqid64_ds *out, void __user *buf,
 			return -EFAULT;
 	} else {
 		struct compat_msqid_ds __user *p = buf;
+		compat_ulong_t qbytes;
+
 		if (get_compat_ipc_perm(&out->msg_perm, &p->msg_perm))
 			return -EFAULT;
-		if (get_user(out->msg_qbytes, &p->msg_qbytes))
+		if (get_user(qbytes, &p->msg_qbytes))
 			return -EFAULT;
+		if (qbytes == 0) {
+			if (get_user(qbytes, &p->msg_lqbytes))
+				return -EFAULT;
+		}
+		out->msg_qbytes = qbytes;
 	}
 	return 0;
 }
@@ -723,9 +728,23 @@ static int copy_compat_msqid_to_user(void __user *buf, struct msqid64_ds *in,
 		v.msg_stime = in->msg_stime;
 		v.msg_rtime = in->msg_rtime;
 		v.msg_ctime = in->msg_ctime;
-		v.msg_cbytes = in->msg_cbytes;
-		v.msg_qnum = in->msg_qnum;
-		v.msg_qbytes = in->msg_qbytes;
+		if (in->msg_cbytes > USHRT_MAX)
+			v.msg_cbytes = USHRT_MAX;
+		else
+			v.msg_cbytes = in->msg_cbytes;
+		v.msg_lcbytes = in->msg_cbytes;
+
+		if (in->msg_qnum > USHRT_MAX)
+			v.msg_qnum = USHRT_MAX;
+		else
+			v.msg_qnum = in->msg_qnum;
+
+		if (in->msg_qbytes > USHRT_MAX)
+			v.msg_qbytes = USHRT_MAX;
+		else
+			v.msg_qbytes = in->msg_qbytes;
+		v.msg_lqbytes = in->msg_qbytes;
+
 		v.msg_lspid = in->msg_lspid;
 		v.msg_lrpid = in->msg_lrpid;
 		return copy_to_user(buf, &v, sizeof(v));

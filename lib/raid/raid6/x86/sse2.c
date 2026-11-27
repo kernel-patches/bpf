@@ -28,7 +28,7 @@ static void raid6_sse21_gen_syndrome(int disks, size_t bytes, void **ptrs)
 	p = dptr[z0+1];		/* XOR parity */
 	q = dptr[z0+2];		/* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("movdqa %0,%%xmm0" : : "m" (raid6_sse_constants.x1d[0]));
 	asm volatile("pxor %xmm5,%xmm5");	/* Zero temp */
@@ -80,7 +80,7 @@ static void raid6_sse21_xor_syndrome(int disks, int start, int stop,
 	p = dptr[disks-2];	/* XOR parity */
 	q = dptr[disks-1];	/* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("movdqa %0,%%xmm0" : : "m" (raid6_sse_constants.x1d[0]));
 
@@ -113,7 +113,6 @@ static void raid6_sse21_xor_syndrome(int disks, int start, int stop,
 		asm volatile("movdqa %%xmm2,%0" : "=m" (p[d]));
 	}
 
-	asm volatile("sfence" : : : "memory");
 	kernel_fpu_end();
 }
 
@@ -136,7 +135,7 @@ static void raid6_sse22_gen_syndrome(int disks, size_t bytes, void **ptrs)
 	p = dptr[z0+1];		/* XOR parity */
 	q = dptr[z0+2];		/* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("movdqa %0,%%xmm0" : : "m" (raid6_sse_constants.x1d[0]));
 	asm volatile("pxor %xmm5,%xmm5"); /* Zero temp */
@@ -189,7 +188,7 @@ static void raid6_sse22_xor_syndrome(int disks, int start, int stop,
 	p = dptr[disks-2];	/* XOR parity */
 	q = dptr[disks-1];	/* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("movdqa %0,%%xmm0" : : "m" (raid6_sse_constants.x1d[0]));
 
@@ -241,7 +240,6 @@ static void raid6_sse22_xor_syndrome(int disks, int start, int stop,
 		asm volatile("movdqa %%xmm3,%0" : "=m" (p[d+16]));
 	}
 
-	asm volatile("sfence" : : : "memory");
 	kernel_fpu_end();
 }
 
@@ -266,7 +264,7 @@ static void raid6_sse24_gen_syndrome(int disks, size_t bytes, void **ptrs)
 	p = dptr[z0+1];		/* XOR parity */
 	q = dptr[z0+2];		/* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("movdqa %0,%%xmm0" :: "m" (raid6_sse_constants.x1d[0]));
 	asm volatile("pxor %xmm2,%xmm2");	/* P[0] */
@@ -353,7 +351,7 @@ static void raid6_sse24_xor_syndrome(int disks, int start, int stop,
 	p = dptr[disks-2];	/* XOR parity */
 	q = dptr[disks-1];	/* RS syndrome */
 
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 
 	asm volatile("movdqa %0,%%xmm0" :: "m" (raid6_sse_constants.x1d[0]));
 
@@ -407,8 +405,8 @@ static void raid6_sse24_xor_syndrome(int disks, int start, int stop,
 			asm volatile("pxor %xmm13,%xmm12");
 			asm volatile("pxor %xmm15,%xmm14");
 		}
-		asm volatile("prefetchnta %0" :: "m" (q[d]));
-		asm volatile("prefetchnta %0" :: "m" (q[d+32]));
+		asm volatile("prefetcht0 %0" :: "m" (q[d]));
+		asm volatile("prefetcht0 %0" :: "m" (q[d+32]));
 		/* P/Q left side optimization */
 		for ( z = start-1 ; z >= 0 ; z-- ) {
 			asm volatile("pxor %xmm5,%xmm5");
@@ -432,20 +430,19 @@ static void raid6_sse24_xor_syndrome(int disks, int start, int stop,
 			asm volatile("pxor %xmm13,%xmm12");
 			asm volatile("pxor %xmm15,%xmm14");
 		}
-		asm volatile("movntdq %%xmm2,%0" : "=m" (p[d]));
-		asm volatile("movntdq %%xmm3,%0" : "=m" (p[d+16]));
-		asm volatile("movntdq %%xmm10,%0" : "=m" (p[d+32]));
-		asm volatile("movntdq %%xmm11,%0" : "=m" (p[d+48]));
+		asm volatile("movdqa %%xmm2,%0" : "=m" (p[d]));
+		asm volatile("movdqa %%xmm3,%0" : "=m" (p[d+16]));
+		asm volatile("movdqa %%xmm10,%0" : "=m" (p[d+32]));
+		asm volatile("movdqa %%xmm11,%0" : "=m" (p[d+48]));
 		asm volatile("pxor %0,%%xmm4" : : "m" (q[d]));
 		asm volatile("pxor %0,%%xmm6" : : "m" (q[d+16]));
 		asm volatile("pxor %0,%%xmm12" : : "m" (q[d+32]));
 		asm volatile("pxor %0,%%xmm14" : : "m" (q[d+48]));
-		asm volatile("movntdq %%xmm4,%0" : "=m" (q[d]));
-		asm volatile("movntdq %%xmm6,%0" : "=m" (q[d+16]));
-		asm volatile("movntdq %%xmm12,%0" : "=m" (q[d+32]));
-		asm volatile("movntdq %%xmm14,%0" : "=m" (q[d+48]));
+		asm volatile("movdqa %%xmm4,%0" : "=m" (q[d]));
+		asm volatile("movdqa %%xmm6,%0" : "=m" (q[d+16]));
+		asm volatile("movdqa %%xmm12,%0" : "=m" (q[d+32]));
+		asm volatile("movdqa %%xmm14,%0" : "=m" (q[d+48]));
 	}
-	asm volatile("sfence" : : : "memory");
 	kernel_fpu_end();
 }
 
