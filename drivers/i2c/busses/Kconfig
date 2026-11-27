@@ -550,6 +550,17 @@ config I2C_CPM
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-cpm.
 
+config I2C_CS75XX
+	tristate "Cortina Systems CS75xx I2C controller"
+	depends on OF
+	depends on HAS_IOMEM
+	help
+	  Say yes here to support the I2C ("Bi-Wire") controller of the
+	  Cortina Systems CS75xx SoCs.
+
+	  This driver can also be built as a module. If so, the module
+	  will be called i2c-cs75xx.
+
 config I2C_DAVINCI
 	tristate "DaVinci I2C driver"
 	depends on ARCH_DAVINCI || ARCH_KEYSTONE || COMPILE_TEST
