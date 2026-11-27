@@ -4778,6 +4778,16 @@ static int intel_pmu_bts_config(struct perf_event *event)
 		if (attr->precise_ip)
 			return -EOPNOTSUPP;
 
+		/*
+		 * BTS samples are built from the BTS buffer when it is drained,
+		 * not from the registers of an interrupted context, and
+		 * intel_pmu_drain_bts_buffer() does not provide the registers in
+		 * the struct x86_perf_regs layout that extended register sampling
+		 * relies on.
+		 */
+		if (event_has_extended_regs(event) || event_has_simd_regs(event))
+			return -EOPNOTSUPP;
+
 		/* disallow bts if conflicting events are present */
 		if (x86_add_exclusive(x86_lbr_exclusive_lbr))
 			return -EBUSY;

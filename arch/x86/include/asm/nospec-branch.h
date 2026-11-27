@@ -185,42 +185,39 @@
  *
  * The Safe-RET sequence is:
  *
- * CALL
- * LEA 8(%RSP), %RSP
- * RET
+ *	CALL	L1
+ * L1:	LEA	8(%RSP), %RSP
+ * L2:	RET
  *
- * The two CMPs below check whether RIP points to after the CALL or after the
- * LEA.
+ * The C equivalent of the ASM sequence below is:
  *
- * The LFENCE below is to address this particular speculation case:
+ *	if (ptr->RIP > L2)	// After RET?
+ *		goto done;
+ *	if (ptr->RIP < L1)	// Before LEA ?
+ *		goto done;
+ *	if (ptr->RIP == L1)	// At LEA ?
+ *		ptr->RSP += 8;	// Emulate LEA
+ *	tmp = *ptr->RSP;	// Read original return IP
+ *	ptr->RIP = tmp;		// Overwrite interrupt return IP
+ *	ptr->RSP += 8;		// Emulate RET
  *
- * 1. Userspace runs and poisons the BTB around the safe-RET routine
- *
- * 2. Userspace triggers some kind of exception
- *
- * 3. Kernel executes error_entry() and mis-speculates the branch into thinking
- *    it actually came from kernel space
- *
- * 4. The kernel then further mis-speculates that the exception occurred due
- *    to an interrupted safe-RET
- *
- * 5. The handle_interrupted_saferet() routine speculatively executes and
- *    speculatively does a safe-RET. But this is unsafe since it was never
- *    untrained.
- *
- * The LFENCE fixes this by ensuring step 5 is never reached speculatively.
- * Note that this LFENCE only occurs if safe-RET was actually interrupted (so
- * it's outside of the normal path).
+ * This ensures that this interrupt returns to the original return IP without
+ * resuming the interrupted safe-RET sequence.
  */
-#define __HANDLE_INTR_SAFERET(name, pt_regs)		\
-	cmpq	$(name), RIP+pt_regs;			\
-	jb	1f;					\
-	cmpq	$(name)+5, RIP+pt_regs;			\
-	ja	1f;					\
-	lfence;						\
-	leaq	pt_regs, %rdi;				\
-	call	handle_interrupted_saferet;		\
-	1:
+#define __FIXUP_INTR_SAFERET(name, ptr, rip_offs, rsp_offs)	\
+	cmpq	$(name)+5, rip_offs(ptr);			\
+	ja	2f;						\
+	cmpq	$(name), rip_offs(ptr);				\
+	jb	2f;						\
+	jne	1f;						\
+	addq	$8, rsp_offs(ptr);				\
+	1:;							\
+	movq	rsp_offs(ptr), %rdx;				\
+	movq	(%rdx), %rdx;					\
+	movq	%rdx, rip_offs(ptr);				\
+	addq	$8, rsp_offs(ptr);				\
+	2:
+
 
 #ifdef __ASSEMBLER__
 
@@ -305,7 +302,7 @@
 .macro CALL_UNTRAIN_RET
 #if defined(CONFIG_MITIGATION_UNRET_ENTRY) || defined(CONFIG_MITIGATION_SRSO)
 	ALTERNATIVE_2 "", "call entry_untrain_ret", X86_FEATURE_UNRET, \
-		          "call srso_alias_untrain_ret", X86_FEATURE_SRSO_ALIAS
+			  "call srso_alias_untrain_ret", X86_FEATURE_SRSO_ALIAS
 #endif
 .endm
 
@@ -339,12 +336,25 @@
 #define UNTRAIN_RET_FROM_CALL \
 	__UNTRAIN_RET X86_FEATURE_ENTRY_IBPB, __stringify(RESET_CALL_DEPTH_FROM_CALL)
 
-.macro HANDLE_INTR_SAFERET pt_regs
+.macro FIXUP_INTR_SAFERET pt_regs
 #ifdef CONFIG_MITIGATION_SRSO
 	ALTERNATIVE_2 "", \
-	__stringify(__HANDLE_INTR_SAFERET(srso_safe_ret, \pt_regs)), X86_FEATURE_SRSO, \
-	__stringify(__HANDLE_INTR_SAFERET(srso_alias_safe_ret, \pt_regs)), X86_FEATURE_SRSO_ALIAS
+	__stringify(__FIXUP_INTR_SAFERET(srso_safe_ret, \pt_regs, RIP+8, RSP+8)), X86_FEATURE_SRSO, \
+	__stringify(__FIXUP_INTR_SAFERET(srso_alias_safe_ret, \pt_regs, RIP+8, RSP+8)), X86_FEATURE_SRSO_ALIAS
+#endif
+.endm
 
+/*
+ * Note the offsets encoding below:
+ *
+ * The IRET frame at call site in asm_exc_nmi() starts at 8(%rsp) (NMI handler
+ * users %rdx as a temp var so it pushes it on the stack on entry).
+ */
+.macro FIXUP_NMI_INTR_SAFERET fptr
+#ifdef CONFIG_MITIGATION_SRSO
+	ALTERNATIVE_2 "", \
+	__stringify(__FIXUP_INTR_SAFERET(srso_safe_ret, \fptr, RIP-RIP+8, RSP-RIP+8)), X86_FEATURE_SRSO, \
+	__stringify(__FIXUP_INTR_SAFERET(srso_alias_safe_ret, \fptr, RIP-RIP+8, RSP-RIP+8)), X86_FEATURE_SRSO_ALIAS
 #endif
 .endm
 
@@ -681,7 +691,6 @@ static __always_inline void x86_idle_clear_cpu_buffers(void)
 
 void srso_safe_ret(void);
 void srso_alias_safe_ret(void);
-void handle_interrupted_saferet(struct pt_regs *regs);
 
 #endif /* __ASSEMBLER__ */
 

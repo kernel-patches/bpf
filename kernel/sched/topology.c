@@ -3187,7 +3187,13 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 			sd = sd->parent;
 
 		if (sd->flags & SD_SHARE_LLC) {
-			init_sched_domain_shared(&d, sd, SD_SHARE_LLC);
+			/*
+			 * The asym path above may have claimed a shared object
+			 * on this very domain; claiming it again overwrites
+			 * sd->shared and leaks the first reference.
+			 */
+			if (!sd->shared)
+				init_sched_domain_shared(&d, sd, SD_SHARE_LLC);
 
 			/*
 			 * In presence of higher domains, adjust the

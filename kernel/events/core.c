@@ -1366,6 +1366,12 @@ void perf_pmu_enable(struct pmu *pmu)
 		pmu->pmu_enable(pmu);
 }
 
+bool perf_pmu_enabled(struct pmu *pmu)
+{
+	int *count = &this_cpc(pmu)->pmu_disable_count;
+	return *count == 0;
+}
+
 static void perf_assert_pmu_disabled(struct pmu *pmu)
 {
 	int *count = &this_cpc(pmu)->pmu_disable_count;
@@ -7776,9 +7782,15 @@ static void perf_pending_task(struct callback_head *head)
 	rctx = perf_swevent_get_recursion_context();
 
 	if (event->pending_work) {
-		event->pending_work = 0;
 		perf_sigtrap(event);
 		local_dec(&event->ctx->nr_no_switch_fast);
+		/*
+		 * event->pending_work also acts as a 'lock' for
+		 * event->{pending_addr, orig_type, attr.sig_data}. As such we
+		 * must clear after perf_sigtrap is complete.
+		 */
+		barrier();
+		event->pending_work = 0;
 	}
 	put_event(event);
 
@@ -10747,8 +10759,15 @@ void perf_report_aux_output_id(struct perf_event *event, u64 hw_id)
 }
 EXPORT_SYMBOL_GPL(perf_report_aux_output_id);
 
+/*
+ * @period is the period of the interval that just ended. PMU drivers
+ * re-arm the counter before calling perf_event_overflow(), which sets
+ * hwc->last_period to the period of the next interval, so the overflow
+ * path passes the sample's period instead.
+ */
 static int
-__perf_event_account_interrupt(struct perf_event *event, int throttle)
+__perf_event_account_interrupt(struct perf_event *event, int throttle,
+			       u64 period)
 {
 	struct hw_perf_event *hwc = &event->hw;
 	int ret = 0;
@@ -10776,7 +10795,7 @@ __perf_event_account_interrupt(struct perf_event *event, int throttle)
 		hwc->freq_time_stamp = now;
 
 		if (delta > 0 && delta < 2*TICK_NSEC)
-			perf_adjust_period(event, delta, hwc->last_period, true);
+			perf_adjust_period(event, delta, period, true);
 	}
 
 	return ret;
@@ -10784,7 +10803,7 @@ __perf_event_account_interrupt(struct perf_event *event, int throttle)
 
 int perf_event_account_interrupt(struct perf_event *event)
 {
-	return __perf_event_account_interrupt(event, 1);
+	return __perf_event_account_interrupt(event, 1, event->hw.last_period);
 }
 
 static inline bool sample_is_allowed(struct perf_event *event, struct pt_regs *regs)
@@ -10819,6 +10838,9 @@ static int bpf_overflow_handler(struct perf_event *event,
 	prog = READ_ONCE(event->prog);
 	if (prog) {
 		perf_prepare_sample(data, event, regs);
+		/* bpf_perf_event_data::addr is readable without PERF_SAMPLE_ADDR */
+		if (!(data->sample_flags & PERF_SAMPLE_ADDR))
+			data->addr = 0;
 		ret = bpf_prog_run(prog, &ctx);
 	}
 	rcu_read_unlock();
@@ -10912,7 +10934,7 @@ static int __perf_event_overflow(struct perf_event *event,
 	if (unlikely(!is_sampling_event(event)))
 		return 0;
 
-	ret = __perf_event_account_interrupt(event, throttle);
+	ret = __perf_event_account_interrupt(event, throttle, data->period);
 
 	if (event->attr.aux_pause)
 		perf_event_aux_pause(event->aux_event, true);
@@ -10950,16 +10972,22 @@ static int __perf_event_overflow(struct perf_event *event,
 
 		notify_mode = in_nmi() ? TWA_NMI_CURRENT : TWA_RESUME;
 
-		if (!event->pending_work &&
-		    !task_work_add(current, &event->pending_task, notify_mode)) {
-			event->pending_work = pending_id;
-			local_inc(&event->ctx->nr_no_switch_fast);
-			WARN_ON_ONCE(!atomic_long_inc_not_zero(&event->refcount));
+		/*
+		 * Software events can nest and attempt this recursively;
+		 * claim the pending_work before task_work_add() recurses.
+		 */
+		if (cmpxchg_local(&event->pending_work, 0, 1) == 0) {
+			if (!task_work_add(event->ctx->task, &event->pending_task, notify_mode)) {
+				event->pending_work = pending_id;
+				local_inc(&event->ctx->nr_no_switch_fast);
+				WARN_ON_ONCE(!atomic_long_inc_not_zero(&event->refcount));
 
-			event->pending_addr = 0;
-			if (valid_sample && (data->sample_flags & PERF_SAMPLE_ADDR))
-				event->pending_addr = data->addr;
-
+				event->pending_addr = 0;
+				if (valid_sample && (data->sample_flags & PERF_SAMPLE_ADDR))
+					event->pending_addr = data->addr;
+			} else {
+				event->pending_work = 0;
+			}
 		} else if (event->attr.exclude_kernel && valid_sample) {
 			/*
 			 * Should not be able to return to user space without
@@ -11142,9 +11170,11 @@ int perf_exclude_event(struct perf_event *event, struct pt_regs *regs)
 static int perf_swevent_match(struct perf_event *event,
 				enum perf_type_id type,
 				u32 event_id,
-				struct perf_sample_data *data,
 				struct pt_regs *regs)
 {
+	if (!perf_pmu_enabled(event->pmu))
+		return 0;
+
 	if (event->attr.type != type)
 		return 0;
 
@@ -11207,11 +11237,10 @@ find_swevent_head(struct swevent_htable *swhash, struct perf_event *event)
 }
 
 static void do_perf_sw_event(enum perf_type_id type, u32 event_id,
-				    u64 nr,
-				    struct perf_sample_data *data,
-				    struct pt_regs *regs)
+				    u64 nr, struct pt_regs *regs, u64 addr)
 {
 	struct swevent_htable *swhash = this_cpu_ptr(&swevent_htable);
+	struct perf_sample_data data;
 	struct perf_event *event;
 	struct hlist_head *head;
 
@@ -11221,8 +11250,10 @@ static void do_perf_sw_event(enum perf_type_id type, u32 event_id,
 		goto end;
 
 	hlist_for_each_entry_rcu(event, head, hlist_entry) {
-		if (perf_swevent_match(event, type, event_id, data, regs))
-			perf_swevent_event(event, nr, data, regs);
+		if (perf_swevent_match(event, type, event_id, regs)) {
+			perf_sample_data_init(&data, addr, 0);
+			perf_swevent_event(event, nr, &data, regs);
+		}
 	}
 end:
 	rcu_read_unlock();
@@ -11243,13 +11274,10 @@ void perf_swevent_put_recursion_context(int rctx)
 
 void ___perf_sw_event(u32 event_id, u64 nr, struct pt_regs *regs, u64 addr)
 {
-	struct perf_sample_data data;
-
 	if (WARN_ON_ONCE(!regs))
 		return;
 
-	perf_sample_data_init(&data, addr, 0);
-	do_perf_sw_event(PERF_TYPE_SOFTWARE, event_id, nr, &data, regs);
+	do_perf_sw_event(PERF_TYPE_SOFTWARE, event_id, nr, regs, addr);
 }
 
 void __perf_sw_event(u32 event_id, u64 nr, struct pt_regs *regs, u64 addr)
@@ -11525,6 +11553,9 @@ static int perf_tp_event_match(struct perf_event *event,
 				struct perf_raw_record *raw,
 				struct pt_regs *regs)
 {
+	if (!perf_pmu_enabled(event->pmu))
+		return 0;
+
 	if (event->hw.state & PERF_HES_STOPPED)
 		return 0;
 	/*
@@ -12968,6 +12999,7 @@ static void perf_pmu_free(struct pmu *pmu)
 			struct perf_cpu_pmu_context *cpc;
 
 			cpc = *per_cpu_ptr(pmu->cpu_pmu_context, cpu);
+			hrtimer_cancel(&cpc->hrtimer);
 			if (!cpc)
 				continue;
 			if (cpc->epc.embedded) {
@@ -13011,12 +13043,6 @@ int perf_pmu_register(struct pmu *_pmu, const char *name, int type)
 	pmu->type = pmu_type.id;
 	atomic_set(&pmu->exclusive_cnt, 0);
 
-	if (pmu_bus_running && !pmu->dev) {
-		int ret = pmu_dev_alloc(pmu);
-		if (ret)
-			return ret;
-	}
-
 	pmu->cpu_pmu_context = alloc_percpu(struct perf_cpu_pmu_context *);
 	if (!pmu->cpu_pmu_context)
 		return -ENOMEM;
@@ -13033,6 +13059,12 @@ int perf_pmu_register(struct pmu *_pmu, const char *name, int type)
 		*per_cpu_ptr(pmu->cpu_pmu_context, cpu) = cpc;
 		__perf_init_event_pmu_context(&cpc->epc, pmu);
 		__perf_mux_hrtimer_init(cpc, cpu);
+	}
+
+	if (pmu_bus_running && !pmu->dev) {
+		int ret = pmu_dev_alloc(pmu);
+		if (ret)
+			return ret;
 	}
 
 	if (!pmu->start_txn) {
@@ -14419,14 +14451,21 @@ SYSCALL_DEFINE5(perf_event_open,
 
 	mutex_unlock(&ctx->mutex);
 
+	/*
+	 * Publish the event on the owner's list before dropping
+	 * exec_update_lock. Otherwise a concurrent exec() can run
+	 * perf_event_remove_on_exec() and clear event->owner before
+	 * owner_entry is linked, leaving an ownerless event on
+	 * current->perf_event_list that perf_release() won't unlink.
+	 */
+	mutex_lock(&current->perf_event_mutex);
+	list_add_tail(&event->owner_entry, &current->perf_event_list);
+	mutex_unlock(&current->perf_event_mutex);
+
 	if (task) {
 		up_read(&task->signal->exec_update_lock);
 		put_task_struct(task);
 	}
-
-	mutex_lock(&current->perf_event_mutex);
-	list_add_tail(&event->owner_entry, &current->perf_event_list);
-	mutex_unlock(&current->perf_event_mutex);
 
 	/*
 	 * File reference in group guarantees that group_leader has been
