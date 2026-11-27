@@ -285,19 +285,15 @@ static int lan9645x_setup(struct dsa_switch *ds)
 
 	lan9645x_port_cpu_init(lan9645x);
 
-	/* Multicast to cpu and all front ports */
-	lan_wr(BIT(lan9645x->num_phys_ports) | front_ports, lan9645x,
-	       ANA_PGID(PGID_MC));
+	/* Multicast to all front ports */
+	lan_wr(front_ports, lan9645x, ANA_PGID(PGID_MC));
 
-	/* IP multicast to cpu and all front ports */
-	lan_wr(BIT(lan9645x->num_phys_ports) | front_ports, lan9645x,
-	       ANA_PGID(PGID_MCIPV4));
-	lan_wr(BIT(lan9645x->num_phys_ports) | front_ports, lan9645x,
-	       ANA_PGID(PGID_MCIPV6));
+	/* IP multicast to all front ports */
+	lan_wr(front_ports, lan9645x, ANA_PGID(PGID_MCIPV4));
+	lan_wr(front_ports, lan9645x, ANA_PGID(PGID_MCIPV6));
 
-	/* Unicast to cpu and all front ports */
-	lan_wr(BIT(lan9645x->num_phys_ports) | front_ports, lan9645x,
-	       ANA_PGID(PGID_UC));
+	/* Unicast to all front ports */
+	lan_wr(front_ports, lan9645x, ANA_PGID(PGID_UC));
 
 	/* Broadcast to cpu and all front ports */
 	lan_wr(BIT(lan9645x->num_phys_ports) | front_ports, lan9645x,
@@ -306,6 +302,20 @@ static int lan9645x_setup(struct dsa_switch *ds)
 	ds->mtu_enforcement_ingress = true;
 	ds->assisted_learning_on_cpu_port = true;
 	ds->fdb_isolation = true;
+	ds->max_num_bridges = ds->num_ports;
+
+	/* ANA_AUTOAGE_AGE_PERIOD is a seconds-based field and entries are
+	 * aged after 2 * AGE_PERIOD, giving (2 * FIELD_MAX) seconds of
+	 * maximum aging and 2 seconds of minimum aging.
+	 *
+	 * An AGE_PERIOD of 0 stops the analyzer from aging at all, which is
+	 * the opposite of what a bridge ageing_time of 0 means. The bridge
+	 * expires every dynamic entry immediately in that case and floods, so
+	 * reject it rather than keep learned addresses forever.
+	 */
+	ds->ageing_time_min = 2U * MSEC_PER_SEC;
+	ds->ageing_time_max = 2U * MSEC_PER_SEC *
+			      FIELD_MAX(ANA_AUTOAGE_AGE_PERIOD);
 
 	dev_info(lan9645x->dev,
 		 "SKU features: max_ports=%d\n",
@@ -325,6 +335,290 @@ static void lan9645x_port_phylink_get_caps(struct dsa_switch *ds, int port,
 	lan9645x_phylink_get_caps(ds->priv, port, config);
 }
 
+static int lan9645x_set_ageing_time(struct dsa_switch *ds, unsigned int msecs)
+{
+	struct lan9645x *lan9645x = ds->priv;
+
+	/* Entry must suffer two aging scans before it is removed, so it is
+	 * aged after 2*AGE_PERIOD, and the unit is in seconds.
+	 */
+	lan_rmw(ANA_AUTOAGE_AGE_PERIOD_SET(msecs / (2 * MSEC_PER_SEC)),
+		ANA_AUTOAGE_AGE_PERIOD,
+		lan9645x, ANA_AUTOAGE);
+
+	return 0;
+}
+
+static int lan9645x_port_pre_bridge_flags(struct dsa_switch *ds, int port,
+					  struct switchdev_brport_flags flags,
+					  struct netlink_ext_ack *extack)
+{
+	if (flags.mask &
+	    ~(BR_LEARNING | BR_FLOOD | BR_MCAST_FLOOD | BR_BCAST_FLOOD))
+		return -EINVAL;
+
+	return 0;
+}
+
+static void lan9645x_port_pgid_set(struct lan9645x *lan9645x, u16 pgid,
+				   int chip_port, bool enabled)
+{
+	u32 reg_msk, port_msk;
+
+	port_msk = ANA_PGID_PGID_SET(enabled ? BIT(chip_port) : 0);
+	reg_msk = ANA_PGID_PGID_SET(BIT(chip_port));
+
+	lan_rmw(port_msk, reg_msk, lan9645x, ANA_PGID(pgid));
+}
+
+static void lan9645x_port_apply_learning(struct lan9645x_port *p)
+{
+	struct lan9645x *lan9645x = p->lan9645x;
+	bool ena;
+
+	lockdep_assert_held(&lan9645x->fwd_domain_lock);
+
+	ena = lan9645x_port_is_bridged(p) && p->learn_ena &&
+	      (p->stp_state == BR_STATE_LEARNING ||
+	       p->stp_state == BR_STATE_FORWARDING);
+
+	lan_rmw(ANA_PORT_CFG_LEARN_ENA_SET(ena), ANA_PORT_CFG_LEARN_ENA,
+		lan9645x, ANA_PORT_CFG(p->chip_port));
+}
+
+static void lan9645x_port_set_learning(struct lan9645x *lan9645x, int port,
+				       bool enabled)
+{
+	struct lan9645x_port *p = lan9645x_to_port(lan9645x, port);
+
+	mutex_lock(&lan9645x->fwd_domain_lock);
+	p->learn_ena = enabled;
+	lan9645x_port_apply_learning(p);
+	mutex_unlock(&lan9645x->fwd_domain_lock);
+}
+
+static int lan9645x_port_bridge_flags(struct dsa_switch *ds, int port,
+				      struct switchdev_brport_flags f,
+				      struct netlink_ext_ack *extack)
+{
+	struct lan9645x *lan9645x = ds->priv;
+
+	/* DSA core does not call this for the CPU port */
+	if (f.mask & BR_LEARNING)
+		lan9645x_port_set_learning(lan9645x, port,
+					   !!(f.val & BR_LEARNING));
+
+	if (f.mask & BR_FLOOD)
+		lan9645x_port_pgid_set(lan9645x, PGID_UC, port,
+				       !!(f.val & BR_FLOOD));
+
+	if (f.mask & BR_MCAST_FLOOD) {
+		bool ena = !!(f.val & BR_MCAST_FLOOD);
+
+		lan9645x_port_pgid_set(lan9645x, PGID_MC, port, ena);
+		lan9645x_port_pgid_set(lan9645x, PGID_MCIPV4, port, ena);
+		lan9645x_port_pgid_set(lan9645x, PGID_MCIPV6, port, ena);
+	}
+
+	if (f.mask & BR_BCAST_FLOOD)
+		lan9645x_port_pgid_set(lan9645x, PGID_BC, port,
+				       !!(f.val & BR_BCAST_FLOOD));
+
+	return 0;
+}
+
+static u32 lan9645x_port_bridge_fwd_mask(struct lan9645x *lan9645x,
+					 struct lan9645x_port *p)
+{
+	struct lan9645x_port *q;
+	struct dsa_port *dp;
+	u32 mask = 0;
+
+	dsa_switch_for_each_user_port(dp, lan9645x->ds) {
+		q = lan9645x_to_port(lan9645x, dp->index);
+		if (q != p && q->bridge_num == p->bridge_num)
+			mask |= BIT(dp->index);
+	}
+
+	return mask & lan9645x->bridge_fwd_mask;
+}
+
+static void lan9645x_update_fwd_mask(struct lan9645x *lan9645x)
+{
+	struct lan9645x_port *p;
+	struct dsa_port *dp;
+
+	lockdep_assert_held(&lan9645x->fwd_domain_lock);
+
+	/* Updates the source port PGIDs, making sure frames from p
+	 * are only forwarded to ports q != p, where q is relevant to forward
+	 */
+	dsa_switch_for_each_available_port(dp, lan9645x->ds) {
+		u32 mask = 0;
+
+		p = lan9645x_to_port(lan9645x, dp->index);
+
+		if (lan9645x_port_is_bridged(p) &&
+		    (lan9645x->bridge_fwd_mask & BIT(dp->index)))
+			mask = lan9645x_port_bridge_fwd_mask(lan9645x, p);
+
+		lan_wr(ANA_PGID_PGID_SET(mask), lan9645x,
+		       ANA_PGID(PGID_SRC + dp->index));
+	}
+}
+
+static void lan9645x_port_set_host_flood(struct dsa_switch *ds, int port,
+					 bool uc, bool mc)
+{
+	struct lan9645x *lan9645x = ds->priv;
+	int cpu = lan9645x->num_phys_ports;
+	bool uc_ena, mc_ena;
+
+	mutex_lock(&lan9645x->fwd_domain_lock);
+
+	if (uc)
+		lan9645x->host_flood_uc_mask |= BIT(port);
+	else
+		lan9645x->host_flood_uc_mask &= ~BIT(port);
+
+	if (mc)
+		lan9645x->host_flood_mc_mask |= BIT(port);
+	else
+		lan9645x->host_flood_mc_mask &= ~BIT(port);
+
+	uc_ena = !!lan9645x->host_flood_uc_mask;
+	mc_ena = !!lan9645x->host_flood_mc_mask;
+
+	lan9645x_port_pgid_set(lan9645x, PGID_UC, cpu, uc_ena);
+	lan9645x_port_pgid_set(lan9645x, PGID_MC, cpu, mc_ena);
+	lan9645x_port_pgid_set(lan9645x, PGID_MCIPV4, cpu, mc_ena);
+	lan9645x_port_pgid_set(lan9645x, PGID_MCIPV6, cpu, mc_ena);
+
+	mutex_unlock(&lan9645x->fwd_domain_lock);
+}
+
+static bool lan9645x_bridge_vlan_proto_ok(const struct net_device *br)
+{
+	u16 proto;
+
+	return !br_vlan_enabled(br) || br_vlan_get_proto(br, &proto) ||
+	       proto == ETH_P_8021Q;
+}
+
+static int lan9645x_single_vlan_aware_bridge(struct dsa_switch *ds,
+					     const struct net_device *br,
+					     struct netlink_ext_ack *extack)
+{
+	struct net_device *other;
+	struct dsa_port *dp;
+
+	dsa_switch_for_each_user_port(dp, ds) {
+		other = dsa_port_bridge_dev_get(dp);
+		if (other && other != br && br_vlan_enabled(other)) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Only one VLAN-aware bridge is supported");
+			return -EBUSY;
+		}
+	}
+
+	return 0;
+}
+
+static int lan9645x_port_bridge_join(struct dsa_switch *ds, int port,
+				     struct dsa_bridge bridge,
+				     bool *tx_fwd_offload,
+				     struct netlink_ext_ack *extack)
+{
+	struct lan9645x *lan9645x = ds->priv;
+	struct lan9645x_port *p;
+	int err;
+
+	if (bridge.num > ds->max_num_bridges) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Range of offloadable bridges exceeded");
+		return -EOPNOTSUPP;
+	}
+
+	if (!lan9645x_bridge_vlan_proto_ok(bridge.dev)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Only 802.1Q VLAN-aware bridges are supported");
+		return -EINVAL;
+	}
+
+	if (br_vlan_enabled(bridge.dev)) {
+		err = lan9645x_single_vlan_aware_bridge(ds, bridge.dev, extack);
+		if (err)
+			return err;
+	}
+
+	p = lan9645x_to_port(lan9645x, port);
+
+	mutex_lock(&lan9645x->fwd_domain_lock);
+
+	p->bridge_num = bridge.num;
+	p->vlan_aware = br_vlan_enabled(bridge.dev);
+	lan9645x_vlan_port_set_bridge_vid(p, !p->vlan_aware);
+	/* DSA sets the bridge port flags before the STP state. Start disabled,
+	 * so the inherited BR_LEARNING does not enable learning in between.
+	 */
+	lan9645x->bridge_fwd_mask &= ~BIT(p->chip_port);
+	p->stp_state = BR_STATE_DISABLED;
+	lan9645x_vlan_clear_hostmode(p);
+
+	mutex_unlock(&lan9645x->fwd_domain_lock);
+
+	/* Forwarding is updated by .port_stp_state_set(), which the core
+	 * invokes after this returns:
+	 * dsa_port_bridge_join() -> dsa_port_switchdev_sync_attrs() ->
+	 * dsa_port_set_state()
+	 */
+
+	return 0;
+}
+
+static void lan9645x_port_bridge_stp_state_set(struct dsa_switch *ds, int port,
+					       u8 state)
+{
+	struct lan9645x *lan9645x;
+	struct lan9645x_port *p;
+
+	lan9645x = ds->priv;
+	p = lan9645x_to_port(lan9645x, port);
+
+	mutex_lock(&lan9645x->fwd_domain_lock);
+
+	p->stp_state = state;
+
+	if (state == BR_STATE_FORWARDING)
+		lan9645x->bridge_fwd_mask |= BIT(p->chip_port);
+	else
+		lan9645x->bridge_fwd_mask &= ~BIT(p->chip_port);
+
+	lan9645x_port_apply_learning(p);
+	lan9645x_update_fwd_mask(lan9645x);
+	mutex_unlock(&lan9645x->fwd_domain_lock);
+}
+
+static void lan9645x_port_bridge_leave(struct dsa_switch *ds, int port,
+				       struct dsa_bridge bridge)
+{
+	struct lan9645x *lan9645x = ds->priv;
+	struct lan9645x_port *p;
+
+	p = lan9645x_to_port(lan9645x, port);
+
+	mutex_lock(&lan9645x->fwd_domain_lock);
+
+	lan9645x_vlan_port_set_bridge_vid(p, false);
+	p->bridge_num = 0;
+
+	lan9645x_vlan_set_hostmode(p);
+	lan9645x_port_apply_learning(p);
+	lan9645x_update_fwd_mask(lan9645x);
+
+	mutex_unlock(&lan9645x->fwd_domain_lock);
+}
+
 static int lan9645x_port_vlan_filtering(struct dsa_switch *ds, int port,
 					bool enabled,
 					struct netlink_ext_ack *extack)
@@ -334,10 +628,18 @@ static int lan9645x_port_vlan_filtering(struct dsa_switch *ds, int port,
 
 	/* DSA core does not call this for the CPU port */
 	p = lan9645x_to_port(lan9645x, port);
+
+	if (lan9645x_port_is_bridged(p)) {
+		if (enabled == p->vlan_aware)
+			return 0;
+
+		NL_SET_ERR_MSG_MOD(extack,
+				   "VLAN filtering cannot be changed on a bridge with offloaded ports");
+		return -EBUSY;
+	}
+
 	mutex_lock(&lan9645x->fwd_domain_lock);
 	p->vlan_aware = enabled;
-	if (lan9645x_port_is_bridged(p))
-		lan9645x_vlan_port_set_bridge_vid(p, !enabled);
 	lan9645x_vlan_port_apply(p);
 	mutex_unlock(&lan9645x->fwd_domain_lock);
 
@@ -422,6 +724,37 @@ static bool lan9645x_db_equal(const struct dsa_db *a, const struct dsa_db *b)
 	return false;
 }
 
+/* A bridge FDB or MDB entry with a VID is never used while the bridge is
+ * VLAN-unaware. The bridge still adds such entries, for every VLAN in the
+ * bridge VLAN group of the port and for its local addresses. In the MAC
+ * table they would land in the VLAN of the VLAN-aware bridge and break FDB
+ * isolation. vlan_filtering cannot change while a switch port is in the
+ * bridge, and DSA deletes the entries of a port before it leaves, so a
+ * delete skips exactly the entries that the add skipped.
+ */
+static bool lan9645x_db_vid_unused(struct lan9645x *lan9645x, u16 vid,
+				   const struct dsa_db *db)
+{
+	struct lan9645x_port *p;
+	struct dsa_port *dp;
+	bool unused = false;
+
+	if (!vid || db->type != DSA_DB_BRIDGE)
+		return false;
+
+	mutex_lock(&lan9645x->fwd_domain_lock);
+	dsa_switch_for_each_user_port(dp, lan9645x->ds) {
+		p = lan9645x_to_port(lan9645x, dp->index);
+		if (p->bridge_num == db->bridge.num) {
+			unused = !p->vlan_aware;
+			break;
+		}
+	}
+	mutex_unlock(&lan9645x->fwd_domain_lock);
+
+	return unused;
+}
+
 /* All host addresses point at the CPU, so host addresses of different
  * databases with the same address and hardware VID are one MAC table
  * entry. DSA only counts references within one database, so keep the
@@ -430,7 +763,8 @@ static bool lan9645x_db_equal(const struct dsa_db *a, const struct dsa_db *b)
  * installed in a different reserved VID for each VLAN-unaware bridge, so
  * it would merge their host addresses. It also only compares databases of
  * the same type, which misses a VLAN upper of a port and a bridge in the
- * same VLAN.
+ * same VLAN. Entries that are not installed, see lan9645x_db_vid_unused(),
+ * do not count.
  */
 static bool lan9645x_host_addr_shared(struct dsa_port *dp,
 				      const struct list_head *addrs,
@@ -445,7 +779,8 @@ static bool lan9645x_host_addr_shared(struct dsa_port *dp,
 	list_for_each_entry(a, addrs, list) {
 		if (ether_addr_equal(a->addr, addr) &&
 		    !lan9645x_db_equal(&a->db, db) &&
-		    lan9645x_fdb_vid(a->vid, &a->db) == hw_vid)
+		    lan9645x_fdb_vid(a->vid, &a->db) == hw_vid &&
+		    !lan9645x_db_vid_unused(dp->ds->priv, a->vid, &a->db))
 			return true;
 	}
 
@@ -459,6 +794,9 @@ static int lan9645x_fdb_add(struct dsa_switch *ds, int port,
 	struct dsa_port *dp = dsa_to_port(ds, port);
 	struct lan9645x *lan9645x = ds->priv;
 	int dest;
+
+	if (lan9645x_db_vid_unused(lan9645x, vid, &db))
+		return 0;
 
 	if (dsa_port_is_cpu(dp) &&
 	    lan9645x_host_addr_shared(dp, &dp->fdbs, addr, vid, &db))
@@ -477,6 +815,9 @@ static int lan9645x_fdb_del(struct dsa_switch *ds, int port,
 {
 	struct dsa_port *dp = dsa_to_port(ds, port);
 	struct lan9645x *lan9645x = ds->priv;
+
+	if (lan9645x_db_vid_unused(lan9645x, vid, &db))
+		return 0;
 
 	if (dsa_port_is_cpu(dp) &&
 	    lan9645x_host_addr_shared(dp, &dp->fdbs, addr, vid, &db))
@@ -503,6 +844,9 @@ static int lan9645x_port_mdb_add(struct dsa_switch *ds, int port,
 	if (mdb->vid > VLAN_MAX)
 		return -EOPNOTSUPP;
 
+	if (lan9645x_db_vid_unused(lan9645x, mdb->vid, &db))
+		return 0;
+
 	if (dsa_port_is_cpu(dp) &&
 	    lan9645x_host_addr_shared(dp, &dp->mdbs, mdb->addr, mdb->vid, &db))
 		return 0;
@@ -523,6 +867,9 @@ static int lan9645x_port_mdb_del(struct dsa_switch *ds, int port,
 
 	dev_dbg(lan9645x->dev, "port=%d addr=%pM vid=%u\n", port, mdb->addr,
 		mdb->vid);
+
+	if (lan9645x_db_vid_unused(lan9645x, mdb->vid, &db))
+		return 0;
 
 	if (dsa_port_is_cpu(dp) &&
 	    lan9645x_host_addr_shared(dp, &dp->mdbs, mdb->addr, mdb->vid, &db))
@@ -550,6 +897,15 @@ static const struct dsa_switch_ops lan9645x_switch_ops = {
 	/* MTU  */
 	.port_change_mtu		= lan9645x_change_mtu,
 	.port_max_mtu			= lan9645x_get_max_mtu,
+
+	/* Bridge integration */
+	.set_ageing_time		= lan9645x_set_ageing_time,
+	.port_pre_bridge_flags		= lan9645x_port_pre_bridge_flags,
+	.port_bridge_flags		= lan9645x_port_bridge_flags,
+	.port_bridge_join		= lan9645x_port_bridge_join,
+	.port_bridge_leave		= lan9645x_port_bridge_leave,
+	.port_stp_state_set		= lan9645x_port_bridge_stp_state_set,
+	.port_set_host_flood		= lan9645x_port_set_host_flood,
 
 	/* VLAN integration */
 	.port_vlan_filtering		= lan9645x_port_vlan_filtering,
