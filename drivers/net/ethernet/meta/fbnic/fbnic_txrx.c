@@ -22,6 +22,7 @@ enum {
 	FBNIC_XDP_PASS = 0,
 	FBNIC_XDP_CONSUME,
 	FBNIC_XDP_TX,
+	FBNIC_XDP_REDIRECT,
 	FBNIC_XDP_LEN_ERR,
 };
 
@@ -1211,10 +1212,15 @@ xdp_pass:
 		return fbnic_build_skb(nv, pkt);
 	case XDP_TX:
 		return ERR_PTR(fbnic_pkt_tx(nv, pkt));
+	case XDP_REDIRECT:
+		if (xdp_do_redirect(nv->napi.dev, &pkt->buff, xdp_prog))
+			goto xdp_exception;
+		return ERR_PTR(-FBNIC_XDP_REDIRECT);
 	default:
 		bpf_warn_invalid_xdp_action(nv->napi.dev, xdp_prog, act);
 		fallthrough;
 	case XDP_ABORTED:
+xdp_exception:
 		trace_xdp_exception(nv->napi.dev, xdp_prog, act);
 		fallthrough;
 	case XDP_DROP:
@@ -1334,6 +1340,8 @@ static int fbnic_clean_rcq(struct fbnic_napi_vector *nv,
 				napi_gro_receive(&nv->napi, skb);
 			} else if (skb == ERR_PTR(-FBNIC_XDP_TX)) {
 				pkt_tail = nv->qt[0].sub1.tail;
+			} else if (skb == ERR_PTR(-FBNIC_XDP_REDIRECT)) {
+				nv->xdp_flush = true;
 			} else if (PTR_ERR(skb) == -FBNIC_XDP_CONSUME) {
 				fbnic_put_pkt_buff(qt, pkt, 1);
 			} else {
@@ -1386,6 +1394,11 @@ next_dont_count:
 	if (head1 >= 0)
 		fbnic_clean_bdq(&qt->sub1, head1, budget);
 	fbnic_fill_bdq(&qt->sub1);
+
+	if (nv->xdp_flush) {
+		nv->xdp_flush = false;
+		xdp_do_flush();
+	}
 
 	/* Record the current head/tail of the queue */
 	if (rcq->head != head) {
