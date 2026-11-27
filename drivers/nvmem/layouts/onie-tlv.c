@@ -110,8 +110,15 @@ static int onie_tlv_add_cells(struct device *dev, struct nvmem_device *nvmem,
 		return -ENOENT;
 
 	while (offset < data_len) {
+		size_t remaining = data_len - offset;
+
+		if (remaining < sizeof(tlv)) {
+			dev_err(dev, "Truncated field header at 0x%x\n", hdr_len + offset);
+			break;
+		}
+
 		memcpy(&tlv, data + offset, sizeof(tlv));
-		if (offset + tlv.len >= data_len) {
+		if (tlv.len > remaining - sizeof(tlv)) {
 			dev_err(dev, "Out of bounds field (0x%x bytes at 0x%x)\n",
 				tlv.len, hdr_len + offset);
 			break;

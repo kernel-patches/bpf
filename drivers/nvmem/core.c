@@ -818,7 +818,6 @@ int nvmem_add_cells_from_dt(struct nvmem_device *nvmem, struct device_node *np)
 
 		info.offset = be32_to_cpup(addr++);
 		info.bytes = be32_to_cpup(addr);
-		info.name = kasprintf(GFP_KERNEL, "%pOFn", child);
 
 		addr = of_get_property(child, "bits", &len);
 		if (addr && len == (2 * sizeof(u32))) {
@@ -832,6 +831,9 @@ int nvmem_add_cells_from_dt(struct nvmem_device *nvmem, struct device_node *np)
 			}
 		}
 
+		info.name = kasprintf(GFP_KERNEL, "%pOFn", child);
+		if (!info.name)
+			return -ENOMEM;
 		info.np = of_node_get(child);
 
 		if (nvmem->fixup_dt_cell_info)
