@@ -1668,7 +1668,7 @@ err_register_controller:
 err_spi_init:
 	qcom_nandc_unalloc(snandc);
 err_snand_alloc:
-	dma_unmap_resource(dev, res->start, resource_size(res),
+	dma_unmap_resource(dev, snandc->base_dma, resource_size(res),
 			   DMA_BIDIRECTIONAL, 0);
 	return ret;
 }

@@ -7,25 +7,33 @@
 #include "spi-loongson.h"
 
 static int loongson_spi_pci_register(struct pci_dev *pdev,
-			const struct pci_device_id *ent)
+				     const struct pci_device_id *ent)
 {
-	int ret;
-	void __iomem *reg_base;
 	struct device *dev = &pdev->dev;
-	int pci_bar = 0;
+	void __iomem *reg_base;
+	int ret, irq = 0;
 
 	ret = pcim_enable_device(pdev);
 	if (ret < 0)
-		return dev_err_probe(dev, ret, "cannot enable pci device\n");
+		return dev_err_probe(dev, ret, "cannot enable pci device");
 
-	reg_base = pcim_iomap_region(pdev, pci_bar, pci_name(pdev));
+	reg_base = pcim_iomap_region(pdev, 0, pci_name(pdev));
 	ret = PTR_ERR_OR_ZERO(reg_base);
 	if (ret)
-		return dev_err_probe(dev, ret, "failed to request and remap memory\n");
+		return dev_err_probe(dev, ret, "failed to request and remap memory");
 
-	ret = loongson_spi_init_controller(dev, reg_base);
+	ret = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_ALL_TYPES);
+	if (ret < 0) {
+		dev_warn(dev, "no IRQ available, will use PIO mode");
+	} else {
+		irq = pci_irq_vector(pdev, 0);
+		if (irq < 0)
+			dev_warn(dev, "failed to get IRQ vector, will use PIO mode");
+	}
+
+	ret = loongson_spi_init_controller(dev, reg_base, irq);
 	if (ret)
-		return dev_err_probe(dev, ret, "failed to initialize controller\n");
+		return dev_err_probe(dev, ret, "failed to initialize controller");
 
 	return 0;
 }

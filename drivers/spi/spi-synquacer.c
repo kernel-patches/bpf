@@ -667,7 +667,7 @@ static int synquacer_spi_probe(struct platform_device *pdev)
 	host->num_chipselect = SYNQUACER_HSSPI_NUM_CHIP_SELECT;
 
 	rx_irq = platform_get_irq(pdev, 0);
-	if (rx_irq <= 0) {
+	if (rx_irq < 0) {
 		ret = rx_irq;
 		goto disable_clk;
 	}
@@ -681,7 +681,7 @@ static int synquacer_spi_probe(struct platform_device *pdev)
 	}
 
 	tx_irq = platform_get_irq(pdev, 1);
-	if (tx_irq <= 0) {
+	if (tx_irq < 0) {
 		ret = tx_irq;
 		goto disable_clk;
 	}
