@@ -22275,7 +22275,6 @@ F:	drivers/pinctrl/freescale/
 F:	drivers/pinctrl/nxp/
 
 PIN CONTROLLER - INTEL
-M:	Mika Westerberg <mika.westerberg@linux.intel.com>
 M:	Andy Shevchenko <andy@kernel.org>
 S:	Supported
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/pinctrl/intel.git

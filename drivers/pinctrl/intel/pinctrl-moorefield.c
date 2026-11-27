@@ -323,18 +323,7 @@ static struct platform_driver mofld_pinctrl_driver = {
 		.acpi_match_table = mofld_acpi_table,
 	},
 };
-
-static int __init mofld_pinctrl_init(void)
-{
-	return platform_driver_register(&mofld_pinctrl_driver);
-}
-subsys_initcall(mofld_pinctrl_init);
-
-static void __exit mofld_pinctrl_exit(void)
-{
-	platform_driver_unregister(&mofld_pinctrl_driver);
-}
-module_exit(mofld_pinctrl_exit);
+subsys_platform_driver(mofld_pinctrl_driver);
 
 MODULE_AUTHOR("Andy Shevchenko <andriy.shevchenko@linux.intel.com>");
 MODULE_DESCRIPTION("Intel Moorefield SoC pinctrl driver");

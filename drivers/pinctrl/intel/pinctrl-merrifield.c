@@ -362,18 +362,7 @@ static struct platform_driver mrfld_pinctrl_driver = {
 		.acpi_match_table = mrfld_acpi_table,
 	},
 };
-
-static int __init mrfld_pinctrl_init(void)
-{
-	return platform_driver_register(&mrfld_pinctrl_driver);
-}
-subsys_initcall(mrfld_pinctrl_init);
-
-static void __exit mrfld_pinctrl_exit(void)
-{
-	platform_driver_unregister(&mrfld_pinctrl_driver);
-}
-module_exit(mrfld_pinctrl_exit);
+subsys_platform_driver(mrfld_pinctrl_driver);
 
 MODULE_AUTHOR("Andy Shevchenko <andriy.shevchenko@linux.intel.com>");
 MODULE_DESCRIPTION("Intel Merrifield SoC pinctrl driver");
