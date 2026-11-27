@@ -9,6 +9,73 @@
  *
  */
 / {
+	/* An invisible combo funnel between clusters and top funnel */
+	funnel {
+		compatible = "arm,coresight-static-funnel";
+		clocks = <&crg_ctrl HI3660_PCLK>;
+		clock-names = "apb_pclk";
+
+		out-ports {
+			port {
+				combo_funnel_out: endpoint {
+					remote-endpoint = <&top_funnel_in>;
+				};
+			};
+		};
+
+		in-ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				combo_funnel_in0: endpoint {
+					remote-endpoint = <&cluster0_etf_out>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+				combo_funnel_in1: endpoint {
+					remote-endpoint = <&cluster1_etf_out>;
+				};
+			};
+		};
+	};
+
+	replicator {
+		compatible = "arm,coresight-static-replicator";
+		clocks = <&crg_ctrl HI3660_PCLK>;
+		clock-names = "apb_pclk";
+
+		in-ports {
+			port {
+				replicator_in: endpoint {
+					remote-endpoint = <&top_etf_out>;
+				};
+			};
+		};
+
+		out-ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				replicator0_out0: endpoint {
+					remote-endpoint = <&etr_in>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+				replicator0_out1: endpoint {
+					remote-endpoint = <&tpiu_in>;
+				};
+			};
+		};
+	};
+
 	soc {
 		/* A53 cluster internals */
 		etm@ecc40000 {
@@ -303,43 +370,6 @@
 			};
 		};
 
-		/* An invisible combo funnel between clusters and top funnel */
-		funnel {
-			compatible = "arm,coresight-static-funnel";
-			clocks = <&crg_ctrl HI3660_PCLK>;
-			clock-names = "apb_pclk";
-
-			out-ports {
-				port {
-					combo_funnel_out: endpoint {
-						remote-endpoint =
-							<&top_funnel_in>;
-					};
-				};
-			};
-
-			in-ports {
-				#address-cells = <1>;
-				#size-cells = <0>;
-
-				port@0 {
-					reg = <0>;
-					combo_funnel_in0: endpoint {
-						remote-endpoint =
-							<&cluster0_etf_out>;
-					};
-				};
-
-				port@1 {
-					reg = <1>;
-					combo_funnel_in1: endpoint {
-						remote-endpoint =
-							<&cluster1_etf_out>;
-					};
-				};
-			};
-		};
-
 		/* Top internals */
 		funnel@ec031000 {
 			compatible = "arm,coresight-dynamic-funnel", "arm,primecell";
@@ -390,40 +420,6 @@
 					top_etf_out: endpoint {
 						remote-endpoint =
 							<&replicator_in>;
-					};
-				};
-			};
-		};
-
-		replicator {
-			compatible = "arm,coresight-static-replicator";
-			clocks = <&crg_ctrl HI3660_PCLK>;
-			clock-names = "apb_pclk";
-
-			in-ports {
-				port {
-					replicator_in: endpoint {
-						remote-endpoint =
-							<&top_etf_out>;
-					};
-				};
-			};
-
-			out-ports {
-				#address-cells = <1>;
-				#size-cells = <0>;
-
-				port@0 {
-					reg = <0>;
-					replicator0_out0: endpoint {
-						remote-endpoint = <&etr_in>;
-					};
-				};
-
-				port@1 {
-					reg = <1>;
-					replicator0_out1: endpoint {
-						remote-endpoint = <&tpiu_in>;
 					};
 				};
 			};
