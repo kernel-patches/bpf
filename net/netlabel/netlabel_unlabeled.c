@@ -1171,6 +1171,12 @@ static int netlbl_unlabel_staticlist(struct sk_buff *skb,
 			if (!iface->valid ||
 			    iter_chain++ < skip_chain)
 				continue;
+			/* Restart the address counters for this interface, the
+			 * skip counters stay until their own list has been
+			 * walked in full.
+			 */
+			iter_addr4 = 0;
+			iter_addr6 = 0;
 			netlbl_af4list_foreach_rcu(addr4,
 						   &iface->addr4_list) {
 				if (iter_addr4++ < skip_addr4)
@@ -1186,7 +1192,6 @@ static int netlbl_unlabel_staticlist(struct sk_buff *skb,
 					goto unlabel_staticlist_return;
 				}
 			}
-			iter_addr4 = 0;
 			skip_addr4 = 0;
 #if IS_ENABLED(CONFIG_IPV6)
 			netlbl_af6list_foreach_rcu(addr6,
@@ -1204,7 +1209,6 @@ static int netlbl_unlabel_staticlist(struct sk_buff *skb,
 					goto unlabel_staticlist_return;
 				}
 			}
-			iter_addr6 = 0;
 			skip_addr6 = 0;
 #endif /* IPv6 */
 		}
