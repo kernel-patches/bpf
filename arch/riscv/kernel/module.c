@@ -595,6 +595,38 @@ static const struct relocation_handlers reloc_handlers[] = {
 };
 
 static void
+cleanup_accumulated_relocations(struct hlist_head **relocation_hashtable,
+				struct list_head *used_buckets_list)
+{
+	/*
+	 * Clean up accumulated relocations without applying them.
+	 */
+	struct used_bucket *bucket_iter;
+	struct used_bucket *bucket_iter_tmp;
+	struct relocation_head *rel_head_iter;
+	struct hlist_node *rel_head_iter_tmp;
+	struct relocation_entry *rel_entry_iter;
+	struct relocation_entry *rel_entry_iter_tmp;
+
+	list_for_each_entry_safe(bucket_iter, bucket_iter_tmp,
+				 used_buckets_list, head) {
+		hlist_for_each_entry_safe(rel_head_iter, rel_head_iter_tmp,
+					  bucket_iter->bucket, node) {
+			list_for_each_entry_safe(rel_entry_iter,
+						 rel_entry_iter_tmp,
+						 &rel_head_iter->rel_entry,
+						 head) {
+				kfree(rel_entry_iter);
+			}
+			kfree(rel_head_iter);
+		}
+		kfree(bucket_iter);
+	}
+
+	kvfree(*relocation_hashtable);
+}
+
+static void
 process_accumulated_relocations(struct module *me,
 				struct hlist_head **relocation_hashtable,
 				struct list_head *used_buckets_list)
@@ -802,6 +834,8 @@ int apply_relocate_add(Elf_Shdr *sechdrs, const char *strtab,
 				continue;
 			pr_warn("%s: Unknown symbol %s\n",
 				me->name, strtab + sym->st_name);
+			cleanup_accumulated_relocations(&relocation_hashtable,
+							&used_buckets_list);
 			return -ENOENT;
 		}
 
@@ -815,6 +849,8 @@ int apply_relocate_add(Elf_Shdr *sechdrs, const char *strtab,
 		if (!handler) {
 			pr_err("%s: Unknown relocation type %u\n",
 			       me->name, type);
+			cleanup_accumulated_relocations(&relocation_hashtable,
+							&used_buckets_list);
 			return -EINVAL;
 		}
 
@@ -868,6 +904,8 @@ int apply_relocate_add(Elf_Shdr *sechdrs, const char *strtab,
 				pr_err(
 				  "%s: Can not find HI20 relocation information\n",
 				  me->name);
+				cleanup_accumulated_relocations(&relocation_hashtable,
+								&used_buckets_list);
 				return -EINVAL;
 			}
 
@@ -882,8 +920,12 @@ int apply_relocate_add(Elf_Shdr *sechdrs, const char *strtab,
 							   &used_buckets_list);
 		else
 			res = handler(me, location, v);
-		if (res)
+
+		if (res) {
+			cleanup_accumulated_relocations(&relocation_hashtable,
+							&used_buckets_list);
 			return res;
+		}
 	}
 
 	process_accumulated_relocations(me, &relocation_hashtable,
