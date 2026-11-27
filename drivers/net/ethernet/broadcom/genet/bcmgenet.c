@@ -92,6 +92,12 @@
 				      ENET_THLD_MAX * ENET_THLD_UNIT, \
 				      ENET_THLD_PAGE_LEN)
 
+/* Largest MTU that fits one descriptor, with room for a VLAN tag so a VLAN
+ * interface can use the parent MTU.
+ */
+#define ENET_MAX_MTU		(ENET_THLD_MAX_LEN - GENET_RBUF_ALIGN - \
+				 ETH_HLEN - VLAN_HLEN)
+
 /* Tx/Rx DMA register offset, skip 256 descriptors */
 #define WORDS_PER_BD(p)		(p->hw_params->words_per_bd)
 #define DMA_DESC_SIZE		(WORDS_PER_BD(priv) * sizeof(u32))
@@ -3281,8 +3287,14 @@ static int bcmgenet_dma_teardown(struct bcmgenet_priv *priv)
 	return ret;
 }
 
-static void bcmgenet_fini_dma(struct bcmgenet_priv *priv)
+/* A non NULL keep takes the rings instead of freeing them, so a restart that
+ * does not resize the buffers can hand them straight back to
+ * bcmgenet_init_dma().
+ */
+static void bcmgenet_fini_dma(struct bcmgenet_priv *priv,
+			      struct bcmgenet_dma_set *keep)
 {
+	struct bcmgenet_rx_ring *ring;
 	struct netdev_queue *txq;
 	int i;
 
@@ -3294,11 +3306,24 @@ static void bcmgenet_fini_dma(struct bcmgenet_priv *priv)
 		netdev_tx_reset_queue(txq);
 	}
 
-	bcmgenet_free_rx_buffers(priv);
-	bcmgenet_destroy_rx_page_pools(priv);
-	kfree(priv->rx_cbs);
+	if (keep) {
+		memset(keep, 0, sizeof(*keep));
+		keep->rx_cbs = priv->rx_cbs;
+		keep->tx_cbs = priv->tx_cbs;
+
+		for (i = 0; i <= priv->hw_params->rx_queues; i++) {
+			ring = &priv->rx_rings[i];
+			keep->page_pool[i] = ring->page_pool;
+			ring->page_pool = NULL;
+		}
+	} else {
+		bcmgenet_free_rx_buffers(priv);
+		bcmgenet_destroy_rx_page_pools(priv);
+		kfree(priv->rx_cbs);
+		kfree(priv->tx_cbs);
+	}
+
 	priv->rx_cbs = NULL;
-	kfree(priv->tx_cbs);
 	priv->tx_cbs = NULL;
 }
 
@@ -3698,7 +3723,7 @@ err_irq0:
 	free_irq(priv->irq0, priv);
 err_fini_dma:
 	bcmgenet_dma_teardown(priv);
-	bcmgenet_fini_dma(priv);
+	bcmgenet_fini_dma(priv, NULL);
 err_clk_disable:
 	if (priv->internal_phy)
 		bcmgenet_power_down(priv, GENET_POWER_PASSIVE);
@@ -3706,7 +3731,8 @@ err_clk_disable:
 	return ret;
 }
 
-static void bcmgenet_netif_stop(struct net_device *dev, bool stop_phy)
+static void bcmgenet_netif_stop(struct net_device *dev, bool stop_phy,
+				struct bcmgenet_dma_set *keep)
 {
 	struct bcmgenet_priv *priv = netdev_priv(dev);
 
@@ -3736,7 +3762,7 @@ static void bcmgenet_netif_stop(struct net_device *dev, bool stop_phy)
 
 	/* tx reclaim */
 	bcmgenet_tx_reclaim_all(dev);
-	bcmgenet_fini_dma(priv);
+	bcmgenet_fini_dma(priv, keep);
 }
 
 static int bcmgenet_close(struct net_device *dev)
@@ -3748,7 +3774,7 @@ static int bcmgenet_close(struct net_device *dev)
 
 	/* A failed resume has torn the datapath down already */
 	if (priv->tx_cbs)
-		bcmgenet_netif_stop(dev, false);
+		bcmgenet_netif_stop(dev, false, NULL);
 
 	/* Really kill the PHY state machine and disconnect from it */
 	phy_disconnect(dev->phydev);
@@ -3999,6 +4025,97 @@ static int bcmgenet_change_carrier(struct net_device *dev, bool new_carrier)
 	return 0;
 }
 
+static int bcmgenet_change_mtu(struct net_device *dev, int new_mtu)
+{
+	unsigned int buf_len = bcmgenet_rx_buf_len(new_mtu);
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+	unsigned int old_mtu = dev->mtu;
+	struct bcmgenet_dma_set set;
+	bool reuse;
+	int ret;
+
+	/* Nothing to reprogram while down, the next open does it */
+	if (!netif_running(dev)) {
+		WRITE_ONCE(dev->mtu, new_mtu);
+		priv->rx_buf_len = buf_len;
+		return 0;
+	}
+
+	/* Below ETH_DATA_LEN everything is floored, so there is nothing to
+	 * reprogram and rx_buf_len stays as the receive path reads it.
+	 */
+	if (max_t(unsigned int, old_mtu, ETH_DATA_LEN) ==
+	    max_t(unsigned int, new_mtu, ETH_DATA_LEN)) {
+		WRITE_ONCE(dev->mtu, new_mtu);
+		return 0;
+	}
+
+	/* The threshold is quantised, so a band of MTUs shares one buffer
+	 * length and the running rings can serve the new MTU as they are.
+	 */
+	reuse = buf_len == priv->rx_buf_len;
+	if (!reuse) {
+		ret = bcmgenet_alloc_dma(priv, buf_len, &set);
+		if (ret)
+			return ret;
+	}
+
+	/* The watchdog trips on an idle queue once the rings are gone */
+	netif_device_detach(dev);
+
+	/* The PHY stays up, hold its lock. A link event would otherwise take
+	 * the MAC out of reset and enable it mid rewrite.
+	 */
+	mutex_lock(&dev->phydev->lock);
+	bcmgenet_netif_stop(dev, false, reuse ? &set : NULL);
+
+	WRITE_ONCE(dev->mtu, new_mtu);
+	priv->rx_buf_len = buf_len;
+	bcmgenet_set_mtu_regs(priv, new_mtu);
+
+	ret = bcmgenet_init_dma(priv, true, &set);
+	if (ret) {
+		/* The datapath is gone, do not leave the interface up */
+		netdev_err(dev, "failed to initialize DMA, closing\n");
+		WRITE_ONCE(dev->mtu, old_mtu);
+		priv->rx_buf_len = bcmgenet_rx_buf_len(old_mtu);
+		mutex_unlock(&dev->phydev->lock);
+		/* bcmgenet_close() attaches the device again */
+		netif_close(dev);
+		return ret;
+	}
+
+	bcmgenet_hfb_restore(priv);
+	bcmgenet_netif_start(dev, false);
+
+	/* bcmgenet_netif_start() only restores the link interrupt */
+	if (bcmgenet_has_mdio_intr(priv))
+		bcmgenet_intrl2_0_writel(priv, UMAC_IRQ_MDIO_EVENT,
+					 INTRL2_CPU_MASK_CLEAR);
+
+	mutex_unlock(&dev->phydev->lock);
+
+	/* Interrupts were off, so a latched link event is lost. Internal PHYs
+	 * on v1-v4 are not polled either.
+	 */
+	phy_mac_interrupt(dev->phydev);
+
+	/* An energy detect event cancelled with the work is still latched */
+	if (READ_ONCE(priv->irq0_stat))
+		schedule_work(&priv->bcmgenet_irq_work);
+
+	netif_device_attach(dev);
+
+	/* Filter updates that came in while the device was detached got
+	 * dropped. An IPv6 join does not hold RTNL.
+	 */
+	netif_addr_lock_bh(dev);
+	bcmgenet_set_rx_mode(dev);
+	netif_addr_unlock_bh(dev);
+
+	return 0;
+}
+
 static const struct net_device_ops bcmgenet_netdev_ops = {
 	.ndo_open		= bcmgenet_open,
 	.ndo_stop		= bcmgenet_close,
@@ -4010,6 +4127,7 @@ static const struct net_device_ops bcmgenet_netdev_ops = {
 	.ndo_set_features	= bcmgenet_set_features,
 	.ndo_get_stats64	= bcmgenet_get_stats64,
 	.ndo_change_carrier	= bcmgenet_change_carrier,
+	.ndo_change_mtu		= bcmgenet_change_mtu,
 };
 
 /* GENET hardware parameters/characteristics */
@@ -4363,9 +4481,18 @@ static int bcmgenet_probe(struct platform_device *pdev)
 	/* Mii wait queue */
 	init_waitqueue_head(&priv->wq);
 	bcmgenet_hfb_init(priv);
+
 	priv->rx_buf_len = bcmgenet_rx_buf_len(dev->mtu);
 	priv->tx_thld_len = bcmgenet_tx_pkt_rdy_thld(dev->mtu) * ENET_THLD_UNIT;
 	priv->tx_thld_window = priv->dma_max_burst_length * ENET_BURST_UNIT;
+
+	/* Only v5 is known to size the TBUF for a long frame and to carry the
+	 * full length in a transmit descriptor, the older parts stay at the
+	 * default MTU
+	 */
+	if (GENET_IS_V5(priv))
+		dev->max_mtu = ENET_MAX_MTU;
+
 	INIT_WORK(&priv->bcmgenet_irq_work, bcmgenet_irq_task);
 
 	priv->clk_wol = devm_clk_get_optional(&priv->pdev->dev, "enet-wol");
@@ -4555,7 +4682,7 @@ static int bcmgenet_resume(struct device *d)
 		umac_enable_set(priv, CMD_RX_EN | CMD_TX_EN, false);
 		bcmgenet_rdma_disable(priv);
 		bcmgenet_intr_disable(priv);
-		bcmgenet_fini_dma(priv);
+		bcmgenet_fini_dma(priv, NULL);
 		if (phy_is_started(dev->phydev) ||
 		    dev->phydev->state == PHY_ERROR)
 			phy_stop(dev->phydev);
@@ -4667,7 +4794,7 @@ static int bcmgenet_suspend(struct device *d)
 		bcmgenet_fini_tx_napi(priv);
 	} else {
 		/* Teardown the interface */
-		bcmgenet_netif_stop(dev, true);
+		bcmgenet_netif_stop(dev, true, NULL);
 	}
 
 	return 0;
