@@ -1293,7 +1293,6 @@ struct macb_info {
 	struct platform_device	*pdev;
 	struct net_device	*netdev;
 	struct macb_or_gem_ops	macbgem_ops;
-	unsigned int		num_queues;
 	u32			caps;
 	int			rx_bd_rd_prefetch;
 	int			tx_bd_rd_prefetch;
@@ -1324,6 +1323,7 @@ struct macb_context {
 	unsigned int		rx_buffer_size;
 	unsigned int		rx_ring_size;
 	unsigned int		tx_ring_size;
+	unsigned int		num_queues;
 	struct macb_rxq		rxq[MACB_MAX_QUEUES];
 	struct macb_txq		txq[MACB_MAX_QUEUES];
 };
@@ -1381,6 +1381,9 @@ struct macb {
 	unsigned int		configured_rx_ring_size;
 	unsigned int		configured_tx_ring_size;
 	struct macb_context	*ctx;
+
+	unsigned int		configured_num_queues;
+	unsigned int		max_num_queues;
 
 	struct macb_dma_desc	*rx_ring_tieoff;
 	dma_addr_t		rx_ring_tieoff_dma;
