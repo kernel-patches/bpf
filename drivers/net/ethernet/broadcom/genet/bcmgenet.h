@@ -543,7 +543,9 @@ struct bcmgenet_hw_params {
 
 struct bcmgenet_skb_cb {
 	struct enet_cb *first_cb;	/* First control block of SKB */
+	struct enet_cb *head_cb;	/* Owns the head mapping */
 	struct enet_cb *last_cb;	/* Last control block of SKB */
+	struct enet_cb *split_cb;	/* Cut, the next one unmaps for both */
 	unsigned int bytes_sent;	/* bytes on the wire (no TSB) */
 };
 
@@ -618,6 +620,8 @@ struct bcmgenet_priv {
 	void __iomem *tx_bds;
 	struct enet_cb *tx_cbs;
 	unsigned int num_tx_bds;
+	unsigned int tx_thld_len;
+	unsigned int tx_thld_window;
 
 	struct bcmgenet_tx_ring tx_rings[GENET_MAX_MQ_CNT + 1];
 
