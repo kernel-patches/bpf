@@ -1696,6 +1696,7 @@ static const struct pppox_proto pppol2tp_proto = {
 	.create		= pppol2tp_create,
 	.ioctl		= pppol2tp_ioctl,
 	.owner		= THIS_MODULE,
+	.lockless_rcv	= true,
 };
 
 #ifdef CONFIG_L2TP_V3

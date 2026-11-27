@@ -63,6 +63,10 @@ struct pppox_proto {
 	int		(*ioctl)(struct socket *sock, unsigned int cmd,
 				 unsigned long arg);
 	struct module	*owner;
+	/* The receive path may queue packets to sk_receive_queue without
+	 * holding the socket lock.
+	 */
+	bool		lockless_rcv;
 };
 
 extern int register_pppox_proto(int proto_num, const struct pppox_proto *pp);
