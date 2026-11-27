@@ -425,6 +425,15 @@ static void prepare_ibc(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
 	}
 }
 
+static void unshadow_icpt(struct kvm_s390_sie_block *scb_o,
+			  struct kvm_s390_sie_block *scb_s)
+{
+	scb_o->icptcode = scb_s->icptcode;
+	scb_o->icptstatus = scb_s->icptstatus;
+	scb_o->ipa = scb_s->ipa;
+	scb_o->ipb = scb_s->ipb;
+}
+
 /* unshadow the scb, copying parameters back to the real scb */
 static void unshadow_scb(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
 {
@@ -432,10 +441,7 @@ static void unshadow_scb(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
 	struct kvm_s390_sie_block *scb_o = vsie_page->scb_o;
 
 	/* interception */
-	scb_o->icptcode = scb_s->icptcode;
-	scb_o->icptstatus = scb_s->icptstatus;
-	scb_o->ipa = scb_s->ipa;
-	scb_o->ipb = scb_s->ipb;
+	unshadow_icpt(scb_o, scb_s);
 	scb_o->gbea = scb_s->gbea;
 
 	/* timer */
@@ -491,6 +497,9 @@ static int shadow_scb(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
 
 	/* make sure we don't have any leftovers when reusing the scb */
 	scb_s->icptcode = 0;
+	scb_s->icptstatus = 0;
+	scb_s->ipa = 0;
+	scb_s->ipb = 0;
 	scb_s->eca = 0;
 	scb_s->ecb = 0;
 	scb_s->ecb2 = 0;
@@ -500,8 +509,10 @@ static int shadow_scb(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
 	scb_s->fpf = 0;
 
 	rc = prepare_cpuflags(vcpu, vsie_page);
-	if (rc)
-		goto out;
+	if (rc) {
+		unshadow_icpt(scb_o, scb_s);
+		return rc;
+	}
 
 	/* timer */
 	scb_s->cputm = scb_o->cputm;
@@ -615,7 +626,6 @@ static int shadow_scb(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
 
 	prepare_ibc(vcpu, vsie_page);
 	rc = shadow_crycb(vcpu, vsie_page);
-out:
 	if (rc)
 		unshadow_scb(vcpu, vsie_page);
 	return rc;
