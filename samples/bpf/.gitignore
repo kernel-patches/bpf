@@ -9,10 +9,6 @@ map_perf_test
 offwaketime
 per_socket_stats_example
 sampleip
-sock_example
-sockex1
-sockex2
-sockex3
 spintest
 syscall_nrs.h
 syscall_tp

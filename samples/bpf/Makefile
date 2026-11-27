@@ -7,11 +7,7 @@ pound := \#
 
 # List of programs to build
 tprogs-y := test_lru_dist
-tprogs-y += sock_example
 tprogs-y += fds_example
-tprogs-y += sockex1
-tprogs-y += sockex2
-tprogs-y += sockex3
 tprogs-y += tracex1
 tprogs-y += tracex3
 tprogs-y += tracex4
@@ -45,9 +41,6 @@ CGROUP_HELPERS := ../../tools/testing/selftests/bpf/cgroup_helpers.o
 TRACE_HELPERS := ../../tools/testing/selftests/bpf/trace_helpers.o
 
 fds_example-objs := fds_example.o
-sockex1-objs := sockex1_user.o
-sockex2-objs := sockex2_user.o
-sockex3-objs := sockex3_user.o
 tracex1-objs := tracex1_user.o $(TRACE_HELPERS)
 tracex3-objs := tracex3_user.o
 tracex4-objs := tracex4_user.o
@@ -72,9 +65,6 @@ hbm-objs := hbm.o $(CGROUP_HELPERS)
 
 # Tell kbuild to always build the programs
 always-y := $(tprogs-y)
-always-y += sockex1_kern.o
-always-y += sockex2_kern.o
-always-y += sockex3_kern.o
 always-y += tracex1.bpf.o
 always-y += tracex3.bpf.o
 always-y += tracex4.bpf.o
