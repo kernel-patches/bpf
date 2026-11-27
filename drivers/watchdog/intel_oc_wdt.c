@@ -266,6 +266,7 @@ static DEFINE_NOIRQ_DEV_PM_OPS(intel_oc_wdt_pm_ops, intel_oc_wdt_suspend_noirq,
 static const struct acpi_device_id intel_oc_wdt_match[] = {
 	{ "INT3F0D" },
 	{ "INTC1099" },
+	{ "INTC109C" },
 	{ },
 };
 MODULE_DEVICE_TABLE(acpi, intel_oc_wdt_match);

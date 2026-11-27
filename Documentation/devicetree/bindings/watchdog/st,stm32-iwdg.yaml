@@ -42,6 +42,9 @@ properties:
 
   wakeup-source: true
 
+  access-controllers:
+    maxItems: 1
+
 required:
   - compatible
   - reg
