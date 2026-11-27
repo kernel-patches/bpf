@@ -7,7 +7,6 @@ pound := \#
 
 # List of programs to build
 tprogs-y := test_lru_dist
-tprogs-y += fds_example
 tprogs-y += tracex1
 tprogs-y += tracex3
 tprogs-y += tracex4
@@ -21,7 +20,6 @@ tprogs-y += map_perf_test
 tprogs-y += trace_event
 tprogs-y += sampleip
 tprogs-y += test_map_in_map
-tprogs-y += per_socket_stats_example
 tprogs-y += syscall_tp
 tprogs-y += cpustat
 tprogs-y += task_fd_query
@@ -38,7 +36,6 @@ LIBBPF = $(LIBBPF_OUTPUT)/libbpf.a
 CGROUP_HELPERS := ../../tools/testing/selftests/bpf/cgroup_helpers.o
 TRACE_HELPERS := ../../tools/testing/selftests/bpf/trace_helpers.o
 
-fds_example-objs := fds_example.o
 tracex1-objs := tracex1_user.o $(TRACE_HELPERS)
 tracex3-objs := tracex3_user.o
 tracex4-objs := tracex4_user.o
@@ -52,7 +49,6 @@ map_perf_test-objs := map_perf_test_user.o
 trace_event-objs := trace_event_user.o $(TRACE_HELPERS)
 sampleip-objs := sampleip_user.o $(TRACE_HELPERS)
 test_map_in_map-objs := test_map_in_map_user.o
-per_socket_stats_example-objs := cookie_uid_helper_example.o
 syscall_tp-objs := syscall_tp_user.o
 cpustat-objs := cpustat_user.o
 task_fd_query-objs := task_fd_query_user.o $(TRACE_HELPERS)

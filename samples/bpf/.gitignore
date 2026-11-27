@@ -1,12 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-only
 cpustat
-fds_example
 hbm
 ibumad
 lathist
 map_perf_test
 offwaketime
-per_socket_stats_example
 sampleip
 spintest
 syscall_nrs.h
