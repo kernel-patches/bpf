@@ -16,25 +16,30 @@ At this moment the driver can do the following things:
 	* Generate random or pattern-based capturing data
 	* Inject delays into the playback and capturing processes
 	* Inject errors during the PCM callbacks
+	* Pause the streams
+	* Report wrong change results from a mixer control
 
 It supports up to 8 substreams and 4 channels. Also it supports both interleaved and
 non-interleaved access modes.
 
 Also, this driver can check the playback stream for containing the predefined pattern,
-which is used in the corresponding selftest (alsa/pcmtest-test.sh) to check the PCM middle
-layer data transferring functionality. Additionally, this driver redefines the default
-RESET ioctl, and the selftest covers this PCM API functionality as well.
+which is used in the corresponding selftest (alsa/test-pcmtest-driver.c) to check the PCM
+middle layer data transferring functionality. Additionally, this driver redefines the
+default RESET ioctl, and the selftest covers this PCM API functionality as well.
 
 Configuration
 -------------
 
 The driver has several parameters besides the common ALSA module parameters:
 
-	* fill_mode (bool) - Buffer fill mode (see below)
+	* fill_mode (short) - Buffer fill mode (see below)
 	* inject_delay (int)
+	* inject_open_err (bool)
 	* inject_hwpars_err (bool)
 	* inject_prepare_err (bool)
 	* inject_trigger_err (bool)
+	* inject_ctl_no_event (bool)
+	* inject_ctl_spurious_event (bool)
 
 
 Capture Data Generation
@@ -93,9 +98,21 @@ writing '1' to the 'inject_hwpars_err' module parameter:
 
 Errors can be injected into the following PCM callbacks:
 
+	* open (EBUSY)
 	* hw_params (EBUSY)
 	* prepare (EINVAL)
 	* trigger (EINVAL)
+
+Control event injection
+-----------------------
+
+The driver has a 'Test Playback Volume' control. Its 'put' callback reports a change
+only when the value changes, so a change event is sent only then.
+
+With 'inject_ctl_no_event' set, the callback reports no change, and no event is sent
+even when the value changes. With 'inject_ctl_spurious_event' set, it reports a change
+on every accepted write. The mixer-test selftest (alsa/mixer-test.c) checks for both.
+If both parameters are set, 'inject_ctl_no_event' wins.
 
 Playback test
 -------------

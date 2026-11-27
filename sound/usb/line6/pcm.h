@@ -183,6 +183,7 @@ extern int line6_init_pcm(struct usb_line6 *line6,
 			  struct line6_pcm_properties *properties);
 extern int snd_line6_trigger(struct snd_pcm_substream *substream, int cmd);
 extern int snd_line6_prepare(struct snd_pcm_substream *substream);
+extern int snd_line6_sync_stop(struct snd_pcm_substream *substream);
 extern int snd_line6_hw_params(struct snd_pcm_substream *substream,
 			       struct snd_pcm_hw_params *hw_params);
 extern int snd_line6_hw_free(struct snd_pcm_substream *substream);

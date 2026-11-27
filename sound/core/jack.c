@@ -487,6 +487,7 @@ static struct snd_jack_kctl * snd_jack_kctl_new(struct snd_card *card, const cha
 
 	jack_kctl->kctl = kctl;
 	jack_kctl->mask_bits = mask;
+	INIT_LIST_HEAD(&jack_kctl->list);
 
 	kctl->private_data = jack_kctl;
 	kctl->private_free = snd_jack_kctl_private_free;
@@ -555,13 +556,15 @@ int snd_jack_new(struct snd_card *card, const char *id, int type,
 	}
 
 	jack = kzalloc_obj(struct snd_jack);
-	if (jack == NULL)
-		return -ENOMEM;
+	if (!jack) {
+		err = -ENOMEM;
+		goto fail_kctl;
+	}
 
 	jack->id = kstrdup(id, GFP_KERNEL);
 	if (jack->id == NULL) {
-		kfree(jack);
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto fail_jack;
 	}
 
 #ifdef CONFIG_SND_JACK_INPUT_DEV
@@ -607,8 +610,13 @@ fail_input:
 #ifdef CONFIG_SND_JACK_INPUT_DEV
 	input_free_device(jack->input_dev);
 #endif
+fail_jack:
 	kfree(jack->id);
 	kfree(jack);
+fail_kctl:
+	if (jack_kctl)
+		snd_ctl_remove(card, jack_kctl->kctl);
+
 	return err;
 }
 EXPORT_SYMBOL(snd_jack_new);

@@ -2506,6 +2506,8 @@ static int snd_emu10k1_fx8010_ioctl(struct snd_hwdep * hw, struct file *file, un
 		kfree(icode);
 		return res;
 	case SNDRV_EMU10K1_IOCTL_PCM_POKE:
+		if (!capable(CAP_SYS_ADMIN))
+			return -EPERM;
 		ipcm = memdup_user(argp, sizeof(*ipcm));
 		if (IS_ERR(ipcm))
 			return PTR_ERR(ipcm);

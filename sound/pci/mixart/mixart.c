@@ -1066,8 +1066,9 @@ static int snd_mixart_free(struct mixart_mgr *mgr)
 			snd_card_free(mgr->chip[i]->card);
 	}
 
-	/* stop mailbox */
-	snd_mixart_exit_mailbox(mgr);
+	/* stop mailbox, unless the register BAR was never mapped */
+	if (mgr->mem[1].virt)
+		snd_mixart_exit_mailbox(mgr);
 
 	/* release irq  */
 	if (mgr->irq >= 0)

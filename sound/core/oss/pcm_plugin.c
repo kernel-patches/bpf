@@ -48,12 +48,12 @@ static int snd_pcm_plugin_alloc(struct snd_pcm_plugin *plugin, snd_pcm_uframes_t
 	if (width < 0)
 		return width;
 	size = array3_size(frames, format->channels, width);
-	/* check for too large period size once again */
-	if (size > 1024 * 1024)
-		return -ENOMEM;
 	if (snd_BUG_ON(size % 8))
 		return -ENXIO;
 	size /= 8;
+	/* check for too large period size once again */
+	if (size > 1024 * 1024)
+		return -ENOMEM;
 	if (plugin->buf_frames < frames) {
 		kvfree(plugin->buf);
 		plugin->buf = kvzalloc(size, GFP_KERNEL);
@@ -604,7 +604,7 @@ snd_pcm_sframes_t snd_pcm_plug_write_transfer(struct snd_pcm_substream *plug, st
 			if (err != frames1) {
 				frames = err;
 				if (plugin->src_frames) {
-					frames = plugin->src_frames(plugin, frames1);
+					frames = plugin->src_frames(plugin, err);
 					if (frames <= 0)
 						return frames;
 				}

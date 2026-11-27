@@ -1247,8 +1247,8 @@ snd_pcm_sframes_t snd_pcm_oss_write3(struct snd_pcm_substream *substream, const 
 				break;
 		}
 		mutex_unlock(&runtime->oss.params_lock);
-		ret = __snd_pcm_lib_xfer(substream, (void *)ptr, true,
-					 frames, in_kernel);
+		ret = snd_pcm_lib_get_and_xfer(substream, (void *)ptr, true,
+					       frames, in_kernel);
 		mutex_lock(&runtime->oss.params_lock);
 		if (ret != -EPIPE && ret != -ESTRPIPE)
 			break;
@@ -1288,9 +1288,10 @@ snd_pcm_sframes_t snd_pcm_oss_read3(struct snd_pcm_substream *substream, char *p
 		if (ret < 0)
 			break;
 		mutex_unlock(&runtime->oss.params_lock);
-		ret = __snd_pcm_lib_xfer(substream, (void *)ptr, true,
-					 frames, in_kernel);
+		ret = snd_pcm_lib_get_and_xfer(substream, ptr, true,
+					       frames, in_kernel);
 		mutex_lock(&runtime->oss.params_lock);
+
 		if (ret == -EPIPE) {
 			if (snd_pcm_get_state(substream) == SNDRV_PCM_STATE_DRAINING) {
 				ret = snd_pcm_kernel_ioctl(substream, SNDRV_PCM_IOCTL_DROP, NULL);
@@ -2500,15 +2501,12 @@ static int snd_pcm_oss_open(struct inode *inode, struct file *file)
 
 	nonseekable_open(inode, file);
 
-	pcm = snd_lookup_oss_minor_data(iminor(inode),
-					SNDRV_OSS_DEVICE_TYPE_PCM);
-	if (pcm == NULL) {
-		err = -ENODEV;
-		goto __error1;
-	}
-	err = snd_card_file_add(pcm->card, file);
-	if (err < 0)
-		goto __error1;
+	pcm = snd_lookup_oss_minor_data_file(iminor(inode),
+					     SNDRV_OSS_DEVICE_TYPE_PCM, file);
+	if (IS_ERR(pcm))
+		return PTR_ERR(pcm);
+	if (!pcm)
+		return -ENODEV;
 	if (!try_module_get(pcm->card->module)) {
 		err = -ENODEV;
 		goto __error2;
@@ -2561,16 +2559,12 @@ static int snd_pcm_oss_open(struct inode *inode, struct file *file)
 	mutex_unlock(&pcm->open_mutex);
 	if (err < 0)
 		goto __error;
-	snd_card_unref(pcm->card);
 	return err;
 
       __error:
      	module_put(pcm->card->module);
       __error2:
       	snd_card_file_remove(pcm->card, file);
-      __error1:
-	if (pcm)
-		snd_card_unref(pcm->card);
 	return err;
 }
 

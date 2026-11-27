@@ -974,7 +974,6 @@ static const struct hda_fixup cxt_fixups[] = {
 			{ 0x1a, 0x05d71030 },
 			{ }
 		},
-		.chain_id = CXT_FIXUP_STEREO_DMIC,
 	},
 	[CXT_FIXUP_INC_MIC_BOOST] = {
 		.type = HDA_FIXUP_FUNC,

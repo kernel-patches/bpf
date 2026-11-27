@@ -966,7 +966,7 @@ static int snd_interval_ratden(struct snd_interval *i,
 		if (num > rats[k].num_max)
 			continue;
 		if (num < rats[k].num_min)
-			num = rats[k].num_max;
+			num = rats[k].num_min;
 		else {
 			unsigned int r;
 			r = (num - rats[k].num_min) % rats[k].num_step;
@@ -2275,6 +2275,7 @@ int pcm_lib_apply_appl_ptr(struct snd_pcm_substream *substream,
 }
 
 /* the common loop for read/write data */
+/* the caller should reserve the buffer via runtime->buffer_access beforehand */
 snd_pcm_sframes_t __snd_pcm_lib_xfer(struct snd_pcm_substream *substream,
 				     void *data, bool interleaved,
 				     snd_pcm_uframes_t size, bool in_kernel)
@@ -2377,9 +2378,6 @@ snd_pcm_sframes_t __snd_pcm_lib_xfer(struct snd_pcm_substream *substream,
 			err = -EINVAL;
 			goto _end_unlock;
 		}
-		err = snd_pcm_buffer_access_get(runtime);
-		if (err < 0)
-			goto _end_unlock;
 		snd_pcm_stream_unlock_irq(substream);
 		if (!is_playback)
 			snd_pcm_dma_buffer_sync(substream, SNDRV_DMA_SYNC_CPU);
@@ -2388,7 +2386,6 @@ snd_pcm_sframes_t __snd_pcm_lib_xfer(struct snd_pcm_substream *substream,
 		if (is_playback)
 			snd_pcm_dma_buffer_sync(substream, SNDRV_DMA_SYNC_DEVICE);
 		snd_pcm_stream_lock_irq(substream);
-		snd_pcm_buffer_access_put(runtime);
 		if (err < 0)
 			goto _end_unlock;
 		err = pcm_accessible_state(substream);

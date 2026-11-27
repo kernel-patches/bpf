@@ -299,10 +299,6 @@ static inline void snd_sbmixer_resume(struct snd_sb *chip) {}
 int snd_sb8dsp_pcm(struct snd_sb *chip, int device);
 /* sb8.c */
 irqreturn_t snd_sb8dsp_interrupt(struct snd_sb *chip);
-int snd_sb8_playback_open(struct snd_pcm_substream *substream);
-int snd_sb8_capture_open(struct snd_pcm_substream *substream);
-int snd_sb8_playback_close(struct snd_pcm_substream *substream);
-int snd_sb8_capture_close(struct snd_pcm_substream *substream);
 /* midi8.c */
 irqreturn_t snd_sb8dsp_midi_interrupt(struct snd_sb *chip);
 int snd_sb8dsp_midi(struct snd_sb *chip, int device);

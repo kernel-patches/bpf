@@ -380,6 +380,10 @@ static int cvt_ump_midi1_to_midi2(struct snd_seq_client *dest,
 	switch (midi1->note.status) {
 	case UMP_MSG_STATUS_NOTE_ON:
 	case UMP_MSG_STATUS_NOTE_OFF:
+		/* MIDI 2.0 doesn't treat a note-on with 0 velocity as note-off */
+		if (midi1->note.status == UMP_MSG_STATUS_NOTE_ON &&
+		    !midi1->note.velocity)
+			midi2->note.status = UMP_MSG_STATUS_NOTE_OFF;
 		midi2->note.note = midi1->note.note;
 		midi2->note.velocity = upscale_7_to_16bit(midi1->note.velocity);
 		break;
@@ -428,6 +432,38 @@ static int cvt_ump_midi1_to_midi2(struct snd_seq_client *dest,
 					      atomic, hop);
 }
 
+/* send a MIDI 2.0 RPN/NRPN as the four MIDI 1.0 CCs that select and set it */
+static int cvt_ump_midi2_rpn_to_midi1(struct snd_seq_client *dest,
+				      struct snd_seq_client_port *dest_port,
+				      struct snd_seq_ump_event *ev_cvt,
+				      const union snd_ump_midi2_msg *midi2,
+				      int atomic, int hop)
+{
+	union snd_ump_midi1_msg *midi1 = (union snd_ump_midi1_msg *)ev_cvt->ump;
+	bool rpn = midi2->rpn.status == UMP_MSG_STATUS_RPN;
+	u16 v = downscale_32_to_14bit(midi2->rpn.data);
+	const unsigned char cc[4][2] = {
+		{ rpn ? UMP_CC_RPN_MSB : UMP_CC_NRPN_MSB, midi2->rpn.bank },
+		{ rpn ? UMP_CC_RPN_LSB : UMP_CC_NRPN_LSB, midi2->rpn.index },
+		{ UMP_CC_DATA, v >> 7 },
+		{ UMP_CC_DATA_LSB, v & 0x7f },
+	};
+	int i, err = 0;
+
+	midi1->cc.status = UMP_MSG_STATUS_CC;
+	for (i = 0; i < ARRAY_SIZE(cc); i++) {
+		midi1->cc.index = cc[i][0];
+		midi1->cc.data = cc[i][1];
+		err = __snd_seq_deliver_single_event(dest, dest_port,
+						     (struct snd_seq_event *)ev_cvt,
+						     atomic, hop);
+		if (err < 0)
+			return err;
+	}
+
+	return err;
+}
+
 /* convert UMP packet from MIDI 2.0 to MIDI 1.0 and deliver it */
 static int cvt_ump_midi2_to_midi1(struct snd_seq_client *dest,
 				  struct snd_seq_client_port *dest_port,
@@ -453,6 +489,10 @@ static int cvt_ump_midi2_to_midi1(struct snd_seq_client *dest,
 	case UMP_MSG_STATUS_NOTE_OFF:
 		midi1->note.note = midi2->note.note;
 		midi1->note.velocity = downscale_16_to_7bit(midi2->note.velocity);
+		/* a note-on with 0 velocity would be a note-off in MIDI 1.0 */
+		if (midi2->note.status == UMP_MSG_STATUS_NOTE_ON &&
+		    !midi1->note.velocity)
+			midi1->note.velocity = 1;
 		break;
 	case UMP_MSG_STATUS_POLY_PRESSURE:
 		midi1->paf.note = midi2->paf.note;
@@ -491,6 +531,10 @@ static int cvt_ump_midi2_to_midi1(struct snd_seq_client *dest,
 		midi1->pb.data_msb = v >> 7;
 		midi1->pb.data_lsb = v & 0x7f;
 		break;
+	case UMP_MSG_STATUS_RPN:
+	case UMP_MSG_STATUS_NRPN:
+		return cvt_ump_midi2_rpn_to_midi1(dest, dest_port, &ev_cvt,
+						  midi2, atomic, hop);
 	default:
 		return 0;
 	}
@@ -630,7 +674,7 @@ static int note_ev_to_ump_midi1(const struct snd_seq_event *event,
 				union snd_ump_midi1_msg *data,
 				unsigned char status)
 {
-	if (!event->data.note.velocity)
+	if (status == UMP_MSG_STATUS_NOTE_ON && !event->data.note.velocity)
 		status = UMP_MSG_STATUS_NOTE_OFF;
 	data->note.status = status;
 	data->note.channel = event->data.note.channel & 0x0f;
@@ -790,13 +834,22 @@ static int paf_ev_to_ump_midi2(const struct snd_seq_event *event,
 	return 1;
 }
 
+static void reset_rpn_data(struct ump_cvt_to_ump_bank *cc)
+{
+	cc->cc_data_msb = cc->cc_data_lsb = 0;
+	cc->cc_data_msb_set = cc->cc_data_lsb_set = 0;
+}
+
+/*
+ * Deselect on a Null RPN/NRPN, but keep the 7f/7f numbers as a MIDI 1.0
+ * receiver does. Otherwise, when the LSB was already 127, the second
+ * message of a Null would select RPN or NRPN 0/127.
+ */
 static void reset_rpn(struct ump_cvt_to_ump_bank *cc)
 {
 	cc->rpn_set = 0;
 	cc->nrpn_set = 0;
-	cc->cc_rpn_msb = cc->cc_rpn_lsb = 0;
-	cc->cc_data_msb = cc->cc_data_lsb = 0;
-	cc->cc_data_msb_set = cc->cc_data_lsb_set = 0;
+	reset_rpn_data(cc);
 }
 
 /* set up the MIDI2 RPN/NRPN packet data from the parsed info */
@@ -820,6 +873,8 @@ static int fill_rpn(struct ump_cvt_to_ump_bank *cc,
 		data->rpn.bank = cc->cc_nrpn_msb;
 		data->rpn.index = cc->cc_nrpn_lsb;
 	} else {
+		/* no RPN/NRPN selected (e.g. after a Null), drop the data */
+		reset_rpn_data(cc);
 		return 0; // skip
 	}
 
@@ -827,7 +882,8 @@ static int fill_rpn(struct ump_cvt_to_ump_bank *cc,
 					     cc->cc_data_lsb);
 	data->rpn.channel = channel;
 
-	reset_rpn(cc);
+	/* keep the RPN/NRPN selection for a following Data Entry */
+	reset_rpn_data(cc);
 	return 1;
 }
 
@@ -847,6 +903,7 @@ static int cc_ev_to_ump_midi2(const struct snd_seq_event *event,
 	switch (index) {
 	case UMP_CC_RPN_MSB:
 		ret = fill_rpn(cc, data, channel, true);
+		cc->nrpn_set = 0;
 		cc->rpn_set = 1;
 		cc->cc_rpn_msb = val;
 		if (cc->cc_rpn_msb == 0x7f && cc->cc_rpn_lsb == 0x7f)
@@ -854,6 +911,7 @@ static int cc_ev_to_ump_midi2(const struct snd_seq_event *event,
 		break;
 	case UMP_CC_RPN_LSB:
 		ret = fill_rpn(cc, data, channel, true);
+		cc->nrpn_set = 0;
 		cc->rpn_set = 1;
 		cc->cc_rpn_lsb = val;
 		if (cc->cc_rpn_msb == 0x7f && cc->cc_rpn_lsb == 0x7f)
@@ -861,13 +919,19 @@ static int cc_ev_to_ump_midi2(const struct snd_seq_event *event,
 		break;
 	case UMP_CC_NRPN_MSB:
 		ret = fill_rpn(cc, data, channel, true);
+		cc->rpn_set = 0;
 		cc->nrpn_set = 1;
 		cc->cc_nrpn_msb = val;
+		if (cc->cc_nrpn_msb == 0x7f && cc->cc_nrpn_lsb == 0x7f)
+			reset_rpn(cc);
 		break;
 	case UMP_CC_NRPN_LSB:
 		ret = fill_rpn(cc, data, channel, true);
+		cc->rpn_set = 0;
 		cc->nrpn_set = 1;
 		cc->cc_nrpn_lsb = val;
+		if (cc->cc_nrpn_msb == 0x7f && cc->cc_nrpn_lsb == 0x7f)
+			reset_rpn(cc);
 		break;
 	case UMP_CC_DATA:
 		cc->cc_data_msb_set = 1;
@@ -975,6 +1039,7 @@ static int ctrl14_ev_to_ump_midi2(const struct snd_seq_event *event,
 	case UMP_CC_RPN_MSB:
 	case UMP_CC_RPN_LSB:
 		ret = fill_rpn(cc, data, channel, true);
+		cc->nrpn_set = 0;
 		cc->cc_rpn_msb = msb;
 		cc->cc_rpn_lsb = lsb;
 		cc->rpn_set = 1;
@@ -984,9 +1049,12 @@ static int ctrl14_ev_to_ump_midi2(const struct snd_seq_event *event,
 	case UMP_CC_NRPN_MSB:
 	case UMP_CC_NRPN_LSB:
 		ret = fill_rpn(cc, data, channel, true);
+		cc->rpn_set = 0;
 		cc->cc_nrpn_msb = msb;
 		cc->nrpn_set = 1;
 		cc->cc_nrpn_lsb = lsb;
+		if (cc->cc_nrpn_msb == 0x7f && cc->cc_nrpn_lsb == 0x7f)
+			reset_rpn(cc);
 		return ret;
 	case UMP_CC_DATA:
 	case UMP_CC_DATA_LSB:

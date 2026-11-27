@@ -629,7 +629,6 @@ static const struct hda_fixup alc662_fixups[] = {
 	[ALC668_FIXUP_ASUS_Nx51_HEADSET_MODE] = {
 		.type = HDA_FIXUP_FUNC,
 		.v.func = alc_fixup_headset_mode_alc668,
-		.chain_id = ALC662_FIXUP_BASS_CHMAP
 	},
 	[ALC668_FIXUP_ASUS_Nx51] = {
 		.type = HDA_FIXUP_PINS,

@@ -1062,6 +1062,7 @@ enum dsp_download_state {
  */
 
 #define AE5_STRIP_MAX_LEDS 100
+#define AE5_ONCARD_LEDS 5
 
 struct ca0132_spec {
 	struct hda_gen_spec gen;
@@ -1167,10 +1168,11 @@ struct ca0132_spec {
 	bool use_alt_controls;
 
 #if IS_ENABLED(CONFIG_SND_HDA_DSP_LOADER)
-	/* AE-5 WS2812 strip control */
+	/* AE-5 WS2812 strip and on-card LED control */
 	struct mutex ae5_strip_mutex;
 	u32 ae5_strip_cur_colors[AE5_STRIP_MAX_LEDS];
 	int ae5_strip_cur_num_leds;
+	u8 ae5_oncard_cur_colors[AE5_ONCARD_LEDS * 3];
 #endif
 };
 
@@ -8690,6 +8692,90 @@ static int ae5_strip_num_leds_put(struct snd_kcontrol *kcontrol,
 	return 1;
 }
 
+static void ae5_oncard_write_bit(struct ca0132_spec *spec, bool bit)
+{
+	writew(bit ? 0x102 : 0x002, spec->mem_base + 0x320);
+	writew(0x103, spec->mem_base + 0x320);
+	writew(0x003, spec->mem_base + 0x320);
+}
+
+/*
+ * Caller must hold spec->ae5_strip_mutex.
+ */
+static void ae5_oncard_send_frame(struct hda_codec *codec, const u8 *rgb_colors)
+{
+	struct ca0132_spec *spec = codec->spec;
+	int i, bit;
+
+	if (!spec || !spec->mem_base)
+		return;
+
+	lockdep_assert_held(&spec->ae5_strip_mutex);
+	CLASS(snd_hda_power_pm, pm)(codec);
+
+	/* Start frame: 32 zeroes */
+	for (i = 0; i < 32; i++)
+		ae5_oncard_write_bit(spec, false);
+
+	/* 5 APA102 LEDs: 8-bit brightness (0xFF), Blue, Green, Red */
+	for (i = 0; i < AE5_ONCARD_LEDS; i++) {
+		u8 r = rgb_colors[i * 3 + 0];
+		u8 g = rgb_colors[i * 3 + 1];
+		u8 b = rgb_colors[i * 3 + 2];
+		u32 val = 0xff000000 | ((u32)b << 16) | ((u32)g << 8) | (u32)r;
+
+		for (bit = 31; bit >= 0; bit--)
+			ae5_oncard_write_bit(spec, (val >> bit) & 1);
+	}
+
+	/* End frame: 32 ones */
+	for (i = 0; i < 32; i++)
+		ae5_oncard_write_bit(spec, true);
+
+	/* Return GPIO pins 2 (data) and 3 (clock) to idle low */
+	ca0113_mmio_gpio_set(codec, 2, false);
+	ca0113_mmio_gpio_set(codec, 3, false);
+}
+
+static int ae5_oncard_ctl_info(struct snd_kcontrol *kcontrol,
+			       struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_BYTES;
+	uinfo->count = AE5_ONCARD_LEDS * 3;
+	return 0;
+}
+
+static int ae5_oncard_ctl_get(struct snd_kcontrol *kcontrol,
+			      struct snd_ctl_elem_value *ucontrol)
+{
+	struct hda_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct ca0132_spec *spec = codec->spec;
+
+	guard(mutex)(&spec->ae5_strip_mutex);
+	memcpy(ucontrol->value.bytes.data, spec->ae5_oncard_cur_colors,
+	       AE5_ONCARD_LEDS * 3);
+	return 0;
+}
+
+static int ae5_oncard_ctl_put(struct snd_kcontrol *kcontrol,
+			      struct snd_ctl_elem_value *ucontrol)
+{
+	struct hda_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct ca0132_spec *spec = codec->spec;
+	bool change;
+
+	guard(mutex)(&spec->ae5_strip_mutex);
+	change = memcmp(spec->ae5_oncard_cur_colors, ucontrol->value.bytes.data,
+			AE5_ONCARD_LEDS * 3) != 0;
+	if (!change)
+		return 0;
+
+	memcpy(spec->ae5_oncard_cur_colors, ucontrol->value.bytes.data,
+	       AE5_ONCARD_LEDS * 3);
+	ae5_oncard_send_frame(codec, spec->ae5_oncard_cur_colors);
+	return 1;
+}
+
 static const struct snd_kcontrol_new ae5_strip_ctls[] = {
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_CARD,
@@ -8708,6 +8794,15 @@ static const struct snd_kcontrol_new ae5_strip_ctls[] = {
 		.info = ae5_strip_num_leds_info,
 		.get = ae5_strip_num_leds_get,
 		.put = ae5_strip_num_leds_put,
+	},
+	{
+		.iface = SNDRV_CTL_ELEM_IFACE_CARD,
+		.name = "AE-5 On-Card LEDs",
+		.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			  SNDRV_CTL_ELEM_ACCESS_VOLATILE,
+		.info = ae5_oncard_ctl_info,
+		.get = ae5_oncard_ctl_get,
+		.put = ae5_oncard_ctl_put,
 	},
 };
 

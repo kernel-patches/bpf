@@ -232,6 +232,21 @@ static struct sound_unit *__sound_remove_unit(struct sound_unit **list, int unit
 static DEFINE_SPINLOCK(sound_loader_lock);
 
 /*
+ * Create the sound device and return an error if device creation fails.
+ */
+
+static int sound_device_create(struct sound_unit *s, struct device *dev)
+{
+	struct device *device;
+
+	device = device_create(&sound_class, dev,
+			       MKDEV(SOUND_MAJOR, s->unit_minor),
+			       NULL, "%s", s->name + 6);
+
+	return PTR_ERR_OR_ZERO(device);
+}
+
+/*
  *	Allocate the controlling structure and add it to the sound driver
  *	list. Acquires locks as needed
  */
@@ -277,9 +292,19 @@ retry:
 		}
 	}
 
-	device_create(&sound_class, dev, MKDEV(SOUND_MAJOR, s->unit_minor),
-		      NULL, "%s", s->name+6);
+	r = sound_device_create(s, dev);
+	if (r)
+		goto err_remove_unit;
+
 	return s->unit_minor;
+
+err_remove_unit:
+	if (!preclaim_oss)
+		__unregister_chrdev(SOUND_MAJOR, s->unit_minor, 1, s->name);
+
+	spin_lock(&sound_loader_lock);
+	__sound_remove_unit(list, s->unit_minor);
+	spin_unlock(&sound_loader_lock);
 
 fail:
 	kfree(s);

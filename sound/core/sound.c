@@ -18,27 +18,27 @@
 #include <linux/kmod.h>
 #include <linux/mutex.h>
 
-static int major = CONFIG_SND_MAJOR;
-int snd_major;
+int snd_major = CONFIG_SND_MAJOR;
 EXPORT_SYMBOL(snd_major);
 
-static int cards_limit = 1;
+/* maximum number of cards allowed for automatic module loading */
+static int snd_cards_limit = 1;
+
+/* this holds the actual maximum card number currently available.
+ * it is initialized from snd_cards_limit and increases when
+ * cards are registered manually at higher indices.
+ */
+int snd_ecards_limit = 1;
+EXPORT_SYMBOL(snd_ecards_limit);
 
 MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("Advanced Linux Sound Architecture driver for soundcards.");
 MODULE_LICENSE("GPL");
-module_param(major, int, 0444);
+module_param_named(major, snd_major, int, 0444);
 MODULE_PARM_DESC(major, "Major # for sound driver.");
-module_param(cards_limit, int, 0444);
+module_param_named(cards_limit, snd_cards_limit, int, 0444);
 MODULE_PARM_DESC(cards_limit, "Count of auto-loadable soundcards.");
 MODULE_ALIAS_CHARDEV_MAJOR(CONFIG_SND_MAJOR);
-
-/* this one holds the actual max. card number currently available.
- * as default, it's identical with cards_limit option.  when more
- * modules are loaded manually, this limit number increases, too.
- */
-int snd_ecards_limit;
-EXPORT_SYMBOL(snd_ecards_limit);
 
 #ifdef CONFIG_SND_DEBUG
 struct dentry *sound_debugfs_root;
@@ -61,7 +61,7 @@ void snd_request_card(int card)
 {
 	if (snd_card_locked(card))
 		return;
-	if (card < 0 || card >= cards_limit)
+	if (card < 0 || card >= snd_cards_limit)
 		return;
 	request_module("snd-card-%i", card);
 }
@@ -114,6 +114,40 @@ void *snd_lookup_minor_data(unsigned int minor, int type)
 	return private_data;
 }
 EXPORT_SYMBOL(snd_lookup_minor_data);
+
+/**
+ * snd_lookup_minor_data_file - get user data of a device and add the file
+ * @minor: the minor number
+ * @type: device type (SNDRV_DEVICE_TYPE_XXX)
+ * @file: the file being opened
+ *
+ * Like snd_lookup_minor_data(), but instead of taking a reference to the
+ * card, adds @file to the file list of the card while the minor is still
+ * registered, and records the user data for snd_card_file_sync().  The
+ * caller must call snd_card_file_remove() when it is done with the file.
+ *
+ * Return: The user data pointer if the specified device is found, %NULL if
+ * it is not found, or an error pointer if the file cannot be added.
+ */
+void *snd_lookup_minor_data_file(unsigned int minor, int type,
+				 struct file *file)
+{
+	struct snd_minor *mreg;
+	int err;
+
+	if (minor >= ARRAY_SIZE(snd_minors))
+		return NULL;
+	guard(mutex)(&sound_mutex);
+	mreg = snd_minors[minor];
+	if (!mreg || mreg->type != type || !mreg->private_data ||
+	    !mreg->card_ptr)
+		return NULL;
+	err = snd_card_file_add_data(mreg->card_ptr, file, mreg->private_data);
+	if (err < 0)
+		return ERR_PTR(err);
+	return mreg->private_data;
+}
+EXPORT_SYMBOL(snd_lookup_minor_data_file);
 
 #ifdef CONFIG_MODULES
 static struct snd_minor *autoload_device(unsigned int minor)
@@ -183,6 +217,18 @@ static int snd_find_free_minor(int type, struct snd_card *card, int dev)
 		return SNDRV_MINOR_SEQUENCER;
 	if (type == SNDRV_DEVICE_TYPE_TIMER)
 		return SNDRV_MINOR_TIMER;
+
+	switch (type) {
+	case SNDRV_DEVICE_TYPE_CONTROL:
+	case SNDRV_DEVICE_TYPE_HWDEP:
+	case SNDRV_DEVICE_TYPE_RAWMIDI:
+	case SNDRV_DEVICE_TYPE_PCM_PLAYBACK:
+	case SNDRV_DEVICE_TYPE_PCM_CAPTURE:
+	case SNDRV_DEVICE_TYPE_COMPRESS:
+		break;
+	default:
+		return -EINVAL;
+	}
 
 	for (minor = 0; minor < ARRAY_SIZE(snd_minors); ++minor) {
 		/* skip static minors still used for module auto loading */
@@ -280,7 +326,7 @@ int snd_register_device(int type, struct snd_card *card, int dev,
 	}
 
 	preg->dev = device;
-	device->devt = MKDEV(major, minor);
+	device->devt = MKDEV(snd_major, minor);
 	err = device_add(device);
 	if (err < 0)
 		goto error;
@@ -396,18 +442,21 @@ static int __init alsa_sound_init(void)
 {
 	int err;
 
-	snd_major = major;
-	snd_ecards_limit = cards_limit;
+	if (!snd_major)
+		return -EINVAL;
 
-	err = register_chrdev(major, "alsa", &snd_fops);
+	snd_ecards_limit = snd_cards_limit;
+
+	err = register_chrdev(snd_major, "alsa", &snd_fops);
 	if (err < 0) {
-		pr_err("ALSA core: unable to register native major device number %d\n", major);
+		pr_err("ALSA core: unable to register native major device number %d\n",
+		       snd_major);
 		return err;
 	}
 
 	err = snd_info_init();
 	if (err < 0) {
-		unregister_chrdev(major, "alsa");
+		unregister_chrdev(snd_major, "alsa");
 		return err;
 	}
 
@@ -426,7 +475,7 @@ static void __exit alsa_sound_exit(void)
 	debugfs_remove(sound_debugfs_root);
 #endif
 	snd_info_done();
-	unregister_chrdev(major, "alsa");
+	unregister_chrdev(snd_major, "alsa");
 }
 
 subsys_initcall(alsa_sound_init);
