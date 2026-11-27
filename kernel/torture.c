@@ -195,6 +195,24 @@ int torture_num_online_cpus(void)
 EXPORT_SYMBOL_GPL(torture_num_online_cpus);
 
 /*
+ * If the CPU-hotplug failure is not the torture test's fault, return a
+ * string saying why it is forgiven.  Otherwise, return NULL.
+ */
+static const char *torture_onoff_forgive(int ret)
+{
+	// PCI probe frequently disables hotplug during boot.
+	if (!rcu_inkernel_boot_has_ended() && ret == -EBUSY)
+		return " (-EBUSY forgiven during boot)";
+	// Hotplug is forbidden, for example by SMT control.
+	if (ret == -EPERM)
+		return " (-EPERM forgiven, hotplug forbidden)";
+	// Something else, such as SMT control, already did the operation.
+	if (ret == 1)
+		return " (already in requested state, forgiven)";
+	return NULL;
+}
+
+/*
  * Attempt to take a CPU offline.  Return false if the CPU is already
  * offline or if it is not subject to CPU-hotplug operations.  The
  * caller can detect other failures by looking at the statistics.
@@ -204,7 +222,7 @@ bool torture_offline(int cpu, long *n_offl_attempts, long *n_offl_successes,
 {
 	unsigned long delta;
 	int ret;
-	char *s;
+	const char *s;
 	unsigned long starttime;
 
 	if (!cpu_online(cpu) || !cpu_is_hotpluggable(cpu))
@@ -220,12 +238,11 @@ bool torture_offline(int cpu, long *n_offl_attempts, long *n_offl_successes,
 	(*n_offl_attempts)++;
 	ret = remove_cpu(cpu);
 	if (ret) {
-		s = "";
-		if (!rcu_inkernel_boot_has_ended() && ret == -EBUSY) {
-			// PCI probe frequently disables hotplug during boot.
+		s = torture_onoff_forgive(ret);
+		if (s)
 			(*n_offl_attempts)--;
-			s = " (-EBUSY forgiven during boot)";
-		}
+		else
+			s = "";
 		if (verbose)
 			pr_alert("%s" TORTURE_FLAG
 				 "torture_onoff task: offline %d failed%s: errno %d\n",
@@ -266,7 +283,7 @@ bool torture_online(int cpu, long *n_onl_attempts, long *n_onl_successes,
 {
 	unsigned long delta;
 	int ret;
-	char *s;
+	const char *s;
 	unsigned long starttime;
 
 	if (cpu_online(cpu) || !cpu_is_hotpluggable(cpu))
@@ -280,12 +297,11 @@ bool torture_online(int cpu, long *n_onl_attempts, long *n_onl_successes,
 	(*n_onl_attempts)++;
 	ret = add_cpu(cpu);
 	if (ret) {
-		s = "";
-		if (!rcu_inkernel_boot_has_ended() && ret == -EBUSY) {
-			// PCI probe frequently disables hotplug during boot.
+		s = torture_onoff_forgive(ret);
+		if (s)
 			(*n_onl_attempts)--;
-			s = " (-EBUSY forgiven during boot)";
-		}
+		else
+			s = "";
 		if (verbose)
 			pr_alert("%s" TORTURE_FLAG
 				 "torture_onoff task: online %d failed%s: errno %d\n",
