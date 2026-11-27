@@ -8,6 +8,8 @@
 #define _LINUX_FTRACE_H
 
 #include <linux/trace_recursion.h>
+#include <linux/trace_controls.h>
+#include <linux/trace_printk.h>
 #include <linux/trace_clock.h>
 #include <linux/jump_label.h>
 #include <linux/kallsyms.h>

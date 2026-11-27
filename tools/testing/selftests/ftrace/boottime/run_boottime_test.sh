@@ -46,6 +46,8 @@ BUSYBOX_APPLETS=(
 	grep
 	sleep
 	sed
+	dmesg
+	basename
 )
 
 usage() {

@@ -623,6 +623,23 @@ TRACE_EVENT(foo_timer_fn,
 
 	TP_printk("name=%s count=%d", __get_str(name), __entry->count)
 );
+
+TRACE_EVENT(foo_tracepoint_str,
+
+	TP_PROTO(const char *str),
+
+	TP_ARGS(str),
+
+	TP_STRUCT__entry(
+		__field(const char *, str)
+	),
+
+	TP_fast_assign(
+		__entry->str = str;
+	),
+
+	TP_printk("str=%s", __entry->str)
+);
 #endif
 
 /***** NOTICE! The #if protection ends here. *****/

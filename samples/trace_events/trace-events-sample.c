@@ -51,6 +51,9 @@ static void do_simple_thread_func(int cnt, const char *fmt, ...)
 	trace_foo_with_template_print("I have to be different", cnt);
 
 	trace_foo_rel_loc("Hello __rel_loc", cnt, bitmask, current->cpus_ptr);
+
+	trace_foo_tracepoint_str(tracepoint_string("tracepoint_string_test_module_string_1"));
+	trace_foo_tracepoint_str(tracepoint_string("tracepoint_string_test_module_string_2"));
 }
 
 static void simple_thread_func(int cnt)

@@ -342,6 +342,14 @@ static int tracefs_apply_options(struct super_block *sb, bool remount)
 		srcu_idx = eventfs_remount_lock();
 		rcu_read_lock();
 		list_for_each_entry_rcu(ti, &tracefs_inodes, list) {
+
+			/*
+			 * Ignore read-only eventfs inodes as they are not
+			 * part of tracefs.
+			 */
+			if (ti->flags & TRACEFS_RO_EVENT_INODE)
+				continue;
+
 			if (update_uid) {
 				ti->flags &= ~TRACEFS_UID_PERM_SET;
 				ti->vfs_inode.i_uid = fsi->uid;
@@ -410,7 +418,7 @@ static int tracefs_drop_inode(struct inode *inode)
 	 * gets freed after an SRCU cycle, so the content will still
 	 * be safe if the iteration is going on now.
 	 */
-	ti->flags &= ~TRACEFS_EVENT_INODE;
+	ti->flags &= ~(TRACEFS_EVENT_INODE | TRACEFS_RO_EVENT_INODE);
 
 	return 1;
 }
@@ -422,6 +430,14 @@ static const struct super_operations tracefs_super_operations = {
 	.drop_inode     = tracefs_drop_inode,
 	.statfs		= simple_statfs,
 	.show_options	= tracefs_show_options,
+};
+
+const struct super_operations eventfs_ro_super_operations = {
+	.alloc_inode    = tracefs_alloc_inode,
+	.free_inode     = tracefs_free_inode,
+	.destroy_inode  = tracefs_destroy_inode,
+	.drop_inode     = tracefs_drop_inode,
+	.statfs		= simple_statfs,
 };
 
 /*
@@ -456,7 +472,7 @@ static int tracefs_d_delete(const struct dentry *dentry)
 	return dentry->d_fsdata == NULL;
 }
 
-static const struct dentry_operations tracefs_dentry_operations = {
+const struct dentry_operations tracefs_dentry_operations = {
 	.d_revalidate = tracefs_d_revalidate,
 	.d_release = tracefs_d_release,
 	.d_delete = tracefs_d_delete,
@@ -804,8 +820,15 @@ static int __init tracefs_init(void)
 		return -EINVAL;
 
 	retval = register_filesystem(&trace_fs_type);
-	if (!retval)
-		tracefs_registered = true;
+	if (retval)
+		return retval;
+	tracefs_registered = true;
+
+	retval = sysfs_create_mount_point(kernel_kobj, "events");
+	if (retval)
+		return retval;
+
+	retval = register_filesystem(&eventfs_ro_fs_type);
 
 	return retval;
 }

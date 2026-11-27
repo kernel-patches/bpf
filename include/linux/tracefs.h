@@ -68,6 +68,8 @@ typedef void (*eventfs_release)(const char *name, void *data);
  * struct eventfs_entry - dynamically created eventfs file call back handler
  * @name:	Then name of the dynamic file in an eventfs directory
  * @callback:	The callback to get the fops of the file when it is created
+ * @release:	The callback when the fops of the file is released
+ * @read_only:	Set if this file can be part of the read-only eventfs file system
  *
  * See evenfs_callback() typedef for how to set up @callback.
  */
@@ -75,6 +77,7 @@ struct eventfs_entry {
 	const char			*name;
 	eventfs_callback		callback;
 	eventfs_release			release;
+	bool				read_only;
 };
 
 struct eventfs_inode;
@@ -86,6 +89,8 @@ struct eventfs_inode *eventfs_create_events_dir(const char *name, struct dentry 
 struct eventfs_inode *eventfs_create_dir(const char *name, struct eventfs_inode *parent,
 					 const struct eventfs_entry *entries,
 					 int size, void *data);
+
+int eventfs_create_events_ro_copy(struct eventfs_inode *ei);
 
 void eventfs_remove_events_dir(struct eventfs_inode *ei);
 void eventfs_remove_dir(struct eventfs_inode *ei);
