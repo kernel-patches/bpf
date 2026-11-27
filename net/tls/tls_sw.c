@@ -1121,9 +1121,11 @@ tls_rx_rec_wait(struct sock *sk, bool nonblock, bool released, bool has_copied)
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_sw_context_rx *ctx = tls_sw_ctx_rx(tls_ctx);
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
-	int ret = 0;
+	int ret;
 	long timeo;
 
+retry:
+	ret = 0;
 	/* a rekey is pending, let userspace deal with it */
 	if (unlikely(ctx->key_update_pending))
 		return -EKEYEXPIRED;
@@ -1184,8 +1186,10 @@ tls_rx_rec_wait(struct sock *sk, bool nonblock, bool released, bool has_copied)
 			return sock_intr_errno(timeo);
 	}
 
-	if (unlikely(!tls_strp_msg_load(&ctx->strp, released)))
-		return tls_rx_rec_wait(sk, nonblock, false, has_copied);
+	if (unlikely(!tls_strp_msg_load(&ctx->strp, released))) {
+		released = false;
+		goto retry;
+	}
 
 	return 1;
 }
