@@ -881,6 +881,7 @@ struct rtl8365mb_port {
  * @pcs: PCS for the SerDes external interface
  * @sds_supported: SerDes tuning parameters match the chip option, so the
  *                 SerDes interface modes can be advertised
+ * @sds_in_use: the SerDes external interface has been configured
  *
  * Private data for this driver.
  */
@@ -893,6 +894,7 @@ struct rtl8365mb {
 	struct rtl8365mb_port ports[RTL8365MB_MAX_NUM_PORTS];
 	struct phylink_pcs pcs;
 	bool sds_supported;
+	bool sds_in_use;
 };
 
 #define pcs_to_rtl8365mb(_pcs) container_of((_pcs), struct rtl8365mb, pcs)
@@ -1403,6 +1405,24 @@ static int rtl8365mb_sds_raise_rate_limits(struct realtek_priv *priv)
 				  RTL8365MB_PORT6_EGRESSBW_CTRL1_MASK);
 }
 
+/* Reset the SerDes data path and resync its PLL, mirroring what the vendor
+ * firmware does right after deasserting the SerDes reset. This flushes the
+ * FIFOs and ensures a clean state for the link, preventing silent drops and
+ * CRC errors.
+ */
+static int rtl8365mb_sds_reset_datapath(struct realtek_priv *priv)
+{
+	int ret;
+
+	ret = rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_BMCR,
+				  RTL8365MB_SDS_BMCR_DPRST_PHASE1);
+	if (ret)
+		return ret;
+
+	return rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_BMCR,
+				   RTL8365MB_SDS_BMCR_DPRST_PHASE2);
+}
+
 static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 				phy_interface_t interface,
 				const unsigned long *advertising,
@@ -1490,18 +1510,7 @@ static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 	if (ret)
 		return ret;
 
-	/* Reset the SerDes data path and resync its PLL, mirroring what the
-	 * vendor firmware does right after deasserting the SerDes reset.
-	 * This flushes the FIFOs and ensures a clean state for the link,
-	 * preventing silent drops and CRC errors.
-	 */
-	ret = rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_BMCR,
-				  RTL8365MB_SDS_BMCR_DPRST_PHASE1);
-	if (ret)
-		return ret;
-
-	ret = rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_BMCR,
-				  RTL8365MB_SDS_BMCR_DPRST_PHASE2);
+	ret = rtl8365mb_sds_reset_datapath(priv);
 	if (ret)
 		return ret;
 
@@ -1515,7 +1524,13 @@ static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 	val &= ~RTL8365MB_SDS_NWAY_EN_MASK;
 	val |= RTL8365MB_SDS_NWAY_RESTART_MASK;
 
-	return rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_NWAY, val);
+	ret = rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_NWAY, val);
+	if (ret)
+		return ret;
+
+	mb->sds_in_use = true;
+
+	return 0;
 }
 
 static bool rtl8365mb_interface_is_serdes(phy_interface_t interface)
@@ -3102,6 +3117,29 @@ static int rtl8365mb_reset_chip(struct realtek_priv *priv)
 					20000, 1e6);
 }
 
+/* The SerDes is configured from phylink long before the conduit Ethernet
+ * controller starts transmitting on the link, so its receiver initially locks
+ * on an idle line. On an RTL8367S connected to an IPQ5018 over HSGMII this
+ * regularly left the switch receiving every frame from the CPU with an FCS
+ * error. Reset the SerDes data path again once the conduit is up.
+ */
+static void rtl8365mb_conduit_state_change(struct dsa_switch *ds,
+					   const struct net_device *conduit,
+					   bool operational)
+{
+	struct realtek_priv *priv = ds->priv;
+	struct rtl8365mb *mb = priv->chip_data;
+	int ret;
+
+	if (!operational || !mb->sds_in_use)
+		return;
+
+	ret = rtl8365mb_sds_reset_datapath(priv);
+	if (ret)
+		dev_err(priv->dev, "failed to reset SerDes data path: %pe\n",
+			ERR_PTR(ret));
+}
+
 static int rtl8365mb_setup(struct dsa_switch *ds)
 {
 	struct realtek_priv *priv = ds->priv;
@@ -3116,6 +3154,7 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 	cpu = &mb->cpu;
 
 	mb->pcs.ops = &rtl8365mb_pcs_ops;
+	mb->sds_in_use = false;
 
 	/* The SerDes has no link interrupt wired up, so phylink must poll the
 	 * PCS for link changes when it tracks the link through pcs_get_state()
@@ -3467,6 +3506,7 @@ static int rtl8365mb_set_mac_eee(struct dsa_switch *ds, int port,
 }
 
 static const struct dsa_switch_ops rtl8365mb_switch_ops = {
+	.conduit_state_change = rtl8365mb_conduit_state_change,
 	.get_tag_protocol = rtl8365mb_get_tag_protocol,
 	.change_tag_protocol = rtl8365mb_change_tag_protocol,
 	.setup = rtl8365mb_setup,
