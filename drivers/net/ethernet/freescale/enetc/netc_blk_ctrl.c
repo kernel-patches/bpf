@@ -482,13 +482,47 @@ static int netc_get_emdio_phy_mask(struct device_node *np, u32 *phy_mask)
 	return 0;
 }
 
-static int imx95_enetc_mdio_phyaddr_config(struct platform_device *pdev)
+static int netc_enetc_mdio_phyaddr_config(struct netc_blk_ctrl *priv,
+					  struct device_node *np,
+					  u32 phy_mask)
+{
+	struct device *dev = &priv->pdev->dev;
+	int link_id, addr;
+
+	link_id = netc_of_get_link_id(priv, np);
+	if (link_id < 0) {
+		dev_err(dev, "Failed to get link ID\n");
+		return link_id;
+	}
+
+	addr = netc_get_phy_addr(np);
+	if (addr < 0) {
+		if (addr == -ENODEV)
+			return 0;
+
+		dev_err(dev, "Failed to get PHY address\n");
+		return addr;
+	}
+
+	if (phy_mask & BIT(addr)) {
+		dev_err(dev,
+			"Find same PHY address in EMDIO and ENETC node\n");
+		return -EINVAL;
+	}
+
+	netc_reg_write(priv->ierb, IERB_LBCR(link_id),
+		       LBCR_MDIO_PHYAD_PRTAD(addr));
+
+	return 0;
+}
+
+static int netc_ierb_enetc_mdio_phyaddr_config(struct platform_device *pdev)
 {
 	struct netc_blk_ctrl *priv = platform_get_drvdata(pdev);
 	struct device_node *np = pdev->dev.of_node;
 	struct device *dev = &pdev->dev;
-	int bus_devfn, addr, err;
 	u32 phy_mask = 0;
+	int err;
 
 	err = netc_get_emdio_phy_mask(np, &phy_mask);
 	if (err) {
@@ -505,43 +539,10 @@ static int imx95_enetc_mdio_phyaddr_config(struct platform_device *pdev)
 			if (!of_device_is_compatible(gchild, "pci1131,e101"))
 				continue;
 
-			bus_devfn = netc_of_pci_get_bus_devfn(gchild);
-			if (bus_devfn < 0) {
-				dev_err(dev, "Failed to get BDF number\n");
-				return bus_devfn;
-			}
-
-			addr = netc_get_phy_addr(gchild);
-			if (addr < 0) {
-				if (addr == -ENODEV)
-					continue;
-
-				dev_err(dev, "Failed to get PHY address\n");
-				return addr;
-			}
-
-			if (phy_mask & BIT(addr)) {
-				dev_err(dev,
-					"Find same PHY address in EMDIO and ENETC node\n");
-				return -EINVAL;
-			}
-
-			switch (bus_devfn) {
-			case IMX95_ENETC0_BUS_DEVFN:
-				netc_reg_write(priv->ierb, IERB_LBCR(0),
-					       LBCR_MDIO_PHYAD_PRTAD(addr));
-				break;
-			case IMX95_ENETC1_BUS_DEVFN:
-				netc_reg_write(priv->ierb, IERB_LBCR(1),
-					       LBCR_MDIO_PHYAD_PRTAD(addr));
-				break;
-			case IMX95_ENETC2_BUS_DEVFN:
-				netc_reg_write(priv->ierb, IERB_LBCR(2),
-					       LBCR_MDIO_PHYAD_PRTAD(addr));
-				break;
-			default:
-				break;
-			}
+			err = netc_enetc_mdio_phyaddr_config(priv, gchild,
+							     phy_mask);
+			if (err)
+				return err;
 		}
 	}
 
@@ -575,7 +576,7 @@ static int imx95_ierb_init(struct platform_device *pdev)
 	/* NETC TIMER */
 	netc_reg_write(priv->ierb, IERB_T0FAUXR, 7);
 
-	return imx95_enetc_mdio_phyaddr_config(pdev);
+	return netc_ierb_enetc_mdio_phyaddr_config(pdev);
 }
 
 static int imx94_get_enetc_id(struct device_node *np)
@@ -650,54 +651,6 @@ end:
 	return 0;
 }
 
-static int imx94_enetc_mdio_phyaddr_config(struct netc_blk_ctrl *priv,
-					   struct device_node *np,
-					   u32 phy_mask)
-{
-	struct device *dev = &priv->pdev->dev;
-	int bus_devfn, addr;
-
-	bus_devfn = netc_of_pci_get_bus_devfn(np);
-	if (bus_devfn < 0) {
-		dev_err(dev, "Failed to get BDF number\n");
-		return bus_devfn;
-	}
-
-	addr = netc_get_phy_addr(np);
-	if (addr < 0) {
-		if (addr == -ENODEV)
-			return 0;
-
-		dev_err(dev, "Failed to get PHY address\n");
-		return addr;
-	}
-
-	if (phy_mask & BIT(addr)) {
-		dev_err(dev,
-			"Find same PHY address in EMDIO and ENETC node\n");
-		return -EINVAL;
-	}
-
-	switch (bus_devfn) {
-	case IMX94_ENETC0_BUS_DEVFN:
-		netc_reg_write(priv->ierb, IERB_LBCR(IMX94_ENETC0_LINK),
-			       LBCR_MDIO_PHYAD_PRTAD(addr));
-		break;
-	case IMX94_ENETC1_BUS_DEVFN:
-		netc_reg_write(priv->ierb, IERB_LBCR(IMX94_ENETC1_LINK),
-			       LBCR_MDIO_PHYAD_PRTAD(addr));
-		break;
-	case IMX94_ENETC2_BUS_DEVFN:
-		netc_reg_write(priv->ierb, IERB_LBCR(IMX94_ENETC2_LINK),
-			       LBCR_MDIO_PHYAD_PRTAD(addr));
-		break;
-	default:
-		break;
-	}
-
-	return 0;
-}
-
 static int imx94_ierb_enetc_init(struct netc_blk_ctrl *priv,
 				 struct device_node *np,
 				 u32 phy_mask)
@@ -708,7 +661,7 @@ static int imx94_ierb_enetc_init(struct netc_blk_ctrl *priv,
 	if (err)
 		return err;
 
-	return imx94_enetc_mdio_phyaddr_config(priv, np, phy_mask);
+	return netc_enetc_mdio_phyaddr_config(priv, np, phy_mask);
 }
 
 static int imx94_switch_mdio_phyaddr_config(struct netc_blk_ctrl *priv,
