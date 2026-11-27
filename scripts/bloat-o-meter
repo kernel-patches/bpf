@@ -27,8 +27,8 @@ fields:
                 '-' means symbol added/removed;
                 '0' delta symbols not included.
 
-  Before:       size of all symbols in old file.
-  After:        size of all symbols in new file.
+  Before:       size of selected symbols in old file.
+  After:        size of selected symbols in new file.
   chg:          percent change.
 
   Symbols in both files with the same size are only counted in Before/After/chg.
