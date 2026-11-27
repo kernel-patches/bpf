@@ -1961,6 +1961,10 @@ static int rpmh_regulator_probe(struct platform_device *pdev)
 		if (ret < 0)
 			return ret;
 
+		/* Keep a mode already applied by set_machine_constraints() */
+		if (vreg->mode != REGULATOR_MODE_INVALID)
+			continue;
+
 		ret = rpmh_regulator_determine_initial_mode(vreg);
 		if (ret < 0)
 			dev_err(dev, "failed to read initial mode for %s\n",

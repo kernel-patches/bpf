@@ -851,13 +851,13 @@ static int pcm3168a_rt_resume(struct device *dev)
 		goto err_clk;
 	}
 
+	regcache_cache_only(pcm3168a->regmap, false);
+
 	ret = pcm3168a_reset(pcm3168a);
 	if (ret) {
 		dev_err(dev, "Failed to reset device: %d\n", ret);
 		goto err_regulator;
 	}
-
-	regcache_cache_only(pcm3168a->regmap, false);
 
 	regcache_mark_dirty(pcm3168a->regmap);
 
@@ -870,6 +870,7 @@ static int pcm3168a_rt_resume(struct device *dev)
 	return 0;
 
 err_regulator:
+	regcache_cache_only(pcm3168a->regmap, true);
 	regulator_bulk_disable(ARRAY_SIZE(pcm3168a->supplies),
 			       pcm3168a->supplies);
 err_clk:
