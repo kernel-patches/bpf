@@ -13,6 +13,7 @@ static const struct sparx5_main_io_resource lan969x_main_iomap[] =  {
 	{ TARGET_CPU,                   0xc0000, 0 }, /* 0xe00c0000 */
 	{ TARGET_FDMA,                  0xc0400, 0 }, /* 0xe00c0400 */
 	{ TARGET_GCB,                 0x2010000, 1 }, /* 0xe2010000 */
+	{ TARGET_CHIP_TOP,            0x2020000, 1 }, /* 0xe2020000 */
 	{ TARGET_QS,                  0x2030000, 1 }, /* 0xe2030000 */
 	{ TARGET_PTP,                 0x2040000, 1 }, /* 0xe2040000 */
 	{ TARGET_ANA_ACL,             0x2050000, 1 }, /* 0xe2050000 */
@@ -177,6 +178,15 @@ static u32 lan969x_port_dev_mapping(struct sparx5 *sparx5, int port)
 			return 8;
 		case 27:
 			return 9;
+		}
+	}
+
+	if (lan969x_port_is_rgmii(port)) {
+		switch (port) {
+		case 28:
+			return 0;
+		case 29:
+			return 1;
 		}
 	}
 
@@ -347,6 +357,7 @@ static const struct sparx5_ops lan969x_ops = {
 	.fdma_deinit             = &lan969x_fdma_deinit,
 	.fdma_poll               = &lan969x_fdma_napi_poll,
 	.fdma_xmit               = &lan969x_fdma_xmit,
+	.fdma_resize             = &lan969x_fdma_resize,
 };
 
 const struct sparx5_match_data lan969x_desc = {

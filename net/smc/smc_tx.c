@@ -148,7 +148,7 @@ static bool smc_should_autocork(struct smc_sock *smc)
 	int corking_size;
 
 	corking_size = min_t(unsigned int, conn->sndbuf_desc->len >> 1,
-			     sock_net(&smc->sk)->smc.sysctl_autocorking_size);
+			     READ_ONCE(sock_net(&smc->sk)->smc.sysctl_autocorking_size));
 
 	if (atomic_read(&conn->cdc_pend_tx_wr) == 0 ||
 	    smc_tx_prepared_sends(conn) > corking_size)
@@ -393,9 +393,9 @@ static int smcr_tx_rdma_writes(struct smc_connection *conn, size_t len,
 			sge[srcchunk].addr = conn->sndbuf_desc->is_vm ?
 				(virt_addr + src_off) : (base_addr + src_off);
 			sge[srcchunk].length = src_len;
-			if (conn->sndbuf_desc->is_vm)
-				sge[srcchunk].lkey =
-					conn->sndbuf_desc->mr[link->link_idx]->lkey;
+			sge[srcchunk].lkey = conn->sndbuf_desc->is_vm ?
+				conn->sndbuf_desc->mr[link->link_idx]->lkey :
+				link->roce_pd->local_dma_lkey;
 			num_sges++;
 
 			src_off += src_len;

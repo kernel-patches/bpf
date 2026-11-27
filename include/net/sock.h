@@ -124,6 +124,7 @@ typedef __u64 __bitwise __addrpair;
  *	@skc_ipv6only: socket is IPV6 only
  *	@skc_net_refcnt: socket is using net ref counting
  *	@skc_bypass_prot_mem: bypass the per-protocol memory accounting for skb
+ *	@skc_unused: unused bits
  *	@skc_bound_dev_if: bound device index if != 0
  *	@skc_bind_node: bind hash linkage for various protocol lookup tables
  *	@skc_portaddr_node: second hash linkage for UDP
@@ -176,11 +177,12 @@ struct sock_common {
 
 	unsigned short		skc_family;
 	volatile unsigned char	skc_state;
-	unsigned char		skc_reuse:4;
+	unsigned char		skc_reuse:2;
 	unsigned char		skc_reuseport:1;
 	unsigned char		skc_ipv6only:1;
 	unsigned char		skc_net_refcnt:1;
 	unsigned char		skc_bypass_prot_mem:1;
+	unsigned char		skc_unused:2;
 	int			skc_bound_dev_if;
 	union {
 		struct hlist_node	skc_bind_node;
@@ -357,6 +359,7 @@ struct sk_filter;
   *	@sk_scm_pidfd: flagged by SO_PASSPIDFD to recv SCM_PIDFD
   *	@sk_scm_rights: flagged by SO_PASSRIGHTS to recv SCM_RIGHTS
   *	@sk_scm_pidfd_thread: flagged by SO_PASSPIDFD_THREAD to recv a thread SCM_PIDFD
+  *	@sk_scm_credentials_thread: flagged by SO_PASSCRED_THREAD to recv SCM_CREDENTIALS_THREAD
   *	@sk_scm_unused: unused flags for scm_recv()
   *	@ns_tracker: tracker for netns reference
   *	@sk_user_frags: xarray of pages the user is holding a reference on.
@@ -564,7 +567,8 @@ struct sock {
 				sk_scm_pidfd : 1,
 				sk_scm_rights : 1,
 				sk_scm_pidfd_thread : 1,
-				sk_scm_unused : 3;
+				sk_scm_credentials_thread : 1,
+				sk_scm_unused : 2;
 		};
 	};
 	u8			sk_clockid;
@@ -1553,7 +1557,10 @@ static inline struct inode *SOCK_INODE(struct socket *socket)
 /*
  * Functions for memory accounting
  */
-int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind);
+enum skb_drop_reason __sk_mem_raise_allocated_reason(struct sock *sk, int size,
+						     int amt, int kind);
+enum skb_drop_reason __sk_mem_schedule_reason(struct sock *sk, int size,
+					      int kind);
 int __sk_mem_schedule(struct sock *sk, int size, int kind);
 void __sk_mem_reduce_allocated(struct sock *sk, int amount);
 void __sk_mem_reclaim(struct sock *sk, int amount);
@@ -1588,16 +1595,35 @@ static inline bool sk_wmem_schedule(struct sock *sk, int size)
 	return delta <= 0 || __sk_mem_schedule(sk, delta, SK_MEM_SEND);
 }
 
-static inline bool
-__sk_rmem_schedule(struct sock *sk, int size, bool pfmemalloc)
+/* Return SKB_NOT_DROPPED_YET on success, or the drop reason. */
+static inline enum skb_drop_reason
+__sk_rmem_schedule_reason(struct sock *sk, int size, bool pfmemalloc)
 {
+	enum skb_drop_reason reason;
 	int delta;
 
 	if (!sk_has_account(sk))
-		return true;
+		return SKB_NOT_DROPPED_YET;
 	delta = size - sk->sk_forward_alloc;
-	return delta <= 0 || __sk_mem_schedule(sk, delta, SK_MEM_RECV) ||
-	       pfmemalloc;
+	if (delta <= 0)
+		return SKB_NOT_DROPPED_YET;
+	reason = __sk_mem_schedule_reason(sk, delta, SK_MEM_RECV);
+	if (reason && pfmemalloc)
+		return SKB_NOT_DROPPED_YET;
+	return reason;
+}
+
+static inline bool
+__sk_rmem_schedule(struct sock *sk, int size, bool pfmemalloc)
+{
+	return __sk_rmem_schedule_reason(sk, size, pfmemalloc) ==
+	       SKB_NOT_DROPPED_YET;
+}
+
+static inline enum skb_drop_reason
+sk_rmem_schedule_reason(struct sock *sk, const struct sk_buff *skb, int size)
+{
+	return __sk_rmem_schedule_reason(sk, size, skb_pfmemalloc(skb));
 }
 
 static inline bool
