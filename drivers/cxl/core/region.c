@@ -144,6 +144,26 @@ static const struct attribute_group *get_cxl_region_access1_group(void)
 	return &cxl_region_access1_coordinate_group;
 }
 
+/*
+ * Region access attributes depend on calculated performance data, not
+ * NUMA node onlining. Re-evaluate visibility after region completion.
+ */
+static void cxl_region_update_access_groups(struct cxl_region *cxlr)
+{
+	if (sysfs_update_group(&cxlr->dev.kobj, get_cxl_region_access0_group()))
+		dev_dbg(&cxlr->dev, "Failed to update access0 group\n");
+
+	if (sysfs_update_group(&cxlr->dev.kobj, get_cxl_region_access1_group()))
+		dev_dbg(&cxlr->dev, "Failed to update access1 group\n");
+}
+
+static void cxl_region_perf_data_complete(struct cxl_region *cxlr)
+{
+	cxl_region_perf_data_update(cxlr);
+	cxl_region_shared_upstream_bandwidth_update(cxlr);
+	cxl_region_update_access_groups(cxlr);
+}
+
 static ssize_t uuid_show(struct device *dev, struct device_attribute *attr,
 			 char *buf)
 {
@@ -313,7 +333,24 @@ static int commit_decoder(struct cxl_decoder *cxld)
 static int cxl_region_decode_commit(struct cxl_region *cxlr)
 {
 	struct cxl_region_params *p = &cxlr->params;
+	bool hdm_db;
 	int i, rc = 0;
+
+	hdm_db = cxlr->type == CXL_DECODER_DEVMEM &&
+		 cxl_root_decoder_is_bi(cxlr->cxlrd);
+
+	/* a reset since attach may have invalidated cxlds->bi */
+	for (i = 0; i < p->nr_targets; i++) {
+		struct cxl_endpoint_decoder *cxled = p->targets[i];
+		struct cxl_memdev *cxlmd = cxled_to_memdev(cxled);
+
+		if (hdm_db && !READ_ONCE(cxlmd->cxlds->bi)) {
+			dev_err(&cxlr->dev, "%s:%s BI not enabled on device\n",
+				dev_name(&cxlmd->dev),
+				dev_name(&cxled->cxld.dev));
+			return -ENXIO;
+		}
+	}
 
 	for (i = 0; i < p->nr_targets; i++) {
 		struct cxl_endpoint_decoder *cxled = p->targets[i];
@@ -344,6 +381,22 @@ static int cxl_region_decode_commit(struct cxl_region *cxlr)
 			}
 
 			cxled->cxld.reset(&cxled->cxld);
+			goto err;
+		}
+
+		/*
+		 * A reset after the check above wipes BI Enable, but
+		 * cxlds->bi is only refreshed from .reset_done, which may
+		 * not have run. Ask the hardware.
+		 */
+		if (hdm_db && !cxl_bi_decoder_enabled(cxled_to_port(cxled))) {
+			dev_err(&cxlr->dev,
+				"%s:%s BI disabled by reset during commit\n",
+				dev_name(&cxlmd->dev),
+				dev_name(&cxled->cxld.dev));
+			WRITE_ONCE(cxlmd->cxlds->bi, false);
+			rc = -ENXIO;
+			i++; /* this target committed, so undo it too */
 			goto err;
 		}
 	}
@@ -493,11 +546,9 @@ static int set_interleave_ways(struct cxl_region *cxlr, int val)
 	struct cxl_decoder *cxld = &cxlrd->cxlsd.cxld;
 	struct cxl_region_params *p = &cxlr->params;
 	int save, rc;
-	u8 iw;
 
-	rc = ways_to_eiw(val, &iw);
-	if (rc)
-		return rc;
+	if (!ways_valid(val))
+		return -EINVAL;
 
 	/*
 	 * Even for x3, x6, and x12 interleaves the region interleave must be a
@@ -566,23 +617,20 @@ static int set_interleave_granularity(struct cxl_region *cxlr, int val)
 	struct cxl_root_decoder *cxlrd = cxlr->cxlrd;
 	struct cxl_decoder *cxld = &cxlrd->cxlsd.cxld;
 	struct cxl_region_params *p = &cxlr->params;
-	int rc;
-	u16 ig;
 
-	rc = granularity_to_eig(val, &ig);
-	if (rc)
-		return rc;
+	if (!granularity_valid(val))
+		return -EINVAL;
 
 	/*
-	 * When the host-bridge is interleaved, disallow region granularity !=
-	 * root granularity. Regions with a granularity less than the root
-	 * interleave result in needing multiple endpoints to support a single
-	 * slot in the interleave (possible to support in the future). Regions
-	 * with a granularity greater than the root interleave result in invalid
-	 * DPA translations (invalid to support).
+	 * Region granularity coarser than the root produces invalid endpoint
+	 * address translations.
 	 */
-	if (cxld->interleave_ways > 1 && val != cxld->interleave_granularity)
+	if (cxld->interleave_ways > 1 && val > cxld->interleave_granularity) {
+		dev_dbg(&cxlr->dev,
+			"cannot set granularity to %d: exceeds root decoder granularity %d\n",
+			val, cxld->interleave_granularity);
 		return -EINVAL;
+	}
 
 	lockdep_assert_held_write(&cxl_rwsem.region);
 
@@ -1132,16 +1180,11 @@ static int cxl_rr_assign_decoder(struct cxl_port *port, struct cxl_region *cxlr,
 	}
 
 	/*
-	 * Endpoints should already match the region type, but backstop that
-	 * assumption with an assertion. Switch-decoders change mapping-type
-	 * based on what is mapped when they are assigned to a region.
+	 * Endpoint decoders inherit their type from cxlr->type; broken
+	 * pairings were already rejected by the coherency checks in
+	 * cxl_region_attach(). Switch-decoders change mapping-type based
+	 * on what is mapped when they are assigned to a region.
 	 */
-	dev_WARN_ONCE(&cxlr->dev,
-		      port == cxled_to_port(cxled) &&
-			      cxld->target_type != cxlr->type,
-		      "%s:%s mismatch decoder type %d -> %d\n",
-		      dev_name(&cxled_to_memdev(cxled)->dev),
-		      dev_name(&cxld->dev), cxld->target_type, cxlr->type);
 	cxld->target_type = cxlr->type;
 	cxl_rr->decoder = cxld;
 	return 0;
@@ -1437,137 +1480,200 @@ static int check_interleave_cap(struct cxl_decoder *cxld, int iw, int ig)
 	return 0;
 }
 
-static int cxl_port_setup_targets(struct cxl_port *port,
-				  struct cxl_region *cxlr,
-				  struct cxl_endpoint_decoder *cxled)
+static int check_root_interleave(struct cxl_region *cxlr)
 {
-	struct cxl_root_decoder *cxlrd = cxlr->cxlrd;
-	int parent_iw, parent_ig, ig, iw, rc, pos = cxled->pos;
-	struct cxl_port *parent_port = to_cxl_port(port->dev.parent);
-	struct cxl_region_ref *cxl_rr = cxl_rr_load(port, cxlr);
-	struct cxl_memdev *cxlmd = cxled_to_memdev(cxled);
-	struct cxl_ep *ep = cxl_ep_load(port, cxlmd);
+	struct cxl_decoder *cxld = &cxlr->cxlrd->cxlsd.cxld;
 	struct cxl_region_params *p = &cxlr->params;
-	struct cxl_decoder *cxld = cxl_rr->decoder;
-	struct cxl_switch_decoder *cxlsd;
-	struct cxl_port *iter = port;
-	u16 eig, peig;
-	u8 eiw, peiw;
+	int root_ig = cxld->interleave_granularity;
+	int root_iw = cxld->interleave_ways;
+
+	if (root_iw == 1)
+		return 0;
+
+	if (p->interleave_granularity > root_ig) {
+		dev_dbg(&cxlr->dev,
+			"granularity %d exceeds root decoder granularity %d\n",
+			p->interleave_granularity, root_ig);
+		return -ENXIO;
+	}
 
 	/*
-	 * While root level decoders support x3, x6, x12, switch level
-	 * decoders only support powers of 2 up to x16.
+	 * A same-granularity region below a power-of-two root may repeat
+	 * the root targets, spanning a multiple of the root span.
 	 */
-	if (!is_power_of_2(cxl_rr->nr_targets)) {
-		dev_dbg(&cxlr->dev, "%s:%s: invalid target count %d\n",
-			dev_name(port->uport_dev), dev_name(&port->dev),
-			cxl_rr->nr_targets);
-		return -EINVAL;
+	if (is_power_of_2(root_iw) && p->interleave_granularity == root_ig)
+		return 0;
+
+	/* Span is one complete pass through the interleave pattern */
+	if (root_iw * root_ig != p->interleave_ways * p->interleave_granularity) {
+		dev_dbg(&cxlr->dev,
+			"region span %d (%d ways at %d) does not match root span %d (%d ways at %d)\n",
+			p->interleave_ways * p->interleave_granularity,
+			p->interleave_ways, p->interleave_granularity,
+			root_iw * root_ig, root_iw, root_ig);
+		return -ENXIO;
 	}
 
-	cxlsd = to_cxl_switch_decoder(&cxld->dev);
-	if (cxl_rr->nr_targets_set) {
-		int i, distance = 1;
-		struct cxl_region_ref *cxl_rr_iter;
+	return 0;
+}
 
-		/*
-		 * The "distance" between peer downstream ports represents which
-		 * endpoint positions in the region interleave a given port can
-		 * host.
-		 *
-		 * For example, at the root of a hierarchy the distance is
-		 * always 1 as every index targets a different host-bridge. At
-		 * each subsequent switch level those ports map every Nth region
-		 * position where N is the width of the switch == distance.
-		 */
-		do {
-			cxl_rr_iter = cxl_rr_load(iter, cxlr);
-			distance *= cxl_rr_iter->nr_targets;
-			iter = to_cxl_port(iter->dev.parent);
-		} while (!is_cxl_root(iter));
-		distance *= cxlrd->cxlsd.cxld.interleave_ways;
+/* Region IG is finer than the IG of its interleaving root decoder */
+static bool cxl_region_is_finer_than_root(struct cxl_region *cxlr)
+{
+	struct cxl_decoder *cxld = &cxlr->cxlrd->cxlsd.cxld;
 
-		for (i = 0; i < cxl_rr->nr_targets_set; i++)
-			if (ep->dport == cxlsd->target[i]) {
-				rc = check_last_peer(cxled, ep, cxl_rr,
-						     distance);
-				if (rc)
-					return rc;
-				goto out_target_set;
-			}
-		goto add_target;
-	}
+	return cxld->interleave_ways > 1 &&
+	       cxld->interleave_granularity > cxlr->params.interleave_granularity;
+}
+
+/*
+ * The "distance" between peer downstream ports represents which
+ * endpoint positions in the region interleave a given port can
+ * host.
+ *
+ * For example, at the root of a hierarchy the distance is
+ * always 1 as every index targets a different host-bridge. At
+ * each subsequent switch level those ports map every Nth region
+ * position where N is the width of the switch == distance.
+ */
+static int cxl_port_peer_distance(struct cxl_port *port, struct cxl_region *cxlr)
+{
+	struct cxl_root_decoder *cxlrd = cxlr->cxlrd;
+	struct cxl_region_ref *cxl_rr_iter;
+	struct cxl_port *iter = port;
+	int distance = 1;
+
+	/*
+	 * A finer-than-root region refines toward the endpoints, so peer
+	 * targets at the finest interleaving level occupy consecutive region
+	 * positions.
+	 */
+	if (cxl_region_is_finer_than_root(cxlr))
+		return 1;
+
+	do {
+		cxl_rr_iter = cxl_rr_load(iter, cxlr);
+		distance *= cxl_rr_iter->nr_targets;
+		iter = to_cxl_port(iter->dev.parent);
+	} while (!is_cxl_root(iter));
+	distance *= cxlrd->cxlsd.cxld.interleave_ways;
+
+	return distance;
+}
+
+/*
+ * Get the parent interleave ways and granularity.
+ *
+ * For address bit routing, use power-of-2 math for switch ports.
+ * Root interleave ways of 3, 6, or 12 are normalized to 1, 2, or 4
+ * in @out_iw.
+ */
+static int cxl_port_parent_interleave(struct cxl_port *port,
+				      struct cxl_region *cxlr,
+				      int *out_iw, int *out_ig)
+{
+	struct cxl_port *parent_port = to_cxl_port(port->dev.parent);
+	struct cxl_root_decoder *cxlrd = cxlr->cxlrd;
+	struct cxl_region_params *p = &cxlr->params;
+	int parent_iw, parent_ig;
 
 	if (is_cxl_root(parent_port)) {
-		/*
-		 * Root decoder IG is always set to value in CFMWS which
-		 * may be different than this region's IG.  We can use the
-		 * region's IG here since interleave_granularity_store()
-		 * does not allow interleaved host-bridges with
-		 * root IG != region IG.
-		 */
-		parent_ig = p->interleave_granularity;
 		parent_iw = cxlrd->cxlsd.cxld.interleave_ways;
-		/*
-		 * For purposes of address bit routing, use power-of-2 math for
-		 * switch ports.
-		 */
+		if (parent_iw > 1) {
+			parent_ig = cxlrd->cxlsd.cxld.interleave_granularity;
+		} else {
+			/*
+			 * A single-way root does not interleave, so its
+			 * granularity does not constrain the region interleave.
+			 * Use the region granularity instead.
+			 */
+			parent_ig = p->interleave_granularity;
+		}
 		if (!is_power_of_2(parent_iw))
 			parent_iw /= 3;
 	} else {
 		struct cxl_region_ref *parent_rr;
-		struct cxl_decoder *parent_cxld;
 
+		/*
+		 * The granularity of a passthrough (iw == 1) decoder is a
+		 * hardware don't-care, so use the parent port's effective
+		 * interleave state rather than the parent decoder's settings.
+		 */
 		parent_rr = cxl_rr_load(parent_port, cxlr);
-		parent_cxld = parent_rr->decoder;
-		parent_ig = parent_cxld->interleave_granularity;
-		parent_iw = parent_cxld->interleave_ways;
+		parent_ig = parent_rr->eff_ig;
+		parent_iw = parent_rr->eff_iw;
 	}
 
-	rc = granularity_to_eig(parent_ig, &peig);
-	if (rc) {
+	if (!granularity_valid(parent_ig)) {
 		dev_dbg(&cxlr->dev, "%s:%s: invalid parent granularity: %d\n",
 			dev_name(parent_port->uport_dev),
 			dev_name(&parent_port->dev), parent_ig);
-		return rc;
+		return -EINVAL;
 	}
 
-	rc = ways_to_eiw(parent_iw, &peiw);
-	if (rc) {
+	if (!ways_valid(parent_iw)) {
 		dev_dbg(&cxlr->dev, "%s:%s: invalid parent interleave: %d\n",
 			dev_name(parent_port->uport_dev),
 			dev_name(&parent_port->dev), parent_iw);
-		return rc;
+		return -EINVAL;
 	}
 
+	*out_iw = parent_iw;
+	*out_ig = parent_ig;
+
+	return 0;
+}
+
+static int cxl_port_calc_interleave(struct cxl_port *port, struct cxl_region *cxlr,
+				    struct cxl_region_ref *cxl_rr, int *out_iw,
+				    int *out_ig)
+{
+	struct cxl_region_params *p = &cxlr->params;
+	struct cxl_decoder *cxld = cxl_rr->decoder;
+	int parent_iw, parent_ig, iw, ig, rc;
+	struct cxl_switch_decoder *cxlsd;
+
+	rc = cxl_port_parent_interleave(port, cxlr, &parent_iw, &parent_ig);
+	if (rc)
+		return rc;
+
 	iw = cxl_rr->nr_targets;
-	rc = ways_to_eiw(iw, &eiw);
-	if (rc) {
+	if (!ways_valid(iw)) {
 		dev_dbg(&cxlr->dev, "%s:%s: invalid port interleave: %d\n",
 			dev_name(port->uport_dev), dev_name(&port->dev), iw);
-		return rc;
+		return -EINVAL;
 	}
 
 	/*
-	 * Interleave granularity is a multiple of @parent_port granularity.
-	 * Multiplier is the parent port interleave ways.
+	 * Finer-than-root regions refine granularity toward the endpoints.
+	 * Otherwise interleave granularity is a multiple of @parent_port
+	 * granularity, and the multiplier is the parent port interleave ways.
+	 * A passthrough decoder does not interleave, so it takes the parent
+	 * granularity.
 	 */
-	rc = granularity_to_eig(parent_ig * parent_iw, &eig);
-	if (rc) {
-		dev_dbg(&cxlr->dev,
-			"%s: invalid granularity calculation (%d * %d)\n",
-			dev_name(&parent_port->dev), parent_ig, parent_iw);
-		return rc;
+	if (cxl_region_is_finer_than_root(cxlr)) {
+		ig = parent_ig / iw;
+
+		if (ig < p->interleave_granularity) {
+			dev_dbg(&cxlr->dev,
+				"%s:%s: granularity %d is finer than region granularity %d\n",
+				dev_name(port->uport_dev), dev_name(&port->dev),
+				ig, p->interleave_granularity);
+			return -ENXIO;
+		}
+	} else if (iw == 1) {
+		ig = parent_ig;
+	} else {
+		ig = parent_ig * parent_iw;
 	}
 
-	rc = eig_to_granularity(eig, &ig);
-	if (rc) {
-		dev_dbg(&cxlr->dev, "%s:%s: invalid interleave: %d\n",
-			dev_name(port->uport_dev), dev_name(&port->dev),
-			256 << eig);
-		return rc;
+	if (!granularity_valid(ig)) {
+		dev_dbg(&cxlr->dev, "%s:%s: invalid granularity: %d\n",
+			dev_name(port->uport_dev), dev_name(&port->dev), ig);
+		return -EINVAL;
 	}
 
+	cxlsd = to_cxl_switch_decoder(&cxld->dev);
 	if (iw > 8 || iw > cxlsd->nr_targets) {
 		dev_dbg(&cxlr->dev,
 			"%s:%s:%s: ways: %d overflows targets: %d\n",
@@ -1575,6 +1681,24 @@ static int cxl_port_setup_targets(struct cxl_port *port,
 			dev_name(&cxld->dev), iw, cxlsd->nr_targets);
 		return -ENXIO;
 	}
+
+	if (iw == 1)
+		cxl_rr->eff_iw = parent_iw;
+	else
+		cxl_rr->eff_iw = iw;
+	cxl_rr->eff_ig = ig;
+
+	*out_iw = iw;
+	*out_ig = ig;
+
+	return 0;
+}
+
+static int cxl_port_setup_decoder(struct cxl_port *port, struct cxl_region *cxlr,
+				  struct cxl_decoder *cxld, int iw, int ig)
+{
+	struct cxl_region_params *p = &cxlr->params;
+	int rc;
 
 	if (test_bit(CXL_REGION_F_AUTO, &cxlr->flags)) {
 		if (cxld->interleave_ways != iw ||
@@ -1594,6 +1718,9 @@ static int cxl_port_setup_targets(struct cxl_port *port,
 				cxld->hpa_range.start, cxld->hpa_range.end);
 			return -ENXIO;
 		}
+		/* Report the effective granularity, not the register value */
+		if (iw == 1)
+			cxld->interleave_granularity = ig;
 	} else {
 		rc = check_interleave_cap(cxld, iw, ig);
 		if (rc) {
@@ -1613,7 +1740,20 @@ static int cxl_port_setup_targets(struct cxl_port *port,
 	}
 	dev_dbg(&cxlr->dev, "%s:%s iw: %d ig: %d\n", dev_name(port->uport_dev),
 		dev_name(&port->dev), iw, ig);
-add_target:
+
+	return 0;
+}
+
+static int cxl_switch_port_add_target(struct cxl_switch_decoder *cxlsd,
+				      struct cxl_region *cxlr,
+				      struct cxl_region_ref *cxl_rr,
+				      struct cxl_endpoint_decoder *cxled,
+				      struct cxl_ep *ep)
+{
+	struct cxl_memdev *cxlmd = cxled_to_memdev(cxled);
+	struct cxl_port *port = cxl_rr->port;
+	int pos = cxled->pos;
+
 	if (cxl_rr->nr_targets_set == cxl_rr->nr_targets) {
 		dev_dbg(&cxlr->dev,
 			"%s:%s: targets full trying to add %s:%s at %d\n",
@@ -1635,7 +1775,54 @@ add_target:
 		cxlsd->cxld.target_map[cxl_rr->nr_targets_set] = ep->dport->port_id;
 	}
 	cxl_rr->nr_targets_set++;
-out_target_set:
+
+	return 0;
+}
+
+static int cxl_switch_port_setup_targets(struct cxl_switch_decoder *cxlsd,
+					 struct cxl_region *cxlr,
+					 struct cxl_endpoint_decoder *cxled)
+{
+	struct cxl_port *port = to_cxl_port(cxlsd->cxld.dev.parent);
+	int iw, ig, rc, pos = cxled->pos;
+	struct cxl_region_ref *cxl_rr = cxl_rr_load(port, cxlr);
+	struct cxl_memdev *cxlmd = cxled_to_memdev(cxled);
+	struct cxl_ep *ep = cxl_ep_load(port, cxlmd);
+	struct cxl_decoder *cxld = &cxlsd->cxld;
+
+	/*
+	 * While root level decoders support x3, x6, x12, switch level
+	 * decoders only support powers of 2 up to x16.
+	 */
+	if (!is_power_of_2(cxl_rr->nr_targets)) {
+		dev_dbg(&cxlr->dev, "%s:%s: invalid target count %d\n",
+			dev_name(port->uport_dev), dev_name(&port->dev),
+			cxl_rr->nr_targets);
+		return -EINVAL;
+	}
+
+	if (cxl_rr->nr_targets_set) {
+		for (int i = 0; i < cxl_rr->nr_targets_set; i++) {
+			if (ep->dport != cxlsd->target[i])
+				continue;
+
+			return check_last_peer(cxled, ep, cxl_rr,
+					       cxl_port_peer_distance(port, cxlr));
+		}
+	} else {
+		rc = cxl_port_calc_interleave(port, cxlr, cxl_rr, &iw, &ig);
+		if (rc)
+			return rc;
+
+		rc = cxl_port_setup_decoder(port, cxlr, cxld, iw, ig);
+		if (rc)
+			return rc;
+	}
+
+	rc = cxl_switch_port_add_target(cxlsd, cxlr, cxl_rr, cxled, ep);
+	if (rc)
+		return rc;
+
 	dev_dbg(&cxlr->dev, "%s:%s target[%d] = %s for %s:%s @ %d\n",
 		dev_name(port->uport_dev), dev_name(&port->dev),
 		cxl_rr->nr_targets_set - 1, dev_name(ep->dport->dport_dev),
@@ -1733,7 +1920,11 @@ static int cxl_region_setup_targets(struct cxl_region *cxlr)
 		 */
 		for (ep = cxl_ep_load(iter, cxlmd); iter;
 		     iter = ep->next, ep = cxl_ep_load(iter, cxlmd)) {
-			rc = cxl_port_setup_targets(iter, cxlr, cxled);
+			struct cxl_region_ref *cxl_rr = cxl_rr_load(iter, cxlr);
+			struct cxl_switch_decoder *cxlsd;
+
+			cxlsd = to_cxl_switch_decoder(&cxl_rr->decoder->dev);
+			rc = cxl_switch_port_setup_targets(cxlsd, cxlr, cxled);
 			if (rc) {
 				cxl_region_teardown_targets(cxlr);
 				return rc;
@@ -1802,12 +1993,24 @@ static int cxl_region_attach_position(struct cxl_region *cxlr,
 	struct cxl_root_decoder *cxlrd = cxlr->cxlrd;
 	struct cxl_memdev *cxlmd = cxled_to_memdev(cxled);
 	struct cxl_switch_decoder *cxlsd = &cxlrd->cxlsd;
+	enum cxl_decoder_type type = cxled->cxld.target_type;
 	struct cxl_decoder *cxld = &cxlsd->cxld;
 	int iw = cxld->interleave_ways;
 	struct cxl_port *iter;
+	int root_pos = pos;
 	int rc;
 
-	if (dport != cxlrd->cxlsd.target[pos % iw]) {
+	/*
+	 * Root target selection advances once per root-granularity chunk, so
+	 * convert the region position to root-granularity units. A
+	 * non-interleaving root does not contribute to the region interleave,
+	 * so its advertised granularity must not scale the position.
+	 */
+	if (iw > 1)
+		root_pos = pos * cxlr->params.interleave_granularity /
+			   cxld->interleave_granularity;
+
+	if (dport != cxlrd->cxlsd.target[root_pos % iw]) {
 		dev_dbg(&cxlr->dev, "%s:%s invalid target position for %s\n",
 			dev_name(&cxlmd->dev), dev_name(&cxled->cxld.dev),
 			dev_name(&cxlrd->cxlsd.cxld.dev));
@@ -1827,7 +2030,16 @@ err:
 	for (iter = cxled_to_port(cxled); !is_cxl_root(iter);
 	     iter = to_cxl_port(iter->dev.parent))
 		cxl_port_detach_region(iter, cxlr, cxled);
+	/* undo cxl_rr_assign_decoder() type inheritance */
+	cxled->cxld.target_type = type;
 	return rc;
+}
+
+static const char *cxl_coherency_name(enum cxl_decoder_type type, bool bi)
+{
+	if (type == CXL_DECODER_HOSTONLYMEM)
+		return "HDM-H";
+	return bi ? "HDM-DB" : "HDM-D";
 }
 
 static int cxl_region_attach_auto(struct cxl_region *cxlr,
@@ -1908,11 +2120,22 @@ static int match_switch_decoder_by_range(struct device *dev,
 	return (r1->start == r2->start && r1->end == r2->end);
 }
 
-static int find_pos_and_ways(struct cxl_port *port, struct range *range,
-			     int *pos, int *ways)
+/*
+ * Return the region position offset that @port's slot in its parent decoder
+ * target list contributes: the slot index weighted by the parent decoder's
+ * granularity in region-granularity units.
+ *
+ * Returns the non-negative offset on success, or a negative errno if the parent
+ * decoder or @port's slot in its target list cannot be found.
+ */
+static int cxl_port_interleave_pos(struct cxl_port *port,
+				   struct cxl_region *cxlr)
 {
+	int region_gran = cxlr->params.interleave_granularity;
+	struct range *range = &cxlr->hpa_range;
 	struct cxl_switch_decoder *cxlsd;
 	struct cxl_port *parent;
+	int ways, gran, pos;
 	int rc = -ENXIO;
 
 	parent = parent_port_of(port);
@@ -1928,46 +2151,61 @@ static int find_pos_and_ways(struct cxl_port *port, struct range *range,
 		return rc;
 	}
 	cxlsd = to_cxl_switch_decoder(dev);
-	*ways = cxlsd->cxld.interleave_ways;
+	ways = cxlsd->cxld.interleave_ways;
+	gran = cxlsd->cxld.interleave_granularity;
 
-	for (int i = 0; i < *ways; i++) {
+	for (int i = 0; i < ways; i++) {
 		if (cxlsd->target[i] == port->parent_dport) {
-			*pos = i;
+			pos = i;
 			rc = 0;
 			break;
 		}
 	}
-	if (rc)
+	if (rc) {
 		dev_err(port->uport_dev,
 			"failed to find %s:%s in target list of %s\n",
 			dev_name(&port->dev),
 			dev_name(port->parent_dport->dport_dev), dev_name(dev));
+		return rc;
+	}
 
-	return rc;
+	return pos * (gran / region_gran);
 }
 
 /**
  * cxl_calc_interleave_pos() - calculate an endpoint position in a region
- * @cxled: endpoint decoder member of given region
- * @hpa_range: translated HPA range of the endpoint
+ * @cxled: endpoint decoder member of @cxlr
+ * @cxlr: region providing the translated HPA range and interleave granularity
  *
- * The endpoint position is calculated by traversing the topology from
- * the endpoint to the root decoder and iteratively applying this
- * calculation:
+ * An endpoint's region position is the interleave position that address
+ * translation applies at the region granularity. cxl_calculate_hpa_offset()
+ * combines it with a DPA offset to form the HPA offset, and
+ * cxl_calculate_position() recovers it from that HPA offset. It is also the
+ * index of the endpoint's region-granularity chunk within one full pass of the
+ * region interleave.
  *
- *    position = position * parent_ways + parent_pos;
+ * Each decoder level above the endpoint contributes the index of the target
+ * it routes the endpoint through, scaled by the weight of that level: how many
+ * region positions pass between successive advances of its target index. The
+ * position is calculated by traversing the topology from the endpoint to the
+ * root decoder and accumulating those contributions:
  *
- * ...where @position is inferred from switch and root decoder target lists.
+ *    position += parent_pos * (parent_granularity / region_granularity);
+ *
+ * ...where @parent_pos is the index of the endpoint's path in a switch or root
+ * decoder target list. A level that selects a single target contributes
+ * nothing.
  *
  * Return: position >= 0 on success
  *	   -ENXIO on failure
  */
 static int cxl_calc_interleave_pos(struct cxl_endpoint_decoder *cxled,
-				   struct range *hpa_range)
+				   struct cxl_region *cxlr)
 {
 	struct cxl_port *iter, *port = cxled_to_port(cxled);
 	struct cxl_memdev *cxlmd = cxled_to_memdev(cxled);
-	int parent_ways = 0, parent_pos = 0, pos = 0;
+	struct range *hpa_range = &cxlr->hpa_range;
+	int pos = 0;
 	int rc;
 
 	/*
@@ -1980,36 +2218,35 @@ static int cxl_calc_interleave_pos(struct cxl_endpoint_decoder *cxled,
 	 *        |    |           |    |
 	 *       mem0 mem1        mem2 mem3
 	 *
-	 * In the example the calculator will iterate twice. The first iteration
-	 * uses the mem position in the host-bridge and the ways of the host-
-	 * bridge to generate the first, or local, position. The second
-	 * iteration uses the host-bridge position in the root_port and the ways
-	 * of the root_port to refine the position.
+	 * The region and the root decoder interleave at the region
+	 * granularity, so each host-bridge decoder interleaves at twice that.
+	 * The host-bridge decoders advance one target every two region
+	 * positions, weight 2, and the root decoder advances one target every
+	 * region position, weight 1.
 	 *
 	 * A trace of the calculation per endpoint looks like this:
-	 * mem0: pos = 0 * 2 + 0    mem2: pos = 0 * 2 + 0
-	 *       pos = 0 * 2 + 0          pos = 0 * 2 + 1
+	 * mem0: pos += 0 * 2       mem2: pos += 0 * 2
+	 *       pos += 0 * 1             pos += 1 * 1
 	 *       pos: 0                   pos: 1
 	 *
-	 * mem1: pos = 0 * 2 + 1    mem3: pos = 0 * 2 + 1
-	 *       pos = 1 * 2 + 0          pos = 1 * 2 + 1
-	 *       pos: 2                   pos = 3
+	 * mem1: pos += 1 * 2       mem3: pos += 1 * 2
+	 *       pos += 0 * 1             pos += 1 * 1
+	 *       pos: 2                   pos: 3
 	 *
 	 * Note that while this example is simple, the method applies to more
 	 * complex topologies, including those with switches.
 	 */
 
-	/* Iterate from endpoint to root_port refining the position */
+	/* Iterate from endpoint to root_port accumulating the position */
 	for (iter = port; iter; iter = parent_port_of(iter)) {
 		if (is_cxl_root(iter))
 			break;
 
-		rc = find_pos_and_ways(iter, hpa_range, &parent_pos,
-				       &parent_ways);
-		if (rc)
+		rc = cxl_port_interleave_pos(iter, cxlr);
+		if (rc < 0)
 			return rc;
 
-		pos = pos * parent_ways + parent_pos;
+		pos += rc;
 	}
 
 	dev_dbg(&cxlmd->dev,
@@ -2028,7 +2265,7 @@ static int cxl_region_sort_targets(struct cxl_region *cxlr)
 	for (i = 0; i < p->nr_targets; i++) {
 		struct cxl_endpoint_decoder *cxled = p->targets[i];
 
-		cxled->pos = cxl_calc_interleave_pos(cxled, &cxlr->hpa_range);
+		cxled->pos = cxl_calc_interleave_pos(cxled, cxlr);
 		/*
 		 * Record that sorting failed, but still continue to calc
 		 * cxled->pos so that cxl_calc_interleave_pos() emits its
@@ -2052,6 +2289,68 @@ static int cxl_region_sort_targets(struct cxl_region *cxlr)
 
 	dev_dbg(&cxlr->dev, "region sort %s\n", rc ? "failed" : "successful");
 	return rc;
+}
+
+/*
+ * Verify the device and HDM are capable of the region's flavor. The
+ * endpoint decoder's target_type is then inherited from cxlr->type
+ * later in cxl_rr_assign_decoder().
+ */
+static int cxl_region_check_coherency(struct cxl_region *cxlr,
+				      struct cxl_endpoint_decoder *cxled)
+{
+	struct cxl_memdev *cxlmd = cxled_to_memdev(cxled);
+	struct cxl_dev_state *cxlds = cxlmd->cxlds;
+	bool root_bi = cxl_root_decoder_is_bi(cxlr->cxlrd);
+	struct cxl_hdm *cxlhdm;
+
+	if (cxlr->type == CXL_DECODER_DEVMEM && root_bi &&
+	    !READ_ONCE(cxlds->bi)) {
+		dev_dbg(&cxlr->dev, "%s:%s BI not enabled on device\n",
+			dev_name(&cxlmd->dev), dev_name(&cxled->cxld.dev));
+		return -ENXIO;
+	}
+
+	if (cxled->state != CXL_DECODER_STATE_AUTO &&
+	    cxlr->type == CXL_DECODER_HOSTONLYMEM &&
+	    cxlds->type == CXL_DEVTYPE_DEVMEM) {
+		dev_dbg(&cxlr->dev, "%s:%s HDM-H requires a Type 3 device\n",
+			dev_name(&cxlmd->dev), dev_name(&cxled->cxld.dev));
+		return -ENXIO;
+	}
+
+	cxlhdm = dev_get_drvdata(&cxled_to_port(cxled)->dev);
+	if (!cxlhdm)
+		return -ENXIO;
+	if (cxlr->type == CXL_DECODER_HOSTONLYMEM &&
+	    cxlhdm->supported_coherency == CXL_HDM_DECODER_COHERENCY_DEV) {
+		dev_dbg(&cxlr->dev, "%s:%s HDM is device-coherent only\n",
+			dev_name(&cxlmd->dev), dev_name(&cxled->cxld.dev));
+		return -ENXIO;
+	}
+	if (cxlr->type == CXL_DECODER_DEVMEM &&
+	    cxlhdm->supported_coherency == CXL_HDM_DECODER_COHERENCY_HOST) {
+		dev_dbg(&cxlr->dev, "%s:%s HDM is host-only coherent\n",
+			dev_name(&cxlmd->dev), dev_name(&cxled->cxld.dev));
+		return -ENXIO;
+	}
+
+	/* a committed decoder cannot inherit the region's flavor */
+	if (cxled->cxld.flags & CXL_DECODER_F_ENABLE) {
+		bool bi = cxled->cxld.flags & CXL_DECODER_F_BI;
+
+		if (cxled->cxld.target_type != cxlr->type || bi != root_bi) {
+			dev_dbg(&cxlr->dev,
+				"%s:%s coherency model mismatch: %s vs %s\n",
+				dev_name(&cxlmd->dev),
+				dev_name(&cxled->cxld.dev),
+				cxl_coherency_name(cxled->cxld.target_type, bi),
+				cxl_coherency_name(cxlr->type, root_bi));
+			return -ENXIO;
+		}
+	}
+
+	return 0;
 }
 
 static int cxl_region_attach(struct cxl_region *cxlr,
@@ -2096,6 +2395,10 @@ static int cxl_region_attach(struct cxl_region *cxlr,
 		return -ENXIO;
 	}
 
+	rc = check_root_interleave(cxlr);
+	if (rc)
+		return rc;
+
 	if (p->nr_targets >= p->interleave_ways) {
 		dev_dbg(&cxlr->dev, "region already has %d endpoints\n",
 			p->nr_targets);
@@ -2112,12 +2415,9 @@ static int cxl_region_attach(struct cxl_region *cxlr,
 		return -ENXIO;
 	}
 
-	if (cxled->cxld.target_type != cxlr->type) {
-		dev_dbg(&cxlr->dev, "%s:%s type mismatch: %d vs %d\n",
-			dev_name(&cxlmd->dev), dev_name(&cxled->cxld.dev),
-			cxled->cxld.target_type, cxlr->type);
-		return -ENXIO;
-	}
+	rc = cxl_region_check_coherency(cxlr, cxled);
+	if (rc)
+		return rc;
 
 	if (cxled_empty(cxled)) {
 		dev_dbg(&cxlr->dev, "%s:%s: missing DPA allocation.\n",
@@ -2134,8 +2434,6 @@ static int cxl_region_attach(struct cxl_region *cxlr,
 			(u64)p->cache_size, (u64)resource_size(p->res));
 		return -EINVAL;
 	}
-
-	cxl_region_perf_data_calculate(cxlr, cxled);
 
 	if (test_bit(CXL_REGION_F_AUTO, &cxlr->flags)) {
 		int i;
@@ -2176,7 +2474,7 @@ static int cxl_region_attach(struct cxl_region *cxlr,
 		 * then the region is already committed.
 		 */
 		p->state = CXL_CONFIG_COMMIT;
-		cxl_region_shared_upstream_bandwidth_update(cxlr);
+		cxl_region_perf_data_complete(cxlr);
 
 		return 0;
 	}
@@ -2198,7 +2496,7 @@ static int cxl_region_attach(struct cxl_region *cxlr,
 		if (rc)
 			return rc;
 		p->state = CXL_CONFIG_ACTIVE;
-		cxl_region_shared_upstream_bandwidth_update(cxlr);
+		cxl_region_perf_data_complete(cxlr);
 	}
 
 	cxled->cxld.interleave_ways = p->interleave_ways;
@@ -2221,7 +2519,7 @@ static int cxl_region_attach(struct cxl_region *cxlr,
 		struct cxl_endpoint_decoder *target = p->targets[i];
 		int test_pos;
 
-		test_pos = cxl_calc_interleave_pos(target, &cxlr->hpa_range);
+		test_pos = cxl_calc_interleave_pos(target, cxlr);
 		if (test_pos != target->pos)
 			dev_warn(&cxlr->dev,
 				 "%s: position mismatch: calculated:%d assigned:%d\n",
@@ -2332,6 +2630,12 @@ __cxl_decoder_detach(struct cxl_region *cxlr,
 		.start = 0,
 		.end = -1,
 	};
+	/*
+	 * Undo cxl_rr_assign_decoder() type inheritance, unless the
+	 * decoder is still committed and its type is what it decodes.
+	 */
+	if (!(cxled->cxld.flags & CXL_DECODER_F_ENABLE))
+		cxled->cxld.target_type = cxled_default_type(cxled);
 
 	get_device(&cxlr->dev);
 	return cxlr;
@@ -2634,7 +2938,6 @@ static struct cxl_region *cxl_region_alloc(struct cxl_root_decoder *cxlrd, int i
 static bool cxl_region_update_coordinates(struct cxl_region *cxlr, int nid)
 {
 	int cset = 0;
-	int rc;
 
 	for (int i = 0; i < ACCESS_COORDINATE_MAX; i++) {
 		if (cxlr->coord[i].read_bandwidth) {
@@ -2655,18 +2958,7 @@ static bool cxl_region_update_coordinates(struct cxl_region *cxlr, int nid)
 		}
 	}
 
-	if (!cset)
-		return false;
-
-	rc = sysfs_update_group(&cxlr->dev.kobj, get_cxl_region_access0_group());
-	if (rc)
-		dev_dbg(&cxlr->dev, "Failed to update access0 group\n");
-
-	rc = sysfs_update_group(&cxlr->dev.kobj, get_cxl_region_access1_group());
-	if (rc)
-		dev_dbg(&cxlr->dev, "Failed to update access1 group\n");
-
-	return true;
+	return cset > 0;
 }
 
 static int cxl_region_perf_attrs_callback(struct notifier_block *nb,
@@ -2781,8 +3073,10 @@ static struct cxl_region *devm_cxl_add_region(struct cxl_root_decoder *cxlrd,
 		return ERR_PTR(rc);
 	}
 
-	dev_dbg(port->uport_dev, "%s: created %s\n",
-		dev_name(&cxlrd->cxlsd.cxld.dev), dev_name(dev));
+	dev_dbg(port->uport_dev, "%s: created %s %s\n",
+		dev_name(&cxlrd->cxlsd.cxld.dev),
+		cxl_coherency_name(cxlr->type, cxl_root_decoder_is_bi(cxlrd)),
+		dev_name(dev));
 	return cxlr;
 err:
 	put_device(dev);
@@ -2840,6 +3134,7 @@ static ssize_t create_region_store(struct device *dev, const char *buf,
 				   size_t len, enum cxl_partition_mode mode)
 {
 	struct cxl_root_decoder *cxlrd = to_cxl_root_decoder(dev);
+	enum cxl_decoder_type target_type;
 	struct cxl_region *cxlr;
 	int rc, id;
 
@@ -2851,7 +3146,15 @@ static ssize_t create_region_store(struct device *dev, const char *buf,
 	if ((rc = ACQUIRE_ERR(mutex_intr, &regions_lock)))
 		return rc;
 
-	cxlr = __create_region(cxlrd, mode, id, CXL_DECODER_HOSTONLYMEM);
+	/*
+	 * The CFMWS dictates endpoint coherency: a BI-restricted Window
+	 * produces an HDM-DB region; otherwise HDM-H. HDM-D is not an
+	 * option here, type2 regions are created by their driver.
+	 */
+	target_type = cxl_root_decoder_is_bi(cxlrd) ?
+		CXL_DECODER_DEVMEM : CXL_DECODER_HOSTONLYMEM;
+
+	cxlr = __create_region(cxlrd, mode, id, target_type);
 	if (IS_ERR(cxlr))
 		return PTR_ERR(cxlr);
 
@@ -3136,13 +3439,13 @@ static bool cxl_is_hpa_in_chunk(u64 hpa, struct cxl_region *cxlr, int pos)
  */
 int cxl_validate_translation_params(u8 eiw, u16 eig, int pos)
 {
-	int ways, gran;
+	int ways;
 
 	if (eiw_to_ways(eiw, &ways)) {
 		pr_debug("%s: invalid eiw=%u\n", __func__, eiw);
 		return -EINVAL;
 	}
-	if (eig_to_granularity(eig, &gran)) {
+	if (!eig_valid(eig)) {
 		pr_debug("%s: invalid eig=%u\n", __func__, eig);
 		return -EINVAL;
 	}
@@ -3500,8 +3803,8 @@ static int unaligned_region_offset_to_dpa_result(struct cxl_region *cxlr,
 	 * a dpa_offset independent of the target device and then enumerate
 	 * and test that dpa_offset against each candidate endpoint decoder.
 	 */
-	gran = cxld->interleave_granularity;
-	interleave_width = gran * cxld->interleave_ways;
+	gran = p->interleave_granularity;
+	interleave_width = gran * p->interleave_ways;
 	interleave_index = div64_u64(offset, interleave_width);
 	gran_offset = do_div(tmp, gran);
 
@@ -3797,11 +4100,29 @@ static struct cxl_region *construct_region(struct cxl_root_decoder *cxlrd,
 	struct cxl_endpoint_decoder *cxled = ctx->cxled;
 	struct cxl_memdev *cxlmd = cxled_to_memdev(cxled);
 	struct cxl_dev_state *cxlds = cxlmd->cxlds;
+	bool bi = cxled->cxld.flags & CXL_DECODER_F_BI;
 	int rc, part = READ_ONCE(cxled->part);
 	struct cxl_region *cxlr;
+	unsigned long need;
 
 	if (part < 0)
 		return ERR_PTR(-EBUSY);
+
+	/*
+	 * A committed decoder defines the region built from it, so no
+	 * attach check can find its coherency model wrong. Only the
+	 * window's restrictions can, if they do not permit its BI bit or
+	 * range type.
+	 */
+	need = cxled->cxld.target_type == CXL_DECODER_DEVMEM ?
+	       CXL_DECODER_F_DEVMEM : CXL_DECODER_F_HOSTONLY;
+	if (bi != cxl_root_decoder_is_bi(cxlrd) ||
+	    !(cxlrd->cxlsd.cxld.flags & need)) {
+		dev_err(&cxlrd->cxlsd.cxld.dev,
+			"%s:%s coherency model not permitted by the window\n",
+			dev_name(&cxlmd->dev), dev_name(&cxled->cxld.dev));
+		return ERR_PTR(-ENXIO);
+	}
 
 	do {
 		cxlr = __create_region(cxlrd, cxlds->part[part].mode,
