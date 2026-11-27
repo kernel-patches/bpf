@@ -608,13 +608,7 @@ static void btmtk_usb_wmt_recv(struct urb *urb)
 			return;
 		}
 
-		if (test_and_clear_bit(BTMTK_TX_WAIT_VND_EVT,
-				       &data->flags)) {
-			/* Barrier to sync with other CPUs */
-			smp_mb__after_atomic();
-			wake_up_bit(&data->flags,
-				    BTMTK_TX_WAIT_VND_EVT);
-		}
+		test_and_clear_wake_up_bit(BTMTK_TX_WAIT_VND_EVT, &data->flags);
 		kfree(urb->setup_packet);
 		return;
 	} else if (urb->status == -ENOENT) {
@@ -1863,6 +1857,10 @@ int btmtk_usb_setup(struct hci_dev *hdev)
 	}
 
 	btmtk_data->dev_id = dev_id;
+
+	/* MT7922 needs per-link requests despite suggested defaults. */
+	if (dev_id == 0x7922)
+		hci_set_quirk(hdev, HCI_QUIRK_NEEDS_LE_SET_DATA_LEN);
 
 	err = btmtk_register_coredump(hdev, btmtk_data->drv_name, fw_version);
 	if (err < 0)

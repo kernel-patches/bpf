@@ -584,6 +584,7 @@ static int bcm_setup(struct hci_uart *hu)
 	bool fw_load_done = false;
 	bool use_autobaud_mode = (bcm->dev ? bcm->dev->use_autobaud_mode : 0);
 	unsigned int speed;
+	bdaddr_t bdaddr;
 	int err;
 
 	bt_dev_dbg(hu->hdev, "hu %p", hu);
@@ -594,6 +595,13 @@ static int bcm_setup(struct hci_uart *hu)
 	err = btbcm_initialize(hu->hdev, &fw_load_done, use_autobaud_mode);
 	if (err)
 		return err;
+
+	/* Prefer a valid platform address, even if the controller has one. */
+	if (!device_property_read_u8_array(hu->hdev->dev.parent,
+					   "local-bd-address", bdaddr.b,
+					   sizeof(bdaddr.b)) &&
+	    bacmp(&bdaddr, BDADDR_ANY))
+		hci_set_quirk(hu->hdev, HCI_QUIRK_USE_BDADDR_PROPERTY);
 
 	if (!fw_load_done)
 		return 0;
